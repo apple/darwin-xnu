@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -105,13 +105,15 @@ _qinit(class_queue_t *q, int type, int lim, classq_pkt_type_t ptype)
 
 /* add a packet at the tail of the queue */
 void
-_addq(class_queue_t *q, void *pkt)
+_addq(class_queue_t *q, classq_pkt_t *pkt)
 {
 	uint32_t size = 0;
 
+	ASSERT(pkt->cp_ptype == qptype(q));
+
 	switch (qptype(q)) {
 	case QP_MBUF: {
-		struct mbuf *m = pkt;
+		struct mbuf *m = pkt->cp_mbuf;
 		MBUFQ_ENQUEUE(&qmbufq(q), m);
 		size = m_length(m);
 		break;
@@ -121,6 +123,7 @@ _addq(class_queue_t *q, void *pkt)
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
 	qlen(q)++;
@@ -130,13 +133,15 @@ _addq(class_queue_t *q, void *pkt)
 
 /* add one or more packets at the tail of the queue */
 void
-_addq_multi(class_queue_t *q, void *pkt_head, void *pkt_tail,
+_addq_multi(class_queue_t *q, classq_pkt_t *pkt_head, classq_pkt_t *pkt_tail,
     u_int32_t cnt, u_int32_t size)
 {
+	ASSERT(pkt_head->cp_ptype == qptype(q));
+	ASSERT(pkt_tail->cp_ptype == qptype(q));
 	switch (qptype(q)) {
 	case QP_MBUF: {
-		struct mbuf *m_head = pkt_head;
-		struct mbuf *m_tail = pkt_tail;
+		struct mbuf *m_head = pkt_head->cp_mbuf;
+		struct mbuf *m_tail = pkt_tail->cp_mbuf;
 		MBUFQ_ENQUEUE_MULTI(&qmbufq(q), m_head, m_tail);
 		break;
 	}
@@ -145,6 +150,7 @@ _addq_multi(class_queue_t *q, void *pkt_head, void *pkt_tail,
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
 	qlen(q) += cnt;
@@ -152,19 +158,17 @@ _addq_multi(class_queue_t *q, void *pkt_head, void *pkt_tail,
 }
 
 /* get a packet at the head of the queue */
-void *
-_getq(class_queue_t *q)
+void
+_getq(class_queue_t *q, classq_pkt_t *pkt)
 {
-	void *pkt = NULL;
 	uint32_t pkt_len;
 
 	switch (qptype(q)) {
 	case QP_MBUF: {
-		struct mbuf *m;
-		MBUFQ_DEQUEUE(&qmbufq(q), m);
-		if (m != NULL) {
-			pkt_len = m_length(m);
-			pkt = m;
+		MBUFQ_DEQUEUE(&qmbufq(q), pkt->cp_mbuf);
+		if (__probable(pkt->cp_mbuf != NULL)) {
+			CLASSQ_PKT_INIT_MBUF(pkt, pkt->cp_mbuf);
+			pkt_len = m_length(pkt->cp_mbuf);
 		}
 		break;
 	}
@@ -173,14 +177,15 @@ _getq(class_queue_t *q)
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
-	if (pkt == NULL) {
+	if (pkt->cp_mbuf == NULL) {
 		VERIFY(qlen(q) == 0);
 		if (qsize(q) > 0) {
 			qsize(q) = 0;
 		}
-		return NULL;
+		return;
 	}
 	VERIFY(qlen(q) > 0);
 	qlen(q)--;
@@ -191,14 +196,12 @@ _getq(class_queue_t *q)
 	} else if (qsize(q) != 0) {
 		qsize(q) = 0;
 	}
-
-	return pkt;
 }
 
-static void *
-_getq_flow_or_scidx(class_queue_t *q, u_int32_t val, boolean_t isflowid)
+static void
+_getq_flow_or_scidx(class_queue_t *q, classq_pkt_t *pkt, u_int32_t val,
+    boolean_t isflowid)
 {
-	void *pkt = NULL;
 	uint32_t pkt_len;
 
 	switch (qptype(q)) {
@@ -217,8 +220,8 @@ _getq_flow_or_scidx(class_queue_t *q, u_int32_t val, boolean_t isflowid)
 				break;
 			}
 		}
-		if (m != NULL) {
-			pkt = m;
+		if (__probable(m != NULL)) {
+			CLASSQ_PKT_INIT_MBUF(pkt, m);
 			pkt_len = m_length(m);
 		}
 		break;
@@ -228,9 +231,10 @@ _getq_flow_or_scidx(class_queue_t *q, u_int32_t val, boolean_t isflowid)
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
-	if (pkt != NULL) {
+	if (pkt->cp_mbuf != NULL) {
 		VERIFY(qlen(q) > 0);
 		qlen(q)--;
 
@@ -241,36 +245,38 @@ _getq_flow_or_scidx(class_queue_t *q, u_int32_t val, boolean_t isflowid)
 			qsize(q) = 0;
 		}
 	}
-
-	return pkt;
 }
 
 /* get a packet of a specific flow beginning from the head of the queue */
-void *
-_getq_flow(class_queue_t *q, u_int32_t flow)
+void
+_getq_flow(class_queue_t *q, classq_pkt_t *pkt, u_int32_t flow)
 {
-	return _getq_flow_or_scidx(q, flow, TRUE);
+	return _getq_flow_or_scidx(q, pkt, flow, TRUE);
 }
 
 /* Get a packet whose MBUF_SCIDX() < scidx from head of queue */
-void *
-_getq_scidx_lt(class_queue_t *q, u_int32_t scidx)
+void
+_getq_scidx_lt(class_queue_t *q, classq_pkt_t *pkt, u_int32_t scidx)
 {
-	return _getq_flow_or_scidx(q, scidx, FALSE);
+	return _getq_flow_or_scidx(q, pkt, scidx, FALSE);
 }
 
 /* get all packets (chained) starting from the head of the queue */
-void *
-_getq_all(class_queue_t *q, void **last, u_int32_t *qlenp,
-    u_int64_t *qsizep)
+void
+_getq_all(class_queue_t *q, classq_pkt_t *first, classq_pkt_t *last,
+    u_int32_t *qlenp, u_int64_t *qsizep)
 {
-	void *pkt = NULL;
-
 	switch (qptype(q)) {
 	case QP_MBUF:
-		pkt = MBUFQ_FIRST(&qmbufq(q));
+		first->cp_mbuf = MBUFQ_FIRST(&qmbufq(q));
+		if (__probable(first->cp_mbuf != NULL)) {
+			CLASSQ_PKT_INIT_MBUF(first, first->cp_mbuf);
+		}
 		if (last != NULL) {
-			*last = MBUFQ_LAST(&qmbufq(q));
+			last->cp_mbuf = MBUFQ_LAST(&qmbufq(q));
+			if (__probable(last->cp_mbuf != NULL)) {
+				CLASSQ_PKT_INIT_MBUF(last, last->cp_mbuf);
+			}
 		}
 		MBUFQ_INIT(&qmbufq(q));
 		break;
@@ -279,6 +285,7 @@ _getq_all(class_queue_t *q, void **last, u_int32_t *qlenp,
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
 	if (qlenp != NULL) {
@@ -290,8 +297,6 @@ _getq_all(class_queue_t *q, void **last, u_int32_t *qlenp,
 
 	qlen(q) = 0;
 	qsize(q) = 0;
-
-	return pkt;
 }
 
 static inline struct mbuf *
@@ -335,22 +340,22 @@ _getq_tail_mbuf(class_queue_t *q)
 }
 
 /* drop a packet at the tail of the queue */
-void *
-_getq_tail(class_queue_t *q)
+void
+_getq_tail(class_queue_t *q, classq_pkt_t *pkt)
 {
-	void *t = NULL;
-
 	switch (qptype(q)) {
 	case QP_MBUF:
-		t = _getq_tail_mbuf(q);
+		pkt->cp_mbuf = _getq_tail_mbuf(q);
+		if (__probable(pkt->cp_mbuf != NULL)) {
+			CLASSQ_PKT_INIT_MBUF(pkt, pkt->cp_mbuf);
+		}
 		break;
 
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
-
-	return t;
 }
 
 static inline struct mbuf *
@@ -415,22 +420,22 @@ _getq_random_mbuf(class_queue_t *q)
 }
 
 /* randomly select a packet in the queue */
-void *
-_getq_random(class_queue_t *q)
+void
+_getq_random(class_queue_t *q, classq_pkt_t *pkt)
 {
-	void *r = NULL;
-
 	switch (qptype(q)) {
 	case QP_MBUF:
-		r = _getq_random_mbuf(q);
+		pkt->cp_mbuf = _getq_random_mbuf(q);
+		if (__probable(pkt->cp_mbuf != NULL)) {
+			CLASSQ_PKT_INIT_MBUF(pkt, pkt->cp_mbuf);
+		}
 		break;
 
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
-
-	return r;
 }
 
 static inline void
@@ -445,12 +450,13 @@ _removeq_mbuf(class_queue_t *q, struct mbuf *m)
 	}
 
 	if (m0 != m) {
-		while (MBUFQ_NEXT(m0) != m) {
-			if (m0 == NULL) {
-				return;
-			}
+		while (m0 != NULL && MBUFQ_NEXT(m0) != m) {
 			m0 = MBUFQ_NEXT(m0);
 		}
+		if (m0 == NULL) {
+			return;
+		}
+
 		mtail = &MBUFQ_NEXT(m0);
 	} else {
 		mtail = &MBUFQ_FIRST(head);
@@ -476,16 +482,18 @@ _removeq_mbuf(class_queue_t *q, struct mbuf *m)
 
 /* remove a packet from the queue */
 void
-_removeq(class_queue_t *q, void *pkt)
+_removeq(class_queue_t *q, classq_pkt_t *pkt)
 {
 	switch (qptype(q)) {
 	case QP_MBUF:
-		_removeq_mbuf(q, pkt);
+		ASSERT(pkt->cp_ptype == QP_MBUF);
+		_removeq_mbuf(q, pkt->cp_mbuf);
 		break;
 
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 }
 
@@ -545,6 +553,7 @@ _flushq_flow_mbuf(class_queue_t *q, u_int32_t flow, u_int32_t *cnt,
 	}
 }
 
+
 void
 _flushq_flow(class_queue_t *q, u_int32_t flow, u_int32_t *cnt, u_int32_t *len)
 {
@@ -556,5 +565,6 @@ _flushq_flow(class_queue_t *q, u_int32_t flow, u_int32_t *cnt, u_int32_t *len)
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 }

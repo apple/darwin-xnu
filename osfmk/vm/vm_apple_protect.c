@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -123,19 +123,19 @@ void crypt_info_deallocate(struct pager_crypt_info *crypt_info);
  * These routines are invoked by VM via the memory_object_*() interfaces.
  */
 const struct memory_object_pager_ops apple_protect_pager_ops = {
-	apple_protect_pager_reference,
-	apple_protect_pager_deallocate,
-	apple_protect_pager_init,
-	apple_protect_pager_terminate,
-	apple_protect_pager_data_request,
-	apple_protect_pager_data_return,
-	apple_protect_pager_data_initialize,
-	apple_protect_pager_data_unlock,
-	apple_protect_pager_synchronize,
-	apple_protect_pager_map,
-	apple_protect_pager_last_unmap,
-	NULL, /* data_reclaim */
-	"apple_protect"
+	.memory_object_reference = apple_protect_pager_reference,
+	.memory_object_deallocate = apple_protect_pager_deallocate,
+	.memory_object_init = apple_protect_pager_init,
+	.memory_object_terminate = apple_protect_pager_terminate,
+	.memory_object_data_request = apple_protect_pager_data_request,
+	.memory_object_data_return = apple_protect_pager_data_return,
+	.memory_object_data_initialize = apple_protect_pager_data_initialize,
+	.memory_object_data_unlock = apple_protect_pager_data_unlock,
+	.memory_object_synchronize = apple_protect_pager_synchronize,
+	.memory_object_map = apple_protect_pager_map,
+	.memory_object_last_unmap = apple_protect_pager_last_unmap,
+	.memory_object_data_reclaim = NULL,
+	.memory_object_pager_name = "apple_protect"
 };
 
 /*
@@ -167,7 +167,7 @@ typedef struct apple_protect_pager {
 int apple_protect_pager_count = 0;              /* number of pagers */
 int apple_protect_pager_count_mapped = 0;       /* number of unmapped pagers */
 queue_head_t apple_protect_pager_queue;
-decl_lck_mtx_data(, apple_protect_pager_lock)
+decl_lck_mtx_data(, apple_protect_pager_lock);
 
 /*
  * Maximum number of unmapped pagers we're willing to keep around.
@@ -511,24 +511,13 @@ retry_src_fault:
 		dst_pnum = (ppnum_t)
 		    upl_phys_page(upl_pl, (int)(cur_offset / PAGE_SIZE));
 		assert(dst_pnum != 0);
-#if __x86_64__
-		src_vaddr = (vm_map_offset_t)
-		    PHYSMAP_PTOV((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page)
-		        << PAGE_SHIFT);
-		dst_vaddr = (vm_map_offset_t)
-		    PHYSMAP_PTOV((pmap_paddr_t)dst_pnum << PAGE_SHIFT);
 
-#elif __arm__ || __arm64__
 		src_vaddr = (vm_map_offset_t)
 		    phystokv((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page)
 		        << PAGE_SHIFT);
 		dst_vaddr = (vm_map_offset_t)
 		    phystokv((pmap_paddr_t)dst_pnum << PAGE_SHIFT);
-#else
-#error "vm_paging_map_object: no 1-to-1 kernel mapping of physical memory..."
-		src_vaddr = 0;
-		dst_vaddr = 0;
-#endif
+
 		src_page_object = VM_PAGE_OBJECT(src_page);
 
 		/*
@@ -1163,6 +1152,8 @@ apple_protect_pager_create(
 	    0,
 	    &control);
 	assert(kr == KERN_SUCCESS);
+
+	memory_object_mark_trusted(control);
 
 	lck_mtx_lock(&apple_protect_pager_lock);
 	/* the new pager is now ready to be used */

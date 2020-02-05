@@ -46,12 +46,17 @@ vnode_label(struct mount *mp, struct vnode *dvp, struct vnode *vp,
     struct componentname *cnp, int flags, vfs_context_t ctx)
 {
 	int error = 0;
-
+	bool exit_fast;
 
 	/* fast path checks... */
 
 	/* are we labeling vnodes? If not still notify of create */
-	if (mac_label_vnodes == 0) {
+#if CONFIG_MACF_LAZY_VNODE_LABELS
+	exit_fast = true;
+#else
+	exit_fast = (mac_label_vnodes == 0);
+#endif
+	if (exit_fast) {
 		if (flags & VNODE_LABEL_CREATE) {
 			error = mac_vnode_notify_create(ctx,
 			    mp, dvp, vp, cnp);

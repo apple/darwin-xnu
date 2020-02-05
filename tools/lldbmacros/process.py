@@ -171,6 +171,7 @@ def GetASTSummary(ast):
         B - AST_BSD
         K - AST_KPERF
         M - AST_MACF
+        r - AST_RESET_PCS
         G - AST_GUARD
         T - AST_TELEMETRY_USER
         T - AST_TELEMETRY_KERNEL
@@ -185,7 +186,7 @@ def GetASTSummary(ast):
     out_string = ""
     state = int(ast)
     thread_state_chars = {0x0:'', 0x1:'P', 0x2:'Q', 0x4:'U', 0x8:'H', 0x10:'Y', 0x20:'A',
-                          0x40:'L', 0x80:'B', 0x100:'K', 0x200:'M',
+                          0x40:'L', 0x80:'B', 0x100:'K', 0x200:'M', 0x400: 'r',
                           0x1000:'G', 0x2000:'T', 0x4000:'T', 0x8000:'T', 0x10000:'S',
                           0x20000: 'D', 0x40000: 'I', 0x80000: 'E', 0x100000: 'R', 0x200000: 'N'}
     state_str = ''
@@ -605,7 +606,7 @@ def ShowTaskCoalitions(cmd_args=None, cmd_options={}):
 # EndMacro: showtaskcoalitions
 
 @lldb_type_summary(['proc', 'proc *'])
-@header("{0: >6s} {1: ^20s} {2: >14s} {3: ^10s} {4: <20s}".format("pid", "process", "io_policy", "wq_state", "command"))
+@header("{0: >6s}   {1: <18s} {2: >11s} {3: ^10s} {4: <20s}".format("pid", "process", "io_policy", "wq_state", "command"))
 def GetProcSummary(proc):
     """ Summarize the process data. 
         params:
@@ -614,7 +615,7 @@ def GetProcSummary(proc):
           str - string summary of the process.
     """
     out_string = ""
-    format_string= "{0: >6d} {1: >#020x} {2: >14s} {3: >2d} {4: >2d} {5: >2d}    {6: <20s}"
+    format_string= "{0: >6d}   {1: <#018x} {2: >11s} {3: >2d} {4: >2d} {5: >2d}   {6: <20s}"
     pval = proc.GetSBValue()
     #code.interact(local=locals())
     if str(pval.GetType()) != str(gettype('proc *')) :
@@ -915,7 +916,7 @@ def DumpThreadTerminateQueue(cmd_args=None):
     
     count = 0
     print GetThreadSummary.header
-    for th in IterateQueue(addressof(kern.globals.thread_terminate_queue), 'struct thread *',  'q_link'):
+    for th in IterateMPSCQueue(addressof(kern.globals.thread_terminate_queue.mpd_queue), 'struct thread', 'mpsc_links'):
         print GetThreadSummary(th)
         count += 1
     print "{0: <d} entries!".format(count)
@@ -965,19 +966,23 @@ def DumpCallQueue(cmd_args=None):
 def ShowAllTaskIOStats(cmd_args=None):
     """ Commad to print I/O stats for all tasks
     """
-    print "{0: <20s} {1: <20s} {2: <20s} {3: <20s} {4: <20s} {5: <20s}".format("task", "Immediate Writes", "Deferred Writes", "Invalidated Writes", "Metadata Writes", "name")
+    print "{0: <20s} {1: <20s} {2: <20s} {3: <20s} {4: <20s} {5: <20s} {6: <20s} {7: <20s} {8: <20s} {9: <20s}".format("task", "Immediate Writes", "Deferred Writes", "Invalidated Writes", "Metadata Writes", "Immediate Writes to External", "Deferred Writes to External", "Invalidated Writes to External", "Metadata Writes to External", "name")
     for t in kern.tasks:
         pval = Cast(t.bsd_info, 'proc *')
-        print "{0: <#18x} {1: >20d} {2: >20d} {3: >20d} {4: >20d} {5: <20s}".format(t,
-            t.task_immediate_writes, 
-            t.task_deferred_writes,
-            t.task_invalidated_writes,
-            t.task_metadata_writes,
+        print "{0: <#18x} {1: >20d} {2: >20d} {3: >20d} {4: >20d}  {5: <20s} {6: <20s} {7: <20s} {8: <20s} {9: <20s}".format(t,
+            t.task_writes_counters_internal.task_immediate_writes, 
+            t.task_writes_counters_internal.task_deferred_writes,
+            t.task_writes_counters_internal.task_invalidated_writes,
+            t.task_writes_counters_internal.task_metadata_writes,
+            t.task_writes_counters_external.task_immediate_writes, 
+            t.task_writes_counters_external.task_deferred_writes,
+            t.task_writes_counters_external.task_invalidated_writes,
+            t.task_writes_counters_external.task_metadata_writes,
             str(pval.p_comm)) 
 
 
-@lldb_command('showalltasks','C')
-def ShowAllTasks(cmd_args=None, cmd_options={}):
+@lldb_command('showalltasks','C', fancy=True)
+def ShowAllTasks(cmd_args=None, cmd_options={}, O=None):
     """  Routine to print a summary listing of all the tasks
          wq_state -> reports "number of workq threads", "number of scheduled workq threads", "number of pending work items"
          if "number of pending work items" seems stuck at non-zero, it may indicate that the workqueue mechanism is hung
@@ -994,11 +999,11 @@ def ShowAllTasks(cmd_args=None, cmd_options={}):
         showcorpse = True
         extra_hdr += " " + GetKCDataSummary.header
 
-    print GetTaskSummary.header + extra_hdr + " " + GetProcSummary.header
-    for t in kern.tasks:
-        pval = Cast(t.bsd_info, 'proc *')
-        out_str = GetTaskSummary(t, showcorpse) + " " + GetProcSummary(pval)
-        print out_str
+    with O.table(GetTaskSummary.header + extra_hdr + " " + GetProcSummary.header):
+        for t in kern.tasks:
+            pval = Cast(t.bsd_info, 'proc *')
+            print GetTaskSummary(t, showcorpse) + " " + GetProcSummary(pval)
+
     ZombTasks()
 
 @lldb_command('taskforpmap')

@@ -95,6 +95,8 @@
 #include <security/mac_framework.h>
 #endif
 
+#include <sys/paths.h>
+
 #if NAMEDRSRCFORK
 #include <sys/xattr.h>
 #endif
@@ -631,7 +633,21 @@ lookup_handle_rsrc_fork(vnode_t dp, struct nameidata *ndp, struct componentname 
 
 	/* Restore the truncated pathname buffer (for audits). */
 	if (ndp->ni_pathlen == 1 && ndp->ni_next[0] == '\0') {
-		ndp->ni_next[0] = '/';
+		/*
+		 * While we replaced only '/' with '\0' and would ordinarily
+		 * need to just switch that back, the buffer in which we did
+		 * this may not be what the pathname buffer is now when symlinks
+		 * are involved. If we just restore the "/" we will make the
+		 * string not terminated anymore, so be safe and restore the
+		 * entire suffix.
+		 */
+		strncpy(ndp->ni_next, _PATH_RSRCFORKSPEC, sizeof(_PATH_RSRCFORKSPEC));
+		cnp->cn_nameptr = ndp->ni_next + 1;
+		cnp->cn_namelen = sizeof(_PATH_RSRCFORKSPEC) - 1;
+		ndp->ni_next += cnp->cn_namelen;
+		if (ndp->ni_next[0] != '\0') {
+			panic("Incorrect termination of path in %s", __FUNCTION__);
+		}
 	}
 	cnp->cn_flags  &= ~MAKEENTRY;
 
@@ -1535,6 +1551,7 @@ lookup_handle_symlink(struct nameidata *ndp, vnode_t *new_dp, vfs_context_t ctx)
 	struct componentname *cnp = &ndp->ni_cnd;
 	vnode_t dp;
 	char *tmppn;
+	u_int rsrclen = (cnp->cn_flags & CN_WANTSRSRCFORK) ? sizeof(_PATH_RSRCFORKSPEC) : 0;
 
 	if (ndp->ni_loopcnt++ >= MAXSYMLINKS) {
 		return ELOOP;
@@ -1577,7 +1594,7 @@ lookup_handle_symlink(struct nameidata *ndp, vnode_t *new_dp, vfs_context_t ctx)
 	 * is only 1024.
 	 */
 	linklen = MAXPATHLEN - (u_int)uio_resid(auio);
-	if (linklen + ndp->ni_pathlen > MAXPATHLEN) {
+	if (linklen + ndp->ni_pathlen + rsrclen > MAXPATHLEN) {
 		if (need_newpathbuf) {
 			FREE_ZONE(cp, MAXPATHLEN, M_NAMEI);
 		}
@@ -1848,7 +1865,7 @@ kdebug_vfs_lookup(long *dbg_parms, int dbg_namelen, void *dp, uint32_t flags)
 
 void
 kdebug_lookup_gen_events(long *dbg_parms, int dbg_namelen, void *dp,
-    boolean_t lookup)
+    bool lookup)
 {
 	kdebug_vfs_lookup(dbg_parms, dbg_namelen, dp,
 	    lookup ? KDBG_VFS_LOOKUP_FLAG_LOOKUP : 0);
@@ -1972,7 +1989,24 @@ vfs_getrealpath(const char * path, char * realpath, size_t bufsize, vfs_context_
 
 	/* Get the target vnode. */
 	if (ino == 2) {
-		error = VFS_ROOT(mp, &vp, ctx);
+		struct vfs_attr vfsattr;
+		int use_vfs_root = TRUE;
+
+		VFSATTR_INIT(&vfsattr);
+		VFSATTR_WANTED(&vfsattr, f_capabilities);
+		if (vfs_getattr(mp, &vfsattr, vfs_context_kernel()) == 0 &&
+		    VFSATTR_IS_SUPPORTED(&vfsattr, f_capabilities)) {
+			if ((vfsattr.f_capabilities.capabilities[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_VOL_GROUPS) &&
+			    (vfsattr.f_capabilities.valid[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_VOL_GROUPS)) {
+				use_vfs_root = FALSE;
+			}
+		}
+
+		if (use_vfs_root) {
+			error = VFS_ROOT(mp, &vp, ctx);
+		} else {
+			error = VFS_VGET(mp, ino, &vp, ctx);
+		}
 	} else {
 		error = VFS_VGET(mp, ino, &vp, ctx);
 	}

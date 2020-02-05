@@ -144,9 +144,9 @@ ulmin(u_int32_t a, u_int32_t b)
 
 
 /* Prototypes for non-quad routines. */
-extern int      ffs(int);
+extern int      ffs(unsigned int);
 extern int      ffsll(unsigned long long);
-extern int      fls(int);
+extern int      fls(unsigned int);
 extern int      flsll(unsigned long long);
 extern u_int32_t        random(void);
 extern int      scanc(u_int, u_char *, const u_char *, int);
@@ -194,10 +194,15 @@ __nosan_crc16(uint16_t crc, const void *bufp, size_t len)
 #endif
 
 int     copystr(const void *kfaddr, void *kdaddr, size_t len, size_t *done);
-int     copyinstr(const user_addr_t uaddr, void *kaddr, size_t len, size_t *done);
+int     copyinstr(const user_addr_t uaddr, void *kaddr, size_t len, size_t *done) OS_WARN_RESULT;
 int     copyoutstr(const void *kaddr, user_addr_t udaddr, size_t len, size_t *done);
 #if XNU_KERNEL_PRIVATE
-extern int copyin_word(const user_addr_t user_addr, uint64_t *kernel_addr, vm_size_t nbytes);
+int     copyin_atomic32(const user_addr_t user_addr, uint32_t *u32);
+int     copyin_atomic32_wait_if_equals(const user_addr_t user_addr, uint32_t u32);
+int     copyin_atomic64(const user_addr_t user_addr, uint64_t *u64);
+int     copyout_atomic32(uint32_t u32, user_addr_t user_addr);
+int     copyout_atomic64(uint64_t u64, user_addr_t user_addr);
+int     copyoutstr_prevalidate(const void *kaddr, user_addr_t uaddr, size_t len);
 #endif
 
 int vsscanf(const char *, char const *, va_list);
@@ -206,7 +211,7 @@ extern int      vprintf(const char *, va_list) __printflike(1, 0);
 extern int      vsnprintf(char *, size_t, const char *, va_list) __printflike(3, 0);
 
 #if XNU_KERNEL_PRIVATE
-extern int      vprintf_log_locked(const char *, va_list) __printflike(1, 0);
+extern int      vprintf_log_locked(const char *, va_list, bool addcr) __printflike(1, 0);
 extern void     osobject_retain(void * object);
 extern void     osobject_release(void * object);
 #endif

@@ -142,7 +142,6 @@ __END_DECLS
 #endif /* __APPLE_API_OBSOLETE */
 
 #ifdef BSD_KERNEL_PRIVATE
-#include <machine/reboot.h>
 
 __BEGIN_DECLS
 int     reboot_kernel(int, char *);

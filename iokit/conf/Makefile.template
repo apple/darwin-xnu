@@ -17,7 +17,7 @@ include $(MakeInc_def)
 # XXX: CFLAGS
 #
 CFLAGS+= -include meta_features.h -DDRIVER_PRIVATE		\
-	-DIOKIT_KERNEL_PRIVATE -DIOMATCHDEBUG=1 -DIOALLOCDEBUG=1
+	-DIOKIT_KERNEL_PRIVATE -DDRIVERKIT_PRIVATE=1 -DIOMATCHDEBUG=1 -DIOALLOCDEBUG=1
 SFLAGS+= -include meta_features.h
 #-DIOKITDEBUG=-1
 
@@ -48,9 +48,10 @@ IOKitBSDInit.cpo_CXXWARNFLAGS_ADD += -Wno-missing-prototypes -Wno-documentation
 IOPMrootDomain.cpo_CXXWARNFLAGS_ADD += -Wno-missing-prototypes
 
 #
-# Directories for mig generated files
+# Directories for generated files
 #
-COMP_SUBDIRS =
+COMP_SUBDIRS = \
+	DriverKit
 
 #
 #  Make sure we don't remove this by accident if interrupted at the wrong
@@ -96,9 +97,9 @@ $(COMPONENT).filelist: $(OBJS)
                 $(SEG_HACK) -n __HIB -o $${hib_file}__ $${hib_file} || exit 1; \
                 mv $${hib_file}__ $${hib_file} || exit 1; \
 	done
-	@echo "$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0)"
+	$(call makelog,$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0))
 	$(_v)for obj in ${OBJS}; do	\
-		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
+		 $(ECHO) $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist
 
 do_all: $(COMPONENT).filelist

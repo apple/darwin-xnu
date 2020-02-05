@@ -174,7 +174,8 @@ static_assert((SCHED_LOAD_EWMA_ALPHA_OLD + SCHED_LOAD_EWMA_ALPHA_NEW) == (1ul <<
 #define SCHED_LOAD_EWMA_UNSCALE(load)   (((load) >> SCHED_LOAD_EWMA_ALPHA_SHIFT) + SCHED_LOAD_EWMA_ROUNDUP(load))
 
 /*
- * Routine to capture the latest runnable counts and update sched_load */
+ * Routine to capture the latest runnable counts and update sched_load (only used for non-clutch schedulers)
+ */
 void
 compute_sched_load(void)
 {
@@ -187,12 +188,12 @@ compute_sched_load(void)
 	uint32_t ncpus = processor_avail_count;
 	uint32_t load_now[TH_BUCKET_MAX];
 
-	load_now[TH_BUCKET_RUN]      = sched_run_buckets[TH_BUCKET_RUN];
-	load_now[TH_BUCKET_FIXPRI]   = sched_run_buckets[TH_BUCKET_FIXPRI];
-	load_now[TH_BUCKET_SHARE_FG] = sched_run_buckets[TH_BUCKET_SHARE_FG];
-	load_now[TH_BUCKET_SHARE_DF] = sched_run_buckets[TH_BUCKET_SHARE_DF];
-	load_now[TH_BUCKET_SHARE_UT] = sched_run_buckets[TH_BUCKET_SHARE_UT];
-	load_now[TH_BUCKET_SHARE_BG] = sched_run_buckets[TH_BUCKET_SHARE_BG];
+	load_now[TH_BUCKET_RUN]      = os_atomic_load(&sched_run_buckets[TH_BUCKET_RUN], relaxed);
+	load_now[TH_BUCKET_FIXPRI]   = os_atomic_load(&sched_run_buckets[TH_BUCKET_FIXPRI], relaxed);
+	load_now[TH_BUCKET_SHARE_FG] = os_atomic_load(&sched_run_buckets[TH_BUCKET_SHARE_FG], relaxed);
+	load_now[TH_BUCKET_SHARE_DF] = os_atomic_load(&sched_run_buckets[TH_BUCKET_SHARE_DF], relaxed);
+	load_now[TH_BUCKET_SHARE_UT] = os_atomic_load(&sched_run_buckets[TH_BUCKET_SHARE_UT], relaxed);
+	load_now[TH_BUCKET_SHARE_BG] = os_atomic_load(&sched_run_buckets[TH_BUCKET_SHARE_BG], relaxed);
 
 	assert(load_now[TH_BUCKET_RUN] >= 0);
 	assert(load_now[TH_BUCKET_FIXPRI] >= 0);
@@ -285,7 +286,7 @@ compute_sched_load(void)
 void
 compute_averages(uint64_t stdelta)
 {
-	uint32_t nthreads = sched_run_buckets[TH_BUCKET_RUN] - 1;
+	uint32_t nthreads = os_atomic_load(&sched_run_buckets[TH_BUCKET_RUN], relaxed) - 1;
 	uint32_t ncpus = processor_avail_count;
 
 	/* Update the global pri_shifts based on the latest values */

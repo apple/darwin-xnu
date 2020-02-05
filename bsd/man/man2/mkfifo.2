@@ -112,6 +112,8 @@ error occurred while reading from or writing to the file system.
 .It Bq Er EFAULT
 .Fa Path
 points outside the process's allocated address space.
+.It Bq Eq EILSEQ
+The filename does not match the encoding rules.
 .El
 .Sh SEE ALSO
 .Xr chmod 2 ,

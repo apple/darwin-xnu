@@ -27,95 +27,18 @@
  */
 
 #include <machine/asm.h>
+#include <arm64/machine_routines_asm.h>
 #include <arm64/proc_reg.h>
 #include <pexpert/arm64/board_config.h>
 #include <mach/exception_types.h>
 #include <mach_kdp.h>
 #include <config_dtrace.h>
 #include "assym.s"
+#include <arm64/exception_asm.h>
 
 #if __ARM_KERNEL_PROTECT__
 #include <arm/pmap.h>
 #endif
-
-
-/*
- * INIT_SAVED_STATE_FLAVORS
- *
- * Initializes the saved state flavors of a new saved state structure
- *  arg0 - saved state pointer
- *  arg1 - 32-bit scratch reg
- *  arg2 - 32-bit scratch reg
- */
-.macro INIT_SAVED_STATE_FLAVORS
-	mov		$1, ARM_SAVED_STATE64				// Set saved state to 64-bit flavor
-	mov		$2, ARM_SAVED_STATE64_COUNT
-	stp		$1, $2, [$0, SS_FLAVOR]
-	mov		$1, ARM_NEON_SAVED_STATE64			// Set neon state to 64-bit flavor
-	str		$1, [$0, NS_FLAVOR]
-	mov		$1, ARM_NEON_SAVED_STATE64_COUNT
-	str		$1, [$0, NS_COUNT]
-.endmacro
-
-
-/*
- * SPILL_REGISTERS
- *
- * Spills the current set of registers (excluding x0 and x1) to the specified
- * save area.
- *   x0 - Address of the save area
- */
-.macro SPILL_REGISTERS
-	stp		x2, x3, [x0, SS64_X2]				// Save remaining GPRs
-	stp		x4, x5, [x0, SS64_X4]
-	stp		x6, x7, [x0, SS64_X6]
-	stp		x8, x9, [x0, SS64_X8]
-	stp		x10, x11, [x0, SS64_X10]
-	stp		x12, x13, [x0, SS64_X12]
-	stp		x14, x15, [x0, SS64_X14]
-	stp		x16, x17, [x0, SS64_X16]
-	stp		x18, x19, [x0, SS64_X18]
-	stp		x20, x21, [x0, SS64_X20]
-	stp		x22, x23, [x0, SS64_X22]
-	stp		x24, x25, [x0, SS64_X24]
-	stp		x26, x27, [x0, SS64_X26]
-	str		x28, [x0, SS64_X28]
-
-	/* Save arm_neon_saved_state64 */
-
-	stp		q0, q1, [x0, NS64_Q0]
-	stp		q2, q3, [x0, NS64_Q2]
-	stp		q4, q5, [x0, NS64_Q4]
-	stp		q6, q7, [x0, NS64_Q6]
-	stp		q8, q9, [x0, NS64_Q8]
-	stp		q10, q11, [x0, NS64_Q10]
-	stp		q12, q13, [x0, NS64_Q12]
-	stp		q14, q15, [x0, NS64_Q14]
-	stp		q16, q17, [x0, NS64_Q16]
-	stp		q18, q19, [x0, NS64_Q18]
-	stp		q20, q21, [x0, NS64_Q20]
-	stp		q22, q23, [x0, NS64_Q22]
-	stp		q24, q25, [x0, NS64_Q24]
-	stp		q26, q27, [x0, NS64_Q26]
-	stp		q28, q29, [x0, NS64_Q28]
-	stp		q30, q31, [x0, NS64_Q30]
-
-	mrs		lr,  ELR_EL1						// Get exception link register
-	mrs		x23, SPSR_EL1						// Load CPSR into var reg x23
-	mrs		x24, FPSR
-	mrs		x25, FPCR
-
-
-	str		lr, [x0, SS64_PC]					// Save ELR to PCB
-	str		w23, [x0, SS64_CPSR]				// Save CPSR to PCB
-	str		w24, [x0, NS64_FPSR]
-	str		w25, [x0, NS64_FPCR]
-
-	mrs		x20, FAR_EL1
-	mrs		x21, ESR_EL1
-	str		x20, [x0, SS64_FAR]
-	str		w21, [x0, SS64_ESR]
-.endmacro
 
 
 #define	CBF_DISABLE	0
@@ -204,19 +127,21 @@
 	.align 3
 	.globl EXT(exc_vectors_table)
 LEXT(exc_vectors_table)
-	/* Table of exception handlers. */
-	.quad Lel1_sp0_synchronous_vector_long
-	.quad Lel1_sp0_irq_vector_long
-	.quad Lel1_sp0_fiq_vector_long
-	.quad Lel1_sp0_serror_vector_long
-	.quad Lel1_sp1_synchronous_vector_long
-	.quad Lel1_sp1_irq_vector_long
-	.quad Lel1_sp1_fiq_vector_long
-	.quad Lel1_sp1_serror_vector_long
-	.quad Lel0_synchronous_vector_64_long
-	.quad Lel0_irq_vector_64_long
-	.quad Lel0_fiq_vector_64_long
-	.quad Lel0_serror_vector_64_long
+	/* Table of exception handlers.
+         * These handlers sometimes contain deadloops. 
+         * It's nice to have symbols for them when debugging. */
+	.quad el1_sp0_synchronous_vector_long
+	.quad el1_sp0_irq_vector_long
+	.quad el1_sp0_fiq_vector_long
+	.quad el1_sp0_serror_vector_long
+	.quad el1_sp1_synchronous_vector_long
+	.quad el1_sp1_irq_vector_long
+	.quad el1_sp1_fiq_vector_long
+	.quad el1_sp1_serror_vector_long
+	.quad el0_synchronous_vector_64_long
+	.quad el0_irq_vector_64_long
+	.quad el0_fiq_vector_64_long
+	.quad el0_serror_vector_64_long
 #endif /* __ARM_KERNEL_PROTECT__ */
 
 	.text
@@ -234,66 +159,66 @@ LEXT(exc_vectors_table)
 	.globl EXT(ExceptionVectorsBase)
 LEXT(ExceptionVectorsBase)
 Lel1_sp0_synchronous_vector:
-	BRANCH_TO_KVA_VECTOR Lel1_sp0_synchronous_vector_long, 0
+	BRANCH_TO_KVA_VECTOR el1_sp0_synchronous_vector_long, 0
 
 	.text
 	.align 7
 Lel1_sp0_irq_vector:
-	BRANCH_TO_KVA_VECTOR Lel1_sp0_irq_vector_long, 1
+	BRANCH_TO_KVA_VECTOR el1_sp0_irq_vector_long, 1
 
 	.text
 	.align 7
 Lel1_sp0_fiq_vector:
-	BRANCH_TO_KVA_VECTOR Lel1_sp0_fiq_vector_long, 2
+	BRANCH_TO_KVA_VECTOR el1_sp0_fiq_vector_long, 2
 
 	.text
 	.align 7
 Lel1_sp0_serror_vector:
-	BRANCH_TO_KVA_VECTOR Lel1_sp0_serror_vector_long, 3
+	BRANCH_TO_KVA_VECTOR el1_sp0_serror_vector_long, 3
 
 	.text
 	.align 7
 Lel1_sp1_synchronous_vector:
-	BRANCH_TO_KVA_VECTOR Lel1_sp1_synchronous_vector_long, 4
+	BRANCH_TO_KVA_VECTOR el1_sp1_synchronous_vector_long, 4
 
 	.text
 	.align 7
 Lel1_sp1_irq_vector:
-	BRANCH_TO_KVA_VECTOR Lel1_sp1_irq_vector_long, 5
+	BRANCH_TO_KVA_VECTOR el1_sp1_irq_vector_long, 5
 
 	.text
 	.align 7
 Lel1_sp1_fiq_vector:
-	BRANCH_TO_KVA_VECTOR Lel1_sp1_fiq_vector_long, 6
+	BRANCH_TO_KVA_VECTOR el1_sp1_fiq_vector_long, 6
 
 	.text
 	.align 7
 Lel1_sp1_serror_vector:
-	BRANCH_TO_KVA_VECTOR Lel1_sp1_serror_vector, 7
+	BRANCH_TO_KVA_VECTOR el1_sp1_serror_vector_long, 7
 
 	.text
 	.align 7
 Lel0_synchronous_vector_64:
 	MAP_KERNEL
-	BRANCH_TO_KVA_VECTOR Lel0_synchronous_vector_64_long, 8
+	BRANCH_TO_KVA_VECTOR el0_synchronous_vector_64_long, 8
 
 	.text
 	.align 7
 Lel0_irq_vector_64:
 	MAP_KERNEL
-	BRANCH_TO_KVA_VECTOR Lel0_irq_vector_64_long, 9
+	BRANCH_TO_KVA_VECTOR el0_irq_vector_64_long, 9
 
 	.text
 	.align 7
 Lel0_fiq_vector_64:
 	MAP_KERNEL
-	BRANCH_TO_KVA_VECTOR Lel0_fiq_vector_64_long, 10
+	BRANCH_TO_KVA_VECTOR el0_fiq_vector_64_long, 10
 
 	.text
 	.align 7
 Lel0_serror_vector_64:
 	MAP_KERNEL
-	BRANCH_TO_KVA_VECTOR Lel0_serror_vector_64_long, 11
+	BRANCH_TO_KVA_VECTOR el0_serror_vector_64_long, 11
 
 	/* Fill out the rest of the page */
 	.align 12
@@ -313,7 +238,7 @@ Lel0_serror_vector_64:
 	mov		x0, sp								// Copy saved state pointer to x0
 .endmacro
 
-Lel1_sp0_synchronous_vector_long:
+el1_sp0_synchronous_vector_long:
 	sub		sp, sp, ARM_CONTEXT_SIZE			// Make space on the exception stack
 	stp		x0, x1, [sp, SS64_X0]				// Save x0, x1 to the stack
 	mrs		x1, ESR_EL1							// Get the exception syndrome
@@ -331,35 +256,35 @@ Lkernel_stack_valid:
 	ldp		x0, x1, [sp, SS64_X0]				// Restore x0, x1
 	add		sp, sp, ARM_CONTEXT_SIZE			// Restore SP1
 	EL1_SP0_VECTOR
-	adrp	x1, fleh_synchronous@page			// Load address for fleh
-	add		x1, x1, fleh_synchronous@pageoff
+	adrp	x1, EXT(fleh_synchronous)@page			// Load address for fleh
+	add		x1, x1, EXT(fleh_synchronous)@pageoff
 	b		fleh_dispatch64
 
-Lel1_sp0_irq_vector_long:
+el1_sp0_irq_vector_long:
 	EL1_SP0_VECTOR
 	mrs		x1, TPIDR_EL1
 	ldr		x1, [x1, ACT_CPUDATAP]
 	ldr		x1, [x1, CPU_ISTACKPTR]
 	mov		sp, x1
-	adrp	x1, fleh_irq@page					// Load address for fleh
-	add		x1, x1, fleh_irq@pageoff
+	adrp	x1, EXT(fleh_irq)@page					// Load address for fleh
+	add		x1, x1, EXT(fleh_irq)@pageoff
 	b		fleh_dispatch64
 
-Lel1_sp0_fiq_vector_long:
+el1_sp0_fiq_vector_long:
 	// ARM64_TODO write optimized decrementer
 	EL1_SP0_VECTOR
 	mrs		x1, TPIDR_EL1
 	ldr		x1, [x1, ACT_CPUDATAP]
 	ldr		x1, [x1, CPU_ISTACKPTR]
 	mov		sp, x1
-	adrp	x1, fleh_fiq@page					// Load address for fleh
-	add		x1, x1, fleh_fiq@pageoff
+	adrp	x1, EXT(fleh_fiq)@page					// Load address for fleh
+	add		x1, x1, EXT(fleh_fiq)@pageoff
 	b		fleh_dispatch64
 
-Lel1_sp0_serror_vector_long:
+el1_sp0_serror_vector_long:
 	EL1_SP0_VECTOR
-	adrp	x1, fleh_serror@page				// Load address for fleh
-	add		x1, x1, fleh_serror@pageoff
+	adrp	x1, EXT(fleh_serror)@page				// Load address for fleh
+	add		x1, x1, EXT(fleh_serror)@pageoff
 	b		fleh_dispatch64
 
 .macro EL1_SP1_VECTOR
@@ -372,7 +297,7 @@ Lel1_sp0_serror_vector_long:
 	mov		x0, sp								// Copy saved state pointer to x0
 .endmacro
 
-Lel1_sp1_synchronous_vector_long:
+el1_sp1_synchronous_vector_long:
 	b		check_exception_stack
 Lel1_sp1_synchronous_valid_stack:
 #if defined(KERNEL_INTEGRITY_KTRR)
@@ -384,27 +309,60 @@ Lel1_sp1_synchronous_vector_continue:
 	add		x1, x1, fleh_synchronous_sp1@pageoff
 	b		fleh_dispatch64
 
-Lel1_sp1_irq_vector_long:
+el1_sp1_irq_vector_long:
 	EL1_SP1_VECTOR
 	adrp	x1, fleh_irq_sp1@page
 	add		x1, x1, fleh_irq_sp1@pageoff
 	b		fleh_dispatch64
 
-Lel1_sp1_fiq_vector_long:
+el1_sp1_fiq_vector_long:
 	EL1_SP1_VECTOR
 	adrp	x1, fleh_fiq_sp1@page
 	add		x1, x1, fleh_fiq_sp1@pageoff
 	b		fleh_dispatch64
 
-Lel1_sp1_serror_vector_long:
+el1_sp1_serror_vector_long:
 	EL1_SP1_VECTOR
 	adrp	x1, fleh_serror_sp1@page
 	add		x1, x1, fleh_serror_sp1@pageoff
 	b		fleh_dispatch64
 
+#if defined(HAS_APPLE_PAC) && !(__APCFG_SUPPORTED__ || __APSTS_SUPPORTED__)
+/**
+ * On these CPUs, SCTLR_CP15BEN_ENABLED is res0, and SCTLR_{ITD,SED}_DISABLED are res1.
+ * The rest of the bits in SCTLR_EL1_DEFAULT | SCTLR_PACIB_ENABLED are set in common_start.
+ */
+#define SCTLR_EL1_INITIAL	(SCTLR_EL1_DEFAULT | SCTLR_PACIB_ENABLED)
+#define SCTLR_EL1_EXPECTED	((SCTLR_EL1_INITIAL | SCTLR_SED_DISABLED | SCTLR_ITD_DISABLED) & ~SCTLR_CP15BEN_ENABLED)
+#endif
+
 .macro EL0_64_VECTOR
 	mov		x18, #0 						// Zero x18 to avoid leaking data to user SS
 	stp		x0, x1, [sp, #-16]!					// Save x0 and x1 to the exception stack
+#if defined(HAS_APPLE_PAC) && !(__APCFG_SUPPORTED__ || __APSTS_SUPPORTED__)
+	// enable JOP for kernel
+	adrp	x0, EXT(const_boot_args)@page
+	add		x0, x0, EXT(const_boot_args)@pageoff
+	ldr		x0, [x0, BA_BOOT_FLAGS]
+	and		x0, x0, BA_BOOT_FLAGS_DISABLE_JOP
+	cbnz	x0, 1f
+	// if disable jop is set, don't touch SCTLR (it's already off)
+	// if (!boot_args->kernel_jop_disable) {
+	mrs		x0, SCTLR_EL1
+	tbnz	x0, SCTLR_PACIA_ENABLED_SHIFT, 1f
+	//      turn on jop for kernel if it isn't already on
+	//	if (!jop_running) {
+	MOV64 	x1, SCTLR_JOP_KEYS_ENABLED
+	orr		x0, x0, x1
+	msr		SCTLR_EL1, x0
+	isb		sy
+	MOV64	x1, SCTLR_EL1_EXPECTED | SCTLR_JOP_KEYS_ENABLED
+	cmp		x0, x1
+	bne		.
+	//	}
+	// }
+1:
+#endif /* defined(HAS_APPLE_PAC) && !(__APCFG_SUPPORTED__ || __APSTS_SUPPORTED__) */
 	mrs		x0, TPIDR_EL1						// Load the thread register
 	mrs		x1, SP_EL0							// Load the user stack pointer
 	add		x0, x0, ACT_CONTEXT					// Calculate where we store the user context pointer
@@ -421,42 +379,42 @@ Lel1_sp1_serror_vector_long:
 .endmacro
 
 
-Lel0_synchronous_vector_64_long:
+el0_synchronous_vector_64_long:
 	EL0_64_VECTOR
 	mrs		x1, TPIDR_EL1						// Load the thread register
 	ldr		x1, [x1, TH_KSTACKPTR]				// Load the top of the kernel stack to x1
 	mov		sp, x1								// Set the stack pointer to the kernel stack
-	adrp	x1, fleh_synchronous@page			// Load address for fleh
-	add		x1, x1, fleh_synchronous@pageoff
+	adrp	x1, EXT(fleh_synchronous)@page			// Load address for fleh
+	add		x1, x1, EXT(fleh_synchronous)@pageoff
 	b		fleh_dispatch64
 
-Lel0_irq_vector_64_long:
+el0_irq_vector_64_long:
 	EL0_64_VECTOR
 	mrs		x1, TPIDR_EL1
 	ldr		x1, [x1, ACT_CPUDATAP]
 	ldr		x1, [x1, CPU_ISTACKPTR]
 	mov		sp, x1								// Set the stack pointer to the kernel stack
-	adrp	x1, fleh_irq@page					// load address for fleh
-	add		x1, x1, fleh_irq@pageoff
+	adrp	x1, EXT(fleh_irq)@page					// load address for fleh
+	add		x1, x1, EXT(fleh_irq)@pageoff
 	b		fleh_dispatch64
 
-Lel0_fiq_vector_64_long:
+el0_fiq_vector_64_long:
 	EL0_64_VECTOR
 	mrs		x1, TPIDR_EL1
 	ldr		x1, [x1, ACT_CPUDATAP]
 	ldr		x1, [x1, CPU_ISTACKPTR]
 	mov		sp, x1								// Set the stack pointer to the kernel stack
-	adrp	x1, fleh_fiq@page					// load address for fleh
-	add		x1, x1, fleh_fiq@pageoff
+	adrp	x1, EXT(fleh_fiq)@page					// load address for fleh
+	add		x1, x1, EXT(fleh_fiq)@pageoff
 	b		fleh_dispatch64
 
-Lel0_serror_vector_64_long:
+el0_serror_vector_64_long:
 	EL0_64_VECTOR
 	mrs		x1, TPIDR_EL1						// Load the thread register
 	ldr		x1, [x1, TH_KSTACKPTR]				// Load the top of the kernel stack to x1
 	mov		sp, x1								// Set the stack pointer to the kernel stack
-	adrp	x1, fleh_serror@page				// load address for fleh
-	add		x1, x1, fleh_serror@pageoff
+	adrp	x1, EXT(fleh_serror)@page				// load address for fleh
+	add		x1, x1, EXT(fleh_serror)@pageoff
 	b		fleh_dispatch64
 
 
@@ -583,7 +541,7 @@ check_ktrr_sctlr_trap:
 	.align 2
 fleh_dispatch64:
 	/* Save arm_saved_state64 */
-	SPILL_REGISTERS
+	SPILL_REGISTERS KERNEL_MODE
 
 	/* If exception is from userspace, zero unused registers */
 	and		x23, x23, #(PSR64_MODE_EL_MASK)
@@ -640,7 +598,8 @@ fleh_dispatch64:
 
 	.text
 	.align 2
-fleh_synchronous:
+	.global EXT(fleh_synchronous)
+LEXT(fleh_synchronous)
 	mrs		x1, ESR_EL1							// Load exception syndrome
 	mrs		x2, FAR_EL1							// Load fault address
 
@@ -724,7 +683,8 @@ Lfleh_sync_load_lr:
 
 	.text
 	.align 2
-fleh_irq:
+	.global EXT(fleh_irq)
+LEXT(fleh_irq)
 	BEGIN_INTERRUPT_HANDLER
 	PUSH_FRAME
 	bl		EXT(sleh_irq)
@@ -742,7 +702,8 @@ LEXT(fleh_fiq_generic)
 
 	.text
 	.align 2
-fleh_fiq:
+	.global EXT(fleh_fiq)
+LEXT(fleh_fiq)
 	BEGIN_INTERRUPT_HANDLER
 	PUSH_FRAME
 	bl		EXT(sleh_fiq)
@@ -754,7 +715,8 @@ fleh_fiq:
 
 	.text
 	.align 2
-fleh_serror:
+	.global EXT(fleh_serror)
+LEXT(fleh_serror)
 	mrs		x1, ESR_EL1							// Load exception syndrome
 	mrs		x2, FAR_EL1							// Load fault address
 
@@ -820,31 +782,27 @@ Lsp1_serror_str:
 	.text
 	.align 2
 exception_return_dispatch:
-	ldr		w0, [x21, SS_FLAVOR]			// x0 = (threadIs64Bit) ? ss_64.cpsr : ss_32.cpsr
-	cmp		x0, ARM_SAVED_STATE64
-	ldr		w1, [x21, SS64_CPSR]
-	ldr		w2, [x21, SS32_CPSR]
-	csel	w0, w1, w2, eq
-	tbnz	w0, PSR64_MODE_EL_SHIFT, return_to_kernel // Test for low bit of EL, return to kernel if set
+	ldr		w0, [x21, SS64_CPSR]
+	tst		w0, PSR64_MODE_EL_MASK
+	b.ne	return_to_kernel // return to kernel if M[3:2] > 0
 	b		return_to_user
 
 	.text
 	.align 2
 return_to_kernel:
-	tbnz	w0, #DAIF_IRQF_SHIFT, Lkernel_skip_ast_taken	// Skip AST check if IRQ disabled
-	msr		DAIFSet, #(DAIFSC_IRQF | DAIFSC_FIQF)		// Disable interrupts
-	mrs		x0, TPIDR_EL1								// Load thread pointer
-	ldr		w1, [x0, ACT_PREEMPT_CNT]					// Load preemption count
-	cbnz	x1, Lkernel_skip_ast_taken					// If preemption disabled, skip AST check
-	ldr		x1, [x0, ACT_CPUDATAP]						// Get current CPU data pointer
-	ldr		x2, [x1, CPU_PENDING_AST]					// Get ASTs
-	tst		x2, AST_URGENT								// If no urgent ASTs, skip ast_taken
-	b.eq	Lkernel_skip_ast_taken
-	mov		sp, x21										// Switch to thread stack for preemption
+	tbnz	w0, #DAIF_IRQF_SHIFT, exception_return  // Skip AST check if IRQ disabled
+	mrs		x3, TPIDR_EL1                           // Load thread pointer
+	ldr		w1, [x3, ACT_PREEMPT_CNT]               // Load preemption count
+	msr		DAIFSet, #DAIFSC_ALL                    // Disable exceptions
+	cbnz	x1, exception_return_unint_tpidr_x3     // If preemption disabled, skip AST check
+	ldr		x1, [x3, ACT_CPUDATAP]                  // Get current CPU data pointer
+	ldr		x2, [x1, CPU_PENDING_AST]               // Get ASTs
+	tst		x2, AST_URGENT                          // If no urgent ASTs, skip ast_taken
+	b.eq	exception_return_unint_tpidr_x3
+	mov		sp, x21                                 // Switch to thread stack for preemption
 	PUSH_FRAME
-	bl		EXT(ast_taken_kernel)						// Handle AST_URGENT
+	bl		EXT(ast_taken_kernel)                   // Handle AST_URGENT
 	POP_FRAME
-Lkernel_skip_ast_taken:
 	b		exception_return
 
 	.text
@@ -870,26 +828,33 @@ LEXT(thread_exception_return)
 	.text
 return_to_user:
 check_user_asts:
-	msr		DAIFSet, #(DAIFSC_IRQF | DAIFSC_FIQF)		// Disable interrupts
 	mrs		x3, TPIDR_EL1								// Load thread pointer
 
 	movn		w2, #0
 	str		w2, [x3, TH_IOTIER_OVERRIDE]			// Reset IO tier override to -1 before returning to user
 
+#if MACH_ASSERT
 	ldr		w0, [x3, TH_RWLOCK_CNT]
-	cbz		w0, 1f								// Detect unbalance RW lock/unlock
+	cbz		w0, 1f						// Detect unbalance RW lock/unlock
 	b		rwlock_count_notzero
 1:
+	ldr		w0, [x3, ACT_PREEMPT_CNT]
+	cbz		w0, 1f
+	b		preempt_count_notzero
+1:
+#endif
 	
-	ldr		x4, [x3, ACT_CPUDATAP]						// Get current CPU data pointer
-	ldr		x0, [x4, CPU_PENDING_AST]					// Get ASTs
-	cbnz	x0, user_take_ast							// If pending ASTs, go service them
+	msr		DAIFSet, #DAIFSC_ALL				// Disable exceptions
+	ldr		x4, [x3, ACT_CPUDATAP]				// Get current CPU data pointer
+	ldr		x0, [x4, CPU_PENDING_AST]			// Get ASTs
+	cbnz	x0, user_take_ast					// If pending ASTs, go service them
 	
 #if	!CONFIG_SKIP_PRECISE_USER_KERNEL_TIME
+	mov		x19, x3						// Preserve thread pointer across function call
 	PUSH_FRAME
 	bl		EXT(timer_state_event_kernel_to_user)
 	POP_FRAME
-	mrs		x3, TPIDR_EL1								// Reload thread pointer
+	mov		x3, x19
 #endif  /* !CONFIG_SKIP_PRECISE_USER_KERNEL_TIME */
 
 #if (CONFIG_KERNEL_INTEGRITY && KERNEL_INTEGRITY_WT)
@@ -923,6 +888,7 @@ check_user_asts:
 	ldr		x0, [x3, ACT_DEBUGDATA]
 	orr		x1, x1, x0							// Thread debug state and live debug state both NULL?
 	cbnz	x1, user_set_debug_state_and_return	// If one or the other non-null, go set debug state
+	b		exception_return_unint_tpidr_x3
 
 	//
 	// Fall through from return_to_user to exception_return.
@@ -932,7 +898,9 @@ check_user_asts:
 
 exception_return:
 	msr		DAIFSet, #DAIFSC_ALL				// Disable exceptions
+exception_return_unint:
 	mrs		x3, TPIDR_EL1					// Load thread pointer
+exception_return_unint_tpidr_x3:
 	mov		sp, x21						// Reload the pcb pointer
 
 	/* ARM64_TODO Reserve x18 until we decide what to do with it */
@@ -960,18 +928,42 @@ Lskip_el0_eret_mapping:
 #endif /* __ARM_KERNEL_PROTECT__ */
 
 Lexception_return_restore_registers:
-	/* Restore special register state */
-	ldr		x0, [sp, SS64_PC]					// Get the return address
-	ldr		w1, [sp, SS64_CPSR]					// Get the return CPSR
-	ldr		w2, [sp, NS64_FPSR]
-	ldr		w3, [sp, NS64_FPCR]
-
-	msr		ELR_EL1, x0							// Load the return address into ELR
-	msr		SPSR_EL1, x1						// Load the return CPSR into SPSR
-	msr		FPSR, x2
-	msr		FPCR, x3							// Synchronized by ERET
-
 	mov 	x0, sp								// x0 = &pcb
+	// Loads authed $x0->ss_64.pc into x1 and $x0->ss_64.cpsr into w2
+	AUTH_THREAD_STATE_IN_X0	x20, x21, x22, x23, x24
+
+/* Restore special register state */
+	ldr		w3, [sp, NS64_FPSR]
+	ldr		w4, [sp, NS64_FPCR]
+
+	msr		ELR_EL1, x1							// Load the return address into ELR
+	msr		SPSR_EL1, x2						// Load the return CPSR into SPSR
+	msr		FPSR, x3
+	msr		FPCR, x4							// Synchronized by ERET
+
+#if defined(HAS_APPLE_PAC) && !(__APCFG_SUPPORTED__ || __APSTS_SUPPORTED__)
+	/* if eret to userspace, disable JOP */
+	tbnz	w2, PSR64_MODE_EL_SHIFT, Lskip_disable_jop
+	adrp	x4, EXT(const_boot_args)@page
+	add		x4, x4, EXT(const_boot_args)@pageoff
+	ldr		x4, [x4, BA_BOOT_FLAGS]
+	and		x1, x4, BA_BOOT_FLAGS_DISABLE_JOP
+	cbnz	x1, Lskip_disable_jop // if global JOP disabled, don't touch SCTLR (kernel JOP is already off)
+	and		x1, x4, BA_BOOT_FLAGS_DISABLE_USER_JOP
+	cbnz	x1, Ldisable_jop // if global user JOP disabled, always turn off JOP regardless of thread flag (kernel running with JOP on)
+	mrs		x2, TPIDR_EL1
+	ldr		x2, [x2, TH_DISABLE_USER_JOP]
+	cbz		x2, Lskip_disable_jop // if thread has JOP enabled, leave it on (kernel running with JOP on)
+Ldisable_jop:
+	MOV64	x1, SCTLR_JOP_KEYS_ENABLED
+	mrs		x4, SCTLR_EL1
+	bic		x4, x4, x1
+	msr		SCTLR_EL1, x4
+	MOV64	x1, SCTLR_EL1_EXPECTED
+	cmp		x4, x1
+	bne		.
+Lskip_disable_jop:
+#endif /* defined(HAS_APPLE_PAC) && !(__APCFG_SUPPORTED__ || __APSTS_SUPPORTED__)*/
 
 	/* Restore arm_neon_saved_state64 */
 	ldp		q0, q1, [x0, NS64_Q0]
@@ -1001,14 +993,15 @@ Lexception_return_restore_registers:
 	ldp		x10, x11, [x0, SS64_X10]
 	ldp		x12, x13, [x0, SS64_X12]
 	ldp		x14, x15, [x0, SS64_X14]
-	ldp		x16, x17, [x0, SS64_X16]
+	// Skip x16, x17 - already loaded + authed by AUTH_THREAD_STATE_IN_X0
 	ldp		x18, x19, [x0, SS64_X18]
 	ldp		x20, x21, [x0, SS64_X20]
 	ldp		x22, x23, [x0, SS64_X22]
 	ldp		x24, x25, [x0, SS64_X24]
 	ldp		x26, x27, [x0, SS64_X26]
 	ldr		x28, [x0, SS64_X28]
-	ldp		fp, lr, [x0, SS64_FP]
+	ldr		fp, [x0, SS64_FP]
+	// Skip lr - already loaded + authed by AUTH_THREAD_STATE_IN_X0
 
 	// Restore stack pointer and our last two GPRs
 	ldr		x1, [x0, SS64_SP]
@@ -1052,18 +1045,18 @@ user_take_ast:
 	PUSH_FRAME
 	bl		EXT(ast_taken_user)							// Handle all ASTs, may return via continuation
 	POP_FRAME
-	mrs		x3, TPIDR_EL1								// Reload thread pointer
 	b		check_user_asts								// Now try again
 
 user_set_debug_state_and_return:
+
+
 	ldr		x4, [x3, ACT_CPUDATAP]				// Get current CPU data pointer
 	isb											// Synchronize context
 	PUSH_FRAME
 	bl		EXT(arm_debug_set)					// Establish thread debug state in live regs
 	POP_FRAME
 	isb
-	mrs		x3, TPIDR_EL1						// Reload thread pointer
-	b 		exception_return			// And continue
+	b 		exception_return_unint					// Continue, reloading the thread pointer
 
 	.text
 	.align 2
@@ -1077,6 +1070,7 @@ L_underflow_str:
 	.asciz "Preemption count negative on thread %p"
 .align 2
 
+#if MACH_ASSERT
 	.text
 	.align 2
 rwlock_count_notzero:
@@ -1089,6 +1083,21 @@ rwlock_count_notzero:
 
 L_rwlock_count_notzero_str:
 	.asciz "RW lock count not 0 on thread %p (%u)"
+
+	.text
+	.align 2
+preempt_count_notzero:
+	mrs		x0, TPIDR_EL1
+	str		x0, [sp, #-16]!						// We'll print thread pointer
+	ldr		w0, [x0, ACT_PREEMPT_CNT]
+	str		w0, [sp, #8]
+	adr		x0, L_preempt_count_notzero_str					// Format string
+	CALL_EXTERN panic							// Game over
+
+L_preempt_count_notzero_str:
+	.asciz "preemption count not 0 on thread %p (%u)"
+#endif /* MACH_ASSERT */
+
 .align 2
 
 #if __ARM_KERNEL_PROTECT__

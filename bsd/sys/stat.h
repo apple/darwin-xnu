@@ -493,8 +493,9 @@ extern void munge_user32_stat64(struct stat64 *sbp, struct user32_stat64 *usbp);
 /*
  * Super-user changeable flags.
  */
-#define SF_SUPPORTED    0x001f0000      /* mask of superuser supported flags */
-#define SF_SETTABLE     0xffff0000      /* mask of superuser changeable flags */
+#define SF_SUPPORTED    0x009f0000      /* mask of superuser supported flags */
+#define SF_SETTABLE     0x3fff0000      /* mask of superuser changeable flags */
+#define SF_SYNTHETIC    0xc0000000      /* mask of system read-only synthetic flags */
 #define SF_ARCHIVED     0x00010000      /* file is archived */
 #define SF_IMMUTABLE    0x00020000      /* file may not be changed */
 #define SF_APPEND       0x00040000      /* writes to file may only append */
@@ -507,6 +508,27 @@ extern void munge_user32_stat64(struct stat64 *sbp, struct user32_stat64 *usbp);
  */
 /* #define SF_SNAPSHOT	0x00200000 */	/* snapshot inode */
 /* NOTE: There is no SF_HIDDEN bit. */
+
+#define SF_FIRMLINK     0x00800000      /* file is a firmlink */
+
+/*
+ * Synthetic flags.
+ *
+ * These are read-only.  We keep them out of SF_SUPPORTED so that
+ * attempts to set them will fail.
+ */
+#define SF_DATALESS     0x40000000     /* file is dataless object */
+
+#ifdef PRIVATE
+/*
+ * Protected flags.
+ *
+ * These flags are read-write, but can only be changed using the safe
+ * mechanism (FSIOC_CAS_BSDFLAGS).  The standard chflags(2) mechanism
+ * will simply preserve these bits as they are in the inode.
+ */
+#define UF_SF_PROTECTED (UF_COMPRESSED)
+#endif
 
 #ifdef KERNEL
 /*

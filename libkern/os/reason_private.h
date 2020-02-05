@@ -53,7 +53,7 @@ OS_ENUM(os_reason_libsystem_code, uint64_t,
 int
 os_fault_with_payload(uint32_t reason_namespace, uint64_t reason_code,
     void *payload, uint32_t payload_size, const char *reason_string,
-    uint64_t reason_flags);
+    uint64_t reason_flags) __attribute__((cold));
 
 #endif // !KERNEL
 

@@ -53,6 +53,7 @@
 #include <net/ethernet.h>
 #include <net/if.h>
 #include <net/kpi_interface.h>
+#include <net/kpi_interfacefilter.h>
 #include <net/if_arp.h>
 #include <net/if_dl.h>
 #include <net/if_ether.h>
@@ -65,7 +66,7 @@
 #include <net/devtimer.h>
 #include <net/if_vlan_var.h>
 #include <net/kpi_protocol.h>
-
+#include <sys/protosw.h>
 #include <kern/locks.h>
 #include <kern/zalloc.h>
 #include <os/refcnt.h>
@@ -79,8 +80,16 @@
 #include <net/if_media.h>
 #include <net/multicast_list.h>
 
+SYSCTL_DECL(_net_link);
+SYSCTL_NODE(_net_link, OID_AUTO, bond, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
+    "Bond interface");
+
+static int if_bond_debug = 0;
+SYSCTL_INT(_net_link_bond, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_LOCKED,
+    &if_bond_debug, 0, "Bond interface debug logs");
+
 static struct ether_addr slow_proto_multicast = {
-	IEEE8023AD_SLOW_PROTO_MULTICAST
+	.octet = IEEE8023AD_SLOW_PROTO_MULTICAST
 };
 
 typedef struct ifbond_s ifbond, * ifbond_ref;
@@ -269,6 +278,13 @@ enum {
 
 typedef u_char MuxState;
 
+#define PORT_CONTROL_FLAGS_IN_LIST               0x01
+#define PORT_CONTROL_FLAGS_PROTO_ATTACHED        0x02
+#define PORT_CONTROL_FLAGS_FILTER_ATTACHED       0x04
+#define PORT_CONTROL_FLAGS_LLADDR_SET            0x08
+#define PORT_CONTROL_FLAGS_MTU_SET               0x10
+#define PORT_CONTROL_FLAGS_PROMISCUOUS_SET       0x20
+
 struct bondport_s {
 	TAILQ_ENTRY(bondport_s)     po_port_list;
 	ifbond_ref                  po_bond;
@@ -278,6 +294,8 @@ struct bondport_s {
 	int                         po_enabled;
 	char                        po_name[IFNAMSIZ];
 	struct ifdevmtu             po_devmtu;
+	uint32_t                    po_control_flags;
+	interface_filter_t          po_filter;
 
 	/* LACP */
 	TAILQ_ENTRY(bondport_s)     po_lag_port_list;
@@ -296,6 +314,7 @@ struct bondport_s {
 	SelectedState               po_selected;
 	int32_t                     po_last_transmit_secs;
 	struct media_info           po_media_info;
+	uint64_t                    po_force_link_event_time;
 	LAG_ref                     po_lag;
 };
 
@@ -462,7 +481,6 @@ typedef struct bond_globals_s {
 	struct ifbond_list          ifbond_list;
 	lacp_system                 system;
 	lacp_system_priority        system_priority;
-	int                         verbose;
 } * bond_globals_ref;
 
 static bond_globals_ref g_bond;
@@ -566,6 +584,8 @@ LAG_get_aggregatable_port_count(LAG_ref lag, int * active_media);
 static int
 ifbond_selection(ifbond_ref bond);
 
+static void
+bond_handle_event(struct ifnet * port_ifp, int event_code);
 
 /**
 ** bondport
@@ -621,19 +641,20 @@ bondport_collecting(bondport_ref p)
 **/
 static int bond_clone_create(struct if_clone *, u_int32_t, void *);
 static int bond_clone_destroy(struct ifnet *);
-static int bond_input(ifnet_t ifp, protocol_family_t protocol, mbuf_t m,
-    char *frame_header);
 static int bond_output(struct ifnet *ifp, struct mbuf *m);
 static int bond_ioctl(struct ifnet *ifp, u_long cmd, void * addr);
 static int bond_set_bpf_tap(struct ifnet * ifp, bpf_tap_mode mode,
     bpf_packet_func func);
 static int bond_attach_protocol(struct ifnet *ifp);
 static int bond_detach_protocol(struct ifnet *ifp);
+static errno_t bond_iff_input(void *cookie, ifnet_t ifp,
+    protocol_family_t protocol, mbuf_t *data, char **frame_ptr);
+static int bond_attach_filter(struct ifnet *ifp, interface_filter_t * filter_p);
 static int bond_setmulti(struct ifnet *ifp);
 static int bond_add_interface(struct ifnet * ifp, struct ifnet * port_ifp);
 static int bond_remove_interface(ifbond_ref ifb, struct ifnet * port_ifp);
 static void bond_if_free(struct ifnet * ifp);
-static  void interface_link_event(struct ifnet * ifp, u_int32_t event_code);
+static void interface_link_event(struct ifnet * ifp, u_int32_t event_code);
 
 static struct if_clone bond_cloner = IF_CLONE_INITIALIZER(BONDNAME,
     bond_clone_create,
@@ -687,11 +708,11 @@ ifbond_release(ifbond_ref ifb)
 		return;
 	}
 
-	if (g_bond->verbose) {
+	if (if_bond_debug) {
 		printf("ifbond_release(%s)\n", ifb->ifb_name);
 	}
 	if (ifb->ifb_ifma_slow_proto != NULL) {
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			printf("ifbond_release(%s) removing multicast\n",
 			    ifb->ifb_name);
 		}
@@ -732,7 +753,7 @@ ifbond_wait(ifbond_ref ifb, const char * msg)
 
 	/* other add/remove in progress */
 	while (ifbond_flags_change_in_progress(ifb)) {
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			printf("%s: %s msleep\n", ifb->ifb_name, msg);
 		}
 		waited = 1;
@@ -740,7 +761,7 @@ ifbond_wait(ifbond_ref ifb, const char * msg)
 	}
 	/* prevent other bond list remove/add from taking place */
 	ifbond_flags_set_change_in_progress(ifb);
-	if (g_bond->verbose && waited) {
+	if (if_bond_debug && waited) {
 		printf("%s: %s woke up\n", ifb->ifb_name, msg);
 	}
 	return;
@@ -761,7 +782,7 @@ ifbond_signal(ifbond_ref ifb, const char * msg)
 {
 	ifbond_flags_clear_change_in_progress(ifb);
 	wakeup((caddr_t)ifb);
-	if (g_bond->verbose) {
+	if (if_bond_debug) {
 		printf("%s: %s wakeup\n", ifb->ifb_name, msg);
 	}
 	return;
@@ -775,6 +796,10 @@ static int
 link_speed(int active)
 {
 	switch (IFM_SUBTYPE(active)) {
+	case IFM_AUTO:
+	case IFM_MANUAL:
+	case IFM_NONE:
+		return 0;
 	case IFM_10_T:
 	case IFM_10_2:
 	case IFM_10_5:
@@ -795,7 +820,7 @@ link_speed(int active)
 	case IFM_1000_KX:
 		return 1000;
 	case IFM_HPNA_1:
-		return 0;
+		return 1;
 	default:
 	/* assume that new defined types are going to be at least 10GigE */
 	case IFM_10G_SR:
@@ -849,6 +874,30 @@ static __inline__ int
 media_full_duplex(const struct media_info * mi)
 {
 	return (mi->mi_active & IFM_FDX) != 0;
+}
+
+static __inline__ int
+media_type_unknown(const struct media_info * mi)
+{
+	int unknown;
+
+	switch (IFM_SUBTYPE(mi->mi_active)) {
+	case IFM_AUTO:
+	case IFM_MANUAL:
+	case IFM_NONE:
+		unknown = 1;
+		break;
+	default:
+		unknown = 0;
+		break;
+	}
+	return unknown;
+}
+
+static __inline__ int
+media_ok(const struct media_info * mi)
+{
+	return media_full_duplex(mi) || media_type_unknown(mi);
 }
 
 static __inline__ int
@@ -1067,7 +1116,7 @@ bond_setmulti(struct ifnet * ifp)
 	}
 	bond_lock();
 signal_done:
-	ifbond_signal(ifb, "bond_setmulti");
+	ifbond_signal(ifb, __func__);
 	bond_unlock();
 	ifbond_release(ifb);
 	return result;
@@ -1171,7 +1220,6 @@ bond_clone_create(struct if_clone * ifc, u_int32_t unit, __unused void *params)
 	ifnet_set_offload(ifp, 0);
 	ifnet_set_addrlen(ifp, ETHER_ADDR_LEN); /* XXX ethernet specific */
 	ifnet_set_flags(ifp, IFF_BROADCAST | IFF_MULTICAST | IFF_SIMPLEX, 0xffff);
-	ifnet_set_baudrate(ifp, 0);
 	ifnet_set_mtu(ifp, ETHERMTU);
 
 	error = ifnet_attach(ifp, NULL);
@@ -1473,7 +1521,7 @@ bond_output(struct ifnet * ifp, struct mbuf * m)
 	ifbond_ref                  ifb;
 	struct ifnet *              port_ifp = NULL;
 	int                         err;
-	struct flowadv              adv = { FADV_SUCCESS };
+	struct flowadv              adv = { .code = FADV_SUCCESS };
 
 	if (m == 0) {
 		return 0;
@@ -1571,6 +1619,7 @@ bond_receive_lacpdu(struct mbuf * m, struct ifnet * port_ifp)
 	struct ifnet *              bond_ifp = NULL;
 	ifbond_ref                  ifb;
 	int                         event_code = 0;
+	bool                        need_link_update = false;
 	bondport_ref                p;
 
 	bond_lock();
@@ -1588,6 +1637,24 @@ bond_receive_lacpdu(struct mbuf * m, struct ifnet * port_ifp)
 	if (ifb->ifb_mode != IF_BOND_MODE_LACP) {
 		goto done;
 	}
+	/*
+	 * Work-around for rdar://problem/51372042
+	 * Sometimes, the link comes up but the driver doesn't report the
+	 * negotiated medium at that time. When we receive an LACPDU packet,
+	 * and the medium is unknown, force a link status check. Don't force
+	 * the link status check more often than _FORCE_LINK_EVENT_INTERVAL
+	 * seconds.
+	 */
+#define _FORCE_LINK_EVENT_INTERVAL      1
+	if (media_type_unknown(&p->po_media_info)) {
+		uint64_t        now = net_uptime();
+
+		if ((now - p->po_force_link_event_time) >=
+		    _FORCE_LINK_EVENT_INTERVAL) {
+			need_link_update = true;
+			p->po_force_link_event_time = now;
+		}
+	}
 	bondport_receive_lacpdu(p, (lacpdu_ref)m->m_data);
 	if (ifbond_selection(ifb)) {
 		event_code = (ifb->ifb_active_lag == NULL)
@@ -1601,7 +1668,7 @@ bond_receive_lacpdu(struct mbuf * m, struct ifnet * port_ifp)
 		    ? KEV_DL_LINK_OFF
 		    : KEV_DL_LINK_ON;
 		if (event_code != ifb->ifb_last_link_event) {
-			if (g_bond->verbose) {
+			if (if_bond_debug) {
 				timestamp_printf("%s: (receive) generating LINK event\n",
 				    ifb->ifb_name);
 			}
@@ -1616,6 +1683,12 @@ done:
 		interface_link_event(bond_ifp, event_code);
 	}
 	m_freem(m);
+	if (need_link_update) {
+		if (if_bond_debug != 0) {
+			printf("bond: simulating link status changed event");
+		}
+		bond_handle_event(port_ifp, KEV_DL_LINK_ON);
+	}
 	return;
 }
 
@@ -1651,9 +1724,8 @@ failed:
 	return;
 }
 
-static int
-bond_input(ifnet_t port_ifp, __unused protocol_family_t protocol, mbuf_t m,
-    char * frame_header)
+static void
+bond_input(ifnet_t port_ifp, mbuf_t m, char *frame_header)
 {
 	bpf_packet_func             bpf_func;
 	const struct ether_header * eh_p;
@@ -1671,17 +1743,17 @@ bond_input(ifnet_t port_ifp, __unused protocol_family_t protocol, mbuf_t m,
 		if (subtype == IEEE8023AD_SLOW_PROTO_SUBTYPE_LACP) {
 			if (m->m_pkthdr.len < (int)offsetof(lacpdu, la_reserved)) {
 				m_freem(m);
-				return 0;
+				return;
 			}
 			/* send to lacp */
 			if (m->m_len < (int)offsetof(lacpdu, la_reserved)) {
 				m = m_pullup(m, offsetof(lacpdu, la_reserved));
 				if (m == NULL) {
-					return 0;
+					return;
 				}
 			}
 			bond_receive_lacpdu(m, port_ifp);
-			return 0;
+			return;
 		} else if (subtype == IEEE8023AD_SLOW_PROTO_SUBTYPE_LA_MARKER_PROTOCOL) {
 			int         min_size;
 
@@ -1692,23 +1764,23 @@ bond_input(ifnet_t port_ifp, __unused protocol_family_t protocol, mbuf_t m,
 			min_size = ETHER_HDR_LEN + offsetof(la_marker_pdu, lm_reserved);
 			if (m->m_pkthdr.len < min_size) {
 				m_freem(m);
-				return 0;
+				return;
 			}
 			/* send to lacp */
 			if (m->m_len < min_size) {
 				m = m_pullup(m, min_size);
 				if (m == NULL) {
-					return 0;
+					return;
 				}
 			}
 			/* send to marker responder */
 			bond_receive_la_marker_pdu(m, port_ifp);
-			return 0;
+			return;
 		} else if (subtype == 0
 		    || subtype > IEEE8023AD_SLOW_PROTO_SUBTYPE_RESERVED_END) {
 			/* invalid subtype, discard the frame */
 			m_freem(m);
-			return 0;
+			return;
 		}
 	}
 	bond_lock();
@@ -1720,11 +1792,18 @@ bond_input(ifnet_t port_ifp, __unused protocol_family_t protocol, mbuf_t m,
 		goto done;
 	}
 
-	/* make the packet appear as if it arrived on the bonded interface */
 	ifb = p->po_bond;
 	ifp = ifb->ifb_ifp;
 	bpf_func = ifb->ifb_bpf_input;
 	bond_unlock();
+
+	/*
+	 * Need to clear the promiscous flags otherwise it will be
+	 * dropped by DLIL after processing filters
+	 */
+	if ((mbuf_flags(m) & MBUF_PROMISC)) {
+		mbuf_setflags_mask(m, 0, MBUF_PROMISC);
+	}
 
 	if (m->m_pkthdr.csum_flags & CSUM_VLAN_TAG_VALID) {
 		(void)ifnet_stat_increment_in(ifp, 1,
@@ -1734,16 +1813,31 @@ bond_input(ifnet_t port_ifp, __unused protocol_family_t protocol, mbuf_t m,
 		(void)ifnet_stat_increment_in(ifp, 1,
 		    (m->m_pkthdr.len + ETHER_HDR_LEN), 0);
 	}
+
+	/* make the packet appear as if it arrived on the bonded interface */
 	m->m_pkthdr.rcvif = ifp;
 	bond_bpf_input(ifp, m, eh_p, bpf_func);
 	m->m_pkthdr.pkt_hdr = frame_header;
 	dlil_input_packet_list(ifp, m);
-	return 0;
+	return;
 
 done:
 	bond_unlock();
 	m_freem(m);
-	return 0;
+	return;
+}
+
+static errno_t
+bond_iff_input(void *cookie, ifnet_t port_ifp, protocol_family_t protocol,
+    mbuf_t *data, char **frame_header_ptr)
+{
+#pragma unused(cookie)
+#pragma unused(protocol)
+	mbuf_t                      m = *data;
+	char *                      frame_header = *frame_header_ptr;
+
+	bond_input(port_ifp, m, frame_header);
+	return EJUSTRETURN;
 }
 
 static __inline__ const char *
@@ -1807,7 +1901,7 @@ bondport_timer_process_func(devtimer_ref timer,
 				    ? KEV_DL_LINK_OFF
 				    : KEV_DL_LINK_ON;
 				if (event_code != p->po_bond->ifb_last_link_event) {
-					if (g_bond->verbose) {
+					if (if_bond_debug) {
 						timestamp_printf("%s: (timer) generating LINK event\n",
 						    p->po_bond->ifb_name);
 					}
@@ -1952,11 +2046,6 @@ bondport_free(bondport_ref p)
 	return;
 }
 
-#define BOND_ADD_PROGRESS_IN_LIST               0x1
-#define BOND_ADD_PROGRESS_PROTO_ATTACHED        0x2
-#define BOND_ADD_PROGRESS_LLADDR_SET            0x4
-#define BOND_ADD_PROGRESS_MTU_SET               0x8
-
 static __inline__ int
 bond_device_mtu(struct ifnet * ifp, ifbond_ref ifb)
 {
@@ -1967,15 +2056,16 @@ bond_device_mtu(struct ifnet * ifp, ifbond_ref ifb)
 static int
 bond_add_interface(struct ifnet * ifp, struct ifnet * port_ifp)
 {
+	uint32_t                    control_flags = 0;
 	int                         devmtu;
 	int                         error = 0;
 	int                         event_code = 0;
+	interface_filter_t          filter = NULL;
 	int                         first = FALSE;
 	ifbond_ref                  ifb;
 	bondport_ref *              new_array = NULL;
 	bondport_ref *              old_array = NULL;
 	bondport_ref                p;
-	int                         progress = 0;
 
 	if (IFNET_IS_INTCOPROC(port_ifp)) {
 		return EINVAL;
@@ -2009,7 +2099,7 @@ bond_add_interface(struct ifnet * ifp, struct ifnet * port_ifp)
 	ifbond_retain(ifb);
 
 	/* wait for other add or remove to complete */
-	ifbond_wait(ifb, "bond_add_interface");
+	ifbond_wait(ifb, __func__);
 
 	if (ifbond_flags_if_detaching(ifb)) {
 		/* someone destroyed the bond while we were waiting */
@@ -2050,8 +2140,9 @@ bond_add_interface(struct ifnet * ifp, struct ifnet * port_ifp)
 			ifnet_offload_t     offload;
 
 			offload = ifp_offload & port_ifp_offload;
-			printf("bond_add_interface(%s, %s)  "
+			printf("%s(%s, %s)  "
 			    "hwassist values don't match 0x%x != 0x%x, using 0x%x instead\n",
+			    __func__,
 			    ifb->ifb_name, bondport_get_name(p),
 			    ifp_offload, port_ifp_offload, offload);
 			/*
@@ -2080,7 +2171,7 @@ bond_add_interface(struct ifnet * ifp, struct ifnet * port_ifp)
 		    IFT_ETHER);
 	}
 
-	progress |= BOND_ADD_PROGRESS_IN_LIST;
+	control_flags |= PORT_CONTROL_FLAGS_IN_LIST;
 
 	/* allocate a larger distributing array */
 	new_array = (bondport_ref *)
@@ -2095,24 +2186,32 @@ bond_add_interface(struct ifnet * ifp, struct ifnet * port_ifp)
 	if (error) {
 		goto failed;
 	}
-	progress |= BOND_ADD_PROGRESS_PROTO_ATTACHED;
+	control_flags |= PORT_CONTROL_FLAGS_PROTO_ATTACHED;
+
+	/* attach our BOND interface filter */
+	error = bond_attach_filter(port_ifp, &filter);
+	if (error != 0) {
+		goto failed;
+	}
+	control_flags |= PORT_CONTROL_FLAGS_FILTER_ATTACHED;
 
 	/* set the interface MTU */
 	devmtu = bond_device_mtu(ifp, ifb);
 	error = siocsifmtu(port_ifp, devmtu);
 	if (error != 0) {
-		printf("bond_add_interface(%s, %s):"
+		printf("%s(%s, %s):"
 		    " SIOCSIFMTU %d failed %d\n",
+		    __func__,
 		    ifb->ifb_name, bondport_get_name(p), devmtu, error);
 		goto failed;
 	}
-	progress |= BOND_ADD_PROGRESS_MTU_SET;
+	control_flags |= PORT_CONTROL_FLAGS_MTU_SET;
 
 	/* program the port with our multicast addresses */
 	error = multicast_list_program(&p->po_multicast, ifp, port_ifp);
 	if (error) {
-		printf("bond_add_interface(%s, %s):"
-		    " multicast_list_program failed %d\n",
+		printf("%s(%s, %s): multicast_list_program failed %d\n",
+		    __func__,
 		    ifb->ifb_name, bondport_get_name(p), error);
 		goto failed;
 	}
@@ -2122,7 +2221,8 @@ bond_add_interface(struct ifnet * ifp, struct ifnet * port_ifp)
 
 	error = ifnet_ioctl(port_ifp, 0, SIOCSIFFLAGS, NULL);
 	if (error != 0) {
-		printf("bond_add_interface(%s, %s): SIOCSIFFLAGS failed %d\n",
+		printf("%s(%s, %s): SIOCSIFFLAGS failed %d\n",
+		    __func__,
 		    ifb->ifb_name, bondport_get_name(p), error);
 		goto failed;
 	}
@@ -2130,18 +2230,36 @@ bond_add_interface(struct ifnet * ifp, struct ifnet * port_ifp)
 	/* re-program the port's ethernet address */
 	error = if_siflladdr(port_ifp,
 	    (const struct ether_addr *)IF_LLADDR(ifp));
+	if (error == 0) {
+		if (memcmp(IF_LLADDR(ifp), IF_LLADDR(port_ifp), ETHER_ADDR_LEN)
+		    != 0) {
+			/* it lied, it really doesn't support setting lladdr */
+			error = EOPNOTSUPP;
+		}
+	}
 	if (error != 0) {
 		/* port doesn't support setting the link address */
-		printf("bond_add_interface(%s, %s): if_siflladdr failed %d\n",
+		printf("%s(%s, %s): if_siflladdr failed %d\n",
+		    __func__,
 		    ifb->ifb_name, bondport_get_name(p), error);
-		goto failed;
+		error = ifnet_set_promiscuous(port_ifp, 1);
+		if (error != 0) {
+			/* port doesn't support setting promiscuous mode */
+			printf("%s(%s, %s): set promiscuous failed %d\n",
+			    __func__,
+			    ifb->ifb_name, bondport_get_name(p), error);
+			goto failed;
+		}
+		control_flags |= PORT_CONTROL_FLAGS_PROMISCUOUS_SET;
+	} else {
+		control_flags |= PORT_CONTROL_FLAGS_LLADDR_SET;
 	}
-	progress |= BOND_ADD_PROGRESS_LLADDR_SET;
 
 	bond_lock();
 
 	/* no failures past this point */
 	p->po_enabled = 1;
+	p->po_control_flags = control_flags;
 
 	/* copy the contents of the existing distributing array */
 	if (ifb->ifb_distributing_count) {
@@ -2172,8 +2290,10 @@ bond_add_interface(struct ifnet * ifp, struct ifnet * port_ifp)
 			bondport_disable_distributing(p);
 		}
 	}
+	p->po_filter = filter;
+
 	/* clear the busy state, and wakeup anyone waiting */
-	ifbond_signal(ifb, "bond_add_interface");
+	ifbond_signal(ifb, __func__);
 	bond_unlock();
 	if (event_code != 0) {
 		interface_link_event(ifp, event_code);
@@ -2194,30 +2314,45 @@ failed:
 	if (new_array != NULL) {
 		FREE(new_array, M_BOND);
 	}
-	if ((progress & BOND_ADD_PROGRESS_LLADDR_SET) != 0) {
+	if ((control_flags & PORT_CONTROL_FLAGS_LLADDR_SET) != 0) {
 		int     error1;
 
 		error1 = if_siflladdr(port_ifp, &p->po_saved_addr);
 		if (error1 != 0) {
-			printf("bond_add_interface(%s, %s): if_siflladdr failed %d\n",
+			printf("%s(%s, %s): if_siflladdr restore failed %d\n",
+			    __func__,
 			    ifb->ifb_name, bondport_get_name(p), error1);
 		}
 	}
-	if ((progress & BOND_ADD_PROGRESS_PROTO_ATTACHED) != 0) {
+	if ((control_flags & PORT_CONTROL_FLAGS_PROMISCUOUS_SET) != 0) {
+		int     error1;
+
+		error1 = ifnet_set_promiscuous(port_ifp, 0);
+		if (error1 != 0) {
+			printf("%s(%s, %s): promiscous mode disable failed %d\n",
+			    __func__,
+			    ifb->ifb_name, bondport_get_name(p), error1);
+		}
+	}
+	if ((control_flags & PORT_CONTROL_FLAGS_PROTO_ATTACHED) != 0) {
 		(void)bond_detach_protocol(port_ifp);
 	}
-	if ((progress & BOND_ADD_PROGRESS_MTU_SET) != 0) {
+	if ((control_flags & PORT_CONTROL_FLAGS_FILTER_ATTACHED) != 0) {
+		iflt_detach(filter);
+	}
+	if ((control_flags & PORT_CONTROL_FLAGS_MTU_SET) != 0) {
 		int error1;
 
 		error1 = siocsifmtu(port_ifp, p->po_devmtu.ifdm_current);
 		if (error1 != 0) {
-			printf("bond_add_interface(%s, %s): SIOCSIFMTU %d failed %d\n",
+			printf("%s(%s, %s): SIOCSIFMTU %d failed %d\n",
+			    __func__,
 			    ifb->ifb_name, bondport_get_name(p),
 			    p->po_devmtu.ifdm_current, error1);
 		}
 	}
 	bond_lock();
-	if ((progress & BOND_ADD_PROGRESS_IN_LIST) != 0) {
+	if ((control_flags & PORT_CONTROL_FLAGS_IN_LIST) != 0) {
 		TAILQ_REMOVE(&ifb->ifb_port_list, p, po_port_list);
 		ifb->ifb_port_count--;
 	}
@@ -2229,7 +2364,7 @@ failed:
 	}
 
 signal_done:
-	ifbond_signal(ifb, "bond_add_interface");
+	ifbond_signal(ifb, __func__);
 	bond_unlock();
 	ifbond_release(ifb);
 	bondport_free(p);
@@ -2244,6 +2379,7 @@ bond_remove_interface(ifbond_ref ifb, struct ifnet * port_ifp)
 	int                         event_code = 0;
 	bondport_ref                head_port;
 	struct ifnet *              ifp;
+	interface_filter_t          filter;
 	int                         last = FALSE;
 	int                         new_link_address = FALSE;
 	bondport_ref                p;
@@ -2315,7 +2451,7 @@ bond_remove_interface(ifbond_ref ifb, struct ifnet * port_ifp)
 			ifb->ifb_last_link_event = event_code = KEV_DL_LINK_OFF;
 		}
 	}
-
+	filter = p->po_filter;
 	bond_unlock();
 
 	if (last) {
@@ -2335,11 +2471,17 @@ bond_remove_interface(ifbond_ref ifb, struct ifnet * port_ifp)
 		TAILQ_FOREACH(scan_port, &ifb->ifb_port_list, po_port_list) {
 			scan_ifp = scan_port->po_ifp;
 
+			if ((scan_port->po_control_flags &
+			    PORT_CONTROL_FLAGS_LLADDR_SET) == 0) {
+				/* port doesn't support setting lladdr */
+				continue;
+			}
 			error = if_siflladdr(scan_ifp,
 			    (const struct ether_addr *) IF_LLADDR(ifp));
 			if (error != 0) {
-				printf("bond_remove_interface(%s, %s): "
+				printf("%s(%s, %s): "
 				    "if_siflladdr (%s) failed %d\n",
+				    __func__,
 				    ifb->ifb_name, bondport_get_name(p),
 				    bondport_get_name(scan_port), error);
 			}
@@ -2347,22 +2489,41 @@ bond_remove_interface(ifbond_ref ifb, struct ifnet * port_ifp)
 	}
 
 	/* restore the port's ethernet address */
-	error = if_siflladdr(port_ifp, &p->po_saved_addr);
-	if (error != 0) {
-		printf("bond_remove_interface(%s, %s): if_siflladdr failed %d\n",
-		    ifb->ifb_name, bondport_get_name(p), error);
+	if ((p->po_control_flags & PORT_CONTROL_FLAGS_LLADDR_SET) != 0) {
+		error = if_siflladdr(port_ifp, &p->po_saved_addr);
+		if (error != 0) {
+			printf("%s(%s, %s): if_siflladdr failed %d\n",
+			    __func__,
+			    ifb->ifb_name, bondport_get_name(p), error);
+		}
+	}
+
+	/* disable promiscous mode (if we enabled it) */
+	if ((p->po_control_flags & PORT_CONTROL_FLAGS_PROMISCUOUS_SET) != 0) {
+		error = ifnet_set_promiscuous(port_ifp, 0);
+		if (error != 0) {
+			printf("%s(%s, %s): disable promiscuous failed %d\n",
+			    __func__,
+			    ifb->ifb_name, bondport_get_name(p), error);
+		}
 	}
 
 	/* restore the port's MTU */
 	error = siocsifmtu(port_ifp, p->po_devmtu.ifdm_current);
 	if (error != 0) {
-		printf("bond_remove_interface(%s, %s): SIOCSIFMTU %d failed %d\n",
+		printf("%s(%s, %s): SIOCSIFMTU %d failed %d\n",
+		    __func__,
 		    ifb->ifb_name, bondport_get_name(p),
 		    p->po_devmtu.ifdm_current, error);
 	}
 
 	/* remove the bond "protocol" */
 	bond_detach_protocol(port_ifp);
+
+	/* detach the filter */
+	if (filter != NULL) {
+		iflt_detach(filter);
+	}
 
 	/* generate link event */
 	if (event_code != 0) {
@@ -2376,7 +2537,7 @@ bond_remove_interface(ifbond_ref ifb, struct ifnet * port_ifp)
 	ifbond_release(ifb);
 
 signal_done:
-	ifbond_signal(ifb, "bond_remove_interface");
+	ifbond_signal(ifb, __func__);
 	ifbond_release(ifb);
 	return error;
 }
@@ -2474,7 +2635,7 @@ bond_set_mode(struct ifnet * ifp, int mode)
 	ifb->ifb_last_link_event = event_code;
 
 signal_done:
-	ifbond_signal(ifb, "bond_set_mode");
+	ifbond_signal(ifb, __func__);
 	bond_unlock();
 	ifbond_release(ifb);
 
@@ -2665,7 +2826,7 @@ bond_set_mtu(struct ifnet * ifp, int mtu, int isdevmtu)
 	}
 
 signal_done:
-	ifbond_signal(ifb, "bond_set_mtu");
+	ifbond_signal(ifb, __func__);
 	ifbond_release(ifb);
 
 done:
@@ -2816,12 +2977,7 @@ bond_ioctl(struct ifnet *ifp, u_long cmd, void * data)
 			break;
 		case IF_BOND_OP_SET_VERBOSE:
 			bond_lock();
-			if (g_bond == NULL) {
-				bond_unlock();
-				error = ENXIO;
-				break;
-			}
-			g_bond->verbose = ibr.ibr_ibru.ibru_int_val;
+			if_bond_debug = ibr.ibr_ibru.ibru_int_val;
 			bond_unlock();
 			break;
 		case IF_BOND_OP_SET_MODE:
@@ -2920,10 +3076,11 @@ bond_handle_event(struct ifnet * port_ifp, int event_code)
 	ifbond_ref          ifb;
 	int                 old_distributing_count;
 	bondport_ref        p;
-	struct media_info   media_info = { 0, 0};
+	struct media_info   media_info = { .mi_active = 0, .mi_status = 0 };
 
 	switch (event_code) {
 	case KEV_DL_IF_DETACHED:
+	case KEV_DL_IF_DETACHING:
 		break;
 	case KEV_DL_LINK_OFF:
 	case KEV_DL_LINK_ON:
@@ -2942,6 +3099,7 @@ bond_handle_event(struct ifnet * port_ifp, int event_code)
 	old_distributing_count = ifb->ifb_distributing_count;
 	switch (event_code) {
 	case KEV_DL_IF_DETACHED:
+	case KEV_DL_IF_DETACHING:
 		bond_remove_interface(ifb, p->po_ifp);
 		break;
 	case KEV_DL_LINK_OFF:
@@ -2966,7 +3124,7 @@ bond_handle_event(struct ifnet * port_ifp, int event_code)
 			    ? KEV_DL_LINK_OFF
 			    : KEV_DL_LINK_ON;
 			if (event_code != ifb->ifb_last_link_event) {
-				if (g_bond->verbose) {
+				if (if_bond_debug) {
 					timestamp_printf("%s: (event) generating LINK event\n",
 					    ifb->ifb_name);
 				}
@@ -3000,8 +3158,9 @@ bond_handle_event(struct ifnet * port_ifp, int event_code)
 }
 
 static void
-bond_event(struct ifnet * port_ifp, __unused protocol_family_t protocol,
-    const struct kev_msg * event)
+bond_iff_event(__unused void *cookie, ifnet_t port_ifp,
+    __unused protocol_family_t protocol,
+    const struct kev_msg *event)
 {
 	int         event_code;
 
@@ -3014,7 +3173,8 @@ bond_event(struct ifnet * port_ifp, __unused protocol_family_t protocol,
 	switch (event_code) {
 	case KEV_DL_LINK_OFF:
 	case KEV_DL_LINK_ON:
-		/* we only care about link status changes */
+	case KEV_DL_IF_DETACHING:
+	case KEV_DL_IF_DETACHED:
 		bond_handle_event(port_ifp, event_code);
 		break;
 	default:
@@ -3023,11 +3183,11 @@ bond_event(struct ifnet * port_ifp, __unused protocol_family_t protocol,
 	return;
 }
 
-static errno_t
-bond_detached(ifnet_t port_ifp, __unused protocol_family_t protocol)
+static void
+bond_iff_detached(__unused void *cookie, ifnet_t port_ifp)
 {
 	bond_handle_event(port_ifp, KEV_DL_IF_DETACHED);
-	return 0;
+	return;
 }
 
 static void
@@ -3052,6 +3212,19 @@ interface_link_event(struct ifnet * ifp, u_int32_t event_code)
 	return;
 }
 
+static errno_t
+bond_proto_input(ifnet_t ifp, protocol_family_t protocol, mbuf_t packet,
+    char *header)
+{
+#pragma unused(protocol, packet, header)
+	if (if_bond_debug != 0) {
+		printf("%s: unexpected packet from %s\n", __func__,
+		    ifp->if_xname);
+	}
+	return 0;
+}
+
+
 /*
  * Function: bond_attach_protocol
  * Purpose:
@@ -3069,9 +3242,7 @@ bond_attach_protocol(struct ifnet *ifp)
 	struct ifnet_attach_proto_param     reg;
 
 	bzero(&reg, sizeof(reg));
-	reg.input = bond_input;
-	reg.event = bond_event;
-	reg.detached = bond_detached;
+	reg.input = bond_proto_input;
 
 	error = ifnet_attach_protocol(ifp, PF_BOND, &reg);
 	if (error) {
@@ -3098,6 +3269,33 @@ bond_detach_protocol(struct ifnet *ifp)
 	}
 	return error;
 }
+
+/*
+ * Function: bond_attach_filter
+ * Purpose:
+ *   Attach our DLIL interface filter.
+ */
+static int
+bond_attach_filter(struct ifnet *ifp, interface_filter_t * filter_p)
+{
+	int                     error;
+	struct iff_filter       iff;
+
+	/*
+	 * install an interface filter
+	 */
+	memset(&iff, 0, sizeof(struct iff_filter));
+	iff.iff_name = "com.apple.kernel.bsd.net.if_bond";
+	iff.iff_input = bond_iff_input;
+	iff.iff_event = bond_iff_event;
+	iff.iff_detached = bond_iff_detached;
+	error = iflt_attach_internal(ifp, &iff, filter_p);
+	if (error != 0) {
+		printf("%s: iflt_attach_internal failed %d\n", __func__, error);
+	}
+	return error;
+}
+
 
 /*
  * DLIL interface family functions
@@ -3178,7 +3376,7 @@ ifbond_list_find_moved_port(bondport_ref rx_port,
 			if (ps->ps_port == lacp_actor_partner_tlv_get_port(atlv)
 			    && bcmp(&ps_li->li_system, atlv->lap_system,
 			    sizeof(ps_li->li_system)) == 0) {
-				if (g_bond->verbose) {
+				if (if_bond_debug) {
 					timestamp_printf("System " EA_FORMAT
 					    " Port 0x%x moved from %s to %s\n",
 					    EA_LIST(&ps_li->li_system), ps->ps_port,
@@ -3219,7 +3417,7 @@ ifbond_selection(ifbond_ref bond)
 		lag_changed = 1;
 	} else if (lag != NULL) {
 		if (lag->lag_active_media != active_media) {
-			if (g_bond->verbose) {
+			if (if_bond_debug) {
 				timestamp_printf("LAG PORT SPEED CHANGED from %d to %d\n",
 				    link_speed(lag->lag_active_media),
 				    link_speed(active_media));
@@ -3484,15 +3682,24 @@ bondport_link_status_changed(bondport_ref p)
 {
 	ifbond_ref  bond = p->po_bond;
 
-	if (g_bond->verbose) {
+	if (if_bond_debug) {
 		if (media_active(&p->po_media_info)) {
+			const char * duplex_string;
+
+			if (media_full_duplex(&p->po_media_info)) {
+				duplex_string = "full";
+			} else if (media_type_unknown(&p->po_media_info)) {
+				duplex_string = "unknown";
+			} else {
+				duplex_string = "half";
+			}
 			timestamp_printf("[%s] Link UP %d Mbit/s %s duplex\n",
 			    bondport_get_name(p),
 			    media_speed(&p->po_media_info),
-			    media_full_duplex(&p->po_media_info)
-			    ? "full" : "half");
+			    duplex_string);
 		} else {
-			timestamp_printf("[%s] Link DOWN\n", bondport_get_name(p));
+			timestamp_printf("[%s] Link DOWN\n",
+			    bondport_get_name(p));
 		}
 	}
 	if (bond->ifb_mode == IF_BOND_MODE_LACP) {
@@ -3501,7 +3708,7 @@ bondport_link_status_changed(bondport_ref p)
 		    && p->po_lag == bond->ifb_active_lag
 		    && p->po_selected != SelectedState_UNSELECTED) {
 			if (media_speed(&p->po_media_info) != p->po_lag->lag_active_media) {
-				if (g_bond->verbose) {
+				if (if_bond_debug) {
 					timestamp_printf("[%s] Port speed %d differs from LAG %d\n",
 					    bondport_get_name(p),
 					    media_speed(&p->po_media_info),
@@ -3538,7 +3745,7 @@ bondport_aggregatable(bondport_ref p)
 	}
 	switch (p->po_receive_state) {
 	default:
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Port is not selectable\n",
 			    bondport_get_name(p));
 		}
@@ -3581,7 +3788,7 @@ bondport_remove_from_LAG(bondport_ref p)
 		return 0;
 	}
 	TAILQ_REMOVE(&lag->lag_port_list, p, po_lag_port_list);
-	if (g_bond->verbose) {
+	if (if_bond_debug) {
 		timestamp_printf("[%s] Removed from LAG (0x%04x," EA_FORMAT
 		    ",0x%04x)\n",
 		    bondport_get_name(p),
@@ -3594,7 +3801,7 @@ bondport_remove_from_LAG(bondport_ref p)
 	if (lag->lag_port_count > 0) {
 		return bond->ifb_active_lag == lag;
 	}
-	if (g_bond->verbose) {
+	if (if_bond_debug) {
 		timestamp_printf("Key 0x%04x: LAG Released (%04x," EA_FORMAT
 		    ",0x%04x)\n",
 		    bond->ifb_key,
@@ -3617,7 +3824,7 @@ bondport_add_to_LAG(bondport_ref p, LAG_ref lag)
 	TAILQ_INSERT_TAIL(&lag->lag_port_list, p, po_lag_port_list);
 	p->po_lag = lag;
 	lag->lag_port_count++;
-	if (g_bond->verbose) {
+	if (if_bond_debug) {
 		timestamp_printf("[%s] Added to LAG (0x%04x," EA_FORMAT "0x%04x)\n",
 		    bondport_get_name(p),
 		    lag->lag_info.li_system_priority,
@@ -3656,7 +3863,7 @@ bondport_assign_to_LAG(bondport_ref p)
 	lag->lag_selected_port_count = 0;
 	lag->lag_info = p->po_partner_state.ps_lag_info;
 	TAILQ_INSERT_TAIL(&bond->ifb_lag_list, lag, lag_list);
-	if (g_bond->verbose) {
+	if (if_bond_debug) {
 		timestamp_printf("Key 0x%04x: LAG Created (0x%04x," EA_FORMAT
 		    ",0x%04x)\n",
 		    bond->ifb_key,
@@ -3699,7 +3906,7 @@ bondport_set_selected(bondport_ref p, SelectedState s)
 			} else if (s == SelectedState_SELECTED) {
 				lag->lag_selected_port_count++;
 			}
-			if (g_bond->verbose) {
+			if (if_bond_debug) {
 				timestamp_printf("[%s] SetSelected: %s (was %s)\n",
 				    bondport_get_name(p),
 				    SelectedStateString(s),
@@ -3753,7 +3960,7 @@ bondport_UpdateSelected(bondport_ref p, lacpdu_ref lacpdu_p)
 	    || (lacp_actor_partner_state_aggregatable(actor->lap_state)
 	    != lacp_actor_partner_state_aggregatable(ps->ps_state))) {
 		bondport_set_selected(p, SelectedState_UNSELECTED);
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] updateSelected UNSELECTED\n",
 			    bondport_get_name(p));
 		}
@@ -3791,7 +3998,7 @@ bondport_RecordPDU(bondport_ref p, lacpdu_ref lacpdu_p)
 	if (lacp_actor_partner_state_active_lacp(ps->ps_state)
 	    || (lacp_actor_partner_state_active_lacp(p->po_actor_state)
 	    && lacp_actor_partner_state_active_lacp(partner->lap_state))) {
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] recordPDU: LACP will maintain\n",
 			    bondport_get_name(p));
 		}
@@ -3810,7 +4017,7 @@ bondport_RecordPDU(bondport_ref p, lacpdu_ref lacpdu_p)
 	    && lacp_actor_partner_state_in_sync(actor->lap_state)
 	    && lacp_maintain) {
 		ps->ps_state = lacp_actor_partner_state_set_in_sync(ps->ps_state);
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] recordPDU: LACP partner in sync\n",
 			    bondport_get_name(p));
 		}
@@ -3818,7 +4025,7 @@ bondport_RecordPDU(bondport_ref p, lacpdu_ref lacpdu_p)
 	    && lacp_actor_partner_state_in_sync(actor->lap_state)
 	    && lacp_maintain) {
 		ps->ps_state = lacp_actor_partner_state_set_in_sync(ps->ps_state);
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] recordPDU: LACP partner in sync (ind)\n",
 			    bondport_get_name(p));
 		}
@@ -3853,7 +4060,7 @@ bondport_UpdateNTT(bondport_ref p, lacpdu_ref lacpdu_p)
 	    || (updateNTTBits(partner->lap_state)
 	    != updateNTTBits(p->po_actor_state))) {
 		bondport_flags_set_ntt(p);
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] updateNTT: Need To Transmit\n",
 			    bondport_get_name(p));
 		}
@@ -3865,7 +4072,7 @@ static void
 bondport_AttachMuxToAggregator(bondport_ref p)
 {
 	if (bondport_flags_mux_attached(p) == 0) {
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Attached Mux To Aggregator\n",
 			    bondport_get_name(p));
 		}
@@ -3878,7 +4085,7 @@ static void
 bondport_DetachMuxFromAggregator(bondport_ref p)
 {
 	if (bondport_flags_mux_attached(p)) {
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Detached Mux From Aggregator\n",
 			    bondport_get_name(p));
 		}
@@ -3894,7 +4101,7 @@ bondport_enable_distributing(bondport_ref p)
 		ifbond_ref      bond = p->po_bond;
 
 		bond->ifb_distributing_array[bond->ifb_distributing_count++] = p;
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Distribution Enabled\n",
 			    bondport_get_name(p));
 		}
@@ -3926,7 +4133,7 @@ bondport_disable_distributing(bondport_ref p)
 			}
 		}
 		bond->ifb_distributing_count--;
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Distribution Disabled\n",
 			    bondport_get_name(p));
 		}
@@ -4027,7 +4234,7 @@ bondport_receive_machine_initialize(bondport_ref p, LAEvent event,
 	switch (event) {
 	case LAEventStart:
 		devtimer_cancel(p->po_current_while_timer);
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Receive INITIALIZE\n",
 			    bondport_get_name(p));
 		}
@@ -4053,7 +4260,7 @@ bondport_receive_machine_port_disabled(bondport_ref p, LAEvent event,
 	switch (event) {
 	case LAEventStart:
 		devtimer_cancel(p->po_current_while_timer);
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Receive PORT_DISABLED\n",
 			    bondport_get_name(p));
 		}
@@ -4063,7 +4270,7 @@ bondport_receive_machine_port_disabled(bondport_ref p, LAEvent event,
 	/* FALL THROUGH */
 	case LAEventMediaChange:
 		if (media_active(&p->po_media_info)) {
-			if (media_full_duplex(&p->po_media_info)) {
+			if (media_ok(&p->po_media_info)) {
 				bondport_receive_machine_expired(p, LAEventStart, NULL);
 			} else {
 				bondport_receive_machine_lacp_disabled(p, LAEventStart, NULL);
@@ -4071,7 +4278,7 @@ bondport_receive_machine_port_disabled(bondport_ref p, LAEvent event,
 		} else if (p->po_selected == SelectedState_SELECTED) {
 			struct timeval      tv;
 
-			if (g_bond->verbose) {
+			if (if_bond_debug) {
 				timestamp_printf("[%s] Receive PORT_DISABLED: "
 				    "link timer started\n",
 				    bondport_get_name(p));
@@ -4088,7 +4295,7 @@ bondport_receive_machine_port_disabled(bondport_ref p, LAEvent event,
 		break;
 	case LAEventTimeout:
 		if (p->po_selected == SelectedState_SELECTED) {
-			if (g_bond->verbose) {
+			if (if_bond_debug) {
 				timestamp_printf("[%s] Receive PORT_DISABLED: "
 				    "link timer completed, marking UNSELECTED\n",
 				    bondport_get_name(p));
@@ -4115,7 +4322,7 @@ bondport_receive_machine_expired(bondport_ref p, LAEvent event,
 	switch (event) {
 	case LAEventStart:
 		devtimer_cancel(p->po_current_while_timer);
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Receive EXPIRED\n",
 			    bondport_get_name(p));
 		}
@@ -4152,7 +4359,7 @@ bondport_receive_machine_lacp_disabled(bondport_ref p, LAEvent event,
 	switch (event) {
 	case LAEventStart:
 		devtimer_cancel(p->po_current_while_timer);
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Receive LACP_DISABLED\n",
 			    bondport_get_name(p));
 		}
@@ -4177,7 +4384,7 @@ bondport_receive_machine_defaulted(bondport_ref p, LAEvent event,
 	switch (event) {
 	case LAEventStart:
 		devtimer_cancel(p->po_current_while_timer);
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Receive DEFAULTED\n",
 			    bondport_get_name(p));
 		}
@@ -4203,7 +4410,7 @@ bondport_receive_machine_current(bondport_ref p, LAEvent event,
 	switch (event) {
 	case LAEventPacket:
 		devtimer_cancel(p->po_current_while_timer);
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Receive CURRENT\n",
 			    bondport_get_name(p));
 		}
@@ -4250,7 +4457,7 @@ bondport_periodic_transmit_machine(bondport_ref p, LAEvent event,
 
 	switch (event) {
 	case LAEventStart:
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] periodic_transmit Start\n",
 			    bondport_get_name(p));
 		}
@@ -4259,7 +4466,7 @@ bondport_periodic_transmit_machine(bondport_ref p, LAEvent event,
 		devtimer_cancel(p->po_periodic_timer);
 		p->po_periodic_interval = 0;
 		if (media_active(&p->po_media_info) == 0
-		    || media_full_duplex(&p->po_media_info) == 0) {
+		    || media_ok(&p->po_media_info) == 0) {
 			break;
 		}
 	case LAEventPacket:
@@ -4280,7 +4487,7 @@ bondport_periodic_transmit_machine(bondport_ref p, LAEvent event,
 		if (p->po_periodic_interval != interval) {
 			if (interval == LACP_FAST_PERIODIC_TIME
 			    && p->po_periodic_interval == LACP_SLOW_PERIODIC_TIME) {
-				if (g_bond->verbose) {
+				if (if_bond_debug) {
 					timestamp_printf("[%s] periodic_transmit:"
 					    " Need To Transmit\n",
 					    bondport_get_name(p));
@@ -4294,7 +4501,7 @@ bondport_periodic_transmit_machine(bondport_ref p, LAEvent event,
 			    (devtimer_timeout_func)
 			    bondport_periodic_transmit_machine,
 			    (void *)LAEventTimeout, NULL);
-			if (g_bond->verbose) {
+			if (if_bond_debug) {
 				timestamp_printf("[%s] Periodic Transmission Timer: %d secs\n",
 				    bondport_get_name(p),
 				    p->po_periodic_interval);
@@ -4308,7 +4515,7 @@ bondport_periodic_transmit_machine(bondport_ref p, LAEvent event,
 		devtimer_set_relative(p->po_periodic_timer, tv, (devtimer_timeout_func)
 		    bondport_periodic_transmit_machine,
 		    (void *)LAEventTimeout, NULL);
-		if (g_bond->verbose > 1) {
+		if (if_bond_debug > 1) {
 			timestamp_printf("[%s] Periodic Transmission Timer: %d secs\n",
 			    bondport_get_name(p), p->po_periodic_interval);
 		}
@@ -4346,7 +4553,7 @@ bondport_transmit_machine(bondport_ref p, LAEvent event,
 {
 	lacp_actor_partner_tlv_ref  aptlv;
 	lacp_collector_tlv_ref      ctlv;
-	struct timeval              next_tick_time = {0, 0};
+	struct timeval              next_tick_time = {.tv_sec = 0, .tv_usec = 0};
 	lacpdu_ref          out_lacpdu_p;
 	packet_buffer_ref           pkt;
 	partner_state_ref           ps;
@@ -4363,7 +4570,7 @@ bondport_transmit_machine(bondport_ref p, LAEvent event,
 		} else if (bondport_can_transmit(p, devtimer_current_secs(),
 		    &next_tick_time.tv_sec) == 0) {
 			if (devtimer_enabled(p->po_transmit_timer)) {
-				if (g_bond->verbose > 0) {
+				if (if_bond_debug > 0) {
 					timestamp_printf("[%s] Transmit Timer Already Set\n",
 					    bondport_get_name(p));
 				}
@@ -4372,7 +4579,7 @@ bondport_transmit_machine(bondport_ref p, LAEvent event,
 				    (devtimer_timeout_func)
 				    bondport_transmit_machine,
 				    (void *)LAEventTimeout, NULL);
-				if (g_bond->verbose > 0) {
+				if (if_bond_debug > 0) {
 					timestamp_printf("[%s] Transmit Timer Deadline %d secs\n",
 					    bondport_get_name(p),
 					    (int)next_tick_time.tv_sec);
@@ -4380,7 +4587,7 @@ bondport_transmit_machine(bondport_ref p, LAEvent event,
 			}
 			break;
 		}
-		if (g_bond->verbose > 0) {
+		if (if_bond_debug > 0) {
 			if (event == LAEventTimeout) {
 				timestamp_printf("[%s] Transmit Timer Complete\n",
 				    bondport_get_name(p));
@@ -4430,7 +4637,7 @@ bondport_transmit_machine(bondport_ref p, LAEvent event,
 
 		bondport_slow_proto_transmit(p, pkt);
 		bondport_flags_clear_ntt(p);
-		if (g_bond->verbose > 0) {
+		if (if_bond_debug > 0) {
 			timestamp_printf("[%s] Transmit Packet %d\n",
 			    bondport_get_name(p), p->po_n_transmit);
 		}
@@ -4493,7 +4700,7 @@ bondport_mux_machine_detached(bondport_ref p, LAEvent event,
 	switch (event) {
 	case LAEventStart:
 		devtimer_cancel(p->po_wait_while_timer);
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Mux DETACHED\n",
 			    bondport_get_name(p));
 		}
@@ -4531,7 +4738,7 @@ bondport_mux_machine_waiting(bondport_ref p, LAEvent event,
 	switch (event) {
 	case LAEventStart:
 		devtimer_cancel(p->po_wait_while_timer);
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Mux WAITING\n",
 			    bondport_get_name(p));
 		}
@@ -4546,21 +4753,21 @@ bondport_mux_machine_waiting(bondport_ref p, LAEvent event,
 		if (p->po_selected == SelectedState_STANDBY) {
 			devtimer_cancel(p->po_wait_while_timer);
 			/* wait until state changes to SELECTED */
-			if (g_bond->verbose) {
+			if (if_bond_debug) {
 				timestamp_printf("[%s] Mux WAITING: Standby\n",
 				    bondport_get_name(p));
 			}
 			break;
 		}
 		if (bondport_flags_ready(p)) {
-			if (g_bond->verbose) {
+			if (if_bond_debug) {
 				timestamp_printf("[%s] Mux WAITING: Port is already ready\n",
 				    bondport_get_name(p));
 			}
 			break;
 		}
 		if (devtimer_enabled(p->po_wait_while_timer)) {
-			if (g_bond->verbose) {
+			if (if_bond_debug) {
 				timestamp_printf("[%s] Mux WAITING: Timer already set\n",
 				    bondport_get_name(p));
 			}
@@ -4568,14 +4775,14 @@ bondport_mux_machine_waiting(bondport_ref p, LAEvent event,
 		}
 		if (ifbond_all_ports_attached(p->po_bond, p)) {
 			devtimer_cancel(p->po_wait_while_timer);
-			if (g_bond->verbose) {
+			if (if_bond_debug) {
 				timestamp_printf("[%s] Mux WAITING: No waiting\n",
 				    bondport_get_name(p));
 			}
 			bondport_flags_set_ready(p);
 			goto no_waiting;
 		}
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Mux WAITING: 2 seconds\n",
 			    bondport_get_name(p));
 		}
@@ -4587,7 +4794,7 @@ bondport_mux_machine_waiting(bondport_ref p, LAEvent event,
 		    (void *)LAEventTimeout, NULL);
 		break;
 	case LAEventTimeout:
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Mux WAITING: Ready\n",
 			    bondport_get_name(p));
 		}
@@ -4596,7 +4803,7 @@ bondport_mux_machine_waiting(bondport_ref p, LAEvent event,
 	case LAEventReady:
 no_waiting:
 		if (bondport_flags_ready(p)) {
-			if (g_bond->verbose) {
+			if (if_bond_debug) {
 				timestamp_printf("[%s] Mux WAITING: All Ports Ready\n",
 				    bondport_get_name(p));
 			}
@@ -4617,7 +4824,7 @@ bondport_mux_machine_attached(bondport_ref p, LAEvent event,
 	switch (event) {
 	case LAEventStart:
 		devtimer_cancel(p->po_wait_while_timer);
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Mux ATTACHED\n",
 			    bondport_get_name(p));
 		}
@@ -4659,7 +4866,7 @@ bondport_mux_machine_collecting_distributing(bondport_ref p,
 	switch (event) {
 	case LAEventStart:
 		devtimer_cancel(p->po_wait_while_timer);
-		if (g_bond->verbose) {
+		if (if_bond_debug) {
 			timestamp_printf("[%s] Mux COLLECTING_DISTRIBUTING\n",
 			    bondport_get_name(p));
 		}

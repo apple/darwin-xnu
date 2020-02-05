@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2018 Apple Inc. All rights reserved.
  */
 /*
  * CDDL HEADER START
@@ -27,16 +27,6 @@
  * Use is subject to license terms.
  */
 
-/* #pragma ident	"@(#)fbt.c	1.15	05/09/19 SMI" */
-
-#ifdef KERNEL
-#ifndef _KERNEL
-#define _KERNEL                 /* Solaris vs. Darwin */
-#endif
-#endif
-
-#define MACH__POSIX_C_SOURCE_PRIVATE 1  /* pulls in suitable savearea from
-	                                 * mach/ppc/thread_status.h */
 #include <kern/thread.h>
 #include <mach/thread_status.h>
 #include <arm/proc_reg.h>
@@ -231,7 +221,7 @@ fbt_perfCallback(
 	if (FBT_EXCEPTION_CODE == trapno && !IS_USER_TRAP(regs)) {
 		boolean_t oldlevel = 0;
 		machine_inst_t emul = 0;
-		uint64_t sp, pc, lr, imm;
+		uint64_t sp, lr, imm;
 
 		oldlevel = ml_set_interrupts_enabled(FALSE);
 
@@ -259,8 +249,7 @@ fbt_perfCallback(
 			/*
 			 * Skip over the patched NOP planted by sdt
 			 */
-			pc = get_saved_state_pc(regs);
-			set_saved_state_pc(regs, pc + DTRACE_INVOP_NOP_SKIP);
+			add_saved_state_pc(regs, DTRACE_INVOP_NOP_SKIP);
 			retval = KERN_SUCCESS;
 		} else if (FBT_IS_ARM64_ADD_FP_SP(emul)) {
 			/* retrieve the value to add */
@@ -278,8 +267,7 @@ fbt_perfCallback(
 			set_saved_state_fp(regs, sp + val);
 
 			/* skip over the bytes of the patched instruction */
-			pc = get_saved_state_pc(regs);
-			set_saved_state_pc(regs, pc + DTRACE_INVOP_ADD_FP_SP_SKIP);
+			add_saved_state_pc(regs, DTRACE_INVOP_ADD_FP_SP_SKIP);
 
 			retval = KERN_SUCCESS;
 		} else if (FBT_IS_ARM64_RET(emul)) {
@@ -290,9 +278,8 @@ fbt_perfCallback(
 			set_saved_state_pc(regs, lr);
 			retval = KERN_SUCCESS;
 		} else if (FBT_IS_ARM64_B_INSTR(emul)) {
-			pc = get_saved_state_pc(regs);
 			imm = FBT_GET_ARM64_B_IMM(emul);
-			set_saved_state_pc(regs, pc + imm);
+			add_saved_state_pc(regs, imm);
 			retval = KERN_SUCCESS;
 		} else if (emul == FBT_PATCHVAL) {
 			/* Means we encountered an error but handled it, try same inst again */

@@ -803,9 +803,6 @@ ip6_input(struct mbuf *m)
 		}
 	}
 
-	/* for consistency */
-	m->m_pkthdr.pkt_proto = ip6->ip6_nxt;
-
 #if DUMMYNET
 check_with_pf:
 #endif /* DUMMYNET */
@@ -928,9 +925,9 @@ check_with_pf:
 		lck_rw_done(&in6_ifaddr_rwlock);
 		ia6 = NULL;
 		/* address is not ready, so discard the packet. */
-		nd6log((LOG_INFO, "%s: packet to an unready address %s->%s\n",
+		nd6log(info, "%s: packet to an unready address %s->%s\n",
 		    __func__, ip6_sprintf(&ip6->ip6_src),
-		    ip6_sprintf(&ip6->ip6_dst)));
+		    ip6_sprintf(&ip6->ip6_dst));
 		goto bad;
 	}
 	lck_rw_done(&in6_ifaddr_rwlock);
@@ -1000,9 +997,9 @@ check_with_pf:
 		RT_UNLOCK(rin6.ro_rt);
 		ia6 = NULL;
 		/* address is not ready, so discard the packet. */
-		nd6log((LOG_INFO, "%s: packet to an unready address %s->%s\n",
+		nd6log(error, "%s: packet to an unready address %s->%s\n",
 		    __func__, ip6_sprintf(&ip6->ip6_src),
-		    ip6_sprintf(&ip6->ip6_dst)));
+		    ip6_sprintf(&ip6->ip6_dst));
 		goto bad;
 	}
 
@@ -1679,9 +1676,9 @@ ip6_savecontrol_v4(struct inpcb *inp, struct mbuf *m, struct mbuf **mp,
 		// Send ECN flags for v4-mapped addresses
 		if ((inp->inp_flags & IN6P_TCLASS) != 0) {
 			struct ip *ip_header = mtod(m, struct ip *);
-			u_int8_t tos = (ip_header->ip_tos & IPTOS_ECN_MASK);
 
-			mp = sbcreatecontrol_mbuf((caddr_t)&tos, sizeof(tos),
+			int tclass = (int)(ip_header->ip_tos);
+			mp = sbcreatecontrol_mbuf((caddr_t)&tclass, sizeof(tclass),
 			    IPV6_TCLASS, IPPROTO_IPV6, mp);
 			if (*mp == NULL) {
 				return NULL;

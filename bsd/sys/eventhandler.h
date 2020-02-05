@@ -74,7 +74,7 @@ struct eventhandler_lists_ctxt {
 };
 
 struct eventhandler_entry_arg {
-	uuid_t ee_fmc_uuid;     /* Flow manager UUID */
+	uuid_t ee_fm_uuid;      /* Flow manager UUID */
 	uuid_t ee_fr_uuid;      /* Flow route UUID */
 };
 

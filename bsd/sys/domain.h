@@ -186,11 +186,12 @@ typedef const struct domain_unguard *domain_unguard_t;
 extern domain_unguard_t domain_unguard_deploy(void);
 extern void domain_unguard_release(domain_unguard_t);
 extern struct domain_old *pffinddomain_old(int);
+extern struct domain *pffinddomain(int) __XNU_INTERNAL(pffinddomain);
 #else
 extern void net_add_domain(struct domain *dp);
 extern int net_del_domain(struct domain *);
-#endif /* XNU_KERNEL_PRIVATE */
 extern struct domain *pffinddomain(int);
+#endif /* XNU_KERNEL_PRIVATE */
 __END_DECLS
 #endif /* KERNEL_PRIVATE */
 #endif /* PRIVATE */

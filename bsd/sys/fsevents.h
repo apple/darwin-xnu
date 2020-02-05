@@ -96,11 +96,11 @@
 // These are special bits that be set in the 32-bit mode
 // field that /dev/fsevents provides.
 //
-#define FSE_MODE_HLINK         (1 << 31)    // notification is for a hard-link
-#define FSE_MODE_LAST_HLINK    (1 << 30)    // link count == 0 on a hard-link delete
-#define FSE_REMOTE_DIR_EVENT   (1 << 29)    // this is a remotely generated directory-level granularity event
-#define FSE_TRUNCATED_PATH     (1 << 28)    // the path for this item had to be truncated
-#define FSE_MODE_CLONE         (1 << 27)    // notification is for a clone
+#define FSE_MODE_HLINK         (1U << 31)    // notification is for a hard-link
+#define FSE_MODE_LAST_HLINK    (1U << 30)    // link count == 0 on a hard-link delete
+#define FSE_REMOTE_DIR_EVENT   (1U << 29)    // this is a remotely generated directory-level granularity event
+#define FSE_TRUNCATED_PATH     (1U << 28)    // the path for this item had to be truncated
+#define FSE_MODE_CLONE         (1U << 27)    // notification is for a clone
 
 // ioctl's on /dev/fsevents
 typedef struct fsevent_clone_args {

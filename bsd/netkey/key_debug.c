@@ -619,8 +619,8 @@ kdebug_secasv(sav)
 		printf("\n");
 	}
 
-	if (sav->replay != NULL)
-		kdebug_secreplay(sav->replay);
+	if (sav->replay[0] != NULL)
+		kdebug_secreplay(sav->replay[0]);
 	if (sav->lft_c != NULL)
 		kdebug_sadb_lifetime((struct sadb_ext *)sav->lft_c);
 	if (sav->lft_h != NULL)

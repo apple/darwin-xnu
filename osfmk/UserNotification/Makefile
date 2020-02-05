@@ -63,7 +63,7 @@ ${COMP_FILES} : ${MIG_TYPES}
 
 ${MIG_KUSRC} : \
 	%.c : %.defs
-	@echo "$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0)"
+	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}        \
 		-user    $*.c              \
 		-header  $*.h              \
@@ -73,7 +73,7 @@ ${MIG_KUSRC} : \
 
 ${MIG_KSSRC}: \
 	%Server.c : %.defs
-	@echo "$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0)"
+	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKSFLAGS}        \
 		-user    /dev/null              \
 		-header  /dev/null              \

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -84,6 +84,9 @@
 #include <security/mac_framework.h>
 #endif
 
+#if defined(HAS_APPLE_PAC)
+#include <ptrauth.h>
+#endif /* defined(HAS_APPLE_PAC) */
 
 lck_grp_t * sysctl_lock_group = NULL;
 lck_rw_t * sysctl_geometry_lock = NULL;
@@ -209,13 +212,43 @@ sysctl_register_oid(struct sysctl_oid *new_oidp)
 		}
 	}
 
+#if defined(HAS_APPLE_PAC)
+	if (oidp->oid_handler) {
+		/*
+		 * Dereference function-pointer-signed oid_handler to prevent an
+		 * attacker with the ability to observe the result of the
+		 * auth_and_resign below from trying all possible inputs until an auth
+		 * succeeds.
+		 */
+		if (__builtin_expect(!*(uintptr_t*)ptrauth_auth_data((void*)
+		    oidp->oid_handler, ptrauth_key_function_pointer, 0), 0)) {
+			/*
+			 * This is necessary to force the dereference but will never
+			 * actually be reached, dereferencing an invalidly signed pointer
+			 * will trap before getting here (and the codegen is nicer than
+			 * with a panic).
+			 */
+			__builtin_trap();
+		}
+		/*
+		 * Sign oid_handler address-discriminated upon installation to make it
+		 * harder to replace with an arbitrary function pointer.
+		 */
+		oidp->oid_handler = ptrauth_auth_and_resign(oidp->oid_handler,
+		    ptrauth_key_function_pointer, 0, ptrauth_key_function_pointer,
+		    ptrauth_blend_discriminator(&oidp->oid_handler,
+		    ptrauth_string_discriminator("oid_handler")));
+	}
+#endif /* defined(HAS_APPLE_PAC) */
 
 	/*
 	 * Insert the oid into the parent's list in order.
 	 */
 	q = NULL;
 	SLIST_FOREACH(p, parent, oid_link) {
-		if (oidp->oid_number < p->oid_number) {
+		if (oidp->oid_number == p->oid_number) {
+			panic("attempting to register a sysctl at previously registered slot : %d", oidp->oid_number);
+		} else if (oidp->oid_number < p->oid_number) {
 			break;
 		}
 		q = p;
@@ -269,6 +302,34 @@ sysctl_unregister_oid(struct sysctl_oid *oidp)
 		}
 	}
 
+#if defined(HAS_APPLE_PAC)
+	if (removed_oidp && removed_oidp->oid_handler && old_oidp == NULL) {
+		/*
+		 * Revert address-discriminated signing performed by
+		 * sysctl_register_oid() (in case this oid is registered again).
+		 */
+		removed_oidp->oid_handler = ptrauth_auth_function(removed_oidp->oid_handler,
+		    ptrauth_key_function_pointer,
+		    ptrauth_blend_discriminator(&removed_oidp->oid_handler,
+		    ptrauth_string_discriminator("oid_handler")));
+		/*
+		 * Dereference the function-pointer-signed result to prevent an
+		 * attacker with the ability to observe the result of the
+		 * auth_and_resign above from trying all possible inputs until an auth
+		 * succeeds.
+		 */
+		if (__builtin_expect(!*(uintptr_t*)ptrauth_auth_data((void*)
+		    removed_oidp->oid_handler, ptrauth_key_function_pointer, 0), 0)) {
+			/*
+			 * This is necessary to force the dereference but will never
+			 * actually be reached, dereferencing an invalidly signed pointer
+			 * will trap before getting here (and the codegen is nicer than
+			 * with a panic).
+			 */
+			__builtin_trap();
+		}
+	}
+#endif /* defined(HAS_APPLE_PAC) */
 
 	/*
 	 * We've removed it from the list at this point, but we don't want
@@ -349,6 +410,7 @@ sysctl_early_init(void)
 	sysctl_unlocked_node_lock = lck_mtx_alloc_init(sysctl_lock_group, NULL);
 
 	sysctl_register_set("__sysctl_set");
+	sysctl_load_devicetree_entries();
 }
 
 /*
@@ -441,10 +503,10 @@ sysctl_io_string(struct sysctl_req *req, char *pValue, size_t valueSize, int tru
 		 * returned string to the buffer size.  This preserves the semantics
 		 * of some library routines implemented via sysctl, which truncate
 		 * their returned data, rather than simply returning an error. The
-		 * returned string is always NUL terminated. */
+		 * returned string is always nul (ascii '\0') terminated. */
 		error = SYSCTL_OUT(req, pValue, req->oldlen - 1);
 		if (!error) {
-			char c = 0;
+			char c = '\0';
 			error = SYSCTL_OUT(req, &c, 1);
 		}
 	} else {
@@ -467,7 +529,7 @@ sysctl_io_string(struct sysctl_req *req, char *pValue, size_t valueSize, int tru
 		return EINVAL;
 	}
 
-	/* copy the string in and force NUL termination */
+	/* copy the string in and force nul termination */
 	error = SYSCTL_IN(req, pValue, req->newlen);
 	pValue[req->newlen] = '\0';
 
@@ -1589,6 +1651,15 @@ found:
 		lck_mtx_lock(sysctl_unlocked_node_lock);
 	}
 
+#if defined(HAS_APPLE_PAC)
+	/*
+	 * oid_handler is signed address-discriminated by sysctl_register_oid().
+	 */
+	oid_handler = ptrauth_auth_function(oid_handler,
+	    ptrauth_key_function_pointer,
+	    ptrauth_blend_discriminator(&oid->oid_handler,
+	    ptrauth_string_discriminator("oid_handler")));
+#endif /* defined(HAS_APPLE_PAC) */
 
 	if ((oid->oid_kind & CTLTYPE) == CTLTYPE_NODE) {
 		i = oid_handler(oid, name + indx, namelen - indx, req);
@@ -1656,7 +1727,7 @@ sysctl_create_user_req(struct sysctl_req *req, struct proc *p, user_addr_t oldp,
 int
 sysctl(proc_t p, struct sysctl_args *uap, __unused int32_t *retval)
 {
-	int error;
+	int error, new_error;
 	size_t oldlen = 0, newlen;
 	int name[CTL_MAXNAME];
 	struct sysctl_req req;
@@ -1721,16 +1792,25 @@ sysctl(proc_t p, struct sysctl_args *uap, __unused int32_t *retval)
 
 err:
 	if (uap->oldlenp != USER_ADDR_NULL) {
-		error = suulong(uap->oldlenp, oldlen);
+		/*
+		 * Only overwrite the old error value on a new error
+		 */
+		new_error = suulong(uap->oldlenp, oldlen);
+
+		if (new_error) {
+			error = new_error;
+		}
 	}
 
 	return error;
 }
 
+// sysctlbyname is also exported as KPI to kexts
+// and the syscall name cannot conflict with it
 int
-sysctlbyname(proc_t p, struct sysctlbyname_args *uap, __unused int32_t *retval)
+sys_sysctlbyname(proc_t p, struct sysctlbyname_args *uap, __unused int32_t *retval)
 {
-	int error;
+	int error, new_error;
 	size_t oldlen = 0, newlen;
 	char *name;
 	size_t namelen = 0;
@@ -1788,7 +1868,14 @@ sysctlbyname(proc_t p, struct sysctlbyname_args *uap, __unused int32_t *retval)
 	}
 
 	if (uap->oldlenp != USER_ADDR_NULL) {
-		error = suulong(uap->oldlenp, oldlen);
+		/*
+		 * Only overwrite the old error value on a new error
+		 */
+		new_error = suulong(uap->oldlenp, oldlen);
+
+		if (new_error) {
+			error = new_error;
+		}
 	}
 
 	return error;

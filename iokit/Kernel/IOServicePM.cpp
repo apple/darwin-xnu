@@ -37,6 +37,7 @@
 #include <IOKit/IOCommand.h>
 #include <IOKit/IOTimeStamp.h>
 #include <IOKit/IOReportMacros.h>
+#include <IOKit/IODeviceTreeSupport.h>
 
 #include <IOKit/pwr_mgt/IOPMlog.h>
 #include <IOKit/pwr_mgt/IOPMinformee.h>
@@ -86,36 +87,23 @@ static bool                  gIOPMInitialized       = false;
 static uint32_t              gIOPMBusyRequestCount  = 0;
 static uint32_t              gIOPMWorkInvokeCount   = 0;
 static uint32_t              gIOPMTickleGeneration  = 0;
-static IOWorkLoop *          gIOPMWorkLoop          = 0;
-static IOPMRequestQueue *    gIOPMRequestQueue      = 0;
-static IOPMRequestQueue *    gIOPMReplyQueue        = 0;
-static IOPMWorkQueue *       gIOPMWorkQueue         = 0;
-static IOPMCompletionQueue * gIOPMCompletionQueue   = 0;
-static IOPMRequest *         gIOPMRequest           = 0;
-static IOService *           gIOPMRootNode          = 0;
-static IOPlatformExpert *    gPlatform              = 0;
+static IOWorkLoop *          gIOPMWorkLoop          = NULL;
+static IOPMRequestQueue *    gIOPMRequestQueue      = NULL;
+static IOPMRequestQueue *    gIOPMReplyQueue        = NULL;
+static IOPMWorkQueue *       gIOPMWorkQueue         = NULL;
+static IOPMCompletionQueue * gIOPMCompletionQueue   = NULL;
+static IOPMRequest *         gIOPMRequest           = NULL;
+static IOService *           gIOPMRootNode          = NULL;
+static IOPlatformExpert *    gPlatform              = NULL;
 
-static char                  gIOSpinDumpKextName[128];
-static char                  gIOSpinDumpDelayType[16];
-static uint32_t              gIOSpinDumpDelayDuration = 0;
 
-static SYSCTL_STRING(_debug, OID_AUTO, swd_kext_name,
-    CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED,
-    &gIOSpinDumpKextName, sizeof(gIOSpinDumpKextName), "");
-static SYSCTL_STRING(_debug, OID_AUTO, swd_delay_type,
-    CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED,
-    &gIOSpinDumpDelayType, sizeof(gIOSpinDumpDelayType), "");
-static SYSCTL_INT(_debug, OID_AUTO, swd_delay_duration,
-    CTLFLAG_RW | CTLFLAG_KERN | CTLFLAG_LOCKED,
-    &gIOSpinDumpDelayDuration, 0, "");
+const OSSymbol *             gIOPMPowerClientDevice     = NULL;
+const OSSymbol *             gIOPMPowerClientDriver     = NULL;
+const OSSymbol *             gIOPMPowerClientChildProxy = NULL;
+const OSSymbol *             gIOPMPowerClientChildren   = NULL;
+const OSSymbol *             gIOPMPowerClientRootDomain = NULL;
 
-const OSSymbol *             gIOPMPowerClientDevice     = 0;
-const OSSymbol *             gIOPMPowerClientDriver     = 0;
-const OSSymbol *             gIOPMPowerClientChildProxy = 0;
-const OSSymbol *             gIOPMPowerClientChildren   = 0;
-const OSSymbol *             gIOPMPowerClientRootDomain = 0;
-
-static const OSSymbol *      gIOPMPowerClientAdvisoryTickle = 0;
+static const OSSymbol *      gIOPMPowerClientAdvisoryTickle = NULL;
 static bool                  gIOPMAdvisoryTickleEnabled = true;
 static thread_t              gIOPMWatchDogThread        = NULL;
 uint32_t                     gCanSleepTimeout           = 0;
@@ -367,19 +355,19 @@ IOService::PMinit( void )
 				if (gIOPMWorkLoop->addEventSource(gIOPMRequestQueue) !=
 				    kIOReturnSuccess) {
 					gIOPMRequestQueue->release();
-					gIOPMRequestQueue = 0;
+					gIOPMRequestQueue = NULL;
 				}
 
 				if (gIOPMWorkLoop->addEventSource(gIOPMReplyQueue) !=
 				    kIOReturnSuccess) {
 					gIOPMReplyQueue->release();
-					gIOPMReplyQueue = 0;
+					gIOPMReplyQueue = NULL;
 				}
 
 				if (gIOPMWorkLoop->addEventSource(gIOPMWorkQueue) !=
 				    kIOReturnSuccess) {
 					gIOPMWorkQueue->release();
-					gIOPMWorkQueue = 0;
+					gIOPMWorkQueue = NULL;
 				}
 
 				// Must be added after the work queue, which pushes request
@@ -387,7 +375,7 @@ IOService::PMinit( void )
 				if (gIOPMWorkLoop->addEventSource(gIOPMCompletionQueue) !=
 				    kIOReturnSuccess) {
 					gIOPMCompletionQueue->release();
-					gIOPMCompletionQueue = 0;
+					gIOPMCompletionQueue = NULL;
 				}
 
 				gIOPMPowerClientDevice =
@@ -407,9 +395,6 @@ IOService::PMinit( void )
 
 				gIOPMPowerClientRootDomain =
 				    OSSymbol::withCStringNoCopy( "RootDomainPower" );
-
-				gIOSpinDumpKextName[0] = '\0';
-				gIOSpinDumpDelayType[0] = '\0';
 			}
 
 			if (gIOPMRequestQueue && gIOPMReplyQueue && gIOPMCompletionQueue) {
@@ -483,10 +468,6 @@ IOService::PMinit( void )
 		fDriverCallEntry = thread_call_allocate(
 			(thread_call_func_t) &IOService::pmDriverCallout, this);
 		assert(fDriverCallEntry);
-		if (kIOKextSpinDump & gIOKitDebug) {
-			fSpinDumpTimer = thread_call_allocate(
-				&IOService::spindump_timer_expired, (thread_call_param_t)this);
-		}
 
 		// Check for powerChangeDone override.
 		if (OSMemberFunctionCast(void (*)(void),
@@ -523,7 +504,7 @@ void
 IOService::PMfree( void )
 {
 	initialized = false;
-	pm_vars = 0;
+	pm_vars = NULL;
 
 	if (pwrMgt) {
 		assert(fMachineState == kIOPM_Finished);
@@ -568,11 +549,6 @@ IOService::PMfree( void )
 			thread_call_free(fDriverCallEntry);
 			fDriverCallEntry = NULL;
 		}
-		if (fSpinDumpTimer) {
-			thread_call_cancel(fSpinDumpTimer);
-			thread_call_free(fSpinDumpTimer);
-			fSpinDumpTimer = NULL;
-		}
 		if (fPMLock) {
 			IOLockFree(fPMLock);
 			fPMLock = NULL;
@@ -587,7 +563,7 @@ IOService::PMfree( void )
 		}
 		if (fDriverCallParamSlots && fDriverCallParamPtr) {
 			IODelete(fDriverCallParamPtr, DriverCallParam, fDriverCallParamSlots);
-			fDriverCallParamPtr = 0;
+			fDriverCallParamPtr = NULL;
 			fDriverCallParamSlots = 0;
 		}
 		if (fResponseArray) {
@@ -605,18 +581,18 @@ IOService::PMfree( void )
 		}
 		if (fPowerClients) {
 			fPowerClients->release();
-			fPowerClients = 0;
+			fPowerClients = NULL;
 		}
 
 #if PM_VARS_SUPPORT
 		if (fPMVars) {
 			fPMVars->release();
-			fPMVars = 0;
+			fPMVars = NULL;
 		}
 #endif
 
 		pwrMgt->release();
-		pwrMgt = 0;
+		pwrMgt = NULL;
 	}
 }
 
@@ -645,7 +621,7 @@ IOService::joinPMtree( IOService * driver )
 	IOPlatformExpert *  platform;
 
 	platform = getPlatform();
-	assert(platform != 0);
+	assert(platform != NULL);
 	platform->PMRegisterDevice(this, driver);
 }
 
@@ -806,8 +782,8 @@ IOService::handlePMstop( IOPMRequest * request )
 IOReturn
 IOService::addPowerChild( IOService * child )
 {
-	IOPowerConnection * connection  = 0;
-	IOPMRequest *       requests[3] = {0, 0, 0};
+	IOPowerConnection * connection  = NULL;
+	IOPMRequest *       requests[3] = {NULL, NULL, NULL};
 	OSIterator *        iter;
 	bool                ok = true;
 
@@ -839,7 +815,7 @@ IOService::addPowerChild( IOService * child )
 			iter->release();
 		}
 		if (!ok) {
-			PM_LOG("%s: %s (%p) is already a child\n",
+			PM_LOG2("%s: %s (%p) is already a child\n",
 			    getName(), child->getName(), OBFUSCATE(child));
 			break;
 		}
@@ -1125,7 +1101,7 @@ IOService::registerPowerDriver(
 	unsigned long       numberOfStates )
 {
 	IOPMRequest *       request;
-	IOPMPSEntry *       powerStatesCopy = 0;
+	IOPMPSEntry *       powerStatesCopy = NULL;
 	IOPMPowerStateIndex stateOrder;
 	IOReturn            error = kIOReturnSuccess;
 
@@ -1245,6 +1221,40 @@ IOService::handleRegisterPowerDriver( IOPMRequest * request )
 
 		lowestPowerState   = fPowerStates[0].stateOrderToIndex;
 		fHighestPowerState = fPowerStates[numberOfStates - 1].stateOrderToIndex;
+
+#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
+		{
+			uint32_t        aotFlags;
+			IOService *     service;
+			OSObject *      object;
+			OSData *        data;
+
+			// Disallow kIOPMAOTPower states unless device tree enabled
+
+			aotFlags = 0;
+			service  = this;
+			while (service && !service->inPlane(gIODTPlane)) {
+				service = service->getProvider();
+			}
+			if (service) {
+				object = service->copyProperty(kIOPMAOTPowerKey, gIODTPlane);
+				data = OSDynamicCast(OSData, object);
+				if (data && (data->getLength() >= sizeof(uint32_t))) {
+					aotFlags = ((uint32_t *)data->getBytesNoCopy())[0];
+				}
+				OSSafeReleaseNULL(object);
+			}
+			if (!aotFlags) {
+				for (i = 0; i < numberOfStates; i++) {
+					if (kIOPMAOTPower & fPowerStates[i].inputPowerFlags) {
+						fPowerStates[i].inputPowerFlags  = 0xFFFFFFFF;
+						fPowerStates[i].capabilityFlags  = 0;
+						fPowerStates[i].outputPowerFlags = 0;
+					}
+				}
+			}
+		}
+#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 		// OR'in all the output power flags
 		fMergedOutputPowerFlags = 0;
@@ -1434,7 +1444,7 @@ IOService::handleInterestChanged( IOPMRequest * request )
 			fInsertInterestSet->removeObject(driver);
 		}
 		fInsertInterestSet->release();
-		fInsertInterestSet = 0;
+		fInsertInterestSet = NULL;
 	}
 
 	if (fRemoveInterestSet) {
@@ -1451,7 +1461,7 @@ IOService::handleInterestChanged( IOPMRequest * request )
 			fRemoveInterestSet->removeObject(driver);
 		}
 		fRemoveInterestSet->release();
-		fRemoveInterestSet = 0;
+		fRemoveInterestSet = NULL;
 	}
 
 	PM_UNLOCK();
@@ -1642,7 +1652,7 @@ IOService::adjustPowerState( uint32_t clamp )
 			/* flags        */ changeFlags,
 			/* power state  */ fDesiredPowerState,
 			/* domain flags */ 0,
-			/* connection   */ 0,
+			/* connection   */ NULL,
 			/* parent flags */ 0);
 	}
 }
@@ -1656,7 +1666,7 @@ IOService::synchronizePowerTree(
 	IOOptionBits    options,
 	IOService *     notifyRoot )
 {
-	IOPMRequest *   request_c = 0;
+	IOPMRequest *   request_c = NULL;
 	IOPMRequest *   request_s;
 
 	if (this != getPMRootDomain()) {
@@ -1666,7 +1676,7 @@ IOService::synchronizePowerTree(
 		return kIOPMNotYetInitialized;
 	}
 
-	OUR_PMLog(kPMLogCSynchronizePowerTree, options, (notifyRoot != 0));
+	OUR_PMLog(kPMLogCSynchronizePowerTree, options, (notifyRoot != NULL));
 
 	if (notifyRoot) {
 		IOPMRequest * nr;
@@ -1727,7 +1737,7 @@ IOService::handleSynchronizePowerTree( IOPMRequest * request )
 			(options & kIOPMSyncNoChildNotify),
 			/* power state  */ fCurrentPowerState,
 			/* domain flags */ 0,
-			/* connection   */ 0,
+			/* connection   */ NULL,
 			/* parent flags */ 0);
 	}
 }
@@ -1964,6 +1974,12 @@ IOService::handlePowerDomainDidChangeTo( IOPMRequest * request )
 		// Absorb and propagate parent's broadcast flags
 		myChangeFlags = kIOPMParentInitiated | kIOPMDomainDidChange |
 		    (parentChangeFlags & kIOPMRootBroadcastFlags);
+
+#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
+		if (kIOPMAOTPower & fPowerStates[maxPowerState].inputPowerFlags) {
+			IOLog("aotPS %s0x%qx[%ld]\n", getName(), getRegistryEntryID(), maxPowerState);
+		}
+#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 		result = startPowerChange(
 			/* flags        */ myChangeFlags,
@@ -2339,7 +2355,7 @@ IOService::changePowerStateWithOverrideTo( IOPMPowerStateIndex ordinal,
 	request->fRequestTag = tag;
 	request->fArg0 = (void *) ordinal;
 	request->fArg1 = (void *) gIOPMPowerClientDevice;
-	request->fArg2 = 0;
+	request->fArg2 = NULL;
 #if NOT_READY
 	if (action) {
 		request->installCompletionAction( action, target, param );
@@ -2441,7 +2457,7 @@ IOService::requestPowerState(
 	client->retain();
 	request->fArg0 = (void *)(uintptr_t) state;
 	request->fArg1 = (void *)            client;
-	request->fArg2 = 0;
+	request->fArg2 = NULL;
 #if NOT_READY
 	if (action) {
 		request->installCompletionAction( action, target, param );
@@ -2730,6 +2746,15 @@ IOService::computeDesiredState( unsigned long localClamp, bool computeOnly )
 	if (newPowerState >= fNumberOfPowerStates) {
 		newPowerState = fHighestPowerState;
 	}
+
+#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
+	if (getPMRootDomain()->isAOTMode()) {
+		if ((kIOPMPreventIdleSleep & fPowerStates[newPowerState].capabilityFlags)
+		    && !(kIOPMPreventIdleSleep & fPowerStates[fDesiredPowerState].capabilityFlags)) {
+			getPMRootDomain()->claimSystemWakeEvent(this, kIOPMWakeEventAOTExit, getName(), NULL);
+		}
+	}
+#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 	fDesiredPowerState = newPowerState;
 
@@ -3432,6 +3457,8 @@ IOService::startPowerChange(
 	IOPowerConnection *     parentConnection,
 	IOPMPowerFlags          parentFlags )
 {
+	uint32_t savedPMActionsParam;
+
 	PM_ASSERT_IN_GATE();
 	assert( fMachineState == kIOPM_Finished );
 	assert( powerState < fNumberOfPowerStates );
@@ -3441,7 +3468,24 @@ IOService::startPowerChange(
 	}
 
 	fIsPreChange = true;
+	savedPMActionsParam = fPMActions.parameter;
 	PM_ACTION_2(actionPowerChangeOverride, &powerState, &changeFlags);
+
+	// rdar://problem/55040032
+	// Schedule a power adjustment after removing the power clamp
+	// to inform our power parent(s) about our latest desired domain
+	// power state. For a self-initiated change, let OurChangeStart()
+	// automatically request parent power when necessary.
+	if (!fAdjustPowerScheduled &&
+	    ((changeFlags & kIOPMSelfInitiated) == 0) &&
+	    ((fPMActions.parameter & kPMActionsFlagLimitPower) == 0) &&
+	    ((savedPMActionsParam  & kPMActionsFlagLimitPower) != 0)) {
+		IOPMRequest * request = acquirePMRequest(this, kIOPMRequestTypeAdjustPowerState);
+		if (request) {
+			submitPMRequest(request);
+			fAdjustPowerScheduled = true;
+		}
+	}
 
 	if (changeFlags & kIOPMExpireIdleTimer) {
 		// Root domain requested removal of tickle influence
@@ -3523,7 +3567,7 @@ IOService::notifyInterestedDrivers( void )
 		if (fDriverCallParamSlots) {
 			assert(fDriverCallParamPtr);
 			IODelete(fDriverCallParamPtr, DriverCallParam, fDriverCallParamSlots);
-			fDriverCallParamPtr = 0;
+			fDriverCallParamPtr = NULL;
 			fDriverCallParamSlots = 0;
 		}
 
@@ -3703,7 +3747,7 @@ IOService::notifyChildren( void )
 	OSIterator *        iter;
 	OSObject *          next;
 	IOPowerConnection * connection;
-	OSArray *           children = 0;
+	OSArray *           children = NULL;
 	IOPMrootDomain *    rootDomain;
 	bool                delayNotify = false;
 
@@ -3763,10 +3807,10 @@ IOService::notifyChildren( void )
 
 	if (children && (children->getCount() == 0)) {
 		children->release();
-		children = 0;
+		children = NULL;
 	}
 	if (children) {
-		assert(fNotifyChildArray == 0);
+		assert(fNotifyChildArray == NULL);
 		fNotifyChildArray = children;
 		MS_PUSH(fMachineState);
 
@@ -3818,7 +3862,7 @@ IOService::notifyChildrenOrdered( void )
 		fNotifyChildArray->removeObject(0);
 	} else {
 		fNotifyChildArray->release();
-		fNotifyChildArray = 0;
+		fNotifyChildArray = NULL;
 
 		MS_POP(); // pushed by notifyChildren()
 	}
@@ -3853,7 +3897,7 @@ IOService::notifyChildrenDelayed( void )
 
 	PM_LOG2("%s: notified delayed children\n", getName());
 	fNotifyChildArray->release();
-	fNotifyChildArray = 0;
+	fNotifyChildArray = NULL;
 
 	MS_POP(); // pushed by notifyChildren()
 }
@@ -3954,14 +3998,11 @@ IOService::driverSetPowerState( void )
 	param = (DriverCallParam *) fDriverCallParamPtr;
 	powerState = fHeadNotePowerState;
 
-	callEntry.callMethod = OSMemberFunctionCast(const void *, fControllingDriver, &IOService::setPowerState);
-	if (assertPMDriverCall(&callEntry)) {
+	if (assertPMDriverCall(&callEntry, kIOPMDriverCallMethodSetPowerState)) {
 		OUR_PMLogFuncStart(kPMLogProgramHardware, (uintptr_t) this, powerState);
-		start_spindump_timer("SetState");
 		clock_get_uptime(&fDriverCallStartTime);
 		result = fControllingDriver->setPowerState( powerState, this );
 		clock_get_uptime(&end);
-		stop_spindump_timer();
 		OUR_PMLogFuncEnd(kPMLogProgramHardware, (uintptr_t) this, (UInt32) result);
 
 		deassertPMDriverCall(&callEntry);
@@ -4017,6 +4058,8 @@ IOService::driverInformPowerChange( void )
 	AbsoluteTime        end;
 	IOReturn            result;
 	IOItemCount         count;
+	IOOptionBits        callMethod = (fDriverCallReason == kDriverCallInformPreChange) ?
+	    kIOPMDriverCallMethodWillChange : kIOPMDriverCallMethodDidChange;
 
 	assert( fDriverCallBusy );
 	assert( fDriverCallParamPtr );
@@ -4032,27 +4075,18 @@ IOService::driverInformPowerChange( void )
 		informee = (IOPMinformee *) param->Target;
 		driver   = informee->whatObject;
 
-		if (fDriverCallReason == kDriverCallInformPreChange) {
-			callEntry.callMethod = OSMemberFunctionCast(const void *, driver, &IOService::powerStateWillChangeTo);
-		} else {
-			callEntry.callMethod = OSMemberFunctionCast(const void *, driver, &IOService::powerStateDidChangeTo);
-		}
-		if (assertPMDriverCall(&callEntry, 0, informee)) {
+		if (assertPMDriverCall(&callEntry, callMethod, informee)) {
 			if (fDriverCallReason == kDriverCallInformPreChange) {
 				OUR_PMLogFuncStart(kPMLogInformDriverPreChange, (uintptr_t) this, powerState);
-				start_spindump_timer("WillChange");
 				clock_get_uptime(&informee->startTime);
 				result = driver->powerStateWillChangeTo(powerFlags, powerState, this);
 				clock_get_uptime(&end);
-				stop_spindump_timer();
 				OUR_PMLogFuncEnd(kPMLogInformDriverPreChange, (uintptr_t) this, result);
 			} else {
 				OUR_PMLogFuncStart(kPMLogInformDriverPostChange, (uintptr_t) this, powerState);
-				start_spindump_timer("DidChange");
 				clock_get_uptime(&informee->startTime);
 				result = driver->powerStateDidChangeTo(powerFlags, powerState, this);
 				clock_get_uptime(&end);
-				stop_spindump_timer();
 				OUR_PMLogFuncEnd(kPMLogInformDriverPostChange, (uintptr_t) this, result);
 			}
 
@@ -4340,7 +4374,7 @@ IOService::all_done( void )
 
 			// inform subclass policy-maker
 			if (fPCDFunctionOverride && fParentsKnowState &&
-			    assertPMDriverCall(&callEntry, kIOPMADC_NoInactiveCheck)) {
+			    assertPMDriverCall(&callEntry, kIOPMDriverCallMethodChangeDone, NULL, kIOPMDriverCallNoInactiveCheck)) {
 				powerChangeDone(prevPowerState);
 				deassertPMDriverCall(&callEntry);
 			}
@@ -4392,7 +4426,7 @@ IOService::all_done( void )
 
 			// inform subclass policy-maker
 			if (fPCDFunctionOverride && fParentsKnowState &&
-			    assertPMDriverCall(&callEntry, kIOPMADC_NoInactiveCheck)) {
+			    assertPMDriverCall(&callEntry, kIOPMDriverCallMethodChangeDone, NULL, kIOPMDriverCallNoInactiveCheck)) {
 				powerChangeDone(prevPowerState);
 				deassertPMDriverCall(&callEntry);
 			}
@@ -4509,7 +4543,7 @@ requestDomainPowerApplier(
 	IOService *                     parent;
 	IOPMRequestDomainPowerContext * context;
 
-	if ((connection = OSDynamicCast(IOPowerConnection, entry)) == 0) {
+	if ((connection = OSDynamicCast(IOPowerConnection, entry)) == NULL) {
 		return;
 	}
 	parent = (IOService *) connection->copyParentEntry(gIOPowerPlane);
@@ -5203,6 +5237,9 @@ IOService::startSettleTimer( void )
 //*********************************************************************************
 
 #ifndef __LP64__
+#if MACH_ASSERT
+__dead2
+#endif
 void
 IOService::ack_timer_ticked( void )
 {
@@ -5232,14 +5269,40 @@ IOService::ackTimerTick( void )
 				PM_ERROR("%s::setPowerState(%p, %lu -> %lu) timed out after %d ms\n",
 				    fName, OBFUSCATE(this), fCurrentPowerState, fHeadNotePowerState, NS_TO_MS(nsec));
 
-#if DEBUG && CONFIG_EMBEDDED
-				panic("%s::setPowerState(%p, %lu -> %lu) timed out after %d ms",
-				    fName, this, fCurrentPowerState, fHeadNotePowerState, NS_TO_MS(nsec));
+#if DEBUG || DEVELOPMENT || CONFIG_EMBEDDED
+				uint32_t panic_allowed = -1;
+				PE_parse_boot_argn("setpowerstate_panic", &panic_allowed, sizeof(panic_allowed));
+				if (panic_allowed != 0) {
+					// rdar://problem/48743340 - excluding AppleSEPManager from panic
+					const char *whitelist = "AppleSEPManager";
+					if (strncmp(fName, whitelist, strlen(whitelist))) {
+						panic("%s::setPowerState(%p, %lu -> %lu) timed out after %d ms",
+						    fName, this, fCurrentPowerState, fHeadNotePowerState, NS_TO_MS(nsec));
+					}
+				} else {
+					PM_ERROR("setPowerState panic disabled by setpowerstate_panic boot-arg\n");
+				}
 #else
 				if (gIOKitDebug & kIOLogDebugPower) {
 					panic("%s::setPowerState(%p, %lu -> %lu) timed out after %d ms",
 					    fName, this, fCurrentPowerState, fHeadNotePowerState, NS_TO_MS(nsec));
 				} else {
+					// panic for first party kexts
+					const void *function_addr = NULL;
+					OSKext *kext = NULL;
+					function_addr = OSMemberFunctionCast(const void *, fControllingDriver, &IOService::setPowerState);
+					kext = OSKext::lookupKextWithAddress((vm_address_t)function_addr);
+					if (kext) {
+						const char *bundleID = kext->getIdentifierCString();
+						const char *apple_prefix = "com.apple";
+						const char *kernel_prefix = "__kernel__";
+						if (strncmp(bundleID, apple_prefix, strlen(apple_prefix)) == 0 || strncmp(bundleID, kernel_prefix, strlen(kernel_prefix)) == 0) {
+							// first party client
+							panic("%s::setPowerState(%p : %p, %lu -> %lu) timed out after %d ms",
+							    fName, this, function_addr, fCurrentPowerState, fHeadNotePowerState, NS_TO_MS(nsec));
+						}
+						kext->release();
+					}
 					// Unblock state machine and pretend driver has acked.
 					done = true;
 				}
@@ -5283,6 +5346,7 @@ IOService::ackTimerTick( void )
 			if (fHeadNotePendingAcks == 0) {
 				// yes, we can continue
 				done = true;
+				getPMRootDomain()->reset_watchdog_timer(this, 0);
 			} else {
 				// no, set timer again
 				start_ack_timer();
@@ -5414,7 +5478,6 @@ IOService::reset_watchdog_timer(IOService *blockedObject, int pendingResponseTim
 			goto exit;
 		}
 
-
 		for (i = 0; i < fBlockedArray->getCount(); i++) {
 			obj = OSDynamicCast(IOService, fBlockedArray->getObject(i));
 			if (obj && (obj->fPendingResponseDeadline < deadline)) {
@@ -5459,9 +5522,9 @@ IOService::watchdog_timer_expired( thread_call_param_t arg0, thread_call_param_t
 
 	gIOPMWatchDogThread = current_thread();
 	getPMRootDomain()->sleepWakeDebugTrig(true);
-	gIOPMWatchDogThread = 0;
+	gIOPMWatchDogThread = NULL;
 	thread_call_free(me->fWatchdogTimer);
-	me->fWatchdogTimer = 0;
+	me->fWatchdogTimer = NULL;
 
 	return;
 }
@@ -5558,108 +5621,6 @@ IOService::ack_timer_expired( thread_call_param_t arg0, thread_call_param_t arg1
 	me->release();
 }
 
-//*********************************************************************************
-// [private] start_spindump_timer
-//*********************************************************************************
-
-void
-IOService::start_spindump_timer( const char * delay_type )
-{
-	AbsoluteTime    deadline;
-	boolean_t       pending;
-
-	if (!fSpinDumpTimer || !(kIOKextSpinDump & gIOKitDebug)) {
-		return;
-	}
-
-	if (gIOSpinDumpKextName[0] == '\0' &&
-	    !(PE_parse_boot_argn("swd_kext_name", &gIOSpinDumpKextName,
-	    sizeof(gIOSpinDumpKextName)))) {
-		return;
-	}
-
-	if (strncmp(gIOSpinDumpKextName, fName, sizeof(gIOSpinDumpKextName)) != 0) {
-		return;
-	}
-
-	if (gIOSpinDumpDelayType[0] == '\0' &&
-	    !(PE_parse_boot_argn("swd_delay_type", &gIOSpinDumpDelayType,
-	    sizeof(gIOSpinDumpDelayType)))) {
-		strncpy(gIOSpinDumpDelayType, "SetState", sizeof(gIOSpinDumpDelayType));
-	}
-
-	if (strncmp(delay_type, gIOSpinDumpDelayType, sizeof(gIOSpinDumpDelayType)) != 0) {
-		return;
-	}
-
-	if (gIOSpinDumpDelayDuration == 0 &&
-	    !(PE_parse_boot_argn("swd_delay_duration", &gIOSpinDumpDelayDuration,
-	    sizeof(gIOSpinDumpDelayDuration)))) {
-		gIOSpinDumpDelayDuration = 300;
-	}
-
-	clock_interval_to_deadline(gIOSpinDumpDelayDuration, kMillisecondScale, &deadline);
-
-	retain();
-	pending = thread_call_enter_delayed(fSpinDumpTimer, deadline);
-	if (pending) {
-		release();
-	}
-}
-
-//*********************************************************************************
-// [private] stop_spindump_timer
-//*********************************************************************************
-
-void
-IOService::stop_spindump_timer( void )
-{
-	boolean_t   pending;
-
-	if (!fSpinDumpTimer || !(kIOKextSpinDump & gIOKitDebug)) {
-		return;
-	}
-
-	pending = thread_call_cancel(fSpinDumpTimer);
-	if (pending) {
-		release();
-	}
-}
-
-
-//*********************************************************************************
-// [static] actionSpinDumpTimerExpired
-//
-// Inside PM work loop's gate.
-//*********************************************************************************
-
-IOReturn
-IOService::actionSpinDumpTimerExpired(
-	OSObject * target,
-	void * arg0, void * arg1,
-	void * arg2, void * arg3 )
-{
-	getPMRootDomain()->takeStackshot(false, false, true);
-
-	return kIOReturnSuccess;
-}
-
-//*********************************************************************************
-// spindump_timer_expired
-//
-// Thread call function. Holds a retain while the callout is in flight.
-//*********************************************************************************
-
-void
-IOService::spindump_timer_expired( thread_call_param_t arg0, thread_call_param_t arg1 )
-{
-	IOService * me = (IOService *) arg0;
-
-	if (gIOPMWorkLoop) {
-		gIOPMWorkLoop->runAction(&actionSpinDumpTimerExpired, me);
-	}
-	me->release();
-}
 
 // MARK: -
 // MARK: Client Messaging
@@ -5887,10 +5848,12 @@ IOService::tellClientsWithResponse( int messageType )
 	}
 
 	context.responseArray    = fResponseArray;
-	context.notifyClients    = 0;
+	context.notifyClients    = NULL;
 	context.serialNumber     = fSerialNumber;
 	context.messageType      = messageType;
 	context.notifyType       = fOutOfBandParameter;
+	context.skippedInDark    = 0;
+	context.notSkippedInDark = 0;
 	context.isPreChange      = fIsPreChange;
 	context.enableTracing    = false;
 	context.us               = this;
@@ -5902,7 +5865,7 @@ IOService::tellClientsWithResponse( int messageType )
 	    OSMemberFunctionCast(
 		IOPMMessageFilter,
 		this,
-		&IOPMrootDomain::systemMessageFilter) : 0;
+		&IOPMrootDomain::systemMessageFilter) : NULL;
 
 	switch (fOutOfBandParameter) {
 	case kNotifyApps:
@@ -5969,6 +5932,12 @@ IOService::tellClientsWithResponse( int messageType )
 	}
 	fNotifyClientArray = context.notifyClients;
 
+	if (context.skippedInDark) {
+		IOLog("tellClientsWithResponse(%s, %d) %d of %d skipped in dark\n",
+		    getIOMessageString(messageType), fOutOfBandParameter,
+		    context.skippedInDark, context.skippedInDark + context.notSkippedInDark);
+	}
+
 	// do we have to wait for somebody?
 	if (!checkForDone()) {
 		OUR_PMLog(kPMLogStartAckTimer, context.maxTimeRequested, 0);
@@ -6027,10 +5996,16 @@ IOService::pmTellAppWithResponse( OSObject * object, void * arg )
 
 			if (proc) {
 				proc_suspended = get_task_pidsuspended((task_t) proc->task);
-				proc_rele(proc);
-
 				if (proc_suspended) {
 					logClientIDForNotification(object, context, "PMTellAppWithResponse - Suspended");
+#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
+				} else if (getPMRootDomain()->isAOTMode() && get_task_suspended((task_t) proc->task)) {
+					proc_suspended = true;
+					context->skippedInDark++;
+#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
+				}
+				proc_rele(proc);
+				if (proc_suspended) {
 					return;
 				}
 			}
@@ -6038,16 +6013,17 @@ IOService::pmTellAppWithResponse( OSObject * object, void * arg )
 	}
 
 	if (context->messageFilter &&
-	    !context->messageFilter(context->us, object, context, 0, &waitForReply)) {
+	    !context->messageFilter(context->us, object, context, NULL, &waitForReply)) {
 		if (kIOLogDebugPower & gIOKitDebug) {
 			logClientIDForNotification(object, context, "DROP App");
 		}
 		return;
 	}
+	context->notSkippedInDark++;
 
 	// Create client array (for tracking purposes) only if the service
 	// has app clients. Usually only root domain does.
-	if (0 == context->notifyClients) {
+	if (NULL == context->notifyClients) {
 		context->notifyClients = OSArray::withCapacity( 32 );
 	}
 
@@ -6104,7 +6080,7 @@ IOService::pmTellClientWithResponse( OSObject * object, void * arg )
 	uint64_t                        nsec;
 
 	if (context->messageFilter &&
-	    !context->messageFilter(context->us, object, context, 0, 0)) {
+	    !context->messageFilter(context->us, object, context, NULL, NULL)) {
 		if ((kIOLogDebugPower & gIOKitDebug) &&
 		    (OSDynamicCast(_IOServiceInterestNotifier, object))) {
 			_IOServiceInterestNotifier *n = (_IOServiceInterestNotifier *) object;
@@ -6138,7 +6114,7 @@ IOService::pmTellClientWithResponse( OSObject * object, void * arg )
 		    OBFUSCATE(object), OBFUSCATE(notifier->handler));
 	}
 
-	if (0 == context->notifyClients) {
+	if (NULL == context->notifyClients) {
 		context->notifyClients = OSArray::withCapacity( 32 );
 	}
 
@@ -6147,7 +6123,7 @@ IOService::pmTellClientWithResponse( OSObject * object, void * arg )
 	notify.stateNumber = context->stateNumber;
 	notify.stateFlags  = context->stateFlags;
 
-	if (context->enableTracing && (notifier != 0)) {
+	if (context->enableTracing && (notifier != NULL)) {
 		getPMRootDomain()->traceDetail(notifier, true);
 	}
 
@@ -6236,9 +6212,40 @@ IOService::pmTellCapabilityAppWithResponse( OSObject * object, void * arg )
 		return;
 	}
 
+	if (context->us == getPMRootDomain() &&
+#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
+	    getPMRootDomain()->isAOTMode()
+#else /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
+	    false
+#endif /* (defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
+	    ) {
+		OSNumber                *clientID = NULL;
+		boolean_t               proc_suspended = FALSE;
+		proc_t                proc = NULL;
+		if ((clientID = copyClientIDForNotification(object, context))) {
+			uint32_t clientPID = clientID->unsigned32BitValue();
+			clientID->release();
+			proc = proc_find(clientPID);
+			if (proc) {
+				proc_suspended = get_task_pidsuspended((task_t) proc->task);
+				if (proc_suspended) {
+					logClientIDForNotification(object, context, "PMTellCapablityAppWithResponse - Suspended");
+				} else if (get_task_suspended((task_t) proc->task)) {
+					proc_suspended = true;
+					context->skippedInDark++;
+				}
+				proc_rele(proc);
+				if (proc_suspended) {
+					return;
+				}
+			}
+		}
+	}
+	context->notSkippedInDark++;
+
 	// Create client array (for tracking purposes) only if the service
 	// has app clients. Usually only root domain does.
-	if (0 == context->notifyClients) {
+	if (NULL == context->notifyClients) {
 		context->notifyClients = OSArray::withCapacity( 32 );
 	}
 
@@ -6316,7 +6323,7 @@ IOService::pmTellCapabilityClientWithResponse(
 
 	memset(&msgArg, 0, sizeof(msgArg));
 	if (context->messageFilter &&
-	    !context->messageFilter(context->us, object, context, &msgArg, 0)) {
+	    !context->messageFilter(context->us, object, context, &msgArg, NULL)) {
 		if ((kIOLogDebugPower & gIOKitDebug) &&
 		    (OSDynamicCast(_IOServiceInterestNotifier, object))) {
 			_IOServiceInterestNotifier *n = (_IOServiceInterestNotifier *) object;
@@ -6328,7 +6335,7 @@ IOService::pmTellCapabilityClientWithResponse(
 		return;
 	}
 
-	if (0 == context->notifyClients) {
+	if (NULL == context->notifyClients) {
 		context->notifyClients = OSArray::withCapacity( 32 );
 	}
 	notifier = OSDynamicCast(_IOServiceInterestNotifier, object);
@@ -6356,7 +6363,7 @@ IOService::pmTellCapabilityClientWithResponse(
 	msgArg.notifyRef = msgRef;
 	msgArg.maxWaitForReply = 0;
 
-	if (context->enableTracing && (notifier != 0)) {
+	if (context->enableTracing && (notifier != NULL)) {
 		getPMRootDomain()->traceDetail(notifier, true);
 	}
 
@@ -6475,7 +6482,7 @@ IOService::tellClients( int messageType )
 	    OSMemberFunctionCast(
 		IOPMMessageFilter,
 		this,
-		&IOPMrootDomain::systemMessageFilter) : 0;
+		&IOPMrootDomain::systemMessageFilter) : NULL;
 
 	context.notifyType    = kNotifyPriority;
 	applyToInterested( gIOPriorityPowerStateInterest,
@@ -6502,7 +6509,7 @@ tellKernelClientApplier( OSObject * object, void * arg )
 	IOPMInterestContext *           context = (IOPMInterestContext *) arg;
 
 	if (context->messageFilter &&
-	    !context->messageFilter(context->us, object, context, 0, 0)) {
+	    !context->messageFilter(context->us, object, context, NULL, NULL)) {
 		if ((kIOLogDebugPower & gIOKitDebug) &&
 		    (OSDynamicCast(_IOServiceInterestNotifier, object))) {
 			_IOServiceInterestNotifier *n = (_IOServiceInterestNotifier *) object;
@@ -6514,7 +6521,7 @@ tellKernelClientApplier( OSObject * object, void * arg )
 		return;
 	}
 
-	notify.powerRef     = (void *) 0;
+	notify.powerRef     = (void *) NULL;
 	notify.returnValue  = 0;
 	notify.stateNumber  = context->stateNumber;
 	notify.stateFlags   = context->stateFlags;
@@ -6596,10 +6603,16 @@ tellAppClientApplier( OSObject * object, void * arg )
 
 			if (proc) {
 				proc_suspended = get_task_pidsuspended((task_t) proc->task);
-				proc_rele(proc);
-
 				if (proc_suspended) {
 					logClientIDForNotification(object, context, "tellAppClientApplier - Suspended");
+#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
+				} else if (IOService::getPMRootDomain()->isAOTMode() && get_task_suspended((task_t) proc->task)) {
+					proc_suspended = true;
+					context->skippedInDark++;
+#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
+				}
+				proc_rele(proc);
+				if (proc_suspended) {
 					return;
 				}
 			}
@@ -6607,18 +6620,19 @@ tellAppClientApplier( OSObject * object, void * arg )
 	}
 
 	if (context->messageFilter &&
-	    !context->messageFilter(context->us, object, context, 0, 0)) {
+	    !context->messageFilter(context->us, object, context, NULL, NULL)) {
 		if (kIOLogDebugPower & gIOKitDebug) {
 			logClientIDForNotification(object, context, "DROP App");
 		}
 		return;
 	}
+	context->notSkippedInDark++;
 
 	if (kIOLogDebugPower & gIOKitDebug) {
 		logClientIDForNotification(object, context, "MESG App");
 	}
 
-	context->us->messageClient(context->messageType, object, 0);
+	context->us->messageClient(context->messageType, object, NULL);
 }
 
 //*********************************************************************************
@@ -6659,7 +6673,7 @@ IOService::responseValid( uint32_t refcon, int pid )
 	UInt16          serialComponent;
 	UInt16          ordinalComponent;
 	OSObject *      theFlag;
-	OSObject        *object = 0;
+	OSObject        *object = NULL;
 
 	serialComponent  = (refcon >> 16) & 0xFFFF;
 	ordinalComponent = (refcon & 0xFFFF);
@@ -6674,7 +6688,7 @@ IOService::responseValid( uint32_t refcon, int pid )
 
 	theFlag = fResponseArray->getObject(ordinalComponent);
 
-	if (theFlag == 0) {
+	if (theFlag == NULL) {
 		return false;
 	}
 
@@ -6727,7 +6741,7 @@ IOService::responseValid( uint32_t refcon, int pid )
 	} else if (object) {
 		getPMRootDomain()->pmStatsRecordApplicationResponse(
 			gIOPMStatsResponsePrompt,
-			0, 0, 0, pid, object);
+			NULL, 0, 0, pid, object);
 	}
 
 	if (kOSBooleanFalse == theFlag) {
@@ -6762,7 +6776,7 @@ IOService::allowPowerChange( unsigned long refcon )
 
 	request->fArg0 = (void *)            refcon;
 	request->fArg1 = (void *)(uintptr_t) proc_selfpid();
-	request->fArg2 = (void *)            0;
+	request->fArg2 = (void *)            NULL;
 	submitPMRequest( request );
 
 	return kIOReturnSuccess;
@@ -6812,6 +6826,23 @@ IOService::cancelPowerChange( unsigned long refcon )
 	submitPMRequest( request );
 
 	return kIOReturnSuccess;
+}
+
+//*********************************************************************************
+// cancelIdlePowerDown
+//
+// Internal method to trigger an idle cancel or revert
+//*********************************************************************************
+
+void
+IOService::cancelIdlePowerDown( IOService * service )
+{
+	IOPMRequest * request;
+
+	request = acquirePMRequest(service, kIOPMRequestTypeIdleCancel);
+	if (request) {
+		submitPMRequest(request);
+	}
 }
 
 #ifndef __LP64__
@@ -7375,7 +7406,7 @@ IOService::actionPMCompletionQueue(
 	IOPMRequest *         request,
 	IOPMCompletionQueue * queue )
 {
-	bool            more = (request->getNextRequest() != 0);
+	bool            more = (request->getNextRequest() != NULL);
 	IOPMRequest *   root = request->getRootRequest();
 
 	if (root && (root != request)) {
@@ -7767,7 +7798,7 @@ IOService::actionPMWorkQueueInvoke( IOPMRequest * request, IOPMWorkQueue * queue
 			    fMachineState);
 		}
 
-		gIOPMRequest = 0;
+		gIOPMRequest = NULL;
 
 		if (fMachineState == kIOPM_Finished) {
 			stop_watchdog_timer();
@@ -7904,7 +7935,7 @@ IOService::actionPMReplyQueue( IOPMRequest * request, IOPMRequestQueue * queue )
 					getPMRootDomain()->pmStatsRecordApplicationResponse(
 						gIOPMStatsResponseCancel,
 						name ? name->getCStringNoCopy() : "", 0,
-						0, (int)(uintptr_t) request->fArg1, 0);
+						0, (int)(uintptr_t) request->fArg1, NULL);
 				}
 			}
 
@@ -8009,10 +8040,11 @@ IOService::actionPMReplyQueue( IOPMRequest * request, IOPMRequestQueue * queue )
 bool
 IOService::assertPMDriverCall(
 	IOPMDriverCallEntry *   entry,
-	IOOptionBits            options,
-	IOPMinformee *          inform )
+	IOOptionBits            method,
+	const IOPMinformee *    inform,
+	IOOptionBits            options )
 {
-	IOService * target = 0;
+	IOService * target = NULL;
 	bool        ok = false;
 
 	if (!initialized) {
@@ -8025,7 +8057,7 @@ IOService::assertPMDriverCall(
 		goto fail;
 	}
 
-	if (((options & kIOPMADC_NoInactiveCheck) == 0) && isInactive()) {
+	if (((options & kIOPMDriverCallNoInactiveCheck) == 0) && isInactive()) {
 		goto fail;
 	}
 
@@ -8037,6 +8069,24 @@ IOService::assertPMDriverCall(
 		if (target->isInactive()) {
 			goto fail;
 		}
+	}
+
+	// Record calling address for sleep failure diagnostics
+	switch (method) {
+	case kIOPMDriverCallMethodSetPowerState:
+		entry->callMethod = OSMemberFunctionCast(const void *, fControllingDriver, &IOService::setPowerState);
+		break;
+	case kIOPMDriverCallMethodWillChange:
+		entry->callMethod = OSMemberFunctionCast(const void *, target, &IOService::powerStateWillChangeTo);
+		break;
+	case kIOPMDriverCallMethodDidChange:
+		entry->callMethod = OSMemberFunctionCast(const void *, target, &IOService::powerStateDidChangeTo);
+		break;
+	case kIOPMDriverCallMethodUnknown:
+	case kIOPMDriverCallMethodSetAggressive:
+	default:
+		entry->callMethod = NULL;
+		break;
 	}
 
 	entry->thread = current_thread();
@@ -8193,9 +8243,9 @@ IOPMRequest *
 IOPMRequest::create( void )
 {
 	IOPMRequest * me = OSTypeAlloc(IOPMRequest);
-	if (me && !me->init(0, kIOPMRequestTypeInvalid)) {
+	if (me && !me->init(NULL, kIOPMRequestTypeInvalid)) {
 		me->release();
-		me = 0;
+		me = NULL;
 	}
 	return me;
 }
@@ -8235,14 +8285,14 @@ IOPMRequest::reset( void )
 	if (fCompletionAction && (fRequestType == kIOPMRequestTypeQuiescePowerTree)) {
 		// Call the completion on PM work loop context
 		fCompletionAction(fCompletionTarget, fCompletionParam);
-		fCompletionAction = 0;
+		fCompletionAction = NULL;
 	}
 
 	fRequestType = kIOPMRequestTypeInvalid;
 
 	if (fTarget) {
 		fTarget->release();
-		fTarget = 0;
+		fTarget = NULL;
 	}
 }
 
@@ -8285,7 +8335,7 @@ IOPMRequest::detachNextRequest( void )
 		    (uint32_t) fRequestNext->fWorkWaitCount,
 		    fTarget->getName());
 #endif
-		fRequestNext = 0;
+		fRequestNext = NULL;
 		ok = true;
 	}
 	return ok;
@@ -8330,7 +8380,7 @@ IOPMRequest::detachRootRequest( void )
 		    (uint32_t) fRequestRoot->fFreeWaitCount,
 		    fTarget->getName());
 #endif
-		fRequestRoot = 0;
+		fRequestRoot = NULL;
 		ok = true;
 	}
 	return ok;
@@ -8353,7 +8403,7 @@ IOPMRequestQueue::create( IOService * inOwner, Action inAction )
 	IOPMRequestQueue * me = OSTypeAlloc(IOPMRequestQueue);
 	if (me && !me->init(inOwner, inAction)) {
 		me->release();
-		me = 0;
+		me = NULL;
 	}
 	return me;
 }
@@ -8367,7 +8417,7 @@ IOPMRequestQueue::init( IOService * inOwner, Action inAction )
 
 	queue_init(&fQueue);
 	fLock = IOLockAlloc();
-	return fLock != 0;
+	return fLock != NULL;
 }
 
 void
@@ -8375,7 +8425,7 @@ IOPMRequestQueue::free( void )
 {
 	if (fLock) {
 		IOLockFree(fLock);
-		fLock = 0;
+		fLock = NULL;
 	}
 	return IOEventSource::free();
 }
@@ -8458,7 +8508,7 @@ IOPMWorkQueue::create( IOService * inOwner, Action invoke, Action retire )
 	IOPMWorkQueue * me = OSTypeAlloc(IOPMWorkQueue);
 	if (me && !me->init(inOwner, invoke, retire)) {
 		me->release();
-		me = 0;
+		me = NULL;
 	}
 	return me;
 }
@@ -8467,7 +8517,7 @@ bool
 IOPMWorkQueue::init( IOService * inOwner, Action invoke, Action retire )
 {
 	if (!invoke || !retire ||
-	    !IOEventSource::init(inOwner, (IOEventSourceAction)0)) {
+	    !IOEventSource::init(inOwner, (IOEventSourceAction)NULL)) {
 		return false;
 	}
 
@@ -8562,7 +8612,7 @@ IOPMWorkQueue::checkRequestQueue( queue_head_t * requestQueue, bool * empty )
 		}
 
 		if (request == fQuiesceRequest) {
-			fQuiesceRequest = 0;
+			fQuiesceRequest = NULL;
 		}
 
 		queue_remove_first(requestQueue, request, typeof(request), fCommandChain);
@@ -8685,7 +8735,7 @@ IOPMWorkQueue::finishQuiesceRequest( IOPMRequest * quiesceRequest )
 {
 	if (fQuiesceRequest && (quiesceRequest == fQuiesceRequest) &&
 	    (fQuiesceStartTime != 0)) {
-		fInvokeAction = 0;
+		fInvokeAction = NULL;
 		fQuiesceFinishTime = mach_absolute_time();
 	}
 }
@@ -8705,7 +8755,7 @@ IOPMCompletionQueue::create( IOService * inOwner, Action inAction )
 	IOPMCompletionQueue * me = OSTypeAlloc(IOPMCompletionQueue);
 	if (me && !me->init(inOwner, inAction)) {
 		me->release();
-		me = 0;
+		me = NULL;
 	}
 	return me;
 }

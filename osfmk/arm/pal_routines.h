@@ -29,6 +29,7 @@
 #define _ARM_PAL_ROUTINES_H
 
 #include <stdint.h>
+#include <string.h>
 
 #if defined(__cplusplus)
 extern "C" {
@@ -58,7 +59,7 @@ static inline void
 pal_get_resource_property(const char **property_name,
     int *property_value)
 {
-	*property_name = 0;
+	*property_name = NULL;
 	(void) property_value;
 }
 

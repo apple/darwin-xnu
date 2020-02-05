@@ -13,7 +13,8 @@
 #include <sys/sysctl.h>
 #include <unistd.h>
 
-T_GLOBAL_META(T_META_NAMESPACE("xnu.ipc"));
+T_GLOBAL_META(T_META_NAMESPACE("xnu.ipc"),
+    T_META_RUN_CONCURRENTLY(true));
 
 /*
  * Attempt to inspect kernel_task using a task_inspect_t.  Interact with the

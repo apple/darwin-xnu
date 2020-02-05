@@ -131,12 +131,15 @@ get_rand_iid(
 {
 	SHA1_CTX ctxt;
 	u_int8_t digest[SHA1_RESULTLEN];
-	int hostnlen    = strlen(hostname);
+	int hostnlen;
 
 	/* generate 8 bytes of pseudo-random value. */
 	bzero(&ctxt, sizeof(ctxt));
 	SHA1Init(&ctxt);
+	lck_mtx_lock(&hostname_lock);
+	hostnlen = strlen(hostname);
 	SHA1Update(&ctxt, hostname, hostnlen);
+	lck_mtx_unlock(&hostname_lock);
 	SHA1Final(digest, &ctxt);
 
 	/* assumes sizeof (digest) > sizeof (iid) */
@@ -212,8 +215,8 @@ in6_generate_tmp_iid(
 	 * use a random non-zero value as the last resort.
 	 */
 	if (bcmp(nullbuf, ret, sizeof(nullbuf)) == 0) {
-		nd6log((LOG_INFO,
-		    "%s: computed SHA1 value is zero.\n", __func__));
+		nd6log(info,
+		    "%s: computed SHA1 value is zero.\n", __func__);
 
 		getmicrotime(&tv);
 		val32 = random() ^ tv.tv_usec;
@@ -289,6 +292,7 @@ in6_iid_from_hw(struct ifnet *ifp, struct in6_addr *in6)
 	case IFT_IEEE80211:
 #endif
 	case IFT_BRIDGE:
+	case IFT_6LOWPAN:
 		/* IEEE802/EUI64 cases - what others? */
 		/* IEEE1394 uses 16byte length address starting with EUI64 */
 		if (addrlen > 8) {
@@ -412,15 +416,15 @@ in6_select_iid_from_all_hw(
 
 	/* first, try to get it from the interface itself */
 	if (in6_iid_from_hw(ifp0, in6) == 0) {
-		nd6log((LOG_DEBUG, "%s: IID derived from HW interface.\n",
-		    if_name(ifp0)));
+		nd6log(debug, "%s: IID derived from HW interface.\n",
+		    if_name(ifp0));
 		goto success;
 	}
 
 	/* try secondary EUI64 source. this basically is for ATM PVC */
 	if (altifp && in6_iid_from_hw(altifp, in6) == 0) {
-		nd6log((LOG_DEBUG, "%s: IID from alterate HW interface %s.\n",
-		    if_name(ifp0), if_name(altifp)));
+		nd6log(debug, "%s: IID from alterate HW interface %s.\n",
+		    if_name(ifp0), if_name(altifp));
 		goto success;
 	}
 
@@ -439,8 +443,8 @@ in6_select_iid_from_all_hw(
 		 * globally unique
 		 */
 		if (ND6_IFID_UNIVERSAL(in6)) {
-			nd6log((LOG_DEBUG, "%s: borrowed IID from %s\n",
-			    if_name(ifp0), if_name(ifp)));
+			nd6log(debug, "%s: borrowed IID from %s\n",
+			    if_name(ifp0), if_name(ifp));
 			ifnet_head_done();
 			goto success;
 		}
@@ -449,7 +453,7 @@ in6_select_iid_from_all_hw(
 
 	/* last resort: get from random number source */
 	if (get_rand_iid(ifp, in6) == 0) {
-		nd6log((LOG_DEBUG, "%s: IID from PRNG.\n", if_name(ifp0)));
+		nd6log(debug, "%s: IID from PRNG.\n", if_name(ifp0));
 		goto success;
 	}
 
@@ -457,13 +461,13 @@ in6_select_iid_from_all_hw(
 	return -1;
 
 success:
-	nd6log((LOG_INFO, "%s: IID: "
+	nd6log(info, "%s: IID: "
 	    "%02x:%02x:%02x:%02x:%02x:%02x:%02x:%02x\n",
 	    if_name(ifp0),
 	    in6->s6_addr[8], in6->s6_addr[9],
 	    in6->s6_addr[10], in6->s6_addr[11],
 	    in6->s6_addr[12], in6->s6_addr[13],
-	    in6->s6_addr[14], in6->s6_addr[15]));
+	    in6->s6_addr[14], in6->s6_addr[15]);
 	return 0;
 }
 
@@ -487,10 +491,10 @@ in6_ifattach_linklocal(struct ifnet *ifp, struct in6_aliasreq *ifra)
 		 * suppress it.  (jinmei@kame.net 20010130)
 		 */
 		if (error != EAFNOSUPPORT) {
-			nd6log((LOG_NOTICE, "%s: failed to "
+			nd6log(info, "%s: failed to "
 			    "configure a link-local address on %s "
 			    "(errno=%d)\n",
-			    __func__, if_name(ifp), error));
+			    __func__, if_name(ifp), error);
 		}
 		return EADDRNOTAVAIL;
 	}
@@ -593,9 +597,9 @@ in6_ifattach_loopback(
 	/* add the new interface address */
 	error = in6_update_ifa(ifp, &ifra, 0, &ia);
 	if (error != 0) {
-		nd6log((LOG_ERR,
+		nd6log(error,
 		    "%s: failed to configure loopback address %s (error=%d)\n",
-		    __func__, if_name(ifp), error));
+		    __func__, if_name(ifp), error);
 		VERIFY(ia == NULL);
 		return EADDRNOTAVAIL;
 	}
@@ -730,9 +734,8 @@ in6_ifattach_prelim(struct ifnet *ifp)
 	 *   (previously, this was a silent error.)
 	 */
 	if ((ifp->if_flags & IFF_MULTICAST) == 0) {
-		nd6log0((LOG_INFO, "in6_ifattach: ",
-		    "%s is not multicast capable, IPv6 not enabled\n",
-		    if_name(ifp)));
+		nd6log0(info, "in6_ifattach: %s is not multicast capable, IPv6 not enabled\n",
+		    if_name(ifp));
 		return EINVAL;
 	}
 
@@ -902,8 +905,8 @@ in6_ifattach_aliasreq(struct ifnet *ifp, struct ifnet *altifp,
 		} else {
 			if (in6_select_iid_from_all_hw(ifp, altifp,
 			    &ifra.ifra_addr.sin6_addr) != 0) {
-				nd6log((LOG_ERR, "%s: no IID available\n",
-				    if_name(ifp)));
+				nd6log(error, "%s: no IID available\n",
+				    if_name(ifp));
 				return EADDRNOTAVAIL;
 			}
 		}
@@ -924,9 +927,9 @@ in6_ifattach_aliasreq(struct ifnet *ifp, struct ifnet *altifp,
 
 	/* Attach the link-local address */
 	if (in6_ifattach_linklocal(ifp, &ifra) != 0) {
-		nd6log((LOG_INFO,
+		nd6log(info,
 		    "%s: %s could not attach link-local address.\n",
-		    __func__, if_name(ifp)));
+		    __func__, if_name(ifp));
 		/* NB: not an error */
 	}
 
@@ -1014,9 +1017,9 @@ in6_ifattach_llcgareq(struct ifnet *ifp, struct in6_cgareq *llcgasr)
 	/* Attach the link-local address */
 	if (in6_ifattach_linklocal(ifp, &ifra) != 0) {
 		/* NB: not an error */
-		nd6log((LOG_INFO,
+		nd6log(info,
 		    "%s: %s could not attach link-local address.\n",
-		    __func__, if_name(ifp)));
+		    __func__, if_name(ifp));
 	}
 
 	VERIFY(error == 0);
@@ -1144,9 +1147,9 @@ in6_ifdetach(struct ifnet *ifp)
 			if (ia->ia_next) {
 				ia->ia_next = oia->ia_next;
 			} else {
-				nd6log((LOG_ERR,
+				nd6log(error,
 				    "%s: didn't unlink in6ifaddr from "
-				    "list\n", if_name(ifp)));
+				    "list\n", if_name(ifp));
 				unlinked = 0;
 			}
 		}

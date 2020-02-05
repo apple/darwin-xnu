@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -70,16 +70,16 @@
 #include <mach/policy.h>
 #include <kern/kern_types.h>
 #include <kern/smp.h>
-#include <kern/queue.h>
+#include <kern/circle_queue.h>
 #include <kern/macro_help.h>
 #include <kern/timer_call.h>
 #include <kern/ast.h>
 #include <kern/kalloc.h>
 #include <kern/bits.h>
 
-#define NRQS            128                             /* 128 levels per run queue */
+#define NRQS_MAX        (128)                           /* maximum number of priority levels */
 
-#define MAXPRI          (NRQS-1)
+#define MAXPRI          (NRQS_MAX-1)
 #define MINPRI          0                               /* lowest legal priority schedulable */
 #define IDLEPRI         MINPRI                          /* idle thread priority */
 #define NOPRI           -1
@@ -142,7 +142,7 @@
  */
 
 #define BASEPRI_RTQUEUES        (BASEPRI_REALTIME + 1)                          /* 97 */
-#define BASEPRI_REALTIME        (MAXPRI - (NRQS / 4) + 1)                       /* 96 */
+#define BASEPRI_REALTIME        (MAXPRI - (NRQS_MAX / 4) + 1)                   /* 96 */
 
 #define MAXPRI_KERNEL           (BASEPRI_REALTIME - 1)                          /* 95 */
 #define BASEPRI_PREEMPT_HIGH    (BASEPRI_PREEMPT + 1)                           /* 93 */
@@ -150,18 +150,18 @@
 #define BASEPRI_VM              (BASEPRI_PREEMPT - 1)                           /* 91 */
 
 #define BASEPRI_KERNEL          (MINPRI_KERNEL + 1)                             /* 81 */
-#define MINPRI_KERNEL           (MAXPRI_KERNEL - (NRQS / 8) + 1)                /* 80 */
+#define MINPRI_KERNEL           (MAXPRI_KERNEL - (NRQS_MAX / 8) + 1)            /* 80 */
 
 #define MAXPRI_RESERVED         (MINPRI_KERNEL - 1)                             /* 79 */
 #define BASEPRI_GRAPHICS        (MAXPRI_RESERVED - 3)                           /* 76 */
-#define MINPRI_RESERVED         (MAXPRI_RESERVED - (NRQS / 8) + 1)              /* 64 */
+#define MINPRI_RESERVED         (MAXPRI_RESERVED - (NRQS_MAX / 8) + 1)          /* 64 */
 
 #define MAXPRI_USER             (MINPRI_RESERVED - 1)                           /* 63 */
 #define BASEPRI_CONTROL         (BASEPRI_DEFAULT + 17)                          /* 48 */
 #define BASEPRI_FOREGROUND      (BASEPRI_DEFAULT + 16)                          /* 47 */
 #define BASEPRI_BACKGROUND      (BASEPRI_DEFAULT + 15)                          /* 46 */
 #define BASEPRI_USER_INITIATED  (BASEPRI_DEFAULT +  6)                          /* 37 */
-#define BASEPRI_DEFAULT         (MAXPRI_USER - (NRQS / 4))                      /* 31 */
+#define BASEPRI_DEFAULT         (MAXPRI_USER - (NRQS_MAX / 4))                  /* 31 */
 #define MAXPRI_SUPPRESSED       (BASEPRI_DEFAULT - 3)                           /* 28 */
 #define BASEPRI_UTILITY         (BASEPRI_DEFAULT - 11)                          /* 20 */
 #define MAXPRI_THROTTLE         (MINPRI + 4)                                    /*  4 */
@@ -174,6 +174,10 @@
 #define MINPRI_EXEC             (BASEPRI_DEFAULT)       /* floor when in exec state */
 #define MINPRI_WAITQ            (BASEPRI_DEFAULT)       /* floor when in waitq handover state */
 
+#define NRQS                    (BASEPRI_REALTIME)      /* Non-realtime levels for runqs */
+
+/* Ensure that NRQS is large enough to represent all non-realtime threads; even promoted ones */
+_Static_assert((NRQS == (MAXPRI_PROMOTE + 1)), "Runqueues are too small to hold all non-realtime threads");
 
 /* Type used for thread->sched_mode and saved_mode */
 typedef enum {
@@ -183,14 +187,25 @@ typedef enum {
 	TH_MODE_TIMESHARE,                                      /* use timesharing algorithm */
 } sched_mode_t;
 
+/*
+ * Since the clutch scheduler organizes threads based on the thread group
+ * and the scheduling bucket, its important to not mix threads from multiple
+ * priority bands into the same bucket. To achieve that, in the clutch bucket
+ * world, there is a scheduling bucket per QoS effectively.
+ */
+
 /* Buckets used for load calculation */
 typedef enum {
-	TH_BUCKET_RUN = 0,      /* All runnable threads */
-	TH_BUCKET_FIXPRI,       /* Fixed-priority */
-	TH_BUCKET_SHARE_FG,     /* Timeshare thread above BASEPRI_DEFAULT */
-	TH_BUCKET_SHARE_DF,     /* Timeshare thread between BASEPRI_DEFAULT and BASEPRI_UTILITY */
-	TH_BUCKET_SHARE_UT,     /* Timeshare thread between BASEPRI_UTILITY and MAXPRI_THROTTLE */
-	TH_BUCKET_SHARE_BG,     /* Timeshare thread between MAXPRI_THROTTLE and MINPRI */
+	TH_BUCKET_FIXPRI = 0,                   /* Fixed-priority */
+	TH_BUCKET_SHARE_FG,                     /* Timeshare thread above BASEPRI_DEFAULT */
+#if CONFIG_SCHED_CLUTCH
+	TH_BUCKET_SHARE_IN,                     /* Timeshare thread between BASEPRI_USER_INITIATED and BASEPRI_DEFAULT */
+#endif /* CONFIG_SCHED_CLUTCH */
+	TH_BUCKET_SHARE_DF,                     /* Timeshare thread between BASEPRI_DEFAULT and BASEPRI_UTILITY */
+	TH_BUCKET_SHARE_UT,                     /* Timeshare thread between BASEPRI_UTILITY and MAXPRI_THROTTLE */
+	TH_BUCKET_SHARE_BG,                     /* Timeshare thread between MAXPRI_THROTTLE and MINPRI */
+	TH_BUCKET_RUN,                          /* All runnable threads */
+	TH_BUCKET_SCHED_MAX = TH_BUCKET_RUN,    /* Maximum schedulable buckets */
 	TH_BUCKET_MAX,
 } sched_bucket_t;
 
@@ -200,18 +215,18 @@ typedef enum {
 #define invalid_pri(pri) ((pri) < MINPRI || (pri) > MAXPRI)
 
 struct runq_stats {
-	uint64_t                                count_sum;
-	uint64_t                                last_change_timestamp;
+	uint64_t                count_sum;
+	uint64_t                last_change_timestamp;
 };
 
 #if defined(CONFIG_SCHED_TIMESHARE_CORE) || defined(CONFIG_SCHED_PROTO)
 
 struct run_queue {
-	int                                     highq;                          /* highest runnable queue */
-	bitmap_t                                bitmap[BITMAP_LEN(NRQS)];       /* run queue bitmap array */
-	int                                     count;                          /* # of threads total */
-	int                                     urgency;                        /* level of preemption urgency */
-	queue_head_t            queues[NRQS];           /* one for each priority */
+	int                     highq;                          /* highest runnable queue */
+	bitmap_t                bitmap[BITMAP_LEN(NRQS)];       /* run queue bitmap array */
+	int                     count;                          /* # of threads total */
+	int                     urgency;                        /* level of preemption urgency */
+	circle_queue_head_t     queues[NRQS];           /* one for each priority */
 
 	struct runq_stats       runq_stats;
 };
@@ -236,7 +251,7 @@ struct rt_queue {
 	_Atomic int             count;                          /* # of threads total */
 	queue_head_t            queue;                          /* all runnable RT threads */
 #if __SMP__
-	decl_simple_lock_data(, rt_lock)
+	decl_simple_lock_data(, rt_lock);
 #endif
 	struct runq_stats       runq_stats;
 };
@@ -393,10 +408,17 @@ extern uint32_t         avenrun[3], mach_factor[3];
 extern uint64_t         max_unsafe_computation;
 extern uint64_t         max_poll_computation;
 
-extern volatile uint32_t sched_run_buckets[TH_BUCKET_MAX];
+extern uint32_t         sched_run_buckets[TH_BUCKET_MAX];
 
 extern uint32_t sched_run_incr(thread_t thread);
 extern uint32_t sched_run_decr(thread_t thread);
+extern void sched_update_thread_bucket(thread_t thread);
+
+#define SCHED_DECAY_TICKS       32
+struct shift_data {
+	int     shift1;
+	int     shift2;
+};
 
 /*
  *	thread_timer_delta macro takes care of both thread timers.

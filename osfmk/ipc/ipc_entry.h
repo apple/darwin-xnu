@@ -125,6 +125,8 @@ struct ipc_entry {
 #define IE_BITS_TYPE_MASK       0x001f0000      /* 5 bits of capability type */
 #define IE_BITS_TYPE(bits)      ((bits) & IE_BITS_TYPE_MASK)
 
+#define IE_BITS_EXTYPE_MASK     0x00200000      /* 1 bit for extended capability */
+
 #ifndef NO_PORT_GEN
 #define IE_BITS_GEN_MASK        0xff000000      /* 8 bits for generation */
 #define IE_BITS_GEN(bits)       ((bits) & IE_BITS_GEN_MASK)

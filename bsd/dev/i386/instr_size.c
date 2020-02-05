@@ -27,11 +27,6 @@
 /*	Copyright (c) 1988 AT&T	*/
 /*	  All Rights Reserved	*/
 
-
-/*
- * #pragma ident	"@(#)instr_size.c	1.14	05/07/08 SMI"
- */
-
 #include <sys/dtrace.h>
 #include <sys/dtrace_glue.h>
 

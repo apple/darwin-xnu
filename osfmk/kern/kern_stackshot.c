@@ -125,10 +125,13 @@ static int              kdp_stackshot_kcdata_format(int pid, uint32_t trace_flag
 uint32_t                kdp_stack_snapshot_bytes_traced(void);
 static void             kdp_mem_and_io_snapshot(struct mem_and_io_snapshot *memio_snap);
 static boolean_t        kdp_copyin(vm_map_t map, uint64_t uaddr, void *dest, size_t size, boolean_t try_fault, uint32_t *kdp_fault_result);
+static int              kdp_copyin_string(task_t task, uint64_t addr, char *buf, int buf_sz, boolean_t try_fault, uint32_t *kdp_fault_results);
 static boolean_t        kdp_copyin_word(task_t task, uint64_t addr, uint64_t *result, boolean_t try_fault, uint32_t *kdp_fault_results);
 static uint64_t         proc_was_throttled_from_task(task_t task);
 static void             stackshot_thread_wait_owner_info(thread_t thread, thread_waitinfo_t * waitinfo);
 static int              stackshot_thread_has_valid_waitinfo(thread_t thread);
+static void             stackshot_thread_turnstileinfo(thread_t thread, thread_turnstileinfo_t *tsinfo);
+static int              stackshot_thread_has_valid_turnstileinfo(thread_t thread);
 
 #if CONFIG_COALITIONS
 static void             stackshot_coalition_jetsam_count(void *arg, int i, coalition_t coal);
@@ -148,6 +151,7 @@ static uint64_t         proc_did_throttle_from_task(task_t task);
 extern void             proc_name_kdp(task_t task, char * buf, int size);
 extern int              proc_threadname_kdp(void * uth, char * buf, size_t size);
 extern void             proc_starttime_kdp(void * p, uint64_t * tv_sec, uint64_t * tv_usec, uint64_t * abstime);
+extern boolean_t        proc_binary_uuid_kdp(task_t task, uuid_t uuid);
 extern int              memorystatus_get_pressure_status_kdp(void);
 extern void             memorystatus_proc_flags_unsafe(void * v, boolean_t *is_dirty, boolean_t *is_dirty_tracked, boolean_t *allow_idle_exit);
 
@@ -237,6 +241,8 @@ SECURITY_READ_ONLY_LATE(static uint32_t) max_tracebuf_size = SANE_TRACEBUF_SIZE;
 #ifndef ROUNDUP
 #define ROUNDUP(x, y)            ((((x)+(y)-1)/(y))*(y))
 #endif
+
+#define STACKSHOT_QUEUE_LABEL_MAXSIZE  64
 
 /*
  * Initialize the mutex governing access to the stack snapshot subsystem
@@ -1023,18 +1029,48 @@ kcdata_record_uuid_info(kcdata_descriptor_t kcd, task_t task, uint32_t trace_fla
 		}
 	}
 
-	if (task_pid > 0 && uuid_info_count > 0 && uuid_info_count < MAX_LOADINFOS) {
-		uint32_t uuid_info_size       = (uint32_t)(task_64bit_addr ? sizeof(struct user64_dyld_uuid_info) : sizeof(struct user32_dyld_uuid_info));
-		uint32_t uuid_info_array_size = uuid_info_count * uuid_info_size;
+	if (save_loadinfo_p && task_pid > 0 && (uuid_info_count < MAX_LOADINFOS)) {
+		uint32_t copied_uuid_count = 0;
+		uint32_t uuid_info_size = (uint32_t)(task_64bit_addr ? sizeof(struct user64_dyld_uuid_info) : sizeof(struct user32_dyld_uuid_info));
+		uint32_t uuid_info_array_size = 0;
 
-		kcd_exit_on_error(kcdata_get_memory_addr_for_array(kcd, (task_64bit_addr ? KCDATA_TYPE_LIBRARY_LOADINFO64 : KCDATA_TYPE_LIBRARY_LOADINFO),
-		    uuid_info_size, uuid_info_count, &out_addr));
+		/* If we found some UUID information, first try to copy it in -- this will only be non-zero if we had a pmap above */
+		if (uuid_info_count > 0) {
+			uuid_info_array_size = uuid_info_count * uuid_info_size;
 
-		/* Copy in the UUID info array
-		 * It may be nonresident, in which case just fix up nloadinfos to 0 in the task_snap
-		 */
-		if (have_pmap && !kdp_copyin(task->map, uuid_info_addr, (void *)out_addr, uuid_info_array_size, should_fault, &kdp_fault_results)) {
-			bzero((void *)out_addr, uuid_info_array_size);
+			kcd_exit_on_error(kcdata_get_memory_addr_for_array(kcd, (task_64bit_addr ? KCDATA_TYPE_LIBRARY_LOADINFO64 : KCDATA_TYPE_LIBRARY_LOADINFO),
+			    uuid_info_size, uuid_info_count, &out_addr));
+
+			if (!kdp_copyin(task->map, uuid_info_addr, (void *)out_addr, uuid_info_array_size, should_fault, &kdp_fault_results)) {
+				bzero((void *)out_addr, uuid_info_array_size);
+			} else {
+				copied_uuid_count = uuid_info_count;
+			}
+		}
+
+		uuid_t binary_uuid;
+		if (!copied_uuid_count && proc_binary_uuid_kdp(task, binary_uuid)) {
+			/* We failed to copyin the UUID information, try to store the UUID of the main binary we have in the proc */
+			if (uuid_info_array_size == 0) {
+				/* We just need to store one UUID */
+				uuid_info_array_size = uuid_info_size;
+				kcd_exit_on_error(kcdata_get_memory_addr_for_array(kcd, (task_64bit_addr ? KCDATA_TYPE_LIBRARY_LOADINFO64 : KCDATA_TYPE_LIBRARY_LOADINFO),
+				    uuid_info_size, 1, &out_addr));
+			}
+
+			if (task_64bit_addr) {
+				struct user64_dyld_uuid_info *uuid_info = (struct user64_dyld_uuid_info *)out_addr;
+				uint64_t image_load_address = task->mach_header_vm_address;
+
+				stackshot_memcpy(&uuid_info->imageUUID, binary_uuid, sizeof(uuid_t));
+				stackshot_memcpy(&uuid_info->imageLoadAddress, &image_load_address, sizeof(image_load_address));
+			} else {
+				struct user32_dyld_uuid_info *uuid_info = (struct user32_dyld_uuid_info *)out_addr;
+				uint32_t image_load_address = (uint32_t) task->mach_header_vm_address;
+
+				stackshot_memcpy(&uuid_info->imageUUID, binary_uuid, sizeof(uuid_t));
+				stackshot_memcpy(&uuid_info->imageLoadAddress, &image_load_address, sizeof(image_load_address));
+			}
 		}
 	} else if (task_pid == 0 && uuid_info_count > 0 && uuid_info_count < MAX_LOADINFOS) {
 		uintptr_t image_load_address;
@@ -1197,7 +1233,7 @@ kcdata_record_task_snapshot(kcdata_descriptor_t kcd, task_t task, uint32_t trace
 
 #if __arm__ || __arm64__
 	if (collect_asid && have_pmap) {
-		uint32_t asid = task->map->pmap->asid;
+		uint32_t asid = PMAP_VASID(task->map->pmap);
 		kcd_exit_on_error(kcdata_get_memory_addr(kcd, STACKSHOT_KCTYPE_ASID, sizeof(uint32_t), &out_addr));
 		stackshot_memcpy((void*)out_addr, &asid, sizeof(asid));
 	}
@@ -1300,7 +1336,7 @@ kcdata_record_task_delta_snapshot(kcdata_descriptor_t kcd, task_t task, uint32_t
 
 #if __arm__ || __arm64__
 	if (collect_asid && have_pmap) {
-		uint32_t asid = task->map->pmap->asid;
+		uint32_t asid = PMAP_VASID(task->map->pmap);
 		kcd_exit_on_error(kcdata_get_memory_addr(kcd, STACKSHOT_KCTYPE_ASID, sizeof(uint32_t), &out_addr));
 		stackshot_memcpy((void*)out_addr, &asid, sizeof(asid));
 	}
@@ -1375,7 +1411,8 @@ kcdata_record_thread_snapshot(
 	cur_thread_snap = (struct thread_snapshot_v4 *)out_addr;
 
 	/* Populate the thread snapshot header */
-	cur_thread_snap->ths_thread_id      = thread_tid(thread);
+	cur_thread_snap->ths_ss_flags = 0;
+	cur_thread_snap->ths_thread_id = thread_tid(thread);
 	cur_thread_snap->ths_wait_event = VM_KERNEL_UNSLIDE_OR_PERM(thread->wait_event);
 	cur_thread_snap->ths_continuation = VM_KERNEL_UNSLIDE(thread->continuation);
 	cur_thread_snap->ths_total_syscalls = thread->syscalls_mach + thread->syscalls_unix;
@@ -1400,6 +1437,27 @@ kcdata_record_thread_snapshot(
 					cur_thread_snap->ths_ss_flags |= kHasDispatchSerial;
 					cur_thread_snap->ths_dqserialnum = dqserialnum;
 				}
+
+				/* try copying in the queue label */
+				uint64_t label_offs = get_task_dispatchqueue_label_offset(task);
+				if (label_offs) {
+					uint64_t dqlabeladdr = dqaddr + label_offs;
+					uint64_t actual_dqlabeladdr = 0;
+
+					copyin_ok = kdp_copyin_word(task, dqlabeladdr, &actual_dqlabeladdr, FALSE, NULL);
+					if (copyin_ok && actual_dqlabeladdr != 0) {
+						char label_buf[STACKSHOT_QUEUE_LABEL_MAXSIZE];
+						int len;
+
+						bzero(label_buf, STACKSHOT_QUEUE_LABEL_MAXSIZE * sizeof(char));
+						len = kdp_copyin_string(task, actual_dqlabeladdr, label_buf, STACKSHOT_QUEUE_LABEL_MAXSIZE, FALSE, NULL);
+						if (len > 0) {
+							mach_vm_address_t label_addr = 0;
+							kcd_exit_on_error(kcdata_get_memory_addr(kcd, STACKSHOT_KCTYPE_THREAD_DISPATCH_QUEUE_LABEL, len, &label_addr));
+							stackshot_strlcpy((char*)label_addr, &label_buf[0], len);
+						}
+					}
+				}
 			}
 		}
 	}
@@ -1415,7 +1473,6 @@ kcdata_record_thread_snapshot(
 		cur_thread_snap->ths_sys_time = 0;
 	}
 
-	cur_thread_snap->ths_ss_flags = 0;
 	if (thread->thread_tag & THREAD_TAG_MAINTHREAD) {
 		cur_thread_snap->ths_ss_flags |= kThreadMain;
 	}
@@ -1658,7 +1715,9 @@ classify_thread(thread_t thread, boolean_t * thread_on_core_p, uint32_t trace_fl
 	processor_t last_processor = thread->last_processor;
 
 	boolean_t thread_on_core =
-	    (last_processor != PROCESSOR_NULL && last_processor->state == PROCESSOR_RUNNING && last_processor->active_thread == thread);
+	    (last_processor != PROCESSOR_NULL &&
+	    (last_processor->state == PROCESSOR_SHUTDOWN || last_processor->state == PROCESSOR_RUNNING) &&
+	    last_processor->active_thread == thread);
 
 	*thread_on_core_p = thread_on_core;
 
@@ -1694,12 +1753,20 @@ kdp_stackshot_record_task(struct stackshot_context *ctx, task_t task)
 	int num_delta_thread_snapshots = 0;
 	int num_nonrunnable_threads    = 0;
 	int num_waitinfo_threads       = 0;
+	int num_turnstileinfo_threads  = 0;
 
 	uint64_t task_start_abstime    = 0;
 	boolean_t task_delta_stackshot = FALSE;
 	boolean_t have_map = FALSE, have_pmap = FALSE;
 	boolean_t some_thread_ran = FALSE;
 	unaligned_u64 *task_snap_ss_flags = NULL;
+
+#if INTERRUPT_MASKED_DEBUG && MONOTONIC
+	uint64_t task_begin_cpu_cycle_count = 0;
+	if (!panic_stackshot) {
+		task_begin_cpu_cycle_count = mt_cur_cpu_cycles();
+	}
+#endif
 
 	if ((task == NULL) || !ml_validate_nofault((vm_offset_t)task, sizeof(struct task))) {
 		error = KERN_FAILURE;
@@ -1783,8 +1850,14 @@ kdp_stackshot_record_task(struct stackshot_context *ctx, task_t task)
 			/* We want to report owner information regardless of whether a thread
 			 * has changed since the last delta, whether it's a normal stackshot,
 			 * or whether it's nonrunnable */
-			if (save_owner_info && stackshot_thread_has_valid_waitinfo(thread)) {
-				num_waitinfo_threads++;
+			if (save_owner_info) {
+				if (stackshot_thread_has_valid_waitinfo(thread)) {
+					num_waitinfo_threads++;
+				}
+
+				if (stackshot_thread_has_valid_turnstileinfo(thread)) {
+					num_turnstileinfo_threads++;
+				}
 			}
 		}
 
@@ -1806,8 +1879,10 @@ kdp_stackshot_record_task(struct stackshot_context *ctx, task_t task)
 			nonrunnable_tids = (uint64_t *)out_addr;
 		}
 
-		thread_waitinfo_t *thread_waitinfo = NULL;
-		int current_waitinfo_index         = 0;
+		thread_waitinfo_t *thread_waitinfo           = NULL;
+		thread_turnstileinfo_t *thread_turnstileinfo = NULL;
+		int current_waitinfo_index              = 0;
+		int current_turnstileinfo_index         = 0;
 
 		if (num_waitinfo_threads > 0) {
 			kcd_exit_on_error(kcdata_get_memory_addr_for_array(stackshot_kcdata_p, STACKSHOT_KCTYPE_THREAD_WAITINFO,
@@ -1815,7 +1890,15 @@ kdp_stackshot_record_task(struct stackshot_context *ctx, task_t task)
 			thread_waitinfo = (thread_waitinfo_t *)out_addr;
 		}
 
-		if (num_delta_thread_snapshots > 0 || num_nonrunnable_threads > 0 || num_waitinfo_threads > 0) {
+		if (num_turnstileinfo_threads > 0) {
+			/* get space for the turnstile info */
+			kcd_exit_on_error(kcdata_get_memory_addr_for_array(stackshot_kcdata_p, STACKSHOT_KCTYPE_THREAD_TURNSTILEINFO,
+			    sizeof(thread_turnstileinfo_t), num_turnstileinfo_threads, &out_addr));
+			thread_turnstileinfo = (thread_turnstileinfo_t *)out_addr;
+		}
+
+		if (num_delta_thread_snapshots > 0 || num_nonrunnable_threads > 0 ||
+		    num_waitinfo_threads > 0 || num_turnstileinfo_threads > 0) {
 			queue_iterate(&task->threads, thread, thread_t, task_threads)
 			{
 				if (active_kthreads_only_p && thread->kernel_stack == 0) {
@@ -1823,10 +1906,18 @@ kdp_stackshot_record_task(struct stackshot_context *ctx, task_t task)
 				}
 
 				/* If we want owner info, we should capture it regardless of its classification */
-				if (save_owner_info && stackshot_thread_has_valid_waitinfo(thread)) {
-					stackshot_thread_wait_owner_info(
-						thread,
-						&thread_waitinfo[current_waitinfo_index++]);
+				if (save_owner_info) {
+					if (stackshot_thread_has_valid_waitinfo(thread)) {
+						stackshot_thread_wait_owner_info(
+							thread,
+							&thread_waitinfo[current_waitinfo_index++]);
+					}
+
+					if (stackshot_thread_has_valid_turnstileinfo(thread)) {
+						stackshot_thread_turnstileinfo(
+							thread,
+							&thread_turnstileinfo[current_turnstileinfo_index++]);
+					}
 				}
 
 				boolean_t thread_on_core;
@@ -1883,6 +1974,13 @@ kdp_stackshot_record_task(struct stackshot_context *ctx, task_t task)
 			kcd_exit_on_error(kcdata_record_shared_cache_info(stackshot_kcdata_p, task, task_snap_ss_flags));
 			kcd_exit_on_error(kcdata_record_uuid_info(stackshot_kcdata_p, task, ctx->trace_flags, have_pmap, task_snap_ss_flags));
 		}
+
+#if INTERRUPT_MASKED_DEBUG && MONOTONIC
+		if (!panic_stackshot) {
+			kcd_exit_on_error(kcdata_add_uint64_with_description(stackshot_kcdata_p, (mt_cur_cpu_cycles() - task_begin_cpu_cycle_count),
+			    "task_cpu_cycle_count"));
+		}
+#endif
 		/* mark end of task snapshot data */
 		kcd_exit_on_error(kcdata_add_container_marker(stackshot_kcdata_p, KCDATA_TYPE_CONTAINER_END, STACKSHOT_KCCONTAINER_TASK,
 		    task_uniqueid));
@@ -1905,6 +2003,14 @@ kdp_stackshot_kcdata_format(int pid, uint32_t trace_flags, uint32_t * pBytesTrac
 	mach_timebase_info_data_t timebase = {0, 0};
 	uint32_t length_to_copy = 0, tmp32 = 0;
 	abs_time = mach_absolute_time();
+
+#if INTERRUPT_MASKED_DEBUG && MONOTONIC
+	uint64_t stackshot_begin_cpu_cycle_count = 0;
+
+	if (!panic_stackshot) {
+		stackshot_begin_cpu_cycle_count = mt_cur_cpu_cycles();
+	}
+#endif
 
 	/* process the flags */
 	boolean_t collect_delta_stackshot = ((trace_flags & STACKSHOT_COLLECT_DELTA_SNAPSHOT) != 0);
@@ -2020,6 +2126,15 @@ kdp_stackshot_kcdata_format(int pid, uint32_t trace_flags, uint32_t * pBytesTrac
 #if CONFIG_COALITIONS
 	int num_coalitions = 0;
 	struct jetsam_coalition_snapshot *coalitions = NULL;
+
+#if INTERRUPT_MASKED_DEBUG && MONOTONIC
+	uint64_t coalition_begin_cpu_cycle_count = 0;
+
+	if (!panic_stackshot && (trace_flags & STACKSHOT_SAVE_JETSAM_COALITIONS)) {
+		coalition_begin_cpu_cycle_count = mt_cur_cpu_cycles();
+	}
+#endif
+
 	/* Iterate over coalitions */
 	if (trace_flags & STACKSHOT_SAVE_JETSAM_COALITIONS) {
 		if (coalition_iterate_stackshot(stackshot_coalition_jetsam_count, &num_coalitions, COALITION_TYPE_JETSAM) != KERN_SUCCESS) {
@@ -2037,6 +2152,12 @@ kdp_stackshot_kcdata_format(int pid, uint32_t trace_flags, uint32_t * pBytesTrac
 			goto error_exit;
 		}
 	}
+#if INTERRUPT_MASKED_DEBUG && MONOTONIC
+	if (!panic_stackshot && (coalition_begin_cpu_cycle_count != 0)) {
+		kcd_exit_on_error(kcdata_add_uint64_with_description(stackshot_kcdata_p, (mt_cur_cpu_cycles() - coalition_begin_cpu_cycle_count),
+		    "coalitions_cpu_cycle_count"));
+	}
+#endif
 #else
 	trace_flags &= ~(STACKSHOT_SAVE_JETSAM_COALITIONS);
 #endif /* CONFIG_COALITIONS */
@@ -2088,6 +2209,13 @@ kdp_stackshot_kcdata_format(int pid, uint32_t trace_flags, uint32_t * pBytesTrac
 	stackshot_memcpy((void *)abs_time_addr, &abs_time_end, sizeof(uint64_t));
 
 	kcd_exit_on_error(kcdata_add_uint32_with_description(stackshot_kcdata_p, trace_flags, "stackshot_out_flags"));
+
+#if INTERRUPT_MASKED_DEBUG && MONOTONIC
+	if (!panic_stackshot) {
+		kcd_exit_on_error(kcdata_add_uint64_with_description(stackshot_kcdata_p, (mt_cur_cpu_cycles() - stackshot_begin_cpu_cycle_count),
+		    "stackshot_total_cpu_cycle_cnt"));
+	}
+#endif
 
 	kcd_exit_on_error(kcdata_write_buffer_end(stackshot_kcdata_p));
 
@@ -2294,7 +2422,7 @@ boolean_t
 kdp_copyin_word(
 	task_t task, uint64_t addr, uint64_t *result, boolean_t try_fault, uint32_t *kdp_fault_results)
 {
-	if (task_has_64Bit_data(task)) {
+	if (task_has_64Bit_addr(task)) {
 		return kdp_copyin(task->map, addr, result, sizeof(uint64_t), try_fault, kdp_fault_results);
 	} else {
 		uint32_t buf;
@@ -2302,6 +2430,46 @@ kdp_copyin_word(
 		*result = buf;
 		return r;
 	}
+}
+
+int
+kdp_copyin_string(
+	task_t task, uint64_t addr, char *buf, int buf_sz, boolean_t try_fault, uint32_t *kdp_fault_results)
+{
+	int i;
+	uint64_t validated = 0, valid_from;
+	uint64_t phys_src, phys_dest;
+
+	for (i = 0; i < buf_sz; i++) {
+		if (validated == 0) {
+			valid_from = i;
+			phys_src = kdp_find_phys(task->map, addr + i, try_fault, kdp_fault_results);
+			phys_dest = kvtophys((vm_offset_t)&buf[i]);
+			uint64_t src_rem = PAGE_SIZE - (phys_src & PAGE_MASK);
+			uint64_t dst_rem = PAGE_SIZE - (phys_dest & PAGE_MASK);
+			if (phys_src && phys_dest) {
+				validated = MIN(src_rem, dst_rem);
+				if (validated) {
+					bcopy_phys(phys_src, phys_dest, 1);
+					validated--;
+				} else {
+					return 0;
+				}
+			} else {
+				return 0;
+			}
+		} else {
+			bcopy_phys(phys_src + (i - valid_from), phys_dest + (i - valid_from), 1);
+			validated--;
+		}
+
+		if (buf[i] == '\0') {
+			return i + 1;
+		}
+	}
+
+	/* ran out of space */
+	return -1;
 }
 
 boolean_t
@@ -2416,13 +2584,7 @@ machine_trace_thread_get_kva(vm_offset_t cur_target_addr, vm_map_t map, uint32_t
 		if (cur_phys_addr == 0) {
 			return 0;
 		}
-#if __x86_64__
-		kern_virt_target_addr = (vm_offset_t) PHYSMAP_PTOV(cur_phys_addr);
-#elif __arm__ || __arm64__
 		kern_virt_target_addr = phystokv(cur_phys_addr);
-#else
-#error Oh come on... we should really unify the physical -> kernel virtual interface
-#endif
 		prev_target_page = cur_target_page;
 		prev_target_kva = (kern_virt_target_addr & ~PAGE_MASK);
 		validate_next_addr = FALSE;
@@ -2526,11 +2688,33 @@ stackshot_thread_has_valid_waitinfo(thread_t thread)
 	}
 }
 
+/* Determine if a thread has turnstileinfo that stackshot can provide */
+static int
+stackshot_thread_has_valid_turnstileinfo(thread_t thread)
+{
+	struct turnstile *ts = thread_get_waiting_turnstile(thread);
+
+	return stackshot_thread_has_valid_waitinfo(thread) &&
+	       ts != TURNSTILE_NULL;
+}
+
+static void
+stackshot_thread_turnstileinfo(thread_t thread, thread_turnstileinfo_t *tsinfo)
+{
+	struct turnstile *ts;
+
+	/* acquire turnstile information and store it in the stackshot */
+	ts = thread_get_waiting_turnstile(thread);
+	tsinfo->waiter = thread_tid(thread);
+	kdp_turnstile_fill_tsinfo(ts, tsinfo);
+}
+
 static void
 stackshot_thread_wait_owner_info(thread_t thread, thread_waitinfo_t *waitinfo)
 {
-	waitinfo->waiter    = thread_tid(thread);
-	waitinfo->wait_type = thread->block_hint;
+	waitinfo->waiter        = thread_tid(thread);
+	waitinfo->wait_type     = thread->block_hint;
+
 	switch (waitinfo->wait_type) {
 	case kThreadWaitKernelMutex:
 		kdp_lck_mtx_find_owner(thread->waitq, thread->wait_event, waitinfo);
@@ -2563,6 +2747,9 @@ stackshot_thread_wait_owner_info(thread_t thread, thread_waitinfo_t *waitinfo)
 		break;
 	case kThreadWaitOnProcess:
 		kdp_wait4_find_process(thread, thread->wait_event, waitinfo);
+		break;
+	case kThreadWaitSleepWithInheritor:
+		kdp_sleep_with_inheritor_find_owner(thread->waitq, thread->wait_event, waitinfo);
 		break;
 	default:
 		waitinfo->owner = 0;

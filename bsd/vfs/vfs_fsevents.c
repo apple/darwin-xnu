@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -605,7 +605,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 			val = 0xbadc0de2;
 		}
 		// overlay the dest inode number on the str/dest pointer fields
-		memcpy(&cur->str, &val, sizeof(ino64_t));
+		__nochk_memcpy(&cur->str, &val, sizeof(ino64_t));
 
 
 		// and last the document-id
@@ -619,7 +619,10 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 		}
 
 		// the docid is 64-bit and overlays the uid/gid fields
-		memcpy(&cur->uid, &val, sizeof(uint64_t));
+		static_assert(sizeof(cur->uid) + sizeof(cur->gid) == sizeof(val), "gid/uid size mismatch");
+		static_assert(offsetof(struct kfs_event, gid) - offsetof(struct kfs_event, uid) == sizeof(cur->uid), "unexpected struct kfs_event layout");
+		memcpy(&cur->uid, &val, sizeof(cur->uid));
+		memcpy(&cur->gid, (u_int8_t *)&val + sizeof(cur->uid), sizeof(cur->gid));
 
 		goto done_with_args;
 	}
@@ -685,7 +688,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 				pathbuff_len = MAXPATHLEN;
 
 				pathbuff[0] = '\0';
-				if ((ret = vn_getpath(vp, pathbuff, &pathbuff_len)) != 0 || pathbuff[0] == '\0') {
+				if ((ret = vn_getpath_no_firmlink(vp, pathbuff, &pathbuff_len)) != 0 || pathbuff[0] == '\0') {
 					cur->flags |= KFSE_CONTAINS_DROPPED_EVENTS;
 
 					do {
@@ -703,7 +706,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 						}
 
 						pathbuff_len = MAXPATHLEN;
-						ret = vn_getpath(vp, pathbuff, &pathbuff_len);
+						ret = vn_getpath_no_firmlink(vp, pathbuff, &pathbuff_len);
 					} while (ret == ENOSPC);
 
 					if (ret != 0 || vp == NULL) {
@@ -1621,7 +1624,7 @@ fsevent_unmount(__unused struct mount *mp, __unused vfs_context_t ctx)
 #if CONFIG_EMBEDDED
 	dev_t dev = mp->mnt_vfsstat.f_fsid.val[0];
 	int error, waitcount = 0;
-	struct timespec ts = {1, 0};
+	struct timespec ts = {.tv_sec = 1, .tv_nsec = 0};
 
 	// wait for any other pending unmounts to complete
 	lock_watch_table();
@@ -1707,13 +1710,6 @@ fseventsf_read(struct fileproc *fp, struct uio *uio,
 	return error;
 }
 
-
-static int
-fseventsf_write(__unused struct fileproc *fp, __unused struct uio *uio,
-    __unused int flags, __unused vfs_context_t ctx)
-{
-	return EIO;
-}
 
 #pragma pack(push, 4)
 typedef struct fsevent_dev_filter_args32 {
@@ -1939,11 +1935,12 @@ filt_fsevent_detach(struct knote *kn)
  *      --If hint is revoke, set special flags and activate
  */
 static int
-filt_fsevent(struct knote *kn, long hint)
+filt_fsevent_common(struct knote *kn, struct kevent_qos_s *kev, long hint)
 {
 	fsevent_handle *fseh = (struct fsevent_handle *)kn->kn_hook;
 	int activate = 0;
 	int32_t rd, wr, amt;
+	int64_t data = 0;
 
 	if (NOTE_REVOKE == hint) {
 		kn->kn_flags |= (EV_EOF | EV_ONESHOT);
@@ -1960,11 +1957,8 @@ filt_fsevent(struct knote *kn, long hint)
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
-		kn->kn_data = amt;
-
-		if (kn->kn_data != 0) {
-			activate = 1;
-		}
+		data = amt;
+		activate = (data != 0);
 		break;
 	case EVFILT_VNODE:
 		/* Check events this note matches against the hint */
@@ -1975,18 +1969,25 @@ filt_fsevent(struct knote *kn, long hint)
 			activate = 1;
 		}
 		break;
-	default: {
+	default:
 		// nothing to do...
 		break;
 	}
-	}
 
+	if (activate && kev) {
+		knote_fill_kevent(kn, kev, data);
+	}
 	return activate;
 }
 
+static int
+filt_fsevent(struct knote *kn, long hint)
+{
+	return filt_fsevent_common(kn, NULL, hint);
+}
 
 static int
-filt_fsevent_touch(struct knote *kn, struct kevent_internal_s *kev)
+filt_fsevent_touch(struct knote *kn, struct kevent_qos_s *kev)
 {
 	int res;
 
@@ -2004,7 +2005,7 @@ filt_fsevent_touch(struct knote *kn, struct kevent_internal_s *kev)
 	//kn->kn_fflags &= kev->fflags;
 
 	/* determine if the filter is now fired */
-	res = filt_fsevent(kn, 0);
+	res = filt_fsevent_common(kn, NULL, 0);
 
 	unlock_watch_table();
 
@@ -2012,23 +2013,16 @@ filt_fsevent_touch(struct knote *kn, struct kevent_internal_s *kev)
 }
 
 static int
-filt_fsevent_process(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev)
+filt_fsevent_process(struct knote *kn, struct kevent_qos_s *kev)
 {
-#pragma unused(data)
 	int res;
 
 	lock_watch_table();
 
-	res = filt_fsevent(kn, 0);
-	if (res) {
-		*kev = kn->kn_kevent;
-		if (kev->flags & EV_CLEAR) {
-			kn->kn_data = 0;
-			kn->kn_fflags = 0;
-		}
-	}
+	res = filt_fsevent_common(kn, kev, 0);
 
 	unlock_watch_table();
+
 	return res;
 }
 
@@ -2042,14 +2036,13 @@ SECURITY_READ_ONLY_EARLY(struct  filterops) fsevent_filtops = {
 };
 
 static int
-fseventsf_kqfilter(__unused struct fileproc *fp, __unused struct knote *kn,
-    __unused struct kevent_internal_s *kev, __unused vfs_context_t ctx)
+fseventsf_kqfilter(struct fileproc *fp, struct knote *kn,
+    __unused struct kevent_qos_s *kev)
 {
 	fsevent_handle *fseh = (struct fsevent_handle *)fp->f_fglob->fg_data;
 	int res;
 
 	kn->kn_hook = (void*)fseh;
-	kn->kn_hookid = 1;
 	kn->kn_filtid = EVFILTID_FSEVENT;
 
 	lock_watch_table();
@@ -2057,7 +2050,7 @@ fseventsf_kqfilter(__unused struct fileproc *fp, __unused struct knote *kn,
 	KNOTE_ATTACH(&fseh->knotes, kn);
 
 	/* check to see if it is fired already */
-	res = filt_fsevent(kn, 0);
+	res = filt_fsevent_common(kn, NULL, 0);
 
 	unlock_watch_table();
 
@@ -2289,14 +2282,14 @@ fseventswrite(__unused dev_t dev, struct uio *uio, __unused int ioflag)
 
 
 static const struct fileops fsevents_fops = {
-	.fo_type = DTYPE_FSEVENTS,
-	.fo_read = fseventsf_read,
-	.fo_write = fseventsf_write,
-	.fo_ioctl = fseventsf_ioctl,
-	.fo_select = fseventsf_select,
-	.fo_close = fseventsf_close,
+	.fo_type     = DTYPE_FSEVENTS,
+	.fo_read     = fseventsf_read,
+	.fo_write    = fo_no_write,
+	.fo_ioctl    = fseventsf_ioctl,
+	.fo_select   = fseventsf_select,
+	.fo_close    = fseventsf_close,
 	.fo_kqfilter = fseventsf_kqfilter,
-	.fo_drain = fseventsf_drain,
+	.fo_drain    = fseventsf_drain,
 };
 
 typedef struct fsevent_clone_args32 {
@@ -2380,12 +2373,26 @@ handle_clone:
 			return error;
 		}
 
+		/*
+		 * Lock down the user's "fd" result buffer so it's safe
+		 * to hold locks while we copy it out.
+		 */
+		error = vslock((user_addr_t)fse_clone_args->fd,
+		    sizeof(int32_t));
+		if (error) {
+			FREE(event_list, M_TEMP);
+			FREE(fseh, M_TEMP);
+			return error;
+		}
+
 		error = add_watcher(event_list,
 		    fse_clone_args->num_events,
 		    fse_clone_args->event_queue_depth,
 		    &fseh->watcher,
 		    fseh);
 		if (error) {
+			vsunlock((user_addr_t)fse_clone_args->fd,
+			    sizeof(int32_t), 0);
 			FREE(event_list, M_TEMP);
 			FREE(fseh, M_TEMP);
 			return error;
@@ -2396,6 +2403,8 @@ handle_clone:
 		error = falloc(p, &f, &fd, vfs_context_current());
 		if (error) {
 			remove_watcher(fseh->watcher);
+			vsunlock((user_addr_t)fse_clone_args->fd,
+			    sizeof(int32_t), 0);
 			FREE(event_list, M_TEMP);
 			FREE(fseh, M_TEMP);
 			return error;
@@ -2404,16 +2413,21 @@ handle_clone:
 		f->f_fglob->fg_flag = FREAD | FWRITE;
 		f->f_fglob->fg_ops = &fsevents_fops;
 		f->f_fglob->fg_data = (caddr_t) fseh;
-		proc_fdunlock(p);
+		/*
+		 * We can safely hold the proc_fdlock across this copyout()
+		 * because of the vslock() call above.  The vslock() call
+		 * also ensures that we will never get an error, so assert
+		 * this.
+		 */
 		error = copyout((void *)&fd, fse_clone_args->fd, sizeof(int32_t));
-		if (error != 0) {
-			fp_free(p, fd, f);
-		} else {
-			proc_fdlock(p);
-			procfdtbl_releasefd(p, fd, NULL);
-			fp_drop(p, fd, f, 1);
-			proc_fdunlock(p);
-		}
+		assert(error == 0);
+
+		procfdtbl_releasefd(p, fd, NULL);
+		fp_drop(p, fd, f, 1);
+		proc_fdunlock(p);
+
+		vsunlock((user_addr_t)fse_clone_args->fd,
+		    sizeof(int32_t), 1);
 		break;
 
 	default:
@@ -2510,6 +2524,7 @@ get_fse_info(struct vnode *vp, fse_info *fse, __unused vfs_context_t ctx)
 
 	VATTR_INIT(&va);
 	VATTR_WANTED(&va, va_fsid);
+	va.va_vaflags |= VA_REALFSID;
 	VATTR_WANTED(&va, va_fileid);
 	VATTR_WANTED(&va, va_mode);
 	VATTR_WANTED(&va, va_uid);
@@ -2595,7 +2610,7 @@ create_fsevent_from_kevent(vnode_t vp, uint32_t kevents, struct vnode_attr *vap)
 	fse.gid = vap->va_gid;
 
 	len = sizeof(pathbuf);
-	if (vn_getpath(vp, pathbuf, &len) == 0) {
+	if (vn_getpath_no_firmlink(vp, pathbuf, &len) == 0) {
 		add_fsevent(fsevent_type, vfs_context_current(), FSE_ARG_STRING, len, pathbuf, FSE_ARG_FINFO, &fse, FSE_ARG_DONE);
 	}
 	return;

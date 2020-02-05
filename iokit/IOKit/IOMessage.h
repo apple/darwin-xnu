@@ -71,6 +71,12 @@ typedef UInt32 IOMessage;
 #define kIOMessageSystemCapabilityChange   iokit_common_msg(0x340)
 #define kIOMessageDeviceSignaledWakeup     iokit_common_msg(0x350)
 
+#ifdef KERNEL_PRIVATE
+// sent to IOUserClients with the property kIOUserClientMessageAppSuspendedKey
+// when their task's app suspend state changes;
+// use task_is_app_suspended() to retrieve the owning task's current state
+#define kIOMessageTaskAppSuspendedChange   iokit_common_msg(0x800)
+#endif
 
 /*!
  * @defined         kIOMessageDeviceWillPowerOff

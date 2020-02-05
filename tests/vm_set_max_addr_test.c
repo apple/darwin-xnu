@@ -8,6 +8,8 @@
 #include <darwintest.h>
 #include <darwintest_utils.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 extern char * testpath;
 
 T_DECL(set_max_addr,

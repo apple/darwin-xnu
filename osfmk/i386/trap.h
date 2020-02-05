@@ -132,8 +132,8 @@ extern void             user_trap(x86_saved_state_t *regs);
 
 extern void             interrupt(x86_saved_state_t *regs);
 
-extern void             panic_double_fault64(x86_saved_state_t *regs);
-extern void             panic_machine_check64(x86_saved_state_t *regs);
+extern void             panic_double_fault64(x86_saved_state_t *regs) __abortlike;
+extern void             panic_machine_check64(x86_saved_state_t *regs) __abortlike;
 
 typedef kern_return_t (*perfCallback)(
 	int                     trapno,

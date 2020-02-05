@@ -63,10 +63,11 @@ void
 /* __private_extern__ */
 unsigned int    _MachineStateCount[] = {
 	 /* FLAVOR_LIST */ 0,
-	ARM_THREAD_STATE_COUNT,
-	ARM_VFP_STATE_COUNT,
-	ARM_EXCEPTION_STATE_COUNT,
-	ARM_DEBUG_STATE_COUNT
+	[ARM_THREAD_STATE]    = ARM_THREAD_STATE_COUNT,
+	[ARM_VFP_STATE]       = ARM_VFP_STATE_COUNT,
+	[ARM_EXCEPTION_STATE] = ARM_EXCEPTION_STATE_COUNT,
+	[ARM_DEBUG_STATE]     = ARM_DEBUG_STATE_COUNT,
+	[ARM_PAGEIN_STATE]    = ARM_PAGEIN_STATE_COUNT,
 };
 
 extern zone_t ads_zone;
@@ -137,6 +138,18 @@ machine_thread_get_state(
 		tstate[2] = ARM_EXCEPTION_STATE;
 		tstate[3] = ARM_DEBUG_STATE;
 		*count = 4;
+		break;
+
+	case THREAD_STATE_FLAVOR_LIST_10_15:
+		if (*count < 5)
+			return (KERN_INVALID_ARGUMENT);
+
+		tstate[0] = ARM_THREAD_STATE;
+		tstate[1] = ARM_VFP_STATE;
+		tstate[2] = ARM_EXCEPTION_STATE;
+		tstate[3] = ARM_DEBUG_STATE;
+		tstate[4] = ARM_PAGEIN_STATE;
+		*count = 5;
 		break;
 
 	case ARM_THREAD_STATE:{
@@ -236,6 +249,20 @@ machine_thread_get_state(
                         *count = ARM_DEBUG_STATE_COUNT;
                         break;
 		}
+
+	case ARM_PAGEIN_STATE:{
+		arm_pagein_state_t *state;
+
+		if (*count < ARM_PAGEIN_STATE_COUNT) {
+			return (KERN_INVALID_ARGUMENT);
+		}
+			
+		state = (arm_pagein_state_t *)tstate;
+		state->__pagein_error = thread->t_pagein_error;
+
+		*count = ARM_PAGEIN_STATE_COUNT;
+		break;
+	}
 
 	default:
 		return (KERN_INVALID_ARGUMENT);
@@ -456,17 +483,30 @@ machine_thread_set_state(
 	return (KERN_SUCCESS);
 }
 
+mach_vm_address_t
+machine_thread_pc(thread_t thread)
+{
+	struct arm_saved_state *ss = get_user_regs(thread);
+	return (mach_vm_address_t)get_saved_state_pc(ss);
+}
+
+void
+machine_thread_reset_pc(thread_t thread, mach_vm_address_t pc)
+{
+	set_saved_state_pc(get_user_regs(thread), (register_t)pc);
+}
+
 /*
  * Routine:	machine_thread_state_initialize
  *
  */
 kern_return_t
 machine_thread_state_initialize(
-				thread_t thread)
+	thread_t thread)
 {
 	struct arm_saved_state *savestate;
 
-	savestate = (struct arm_saved_state *) & thread->machine.PcbData;
+	savestate = (struct arm_saved_state *) &thread->machine.PcbData;
 	bzero((char *) savestate, sizeof(struct arm_saved_state));
 	savestate->cpsr = PSR_USERDFLT;
 

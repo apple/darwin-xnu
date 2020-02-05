@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -784,23 +784,27 @@ extern u_char inet6ctlerrmap[];
 extern u_int32_t in6_maxmtu;
 
 /* N.B.: if_inet6data is never freed once set, so we don't need to lock */
-#define in6_ifstat_inc_common(_ifp, _tag, _atomic) do {                 \
+#define in6_ifstat_add_common(_ifp, _tag, _count, _atomic) do {         \
 	if (_ifp != NULL && IN6_IFEXTRA(_ifp) != NULL) {                \
 	        if (_atomic)                                            \
 	                atomic_add_64(                                  \
-	                    &IN6_IFEXTRA(_ifp)->in6_ifstat._tag, 1);    \
+	                    &IN6_IFEXTRA(_ifp)->in6_ifstat._tag, _count);\
 	        else                                                    \
-	                IN6_IFEXTRA(_ifp)->in6_ifstat._tag++;           \
+	                IN6_IFEXTRA(_ifp)->in6_ifstat._tag += _count;   \
 	}                                                               \
 } while (0)
 
 /* atomic version */
 #define in6_ifstat_inc(_ifp, _tag) \
-	in6_ifstat_inc_common(_ifp, _tag, TRUE)
+	in6_ifstat_add_common(_ifp, _tag, 1, TRUE)
 
 /* non-atomic version (for fast paths) */
 #define in6_ifstat_inc_na(_ifp, _tag) \
-	in6_ifstat_inc_common(_ifp, _tag, FALSE)
+	in6_ifstat_add_common(_ifp, _tag, 1, FALSE)
+
+/* atomic add version */
+#define in6_ifstat_add(_ifp, _tag, _count) \
+	in6_ifstat_add_common(_ifp, _tag, _count, TRUE)
 
 /*
  * Macro for finding the internet address structure (in6_ifaddr) corresponding

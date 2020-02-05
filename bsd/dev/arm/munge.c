@@ -166,7 +166,7 @@ int
 munge_wwl(const void *regs, void *args)
 {
 	if (REGS_TO_STYLE(regs) == kDirect) {
-		return marshal_no_pad(regs, args, 3);
+		return marshal_no_pad(regs, args, 4);
 	} else {
 		DECLARE_AND_CAST(regs, args, ss, uu_args);
 

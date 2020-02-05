@@ -7,7 +7,8 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-T_GLOBAL_META(T_META_ASROOT(true));
+T_GLOBAL_META(T_META_ASROOT(true),
+    T_META_RUN_CONCURRENTLY(true));
 
 T_DECL(processor_cpu_stat64,
     "ensure 64-bit processor statistics are reported correctly",
@@ -46,7 +47,6 @@ T_DECL(processor_cpu_stat64,
 	memset(prestats, 0xff, cpu_count * sizeof(*prestats));
 
 	for (int i = 0; i < (int)cpu_count; i++) {
-		printf("%d\n", PROCESSOR_CPU_STAT64_COUNT);
 		mach_msg_type_number_t info_count = PROCESSOR_CPU_STAT64_COUNT;
 		kr = processor_info(cpu_ports[i], PROCESSOR_CPU_STAT64, &host,
 		    (processor_info_t)&prestats[i], &info_count);

@@ -23,15 +23,6 @@
  * Use is subject to license terms.
  */
 
-/* #pragma ident	"@(#)lockstat.c	1.12	08/01/16 SMI" */
-
-
-#ifdef KERNEL
-#ifndef _KERNEL
-#define _KERNEL /* Solaris vs. Darwin */
-#endif
-#endif
-
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/errno.h>

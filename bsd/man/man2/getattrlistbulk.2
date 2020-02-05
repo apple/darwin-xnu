@@ -86,7 +86,7 @@ structure must be set.
 Volume attributes  cannot be requested but all other supported getattrlist attributes can be used. For this function,
 .Dv ATTR_CMN_NAME
 and
-.Dv ATRR_CMN_RETURNED_ATTRS
+.Dv ATTR_CMN_RETURNED_ATTRS
 are required and the absence of these attributes in the attrList parameter results in an error. Note that 
 not all attributes supported by 
 .Fn getattrlist
@@ -160,8 +160,23 @@ attributes and then use the value of the
 .Dv ATTR_CMN_OBJTYPE 
 attribute to parse the resulting attribute buffer.
 .Pp
-A directory which is a mount point for a file system, will have a value of "DIR_MNTSTATUS_MNTPOINT" set for it's the
-ATTR_DIR_MOUNTSTATUS attribute entry. However the attributes for the mount point will be those from the (underlying) file system. The only way to get the attributes of mounted root directory is to call getattrlist(2) on the mount point.
+A directory which is a mount point for a file system, will have a value of
+.Dq DIR_MNTSTATUS_MNTPOINT
+set for its ATTR_DIR_MOUNTSTATUS attribute entry.
+However the attributes for the mount point will be those from the (underlying) file system.
+To get the attributes of the mounted root directory, call
+.Xr getattrlist 2
+on the mount point.
+.Pp
+A directory which is a firmlink will have the
+.Dq SF_FIRMLINK
+flag set in its ATTR_CMN_FLAGS attribute entry.
+However, the attributes returned by
+.Fn getattrlistbulk
+will be those from the firmlink, not the firmlink's target.
+To get the attribute of the firmlink's target, call
+.Xr getattrlist 2
+on the firmlink.
 .
 .Sh RETURN VALUES
 Upon successful completion the numbers of entries successfully read

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -354,6 +354,9 @@ loop:
 
 				cmp = nfs_case_insensitive(mp) ? strncasecmp : strncmp;
 
+				if (vp->v_name && (size_t)cnp->cn_namelen != strnlen(vp->v_name, MAXPATHLEN)) {
+					update_flags |= VNODE_UPDATE_NAME;
+				}
 				if (vp->v_name && cnp->cn_namelen && (*cmp)(cnp->cn_nameptr, vp->v_name, cnp->cn_namelen)) {
 					update_flags |= VNODE_UPDATE_NAME;
 				}
@@ -504,6 +507,7 @@ loop:
 	vfsp.vnfs_str = "nfs";
 	vfsp.vnfs_dvp = dnp ? NFSTOV(dnp) : NULL;
 	vfsp.vnfs_fsnode = np;
+#if CONFIG_NFS4
 	if (nfsvers == NFS_VER4) {
 #if FIFO
 		if (nvap->nva_type == VFIFO) {
@@ -515,7 +519,9 @@ loop:
 		} else {
 			vfsp.vnfs_vops = nfsv4_vnodeop_p;
 		}
-	} else {
+	} else
+#endif /* CONFIG_NFS4 */
+	{
 #if FIFO
 		if (nvap->nva_type == VFIFO) {
 			vfsp.vnfs_vops = fifo_nfsv2nodeop_p;
@@ -538,20 +544,24 @@ loop:
 	}
 
 #if CONFIG_TRIGGERS
-	if ((nfsvers >= NFS_VER4) && (nvap->nva_type == VDIR) && (np->n_vattr.nva_flags & NFS_FFLAG_TRIGGER)) {
+	if (((nfsvers >= NFS_VER4)
+	    )
+	    && (nvap->nva_type == VDIR) && (np->n_vattr.nva_flags & NFS_FFLAG_TRIGGER)
+	    && !(flags & NG_MARKROOT)) {
 		struct vnode_trigger_param vtp;
 		bzero(&vtp, sizeof(vtp));
 		bcopy(&vfsp, &vtp.vnt_params, sizeof(vfsp));
 		vtp.vnt_resolve_func = nfs_mirror_mount_trigger_resolve;
 		vtp.vnt_unresolve_func = nfs_mirror_mount_trigger_unresolve;
 		vtp.vnt_rearm_func = nfs_mirror_mount_trigger_rearm;
-		vtp.vnt_flags = VNT_AUTO_REARM;
+		vtp.vnt_flags = VNT_AUTO_REARM | VNT_KERN_RESOLVE;
 		error = vnode_create(VNCREATE_TRIGGER, VNCREATE_TRIGGER_SIZE, &vtp, &np->n_vnode);
 	} else
 #endif
 	{
 		error = vnode_create(VNCREATE_FLAVOR, VCREATESIZE, &vfsp, &np->n_vnode);
 	}
+notsup:
 	if (error) {
 		FSDBG(266, 0, np, np->n_flag, 0xb1eb1e);
 		nfs_node_unlock(np);
@@ -677,6 +687,7 @@ restart:
 		 * node has gone inactive without being open, we need to
 		 * clean up (close) the open done in the create.
 		 */
+#if CONFIG_NFS4
 		if ((nofp->nof_flags & NFS_OPEN_FILE_CREATE) && nofp->nof_creator && !force) {
 			if (nofp->nof_flags & NFS_OPEN_FILE_REOPEN) {
 				lck_mtx_unlock(&np->n_openlock);
@@ -705,6 +716,7 @@ restart:
 			}
 			goto restart;
 		}
+#endif
 		if (nofp->nof_flags & NFS_OPEN_FILE_NEEDCLOSE) {
 			/*
 			 * If the file is marked as needing reopen, but this was the only
@@ -725,9 +737,11 @@ restart:
 					if (inuse) {
 						nfs_mount_state_in_use_end(nmp, 0);
 					}
+#if CONFIG_NFS4
 					if (!nfs4_reopen(nofp, NULL)) {
 						goto restart;
 					}
+#endif
 				}
 				error = nfs_close(np, nofp, NFS_OPEN_SHARE_ACCESS_READ, NFS_OPEN_SHARE_DENY_NONE, ctx);
 				if (error) {
@@ -910,9 +924,11 @@ nfs_vnop_reclaim(
 	FSDBG_TOP(265, vp, np, np->n_flag, 0);
 	force = (!mp || vfs_isforce(mp) || nfs_mount_gone(nmp));
 
+
 	/* There shouldn't be any open or lock state at this point */
 	lck_mtx_lock(&np->n_openlock);
 
+#if CONFIG_NFS4
 	if (nmp && (nmp->nm_vers >= NFS_VER4)) {
 		/* need to drop a delegation */
 		if (np->n_dreturn.tqe_next != NFSNOLIST) {
@@ -944,6 +960,7 @@ nfs_vnop_reclaim(
 			np->n_attrdirfh = NULL;
 		}
 	}
+#endif
 
 	/* clean up file locks */
 	TAILQ_FOREACH_SAFE(nflp, &np->n_locks, nfl_link, nextnflp) {
@@ -1004,12 +1021,14 @@ nfs_vnop_reclaim(
 				    nofp->nof_r_drw, nofp->nof_d_r_drw,
 				    nofp->nof_w_drw, nofp->nof_d_w_drw,
 				    nofp->nof_rw_drw, nofp->nof_d_rw_drw);
+#if CONFIG_NFS4
 				/* try sending a close RPC if it wasn't delegated */
 				if (nofp->nof_r || nofp->nof_w || nofp->nof_rw ||
 				    nofp->nof_r_dw || nofp->nof_w_dw || nofp->nof_rw_dw ||
 				    nofp->nof_r_drw || nofp->nof_w_drw || nofp->nof_rw_drw) {
 					nfs4_close_rpc(np, nofp, NULL, nofp->nof_owner->noo_cred, R_RECOVER);
 				}
+#endif
 			}
 		}
 		TAILQ_REMOVE(&np->n_opens, nofp, nof_link);
@@ -1022,7 +1041,7 @@ nfs_vnop_reclaim(
 		/* then remove this node from the monitored node list. */
 		lck_mtx_lock(&nmp->nm_lock);
 		while (np->n_mflag & NMMONSCANINPROG) {
-			struct timespec ts = { 1, 0 };
+			struct timespec ts = { .tv_sec = 1, .tv_nsec = 0 };
 			np->n_mflag |= NMMONSCANWANT;
 			msleep(&np->n_mflag, &nmp->nm_lock, PZERO - 1, "nfswaitmonscan", &ts);
 		}
@@ -1178,7 +1197,7 @@ nfs_node_unlock2(nfsnode_t np1, nfsnode_t np2)
 int
 nfs_node_set_busy(nfsnode_t np, thread_t thd)
 {
-	struct timespec ts = { 2, 0 };
+	struct timespec ts = { .tv_sec = 2, .tv_nsec = 0 };
 	int error;
 
 	if ((error = nfs_node_lock(np))) {

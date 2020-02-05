@@ -295,15 +295,29 @@ class value(object):
         return content
 
     def _GetValueAsSigned(self):
+        if self._sbval19k84obscure747_is_ptr:
+            print "ERROR: You cannot get 'int' from pointer type %s, please use unsigned(obj) for such purposes." % str(self._sbval19k84obscure747_type)
+            raise ValueError("Cannot get signed int for pointer data.")
         serr = lldb.SBError()
         retval = self._sbval19k84obscure747.GetValueAsSigned(serr)
         if serr.success:
             return retval
         raise ValueError("Failed to read signed data. "+ str(self._sbval19k84obscure747) +"(type =" + str(self._sbval19k84obscure747_type) + ") Error description: " + serr.GetCString())
-    
+
+    def _GetValueAsCast(self, dest_type):
+        if type(dest_type) is not lldb.SBType:
+            raise ValueError("Invalid type for dest_type: {}".format(type(dest_type)))
+        addr = self._GetValueAsUnsigned()
+        sbval = self._sbval19k84obscure747.target.CreateValueFromExpression("newname", "(void *)"+str(addr))
+        val = value(sbval.Cast(dest_type))
+        return val
+
     def _GetValueAsUnsigned(self):
         serr = lldb.SBError()
-        retval = self._sbval19k84obscure747.GetValueAsUnsigned(serr)
+        if self._sbval19k84obscure747_is_ptr:
+            retval = self._sbval19k84obscure747.GetValueAsAddress()
+        else:
+            retval = self._sbval19k84obscure747.GetValueAsUnsigned(serr)
         if serr.success:
             return retval
         raise ValueError("Failed to read unsigned data. "+ str(self._sbval19k84obscure747) +"(type =" + str(self._sbval19k84obscure747_type) + ") Error description: " + serr.GetCString())
@@ -311,7 +325,7 @@ class value(object):
     def _GetValueAsString(self, offset = 0, maxlen = 1024):
         serr = lldb.SBError()
         sbdata = None
-        if self._sbval19k84obscure747.TypeIsPointerType():
+        if self._sbval19k84obscure747_is_ptr:
             sbdata = self._sbval19k84obscure747.GetPointeeData(offset, maxlen)
         else:
             sbdata = self._sbval19k84obscure747.GetData()
@@ -381,7 +395,7 @@ def dereference(val):
             obj_ptr = (int *)0x1234  #C
             val = *obj_ptr           #C
     """
-    if type(val) is value and val.GetSBValue().TypeIsPointerType():
+    if type(val) is value and val._sbval19k84obscure747_is_ptr:
         return value(val.GetSBValue().Dereference())
     raise TypeError('Cannot dereference this type.')
         
@@ -410,8 +424,8 @@ def cast(obj, target_type):
     elif type(target_type) is value:
         dest_type = target_type.GetSBValue().GetType()
 
-    if type(obj) is value :
-        return value(obj.GetSBValue().Cast(dest_type))
+    if type(obj) is value:
+        return obj._GetValueAsCast(dest_type)
     elif type(obj) is int:
         print "ERROR: You cannot cast an 'int' to %s, please use kern.GetValueFromAddress() for such purposes." % str(target_type) 
     raise TypeError("object of type %s cannot be casted to %s" % (str(type(obj)), str(target_type)))

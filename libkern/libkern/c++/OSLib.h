@@ -78,7 +78,11 @@ extern "C" int debug_ivars_size;
 
 #ifndef NULL
 #if defined (__cplusplus)
+#if __cplusplus >= 201103L
+#define NULL nullptr
+#else
 #define NULL 0
+#endif
 #else
 #define NULL ((void *)0)
 #endif

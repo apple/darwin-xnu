@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -54,7 +54,7 @@ class IOMemoryDescriptor;
  */
 class IOMemoryCursor : public OSObject
 {
-	OSDeclareDefaultStructors(IOMemoryCursor)
+	OSDeclareDefaultStructors(IOMemoryCursor);
 
 public:
 /*!
@@ -148,7 +148,7 @@ public:
 		void *              segments,
 		UInt32              maxSegments,
 		UInt32              maxTransferSize = 0,
-		IOByteCount        *transferSize = 0);
+		IOByteCount        *transferSize = NULL);
 };
 
 /************************ class IONaturalMemoryCursor ************************/
@@ -161,7 +161,7 @@ public:
  */
 class IONaturalMemoryCursor : public IOMemoryCursor
 {
-	OSDeclareDefaultStructors(IONaturalMemoryCursor)
+	OSDeclareDefaultStructors(IONaturalMemoryCursor);
 
 public:
 /*! @function outputSegment
@@ -221,7 +221,7 @@ public:
 	    PhysicalSegment    *segments,
 	    UInt32              maxSegments,
 	    UInt32              inMaxTransferSize = 0,
-	    IOByteCount        *transferSize = 0)
+	    IOByteCount        *transferSize = NULL)
 	{
 		return genPhysicalSegments(descriptor, fromPosition, segments,
 		           maxSegments, inMaxTransferSize, transferSize);
@@ -237,7 +237,7 @@ public:
  */
 class IOBigMemoryCursor : public IOMemoryCursor
 {
-	OSDeclareDefaultStructors(IOBigMemoryCursor)
+	OSDeclareDefaultStructors(IOBigMemoryCursor);
 
 public:
 /*! @function outputSegment
@@ -298,7 +298,7 @@ public:
 	    PhysicalSegment *    segments,
 	    UInt32               maxSegments,
 	    UInt32               inMaxTransferSize = 0,
-	    IOByteCount       *  transferSize = 0)
+	    IOByteCount       *  transferSize = NULL)
 	{
 		return genPhysicalSegments(descriptor, fromPosition, segments,
 		           maxSegments, inMaxTransferSize, transferSize);
@@ -314,7 +314,7 @@ public:
  */
 class IOLittleMemoryCursor : public IOMemoryCursor
 {
-	OSDeclareDefaultStructors(IOLittleMemoryCursor)
+	OSDeclareDefaultStructors(IOLittleMemoryCursor);
 
 public:
 /*! @function outputSegment
@@ -373,7 +373,7 @@ public:
 	    PhysicalSegment *    segments,
 	    UInt32               maxSegments,
 	    UInt32               inMaxTransferSize = 0,
-	    IOByteCount       *  transferSize = 0)
+	    IOByteCount       *  transferSize = NULL)
 	{
 		return genPhysicalSegments(descriptor, fromPosition, segments,
 		           maxSegments, inMaxTransferSize, transferSize);

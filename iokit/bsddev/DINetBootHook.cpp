@@ -101,9 +101,9 @@
 static IOService *
 di_load_controller( void )
 {
-	OSIterator *    controllerIterator      = 0;
-	OSDictionary *  matchDictionary         = 0;
-	IOService *     controller                      = 0;
+	OSIterator *    controllerIterator      = NULL;
+	OSDictionary *  matchDictionary         = NULL;
+	IOService *     controller                      = NULL;
 
 	do {
 		IOService::getResourceService()->publishResource("com.apple.AppleDiskImageController.load", kOSBooleanTrue);
@@ -151,11 +151,11 @@ int
 di_root_image(const char *path, char *devname, size_t devsz, dev_t *dev_p)
 {
 	IOReturn                        res                             = 0;
-	IOService               *       controller                      = 0;
-	OSString                *       pathString                      = 0;
-	OSNumber                *       myResult                        = 0;
-	OSString                *       myDevName                       = 0;
-	OSNumber                *       myDevT                          = 0;
+	IOService               *       controller                      = NULL;
+	OSString                *       pathString                      = NULL;
+	OSNumber                *       myResult                        = NULL;
+	OSString                *       myDevName                       = NULL;
+	OSNumber                *       myDevT                          = NULL;
 
 	// sanity check arguments please
 	if (devname) {
@@ -243,11 +243,11 @@ int
 di_root_ramfile_buf(void *buf, size_t bufsz, char *devname, size_t devsz, dev_t *dev_p)
 {
 	IOReturn res = 0;
-	IOService *controller = 0;
-	OSNumber *myResult = 0;
-	OSString *myDevName = 0;
-	OSNumber *myDevT = 0;
-	IOMemoryDescriptor *mem = 0;
+	IOService *controller = NULL;
+	OSNumber *myResult = NULL;
+	OSString *myDevName = NULL;
+	OSNumber *myDevT = NULL;
+	IOMemoryDescriptor *mem = NULL;
 
 	mem = IOMemoryDescriptor::withAddress(buf, bufsz, kIODirectionInOut);
 	assert(mem);
@@ -306,7 +306,7 @@ di_root_ramfile( IORegistryEntry * entry )
 	IOMemoryDescriptor *    mem;
 	uint64_t                dmgSize;
 	uint64_t                remain, length;
-	OSData *                extentData = 0;
+	OSData *                extentData = NULL;
 	IOAddressRange *        extentList;
 	uint64_t                extentSize;
 	uint32_t                extentCount;

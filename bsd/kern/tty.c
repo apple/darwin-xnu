@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 1997-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1581,6 +1581,12 @@ ttioctl_locked(struct tty *tp, u_long cmd, caddr_t data, int flag, proc_t p)
 	case TIOCGDRAINWAIT:
 		*(int *)data = tp->t_timeout / hz;
 		break;
+	case TIOCREVOKE:
+		if (ISSET(tp->t_state, TS_PGRPHUP)) {
+			tp->t_gen++;
+			wakeup(TSA_HUP_OR_INPUT(tp));
+		}
+		break;
 	default:
 		error = ttcompat(tp, cmd, data, flag, p);
 		goto out;
@@ -2147,7 +2153,7 @@ loop:
 		int m = cc[VMIN];
 		long t = cc[VTIME];
 		struct timeval timecopy;
-		struct timeval etime = {0, 0};  /* protected by !has_etime */
+		struct timeval etime = {.tv_sec = 0, .tv_usec = 0};     /* protected by !has_etime */
 
 		/*
 		 * Check each of the four combinations.
@@ -2806,6 +2812,16 @@ ttyecho(int c, struct tty *tp)
 	(void)ttyoutput(c, tp);
 }
 
+static void
+ttwakeup_knote(struct selinfo *sip, long hint)
+{
+	if ((sip->si_flags & SI_KNPOSTING) == 0) {
+		sip->si_flags |= SI_KNPOSTING;
+		KNOTE(&sip->si_note, hint);
+		sip->si_flags &= ~SI_KNPOSTING;
+	}
+}
+
 
 /*
  * Wake up any readers on a tty.
@@ -2818,7 +2834,7 @@ ttwakeup(struct tty *tp)
 	TTY_LOCK_OWNED(tp);     /* debug assert */
 
 	selwakeup(&tp->t_rsel);
-	KNOTE(&tp->t_rsel.si_note, 1);
+	ttwakeup_knote(&tp->t_rsel, 0);
 	if (ISSET(tp->t_state, TS_ASYNC)) {
 		/*
 		 * XXX: Callers may not revalidate it the tty is closed
@@ -2850,7 +2866,7 @@ ttwwakeup(struct tty *tp)
 
 	if (tp->t_outq.c_cc <= tp->t_lowat) {
 		selwakeup(&tp->t_wsel);
-		KNOTE(&tp->t_wsel.si_note, 1);
+		ttwakeup_knote(&tp->t_wsel, 0);
 	}
 	if (ISSET(tp->t_state, TS_BUSY | TS_SO_OCOMPLETE) ==
 	    TS_SO_OCOMPLETE && tp->t_outq.c_cc == 0) {
@@ -3030,7 +3046,6 @@ ttyinfo_locked(struct tty *tp)
 		break;
 	}
 	calcru(pick, &utime, &stime, NULL);
-	proc_rele(pick);
 
 	/* Print command, pid, state, utime, and stime */
 	ttyprintf(tp, " cmd: %s %d %s %ld.%02du %ld.%02ds\n",
@@ -3039,6 +3054,8 @@ ttyinfo_locked(struct tty *tp)
 	    state,
 	    (long)utime.tv_sec, utime.tv_usec / 10000,
 	    (long)stime.tv_sec, stime.tv_usec / 10000);
+
+	proc_rele(pick);
 	tp->t_rocount = 0;
 }
 
@@ -3311,11 +3328,11 @@ isctty_sp(proc_t p, struct tty  *tp, struct session *sessp)
 }
 
 
-static int  filt_ttyattach(struct knote *kn, struct kevent_internal_s *kev);
+static int  filt_ttyattach(struct knote *kn, struct kevent_qos_s *kev);
 static void filt_ttydetach(struct knote *kn);
 static int  filt_ttyevent(struct knote *kn, long hint);
-static int  filt_ttytouch(struct knote *kn, struct kevent_internal_s *kev);
-static int  filt_ttyprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
+static int  filt_ttytouch(struct knote *kn, struct kevent_qos_s *kev);
+static int  filt_ttyprocess(struct knote *kn, struct kevent_qos_s *kev);
 
 SECURITY_READ_ONLY_EARLY(struct filterops) tty_filtops = {
 	.f_isfd    = 1,
@@ -3331,30 +3348,34 @@ SECURITY_READ_ONLY_EARLY(struct filterops) tty_filtops = {
  * or written.
  */
 static int
-filt_tty_common(struct knote *kn, struct tty *tp)
+filt_tty_common(struct knote *kn, struct kevent_qos_s *kev, struct tty *tp)
 {
 	int retval = 0;
+	int64_t data = 0;
 
 	TTY_LOCK_OWNED(tp); /* debug assert */
 
-	if (tp->t_state & TS_ZOMBIE) {
-		kn->kn_flags |= EV_EOF;
-		return 1;
-	}
-
-	switch (knote_get_seltype(kn)) {
-	case FREAD:
-		retval = ttnread(tp);
+	switch (kn->kn_filter) {
+	case EVFILT_READ:
+		/*
+		 * ttnread can change the tty state,
+		 * hence must be done upfront, before any other check.
+		 */
+		data = ttnread(tp);
+		retval = (data != 0);
 		break;
-	case FWRITE:
+	case EVFILT_WRITE:
 		if ((tp->t_outq.c_cc <= tp->t_lowat) &&
 		    (tp->t_state & TS_CONNECTED)) {
-			retval = tp->t_hiwat - tp->t_outq.c_cc;
+			data = tp->t_hiwat - tp->t_outq.c_cc;
+			retval = (data != 0);
 		}
 		break;
+	default:
+		panic("tty kevent: unexpected filter: %d, kn = %p, tty = %p",
+		    kn->kn_filter, kn, tp);
+		break;
 	}
-
-	kn->kn_data = retval;
 
 	/*
 	 * TODO(mwidmann, jandrus): For native knote low watermark support,
@@ -3363,6 +3384,16 @@ filt_tty_common(struct knote *kn, struct tty *tp)
 	 * res = ((kn->kn_sfflags & NOTE_LOWAT) != 0) ?
 	 *        (kn->kn_data >= kn->kn_sdata) : kn->kn_data;
 	 */
+
+	if (tp->t_state & TS_ZOMBIE) {
+		kn->kn_flags |= EV_EOF;
+	}
+	if (kn->kn_flags & EV_EOF) {
+		retval = 1;
+	}
+	if (retval && kev) {
+		knote_fill_kevent(kn, kev, data);
+	}
 
 	return retval;
 }
@@ -3413,24 +3444,6 @@ static struct tty *
 tty_from_knote(struct knote *kn)
 {
 	return (struct tty *)kn->kn_hook;
-}
-
-/*
- * Try to lock the TTY structure associated with a knote.
- *
- * On success, this function returns a locked TTY structure.  Otherwise, NULL is
- * returned.
- */
-__attribute__((warn_unused_result))
-static struct tty *
-tty_lock_from_knote(struct knote *kn)
-{
-	struct tty *tp = tty_from_knote(kn);
-	if (tp) {
-		tty_lock(tp);
-	}
-
-	return tp;
 }
 
 /*
@@ -3538,7 +3551,7 @@ out:
 }
 
 static int
-filt_ttyattach(struct knote *kn, __unused struct kevent_internal_s *kev)
+filt_ttyattach(struct knote *kn, __unused struct kevent_qos_s *kev)
 {
 	int selres = 0;
 	struct tty *tp;
@@ -3566,19 +3579,18 @@ filt_ttyattach(struct knote *kn, __unused struct kevent_internal_s *kev)
 	/*
 	 * Attach the knote to selinfo's klist.
 	 */
-	tp = tty_lock_from_knote(kn);
-	if (!tp) {
-		knote_set_error(kn, ENOENT);
-		return 0;
-	}
+	tp = tty_from_knote(kn);
+	tty_lock(tp);
 
-	switch (knote_get_seltype(kn)) {
-	case FREAD:
+	switch (kn->kn_filter) {
+	case EVFILT_READ:
 		KNOTE_ATTACH(&tp->t_rsel.si_note, kn);
 		break;
-	case FWRITE:
+	case EVFILT_WRITE:
 		KNOTE_ATTACH(&tp->t_wsel.si_note, kn);
 		break;
+	default:
+		panic("invalid knote %p attach, filter: %d", kn, kn->kn_filter);
 	}
 
 	tty_unlock(tp);
@@ -3589,27 +3601,21 @@ filt_ttyattach(struct knote *kn, __unused struct kevent_internal_s *kev)
 static void
 filt_ttydetach(struct knote *kn)
 {
-	struct tty *tp;
+	struct tty *tp = tty_from_knote(kn);
 
-	tp = tty_lock_from_knote(kn);
-	if (!tp) {
-		knote_set_error(kn, ENOENT);
-		return;
-	}
+	tty_lock(tp);
 
-	struct selinfo *si = NULL;
-	switch (knote_get_seltype(kn)) {
-	case FREAD:
-		si = &tp->t_rsel;
+	switch (kn->kn_filter) {
+	case EVFILT_READ:
+		KNOTE_DETACH(&tp->t_rsel.si_note, kn);
 		break;
-	case FWRITE:
-		si = &tp->t_wsel;
+	case EVFILT_WRITE:
+		KNOTE_DETACH(&tp->t_wsel.si_note, kn);
 		break;
-		/* knote_get_seltype will panic on default */
+	default:
+		panic("invalid knote %p detach, filter: %d", kn, kn->kn_filter);
+		break;
 	}
-
-	KNOTE_DETACH(&si->si_note, kn);
-	kn->kn_hook = NULL;
 
 	tty_unlock(tp);
 	ttyfree(tp);
@@ -3618,52 +3624,34 @@ filt_ttydetach(struct knote *kn)
 static int
 filt_ttyevent(struct knote *kn, long hint)
 {
+	struct tty *tp = tty_from_knote(kn);
 	int ret;
-	struct tty *tp;
-	bool revoked = hint & NOTE_REVOKE;
-	hint &= ~NOTE_REVOKE;
 
-	tp = tty_from_knote(kn);
-	if (!tp) {
-		knote_set_error(kn, ENOENT);
-		return 0;
-	}
+	TTY_LOCK_OWNED(tp);
 
-	if (!hint) {
-		tty_lock(tp);
-	}
-
-	if (revoked) {
+	if (hint & NOTE_REVOKE) {
 		kn->kn_flags |= EV_EOF | EV_ONESHOT;
 		ret = 1;
 	} else {
-		ret = filt_tty_common(kn, tp);
-	}
-
-	if (!hint) {
-		tty_unlock(tp);
+		ret = filt_tty_common(kn, NULL, tp);
 	}
 
 	return ret;
 }
 
 static int
-filt_ttytouch(struct knote *kn, struct kevent_internal_s *kev)
+filt_ttytouch(struct knote *kn, struct kevent_qos_s *kev)
 {
-	struct tty *tp;
+	struct tty *tp = tty_from_knote(kn);
 	int res = 0;
 
-	tp = tty_lock_from_knote(kn);
-	if (!tp) {
-		knote_set_error(kn, ENOENT);
-		return 0;
-	}
+	tty_lock(tp);
 
 	kn->kn_sdata = kev->data;
 	kn->kn_sfflags = kev->fflags;
 
 	if (kn->kn_vnode_kqok) {
-		res = filt_tty_common(kn, tp);
+		res = filt_tty_common(kn, NULL, tp);
 	}
 
 	tty_unlock(tp);
@@ -3672,26 +3660,14 @@ filt_ttytouch(struct knote *kn, struct kevent_internal_s *kev)
 }
 
 static int
-filt_ttyprocess(struct knote *kn, __unused struct filt_process_s *data, struct kevent_internal_s *kev)
+filt_ttyprocess(struct knote *kn, struct kevent_qos_s *kev)
 {
-	struct tty *tp;
+	struct tty *tp = tty_from_knote(kn);
 	int res;
 
-	tp = tty_lock_from_knote(kn);
-	if (!tp) {
-		knote_set_error(kn, ENOENT);
-		return 0;
-	}
+	tty_lock(tp);
 
-	res = filt_tty_common(kn, tp);
-
-	if (res) {
-		*kev = kn->kn_kevent;
-		if (kn->kn_flags & EV_CLEAR) {
-			kn->kn_fflags = 0;
-			kn->kn_data = 0;
-		}
-	}
+	res = filt_tty_common(kn, kev, tp);
 
 	tty_unlock(tp);
 

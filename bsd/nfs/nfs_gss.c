@@ -157,6 +157,9 @@ static void     nfs_gss_svc_ctx_insert(struct nfs_gss_svc_ctx *);
 static void     nfs_gss_svc_ctx_timer(void *, void *);
 static int      nfs_gss_svc_gssd_upcall(struct nfs_gss_svc_ctx *);
 static int      nfs_gss_svc_seqnum_valid(struct nfs_gss_svc_ctx *, uint32_t);
+
+/* This is only used by server code */
+static void     nfs_gss_nfsm_chain(struct nfsm_chain *, mbuf_t);
 #endif /* NFSSERVER */
 
 static void     host_release_special_port(mach_port_t);
@@ -166,7 +169,6 @@ static int      nfs_gss_mach_vmcopyout(vm_map_copy_t, uint32_t, u_char *);
 
 static int      nfs_gss_mchain_length(mbuf_t);
 static int      nfs_gss_append_chain(struct nfsm_chain *, mbuf_t);
-static void     nfs_gss_nfsm_chain(struct nfsm_chain *, mbuf_t);
 
 #if NFSSERVER
 thread_call_t nfs_gss_svc_ctx_timer_call;
@@ -3896,6 +3898,12 @@ nfs_gss_mach_alloc_buffer(u_char *buf, uint32_t buflen, vm_map_copy_t *addr)
 
 	tbuflen = vm_map_round_page(buflen,
 	    vm_map_page_mask(ipc_kernel_map));
+
+	if (tbuflen < buflen) {
+		printf("nfs_gss_mach_alloc_buffer: vm_map_round_page failed\n");
+		return;
+	}
+
 	kr = vm_allocate_kernel(ipc_kernel_map, &kmem_buf, tbuflen, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_FILE);
 	if (kr != 0) {
 		printf("nfs_gss_mach_alloc_buffer: vm_allocate failed\n");
@@ -4005,6 +4013,7 @@ nfs_gss_append_chain(struct nfsm_chain *nmc, mbuf_t mc)
 	return 0;
 }
 
+#if NFSSERVER /* Only used by NFSSERVER */
 /*
  * Convert an mbuf chain to an NFS mbuf chain
  */
@@ -4025,7 +4034,7 @@ nfs_gss_nfsm_chain(struct nfsm_chain *nmc, mbuf_t mc)
 	nmc->nmc_left = mbuf_trailingspace(tail);
 	nmc->nmc_flags = 0;
 }
-
+#endif /* NFSSERVER */
 
 
 #if 0

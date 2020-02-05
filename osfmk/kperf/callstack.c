@@ -44,10 +44,10 @@
 #endif
 
 static void
-callstack_fixup_user(struct callstack *cs, thread_t thread)
+callstack_fixup_user(struct kp_ucallstack *cs, thread_t thread)
 {
 	uint64_t fixup_val = 0;
-	assert(cs->nframes < MAX_CALLSTACK_FRAMES);
+	assert(cs->kpuc_nframes < MAX_UCALLSTACK_FRAMES);
 
 #if defined(__x86_64__)
 	user_addr_t sp_user;
@@ -83,7 +83,7 @@ callstack_fixup_user(struct callstack *cs, thread_t thread)
 
 	/* encode thumb mode into low bit of PC */
 	if (get_saved_state_cpsr(state) & PSR_TF) {
-		cs->frames[0] |= 1ULL;
+		cs->kpuc_frames[0] |= 1ULL;
 	}
 
 	fixup_val = get_saved_state_lr(state);
@@ -93,7 +93,7 @@ callstack_fixup_user(struct callstack *cs, thread_t thread)
 #endif
 
 out:
-	cs->frames[cs->nframes++] = fixup_val;
+	cs->kpuc_frames[cs->kpuc_nframes++] = fixup_val;
 }
 
 #if defined(__x86_64__)
@@ -186,10 +186,10 @@ interrupted_kernel_lr(uintptr_t *lr)
 
 
 static void
-callstack_fixup_interrupted(struct callstack *cs)
+callstack_fixup_interrupted(struct kp_kcallstack *cs)
 {
 	uintptr_t fixup_val = 0;
-	assert(cs->nframes < MAX_CALLSTACK_FRAMES);
+	assert(cs->kpkc_nframes < MAX_KCALLSTACK_FRAMES);
 
 	/*
 	 * Only provide arbitrary data on development or debug kernels.
@@ -202,12 +202,12 @@ callstack_fixup_interrupted(struct callstack *cs)
 #endif /* defined(__x86_64__) */
 #endif /* DEVELOPMENT || DEBUG */
 
-	assert(cs->flags & CALLSTACK_KERNEL);
-	cs->frames[cs->nframes++] = fixup_val;
+	assert(cs->kpkc_flags & CALLSTACK_KERNEL);
+	cs->kpkc_frames[cs->kpkc_nframes++] = fixup_val;
 }
 
 void
-kperf_continuation_sample(struct callstack *cs, struct kperf_context *context)
+kperf_continuation_sample(struct kp_kcallstack *cs, struct kperf_context *context)
 {
 	thread_t thread;
 
@@ -218,42 +218,46 @@ kperf_continuation_sample(struct callstack *cs, struct kperf_context *context)
 	assert(thread != NULL);
 	assert(thread->continuation != NULL);
 
-	cs->flags = CALLSTACK_CONTINUATION | CALLSTACK_VALID | CALLSTACK_KERNEL;
+	cs->kpkc_flags = CALLSTACK_CONTINUATION | CALLSTACK_VALID | CALLSTACK_KERNEL;
 #ifdef __LP64__
-	cs->flags |= CALLSTACK_64BIT;
+	cs->kpkc_flags |= CALLSTACK_64BIT;
 #endif
 
-	cs->nframes = 1;
-	cs->frames[0] = VM_KERNEL_UNSLIDE(thread->continuation);
+	cs->kpkc_nframes = 1;
+	cs->kpkc_frames[0] = VM_KERNEL_UNSLIDE(thread->continuation);
 }
 
 void
-kperf_backtrace_sample(struct callstack *cs, struct kperf_context *context)
+kperf_backtrace_sample(struct kp_kcallstack *cs, struct kperf_context *context)
 {
 	assert(cs != NULL);
 	assert(context != NULL);
 	assert(context->cur_thread == current_thread());
 
-	cs->flags = CALLSTACK_KERNEL | CALLSTACK_KERNEL_WORDS;
+	cs->kpkc_flags = CALLSTACK_KERNEL | CALLSTACK_KERNEL_WORDS;
 #ifdef __LP64__
-	cs->flags |= CALLSTACK_64BIT;
+	cs->kpkc_flags |= CALLSTACK_64BIT;
 #endif
 
 	BUF_VERB(PERF_CS_BACKTRACE | DBG_FUNC_START, 1);
 
-	cs->nframes = backtrace_frame((uintptr_t *)&(cs->frames), cs->nframes - 1,
-	    context->starting_fp);
-	if (cs->nframes > 0) {
-		cs->flags |= CALLSTACK_VALID;
+	bool trunc = false;
+	cs->kpkc_nframes = backtrace_frame(cs->kpkc_word_frames,
+	    cs->kpkc_nframes - 1, context->starting_fp, &trunc);
+	if (cs->kpkc_nframes > 0) {
+		cs->kpkc_flags |= CALLSTACK_VALID;
 		/*
 		 * Fake the value pointed to by the stack pointer or the link
 		 * register for symbolicators.
 		 */
-		cs->frames[cs->nframes + 1] = 0;
-		cs->nframes += 1;
+		cs->kpkc_word_frames[cs->kpkc_nframes + 1] = 0;
+		cs->kpkc_nframes += 1;
+	}
+	if (trunc) {
+		cs->kpkc_nframes |= CALLSTACK_TRUNCATED;
 	}
 
-	BUF_VERB(PERF_CS_BACKTRACE | DBG_FUNC_END, cs->nframes);
+	BUF_VERB(PERF_CS_BACKTRACE | DBG_FUNC_END, cs->kpkc_nframes);
 }
 
 kern_return_t chudxnu_thread_get_callstack64_kperf(thread_t thread,
@@ -261,33 +265,36 @@ kern_return_t chudxnu_thread_get_callstack64_kperf(thread_t thread,
     boolean_t user_only);
 
 void
-kperf_kcallstack_sample(struct callstack *cs, struct kperf_context *context)
+kperf_kcallstack_sample(struct kp_kcallstack *cs, struct kperf_context *context)
 {
 	thread_t thread;
 
 	assert(cs != NULL);
 	assert(context != NULL);
-	assert(cs->nframes <= MAX_CALLSTACK_FRAMES);
+	assert(cs->kpkc_nframes <= MAX_KCALLSTACK_FRAMES);
 
 	thread = context->cur_thread;
 	assert(thread != NULL);
 
 	BUF_INFO(PERF_CS_KSAMPLE | DBG_FUNC_START, (uintptr_t)thread_tid(thread),
-	    cs->nframes);
+	    cs->kpkc_nframes);
 
-	cs->flags = CALLSTACK_KERNEL;
-
+	cs->kpkc_flags = CALLSTACK_KERNEL;
 #ifdef __LP64__
-	cs->flags |= CALLSTACK_64BIT;
+	cs->kpkc_flags |= CALLSTACK_64BIT;
 #endif
 
 	if (ml_at_interrupt_context()) {
 		assert(thread == current_thread());
-		cs->flags |= CALLSTACK_KERNEL_WORDS;
-		cs->nframes = backtrace_interrupted((uintptr_t *)cs->frames,
-		    cs->nframes - 1);
-		if (cs->nframes != 0) {
+		cs->kpkc_flags |= CALLSTACK_KERNEL_WORDS;
+		bool trunc = false;
+		cs->kpkc_nframes = backtrace_interrupted(
+		    cs->kpkc_word_frames, cs->kpkc_nframes - 1, &trunc);
+		if (cs->kpkc_nframes != 0) {
 			callstack_fixup_interrupted(cs);
+		}
+		if (trunc) {
+			cs->kpkc_flags |= CALLSTACK_TRUNCATED;
 		}
 	} else {
 		/*
@@ -295,62 +302,59 @@ kperf_kcallstack_sample(struct callstack *cs, struct kperf_context *context)
 		 * other threads.
 		 */
 		kern_return_t kr;
-		kr = chudxnu_thread_get_callstack64_kperf(thread, cs->frames,
-		    &cs->nframes, FALSE);
+		kr = chudxnu_thread_get_callstack64_kperf(thread,
+		    cs->kpkc_frames, &cs->kpkc_nframes, FALSE);
 		if (kr == KERN_SUCCESS) {
-			cs->flags |= CALLSTACK_VALID;
+			cs->kpkc_flags |= CALLSTACK_VALID;
 		} else if (kr == KERN_RESOURCE_SHORTAGE) {
-			cs->flags |= CALLSTACK_VALID;
-			cs->flags |= CALLSTACK_TRUNCATED;
+			cs->kpkc_flags |= CALLSTACK_VALID;
+			cs->kpkc_flags |= CALLSTACK_TRUNCATED;
 		} else {
-			cs->nframes = 0;
+			cs->kpkc_nframes = 0;
 		}
 	}
 
-	if (cs->nframes == 0) {
+	if (!(cs->kpkc_flags & CALLSTACK_VALID)) {
 		BUF_INFO(PERF_CS_ERROR, ERR_GETSTACK);
 	}
 
-	BUF_INFO(PERF_CS_KSAMPLE | DBG_FUNC_END, (uintptr_t)thread_tid(thread), cs->flags, cs->nframes);
+	BUF_INFO(PERF_CS_KSAMPLE | DBG_FUNC_END, (uintptr_t)thread_tid(thread),
+	    cs->kpkc_flags, cs->kpkc_nframes);
 }
 
 void
-kperf_ucallstack_sample(struct callstack *cs, struct kperf_context *context)
+kperf_ucallstack_sample(struct kp_ucallstack *cs, struct kperf_context *context)
 {
-	thread_t thread;
-	bool user_64 = false;
-	int err;
-
-	assert(cs != NULL);
-	assert(context != NULL);
-	assert(cs->nframes <= MAX_CALLSTACK_FRAMES);
 	assert(ml_get_interrupts_enabled() == TRUE);
 
-	thread = context->cur_thread;
+	thread_t thread = context->cur_thread;
 	assert(thread != NULL);
 
-	BUF_INFO(PERF_CS_USAMPLE | DBG_FUNC_START, (uintptr_t)thread_tid(thread),
-	    cs->nframes);
+	BUF_INFO(PERF_CS_USAMPLE | DBG_FUNC_START,
+	    (uintptr_t)thread_tid(thread), cs->kpuc_nframes);
 
-	cs->flags = 0;
-
-	err = backtrace_thread_user(thread, (uintptr_t *)cs->frames,
-	    cs->nframes - 1, &cs->nframes, &user_64);
-	cs->flags |= CALLSTACK_KERNEL_WORDS;
-	if (user_64) {
-		cs->flags |= CALLSTACK_64BIT;
+	bool user64 = false;
+	bool trunc = false;
+	int err = backtrace_thread_user(thread, cs->kpuc_frames,
+	    cs->kpuc_nframes - 1, &cs->kpuc_nframes, &user64, &trunc);
+	cs->kpuc_flags = CALLSTACK_KERNEL_WORDS;
+	if (user64) {
+		cs->kpuc_flags |= CALLSTACK_64BIT;
+	}
+	if (trunc) {
+		cs->kpuc_flags |= CALLSTACK_TRUNCATED;
 	}
 
 	if (!err || err == EFAULT) {
 		callstack_fixup_user(cs, thread);
-		cs->flags |= CALLSTACK_VALID;
+		cs->kpuc_flags |= CALLSTACK_VALID;
 	} else {
-		cs->nframes = 0;
+		cs->kpuc_nframes = 0;
 		BUF_INFO(PERF_CS_ERROR, ERR_GETSTACK, err);
 	}
 
 	BUF_INFO(PERF_CS_USAMPLE | DBG_FUNC_END, (uintptr_t)thread_tid(thread),
-	    cs->flags, cs->nframes);
+	    cs->kpuc_flags, cs->kpuc_nframes);
 }
 
 static inline uintptr_t
@@ -378,38 +382,36 @@ scrub_frame(uint64_t *bt, int n_frames, int frame)
 }
 
 static void
-callstack_log(struct callstack *cs, uint32_t hcode, uint32_t dcode)
+callstack_log(uint32_t hdrid, uint32_t dataid, void *vframes,
+    unsigned int nframes, unsigned int flags)
 {
-	BUF_VERB(PERF_CS_LOG | DBG_FUNC_START, cs->flags, cs->nframes);
+	BUF_VERB(PERF_CS_LOG | DBG_FUNC_START, flags, nframes);
 
-	/* framing information for the stack */
-	BUF_DATA(hcode, cs->flags, cs->nframes);
+	BUF_DATA(hdrid, flags, nframes);
 
-	/* how many batches of 4 */
-	unsigned int nframes = cs->nframes;
-	unsigned int n = nframes / 4;
+	unsigned int nevts = nframes / 4;
 	unsigned int ovf = nframes % 4;
 	if (ovf != 0) {
-		n++;
+		nevts++;
 	}
 
-	bool kern = cs->flags & CALLSTACK_KERNEL;
+	bool kern = flags & CALLSTACK_KERNEL;
 
-	if (cs->flags & CALLSTACK_KERNEL_WORDS) {
-		uintptr_t *frames = (uintptr_t *)cs->frames;
-		for (unsigned int i = 0; i < n; i++) {
+	if (flags & CALLSTACK_KERNEL_WORDS) {
+		uintptr_t *frames = vframes;
+		for (unsigned int i = 0; i < nevts; i++) {
 			unsigned int j = i * 4;
-			BUF_DATA(dcode,
+			BUF_DATA(dataid,
 			    scrub_word(frames, nframes, j + 0, kern),
 			    scrub_word(frames, nframes, j + 1, kern),
 			    scrub_word(frames, nframes, j + 2, kern),
 			    scrub_word(frames, nframes, j + 3, kern));
 		}
 	} else {
-		for (unsigned int i = 0; i < n; i++) {
-			uint64_t *frames = cs->frames;
+		for (unsigned int i = 0; i < nevts; i++) {
+			uint64_t *frames = vframes;
 			unsigned int j = i * 4;
-			BUF_DATA(dcode,
+			BUF_DATA(dataid,
 			    scrub_frame(frames, nframes, j + 0),
 			    scrub_frame(frames, nframes, j + 1),
 			    scrub_frame(frames, nframes, j + 2),
@@ -417,19 +419,21 @@ callstack_log(struct callstack *cs, uint32_t hcode, uint32_t dcode)
 		}
 	}
 
-	BUF_VERB(PERF_CS_LOG | DBG_FUNC_END, cs->flags, cs->nframes);
+	BUF_VERB(PERF_CS_LOG | DBG_FUNC_END, flags, nframes);
 }
 
 void
-kperf_kcallstack_log( struct callstack *cs )
+kperf_kcallstack_log(struct kp_kcallstack *cs)
 {
-	callstack_log(cs, PERF_CS_KHDR, PERF_CS_KDATA);
+	callstack_log(PERF_CS_KHDR, PERF_CS_KDATA, cs->kpkc_frames,
+	    cs->kpkc_nframes, cs->kpkc_flags);
 }
 
 void
-kperf_ucallstack_log( struct callstack *cs )
+kperf_ucallstack_log(struct kp_ucallstack *cs)
 {
-	callstack_log(cs, PERF_CS_UHDR, PERF_CS_UDATA);
+	callstack_log(PERF_CS_UHDR, PERF_CS_UDATA, cs->kpuc_frames,
+	    cs->kpuc_nframes, cs->kpuc_flags);
 }
 
 int
@@ -662,6 +666,9 @@ chudxnu_thread_get_callstack64_kperf(
 }
 #elif __arm64__
 
+#if defined(HAS_APPLE_PAC)
+#include <ptrauth.h>
+#endif
 
 // chudxnu_thread_get_callstack gathers a raw callstack along with any information needed to
 // fix it up later (in case we stopped program as it was saving values into prev stack frame, etc.)
@@ -789,7 +796,12 @@ chudxnu_thread_get_callstack64_internal(
 					    (vm_offset_t)fp,
 					    (vm_size_t)sizeof(frame));
 					if (kr == KERN_SUCCESS) {
+#if defined(HAS_APPLE_PAC)
+						/* return addresses on stack will be signed by arm64e ABI */
+						pc = (uint64_t)ptrauth_strip((void *)frame[1], ptrauth_key_return_address);
+#else
 						pc = frame[1];
+#endif
 						nextFramePointer = (uint64_t *)frame[0];
 					} else {
 						pc = 0ULL;
@@ -803,7 +815,12 @@ chudxnu_thread_get_callstack64_internal(
 				    (vm_offset_t)fp,
 				    (vm_size_t)sizeof(frame));
 				if (kr == KERN_SUCCESS) {
+#if defined(HAS_APPLE_PAC)
+					/* return addresses on stack will be signed by arm64e ABI */
+					pc = (uint64_t)ptrauth_strip((void *)frame[1], ptrauth_key_return_address);
+#else
 					pc = frame[1];
+#endif
 					nextFramePointer = (uint64_t *)(frame[0]);
 				} else {
 					pc = 0ULL;

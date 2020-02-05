@@ -53,7 +53,7 @@ IOSubMemoryDescriptor::withSubRange(IOMemoryDescriptor *        of,
 
 	if (self && !self->initSubRange(of, offset, length, (IODirection) options)) {
 		self->release();
-		self = 0;
+		self = NULL;
 	}
 	return self;
 }
@@ -152,6 +152,22 @@ IOSubMemoryDescriptor::setPurgeable( IOOptionBits newState,
 }
 
 IOReturn
+IOSubMemoryDescriptor::setOwnership( task_t newOwner,
+    int newLedgerTag,
+    IOOptionBits newLedgerOptions )
+{
+	IOReturn err;
+
+	if (iokit_iomd_setownership_enabled == FALSE) {
+		return kIOReturnUnsupported;
+	}
+
+	err = _parent->setOwnership( newOwner, newLedgerTag, newLedgerOptions );
+
+	return err;
+}
+
+IOReturn
 IOSubMemoryDescriptor::prepare(
 	IODirection forDirection)
 {
@@ -182,7 +198,7 @@ IOSubMemoryDescriptor::makeMapping(
 	IOByteCount             offset,
 	IOByteCount             length )
 {
-	IOMemoryMap * mapping = 0;
+	IOMemoryMap * mapping = NULL;
 
 #ifndef __LP64__
 	if (!(kIOMap64Bit & options)) {

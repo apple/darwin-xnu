@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -282,6 +282,8 @@ int sysctl_io_opaque(struct sysctl_req *req, void *pValue, size_t valueSize, int
 void sysctl_register_oid(struct sysctl_oid *oidp);
 void sysctl_unregister_oid(struct sysctl_oid *oidp);
 
+void sysctl_load_devicetree_entries(void);
+
 /* Deprecated */
 void sysctl_register_fixed(void) __deprecated;
 
@@ -327,7 +329,7 @@ __END_DECLS
 /* This constructs a "raw" MIB oid. */
 #define SYSCTL_STRUCT_INIT(parent, nbr, name, kind, a1, a2, handler, fmt, descr) \
 	{                                                                                               \
-	        &sysctl_##parent##_children, { 0 },                     \
+	        &sysctl_##parent##_children, { NULL },                  \
 	        nbr, (int)(kind|CTLFLAG_OID2), a1, (int)(a2), #name, handler, fmt, descr, SYSCTL_OID_VERSION, 0 \
 	}
 
@@ -340,7 +342,7 @@ __END_DECLS
 	struct sysctl_oid_list sysctl_##parent##_##name##_children;         \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_NODE|access,                  \
 	           (void*)&sysctl_##parent##_##name##_children, 0, handler, \
-	           "N", descr);
+	           "N", descr)
 
 /* Oid for a string.  len can be 0 to indicate '\0' termination. */
 #define SYSCTL_STRING(parent, nbr, name, access, arg, len, descr) \
@@ -359,31 +361,31 @@ __END_DECLS
 #define SYSCTL_INT(parent, nbr, name, access, ptr, val, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
 	       ptr, val, sysctl_handle_int, "I", descr); \
-	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(int)) ? 0 : -1];
+	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(int)) ? 0 : -1]
 
 /* Oid for an unsigned int.  If ptr is NULL, val is returned. */
 #define SYSCTL_UINT(parent, nbr, name, access, ptr, val, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
 	        ptr, val, sysctl_handle_int, "IU", descr); \
-	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(unsigned int)) ? 0 : -1];
+	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(unsigned int)) ? 0 : -1]
 
 /* Oid for a long.  The pointer must be non NULL. */
 #define SYSCTL_LONG(parent, nbr, name, access, ptr, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
 	        ptr, 0, sysctl_handle_long, "L", descr); \
-	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(long)) ? 0 : -1];
+	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(long)) ? 0 : -1]
 
 /* Oid for a unsigned long.  The pointer must be non NULL. */
 #define SYSCTL_ULONG(parent, nbr, name, access, ptr, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_INT|access, \
 	        ptr, 0, sysctl_handle_long, "LU", descr); \
-	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(unsigned long)) ? 0 : -1];
+	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(unsigned long)) ? 0 : -1]
 
 /* Oid for a quad.  The pointer must be non NULL. */
 #define SYSCTL_QUAD(parent, nbr, name, access, ptr, descr) \
 	SYSCTL_OID(parent, nbr, name, CTLTYPE_QUAD|access, \
 	        ptr, 0, sysctl_handle_quad, "Q", descr); \
-	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(long long)) ? 0 : -1];
+	typedef char _sysctl_##parent##_##name##_size_check[(__builtin_constant_p(ptr) || sizeof(*(ptr)) == sizeof(long long)) ? 0 : -1]
 
 /* Oid for an opaque object.  Specified by a pointer and a length. */
 #define SYSCTL_OPAQUE(parent, nbr, name, access, ptr, len, fmt, descr) \
@@ -522,7 +524,7 @@ SYSCTL_DECL(_hw_features);
 #define KERN_LOGSIGEXIT 36      /* int: do we log sigexit procs? */
 #define KERN_SYMFILE            37      /* string: kernel symbol filename */
 #define KERN_PROCARGS           38
-/* 39 was KERN_PCSAMPLES... now deprecated */
+/* 39 was KERN_PCSAMPLES... now obsolete */
 #define KERN_NETBOOT            40      /* int: are we netbooted? 1=yes,0=no */
 /* 41 was KERN_PANICINFO : panic UI information (deprecated) */
 #define KERN_SYSV               42      /* node: System V IPC information */
@@ -716,6 +718,12 @@ SYSCTL_DECL(_hw_features);
 #define KERN_PROC_UID           5       /* by effective uid */
 #define KERN_PROC_RUID          6       /* by real uid */
 #define KERN_PROC_LCID          7       /* by login context id */
+
+/*
+ * KERN_VFSNSPACE subtypes
+ */
+#define KERN_VFSNSPACE_HANDLE_PROC              1
+#define KERN_VFSNSPACE_UNHANDLE_PROC    2
 
 #if defined(XNU_KERNEL_PRIVATE) || !defined(KERNEL)
 /*

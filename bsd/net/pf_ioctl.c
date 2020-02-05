@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -80,6 +80,7 @@
 #include <sys/conf.h>
 #include <sys/mcache.h>
 #include <sys/queue.h>
+#include <os/log.h>
 
 #include <mach/vm_param.h>
 
@@ -189,20 +190,20 @@ static void pf_deleterule_anchor_step_out(struct pf_ruleset **,
 #define PF_CDEV_MAJOR   (-1)
 
 static struct cdevsw pf_cdevsw = {
-	/* open */ pfopen,
-	/* close */ pfclose,
-	/* read */ eno_rdwrt,
-	/* write */ eno_rdwrt,
-	/* ioctl */ pfioctl,
-	/* stop */ eno_stop,
-	/* reset */ eno_reset,
-	/* tty */ NULL,
-	/* select */ eno_select,
-	/* mmap */ eno_mmap,
-	/* strategy */ eno_strat,
-	/* getc */ eno_getc,
-	/* putc */ eno_putc,
-	/* type */ 0
+	.d_open       = pfopen,
+	.d_close      = pfclose,
+	.d_read       = eno_rdwrt,
+	.d_write      = eno_rdwrt,
+	.d_ioctl      = pfioctl,
+	.d_stop       = eno_stop,
+	.d_reset      = eno_reset,
+	.d_ttys       = NULL,
+	.d_select     = eno_select,
+	.d_mmap       = eno_mmap,
+	.d_strategy   = eno_strat,
+	.d_reserved_1 = eno_getc,
+	.d_reserved_2 = eno_putc,
+	.d_type       = 0
 };
 
 static void pf_attach_hooks(void);
@@ -224,6 +225,8 @@ int16_t pf_nat64_configured = 0;
 /*
  * These are the pf enabled reference counting variables
  */
+#define NR_TOKENS_LIMIT (INT_MAX / sizeof(struct pfioc_token))
+
 static u_int64_t pf_enabled_ref_count;
 static u_int32_t nr_tokens = 0;
 static u_int64_t pffwrules;
@@ -344,6 +347,11 @@ generate_token(struct proc *p)
 	u_int64_t token_value;
 	struct pfioc_kernel_token *new_token;
 
+	if (nr_tokens + 1 > NR_TOKENS_LIMIT) {
+		os_log_error(OS_LOG_DEFAULT, "%s: NR_TOKENS_LIMIT reached", __func__);
+		return 0;
+	}
+
 	new_token = _MALLOC(sizeof(struct pfioc_kernel_token), M_TEMP,
 	    M_WAITOK | M_ZERO);
 
@@ -351,7 +359,7 @@ generate_token(struct proc *p)
 
 	if (new_token == NULL) {
 		/* malloc failed! bail! */
-		printf("%s: unable to allocate pf token structure!", __func__);
+		os_log_error(OS_LOG_DEFAULT, "%s: unable to allocate pf token structure!", __func__);
 		return 0;
 	}
 
@@ -2292,6 +2300,11 @@ pfioctl_ioc_tokens(u_long cmd, struct pfioc_tokens_32 *tok32,
 		}
 
 		size = sizeof(struct pfioc_token) * nr_tokens;
+		if (size / nr_tokens != sizeof(struct pfioc_token)) {
+			os_log_error(OS_LOG_DEFAULT, "%s: size overflows", __func__);
+			error = ERANGE;
+			break;
+		}
 		ocnt = cnt = (p64 ? tok64->size : tok32->size);
 		if (cnt == 0) {
 			if (p64) {

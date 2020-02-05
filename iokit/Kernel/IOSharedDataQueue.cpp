@@ -50,7 +50,7 @@ IOSharedDataQueue *IOSharedDataQueue::withCapacity(UInt32 size)
 	if (dataQueue) {
 		if (!dataQueue->initWithCapacity(size)) {
 			dataQueue->release();
-			dataQueue = 0;
+			dataQueue = NULL;
 		}
 	}
 
@@ -65,7 +65,7 @@ IOSharedDataQueue::withEntries(UInt32 numEntries, UInt32 entrySize)
 	if (dataQueue) {
 		if (!dataQueue->initWithEntries(numEntries, entrySize)) {
 			dataQueue->release();
-			dataQueue = 0;
+			dataQueue = NULL;
 		}
 	}
 
@@ -98,7 +98,7 @@ IOSharedDataQueue::initWithCapacity(UInt32 size)
 	}
 
 	dataQueue = (IODataQueueMemory *)IOMallocAligned(allocSize, PAGE_SIZE);
-	if (dataQueue == 0) {
+	if (dataQueue == NULL) {
 		return false;
 	}
 	bzero(dataQueue, allocSize);
@@ -150,9 +150,9 @@ IOSharedDataQueue::free()
 IOMemoryDescriptor *
 IOSharedDataQueue::getMemoryDescriptor()
 {
-	IOMemoryDescriptor *descriptor = 0;
+	IOMemoryDescriptor *descriptor = NULL;
 
-	if (dataQueue != 0) {
+	if (dataQueue != NULL) {
 		descriptor = IOMemoryDescriptor::withAddress(dataQueue, getQueueSize() + DATA_QUEUE_MEMORY_HEADER_SIZE + DATA_QUEUE_MEMORY_APPENDIX_SIZE, kIODirectionOutIn);
 	}
 
@@ -163,7 +163,7 @@ IOSharedDataQueue::getMemoryDescriptor()
 IODataQueueEntry *
 IOSharedDataQueue::peek()
 {
-	IODataQueueEntry *entry      = 0;
+	IODataQueueEntry *entry      = NULL;
 	UInt32            headOffset;
 	UInt32            tailOffset;
 
@@ -177,7 +177,7 @@ IOSharedDataQueue::peek()
 	tailOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->tail, __ATOMIC_ACQUIRE);
 
 	if (headOffset != tailOffset) {
-		volatile IODataQueueEntry * head = 0;
+		volatile IODataQueueEntry * head = NULL;
 		UInt32              headSize     = 0;
 		UInt32              headOffset   = dataQueue->head;
 		UInt32              queueSize    = getQueueSize();
@@ -239,7 +239,7 @@ IOSharedDataQueue::enqueue(void * data, UInt32 dataSize)
 			entry = (IODataQueueEntry *)((UInt8 *)dataQueue->queue + tail);
 
 			entry->size = dataSize;
-			memcpy(&entry->data, data, dataSize);
+			__nochk_memcpy(&entry->data, data, dataSize);
 
 			// The tail can be out of bound when the size of the new entry
 			// exactly matches the available space at the end of the queue.
@@ -260,7 +260,7 @@ IOSharedDataQueue::enqueue(void * data, UInt32 dataSize)
 				((IODataQueueEntry *)((UInt8 *)dataQueue->queue + tail))->size = dataSize;
 			}
 
-			memcpy(&dataQueue->queue->data, data, dataSize);
+			__nochk_memcpy(&dataQueue->queue->data, data, dataSize);
 			newTail = entrySize;
 		} else {
 			return false; // queue is full
@@ -273,7 +273,7 @@ IOSharedDataQueue::enqueue(void * data, UInt32 dataSize)
 			entry = (IODataQueueEntry *)((UInt8 *)dataQueue->queue + tail);
 
 			entry->size = dataSize;
-			memcpy(&entry->data, data, dataSize);
+			__nochk_memcpy(&entry->data, data, dataSize);
 			newTail = tail + entrySize;
 		} else {
 			return false; // queue is full
@@ -308,7 +308,7 @@ Boolean
 IOSharedDataQueue::dequeue(void *data, UInt32 *dataSize)
 {
 	Boolean             retVal          = TRUE;
-	volatile IODataQueueEntry * entry   = 0;
+	volatile IODataQueueEntry *  entry  = NULL;
 	UInt32              entrySize       = 0;
 	UInt32              headOffset      = 0;
 	UInt32              tailOffset      = 0;
@@ -324,7 +324,7 @@ IOSharedDataQueue::dequeue(void *data, UInt32 *dataSize)
 	tailOffset = __c11_atomic_load((_Atomic UInt32 *)&dataQueue->tail, __ATOMIC_ACQUIRE);
 
 	if (headOffset != tailOffset) {
-		volatile IODataQueueEntry * head = 0;
+		volatile IODataQueueEntry * head = NULL;
 		UInt32              headSize     = 0;
 		UInt32              queueSize    = getQueueSize();
 
@@ -372,7 +372,7 @@ IOSharedDataQueue::dequeue(void *data, UInt32 *dataSize)
 			// not enough space
 			return false;
 		}
-		memcpy(data, (void *)entry->data, entrySize);
+		__nochk_memcpy(data, (void *)entry->data, entrySize);
 		*dataSize = entrySize;
 	}
 

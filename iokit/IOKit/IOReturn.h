@@ -40,7 +40,40 @@
 extern "C" {
 #endif
 
+#ifndef PLATFORM_DriverKit
+
 #include <mach/error.h>
+
+#else  /* PLATFORM_DriverKit */
+
+typedef int             kern_return_t;
+
+#define KERN_SUCCESS                    0
+
+/*
+ *	error number layout as follows:
+ *
+ *	hi		                       lo
+ *	| system(6) | subsystem(12) | code(14) |
+ */
+
+#define err_none                (kern_return_t)0
+#define ERR_SUCCESS             (kern_return_t)0
+
+#define err_system(x)           ((signed)((((unsigned)(x))&0x3f)<<26))
+#define err_sub(x)              (((x)&0xfff)<<14)
+
+#define err_get_system(err)     (((err)>>26)&0x3f)
+#define err_get_sub(err)        (((err)>>14)&0xfff)
+#define err_get_code(err)       ((err)&0x3fff)
+
+#define err_max_system          0x3f
+
+#define system_emask            (err_system(err_max_system))
+#define sub_emask               (err_sub(0xfff))
+#define code_emask              (0x3fff)
+
+#endif /* PLATFORM_DriverKit */
 
 typedef kern_return_t           IOReturn;
 
@@ -73,6 +106,10 @@ typedef kern_return_t           IOReturn;
 #ifdef PRIVATE
 #define sub_iokit_smc                     err_sub(32)
 #endif
+#define sub_iokit_apfs                    err_sub(33)
+#define sub_iokit_acpiec                  err_sub(34)
+#define sub_iokit_timesync_avb            err_sub(35)
+
 #define sub_iokit_platform                err_sub(0x2A)
 #define sub_iokit_audio_video             err_sub(0x45)
 #define sub_iokit_cec                     err_sub(0x46)

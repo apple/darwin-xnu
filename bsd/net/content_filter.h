@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2013-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -31,6 +31,7 @@
 #include <sys/syslog.h>
 #include <netinet/in.h>
 #include <stdint.h>
+#include <corecrypto/ccsha2.h>
 
 #ifdef BSD_KERNEL_PRIVATE
 #include <sys/mbuf.h>
@@ -91,7 +92,42 @@ struct cfil_opt_sock_info {
 /*
  * How many filter may be active simultaneously
  */
+#if !TARGET_OS_OSX && !defined(XNU_TARGET_OS_OSX)
 #define CFIL_MAX_FILTER_COUNT   2
+#else
+#define CFIL_MAX_FILTER_COUNT   8
+#endif
+
+
+/*
+ * Crypto Support
+ */
+#define CFIL_CRYPTO 1
+#define CFIL_CRYPTO_SIGNATURE_SIZE 32
+#define CFIL_CRYPTO_DATA_EVENT 1
+
+typedef uint8_t cfil_crypto_key[CCSHA256_OUTPUT_SIZE];
+typedef uint8_t cfil_crypto_signature[CFIL_CRYPTO_SIGNATURE_SIZE];
+
+typedef struct cfil_crypto_state {
+	const struct ccdigest_info *digest_info;
+	cfil_crypto_key key;
+} *cfil_crypto_state_t;
+
+typedef struct cfil_crypto_data {
+	uuid_t flow_id;
+	u_int64_t sock_id;
+	u_int32_t direction;
+	union sockaddr_in_4_6 remote;
+	union sockaddr_in_4_6 local;
+	u_int32_t socketProtocol;
+	pid_t pid;
+	pid_t effective_pid;
+	uuid_t uuid;
+	uuid_t effective_uuid;
+	u_int64_t byte_count_in;
+	u_int64_t byte_count_out;
+} *cfil_crypto_data_t;
 
 /*
  * Types of messages
@@ -120,6 +156,7 @@ struct cfil_opt_sock_info {
 #define CFM_OP_DATA_UPDATE 16           /* update pass or peek offsets */
 #define CFM_OP_DROP 17                  /* shutdown socket, no more data */
 #define CFM_OP_BLESS_CLIENT 18          /* mark a client flow as already filtered, passes a uuid */
+#define CFM_OP_SET_CRYPTO_KEY 19        /* assign client crypto key for message signing */
 
 /*
  * struct cfil_msg_hdr
@@ -135,6 +172,14 @@ struct cfil_msg_hdr {
 };
 
 #define CFM_VERSION_CURRENT 1
+
+/*
+ * Connection Direction
+ */
+#define CFS_CONNECTION_DIR_IN  0
+#define CFS_CONNECTION_DIR_OUT 1
+
+#define CFS_AUDIT_TOKEN            1
 
 /*
  * struct cfil_msg_sock_attached
@@ -158,6 +203,12 @@ struct cfil_msg_sock_attached {
 	pid_t                   cfs_e_pid;
 	uuid_t                  cfs_uuid;
 	uuid_t                  cfs_e_uuid;
+	union sockaddr_in_4_6   cfs_src;
+	union sockaddr_in_4_6   cfs_dst;
+	int                     cfs_conn_dir;
+	unsigned int            cfs_audit_token[8];             /* Must match audit_token_t */
+	cfil_crypto_signature   cfs_signature;
+	uint32_t                cfs_signature_length;
 };
 
 /*
@@ -181,6 +232,8 @@ struct cfil_msg_data_event {
 	union sockaddr_in_4_6   cfc_dst;
 	uint64_t                cfd_start_offset;
 	uint64_t                cfd_end_offset;
+	cfil_crypto_signature   cfd_signature;
+	uint32_t                cfd_signature_length;
 	/* Actual content data immediatly follows */
 };
 
@@ -203,6 +256,10 @@ struct cfil_msg_sock_closed {
 	uint32_t                cfc_op_list_ctr;
 	uint32_t                cfc_op_time[CFI_MAX_TIME_LOG_ENTRY];    /* time interval in microseconds since first event */
 	unsigned char           cfc_op_list[CFI_MAX_TIME_LOG_ENTRY];
+	uint64_t                cfc_byte_inbound_count;
+	uint64_t                cfc_byte_outbound_count;
+	cfil_crypto_signature   cfc_signature;
+	uint32_t                cfc_signature_length;
 } __attribute__((aligned(8)));
 
 /*
@@ -242,6 +299,20 @@ struct cfil_msg_action {
 struct cfil_msg_bless_client {
 	struct cfil_msg_hdr     cfb_msghdr;
 	uuid_t cfb_client_uuid;
+};
+
+/*
+ * struct cfil_msg_set_crypto_key
+ *
+ * Filter assigning client crypto key to CFIL for message signing
+ *
+ * Valid Type: CFM_TYPE_ACTION
+ *
+ * Valid Ops: CFM_OP_SET_CRYPTO_KEY
+ */
+struct cfil_msg_set_crypto_key {
+	struct cfil_msg_hdr     cfb_msghdr;
+	cfil_crypto_key         crypto_key;
 };
 
 #define CFM_MAX_OFFSET  UINT64_MAX
@@ -400,7 +471,10 @@ do { \
 
 extern void cfil_init(void);
 
-extern errno_t cfil_sock_attach(struct socket *so);
+extern boolean_t cfil_filter_present(void);
+extern boolean_t cfil_sock_connected_pending_verdict(struct socket *so);
+extern errno_t cfil_sock_attach(struct socket *so,
+    struct sockaddr *local, struct sockaddr *remote, int dir);
 extern errno_t cfil_sock_detach(struct socket *so);
 
 extern int cfil_sock_data_out(struct socket *so, struct sockaddr  *to,

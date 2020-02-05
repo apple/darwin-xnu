@@ -69,6 +69,8 @@ typedef enum {
 #define kDbgIdAstrisConnection          DEBUG_RECORD_ID_LONG('A','S','T','R','C','N','X','N')
 #define kDbgIdAstrisConnectionVers      DEBUG_RECORD_ID_LONG('A','S','T','R','C','V','E','R')
 
+#define kDbgIdMacOSPanicRegion          DEBUG_RECORD_ID_LONG('M','A','C','P','A','N','I','C')
+
 #define kDbgIdUnusedEntry       0x0ULL
 #define kDbgIdReservedEntry     DEBUG_RECORD_ID_LONG('R','E','S','E','R','V','E', 'D')
 #define kDbgIdFreeReqEntry      DEBUG_RECORD_ID_LONG('F','R','E','E','-','R','E','Q')
@@ -125,6 +127,12 @@ int PE_consistent_debug_inherit(void);
  * Register a region in the consistent debug structure
  */
 int PE_consistent_debug_register(uint64_t record_id, uint64_t physaddr, uint64_t length);
+
+/*
+ * Lookup an exidting entry from the consistent debug structure, populate the attributes
+ * if it exists.
+ */
+boolean_t PE_consistent_debug_lookup_entry(uint64_t record_id, uint64_t *phys_addr, uint64_t *length);
 
 /*
  * Returns whether consistent debug is enabled on the current device.

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -80,7 +80,6 @@
 #include <kern/kern_types.h>
 #include <kern/assert.h>
 #include <kern/queue.h>
-#include <kern/xpr.h>
 #include <kern/kalloc.h>
 #include <kern/zalloc.h>
 #include <kern/host.h>
@@ -353,10 +352,6 @@ _vm_object_allocate(
 	vm_object_size_t        size,
 	vm_object_t             object)
 {
-	XPR(XPR_VM_OBJECT,
-	    "vm_object_allocate, object 0x%X size 0x%X\n",
-	    object, size, 0, 0, 0);
-
 	*object = vm_object_template;
 	vm_page_queue_init(&object->memq);
 #if UPL_DEBUG || CONFIG_IOSCHED
@@ -539,8 +534,8 @@ vm_object_bootstrap(void)
 	vm_object_template.volatile_fault = FALSE;
 	vm_object_template.all_reusable = FALSE;
 	vm_object_template.blocked_access = FALSE;
-	vm_object_template.vo_ledger_tag = VM_OBJECT_LEDGER_TAG_NONE;
-	vm_object_template.__object2_unused_bits = 0;
+	vm_object_template.vo_ledger_tag = VM_LEDGER_TAG_NONE;
+	vm_object_template.vo_no_footprint = FALSE;
 #if CONFIG_IOSCHED || UPL_DEBUG
 	vm_object_template.uplq.prev = NULL;
 	vm_object_template.uplq.next = NULL;
@@ -650,6 +645,7 @@ vm_io_reprioritize_init(void)
 
 	result = kernel_thread_start_priority(io_reprioritize_thread, NULL, 95 /* MAXPRI_KERNEL */, &thread);
 	if (result == KERN_SUCCESS) {
+		thread_set_thread_name(thread, "VM_io_reprioritize_thread");
 		thread_deallocate(thread);
 	} else {
 		panic("Could not create io_reprioritize_thread");
@@ -671,6 +667,7 @@ vm_object_reaper_init(void)
 	if (kr != KERN_SUCCESS) {
 		panic("failed to launch vm_object_reaper_thread kr=0x%x", kr);
 	}
+	thread_set_thread_name(thread, "VM_object_reaper_thread");
 	thread_deallocate(thread);
 }
 
@@ -908,12 +905,6 @@ vm_object_deallocate(
 			thread_block(THREAD_CONTINUE_NULL);
 			continue;
 		}
-
-		XPR(XPR_VM_OBJECT,
-		    "vm_o_deallocate: 0x%X res %d paging_ops %d thread 0x%p ref %d\n",
-		    object, object->resident_page_count,
-		    object->paging_in_progress,
-		    (void *)current_thread(), object->ref_count);
 
 		VM_OBJ_RES_DECR(object);        /* XXX ? */
 		/*
@@ -1333,9 +1324,6 @@ vm_object_terminate(
 {
 	vm_object_t     shadow_object;
 
-	XPR(XPR_VM_OBJECT, "vm_object_terminate, object 0x%X ref %d\n",
-	    object, object->ref_count, 0, 0, 0);
-
 	vm_object_lock_assert_exclusive(object);
 
 	if (!object->pageout && (!object->internal && object->can_persist) &&
@@ -1484,12 +1472,21 @@ vm_object_reap(
 	if (object->internal &&
 	    (object->purgable != VM_PURGABLE_DENY ||
 	    object->vo_ledger_tag)) {
+		int ledger_flags;
+		kern_return_t kr;
+
+		ledger_flags = 0;
+		if (object->vo_no_footprint) {
+			ledger_flags |= VM_LEDGER_FLAG_NO_FOOTPRINT;
+		}
 		assert(!object->alive);
 		assert(object->terminating);
-		vm_object_ownership_change(object,
-		    object->vo_ledger_tag,                        /* unchanged */
-		    NULL,                        /* no owner */
-		    FALSE);                        /* task_objq not locked */
+		kr = vm_object_ownership_change(object,
+		    object->vo_ledger_tag,   /* unchanged */
+		    NULL,                    /* no owner */
+		    ledger_flags,
+		    FALSE);                  /* task_objq not locked */
+		assert(kr == KERN_SUCCESS);
 		assert(object->vo_owner == NULL);
 	}
 
@@ -2109,7 +2106,7 @@ typedef uint64_t        chunk_state_t;
  * while processing a higher level object in the shadow chain.
  */
 
-#define PAGE_ALREADY_HANDLED(c, p)      (((c) & (1LL << (p))) == 0)
+#define PAGE_ALREADY_HANDLED(c, p)      (((c) & (1ULL << (p))) == 0)
 
 /*
  * Mark the page at offset 'p' in the bit map as having been processed.
@@ -2117,7 +2114,7 @@ typedef uint64_t        chunk_state_t;
 
 #define MARK_PAGE_HANDLED(c, p) \
 MACRO_BEGIN \
-	(c) = (c) & ~(1LL << (p)); \
+	(c) = (c) & ~(1ULL << (p)); \
 MACRO_END
 
 
@@ -2875,9 +2872,6 @@ vm_object_copy_slowly(
 
 	struct vm_object_fault_info fault_info = {};
 
-	XPR(XPR_VM_OBJECT, "v_o_c_slowly obj 0x%x off 0x%x size 0x%x\n",
-	    src_object, src_offset, size, 0, 0);
-
 	if (size == 0) {
 		vm_object_unlock(src_object);
 		*_result_object = VM_OBJECT_NULL;
@@ -3018,7 +3012,6 @@ vm_object_copy_slowly(
 			}
 			fault_info.cluster_size = cluster_size;
 
-			XPR(XPR_VM_FAULT, "vm_object_copy_slowly -> vm_fault_page", 0, 0, 0, 0, 0);
 			_result_page = VM_PAGE_NULL;
 			result = vm_fault_page(src_object, src_offset,
 			    VM_PROT_READ, FALSE,
@@ -3161,8 +3154,6 @@ vm_object_copy_quickly(
 	vm_object_t     object = *_object;
 	memory_object_copy_strategy_t copy_strategy;
 
-	XPR(XPR_VM_OBJECT, "v_o_c_quickly obj 0x%x off 0x%x size 0x%x\n",
-	    *_object, offset, size, 0, 0);
 	if (object == VM_OBJECT_NULL) {
 		*_src_needs_copy = FALSE;
 		*_dst_needs_copy = FALSE;
@@ -3674,10 +3665,6 @@ Retry:
 	vm_object_unlock(src_object);
 	vm_object_unlock(new_copy);
 
-	XPR(XPR_VM_OBJECT,
-	    "vm_object_copy_delayed: used copy object %X for source %X\n",
-	    new_copy, src_object, 0, 0, 0);
-
 	return new_copy;
 }
 
@@ -3776,7 +3763,6 @@ vm_object_copy_strategically(
 		break;
 
 	case MEMORY_OBJECT_COPY_SYMMETRIC:
-		XPR(XPR_VM_OBJECT, "v_o_c_strategically obj 0x%x off 0x%x size 0x%x\n", src_object, src_offset, size, 0, 0);
 		vm_object_unlock(src_object);
 		result = KERN_MEMORY_RESTART_COPY;
 		break;
@@ -4003,6 +3989,7 @@ vm_object_memory_object_associate(
 		assert(object->pager_created);
 		assert(!object->pager_initialized);
 		assert(!object->pager_ready);
+		assert(object->pager_trusted);
 	} else {
 		object = vm_object_allocate(size);
 		assert(object != VM_OBJECT_NULL);
@@ -4124,6 +4111,7 @@ vm_object_compressor_pager_create(
 	 */
 
 	object->pager_created = TRUE;
+	object->pager_trusted = TRUE;
 	object->paging_offset = 0;
 
 	vm_object_unlock(object);
@@ -4444,9 +4432,6 @@ vm_object_do_collapse(
 	backing_object->alive = FALSE;
 	vm_object_unlock(backing_object);
 
-	XPR(XPR_VM_OBJECT, "vm_object_collapse, collapsed 0x%X\n",
-	    backing_object, 0, 0, 0, 0);
-
 #if VM_OBJECT_TRACKING
 	if (vm_object_tracking_inited) {
 		btlog_remove_entries_for_element(vm_object_tracking_btlog,
@@ -4624,9 +4609,6 @@ vm_object_collapse(
 		return;
 	}
 
-	XPR(XPR_VM_OBJECT, "vm_object_collapse, obj 0x%X\n",
-	    object, 0, 0, 0, 0);
-
 	if (object == VM_OBJECT_NULL) {
 		return;
 	}
@@ -4793,12 +4775,6 @@ retry:
 				backing_object_lock_type = OBJECT_LOCK_EXCLUSIVE;
 				goto retry;
 			}
-
-			XPR(XPR_VM_OBJECT,
-			    "vm_object_collapse: %x to %x, pager %x, pager_control %x\n",
-			    backing_object, object,
-			    backing_object->pager,
-			    backing_object->pager_control, 0);
 
 			/*
 			 *	Collapse the object with its backing
@@ -5152,10 +5128,6 @@ vm_object_coalesce(
 	if (prev_object == VM_OBJECT_NULL) {
 		return TRUE;
 	}
-
-	XPR(XPR_VM_OBJECT,
-	    "vm_object_coalesce: 0x%X prev_off 0x%X prev_size 0x%X next_size 0x%X\n",
-	    prev_object, prev_offset, prev_size, next_size, 0);
 
 	vm_object_lock(prev_object);
 
@@ -5515,11 +5487,6 @@ vm_object_lock_request(
 	__unused boolean_t      should_flush;
 
 	should_flush = flags & MEMORY_OBJECT_DATA_FLUSH;
-
-	XPR(XPR_MEMORY_OBJECT,
-	    "vm_o_lock_request, obj 0x%X off 0x%X size 0x%X flags %X prot %X\n",
-	    object, offset, size,
-	    (((should_return & 1) << 1) | should_flush), prot);
 
 	/*
 	 *	Check for bogus arguments.
@@ -6579,8 +6546,6 @@ MACRO_END
 	assert(object1->__object3_unused_bits == 0);
 	assert(object2->__object3_unused_bits == 0);
 #endif /* CONFIG_SECLUDED_MEMORY */
-	assert(object1->__object2_unused_bits == 0);
-	assert(object2->__object2_unused_bits == 0);
 #if UPL_DEBUG
 	/* "uplq" refers to the object not its contents (see upl_transpose()) */
 #endif
@@ -7491,15 +7456,16 @@ vm_object_compressed_freezer_done()
 }
 
 
-void
+uint32_t
 vm_object_compressed_freezer_pageout(
-	vm_object_t object)
+	vm_object_t object, uint32_t dirty_budget)
 {
 	vm_page_t                       p;
 	vm_page_t                       local_freeq = NULL;
 	int                             local_freed = 0;
 	kern_return_t                   retval = KERN_SUCCESS;
 	int                             obj_resident_page_count_snapshot = 0;
+	uint32_t                        paged_out_count = 0;
 
 	assert(object != VM_OBJECT_NULL);
 	assert(object->internal);
@@ -7517,7 +7483,7 @@ vm_object_compressed_freezer_pageout(
 
 		if (!object->pager_initialized || object->pager == MEMORY_OBJECT_NULL) {
 			vm_object_unlock(object);
-			return;
+			return paged_out_count;
 		}
 	}
 
@@ -7563,7 +7529,7 @@ vm_object_compressed_freezer_pageout(
 
 	vm_object_activity_begin(object);
 
-	while ((obj_resident_page_count_snapshot--) && !vm_page_queue_empty(&object->memq)) {
+	while ((obj_resident_page_count_snapshot--) && !vm_page_queue_empty(&object->memq) && paged_out_count < dirty_budget) {
 		p = (vm_page_t)vm_page_queue_first(&object->memq);
 
 		KERNEL_DEBUG(0xe0430004 | DBG_FUNC_START, object, local_freed, 0, 0, 0);
@@ -7643,6 +7609,7 @@ vm_object_compressed_freezer_pageout(
 			p->vmp_snext = local_freeq;
 			local_freeq = p;
 			local_freed++;
+			paged_out_count++;
 
 			if (local_freed >= MAX_FREE_BATCH) {
 				OSAddAtomic64(local_freed, &vm_pageout_vminfo.vm_pageout_compressions);
@@ -7681,6 +7648,7 @@ vm_object_compressed_freezer_pageout(
 		thread_yield_internal(FREEZER_DUTY_CYCLE_OFF_MS);
 		clock_get_uptime(&c_freezer_last_yield_ts);
 	}
+	return paged_out_count;
 }
 
 #endif /* CONFIG_FREEZE */
@@ -8110,24 +8078,96 @@ vm_object_ledger_tag_ledgers(
 {
 	assert(object->shadow == VM_OBJECT_NULL);
 
+	*do_footprint = !object->vo_no_footprint;
+
 	switch (object->vo_ledger_tag) {
-	case VM_OBJECT_LEDGER_TAG_NONE:
-		/* regular purgeable memory */
+	case VM_LEDGER_TAG_NONE:
+		/*
+		 * Regular purgeable memory:
+		 * counts in footprint only when nonvolatile.
+		 */
+		*do_footprint = TRUE;
 		assert(object->purgable != VM_PURGABLE_DENY);
 		*ledger_idx_volatile = task_ledgers.purgeable_volatile;
 		*ledger_idx_nonvolatile = task_ledgers.purgeable_nonvolatile;
 		*ledger_idx_volatile_compressed = task_ledgers.purgeable_volatile_compressed;
 		*ledger_idx_nonvolatile_compressed = task_ledgers.purgeable_nonvolatile_compressed;
-		*do_footprint = TRUE;
 		break;
-	case VM_OBJECT_LEDGER_TAG_NETWORK:
+	case VM_LEDGER_TAG_DEFAULT:
+		/*
+		 * "default" tagged memory:
+		 * counts in footprint only when nonvolatile and not marked
+		 * as "no_footprint".
+		 */
+		*ledger_idx_volatile = task_ledgers.tagged_nofootprint;
+		*ledger_idx_volatile_compressed = task_ledgers.tagged_nofootprint_compressed;
+		if (*do_footprint) {
+			*ledger_idx_nonvolatile = task_ledgers.tagged_footprint;
+			*ledger_idx_nonvolatile_compressed = task_ledgers.tagged_footprint_compressed;
+		} else {
+			*ledger_idx_nonvolatile = task_ledgers.tagged_nofootprint;
+			*ledger_idx_nonvolatile_compressed = task_ledgers.tagged_nofootprint_compressed;
+		}
+		break;
+	case VM_LEDGER_TAG_NETWORK:
+		/*
+		 * "network" tagged memory:
+		 * never counts in footprint.
+		 */
+		*do_footprint = FALSE;
 		*ledger_idx_volatile = task_ledgers.network_volatile;
 		*ledger_idx_volatile_compressed = task_ledgers.network_volatile_compressed;
 		*ledger_idx_nonvolatile = task_ledgers.network_nonvolatile;
 		*ledger_idx_nonvolatile_compressed = task_ledgers.network_nonvolatile_compressed;
-		*do_footprint = FALSE;
 		break;
-	case VM_OBJECT_LEDGER_TAG_MEDIA:
+	case VM_LEDGER_TAG_MEDIA:
+		/*
+		 * "media" tagged memory:
+		 * counts in footprint only when nonvolatile and not marked
+		 * as "no footprint".
+		 */
+		*ledger_idx_volatile = task_ledgers.media_nofootprint;
+		*ledger_idx_volatile_compressed = task_ledgers.media_nofootprint_compressed;
+		if (*do_footprint) {
+			*ledger_idx_nonvolatile = task_ledgers.media_footprint;
+			*ledger_idx_nonvolatile_compressed = task_ledgers.media_footprint_compressed;
+		} else {
+			*ledger_idx_nonvolatile = task_ledgers.media_nofootprint;
+			*ledger_idx_nonvolatile_compressed = task_ledgers.media_nofootprint_compressed;
+		}
+		break;
+	case VM_LEDGER_TAG_GRAPHICS:
+		/*
+		 * "graphics" tagged memory:
+		 * counts in footprint only when nonvolatile and not marked
+		 * as "no footprint".
+		 */
+		*ledger_idx_volatile = task_ledgers.graphics_nofootprint;
+		*ledger_idx_volatile_compressed = task_ledgers.graphics_nofootprint_compressed;
+		if (*do_footprint) {
+			*ledger_idx_nonvolatile = task_ledgers.graphics_footprint;
+			*ledger_idx_nonvolatile_compressed = task_ledgers.graphics_footprint_compressed;
+		} else {
+			*ledger_idx_nonvolatile = task_ledgers.graphics_nofootprint;
+			*ledger_idx_nonvolatile_compressed = task_ledgers.graphics_nofootprint_compressed;
+		}
+		break;
+	case VM_LEDGER_TAG_NEURAL:
+		/*
+		 * "neural" tagged memory:
+		 * counts in footprint only when nonvolatile and not marked
+		 * as "no footprint".
+		 */
+		*ledger_idx_volatile = task_ledgers.neural_nofootprint;
+		*ledger_idx_volatile_compressed = task_ledgers.neural_nofootprint_compressed;
+		if (*do_footprint) {
+			*ledger_idx_nonvolatile = task_ledgers.neural_footprint;
+			*ledger_idx_nonvolatile_compressed = task_ledgers.neural_footprint_compressed;
+		} else {
+			*ledger_idx_nonvolatile = task_ledgers.neural_nofootprint;
+			*ledger_idx_nonvolatile_compressed = task_ledgers.neural_nofootprint_compressed;
+		}
+		break;
 	default:
 		panic("%s: object %p has unsupported ledger_tag %d\n",
 		    __FUNCTION__, object, object->vo_ledger_tag);
@@ -8139,7 +8179,8 @@ vm_object_ownership_change(
 	vm_object_t     object,
 	int             new_ledger_tag,
 	task_t          new_owner,
-	boolean_t       task_objq_locked)
+	int             new_ledger_flags,
+	boolean_t       old_task_objq_locked)
 {
 	int             old_ledger_tag;
 	task_t          old_owner;
@@ -8151,14 +8192,84 @@ vm_object_ownership_change(
 	int             ledger_idx_nonvolatile_compressed;
 	int             ledger_idx;
 	int             ledger_idx_compressed;
-	boolean_t       do_footprint;
+	boolean_t       do_footprint, old_no_footprint, new_no_footprint;
+	boolean_t       new_task_objq_locked;
 
 	vm_object_lock_assert_exclusive(object);
-	assert(object->internal);
+
+	if (!object->internal) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	if (new_ledger_tag == VM_LEDGER_TAG_NONE &&
+	    object->purgable == VM_PURGABLE_DENY) {
+		/* non-purgeable memory must have a valid non-zero ledger tag */
+		return KERN_INVALID_ARGUMENT;
+	}
+	if (new_ledger_tag < 0 ||
+	    new_ledger_tag > VM_LEDGER_TAG_MAX) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	if (new_ledger_flags & ~VM_LEDGER_FLAGS) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	if (object->vo_ledger_tag == VM_LEDGER_TAG_NONE &&
+	    object->purgable == VM_PURGABLE_DENY) {
+		/*
+		 * This VM object is neither ledger-tagged nor purgeable.
+		 * We can convert it to "ledger tag" ownership iff it
+		 * has not been used at all yet (no resident pages and
+		 * no pager) and it's going to be assigned to a valid task.
+		 */
+		if (object->resident_page_count != 0 ||
+		    object->pager != NULL ||
+		    object->pager_created ||
+		    object->ref_count != 1 ||
+		    object->vo_owner != TASK_NULL ||
+		    object->copy_strategy != MEMORY_OBJECT_COPY_NONE ||
+		    new_owner == TASK_NULL) {
+			return KERN_FAILURE;
+		}
+	}
+
+	if (new_ledger_flags & VM_LEDGER_FLAG_NO_FOOTPRINT) {
+		new_no_footprint = TRUE;
+	} else {
+		new_no_footprint = FALSE;
+	}
+#if __arm64__
+	if (!new_no_footprint &&
+	    object->purgable != VM_PURGABLE_DENY &&
+	    new_owner != TASK_NULL &&
+	    new_owner != VM_OBJECT_OWNER_DISOWNED &&
+	    new_owner->task_legacy_footprint) {
+		/*
+		 * This task has been granted "legacy footprint" and should
+		 * not be charged for its IOKit purgeable memory.  Since we
+		 * might now change the accounting of such memory to the
+		 * "graphics" ledger, for example, give it the "no footprint"
+		 * option.
+		 */
+		new_no_footprint = TRUE;
+	}
+#endif /* __arm64__ */
+	assert(object->copy_strategy == MEMORY_OBJECT_COPY_NONE);
+	assert(object->shadow == VM_OBJECT_NULL);
+	assert(object->copy == VM_OBJECT_NULL);
 
 	old_ledger_tag = object->vo_ledger_tag;
+	old_no_footprint = object->vo_no_footprint;
 	old_owner = VM_OBJECT_OWNER(object);
 
+	DTRACE_VM7(object_ownership_change,
+	    vm_object_t, object,
+	    task_t, old_owner,
+	    int, old_ledger_tag,
+	    int, old_no_footprint,
+	    task_t, new_owner,
+	    int, new_ledger_tag,
+	    int, new_no_footprint);
+
+	assert(object->internal);
 	resident_count = object->resident_page_count - object->wired_page_count;
 	wired_count = object->wired_page_count;
 	compressed_count = vm_compressor_pager_get_count(object->pager);
@@ -8169,8 +8280,9 @@ vm_object_ownership_change(
 	if (old_owner != TASK_NULL &&
 	    ((old_owner != new_owner)           /* new owner ... */
 	    ||                                  /* ... or ... */
-	    (old_ledger_tag &&                  /* ... new ledger */
-	    old_ledger_tag != new_ledger_tag))) {
+	    (old_no_footprint != new_no_footprint) /* new "no_footprint" */
+	    ||                                  /* ... or ... */
+	    old_ledger_tag != new_ledger_tag)) { /* ... new ledger */
 		/*
 		 * Take this object off of the old owner's ledgers.
 		 */
@@ -8236,10 +8348,11 @@ vm_object_ownership_change(
 			/* remove object from old_owner's list of owned objects */
 			DTRACE_VM2(object_owner_remove,
 			    vm_object_t, object,
-			    task_t, new_owner);
-			if (!task_objq_locked) {
+			    task_t, old_owner);
+			if (!old_task_objq_locked) {
 				task_objq_lock(old_owner);
 			}
+			old_owner->task_owned_objects--;
 			queue_remove(&old_owner->task_objq, object,
 			    vm_object_t, task_objq);
 			switch (object->purgable) {
@@ -8255,7 +8368,7 @@ vm_object_ownership_change(
 			default:
 				break;
 			}
-			if (!task_objq_locked) {
+			if (!old_task_objq_locked) {
 				task_objq_unlock(old_owner);
 			}
 		}
@@ -8264,12 +8377,49 @@ vm_object_ownership_change(
 	/*
 	 * Switch to new ledger tag and/or owner.
 	 */
+
+	new_task_objq_locked = FALSE;
+	if (new_owner != old_owner &&
+	    new_owner != TASK_NULL &&
+	    new_owner != VM_OBJECT_OWNER_DISOWNED) {
+		/*
+		 * If the new owner is not accepting new objects ("disowning"),
+		 * the object becomes "disowned" and will be added to
+		 * the kernel's task_objq.
+		 *
+		 * Check first without locking, to avoid blocking while the
+		 * task is disowning its objects.
+		 */
+		if (new_owner->task_objects_disowning) {
+			new_owner = VM_OBJECT_OWNER_DISOWNED;
+		} else {
+			task_objq_lock(new_owner);
+			/* check again now that we have the lock */
+			if (new_owner->task_objects_disowning) {
+				new_owner = VM_OBJECT_OWNER_DISOWNED;
+				task_objq_unlock(new_owner);
+			} else {
+				new_task_objq_locked = TRUE;
+			}
+		}
+	}
+
 	object->vo_ledger_tag = new_ledger_tag;
 	object->vo_owner = new_owner;
+	object->vo_no_footprint = new_no_footprint;
 
 	if (new_owner == VM_OBJECT_OWNER_DISOWNED) {
+		/*
+		 * Disowned objects are added to the kernel's task_objq but
+		 * are marked as owned by "VM_OBJECT_OWNER_DISOWNED" to
+		 * differentiate them from objects intentionally owned by
+		 * the kernel.
+		 */
 		assert(old_owner != kernel_task);
 		new_owner = kernel_task;
+		assert(!new_task_objq_locked);
+		task_objq_lock(new_owner);
+		new_task_objq_locked = TRUE;
 	}
 
 	/*
@@ -8278,8 +8428,9 @@ vm_object_ownership_change(
 	if (new_owner != TASK_NULL &&
 	    ((new_owner != old_owner)           /* new owner ... */
 	    ||                                  /* ... or ... */
-	    (new_ledger_tag &&                  /* ... new ledger */
-	    new_ledger_tag != old_ledger_tag))) {
+	    (new_no_footprint != old_no_footprint) /* ... new "no_footprint" */
+	    ||                                  /* ... or ... */
+	    new_ledger_tag != old_ledger_tag)) { /* ... new ledger */
 		/*
 		 * Add this object to the new owner's ledgers.
 		 */
@@ -8346,7 +8497,8 @@ vm_object_ownership_change(
 			DTRACE_VM2(object_owner_add,
 			    vm_object_t, object,
 			    task_t, new_owner);
-			task_objq_lock(new_owner);
+			assert(new_task_objq_locked);
+			new_owner->task_owned_objects++;
 			queue_enter(&new_owner->task_objq, object,
 			    vm_object_t, task_objq);
 			switch (object->purgable) {
@@ -8362,9 +8514,100 @@ vm_object_ownership_change(
 			default:
 				break;
 			}
-			task_objq_unlock(new_owner);
 		}
 	}
 
+	if (new_task_objq_locked) {
+		task_objq_unlock(new_owner);
+	}
+
 	return KERN_SUCCESS;
+}
+
+void
+vm_owned_objects_disown(
+	task_t  task)
+{
+	vm_object_t     next_object;
+	vm_object_t     object;
+	int             collisions;
+	kern_return_t   kr;
+
+	if (task == NULL) {
+		return;
+	}
+
+	collisions = 0;
+
+again:
+	if (task->task_objects_disowned) {
+		/* task has already disowned its owned objects */
+		assert(task->task_volatile_objects == 0);
+		assert(task->task_nonvolatile_objects == 0);
+		assert(task->task_owned_objects == 0);
+		return;
+	}
+
+	task_objq_lock(task);
+
+	task->task_objects_disowning = TRUE;
+
+	for (object = (vm_object_t) queue_first(&task->task_objq);
+	    !queue_end(&task->task_objq, (queue_entry_t) object);
+	    object = next_object) {
+		if (task->task_nonvolatile_objects == 0 &&
+		    task->task_volatile_objects == 0 &&
+		    task->task_owned_objects == 0) {
+			/* no more objects owned by "task" */
+			break;
+		}
+
+		next_object = (vm_object_t) queue_next(&object->task_objq);
+
+#if DEBUG
+		assert(object->vo_purgeable_volatilizer == NULL);
+#endif /* DEBUG */
+		assert(object->vo_owner == task);
+		if (!vm_object_lock_try(object)) {
+			task_objq_unlock(task);
+			mutex_pause(collisions++);
+			goto again;
+		}
+		/* transfer ownership to the kernel */
+		assert(VM_OBJECT_OWNER(object) != kernel_task);
+		kr = vm_object_ownership_change(
+			object,
+			object->vo_ledger_tag, /* unchanged */
+			VM_OBJECT_OWNER_DISOWNED, /* new owner */
+			0, /* new_ledger_flags */
+			TRUE);  /* old_owner->task_objq locked */
+		assert(kr == KERN_SUCCESS);
+		assert(object->vo_owner == VM_OBJECT_OWNER_DISOWNED);
+		vm_object_unlock(object);
+	}
+
+	if (__improbable(task->task_volatile_objects != 0 ||
+	    task->task_nonvolatile_objects != 0 ||
+	    task->task_owned_objects != 0)) {
+		panic("%s(%p): volatile=%d nonvolatile=%d owned=%d q=%p q_first=%p q_last=%p",
+		    __FUNCTION__,
+		    task,
+		    task->task_volatile_objects,
+		    task->task_nonvolatile_objects,
+		    task->task_owned_objects,
+		    &task->task_objq,
+		    queue_first(&task->task_objq),
+		    queue_last(&task->task_objq));
+	}
+
+	/* there shouldn't be any objects owned by task now */
+	assert(task->task_volatile_objects == 0);
+	assert(task->task_nonvolatile_objects == 0);
+	assert(task->task_owned_objects == 0);
+	assert(task->task_objects_disowning);
+
+	/* and we don't need to try and disown again */
+	task->task_objects_disowned = TRUE;
+
+	task_objq_unlock(task);
 }

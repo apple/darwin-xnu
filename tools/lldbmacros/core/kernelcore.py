@@ -223,7 +223,7 @@ def IterateRBTreeEntry(element, element_type, field_name):
                 elt = cast(elt, element_type)
 
 
-def IteratePriorityQueueEntry(root, element_type, field_name):
+def IteratePriorityQueue(root, element_type, field_name):
     """ iterate over a priority queue as defined with struct priority_queue from osfmk/kern/priority_queue.h
             root         - value : Value object for the priority queue
             element_type - str   : Type of the link element
@@ -246,6 +246,19 @@ def IteratePriorityQueueEntry(root, element_type, field_name):
             if addr: queue.append(addr)
             elt = elt.next
 
+def IterateMPSCQueue(root, element_type, field_name):
+    """ iterate over an MPSC queue as defined with struct mpsc_queue_head from osfmk/kern/mpsc_queue.h
+            root         - value : Value object for the mpsc queue
+            element_type - str   : Type of the link element
+            field_name   - str   : Name of the field in link element's structure
+        returns:
+            A generator does not return. It is used for iterating
+            value  : an object thats of type (element_type). Always a pointer object
+    """
+    elt = root.mpqh_head.mpqc_next
+    while unsigned(elt):
+        yield containerof(elt, element_type, field_name)
+        elt = elt.mpqc_next
 
 class KernelTarget(object):
     """ A common kernel object that provides access to kernel objects and information.
@@ -327,6 +340,7 @@ class KernelTarget(object):
                 addr = int(addr, 16)
             else:
                 addr = int(addr)
+        addr = self.StripKernelPAC(addr)
         ret_array = []
         symbolicator = self._GetSymbolicator()
         syms = symbolicator.symbolicate(addr)
@@ -424,6 +438,17 @@ class KernelTarget(object):
         val = ((addr + size) & (unsigned(self.GetGlobalVariable("page_size"))-1))
         return (val < size and val > 0)
 
+    def StripUserPAC(self, addr):
+        if self.arch != 'arm64e':
+            return addr
+        T0Sz = self.GetGlobalVariable('gT0Sz')
+        return StripPAC(addr, T0Sz)
+
+    def StripKernelPAC(self, addr):
+        if self.arch != 'arm64e':
+            return addr
+        T1Sz = self.GetGlobalVariable('gT1Sz')
+        return StripPAC(addr, T1Sz)
 
     def PhysToKVARM64(self, addr):
         ptov_table = self.GetGlobalVariable('ptov_table')

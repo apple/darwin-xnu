@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -129,7 +129,7 @@ struct if_clonereq32 {
 #define IFEF_ENQUEUE_MULTI      0x00000002      /* enqueue multiple packets at once */
 #define IFEF_DELAY_START        0x00000004      /* delay start callback */
 #define IFEF_PROBE_CONNECTIVITY 0x00000008      /* Probe connections going over this interface */
-#define IFEF_QOSMARKING_CAPABLE 0x00000010      /* XXX Obsolete, to be removed */
+#define IFEF_ADV_REPORT         0x00000010      /* Supports interface advisory report */
 #define IFEF_IPV6_DISABLED      0x00000020      /* coupled to ND6_IFF_IFDISABLED */
 #define IFEF_ACCEPT_RTADV       0x00000040      /* accepts IPv6 RA on the interface */
 #define IFEF_TXSTART            0x00000080      /* has start callback */
@@ -178,12 +178,14 @@ struct if_clonereq32 {
 #define IFXF_WAKE_ON_MAGIC_PACKET       0x00000001 /* wake on magic packet */
 #define IFXF_TIMESTAMP_ENABLED          0x00000002 /* time stamping enabled */
 #define IFXF_NX_NOAUTO                  0x00000004 /* no auto config nexus */
-#define IFXF_MULTISTACK_BPF_TAP         0x00000008 /* multistack bpf tap */
+#define IFXF_LEGACY                     0x00000008 /* legacy (non-netif) mode */
 #define IFXF_LOW_INTERNET_UL            0x00000010 /* Uplink Low Internet is confirmed */
 #define IFXF_LOW_INTERNET_DL            0x00000020 /* Downlink Low Internet is confirmed */
 #define IFXF_ALLOC_KPI                  0x00000040 /* Allocated via the ifnet_alloc KPI */
 #define IFXF_LOW_POWER                  0x00000080 /* Low Power Mode */
-
+#define IFXF_MPK_LOG                    0x00000100 /* Multi-layer Packet Logging */
+#define IFXF_CONSTRAINED                0x00000200 /* Constrained - Save Data Mode */
+#define IFXF_LOW_LATENCY                0x00000400 /* Low latency interface */
 /*
  * Current requirements for an AWDL interface.  Setting/clearing IFEF_AWDL
  * will also trigger the setting/clearing of the rest of the flags.  Once
@@ -433,6 +435,7 @@ struct  ifreq {
 			uint32_t        ifo_inuse;
 		} ifru_opportunistic;
 		u_int64_t ifru_eflags;
+		u_int64_t ifru_xflags;
 		struct {
 			int32_t         ifl_level;
 			uint32_t        ifl_flags;
@@ -466,6 +469,9 @@ struct  ifreq {
 #define IFRTYPE_FAMILY_FIREWIRE         13
 #define IFRTYPE_FAMILY_BOND             14
 #define IFRTYPE_FAMILY_CELLULAR         15
+#define IFRTYPE_FAMILY_6LOWPAN          16
+#define IFRTYPE_FAMILY_UTUN             17
+#define IFRTYPE_FAMILY_IPSEC            18
 			uint32_t        ift_subfamily;
 #define IFRTYPE_SUBFAMILY_ANY           0
 #define IFRTYPE_SUBFAMILY_USB           1
@@ -474,19 +480,23 @@ struct  ifreq {
 #define IFRTYPE_SUBFAMILY_THUNDERBOLT   4
 #define IFRTYPE_SUBFAMILY_RESERVED      5
 #define IFRTYPE_SUBFAMILY_INTCOPROC     6
+#define IFRTYPE_SUBFAMILY_QUICKRELAY    7
+#define IFRTYPE_SUBFAMILY_DEFAULT       8
 		} ifru_type;
 #endif /* PRIVATE */
 		u_int32_t ifru_functional_type;
-#define IFRTYPE_FUNCTIONAL_UNKNOWN      0
-#define IFRTYPE_FUNCTIONAL_LOOPBACK     1
-#define IFRTYPE_FUNCTIONAL_WIRED        2
-#define IFRTYPE_FUNCTIONAL_WIFI_INFRA   3
-#define IFRTYPE_FUNCTIONAL_WIFI_AWDL    4
-#define IFRTYPE_FUNCTIONAL_CELLULAR     5
-#define IFRTYPE_FUNCTIONAL_INTCOPROC    6
-#define IFRTYPE_FUNCTIONAL_LAST         6
+#define IFRTYPE_FUNCTIONAL_UNKNOWN              0
+#define IFRTYPE_FUNCTIONAL_LOOPBACK             1
+#define IFRTYPE_FUNCTIONAL_WIRED                2
+#define IFRTYPE_FUNCTIONAL_WIFI_INFRA           3
+#define IFRTYPE_FUNCTIONAL_WIFI_AWDL            4
+#define IFRTYPE_FUNCTIONAL_CELLULAR             5
+#define IFRTYPE_FUNCTIONAL_INTCOPROC            6
+#define IFRTYPE_FUNCTIONAL_COMPANIONLINK        7
+#define IFRTYPE_FUNCTIONAL_LAST                 7
 #ifdef PRIVATE
 		u_int32_t ifru_expensive;
+		u_int32_t ifru_constrained;
 		u_int32_t ifru_2kcl;
 		struct {
 			u_int32_t qlen;
@@ -500,7 +510,8 @@ struct  ifreq {
 #define IFRTYPE_ECN_DISABLE             2
 		u_int32_t ifru_qosmarking_mode;
 #define IFRTYPE_QOSMARKING_MODE_NONE            0
-#define IFRTYPE_QOSMARKING_FASTLANE     1
+#define IFRTYPE_QOSMARKING_FASTLANE     1       /* supported: socket/channel */
+#define IFRTYPE_QOSMARKING_RFC4594      2       /* supported: channel only */
 		u_int32_t ifru_qosmarking_enabled;
 		u_int32_t ifru_disable_output;
 		u_int32_t ifru_low_internet;
@@ -508,6 +519,9 @@ struct  ifreq {
 #define IFRTYPE_LOW_INTERNET_ENABLE_UL          0x0001
 #define IFRTYPE_LOW_INTERNET_ENABLE_DL          0x0002
 		int ifru_low_power_mode;
+		u_int32_t ifru_tcp_kao_max;
+		int ifru_mpk_log;        /* Multi Layer Packet Log */
+		u_int32_t ifru_noack_prio;
 #endif /* PRIVATE */
 	} ifr_ifru;
 #define ifr_addr        ifr_ifru.ifru_addr      /* address */
@@ -540,9 +554,11 @@ struct  ifreq {
 #ifdef PRIVATE
 #define ifr_opportunistic       ifr_ifru.ifru_opportunistic
 #define ifr_eflags      ifr_ifru.ifru_eflags    /* extended flags  */
+#define ifr_xflags      ifr_ifru.ifru_xflags    /* extra flags  */
 #define ifr_log         ifr_ifru.ifru_log       /* logging level/flags */
 #define ifr_delegated   ifr_ifru.ifru_delegated /* delegated interface index */
 #define ifr_expensive   ifr_ifru.ifru_expensive
+#define ifr_constrained   ifr_ifru.ifru_constrained
 #define ifr_type        ifr_ifru.ifru_type      /* interface type */
 #define ifr_functional_type     ifr_ifru.ifru_functional_type
 #define ifr_2kcl        ifr_ifru.ifru_2kcl
@@ -558,6 +574,9 @@ struct  ifreq {
 #define ifr_disable_output      ifr_ifru.ifru_disable_output
 #define ifr_low_internet        ifr_ifru.ifru_low_internet
 #define ifr_low_power_mode      ifr_ifru.ifru_low_power_mode
+#define ifr_tcp_kao_max         ifr_ifru.ifru_tcp_kao_max
+#define ifr_mpk_log             ifr_ifru.ifru_mpk_log
+#define ifr_noack_prio          ifr_ifru.ifru_noack_prio
 
 #endif /* PRIVATE */
 };
@@ -794,6 +813,8 @@ struct if_linkparamsreq {
 	struct if_bandwidths iflpr_input_bw;
 	struct if_latencies iflpr_output_lt;
 	struct if_latencies iflpr_input_lt;
+	struct if_netem_params iflpr_input_netem;
+	struct if_netem_params iflpr_output_netem;
 };
 
 /*
@@ -912,7 +933,7 @@ struct if_nexusreq {
 	char            ifnr_name[IFNAMSIZ];    /* interface name */
 	uint64_t        ifnr_flags;             /* unused, must be zero */
 	uuid_t          ifnr_netif;             /* netif nexus instance UUID */
-	uuid_t          ifnr_multistack;        /* multistack nexus UUID */
+	uuid_t          ifnr_flowswitch;        /* flowswitch nexus UUID */
 	uint64_t        ifnr_reserved[5];
 };
 

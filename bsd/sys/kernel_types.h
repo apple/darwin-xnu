@@ -55,11 +55,13 @@ struct ucred;
 typedef struct ucred * ucred_t;
 #endif
 
+#if defined(KERNEL) || !defined(_SYS_MOUNT_H_) /* also defined in mount.h */
 struct mount;
 typedef struct mount * mount_t;
 
 struct vnode;
 typedef struct vnode * vnode_t;
+#endif
 
 struct proc;
 typedef struct proc * proc_t;
@@ -104,8 +106,10 @@ typedef struct file * file_t;
 #ifndef __LP64__
 typedef struct ucred * ucred_t;
 #endif
+#if defined(KERNEL) || !defined(_SYS_MOUNT_H_) /* also defined in mount.h */
 typedef struct mount * mount_t;
 typedef struct vnode * vnode_t;
+#endif
 typedef struct proc * proc_t;
 typedef struct uio * uio_t;
 typedef struct user_iovec * user_iovec_t;

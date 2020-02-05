@@ -9,6 +9,8 @@
 
 #include <darwintest.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 static int nthreads = 0;
 static int fd;
 static _Atomic int phase = 0;

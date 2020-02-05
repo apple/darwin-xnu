@@ -58,7 +58,7 @@ struct test_msg {
 
 #pragma mark pthread callbacks
 
-static void
+static pthread_t
 thread_create_at_qos(qos_class_t qos, void * (*function)(void *));
 static void
 send(mach_port_t send_port, mach_port_t reply_port, mach_port_t msg_port, mach_msg_priority_t qos, mach_msg_option_t options);
@@ -208,6 +208,62 @@ workloop_cb_test_sync_send_and_enable(uint64_t *workloop_id, struct kevent_qos_s
 }
 
 /*
+ * WL handler which checks the overridden Qos and then handoffs the IPC,
+ * enables the knote and checks for the Qos again that it hasn't dropped the sync ipc override.
+ */
+static void
+workloop_cb_test_sync_send_and_enable_handoff(uint64_t *workloop_id, struct kevent_qos_s **eventslist, int *events)
+{
+	unsigned override_priority;
+	int error;
+
+	T_LOG("Workloop handler workloop_cb_test_sync_send_and_enable_handoff called");
+
+	EXPECT_TEST_MSG(*eventslist);
+
+	if (geteuid() != 0) {
+		T_SKIP("kevent_qos test requires root privileges to run.");
+	}
+
+	/* The effective Qos should be the one expected after override */
+	EXPECT_QOS_EQ(g_expected_qos[ENV_QOS_AFTER_OVERRIDE],
+	    "dispatch_source event handler QoS should be %s",
+	    g_expected_qos_name[ENV_QOS_AFTER_OVERRIDE]);
+
+	/* Snapshot the current override priority */
+	override_priority = get_user_promotion_basepri();
+
+	struct kevent_qos_s *kev = *eventslist;
+	mach_msg_header_t *hdr = (mach_msg_header_t *)kev->ext[0];
+
+	/* handoff the IPC */
+	struct kevent_qos_s handoff_kev = {
+		.filter = EVFILT_WORKLOOP,
+		.ident = hdr->msgh_remote_port,
+		.flags = EV_ADD | EV_DISABLE,
+		.fflags = 0x80000000,
+	};
+
+	error = kevent_id(*workloop_id, &handoff_kev, 1, &handoff_kev, 1, NULL,
+	    NULL, KEVENT_FLAG_WORKLOOP | KEVENT_FLAG_ERROR_EVENTS | KEVENT_FLAG_DYNAMIC_KQ_MUST_EXIST);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(error, "kevent_id");
+	T_ASSERT_EQ(0, error, "Handed off the sync IPC");
+
+	/* Enable the knote */
+	enable_kevent(workloop_id, kev->ident);
+
+	/*
+	 * Check if the override has not been dropped.
+	 */
+	EXPECT_QOS_EQ(g_expected_qos[ENV_QOS_AFTER_OVERRIDE],
+	    "dispatch_source event handler QoS should still be %s",
+	    g_expected_qos_name[ENV_QOS_AFTER_OVERRIDE]);
+
+	*events = 0;
+	T_END;
+}
+
+/*
  * WL handler receives the first message and checks sync ipc override, then enables the knote
  * and receives 2nd message and checks it sync ipc override.
  */
@@ -346,7 +402,7 @@ populate_kevent(struct kevent_qos_s *kev, unsigned long long port)
 	kev->ident = port;
 	kev->filter = EVFILT_MACHPORT;
 	kev->flags = EV_ADD | EV_ENABLE | EV_UDATA_SPECIFIC | EV_DISPATCH | EV_VANISHED;
-	kev->fflags = (MACH_RCV_MSG | MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY |
+	kev->fflags = (MACH_RCV_MSG | MACH_RCV_VOUCHER | MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY |
 	    MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_CTX) |
 	    MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0));
 	kev->data = 1;
@@ -355,15 +411,15 @@ populate_kevent(struct kevent_qos_s *kev, unsigned long long port)
 static void
 enable_kevent(uint64_t *workloop_id, unsigned long long port)
 {
-	kern_return_t kr;
 	struct kevent_qos_s kev;
+	int error;
 
 	populate_kevent(&kev, port);
 	struct kevent_qos_s kev_err[] = {{ 0 }};
 
-	kr = kevent_id(*workloop_id, &kev, 1, kev_err, 1, NULL,
+	error = kevent_id(*workloop_id, &kev, 1, kev_err, 1, NULL,
 	    NULL, KEVENT_FLAG_WORKLOOP | KEVENT_FLAG_ERROR_EVENTS | KEVENT_FLAG_DYNAMIC_KQ_MUST_EXIST);
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(kr, "kevent_id");
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(error, "kevent_id");
 }
 
 /*
@@ -847,16 +903,14 @@ send(
 		send_msg.qos = (uint32_t)_pthread_qos_class_encode(qc, relpri, 0);
 	}
 
-	ret = mach_msg(&(send_msg.header),
-	    MACH_SEND_MSG |
-	    MACH_SEND_TIMEOUT |
-	    MACH_SEND_OVERRIDE |
-	    ((reply_port ? MACH_SEND_SYNC_OVERRIDE : 0) | options),
-	    send_msg.header.msgh_size,
-	    0,
-	    MACH_PORT_NULL,
-	    10000,
-	    0);
+	mach_msg_option_t send_opts = options;
+	if (reply_port) {
+		send_opts |= MACH_SEND_SYNC_OVERRIDE;
+	}
+	send_opts |= MACH_SEND_MSG | MACH_SEND_TIMEOUT | MACH_SEND_OVERRIDE;
+
+	ret = mach_msg(&send_msg.header, send_opts, send_msg.header.msgh_size,
+	    0, MACH_PORT_NULL, 10000, qos);
 
 	T_QUIET; T_ASSERT_MACH_SUCCESS(ret, "client mach_msg");
 }
@@ -957,7 +1011,7 @@ qos_client_send_to_intransit(void *arg __unused)
 		    (uint32_t)_pthread_qos_class_encode(g_expected_qos[ENV_QOS_BEFORE_OVERRIDE], 0, 0), 0);
 	}
 
-	T_LOG("Sent 5 msgs, now trying to send sync ipc messgae, which will block with a timeout\n");
+	T_LOG("Sent 5 msgs, now trying to send sync ipc message, which will block with a timeout\n");
 	/* Send the message to the in-transit port, it should block and override the rcv's workloop */
 	send(msg_port, special_reply_port, MACH_PORT_NULL,
 	    (uint32_t)_pthread_qos_class_encode(g_expected_qos[ENV_QOS_AFTER_OVERRIDE], 0, 0), 0);
@@ -974,7 +1028,7 @@ T_HELPER_DECL(qos_client_send_to_intransit_with_thr_pri,
 	sleep(HELPER_TIMEOUT_SECS);
 }
 
-static void
+static pthread_t
 thread_create_at_qos(qos_class_t qos, void * (*function)(void *))
 {
 	qos_class_t qos_thread;
@@ -994,6 +1048,7 @@ thread_create_at_qos(qos_class_t qos, void * (*function)(void *))
 	T_LOG("pthread created\n");
 	pthread_get_qos_class_np(thread, &qos_thread, NULL);
 	T_EXPECT_EQ(qos_thread, (qos_class_t)qos, NULL);
+	return thread;
 }
 
 static void *
@@ -1032,10 +1087,81 @@ qos_send_and_sync_rcv(void *arg __unused)
 	return NULL;
 }
 
+static void *
+qos_sync_rcv(void *arg __unused)
+{
+	mach_port_t qos_send_port;
+	mach_port_t special_reply_port;
+
+	T_LOG("Client: from created thread\n");
+
+	kern_return_t kr = bootstrap_look_up(bootstrap_port,
+	    KEVENT_QOS_SERVICE_NAME, &qos_send_port);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "client bootstrap_look_up");
+
+	special_reply_port = thread_get_special_reply_port();
+	T_QUIET; T_ASSERT_TRUE(MACH_PORT_VALID(special_reply_port), "get_thread_special_reply_port");
+
+	/* enqueue two messages to make sure that mqueue is not empty */
+	send(qos_send_port, MACH_PORT_NULL, MACH_PORT_NULL,
+	    (uint32_t)_pthread_qos_class_encode(g_expected_qos[ENV_QOS_QUEUE_OVERRIDE], 0, 0), 0);
+
+	sleep(RECV_TIMEOUT_SECS);
+
+	/* sync wait on msg port */
+	receive(special_reply_port, qos_send_port);
+
+	T_LOG("Client done doing sync rcv, now waiting for server to end the test");
+	sleep(SEND_TIMEOUT_SECS);
+
+	T_ASSERT_FAIL("client timed out");
+	return NULL;
+}
+
+static void
+thread_wait_to_block(mach_port_t thread_port)
+{
+	thread_extended_info_data_t extended_info;
+	kern_return_t kr;
+
+	while (1) {
+		mach_msg_type_number_t count = THREAD_EXTENDED_INFO_COUNT;
+		kr = thread_info(thread_port, THREAD_EXTENDED_INFO,
+		    (thread_info_t)&extended_info, &count);
+
+		T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "thread_info");
+
+		if (extended_info.pth_run_state == TH_STATE_WAITING) {
+			T_LOG("Target thread blocked\n");
+			break;
+		}
+		thread_switch(thread_port, SWITCH_OPTION_DEPRESS, 0);
+	}
+}
+
 T_HELPER_DECL(qos_client_send_sync_and_sync_rcv,
     "Send messages and syncronously wait for rcv")
 {
 	thread_create_at_qos(g_expected_qos[ENV_QOS_AFTER_OVERRIDE], qos_send_and_sync_rcv);
+	sleep(HELPER_TIMEOUT_SECS);
+}
+
+T_HELPER_DECL(qos_client_sync_rcv_qos_change,
+    "Send messages and syncronously wait for rcv and change qos of waiting thread")
+{
+	pthread_t rcv_thread;
+
+	rcv_thread = thread_create_at_qos(g_expected_qos[ENV_QOS_BEFORE_OVERRIDE], qos_sync_rcv);
+
+	T_LOG("Waiting for %d seconds before changing qos of rcv thread", SEND_TIMEOUT_SECS);
+	sleep(SEND_TIMEOUT_SECS);
+
+	/* Wait for the thread to block */
+	thread_wait_to_block(pthread_mach_thread_np(rcv_thread));
+
+	/* Update the rcv thread's qos */
+	pthread_override_qos_class_start_np(rcv_thread, g_expected_qos[ENV_QOS_AFTER_OVERRIDE], 0);
+
 	sleep(HELPER_TIMEOUT_SECS);
 }
 
@@ -1327,7 +1453,7 @@ qos_client_create_sepcial_reply_and_spawn_thread(void *arg __unused)
 	/* Create a new thread to send the sync message on our special reply port */
 	thread_create_at_qos(g_expected_qos[ENV_QOS_AFTER_OVERRIDE], qos_client_destroy_other_threads_port);
 
-	/* Client starting to receive messgae */
+	/* Client starting to receive message */
 	receive(special_reply_port, qos_send_port);
 
 	sleep(3 * SEND_TIMEOUT_SECS);
@@ -1457,6 +1583,10 @@ expect_kevent_id_recv(mach_port_t port, qos_class_t qos[], const char *qos_name[
 		T_QUIET; T_ASSERT_POSIX_ZERO(_pthread_workqueue_init_with_workloop(
 			    worker_cb, event_cb,
 			    (pthread_workqueue_function_workloop_t)workloop_cb_test_sync_send_and_enable, 0, 0), NULL);
+	} else if (strcmp(wl_function, "workloop_cb_test_sync_send_and_enable_handoff") == 0) {
+		T_QUIET; T_ASSERT_POSIX_ZERO(_pthread_workqueue_init_with_workloop(
+			    worker_cb, event_cb,
+			    (pthread_workqueue_function_workloop_t)workloop_cb_test_sync_send_and_enable_handoff, 0, 0), NULL);
 	} else if (strcmp(wl_function, "workloop_cb_test_send_two_sync") == 0) {
 		T_QUIET; T_ASSERT_POSIX_ZERO(_pthread_workqueue_init_with_workloop(
 			    worker_cb, event_cb,
@@ -1521,7 +1651,7 @@ expect_kevent_id_recv(mach_port_t port, qos_class_t qos[], const char *qos_name[
 					     .ident = port,
 					     .filter = EVFILT_MACHPORT,
 					     .flags = EV_ADD | EV_UDATA_SPECIFIC | EV_DISPATCH | EV_VANISHED,
-					     .fflags = (MACH_RCV_MSG | MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY |
+					     .fflags = (MACH_RCV_MSG | MACH_RCV_VOUCHER | MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY |
 	    MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_CTX) |
 	    MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0)),
 					     .data = 1,
@@ -1551,6 +1681,51 @@ T_HELPER_DECL(server_kevent_id,
 	sleep(HELPER_TIMEOUT_SECS);
 	T_ASSERT_FAIL("should receive a message within %d seconds",
 	    RECV_TIMEOUT_SECS);
+}
+
+static void *
+special_reply_port_thread(void *ctxt)
+{
+	kern_return_t ret;
+	mach_port_t rcv_port = *(mach_port_t *)ctxt;
+	struct test_msg rcv_msg = {
+		.header = {
+			.msgh_remote_port = MACH_PORT_NULL,
+			.msgh_local_port  = rcv_port,
+			.msgh_size        = sizeof(rcv_msg),
+		},
+	};
+
+	ret = mach_msg(&rcv_msg.header, MACH_RCV_MSG | MACH_RCV_TIMEOUT, 0,
+	    rcv_msg.header.msgh_size, rcv_port, 1000, MACH_PORT_NULL);
+
+	T_EXPECT_EQ(ret, MACH_RCV_TIMED_OUT, "receive should not panic");
+
+	*(mach_port_t *)ctxt = MACH_PORT_NULL;
+
+	sleep(1); // give some time to pthread_exit
+
+	ret = mach_msg(&rcv_msg.header, MACH_RCV_MSG | MACH_RCV_TIMEOUT, 0,
+	    rcv_msg.header.msgh_size, rcv_port, 1000, MACH_PORT_NULL);
+
+	T_EXPECT_EQ(ret, MACH_RCV_TIMED_OUT, "receive should not panic");
+
+	T_END;
+}
+
+T_DECL(special_reply_port, "basic special reply port robustness checks",
+    T_META_RUN_CONCURRENTLY(true))
+{
+	pthread_t thread;
+	mach_port_t srp = thread_get_special_reply_port();
+
+	pthread_create(&thread, NULL, special_reply_port_thread, &srp);
+
+	while (srp) {
+		usleep(1000);
+	}
+
+	pthread_exit(NULL);
 }
 
 #define TEST_QOS(server_name, client_name, name, wl_function_name, qos_bo, qos_bo_name, qos_qo, qos_qo_name, qos_ao, qos_ao_name) \
@@ -1677,6 +1852,7 @@ TEST_QOS("server_kevent_id", "qos_client_send_two_msg_and_destroy", send_two_UI_
     QOS_CLASS_BACKGROUND, "background",
     QOS_CLASS_MAINTENANCE, "maintenance",
     QOS_CLASS_USER_INTERACTIVE, "user initiated with 47 basepri promotion")
+
 /*
  * Test 11: test sending two ports with chaining
  *
@@ -1689,7 +1865,29 @@ TEST_QOS("server_kevent_id", "qos_client_send_complex_msg_with_pri", send_comple
     QOS_CLASS_USER_INTERACTIVE, "user initiated with 47 basepri promotion")
 
 /*
- * Test 12 - 19
+ * Test 12: test sending two ports with chaining
+ *
+ * Send a sync IPC to a connection port, which itself is embedded in a message
+ * sent as a sync IPC to a service port.
+ */
+TEST_QOS("server_kevent_id", "qos_client_send_complex_msg_with_pri", send_complex_sync_UI_and_enable_and_handoff, "workloop_cb_test_sync_send_and_enable_handoff",
+    QOS_CLASS_USER_INITIATED, "user initiated",
+    QOS_CLASS_USER_INITIATED, "user initiated",
+    QOS_CLASS_USER_INTERACTIVE, "user initiated with 47 basepri promotion")
+
+/*
+ * Test 13: test changing qos of a thread to trigger turnstile push
+ *
+ * Send a sync IPC to a service port and change the qos of the blocked thread
+ * to verify that changing qos triggers a turnstile push.
+ */
+TEST_QOS("server_kevent_id", "qos_client_sync_rcv_qos_change", qos_change_to_IN, "workloop_cb_test_intransit",
+    QOS_CLASS_DEFAULT, "default",
+    QOS_CLASS_MAINTENANCE, "maintenance",
+    QOS_CLASS_USER_INITIATED, "user initiated")
+
+/*
+ * Test 14 - 21
  *
  * Test single sync ipc link with server that breaks/preserves the link in different ways.
  */
@@ -1732,8 +1930,9 @@ TEST_QOS("server_kevent_id", "qos_client_send_sync_msg_with_link_check_correct_s
     QOS_CLASS_DEFAULT, "default",
     QOS_CLASS_DEFAULT, "default",
     QOS_CLASS_DEFAULT, "default")
+
 /*
- * Test 20 - 23
+ * Test 22 - 25
  *
  * Test sequential sync ipc link with server that breaks/preserves the link.
  */

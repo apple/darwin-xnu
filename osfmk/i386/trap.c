@@ -117,7 +117,7 @@ extern void kprint_state(x86_saved_state64_t *saved_state);
  * Forward declarations
  */
 static void user_page_fault_continue(kern_return_t kret);
-static void panic_trap(x86_saved_state64_t *saved_state, uint32_t pl, kern_return_t fault_result);
+static void panic_trap(x86_saved_state64_t *saved_state, uint32_t pl, kern_return_t fault_result) __dead2;
 static void set_recovery_ip(x86_saved_state64_t *saved_state, vm_offset_t ip);
 
 #if CONFIG_DTRACE
@@ -709,7 +709,7 @@ kernel_trap(
 	case T_PAGE_FAULT:
 
 #if CONFIG_DTRACE
-		if (thread != THREAD_NULL && thread->options & TH_OPT_DTRACE) { /* Executing under dtrace_probe? */
+		if (thread != THREAD_NULL && thread->t_dtrace_inprobe) { /* Executing under dtrace_probe? */
 			if (dtrace_tally_fault(vaddr)) { /* Should a fault under dtrace be ignored? */
 				/*
 				 * DTrace has "anticipated" the possibility of this fault, and has
@@ -878,12 +878,6 @@ panic_trap(x86_saved_state64_t *regs, uint32_t pl, kern_return_t fault_result)
 	    potential_smap_fault ? " SMAP fault" : "",
 	    pl,
 	    fault_result);
-	/*
-	 * This next statement is not executed,
-	 * but it's needed to stop the compiler using tail call optimization
-	 * for the panic call - which confuses the subsequent backtrace.
-	 */
-	cr0 = 0;
 }
 
 #if CONFIG_DTRACE
@@ -1124,6 +1118,14 @@ user_trap(
 			/*NOTREACHED*/
 		}
 
+		/*
+		 * For a user trap, vm_fault() should never return KERN_FAILURE.
+		 * If it does, we're leaking preemption disables somewhere in the kernel.
+		 */
+		if (__improbable(kret == KERN_FAILURE)) {
+			panic("vm_fault() KERN_FAILURE from user fault on thread %p", thread);
+		}
+
 		user_page_fault_continue(kret);
 	}       /* NOTREACHED */
 	break;
@@ -1153,7 +1155,6 @@ user_trap(
 
 	default:
 		panic("Unexpected user trap, type %d", type);
-		return;
 	}
 	/* Note: Codepaths that directly return from user_trap() have pending
 	 * ASTs processed in locore

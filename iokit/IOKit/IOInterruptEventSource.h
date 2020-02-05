@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -60,7 +60,7 @@ struct IOInterruptAccountingData;
  */
 class IOInterruptEventSource : public IOEventSource
 {
-	OSDeclareDefaultStructors(IOInterruptEventSource)
+	OSDeclareDefaultStructors(IOInterruptEventSource);
 
 public:
 /*! @typedef Action
@@ -138,7 +138,7 @@ public:
 	static IOInterruptEventSource *
 	interruptEventSource(OSObject *owner,
 	    Action action,
-	    IOService *provider = 0,
+	    IOService *provider = NULL,
 	    int intIndex = 0);
 
 
@@ -171,7 +171,7 @@ public:
  *  successfully.  */
 	virtual bool init(OSObject *owner,
 	    Action action,
-	    IOService *provider = 0,
+	    IOService *provider = NULL,
 	    int intIndex = 0);
 
 /*! @function enable
@@ -230,6 +230,20 @@ public:
  *   milliseconds between targets is the expected time scale.  NOTE: it is not safe to call this method with interrupts disabled.
  *   @param abstime Time at which interrupt is expected. */
 	IOReturn warmCPU(uint64_t abstime);
+
+/*! @function enablePrimaryInterruptTimestamp
+ *   @abstract Enables collection of mach_absolute_time at primary interrupt.
+ *   @discussion Enables collection of mach_absolute_time at primary interrupt.
+ *   @param enable True to enable timestamp. */
+
+	void enablePrimaryInterruptTimestamp(bool enable);
+
+/*! @function getPimaryInterruptTimestamp
+ *   @abstract Returns mach_absolute_time timestamp of primary interrupt.
+ *   @discussion Returns mach_absolute_time timestamp of primary interrupt.
+ *   @result Value of the timestamp. Zero if never interrupted, or -1ULL if timestamp collection has not been enabled. */
+
+	uint64_t getPimaryInterruptTimestamp();
 
 private:
 	IOReturn registerInterruptHandler(IOService *inProvider, int inIntIndex);

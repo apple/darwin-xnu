@@ -43,8 +43,8 @@ struct kperf_sample {
 
 	struct kperf_task_snapshot tk_snapshot;
 
-	struct callstack   kcallstack;
-	struct callstack   ucallstack;
+	struct kp_kcallstack kcallstack;
+	struct kp_ucallstack ucallstack;
 	struct meminfo     meminfo;
 
 #if KPC

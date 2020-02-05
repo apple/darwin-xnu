@@ -177,12 +177,11 @@ pool_create(size_t capacity)
 {
 	KXLDArrayPool *pool = NULL, *rval = NULL;
 
-	pool = kxld_alloc(sizeof(*pool));
+	pool = kxld_calloc(sizeof(*pool));
 	require(pool, finish);
 
 	pool->buffer = kxld_page_alloc(capacity);
 	require(pool->buffer, finish);
-	bzero(pool->buffer, capacity);
 
 	rval = pool;
 	pool = NULL;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -63,6 +63,8 @@
 #include <kern/kalloc.h>
 #include <kern/ipc_kobject.h>
 
+#include <machine/atomic.h>
+
 #include <mach/memory_object_control.h>
 #include <mach/memory_object_types.h>
 #include <mach/upl.h>
@@ -119,19 +121,19 @@ kern_return_t compressor_memory_object_data_reclaim(
 	__unused boolean_t              reclaim_backing_store);
 
 const struct memory_object_pager_ops compressor_pager_ops = {
-	compressor_memory_object_reference,
-	compressor_memory_object_deallocate,
-	compressor_memory_object_init,
-	compressor_memory_object_terminate,
-	compressor_memory_object_data_request,
-	compressor_memory_object_data_return,
-	compressor_memory_object_data_initialize,
-	compressor_memory_object_data_unlock,
-	compressor_memory_object_synchronize,
-	compressor_memory_object_map,
-	compressor_memory_object_last_unmap,
-	compressor_memory_object_data_reclaim,
-	"compressor pager"
+	.memory_object_reference = compressor_memory_object_reference,
+	.memory_object_deallocate = compressor_memory_object_deallocate,
+	.memory_object_init = compressor_memory_object_init,
+	.memory_object_terminate = compressor_memory_object_terminate,
+	.memory_object_data_request = compressor_memory_object_data_request,
+	.memory_object_data_return = compressor_memory_object_data_return,
+	.memory_object_data_initialize = compressor_memory_object_data_initialize,
+	.memory_object_data_unlock = compressor_memory_object_data_unlock,
+	.memory_object_synchronize = compressor_memory_object_synchronize,
+	.memory_object_map = compressor_memory_object_map,
+	.memory_object_last_unmap = compressor_memory_object_last_unmap,
+	.memory_object_data_reclaim = compressor_memory_object_data_reclaim,
+	.memory_object_pager_name = "compressor pager"
 };
 
 /* internal data structures */
@@ -662,7 +664,7 @@ compressor_pager_slot_lookup(
 				 * This memory barrier should take care of this
 				 * according to the platform requirements.
 				 */
-				__c11_atomic_thread_fence(memory_order_release);
+				os_atomic_thread_fence(release);
 
 				chunk = pager->cpgr_slots.cpgr_islots[chunk_idx] = t_chunk;
 				t_chunk = NULL;

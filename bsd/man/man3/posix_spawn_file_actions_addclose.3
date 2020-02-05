@@ -61,6 +61,16 @@
 .Fa "posix_spawn_file_actions_t *file_actions"
 .Fa "int filedes"
 .Fc
+.Ft int
+.Fo posix_spawn_file_actions_addchdir_np
+.Fa "posix_spawn_file_actions_t *file_actions"
+.Fa "const char *restrict path"
+.Fc
+.Ft int
+.Fo posix_spawn_file_actions_addfchdir_np
+.Fa "posix_spawn_file_actions_t *file_actions"
+.Fa "int filedes"
+.Fc
 .Sh DESCRIPTION
 The
 .Fn posix_spawn_file_actions_addclose
@@ -156,6 +166,45 @@ are made available in the spawned process. In that case,
 can be used to make specific pre-existing file
 descriptors from the parent process be
 available in the spawned process.
+.Pp
+The
+.Fn posix_spawn_file_actions_addchdir
+function adds an chdir operation to the list of operations associated with
+the object referenced by
+.Em file_actions ,
+for subsequent use in a call to
+.Xr posix_spawn 2
+or 
+.Xr posix_spawnp 2 .
+The current working directory will be set as if
+.Fn chdir
+had been called with
+.Em path
+prior to the new child process starting execution.
+.Pp
+The
+.Fn posix_spawn_file_actions_addfchdir
+function adds a fchdir operation to the list of operations associated with
+the object referenced by
+.Em file_actions ,
+for subsequent use in a call to
+.Xr posix_spawn 2
+or 
+.Xr posix_spawnp 2 .
+The current working directory will be set as if
+.Fn fchdir
+had been called with
+.Em filedes
+prior to the new child process starting execution.
+When
+.Em POSIX_SPAWN_CLOEXEC_DEFAULT
+is set, the file descriptor
+.Em filedes
+will not be automatically inherited unless an explicit
+.Fn posix_spawn_file_actions_addinherit_np
+action for
+.Em filedes
+has been added.
 .Sh RETURN VALUES
 On success, these functions return 0; on failure they return an error
 number from
@@ -174,6 +223,12 @@ open files it is allowed.
 The value of
 .Fa file_actions
 is invalid.
+.\" ==========
+.It Bq Er ENAMETOOLONG
+The length of the value specified by
+.Fa path
+exceeds
+.Dv PATH_MAX.
 .\" ==========
 .It Bq Er ENOMEM
 Insufficient memory was available to add the new action to

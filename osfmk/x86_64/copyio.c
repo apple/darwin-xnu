@@ -31,6 +31,7 @@
 #include <i386/param.h>
 #include <i386/misc_protos.h>
 #include <i386/cpu_data.h>
+#include <i386/machine_cpu.h>
 #include <i386/machine_routines.h>
 #include <i386/cpuid.h>
 #include <i386/vmx.h>
@@ -79,7 +80,10 @@ const int copysize_limit_panic = (64 * MB);
  */
 extern int _bcopy(const void *, void *, vm_size_t);
 extern int _bcopystr(const void *, void *, vm_size_t, vm_size_t *);
-extern int _copyin_word(const char *src, uint64_t *dst, vm_size_t len);
+extern int _copyin_atomic32(const char *src, uint32_t *dst);
+extern int _copyin_atomic64(const char *src, uint64_t *dst);
+extern int _copyout_atomic32(const uint32_t *u32, char *src);
+extern int _copyout_atomic64(const uint64_t *u64, char *src);
 
 /* On by default, optionally disabled by boot-arg */
 extern boolean_t copyio_zalloc_check;
@@ -92,7 +96,10 @@ extern boolean_t copyio_zalloc_check;
 #define COPYINSTR       2       /* string variant of copyout */
 #define COPYINPHYS      3       /* from user virtual to kernel physical */
 #define COPYOUTPHYS     4       /* from kernel physical to user virtual */
-#define COPYINWORD      5       /* from user virtual to kernel virtual */
+#define COPYINATOMIC32  5       /* from user virtual to kernel virtual */
+#define COPYINATOMIC64  6       /* from user virtual to kernel virtual */
+#define COPYOUTATOMIC32 7       /* from user virtual to kernel virtual */
+#define COPYOUTATOMIC64 8       /* from user virtual to kernel virtual */
 
 #if ENABLE_SMAPLOG
 typedef struct {
@@ -210,11 +217,27 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 		goto out;
 	}
 
+	if (copy_type >= COPYINATOMIC32 && copy_type <= COPYOUTATOMIC64) {
+		if (__improbable(pmap == kernel_pmap)) {
+			error = EFAULT;
+			goto out;
+		}
+	}
+
 #if KASAN
-	if (copy_type == COPYIN || copy_type == COPYINSTR || copy_type == COPYINWORD) {
+	switch (copy_type) {
+	case COPYIN:
+	case COPYINSTR:
+	case COPYINATOMIC32:
+	case COPYINATOMIC64:
 		__asan_storeN((uptr)kernel_addr, nbytes);
-	} else if (copy_type == COPYOUT) {
+		break;
+	case COPYOUT:
+	case COPYOUTATOMIC32:
+	case COPYOUTATOMIC64:
 		__asan_loadN((uptr)kernel_addr, nbytes);
+		kasan_check_uninitialized((vm_address_t)kernel_addr, nbytes);
+		break;
 	}
 #endif
 
@@ -288,10 +311,24 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 		    nbytes);
 		break;
 
-	case COPYINWORD:
-		error = _copyin_word((const void *) user_addr,
-		    (void *) kernel_addr,
-		    nbytes);
+	case COPYINATOMIC32:
+		error = _copyin_atomic32((const void *) user_addr,
+		    (void *) kernel_addr);
+		break;
+
+	case COPYINATOMIC64:
+		error = _copyin_atomic64((const void *) user_addr,
+		    (void *) kernel_addr);
+		break;
+
+	case COPYOUTATOMIC32:
+		error = _copyout_atomic32((const void *) kernel_addr,
+		    (void *) user_addr);
+		break;
+
+	case COPYOUTATOMIC64:
+		error = _copyout_atomic64((const void *) kernel_addr,
+		    (void *) user_addr);
 		break;
 
 	case COPYINSTR:
@@ -395,23 +432,63 @@ copyin(const user_addr_t user_addr, void *kernel_addr, vm_size_t nbytes)
 }
 
 /*
- * copyin_word
- * Read an aligned value from userspace as a single memory transaction.
- * This function supports userspace synchronization features
+ * copy{in,out}_atomic{32,64}
+ * Read or store an aligned value from userspace as a single memory transaction.
+ * These functions support userspace synchronization features
  */
 int
-copyin_word(const user_addr_t user_addr, uint64_t *kernel_addr, vm_size_t nbytes)
+copyin_atomic32(const user_addr_t user_addr, uint32_t *kernel_addr)
 {
-	/* Verify sizes */
-	if ((nbytes != 4) && (nbytes != 8)) {
-		return EINVAL;
-	}
-
 	/* Test alignment */
-	if (user_addr & (nbytes - 1)) {
+	if (user_addr & 3) {
 		return EINVAL;
 	}
-	return copyio(COPYINWORD, user_addr, (char *)(uintptr_t)kernel_addr, nbytes, NULL, 0);
+	return copyio(COPYINATOMIC32, user_addr, (char *)(uintptr_t)kernel_addr, 4, NULL, 0);
+}
+
+int
+copyin_atomic32_wait_if_equals(const user_addr_t user_addr, uint32_t value)
+{
+	uint32_t u32;
+	int result = copyin_atomic32(user_addr, &u32);
+	if (__improbable(result)) {
+		return result;
+	}
+	if (u32 != value) {
+		return ESTALE;
+	}
+	cpu_pause();
+	return 0;
+}
+
+int
+copyin_atomic64(const user_addr_t user_addr, uint64_t *kernel_addr)
+{
+	/* Test alignment */
+	if (user_addr & 7) {
+		return EINVAL;
+	}
+	return copyio(COPYINATOMIC64, user_addr, (char *)(uintptr_t)kernel_addr, 8, NULL, 0);
+}
+
+int
+copyout_atomic32(uint32_t value, user_addr_t user_addr)
+{
+	/* Test alignment */
+	if (user_addr & 3) {
+		return EINVAL;
+	}
+	return copyio(COPYOUTATOMIC32, user_addr, (char *)&value, 4, NULL, 0);
+}
+
+int
+copyout_atomic64(uint64_t value, user_addr_t user_addr)
+{
+	/* Test alignment */
+	if (user_addr & 7) {
+		return EINVAL;
+	}
+	return copyio(COPYOUTATOMIC64, user_addr, (char *)&value, 8, NULL, 0);
 }
 
 int

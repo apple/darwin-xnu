@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -245,7 +245,6 @@ nfs_boot_init(struct nfs_diskless *nd)
 		bp_sin.sin_len = sizeof(bp_sin);
 		bp_sin.sin_family = AF_INET;
 		bp_sin.sin_addr.s_addr = INADDR_BROADCAST;
-		hostnamelen = MAXHOSTNAMELEN;
 		router.s_addr = 0;
 		error = bp_whoami(&bp_sin, &my_ip, &router);
 		if (error) {
@@ -254,7 +253,9 @@ nfs_boot_init(struct nfs_diskless *nd)
 		}
 		printf("nfs_boot: BOOTPARAMS server " IP_FORMAT "\n",
 		    IP_LIST(&bp_sin.sin_addr));
+		lck_mtx_lock(&hostname_lock);
 		printf("nfs_boot: hostname %s\n", hostname);
+		lck_mtx_unlock(&hostname_lock);
 	}
 	if (do_bpgetfile) {
 		error = bp_getfile(&bp_sin, "root", &nd->nd_root.ndm_saddr,
@@ -537,9 +538,10 @@ bp_whoami(struct sockaddr_in *bpsin,
 	if (cn_len >= MAXHOSTNAMELEN) {
 		goto bad;
 	}
+	lck_mtx_lock(&hostname_lock);
 	bcopy(str->data, hostname, cn_len);
 	hostname[cn_len] = '\0';
-	hostnamelen = cn_len;
+	lck_mtx_unlock(&hostname_lock);
 	p += RPC_STR_SIZE(cn_len);
 	msg_len -= RPC_STR_SIZE(cn_len);
 
@@ -555,9 +557,10 @@ bp_whoami(struct sockaddr_in *bpsin,
 	if (dn_len >= MAXHOSTNAMELEN) {
 		goto bad;
 	}
+	lck_mtx_lock(&domainname_lock);
 	bcopy(str->data, domainname, dn_len);
 	domainname[dn_len] = '\0';
-	domainnamelen = dn_len;
+	lck_mtx_unlock(&domainname_lock);
 	p += RPC_STR_SIZE(dn_len);
 	msg_len -= RPC_STR_SIZE(dn_len);
 
@@ -611,7 +614,9 @@ bp_getfile(struct sockaddr_in *bpsin,
 	/*
 	 * Get message buffer of sufficient size.
 	 */
-	cn_len = hostnamelen;
+	lck_mtx_lock(&hostname_lock);
+	cn_len = strlen(hostname);
+	lck_mtx_unlock(&hostname_lock);
 	key_len = strlen(key);
 	msg_len = 0;
 	msg_len += RPC_STR_SIZE(cn_len);
@@ -629,7 +634,9 @@ bp_getfile(struct sockaddr_in *bpsin,
 	/* client name (hostname) */
 	str = (struct rpc_string *)p;
 	str->len = htonl(cn_len);
+	lck_mtx_lock(&hostname_lock);
 	bcopy(hostname, str->data, cn_len);
+	lck_mtx_unlock(&hostname_lock);
 	p += RPC_STR_SIZE(cn_len);
 	/* key name (root or swap) */
 	str = (struct rpc_string *)p;

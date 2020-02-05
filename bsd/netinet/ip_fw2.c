@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -2136,7 +2136,7 @@ ipfw_chk(struct ip_fw_args *args)
 	 */
 	u_int8_t proto;
 	u_int16_t src_port = 0, dst_port = 0;   /* NOTE: host format	*/
-	struct in_addr src_ip = { 0 }, dst_ip = { 0 };          /* NOTE: network format	*/
+	struct in_addr src_ip = { .s_addr = 0 }, dst_ip = { .s_addr = 0 };              /* NOTE: network format	*/
 	u_int16_t ip_len = 0;
 	int pktlen;
 	int dyn_dir = MATCH_UNKNOWN;

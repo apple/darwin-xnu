@@ -23,7 +23,7 @@ endif
 
 $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile: $(SRCROOT)/SETUP/config/doconf $(OBJROOT)/SETUP/config $(DOCONFDEPS)
 	$(_v)$(MKDIR) $(TARGET)/$(CURRENT_KERNEL_CONFIG)
-	$(_v)$(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(CURRENT_KERNEL_CONFIG);
+	$(_v)$(SRCROOT)/SETUP/config/doconf -c -cpu $(DOCONF_ARCH_CONFIG_LC) -soc $(CURRENT_MACHINE_CONFIG_LC) -d $(TARGET)/$(CURRENT_KERNEL_CONFIG) -s $(SOURCE) -m $(MASTERCONFDIR) $(CURRENT_KERNEL_CONFIG)
 
 do_all: $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile
 	$(_v)${MAKE} \
@@ -35,7 +35,7 @@ do_all: $(TARGET)/$(CURRENT_KERNEL_CONFIG)/Makefile
 		SOURCE=$(subst conf/,,$(SOURCE))			\
 		TARGET=${TARGET}					\
 		OBJPATH=${OBJPATH}					\
-		build_all;
+		build_all
 
 do_build_all:: do_all
 

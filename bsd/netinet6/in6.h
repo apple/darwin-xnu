@@ -1004,7 +1004,6 @@ extern int inet6_rth_add(void *, const struct in6_addr *);
 extern int inet6_rth_reverse(const void *, void *);
 extern int inet6_rth_segments(const void *);
 extern struct in6_addr *inet6_rth_getaddr(const void *, int);
-extern void addrsel_policy_init(void);
 
 __END_DECLS
 #endif /* !KERNEL */

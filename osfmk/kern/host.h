@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -77,7 +77,7 @@
 #include <mach/vm_statistics.h>
 
 struct  host {
-	decl_lck_mtx_data(, lock)                /* lock to protect exceptions */
+	decl_lck_mtx_data(, lock);               /* lock to protect exceptions */
 	ipc_port_t special[HOST_MAX_SPECIAL_PORT + 1];
 	struct exception_action exc_actions[EXC_TYPES_COUNT];
 };

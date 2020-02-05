@@ -30,6 +30,7 @@
 
 extern kern_return_t test_pmap_enter_disconnect(unsigned int);
 extern kern_return_t test_pmap_iommu_disconnect(void);
+extern kern_return_t test_pmap_extended(void);
 
 static int
 sysctl_test_pmap_enter_disconnect(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
@@ -62,3 +63,19 @@ sysctl_test_pmap_iommu_disconnect(__unused struct sysctl_oid *oidp, __unused voi
 SYSCTL_PROC(_kern, OID_AUTO, pmap_iommu_disconnect_test,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     0, 0, sysctl_test_pmap_iommu_disconnect, "I", "");
+
+static int
+sysctl_test_pmap_extended(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	unsigned int run = 0;
+	int error, changed;
+	error = sysctl_io_number(req, 0, sizeof(run), &run, &changed);
+	if (error || !changed) {
+		return error;
+	}
+	return test_pmap_extended();
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, pmap_extended_test,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, sysctl_test_pmap_extended, "I", "");

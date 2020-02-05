@@ -71,6 +71,8 @@ struct user_nfs_gss_principal {
 
 #define NFS_IOC_GET_CRED                _IOWR('n', 3, struct nfs_gss_principal)
 
+#define NFS_IOC_DISARM_TRIGGER          _IO('n', 4)
+
 #ifdef KERNEL
 
 #define NFS_IOC_SET_CRED64              _IOW('n', 2, struct user_nfs_gss_principal)

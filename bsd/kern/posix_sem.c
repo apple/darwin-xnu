@@ -171,28 +171,18 @@ static int psem_cache_search(struct pseminfo **,
     struct psemname *, struct psemcache **);
 static int psem_delete(struct pseminfo * pinfo);
 
-static int psem_read(struct fileproc *fp, struct uio *uio,
-    int flags, vfs_context_t ctx);
-static int psem_write(struct fileproc *fp, struct uio *uio,
-    int flags, vfs_context_t ctx);
-static int psem_ioctl(struct fileproc *fp, u_long com,
-    caddr_t data, vfs_context_t ctx);
-static int psem_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx);
 static int psem_closefile(struct fileglob *fp, vfs_context_t ctx);
 static int psem_unlink_internal(struct pseminfo *pinfo, struct psemcache *pcache);
 
-static int psem_kqfilter(struct fileproc *fp, struct knote *kn,
-    struct kevent_internal_s *kev, vfs_context_t ctx);
-
 static const struct fileops psemops = {
-	.fo_type = DTYPE_PSXSEM,
-	.fo_read = psem_read,
-	.fo_write = psem_write,
-	.fo_ioctl = psem_ioctl,
-	.fo_select = psem_select,
-	.fo_close = psem_closefile,
-	.fo_kqfilter = psem_kqfilter,
-	.fo_drain = NULL,
+	.fo_type     = DTYPE_PSXSEM,
+	.fo_read     = fo_no_read,
+	.fo_write    = fo_no_write,
+	.fo_ioctl    = fo_no_ioctl,
+	.fo_select   = fo_no_select,
+	.fo_close    = psem_closefile,
+	.fo_drain    = fo_no_drain,
+	.fo_kqfilter = fo_no_kqfilter,
 };
 
 static lck_grp_t       *psx_sem_subsys_lck_grp;
@@ -797,7 +787,7 @@ sem_unlink(__unused proc_t p, struct sem_unlink_args *uap, __unused int32_t *ret
 
 	if (error != PSEMCACHE_FOUND) {
 		PSEM_SUBSYS_UNLOCK();
-		error = EINVAL;
+		error = ENOENT;
 		goto bad;
 	}
 
@@ -842,6 +832,8 @@ sem_close(proc_t p, struct sem_close_args *uap, __unused int32_t *retval)
 		return EBADF;
 	}
 	procfdtbl_markclosefd(p, fd);
+	/* release the ref returned from fp_lookup before calling drain */
+	(void) os_ref_release_locked(&fp->f_iocount);
 	fileproc_drain(p, fp);
 	fdrelse(p, fd);
 	error = closef_locked(fp, fp->f_fglob, p);
@@ -1115,43 +1107,6 @@ psem_delete(struct pseminfo * pinfo)
 	default:
 		return EINVAL;
 	}
-}
-
-static int
-psem_read(__unused struct fileproc *fp, __unused struct uio *uio,
-    __unused int flags, __unused vfs_context_t ctx)
-{
-	return ENOTSUP;
-}
-
-static int
-psem_write(__unused struct fileproc *fp, __unused struct uio *uio,
-    __unused int flags, __unused vfs_context_t ctx)
-{
-	return ENOTSUP;
-}
-
-static int
-psem_ioctl(__unused struct fileproc *fp, __unused u_long com,
-    __unused caddr_t data, __unused vfs_context_t ctx)
-{
-	return ENOTSUP;
-}
-
-static int
-psem_select(__unused struct fileproc *fp, __unused int which,
-    __unused void *wql, __unused vfs_context_t ctx)
-{
-	return ENOTSUP;
-}
-
-static int
-psem_kqfilter(__unused struct fileproc *fp, struct knote *kn,
-    __unused struct kevent_internal_s *kev, __unused vfs_context_t ctx)
-{
-	kn->kn_flags = EV_ERROR;
-	kn->kn_data = ENOTSUP;
-	return 0;
 }
 
 int

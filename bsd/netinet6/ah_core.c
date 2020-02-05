@@ -164,37 +164,37 @@ const struct ah_algorithm *
 ah_algorithm_lookup(int idx)
 {
 	/* checksum algorithms */
-	static struct ah_algorithm hmac_md5 =
+	static const struct ah_algorithm hmac_md5 =
 	{ ah_sumsiz_1216, ah_hmac_md5_mature, 128, 128, "hmac-md5",
 	  ah_hmac_md5_init, ah_hmac_md5_loop,
 	  ah_hmac_md5_result, };
-	static struct ah_algorithm keyed_md5 =
+	static const struct ah_algorithm keyed_md5 =
 	{ ah_sumsiz_1216, ah_keyed_md5_mature, 128, 128, "keyed-md5",
 	  ah_keyed_md5_init, ah_keyed_md5_loop,
 	  ah_keyed_md5_result, };
-	static struct ah_algorithm hmac_sha1 =
+	static const struct ah_algorithm hmac_sha1 =
 	{ ah_sumsiz_1216, ah_hmac_sha1_mature, 160, 160, "hmac-sha1",
 	  ah_hmac_sha1_init, ah_hmac_sha1_loop,
 	  ah_hmac_sha1_result, };
-	static struct ah_algorithm keyed_sha1 =
+	static const struct ah_algorithm keyed_sha1 =
 	{ ah_sumsiz_1216, ah_keyed_sha1_mature, 160, 160, "keyed-sha1",
 	  ah_keyed_sha1_init, ah_keyed_sha1_loop,
 	  ah_keyed_sha1_result, };
-	static struct ah_algorithm ah_none =
+	static const struct ah_algorithm ah_none =
 	{ ah_sumsiz_zero, ah_none_mature, 0, 2048, "none",
 	  ah_none_init, ah_none_loop, ah_none_result, };
 #if AH_ALL_CRYPTO
-	static struct ah_algorithm hmac_sha2_256 =
+	static const struct ah_algorithm hmac_sha2_256 =
 	{ ah_sumsiz_sha2_256, ah_hmac_sha2_256_mature, 256, 256,
 	  "hmac-sha2-256",
 	  ah_hmac_sha2_256_init, ah_hmac_sha2_256_loop,
 	  ah_hmac_sha2_256_result, };
-	static struct ah_algorithm hmac_sha2_384 =
+	static const struct ah_algorithm hmac_sha2_384 =
 	{ ah_sumsiz_sha2_384, ah_hmac_sha2_384_mature, 384, 384,
 	  "hmac-sha2-384",
 	  ah_hmac_sha2_384_init, ah_hmac_sha2_384_loop,
 	  ah_hmac_sha2_384_result, };
-	static struct ah_algorithm hmac_sha2_512 =
+	static const struct ah_algorithm hmac_sha2_512 =
 	{ ah_sumsiz_sha2_512, ah_hmac_sha2_512_mature, 512, 512,
 	  "hmac-sha2-512",
 	  ah_hmac_sha2_512_init, ah_hmac_sha2_512_loop,

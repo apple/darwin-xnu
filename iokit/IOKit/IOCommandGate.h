@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -59,7 +59,7 @@
  */
 class IOCommandGate : public IOEventSource
 {
-	OSDeclareDefaultStructors(IOCommandGate)
+	OSDeclareDefaultStructors(IOCommandGate);
 
 public:
 /*!
@@ -99,7 +99,7 @@ public:
 /*! @function commandGate
  *   @abstract Factory method to create and initialise an IOCommandGate, See $link init.
  *   @result Returns a pointer to the new command gate if sucessful, 0 otherwise. */
-	static IOCommandGate *commandGate(OSObject *owner, Action action = 0);
+	static IOCommandGate *commandGate(OSObject *owner, Action action = NULL);
 
 /*! @function init
  *   @abstract Class initialiser.
@@ -112,7 +112,7 @@ public:
  *  must cast the member function to $link IOCommandGate::Action and they will get a
  *  compiler warning.  Defaults to zero, see $link IOEventSource::setAction.
  *   @result True if inherited classes initialise successfully. */
-	virtual bool init(OSObject *owner, Action action = 0);
+	virtual bool init(OSObject *owner, Action action = NULL);
 
 // Superclass overrides
 	virtual void free() APPLE_KEXT_OVERRIDE;
@@ -132,8 +132,8 @@ public:
  *   @param arg3 Parameter for action of command gate, defaults to 0.
  *   @result kIOReturnSuccess if successful. kIOReturnAborted if a disabled command gate is free()ed before being reenabled, kIOReturnNoResources if no action available.
  */
-	virtual IOReturn runCommand(void *arg0 = 0, void *arg1 = 0,
-	    void *arg2 = 0, void *arg3 = 0);
+	virtual IOReturn runCommand(void *arg0 = NULL, void *arg1 = NULL,
+	    void *arg2 = NULL, void *arg3 = NULL);
 
 /*! @function runAction
  *   @abstract Single thread a call to an action with the target work loop.
@@ -151,8 +151,8 @@ public:
  *   @result The return value of action if it was called, kIOReturnBadArgument if action is not defined, kIOReturnAborted if a disabled command gate is free()ed before being reenabled.
  */
 	virtual IOReturn runAction(Action action,
-	    void *arg0 = 0, void *arg1 = 0,
-	    void *arg2 = 0, void *arg3 = 0);
+	    void *arg0 = NULL, void *arg1 = NULL,
+	    void *arg2 = NULL, void *arg3 = NULL);
 
 #ifdef __BLOCKS__
 /*! @function runActionBlock
@@ -179,8 +179,8 @@ public:
  *   @param arg3 Parameter for action of command gate, defaults to 0.
  *   @result kIOReturnSuccess if successful. kIOReturnNotPermitted if this event source is currently disabled, kIOReturnNoResources if no action available, kIOReturnCannotLock if lock attempt fails.
  */
-	virtual IOReturn attemptCommand(void *arg0 = 0, void *arg1 = 0,
-	    void *arg2 = 0, void *arg3 = 0);
+	virtual IOReturn attemptCommand(void *arg0 = NULL, void *arg1 = NULL,
+	    void *arg2 = NULL, void *arg3 = NULL);
 
 /*! @function attemptAction
  *   @abstract Single thread a call to an action with the target work loop.
@@ -197,8 +197,8 @@ public:
  *
  */
 	virtual IOReturn attemptAction(Action action,
-	    void *arg0 = 0, void *arg1 = 0,
-	    void *arg2 = 0, void *arg3 = 0);
+	    void *arg0 = NULL, void *arg1 = NULL,
+	    void *arg2 = NULL, void *arg3 = NULL);
 
 /*! @function commandSleep
  *   @abstract Put a thread that is currently holding the command gate to sleep.

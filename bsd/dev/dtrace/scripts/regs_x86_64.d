@@ -3,8 +3,6 @@
  * Use is subject to license terms.
  */
 
-#pragma ident	"@(#)regs.d.in	1.1	04/09/28 SMI"
-
 inline int R_GS = 0;
 #pragma D binding "1.0" R_GS
 inline int R_FS = 1;

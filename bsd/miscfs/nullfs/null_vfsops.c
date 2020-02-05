@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -408,7 +408,7 @@ nullfs_vfs_getattr(struct mount * mp, struct vfs_attr * vfap, vfs_context_t ctx)
 	vol_capabilities_attr_t capabilities;
 	struct vfsstatfs * sp = vfs_statfs(mp);
 
-	struct timespec tzero = {0, 0};
+	struct timespec tzero = {.tv_sec = 0, .tv_nsec = 0};
 
 	NULLFSDEBUG("%s\n", __FUNCTION__);
 
@@ -549,9 +549,9 @@ nullfs_vfs_start(__unused struct mount * mp, __unused int flags, __unused vfs_co
 	return 0;
 }
 
-extern struct vnodeopv_desc nullfs_vnodeop_opv_desc;
+extern const struct vnodeopv_desc nullfs_vnodeop_opv_desc;
 
-struct vnodeopv_desc * nullfs_vnodeopv_descs[] = {
+const struct vnodeopv_desc * nullfs_vnodeopv_descs[] = {
 	&nullfs_vnodeop_opv_desc,
 };
 

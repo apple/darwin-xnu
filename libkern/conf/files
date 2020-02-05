@@ -2,13 +2,13 @@
 
 OPTIONS/libkerncpp					optional libkerncpp
 OPTIONS/kdebug						optional kdebug
-OPTIONS/gprof						optional gprof
 OPTIONS/config_dtrace					optional config_dtrace
 OPTIONS/hibernation					optional hibernation
 OPTIONS/iotracking					optional iotracking
 OPTIONS/networking					optional networking
 OPTIONS/crypto						optional crypto
 OPTIONS/zlib						optional zlib
+OPTIONS/zlibc						optional zlibc
 
 # libkern
 
@@ -37,6 +37,7 @@ libkern/c++/OSSymbol.cpp				optional libkerncpp
 libkern/c++/OSUnserialize.cpp				optional libkerncpp
 libkern/c++/OSUnserializeXML.cpp			optional libkerncpp
 libkern/c++/OSSerializeBinary.cpp			optional libkerncpp
+libkern/c++/OSCompat.cpp			optional libkerncpp
 
 libkern/OSKextLib.cpp					optional libkerncpp
 libkern/mkext.c						standard
@@ -69,6 +70,18 @@ libkern/zlib/inftrees.c                                 optional zlib
 libkern/zlib/trees.c                                    optional zlib
 libkern/zlib/uncompr.c                                  optional zlib
 libkern/zlib/zutil.c                                    optional zlib
+
+libkern/zlib/adler32.c                                  optional zlibc
+libkern/zlib/compress.c                                 optional zlibc
+libkern/zlib/z_crc32.c                                  optional zlibc
+libkern/zlib/deflate.c                                  optional zlibc
+libkern/zlib/infback.c                                  optional zlibc
+libkern/zlib/inffast.c                                  optional zlibc
+libkern/zlib/inflate.c                                  optional zlibc
+libkern/zlib/inftrees.c                                 optional zlibc
+libkern/zlib/trees.c                                    optional zlibc
+libkern/zlib/uncompr.c                                  optional zlibc
+libkern/zlib/zutil.c                                    optional zlibc
 
 libkern/crypto/register_crypto.c		optional crypto
 libkern/crypto/corecrypto_sha2.c		standard

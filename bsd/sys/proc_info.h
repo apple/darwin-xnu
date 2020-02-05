@@ -139,6 +139,11 @@ struct proc_originatorinfo {
 	uint64_t                p_reserve4;
 };
 
+struct proc_ipctableinfo {
+	uint32_t               table_size;
+	uint32_t               table_free;
+};
+
 #endif
 
 
@@ -375,6 +380,12 @@ struct vnode_fdinfowithpath {
 struct proc_regionwithpathinfo {
 	struct proc_regioninfo  prp_prinfo;
 	struct vnode_info_path  prp_vip;
+};
+
+struct proc_regionpath {
+	uint64_t prpo_addr;
+	uint64_t prpo_regionlength;
+	char prpo_path[MAXPATHLEN];
 };
 
 struct proc_vnodepathinfo {
@@ -800,6 +811,16 @@ struct proc_fileportinfo {
 
 #define PROC_PIDVMRTFAULTINFO           29
 #define PROC_PIDVMRTFAULTINFO_SIZE (7 * sizeof(uint64_t))
+
+#define PROC_PIDPLATFORMINFO 30
+#define PROC_PIDPLATFORMINFO_SIZE (sizeof(uint32_t))
+
+#define PROC_PIDREGIONPATH              31
+#define PROC_PIDREGIONPATH_SIZE         (sizeof(struct proc_regionpath))
+
+#define PROC_PIDIPCTABLEINFO 32
+#define PROC_PIDIPCTABLEINFO_SIZE (sizeof(struct proc_ipctableinfo))
+
 #endif /* PRIVATE */
 /* Flavors for proc_pidfdinfo */
 

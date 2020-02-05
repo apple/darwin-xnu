@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -77,6 +77,7 @@
 
 #include <kern/zalloc.h>
 #include <pexpert/pexpert.h>
+#include <os/log.h>
 
 #include <net/if.h>
 #include <net/if_types.h>
@@ -778,10 +779,6 @@ inctl_ifaddr(struct ifnet *ifp, struct in_ifaddr *ia, u_long cmd,
 			error = 0;
 		}
 		if (error != 0) {
-			/* Reset the detaching flag */
-			IFA_LOCK(&ia->ia_ifa);
-			ia->ia_ifa.ifa_debug &= ~IFD_DETACHING;
-			IFA_UNLOCK(&ia->ia_ifa);
 			break;
 		}
 
@@ -1346,21 +1343,6 @@ in_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 			if (iap->ia_ifp == ifp &&
 			    iap->ia_addr.sin_addr.s_addr ==
 			    sa->sin_addr.s_addr) {
-				/*
-				 * Avoid the race condition seen when two
-				 * threads process SIOCDIFADDR command
-				 * at the same time (radar 28942007)
-				 */
-				if (cmd == SIOCDIFADDR) {
-					if (iap->ia_ifa.ifa_debug &
-					    IFD_DETACHING) {
-						IFA_UNLOCK(&iap->ia_ifa);
-						continue;
-					} else {
-						iap->ia_ifa.ifa_debug |=
-						    IFD_DETACHING;
-					}
-				}
 				ia = iap;
 				IFA_ADDREF_LOCKED(&iap->ia_ifa);
 				IFA_UNLOCK(&iap->ia_ifa);
@@ -1377,14 +1359,11 @@ in_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 				IFA_LOCK(&iap->ia_ifa);
 				if (iap->ia_addr.sin_family == AF_INET) {
 					ia = iap;
+					IFA_ADDREF_LOCKED(&iap->ia_ifa);
 					IFA_UNLOCK(&iap->ia_ifa);
 					break;
 				}
 				IFA_UNLOCK(&iap->ia_ifa);
-			}
-			/* take a reference on ia before releasing lock */
-			if (ia != NULL) {
-				IFA_ADDREF(&ia->ia_ifa);
 			}
 			ifnet_lock_done(ifp);
 		}
@@ -1444,10 +1423,40 @@ in_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 			error = EINVAL;
 			goto done;
 		}
-		if (cmd == SIOCDIFADDR && ia == NULL) {
-			error = EADDRNOTAVAIL;
-			goto done;
+		if (cmd == SIOCDIFADDR) {
+			if (ia == NULL) {
+				error = EADDRNOTAVAIL;
+				goto done;
+			}
+
+			IFA_LOCK(&ia->ia_ifa);
+			/*
+			 * Avoid the race condition seen when two
+			 * threads process SIOCDIFADDR command
+			 * at the same time.
+			 */
+			while (ia->ia_ifa.ifa_debug & IFD_DETACHING) {
+				os_log(OS_LOG_DEFAULT,
+				    "Another thread is already attempting to "
+				    "delete IPv4 address: %s on interface %s. "
+				    "Go to sleep and check again after the operation is done",
+				    inet_ntoa(sa->sin_addr), ia->ia_ifp->if_xname);
+				ia->ia_ifa.ifa_del_waiters++;
+				(void) msleep(ia->ia_ifa.ifa_del_wc, &ia->ia_ifa.ifa_lock, (PZERO - 1),
+				    __func__, NULL);
+				IFA_LOCK_ASSERT_HELD(&ia->ia_ifa);
+			}
+
+			if ((ia->ia_ifa.ifa_debug & IFD_ATTACHED) == 0) {
+				error = EADDRNOTAVAIL;
+				IFA_UNLOCK(&ia->ia_ifa);
+				goto done;
+			}
+
+			ia->ia_ifa.ifa_debug |= IFD_DETACHING;
+			IFA_UNLOCK(&ia->ia_ifa);
 		}
+
 	/* FALLTHROUGH */
 	case SIOCSIFADDR:               /* struct ifreq */
 	case SIOCSIFDSTADDR:            /* struct ifreq */
@@ -1543,8 +1552,18 @@ in_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 		error = EOPNOTSUPP;
 		break;
 	}
+
 done:
 	if (ia != NULL) {
+		if (cmd == SIOCDIFADDR) {
+			IFA_LOCK(&ia->ia_ifa);
+			ia->ia_ifa.ifa_debug &= ~IFD_DETACHING;
+			if (ia->ia_ifa.ifa_del_waiters > 0) {
+				ia->ia_ifa.ifa_del_waiters = 0;
+				wakeup(ia->ia_ifa.ifa_del_wc);
+			}
+			IFA_UNLOCK(&ia->ia_ifa);
+		}
 		IFA_REMREF(&ia->ia_ifa);
 	}
 	if (so_unlocked) {
@@ -2036,6 +2055,8 @@ in_ifaddr_alloc(int how)
 		bzero(inifa, inifa_size);
 		inifa->ia_ifa.ifa_free = in_ifaddr_free;
 		inifa->ia_ifa.ifa_debug |= IFD_ALLOC;
+		inifa->ia_ifa.ifa_del_wc = &inifa->ia_ifa.ifa_debug;
+		inifa->ia_ifa.ifa_del_waiters = 0;
 		ifa_lock_init(&inifa->ia_ifa);
 		if (inifa_debug != 0) {
 			struct in_ifaddr_dbg *inifa_dbg =

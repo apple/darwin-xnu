@@ -226,6 +226,9 @@ static const bsm_fcntl_cmd_t bsm_fcntl_cmdtab[] = {
 #ifdef  F_TRIM_ACTIVE_FILE
 	{ BSM_F_TRIM_ACTIVE_FILE, F_TRIM_ACTIVE_FILE },
 #endif
+#ifdef  F_SPECULATIVE_READ
+	{ BSM_F_SPECULATIVE_READ, F_SPECULATIVE_READ },
+#endif
 
 #ifdef  FCNTL_FS_SPECIFIC_BASE
 	{ BSM_F_FS_SPECIFIC_0, FCNTL_FS_SPECIFIC_BASE},

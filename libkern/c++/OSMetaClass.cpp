@@ -60,6 +60,7 @@ __BEGIN_DECLS
 #include <kern/thread_call.h>
 #include <kern/host.h>
 #include <mach/mach_interface.h>
+#include <stddef.h>
 
 #if PRAGMA_MARK
 #pragma mark Macros
@@ -144,14 +145,14 @@ OSMetaClassBase::_RESERVEDOSMetaClassBase2()
 {
 	panic("OSMetaClassBase::_RESERVEDOSMetaClassBase%d called.", 2);
 }
-#endif /* SLOT_USED */
-
-// As these slots are used move them up inside the #if above
 void
 OSMetaClassBase::_RESERVEDOSMetaClassBase3()
 {
 	panic("OSMetaClassBase::_RESERVEDOSMetaClassBase%d called.", 3);
 }
+#endif /* SLOT_USED */
+
+// As these slots are used move them up inside the #if above
 void
 OSMetaClassBase::_RESERVEDOSMetaClassBase4()
 {
@@ -169,13 +170,14 @@ OSMetaClassBase::_RESERVEDOSMetaClassBase6()
 }
 #endif
 
-
 /*********************************************************************
 *********************************************************************/
 
 #if defined(__arm__) || defined(__arm64__)
 
-
+#if defined(HAS_APPLE_PAC)
+#include <ptrauth.h>
+#endif /* defined(HAS_APPLE_PAC) */
 
 /*
  *  IHI0059A "C++ Application Binary Interface Standard for the ARM 64 - bit Architecture":
@@ -194,9 +196,16 @@ OSMetaClassBase::_RESERVEDOSMetaClassBase6()
  */
 
 OSMetaClassBase::_ptf_t
-OSMetaClassBase::_ptmf2ptf(const OSMetaClassBase *self, void (OSMetaClassBase::*func)(void))
+#if defined(HAS_APPLE_PAC) && __has_feature(ptrauth_type_discriminator)
+OSMetaClassBase::_ptmf2ptf(const OSMetaClassBase *self __attribute__((unused)),
+    void (OSMetaClassBase::*func)(void), uintptr_t typeDisc)
+#else
+OSMetaClassBase::_ptmf2ptf(const OSMetaClassBase *self,
+    void (OSMetaClassBase::*func)(void),
+    uintptr_t typeDisc
+    __attribute__((unused)))
+#endif
 {
-	typedef long int ptrdiff_t;
 	struct ptmf_t {
 		_ptf_t fPFN;
 		ptrdiff_t delta;
@@ -210,6 +219,13 @@ OSMetaClassBase::_ptmf2ptf(const OSMetaClassBase *self, void (OSMetaClassBase::*
 	map.fIn = func;
 	pfn     = map.pTMF.fPFN;
 
+#if defined(HAS_APPLE_PAC) && __has_feature(ptrauth_type_discriminator)
+	// Authenticate 'pfn' using the member function pointer type discriminator
+	// and resign it as a C function pointer. 'pfn' can point to either a
+	// non-virtual function or a virtual member function thunk.
+	pfn = ptrauth_auth_function(pfn, ptrauth_key_function_pointer, typeDisc);
+	return pfn;
+#else
 	if (map.pTMF.delta & 1) {
 		// virtual
 		union {
@@ -219,12 +235,33 @@ OSMetaClassBase::_ptmf2ptf(const OSMetaClassBase *self, void (OSMetaClassBase::*
 		u.fObj = self;
 
 		// Virtual member function so dereference table
+#if defined(HAS_APPLE_PAC)
+		// The entity hash is stored in the top 32-bits of the vtable offset of a
+		// member function pointer.
+		uint32_t entity_hash = ((uintptr_t)pfn) >> 32;
+		pfn = (_ptf_t)(((uintptr_t) pfn) & 0xFFFFFFFF);
+
+		// Authenticate the vtable pointer.
+		_ptf_t *vtablep = ptrauth_auth_data(*u.vtablep,
+		    ptrauth_key_cxx_vtable_pointer, 0);
+		// Calculate the address of the vtable entry.
+		_ptf_t *vtentryp = (_ptf_t *)(((uintptr_t)vtablep) + (uintptr_t)pfn);
+		// Load the pointer from the vtable entry.
+		pfn = *vtentryp;
+
+		// Finally, resign the vtable entry as a function pointer.
+		uintptr_t auth_data = ptrauth_blend_discriminator(vtentryp, entity_hash);
+		pfn = ptrauth_auth_and_resign(pfn, ptrauth_key_function_pointer,
+		    auth_data, ptrauth_key_function_pointer, 0);
+#else /* defined(HAS_APPLE_PAC) */
 		pfn = *(_ptf_t *)(((uintptr_t)*u.vtablep) + (uintptr_t)pfn);
+#endif /* !defined(HAS_APPLE_PAC) */
 		return pfn;
 	} else {
 		// Not virtual, i.e. plain member func
 		return pfn;
 	}
+#endif
 }
 
 #endif /* defined(__arm__) || defined(__arm64__) */
@@ -243,7 +280,32 @@ OSMetaClassBase::safeMetaCast(
 	const OSMetaClassBase * me,
 	const OSMetaClass     * toType)
 {
-	return (me)? me->metaCast(toType) : 0;
+	return (me)? me->metaCast(toType) : NULL;
+}
+
+/// A helper function to crash with a kernel panic.
+__attribute__((cold, not_tail_called, noreturn))
+static inline void
+panic_crash_fail_cast(const OSMetaClassBase *me,
+    const OSMetaClass *toType)
+{
+	panic("Unexpected cast fail: from %p to %p", me, toType);
+	__builtin_unreachable();
+}
+
+OSMetaClassBase *
+OSMetaClassBase::requiredMetaCast(
+	const OSMetaClassBase * me,
+	const OSMetaClass     * toType)
+{
+	if (!me) {
+		return NULL;
+	}
+	OSMetaClassBase *tmp = safeMetaCast(me, toType);
+	if (!tmp) {
+		panic_crash_fail_cast(me, toType);
+	}
+	return tmp;
 }
 
 /*********************************************************************
@@ -254,7 +316,7 @@ OSMetaClassBase::checkTypeInst(
 	const OSMetaClassBase * typeinst)
 {
 	const OSMetaClass * toType = OSTypeIDInst(typeinst);
-	return typeinst && inst && (0 != inst->metaCast(toType));
+	return typeinst && inst && (NULL != inst->metaCast(toType));
 }
 
 /*********************************************************************
@@ -327,7 +389,7 @@ OSMetaClassBase *
 OSMetaClassBase::metaCast(const OSString * toMetaStr) const
 {
 	const OSSymbol  * tempSymb = OSSymbol::withString(toMetaStr);
-	OSMetaClassBase * ret = 0;
+	OSMetaClassBase * ret = NULL;
 	if (tempSymb) {
 		ret = metaCast(tempSymb);
 		tempSymb->release();
@@ -341,7 +403,7 @@ OSMetaClassBase *
 OSMetaClassBase::metaCast(const char * toMetaCStr) const
 {
 	const OSSymbol  * tempSymb = OSSymbol::withCString(toMetaCStr);
-	OSMetaClassBase * ret = 0;
+	OSMetaClassBase * ret = NULL;
 	if (tempSymb) {
 		ret = metaCast(tempSymb);
 		tempSymb->release();
@@ -362,13 +424,13 @@ public:
 	OSObject * alloc() const;
 };
 OSMetaClassMeta::OSMetaClassMeta()
-	: OSMetaClass("OSMetaClass", 0, sizeof(OSMetaClass))
+	: OSMetaClass("OSMetaClass", NULL, sizeof(OSMetaClass))
 {
 }
 OSObject *
 OSMetaClassMeta::alloc() const
 {
-	return 0;
+	return NULL;
 }
 
 static OSMetaClassMeta sOSMetaClassMeta;
@@ -496,6 +558,7 @@ OSMetaClass::logError(OSReturn error)
 * registration, and OSMetaClass::postModLoad(), which actually
 * records all the class/kext relationships of the new MetaClasses.
 *********************************************************************/
+
 OSMetaClass::OSMetaClass(
 	const char        * inClassName,
 	const OSMetaClass * inSuperClass,
@@ -568,7 +631,7 @@ OSMetaClass::OSMetaClass(
 *********************************************************************/
 OSMetaClass::~OSMetaClass()
 {
-	OSKext * myKext = reserved ? reserved->kext : 0; // do not release
+	OSKext * myKext = reserved ? reserved->kext : NULL; // do not release
 
 	/* Hack alert: 'className' is a C string during early C++ init, and
 	 * is converted to a real OSSymbol only when we record the OSKext in
@@ -698,7 +761,7 @@ OSMetaClass::preModLoad(const char * kextIdentifier)
 		    kalloc_tag(kKModCapacityIncrement * sizeof(OSMetaClass *), VM_KERN_MEMORY_OSKEXT);
 		if (!sStalled->classes) {
 			kfree(sStalled, sizeof(*sStalled));
-			return 0;
+			return NULL;
 		}
 		OSMETA_ACCUMSIZE((kKModCapacityIncrement * sizeof(OSMetaClass *)) +
 		    sizeof(*sStalled));
@@ -730,8 +793,8 @@ OSReturn
 OSMetaClass::postModLoad(void * loadHandle)
 {
 	OSReturn         result     = kOSReturnSuccess;
-	OSSymbol       * myKextName = 0;// must release
-	OSKext         * myKext     = 0;// must release
+	OSSymbol       * myKextName = NULL;// must release
+	OSKext         * myKext     = NULL;// must release
 
 	if (!sStalled || loadHandle != sStalled) {
 		result = kOSMetaClassInternal;
@@ -882,7 +945,7 @@ finish:
 	            sizeof(*sStalled)));
 	        kfree(sStalled->classes, sStalled->capacity * sizeof(OSMetaClass *));
 	        kfree(sStalled, sizeof(*sStalled));
-	        sStalled = 0;
+	        sStalled = NULL;
 	}
 
 	IOLockUnlock(sStalledClassesLock);
@@ -988,7 +1051,7 @@ OSMetaClass::removeInstance(const OSObject * instance, bool super) const
 			}
                         IOLockLock(sAllClassesLock);
                         reserved->instances->release();
-                        reserved->instances = 0;
+                        reserved->instances = NULL;
                         IOLockUnlock(sAllClassesLock);
 		}
 	}
@@ -1072,7 +1135,7 @@ OSMetaClass::applyToInstancesOfClassName(
 	void * context)
 {
         OSMetaClass  * meta;
-        OSOrderedSet * set = 0;
+        OSOrderedSet * set = NULL;
 
         IOLockLock(sAllClassesLock);
         if (sAllClassesDict
@@ -1144,10 +1207,10 @@ OSMetaClass::removeClasses(OSCollection * metaClasses)
 const OSMetaClass *
 OSMetaClass::getMetaClassWithName(const OSSymbol * name)
 {
-        OSMetaClass * retMeta = 0;
+        OSMetaClass * retMeta = NULL;
 
         if (!name) {
-                return 0;
+                return NULL;
 	}
 
         IOLockLock(sAllClassesLock);
@@ -1167,10 +1230,10 @@ OSMetaClass::copyMetaClassWithName(const OSSymbol * name)
         const OSMetaClass * meta;
 
         if (!name) {
-                return 0;
+                return NULL;
 	}
 
-        meta = 0;
+        meta = NULL;
         IOLockLock(sAllClassesLock);
         if (sAllClassesDict) {
                 meta = (OSMetaClass *) sAllClassesDict->getObject(name);
@@ -1199,7 +1262,7 @@ OSMetaClass::allocClassWithName(const OSSymbol * name)
         const OSMetaClass * meta;
         OSObject          * result;
 
-        result = 0;
+        result = NULL;
         meta = copyMetaClassWithName(name);
         if (meta) {
                 result = meta->alloc();
@@ -1239,7 +1302,7 @@ OSMetaClass::checkMetaCastWithName(
 	const OSSymbol        * name,
 	const OSMetaClassBase * in)
 {
-        OSMetaClassBase * result = 0;
+        OSMetaClassBase * result = NULL;
 
         const OSMetaClass * const meta = getMetaClassWithName(name);
 
@@ -1305,11 +1368,12 @@ OSMetaClass::checkMetaCast(
 		}
 	}
 
-        return 0;
+        return NULL;
 }
 
 /*********************************************************************
 *********************************************************************/
+__dead2
 void
 OSMetaClass::reservedCalled(int ind) const
 {
@@ -1332,7 +1396,7 @@ OSMetaClass::getSuperClass() const
 const OSSymbol *
 OSMetaClass::getKmodName() const
 {
-        OSKext * myKext = reserved ? reserved->kext : 0;
+        OSKext * myKext = reserved ? reserved->kext : NULL;
         if (myKext) {
                 return myKext->getIdentifier();
 	}
@@ -1383,7 +1447,7 @@ OSDictionary *
 OSMetaClass::getClassDictionary()
 {
         panic("OSMetaClass::getClassDictionary() is obsoleted.\n");
-        return 0;
+        return NULL;
 }
 
 /*********************************************************************

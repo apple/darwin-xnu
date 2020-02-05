@@ -36,13 +36,16 @@
 #include <arm/caches_internal.h>
 #include <arm/misc_protos.h>
 #include <arm/machdep_call.h>
+#include <arm/machine_routines.h>
 #include <arm/rtclock.h>
 #include <arm/cpuid_internal.h>
+#include <arm/cpu_capabilities.h>
 #include <console/serial_protos.h>
 #include <kern/machine.h>
 #include <prng/random.h>
 #include <kern/startup.h>
 #include <kern/thread.h>
+#include <kern/timer_queue.h>
 #include <mach/machine.h>
 #include <machine/atomic.h>
 #include <vm/pmap.h>
@@ -64,6 +67,7 @@
 #endif
 
 
+
 static int max_cpus_initialized = 0;
 #define MAX_CPUS_SET    0x1
 #define MAX_CPUS_WAIT   0x2
@@ -76,10 +80,12 @@ boolean_t is_clock_configured = FALSE;
 
 uint32_t yield_delay_us = 0; /* Must be less than cpu_idle_latency to ensure ml_delay_should_spin is true */
 
+#if CONFIG_NONFATAL_ASSERTS
 extern int mach_assert;
+#endif
 extern volatile uint32_t debug_enabled;
 
-extern vm_offset_t   segEXTRADATA;
+extern vm_offset_t   segLOWEST;
 extern vm_offset_t   segLOWESTTEXT;
 extern vm_offset_t   segLASTB;
 extern unsigned long segSizeLAST;
@@ -108,12 +114,14 @@ void ml_lockdown_run_handler(void);
 uint32_t get_arm_cpu_version(void);
 
 
+__dead2
 void
-ml_cpu_signal(unsigned int cpu_id __unused)
+ml_cpu_signal(unsigned int cpu_mpidr __unused)
 {
 	panic("Platform does not support ACC Fast IPI");
 }
 
+__dead2
 void
 ml_cpu_signal_deferred_adjust_timer(uint64_t nanosecs)
 {
@@ -127,14 +135,16 @@ ml_cpu_signal_deferred_get_timer()
 	return 0;
 }
 
+__dead2
 void
-ml_cpu_signal_deferred(unsigned int cpu_id __unused)
+ml_cpu_signal_deferred(unsigned int cpu_mpidr __unused)
 {
 	panic("Platform does not support ACC Fast IPI deferral");
 }
 
+__dead2
 void
-ml_cpu_signal_retract(unsigned int cpu_id __unused)
+ml_cpu_signal_retract(unsigned int cpu_mpidr __unused)
 {
 	panic("Platform does not support ACC Fast IPI retraction");
 }
@@ -142,9 +152,9 @@ ml_cpu_signal_retract(unsigned int cpu_id __unused)
 void
 machine_idle(void)
 {
-	__asm__ volatile ("msr DAIFSet, %[mask]" ::[mask] "i" (DAIFSC_IRQF | DAIFSC_FIQF));
+	__builtin_arm_wsr("DAIFSet", (DAIFSC_IRQF | DAIFSC_FIQF));
 	Idle_context();
-	__asm__ volatile ("msr DAIFClr, %[mask]" ::[mask] "i" (DAIFSC_IRQF | DAIFSC_FIQF));
+	__builtin_arm_wsr("DAIFClr", (DAIFSC_IRQF | DAIFSC_FIQF));
 }
 
 void
@@ -234,15 +244,11 @@ user_cont_hwclock_allowed(void)
 	return FALSE;
 }
 
-/*
- * user_timebase_allowed()
- *
- * Indicates whether we allow EL0 to read the physical timebase (CNTPCT_EL0).
- */
-boolean_t
-user_timebase_allowed(void)
+
+uint8_t
+user_timebase_type(void)
 {
-	return TRUE;
+	return USER_TIMEBASE_SPEC;
 }
 
 boolean_t
@@ -357,9 +363,9 @@ lock_mmu(uint64_t begin, uint64_t end)
 	__builtin_arm_isb(ISB_SY);
 	flush_mmu_tlb();
 
-#else
+#else /* defined(KERNEL_INTEGRITY_KTRR) */
 #error KERNEL_INTEGRITY config error
-#endif
+#endif /* defined(KERNEL_INTEGRITY_KTRR) */
 }
 
 static void
@@ -403,7 +409,7 @@ rorgn_lockdown(void)
 	assert_unlocked();
 
 	/* [x] - Use final method of determining all kernel text range or expect crashes */
-	ktrr_begin = segEXTRADATA;
+	ktrr_begin = segLOWEST;
 	assert(ktrr_begin && gVirtBase && gPhysBase);
 
 	ktrr_begin = kvtophys(ktrr_begin);
@@ -451,7 +457,9 @@ machine_startup(__unused boot_args * args)
 	int boot_arg;
 
 
+#if CONFIG_NONFATAL_ASSERTS
 	PE_parse_boot_argn("assert", &mach_assert, sizeof(mach_assert));
+#endif
 
 	if (PE_parse_boot_argn("preempt", &boot_arg, sizeof(boot_arg))) {
 		default_preemption_rate = boot_arg;
@@ -649,8 +657,8 @@ ml_init_lock_timeout(void)
 void
 ml_cpu_up(void)
 {
-	hw_atomic_add(&machine_info.physical_cpu, 1);
-	hw_atomic_add(&machine_info.logical_cpu, 1);
+	os_atomic_inc(&machine_info.physical_cpu, relaxed);
+	os_atomic_inc(&machine_info.logical_cpu, relaxed);
 }
 
 /*
@@ -662,8 +670,8 @@ ml_cpu_down(void)
 {
 	cpu_data_t      *cpu_data_ptr;
 
-	hw_atomic_sub(&machine_info.physical_cpu, 1);
-	hw_atomic_sub(&machine_info.logical_cpu, 1);
+	os_atomic_dec(&machine_info.physical_cpu, relaxed);
+	os_atomic_dec(&machine_info.logical_cpu, relaxed);
 
 	/*
 	 * If we want to deal with outstanding IPIs, we need to
@@ -678,6 +686,16 @@ ml_cpu_down(void)
 	 */
 	cpu_data_ptr = getCpuDatap();
 	cpu_data_ptr->cpu_running = FALSE;
+
+	if (cpu_data_ptr != &BootCpuData) {
+		/*
+		 * Move all of this cpu's timers to the master/boot cpu,
+		 * and poke it in case there's a sooner deadline for it to schedule.
+		 */
+		timer_queue_shutdown(&cpu_data_ptr->rtclock_timer.queue);
+		cpu_xcall(BootCpuData.cpu_number, &timer_queue_expire_local, NULL);
+	}
+
 	cpu_signal_handler_internal(TRUE);
 }
 
@@ -1085,7 +1103,7 @@ ml_processor_register(ml_processor_info_t *in_processor_info,
 #endif /* KPC */
 
 	if (!is_boot_cpu) {
-		early_random_cpu_init(this_cpu_datap->cpu_number);
+		random_cpu_init(this_cpu_datap->cpu_number);
 		// now let next CPU register itself
 		OSIncrementAtomic((SInt32*)&real_ncpus);
 	}
@@ -1162,6 +1180,16 @@ ml_io_map(
 	vm_size_t size)
 {
 	return io_map(phys_addr, size, VM_WIMG_IO);
+}
+
+/* Map memory map IO space (with protections specified) */
+vm_offset_t
+ml_io_map_with_prot(
+	vm_offset_t phys_addr,
+	vm_size_t size,
+	vm_prot_t prot)
+{
+	return io_map_with_prot(phys_addr, size, VM_WIMG_IO, prot);
 }
 
 vm_offset_t
@@ -1308,9 +1336,6 @@ ml_static_protect(
 						}
 					}
 				}
-#ifndef  __ARM_L1_PTW__
-				FlushPoC_DcacheRegion( trunc_page_32(pte_p), 4 * sizeof(*pte_p));
-#endif
 			} else {
 				ptmp = *pte_p;
 
@@ -1319,10 +1344,6 @@ ml_static_protect(
 					ptmp = (ptmp & ~(ARM_PTE_APMASK | ARM_PTE_PNXMASK | ARM_PTE_NXMASK)) | arm_prot;
 					*pte_p = ptmp;
 				}
-
-#ifndef  __ARM_L1_PTW__
-				FlushPoC_DcacheRegion( trunc_page_32(pte_p), sizeof(*pte_p));
-#endif
 			}
 			__unreachable_ok_pop
 		}
@@ -1601,9 +1622,8 @@ ml_get_hwclock()
 	// ISB required by ARMV7C.b section B8.1.2 & ARMv8 section D6.1.2
 	// "Reads of CNTPCT[_EL0] can occur speculatively and out of order relative
 	// to other instructions executed on the same processor."
-	__asm__ volatile ("isb\n"
-                          "mrs %0, CNTPCT_EL0"
-                          : "=r"(timebase));
+	__builtin_arm_isb(ISB_SY);
+	timebase = __builtin_arm_rsr64("CNTPCT_EL0");
 
 	return timebase;
 }
@@ -1678,7 +1698,13 @@ cache_trap_recover()
 static void
 set_cache_trap_recover(thread_t thread)
 {
+#if defined(HAS_APPLE_PAC)
+	thread->recover = (vm_address_t)ptrauth_auth_and_resign(&cache_trap_recover,
+	    ptrauth_key_function_pointer, 0,
+	    ptrauth_key_function_pointer, ptrauth_blend_discriminator(&thread->recover, PAC_DISCRIMINATOR_RECOVER));
+#else /* defined(HAS_APPLE_PAC) */
 	thread->recover = (vm_address_t)cache_trap_recover;
+#endif /* defined(HAS_APPLE_PAC) */
 }
 
 static void
@@ -1742,14 +1768,8 @@ icache_invalidate_trap(vm_map_address_t start, vm_map_size_t size)
 
 	set_cache_trap_recover(thread);
 
-	CleanPoU_DcacheRegion(start, (uint32_t) size);
-
 	/* Invalidate iCache to point of unification */
-#if __ARM_IC_NOALIAS_ICACHE__
 	InvalidatePoU_IcacheRegion(start, (uint32_t)size);
-#else
-	InvalidatePoU_Icache();
-#endif
 
 	/* Restore recovery function */
 	thread->recover = old_recover;
@@ -1814,7 +1834,7 @@ _enable_timebase_event_stream(uint32_t bit_index)
 	 * If the SOC supports it (and it isn't broken), enable
 	 * EL0 access to the physical timebase register.
 	 */
-	if (user_timebase_allowed()) {
+	if (user_timebase_type() != USER_TIMEBASE_NONE) {
 		cntkctl |= CNTKCTL_EL1_PL0PCTEN;
 	}
 
@@ -1832,6 +1852,8 @@ _enable_virtual_timer(void)
 	__asm__ volatile ("msr CNTP_CTL_EL0, %0" : : "r"(cntvctl));
 }
 
+uint64_t events_per_sec = 0;
+
 void
 fiq_context_init(boolean_t enable_fiq __unused)
 {
@@ -1847,16 +1869,10 @@ fiq_context_bootstrap(boolean_t enable_fiq)
 {
 #if defined(APPLE_ARM64_ARCH_FAMILY) || defined(BCM2837)
 	/* Could fill in our own ops here, if we needed them */
-	uint64_t        ticks_per_sec, ticks_per_event, events_per_sec;
+	uint64_t        ticks_per_sec, ticks_per_event;
 	uint32_t        bit_index;
 
 	ticks_per_sec = gPEClockFrequencyInfo.timebase_frequency_hz;
-#if defined(ARM_BOARD_WFE_TIMEOUT_NS)
-	events_per_sec = 1000000000 / ARM_BOARD_WFE_TIMEOUT_NS;
-#else
-	/* Default to 1usec (or as close as we can get) */
-	events_per_sec = 1000000;
-#endif
 	ticks_per_event = ticks_per_sec / events_per_sec;
 	bit_index = flsll(ticks_per_event) - 1; /* Highest bit set */
 
@@ -1988,7 +2004,7 @@ timer_state_event_kernel_to_user(void)
  * The following are required for parts of the kernel
  * that cannot resolve these functions as inlines:
  */
-extern thread_t current_act(void);
+extern thread_t current_act(void) __attribute__((const));
 thread_t
 current_act(void)
 {
@@ -1996,7 +2012,7 @@ current_act(void)
 }
 
 #undef current_thread
-extern thread_t current_thread(void);
+extern thread_t current_thread(void) __attribute__((const));
 thread_t
 current_thread(void)
 {
@@ -2057,3 +2073,59 @@ ex_cb_invoke(
 	return EXCB_ACTION_NONE;
 }
 
+#if defined(HAS_APPLE_PAC)
+void
+ml_task_set_disable_user_jop(task_t task, boolean_t disable_user_jop)
+{
+	assert(task);
+	task->disable_user_jop = disable_user_jop;
+}
+
+void
+ml_thread_set_disable_user_jop(thread_t thread, boolean_t disable_user_jop)
+{
+	assert(thread);
+	thread->machine.disable_user_jop = disable_user_jop;
+}
+
+void
+ml_task_set_rop_pid(task_t task, task_t parent_task, boolean_t inherit)
+{
+	if (inherit) {
+		task->rop_pid = parent_task->rop_pid;
+	} else {
+		task->rop_pid = early_random();
+	}
+}
+#endif /* defined(HAS_APPLE_PAC) */
+
+
+#if defined(HAS_APPLE_PAC)
+
+/*
+ * ml_auth_ptr_unchecked: call this instead of ptrauth_auth_data
+ * instrinsic when you don't want to trap on auth fail.
+ *
+ */
+
+void *
+ml_auth_ptr_unchecked(void *ptr, ptrauth_key key, uint64_t modifier)
+{
+	switch (key & 0x3) {
+	case ptrauth_key_asia:
+		asm volatile ("autia %[ptr], %[modifier]" : [ptr] "+r"(ptr) : [modifier] "r"(modifier));
+		break;
+	case ptrauth_key_asib:
+		asm volatile ("autib %[ptr], %[modifier]" : [ptr] "+r"(ptr) : [modifier] "r"(modifier));
+		break;
+	case ptrauth_key_asda:
+		asm volatile ("autda %[ptr], %[modifier]" : [ptr] "+r"(ptr) : [modifier] "r"(modifier));
+		break;
+	case ptrauth_key_asdb:
+		asm volatile ("autdb %[ptr], %[modifier]" : [ptr] "+r"(ptr) : [modifier] "r"(modifier));
+		break;
+	}
+
+	return ptr;
+}
+#endif /* defined(HAS_APPLE_PAC) */

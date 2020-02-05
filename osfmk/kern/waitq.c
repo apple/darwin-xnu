@@ -164,7 +164,7 @@ lck_grp_t waitq_lck_grp;
  * Prepost callback function for specially marked waitq sets
  * (prepost alternative)
  */
-extern void waitq_set__CALLING_PREPOST_HOOK__(void *ctx, void *memberctx, int priority);
+extern void waitq_set__CALLING_PREPOST_HOOK__(waitq_set_prepost_hook_t *ctx);
 
 #define DEFAULT_MIN_FREE_TABLE_ELEM    100
 static uint32_t g_min_free_table_elem;
@@ -1706,7 +1706,7 @@ waitq_grab_backtrace(uintptr_t bt[NWAITQ_BTFRAMES], int skip)
 		skip = 0;
 	}
 	memset(buf, 0, (NWAITQ_BTFRAMES + skip) * sizeof(uintptr_t));
-	backtrace(buf, g_nwaitq_btframes + skip);
+	backtrace(buf, g_nwaitq_btframes + skip, NULL);
 	memcpy(&bt[0], &buf[skip], NWAITQ_BTFRAMES * sizeof(uintptr_t));
 }
 #else /* no stats */
@@ -1850,29 +1850,8 @@ waitq_thread_insert(struct waitq *wq,
     thread_t thread, boolean_t fifo)
 {
 	if (waitq_is_turnstile_queue(wq)) {
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		    (TURNSTILE_CODE(TURNSTILE_HEAP_OPERATIONS, (THREAD_ADDED_TO_TURNSTILE_WAITQ))) | DBG_FUNC_NONE,
-		    VM_KERNEL_UNSLIDE_OR_PERM(waitq_to_turnstile(wq)),
-		    thread_tid(thread),
-		    thread->base_pri, 0, 0);
-
 		turnstile_stats_update(0, TSU_TURNSTILE_BLOCK_COUNT, NULL);
-
-		/*
-		 * For turnstile queues (which use priority queues),
-		 * insert the thread in the heap based on its current
-		 * base_pri. Note that the priority queue implementation
-		 * is currently not stable, so does not maintain fifo for
-		 * threads at the same base_pri. Also, if the base_pri
-		 * of the thread changes while its blocked in the waitq,
-		 * the thread position should be updated in the priority
-		 * queue by calling priority queue increase/decrease
-		 * operations.
-		 */
-		priority_queue_entry_init(&(thread->wait_prioq_links));
-		priority_queue_insert(&wq->waitq_prio_queue,
-		    &thread->wait_prioq_links, thread->base_pri,
-		    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE);
+		turnstile_waitq_add_thread_priority_queue(wq, thread);
 	} else {
 		turnstile_stats_update(0, TSU_REGULAR_WAITQ_BLOCK_COUNT, NULL);
 		if (fifo) {
@@ -2059,6 +2038,7 @@ struct waitq_select_args {
 	event64_t        event;
 	waitq_select_cb  select_cb;
 	void            *select_ctx;
+	int             priority;
 
 	uint64_t        *reserved_preposts;
 
@@ -2119,16 +2099,13 @@ waitq_select_walk_cb(struct waitq *waitq, void *ctx,
 	 */
 	do_waitq_select_n_locked(&args);
 
-	if (*(args.nthreads) > 0 ||
-	    (args.threadq && !queue_empty(args.threadq))) {
+	if (*args.nthreads > 0 || (args.threadq && !queue_empty(args.threadq))) {
 		/* at least 1 thread was selected and returned: don't prepost */
-		if (args.max_threads > 0 &&
-		    *(args.nthreads) >= args.max_threads) {
+		if (args.max_threads > 0 && *args.nthreads >= args.max_threads) {
 			/* break out of the setid walk */
 			ret = WQ_ITERATE_FOUND;
 		}
-		goto out_unlock;
-	} else {
+	} else if (args.event == NO_EVENT64) {
 		/*
 		 * No thread selected: prepost 'waitq' to 'wqset'
 		 * if wqset can handle preposts and the event is set to 0.
@@ -2139,14 +2116,39 @@ waitq_select_walk_cb(struct waitq *waitq, void *ctx,
 		 * callout function and pass the set's 'prepost_hook.' This
 		 * could potentially release another thread to handle events.
 		 */
-		if (args.event == NO_EVENT64) {
-			if (waitq_set_can_prepost(wqset)) {
-				wq_prepost_do_post_locked(
-					wqset, waitq, args.reserved_preposts);
-			} else if (waitq_set_has_prepost_hook(wqset)) {
-				waitq_set__CALLING_PREPOST_HOOK__(
-					wqset->wqset_prepost_hook, waitq, 0);
-			}
+		if (waitq_set_can_prepost(wqset)) {
+			wq_prepost_do_post_locked(
+				wqset, waitq, args.reserved_preposts);
+		} else if (waitq_set_has_prepost_hook(wqset)) {
+			waitq_set_prepost_hook_t *hook = wqset->wqset_prepost_hook;
+
+			/*
+			 * When calling out to the prepost hook,
+			 * we drop the waitq lock, to allow for the kevent
+			 * subsytem to call into the waitq subsystem again,
+			 * without risking a deadlock.
+			 *
+			 * However, we need to guard against wqset going away,
+			 * so we increment the prepost hook use count
+			 * while the lock is dropped.
+			 *
+			 * This lets waitq_set_deinit() know to wait for the
+			 * prepost hook call to be done before it can proceed.
+			 *
+			 * Note: we need to keep preemption disabled the whole
+			 * time as waitq_set_deinit will spin on this.
+			 */
+
+			disable_preemption();
+			os_atomic_inc(hook, relaxed);
+			waitq_set_unlock(wqset);
+
+			waitq_set__CALLING_PREPOST_HOOK__(hook);
+
+			/* Note: after this decrement, the wqset may be deallocated */
+			os_atomic_dec(hook, relaxed);
+			enable_preemption();
+			return ret;
 		}
 	}
 
@@ -2324,6 +2326,13 @@ waitq_prioq_iterate_locked(struct waitq *safeq, struct waitq *waitq,
 
 		if (first_thread == THREAD_NULL) {
 			first_thread = thread;
+			/*
+			 * turnstile_kernel_update_inheritor_on_wake_locked will lock
+			 * first_thread, so call it before locking it.
+			 */
+			if (args->priority == WAITQ_PROMOTE_ON_WAKE && first_thread != THREAD_NULL && waitq_is_turnstile_queue(safeq)) {
+				turnstile_kernel_update_inheritor_on_wake_locked(waitq_to_turnstile(safeq), (turnstile_inheritor_t)first_thread, TURNSTILE_INHERITOR_THREAD);
+			}
 		}
 
 		/* For the peek operation, break out early */
@@ -2431,6 +2440,7 @@ do_waitq_select_n_locked(struct waitq_select_args *args)
 		/* we know this is the first (and only) thread */
 		++(*nthreads);
 		*(args->spl) = (safeq != waitq) ? spl : splsched();
+
 		thread_lock(first_thread);
 		thread_clear_waitq_state(first_thread);
 		waitq_thread_remove(safeq, first_thread);
@@ -2510,7 +2520,8 @@ waitq_select_n_locked(struct waitq *waitq,
     void *select_ctx,
     uint64_t *reserved_preposts,
     queue_t threadq,
-    int max_threads, spl_t *spl)
+    int max_threads, spl_t *spl,
+    int priority)
 {
 	int nthreads = 0;
 
@@ -2520,6 +2531,7 @@ waitq_select_n_locked(struct waitq *waitq,
 		.event = event,
 		.select_cb = select_cb,
 		.select_ctx = select_ctx,
+		.priority = priority,
 		.reserved_preposts = reserved_preposts,
 		.threadq = threadq,
 		.max_threads = max_threads,
@@ -2547,14 +2559,13 @@ waitq_select_one_locked(struct waitq *waitq, event64_t event,
     uint64_t *reserved_preposts,
     int priority, spl_t *spl)
 {
-	(void)priority;
 	int nthreads;
 	queue_head_t threadq;
 
 	queue_init(&threadq);
 
 	nthreads = waitq_select_n_locked(waitq, event, NULL, NULL,
-	    reserved_preposts, &threadq, 1, spl);
+	    reserved_preposts, &threadq, 1, spl, priority);
 
 	/* if we selected a thread, return it (still locked) */
 	if (!queue_empty(&threadq)) {
@@ -2568,96 +2579,6 @@ waitq_select_one_locked(struct waitq *waitq, event64_t event,
 
 	return THREAD_NULL;
 }
-
-struct find_max_pri_ctx {
-	integer_t max_sched_pri;
-	integer_t max_base_pri;
-	thread_t highest_thread;
-};
-
-/**
- * callback function that finds the max priority thread
- *
- * Conditions:
- *      'waitq' is locked
- *      'thread' is not locked
- */
-static thread_t
-waitq_find_max_pri_cb(void         *ctx_in,
-    __unused struct waitq *waitq,
-    __unused int           is_global,
-    thread_t      thread)
-{
-	struct find_max_pri_ctx *ctx = (struct find_max_pri_ctx *)ctx_in;
-
-	/*
-	 * thread is not locked, use pri as a hint only
-	 * wake up the highest base pri, and find the highest sched pri at that base pri
-	 */
-	integer_t sched_pri = *(volatile int16_t *)&thread->sched_pri;
-	integer_t base_pri  = *(volatile int16_t *)&thread->base_pri;
-
-	if (ctx->highest_thread == THREAD_NULL ||
-	    (base_pri > ctx->max_base_pri) ||
-	    (base_pri == ctx->max_base_pri && sched_pri > ctx->max_sched_pri)) {
-		/* don't select the thread, just update ctx */
-
-		ctx->max_sched_pri  = sched_pri;
-		ctx->max_base_pri   = base_pri;
-		ctx->highest_thread = thread;
-	}
-
-	return THREAD_NULL;
-}
-
-/**
- * select from a waitq the highest priority thread waiting for a given event
- *
- * Conditions:
- *	'waitq' is locked
- *
- * Returns:
- *	A locked thread that's been removed from the waitq, but has not
- *	yet been put on a run queue. Caller is responsible to call splx
- *	with the '*spl' value.
- */
-static thread_t
-waitq_select_max_locked(struct waitq *waitq, event64_t event,
-    uint64_t *reserved_preposts,
-    spl_t *spl)
-{
-	__assert_only int nthreads;
-	assert(!waitq->waitq_set_id); /* doesn't support recursive sets */
-
-	struct find_max_pri_ctx ctx = {
-		.max_sched_pri = 0,
-		.max_base_pri = 0,
-		.highest_thread = THREAD_NULL,
-	};
-
-	/*
-	 * Scan the waitq to find the highest priority thread.
-	 * This doesn't remove any thread from the queue
-	 */
-	nthreads = waitq_select_n_locked(waitq, event,
-	    waitq_find_max_pri_cb,
-	    &ctx, reserved_preposts, NULL, 1, spl);
-
-	assert(nthreads == 0);
-
-	if (ctx.highest_thread != THREAD_NULL) {
-		__assert_only kern_return_t ret;
-
-		/* Remove only the thread we just found */
-		ret = waitq_select_thread_locked(waitq, event, ctx.highest_thread, spl);
-
-		assert(ret == KERN_SUCCESS);
-		return ctx.highest_thread;
-	}
-
-	return THREAD_NULL;
-}
-
 
 struct select_thread_ctx {
 	thread_t      thread;
@@ -3051,9 +2972,6 @@ maybe_adjust_thread_pri(thread_t   thread,
 		}
 
 		sched_thread_promote_reason(thread, TH_SFLAG_WAITQ_PROMOTED, trace_waitq);
-	} else if (priority > 0) {
-		/* Mutex subsystem wants to see this thread before we 'go' it */
-		lck_mtx_wakeup_adjust_pri(thread, priority);
 	}
 }
 
@@ -3123,7 +3041,7 @@ waitq_wakeup64_all_locked(struct waitq *waitq,
 
 	nthreads = waitq_select_n_locked(waitq, wake_event, NULL, NULL,
 	    reserved_preposts,
-	    &wakeup_queue, -1, &th_spl);
+	    &wakeup_queue, -1, &th_spl, priority);
 
 	/* set each thread running */
 	ret = KERN_NOT_WAITING;
@@ -3175,16 +3093,9 @@ waitq_wakeup64_one_locked(struct waitq *waitq,
 
 	assert(waitq_held(waitq));
 
-	if (priority == WAITQ_SELECT_MAX_PRI) {
-		thread = waitq_select_max_locked(waitq, wake_event,
-		    reserved_preposts,
-		    &th_spl);
-	} else {
-		thread = waitq_select_one_locked(waitq, wake_event,
-		    reserved_preposts,
-		    priority, &th_spl);
-	}
-
+	thread = waitq_select_one_locked(waitq, wake_event,
+	    reserved_preposts,
+	    priority, &th_spl);
 
 	if (thread != THREAD_NULL) {
 		waitq_stats_count_wakeup(waitq);
@@ -3233,15 +3144,9 @@ waitq_wakeup64_identify_locked(struct waitq     *waitq,
 
 	assert(waitq_held(waitq));
 
-	if (priority == WAITQ_SELECT_MAX_PRI) {
-		thread = waitq_select_max_locked(waitq, wake_event,
-		    reserved_preposts,
-		    spl);
-	} else {
-		thread = waitq_select_one_locked(waitq, wake_event,
-		    reserved_preposts,
-		    priority, spl);
-	}
+	thread = waitq_select_one_locked(waitq, wake_event,
+	    reserved_preposts,
+	    priority, spl);
 
 	if (thread != THREAD_NULL) {
 		waitq_stats_count_wakeup(waitq);
@@ -3508,7 +3413,7 @@ wqset_clear_prepost_chain_cb(struct waitq_set __unused *wqset,
  *	NULL on failure
  */
 struct waitq_set *
-waitq_set_alloc(int policy, void *prepost_hook)
+waitq_set_alloc(int policy, waitq_set_prepost_hook_t *prepost_hook)
 {
 	struct waitq_set *wqset;
 
@@ -3537,7 +3442,7 @@ waitq_set_alloc(int policy, void *prepost_hook)
 kern_return_t
 waitq_set_init(struct waitq_set *wqset,
     int policy, uint64_t *reserved_link,
-    void *prepost_hook)
+    waitq_set_prepost_hook_t *prepost_hook)
 {
 	struct waitq_link *link;
 	kern_return_t ret;
@@ -3676,6 +3581,20 @@ waitq_set_deinit(struct waitq_set *wqset)
 	assert(!waitq_irq_safe(&wqset->wqset_q));
 
 	waitq_set_lock(wqset);
+
+	if (waitq_set_has_prepost_hook(wqset)) {
+		waitq_set_prepost_hook_t *hook = wqset->wqset_prepost_hook;
+		/*
+		 * If the wqset_prepost_hook value is non 0,
+		 * then another core is currently posting to this waitq set
+		 * and we need for it to finish what it's doing.
+		 */
+		while (os_atomic_load(hook, relaxed) != 0) {
+			waitq_set_unlock(wqset);
+			delay(1);
+			waitq_set_lock(wqset);
+		}
+	}
 
 	set_id = wqset->wqset_id;
 

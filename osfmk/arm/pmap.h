@@ -1,6 +1,5 @@
 /*
- *
- * Copyright (c) 2007-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -43,26 +42,41 @@
 #ifndef ASSEMBLER
 
 #include <stdatomic.h>
+#include <stdbool.h>
 #include <libkern/section_keywords.h>
 #include <mach/kern_return.h>
 #include <mach/machine/vm_types.h>
 #include <arm/pmap_public.h>
 #include <mach/arm/thread_status.h>
+#if defined(__arm64__)
+#include <arm64/tlb.h>
+#else
+#include <arm/tlb.h>
+#endif
+
+
+#define ASID_SHIFT                  (11)                            /* Shift for 2048 max virtual ASIDs (2048 pmaps) */
+#define MAX_ASID                    (1 << ASID_SHIFT)               /* Max supported ASIDs (can be virtual) */
+#ifndef ARM_ASID_SHIFT
+#define ARM_ASID_SHIFT              (8)                             /* Shift for the maximum ARM ASID value (256) */
+#endif
+#define ARM_MAX_ASID                (1 << ARM_ASID_SHIFT)           /* Max ASIDs supported by the hardware */
+#define NBBY                        8
 
 #if __ARM_KERNEL_PROTECT__
-/*
- * For __ARM_KERNEL_PROTECT__, we need twice as many ASIDs to support having
- * unique EL0 and EL1 ASIDs for each pmap.
- */
-#define ASID_SHIFT                      (12)                            /* Shift for the maximum virtual ASID value (2048)*/
-#else /* __ARM_KERNEL_PROTECT__ */
-#define ASID_SHIFT                      (11)                            /* Shift for the maximum virtual ASID value (2048) */
-#endif /* __ARM_KERNEL_PROTECT__ */
-#define MAX_ASID                        (1 << ASID_SHIFT)               /* Max supported ASIDs (can be virtual) */
-#define ARM_ASID_SHIFT                  (8)                             /* Shift for the maximum ARM ASID value (256) */
-#define ARM_MAX_ASID                    (1 << ARM_ASID_SHIFT)           /* Max ASIDs supported by the hardware */
-#define ASID_VIRT_BITS                  (ASID_SHIFT - ARM_ASID_SHIFT)   /* The number of virtual bits in a virtaul ASID */
-#define NBBY                            8
+#define MAX_HW_ASID ((ARM_MAX_ASID >> 1) - 1)
+#else
+#define MAX_HW_ASID (ARM_MAX_ASID - 1)
+#endif
+
+#ifndef ARM_VMID_SHIFT
+#define ARM_VMID_SHIFT                  (8)
+#endif
+#define ARM_MAX_VMID                    (1 << ARM_VMID_SHIFT)
+
+/* XPRR virtual register map */
+
+#define CPUWINDOWS_MAX              4
 
 struct pmap_cpu_data {
 #if defined(__arm64__)
@@ -72,7 +86,9 @@ struct pmap_cpu_data {
 	unsigned int cpu_user_pmap_stamp;
 #endif
 	unsigned int cpu_number;
+	bool copywindow_strong_sync[CPUWINDOWS_MAX];
 
+#if MAX_ASID > MAX_HW_ASID
 
 	/*
 	 * This supports overloading of ARM ASIDs by the pmap.  The field needs
@@ -85,7 +101,8 @@ struct pmap_cpu_data {
 	 * memory by only having enough bits to support MAX_ASID.  However, such
 	 * an implementation would be more error prone.
 	 */
-	uint8_t cpu_asid_high_bits[ARM_MAX_ASID];
+	uint8_t cpu_asid_high_bits[MAX_HW_ASID];
+#endif
 };
 typedef struct pmap_cpu_data pmap_cpu_data_t;
 
@@ -134,6 +151,16 @@ typedef uint32_t        pt_entry_t;                                     /* page 
 #error unknown arch
 #endif
 
+struct page_table_level_info {
+	const uint64_t size;
+	const uint64_t offmask;
+	const uint64_t shift;
+	const uint64_t index_mask;
+	const uint64_t valid_mask;
+	const uint64_t type_mask;
+	const uint64_t type_block;
+};
+
 
 /* superpages */
 #define SUPERPAGE_NBASEPAGES 1  /* No superpages support */
@@ -174,37 +201,6 @@ typedef uint32_t        pt_entry_t;                                     /* page 
 #define NPTES   (ARM_PGBYTES / sizeof(pt_entry_t))
 #endif
 
-extern void sync_tlb_flush(void);
-extern void flush_mmu_tlb_async(void);
-extern void flush_mmu_tlb(void);
-extern void flush_core_tlb_async(void);
-extern void flush_core_tlb(void);
-#if defined(__arm64__)
-extern void flush_mmu_tlb_allentries_async(uint64_t, uint64_t);
-extern void flush_mmu_tlb_allentries(uint64_t, uint64_t);
-extern void flush_mmu_tlb_entry_async(uint64_t);
-extern void flush_mmu_tlb_entry(uint64_t);
-extern void flush_mmu_tlb_entries_async(uint64_t, uint64_t);
-extern void flush_mmu_tlb_entries(uint64_t, uint64_t);
-extern void flush_mmu_tlb_asid_async(uint64_t);
-extern void flush_mmu_tlb_asid(uint64_t);
-extern void flush_core_tlb_asid_async(uint64_t);
-extern void flush_core_tlb_asid(uint64_t);
-
-#define tlbi_addr(x) (((x) >> TLBI_ADDR_SHIFT) & TLBI_ADDR_MASK)
-#define tlbi_asid(x) (((uint64_t)x << TLBI_ASID_SHIFT) & TLBI_ASID_MASK)
-#else
-extern void flush_mmu_tlb_entry_async(uint32_t);
-extern void flush_mmu_tlb_entry(uint32_t);
-extern void flush_mmu_tlb_entries_async(uint32_t, uint32_t);
-extern void flush_mmu_tlb_entries(uint32_t, uint32_t);
-extern void flush_mmu_tlb_mva_entries_async(uint32_t);
-extern void flush_mmu_tlb_mva_entries(uint32_t);
-extern void flush_mmu_tlb_asid_async(uint32_t);
-extern void flush_mmu_tlb_asid(uint32_t);
-extern void flush_core_tlb_asid_async(uint32_t);
-extern void flush_core_tlb_asid(uint32_t);
-#endif
 extern void flush_mmu_tlb_region(vm_offset_t va, unsigned length);
 
 #if defined(__arm64__)
@@ -291,6 +287,9 @@ extern pmap_paddr_t mmu_uvtop(vm_offset_t va);
 #endif /* DEVELOPMENT || DEBUG */
 
 
+/* Forward struct declarations for the pmap data structure */
+struct page_table_attr;
+
 /*
  *	Convert translation/page table entry to kernel virtual address
  */
@@ -298,12 +297,15 @@ extern pmap_paddr_t mmu_uvtop(vm_offset_t va);
 #define ptetokv(a)      (phystokv(pte_to_pa(a)))
 
 struct pmap {
-	tt_entry_t                      *tte;                   /* translation table entries */
+	tt_entry_t              *tte;                   /* translation table entries */
 	pmap_paddr_t            ttep;                   /* translation table physical */
 	vm_map_address_t        min;                    /* min address in pmap */
 	vm_map_address_t        max;                    /* max address in pmap */
+#if ARM_PARAMETERIZED_PMAP
+	const struct page_table_attr * pmap_pt_attr;    /* details about page table layout */
+#endif /* ARM_PARAMETERIZED_PMAP */
 	ledger_t                ledger;                 /* ledger tracking phys mappings */
-	decl_simple_lock_data(, lock)            /* lock on map */
+	decl_simple_lock_data(, lock);           /* lock on map */
 	struct pmap_statistics  stats;          /* map statistics */
 	queue_chain_t           pmaps;                  /* global list of pmaps */
 	tt_entry_t                      *tt_entry_free; /* free translation table entries */
@@ -317,19 +319,19 @@ struct pmap {
 	unsigned int            *nested_region_asid_bitmap;
 
 #if (__ARM_VMSA__ <= 7)
-	decl_simple_lock_data(, tt1_lock)       /* lock on tt1 */
+	decl_simple_lock_data(, tt1_lock);       /* lock on tt1 */
 	unsigned int            cpu_ref;                /* number of cpus using pmap */
+	unsigned int            tte_index_max;          /* max tte index in translation table entries */
 #endif
 
 
-	unsigned int            asid;                   /* address space id */
-	unsigned int            vasid;                  /* Virtual address space id */
 	unsigned int            stamp;                  /* creation stamp */
 	_Atomic int32_t         ref_count;              /* pmap reference count */
 	unsigned int            gc_status;              /* gc status */
 	unsigned int            nested_region_asid_bitmap_size;
-	unsigned int            tte_index_max;          /* max tte index in translation table entries */
 	uint32_t                nested_no_bounds_refcnt;/* number of pmaps that nested this pmap without bounds set */
+	uint16_t                hw_asid;
+	uint8_t                 sw_asid;
 
 #if MACH_ASSERT
 	int                     pmap_pid;
@@ -340,32 +342,17 @@ struct pmap {
 	bool            footprint_suspended;
 	bool            footprint_was_suspended;
 #endif /* DEVELOPMENT || DEBUG */
-	bool                    nx_enabled;                             /* no execute */
-	bool                    nested;                                 /* is nested */
-	bool                    is_64bit;                               /* is 64bit */
+	bool            nx_enabled;                             /* no execute */
+	bool            nested;                                 /* is nested */
+	bool            is_64bit;                               /* is 64bit */
 	bool            nested_has_no_bounds_ref;       /* nested a pmap when the bounds were not set */
 	bool            nested_bounds_set;                      /* The nesting bounds have been set */
+#if HAS_APPLE_PAC
+	bool            disable_jop;
+#endif /* HAS_APPLE_PAC */
 };
 
-/* typedef struct pmap *pmap_t; */
-#define PMAP_NULL       ((pmap_t) 0)
-
-
-/*
- * WIMG control
- */
-#define VM_MEM_INNER            0x10
-#define VM_MEM_RT               0x10 // intentionally alias VM_MEM_INNER; will be used with mutually exclusive caching policies
-#define VM_MEM_EARLY_ACK        0x20
-
-#define VM_WIMG_DEFAULT         (VM_MEM_COHERENT)
-#define VM_WIMG_COPYBACK        (VM_MEM_COHERENT)
-#define VM_WIMG_INNERWBACK      (VM_MEM_COHERENT | VM_MEM_INNER)
-#define VM_WIMG_IO              (VM_MEM_COHERENT | VM_MEM_NOT_CACHEABLE | VM_MEM_GUARDED)
-#define VM_WIMG_POSTED          (VM_MEM_COHERENT | VM_MEM_NOT_CACHEABLE | VM_MEM_GUARDED | VM_MEM_EARLY_ACK)
-#define VM_WIMG_WTHRU           (VM_MEM_WRITE_THROUGH | VM_MEM_COHERENT | VM_MEM_GUARDED)
-#define VM_WIMG_WCOMB           (VM_MEM_NOT_CACHEABLE | VM_MEM_COHERENT)
-#define VM_WIMG_RT              (VM_WIMG_IO | VM_MEM_RT)
+#define PMAP_VASID(pmap) (((uint32_t)((pmap)->sw_asid) << 16) | pmap->hw_asid)
 
 #if VM_DEBUG
 extern int      pmap_list_resident_pages(
@@ -460,15 +447,17 @@ extern vm_map_address_t pmap_map_high_window_bd( vm_offset_t pa, vm_size_t len, 
 extern kern_return_t pmap_map_block(pmap_t pmap, addr64_t va, ppnum_t pa, uint32_t size, vm_prot_t prot, int attr, unsigned int flags);
 extern void pmap_map_globals(void);
 
-#define PMAP_MAP_BD_DEVICE      0x1
-#define PMAP_MAP_BD_WCOMB       0x2
-#define PMAP_MAP_BD_POSTED      0x3
-#define PMAP_MAP_BD_MASK        0x3
+#define PMAP_MAP_BD_DEVICE                    0x0
+#define PMAP_MAP_BD_WCOMB                     0x1
+#define PMAP_MAP_BD_POSTED                    0x2
+#define PMAP_MAP_BD_POSTED_REORDERED          0x3
+#define PMAP_MAP_BD_POSTED_COMBINED_REORDERED 0x4
+#define PMAP_MAP_BD_MASK                      0x7
 
 extern vm_map_address_t pmap_map_bd_with_options(vm_map_address_t va, vm_offset_t sa, vm_offset_t ea, vm_prot_t prot, int32_t options);
 extern vm_map_address_t pmap_map_bd(vm_map_address_t va, vm_offset_t sa, vm_offset_t ea, vm_prot_t prot);
 
-extern void pmap_init_pte_page(pmap_t, pt_entry_t *, vm_offset_t, unsigned int ttlevel, boolean_t alloc_ptd);
+extern void pmap_init_pte_page(pmap_t, pt_entry_t *, vm_offset_t, unsigned int ttlevel, boolean_t alloc_ptd, boolean_t clear);
 
 extern boolean_t pmap_valid_address(pmap_paddr_t addr);
 extern void pmap_disable_NX(pmap_t pmap);
@@ -551,7 +540,9 @@ boolean_t pmap_enforces_execute_only(pmap_t pmap);
 #define PMAP_LEDGER_ALLOC_INDEX 66
 #define PMAP_LEDGER_FREE_INDEX 67
 
-#define PMAP_COUNT 68
+
+
+#define PMAP_COUNT 71
 
 #define PMAP_INVALID_CPU_NUM (~0U)
 

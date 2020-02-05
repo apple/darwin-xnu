@@ -41,7 +41,8 @@
 #include <mach/task_policy.h>
 #include <kern/task.h>
 #include <kern/ledger.h>
-
+#include <sys/kdebug.h>
+#include <kern/sched_prim.h>
 /*
  ******************************
  * XNU-internal functionality
@@ -74,42 +75,41 @@ extern kern_return_t task_importance(task_t task, integer_t importance);
 /* flavors (also DBG_IMPORTANCE subclasses  0x20 - 0x3F) */
 
 /* internal or external, thread or task */
-#define TASK_POLICY_DARWIN_BG           0x21
-#define TASK_POLICY_IOPOL               0x22
-#define TASK_POLICY_IO                  0x23
-#define TASK_POLICY_PASSIVE_IO          0x24
+#define TASK_POLICY_DARWIN_BG           IMP_TASK_POLICY_DARWIN_BG
+#define TASK_POLICY_IOPOL               IMP_TASK_POLICY_IOPOL
+#define TASK_POLICY_IO                  IMP_TASK_POLICY_IO
+#define TASK_POLICY_PASSIVE_IO          IMP_TASK_POLICY_PASSIVE_IO
 
 /* internal, task only */
-#define TASK_POLICY_DARWIN_BG_IOPOL     0x27
+#define TASK_POLICY_DARWIN_BG_IOPOL     IMP_TASK_POLICY_DARWIN_BG_IOPOL
 
 /* task-only attributes */
-#define TASK_POLICY_TAL                 0x28
-#define TASK_POLICY_BOOST               0x29
-#define TASK_POLICY_ROLE                0x2A
+#define TASK_POLICY_TAL                 IMP_TASK_POLICY_TAL
+#define TASK_POLICY_BOOST               IMP_TASK_POLICY_BOOST
+#define TASK_POLICY_ROLE                IMP_TASK_POLICY_ROLE
 /* unused                               0x2B */
-#define TASK_POLICY_TERMINATED          0x2C
-#define TASK_POLICY_NEW_SOCKETS_BG      0x2D
-#define TASK_POLICY_SUP_ACTIVE          0x2E
-#define TASK_POLICY_LATENCY_QOS         0x2F
-#define TASK_POLICY_THROUGH_QOS         0x30
-#define TASK_POLICY_WATCHERS_BG         0x31
+#define TASK_POLICY_TERMINATED          IMP_TASK_POLICY_TERMINATED
+#define TASK_POLICY_NEW_SOCKETS_BG      IMP_TASK_POLICY_NEW_SOCKETS_BG
+#define TASK_POLICY_SUP_ACTIVE          IMP_TASK_POLICY_SUP_ACTIVE
+#define TASK_POLICY_LATENCY_QOS         IMP_TASK_POLICY_LATENCY_QOS
+#define TASK_POLICY_THROUGH_QOS         IMP_TASK_POLICY_THROUGH_QOS
+#define TASK_POLICY_WATCHERS_BG         IMP_TASK_POLICY_WATCHERS_BG
+#define TASK_POLICY_SFI_MANAGED         IMP_TASK_POLICY_SFI_MANAGED
+#define TASK_POLICY_ALL_SOCKETS_BG      IMP_TASK_POLICY_ALL_SOCKETS_BG
 
-#define TASK_POLICY_SFI_MANAGED         0x34
-#define TASK_POLICY_ALL_SOCKETS_BG      0x37
-
-#define TASK_POLICY_BASE_LATENCY_AND_THROUGHPUT_QOS  0x39 /* latency as value1, throughput as value2 */
-#define TASK_POLICY_OVERRIDE_LATENCY_AND_THROUGHPUT_QOS  0x3A /* latency as value1, throughput as value2 */
+#define TASK_POLICY_BASE_LATENCY_AND_THROUGHPUT_QOS IMP_TASK_POLICY_BASE_LATENCY_AND_THROUGHPUT_QOS /* latency as value1, throughput as value2 */
+#define TASK_POLICY_OVERRIDE_LATENCY_AND_THROUGHPUT_QOS  IMP_TASK_POLICY_OVERRIDE_LATENCY_AND_THROUGHPUT_QOS /* latency as value1, throughput as value2 */
 
 /* thread-only attributes */
-#define TASK_POLICY_PIDBIND_BG          0x32
+#define TASK_POLICY_PIDBIND_BG          IMP_TASK_POLICY_PIDBIND_BG
 /* unused                               0x33 */
-#define TASK_POLICY_QOS                 0x35
-#define TASK_POLICY_QOS_OVERRIDE        0x36
-#define TASK_POLICY_QOS_AND_RELPRIO     0x38 /* QoS as value1, relative priority as value2 */
-#define TASK_POLICY_QOS_WORKQ_OVERRIDE  0x3B
-#define TASK_POLICY_QOS_PROMOTE         0x3C
-#define TASK_POLICY_QOS_IPC_OVERRIDE    0x3D
-// was TASK_POLICY_QOS_SYNC_IPC_OVERRIDE 0x3E
+#define TASK_POLICY_QOS                 0x35 /* Used only as a convenience for getter */
+#define TASK_POLICY_QOS_OVERRIDE        IMP_TASK_POLICY_QOS_OVERRIDE
+#define TASK_POLICY_QOS_AND_RELPRIO     IMP_TASK_POLICY_QOS_AND_RELPRIO /* QoS as value1, relative priority as value2 */
+#define TASK_POLICY_QOS_WORKQ_OVERRIDE  IMP_TASK_POLICY_QOS_WORKQ_OVERRIDE
+#define TASK_POLICY_QOS_PROMOTE         IMP_TASK_POLICY_QOS_PROMOTE
+#define TASK_POLICY_QOS_KEVENT_OVERRIDE IMP_TASK_POLICY_QOS_KEVENT_OVERRIDE
+#define TASK_POLICY_QOS_SERVICER_OVERRIDE IMP_TASK_POLICY_QOS_SERVICER_OVERRIDE
 
 #define TASK_POLICY_MAX                 0x3F
 
@@ -133,8 +133,8 @@ extern int  proc_task_role_to_darwin_role(int task_role);
 
 /* Functions used by kern_exec.c */
 extern void task_set_main_thread_qos(task_t task, thread_t main_thread);
-extern void proc_set_task_spawnpolicy(task_t task, int apptype, int qos_clamp, int role,
-    ipc_port_t * portwatch_ports, int portwatch_count);
+extern void proc_set_task_spawnpolicy(task_t task, thread_t thread, int apptype, int qos_clamp, int role,
+    ipc_port_t * portwatch_ports, uint32_t portwatch_count);
 extern void proc_inherit_task_role(task_t new_task, task_t old_task);
 
 /* IO Throttle tiers */
@@ -166,6 +166,9 @@ extern int task_get_apptype(task_t);
 #ifdef MACH_BSD
 extern void proc_apply_task_networkbg(void * bsd_info, thread_t thread);
 #endif /* MACH_BSD */
+
+extern void thread_freeze_base_pri(thread_t thread);
+extern bool thread_unfreeze_base_pri(thread_t thread);
 
 /* Functions used by pthread_shims.c */
 extern int proc_thread_qos_add_override(task_t task, thread_t thread, uint64_t tid,
@@ -245,15 +248,21 @@ extern kern_return_t thread_policy_set_internal(thread_t thread, thread_policy_f
     thread_policy_t policy_info, mach_msg_type_number_t count);
 
 extern boolean_t thread_recompute_user_promotion_locked(thread_t thread);
+extern boolean_t thread_recompute_kernel_promotion_locked(thread_t thread);
 extern thread_qos_t thread_user_promotion_qos_for_pri(int priority);
 
 extern void thread_set_exec_promotion(thread_t thread);
 extern void thread_clear_exec_promotion(thread_t thread);
 
-/* for IPC override management */
-extern void thread_add_ipc_override(thread_t thread, uint32_t qos_override);
-extern void thread_update_ipc_override(thread_t thread, uint32_t qos_override);
-extern void thread_drop_ipc_override(thread_t thread);
+/* for servicer override management (workloops only) */
+extern void thread_add_servicer_override(thread_t thread, uint32_t qos_override);
+extern void thread_update_servicer_override(thread_t thread, uint32_t qos_override);
+extern void thread_drop_servicer_override(thread_t thread);
+
+/* for generic kevent override management */
+extern void thread_add_kevent_override(thread_t thread, uint32_t qos_override);
+extern void thread_update_kevent_override(thread_t thread, uint32_t qos_override);
+extern void thread_drop_kevent_override(thread_t thread);
 
 /* for ipc_pset.c */
 extern thread_qos_t thread_get_requested_qos(thread_t thread, int *relpri);
@@ -280,7 +289,8 @@ typedef struct task_pend_token {
 	    tpt_update_throttle     :1,
 	    tpt_update_thread_sfi   :1,
 	    tpt_force_recompute_pri :1,
-	    tpt_update_tg_ui_flag   :1;
+	    tpt_update_tg_ui_flag   :1,
+	    tpt_update_turnstile    :1;
 } *task_pend_token_t;
 
 extern void task_policy_update_complete_unlocked(task_t task, task_pend_token_t pend_token);

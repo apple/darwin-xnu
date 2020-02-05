@@ -1084,45 +1084,6 @@ audit_pipe_poll(dev_t dev, int events, void *wql, struct proc *p)
 	return revents;
 }
 
-#ifndef __APPLE__
-/*
- * Return true if there are records available for reading on the pipe.
- */
-static int
-audit_pipe_kqread(struct knote *kn, long hint)
-{
-	struct audit_pipe *ap;
-
-	ap = (struct audit_pipe *)kn->kn_hook;
-	KASSERT(ap != NULL, ("audit_pipe_kqread: ap == NULL"));
-	AUDIT_PIPE_LOCK_ASSERT(ap);
-
-	if (ap->ap_qlen != 0) {
-		kn->kn_data = ap->ap_qbyteslen - ap->ap_qoffset;
-		return 1;
-	} else {
-		kn->kn_data = 0;
-		return 0;
-	}
-}
-
-/*
- * Detach kqueue state from audit pipe.
- */
-static void
-audit_pipe_kqdetach(struct knote *kn)
-{
-	struct audit_pipe *ap;
-
-	ap = (struct audit_pipe *)kn->kn_hook;
-	KASSERT(ap != NULL, ("audit_pipe_kqdetach: ap == NULL"));
-
-	AUDIT_PIPE_LOCK(ap);
-	knlist_remove(&ap->ap_selinfo.si_note, kn, 1);
-	AUDIT_PIPE_UNLOCK(ap);
-}
-#endif /* !__APPLE__ */
-
 static void *devnode;
 
 int

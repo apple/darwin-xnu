@@ -157,6 +157,8 @@ extern  void    commpage_update_mach_continuous_time(uint64_t sleeptime);
 extern  void    commpage_update_boottime(uint64_t boottime_usec);
 extern  void    commpage_update_kdebug_state(void);
 extern  void    commpage_update_atm_diagnostic_config(uint32_t);
+extern  void    commpage_update_dof(boolean_t enabled);
+extern  void    commpage_update_dyld_flags(uint64_t value);
 extern  void    commpage_post_ucode_update(void);
 
 extern  uint32_t        commpage_is_in_pfz32(uint32_t);

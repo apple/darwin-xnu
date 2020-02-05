@@ -17,6 +17,7 @@ PRIVATE_KERNELFILES = \
 
 # Available only in xnu proper
 PRIVATE_XNUFILES = \
+	ksancov.h \
 	kasan.h
 
 INSTALL_MI_LIST = ${DATAFILES}
@@ -32,7 +33,7 @@ COMP_SUBDIRS = conf
 
 .DELETE_ON_ERROR:
 $(OBJROOT)/san/kasan-blacklist-%: $(SOURCE)/kasan-blacklist $(SOURCE)/ubsan-blacklist $(SOURCE)/kasan-blacklist-%
-	@echo "$(ColorH)GENERATING$(Color0)    $(ColorLF)$(notdir $@)$(Color0)"
+	$(call makelog,$(ColorH)GENERATING$(Color0)    $(ColorLF)$(notdir $@)$(Color0))
 	$(_v)sed -e 's,^src:\./,src:'"$(SRCROOT)/," $^ > $@
 	$(_v)$(SOURCE)/tools/validate_blacklist.sh "$@"
 
@@ -57,7 +58,7 @@ endif
 
 # Our external dependency on allsymbols is fine because this runs in a later phase (config_install vs. config_all)
 $(OBJPATH)/%.symbolset: $(SOURCE)/%.exports
-	@echo "$(ColorH)SYMBOLSET$(Color0)  $(ColorF)$*$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
+	$(call makelog,$(ColorH)SYMBOLSET$(Color0)     $(ColorF)$*$(Color0) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))")
 	$(_v)$(KEXT_CREATE_SYMBOL_SET)			\
 		$(ARCH_FLAGS_$(CURRENT_ARCH_CONFIG))	\
 		-import $(OBJPATH)/allsymbols		\
@@ -66,12 +67,12 @@ $(OBJPATH)/%.symbolset: $(SOURCE)/%.exports
 
 $(DSTROOT_KEXT): $(DSTROOT_KEXT_PATH)/% : $(OBJPATH)/%.symbolset
 	$(_v)$(MKDIR) $(dir $@)
-	@echo "$(ColorF)INSTALL$(Color0)    $(ColorF)$(notdir $@)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
+	$(call makelog,$(ColorF)INSTALL$(Color0)    $(ColorF)$(notdir $@)$(Color0) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))")
 	$(_v)$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@
 
 $(SYMROOT_KEXT): $(SYMROOT_KEXT_PATH)/% : $(DSTROOT_KEXT_PATH)/%
 	$(_v)$(MKDIR) $(dir $@)
-	@echo "$(ColorF)INSTALL$(Color0)    $(ColorF)$(notdir $@)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
+	$(call makelog,$(ColorF)INSTALL$(Color0)    $(ColorF)$(notdir $@)$(Color0) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))")
 	$(_v)$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@
 
 do_config_install:: $(DSTROOT_KEXT) $(SYMROOT_KEXT)
@@ -85,7 +86,7 @@ endif
 
 $(KASAN_HELPER_SCRIPTS): $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/% : $(SOURCE)/tools/%
 	$(_v)$(MKDIR) $(dir $@)
-	@echo "$(ColorH)INSTALL$(Color0)    $(ColorF)$(@F)$(Color0)"
+	$(call makelog,$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0))
 	$(_v)$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@
 
 do_config_install:: $(KASAN_HELPER_SCRIPTS)

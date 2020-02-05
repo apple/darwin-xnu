@@ -13,6 +13,8 @@
 
 #include <TargetConditionals.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 #define TMP_FILE_PATH "/tmp/test_kqueue_fifo_18776047"
 
 #define READ_BUFFER_LEN 256

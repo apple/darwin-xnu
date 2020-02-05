@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -68,7 +68,9 @@ enum {
 	kPEPagingOff,
 	kPEPanicBegin,
 	kPEPanicEnd,
-	kPEPanicDiskShutdown
+	kPEPanicDiskShutdown,
+	kPEPanicRestartCPUNoPanicEndCallouts,
+	kPEPanicRestartCPUNoCallouts
 };
 extern int (*PE_halt_restart)(unsigned int type);
 extern int PEHaltRestart(unsigned int type);
@@ -79,7 +81,13 @@ enum {
 	kIOSystemShutdownNotificationStageRootUnmount = 1,
 };
 extern void IOSystemShutdownNotification(int stage);
+
+extern uint32_t gEnforceQuiesceSafety;
 #endif /* XNU_KERNEL_PRIVATE */
+
+#ifdef KERNEL_PRIVATE
+extern boolean_t IOPMRootDomainGetWillShutdown(void);
+#endif /* KERNEL_PRIVATE */
 
 // Save the Panic Info.  Returns the number of bytes saved.
 extern UInt32 PESavePanicInfo(UInt8 *buffer, UInt32 length);
@@ -118,12 +126,70 @@ extern coprocessor_type_t PEGetCoprocessorVersion( void );
 
 extern OSSymbol *               gPlatformInterruptControllerName;
 
-extern const OSSymbol *         gIOPlatformSleepActionKey;
-extern const OSSymbol *         gIOPlatformWakeActionKey;
-extern const OSSymbol *         gIOPlatformQuiesceActionKey;
-extern const OSSymbol *         gIOPlatformActiveActionKey;
-extern const OSSymbol *         gIOPlatformHaltRestartActionKey;
-extern const OSSymbol *         gIOPlatformPanicActionKey;
+/*
+ * IOPlatformSleepAction
+ *
+ * Sleep is called after power management has finished all of the power plane
+ * driver power management notifications and state transitions and has
+ * committed to sleep, but before the other CPUs are powered off.
+ * The scheduler is still active.
+ */
+extern const OSSymbol *gIOPlatformSleepActionKey;
+
+/*
+ * IOPlatformWakeAction
+ *
+ * Wake is called with the scheduler enabled, but before
+ * powering on other CPUs, so try to minimize work done in this path to speed
+ * up wake time.
+ */
+extern const OSSymbol *gIOPlatformWakeActionKey;
+
+/*
+ * IOPlatformQuiesceAction
+ *
+ * Quiesce is called after all CPUs are off, scheduling is disabled,
+ * and the boot CPU is about to pull the plug.
+ * Mutexes and blocking are disallowed in this context and will panic.
+ * Do not pass this action to super() (incl. IOService, IOPlatformExpert)
+ */
+extern const OSSymbol *gIOPlatformQuiesceActionKey;
+
+/*
+ * IOPlatformActiveAction
+ *
+ * Active is called very early in the wake path before enabling the scheduler
+ * on the boot CPU.
+ * Mutexes and blocking are disallowed in this context and will panic.
+ * Do not pass this action to super() (incl. IOService, IOPlatformExpert)
+ */
+extern const OSSymbol *gIOPlatformActiveActionKey;
+
+/*
+ * IOPlatformHaltRestartAction
+ *
+ * Halt/Restart is called after the kernel finishes shutting down the
+ * system and is ready to power off or reboot.
+ *
+ * It is not guaranteed to be called in non-graceful shutdown scenarios.
+ */
+extern const OSSymbol *gIOPlatformHaltRestartActionKey;
+
+/*
+ * IOPlatformPanicAction
+ *
+ * Panic is called when the system is panicking before it records a core file
+ * (if it is configured to do so)
+ *
+ * It can be called at any time, in any context, in any state.  Don't depend
+ * on anything being powered on in a useful state.
+ *
+ * Mutexes and blocking are disallowed in this context and will fail.
+ *
+ * If you hang or panic again in this callout, the panic log may not be recorded,
+ * leading to the loss of field reports about customer issues.
+ */
+extern const OSSymbol *gIOPlatformPanicActionKey;
 
 class IORangeAllocator;
 class IONVRAMController;
@@ -168,7 +234,7 @@ public:
 	virtual IOService * createNub( OSDictionary * from );
 
 	virtual bool compareNubName( const IOService * nub, OSString * name,
-	    OSString ** matched = 0 ) const;
+	    OSString ** matched = NULL ) const;
 	virtual IOReturn getNubResources( IOService * nub );
 
 	virtual long getBootROMType(void);
@@ -261,7 +327,7 @@ public:
 	virtual bool createNubs( IOService * parent, LIBKERN_CONSUMED OSIterator * iter );
 
 	virtual bool compareNubName( const IOService * nub, OSString * name,
-	    OSString ** matched = 0 ) const APPLE_KEXT_OVERRIDE;
+	    OSString ** matched = NULL ) const APPLE_KEXT_OVERRIDE;
 
 	virtual IOReturn getNubResources( IOService * nub ) APPLE_KEXT_OVERRIDE;
 
@@ -318,7 +384,7 @@ public:
 
 class IOPlatformExpertDevice : public IOService
 {
-	OSDeclareDefaultStructors(IOPlatformExpertDevice)
+	OSDeclareDefaultStructors(IOPlatformExpertDevice);
 
 private:
 	IOWorkLoop *workLoop;
@@ -329,7 +395,7 @@ private:
 public:
 	virtual bool initWithArgs( void * p1, void * p2,
 	    void * p3, void *p4 );
-	virtual bool compareName( OSString * name, OSString ** matched = 0 ) const APPLE_KEXT_OVERRIDE;
+	virtual bool compareName( OSString * name, OSString ** matched = NULL ) const APPLE_KEXT_OVERRIDE;
 
 	virtual IOWorkLoop *getWorkLoop() const APPLE_KEXT_OVERRIDE;
 	virtual IOReturn setProperties( OSObject * properties ) APPLE_KEXT_OVERRIDE;
@@ -353,13 +419,13 @@ public:
 
 class IOPlatformDevice : public IOService
 {
-	OSDeclareDefaultStructors(IOPlatformDevice)
+	OSDeclareDefaultStructors(IOPlatformDevice);
 
 	struct ExpansionData { };
 	ExpansionData *iopd_reserved;
 
 public:
-	virtual bool compareName( OSString * name, OSString ** matched = 0 ) const APPLE_KEXT_OVERRIDE;
+	virtual bool compareName( OSString * name, OSString ** matched = NULL ) const APPLE_KEXT_OVERRIDE;
 	virtual IOService * matchLocation( IOService * client ) APPLE_KEXT_OVERRIDE;
 	virtual IOReturn getResources( void ) APPLE_KEXT_OVERRIDE;
 

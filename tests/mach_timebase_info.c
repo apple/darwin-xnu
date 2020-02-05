@@ -2,6 +2,8 @@
 
 #include <darwintest.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 extern kern_return_t mach_timebase_info_trap(mach_timebase_info_t info);
 
 T_DECL(mach_timebase_info, "mach_timebase_info(_trap)",

@@ -236,12 +236,12 @@ mac_audit_text(char *text, mac_policy_handle_t handle)
 {
 	char *sanitized;
 	const char *name;
-	int i, size, plen, len;
+	size_t i, size, plen, text_len;
 
 	name = mac_get_mpc(handle)->mpc_name;
-	len = strlen(text);
+	text_len = strlen(text);
 	plen = 2 + strlen(name);
-	if (plen + len >= MAC_AUDIT_DATA_LIMIT) {
+	if (plen + text_len >= MAC_AUDIT_DATA_LIMIT) {
 		return EINVAL;
 	}
 
@@ -249,18 +249,18 @@ mac_audit_text(char *text, mac_policy_handle_t handle)
 	 * Make sure the text is only composed of only ASCII printable
 	 * characters.
 	 */
-	for (i = 0; i < len; i++) {
+	for (i = 0; i < text_len; i++) {
 		if (text[i] < (char) 32 || text[i] > (char) 126) {
 			return EINVAL;
 		}
 	}
 
-	size = len + plen + 1;
+	size = text_len + plen + 1;
 	sanitized = (char *)zalloc(mac_audit_data_zone);
 
 	strlcpy(sanitized, name, MAC_AUDIT_DATA_LIMIT);
-	strncat(sanitized, ": ", MAC_AUDIT_DATA_LIMIT - plen + 2);
-	strncat(sanitized, text, MAC_AUDIT_DATA_LIMIT - plen);
+	strlcat(sanitized, ": ", MAC_AUDIT_DATA_LIMIT);
+	strlcat(sanitized, text, MAC_AUDIT_DATA_LIMIT);
 
 	return audit_mac_data(MAC_AUDIT_TEXT_TYPE, size, (u_char *)sanitized);
 }

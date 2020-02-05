@@ -45,13 +45,11 @@
  * Machine support declarations.
  */
 
-extern void             processor_up(
-	processor_t             processor);
+extern void processor_up(
+	processor_t processor);
 
-extern void             processor_offline(
-	processor_t             processor);
-
-extern void             processor_start_thread(void *machine_param);
+extern void processor_start_thread(void *machine_param,
+    wait_result_t result);
 
 /*
  * Must be implemented in machine dependent code.

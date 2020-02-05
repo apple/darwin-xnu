@@ -10,7 +10,8 @@
 #include <stdint.h>
 #include <unistd.h>
 
-T_GLOBAL_META(T_META_NAMESPACE("xnu.poll"));
+T_GLOBAL_META(T_META_NAMESPACE("xnu.poll"),
+    T_META_RUN_CONCURRENTLY(true));
 
 #define SLEEP_TIME_SECS 1
 #define POLL_TIMEOUT_MS 1800
@@ -26,7 +27,7 @@ T_DECL(sleep_with_no_fds,
     "poll() called with no fds provided should act like sleep")
 {
 	uint64_t begin_time, sleep_time, poll_time;
-	struct pollfd pfd = { 0 };
+	struct pollfd pfd = { .fd = 0, .events = 0, .revents = 0 };
 
 	begin_time = mach_absolute_time();
 	sleep(SLEEP_TIME_SECS);

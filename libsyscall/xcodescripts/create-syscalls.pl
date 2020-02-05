@@ -150,8 +150,10 @@ sub usage {
 # Read the syscall.master file and collect the system call names and number
 # of arguments.  It looks for the NO_SYSCALL_STUB quailifier following the
 # prototype to determine if no automatic stub should be created by Libsystem.
-# System call name that are already prefixed with double-underbar are set as
-# if the NO_SYSCALL_STUB qualifier were specified (whether it is or not).
+#
+# The `sys_` prefix is stripped from syscall names, and is only kept for
+# the kernel symbol in order to avoid namespace clashes and identify
+# syscalls more easily.
 #
 # For the #if lines in syscall.master, all macros are assumed to be defined,
 # except COMPAT_GETFSSTAT (assumed undefined).
@@ -186,6 +188,7 @@ sub readMaster {
         my $no_syscall_stub = /\)\s*NO_SYSCALL_STUB\s*;/;
         my($name, $args) = /\s(\S+)\s*\(([^)]*)\)/;
         next if $name =~ /e?nosys/;
+        $name =~ s/^sys_//;
         $args =~ s/^\s+//;
         $args =~ s/\s+$//;
         my $argbytes = 0;
@@ -330,13 +333,13 @@ sub writeStubForSymbol {
         $arch =~ s/arm64(.*)/arm64/;
         push(@conditions, "defined(__${arch}__)") unless grep { $_ eq $arch } @{$$symbol{except}};
 
-        if($arch == 'arm64') {
+        if($arch eq "arm64") {
             $has_arm64 = 1 unless grep { $_ eq $arch } @{$$symbol{except}};
         }
     }
 
-	my %is_cancel;
-	for (@Cancelable) { $is_cancel{$_} = 1 };
+    my %is_cancel;
+    for (@Cancelable) { $is_cancel{$_} = 1 };
 
     print $f "#define __SYSCALL_32BIT_ARG_BYTES $$symbol{bytes}\n";
     print $f "#include \"SYS.h\"\n\n";

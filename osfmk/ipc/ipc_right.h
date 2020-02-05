@@ -78,7 +78,7 @@ typedef uint32_t ipc_right_copyin_flags_t;
 
 #define IPC_RIGHT_COPYIN_FLAGS_NONE                   0x0
 #define IPC_RIGHT_COPYIN_FLAGS_DEADOK                 0x1
-#define IPC_RIGHT_COPYIN_FLAGS_RESERVED               0x2
+#define IPC_RIGHT_COPYIN_FLAGS_ALLOW_IMMOVABLE_SEND   0x2
 #define IPC_RIGHT_COPYIN_FLAGS_ALLOW_DEAD_SEND_ONCE   0x4   /* allow copyin of a send once right to a dead port with no dead name requests */
 
 /* Find an entry in a space, given the name */
@@ -180,44 +180,37 @@ extern kern_return_t ipc_right_info(
 	mach_port_type_t        *typep,
 	mach_port_urefs_t       *urefsp);
 
-/* Check if a subsequent ipc_right_copyin would succeed */
-extern boolean_t ipc_right_copyin_check(
-	ipc_space_t             space,
-	mach_port_name_t        name,
-	ipc_entry_t             entry,
-	mach_msg_type_name_t    msgt_name);
+/* Check if a subsequent ipc_right_copyin of the reply port will succeed */
+extern boolean_t ipc_right_copyin_check_reply(
+	ipc_space_t              space,
+	mach_port_name_t         reply_name,
+	ipc_entry_t              reply_entry,
+	mach_msg_type_name_t     reply_type);
 
 /* Copyin a capability from a space */
 extern kern_return_t ipc_right_copyin(
-	ipc_space_t              space,
-	mach_port_name_t         name,
-	ipc_entry_t              entry,
-	mach_msg_type_name_t     msgt_name,
-	ipc_right_copyin_flags_t flags,
-	ipc_object_t             *objectp,
-	ipc_port_t               *sorightp,
-	ipc_port_t               *releasep,
-	int                      *assertcntp);
-
-/* Undo the effects of an ipc_right_copyin */
-extern void ipc_right_copyin_undo(
-	ipc_space_t             space,
-	mach_port_name_t        name,
-	ipc_entry_t             entry,
-	mach_msg_type_name_t    msgt_name,
-	ipc_object_t            object,
-	ipc_port_t              soright);
+	ipc_space_t               space,
+	mach_port_name_t          name,
+	ipc_entry_t               entry,
+	mach_msg_type_name_t      msgt_name,
+	ipc_right_copyin_flags_t  flags,
+	ipc_object_t              *objectp,
+	ipc_port_t                *sorightp,
+	ipc_port_t                *releasep,
+	int                       *assertcntp,
+	mach_port_context_t       context,
+	mach_msg_guard_flags_t    *guard_flags);
 
 /* Copyin a pair of dispositions from a space */
 extern kern_return_t ipc_right_copyin_two(
-	ipc_space_t             space,
-	mach_port_name_t        name,
-	ipc_entry_t             entry,
-	mach_msg_type_name_t    msgt_one,
-	mach_msg_type_name_t    msgt_two,
-	ipc_object_t            *objectp,
-	ipc_port_t              *sorightp,
-	ipc_port_t              *releasep);
+	ipc_space_t               space,
+	mach_port_name_t          name,
+	ipc_entry_t               entry,
+	mach_msg_type_name_t      msgt_one,
+	mach_msg_type_name_t      msgt_two,
+	ipc_object_t              *objectp,
+	ipc_port_t                *sorightp,
+	ipc_port_t                *releasep);
 
 /* Copyout a capability to a space */
 extern kern_return_t ipc_right_copyout(
@@ -225,15 +218,8 @@ extern kern_return_t ipc_right_copyout(
 	mach_port_name_t        name,
 	ipc_entry_t             entry,
 	mach_msg_type_name_t    msgt_name,
-	boolean_t               overflow,
+	mach_port_context_t     *context,
+	mach_msg_guard_flags_t  *guard_flags,
 	ipc_object_t            object);
-
-/* Reanme a capability */
-extern kern_return_t ipc_right_rename(
-	ipc_space_t             space,
-	mach_port_name_t        oname,
-	ipc_entry_t             oentry,
-	mach_port_name_t        nname,
-	ipc_entry_t             nentry);
 
 #endif  /* _IPC_IPC_RIGHT_H_ */

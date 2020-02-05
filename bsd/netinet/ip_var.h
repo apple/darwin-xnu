@@ -248,7 +248,7 @@ struct ip_moptions;
 /* flags passed to ip_output as last parameter */
 #define IP_FORWARDING   0x1             /* most of ip header exists */
 #define IP_RAWOUTPUT    0x2             /* raw ip header exists */
-#define IP_NOIPSEC      0x4             /* No IPSec processing */
+#define IP_NOIPSEC      0x4             /* No IPsec processing */
 #define IP_ROUTETOIF    SO_DONTROUTE    /* bypass routing tables (0x0010) */
 #define IP_ALLOWBROADCAST SO_BROADCAST  /* can send broadcast pkts (0x0020) */
 #define IP_OUTARGS      0x100           /* has ancillary output info */
@@ -297,6 +297,7 @@ struct ip_out_args {
 #define IPOAF_AWDL_UNRESTRICTED 0x00000040      /* can send over
 	                                         *  AWDL_RESTRICTED */
 #define IPOAF_QOSMARKING_ALLOWED        0x00000080      /* policy allows Fastlane DSCP marking */
+#define IPOAF_NO_CONSTRAINED    0x00000100      /* skip IFXF_CONSTRAINED */
 	u_int32_t       ipoa_retflags;  /* IPOARF return flags (see below) */
 #define IPOARF_IFDENIED 0x00000001      /* denied access to interface */
 	int             ipoa_sotc;      /* traffic class for Fastlane DSCP mapping */

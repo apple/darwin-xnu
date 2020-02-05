@@ -53,6 +53,8 @@ struct turnstile_stats {
 #include <os/refcnt.h>
 #include <kern/assert.h>
 #include <kern/kern_types.h>
+#include <kern/mpsc_queue.h>
+#include <kern/locks.h>
 
 /*
  * turnstile_type_t : Indicates the type of primitive the turnstile is associated with
@@ -67,7 +69,8 @@ typedef enum __attribute__((packed)) turnstile_type {
 	TURNSTILE_WORKLOOPS = 5,
 	TURNSTILE_WORKQS = 6,
 	TURNSTILE_KNOTE = 7,
-	TURNSTILE_TOTAL_TYPES = 8,
+	TURNSTILE_SLEEP_INHERITOR = 8,
+	TURNSTILE_TOTAL_TYPES = 9,
 } turnstile_type_t;
 
 /*
@@ -112,6 +115,12 @@ typedef enum __attribute__((packed)) turnstile_type {
  * TURNSTILE_KNOTE
  *    Interlock: the knote lock
  *    Inheritor: WL turnstile
+ *
+ * TURNSTILE_SLEEP_INHERITOR
+ *    Interlock: turnstile_htable bucket spinlock.
+ *    Inheritor: threads.
+ *    Lock order: turnstile lock, thread lock.
+ *
  */
 
 typedef enum __attribute__((flag_enum)) turnstile_promote_policy {
@@ -120,6 +129,12 @@ typedef enum __attribute__((flag_enum)) turnstile_promote_policy {
 	TURNSTILE_USER_PROMOTE = 0x2,
 	TURNSTILE_USER_IPC_PROMOTE = 0x4,
 } turnstile_promote_policy_t;
+
+typedef enum __attribute__((flag_enum)) turnstile_hash_lock_policy {
+	TURNSTILE_HASH_LOCK_POLICY_NONE = 0,
+	TURNSTILE_IRQ_UNSAFE_HASH = 0x1,
+	TURNSTILE_LOCKED_HASH = 0x2,
+} turnstile_hash_lock_policy_t;
 
 /*
  * Turnstile state flags
@@ -178,7 +193,7 @@ MACRO_END
 
 #endif /* DEVELOPMENT || DEBUG */
 
-/* Foward declaration of turnstile */
+struct knote;
 struct turnstile;
 
 /*
@@ -311,7 +326,7 @@ struct turnstile {
 	struct priority_queue         ts_inheritor_queue;    /* Queue of turnstile with us as an inheritor (WL) */
 	union {
 		struct priority_queue_entry ts_inheritor_links;    /* Inheritor queue links */
-		queue_chain_t         ts_deallocate_link;    /* thread deallocate link */
+		struct mpsc_queue_chain   ts_deallocate_link;    /* thread deallocate link */
 	};
 	SLIST_ENTRY(turnstile)        ts_htable_link;        /* linkage for turnstile in global hash table */
 	uintptr_t                     ts_proprietor;         /* hash key lookup turnstile (IL) */
@@ -333,7 +348,7 @@ struct turnstile {
 
 /* IL - interlock, WL - turnstile lock i.e. waitq lock */
 
-#define TURNSTILE_PROPRIETOR_NULL 0
+#define TURNSTILE_PROPRIETOR_NULL 0ul
 
 /*
  * Name: turnstiles_init
@@ -397,6 +412,21 @@ turnstile_reference(struct turnstile *turnstile);
  */
 void
 turnstile_deallocate(struct turnstile *turnstile);
+
+/*
+ * Name: turnstile_waitq_add_thread_priority_queue
+ *
+ * Description: add thread to the turnstile waitq
+ *
+ * Arg1: waitq
+ * Arg2: thread
+ *
+ * Conditions: waitq locked
+ */
+void
+turnstile_waitq_add_thread_priority_queue(
+	struct waitq* wq,
+	thread_t thread);
 
 /*
  * Name: turnstile_deallocate_safe
@@ -465,6 +495,27 @@ turnstile_workq_proprietor_of_max_turnstile(
 	uintptr_t *proprietor);
 
 /*
+ * Name: turnstile_workloop_pusher_info
+ *
+ * Description: Returns the priority of the turnstile push for a workloop,
+ *              and the thread or knote responsible for this push.
+ *
+ * Args: workloop turnstile
+ *
+ * Returns:
+ *    Priority of the push or 0
+ *    Thread (with a +1 reference) with that push or THREAD_NULL.
+ *    Port (with a +1 reference) with that push, or IP_NULL.
+ *    Sync IPC knote with the highest push (or NULL)
+ */
+int
+turnstile_workloop_pusher_info(
+	struct turnstile *turnstile,
+	thread_t *thread,
+	ipc_port_t *port,
+	struct knote **knote_out);
+
+/*
  * Name: turnstile_cleanup
  *
  * Description: Update priority of a turnstile inheritor
@@ -476,6 +527,19 @@ turnstile_workq_proprietor_of_max_turnstile(
  */
 void
 turnstile_cleanup(void);
+
+/*
+ * Name: turnstile_update_thread_priority_chain
+ *
+ * Description: Priority of a thread blocked on a turnstile
+ *              has changed, update the turnstile priority.
+ *
+ * Arg1: thread: thread whose priority has changed.
+ *
+ * Returns: None.
+ */
+void
+turnstile_update_thread_priority_chain(thread_t thread);
 
 /*
  * Name: turnstile_update_inheritor_locked
@@ -494,18 +558,32 @@ void
 turnstile_update_inheritor_locked(struct turnstile *turnstile);
 
 /*
- * Name: thread_get_inheritor_turnstile_priority
+ * Name: thread_get_inheritor_turnstile_base_priority
  *
- * Description: Get the max priority of all the inheritor turnstiles
+ * Description: Get the max base priority of all the inheritor turnstiles
  *
  * Arg1: thread
  *
- * Returns: Max priority of all the inheritor turnstiles.
+ * Returns: Max base priority of all the inheritor turnstiles.
  *
  * Condition: thread locked
  */
 int
-thread_get_inheritor_turnstile_priority(thread_t thread);
+thread_get_inheritor_turnstile_base_priority(thread_t thread);
+
+/*
+ * Name: thread_get_inheritor_turnstile_sched_priority
+ *
+ * Description: Get the max sched priority of all the inheritor turnstiles
+ *
+ * Arg1: thread
+ *
+ * Returns: Max sched priority of all the inheritor turnstiles.
+ *
+ * Condition: thread locked
+ */
+int
+thread_get_inheritor_turnstile_sched_priority(thread_t thread);
 
 /*
  * Name: thread_get_waiting_turnstile
@@ -529,6 +607,7 @@ thread_get_waiting_turnstile(thread_t thread);
  *              turnstile hash.
  *
  * Arg1: port
+ * Arg2: turnstile_type_t type
  *
  * Returns: turnstile: if the proprietor has a turnstile.
  *          TURNSTILE_NULL: otherwise.
@@ -536,7 +615,20 @@ thread_get_waiting_turnstile(thread_t thread);
  * Condition: proprietor interlock held.
  */
 struct turnstile *
-turnstile_lookup_by_proprietor(uintptr_t proprietor);
+turnstile_lookup_by_proprietor(uintptr_t proprietor, turnstile_type_t type);
+
+/*
+ * Name: turnstile_has_waiters
+ *
+ * Description: returns if there are waiters on the turnstile
+ *
+ * Arg1: turnstile: turnstile
+ *
+ * Returns: TRUE if there are waiters, FALSE otherwise.
+ */
+
+boolean_t
+turnstile_has_waiters(struct turnstile *turnstile);
 
 /*
  * Name: turnstile_stats_update
@@ -557,12 +649,17 @@ turnstile_stats_update(
 
 #if DEVELOPMENT || DEBUG
 
+#define SYSCTL_TURNSTILE_TEST_USER_DEFAULT              1
+#define SYSCTL_TURNSTILE_TEST_USER_HASHTABLE            2
+#define SYSCTL_TURNSTILE_TEST_KERNEL_DEFAULT            3
+#define SYSCTL_TURNSTILE_TEST_KERNEL_HASHTABLE          4
+
 /* Functions used by debug test primitive exported by sysctls */
 int
-tstile_test_prim_lock(boolean_t use_hashtable);
+tstile_test_prim_lock(int val);
 
 int
-tstile_test_prim_unlock(boolean_t use_hashtable);
+tstile_test_prim_unlock(int val);
 
 int
 turnstile_get_boost_stats_sysctl(void *req);
@@ -572,6 +669,42 @@ turnstile_get_unboost_stats_sysctl(void *req);
 #endif /* XNU_KERNEL_PRIVATE */
 
 /* Interface */
+
+/*
+ * Name: turnstile_hash_bucket_lock
+ *
+ * Description: locks the spinlock associated with proprietor's bucket.
+ *              if proprietor is specified the index for the hash will be
+ *              recomputed and returned in index_proprietor,
+ *              otherwise the value save in index_proprietor is used as index.
+ *
+ * Args:
+ *   Arg1: proprietor (key) for hashing
+ *   Arg2: index for proprietor in the hash
+ *   Arg3: turnstile type
+ *
+ * Returns: old value of irq if irq were disabled before acquiring the lock.
+ */
+unsigned
+turnstile_hash_bucket_lock(uintptr_t proprietor, uint32_t *index_proprietor, turnstile_type_t type);
+
+/*
+ * Name: turnstile_hash_bucket_unlock
+ *
+ * Description: unlocks the spinlock associated with proprietor's bucket.
+ *              if proprietor is specified the index for the hash will be
+ *              recomputed and returned in index_proprietor,
+ *              otherwise the value save in index_proprietor is used as index.
+ *
+ * Args:
+ *   Arg1: proprietor (key) for hashing
+ *   Arg2: index for proprietor in the hash
+ *   Arg3: turnstile type
+ *   Arg4: irq value returned by turnstile_hash_bucket_lock
+ *
+ */
+void
+turnstile_hash_bucket_unlock(uintptr_t proprietor, uint32_t *index_proprietor, turnstile_type_t type, unsigned s);
 
 /*
  * Name: turnstile_prepare
@@ -609,6 +742,7 @@ turnstile_prepare(
  *   Arg1: proprietor
  *   Arg2: pointer in primitive struct to update turnstile
  *   Arg3: pointer to store the returned turnstile instead of attaching it to thread
+ *   Arg4: type of primitive
  *
  * Returns:
  *   None.
@@ -617,7 +751,8 @@ void
 turnstile_complete(
 	uintptr_t proprietor,
 	struct turnstile **tstore,
-	struct turnstile **turnstile);
+	struct turnstile **turnstile,
+	turnstile_type_t type);
 
 /*
  * Name: turnstile_update_inheritor
@@ -665,6 +800,46 @@ turnstile_update_inheritor_complete(
 	struct turnstile *turnstile,
 	turnstile_update_complete_flags_t flags);
 
+
+/*
+ * Name: turnstile_kernel_update_inheritor_on_wake_locked
+ *
+ * Description: Set thread as the inheritor of the turnstile and
+ *		boost the inheritor.
+ * Args:
+ *   Arg1: turnstile
+ *   Arg2: new_inheritor
+ *   Arg3: flags
+ *
+ * Called with turnstile locked
+ */
+void
+turnstile_kernel_update_inheritor_on_wake_locked(
+	struct turnstile *turnstile,
+	turnstile_inheritor_t new_inheritor,
+	turnstile_update_flags_t flags);
+
+/*
+ * Internal KPI for sleep_with_inheritor, wakeup_with_inheritor, change_sleep_inheritor
+ * meant to allow specifing the turnstile type to use to have different policy
+ * on how to push on the inheritor.
+ *
+ * Differently from the "standard" KPI in locks.h these are meant to be used only
+ * if you know what you are doing with turnstile.
+ */
+
+extern wait_result_t
+lck_mtx_sleep_with_inheritor_and_turnstile_type(lck_mtx_t *lock, lck_sleep_action_t lck_sleep_action, event_t event, thread_t inheritor, wait_interrupt_t interruptible, uint64_t deadline, turnstile_type_t type);
+
+extern wait_result_t
+lck_rw_sleep_with_inheritor_and_turnstile_type(lck_rw_t *lock, lck_sleep_action_t lck_sleep_action, event_t event, thread_t inheritor, wait_interrupt_t interruptible, uint64_t deadline, turnstile_type_t type);
+
+extern kern_return_t
+wakeup_with_inheritor_and_turnstile_type(event_t event, turnstile_type_t type, wait_result_t result, bool wake_one, lck_wake_action_t action, thread_t *thread_wokenup);
+
+extern kern_return_t
+change_sleep_inheritor_and_turnstile_type(event_t event, thread_t inheritor, turnstile_type_t type);
+
 #endif /* KERNEL_PRIVATE */
 #if XNU_KERNEL_PRIVATE
 
@@ -673,13 +848,9 @@ struct workqueue;
 /* pthread_workqueue.c */
 extern void workq_reference(struct workqueue *wq);
 extern void workq_deallocate_safe(struct workqueue *wq);
-extern void workq_destroy(struct workqueue *wq);
 extern bool workq_is_current_thread_updating_turnstile(struct workqueue *wq);
 extern void workq_schedule_creator_turnstile_redrive(struct workqueue *wq,
     bool locked);
-
-/* thread.c */
-extern void     workq_deallocate_enqueue(struct workqueue *wq);
 
 #endif /* XNU_KERNEL_PRIVATE */
 

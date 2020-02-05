@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -37,6 +37,7 @@
 #include <sys/mcache.h>
 #include <sys/sysctl.h>
 
+#include <dev/random/randomdev.h>
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_dl.h>
@@ -46,13 +47,14 @@
 #include <net/pktsched/pktsched_tcq.h>
 #include <net/pktsched/pktsched_qfq.h>
 #include <net/pktsched/pktsched_fq_codel.h>
+#include <net/pktsched/pktsched_netem.h>
 
 #include <pexpert/pexpert.h>
 
 
 u_int32_t machclk_freq = 0;
 u_int64_t machclk_per_sec = 0;
-u_int32_t pktsched_verbose;     /* more noise if greater than 1 */
+u_int32_t pktsched_verbose = 0; /* more noise if greater than 1 */
 
 static void init_machclk(void);
 
@@ -72,6 +74,7 @@ pktsched_init(void)
 
 	tcq_init();
 	qfq_init();
+	netem_init();
 }
 
 static void
@@ -225,22 +228,83 @@ pktsched_getqstats(struct ifclassq *ifq, u_int32_t qid,
 }
 
 void
-pktsched_pkt_encap(pktsched_pkt_t *pkt, classq_pkt_type_t ptype, void *pp)
+pktsched_pkt_encap(pktsched_pkt_t *pkt, classq_pkt_t *cpkt)
 {
-	pkt->pktsched_ptype = ptype;
-	pkt->pktsched_pkt = pp;
+	pkt->pktsched_pkt = *cpkt;
 
-	switch (ptype) {
+	switch (cpkt->cp_ptype) {
 	case QP_MBUF:
 		pkt->pktsched_plen =
-		    (uint32_t)m_pktlen((struct mbuf *)pkt->pktsched_pkt);
+		    (uint32_t)m_pktlen(pkt->pktsched_pkt_mbuf);
 		break;
 
 
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
+}
+
+int
+pktsched_clone_pkt(pktsched_pkt_t *pkt1, pktsched_pkt_t *pkt2)
+{
+	struct mbuf *m1, *m2;
+
+	ASSERT(pkt1 != NULL);
+	ASSERT(pkt1->pktsched_pkt_mbuf != NULL);
+	/* allow in place clone, but make sure pkt2->pktsched_pkt won't leak */
+	ASSERT((pkt1 == pkt2 && pkt1->pktsched_pkt_mbuf ==
+	    pkt2->pktsched_pkt_mbuf) || (pkt1 != pkt2 &&
+	    pkt2->pktsched_pkt_mbuf == NULL));
+
+	switch (pkt1->pktsched_ptype) {
+	case QP_MBUF:
+		m1 = (struct mbuf *)pkt1->pktsched_pkt_mbuf;
+		m2 = m_dup(m1, M_NOWAIT);
+		if (__improbable(m2 == NULL)) {
+			return ENOBUFS;
+		}
+		pkt2->pktsched_pkt_mbuf = m2;
+		break;
+
+
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+		__builtin_unreachable();
+	}
+
+	pkt2->pktsched_plen = pkt1->pktsched_plen;
+	pkt2->pktsched_ptype = pkt1->pktsched_ptype;
+	return 0;
+}
+
+void
+pktsched_corrupt_packet(pktsched_pkt_t *pkt)
+{
+	struct mbuf *m = NULL;
+	uint8_t *data = NULL;
+	uint32_t data_len = 0;
+	uint32_t rand32, rand_off, rand_bit;
+
+	switch (pkt->pktsched_ptype) {
+	case QP_MBUF:
+		m = pkt->pktsched_pkt_mbuf;
+		data = mtod(m, uint8_t *);
+		data_len = m->m_pkthdr.len;
+		break;
+
+	default:
+		/* NOTREACHED */
+		VERIFY(0);
+		__builtin_unreachable();
+	}
+
+	read_frandom(&rand32, sizeof(rand32));
+	rand_bit = rand32 & 0x8;
+	rand_off = (rand32 >> 3) % data_len;
+	data[rand_off] ^= 1 << rand_bit;
 }
 
 void
@@ -248,24 +312,18 @@ pktsched_free_pkt(pktsched_pkt_t *pkt)
 {
 	switch (pkt->pktsched_ptype) {
 	case QP_MBUF:
-		m_freem(pkt->pktsched_pkt);
+		m_freem(pkt->pktsched_pkt_mbuf);
 		break;
 
 
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
-	pkt->pktsched_pkt = NULL;
+	pkt->pktsched_pkt = CLASSQ_PKT_INITIALIZER(pkt->pktsched_pkt);
 	pkt->pktsched_plen = 0;
-	pkt->pktsched_ptype = 0;
-}
-
-uint32_t
-pktsched_get_pkt_len(pktsched_pkt_t *pkt)
-{
-	return pkt->pktsched_plen;
 }
 
 mbuf_svc_class_t
@@ -275,27 +333,27 @@ pktsched_get_pkt_svc(pktsched_pkt_t *pkt)
 
 	switch (pkt->pktsched_ptype) {
 	case QP_MBUF:
-		svc = m_get_service_class((mbuf_t)pkt->pktsched_pkt);
+		svc = m_get_service_class(pkt->pktsched_pkt_mbuf);
 		break;
 
 
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
 	return svc;
 }
 
 void
-pktsched_get_pkt_vars(pktsched_pkt_t *pkt, uint32_t **flags,
+pktsched_get_pkt_vars(pktsched_pkt_t *pkt, volatile uint32_t **flags,
     uint64_t **timestamp, uint32_t *flowid, uint8_t *flowsrc, uint8_t *proto,
     uint32_t *tcp_start_seq)
 {
 	switch (pkt->pktsched_ptype) {
 	case QP_MBUF: {
-		struct mbuf *m = (struct mbuf *)pkt->pktsched_pkt;
-		struct pkthdr *pkth = &m->m_pkthdr;
+		struct pkthdr *pkth = &(pkt->pktsched_pkt_mbuf->m_pkthdr);
 
 		if (flags != NULL) {
 			*flags = &pkth->pkt_flags;
@@ -327,6 +385,7 @@ pktsched_get_pkt_vars(pktsched_pkt_t *pkt, uint32_t **flags,
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 }
 
@@ -338,7 +397,7 @@ pktsched_alloc_fcentry(pktsched_pkt_t *pkt, struct ifnet *ifp, int how)
 
 	switch (pkt->pktsched_ptype) {
 	case QP_MBUF: {
-		struct mbuf *m = (struct mbuf *)pkt->pktsched_pkt;
+		struct mbuf *m = pkt->pktsched_pkt_mbuf;
 
 		fce = flowadv_alloc_entry(how);
 		if (fce == NULL) {
@@ -357,6 +416,7 @@ pktsched_alloc_fcentry(pktsched_pkt_t *pkt, struct ifnet *ifp, int how)
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
 	return fce;
@@ -369,12 +429,10 @@ pktsched_get_pkt_sfb_vars(pktsched_pkt_t *pkt, uint32_t **sfb_flags)
 
 	switch (pkt->pktsched_ptype) {
 	case QP_MBUF: {
-		struct mbuf *m = (struct mbuf *)pkt->pktsched_pkt;
-		struct pkthdr *pkth = &m->m_pkthdr;
+		struct pkthdr *pkth = &(pkt->pktsched_pkt_mbuf->m_pkthdr);
 
 		_CASSERT(sizeof(pkth->pkt_mpriv_hash) == sizeof(uint32_t));
 		_CASSERT(sizeof(pkth->pkt_mpriv_flags) == sizeof(uint32_t));
-
 		*sfb_flags = &pkth->pkt_mpriv_flags;
 		hashp = &pkth->pkt_mpriv_hash;
 		break;
@@ -384,6 +442,7 @@ pktsched_get_pkt_sfb_vars(pktsched_pkt_t *pkt, uint32_t **sfb_flags)
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
 	return hashp;

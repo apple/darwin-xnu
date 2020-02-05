@@ -183,11 +183,11 @@ typedef struct {
 extern  lapic_ops_table_t *lapic_ops;
 
 #define LAPIC_INIT()                    lapic_ops->init();
-#define LAPIC_WRITE(reg, val)            lapic_ops->write(reg, val)
+#define LAPIC_WRITE(reg, val)           lapic_ops->write(reg, val)
 #define LAPIC_READ(reg)                 lapic_ops->read(reg)
-#define LAPIC_READ_OFFSET(reg, off)      LAPIC_READ((reg)+(off))
+#define LAPIC_READ_OFFSET(reg, off)     LAPIC_READ((lapic_register_t)((reg)+(off)))
 #define LAPIC_READ_ICR()                lapic_ops->read_icr()
-#define LAPIC_WRITE_ICR(dst, cmd)        lapic_ops->write_icr(dst, cmd)
+#define LAPIC_WRITE_ICR(dst, cmd)       lapic_ops->write_icr(dst, cmd)
 
 typedef enum {
 	periodic,

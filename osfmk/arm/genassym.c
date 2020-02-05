@@ -355,11 +355,11 @@ main(
 	DECLARE("BA_TOP_OF_KERNEL_DATA",
 	    offsetof(struct boot_args, topOfKernelData));
 
-	DECLARE("ENTROPY_INDEX_PTR",
-	    offsetof(entropy_data_t, index_ptr));
+	DECLARE("ENTROPY_SAMPLE_COUNT",
+	    offsetof(entropy_data_t, sample_count));
 	DECLARE("ENTROPY_BUFFER",
 	    offsetof(entropy_data_t, buffer));
-	DECLARE("ENTROPY_DATA_SIZE", sizeof(struct entropy_data));
+	DECLARE("ENTROPY_BUFFER_INDEX_MASK", ENTROPY_BUFFER_INDEX_MASK);
 
 	return 0;
 }

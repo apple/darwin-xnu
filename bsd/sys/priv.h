@@ -93,6 +93,8 @@
 #define PRIV_PACKAGE_EXTENSIONS         1013    /* Push package extension list used by vn_path_package_check() */
 #define PRIV_TRIM_ACTIVE_FILE           1014    /* Allow freeing space out from under an active file  */
 #define PRIV_PROC_CPUMON_OVERRIDE       1015    /* Allow CPU usage monitor parameters less restrictive than default */
+#define PRIV_ENDPOINTSECURITY_CLIENT    1016    /* Allow EndpointSecurity clients to connect */
+#define PRIV_AUDIT_SESSION_PORT         1017    /* Obtain send-right for arbitrary audit session's port. */
 
 /*
  * Virtual memory privileges.
@@ -118,10 +120,20 @@
 #define PRIV_NET_RESTRICTED_MULTIPATH_EXTENDED  10010   /* Extended multipath (more aggressive on cell) */
 #define PRIV_NET_RESTRICTED_ROUTE_NC_READ       10011   /* Enable route neighbhor cache read operations */
 
+#define PRIV_NET_PRIVILEGED_CLIENT_ACCESS       10012   /* Allow client networking access on restricted platforms */
+#define PRIV_NET_PRIVILEGED_SERVER_ACCESS       10013   /* Allow server networking access on restricted platforms */
+
+#define PRIV_NET_VALIDATED_RESOLVER             10014   /* Privilege to sign DNS resolver results for validation */
+
+#define PRIV_NET_CUSTOM_PROTOCOL                10015   /* Privilege to use custom protocol APIs */
+#define PRIV_NET_PRIVILEGED_NECP_DROP_ALL_BYPASS 10016  /* Privilege to bypass NECP drop-all */
+#define PRIV_NET_PRIVILEGED_IPSEC_WAKE_PACKET   10017   /* Privilege to get IPsec wake packet */
+
 /*
  * IPv4 and IPv6 privileges.
  */
 #define PRIV_NETINET_RESERVEDPORT       11000   /* Bind low port number. */
+#define PRIV_NETINET_TCP_KA_OFFLOAD     11001   /* Can set TCP keep alive offload option */
 
 
 /*
@@ -131,10 +143,15 @@
 #define PRIV_VFS_MOVE_DATA_EXTENTS      14001   /* Allow F_MOVEDATAEXTENTS fcntl */
 #define PRIV_VFS_SNAPSHOT               14002   /* Allow create/rename/delete of snapshots */
 #define PRIV_VFS_SNAPSHOT_REVERT        14003   /* Allow reverting filesystem to a previous snapshot */
+#define PRIV_VFS_DATALESS_RESOLVER      14004   /* Allow registration as dataless file resolver */
+#define PRIV_VFS_DATALESS_MANIPULATION  14005   /* Allow process to inspect dataless directories / manipulate dataless objects */
 
 #define PRIV_APFS_EMBED_DRIVER          14100   /* Allow embedding an EFI driver into the APFS container */
 #define PRIV_APFS_FUSION_DEBUG      14101   /* Allow getting internal statistics and controlling the APFS Fusion container */
 #define PRIV_APFS_FUSION_ALLOW_PIN_FASTPROMOTE  14102   /* Allow changing pinned/fastPromote inode flags in APFS Fusion container */
+// #define PRIV_APFS_UNUSED              14103
+#define PRIV_APFS_SET_FREE_SPACE_CHANGE_THRESHOLD       14104   /* Allow setting the free space change notification threshold */
+#define PRIV_APFS_SET_FIRMLINK       14105   /* Allow setting the SF_FIRM_LINK bsd flag */
 
 #ifdef KERNEL
 /*

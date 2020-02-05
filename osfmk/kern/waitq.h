@@ -49,7 +49,7 @@
  */
 #define WAITQ_ALL_PRIORITIES   (-1)
 #define WAITQ_PROMOTE_PRIORITY (-2)
-#define WAITQ_SELECT_MAX_PRI   (-3)
+#define WAITQ_PROMOTE_ON_WAKE  (-3)
 
 typedef enum e_waitq_lock_state {
 	WAITQ_KEEP_LOCKED    = 0x01,
@@ -175,7 +175,7 @@ struct waitq_set {
 	};
 };
 
-#define WQSET_NOT_LINKED ((uint64_t)(~0))
+#define WQSET_NOT_LINKED       ((uint64_t)(~0))
 static_assert(sizeof(struct waitq_set) == WQS_OPAQUE_SIZE, "waitq_set structure size mismatch");
 static_assert(__alignof(struct waitq_set) == WQS_OPAQUE_ALIGN, "waitq_set structure alignment mismatch");
 
@@ -388,14 +388,17 @@ extern struct waitq *_global_eventq(char *event, size_t event_length);
 
 extern struct waitq *global_waitq(int index);
 
+typedef uint16_t waitq_set_prepost_hook_t;
+
 /*
  * set alloc/init/free
  */
-extern struct waitq_set *waitq_set_alloc(int policy, void *prepost_hook);
+extern struct waitq_set *waitq_set_alloc(int policy,
+    waitq_set_prepost_hook_t *prepost_hook);
 
 extern kern_return_t waitq_set_init(struct waitq_set *wqset,
     int policy, uint64_t *reserved_link,
-    void *prepost_hook);
+    waitq_set_prepost_hook_t *prepost_hook);
 
 extern void waitq_set_deinit(struct waitq_set *wqset);
 

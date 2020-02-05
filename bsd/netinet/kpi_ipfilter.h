@@ -36,7 +36,12 @@
 #ifndef __KPI_IPFILTER__
 #define __KPI_IPFILTER__
 
-#include <sys/kernel_types.h>
+#ifndef PRIVATE
+#include <Availability.h>
+#define __NKE_API_DEPRECATED __API_DEPRECATED("Network Kernel Extension KPI is deprecated", macos(10.4, 10.15))
+#else
+#define __NKE_API_DEPRECATED
+#endif /* PRIVATE */
 
 /*
  * ipf_pktopts
@@ -50,14 +55,15 @@ struct ipf_pktopts {
 	int                             ippo_mcast_loop;
 	u_int8_t                        ippo_mcast_ttl;
 };
-#define IPPOF_MCAST_OPTS        0x1
+#define IPPOF_MCAST_OPTS            0x1
 #ifdef PRIVATE
-#define IPPOF_BOUND_IF          0x2
-#define IPPOF_NO_IFT_CELLULAR   0x4
-#define IPPOF_SELECT_SRCIF      0x8
-#define IPPOF_BOUND_SRCADDR     0x10
-#define IPPOF_SHIFT_IFSCOPE     16
-#define IPPOF_NO_IFF_EXPENSIVE  0x20
+#define IPPOF_BOUND_IF              0x2
+#define IPPOF_NO_IFT_CELLULAR       0x4
+#define IPPOF_SELECT_SRCIF          0x8
+#define IPPOF_BOUND_SRCADDR         0x10
+#define IPPOF_SHIFT_IFSCOPE         16
+#define IPPOF_NO_IFF_EXPENSIVE      0x20
+#define IPPOF_NO_IFF_CONSTRAINED    0x40
 #endif /* PRIVATE */
 
 typedef struct ipf_pktopts *ipf_pktopts_t;
@@ -72,7 +78,7 @@ __BEGIN_DECLS
  *               filter is called between when the general IP processing is
  *               handled and when the packet is passed up to the next layer
  *               protocol such as udp or tcp. In the case of encapsulation, such
- *               as UDP in ESP (IPSec), your filter will be called once for ESP
+ *               as UDP in ESP (IPsec), your filter will be called once for ESP
  *               and then again for UDP. This will give your filter an
  *               opportunity to process the ESP header as well as the decrypted
  *               packet. Offset and protocol are used to determine where in the
@@ -101,7 +107,7 @@ typedef errno_t (*ipf_input_func)(void *cookie, mbuf_t *data, int offset,
  *
  *       @discussion ipf_output_func is used to filter outbound ip packets.
  *               The IP filter is called for packets to all interfaces. The
- *               filter is called before fragmentation and IPSec processing. If
+ *               filter is called before fragmentation and IPsec processing. If
  *               you need to change the destination IP address, call
  *               ipf_inject_output and return EJUSTRETURN.
  *       @param cookie The cookie specified when your filter was attached.
@@ -164,7 +170,8 @@ extern errno_t ipf_addv4_internal(const struct ipf_filter *filter,
     ipf_addv4_internal((filter), (filter_ref))
 #else
 extern errno_t ipf_addv4(const struct ipf_filter *filter,
-    ipfilter_t *filter_ref);
+    ipfilter_t *filter_ref)
+__NKE_API_DEPRECATED;
 #endif /* KERNEL_PRIVATE */
 
 /*!
@@ -182,7 +189,8 @@ extern errno_t ipf_addv6_internal(const struct ipf_filter *filter,
     ipf_addv6_internal((filter), (filter_ref))
 #else
 extern errno_t ipf_addv6(const struct ipf_filter *filter,
-    ipfilter_t *filter_ref);
+    ipfilter_t *filter_ref)
+__NKE_API_DEPRECATED;
 #endif /* KERNEL_PRIVATE */
 
 /*!
@@ -192,7 +200,8 @@ extern errno_t ipf_addv6(const struct ipf_filter *filter,
  *               ipf_addv6.
  *       @result 0 on success otherwise the errno error.
  */
-extern errno_t ipf_remove(ipfilter_t filter_ref);
+extern errno_t ipf_remove(ipfilter_t filter_ref)
+__NKE_API_DEPRECATED;
 
 /*!
  *       @function ipf_inject_input
@@ -212,7 +221,8 @@ extern errno_t ipf_remove(ipfilter_t filter_ref);
  *       @param filter_ref The reference to the filter injecting the data
  *       @result 0 on success otherwise the errno error.
  */
-extern errno_t ipf_inject_input(mbuf_t data, ipfilter_t filter_ref);
+extern errno_t ipf_inject_input(mbuf_t data, ipfilter_t filter_ref)
+__NKE_API_DEPRECATED;
 
 /*!
  *       @function ipf_inject_output
@@ -231,7 +241,8 @@ extern errno_t ipf_inject_input(mbuf_t data, ipfilter_t filter_ref);
  *               will always free the mbuf.
  */
 extern errno_t ipf_inject_output(mbuf_t data, ipfilter_t filter_ref,
-    ipf_pktopts_t options);
+    ipf_pktopts_t options)
+__NKE_API_DEPRECATED;
 
 __END_DECLS
 #endif /* __KPI_IPFILTER__ */

@@ -78,6 +78,7 @@
 struct label;
 
 #ifdef __APPLE_API_UNSTABLE
+#ifdef KERNEL
 #include <sys/queue.h>
 
 /*
@@ -119,6 +120,11 @@ struct ucred {
 	 */
 	struct au_session cr_audit;             /* user auditing data */
 };
+#else /* KERNEL */
+struct ucred;
+struct posix_cred;
+#endif /* KERNEL */
+
 #ifndef _KAUTH_CRED_T
 #define _KAUTH_CRED_T
 typedef struct ucred *kauth_cred_t;

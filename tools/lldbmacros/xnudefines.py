@@ -4,7 +4,7 @@
     The objective is to provide a single place to be the bridge between C code in xnu and the python macros used by lldb.
     If you define a variable which has been copied/referred over from C code and has high chance of changing over time. It would
     be best to define a supporting function of format "populate_<variable_name>". This will help in running them to repopulate.
-     
+
     Please take a look at example of kobject_types below before making changes to this file.
     Note: The Format of the function has to be populate_<variable_name> so that the automated updating will pick it up.
 """
@@ -70,18 +70,21 @@ arm_level2_access_strings = [ " noaccess",
                               " "
                              ]
 
-kq_state_strings = { 0x000: '',
-                     0x001: 'SEL',
-                     0x002: 'SLEEP',
-                     0x004: 'PROCWAIT',
-                     0x008: 'KEV32',
-                     0x010: 'KEV64',
-                     0x020: 'KEVQOS',
-                     0x040: 'WORKQ',
-                     0x080: 'WORKLOOP',
-                     0x100: 'PROCESS',
-                     0x200: 'DRAIN',
-                     0x400: 'WAKEUP' }
+kq_state_strings = { 0x0000: '',
+                     0x0001: 'SEL',
+                     0x0002: 'SLEEP',
+                     0x0004: 'PROCWAIT',
+                     0x0008: '32',
+                     0x0010: '64',
+                     0x0020: 'QOS',
+                     0x0040: 'WQ',
+                     0x0080: 'WL',
+                     0x0100: 'PROCESS',
+                     0x0200: 'DRAIN',
+                     0x0400: 'WAKEUP',
+                     0x0800: 'DYN',
+                     0x1000: 'R2K',
+                     0x2000: 'TS' }
 
 kn_state_strings = { 0x0000: '',
                      0x0001: 'ACTIVE',
@@ -89,23 +92,14 @@ kn_state_strings = { 0x0000: '',
                      0x0004: 'DISABLED',
                      0x0008: 'DROPPING',
                      0x0010: 'LOCKED',
-                     0x0020: 'ATTACHING',
+                     0x0020: 'POSTING',
                      0x0040: 'STAYACTIVE',
-                     0x0080: 'DEFERDROP',
-                     0x0100: 'ATTACHED',
-                     0x0200: 'DISPATCH',
-                     0x0400: 'UDATASPEC',
-                     0x0800: 'SUPPRESS',
-                     0x1000: 'MERGE_QOS',
-                     0x2000: 'REQVANISH',
-                     0x4000: 'VANISHED' }
+                     0x0080: 'DEFERDELETE',
+                     0x0100: 'MERGE_QOS',
+                     0x0200: 'REQVANISH',
+                     0x0400: 'VANISHED',
+                     0x0800: 'SUPPRESS' }
 
-kqrequest_state_strings = { 0x01: 'WORKLOOP',
-                            0x02: 'THREQUESTED',
-                            0x04: 'WAKEUP',
-                            0x08: 'THOVERCOMMIT',
-                            0x10: 'R2K_ARMED',
-                            0x20: 'ALLOC_TURNSTILE' }
 thread_qos_short_strings = { 0: '--',
                              1: 'MT',
                              2: 'BG',
@@ -179,8 +173,8 @@ proc_flag_explain_strings = ["!0x00000004 - process is 32 bit",  #only exception
                              ]
 #File: xnu/osfmk/kern/ipc_kobject.h
 # string representations for Kobject types
-kobject_types = ['', 'THREAD', 'TASK', 'HOST', 'HOST_PRIV', 'PROCESSOR', 'PSET', 'PSET_NAME', 'TIMER', 'PAGER_REQ', 'DEVICE', 'XMM_OBJECT', 'XMM_PAGER', 'XMM_KERNEL', 'XMM_REPLY', 
-                     'NOTDEF 15', 'NOTDEF 16', 'HOST_SEC', 'LEDGER', 'MASTER_DEV', 'TASK_NAME', 'SUBSYTEM', 'IO_DONE_QUE', 'SEMAPHORE', 'LOCK_SET', 'CLOCK', 'CLOCK_CTRL' , 'IOKIT_SPARE', 
+kobject_types = ['', 'THREAD', 'TASK', 'HOST', 'HOST_PRIV', 'PROCESSOR', 'PSET', 'PSET_NAME', 'TIMER', 'PAGER_REQ', 'DEVICE', 'XMM_OBJECT', 'XMM_PAGER', 'XMM_KERNEL', 'XMM_REPLY',
+                     'NOTDEF 15', 'NOTDEF 16', 'HOST_SEC', 'LEDGER', 'MASTER_DEV', 'TASK_NAME', 'SUBSYTEM', 'IO_DONE_QUE', 'SEMAPHORE', 'LOCK_SET', 'CLOCK', 'CLOCK_CTRL' , 'IOKIT_SPARE',
                       'NAMED_MEM', 'IOKIT_CON', 'IOKIT_OBJ', 'UPL', 'MEM_OBJ_CONTROL', 'AU_SESSIONPORT', 'FILEPORT', 'LABELH', 'TASK_RESUME', 'VOUCHER', 'VOUCHER_ATTR_CONTROL', 'WORK_INTERVAL',
                       'UX_HANDLER']
 
@@ -213,7 +207,15 @@ EMBEDDED_PANIC_MAGIC = 0x46554E4B
 EMBEDDED_PANIC_STACKSHOT_SUCCEEDED_FLAG = 0x02
 
 MACOS_PANIC_MAGIC = 0x44454544
+MACOS_PANIC_STACKSHOT_SUCCEEDED_FLAG = 0x04
+
+AURR_PANIC_MAGIC = 0x41555252
+AURR_PANIC_STRING_LEN = 112
+AURR_PANIC_VERSION = 1
+
+CRASHLOG_PANIC_STRING_LEN = 32
+AURR_CRASHLOG_PANIC_VERSION = 2
 
 if __name__ == "__main__":
     populate_kobject_types("../../")
-    
+

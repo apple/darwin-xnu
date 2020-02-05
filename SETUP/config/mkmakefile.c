@@ -738,25 +738,14 @@ common:
 			fprintf(f, "%s%.*s${%c_RULE_1B%s}%s\n",
 			    source_dir, (int)(tp - np), np, och_upper, extras, nl);
 
-			/* While we are still using CTF, any build that normally does not support CTF will
-			 * a "standard" compile done as well that we can harvest CTF information from; do
-			 * that here.
-			 */
-			fprintf(f, "\t${%c_CTFRULE_1A%s}", och_upper, extras);
-			if (ftp->f_extra) {
-				fprintf(f, "%s", ftp->f_extra);
-			}
-			fprintf(f, "%s%.*s${%c_CTFRULE_1B%s}%s\n",
-			    source_dir, (int)(tp - np), np, och_upper, extras, nl);
-
 			fprintf(f, "\t${%c_RULE_2%s}%s\n", och_upper, extras, nl);
-			fprintf(f, "\t${%c_CTFRULE_2%s}%s\n", och_upper, extras, nl);
 			fprintf(f, "\t${%c_RULE_3%s}%s\n", och_upper, extras, nl);
-			fprintf(f, "\t${%c_RULE_4A%s}", och_upper, extras);
+			fprintf(f, "\t$(if ${%c_RULE_4A%s},${%c_RULE_4A%s}",
+			    och_upper, extras, och_upper, extras);
 			if (ftp->f_extra) {
 				fprintf(f, "%s", ftp->f_extra);
 			}
-			fprintf(f, "%s%.*s${%c_RULE_4B%s}%s\n",
+			fprintf(f, "%s%.*s${%c_RULE_4B%s}%s)\n",
 			    source_dir, (int)(tp - np), np, och_upper, extras, nl);
 			break;
 

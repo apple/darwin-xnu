@@ -98,14 +98,14 @@ static int soo_close(struct fileglob *, vfs_context_t ctx);
 static int soo_drain(struct fileproc *, vfs_context_t ctx);
 
 const struct fileops socketops = {
-	.fo_type = DTYPE_SOCKET,
-	.fo_read = soo_read,
-	.fo_write = soo_write,
-	.fo_ioctl = soo_ioctl,
-	.fo_select = soo_select,
-	.fo_close = soo_close,
+	.fo_type     = DTYPE_SOCKET,
+	.fo_read     = soo_read,
+	.fo_write    = soo_write,
+	.fo_ioctl    = soo_ioctl,
+	.fo_select   = soo_select,
+	.fo_close    = soo_close,
+	.fo_drain    = soo_drain,
 	.fo_kqfilter = soo_kqfilter,
-	.fo_drain = soo_drain,
 };
 
 /* ARGSUSED */

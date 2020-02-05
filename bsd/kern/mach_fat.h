@@ -36,9 +36,9 @@
 
 load_return_t fatfile_validate_fatarches(vm_offset_t data_ptr, vm_size_t data_size);
 
-load_return_t fatfile_getbestarch(vm_offset_t data_ptr, vm_size_t data_size, struct fat_arch *archret);
+load_return_t fatfile_getbestarch(vm_offset_t data_ptr, vm_size_t data_size, struct image_params *imgp, struct fat_arch *archret);
 load_return_t fatfile_getbestarch_for_cputype(cpu_type_t cputype,
-    vm_offset_t data_ptr, vm_size_t data_size, struct fat_arch *archret);
+    vm_offset_t data_ptr, vm_size_t data_size, struct image_params *imgp, struct fat_arch *archret);
 load_return_t fatfile_getarch_with_bits(integer_t archbits,
     vm_offset_t data_ptr, vm_size_t data_size, struct fat_arch *archret);
 

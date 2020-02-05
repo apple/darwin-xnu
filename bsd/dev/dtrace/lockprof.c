@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -31,6 +31,7 @@
 #include <kern/lock_stat.h>
 
 #if LOCK_STATS
+
 #define SPIN_HELD 0
 #define SPIN_MISS 1
 #define SPIN_SPIN 2
@@ -44,7 +45,7 @@
 
 static dtrace_provider_id_t lockprof_id;
 
-decl_lck_mtx_data(extern, lck_grp_lock)
+decl_lck_mtx_data(extern, lck_grp_lock);
 extern queue_head_t lck_grp_queue;
 extern unsigned int lck_grp_cnt;
 

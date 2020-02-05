@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -35,6 +35,9 @@
 #define _LIBKERN_OSOBJECT_H
 
 #include <libkern/c++/OSMetaClass.h>
+#include <IOKit/IORPC.h>
+#include <DriverKit/OSObject.h>
+#include <libkern/c++/OSPtr.h>
 
 #if defined(__clang__)
 #pragma clang diagnostic ignored "-Woverloaded-virtual"
@@ -42,6 +45,9 @@
 
 class OSSymbol;
 class OSString;
+class OSObject;
+
+typedef OSPtr<OSObject> OSObjectPtr;
 
 
 /*!
@@ -167,9 +173,15 @@ class OSString;
  */
 class OSObject : public OSMetaClassBase
 {
-	OSDeclareAbstractStructors(OSObject)
+	OSDeclareAbstractStructorsWithDispatch(OSObject);
+
 #if IOKITSTATS
 	friend class IOStatistics;
+#endif
+
+#ifdef LIBKERN_SMART_POINTERS
+	template<class T, class OSPtrPolicy>
+	friend class os::smart_ptr;
 #endif
 
 private:
@@ -192,10 +204,10 @@ protected:
  * drops below the specified threshold.
  *
  * @param freeWhen If decrementing the reference count makes it
- *                 >= <code>freeWhen</code>, the object is immediately freed.
+ *                 < <code>freeWhen</code>, the object is immediately freed.
  *
  * @discussion
- * If the receiver has <code>freeWhen</code> or fewer references
+ * If the receiver has fewer than <code>freeWhen</code> references
  * after its reference count is decremented,
  * it is immediately freed.
  *
@@ -215,14 +227,14 @@ protected:
  *
  * @param tag      Used for tracking collection references.
  * @param freeWhen If decrementing the reference count makes it
- *                 >= <code>freeWhen</code>, the object is immediately freed.
+ *                 < <code>freeWhen</code>, the object is immediately freed.
  *
  * @discussion
  * Kernel extensions should not use this function.
  * It is for use by OSCollection and subclasses to track
  * inclusion in collections.
  *
- * If the receiver has <code>freeWhen</code> or fewer references
+ * If the receiver has fewer than <code>freeWhen</code> references
  * after its reference count is decremented,
  * it is immediately freed.
  *
@@ -299,7 +311,13 @@ protected:
  */
 	static void operator delete(void * mem, size_t size);
 
+// XXX: eventually we can flip this switch
+//#ifdef LIBKERN_SMART_POINTERS
+#if 0
+private:
+#else
 public:
+#endif
 
 /*!
  * @function operator new
@@ -314,6 +332,7 @@ public:
  */
 	static void * operator new(size_t size);
 
+public:
 
 /*!
  * @function getRetainCount
@@ -378,7 +397,7 @@ public:
  * outside the context in which you received it,
  * you should always retain it immediately.
  */
-	virtual void taggedRetain(const void * tag = 0) const APPLE_KEXT_OVERRIDE;
+	virtual void taggedRetain(const void * tag = NULL) const APPLE_KEXT_OVERRIDE;
 
 
 /*!
@@ -396,7 +415,7 @@ public:
  * It is for use by OSCollection and subclasses to track
  * inclusion in collections.
  */
-	virtual void taggedRelease(const void * tag = 0) const APPLE_KEXT_OVERRIDE;
+	virtual void taggedRelease(const void * tag = NULL) const APPLE_KEXT_OVERRIDE;
 // xx-review: used to say, "Remove a reference on this object with this tag, if an attempt is made to remove a reference that isn't associated with this tag the kernel will panic immediately", but I don't see that in the implementation
 
 
@@ -430,7 +449,13 @@ public:
 #endif
 
 	bool taggedTryRetain(const void *tag) const;
-#endif
+
+	bool iterateObjects(void * refcon, bool (*callback)(void * refcon, OSObject * object));
+#ifdef __BLOCKS__
+	bool iterateObjects(bool (^block)(OSObject * object));
+#endif /* __BLOCKS__ */
+
+#endif /* XNU_KERNEL_PRIVATE */
 
 // Unused Padding
 	OSMetaClassDeclareReservedUnused(OSObject, 0);

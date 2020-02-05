@@ -51,23 +51,6 @@ struct i24 {
 #define NUM     0
 #define STR     1
 
-#if !defined(__LP64__) && !defined(__arm__)
-boolean_t
-PE_parse_boot_arg(
-	const char  *arg_string,
-	void            *arg_ptr)
-{
-	int max_len = -1;
-
-#if CONFIG_EMBEDDED
-	/* Limit arg size to 4 byte when no size is given */
-	max_len = 4;
-#endif
-
-	return PE_parse_boot_argn(arg_string, arg_ptr, max_len);
-}
-#endif
-
 static boolean_t
 PE_parse_boot_argn_internal(
 	const char *arg_string,
@@ -393,7 +376,16 @@ getval(
 boolean_t
 PE_imgsrc_mount_supported()
 {
+#if CONFIG_LOCKERBOOT
+	/*
+	 * Booting from a locker requires that we be able to mount the containing
+	 * volume inside the locker. This looks redundant, but this is here in case
+	 * the other conditional needs to be modified for some reason.
+	 */
 	return TRUE;
+#else
+	return TRUE;
+#endif
 }
 
 boolean_t

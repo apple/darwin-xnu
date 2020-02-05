@@ -175,8 +175,15 @@ extern thread_t convert_port_to_thread(
 extern thread_inspect_t convert_port_to_thread_inspect(
 	ipc_port_t              port);
 
+__options_decl(port_to_thread_options_t, uint32_t, {
+	PORT_TO_THREAD_NONE               = 0x0000,
+	PORT_TO_THREAD_IN_CURRENT_TASK    = 0x0001,
+	PORT_TO_THREAD_NOT_CURRENT_THREAD = 0x0002,
+});
+
 extern thread_t port_name_to_thread(
-	mach_port_name_t        port_name);
+	mach_port_name_t            port_name,
+	port_to_thread_options_t    options);
 
 /* Deallocate a space ref produced by convert_port_to_space */
 extern void space_deallocate(

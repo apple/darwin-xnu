@@ -88,7 +88,7 @@ typedef integer_t       task_info_data_t[TASK_INFO_MAX];
  *	Currently defined information structures.
  */
 
-#pragma pack(4)
+#pragma pack(push, 4)
 
 /* Don't use this, use MACH_TASK_BASIC_INFO instead */
 #define TASK_BASIC_INFO_32      4       /* basic information */
@@ -390,12 +390,47 @@ struct task_vm_info {
 	/* added for rev2 */
 	mach_vm_address_t       min_address;
 	mach_vm_address_t       max_address;
+
+	/* added for rev3 */
+	int64_t ledger_phys_footprint_peak;
+	int64_t ledger_purgeable_nonvolatile;
+	int64_t ledger_purgeable_novolatile_compressed;
+	int64_t ledger_purgeable_volatile;
+	int64_t ledger_purgeable_volatile_compressed;
+	int64_t ledger_tag_network_nonvolatile;
+	int64_t ledger_tag_network_nonvolatile_compressed;
+	int64_t ledger_tag_network_volatile;
+	int64_t ledger_tag_network_volatile_compressed;
+	int64_t ledger_tag_media_footprint;
+	int64_t ledger_tag_media_footprint_compressed;
+	int64_t ledger_tag_media_nofootprint;
+	int64_t ledger_tag_media_nofootprint_compressed;
+	int64_t ledger_tag_graphics_footprint;
+	int64_t ledger_tag_graphics_footprint_compressed;
+	int64_t ledger_tag_graphics_nofootprint;
+	int64_t ledger_tag_graphics_nofootprint_compressed;
+	int64_t ledger_tag_neural_footprint;
+	int64_t ledger_tag_neural_footprint_compressed;
+	int64_t ledger_tag_neural_nofootprint;
+	int64_t ledger_tag_neural_nofootprint_compressed;
+
+	/* added for rev4 */
+	uint64_t limit_bytes_remaining;
+
+	/* added for rev5 */
+	integer_t decompressions;
 };
 typedef struct task_vm_info     task_vm_info_data_t;
 typedef struct task_vm_info     *task_vm_info_t;
 #define TASK_VM_INFO_COUNT      ((mach_msg_type_number_t) \
 	        (sizeof (task_vm_info_data_t) / sizeof (natural_t)))
-#define TASK_VM_INFO_REV2_COUNT TASK_VM_INFO_COUNT
+#define TASK_VM_INFO_REV5_COUNT TASK_VM_INFO_COUNT
+#define TASK_VM_INFO_REV4_COUNT /* doesn't include decompressions */ \
+	((mach_msg_type_number_t) (TASK_VM_INFO_REV5_COUNT - 1))
+#define TASK_VM_INFO_REV3_COUNT /* doesn't include limit bytes */ \
+	((mach_msg_type_number_t) (TASK_VM_INFO_REV4_COUNT - 2))
+#define TASK_VM_INFO_REV2_COUNT /* doesn't include extra ledgers info */ \
+	((mach_msg_type_number_t) (TASK_VM_INFO_REV3_COUNT - 42))
 #define TASK_VM_INFO_REV1_COUNT /* doesn't include min and max address */ \
 	((mach_msg_type_number_t) (TASK_VM_INFO_REV2_COUNT - 4))
 #define TASK_VM_INFO_REV0_COUNT /* doesn't include phys_footprint */ \
@@ -497,6 +532,35 @@ typedef struct task_debug_info_internal task_debug_info_internal_data_t;
 #endif /* PRIVATE */
 
 /*
+ * Type to control EXC_GUARD delivery options for a task
+ * via task_get/set_exc_guard_behavior interface(s).
+ */
+typedef uint32_t task_exc_guard_behavior_t;
+
+/* EXC_GUARD optional delivery settings on a per-task basis */
+#define TASK_EXC_GUARD_VM_DELIVER            0x01 /* Deliver virtual memory EXC_GUARD exceptions */
+#define TASK_EXC_GUARD_VM_ONCE               0x02 /* Deliver them only once */
+#define TASK_EXC_GUARD_VM_CORPSE             0x04 /* Deliver them via a forked corpse */
+#define TASK_EXC_GUARD_VM_FATAL              0x08 /* Virtual Memory EXC_GUARD delivery is fatal */
+#define TASK_EXC_GUARD_VM_ALL                0x0f
+
+#define TASK_EXC_GUARD_MP_DELIVER            0x10 /* Deliver mach port EXC_GUARD exceptions */
+#define TASK_EXC_GUARD_MP_ONCE               0x20 /* Deliver them only once */
+#define TASK_EXC_GUARD_MP_CORPSE             0x40 /* Deliver them via a forked corpse */
+#define TASK_EXC_GUARD_MP_FATAL              0x80 /* mach port EXC_GUARD delivery is fatal */
+#define TASK_EXC_GUARD_MP_ALL                0xf0
+
+#define TASK_EXC_GUARD_ALL                   0xff /* All optional deliver settings */
+
+#ifdef PRIVATE
+/*
+ * Experimental mode of setting default guard behavior for non-Apple processes
+ * The default for 3rd party guards is shifted up 8 bits - but otherwise the same values as above.
+ */
+#define TASK_EXC_GUARD_THIRD_PARTY_DEFAULT_SHIFT 0x8 /* 3rd party default shifted up in boot-arg */
+#endif
+
+/*
  * Obsolete interfaces.
  */
 
@@ -506,6 +570,6 @@ typedef struct task_debug_info_internal task_debug_info_internal_data_t;
 
 #define TASK_SCHED_INFO                 14
 
-#pragma pack()
+#pragma pack(pop)
 
 #endif  /* _MACH_TASK_INFO_H_ */

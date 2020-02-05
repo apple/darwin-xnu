@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -160,6 +160,7 @@ struct inpcb {
 	u_int32_t inp_flow;             /* IPv6 flow information */
 
 	u_char  inp_sndinprog_cnt;      /* outstanding send operations */
+	uint32_t inp_sndingprog_waiters;/* waiters for outstanding send */
 	u_char  inp_vflag;              /* INP_IPV4 or INP_IPV6 */
 
 	u_char inp_ip_ttl;              /* time to live proto */
@@ -212,7 +213,7 @@ struct inpcb {
 	struct label *inp_label;        /* MAC label */
 #endif
 #if IPSEC
-	struct inpcbpolicy *inp_sp;     /* for IPSec */
+	struct inpcbpolicy *inp_sp;     /* for IPsec */
 #endif /* IPSEC */
 #if NECP
 	struct {
@@ -238,6 +239,9 @@ struct inpcb {
 	u_int8_t inp_Wstat_store[sizeof(struct inp_stat) + sizeof(u_int64_t)];
 	activity_bitmap_t inp_nw_activity;
 	u_int64_t inp_start_timestamp;
+
+	char inp_last_proc_name[MAXCOMLEN + 1];
+	char inp_e_proc_name[MAXCOMLEN + 1];
 };
 
 #define INP_ADD_STAT(_inp, _cnt_cellular, _cnt_wifi, _cnt_wired, _a, _n) \
@@ -624,6 +628,8 @@ struct inpcbinfo {
 	((_inp)->inp_flags & INP_NO_IFT_CELLULAR)
 #define INP_NO_EXPENSIVE(_inp) \
 	((_inp)->inp_flags2 & INP2_NO_IFF_EXPENSIVE)
+#define INP_NO_CONSTRAINED(_inp) \
+	((_inp)->inp_flags2 & INP2_NO_IFF_CONSTRAINED)
 #define INP_AWDL_UNRESTRICTED(_inp) \
 	((_inp)->inp_flags2 & INP2_AWDL_UNRESTRICTED)
 #define INP_INTCOPROC_ALLOWED(_inp) \
@@ -709,6 +715,8 @@ struct inpcbinfo {
 #define INP2_INTCOPROC_ALLOWED  0x00000080 /* Allow communication via internal co-processor interfaces */
 #define INP2_CONNECT_IN_PROGRESS        0x00000100 /* A connect call is in progress, so binds are intermediate steps */
 #define INP2_CLAT46_FLOW        0x00000200 /* The flow is going to use CLAT46 path */
+#define INP2_EXTERNAL_PORT      0x00000400 /* The port is registered externally, for NECP listeners */
+#define INP2_NO_IFF_CONSTRAINED 0x00000800 /* do not use constrained interface */
 
 /*
  * Flags passed to in_pcblookup*() functions.
@@ -807,6 +815,7 @@ extern int inp_bindif(struct inpcb *, unsigned int, struct ifnet **);
 extern void inp_set_nocellular(struct inpcb *);
 extern void inp_clear_nocellular(struct inpcb *);
 extern void inp_set_noexpensive(struct inpcb *);
+extern void inp_set_noconstrained(struct inpcb *);
 extern void inp_set_awdl_unrestricted(struct inpcb *);
 extern boolean_t inp_get_awdl_unrestricted(struct inpcb *);
 extern void inp_clear_awdl_unrestricted(struct inpcb *);
@@ -838,6 +847,8 @@ extern int32_t inp_get_sndbytes_allunsent(struct socket *, u_int32_t);
 extern void inp_decr_sndbytes_allunsent(struct socket *, u_int32_t);
 extern void inp_set_activity_bitmap(struct inpcb *inp);
 extern void inp_get_activity_bitmap(struct inpcb *inp, activity_bitmap_t *b);
+extern void inp_update_last_owner(struct socket *so, struct proc *p, struct proc *ep);
+extern void inp_copy_last_owner(struct socket *so, struct socket *head);
 #endif /* BSD_KERNEL_PRIVATE */
 #ifdef KERNEL_PRIVATE
 /* exported for PPP */

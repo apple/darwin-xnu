@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -56,6 +56,14 @@
 #define FSOPT_ATTR_CMN_EXTENDED 0x00000020
 #ifdef PRIVATE
 #define FSOPT_LIST_SNAPSHOT     0x00000040
+#ifndef FSOPT_NOFIRMLINKPATH /*a copy is in fsgetpath.h */
+#define FSOPT_NOFIRMLINKPATH     0x00000080
+#endif /* FSOPT_NOFIRMLINKPATH */
+#define FSOPT_FOLLOW_FIRMLINK    0x00000100
+#define FSOPT_RETURN_REALDEV     0x00000200
+#ifndef FSOPT_ISREALFSID  /*a copy is in fsgetpath.h */
+#define FSOPT_ISREALFSID         FSOPT_RETURN_REALDEV
+#endif
 #endif /* PRIVATE */
 
 /* we currently aren't anywhere near this amount for a valid
@@ -235,6 +243,16 @@ typedef struct vol_capabilities_attr {
  *
  * VOL_CAP_FMT_NO_PERMISSIONS: When set, the volume does not support setting
  * permissions.
+ *
+ * VOL_CAP_FMT_SHARED_SPACE: When set, the volume supports sharing space with
+ * other filesystems i.e. multiple logical filesystems can exist in the same
+ * "partition". An implication of this is that the filesystem which sets
+ * this capability treats waitfor arguments to VFS_SYNC as bit flags.
+ *
+ * VOL_CAP_FMT_VOL_GROUPS: When set, this volume is part of a volume-group
+ * that implies multiple volumes must be mounted in order to boot and root the
+ * operating system. Typically, this means a read-only system volume and a
+ * writable data volume.
  */
 #define VOL_CAP_FMT_PERSISTENTOBJECTIDS         0x00000001
 #define VOL_CAP_FMT_SYMBOLICLINKS               0x00000002
@@ -259,7 +277,8 @@ typedef struct vol_capabilities_attr {
 #define VOL_CAP_FMT_WRITE_GENERATION_COUNT      0x00100000
 #define VOL_CAP_FMT_NO_IMMUTABLE_FILES          0x00200000
 #define VOL_CAP_FMT_NO_PERMISSIONS              0x00400000
-
+#define VOL_CAP_FMT_SHARED_SPACE                0x00800000
+#define VOL_CAP_FMT_VOL_GROUPS                  0x01000000
 
 /*
  * VOL_CAP_INT_SEARCHFS: When set, the volume implements the
@@ -328,6 +347,8 @@ typedef struct vol_capabilities_attr {
  * VOL_CAP_INT_RENAME_EXCL: When set, the volume supports an
  * exclusive rename operation.
  *
+ * VOL_CAP_INT_RENAME_OPENFAIL: When set, the volume may fail rename
+ * operations on files that are open.
  */
 #define VOL_CAP_INT_SEARCHFS                    0x00000001
 #define VOL_CAP_INT_ATTRLIST                    0x00000002
@@ -352,6 +373,7 @@ typedef struct vol_capabilities_attr {
 #define VOL_CAP_INT_SNAPSHOT                    0x00020000
 #define VOL_CAP_INT_RENAME_SWAP                 0x00040000
 #define VOL_CAP_INT_RENAME_EXCL                 0x00080000
+#define VOL_CAP_INT_RENAME_OPENFAIL             0x00100000
 
 typedef struct vol_attributes_attr {
 	attribute_set_t validattr;
@@ -506,8 +528,11 @@ typedef struct vol_attributes_attr {
 #define ATTR_CMNEXT_RELPATH     0x00000004
 #define ATTR_CMNEXT_PRIVATESIZE 0x00000008
 #define ATTR_CMNEXT_LINKID      0x00000010
+#define ATTR_CMNEXT_NOFIRMLINKPATH     0x00000020
+#define ATTR_CMNEXT_REALDEVID   0x00000040
+#define ATTR_CMNEXT_REALFSID    0x00000080
 
-#define ATTR_CMNEXT_VALIDMASK   0x0000001c
+#define ATTR_CMNEXT_VALIDMASK   0x000000fc
 #define ATTR_CMNEXT_SETMASK             0x00000000
 
 /* Deprecated fork attributes */

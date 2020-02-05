@@ -41,6 +41,8 @@
 #include <unistd.h>
 #include <sys/sysctl.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 #ifndef _COMM_PAGE_CPU_QUIESCENT_COUNTER
 
 T_DECL(test_quiescent_counter, "Validate that _COMM_PAGE_CPU_QUIESCENT_COUNTER increments",

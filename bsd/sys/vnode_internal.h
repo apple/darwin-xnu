@@ -179,6 +179,11 @@ struct vnode {
 #if CONFIG_TRIGGERS
 	vnode_resolve_t v_resolve;              /* trigger vnode resolve info (VDIR only) */
 #endif /* CONFIG_TRIGGERS */
+#if CONFIG_FIRMLINKS
+	vnode_t v_fmlink;                       /* firmlink if set (VDIR only), Points to source
+	                                         *  if VFLINKTARGET is set, if  VFLINKTARGET is not
+	                                         *  set, points to target */
+#endif /* CONFIG_FIRMLINKS */
 };
 
 #define v_mountedhere   v_un.vu_mountedhere
@@ -260,8 +265,8 @@ struct vnode {
 #define VISDIRTY       0x4000000        /* vnode will need IO if reclaimed */
 #define VFASTDEVCANDIDATE  0x8000000        /* vnode is a candidate to store on a fast device */
 #define VAUTOCANDIDATE 0x10000000       /* vnode was automatically marked as a fast-dev candidate */
+#define VFMLINKTARGET  0x20000000       /* vnode is firmlink target */
 /*
- *  0x20000000 not used
  *  0x40000000 not used
  *  0x80000000 not used.
  */
@@ -435,7 +440,6 @@ int     vn_authorize_open_existing(vnode_t vp, struct componentname *cnp, int fm
 int     vn_authorize_create(vnode_t, struct componentname *, struct vnode_attr *, vfs_context_t, void*);
 int     vn_attribute_prepare(vnode_t dvp, struct vnode_attr *vap, uint32_t *defaulted_fieldsp, vfs_context_t ctx);
 void    vn_attribute_cleanup(struct vnode_attr *vap, uint32_t defaulted_fields);
-int     vn_authorize_unlink(vnode_t dvp, vnode_t vp, struct componentname *cnp, vfs_context_t ctx, void *reserved);
 int     vn_authorize_rename(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp,
     struct vnode *tdvp, struct vnode *tvp, struct componentname *tcnp,
     vfs_context_t ctx, void *reserved);
@@ -585,8 +589,6 @@ int vfs_sysctl_node SYSCTL_HANDLER_ARGS;
 void vnode_setneedinactive(vnode_t);
 int     vnode_hasnamedstreams(vnode_t); /* Does this vnode have associated named streams? */
 
-void nspace_proc_exit(struct proc *p);
-
 errno_t
 vnode_readdir64(struct vnode *vp, struct uio *uio, int flags, int *eofflag,
     int *numdirent, vfs_context_t ctxp);
@@ -604,6 +606,11 @@ void vfs_nested_trigger_unmounts(mount_t, int, vfs_context_t);
 #endif /* CONFIG_TRIGGERS */
 
 int     build_path_with_parent(vnode_t, vnode_t /* parent */, char *, int, int *, int, vfs_context_t);
+
+void    nspace_resolver_init(void);
+void    nspace_resolver_exited(struct proc *);
+
+int     vnode_materialize_dataless_file(vnode_t, uint64_t);
 
 #endif /* BSD_KERNEL_PRIVATE */
 

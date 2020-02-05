@@ -1,20 +1,21 @@
+/* Copyright (c) 2018 Apple Inc.  All rights reserved. */
+
 #include <darwintest.h>
 #include <inttypes.h>
 #include <stdint.h>
+#include <sys/sysctl.h>
 
 #include <kperf/kpc.h>
 
-T_DECL(fixed_counters,
-    "test that fixed counters return monotonically increasing values",
-    T_META_ASROOT(YES))
-{
-	T_SKIP("unimplemented");
-}
+T_GLOBAL_META(
+	T_META_NAMESPACE("xnu.ktrace"),
+	T_META_ASROOT(true),
+	T_META_CHECK_LEAKS(false));
 
 T_DECL(fixed_thread_counters,
-    "test that fixed thread counters return monotonically increasing values",
-    T_META_ASROOT(YES))
+    "test that fixed thread counters return monotonically increasing values")
 {
+
 	int err;
 	uint32_t ctrs_cnt;
 	uint64_t *ctrs_a;
@@ -66,3 +67,66 @@ T_DECL(fixed_thread_counters,
 	free(ctrs_a);
 	free(ctrs_b);
 }
+
+#if defined(__arm64__)
+/*
+ * This policy only applies to arm64 devices.
+ */
+
+static int g_prev_disablewl = 0;
+
+static void
+whitelist_atend(void)
+{
+	int ret = sysctlbyname("kpc.disable_whitelist", NULL, NULL,
+	    &g_prev_disablewl, sizeof(g_prev_disablewl));
+	if (ret < 0) {
+		T_LOG("failed to reset whitelist: %d (%s)", errno, strerror(errno));
+	}
+}
+
+T_DECL(whitelist, "ensure kpc's whitelist is filled out")
+{
+	/* Start enforcing the whitelist. */
+	int set = 0;
+	size_t getsz = sizeof(g_prev_disablewl);
+	int ret = sysctlbyname("kpc.disable_whitelist", &g_prev_disablewl, &getsz,
+	    &set, sizeof(set));
+	if (ret < 0 && errno == ENOENT) {
+		T_SKIP("kpc not running with a whitelist, or RELEASE kernel");
+	}
+
+	T_ASSERT_POSIX_SUCCESS(ret, "started enforcing the event whitelist");
+	T_ATEND(whitelist_atend);
+
+	uint32_t nconfigs = kpc_get_config_count(KPC_CLASS_CONFIGURABLE_MASK);
+	uint64_t *config = calloc(nconfigs, sizeof(*config));
+
+	/*
+	 * Check that events in the whitelist are allowed.  CORE_CYCLE (0x2) is
+	 * always present in the whitelist.
+	 */
+	config[0] = 0x02;
+	ret = kpc_set_config(KPC_CLASS_CONFIGURABLE_MASK, config);
+	T_ASSERT_POSIX_SUCCESS(ret, "configured kpc to count cycles");
+
+	/* Check that non-event bits are ignored by the whitelist. */
+	config[0] = 0x102;
+	ret = kpc_set_config(KPC_CLASS_CONFIGURABLE_MASK, config);
+	T_ASSERT_POSIX_SUCCESS(ret,
+	    "configured kpc to count cycles with non-event bits set");
+
+	/* Check that configurations of non-whitelisted events fail. */
+	config[0] = 0xfe;
+	ret = kpc_set_config(KPC_CLASS_CONFIGURABLE_MASK, config);
+	T_ASSERT_POSIX_FAILURE(ret, EPERM,
+	    "shouldn't allow arbitrary events with whitelist enabled");
+
+	/* Clean up the configuration. */
+	config[0] = 0;
+	(void)kpc_set_config(KPC_CLASS_CONFIGURABLE_MASK, config);
+
+	free(config);
+}
+
+#endif /* defined(__arm64__) */

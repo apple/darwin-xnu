@@ -832,6 +832,24 @@ kcdata_get_typedescription(unsigned type_id, uint8_t * buffer, uint32_t buffer_s
 		break;
 	}
 
+	case STACKSHOT_KCTYPE_THREAD_DISPATCH_QUEUE_LABEL: {
+		i = 0;
+		_STRINGTYPE("dispatch_queue_label");
+		setup_type_definition(retval, type_id, i, "dispatch_queue_label");
+		break;
+	}
+
+	case STACKSHOT_KCTYPE_THREAD_TURNSTILEINFO: {
+		i = 0;
+		_SUBTYPE(KC_ST_UINT64, struct stackshot_thread_turnstileinfo, waiter);
+		_SUBTYPE(KC_ST_UINT64, struct stackshot_thread_turnstileinfo, turnstile_context);
+		_SUBTYPE(KC_ST_UINT8, struct stackshot_thread_turnstileinfo, turnstile_priority);
+		_SUBTYPE(KC_ST_UINT8, struct stackshot_thread_turnstileinfo, number_of_hops);
+		_SUBTYPE(KC_ST_UINT64, struct stackshot_thread_turnstileinfo, turnstile_flags);
+		setup_type_definition(retval, type_id, i, "thread_turnstileinfo");
+		break;
+	}
+
 	default:
 		retval = NULL;
 		break;

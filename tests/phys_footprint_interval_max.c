@@ -33,6 +33,8 @@
 #include <libproc_internal.h>
 #include <TargetConditionals.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 #define ALLOC_SIZE_LARGE 5*1024*1024
 #define ALLOC_SIZE_SMALL 2*1024*1024
 

@@ -110,12 +110,6 @@ typedef u_int64_t dn_key;       /* sorting key */
  */
 
 /*
- * The OFFSET_OF macro is used to return the offset of a field within
- * a structure. It is used by the heap management routines.
- */
-#define OFFSET_OF(type, field) ((int)&( ((type *)0)->field) )
-
-/*
  * The maximum hash table size for queues.  This value must be a power
  * of 2.
  */
@@ -188,7 +182,6 @@ struct dn_pkt_tag {
 	struct route_in6    dn_ro6_pmtu;        /* for ip6_output */
 	struct ifnet        *dn_origifp;        /* for ip6_output */
 	u_int32_t           dn_mtu;             /* for ip6_output */
-	int                 dn_alwaysfrag;      /* for ip6_output */
 	u_int32_t           dn_unfragpartlen;   /* for ip6_output */
 	struct ip6_exthdrs  dn_exthdrs;         /* for ip6_output */
 	int                 dn_flags;           /* flags, for ip[6]_output */

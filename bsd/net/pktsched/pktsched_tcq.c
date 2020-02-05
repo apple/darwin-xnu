@@ -51,10 +51,9 @@
 /*
  * function prototypes
  */
-static int tcq_enqueue_ifclassq(struct ifclassq *, void *, classq_pkt_type_t,
-    boolean_t *);
-static void *tcq_dequeue_tc_ifclassq(struct ifclassq *, mbuf_svc_class_t,
-    classq_pkt_type_t *);
+static int tcq_enqueue_ifclassq(struct ifclassq *, classq_pkt_t *, boolean_t *);
+static void tcq_dequeue_tc_ifclassq(struct ifclassq *, mbuf_svc_class_t,
+    classq_pkt_t *);
 static int tcq_request_ifclassq(struct ifclassq *, cqrq_t, void *);
 static int tcq_clear_interface(struct tcq_if *);
 static struct tcq_class *tcq_class_create(struct tcq_if *, int, u_int32_t,
@@ -489,24 +488,23 @@ tcq_dequeue_cl(struct tcq_if *tif, struct tcq_class *cl, mbuf_svc_class_t sc,
 	uint32_t len;
 
 	IFCQ_LOCK_ASSERT_HELD(ifq);
+	pkt->pktsched_pkt_mbuf = NULL;
 
 	if (cl == NULL) {
 		cl = tcq_clh_to_clp(tif, MBUF_SCIDX(sc));
 		if (cl == NULL) {
-			pkt->pktsched_pkt = NULL;
 			return;
 		}
 	}
 
 	if (qempty(&cl->cl_q)) {
-		pkt->pktsched_pkt = NULL;
 		return;
 	}
 
 	VERIFY(!IFCQ_IS_EMPTY(ifq));
 
 	tcq_getq(cl, pkt);
-	if (pkt->pktsched_pkt != NULL) {
+	if (pkt->pktsched_pkt_mbuf != NULL) {
 		len = pktsched_get_pkt_len(pkt);
 		IFCQ_DEC_LEN(ifq);
 		IFCQ_DEC_BYTES(ifq, len);
@@ -578,7 +576,7 @@ tcq_addq(struct tcq_class *cl, pktsched_pkt_t *pkt, struct pf_mtag *t)
 #endif /* PF_ECN */
 
 	VERIFY(pkt->pktsched_ptype == qptype(&cl->cl_q));
-	_addq(&cl->cl_q, pkt->pktsched_pkt);
+	_addq(&cl->cl_q, &pkt->pktsched_pkt);
 
 	return 0;
 }
@@ -586,13 +584,16 @@ tcq_addq(struct tcq_class *cl, pktsched_pkt_t *pkt, struct pf_mtag *t)
 static inline void
 tcq_getq(struct tcq_class *cl, pktsched_pkt_t *pkt)
 {
+	classq_pkt_t p = CLASSQ_PKT_INITIALIZER(p);
+
 	IFCQ_LOCK_ASSERT_HELD(cl->cl_tif->tif_ifq);
 
 	if (q_is_sfb(&cl->cl_q) && cl->cl_sfb != NULL) {
 		return sfb_getq(cl->cl_sfb, &cl->cl_q, pkt);
 	}
 
-	return pktsched_pkt_encap(pkt, qptype(&cl->cl_q), _getq(&cl->cl_q));
+	_getq(&cl->cl_q, &p);
+	return pktsched_pkt_encap(pkt, &p);
 }
 
 static void
@@ -739,8 +740,7 @@ tcq_style(struct tcq_if *tif)
  * (*ifcq_enqueue) in struct ifclassq.
  */
 static int
-tcq_enqueue_ifclassq(struct ifclassq *ifq, void *p, classq_pkt_type_t ptype,
-    boolean_t *pdrop)
+tcq_enqueue_ifclassq(struct ifclassq *ifq, classq_pkt_t *p, boolean_t *pdrop)
 {
 	u_int32_t i = 0;
 	int ret;
@@ -749,14 +749,15 @@ tcq_enqueue_ifclassq(struct ifclassq *ifq, void *p, classq_pkt_type_t ptype,
 
 	IFCQ_LOCK_ASSERT_HELD(ifq);
 
-	if (ptype == QP_MBUF) {
-		struct mbuf *m = p;
+	if (p->cp_ptype == QP_MBUF) {
+		struct mbuf *m = p->cp_mbuf;
 		if (!(m->m_flags & M_PKTHDR)) {
 			/* should not happen */
 			log(LOG_ERR, "%s: packet does not have pkthdr\n",
 			    if_name(ifq->ifcq_ifp));
 			IFCQ_CONVERT_LOCK(ifq);
 			m_freem(m);
+			*p = CLASSQ_PKT_INITIALIZER(*p);
 			*pdrop = TRUE;
 			return ENOBUFS;
 		}
@@ -765,7 +766,7 @@ tcq_enqueue_ifclassq(struct ifclassq *ifq, void *p, classq_pkt_type_t ptype,
 	}
 	VERIFY((u_int32_t)i < IFCQ_SC_MAX);
 
-	pktsched_pkt_encap(&pkt, ptype, p);
+	pktsched_pkt_encap(&pkt, p);
 
 	ret = tcq_enqueue(ifq->ifcq_disc,
 	    ifq->ifcq_disc_slots[i].cl, &pkt, t);
@@ -795,6 +796,7 @@ tcq_enqueue_ifclassq(struct ifclassq *ifq, void *p, classq_pkt_type_t ptype,
 		break;
 	default:
 		VERIFY(0);
+		__builtin_unreachable();
 	}
 	return ret;
 }
@@ -808,19 +810,18 @@ tcq_enqueue_ifclassq(struct ifclassq *ifq, void *p, classq_pkt_type_t ptype,
  *	CLASSQDQ_REMOVE must return the same packet if called immediately
  *	after CLASSQDQ_POLL.
  */
-static void *
+static void
 tcq_dequeue_tc_ifclassq(struct ifclassq *ifq, mbuf_svc_class_t sc,
-    classq_pkt_type_t *ptype)
+    classq_pkt_t *cpkt)
 {
 	pktsched_pkt_t pkt;
 	u_int32_t i = MBUF_SCIDX(sc);
 
 	VERIFY((u_int32_t)i < IFCQ_SC_MAX);
 
-	bzero(&pkt, sizeof(pkt));
+	_PKTSCHED_PKT_INIT(&pkt);
 	(tcq_dequeue_cl(ifq->ifcq_disc, ifq->ifcq_disc_slots[i].cl, sc, &pkt));
-	*ptype = pkt.pktsched_ptype;
-	return pkt.pktsched_pkt;
+	*cpkt = pkt.pktsched_pkt;
 }
 
 static int

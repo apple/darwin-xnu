@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -206,8 +206,6 @@
 #define DEQUEUE_SPIKE(_new, _old)       \
 	((u_int64_t)ABS((int64_t)(_new) - (int64_t)(_old)) > ((_old) << 11))
 
-#define ABS(v)  (((v) > 0) ? (v) : -(v))
-
 #define SFB_ZONE_MAX            32              /* maximum elements in zone */
 #define SFB_ZONE_NAME           "classq_sfb"    /* zone name */
 
@@ -301,13 +299,13 @@ struct sfb_time_tbl {
 };
 
 static struct sfb_time_tbl sfb_ttbl[] = {
-	{   1 * MBPS, HOLDTIME_BASE * 1000, PBOXTIME_BASE * 1000    },
-	{  10 * MBPS, HOLDTIME_BASE * 100, PBOXTIME_BASE * 100     },
-	{ 100 * MBPS, HOLDTIME_BASE * 10, PBOXTIME_BASE * 10      },
-	{   1 * GBPS, HOLDTIME_BASE, PBOXTIME_BASE           },
-	{  10 * GBPS, HOLDTIME_BASE / 10, PBOXTIME_BASE / 10      },
-	{ 100 * GBPS, HOLDTIME_BASE / 100, PBOXTIME_BASE / 100     },
-	{ 0, 0, 0 }
+	{ .speed =   1 * MBPS, .holdtime = HOLDTIME_BASE * 1000, .pboxtime = PBOXTIME_BASE * 1000},
+	{ .speed =  10 * MBPS, .holdtime = HOLDTIME_BASE * 100, .pboxtime = PBOXTIME_BASE * 100 },
+	{ .speed = 100 * MBPS, .holdtime = HOLDTIME_BASE * 10, .pboxtime = PBOXTIME_BASE * 10  },
+	{ .speed =   1 * GBPS, .holdtime = HOLDTIME_BASE, .pboxtime = PBOXTIME_BASE       },
+	{ .speed =  10 * GBPS, .holdtime = HOLDTIME_BASE / 10, .pboxtime = PBOXTIME_BASE / 10  },
+	{ .speed = 100 * GBPS, .holdtime = HOLDTIME_BASE / 100, .pboxtime = PBOXTIME_BASE / 100 },
+	{ .speed = 0, .holdtime = 0, .pboxtime = 0 }
 };
 
 void
@@ -326,7 +324,7 @@ sfb_init(void)
 	zone_change(sfb_zone, Z_EXPAND, TRUE);
 	zone_change(sfb_zone, Z_CALLERACCT, TRUE);
 
-	sfb_bins_size = sizeof(*((struct sfb *)0)->sfb_bins);
+	sfb_bins_size = sizeof(struct sfb_bins);
 	sfb_bins_zone = zinit(sfb_bins_size, SFB_BINS_ZONE_MAX * sfb_bins_size,
 	    0, SFB_BINS_ZONE_NAME);
 	if (sfb_bins_zone == NULL) {
@@ -336,7 +334,7 @@ sfb_init(void)
 	zone_change(sfb_bins_zone, Z_EXPAND, TRUE);
 	zone_change(sfb_bins_zone, Z_CALLERACCT, TRUE);
 
-	sfb_fcl_size = sizeof(*((struct sfb *)0)->sfb_fc_lists);
+	sfb_fcl_size = sizeof(struct sfb_fcl);
 	sfb_fcl_zone = zinit(sfb_fcl_size, SFB_FCL_ZONE_MAX * sfb_fcl_size,
 	    0, SFB_FCL_ZONE_NAME);
 	if (sfb_fcl_zone == NULL) {
@@ -722,7 +720,7 @@ static int
 sfb_penalize(struct sfb *sp, uint32_t pkt_sfb_hash, uint32_t *pkt_sfb_flags,
     struct timespec *now)
 {
-	struct timespec delta = { 0, 0 };
+	struct timespec delta = { .tv_sec = 0, .tv_nsec = 0 };
 	uint8_t *pkt_sfb_hash8 = (uint8_t *)&pkt_sfb_hash;
 
 	/* If minimum pmark of current bins is < SFB_PMARK_TH, we're done */
@@ -1149,7 +1147,7 @@ sfb_addq(struct sfb *sp, class_queue_t *q, pktsched_pkt_t *pkt,
 	uint16_t *pkt_sfb_hash16;
 	uint32_t *pkt_sfb_flags;
 	uint32_t pkt_flowid;
-	uint32_t *pkt_flags;
+	volatile uint32_t *pkt_flags;
 	uint8_t pkt_proto, pkt_flowsrc;
 
 	s = sp->sfb_current;
@@ -1160,10 +1158,16 @@ sfb_addq(struct sfb *sp, class_queue_t *q, pktsched_pkt_t *pkt,
 	pkt_sfb_hash = pktsched_get_pkt_sfb_vars(pkt, &pkt_sfb_flags);
 	pkt_sfb_hash16 = (uint16_t *)pkt_sfb_hash;
 
-	if (pkt->pktsched_ptype == QP_MBUF) {
+	switch (pkt->pktsched_ptype) {
+	case QP_MBUF:
 		/* See comments in <rdar://problem/14040693> */
 		VERIFY(!(*pkt_flags & PKTF_PRIV_GUARDED));
 		*pkt_flags |= PKTF_PRIV_GUARDED;
+		break;
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
 	if (*pkt_timestamp > 0) {
@@ -1294,7 +1298,7 @@ sfb_addq(struct sfb *sp, class_queue_t *q, pktsched_pkt_t *pkt,
 	/* if successful enqueue this packet, else drop it */
 	if (droptype == DTYPE_NODROP) {
 		VERIFY(pkt->pktsched_ptype == qptype(q));
-		_addq(q, pkt->pktsched_pkt);
+		_addq(q, &pkt->pktsched_pkt);
 	} else {
 		IFCQ_CONVERT_LOCK(&sp->sfb_ifp->if_snd);
 		return (ret != CLASSQEQ_SUCCESS) ? ret : CLASSQEQ_DROP;
@@ -1316,12 +1320,11 @@ sfb_getq_flow(struct sfb *sp, class_queue_t *q, u_int32_t flow, boolean_t purge,
     pktsched_pkt_t *pkt)
 {
 	struct timespec now;
-	classq_pkt_type_t ptype;
 	uint64_t *pkt_timestamp;
-	uint32_t *pkt_flags;
+	volatile uint32_t *pkt_flags;
 	uint32_t *pkt_sfb_flags;
 	uint32_t *pkt_sfb_hash;
-	void *p;
+	classq_pkt_t p = CLASSQ_PKT_INITIALIZER(p);
 
 	if (!purge && (sp->sfb_flags & SFBF_SUSPENDED)) {
 		return NULL;
@@ -1330,22 +1333,33 @@ sfb_getq_flow(struct sfb *sp, class_queue_t *q, u_int32_t flow, boolean_t purge,
 	nanouptime(&now);
 
 	/* flow of 0 means head of queue */
-	if ((p = ((flow == 0) ? _getq(q) : _getq_flow(q, flow))) == NULL) {
+	if (flow == 0) {
+		_getq(q, &p);
+	} else {
+		_getq_flow(q, &p, flow);
+	}
+
+	if (p.cp_ptype == QP_INVALID) {
 		if (!purge) {
 			net_timerclear(&sp->sfb_getqtime);
 		}
 		return NULL;
 	}
 
-	ptype = qptype(q);
-	pktsched_pkt_encap(pkt, ptype, p);
+	pktsched_pkt_encap(pkt, &p);
 	pktsched_get_pkt_vars(pkt, &pkt_flags, &pkt_timestamp, NULL,
 	    NULL, NULL, NULL);
 	pkt_sfb_hash = pktsched_get_pkt_sfb_vars(pkt, &pkt_sfb_flags);
 
 	/* See comments in <rdar://problem/14040693> */
-	if (ptype == QP_MBUF) {
+	switch (p.cp_ptype) {
+	case QP_MBUF:
 		VERIFY(*pkt_flags & PKTF_PRIV_GUARDED);
+		break;
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
 	if (!purge) {
@@ -1424,9 +1438,15 @@ sfb_getq_flow(struct sfb *sp, class_queue_t *q, u_int32_t flow, boolean_t purge,
 		    &now, qsize(q));
 	}
 
-	/* See comments in <rdar://problem/14040693> */
-	if (ptype == QP_MBUF) {
+	switch (p.cp_ptype) {
+	case QP_MBUF:
+		/* See comments in <rdar://problem/14040693> */
 		*pkt_flags &= ~PKTF_PRIV_GUARDED;
+		break;
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
 	/*
@@ -1440,7 +1460,7 @@ sfb_getq_flow(struct sfb *sp, class_queue_t *q, u_int32_t flow, boolean_t purge,
 		net_timerclear(&sp->sfb_update_time);
 		net_timerclear(&sp->sfb_getqtime);
 	}
-	return p;
+	return pkt->pktsched_pkt_mbuf;
 }
 
 void

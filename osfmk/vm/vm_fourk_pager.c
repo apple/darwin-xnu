@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -118,19 +118,19 @@ kern_return_t fourk_pager_last_unmap(memory_object_t mem_obj);
  * These routines are invoked by VM via the memory_object_*() interfaces.
  */
 const struct memory_object_pager_ops fourk_pager_ops = {
-	fourk_pager_reference,
-	fourk_pager_deallocate,
-	fourk_pager_init,
-	fourk_pager_terminate,
-	fourk_pager_data_request,
-	fourk_pager_data_return,
-	fourk_pager_data_initialize,
-	fourk_pager_data_unlock,
-	fourk_pager_synchronize,
-	fourk_pager_map,
-	fourk_pager_last_unmap,
-	NULL, /* data_reclaim */
-	"fourk_pager"
+	.memory_object_reference = fourk_pager_reference,
+	.memory_object_deallocate = fourk_pager_deallocate,
+	.memory_object_init = fourk_pager_init,
+	.memory_object_terminate = fourk_pager_terminate,
+	.memory_object_data_request = fourk_pager_data_request,
+	.memory_object_data_return = fourk_pager_data_return,
+	.memory_object_data_initialize = fourk_pager_data_initialize,
+	.memory_object_data_unlock = fourk_pager_data_unlock,
+	.memory_object_synchronize = fourk_pager_synchronize,
+	.memory_object_map = fourk_pager_map,
+	.memory_object_last_unmap = fourk_pager_last_unmap,
+	.memory_object_data_reclaim = NULL,
+	.memory_object_pager_name = "fourk_pager"
 };
 
 /*
@@ -163,7 +163,7 @@ typedef struct fourk_pager {
 int fourk_pager_count = 0;              /* number of pagers */
 int fourk_pager_count_mapped = 0;       /* number of unmapped pagers */
 queue_head_t fourk_pager_queue;
-decl_lck_mtx_data(, fourk_pager_lock)
+decl_lck_mtx_data(, fourk_pager_lock);
 
 /*
  * Maximum number of unmapped pagers we're willing to keep around.
@@ -759,6 +759,8 @@ fourk_pager_create(void)
 	    &control);
 	assert(kr == KERN_SUCCESS);
 
+	memory_object_mark_trusted(control);
+
 	lck_mtx_lock(&fourk_pager_lock);
 	/* the new pager is now ready to be used */
 	pager->is_ready = TRUE;
@@ -892,23 +894,8 @@ fourk_pager_data_request(
 		dst_pnum = (ppnum_t)
 		    upl_phys_page(upl_pl, (int)(cur_offset / PAGE_SIZE));
 		assert(dst_pnum != 0);
-#if __x86_64__
-		dst_vaddr = (vm_map_offset_t)
-		    PHYSMAP_PTOV((pmap_paddr_t)dst_pnum << PAGE_SHIFT);
-#elif __arm__ || __arm64__
 		dst_vaddr = (vm_map_offset_t)
 		    phystokv((pmap_paddr_t)dst_pnum << PAGE_SHIFT);
-#else
-		kr = pmap_enter(kernel_pmap,
-		    dst_vaddr,
-		    dst_pnum,
-		    VM_PROT_READ | VM_PROT_WRITE,
-		    VM_PROT_NONE,
-		    0,
-		    TRUE);
-
-		assert(kr == KERN_SUCCESS);
-#endif
 
 		/* retrieve appropriate data for each 4K-page in this page */
 		if (PAGE_SHIFT == FOURK_PAGE_SHIFT &&
@@ -1084,29 +1071,9 @@ retry_src_fault:
 				vm_page_unlock_queues();
 			}
 
-#if __x86_64__
-			src_vaddr = (vm_map_offset_t)
-			    PHYSMAP_PTOV((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page)
-			        << PAGE_SHIFT);
-#elif __arm__ || __arm64__
 			src_vaddr = (vm_map_offset_t)
 			    phystokv((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page)
 			        << PAGE_SHIFT);
-#else
-			/*
-			 * Establish an explicit mapping of the source
-			 * physical page.
-			 */
-			kr = pmap_enter(kernel_pmap,
-			    src_vaddr,
-			    VM_PAGE_GET_PHYS_PAGE(src_page),
-			    VM_PROT_READ,
-			    VM_PROT_NONE,
-			    0,
-			    TRUE);
-
-			assert(kr == KERN_SUCCESS);
-#endif
 
 			/*
 			 * Validate the 4K page we want from

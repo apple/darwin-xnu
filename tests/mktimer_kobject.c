@@ -7,6 +7,8 @@
 
 #include <darwintest.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 T_DECL(mktimer_kobject, "mktimer_kobject()", T_META_ALL_VALID_ARCHS(true))
 {
 	mach_port_t timer_port = MACH_PORT_NULL;

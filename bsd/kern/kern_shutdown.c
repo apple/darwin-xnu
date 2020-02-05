@@ -145,6 +145,7 @@ get_system_inshutdown()
 	return system_inshutdown;
 }
 
+__abortlike
 static void
 panic_kernel(int howto, char *message)
 {
@@ -153,6 +154,11 @@ panic_kernel(int howto, char *message)
 	}
 	panic("userspace panic: %s", message);
 }
+
+extern boolean_t compressor_store_stop_compaction;
+extern lck_mtx_t vm_swap_data_lock;
+extern int vm_swapfile_create_thread_running;
+extern int vm_swapfile_gc_thread_running;
 
 int
 reboot_kernel(int howto, char *message)
@@ -170,6 +176,25 @@ reboot_kernel(int howto, char *message)
 		}
 		return EBUSY;
 	}
+
+	lck_mtx_lock(&vm_swap_data_lock);
+
+	/* Turn OFF future swapfile reclaimation / compaction etc.*/
+	compressor_store_stop_compaction = TRUE;
+
+	/* wait for any current swapfile work to end */
+	while (vm_swapfile_create_thread_running || vm_swapfile_gc_thread_running) {
+		assert_wait((event_t)&compressor_store_stop_compaction, THREAD_UNINT);
+
+		lck_mtx_unlock(&vm_swap_data_lock);
+
+		thread_block(THREAD_CONTINUE_NULL);
+
+		lck_mtx_lock(&vm_swap_data_lock);
+	}
+
+	lck_mtx_unlock(&vm_swap_data_lock);
+
 	/*
 	 * Notify the power management root domain that the system will shut down.
 	 */
@@ -263,9 +288,6 @@ force_reboot:
 		panic_kernel(howto, message);
 	}
 
-	if (howto & RB_POWERDOWN) {
-		hostboot_option = HOST_REBOOT_HALT;
-	}
 	if (howto & RB_HALT) {
 		hostboot_option = HOST_REBOOT_HALT;
 	}

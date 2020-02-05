@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -106,7 +106,12 @@ uint32_t telemetry_timestamp = 0;
  * compute_averages().  It will notify its client (if one
  * exists) when it has enough data to be worth flushing.
  */
-struct micro_snapshot_buffer telemetry_buffer = {0, 0, 0, 0};
+struct micro_snapshot_buffer telemetry_buffer = {
+	.buffer = 0,
+	.size = 0,
+	.current_position = 0,
+	.end_point = 0
+};
 
 int                                     telemetry_bytes_since_last_mark = -1; // How much data since buf was last marked?
 int                                     telemetry_buffer_notify_at = 0;
@@ -478,20 +483,23 @@ telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct micro
 	 * buffer with the global telemetry lock held -- so we must do our (possibly faulting)
 	 * copies from userland here, before taking the lock.
 	 */
-	uintptr_t frames[MAX_CALLSTACK_FRAMES] = {};
-	bool user64;
-	int backtrace_error = backtrace_user(frames, MAX_CALLSTACK_FRAMES, &btcount, &user64);
+
+	uintptr_t frames[128];
+	bool user64_regs = false;
+	int backtrace_error = backtrace_user(frames,
+	    sizeof(frames) / sizeof(frames[0]), &btcount, &user64_regs, NULL);
 	if (backtrace_error) {
 		return;
 	}
+	bool user64_va = task_has_64Bit_addr(task);
 
 	/*
 	 * Find the actual [slid] address of the shared cache's UUID, and copy it in from userland.
 	 */
-	int                                                     shared_cache_uuid_valid = 0;
-	uint64_t                                        shared_cache_base_address;
-	struct _dyld_cache_header       shared_cache_header;
-	uint64_t                                        shared_cache_slide;
+	int shared_cache_uuid_valid = 0;
+	uint64_t shared_cache_base_address = 0;
+	struct _dyld_cache_header shared_cache_header = {};
+	uint64_t shared_cache_slide = 0;
 
 	/*
 	 * Don't copy in the entire shared cache header; we only need the UUID. Calculate the
@@ -516,15 +524,18 @@ telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct micro
 	 *
 	 * XXX - make this common with kdp?
 	 */
-	uint32_t                        uuid_info_count = 0;
-	mach_vm_address_t       uuid_info_addr = 0;
-	if (task_has_64Bit_addr(task)) {
+	uint32_t uuid_info_count = 0;
+	mach_vm_address_t uuid_info_addr = 0;
+	uint32_t uuid_info_size = 0;
+	if (user64_va) {
+		uuid_info_size = sizeof(struct user64_dyld_uuid_info);
 		struct user64_dyld_all_image_infos task_image_infos;
 		if (copyin(task->all_image_info_addr, (char *)&task_image_infos, sizeof(task_image_infos)) == 0) {
 			uuid_info_count = (uint32_t)task_image_infos.uuidArrayCount;
 			uuid_info_addr = task_image_infos.uuidArray;
 		}
 	} else {
+		uuid_info_size = sizeof(struct user32_dyld_uuid_info);
 		struct user32_dyld_all_image_infos task_image_infos;
 		if (copyin(task->all_image_info_addr, (char *)&task_image_infos, sizeof(task_image_infos)) == 0) {
 			uuid_info_count = task_image_infos.uuidArrayCount;
@@ -549,7 +560,6 @@ telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct micro
 		uuid_info_count = TELEMETRY_MAX_UUID_COUNT;
 	}
 
-	uint32_t uuid_info_size = (uint32_t)(task_has_64Bit_addr(thread->task) ? sizeof(struct user64_dyld_uuid_info) : sizeof(struct user32_dyld_uuid_info));
 	uint32_t uuid_info_array_size = uuid_info_count * uuid_info_size;
 	char     *uuid_info_array = NULL;
 
@@ -579,10 +589,10 @@ telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct micro
 	if (dqkeyaddr != 0) {
 		uint64_t dqaddr = 0;
 		uint64_t dq_serialno_offset = get_task_dispatchqueue_serialno_offset(task);
-		if ((copyin(dqkeyaddr, (char *)&dqaddr, (task_has_64Bit_addr(task) ? 8 : 4)) == 0) &&
+		if ((copyin(dqkeyaddr, (char *)&dqaddr, (user64_va ? 8 : 4)) == 0) &&
 		    (dqaddr != 0) && (dq_serialno_offset != 0)) {
 			uint64_t dqserialnumaddr = dqaddr + dq_serialno_offset;
-			if (copyin(dqserialnumaddr, (char *)&dqserialnum, (task_has_64Bit_addr(task) ? 8 : 4)) == 0) {
+			if (copyin(dqserialnumaddr, (char *)&dqserialnum, (user64_va ? 8 : 4)) == 0) {
 				dqserialnum_valid = 1;
 			}
 		}
@@ -694,7 +704,7 @@ copytobuffer:
 	tsnap->latency_qos = task_grab_latency_qos(task);
 
 	strlcpy(tsnap->p_comm, proc_name_address(p), sizeof(tsnap->p_comm));
-	if (task_has_64Bit_addr(thread->task)) {
+	if (user64_va) {
 		tsnap->ss_flags |= kUser64_p;
 	}
 
@@ -796,7 +806,7 @@ copytobuffer:
 		current_buffer->current_position += sizeof(dqserialnum);
 	}
 
-	if (user64) {
+	if (user64_regs) {
 		framesize = 8;
 		thsnap->ss_flags |= kUser64_p;
 	} else {
@@ -1182,9 +1192,9 @@ bootprofile_timer_call(
 	if (bootprofile_buffer_current_position < bootprofile_buffer_size) {
 		uint32_t flags = STACKSHOT_KCDATA_FORMAT | STACKSHOT_TRYLOCK | STACKSHOT_SAVE_LOADINFO
 		    | STACKSHOT_GET_GLOBAL_MEM_STATS;
-#if __x86_64__
+#if !CONFIG_EMBEDDED
 		flags |= STACKSHOT_SAVE_KEXT_LOADINFO;
-#endif /* __x86_64__ */
+#endif
 
 
 		/* OR on flags specified in boot-args */

@@ -69,13 +69,15 @@ extern  reset_handler_data_t    ResetHandlerData;
 #define MAX_CPUS                        1
 #endif
 
-#define CPUWINDOWS_MAX                  4
+/* Put the static check for cpumap_t here as it's defined in <kern/processor.h> */
+static_assert(sizeof(cpumap_t) * CHAR_BIT >= MAX_CPUS, "cpumap_t bitvector is too small for current MAX_CPUS value");
+
 #ifdef  __arm__
-#define CPUWINDOWS_BASE                 0xFFF00000UL
+#define CPUWINDOWS_BASE_MASK            0xFFF00000UL
 #else
 #define CPUWINDOWS_BASE_MASK            0xFFFFFFFFFFF00000UL
-#define CPUWINDOWS_BASE                 (VM_MAX_KERNEL_ADDRESS & CPUWINDOWS_BASE_MASK)
 #endif
+#define CPUWINDOWS_BASE                 (VM_MAX_KERNEL_ADDRESS & CPUWINDOWS_BASE_MASK)
 #define CPUWINDOWS_TOP                  (CPUWINDOWS_BASE + (MAX_CPUS * CPUWINDOWS_MAX * PAGE_SIZE))
 
 typedef struct cpu_data_entry {
@@ -109,8 +111,9 @@ typedef struct {
 	uint64_t ipi_cnt_wake;
 	uint64_t timer_cnt;
 	uint64_t timer_cnt_wake;
-	uint64_t pmi_cnt;
+#if MONOTONIC
 	uint64_t pmi_cnt_wake;
+#endif /* MONOTONIC */
 	uint64_t undef_ex_cnt;
 	uint64_t unaligned_cnt;
 	uint64_t vfp_cnt;
@@ -137,11 +140,6 @@ typedef struct cpu_data {
 	unsigned int                            cpu_ident;
 	cpu_id_t                                cpu_id;
 	unsigned volatile int                   cpu_signal;
-#if DEBUG || DEVELOPMENT
-	void                                    *failed_xcall;
-	unsigned int                            failed_signal;
-	volatile long                           failed_signal_count;
-#endif
 	void                                    *cpu_cache_dispatch;
 	ast_t                                   cpu_pending_ast;
 	struct processor                        *cpu_processor;
@@ -223,6 +221,8 @@ typedef struct cpu_data {
 
 	void                                    *cpu_xcall_p0;
 	void                                    *cpu_xcall_p1;
+	void                                    *cpu_imm_xcall_p0;
+	void                                    *cpu_imm_xcall_p1;
 
 #if     __ARM_SMP__ && defined(ARMA7)
 	volatile uint32_t                       cpu_CLW_active;
@@ -278,6 +278,9 @@ typedef struct cpu_data {
 		CPU_HALTED,
 		CPU_HALTED_WITH_STATE
 	}                                       halt_status;
+#if defined(HAS_APPLE_PAC)
+	uint64_t        rop_key;
+#endif /* defined(HAS_APPLE_PAC) */
 } cpu_data_t;
 
 /*

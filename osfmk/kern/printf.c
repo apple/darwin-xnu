@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -179,6 +179,10 @@
 #include <arm/cpu_data_internal.h>
 #endif
 
+#ifdef HAS_APPLE_PAC
+#include <mach/vm_param.h>
+#include <ptrauth.h>
+#endif /* HAS_APPLE_PAC */
 
 #define isdigit(d) ((d) >= '0' && (d) <= '9')
 #define Ctod(c) ((c) - '0')
@@ -256,6 +260,11 @@ __doprnt(
 	char    c;
 	int             capitals;
 	int             long_long;
+	enum {
+		INT,
+		SHORT,
+		CHAR,
+	} numeric_type = INT;
 	int             nprinted = 0;
 
 	while ((c = *fmt) != '\0') {
@@ -269,6 +278,7 @@ __doprnt(
 		fmt++;
 
 		long_long = 0;
+		numeric_type = INT;
 		length = 0;
 		prec = -1;
 		ladjust = FALSE;
@@ -335,6 +345,13 @@ __doprnt(
 			}
 			if (c == 'l') {
 				long_long = 1;
+				c = *++fmt;
+			}
+		} else if (c == 'h') {
+			c = *++fmt;
+			numeric_type = SHORT;
+			if (c == 'h') {
+				numeric_type = CHAR;
 				c = *++fmt;
 			}
 		} else if (c == 'q' || c == 'L') {
@@ -521,6 +538,7 @@ __doprnt(
 
 		case 'u':
 			truncate = _doprnt_truncates;
+		/* FALLTHROUGH */
 		case 'U':
 			base = 10;
 			goto print_unsigned;
@@ -530,6 +548,7 @@ __doprnt(
 			if (sizeof(int) < sizeof(void *)) {
 				long_long = 1;
 			}
+		/* FALLTHROUGH */
 		case 'x':
 			truncate = _doprnt_truncates;
 			base = 16;
@@ -542,12 +561,14 @@ __doprnt(
 
 		case 'r':
 			truncate = _doprnt_truncates;
+		/* FALLTHROUGH */
 		case 'R':
 			base = radix;
 			goto print_signed;
 
 		case 'n':
 			truncate = _doprnt_truncates;
+		/* FALLTHROUGH */
 		case 'N':
 			base = radix;
 			goto print_unsigned;
@@ -557,6 +578,16 @@ print_signed:
 				n = va_arg(argp, long long);
 			} else {
 				n = va_arg(argp, int);
+			}
+			switch (numeric_type) {
+			case SHORT:
+				n = (short)n;
+				break;
+			case CHAR:
+				n = (char)n;
+				break;
+			default:
+				break;
 			}
 			if (n >= 0) {
 				u = n;
@@ -572,6 +603,16 @@ print_unsigned:
 				u = va_arg(argp, unsigned long long);
 			} else {
 				u = va_arg(argp, unsigned int);
+			}
+			switch (numeric_type) {
+			case SHORT:
+				u = (unsigned short)u;
+				break;
+			case CHAR:
+				u = (unsigned char)u;
+				break;
+			default:
+				break;
 			}
 			goto print_num;
 
@@ -591,6 +632,13 @@ print_num:
 					const char* strp = str;
 					int strl = sizeof(str) - 1;
 
+#ifdef HAS_APPLE_PAC
+					/**
+					 * Strip out the pointer authentication code before
+					 * checking whether the pointer is a kernel address.
+					 */
+					u = (unsigned long long)VM_KERNEL_STRIP_PTR(u);
+#endif /* HAS_APPLE_PAC */
 
 					if (u >= VM_MIN_KERNEL_AND_KEXT_ADDRESS && u <= VM_MAX_KERNEL_ADDRESS) {
 						while (*strp != '\0') {
@@ -681,7 +729,19 @@ dummy_putc(int ch, void *arg)
 {
 	void (*real_putc)(char) = arg;
 
-	real_putc(ch);
+	/*
+	 * Attempts to panic (or otherwise log to console) during early boot
+	 * can result in _doprnt() and _doprnt_log() being called from
+	 * _kprintf() before PE_init_kprintf() has been called. This causes
+	 * the "putc" param to _doprnt() and _doprnt_log() to be passed as
+	 * NULL. That NULL makes its way here, and we would try jump to it.
+	 * Given that this is a poor idea, and this happens at very early
+	 * boot, there is not a way to report this easily (we are likely
+	 * already panicing), so we'll just do nothing instead of crashing.
+	 */
+	if (real_putc) {
+		real_putc(ch);
+	}
 }
 
 void
@@ -710,11 +770,11 @@ _doprnt_log(
 boolean_t       new_printf_cpu_number = FALSE;
 #endif  /* MP_PRINTF */
 
-decl_simple_lock_data(, printf_lock)
-decl_simple_lock_data(, bsd_log_spinlock)
+decl_simple_lock_data(, printf_lock);
+decl_simple_lock_data(, bsd_log_spinlock);
 
 lck_grp_t oslog_stream_lock_grp;
-decl_lck_spin_data(, oslog_stream_lock)
+decl_lck_spin_data(, oslog_stream_lock);
 void oslog_lock_init(void);
 
 extern void bsd_log_init(void);

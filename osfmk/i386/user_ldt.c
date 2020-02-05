@@ -77,6 +77,9 @@
 #include <i386/seg.h>
 #include <i386/thread.h>
 
+#include <IOKit/IOBSD.h> /* for IOTaskHasEntitlement */
+#include <sys/csr.h> /* for csr_check */
+
 #include <sys/errno.h>
 
 static void user_ldt_set_action(void *);
@@ -85,7 +88,7 @@ static int i386_set_ldt_impl(uint32_t *retval, uint64_t start_sel, uint64_t desc
 static int i386_get_ldt_impl(uint32_t *retval, uint64_t start_sel, uint64_t descs,
     uint64_t num_sels);
 
-extern int allow_64bit_proc_LDT_ops;
+#define LDT_IN_64BITPROC_ENTITLEMENT "com.apple.security.ldt-in-64bit-process"
 
 /*
  * Add the descriptors to the LDT, starting with
@@ -441,8 +444,9 @@ i386_set_ldt64(
 	uint64_t                descs,  /* out */
 	uint64_t                num_sels)
 {
-	if (!allow_64bit_proc_LDT_ops) {
-		return EINVAL;
+	if (csr_check(CSR_ALLOW_UNTRUSTED_KEXTS) != 0 &&
+	    !IOTaskHasEntitlement(current_task(), LDT_IN_64BITPROC_ENTITLEMENT)) {
+		return EPERM;
 	}
 
 	return i386_set_ldt_impl(retval, start_sel, descs, num_sels);
@@ -468,8 +472,9 @@ i386_get_ldt64(
 	uint64_t                descs,  /* out */
 	uint64_t                num_sels)
 {
-	if (!allow_64bit_proc_LDT_ops) {
-		return EINVAL;
+	if (csr_check(CSR_ALLOW_UNTRUSTED_KEXTS) != 0 &&
+	    !IOTaskHasEntitlement(current_task(), LDT_IN_64BITPROC_ENTITLEMENT)) {
+		return EPERM;
 	}
 
 	return i386_get_ldt_impl(retval, start_sel, descs, num_sels);

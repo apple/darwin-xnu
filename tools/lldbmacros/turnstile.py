@@ -15,22 +15,24 @@ def GetTurnstileSummary(turnstile):
     type_and_gencount = Cast(addressof(turnstile.ts_type_gencount), 'union turnstile_type_gencount *')
     turnstile_type = ""
 
-    if type_and_gencount.ts_type == 0:
+    if type_and_gencount.ts_type == GetEnumValue('turnstile_type_t::TURNSTILE_NONE'):
       turnstile_type = "none   "
-    elif type_and_gencount.ts_type == 1:
+    elif type_and_gencount.ts_type == GetEnumValue('turnstile_type_t::TURNSTILE_KERNEL_MUTEX'):
       turnstile_type = "knl_mtx"
-    elif type_and_gencount.ts_type == 2:
+    elif type_and_gencount.ts_type == GetEnumValue('turnstile_type_t::TURNSTILE_ULOCK'):
       turnstile_type = "ulock  "
-    elif type_and_gencount.ts_type == 3:
+    elif type_and_gencount.ts_type == GetEnumValue('turnstile_type_t::TURNSTILE_PTHREAD_MUTEX'):
       turnstile_type = "pth_mtx"
-    elif type_and_gencount.ts_type == 4:
+    elif type_and_gencount.ts_type == GetEnumValue('turnstile_type_t::TURNSTILE_SYNC_IPC'):
       turnstile_type = "syn_ipc"
-    elif type_and_gencount.ts_type == 5:
+    elif type_and_gencount.ts_type == GetEnumValue('turnstile_type_t::TURNSTILE_WORKLOOPS'):
       turnstile_type = "kqwl   "
-    elif type_and_gencount.ts_type == 6:
+    elif type_and_gencount.ts_type == GetEnumValue('turnstile_type_t::TURNSTILE_WORKQS'):
       turnstile_type = "workq  "
-    elif type_and_gencount.ts_type == 7:
+    elif type_and_gencount.ts_type == GetEnumValue('turnstile_type_t::TURNSTILE_KNOTE'):
       turnstile_type = "knote  "
+    elif type_and_gencount.ts_type == GetEnumValue('turnstile_type_t::TURNSTILE_SLEEP_INHERITOR'):
+      turnstile_type = "slp_inh"
 
     turnstile_state = ""
     if turnstile.ts_state & 0x1:
@@ -144,4 +146,32 @@ def ShowAllTurnstiles(cmd_args=None, cmd_options={}):
         PrintTurnstile(turnstile)
     return True
 # EndMacro showallbusyturnstiles
+
+@lldb_command('showthreadbaseturnstiles', fancy=True)
+def ShowThreadInheritorBase(cmd_args=None, cmd_options={}, O=None):
+    """ A DEVELOPMENT macro that walks the list of userspace turnstiles pushing on a thread
+        and prints them.
+        usage: (lldb) showthreadbaseturnstiles thread_pointer
+    """
+    if not cmd_args:
+        return O.error('invalid thread pointer')
+
+    thread = kern.GetValueFromAddress(cmd_args[0], "thread_t")
+    with O.table(GetTurnstileSummary.header):
+        for turnstile in IteratePriorityQueue(thread.base_inheritor_queue, 'struct turnstile', 'ts_inheritor_links'):
+            PrintTurnstile(turnstile)
+
+@lldb_command('showthreadschedturnstiles', fancy=True)
+def ShowThreadInheritorSched(cmd_args=None, cmd_options={}, O=None):
+    """ A DEVELOPMENT macro that walks the list of kernelspace turnstiles pushing on a thread
+        and prints them.
+        usage: (lldb) showthreadschedturnstiles thread_pointer
+    """
+    if not cmd_args:
+        return O.error('invalid thread pointer')
+
+    thread = kern.GetValueFromAddress(cmd_args[0], "thread_t")
+    with O.table(GetTurnstileSummary.header):
+        for turnstile in IteratePriorityQueue(thread.sched_inheritor_queue, 'struct turnstile', 'ts_inheritor_links'):
+            PrintTurnstile(turnstile)
 #endif

@@ -520,7 +520,7 @@ ml_phys_write_double_64(addr64_t paddr64, unsigned long long data)
 void
 setbit(int bitno, int *s)
 {
-	s[bitno / INT_SIZE] |= 1 << (bitno % INT_SIZE);
+	s[bitno / INT_SIZE] |= 1U << (bitno % INT_SIZE);
 }
 
 /*
@@ -529,7 +529,7 @@ setbit(int bitno, int *s)
 void
 clrbit(int bitno, int *s)
 {
-	s[bitno / INT_SIZE] &= ~(1 << (bitno % INT_SIZE));
+	s[bitno / INT_SIZE] &= ~(1U << (bitno % INT_SIZE));
 }
 
 /*
@@ -538,7 +538,7 @@ clrbit(int bitno, int *s)
 int
 testbit(int bitno, int *s)
 {
-	return s[bitno / INT_SIZE] & (1 << (bitno % INT_SIZE));
+	return s[bitno / INT_SIZE] & (1U << (bitno % INT_SIZE));
 }
 
 /*
@@ -765,17 +765,18 @@ ml_thread_policy(
 	//	kprintf("ml_thread_policy() unimplemented\n");
 }
 
+__dead2
 void
-panic_unimplemented()
+panic_unimplemented(void)
 {
 	panic("Not yet implemented.");
 }
 
 /* ARM64_TODO <rdar://problem/9198953> */
-void abort(void);
+void abort(void) __dead2;
 
 void
-abort()
+abort(void)
 {
 	panic("Abort.");
 }

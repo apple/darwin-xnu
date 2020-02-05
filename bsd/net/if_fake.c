@@ -81,6 +81,12 @@
 #include <net/if_media.h>
 #include <net/ether_if_module.h>
 
+static boolean_t
+is_power_of_two(unsigned int val)
+{
+	return (val & (val - 1)) == 0;
+}
+
 #define FAKE_ETHER_NAME         "feth"
 
 SYSCTL_DECL(_net_link);
@@ -111,6 +117,204 @@ static int if_fake_wmm_mode = 0;
 SYSCTL_INT(_net_link_fake, OID_AUTO, wmm_mode, CTLFLAG_RW | CTLFLAG_LOCKED,
     &if_fake_wmm_mode, 0, "Fake interface in 802.11 WMM mode");
 
+static int if_fake_multibuflet = 0;
+SYSCTL_INT(_net_link_fake, OID_AUTO, multibuflet, CTLFLAG_RW | CTLFLAG_LOCKED,
+    &if_fake_multibuflet, 0, "Fake interface using multi-buflet packets");
+
+static int if_fake_copypkt_mode = 0;
+SYSCTL_INT(_net_link_fake, OID_AUTO, copypkt_mode, CTLFLAG_RW | CTLFLAG_LOCKED,
+    &if_fake_copypkt_mode, 0, "Fake interface copying packet to peer");
+
+/* sysctl net.link.fake.tx_headroom */
+#define FETH_TX_HEADROOM_MAX      32
+static unsigned int if_fake_tx_headroom = 0;
+
+static int
+feth_tx_headroom_sysctl SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	unsigned int new_value;
+	int changed;
+	int error;
+
+	error = sysctl_io_number(req, if_fake_tx_headroom,
+	    sizeof(if_fake_tx_headroom), &new_value, &changed);
+	if (error == 0 && changed != 0) {
+		if (new_value > FETH_TX_HEADROOM_MAX ||
+		    (new_value % 8) != 0) {
+			return EINVAL;
+		}
+		if_fake_tx_headroom = new_value;
+	}
+	return 0;
+}
+
+SYSCTL_PROC(_net_link_fake, OID_AUTO, tx_headroom,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, feth_tx_headroom_sysctl, "IU", "Fake ethernet Tx headroom");
+
+
+/* sysctl net.link.fake.max_mtu */
+#define FETH_MAX_MTU_DEFAULT    2048
+#define FETH_MAX_MTU_MAX        ((16 * 1024) - ETHER_HDR_LEN)
+
+static unsigned int if_fake_max_mtu = FETH_MAX_MTU_DEFAULT;
+
+/* sysctl net.link.fake.buflet_size */
+#define FETH_BUFLET_SIZE_MIN            512
+#define FETH_BUFLET_SIZE_MAX            2048
+
+static unsigned int if_fake_buflet_size = FETH_BUFLET_SIZE_MIN;
+
+static int
+feth_max_mtu_sysctl SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	unsigned int new_value;
+	int changed;
+	int error;
+
+	error = sysctl_io_number(req, if_fake_max_mtu,
+	    sizeof(if_fake_max_mtu), &new_value, &changed);
+	if (error == 0 && changed != 0) {
+		if (new_value > FETH_MAX_MTU_MAX ||
+		    new_value < ETHERMTU ||
+		    new_value <= if_fake_buflet_size) {
+			return EINVAL;
+		}
+		if_fake_max_mtu = new_value;
+	}
+	return 0;
+}
+
+SYSCTL_PROC(_net_link_fake, OID_AUTO, max_mtu,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, feth_max_mtu_sysctl, "IU", "Fake interface maximum MTU");
+
+static int
+feth_buflet_size_sysctl SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	unsigned int new_value;
+	int changed;
+	int error;
+
+	error = sysctl_io_number(req, if_fake_buflet_size,
+	    sizeof(if_fake_buflet_size), &new_value, &changed);
+	if (error == 0 && changed != 0) {
+		/* must be a power of 2 between min and max */
+		if (new_value > FETH_BUFLET_SIZE_MAX ||
+		    new_value < FETH_BUFLET_SIZE_MIN ||
+		    !is_power_of_two(new_value) ||
+		    new_value >= if_fake_max_mtu) {
+			return EINVAL;
+		}
+		if_fake_buflet_size = new_value;
+	}
+	return 0;
+}
+
+SYSCTL_PROC(_net_link_fake, OID_AUTO, buflet_size,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, feth_buflet_size_sysctl, "IU", "Fake interface buflet size");
+
+static unsigned int if_fake_user_access = 0;
+
+static int
+feth_user_access_sysctl SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	unsigned int new_value;
+	int changed;
+	int error;
+
+	error = sysctl_io_number(req, if_fake_user_access,
+	    sizeof(if_fake_user_access), &new_value, &changed);
+	if (error == 0 && changed != 0) {
+		if (new_value != 0) {
+			if (new_value != 1) {
+				return EINVAL;
+			}
+			/*
+			 * copypkt mode requires a kernel only buffer pool so
+			 * it is incompatible with user access mode.
+			 */
+			if (if_fake_copypkt_mode != 0) {
+				return ENOTSUP;
+			}
+		}
+		if_fake_user_access = new_value;
+	}
+	return 0;
+}
+
+SYSCTL_PROC(_net_link_fake, OID_AUTO, user_access,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, feth_user_access_sysctl, "IU", "Fake interface user access");
+
+/* sysctl net.link.fake.if_adv_intvl (unit: millisecond) */
+#define FETH_IF_ADV_INTVL_MIN            10
+#define FETH_IF_ADV_INTVL_MAX            INT_MAX
+
+static int if_fake_if_adv_interval = 0; /* no interface advisory */
+static int
+feth_if_adv_interval_sysctl SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	unsigned int new_value;
+	int changed;
+	int error;
+
+	error = sysctl_io_number(req, if_fake_if_adv_interval,
+	    sizeof(if_fake_if_adv_interval), &new_value, &changed);
+	if (error == 0 && changed != 0) {
+		if ((new_value != 0) && (new_value > FETH_IF_ADV_INTVL_MAX ||
+		    new_value < FETH_IF_ADV_INTVL_MIN)) {
+			return EINVAL;
+		}
+		if_fake_if_adv_interval = new_value;
+	}
+	return 0;
+}
+
+SYSCTL_PROC(_net_link_fake, OID_AUTO, if_adv_intvl,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0,
+    feth_if_adv_interval_sysctl, "IU",
+    "Fake interface will generate interface advisories reports at the specified interval in ms");
+
+/* sysctl net.link.fake.tx_drops */
+/*
+ * Fake ethernet will drop packet on the transmit path at the specified
+ * rate, i.e drop one in every if_fake_tx_drops number of packets.
+ */
+#define FETH_TX_DROPS_MIN            0
+#define FETH_TX_DROPS_MAX            INT_MAX
+static int if_fake_tx_drops = 0; /* no packets are dropped */
+static int
+feth_fake_tx_drops_sysctl SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	unsigned int new_value;
+	int changed;
+	int error;
+
+	error = sysctl_io_number(req, if_fake_tx_drops,
+	    sizeof(if_fake_tx_drops), &new_value, &changed);
+	if (error == 0 && changed != 0) {
+		if (new_value > FETH_TX_DROPS_MAX ||
+		    new_value < FETH_TX_DROPS_MIN) {
+			return EINVAL;
+		}
+		if_fake_tx_drops = new_value;
+	}
+	return 0;
+}
+
+SYSCTL_PROC(_net_link_fake, OID_AUTO, tx_drops,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0,
+    feth_fake_tx_drops_sysctl, "IU",
+    "Fake interface will intermittently drop packets on Tx path");
+
 /**
 ** virtual ethernet structures, types
 **/
@@ -125,6 +329,8 @@ typedef uint16_t        iff_flags_t;
 #define IFF_FLAGS_BSD_MODE              0x0002
 #define IFF_FLAGS_DETACHING             0x0004
 #define IFF_FLAGS_WMM_MODE              0x0008
+#define IFF_FLAGS_MULTIBUFLETS          0x0010
+#define IFF_FLAGS_COPYPKT_MODE          0x0020
 
 
 struct if_fake {
@@ -139,6 +345,7 @@ struct if_fake {
 	int                     iff_media_list[IF_FAKE_MEDIA_LIST_MAX];
 	struct mbuf *           iff_pending_tx_packet;
 	boolean_t               iff_start_busy;
+	unsigned int            iff_max_mtu;
 };
 
 typedef struct if_fake * if_fake_ref;
@@ -288,12 +495,35 @@ feth_unlock(void)
 }
 
 static inline int
-feth_max_mtu(void)
+get_max_mtu(int bsd_mode, unsigned int max_mtu)
 {
-	if (njcl > 0) {
-		return M16KCLBYTES - ETHER_HDR_LEN;
+	unsigned int    mtu;
+
+	if (bsd_mode != 0) {
+		mtu = (njcl > 0) ? (M16KCLBYTES - ETHER_HDR_LEN)
+		    : MBIGCLBYTES - ETHER_HDR_LEN;
+		if (mtu > max_mtu) {
+			mtu = max_mtu;
+		}
+	} else {
+		mtu = max_mtu;
 	}
-	return MBIGCLBYTES - ETHER_HDR_LEN;
+	return mtu;
+}
+
+static inline unsigned int
+feth_max_mtu(ifnet_t ifp)
+{
+	if_fake_ref     fakeif;
+	unsigned int    max_mtu = ETHERMTU;
+
+	feth_lock();
+	fakeif = ifnet_get_if_fake(ifp);
+	if (fakeif != NULL) {
+		max_mtu = fakeif->iff_max_mtu;
+	}
+	feth_unlock();
+	return max_mtu;
 }
 
 static void
@@ -406,6 +636,7 @@ feth_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	if (if_fake_hwcsum != 0) {
 		fakeif->iff_flags |= IFF_FLAGS_HWCSUM;
 	}
+	fakeif->iff_max_mtu = get_max_mtu(if_fake_bsd_mode, if_fake_max_mtu);
 
 	/* use the interface name as the unique id for ifp recycle */
 	if ((unsigned int)
@@ -598,15 +829,19 @@ feth_start(ifnet_t ifp)
 
 	feth_lock();
 	fakeif = ifnet_get_if_fake(ifp);
+	if (fakeif == NULL) {
+		feth_unlock();
+		return;
+	}
+
 	if (fakeif->iff_start_busy) {
 		feth_unlock();
 		printf("if_fake: start is busy\n");
 		return;
 	}
-	if (fakeif != NULL) {
-		peer = fakeif->iff_peer;
-		flags = fakeif->iff_flags;
-	}
+
+	peer = fakeif->iff_peer;
+	flags = fakeif->iff_flags;
 
 	/* check for pending TX */
 	m = fakeif->iff_pending_tx_packet;
@@ -888,7 +1123,7 @@ feth_get_drvspec(ifnet_t ifp, u_int32_t cmd, u_int32_t len,
 			break;
 		}
 		feth_lock();
-		fakeif = (if_fake_ref)ifnet_softc(ifp);
+		fakeif = ifnet_get_if_fake(ifp);
 		if (fakeif == NULL) {
 			feth_unlock();
 			error = EOPNOTSUPP;
@@ -941,7 +1176,7 @@ feth_ioctl(ifnet_t ifp, u_long cmd, void * data)
 	case SIOCGIFMEDIA32:
 	case SIOCGIFMEDIA64:
 		feth_lock();
-		fakeif = (if_fake_ref)ifnet_softc(ifp);
+		fakeif = ifnet_get_if_fake(ifp);
 		if (fakeif == NULL) {
 			feth_unlock();
 			return EOPNOTSUPP;
@@ -973,12 +1208,13 @@ feth_ioctl(ifnet_t ifp, u_long cmd, void * data)
 	case SIOCGIFDEVMTU:
 		devmtu_p = &ifr->ifr_devmtu;
 		devmtu_p->ifdm_current = ifnet_mtu(ifp);
-		devmtu_p->ifdm_max = feth_max_mtu();
+		devmtu_p->ifdm_max = feth_max_mtu(ifp);
 		devmtu_p->ifdm_min = IF_MINMTU;
 		break;
 
 	case SIOCSIFMTU:
-		if (ifr->ifr_mtu > feth_max_mtu() || ifr->ifr_mtu < IF_MINMTU) {
+		if ((unsigned int)ifr->ifr_mtu > feth_max_mtu(ifp) ||
+		    ifr->ifr_mtu < IF_MINMTU) {
 			error = EINVAL;
 		} else {
 			error = ifnet_set_mtu(ifp, ifr->ifr_mtu);

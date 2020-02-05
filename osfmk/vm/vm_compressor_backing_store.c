@@ -425,6 +425,16 @@ vm_compressor_swap_init()
 		panic("vm_swapfile_gc_thread: create failed");
 	}
 	thread_set_thread_name(thread, "VM_swapfile_gc");
+
+	/*
+	 * Swapfile garbage collection will need to allocate memory
+	 * to complete its swap reclaim and in-memory compaction.
+	 * So allow it to dip into the reserved VM page pool.
+	 */
+	thread_lock(thread);
+	thread->options |= TH_OPT_VMPRIV;
+	thread_unlock(thread);
+
 	thread_deallocate(thread);
 
 	proc_set_thread_policy_with_tid(kernel_task, thread->thread_id,
@@ -679,6 +689,10 @@ vm_swapfile_create_thread(void)
 			break;
 		}
 
+		if (compressor_store_stop_compaction == TRUE) {
+			break;
+		}
+
 		clock_get_system_nanotime(&sec, &nsec);
 
 		if (VM_SWAP_SHOULD_CREATE(sec) == 0) {
@@ -698,6 +712,10 @@ vm_swapfile_create_thread(void)
 
 	if (hibernate_in_progress_with_pinned_swap == TRUE) {
 		thread_wakeup((event_t)&hibernate_in_progress_with_pinned_swap);
+	}
+
+	if (compressor_store_stop_compaction == TRUE) {
+		thread_wakeup((event_t)&compressor_store_stop_compaction);
 	}
 
 	assert_wait((event_t)&vm_swapfile_create_needed, THREAD_UNINT);
@@ -811,6 +829,10 @@ vm_swapfile_gc_thread(void)
 
 	if (hibernate_in_progress_with_pinned_swap == TRUE) {
 		thread_wakeup((event_t)&hibernate_in_progress_with_pinned_swap);
+	}
+
+	if (compressor_store_stop_compaction == TRUE) {
+		thread_wakeup((event_t)&compressor_store_stop_compaction);
 	}
 
 	assert_wait((event_t)&vm_swapfile_gc_needed, THREAD_UNINT);
@@ -1110,8 +1132,6 @@ again:
 			soc->swp_io_busy = 1;
 			vm_swapout_soc_busy++;
 		}
-		vm_swapout_thread_throttle_adjust();
-		vm_pageout_io_throttle();
 
 c_seg_is_empty:
 		if (c_swapout_count == 0) {
@@ -1123,6 +1143,12 @@ c_seg_is_empty:
 		if ((soc = vm_swapout_find_done_soc())) {
 			vm_swapout_complete_soc(soc);
 		}
+		lck_mtx_unlock_always(c_list_lock);
+
+		vm_swapout_thread_throttle_adjust();
+		vm_pageout_io_throttle();
+
+		lck_mtx_lock_spin_always(c_list_lock);
 	}
 	if ((soc = vm_swapout_find_done_soc())) {
 		vm_swapout_complete_soc(soc);

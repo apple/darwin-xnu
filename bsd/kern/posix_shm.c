@@ -187,14 +187,7 @@ static pshm_info_t *pshm_cache_search(pshm_info_t * look);
 static void pshm_cache_add(pshm_info_t *entry);
 static void pshm_cache_delete(pshm_info_t *entry);
 
-static int pshm_read(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx);
-static int pshm_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx);
-static int pshm_ioctl(struct fileproc *fp, u_long com, caddr_t data, vfs_context_t ctx);
-static int pshm_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx);
 static int pshm_closefile(struct fileglob *fg, vfs_context_t ctx);
-
-static int pshm_kqfilter(struct fileproc *fp, struct knote *kn,
-    struct kevent_internal_s *kev, vfs_context_t ctx);
 
 static int pshm_access(pshm_info_t *pinfo, int mode, kauth_cred_t cred, proc_t p);
 int pshm_cache_purge_all(proc_t p);
@@ -202,14 +195,14 @@ int pshm_cache_purge_all(proc_t p);
 static int pshm_unlink_internal(pshm_info_t *pinfo);
 
 static const struct fileops pshmops = {
-	.fo_type = DTYPE_PSXSHM,
-	.fo_read = pshm_read,
-	.fo_write = pshm_write,
-	.fo_ioctl = pshm_ioctl,
-	.fo_select = pshm_select,
-	.fo_close = pshm_closefile,
-	.fo_kqfilter = pshm_kqfilter,
-	.fo_drain = NULL,
+	.fo_type     = DTYPE_PSXSHM,
+	.fo_read     = fo_no_read,
+	.fo_write    = fo_no_write,
+	.fo_ioctl    = fo_no_ioctl,
+	.fo_select   = fo_no_select,
+	.fo_close    = pshm_closefile,
+	.fo_drain    = fo_no_drain,
+	.fo_kqfilter = fo_no_kqfilter,
 };
 
 /*
@@ -1126,43 +1119,6 @@ pshm_closefile(struct fileglob *fg, __unused vfs_context_t ctx)
 	}
 
 	return error;
-}
-
-static int
-pshm_read(__unused struct fileproc *fp, __unused struct uio *uio,
-    __unused int flags, __unused vfs_context_t ctx)
-{
-	return ENOTSUP;
-}
-
-static int
-pshm_write(__unused struct fileproc *fp, __unused struct uio *uio,
-    __unused int flags, __unused vfs_context_t ctx)
-{
-	return ENOTSUP;
-}
-
-static int
-pshm_ioctl(__unused struct fileproc *fp, __unused u_long com,
-    __unused caddr_t data, __unused vfs_context_t ctx)
-{
-	return ENOTSUP;
-}
-
-static int
-pshm_select(__unused struct fileproc *fp, __unused int which, __unused void *wql,
-    __unused vfs_context_t ctx)
-{
-	return ENOTSUP;
-}
-
-static int
-pshm_kqfilter(__unused struct fileproc *fp, struct knote *kn,
-    __unused struct kevent_internal_s *kev, __unused vfs_context_t ctx)
-{
-	kn->kn_flags = EV_ERROR;
-	kn->kn_data = ENOTSUP;
-	return 0;
 }
 
 int

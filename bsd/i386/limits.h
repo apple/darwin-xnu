@@ -37,14 +37,18 @@
 #define _I386_LIMITS_H_
 
 #include <sys/cdefs.h>
+#ifndef DRIVERKIT
 #include <i386/_limits.h>
+#endif
 
 #define CHAR_BIT        8               /* number of bits in a char */
 #define MB_LEN_MAX      6               /* Allow 31 bit UTF2 */
 
+#ifndef DRIVERKIT
 #if !defined(_ANSI_SOURCE) && (!defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE))
 #define CLK_TCK         __DARWIN_CLK_TCK        /* ticks per second */
 #endif /* !_ANSI_SOURCE && (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
+#endif
 
 /*
  * According to ANSI (section 2.2.4.2), the values below must be usable by

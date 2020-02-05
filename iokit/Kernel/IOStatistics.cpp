@@ -168,19 +168,19 @@ oid_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1, int arg2, stru
 	return error;
 }
 
-SYSCTL_NODE(_debug, OID_AUTO, iokit_statistics, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "IOStatistics");
+SYSCTL_NODE(_debug, OID_AUTO, iokit_statistics, CTLFLAG_RW | CTLFLAG_LOCKED, NULL, "IOStatistics");
 
 static SYSCTL_PROC(_debug_iokit_statistics, OID_AUTO, general,
     CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
-    0, kIOStatisticsGeneral, oid_sysctl, "S", "");
+    NULL, kIOStatisticsGeneral, oid_sysctl, "S", "");
 
 static SYSCTL_PROC(_debug_iokit_statistics, OID_AUTO, workloop,
     CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
-    0, kIOStatisticsWorkLoop, oid_sysctl, "S", "");
+    NULL, kIOStatisticsWorkLoop, oid_sysctl, "S", "");
 
 static SYSCTL_PROC(_debug_iokit_statistics, OID_AUTO, userclient,
     CTLTYPE_STRUCT | CTLFLAG_RW | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
-    0, kIOStatisticsUserClient, oid_sysctl, "S", "");
+    NULL, kIOStatisticsUserClient, oid_sysctl, "S", "");
 
 void
 IOStatistics::initialize()
@@ -1260,7 +1260,7 @@ IOStatistics::getKextNodeFromBacktrace(boolean_t write)
 	 * overhead. OSBacktrace does many safety checks that
 	 * are not needed in this situation.
 	 */
-	btCount = backtrace((uintptr_t*)bt, btCount);
+	btCount = backtrace((uintptr_t*)bt, btCount, NULL);
 
 	if (write) {
 		IORWLockWrite(lock);

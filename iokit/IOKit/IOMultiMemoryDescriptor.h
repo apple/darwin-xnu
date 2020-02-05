@@ -108,6 +108,8 @@ public:
 
 	virtual IOReturn setPurgeable(IOOptionBits newState, IOOptionBits * oldState) APPLE_KEXT_OVERRIDE;
 
+	IOReturn setOwnership(task_t newOwner, int newLedgerTag, IOOptionBits newOptions);
+
 /*! @function getPageCounts
  *   @abstract Retrieve the number of resident and/or dirty pages encompassed by an IOMemoryDescriptor.
  *   @discussion This method returns the number of resident and/or dirty pages encompassed by an IOMemoryDescriptor.

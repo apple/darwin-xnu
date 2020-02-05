@@ -89,7 +89,7 @@ typedef enum {
 
 extern int(**devfs_vnodeop_p)(void *);  /* our own vector array for dirs */
 extern int(**devfs_spec_vnodeop_p)(void *);  /* our own vector array for devs */
-extern struct vfsops devfs_vfsops;
+extern const struct vfsops devfs_vfsops;
 
 typedef struct devnode          devnode_t;
 typedef struct devdirent        devdirent_t;
@@ -132,7 +132,7 @@ struct devnode {
 	 * make sure that a deferred delete eventually happens if it is
 	 * blocked behind that reference.
 	 */
-	int                 dn_refcount;
+	os_ref_atomic_t     dn_refcount;
 	u_short             dn_mode;
 	uid_t               dn_uid;
 	gid_t               dn_gid;

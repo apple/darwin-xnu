@@ -227,7 +227,7 @@ kpc_reload_configurable(int ctr)
 	return old;
 }
 
-void kpc_pmi_handler(x86_saved_state_t *state);
+void kpc_pmi_handler(void);
 
 static void
 set_running_fixed(boolean_t on)
@@ -470,7 +470,7 @@ kpc_get_curcpu_counters_mp_call(void *args)
 	r = kpc_get_curcpu_counters(handler->classes, NULL, &handler->buf[offset]);
 
 	/* number of counters added by this CPU, needs to be atomic  */
-	hw_atomic_add(&(handler->nb_counters), r);
+	os_atomic_add(&(handler->nb_counters), r, relaxed);
 }
 
 int
@@ -632,7 +632,7 @@ kpc_set_config_arch(struct kpc_config_remote *mp_config)
 
 /* PMI stuff */
 void
-kpc_pmi_handler(__unused x86_saved_state_t *state)
+kpc_pmi_handler(void)
 {
 	uint64_t status, extra;
 	uint32_t ctr;

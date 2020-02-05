@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -196,7 +196,7 @@ struct user_dqblk {
 #define INITQMAGICS { \
 	0xff31ff35,     /* USRQUOTA */ \
 	0xff31ff27,     /* GRPQUOTA */ \
-};
+}
 
 #define QF_VERSION          1
 #define QF_STRING_TAG       "QUOTA HASH FILE"

@@ -57,11 +57,11 @@
 /* version number of the in-kernel shims given to pthread.kext */
 #define PTHREAD_SHIMS_VERSION 1
 
-/* on arm, the callbacks function has two #ifdef arm ponters */
+/* on arm, the callbacks function has two #ifdef arm pointers */
 #if defined(__arm__)
 #define PTHREAD_CALLBACK_MEMBER __unused_was_map_is_1gb
 #else
-#define PTHREAD_CALLBACK_MEMBER __unused_was_ml_get_max_cpus
+#define PTHREAD_CALLBACK_MEMBER kevent_workq_internal
 #endif
 
 /* compile time asserts to check the length of structures in pthread_shims.h */
@@ -255,7 +255,7 @@ static void
 psynch_wait_complete(uintptr_t kwq, struct turnstile **tstore)
 {
 	assert(tstore);
-	turnstile_complete(kwq, tstore, NULL);
+	turnstile_complete(kwq, tstore, NULL, TURNSTILE_PTHREAD_MUTEX);
 }
 
 static void
@@ -270,7 +270,7 @@ psynch_wait_update_owner(uintptr_t kwq, thread_t owner,
 	turnstile_update_inheritor(ts, owner,
 	    (TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_THREAD));
 	turnstile_update_inheritor_complete(ts, TURNSTILE_INTERLOCK_HELD);
-	turnstile_complete(kwq, tstore, NULL);
+	turnstile_complete(kwq, tstore, NULL, TURNSTILE_PTHREAD_MUTEX);
 }
 
 static void
@@ -300,7 +300,7 @@ psynch_wait_wakeup(uintptr_t kwq, struct ksyn_waitq_element *kwe,
 		    uth->uu_thread, THREAD_AWAKENED);
 
 		turnstile_update_inheritor_complete(ts, TURNSTILE_INTERLOCK_HELD);
-		turnstile_complete(kwq, tstore, NULL);
+		turnstile_complete(kwq, tstore, NULL, TURNSTILE_PTHREAD_MUTEX);
 	} else {
 		kr = thread_wakeup_thread((event_t)kwq, uth->uu_thread);
 	}
@@ -481,11 +481,8 @@ kdp_pthread_get_thread_kwq(thread_t thread)
 }
 
 void
-thread_will_park_or_terminate(thread_t thread)
+thread_will_park_or_terminate(__unused thread_t thread)
 {
-	if (thread_owned_workloops_count(thread)) {
-		(void)kevent_exit_on_workloop_ownership_leak(thread);
-	}
 }
 
 /*
@@ -539,6 +536,8 @@ static const struct pthread_callbacks_s pthread_callbacks = {
 	.current_map = _current_map,
 	.thread_create = thread_create,
 	.thread_resume = thread_resume,
+
+	.kevent_workq_internal = kevent_workq_internal,
 
 	.convert_thread_to_port = convert_thread_to_port,
 

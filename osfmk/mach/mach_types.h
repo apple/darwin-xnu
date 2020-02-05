@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -134,6 +134,7 @@ typedef struct alarm                    *alarm_t;
 typedef struct clock                    *clock_serv_t;
 typedef struct clock                    *clock_ctrl_t;
 
+typedef struct arcade_register          *arcade_register_t;
 
 /*
  * OBSOLETE: lock_set interfaces are obsolete.
@@ -154,6 +155,8 @@ struct semaphore;
 struct ledger;
 struct alarm;
 struct clock;
+
+struct arcade_register;
 
 __END_DECLS
 
@@ -188,6 +191,7 @@ typedef mach_port_t             alarm_t;
 typedef mach_port_t             clock_serv_t;
 typedef mach_port_t             clock_ctrl_t;
 
+typedef mach_port_t             arcade_register_t;
 #endif  /* KERNEL */
 
 /*
@@ -254,21 +258,46 @@ typedef clock_serv_t            clock_serv_port_t;
 typedef clock_ctrl_t            clock_ctrl_port_t;
 typedef exception_handler_t     exception_port_t;
 typedef exception_handler_array_t exception_port_arrary_t;
+typedef char vfs_path_t[4096];
+typedef char nspace_path_t[1024]; /* 1024 == PATH_MAX */
 
-
+#ifdef KERNEL
+#define TASK_NULL               ((task_t) NULL)
+#define TASK_NAME_NULL          ((task_name_t) NULL)
+#define TASK_INSPECT_NULL               ((task_inspect_t) NULL)
+#define THREAD_NULL             ((thread_t) NULL)
+#define THREAD_INSPECT_NULL     ((thread_inspect_t)NULL)
+#define TID_NULL                ((uint64_t) NULL)
+#define THR_ACT_NULL            ((thread_act_t) NULL)
+#define IPC_SPACE_NULL          ((ipc_space_t) NULL)
+#define IPC_SPACE_INSPECT_NULL  ((ipc_space_inspect_t) NULL)
+#define COALITION_NULL          ((coalition_t) NULL)
+#define HOST_NULL               ((host_t) NULL)
+#define HOST_PRIV_NULL          ((host_priv_t)NULL)
+#define HOST_SECURITY_NULL      ((host_security_t)NULL)
+#define PROCESSOR_SET_NULL      ((processor_set_t) NULL)
+#define PROCESSOR_NULL          ((processor_t) NULL)
+#define SEMAPHORE_NULL          ((semaphore_t) NULL)
+#define LOCK_SET_NULL           ((lock_set_t) NULL)
+#define LEDGER_NULL             ((ledger_t) NULL)
+#define ALARM_NULL              ((alarm_t) NULL)
+#define CLOCK_NULL              ((clock_t) NULL)
+#define UND_SERVER_NULL         ((UNDServerRef) NULL)
+#define ARCADE_REG_NULL         ((arcade_register_t) NULL)
+#else
 #define TASK_NULL               ((task_t) 0)
 #define TASK_NAME_NULL          ((task_name_t) 0)
 #define TASK_INSPECT_NULL               ((task_inspect_t) 0)
 #define THREAD_NULL             ((thread_t) 0)
-#define THREAD_INSPECT_NULL     ((thread_inspect_t)0)
+#define THREAD_INSPECT_NULL     ((thread_inspect_t) 0)
 #define TID_NULL                ((uint64_t) 0)
 #define THR_ACT_NULL            ((thread_act_t) 0)
 #define IPC_SPACE_NULL          ((ipc_space_t) 0)
 #define IPC_SPACE_INSPECT_NULL  ((ipc_space_inspect_t) 0)
 #define COALITION_NULL          ((coalition_t) 0)
 #define HOST_NULL               ((host_t) 0)
-#define HOST_PRIV_NULL          ((host_priv_t)0)
-#define HOST_SECURITY_NULL      ((host_security_t)0)
+#define HOST_PRIV_NULL          ((host_priv_t) 0)
+#define HOST_SECURITY_NULL      ((host_security_t) 0)
 #define PROCESSOR_SET_NULL      ((processor_set_t) 0)
 #define PROCESSOR_NULL          ((processor_t) 0)
 #define SEMAPHORE_NULL          ((semaphore_t) 0)
@@ -277,6 +306,8 @@ typedef exception_handler_array_t exception_port_arrary_t;
 #define ALARM_NULL              ((alarm_t) 0)
 #define CLOCK_NULL              ((clock_t) 0)
 #define UND_SERVER_NULL         ((UNDServerRef) 0)
+#define ARCADE_REG_NULL         ((arcade_register_t) 0)
+#endif
 
 /* DEPRECATED */
 typedef natural_t       ledger_item_t;

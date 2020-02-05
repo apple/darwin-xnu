@@ -34,7 +34,7 @@ def GetBankTaskSummary(bank_task):
     """
 
     format_str = "{0: <#020x} {1: <16d} {2: <#020x} {3: <16d} {4: <16d} {5: <16d} {6: <16d} {7: <16d}"
-    out_string = format_str.format(bank_task, bank_task.bt_proc_persona.pid, bank_task.bt_creditcard, unsigned(bank_task.bt_elem.be_refs), unsigned(bank_task.bt_elem.be_made), bank_task.bt_proc_persona.persona_id, bank_task.bt_proc_persona.uid, bank_task.bt_proc_persona.gid)
+    out_string = format_str.format(bank_task, bank_task.bt_proc_persona.pid, bank_task.bt_ledger, unsigned(bank_task.bt_elem.be_refs), unsigned(bank_task.bt_elem.be_made), bank_task.bt_proc_persona.persona_id, bank_task.bt_proc_persona.uid, bank_task.bt_proc_persona.gid)
 
     #if DEVELOPMENT
     format_str = "{0: <#020x} {1: <20s}"

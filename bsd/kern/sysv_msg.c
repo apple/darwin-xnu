@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -90,7 +90,7 @@ static void msg_freehdr(struct msg *msghdr);
 typedef int     sy_call_t(struct proc *, void *, int *);
 
 /* XXX casting to (sy_call_t *) is bogus, as usual. */
-static sy_call_t *msgcalls[] = {
+static sy_call_t* const msgcalls[] = {
 	(sy_call_t *)msgctl, (sy_call_t *)msgget,
 	(sy_call_t *)msgsnd, (sy_call_t *)msgrcv
 };
@@ -122,12 +122,12 @@ int     msgmax,                 /* max chars in a message */
     msgssz,                     /* size of a message segment (see notes above) */
     msgseg;                     /* number of message segments */
 struct msginfo msginfo = {
-	MSGMAX,                 /* = (MSGSSZ*MSGSEG) : max chars in a message */
-	MSGMNI,                 /* = 40 : max message queue identifiers */
-	MSGMNB,                 /* = 2048 : max chars in a queue */
-	MSGTQL,                 /* = 40 : max messages in system */
-	MSGSSZ,                 /* = 8 : size of a message segment (2^N long) */
-	MSGSEG                  /* = 2048 : number of message segments */
+	.msgmax = MSGMAX,               /* = (MSGSSZ*MSGSEG) : max chars in a message */
+	.msgmni = MSGMNI,               /* = 40 : max message queue identifiers */
+	.msgmnb = MSGMNB,               /* = 2048 : max chars in a queue */
+	.msgtql = MSGTQL,               /* = 40 : max messages in system */
+	.msgssz = MSGSSZ,               /* = 8 : size of a message segment (2^N long) */
+	.msgseg = MSGSEG                /* = 2048 : number of message segments */
 };
 #endif /* __APPLE_API_PRIVATE */
 

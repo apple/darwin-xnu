@@ -55,7 +55,12 @@ mach_bridge_compute_timestamp(uint64_t local_ts_ns, struct bt_params *params)
 	 */
 	int64_t remote_ts = 0;
 	int64_t rate_prod = 0;
-	rate_prod = (int64_t)(params->rate * (double)((int64_t)local_ts_ns - (int64_t)params->base_local_ts));
+	/* To avoid precision loss due to typecasting from int64_t to double */
+	if (params->rate != 1.0) {
+		rate_prod = (int64_t)(params->rate * (double)((int64_t)local_ts_ns - (int64_t)params->base_local_ts));
+	} else {
+		rate_prod = (int64_t)local_ts_ns - (int64_t)params->base_local_ts;
+	}
 	if (os_add_overflow((int64_t)params->base_remote_ts, rate_prod, &remote_ts)) {
 		return 0;
 	}

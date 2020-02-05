@@ -152,18 +152,27 @@
 #endif /* !NO_ANSI_KEYWORDS */
 #endif /* !(__STDC__ || __cplusplus) */
 
-#define __dead2         __attribute__((noreturn))
-#define __pure2         __attribute__((const))
+#define __dead2         __attribute__((__noreturn__))
+#define __pure2         __attribute__((__const__))
 
 /* __unused denotes variables and functions that may not be used, preventing
  * the compiler from warning about it if not used.
  */
-#define __unused        __attribute__((unused))
+#define __unused        __attribute__((__unused__))
 
 /* __used forces variables and functions to be included even if it appears
  * to the compiler that they are not used (and would thust be discarded).
  */
-#define __used          __attribute__((used))
+#define __used          __attribute__((__used__))
+
+/* __cold marks code used for debugging or that is rarely taken
+ * and tells the compiler to optimize for size and outline code.
+ */
+#if __has_attribute(cold)
+#define __cold          __attribute__((__cold__))
+#else
+#define __cold
+#endif
 
 /* __deprecated causes the compiler to produce a warning when encountering
  * code using the deprecated functionality.
@@ -172,14 +181,16 @@
  * This may require turning on such warning with the -Wdeprecated flag.
  * __deprecated_enum_msg() should be used on enums, and compilers that support
  * it will print the deprecation warning.
+ * __kpi_deprecated() specifically indicates deprecation of kernel programming
+ * interfaces in Kernel.framework used by KEXTs.
  */
-#define __deprecated    __attribute__((deprecated))
+#define __deprecated    __attribute__((__deprecated__))
 
 #if __has_extension(attribute_deprecated_with_message) || \
         (defined(__GNUC__) && ((__GNUC__ >= 5) || ((__GNUC__ == 4) && (__GNUC_MINOR__ >= 5))))
-	#define __deprecated_msg(_msg) __attribute__((deprecated(_msg)))
+	#define __deprecated_msg(_msg) __attribute__((__deprecated__(_msg)))
 #else
-	#define __deprecated_msg(_msg) __attribute__((deprecated))
+	#define __deprecated_msg(_msg) __attribute__((__deprecated__))
 #endif
 
 #if __has_extension(enumerator_attributes)
@@ -188,10 +199,16 @@
 	#define __deprecated_enum_msg(_msg)
 #endif
 
+#if defined(KERNEL) && !defined(KERNEL_PRIVATE)
+#define __kpi_deprecated(_msg) __deprecated_msg(_msg)
+#else /* !defined(KERNEL) || defined(KERNEL_PRIVATE) */
+#define __kpi_deprecated(_msg)
+#endif /* !defined(KERNEL) || defined(KERNEL_PRIVATE) */
+
 /* __unavailable causes the compiler to error out when encountering
  * code using the tagged function of variable.
  */
-#define __unavailable   __attribute__((unavailable))
+#define __unavailable   __attribute__((__unavailable__))
 
 /* Delete pseudo-keywords wherever they are not available or needed. */
 #ifndef __dead
@@ -275,6 +292,15 @@
 #define __swift_unavailable(_msg)       __attribute__((__availability__(swift, unavailable, message=_msg)))
 #else
 #define __swift_unavailable(_msg)
+#endif
+
+/*
+ * __abortlike is the attribute to put on functions like abort() that are
+ * typically used to mark assertions. These optimize the codegen
+ * for outlining while still maintaining debugability.
+ */
+#ifndef __abortlike
+#define __abortlike __dead2 __cold __not_tail_called
 #endif
 
 /* Declaring inline functions within headers is error-prone due to differences
@@ -525,6 +551,12 @@
 #define __DARWIN_ONLY_UNIX_CONFORMANCE  1
 #define __DARWIN_ONLY_VERS_1050         1
 #endif /* PLATFORM_BridgeOS */
+#ifdef PLATFORM_DriverKit
+/* Platform: DriverKit */
+#define __DARWIN_ONLY_64_BIT_INO_T      1
+#define __DARWIN_ONLY_UNIX_CONFORMANCE  1
+#define __DARWIN_ONLY_VERS_1050         1
+#endif /* PLATFORM_DriverKit */
 #ifdef PLATFORM_MacOSX
 /* Platform: MacOSX */
 #define __DARWIN_ONLY_64_BIT_INO_T      0
@@ -691,6 +723,9 @@
 
 #define __DARWIN_EXTSN(sym)             __asm("_" __STRING(sym) __DARWIN_SUF_EXTSN)
 #define __DARWIN_EXTSN_C(sym)           __asm("_" __STRING(sym) __DARWIN_SUF_EXTSN __DARWIN_SUF_NON_CANCELABLE)
+#if XNU_KERNEL_PRIVATE
+#define __XNU_INTERNAL(sym)             __asm("_" __STRING(sym) "$XNU_INTERNAL")
+#endif
 
 /*
  * symbol release macros
@@ -855,6 +890,16 @@
 #define _DARWIN_FEATURE_UNIX_CONFORMANCE        3
 #endif
 
+#if defined(DRIVERKIT) && !defined(KERNEL)
+/*
+ * __DRIVERKIT_LIBC__ indicates to the C++ standard library headers and
+ * similar components that only the restricted set of standard C library
+ * functionality and headers for the DriverKit userspace driver environment
+ * are available.
+ */
+#define __DRIVERKIT_LIBC__                      1
+#endif /* defined(DRIVERKIT) && !defined(KERNEL) */
+
 /*
  * This macro casts away the qualifier from the variable
  *
@@ -905,13 +950,61 @@
 #define __improbable(x) __builtin_expect(!!(x), 0)
 #endif /* !defined(__probable) && !defined(__improbable) */
 
-#define __container_of(ptr, type, field) ({ \
-	        const typeof(((type *)0)->field) *__ptr = (ptr); \
+#if defined(__cplusplus)
+#define __container_of(ptr, type, field) __extension__({ \
+	        const typeof(((type *)nullptr)->field) *__ptr = (ptr); \
 	        (type *)((uintptr_t)__ptr - offsetof(type, field)); \
 	})
+#else
+#define __container_of(ptr, type, field) __extension__({ \
+	        const typeof(((type *)NULL)->field) *__ptr = (ptr); \
+	        (type *)((uintptr_t)__ptr - offsetof(type, field)); \
+	})
+#endif
 
 #endif /* KERNEL || PRIVATE */
 
 #define __compiler_barrier() __asm__ __volatile__("" ::: "memory")
+
+#if __has_attribute(enum_extensibility)
+#define __enum_open __attribute__((__enum_extensibility__(open)))
+#define __enum_closed __attribute__((__enum_extensibility__(closed)))
+#else
+#define __enum_open
+#define __enum_closed
+#endif // __has_attribute(enum_extensibility)
+
+#if __has_attribute(flag_enum)
+#define __enum_options __attribute__((__flag_enum__))
+#else
+#define __enum_options
+#endif
+
+/*
+ * Similar to OS_ENUM/OS_CLOSED_ENUM/OS_OPTIONS/OS_CLOSED_OPTIONS
+ *
+ * This provides more advanced type checking on compilers supporting
+ * the proper extensions, even in C.
+ */
+#if __has_feature(objc_fixed_enum) || __has_extension(cxx_fixed_enum) || \
+        __has_extension(cxx_strong_enums)
+#define __enum_decl(_name, _type, ...) \
+	        typedef enum : _type __VA_ARGS__ __enum_open _name
+#define __enum_closed_decl(_name, _type, ...) \
+	        typedef enum : _type __VA_ARGS__ __enum_closed _name
+#define __options_decl(_name, _type, ...) \
+	        typedef enum : _type __VA_ARGS__ __enum_open __enum_options _name
+#define __options_closed_decl(_name, _type, ...) \
+	        typedef enum : _type __VA_ARGS__ __enum_closed __enum_options _name
+#else
+#define __enum_decl(_name, _type, ...) \
+	        typedef _type _name; enum __VA_ARGS__ __enum_open
+#define __enum_closed_decl(_name, _type, ...) \
+	        typedef _type _name; enum __VA_ARGS__ __enum_closed
+#define __options_decl(_name, _type, ...) \
+	        typedef _type _name; enum __VA_ARGS__ __enum_open __enum_options
+#define __options_closed_decl(_name, _type, ...) \
+	        typedef _type _name; enum __VA_ARGS__ __enum_closed __enum_options
+#endif
 
 #endif /* !_CDEFS_H_ */

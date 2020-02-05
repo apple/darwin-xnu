@@ -139,6 +139,9 @@ __attribute__((visibility("hidden"), format(printf, 3, 4)));
 * Allocators
 *******************************************************************************/
 
+void * kxld_calloc(size_t size)
+__attribute__((malloc, visibility("hidden")));
+
 void * kxld_alloc(size_t size)
 __attribute__((malloc, visibility("hidden")));
 

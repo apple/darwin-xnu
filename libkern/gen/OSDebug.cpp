@@ -43,6 +43,9 @@
 #include <sys/kdebug.h>
 #include <kern/thread.h>
 
+#if defined(HAS_APPLE_PAC)
+#include <ptrauth.h>
+#endif
 
 extern int etext;
 __BEGIN_DECLS
@@ -95,7 +98,7 @@ trace_backtrace(uint32_t debugid, uint32_t debugid2, uintptr_t size, uintptr_t d
 		i = 2;
 	}
 
-#define safe_bt(a) (uintptr_t)(a<cnt ? bt[a] : 0)
+#define safe_bt(a) (uintptr_t)(a<cnt ? bt[a] : NULL)
 	kernel_debug(debugid, data, size, safe_bt(i), safe_bt(i + 1), 0);
 	kernel_debug(debugid2, safe_bt(i + 2), safe_bt(i + 3), safe_bt(i + 4), safe_bt(i + 5), 0);
 }
@@ -236,7 +239,7 @@ pad:
 	frame = frame_index;
 
 	for (; frame_index < maxAddrs; frame_index++) {
-		bt[frame_index] = (void *) 0;
+		bt[frame_index] = (void *) NULL;
 	}
 #elif __arm__ || __arm64__
 	uint32_t i = 0;
@@ -270,7 +273,12 @@ pad:
 		}
 
 		// No need to use copyin as this is always a kernel address, see check above
+#if defined(HAS_APPLE_PAC)
+		/* return addresses on stack signed by arm64e ABI */
+		bt[i] = ptrauth_strip((void*)frameb[1], ptrauth_key_return_address); // link register
+#else
 		bt[i] = (void*)frameb[1]; // link register
+#endif
 		fp = frameb[0];
 	} while (++i < maxAddrs);
 	frame = i;

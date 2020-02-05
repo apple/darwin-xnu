@@ -243,9 +243,6 @@ struct socket {
 	pid_t           last_pid;       /* pid of most recent accessor */
 	u_int64_t       last_upid;      /* upid of most recent accessor */
 
-	struct mbuf     *so_temp;       /* Holding area for outbound frags */
-	/* Plug-in support - make the socket interface overridable */
-	struct mbuf     *so_tail;
 	struct socket_filter_entry *so_filt;    /* NKE hook */
 	u_int32_t       so_flags;               /* Flags */
 #define SOF_NOSIGPIPE           0x00000001
@@ -284,7 +281,7 @@ struct socket {
 #define SOF_CONTENT_FILTER      0x20000000 /* Content filter enabled */
 
 	uint32_t        so_upcallusecount; /* number of upcalls in progress */
-	int             so_usecount; /* refcounting of socket use */;
+	int             so_usecount;    /* refcounting of socket use */
 	int             so_retaincnt;
 	u_int32_t       so_filteruse;   /* usecount for the socket filters */
 	u_int16_t       so_traffic_class;
@@ -355,8 +352,14 @@ struct socket {
 #define SOF1_IN_KERNEL_SOCKET           0x00100000 /* Socket created in kernel via KPI */
 #define SOF1_CONNECT_COUNTED            0x00200000 /* connect() call was counted */
 #define SOF1_DNS_COUNTED                0x00400000 /* socket counted to send DNS queries */
+#define SOF1_MPKL_SEND_INFO             0x00800000 /* SO_MPKL_SEND_INFO option is set */
+#define SOF1_INBOUND                    0x01000000 /* Created via a passive listener */
 
 	u_int64_t       so_extended_bk_start;
+
+	u_int8_t        so_log_seqn;    /* Multi-layer Packet Logging rolling sequence number */
+	uuid_t          so_mpkl_send_uuid;
+	uint8_t         so_mpkl_send_proto;
 };
 
 /* Control message accessor in mbufs */
@@ -617,12 +620,14 @@ struct kextcb {
 #define SO_FILT_HINT_MUSTRST            0x00020000      /* must send RST and close */
 #define SO_FILT_HINT_MPCANTRCVMORE      0x00040000      /* MPTCP DFIN Received */
 #define SO_FILT_HINT_NOTIFY_ACK         0x00080000      /* Notify Acknowledgement */
+#define SO_FILT_HINT_MP_SUB_ERROR       0x00100000      /* Error happend on subflow */
 
 #define SO_FILT_HINT_BITS \
 	"\020\1LOCKED\2CONNRESET\3CANTRCVMORE\4CANTSENDMORE\5TIMEOUT"   \
 	"\6NOSRCADDR\7IFDENIED\10SUSPEND\11RESUME\12KEEPALIVE\13AWTIMO" \
 	"\14ARTIMO\15CONNECTED\16DISCONNECTED\17CONNINFO_UPDATED"       \
-	"\20MPFAILOVER\21MPSTATUS\22MUSTRST\23MPCANTRCVMORE\24NOTIFYACK"
+	"\20MPFAILOVER\21MPSTATUS\22MUSTRST\23MPCANTRCVMORE\24NOTIFYACK"\
+	"\25MPSUBERROR"
 
 /* Mask for hints that have corresponding kqueue events */
 #define SO_FILT_HINT_EV                                                 \
@@ -703,6 +708,8 @@ struct so_procinfo {
 	uuid_t          spi_uuid;
 	uuid_t          spi_euuid;
 	int             spi_delegated;
+	char            spi_proc_name[MAXCOMLEN + 1];
+	char            spi_e_proc_name[MAXCOMLEN + 1];
 };
 
 extern u_int32_t sb_max;
@@ -726,11 +733,6 @@ extern u_int32_t net_io_policy_uuid;
 #endif /* CONFIG_PROC_UUID_POLICY */
 
 extern struct soextbkidlestat soextbkidlestat;
-
-struct net_qos_dscp_map {
-	u_int8_t        sotc_to_dscp[SO_TC_MAX];
-	u_int8_t        netsvctype_to_dscp[_NET_SERVICE_TYPE_COUNT];
-};
 
 #endif /* BSD_KERNEL_PRIVATE */
 
@@ -777,9 +779,12 @@ extern struct socket *sonewconn(struct socket *head, int connstatus,
     const struct sockaddr *from);
 extern int sopoll(struct socket *so, int events, struct ucred *cred, void *wql);
 extern int sooptcopyin(struct sockopt *sopt, void *data, size_t len,
-    size_t minlen);
-extern int sooptcopyout(struct sockopt *sopt, void *data, size_t len);
-extern int soopt_cred_check(struct socket *so, int priv, boolean_t allow_root);
+    size_t minlen)
+__attribute__ ((warn_unused_result));
+extern int sooptcopyout(struct sockopt *sopt, void *data, size_t len)
+__attribute__ ((warn_unused_result));
+extern int soopt_cred_check(struct socket *so, int priv, boolean_t allow_root,
+    boolean_t ignore_delegate);
 extern int soreceive(struct socket *so, struct sockaddr **paddr,
     struct uio *uio, struct mbuf **mp0, struct mbuf **controlp, int *flagsp);
 extern int soreserve(struct socket *so, u_int32_t sndcc, u_int32_t rcvcc);
@@ -838,7 +843,6 @@ extern struct mbuf **sbcreatecontrol_mbuf(caddr_t p, int size, int type,
     int level, struct mbuf **m);
 extern void sbdrop(struct sockbuf *sb, int len);
 extern void sbdroprecord(struct sockbuf *sb);
-extern int sbinsertoob(struct sockbuf *sb, struct mbuf *m0);
 extern void sbrelease(struct sockbuf *sb);
 extern int sbreserve(struct sockbuf *sb, u_int32_t cc);
 extern void sbtoxsockbuf(struct sockbuf *sb, struct xsockbuf *xsb);
@@ -878,7 +882,7 @@ extern int sodisconnectx(struct socket *so, sae_associd_t, sae_connid_t);
 extern int sodisconnectxlocked(struct socket *so, sae_associd_t, sae_connid_t);
 extern void soevupcall(struct socket *, u_int32_t);
 /* flags for socreate_internal */
-#define SOCF_ASYNC      0x1     /* non-blocking socket */
+#define SOCF_MPTCP      0x1     /* MPTCP-subflow */
 extern int socreate_internal(int dom, struct socket **aso, int type, int proto,
     struct proc *, uint32_t, struct proc *);
 extern int socreate(int dom, struct socket **aso, int type, int proto);
@@ -906,6 +910,7 @@ extern int soissrcbesteffort(struct socket *so);
 extern void soclearfastopen(struct socket *so);
 extern int solisten(struct socket *so, int backlog);
 extern struct socket *sodropablereq(struct socket *head);
+extern lck_mtx_t *socket_getlock(struct socket *so, int flags);
 extern void socket_lock(struct socket *so, int refcount);
 extern void socket_lock_assert_owned(struct socket *so);
 extern int socket_try_lock(struct socket *so);
@@ -915,7 +920,7 @@ extern const char *solockhistory_nr(struct socket *);
 extern void soevent(struct socket *so, long hint);
 extern void sorflush(struct socket *so);
 extern void sowflush(struct socket *so);
-extern void sowakeup(struct socket *so, struct sockbuf *sb);
+extern void sowakeup(struct socket *so, struct sockbuf *sb, struct socket *so2);
 extern int soioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p);
 extern int sogetoptlock(struct socket *so, struct sockopt *sopt, int);
 extern int sosetoptlock(struct socket *so, struct sockopt *sopt, int);
@@ -936,8 +941,7 @@ extern int sosendcheck(struct socket *, struct sockaddr *, user_ssize_t,
 extern int soo_ioctl(struct fileproc *, u_long, caddr_t, vfs_context_t);
 extern int soo_stat(struct socket *, void *, int);
 extern int soo_select(struct fileproc *, int, void *, vfs_context_t);
-extern int soo_kqfilter(struct fileproc *, struct knote *,
-    struct kevent_internal_s *kev, vfs_context_t);
+extern int soo_kqfilter(struct fileproc *, struct knote *, struct kevent_qos_s *);
 
 /* Service class flags used for setting service class on a packet */
 #define PKT_SCF_IPV6            0x00000001      /* IPv6 packet */
@@ -971,8 +975,8 @@ extern int so_set_opportunistic(struct socket *, int);
 extern int so_get_opportunistic(struct socket *);
 extern int so_set_recv_anyif(struct socket *, int);
 extern int so_get_recv_anyif(struct socket *);
-extern int so_set_effective_pid(struct socket *, int, struct proc *);
-extern int so_set_effective_uuid(struct socket *, uuid_t, struct proc *);
+extern int so_set_effective_pid(struct socket *so, int epid, struct proc *p, boolean_t check_cred);
+extern int so_set_effective_uuid(struct socket *so, uuid_t euuid, struct proc *p, boolean_t check_cred);
 extern int so_set_restrictions(struct socket *, uint32_t);
 extern uint32_t so_get_restrictions(struct socket *);
 extern void socket_tclass_init(void);
@@ -996,14 +1000,9 @@ extern void mptcp_fallback_sbdrop(struct socket *so, struct mbuf *m, int len);
 extern void mptcp_preproc_sbdrop(struct socket *, struct mbuf *, unsigned int);
 extern void mptcp_postproc_sbdrop(struct mbuf *, u_int64_t, u_int32_t,
     u_int32_t);
-extern int mptcp_adj_rmap(struct socket *so, struct mbuf *m, int off,
-    uint64_t dsn, uint32_t rseq, uint16_t dlen);
 
 extern void netpolicy_post_msg(uint32_t, struct netpolicy_event_data *,
     uint32_t);
-extern void socket_post_kev_msg(uint32_t, struct kev_socket_event_data *,
-    uint32_t);
-extern void socket_post_kev_msg_closed(struct socket *);
 /*
  * Socket operation routines.
  * These routines are called by the routines in

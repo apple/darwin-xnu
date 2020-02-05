@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -320,6 +320,20 @@ extern kern_return_t mach_voucher_extract_attr_recipe_trap(
 	mach_voucher_attr_raw_recipe_t recipe,
 	mach_msg_type_number_t *recipe_size);
 
+extern kern_return_t _kernelrpc_mach_port_type_trap(
+	ipc_space_t task,
+	mach_port_name_t name,
+	mach_port_type_t *ptype);
+
+extern kern_return_t _kernelrpc_mach_port_request_notification_trap(
+	ipc_space_t task,
+	mach_port_name_t name,
+	mach_msg_id_t msgid,
+	mach_port_mscount_t sync,
+	mach_port_name_t notify,
+	mach_msg_type_name_t notifyPoly,
+	mach_port_name_t *previous);
+
 /*
  *	Obsolete interfaces.
  */
@@ -337,6 +351,11 @@ extern kern_return_t task_name_for_pid(
 extern kern_return_t pid_for_task(
 	mach_port_name_t t,
 	int *x);
+
+extern kern_return_t debug_control_port_for_pid(
+	mach_port_name_t target_tport,
+	int pid,
+	mach_port_name_t *t);
 
 #else   /* KERNEL */
 
@@ -370,7 +389,7 @@ extern kern_return_t pid_for_task(
 #endif
 
 #define PAD_ARG_(arg_type, arg_name) \
-  char arg_name##_l_[PADL_(arg_type)]; arg_type arg_name; char arg_name##_r_[PADR_(arg_type)];
+  char arg_name##_l_[PADL_(arg_type)]; arg_type arg_name; char arg_name##_r_[PADR_(arg_type)]
 
 /*
  * To support 32-bit clients as well as 64-bit clients, argument
@@ -502,6 +521,14 @@ struct pid_for_task_args {
 };
 extern kern_return_t pid_for_task(
 	struct pid_for_task_args *args);
+
+struct debug_control_port_for_pid_args {
+	PAD_ARG_(mach_port_name_t, target_tport);
+	PAD_ARG_(int, pid);
+	PAD_ARG_(user_addr_t, t);
+};
+extern kern_return_t debug_control_port_for_pid(
+	struct debug_control_port_for_pid_args *args);
 
 struct macx_swapon_args {
 	PAD_ARG_(uint64_t, filename);
@@ -813,6 +840,26 @@ struct mach_voucher_extract_attr_recipe_args {
 
 extern kern_return_t mach_voucher_extract_attr_recipe_trap(
 	struct mach_voucher_extract_attr_recipe_args *args);
+
+struct _kernelrpc_mach_port_type_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(mach_port_right_t, name);
+	PAD_ARG_(user_addr_t, ptype);
+};
+extern kern_return_t _kernelrpc_mach_port_type_trap(
+	struct _kernelrpc_mach_port_type_args *args);
+
+struct _kernelrpc_mach_port_request_notification_args {
+	PAD_ARG_(mach_port_name_t, target);
+	PAD_ARG_(mach_port_name_t, name);
+	PAD_ARG_(mach_msg_id_t, msgid);
+	PAD_ARG_(mach_port_mscount_t, sync);
+	PAD_ARG_(mach_port_name_t, notify);
+	PAD_ARG_(mach_msg_type_name_t, notifyPoly);
+	PAD_ARG_(user_addr_t, previous);
+};
+extern kern_return_t _kernelrpc_mach_port_request_notification_trap(
+	struct _kernelrpc_mach_port_request_notification_args *args);
 
 
 /* not published to LP64 clients yet */

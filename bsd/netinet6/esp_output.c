@@ -79,12 +79,15 @@
 
 #include <net/if.h>
 #include <net/route.h>
+#include <net/multi_layer_pkt_log.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
 #include <netinet/in_var.h>
 #include <netinet/udp.h> /* for nat traversal */
+#include <netinet/tcp.h>
+#include <netinet/in_tclass.h>
 
 #if INET6
 #include <netinet/ip6.h>
@@ -184,7 +187,7 @@ esp_hdrsiz(__unused struct ipsecrequest *isr)
 		} else {
 			/* RFC 2406 */
 			aalgo = ah_algorithm_lookup(sav->alg_auth);
-			if (aalgo && sav->replay && sav->key_auth) {
+			if (aalgo && sav->replay[0] != NULL && sav->key_auth) {
 				authlen = (aalgo->sumsiz)(sav);
 			} else {
 				authlen = 0;
@@ -251,7 +254,11 @@ esp_output(
 	struct esp *esp;
 	struct esptail *esptail;
 	const struct esp_algorithm *algo;
+	struct tcphdr th = {};
 	u_int32_t spi;
+	u_int32_t seq;
+	u_int32_t inner_payload_len = 0;
+	u_int8_t inner_protocol = 0;
 	u_int8_t nxt = 0;
 	size_t plen;    /*payload length to be encrypted*/
 	size_t espoff;
@@ -263,7 +270,7 @@ esp_output(
 	struct ipsecstat *stat;
 	struct udphdr *udp = NULL;
 	int     udp_encapsulate = (sav->flags & SADB_X_EXT_NATT && (af == AF_INET || af == AF_INET6) &&
-	    (esp_udp_encap_port & 0xFFFF) != 0);
+	    ((esp_udp_encap_port & 0xFFFF) != 0 || sav->natt_encapsulated_src_port != 0));
 
 	KERNEL_DEBUG(DBG_FNC_ESPOUT | DBG_FUNC_START, sav->ivlen, 0, 0, 0, 0);
 	switch (af) {
@@ -285,8 +292,35 @@ esp_output(
 		return 0;       /* no change at all */
 	}
 
+	mbuf_traffic_class_t traffic_class = 0;
+	if ((sav->flags2 & SADB_X_EXT_SA2_SEQ_PER_TRAFFIC_CLASS) ==
+	    SADB_X_EXT_SA2_SEQ_PER_TRAFFIC_CLASS) {
+		u_int8_t dscp = 0;
+		switch (af) {
+#if INET
+		case AF_INET:
+		{
+			struct ip *ip = mtod(m, struct ip *);
+			dscp = ip->ip_tos >> IPTOS_DSCP_SHIFT;
+			break;
+		}
+#endif /*INET*/
+#if INET6
+		case AF_INET6:
+		{
+			struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
+			dscp = (ntohl(ip6->ip6_flow) & IP6FLOW_DSCP_MASK) >> IP6FLOW_DSCP_SHIFT;
+			break;
+		}
+#endif /*INET6*/
+		default:
+			panic("esp_output: should not reach here");
+		}
+		traffic_class = rfc4594_dscp_to_tc(dscp);
+	}
+
 	/* some sanity check */
-	if ((sav->flags & SADB_X_EXT_OLD) == 0 && !sav->replay) {
+	if ((sav->flags & SADB_X_EXT_OLD) == 0 && sav->replay[traffic_class] == NULL) {
 		switch (af) {
 #if INET
 		case AF_INET:
@@ -396,6 +430,58 @@ esp_output(
 			hlen = sizeof(*ip6);
 			break;
 #endif
+		}
+
+		/* grab info for packet logging */
+		struct secashead *sah = sav->sah;
+		if (net_mpklog_enabled &&
+		    sah != NULL && sah->ipsec_if != NULL) {
+			ifnet_t ifp = sah->ipsec_if;
+
+			if ((ifp->if_xflags & IFXF_MPK_LOG) == IFXF_MPK_LOG) {
+				size_t iphlen = 0;
+
+				if (sav->sah->saidx.mode == IPSEC_MODE_TUNNEL) {
+					struct ip *inner_ip = mtod(md, struct ip *);
+					if (IP_VHL_V(inner_ip->ip_vhl) == IPVERSION) {
+#ifdef _IP_VHL
+						iphlen = IP_VHL_HL(inner_ip->ip_vhl) << 2;
+#else
+						iphlen = inner_ip->ip_hl << 2;
+#endif
+						inner_protocol = inner_ip->ip_p;
+					} else if (IP_VHL_V(inner_ip->ip_vhl) == IPV6_VERSION) {
+						struct ip6_hdr *inner_ip6 = mtod(md, struct ip6_hdr *);
+						iphlen = sizeof(struct ip6_hdr);
+						inner_protocol = inner_ip6->ip6_nxt;
+					}
+
+					if (inner_protocol == IPPROTO_TCP) {
+						if ((int)(iphlen + sizeof(th)) <=
+						    (m->m_pkthdr.len - m->m_len)) {
+							m_copydata(md, iphlen, sizeof(th), (u_int8_t *)&th);
+						}
+
+						inner_payload_len = m->m_pkthdr.len - m->m_len - iphlen - (th.th_off << 2);
+					}
+				} else {
+					iphlen = hlen;
+					if (af == AF_INET) {
+						inner_protocol = ip->ip_p;
+					} else if (af == AF_INET6) {
+						inner_protocol = ip6->ip6_nxt;
+					}
+
+					if (inner_protocol == IPPROTO_TCP) {
+						if ((int)(iphlen + sizeof(th)) <=
+						    m->m_pkthdr.len) {
+							m_copydata(m, iphlen, sizeof(th), (u_int8_t *)&th);
+						}
+
+						inner_payload_len = m->m_pkthdr.len - iphlen - (th.th_off << 2);
+					}
+				}
+			}
 		}
 
 		/* make the packet over-writable */
@@ -514,7 +600,7 @@ esp_output(
 	if ((sav->flags & SADB_X_EXT_OLD) == 0) {
 		struct newesp *nesp;
 		nesp = (struct newesp *)esp;
-		if (sav->replay->count == ~0) {
+		if (sav->replay[traffic_class]->count == sav->replay[traffic_class]->lastseq) {
 			if ((sav->flags & SADB_X_EXT_CYCSEQ) == 0) {
 				/* XXX Is it noisy ? */
 				ipseclog((LOG_WARNING,
@@ -527,13 +613,14 @@ esp_output(
 			}
 		}
 		lck_mtx_lock(sadb_mutex);
-		sav->replay->count++;
+		sav->replay[traffic_class]->count++;
 		lck_mtx_unlock(sadb_mutex);
 		/*
 		 * XXX sequence number must not be cycled, if the SA is
 		 * installed by IKE daemon.
 		 */
-		nesp->esp_seq = htonl(sav->replay->count);
+		nesp->esp_seq = htonl(sav->replay[traffic_class]->count);
+		seq = sav->replay[traffic_class]->count;
 	}
 
 	{
@@ -665,9 +752,13 @@ esp_output(
 			*nexthdrp = IPPROTO_UDP;
 
 			/* Fill out the UDP header */
-			udp->uh_sport = ntohs((u_short)esp_udp_encap_port);
-			udp->uh_dport = ntohs(sav->remote_ike_port);
-//		udp->uh_len set later, after all length tweaks are complete
+			if (sav->natt_encapsulated_src_port != 0) {
+				udp->uh_sport = (u_short)sav->natt_encapsulated_src_port;
+			} else {
+				udp->uh_sport = htons((u_short)esp_udp_encap_port);
+			}
+			udp->uh_dport = htons(sav->remote_ike_port);
+			// udp->uh_len set later, after all length tweaks are complete
 			udp->uh_sum = 0;
 
 			/* Update last sent so we know if we need to send keepalive */
@@ -753,7 +844,7 @@ esp_output(
 		goto fill_icv;
 	}
 
-	if (!sav->replay) {
+	if (!sav->replay[traffic_class]) {
 		goto noantireplay;
 	}
 	if (!sav->key_auth) {
@@ -863,6 +954,17 @@ fill_icv:
 	}
 
 noantireplay:
+	if (net_mpklog_enabled && sav->sah != NULL &&
+	    sav->sah->ipsec_if != NULL &&
+	    (sav->sah->ipsec_if->if_xflags & IFXF_MPK_LOG) &&
+	    inner_protocol == IPPROTO_TCP) {
+		MPKL_ESP_OUTPUT_TCP(esp_mpkl_log_object,
+		    ntohl(spi), seq,
+		    ntohs(th.th_sport), ntohs(th.th_dport),
+		    ntohl(th.th_seq), ntohl(th.th_ack),
+		    th.th_flags, inner_payload_len);
+	}
+
 	lck_mtx_lock(sadb_mutex);
 	if (!m) {
 		ipseclog((LOG_ERR,

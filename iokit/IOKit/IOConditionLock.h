@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -40,7 +40,7 @@
 
 class IOConditionLock : public OSObject
 {
-	OSDeclareDefaultStructors(IOConditionLock)
+	OSDeclareDefaultStructors(IOConditionLock);
 
 private:
 	IOLock *            cond_interlock;     // condition var Simple lock

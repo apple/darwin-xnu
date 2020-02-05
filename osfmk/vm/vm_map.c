@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -102,7 +102,6 @@
 #include <ipc/ipc_port.h>
 #include <kern/sched_prim.h>
 #include <kern/misc_protos.h>
-#include <kern/xpr.h>
 
 #include <mach/vm_map_server.h>
 #include <mach/mach_host_server.h>
@@ -140,6 +139,8 @@ int vm_map_debug_fourk = 0;
 
 SECURITY_READ_ONLY_LATE(int) vm_map_executable_immutable = 1;
 int vm_map_executable_immutable_verbose = 0;
+
+os_refgrp_decl(static, map_refgrp, "vm_map", NULL);
 
 extern u_int32_t random(void);  /* from <libkern/libkern.h> */
 /* Internal prototypes
@@ -397,6 +398,7 @@ boolean_t _vmec_reserved = (NEW)->from_reserved_zone;   \
 	(NEW)->vme_resilient_codesign = FALSE; \
 	(NEW)->vme_resilient_media = FALSE;     \
 	(NEW)->vme_atomic = FALSE;      \
+	(NEW)->vme_no_copy_on_read = FALSE;     \
 MACRO_END
 
 #define vm_map_entry_copy_full(NEW, OLD)                 \
@@ -405,6 +407,43 @@ boolean_t _vmecf_reserved = (NEW)->from_reserved_zone;  \
 (*(NEW) = *(OLD));                                      \
 (NEW)->from_reserved_zone = _vmecf_reserved;                    \
 MACRO_END
+
+/*
+ * Normal lock_read_to_write() returns FALSE/0 on failure.
+ * These functions evaluate to zero on success and non-zero value on failure.
+ */
+__attribute__((always_inline))
+int
+vm_map_lock_read_to_write(vm_map_t map)
+{
+	if (lck_rw_lock_shared_to_exclusive(&(map)->lock)) {
+		DTRACE_VM(vm_map_lock_upgrade);
+		return 0;
+	}
+	return 1;
+}
+
+__attribute__((always_inline))
+boolean_t
+vm_map_try_lock(vm_map_t map)
+{
+	if (lck_rw_try_lock_exclusive(&(map)->lock)) {
+		DTRACE_VM(vm_map_lock_w);
+		return TRUE;
+	}
+	return FALSE;
+}
+
+__attribute__((always_inline))
+boolean_t
+vm_map_try_lock_read(vm_map_t map)
+{
+	if (lck_rw_try_lock_shared(&(map)->lock)) {
+		DTRACE_VM(vm_map_lock_r);
+		return TRUE;
+	}
+	return FALSE;
+}
 
 /*
  *	Decide if we want to allow processes to execute from their data or stack areas.
@@ -640,9 +679,6 @@ vm_map_apple_protected(
 	 * properly page-aligned) or a "fourk_pager", itself backed by a
 	 * vnode pager (if 4K-aligned but not page-aligned).
 	 */
-#else /* __arm64__ */
-	assert(start_aligned == start);
-	assert(end_aligned == end);
 #endif /* __arm64__ */
 
 	map_addr = start_aligned;
@@ -1129,10 +1165,10 @@ vm_map_create_options(
 	result->size = 0;
 	result->user_wire_limit = MACH_VM_MAX_ADDRESS;  /* default limit is unlimited */
 	result->user_wire_size  = 0;
-#if __x86_64__
+#if !CONFIG_EMBEDDED
 	result->vmmap_high_start = 0;
-#endif /* __x86_64__ */
-	result->map_refcnt = 1;
+#endif
+	os_ref_init_count(&result->map_refcnt, &map_refgrp, 1);
 #if     TASK_SWAPPER
 	result->res_count = 1;
 	result->sw_state = MAP_SW_IN;
@@ -1230,7 +1266,7 @@ _vm_map_entry_create(
 #if     MAP_ENTRY_CREATION_DEBUG
 	entry->vme_creation_maphdr = map_header;
 	backtrace(&entry->vme_creation_bt[0],
-	    (sizeof(entry->vme_creation_bt) / sizeof(uintptr_t)));
+	    (sizeof(entry->vme_creation_bt) / sizeof(uintptr_t)), NULL);
 #endif
 	return entry;
 }
@@ -1310,7 +1346,7 @@ vm_map_res_reference(vm_map_t map)
 {
 	/* assert map is locked */
 	assert(map->res_count >= 0);
-	assert(map->map_refcnt >= map->res_count);
+	assert(os_ref_get_count(&map->map_refcnt) >= map->res_count);
 	if (map->res_count == 0) {
 		lck_mtx_unlock(&map->s_lock);
 		vm_map_lock(map);
@@ -1337,8 +1373,8 @@ vm_map_reference_swap(vm_map_t map)
 	assert(map != VM_MAP_NULL);
 	lck_mtx_lock(&map->s_lock);
 	assert(map->res_count >= 0);
-	assert(map->map_refcnt >= map->res_count);
-	map->map_refcnt++;
+	assert(os_ref_get_count(&map->map_refcnt) >= map->res_count);
+	os_ref_retain_locked(&map->map_refcnt);
 	vm_map_res_reference(map);
 	lck_mtx_unlock(&map->s_lock);
 }
@@ -1364,7 +1400,7 @@ vm_map_res_deallocate(vm_map_t map)
 		vm_map_unlock(map);
 		lck_mtx_lock(&map->s_lock);
 	}
-	assert(map->map_refcnt >= map->res_count);
+	assert(os_ref_get_count(&map->map_refcnt) >= map->res_count);
 }
 #endif  /* MACH_ASSERT && TASK_SWAPPER */
 
@@ -2093,6 +2129,10 @@ vm_memory_malloc_no_cow(
 {
 	uint64_t alias_mask;
 
+	if (alias > 63) {
+		return FALSE;
+	}
+
 	alias_mask = 1ULL << alias;
 	if (alias_mask & vm_memory_malloc_no_cow_mask) {
 		return TRUE;
@@ -2148,6 +2188,7 @@ vm_map_enter(
 	boolean_t               no_cache = ((flags & VM_FLAGS_NO_CACHE) != 0);
 	boolean_t               is_submap = vmk_flags.vmkf_submap;
 	boolean_t               permanent = vmk_flags.vmkf_permanent;
+	boolean_t               no_copy_on_read = vmk_flags.vmkf_no_copy_on_read;
 	boolean_t               entry_for_jit = vmk_flags.vmkf_map_jit;
 	boolean_t               iokit_acct = vmk_flags.vmkf_iokit_acct;
 	boolean_t               resilient_codesign = ((flags & VM_FLAGS_RESILIENT_CODESIGN) != 0);
@@ -2241,10 +2282,29 @@ vm_map_enter(
 		}
 	}
 
-	if (resilient_codesign || resilient_media) {
+	if (resilient_codesign) {
+		assert(!is_submap);
 		if ((cur_protection & (VM_PROT_WRITE | VM_PROT_EXECUTE)) ||
 		    (max_protection & (VM_PROT_WRITE | VM_PROT_EXECUTE))) {
 			return KERN_PROTECTION_FAILURE;
+		}
+	}
+
+	if (resilient_media) {
+		assert(!is_submap);
+//		assert(!needs_copy);
+		if (object != VM_OBJECT_NULL &&
+		    !object->internal) {
+			/*
+			 * This mapping is directly backed by an external
+			 * memory manager (e.g. a vnode pager for a file):
+			 * we would not have any safe place to inject
+			 * a zero-filled page if an actual page is not
+			 * available, without possibly impacting the actual
+			 * contents of the mapped object (e.g. the file),
+			 * so we can't provide any media resiliency here.
+			 */
+			return KERN_INVALID_ARGUMENT;
 		}
 	}
 
@@ -2285,7 +2345,15 @@ vm_map_enter(
 #endif  /* __arm__ */
 		effective_max_offset = 0x00000000FFFFF000ULL;
 	} else {
+#if     !defined(CONFIG_EMBEDDED)
+		if (__improbable(vmk_flags.vmkf_32bit_map_va)) {
+			effective_max_offset = MIN(map->max_offset, 0x00000000FFFFF000ULL);
+		} else {
+			effective_max_offset = map->max_offset;
+		}
+#else
 		effective_max_offset = map->max_offset;
+#endif
 	}
 
 	if (size == 0 ||
@@ -2392,13 +2460,13 @@ StartAgain:;
 			}
 			start = *address;
 		}
-#if __x86_64__
+#if !CONFIG_EMBEDDED
 		else if ((start == 0 || start == vm_map_min(map)) &&
 		    !map->disable_vmentry_reuse &&
 		    map->vmmap_high_start != 0) {
 			start = map->vmmap_high_start;
 		}
-#endif /* __x86_64__ */
+#endif
 
 
 		/*
@@ -2815,6 +2883,7 @@ StartAgain:;
 	    (!entry->vme_resilient_codesign) &&
 	    (!entry->vme_resilient_media) &&
 	    (!entry->vme_atomic) &&
+	    (entry->vme_no_copy_on_read == no_copy_on_read) &&
 
 	    ((entry->vme_end - entry->vme_start) + size <=
 	    (user_alias == VM_MEMORY_REALLOC ?
@@ -2888,6 +2957,7 @@ StartAgain:;
 				0,
 				no_cache,
 				permanent,
+				no_copy_on_read,
 				superpage_size,
 				clear_map_aligned,
 				is_submap,
@@ -2903,8 +2973,8 @@ StartAgain:;
 			}
 
 			if (resilient_media &&
-			    !((cur_protection | max_protection) &
-			    (VM_PROT_WRITE | VM_PROT_EXECUTE))) {
+			    (object == VM_OBJECT_NULL ||
+			    object->internal)) {
 				new_entry->vme_resilient_media = TRUE;
 			}
 
@@ -2955,13 +3025,13 @@ StartAgain:;
 				assert(!new_entry->iokit_acct);
 				submap = (vm_map_t) object;
 				submap_is_64bit = vm_map_is_64bit(submap);
-				use_pmap = (user_alias == VM_MEMORY_SHARED_PMAP);
+				use_pmap = vmk_flags.vmkf_nested_pmap;
 #ifndef NO_NESTED_PMAP
 				if (use_pmap && submap->pmap == NULL) {
 					ledger_t ledger = map->pmap->ledger;
 					/* we need a sub pmap to nest... */
-					submap->pmap = pmap_create(ledger, 0,
-					    submap_is_64bit);
+					submap->pmap = pmap_create_options(ledger, 0,
+					    submap_is_64bit ? PMAP_CREATE_64BIT : 0);
 					if (submap->pmap == NULL) {
 						/* let's proceed without nesting... */
 					}
@@ -3264,6 +3334,7 @@ vm_map_enter_fourk(
 	boolean_t               no_cache = ((flags & VM_FLAGS_NO_CACHE) != 0);
 	boolean_t               is_submap = vmk_flags.vmkf_submap;
 	boolean_t               permanent = vmk_flags.vmkf_permanent;
+	boolean_t               no_copy_on_read = vmk_flags.vmkf_permanent;
 	boolean_t               entry_for_jit = vmk_flags.vmkf_map_jit;
 //	boolean_t		iokit_acct = vmk_flags.vmkf_iokit_acct;
 	unsigned int            superpage_size = ((flags & VM_FLAGS_SUPERPAGE_MASK) >> VM_FLAGS_SUPERPAGE_SHIFT);
@@ -3532,7 +3603,8 @@ vm_map_enter_fourk(
 	    copy_object,
 	    0,                         /* offset */
 	    FALSE,                         /* needs_copy */
-	    FALSE, FALSE,
+	    FALSE,
+	    FALSE,
 	    cur_protection, max_protection,
 	    VM_BEHAVIOR_DEFAULT,
 	    ((entry_for_jit)
@@ -3541,6 +3613,7 @@ vm_map_enter_fourk(
 	    0,
 	    no_cache,
 	    permanent,
+	    no_copy_on_read,
 	    superpage_size,
 	    clear_map_aligned,
 	    is_submap,
@@ -5194,7 +5267,7 @@ vm_map_clip_unnest(
 	pmap_unnest(map->pmap,
 	    entry->vme_start,
 	    entry->vme_end - entry->vme_start);
-	if ((map->mapped_in_other_pmaps) && (map->map_refcnt)) {
+	if ((map->mapped_in_other_pmaps) && os_ref_get_count(&map->map_refcnt) != 0) {
 		/* clean up parent map/maps */
 		vm_map_submap_pmap_clean(
 			map, entry->vme_start,
@@ -5599,8 +5672,8 @@ vm_map_submap(
 			/* nest if platform code will allow */
 			if (submap->pmap == NULL) {
 				ledger_t ledger = map->pmap->ledger;
-				submap->pmap = pmap_create(ledger,
-				    (vm_map_size_t) 0, FALSE);
+				submap->pmap = pmap_create_options(ledger,
+				    (vm_map_size_t) 0, 0);
 				if (submap->pmap == PMAP_NULL) {
 					vm_map_unlock(map);
 					return KERN_NO_SPACE;
@@ -5651,10 +5724,6 @@ vm_map_protect(
 	vm_prot_t                       new_max;
 	int                             pmap_options = 0;
 	kern_return_t                   kr;
-
-	XPR(XPR_VM_MAP,
-	    "vm_map_protect, 0x%X start 0x%X end 0x%X, new 0x%X %d",
-	    map, start, end, new_prot, set_max);
 
 	if (new_prot & VM_PROT_COPY) {
 		vm_map_offset_t         new_start;
@@ -7349,8 +7418,9 @@ vm_map_submap_pmap_clean(
 				VME_SUBMAP(entry),
 				VME_OFFSET(entry));
 		} else {
-			if ((map->mapped_in_other_pmaps) && (map->map_refcnt)
-			    && (VME_OBJECT(entry) != NULL)) {
+			if (map->mapped_in_other_pmaps &&
+			    os_ref_get_count(&map->map_refcnt) != 0 &&
+			    VME_OBJECT(entry) != NULL) {
 				vm_object_pmap_protect_options(
 					VME_OBJECT(entry),
 					(VME_OFFSET(entry) +
@@ -7385,8 +7455,9 @@ vm_map_submap_pmap_clean(
 				VME_SUBMAP(entry),
 				VME_OFFSET(entry));
 		} else {
-			if ((map->mapped_in_other_pmaps) && (map->map_refcnt)
-			    && (VME_OBJECT(entry) != NULL)) {
+			if (map->mapped_in_other_pmaps &&
+			    os_ref_get_count(&map->map_refcnt) != 0 &&
+			    VME_OBJECT(entry) != NULL) {
 				vm_object_pmap_protect_options(
 					VME_OBJECT(entry),
 					VME_OFFSET(entry),
@@ -7479,16 +7550,23 @@ vm_map_guard_exception(
 	unsigned int guard_type = GUARD_TYPE_VIRT_MEMORY;
 	unsigned int target = 0; /* should we pass in pid associated with map? */
 	mach_exception_data_type_t subcode = (uint64_t)gap_start;
+	boolean_t fatal = FALSE;
+
+	task_t task = current_task();
 
 	/* Can't deliver exceptions to kernel task */
-	if (current_task() == kernel_task) {
+	if (task == kernel_task) {
 		return;
 	}
 
 	EXC_GUARD_ENCODE_TYPE(code, guard_type);
 	EXC_GUARD_ENCODE_FLAVOR(code, reason);
 	EXC_GUARD_ENCODE_TARGET(code, target);
-	thread_guard_violation(current_thread(), code, subcode);
+
+	if (task->task_exc_guard & TASK_EXC_GUARD_VM_FATAL) {
+		fatal = TRUE;
+	}
+	thread_guard_violation(current_thread(), code, subcode, fatal);
 }
 
 /*
@@ -7518,8 +7596,8 @@ vm_map_delete(
 	unsigned int            last_timestamp = ~0; /* unlikely value */
 	int                     interruptible;
 	vm_map_offset_t         gap_start;
-	vm_map_offset_t         save_start = start;
-	vm_map_offset_t         save_end = end;
+	__unused vm_map_offset_t save_start = start;
+	__unused vm_map_offset_t save_end = end;
 	const vm_map_offset_t   FIND_GAP = 1;   /* a not page aligned value */
 	const vm_map_offset_t   GAPS_OK = 2;    /* a different not page aligned value */
 
@@ -7609,7 +7687,7 @@ vm_map_delete(
 			SAVE_HINT_MAP_WRITE(map, entry->vme_prev);
 		} else {
 			if (map->pmap == kernel_pmap &&
-			    map->map_refcnt != 0) {
+			    os_ref_get_count(&map->map_refcnt) != 0) {
 				panic("vm_map_delete(%p,0x%llx,0x%llx): "
 				    "no map entry at 0x%llx\n",
 				    map,
@@ -8041,7 +8119,8 @@ vm_map_delete(
 					entry->vme_end - entry->vme_start,
 					pmap_flags);
 #endif  /* NO_NESTED_PMAP */
-				if ((map->mapped_in_other_pmaps) && (map->map_refcnt)) {
+				if (map->mapped_in_other_pmaps &&
+				    os_ref_get_count(&map->map_refcnt) != 0) {
 					/* clean up parent map/maps */
 					vm_map_submap_pmap_clean(
 						map, entry->vme_start,
@@ -8058,7 +8137,8 @@ vm_map_delete(
 		} else if (VME_OBJECT(entry) != kernel_object &&
 		    VME_OBJECT(entry) != compressor_object) {
 			object = VME_OBJECT(entry);
-			if ((map->mapped_in_other_pmaps) && (map->map_refcnt)) {
+			if (map->mapped_in_other_pmaps &&
+			    os_ref_get_count(&map->map_refcnt) != 0) {
 				vm_object_pmap_protect_options(
 					object, VME_OFFSET(entry),
 					entry->vme_end - entry->vme_start,
@@ -8113,7 +8193,7 @@ vm_map_delete(
 		next = entry->vme_next;
 
 		if (map->pmap == kernel_pmap &&
-		    map->map_refcnt != 0 &&
+		    os_ref_get_count(&map->map_refcnt) != 0 &&
 		    entry->vme_end < end &&
 		    (next == vm_map_to_entry(map) ||
 		    next->vme_start != entry->vme_end)) {
@@ -8229,18 +8309,6 @@ vm_map_delete(
 		    vm_map_offset_t, save_start,
 		    vm_map_offset_t, save_end);
 		if (!(flags & VM_MAP_REMOVE_GAPS_OK)) {
-#if defined(DEVELOPMENT) || defined(DEBUG)
-			/* log just once if not checking, otherwise log each one */
-			if (!map->warned_delete_gap ||
-			    (task_exc_guard_default & TASK_EXC_GUARD_VM_ALL) != 0) {
-				printf("vm_map_delete: map %p [%p...%p] nothing at %p\n",
-				    (void *)map, (void *)save_start, (void *)save_end,
-				    (void *)gap_start);
-				if (!map->warned_delete_gap) {
-					map->warned_delete_gap = 1;
-				}
-			}
-#endif
 			vm_map_guard_exception(gap_start, kGUARD_EXC_DEALLOC_GAP);
 		}
 	}
@@ -8931,7 +8999,7 @@ start_overwrite:
 					entry->is_sub_map = FALSE;
 					vm_map_deallocate(
 						VME_SUBMAP(entry));
-					VME_OBJECT_SET(entry, NULL);
+					VME_OBJECT_SET(entry, VM_OBJECT_NULL);
 					VME_OFFSET_SET(entry, 0);
 					entry->is_shared = FALSE;
 					entry->needs_copy = FALSE;
@@ -9611,7 +9679,7 @@ vm_map_copy_overwrite_unaligned(
 			}
 			dst_object = vm_object_allocate((vm_map_size_t)
 			    entry->vme_end - entry->vme_start);
-			VME_OBJECT(entry) = dst_object;
+			VME_OBJECT_SET(entry, dst_object);
 			VME_OFFSET_SET(entry, 0);
 			assert(entry->use_pmap);
 			vm_map_lock_write_to_read(dst_map);
@@ -10735,6 +10803,7 @@ StartAgain:;
 		while (entry != vm_map_copy_to_entry(copy)) {
 			new = vm_map_copy_entry_create(copy, !copy->cpy_hdr.entries_pageable);
 			vm_map_entry_copy_full(new, entry);
+			new->vme_no_copy_on_read = FALSE;
 			assert(!new->iokit_acct);
 			if (new->is_sub_map) {
 				/* clr address space specifics */
@@ -11080,8 +11149,6 @@ vm_map_copyin_internal(
 		           src_destroy, copy_result);
 	}
 
-	XPR(XPR_VM_MAP, "vm_map_copyin_common map 0x%x addr 0x%x len 0x%x dest %d\n", src_map, src_addr, len, src_destroy, 0);
-
 	/*
 	 *	Allocate a header element for the list.
 	 *
@@ -11342,13 +11409,10 @@ vm_map_copyin_internal(
 
 
 RestartCopy:
-		XPR(XPR_VM_MAP, "vm_map_copyin_common src_obj 0x%x ent 0x%x obj 0x%x was_wired %d\n",
-		    src_object, new_entry, VME_OBJECT(new_entry),
-		    was_wired, 0);
 		if ((src_object == VM_OBJECT_NULL ||
 		    (!was_wired && !map_share && !tmp_entry->is_shared)) &&
 		    vm_object_copy_quickly(
-			    &VME_OBJECT(new_entry),
+			    VME_OBJECT_PTR(new_entry),
 			    src_offset,
 			    src_size,
 			    &src_needs_copy,
@@ -11425,7 +11489,7 @@ CopySlowly:
 				src_offset,
 				src_size,
 				THREAD_UNINT,
-				&VME_OBJECT(new_entry));
+				VME_OBJECT_PTR(new_entry));
 			VME_OFFSET_SET(new_entry, 0);
 			new_entry->needs_copy = FALSE;
 		} else if (src_object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC &&
@@ -11455,7 +11519,7 @@ CopySlowly:
 			result = vm_object_copy_strategically(src_object,
 			    src_offset,
 			    src_size,
-			    &VME_OBJECT(new_entry),
+			    VME_OBJECT_PTR(new_entry),
 			    &new_offset,
 			    &new_entry_needs_copy);
 			if (new_offset != VME_OFFSET(new_entry)) {
@@ -12368,7 +12432,12 @@ vm_map_fork(
 #error Unknown architecture.
 #endif
 
-	new_pmap = pmap_create(ledger, (vm_map_size_t) 0, pmap_is64bit);
+	unsigned int pmap_flags = 0;
+	pmap_flags |= pmap_is64bit ? PMAP_CREATE_64BIT : 0;
+#if defined(HAS_APPLE_PAC)
+	pmap_flags |= old_map->pmap->disable_jop ? PMAP_CREATE_DISABLE_JOP : 0;
+#endif
+	new_pmap = pmap_create_options(ledger, (vm_map_size_t) 0, pmap_flags);
 
 	vm_map_reference_swap(old_map);
 	vm_map_lock(old_map);
@@ -12473,7 +12542,7 @@ vm_map_fork(
 			}
 
 			if (!vm_object_copy_quickly(
-				    &VME_OBJECT(new_entry),
+				    VME_OBJECT_PTR(new_entry),
 				    VME_OFFSET(old_entry),
 				    (old_entry->vme_end -
 				    old_entry->vme_start),
@@ -12711,6 +12780,7 @@ submap_recurse:
 		vm_map_entry_t          submap_entry;
 		vm_prot_t               subentry_protection;
 		vm_prot_t               subentry_max_protection;
+		boolean_t               subentry_no_copy_on_read;
 		boolean_t               mapped_needs_copy = FALSE;
 
 		local_vaddr = vaddr;
@@ -12920,6 +12990,7 @@ RetrySubMap:
 
 			subentry_protection = submap_entry->protection;
 			subentry_max_protection = submap_entry->max_protection;
+			subentry_no_copy_on_read = submap_entry->vme_no_copy_on_read;
 			vm_map_unlock(map);
 			submap_entry = NULL; /* not valid after map unlock */
 
@@ -12996,6 +13067,8 @@ RetrySubMap:
 				entry->protection |= subentry_protection;
 			}
 			entry->max_protection |= subentry_max_protection;
+			/* propagate no_copy_on_read */
+			entry->vme_no_copy_on_read = subentry_no_copy_on_read;
 
 			if ((entry->protection & VM_PROT_WRITE) &&
 			    (entry->protection & VM_PROT_EXECUTE) &&
@@ -13209,6 +13282,8 @@ protection_failure:
 #endif /* CONFIG_PMAP_CS */
 		fault_info->mark_zf_absent = FALSE;
 		fault_info->batch_pmap_op = FALSE;
+		fault_info->resilient_media = entry->vme_resilient_media;
+		fault_info->no_copy_on_read = entry->vme_no_copy_on_read;
 	}
 
 	/*
@@ -13347,6 +13422,9 @@ vm_map_region_recurse_64(
 
 		if (original_count >= VM_REGION_SUBMAP_INFO_V1_COUNT_64) {
 			*count = VM_REGION_SUBMAP_INFO_V1_COUNT_64;
+		}
+		if (original_count >= VM_REGION_SUBMAP_INFO_V2_COUNT_64) {
+			*count = VM_REGION_SUBMAP_INFO_V2_COUNT_64;
 		}
 	}
 
@@ -13534,23 +13612,19 @@ recurse_again:
 		    next_entry == NULL && /* & there are no more regions */
 		    /* & we haven't already provided our fake region: */
 		    user_address <= vm_map_last_entry(map)->vme_end) {
-			ledger_amount_t nonvol, nonvol_compressed;
+			ledger_amount_t ledger_resident, ledger_compressed;
+
 			/*
 			 * Add a fake memory region to account for
-			 * purgeable memory that counts towards this
-			 * task's memory footprint, i.e. the resident
-			 * compressed pages of non-volatile objects
-			 * owned by that task.
+			 * purgeable and/or ledger-tagged memory that
+			 * counts towards this task's memory footprint,
+			 * i.e. the resident/compressed pages of non-volatile
+			 * objects owned by that task.
 			 */
-			ledger_get_balance(
-				map->pmap->ledger,
-				task_ledgers.purgeable_nonvolatile,
-				&nonvol);
-			ledger_get_balance(
-				map->pmap->ledger,
-				task_ledgers.purgeable_nonvolatile_compressed,
-				&nonvol_compressed);
-			if (nonvol + nonvol_compressed == 0) {
+			task_ledgers_footprint(map->pmap->ledger,
+			    &ledger_resident,
+			    &ledger_compressed);
+			if (ledger_resident + ledger_compressed == 0) {
 				/* no purgeable memory usage to report */
 				return KERN_INVALID_ADDRESS;
 			}
@@ -13561,9 +13635,9 @@ recurse_again:
 				submap_info->inheritance = VM_INHERIT_DEFAULT;
 				submap_info->offset = 0;
 				submap_info->user_tag = -1;
-				submap_info->pages_resident = (unsigned int) (nonvol / PAGE_SIZE);
+				submap_info->pages_resident = (unsigned int) (ledger_resident / PAGE_SIZE);
 				submap_info->pages_shared_now_private = 0;
-				submap_info->pages_swapped_out = (unsigned int) (nonvol_compressed / PAGE_SIZE);
+				submap_info->pages_swapped_out = (unsigned int) (ledger_compressed / PAGE_SIZE);
 				submap_info->pages_dirtied = submap_info->pages_resident;
 				submap_info->ref_count = 1;
 				submap_info->shadow_depth = 0;
@@ -13590,7 +13664,7 @@ recurse_again:
 				short_info->ref_count = 1;
 			}
 			*nesting_depth = 0;
-			*size = (vm_map_size_t) (nonvol + nonvol_compressed);
+			*size = (vm_map_size_t) (ledger_resident + ledger_compressed);
 //			*address = user_address;
 			*address = vm_map_last_entry(map)->vme_end;
 			return KERN_SUCCESS;
@@ -13706,7 +13780,7 @@ recurse_again:
 			} else {
 				extended.share_mode = SM_PRIVATE;
 			}
-			extended.ref_count = VME_SUBMAP(curr_entry)->map_refcnt;
+			extended.ref_count = os_ref_get_count(&VME_SUBMAP(curr_entry)->map_refcnt);
 		}
 	}
 
@@ -13723,6 +13797,9 @@ recurse_again:
 
 		if (original_count >= VM_REGION_SUBMAP_INFO_V1_COUNT_64) {
 			submap_info->pages_reusable = extended.pages_reusable;
+		}
+		if (original_count >= VM_REGION_SUBMAP_INFO_V2_COUNT_64) {
+			submap_info->object_id_full = (vm_object_id_t) (VME_OBJECT(curr_entry) != NULL) ? VM_KERNEL_ADDRPERM(VME_OBJECT(curr_entry)) : 0ULL;
 		}
 	} else {
 		short_info->external_pager = extended.external_pager;
@@ -14039,7 +14116,7 @@ vm_map_region_top_walk(
 				    OBJ_RESIDENT_COUNT(obj, entry_size);
 			} else {
 				if (ref_count == 1 ||
-				    (ref_count == 2 && !(obj->pager_trusted) && !(obj->internal))) {
+				    (ref_count == 2 && obj->named)) {
 					top->share_mode = SM_PRIVATE;
 					top->private_pages_resident =
 					    OBJ_RESIDENT_COUNT(obj,
@@ -14235,7 +14312,7 @@ collect_object_info:
 		shadow_object = obj->shadow;
 		shadow_depth = 0;
 
-		if (!(obj->pager_trusted) && !(obj->internal)) {
+		if (!(obj->internal)) {
 			extended->external_pager = 1;
 		}
 
@@ -14246,8 +14323,7 @@ collect_object_info:
 			    shadow_depth++) {
 				vm_object_t     next_shadow;
 
-				if (!(shadow_object->pager_trusted) &&
-				    !(shadow_object->internal)) {
+				if (!(shadow_object->internal)) {
 					extended->external_pager = 1;
 				}
 
@@ -14342,7 +14418,7 @@ vm_map_region_look_for_page(
 
 
 	while (TRUE) {
-		if (!(object->pager_trusted) && !(object->internal)) {
+		if (!(object->internal)) {
 			extended->external_pager = 1;
 		}
 
@@ -14506,6 +14582,7 @@ vm_map_simplify_entry(
 	    this_entry->vme_resilient_codesign) &&
 	    (prev_entry->vme_resilient_media ==
 	    this_entry->vme_resilient_media) &&
+	    (prev_entry->vme_no_copy_on_read == this_entry->vme_no_copy_on_read) &&
 
 	    (prev_entry->wired_count == this_entry->wired_count) &&
 	    (prev_entry->user_wired_count == this_entry->user_wired_count) &&
@@ -14751,10 +14828,6 @@ vm_map_behavior_set(
 	vm_map_entry_t  entry;
 	vm_map_entry_t  temp_entry;
 
-	XPR(XPR_VM_MAP,
-	    "vm_map_behavior_set, 0x%X start 0x%X end 0x%X behavior %d",
-	    map, start, end, new_behavior, 0);
-
 	if (start > end ||
 	    start < vm_map_min(map) ||
 	    end > vm_map_max(map)) {
@@ -14847,9 +14920,9 @@ vm_map_behavior_set(
 /*
  * Internals for madvise(MADV_WILLNEED) system call.
  *
- * The present implementation is to do a read-ahead if the mapping corresponds
- * to a mapped regular file.  If it's an anonymous mapping, then we do nothing
- * and basically ignore the "advice" (which we are always free to do).
+ * The implementation is to do:-
+ * a) read-ahead if the mapping corresponds to a mapped regular file
+ * b) or, fault in the pages (zero-fill, decompress etc) if it's an anonymous mapping
  */
 
 
@@ -14929,69 +15002,98 @@ vm_map_willneed(
 		}
 
 		/*
-		 * If there's no read permission to this mapping, then just
-		 * skip it.
+		 * If the entry is a submap OR there's no read permission
+		 * to this mapping, then just skip it.
 		 */
-		if ((entry->protection & VM_PROT_READ) == 0) {
+		if ((entry->is_sub_map) || (entry->protection & VM_PROT_READ) == 0) {
 			entry = entry->vme_next;
 			start = entry->vme_start;
 			continue;
 		}
 
-		/*
-		 * Find the file object backing this map entry.  If there is
-		 * none, then we simply ignore the "will need" advice for this
-		 * entry and go on to the next one.
-		 */
-		if ((object = find_vnode_object(entry)) == VM_OBJECT_NULL) {
-			entry = entry->vme_next;
-			start = entry->vme_start;
-			continue;
-		}
+		object = VME_OBJECT(entry);
 
-		/*
-		 * The data_request() could take a long time, so let's
-		 * release the map lock to avoid blocking other threads.
-		 */
-		vm_map_unlock_read(map);
+		if (object == NULL ||
+		    (object && object->internal)) {
+			/*
+			 * Memory range backed by anonymous memory.
+			 */
+			vm_size_t region_size = 0, effective_page_size = 0;
+			vm_map_offset_t addr = 0, effective_page_mask = 0;
 
-		vm_object_paging_begin(object);
-		pager = object->pager;
-		vm_object_unlock(object);
+			region_size = len;
+			addr = start;
 
-		/*
-		 * Get the data from the object asynchronously.
-		 *
-		 * Note that memory_object_data_request() places limits on the
-		 * amount of I/O it will do.  Regardless of the len we
-		 * specified, it won't do more than MAX_UPL_TRANSFER_BYTES and it
-		 * silently truncates the len to that size.  This isn't
-		 * necessarily bad since madvise shouldn't really be used to
-		 * page in unlimited amounts of data.  Other Unix variants
-		 * limit the willneed case as well.  If this turns out to be an
-		 * issue for developers, then we can always adjust the policy
-		 * here and still be backwards compatible since this is all
-		 * just "advice".
-		 */
-		kr = memory_object_data_request(
-			pager,
-			offset + object->paging_offset,
-			0,      /* ignored */
-			VM_PROT_READ,
-			(memory_object_fault_info_t)&fault_info);
+			effective_page_mask = MAX(vm_map_page_mask(current_map()), PAGE_MASK);
+			effective_page_size = effective_page_mask + 1;
 
-		vm_object_lock(object);
-		vm_object_paging_end(object);
-		vm_object_unlock(object);
+			vm_map_unlock_read(map);
 
-		/*
-		 * If we couldn't do the I/O for some reason, just give up on
-		 * the madvise.  We still return success to the user since
-		 * madvise isn't supposed to fail when the advice can't be
-		 * taken.
-		 */
-		if (kr != KERN_SUCCESS) {
-			return KERN_SUCCESS;
+			while (region_size) {
+				vm_pre_fault(
+					vm_map_trunc_page(addr, effective_page_mask),
+					VM_PROT_READ | VM_PROT_WRITE);
+
+				region_size -= effective_page_size;
+				addr += effective_page_size;
+			}
+		} else {
+			/*
+			 * Find the file object backing this map entry.  If there is
+			 * none, then we simply ignore the "will need" advice for this
+			 * entry and go on to the next one.
+			 */
+			if ((object = find_vnode_object(entry)) == VM_OBJECT_NULL) {
+				entry = entry->vme_next;
+				start = entry->vme_start;
+				continue;
+			}
+
+			vm_object_paging_begin(object);
+			pager = object->pager;
+			vm_object_unlock(object);
+
+			/*
+			 * The data_request() could take a long time, so let's
+			 * release the map lock to avoid blocking other threads.
+			 */
+			vm_map_unlock_read(map);
+
+			/*
+			 * Get the data from the object asynchronously.
+			 *
+			 * Note that memory_object_data_request() places limits on the
+			 * amount of I/O it will do.  Regardless of the len we
+			 * specified, it won't do more than MAX_UPL_TRANSFER_BYTES and it
+			 * silently truncates the len to that size.  This isn't
+			 * necessarily bad since madvise shouldn't really be used to
+			 * page in unlimited amounts of data.  Other Unix variants
+			 * limit the willneed case as well.  If this turns out to be an
+			 * issue for developers, then we can always adjust the policy
+			 * here and still be backwards compatible since this is all
+			 * just "advice".
+			 */
+			kr = memory_object_data_request(
+				pager,
+				offset + object->paging_offset,
+				0,      /* ignored */
+				VM_PROT_READ,
+				(memory_object_fault_info_t)&fault_info);
+
+			vm_object_lock(object);
+			vm_object_paging_end(object);
+			vm_object_unlock(object);
+
+			/*
+			 * If we couldn't do the I/O for some reason, just give up on
+			 * the madvise.  We still return success to the user since
+			 * madvise isn't supposed to fail when the advice can't be
+			 * taken.
+			 */
+
+			if (kr != KERN_SUCCESS) {
+				return KERN_SUCCESS;
+			}
 		}
 
 		start += len;
@@ -15480,6 +15582,7 @@ vm_map_entry_insert(
 	unsigned                wired_count,
 	boolean_t               no_cache,
 	boolean_t               permanent,
+	boolean_t               no_copy_on_read,
 	unsigned int            superpage_size,
 	boolean_t               clear_map_aligned,
 	boolean_t               is_submap,
@@ -15563,9 +15666,6 @@ vm_map_entry_insert(
 		{
 			new_entry->used_for_jit = TRUE;
 			map->jit_entry_exists = TRUE;
-
-			/* Tell the pmap that it supports JIT. */
-			pmap_set_jit_entitled(map->pmap);
 		}
 	} else {
 		new_entry->used_for_jit = FALSE;
@@ -15575,6 +15675,7 @@ vm_map_entry_insert(
 	new_entry->vme_resilient_codesign = FALSE;
 	new_entry->vme_resilient_media = FALSE;
 	new_entry->vme_atomic = FALSE;
+	new_entry->vme_no_copy_on_read = no_copy_on_read;
 
 	/*
 	 *	Insert the new entry into the list.
@@ -15706,7 +15807,8 @@ vm_map_remap_extract(
 				 * This entry uses "IOKit accounting".
 				 */
 			} else if (object != VM_OBJECT_NULL &&
-			    object->purgable != VM_PURGABLE_DENY) {
+			    (object->purgable != VM_PURGABLE_DENY ||
+			    object->vo_ledger_tag != VM_LEDGER_TAG_NONE)) {
 				/*
 				 * Purgeable objects have their own accounting:
 				 * no pmap accounting for them.
@@ -15852,16 +15954,20 @@ vm_map_remap_extract(
 		 */
 RestartCopy:
 		if (!copy) {
-			/*
-			 * Cannot allow an entry describing a JIT
-			 * region to be shared across address spaces.
-			 */
-			if (src_entry->used_for_jit == TRUE && !same_map) {
+			if (src_entry->used_for_jit == TRUE) {
+				if (same_map) {
+				} else {
 #if CONFIG_EMBEDDED
-				result = KERN_INVALID_ARGUMENT;
-				break;
+					/*
+					 * Cannot allow an entry describing a JIT
+					 * region to be shared across address spaces.
+					 */
+					result = KERN_INVALID_ARGUMENT;
+					break;
 #endif /* CONFIG_EMBEDDED */
+				}
 			}
+
 			src_entry->is_shared = TRUE;
 			new_entry->is_shared = TRUE;
 			if (!(new_entry->is_sub_map)) {
@@ -15873,7 +15979,7 @@ RestartCopy:
 			new_entry->needs_copy = TRUE;
 			object = VM_OBJECT_NULL;
 		} else if (src_entry->wired_count == 0 &&
-		    vm_object_copy_quickly(&VME_OBJECT(new_entry),
+		    vm_object_copy_quickly(VME_OBJECT_PTR(new_entry),
 		    VME_OFFSET(new_entry),
 		    (new_entry->vme_end -
 		    new_entry->vme_start),
@@ -15946,7 +16052,7 @@ RestartCopy:
 					(new_entry->vme_end -
 					new_entry->vme_start),
 					THREAD_UNINT,
-					&VME_OBJECT(new_entry));
+					VME_OBJECT_PTR(new_entry));
 
 				VME_OFFSET_SET(new_entry, 0);
 				new_entry->needs_copy = FALSE;
@@ -15959,7 +16065,7 @@ RestartCopy:
 					offset,
 					(new_entry->vme_end -
 					new_entry->vme_start),
-					&VME_OBJECT(new_entry),
+					VME_OBJECT_PTR(new_entry),
 					&new_offset,
 					&new_entry_needs_copy);
 				if (new_offset != VME_OFFSET(new_entry)) {
@@ -16126,6 +16232,13 @@ vm_map_remap(
 		return KERN_INVALID_ARGUMENT;
 	}
 
+	if (flags & VM_FLAGS_RESILIENT_MEDIA) {
+		/* must be copy-on-write to be "media resilient" */
+		if (!copy) {
+			return KERN_INVALID_ARGUMENT;
+		}
+	}
+
 	result = vm_map_remap_extract(src_map, memory_address,
 	    size, copy, &map_header,
 	    cur_protection,
@@ -16165,6 +16278,12 @@ vm_map_remap(
 			entry->vme_start += *address;
 			entry->vme_end += *address;
 			assert(!entry->map_aligned);
+			if ((flags & VM_FLAGS_RESILIENT_MEDIA) &&
+			    !entry->is_sub_map &&
+			    (VME_OBJECT(entry) == VM_OBJECT_NULL ||
+			    VME_OBJECT(entry)->internal)) {
+				entry->vme_resilient_media = TRUE;
+			}
 			vm_map_store_entry_link(target_map, insp_entry, entry,
 			    vmk_flags);
 			insp_entry = entry;
@@ -16876,6 +16995,7 @@ vm_map_page_range_info_internal(
 	vm_map_offset_t         offset_in_page = 0, offset_in_object = 0, curr_offset_in_object = 0;
 	vm_map_offset_t         start = 0, end = 0, curr_s_offset = 0, curr_e_offset = 0;
 	boolean_t               do_region_footprint;
+	ledger_amount_t         ledger_resident, ledger_compressed;
 
 	switch (flavor) {
 	case VM_PAGE_INFO_BASIC:
@@ -16913,6 +17033,8 @@ vm_map_page_range_info_internal(
 
 	vm_map_lock_read(map);
 
+	task_ledgers_footprint(map->pmap->ledger, &ledger_resident, &ledger_compressed);
+
 	for (curr_s_offset = start; curr_s_offset < end;) {
 		/*
 		 * New lookup needs reset of these variables.
@@ -16924,8 +17046,6 @@ vm_map_page_range_info_internal(
 
 		if (do_region_footprint &&
 		    curr_s_offset >= vm_map_last_entry(map)->vme_end) {
-			ledger_amount_t nonvol_compressed;
-
 			/*
 			 * Request for "footprint" info about a page beyond
 			 * the end of address space: this must be for
@@ -16934,13 +17054,9 @@ vm_map_page_range_info_internal(
 			 * memory owned by this task.
 			 */
 			disposition = 0;
-			nonvol_compressed = 0;
-			ledger_get_balance(
-				map->pmap->ledger,
-				task_ledgers.purgeable_nonvolatile_compressed,
-				&nonvol_compressed);
+
 			if (curr_s_offset - vm_map_last_entry(map)->vme_end <=
-			    (unsigned) nonvol_compressed) {
+			    (unsigned) ledger_compressed) {
 				/*
 				 * We haven't reported all the "non-volatile
 				 * compressed" pages yet, so report this fake
@@ -17214,6 +17330,9 @@ vm_map_page_range_info_internal(
 					} else {
 						disposition |= VM_PAGE_QUERY_PAGE_EXTERNAL;
 					}
+					if (pmap_disp & PMAP_QUERY_PAGE_REUSABLE) {
+						disposition |= VM_PAGE_QUERY_PAGE_REUSABLE;
+					}
 				} else if (pmap_disp & PMAP_QUERY_PAGE_COMPRESSED) {
 					assertf(map_entry->use_pmap, "offset 0x%llx map_entry %p", (uint64_t) curr_s_offset, map_entry);
 					disposition |= VM_PAGE_QUERY_PAGE_PAGED_OUT;
@@ -17343,6 +17462,9 @@ vm_map_page_range_info_internal(
 					}
 					if (m->vmp_cs_nx) {
 						disposition |= VM_PAGE_QUERY_PAGE_CS_NX;
+					}
+					if (m->vmp_reusable || curr_object->all_reusable) {
+						disposition |= VM_PAGE_QUERY_PAGE_REUSABLE;
 					}
 				}
 			}
@@ -17794,10 +17916,10 @@ vm_map_reference(
 	lck_mtx_lock(&map->s_lock);
 #if     TASK_SWAPPER
 	assert(map->res_count > 0);
-	assert(map->map_refcnt >= map->res_count);
+	assert(os_ref_get_count(&map->map_refcnt) >= map->res_count);
 	map->res_count++;
 #endif
-	map->map_refcnt++;
+	os_ref_retain_locked(&map->map_refcnt);
 	lck_mtx_unlock(&map->s_lock);
 }
 
@@ -17819,13 +17941,13 @@ vm_map_deallocate(
 	}
 
 	lck_mtx_lock(&map->s_lock);
-	ref = --map->map_refcnt;
+	ref = os_ref_release_locked(&map->map_refcnt);
 	if (ref > 0) {
 		vm_map_res_deallocate(map);
 		lck_mtx_unlock(&map->s_lock);
 		return;
 	}
-	assert(map->map_refcnt == 0);
+	assert(os_ref_get_count(&map->map_refcnt) == 0);
 	lck_mtx_unlock(&map->s_lock);
 
 #if     TASK_SWAPPER
@@ -17896,6 +18018,19 @@ vm_map_set_jumbo(vm_map_t map)
 {
 #if defined (__arm64__)
 	vm_map_set_max_addr(map, ~0);
+#else /* arm64 */
+	(void) map;
+#endif
+}
+
+/*
+ * This map has a JIT entitlement
+ */
+void
+vm_map_set_jit_entitled(vm_map_t map)
+{
+#if defined (__arm64__)
+	pmap_set_jit_entitled(map->pmap);
 #else /* arm64 */
 	(void) map;
 #endif
@@ -18384,12 +18519,12 @@ extern unsigned int memorystatus_freeze_shared_mb_per_process_max;
 
 kern_return_t
 vm_map_freeze(
-	vm_map_t map,
+	task_t       task,
 	unsigned int *purgeable_count,
 	unsigned int *wired_count,
 	unsigned int *clean_count,
 	unsigned int *dirty_count,
-	__unused unsigned int dirty_budget,
+	unsigned int dirty_budget,
 	unsigned int *shared_count,
 	int          *freezer_error_code,
 	boolean_t    eval_only)
@@ -18408,6 +18543,8 @@ vm_map_freeze(
 	 * block any page faults or lookups while we are
 	 * in the middle of freezing this vm map.
 	 */
+	vm_map_t map = task->map;
+
 	vm_map_lock(map);
 
 	assert(VM_CONFIG_COMPRESSOR_IS_PRESENT);
@@ -18460,6 +18597,30 @@ again:
 			if (src_object->internal == TRUE) {
 				if (VM_CONFIG_FREEZER_SWAP_IS_ACTIVE) {
 					/*
+					 * We skip purgeable objects during evaluation phase only.
+					 * If we decide to freeze this process, we'll explicitly
+					 * purge these objects before we go around again with
+					 * 'evaluation_phase' set to FALSE.
+					 */
+
+					if ((src_object->purgable == VM_PURGABLE_EMPTY) || (src_object->purgable == VM_PURGABLE_VOLATILE)) {
+						/*
+						 * We want to purge objects that may not belong to this task but are mapped
+						 * in this task alone. Since we already purged this task's purgeable memory
+						 * at the end of a successful evaluation phase, we want to avoid doing no-op calls
+						 * on this task's purgeable objects. Hence the check for only volatile objects.
+						 */
+						if (evaluation_phase == FALSE &&
+						    (src_object->purgable == VM_PURGABLE_VOLATILE) &&
+						    (src_object->ref_count == 1)) {
+							vm_object_lock(src_object);
+							vm_object_purge(src_object, 0);
+							vm_object_unlock(src_object);
+						}
+						continue;
+					}
+
+					/*
 					 * Pages belonging to this object could be swapped to disk.
 					 * Make sure it's not a shared object because we could end
 					 * up just bringing it back in again.
@@ -18468,6 +18629,7 @@ again:
 					 * more than once within our own map. But we don't do full searches,
 					 * we just look at the entries following our current entry.
 					 */
+
 					if (src_object->ref_count > 1) {
 						if (src_object != cur_shared_object) {
 							obj_pages_snapshot = (src_object->resident_page_count - src_object->wired_page_count) + vm_compressor_pager_get_count(src_object->pager);
@@ -18503,8 +18665,7 @@ again:
 					}
 				}
 
-				vm_object_compressed_freezer_pageout(src_object);
-
+				uint32_t paged_out_count = vm_object_compressed_freezer_pageout(src_object, dirty_budget);
 				*wired_count += src_object->wired_page_count;
 
 				if (vm_compressor_low_on_space() || vm_swap_low_on_space()) {
@@ -18519,6 +18680,10 @@ again:
 					kr = KERN_NO_SPACE;
 					break;
 				}
+				if (paged_out_count >= dirty_budget) {
+					break;
+				}
+				dirty_budget -= paged_out_count;
 			}
 		}
 	}
@@ -18549,6 +18714,8 @@ again:
 			kr = KERN_SUCCESS;
 			goto done;
 		}
+
+		vm_purgeable_purge_task_owned(task);
 
 		goto again;
 	} else {
@@ -18923,7 +19090,7 @@ vm_commit_pagezero_status(vm_map_t lmap)
 	pmap_advise_pagezero_range(lmap->pmap, lmap->min_offset);
 }
 
-#if __x86_64__
+#if !CONFIG_EMBEDDED
 void
 vm_map_set_high_start(
 	vm_map_t        map,
@@ -18931,7 +19098,7 @@ vm_map_set_high_start(
 {
 	map->vmmap_high_start = high_start;
 }
-#endif /* __x86_64__ */
+#endif
 
 #if PMAP_CS
 kern_return_t
@@ -19722,8 +19889,16 @@ vm_map_copy_footprint_ledgers(
 	vm_map_copy_ledger(old_task, new_task, task_ledgers.alternate_accounting);
 	vm_map_copy_ledger(old_task, new_task, task_ledgers.alternate_accounting_compressed);
 	vm_map_copy_ledger(old_task, new_task, task_ledgers.page_table);
+	vm_map_copy_ledger(old_task, new_task, task_ledgers.tagged_footprint);
+	vm_map_copy_ledger(old_task, new_task, task_ledgers.tagged_footprint_compressed);
 	vm_map_copy_ledger(old_task, new_task, task_ledgers.network_nonvolatile);
 	vm_map_copy_ledger(old_task, new_task, task_ledgers.network_nonvolatile_compressed);
+	vm_map_copy_ledger(old_task, new_task, task_ledgers.media_footprint);
+	vm_map_copy_ledger(old_task, new_task, task_ledgers.media_footprint_compressed);
+	vm_map_copy_ledger(old_task, new_task, task_ledgers.graphics_footprint);
+	vm_map_copy_ledger(old_task, new_task, task_ledgers.graphics_footprint_compressed);
+	vm_map_copy_ledger(old_task, new_task, task_ledgers.neural_footprint);
+	vm_map_copy_ledger(old_task, new_task, task_ledgers.neural_footprint_compressed);
 	vm_map_copy_ledger(old_task, new_task, task_ledgers.wired_mem);
 }
 
@@ -19771,3 +19946,146 @@ vm_map_copy_ledger(
 		    delta);
 	}
 }
+
+#if MACH_ASSERT
+
+extern int pmap_ledgers_panic;
+extern int pmap_ledgers_panic_leeway;
+
+#define LEDGER_DRIFT(__LEDGER)                    \
+	int             __LEDGER##_over;          \
+	ledger_amount_t __LEDGER##_over_total;    \
+	ledger_amount_t __LEDGER##_over_max;      \
+	int             __LEDGER##_under;         \
+	ledger_amount_t __LEDGER##_under_total;   \
+	ledger_amount_t __LEDGER##_under_max
+
+struct {
+	uint64_t        num_pmaps_checked;
+
+	LEDGER_DRIFT(phys_footprint);
+	LEDGER_DRIFT(internal);
+	LEDGER_DRIFT(internal_compressed);
+	LEDGER_DRIFT(iokit_mapped);
+	LEDGER_DRIFT(alternate_accounting);
+	LEDGER_DRIFT(alternate_accounting_compressed);
+	LEDGER_DRIFT(page_table);
+	LEDGER_DRIFT(purgeable_volatile);
+	LEDGER_DRIFT(purgeable_nonvolatile);
+	LEDGER_DRIFT(purgeable_volatile_compressed);
+	LEDGER_DRIFT(purgeable_nonvolatile_compressed);
+	LEDGER_DRIFT(tagged_nofootprint);
+	LEDGER_DRIFT(tagged_footprint);
+	LEDGER_DRIFT(tagged_nofootprint_compressed);
+	LEDGER_DRIFT(tagged_footprint_compressed);
+	LEDGER_DRIFT(network_volatile);
+	LEDGER_DRIFT(network_nonvolatile);
+	LEDGER_DRIFT(network_volatile_compressed);
+	LEDGER_DRIFT(network_nonvolatile_compressed);
+	LEDGER_DRIFT(media_nofootprint);
+	LEDGER_DRIFT(media_footprint);
+	LEDGER_DRIFT(media_nofootprint_compressed);
+	LEDGER_DRIFT(media_footprint_compressed);
+	LEDGER_DRIFT(graphics_nofootprint);
+	LEDGER_DRIFT(graphics_footprint);
+	LEDGER_DRIFT(graphics_nofootprint_compressed);
+	LEDGER_DRIFT(graphics_footprint_compressed);
+	LEDGER_DRIFT(neural_nofootprint);
+	LEDGER_DRIFT(neural_footprint);
+	LEDGER_DRIFT(neural_nofootprint_compressed);
+	LEDGER_DRIFT(neural_footprint_compressed);
+} pmap_ledgers_drift;
+
+void
+vm_map_pmap_check_ledgers(
+	pmap_t          pmap,
+	ledger_t        ledger,
+	int             pid,
+	char            *procname)
+{
+	ledger_amount_t bal;
+	boolean_t       do_panic;
+
+	do_panic = FALSE;
+
+	pmap_ledgers_drift.num_pmaps_checked++;
+
+#define LEDGER_CHECK_BALANCE(__LEDGER)                                  \
+MACRO_BEGIN                                                             \
+	int panic_on_negative = TRUE;                                   \
+	ledger_get_balance(ledger,                                      \
+	                   task_ledgers.__LEDGER,                       \
+	                   &bal);                                       \
+	ledger_get_panic_on_negative(ledger,                            \
+	                             task_ledgers.__LEDGER,             \
+	                             &panic_on_negative);               \
+	if (bal != 0) {                                                 \
+	        if (panic_on_negative ||                                \
+	            (pmap_ledgers_panic &&                              \
+	             pmap_ledgers_panic_leeway > 0 &&                   \
+	             (bal > (pmap_ledgers_panic_leeway * PAGE_SIZE) ||  \
+	              bal < (-pmap_ledgers_panic_leeway * PAGE_SIZE)))) { \
+	                do_panic = TRUE;                                \
+	        }                                                       \
+	        printf("LEDGER BALANCE proc %d (%s) "                   \
+	               "\"%s\" = %lld\n",                               \
+	               pid, procname, #__LEDGER, bal);                  \
+	        if (bal > 0) {                                          \
+	                pmap_ledgers_drift.__LEDGER##_over++;           \
+	                pmap_ledgers_drift.__LEDGER##_over_total += bal; \
+	                if (bal > pmap_ledgers_drift.__LEDGER##_over_max) { \
+	                        pmap_ledgers_drift.__LEDGER##_over_max = bal; \
+	                }                                               \
+	        } else if (bal < 0) {                                   \
+	                pmap_ledgers_drift.__LEDGER##_under++;          \
+	                pmap_ledgers_drift.__LEDGER##_under_total += bal; \
+	                if (bal < pmap_ledgers_drift.__LEDGER##_under_max) { \
+	                        pmap_ledgers_drift.__LEDGER##_under_max = bal; \
+	                }                                               \
+	        }                                                       \
+	}                                                               \
+MACRO_END
+
+	LEDGER_CHECK_BALANCE(phys_footprint);
+	LEDGER_CHECK_BALANCE(internal);
+	LEDGER_CHECK_BALANCE(internal_compressed);
+	LEDGER_CHECK_BALANCE(iokit_mapped);
+	LEDGER_CHECK_BALANCE(alternate_accounting);
+	LEDGER_CHECK_BALANCE(alternate_accounting_compressed);
+	LEDGER_CHECK_BALANCE(page_table);
+	LEDGER_CHECK_BALANCE(purgeable_volatile);
+	LEDGER_CHECK_BALANCE(purgeable_nonvolatile);
+	LEDGER_CHECK_BALANCE(purgeable_volatile_compressed);
+	LEDGER_CHECK_BALANCE(purgeable_nonvolatile_compressed);
+	LEDGER_CHECK_BALANCE(tagged_nofootprint);
+	LEDGER_CHECK_BALANCE(tagged_footprint);
+	LEDGER_CHECK_BALANCE(tagged_nofootprint_compressed);
+	LEDGER_CHECK_BALANCE(tagged_footprint_compressed);
+	LEDGER_CHECK_BALANCE(network_volatile);
+	LEDGER_CHECK_BALANCE(network_nonvolatile);
+	LEDGER_CHECK_BALANCE(network_volatile_compressed);
+	LEDGER_CHECK_BALANCE(network_nonvolatile_compressed);
+	LEDGER_CHECK_BALANCE(media_nofootprint);
+	LEDGER_CHECK_BALANCE(media_footprint);
+	LEDGER_CHECK_BALANCE(media_nofootprint_compressed);
+	LEDGER_CHECK_BALANCE(media_footprint_compressed);
+	LEDGER_CHECK_BALANCE(graphics_nofootprint);
+	LEDGER_CHECK_BALANCE(graphics_footprint);
+	LEDGER_CHECK_BALANCE(graphics_nofootprint_compressed);
+	LEDGER_CHECK_BALANCE(graphics_footprint_compressed);
+	LEDGER_CHECK_BALANCE(neural_nofootprint);
+	LEDGER_CHECK_BALANCE(neural_footprint);
+	LEDGER_CHECK_BALANCE(neural_nofootprint_compressed);
+	LEDGER_CHECK_BALANCE(neural_footprint_compressed);
+
+	if (do_panic) {
+		if (pmap_ledgers_panic) {
+			panic("pmap_destroy(%p) %d[%s] has imbalanced ledgers\n",
+			    pmap, pid, procname);
+		} else {
+			printf("pmap_destroy(%p) %d[%s] has imbalanced ledgers\n",
+			    pmap, pid, procname);
+		}
+	}
+}
+#endif /* MACH_ASSERT */

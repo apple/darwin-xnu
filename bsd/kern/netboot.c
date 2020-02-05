@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2001-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -561,7 +561,7 @@ static int
 default_route_add(struct in_addr router, boolean_t proxy_arp)
 {
 	uint32_t                    flags = 0;
-	struct in_addr              zeroes = { 0 };
+	struct in_addr              zeroes = { .s_addr = 0 };
 
 	if (proxy_arp == FALSE) {
 		flags |= RTF_GATEWAY;
@@ -572,7 +572,7 @@ default_route_add(struct in_addr router, boolean_t proxy_arp)
 static int
 host_route_delete(struct in_addr host, unsigned int ifscope)
 {
-	struct in_addr              zeroes = { 0 };
+	struct in_addr              zeroes = { .s_addr = 0 };
 
 	return route_cmd(RTM_DELETE, host, zeroes, zeroes, RTF_HOST, ifscope);
 }
@@ -599,11 +599,11 @@ find_interface(void)
 }
 
 static const struct sockaddr_in blank_sin = {
-	sizeof(struct sockaddr_in),
-	AF_INET,
-	0,
-	{ 0 },
-	{ 0, 0, 0, 0, 0, 0, 0, 0 }
+	.sin_len = sizeof(struct sockaddr_in),
+	.sin_family = AF_INET,
+	.sin_port = 0,
+	.sin_addr = { .s_addr = 0 },
+	.sin_zero = { 0, 0, 0, 0, 0, 0, 0, 0 }
 };
 
 static int
@@ -636,12 +636,12 @@ int
 netboot_mountroot(void)
 {
 	int                         error = 0;
-	struct in_addr              iaddr = { 0 };
+	struct in_addr              iaddr = { .s_addr = 0 };
 	struct ifreq                ifr;
 	struct ifnet *              ifp;
-	struct in_addr              netmask = { 0 };
+	struct in_addr              netmask = { .s_addr = 0 };
 	proc_t                      procp = current_proc();
-	struct in_addr              router = { 0 };
+	struct in_addr              router = { .s_addr = 0 };
 	struct socket *             so = NULL;
 	unsigned int                try;
 
@@ -770,11 +770,11 @@ netboot_setup()
 		goto done;
 	}
 	printf("netboot_setup: calling imageboot_mount_image\n");
-	error = imageboot_mount_image(S_netboot_info_p->image_path, -1);
+	error = imageboot_mount_image(S_netboot_info_p->image_path, -1, IMAGEBOOT_DMG);
 	if (error != 0) {
 		printf("netboot: failed to mount root image, %d\n", error);
 	} else if (S_netboot_info_p->second_image_path != NULL) {
-		error = imageboot_mount_image(S_netboot_info_p->second_image_path, 0);
+		error = imageboot_mount_image(S_netboot_info_p->second_image_path, 0, IMAGEBOOT_DMG);
 		if (error != 0) {
 			printf("netboot: failed to mount second root image, %d\n", error);
 		}

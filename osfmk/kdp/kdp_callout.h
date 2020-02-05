@@ -26,12 +26,15 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <sys/cdefs.h>
+
 typedef enum {
 	KDP_EVENT_ENTER,
 	KDP_EVENT_EXIT,
 	KDP_EVENT_PANICLOG
 } kdp_event_t;
 
+__BEGIN_DECLS
 typedef void (*kdp_callout_fn_t)(void *arg, kdp_event_t event);
 
 /*
@@ -43,3 +46,5 @@ typedef void (*kdp_callout_fn_t)(void *arg, kdp_event_t event);
  * non-trivial service.
  */
 extern void kdp_register_callout(kdp_callout_fn_t fn, void *arg);
+
+__END_DECLS

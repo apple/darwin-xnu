@@ -93,8 +93,6 @@ RootDomainUserClient::secureSleepSystemOptions(
 	int             local_priv = 0;
 	int             admin_priv = 0;
 	IOReturn        ret = kIOReturnNotPrivileged;
-	OSDictionary    *unserializedOptions =  NULL;
-	OSString        *unserializeErrorString = NULL;
 
 	ret = clientHasPrivilege(fOwningTask, kIOClientPrivilegeLocalUser);
 	local_priv = (kIOReturnSuccess == ret);
@@ -102,38 +100,38 @@ RootDomainUserClient::secureSleepSystemOptions(
 	ret = clientHasPrivilege(fOwningTask, kIOClientPrivilegeAdministrator);
 	admin_priv = (kIOReturnSuccess == ret);
 
-
-	if (inOptions) {
-		unserializedOptions = OSDynamicCast( OSDictionary,
-		    OSUnserializeXML((const char *)inOptions, inOptionsSize, &unserializeErrorString));
-
-		if (!unserializedOptions) {
-			IOLog("IOPMRootDomain SleepSystem unserialization failure: %s\n",
-			    unserializeErrorString ? unserializeErrorString->getCStringNoCopy() : "Unknown");
-		}
-	}
-
 	if ((local_priv || admin_priv) && fOwner) {
+		OSString        *unserializeErrorString = NULL;
+		OSObject        *unserializedObject = NULL;
+		OSDictionary    *sleepOptionsDict = NULL; // do not release
+
 		proc_t p;
 		p = (proc_t)get_bsdtask_info(fOwningTask);
 		if (p) {
 			fOwner->setProperty("SleepRequestedByPID", proc_pid(p), 32);
 		}
 
-		if (unserializedOptions) {
+		if (inOptions) {
+			unserializedObject = OSUnserializeXML((const char *)inOptions, inOptionsSize, &unserializeErrorString);
+			sleepOptionsDict = OSDynamicCast( OSDictionary, unserializedObject);
+			if (!sleepOptionsDict) {
+				IOLog("IOPMRootDomain SleepSystem unserialization failure: %s\n",
+				    unserializeErrorString ? unserializeErrorString->getCStringNoCopy() : "Unknown");
+			}
+		}
+
+		if (sleepOptionsDict) {
 			// Publish Sleep Options in registry under root_domain
-			fOwner->setProperty( kRootDomainSleepOptionsKey, unserializedOptions);
-
-			*returnCode = fOwner->sleepSystemOptions( unserializedOptions );
-
-			unserializedOptions->release();
+			fOwner->setProperty( kRootDomainSleepOptionsKey, sleepOptionsDict);
 		} else {
 			// No options
 			// Clear any pre-existing options
 			fOwner->removeProperty( kRootDomainSleepOptionsKey );
-
-			*returnCode = fOwner->sleepSystemOptions( NULL );
 		}
+
+		*returnCode = fOwner->sleepSystemOptions( sleepOptionsDict );
+		OSSafeReleaseNULL(unserializedObject);
+		OSSafeReleaseNULL(unserializeErrorString);
 	} else {
 		*returnCode = kIOReturnNotPrivileged;
 	}
@@ -233,7 +231,7 @@ RootDomainUserClient::stop( IOService *provider)
 {
 	if (fOwningTask) {
 		task_deallocate(fOwningTask);
-		fOwningTask = 0;
+		fOwningTask = NULL;
 	}
 
 	super::stop(provider);

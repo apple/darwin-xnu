@@ -25,7 +25,6 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#include <stdatomic.h>
 #include <mach/mach_time.h>
 #include <mach/clock_types.h>
 #include <kern/misc_protos.h>
@@ -39,6 +38,7 @@
 #include <kern/kern_types.h>
 #include <kern/thread.h>
 #include <machine/commpage.h>
+#include <machine/atomic.h>
 
 #if CONFIG_MACH_BRIDGE_SEND_TIME
 
@@ -58,9 +58,9 @@ uint32_t mach_bridge_timer_enable(uint32_t new_value, int change);
 extern void mach_bridge_send_timestamp(uint64_t);
 
 void
-mach_bridge_timer_maintenance()
+mach_bridge_timer_maintenance(void)
 {
-	if (!bt_init_flag) {
+	if (!os_atomic_load(&bt_init_flag, acquire)) {
 		return;
 	}
 
@@ -81,7 +81,7 @@ done:
 void
 mach_bridge_timer_init(void)
 {
-	assert(!bt_init_flag);
+	assert(!os_atomic_load(&bt_init_flag, relaxed));
 	/* Initialize the lock */
 	static lck_grp_t *bt_lck_grp = NULL;
 	bt_lck_grp = lck_grp_alloc_init("bridgetimestamp", LCK_GRP_ATTR_NULL);
@@ -97,7 +97,7 @@ uint32_t
 mach_bridge_timer_enable(uint32_t new_value, int change)
 {
 	uint32_t current_value = 0;
-	assert(bt_init_flag == 1);
+	assert(os_atomic_load(&bt_init_flag, relaxed));
 	lck_spin_lock(bt_maintenance_lock);
 	if (change) {
 		bt_enable_flag = new_value;
@@ -119,6 +119,7 @@ mach_bridge_timer_enable(uint32_t new_value, int change)
 void mach_bridge_add_timestamp(uint64_t remote_timestamp, uint64_t local_timestamp);
 void bt_calibration_thread_start(void);
 lck_spin_t *ts_conversion_lock = NULL;
+void bt_params_add(struct bt_params *params);
 
 /* function called by sysctl */
 struct bt_params bt_params_get_latest(void);
@@ -140,7 +141,7 @@ static uint64_t received_remote_timestamp = 0;
 static struct bt_params bt_params_hist[BT_PARAMS_COUNT] = {};
 static int bt_params_idx = -1;
 
-static inline void
+void
 bt_params_add(struct bt_params *params)
 {
 	lck_spin_assert(ts_conversion_lock, LCK_ASSERT_OWNED);
@@ -149,6 +150,7 @@ bt_params_add(struct bt_params *params)
 	bt_params_hist[bt_params_idx] = *params;
 }
 
+#if defined(XNU_TARGET_OS_BRIDGE)
 static inline struct bt_params*
 bt_params_find(uint64_t local_ts)
 {
@@ -169,6 +171,20 @@ bt_params_find(uint64_t local_ts)
 
 	return NULL;
 }
+#endif /* defined(XNU_TARGET_OS_BRIDGE) */
+
+static inline struct bt_params
+bt_params_get_latest_locked(void)
+{
+	lck_spin_assert(ts_conversion_lock, LCK_ASSERT_OWNED);
+
+	struct bt_params latest_params = {};
+	if (bt_params_idx >= 0) {
+		latest_params = bt_params_hist[bt_params_idx];
+	}
+
+	return latest_params;
+}
 
 struct bt_params
 bt_params_get_latest(void)
@@ -176,11 +192,9 @@ bt_params_get_latest(void)
 	struct bt_params latest_params = {};
 
 	/* Check if ts_converison_lock has been initialized */
-	if (atomic_load(&bt_init_flag)) {
+	if (os_atomic_load(&bt_init_flag, acquire)) {
 		lck_spin_lock(ts_conversion_lock);
-		if (bt_params_idx >= 0) {
-			latest_params = bt_params_hist[bt_params_idx];
-		}
+		latest_params = bt_params_get_latest_locked();
 		lck_spin_unlock(ts_conversion_lock);
 	}
 	return latest_params;
@@ -472,7 +486,9 @@ bt_calibration_thread_start(void)
  * the local time.
  *
  * If local_timestamp = 0, then the remote_timestamp is calculated
- * corresponding to the current mach_absolute_time. Monotonicity of
+ * corresponding to the current mach_absolute_time.
+ *
+ * If XNU_TARGET_OS_BRIDGE is defined, then monotonicity of
  * predicted time is guaranteed only for recent local_timestamp values
  * lesser than the current mach_absolute_time upto 1 second.
  *
@@ -499,27 +515,31 @@ mach_bridge_remote_time(uint64_t local_timestamp)
 	/* neither the send or receive side of the bridge is defined: echo the input */
 	return local_timestamp;
 #else
-	if (!atomic_load(&bt_init_flag)) {
+	if (!os_atomic_load(&bt_init_flag, acquire)) {
 		return 0;
 	}
 
+	uint64_t remote_timestamp = 0;
+
 	lck_spin_lock(ts_conversion_lock);
 	uint64_t now = mach_absolute_time();
-
-	uint64_t remote_timestamp = 0;
-	uint64_t local_timestamp_ns = 0;
 	if (!local_timestamp) {
 		local_timestamp = now;
-	} else if (local_timestamp > now) {
-		goto out_unlock;
 	}
-	absolutetime_to_nanoseconds(local_timestamp, &local_timestamp_ns);
-	struct bt_params *params = bt_params_find(local_timestamp_ns);
-	remote_timestamp = mach_bridge_compute_timestamp(local_timestamp_ns, params);
-
-out_unlock:
+#if defined(XNU_TARGET_OS_BRIDGE)
+	uint64_t local_timestamp_ns = 0;
+	if (local_timestamp < now) {
+		absolutetime_to_nanoseconds(local_timestamp, &local_timestamp_ns);
+		struct bt_params *params = bt_params_find(local_timestamp_ns);
+		remote_timestamp = mach_bridge_compute_timestamp(local_timestamp_ns, params);
+	}
+#else
+	struct bt_params params = bt_params_get_latest_locked();
+	remote_timestamp = mach_bridge_compute_timestamp(local_timestamp, &params);
+#endif /* defined(XNU_TARGET_OS_BRIDGE) */
 	lck_spin_unlock(ts_conversion_lock);
 	KDBG(MACHDBG_CODE(DBG_MACH_CLOCK, MACH_BRIDGE_REMOTE_TIME), local_timestamp, remote_timestamp, now);
+
 	return remote_timestamp;
 #endif /* !defined(CONFIG_MACH_BRIDGE_RECV_TIME) */
 #endif /* defined(CONFIG_MACH_BRIDGE_SEND_TIME) */

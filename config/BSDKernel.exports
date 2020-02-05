@@ -93,6 +93,8 @@ _buf_uploffset
 _buf_valid
 _buf_vnode
 _buf_wcred
+_bufattr_markioscheduled
+_bufattr_ioscheduled
 _cache_enter
 _cache_lookup
 _cache_purge
@@ -343,6 +345,9 @@ _kauth_null_guid
 _kauth_register_scope
 _kauth_unlisten_scope
 _kdebug_enable
+_kdebug_debugid_enabled
+_kdebug_debugid_explicitly_enabled
+_kdebug_using_continuous_time
 _kernel_debug
 _kernel_debug1
 _kernel_debug_filtered
@@ -483,12 +488,14 @@ _proc_noremotehang
 _proc_pgrpid
 _proc_pid
 _proc_ppid
+_proc_original_ppid
 _proc_rele
 _proc_self
 _proc_selfname
 _proc_selfpid
 _proc_selfppid
 _proc_selfpgrpid
+_proc_sessionid
 _proc_signal
 _proc_suser
 _proto_inject
@@ -628,6 +635,7 @@ _vflush
 _vfs_64bitready
 _vfs_addname
 _vfs_attr_pack
+_vfs_attr_pack_ext
 _vfs_authcache_ttl
 _vfs_authopaque
 _vfs_authopaqueaccess
@@ -688,6 +696,7 @@ _vfs_sysctl
 _vfs_typenum
 _vfs_unbusy
 _vfs_unmountbyfsid
+_vn_authorize_unlink
 _vn_bwrite
 _vn_default_error
 _vn_getpath
@@ -758,6 +767,7 @@ _vnode_vfsmaxsymlen
 _vnode_vfsname
 _vnode_vfstypenum
 _vnode_vid
+_vnode_isonexternalstorage
 _vnode_vtype
 _vnode_waitforwrites
 _vnode_writedone
@@ -783,6 +793,7 @@ _vnop_listxattr_desc
 _vnop_lookup_desc
 _vnop_mkdir_desc
 _vnop_mknod_desc
+_vnop_mmap_check_desc
 _vnop_mmap_desc
 _vnop_mnomap_desc
 _vnop_offtoblk_desc

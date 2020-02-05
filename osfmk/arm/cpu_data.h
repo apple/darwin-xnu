@@ -48,7 +48,7 @@
 
 #define current_thread()        current_thread_fast()
 
-static inline __pure2 thread_t
+static inline __attribute__((const)) thread_t
 current_thread_fast(void)
 {
 #if defined(__arm64__)

@@ -33,7 +33,12 @@ DATAFILES = \
 	user.h utfconv.h utsname.h vadvise.h vcmd.h \
 	vm.h vmmeter.h vmparam.h vnioctl.h vnode.h vnode_if.h vstat.h wait.h xattr.h \
 	_select.h _structs.h _types.h _endian.h domain.h protosw.h \
-	spawn.h timex.h commpage.h
+	spawn.h timex.h commpage.h log_data.h
+
+# Installs header file for DriverKit drivers -
+#	  $(DSTROOT)/System/DriverKit/System/usr/include/
+DRIVERKIT_DATAFILES = \
+	cdefs.h _types.h
 
 # Installs header file for Apple internal use in user level -
 #	  $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
@@ -64,7 +69,10 @@ PRIVATE_DATAFILES = \
 	kern_control.h \
 	kern_event.h \
 	kern_memorystatus.h \
+	kern_memorystatus_freeze.h \
+	kern_memorystatus_notify.h \
 	kern_overrides.h \
+	kern_sysctl.h \
 	mbuf.h \
 	mman.h \
 	monotonic.h \
@@ -98,6 +106,11 @@ PRIVATE_DATAFILES = \
 	memory_maintenance.h \
 	commpage.h
 
+# Installs header file for Apple internal use by DriverKit drivers -
+#	  $(DSTROOT)/System/DriverKit/System/usr/local/include/
+DRIVERKIT_PRIVATE_DATAFILES = \
+	appleapiopts.h kdebug.h
+
 # Installs header file for kernel extensions -
 #	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers
 #	  $(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders
@@ -108,8 +121,8 @@ KERNELFILES = \
 	errno.h ev.h event.h fcntl.h file.h filio.h \
 	ioccom.h ioctl.h ipc.h \
 	ioctl_compat.h  kernel.h kernel_types.h kern_event.h lock.h lockf.h \
-	kauth.h kdebug.h  md5.h kern_control.h imgact.h malloc.h namei.h \
-	mman.h mbuf.h mount.h netport.h param.h paths.h \
+	kauth.h kdebug.h kdebug_kernel.h md5.h kern_control.h imgact.h malloc.h \
+	namei.h mman.h mbuf.h mount.h netport.h param.h paths.h \
 	proc.h  queue.h random.h resource.h \
 	sbuf.h posix_sem.h posix_shm.h sem.h shm.h \
 	select.h signal.h socket.h socketvar.h sockio.h stat.h stdio.h \
@@ -140,6 +153,8 @@ PRIVATE_KERNELFILES = \
 	fslog.h \
 	kasl.h \
 	kern_memorystatus.h \
+	kern_memorystatus_freeze.h \
+	kern_memorystatus_notify.h \
 	kpi_private.h \
 	ktrace.h \
 	mach_swapon.h \
@@ -168,6 +183,7 @@ PRIVATE_KERNELFILES = \
 	doc_tombstone.h \
 	fsevents.h \
 	work_interval.h \
+	kern_sysctl.h \
 
 XNU_ONLY_EXPORTS = \
 	bsdtask_info.h \
@@ -191,7 +207,11 @@ XNU_ONLY_EXPORTS = \
 # /usr/include
 INSTALL_MI_LIST	= ${DATAFILES}
 
+INSTALL_DRIVERKIT_MI_LIST = ${DRIVERKIT_DATAFILES}
+
 INSTALL_MI_GEN_LIST = syscall.h _posix_availability.h _symbol_aliasing.h
+
+INSTALL_DRIVERKIT_MI_GEN_LIST = _posix_availability.h _symbol_aliasing.h
 
 INSTALL_MI_DIR = sys
 
@@ -203,6 +223,8 @@ EXPORT_MI_DIR = sys
 
 # /System/Library/Frameworks/System.framework/PrivateHeaders
 INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
+
+INSTALL_DRIVERKIT_MI_LCL_LIST = ${DRIVERKIT_PRIVATE_DATAFILES}
 
 # /System/Library/Frameworks/Kernel.framework/PrivateHeaders
 INSTALL_KF_MI_LCL_LIST =  ${KERNELFILES} ${PRIVATE_KERNELFILES}
@@ -221,43 +243,48 @@ $(OBJROOT)/cscope.genhdrs:
 	$(_v)mkdir -p $(OBJROOT)/cscope.genhdrs
 
 $(OBJROOT)/syscall.codes: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
-	@echo "[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0)";
+	$(call makelog,[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0))
 	$(_v)$(MAKESYSCALLS) $< trace > $@
 
 $(OBJROOT)/trace.codes: $(SRCROOT)/bsd/kern/trace_codes $(OBJROOT)/syscall.codes
 	$(_v)sort -g $(SRCROOT)/bsd/kern/trace_codes $(OBJROOT)/syscall.codes >$@
 
 syscall.h: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS) $(OBJROOT)/cscope.genhdrs
-	@echo "[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)bsd/sys/$@$(Color0) from $(ColorF)$<$(Color0)";
+	$(call makelog,[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)bsd/sys/$@$(Color0) from $(ColorF)$<$(Color0))
 	@echo "$(OBJPATH)/bsd/sys/$@" > $(OBJROOT)/cscope.genhdrs/$@.path
 	$(_v)$(MAKESYSCALLS) $< header > /dev/null
 
 sysproto.h: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS) $(OBJROOT)/cscope.genhdrs
-	@echo "[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)bsd/sys/$@$(Color0) from $(ColorF)$<$(Color0)";
+	$(call makelog,[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)bsd/sys/$@$(Color0) from $(ColorF)$<$(Color0))
 	@echo "$(OBJPATH)/bsd/sys/$@" > $(OBJROOT)/cscope.genhdrs/$@.path
 	$(_v)$(MAKESYSCALLS) $< proto > /dev/null
 
 kdebugevents.h:  $(OBJROOT)/trace.codes $(MAKEKDEBUGEVENTS) $(OBJROOT)/cscope.genhdrs
-	@echo "[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)bsd/sys/$@$(Color0) from $(ColorF)$<$(Color0)";
+	$(call makelog,[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)bsd/sys/$@$(Color0) from $(ColorF)$<$(Color0))
 	@echo "$(OBJPATH)/bsd/sys/$@" > $(OBJROOT)/cscope.genhdrs/$@.path
 	$(_v)$(MAKEKDEBUGEVENTS) $< > "$(OBJPATH)/bsd/sys/$@"
 
 MAKE_POSIX_AVAILABILITY = $(SRCROOT)/bsd/sys/make_posix_availability.sh
 _posix_availability.h: $(MAKE_POSIX_AVAILABILITY)
-	@echo "[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)bsd/sys/$@$(Color0)";
+	$(call makelog,[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)bsd/sys/$@$(Color0))
 	$(_v)$(MAKE_POSIX_AVAILABILITY) "$@"
 
 MAKE_SYMBOL_ALIASING = $(SRCROOT)/bsd/sys/make_symbol_aliasing.sh
 _symbol_aliasing.h: $(MAKE_SYMBOL_ALIASING)
-	@echo "[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)bsd/sys/$@$(Color0)";
+	$(call makelog,[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)bsd/sys/$@$(Color0))
 	$(_v)$(MAKE_SYMBOL_ALIASING) "$(SDKROOT)" "$@"
+
+# generated headers needed early (used by iig during installhdrs of iokit/DriverKit)
+SETUP_GEN_LIST = _posix_availability.h _symbol_aliasing.h
+
+do_build_setup:: $(SETUP_GEN_LIST)
 
 TRACE_CODES_DEST = \
 	$(DSTROOT)/$(INSTALL_SHARE_MISC_DIR)/trace.codes
 
 $(TRACE_CODES_DEST): $(OBJROOT)/trace.codes
 	$(_v)$(MKDIR) $(DSTROOT)/$(INSTALL_SHARE_MISC_DIR)
-	@echo INSTALL $(@F)
+	$(call makelog,INSTALL $(@F))
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $(OBJROOT)/trace.codes $@
 
 do_textfiles_install:: $(TRACE_CODES_DEST)

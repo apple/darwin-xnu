@@ -27,6 +27,7 @@
  */
 
 #include <arm/monotonic.h>
+#include <kern/monotonic.h>
 #include <sys/errno.h>
 #include <sys/monotonic.h>
 
@@ -39,6 +40,12 @@ mt_early_init(void)
 
 uint64_t
 mt_core_snap(__unused unsigned int ctr)
+{
+	return 0;
+}
+
+uint64_t
+mt_count_pmis(void)
 {
 	return 0;
 }

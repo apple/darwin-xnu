@@ -140,6 +140,17 @@ typedef struct mig_symtab {
 	                                                         */
 } mig_symtab_t;
 
+/*
+ * A compiler attribute for annotating all MIG server routines and other
+ * functions that should behave similarly.  Allows the compiler to perform
+ * additional static bug-finding over them.
+ */
+#if __has_attribute(mig_server_routine)
+#define MIG_SERVER_ROUTINE __attribute__((mig_server_routine))
+#else
+#define MIG_SERVER_ROUTINE
+#endif
+
 #ifdef  PRIVATE
 
 /* MIG object runtime - not ready for public consumption */

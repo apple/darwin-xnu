@@ -342,7 +342,7 @@ pmap_find_phys(pmap_t pmap, addr64_t va)
 		mp_disable_preemption();
 	}
 
-	if (!pmap->ref_count) {
+	if (os_ref_get_count(&pmap->ref_count) == 0) {
 		goto pfp_exit;
 	}
 
@@ -640,7 +640,7 @@ Retry:
 	old_pa_locked = FALSE;
 
 	if (old_pa == 0 &&
-	    PTE_IS_COMPRESSED(*pte, pte)) {
+	    PTE_IS_COMPRESSED(*pte, pte, pmap, vaddr)) {
 		/*
 		 * "pmap" should be locked at this point, so this should
 		 * not race with another pmap_enter() or pmap_remove_range().
@@ -1261,7 +1261,7 @@ pmap_remove_range_options(
 		pa = pte_to_pa(p);
 		if (pa == 0) {
 			if ((options & PMAP_OPTIONS_REMOVE) &&
-			    (PTE_IS_COMPRESSED(p, cpte))) {
+			    (PTE_IS_COMPRESSED(p, cpte, pmap, vaddr))) {
 				assert(pmap != kernel_pmap);
 				/* one less "compressed"... */
 				stats_compressed++;
@@ -1322,7 +1322,7 @@ check_pte_for_compressed_marker:
 			 * loop above, so check again.
 			 */
 			if ((options & PMAP_OPTIONS_REMOVE) &&
-			    (PTE_IS_COMPRESSED(*cpte, cpte))) {
+			    (PTE_IS_COMPRESSED(*cpte, cpte, pmap, vaddr))) {
 				assert(pmap != kernel_pmap);
 				/* one less "compressed"... */
 				stats_compressed++;
@@ -1724,7 +1724,7 @@ pmap_page_protect_options(
 			if (pmap != kernel_pmap &&
 			    (options & PMAP_OPTIONS_COMPRESSOR) &&
 			    IS_INTERNAL_PAGE(pai)) {
-				assert(!PTE_IS_COMPRESSED(*pte, pte));
+				assert(!PTE_IS_COMPRESSED(*pte, pte, pmap, vaddr));
 				/* mark this PTE as having been "compressed" */
 				new_pte_value = PTE_COMPRESSED;
 				if (IS_ALTACCT_PAGE(pai, pv_e)) {
@@ -2525,7 +2525,7 @@ pmap_query_page_info(
 
 	pa = pte_to_pa(*pte);
 	if (pa == 0) {
-		if (PTE_IS_COMPRESSED(*pte, pte)) {
+		if (PTE_IS_COMPRESSED(*pte, pte, pmap, va)) {
 			disp |= PMAP_QUERY_PAGE_COMPRESSED;
 			if (*pte & PTE_COMPRESSED_ALT) {
 				disp |= PMAP_QUERY_PAGE_COMPRESSED_ALTACCT;
@@ -2581,6 +2581,7 @@ pmap_trim(__unused pmap_t grand, __unused pmap_t subord, __unused addr64_t vstar
 	return;
 }
 
+__dead2
 void
 pmap_ledger_alloc_init(size_t size)
 {
@@ -2589,15 +2590,15 @@ pmap_ledger_alloc_init(size_t size)
 	    __func__, size);
 }
 
+__dead2
 ledger_t
 pmap_ledger_alloc(void)
 {
 	panic("%s: unsupported",
 	    __func__);
-
-	return NULL;
 }
 
+__dead2
 void
 pmap_ledger_free(ledger_t ledger)
 {

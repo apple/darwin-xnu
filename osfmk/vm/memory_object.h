@@ -145,6 +145,9 @@ extern void             memory_object_mark_unused(
 extern void             memory_object_mark_io_tracking(
 	memory_object_control_t         control);
 
+extern void             memory_object_mark_trusted(
+	memory_object_control_t         control);
+
 #if CONFIG_SECLUDED_MEMORY
 extern void             memory_object_mark_eligible_for_secluded(
 	memory_object_control_t         control,

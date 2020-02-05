@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -58,18 +58,18 @@ extern "C" {
 #define PKTSCHEDF_QALG_DRIVER_MANAGED   0x10    /* driver managed */
 
 typedef struct _pktsched_pkt_ {
-	classq_pkt_type_t       __ptype;
+	classq_pkt_t            __pkt;
 	uint32_t                __plen;
-	void                    *__pkt;
-#define pktsched_ptype  __ptype
+#define pktsched_ptype  __pkt.cp_ptype
 #define pktsched_plen   __plen
 #define pktsched_pkt    __pkt
+#define pktsched_pkt_mbuf       __pkt.cp_mbuf
+#define pktsched_pkt_kpkt       __pkt.cp_kpkt
 } pktsched_pkt_t;
 
-#define _PKTSCHED_PKT_INIT(_p)  do {            \
-	(_p)->pktsched_ptype = QP_INVALID;      \
-	(_p)->pktsched_plen = 0;                \
-	(_p)->pktsched_pkt = NULL;              \
+#define _PKTSCHED_PKT_INIT(_p)  do {                                    \
+	(_p)->pktsched_pkt = CLASSQ_PKT_INITIALIZER((_p)->pktsched_pkt);\
+	(_p)->pktsched_plen = 0;                                        \
 } while (0)
 
 /* macro for timeout/untimeout */
@@ -137,6 +137,12 @@ __fls(pktsched_bitmap_t word)
 	return pktsched_fls(word) - 1;
 }
 
+static inline uint32_t
+pktsched_get_pkt_len(pktsched_pkt_t *pkt)
+{
+	return pkt->pktsched_plen;
+}
+
 /*
  * We can use mach_absolute_time which returns a 64-bit value with
  * granularity less than a microsecond even on the slowest processor.
@@ -164,11 +170,12 @@ extern int pktsched_getqstats(struct ifclassq *, u_int32_t,
 extern u_int64_t pktsched_abs_to_nsecs(u_int64_t);
 extern u_int64_t pktsched_nsecs_to_abstime(u_int64_t);
 extern void pktsched_free_pkt(pktsched_pkt_t *);
-extern uint32_t pktsched_get_pkt_len(pktsched_pkt_t *);
-extern void pktsched_get_pkt_vars(pktsched_pkt_t *, uint32_t **, uint64_t **,
-    uint32_t *, uint8_t *, uint8_t *, uint32_t *);
+extern int pktsched_clone_pkt(pktsched_pkt_t *, pktsched_pkt_t *);
+extern void pktsched_corrupt_packet(pktsched_pkt_t *pkt);
+extern void pktsched_get_pkt_vars(pktsched_pkt_t *, volatile uint32_t **,
+    uint64_t **, uint32_t *, uint8_t *, uint8_t *, uint32_t *);
 extern uint32_t *pktsched_get_pkt_sfb_vars(pktsched_pkt_t *, uint32_t **);
-extern void pktsched_pkt_encap(pktsched_pkt_t *, classq_pkt_type_t, void *);
+extern void pktsched_pkt_encap(pktsched_pkt_t *, classq_pkt_t *);
 extern mbuf_svc_class_t pktsched_get_pkt_svc(pktsched_pkt_t *);
 extern struct flowadv_fcentry *pktsched_alloc_fcentry(pktsched_pkt_t *,
     struct ifnet *, int);

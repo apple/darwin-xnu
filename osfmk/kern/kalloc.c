@@ -96,11 +96,11 @@ vm_size_t kalloc_kernmap_size;  /* size of kallocs that can come from kernel map
 /* how many times we couldn't allocate out of kalloc_map and fell back to kernel_map */
 unsigned long kalloc_fallback_count;
 
-unsigned int kalloc_large_inuse;
-vm_size_t    kalloc_large_total;
-vm_size_t    kalloc_large_max;
-vm_size_t    kalloc_largest_allocated = 0;
-uint64_t    kalloc_large_sum;
+uint_t     kalloc_large_inuse;
+vm_size_t  kalloc_large_total;
+vm_size_t  kalloc_large_max;
+vm_size_t  kalloc_largest_allocated = 0;
+uint64_t   kalloc_large_sum;
 
 int     kalloc_fake_zone_index = -1; /* index of our fake zone in statistics arrays */
 
@@ -191,8 +191,9 @@ KALLOC_ZINFO_SFREE(vm_size_t bytes)
  * 4096       Y                    N                   N
  * 6144       N                    N                   N
  * 8192       Y                    N                   N
+ * 12288      N                    X                   X
  * 16384      N                    N                   N
- * 32768      N                    N                   N
+ * 32768      X                    N                   N
  *
  */
 static const struct kalloc_zone_config {
@@ -300,8 +301,8 @@ static const struct kalloc_zone_config {
 	KZC_ENTRY(4096, true),
 	KZC_ENTRY(6144, false),
 	KZC_ENTRY(8192, true),
-	KZC_ENTRY(16384, false),
-	KZC_ENTRY(32768, false),
+	KZC_ENTRY(12288, false),
+	KZC_ENTRY(16384, false)
 
 #endif /* CONFIG_EMBEDDED */
 
@@ -407,13 +408,7 @@ kalloc_init(
 	kalloc_map_min = min;
 	kalloc_map_max = min + kalloc_map_size - 1;
 
-	/*
-	 * Create zones up to a least 4 pages because small page-multiples are
-	 * common allocations.  Also ensure that zones up to size 16KB bytes exist.
-	 * This is desirable because messages are allocated with kalloc(), and
-	 * messages up through size 8192 are common.
-	 */
-	kalloc_max = PAGE_SIZE << 2;
+	kalloc_max = (k_zone_config[MAX_K_ZONE - 1].kzc_size << 1);
 	if (kalloc_max < KiB(16)) {
 		kalloc_max = KiB(16);
 	}
@@ -674,6 +669,7 @@ vm_size_t
 	DTRACE_VM3(kfree, vm_size_t, -1, vm_size_t, size, void*, addr);
 
 	kalloc_spin_lock();
+	assert(kalloc_large_total >= size);
 	kalloc_large_total -= size;
 	kalloc_large_inuse--;
 	kalloc_unlock();
@@ -685,9 +681,9 @@ vm_size_t
 
 void *
 kalloc_canblock(
-	vm_size_t              * psize,
-	boolean_t              canblock,
-	vm_allocation_site_t * site)
+	vm_size_t             *psize,
+	boolean_t             canblock,
+	vm_allocation_site_t *site)
 {
 	zone_t z;
 	vm_size_t size;
@@ -724,6 +720,8 @@ kalloc_canblock(
 		/* large allocation - use guard pages instead of small redzones */
 		size = round_page(req_size + 2 * PAGE_SIZE);
 		assert(size >= MAX_SIZE_ZDLUT && size >= kalloc_max_prerounded);
+#else
+		size = round_page(size);
 #endif
 
 		if (size >= kalloc_kernmap_size) {
@@ -760,6 +758,7 @@ kalloc_canblock(
 			}
 
 			kalloc_large_inuse++;
+			assert(kalloc_large_total + size >= kalloc_large_total); /* no wrap around */
 			kalloc_large_total += size;
 			kalloc_large_sum += size;
 
@@ -775,7 +774,7 @@ kalloc_canblock(
 		/* fixup the return address to skip the redzone */
 		addr = (void *)kasan_alloc((vm_offset_t)addr, size, req_size, PAGE_SIZE);
 #else
-		*psize = round_page(size);
+		*psize = size;
 #endif
 		DTRACE_VM3(kalloc, vm_size_t, size, vm_size_t, *psize, void*, addr);
 		return addr;
@@ -863,6 +862,7 @@ void
 		kmem_free(alloc_map, (vm_offset_t)data, size);
 		kalloc_spin_lock();
 
+		assert(kalloc_large_total >= size);
 		kalloc_large_total -= size;
 		kalloc_large_inuse--;
 
@@ -949,7 +949,7 @@ OSMalloc_Tagref(
 		panic("OSMalloc_Tagref():'%s' has bad state 0x%08X\n", tag->OSMT_name, tag->OSMT_state);
 	}
 
-	(void)hw_atomic_add(&tag->OSMT_refcnt, 1);
+	os_atomic_inc(&tag->OSMT_refcnt, relaxed);
 }
 
 void
@@ -960,8 +960,8 @@ OSMalloc_Tagrele(
 		panic("OSMalloc_Tagref():'%s' has bad state 0x%08X\n", tag->OSMT_name, tag->OSMT_state);
 	}
 
-	if (hw_atomic_sub(&tag->OSMT_refcnt, 1) == 0) {
-		if (hw_compare_and_store(OSMT_VALID | OSMT_RELEASED, OSMT_VALID | OSMT_RELEASED, &tag->OSMT_state)) {
+	if (os_atomic_dec(&tag->OSMT_refcnt, relaxed) == 0) {
+		if (os_atomic_cmpxchg(&tag->OSMT_state, OSMT_VALID | OSMT_RELEASED, OSMT_VALID | OSMT_RELEASED, acq_rel)) {
 			OSMalloc_tag_spin_lock();
 			(void)remque((queue_entry_t)tag);
 			OSMalloc_tag_unlock();
@@ -976,11 +976,11 @@ void
 OSMalloc_Tagfree(
 	OSMallocTag            tag)
 {
-	if (!hw_compare_and_store(OSMT_VALID, OSMT_VALID | OSMT_RELEASED, &tag->OSMT_state)) {
+	if (!os_atomic_cmpxchg(&tag->OSMT_state, OSMT_VALID, OSMT_VALID | OSMT_RELEASED, acq_rel)) {
 		panic("OSMalloc_Tagfree():'%s' has bad state 0x%08X \n", tag->OSMT_name, tag->OSMT_state);
 	}
 
-	if (hw_atomic_sub(&tag->OSMT_refcnt, 1) == 0) {
+	if (os_atomic_dec(&tag->OSMT_refcnt, relaxed) == 0) {
 		OSMalloc_tag_spin_lock();
 		(void)remque((queue_entry_t)tag);
 		OSMalloc_tag_unlock();

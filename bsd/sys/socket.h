@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -191,6 +191,7 @@
 #define  SO_RESTRICT_DENY_OUT   0x2     /* deny outbound (trapdoor) */
 #define  SO_RESTRICT_DENY_CELLULAR 0x4  /* deny use of cellular (trapdoor) */
 #define  SO_RESTRICT_DENY_EXPENSIVE 0x8 /* deny use of expensive if (trapdoor) */
+#define  SO_RESTRICT_DENY_CONSTRAINED 0x10 /* deny use of expensive if (trapdoor) */
 #endif /* PRIVATE */
 #define SO_RANDOMPORT   0x1082  /* APPLE: request local port randomization */
 #define SO_NP_EXTENSIONS        0x1083  /* To turn off some POSIX behavior */
@@ -334,7 +335,20 @@
 #define SO_EXTENDED_BK_IDLE     0x1114  /* extended time to keep socket idle after app is suspended (int) */
 #define SO_MARK_CELLFALLBACK    0x1115  /* Mark as initiated by cell fallback */
 #endif /* PRIVATE */
+#define SO_NET_SERVICE_TYPE     0x1116  /* Network service type */
 
+#ifdef PRIVATE
+#define SO_QOSMARKING_POLICY_OVERRIDE   0x1117  /* int */
+#define SO_INTCOPROC_ALLOW              0x1118  /* Try to use internal co-processor interfaces. */
+#endif /* PRIVATE */
+
+#define SO_NETSVC_MARKING_LEVEL 0x1119  /* Get QoS marking in effect for socket */
+
+#ifdef PRIVATE
+#define SO_NECP_LISTENUUID      0x1120  /* NECP client UUID for listener */
+#define SO_MPKL_SEND_INFO       0x1122  /* (struct so_mpkl_send_info) */
+#define SO_STATISTICS_EVENT 0x1123  /* int64 argument, an event in statistics collection */
+#endif /* PRIVATE */
 /*
  * Network Service Type for option SO_NET_SERVICE_TYPE
  *
@@ -417,7 +431,6 @@
  *	inelastic flow, constant packet rate, somewhat fixed size.
  *	E.g. VoIP.
  */
-#define SO_NET_SERVICE_TYPE     0x1116  /* Network service type */
 
 #define NET_SERVICE_TYPE_BE     0 /* Best effort */
 #define NET_SERVICE_TYPE_BK     1 /* Background system initiated */
@@ -430,9 +443,6 @@
 #define NET_SERVICE_TYPE_RD     8 /* Responsive Data */
 
 #if PRIVATE
-#define SO_QOSMARKING_POLICY_OVERRIDE   0x1117  /* int */
-#define SO_INTCOPROC_ALLOW              0x1118  /* Try to use internal co-processor interfaces. */
-
 #define _NET_SERVICE_TYPE_COUNT 9
 #define _NET_SERVICE_TYPE_UNSPEC        ((int)-1)
 
@@ -450,13 +460,13 @@ extern const int sotc_by_netservicetype[_NET_SERVICE_TYPE_COUNT];
 #define SO_TC_NETSVC_SIG        (SO_TC_NET_SERVICE_OFFSET + NET_SERVICE_TYPE_SIG)
 #endif /* PRIVATE */
 
-#define SO_NETSVC_MARKING_LEVEL 0x1119  /* Get QoS marking in effect for socket */
-
+/* These are supported values for SO_NETSVC_MARKING_LEVEL */
 #define NETSVC_MRKNG_UNKNOWN            0       /* The outgoing network interface is not known */
 #define NETSVC_MRKNG_LVL_L2             1       /* Default marking at layer 2 (for example Wi-Fi WMM) */
 #define NETSVC_MRKNG_LVL_L3L2_ALL       2       /* Layer 3 DSCP marking and layer 2 marking for all Network Service Types */
 #define NETSVC_MRKNG_LVL_L3L2_BK        3       /* The system policy limits layer 3 DSCP marking and layer 2 marking
 	                                         * to background Network Service Types */
+
 
 typedef __uint32_t sae_associd_t;
 #define SAE_ASSOCID_ANY 0
@@ -686,6 +696,7 @@ struct sockaddr_storage {
 #define PF_BOND         ((uint32_t)0x626f6e64)  /* 'bond' */
 #ifdef KERNEL_PRIVATE
 #define PF_BRIDGE       ((uint32_t)0x62726467)  /* 'brdg' */
+#define PF_802154       ((uint32_t)0x38313534)  /* '8154' */
 #endif /* KERNEL_PRIVATE */
 
 /*
@@ -768,6 +779,15 @@ struct sockaddr_storage {
 #define NET_RT_FLAGS_PRIV       10
 #define NET_RT_MAXID            11
 #endif /* (_POSIX_C_SOURCE && !_DARWIN_C_SOURCE) */
+
+#ifdef PRIVATE
+/* These are supported values for SO_STATISTICS_EVENT */
+#define SO_STATISTICS_EVENT_ENTER_CELLFALLBACK (1 << 0)
+#define SO_STATISTICS_EVENT_EXIT_CELLFALLBACK  (1 << 1)
+#define SO_STATISTICS_EVENT_RESERVED_1         (1 << 2)
+#define SO_STATISTICS_EVENT_RESERVED_2         (1 << 3)
+#endif /* PRIVATE */
+
 
 #ifdef KERNEL_PRIVATE
 #define CTL_NET_RT_NAMES { \
@@ -982,9 +1002,9 @@ struct user32_sa_endpoints {
 #else
 #define MSG_WAITSTREAM  0x200           /* wait up to full request.. may return partial */
 #endif
-#define MSG_FLUSH       0x400           /* Start of 'hold' seq; dump so_temp */
-#define MSG_HOLD        0x800           /* Hold frag in so_temp */
-#define MSG_SEND        0x1000          /* Send the packet in so_temp */
+#define MSG_FLUSH       0x400           /* Start of 'hold' seq; dump so_temp, deprecated */
+#define MSG_HOLD        0x800           /* Hold frag in so_temp, deprecated */
+#define MSG_SEND        0x1000          /* Send the packet in so_temp, deprecated */
 #define MSG_HAVEMORE    0x2000          /* Data ready to be read */
 #define MSG_RCVMORE     0x4000          /* Data remains in current pkt */
 #endif
@@ -1090,7 +1110,9 @@ struct cmsgcred {
 #ifdef PRIVATE
 #define SCM_SEQNUM                      0x05    /* TCP unordered recv seq no */
 #define SCM_MSG_PRIORITY                0x06    /* TCP unordered snd priority */
-#define SCM_TIMESTAMP_CONTINUOUS                0x07    /* timestamp (uint64_t) */
+#define SCM_TIMESTAMP_CONTINUOUS        0x07    /* timestamp (uint64_t) */
+#define SCM_MPKL_SEND_INFO              0x08    /* send info for multi-layer packet logging (struct so_mpkl_send_info) */
+#define SCM_MPKL_RECV_INFO              0x09    /* receive info for multi-layer packet logging (struct so_mpkl_recv_info */
 #endif /* PRIVATE */
 
 #ifdef KERNEL_PRIVATE
@@ -1290,10 +1312,7 @@ struct so_cordreq {
  */
 struct netpolicy_event_data {
 	__uint64_t      eupid;          /* effective unique PID */
-	pid_t           epid;           /* effective PID */
-#if !defined(__LP64__)
-	__uint32_t      pad;
-#endif /* __LP64__ */
+	__uint64_t      epid;           /* effective PID */
 	uuid_t          euuid;          /* effective UUID */
 };
 
@@ -1306,23 +1325,24 @@ struct kev_netpolicy_ifdenied {
 };
 
 /*
- * Common structure for KEV_SOCKET_SUBCLASS
- */
-struct kev_socket_event_data {
-	struct sockaddr_storage kev_sockname;
-	struct sockaddr_storage kev_peername;
-};
-
-struct kev_socket_closed {
-	struct kev_socket_event_data ev_data;
-};
-
-/*
  * Network Service Type to DiffServ Code Point mapping
  */
 struct netsvctype_dscp_map {
 	int             netsvctype;
 	u_int8_t        dscp; /* 6 bits diffserv code point */
+};
+
+/*
+ * Multi-layer packet logging require SO_MPK_LOG to be set
+ */
+struct so_mpkl_send_info {
+	uuid_t          mpkl_uuid;
+	__uint8_t       mpkl_proto;     /* see net/multi_layer_pkt_log.h */
+};
+
+struct so_mpkl_recv_info {
+	__uint32_t      mpkl_seq;
+	__uint8_t       mpkl_proto;     /* see net/multi_layer_pkt_log.h */
 };
 
 #ifndef KERNEL

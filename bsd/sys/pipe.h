@@ -133,7 +133,7 @@ struct pipemapping {
 #define PIPE_LWANT      0x200   /* Process wants exclusive access to pointers/data. */
 #define PIPE_DIRECTW    0x400   /* Pipe direct write active. */
 #define PIPE_DIRECTOK   0x800   /* Direct mode ok. */
-#define PIPE_KNOTE      0x1000   /* Pipe has kernel events activated */
+// was  PIPE_KNOTE      0x1000
 #define PIPE_DRAIN      0x2000  /* Waiting for I/O to drop for a close.  Treated like EOF;
 	                         *       only separate for easier debugging. */
 #define PIPE_WSELECT    0x4000  /* Some thread has done an FWRITE select on the pipe */

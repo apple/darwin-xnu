@@ -49,7 +49,9 @@
 static zone_t           mk_timer_zone;
 
 static mach_port_qos_t mk_timer_qos = {
-	FALSE, TRUE, 0, sizeof(mk_timer_expire_msg_t)
+	.name       = FALSE,
+	.prealloc   = TRUE,
+	.len        = sizeof(mk_timer_expire_msg_t),
 };
 
 static void     mk_timer_expire(
@@ -71,7 +73,7 @@ mk_timer_create_trap(
 		return MACH_PORT_NULL;
 	}
 
-	result = mach_port_allocate_qos(myspace, MACH_PORT_RIGHT_RECEIVE,
+	result = mach_port_allocate_internal(myspace, MACH_PORT_RIGHT_RECEIVE,
 	    &mk_timer_qos, &name);
 	if (result == KERN_SUCCESS) {
 		result = ipc_port_translate_receive(myspace, name, &port);

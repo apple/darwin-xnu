@@ -1,6 +1,5 @@
 /*-
- * Copyright (c) 1999-2010, Apple Inc.
- * All rights reserved.
+ * Copyright (c) 1999-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -159,12 +158,30 @@ audit(proc_t p, struct audit_args *uap, __unused int32_t *retval)
 	int max_record_length = MAX_AUDIT_RECORD_SIZE;
 	void *udata = NULL;
 	u_int ulen = 0;
-	struct au_identity_info id_info = {0, NULL, 0, NULL, 0, NULL, 0};
+	struct au_identity_info id_info = {
+		.signer_type = 0,
+		.signing_id = NULL,
+		.signing_id_trunc = 0,
+		.team_id = NULL,
+		.team_id_trunc = 0,
+		.cdhash = NULL,
+		.cdhash_len = 0
+	};
 	token_t *id_tok = NULL;
+	boolean_t kern_events_allowed = FALSE;
 
 	error = suser(kauth_cred_get(), &p->p_acflag);
 	if (error) {
-		goto free_out;
+		/*
+		 * If a process is not running as root but is properly
+		 * entitled, allow it to audit non-kernel events only.
+		 */
+		if (!IOTaskHasEntitlement(current_task(),
+		    AU_AUDIT_USER_ENTITLEMENT)) {
+			goto free_out;
+		}
+	} else {
+		kern_events_allowed = TRUE;
 	}
 
 	mtx_lock(&audit_mtx);
@@ -234,7 +251,7 @@ audit(proc_t p, struct audit_args *uap, __unused int32_t *retval)
 #endif
 
 	/* Verify the record. */
-	if (bsm_rec_verify(rec, uap->length) == 0) {
+	if (bsm_rec_verify(rec, uap->length, kern_events_allowed) == 0) {
 		error = EINVAL;
 		goto free_out;
 	}

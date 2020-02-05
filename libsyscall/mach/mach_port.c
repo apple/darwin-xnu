@@ -33,6 +33,7 @@
 #include <mach/mach_sync_ipc.h>
 #include "tsd.h"
 
+
 kern_return_t
 mach_port_names(
 	ipc_space_t task,
@@ -57,7 +58,11 @@ mach_port_type(
 {
 	kern_return_t rv;
 
-	rv = _kernelrpc_mach_port_type(task, name, ptype);
+	rv = _kernelrpc_mach_port_type_trap(task, name, ptype);
+
+	if (rv == MACH_SEND_INVALID_DEST) {
+		rv = _kernelrpc_mach_port_type(task, name, ptype);
+	}
 
 	return rv;
 }
@@ -246,8 +251,13 @@ mach_port_request_notification(
 {
 	kern_return_t rv;
 
-	rv = _kernelrpc_mach_port_request_notification(task, name, msgid,
+	rv = _kernelrpc_mach_port_request_notification_trap(task, name, msgid,
 	    sync, notify, notifyPoly, previous);
+
+	if (rv == MACH_SEND_INVALID_DEST) {
+		rv = _kernelrpc_mach_port_request_notification(task, name, msgid,
+		    sync, notify, notifyPoly, previous);
+	}
 
 	return rv;
 }
@@ -743,4 +753,32 @@ thread_destruct_special_reply_port(
 	default:
 		return KERN_INVALID_ARGUMENT;
 	}
+}
+
+kern_return_t
+mach_port_guard_with_flags(
+	ipc_space_t             task,
+	mach_port_name_t        name,
+	mach_port_context_t     guard,
+	uint64_t                flags)
+{
+	kern_return_t rv;
+
+	rv = _kernelrpc_mach_port_guard_with_flags(task, name, (uint64_t) guard, flags);
+
+	return rv;
+}
+
+kern_return_t
+mach_port_swap_guard(
+	ipc_space_t             task,
+	mach_port_name_t        name,
+	mach_port_context_t     old_guard,
+	mach_port_context_t     new_guard)
+{
+	kern_return_t rv;
+
+	rv = _kernelrpc_mach_port_swap_guard(task, name, (uint64_t)old_guard, (uint64_t)new_guard);
+
+	return rv;
 }

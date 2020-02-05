@@ -8,6 +8,8 @@
 #ifdef __cplusplus
 
 #include <IOKit/IOService.h>
+#include <stdatomic.h>
+#include <kern/bits.h>
 
 struct thread_group;
 
@@ -175,6 +177,13 @@ public:
 		WorkEndFunction workEnd;
 	};
 
+	struct IOPerfControlClientShared {
+		atomic_uint_fast8_t maxDriverIndex;
+		PerfControllerInterface interface;
+		IOLock *interfaceLock;
+		OSSet *deviceRegistrationList;
+	};
+
 /*!
  * @function registerPerformanceController
  * @abstract Register a performance controller to receive callbacks. Not for general driver use.
@@ -190,20 +199,22 @@ private:
 		uint8_t perfcontrol_data[32];
 	};
 
-// TODO: size of table should match sum(maxWorkCapacity) of all users
-	static constexpr size_t kWorkTableNumEntries = 1024;
+	static constexpr size_t kMaxWorkTableNumEntries = 1024;
+	static constexpr size_t kWorkTableIndexBits = 24;
+	static constexpr size_t kWorkTableMaxSize = (1 << kWorkTableIndexBits) - 1; // - 1 since
+	// kIOPerfControlClientWorkUntracked takes number 0
+	static constexpr size_t kWorkTableIndexMask = mask(kWorkTableIndexBits);
 
 	uint64_t allocateToken(thread_group *thread_group);
 	void deallocateToken(uint64_t token);
 	bool getEntryForToken(uint64_t token, WorkTableEntry &entry);
 	void markEntryStarted(uint64_t token, bool started);
+	inline uint64_t tokenToGlobalUniqueToken(uint64_t token);
 
-	PerfControllerInterface interface;
-	IOLock *interfaceLock;
-	OSSet *deviceRegistrationList;
-
-// TODO: replace with ltable or pool of objects
-	WorkTableEntry workTable[kWorkTableNumEntries];
+	uint8_t driverIndex;
+	IOPerfControlClientShared *shared;
+	WorkTableEntry *workTable;
+	size_t workTableLength;
 	size_t workTableNextIndex;
 	IOSimpleLock *workTableLock;
 };

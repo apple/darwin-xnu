@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -82,7 +82,7 @@ extern int available_for_purge;
  * mostly used on a user context and we don't want any contention with the
  * pageout daemon.
  */
-decl_lck_mtx_data(extern, vm_purgeable_queue_lock)
+decl_lck_mtx_data(extern, vm_purgeable_queue_lock);
 
 /* add a new token to queue. called by vm_object_purgeable_control */
 /* enter with page queue locked */

@@ -14,6 +14,8 @@
 #include <darwintest.h>
 #include <TargetConditionals.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 #define MAX_TRIES 20
 #define EXTRA_THREADS 15
 

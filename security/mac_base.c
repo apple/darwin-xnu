@@ -181,9 +181,20 @@ SYSCTL_UINT(_security_mac, OID_AUTO, label_mbufs, SECURITY_MAC_CTLFLAGS,
  * already has to deal with uninitialized labels, this probably won't
  * be a problem.
  */
+#if CONFIG_MACF_LAZY_VNODE_LABELS
+unsigned int    mac_label_vnodes = 1;
+#else
 unsigned int    mac_label_vnodes = 0;
-SYSCTL_UINT(_security_mac, OID_AUTO, labelvnodes, SECURITY_MAC_CTLFLAGS,
-    &mac_label_vnodes, 0, "Label all vnodes");
+#endif /* CONFIG_MACF_LAZY_VNODE_LABELS */
+SYSCTL_UINT(_security_mac, OID_AUTO, labelvnodes, SECURITY_MAC_CTLFLAGS
+#if CONFIG_MACF_LAZY_VNODE_LABELS
+    | CTLFLAG_RD
+#endif
+    , &mac_label_vnodes, 0, "Label all vnodes");
+
+unsigned int mac_vnode_label_count = 0;
+SYSCTL_UINT(_security_mac, OID_AUTO, vnode_label_count, SECURITY_MAC_CTLFLAGS | CTLFLAG_RD,
+    &mac_vnode_label_count, 0, "Count of vnode labels");
 
 unsigned int mac_device_enforce = 1;
 SYSCTL_UINT(_security_mac, OID_AUTO, device_enforce, SECURITY_MAC_CTLFLAGS,

@@ -6,6 +6,8 @@
 #include <darwintest.h>
 #include <darwintest_utils.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 #define T_LOG_VERBOSE(...)
 
 #define timespec2nanosec(ts) ((uint64_t)((ts)->tv_sec) * NSEC_PER_SEC + (uint64_t)((ts)->tv_nsec))

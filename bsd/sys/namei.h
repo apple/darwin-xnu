@@ -179,6 +179,7 @@ struct nameidata {
 #define AUDITVNPATH2    0x00200000 /* audit the path/vnode info */
 #define USEDVP          0x00400000 /* start the lookup at ndp.ni_dvp */
 #define CN_VOLFSPATH    0x00800000 /* user path was a volfs style path */
+#define CN_FIRMLINK_NOFOLLOW    0x01000000 /* Do not follow firm links */
 #define UNIONCREATED    0x02000000 /* union fs creation of vnode */
 #if NAMEDRSRCFORK
 #define CN_WANTSRSRCFORK 0x04000000

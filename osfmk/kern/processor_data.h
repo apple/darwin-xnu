@@ -36,6 +36,8 @@
  * #include kern/processor.h instead of this file.
  */
 
+#ifdef XNU_KERNEL_PRIVATE
+
 #ifdef MACH_KERNEL_PRIVATE
 
 #include <ipc/ipc_kmsg.h>
@@ -149,5 +151,9 @@ MACRO_BEGIN                                                                     
 MACRO_END
 
 #endif /* MACH_KERNEL_PRIVATE */
+
+extern boolean_t processor_in_panic_context(processor_t processor);
+
+#endif /* XNU_KERNEL_PRIVATE */
 
 #endif /* _KERN_PROCESSOR_DATA_H_ */

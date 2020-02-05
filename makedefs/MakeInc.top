@@ -88,7 +88,7 @@ override DEFAULT_I386_MACHINE_CONFIG := NONE
 override DEFAULT_X86_64_MACHINE_CONFIG := NONE
 override DEFAULT_X86_64H_MACHINE_CONFIG := NONE
 override DEFAULT_ARM_MACHINE_CONFIG	:= T8002
-override DEFAULT_ARM64_MACHINE_CONFIG	:= S5L8960X
+override DEFAULT_ARM64_MACHINE_CONFIG	:= T7000
 
 # This is typically never specified (TARGET_CONFIGS is used)
 ifndef MACHINE_CONFIGS
@@ -556,6 +556,11 @@ else ifeq ($(RC_ProjectName),xnu_kasan)
 install: install_config install_kernels
 else ifeq ($(RC_ProjectName),xnu_headers_Sim)
 install: installhdrs
+else ifeq ($(RC_ProjectName),xnu_headers_host)
+install: installhdrs
+export INSTALLHDRS_SKIP_HOST=YES
+else ifeq ($(RC_ProjectName),xnu_headers_driverkit)
+install: installhdrs_desktop
 else
 
 install: installhdrs install_textfiles install_config install_kernels install_aliases checkstyle

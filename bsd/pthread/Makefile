@@ -31,7 +31,7 @@ INSTALL_MI_DIR = pthread
 
 # /usr/local/include without PRIVATE stuff
 # /System/Library/Frameworks/System.framework/PrivateHeaders
-INCDIR = /usr/local/include
+INCDIR = $(SDKHEADERSROOT)/usr/local/include
 INSTALL_MI_LIST = ${DATAFILES}
 INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 

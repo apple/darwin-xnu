@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -38,35 +38,24 @@ __BEGIN_DECLS
 #ifndef KERNEL
 
 /*
- * In previous versions of the operating system, applications could use:
- *
- * syscall(SYS_kdebug_trace, APPSDBG_CODE(DBG_MACH_CHUD, <your event code>) | DBG_FUNC_<type>, arg1, arg2, arg3, arg4);
- *
- * to record events that would be displayed by Instruments.
- *
- * syscall(2) is now deprecated and this interface replaces the above call as follows:
- *
- * The code argument is <your event code>.  Only the low 14-bits of the code are
- * preserved.
+ * kdebug_signpost(2) is deprecated.  Use the os_signpost(3) family of tracing
+ * functions, instead.
  */
 
-/*
- * When <type> is NONE, use kdebug_signpost.
- */
-int kdebug_signpost(uint32_t code, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3, uintptr_t arg4)
-__OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0) __TVOS_AVAILABLE(10.0);
+int kdebug_signpost(uint32_t code, uintptr_t arg1, uintptr_t arg2,
+    uintptr_t arg3, uintptr_t arg4)
+__API_DEPRECATED_WITH_REPLACEMENT("os_signpost_event_emit",
+    macos(10.12, 10.15), ios(10.0, 13.0), watchos(3.0, 6.0), tvos(10.0, 13.0));
 
-/*
- * When <type> is START, use kdebug_signpost_start.
- */
-int kdebug_signpost_start(uint32_t code, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3, uintptr_t arg4)
-__OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0) __TVOS_AVAILABLE(10.0);
+int kdebug_signpost_start(uint32_t code, uintptr_t arg1, uintptr_t arg2,
+    uintptr_t arg3, uintptr_t arg4)
+__API_DEPRECATED_WITH_REPLACEMENT("os_signpost_interval_begin",
+    macos(10.12, 10.15), ios(10.0, 13.0), watchos(3.0, 6.0), tvos(10.0, 13.0));
 
-/*
- * When <type> is END, use kdebug_signpost_end.
- */
-int kdebug_signpost_end(uint32_t code, uintptr_t arg1, uintptr_t arg2, uintptr_t arg3, uintptr_t arg4)
-__OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0) __WATCHOS_AVAILABLE(3.0) __TVOS_AVAILABLE(10.0);
+int kdebug_signpost_end(uint32_t code, uintptr_t arg1, uintptr_t arg2,
+    uintptr_t arg3, uintptr_t arg4)
+__API_DEPRECATED_WITH_REPLACEMENT("os_signpost_interval_end",
+    macos(10.12, 10.15), ios(10.0, 13.0), watchos(3.0, 6.0), tvos(10.0, 13.0));
 
 #endif /* !KERNEL */
 

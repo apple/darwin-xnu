@@ -101,7 +101,7 @@ sysctl_ubsan_log_dump SYSCTL_HANDLER_ARGS
 	if (!buf) {
 		return 0;
 	}
-	buf[0] = '\0';
+	bzero(buf, sz);
 
 	for (size_t i = start; i != end; i = next_entry(i)) {
 		n += ubsan_format(&ubsan_log[i], buf + n, sz - n);

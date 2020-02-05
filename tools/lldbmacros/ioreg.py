@@ -34,6 +34,7 @@ def GetObjectSummary(obj):
         return
 
     vt = dereference(Cast(obj, 'uintptr_t *')) - 2 * sizeof('uintptr_t')
+    vt = kern.StripKernelPAC(vt)
     vtype = kern.SymbolicateFromAddress(vt)
     if len(vtype):
         vtype_str = " <" + vtype[0].GetName() + ">"
@@ -91,6 +92,7 @@ def GetObjectTypeStr(obj):
         return None
 
     vt = dereference(Cast(obj, 'uintptr_t *')) - 2 * sizeof('uintptr_t')
+    vt = kern.StripKernelPAC(vt)
     vtype = kern.SymbolicateFromAddress(vt)
     if len(vtype):
         return vtype[0].GetName()
@@ -128,6 +130,7 @@ def GetRegistryEntrySummary(entry):
     
     # I'm using uintptr_t for now to work around <rdar://problem/12749733> FindFirstType & Co. should allow you to make pointer types directly
     vtableAddr = dereference(Cast(entry, 'uintptr_t *')) - 2 * sizeof('uintptr_t *')
+    vtableAddr = kern.StripKernelPAC(vtableAddr)
     vtype = kern.SymbolicateFromAddress(vtableAddr)
     if vtype is None or len(vtype) < 1:
         out_string += "<object 0x{0: <16x}, id 0x{1:x}, vtable 0x{2: <16x}".format(entry, CastIOKitClass(entry, 'IORegistryEntry *').reserved.fRegistryEntryID, vtableAddr)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -42,89 +42,117 @@ struct cbrt_table_entry {
 
 static const struct cbrt_table_entry cbrt_table[] = {
 	/* mantissa = 0x1.00... */
-	{0x1.0000000000000p+0, 0x1.0000000000000p+0,
-	 0x1.0000000000000p+0, 0x1.0000000000000p+0}, /* exponent = 0 */
-	{0x1.037e200000000p+1, 0x1.4400000000000p+0,
-	 0x1.948b0fcd6e9e0p-1, 0x1.f91bd1b62b9cfp-2}, /* exponent = 1 */
-	{0x1.0315800000000p+2, 0x1.9800000000000p+0,
-	 0x1.4141414141414p-1, 0x1.f9e7cba5753afp-3}, /* exponent = 2 */
+	{
+		.x            = 0x1.0000000000000p+0,
+		.cbrt_x       = 0x1.0000000000000p+0,
+		.recip_cbrt_x = 0x1.0000000000000p+0,
+		.recip_x      = 0x1.0000000000000p+0
+	}, /* exponent = 0 */
+	{
+		.x            = 0x1.037e200000000p+1,
+		.cbrt_x       = 0x1.4400000000000p+0,
+		.recip_cbrt_x = 0x1.948b0fcd6e9e0p-1,
+		.recip_x      = 0x1.f91bd1b62b9cfp-2
+	}, /* exponent = 1 */
+	{
+		.x            = 0x1.0315800000000p+2,
+		.cbrt_x       = 0x1.9800000000000p+0,
+		.recip_cbrt_x = 0x1.4141414141414p-1,
+		.recip_x      = 0x1.f9e7cba5753afp-3
+	}, /* exponent = 2 */
 
 	/* mantissa = 0x1.04... */
-	{0x1.060c080000000p+0, 0x1.0200000000000p+0,
-	 0x1.fc07f01fc07f0p-1, 0x1.f42f61dacddc6p-1}, /* exponent = 0 */
-	{0x1.05ff4c356ff40p+1, 0x1.450a000000000p+0,
-	 0x1.933fff9b30002p-1, 0x1.f447b132ca3acp-2}, /* exponent = 1 */
-	{0x1.06e9aa0000000p+2, 0x1.9a00000000000p+0,
-	 0x1.3fb013fb013fbp-1, 0x1.f289bb31fd41cp-3}, /* exponent = 2 */
+	{
+		.x = 0x1.060c080000000p+0,
+		.cbrt_x = 0x1.0200000000000p+0,
+		0x1.fc07f01fc07f0p-1,
+		0x1.f42f61dacddc6p-1
+	}, /* exponent = 0 */
+	{
+		.x = 0x1.05ff4c356ff40p+1,
+		.cbrt_x = 0x1.450a000000000p+0,
+		0x1.933fff9b30002p-1,
+		0x1.f447b132ca3acp-2
+	}, /* exponent = 1 */
+	{
+		.x = 0x1.06e9aa0000000p+2,
+		.cbrt_x = 0x1.9a00000000000p+0,
+		0x1.3fb013fb013fbp-1,
+		0x1.f289bb31fd41cp-3
+	}, /* exponent = 2 */
 
 	/* mantissa = 0x1.08...*/
-	{0x1.09fe97c0b2e80p+0, 0x1.034a000000000p+0,
+	{.x = 0x1.09fe97c0b2e80p+0, .cbrt_x = 0x1.034a000000000p+0,
 	 0x1.f9815c85b04a3p-1, 0x1.ecc3168ac46e4p-1}, // exponent = 0
-	{0x1.0853ec0000000p+1, 0x1.4600000000000p+0, 0x1.920fb49d0e229p-1, 0x1.efde7dcdacefdp-2}, // exponent = 1
-	{0x1.0ac7700000000p+2, 0x1.9c00000000000p+0, 0x1.3e22cbce4a902p-1, 0x1.eb501ca81bb3ep-3}, // exponent = 2
+	{.x = 0x1.0853ec0000000p+1, .cbrt_x = 0x1.4600000000000p+0,
+	 0x1.920fb49d0e229p-1, 0x1.efde7dcdacefdp-2}, // exponent = 1
+	{.x = 0x1.0ac7700000000p+2, .cbrt_x = 0x1.9c00000000000p+0,
+	 0x1.3e22cbce4a902p-1, 0x1.eb501ca81bb3ep-3}, // exponent = 2
 
 	/* mantissa = 0x1.0c...*/
-	{0x1.0c30400000000p+0, 0x1.0400000000000p+0, 0x1.f81f81f81f820p-1, 0x1.e8bb1d5b6e585p-1}, // exponent = 0
-	{0x1.0d39000000000p+1, 0x1.4800000000000p+0, 0x1.8f9c18f9c18fap-1, 0x1.e6da80ced1523p-2}, // exponent = 1
-	{0x1.0eaede0000000p+2, 0x1.9e00000000000p+0, 0x1.3c995a47babe7p-1, 0x1.e43a0fc24fe4bp-3}, // exponent = 2
+	{.x = 0x1.0c30400000000p+0, 0x1.0400000000000p+0,
+	 0x1.f81f81f81f820p-1, 0x1.e8bb1d5b6e585p-1}, // exponent = 0
+	{.x = 0x1.0d39000000000p+1, 0x1.4800000000000p+0,
+	 0x1.8f9c18f9c18fap-1, 0x1.e6da80ced1523p-2}, // exponent = 1
+	{.x = 0x1.0eaede0000000p+2, 0x1.9e00000000000p+0, 0x1.3c995a47babe7p-1, 0x1.e43a0fc24fe4bp-3}, // exponent = 2
 
 	/* mantissa = 0x1.10...*/
-	{0x1.126cd80000000p+0, 0x1.0600000000000p+0, 0x1.f44659e4a4271p-1, 0x1.dd9fb30af3365p-1}, // exponent = 0
-	{0x1.122d740000000p+1, 0x1.4a00000000000p+0, 0x1.8d3018d3018d3p-1, 0x1.de0e209af882ep-2}, // exponent = 1
-	{0x1.12a0000000000p+2, 0x1.a000000000000p+0, 0x1.3b13b13b13b14p-1, 0x1.dd46baab49c24p-3}, // exponent = 2
+	{.x = 0x1.126cd80000000p+0, 0x1.0600000000000p+0, 0x1.f44659e4a4271p-1, 0x1.dd9fb30af3365p-1}, // exponent = 0
+	{.x = 0x1.122d740000000p+1, 0x1.4a00000000000p+0, 0x1.8d3018d3018d3p-1, 0x1.de0e209af882ep-2}, // exponent = 1
+	{.x = 0x1.12a0000000000p+2, 0x1.a000000000000p+0, 0x1.3b13b13b13b14p-1, 0x1.dd46baab49c24p-3}, // exponent = 2
 
 	/* mantissa = 0x1.14...*/
-	{0x1.15f9b5b480000p+0, 0x1.0720000000000p+0, 0x1.f222c82dba316p-1, 0x1.d786108fd7a9fp-1}, // exponent = 0
-	{0x1.1731600000000p+1, 0x1.4c00000000000p+0, 0x1.8acb90f6bf3aap-1, 0x1.d577b2f5c6f87p-2}, // exponent = 1
-	{0x1.169ae20000000p+2, 0x1.a200000000000p+0, 0x1.3991c2c187f63p-1, 0x1.d67549c6f9b67p-3}, // exponent = 2
+	{.x = 0x1.15f9b5b480000p+0, 0x1.0720000000000p+0, 0x1.f222c82dba316p-1, 0x1.d786108fd7a9fp-1}, // exponent = 0
+	{.x = 0x1.1731600000000p+1, 0x1.4c00000000000p+0, 0x1.8acb90f6bf3aap-1, 0x1.d577b2f5c6f87p-2}, // exponent = 1
+	{.x = 0x1.169ae20000000p+2, 0x1.a200000000000p+0, 0x1.3991c2c187f63p-1, 0x1.d67549c6f9b67p-3}, // exponent = 2
 
 	/* mantissa = 0x1.18...*/
-	{0x1.18c2000000000p+0, 0x1.0800000000000p+0, 0x1.f07c1f07c1f08p-1, 0x1.d2d9cbd756afdp-1}, // exponent = 0
-	{0x1.19fb2ce620540p+1, 0x1.4d1a000000000p+0, 0x1.897d564f5cf98p-1, 0x1.d0d34ccd78141p-2}, // exponent = 1
-	{0x1.1a9f900000000p+2, 0x1.a400000000000p+0, 0x1.3813813813814p-1, 0x1.cfc4ef7db5bffp-3}, // exponent = 2
+	{.x = 0x1.18c2000000000p+0, 0x1.0800000000000p+0, 0x1.f07c1f07c1f08p-1, 0x1.d2d9cbd756afdp-1}, // exponent = 0
+	{.x = 0x1.19fb2ce620540p+1, 0x1.4d1a000000000p+0, 0x1.897d564f5cf98p-1, 0x1.d0d34ccd78141p-2}, // exponent = 1
+	{.x = 0x1.1a9f900000000p+2, 0x1.a400000000000p+0, 0x1.3813813813814p-1, 0x1.cfc4ef7db5bffp-3}, // exponent = 2
 
 	/* mantissa = 0x1.1c...*/
-	{0x1.1f2fe80000000p+0, 0x1.0a00000000000p+0, 0x1.ecc07b301ecc0p-1, 0x1.c86636f753a66p-1}, // exponent = 0
-	{0x1.1c44dc0000000p+1, 0x1.4e00000000000p+0, 0x1.886e5f0abb04ap-1, 0x1.cd159cdbba714p-2}, // exponent = 1
-	{0x1.1eae160000000p+2, 0x1.a600000000000p+0, 0x1.3698df3de0748p-1, 0x1.c934e4095d202p-3}, // exponent = 2
+	{.x = 0x1.1f2fe80000000p+0, 0x1.0a00000000000p+0, 0x1.ecc07b301ecc0p-1, 0x1.c86636f753a66p-1}, // exponent = 0
+	{.x = 0x1.1c44dc0000000p+1, 0x1.4e00000000000p+0, 0x1.886e5f0abb04ap-1, 0x1.cd159cdbba714p-2}, // exponent = 1
+	{.x = 0x1.1eae160000000p+2, 0x1.a600000000000p+0, 0x1.3698df3de0748p-1, 0x1.c934e4095d202p-3}, // exponent = 2
 
 	/* mantissa = 0x1.20...*/
-	{0x1.21fac7ca59c00p+0, 0x1.0adc000000000p+0, 0x1.eb2a412496abdp-1, 0x1.c40112c606d3ep-1}, // exponent = 0
-	{0x1.2168000000000p+1, 0x1.5000000000000p+0, 0x1.8618618618618p-1, 0x1.c4e651e0c37d7p-2}, // exponent = 1
-	{0x1.22c6800000000p+2, 0x1.a800000000000p+0, 0x1.3521cfb2b78c1p-1, 0x1.c2c46544650c1p-3}, // exponent = 2
+	{.x = 0x1.21fac7ca59c00p+0, 0x1.0adc000000000p+0, 0x1.eb2a412496abdp-1, 0x1.c40112c606d3ep-1}, // exponent = 0
+	{.x = 0x1.2168000000000p+1, 0x1.5000000000000p+0, 0x1.8618618618618p-1, 0x1.c4e651e0c37d7p-2}, // exponent = 1
+	{.x = 0x1.22c6800000000p+2, 0x1.a800000000000p+0, 0x1.3521cfb2b78c1p-1, 0x1.c2c46544650c1p-3}, // exponent = 2
 
 	/* mantissa = 0x1.24...*/
-	{0x1.25b6c00000000p+0, 0x1.0c00000000000p+0, 0x1.e9131abf0b767p-1, 0x1.be41e7ee3f7edp-1}, // exponent = 0
-	{0x1.269ae40000000p+1, 0x1.5200000000000p+0, 0x1.83c977ab2beddp-1, 0x1.bce853967753cp-2}, // exponent = 1
-	{0x1.26e8da0000000p+2, 0x1.aa00000000000p+0, 0x1.33ae45b57bcb2p-1, 0x1.bc72b67ab9ce7p-3}, // exponent = 2
+	{.x = 0x1.25b6c00000000p+0, 0x1.0c00000000000p+0, 0x1.e9131abf0b767p-1, 0x1.be41e7ee3f7edp-1}, // exponent = 0
+	{.x = 0x1.269ae40000000p+1, 0x1.5200000000000p+0, 0x1.83c977ab2beddp-1, 0x1.bce853967753cp-2}, // exponent = 1
+	{.x = 0x1.26e8da0000000p+2, 0x1.aa00000000000p+0, 0x1.33ae45b57bcb2p-1, 0x1.bc72b67ab9ce7p-3}, // exponent = 2
 
 	/* mantissa = 0x1.28...*/
-	{0x1.29ff9aaaa2c00p+0, 0x1.0d4c000000000p+0, 0x1.e6b8275501adbp-1, 0x1.b7d7596e80007p-1}, // exponent = 0
-	{0x1.2bdda00000000p+1, 0x1.5400000000000p+0, 0x1.8181818181818p-1, 0x1.b51a30f9739f8p-2}, // exponent = 1
-	{0x1.2b15300000000p+2, 0x1.ac00000000000p+0, 0x1.323e34a2b10bfp-1, 0x1.b63f203c60c07p-3}, // exponent = 2
+	{.x = 0x1.29ff9aaaa2c00p+0, 0x1.0d4c000000000p+0, 0x1.e6b8275501adbp-1, 0x1.b7d7596e80007p-1}, // exponent = 0
+	{.x = 0x1.2bdda00000000p+1, 0x1.5400000000000p+0, 0x1.8181818181818p-1, 0x1.b51a30f9739f8p-2}, // exponent = 1
+	{.x = 0x1.2b15300000000p+2, 0x1.ac00000000000p+0, 0x1.323e34a2b10bfp-1, 0x1.b63f203c60c07p-3}, // exponent = 2
 
 	/* mantissa = 0x1.2c...*/
-	{0x1.2c56b80000000p+0, 0x1.0e00000000000p+0, 0x1.e573ac901e574p-1, 0x1.b469f4adc7794p-1}, // exponent = 0
-	{0x1.2dfff74f29dc0p+1, 0x1.54ce000000000p+0, 0x1.80987c755886ap-1, 0x1.b203708429799p-2}, // exponent = 1
-	{0x1.2f4b8e0000000p+2, 0x1.ae00000000000p+0, 0x1.30d190130d190p-1, 0x1.b028f031c8644p-3}, // exponent = 2
+	{.x = 0x1.2c56b80000000p+0, 0x1.0e00000000000p+0, 0x1.e573ac901e574p-1, 0x1.b469f4adc7794p-1}, // exponent = 0
+	{.x = 0x1.2dfff74f29dc0p+1, 0x1.54ce000000000p+0, 0x1.80987c755886ap-1, 0x1.b203708429799p-2}, // exponent = 1
+	{.x = 0x1.2f4b8e0000000p+2, 0x1.ae00000000000p+0, 0x1.30d190130d190p-1, 0x1.b028f031c8644p-3}, // exponent = 2
 
 	/* mantissa = 0x1.30...*/
-	{0x1.3310000000000p+0, 0x1.1000000000000p+0, 0x1.e1e1e1e1e1e1ep-1, 0x1.aadb93d39ae9cp-1}, // exponent = 0
-	{0x1.31304c0000000p+1, 0x1.5600000000000p+0, 0x1.7f405fd017f40p-1, 0x1.ad7a85e593e54p-2}, // exponent = 1
-	{0x1.338c000000000p+2, 0x1.b000000000000p+0, 0x1.2f684bda12f68p-1, 0x1.aa2f78f1b4cc6p-3}, // exponent = 2
+	{.x = 0x1.3310000000000p+0, 0x1.1000000000000p+0, 0x1.e1e1e1e1e1e1ep-1, 0x1.aadb93d39ae9cp-1}, // exponent = 0
+	{.x = 0x1.31304c0000000p+1, 0x1.5600000000000p+0, 0x1.7f405fd017f40p-1, 0x1.ad7a85e593e54p-2}, // exponent = 1
+	{.x = 0x1.338c000000000p+2, 0x1.b000000000000p+0, 0x1.2f684bda12f68p-1, 0x1.aa2f78f1b4cc6p-3}, // exponent = 2
 
 	/* mantissa = 0x1.34... */
-	{0x1.35fb6f4579c00p+0, 0x1.10dc000000000p+0, 0x1.e05d5a24448c5p-1, 0x1.a6d6548fa984dp-1}, // exponent = 0
-	{0x1.3693000000000p+1, 0x1.5800000000000p+0, 0x1.7d05f417d05f4p-1, 0x1.a607fa909db1fp-2}, // exponent = 1
-	{0x1.37d6920000000p+2, 0x1.b200000000000p+0, 0x1.2e025c04b8097p-1, 0x1.a45211d8b748ap-3}, // exponent = 2
+	{.x = 0x1.35fb6f4579c00p+0, 0x1.10dc000000000p+0, 0x1.e05d5a24448c5p-1, 0x1.a6d6548fa984dp-1}, // exponent = 0
+	{.x = 0x1.3693000000000p+1, 0x1.5800000000000p+0, 0x1.7d05f417d05f4p-1, 0x1.a607fa909db1fp-2}, // exponent = 1
+	{.x = 0x1.37d6920000000p+2, 0x1.b200000000000p+0, 0x1.2e025c04b8097p-1, 0x1.a45211d8b748ap-3}, // exponent = 2
 
 /* mantissa = 0x1.38... */
-	{0x1.39e2c80000000p+0, 0x1.1200000000000p+0, 0x1.de5d6e3f8868ap-1, 0x1.a1941b013022dp-1}, // exponent = 0
-	{0x1.39fe541ac7840p+1, 0x1.5942000000000p+0, 0x1.7ba298eae8947p-1, 0x1.a16f787114257p-2}, // exponent = 1
-	{0x1.39ffaac000000p+2, 0x1.b300000000000p+0, 0x1.2d50a012d50a0p-1, 0x1.a16db0ec408b2p-3}, // exponent = 2
+	{.x = 0x1.39e2c80000000p+0, 0x1.1200000000000p+0, 0x1.de5d6e3f8868ap-1, 0x1.a1941b013022dp-1}, // exponent = 0
+	{.x = 0x1.39fe541ac7840p+1, 0x1.5942000000000p+0, 0x1.7ba298eae8947p-1, 0x1.a16f787114257p-2}, // exponent = 1
+	{.x = 0x1.39ffaac000000p+2, 0x1.b300000000000p+0, 0x1.2d50a012d50a0p-1, 0x1.a16db0ec408b2p-3}, // exponent = 2
 
 	/* mantissa = 0x1.3c... */
-	{0x1.3dfc1312b0000p+0, 0x1.1330000000000p+0, 0x1.dc4cfaf10eb5cp-1, 0x1.9c322b87f17e8p-1}, // exponent = 0
+	{.x = 0x1.3dfc1312b0000p+0, 0x1.1330000000000p+0, 0x1.dc4cfaf10eb5cp-1, 0x1.9c322b87f17e8p-1}, // exponent = 0
 	{0x1.3c05d40000000p+1, 0x1.5a00000000000p+0, 0x1.7ad2208e0ecc3p-1, 0x1.9ec1430b0dfc7p-2}, // exponent = 1
 	{0x1.3c2b500000000p+2, 0x1.b400000000000p+0, 0x1.2c9fb4d812ca0p-1, 0x1.9e9016e2211b6p-3}, // exponent = 2
 
@@ -349,24 +377,24 @@ static const struct cbrt_table_entry cbrt_table[] = {
 	{0x1.ee35ca0000000p+2, 0x1.fa00000000000p+0, 0x1.03091b51f5e1ap-1, 0x1.093712d33ff42p-3}, // exponent = 2
 
 	/* mantissa = 0x1.f0... */
-	{0x1.f1fd112ab0c80p+0, 0x1.3f92000000000p+0, 0x1.9a2696dd75ba1p-1, 0x1.0733ed7907e73p-1}, // exponent = 0
-	{0x1.f1fc8b255bc40p+1, 0x1.92a2000000000p+0, 0x1.45898cb57730cp-1, 0x1.0734344eaebefp-2}, // exponent = 1
-	{0x1.f1ff2ff2d4ba0p+2, 0x1.fb4a000000000p+0, 0x1.02609989a73cfp-1, 0x1.0732ce999c3d1p-3}, // exponent = 2
+	{.x = 0x1.f1fd112ab0c80p+0, 0x1.3f92000000000p+0, 0x1.9a2696dd75ba1p-1, 0x1.0733ed7907e73p-1}, // exponent = 0
+	{.x = 0x1.f1fc8b255bc40p+1, 0x1.92a2000000000p+0, 0x1.45898cb57730cp-1, 0x1.0734344eaebefp-2}, // exponent = 1
+	{.x = 0x1.f1ff2ff2d4ba0p+2, 0x1.fb4a000000000p+0, 0x1.02609989a73cfp-1, 0x1.0732ce999c3d1p-3}, // exponent = 2
 
 	/* mantissa = 0x1.f4... */
-	{0x1.f400000000000p+0, 0x1.4000000000000p+0, 0x1.999999999999ap-1, 0x1.0624dd2f1a9fcp-1}, // exponent = 0
-	{0x1.f713a00000000p+1, 0x1.9400000000000p+0, 0x1.446f86562d9fbp-1, 0x1.048a727489527p-2}, // exponent = 1
-	{0x1.f417f00000000p+2, 0x1.fc00000000000p+0, 0x1.0204081020408p-1, 0x1.061850f2a7123p-3}, // exponent = 2
+	{.x = 0x1.f400000000000p+0, 0x1.4000000000000p+0, 0x1.999999999999ap-1, 0x1.0624dd2f1a9fcp-1}, // exponent = 0
+	{.x = 0x1.f713a00000000p+1, 0x1.9400000000000p+0, 0x1.446f86562d9fbp-1, 0x1.048a727489527p-2}, // exponent = 1
+	{.x = 0x1.f417f00000000p+2, 0x1.fc00000000000p+0, 0x1.0204081020408p-1, 0x1.061850f2a7123p-3}, // exponent = 2
 
 	/* mantissa = 0x1.f8... */
-	{0x1.f9fe36d7a7d80p+0, 0x1.4146000000000p+0, 0x1.97f9f956c92fdp-1, 0x1.030a055aebeddp-1}, // exponent = 0
-	{0x1.f9f8b6ce70ec0p+1, 0x1.94c6000000000p+0, 0x1.43d0d2af8e146p-1, 0x1.030cd637fd65ep-2}, // exponent = 1
-	{0x1.fa05fe0000000p+2, 0x1.fe00000000000p+0, 0x1.0101010101010p-1, 0x1.03060a0f151c2p-3}, // exponent = 2
+	{.x = 0x1.f9fe36d7a7d80p+0, 0x1.4146000000000p+0, 0x1.97f9f956c92fdp-1, 0x1.030a055aebeddp-1}, // exponent = 0
+	{.x = 0x1.f9f8b6ce70ec0p+1, 0x1.94c6000000000p+0, 0x1.43d0d2af8e146p-1, 0x1.030cd637fd65ep-2}, // exponent = 1
+	{.x = 0x1.fa05fe0000000p+2, 0x1.fe00000000000p+0, 0x1.0101010101010p-1, 0x1.03060a0f151c2p-3}, // exponent = 2
 
 	/* mantissa = 0x1.fc... */
-	{0x1.fd6f080000000p+0, 0x1.4200000000000p+0, 0x1.970e4f80cb872p-1, 0x1.014a239d8b1a9p-1}, // exponent = 0
-	{0x1.fe95cc0000000p+1, 0x1.9600000000000p+0, 0x1.42d6625d51f87p-1, 0x1.00b59a78a8ffcp-2}, // exponent = 1
-	{0x1.0000000000000p+3, 0x1.0000000000000p+1, 0x1.0000000000000p-1, 0x1.0000000000000p-3}, // exponent = 2
+	{.x = 0x1.fd6f080000000p+0, 0x1.4200000000000p+0, 0x1.970e4f80cb872p-1, 0x1.014a239d8b1a9p-1}, // exponent = 0
+	{.x = 0x1.fe95cc0000000p+1, 0x1.9600000000000p+0, 0x1.42d6625d51f87p-1, 0x1.00b59a78a8ffcp-2}, // exponent = 1
+	{.x = 0x1.0000000000000p+3, 0x1.0000000000000p+1, 0x1.0000000000000p-1, 0x1.0000000000000p-3}, // exponent = 2
 };
 
 union floatdata { float f; int32_t x; };

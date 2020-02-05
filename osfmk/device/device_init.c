@@ -90,12 +90,10 @@ lck_mtx_t iokit_obj_to_port_binding_lock;
 void
 device_service_create(void)
 {
-	master_device_port = ipc_port_alloc_kernel();
-	if (master_device_port == IP_NULL) {
-		panic("can't allocate master device port");
-	}
+	master_device_port = ipc_kobject_alloc_port(
+		(ipc_kobject_t)&master_device_kobject, IKOT_MASTER_DEVICE,
+		IPC_KOBJECT_ALLOC_NONE);
 
-	ipc_kobject_set(master_device_port, (ipc_kobject_t)&master_device_kobject, IKOT_MASTER_DEVICE);
 	kernel_set_special_port(host_priv_self(), HOST_IO_MASTER_PORT,
 	    ipc_port_make_send(master_device_port));
 

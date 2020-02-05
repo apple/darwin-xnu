@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -111,6 +111,8 @@
 #include <sys/proc_info.h>
 #include <sys/bsdtask_info.h>
 #include <sys/persona.h>
+#include <sys/sysent.h>
+#include <sys/reason.h>
 
 #ifdef CONFIG_32BIT_TELEMETRY
 #include <sys/kasl.h>
@@ -162,6 +164,10 @@ extern struct tty cons;
 
 extern int cs_debug;
 
+#if DEVELOPMENT || DEBUG
+int syscallfilter_disable = 0;
+#endif // DEVELOPMENT || DEBUG
+
 #if DEBUG
 #define __PROC_INTERNAL_DEBUG 1
 #endif
@@ -184,6 +190,7 @@ typedef uint64_t unaligned_u64 __attribute__((aligned(1)));
 
 static void orphanpg(struct pgrp * pg);
 void proc_name_kdp(task_t t, char * buf, int size);
+boolean_t proc_binary_uuid_kdp(task_t task, uuid_t uuid);
 int proc_threadname_kdp(void * uth, char * buf, size_t size);
 void proc_starttime_kdp(void * p, unaligned_u64 *tv_sec, unaligned_u64 *tv_usec, unaligned_u64 *abstime);
 char * proc_name_address(void * p);
@@ -463,13 +470,12 @@ record_procref(proc_t p __unused, int count)
 		return;
 	}
 
-	if (count == 1) {
-		if (uth->uu_pindex < NUM_PROC_REFS_TO_TRACK) {
-			backtrace((uintptr_t *) &uth->uu_proc_pcs[uth->uu_pindex], PROC_REF_STACK_DEPTH);
+	if (uth->uu_pindex < NUM_PROC_REFS_TO_TRACK) {
+		backtrace((uintptr_t *) &uth->uu_proc_pcs[uth->uu_pindex],
+		    PROC_REF_STACK_DEPTH, NULL);
 
-			uth->uu_proc_ps[uth->uu_pindex] = p;
-			uth->uu_pindex++;
-		}
+		uth->uu_proc_ps[uth->uu_pindex] = p;
+		uth->uu_pindex++;
 	}
 #endif
 }
@@ -809,6 +815,15 @@ proc_ppid(proc_t p)
 }
 
 int
+proc_original_ppid(proc_t p)
+{
+	if (p != NULL) {
+		return p->p_original_ppid;
+	}
+	return -1;
+}
+
+int
 proc_selfpid(void)
 {
 	return current_proc()->p_pid;
@@ -824,6 +839,24 @@ int
 proc_selfcsflags(void)
 {
 	return current_proc()->p_csflags;
+}
+
+uint32_t
+proc_platform(proc_t p)
+{
+	if (p != NULL) {
+		return p->p_platform;
+	}
+	return (uint32_t)-1;
+}
+
+uint32_t
+proc_sdk(proc_t p)
+{
+	if (p != NULL) {
+		return p->p_sdk;
+	}
+	return (uint32_t)-1;
 }
 
 #if CONFIG_DTRACE
@@ -921,6 +954,19 @@ proc_name_kdp(task_t t, char * buf, int size)
 	} else {
 		strlcpy(buf, &p->p_comm[0], MIN((int)sizeof(p->p_comm), size));
 	}
+}
+
+boolean_t
+proc_binary_uuid_kdp(task_t task, uuid_t uuid)
+{
+	proc_t p = get_bsdtask_info(task);
+	if (p == PROC_NULL) {
+		return FALSE;
+	}
+
+	proc_getexecutableuuid(p, uuid, sizeof(uuid_t));
+
+	return TRUE;
 }
 
 int
@@ -1191,6 +1237,12 @@ proc_getcdhash(proc_t p, unsigned char *cdhash)
 	return vn_getcdhash(p->p_textvp, p->p_textoff, cdhash);
 }
 
+int
+proc_exitstatus(proc_t p)
+{
+	return p->p_xstat & 0xffff;
+}
+
 void
 proc_getexecutableuuid(proc_t p, unsigned char *uuidbuf, unsigned long size)
 {
@@ -1214,6 +1266,49 @@ proc_getexecutablevnode(proc_t p)
 	return NULLVP;
 }
 
+int
+proc_selfexecutableargs(uint8_t *buf, size_t *buflen)
+{
+	proc_t p = current_proc();
+
+	// buflen must always be provided
+	if (buflen == NULL) {
+		return EINVAL;
+	}
+
+	// If a buf is provided, there must be at least enough room to fit argc
+	if (buf && *buflen < sizeof(p->p_argc)) {
+		return EINVAL;
+	}
+
+	if (!p->user_stack) {
+		return EINVAL;
+	}
+
+	if (buf == NULL) {
+		*buflen = p->p_argslen + sizeof(p->p_argc);
+		return 0;
+	}
+
+	// Copy in argc to the first 4 bytes
+	memcpy(buf, &p->p_argc, sizeof(p->p_argc));
+
+	if (*buflen > sizeof(p->p_argc) && p->p_argslen > 0) {
+		// See memory layout comment in kern_exec.c:exec_copyout_strings()
+		// We want to copy starting from `p_argslen` bytes away from top of stack
+		return copyin(p->user_stack - p->p_argslen,
+		           buf + sizeof(p->p_argc),
+		           MIN(p->p_argslen, *buflen - sizeof(p->p_argc)));
+	} else {
+		return 0;
+	}
+}
+
+off_t
+proc_getexecutableoffset(proc_t p)
+{
+	return p->p_textoff;
+}
 
 void
 bsd_set_dependency_capable(task_t task)
@@ -1387,6 +1482,7 @@ pinsertchild(proc_t parent, proc_t child)
 	TAILQ_INIT(&child->p_evlist);
 	child->p_pptr = parent;
 	child->p_ppid = parent->p_pid;
+	child->p_original_ppid = parent->p_pid;
 	child->p_puniqueid = parent->p_uniqueid;
 	child->p_xhighbits = 0;
 
@@ -1766,20 +1862,104 @@ fixjobc(proc_t p, struct pgrp *pgrp, int entering)
 }
 
 /*
+ * The pidlist_* routines support the functions in this file that
+ * walk lists of processes applying filters and callouts to the
+ * elements of the list.
+ *
+ * A prior implementation used a single linear array, which can be
+ * tricky to allocate on large systems. This implementation creates
+ * an SLIST of modestly sized arrays of PIDS_PER_ENTRY elements.
+ *
+ * The array should be sized large enough to keep the overhead of
+ * walking the list low, but small enough that blocking allocations of
+ * pidlist_entry_t structures always succeed.
+ */
+
+#define PIDS_PER_ENTRY 1021
+
+typedef struct pidlist_entry {
+	SLIST_ENTRY(pidlist_entry) pe_link;
+	u_int pe_nused;
+	pid_t pe_pid[PIDS_PER_ENTRY];
+} pidlist_entry_t;
+
+typedef struct {
+	SLIST_HEAD(, pidlist_entry) pl_head;
+	struct pidlist_entry *pl_active;
+	u_int pl_nalloc;
+} pidlist_t;
+
+static __inline__ pidlist_t *
+pidlist_init(pidlist_t *pl)
+{
+	SLIST_INIT(&pl->pl_head);
+	pl->pl_active = NULL;
+	pl->pl_nalloc = 0;
+	return pl;
+}
+
+static u_int
+pidlist_alloc(pidlist_t *pl, u_int needed)
+{
+	while (pl->pl_nalloc < needed) {
+		pidlist_entry_t *pe = kalloc(sizeof(*pe));
+		if (NULL == pe) {
+			panic("no space for pidlist entry");
+		}
+		pe->pe_nused = 0;
+		SLIST_INSERT_HEAD(&pl->pl_head, pe, pe_link);
+		pl->pl_nalloc += (sizeof(pe->pe_pid) / sizeof(pe->pe_pid[0]));
+	}
+	return pl->pl_nalloc;
+}
+
+static void
+pidlist_free(pidlist_t *pl)
+{
+	pidlist_entry_t *pe;
+	while (NULL != (pe = SLIST_FIRST(&pl->pl_head))) {
+		SLIST_FIRST(&pl->pl_head) = SLIST_NEXT(pe, pe_link);
+		kfree(pe, sizeof(*pe));
+	}
+	pl->pl_nalloc = 0;
+}
+
+static __inline__ void
+pidlist_set_active(pidlist_t *pl)
+{
+	pl->pl_active = SLIST_FIRST(&pl->pl_head);
+	assert(pl->pl_active);
+}
+
+static void
+pidlist_add_pid(pidlist_t *pl, pid_t pid)
+{
+	pidlist_entry_t *pe = pl->pl_active;
+	if (pe->pe_nused >= sizeof(pe->pe_pid) / sizeof(pe->pe_pid[0])) {
+		if (NULL == (pe = SLIST_NEXT(pe, pe_link))) {
+			panic("pidlist allocation exhausted");
+		}
+		pl->pl_active = pe;
+	}
+	pe->pe_pid[pe->pe_nused++] = pid;
+}
+
+static __inline__ u_int
+pidlist_nalloc(const pidlist_t *pl)
+{
+	return pl->pl_nalloc;
+}
+
+/*
  * A process group has become orphaned; if there are any stopped processes in
  * the group, hang-up all process in that group.
  */
 static void
 orphanpg(struct pgrp *pgrp)
 {
-	pid_t *pid_list;
+	pidlist_t pid_list, *pl = pidlist_init(&pid_list);
+	u_int pid_count_available = 0;
 	proc_t p;
-	vm_size_t pid_list_size = 0;
-	vm_size_t pid_list_size_needed = 0;
-	int pid_count = 0;
-	int pid_count_available = 0;
-
-	assert(pgrp != NULL);
 
 	/* allocate outside of the pgrp_lock */
 	for (;;) {
@@ -1790,71 +1970,52 @@ orphanpg(struct pgrp *pgrp)
 
 		PGMEMBERS_FOREACH(pgrp, p) {
 			pid_count_available++;
-
 			if (p->p_stat == SSTOP) {
 				should_iterate = TRUE;
 			}
 		}
-
 		if (pid_count_available == 0 || !should_iterate) {
 			pgrp_unlock(pgrp);
-			return;
+			goto out; /* no orphaned processes OR nothing stopped */
 		}
-
-		pid_list_size_needed = pid_count_available * sizeof(pid_t);
-		if (pid_list_size >= pid_list_size_needed) {
+		if (pidlist_nalloc(pl) >= pid_count_available) {
 			break;
 		}
 		pgrp_unlock(pgrp);
 
-		if (pid_list_size != 0) {
-			kfree(pid_list, pid_list_size);
-		}
-		pid_list = kalloc(pid_list_size_needed);
-		if (!pid_list) {
-			return;
-		}
-		pid_list_size = pid_list_size_needed;
+		pidlist_alloc(pl, pid_count_available);
 	}
+	pidlist_set_active(pl);
 
-	/* no orphaned processes */
-	if (pid_list_size == 0) {
-		pgrp_unlock(pgrp);
-		return;
-	}
-
+	u_int pid_count = 0;
 	PGMEMBERS_FOREACH(pgrp, p) {
-		pid_list[pid_count++] = proc_pid(p);
-		if (pid_count >= pid_count_available) {
+		pidlist_add_pid(pl, proc_pid(p));
+		if (++pid_count >= pid_count_available) {
 			break;
 		}
 	}
 	pgrp_unlock(pgrp);
 
-	if (pid_count == 0) {
-		goto out;
-	}
-
-	for (int i = 0; i < pid_count; i++) {
-		/* do not handle kernproc */
-		if (pid_list[i] == 0) {
-			continue;
+	const pidlist_entry_t *pe;
+	SLIST_FOREACH(pe, &(pl->pl_head), pe_link) {
+		for (u_int i = 0; i < pe->pe_nused; i++) {
+			const pid_t pid = pe->pe_pid[i];
+			if (0 == pid) {
+				continue; /* skip kernproc */
+			}
+			p = proc_find(pid);
+			if (!p) {
+				continue;
+			}
+			proc_transwait(p, 0);
+			pt_setrunnable(p);
+			psignal(p, SIGHUP);
+			psignal(p, SIGCONT);
+			proc_rele(p);
 		}
-		p = proc_find(pid_list[i]);
-		if (!p) {
-			continue;
-		}
-
-		proc_transwait(p, 0);
-		pt_setrunnable(p);
-		psignal(p, SIGHUP);
-		psignal(p, SIGCONT);
-		proc_rele(p);
 	}
-
 out:
-	kfree(pid_list, pid_list_size);
-	return;
+	pidlist_free(pl);
 }
 
 int
@@ -2344,7 +2505,7 @@ out:
 	return error;
 }
 
-int
+void
 proc_iterate(
 	unsigned int flags,
 	proc_iterate_fn_t callout,
@@ -2352,40 +2513,28 @@ proc_iterate(
 	proc_iterate_fn_t filterfn,
 	void *filterarg)
 {
-	pid_t *pid_list = NULL;
-	vm_size_t pid_list_size = 0;
-	vm_size_t pid_list_size_needed = 0;
-	int pid_count = 0;
-	int pid_count_available = 0;
+	pidlist_t pid_list, *pl = pidlist_init(&pid_list);
+	u_int pid_count_available = 0;
 
 	assert(callout != NULL);
 
 	/* allocate outside of the proc_list_lock */
 	for (;;) {
 		proc_list_lock();
-
-		pid_count_available = nprocs + 1 /* kernel_task not counted in nprocs */;
+		pid_count_available = nprocs + 1; /* kernel_task not counted in nprocs */
 		assert(pid_count_available > 0);
-
-		pid_list_size_needed = pid_count_available * sizeof(pid_t);
-		if (pid_list_size >= pid_list_size_needed) {
+		if (pidlist_nalloc(pl) > pid_count_available) {
 			break;
 		}
 		proc_list_unlock();
 
-		if (pid_list_size != 0) {
-			kfree(pid_list, pid_list_size);
-		}
-		pid_list = kalloc(pid_list_size_needed);
-		if (!pid_list) {
-			return 1;
-		}
-		pid_list_size = pid_list_size_needed;
+		pidlist_alloc(pl, pid_count_available);
 	}
-	assert(pid_list != NULL);
+	pidlist_set_active(pl);
 
-	/* filter pids into pid_list */
+	/* filter pids into the pid_list */
 
+	u_int pid_count = 0;
 	if (flags & PROC_ALLPROCLIST) {
 		proc_t p;
 		ALLPROC_FOREACH(p) {
@@ -2396,9 +2545,8 @@ proc_iterate(
 			if ((filterfn != NULL) && (filterfn(p, filterarg) == 0)) {
 				continue;
 			}
-
-			pid_list[pid_count++] = proc_pid(p);
-			if (pid_count >= pid_count_available) {
+			pidlist_add_pid(pl, proc_pid(p));
+			if (++pid_count >= pid_count_available) {
 				break;
 			}
 		}
@@ -2411,9 +2559,8 @@ proc_iterate(
 			if ((filterfn != NULL) && (filterfn(p, filterarg) == 0)) {
 				continue;
 			}
-
-			pid_list[pid_count++] = proc_pid(p);
-			if (pid_count >= pid_count_available) {
+			pidlist_add_pid(pl, proc_pid(p));
+			if (++pid_count >= pid_count_available) {
 				break;
 			}
 		}
@@ -2423,63 +2570,63 @@ proc_iterate(
 
 	/* call callout on processes in the pid_list */
 
-	for (int i = 0; i < pid_count; i++) {
-		proc_t p = proc_find(pid_list[i]);
-		if (p) {
-			if ((flags & PROC_NOWAITTRANS) == 0) {
-				proc_transwait(p, 0);
-			}
-			int callout_ret = callout(p, arg);
+	const pidlist_entry_t *pe;
+	SLIST_FOREACH(pe, &(pl->pl_head), pe_link) {
+		for (u_int i = 0; i < pe->pe_nused; i++) {
+			const pid_t pid = pe->pe_pid[i];
+			proc_t p = proc_find(pid);
+			if (p) {
+				if ((flags & PROC_NOWAITTRANS) == 0) {
+					proc_transwait(p, 0);
+				}
+				const int callout_ret = callout(p, arg);
 
-			switch (callout_ret) {
-			case PROC_RETURNED_DONE:
-				proc_rele(p);
-			/* FALLTHROUGH */
-			case PROC_CLAIMED_DONE:
-				goto out;
+				switch (callout_ret) {
+				case PROC_RETURNED_DONE:
+					proc_rele(p);
+				/* FALLTHROUGH */
+				case PROC_CLAIMED_DONE:
+					goto out;
 
-			case PROC_RETURNED:
-				proc_rele(p);
-			/* FALLTHROUGH */
-			case PROC_CLAIMED:
-				break;
+				case PROC_RETURNED:
+					proc_rele(p);
+				/* FALLTHROUGH */
+				case PROC_CLAIMED:
+					break;
+				default:
+					panic("%s: callout =%d for pid %d",
+					    __func__, callout_ret, pid);
+					break;
+				}
+			} else if (flags & PROC_ZOMBPROCLIST) {
+				p = proc_find_zombref(pid);
+				if (!p) {
+					continue;
+				}
+				const int callout_ret = callout(p, arg);
 
-			default:
-				panic("proc_iterate: callout returned %d for pid %d",
-				    callout_ret, pid_list[i]);
-				break;
-			}
-		} else if (flags & PROC_ZOMBPROCLIST) {
-			p = proc_find_zombref(pid_list[i]);
-			if (!p) {
-				continue;
-			}
-			int callout_ret = callout(p, arg);
+				switch (callout_ret) {
+				case PROC_RETURNED_DONE:
+					proc_drop_zombref(p);
+				/* FALLTHROUGH */
+				case PROC_CLAIMED_DONE:
+					goto out;
 
-			switch (callout_ret) {
-			case PROC_RETURNED_DONE:
-				proc_drop_zombref(p);
-			/* FALLTHROUGH */
-			case PROC_CLAIMED_DONE:
-				goto out;
-
-			case PROC_RETURNED:
-				proc_drop_zombref(p);
-			/* FALLTHROUGH */
-			case PROC_CLAIMED:
-				break;
-
-			default:
-				panic("proc_iterate: callout returned %d for zombie pid %d",
-				    callout_ret, pid_list[i]);
-				break;
+				case PROC_RETURNED:
+					proc_drop_zombref(p);
+				/* FALLTHROUGH */
+				case PROC_CLAIMED:
+					break;
+				default:
+					panic("%s: callout =%d for zombie %d",
+					    __func__, callout_ret, pid);
+					break;
+				}
 			}
 		}
 	}
-
 out:
-	kfree(pid_list, pid_list_size);
-	return 0;
+	pidlist_free(pl);
 }
 
 void
@@ -2520,93 +2667,82 @@ restart_foreach:
 	proc_list_unlock();
 }
 
-int
+void
 proc_childrenwalk(
 	proc_t parent,
 	proc_iterate_fn_t callout,
 	void *arg)
 {
-	pid_t *pid_list;
-	vm_size_t pid_list_size = 0;
-	vm_size_t pid_list_size_needed = 0;
-	int pid_count = 0;
-	int pid_count_available = 0;
+	pidlist_t pid_list, *pl = pidlist_init(&pid_list);
+	u_int pid_count_available = 0;
 
 	assert(parent != NULL);
 	assert(callout != NULL);
 
 	for (;;) {
 		proc_list_lock();
-
 		pid_count_available = parent->p_childrencnt;
 		if (pid_count_available == 0) {
 			proc_list_unlock();
-			return 0;
+			goto out;
 		}
-
-		pid_list_size_needed = pid_count_available * sizeof(pid_t);
-		if (pid_list_size >= pid_list_size_needed) {
+		if (pidlist_nalloc(pl) > pid_count_available) {
 			break;
 		}
 		proc_list_unlock();
 
-		if (pid_list_size != 0) {
-			kfree(pid_list, pid_list_size);
-		}
-		pid_list = kalloc(pid_list_size_needed);
-		if (!pid_list) {
-			return 1;
-		}
-		pid_list_size = pid_list_size_needed;
+		pidlist_alloc(pl, pid_count_available);
 	}
+	pidlist_set_active(pl);
 
+	u_int pid_count = 0;
 	proc_t p;
 	PCHILDREN_FOREACH(parent, p) {
 		if (p->p_stat == SIDL) {
 			continue;
 		}
-
-		pid_list[pid_count++] = proc_pid(p);
-		if (pid_count >= pid_count_available) {
+		pidlist_add_pid(pl, proc_pid(p));
+		if (++pid_count >= pid_count_available) {
 			break;
 		}
 	}
 
 	proc_list_unlock();
 
-	for (int i = 0; i < pid_count; i++) {
-		p = proc_find(pid_list[i]);
-		if (!p) {
-			continue;
-		}
+	const pidlist_entry_t *pe;
+	SLIST_FOREACH(pe, &(pl->pl_head), pe_link) {
+		for (u_int i = 0; i < pe->pe_nused; i++) {
+			const pid_t pid = pe->pe_pid[i];
+			p = proc_find(pid);
+			if (!p) {
+				continue;
+			}
+			const int callout_ret = callout(p, arg);
 
-		int callout_ret = callout(p, arg);
+			switch (callout_ret) {
+			case PROC_RETURNED_DONE:
+				proc_rele(p);
+			/* FALLTHROUGH */
+			case PROC_CLAIMED_DONE:
+				goto out;
 
-		switch (callout_ret) {
-		case PROC_RETURNED_DONE:
-			proc_rele(p);
-		/* FALLTHROUGH */
-		case PROC_CLAIMED_DONE:
-			goto out;
-
-		case PROC_RETURNED:
-			proc_rele(p);
-		/* FALLTHROUGH */
-		case PROC_CLAIMED:
-			break;
-		default:
-			panic("proc_childrenwalk: callout returned %d for pid %d",
-			    callout_ret, pid_list[i]);
-			break;
+			case PROC_RETURNED:
+				proc_rele(p);
+			/* FALLTHROUGH */
+			case PROC_CLAIMED:
+				break;
+			default:
+				panic("%s: callout =%d for pid %d",
+				    __func__, callout_ret, pid);
+				break;
+			}
 		}
 	}
-
 out:
-	kfree(pid_list, pid_list_size);
-	return 0;
+	pidlist_free(pl);
 }
 
-int
+void
 pgrp_iterate(
 	struct pgrp *pgrp,
 	unsigned int flags,
@@ -2615,51 +2751,40 @@ pgrp_iterate(
 	proc_iterate_fn_t filterfn,
 	void * filterarg)
 {
-	pid_t *pid_list;
-	proc_t p;
-	vm_size_t pid_list_size = 0;
-	vm_size_t pid_list_size_needed = 0;
-	int pid_count = 0;
-	int pid_count_available = 0;
-
-	pid_t pgid;
+	pidlist_t pid_list, *pl = pidlist_init(&pid_list);
+	u_int pid_count_available = 0;
 
 	assert(pgrp != NULL);
 	assert(callout != NULL);
 
 	for (;;) {
 		pgrp_lock(pgrp);
-
 		pid_count_available = pgrp->pg_membercnt;
 		if (pid_count_available == 0) {
 			pgrp_unlock(pgrp);
-			return 0;
+			if (flags & PGRP_DROPREF) {
+				pg_rele(pgrp);
+			}
+			goto out;
 		}
-
-		pid_list_size_needed = pid_count_available * sizeof(pid_t);
-		if (pid_list_size >= pid_list_size_needed) {
+		if (pidlist_nalloc(pl) > pid_count_available) {
 			break;
 		}
 		pgrp_unlock(pgrp);
 
-		if (pid_list_size != 0) {
-			kfree(pid_list, pid_list_size);
-		}
-		pid_list = kalloc(pid_list_size_needed);
-		if (!pid_list) {
-			return 1;
-		}
-		pid_list_size = pid_list_size_needed;
+		pidlist_alloc(pl, pid_count_available);
 	}
+	pidlist_set_active(pl);
 
-	pgid = pgrp->pg_id;
-
+	const pid_t pgid = pgrp->pg_id;
+	u_int pid_count = 0;
+	proc_t p;
 	PGMEMBERS_FOREACH(pgrp, p) {
 		if ((filterfn != NULL) && (filterfn(p, filterarg) == 0)) {
 			continue;;
 		}
-		pid_list[pid_count++] = proc_pid(p);
-		if (pid_count >= pid_count_available) {
+		pidlist_add_pid(pl, proc_pid(p));
+		if (++pid_count >= pid_count_available) {
 			break;
 		}
 	}
@@ -2670,44 +2795,44 @@ pgrp_iterate(
 		pg_rele(pgrp);
 	}
 
-	for (int i = 0; i < pid_count; i++) {
-		/* do not handle kernproc */
-		if (pid_list[i] == 0) {
-			continue;
-		}
-		p = proc_find(pid_list[i]);
-		if (!p) {
-			continue;
-		}
-		if (p->p_pgrpid != pgid) {
-			proc_rele(p);
-			continue;
-		}
+	const pidlist_entry_t *pe;
+	SLIST_FOREACH(pe, &(pl->pl_head), pe_link) {
+		for (u_int i = 0; i < pe->pe_nused; i++) {
+			const pid_t pid = pe->pe_pid[i];
+			if (0 == pid) {
+				continue; /* skip kernproc */
+			}
+			p = proc_find(pid);
+			if (!p) {
+				continue;
+			}
+			if (p->p_pgrpid != pgid) {
+				proc_rele(p);
+				continue;
+			}
+			const int callout_ret = callout(p, arg);
 
-		int callout_ret = callout(p, arg);
+			switch (callout_ret) {
+			case PROC_RETURNED:
+				proc_rele(p);
+			/* FALLTHROUGH */
+			case PROC_CLAIMED:
+				break;
+			case PROC_RETURNED_DONE:
+				proc_rele(p);
+			/* FALLTHROUGH */
+			case PROC_CLAIMED_DONE:
+				goto out;
 
-		switch (callout_ret) {
-		case PROC_RETURNED:
-			proc_rele(p);
-		/* FALLTHROUGH */
-		case PROC_CLAIMED:
-			break;
-
-		case PROC_RETURNED_DONE:
-			proc_rele(p);
-		/* FALLTHROUGH */
-		case PROC_CLAIMED_DONE:
-			goto out;
-
-		default:
-			panic("pgrp_iterate: callout returned %d for pid %d",
-			    callout_ret, pid_list[i]);
+			default:
+				panic("%s: callout =%d for pid %d",
+				    __func__, callout_ret, pid);
+			}
 		}
 	}
 
 out:
-	kfree(pid_list, pid_list_size);
-	return 0;
+	pidlist_free(pl);
 }
 
 static void
@@ -3110,7 +3235,7 @@ proc_knote_drain(struct proc *p)
 	 */
 	proc_klist_lock();
 	while ((kn = SLIST_FIRST(&p->p_klist))) {
-		kn->kn_ptr.p_proc = PROC_NULL;
+		kn->kn_proc = PROC_NULL;
 		KNOTE_DETACH(&p->p_klist, kn);
 	}
 	proc_klist_unlock();
@@ -3136,6 +3261,20 @@ pid_t
 proc_pgrpid(proc_t p)
 {
 	return p->p_pgrpid;
+}
+
+pid_t
+proc_sessionid(proc_t p)
+{
+	pid_t sid = -1;
+	struct session * sessp = proc_session(p);
+
+	if (sessp != SESSION_NULL) {
+		sid = sessp->s_sid;
+		session_rele(sessp);
+	}
+
+	return sid;
 }
 
 pid_t
@@ -3167,6 +3306,7 @@ int
 proc_dopcontrol(proc_t p)
 {
 	int pcontrol;
+	os_reason_t kill_reason;
 
 	proc_lock(p);
 
@@ -3191,7 +3331,8 @@ proc_dopcontrol(proc_t p)
 			PROC_SETACTION_STATE(p);
 			proc_unlock(p);
 			printf("low swap: killing pid %d (%s)\n", p->p_pid, p->p_comm);
-			psignal(p, SIGKILL);
+			kill_reason = os_reason_create(OS_REASON_JETSAM, JETSAM_REASON_LOWSWAP);
+			psignal_with_reason(p, SIGKILL, kill_reason);
 			break;
 
 		default:
@@ -3348,7 +3489,7 @@ proc_pcontrol_null(__unused proc_t p, __unused void *arg)
 
 extern uint64_t vm_compressor_pages_compressed(void);
 
-struct timeval  last_no_space_action = {0, 0};
+struct timeval  last_no_space_action = {.tv_sec = 0, .tv_usec = 0};
 
 #if DEVELOPMENT || DEBUG
 extern boolean_t kill_on_no_paging_space;
@@ -3366,6 +3507,7 @@ no_paging_space_action()
 	proc_t          p;
 	struct no_paging_space nps;
 	struct timeval  now;
+	os_reason_t kill_reason;
 
 	/*
 	 * Throttle how often we come through here.  Once every 5 seconds should be plenty.
@@ -3413,7 +3555,8 @@ no_paging_space_action()
 				last_no_space_action = now;
 
 				printf("low swap: killing largest compressed process with pid %d (%s) and size %llu MB\n", p->p_pid, p->p_comm, (nps.pcs_max_size / MB_SIZE));
-				psignal(p, SIGKILL);
+				kill_reason = os_reason_create(OS_REASON_JETSAM, JETSAM_REASON_LOWSWAP);
+				psignal_with_reason(p, SIGKILL, kill_reason);
 
 				proc_rele(p);
 
@@ -3573,6 +3716,36 @@ proc_send_synchronous_EXC_RESOURCE(proc_t p)
 		return TRUE;
 	}
 	return FALSE;
+}
+
+size_t
+proc_get_syscall_filter_mask_size(int which)
+{
+	if (which == SYSCALL_MASK_UNIX) {
+		return nsysent;
+	}
+
+	return 0;
+}
+
+int
+proc_set_syscall_filter_mask(proc_t p, int which, unsigned char *maskptr, size_t masklen)
+{
+#if DEVELOPMENT || DEBUG
+	if (syscallfilter_disable) {
+		printf("proc_set_syscall_filter_mask: attempt to set policy for pid %d, but disabled by boot-arg\n", proc_pid(p));
+		return KERN_SUCCESS;
+	}
+#endif // DEVELOPMENT || DEBUG
+
+	if (which != SYSCALL_MASK_UNIX ||
+	    (maskptr != NULL && masklen != nsysent)) {
+		return EINVAL;
+	}
+
+	p->syscall_filter_mask = maskptr;
+
+	return KERN_SUCCESS;
 }
 
 #ifdef CONFIG_32BIT_TELEMETRY

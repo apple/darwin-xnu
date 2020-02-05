@@ -118,6 +118,11 @@ struct uthread {
 	u_int64_t uu_arg[8]; /* arguments to current system call */
 	int uu_rval[2];
 	char uu_cursig; /* p_cursig for exc. */
+	/*
+	 * uu_workq_pthread_kill_allowed is not modified under a lock and thus
+	 * relies on single copy atomicity and cannot be changed to a bitfield.
+	 */
+	bool uu_workq_pthread_kill_allowed;
 	unsigned int syscall_code; /* current syscall code */
 
 	/* thread exception handling */
@@ -135,37 +140,13 @@ struct uthread {
 			int32_t *retval;                    /* place to store return val */
 		} uus_select_data;
 
-		struct _kqueue_scan {
-			kevent_callback_t call;             /* per-event callback */
-			kqueue_continue_t cont;             /* whole call continuation */
-			filt_process_data_t process_data;   /* needed for filter processing */
-			uint64_t deadline;                  /* computed deadline for operation */
-			void *data;                         /* caller's private data */
-		} uus_kqueue_scan;                       /* saved state for kevent_scan() */
-
-		struct _kevent {
-			struct _kqueue_scan scan;           /* space for the generic data */
-			struct fileproc *fp;                /* fileproc we hold iocount on */
-			int fd;                             /* fd for fileproc (if held) */
-			int eventcount;                     /* user-level event count */
-			int eventout;                       /* number of events output */
-			struct filt_process_s process_data; /* space for process data fed thru */
-			int32_t *retval;                    /* place to store return val */
-			user_addr_t eventlist;              /* user-level event list address */
-			uint64_t data_available;            /* [user/kernel] addr of in/out size */
-		} uus_kevent;                            /* saved state for kevent() */
+		struct kevent_ctx_s uus_kevent;
 
 		struct _kevent_register {
-			struct kevent_internal_s kev;       /* the kevent to maybe copy out */
-			struct knote *knote;                /* the knote used for the wait */
-			struct fileproc *fp;                /* fileproc we hold iocount on */
+			struct kevent_qos_s kev;            /* the kevent to maybe copy out */
 			thread_t handoff_thread;            /* thread we handed off to, has +1 */
-			struct kqueue *kq;
-			int fd;                             /* fd for fileproc (if held) */
-			int eventcount;                     /* user-level event count */
+			struct kqworkloop *kqwl;
 			int eventout;                       /* number of events output */
-			unsigned int flags;                 /* flags for kevent_copyout() */
-			int32_t *retval;                    /* place to store return val */
 			user_addr_t ueventlist;             /* the user-address to copyout to */
 		} uus_kevent_register;                   /* saved for EVFILT_WORKLOOP wait */
 
@@ -234,7 +215,10 @@ struct uthread {
 	struct kaudit_record    *uu_ar;                 /* audit record */
 	struct task*    uu_aio_task;                    /* target task for async io */
 
-	lck_mtx_t       *uu_mtx;
+	union {
+		lck_mtx_t  *uu_mtx;
+		struct knote_lock_ctx *uu_knlock;
+	};
 
 	lck_spin_t      uu_rethrottle_lock;     /* locks was_rethrottled and is_throttled */
 	TAILQ_ENTRY(uthread) uu_throttlelist;   /* List of uthreads currently throttled */
@@ -258,7 +242,7 @@ struct uthread {
 	 * Bound kqueue request. This field is only cleared by the current thread,
 	 * hence can be dereferenced safely by the current thread without locks.
 	 */
-	struct kqrequest *uu_kqr_bound;
+	struct workq_threadreq_s *uu_kqr_bound;
 	TAILQ_ENTRY(uthread) uu_workq_entry;
 	mach_vm_offset_t uu_workq_stackaddr;
 	mach_port_name_t uu_workq_thport;
@@ -364,9 +348,10 @@ typedef struct uthread * uthread_t;
 #define UT_PASSIVE_IO   0x00000100      /* this thread issues passive I/O */
 #define UT_PROCEXIT     0x00000200      /* this thread completed the  proc exit */
 #define UT_RAGE_VNODES  0x00000400      /* rapid age any vnodes created by this thread */
-#define UT_KERN_RAGE_VNODES     0x00000800      /* rapid age any vnodes created by this thread (kernel set) */
-/* 0x00001000 unused, used to be UT_BACKGROUND_TRAFFIC_MGT */
+#define UT_KERN_RAGE_VNODES        0x00000800 /* rapid age any vnodes created by this thread (kernel set) */
+#define UT_NSPACE_NODATALESSFAULTS 0x00001000 /* thread does not materialize dataless files */
 #define UT_ATIME_UPDATE 0x00002000      /* don't update atime for files accessed by this thread */
+#define UT_NSPACE_FORCEDATALESSFAULTS  0x00004000 /* thread always materializes dataless files */
 #define UT_VFORK        0x02000000      /* thread has vfork children */
 #define UT_SETUID       0x04000000      /* thread is settugid() */
 #define UT_WASSETUID    0x08000000      /* thread was settugid() (in vfork) */

@@ -251,6 +251,12 @@ typedef unsigned int mach_msg_copy_options_t;
 #define MACH_MSG_KALLOC_COPY_T          4
 #endif  /* MACH_KERNEL */
 
+#define MACH_MSG_GUARD_FLAGS_NONE                   0x0000
+#define MACH_MSG_GUARD_FLAGS_IMMOVABLE_RECEIVE      0x0001    /* Move the receive right and mark it as immovable */
+#define MACH_MSG_GUARD_FLAGS_UNGUARDED_ON_SEND      0x0002    /* Verify that the port is unguarded */
+#define MACH_MSG_GUARD_FLAGS_MASK                   0x0003    /* Valid flag bits */
+typedef unsigned int mach_msg_guard_flags_t;
+
 /*
  * In a complex mach message, the mach_msg_header_t is followed by
  * a descriptor count, then an array of that number of descriptors
@@ -269,8 +275,9 @@ typedef unsigned int mach_msg_descriptor_type_t;
 #define MACH_MSG_OOL_DESCRIPTOR                 1
 #define MACH_MSG_OOL_PORTS_DESCRIPTOR           2
 #define MACH_MSG_OOL_VOLATILE_DESCRIPTOR        3
+#define MACH_MSG_GUARDED_PORT_DESCRIPTOR        4
 
-#pragma pack(4)
+#pragma pack(push, 4)
 
 typedef struct{
 	natural_t                     pad1;
@@ -363,6 +370,48 @@ typedef struct{
 #endif
 } mach_msg_ool_ports_descriptor_t;
 
+typedef struct{
+	uint32_t                      context;
+	mach_port_name_t              name;
+	mach_msg_guard_flags_t        flags : 16;
+	mach_msg_type_name_t          disposition : 8;
+	mach_msg_descriptor_type_t    type : 8;
+} mach_msg_guarded_port_descriptor32_t;
+
+typedef struct{
+	uint64_t                      context;
+	mach_msg_guard_flags_t        flags : 16;
+	mach_msg_type_name_t          disposition : 8;
+	mach_msg_descriptor_type_t    type : 8;
+	mach_port_name_t              name;
+} mach_msg_guarded_port_descriptor64_t;
+
+typedef struct{
+#if defined(KERNEL)
+	mach_port_t                   name;
+#if !defined(__LP64__)
+	uint32_t                      pad1;
+#endif
+	mach_msg_guard_flags_t        flags : 16;
+	mach_msg_type_name_t          disposition : 8;
+	mach_msg_descriptor_type_t    type : 8;
+#if defined(__LP64__)
+	uint32_t                      pad_end;
+#endif /* defined(__LP64__) */
+#else
+	mach_port_context_t           context;
+#if !defined(__LP64__)
+	mach_port_name_t              name;
+#endif
+	mach_msg_guard_flags_t        flags : 16;
+	mach_msg_type_name_t          disposition : 8;
+	mach_msg_descriptor_type_t    type : 8;
+#if defined(__LP64__)
+	mach_port_name_t              name;
+#endif /* defined(__LP64__) */
+#endif /* defined(KERNEL) */
+} mach_msg_guarded_port_descriptor_t;
+
 /*
  * LP64support - This union definition is not really
  * appropriate in LP64 mode because not all descriptors
@@ -374,6 +423,7 @@ typedef union{
 	mach_msg_ool_descriptor32_t           out_of_line;
 	mach_msg_ool_ports_descriptor32_t     ool_ports;
 	mach_msg_type_descriptor_t            type;
+	mach_msg_guarded_port_descriptor32_t  guarded_port;
 } mach_msg_descriptor_t;
 #else
 typedef union{
@@ -381,6 +431,7 @@ typedef union{
 	mach_msg_ool_descriptor_t             out_of_line;
 	mach_msg_ool_ports_descriptor_t       ool_ports;
 	mach_msg_type_descriptor_t            type;
+	mach_msg_guarded_port_descriptor_t    guarded_port;
 } mach_msg_descriptor_t;
 #endif
 
@@ -576,10 +627,10 @@ typedef mach_msg_security_trailer_t mach_msg_format_0_trailer_t;
 #define MACH_MSG_TRAILER_FORMAT_0_SIZE sizeof(mach_msg_format_0_trailer_t)
 
 #define   KERNEL_SECURITY_TOKEN_VALUE  { {0, 1} }
-extern security_token_t KERNEL_SECURITY_TOKEN;
+extern const security_token_t KERNEL_SECURITY_TOKEN;
 
 #define   KERNEL_AUDIT_TOKEN_VALUE  { {0, 0, 0, 0, 0, 0, 0, 0} }
-extern audit_token_t KERNEL_AUDIT_TOKEN;
+extern const audit_token_t KERNEL_AUDIT_TOKEN;
 
 typedef integer_t mach_msg_options_t;
 
@@ -597,7 +648,7 @@ typedef union{
 	mach_msg_empty_rcv_t  rcv;
 } mach_msg_empty_t;
 
-#pragma pack()
+#pragma pack(pop)
 
 /* utility to round the message size - will become machine dependent */
 #define round_msg(x)    (((mach_msg_size_t)(x) + sizeof (natural_t) - 1) & \
@@ -683,7 +734,7 @@ typedef integer_t mach_msg_option_t;
 #define MACH_RCV_LARGE_IDENTITY 0x00000008      /* identify source of large messages */
 
 #define MACH_SEND_TIMEOUT       0x00000010      /* timeout value applies to send */
-#define MACH_SEND_OVERRIDE  0x00000020  /* priority override for send */
+#define MACH_SEND_OVERRIDE      0x00000020      /* priority override for send */
 #define MACH_SEND_INTERRUPT     0x00000040      /* don't restart interrupted sends */
 #define MACH_SEND_NOTIFY        0x00000080      /* arm send-possible notify */
 #define MACH_SEND_ALWAYS        0x00010000      /* ignore qlimits - kernel only */
@@ -692,16 +743,23 @@ typedef integer_t mach_msg_option_t;
 #define MACH_SEND_NODENAP       MACH_SEND_NOIMPORTANCE
 #define MACH_SEND_IMPORTANCE    0x00080000      /* msg carries importance - kernel only */
 #define MACH_SEND_SYNC_OVERRIDE 0x00100000      /* msg should do sync ipc override */
-#define MACH_SEND_PROPAGATE_QOS  0x00200000     /* IPC should propagate the caller's QoS */
+#define MACH_SEND_PROPAGATE_QOS 0x00200000      /* IPC should propagate the caller's QoS */
 #define MACH_SEND_SYNC_USE_THRPRI       MACH_SEND_PROPAGATE_QOS /* obsolete name */
-#define MACH_SEND_KERNEL    0x00400000  /* full send from kernel space - kernel only */
+#define MACH_SEND_KERNEL        0x00400000      /* full send from kernel space - kernel only */
+#define MACH_SEND_SYNC_BOOTSTRAP_CHECKIN  0x00800000      /* special reply port should boost thread doing sync bootstrap checkin */
 
 #define MACH_RCV_TIMEOUT        0x00000100      /* timeout value applies to receive */
-#define MACH_RCV_NOTIFY         0x00000200      /* reserved - legacy */
+#define MACH_RCV_NOTIFY         0x00000000      /* legacy name (value was: 0x00000200) */
 #define MACH_RCV_INTERRUPT      0x00000400      /* don't restart interrupted receive */
 #define MACH_RCV_VOUCHER        0x00000800      /* willing to receive voucher port */
-#define MACH_RCV_OVERWRITE      0x00001000      /* scatter receive (deprecated) */
+#define MACH_RCV_OVERWRITE      0x00000000      /* scatter receive (deprecated) */
+#define MACH_RCV_GUARDED_DESC   0x00001000      /* Can receive new guarded descriptor */
 #define MACH_RCV_SYNC_WAIT      0x00004000      /* sync waiter waiting for rcv */
+#define MACH_RCV_SYNC_PEEK      0x00008000      /* sync waiter waiting to peek */
+
+#define MACH_MSG_STRICT_REPLY   0x00000200      /* Enforce specific properties about the reply port, and
+	                                         * the context in which a thread replies to a message.
+	                                         * This flag must be passed on both the SEND and RCV */
 
 #ifdef XNU_KERNEL_PRIVATE
 
@@ -745,12 +803,15 @@ typedef integer_t mach_msg_option_t;
 #define MACH_SEND_USER (MACH_SEND_MSG | MACH_SEND_TIMEOUT | \
 	                                        MACH_SEND_NOTIFY | MACH_SEND_OVERRIDE | \
 	                                        MACH_SEND_TRAILER | MACH_SEND_NOIMPORTANCE | \
-	                                        MACH_SEND_SYNC_OVERRIDE | MACH_SEND_PROPAGATE_QOS)
+	                                        MACH_SEND_SYNC_OVERRIDE | MACH_SEND_PROPAGATE_QOS | \
+	                                        MACH_SEND_SYNC_BOOTSTRAP_CHECKIN | \
+	                                        MACH_MSG_STRICT_REPLY | MACH_RCV_GUARDED_DESC)
 
 #define MACH_RCV_USER (MACH_RCV_MSG | MACH_RCV_TIMEOUT | \
 	                                   MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY | \
 	                                   MACH_RCV_VOUCHER | MACH_RCV_TRAILER_MASK | \
-	                                   MACH_RCV_SYNC_WAIT)
+	                                   MACH_RCV_SYNC_WAIT | MACH_RCV_SYNC_PEEK  | \
+	                                   MACH_RCV_GUARDED_DESC | MACH_MSG_STRICT_REPLY)
 
 #define MACH_MSG_OPTION_USER     (MACH_SEND_USER | MACH_RCV_USER)
 
@@ -767,6 +828,21 @@ typedef integer_t mach_msg_option_t;
  */
 #define MACH_SEND_KERNEL_DEFAULT (MACH_SEND_MSG | \
 	                          MACH_SEND_ALWAYS | MACH_SEND_NOIMPORTANCE)
+
+#define MACH_SEND_WITH_STRICT_REPLY(_opts) (((_opts) & (MACH_MSG_STRICT_REPLY | MACH_SEND_MSG)) == \
+	                                    (MACH_MSG_STRICT_REPLY | MACH_SEND_MSG))
+
+#define MACH_SEND_REPLY_IS_IMMOVABLE(_opts) (((_opts) & (MACH_MSG_STRICT_REPLY | \
+	                                                 MACH_SEND_MSG | MACH_RCV_MSG | \
+	                                                 MACH_RCV_GUARDED_DESC)) == \
+	                                     (MACH_MSG_STRICT_REPLY | MACH_SEND_MSG | MACH_RCV_GUARDED_DESC))
+
+#define MACH_RCV_WITH_STRICT_REPLY(_opts)  (((_opts) & (MACH_MSG_STRICT_REPLY | MACH_RCV_MSG)) == \
+	                                    (MACH_MSG_STRICT_REPLY | MACH_RCV_MSG))
+
+#define MACH_RCV_WITH_IMMOVABLE_REPLY(_opts) (((_opts) & (MACH_MSG_STRICT_REPLY | \
+	                                                  MACH_RCV_MSG | MACH_RCV_GUARDED_DESC)) == \
+	                                      (MACH_MSG_STRICT_REPLY | MACH_RCV_MSG | MACH_RCV_GUARDED_DESC))
 
 #endif /* MACH_KERNEL_PRIVATE */
 
@@ -881,8 +957,12 @@ typedef kern_return_t mach_msg_return_t;
 /* A field in the header had a bad value. */
 #define MACH_SEND_INVALID_TRAILER       0x10000011
 /* The trailer to be sent does not match kernel format. */
+#define MACH_SEND_INVALID_CONTEXT       0x10000012
+/* The sending thread context did not match the context on the dest port */
 #define MACH_SEND_INVALID_RT_OOL_SIZE   0x10000015
 /* compatibility: no longer a returned error */
+#define MACH_SEND_NO_GRANT_DEST         0x10000016
+/* The destination port doesn't accept ports in body */
 
 #define MACH_RCV_IN_PROGRESS            0x10004001
 /* Thread is waiting for receive.  (Internal use only.) */
@@ -916,6 +996,8 @@ typedef kern_return_t mach_msg_return_t;
 /* trailer type or number of trailer elements not supported */
 #define MACH_RCV_IN_PROGRESS_TIMED      0x10004011
 /* Waiting for receive with timeout. (Internal use only.) */
+#define MACH_RCV_INVALID_REPLY          0x10004012
+/* invalid reply port used in a STRICT_REPLY message */
 
 #ifdef XNU_KERNEL_PRIVATE
 #define MACH_PEEK_IN_PROGRESS           0x10008001

@@ -420,10 +420,9 @@ mach_msg_rpc_from_kernel_body(
 
 	for (;;) {
 		ipc_mqueue_t mqueue;
-		ipc_object_t object;
 
 		assert(reply->ip_in_pset == 0);
-		assert(ip_active(reply));
+		require_ip_active(reply);
 
 		/* JMM - why this check? */
 		if (!self->active && !self->inspection) {
@@ -445,8 +444,7 @@ mach_msg_rpc_from_kernel_body(
 		kmsg = self->ith_kmsg;
 		seqno = self->ith_seqno;
 
-		__IGNORE_WCASTALIGN(object = (ipc_object_t) reply);
-		mach_msg_receive_results_complete(object);
+		mach_msg_receive_results_complete(ip_to_object(reply));
 
 		if (mr == MACH_MSG_SUCCESS) {
 			break;
@@ -586,6 +584,13 @@ mach_msg_destroy_from_kernel_proper(mach_msg_header_t *msg)
 			kfree(dsc->address, (vm_size_t) dsc->count * sizeof(mach_port_t));
 			break;
 		}
+		case MACH_MSG_GUARDED_PORT_DESCRIPTOR: {
+			mach_msg_guarded_port_descriptor_t *dsc = (mach_msg_guarded_port_descriptor_t *)&daddr->guarded_port;
+			if (IO_VALID((ipc_object_t) dsc->name)) {
+				ipc_object_destroy((ipc_object_t) dsc->name, dsc->disposition);
+			}
+			break;
+		}
 		default:
 			break;
 		}
@@ -633,7 +638,7 @@ mach_msg_overwrite(
 
 		if ((send_size & 3) ||
 		    send_size < sizeof(mach_msg_header_t) ||
-		    (send_size < sizeof(mach_msg_body_t) && (msg->msgh_bits & MACH_MSGH_BITS_COMPLEX))) {
+		    (send_size < sizeof(mach_msg_base_t) && (msg->msgh_bits & MACH_MSGH_BITS_COMPLEX))) {
 			return MACH_SEND_MSG_TOO_SMALL;
 		}
 
@@ -962,7 +967,13 @@ mig_object_deallocate(
 	mig_object_t    mig_object)
 {
 	assert(mig_object != MIG_OBJECT_NULL);
-	mig_object->pVtbl->Release((IMIGObject *)mig_object);
+	ipc_port_t port = mig_object->port;
+	if (mig_object->pVtbl->Release((IMIGObject *)mig_object) == 0) {
+		if (IP_VALID(port)) {
+			assert(!port->ip_srights);
+			ipc_port_dealloc_kernel(port);
+		}
+	}
 }
 
 /*
@@ -981,56 +992,20 @@ ipc_port_t
 convert_mig_object_to_port(
 	mig_object_t    mig_object)
 {
-	ipc_port_t      port;
-	boolean_t       deallocate = TRUE;
-
 	if (mig_object == MIG_OBJECT_NULL) {
 		return IP_NULL;
 	}
 
-	port = mig_object->port;
-	while ((port == IP_NULL) ||
-	    ((port = ipc_port_make_send(port)) == IP_NULL)) {
-		ipc_port_t      previous;
-
-		/*
-		 * Either the port was never set up, or it was just
-		 * deallocated out from under us by the no-senders
-		 * processing.  In either case, we must:
-		 *	Attempt to make one
-		 *      Arrange for no senders
-		 *	Try to atomically register it with the object
-		 *		Destroy it if we are raced.
-		 */
-		port = ipc_port_alloc_kernel();
-		ip_lock(port);
-		ipc_kobject_set_atomically(port,
-		    (ipc_kobject_t) mig_object,
-		    IKOT_MIG);
-
-		/* make a sonce right for the notification */
-		port->ip_sorights++;
-		ip_reference(port);
-
-		ipc_port_nsrequest(port, 1, port, &previous);
-		/* port unlocked */
-
-		assert(previous == IP_NULL);
-
-		if (OSCompareAndSwapPtr((void *)IP_NULL, (void *)port,
-		    (void * volatile *)&mig_object->port)) {
-			deallocate = FALSE;
-		} else {
-			ipc_port_dealloc_kernel(port);
-			port = mig_object->port;
-		}
+	/*
+	 * make a send right and donate our reference for mig_object_no_senders
+	 * if this is the first send right
+	 */
+	if (!ipc_kobject_make_send_lazy_alloc_port(&mig_object->port,
+	    (ipc_kobject_t) mig_object, IKOT_MIG)) {
+		mig_object_deallocate(mig_object);
 	}
 
-	if (deallocate) {
-		mig_object->pVtbl->Release((IMIGObject *)mig_object);
-	}
-
-	return port;
+	return mig_object->port;
 }
 
 
@@ -1082,59 +1057,18 @@ convert_port_to_mig_object(
  *		Base implementation of a no-senders notification handler
  *		for MIG objects. If there truly are no more senders, must
  *		destroy the port and drop its reference on the object.
- *	Returns:
- *		TRUE  - port deallocate and reference dropped
- *		FALSE - more senders arrived, re-registered for notification
  *	Conditions:
  *		Nothing locked.
  */
-
-boolean_t
+void
 mig_object_no_senders(
-	ipc_port_t              port,
-	mach_port_mscount_t     mscount)
+	ipc_port_t              port)
 {
-	mig_object_t            mig_object;
+	require_ip_active(port);
+	assert(IKOT_MIG == ip_kotype(port));
 
-	ip_lock(port);
-	if (port->ip_mscount > mscount) {
-		ipc_port_t      previous;
-
-		/*
-		 * Somebody created new send rights while the
-		 * notification was in-flight.  Just create a
-		 * new send-once right and re-register with
-		 * the new (higher) mscount threshold.
-		 */
-		/* make a sonce right for the notification */
-		port->ip_sorights++;
-		ip_reference(port);
-		ipc_port_nsrequest(port, mscount, port, &previous);
-		/* port unlocked */
-
-		assert(previous == IP_NULL);
-		return FALSE;
-	}
-
-	/*
-	 * Clear the port pointer while we have it locked.
-	 */
-	mig_object = (mig_object_t)port->ip_kobject;
-	mig_object->port = IP_NULL;
-
-	/*
-	 * Bring the sequence number and mscount in
-	 * line with ipc_port_destroy assertion.
-	 */
-	port->ip_mscount = 0;
-	port->ip_messages.imq_seqno = 0;
-	ipc_port_destroy(port); /* releases lock */
-
-	/*
-	 * Release the port's reference on the object.
-	 */
-	mig_object->pVtbl->Release((IMIGObject *)mig_object);
-	return TRUE;
+	/* consume the reference donated by convert_mig_object_to_port */
+	mig_object_deallocate((mig_object_t)port->ip_kobject);
 }
 
 /*

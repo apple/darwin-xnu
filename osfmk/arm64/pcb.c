@@ -61,7 +61,6 @@
 
 #include <sys/kdebug.h>
 
-
 #define USER_SS_ZONE_ALLOC_SIZE (0x4000)
 
 extern int debug_task;
@@ -70,7 +69,7 @@ zone_t ads_zone;     /* zone for debug_state area */
 zone_t user_ss_zone; /* zone for user arm_context_t allocations */
 
 /*
- * Routine:	consider_machine_collect
+ * Routine: consider_machine_collect
  *
  */
 void
@@ -80,7 +79,7 @@ consider_machine_collect(void)
 }
 
 /*
- * Routine:	consider_machine_adjust
+ * Routine: consider_machine_adjust
  *
  */
 void
@@ -88,22 +87,22 @@ consider_machine_adjust(void)
 {
 }
 
+
 /*
- * Routine:	machine_switch_context
+ * Routine: machine_switch_context
  *
  */
 thread_t
-machine_switch_context(
-		       thread_t old,
-		       thread_continue_t continuation,
-		       thread_t new)
+machine_switch_context(thread_t old,
+                       thread_continue_t continuation,
+                       thread_t new)
 {
 	thread_t retval;
-	pmap_t          new_pmap;
-	cpu_data_t	*cpu_data_ptr;
+	pmap_t       new_pmap;
+	cpu_data_t * cpu_data_ptr;
 
-#define machine_switch_context_kprintf(x...)	/* kprintf("machine_switch_con
-						 * text: " x) */
+#define machine_switch_context_kprintf(x...) \
+	/* kprintf("machine_switch_context: " x) */
 
 	cpu_data_ptr = getCpuDatap();
 	if (old == new)
@@ -112,9 +111,11 @@ machine_switch_context(
 	kpc_off_cpu(old);
 
 
+
 	new_pmap = new->map->pmap;
 	if (old->map->pmap != new_pmap)
 		pmap_switch(new_pmap);
+
 
 	new->machine.CpuDatap = cpu_data_ptr;
 
@@ -130,19 +131,25 @@ machine_switch_context(
 	return retval;
 }
 
+boolean_t
+machine_thread_on_core(thread_t thread)
+{
+	return thread->machine.machine_thread_flags & MACHINE_THREAD_FLAGS_ON_CPU;
+}
+
 /*
- * Routine:	machine_thread_create
+ * Routine: machine_thread_create
  *
  */
 kern_return_t
-machine_thread_create(
-		      thread_t thread,
-		      task_t task)
+machine_thread_create(thread_t thread,
+                      task_t task)
 {
 	arm_context_t *thread_user_ss = NULL;
 	kern_return_t result = KERN_SUCCESS;
 
-#define machine_thread_create_kprintf(x...)	/* kprintf("machine_thread_create: " x) */
+#define machine_thread_create_kprintf(x...) \
+	/* kprintf("machine_thread_create: " x) */
 
 	machine_thread_create_kprintf("thread = %x\n", thread);
 
@@ -152,6 +159,10 @@ machine_thread_create(
 	thread->machine.preemption_count = 0;
 	thread->machine.cthread_self = 0;
 	thread->machine.cthread_data = 0;
+#if defined(HAS_APPLE_PAC)
+	thread->machine.rop_pid = task->rop_pid;
+	thread->machine.disable_user_jop = task->disable_user_jop;
+#endif
 
 
 	if (task != kernel_task) {
@@ -159,7 +170,8 @@ machine_thread_create(
 		thread->machine.contextData = (arm_context_t *)zalloc(user_ss_zone);
 
 		if (!thread->machine.contextData) {
-			return KERN_FAILURE;
+			result = KERN_FAILURE;
+			goto done;
 		}
 
 		thread->machine.upcb = &thread->machine.contextData->ss;
@@ -176,34 +188,38 @@ machine_thread_create(
 			thread->machine.uNeon->nsh.flavor = ARM_NEON_SAVED_STATE32;
 			thread->machine.uNeon->nsh.count = ARM_NEON_SAVED_STATE32_COUNT;
 		}
+
 	} else {
 		thread->machine.upcb = NULL;
 		thread->machine.uNeon = NULL;
 		thread->machine.contextData = NULL;
 	}
 
-	bzero(&thread->machine.perfctrl_state, sizeof(thread->machine.perfctrl_state));
 
+	bzero(&thread->machine.perfctrl_state, sizeof(thread->machine.perfctrl_state));
 	result = machine_thread_state_initialize(thread);
 
+done:
 	if (result != KERN_SUCCESS) {
 		thread_user_ss = thread->machine.contextData;
-		thread->machine.upcb = NULL;
-		thread->machine.uNeon = NULL;
-		thread->machine.contextData = NULL;
-		zfree(user_ss_zone, thread_user_ss);
+
+		if (thread_user_ss) {
+			thread->machine.upcb = NULL;
+			thread->machine.uNeon = NULL;
+			thread->machine.contextData = NULL;
+			zfree(user_ss_zone, thread_user_ss);
+		}
 	}
 
 	return result;
 }
 
 /*
- * Routine:	machine_thread_destroy
+ * Routine: machine_thread_destroy
  *
  */
 void
-machine_thread_destroy(
-		       thread_t thread)
+machine_thread_destroy(thread_t thread)
 {
 	arm_context_t *thread_user_ss;
 
@@ -213,6 +229,8 @@ machine_thread_destroy(
 		thread->machine.upcb = NULL;
 		thread->machine.uNeon = NULL;
 		thread->machine.contextData = NULL;
+
+
 		zfree(user_ss_zone, thread_user_ss);
 	}
 
@@ -227,7 +245,7 @@ machine_thread_destroy(
 
 
 /*
- * Routine:	machine_thread_init
+ * Routine: machine_thread_init
  *
  */
 void
@@ -251,11 +269,12 @@ machine_thread_init(void)
 	                     CONFIG_THREAD_MAX * (sizeof(arm_context_t)),
 	                     USER_SS_ZONE_ALLOC_SIZE,
 	                     "user save state");
+
 }
 
 
 /*
- * Routine:	get_useraddr
+ * Routine: get_useraddr
  *
  */
 user_addr_t
@@ -265,17 +284,16 @@ get_useraddr()
 }
 
 /*
- * Routine:	machine_stack_detach
+ * Routine: machine_stack_detach
  *
  */
 vm_offset_t
-machine_stack_detach(
-		     thread_t thread)
+machine_stack_detach(thread_t thread)
 {
-	vm_offset_t     stack;
+	vm_offset_t stack;
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_STACK_DETACH),
-		     (uintptr_t)thread_tid(thread), thread->priority, thread->sched_pri, 0, 0);
+	             (uintptr_t)thread_tid(thread), thread->priority, thread->sched_pri, 0, 0);
 
 	stack = thread->kernel_stack;
 	thread->kernel_stack = 0;
@@ -286,21 +304,22 @@ machine_stack_detach(
 
 
 /*
- * Routine:	machine_stack_attach
+ * Routine: machine_stack_attach
  *
  */
 void
-machine_stack_attach(
-		     thread_t thread,
-		     vm_offset_t stack)
+machine_stack_attach(thread_t thread,
+                     vm_offset_t stack)
 {
 	struct arm_context *context;
 	struct arm_saved_state64 *savestate;
+	uint32_t current_el;
 
-#define machine_stack_attach_kprintf(x...)	/* kprintf("machine_stack_attach: " x) */
+#define machine_stack_attach_kprintf(x...) \
+	/* kprintf("machine_stack_attach: " x) */
 
 	KERNEL_DEBUG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_STACK_ATTACH),
-		     (uintptr_t)thread_tid(thread), thread->priority, thread->sched_pri, 0, 0);
+	             (uintptr_t)thread_tid(thread), thread->priority, thread->sched_pri, 0, 0);
 
 	thread->kernel_stack = stack;
 	thread->machine.kstackptr = stack + kernel_stack_size - sizeof(struct thread_kernel_state);
@@ -308,28 +327,66 @@ machine_stack_attach(
 
 	machine_stack_attach_kprintf("kstackptr: %lx\n", (vm_address_t)thread->machine.kstackptr);
 
+	current_el = (uint32_t) __builtin_arm_rsr64("CurrentEL");
 	context = &((thread_kernel_state_t) thread->machine.kstackptr)->machine;
 	savestate = saved_state64(&context->ss);
 	savestate->fp = 0;
-	savestate->lr = (uintptr_t)thread_continue;
 	savestate->sp = thread->machine.kstackptr;
-	savestate->cpsr = PSR64_KERNEL_DEFAULT;
+#if defined(HAS_APPLE_PAC)
+	/* Sign the initial kernel stack saved state */
+	const uint32_t default_cpsr = PSR64_KERNEL_DEFAULT & ~PSR64_MODE_EL_MASK;
+	asm volatile (
+		"mov	x0, %[ss]"				"\n"
+
+		"mov	x1, xzr"				"\n"
+		"str	x1, [x0, %[SS64_PC]]"			"\n"
+
+		"mov	x2, %[default_cpsr_lo]"			"\n"
+		"movk	x2, %[default_cpsr_hi], lsl #16"	"\n"
+		"mrs	x3, CurrentEL"				"\n"
+		"orr	w2, w2, w3"				"\n"
+		"str	w2, [x0, %[SS64_CPSR]]"			"\n"
+
+		"adrp	x3, _thread_continue@page"		"\n"
+		"add	x3, x3, _thread_continue@pageoff"	"\n"
+		"str	x3, [x0, %[SS64_LR]]"			"\n"
+
+		"mov	x4, xzr"				"\n"
+		"mov	x5, xzr"				"\n"
+		"stp	x4, x5, [x0, %[SS64_X16]]"		"\n"
+
+		"mov	x6, lr"					"\n"
+		"bl	_ml_sign_thread_state"			"\n"
+		"mov	lr, x6"					"\n"
+		:
+		: [ss]			"r"(&context->ss),
+		  [default_cpsr_lo]	"M"(default_cpsr & 0xFFFF),
+		  [default_cpsr_hi]	"M"(default_cpsr >> 16),
+		  [SS64_X16]		"i"(offsetof(struct arm_saved_state, ss_64.x[16])),
+		  [SS64_PC]		"i"(offsetof(struct arm_saved_state, ss_64.pc)),
+		  [SS64_CPSR]		"i"(offsetof(struct arm_saved_state, ss_64.cpsr)),
+		  [SS64_LR]		"i"(offsetof(struct arm_saved_state, ss_64.lr))
+		: "x0", "x1", "x2", "x3", "x4", "x5", "x6"
+	);
+#else
+	savestate->lr = (uintptr_t)thread_continue;
+	savestate->cpsr = (PSR64_KERNEL_DEFAULT & ~PSR64_MODE_EL_MASK) | current_el;
+#endif /* defined(HAS_APPLE_PAC) */
 	machine_stack_attach_kprintf("thread = %p pc = %llx, sp = %llx\n", thread, savestate->lr, savestate->sp);
 }
 
 
 /*
- * Routine:	machine_stack_handoff
+ * Routine: machine_stack_handoff
  *
  */
 void
-machine_stack_handoff(
-		      thread_t old,
-		      thread_t new)
+machine_stack_handoff(thread_t old,
+                      thread_t new)
 {
-	vm_offset_t     stack;
-	pmap_t          new_pmap;
-	cpu_data_t	*cpu_data_ptr;
+	vm_offset_t  stack;
+	pmap_t       new_pmap;
+	cpu_data_t * cpu_data_ptr;
 
 	kpc_off_cpu(old);
 
@@ -344,9 +401,11 @@ machine_stack_handoff(
 	}
 
 
+
 	new_pmap = new->map->pmap;
 	if (old->map->pmap != new_pmap)
 		pmap_switch(new_pmap);
+
 
 	new->machine.CpuDatap = cpu_data_ptr;
 
@@ -362,17 +421,17 @@ machine_stack_handoff(
 
 
 /*
- * Routine:	call_continuation
+ * Routine: call_continuation
  *
  */
 void
-call_continuation(
-	thread_continue_t continuation,
-	void *parameter,
-	wait_result_t wresult,
-	boolean_t enable_interrupts)
+call_continuation(thread_continue_t continuation,
+                  void *parameter,
+                  wait_result_t wresult,
+                  boolean_t enable_interrupts)
 {
-#define call_continuation_kprintf(x...)	/* kprintf("call_continuation_kprintf:" x) */
+#define call_continuation_kprintf(x...) \
+	/* kprintf("call_continuation_kprintf:" x) */
 
 	call_continuation_kprintf("thread = %p continuation = %p, stack = %p\n", current_thread(), continuation, current_thread()->machine.kstackptr);
 	Call_continuation(continuation, parameter, wresult, enable_interrupts);
@@ -398,12 +457,12 @@ call_continuation(
 
 void arm_debug_set32(arm_debug_state_t *debug_state)
 {
-	struct cpu_data 	*cpu_data_ptr;
-	arm_debug_info_t 	*debug_info = arm_debug_info();
-	boolean_t       	intr, set_mde = 0;
-	arm_debug_state_t 	off_state;
-	uint32_t 			i;
-	uint64_t		all_ctrls = 0;
+	struct cpu_data *  cpu_data_ptr;
+	arm_debug_info_t * debug_info    = arm_debug_info();
+	boolean_t          intr, set_mde = 0;
+	arm_debug_state_t  off_state;
+	uint32_t           i;
+	uint64_t           all_ctrls = 0;
 
 	intr = ml_set_interrupts_enabled(FALSE);
 	cpu_data_ptr = getCpuDatap();
@@ -550,16 +609,14 @@ void arm_debug_set32(arm_debug_state_t *debug_state)
 	} else {
 		update_mdscr(0x8000, 0);
 	}
-		
+
 	/*
 	 * Software debug single step enable
 	 */
 	if (debug_state->uds.ds32.mdscr_el1 & 0x1) {
 		update_mdscr(0x8000, 1); // ~MDE | SS : no brk/watch while single stepping (which we've set)
 
-		set_saved_state_cpsr((current_thread()->machine.upcb), 
-			get_saved_state_cpsr((current_thread()->machine.upcb)) | PSR64_SS);
-
+		mask_saved_state_cpsr(current_thread()->machine.upcb, PSR64_SS, 0);
 	} else {
 
 		update_mdscr(0x1, 0);
@@ -577,12 +634,12 @@ void arm_debug_set32(arm_debug_state_t *debug_state)
 
 void arm_debug_set64(arm_debug_state_t *debug_state)
 {
-	struct cpu_data 	*cpu_data_ptr;
-	arm_debug_info_t 	*debug_info = arm_debug_info();
-	boolean_t       	intr, set_mde = 0;
-	arm_debug_state_t 	off_state;
-	uint32_t 			i;
-	uint64_t			all_ctrls = 0;
+	struct cpu_data *  cpu_data_ptr;
+	arm_debug_info_t * debug_info    = arm_debug_info();
+	boolean_t          intr, set_mde = 0;
+	arm_debug_state_t  off_state;
+	uint32_t           i;
+	uint64_t           all_ctrls = 0;
 
 	intr = ml_set_interrupts_enabled(FALSE);
 	cpu_data_ptr = getCpuDatap();
@@ -727,7 +784,7 @@ void arm_debug_set64(arm_debug_state_t *debug_state)
 	if (set_mde) {
 		update_mdscr(0, 0x8000); // MDSCR_EL1[MDE]
 	}
-		
+
 	/*
 	 * Software debug single step enable
 	 */
@@ -735,9 +792,7 @@ void arm_debug_set64(arm_debug_state_t *debug_state)
 
 		update_mdscr(0x8000, 1); // ~MDE | SS : no brk/watch while single stepping (which we've set)
 
-		set_saved_state_cpsr((current_thread()->machine.upcb), 
-			get_saved_state_cpsr((current_thread()->machine.upcb)) | PSR64_SS);
-
+		mask_saved_state_cpsr(current_thread()->machine.upcb, PSR64_SS, 0);
 	} else {
 
 		update_mdscr(0x1, 0);
@@ -779,7 +834,7 @@ void arm_debug_set(arm_debug_state_t *debug_state)
 boolean_t
 debug_legacy_state_is_valid(arm_legacy_debug_state_t *debug_state)
 {
-	arm_debug_info_t 	*debug_info = arm_debug_info();
+	arm_debug_info_t *debug_info = arm_debug_info();
 	uint32_t i;
 	for (i = 0; i < debug_info->num_breakpoint_pairs; i++) {
 		if (0 != debug_state->bcr[i] && VM_MAX_ADDRESS32 <= debug_state->bvr[i])
@@ -796,7 +851,7 @@ debug_legacy_state_is_valid(arm_legacy_debug_state_t *debug_state)
 boolean_t
 debug_state_is_valid32(arm_debug_state32_t *debug_state)
 {
-	arm_debug_info_t 	*debug_info = arm_debug_info();
+	arm_debug_info_t *debug_info = arm_debug_info();
 	uint32_t i;
 	for (i = 0; i < debug_info->num_breakpoint_pairs; i++) {
 		if (0 != debug_state->bcr[i] && VM_MAX_ADDRESS32 <= debug_state->bvr[i])
@@ -813,7 +868,7 @@ debug_state_is_valid32(arm_debug_state32_t *debug_state)
 boolean_t
 debug_state_is_valid64(arm_debug_state64_t *debug_state)
 {
-	arm_debug_info_t 	*debug_info = arm_debug_info();
+	arm_debug_info_t *debug_info = arm_debug_info();
 	uint32_t i;
 	for (i = 0; i < debug_info->num_breakpoint_pairs; i++) {
 		if (0 != debug_state->bcr[i] && MACH_VM_MAX_ADDRESS <= debug_state->bvr[i])
@@ -832,38 +887,33 @@ debug_state_is_valid64(arm_debug_state64_t *debug_state)
  * is ignored in the case of ARM -- Is this the right assumption?
  */
 void
-copy_legacy_debug_state(
-		arm_legacy_debug_state_t *src,
-		arm_legacy_debug_state_t *target,
-		__unused boolean_t all)
+copy_legacy_debug_state(arm_legacy_debug_state_t * src,
+                        arm_legacy_debug_state_t * target,
+                        __unused boolean_t         all)
 {
 	bcopy(src, target, sizeof(arm_legacy_debug_state_t));
 }
 
 void
-copy_debug_state32(
-		arm_debug_state32_t *src,
-		arm_debug_state32_t *target,
-		__unused boolean_t all)
+copy_debug_state32(arm_debug_state32_t * src,
+                   arm_debug_state32_t * target,
+                   __unused boolean_t    all)
 {
 	bcopy(src, target, sizeof(arm_debug_state32_t));
 }
 
 void
-copy_debug_state64(
-		arm_debug_state64_t *src,
-		arm_debug_state64_t *target,
-		__unused boolean_t all)
+copy_debug_state64(arm_debug_state64_t * src,
+                   arm_debug_state64_t * target,
+                   __unused boolean_t    all)
 {
 	bcopy(src, target, sizeof(arm_debug_state64_t));
 }
 
 kern_return_t
-machine_thread_set_tsd_base(
-	thread_t			thread,
-	mach_vm_offset_t	tsd_base)
+machine_thread_set_tsd_base(thread_t         thread,
+                            mach_vm_offset_t tsd_base)
 {
-
 	if (thread->task == kernel_task) {
 		return KERN_INVALID_ARGUMENT;
 	}

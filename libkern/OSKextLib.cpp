@@ -190,9 +190,12 @@ OSKextCancelRequest(
 #pragma mark MIG Functions & Wrappers
 #endif
 /*********************************************************************
-* IMPORTANT: Once we have done the vm_map_copyout(), we *must* return
-* KERN_SUCCESS or the kernel map gets messed up (reason as yet
-* unknown). We use op_result to return the real result of our work.
+* IMPORTANT: vm_map_copyout_size() consumes the requestIn copy
+* object on success. Therefore once it has been invoked successfully,
+* this routine *must* return KERN_SUCCESS, regardless of our actual
+* result. Our contract with the caller is that requestIn must be
+* caller-deallocated if we return an error. We use op_result to return
+* the real result of our work.
 *********************************************************************/
 kern_return_t
 kext_request(
@@ -222,9 +225,9 @@ kext_request(
 	 * just in case, or MIG will try to copy out bogus data.
 	 */
 	*op_result = KERN_FAILURE;
-	*responseOut = NULL;
+	*responseOut = 0;
 	*responseLengthOut = 0;
-	*logDataOut = NULL;
+	*logDataOut = 0;
 	*logDataLengthOut = 0;
 
 	/* Check for input. Don't discard what isn't there, though.
@@ -238,17 +241,17 @@ kext_request(
 		goto finish;
 	}
 
-	/* Once we have done the vm_map_copyout(), we *must* return KERN_SUCCESS
-	 * or the kernel map gets messed up (reason as yet unknown). We will use
-	 * op_result to return the real result of our work.
-	 */
-	result = vm_map_copyout(kernel_map, &map_addr, (vm_map_copy_t)requestIn);
+	result = vm_map_copyout_size(kernel_map, &map_addr, (vm_map_copy_t)requestIn, requestLengthIn);
 	if (result != KERN_SUCCESS) {
 		OSKextLog(/* kext */ NULL,
 		    kOSKextLogErrorLevel |
 		    kOSKextLogIPCFlag,
 		    "vm_map_copyout() failed for request from user space.");
-		vm_map_copy_discard((vm_map_copy_t)requestIn);
+		/*
+		 * If we return an error it is our caller's responsibility to
+		 * deallocate the requestIn copy object, so do not deallocate it
+		 * here. See comment above.
+		 */
 		goto finish;
 	}
 	request = CAST_DOWN(char *, map_addr);
@@ -314,7 +317,7 @@ kext_request(
 			    kOSKextLogIPCFlag,
 			    "Failed to copy response to request from user space.");
 			*op_result = copyin_result; // xxx - should we map to our own code?
-			*responseOut = NULL;
+			*responseOut = 0;
 			*responseLengthOut = 0;
 			goto finish;
 		}
@@ -334,7 +337,7 @@ kext_request(
 			    kOSKextLogIPCFlag,
 			    "Failed to copy log data for request from user space.");
 			*op_result = copyin_result; // xxx - should we map to our own code?
-			*logDataOut = NULL;
+			*logDataOut = 0;
 			*logDataLengthOut = 0;
 			goto finish;
 		}
@@ -392,7 +395,7 @@ kext_weak_symbol_referenced(void)
 	panic("A kext referenced an unresolved weak symbol\n");
 }
 
-const void *gOSKextUnresolved = (const void *)&kext_weak_symbol_referenced;
+const void * const gOSKextUnresolved = (const void *)&kext_weak_symbol_referenced;
 
 #if PRAGMA_MARK
 #pragma mark Kernel-Internal C Functions

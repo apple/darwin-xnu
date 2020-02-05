@@ -113,7 +113,6 @@ struct ip_fw_args {
 	struct route_in6        *fwa_ro6_pmtu;  /* for IPv6 output */
 	struct ifnet            *fwa_origifp;   /* for IPv6 output */
 	u_int32_t               fwa_mtu;        /* for IPv6 output */
-	int                     fwa_alwaysfrag; /* for IPv6 output */
 	u_int32_t               fwa_unfragpartlen;  /* for IPv6 output */
 	struct ip6_exthdrs      *fwa_exthdrs;   /* for IPv6 output */
 	struct ip_flow_id       fwa_id;         /* grabbed from IP header       */

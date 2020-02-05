@@ -129,6 +129,7 @@
 #include <kern/exc_guard.h>
 
 #include <vm/vm_protos.h>
+#include <os/log.h>
 
 #include <pexpert/pexpert.h>
 
@@ -152,6 +153,9 @@ void dtrace_proc_exit(proc_t p);
 #include <sys/syscall.h>
 #endif /* CONFIG_MACF */
 
+#if CONFIG_MEMORYSTATUS
+static void proc_memorystatus_remove(proc_t p);
+#endif /* CONFIG_MEMORYSTATUS */
 void proc_prepareexit(proc_t p, int rv, boolean_t perf_notify);
 void gather_populate_corpse_crashinfo(proc_t p, task_t corpse_task,
     mach_exception_data_type_t code, mach_exception_data_type_t subcode,
@@ -509,6 +513,11 @@ populate_corpse_crashinfo(proc_t p, task_t corpse_task, struct rusage_superset *
 		kcdata_memcpy(crash_info_ptr, uaddr, &p->p_responsible_pid, sizeof(p->p_responsible_pid));
 	}
 
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PROC_PERSONA_ID, sizeof(uid_t), &uaddr)) {
+		uid_t persona_id = proc_persona_id(p);
+		kcdata_memcpy(crash_info_ptr, uaddr, &persona_id, sizeof(persona_id));
+	}
+
 #if CONFIG_COALITIONS
 	if (KERN_SUCCESS == kcdata_get_memory_addr_for_array(crash_info_ptr, TASK_CRASHINFO_COALITION_ID, sizeof(uint64_t), COALITION_NUM_TYPES, &uaddr)) {
 		uint64_t coalition_ids[COALITION_NUM_TYPES];
@@ -518,11 +527,15 @@ populate_corpse_crashinfo(proc_t p, task_t corpse_task, struct rusage_superset *
 #endif /* CONFIG_COALITIONS */
 
 #if CONFIG_MEMORYSTATUS
-	memstat_dirty_flags = memorystatus_dirty_get(p);
+	memstat_dirty_flags = memorystatus_dirty_get(p, FALSE);
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_DIRTY_FLAGS, sizeof(memstat_dirty_flags), &uaddr)) {
 		kcdata_memcpy(crash_info_ptr, uaddr, &memstat_dirty_flags, sizeof(memstat_dirty_flags));
 	}
 #endif
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_MEMORY_LIMIT_INCREASE, sizeof(p->p_memlimit_increase), &uaddr)) {
+		kcdata_memcpy(crash_info_ptr, uaddr, &p->p_memlimit_increase, sizeof(p->p_memlimit_increase));
+	}
 
 	if (p->p_exit_reason != OS_REASON_NULL && reason == OS_REASON_NULL) {
 		reason = p->p_exit_reason;
@@ -596,7 +609,8 @@ launchd_exit_reason_get_string_desc(os_reason_t exit_reason)
 	return (char *)kcdata_iter_payload(iter);
 }
 
-static __attribute__((noinline)) void
+__abortlike
+static void
 launchd_crashed_panic(proc_t p, int rv)
 {
 	char *launchd_exit_reason_desc = launchd_exit_reason_get_string_desc(p->p_exit_reason);
@@ -921,6 +935,25 @@ exit_with_reason(proc_t p, int rv, int *retval, boolean_t thread_can_terminate, 
 	return 0;
 }
 
+#if CONFIG_MEMORYSTATUS
+/*
+ * Remove this process from jetsam bands for freezing or exiting. Note this will block, if the process
+ * is currently being frozen.
+ * The proc_list_lock is held by the caller.
+ * NB: If the process should be ineligible for future freezing or jetsaming the caller should first set
+ * the p_listflag P_LIST_EXITED bit.
+ */
+static void
+proc_memorystatus_remove(proc_t p)
+{
+	LCK_MTX_ASSERT(proc_list_mlock, LCK_MTX_ASSERT_OWNED);
+	while (memorystatus_remove(p) == EAGAIN) {
+		os_log(OS_LOG_DEFAULT, "memorystatus_remove: Process[%d] tried to exit while being frozen. Blocking exit until freeze completes.", p->p_pid);
+		msleep(&p->p_memstat_state, proc_list_mlock, PWAIT, "proc_memorystatus_remove", NULL);
+	}
+}
+#endif
+
 void
 proc_prepareexit(proc_t p, int rv, boolean_t perf_notify)
 {
@@ -1056,7 +1089,7 @@ skipcheck:
 	proc_list_lock();
 
 #if CONFIG_MEMORYSTATUS
-	memorystatus_remove(p, TRUE);
+	proc_memorystatus_remove(p);
 #endif
 
 	LIST_REMOVE(p, p_list);
@@ -1065,7 +1098,6 @@ skipcheck:
 	p->p_listflag |= P_LIST_EXITED;
 
 	proc_list_unlock();
-
 
 #ifdef PGINPROF
 	vmsizmon();
@@ -1140,8 +1172,6 @@ proc_exit(proc_t p)
 	dtrace_proc_exit(p);
 #endif
 
-	nspace_proc_exit(p);
-
 	/*
 	 * need to cancel async IO requests that can be cancelled and wait for those
 	 * already active.  MAY BLOCK!
@@ -1177,6 +1207,14 @@ proc_exit(proc_t p)
 		 * but we do need to update our bookeeping w/r to throttled threads
 		 */
 		throttle_lowpri_io(0);
+	}
+
+	if (p->p_lflag & P_LNSPACE_RESOLVER) {
+		/*
+		 * The namespace resolver is exiting; there may be
+		 * outstanding materialization requests to clean up.
+		 */
+		nspace_resolver_exited(p);
 	}
 
 #if SYSV_SHM
@@ -2327,7 +2365,7 @@ proc_reparentlocked(proc_t child, proc_t parent, int signallable, int locked)
 	}
 #endif
 	oldparent->p_childrencnt--;
-#if __PROC_INTERNAL_DEBUG1
+#if __PROC_INTERNAL_DEBUG
 	if (oldparent->p_childrencnt < 0) {
 		panic("process children count -ve\n");
 	}
@@ -2411,7 +2449,7 @@ vfork_exit_internal(proc_t p, int rv, int forceexit)
 	proc_list_lock();
 
 #if CONFIG_MEMORYSTATUS
-	memorystatus_remove(p, TRUE);
+	proc_memorystatus_remove(p);
 #endif
 
 	LIST_REMOVE(p, p_list);

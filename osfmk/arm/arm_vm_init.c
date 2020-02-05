@@ -184,11 +184,12 @@ arm_vm_page_granular_helper(vm_offset_t start, vm_offset_t _end, vm_offset_t va,
 		} else {
 			/* TTE must be reincarnated COARSE. */
 			ppte = (pt_entry_t *)phystokv(avail_start);
+			pmap_paddr_t l2table = avail_start;
 			avail_start += ARM_PGBYTES;
 			bzero(ppte, ARM_PGBYTES);
 
 			for (i = 0; i < 4; ++i) {
-				tte[i] = pa_to_tte(kvtophys((vm_offset_t)ppte) + (i * 0x400)) | ARM_TTE_TYPE_TABLE;
+				tte[i] = pa_to_tte(l2table + (i * 0x400)) | ARM_TTE_TYPE_TABLE;
 			}
 		}
 
@@ -343,8 +344,9 @@ arm_vm_prot_init(boot_args * args)
 	 */
 	pmap_paddr_t p = (pmap_paddr_t)(args->topOfKernelData) + (ARM_PGBYTES * 9);
 	pt_entry_t *ppte = (pt_entry_t *)phystokv(p);
+	pmap_init_pte_page(kernel_pmap, ppte, HIGH_EXC_VECTORS & ~ARM_TT_L1_PT_OFFMASK, 2, TRUE, FALSE);
 
-	int idx = (HIGH_EXC_VECTORS & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT;
+	int idx = (HIGH_EXC_VECTORS & ARM_TT_L1_PT_OFFMASK) >> ARM_TT_L2_SHIFT;
 	pt_entry_t ptmp = ppte[idx];
 
 	ptmp = (ptmp & ~ARM_PTE_APMASK) | ARM_PTE_AP(AP_RONA);
@@ -367,9 +369,6 @@ arm_vm_prot_finalize(boot_args * args)
 
 	arm_vm_page_granular_RWNX(phystokv(args->topOfKernelData) + ARM_PGBYTES * 9, ARM_PGBYTES, FALSE); /* commpage, EVB */
 
-#ifndef  __ARM_L1_PTW__
-	FlushPoC_Dcache();
-#endif
 	flush_mmu_tlb();
 }
 
@@ -497,11 +496,6 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	sectCONSTB = sectDCONST->addr;
 	sectSizeCONST = sectDCONST->size;
 
-#if !SECURE_KERNEL
-	/* doconstro is true by default, but we allow a boot-arg to disable it */
-	(void) PE_parse_boot_argn("dataconstro", &doconstro, sizeof(doconstro));
-#endif
-
 	if (doconstro) {
 		extern vm_offset_t _lastkerneldataconst;
 		extern vm_size_t _lastkerneldataconst_padsize;
@@ -534,25 +528,6 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 
 	vm_set_page_size();
 
-#ifndef __ARM_L1_PTW__
-	FlushPoC_Dcache();
-#endif
-	set_mmu_ttb(cpu_ttep);
-	set_mmu_ttb_alternate(cpu_ttep);
-	flush_mmu_tlb();
-#if __arm__ && __ARM_USER_PROTECT__
-	{
-		unsigned int ttbr0_val, ttbr1_val, ttbcr_val;
-		thread_t thread = current_thread();
-
-		__asm__ volatile ("mrc p15,0,%0,c2,c0,0\n" : "=r"(ttbr0_val));
-		__asm__ volatile ("mrc p15,0,%0,c2,c0,1\n" : "=r"(ttbr1_val));
-		__asm__ volatile ("mrc p15,0,%0,c2,c0,2\n" : "=r"(ttbcr_val));
-		thread->machine.uptw_ttb = ttbr0_val;
-		thread->machine.kptw_ttb = ttbr1_val;
-		thread->machine.uptw_ttc = ttbcr_val;
-	}
-#endif
 	vm_prelink_stext = segPRELINKTEXTB;
 	vm_prelink_etext = segPRELINKTEXTB + segSizePRELINKTEXT;
 	vm_prelink_sinfo = segPRELINKINFOB;
@@ -591,14 +566,30 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 		ptp = (pt_entry_t *) phystokv(avail_start);
 		ptp_phys = (pmap_paddr_t)avail_start;
 		avail_start += ARM_PGBYTES;
-		pmap_init_pte_page(kernel_pmap, ptp, va + off, 2, TRUE);
+		pmap_init_pte_page(kernel_pmap, ptp, va + off, 2, TRUE, TRUE);
 		tte = &cpu_tte[ttenum(va + off)];
-		*tte     = pa_to_tte((ptp_phys)) | ARM_TTE_TYPE_TABLE;;
-		*(tte + 1) = pa_to_tte((ptp_phys + 0x400)) | ARM_TTE_TYPE_TABLE;;
-		*(tte + 2) = pa_to_tte((ptp_phys + 0x800)) | ARM_TTE_TYPE_TABLE;;
-		*(tte + 3) = pa_to_tte((ptp_phys + 0xC00)) | ARM_TTE_TYPE_TABLE;;
+		*tte     = pa_to_tte((ptp_phys)) | ARM_TTE_TYPE_TABLE;
+		*(tte + 1) = pa_to_tte((ptp_phys + 0x400)) | ARM_TTE_TYPE_TABLE;
+		*(tte + 2) = pa_to_tte((ptp_phys + 0x800)) | ARM_TTE_TYPE_TABLE;
+		*(tte + 3) = pa_to_tte((ptp_phys + 0xC00)) | ARM_TTE_TYPE_TABLE;
 	}
 
+	set_mmu_ttb(cpu_ttep);
+	set_mmu_ttb_alternate(cpu_ttep);
+	flush_mmu_tlb();
+#if __arm__ && __ARM_USER_PROTECT__
+	{
+		unsigned int ttbr0_val, ttbr1_val, ttbcr_val;
+		thread_t thread = current_thread();
+
+		__asm__ volatile ("mrc p15,0,%0,c2,c0,0\n" : "=r"(ttbr0_val));
+		__asm__ volatile ("mrc p15,0,%0,c2,c0,1\n" : "=r"(ttbr1_val));
+		__asm__ volatile ("mrc p15,0,%0,c2,c0,2\n" : "=r"(ttbcr_val));
+		thread->machine.uptw_ttb = ttbr0_val;
+		thread->machine.kptw_ttb = ttbr1_val;
+		thread->machine.uptw_ttc = ttbcr_val;
+	}
+#endif
 	avail_start = (avail_start + PAGE_MASK) & ~PAGE_MASK;
 
 	first_avail = avail_start;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -44,7 +44,7 @@
 
 class IODeviceMemory : public IOMemoryDescriptor
 {
-	OSDeclareDefaultStructors(IODeviceMemory)
+	OSDeclareDefaultStructors(IODeviceMemory);
 
 public:
 

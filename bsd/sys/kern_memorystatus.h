@@ -29,11 +29,9 @@
 #ifndef SYS_MEMORYSTATUS_H
 #define SYS_MEMORYSTATUS_H
 
-#include <stdint.h>
 #include <sys/time.h>
-#include <sys/proc.h>
-#include <sys/param.h>
 #include <mach_debug/zone_info.h>
+#include <sys/proc.h>
 
 #define MEMORYSTATUS_ENTITLEMENT "com.apple.private.memorystatus"
 
@@ -55,6 +53,7 @@
 #define JETSAM_PRIORITY_FOREGROUND               10
 #define JETSAM_PRIORITY_AUDIO_AND_ACCESSORY      12
 #define JETSAM_PRIORITY_CONDUCTOR                13
+#define JETSAM_PRIORITY_DRIVER_APPLE             15
 #define JETSAM_PRIORITY_HOME                     16
 #define JETSAM_PRIORITY_EXECUTIVE                17
 #define JETSAM_PRIORITY_IMPORTANT                18
@@ -69,6 +68,21 @@
 /* Compatibility */
 #define DEFAULT_JETSAM_PRIORITY                  18
 
+/*
+ * The deferral time used by default for apps and daemons in all aging
+ * policies except kJetsamAgingPolicySysProcsReclaimedFirst is
+ * DEFERRED_IDLE_EXIT_TIME_SECS.
+ *
+ * For kJetsamAgingPolicySysProcsReclaimedFirst,
+ *
+ * Daemons: The actual idle deferred time for the daemon is based on
+ * the relaunch behavior of the daemon. The relaunch behavior determines
+ * the scaling factor applied to DEFERRED_IDLE_EXIT_TIME_SECS. See
+ * kJetsamSysProcsIdleDelayTime* ratios defined in kern_memorystatus.c
+ *
+ * Apps: The apps are aged for DEFERRED_IDLE_EXIT_TIME_SECS factored
+ * by kJetsamAppsIdleDelayTimeRatio.
+ */
 #define DEFERRED_IDLE_EXIT_TIME_SECS             10
 
 #define KEV_MEMORYSTATUS_SUBCLASS                 3
@@ -185,14 +199,27 @@ typedef struct jetsam_snapshot {
 	memorystatus_jetsam_snapshot_entry_t entries[];
 } memorystatus_jetsam_snapshot_t;
 
-typedef struct memorystatus_freeze_entry {
-	int32_t pid;
-	uint32_t flags;
-	uint32_t pages;
-} memorystatus_freeze_entry_t;
-
 /* TODO - deprecate; see <rdar://problem/12969599> */
 #define kMaxSnapshotEntries 192
+
+/*
+ * default jetsam snapshot support
+ */
+extern memorystatus_jetsam_snapshot_t *memorystatus_jetsam_snapshot;
+extern memorystatus_jetsam_snapshot_t *memorystatus_jetsam_snapshot_copy;
+extern unsigned int memorystatus_jetsam_snapshot_count;
+extern unsigned int memorystatus_jetsam_snapshot_copy_count;
+extern unsigned int memorystatus_jetsam_snapshot_max;
+extern unsigned int memorystatus_jetsam_snapshot_size;
+extern uint64_t memorystatus_jetsam_snapshot_last_timestamp;
+extern uint64_t memorystatus_jetsam_snapshot_timeout;
+#define memorystatus_jetsam_snapshot_list memorystatus_jetsam_snapshot->entries
+#define JETSAM_SNAPSHOT_TIMEOUT_SECS 30
+
+/* General memorystatus stuff */
+
+extern uint64_t memorystatus_sysprocs_idle_delay_time;
+extern uint64_t memorystatus_apps_idle_delay_time;
 
 /* State */
 #define kMemorystatusSuspended        0x01
@@ -201,6 +228,7 @@ typedef struct memorystatus_freeze_entry {
 #define kMemorystatusTracked          0x08
 #define kMemorystatusSupportsIdleExit 0x10
 #define kMemorystatusDirty            0x20
+#define kMemorystatusAssertion        0x40
 
 /*
  * Jetsam exit reason definitions - related to memorystatus
@@ -223,8 +251,8 @@ typedef struct memorystatus_freeze_entry {
 #define JETSAM_REASON_ZONE_MAP_EXHAUSTION                                       10
 #define JETSAM_REASON_MEMORY_VMCOMPRESSOR_THRASHING                     11
 #define JETSAM_REASON_MEMORY_VMCOMPRESSOR_SPACE_SHORTAGE        12
-
-#define JETSAM_REASON_MEMORYSTATUS_MAX  JETSAM_REASON_MEMORY_VMCOMPRESSOR_SPACE_SHORTAGE
+#define JETSAM_REASON_LOWSWAP                                   13
+#define JETSAM_REASON_MEMORYSTATUS_MAX  JETSAM_REASON_LOWSWAP
 
 /*
  * Jetsam exit reason definitions - not related to memorystatus
@@ -246,9 +274,14 @@ enum {
 	kMemorystatusKilledZoneMapExhaustion                    = JETSAM_REASON_ZONE_MAP_EXHAUSTION,
 	kMemorystatusKilledVMCompressorThrashing                = JETSAM_REASON_MEMORY_VMCOMPRESSOR_THRASHING,
 	kMemorystatusKilledVMCompressorSpaceShortage    = JETSAM_REASON_MEMORY_VMCOMPRESSOR_SPACE_SHORTAGE,
+	kMemorystatusKilledLowSwap                      = JETSAM_REASON_LOWSWAP,
 };
 
-/* For backwards compatibility */
+/*
+ * For backwards compatibility
+ * Keeping these around for external users (e.g. ReportCrash, Ariadne).
+ * TODO: Remove once they stop using these.
+ */
 #define kMemorystatusKilledDiagnostic           kMemorystatusKilledDiskSpaceShortage
 #define kMemorystatusKilledVMThrashing          kMemorystatusKilledVMCompressorThrashing
 #define JETSAM_REASON_MEMORY_VMTHRASHING        JETSAM_REASON_MEMORY_VMCOMPRESSOR_THRASHING
@@ -288,6 +321,10 @@ int memorystatus_control(uint32_t command, int32_t pid, uint32_t flags, void *bu
 #define MEMORYSTATUS_CMD_FREEZER_CONTROL              20
 #endif /* DEVELOPMENT || DEBUG */
 #endif /* CONFIG_FREEZE */
+
+#define MEMORYSTATUS_CMD_GET_AGGRESSIVE_JETSAM_LENIENT_MODE      21   /* Query if the lenient mode for aggressive jetsam is enabled. */
+
+#define MEMORYSTATUS_CMD_INCREASE_JETSAM_TASK_LIMIT   22   /* Used by DYLD to increase the jetsam active and inactive limits, when using roots */
 
 /* Commands that act on a group of processes */
 #define MEMORYSTATUS_CMD_GRP_SET_PROPERTIES           100
@@ -363,6 +400,11 @@ typedef struct memorystatus_priority_properties {
 } memorystatus_priority_properties_t;
 
 /*
+ * Inform the kernel that setting the priority property is driven by assertions.
+ */
+#define MEMORYSTATUS_SET_PRIORITY_ASSERTION     0x1
+
+/*
  * For use with memorystatus_control:
  * MEMORYSTATUS_CMD_SET_MEMLIMIT_PROPERTIES
  * MEMORYSTATUS_CMD_GET_MEMLIMIT_PROPERTIES
@@ -373,6 +415,12 @@ typedef struct memorystatus_memlimit_properties {
 	int32_t memlimit_inactive;              /* jetsam memory limit (in MB) when process is inactive */
 	uint32_t memlimit_inactive_attr;
 } memorystatus_memlimit_properties_t;
+
+typedef struct memorystatus_memlimit_properties2 {
+	memorystatus_memlimit_properties_t v1;
+	uint32_t memlimit_increase;             /* jetsam memory limit increase (in MB) for active and inactive states */
+	uint32_t memlimit_increase_bytes;       /* bytes used to determine the jetsam memory limit increase, for active and inactive states */
+} memorystatus_memlimit_properties2_t;
 
 #define MEMORYSTATUS_MEMLIMIT_ATTR_FATAL        0x1     /* if set, exceeding the memlimit is fatal */
 
@@ -414,7 +462,6 @@ typedef struct memorystatus_memlimit_properties {
 #define P_MEMSTAT_FREEZE_IGNORE        0x00000040 /* Process was evaluated by freezer and will be ignored till the next time it goes active and does something */
 #define P_MEMSTAT_PRIORITYUPDATED      0x00000080 /* Process had its jetsam priority updated */
 #define P_MEMSTAT_FOREGROUND           0x00000100 /* Process is in the FG jetsam band...unused??? */
-#define P_MEMSTAT_DIAG_SUSPENDED       0x00000200 /* ...unused??? */
 #define P_MEMSTAT_REFREEZE_ELIGIBLE    0x00000400 /* Process was once thawed i.e. its state was brought back from disk. It is now refreeze eligible.*/
 #define P_MEMSTAT_MANAGED              0x00000800 /* Process is managed by assertiond i.e. is either application or extension */
 #define P_MEMSTAT_INTERNAL             0x00001000 /* Process is a system-critical-not-be-jetsammed process i.e. launchd */
@@ -423,24 +470,73 @@ typedef struct memorystatus_memlimit_properties {
 #define P_MEMSTAT_MEMLIMIT_INACTIVE_FATAL         0x00008000   /* if set, exceeding limit is fatal when the process is inactive */
 #define P_MEMSTAT_USE_ELEVATED_INACTIVE_BAND      0x00010000   /* if set, the process will go into this band & stay there when in the background instead
 	                                                        *  of the aging bands and/or the IDLE band. */
+#define P_MEMSTAT_PRIORITY_ASSERTION              0x00020000   /* jetsam priority is being driven by an assertion */
+
+
+/*
+ * p_memstat_relaunch_flags holds
+ *      - relaunch behavior when jetsammed
+ */
+#define P_MEMSTAT_RELAUNCH_UNKNOWN      0x0
+#define P_MEMSTAT_RELAUNCH_LOW          0x1
+#define P_MEMSTAT_RELAUNCH_MED          0x2
+#define P_MEMSTAT_RELAUNCH_HIGH         0x4
+
+/*
+ * Checking the p_memstat_state almost always requires the proc_list_lock
+ * because the jetsam thread could be on the other core changing the state.
+ *
+ * App -- almost always managed by a system process. Always have dirty tracking OFF. Can include extensions too.
+ * System Processes -- not managed by anybody. Always have dirty tracking ON. Can include extensions (here) too.
+ */
+#define isApp(p)            ((p->p_memstat_state & P_MEMSTAT_MANAGED) || ! (p->p_memstat_dirty & P_DIRTY_TRACK))
+#define isSysProc(p)            ( ! (p->p_memstat_state & P_MEMSTAT_MANAGED) || (p->p_memstat_dirty & P_DIRTY_TRACK))
+
+#define MEMSTAT_BUCKET_COUNT (JETSAM_PRIORITY_MAX + 1)
+
+typedef struct memstat_bucket {
+	TAILQ_HEAD(, proc) list;
+	int count;
+	int relaunch_high_count;
+} memstat_bucket_t;
+
+extern memstat_bucket_t memstat_bucket[MEMSTAT_BUCKET_COUNT];
+
+/*
+ * Table that expresses the probability of a process
+ * being used in the next hour.
+ */
+typedef struct memorystatus_internal_probabilities {
+	char proc_name[MAXCOMLEN + 1];
+	int use_probability;
+} memorystatus_internal_probabilities_t;
+
+extern memorystatus_internal_probabilities_t *memorystatus_global_probabilities_table;
+extern size_t memorystatus_global_probabilities_size;
+
 
 extern void memorystatus_init(void) __attribute__((section("__TEXT, initcode")));
 
 extern void memorystatus_init_at_boot_snapshot(void);
 
 extern int memorystatus_add(proc_t p, boolean_t locked);
-extern int memorystatus_update(proc_t p, int priority, uint64_t user_data, boolean_t effective,
+extern int memorystatus_update(proc_t p, int priority, uint64_t user_data, boolean_t is_assertion, boolean_t effective,
     boolean_t update_memlimit, int32_t memlimit_active, boolean_t memlimit_active_is_fatal,
     int32_t memlimit_inactive, boolean_t memlimit_inactive_is_fatal);
 
-extern int memorystatus_remove(proc_t p, boolean_t locked);
+/* Remove this process from jetsam bands for killing or freezing.
+ * The proc_list_lock is held by the caller.
+ * @param p: The process to remove.
+ * @return: 0 if successful. EAGAIN if the process can't be removed right now (because it's being frozen) or ESRCH.
+ */
+extern int memorystatus_remove(proc_t p);
 
 int memorystatus_update_inactive_jetsam_priority_band(pid_t pid, uint32_t opflags, int priority, boolean_t effective_now);
-
+int memorystatus_relaunch_flags_update(proc_t p, int relaunch_flags);
 
 extern int memorystatus_dirty_track(proc_t p, uint32_t pcontrol);
 extern int memorystatus_dirty_set(proc_t p, boolean_t self, uint32_t pcontrol);
-extern int memorystatus_dirty_get(proc_t p);
+extern int memorystatus_dirty_get(proc_t p, boolean_t locked);
 extern int memorystatus_dirty_clear(proc_t p, uint32_t pcontrol);
 
 extern int memorystatus_on_terminate(proc_t p);
@@ -463,6 +559,11 @@ void memorystatus_log_exception(const int max_footprint_mb, boolean_t memlimit_i
 void memorystatus_on_ledger_footprint_exceeded(int warning, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal);
 void proc_memstat_terminated(proc_t p, boolean_t set);
 void memorystatus_proc_flags_unsafe(void * v, boolean_t *is_dirty, boolean_t *is_dirty_tracked, boolean_t *allow_idle_exit);
+
+#if __arm64__
+void memorystatus_act_on_legacy_footprint_entitlement(proc_t p, boolean_t footprint_increase);
+#endif /* __arm64__ */
+
 #endif /* CONFIG_MEMORYSTATUS */
 
 int memorystatus_get_pressure_status_kdp(void);
@@ -472,9 +573,6 @@ int memorystatus_get_pressure_status_kdp(void);
 typedef enum memorystatus_policy {
 	kPolicyDefault        = 0x0,
 	kPolicyMoreFree       = 0x1,
-	kPolicyDiagnoseAll    = 0x2,
-	kPolicyDiagnoseFirst  = 0x4,
-	kPolicyDiagnoseActive = (kPolicyDiagnoseAll | kPolicyDiagnoseFirst),
 } memorystatus_policy_t;
 
 boolean_t memorystatus_kill_on_VM_page_shortage(boolean_t async);
@@ -487,48 +585,27 @@ void memorystatus_fast_jetsam_override(boolean_t enable_override);
 
 #endif /* CONFIG_JETSAM */
 
+/* These are very verbose printfs(), enable with
+ * MEMORYSTATUS_DEBUG_LOG
+ */
+#if MEMORYSTATUS_DEBUG_LOG
+#define MEMORYSTATUS_DEBUG(cond, format, ...)      \
+do {                                              \
+if (cond) { printf(format, ##__VA_ARGS__); } \
+} while(0)
+#else
+#define MEMORYSTATUS_DEBUG(cond, format, ...)
+#endif
+
 boolean_t memorystatus_kill_on_zone_map_exhaustion(pid_t pid);
 boolean_t memorystatus_kill_on_VM_compressor_space_shortage(boolean_t async);
 void memorystatus_pages_update(unsigned int pages_avail);
-
 boolean_t memorystatus_idle_exit_from_VM(void);
-
-
-#ifdef CONFIG_FREEZE
-
-#define FREEZE_PAGES_MIN   ( 8 * 1024 * 1024 / PAGE_SIZE)
-#define FREEZE_PAGES_MAX   (32 * 1024 * 1024 / PAGE_SIZE)
-
-#define FREEZE_SUSPENDED_THRESHOLD_DEFAULT 4
-#define FREEZE_PROCESSES_MAX               20
-
-#define FREEZE_DAILY_MB_MAX_DEFAULT       1024
-#define FREEZE_DEGRADATION_BUDGET_THRESHOLD     25 //degraded perf. when the daily budget left falls below this threshold percentage
-
-#define MAX_FROZEN_SHARED_MB_PERCENT 10 /* max shared MB calculated as percent of system task limit. */
-#define MAX_FROZEN_PROCESS_DEMOTIONS 2  /* max demotions of frozen processes into IDLE band done daily. */
-#define MIN_THAW_DEMOTION_THRESHOLD  5  /* min # of thaws required for a process to be safe from demotion. */
-#define MIN_THAW_REFREEZE_THRESHOLD  3  /* min # of global thaws needed for us to consider refreezing these processes. */
-
-typedef struct throttle_interval_t {
-	uint32_t mins;
-	uint32_t burst_multiple;
-	uint32_t pageouts;
-	uint32_t max_pageouts;
-	mach_timespec_t ts;
-} throttle_interval_t;
-
-extern boolean_t memorystatus_freeze_enabled;
-extern int memorystatus_freeze_wakeup;
-
-extern void memorystatus_freeze_init(void) __attribute__((section("__TEXT, initcode")));
-extern int  memorystatus_freeze_process_sync(proc_t p);
-
-#if DEVELOPMENT || DEBUG
-#define FREEZER_CONTROL_GET_STATUS      (1)
-#endif /* DEVELOPMENT || DEBUG */
-
-#endif /* CONFIG_FREEZE */
+proc_t memorystatus_get_first_proc_locked(unsigned int *bucket_index, boolean_t search);
+proc_t memorystatus_get_next_proc_locked(unsigned int *bucket_index, proc_t p, boolean_t search);
+void memorystatus_get_task_page_counts(task_t task, uint32_t *footprint, uint32_t *max_footprint_lifetime, uint32_t *purgeable_pages);
+void memorystatus_invalidate_idle_demotion_locked(proc_t p, boolean_t clean_state);
+void memorystatus_update_priority_locked(proc_t p, int priority, boolean_t head_insert, boolean_t skip_demotion_check);
 
 #if VM_PRESSURE_EVENTS
 

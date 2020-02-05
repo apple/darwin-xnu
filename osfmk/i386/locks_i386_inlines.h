@@ -31,25 +31,22 @@
 
 #include <kern/locks.h>
 #include <kern/lock_stat.h>
+#include <kern/turnstile.h>
 
 // Enforce program order of loads and stores.
-#define ordered_load(target) _Generic( (target),\
-	        uint32_t* : __c11_atomic_load((_Atomic uint32_t* )(target), memory_order_relaxed), \
-	        uintptr_t*: __c11_atomic_load((_Atomic uintptr_t*)(target), memory_order_relaxed) )
-#define ordered_store_release(target, value) _Generic( (target),\
-	        uint32_t* : __c11_atomic_store((_Atomic uint32_t* )(target), (value), memory_order_release_smp), \
-	        uintptr_t*: __c11_atomic_store((_Atomic uintptr_t*)(target), (value), memory_order_release_smp) )
-#define ordered_store_volatile(target, value) _Generic( (target),\
-	        volatile uint32_t* : __c11_atomic_store((_Atomic volatile uint32_t* )(target), (value), memory_order_relaxed), \
-	        volatile uintptr_t*: __c11_atomic_store((_Atomic volatile uintptr_t*)(target), (value), memory_order_relaxed) )
+#define ordered_load(target) os_atomic_load(target, compiler_acq_rel)
+#define ordered_store_release(target, value) ({ \
+	        os_atomic_store(target, value, release); \
+	        os_compiler_barrier(); \
+})
 
 /* Enforce program order of loads and stores. */
 #define ordered_load_mtx_state(lock)                    ordered_load(&(lock)->lck_mtx_state)
 #define ordered_store_mtx_state_release(lock, value)            ordered_store_release(&(lock)->lck_mtx_state, (value))
-#define ordered_store_mtx_owner(lock, value)    ordered_store_volatile(&(lock)->lck_mtx_owner, (value))
+#define ordered_store_mtx_owner(lock, value)    os_atomic_store(&(lock)->lck_mtx_owner, (value), compiler_acq_rel)
 
 #if DEVELOPMENT | DEBUG
-void lck_mtx_owner_check_panic(lck_mtx_t       *mutex);
+void lck_mtx_owner_check_panic(lck_mtx_t       *mutex) __abortlike;
 #endif
 
 __attribute__((always_inline))
@@ -75,6 +72,29 @@ lck_mtx_lock_finish_inline(
 
 	/* release the interlock and re-enable preemption */
 	lck_mtx_ilk_unlock_inline(mutex, state);
+
+#if     CONFIG_DTRACE
+	if (indirect) {
+		LOCKSTAT_RECORD(LS_LCK_MTX_EXT_LOCK_ACQUIRE, mutex, 0);
+	} else {
+		LOCKSTAT_RECORD(LS_LCK_MTX_LOCK_ACQUIRE, mutex, 0);
+	}
+#endif
+}
+
+__attribute__((always_inline))
+static inline void
+lck_mtx_lock_finish_inline_with_cleanup(
+	lck_mtx_t       *mutex,
+	uint32_t        state,
+	boolean_t       indirect)
+{
+	assert(state & LCK_MTX_ILOCKED_MSK);
+
+	/* release the interlock and re-enable preemption */
+	lck_mtx_ilk_unlock_inline(mutex, state);
+
+	turnstile_cleanup();
 
 #if     CONFIG_DTRACE
 	if (indirect) {

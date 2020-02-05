@@ -30,6 +30,9 @@
 #ifndef _OS_OSUNSERIALIZE_H
 #define _OS_OSUNSERIALIZE_H
 
+#include <libkern/c++/OSMetaClass.h>
+#include <libkern/c++/OSString.h>
+
 #include <sys/appleapiopts.h>
 #include <sys/types.h>
 
@@ -64,9 +67,9 @@ class OSString;
  * @discussion
  * <b>Not safe</b> to call in a primary interrupt handler.
  */
-extern "C++" OSObject * OSUnserializeXML(
+extern "C++" OSObjectPtr OSUnserializeXML(
 	const char  * buffer,
-	OSString   ** errorString = 0);
+	OSStringPtr * errorString = NULL);
 
 /*!
  * @function OSUnserializeXML
@@ -90,16 +93,16 @@ extern "C++" OSObject * OSUnserializeXML(
  * @discussion
  * <b>Not safe</b> to call in a primary interrupt handler.
  */
-extern "C++" OSObject * OSUnserializeXML(
+extern "C++" OSObjectPtr OSUnserializeXML(
 	const char  * buffer,
 	size_t        bufferSize,
-	OSString   ** errorString = 0);
+	OSStringPtr   *errorString = NULL);
 
-extern "C++" OSObject *
-OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorString);
+extern "C++" OSObjectPtr
+OSUnserializeBinary(const char *buffer, size_t bufferSize, OSStringPtr *errorString);
 
 #ifdef __APPLE_API_OBSOLETE
-extern OSObject* OSUnserialize(const char *buffer, OSString **errorString = 0);
+extern OSObjectPtr OSUnserialize(const char *buffer, OSStringPtr *errorString = NULL);
 #endif /* __APPLE_API_OBSOLETE */
 
 #endif /* _OS_OSUNSERIALIZE_H */

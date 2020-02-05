@@ -88,14 +88,14 @@
 #include <kern/locks.h>
 
 struct klist;
-struct kqlist;
+struct kqwllist;
 
 struct filedesc {
 	struct  fileproc **fd_ofiles;   /* file structures for open files */
 	lck_mtx_t fd_kqhashlock;        /* lock for dynamic kqueue hash */
 	u_long  fd_kqhashmask;          /* size of dynamic kqueue hash */
-	struct  kqlist *fd_kqhash;      /* hash table for dynamic kqueues */
-	struct  kqueue *fd_wqkqueue;    /* the workq kqueue */
+	struct  kqwllist *fd_kqhash;    /* hash table for dynamic kqueues */
+	struct  kqworkq *fd_wqkqueue;   /* the workq kqueue */
 	char    *fd_ofileflags;         /* per-process open file flags */
 	struct  vnode *fd_cdir;         /* current directory */
 	struct  vnode *fd_rdir;         /* root directory */

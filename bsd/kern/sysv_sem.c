@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -85,16 +85,16 @@
  * These are not needed if we can make the semaphore pages swappable.
  */
 static struct seminfo limitseminfo = {
-	SEMMAP,        /* # of entries in semaphore map */
-	SEMMNI,        /* # of semaphore identifiers */
-	SEMMNS,        /* # of semaphores in system */
-	SEMMNU,        /* # of undo structures in system */
-	SEMMSL,        /* max # of semaphores per id */
-	SEMOPM,        /* max # of operations per semop call */
-	SEMUME,        /* max # of undo entries per process */
-	SEMUSZ,        /* size in bytes of undo structure */
-	SEMVMX,        /* semaphore maximum value */
-	SEMAEM         /* adjust on exit max value */
+	.semmap = SEMMAP,        /* # of entries in semaphore map */
+	.semmni = SEMMNI,        /* # of semaphore identifiers */
+	.semmns = SEMMNS,        /* # of semaphores in system */
+	.semmnu = SEMMNU,        /* # of undo structures in system */
+	.semmsl = SEMMSL,        /* max # of semaphores per id */
+	.semopm = SEMOPM,        /* max # of operations per semop call */
+	.semume = SEMUME,        /* max # of undo entries per process */
+	.semusz = SEMUSZ,        /* size in bytes of undo structure */
+	.semvmx = SEMVMX,        /* semaphore maximum value */
+	.semaem = SEMAEM         /* adjust on exit max value */
 };
 
 /* Current system allocations.  We use this structure to track how many
@@ -102,16 +102,16 @@ static struct seminfo limitseminfo = {
  * and not allocate the memory for them up front.
  */
 struct seminfo seminfo = {
-	SEMMAP, /* Unused, # of entries in semaphore map */
-	0,      /* # of semaphore identifiers */
-	0,      /* # of semaphores in system */
-	0,      /* # of undo entries in system */
-	SEMMSL, /* max # of semaphores per id */
-	SEMOPM, /* max # of operations per semop call */
-	SEMUME, /* max # of undo entries per process */
-	SEMUSZ, /* size in bytes of undo structure */
-	SEMVMX, /* semaphore maximum value */
-	SEMAEM  /* adjust on exit max value */
+	.semmap = SEMMAP,       /* Unused, # of entries in semaphore map */
+	.semmni = 0,            /* # of semaphore identifiers */
+	.semmns = 0,            /* # of semaphores in system */
+	.semmnu = 0,            /* # of undo entries in system */
+	.semmsl = SEMMSL,       /* max # of semaphores per id */
+	.semopm = SEMOPM,       /* max # of operations per semop call */
+	.semume = SEMUME,       /* max # of undo entries per process */
+	.semusz = SEMUSZ,       /* size in bytes of undo structure */
+	.semvmx = SEMVMX,       /* semaphore maximum value */
+	.semaem = SEMAEM        /* adjust on exit max value */
 };
 
 
@@ -121,7 +121,7 @@ static int semundo_adjust(struct proc *p, int *supidx,
 static void semundo_clear(int semid, int semnum);
 
 /* XXX casting to (sy_call_t *) is bogus, as usual. */
-static sy_call_t *semcalls[] = {
+static sy_call_t* const semcalls[] = {
 	(sy_call_t *)semctl, (sy_call_t *)semget,
 	(sy_call_t *)semop
 };

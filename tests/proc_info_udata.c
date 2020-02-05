@@ -4,6 +4,8 @@
 #include <stdio.h>
 #include <unistd.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 T_DECL(proc_udata_info, "Get and set a proc udata token"){
 	uint64_t token = mach_absolute_time();
 	proc_info_udata_t udata;

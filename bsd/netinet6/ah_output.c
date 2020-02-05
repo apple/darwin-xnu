@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -197,12 +197,12 @@ ah4_output(struct mbuf *m, struct secasvar *sav)
 	size_t plen = 0;        /*AH payload size in bytes*/
 	size_t ahlen = 0;       /*plen + sizeof(ah)*/
 	struct ip *ip;
-	struct in_addr dst = { 0 };
+	struct in_addr dst = { .s_addr = 0 };
 	struct in_addr *finaldst;
 	int error;
 
 	/* sanity checks */
-	if ((sav->flags & SADB_X_EXT_OLD) == 0 && !sav->replay) {
+	if ((sav->flags & SADB_X_EXT_OLD) == 0 && sav->replay[0] == NULL) {
 		ip = mtod(m, struct ip *);
 		ipseclog((LOG_DEBUG, "ah4_output: internal error: "
 		    "sav->replay is null: %x->%x, SPI=%u\n",
@@ -295,7 +295,7 @@ ah4_output(struct mbuf *m, struct secasvar *sav)
 		ahdr->ah_nxt = ip->ip_p;
 		ahdr->ah_reserve = htons(0);
 		ahdr->ah_spi = spi;
-		if (sav->replay->count == ~0) {
+		if (sav->replay[0]->count == ~0) {
 			if ((sav->flags & SADB_X_EXT_CYCSEQ) == 0) {
 				/* XXX Is it noisy ? */
 				ipseclog((LOG_WARNING,
@@ -307,13 +307,13 @@ ah4_output(struct mbuf *m, struct secasvar *sav)
 			}
 		}
 		lck_mtx_lock(sadb_mutex);
-		sav->replay->count++;
+		sav->replay[0]->count++;
 		lck_mtx_unlock(sadb_mutex);
 		/*
 		 * XXX sequence number must not be cycled, if the SA is
 		 * installed by IKE daemon.
 		 */
-		ahdr->ah_seq = htonl(sav->replay->count);
+		ahdr->ah_seq = htonl(sav->replay[0]->count);
 		bzero(ahdr + 1, plen);
 	}
 
@@ -461,7 +461,7 @@ ah6_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md,
 	ip6 = mtod(m, struct ip6_hdr *);
 	ip6->ip6_plen = htons(m->m_pkthdr.len - sizeof(struct ip6_hdr));
 
-	if ((sav->flags & SADB_X_EXT_OLD) == 0 && !sav->replay) {
+	if ((sav->flags & SADB_X_EXT_OLD) == 0 && sav->replay[0] == NULL) {
 		ipseclog((LOG_DEBUG, "ah6_output: internal error: "
 		    "sav->replay is null: SPI=%u\n",
 		    (u_int32_t)ntohl(sav->spi)));
@@ -504,7 +504,7 @@ ah6_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md,
 		ahdr->ah_len = (plen >> 2) + 1; /* plus one for seq# */
 		ahdr->ah_reserve = htons(0);
 		ahdr->ah_spi = spi;
-		if (sav->replay->count == ~0) {
+		if (sav->replay[0]->count == ~0) {
 			if ((sav->flags & SADB_X_EXT_CYCSEQ) == 0) {
 				/* XXX Is it noisy ? */
 				ipseclog((LOG_WARNING,
@@ -516,13 +516,13 @@ ah6_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md,
 			}
 		}
 		lck_mtx_lock(sadb_mutex);
-		sav->replay->count++;
+		sav->replay[0]->count++;
 		lck_mtx_unlock(sadb_mutex);
 		/*
 		 * XXX sequence number must not be cycled, if the SA is
 		 * installed by IKE daemon.
 		 */
-		ahdr->ah_seq = htonl(sav->replay->count);
+		ahdr->ah_seq = htonl(sav->replay[0]->count);
 		bzero(ahdr + 1, plen);
 	}
 

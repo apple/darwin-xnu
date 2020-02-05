@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -128,12 +128,13 @@
 #define IFT_PROPVIRTUAL 0x35            /* Proprietary Virtual/internal */
 #define IFT_PROPMUX     0x36            /* Proprietary Multiplexing */
 /*
- * IFT_GIF, IFT_FAITH and IFT_FAITH are not based on IANA assignments.
+ * IFT_GIF, IFT_FAITH and IFT_6LOWPAN are not based on IANA assignments.
  * Note: IFT_STF has a defined ifType: 0xd7 (215), but we use 0x39.
  */
 #define IFT_GIF         0x37            /*0xf0*/
 #define IFT_FAITH       0x38            /*0xf2*/
 #define IFT_STF         0x39            /*0xf3*/
+#define IFT_6LOWPAN     0x40            /* IETF RFC 6282 */
 
 #define IFT_L2VLAN      0x87            /* Layer 2 Virtual LAN using 802.1Q */
 #define IFT_IEEE8023ADLAG 0x88          /* IEEE802.3ad Link Aggregate */

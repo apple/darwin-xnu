@@ -271,8 +271,8 @@ extern vm_offset_t buf_kernel_addrperm;
 #define BA_ISOCHRONOUS          0x00001000 /* device specific isochronous throughput to media */
 
 #define BA_STRATEGY_TRACKED_IO  0x00002000 /* tracked by spec_strategy */
-#define BA_IO_TIER_UPGRADE  0x00004000 /* effective I/O tier is higher than BA_IO_TIER */
-
+#define BA_IO_TIER_UPGRADE      0x00004000 /* effective I/O tier is higher than BA_IO_TIER */
+#define BA_IO_SCHEDULED         0x00008000 /* buf is associated with a mount point that is io scheduled */
 
 #define GET_BUFATTR_IO_TIER(bap)        ((bap->ba_flags & BA_IO_TIER_MASK) >> BA_IO_TIER_SHIFT)
 #define SET_BUFATTR_IO_TIER(bap, tier)                                          \

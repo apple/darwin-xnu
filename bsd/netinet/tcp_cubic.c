@@ -85,9 +85,9 @@ struct tcp_cc_algo tcp_cc_cubic = {
 	.switch_to = tcp_cubic_switch_cc
 };
 
-const float tcp_cubic_backoff = 0.2; /* multiplicative decrease factor */
-const float tcp_cubic_coeff = 0.4;
-const float tcp_cubic_fast_convergence_factor = 0.875;
+const float tcp_cubic_backoff = 0.2f; /* multiplicative decrease factor */
+const float tcp_cubic_coeff = 0.4f;
+const float tcp_cubic_fast_convergence_factor = 0.875f;
 
 SYSCTL_SKMEM_TCP_INT(OID_AUTO, cubic_tcp_friendliness, CTLFLAG_RW | CTLFLAG_LOCKED,
     static int, tcp_cubic_tcp_friendliness, 0, "Enable TCP friendliness");

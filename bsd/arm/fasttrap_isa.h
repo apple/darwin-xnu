@@ -30,8 +30,6 @@
 #ifndef _FASTTRAP_ISA_H
 #define _FASTTRAP_ISA_H
 
-/* #pragma ident	"@(#)fasttrap_isa.h	1.4	05/06/08 SMI" */
-
 #include <sys/types.h>
 #include <stdint.h>
 

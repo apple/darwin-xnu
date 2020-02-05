@@ -10,15 +10,15 @@
 #include <sys/sysctl.h>
 #include <sys/wait.h>
 
-T_GLOBAL_META(T_META_NAMESPACE("xnu.quicktest"), T_META_CHECK_LEAKS(false));
+T_GLOBAL_META(
+	T_META_NAMESPACE("xnu.quicktest"),
+	T_META_CHECK_LEAKS(false),
+	T_META_RUN_CONCURRENTLY(true)
+	);
+
 char g_target_path[PATH_MAX];
 
-/*  **************************************************************************************************************
- *	Test the syscall system call.
- *  **************************************************************************************************************
- */
-T_DECL(syscall,
-    "xnu_quick_test for syscall", T_META_CHECK_LEAKS(NO))
+T_DECL(syscall, "xnu_quick_test for syscall")
 {
 	int                             my_fd = -1;
 	char *                  my_pathp;
@@ -59,12 +59,8 @@ T_DECL(syscall,
 	T_ATEND(remove_target_directory);
 }
 
-/*  **************************************************************************************************************
- *	Test fork wait4, and exit system calls.
- *  **************************************************************************************************************
- */
 T_DECL(fork_wait4_exit,
-    "Tests forking off a process and waiting for the child to exit", T_META_CHECK_LEAKS(false))
+    "Tests forking off a process and waiting for the child to exit")
 {
 	int                             my_err, my_status;
 	pid_t                       my_pid, my_wait_pid;
@@ -104,15 +100,15 @@ T_DECL(fork_wait4_exit,
 	    "check if wait4 returns right exit status");
 }
 
-T_DECL(getrusage, "Sanity check of getrusage")
+T_DECL(getrusage, "check getrusage works")
 {
-	struct rusage   my_rusage;
+	struct rusage rubuf;
 
-	T_WITH_ERRNO;
-	T_ASSERT_EQ(getrusage( RUSAGE_SELF, &my_rusage ), 0, NULL);
-	T_LOG("Checking that getrusage returned sane values");
-	T_EXPECT_LT(my_rusage.ru_msgrcv, 1000, NULL);
-	T_EXPECT_GE(my_rusage.ru_msgrcv, 0, NULL);
-	T_EXPECT_LT(my_rusage.ru_nsignals, 1000, NULL);
-	T_EXPECT_GE(my_rusage.ru_nsignals, 0, NULL);
+	int ret = getrusage(RUSAGE_SELF, &rubuf);
+	T_ASSERT_POSIX_SUCCESS(ret, "getrusage for self");
+
+	T_EXPECT_LT(rubuf.ru_msgrcv, 1000, "upper bound on messages received");
+	T_EXPECT_GE(rubuf.ru_msgrcv, 0, "lower bound on messages reseived");
+	T_EXPECT_LT(rubuf.ru_nsignals, 1000, "upper bound on signals");
+	T_EXPECT_GE(rubuf.ru_nsignals, 0, "lower bound on signals");
 }

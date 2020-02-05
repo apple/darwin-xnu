@@ -41,8 +41,8 @@ extern "C" {
 
 
 void serial_keyboard_init(void);
-void serial_keyboard_start(void);
-void serial_keyboard_poll(void);
+void serial_keyboard_start(void) __dead2;
+void serial_keyboard_poll(void) __dead2;
 
 extern uint32_t serialmode;
 

@@ -73,6 +73,7 @@
 #if !CONFIG_EMBEDDED
 #include <sys/kasl.h>
 #endif
+#include <sys/priv.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
 #include <sys/protosw.h>
@@ -82,6 +83,7 @@
 #include <net/route.h>
 #include <net/ntstat.h>
 #include <net/content_filter.h>
+#include <net/multi_layer_pkt_log.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -104,6 +106,7 @@
 #include <netinet/tcp_var.h>
 #include <netinet/tcpip.h>
 #include <netinet/tcp_cc.h>
+#include <netinet/tcp_log.h>
 #include <mach/sdt.h>
 #if TCPDEBUG
 #include <netinet/tcp_debug.h>
@@ -125,12 +128,11 @@ errno_t tcp_fill_info_for_info_tuple(struct info_tuple *, struct tcp_info *);
 int tcp_sysctl_info(struct sysctl_oid *, void *, int, struct sysctl_req *);
 static void tcp_connection_fill_info(struct tcpcb *tp,
     struct tcp_connection_info *tci);
+static int tcp_get_mpkl_send_info(struct mbuf *, struct so_mpkl_send_info *);
 
 /*
  * TCP protocol interface to socket abstraction.
  */
-extern  char *tcpstates[];      /* XXX ??? */
-
 static int      tcp_attach(struct socket *, struct proc *);
 static int      tcp_connect(struct tcpcb *, struct sockaddr *, struct proc *);
 #if INET6
@@ -387,6 +389,7 @@ tcp_usr_listen(struct socket *so, struct proc *p)
 	if (error == 0) {
 		tp->t_state = TCPS_LISTEN;
 	}
+	TCP_LOG_LISTEN(tp, error);
 	COMMON_END(PRU_LISTEN);
 }
 
@@ -409,6 +412,7 @@ tcp6_usr_listen(struct socket *so, struct proc *p)
 	if (error == 0) {
 		tp->t_state = TCPS_LISTEN;
 	}
+	TCP_LOG_LISTEN(tp, error);
 	COMMON_END(PRU_LISTEN);
 }
 #endif /* INET6 */
@@ -422,7 +426,8 @@ tcp_connect_complete(struct socket *so)
 
 	/* TFO delays the tcp_output until later, when the app calls write() */
 	if (so->so_flags1 & SOF1_PRECONNECT_DATA) {
-		if (!necp_socket_is_allowed_to_send_recv(sotoinpcb(so), NULL, NULL, NULL)) {
+		if (!necp_socket_is_allowed_to_send_recv(sotoinpcb(so), NULL, NULL, NULL, NULL)) {
+			TCP_LOG_DROP_NECP(NULL, NULL, tp, true);
 			return EHOSTUNREACH;
 		}
 
@@ -474,8 +479,14 @@ tcp_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 		}
 	}
 #if NECP
+#if CONTENT_FILTER
+	error = cfil_sock_attach(so, NULL, nam, CFS_CONNECTION_DIR_OUT);
+	if (error != 0) {
+		return error;
+	}
+#endif /* CONTENT_FILTER */
 #if FLOW_DIVERT
-	else if (necp_socket_should_use_flow_divert(inp)) {
+	if (necp_socket_should_use_flow_divert(inp)) {
 		uint32_t fd_ctl_unit = necp_socket_get_flow_divert_control_unit(inp);
 		if (fd_ctl_unit > 0) {
 			error = flow_divert_pcb_init(so, fd_ctl_unit);
@@ -489,12 +500,6 @@ tcp_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 		return error;
 	}
 #endif /* FLOW_DIVERT */
-#if CONTENT_FILTER
-	error = cfil_sock_attach(so);
-	if (error != 0) {
-		return error;
-	}
-#endif /* CONTENT_FILTER */
 #endif /* NECP */
 	tp = intotcpcb(inp);
 	TCPDEBUG1();
@@ -516,10 +521,13 @@ tcp_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 	}
 
 	if ((error = tcp_connect(tp, nam, p)) != 0) {
+		TCP_LOG_CONNECT(tp, true, error);
 		goto out;
 	}
 
 	error = tcp_connect_complete(so);
+
+	TCP_LOG_CONNECT(tp, true, error);
 
 	COMMON_END(PRU_CONNECT);
 }
@@ -658,8 +666,14 @@ tcp6_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 		}
 	}
 #if NECP
+#if CONTENT_FILTER
+	error = cfil_sock_attach(so, NULL, nam, CFS_CONNECTION_DIR_OUT);
+	if (error != 0) {
+		return error;
+	}
+#endif /* CONTENT_FILTER */
 #if FLOW_DIVERT
-	else if (necp_socket_should_use_flow_divert(inp)) {
+	if (necp_socket_should_use_flow_divert(inp)) {
 		uint32_t fd_ctl_unit = necp_socket_get_flow_divert_control_unit(inp);
 		if (fd_ctl_unit > 0) {
 			error = flow_divert_pcb_init(so, fd_ctl_unit);
@@ -673,12 +687,6 @@ tcp6_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 		return error;
 	}
 #endif /* FLOW_DIVERT */
-#if CONTENT_FILTER
-	error = cfil_sock_attach(so);
-	if (error != 0) {
-		return error;
-	}
-#endif /* CONTENT_FILTER */
 #endif /* NECP */
 
 	tp = intotcpcb(inp);
@@ -712,6 +720,7 @@ tcp6_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 		inp->inp_vflag |= INP_IPV4;
 		inp->inp_vflag &= ~INP_IPV6;
 		if ((error = tcp_connect(tp, (struct sockaddr *)&sin, p)) != 0) {
+			TCP_LOG_CONNECT(tp, true, error);
 			goto out;
 		}
 
@@ -721,10 +730,14 @@ tcp6_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 	inp->inp_vflag &= ~INP_IPV4;
 	inp->inp_vflag |= INP_IPV6;
 	if ((error = tcp6_connect(tp, nam, p)) != 0) {
+		TCP_LOG_CONNECT(tp, true, error);
 		goto out;
 	}
 
 	error = tcp_connect_complete(so);
+
+	TCP_LOG_CONNECT(tp, true, error);
+
 	COMMON_END(PRU_CONNECT);
 }
 
@@ -807,16 +820,13 @@ tcp_usr_accept(struct socket *so, struct sockaddr **nam)
 	else if (necp_socket_should_use_flow_divert(inp)) {
 		return EPROTOTYPE;
 	}
-#if CONTENT_FILTER
-	error = cfil_sock_attach(so);
-	if (error != 0) {
-		return error;
-	}
-#endif /* CONTENT_FILTER */
+
 #endif /* NECP */
 
 	tp = intotcpcb(inp);
 	TCPDEBUG1();
+
+	TCP_LOG_ACCEPT(tp, 0);
 
 	calculate_tcp_clock();
 
@@ -843,16 +853,13 @@ tcp6_usr_accept(struct socket *so, struct sockaddr **nam)
 	else if (necp_socket_should_use_flow_divert(inp)) {
 		return EPROTOTYPE;
 	}
-#if CONTENT_FILTER
-	error = cfil_sock_attach(so);
-	if (error != 0) {
-		return error;
-	}
-#endif /* CONTENT_FILTER */
+
 #endif /* NECP */
 
 	tp = intotcpcb(inp);
 	TCPDEBUG1();
+
+	TCP_LOG_ACCEPT(tp, 0);
 
 	calculate_tcp_clock();
 
@@ -1005,6 +1012,10 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
 	uint32_t msgpri = MSG_PRI_DEFAULT;
+	uint32_t mpkl_len = 0; /* length of mbuf chain */
+	uint32_t mpkl_seq; /* sequence number where new data is added */
+	struct so_mpkl_send_info mpkl_send_info = {};
+
 #if INET6
 	int isipv6;
 #endif
@@ -1045,6 +1056,17 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 
 	calculate_tcp_clock();
 
+	if (net_mpklog_enabled) {
+		mpkl_seq = tp->snd_una + so->so_snd.sb_cc;
+		if (m) {
+			mpkl_len = m_length(m);
+		}
+		if (so->so_flags1 & SOF1_MPKL_SEND_INFO) {
+			uuid_copy(mpkl_send_info.mpkl_uuid, so->so_mpkl_send_uuid);
+			mpkl_send_info.mpkl_proto = so->so_mpkl_send_proto;
+		}
+	}
+
 	if (control != NULL) {
 		if (so->so_flags & SOF_ENABLE_MSGS) {
 			/* Get the msg priority from control mbufs */
@@ -1058,22 +1080,30 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 				m = NULL;
 				goto out;
 			}
-			m_freem(control);
-			control = NULL;
-		} else if (control->m_len) {
-			/*
-			 * if not unordered, TCP should not have
-			 * control mbufs
-			 */
-			m_freem(control);
-			if (m != NULL) {
-				m_freem(m);
-			}
-			control = NULL;
-			m = NULL;
-			error = EINVAL;
-			goto out;
 		}
+		if (control->m_len > 0 && net_mpklog_enabled) {
+			error = tcp_get_mpkl_send_info(control, &mpkl_send_info);
+			/*
+			 * Intepretation of the returned code:
+			 *  0: client wants us to use value passed in SCM_MPKL_SEND_INFO
+			 *  1: SCM_MPKL_SEND_INFO was not present
+			 *  other: failure
+			 */
+			if (error != 0 && error != ENOMSG) {
+				m_freem(control);
+				if (m != NULL) {
+					m_freem(m);
+				}
+				control = NULL;
+				m = NULL;
+				goto out;
+			}
+		}
+		/*
+		 * Silently drop unsupported ancillary data messages
+		 */
+		m_freem(control);
+		control = NULL;
 	}
 
 	if (so->so_flags & SOF_ENABLE_MSGS) {
@@ -1107,11 +1137,17 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 #endif /* INET6 */
 			error = tcp_connect(tp, nam, p);
 			if (error) {
+				TCP_LOG_CONNECT(tp, true, error);
 				goto out;
 			}
 			tp->snd_wnd = TTCP_CLIENT_SND_WND;
 			tp->max_sndwnd = tp->snd_wnd;
 			tcp_mss(tp, -1, IFSCOPE_NONE);
+
+			TCP_LOG_CONNECT(tp, true, error);
+
+			/* The sequence number of the data is past the SYN */
+			mpkl_seq = tp->iss + 1;
 		}
 
 		if (flags & PRUS_EOF) {
@@ -1162,11 +1198,14 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 #endif /* INET6 */
 			error = tcp_connect(tp, nam, p);
 			if (error) {
+				TCP_LOG_CONNECT(tp, true, error);
 				goto out;
 			}
 			tp->snd_wnd = TTCP_CLIENT_SND_WND;
 			tp->max_sndwnd = tp->snd_wnd;
 			tcp_mss(tp, -1, IFSCOPE_NONE);
+
+			TCP_LOG_CONNECT(tp, true, error);
 		}
 		tp->snd_up = tp->snd_una + so->so_snd.sb_cc;
 		tp->t_flagsext |= TF_FORCE;
@@ -1174,6 +1213,17 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 		tp->t_flagsext &= ~TF_FORCE;
 	}
 
+	if (net_mpklog_enabled && (inp = tp->t_inpcb) != NULL &&
+	    ((inp->inp_last_outifp != NULL &&
+	    (inp->inp_last_outifp->if_xflags & IFXF_MPK_LOG)) ||
+	    (inp->inp_boundifp != NULL &&
+	    (inp->inp_boundifp->if_xflags & IFXF_MPK_LOG)))) {
+		MPKL_TCP_SEND(tcp_mpkl_log_object,
+		    mpkl_send_info.mpkl_proto, mpkl_send_info.mpkl_uuid,
+		    ntohs(inp->inp_lport), ntohs(inp->inp_fport),
+		    mpkl_seq, mpkl_len,
+		    so->last_pid, so->so_log_seqn++);
+	}
 
 	/*
 	 * We wait for the socket to successfully connect before returning.
@@ -1445,6 +1495,7 @@ skip_oinp:
 	tp->t_timer[TCPT_KEEP] = OFFSET_FROM_START(tp, TCP_CONN_KEEPINIT(tp));
 	tp->iss = tcp_new_isn(tp);
 	tcp_sendseqinit(tp);
+	tp->t_connect_time = tcp_now;
 	if (nstat_collect) {
 		nstat_route_connect_attempt(inp->inp_route.ro_rt);
 	}
@@ -1546,6 +1597,7 @@ tcp6_connect(struct tcpcb *tp, struct sockaddr *nam, struct proc *p)
 	    TCP_CONN_KEEPINIT(tp));
 	tp->iss = tcp_new_isn(tp);
 	tcp_sendseqinit(tp);
+	tp->t_connect_time = tcp_now;
 	if (nstat_collect) {
 		nstat_route_connect_attempt(inp->inp_route.ro_rt);
 	}
@@ -1639,7 +1691,7 @@ tcp_fill_info(struct tcpcb *tp, struct tcp_info *ti)
 		ti->tcpi_rxoutoforderbytes = tp->t_stat.rxoutoforderbytes;
 
 		if (tp->t_state > TCPS_LISTEN) {
-			ti->tcpi_synrexmits = tp->t_stat.synrxtshift;
+			ti->tcpi_synrexmits = tp->t_stat.rxmitsyns;
 		}
 		ti->tcpi_cell_rxpackets = inp->inp_cstat->rxpackets;
 		ti->tcpi_cell_rxbytes = inp->inp_cstat->rxbytes;
@@ -1856,44 +1908,6 @@ tcp_sysctl_info(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused 
 	int error;
 	struct tcp_info ti = {};
 	struct info_tuple itpl;
-#if !CONFIG_EMBEDDED
-	proc_t caller = PROC_NULL;
-	proc_t caller_parent = PROC_NULL;
-	char command_name[MAXCOMLEN + 1] = "";
-	char parent_name[MAXCOMLEN + 1] = "";
-
-	if ((caller = proc_self()) != PROC_NULL) {
-		/* get process name */
-		strlcpy(command_name, caller->p_comm, sizeof(command_name));
-
-		/* get parent process name if possible */
-		if ((caller_parent = proc_find(caller->p_ppid)) != PROC_NULL) {
-			strlcpy(parent_name, caller_parent->p_comm,
-			    sizeof(parent_name));
-			proc_rele(caller_parent);
-		}
-
-		if ((escape_str(command_name, strlen(command_name) + 1,
-		    sizeof(command_name)) == 0) &&
-		    (escape_str(parent_name, strlen(parent_name) + 1,
-		    sizeof(parent_name)) == 0)) {
-			kern_asl_msg(LOG_DEBUG, "messagetracer",
-			    5,
-			    "com.apple.message.domain",
-			    "com.apple.kernel.tcpstat", /* 1 */
-			    "com.apple.message.signature",
-			    "tcpinfo", /* 2 */
-			    "com.apple.message.signature2", command_name, /* 3 */
-			    "com.apple.message.signature3", parent_name, /* 4 */
-			    "com.apple.message.summarize", "YES", /* 5 */
-			    NULL);
-		}
-	}
-
-	if (caller != PROC_NULL) {
-		proc_rele(caller);
-	}
-#endif /* !CONFIG_EMBEDDED */
 
 	if (req->newptr == USER_ADDR_NULL) {
 		return EINVAL;
@@ -1963,6 +1977,90 @@ tcp_getconninfo(struct socket *so, struct conninfo_tcp *tcp_ci)
 {
 	(void) tcp_lookup_peer_pid_locked(so, &tcp_ci->tcpci_peer_pid);
 	tcp_fill_info(sototcpcb(so), &tcp_ci->tcpci_tcp_info);
+}
+
+void
+tcp_clear_keep_alive_offload(struct socket *so)
+{
+	struct inpcb *inp;
+	struct ifnet *ifp;
+
+	inp = sotoinpcb(so);
+	if (inp == NULL) {
+		return;
+	}
+
+	if ((inp->inp_flags2 & INP2_KEEPALIVE_OFFLOAD) == 0) {
+		return;
+	}
+
+	ifp = inp->inp_boundifp != NULL ? inp->inp_boundifp :
+	    inp->inp_last_outifp;
+	if (ifp == NULL) {
+		panic("%s: so %p inp %p ifp NULL",
+		    __func__, so, inp);
+	}
+
+	ifnet_lock_exclusive(ifp);
+
+	if (ifp->if_tcp_kao_cnt == 0) {
+		panic("%s: so %p inp %p ifp %p if_tcp_kao_cnt == 0",
+		    __func__, so, inp, ifp);
+	}
+	ifp->if_tcp_kao_cnt--;
+	inp->inp_flags2 &= ~INP2_KEEPALIVE_OFFLOAD;
+
+	ifnet_lock_done(ifp);
+}
+
+static int
+tcp_set_keep_alive_offload(struct socket *so, struct proc *proc)
+{
+	int error = 0;
+	struct inpcb *inp;
+	struct ifnet *ifp;
+
+	inp = sotoinpcb(so);
+	if (inp == NULL) {
+		return ECONNRESET;
+	}
+	if ((inp->inp_flags2 & INP2_KEEPALIVE_OFFLOAD) != 0) {
+		return 0;
+	}
+
+	ifp = inp->inp_boundifp != NULL ? inp->inp_boundifp :
+	    inp->inp_last_outifp;
+	if (ifp == NULL) {
+		error = ENXIO;
+		os_log_info(OS_LOG_DEFAULT,
+		    "%s: error %d for proc %s[%u] out ifp is not set\n",
+		    __func__, error,
+		    proc != NULL ? proc->p_comm : "kernel",
+		    proc != NULL ? proc->p_pid : 0);
+		return ENXIO;
+	}
+
+	error = if_get_tcp_kao_max(ifp);
+	if (error != 0) {
+		return error;
+	}
+
+	ifnet_lock_exclusive(ifp);
+	if (ifp->if_tcp_kao_cnt < ifp->if_tcp_kao_max) {
+		ifp->if_tcp_kao_cnt++;
+		inp->inp_flags2 |= INP2_KEEPALIVE_OFFLOAD;
+	} else {
+		error = ETOOMANYREFS;
+		os_log_info(OS_LOG_DEFAULT,
+		    "%s: error %d for proc %s[%u] if_tcp_kao_max %u\n",
+		    __func__, error,
+		    proc != NULL ? proc->p_comm : "kernel",
+		    proc != NULL ? proc->p_pid : 0,
+		    ifp->if_tcp_kao_max);
+	}
+	ifnet_lock_done(ifp);
+
+	return error;
 }
 
 /*
@@ -2203,6 +2301,10 @@ tcp_ctloutput(struct socket *so, struct sockopt *sopt)
 			break;
 
 		case TCP_KEEPALIVE_OFFLOAD:
+			if ((error = priv_check_cred(kauth_cred_get(),
+			    PRIV_NETINET_TCP_KA_OFFLOAD, 0)) != 0) {
+				break;
+			}
 			error = sooptcopyin(sopt, &optval, sizeof(optval),
 			    sizeof(optval));
 			if (error) {
@@ -2213,9 +2315,10 @@ tcp_ctloutput(struct socket *so, struct sockopt *sopt)
 				break;
 			}
 			if (optval != 0) {
-				inp->inp_flags2 |= INP2_KEEPALIVE_OFFLOAD;
+				error = tcp_set_keep_alive_offload(so,
+				    sopt->sopt_p);
 			} else {
-				inp->inp_flags2 &= ~INP2_KEEPALIVE_OFFLOAD;
+				tcp_clear_keep_alive_offload(so);
 			}
 			break;
 
@@ -2398,6 +2501,9 @@ tcp_ctloutput(struct socket *so, struct sockopt *sopt)
 			}
 			break;
 		case TCP_FASTOPEN_FORCE_HEURISTICS:
+
+			break;
+		case TCP_FASTOPEN_FORCE_ENABLE:
 			error = sooptcopyin(sopt, &optval, sizeof(optval),
 			    sizeof(optval));
 
@@ -2414,9 +2520,9 @@ tcp_ctloutput(struct socket *so, struct sockopt *sopt)
 				break;
 			}
 			if (optval) {
-				tp->t_flagsext |= TF_FASTOPEN_HEUR;
+				tp->t_flagsext |= TF_FASTOPEN_FORCE_ENABLE;
 			} else {
-				tp->t_flagsext &= ~TF_FASTOPEN_HEUR;
+				tp->t_flagsext &= ~TF_FASTOPEN_FORCE_ENABLE;
 			}
 
 			break;
@@ -2600,7 +2706,10 @@ tcp_ctloutput(struct socket *so, struct sockopt *sopt)
 			optval = tfo_enabled(tp);
 			break;
 		case TCP_FASTOPEN_FORCE_HEURISTICS:
-			optval = (tp->t_flagsext & TF_FASTOPEN_HEUR) ? 1 : 0;
+			optval = 0;
+			break;
+		case TCP_FASTOPEN_FORCE_ENABLE:
+			optval = (tp->t_flagsext & TF_FASTOPEN_FORCE_ENABLE) ? 1 : 0;
 			break;
 		case TCP_MEASURE_SND_BW:
 			optval = tp->t_flagsext & TF_MEASURESNDBW;
@@ -2915,6 +3024,7 @@ tcp_usrclosed(struct tcpcb *tp)
 		    struct tcpcb *, tp,
 		    int32_t, TCPS_FIN_WAIT_1);
 		tp->t_state = TCPS_FIN_WAIT_1;
+		TCP_LOG_CONNECTION_SUMMARY(tp);
 		break;
 
 	case TCPS_CLOSE_WAIT:
@@ -2923,6 +3033,7 @@ tcp_usrclosed(struct tcpcb *tp)
 		    struct tcpcb *, tp,
 		    int32_t, TCPS_LAST_ACK);
 		tp->t_state = TCPS_LAST_ACK;
+		TCP_LOG_CONNECTION_SUMMARY(tp);
 		break;
 	}
 	if (tp && tp->t_state >= TCPS_FIN_WAIT_2) {
@@ -2964,6 +3075,7 @@ tcp_out6_cksum_stats(u_int32_t len)
 	tcpstat.tcps_snd6_swcsum++;
 	tcpstat.tcps_snd6_swcsum_bytes += len;
 }
+#endif /* INET6 */
 
 /*
  * When messages are enabled on a TCP socket, the message priority
@@ -2973,6 +3085,7 @@ int
 tcp_get_msg_priority(struct mbuf *control, uint32_t *msgpri)
 {
 	struct cmsghdr *cm;
+
 	if (control == NULL) {
 		return EINVAL;
 	}
@@ -2994,4 +3107,33 @@ tcp_get_msg_priority(struct mbuf *control, uint32_t *msgpri)
 	}
 	return 0;
 }
-#endif /* INET6 */
+
+int
+tcp_get_mpkl_send_info(struct mbuf *control,
+    struct so_mpkl_send_info *mpkl_send_info)
+{
+	struct cmsghdr *cm;
+
+	if (control == NULL || mpkl_send_info == NULL) {
+		return EINVAL;
+	}
+
+	for (cm = M_FIRST_CMSGHDR(control); cm;
+	    cm = M_NXT_CMSGHDR(control, cm)) {
+		if (cm->cmsg_len < sizeof(struct cmsghdr) ||
+		    cm->cmsg_len > control->m_len) {
+			return EINVAL;
+		}
+		if (cm->cmsg_level != SOL_SOCKET ||
+		    cm->cmsg_type != SCM_MPKL_SEND_INFO) {
+			continue;
+		}
+		if (cm->cmsg_len != CMSG_LEN(sizeof(struct so_mpkl_send_info))) {
+			return EINVAL;
+		}
+		memcpy(mpkl_send_info, CMSG_DATA(cm),
+		    sizeof(struct so_mpkl_send_info));
+		return 0;
+	}
+	return ENOMSG;
+}

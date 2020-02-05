@@ -104,7 +104,7 @@
 
 __private_extern__ void vntblinit(void);
 
-extern struct vnodeopv_desc *vfs_opv_descs[];
+extern const struct vnodeopv_desc *vfs_opv_descs[];
 /* a list of lists of vnodeops defns */
 extern struct vnodeop_desc *vfs_op_descs[];
 /* and the operations they perform */
@@ -150,7 +150,7 @@ vfs_opv_init(void)
 	int i, j, k;
 	int(***opv_desc_vector_p)(void *);
 	int(**opv_desc_vector)(void *);
-	struct vnodeopv_entry_desc *opve_descp;
+	const struct vnodeopv_entry_desc *opve_descp;
 
 	/*
 	 * Allocate the dynamic vectors and fill them in.
@@ -319,8 +319,6 @@ lck_mtx_t *pkg_extensions_lck;
 
 struct mount * dead_mountp;
 
-extern void nspace_handler_init(void);
-
 /*
  * Initialize the vnode structures and initialize each file system type.
  */
@@ -414,8 +412,6 @@ vfsinit(void)
 	 * Initialize the vnode name cache
 	 */
 	nchinit();
-
-	nspace_handler_init();
 
 	/*
 	 * Build vnode operation vectors.
@@ -516,6 +512,8 @@ vfsinit(void)
 #if FS_COMPRESSION
 	decmpfs_init();
 #endif
+
+	nspace_resolver_init();
 }
 
 void

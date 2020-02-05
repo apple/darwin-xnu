@@ -737,12 +737,11 @@ kernel_pmap_present_mapping(uint64_t vaddr, uint64_t * pvincr, uintptr_t * pvphy
     if (ppn && pvphysaddr)
     {
         uint64_t phys = ptoa_64(ppn);
-#if defined(__arm__) || defined(__arm64__)
-        if (isphysmem(phys))        *pvphysaddr = phystokv(phys);
-#else
-        if (physmap_enclosed(phys)) *pvphysaddr = (uintptr_t)PHYSMAP_PTOV(phys);
-#endif
-        else                        ppn = 0;
+        if (physmap_enclosed(phys)) {
+		*pvphysaddr = phystokv(phys);
+        } else {
+		ppn = 0;
+	}
     }
 
     return (ppn);
@@ -758,15 +757,17 @@ pmap_traverse_present_mappings(pmap_t __unused pmap,
     IOReturn        ret;
     vm_map_offset_t vcurstart, vcur;
     uint64_t        vincr = 0;
-    vm_map_offset_t debug_start;
-    vm_map_offset_t debug_end;
+    vm_map_offset_t debug_start = trunc_page((vm_map_offset_t) debug_buf_base);
+    vm_map_offset_t debug_end = round_page((vm_map_offset_t) (debug_buf_base + debug_buf_size));
+#if defined(XNU_TARGET_OS_BRIDGE)
+    vm_map_offset_t macos_panic_start = trunc_page((vm_map_offset_t) macos_panic_base);
+    vm_map_offset_t macos_panic_end = round_page((vm_map_offset_t) (macos_panic_base + macos_panic_size));
+#endif
+
     boolean_t       lastvavalid;
 #if defined(__arm__) || defined(__arm64__)
     vm_page_t m = VM_PAGE_NULL;
 #endif
-
-    debug_start = trunc_page((vm_map_offset_t) debug_buf_base);
-    debug_end   = round_page((vm_map_offset_t) (debug_buf_base + debug_buf_size));
 
 #if defined(__x86_64__)
     assert(!is_ept_pmap(pmap));
@@ -827,8 +828,12 @@ pmap_traverse_present_mappings(pmap_t __unused pmap,
 	if (ppn != 0)
 	{
 	    if (((vcur < debug_start) || (vcur >= debug_end))
-		&& !(EFI_VALID_PAGE(ppn) ||
-	    	     pmap_valid_page(ppn)))
+		&& !(EFI_VALID_PAGE(ppn) || pmap_valid_page(ppn))
+#if defined(XNU_TARGET_OS_BRIDGE)
+		// include the macOS panic region if it's mapped
+		&& ((vcur < macos_panic_start) || (vcur >= macos_panic_end))
+#endif
+		)
 	    {
 		/* not something we want */
 		ppn = 0;
@@ -1170,7 +1175,7 @@ do_kern_dump(kern_dump_output_proc outproc, enum kern_dump_type kd_variant)
 
 	assert (existing_log_size <= debug_buf_size);
 
-	if (kd_variant == KERN_DUMP_DISK) {
+	if ((kd_variant == KERN_DUMP_DISK) || (kd_variant == KERN_DUMP_STACKSHOT_DISK)) {
 		/* Open the file for output */
 		if ((ret = (*outproc)(KDP_WRQ, NULL, 0, NULL)) != kIOReturnSuccess) {
 			kern_coredump_log(NULL, "outproc(KDP_WRQ, NULL, 0, NULL) returned 0x%x\n", ret);
@@ -1184,7 +1189,7 @@ do_kern_dump(kern_dump_output_proc outproc, enum kern_dump_type kd_variant)
 	bzero(&outvars, sizeof(outvars));
 	outvars.outproc = outproc;
 
-	if (kd_variant == KERN_DUMP_DISK) {
+	if ((kd_variant == KERN_DUMP_DISK) || (kd_variant == KERN_DUMP_STACKSHOT_DISK)) {
 		outvars.zoutput     = kdp_core_zoutput;
 		/* Space for file header, panic log, core log */
 		foffset = (KERN_COREDUMP_HEADERSIZE + existing_log_size + KERN_COREDUMP_MAXDEBUGLOGSIZE +
@@ -1215,6 +1220,35 @@ do_kern_dump(kern_dump_output_proc outproc, enum kern_dump_type kd_variant)
 	kern_coredump_log(NULL, "%s", (kd_variant == KERN_DUMP_DISK) ? "Writing local cores..." :
     	    	       "Transmitting kernel state, please wait:\n");
 
+
+#if defined(__x86_64__)
+	if (((kd_variant == KERN_DUMP_STACKSHOT_DISK) || (kd_variant == KERN_DUMP_DISK)) && ((panic_stackshot_buf != 0) && (panic_stackshot_len != 0))) {
+		uint64_t compressed_stackshot_len = 0;
+
+		if ((ret = kdp_reset_output_vars(&outvars, panic_stackshot_len)) != KERN_SUCCESS) {
+			kern_coredump_log(NULL, "Failed to reset outvars for stackshot with len 0x%zx, returned 0x%x\n", panic_stackshot_len, ret);
+			dump_succeeded = FALSE;
+		} else if ((ret = kdp_core_output(&outvars, panic_stackshot_len, (void *)panic_stackshot_buf)) != KERN_SUCCESS) {
+			kern_coredump_log(NULL, "Failed to write panic stackshot to file, kdp_coreoutput(outvars, %lu, %p) returned 0x%x\n",
+				       panic_stackshot_len, (void *) panic_stackshot_buf, ret);
+			dump_succeeded = FALSE;
+		} else if ((ret = kdp_core_output(&outvars, 0, NULL)) != KERN_SUCCESS) {
+			kern_coredump_log(NULL, "Failed to flush stackshot data : kdp_core_output(%p, 0, NULL) returned 0x%x\n", &outvars, ret);
+			dump_succeeded = FALSE;
+		} else if ((ret = kern_dump_record_file(&outvars, "panic_stackshot.kcdata", foffset, &compressed_stackshot_len)) != KERN_SUCCESS) {
+			kern_coredump_log(NULL, "Failed to record panic stackshot in corefile header, kern_dump_record_file returned 0x%x\n", ret);
+			dump_succeeded = FALSE;
+		} else {
+			kern_coredump_log(NULL, "Recorded panic stackshot in corefile at offset 0x%llx, compressed to %llu bytes\n", foffset, compressed_stackshot_len);
+			foffset = roundup((foffset + compressed_stackshot_len), KERN_COREDUMP_BEGIN_FILEBYTES_ALIGN);
+			if ((ret = kern_dump_seek_to_next_file(&outvars, foffset)) != kIOReturnSuccess) {
+				kern_coredump_log(NULL, "Failed to seek to stackshot file offset 0x%llx, kern_dump_seek_to_next_file returned 0x%x\n", foffset, ret);
+				dump_succeeded = FALSE;
+			}
+		}
+	}
+#endif
+
 	if (kd_variant == KERN_DUMP_DISK) {
 		/*
 		 * Dump co-processors as well, foffset will be overwritten with the
@@ -1223,7 +1257,7 @@ do_kern_dump(kern_dump_output_proc outproc, enum kern_dump_type kd_variant)
 		if (kern_do_coredump(&outvars, FALSE, foffset, &foffset) != 0) {
 			dump_succeeded = FALSE;
 		}
-	} else {
+	} else if (kd_variant != KERN_DUMP_STACKSHOT_DISK) {
 		/* Only the kernel */
 		if (kern_do_coredump(&outvars, TRUE, foffset, &foffset) != 0) {
 			dump_succeeded = FALSE;
@@ -1231,34 +1265,6 @@ do_kern_dump(kern_dump_output_proc outproc, enum kern_dump_type kd_variant)
 	}
 
 	if (kd_variant == KERN_DUMP_DISK) {
-#if defined(__x86_64__) && (DEVELOPMENT || DEBUG)
-		/* Write the macOS panic stackshot on its own to a separate 'corefile' */
-		if (panic_stackshot_buf && panic_stackshot_len) {
-			uint64_t compressed_stackshot_len = 0;
-
-			/* Seek to the offset of the next 'file' (foffset provided/updated from kern_do_coredump) */
-			if ((ret = kern_dump_seek_to_next_file(&outvars, foffset)) != kIOReturnSuccess) {
-				kern_coredump_log(NULL, "Failed to seek to stackshot file offset 0x%llx, kern_dump_seek_to_next_file returned 0x%x\n", foffset, ret);
-				dump_succeeded = FALSE;
-			} else if ((ret = kdp_reset_output_vars(&outvars, panic_stackshot_len)) != KERN_SUCCESS) {
-				kern_coredump_log(NULL, "Failed to reset outvars for stackshot with len 0x%zx, returned 0x%x\n", panic_stackshot_len, ret);
-				dump_succeeded = FALSE;
-			} else if ((ret = kdp_core_output(&outvars, panic_stackshot_len, (void *)panic_stackshot_buf)) != KERN_SUCCESS) {
-				kern_coredump_log(NULL, "Failed to write panic stackshot to file, kdp_coreoutput(outvars, %lu, %p) returned 0x%x\n",
-					       panic_stackshot_len, (void *) panic_stackshot_buf, ret);
-				dump_succeeded = FALSE;
-			} else if ((ret = kdp_core_output(&outvars, 0, NULL)) != KERN_SUCCESS) {
-				kern_coredump_log(NULL, "Failed to flush stackshot data : kdp_core_output(%p, 0, NULL) returned 0x%x\n", &outvars, ret);
-				dump_succeeded = FALSE;
-			} else if ((ret = kern_dump_record_file(&outvars, "panic_stackshot.kcdata", foffset, &compressed_stackshot_len)) != KERN_SUCCESS) {
-				kern_coredump_log(NULL, "Failed to record panic stackshot in corefile header, kern_dump_record_file returned 0x%x\n", ret);
-				dump_succeeded = FALSE;
-			} else {
-				kern_coredump_log(NULL, "Recorded panic stackshot in corefile at offset 0x%llx, compressed to %llu bytes\n", foffset, compressed_stackshot_len);
-			}
-		}
-#endif /* defined(__x86_64__) && (DEVELOPMENT || DEBUG) */
-
 		/* Write the debug log -- first seek to the end of the corefile header */
 		foffset = KERN_COREDUMP_HEADERSIZE;
 		if ((ret = (*outproc)(KDP_SEEK, NULL, sizeof(foffset), &foffset)) != kIOReturnSuccess) {
@@ -1356,14 +1362,14 @@ kern_dump(enum kern_dump_type kd_variant)
 #if KASAN
 	kasan_disable();
 #endif
-	if (kd_variant == KERN_DUMP_DISK) {
+	if ((kd_variant == KERN_DUMP_DISK) || (kd_variant == KERN_DUMP_STACKSHOT_DISK)) {
 		if (dumped_local) return (0);
 		if (local_dump_in_progress) return (-1);
 		local_dump_in_progress = TRUE;
 #if CONFIG_EMBEDDED
 		hwsd_info->xhsdci_status = XHSDCI_STATUS_KERNEL_BUSY;
 #endif
-		ret = do_kern_dump(&kern_dump_disk_proc, KERN_DUMP_DISK);
+		ret = do_kern_dump(&kern_dump_disk_proc, kd_variant);
 		if (ret == 0) {
 			dumped_local = TRUE;
 			kern_dump_successful = TRUE;
@@ -1548,12 +1554,6 @@ kdp_core_init(void)
 	PE_consistent_debug_register(kDbgIdAstrisConnection, kvtophys((vm_offset_t) hwsd_info), sizeof(pmap_paddr_t));
 	PE_consistent_debug_register(kDbgIdAstrisConnectionVers, CUR_XNU_HWSDCI_STRUCT_VERS, sizeof(uint32_t));
 #endif /* CONFIG_EMBEDDED */
-
-#if defined(__x86_64__) && (DEVELOPMENT || DEBUG)
-	/* Allocate space in the kernel map for the panic stackshot */
-	kr = kmem_alloc(kernel_map, &panic_stackshot_buf, PANIC_STACKSHOT_BUFSIZE, VM_KERN_MEMORY_DIAG);
-	assert (KERN_SUCCESS == kr);
-#endif /* defined(__x86_64__) && (DEVELOPMENT || DEBUG) */
 }
 
 #endif /* CONFIG_KDP_INTERACTIVE_DEBUGGING */

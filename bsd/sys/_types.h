@@ -52,6 +52,7 @@
 #define __DARWIN_NULL ((void *)0)
 #endif /* __cplusplus */
 
+#if !defined(DRIVERKIT)
 typedef __int64_t       __darwin_blkcnt_t;      /* total blocks */
 typedef __int32_t       __darwin_blksize_t;     /* preferred block size */
 typedef __int32_t       __darwin_dev_t;         /* dev_t */
@@ -74,12 +75,13 @@ typedef __uint32_t      __darwin_sigset_t;      /* [???] signal set */
 typedef __int32_t       __darwin_suseconds_t;   /* [???] microseconds */
 typedef __uint32_t      __darwin_uid_t;         /* [???] user IDs */
 typedef __uint32_t      __darwin_useconds_t;    /* [???] microseconds */
+#endif /* !defined(DRIVERKIT) */
 typedef unsigned char   __darwin_uuid_t[16];
 typedef char    __darwin_uuid_string_t[37];
 
-#ifndef KERNEL
+#if !defined(KERNEL) && !defined(DRIVERKIT)
 #include <sys/_pthread/_pthread_types.h>
-#endif /* KERNEL */
+#endif /* !defined(KERNEL) && !defined(DRIVERKIT) */
 
 #if defined(__GNUC__) && (__GNUC__ == 3 && __GNUC_MINOR__ >= 5 || __GNUC__ > 3)
 #define __offsetof(type, field) __builtin_offsetof(type, field)

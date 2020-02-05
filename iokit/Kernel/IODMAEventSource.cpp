@@ -48,7 +48,7 @@ IODMAEventSource::init(OSObject *inOwner,
 		return false;
 	}
 
-	if (inProvider == 0) {
+	if (inProvider == NULL) {
 		return false;
 	}
 
@@ -58,7 +58,7 @@ IODMAEventSource::init(OSObject *inOwner,
 	dmaNotificationAction = inNotification;
 
 	dmaController = IODMAController::getController(dmaProvider, inDMAIndex);
-	if (dmaController == 0) {
+	if (dmaController == NULL) {
 		return false;
 	}
 	dmaController->retain();
@@ -94,7 +94,7 @@ IODMAEventSource::dmaEventSource(OSObject *inOwner,
 
 	if (dmaES && !dmaES->init(inOwner, inProvider, inCompletion, inNotification, inDMAIndex)) {
 		dmaES->release();
-		return 0;
+		return NULL;
 	}
 
 	return dmaES;
@@ -105,7 +105,7 @@ IODMAEventSource::startDMACommand(IODMACommand *dmaCommand, IODirection directio
 {
 	IOReturn result;
 
-	if ((dmaController == 0) || (dmaIndex == 0xFFFFFFFF)) {
+	if ((dmaController == NULL) || (dmaIndex == 0xFFFFFFFF)) {
 		return kIOReturnError;
 	}
 
@@ -113,7 +113,7 @@ IODMAEventSource::startDMACommand(IODMACommand *dmaCommand, IODirection directio
 		return kIOReturnBusy;
 	}
 
-	if (dmaCompletionAction == 0) {
+	if (dmaCompletionAction == NULL) {
 		dmaSynchBusy = true;
 	}
 
@@ -134,7 +134,7 @@ IODMAEventSource::startDMACommand(IODMACommand *dmaCommand, IODirection directio
 IOReturn
 IODMAEventSource::stopDMACommand(bool flush, uint64_t timeout)
 {
-	if ((dmaController == 0) || (dmaIndex == 0xFFFFFFFF)) {
+	if ((dmaController == NULL) || (dmaIndex == 0xFFFFFFFF)) {
 		return kIOReturnError;
 	}
 
@@ -145,7 +145,7 @@ IODMAEventSource::stopDMACommand(bool flush, uint64_t timeout)
 IOReturn
 IODMAEventSource::queryDMACommand(IODMACommand **dmaCommand, IOByteCount *transferCount, bool waitForIdle)
 {
-	if ((dmaController == 0) || (dmaIndex == 0xFFFFFFFF)) {
+	if ((dmaController == NULL) || (dmaIndex == 0xFFFFFFFF)) {
 		return kIOReturnError;
 	}
 
@@ -156,7 +156,7 @@ IODMAEventSource::queryDMACommand(IODMACommand **dmaCommand, IOByteCount *transf
 IOByteCount
 IODMAEventSource::getFIFODepth(IODirection direction)
 {
-	if ((dmaController == 0) || (dmaIndex == 0xFFFFFFFF)) {
+	if ((dmaController == NULL) || (dmaIndex == 0xFFFFFFFF)) {
 		return 0;
 	}
 
@@ -167,7 +167,7 @@ IODMAEventSource::getFIFODepth(IODirection direction)
 IOReturn
 IODMAEventSource::setFIFODepth(IOByteCount depth)
 {
-	if ((dmaController == 0) || (dmaIndex == 0xFFFFFFFF)) {
+	if ((dmaController == NULL) || (dmaIndex == 0xFFFFFFFF)) {
 		return kIOReturnError;
 	}
 
@@ -178,7 +178,7 @@ IODMAEventSource::setFIFODepth(IOByteCount depth)
 IOByteCount
 IODMAEventSource::validFIFODepth(IOByteCount depth, IODirection direction)
 {
-	if ((dmaController == 0) || (dmaIndex == 0xFFFFFFFF)) {
+	if ((dmaController == NULL) || (dmaIndex == 0xFFFFFFFF)) {
 		return kIOReturnError;
 	}
 
@@ -189,7 +189,7 @@ IODMAEventSource::validFIFODepth(IOByteCount depth, IODirection direction)
 IOReturn
 IODMAEventSource::setFrameSize(UInt8 byteCount)
 {
-	if ((dmaController == 0) || (dmaIndex == 0xFFFFFFFF)) {
+	if ((dmaController == NULL) || (dmaIndex == 0xFFFFFFFF)) {
 		return kIOReturnError;
 	}
 
@@ -224,7 +224,7 @@ IODMAEventSource::checkForWork(void)
 void
 IODMAEventSource::completeDMACommand(IODMACommand *dmaCommand)
 {
-	if (dmaCompletionAction != 0) {
+	if (dmaCompletionAction != NULL) {
 		IOSimpleLockLock(dmaCommandsCompletedLock);
 		queue_enter(&dmaCommandsCompleted, dmaCommand, IODMACommand *, fCommandChain);
 		IOSimpleLockUnlock(dmaCommandsCompletedLock);
@@ -243,7 +243,7 @@ IODMAEventSource::notifyDMACommand(IODMACommand *dmaCommand, IOReturn status, IO
 	dmaCommand->reserved->fActualByteCount = actualByteCount;
 	dmaCommand->reserved->fTimeStamp = timeStamp;
 
-	if (dmaNotificationAction != 0) {
+	if (dmaNotificationAction != NULL) {
 		(*dmaNotificationAction)(owner, this, dmaCommand, status, actualByteCount, timeStamp);
 	}
 }

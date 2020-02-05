@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -84,7 +84,6 @@
  */
 #include <string.h>             /* For memcpy() */
 
-#include <kern/xpr.h>
 #include <kern/host.h>
 #include <kern/thread.h>        /* For current_thread() */
 #include <kern/ipc_mig.h>
@@ -106,7 +105,7 @@
 #include <vm/vm_protos.h>
 
 memory_object_default_t memory_manager_default = MEMORY_OBJECT_DEFAULT_NULL;
-decl_lck_mtx_data(, memory_manager_default_lock)
+decl_lck_mtx_data(, memory_manager_default_lock);
 
 
 /*
@@ -166,11 +165,6 @@ memory_object_lock_page(
 	boolean_t               should_flush,
 	vm_prot_t               prot)
 {
-	XPR(XPR_MEMORY_OBJECT,
-	    "m_o_lock_page, page 0x%X rtn %d flush %d prot %d\n",
-	    m, should_return, should_flush, prot, 0);
-
-
 	if (m->vmp_busy || m->vmp_cleaning) {
 		return MEMORY_OBJECT_LOCK_RESULT_MUST_BLOCK;
 	}
@@ -446,10 +440,6 @@ vm_object_sync(
 {
 	boolean_t       rv;
 	int             flags;
-
-	XPR(XPR_VM_OBJECT,
-	    "vm_o_sync, object 0x%X, offset 0x%X size 0x%x flush %d rtn %d\n",
-	    object, offset, size, should_flush, should_return);
 
 	/*
 	 * Lock the object, and acquire a paging reference to
@@ -1057,10 +1047,6 @@ vm_object_set_attributes_common(
 	memory_object_copy_strategy_t copy_strategy)
 {
 	boolean_t       object_became_ready;
-
-	XPR(XPR_MEMORY_OBJECT,
-	    "m_o_set_attr_com, object 0x%X flg %x strat %d\n",
-	    object, (may_cache & 1), copy_strategy, 0, 0);
 
 	if (object == VM_OBJECT_NULL) {
 		return KERN_INVALID_ARGUMENT;
@@ -1875,6 +1861,24 @@ memory_object_mark_io_tracking(
 	if (object != VM_OBJECT_NULL) {
 		vm_object_lock(object);
 		object->io_tracking = TRUE;
+		vm_object_unlock(object);
+	}
+}
+
+void
+memory_object_mark_trusted(
+	memory_object_control_t control)
+{
+	vm_object_t             object;
+
+	if (control == NULL) {
+		return;
+	}
+	object = memory_object_control_to_vm_object(control);
+
+	if (object != VM_OBJECT_NULL) {
+		vm_object_lock(object);
+		object->pager_trusted = TRUE;
 		vm_object_unlock(object);
 	}
 }

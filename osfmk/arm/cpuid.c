@@ -42,36 +42,34 @@
 
 typedef struct {
 	uint32_t
-
-	    Ctype1:3,   /* 2:0 */
-	    Ctype2:3,   /* 5:3 */
-	    Ctype3:3,   /* 8:6 */
-	    Ctypes:15,  /* 6:23 - Don't Care */
-	    LoC:3,      /* 26-24 - Level of Coherency */
-	    LoU:3,      /* 29:27 - Level of Unification */
-	    RAZ:2;      /* 31:30 - Read-As-Zero */
-}               arm_cache_clidr_t;
+	    Ctype1:3, /* 2:0 */
+	    Ctype2:3, /* 5:3 */
+	    Ctype3:3, /* 8:6 */
+	    Ctypes:15, /* 6:23 - Don't Care */
+	    LoC:3, /* 26-24 - Level of Coherency */
+	    LoU:3, /* 29:27 - Level of Unification */
+	    RAZ:2; /* 31:30 - Read-As-Zero */
+} arm_cache_clidr_t;
 
 typedef union {
 	arm_cache_clidr_t bits;
-	uint32_t        value;
-}               arm_cache_clidr_info_t;
+	uint32_t          value;
+} arm_cache_clidr_info_t;
 
 
 typedef struct {
 	uint32_t
-
 	    LineSize:3, /* 2:0 - Number of words in cache line */
-	    Assoc:10,   /* 12:3 - Associativity of cache */
+	    Assoc:10, /* 12:3 - Associativity of cache */
 	    NumSets:15, /* 27:13 - Number of sets in cache */
-	    c_type:4;   /* 31:28 - Cache type */
-}               arm_cache_ccsidr_t;
+	    c_type:4; /* 31:28 - Cache type */
+} arm_cache_ccsidr_t;
 
 
 typedef union {
 	arm_cache_ccsidr_t bits;
-	uint32_t        value;
-}               arm_cache_ccsidr_info_t;
+	uint32_t           value;
+} arm_cache_ccsidr_info_t;
 
 /* Statics */
 
@@ -85,17 +83,21 @@ void
 do_cpuid(void)
 {
 	cpuid_cpu_info.value = machine_read_midr();
-#if             (__ARM_ARCH__ == 8)
+#if (__ARM_ARCH__ == 8)
 
+#if defined(HAS_APPLE_PAC)
+	cpuid_cpu_info.arm_info.arm_arch = CPU_ARCH_ARMv8E;
+#else /* defined(HAS_APPLE_PAC) */
 	cpuid_cpu_info.arm_info.arm_arch = CPU_ARCH_ARMv8;
+#endif /* defined(HAS_APPLE_PAC) */
 
-#elif   (__ARM_ARCH__ == 7)
-  #ifdef __ARM_SUB_ARCH__
+#elif (__ARM_ARCH__ == 7)
+#ifdef __ARM_SUB_ARCH__
 	cpuid_cpu_info.arm_info.arm_arch = __ARM_SUB_ARCH__;
-  #else
+#else /* __ARM_SUB_ARCH__ */
 	cpuid_cpu_info.arm_info.arm_arch = CPU_ARCH_ARMv7;
-  #endif
-#else
+#endif /* __ARM_SUB_ARCH__ */
+#else /* (__ARM_ARCH__ != 7) && (__ARM_ARCH__ != 8) */
 	/* 1176 architecture lives in the extended feature register */
 	if (cpuid_cpu_info.arm_info.arm_arch == CPU_ARCH_EXTENDED) {
 		arm_isa_feat1_reg isa = machine_read_isa_feat1();
@@ -108,7 +110,7 @@ do_cpuid(void)
 			cpuid_cpu_info.arm_info.arm_arch = CPU_ARCH_ARMv6;
 		}
 	}
-#endif
+#endif /* (__ARM_ARCH__ != 7) && (__ARM_ARCH__ != 8) */
 }
 
 arm_cpu_info_t *
@@ -175,6 +177,13 @@ cpuid_get_cpufamily(void)
 		case CPU_PART_MONSOON:
 		case CPU_PART_MISTRAL:
 			cpufamily = CPUFAMILY_ARM_MONSOON_MISTRAL;
+			break;
+		case CPU_PART_VORTEX:
+		case CPU_PART_TEMPEST:
+		case CPU_PART_TEMPEST_M9:
+		case CPU_PART_VORTEX_ARUBA:
+		case CPU_PART_TEMPEST_ARUBA:
+			cpufamily = CPUFAMILY_ARM_VORTEX_TEMPEST;
 			break;
 		default:
 			cpufamily = CPUFAMILY_UNKNOWN;

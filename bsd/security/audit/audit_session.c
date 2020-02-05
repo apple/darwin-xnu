@@ -34,6 +34,7 @@
 #include <sys/kauth.h>
 #include <sys/conf.h>
 #include <sys/poll.h>
+#include <sys/priv.h>
 #include <sys/queue.h>
 #include <sys/signalvar.h>
 #include <sys/syscall.h>
@@ -100,8 +101,10 @@ static au_sentry_t audit_default_se = {
 
 struct auditinfo_addr *audit_default_aia_p = &audit_default_se.se_auinfo;
 
+/* Copied from <ipc/ipc_object.h> */
+#define IPC_KMSG_FLAGS_ALLOW_IMMOVABLE_SEND 0x1
 kern_return_t ipc_object_copyin(ipc_space_t, mach_port_name_t,
-    mach_msg_type_name_t, ipc_port_t *);
+    mach_msg_type_name_t, ipc_port_t *, mach_port_context_t, mach_msg_guard_flags_t *, uint32_t);
 void ipc_port_release_send(ipc_port_t);
 
 #if CONFIG_AUDIT
@@ -556,7 +559,7 @@ audit_sysctl_session_debug(__unused struct sysctl_oid *oidp,
 	AUDIT_SENTRY_RUNLOCK();
 
 	/* Reconcile with the process table. */
-	(void) proc_iterate(PROC_ALLPROCLIST | PROC_ZOMBPROCLIST,
+	proc_iterate(PROC_ALLPROCLIST | PROC_ZOMBPROCLIST,
 	    audit_session_debug_callout, NULL,
 	    audit_session_debug_filterfn, (void *)&sed_tab[0]);
 
@@ -1350,10 +1353,15 @@ audit_session_port(proc_t p, struct audit_session_port_args *uap,
 		 */
 		se = AU_SENTRY_PTR(aia_p);
 		audit_ref_session(se);
-	} else if (kauth_cred_issuser(cred)) {
-		/* The superuser may obtain a port for any existing
-		 * session.
+	} else {
+		/*
+		 * Only privileged processes may obtain a port for
+		 * any existing session.
 		 */
+		err = priv_check_cred(cred, PRIV_AUDIT_SESSION_PORT, 0);
+		if (err != 0) {
+			goto done;
+		}
 		AUDIT_SENTRY_RLOCK();
 		se = audit_session_find(uap->asid);
 		AUDIT_SENTRY_RUNLOCK();
@@ -1362,9 +1370,6 @@ audit_session_port(proc_t p, struct audit_session_port_args *uap,
 			goto done;
 		}
 		aia_p = &se->se_auinfo;
-	} else {
-		err = EPERM;
-		goto done;
 	}
 
 	/*
@@ -1513,7 +1518,7 @@ audit_session_join(proc_t p, struct audit_session_join_args *uap,
 
 
 	if (ipc_object_copyin(get_task_ipcspace(p->task), send,
-	    MACH_MSG_TYPE_COPY_SEND, &port) != KERN_SUCCESS) {
+	    MACH_MSG_TYPE_COPY_SEND, &port, 0, NULL, IPC_KMSG_FLAGS_ALLOW_IMMOVABLE_SEND) != KERN_SUCCESS) {
 		*ret_asid = AU_DEFAUDITSID;
 		err = EINVAL;
 	} else {

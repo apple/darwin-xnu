@@ -50,7 +50,11 @@ extern "C" {
 
 #ifndef NULL
 #if defined (__cplusplus)
+#if __cplusplus >= 201103L
+#define NULL nullptr
+#else
 #define NULL 0
+#endif
 #else
 #define NULL ((void *)0)
 #endif
@@ -93,50 +97,85 @@ extern int      strprefix(const char *s1, const char *s2);
 extern int      bcmp(const void *, const void *, size_t);
 extern void     bcopy(const void *, void *, size_t);
 extern void     bzero(void *, size_t);
+extern int      timingsafe_bcmp(const void *b1, const void *b2, size_t n);
 
 #ifdef PRIVATE
 #include <san/memintrinsics.h>
 #endif
 
+#if __has_builtin(__builtin_dynamic_object_size)
+#define XNU_BOS __builtin_dynamic_object_size
+#else
+#define XNU_BOS __builtin_object_size
+#endif
+
+
+/* __nochk_ functions for opting out of type 1 bounds checking */
+__attribute__((always_inline)) static inline void *
+__nochk_memcpy(void *dest, const void *src, size_t len)
+{
+	return __builtin___memcpy_chk(dest, src, len, XNU_BOS(dest, 0));
+}
+__attribute__((always_inline)) static inline void *
+__nochk_memmove(void *dest, const void *src, size_t len)
+{
+	return __builtin___memmove_chk(dest, src, len, XNU_BOS(dest, 0));
+}
+__attribute__((always_inline)) static inline void
+__nochk_bcopy(const void *src, void *dest, size_t len)
+{
+	__builtin___memmove_chk(dest, src, len, XNU_BOS(dest, 0));
+}
+
 #if defined(__MAC_OS_X_VERSION_MIN_REQUIRED) && __MAC_OS_X_VERSION_MIN_REQUIRED < __MAC_10_13
 /* older deployment target */
 #elif defined(KASAN) || (defined (_FORTIFY_SOURCE) && _FORTIFY_SOURCE == 0)
-/* FORTIFY_SOURCE disabled */
+/* _FORTIFY_SOURCE disabled */
 #else /* _chk macros */
+
+#ifdef XNU_KERNEL_PRIVATE
+/* Stricter checking in xnu than kexts. When type is set to 1, __builtin_object_size
+ * returns the size of the closest surrounding sub-object, which would detect copying past
+ * the end of a struct member. */
+#define BOS_COPY_TYPE 1
+#else
+#define BOS_COPY_TYPE 0
+#endif
+
 #if __has_builtin(__builtin___memcpy_chk)
-#define memcpy(dest, src, len) __builtin___memcpy_chk(dest, src, len, __builtin_object_size(dest, 0))
+#define memcpy(dest, src, len) __builtin___memcpy_chk(dest, src, len, XNU_BOS(dest, BOS_COPY_TYPE))
 #endif
 
 #if __has_builtin(__builtin___memmove_chk)
-#define memmove(dest, src, len) __builtin___memmove_chk(dest, src, len, __builtin_object_size(dest, 0))
+#define memmove(dest, src, len) __builtin___memmove_chk(dest, src, len, XNU_BOS(dest, BOS_COPY_TYPE))
 #endif
 
 #if __has_builtin(__builtin___strncpy_chk)
-#define strncpy(dest, src, len) __builtin___strncpy_chk(dest, src, len, __builtin_object_size(dest, 1))
+#define strncpy(dest, src, len) __builtin___strncpy_chk(dest, src, len, XNU_BOS(dest, 1))
 #endif
 
 #if __has_builtin(__builtin___strncat_chk)
-#define strncat(dest, src, len) __builtin___strncat_chk(dest, src, len, __builtin_object_size(dest, 1))
+#define strncat(dest, src, len) __builtin___strncat_chk(dest, src, len, XNU_BOS(dest, 1))
 #endif
 
 #if __has_builtin(__builtin___strlcat_chk)
-#define strlcat(dest, src, len) __builtin___strlcat_chk(dest, src, len, __builtin_object_size(dest, 1))
+#define strlcat(dest, src, len) __builtin___strlcat_chk(dest, src, len, XNU_BOS(dest, 1))
 #endif
 
 #if __has_builtin(__builtin___strlcpy_chk)
-#define strlcpy(dest, src, len) __builtin___strlcpy_chk(dest, src, len, __builtin_object_size(dest, 1))
+#define strlcpy(dest, src, len) __builtin___strlcpy_chk(dest, src, len, XNU_BOS(dest, 1))
 #endif
 
 #if __has_builtin(__builtin___strcpy_chk)
-#define strcpy(dest, src, len) __builtin___strcpy_chk(dest, src, __builtin_object_size(dest, 1))
+#define strcpy(dest, src, len) __builtin___strcpy_chk(dest, src, XNU_BOS(dest, 1))
 #endif
 
 #if __has_builtin(__builtin___strcat_chk)
-#define strcat(dest, src) __builtin___strcat_chk(dest, src, __builtin_object_size(dest, 1))
+#define strcat(dest, src) __builtin___strcat_chk(dest, src, XNU_BOS(dest, 1))
 #endif
 
 #if __has_builtin(__builtin___memmove_chk)
-#define bcopy(src, dest, len) __builtin___memmove_chk(dest, src, len, __builtin_object_size(dest, 0))
+#define bcopy(src, dest, len) __builtin___memmove_chk(dest, src, len, XNU_BOS(dest, BOS_COPY_TYPE))
 #endif
 
 #endif /* _chk macros */

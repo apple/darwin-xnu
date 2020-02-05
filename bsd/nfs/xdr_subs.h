@@ -100,7 +100,10 @@
  *
  * generalized functionality for managing the building/dissecting of XDR data
  */
-typedef enum xdrbuf_type { XDRBUF_BUFFER=1 } xdrbuf_type;
+typedef enum xdrbuf_type {
+	XDRBUF_NONE   = 0,
+	XDRBUF_BUFFER = 1,
+} xdrbuf_type;
 
 struct xdrbuf {
 	union {
@@ -192,6 +195,8 @@ xb_cleanup(struct xdrbuf *xbp)
 			xb_free(xbp->xb_u.xb_buffer.xbb_base);
 		}
 		break;
+	default:
+		break;
 	}
 	xbp->xb_flags &= ~XB_CLEANUP;
 }
@@ -206,6 +211,8 @@ xb_set_cur_buf_len(struct xdrbuf *xbp)
 	switch (xbp->xb_type) {
 	case XDRBUF_BUFFER:
 		xbp->xb_u.xb_buffer.xbb_len = xbp->xb_ptr - xbp->xb_u.xb_buffer.xbb_base;
+		break;
+	default:
 		break;
 	}
 }
@@ -244,6 +251,8 @@ xb_offset(struct xdrbuf *xbp)
 	case XDRBUF_BUFFER:
 		offset = xbp->xb_ptr - xbp->xb_u.xb_buffer.xbb_base;
 		break;
+	default:
+		break;
 	}
 
 	return offset;
@@ -259,6 +268,8 @@ xb_seek(struct xdrbuf *xbp, uint32_t offset)
 	case XDRBUF_BUFFER:
 		xbp->xb_ptr = xbp->xb_u.xb_buffer.xbb_base + offset;
 		xbp->xb_left = xbp->xb_u.xb_buffer.xbb_len - offset;
+		break;
+	default:
 		break;
 	}
 
@@ -322,6 +333,8 @@ xb_grow(struct xdrbuf *xbp)
 		xbp->xb_u.xb_buffer.xbb_size = newsize;
 		xbp->xb_ptr = newbuf + oldsize;
 		xbp->xb_left = xbp->xb_growsize;
+		break;
+	default:
 		break;
 	}
 

@@ -62,7 +62,7 @@ withWorkLoop(IOWorkLoop *inWorkLoop)
 
 	if (me && !me->initWithWorkLoop(inWorkLoop)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -106,7 +106,7 @@ commandPool(IOService * inOwner, IOWorkLoop *inWorkLoop, UInt32 inSize)
 
 	if (me && !me->init(inOwner, inWorkLoop, inSize)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -135,7 +135,7 @@ IOCommandPool::free(void)
 		}
 
 		fSerializer->release();
-		fSerializer = 0;
+		fSerializer = NULL;
 	}
 
 	// Tell our superclass to cleanup too
@@ -153,7 +153,7 @@ IOCommand *
 IOCommandPool::getCommand(bool blockForCommand)
 {
 	IOReturn     result  = kIOReturnSuccess;
-	IOCommand *command = 0;
+	IOCommand *command = NULL;
 
 	IOCommandGate::Action func = OSMemberFunctionCast(
 		IOCommandGate::Action, this, &IOCommandPool::gatedGetCommand);
@@ -162,7 +162,7 @@ IOCommandPool::getCommand(bool blockForCommand)
 	if (kIOReturnSuccess == result) {
 		return command;
 	} else {
-		return 0;
+		return NULL;
 	}
 }
 

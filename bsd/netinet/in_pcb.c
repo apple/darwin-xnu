@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -94,11 +94,13 @@
 #include <net/flowadv.h>
 #include <net/nat464_utils.h>
 #include <net/ntstat.h>
+#include <net/restricted_in_port.h>
 
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
+
 #if INET6
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
@@ -119,6 +121,10 @@
 #include <sys/stat.h>
 #include <sys/ubc.h>
 #include <sys/vnode.h>
+
+#include <os/log.h>
+
+extern const char *proc_name_address(struct proc *);
 
 static lck_grp_t        *inpcb_lock_grp;
 static lck_attr_t       *inpcb_lock_attr;
@@ -173,6 +179,20 @@ sysctl_net_ipport_check SYSCTL_HANDLER_ARGS
 {
 #pragma unused(arg1, arg2)
 	int error;
+#if (DEBUG | DEVELOPMENT)
+	int old_value = *(int *)oidp->oid_arg1;
+	/*
+	 * For unit testing allow a non-superuser process with the
+	 * proper entitlement to modify the variables
+	 */
+	if (req->newptr) {
+		if (proc_suser(current_proc()) != 0 &&
+		    (error = priv_check_cred(kauth_cred_get(),
+		    PRIV_NETINET_RESERVEDPORT, 0))) {
+			return EPERM;
+		}
+	}
+#endif /* (DEBUG | DEVELOPMENT) */
 
 	error = sysctl_handle_int(oidp, oidp->oid_arg1, oidp->oid_arg2, req);
 	if (!error) {
@@ -183,6 +203,14 @@ sysctl_net_ipport_check SYSCTL_HANDLER_ARGS
 		RANGECHK(ipport_hifirstauto, IPPORT_RESERVED, USHRT_MAX);
 		RANGECHK(ipport_hilastauto, IPPORT_RESERVED, USHRT_MAX);
 	}
+
+#if (DEBUG | DEVELOPMENT)
+	os_log(OS_LOG_DEFAULT,
+	    "%s:%u sysctl net.restricted_port.verbose: %d -> %d)",
+	    proc_best_name(current_proc()), proc_selfpid(),
+	    old_value, *(int *)oidp->oid_arg1);
+#endif /* (DEBUG | DEVELOPMENT) */
+
 	return error;
 }
 
@@ -191,23 +219,29 @@ sysctl_net_ipport_check SYSCTL_HANDLER_ARGS
 SYSCTL_NODE(_net_inet_ip, IPPROTO_IP, portrange,
     CTLFLAG_RW | CTLFLAG_LOCKED, 0, "IP Ports");
 
+#if (DEBUG | DEVELOPMENT)
+#define CTLFAGS_IP_PORTRANGE (CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY)
+#else
+#define CTLFAGS_IP_PORTRANGE (CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED)
+#endif /* (DEBUG | DEVELOPMENT) */
+
 SYSCTL_PROC(_net_inet_ip_portrange, OID_AUTO, lowfirst,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    CTLFAGS_IP_PORTRANGE,
     &ipport_lowfirstauto, 0, &sysctl_net_ipport_check, "I", "");
 SYSCTL_PROC(_net_inet_ip_portrange, OID_AUTO, lowlast,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    CTLFAGS_IP_PORTRANGE,
     &ipport_lowlastauto, 0, &sysctl_net_ipport_check, "I", "");
 SYSCTL_PROC(_net_inet_ip_portrange, OID_AUTO, first,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    CTLFAGS_IP_PORTRANGE,
     &ipport_firstauto, 0, &sysctl_net_ipport_check, "I", "");
 SYSCTL_PROC(_net_inet_ip_portrange, OID_AUTO, last,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    CTLFAGS_IP_PORTRANGE,
     &ipport_lastauto, 0, &sysctl_net_ipport_check, "I", "");
 SYSCTL_PROC(_net_inet_ip_portrange, OID_AUTO, hifirst,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    CTLFAGS_IP_PORTRANGE,
     &ipport_hifirstauto, 0, &sysctl_net_ipport_check, "I", "");
 SYSCTL_PROC(_net_inet_ip_portrange, OID_AUTO, hilast,
-    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    CTLFAGS_IP_PORTRANGE,
     &ipport_hilastauto, 0, &sysctl_net_ipport_check, "I", "");
 
 static uint32_t apn_fallbk_debug = 0;
@@ -652,7 +686,7 @@ in_pcballoc(struct socket *so, struct inpcbinfo *pcbinfo, struct proc *p)
  * in_pcblookup_local_and_cleanup does everything
  * in_pcblookup_local does but it checks for a socket
  * that's going away. Since we know that the lock is
- * held read+write when this funciton is called, we
+ * held read+write when this function is called, we
  * can safely dispose of this socket like the slow
  * timer would usually do and return NULL. This is
  * great for bind.
@@ -816,13 +850,16 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 				IFA_REMREF(ifa);
 			}
 		}
+
+
 		if (lport != 0) {
 			struct inpcb *t;
 			uid_t u;
 
 #if !CONFIG_EMBEDDED
 			if (ntohs(lport) < IPPORT_RESERVED &&
-			    SIN(nam)->sin_addr.s_addr != 0) {
+			    SIN(nam)->sin_addr.s_addr != 0 &&
+			    !(inp->inp_flags2 & INP2_EXTERNAL_PORT)) {
 				cred = kauth_cred_proc_ref(p);
 				error = priv_check_cred(cred,
 				    PRIV_NETINET_RESERVEDPORT, 0);
@@ -834,6 +871,16 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 				}
 			}
 #endif /* !CONFIG_EMBEDDED */
+			/*
+			 * Check wether the process is allowed to bind to a restricted port
+			 */
+			if (!current_task_can_use_restricted_in_port(lport,
+			    so->so_proto->pr_protocol, PORT_FLAGS_BSD)) {
+				lck_rw_done(pcbinfo->ipi_lock);
+				socket_lock(so, 0);
+				return EADDRINUSE;
+			}
+
 			if (!IN_MULTICAST(ntohl(SIN(nam)->sin_addr.s_addr)) &&
 			    (u = kauth_cred_getuid(so->so_cred)) != 0 &&
 			    (t = in_pcblookup_local_and_cleanup(
@@ -845,7 +892,10 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 			    (u != kauth_cred_getuid(t->inp_socket->so_cred)) &&
 			    !(t->inp_socket->so_flags & SOF_REUSESHAREUID) &&
 			    (SIN(nam)->sin_addr.s_addr != INADDR_ANY ||
-			    t->inp_laddr.s_addr != INADDR_ANY)) {
+			    t->inp_laddr.s_addr != INADDR_ANY) &&
+			    (!(t->inp_flags2 & INP2_EXTERNAL_PORT) ||
+			    !(inp->inp_flags2 & INP2_EXTERNAL_PORT) ||
+			    uuid_compare(t->necp_client_uuid, inp->necp_client_uuid) != 0)) {
 				if ((t->inp_socket->so_flags &
 				    SOF_NOTIFYCONFLICT) &&
 				    !(so->so_flags & SOF_NOTIFYCONFLICT)) {
@@ -864,7 +914,10 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 			t = in_pcblookup_local_and_cleanup(pcbinfo,
 			    SIN(nam)->sin_addr, lport, wild);
 			if (t != NULL &&
-			    (reuseport & t->inp_socket->so_options) == 0) {
+			    (reuseport & t->inp_socket->so_options) == 0 &&
+			    (!(t->inp_flags2 & INP2_EXTERNAL_PORT) ||
+			    !(inp->inp_flags2 & INP2_EXTERNAL_PORT) ||
+			    uuid_compare(t->necp_client_uuid, inp->necp_client_uuid) != 0)) {
 #if INET6
 				if (SIN(nam)->sin_addr.s_addr != INADDR_ANY ||
 				    t->inp_laddr.s_addr != INADDR_ANY ||
@@ -894,6 +947,13 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 		u_short first, last;
 		int count;
 		bool found;
+
+		/*
+		 * Override wild = 1 for implicit bind (mainly used by connect)
+		 * For implicit bind (lport == 0), we always use an unused port,
+		 * so REUSEADDR|REUSEPORT don't apply
+		 */
+		wild = 1;
 
 		randomport = (so->so_flags & SOF_BINDRANDOMPORT) ||
 		    (so->so_type == SOCK_STREAM ? tcp_use_randomport :
@@ -967,6 +1027,14 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 				}
 				lport = htons(*lastport);
 
+				/*
+				 * Skip if this is a restricted port as we do not want to
+				 * restricted ports as ephemeral
+				 */
+				if (IS_RESTRICTED_IN_PORT(lport)) {
+					continue;
+				}
+
 				found = in_pcblookup_local_and_cleanup(pcbinfo,
 				    lookup_addr, lport, wild) == NULL;
 			} while (!found);
@@ -998,6 +1066,14 @@ in_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 					*lastport = first;
 				}
 				lport = htons(*lastport);
+
+				/*
+				 * Skip if this is a restricted port as we do not want to
+				 * restricted ports as ephemeral
+				 */
+				if (IS_RESTRICTED_IN_PORT(lport)) {
+					continue;
+				}
 
 				found = in_pcblookup_local_and_cleanup(pcbinfo,
 				    lookup_addr, lport, wild) == NULL;
@@ -1159,7 +1235,7 @@ apn_fallback_required(proc_t proc, struct socket *so, struct sockaddr_in *p_dstv
 
 		bzero(&sb, sizeof(struct stat64));
 		context = vfs_context_create(NULL);
-		vn_stat_error = vn_stat(proc->p_textvp, &sb, NULL, 1, context);
+		vn_stat_error = vn_stat(proc->p_textvp, &sb, NULL, 1, 0, context);
 		(void)vfs_context_rele(context);
 
 		if (vn_stat_error != 0 ||
@@ -2172,6 +2248,12 @@ in_pcblookup_hash_exists(struct inpcbinfo *pcbinfo, struct in_addr faddr,
 			continue;
 		}
 
+#if NECP
+		if (!necp_socket_is_allowed_to_recv_on_interface(inp, ifp)) {
+			continue;
+		}
+#endif /* NECP */
+
 		if (inp->inp_faddr.s_addr == faddr.s_addr &&
 		    inp->inp_laddr.s_addr == laddr.s_addr &&
 		    inp->inp_fport == fport &&
@@ -2209,6 +2291,12 @@ in_pcblookup_hash_exists(struct inpcbinfo *pcbinfo, struct in_addr faddr,
 		if (inp_restricted_recv(inp, ifp)) {
 			continue;
 		}
+
+#if NECP
+		if (!necp_socket_is_allowed_to_recv_on_interface(inp, ifp)) {
+			continue;
+		}
+#endif /* NECP */
 
 		if (inp->inp_faddr.s_addr == INADDR_ANY &&
 		    inp->inp_lport == lport) {
@@ -2295,6 +2383,12 @@ in_pcblookup_hash(struct inpcbinfo *pcbinfo, struct in_addr faddr,
 			continue;
 		}
 
+#if NECP
+		if (!necp_socket_is_allowed_to_recv_on_interface(inp, ifp)) {
+			continue;
+		}
+#endif /* NECP */
+
 		if (inp->inp_faddr.s_addr == faddr.s_addr &&
 		    inp->inp_laddr.s_addr == laddr.s_addr &&
 		    inp->inp_fport == fport &&
@@ -2333,6 +2427,12 @@ in_pcblookup_hash(struct inpcbinfo *pcbinfo, struct in_addr faddr,
 		if (inp_restricted_recv(inp, ifp)) {
 			continue;
 		}
+
+#if NECP
+		if (!necp_socket_is_allowed_to_recv_on_interface(inp, ifp)) {
+			continue;
+		}
+#endif /* NECP */
 
 		if (inp->inp_faddr.s_addr == INADDR_ANY &&
 		    inp->inp_lport == lport) {
@@ -2898,6 +2998,15 @@ inp_set_noexpensive(struct inpcb *inp)
 }
 
 void
+inp_set_noconstrained(struct inpcb *inp)
+{
+	inp->inp_flags2 |= INP2_NO_IFF_CONSTRAINED;
+
+	/* Blow away any cached route in the PCB */
+	ROUTE_RELEASE(&inp->inp_route);
+}
+
+void
 inp_set_awdl_unrestricted(struct inpcb *inp)
 {
 	inp->inp_flags2 |= INP2_AWDL_UNRESTRICTED;
@@ -3233,6 +3342,8 @@ inp_get_soprocinfo(struct inpcb *inp, struct so_procinfo *soprocinfo)
 	struct socket *so = inp->inp_socket;
 
 	soprocinfo->spi_pid = so->last_pid;
+	strlcpy(&soprocinfo->spi_proc_name[0], &inp->inp_last_proc_name[0],
+	    sizeof(soprocinfo->spi_proc_name));
 	if (so->last_pid != 0) {
 		uuid_copy(soprocinfo->spi_uuid, so->last_uuid);
 	}
@@ -3247,6 +3358,8 @@ inp_get_soprocinfo(struct inpcb *inp, struct so_procinfo *soprocinfo)
 		soprocinfo->spi_delegated = 0;
 		soprocinfo->spi_epid = so->last_pid;
 	}
+	strlcpy(&soprocinfo->spi_e_proc_name[0], &inp->inp_e_proc_name[0],
+	    sizeof(soprocinfo->spi_e_proc_name));
 }
 
 int
@@ -3479,6 +3592,10 @@ _inp_restricted_recv(struct inpcb *inp, struct ifnet *ifp)
 		return TRUE;
 	}
 
+	if (IFNET_IS_CONSTRAINED(ifp) && INP_NO_CONSTRAINED(inp)) {
+		return TRUE;
+	}
+
 	if (IFNET_IS_AWDL_RESTRICTED(ifp) && !INP_AWDL_UNRESTRICTED(inp)) {
 		return TRUE;
 	}
@@ -3545,6 +3662,10 @@ _inp_restricted_send(struct inpcb *inp, struct ifnet *ifp)
 		return TRUE;
 	}
 
+	if (IFNET_IS_CONSTRAINED(ifp) && INP_NO_CONSTRAINED(inp)) {
+		return TRUE;
+	}
+
 	if (IFNET_IS_AWDL_RESTRICTED(ifp) && !INP_AWDL_UNRESTRICTED(inp)) {
 		return TRUE;
 	}
@@ -3576,8 +3697,7 @@ inp_count_sndbytes(struct inpcb *inp, u_int32_t th_ack)
 	struct ifnet *ifp = inp->inp_last_outifp;
 	struct socket *so = inp->inp_socket;
 	if (ifp != NULL && !(so->so_flags & SOF_MP_SUBFLOW) &&
-	    (ifp->if_type == IFT_CELLULAR ||
-	    ifp->if_subfamily == IFNET_SUBFAMILY_WIFI)) {
+	    (ifp->if_type == IFT_CELLULAR || IFNET_IS_WIFI(ifp))) {
 		int32_t unsent;
 
 		so->so_snd.sb_flags |= SB_SNDBYTE_CNT;
@@ -3636,12 +3756,12 @@ inp_incr_sndbytes_unsent(struct socket *so, int32_t len)
 inline void
 inp_decr_sndbytes_unsent(struct socket *so, int32_t len)
 {
-	struct inpcb *inp = (struct inpcb *)so->so_pcb;
-	struct ifnet *ifp = inp->inp_last_outifp;
-
 	if (so == NULL || !(so->so_snd.sb_flags & SB_SNDBYTE_CNT)) {
 		return;
 	}
+
+	struct inpcb *inp = (struct inpcb *)so->so_pcb;
+	struct ifnet *ifp = inp->inp_last_outifp;
 
 	if (ifp != NULL) {
 		if (ifp->if_sndbyte_unsent >= len) {
@@ -3676,4 +3796,41 @@ inline void
 inp_get_activity_bitmap(struct inpcb *inp, activity_bitmap_t *ab)
 {
 	bcopy(&inp->inp_nw_activity, ab, sizeof(*ab));
+}
+
+void
+inp_update_last_owner(struct socket *so, struct proc *p, struct proc *ep)
+{
+	struct inpcb *inp = (struct inpcb *)so->so_pcb;
+
+	if (inp == NULL) {
+		return;
+	}
+
+	if (p != NULL) {
+		strlcpy(&inp->inp_last_proc_name[0], proc_name_address(p), sizeof(inp->inp_last_proc_name));
+	}
+	if (so->so_flags & SOF_DELEGATED) {
+		if (ep != NULL) {
+			strlcpy(&inp->inp_e_proc_name[0], proc_name_address(ep), sizeof(inp->inp_e_proc_name));
+		} else {
+			inp->inp_e_proc_name[0] = 0;
+		}
+	} else {
+		inp->inp_e_proc_name[0] = 0;
+	}
+}
+
+void
+inp_copy_last_owner(struct socket *so, struct socket *head)
+{
+	struct inpcb *inp = (struct inpcb *)so->so_pcb;
+	struct inpcb *head_inp = (struct inpcb *)head->so_pcb;
+
+	if (inp == NULL || head_inp == NULL) {
+		return;
+	}
+
+	strlcpy(&inp->inp_last_proc_name[0], &head_inp->inp_last_proc_name[0], sizeof(inp->inp_last_proc_name));
+	strlcpy(&inp->inp_e_proc_name[0], &head_inp->inp_e_proc_name[0], sizeof(inp->inp_e_proc_name));
 }

@@ -34,6 +34,7 @@
 #define I386_CPU_DATA
 
 #include <mach_assert.h>
+#include <machine/atomic.h>
 
 #include <kern/assert.h>
 #include <kern/kern_types.h>
@@ -436,7 +437,7 @@ get_active_thread_volatile(void)
 	CPU_DATA_GET(cpu_active_thread, thread_t)
 }
 
-static inline __pure2 thread_t
+static inline __attribute__((const)) thread_t
 get_active_thread(void)
 {
 	CPU_DATA_GET(cpu_active_thread, thread_t)
@@ -630,6 +631,7 @@ disable_preemption_internal(void)
 {
 	assert(get_preemption_level() >= 0);
 
+	os_compiler_barrier(release);
 #if defined(__clang__)
 	cpu_data_t GS_RELATIVE *cpu_data = (cpu_data_t GS_RELATIVE *)0UL;
 	cpu_data->cpu_preemption_level++;
@@ -638,6 +640,7 @@ disable_preemption_internal(void)
             :
             : "i" (offsetof(cpu_data_t, cpu_preemption_level)));
 #endif
+	os_compiler_barrier(acquire);
 	pltrace(FALSE);
 }
 
@@ -646,6 +649,7 @@ enable_preemption_internal(void)
 {
 	assert(get_preemption_level() > 0);
 	pltrace(TRUE);
+	os_compiler_barrier(release);
 #if defined(__clang__)
 	cpu_data_t GS_RELATIVE *cpu_data = (cpu_data_t GS_RELATIVE *)0UL;
 	if (0 == --cpu_data->cpu_preemption_level) {
@@ -660,6 +664,7 @@ enable_preemption_internal(void)
                         : "i" (offsetof(cpu_data_t, cpu_preemption_level))
                         : "eax", "ecx", "edx", "cc", "memory");
 #endif
+	os_compiler_barrier(acquire);
 }
 
 static inline void
@@ -668,6 +673,7 @@ enable_preemption_no_check(void)
 	assert(get_preemption_level() > 0);
 
 	pltrace(TRUE);
+	os_compiler_barrier(release);
 #if defined(__clang__)
 	cpu_data_t GS_RELATIVE *cpu_data = (cpu_data_t GS_RELATIVE *)0UL;
 	cpu_data->cpu_preemption_level--;
@@ -677,6 +683,7 @@ enable_preemption_no_check(void)
                         : "i" (offsetof(cpu_data_t, cpu_preemption_level))
                         : "cc", "memory");
 #endif
+	os_compiler_barrier(acquire);
 }
 
 static inline void

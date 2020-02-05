@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -224,11 +224,11 @@ cldt_t *dyn_ldts;
  * in the uber-space remapping window on the kernel.
  */
 struct fake_descriptor64 kernel_ldt_desc64 = {
-	0,
-	LDTSZ_MIN*sizeof(struct fake_descriptor) - 1,
-	0,
-	ACC_P | ACC_PL_K | ACC_LDT,
-	0
+	.offset64 = 0,
+	.lim_or_seg = LDTSZ_MIN * sizeof(struct fake_descriptor) - 1,
+	.size_or_IST = 0,
+	.access = ACC_P | ACC_PL_K | ACC_LDT,
+	.reserved = 0
 };
 
 /*
@@ -236,11 +236,11 @@ struct fake_descriptor64 kernel_ldt_desc64 = {
  * It is follows pattern of the KERNEL_LDT.
  */
 struct fake_descriptor64 kernel_tss_desc64 = {
-	0,
-	sizeof(struct x86_64_tss) - 1,
-	0,
-	ACC_P | ACC_PL_K | ACC_TSS,
-	0
+	.offset64 = 0,
+	.lim_or_seg = sizeof(struct x86_64_tss) - 1,
+	.size_or_IST = 0,
+	.access = ACC_P | ACC_PL_K | ACC_TSS,
+	.reserved = 0
 };
 
 /*
@@ -499,9 +499,6 @@ cpu_desc_load(cpu_data_t *cdp)
 	postcode(CPU_DESC_LOAD_TSS);
 	set_tr(KERNEL_TSS);
 
-#if GPROF // Hack to enable mcount to work on K64
-	__asm__ volatile ("mov %0, %%gs" : : "rm" ((unsigned short)(KERNEL_DS)));
-#endif
 	postcode(CPU_DESC_LOAD_EXIT);
 }
 
@@ -511,11 +508,8 @@ cpu_desc_load(cpu_data_t *cdp)
 void
 cpu_syscall_init(cpu_data_t *cdp)
 {
-#if MONOTONIC
-	mt_cpu_up(cdp);
-#else /* MONOTONIC */
 #pragma unused(cdp)
-#endif /* !MONOTONIC */
+
 	wrmsr64(MSR_IA32_SYSENTER_CS, SYSENTER_CS);
 	wrmsr64(MSR_IA32_SYSENTER_EIP, DBLMAP((uintptr_t) hi64_sysenter));
 	wrmsr64(MSR_IA32_SYSENTER_ESP, current_cpu_datap()->cpu_desc_index.cdi_sstku);

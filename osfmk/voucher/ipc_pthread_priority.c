@@ -97,7 +97,7 @@ ipc_pthread_priority_release(ipc_voucher_attr_manager_t __assert_only manager);
 /*
  * communication channel from voucher system to IPC_PTHREAD_PRIORITY
  */
-struct ipc_voucher_attr_manager ipc_pthread_priority_manager = {
+const struct ipc_voucher_attr_manager ipc_pthread_priority_manager = {
 	.ivam_release_value    = ipc_pthread_priority_release_value,
 	.ivam_get_value        = ipc_pthread_priority_get_value,
 	.ivam_extract_content  = ipc_pthread_priority_extract_content,

@@ -62,8 +62,8 @@ IODeviceMemory::arrayFromList(
 	IOItemCount         i;
 
 	array = OSArray::withCapacity( count );
-	if (0 == array) {
-		return 0;
+	if (NULL == array) {
+		return NULL;
 	}
 
 	for (i = 0; i < count; i++) {
@@ -74,7 +74,7 @@ IODeviceMemory::arrayFromList(
 			range->release();
 		} else {
 			array->release();
-			array = 0;
+			array = NULL;
 			break;
 		}
 	}

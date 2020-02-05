@@ -76,11 +76,47 @@ enum {
 
 #define DECMPFS_XATTR_NAME "com.apple.decmpfs" /* extended attribute to use for decmpfs */
 
+/*
+ * This single field is to be interpreted differently depending on the
+ * corresponding item type.
+ * For regular files: it is a 64bits-encoded logical size
+ * For directories: it is a 64bits-encoded number of children (ie st_nlink - 2)
+ * For packages: it is 40bits encoded size and 24bits number of children at root
+ */
+typedef struct __attribute__((packed)) {
+	uint64_t  value;
+} decmpfs_raw_item_size;
+
+#define DECMPFS_PKG_SIZE_MASK           0x000000ffffffffffULL
+#define DECMPFS_PKG_COUNT_MASK          0xffffff
+#define DECMPFS_PKG_CHLD_COUNT_SHIFT    40
+
+#define DECMPFS_PKG_SIZE(x)             ((x).value & DECMPFS_PKG_SIZE_MASK)
+#define DECMPFS_PKG_CHLD_COUNT(x)       ((uint32_t)(((x).value >> DECMPFS_PKG_CHLD_COUNT_SHIFT) & DECMPFS_PKG_COUNT_MASK))
+#define DECMPFS_PKG_VALUE_FROM_SIZE_COUNT(size, count) \
+	(((size) & DECMPFS_PKG_SIZE_MASK) | ((uint64_t)(count) << DECMPFS_PKG_CHLD_COUNT_SHIFT))
+
+/* Dataless file or directory */
+#define DATALESS_CMPFS_TYPE     0x80000001
+
+/* Dataless package, with number of root children and total size encoded on disk */
+#define DATALESS_PKG_CMPFS_TYPE 0x80000002
+
+
+static inline bool
+decmpfs_type_is_dataless(uint32_t cmp_type)
+{
+	return cmp_type == DATALESS_CMPFS_TYPE || cmp_type == DATALESS_PKG_CMPFS_TYPE;
+}
+
 typedef struct __attribute__((packed)) {
 	/* this structure represents the xattr on disk; the fields below are little-endian */
 	uint32_t compression_magic;
-	uint32_t compression_type; /* see the enum below */
-	uint64_t uncompressed_size;
+	uint32_t compression_type;   /* see the enum below */
+	union {
+		uint64_t uncompressed_size;  /* compatility accessor */
+		decmpfs_raw_item_size _size;
+	};
 	unsigned char attr_bytes[0]; /* the bytes of the attribute after the header */
 } decmpfs_disk_header;
 
@@ -89,9 +125,37 @@ typedef struct __attribute__((packed)) {
 	uint32_t attr_size;
 	uint32_t compression_magic;
 	uint32_t compression_type;
-	uint64_t uncompressed_size;
+	union {
+		/*
+		 * although uncompressed_size remains available for backward-compatibility reasons
+		 * the uncompressed size and nchildren should be accessed using the inline helpers
+		 * below
+		 */
+		uint64_t uncompressed_size;
+		decmpfs_raw_item_size _size;
+	};
 	unsigned char attr_bytes[0]; /* the bytes of the attribute after the header */
 } decmpfs_header;
+
+static inline uint64_t
+decmpfs_get_uncompressed_size(const decmpfs_header *hdr)
+{
+	if (hdr->compression_magic == DECMPFS_MAGIC && hdr->compression_type == DATALESS_PKG_CMPFS_TYPE) {
+		return DECMPFS_PKG_SIZE(hdr->_size);
+	}
+
+	return hdr->uncompressed_size;
+}
+
+static inline uint32_t
+decmpfs_get_directory_entries(const decmpfs_header *hdr)
+{
+	if (hdr->compression_magic == DECMPFS_MAGIC && hdr->compression_type == DATALESS_PKG_CMPFS_TYPE) {
+		return DECMPFS_PKG_CHLD_COUNT(hdr->_size);
+	}
+
+	return (uint32_t)hdr->uncompressed_size;
+}
 
 /* compression_type values */
 enum {
@@ -120,6 +184,8 @@ struct decmpfs_cnode {
 	uint32_t lockcount;
 	void    *lockowner;          /* cnode's lock owner (if a thread is currently holding an exclusive lock) */
 	uint64_t uncompressed_size __attribute__((aligned(8)));
+	uint64_t nchildren __attribute__((aligned(8))); /* for dataless directories (incl. packages) */
+	uint64_t total_size __attribute__((aligned(8)));/* for dataless directories (incl. packages) */
 	uint64_t decompression_flags;
 	lck_rw_t compressed_data_lock;
 };
@@ -156,6 +222,11 @@ void decmpfs_unlock_compressed_data(decmpfs_cnode *cp, int exclusive);
 uint32_t decmpfs_cnode_get_vnode_state(decmpfs_cnode *cp);
 void decmpfs_cnode_set_vnode_state(decmpfs_cnode *cp, uint32_t state, int skiplock);
 uint64_t decmpfs_cnode_get_vnode_cached_size(decmpfs_cnode *cp);
+uint64_t decmpfs_cnode_get_vnode_cached_nchildren(decmpfs_cnode *cp);
+uint64_t decmpfs_cnode_get_vnode_cached_total_size(decmpfs_cnode *cp);
+void decmpfs_cnode_set_vnode_cached_size(decmpfs_cnode *cp, uint64_t size);
+void decmpfs_cnode_set_vnode_cached_nchildren(decmpfs_cnode *cp, uint64_t nchildren);
+void decmpfs_cnode_set_vnode_cached_total_size(decmpfs_cnode *cp, uint64_t total_sz);
 uint32_t decmpfs_cnode_cmp_type(decmpfs_cnode *cp);
 
 int decmpfs_file_is_compressed(vnode_t vp, decmpfs_cnode *cp);

@@ -40,9 +40,3 @@ const char * gIOKernelConfigTables =
     "     'IOProbeScore'    = 0:32;"
     "   }"
     ")";
-
-/* This stuff is no longer used at all but was exported in prior
- * releases, so we'll keep them around for PPC/i386 only.
- * See libkern's OSKext.cpp for other symbols, which have been moved
- * there for sanity.
- */

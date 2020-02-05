@@ -128,4 +128,8 @@ typedef int     task_special_port_t;
 #define task_set_task_debug_control_port(task, port) \
 	        (task_set_special_port((task), TASK_DEBUG_CONTROL_PORT, (port)))
 
+#ifdef XNU_KERNEL_PRIVATE
+#define DEBUG_PORT_ENTITLEMENT "com.apple.private.debug_port"
+#endif /* XNU_KERNEL_PRIVATE */
+
 #endif  /* _MACH_TASK_SPECIAL_PORTS_H_ */

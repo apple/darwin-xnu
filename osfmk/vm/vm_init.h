@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -34,6 +34,6 @@
 
 extern void vm_mem_bootstrap(void);
 extern void vm_mem_init(void);
-extern void vm_map_steal_memory(void);;
+extern void vm_map_steal_memory(void);
 
 #endif /* VM_INIT_H */

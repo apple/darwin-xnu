@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -107,7 +107,7 @@ enum{
 
 class IOTimerEventSource : public IOEventSource
 {
-	OSDeclareDefaultStructors(IOTimerEventSource)
+	OSDeclareDefaultStructors(IOTimerEventSource);
 
 protected:
 /*! @var calloutEntry thread_call entry for preregistered thread callouts */
@@ -161,7 +161,7 @@ public:
 #endif /* __BLOCKS__ */
 
 	static IOTimerEventSource *
-	timerEventSource(OSObject *owner, Action action = 0);
+	timerEventSource(OSObject *owner, Action action = NULL);
 
 /*! @function timerEventSource
  *   @abstract Allocates and returns an initialized timer instance.
@@ -170,7 +170,7 @@ public:
  *   @param action 'C' Function pointer for the callout routine of this event source.
  */
 	static IOTimerEventSource *
-	timerEventSource(uint32_t options, OSObject *owner, Action action = 0);
+	timerEventSource(uint32_t options, OSObject *owner, Action action = NULL);
 
 #ifdef __BLOCKS__
 /*! @function timerEventSource
@@ -191,7 +191,7 @@ public:
 /*! @function init
  *   @abstract Initializes the timer with an owner, and a handler to call when the timeout expires.
  */
-	virtual bool init(OSObject *owner, Action action = 0);
+	virtual bool init(OSObject *owner, Action action = NULL);
 
 /*! @function enable
  *   @abstract Enables a call to the action.

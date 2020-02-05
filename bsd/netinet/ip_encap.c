@@ -76,7 +76,7 @@
  * Well, what can I say.  They impose different en/decapsulation mechanism
  * from each other, so they need separate protocol handler.  The only one
  * we can easily determine by protocol # is IPsec, which always has
- * AH/ESP/IPComp header right after outer IP header.
+ * AH/ESP header right after outer IP header.
  *
  * So, clearly good old protosw does not work for protocol #4 and #41.
  * The code will let you match protocol via src/dst address pair.

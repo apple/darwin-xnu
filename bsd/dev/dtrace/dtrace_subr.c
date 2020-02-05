@@ -24,10 +24,6 @@
  * Use is subject to license terms.
  */
 
-/*
- * #pragma ident	"@(#)dtrace_subr.c	1.8	07/06/05 SMI"
- */
-
 #include <stdarg.h>
 #include <string.h>
 #include <sys/malloc.h>
@@ -295,6 +291,44 @@ dtrace_invop_remove(int (*func)(uintptr_t, uintptr_t *, uintptr_t))
 	kmem_free(hdlr, sizeof (dtrace_invop_hdlr_t));
 }
 
+void*
+dtrace_ptrauth_strip(void *ptr, uint64_t key)
+{
+#pragma unused(key)
+#if __has_feature(ptrauth_calls)
+	/*
+	 * The key argument to ptrauth_strip needs to be a compile-time
+	 * constant
+	 */
+	switch (key) {
+	case ptrauth_key_asia:
+		return ptrauth_strip(ptr, ptrauth_key_asia);
+	case ptrauth_key_asib:
+		return ptrauth_strip(ptr, ptrauth_key_asib);
+	case ptrauth_key_asda:
+		return ptrauth_strip(ptr, ptrauth_key_asda);
+	case ptrauth_key_asdb:
+		return ptrauth_strip(ptr, ptrauth_key_asdb);
+	default:
+		return ptr;
+	}
+#else
+	return ptr;
+#endif // __has_feature(ptrauth_calls)
+}
+
+int
+dtrace_is_valid_ptrauth_key(uint64_t key)
+{
+#pragma unused(key)
+#if __has_feature(ptrauth_calls)
+	return (key == ptrauth_key_asia) || (key == ptrauth_key_asib) ||
+	    (key == ptrauth_key_asda) || (key == ptrauth_key_asdb);
+#else
+	return (0);
+#endif /* __has_feature(ptrauth_calls) */
+}
+
 static minor_t next_minor = 0;
 static dtrace_state_t* dtrace_clients[DTRACE_NCLIENTS] = {NULL};
 
@@ -303,7 +337,7 @@ minor_t
 dtrace_state_reserve(void)
 {
 	for (int i = 0; i < DTRACE_NCLIENTS; i++) {
-		minor_t minor = atomic_add_32(&next_minor, 1) % DTRACE_NCLIENTS;
+		minor_t minor = os_atomic_inc_orig(&next_minor, relaxed) % DTRACE_NCLIENTS;
 		if (dtrace_clients[minor] == NULL)
 			return minor;
 	}

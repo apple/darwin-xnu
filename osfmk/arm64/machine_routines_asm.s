@@ -35,6 +35,30 @@
 #include "assym.s"
 
 
+#if defined(HAS_APPLE_PAC)
+/*
+ * void
+ * ml_set_kernelkey_enabled(boolean_t enable)
+ *
+ * Toggle pointer auth kernel domain key diversification. Assembly to prevent compiler reordering.
+ *
+ */
+
+	.align 2
+	.globl EXT(ml_set_kernelkey_enabled)
+LEXT(ml_set_kernelkey_enabled)
+	mrs		x1, ARM64_REG_APCTL_EL1
+	orr		x2, x1, #APCTL_EL1_KernKeyEn
+	and 	x1, x1, #~APCTL_EL1_KernKeyEn
+	cmp		w0, #0
+	csel	x1, x1, x2, eq
+	msr		ARM64_REG_APCTL_EL1, x1
+	isb
+	ret
+
+#endif /* defined(HAS_APPLE_PAC) */
+
+
 
 /*	uint32_t get_fpscr(void):
  *		Returns (FPSR | FPCR).
@@ -131,369 +155,6 @@ Lupdate_mdscr_panic_str:
 	.asciz "MDSCR.KDE was set"
 
 
-#if __ARM_KERNEL_PROTECT__
-/*
- * __ARM_KERNEL_PROTECT__ adds two complications to TLB management:
- *
- * 1. As each pmap has two ASIDs, every TLB operation that targets an ASID must
- *   target both ASIDs for the pmap that owns the target ASID.
- *
- * 2. Any TLB operation targeting the kernel_pmap ASID (ASID 0) must target all
- *   ASIDs (as kernel_pmap mappings may be referenced while using an ASID that
- *   belongs to another pmap).  We expect these routines to be called with the
- *   EL0 ASID for the target; not the EL1 ASID.
- */
-#endif /* __ARM_KERNEL_PROTECT__ */
-
-.macro SYNC_TLB_FLUSH
-	dsb	ish
-	isb	sy
-.endmacro
-
-
-/*
- *	void sync_tlb_flush(void)
- *
- *		Synchronize one or more prior TLB flush operations
- */
-	.text
-	.align 2
-	.globl EXT(sync_tlb_flush)
-LEXT(sync_tlb_flush)
-	SYNC_TLB_FLUSH
-	ret
-
-
-.macro FLUSH_MMU_TLB
-	tlbi    vmalle1is
-.endmacro
-/*
- *	void flush_mmu_tlb_async(void)
- *
- *		Flush all TLBs, don't wait for completion
- */
-	.text
-	.align 2
-	.globl EXT(flush_mmu_tlb_async)
-LEXT(flush_mmu_tlb_async)
-	FLUSH_MMU_TLB
-	ret
-
-/*
- *	void flush_mmu_tlb(void)
- *
- *		Flush all TLBs
- */
-	.text
-	.align 2
-	.globl EXT(flush_mmu_tlb)
-LEXT(flush_mmu_tlb)
-	FLUSH_MMU_TLB
-	SYNC_TLB_FLUSH
-	ret
-
-.macro FLUSH_CORE_TLB
-	tlbi    vmalle1
-.endmacro
-
-/*
- *	void flush_core_tlb_async(void)
- *
- *		Flush local core TLB, don't wait for completion
- */
-	.text
-	.align 2
-	.globl EXT(flush_core_tlb_async)
-LEXT(flush_core_tlb_async)
-	FLUSH_CORE_TLB
-	ret
-
-/*
- *	void flush_core_tlb(void)
- *
- *		Flush local core TLB
- */
-	.text
-	.align 2
-	.globl EXT(flush_core_tlb)
-LEXT(flush_core_tlb)
-	FLUSH_CORE_TLB
-	SYNC_TLB_FLUSH
-	ret
-
-.macro FLUSH_MMU_TLB_ALLENTRIES
-#if __ARM_16K_PG__
-	and		x0, x0, #~0x3
-
-	/*
-	 * The code below is not necessarily correct.  From an overview of
-	 * the client code, the expected contract for TLB flushes is that
-	 * we will expand from an "address, length" pair to "start address,
-	 * end address" in the course of a TLB flush.  This suggests that
-	 * a flush for "X, X+4" is actually only asking for a flush of a
-	 * single 16KB page.  At the same time, we'd like to be prepared
-	 * for bad inputs (X, X+3), so add 3 and then truncate the 4KB page
-	 * number to a 16KB page boundary.  This should deal correctly with
-	 * unaligned inputs.
-	 *
-	 * If our expecations about client behavior are wrong however, this
-	 * will lead to occasional TLB corruption on platforms with 16KB
-	 * pages.
-	 */
-	add		x1, x1, #0x3
-	and		x1, x1, #~0x3
-#endif
-1: // Lflush_mmu_tlb_allentries_loop:
-	tlbi    vaae1is, x0
-	add		x0, x0, #(ARM_PGBYTES / 4096)	// Units are 4KB pages, as defined by the ISA
-	cmp		x0, x1
-	b.lt	1b // Lflush_mmu_tlb_allentries_loop
-.endmacro
-
-/*
- *	void flush_mmu_tlb_allentries_async(uint64_t, uint64_t)
- *
- *		Flush TLB entries, don't wait for completion
- */
-	.text
-	.align 2
-	.globl EXT(flush_mmu_tlb_allentries_async)
-LEXT(flush_mmu_tlb_allentries_async)
-	FLUSH_MMU_TLB_ALLENTRIES
-	ret
-
-/*
- *	void flush_mmu_tlb_allentries(uint64_t, uint64_t)
- *
- *		Flush TLB entries
- */
-	.globl EXT(flush_mmu_tlb_allentries)
-LEXT(flush_mmu_tlb_allentries)
-	FLUSH_MMU_TLB_ALLENTRIES
-	SYNC_TLB_FLUSH
-	ret
-
-.macro FLUSH_MMU_TLB_ENTRY
-#if __ARM_KERNEL_PROTECT__
-	/*
-	 * If we are flushing ASID 0, this is a kernel operation.  With this
-	 * ASID scheme, this means we should flush all ASIDs.
-	 */
-	lsr		x2, x0, #TLBI_ASID_SHIFT
-	cmp		x2, #0
-	b.eq		1f // Lflush_mmu_tlb_entry_globally
-
-	bic		x0, x0, #(1 << TLBI_ASID_SHIFT)
-	tlbi    vae1is, x0
-	orr		x0, x0, #(1 << TLBI_ASID_SHIFT)
-#endif /* __ARM_KERNEL_PROTECT__ */
-	tlbi    vae1is, x0
-#if __ARM_KERNEL_PROTECT__
-	b		2f // Lflush_mmu_tlb_entry_done
-1: // Lflush_mmu_tlb_entry_globally:
-	tlbi    vaae1is, x0
-2: // Lflush_mmu_tlb_entry_done
-#endif /* __ARM_KERNEL_PROTECT__ */
-.endmacro
-/*
- *	void flush_mmu_tlb_entry_async(uint64_t)
- *
- *		Flush TLB entry, don't wait for completion
- */
-	.text
-	.align 2
-	.globl EXT(flush_mmu_tlb_entry_async)
-LEXT(flush_mmu_tlb_entry_async)
-	FLUSH_MMU_TLB_ENTRY
-	ret
-
-/*
- *	void flush_mmu_tlb_entry(uint64_t)
- *
- *		Flush TLB entry
- */
-	.text
-	.align 2
-	.globl EXT(flush_mmu_tlb_entry)
-LEXT(flush_mmu_tlb_entry)
-	FLUSH_MMU_TLB_ENTRY
-	SYNC_TLB_FLUSH
-	ret
-
-.macro FLUSH_MMU_TLB_ENTRIES
-#if __ARM_16K_PG__
-	and		x0, x0, #~0x3
-
-	/*
-	 * The code below is not necessarily correct.  From an overview of
-	 * the client code, the expected contract for TLB flushes is that
-	 * we will expand from an "address, length" pair to "start address,
-	 * end address" in the course of a TLB flush.  This suggests that
-	 * a flush for "X, X+4" is actually only asking for a flush of a
-	 * single 16KB page.  At the same time, we'd like to be prepared
-	 * for bad inputs (X, X+3), so add 3 and then truncate the 4KB page
-	 * number to a 16KB page boundary.  This should deal correctly with
-	 * unaligned inputs.
-	 *
-	 * If our expecations about client behavior are wrong however, this
-	 * will lead to occasional TLB corruption on platforms with 16KB
-	 * pages.
-	 */
-	add		x1, x1, #0x3
-	and		x1, x1, #~0x3
-#endif /* __ARM_16K_PG__ */
-#if __ARM_KERNEL_PROTECT__
-	/*
-	 * If we are flushing ASID 0, this is a kernel operation.  With this
-	 * ASID scheme, this means we should flush all ASIDs.
-	 */
-	lsr		x2, x0, #TLBI_ASID_SHIFT
-	cmp		x2, #0
-	b.eq		2f // Lflush_mmu_tlb_entries_globally_loop
-
-	bic		x0, x0, #(1 << TLBI_ASID_SHIFT)
-#endif /* __ARM_KERNEL_PROTECT__ */
-1: // Lflush_mmu_tlb_entries_loop
-	tlbi    vae1is, x0
-#if __ARM_KERNEL_PROTECT__
-	orr		x0, x0, #(1 << TLBI_ASID_SHIFT)
-	tlbi    vae1is, x0
-	bic		x0, x0, #(1 << TLBI_ASID_SHIFT)
-#endif /* __ARM_KERNEL_PROTECT__ */
-	add		x0, x0, #(ARM_PGBYTES / 4096)	// Units are pages
-	cmp		x0, x1
-	b.lt		1b // Lflush_mmu_tlb_entries_loop
-#if __ARM_KERNEL_PROTECT__
-	b		3f // Lflush_mmu_tlb_entries_done
-2: // Lflush_mmu_tlb_entries_globally_loop:
-	tlbi	vaae1is, x0
-	add		x0, x0, #(ARM_PGBYTES / 4096)	// Units are pages
-	cmp		x0, x1
-	b.lt		2b // Lflush_mmu_tlb_entries_globally_loop
-3: // Lflush_mmu_tlb_entries_done
-#endif /* __ARM_KERNEL_PROTECT__ */
-.endmacro
-
-/*
- *	void flush_mmu_tlb_entries_async(uint64_t, uint64_t)
- *
- *		Flush TLB entries, don't wait for completion
- */
-	.text
-	.align 2
-	.globl EXT(flush_mmu_tlb_entries_async)
-LEXT(flush_mmu_tlb_entries_async)
-	FLUSH_MMU_TLB_ENTRIES
-	ret
-
-/*
- *	void flush_mmu_tlb_entries(uint64_t, uint64_t)
- *
- *		Flush TLB entries
- */
-	.text
-	.align 2
-	.globl EXT(flush_mmu_tlb_entries)
-LEXT(flush_mmu_tlb_entries)
-	FLUSH_MMU_TLB_ENTRIES
-	SYNC_TLB_FLUSH
-	ret
-
-.macro FLUSH_MMU_TLB_ASID
-#if __ARM_KERNEL_PROTECT__
-	/*
-	 * If we are flushing ASID 0, this is a kernel operation.  With this
-	 * ASID scheme, this means we should flush all ASIDs.
-	 */
-	lsr		x1, x0, #TLBI_ASID_SHIFT
-	cmp		x1, #0
-	b.eq		1f // Lflush_mmu_tlb_globally
-
-	bic		x0, x0, #(1 << TLBI_ASID_SHIFT)
-	tlbi    aside1is, x0
-	orr		x0, x0, #(1 << TLBI_ASID_SHIFT)
-#endif /* __ARM_KERNEL_PROTECT__ */
-	tlbi    aside1is, x0
-#if __ARM_KERNEL_PROTECT__
-	b		2f // Lflush_mmu_tlb_asid_done
-1: // Lflush_mmu_tlb_globally:
-	tlbi    vmalle1is
-2: // Lflush_mmu_tlb_asid_done:
-#endif /* __ARM_KERNEL_PROTECT__ */
-.endmacro
-
-/*
- *	void flush_mmu_tlb_asid_async(uint64_t)
- *
- *		Flush TLB entriesfor requested asid, don't wait for completion
- */
-	.text
-	.align 2
-	.globl EXT(flush_mmu_tlb_asid_async)
-LEXT(flush_mmu_tlb_asid_async)
-	FLUSH_MMU_TLB_ASID
-	ret
-
-/*
- *	void flush_mmu_tlb_asid(uint64_t)
- *
- *		Flush TLB entriesfor requested asid
- */
-	.text
-	.align 2
-	.globl EXT(flush_mmu_tlb_asid)
-LEXT(flush_mmu_tlb_asid)
-	FLUSH_MMU_TLB_ASID
-	SYNC_TLB_FLUSH
-	ret
-
-.macro FLUSH_CORE_TLB_ASID
-#if __ARM_KERNEL_PROTECT__
-	/*
-	 * If we are flushing ASID 0, this is a kernel operation.  With this
-	 * ASID scheme, this means we should flush all ASIDs.
-	 */
-	lsr		x1, x0, #TLBI_ASID_SHIFT
-	cmp		x1, #0
-	b.eq		1f // Lflush_core_tlb_asid_globally
-
-	bic		x0, x0, #(1 << TLBI_ASID_SHIFT)
-	tlbi	aside1, x0
-	orr		x0, x0, #(1 << TLBI_ASID_SHIFT)
-#endif /* __ARM_KERNEL_PROTECT__ */
-	tlbi	aside1, x0
-#if __ARM_KERNEL_PROTECT__
-	b		2f // Lflush_core_tlb_asid_done
-1: // Lflush_core_tlb_asid_globally:
-	tlbi	vmalle1
-2: // Lflush_core_tlb_asid_done:
-#endif /* __ARM_KERNEL_PROTECT__ */
-.endmacro
-
-/*
- *	void flush_core_tlb_asid_async(uint64_t)
- *
- *		Flush TLB entries for core for requested asid, don't wait for completion
- */
-	.text
-	.align 2
-	.globl EXT(flush_core_tlb_asid_async)
-LEXT(flush_core_tlb_asid_async)
-	FLUSH_CORE_TLB_ASID
-	ret
-/*
- *	void flush_core_tlb_asid(uint64_t)
- *
- *		Flush TLB entries for core for requested asid
- */
-	.text
-	.align 2
-	.globl EXT(flush_core_tlb_asid)
-LEXT(flush_core_tlb_asid)
-	FLUSH_CORE_TLB_ASID
-	SYNC_TLB_FLUSH
-	ret
-
 /*
  * 	Set MMU Translation Table Base Alternate
  */
@@ -566,7 +227,7 @@ LEXT(set_tcr)
 	cbnz	x1, L_set_tcr_panic
 #if defined(KERNEL_INTEGRITY_KTRR)
 	mov		x1, lr
-	bl		_pinst_set_tcr
+	bl		EXT(pinst_set_tcr)
 	mov		lr, x1
 #else
 	msr		TCR_EL1, x0
@@ -598,7 +259,7 @@ L_set_locked_reg_panic_str:
 #else
 #if defined(KERNEL_INTEGRITY_KTRR)
 	mov		x1, lr
-	bl		_pinst_set_tcr
+	bl		EXT(pinst_set_tcr)
 	mov		lr, x1
 #else
 	msr		TCR_EL1, x0
@@ -683,6 +344,11 @@ L_mmu_kvtop_wpreflight_invalid:
 	mrs		$0, TPIDR_EL1					// Load thread pointer
 	adrp	$2, $3@page						// Load the recovery handler address
 	add		$2, $2, $3@pageoff
+#if defined(HAS_APPLE_PAC)
+	add		$1, $0, TH_RECOVER
+	movk	$1, #PAC_DISCRIMINATOR_RECOVER, lsl 48
+	pacia	$2, $1							// Sign with IAKey + blended discriminator
+#endif
 
 	ldr		$1, [$0, TH_RECOVER]			// Save previous recovery handler
 	str		$2, [$0, TH_RECOVER]			// Set new signed recovery handler
@@ -744,34 +410,93 @@ LEXT(_bcopyin)
 	ARM64_STACK_EPILOG
 
 /*
- * int _copyin_word(const char *src, uint64_t *dst, vm_size_t len)
+ * int _copyin_atomic32(const char *src, uint32_t *dst)
  */
 	.text
 	.align 2
-	.globl EXT(_copyin_word)
-LEXT(_copyin_word)
+	.globl EXT(_copyin_atomic32)
+LEXT(_copyin_atomic32)
 	ARM64_STACK_PROLOG
 	PUSH_FRAME
 	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
-	cmp		x2, #4
-	b.eq	L_copyin_word_4
-	cmp		x2, #8
-	b.eq	L_copyin_word_8
-	mov		x0, EINVAL
-	b		L_copying_exit
-L_copyin_word_4:
 	ldr		w8, [x0]
-	b		L_copyin_word_store
-L_copyin_word_8:
-	ldr		x8, [x0]
-L_copyin_word_store:
-	str		x8, [x1]
+	str		w8, [x1]
 	mov		x0, #0
 	CLEAR_RECOVERY_HANDLER x10, x11
-L_copying_exit:
 	POP_FRAME
 	ARM64_STACK_EPILOG
 
+/*
+ * int _copyin_atomic32_wait_if_equals(const char *src, uint32_t value)
+ */
+	.text
+	.align 2
+	.globl EXT(_copyin_atomic32_wait_if_equals)
+LEXT(_copyin_atomic32_wait_if_equals)
+	ARM64_STACK_PROLOG
+	PUSH_FRAME
+	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
+	ldxr		w8, [x0]
+	cmp		w8, w1
+	mov		x0, ESTALE
+	b.ne		1f
+	mov		x0, #0
+	wfe
+1:
+	clrex
+	CLEAR_RECOVERY_HANDLER x10, x11
+	POP_FRAME
+	ARM64_STACK_EPILOG
+
+/*
+ * int _copyin_atomic64(const char *src, uint32_t *dst)
+ */
+	.text
+	.align 2
+	.globl EXT(_copyin_atomic64)
+LEXT(_copyin_atomic64)
+	ARM64_STACK_PROLOG
+	PUSH_FRAME
+	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
+	ldr		x8, [x0]
+	str		x8, [x1]
+	mov		x0, #0
+	CLEAR_RECOVERY_HANDLER x10, x11
+	POP_FRAME
+	ARM64_STACK_EPILOG
+
+
+/*
+ * int _copyout_atomic32(uint32_t value, char *dst)
+ */
+	.text
+	.align 2
+	.globl EXT(_copyout_atomic32)
+LEXT(_copyout_atomic32)
+	ARM64_STACK_PROLOG
+	PUSH_FRAME
+	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
+	str		w0, [x1]
+	mov		x0, #0
+	CLEAR_RECOVERY_HANDLER x10, x11
+	POP_FRAME
+	ARM64_STACK_EPILOG
+
+/*
+ * int _copyout_atomic64(uint64_t value, char *dst)
+ */
+	.text
+	.align 2
+	.globl EXT(_copyout_atomic64)
+LEXT(_copyout_atomic64)
+	ARM64_STACK_PROLOG
+	PUSH_FRAME
+	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
+	str		x0, [x1]
+	mov		x0, #0
+	CLEAR_RECOVERY_HANDLER x10, x11
+	POP_FRAME
+	ARM64_STACK_EPILOG
 
 
 /*
@@ -825,6 +550,11 @@ LEXT(_bcopyinstr)
 	mrs		x10, TPIDR_EL1				// Get thread pointer
 	ldr		x11, [x10, TH_RECOVER]		// Save previous recover
 
+#if defined(HAS_APPLE_PAC)
+	add		x5, x10, TH_RECOVER		// Sign new pointer with IAKey + blended discriminator
+	movk	x5, #PAC_DISCRIMINATOR_RECOVER, lsl 48
+	pacia	x4, x5
+#endif
 	str		x4, [x10, TH_RECOVER]		// Store new recover
 
 	mov		x4, #0						// x4 - total bytes copied
@@ -940,8 +670,8 @@ LEXT(arm_debug_set_cp14)
 LEXT(arm64_prepare_for_sleep)
 	PUSH_FRAME
 
-#if defined(APPLECYCLONE) || defined(APPLETYPHOON)
-	// <rdar://problem/15827409> CPU1 Stuck in WFIWT Because of MMU Prefetch
+#if defined(APPLETYPHOON)
+	// <rdar://problem/15827409>
 	mrs		x0, ARM64_REG_HID2                              // Read HID2
 	orr		x0, x0, #(ARM64_REG_HID2_disMMUmtlbPrefetch)    // Set HID.DisableMTLBPrefetch
 	msr		ARM64_REG_HID2, x0                              // Write HID2
@@ -1022,16 +752,16 @@ LEXT(arm64_force_wfi_clock_gate)
 
 
 
-#if defined(APPLECYCLONE) || defined(APPLETYPHOON)
+#if defined(APPLETYPHOON)
 
 	.text
 	.align 2
-	.globl EXT(cyclone_typhoon_prepare_for_wfi)
+	.globl EXT(typhoon_prepare_for_wfi)
 
-LEXT(cyclone_typhoon_prepare_for_wfi)
+LEXT(typhoon_prepare_for_wfi)
 	PUSH_FRAME
 
-	// <rdar://problem/15827409> CPU1 Stuck in WFIWT Because of MMU Prefetch
+	// <rdar://problem/15827409>
 	mrs		x0, ARM64_REG_HID2                              // Read HID2
 	orr		x0, x0, #(ARM64_REG_HID2_disMMUmtlbPrefetch)    // Set HID.DisableMTLBPrefetch
 	msr		ARM64_REG_HID2, x0                              // Write HID2
@@ -1044,11 +774,11 @@ LEXT(cyclone_typhoon_prepare_for_wfi)
 
 	.text
 	.align 2
-	.globl EXT(cyclone_typhoon_return_from_wfi)
-LEXT(cyclone_typhoon_return_from_wfi)
+	.globl EXT(typhoon_return_from_wfi)
+LEXT(typhoon_return_from_wfi)
 	PUSH_FRAME
 
-	// <rdar://problem/15827409> CPU1 Stuck in WFIWT Because of MMU Prefetch
+	// <rdar://problem/15827409>
 	mrs		x0, ARM64_REG_HID2                              // Read HID2
 	mov		x1, #(ARM64_REG_HID2_disMMUmtlbPrefetch)        //
 	bic		x0, x0, x1                                      // Clear HID.DisableMTLBPrefetchMTLBPrefetch
@@ -1204,7 +934,7 @@ LEXT(arm64_replace_bootstack)
 	// Set SP_EL1 to exception stack
 #if defined(KERNEL_INTEGRITY_KTRR)
 	mov		x1, lr
-	bl		_pinst_spsel_1
+	bl		EXT(pinst_spsel_1)
 	mov		lr, x1
 #else
 	msr		SPSel, #1
@@ -1233,5 +963,84 @@ LEXT(monitor_call)
 	ret
 #endif
 
+#ifdef HAS_APPLE_PAC
+/**
+ * void ml_sign_thread_state(arm_saved_state_t *ss, uint64_t pc,
+ *							 uint32_t cpsr, uint64_t lr, uint64_t x16,
+ *							 uint64_t x17)
+ */
+	.text
+	.align 2
+	.globl EXT(ml_sign_thread_state)
+LEXT(ml_sign_thread_state)
+	pacga	x1, x1, x0		/* PC hash (gkey + &arm_saved_state) */
+	/*
+	 * Mask off the carry flag so we don't need to re-sign when that flag is
+	 * touched by the system call return path.
+	 */
+	bic		x2, x2, PSR_CF
+	pacga	x1, x2, x1		/* SPSR hash (gkey + pc hash) */
+	pacga	x1, x3, x1		/* LR Hash (gkey + spsr hash) */
+	pacga	x1, x4, x1		/* X16 hash (gkey + lr hash) */
+	pacga	x1, x5, x1		/* X17 hash (gkey + x16 hash) */
+	str		x1, [x0, SS64_JOPHASH]
+	ret
+
+/**
+ * void ml_check_signed_state(arm_saved_state_t *ss, uint64_t pc,
+ *							  uint32_t cpsr, uint64_t lr, uint64_t x16,
+ *							  uint64_t x17)
+ */
+	.text
+	.align 2
+	.globl EXT(ml_check_signed_state)
+LEXT(ml_check_signed_state)
+	pacga	x1, x1, x0		/* PC hash (gkey + &arm_saved_state) */
+	/*
+	 * Mask off the carry flag so we don't need to re-sign when that flag is
+	 * touched by the system call return path.
+	 */
+	bic		x2, x2, PSR_CF
+	pacga	x1, x2, x1		/* SPSR hash (gkey + pc hash) */
+	pacga	x1, x3, x1		/* LR Hash (gkey + spsr hash) */
+	pacga	x1, x4, x1		/* X16 hash (gkey + lr hash) */
+	pacga	x1, x5, x1		/* X17 hash (gkey + x16 hash) */
+	ldr		x2, [x0, SS64_JOPHASH]
+	cmp		x1, x2
+	b.ne	Lcheck_hash_panic
+	ret
+Lcheck_hash_panic:
+	mov		x1, x0
+	adr		x0, Lcheck_hash_str
+	CALL_EXTERN panic_with_thread_kernel_state
+Lcheck_hash_str:
+	.asciz "JOP Hash Mismatch Detected (PC, CPSR, or LR corruption)"
+#endif /* HAS_APPLE_PAC */
+
+	.text
+	.align 2
+	.globl EXT(fill32_dczva)
+LEXT(fill32_dczva)
+0:
+	dc	zva, x0
+	add	x0, x0, #64
+	subs	x1, x1, #64
+	b.hi	0b
+	ret
+
+	.text
+	.align 2
+	.globl EXT(fill32_nt)
+LEXT(fill32_nt)
+	dup.4s	v0, w2
+0:
+	stnp	q0, q0, [x0]
+	stnp	q0, q0, [x0, #0x20]
+	stnp	q0, q0, [x0, #0x40]
+	stnp	q0, q0, [x0, #0x60]
+	add	x0, x0, #128
+	subs	x1, x1, #128
+	b.hi	0b
+	ret
 
 /* vim: set sw=4 ts=4: */

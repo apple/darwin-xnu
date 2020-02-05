@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -246,6 +246,7 @@ typedef struct mcache_obj {
 
 typedef struct mcache_bkt {
 	void            *bkt_next;      /* next bucket in list */
+	struct mcache_bkttype *bkt_type; /* bucket type */
 	void            *bkt_obj[1];    /* one or more objects */
 } mcache_bkt_t;
 
@@ -373,7 +374,7 @@ typedef struct mcache_audit {
 	} mca_trns[MCA_TRN_MAX];
 } mcache_audit_t;
 
-__private_extern__ int assfail(const char *, const char *, int);
+__private_extern__ int assfail(const char *, const char *, int) __abortlike;
 __private_extern__ void mcache_init(void);
 __private_extern__ unsigned int mcache_getflags(void);
 __private_extern__ unsigned int mcache_cache_line_size(void);
@@ -407,7 +408,7 @@ __private_extern__ void mcache_audit_free_verify_set(mcache_audit_t *,
     void *, size_t, size_t);
 __private_extern__ char *mcache_dump_mca(mcache_audit_t *);
 __private_extern__ void mcache_audit_panic(mcache_audit_t *, void *, size_t,
-    int64_t, int64_t);
+    int64_t, int64_t) __abortlike;
 
 extern int32_t total_sbmb_cnt;
 extern int32_t total_sbmb_cnt_floor;

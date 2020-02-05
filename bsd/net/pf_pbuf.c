@@ -28,6 +28,7 @@
 #include <sys/mcache.h>
 #include <kern/kern_types.h>
 #include <net/pf_pbuf.h>
+#include <net/pfvar.h>
 #include <netinet/in.h>
 
 void
@@ -90,6 +91,9 @@ pbuf_sync(pbuf_t *pbuf)
 		pbuf->pb_flowid = &m->m_pkthdr.pkt_flowid;
 		pbuf->pb_flags = &m->m_pkthdr.pkt_flags;
 		pbuf->pb_pftag = m_pftag(m);
+		pbuf->pb_pf_fragtag = pf_find_fragment_tag(m);
+		ASSERT((pbuf->pb_pf_fragtag == NULL) ||
+		    (pbuf->pb_pftag->pftag_flags & PF_TAG_REASSEMBLED));
 	} else if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
 		struct pbuf_memory *nm = &pbuf->pb_memory;
 
@@ -109,6 +113,7 @@ pbuf_sync(pbuf_t *pbuf)
 		pbuf->pb_flowid = &nm->pm_flowid;
 		pbuf->pb_flags = &nm->pm_flags;
 		pbuf->pb_pftag = &nm->pm_pftag;
+		pbuf->pb_pf_fragtag = &nm->pm_pf_fragtag;
 	} else {
 		panic("%s: bad pb_type: %d", __func__, pbuf->pb_type);
 	}
@@ -125,9 +130,10 @@ pbuf_to_mbuf(pbuf_t *pbuf, boolean_t release_ptr)
 		m = pbuf->pb_mbuf;
 		if (release_ptr) {
 			pbuf->pb_mbuf = NULL;
-			pbuf_destroy(pbuf);
 		}
 	} else if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
+		boolean_t fragtag = FALSE;
+
 		if (pbuf->pb_packet_len > (u_int)MHLEN) {
 			if (pbuf->pb_packet_len > (u_int)MCLBYTES) {
 				printf("%s: packet too big for cluster (%u)\n",
@@ -139,7 +145,7 @@ pbuf_to_mbuf(pbuf_t *pbuf, boolean_t release_ptr)
 			m = m_gethdr(M_DONTWAIT, MT_DATA);
 		}
 		if (m == NULL) {
-			return NULL;
+			goto done;
 		}
 
 		m_copyback(m, 0, pbuf->pb_packet_len, pbuf->pb_data);
@@ -153,16 +159,26 @@ pbuf_to_mbuf(pbuf_t *pbuf, boolean_t release_ptr)
 		if (pbuf->pb_pftag != NULL) {
 			struct pf_mtag *pftag = m_pftag(m);
 
-			if (pftag != NULL) {
-				*pftag = *pbuf->pb_pftag;
-			}
+			ASSERT(pftag != NULL);
+			*pftag = *pbuf->pb_pftag;
+			fragtag =
+			    ((pftag->pftag_flags & PF_TAG_REASSEMBLED) != 0);
 		}
 
-		if (release_ptr) {
-			pbuf_destroy(pbuf);
+		if (fragtag && pbuf->pb_pf_fragtag != NULL) {
+			if (pf_copy_fragment_tag(m, pbuf->pb_pf_fragtag,
+			    M_NOWAIT) == NULL) {
+				m_freem(m);
+				m = NULL;
+				goto done;
+			}
 		}
 	}
 
+done:
+	if (release_ptr) {
+		pbuf_destroy(pbuf);
+	}
 	return m;
 }
 
@@ -335,7 +351,7 @@ pbuf_copy_back(pbuf_t *pbuf, int off, int len, void *src)
 
 	if (pbuf->pb_type == PBUF_TYPE_MBUF) {
 		m_copyback(pbuf->pb_mbuf, off, len, src);
-	} else if (pbuf->pb_type == PBUF_TYPE_MBUF) {
+	} else if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
 		if (len) {
 			memcpy(&((uint8_t *)pbuf->pb_data)[off], src, len);
 		}
@@ -353,7 +369,7 @@ pbuf_copy_data(pbuf_t *pbuf, int off, int len, void *dst)
 
 	if (pbuf->pb_type == PBUF_TYPE_MBUF) {
 		m_copydata(pbuf->pb_mbuf, off, len, dst);
-	} else if (pbuf->pb_type == PBUF_TYPE_MBUF) {
+	} else if (pbuf->pb_type == PBUF_TYPE_MEMORY) {
 		if (len) {
 			memcpy(dst, &((uint8_t *)pbuf->pb_data)[off], len);
 		}

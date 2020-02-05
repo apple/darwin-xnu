@@ -127,7 +127,6 @@
  * +++
  */
 extern int thread_enable_fpe(thread_t act, int onoff);
-extern thread_t port_name_to_thread(mach_port_name_t port_name);
 extern kern_return_t get_signalact(task_t, thread_t *, int);
 extern unsigned int get_useraddr(void);
 extern boolean_t task_did_exec(task_t task);
@@ -154,11 +153,11 @@ kern_return_t semaphore_timedwait_trap_internal(mach_port_name_t, unsigned int, 
 kern_return_t semaphore_wait_signal_trap_internal(mach_port_name_t, mach_port_name_t, void (*)(kern_return_t));
 kern_return_t semaphore_wait_trap_internal(mach_port_name_t, void (*)(kern_return_t));
 
-static int      filt_sigattach(struct knote *kn, struct kevent_internal_s *kev);
+static int      filt_sigattach(struct knote *kn, struct kevent_qos_s *kev);
 static void     filt_sigdetach(struct knote *kn);
 static int      filt_signal(struct knote *kn, long hint);
-static int      filt_signaltouch(struct knote *kn, struct kevent_internal_s *kev);
-static int      filt_signalprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
+static int      filt_signaltouch(struct knote *kn, struct kevent_qos_s *kev);
+static int      filt_signalprocess(struct knote *kn, struct kevent_qos_s *kev);
 
 SECURITY_READ_ONLY_EARLY(struct filterops) sig_filtops = {
 	.f_attach = filt_sigattach,
@@ -996,7 +995,8 @@ __pthread_markcancel(__unused proc_t p,
 	int error = 0;
 	struct uthread *uth;
 
-	target_act = (thread_act_t)port_name_to_thread(uap->thread_port);
+	target_act = (thread_act_t)port_name_to_thread(uap->thread_port,
+	    PORT_TO_THREAD_IN_CURRENT_TASK);
 
 	if (target_act == THR_ACT_NULL) {
 		return ESRCH;
@@ -1264,7 +1264,8 @@ __pthread_kill(__unused proc_t p, struct __pthread_kill_args *uap,
 	int signum = uap->sig;
 	struct uthread *uth;
 
-	target_act = (thread_t)port_name_to_thread(uap->thread_port);
+	target_act = (thread_t)port_name_to_thread(uap->thread_port,
+	    PORT_TO_THREAD_NONE);
 
 	if (target_act == THREAD_NULL) {
 		return ESRCH;
@@ -1278,6 +1279,11 @@ __pthread_kill(__unused proc_t p, struct __pthread_kill_args *uap,
 
 	if (uth->uu_flag & UT_NO_SIGMASK) {
 		error = ESRCH;
+		goto out;
+	}
+
+	if ((thread_get_tag(target_act) & THREAD_TAG_WORKQUEUE) && !uth->uu_workq_pthread_kill_allowed) {
+		error = ENOTSUP;
 		goto out;
 	}
 
@@ -2048,6 +2054,7 @@ get_signalthread(proc_t p, int signum, thread_t * thr)
 	thread_t sig_thread;
 	struct task * sig_task = p->task;
 	kern_return_t kret;
+	bool skip_wqthreads = true;
 
 	*thr = THREAD_NULL;
 
@@ -2062,14 +2069,24 @@ get_signalthread(proc_t p, int signum, thread_t * thr)
 		}
 	}
 
+again:
 	TAILQ_FOREACH(uth, &p->p_uthlist, uu_list) {
 		if (((uth->uu_flag & UT_NO_SIGMASK) == 0) &&
 		    (((uth->uu_sigmask & mask) == 0) || (uth->uu_sigwait & mask))) {
-			if (check_actforsig(p->task, uth->uu_context.vc_thread, 1) == KERN_SUCCESS) {
-				*thr = uth->uu_context.vc_thread;
+			thread_t th = uth->uu_context.vc_thread;
+			if (skip_wqthreads && (thread_get_tag(th) & THREAD_TAG_WORKQUEUE)) {
+				/* Workqueue threads may be parked in the kernel unable to
+				 * deliver signals for an extended period of time, so skip them
+				 * in favor of pthreads in a first pass. (rdar://50054475). */
+			} else if (check_actforsig(p->task, th, 1) == KERN_SUCCESS) {
+				*thr = th;
 				return KERN_SUCCESS;
 			}
 		}
+	}
+	if (skip_wqthreads) {
+		skip_wqthreads = false;
+		goto again;
 	}
 	if (get_signalact(p->task, thr, 1) == KERN_SUCCESS) {
 		return KERN_SUCCESS;
@@ -2690,6 +2707,12 @@ psignal_with_reason(proc_t p, int signum, struct os_reason *signal_reason)
 }
 
 void
+psignal_sigkill_with_reason(proc_t p, struct os_reason *signal_reason)
+{
+	psignal_internal(p, NULL, NULL, 0, SIGKILL, signal_reason);
+}
+
+void
 psignal_locked(proc_t p, int signum)
 {
 	psignal_internal(p, NULL, NULL, PSIG_LOCKED, signum, NULL);
@@ -3269,6 +3292,7 @@ postsig_locked(int signum)
 		if ((ps->ps_signodefer & mask) == 0) {
 			ut->uu_sigmask |= mask;
 		}
+		sigset_t siginfo = ps->ps_siginfo;
 		if ((signum != SIGILL) && (signum != SIGTRAP) && (ps->ps_sigreset & mask)) {
 			if ((signum != SIGCONT) && (sigprop[signum] & SA_IGNORE)) {
 				p->p_sigignore |= mask;
@@ -3285,7 +3309,7 @@ postsig_locked(int signum)
 			ps->ps_code = 0;
 		}
 		OSIncrementAtomicLong(&p->p_stats->p_ru.ru_nsignals);
-		sendsig(p, catcher, signum, returnmask, code);
+		sendsig(p, catcher, signum, returnmask, code, siginfo);
 	}
 	proc_signalend(p, 1);
 }
@@ -3299,13 +3323,15 @@ postsig_locked(int signum)
  */
 
 static int
-filt_sigattach(struct knote *kn, __unused struct kevent_internal_s *kev)
+filt_sigattach(struct knote *kn, __unused struct kevent_qos_s *kev)
 {
 	proc_t p = current_proc();  /* can attach only to oneself */
 
 	proc_klist_lock();
 
-	kn->kn_ptr.p_proc = p;
+	kn->kn_proc = p;
+	kn->kn_flags |= EV_CLEAR; /* automatically set */
+	kn->kn_sdata = 0;         /* incoming data is ignored */
 
 	KNOTE_ATTACH(&p->p_klist, kn);
 
@@ -3323,10 +3349,10 @@ filt_sigattach(struct knote *kn, __unused struct kevent_internal_s *kev)
 static void
 filt_sigdetach(struct knote *kn)
 {
-	proc_t p = kn->kn_ptr.p_proc;
+	proc_t p = kn->kn_proc;
 
 	proc_klist_lock();
-	kn->kn_ptr.p_proc = NULL;
+	kn->kn_proc = NULL;
 	KNOTE_DETACH(&p->p_klist, kn);
 	proc_klist_unlock();
 }
@@ -3347,19 +3373,17 @@ filt_signal(struct knote *kn, long hint)
 		hint &= ~NOTE_SIGNAL;
 
 		if (kn->kn_id == (unsigned int)hint) {
-			kn->kn_data++;
+			kn->kn_hook32++;
 		}
 	} else if (hint & NOTE_EXIT) {
 		panic("filt_signal: detected NOTE_EXIT event");
 	}
 
-	return kn->kn_data != 0;
+	return kn->kn_hook32 != 0;
 }
 
 static int
-filt_signaltouch(
-	struct knote *kn,
-	struct kevent_internal_s *kev)
+filt_signaltouch(struct knote *kn, struct kevent_qos_s *kev)
 {
 #pragma unused(kev)
 
@@ -3370,7 +3394,7 @@ filt_signaltouch(
 	/*
 	 * No data to save - just capture if it is already fired
 	 */
-	res = (kn->kn_data > 0);
+	res = (kn->kn_hook32 > 0);
 
 	proc_klist_unlock();
 
@@ -3378,29 +3402,22 @@ filt_signaltouch(
 }
 
 static int
-filt_signalprocess(
-	struct knote *kn,
-	__unused struct filt_process_s *data,
-	struct kevent_internal_s *kev)
+filt_signalprocess(struct knote *kn, struct kevent_qos_s *kev)
 {
-	proc_klist_lock();
-
-	if (kn->kn_data == 0) {
-		proc_klist_unlock();
-		return 0;
-	}
+	int res = 0;
 
 	/*
 	 * Snapshot the event data.
-	 * All signal events are EV_CLEAR, so
-	 * add that and clear out the data field.
 	 */
-	*kev = kn->kn_kevent;
-	kev->flags |= EV_CLEAR;
-	kn->kn_data = 0;
 
+	proc_klist_lock();
+	if (kn->kn_hook32) {
+		knote_fill_kevent(kn, kev, kn->kn_hook32);
+		kn->kn_hook32 = 0;
+		res = 1;
+	}
 	proc_klist_unlock();
-	return 1;
+	return res;
 }
 
 void
@@ -3409,7 +3426,6 @@ bsd_ast(thread_t thread)
 	proc_t p = current_proc();
 	struct uthread *ut = get_bsdthread_info(thread);
 	int     signum;
-	user_addr_t pc;
 	static int bsd_init_done = 0;
 
 	if (p == NULL) {
@@ -3419,12 +3435,6 @@ bsd_ast(thread_t thread)
 	/* don't run bsd ast on exec copy or exec'ed tasks */
 	if (task_did_exec(current_task()) || task_is_exec_copy(current_task())) {
 		return;
-	}
-
-	if ((p->p_flag & P_OWEUPC) && (p->p_flag & P_PROFIL)) {
-		pc = get_useraddr();
-		addupc_task(p, pc, 1);
-		OSBitAndAtomic(~((uint32_t)P_OWEUPC), &p->p_flag);
 	}
 
 	if (timerisset(&p->p_vtimer_user.it_value)) {

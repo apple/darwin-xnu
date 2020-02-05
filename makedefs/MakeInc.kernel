@@ -31,11 +31,22 @@ do_build_setup::
 	$(_v)$(CAT) > $(OBJPATH)/compile_commands.json < /dev/null
 endif
 
+ifeq ($(BUILD_STATIC_LINK),1)
+ifeq ($(USE_LTO),1)
+# <rdar://problem/46252406>
+# To run LTO in the xnu project while linking the final result in KCB, without losing debugging info,
+# run ld -r on only the LTO bitcode object files to produce one mach-o for KCB to use, which is added
+# to the static link archive, along with the non-LTO objects (not linked, since ld -r on mach-o objects
+# does not preserve DWARF.)
+PRE_LTO=1
+endif
+endif
+
 #
 # Rules for the highly parallel "build" phase, where each build configuration
 # writes into their own $(TARGET) independent of other build configs
 #
-# There are 3 primary build outputs:
+# There are 4 primary build outputs:
 # 1) $(KERNEL_FILE_NAME).unstripped    (raw linked kernel, unstripped)
 # 2) $(KERNEL_FILE_NAME)               (stripped kernel, with optional CTF data)
 # 3) $(KERNEL_FILE_NAME).dSYM          (dSYM)
@@ -44,7 +55,7 @@ endif
 ifeq ($(BUILD_STATIC_LINK),1)
 
 KERNEL_STATIC_LINK_TARGETS = \
-        $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).a
+	$(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).a
 
 KERNEL_STATIC_LINK_DST = \
 			$(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).a             \
@@ -78,44 +89,81 @@ do_build_kernel_dSYM: $(TARGET)/$(KERNEL_FILE_NAME).dSYM
 .CFLAGS: ALWAYS
 	$(_v)$(REPLACECONTENTS) $@ $(KCC) $(CFLAGS) $(INCFLAGS)
 
-$(TARGET)/$(KERNEL_FILE_NAME): $(TARGET)/$(KERNEL_FILE_NAME).unstripped
-	@echo "$(ColorH)STRIP$(Color0)      $(ColorLF)$(@F)$(Color0)"
+$(TARGET)/$(KERNEL_FILE_NAME): $(TARGET)/$(KERNEL_FILE_NAME).unstripped $(TARGET)/$(KERNEL_FILE_NAME).dSYM
+	$(call makelog,$(ColorH)STRIP$(Color0)         $(ColorLF)$(@F)$(Color0))
 	$(_v)$(STRIP) $(STRIP_FLAGS) $< -o $@
 	$(_v)$(RM) $@.ctfdata
 ifeq ($(DO_CTFMERGE),1)
-	@echo "$(ColorH)CTFMERGE$(Color0)   $(ColorLF)$(@F)$(Color0)"
-	$(_v)$(FIND) $(TARGET)/ -name \*.ctf -size +0 |		\
-		$(XARGS) $(CTFMERGE) -l xnu -o $@ -Z $@.ctfdata || true
-endif
+	$(call makelog,$(ColorH)CTFCONVERT$(Color0)    $(ColorLF)$(@F)$(Color0))
+	$(_v)$(CTFCONVERT) -c -l xnu -u /xnu -o $@.ctf $(TARGET)/$(KERNEL_FILE_NAME).dSYM/Contents/Resources/DWARF/$(KERNEL_FILE_NAME)
+	$(call makelog,$(ColorH)CTFMERGE$(Color0)      $(ColorLF)$(@F)$(Color0))
+	$(_v)$(CTFMERGE) -l xnu -o $@ -Z $@.ctfdata $@.ctf
 	$(_v)if [ -s $@.ctfdata ]; then								\
-		echo "$(ColorH)CTFINSERT$(Color0)  $(ColorLF)$(@F)$(Color0)";					\
+		$(LOG) "$(ColorH)CTFINSERT$(Color0)     $(ColorLF)$(@F)$(Color0)";		\
 		$(CTFINSERT) $@	$(ARCH_FLAGS_$(CURRENT_ARCH_CONFIG))				\
 			     $@.ctfdata -o $@;							\
 	fi;
+endif
 	$(_v)$(LN) $(call function_convert_build_config_to_objdir,$(CURRENT_BUILD_CONFIG))/$(KERNEL_FILE_NAME) $(OBJROOT)/$(KERNEL_FILE_NAME)
 
 $(TARGET)/$(KERNEL_FILE_NAME).dSYM: $(TARGET)/$(KERNEL_FILE_NAME).unstripped
-	$(_v)echo "$(ColorH)DSYMUTIL$(Color0)   $(ColorLF)$(@F)$(Color0)"
+	$(call makelog,$(ColorH)DSYMUTIL$(Color0)      $(ColorLF)$(@F)$(Color0))
 	$(_v)$(DSYMUTIL) $(DSYMUTIL_FLAGS) $< -o $@
 	$(_v)$(MV) $@/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME).unstripped $@/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME)
 	$(_v)$(TOUCH) $@
 
-$(TARGET)/$(KERNEL_FILE_NAME).unstripped: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST),$(component)/$(CURRENT_KERNEL_CONFIG)/$(component).filelist)) lastkerneldataconst.o lastkernelconstructor.o $(SRCROOT)/config/version.c $(SRCROOT)/config/MasterVersion .LDFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
+$(TARGET)/$(KERNEL_FILE_NAME).unstripped: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST),$(component)/$(CURRENT_KERNEL_CONFIG)/$(component).filelist)) lastkerneldataconst.o lastkernelconstructor.o nonlto.o $(SRCROOT)/config/version.c $(SRCROOT)/config/MasterVersion .LDFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
 	$(_v)${MAKE} -f $(firstword $(MAKEFILE_LIST)) version.o
-	@echo "$(ColorL)LD$(Color0)  $(ColorLF)$(@F)$(Color0)"
+ifeq ($(PRE_LTO),1)
+	$(call makelog,$(ColorL)LTO$(Color0) $(ColorLF)$(@F)$(Color0))
+	$(_v)rm -f ltolink.filelist
+	$(_v)rm -f nonltolink.filelist
+	$(_v)files="$$($(CAT) $(filter %.filelist,$+)) version.o $(filter %.o,$+)"; \
+	for ofile in $$files; \
+	do \
+		hdr=$$(od -An -N 4 -t x4 $$ofile); \
+		if [ $$hdr == "0b17c0de" ]; \
+			then \
+				lto="$$lto$$ofile"$$'\n'; \
+			else \
+				nonlto="$$nonlto$$ofile"$$'\n'; \
+			fi; \
+	done; \
+	printf "$$lto" >ltolink.filelist; \
+	printf "$$nonlto" >nonltolink.filelist
+	$(_v)if [ -s ltolink.filelist ]; \
+	then \
+		$(LD) $($(addsuffix $(CURRENT_ARCH_CONFIG),ARCH_FLAGS_)) -r nonlto.o -filelist ltolink.filelist $(LDFLAGS_KERNEL_LTO) -Wl,-object_path_lto,$(TARGET)/justlto.o -o $(TARGET)/justlto.tmp.o && \
+		$(LD) $(LDFLAGS_KERNEL) $(LDFLAGS_KERNEL_EXPORTS) -filelist nonltolink.filelist $(TARGET)/justlto.o $(LDFLAGS_KERNEL_STRIP_LTO) -o $@ $(LD_KERNEL_LIBS) $(LD_KERNEL_ARCHIVES); \
+	else \
+		$(LD) $(LDFLAGS_KERNEL) $(LDFLAGS_KERNEL_EXPORTS) -filelist nonltolink.filelist -o $@ $(LD_KERNEL_LIBS) $(LD_KERNEL_ARCHIVES); \
+	fi
+else
+	$(call makelog,$(ColorL)LD$(Color0)  $(ColorLF)$(@F)$(Color0))
 	$(_v)$(CAT) $(filter %.filelist,$+) < /dev/null > link.filelist
 	$(_v)$(LD) $(LDFLAGS_KERNEL) $(LDFLAGS_KERNEL_EXPORTS) -filelist link.filelist version.o $(filter %.o,$+) -o $@ $(LD_KERNEL_LIBS) $(LD_KERNEL_ARCHIVES)
+endif
 
-$(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).a: $(addprefix $(TARGET)/,$(foreach component,$(COMPONENT_LIST),$(component)/$(CURRENT_KERNEL_CONFIG)/$(component).filelist)) lastkerneldataconst.o lastkernelconstructor.o $(TARGET)/$(KERNEL_FILE_NAME).unstripped .LDFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
-	@echo "$(ColorL)LIBTOOL$(Color0)    $(ColorLF)$(@F)$(Color0)"
+
+$(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).a:   $(TARGET)/$(KERNEL_FILE_NAME).unstripped .LDFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
+	$(call makelog,$(ColorL)LIBTOOL$(Color0)    $(ColorLF)$(@F)$(Color0))
 	$(_v)$(MKDIR) $(dir $@)
-	$(_v)$(CAT) $(filter %.filelist,$+) < /dev/null > libtool.filelist
-	$(_v)$(LIBTOOL) -ca -filelist libtool.filelist $(filter %.o,$+) version.o -o $@
+ifeq ($(PRE_LTO),1)
+	$(_v)$(LIBTOOL) -ca $(TARGET)/justlto.o -filelist nonltolink.filelist -o $@
+else
+	$(_v)$(LIBTOOL) -ca -filelist link.filelist version.o lastkerneldataconst.o lastkernelconstructor.o -o $@
+endif
 	$(_v)cp $(TARGET)/all-kpi.exp $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).exp
 	$(_v)cp $(TARGET)/all-alias.exp $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).alias.exp
 	$(_v)echo "$(LD_KERNEL_ARCHIVES)" >$(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).linkarchives
 	$(_v)echo "$(LDFLAGS_KERNEL) $(LD_KERNEL_LIBS)" >$(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).linkarguments
 	$(_v)$(LN) $(call function_convert_build_config_to_objdir,$(CURRENT_BUILD_CONFIG))/$(KERNEL_FILE_NAME).link $(OBJROOT)/$(KERNEL_FILE_NAME).link
+
+nonlto.o: .CFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
+nonlto.o:   $(SRCROOT)/libsa/nonlto.c
+	${C_RULE_0}
+	${C_RULE_1A}$< $(CFLAGS_NOLTO_FLAG)
+	${C_RULE_2}
 
 -include version.d
 version.o: .CFLAGS $(filter %/MakeInc.kernel,$(MAKEFILE_LIST))
@@ -155,10 +203,10 @@ lastkernelconstructor.o: $(SRCROOT)/libsa/lastkernelconstructor.c
 	${C_RULE_3}
 	${C_RULE_4}
 	$(_v)for last_file in ${LAST_FILES};				\
-        do							\
+	do							\
 		$(SEG_HACK) -s __DATA -n __LAST -o $${last_file}__ $${last_file} || exit 1; \
-                mv $${last_file}__ $${last_file} || exit 1;		\
-        done
+		mv $${last_file}__ $${last_file} || exit 1;		\
+	done
 
 #
 # Install rules. Each build config is classified as "primary" (the first
@@ -209,12 +257,11 @@ do_install_xnu_debug_files:	$(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/README.DEBUG-kern
 
 $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME): $(TARGET)/$(KERNEL_FILE_NAME) ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
+	$(call makelog,$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0) $(ColorLF)$(CURRENT_MACHINE_CONFIG_LC)$(Color0))")
 	$(_v)if [ $(OBJROOT)/.mach_kernel.timestamp -nt $@ ]; then	\
-		echo "$(ColorH)INSTALL$(Color0)    $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0) $(ColorLF)$(CURRENT_MACHINE_CONFIG_LC)$(Color0))\""; \
 		$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@;			\
 		cmdstatus=$$?;						\
 	else								\
-		echo "$(ColorH)INSTALL$(Color0)    $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0) $(ColorLF)$(CURRENT_MACHINE_CONFIG_LC)$(Color0))\""; \
 		$(LIPO) -create $@ $< -output $@;			\
 		cmdstatus=$$?;						\
 	fi;								\
@@ -224,27 +271,27 @@ ifeq ($(BUILD_STATIC_LINK),1)
 
 $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).a: $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).a ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
-	@echo "$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0)"
+	$(call makelog,$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0))
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).linkarguments: $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).linkarguments ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
-	@echo "$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0)"
+	$(call makelog,$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0))
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).linkarchives: $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).linkarchives ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
-	@echo "$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0)"
+	$(call makelog,$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0))
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).exp: $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).exp ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
-	@echo "$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0)"
+	$(call makelog,$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0))
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).alias.exp: $(TARGET)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).alias.exp ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
-	@echo "$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0)"
+	$(call makelog,$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0))
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 # BUILD_STATIC_LINK
@@ -252,12 +299,11 @@ endif
 
 $(SYMROOT)/$(KERNEL_FILE_NAME): $(TARGET)/$(KERNEL_FILE_NAME).unstripped ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
+	$(call makelog,$(ColorH)INSTALLSYM$(Color0)    $(ColorF)$(@F)$(Color0) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))")
 	$(_v)if [ $(OBJROOT)/.mach_kernel.timestamp -nt $@ ]; then		\
-		echo "$(ColorH)INSTALLSYM$(Color0) $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\"";	\
 		$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@;				\
 		cmdstatus=$$?;							\
 	else									\
-		echo "$(ColorH)INSTALLSYM$(Color0) $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\"";	\
 		$(LIPO) -create $@ $< -output $@;				\
 		cmdstatus=$$?;							\
 	fi;									\
@@ -269,7 +315,7 @@ $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).dS
 $(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros:                                          \
 $(TARGET)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/lldbmacros
 	$(_v)$(MKDIR) $(dir $@)
-	@echo "$(ColorH)INSTALLMACROS$(Color0) $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
+	$(call makelog,$(ColorH)INSTALLMACROS$(Color0) $(ColorF)$(@F)$(Color0) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))")
 	$(_v)$(CP) -r $< $(dir $@)
 	$(_v)$(TOUCH) $@
 
@@ -278,27 +324,26 @@ $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME).link/$(KERNEL_FILE_NAME).dS
 $(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_LLDBBOOTSTRAP_NAME):                        \
 $(TARGET)/$(KERNEL_FILE_NAME).dSYM/$(DSYMLLDBMACROSDIR)/$(KERNEL_LLDBBOOTSTRAP_NAME)
 	$(_v)$(MKDIR) $(dir $@)
-	@echo "$(ColorH)INSTALLMACROS$(Color0) $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
+	$(call makelog,$(ColorH)INSTALLMACROS$(Color0) $(ColorF)$(@F)$(Color0) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))")
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/README.DEBUG-kernel.txt: $(SRCROOT)/config/README.DEBUG-kernel.txt
 	$(_v)$(MKDIR) $(dir $@)
-	@echo "$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0)"
+	$(call makelog,$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0))
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 $(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMINFODIR)/Info.plist $(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMINFODIR)/Info.plist: $(TARGET)/$(KERNEL_FILE_NAME).dSYM/$(DSYMINFODIR)/Info.plist
 	$(_v)$(MKDIR) $(dir $@)
-	@echo "$(ColorH)INSTALLSYM$(Color0) $(ColorL)dSYM$(Color0) $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
+	$(call makelog,$(ColorH)INSTALLSYM$(Color0)    $(ColorL)dSYM$(Color0) $(ColorF)$(@F)$(Color0) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))")
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 $(SYMROOT)/$(KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME) $(DSTROOT)/$(INSTALL_KERNEL_SYM_DIR)/$(KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME): $(TARGET)/$(KERNEL_FILE_NAME).dSYM/$(DSYMDWARFDIR)/$(KERNEL_FILE_NAME) ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
+	$(call makelog,$(ColorH)INSTALLSYM$(Color0)    $(ColorL)dSYM$(Color0) $(ColorF)$(@F).dSYM$(ColorF) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))")
 	$(_v)if [ $(OBJROOT)/.mach_kernel.timestamp -nt $@ ]; then			\
-		echo "$(ColorH)INSTALLSYM$(Color0) $(ColorL)dSYM$(Color0) $(ColorF)$(@F).dSYM$(ColorF) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\"";	\
 		$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@;					\
 		cmdstatus=$$?;								\
 	else										\
-		echo "$(ColorH)INSTALLSYM$(Color0) $(ColorL)dSYM$(Color0) $(ColorF)$(@F).dSYM$(ColorF) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\"";	\
 		$(LIPO) -create $@ $< -output $@;					\
 		cmdstatus=$$?;								\
 	fi;										\
@@ -331,6 +376,7 @@ do_install_machine_specific_KDK_dSYM: \
 # symlink during incremental builds and create a new symlink inside
 # the target of the existing symlink
 do_installhdrs_mi:: $(DSTROOT)/$(KRESDIR)/Info.plist
+ifneq ($(INSTALLHDRS_SKIP_HOST),YES)
 	$(_v)$(MKDIR) $(DSTROOT)/$(KINCFRAME)
 	$(_v)$(MKDIR) $(DSTROOT)/$(KPINCDIR)
 	$(_v)$(MKDIR) $(DSTROOT)/$(KRESDIR)
@@ -345,17 +391,20 @@ do_installhdrs_mi:: $(DSTROOT)/$(KRESDIR)/Info.plist
 	$(_v)$(RM) $(DSTROOT)/$(KINCFRAME)/Resources
 	$(_v)$(LN) Versions/Current/Resources			\
 		   $(DSTROOT)/$(KINCFRAME)/Resources
+endif
 
 $(DSTROOT)/$(KRESDIR)/Info.plist: $(SOURCE)/EXTERNAL_HEADERS/Info.plist
+ifneq ($(INSTALLHDRS_SKIP_HOST),YES)
 	$(_v)$(MKDIR) $(DSTROOT)/$(KRESDIR)
 	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
 	$(_v)$(NEWVERS) $@ $(_vstdout)
 ifeq ($(USE_BINARY_PLIST),1)
 	$(_v)$(PLUTIL) -convert binary1 -o $@ $@
 endif
+endif
 
 $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(ALIAS_FILE_NAME): ALWAYS
-	$(_v)echo "$(ColorH)ALIAS$(Color0)      $(ColorF)$(@F)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0) $(ColorLF)$(CURRENT_MACHINE_CONFIG_LC)$(Color0) $(ColorLF)$(CURRENT_ALIAS_MACHINE_CONFIG_LC)$(Color0))\""
+	$(call makelog,$(ColorH)ALIAS$(Color0)         $(ColorF)$(@F)$(Color0) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0) $(ColorLF)$(CURRENT_MACHINE_CONFIG_LC)$(Color0) $(ColorLF)$(CURRENT_ALIAS_MACHINE_CONFIG_LC)$(Color0))")
 	$(_v)$(INSTALL) $(EXEC_INSTALL_FLAGS) $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(KERNEL_FILE_NAME) $@
 
 install_alias: $(DSTROOT)/$(INSTALL_KERNEL_DIR)/$(ALIAS_FILE_NAME)

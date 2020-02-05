@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -40,6 +40,9 @@
 #include <pexpert/boot.h>
 #include <pexpert/pexpert.h>
 
+#if defined(HAS_APPLE_PAC)
+#include <ptrauth.h>
+#endif
 
 #include <kern/misc_protos.h>
 #include <kern/startup.h>
@@ -135,7 +138,7 @@ extern uint64_t         last_hwaccess_thread;
 extern char  gTargetTypeBuffer[8];
 extern char  gModelTypeBuffer[32];
 
-decl_simple_lock_data(extern, clock_lock)
+decl_simple_lock_data(extern, clock_lock);
 extern struct timeval    gIOLastSleepTime;
 extern struct timeval    gIOLastWakeTime;
 extern boolean_t                 is_clock_configured;
@@ -262,6 +265,10 @@ print_one_backtrace(pmap_t pmap, vm_offset_t topfp, const char *cur_marker,
 		if (ppn != (ppnum_t)NULL) {
 			if (is_64_bit) {
 				lr = ml_phys_read_double_64(((((vm_offset_t)ppn) << PAGE_SHIFT)) | ((fp + FP_LR_OFFSET64) & PAGE_MASK));
+#if defined(HAS_APPLE_PAC)
+				/* return addresses on stack will be signed by arm64e ABI */
+				lr = (addr64_t) ptrauth_strip((void *)lr, ptrauth_key_return_address);
+#endif
 			} else {
 				lr = ml_phys_read_word(((((vm_offset_t)ppn) << PAGE_SHIFT)) | ((fp + FP_LR_OFFSET) & PAGE_MASK));
 			}
@@ -309,8 +316,7 @@ print_one_backtrace(pmap_t pmap, vm_offset_t topfp, const char *cur_marker,
 extern void panic_print_vnodes(void);
 
 static void
-do_print_all_backtraces(
-	const char      *message)
+do_print_all_backtraces(const char *message, uint64_t panic_options)
 {
 	int             logversion = PANICLOG_VERSION;
 	thread_t        cur_thread = current_thread();
@@ -337,7 +343,7 @@ do_print_all_backtraces(
 	}
 	panic_bt_depth++;
 
-	/* Truncate panic string to 1200 bytes -- WDT log can be ~1100 bytes */
+	/* Truncate panic string to 1200 bytes */
 	paniclog_append_noflush("Debugger message: %.1200s\n", message);
 	if (debug_enabled) {
 		paniclog_append_noflush("Device: %s\n",
@@ -437,8 +443,8 @@ do_print_all_backtraces(
 	}
 #endif
 
-	// Just print threads with high CPU usage for WDT timeouts
-	if (strncmp(message, "WDT timeout", 11) == 0) {
+	// Highlight threads that used high amounts of CPU in the panic log if requested (historically requested for watchdog panics)
+	if (panic_options & DEBUGGER_OPTION_PRINT_CPU_USAGE_PANICLOG) {
 		thread_t        top_runnable[5] = {0};
 		thread_t        thread;
 		int                     total_cpu_usage = 0;
@@ -483,7 +489,7 @@ do_print_all_backtraces(
 			}
 		} // Loop through highest priority runnable threads
 		paniclog_append_noflush("\n");
-	} // Check if message is "WDT timeout"
+	}
 
 	// print current task info
 	if (VALIDATE_PTR_LIST(cur_thread, cur_thread->task)) {
@@ -557,7 +563,7 @@ do_print_all_backtraces(
 			kdp_snapshot_preflight(-1, stackshot_begin_loc, bytes_remaining - end_marker_bytes,
 			    (STACKSHOT_GET_GLOBAL_MEM_STATS | STACKSHOT_SAVE_LOADINFO | STACKSHOT_KCDATA_FORMAT |
 			    STACKSHOT_ENABLE_BT_FAULTING | STACKSHOT_ENABLE_UUID_FAULTING | STACKSHOT_FROM_PANIC |
-			    STACKSHOT_NO_IO_STATS | STACKSHOT_THREAD_WAITINFO), &kc_panic_data, 0);
+			    STACKSHOT_NO_IO_STATS | STACKSHOT_THREAD_WAITINFO | STACKSHOT_COLLECT_SHAREDCACHE_LAYOUT), &kc_panic_data, 0);
 			err = do_stackshot(NULL);
 			bytes_traced = kdp_stack_snapshot_bytes_traced();
 			if (bytes_traced > 0 && !err) {
@@ -605,7 +611,7 @@ do_print_all_backtraces(
  * Entry to print_all_backtraces is serialized by the debugger lock
  */
 static void
-print_all_backtraces(const char *message)
+print_all_backtraces(const char *message, uint64_t panic_options)
 {
 	unsigned int initial_not_in_kdp = not_in_kdp;
 
@@ -620,7 +626,7 @@ print_all_backtraces(const char *message)
 	 * not_in_kdp.
 	 */
 	not_in_kdp = 0;
-	do_print_all_backtraces(message);
+	do_print_all_backtraces(message, panic_options);
 
 	not_in_kdp = initial_not_in_kdp;
 
@@ -663,10 +669,20 @@ panic_print_symbol_name(vm_address_t search)
 
 void
 SavePanicInfo(
-	const char *message, __unused void *panic_data, __unused uint64_t panic_options)
+	const char *message, __unused void *panic_data, uint64_t panic_options)
 {
-	/* This should be initialized by the time we get here */
-	assert(panic_info->eph_panic_log_offset != 0);
+	/*
+	 * This should be initialized by the time we get here, but
+	 * if it is not, asserting about it will be of no use (it will
+	 * come right back to here), so just loop right here and now.
+	 * This prevents early-boot panics from becoming recursive and
+	 * thus makes them easier to debug. If you attached to a device
+	 * and see your PC here, look down a few frames to see your
+	 * early-boot panic there.
+	 */
+	while (!panic_info || panic_info->eph_panic_log_offset == 0) {
+		;
+	}
 
 	if (panic_options & DEBUGGER_OPTION_PANICLOGANDREBOOT) {
 		panic_info->eph_panic_flags  |= EMBEDDED_PANIC_HEADER_FLAG_BUTTON_RESET_PANIC;
@@ -699,7 +715,7 @@ SavePanicInfo(
 
 	PanicInfoSaved = TRUE;
 
-	print_all_backtraces(message);
+	print_all_backtraces(message, panic_options);
 
 	assert(panic_info->eph_panic_log_len != 0);
 	panic_info->eph_other_log_len = PE_get_offset_into_panic_region(debug_buf_ptr) - panic_info->eph_other_log_offset;
@@ -742,6 +758,20 @@ paniclog_flush()
 	PESavePanicInfo((unsigned char *)gPanicBase, panicbuf_length);
 
 	PE_sync_panic_buffers();
+}
+
+/*
+ * @function _was_in_userspace
+ *
+ * @abstract Unused function used to indicate that a CPU was in userspace
+ * before it was IPI'd to enter the Debugger context.
+ *
+ * @discussion This function should never actually be called.
+ */
+static void __attribute__((__noreturn__))
+_was_in_userspace(void)
+{
+	panic("%s: should not have been invoked.", __FUNCTION__);
 }
 
 /*
@@ -814,7 +844,7 @@ DebuggerXCallEnter(
 			}
 
 			if (KERN_SUCCESS == cpu_signal(target_cpu_datap, SIGPdebug, (void *)NULL, NULL)) {
-				(void)hw_atomic_add(&debugger_sync, 1);
+				os_atomic_inc(&debugger_sync, relaxed);
 			} else {
 				cpu_signal_failed = true;
 				kprintf("cpu_signal failed in DebuggerXCallEnter\n");
@@ -951,16 +981,16 @@ DebuggerXCall(
 
 	if (save_context) {
 		/* Save the interrupted context before acknowledging the signal */
-		*state = *regs;
+		copy_signed_thread_state(state, regs);
 	} else if (regs) {
 		/* zero old state so machine_trace_thread knows not to backtrace it */
 		set_saved_state_fp(state, 0);
-		set_saved_state_pc(state, 0);
+		set_saved_state_pc(state, (register_t)&_was_in_userspace);
 		set_saved_state_lr(state, 0);
 		set_saved_state_sp(state, 0);
 	}
 
-	(void)hw_atomic_sub(&debugger_sync, 1);
+	os_atomic_dec(&debugger_sync, relaxed);
 	__builtin_arm_dmb(DMB_ISH);
 	while (mp_kdp_trap) {
 		;

@@ -7,6 +7,8 @@
 #include <darwintest.h>
 #include <stdlib.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 #if !defined(CS_OPS_CLEARPLATFORM)
 #define CS_OPS_CLEARPLATFORM 13
 #endif

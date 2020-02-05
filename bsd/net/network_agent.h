@@ -108,15 +108,22 @@ struct netagent_assign_nexus_message {
 
 #define NETAGENT_MAX_DATA_SIZE  4096
 
-#define NETAGENT_FLAG_REGISTERED                0x0001  // Agent is registered
-#define NETAGENT_FLAG_ACTIVE                    0x0002  // Agent is active
-#define NETAGENT_FLAG_KERNEL_ACTIVATED          0x0004  // Agent can be activated by kernel activity
-#define NETAGENT_FLAG_USER_ACTIVATED            0x0008  // Agent can be activated by system call (netagent_trigger)
-#define NETAGENT_FLAG_VOLUNTARY                 0x0010  // Use of agent is optional
-#define NETAGENT_FLAG_SPECIFIC_USE_ONLY         0x0020  // Agent should only be used and activated when specifically required
+#define NETAGENT_FLAG_REGISTERED                0x0001 // Agent is registered
+#define NETAGENT_FLAG_ACTIVE                    0x0002 // Agent is active
+#define NETAGENT_FLAG_KERNEL_ACTIVATED          0x0004 // Agent can be activated by kernel activity
+#define NETAGENT_FLAG_USER_ACTIVATED            0x0008 // Agent can be activated by system call (netagent_trigger)
+#define NETAGENT_FLAG_VOLUNTARY                 0x0010 // Use of agent is optional
+#define NETAGENT_FLAG_SPECIFIC_USE_ONLY         0x0020 // Agent should only be used and activated when specifically required
 #define NETAGENT_FLAG_NETWORK_PROVIDER          0x0040 // Agent provides network access
 #define NETAGENT_FLAG_NEXUS_PROVIDER            0x0080 // Agent provides a skywalk nexus
 #define NETAGENT_FLAG_SUPPORTS_BROWSE           0x0100 // Assertions will cause agent to fill in browse endpoints
+#define NETAGENT_FLAG_REQUIRES_ASSERT           0x0200 // Assertions are expected to be taken against this agent
+#define NETAGENT_FLAG_NEXUS_LISTENER            0x0400 // Nexus supports listeners
+#define NETAGENT_FLAG_UPDATE_IMMEDIATELY        0x0800 // Updates the clients without waiting for a leeway
+#define NETAGENT_FLAG_CUSTOM_ETHER_NEXUS        0x2000 // Agent provides a custom ethertype nexus
+#define NETAGENT_FLAG_CUSTOM_IP_NEXUS           0x4000 // Agent provides a custom IP nexus
+#define NETAGENT_FLAG_INTERPOSE_NEXUS           0x8000 // Agent provides an interpose nexus
+#define NETAGENT_FLAG_SUPPORTS_RESOLVE          0x10000 // Assertions will cause agent to fill in resolved endpoints
 
 #define NETAGENT_NEXUS_MAX_REQUEST_TYPES                        16
 #define NETAGENT_NEXUS_MAX_RESOLUTION_TYPE_PAIRS        16
@@ -130,9 +137,11 @@ struct netagent_assign_nexus_message {
 #define NETAGENT_NEXUS_ENDPOINT_TYPE_ADDRESS    1
 #define NETAGENT_NEXUS_ENDPOINT_TYPE_HOST               2
 #define NETAGENT_NEXUS_ENDPOINT_TYPE_BONJOUR    3
+#define NETAGENT_NEXUS_ENDPOINT_TYPE_SRV        5
 
 #define NETAGENT_NEXUS_FLAG_SUPPORTS_USER_PACKET_POOL   0x1
 #define NETAGENT_NEXUS_FLAG_ASSERT_UNSUPPORTED                  0x2 // No calls to assert the agent are required
+#define NETAGENT_NEXUS_FLAG_SHOULD_USE_EVENT_RING       0x4 // indicates that nexus agent should use event rings
 
 struct netagent_nexus {
 	u_int32_t       frame_type;
@@ -206,12 +215,14 @@ struct netagentlist_req64 {
 	user64_addr_t   data __attribute__((aligned(8)));
 };
 
-struct necp_client_nexus_parameters;
+struct necp_client_agent_parameters;
 
 // Kernel accessors
 extern void netagent_post_updated_interfaces(uuid_t uuid); // To be called from interface ioctls
 
 extern u_int32_t netagent_get_flags(uuid_t uuid);
+
+extern errno_t netagent_set_flags(uuid_t uuid, u_int32_t flags);
 
 extern u_int32_t netagent_get_generation(uuid_t uuid);
 
@@ -226,7 +237,7 @@ extern int netagent_client_message_with_params(uuid_t agent_uuid,
     pid_t pid,
     void *handle,
     u_int8_t message_type,
-    struct necp_client_nexus_parameters *parameters,
+    struct necp_client_agent_parameters *parameters,
     void **assigned_results,
     size_t *assigned_results_length);
 
@@ -249,7 +260,7 @@ struct netagent_nexus_agent {
 #define NETAGENT_EVENT_NEXUS_FLOW_REMOVE                        NETAGENT_MESSAGE_TYPE_CLOSE_NEXUS
 #define NETAGENT_EVENT_NEXUS_FLOW_ABORT                         NETAGENT_MESSAGE_TYPE_ABORT_NEXUS
 
-typedef errno_t (*netagent_event_f)(u_int8_t event, uuid_t necp_client_uuid, pid_t pid, void *necp_handle, void *context, struct necp_client_nexus_parameters *parameters, void **assigned_results, size_t *assigned_results_length);
+typedef errno_t (*netagent_event_f)(u_int8_t event, uuid_t necp_client_uuid, pid_t pid, void *necp_handle, void *context, struct necp_client_agent_parameters *parameters, void **assigned_results, size_t *assigned_results_length);
 
 extern netagent_session_t netagent_create(netagent_event_f event_handler, void *handle);
 

@@ -14,6 +14,8 @@
 #include <sysexits.h>
 #include <err.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 /*
  * Test to validate that suspended-spawn DTRTs when a SIGKILL is recieved
  * while the process is waiting for SIGCONT.

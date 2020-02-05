@@ -86,17 +86,44 @@ extern int testbit(
 	int             which,
 	int             *bitmap);
 
-/* Move an aligned 32 or 64-bit word from user space to kernel space
+/*
+ * Move an aligned 32 or 64-bit word from user space to kernel space
  * using a single read instruction
- *
- * when reading a 32-bit word, the value is 0-extended into the kernel space
- * 64-bit buffer passed as `kernel_addr`
- * (think `*kernel_addr = *(uint32_t *)user_addr`)
  */
-extern int copyin_word(
+extern int copyin_atomic32(
 	const user_addr_t   user_addr,
-	uint64_t            *kernel_addr,
-	vm_size_t           nbytes);
+	uint32_t            *kernel_addr);
+
+extern int copyin_atomic64(
+	const user_addr_t   user_addr,
+	uint64_t            *kernel_addr);
+
+/*
+ * Does an atomic copyin at the specified user_address and compares
+ * it to the passed in value, and if it matches, waits.
+ *
+ * This is used to implement adaptive spinning for userspace synchronization
+ *
+ * Returns:
+ * 0:       the value mached, and it paused efficiently for the platform
+ * ESTALE:  the value didn't match, and it returned immediately
+ * other:   the copyin failed (EFAULT, EINVAL, ...)
+ */
+extern int copyin_atomic32_wait_if_equals(
+	const user_addr_t   user_addr,
+	uint32_t            value);
+
+/*
+ * Move a 32 or 64-bit word from kernel space to user space
+ * using a single write instruction
+ */
+extern int copyout_atomic32(
+	uint32_t            u32,
+	user_addr_t         user_addr);
+
+extern int copyout_atomic64(
+	uint64_t            u64,
+	user_addr_t         user_addr);
 
 /* Move a NUL-terminated string from a user space to kernel space */
 extern int copyinstr(
@@ -120,9 +147,6 @@ extern int copyoutmsg(
 /* Invalidate copy window(s) cache */
 extern void inval_copy_windows(thread_t);
 extern void copy_window_fault(thread_t, vm_map_t, int);
-
-extern int copyin_validate(const user_addr_t, uintptr_t, vm_size_t);
-extern int copyout_validate(uintptr_t, const user_addr_t, vm_size_t);
 
 extern int sscanf(const char *input, const char *fmt, ...) __scanflike(2, 3);
 

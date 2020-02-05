@@ -104,6 +104,10 @@ struct gfp_crarg {
 	u_int gca_attrs;
 };
 
+#ifdef OS_REFCNT_DEBUG
+extern struct os_refgrp f_iocount_refgrp;
+#endif
+
 static struct fileproc *
 guarded_fileproc_alloc_init(void *crarg)
 {
@@ -115,7 +119,11 @@ guarded_fileproc_alloc_init(void *crarg)
 	}
 
 	bzero(gfp, sizeof(*gfp));
-	gfp->gf_fileproc.f_flags = FTYPE_GUARDED;
+
+	struct fileproc *fp = &gfp->gf_fileproc;
+	os_ref_init(&fp->f_iocount, &f_iocount_refgrp);
+	fp->f_flags = FTYPE_GUARDED;
+
 	gfp->gf_magic = GUARDED_FILEPROC_MAGIC;
 	gfp->gf_guard = aarg->gca_guard;
 	gfp->gf_attrs = aarg->gca_attrs;
@@ -172,7 +180,7 @@ fp_lookup_guarded(proc_t p, int fd, guardid_t guard,
  * if (FP_ISGUARDED(fp, GUARD_CLOSE)) {
  *      error = fp_guard_exception(p, fd, fp, kGUARD_EXC_CLOSE);
  *      proc_fdunlock(p);
- *      return (error);
+ *      return error;
  * }
  */
 
@@ -211,7 +219,7 @@ fp_guard_exception(proc_t p, int fd, struct fileproc *fp, u_int flavor)
 	mach_exception_subcode_t subcode = gfp->gf_guard;
 
 	thread_t t = current_thread();
-	thread_guard_violation(t, code, subcode);
+	thread_guard_violation(t, code, subcode, TRUE);
 	return EPERM;
 }
 
@@ -413,7 +421,7 @@ guarded_kqueue_np(proc_t p, struct guarded_kqueue_np_args *uap, int32_t *retval)
 		return EINVAL;
 	}
 
-	return kqueue_body(p, guarded_fileproc_alloc_init, &crarg, retval);
+	return kqueue_internal(p, guarded_fileproc_alloc_init, &crarg, retval);
 }
 
 /*
@@ -636,14 +644,14 @@ restart:
 			proc_fdlock(p);
 
 			switch (error = fp_tryswap(p, fd, nfp)) {
-			case 0: /* guarded-ness comes with side-effects */
+			case 0: /* success; guarded-ness comes with side-effects */
+				fp = NULL;
 				gfp = FP_TO_GFP(nfp);
 				if (gfp->gf_attrs & GUARD_CLOSE) {
 					FDFLAGS_SET(p, fd, UF_FORKCLOSE);
 				}
 				FDFLAGS_SET(p, fd, UF_EXCLOSE);
 				(void) fp_drop(p, fd, nfp, 1);
-				fileproc_free(fp);
 				break;
 			case EKEEPLOOKING: /* f_iocount indicates a collision */
 				(void) fp_drop(p, fd, fp, 1);
@@ -688,7 +696,8 @@ restart:
 			proc_fdlock(p);
 
 			switch (error = fp_tryswap(p, fd, nfp)) {
-			case 0: /* undo side-effects of guarded-ness */
+			case 0: /* success; undo side-effects of guarded-ness */
+				fp = NULL;
 				FDFLAGS_CLR(p, fd, UF_FORKCLOSE | UF_EXCLOSE);
 				FDFLAGS_SET(p, fd,
 				    (nfdflags & FD_CLOFORK) ? UF_FORKCLOSE : 0);
@@ -696,7 +705,6 @@ restart:
 				FDFLAGS_SET(p, fd,
 				    (nfdflags & FD_CLOEXEC) ? UF_EXCLOSE : 0);
 				(void) fp_drop(p, fd, nfp, 1);
-				fileproc_free(fp);
 				break;
 			case EKEEPLOOKING: /* f_iocount indicates collision */
 				(void) fp_drop(p, fd, fp, 1);
@@ -1078,6 +1086,59 @@ vng_lbl_set(struct label *label, void *data)
 }
 
 static int
+vnguard_sysc_getguardattr(proc_t p, struct vnguard_getattr *vga)
+{
+	const int fd = vga->vga_fd;
+
+	if (0 == vga->vga_guard) {
+		return EINVAL;
+	}
+
+	int error;
+	struct fileproc *fp;
+	if (0 != (error = fp_lookup(p, fd, &fp, 0))) {
+		return error;
+	}
+	do {
+		struct fileglob *fg = fp->f_fglob;
+		if (FILEGLOB_DTYPE(fg) != DTYPE_VNODE) {
+			error = EBADF;
+			break;
+		}
+		struct vnode *vp = fg->fg_data;
+		if (!vnode_isreg(vp) || NULL == vp->v_mount) {
+			error = EBADF;
+			break;
+		}
+		error = vnode_getwithref(vp);
+		if (0 != error) {
+			break;
+		}
+
+		vga->vga_attrs = 0;
+
+		lck_rw_lock_shared(&llock);
+
+		if (NULL != vp->v_label) {
+			const struct vng_info *vgi = vng_lbl_get(vp->v_label);
+			if (NULL != vgi) {
+				if (vgi->vgi_guard != vga->vga_guard) {
+					error = EPERM;
+				} else {
+					vga->vga_attrs = vgi->vgi_attrs;
+				}
+			}
+		}
+
+		lck_rw_unlock_shared(&llock);
+		vnode_put(vp);
+	} while (0);
+
+	fp_drop(p, fd, fp, 0);
+	return error;
+}
+
+static int
 vnguard_sysc_setguard(proc_t p, const struct vnguard_set *vns)
 {
 	const int fd = vns->vns_fd;
@@ -1122,9 +1183,9 @@ vnguard_sysc_setguard(proc_t p, const struct vnguard_set *vns)
 		}
 		error = vnode_getwithref(vp);
 		if (0 != error) {
-			fp_drop(p, fd, fp, 0);
 			break;
 		}
+
 		/* Ensure the target vnode -has- a label */
 		struct vfs_context *ctx = vfs_context_current();
 		mac_vnode_label_update(ctx, vp, NULL);
@@ -1165,7 +1226,16 @@ vnguard_sysc_setguard(proc_t p, const struct vnguard_set *vns)
 				if (vgi->vgi_guard != vns->vns_guard) {
 					error = EPERM; /* guard mismatch */
 				} else if (vgi->vgi_attrs != vns->vns_attrs) {
-					error = EACCES; /* attr mismatch */
+					/*
+					 * Temporary workaround for older versions of SQLite:
+					 * allow newer guard attributes to be silently cleared.
+					 */
+					const unsigned mask = ~(VNG_WRITE_OTHER | VNG_TRUNC_OTHER);
+					if ((vgi->vgi_attrs & mask) == (vns->vns_attrs & mask)) {
+						vgi->vgi_attrs &= vns->vns_attrs;
+					} else {
+						error = EACCES; /* attr mismatch */
+					}
 				}
 				if (0 != error || NULL != vgo) {
 					free_vgo(nvgo);
@@ -1203,6 +1273,19 @@ vng_policy_syscall(proc_t p, int cmd, user_addr_t arg)
 			break;
 		}
 		error = vnguard_sysc_setguard(p, &vns);
+		break;
+	}
+	case VNG_SYSC_GET_ATTR: {
+		struct vnguard_getattr vga;
+		error = copyin(arg, (void *)&vga, sizeof(vga));
+		if (error) {
+			break;
+		}
+		error = vnguard_sysc_getguardattr(p, &vga);
+		if (error) {
+			break;
+		}
+		error = copyout((void *)&vga, arg, sizeof(vga));
 		break;
 	}
 	default:
@@ -1281,6 +1364,11 @@ vng_reason_from_pathname(const char *path, uint32_t pathlen)
 
 static int vng_policy_flags;
 
+/*
+ * Note: if an EXC_GUARD is generated, llock will be dropped and
+ * subsequently reacquired by this routine. Data derived from
+ * any label in the caller should be regenerated.
+ */
 static int
 vng_guard_violation(const struct vng_info *vgi,
     unsigned opval, vnode_t vp)
@@ -1364,6 +1452,8 @@ vng_guard_violation(const struct vng_info *vgi,
 		EXC_GUARD_ENCODE_TARGET(code, pid);
 		subcode = vgi->vgi_guard;
 
+		lck_rw_unlock_shared(&llock);
+
 		if (vng_policy_flags & kVNG_POLICY_EXC_CORPSE) {
 			char *path;
 			int len = MAXPATHLEN;
@@ -1384,8 +1474,10 @@ vng_guard_violation(const struct vng_info *vgi,
 			}
 		} else {
 			thread_t t = current_thread();
-			thread_guard_violation(t, code, subcode);
+			thread_guard_violation(t, code, subcode, TRUE);
 		}
+
+		lck_rw_lock_shared(&llock);
 	} else if (vng_policy_flags & kVNG_POLICY_SIGKILL) {
 		proc_t p = current_proc();
 		psignal(p, SIGKILL);
@@ -1614,7 +1706,7 @@ SECURITY_READ_ONLY_LATE(static struct mac_policy_conf) vng_policy_conf = {
 	.mpc_runtime_flags = 0
 };
 
-static mac_policy_handle_t vng_policy_handle;
+SECURITY_READ_ONLY_LATE(static mac_policy_handle_t) vng_policy_handle;
 
 void
 vnguard_policy_init(void)

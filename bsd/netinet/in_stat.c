@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2017-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -41,7 +41,8 @@ in_stat_set_activity_bitmap(activity_bitmap_t *activity, uint64_t now)
 	uint64_t elapsed_time, slot;
 	uint64_t *bitmap;
 	if (activity->start == 0) {
-		activity->start = now;
+		// Align all activity maps
+		activity->start = now - (now % IN_STAT_ACTIVITY_GRANULARITY);
 	}
 	elapsed_time = now - activity->start;
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -73,7 +73,7 @@ enum { kDefaultIOSize = 128 * 1024 };
 
 class IOPolledFilePollers : public OSObject
 {
-	OSDeclareDefaultStructors(IOPolledFilePollers)
+	OSDeclareDefaultStructors(IOPolledFilePollers);
 
 public:
 	IOService                * media;
@@ -188,7 +188,7 @@ IOPolledFilePollersOpen(IOPolledFileIOVars * filevars, uint32_t state, bool abor
 	int32_t                    idx;
 
 	vars->abortable = abortable;
-	ioBuffer = 0;
+	ioBuffer = NULL;
 
 	if (kIOPolledAfterSleepState == state) {
 		vars->ioStatus = 0;
@@ -270,7 +270,7 @@ IOPolledFilePollersClose(IOPolledFileIOVars * filevars, uint32_t state)
 			}
 			if (vars->ioBuffer) {
 				vars->ioBuffer->release();
-				vars->ioBuffer = 0;
+				vars->ioBuffer = NULL;
 			}
 		}while (false);
 	}
@@ -348,7 +348,7 @@ IOStartPolledIO(IOPolledFilePollers * vars,
 		return err;
 	}
 
-	completion.target    = 0;
+	completion.target    = NULL;
 	completion.action    = &IOPolledIOComplete;
 	completion.parameter = vars;
 
@@ -452,11 +452,11 @@ IOCopyMediaForDev(dev_t device)
 	OSDictionary * matching;
 	OSNumber *     num;
 	OSIterator *   iter;
-	IOService *    result = 0;
+	IOService *    result = NULL;
 
 	matching = IOService::serviceMatching("IOMedia");
 	if (!matching) {
-		return 0;
+		return NULL;
 	}
 	do{
 		num = OSNumber::withNumber(major(device), 32);
@@ -489,13 +489,15 @@ IOCopyMediaForDev(dev_t device)
 #define APFSMEDIA_GETHIBERKEY         "getHiberKey"
 
 static IOReturn
-IOGetVolumeCryptKey(dev_t block_dev, OSString ** pKeyUUID,
-    uint8_t * volumeCryptKey, size_t * keySize)
+IOGetVolumeCryptKey(dev_t block_dev,
+    LIBKERN_RETURNS_RETAINED OSString ** pKeyUUID,
+    uint8_t * volumeCryptKey,
+    size_t * keySize)
 {
 	IOReturn         err;
 	IOService *      part;
-	OSString *       keyUUID = 0;
-	OSString *       keyStoreUUID = 0;
+	OSString *       keyUUID = NULL;
+	OSString *       keyStoreUUID = NULL;
 	uuid_t           volumeKeyUUID;
 	aks_volume_key_t vek;
 	size_t           callerKeySize;
@@ -585,7 +587,7 @@ IOPolledFileOpen(const char * filename,
 	_OpenFileContext     ctx;
 	OSData *             extentsData = NULL;
 	OSNumber *           num;
-	IOService *          part = 0;
+	IOService *          part = NULL;
 	dev_t                block_dev;
 	dev_t                image_dev;
 	AbsoluteTime         startTime, endTime;
@@ -694,7 +696,7 @@ IOPolledFileOpen(const char * filename,
 				(void *) part, (void *) str2,
 				(void *) (uintptr_t) true, (void *) &data);
 #else
-			data = 0;
+			data = NULL;
 			err = kIOReturnSuccess;
 #endif
 			if (kIOReturnSuccess != err) {
@@ -713,7 +715,7 @@ IOPolledFileOpen(const char * filename,
 
 	if (kIOReturnSuccess != err) {
 		HIBLOG("error 0x%x opening polled file\n", err);
-		IOPolledFileClose(&vars, 0, 0, 0, 0, 0);
+		IOPolledFileClose(&vars, 0, NULL, 0, 0, 0);
 		if (extentsData) {
 			extentsData->release();
 		}
@@ -747,11 +749,11 @@ IOPolledFileClose(IOPolledFileIOVars ** pVars,
 	}
 	if (vars->fileExtents) {
 		vars->fileExtents->release();
-		vars->fileExtents = 0;
+		vars->fileExtents = NULL;
 	}
 	if (vars->pollers) {
 		vars->pollers->release();
-		vars->pollers = 0;
+		vars->pollers = NULL;
 	}
 
 	if (vars->allocated) {
@@ -1032,7 +1034,7 @@ IOPolledFileRead(IOPolledFileIOVars * vars,
 
 		if ((vars->bufferOffset == vars->bufferLimit) && (vars->position < vars->readEnd)) {
 			if (!vars->pollers->io) {
-				cryptvars = 0;
+				cryptvars = NULL;
 			}
 			err = IOPolledFilePollersIODone(vars->pollers, true);
 			if (kIOReturnSuccess != err) {

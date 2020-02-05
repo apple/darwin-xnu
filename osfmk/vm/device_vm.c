@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -66,19 +66,19 @@
 
 /* until component support available */
 const struct memory_object_pager_ops device_pager_ops = {
-	device_pager_reference,
-	device_pager_deallocate,
-	device_pager_init,
-	device_pager_terminate,
-	device_pager_data_request,
-	device_pager_data_return,
-	device_pager_data_initialize,
-	device_pager_data_unlock,
-	device_pager_synchronize,
-	device_pager_map,
-	device_pager_last_unmap,
-	NULL, /* data_reclaim */
-	"device pager"
+	.memory_object_reference = device_pager_reference,
+	.memory_object_deallocate = device_pager_deallocate,
+	.memory_object_init = device_pager_init,
+	.memory_object_terminate = device_pager_terminate,
+	.memory_object_data_request = device_pager_data_request,
+	.memory_object_data_return = device_pager_data_return,
+	.memory_object_data_initialize = device_pager_data_initialize,
+	.memory_object_data_unlock = device_pager_data_unlock,
+	.memory_object_synchronize = device_pager_synchronize,
+	.memory_object_map = device_pager_map,
+	.memory_object_last_unmap = device_pager_last_unmap,
+	.memory_object_data_reclaim = NULL,
+	.memory_object_pager_name = "device pager"
 };
 
 typedef uintptr_t device_port_t;
@@ -178,6 +178,8 @@ device_pager_setup(
 	    size,
 	    &control);
 	object = memory_object_control_to_vm_object(control);
+
+	memory_object_mark_trusted(control);
 
 	assert(object != VM_OBJECT_NULL);
 	vm_object_lock(object);
@@ -383,7 +385,6 @@ device_pager_reference(
 
 	device_object = device_pager_lookup(mem_obj);
 	os_ref_retain(&device_object->ref_count);
-
 	DTRACE_VM2(device_pager_reference,
 	    device_pager_t, device_object,
 	    unsigned int, os_ref_get_count(&device_object->ref_count));

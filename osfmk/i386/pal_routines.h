@@ -123,7 +123,7 @@ void pal_thread_terminate_self(thread_t thread);
 void pal_ast_check(thread_t thread);
 
 /* Called by sync_iss_to_iks */
-extern void pal_get_kern_regs( x86_saved_state_t *state );
+extern void pal_get_kern_regs( x86_saved_state_t *state ) __dead2;
 
 /*
  * Platform-specific hlt/sti.

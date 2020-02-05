@@ -129,6 +129,7 @@ __END_DECLS
  */
 #define CPU_ARCH_MASK           0xff000000      /* mask for architecture bits */
 #define CPU_ARCH_ABI64          0x01000000      /* 64 bit ABI */
+#define CPU_ARCH_ABI64_32       0x02000000      /* ABI for 64-bit hardware with 32-bit types; LP32 */
 
 /*
  *	Machine types known by all.
@@ -152,6 +153,7 @@ __END_DECLS
 #define CPU_TYPE_HPPA           ((cpu_type_t) 11)
 #define CPU_TYPE_ARM            ((cpu_type_t) 12)
 #define CPU_TYPE_ARM64          (CPU_TYPE_ARM | CPU_ARCH_ABI64)
+#define CPU_TYPE_ARM64_32       (CPU_TYPE_ARM | CPU_ARCH_ABI64_32)
 #define CPU_TYPE_MC88000        ((cpu_type_t) 13)
 #define CPU_TYPE_SPARC          ((cpu_type_t) 14)
 #define CPU_TYPE_I860           ((cpu_type_t) 15)
@@ -159,6 +161,7 @@ __END_DECLS
 /* skip				((cpu_type_t) 17)	*/
 #define CPU_TYPE_POWERPC                ((cpu_type_t) 18)
 #define CPU_TYPE_POWERPC64              (CPU_TYPE_POWERPC | CPU_ARCH_ABI64)
+/* skip				((cpu_type_t) 19)	*/
 
 /*
  *	Machine subtypes (these are defined here, instead of in a machine
@@ -352,22 +355,32 @@ __END_DECLS
 #define CPU_SUBTYPE_ARM_V6              ((cpu_subtype_t) 6)
 #define CPU_SUBTYPE_ARM_V5TEJ           ((cpu_subtype_t) 7)
 #define CPU_SUBTYPE_ARM_XSCALE          ((cpu_subtype_t) 8)
-#define CPU_SUBTYPE_ARM_V7              ((cpu_subtype_t) 9)
+#define CPU_SUBTYPE_ARM_V7              ((cpu_subtype_t) 9)  /* ARMv7-A and ARMv7-R */
 #define CPU_SUBTYPE_ARM_V7F             ((cpu_subtype_t) 10) /* Cortex A9 */
 #define CPU_SUBTYPE_ARM_V7S             ((cpu_subtype_t) 11) /* Swift */
 #define CPU_SUBTYPE_ARM_V7K             ((cpu_subtype_t) 12)
+#define CPU_SUBTYPE_ARM_V8              ((cpu_subtype_t) 13)
 #define CPU_SUBTYPE_ARM_V6M             ((cpu_subtype_t) 14) /* Not meant to be run under xnu */
 #define CPU_SUBTYPE_ARM_V7M             ((cpu_subtype_t) 15) /* Not meant to be run under xnu */
 #define CPU_SUBTYPE_ARM_V7EM            ((cpu_subtype_t) 16) /* Not meant to be run under xnu */
-
-#define CPU_SUBTYPE_ARM_V8              ((cpu_subtype_t) 13)
+#define CPU_SUBTYPE_ARM_V8M             ((cpu_subtype_t) 17) /* Not meant to be run under xnu */
 
 /*
  *  ARM64 subtypes
  */
 #define CPU_SUBTYPE_ARM64_ALL           ((cpu_subtype_t) 0)
 #define CPU_SUBTYPE_ARM64_V8            ((cpu_subtype_t) 1)
+#define CPU_SUBTYPE_ARM64E              ((cpu_subtype_t) 2)
 
+/* CPU subtype feature flags for ptrauth on arm64e platforms */
+#define CPU_SUBTYPE_ARM64_PTR_AUTH_MASK 0x0f000000
+#define CPU_SUBTYPE_ARM64_PTR_AUTH_VERSION(x) (((x) & CPU_SUBTYPE_ARM64_PTR_AUTH_MASK) >> 24)
+
+/*
+ *  ARM64_32 subtypes
+ */
+#define CPU_SUBTYPE_ARM64_32_ALL        ((cpu_subtype_t) 0)
+#define CPU_SUBTYPE_ARM64_32_V8 ((cpu_subtype_t) 1)
 
 #endif /* !__ASSEMBLER__ */
 
@@ -409,6 +422,7 @@ __END_DECLS
 #define CPUFAMILY_ARM_TWISTER           0x92fb37c8
 #define CPUFAMILY_ARM_HURRICANE         0x67ceee93
 #define CPUFAMILY_ARM_MONSOON_MISTRAL   0xe81e7ef6
+#define CPUFAMILY_ARM_VORTEX_TEMPEST    0x07d34b9f
 
 /* The following synonyms are deprecated: */
 #define CPUFAMILY_INTEL_6_23    CPUFAMILY_INTEL_PENRYN

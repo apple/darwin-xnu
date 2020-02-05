@@ -226,16 +226,16 @@ int
 proc_regionfilename(int pid, uint64_t address, void * buffer, uint32_t buffersize)
 {
 	int retval;
-	struct proc_regionwithpathinfo reginfo;
+	struct proc_regionpath path;
 
 	if (buffersize < MAXPATHLEN) {
 		errno = ENOMEM;
 		return 0;
 	}
 
-	retval = proc_pidinfo(pid, PROC_PIDREGIONPATHINFO2, (uint64_t)address, &reginfo, sizeof(struct proc_regionwithpathinfo));
+	retval = proc_pidinfo(pid, PROC_PIDREGIONPATH, (uint64_t)address, &path, sizeof(struct proc_regionpath));
 	if (retval != -1) {
-		return (int)(strlcpy(buffer, reginfo.prp_vip.vip_path, MAXPATHLEN));
+		return (int)(strlcpy(buffer, path.prpo_path, buffersize));
 	}
 	return 0;
 }
@@ -622,7 +622,7 @@ proc_clear_cpulimits(pid_t pid)
 	}
 }
 
-#if TARGET_OS_EMBEDDED
+#if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 
 int
 proc_setcpu_deadline(pid_t pid, int action, uint64_t deadline)
@@ -739,7 +739,7 @@ proc_can_use_foreground_hw(int pid, uint32_t *reason)
 {
 	return __proc_info(PROC_INFO_CALL_CANUSEFGHW, pid, 0, 0, reason, sizeof(*reason));
 }
-#endif /* TARGET_OS_EMBEDDED */
+#endif /* (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 
 
 /* Donate importance to adaptive processes from this process */
@@ -748,19 +748,19 @@ proc_donate_importance_boost()
 {
 	int rval;
 
-#if TARGET_OS_EMBEDDED
+#if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 	rval = __process_policy(PROC_POLICY_SCOPE_PROCESS,
 	    PROC_POLICY_ACTION_ENABLE,
 	    PROC_POLICY_APPTYPE,
 	    PROC_POLICY_IOS_DONATEIMP,
 	    NULL, getpid(), (uint64_t)0);
-#else /* TARGET_OS_EMBEDDED */
+#else /* (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 	rval = __process_policy(PROC_POLICY_SCOPE_PROCESS,
 	    PROC_POLICY_ACTION_SET,
 	    PROC_POLICY_BOOST,
 	    PROC_POLICY_IMP_DONATION,
 	    NULL, getpid(), 0);
-#endif /* TARGET_OS_EMBEDDED */
+#endif /* (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 
 	if (rval == 0) {
 		return 0;
@@ -903,7 +903,7 @@ proc_denap_assertion_complete(uint64_t assertion_token)
 	return proc_importance_assertion_complete(assertion_token);
 }
 
-#if !TARGET_OS_EMBEDDED
+#if !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 
 int
 proc_clear_vmpressure(pid_t pid)
@@ -992,7 +992,7 @@ proc_enable_apptype(pid_t pid, int apptype)
 	}
 }
 
-#if !TARGET_IPHONE_SIMULATOR
+#if !TARGET_OS_SIMULATOR
 
 int
 proc_suppress(__unused pid_t pid, __unused uint64_t *generation)
@@ -1000,6 +1000,6 @@ proc_suppress(__unused pid_t pid, __unused uint64_t *generation)
 	return 0;
 }
 
-#endif /* !TARGET_IPHONE_SIMULATOR */
+#endif /* !TARGET_OS_SIMULATOR */
 
-#endif /* !TARGET_OS_EMBEDDED */
+#endif /* !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */

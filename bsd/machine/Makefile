@@ -13,6 +13,9 @@ DATAFILES = \
 	vmparam.h _types.h _limits.h _param.h \
 	_mcontext.h
 
+DRIVERKIT_DATAFILES = \
+	limits.h types.h _types.h
+
 PRIVATE_DATAFILES = \
 	disklabel.h
 
@@ -25,6 +28,7 @@ KERNELFILES = \
 	_mcontext.h
 
 INSTALL_MI_LIST = ${DATAFILES}
+INSTALL_DRIVERKIT_MI_LIST = ${DRIVERKIT_DATAFILES}
 INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
 INSTALL_MI_DIR = machine

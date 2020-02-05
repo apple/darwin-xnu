@@ -33,7 +33,7 @@
 
 static const bool ubsan_print = false;
 static const uint32_t line_acquired = 0x80000000UL;
-
+static const char *get_type_check_kind(uint8_t kind);
 static size_t
 format_loc(struct san_src_loc *loc, char *dst, size_t sz)
 {
@@ -98,24 +98,41 @@ format_shift(struct ubsan_violation *v, char *buf, size_t sz)
 	return n;
 }
 
-static const char *const
-align_kinds[] = {
-	"load",
-	"store",
-	"<unknown>",
-	"member access",
-	"<unknown>",
+static const char * const
+type_check_kinds[] = {
+	"load of", "store to", "reference binding to", "member access within",
+	"member call on", "constructor call on", "downcast of", "downcast of",
+	"upcast of", "cast to virtual base of", "_Nonnull binding to"
 };
 
+static const char *
+get_type_check_kind(uint8_t kind)
+{
+	return (kind < (sizeof(type_check_kinds) / sizeof(type_check_kinds[0])))
+	       ? type_check_kinds[kind]
+	       : "some";
+}
+
 static size_t
-format_alignment(struct ubsan_violation *v, char *buf, size_t sz)
+format_type_mismatch(struct ubsan_violation *v, char *buf, size_t sz)
 {
 	size_t n = 0;
-	struct san_type_desc *ty = v->align->ty;
+	size_t alignment = 1 << v->align->align;
+	void *ptr = (void*)v->lhs;
+	const char * kind = get_type_check_kind(v->align->kind);
+	if (NULL == ptr) {
+		//null pointer use
+		n += snprintf(buf + n, sz - n, "%s NULL pointer of type %s\n", kind, v->align->ty->name);
+	} else if (alignment && ((uintptr_t)ptr & (alignment - 1))) {
+		//misaligned pointer use
+		n += snprintf(buf + n, sz - n, "%s mis-aligned address %p for type %s ", kind, (void*)v->lhs, v->align->ty->name);
+		n += snprintf(buf + n, sz - n, "which requires %d byte alignment\n", 1 << v->align->align);
+	} else {
+		//insufficient object size
+		n += snprintf(buf + n, sz - n, "%s address %p with insufficient space for an object of type %s\n",
+		    kind, ptr, v->align->ty->name);
+	}
 
-	n += snprintf(buf + n, sz - n, "mis-aligned %s of 0x%llx\n", align_kinds[v->align->kind], v->lhs);
-	n += snprintf(buf + n, sz - n, "  expected %d-byte alignment, type = %s\n",
-	    1 << v->align->align, ty->name);
 	return n;
 }
 
@@ -150,14 +167,17 @@ ubsan_format(struct ubsan_violation *v, char *buf, size_t sz)
 	case UBSAN_SHIFT:
 		n += format_shift(v, buf + n, sz - n);
 		break;
-	case UBSAN_ALIGN:
-		n += format_alignment(v, buf + n, sz - n);
+	case UBSAN_TYPE_MISMATCH:
+		n += format_type_mismatch(v, buf + n, sz - n);
 		break;
 	case UBSAN_POINTER_OVERFLOW:
 		n += snprintf(buf + n, sz - n, "pointer overflow, before = 0x%llx, after = 0x%llx\n", v->lhs, v->rhs);
 		break;
 	case UBSAN_OOB:
 		n += format_oob(v, buf + n, sz - n);
+		break;
+	case UBSAN_GENERIC:
+		n += snprintf(buf + n, sz - n, "%s\n", v->func);
 		break;
 	default:
 		panic("unknown violation");
@@ -236,14 +256,14 @@ DEFINE_OVERFLOW(negate)
 void
 __ubsan_handle_type_mismatch_v1(struct ubsan_align_desc *desc, uint64_t val)
 {
-	struct ubsan_violation v = { UBSAN_ALIGN, val, 0, .align = desc, &desc->loc };
+	struct ubsan_violation v = { UBSAN_TYPE_MISMATCH, val, 0, .align = desc, &desc->loc };
 	ubsan_handle(&v, false);
 }
 
 void
 __ubsan_handle_type_mismatch_v1_abort(struct ubsan_align_desc *desc, uint64_t val)
 {
-	struct ubsan_violation v = { UBSAN_ALIGN, val, 0, .align = desc, &desc->loc };
+	struct ubsan_violation v = { UBSAN_TYPE_MISMATCH, val, 0, .align = desc, &desc->loc };
 	ubsan_handle(&v, true);
 }
 
@@ -274,3 +294,27 @@ __ubsan_handle_out_of_bounds_abort(struct ubsan_oob_desc *desc, uint64_t idx)
 	struct ubsan_violation v = { UBSAN_OOB, idx, 0, .oob = desc, &desc->loc };
 	ubsan_handle(&v, true);
 }
+
+#define DEFINE_GENERIC(check) \
+	void __ubsan_handle_##check (struct san_src_loc* loc) \
+	{ \
+	        struct ubsan_violation v = { UBSAN_GENERIC, 0, 0, .func = __func__, loc }; \
+	        ubsan_handle(&v, false); \
+	} \
+	void __ubsan_handle_##check##_abort(struct san_src_loc* loc) \
+	{ \
+	        struct ubsan_violation v = { UBSAN_GENERIC, 0, 0, .func = __func__, loc }; \
+	        ubsan_handle(&v, true); \
+	}
+
+DEFINE_GENERIC(invalid_builtin)
+DEFINE_GENERIC(load_invalid_value)
+DEFINE_GENERIC(nonnull_arg)
+DEFINE_GENERIC(vla_bound_not_positive)
+DEFINE_GENERIC(float_cast_overflow)
+DEFINE_GENERIC(function_type_mismatch)
+DEFINE_GENERIC(missing_return)
+DEFINE_GENERIC(nonnull_return)
+DEFINE_GENERIC(nullability_arg)
+DEFINE_GENERIC(nullability_return)
+DEFINE_GENERIC(implicit_conversion)

@@ -64,44 +64,30 @@ flush_dcache(
 	boolean_t phys)
 {
 	cpu_data_t      *cpu_data_ptr = getCpuDatap();
+	vm_offset_t     vaddr;
+	addr64_t        paddr;
+	vm_size_t       count;
 
-	if (phys) {
-		pmap_paddr_t    paddr;
-		vm_offset_t     vaddr;
-
-		paddr = CAST_DOWN(pmap_paddr_t, addr);
-		if (!isphysmem(paddr)) {
-			return;
-		}
-		vaddr = phystokv(paddr);
-		FlushPoC_DcacheRegion((vm_offset_t) vaddr, length);
-
-		if (cpu_data_ptr->cpu_cache_dispatch != (cache_dispatch_t) NULL) {
-			((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
-				cpu_data_ptr->cpu_id, CacheCleanFlushRegion, (unsigned int) paddr, length);
-		}
-		return;
-	}
-	if (cpu_data_ptr->cpu_cache_dispatch == (cache_dispatch_t) NULL) {
-		FlushPoC_DcacheRegion((vm_offset_t) addr, length);
-	} else {
-		addr64_t        paddr;
-		uint32_t        count;
-
-		while (length > 0) {
+	while (length > 0) {
+		if (phys) {
+			count = length;
+			paddr = CAST_DOWN(pmap_paddr_t, addr);
+			vaddr = phystokv_range(paddr, &count);
+		} else {
+			paddr = kvtophys(addr);
+			vaddr = addr;
 			count = PAGE_SIZE - (addr & PAGE_MASK);
 			if (count > length) {
 				count = length;
 			}
-			FlushPoC_DcacheRegion((vm_offset_t) addr, count);
-			paddr = kvtophys(addr);
-			if (paddr) {
-				((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
-					cpu_data_ptr->cpu_id, CacheCleanFlushRegion, (unsigned int) paddr, count);
-			}
-			addr += count;
-			length -= count;
 		}
+		FlushPoC_DcacheRegion(vaddr, (unsigned)count);
+		if (paddr && (cpu_data_ptr->cpu_cache_dispatch != NULL)) {
+			((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
+				cpu_data_ptr->cpu_id, CacheCleanFlushRegion, (unsigned int) paddr, (unsigned)count);
+		}
+		addr += count;
+		length -= count;
 	}
 	return;
 }
@@ -113,46 +99,30 @@ clean_dcache(
 	boolean_t phys)
 {
 	cpu_data_t      *cpu_data_ptr = getCpuDatap();
+	vm_offset_t     vaddr;
+	addr64_t        paddr;
+	vm_size_t       count;
 
-	if (phys) {
-		pmap_paddr_t    paddr;
-		vm_offset_t     vaddr;
-
-		paddr = CAST_DOWN(pmap_paddr_t, addr);
-		if (!isphysmem(paddr)) {
-			return;
-		}
-
-		vaddr = phystokv(paddr);
-		CleanPoC_DcacheRegion((vm_offset_t) vaddr, length);
-
-		if (cpu_data_ptr->cpu_cache_dispatch != (cache_dispatch_t) NULL) {
-			((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
-				cpu_data_ptr->cpu_id, CacheCleanRegion, (unsigned int) paddr, length);
-		}
-		return;
-	}
-
-	if (cpu_data_ptr->cpu_cache_dispatch == (cache_dispatch_t) NULL) {
-		CleanPoC_DcacheRegion((vm_offset_t) addr, length);
-	} else {
-		addr64_t        paddr;
-		uint32_t        count;
-
-		while (length > 0) {
+	while (length > 0) {
+		if (phys) {
+			count = length;
+			paddr = CAST_DOWN(pmap_paddr_t, addr);
+			vaddr = phystokv_range(paddr, &count);
+		} else {
+			paddr = kvtophys(addr);
+			vaddr = addr;
 			count = PAGE_SIZE - (addr & PAGE_MASK);
 			if (count > length) {
 				count = length;
 			}
-			CleanPoC_DcacheRegion((vm_offset_t) addr, count);
-			paddr = kvtophys(addr);
-			if (paddr) {
-				((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
-					cpu_data_ptr->cpu_id, CacheCleanRegion, (unsigned int) paddr, count);
-			}
-			addr += count;
-			length -= count;
 		}
+		CleanPoC_DcacheRegion(vaddr, (unsigned)count);
+		if (paddr && (cpu_data_ptr->cpu_cache_dispatch != NULL)) {
+			((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
+				cpu_data_ptr->cpu_id, CacheCleanRegion, (unsigned int) paddr, (unsigned)count);
+		}
+		addr += count;
+		length -= count;
 	}
 	return;
 }
@@ -184,8 +154,6 @@ dcache_incoherent_io_flush64(
 	unsigned int remaining,
 	unsigned int *res)
 {
-	vm_offset_t vaddr;
-	pmap_paddr_t paddr = CAST_DOWN(pmap_paddr_t, pa);
 	cpu_data_t *cpu_data_ptr = getCpuDatap();
 
 	if ((cache_info()->c_bulksize_op != 0) && (remaining >= (cache_info()->c_bulksize_op))) {
@@ -199,41 +167,38 @@ dcache_incoherent_io_flush64(
 #endif
 		*res = BWOpDone;
 	} else {
-		if (isphysmem(paddr)) {
-			vaddr = phystokv(pa);
-			{
-				FlushPoC_DcacheRegion((vm_offset_t) vaddr, size);
+		vm_offset_t     vaddr;
+		pmap_paddr_t    paddr = CAST_DOWN(pmap_paddr_t, pa);
+		vm_size_t       count;
+		unsigned int    wimg_bits, index;
 
-				if (cpu_data_ptr->cpu_cache_dispatch != (cache_dispatch_t) NULL) {
-					((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(cpu_data_ptr->cpu_id, CacheCleanFlushRegion, (unsigned int) pa, size);
-				}
-			}
-		} else {
-			/* slow path - pa isn't in the vtop region. Flush one page at a time via cpu_copywindows */
-			unsigned int wimg_bits, index;
-			uint32_t count;
-
-			mp_disable_preemption();
-
-			while (size > 0) {
+		while (size > 0) {
+			if (isphysmem(paddr)) {
+				count = size;
+				vaddr = phystokv_range(paddr, &count);
+			} else {
 				count = PAGE_SIZE - (paddr & PAGE_MASK);
 				if (count > size) {
 					count = size;
 				}
 
 				wimg_bits = pmap_cache_attributes((ppnum_t) (paddr >> PAGE_SHIFT));
+				mp_disable_preemption();
 				index = pmap_map_cpu_windows_copy((ppnum_t) (paddr >> PAGE_SHIFT), VM_PROT_READ | VM_PROT_WRITE, wimg_bits);
 				vaddr = pmap_cpu_windows_copy_addr(cpu_number(), index) | (paddr & PAGE_MASK);
-
-				CleanPoC_DcacheRegion((vm_offset_t) vaddr, count);
-
-				pmap_unmap_cpu_windows_copy(index);
-
-				paddr += count;
-				size -= count;
 			}
-
-			mp_enable_preemption();
+			FlushPoC_DcacheRegion(vaddr, (unsigned)count);
+			if (isphysmem(paddr)) {
+				if (cpu_data_ptr->cpu_cache_dispatch != NULL) {
+					((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
+						cpu_data_ptr->cpu_id, CacheCleanFlushRegion, (unsigned int) paddr, (unsigned)count);
+				}
+			} else {
+				pmap_unmap_cpu_windows_copy(index);
+				mp_enable_preemption();
+			}
+			paddr += count;
+			size -= count;
 		}
 	}
 
@@ -247,13 +212,12 @@ dcache_incoherent_io_store64(
 	unsigned int remaining,
 	unsigned int *res)
 {
-	vm_offset_t vaddr;
 	pmap_paddr_t paddr = CAST_DOWN(pmap_paddr_t, pa);
 	cpu_data_t *cpu_data_ptr = getCpuDatap();
 
 	if (isphysmem(paddr)) {
 		unsigned int wimg_bits = pmap_cache_attributes((ppnum_t) (paddr >> PAGE_SHIFT));
-		if ((wimg_bits == VM_WIMG_IO) || (wimg_bits == VM_WIMG_WCOMB)) {
+		if ((wimg_bits == VM_WIMG_IO) || (wimg_bits == VM_WIMG_WCOMB) || (wimg_bits == VM_WIMG_RT)) {
 			return;
 		}
 	}
@@ -272,41 +236,36 @@ dcache_incoherent_io_store64(
 #endif
 		*res = BWOpDone;
 	} else {
-		if (isphysmem(paddr)) {
-			vaddr = phystokv(pa);
-			{
-				CleanPoC_DcacheRegion((vm_offset_t) vaddr, size);
+		vm_offset_t     vaddr;
+		vm_size_t       count;
+		unsigned int    wimg_bits, index;
 
-				if (cpu_data_ptr->cpu_cache_dispatch != (cache_dispatch_t) NULL) {
-					((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(cpu_data_ptr->cpu_id, CacheCleanRegion, (unsigned int) pa, size);
-				}
-			}
-		} else {
-			/* slow path - pa isn't in the vtop region. Flush one page at a time via cpu_copywindows */
-			unsigned int wimg_bits, index;
-			uint32_t count;
-
-			mp_disable_preemption();
-
-			while (size > 0) {
+		while (size > 0) {
+			if (isphysmem(paddr)) {
+				count = size;
+				vaddr = phystokv_range(paddr, &count);
+			} else {
 				count = PAGE_SIZE - (paddr & PAGE_MASK);
 				if (count > size) {
 					count = size;
 				}
-
 				wimg_bits = pmap_cache_attributes((ppnum_t) (paddr >> PAGE_SHIFT));
+				mp_disable_preemption();
 				index = pmap_map_cpu_windows_copy((ppnum_t) (paddr >> PAGE_SHIFT), VM_PROT_READ | VM_PROT_WRITE, wimg_bits);
 				vaddr = pmap_cpu_windows_copy_addr(cpu_number(), index) | (paddr & PAGE_MASK);
-
-				CleanPoC_DcacheRegion((vm_offset_t) vaddr, count);
-
-				pmap_unmap_cpu_windows_copy(index);
-
-				paddr += count;
-				size -= count;
 			}
-
-			mp_enable_preemption();
+			CleanPoC_DcacheRegion(vaddr, (unsigned)count);
+			if (isphysmem(paddr)) {
+				if (cpu_data_ptr->cpu_cache_dispatch != NULL) {
+					((cache_dispatch_t) cpu_data_ptr->cpu_cache_dispatch)(
+						cpu_data_ptr->cpu_id, CacheCleanRegion, (unsigned int) paddr, (unsigned)count);
+				}
+			} else {
+				pmap_unmap_cpu_windows_copy(index);
+				mp_enable_preemption();
+			}
+			paddr += count;
+			size -= count;
 		}
 	}
 
@@ -322,13 +281,7 @@ cache_sync_page(
 
 	if (isphysmem(paddr)) {
 		vm_offset_t     vaddr = phystokv(paddr);
-
-		CleanPoU_DcacheRegion(vaddr, PAGE_SIZE);
-#ifdef  __ARM_IC_NOALIAS_ICACHE__
 		InvalidatePoU_IcacheRegion(vaddr, PAGE_SIZE);
-#else
-		InvalidatePoU_Icache();
-#endif
 	} else {
 		FlushPoC_Dcache();
 		InvalidatePoU_Icache();
@@ -406,14 +359,10 @@ platform_cache_disable(void)
 	uint32_t sctlr_value = 0;
 
 	/* Disable dcache allocation. */
-	__asm__ volatile ("mrc p15, 0, %0, c1, c0, 0"
-                          : "=r"(sctlr_value));
-
+	sctlr_value = __builtin_arm_mrc(MRC_SCTLR);
 	sctlr_value &= ~SCTLR_DCACHE;
-
-	__asm__ volatile ("mcr p15, 0, %0, c1, c0, 0\n"
-                          "isb"
-                          :: "r"(sctlr_value));
+	__builtin_arm_mcr(MCR_SCTLR(sctlr_value));
+	__builtin_arm_isb(ISB_SY);
 #endif /* (__ARM_ARCH__ < 8) */
 }
 
@@ -421,7 +370,7 @@ void
 platform_cache_idle_enter(
 	void)
 {
-#if     __ARM_SMP__
+#if __ARM_SMP__
 	platform_cache_disable();
 
 	/*
@@ -438,42 +387,39 @@ platform_cache_idle_enter(
 #if (__ARM_ARCH__ < 8)
 		cpu_data_t      *cpu_data_ptr = getCpuDatap();
 		cpu_data_ptr->cpu_CLW_active = 0;
-		__asm__ volatile ("dmb ish");
+		__builtin_arm_dmb(DMB_ISH);
 		cpu_data_ptr->cpu_CLWFlush_req = 0;
 		cpu_data_ptr->cpu_CLWClean_req = 0;
 		CleanPoC_DcacheRegion((vm_offset_t) cpu_data_ptr, sizeof(cpu_data_t));
 #endif /* (__ARM_ARCH__ < 8) */
 	}
-#else
+#else /* !__ARM_SMP__ */
 	CleanPoU_Dcache();
-#endif
+#endif /* !__ARM_SMP__ */
 
-#if      defined (__ARM_SMP__) && defined (ARMA7)
+#if defined(__ARM_SMP__) && defined(ARMA7)
 	uint32_t actlr_value = 0;
 
 	/* Leave the coherency domain */
-	__asm__ volatile ("clrex\n"
-                          "mrc p15, 0, %0, c1, c0, 1\n"
-                          : "=r"(actlr_value));
-
+	__builtin_arm_clrex();
+	actlr_value = __builtin_arm_mrc(MRC_ACTLR);
 	actlr_value &= ~0x40;
 
-	__asm__ volatile ("mcr p15, 0, %0, c1, c0, 1\n"
-	                  /* Ensures any pending fwd request gets serviced and ends up */
-                          "dsb\n"
-	                  /* Forces the processor to re-fetch, so any pending fwd request gets into the core */
-                          "isb\n"
-	                  /* Ensures the second possible pending fwd request ends up. */
-                          "dsb\n"
-                          :: "r"(actlr_value));
-#endif
+	__builtin_arm_mcr(MCR_ACTLR(actlr_value));
+	/* Ensures any pending fwd request gets serviced and ends up */
+	__builtin_arm_dsb(DSB_SY);
+	/* Forces the processor to re-fetch, so any pending fwd request gets into the core */
+	__builtin_arm_isb(ISB_SY);
+	/* Ensures the second possible pending fwd request ends up. */
+	__builtin_arm_dsb(DSB_SY);
+#endif /* defined(__ARM_SMP__) && defined(ARMA7) */
 }
 
 void
 platform_cache_idle_exit(
 	void)
 {
-#if defined (ARMA7)
+#if defined(ARMA7)
 	uint32_t actlr_value = 0;
 
 	/* Flush L1 caches and TLB before rejoining the coherency domain */
@@ -491,30 +437,22 @@ platform_cache_idle_exit(
 	}
 
 	/* Rejoin the coherency domain */
-	__asm__ volatile ("mrc p15, 0, %0, c1, c0, 1\n"
-                          : "=r"(actlr_value));
-
+	actlr_value = __builtin_arm_mrc(MRC_ACTLR);
 	actlr_value |= 0x40;
-
-	__asm__ volatile ("mcr p15, 0, %0, c1, c0, 1\n"
-                          "isb\n"
-                          :: "r"(actlr_value));
+	__builtin_arm_mcr(MCR_ACTLR(actlr_value));
+	__builtin_arm_isb(ISB_SY);
 
 #if __ARM_SMP__
 	uint32_t sctlr_value = 0;
 
 	/* Enable dcache allocation. */
-	__asm__ volatile ("mrc p15, 0, %0, c1, c0, 0\n"
-                          : "=r"(sctlr_value));
-
+	sctlr_value = __builtin_arm_mrc(MRC_SCTLR);
 	sctlr_value |= SCTLR_DCACHE;
-
-	__asm__ volatile ("mcr p15, 0, %0, c1, c0, 0\n"
-                          "isb"
-                          :: "r"(sctlr_value));
+	__builtin_arm_mcr(MCR_SCTLR(sctlr_value));
+	__builtin_arm_isb(ISB_SY);
 	getCpuDatap()->cpu_CLW_active = 1;
-#endif
-#endif
+#endif /* __ARM_SMP__ */
+#endif /* defined(ARMA7) */
 }
 
 boolean_t
@@ -603,7 +541,7 @@ cache_xcall(unsigned int op)
 		} else if (op == LWClean) {
 			target_cdp->cpu_CLWClean_req = abstime;
 		}
-		__asm__ volatile ("dmb ish");
+		__builtin_arm_dmb(DMB_ISH);
 		if (target_cdp->cpu_CLW_active == 0) {
 			if (op == LWFlush) {
 				target_cdp->cpu_CLWFlush_req = 0x0ULL;
@@ -675,7 +613,7 @@ flush_dcache(
 	__unused unsigned length,
 	__unused boolean_t phys)
 {
-	__asm__ volatile ("dsb sy");
+	__builtin_arm_dsb(DSB_SY);
 }
 
 void
@@ -684,7 +622,7 @@ clean_dcache(
 	__unused unsigned length,
 	__unused boolean_t phys)
 {
-	__asm__ volatile ("dsb sy");
+	__builtin_arm_dsb(DSB_SY);
 }
 
 void
@@ -692,7 +630,7 @@ flush_dcache_syscall(
 	__unused vm_offset_t va,
 	__unused unsigned length)
 {
-	__asm__ volatile ("dsb sy");
+	__builtin_arm_dsb(DSB_SY);
 }
 
 void
@@ -702,7 +640,7 @@ dcache_incoherent_io_flush64(
 	__unused unsigned int remaining,
 	__unused unsigned int *res)
 {
-	__asm__ volatile ("dsb sy");
+	__builtin_arm_dsb(DSB_SY);
 	*res = LWOpDone;
 	return;
 }
@@ -714,7 +652,7 @@ dcache_incoherent_io_store64(
 	__unused unsigned int remaining,
 	__unused unsigned int *res)
 {
-	__asm__ volatile ("dsb sy");
+	__builtin_arm_dsb(DSB_SY);
 	*res = LWOpDone;
 	return;
 }
@@ -728,12 +666,7 @@ cache_sync_page(
 
 	if (isphysmem(paddr)) {
 		vm_offset_t     vaddr = phystokv(paddr);
-
-#ifdef  __ARM_IC_NOALIAS_ICACHE__
 		InvalidatePoU_IcacheRegion(vaddr, PAGE_SIZE);
-#else
-		InvalidatePoU_Icache();
-#endif
 	}
 }
 

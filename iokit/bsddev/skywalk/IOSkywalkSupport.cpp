@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -37,7 +37,7 @@ IOSKCopyKextIdentifierWithAddress( vm_address_t address );
 const OSSymbol *
 IOSKCopyKextIdentifierWithAddress( vm_address_t address )
 {
-	const OSSymbol * id = 0;
+	const OSSymbol * id = NULL;
 
 	OSKext * kext = OSKext::lookupKextWithAddress(address);
 	if (kext) {

@@ -10,14 +10,21 @@
 #include <mach/vm_map.h>
 
 #include <sys/mman.h>
+#include <sys/types.h>
+#include <sys/sysctl.h>
+
+#include <TargetConditionals.h>
 
 #include <Kernel/kern/ledger.h>
 extern int ledger(int cmd, caddr_t arg1, caddr_t arg2, caddr_t arg3);
 
-#if ENTITLED && defined(__arm64__)
-#define LEGACY_FOOTPRINT 1
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+boolean_t legacy_footprint;
+
+#if LEGACY_FOOTPRINT_ENTITLED && defined(__arm64__)
+#define TEST_VM_NAMESPACE "xnu.vm_legacy"
 #else /* ENTITLED && __arm64__ */
-#define LEGACY_FOOTPRINT 0
+#define TEST_VM_NAMESPACE "xnu.vm"
 #endif /* ENTITLED && __arm64__ */
 
 #define MEM_SIZE (100 * 1024 * 1024) /* 100 MB */
@@ -35,6 +42,8 @@ ledger_init(void)
 	struct ledger_template_info     *templateInfo;
 	int64_t                         templateCnt;
 	int                             i;
+	int                             legacy_footprint_entitlement_mode;
+	size_t                          oldlen;
 
 	if (ledger_inited) {
 		return;
@@ -42,6 +51,24 @@ ledger_init(void)
 	ledger_inited = 1;
 
 	T_SETUPBEGIN;
+
+	legacy_footprint = FALSE;
+#if LEGACY_FOOTPRINT_ENTITLED
+	int ret;
+
+	T_QUIET;
+	T_WITH_ERRNO;
+	oldlen = sizeof(legacy_footprint_entitlement_mode);
+	ret = sysctlbyname("kern.legacy_footprint_entitlement_mode",
+	    &legacy_footprint_entitlement_mode,
+	    &oldlen,
+	    NULL,
+	    0);
+	if (ret == 0 && legacy_footprint_entitlement_mode == 2) {
+		legacy_footprint = TRUE;
+	}
+#endif /* LEGACY_FOOTPRINT_ENTITLED */
+
 	T_QUIET;
 	T_WITH_ERRNO;
 	T_ASSERT_EQ(ledger(LEDGER_INFO,
@@ -192,7 +219,7 @@ pre_warm(
 
 T_DECL(phys_footprint_anonymous,
     "phys_footprint for anonymous memory",
-    T_META_NAMESPACE("xnu.vm"),
+    T_META_NAMESPACE(TEST_VM_NAMESPACE),
     T_META_LTEPHASE(LTE_POSTINIT))
 {
 	uint64_t                footprint_before, pagetable_before;
@@ -265,7 +292,7 @@ T_DECL(phys_footprint_anonymous,
 
 T_DECL(phys_footprint_file,
     "phys_footprint for mapped file",
-    T_META_NAMESPACE("xnu.vm"),
+    T_META_NAMESPACE(TEST_VM_NAMESPACE),
     T_META_LTEPHASE(LTE_POSTINIT))
 {
 	uint64_t                footprint_before, pagetable_before;
@@ -365,7 +392,7 @@ T_DECL(phys_footprint_file,
 
 T_DECL(phys_footprint_purgeable,
     "phys_footprint for purgeable memory",
-    T_META_NAMESPACE("xnu.vm"),
+    T_META_NAMESPACE(TEST_VM_NAMESPACE),
     T_META_LTEPHASE(LTE_POSTINIT))
 {
 	uint64_t                footprint_before, pagetable_before;
@@ -484,7 +511,7 @@ T_DECL(phys_footprint_purgeable,
 
 T_DECL(phys_footprint_purgeable_ownership,
     "phys_footprint for owned purgeable memory",
-    T_META_NAMESPACE("xnu.vm"),
+    T_META_NAMESPACE(TEST_VM_NAMESPACE),
     T_META_LTEPHASE(LTE_POSTINIT))
 {
 	uint64_t                footprint_before, pagetable_before;
@@ -648,7 +675,7 @@ T_DECL(phys_footprint_purgeable_ownership,
 #ifdef MAP_MEM_LEDGER_TAGGED
 T_DECL(phys_footprint_ledger_purgeable_owned,
     "phys_footprint for ledger-tagged purgeable memory ownership",
-    T_META_NAMESPACE("xnu.vm"),
+    T_META_NAMESPACE(TEST_VM_NAMESPACE),
     T_META_LTEPHASE(LTE_POSTINIT))
 {
 	uint64_t                footprint_before, pagetable_before;
@@ -821,7 +848,7 @@ T_DECL(phys_footprint_ledger_purgeable_owned,
 
 T_DECL(phys_footprint_ledger_owned,
     "phys_footprint for ledger-tagged memory ownership",
-    T_META_NAMESPACE("xnu.vm"),
+    T_META_NAMESPACE(TEST_VM_NAMESPACE),
     T_META_LTEPHASE(LTE_POSTINIT))
 {
 	uint64_t                footprint_before, pagetable_before;
@@ -830,7 +857,6 @@ T_DECL(phys_footprint_ledger_owned,
 	kern_return_t           kr;
 	mach_vm_address_t       pre_vm_addr, vm_addr;
 	mach_vm_size_t          vm_size, dirty_size, me_size;
-	int                     state;
 	mach_port_t             me_port;
 
 	/* pre-warm to account for page table expansion */
@@ -988,6 +1014,11 @@ setIntValue(CFMutableDictionaryRef dict, const CFStringRef key, int value)
 	CFDictionarySetValue(dict, key, number);
 	CFRelease(number);
 }
+static inline void
+setBoolValue(CFMutableDictionaryRef dict, const CFStringRef key, bool value)
+{
+	CFDictionarySetValue(dict, key, value ? kCFBooleanTrue : kCFBooleanFalse);
+}
 typedef void (^SurfacePlaneBlock)(void *data, size_t planeIndex, size_t width, size_t height, size_t rowbytes);
 static IOReturn
 SurfaceApplyPlaneBlock(IOSurfaceRef surface, SurfacePlaneBlock block)
@@ -1049,6 +1080,24 @@ ClearSurface(IOSurfaceRef surface)
 		}
 	});
 }
+static size_t
+SurfaceGetMemorySize(IOSurfaceRef surface)
+{
+	size_t planeCount = IOSurfaceGetPlaneCount(surface);
+
+	if (planeCount == 0) {
+		size_t rb = IOSurfaceGetBytesPerRow(surface);
+		size_t h = IOSurfaceGetHeight(surface);
+		return rb * h;
+	} else if (planeCount == 2) {
+		size_t rb0 = IOSurfaceGetBytesPerRowOfPlane(surface, 0);
+		size_t h0 = IOSurfaceGetHeightOfPlane(surface, 0);
+		size_t rb1 = IOSurfaceGetBytesPerRowOfPlane(surface, 1);
+		size_t h1 = IOSurfaceGetHeightOfPlane(surface, 1);
+		return rb0 * h0 + rb1 * h1;
+	}
+	return 0;
+}
 static IOSurfaceRef
 CreateSurface(uint32_t pixelsWide, uint32_t pixelsHigh, uint32_t rowBytesAlignment, uint32_t fmt, bool purgeable, bool clear)
 {
@@ -1075,11 +1124,11 @@ CreateSurface(uint32_t pixelsWide, uint32_t pixelsHigh, uint32_t rowBytesAlignme
 	setIntValue(props, kIOSurfaceWidth, (int)pixelsWide);
 	setIntValue(props, kIOSurfaceHeight, (int)pixelsHigh);
 	setIntValue(props, kIOSurfacePixelFormat, (int)fmt);
-#if TARGET_OS_IPHONE
-	setIntValue(props, kIOSurfaceNonPurgeable, purgeable);
-#else /* TARGET_OS_IPHONE */
+#if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
+	setBoolValue(props, kIOSurfaceNonPurgeable, !purgeable);
+#else /* (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 	(void)purgeable;
-#endif /* TARGET_OS_IPHONE */
+#endif /* (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 	{
 		if (bpe != bpp) { // i.e. a 422 format such as 'yuvf' etc.
 			setIntValue(props, kIOSurfaceElementWidth, 2);
@@ -1099,17 +1148,19 @@ CreateSurface(uint32_t pixelsWide, uint32_t pixelsHigh, uint32_t rowBytesAlignme
 }
 T_DECL(phys_footprint_purgeable_iokit,
     "phys_footprint for purgeable IOKit memory",
-    T_META_NAMESPACE("xnu.vm"),
+    T_META_NAMESPACE(TEST_VM_NAMESPACE),
     T_META_LTEPHASE(LTE_POSTINIT))
 {
 	uint64_t        footprint_before, pagetable_before;
 	uint64_t        footprint_after, pagetable_after;
-	uint64_t        footprint_expected;
+	uint64_t        footprint_expected, footprint_delta_slop;
+	int64_t         footprint_delta;
 	IOSurfaceRef    surface;
 	uint32_t        old_state;
 	uint64_t        surface_size;
 
 	T_SETUPBEGIN;
+	footprint_delta_slop = 8 * vm_kernel_page_size;
 	ledger_init();
 	surface = CreateSurface(1024, 1024, 0, 32, true, true);
 	IOSurfaceSetPurgeable(surface, kIOSurfacePurgeableVolatile, &old_state);
@@ -1123,73 +1174,75 @@ T_DECL(phys_footprint_purgeable_iokit,
 	get_ledger_info(&footprint_before, &pagetable_before);
 	surface = CreateSurface(1024, 1024, 0, 32, true, true);
 	get_ledger_info(&footprint_after, &pagetable_after);
-#if LEGACY_FOOTPRINT
-	footprint_expected = footprint_before;
-	footprint_expected += (pagetable_after - pagetable_before);
-	T_LOG("LEGACY FOOTPRINT: creating IOSurface: no footprint impact");
-	T_EXPECT_EQ(footprint_after, footprint_expected,
-	    "create IOSurface %lld bytes: "
-	    "footprint %lld -> %lld expected %lld delta %lld",
-	    surface_size, footprint_before, footprint_after,
-	    footprint_expected, footprint_after - footprint_expected);
-#else /* LEGACY_FOOTPRINT */
-	footprint_expected = footprint_before + surface_size;
-	footprint_expected += (pagetable_after - pagetable_before);
-	T_LOG("creating IOSurface increases phys_footprint");
-	T_EXPECT_EQ(footprint_after, footprint_expected,
-	    "create IOSurface %lld bytes: "
-	    "footprint %lld -> %lld expected %lld delta %lld",
-	    surface_size, footprint_before, footprint_after,
-	    footprint_expected, footprint_after - footprint_expected);
-#endif /* LEGACY_FOOTPRINT */
+	if (legacy_footprint) {
+		footprint_expected = footprint_before;
+		footprint_expected += (pagetable_after - pagetable_before);
+		footprint_delta = (int64_t)(footprint_after - footprint_expected);
+		T_LOG("LEGACY FOOTPRINT: creating purgeable IOSurface: no footprint impact");
+		T_EXPECT_LE((uint64_t)llabs(footprint_delta), footprint_delta_slop,
+		    "create purgeable IOSurface %lld bytes: "
+		    "footprint %lld -> %lld expected %lld delta %lld",
+		    surface_size, footprint_before, footprint_after,
+		    footprint_expected, footprint_delta);
+	} else {
+		footprint_expected = footprint_before + surface_size;
+		footprint_expected += (pagetable_after - pagetable_before);
+		footprint_delta = (int64_t)(footprint_after - footprint_expected);
+		T_LOG("creating purgeable IOSurface increases phys_footprint");
+		T_EXPECT_LE((uint64_t)llabs(footprint_delta), footprint_delta_slop,
+		    "create purgeable IOSurface %lld bytes: "
+		    "footprint %lld -> %lld expected %lld delta %lld",
+		    surface_size, footprint_before, footprint_after,
+		    footprint_expected, footprint_delta);
+	}
 
 	/* make IOSurface volatile: footprint shrinks */
 	get_ledger_info(&footprint_before, &pagetable_before);
 	IOSurfaceSetPurgeable(surface, kIOSurfacePurgeableVolatile, &old_state);
 	get_ledger_info(&footprint_after, &pagetable_after);
-#if LEGACY_FOOTPRINT
-	footprint_expected = footprint_before;
-	footprint_expected += (pagetable_after - pagetable_before);
-	T_LOG("LEGACY FOOTPRINT: volatile IOSurface: no footprint impact");
-	T_EXPECT_EQ(footprint_after, footprint_expected,
-	    "volatile IOSurface %lld bytes: "
-	    "footprint %lld -> %lld expected %lld delta %lld",
-	    surface_size, footprint_before, footprint_after,
-	    footprint_expected, footprint_after - footprint_expected);
-#else /* LEGACY_FOOTPRINT */
-	footprint_expected = footprint_before - surface_size;
-	footprint_expected += (pagetable_after - pagetable_before);
-	T_LOG("making IOSurface volatile decreases phys_footprint");
-	T_EXPECT_EQ(footprint_after, footprint_expected,
-	    "made volatile %lld bytes: "
-	    "footprint %lld -> %lld expected %lld delta %lld",
-	    surface_size, footprint_before, footprint_after,
-	    footprint_expected, footprint_after - footprint_expected);
-#endif /* LEGACY_FOOTPRINT */
+	if (legacy_footprint) {
+		footprint_expected = footprint_before;
+		footprint_expected += (pagetable_after - pagetable_before);
+		T_LOG("LEGACY FOOTPRINT: volatile IOSurface: no footprint impact");
+		T_EXPECT_EQ(footprint_after, footprint_expected,
+		    "volatile IOSurface %lld bytes: "
+		    "footprint %lld -> %lld expected %lld delta %lld",
+		    surface_size, footprint_before, footprint_after,
+		    footprint_expected, footprint_after - footprint_expected);
+	} else {
+		footprint_expected = footprint_before - surface_size;
+		footprint_expected += (pagetable_after - pagetable_before);
+		T_LOG("making IOSurface volatile decreases phys_footprint");
+		T_EXPECT_EQ(footprint_after, footprint_expected,
+		    "made volatile %lld bytes: "
+		    "footprint %lld -> %lld expected %lld delta %lld",
+		    surface_size, footprint_before, footprint_after,
+		    footprint_expected, footprint_after - footprint_expected);
+	}
 
 	/* make IOSurface non-volatile: footprint grows */
 	get_ledger_info(&footprint_before, &pagetable_before);
 	IOSurfaceSetPurgeable(surface, kIOSurfacePurgeableNonVolatile, &old_state);
 	get_ledger_info(&footprint_after, &pagetable_after);
-#if LEGACY_FOOTPRINT
-	footprint_expected = footprint_before;
-	footprint_expected += (pagetable_after - pagetable_before);
-	T_LOG("LEGACY FOOTPRINT: non-volatile IOSurface: no footprint impact");
-	T_EXPECT_EQ(footprint_after, footprint_expected,
-	    "non-volatile IOSurface %lld bytes: "
-	    "footprint %lld -> %lld expected %lld delta %lld",
-	    surface_size, footprint_before, footprint_after,
-	    footprint_expected, footprint_after - footprint_expected);
-#else /* LEGACY_FOOTPRINT */
-	footprint_expected = footprint_before + surface_size;
-	footprint_expected += (pagetable_after - pagetable_before);
-	T_LOG("making IOSurface non-volatile increases phys_footprint");
-	T_EXPECT_EQ(footprint_after, footprint_expected,
-	    "made non-volatile %lld bytes: "
-	    "footprint %lld -> %lld expected %lld delta %lld",
-	    surface_size, footprint_before, footprint_after,
-	    footprint_expected, footprint_after - footprint_expected);
-#endif /* LEGACY_FOOTPRINT */
+	if (legacy_footprint) {
+		footprint_expected = footprint_before;
+		footprint_expected += (pagetable_after - pagetable_before);
+		T_LOG("LEGACY FOOTPRINT: non-volatile IOSurface: no footprint impact");
+		T_EXPECT_EQ(footprint_after, footprint_expected,
+		    "non-volatile IOSurface %lld bytes: "
+		    "footprint %lld -> %lld expected %lld delta %lld",
+		    surface_size, footprint_before, footprint_after,
+		    footprint_expected, footprint_after - footprint_expected);
+	} else {
+		footprint_expected = footprint_before + surface_size;
+		footprint_expected += (pagetable_after - pagetable_before);
+		T_LOG("making IOSurface non-volatile increases phys_footprint");
+		T_EXPECT_EQ(footprint_after, footprint_expected,
+		    "made non-volatile %lld bytes: "
+		    "footprint %lld -> %lld expected %lld delta %lld",
+		    surface_size, footprint_before, footprint_after,
+		    footprint_expected, footprint_after - footprint_expected);
+	}
 
 	/* accessing IOSurface re-mapping: no footprint impact */
 
@@ -1199,16 +1252,149 @@ T_DECL(phys_footprint_purgeable_iokit,
 	get_ledger_info(&footprint_before, &pagetable_before);
 	CFRelease(surface);
 	get_ledger_info(&footprint_after, &pagetable_after);
-#if LEGACY_FOOTPRINT
+	if (legacy_footprint) {
+		footprint_expected = footprint_before;
+		footprint_expected += (pagetable_after - pagetable_before);
+		T_LOG("LEGACY FOOTPRINT: release IOSurface: no footprint impact");
+		T_EXPECT_EQ(footprint_after, footprint_expected,
+		    "releasing IOSurface %lld bytes: "
+		    "footprint %lld -> %lld expected %lld delta %lld",
+		    surface_size, footprint_before, footprint_after,
+		    footprint_expected, footprint_after - footprint_expected);
+	} else {
+		footprint_expected = footprint_before - surface_size;
+		footprint_expected += (pagetable_after - pagetable_before);
+		T_LOG("releasing IOSurface decreases phys_footprint");
+		T_EXPECT_EQ(footprint_after, footprint_expected,
+		    "released IOSurface %lld bytes: "
+		    "footprint %lld -> %lld expected %lld delta %lld",
+		    surface_size, footprint_before, footprint_after,
+		    footprint_expected, footprint_after - footprint_expected);
+	}
+}
+
+#if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
+T_DECL(phys_footprint_nonpurgeable_iokit,
+    "phys_footprint for non-purgeable IOKit memory",
+    T_META_NAMESPACE(TEST_VM_NAMESPACE),
+    T_META_LTEPHASE(LTE_POSTINIT))
+{
+	uint64_t        footprint_before, pagetable_before;
+	uint64_t        footprint_after, pagetable_after;
+	uint64_t        footprint_expected, footprint_delta_slop;
+	int64_t         footprint_delta;
+	IOSurfaceRef    surface;
+	uint64_t        surface_size;
+	void            *map_base;
+	size_t          map_size;
+	mach_vm_address_t remap_addr;
+	kern_return_t kr;
+	vm_prot_t       cur_prot, max_prot;
+	uint32_t        old_state;
+
+
+	T_SETUPBEGIN;
+	ledger_init();
+	surface = CreateSurface(1024, 1024, 0, 32, false, true);
+	CFRelease(surface);
+	footprint_delta_slop = 8 * vm_kernel_page_size;
+	T_SETUPEND;
+
+	surface_size = 1024 * 1024 * 4;
+
+	/* create IOsurface: footprint grows */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	surface = CreateSurface(1024, 1024, 0, 32, false, true);
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before + surface_size;
+	footprint_expected += (pagetable_after - pagetable_before);
+	footprint_delta = (int64_t)(footprint_after - footprint_expected);
+	T_LOG("creating non-purgeable IOSurface increases phys_footprint");
+	T_EXPECT_LE((uint64_t)llabs(footprint_delta), footprint_delta_slop,
+	    "create non-purgeable IOSurface %lld bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    surface_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_delta);
+
+	/* make IOSurface volatile: fail and no footprint impact */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	IOSurfaceSetPurgeable(surface, kIOSurfacePurgeableVolatile, &old_state);
+	get_ledger_info(&footprint_after, &pagetable_after);
 	footprint_expected = footprint_before;
 	footprint_expected += (pagetable_after - pagetable_before);
-	T_LOG("LEGACY FOOTPRINT: release IOSurface: no footprint impact");
+	T_LOG("making non-purgeable IOSurface volatile: no footprint impact");
 	T_EXPECT_EQ(footprint_after, footprint_expected,
-	    "releasing IOSurface %lld bytes: "
+	    "made volatile %lld non-purgeable bytes: "
 	    "footprint %lld -> %lld expected %lld delta %lld",
 	    surface_size, footprint_before, footprint_after,
 	    footprint_expected, footprint_after - footprint_expected);
-#else /* LEGACY_FOOTPRINT */
+
+	/* re-mapping IOSurface: no footprint impact */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	map_base = IOSurfaceGetBaseAddress(surface);
+	map_size = SurfaceGetMemorySize(surface);
+//	T_EXPECT_EQ(map_size, surface_size, "map_size %lld surface_size %lld",
+//		    map_size, surface_size);
+	remap_addr = 0;
+	kr = mach_vm_remap(mach_task_self(),
+	    &remap_addr,
+	    (mach_vm_size_t)surface_size,
+	    0,
+	    VM_FLAGS_ANYWHERE,
+	    mach_task_self(),
+	    (mach_vm_address_t)map_base,
+	    FALSE,                /* copy */
+	    &cur_prot,
+	    &max_prot,
+	    VM_INHERIT_DEFAULT);
+	T_QUIET;
+	T_EXPECT_EQ(kr, KERN_SUCCESS, "vm_remap() error 0x%x (%s)",
+	    kr, mach_error_string(kr));
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("re-mapping IOSurface does not impact phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "remapping IOSurface %lld bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    surface_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+
+	/* accessing IOSurface re-mapping: footprint grows */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	memset((char *)(uintptr_t)remap_addr, 'p', (size_t)surface_size);
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before + surface_size;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("accessing re-mapped IOSurface grows phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "accessing remapped IOSurface %lld bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    surface_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+
+	/* deallocating IOSurface re-mapping: footprint shrinks */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	kr = mach_vm_deallocate(mach_task_self(),
+	    remap_addr,
+	    (mach_vm_size_t)surface_size);
+	T_QUIET;
+	T_EXPECT_EQ(kr, KERN_SUCCESS, "vm_deallocate() error 0x%x (%s)",
+	    kr, mach_error_string(kr));
+	get_ledger_info(&footprint_after, &pagetable_after);
+	footprint_expected = footprint_before - surface_size;
+	footprint_expected += (pagetable_after - pagetable_before);
+	T_LOG("deallocating re-mapping of IOSurface shrinks phys_footprint");
+	T_EXPECT_EQ(footprint_after, footprint_expected,
+	    "deallocating remapped IOSurface %lld bytes: "
+	    "footprint %lld -> %lld expected %lld delta %lld",
+	    surface_size, footprint_before, footprint_after,
+	    footprint_expected, footprint_after - footprint_expected);
+
+	/* release IOSurface: footprint shrinks */
+	get_ledger_info(&footprint_before, &pagetable_before);
+	CFRelease(surface);
+	get_ledger_info(&footprint_after, &pagetable_after);
 	footprint_expected = footprint_before - surface_size;
 	footprint_expected += (pagetable_after - pagetable_before);
 	T_LOG("releasing IOSurface decreases phys_footprint");
@@ -1217,5 +1403,5 @@ T_DECL(phys_footprint_purgeable_iokit,
 	    "footprint %lld -> %lld expected %lld delta %lld",
 	    surface_size, footprint_before, footprint_after,
 	    footprint_expected, footprint_after - footprint_expected);
-#endif /* LEGACY_FOOTPRINT */
 }
+#endif /* (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */

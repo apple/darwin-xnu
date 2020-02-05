@@ -45,6 +45,17 @@
 
 #define EXC_ARM_UNDEFINED       1       /* Undefined */
 
+/*
+ *      EXC_ARITHMETIC
+ */
+
+#define EXC_ARM_FP_UNDEFINED    0       /* Undefined Floating Point Exception */
+#define EXC_ARM_FP_IO           1       /* Invalid Floating Point Operation */
+#define EXC_ARM_FP_DZ           2       /* Floating Point Divide by Zero */
+#define EXC_ARM_FP_OF           3       /* Floating Point Overflow */
+#define EXC_ARM_FP_UF           4       /* Floating Point Underflow */
+#define EXC_ARM_FP_IX           5       /* Inexact Floating Point Result */
+#define EXC_ARM_FP_ID           6       /* Floating Point Denormal Input */
 
 /*
  *      EXC_BAD_ACCESS
@@ -54,7 +65,7 @@
 #define EXC_ARM_DA_ALIGN        0x101   /* Alignment Fault */
 #define EXC_ARM_DA_DEBUG        0x102   /* Debug (watch/break) Fault */
 #define EXC_ARM_SP_ALIGN        0x103   /* SP Alignment Fault */
-#define EXC_ARM_SWP                     0x104   /* SWP instruction */
+#define EXC_ARM_SWP             0x104   /* SWP instruction */
 
 /*
  *	EXC_BREAKPOINT

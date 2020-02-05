@@ -248,9 +248,8 @@ kxld_object_init_from_macho(KXLDObject *object, u_char *file, u_long size,
 	/* Allocate the symbol table */
 
 	if (!object->symtab) {
-		object->symtab = kxld_alloc(kxld_symtab_sizeof());
+		object->symtab = kxld_calloc(kxld_symtab_sizeof());
 		require_action(object->symtab, finish, rval = KERN_RESOURCE_SHORTAGE);
-		bzero(object->symtab, kxld_symtab_sizeof());
 	}
 
 	/* Build the relocator */

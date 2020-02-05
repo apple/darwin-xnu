@@ -66,6 +66,8 @@
  *	@(#)kern_subr.c	8.3 (Berkeley) 1/21/94
  */
 
+#include <machine/atomic.h>
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc_internal.h>
@@ -601,7 +603,7 @@ uio_create( int a_iovcount,                     /* number of iovecs */
 		/* leave a note that we allocated this uio_t */
 		my_uio->uio_flags |= UIO_FLAGS_WE_ALLOCED;
 #if DEBUG
-		(void)hw_atomic_add(&uio_t_count, 1);
+		os_atomic_inc(&uio_t_count, relaxed);
 #endif
 	}
 
@@ -826,7 +828,7 @@ uio_free( uio_t a_uio )
 
 	if (a_uio != NULL && (a_uio->uio_flags & UIO_FLAGS_WE_ALLOCED) != 0) {
 #if DEBUG
-		if (hw_atomic_sub(&uio_t_count, 1) == UINT_MAX) {
+		if (os_atomic_dec_orig(&uio_t_count, relaxed) == 0) {
 			panic("%s :%d - uio_t_count underflow\n", __FILE__, __LINE__);
 		}
 #endif
@@ -843,12 +845,20 @@ uio_free( uio_t a_uio )
 int
 uio_addiov( uio_t a_uio, user_addr_t a_baseaddr, user_size_t a_length )
 {
-	int                     i;
+	int i;
+	user_size_t resid;
 
 	if (a_uio == NULL) {
 #if DEBUG
 		panic("%s :%d - invalid uio_t\n", __FILE__, __LINE__);
-#endif /* LP64_DEBUG */
+#endif
+		return -1;
+	}
+
+	if (os_add_overflow(a_length, a_uio->uio_resid_64, &resid)) {
+#if DEBUG
+		panic("%s :%d - invalid length %lu\n", __FILE__, __LINE__, (unsigned long)a_length);
+#endif
 		return -1;
 	}
 
@@ -858,7 +868,7 @@ uio_addiov( uio_t a_uio, user_addr_t a_baseaddr, user_size_t a_length )
 				a_uio->uio_iovs.uiovp[i].iov_len = a_length;
 				a_uio->uio_iovs.uiovp[i].iov_base = a_baseaddr;
 				a_uio->uio_iovcnt++;
-				a_uio->uio_resid_64 += a_length;
+				a_uio->uio_resid_64 = resid;
 				return 0;
 			}
 		}
@@ -868,7 +878,7 @@ uio_addiov( uio_t a_uio, user_addr_t a_baseaddr, user_size_t a_length )
 				a_uio->uio_iovs.kiovp[i].iov_len = (u_int64_t)a_length;
 				a_uio->uio_iovs.kiovp[i].iov_base = (u_int64_t)a_baseaddr;
 				a_uio->uio_iovcnt++;
-				a_uio->uio_resid_64 += a_length;
+				a_uio->uio_resid_64 = resid;
 				return 0;
 			}
 		}
@@ -1161,7 +1171,7 @@ uio_duplicate( uio_t a_uio )
 
 	my_uio->uio_flags = UIO_FLAGS_WE_ALLOCED | UIO_FLAGS_INITED;
 #if DEBUG
-	(void)hw_atomic_add(&uio_t_count, 1);
+	os_atomic_inc(&uio_t_count, relaxed);
 #endif
 
 

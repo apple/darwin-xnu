@@ -865,7 +865,7 @@ task_policy_update_internal_locked(task_t task, boolean_t in_create, task_pend_t
 			break;
 		}
 	} else {
-		/* Daemons get USER_INTERACTIVE squashed to USER_INITIATED */
+		/* Daemons and dext get USER_INTERACTIVE squashed to USER_INITIATED */
 		next.tep_qos_ceiling = THREAD_QOS_USER_INITIATED;
 	}
 
@@ -1077,6 +1077,7 @@ task_policy_update_internal_locked(task_t task, boolean_t in_create, task_pend_t
 	case TASK_APPTYPE_DAEMON_STANDARD:
 	case TASK_APPTYPE_DAEMON_ADAPTIVE:
 	case TASK_APPTYPE_DAEMON_BACKGROUND:
+	case TASK_APPTYPE_DRIVER:
 	default:
 		next.tep_live_donor = 0;
 		break;
@@ -1907,8 +1908,8 @@ extern boolean_t ipc_importance_interactive_receiver;
  * TODO: Make this function more table-driven instead of ad-hoc
  */
 void
-proc_set_task_spawnpolicy(task_t task, int apptype, int qos_clamp, int role,
-    ipc_port_t * portwatch_ports, int portwatch_count)
+proc_set_task_spawnpolicy(task_t task, thread_t thread, int apptype, int qos_clamp, int role,
+    ipc_port_t * portwatch_ports, uint32_t portwatch_count)
 {
 	struct task_pend_token pend_token = {};
 
@@ -1968,6 +1969,13 @@ proc_set_task_spawnpolicy(task_t task, int apptype, int qos_clamp, int role,
 		task_importance_mark_denap_receiver(task, FALSE);
 		break;
 
+	case TASK_APPTYPE_DRIVER:
+		task_importance_mark_donor(task, FALSE);
+		task_importance_mark_live_donor(task, FALSE);
+		task_importance_mark_receiver(task, FALSE);
+		task_importance_mark_denap_receiver(task, FALSE);
+		break;
+
 	case TASK_APPTYPE_NONE:
 		break;
 	}
@@ -1975,10 +1983,10 @@ proc_set_task_spawnpolicy(task_t task, int apptype, int qos_clamp, int role,
 	if (portwatch_ports != NULL && apptype == TASK_APPTYPE_DAEMON_ADAPTIVE) {
 		int portwatch_boosts = 0;
 
-		for (int i = 0; i < portwatch_count; i++) {
+		for (uint32_t i = 0; i < portwatch_count; i++) {
 			ipc_port_t port = NULL;
 
-			if ((port = portwatch_ports[i]) != NULL) {
+			if (IP_VALID(port = portwatch_ports[i])) {
 				int boost = 0;
 				task_add_importance_watchport(task, port, &boost);
 				portwatch_boosts += boost;
@@ -1988,6 +1996,11 @@ proc_set_task_spawnpolicy(task_t task, int apptype, int qos_clamp, int role,
 		if (portwatch_boosts > 0) {
 			task_importance_hold_internal_assertion(task, portwatch_boosts);
 		}
+	}
+
+	/* Redirect the turnstile push of watchports to task */
+	if (portwatch_count && portwatch_ports != NULL) {
+		task_add_turnstile_watchports(task, thread, portwatch_ports, portwatch_count);
 	}
 
 	task_lock(task);
@@ -2065,6 +2078,7 @@ task_compute_main_thread_qos(task_t task)
 	case TASK_APPTYPE_DAEMON_INTERACTIVE:
 	case TASK_APPTYPE_DAEMON_STANDARD:
 	case TASK_APPTYPE_DAEMON_ADAPTIVE:
+	case TASK_APPTYPE_DRIVER:
 		primordial_qos = THREAD_QOS_LEGACY;
 		break;
 
@@ -2115,6 +2129,15 @@ task_is_daemon(task_t task)
 	default:
 		return FALSE;
 	}
+}
+
+bool
+task_is_driver(task_t task)
+{
+	if (!task) {
+		return FALSE;
+	}
+	return task->requested_policy.trp_apptype == TASK_APPTYPE_DRIVER;
 }
 
 boolean_t

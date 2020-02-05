@@ -942,10 +942,24 @@ def DumpRawTraceFile(cmd_args=[], cmd_options={}):
             # XXX condition here is on __LP64__
             if lp64 :
                 tempbuf += struct.pack('QQQQQQIIQ', 
-                        e.timestamp, e.arg1, e.arg2, e.arg3, e.arg4, e.arg5, e.debugid, e.cpuid, e.unused)
+                        unsigned(e.timestamp),
+                        unsigned(e.arg1),
+                        unsigned(e.arg2),
+                        unsigned(e.arg3),
+                        unsigned(e.arg4),
+                        unsigned(e.arg5),
+                        unsigned(e.debugid),
+                        unsigned(e.cpuid),
+                        unsigned(e.unused))
             else :
-                tempbuf += struct.pack('QIIIIII', 
-                        e.timestamp, e.arg1, e.arg2, e.arg3, e.arg4, e.arg5, e.debugid)
+                tempbuf += struct.pack('QIIIIII',
+                        unsigned(e.timestamp),
+                        unsigned(e.arg1),
+                        unsigned(e.arg2),
+                        unsigned(e.arg3),
+                        unsigned(e.arg4),
+                        unsigned(e.arg5),
+                        unsigned(e.debugid))
 
             # Watch for out of order timestamps
             if earliest_time < (htab[min_kdbp].kd_prev_timebase & KDBG_TIMESTAMP_MASK) :

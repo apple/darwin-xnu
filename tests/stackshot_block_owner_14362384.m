@@ -24,7 +24,7 @@
 #include <unistd.h>
 #include <TargetConditionals.h>
 
-#if !TARGET_OS_EMBEDDED
+#if !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 #include <pcre.h>
 #endif
 
@@ -118,7 +118,7 @@ void check_python(void *stackshot, const char *fmt, ...)
 {
 	save_stackshot(stackshot, "/tmp/ss");
 
-#if !TARGET_OS_EMBEDDED
+#if !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 	va_list args;
 	va_start(args, fmt);
 	char *re_string = NULL;

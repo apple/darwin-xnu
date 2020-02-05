@@ -122,4 +122,7 @@ const struct ccmode_ofb *ccaes_ofb_crypt_mode(void);
 const struct ccmode_siv *ccaes_siv_encrypt_mode(void);
 const struct ccmode_siv *ccaes_siv_decrypt_mode(void);
 
+const struct ccmode_siv_hmac *ccaes_siv_hmac_sha256_encrypt_mode(void);
+const struct ccmode_siv_hmac *ccaes_siv_hmac_sha256_decrypt_mode(void);
+
 #endif /* _CORECRYPTO_CCAES_H_ */

@@ -188,7 +188,7 @@ OSSymbolPool::init()
 
 	poolGate = lck_rw_alloc_init(IOLockGroup, LCK_ATTR_NULL);
 
-	return poolGate != 0;
+	return poolGate != NULL;
 }
 
 OSSymbolPool::OSSymbolPool(const OSSymbolPool *old)
@@ -197,7 +197,7 @@ OSSymbolPool::OSSymbolPool(const OSSymbolPool *old)
 	nBuckets = old->nBuckets;
 	buckets = old->buckets;
 
-	poolGate = 0;   // Do not duplicate the poolGate
+	poolGate = NULL; // Do not duplicate the poolGate
 }
 
 OSSymbolPool::~OSSymbolPool()
@@ -250,7 +250,7 @@ OSSymbolPool::nextHashState(OSSymbolPoolState *stateP)
 
 	while (!stateP->j) {
 		if (!stateP->i) {
-			return 0;
+			return NULL;
 		}
 		stateP->i--;
 		thisBucket--;
@@ -319,7 +319,7 @@ OSSymbolPool::findSymbol(const char *cString) const
 	j = thisBucket->count;
 
 	if (!j) {
-		return 0;
+		return NULL;
 	}
 
 	if (j == 1) {
@@ -330,7 +330,7 @@ OSSymbolPool::findSymbol(const char *cString) const
 		    && probeSymbol->taggedTryRetain(nullptr)) {
 			return probeSymbol;
 		}
-		return 0;
+		return NULL;
 	}
 
 	for (list = thisBucket->symbolP; j--; list++) {
@@ -342,7 +342,7 @@ OSSymbolPool::findSymbol(const char *cString) const
 		}
 	}
 
-	return 0;
+	return NULL;
 }
 
 OSSymbol *
@@ -432,7 +432,7 @@ OSSymbolPool::removeSymbol(OSSymbol *sym)
 		probeSymbol = (OSSymbol *) list;
 
 		if (probeSymbol == sym) {
-			thisBucket->symbolP = 0;
+			thisBucket->symbolP = NULL;
 			count--;
 			thisBucket->count--;
 			SHRINK_POOL();

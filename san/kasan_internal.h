@@ -71,6 +71,10 @@ typedef uintptr_t uptr;
 #define KASAN_ARGS_NODYCHECKS      0x0100U
 #define KASAN_ARGS_NOPOISON_HEAP   0x0200U
 #define KASAN_ARGS_NOPOISON_GLOBAL 0x0400U
+#define KASAN_ARGS_CHECK_LEAKS     0x0800U
+
+/* uninitialized memory detection */
+#define KASAN_UNINITIALIZED_HEAP   0xbe
 
 #ifndef KASAN
 # error KASAN undefined
@@ -110,6 +114,7 @@ enum __attribute__((flag_enum)) kasan_access_types {
 	TYPE_POISON_HEAP   = BIT(14),
 	/* no TYPE_POISON_STACK, because the runtime does not control stack poisoning */
 	TYPE_TEST          = BIT(15),
+	TYPE_LEAK          = BIT(16),
 
 	/* masks */
 	TYPE_MEM     = TYPE_MEMR | TYPE_MEMW,            /* memory intrinsics */
@@ -130,6 +135,7 @@ enum kasan_violation_types {
 	REASON_INVALID_SIZE =   2, /* free size did not match alloc size */
 	REASON_MOD_AFTER_FREE = 3, /* object modified after free */
 	REASON_MOD_OOB =        4, /* out of bounds modification of object */
+	REASON_UNINITIALIZED =  5, /* leak of uninitialized kernel memory */
 };
 
 typedef enum kasan_access_types access_t;

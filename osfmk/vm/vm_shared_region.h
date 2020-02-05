@@ -187,6 +187,9 @@ struct vm_shared_region_slide_info {
 	mach_vm_offset_t        start;
 	mach_vm_offset_t        end;
 	uint32_t                slide;
+#if defined(HAS_APPLE_PAC)
+	boolean_t               si_ptrauth;
+#endif /* HAS_APPLE_PAC */
 	vm_object_t             slide_object;
 	mach_vm_size_t          slide_info_size;
 	vm_shared_region_slide_info_entry_t     slide_info_entry;

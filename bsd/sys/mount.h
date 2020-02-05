@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -74,6 +74,7 @@
 #include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
 #include <sys/attr.h>           /* needed for vol_capabilities_attr_t */
+#include <os/base.h>
 
 #ifndef KERNEL
 #include <stdint.h>
@@ -100,6 +101,8 @@
 #define MNAMELEN        90              /* length of buffer for returned name */
 #endif /* __DARWIN_64_BIT_INO_T */
 
+#define MNT_EXT_ROOT_DATA_VOL      0x00000001      /* Data volume of root volume group */
+
 #define __DARWIN_STRUCT_STATFS64 { \
 	uint32_t	f_bsize;        /* fundamental file system block size */ \
 	int32_t		f_iosize;       /* optimal transfer block size */ \
@@ -116,7 +119,8 @@
 	char		f_fstypename[MFSTYPENAMELEN];   /* fs type name */ \
 	char		f_mntonname[MAXPATHLEN];        /* directory on which mounted */ \
 	char		f_mntfromname[MAXPATHLEN];      /* mounted filesystem */ \
-	uint32_t	f_reserved[8];  /* For future use */ \
+	uint32_t    f_flags_ext;    /* extended flags */ \
+	uint32_t	f_reserved[7];  /* For future use */ \
 }
 
 #if !__DARWIN_ONLY_64_BIT_INO_T
@@ -300,6 +304,12 @@ struct vfs_attr {
 #define MNT_EXPORTED    0x00000100      /* file system is exported */
 
 /*
+ * Denotes storage which can be removed from the system by the user.
+ */
+
+#define MNT_REMOVABLE   0x00000200
+
+/*
  * MAC labeled / "quarantined" flag
  */
 #define MNT_QUARANTINE  0x00000400      /* file system is quarantined */
@@ -322,6 +332,7 @@ struct vfs_attr {
 #define MNT_MULTILABEL  0x04000000      /* MAC support for individual labels */
 #define MNT_NOATIME             0x10000000      /* disable update of file access time */
 #define MNT_SNAPSHOT    0x40000000 /* The mount is a snapshot */
+#define MNT_STRICTATIME 0x80000000      /* enable strict update of file access time */
 #ifdef BSD_KERNEL_PRIVATE
 /* #define MNT_IMGSRC_BY_INDEX 0x20000000 see sys/imgsrc.h */
 #endif /* BSD_KERNEL_PRIVATE */
@@ -337,11 +348,11 @@ struct vfs_attr {
 #define MNT_VISFLAGMASK (MNT_RDONLY	| MNT_SYNCHRONOUS | MNT_NOEXEC	| \
 	                MNT_NOSUID	| MNT_NODEV	| MNT_UNION	| \
 	                MNT_ASYNC	| MNT_EXPORTED	| MNT_QUARANTINE | \
-	                MNT_LOCAL	| MNT_QUOTA | \
+	                MNT_LOCAL	| MNT_QUOTA | MNT_REMOVABLE | \
 	                MNT_ROOTFS	| MNT_DOVOLFS	| MNT_DONTBROWSE | \
 	                MNT_IGNORE_OWNERSHIP | MNT_AUTOMOUNTED | MNT_JOURNALED | \
 	                MNT_NOUSERXATTR | MNT_DEFWRITE	| MNT_MULTILABEL | \
-	                MNT_NOATIME | MNT_SNAPSHOT | MNT_CPROTECT)
+	                MNT_NOATIME | MNT_STRICTATIME | MNT_SNAPSHOT | MNT_CPROTECT)
 /*
  * External filesystem command modifier flags.
  * Unmount can use the MNT_FORCE flag.
@@ -381,9 +392,13 @@ struct vfs_attr {
 #define MNT_WAIT        1       /* synchronized I/O file integrity completion */
 #define MNT_NOWAIT      2       /* start all I/O, but do not wait for it */
 #define MNT_DWAIT       4       /* synchronized I/O data integrity completion */
+#ifdef KERNEL
+/* only for VFS_SYNC */
+#define MNT_VOLUME      8       /* sync on a single mounted filesystem  */
+#endif
 
 
-#ifndef KERNEL
+#if !defined(KERNEL) && !defined(_KERN_SYS_KERNELTYPES_H_) /* also defined in kernel_types.h */
 struct mount;
 typedef struct mount * mount_t;
 struct vnode;
@@ -489,7 +504,8 @@ struct netfs_status {
 #define VQ_QUOTA        0x1000  /* a user quota has been hit */
 #define VQ_NEARLOWDISK          0x2000  /* Above lowdisk and below desired disk space */
 #define VQ_DESIRED_DISK         0x4000  /* the desired disk space */
-#define VQ_FLAG8000     0x8000  /* placeholder */
+#define VQ_FREE_SPACE_CHANGE    0x8000  /* free disk space has significantly changed */
+#define VQ_FLAG10000    0x10000  /* placeholder */
 
 
 #ifdef KERNEL
@@ -772,6 +788,18 @@ struct fs_snapshot_root_args {
 };
 #define VFSIOC_ROOT_SNAPSHOT  _IOW('V', 3, struct fs_snapshot_root_args)
 
+typedef struct fs_role_mount_args {
+	mount_t root_mp;
+	uint32_t mount_role;
+} fs_role_mount_args_t;
+
+OS_ENUM(vfs_roles, uint32_t,
+    VFS_SYSTEM_ROLE = 1,
+    VFS_VM_ROLE = 8,
+    VFS_DATA_ROLE = 64);
+
+#define VFSIOC_MOUNT_BYROLE  _IOW('V', 4, fs_role_mount_args_t)
+
 #endif /* KERNEL */
 
 /*
@@ -780,6 +808,9 @@ struct fs_snapshot_root_args {
 #ifdef PRIVATE
 #define VFS_ITERATE_TAIL_FIRST  (1 << 0)
 #define VFS_ITERATE_CB_DROPREF  (1 << 1)        // Callback will drop the iterref
+#define VFS_ITERATE_NOSKIP_UNMOUNT  (1 << 2)    /* Callback will be made on FS in unmount.
+	                                        * The callback cannot make any calls
+	                                        * into the Filesystem when this is set. */
 #endif /* PRIVATE */
 
 /*
@@ -1280,6 +1311,7 @@ void *  vfs_mntlabel(mount_t mp); /* Safe to cast to "struct label*"; returns "v
 void    vfs_setcompoundopen(mount_t mp);
 uint64_t vfs_throttle_mask(mount_t mp);
 int vfs_isswapmount(mount_t mp);
+boolean_t vfs_context_is_dataless_manipulator(vfs_context_t);
 
 struct vnode_trigger_info;
 
@@ -1352,6 +1384,13 @@ int     vfs_settriggercallback(fsid_t *fsid, vfs_trigger_callback_t vtc, void *d
 
 /* tags a volume as not supporting extended readdir for NFS exports */
 void mount_set_noreaddirext(mount_t);
+
+/*!
+ *  @function vfs_get_statfs64
+ *  @abstract Get the same information as vfs_statfs(), but in a format suitable
+ *  for copying to userland.
+ */
+void vfs_get_statfs64(struct mount *mp, struct statfs64 *sfs);
 
 #endif  /* KERNEL_PRIVATE */
 __END_DECLS

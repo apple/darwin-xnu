@@ -1,0 +1,171 @@
+/*
+ * Copyright (c) 2019-2019 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ *
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ *
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ *
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
+#if !__IIG
+#if KERNEL
+#include <libkern/c++/OSObject.h>
+#endif
+#endif
+
+#ifndef _IOKIT_UOSOBJECT_H
+#define _IOKIT_UOSOBJECT_H
+
+#if !KERNEL
+#include <stddef.h>
+#include <stdint.h>
+#include <DriverKit/IOReturn.h>
+#if DRIVERKIT_PRIVATE
+#include <mach/port.h>
+#endif
+#if !__IIG
+#include <string.h>
+#include <DriverKit/OSMetaClass.h>
+#endif
+class OSObject;
+typedef OSObject * OSObjectPtr;
+#endif
+
+#if __IIG && !__IIG_ATTRIBUTES_DEFINED__
+
+#define __IIG_ATTRIBUTES_DEFINED__	1
+
+#define KERNEL       __attribute__((annotate("kernel")))
+#define NATIVE       __attribute__((annotate("native")))
+#define LOCAL        __attribute__((annotate("local")))
+#define LOCALONLY    __attribute__((annotate("localonly")))
+#define REMOTE       __attribute__((annotate("remote")))
+
+#define LOCALHOST    __attribute__((annotate("localhost")))
+
+#define INVOKEREPLY  __attribute__((annotate("invokereply")))
+#define REPLY        __attribute__((annotate("reply")))
+
+#define PORTMAKESEND __attribute__((annotate("MACH_MSG_TYPE_MAKE_SEND")))
+#define PORTCOPYSEND __attribute__((annotate("MACH_MSG_TYPE_COPY_SEND")))
+
+#define TARGET       __attribute__((annotate("target")))
+#define TYPE(p)      __attribute__((annotate("type=" # p)))
+
+//#define ARRAY(maxcount) __attribute__((annotate(# maxcount), annotate("array")))
+#define EXTENDS(cls) __attribute__((annotate("extends=" # cls)))
+
+//#define INTERFACE    __attribute__((annotate("interface")))
+//#define IMPLEMENTS(i)   void implements(i *);
+
+#define QUEUENAME(name) __attribute__((annotate("queuename=" # name)))
+
+#define IIG_SERIALIZABLE __attribute__((annotate("serializable")))
+
+#else
+
+#define IIG_SERIALIZABLE
+
+#endif /* __IIG */
+
+
+#if !__IIG
+#if KERNEL
+typedef OSObject OSContainer;
+#else
+class IIG_SERIALIZABLE OSContainer;
+#endif
+#else
+class IIG_SERIALIZABLE OSContainer;
+#endif
+
+class IIG_SERIALIZABLE OSData;
+class IIG_SERIALIZABLE OSNumber;
+class IIG_SERIALIZABLE OSString;
+class IIG_SERIALIZABLE OSBoolean;
+class IIG_SERIALIZABLE OSDictionary;
+class IIG_SERIALIZABLE OSArray;
+
+class OSMetaClass;
+class IODispatchQueue;
+typedef char IODispatchQueueName[256];
+
+#if __IIG
+class OSMetaClassBase
+{
+	virtual const OSMetaClass *
+	getMetaClass() const LOCALONLY;
+
+    virtual void
+    retain() const LOCALONLY;
+
+    virtual void
+    release() const LOCALONLY;
+
+	virtual bool
+    isEqualTo(const OSMetaClassBase * anObject) const LOCALONLY;
+};
+#endif /* __IIG */
+
+
+/*!
+@iig implementation
+#include <DriverKit/IODispatchQueue.h>
+@iig end
+*/
+
+class OSObject : public OSMetaClassBase
+{
+public:
+
+	virtual bool
+	init() LOCALONLY;
+
+	virtual void
+	free() LOCALONLY;
+
+    virtual void
+    retain() const override;
+
+    virtual void
+    release() const override;
+
+	virtual kern_return_t
+	SetDispatchQueue(
+		const IODispatchQueueName name,
+		IODispatchQueue         * queue) KERNEL = 0;
+
+	virtual kern_return_t
+	CopyDispatchQueue(
+		const IODispatchQueueName name,
+		IODispatchQueue        ** queue) KERNEL = 0;
+};
+
+#define DEFN(classname, name)                                       \
+name ## _Impl(classname ## _ ## name ## _Args)
+
+#define IMPL(classname, name)                                       \
+classname :: DEFN(classname, name)
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
+#endif /* ! _IOKIT_UOSOBJECT_H */

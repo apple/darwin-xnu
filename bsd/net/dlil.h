@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -97,6 +97,12 @@ enum {
 	}                                                               \
 } while (0)
 
+#define net_timerusec(tvp, nsp) do {                                    \
+	*(nsp) = (tvp)->tv_nsec / NSEC_PER_USEC;                        \
+	if ((tvp)->tv_sec > 0)                                          \
+	        *(nsp) += ((tvp)->tv_sec * USEC_PER_SEC);               \
+} while (0)
+
 #define net_timernsec(tvp, nsp) do {                                    \
 	*(nsp) = (tvp)->tv_nsec;                                        \
 	if ((tvp)->tv_sec > 0)                                          \
@@ -165,44 +171,12 @@ struct dlil_threading_info {
 	struct thread   *wloop_thr;     /* workloop thread */
 	struct thread   *poll_thr;      /* poll thread */
 	u_int32_t       tag;            /* affinity tag */
-	/*
-	 * Opportunistic polling.
-	 */
-	ifnet_model_t   mode;           /* current mode */
-	struct pktcntr  tstats;         /* incremental polling statistics */
-	struct if_rxpoll_stats pstats;  /* polling statistics */
-#define rxpoll_offreq   pstats.ifi_poll_off_req
-#define rxpoll_offerr   pstats.ifi_poll_off_err
-#define rxpoll_onreq    pstats.ifi_poll_on_req
-#define rxpoll_onerr    pstats.ifi_poll_on_err
-#define rxpoll_wavg     pstats.ifi_poll_wakeups_avg
-#define rxpoll_wlowat   pstats.ifi_poll_wakeups_lowat
-#define rxpoll_whiwat   pstats.ifi_poll_wakeups_hiwat
-#define rxpoll_pavg     pstats.ifi_poll_packets_avg
-#define rxpoll_pmin     pstats.ifi_poll_packets_min
-#define rxpoll_pmax     pstats.ifi_poll_packets_max
-#define rxpoll_plowat   pstats.ifi_poll_packets_lowat
-#define rxpoll_phiwat   pstats.ifi_poll_packets_hiwat
-#define rxpoll_bavg     pstats.ifi_poll_bytes_avg
-#define rxpoll_bmin     pstats.ifi_poll_bytes_min
-#define rxpoll_bmax     pstats.ifi_poll_bytes_max
-#define rxpoll_blowat   pstats.ifi_poll_bytes_lowat
-#define rxpoll_bhiwat   pstats.ifi_poll_bytes_hiwat
-#define rxpoll_plim     pstats.ifi_poll_packets_limit
-#define rxpoll_ival     pstats.ifi_poll_interval_time
-	struct pktcntr  sstats;         /* packets and bytes per sampling */
-	struct timespec mode_holdtime;  /* mode holdtime in nsec */
-	struct timespec mode_lasttime;  /* last mode change time in nsec */
-	struct timespec sample_holdtime; /* sampling holdtime in nsec */
-	struct timespec sample_lasttime; /* last sampling time in nsec */
-	struct timespec dbg_lasttime;   /* last debug message time in nsec */
 #if IFNET_INPUT_SANITY_CHK
 	/*
 	 * For debugging.
 	 */
 	u_int64_t       input_mbuf_cnt; /* total # of packets processed */
 #endif
-	thread_call_t   input_mit_tcall; /* coalescing input processing */
 };
 
 /*
@@ -230,11 +204,20 @@ struct dlil_main_threading_info {
 #define DLIL_IFF_TSO            0x01    /* Interface filter supports TSO */
 #define DLIL_IFF_INTERNAL       0x02    /* Apple internal -- do not count towards stats */
 
+/* Input poll interval definitions */
+#define IF_RXPOLL_INTERVALTIME_MIN      (1ULL * 1000)           /* 1 us */
+#define IF_RXPOLL_INTERVALTIME          (1ULL * 1000 * 1000)    /* 1 ms */
+
 extern int dlil_verbose;
 extern uint32_t hwcksum_dbg;
 extern uint32_t hwcksum_tx;
 extern uint32_t hwcksum_rx;
 extern struct dlil_threading_info *dlil_main_input_thread;
+extern unsigned int net_rxpoll;
+extern uint32_t if_rxpoll;
+extern uint32_t if_rxpoll_decay;
+extern uint32_t if_rxpoll_interval_pkts;
+extern uint32_t if_rcvq_maxlen;
 
 extern void dlil_init(void);
 
@@ -323,7 +306,7 @@ extern void dlil_detach_filter(interface_filter_t);
 
 extern void dlil_proto_unplumb_all(ifnet_t);
 
-extern void dlil_post_msg(struct ifnet *, u_int32_t, u_int32_t,
+extern int dlil_post_msg(struct ifnet *, u_int32_t, u_int32_t,
     struct net_event_data *, u_int32_t);
 
 extern void dlil_post_sifflags_msg(struct ifnet *);
@@ -331,6 +314,14 @@ extern void dlil_post_sifflags_msg(struct ifnet *);
 extern int dlil_post_complete_msg(struct ifnet *, struct kev_msg *);
 
 extern int dlil_alloc_local_stats(struct ifnet *);
+
+extern void ifnet_filter_update_tso(boolean_t filter_enable);
+extern errno_t dlil_rxpoll_validate_params(struct ifnet_poll_params *);
+extern void dlil_rxpoll_update_params(struct ifnet *,
+    struct ifnet_poll_params *);
+extern void ifnet_poll(struct ifnet *);
+extern errno_t ifnet_input_poll(struct ifnet *, struct mbuf *,
+    struct mbuf *, const struct ifnet_stat_increment_param *);
 
 
 /*
@@ -346,9 +337,11 @@ extern void dlil_if_release(struct ifnet *ifp);
 extern errno_t dlil_if_ref(struct ifnet *);
 extern errno_t dlil_if_free(struct ifnet *);
 
-extern void dlil_node_present(struct ifnet *, struct sockaddr *, int32_t, int,
+extern int dlil_node_present(struct ifnet *, struct sockaddr *, int32_t, int,
     int, u_int8_t[48]);
 extern void dlil_node_absent(struct ifnet *, struct sockaddr *);
+extern int dlil_node_present_v2(struct ifnet *, struct sockaddr *, struct sockaddr_dl *, int32_t, int,
+    int, u_int8_t[48]);
 
 extern const void *dlil_ifaddr_bytes(const struct sockaddr_dl *, size_t *,
     kauth_cred_t *);
@@ -356,7 +349,7 @@ extern const void *dlil_ifaddr_bytes(const struct sockaddr_dl *, size_t *,
 extern void dlil_report_issues(struct ifnet *, u_int8_t[DLIL_MODIDLEN],
     u_int8_t[DLIL_MODARGLEN]);
 
-#define PROTO_HASH_SLOTS        4
+#define PROTO_HASH_SLOTS        5
 
 extern int proto_hash_value(u_int32_t);
 

@@ -245,6 +245,12 @@ and
 can be requested. When this option is used, forkattrs are reinterpreted as a
 set of extended common attributes.
 .
+.It FSOPT_RETURN_REALDEV
+If this is bit is set, then ATTR_CMN_DEVID and ATTR_CMN_FSID will return
+the values corresponding to the physical volume they are on. When a
+filesystem supports VOL_CAP_INT_VOLUME_GROUPS, it is possible that the
+filesystem may return a common logical value for these attributes otherwise.
+.
 .El
 .
 .Sh ATTRIBUTE BUFFER
@@ -433,7 +439,7 @@ in
 An
 .Vt fsobj_id_t
 structure that uniquely identifies the file system object within a mounted 
-volume for the duration of it's mount; this identifier is not guaranteed to be 
+volume for the duration of its mount; this identifier is not guaranteed to be 
 persistent for the volume and may change every time the volume is mounted.
 .Pp
 On HFS+ volumes, the ATTR_CMN_OBJID of a file system object is distinct from 
@@ -1181,6 +1187,41 @@ system object. Although the ATTR_CMNEXT_LINKID of a file system object may appea
 similar (in whole or in part) to its ATTR_CMN_FILEID (see description of
 ATTR_CMN_FILEID above), \fBno relation between the two attributes should ever be implied.\fP
 .
+.It ATTR_CMNEXT_NOFIRMLINKPATH
+An
+.Vt attrreference
+structure containing a path that does not have firmlinks of
+the file system object as
+a UTF-8 encoded, null terminated C string.
+The attribute data length will not be greater than
+.Dv PATH_MAX.
+Inconsistent behavior may be observed when this attribute is requested on
+hard-linked items, particularly when the file system does not support
+ATTR_CMN_PARENTID natively. Callers should be aware of this when requesting the
+canonical path of a hard-linked item.
+.It ATTR_CMNEXT_REALDEVID
+A
+.Vt dev_t
+containing the real device number of the device on which this
+file system object's volume is mounted.
+Equivalent to the
+.Fa st_dev
+field of the
+.Vt stat
+structure returned by
+.Xr stat 2 .
+.
+.It ATTR_CMNEXT_REALFSID
+An
+.Vt fsid_t
+structure containing the real file system identifier for the volume on which
+the file system object resides.
+Equivalent to the
+.Fa f_fsid
+field of the
+.Vt statfs
+structure returned by
+.Xr statfs 2 .
 .El
 .
 .Sh VOLUME CAPABILITIES
@@ -1424,6 +1465,14 @@ See ATTR_CMN_FLAGS for more details.
 If this bit is set, the volume format does not support setting file
 permissions.
 See ATTR_CMN_USERACCESS for more details.
+.It VOL_CAP_FMT_SHARED_SPACE
+If this bit is set, the volume format supports having multiple logical filesystems
+in a single "partition" which share space.
+.It VOL_CAP_FMT_VOL_GROUPS
+If this bit is set, the volume format supports having multiple logical filesystems
+which may be mounted and unmounted together and may present common filesystem
+identifier information.
+.
 .
 .El
 .Pp
@@ -1560,6 +1609,13 @@ for more details.
 .It VOL_CAP_INT_RENAME_EXCL
 If this bit is set, the file system supports an exclusive rename
 operation. See
+.Xr rename 2
+for more details.
+.
+.It VOL_CAP_INT_RENAME_OPENFAIL
+If this bit is set, the file system may fail a rename operation
+of a directory if one of its descendents is open.
+See
 .Xr rename 2
 for more details.
 .

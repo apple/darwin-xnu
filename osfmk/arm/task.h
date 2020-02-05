@@ -59,5 +59,12 @@
  * Machine dependant task fields
  */
 
+#if defined(HAS_APPLE_PAC)
+#define MACHINE_TASK \
+	void*                   task_debug; \
+	uint64_t rop_pid; \
+	boolean_t disable_user_jop;
+#else
 #define MACHINE_TASK \
 	void*                   task_debug;
+#endif

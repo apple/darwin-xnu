@@ -61,7 +61,7 @@ IODataQueue *IODataQueue::withCapacity(UInt32 size)
 	if (dataQueue) {
 		if (!dataQueue->initWithCapacity(size)) {
 			dataQueue->release();
-			dataQueue = 0;
+			dataQueue = NULL;
 		}
 	}
 
@@ -76,7 +76,7 @@ IODataQueue::withEntries(UInt32 numEntries, UInt32 entrySize)
 	if (dataQueue) {
 		if (!dataQueue->initWithEntries(numEntries, entrySize)) {
 			dataQueue->release();
-			dataQueue = 0;
+			dataQueue = NULL;
 		}
 	}
 
@@ -111,7 +111,7 @@ IODataQueue::initWithCapacity(UInt32 size)
 	((IODataQueueInternal *)notifyMsg)->queueSize = size;
 
 	dataQueue = (IODataQueueMemory *)IOMallocAligned(allocSize, PAGE_SIZE);
-	if (dataQueue == 0) {
+	if (dataQueue == NULL) {
 		return false;
 	}
 	bzero(dataQueue, allocSize);
@@ -190,7 +190,7 @@ IODataQueue::enqueue(void * data, UInt32 dataSize)
 			entry = (IODataQueueEntry *)((UInt8 *)dataQueue->queue + tail);
 
 			entry->size = dataSize;
-			memcpy(&entry->data, data, dataSize);
+			__nochk_memcpy(&entry->data, data, dataSize);
 
 			// The tail can be out of bound when the size of the new entry
 			// exactly matches the available space at the end of the queue.
@@ -211,7 +211,7 @@ IODataQueue::enqueue(void * data, UInt32 dataSize)
 				((IODataQueueEntry *)((UInt8 *)dataQueue->queue + tail))->size = dataSize;
 			}
 
-			memcpy(&dataQueue->queue->data, data, dataSize);
+			__nochk_memcpy(&dataQueue->queue->data, data, dataSize);
 			newTail = entrySize;
 		} else {
 			return false; // queue is full
@@ -224,7 +224,7 @@ IODataQueue::enqueue(void * data, UInt32 dataSize)
 			entry = (IODataQueueEntry *)((UInt8 *)dataQueue->queue + tail);
 
 			entry->size = dataSize;
-			memcpy(&entry->data, data, dataSize);
+			__nochk_memcpy(&entry->data, data, dataSize);
 			newTail = tail + entrySize;
 		} else {
 			return false; // queue is full
@@ -291,11 +291,11 @@ IODataQueue::sendDataAvailableNotification()
 IOMemoryDescriptor *
 IODataQueue::getMemoryDescriptor()
 {
-	IOMemoryDescriptor *descriptor = 0;
+	IOMemoryDescriptor *descriptor = NULL;
 	UInt32              queueSize;
 
 	queueSize = ((IODataQueueInternal *) notifyMsg)->queueSize;
-	if (dataQueue != 0) {
+	if (dataQueue != NULL) {
 		descriptor = IOMemoryDescriptor::withAddress(dataQueue, queueSize + DATA_QUEUE_MEMORY_HEADER_SIZE, kIODirectionOutIn);
 	}
 

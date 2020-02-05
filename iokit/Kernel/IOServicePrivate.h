@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -84,7 +84,7 @@ class _IOServiceNotifier : public IONotifier
 {
 	friend class IOService;
 
-	OSDeclareDefaultStructors(_IOServiceNotifier)
+	OSDeclareDefaultStructors(_IOServiceNotifier);
 
 public:
 	OSOrderedSet *                      whence;
@@ -110,7 +110,7 @@ class _IOServiceInterestNotifier : public IONotifier
 {
 	friend class IOService;
 
-	OSDeclareDefaultStructors(_IOServiceInterestNotifier)
+	OSDeclareDefaultStructors(_IOServiceInterestNotifier);
 
 public:
 	queue_chain_t               chain;
@@ -131,7 +131,7 @@ public:
 
 class _IOServiceNullNotifier : public IONotifier
 {
-	OSDeclareDefaultStructors(_IOServiceNullNotifier)
+	OSDeclareDefaultStructors(_IOServiceNullNotifier);
 
 public:
 	virtual void taggedRetain(const void *tag) const APPLE_KEXT_OVERRIDE;
@@ -147,12 +147,10 @@ class _IOConfigThread : public OSObject
 {
 	friend class IOService;
 
-	OSDeclareDefaultStructors(_IOConfigThread)
+	OSDeclareDefaultStructors(_IOConfigThread);
 
 public:
-	virtual void free() APPLE_KEXT_OVERRIDE;
-
-	static void configThread( void );
+	static void configThread( int configThreadId );
 	static void main( void * arg, wait_result_t result );
 };
 
@@ -168,7 +166,7 @@ class _IOServiceJob : public OSObject
 {
 	friend class IOService;
 
-	OSDeclareDefaultStructors(_IOServiceJob)
+	OSDeclareDefaultStructors(_IOServiceJob);
 
 public:
 	int                 type;
@@ -184,11 +182,11 @@ class IOResources : public IOService
 {
 	friend class IOService;
 
-	OSDeclareDefaultStructors(IOResources)
+	OSDeclareDefaultStructors(IOResources);
 
 public:
 	static IOService * resources( void );
-	virtual bool init( OSDictionary * dictionary = 0 ) APPLE_KEXT_OVERRIDE;
+	virtual bool init( OSDictionary * dictionary = NULL ) APPLE_KEXT_OVERRIDE;
 	virtual IOReturn newUserClient(task_t owningTask, void * securityID,
 	    UInt32 type, OSDictionary * properties,
 	    IOUserClient ** handler) APPLE_KEXT_OVERRIDE;
@@ -197,11 +195,27 @@ public:
 	virtual IOReturn setProperties( OSObject * properties ) APPLE_KEXT_OVERRIDE;
 };
 
+class IOUserResources : public IOService
+{
+	friend class IOService;
+
+	OSDeclareDefaultStructors(IOUserResources);
+
+public:
+	static IOService * resources( void );
+	virtual bool init( OSDictionary * dictionary = NULL ) APPLE_KEXT_OVERRIDE;
+	virtual IOReturn newUserClient(task_t owningTask, void * securityID,
+	    UInt32 type, OSDictionary * properties,
+	    IOUserClient ** handler) APPLE_KEXT_OVERRIDE;
+	virtual IOWorkLoop * getWorkLoop() const APPLE_KEXT_OVERRIDE;
+	virtual bool matchPropertyTable( OSDictionary * table ) APPLE_KEXT_OVERRIDE;
+};
+
 class _IOOpenServiceIterator : public OSIterator
 {
 	friend class IOService;
 
-	OSDeclareDefaultStructors(_IOOpenServiceIterator)
+	OSDeclareDefaultStructors(_IOOpenServiceIterator);
 
 	OSIterator *        iter;
 	const IOService *   client;

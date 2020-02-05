@@ -118,11 +118,6 @@ typedef struct os_log_buffer_value_s {
 typedef struct os_log_buffer_s {
 #define OS_LOG_BUFFER_HAS_PRIVATE 0x1
 #define OS_LOG_BUFFER_HAS_NON_SCALAR 0x2
-#ifdef KERNEL
-#define OS_LOG_BUFFER_MAX_SIZE 256
-#else
-#define OS_LOG_BUFFER_MAX_SIZE 1024
-#endif
 	uint8_t flags;
 	uint8_t arg_cnt;
 	uint8_t content[];

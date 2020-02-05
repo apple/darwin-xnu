@@ -35,6 +35,9 @@
 #include <mach/vm_types.h>
 #endif
 
+#define USER_TIMEBASE_NONE   0
+#define USER_TIMEBASE_SPEC   1
+
 /*
  * This is the authoritative way to determine from user mode what
  * implementation-specific processor features are available.
@@ -45,6 +48,8 @@
 /*
  * Bit definitions for _cpu_capabilities:
  */
+#define kHasICDSBShift                  2
+#define kHasICDSB                       0x00000004      // ICache Data Syncronization on DSB enabled (H13)
 #define kHasNeonFP16                    0x00000008      // ARM v8.2 NEON FP16 supported
 #define kCache32                        0x00000010      // cache line size is 32 bytes
 #define kCache64                        0x00000020      // cache line size is 64 bytes
@@ -53,16 +58,17 @@
 #define kHasNeon                        0x00000100      // Advanced SIMD is supported
 #define kHasNeonHPFP                    0x00000200      // Advanced SIMD half-precision
 #define kHasVfp                         0x00000400      // VFP is supported
+#define kHasUCNormalMemory              0x00000800      // Uncacheable normal memory type supported
 #define kHasEvent                       0x00001000      // WFE/SVE and period event wakeup
 #define kHasFMA                         0x00002000      // Fused multiply add is supported
+#define kHasARMv82FHM                   0x00004000      // Optional ARMv8.2 FMLAL/FMLSL instructions (required in ARMv8.4)
 #define kUP                             0x00008000      // set if (kNumCPUs == 1)
 #define kNumCPUs                        0x00FF0000      // number of CPUs (see _NumCPUs() below)
 #define kHasARMv8Crypto                 0x01000000      // Optional ARMv8 Crypto extensions
 #define kHasARMv81Atomics               0x02000000      // ARMv8.1 Atomic instructions supported
 #define kHasARMv8Crc32                  0x04000000      // Optional ARMv8 crc32 instructions (required in ARMv8.1)
 
-#define kNumCPUsShift           16                      // see _NumCPUs() below
-
+#define kNumCPUsShift                   16              // see _NumCPUs() below
 /*
  * Bit definitions for multiuser_config:
  */
@@ -72,7 +78,9 @@
 #ifndef __ASSEMBLER__
 #include <sys/commpage.h>
 
+__BEGIN_DECLS
 extern int  _get_cpu_capabilities( void );
+__END_DECLS
 
 __inline static
 int
@@ -80,6 +88,7 @@ _NumCPUs( void )
 {
 	return (_get_cpu_capabilities() & kNumCPUs) >> kNumCPUsShift;
 }
+
 
 typedef struct {
 	volatile uint64_t       TimeBase;
@@ -92,7 +101,9 @@ typedef struct {
 	volatile uint32_t       TimeBase_shift;
 } commpage_timeofday_data_t;
 
+__BEGIN_DECLS
 extern vm_address_t                             _get_commpage_priv_address(void);
+__END_DECLS
 
 #endif /* __ASSEMBLER__ */
 
@@ -166,6 +177,7 @@ extern vm_address_t                             _get_commpage_priv_address(void)
  * apply _COMM_PAGE_PRIV macro to use these in privileged mode
  */
 #define _COMM_PAGE_SIGNATURE                    (_COMM_PAGE_START_ADDRESS+0x000)        // first few bytes are a signature
+#define _COMM_PAGE_SIGNATURELEN                 (0x10)
 #define _COMM_PAGE_VERSION                      (_COMM_PAGE_START_ADDRESS+0x01E)        // 16-bit version#
 #define _COMM_PAGE_THIS_VERSION                 3                                       // version of the commarea format
 
@@ -188,7 +200,8 @@ extern vm_address_t                             _get_commpage_priv_address(void)
 #define _COMM_PAGE_TIMEBASE_OFFSET              (_COMM_PAGE_START_ADDRESS+0x088)        // uint64_t timebase offset for constructing mach_absolute_time()
 #define _COMM_PAGE_USER_TIMEBASE                (_COMM_PAGE_START_ADDRESS+0x090)        // uint8_t is userspace mach_absolute_time supported (can read the timebase)
 #define _COMM_PAGE_CONT_HWCLOCK                 (_COMM_PAGE_START_ADDRESS+0x091)        // uint8_t is always-on hardware clock present for mach_continuous_time()
-#define _COMM_PAGE_UNUSED0                      (_COMM_PAGE_START_ADDRESS+0x092)        // 6 unused bytes
+#define _COMM_PAGE_DTRACE_DOF_ENABLED           (_COMM_PAGE_START_ADDRESS+0x092)        // uint8_t 0 if userspace DOF disable, 1 if enabled
+#define _COMM_PAGE_UNUSED0                      (_COMM_PAGE_START_ADDRESS+0x093)        // 5 unused bytes
 #define _COMM_PAGE_CONT_TIMEBASE                (_COMM_PAGE_START_ADDRESS+0x098)        // uint64_t base for mach_continuous_time()
 #define _COMM_PAGE_BOOTTIME_USEC                (_COMM_PAGE_START_ADDRESS+0x0A0)        // uint64_t boottime in microseconds
 
@@ -204,6 +217,7 @@ extern vm_address_t                             _get_commpage_priv_address(void)
 
 #define _COMM_PAGE_NEWTIMEOFDAY_DATA            (_COMM_PAGE_START_ADDRESS+0x120)        // used by gettimeofday(). Currently, sizeof(new_commpage_timeofday_data_t) = 40.
 #define _COMM_PAGE_REMOTETIME_PARAMS            (_COMM_PAGE_START_ADDRESS+0x148)        // used by mach_bridge_remote_time(). Currently, sizeof(struct bt_params) = 24
+#define _COMM_PAGE_DYLD_SYSTEM_FLAGS            (_COMM_PAGE_START_ADDRESS+0x160)        // uint64_t export kern.dyld_system_flags to userspace
 
 // aligning to 128 bytes for cacheline/fabric size
 #define _COMM_PAGE_CPU_QUIESCENT_COUNTER        (_COMM_PAGE_START_ADDRESS+0x180)        // uint64_t, but reserve the whole 128 (0x80) bytes

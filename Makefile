@@ -17,6 +17,12 @@ endif
 ifndef SYMROOT
 export SYMROOT = $(SRCROOT)/BUILD/sym
 endif
+ifndef MallocNanoZone
+export MallocNanoZone := 1
+endif
+
+# Avoid make default rules, make becomes faster
+MAKEFLAGS+=r
 
 export MakeInc_top=${VERSDIR}/makedefs/MakeInc.top
 export MakeInc_kernel=${VERSDIR}/makedefs/MakeInc.kernel
@@ -32,8 +38,10 @@ export MakeInc_dir=${VERSDIR}/makedefs/MakeInc.dir
 
 ifeq ($(findstring Libsyscall,$(RC_ProjectName)),Libsyscall)
 
-ifeq ($(RC_ProjectName),Libsyscall_headers_Sim)
-TARGET=-target Libsyscall_headers_Sim
+include $(MakeInc_cmd)
+
+ifneq ($(findstring Libsyscall_,$(RC_ProjectName)),)
+TARGET=-target $(RC_ProjectName)
 endif
 
 default: install
@@ -44,11 +52,16 @@ SDKROOT ?= macosx.internal
 installhdrs install:
 	cd libsyscall ; \
 		xcodebuild $@ $(TARGET)	\
+			$(MAKEOVERRIDES)	\
 			"SRCROOT=$(SRCROOT)/libsyscall"					\
 			"OBJROOT=$(OBJROOT)"						\
 			"SYMROOT=$(SYMROOT)"						\
 			"DSTROOT=$(DSTROOT)"						\
 			"SDKROOT=$(SDKROOT)"
+
+Libsyscall_driverkit: install
+
+.PHONY: Libsyscall_driverkit
 
 clean:
 
@@ -90,6 +103,7 @@ default: install
 installhdrs install:
 	cd libkern/kmod ; \
 		xcodebuild $@	\
+			$(MAKEOVERRIDES)	\
 			"SRCROOT=$(SRCROOT)/libkern/kmod"				\
 			"OBJROOT=$(OBJROOT)"						\
 			"SYMROOT=$(SYMROOT)"						\
@@ -105,11 +119,7 @@ else ifeq ($(RC_ProjectName),xnu_tests)
 
 export SYSCTL_HW_PHYSICALCPU := $(shell /usr/sbin/sysctl -n hw.physicalcpu)
 export SYSCTL_HW_LOGICALCPU  := $(shell /usr/sbin/sysctl -n hw.logicalcpu)
-ifeq ($(SYSCTL_HW_PHYSICALCPU),$(SYSCTL_HW_LOGICALCPU))
-MAKEJOBS := --jobs=$(shell expr $(SYSCTL_HW_PHYSICALCPU) + 1)
-else
-MAKEJOBS := --jobs=$(SYSCTL_HW_LOGICALCPU)
-endif
+MAKEJOBS := --jobs=$(shell expr $(SYSCTL_HW_LOGICALCPU) + 1)
 
 default: install
 
@@ -142,11 +152,7 @@ endif
 #
 export SYSCTL_HW_PHYSICALCPU := $(shell /usr/sbin/sysctl -n hw.physicalcpu)
 export SYSCTL_HW_LOGICALCPU  := $(shell /usr/sbin/sysctl -n hw.logicalcpu)
-ifeq ($(SYSCTL_HW_PHYSICALCPU),$(SYSCTL_HW_LOGICALCPU))
-MAKEJOBS := --jobs=$(shell expr $(SYSCTL_HW_PHYSICALCPU) + 1)
-else
-MAKEJOBS := --jobs=$(SYSCTL_HW_LOGICALCPU)
-endif
+MAKEJOBS := --jobs=$(shell expr $(SYSCTL_HW_LOGICALCPU) + 1)
 
 TOP_TARGETS =								\
 	clean								\
@@ -220,7 +226,7 @@ EXPINC_SUBDIRS_X86_64H = $(EXPINC_SUBDIRS)
 EXPINC_SUBDIRS_ARM = $(EXPINC_SUBDIRS)
 EXPINC_SUBDIRS_ARM64 = $(EXPINC_SUBDIRS)
 
-SETUP_SUBDIRS = SETUP osfmk san
+SETUP_SUBDIRS = SETUP san bsd
 
 COMP_SUBDIRS_X86_64 = $(ALL_SUBDIRS)
 COMP_SUBDIRS_X86_64H = $(ALL_SUBDIRS)
@@ -241,6 +247,7 @@ endif # all other RC_ProjectName
 installapi_libkdd installhdrs_libkdd install_libkdd:
 	cd libkdd; \
 		xcodebuild -target Default $(subst _libkdd,,$@)	\
+			$(MAKEOVERRIDES)	\
 			"SRCROOT=$(SRCROOT)/libkdd"		\
 			"OBJROOT=$(OBJROOT)"			\
 			"SYMROOT=$(SYMROOT)"			\
@@ -251,6 +258,7 @@ installapi_libkdd installhdrs_libkdd install_libkdd:
 installapi_libkdd_tests installhdrs_libkdd_tests install_libkdd_tests:
 	cd libkdd; \
 		xcodebuild -target tests $(subst _libkdd_tests,,$@)	\
+			$(MAKEOVERRIDES)	\
 			"SRCROOT=$(SRCROOT)/libkdd"		\
 			"OBJROOT=$(OBJROOT)"			\
 			"SYMROOT=$(SYMROOT)"			\
@@ -261,6 +269,7 @@ installapi_libkdd_tests installhdrs_libkdd_tests install_libkdd_tests:
 installapi_libkdd_host installhdrs_libkdd_host install_libkdd_host:
 	cd libkdd; \
 		xcodebuild -configuration ReleaseHost -target kdd.framework $(subst _libkdd_host,,$@)	\
+			$(MAKEOVERRIDES)	\
 			"SRCROOT=$(SRCROOT)/libkdd"		\
 			"OBJROOT=$(OBJROOT)"			\
 			"SYMROOT=$(SYMROOT)"			\

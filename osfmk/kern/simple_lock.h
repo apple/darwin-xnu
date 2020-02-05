@@ -77,6 +77,7 @@
 #include <machine/simple_lock.h>
 
 #ifdef  MACH_KERNEL_PRIVATE
+#include <machine/atomic.h>
 #include <mach_ldebug.h>
 
 extern void                     hw_lock_init(
@@ -141,61 +142,14 @@ extern void                     hw_lock_unlock_nopreempt(
 extern unsigned int             hw_lock_held(
 	hw_lock_t);
 
+extern boolean_t hw_atomic_test_and_set32(uint32_t *target, uint32_t test_mask, uint32_t set_mask, enum memory_order ord, boolean_t wait);
 #endif  /* MACH_KERNEL_PRIVATE */
 
 __BEGIN_DECLS
 
-extern uint32_t                 hw_atomic_add(
-	volatile uint32_t       *dest,
-	uint32_t        delt);
-
-extern uint32_t                 hw_atomic_sub(
-	volatile uint32_t       *dest,
-	uint32_t        delt);
-
-extern uint32_t                 hw_atomic_or(
-	volatile uint32_t       *dest,
-	uint32_t        mask);
-
-extern uint32_t                 hw_atomic_and(
-	volatile uint32_t       *dest,
-	uint32_t        mask);
-
-/*
- * Variant of hw_atomic_or which doesn't return a value; potentially
- * more efficient on some platforms.
- */
-extern void                     hw_atomic_or_noret(
-	volatile uint32_t       *dest,
-	uint32_t        mask);
-/*
- * Variant of hw_atomic_and which doesn't return a value; potentially
- * more efficient on some platforms.
- */
-
-extern void                     hw_atomic_and_noret(
-	volatile uint32_t       *dest,
-	uint32_t        mask);
-
-extern uint32_t                 hw_compare_and_store(
-	uint32_t        oldval,
-	uint32_t        newval,
-	volatile uint32_t       *dest);
-
-extern void                     hw_queue_atomic(
-	unsigned int *anchor,
-	unsigned int *elem,
-	unsigned int disp);
-
-extern void                     hw_queue_atomic_list(
-	unsigned int *anchor,
-	unsigned int *first,
-	unsigned int *last,
-	unsigned int disp);
-
-extern unsigned int             *hw_dequeue_atomic(
-	unsigned int *anchor,
-	unsigned int disp);
+extern void *                   hw_wait_while_equals(
+	void    **address,
+	void    *current);
 
 extern void                     usimple_lock_init(
 	usimple_lock_t,
@@ -213,6 +167,19 @@ extern unsigned int             usimple_lock_try(
 extern void             usimple_lock_try_lock_loop(
 	usimple_lock_t,
 	lck_grp_t*);
+
+#if defined(__x86_64__)
+extern unsigned int     usimple_lock_try_lock_mp_signal_safe_loop_deadline(
+	usimple_lock_t,
+	uint64_t,
+	lck_grp_t*);
+
+extern unsigned int     usimple_lock_try_lock_mp_signal_safe_loop_duration(
+	usimple_lock_t,
+	uint64_t,
+	lck_grp_t*);
+#endif
+
 #else
 extern void                     usimple_lock(
 	usimple_lock_t);
@@ -227,6 +194,18 @@ extern unsigned int             usimple_lock_try(
 extern void             usimple_lock_try_lock_loop(
 	usimple_lock_t);
 #define usimple_lock_try_lock_loop(lck, grp) usimple_lock_try_lock_loop(lck)
+
+#if defined(__x86_64__)
+extern unsigned int     usimple_lock_try_lock_mp_signal_safe_loop_deadline(
+	usimple_lock_t,
+	uint64_t);
+#define usimple_lock_try_lock_mp_signal_safe_loop_deadline(lck, ddl, grp) usimple_lock_try_lock_mp_signal_safe_loop_deadline(lck, ddl)
+
+extern unsigned int     usimple_lock_try_lock_mp_signal_safe_loop_duration(
+	usimple_lock_t,
+	uint64_t);
+#define usimple_lock_try_lock_mp_signal_safe_loop_duration(lck, dur, grp) usimple_lock_try_lock_mp_signal_safe_loop_duration(lck, dur)
+#endif
 
 #endif /* LOCK_STATS */
 
@@ -250,8 +229,72 @@ __END_DECLS
 #define simple_unlock(l)        usimple_unlock(l)
 #define simple_lock_try(l, grp)      usimple_lock_try(l, grp)
 #define simple_lock_try_lock_loop(l, grp)    usimple_lock_try_lock_loop(l, grp)
+#define simple_lock_try_lock_mp_signal_safe_loop_deadline(l, ddl, grp)    usimple_lock_try_lock_mp_signal_safe_loop_deadline(l, ddl, grp)
+#define simple_lock_try_lock_mp_signal_safe_loop_duration(l, dur, grp)    usimple_lock_try_lock_mp_signal_safe_loop_duration(l, dur, grp)
 #define simple_lock_addr(l)     (&(l))
 #endif /* !defined(simple_lock_init) */
+
+#ifdef MACH_KERNEL_PRIVATE
+
+typedef uint32_t hw_lock_bit_t;
+
+#if LOCK_STATS
+extern void     hw_lock_bit(
+	hw_lock_bit_t *,
+	unsigned int,
+	lck_grp_t*);
+
+extern void     hw_lock_bit_nopreempt(
+	hw_lock_bit_t *,
+	unsigned int,
+	lck_grp_t*);
+
+extern unsigned int hw_lock_bit_try(
+	hw_lock_bit_t *,
+	unsigned int,
+	lck_grp_t*);
+
+extern unsigned int hw_lock_bit_to(
+	hw_lock_bit_t *,
+	unsigned int,
+	uint32_t,
+	lck_grp_t*);
+
+#else
+extern void     hw_lock_bit(
+	hw_lock_bit_t *,
+	unsigned int);
+#define hw_lock_bit(lck, bit, grp) hw_lock_bit(lck, bit)
+
+extern void     hw_lock_bit_nopreempt(
+	hw_lock_bit_t *,
+	unsigned int);
+#define hw_lock_bit_nopreempt(lck, bit, grp) hw_lock_bit_nopreempt(lck, bit)
+
+extern unsigned int hw_lock_bit_try(
+	hw_lock_bit_t *,
+	unsigned int);
+#define hw_lock_bit_try(lck, bit, grp) hw_lock_bit_try(lck, bit)
+
+extern unsigned int hw_lock_bit_to(
+	hw_lock_bit_t *,
+	unsigned int,
+	uint32_t);
+#define hw_lock_bit_to(lck, bit, timeout, grp) hw_lock_bit_to(lck, bit, timeout)
+
+#endif /* LOCK_STATS */
+
+extern void     hw_unlock_bit(
+	hw_lock_bit_t *,
+	unsigned int);
+
+extern void     hw_unlock_bit_nopreempt(
+	hw_lock_bit_t *,
+	unsigned int);
+
+#define hw_lock_bit_held(l, b) (((*(l))&(1<<b))!=0)
+
+#endif  /* MACH_KERNEL_PRIVATE */
 
 #endif /*!_KERN_SIMPLE_LOCK_H_*/
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -3012,7 +3012,7 @@ ip6_setmoptions(struct inpcb *inp, struct sockopt *sopt)
 		if (error) {
 			break;
 		}
-		if (hlim < -1 || hlim > 255) {
+		if (hlim < -1 || hlim > IPV6_MAXHLIM) {
 			error = EINVAL;
 			break;
 		} else if (hlim == -1) {

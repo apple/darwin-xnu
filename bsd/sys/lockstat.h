@@ -27,8 +27,6 @@
 #ifndef _SYS_LOCKSTAT_H
 #define _SYS_LOCKSTAT_H
 
-/* #pragma ident	"@(#)lockstat.h	1.6	05/06/08 SMI" */
-
 #ifdef  __cplusplus
 extern "C" {
 #endif

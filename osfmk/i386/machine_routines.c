@@ -147,10 +147,9 @@ ml_static_unslide(
 	return VM_KERNEL_UNSLIDE(vaddr);
 }
 
-
 /*
- *	Routine:        ml_static_mfree
- *	Function:
+ * Reclaim memory, by virtual address, that was used in early boot that is no longer needed
+ * by the kernel.
  */
 void
 ml_static_mfree(
@@ -160,28 +159,43 @@ ml_static_mfree(
 	addr64_t vaddr_cur;
 	ppnum_t ppn;
 	uint32_t freed_pages = 0;
+	vm_size_t map_size;
 
 	assert(vaddr >= VM_MIN_KERNEL_ADDRESS);
 
 	assert((vaddr & (PAGE_SIZE - 1)) == 0); /* must be page aligned */
 
-	for (vaddr_cur = vaddr;
-	    vaddr_cur < round_page_64(vaddr + size);
-	    vaddr_cur += PAGE_SIZE) {
+	for (vaddr_cur = vaddr; vaddr_cur < round_page_64(vaddr + size);) {
+		map_size = pmap_query_pagesize(kernel_pmap, vaddr_cur);
+
+		/* just skip if nothing mapped here */
+		if (map_size == 0) {
+			vaddr_cur += PAGE_SIZE;
+			continue;
+		}
+
+		/*
+		 * Can't free from the middle of a large page.
+		 */
+		assert((vaddr_cur & (map_size - 1)) == 0);
+
 		ppn = pmap_find_phys(kernel_pmap, vaddr_cur);
-		if (ppn != (vm_offset_t)NULL) {
-			kernel_pmap->stats.resident_count++;
-			if (kernel_pmap->stats.resident_count >
-			    kernel_pmap->stats.resident_max) {
-				kernel_pmap->stats.resident_max =
-				    kernel_pmap->stats.resident_count;
+		assert(ppn != (ppnum_t)NULL);
+
+		pmap_remove(kernel_pmap, vaddr_cur, vaddr_cur + map_size);
+		while (map_size > 0) {
+			if (++kernel_pmap->stats.resident_count > kernel_pmap->stats.resident_max) {
+				kernel_pmap->stats.resident_max = kernel_pmap->stats.resident_count;
 			}
-			pmap_remove(kernel_pmap, vaddr_cur, vaddr_cur + PAGE_SIZE);
+
 			assert(pmap_valid_page(ppn));
 			if (IS_MANAGED_PAGE(ppn)) {
 				vm_page_create(ppn, (ppn + 1));
 				freed_pages++;
 			}
+			map_size -= PAGE_SIZE;
+			vaddr_cur += PAGE_SIZE;
+			ppn++;
 		}
 	}
 	vm_page_lockspin_queues();
@@ -371,6 +385,7 @@ ml_get_power_state(boolean_t *icp, boolean_t *pidlep)
 }
 
 /* Generate a fake interrupt */
+__dead2
 void
 ml_cause_interrupt(void)
 {
@@ -429,6 +444,7 @@ machine_signal_idle(
 	cpu_interrupt(processor->cpu_id);
 }
 
+__dead2
 void
 machine_signal_idle_deferred(
 	__unused processor_t processor)
@@ -436,6 +452,7 @@ machine_signal_idle_deferred(
 	panic("Unimplemented");
 }
 
+__dead2
 void
 machine_signal_idle_cancel(
 	__unused processor_t processor)
@@ -567,7 +584,7 @@ ml_processor_register(
 	/* allocate and initialize other per-cpu structures */
 	if (!boot_cpu) {
 		mp_cpus_call_cpu_init(cpunum);
-		early_random_cpu_init(cpunum);
+		random_cpu_init(cpunum);
 	}
 
 	/* output arg */
@@ -868,7 +885,7 @@ ml_cpu_down(void)
  * The following are required for parts of the kernel
  * that cannot resolve these functions as inlines:
  */
-extern thread_t current_act(void);
+extern thread_t current_act(void) __attribute__((const));
 thread_t
 current_act(void)
 {
@@ -876,7 +893,7 @@ current_act(void)
 }
 
 #undef current_thread
-extern thread_t current_thread(void);
+extern thread_t current_thread(void) __attribute__((const));
 thread_t
 current_thread(void)
 {
@@ -1045,11 +1062,8 @@ ml_entropy_collect(void)
 	assert(cpu_number() == master_cpu);
 
 	/* update buffer pointer cyclically */
-	if (EntropyData.index_ptr - EntropyData.buffer == ENTROPY_BUFFER_SIZE) {
-		ep = EntropyData.index_ptr = EntropyData.buffer;
-	} else {
-		ep = EntropyData.index_ptr++;
-	}
+	ep = EntropyData.buffer + (EntropyData.sample_count & ENTROPY_BUFFER_INDEX_MASK);
+	EntropyData.sample_count += 1;
 
 	rdtsc_nofence(tsc_lo, tsc_hi);
 	*ep = ror32(*ep, 9) ^ tsc_lo;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 1997-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -118,18 +118,38 @@ extern  d_select_t      ptcselect;
 
 static int ptmx_major;          /* dynamically assigned major number */
 static struct cdevsw ptmx_cdev = {
-	ptcopen, ptcclose, ptcread, ptcwrite,
-	ptyioctl, ptcstop, ptcreset, 0,
-	ptcselect, eno_mmap, eno_strat, eno_getc,
-	eno_putc, D_TTY
+	.d_open       = ptcopen,
+	.d_close      = ptcclose,
+	.d_read       = ptcread,
+	.d_write      = ptcwrite,
+	.d_ioctl      = ptyioctl,
+	.d_stop       = ptcstop,
+	.d_reset      = ptcreset,
+	.d_ttys       = NULL,
+	.d_select     = ptcselect,
+	.d_mmap       = eno_mmap,
+	.d_strategy   = eno_strat,
+	.d_reserved_1 = eno_getc,
+	.d_reserved_2 = eno_putc,
+	.d_type       = D_TTY
 };
 
 static int ptsd_major;          /* dynamically assigned major number */
 static struct cdevsw ptsd_cdev = {
-	ptsopen, ptsclose, ptsread, ptswrite,
-	ptyioctl, ptsstop, ptsreset, 0,
-	ptsselect, eno_mmap, eno_strat, eno_getc,
-	eno_putc, D_TTY
+	.d_open       = ptsopen,
+	.d_close      = ptsclose,
+	.d_read       = ptsread,
+	.d_write      = ptswrite,
+	.d_ioctl      = ptyioctl,
+	.d_stop       = ptsstop,
+	.d_reset      = ptsreset,
+	.d_ttys       = NULL,
+	.d_select     = ptsselect,
+	.d_mmap       = eno_mmap,
+	.d_strategy   = eno_strat,
+	.d_reserved_1 = eno_getc,
+	.d_reserved_2 = eno_putc,
+	.d_type       = D_TTY
 };
 
 /*
@@ -467,8 +487,8 @@ ptmx_clone(__unused dev_t dev, int action)
 int ptsd_kqfilter(dev_t dev, struct knote *kn);
 static void ptsd_kqops_detach(struct knote *);
 static int ptsd_kqops_event(struct knote *, long);
-static int ptsd_kqops_touch(struct knote *kn, struct kevent_internal_s *kev);
-static int ptsd_kqops_process(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
+static int ptsd_kqops_touch(struct knote *kn, struct kevent_qos_s *kev);
+static int ptsd_kqops_process(struct knote *kn, struct kevent_qos_s *kev);
 
 SECURITY_READ_ONLY_EARLY(struct filterops) ptsd_kqops = {
 	.f_isfd = 1,
@@ -491,10 +511,7 @@ SECURITY_READ_ONLY_EARLY(struct filterops) ptsd_kqops = {
 static void
 ptsd_kqops_detach(struct knote *kn)
 {
-	struct tty *tp;
-
-	tp = kn->kn_hook;
-	assert(tp != NULL);
+	struct tty *tp = kn->kn_hook;
 
 	tty_lock(tp);
 
@@ -507,42 +524,41 @@ ptsd_kqops_detach(struct knote *kn)
 		case EVFILT_READ:
 			KNOTE_DETACH(&tp->t_rsel.si_note, kn);
 			break;
-
 		case EVFILT_WRITE:
 			KNOTE_DETACH(&tp->t_wsel.si_note, kn);
 			break;
-
 		default:
 			panic("invalid knote %p detach, filter: %d", kn, kn->kn_filter);
 			break;
 		}
 	}
 
-	kn->kn_hook = NULL;
 	tty_unlock(tp);
-
 	ttyfree(tp);
 }
 
 static int
-ptsd_kqops_common(struct knote *kn, struct tty *tp)
+ptsd_kqops_common(struct knote *kn, struct kevent_qos_s *kev, struct tty *tp)
 {
 	int retval = 0;
+	int64_t data = 0;
 
 	TTY_LOCK_OWNED(tp);
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
-		kn->kn_data = ttnread(tp);
-		if (kn->kn_data > 0) {
-			retval = 1;
-		}
+		/*
+		 * ttnread can change the tty state,
+		 * hence must be done upfront, before any other check.
+		 */
+		data = ttnread(tp);
+		retval = (data > 0);
 		break;
 
 	case EVFILT_WRITE:
 		if ((tp->t_outq.c_cc <= tp->t_lowat) &&
 		    (tp->t_state & TS_CONNECTED)) {
-			kn->kn_data = tp->t_outq.c_cn - tp->t_outq.c_cc;
+			data = tp->t_outq.c_cn - tp->t_outq.c_cc;
 			retval = 1;
 		}
 		break;
@@ -555,9 +571,13 @@ ptsd_kqops_common(struct knote *kn, struct tty *tp)
 
 	if (tp->t_state & TS_ZOMBIE) {
 		kn->kn_flags |= EV_EOF;
+	}
+	if (kn->kn_flags & EV_EOF) {
 		retval = 1;
 	}
-
+	if (retval && kev) {
+		knote_fill_kevent(kn, kev, data);
+	}
 	return retval;
 }
 
@@ -566,34 +586,24 @@ ptsd_kqops_event(struct knote *kn, long hint)
 {
 	struct tty *tp = kn->kn_hook;
 	int ret;
-	bool revoked = hint & NOTE_REVOKE;
-	hint &= ~NOTE_REVOKE;
 
-	if (!hint) {
-		tty_lock(tp);
-	}
+	TTY_LOCK_OWNED(tp);
 
-	if (revoked) {
+	if (hint & NOTE_REVOKE) {
 		kn->kn_flags |= EV_EOF | EV_ONESHOT;
 		ret = 1;
 	} else {
-		ret = ptsd_kqops_common(kn, tp);
-	}
-
-	if (!hint) {
-		tty_unlock(tp);
+		ret = ptsd_kqops_common(kn, NULL, tp);
 	}
 
 	return ret;
 }
 
 static int
-ptsd_kqops_touch(struct knote *kn, struct kevent_internal_s *kev)
+ptsd_kqops_touch(struct knote *kn, struct kevent_qos_s *kev)
 {
-	struct tty *tp;
+	struct tty *tp = kn->kn_hook;
 	int ret;
-
-	tp = kn->kn_hook;
 
 	tty_lock(tp);
 
@@ -602,7 +612,7 @@ ptsd_kqops_touch(struct knote *kn, struct kevent_internal_s *kev)
 	kn->kn_sdata = kev->data;
 
 	/* recapture fired state of knote */
-	ret = ptsd_kqops_common(kn, tp);
+	ret = ptsd_kqops_common(kn, NULL, tp);
 
 	tty_unlock(tp);
 
@@ -610,21 +620,13 @@ ptsd_kqops_touch(struct knote *kn, struct kevent_internal_s *kev)
 }
 
 static int
-ptsd_kqops_process(struct knote *kn, __unused struct filt_process_s *data,
-    struct kevent_internal_s *kev)
+ptsd_kqops_process(struct knote *kn, struct kevent_qos_s *kev)
 {
 	struct tty *tp = kn->kn_hook;
 	int ret;
 
 	tty_lock(tp);
-	ret = ptsd_kqops_common(kn, tp);
-	if (ret) {
-		*kev = kn->kn_kevent;
-		if (kn->kn_flags & EV_CLEAR) {
-			kn->kn_fflags = 0;
-			kn->kn_data = 0;
-		}
-	}
+	ret = ptsd_kqops_common(kn, kev, tp);
 	tty_unlock(tp);
 
 	return ret;
@@ -672,7 +674,7 @@ ptsd_kqfilter(dev_t dev, struct knote *kn)
 	}
 
 	/* capture current event state */
-	ret = ptsd_kqops_common(kn, tp);
+	ret = ptsd_kqops_common(kn, NULL, tp);
 
 	tty_unlock(tp);
 
@@ -688,10 +690,12 @@ ptsd_revoke_knotes(__unused int minor, struct tty *tp)
 	tty_lock(tp);
 
 	ttwakeup(tp);
-	KNOTE(&tp->t_rsel.si_note, NOTE_REVOKE | 1 /* the lock is already held */);
+	assert((tp->t_rsel.si_flags & SI_KNPOSTING) == 0);
+	KNOTE(&tp->t_rsel.si_note, NOTE_REVOKE);
 
 	ttwwakeup(tp);
-	KNOTE(&tp->t_wsel.si_note, NOTE_REVOKE | 1);
+	assert((tp->t_wsel.si_flags & SI_KNPOSTING) == 0);
+	KNOTE(&tp->t_wsel.si_note, NOTE_REVOKE);
 
 	tty_unlock(tp);
 }
@@ -706,9 +710,10 @@ ptsd_revoke_knotes(__unused int minor, struct tty *tp)
 int ptmx_kqfilter(dev_t dev, struct knote *kn);
 static void ptmx_kqops_detach(struct knote *);
 static int ptmx_kqops_event(struct knote *, long);
-static int ptmx_kqops_touch(struct knote *kn, struct kevent_internal_s *kev);
-static int ptmx_kqops_process(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
-static int ptmx_kqops_common(struct knote *kn, struct ptmx_ioctl *pti, struct tty *tp);
+static int ptmx_kqops_touch(struct knote *kn, struct kevent_qos_s *kev);
+static int ptmx_kqops_process(struct knote *kn, struct kevent_qos_s *kev);
+static int ptmx_kqops_common(struct knote *kn, struct kevent_qos_s *kev,
+    struct ptmx_ioctl *pti, struct tty *tp);
 
 SECURITY_READ_ONLY_EARLY(struct filterops) ptmx_kqops = {
 	.f_isfd = 1,
@@ -728,8 +733,7 @@ ptmx_knote_ioctl(struct knote *kn)
 static struct tty *
 ptmx_knote_tty(struct knote *kn)
 {
-	struct ptmx_ioctl *pti = kn->kn_hook;
-	return pti->pt_tty;
+	return ptmx_knote_ioctl(kn)->pt_tty;
 }
 
 int
@@ -754,6 +758,8 @@ ptmx_kqfilter(dev_t dev, struct knote *kn)
 	tty_lock(tp);
 
 	kn->kn_filtid = EVFILTID_PTMX;
+	/* the tty will be freed when detaching the knote */
+	ttyhold(tp);
 	kn->kn_hook = pti;
 
 	/*
@@ -775,10 +781,8 @@ ptmx_kqfilter(dev_t dev, struct knote *kn)
 	}
 
 	/* capture current event state */
-	ret = ptmx_kqops_common(kn, pti, tp);
+	ret = ptmx_kqops_common(kn, NULL, pti, tp);
 
-	/* take a reference on the TTY */
-	ttyhold(tp);
 	tty_unlock(tp);
 
 	return ret;
@@ -790,49 +794,39 @@ ptmx_kqops_detach(struct knote *kn)
 	struct ptmx_ioctl *pti = kn->kn_hook;
 	struct tty *tp = pti->pt_tty;
 
-	assert(tp != NULL);
-
 	tty_lock(tp);
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
 		KNOTE_DETACH(&pti->pt_selr.si_note, kn);
 		break;
-
 	case EVFILT_WRITE:
 		KNOTE_DETACH(&pti->pt_selw.si_note, kn);
 		break;
-
 	default:
 		panic("invalid knote %p detach, filter: %d", kn, kn->kn_filter);
 		break;
 	}
 
-	kn->kn_hook = NULL;
 	tty_unlock(tp);
-
 	ttyfree(tp);
 }
 
 static int
-ptmx_kqops_common(struct knote *kn, struct ptmx_ioctl *pti, struct tty *tp)
+ptmx_kqops_common(struct knote *kn, struct kevent_qos_s *kev,
+    struct ptmx_ioctl *pti, struct tty *tp)
 {
 	int retval = 0;
+	int64_t data = 0;
 
 	TTY_LOCK_OWNED(tp);
-
-	/* disconnects should force a wakeup (EOF) */
-	if (!(tp->t_state & TS_CONNECTED)) {
-		kn->kn_flags |= EV_EOF;
-		return 1;
-	}
 
 	switch (kn->kn_filter) {
 	case EVFILT_READ:
 		/* there's data on the TTY and it's not stopped */
 		if (tp->t_outq.c_cc && !(tp->t_state & TS_TTSTOP)) {
-			retval = tp->t_outq.c_cc;
-			kn->kn_data = retval;
+			data = tp->t_outq.c_cc;
+			retval = data > 0;
 		} else if (((pti->pt_flags & PF_PKT) && pti->pt_send) ||
 		    ((pti->pt_flags & PF_UCNTL) && pti->pt_ucntl)) {
 			retval = 1;
@@ -861,11 +855,16 @@ ptmx_kqops_common(struct knote *kn, struct ptmx_ioctl *pti, struct tty *tp)
 		break;
 	}
 
-	if (tp->t_state & TS_ZOMBIE) {
+	/* disconnects should force a wakeup (EOF) */
+	if (!(tp->t_state & TS_CONNECTED) || (tp->t_state & TS_ZOMBIE)) {
 		kn->kn_flags |= EV_EOF;
+	}
+	if (kn->kn_flags & EV_EOF) {
 		retval = 1;
 	}
-
+	if (retval && kev) {
+		knote_fill_kevent(kn, kev, data);
+	}
 	return retval;
 }
 
@@ -875,29 +874,21 @@ ptmx_kqops_event(struct knote *kn, long hint)
 	struct ptmx_ioctl *pti = ptmx_knote_ioctl(kn);
 	struct tty *tp = ptmx_knote_tty(kn);
 	int ret;
-	bool revoked = hint & NOTE_REVOKE;
-	hint &= ~NOTE_REVOKE;
 
-	if (!hint) {
-		tty_lock(tp);
-	}
+	TTY_LOCK_OWNED(tp);
 
-	if (revoked) {
+	if (hint & NOTE_REVOKE) {
 		kn->kn_flags |= EV_EOF | EV_ONESHOT;
 		ret = 1;
 	} else {
-		ret = ptmx_kqops_common(kn, pti, tp);
-	}
-
-	if (!hint) {
-		tty_unlock(tp);
+		ret = ptmx_kqops_common(kn, NULL, pti, tp);
 	}
 
 	return ret;
 }
 
 static int
-ptmx_kqops_touch(struct knote *kn, struct kevent_internal_s *kev)
+ptmx_kqops_touch(struct knote *kn, struct kevent_qos_s *kev)
 {
 	struct ptmx_ioctl *pti = ptmx_knote_ioctl(kn);
 	struct tty *tp = ptmx_knote_tty(kn);
@@ -910,7 +901,7 @@ ptmx_kqops_touch(struct knote *kn, struct kevent_internal_s *kev)
 	kn->kn_sdata = kev->data;
 
 	/* recapture fired state of knote */
-	ret = ptmx_kqops_common(kn, pti, tp);
+	ret = ptmx_kqops_common(kn, NULL, pti, tp);
 
 	tty_unlock(tp);
 
@@ -918,22 +909,14 @@ ptmx_kqops_touch(struct knote *kn, struct kevent_internal_s *kev)
 }
 
 static int
-ptmx_kqops_process(struct knote *kn, __unused struct filt_process_s *data,
-    struct kevent_internal_s *kev)
+ptmx_kqops_process(struct knote *kn, struct kevent_qos_s *kev)
 {
 	struct ptmx_ioctl *pti = ptmx_knote_ioctl(kn);
 	struct tty *tp = ptmx_knote_tty(kn);
 	int ret;
 
 	tty_lock(tp);
-	ret = ptmx_kqops_common(kn, pti, tp);
-	if (ret) {
-		*kev = kn->kn_kevent;
-		if (kn->kn_flags & EV_CLEAR) {
-			kn->kn_fflags = 0;
-			kn->kn_data = 0;
-		}
-	}
+	ret = ptmx_kqops_common(kn, kev, pti, tp);
 	tty_unlock(tp);
 
 	return ret;

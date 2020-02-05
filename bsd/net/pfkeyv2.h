@@ -145,10 +145,9 @@ struct sadb_sa_2 {
 		u_int16_t               sadb_sa_natt_interval;
 	};
 
-	union {
-		u_int32_t               sadb_reserved1;
-		u_int16_t               sadb_sa_natt_offload_interval;
-	};
+	u_int16_t               sadb_sa_natt_offload_interval;
+#define SADB_SA_NATT_SRC_PORT   1
+	u_int16_t               sadb_sa_natt_src_port;
 };
 #endif /* PRIVATE */
 
@@ -293,9 +292,9 @@ struct sadb_x_policy {
  *	= (sadb_x_policy_len * sizeof(uint64_t) - sizeof(struct sadb_x_policy))
  */
 #ifdef PRIVATE
-/* IPSec Interface Extension:
- * IPSec interface can be specified alone, or all three
- * of internal, outgoing, and IPSec interfaces must be
+/* IPsec Interface Extension:
+ * IPsec interface can be specified alone, or all three
+ * of internal, outgoing, and IPsec interfaces must be
  * specified.
  */
 struct sadb_x_ipsecif {
@@ -492,6 +491,7 @@ struct sadb_sastat {
 
 #ifdef PRIVATE
 #define SADB_X_EXT_SA2_DELETE_ON_DETACH   0x0001
+#define SADB_X_EXT_SA2_SEQ_PER_TRAFFIC_CLASS  0x0002
 #endif
 
 /* SPI size for PF_KEYv2 */

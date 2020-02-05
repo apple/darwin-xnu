@@ -596,7 +596,7 @@ udp_input(struct mbuf *m, int iphlen)
 			goto bad;
 		}
 
-		/* free the extra copy of mbuf or skipped by IPSec */
+		/* free the extra copy of mbuf or skipped by IPsec */
 		if (m != NULL) {
 			m_freem(m);
 		}
@@ -607,13 +607,14 @@ udp_input(struct mbuf *m, int iphlen)
 #if IPSEC
 	/*
 	 * UDP to port 4500 with a payload where the first four bytes are
-	 * not zero is a UDP encapsulated IPSec packet. Packets where
+	 * not zero is a UDP encapsulated IPsec packet. Packets where
 	 * the payload is one byte and that byte is 0xFF are NAT keepalive
-	 * packets. Decapsulate the ESP packet and carry on with IPSec input
+	 * packets. Decapsulate the ESP packet and carry on with IPsec input
 	 * or discard the NAT keep-alive.
 	 */
 	if (ipsec_bypass == 0 && (esp_udp_encap_port & 0xFFFF) != 0 &&
-	    uh->uh_dport == ntohs((u_short)esp_udp_encap_port)) {
+	    (uh->uh_dport == ntohs((u_short)esp_udp_encap_port) ||
+	    uh->uh_sport == ntohs((u_short)esp_udp_encap_port))) {
 		int payload_len = len - sizeof(struct udphdr) > 4 ? 4 :
 		    len - sizeof(struct udphdr);
 
@@ -643,7 +644,7 @@ udp_input(struct mbuf *m, int iphlen)
 			return;
 		} else if (payload_len == 4 && *(u_int32_t *)(void *)
 		    ((caddr_t)uh + sizeof(struct udphdr)) != 0) {
-			/* UDP encapsulated IPSec packet to pass through NAT */
+			/* UDP encapsulated IPsec packet to pass through NAT */
 			KERNEL_DEBUG(DBG_FNC_UDP_INPUT | DBG_FUNC_END,
 			    0, 0, 0, 0, 0);
 			/* preserve the udp header */
@@ -1571,6 +1572,9 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	if (INP_NO_EXPENSIVE(inp)) {
 		ipoa.ipoa_flags |=  IPOAF_NO_EXPENSIVE;
 	}
+	if (INP_NO_CONSTRAINED(inp)) {
+		ipoa.ipoa_flags |=  IPOAF_NO_CONSTRAINED;
+	}
 	if (INP_AWDL_UNRESTRICTED(inp)) {
 		ipoa.ipoa_flags |=  IPOAF_AWDL_UNRESTRICTED;
 	}
@@ -1948,6 +1952,9 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	VERIFY(inp->inp_sndinprog_cnt > 0);
 	if (--inp->inp_sndinprog_cnt == 0) {
 		inp->inp_flags &= ~(INP_FC_FEEDBACK);
+		if (inp->inp_sndingprog_waiters > 0) {
+			wakeup(&inp->inp_sndinprog_cnt);
+		}
 	}
 
 	/* Synchronize PCB cached route */
@@ -2008,7 +2015,7 @@ abort:
 	 * denied access to it, generate an event.
 	 */
 	if (error != 0 && (ipoa.ipoa_retflags & IPOARF_IFDENIED) &&
-	    (INP_NO_CELLULAR(inp) || INP_NO_EXPENSIVE(inp))) {
+	    (INP_NO_CELLULAR(inp) || INP_NO_EXPENSIVE(inp) || INP_NO_CONSTRAINED(inp))) {
 		soevent(so, (SO_FILT_HINT_LOCKED | SO_FILT_HINT_IFDENIED));
 	}
 

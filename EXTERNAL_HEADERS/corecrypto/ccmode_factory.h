@@ -14,74 +14,9 @@
 #include <corecrypto/ccn.h>  /* TODO: Remove dependency on this header. */
 #include <corecrypto/ccmode_impl.h>
 
-/* Function and macros defined in this file are only to be used
+/* Functions defined in this file are only to be used
  within corecrypto files.
  */
-
-/* For CBC, direction of underlying ecb is the same as the cbc direction */
-#define CCMODE_CBC_FACTORY(_cipher_, _dir_)                                     \
-static struct ccmode_cbc cbc_##_cipher_##_##_dir_;                              \
-                                                                                \
-const struct ccmode_cbc *cc##_cipher_##_cbc_##_dir_##_mode(void)                \
-{                                                                               \
-    const struct ccmode_ecb *ecb=cc##_cipher_##_ecb_##_dir_##_mode();           \
-    ccmode_factory_cbc_##_dir_(&cbc_##_cipher_##_##_dir_, ecb);                 \
-    return &cbc_##_cipher_##_##_dir_;                                           \
-}
-
-/* For CTR, only one direction, underlying ecb is always encrypt */
-#define CCMODE_CTR_FACTORY(_cipher_)                                            \
-static struct ccmode_ctr ctr_##_cipher_;                                        \
-                                                                                \
-const struct ccmode_ctr *cc##_cipher_##_ctr_crypt_mode(void)                    \
-{                                                                               \
-    const struct ccmode_ecb *ecb=cc##_cipher_##_ecb_encrypt_mode();             \
-    ccmode_factory_ctr_crypt(&ctr_##_cipher_, ecb);                             \
-    return &ctr_##_cipher_;                                                     \
-}
-
-/* OFB, same as CTR */
-#define CCMODE_OFB_FACTORY(_cipher_)                                            \
-static struct ccmode_ofb ofb_##_cipher_;                                        \
-                                                                                \
-const struct ccmode_ofb *cc##_cipher_##_ofb_crypt_mode(void)                    \
-{                                                                               \
-    const struct ccmode_ecb *ecb=cc##_cipher_##_ecb_encrypt_mode();             \
-    ccmode_factory_ofb_crypt(&ofb_##_cipher_, ecb);                             \
-    return &ofb_##_cipher_;                                                     \
-}
-
-
-/* For CFB, the underlying ecb operation is encrypt for both directions */
-#define CCMODE_CFB_FACTORY(_cipher_, _mode_, _dir_)                             \
-static struct ccmode_##_mode_ _mode_##_##_cipher_##_##_dir_;                    \
-                                                                                \
-const struct ccmode_##_mode_ *cc##_cipher_##_##_mode_##_##_dir_##_mode(void)    \
-{                                                                               \
-    const struct ccmode_ecb *ecb=cc##_cipher_##_ecb_encrypt_mode();             \
-    ccmode_factory_##_mode_##_##_dir_(&_mode_##_##_cipher_##_##_dir_, ecb);     \
-    return &_mode_##_##_cipher_##_##_dir_;                                      \
-}
-
-/* For GCM, same as CFB */
-#define CCMODE_GCM_FACTORY(_cipher_, _dir_) CCMODE_CFB_FACTORY(_cipher_, gcm, _dir_)
-
-/* For CCM, same as CFB */
-#define CCMODE_CCM_FACTORY(_cipher_, _dir_) CCMODE_CFB_FACTORY(_cipher_, ccm, _dir_)
-
-
-/* Fot XTS, you always need an ecb encrypt */
-#define CCMODE_XTS_FACTORY(_cipher_ , _dir_)                                    \
-static struct ccmode_xts xts##_cipher_##_##_dir_;                               \
-                                                                                \
-const struct ccmode_xts *cc##_cipher_##_xts_##_dir_##_mode(void)                \
-{                                                                               \
-    const struct ccmode_ecb *ecb=cc##_cipher_##_ecb_##_dir_##_mode();           \
-    const struct ccmode_ecb *ecb_enc=cc##_cipher_##_ecb_encrypt_mode();         \
-                                                                                \
-    ccmode_factory_xts_##_dir_(&xts##_cipher_##_##_dir_, ecb, ecb_enc);         \
-    return &xts##_cipher_##_##_dir_;                                            \
-}
 
 /* Use these function to runtime initialize a ccmode_cbc decrypt object (for
  example if it's part of a larger structure). Normally you would pass a

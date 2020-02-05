@@ -276,6 +276,7 @@ __END_DECLS
 #ifdef BSD_KERNEL_PRIVATE
 #define EREDRIVEOPEN    (-6)
 #define EKEEPLOOKING    (-7)
+#define EDATALESS       (-8)
 /* used for cvwait error returns to Libc */
 #define ECVCERORR       256
 #define ECVPERORR       512

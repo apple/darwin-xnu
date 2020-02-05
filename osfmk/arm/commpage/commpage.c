@@ -42,6 +42,7 @@
 #include <mach/vm_map.h>
 #include <machine/cpu_capabilities.h>
 #include <machine/commpage.h>
+#include <machine/config.h>
 #include <machine/pmap.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
@@ -70,6 +71,7 @@ SECURITY_READ_ONLY_LATE(uint32_t)       _cpu_capabilities = 0;
 /* For sysctl access from BSD side */
 extern int      gARMv81Atomics;
 extern int      gARMv8Crc32;
+extern int      gARMv82FHM;
 
 void
 commpage_populate(
@@ -80,6 +82,14 @@ commpage_populate(
 
 	sharedpage_rw_addr = pmap_create_sharedpage();
 	commPagePtr = (vm_address_t)_COMM_PAGE_BASE_ADDRESS;
+
+#if __arm64__
+	bcopy(_COMM_PAGE64_SIGNATURE_STRING, (void *)(_COMM_PAGE_SIGNATURE + _COMM_PAGE_RW_OFFSET),
+	    MIN(_COMM_PAGE_SIGNATURELEN, strlen(_COMM_PAGE64_SIGNATURE_STRING)));
+#else
+	bcopy(_COMM_PAGE32_SIGNATURE_STRING, (void *)(_COMM_PAGE_SIGNATURE + _COMM_PAGE_RW_OFFSET),
+	    MIN(_COMM_PAGE_SIGNATURELEN, strlen(_COMM_PAGE32_SIGNATURE_STRING)));
+#endif
 
 	*((uint16_t*)(_COMM_PAGE_VERSION + _COMM_PAGE_RW_OFFSET)) = (uint16_t) _COMM_PAGE_THIS_VERSION;
 
@@ -108,14 +118,14 @@ commpage_populate(
 	*((uint64_t*)(_COMM_PAGE_MEMORY_SIZE + _COMM_PAGE_RW_OFFSET)) = machine_info.max_mem;
 	*((uint32_t*)(_COMM_PAGE_CPUFAMILY + _COMM_PAGE_RW_OFFSET)) = (uint32_t)cpufamily;
 	*((uint32_t*)(_COMM_PAGE_DEV_FIRM + _COMM_PAGE_RW_OFFSET)) = (uint32_t)PE_i_can_has_debugger(NULL);
-	*((uint8_t*)(_COMM_PAGE_USER_TIMEBASE + _COMM_PAGE_RW_OFFSET)) = user_timebase_allowed();
+	*((uint8_t*)(_COMM_PAGE_USER_TIMEBASE + _COMM_PAGE_RW_OFFSET)) = user_timebase_type();
 	*((uint8_t*)(_COMM_PAGE_CONT_HWCLOCK + _COMM_PAGE_RW_OFFSET)) = user_cont_hwclock_allowed();
 	*((uint8_t*)(_COMM_PAGE_KERNEL_PAGE_SHIFT + _COMM_PAGE_RW_OFFSET)) = (uint8_t) page_shift;
 
 #if __arm64__
 	*((uint8_t*)(_COMM_PAGE_USER_PAGE_SHIFT_32 + _COMM_PAGE_RW_OFFSET)) = (uint8_t) page_shift_user32;
 	*((uint8_t*)(_COMM_PAGE_USER_PAGE_SHIFT_64 + _COMM_PAGE_RW_OFFSET)) = (uint8_t) SIXTEENK_PAGE_SHIFT;
-#elif (__ARM_ARCH_7K__ >= 2) && defined(PLATFORM_WatchOS)
+#elif (__ARM_ARCH_7K__ >= 2)
 	/* enforce 16KB alignment for watch targets with new ABI */
 	*((uint8_t*)(_COMM_PAGE_USER_PAGE_SHIFT_32 + _COMM_PAGE_RW_OFFSET)) = (uint8_t) SIXTEENK_PAGE_SHIFT;
 	*((uint8_t*)(_COMM_PAGE_USER_PAGE_SHIFT_64 + _COMM_PAGE_RW_OFFSET)) = (uint8_t) SIXTEENK_PAGE_SHIFT;
@@ -243,6 +253,12 @@ commpage_cpus( void )
 	return cpus;
 }
 
+int
+_get_cpu_capabilities(void)
+{
+	return _cpu_capabilities;
+}
+
 vm_address_t
 _get_commpage_priv_address(void)
 {
@@ -323,7 +339,15 @@ commpage_init_cpu_capabilities( void )
 		bits |= kHasARMv8Crc32;
 		gARMv8Crc32 = 1;
 	}
+	if ((isar0 & ID_AA64ISAR0_EL1_FHM_MASK) >= ID_AA64ISAR0_EL1_FHM_8_2) {
+		bits |= kHasARMv82FHM;
+		gARMv82FHM = 1;
+	}
 #endif
+
+
+
+
 	_cpu_capabilities = bits;
 
 	*((uint32_t *)(_COMM_PAGE_CPU_CAPABILITIES + _COMM_PAGE_RW_OFFSET)) = _cpu_capabilities;
@@ -513,10 +537,32 @@ commpage_increment_cpu_quiescent_counter(void)
 	 * the cpu mask, relaxed loads and stores is more efficient.
 	 */
 #if __LP64__
-	old_gen = atomic_load_explicit(sched_gen, memory_order_relaxed);
-	atomic_store_explicit(sched_gen, old_gen + 1, memory_order_relaxed);
+	old_gen = os_atomic_load(sched_gen, relaxed);
+	os_atomic_store(sched_gen, old_gen + 1, relaxed);
 #else
 	old_gen = atomic_fetch_add_explicit(sched_gen, 1, memory_order_relaxed);
 #endif
 	return old_gen;
+}
+
+/*
+ * update the commpage with if dtrace user land probes are enabled
+ */
+void
+commpage_update_dof(boolean_t enabled)
+{
+#if CONFIG_DTRACE
+	*((uint8_t*)(_COMM_PAGE_DTRACE_DOF_ENABLED + _COMM_PAGE_RW_OFFSET)) = (enabled ? 1 : 0);
+#else
+	(void)enabled;
+#endif
+}
+
+/*
+ * update the dyld global config flags
+ */
+void
+commpage_update_dyld_flags(uint64_t value)
+{
+	*((uint64_t*)(_COMM_PAGE_DYLD_SYSTEM_FLAGS + _COMM_PAGE_RW_OFFSET)) = value;
 }

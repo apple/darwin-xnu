@@ -10,7 +10,9 @@ PRIVATE_DATAFILES = \
 	cpu_capabilities.h
 
 KERNELFILES = \
+	atomic_impl.h	\
 	atomic.h	\
+	config.h		\
 	cpu_capabilities.h	\
 	cpu_number.h	\
 	io_map_entries.h \
@@ -20,10 +22,12 @@ KERNELFILES = \
 	machine_remote_time.h \
 	machine_routines.h	\
 	machine_kpc.h		\
+	memory_types.h		\
 	monotonic.h \
 	pal_routines.h		\
 	pal_hibernate.h		\
-	simple_lock.h
+	simple_lock.h		\
+	smp.h
 
 EXPORT_FILES = \
 	machine_remote_time.h

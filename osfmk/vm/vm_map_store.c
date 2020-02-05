@@ -125,7 +125,7 @@ _vm_map_store_entry_link( struct vm_map_header * mapHdr, vm_map_entry_t after_wh
 #endif
 #if MAP_ENTRY_INSERTION_DEBUG
 	backtrace(&entry->vme_insertion_bt[0],
-	    (sizeof(entry->vme_insertion_bt) / sizeof(uintptr_t)));
+	    (sizeof(entry->vme_insertion_bt) / sizeof(uintptr_t)), NULL);
 #endif
 }
 

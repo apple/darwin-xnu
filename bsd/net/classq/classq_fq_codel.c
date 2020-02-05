@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -69,6 +69,7 @@ fq_codel_init(void)
 	if (flowq_cache == NULL) {
 		panic("%s: failed to allocate flowq_cache", __func__);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 }
 
@@ -130,12 +131,13 @@ void
 fq_head_drop(fq_if_t *fqs, fq_t *fq)
 {
 	pktsched_pkt_t pkt;
-	uint32_t *pkt_flags;
+	volatile uint32_t *pkt_flags;
 	uint64_t *pkt_timestamp;
 	struct ifclassq *ifq = fqs->fqs_ifq;
 
 	_PKTSCHED_PKT_INIT(&pkt);
-	if (fq_getq_flow_internal(fqs, fq, &pkt) == NULL) {
+	fq_getq_flow_internal(fqs, fq, &pkt);
+	if (pkt.pktsched_pkt_mbuf == NULL) {
 		return;
 	}
 
@@ -143,8 +145,14 @@ fq_head_drop(fq_if_t *fqs, fq_t *fq)
 	    NULL, NULL);
 
 	*pkt_timestamp = 0;
-	if (pkt.pktsched_ptype == QP_MBUF) {
+	switch (pkt.pktsched_ptype) {
+	case QP_MBUF:
 		*pkt_flags &= ~PKTF_PRIV_GUARDED;
+		break;
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
 	IFCQ_DROP_ADD(ifq, 1, pktsched_get_pkt_len(&pkt));
@@ -159,17 +167,23 @@ fq_addq(fq_if_t *fqs, pktsched_pkt_t *pkt, fq_if_classq_t *fq_cl)
 	u_int64_t now;
 	fq_t *fq = NULL;
 	uint64_t *pkt_timestamp;
-	uint32_t *pkt_flags;
+	volatile uint32_t *pkt_flags;
 	uint32_t pkt_flowid, pkt_tx_start_seq;
 	uint8_t pkt_proto, pkt_flowsrc;
 
 	pktsched_get_pkt_vars(pkt, &pkt_flags, &pkt_timestamp, &pkt_flowid,
 	    &pkt_flowsrc, &pkt_proto, &pkt_tx_start_seq);
 
-	if (pkt->pktsched_ptype == QP_MBUF) {
+	switch (pkt->pktsched_ptype) {
+	case QP_MBUF:
 		/* See comments in <rdar://problem/14040693> */
 		VERIFY(!(*pkt_flags & PKTF_PRIV_GUARDED));
 		*pkt_flags |= PKTF_PRIV_GUARDED;
+		break;
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
 	if (*pkt_timestamp > 0) {
@@ -200,9 +214,10 @@ fq_addq(fq_if_t *fqs, pktsched_pkt_t *pkt, fq_if_classq_t *fq_cl)
 			fc_adv = 1;
 			/*
 			 * If the flow is suspended or it is not
-			 * TCP, drop the packet
+			 * TCP/QUIC, drop the packet
 			 */
-			if (pkt_proto != IPPROTO_TCP) {
+			if ((pkt_proto != IPPROTO_TCP) &&
+			    (pkt_proto != IPPROTO_QUIC)) {
 				droptype = DTYPE_EARLY;
 				fq_cl->fcl_stat.fcl_drop_early++;
 			}
@@ -312,20 +327,21 @@ fq_addq(fq_if_t *fqs, pktsched_pkt_t *pkt, fq_if_classq_t *fq_cl)
 	return ret;
 }
 
-void *
+void
 fq_getq_flow_internal(fq_if_t *fqs, fq_t *fq, pktsched_pkt_t *pkt)
 {
-	void *p;
+	classq_pkt_t p = CLASSQ_PKT_INITIALIZER(p);
 	uint32_t plen;
 	fq_if_classq_t *fq_cl;
 	struct ifclassq *ifq = fqs->fqs_ifq;
 
-	fq_dequeue(fq, p);
-	if (p == NULL) {
-		return NULL;
+	fq_dequeue(fq, &p);
+	if (p.cp_ptype == QP_INVALID) {
+		VERIFY(p.cp_mbuf == NULL);
+		return;
 	}
 
-	pktsched_pkt_encap(pkt, fq->fq_ptype, p);
+	pktsched_pkt_encap(pkt, &p);
 	plen = pktsched_get_pkt_len(pkt);
 
 	VERIFY(fq->fq_bytes >= plen);
@@ -341,24 +357,23 @@ fq_getq_flow_internal(fq_if_t *fqs, fq_t *fq, pktsched_pkt_t *pkt)
 	if (fq_empty(fq)) {
 		fq->fq_getqtime = 0;
 	}
-
-	return p;
 }
 
-void *
+void
 fq_getq_flow(fq_if_t *fqs, fq_t *fq, pktsched_pkt_t *pkt)
 {
-	void *p;
 	fq_if_classq_t *fq_cl;
 	u_int64_t now;
 	int64_t qdelay = 0;
 	struct timespec now_ts;
-	uint32_t *pkt_flags, pkt_tx_start_seq;
+	volatile uint32_t *pkt_flags;
+	uint32_t pkt_tx_start_seq;
 	uint64_t *pkt_timestamp;
 
-	p = fq_getq_flow_internal(fqs, fq, pkt);
-	if (p == NULL) {
-		return NULL;
+	fq_getq_flow_internal(fqs, fq, pkt);
+	if (pkt->pktsched_ptype == QP_INVALID) {
+		VERIFY(pkt->pktsched_pkt_mbuf == NULL);
+		return;
 	}
 
 	pktsched_get_pkt_vars(pkt, &pkt_flags, &pkt_timestamp, NULL, NULL,
@@ -385,8 +400,6 @@ fq_getq_flow(fq_if_t *fqs, fq_t *fq, pktsched_pkt_t *pkt)
 		} else {
 			FQ_CLEAR_DELAY_HIGH(fq);
 		}
-
-
 		/* Reset measured queue delay and update time */
 		fq->fq_updatetime = now + fqs->fqs_update_interval;
 		fq->fq_min_qdelay = 0;
@@ -407,9 +420,13 @@ fq_getq_flow(fq_if_t *fqs, fq_t *fq, pktsched_pkt_t *pkt)
 	fq_if_is_flow_heavy(fqs, fq);
 
 	*pkt_timestamp = 0;
-	if (pkt->pktsched_ptype == QP_MBUF) {
+	switch (pkt->pktsched_ptype) {
+	case QP_MBUF:
 		*pkt_flags &= ~PKTF_PRIV_GUARDED;
+		break;
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+		__builtin_unreachable();
 	}
-
-	return p;
 }

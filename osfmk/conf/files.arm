@@ -72,6 +72,3 @@ osfmk/kperf/arm/kperf_mp.c      optional kperf
 osfmk/arm/kpc_arm.c		optional kpc
 
 osfmk/arm/monotonic_arm.c optional monotonic
-
-# Support for early_random()
-osfmk/corecrypto/ccn/src/arm/ccn_set.s	standard

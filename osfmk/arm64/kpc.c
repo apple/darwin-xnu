@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -36,6 +36,8 @@
 #include <machine/machine_routines.h>
 #include <stdint.h>
 #include <sys/errno.h>
+
+#if APPLE_ARM64_ARCH_FAMILY
 
 #if MONOTONIC
 #include <kern/monotonic.h>
@@ -180,12 +182,10 @@ void kpc_pmi_handler(unsigned int ctr);
 #define SREG_PMC8 "S3_2_c15_c9_0"
 #define SREG_PMC9 "S3_2_c15_c10_0"
 
-#if !defined(APPLECYCLONE)
 #define SREG_PMMMAP   "S3_2_c15_c15_0"
 #define SREG_PMTRHLD2 "S3_2_c15_c14_0"
 #define SREG_PMTRHLD4 "S3_2_c15_c13_0"
 #define SREG_PMTRHLD6 "S3_2_c15_c12_0"
-#endif
 
 /*
  * The low 8 bits of a configuration words select the event to program on
@@ -217,11 +217,11 @@ void kpc_pmi_handler(unsigned int ctr);
  * All: PMCR2-4, OPMAT0-1, OPMSK0-1.
  * Typhoon/Twister/Hurricane: PMMMAP, PMTRHLD2/4/6.
  */
-#if defined(APPLECYCLONE)
+#if HAS_EARLY_APPLE_CPMU
 #define RAWPMU_CONFIG_COUNT 7
-#else
+#else /* HAS_EARLY_APPLE_CPMU */
 #define RAWPMU_CONFIG_COUNT 11
-#endif
+#endif /* !HAS_EARLY_APPLE_CPMU */
 
 /* TODO: allocate dynamically */
 static uint64_t saved_PMCR[MAX_CPUS][2];
@@ -243,100 +243,89 @@ static boolean_t whitelist_disabled = TRUE;
 static boolean_t whitelist_disabled = FALSE;
 #endif
 
-/* List of counter events that are allowed externally */
+#define CPMU_CORE_CYCLE 0x02
+
+#if HAS_EARLY_APPLE_CPMU
+
+#define CPMU_BIU_UPSTREAM_CYCLE 0x19
+#define CPMU_BIU_DOWNSTREAM_CYCLE 0x1a
+#define CPMU_L2C_AGENT_LD 0x22
+#define CPMU_L2C_AGENT_LD_MISS 0x23
+#define CPMU_L2C_AGENT_ST 0x24
+#define CPMU_L2C_AGENT_ST_MISS 0x25
+#define CPMU_INST_A32 0x78
+#define CPMU_INST_THUMB 0x79
+#define CPMU_INST_A64 0x7a
+#define CPMU_INST_BRANCH 0x7b
+#define CPMU_SYNC_DC_LOAD_MISS 0xb4
+#define CPMU_SYNC_DC_STORE_MISS 0xb5
+#define CPMU_SYNC_DTLB_MISS 0xb6
+#define CPMU_SYNC_ST_HIT_YNGR_LD 0xb9
+#define CPMU_SYNC_BR_ANY_MISP 0xc0
+#define CPMU_FED_IC_MISS_DEM 0xce
+#define CPMU_FED_ITLB_MISS 0xcf
+
+#else /* HAS_EARLY_APPLE_CPMU */
+
+#if HAS_CPMU_BIU_EVENTS
+#define CPMU_BIU_UPSTREAM_CYCLE 0x13
+#define CPMU_BIU_DOWNSTREAM_CYCLE 0x14
+#endif /* HAS_CPMU_BIU_EVENTS */
+
+#if HAS_CPMU_L2C_EVENTS
+#define CPMU_L2C_AGENT_LD 0x1a
+#define CPMU_L2C_AGENT_LD_MISS 0x1b
+#define CPMU_L2C_AGENT_ST 0x1c
+#define CPMU_L2C_AGENT_ST_MISS 0x1d
+#endif /* HAS_CPMU_L2C_EVENTS */
+
+#define CPMU_INST_A32 0x8a
+#define CPMU_INST_THUMB 0x8b
+#define CPMU_INST_A64 0x8c
+#define CPMU_INST_BRANCH 0x8d
+#define CPMU_SYNC_DC_LOAD_MISS 0xbf
+#define CPMU_SYNC_DC_STORE_MISS 0xc0
+#define CPMU_SYNC_DTLB_MISS 0xc1
+#define CPMU_SYNC_ST_HIT_YNGR_LD 0xc4
+#define CPMU_SYNC_BR_ANY_MISP 0xcb
+#define CPMU_FED_IC_MISS_DEM 0xd3
+#define CPMU_FED_ITLB_MISS 0xd4
+
+#endif /* !HAS_EARLY_APPLE_CPMU */
+
+/* List of counter events that are allowed to be used by 3rd-parties. */
 static kpc_config_t whitelist[] = {
-	0,    /* NO_EVENT */
+	0, /* NO_EVENT */
 
-#if defined(APPLECYCLONE)
-	0x02, /* CORE_CYCLE */
-	0x19, /* BIU_UPSTREAM_CYCLE */
-	0x1a, /* BIU_DOWNSTREAM_CYCLE */
-	0x22, /* L2C_AGENT_LD */
-	0x23, /* L2C_AGENT_LD_MISS */
-	0x24, /* L2C_AGENT_ST */
-	0x25, /* L2C_AGENT_ST_MISS */
-	0x78, /* INST_A32 */
-	0x79, /* INST_THUMB */
-	0x7a, /* INST_A64 */
-	0x7b, /* INST_BRANCH */
-	0xb4, /* SYNC_DC_LOAD_MISS */
-	0xb5, /* SYNC_DC_STORE_MISS */
-	0xb6, /* SYNC_DTLB_MISS */
-	0xb9, /* SYNC_ST_HIT_YNGR_LD */
-	0xc0, /* SYNC_BR_ANY_MISP */
-	0xce, /* FED_IC_MISS_DEM */
-	0xcf, /* FED_ITLB_MISS */
+	CPMU_CORE_CYCLE,
 
-#elif defined(APPLETYPHOON)
-	0x02, /* CORE_CYCLE */
-	0x13, /* BIU_UPSTREAM_CYCLE */
-	0x14, /* BIU_DOWNSTREAM_CYCLE */
-	0x1a, /* L2C_AGENT_LD */
-	0x1b, /* L2C_AGENT_LD_MISS */
-	0x1c, /* L2C_AGENT_ST */
-	0x1d, /* L2C_AGENT_ST_MISS */
-	0x8a, /* INST_A32 */
-	0x8b, /* INST_THUMB */
-	0x8c, /* INST_A64 */
-	0x8d, /* INST_BRANCH */
-	0xbf, /* SYNC_DC_LOAD_MISS */
-	0xc0, /* SYNC_DC_STORE_MISS */
-	0xc1, /* SYNC_DTLB_MISS */
-	0xc4, /* SYNC_ST_HIT_YNGR_LD */
-	0xcb, /* SYNC_BR_ANY_MISP */
-	0xd3, /* FED_IC_MISS_DEM */
-	0xd4, /* FED_ITLB_MISS */
+#if HAS_CPMU_BIU_EVENTS
+	CPMU_BIU_UPSTREAM_CYCLE, CPMU_BIU_DOWNSTREAM_CYCLE,
+#endif /* HAS_CPMU_BIU_EVENTS */
 
-#elif defined(APPLETWISTER) || defined(APPLEHURRICANE)
-	0x02, /* CORE_CYCLE */
-	0x1a, /* L2C_AGENT_LD */
-	0x1b, /* L2C_AGENT_LD_MISS */
-	0x1c, /* L2C_AGENT_ST */
-	0x1d, /* L2C_AGENT_ST_MISS */
-	0x8a, /* INST_A32 */
-	0x8b, /* INST_THUMB */
-	0x8c, /* INST_A64 */
-	0x8d, /* INST_BRANCH */
-	0xbf, /* SYNC_DC_LOAD_MISS */
-	0xc0, /* SYNC_DC_STORE_MISS */
-	0xc1, /* SYNC_DTLB_MISS */
-	0xc4, /* SYNC_ST_HIT_YNGR_LD */
-	0xcb, /* SYNC_BR_ANY_MISP */
-	0xd3, /* FED_IC_MISS_DEM */
-	0xd4, /* FED_ITLB_MISS */
+#if HAS_CPMU_L2C_EVENTS
+	CPMU_L2C_AGENT_LD, CPMU_L2C_AGENT_LD_MISS, CPMU_L2C_AGENT_ST,
+	CPMU_L2C_AGENT_ST_MISS,
+#endif /* HAS_CPMU_L2C_EVENTS */
 
-#elif defined(APPLEMONSOON)
-	0x02, /* CORE_CYCLE */
-	0x8a, /* INST_A32 */
-	0x8b, /* INST_THUMB */
-	0x8c, /* INST_A64 */
-	0x8d, /* INST_BRANCH */
-	0xbf, /* SYNC_DC_LOAD_MISS */
-	0xc0, /* SYNC_DC_STORE_MISS */
-	0xc1, /* SYNC_DTLB_MISS */
-	0xc4, /* SYNC_ST_HIT_YNGR_LD */
-	0xcb, /* SYNC_BR_ANY_MISP */
-	0xd3, /* FED_IC_MISS_DEM */
-	0xd4, /* FED_ITLB_MISS */
-
-#else
-	/* An unknown CPU gets a trivial { NO_EVENT } whitelist. */
-#endif
+	CPMU_INST_A32, CPMU_INST_THUMB, CPMU_INST_A64, CPMU_INST_BRANCH,
+	CPMU_SYNC_DC_LOAD_MISS, CPMU_SYNC_DC_STORE_MISS,
+	CPMU_SYNC_DTLB_MISS, CPMU_SYNC_ST_HIT_YNGR_LD,
+	CPMU_SYNC_BR_ANY_MISP, CPMU_FED_IC_MISS_DEM, CPMU_FED_ITLB_MISS,
 };
-#define WHITELIST_COUNT (sizeof(whitelist)/sizeof(*whitelist))
+#define WHITELIST_COUNT (sizeof(whitelist) / sizeof(whitelist[0]))
+#define EVENT_MASK 0xff
 
-static boolean_t
+static bool
 config_in_whitelist(kpc_config_t cfg)
 {
-	unsigned int i;
-
-	for (i = 0; i < WHITELIST_COUNT; i++) {
-		if (cfg == whitelist[i]) {
-			return TRUE;
+	for (unsigned int i = 0; i < WHITELIST_COUNT; i++) {
+		/* Strip off any EL configuration bits -- just look at the event. */
+		if ((cfg & EVENT_MASK) == whitelist[i]) {
+			return true;
 		}
 	}
-
-	return FALSE;
+	return false;
 }
 
 #ifdef KPC_DEBUG
@@ -784,7 +773,7 @@ kpc_set_running_xcall( void *vstate )
 	set_running_configurable(mp_config->cfg_target_mask,
 	    mp_config->cfg_state_mask);
 
-	if (hw_atomic_sub(&kpc_xcall_sync, 1) == 0) {
+	if (os_atomic_dec(&kpc_xcall_sync, relaxed) == 0) {
 		thread_wakeup((event_t) &kpc_xcall_sync);
 	}
 }
@@ -802,9 +791,9 @@ kpc_get_curcpu_counters_xcall(void *args)
 	int r = kpc_get_curcpu_counters(handler->classes, NULL, &handler->buf[offset]);
 
 	/* number of counters added by this CPU, needs to be atomic  */
-	hw_atomic_add(&(handler->nb_counters), r);
+	os_atomic_add(&(handler->nb_counters), r, relaxed);
 
-	if (hw_atomic_sub(&kpc_xread_sync, 1) == 0) {
+	if (os_atomic_dec(&kpc_xread_sync, relaxed) == 0) {
 		thread_wakeup((event_t) &kpc_xread_sync);
 	}
 }
@@ -939,7 +928,7 @@ kpc_set_config_xcall(void *vmp_config)
 		new_config += RAWPMU_CONFIG_COUNT;
 	}
 
-	if (hw_atomic_sub(&kpc_config_sync, 1) == 0) {
+	if (os_atomic_dec(&kpc_config_sync, relaxed) == 0) {
 		thread_wakeup((event_t) &kpc_config_sync);
 	}
 }
@@ -1010,7 +999,7 @@ kpc_set_reload_xcall(void *vmp_config)
 
 	ml_set_interrupts_enabled(enabled);
 
-	if (hw_atomic_sub(&kpc_reload_sync, 1) == 0) {
+	if (os_atomic_dec(&kpc_reload_sync, relaxed) == 0) {
 		thread_wakeup((event_t) &kpc_reload_sync);
 	}
 }
@@ -1124,3 +1113,165 @@ kpc_get_pmu_version(void)
 {
 	return KPC_PMU_ARM_APPLE;
 }
+
+#else /* APPLE_ARM64_ARCH_FAMILY */
+
+/* We don't currently support non-Apple arm64 PMU configurations like PMUv3 */
+
+void
+kpc_arch_init(void)
+{
+	/* No-op */
+}
+
+uint32_t
+kpc_get_classes(void)
+{
+	return 0;
+}
+
+uint32_t
+kpc_fixed_count(void)
+{
+	return 0;
+}
+
+uint32_t
+kpc_configurable_count(void)
+{
+	return 0;
+}
+
+uint32_t
+kpc_fixed_config_count(void)
+{
+	return 0;
+}
+
+uint32_t
+kpc_configurable_config_count(uint64_t pmc_mask __unused)
+{
+	return 0;
+}
+
+int
+kpc_get_fixed_config(kpc_config_t *configv __unused)
+{
+	return 0;
+}
+
+uint64_t
+kpc_fixed_max(void)
+{
+	return 0;
+}
+
+uint64_t
+kpc_configurable_max(void)
+{
+	return 0;
+}
+
+int
+kpc_get_configurable_config(kpc_config_t *configv __unused, uint64_t pmc_mask __unused)
+{
+	return ENOTSUP;
+}
+
+int
+kpc_get_configurable_counters(uint64_t *counterv __unused, uint64_t pmc_mask __unused)
+{
+	return ENOTSUP;
+}
+
+int
+kpc_get_fixed_counters(uint64_t *counterv __unused)
+{
+	return 0;
+}
+
+boolean_t
+kpc_is_running_fixed(void)
+{
+	return FALSE;
+}
+
+boolean_t
+kpc_is_running_configurable(uint64_t pmc_mask __unused)
+{
+	return FALSE;
+}
+
+int
+kpc_set_running_arch(struct kpc_running_remote *mp_config __unused)
+{
+	return ENOTSUP;
+}
+
+int
+kpc_set_period_arch(struct kpc_config_remote *mp_config __unused)
+{
+	return ENOTSUP;
+}
+
+int
+kpc_set_config_arch(struct kpc_config_remote *mp_config __unused)
+{
+	return ENOTSUP;
+}
+
+void
+kpc_idle(void)
+{
+	// do nothing
+}
+
+void
+kpc_idle_exit(void)
+{
+	// do nothing
+}
+
+int
+kpc_get_all_cpus_counters(uint32_t classes __unused, int *curcpu __unused, uint64_t *buf __unused)
+{
+	return 0;
+}
+
+int
+kpc_set_sw_inc( uint32_t mask __unused )
+{
+	return ENOTSUP;
+}
+
+int
+kpc_get_pmu_version(void)
+{
+	return KPC_PMU_ERROR;
+}
+
+uint32_t
+kpc_rawpmu_config_count(void)
+{
+	return 0;
+}
+
+int
+kpc_get_rawpmu_config(__unused kpc_config_t *configv)
+{
+	return 0;
+}
+
+int
+kpc_disable_whitelist( int val __unused )
+{
+	return 0;
+}
+
+int
+kpc_get_whitelist_disabled( void )
+{
+	return 0;
+}
+
+#endif /* !APPLE_ARM64_ARCH_FAMILY */

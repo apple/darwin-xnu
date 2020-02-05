@@ -5067,7 +5067,7 @@ wait_for_dreads:
 		 * vm_pre_fault() will call vm_fault() to enter the page into
 		 * the pmap if there isn't _a_ physical page for that VA already.
 		 */
-		vm_pre_fault(vm_map_trunc_page(next_iov_base, PAGE_MASK));
+		vm_pre_fault(vm_map_trunc_page(next_iov_base, PAGE_MASK), VM_PROT_READ);
 	}
 
 	if (io_req_size && retval == 0) {
@@ -6897,8 +6897,13 @@ vfs_drt_alloc_map(struct vfs_drt_clustermap **cmapp)
 				modulus_size = DRT_HASH_XLARGE_MODULUS;
 				map_size = DRT_XLARGE_ALLOCATION;
 			} else {
-				modulus_size = DRT_HASH_LARGE_MODULUS;
-				map_size = DRT_LARGE_ALLOCATION;
+				/*
+				 * If the ring is completely full and we can't
+				 * expand, there's nothing useful for us to do.
+				 * Behave as though we had compacted into the new
+				 * array and return.
+				 */
+				return KERN_SUCCESS;
 			}
 		} else {
 			/* already using the xlarge modulus */

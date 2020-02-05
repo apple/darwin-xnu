@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -48,7 +48,7 @@ typedef void (*IOCommandQueueAction)
 
 class IOCommandQueue : public IOEventSource
 {
-	OSDeclareDefaultStructors(IOCommandQueue)
+	OSDeclareDefaultStructors(IOCommandQueue);
 
 protected:
 	static const int kIOCQDefaultSize = 128;
@@ -65,17 +65,17 @@ protected:
 
 public:
 	static IOCommandQueue *commandQueue(OSObject *inOwner,
-	    IOCommandQueueAction inAction = 0,
+	    IOCommandQueueAction inAction = NULL,
 	    int inSize = kIOCQDefaultSize)
 	APPLE_KEXT_DEPRECATED;
 	virtual bool init(OSObject *inOwner,
-	    IOCommandQueueAction inAction = 0,
+	    IOCommandQueueAction inAction = NULL,
 	    int inSize = kIOCQDefaultSize)
 	APPLE_KEXT_DEPRECATED;
 
 	virtual kern_return_t enqueueCommand(bool gotoSleep = true,
-	    void *field0 = 0, void *field1 = 0,
-	    void *field2 = 0, void *field3 = 0)
+	    void *field0 = NULL, void *field1 = NULL,
+	    void *field2 = NULL, void *field3 = NULL)
 	APPLE_KEXT_DEPRECATED;
 
 // WARNING:  This function can only be safely called from the appropriate
@@ -84,8 +84,8 @@ public:
 // For each entry in the commandQueue call the target/action.
 // Lockout all new entries to the queue while iterating.
 // If the input fields are zero then the queue's owner/action will be used.
-	virtual int performAndFlush(OSObject *target = 0,
-	    IOCommandQueueAction inAction = 0)
+	virtual int performAndFlush(OSObject *target = NULL,
+	    IOCommandQueueAction inAction = NULL)
 	APPLE_KEXT_DEPRECATED;
 };
 

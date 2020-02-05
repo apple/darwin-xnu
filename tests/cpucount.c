@@ -27,6 +27,8 @@
 
 #include <os/tsd.h> /* private header for _os_cpu_number */
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 /* const variables aren't constants, but enums are */
 enum { max_threads = 40 };
 

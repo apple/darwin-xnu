@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -32,6 +32,7 @@
 #define _OS_OSNUMBER_H
 
 #include <libkern/c++/OSObject.h>
+#include <libkern/c++/OSPtr.h>
 
 /*!
  * @header
@@ -40,6 +41,9 @@
  * This header declares the OSNumber container class.
  */
 
+class OSNumber;
+
+typedef OSPtr<OSNumber> OSNumberPtr;
 
 /*!
  * @class OSNumber
@@ -72,7 +76,7 @@ class OSNumber : public OSObject
 {
 	friend class OSSerialize;
 
-	OSDeclareDefaultStructors(OSNumber)
+	OSDeclareDefaultStructors(OSNumber);
 
 #if APPLE_KEXT_ALIGN_CONTAINERS
 
@@ -118,7 +122,7 @@ public:
  * and <code>@link addValue addValue@/link</code>,
  * but you can't change the bit size.
  */
-	static OSNumber * withNumber(
+	static OSNumberPtr withNumber(
 		unsigned long long value,
 		unsigned int       numberOfBits);
 
@@ -153,7 +157,7 @@ public:
  * and <code>@link addValue addValue@/link</code>,
  * but you can't change the bit size.
  */
-	static OSNumber * withNumber(
+	static OSNumberPtr withNumber(
 		const char   * valueString,
 		unsigned int   numberOfBits);
 

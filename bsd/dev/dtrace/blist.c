@@ -62,59 +62,12 @@
  * $FreeBSD: src/sys/kern/subr_blist.c,v 1.5.2.1 2000/03/17 10:47:29 ps Exp $
  */
 
-#if !defined(__APPLE__)
-#ifdef _KERNEL
-
-#include <sys/param.h>
-#include <sys/systm.h>
-#include <sys/lock.h>
-#include <sys/kernel.h>
-#include <sys/blist.h>
-#include <sys/malloc.h>
-#include <vm/vm.h>
-#include <vm/vm_object.h>
-#include <vm/vm_kern.h>
-#include <vm/vm_extern.h>
-#include <vm/vm_page.h>
-
-#else
-
-#ifndef BLIST_NO_DEBUG
-#define BLIST_DEBUG
-#endif
-
-#define SWAPBLK_NONE ((daddr_t)-1)
-
-#include <sys/types.h>
-#include <stdio.h>
-#include <string.h>
-#include <stdlib.h>
-#include <stdarg.h>
-
-#define malloc(a, b, c)   malloc(a)
-#define free(a, b)       free(a)
-
-typedef unsigned int u_daddr_t;
-
-#include <sys/blist.h>
-
-void panic(const char *ctl, ...);
-
-#endif
-#else /* is MacOS X */
-#ifdef KERNEL
-#ifndef _KERNEL
-#define _KERNEL /* Solaris vs. Darwin */
-#endif
-#endif
-
 typedef unsigned int u_daddr_t;
 
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/lock.h>
 #include <sys/kernel.h>
-/* #include <sys/blist.h> */
 #include "blist.h"
 #include <sys/malloc.h>
 
@@ -122,8 +75,6 @@ typedef unsigned int u_daddr_t;
 #define malloc _MALLOC
 #define free _FREE
 #define M_SWAP M_TEMP
-
-#endif /* __APPLE__ */
 
 /*
  * static support functions
@@ -139,16 +90,6 @@ static void blst_copy(blmeta_t *scan, daddr_t blk, daddr_t radix,
     daddr_t skip, blist_t dest, daddr_t count);
 static daddr_t  blst_radix_init(blmeta_t *scan, daddr_t radix,
     int skip, daddr_t count);
-#ifndef _KERNEL
-static void     blst_radix_print(blmeta_t *scan, daddr_t blk,
-    daddr_t radix, int skip, int tab);
-#endif
-
-#if !defined(__APPLE__)
-#ifdef _KERNEL
-static MALLOC_DEFINE(M_SWAP, "SWAP", "Swap space");
-#endif
-#endif /* __APPLE__ */
 
 /*
  * blist_create() - create a blist capable of handling up to the specified

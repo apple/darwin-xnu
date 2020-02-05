@@ -16,7 +16,8 @@
 
 T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.intel"),
-	T_META_CHECK_LEAKS(false)
+	T_META_CHECK_LEAKS(false),
+	T_META_RUN_CONCURRENTLY(true)
 	);
 
 #define NORMAL_RUN_TIME  (10)

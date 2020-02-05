@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2016-2018 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -219,8 +219,9 @@ disk_conditioner_set_info(mount_t mp, disk_conditioner_info *uinfo)
 
 	internal_info = mp->mnt_disk_conditioner_info;
 	if (!internal_info) {
-		internal_info = mp->mnt_disk_conditioner_info = kalloc(sizeof(struct _disk_conditioner_info_t));
+		internal_info = kalloc(sizeof(struct _disk_conditioner_info_t));
 		bzero(internal_info, sizeof(struct _disk_conditioner_info_t));
+		mp->mnt_disk_conditioner_info = internal_info;
 		mnt_fields = &(internal_info->mnt_fields);
 
 		/* save mount_t fields for restoration later */
@@ -300,7 +301,10 @@ disk_conditioner_mount_is_ssd(mount_t mp)
 	struct _disk_conditioner_info_t *internal_info = mp->mnt_disk_conditioner_info;
 
 	if (!internal_info || !internal_info->dcinfo.enabled) {
-		return !!(mp->mnt_kern_flag & MNTK_SSD);
+		if (mp->mnt_kern_flag & MNTK_SSD) {
+			return TRUE;
+		}
+		return FALSE;
 	}
 
 	return internal_info->dcinfo.is_ssd;

@@ -26,6 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <kern/ast.h>
 #include <kern/locks.h>
 #include <kern/task.h>
 #include <kern/thread.h>
@@ -229,4 +230,10 @@ kern_return_t
 hv_thread_trap(uint64_t index, uint64_t arg)
 {
 	return HV_TRAP_DISPATCH(HV_THREAD_TRAP, index, hv_get_thread_target(), arg);
+}
+
+boolean_t
+hv_ast_pending(void)
+{
+	return current_cpu_datap()->cpu_pending_ast & (AST_APC | AST_BSD);
 }

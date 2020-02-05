@@ -146,7 +146,7 @@ firehose_chunk_tracepoint_try_reserve(firehose_chunk_t fc, uint64_t stamp,
 		return FIREHOSE_CHUNK_TRY_RESERVE_FAIL_ENQUEUE;
 	}
 	if (privptr) {
-		*privptr = fc->fc_start + pos.fcp_private_offs;
+		*privptr = (uint8_t *)((uintptr_t)fc->fc_start + pos.fcp_private_offs);
 	}
 	return orig.fcp_next_entry_offs;
 }
@@ -157,7 +157,7 @@ firehose_chunk_tracepoint_begin(firehose_chunk_t fc, uint64_t stamp,
     uint16_t pubsize, uint64_t thread_id, long offset)
 {
 	firehose_tracepoint_t ft = (firehose_tracepoint_t)
-	    __builtin_assume_aligned(fc->fc_start + offset, 8);
+	    __builtin_assume_aligned((void *)((uintptr_t)fc->fc_start + (uintptr_t)offset), 8);
 	stamp -= fc->fc_timestamp;
 	stamp |= (uint64_t)pubsize << 48;
 	// The compiler barrier is needed for userland process death handling, see

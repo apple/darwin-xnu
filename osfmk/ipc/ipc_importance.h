@@ -95,10 +95,10 @@ struct ipc_importance_elem {
 
 #if !IIE_REF_DEBUG
 #define ipc_importance_reference_internal(elem)         \
-	(hw_atomic_add(&(elem)->iie_bits, 1) & IIE_REFS_MASK)
+	(os_atomic_inc(&(elem)->iie_bits, relaxed) & IIE_REFS_MASK)
 
 #define ipc_importance_release_internal(elem)           \
-	(hw_atomic_sub(&(elem)->iie_bits, 1) & IIE_REFS_MASK)
+	(os_atomic_dec(&(elem)->iie_bits, relaxed) & IIE_REFS_MASK)
 #endif
 
 struct ipc_importance_task {

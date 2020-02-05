@@ -36,11 +36,15 @@
 #include <corecrypto/cc_priv.h>
 
 void
-ccdigest_update(const struct ccdigest_info *di, ccdigest_ctx_t ctx,
-    size_t len, const void *data)
+ccdigest_update(const struct ccdigest_info *di, ccdigest_ctx_t ctx, size_t len, const void *data)
 {
 	const char * data_ptr = data;
 	size_t nblocks, nbytes;
+
+	// Sanity check to recover from ctx corruptions.
+	if (ccdigest_num(di, ctx) >= di->block_size) {
+		ccdigest_num(di, ctx) = 0;
+	}
 
 	while (len > 0) {
 		if (ccdigest_num(di, ctx) == 0 && len > di->block_size) {
@@ -59,13 +63,10 @@ ccdigest_update(const struct ccdigest_info *di, ccdigest_ctx_t ctx,
 			di->compress(ccdigest_state(di, ctx), nblocks, data_ptr);
 			len -= nbytes;
 			data_ptr += nbytes;
-			ccdigest_nbits(di, ctx) += nbytes * 8;
+			ccdigest_nbits(di, ctx) += (uint64_t) (nbytes) * 8;
 		} else {
-			size_t n = di->block_size - ccdigest_num(di, ctx);
-			if (len < n) {
-				n = len;
-			}
-			CC_MEMCPY(ccdigest_data(di, ctx) + ccdigest_num(di, ctx), data_ptr, n);
+			size_t n = CC_MIN(di->block_size - ccdigest_num(di, ctx), len);
+			cc_memcpy(ccdigest_data(di, ctx) + ccdigest_num(di, ctx), data_ptr, n);
 			/* typecast: less than block size, will always fit into an int */
 			ccdigest_num(di, ctx) += (unsigned int)n;
 			len -= n;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -77,7 +77,6 @@
 #include <kern/thread.h>
 #include <kern/kalloc.h>
 #include <kern/zalloc.h>
-#include <kern/xpr.h>
 #include <kern/ledger.h>
 #include <vm/pmap.h>
 #include <vm/vm_init.h>
@@ -96,6 +95,9 @@
 #include <vm/memory_object.h>
 #include <vm/vm_purgeable_internal.h>
 #include <vm/vm_compressor.h>
+#if defined (__x86_64__)
+#include <i386/misc_protos.h>
+#endif
 
 #if CONFIG_PHANTOM_CACHE
 #include <vm/vm_phantom_cache.h>
@@ -105,6 +107,9 @@
 
 #include <sys/kdebug.h>
 
+#if defined(HAS_APPLE_PAC)
+#include <ptrauth.h>
+#endif
 
 #if MACH_ASSERT
 
@@ -115,6 +120,10 @@
 #define ASSERT_PMAP_FREE(mem) /* nothing */
 
 #endif /* MACH_ASSERT */
+
+extern boolean_t vm_pageout_running;
+extern thread_t  vm_pageout_scan_thread;
+extern boolean_t vps_dynamic_priority_enabled;
 
 char    vm_page_inactive_states[VM_PAGE_Q_STATE_ARRAY_SIZE];
 char    vm_page_pageable_states[VM_PAGE_Q_STATE_ARRAY_SIZE];
@@ -328,7 +337,7 @@ unsigned int    vm_page_free_count;
 zone_t  vm_page_array_zone;
 zone_t  vm_page_zone;
 vm_locks_array_t vm_page_locks;
-decl_lck_mtx_data(, vm_page_alloc_lock)
+decl_lck_mtx_data(, vm_page_alloc_lock);
 lck_mtx_ext_t vm_page_alloc_lock_ext;
 
 unsigned int    vm_page_local_q_count = 0;
@@ -399,6 +408,7 @@ unsigned int    vm_page_inactive_count;
 unsigned int    vm_page_secluded_count;
 unsigned int    vm_page_secluded_count_free;
 unsigned int    vm_page_secluded_count_inuse;
+unsigned int    vm_page_secluded_count_over_target;
 #endif /* CONFIG_SECLUDED_MEMORY */
 unsigned int    vm_page_anonymous_count;
 unsigned int    vm_page_throttled_count;
@@ -409,6 +419,9 @@ unsigned int    vm_page_wire_count_on_boot = 0;
 unsigned int    vm_page_stolen_count = 0;
 unsigned int    vm_page_wire_count_initial;
 unsigned int    vm_page_gobble_count = 0;
+unsigned int    vm_page_kern_lpage_count = 0;
+
+uint64_t        booter_size;  /* external so it can be found in core dumps */
 
 #define VM_PAGE_WIRE_COUNT_WARNING      0
 #define VM_PAGE_GOBBLE_COUNT_WARNING    0
@@ -644,6 +657,12 @@ vm_get_delayed_page(int grab_options)
 	assert(vm_delayed_count > 0);
 	--vm_delayed_count;
 
+#if defined(__x86_64__)
+	/* x86 cluster code requires increasing phys_page in vm_pages[] */
+	if (vm_pages_count > 0) {
+		assert(pnum > vm_pages[vm_pages_count - 1].vmp_phys_page);
+	}
+#endif
 	p = &vm_pages[vm_pages_count];
 	assert(p < vm_page_array_ending_addr);
 	vm_page_init(p, pnum, FALSE);
@@ -687,8 +706,8 @@ vm_free_delayed_pages(void)
 	vm_page_t   p;
 	vm_page_t   list = NULL;
 	uint_t      cnt = 0;
-	vm_offset_t start_free_page;
-	vm_size_t   free_size;
+	vm_offset_t start_free_va;
+	int64_t     free_size;
 
 	while ((p = vm_get_delayed_page(VM_PAGE_GRAB_OPTIONS_NONE)) != NULL) {
 		if (vm_himemory_mode) {
@@ -711,29 +730,39 @@ vm_free_delayed_pages(void)
 		vm_page_release(p, FALSE);
 	}
 #if DEVELOPMENT || DEBUG
-	kprintf("vm_free_delayed_pages: freed %d pages\n", cnt);
+	kprintf("vm_free_delayed_pages: initialized %d free pages\n", cnt);
 #endif
 
 	/*
 	 * Free up any unused full pages at the end of the vm_pages[] array
 	 */
-	start_free_page = round_page((vm_offset_t)&vm_pages[vm_pages_count]);
-	if (start_free_page < (vm_offset_t)vm_page_array_ending_addr) {
-		free_size = trunc_page((vm_offset_t)vm_page_array_ending_addr - start_free_page);
-		if (free_size > 0) {
-#if DEVELOPMENT || DEBUG
-			kprintf("Freeing final unused %ld bytes from vm_pages[] at 0x%lx\n",
-			    (long)free_size, (long)start_free_page);
+	start_free_va = round_page((vm_offset_t)&vm_pages[vm_pages_count]);
+
+#if defined(__x86_64__)
+	/*
+	 * Since x86 might have used large pages for vm_pages[], we can't
+	 * free starting in the middle of a partially used large page.
+	 */
+	if (pmap_query_pagesize(kernel_pmap, start_free_va) == I386_LPGBYTES) {
+		start_free_va = ((start_free_va + I386_LPGMASK) & ~I386_LPGMASK);
+	}
 #endif
-			pmap_pv_fixup(start_free_page, free_size);
-			ml_static_mfree(start_free_page, free_size);
-			vm_page_array_ending_addr = (void *)start_free_page;
+	if (start_free_va < (vm_offset_t)vm_page_array_ending_addr) {
+		free_size = trunc_page((vm_offset_t)vm_page_array_ending_addr - start_free_va);
+		if (free_size > 0) {
+			ml_static_mfree(start_free_va, (vm_offset_t)free_size);
+			vm_page_array_ending_addr = (void *)start_free_va;
 
 			/*
 			 * Note there's no locking here, as only this thread will ever change this value.
 			 * The reader, vm_page_diagnose, doesn't grab any locks for the counts it looks at.
 			 */
-			--vm_page_stolen_count;
+			vm_page_stolen_count -= (free_size >> PAGE_SHIFT);
+
+#if DEVELOPMENT || DEBUG
+			kprintf("Freeing final unused %ld bytes from vm_pages[] at 0x%lx\n",
+			    (long)free_size, (long)start_free_va);
+#endif
 		}
 	}
 
@@ -1183,6 +1212,9 @@ vm_page_bootstrap(
 #endif
 	vm_page_wire_count_initial = vm_page_wire_count;
 
+	/* capture this for later use */
+	booter_size = ml_get_booter_memory_size();
+
 	printf("vm_page_bootstrap: %d free pages, %d wired pages, (up to %d of which are delayed free)\n",
 	    vm_page_free_count, vm_page_wire_count, vm_delayed_count);
 
@@ -1192,81 +1224,103 @@ vm_page_bootstrap(
 
 #ifndef MACHINE_PAGES
 /*
- *	We implement pmap_steal_memory and pmap_startup with the help
- *	of two simpler functions, pmap_virtual_space and pmap_next_page.
+ * This is the early boot time allocator for data structures needed to bootstrap the VM system.
+ * On x86 it will allocate large pages if size is sufficiently large. We don't need to do this
+ * on ARM yet, due to the combination of a large base page size and smaller RAM devices.
  */
-
-void *
-pmap_steal_memory(
-	vm_size_t size)
+static void *
+pmap_steal_memory_internal(
+	vm_size_t size,
+	boolean_t might_free)
 {
 	kern_return_t kr;
-	vm_offset_t addr, vaddr;
+	vm_offset_t addr;
+	vm_offset_t map_addr;
 	ppnum_t phys_page;
 
 	/*
-	 *	We round the size to a round multiple.
+	 * Size needs to be aligned to word size.
 	 */
-
 	size = (size + sizeof(void *) - 1) & ~(sizeof(void *) - 1);
 
 	/*
-	 *	If this is the first call to pmap_steal_memory,
-	 *	we have to initialize ourself.
+	 * On the first call, get the initial values for virtual address space
+	 * and page align them.
 	 */
-
 	if (virtual_space_start == virtual_space_end) {
 		pmap_virtual_space(&virtual_space_start, &virtual_space_end);
-
-		/*
-		 *	The initial values must be aligned properly, and
-		 *	we don't trust the pmap module to do it right.
-		 */
-
 		virtual_space_start = round_page(virtual_space_start);
 		virtual_space_end = trunc_page(virtual_space_end);
+
+#if defined(__x86_64__)
+		/*
+		 * Release remaining unused section of preallocated KVA and the 4K page tables
+		 * that map it. This makes the VA available for large page mappings.
+		 */
+		Idle_PTs_release(virtual_space_start, virtual_space_end);
+#endif
 	}
 
 	/*
-	 *	Allocate virtual memory for this request.
+	 * Allocate the virtual space for this request. On x86, we'll align to a large page
+	 * address if the size is big enough to back with at least 1 large page.
 	 */
-
+#if defined(__x86_64__)
+	if (size >= I386_LPGBYTES) {
+		virtual_space_start = ((virtual_space_start + I386_LPGMASK) & ~I386_LPGMASK);
+	}
+#endif
 	addr = virtual_space_start;
 	virtual_space_start += size;
 
 	//kprintf("pmap_steal_memory: %08lX - %08lX; size=%08lX\n", (long)addr, (long)virtual_space_start, (long)size);	/* (TEST/DEBUG) */
 
 	/*
-	 *	Allocate and map physical pages to back new virtual pages.
+	 * Allocate and map physical pages to back the new virtual space.
 	 */
+	map_addr = round_page(addr);
+	while (map_addr < addr + size) {
+#if defined(__x86_64__)
+		/*
+		 * Back with a large page if properly aligned on x86
+		 */
+		if ((map_addr & I386_LPGMASK) == 0 &&
+		    map_addr + I386_LPGBYTES <= addr + size &&
+		    pmap_pre_expand_large(kernel_pmap, map_addr) == KERN_SUCCESS &&
+		    pmap_next_page_large(&phys_page) == KERN_SUCCESS) {
+			kr = pmap_enter(kernel_pmap, map_addr, phys_page,
+			    VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE,
+			    VM_WIMG_USE_DEFAULT | VM_MEM_SUPERPAGE, FALSE);
 
-	for (vaddr = round_page(addr);
-	    vaddr < addr + size;
-	    vaddr += PAGE_SIZE) {
-		if (!pmap_next_page_hi(&phys_page)) {
+			if (kr != KERN_SUCCESS) {
+				panic("pmap_steal_memory: pmap_enter() large failed, new_addr=%#lx, phys_page=%u",
+				    (unsigned long)map_addr, phys_page);
+			}
+			map_addr += I386_LPGBYTES;
+			vm_page_wire_count += I386_LPGBYTES >> PAGE_SHIFT;
+			vm_page_stolen_count += I386_LPGBYTES >> PAGE_SHIFT;
+			vm_page_kern_lpage_count++;
+			continue;
+		}
+#endif
+
+		if (!pmap_next_page_hi(&phys_page, might_free)) {
 			panic("pmap_steal_memory() size: 0x%llx\n", (uint64_t)size);
 		}
 
-		/*
-		 *	XXX Logically, these mappings should be wired,
-		 *	but some pmap modules barf if they are.
-		 */
-#if defined(__LP64__)
-#ifdef  __arm64__
-		/* ARM64_TODO: verify that we really don't need this */
-#else
-		pmap_pre_expand(kernel_pmap, vaddr);
-#endif
+#if defined(__x86_64__)
+		pmap_pre_expand(kernel_pmap, map_addr);
 #endif
 
-		kr = pmap_enter(kernel_pmap, vaddr, phys_page,
+		kr = pmap_enter(kernel_pmap, map_addr, phys_page,
 		    VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE,
 		    VM_WIMG_USE_DEFAULT, FALSE);
 
 		if (kr != KERN_SUCCESS) {
-			panic("pmap_steal_memory() pmap_enter failed, vaddr=%#lx, phys_page=%u",
-			    (unsigned long)vaddr, phys_page);
+			panic("pmap_steal_memory() pmap_enter failed, map_addr=%#lx, phys_page=%u",
+			    (unsigned long)map_addr, phys_page);
 		}
+		map_addr += PAGE_SIZE;
 
 		/*
 		 * Account for newly stolen memory
@@ -1275,10 +1329,33 @@ pmap_steal_memory(
 		vm_page_stolen_count++;
 	}
 
+#if defined(__x86_64__)
+	/*
+	 * The call with might_free is currently the last use of pmap_steal_memory*().
+	 * Notify the pmap layer to record which high pages were allocated so far.
+	 */
+	if (might_free) {
+		pmap_hi_pages_done();
+	}
+#endif
 #if KASAN
 	kasan_notify_address(round_page(addr), size);
 #endif
 	return (void *) addr;
+}
+
+void *
+pmap_steal_memory(
+	vm_size_t size)
+{
+	return pmap_steal_memory_internal(size, FALSE);
+}
+
+void *
+pmap_steal_freeable_memory(
+	vm_size_t size)
+{
+	return pmap_steal_memory_internal(size, TRUE);
 }
 
 #if CONFIG_SECLUDED_MEMORY
@@ -1336,7 +1413,7 @@ pmap_startup(
 	mem_sz += round_page(virtual_space_start) - virtual_space_start;        /* Account for any slop */
 	npages = (uint_t)(mem_sz / (PAGE_SIZE + sizeof(*vm_pages)));    /* scaled to include the vm_page_ts */
 
-	vm_pages = (vm_page_t) pmap_steal_memory(npages * sizeof *vm_pages);
+	vm_pages = (vm_page_t) pmap_steal_freeable_memory(npages * sizeof *vm_pages);
 
 	/*
 	 * Check if we want to initialize pages to a known value
@@ -1483,6 +1560,12 @@ pmap_startup(
 		assert((i + vm_first_phys_ppnum) == phys_page);
 #endif
 
+#if defined(__x86_64__)
+		/* The x86 clump freeing code requires increasing ppn's to work correctly */
+		if (i > 0) {
+			assert(phys_page > vm_pages[i - 1].vmp_phys_page);
+		}
+#endif
 		++vm_pages_count;
 		vm_page_init(&vm_pages[i], phys_page, FALSE);
 		if (fill) {
@@ -1684,9 +1767,6 @@ vm_page_insert_internal(
 	int                     ledger_idx_nonvolatile_compressed;
 	boolean_t               do_footprint;
 
-	XPR(XPR_VM_PAGE,
-	    "vm_page_insert, object 0x%X offset 0x%X page 0x%X\n",
-	    object, offset, mem, 0, 0);
 #if 0
 	/*
 	 * we may not hold the page queue lock
@@ -2027,11 +2107,6 @@ vm_page_remove(
 	int             do_footprint;
 
 	m_object = VM_PAGE_OBJECT(mem);
-
-	XPR(XPR_VM_PAGE,
-	    "vm_page_remove, object 0x%X offset 0x%X page 0x%X\n",
-	    m_object, mem->vmp_offset,
-	    mem, 0, 0);
 
 	vm_object_lock_assert_exclusive(m_object);
 	assert(mem->vmp_tabled);
@@ -2433,11 +2508,6 @@ vm_page_rename(
 
 	assert(m_object != new_object);
 	assert(m_object);
-
-	XPR(XPR_VM_PAGE,
-	    "vm_page_rename, new object 0x%X, offset 0x%X page 0x%X\n",
-	    new_object, new_offset,
-	    mem, 0, 0);
 
 	/*
 	 *	Changes to mem->vmp_object require the page lock because
@@ -3272,15 +3342,22 @@ return_page_from_cpu_list:
 	/*
 	 *	Decide if we should poke the pageout daemon.
 	 *	We do this if the free count is less than the low
-	 *	water mark, or if the free count is less than the high
-	 *	water mark (but above the low water mark) and the inactive
-	 *	count is less than its target.
+	 *	water mark. VM Pageout Scan will keep running till
+	 *	the free_count > free_target (& hence above free_min).
+	 *	This wakeup is to catch the possibility of the counts
+	 *	dropping between VM Pageout Scan parking and this check.
 	 *
 	 *	We don't have the counts locked ... if they change a little,
 	 *	it doesn't really matter.
 	 */
 	if (vm_page_free_count < vm_page_free_min) {
-		thread_wakeup((event_t) &vm_page_free_wanted);
+		lck_mtx_lock(&vm_page_queue_free_lock);
+		if (vm_pageout_running == FALSE) {
+			lck_mtx_unlock(&vm_page_queue_free_lock);
+			thread_wakeup((event_t) &vm_page_free_wanted);
+		} else {
+			lck_mtx_unlock(&vm_page_queue_free_lock);
+		}
 	}
 
 	VM_CHECK_MEMORYSTATUS;
@@ -3434,6 +3511,66 @@ reactivate_secluded_page:
 
 	return mem;
 }
+
+uint64_t
+vm_page_secluded_drain(void)
+{
+	vm_page_t local_freeq;
+	int local_freed;
+	uint64_t num_reclaimed;
+	unsigned int saved_secluded_count, saved_secluded_target;
+
+	num_reclaimed = 0;
+	local_freeq = NULL;
+	local_freed = 0;
+
+	vm_page_lock_queues();
+
+	saved_secluded_count = vm_page_secluded_count;
+	saved_secluded_target = vm_page_secluded_target;
+	vm_page_secluded_target = 0;
+	VM_PAGE_SECLUDED_COUNT_OVER_TARGET_UPDATE();
+	while (vm_page_secluded_count) {
+		vm_page_t secluded_page;
+
+		assert((vm_page_secluded_count_free +
+		    vm_page_secluded_count_inuse) ==
+		    vm_page_secluded_count);
+		secluded_page = (vm_page_t)vm_page_queue_first(&vm_page_queue_secluded);
+		assert(secluded_page->vmp_q_state == VM_PAGE_ON_SECLUDED_Q);
+
+		vm_page_queues_remove(secluded_page, FALSE);
+		assert(!secluded_page->vmp_fictitious);
+		assert(!VM_PAGE_WIRED(secluded_page));
+
+		if (secluded_page->vmp_object == 0) {
+			/* transfer to free queue */
+			assert(secluded_page->vmp_busy);
+			secluded_page->vmp_snext = local_freeq;
+			local_freeq = secluded_page;
+			local_freed += 1;
+		} else {
+			/* transfer to head of active queue */
+			vm_page_enqueue_active(secluded_page, FALSE);
+			secluded_page = VM_PAGE_NULL;
+		}
+		num_reclaimed++;
+	}
+	vm_page_secluded_target = saved_secluded_target;
+	VM_PAGE_SECLUDED_COUNT_OVER_TARGET_UPDATE();
+
+//	printf("FBDP %s:%d secluded_count %d->%d, target %d, reclaimed %lld\n", __FUNCTION__, __LINE__, saved_secluded_count, vm_page_secluded_count, vm_page_secluded_target, num_reclaimed);
+
+	vm_page_unlock_queues();
+
+	if (local_freed) {
+		vm_page_free_list(local_freeq, TRUE);
+		local_freeq = NULL;
+		local_freed = 0;
+	}
+
+	return num_reclaimed;
+}
 #endif /* CONFIG_SECLUDED_MEMORY */
 
 
@@ -3467,6 +3604,7 @@ vm_page_release(
 #if CONFIG_SECLUDED_MEMORY
 	int     need_secluded_wakeup = 0;
 #endif /* CONFIG_SECLUDED_MEMORY */
+	event_t wakeup_event = NULL;
 
 	if (page_queues_locked) {
 		LCK_MTX_ASSERT(&vm_page_queue_lock, LCK_MTX_ASSERT_OWNED);
@@ -3533,6 +3671,7 @@ vm_page_release(
 		vm_page_queue_enter_first(&vm_page_queue_secluded, mem, vmp_pageq);
 		mem->vmp_q_state = VM_PAGE_ON_SECLUDED_Q;
 		vm_page_secluded_count++;
+		VM_PAGE_SECLUDED_COUNT_OVER_TARGET_UPDATE();
 		vm_page_secluded_count_free++;
 		if (!page_queues_locked) {
 			vm_page_unlock_queues();
@@ -3597,15 +3736,25 @@ vm_page_release(
 	lck_mtx_unlock(&vm_page_queue_free_lock);
 
 	if (need_priv_wakeup) {
-		thread_wakeup_one((event_t) &vm_page_free_wanted_privileged);
+		wakeup_event = &vm_page_free_wanted_privileged;
 	}
 #if CONFIG_SECLUDED_MEMORY
 	else if (need_secluded_wakeup) {
-		thread_wakeup_one((event_t) &vm_page_free_wanted_secluded);
+		wakeup_event = &vm_page_free_wanted_secluded;
 	}
 #endif /* CONFIG_SECLUDED_MEMORY */
 	else if (need_wakeup) {
-		thread_wakeup_one((event_t) &vm_page_free_count);
+		wakeup_event = &vm_page_free_count;
+	}
+
+	if (wakeup_event) {
+		if (vps_dynamic_priority_enabled == TRUE) {
+			thread_t thread_woken = NULL;
+			wakeup_one_with_inheritor((event_t) wakeup_event, THREAD_AWAKENED, LCK_WAKE_DO_NOT_TRANSFER_PUSH, &thread_woken);
+			thread_deallocate(thread_woken);
+		} else {
+			thread_wakeup_one((event_t) wakeup_event);
+		}
 	}
 
 	VM_CHECK_MEMORYSTATUS;
@@ -3634,6 +3783,7 @@ vm_page_release_startup(
 		mem->vmp_lopage = FALSE;
 		mem->vmp_q_state = VM_PAGE_ON_SECLUDED_Q;
 		vm_page_secluded_count++;
+		VM_PAGE_SECLUDED_COUNT_OVER_TARGET_UPDATE();
 		vm_page_secluded_count_free++;
 		queue_free = &vm_page_queue_secluded;
 #endif /* CONFIG_SECLUDED_MEMORY */
@@ -3679,6 +3829,7 @@ vm_page_wait(
 	kern_return_t   wait_result;
 	int             need_wakeup = 0;
 	int             is_privileged = current_thread()->options & TH_OPT_VMPRIV;
+	event_t         wait_event = NULL;
 
 	lck_mtx_lock_spin(&vm_page_queue_free_lock);
 
@@ -3696,7 +3847,7 @@ vm_page_wait(
 		if (vm_page_free_wanted_privileged++ == 0) {
 			need_wakeup = 1;
 		}
-		wait_result = assert_wait((event_t)&vm_page_free_wanted_privileged, interruptible);
+		wait_event = (event_t)&vm_page_free_wanted_privileged;
 #if CONFIG_SECLUDED_MEMORY
 	} else if (secluded_for_apps &&
 	    task_can_use_secluded_mem(current_task(), FALSE)) {
@@ -3712,25 +3863,41 @@ vm_page_wait(
 		if (vm_page_free_wanted_secluded++ == 0) {
 			need_wakeup = 1;
 		}
-		wait_result = assert_wait(
-			(event_t)&vm_page_free_wanted_secluded,
-			interruptible);
+		wait_event = (event_t)&vm_page_free_wanted_secluded;
 #endif /* CONFIG_SECLUDED_MEMORY */
 	} else {
 		if (vm_page_free_wanted++ == 0) {
 			need_wakeup = 1;
 		}
-		wait_result = assert_wait((event_t)&vm_page_free_count,
-		    interruptible);
-	}
-	lck_mtx_unlock(&vm_page_queue_free_lock);
-	counter(c_vm_page_wait_block++);
-
-	if (need_wakeup) {
-		thread_wakeup((event_t)&vm_page_free_wanted);
+		wait_event = (event_t)&vm_page_free_count;
 	}
 
-	if (wait_result == THREAD_WAITING) {
+	/*
+	 * We don't do a vm_pageout_scan wakeup if we already have
+	 * some waiters because vm_pageout_scan checks for waiters
+	 * before it returns and does so behind the vm_page_queue_free_lock,
+	 * which we own when we bump the waiter counts.
+	 */
+
+	if (vps_dynamic_priority_enabled == TRUE) {
+		/*
+		 * We are waking up vm_pageout_scan here. If it needs
+		 * the vm_page_queue_free_lock before we unlock it
+		 * we'll end up just blocking and incur an extra
+		 * context switch. Could be a perf. issue.
+		 */
+
+		counter(c_vm_page_wait_block++);
+
+		if (need_wakeup) {
+			thread_wakeup((event_t)&vm_page_free_wanted);
+		}
+
+		/*
+		 * LD: This event is going to get recorded every time because
+		 * we don't get back THREAD_WAITING from lck_mtx_sleep_with_inheritor.
+		 * We just block in that routine.
+		 */
 		VM_DEBUG_CONSTANT_EVENT(vm_page_wait_block, VM_PAGE_WAIT_BLOCK, DBG_FUNC_START,
 		    vm_page_free_wanted_privileged,
 		    vm_page_free_wanted,
@@ -3740,12 +3907,39 @@ vm_page_wait(
 		    0,
 #endif /* CONFIG_SECLUDED_MEMORY */
 		    0);
-		wait_result = thread_block(THREAD_CONTINUE_NULL);
-		VM_DEBUG_CONSTANT_EVENT(vm_page_wait_block,
-		    VM_PAGE_WAIT_BLOCK, DBG_FUNC_END, 0, 0, 0, 0);
+		wait_result =  lck_mtx_sleep_with_inheritor(&vm_page_queue_free_lock,
+		    LCK_SLEEP_UNLOCK,
+		    wait_event,
+		    vm_pageout_scan_thread,
+		    interruptible,
+		    0);
+	} else {
+		wait_result = assert_wait(wait_event, interruptible);
+
+		lck_mtx_unlock(&vm_page_queue_free_lock);
+		counter(c_vm_page_wait_block++);
+
+		if (need_wakeup) {
+			thread_wakeup((event_t)&vm_page_free_wanted);
+		}
+
+		if (wait_result == THREAD_WAITING) {
+			VM_DEBUG_CONSTANT_EVENT(vm_page_wait_block, VM_PAGE_WAIT_BLOCK, DBG_FUNC_START,
+			    vm_page_free_wanted_privileged,
+			    vm_page_free_wanted,
+#if CONFIG_SECLUDED_MEMORY
+			    vm_page_free_wanted_secluded,
+#else /* CONFIG_SECLUDED_MEMORY */
+			    0,
+#endif /* CONFIG_SECLUDED_MEMORY */
+			    0);
+			wait_result = thread_block(THREAD_CONTINUE_NULL);
+			VM_DEBUG_CONSTANT_EVENT(vm_page_wait_block,
+			    VM_PAGE_WAIT_BLOCK, DBG_FUNC_END, 0, 0, 0, 0);
+		}
 	}
 
-	return wait_result == THREAD_AWAKENED;
+	return (wait_result == THREAD_AWAKENED) || (wait_result == THREAD_NOT_WAITING);
 }
 
 /*
@@ -4099,6 +4293,8 @@ vm_page_free_list(
 #if CONFIG_SECLUDED_MEMORY
 			unsigned int    need_wakeup_secluded = 0;
 #endif /* CONFIG_SECLUDED_MEMORY */
+			event_t         priv_wakeup_event, secluded_wakeup_event, normal_wakeup_event;
+			boolean_t       priv_wakeup_all, secluded_wakeup_all, normal_wakeup_all;
 
 			lck_mtx_lock_spin(&vm_page_queue_free_lock);
 
@@ -4174,27 +4370,32 @@ vm_page_free_list(
 			}
 			lck_mtx_unlock(&vm_page_queue_free_lock);
 
+			priv_wakeup_event = NULL;
+			secluded_wakeup_event = NULL;
+			normal_wakeup_event = NULL;
+
+			priv_wakeup_all = FALSE;
+			secluded_wakeup_all = FALSE;
+			normal_wakeup_all = FALSE;
+
+
 			if (need_priv_wakeup != 0) {
 				/*
 				 * There shouldn't be that many VM-privileged threads,
 				 * so let's wake them all up, even if we don't quite
 				 * have enough pages to satisfy them all.
 				 */
-				thread_wakeup((event_t)&vm_page_free_wanted_privileged);
+				priv_wakeup_event = (event_t)&vm_page_free_wanted_privileged;
+				priv_wakeup_all = TRUE;
 			}
 #if CONFIG_SECLUDED_MEMORY
 			if (need_wakeup_secluded != 0 &&
 			    vm_page_free_wanted_secluded == 0) {
-				thread_wakeup((event_t)
-				    &vm_page_free_wanted_secluded);
+				secluded_wakeup_event = (event_t)&vm_page_free_wanted_secluded;
+				secluded_wakeup_all = TRUE;
+				need_wakeup_secluded = 0;
 			} else {
-				for (;
-				    need_wakeup_secluded != 0;
-				    need_wakeup_secluded--) {
-					thread_wakeup_one(
-						(event_t)
-						&vm_page_free_wanted_secluded);
-				}
+				secluded_wakeup_event = (event_t)&vm_page_free_wanted_secluded;
 			}
 #endif /* CONFIG_SECLUDED_MEMORY */
 			if (need_wakeup != 0 && vm_page_free_wanted == 0) {
@@ -4203,13 +4404,82 @@ vm_page_free_list(
 				 * after this, so let's wake them all up at
 				 * once.
 				 */
-				thread_wakeup((event_t) &vm_page_free_count);
+				normal_wakeup_event = (event_t) &vm_page_free_count;
+				normal_wakeup_all = TRUE;
+				need_wakeup = 0;
 			} else {
-				for (; need_wakeup != 0; need_wakeup--) {
+				normal_wakeup_event = (event_t) &vm_page_free_count;
+			}
+
+			if (priv_wakeup_event ||
+#if CONFIG_SECLUDED_MEMORY
+			    secluded_wakeup_event ||
+#endif /* CONFIG_SECLUDED_MEMORY */
+			    normal_wakeup_event) {
+				if (vps_dynamic_priority_enabled == TRUE) {
+					thread_t thread_woken = NULL;
+
+					if (priv_wakeup_all == TRUE) {
+						wakeup_all_with_inheritor(priv_wakeup_event, THREAD_AWAKENED);
+					}
+
+#if CONFIG_SECLUDED_MEMORY
+					if (secluded_wakeup_all == TRUE) {
+						wakeup_all_with_inheritor(secluded_wakeup_event, THREAD_AWAKENED);
+					}
+
+					while (need_wakeup_secluded-- != 0) {
+						/*
+						 * Wake up one waiter per page we just released.
+						 */
+						wakeup_one_with_inheritor(secluded_wakeup_event, THREAD_AWAKENED, LCK_WAKE_DO_NOT_TRANSFER_PUSH, &thread_woken);
+						thread_deallocate(thread_woken);
+					}
+#endif /* CONFIG_SECLUDED_MEMORY */
+
+					if (normal_wakeup_all == TRUE) {
+						wakeup_all_with_inheritor(normal_wakeup_event, THREAD_AWAKENED);
+					}
+
+					while (need_wakeup-- != 0) {
+						/*
+						 * Wake up one waiter per page we just released.
+						 */
+						wakeup_one_with_inheritor(normal_wakeup_event, THREAD_AWAKENED, LCK_WAKE_DO_NOT_TRANSFER_PUSH, &thread_woken);
+						thread_deallocate(thread_woken);
+					}
+				} else {
 					/*
-					 * Wake up one waiter per page we just released.
+					 * Non-priority-aware wakeups.
 					 */
-					thread_wakeup_one((event_t) &vm_page_free_count);
+
+					if (priv_wakeup_all == TRUE) {
+						thread_wakeup(priv_wakeup_event);
+					}
+
+#if CONFIG_SECLUDED_MEMORY
+					if (secluded_wakeup_all == TRUE) {
+						thread_wakeup(secluded_wakeup_event);
+					}
+
+					while (need_wakeup_secluded-- != 0) {
+						/*
+						 * Wake up one waiter per page we just released.
+						 */
+						thread_wakeup_one(secluded_wakeup_event);
+					}
+
+#endif /* CONFIG_SECLUDED_MEMORY */
+					if (normal_wakeup_all == TRUE) {
+						thread_wakeup(normal_wakeup_event);
+					}
+
+					while (need_wakeup-- != 0) {
+						/*
+						 * Wake up one waiter per page we just released.
+						 */
+						thread_wakeup_one(normal_wakeup_event);
+					}
 				}
 			}
 
@@ -4685,6 +4955,7 @@ vm_page_activate(
 				vm_page_queue_enter(&vm_page_queue_secluded, m, vmp_pageq);
 				m->vmp_q_state = VM_PAGE_ON_SECLUDED_Q;
 				vm_page_secluded_count++;
+				VM_PAGE_SECLUDED_COUNT_OVER_TARGET_UPDATE();
 				vm_page_secluded_count_inuse++;
 				assert(!m_object->internal);
 //				vm_page_pageable_external_count++;
@@ -4760,6 +5031,7 @@ vm_page_speculate(
 			 */
 			aq->age_ts.tv_sec = vm_pageout_state.vm_page_speculative_q_age_ms / 1000;
 			aq->age_ts.tv_nsec = (vm_pageout_state.vm_page_speculative_q_age_ms % 1000) * 1000 * NSEC_PER_USEC;
+
 			ADD_MACH_TIMESPEC(&aq->age_ts, &ts);
 		} else {
 			aq = &vm_page_queue_speculative[speculative_age_index];
@@ -4785,6 +5057,7 @@ vm_page_speculate(
 
 				aq->age_ts.tv_sec = vm_pageout_state.vm_page_speculative_q_age_ms / 1000;
 				aq->age_ts.tv_nsec = (vm_pageout_state.vm_page_speculative_q_age_ms % 1000) * 1000 * NSEC_PER_USEC;
+
 				ADD_MACH_TIMESPEC(&aq->age_ts, &ts);
 			}
 		}
@@ -5128,9 +5401,6 @@ void
 vm_page_zero_fill(
 	vm_page_t       m)
 {
-	XPR(XPR_VM_PAGE,
-	    "vm_page_zero_fill, object 0x%X offset 0x%X page 0x%X\n",
-	    VM_PAGE_OBJECT(m), m->vmp_offset, m, 0, 0);
 #if 0
 	/*
 	 * we don't hold the page queue lock
@@ -5187,11 +5457,6 @@ vm_page_copy(
 
 	src_m_object = VM_PAGE_OBJECT(src_m);
 
-	XPR(XPR_VM_PAGE,
-	    "vm_page_copy, object 0x%X offset 0x%X to object 0x%X offset 0x%X\n",
-	    src_m_object, src_m->vmp_offset,
-	    VM_PAGE_OBJECT(dest_m), dest_m->vmp_offset,
-	    0);
 #if 0
 	/*
 	 * we don't hold the page queue lock
@@ -6234,7 +6499,13 @@ cpm_allocate(
 	 * determine need for wakeups
 	 */
 	if (vm_page_free_count < vm_page_free_min) {
-		thread_wakeup((event_t) &vm_page_free_wanted);
+		lck_mtx_lock(&vm_page_queue_free_lock);
+		if (vm_pageout_running == FALSE) {
+			lck_mtx_unlock(&vm_page_queue_free_lock);
+			thread_wakeup((event_t) &vm_page_free_wanted);
+		} else {
+			lck_mtx_unlock(&vm_page_queue_free_lock);
+		}
 	}
 
 	VM_CHECK_MEMORYSTATUS;
@@ -6298,10 +6569,22 @@ vm_page_do_delayed_work(
 	if (!vm_page_trylockspin_queues()) {
 		vm_object_unlock(object);
 
+		/*
+		 * "Turnstile enabled vm_pageout_scan" can be runnable
+		 * for a very long time without getting on a core.
+		 * If this is a higher priority thread it could be
+		 * waiting here for a very long time respecting the fact
+		 * that pageout_scan would like its object after VPS does
+		 * a mutex_pause(0).
+		 * So we cap the number of yields in the vm_object_lock_avoid()
+		 * case to a single mutex_pause(0) which will give vm_pageout_scan
+		 * 10us to run and grab the object if needed.
+		 */
 		vm_page_lockspin_queues();
 
 		for (j = 0;; j++) {
-			if (!vm_object_lock_avoid(object) &&
+			if ((!vm_object_lock_avoid(object) ||
+			    (vps_dynamic_priority_enabled && (j > 0))) &&
 			    _vm_object_lock_try(object)) {
 				break;
 			}
@@ -8394,6 +8677,7 @@ vm_page_queues_remove(vm_page_t mem, boolean_t __unused remove_from_backgroundq)
 	{
 		vm_page_queue_remove(&vm_page_queue_secluded, mem, vmp_pageq);
 		vm_page_secluded_count--;
+		VM_PAGE_SECLUDED_COUNT_OVER_TARGET_UPDATE();
 		if (m_object == VM_OBJECT_NULL) {
 			vm_page_secluded_count_free--;
 			was_pageable = FALSE;
@@ -8628,6 +8912,9 @@ vm_tag_bt(void)
 		/* Pull return address from one spot above the frame pointer */
 		retaddr = *(frameptr + 1);
 
+#if defined(HAS_APPLE_PAC)
+		retaddr = (uintptr_t) ptrauth_strip((void *)retaddr, ptrauth_key_return_address);
+#endif
 
 		if (((retaddr < vm_kernel_builtinkmod_text_end) && (retaddr >= vm_kernel_builtinkmod_text))
 		    || (retaddr < vm_kernel_stext) || (retaddr > vm_kernel_top)) {
@@ -8937,6 +9224,7 @@ kern_allocation_update_subtotal(kern_allocation_name_t allocation, uint32_t subt
 
 	subidx = 0;
 	assert(VM_KERN_MEMORY_NONE != subtag);
+	lck_spin_lock(&vm_allocation_sites_lock);
 	for (; subidx < allocation->subtotalscount; subidx++) {
 		if (VM_KERN_MEMORY_NONE == allocation->subtotals[subidx].tag) {
 			allocation->subtotals[subidx].tag = subtag;
@@ -8946,6 +9234,7 @@ kern_allocation_update_subtotal(kern_allocation_name_t allocation, uint32_t subt
 			break;
 		}
 	}
+	lck_spin_unlock(&vm_allocation_sites_lock);
 	assert(subidx < allocation->subtotalscount);
 	if (subidx >= allocation->subtotalscount) {
 		return;
@@ -8957,13 +9246,10 @@ kern_allocation_update_subtotal(kern_allocation_name_t allocation, uint32_t subt
 
 	if (delta < 0) {
 		assertf(total->total >= ((uint64_t)-delta), "name %p", allocation);
-		OSAddAtomic64(delta, &total->total);
 		assertf(other->mapped >= ((uint64_t)-delta), "other %p", other);
-		OSAddAtomic64(delta, &other->mapped);
-	} else {
-		OSAddAtomic64(delta, &other->mapped);
-		OSAddAtomic64(delta, &total->total);
 	}
+	OSAddAtomic64(delta, &other->mapped);
+	OSAddAtomic64(delta, &total->total);
 }
 
 const char *
@@ -9215,14 +9501,12 @@ vm_page_diagnose_estimate(void)
 	return count;
 }
 
-
 kern_return_t
 vm_page_diagnose(mach_memory_info_t * info, unsigned int num_info, uint64_t zones_collectable_bytes)
 {
 	uint64_t                 wired_size;
 	uint64_t                 wired_managed_size;
 	uint64_t                 wired_reserved_size;
-	uint64_t                 booter_size;
 	boolean_t                iterate;
 	mach_memory_info_t     * counts;
 
@@ -9241,7 +9525,6 @@ vm_page_diagnose(mach_memory_info_t * info, unsigned int num_info, uint64_t zone
 #endif
 	wired_managed_size  = ptoa_64(vm_page_wire_count - vm_page_wire_count_initial);
 
-	booter_size = ml_get_booter_memory_size();
 	wired_size += booter_size;
 
 	assert(num_info >= VM_KERN_COUNTER_COUNT);
@@ -9455,6 +9738,7 @@ start_secluded_suppression(task_t task)
 		task->task_suppressed_secluded = TRUE;
 		vm_page_secluded_save_target = vm_page_secluded_target;
 		vm_page_secluded_target = 0;
+		VM_PAGE_SECLUDED_COUNT_OVER_TARGET_UPDATE();
 	}
 	lck_spin_unlock(&secluded_suppress_slock);
 }
@@ -9466,6 +9750,7 @@ stop_secluded_suppression(task_t task)
 	if (task->task_suppressed_secluded && --vm_page_secluded_suppress_cnt == 0) {
 		task->task_suppressed_secluded = FALSE;
 		vm_page_secluded_target = vm_page_secluded_save_target;
+		VM_PAGE_SECLUDED_COUNT_OVER_TARGET_UPDATE();
 	}
 	lck_spin_unlock(&secluded_suppress_slock);
 }

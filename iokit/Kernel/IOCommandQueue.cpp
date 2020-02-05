@@ -120,7 +120,7 @@ IOCommandQueue::commandQueue(OSObject *inOwner,
 
 	if (me && !me->init(inOwner, inAction, inSize)) {
 		me->free();
-		return 0;
+		return NULL;
 	}
 
 	return me;

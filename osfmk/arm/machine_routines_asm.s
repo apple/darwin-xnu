@@ -621,15 +621,21 @@ LEXT(set_context_id)
 	isb
 	bx		lr
 
-#define	COPYIO_VALIDATE(NAME)						\
-	/* call NAME_validate to check the arguments */			;\
-	push		{r0, r1, r2, r7, lr}				;\
-	add		r7, sp, #12					;\
-	blx		EXT(NAME##_validate)				;\
-	cmp		r0, #0						;\
-	addne           sp, #12						;\
-	popne		{r7, pc}					;\
-	pop		{r0, r1, r2, r7, lr}				;\
+/*
+ * arg0: prefix of the external validator function (copyin or copyout)
+ * arg1: 0-based index of highest argument register that must be preserved
+ */
+.macro COPYIO_VALIDATE
+	/* call NAME_validate to check the arguments */
+	push		{r0-r$1, r7, lr}
+	add		r7, sp, #(($1 + 1) * 4)
+	blx		EXT($0_validate)
+	cmp		r0, #0
+	addne           sp, #(($1 + 1) * 4)
+	popne		{r7, pc}
+	pop		{r0-r$1, r7, lr}
+.endmacro
+
 
 #define	COPYIO_SET_RECOVER()						\
 	/* set recovery address */					;\
@@ -735,7 +741,7 @@ LEXT(copyinstr)
 	moveq		r12, #0
 	streq		r12, [r3]
 	bxeq		lr
-	COPYIO_VALIDATE(copyin)
+	COPYIO_VALIDATE copyin_user, 3
 	stmfd	sp!, { r4, r5, r6 }
 	
 	mov		r6, r3
@@ -786,7 +792,7 @@ copyinstr_error:
 	.globl EXT(copyin)
 LEXT(copyin)
 	COPYIO_HEADER()
-	COPYIO_VALIDATE(copyin)
+	COPYIO_VALIDATE copyin, 2
 	COPYIO_TRY_KERNEL()
 	COPYIO_SET_RECOVER()
 	COPYIO_MAP_USER()
@@ -803,7 +809,7 @@ LEXT(copyin)
 	.globl EXT(copyout)
 LEXT(copyout)
 	COPYIO_HEADER()
-	COPYIO_VALIDATE(copyout)
+	COPYIO_VALIDATE copyout, 2
 	COPYIO_TRY_KERNEL()
 	COPYIO_SET_RECOVER()
 	COPYIO_MAP_USER()
@@ -814,34 +820,96 @@ LEXT(copyout)
 
 
 /*
- *  int copyin_word(const user_addr_t user_addr, uint64_t *kernel_addr, vm_size_t nbytes)
+ *  int copyin_atomic32(const user_addr_t user_addr, uint32_t *kernel_addr)
+ *    r0: user_addr
+ *    r1: kernel_addr
  */
 	.text
 	.align 2
-	.globl EXT(copyin_word)
-LEXT(copyin_word)
-	cmp		r2, #4			// Test if size is 4 or 8
-	cmpne		r2, #8
-	bne		L_copyin_invalid
-	sub		r3, r2, #1
-	tst		r0, r3			// Test alignment of user address
-	bne		L_copyin_invalid
+	.globl EXT(copyin_atomic32)
+LEXT(copyin_atomic32)
+	tst		r0, #3			// Test alignment of user address
+	bne		2f
 
-	COPYIO_VALIDATE(copyin)
+	mov		r2, #4
+	COPYIO_VALIDATE copyin_user, 1
 	COPYIO_SET_RECOVER()
 	COPYIO_MAP_USER()
 
-	mov		r3, #0			// Clear high register
-	cmp		r2, #4			// If size is 4
-	ldreq		r2, [r0]		// 	Load word from user
-	ldrdne		r2, r3, [r0]		// Else Load double word from user
+	ldr		r2, [r0]		// Load word from user
+	str		r2, [r1]		// Store to kernel_addr
+	mov		r0, #0			// Success
+
+	COPYIO_UNMAP_USER()
+	COPYIO_RESTORE_RECOVER()
+	bx		lr
+2:	// misaligned copyin
+	mov		r0, #EINVAL
+	bx		lr
+
+/*
+ *  int copyin_atomic32_wait_if_equals(const char *src, uint32_t value)
+ *    r0: user_addr
+ *    r1: value
+ */
+	.text
+	.align 2
+	.globl EXT(copyin_atomic32_wait_if_equals)
+LEXT(copyin_atomic32_wait_if_equals)
+	tst		r0, #3			// Test alignment of user address
+	bne		2f
+
+	mov		r2, r0
+	mov		r3, #4
+	COPYIO_VALIDATE copyio_user, 1		// validate user address (uses r2, r3)
+	COPYIO_SET_RECOVER()
+	COPYIO_MAP_USER()
+
+	ldrex		r2, [r0]
+	cmp		r2, r1
+	movne		r0, ESTALE
+	bne		1f
+	mov		r0, #0
+	wfe
+1:
+	clrex
+
+	COPYIO_UNMAP_USER()
+	COPYIO_RESTORE_RECOVER()
+	bx		lr
+2:	// misaligned copyin
+	mov		r0, #EINVAL
+	bx		lr
+
+/*
+ *  int copyin_atomic64(const user_addr_t user_addr, uint64_t *kernel_addr)
+ *    r0: user_addr
+ *    r1: kernel_addr
+ */
+	.text
+	.align 2
+	.globl EXT(copyin_atomic64)
+LEXT(copyin_atomic64)
+	tst		r0, #7			// Test alignment of user address
+	bne		2f
+
+	mov		r2, #8
+	COPYIO_VALIDATE copyin_user, 1
+	COPYIO_SET_RECOVER()
+	COPYIO_MAP_USER()
+
+1:	// ldrex/strex retry loop
+	ldrexd		r2, r3, [r0]		// Load double word from user
+	strexd		r5, r2, r3, [r0]	// (the COPYIO_*() macros make r5 safe to use as a scratch register here)
+	cmp		r5, #0
+	bne		1b
 	stm		r1, {r2, r3}		// Store to kernel_addr
 	mov		r0, #0			// Success
 
 	COPYIO_UNMAP_USER()
 	COPYIO_RESTORE_RECOVER()
 	bx		lr
-L_copyin_invalid:
+2:	// misaligned copyin
 	mov		r0, #EINVAL
 	bx		lr
 
@@ -852,6 +920,69 @@ copyio_error:
 	str		r4, [r12, TH_RECOVER]
 	ldmfd		sp!, { r4, r5, r6 }
 	bx		lr
+
+
+/*
+ *  int copyout_atomic32(uint32_t value, user_addr_t user_addr)
+ *    r0: value
+ *    r1: user_addr
+ */
+	.text
+	.align 2
+	.globl EXT(copyout_atomic32)
+LEXT(copyout_atomic32)
+	tst		r1, #3			// Test alignment of user address
+	bne		2f
+
+	mov		r2, r1
+	mov		r3, #4
+	COPYIO_VALIDATE copyio_user, 1		// validate user address (uses r2, r3)
+	COPYIO_SET_RECOVER()
+	COPYIO_MAP_USER()
+
+	str		r0, [r1]		// Store word to user
+	mov		r0, #0			// Success
+
+	COPYIO_UNMAP_USER()
+	COPYIO_RESTORE_RECOVER()
+	bx		lr
+2:	// misaligned copyout
+	mov		r0, #EINVAL
+	bx		lr
+
+
+/*
+ *  int copyout_atomic64(uint64_t value, user_addr_t user_addr)
+ *    r0, r1: value
+ *    r2: user_addr
+ */
+	.text
+	.align 2
+	.globl EXT(copyout_atomic64)
+LEXT(copyout_atomic64)
+	tst		r2, #7			// Test alignment of user address
+	bne		2f
+
+	mov		r3, #8
+	COPYIO_VALIDATE copyio_user, 2		// validate user address (uses r2, r3)
+	COPYIO_SET_RECOVER()
+	COPYIO_MAP_USER()
+
+1:	// ldrex/strex retry loop
+	ldrexd		r4, r5, [r2]
+	strexd		r3, r0, r1, [r2]	// Atomically store double word to user
+	cmp		r3, #0
+	bne		1b
+
+	mov		r0, #0			// Success
+
+	COPYIO_UNMAP_USER()
+	COPYIO_RESTORE_RECOVER()
+	bx		lr
+2:	// misaligned copyout
+	mov		r0, #EINVAL
+	bx		lr
+
 
 /*
  * int copyin_kern(const user_addr_t user_addr, char *kernel_addr, vm_size_t nbytes)

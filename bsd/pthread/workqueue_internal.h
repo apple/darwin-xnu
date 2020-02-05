@@ -67,6 +67,7 @@
 #define WORKQUEUE_CONSTRAINED_FACTOR 5
 
 #if BSD_KERNEL_PRIVATE
+#include <kern/mpsc_queue.h>
 #include <kern/priority_queue.h>
 #include <kern/thread_call.h>
 #include <kern/turnstile.h>
@@ -96,33 +97,96 @@ typedef union workq_threadreq_param_s {
 } workq_threadreq_param_t;
 
 #define TRP_PRIORITY            0x1
-#define TRP_POLICY                      0x2
+#define TRP_POLICY              0x2
 #define TRP_CPUPERCENT          0x4
 #define TRP_RELEASED            0x8000
+
+/*!
+ * @enum workq_tr_state_t
+ *
+ * @brief
+ * This enum represents the state of a workq thread request.
+ *
+ * @discussion
+ * The states are used and set by both kevent and the workq subsystem under very
+ * precise locking domains.
+ *
+ * When for kevent requests, this structure is embedded on the kqueue itself,
+ * for non kevent related thread requests, it is allocated.
+ *
+ * Only the BINDING state isn't set under the kqlock, but then only QUEUED could
+ * be read by kqueue in its stead.
+ *
+ * @const WORKQ_TR_STATE_IDLE
+ * This thread request is idle.
+ * The state is only transient for non kevent thread requests.
+ * Set under the kqlock (kevent) or after allocation (workq).
+ *
+ * tr_entry/tr_thread are unused.
+ *
+ * @const WORKQ_TR_STATE_NEW
+ * This thread request is being initialized. This state is transient.
+ * Set workq lock for all kinds, set under the kqlock to for kevent requests.
+ *
+ * tr_entry is initialized, tr_thread is unused.
+ *
+ * @const WORKQ_TR_STATE_QUEUED
+ * This thread request has been pended, waiting for a thread to be bound.
+ * Set workq lock for all kinds, set under the kqlock to for kevent requests.
+ *
+ * tr_entry is used as linkage in a workq priority queue, tr_thread is unused.
+ *
+ * @const WORKQ_TR_STATE_CANCELED
+ * When the process exits, Queued thread requests are marked canceled.
+ * This happens under the workqueue lock.
+ *
+ * @const WORKQ_TR_STATE_BINDING (kevent only)
+ * A thread was found to bind to the thread request.
+ * The bind is preposted this way under the workq lock and will be
+ * acknowledged by the kevent subsystem.
+ *
+ * tr_entry is unused, tr_thread is the thread we're binding to.
+ *
+ * @const WORKQ_TR_STATE_BOUND (kevent only)
+ * A thread bind has been acknowledged by the kevent subsystem.
+ * This is always set under the kqlock, sometimes also under the workq lock.
+ *
+ * tr_entry is unused, tr_thread is the thread we're bound to.
+ */
+__enum_decl(workq_tr_state_t, uint8_t, {
+	WORKQ_TR_STATE_IDLE        = 0, /* request isn't in flight       */
+	WORKQ_TR_STATE_NEW         = 1, /* request is being initiated    */
+	WORKQ_TR_STATE_QUEUED      = 2, /* request is being queued       */
+	WORKQ_TR_STATE_CANCELED    = 3, /* request is canceled           */
+	WORKQ_TR_STATE_BINDING     = 4, /* request is preposted for bind */
+	WORKQ_TR_STATE_BOUND       = 5, /* request is bound to a thread  */
+});
+
+__options_decl(workq_tr_flags_t, uint8_t, {
+	WORKQ_TR_FLAG_KEVENT         = 0x01,
+	WORKQ_TR_FLAG_WORKLOOP       = 0x02,
+	WORKQ_TR_FLAG_OVERCOMMIT     = 0x04,
+	WORKQ_TR_FLAG_WL_PARAMS      = 0x08,
+	WORKQ_TR_FLAG_WL_OUTSIDE_QOS = 0x10,
+});
 
 typedef struct workq_threadreq_s {
 	union {
 		struct priority_queue_entry tr_entry;
-		thread_t tr_binding_thread;
+		thread_t tr_thread;
 	};
-	uint32_t     tr_flags;
-	uint8_t      tr_state;
-	thread_qos_t tr_qos;
-	uint16_t     tr_count;
-} *workq_threadreq_t;
+	uint16_t           tr_count;
+	workq_tr_flags_t   tr_flags;
+	workq_tr_state_t   tr_state;
+	thread_qos_t       tr_qos;                 /* qos for the thread request */
+
+	/* kqueue states, modified under the kqlock */
+	kq_index_t         tr_kq_override_index;   /* highest wakeup override index */
+	kq_index_t         tr_kq_qos_index;        /* QoS for the servicer */
+	bool               tr_kq_wakeup;           /* an event has fired */
+} workq_threadreq_s, *workq_threadreq_t;
 
 TAILQ_HEAD(threadreq_head, workq_threadreq_s);
-
-#define TR_STATE_IDLE           0  /* request isn't in flight       */
-#define TR_STATE_NEW            1  /* request is being initiated    */
-#define TR_STATE_QUEUED         2  /* request is being queued       */
-#define TR_STATE_BINDING        4  /* request is preposted for bind */
-
-#define TR_FLAG_KEVENT                  0x01
-#define TR_FLAG_WORKLOOP                0x02
-#define TR_FLAG_OVERCOMMIT              0x04
-#define TR_FLAG_WL_PARAMS               0x08
-#define TR_FLAG_WL_OUTSIDE_QOS  0x10
 
 #if defined(__LP64__)
 typedef unsigned __int128 wq_thactive_t;
@@ -130,7 +194,7 @@ typedef unsigned __int128 wq_thactive_t;
 typedef uint64_t wq_thactive_t;
 #endif
 
-typedef enum {
+__options_decl(workq_state_flags_t, uint32_t, {
 	WQ_EXITING                  = 0x0001,
 	WQ_PROC_SUSPENDED           = 0x0002,
 	WQ_DEATH_CALL_SCHEDULED     = 0x0004,
@@ -139,7 +203,7 @@ typedef enum {
 	WQ_DELAYED_CALL_PENDED      = 0x0020,
 	WQ_IMMEDIATE_CALL_SCHEDULED = 0x0040,
 	WQ_IMMEDIATE_CALL_PENDED    = 0x0080,
-} workq_state_flags_t;
+});
 
 TAILQ_HEAD(workq_uthread_head, uthread);
 
@@ -147,7 +211,11 @@ struct workqueue {
 	thread_call_t   wq_delayed_call;
 	thread_call_t   wq_immediate_call;
 	thread_call_t   wq_death_call;
-	struct turnstile *wq_turnstile;
+
+	union {
+		struct turnstile *wq_turnstile;
+		struct mpsc_queue_chain wq_destroy_link;
+	};
 
 	lck_spin_t      wq_lock;
 
@@ -171,6 +239,7 @@ struct workqueue {
 
 	struct proc    *wq_proc;
 	struct uthread *wq_creator;
+	turnstile_inheritor_t wq_inheritor;
 	thread_t wq_turnstile_updater; // thread doing a turnstile_update_ineritor
 	struct workq_uthread_head wq_thrunlist;
 	struct workq_uthread_head wq_thnewlist;
@@ -182,9 +251,6 @@ struct workqueue {
 	workq_threadreq_t wq_event_manager_threadreq;
 };
 
-static_assert(offsetof(struct workqueue, wq_lock) >= sizeof(struct queue_entry),
-    "Make sure workq_deallocate_enqueue can cast the workqueue");
-
 #define WORKQUEUE_MAXTHREADS            512
 #define WQ_STALLED_WINDOW_USECS         200
 #define WQ_REDUCE_POOL_WINDOW_USECS     5000000
@@ -192,7 +258,7 @@ static_assert(offsetof(struct workqueue, wq_lock) >= sizeof(struct queue_entry),
 
 #pragma mark definitions
 
-struct kqrequest;
+struct workq_threadreq_s;
 uint32_t _get_pwq_state_kdp(proc_t p);
 
 void workq_exit(struct proc *p);
@@ -200,34 +266,34 @@ void workq_mark_exiting(struct proc *p);
 
 bool workq_is_exiting(struct proc *p);
 
-struct turnstile *workq_turnstile(struct proc *p);
-
-void workq_thread_set_max_qos(struct proc *p, struct kqrequest *kqr);
+void workq_thread_set_max_qos(struct proc *p, struct workq_threadreq_s *kqr);
 
 void workq_thread_terminate(struct proc *p, struct uthread *uth);
 
-#define WORKQ_THREADREQ_SET_AST_ON_FAILURE  0x01
-#define WORKQ_THREADREQ_ATTEMPT_REBIND      0x02
-#define WORKQ_THREADREQ_CAN_CREATE_THREADS  0x04
-#define WORKQ_THREADREQ_CREATOR_TRANSFER    0x08
-#define WORKQ_THREADREQ_CREATOR_SYNC_UPDATE 0x10
+__options_decl(workq_kern_threadreq_flags_t, uint32_t, {
+	WORKQ_THREADREQ_NONE                = 0x00,
+	WORKQ_THREADREQ_SET_AST_ON_FAILURE  = 0x01,
+	WORKQ_THREADREQ_ATTEMPT_REBIND      = 0x02,
+	WORKQ_THREADREQ_CAN_CREATE_THREADS  = 0x04,
+	WORKQ_THREADREQ_MAKE_OVERCOMMIT     = 0x08,
+});
 
 // called with the kq req lock held
-bool workq_kern_threadreq_initiate(struct proc *p, struct kqrequest *kqr,
-    struct turnstile *ts, thread_qos_t qos, int flags);
+bool workq_kern_threadreq_initiate(struct proc *p, struct workq_threadreq_s *kqr,
+    struct turnstile *ts, thread_qos_t qos, workq_kern_threadreq_flags_t flags);
 
 // called with the kq req lock held
-void workq_kern_threadreq_modify(struct proc *p, struct kqrequest *kqr,
-    thread_qos_t qos, int flags);
+void workq_kern_threadreq_modify(struct proc *p, struct workq_threadreq_s *kqr,
+    thread_qos_t qos, workq_kern_threadreq_flags_t flags);
 
 // called with the kq req lock held
-void workq_kern_threadreq_update_inheritor(struct proc *p, struct kqrequest *kqr,
+void workq_kern_threadreq_update_inheritor(struct proc *p, struct workq_threadreq_s *kqr,
     thread_t owner, struct turnstile *ts, turnstile_update_flags_t flags);
 
 void workq_kern_threadreq_lock(struct proc *p);
 void workq_kern_threadreq_unlock(struct proc *p);
 
-void workq_kern_threadreq_redrive(struct proc *p, int flags);
+void workq_kern_threadreq_redrive(struct proc *p, workq_kern_threadreq_flags_t flags);
 
 enum workq_set_self_flags {
 	WORKQ_SET_SELF_QOS_FLAG = 0x1,

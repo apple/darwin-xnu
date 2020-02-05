@@ -65,7 +65,7 @@ __BEGIN_DECLS
 #define PROC_POLICY_HARDWARE_ACCESS     2       /* access to various hardware */
 #define PROC_POLICY_RESOURCE_STARVATION 3       /* behavior on resource starvation */
 #define PROC_POLICY_RESOURCE_USAGE      4       /* behavior on resource consumption */
-#if CONFIG_EMBEDDED || TARGET_OS_EMBEDDED
+#if CONFIG_EMBEDDED || (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 #define PROC_POLICY_APP_LIFECYCLE       5       /* app life cycle management */
 #else /* CONFIG_EMBEDDED */
 #define PROC_POLICY_RESERVED            5       /* behavior on resource consumption */
@@ -79,7 +79,7 @@ __BEGIN_DECLS
 #define PROC_POLICY_BG_DISKTHROTTLE     2       /* disk accesses throttled */
 #define PROC_POLICY_BG_NETTHROTTLE      4       /* network accesses throttled */
 #define PROC_POLICY_BG_GPUDENY          8       /* no access to GPU */
-#if CONFIG_EMBEDDED || TARGET_OS_EMBEDDED
+#if CONFIG_EMBEDDED || (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 #define PROC_POLICY_BG_ALL            0x0F
 #else /* CONFIG_EMBEDDED */
 #define PROC_POLICY_BG_ALL            0x07
@@ -169,7 +169,7 @@ typedef struct proc_policy_cpuusage_attr {
 	uint64_t        ppattr_cpu_attr_deadline;     /* 64bit deadline in nsecs */
 } proc_policy_cpuusage_attr_t;
 
-#if CONFIG_EMBEDDED || TARGET_OS_EMBEDDED
+#if CONFIG_EMBEDDED || (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 /* sub policies for app lifecycle management */
 #define PROC_POLICY_APPLIFE_NONE        0       /* does nothing.. */
 #define PROC_POLICY_APPLIFE_STATE       1       /* sets the app to various lifecycle states */
@@ -180,7 +180,7 @@ typedef struct proc_policy_cpuusage_attr {
 /* sub policies for PROC_POLICY_APPTYPE */
 #define PROC_POLICY_APPTYPE_NONE        0       /* does nothing.. */
 #define PROC_POLICY_APPTYPE_MODIFY      1       /* sets the app to various lifecycle states */
-#if CONFIG_EMBEDDED || TARGET_OS_EMBEDDED
+#if CONFIG_EMBEDDED || (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 #define PROC_POLICY_APPTYPE_THREADTHR   2       /* notes the device in inactive or short/long term */
 #endif /* CONFIG_EMBEDDED */
 

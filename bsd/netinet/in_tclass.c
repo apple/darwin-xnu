@@ -61,8 +61,13 @@
 #include <netinet/lro_ext.h>
 #include <netinet/in_tclass.h>
 
+struct net_qos_dscp_map {
+	uint8_t        sotc_to_dscp[SO_TC_MAX];
+	uint8_t        netsvctype_to_dscp[_NET_SERVICE_TYPE_COUNT];
+};
+
 struct dcsp_msc_map {
-	u_int8_t                dscp;
+	uint8_t                 dscp;
 	mbuf_svc_class_t        msc;
 };
 static inline int so_throttle_best_effort(struct socket *, struct ifnet *);
@@ -117,10 +122,6 @@ int net_qos_policy_wifi_enabled = 0;
 SYSCTL_INT(_net_qos_policy, OID_AUTO, wifi_enabled,
     CTLFLAG_RW | CTLFLAG_LOCKED, &net_qos_policy_wifi_enabled, 0, "");
 
-int net_qos_policy_none_wifi_enabled = 0;
-SYSCTL_INT(_net_qos_policy, OID_AUTO, none_wifi_enabled,
-    CTLFLAG_RW | CTLFLAG_LOCKED, &net_qos_policy_none_wifi_enabled, 0, "");
-
 int net_qos_policy_capable_enabled = 0;
 SYSCTL_INT(_net_qos_policy, OID_AUTO, capable_enabled,
     CTLFLAG_RW | CTLFLAG_LOCKED, &net_qos_policy_capable_enabled, 0, "");
@@ -145,18 +146,36 @@ const int sotc_by_netservicetype[_NET_SERVICE_TYPE_COUNT] = {
  */
 static const
 struct netsvctype_dscp_map fastlane_netsvctype_dscp_map[_NET_SERVICE_TYPE_COUNT] = {
-	{ NET_SERVICE_TYPE_BE, _DSCP_DF },
-	{ NET_SERVICE_TYPE_BK, _DSCP_AF11 },
-	{ NET_SERVICE_TYPE_SIG, _DSCP_CS3 },
-	{ NET_SERVICE_TYPE_VI, _DSCP_AF41 },
-	{ NET_SERVICE_TYPE_VO, _DSCP_EF },
-	{ NET_SERVICE_TYPE_RV, _DSCP_CS4 },
-	{ NET_SERVICE_TYPE_AV, _DSCP_AF31 },
-	{ NET_SERVICE_TYPE_OAM, _DSCP_CS2 },
-	{ NET_SERVICE_TYPE_RD, _DSCP_AF21 },
+	{ .netsvctype = NET_SERVICE_TYPE_BE, .dscp = _DSCP_DF },
+	{ .netsvctype = NET_SERVICE_TYPE_BK, .dscp = _DSCP_AF11 },
+	{ .netsvctype = NET_SERVICE_TYPE_SIG, .dscp = _DSCP_CS3 },
+	{ .netsvctype = NET_SERVICE_TYPE_VI, .dscp = _DSCP_AF41 },
+	{ .netsvctype = NET_SERVICE_TYPE_VO, .dscp = _DSCP_EF },
+	{ .netsvctype = NET_SERVICE_TYPE_RV, .dscp = _DSCP_CS4 },
+	{ .netsvctype = NET_SERVICE_TYPE_AV, .dscp = _DSCP_AF31 },
+	{ .netsvctype = NET_SERVICE_TYPE_OAM, .dscp = _DSCP_CS2 },
+	{ .netsvctype = NET_SERVICE_TYPE_RD, .dscp = _DSCP_AF21 },
 };
 
-static struct net_qos_dscp_map default_net_qos_dscp_map;
+
+/*
+ * DSCP mappings for QoS RFC4594 as based on network service types
+ */
+static const
+struct netsvctype_dscp_map rfc4594_netsvctype_dscp_map[_NET_SERVICE_TYPE_COUNT] = {
+	{ .netsvctype = NET_SERVICE_TYPE_BE, .dscp = _DSCP_DF },
+	{ .netsvctype = NET_SERVICE_TYPE_BK, .dscp = _DSCP_CS1 },
+	{ .netsvctype = NET_SERVICE_TYPE_SIG, .dscp = _DSCP_CS5 },
+	{ .netsvctype = NET_SERVICE_TYPE_VI, .dscp = _DSCP_AF41 },
+	{ .netsvctype = NET_SERVICE_TYPE_VO, .dscp = _DSCP_EF },
+	{ .netsvctype = NET_SERVICE_TYPE_RV, .dscp = _DSCP_CS4 },
+	{ .netsvctype = NET_SERVICE_TYPE_AV, .dscp = _DSCP_AF31 },
+	{ .netsvctype = NET_SERVICE_TYPE_OAM, .dscp = _DSCP_CS2 },
+	{ .netsvctype = NET_SERVICE_TYPE_RD, .dscp = _DSCP_AF21 },
+};
+
+static struct net_qos_dscp_map fastlane_net_qos_dscp_map;
+static struct net_qos_dscp_map rfc4594_net_qos_dscp_map;
 
 /*
  * The size is one more than the max because DSCP start at zero
@@ -174,79 +193,79 @@ static struct net_qos_dscp_map default_net_qos_dscp_map;
  * option instead to select L2 QoS marking instead of IP_TOS or IPV6_TCLASS.
  */
 static const struct dcsp_msc_map default_dscp_to_wifi_ac_map[] = {
-	{ _DSCP_DF, MBUF_SC_BE },               /* RFC 2474 Standard */
-	{ 1, MBUF_SC_BE },                      /*  */
-	{ 2, MBUF_SC_BE },                      /*  */
-	{ 3, MBUF_SC_BE },                      /*  */
-	{ 4, MBUF_SC_BE },                      /*  */
-	{ 5, MBUF_SC_BE },                      /*  */
-	{ 6, MBUF_SC_BE },                      /*  */
-	{ 7, MBUF_SC_BE },                      /*  */
+	{ .dscp = _DSCP_DF, .msc = MBUF_SC_BE },        /* RFC 2474 Standard */
+	{ .dscp = 1, .msc = MBUF_SC_BE },               /*  */
+	{ .dscp = 2, .msc = MBUF_SC_BE },               /*  */
+	{ .dscp = 3, .msc = MBUF_SC_BE },               /*  */
+	{ .dscp = 4, .msc = MBUF_SC_BE },               /*  */
+	{ .dscp = 5, .msc = MBUF_SC_BE },               /*  */
+	{ .dscp = 6, .msc = MBUF_SC_BE },               /*  */
+	{ .dscp = 7, .msc = MBUF_SC_BE },               /*  */
 
-	{ _DSCP_CS1, MBUF_SC_BK },              /* RFC 3662 Low-Priority Data */
-	{ 9, MBUF_SC_BK },                      /*  */
-	{ _DSCP_AF11, MBUF_SC_BK },             /* RFC 2597 High-Throughput Data */
-	{ 11, MBUF_SC_BK },                     /*  */
-	{ _DSCP_AF12, MBUF_SC_BK },             /* RFC 2597 High-Throughput Data */
-	{ 13, MBUF_SC_BK },                     /*  */
-	{ _DSCP_AF13, MBUF_SC_BK },             /* RFC 2597 High-Throughput Data */
-	{ 15, MBUF_SC_BK },                     /*  */
+	{ .dscp = _DSCP_CS1, .msc = MBUF_SC_BK },       /* RFC 3662 Low-Priority Data */
+	{ .dscp = 9, .msc = MBUF_SC_BK },               /*  */
+	{ .dscp = _DSCP_AF11, .msc = MBUF_SC_BK },      /* RFC 2597 High-Throughput Data */
+	{ .dscp = 11, .msc = MBUF_SC_BK },              /*  */
+	{ .dscp = _DSCP_AF12, .msc = MBUF_SC_BK },      /* RFC 2597 High-Throughput Data */
+	{ .dscp = 13, .msc = MBUF_SC_BK },              /*  */
+	{ .dscp = _DSCP_AF13, .msc = MBUF_SC_BK },      /* RFC 2597 High-Throughput Data */
+	{ .dscp = 15, .msc = MBUF_SC_BK },              /*  */
 
-	{ _DSCP_CS2, MBUF_SC_BK },              /* RFC 4594 OAM */
-	{ 17, MBUF_SC_BK },                     /*  */
-	{ _DSCP_AF21, MBUF_SC_BK },             /* RFC 2597 Low-Latency Data */
-	{ 19, MBUF_SC_BK },                     /*  */
-	{ _DSCP_AF22, MBUF_SC_BK },             /* RFC 2597 Low-Latency Data */
-	{ 21, MBUF_SC_BK },                     /*  */
-	{ _DSCP_AF23, MBUF_SC_BK },             /* RFC 2597 Low-Latency Data */
-	{ 23, MBUF_SC_BK },                     /*  */
+	{ .dscp = _DSCP_CS2, .msc = MBUF_SC_BK },       /* RFC 4594 OAM */
+	{ .dscp = 17, .msc = MBUF_SC_BK },              /*  */
+	{ .dscp = _DSCP_AF21, .msc = MBUF_SC_BK },      /* RFC 2597 Low-Latency Data */
+	{ .dscp = 19, .msc = MBUF_SC_BK },              /*  */
+	{ .dscp = _DSCP_AF22, .msc = MBUF_SC_BK },      /* RFC 2597 Low-Latency Data */
+	{ .dscp = 21, .msc = MBUF_SC_BK },              /*  */
+	{ .dscp = _DSCP_AF23, .msc = MBUF_SC_BK },      /* RFC 2597 Low-Latency Data */
+	{ .dscp = 23, .msc = MBUF_SC_BK },              /*  */
 
-	{ _DSCP_CS3, MBUF_SC_BE },              /* RFC 2474 Broadcast Video */
-	{ 25, MBUF_SC_BE },                     /*  */
-	{ _DSCP_AF31, MBUF_SC_BE },             /* RFC 2597 Multimedia Streaming */
-	{ 27, MBUF_SC_BE },                     /*  */
-	{ _DSCP_AF32, MBUF_SC_BE },             /* RFC 2597 Multimedia Streaming */
-	{ 29, MBUF_SC_BE },                     /*  */
-	{ _DSCP_AF33, MBUF_SC_BE },             /* RFC 2597 Multimedia Streaming */
-	{ 31, MBUF_SC_BE },                     /*  */
+	{ .dscp = _DSCP_CS3, .msc = MBUF_SC_BE },       /* RFC 2474 Broadcast Video */
+	{ .dscp = 25, .msc = MBUF_SC_BE },              /*  */
+	{ .dscp = _DSCP_AF31, .msc = MBUF_SC_BE },      /* RFC 2597 Multimedia Streaming */
+	{ .dscp = 27, .msc = MBUF_SC_BE },              /*  */
+	{ .dscp = _DSCP_AF32, .msc = MBUF_SC_BE },      /* RFC 2597 Multimedia Streaming */
+	{ .dscp = 29, .msc = MBUF_SC_BE },              /*  */
+	{ .dscp = _DSCP_AF33, .msc = MBUF_SC_BE },      /* RFC 2597 Multimedia Streaming */
+	{ .dscp = 31, .msc = MBUF_SC_BE },              /*  */
 
-	{ _DSCP_CS4, MBUF_SC_VI },              /* RFC 2474 Real-Time Interactive */
-	{ 33, MBUF_SC_VI },                     /*  */
-	{ _DSCP_AF41, MBUF_SC_VI },             /* RFC 2597 Multimedia Conferencing */
-	{ 35, MBUF_SC_VI },                     /*  */
-	{ _DSCP_AF42, MBUF_SC_VI },             /* RFC 2597 Multimedia Conferencing */
-	{ 37, MBUF_SC_VI },                     /*  */
-	{ _DSCP_AF43, MBUF_SC_VI },             /* RFC 2597 Multimedia Conferencing */
-	{ 39, MBUF_SC_VI },                     /*  */
+	{ .dscp = _DSCP_CS4, .msc = MBUF_SC_VI },       /* RFC 2474 Real-Time Interactive */
+	{ .dscp = 33, .msc = MBUF_SC_VI },              /*  */
+	{ .dscp = _DSCP_AF41, .msc = MBUF_SC_VI },      /* RFC 2597 Multimedia Conferencing */
+	{ .dscp = 35, .msc = MBUF_SC_VI },              /*  */
+	{ .dscp = _DSCP_AF42, .msc = MBUF_SC_VI },      /* RFC 2597 Multimedia Conferencing */
+	{ .dscp = 37, .msc = MBUF_SC_VI },              /*  */
+	{ .dscp = _DSCP_AF43, .msc = MBUF_SC_VI },      /* RFC 2597 Multimedia Conferencing */
+	{ .dscp = 39, .msc = MBUF_SC_VI },              /*  */
 
-	{ _DSCP_CS5, MBUF_SC_VI },              /* RFC 2474 Signaling */
-	{ 41, MBUF_SC_VI },                     /*  */
-	{ 42, MBUF_SC_VI },                     /*  */
-	{ 43, MBUF_SC_VI },                     /*  */
-	{ _DSCP_VA, MBUF_SC_VI },               /* RFC 5865 VOICE-ADMIT */
-	{ 45, MBUF_SC_VI },                     /*  */
-	{ _DSCP_EF, MBUF_SC_VI },               /* RFC 3246 Telephony */
-	{ 47, MBUF_SC_VI },                     /*  */
+	{ .dscp = _DSCP_CS5, .msc = MBUF_SC_VI },       /* RFC 2474 Signaling */
+	{ .dscp = 41, .msc = MBUF_SC_VI },              /*  */
+	{ .dscp = 42, .msc = MBUF_SC_VI },              /*  */
+	{ .dscp = 43, .msc = MBUF_SC_VI },              /*  */
+	{ .dscp = _DSCP_VA, .msc = MBUF_SC_VI },        /* RFC 5865 VOICE-ADMIT */
+	{ .dscp = 45, .msc = MBUF_SC_VI },              /*  */
+	{ .dscp = _DSCP_EF, .msc = MBUF_SC_VI },        /* RFC 3246 Telephony */
+	{ .dscp = 47, .msc = MBUF_SC_VI },              /*  */
 
-	{ _DSCP_CS6, MBUF_SC_VO },              /* Wi-Fi WMM Certification: Chariot */
-	{ 49, MBUF_SC_VO },                     /*  */
-	{ 50, MBUF_SC_VO },                     /*  */
-	{ 51, MBUF_SC_VO },                     /*  */
-	{ 52, MBUF_SC_VO },                     /* Wi-Fi WMM Certification: Sigma */
-	{ 53, MBUF_SC_VO },                     /*  */
-	{ 54, MBUF_SC_VO },                     /*  */
-	{ 55, MBUF_SC_VO },                     /*  */
+	{ .dscp = _DSCP_CS6, .msc = MBUF_SC_VO },       /* Wi-Fi WMM Certification: Chariot */
+	{ .dscp = 49, .msc = MBUF_SC_VO },              /*  */
+	{ .dscp = 50, .msc = MBUF_SC_VO },              /*  */
+	{ .dscp = 51, .msc = MBUF_SC_VO },              /*  */
+	{ .dscp = 52, .msc = MBUF_SC_VO },              /* Wi-Fi WMM Certification: Sigma */
+	{ .dscp = 53, .msc = MBUF_SC_VO },              /*  */
+	{ .dscp = 54, .msc = MBUF_SC_VO },              /*  */
+	{ .dscp = 55, .msc = MBUF_SC_VO },              /*  */
 
-	{ _DSCP_CS7, MBUF_SC_VO },              /* Wi-Fi WMM Certification: Chariot */
-	{ 57, MBUF_SC_VO },                     /*  */
-	{ 58, MBUF_SC_VO },                     /*  */
-	{ 59, MBUF_SC_VO },                     /*  */
-	{ 60, MBUF_SC_VO },                     /*  */
-	{ 61, MBUF_SC_VO },                     /*  */
-	{ 62, MBUF_SC_VO },                     /*  */
-	{ 63, MBUF_SC_VO },                     /*  */
+	{ .dscp = _DSCP_CS7, .msc = MBUF_SC_VO },       /* Wi-Fi WMM Certification: Chariot */
+	{ .dscp = 57, .msc = MBUF_SC_VO },              /*  */
+	{ .dscp = 58, .msc = MBUF_SC_VO },              /*  */
+	{ .dscp = 59, .msc = MBUF_SC_VO },              /*  */
+	{ .dscp = 60, .msc = MBUF_SC_VO },              /*  */
+	{ .dscp = 61, .msc = MBUF_SC_VO },              /*  */
+	{ .dscp = 62, .msc = MBUF_SC_VO },              /*  */
+	{ .dscp = 63, .msc = MBUF_SC_VO },              /*  */
 
-	{ 255, MBUF_SC_UNSPEC }                  /* invalid DSCP to mark last entry */
+	{ .dscp = 255, .msc = MBUF_SC_UNSPEC }          /* invalid DSCP to mark last entry */
 };
 
 mbuf_svc_class_t wifi_dscp_to_msc_array[DSCP_ARRAY_SIZE];
@@ -270,7 +289,7 @@ struct tclass_for_proc {
 	int             tfp_class;
 	pid_t           tfp_pid;
 	char            tfp_pname[(2 * MAXCOMLEN) + 1];
-	u_int32_t       tfp_qos_mode;
+	uint32_t        tfp_qos_mode;
 };
 
 static int get_pid_tclass(struct so_tcdbg *);
@@ -873,9 +892,7 @@ so_get_netsvc_marking_level(struct socket *so)
 		break;
 	}
 	if (ifp != NULL) {
-		if ((ifp->if_eflags &
-		    (IFEF_QOSMARKING_ENABLED | IFEF_QOSMARKING_CAPABLE)) ==
-		    (IFEF_QOSMARKING_ENABLED | IFEF_QOSMARKING_CAPABLE)) {
+		if ((ifp->if_eflags & IFEF_QOSMARKING_ENABLED) != 0) {
 			if ((so->so_flags1 & SOF1_QOSMARKING_ALLOWED)) {
 				marking_level = NETSVC_MRKNG_LVL_L3L2_ALL;
 			} else {
@@ -1080,7 +1097,7 @@ so_inc_recv_data_stat(struct socket *so, size_t pkts, size_t bytes,
 static inline int
 so_throttle_best_effort(struct socket *so, struct ifnet *ifp)
 {
-	u_int32_t uptime = net_uptime();
+	uint32_t uptime = net_uptime();
 	return soissrcbesteffort(so) &&
 	       net_io_policy_throttle_best_effort == 1 &&
 	       ifp->if_rt_sendts > 0 &&
@@ -1096,7 +1113,7 @@ set_tcp_stream_priority(struct socket *so)
 	u_char old_cc = tp->tcp_cc_index;
 	int recvbg = IS_TCP_RECV_BG(so);
 	bool is_local = false, fg_active = false;
-	u_int32_t uptime;
+	uint32_t uptime;
 
 	VERIFY((SOCK_CHECK_DOM(so, PF_INET) ||
 	    SOCK_CHECK_DOM(so, PF_INET6)) &&
@@ -1210,7 +1227,7 @@ set_tcp_stream_priority(struct socket *so)
  */
 __private_extern__ void
 set_packet_service_class(struct mbuf *m, struct socket *so,
-    int sotc, u_int32_t flags)
+    int sotc, uint32_t flags)
 {
 	mbuf_svc_class_t msc = MBUF_SC_BE;         /* Best effort by default */
 	struct inpcb *inp = sotoinpcb(so); /* in6pcb and inpcb are the same */
@@ -1473,28 +1490,160 @@ sotc_index(int sotc)
 	return SIZE_T_MAX;
 }
 
+uint8_t
+fastlane_sc_to_dscp(uint32_t svc_class)
+{
+	uint8_t dscp = _DSCP_DF;
+
+	switch (svc_class) {
+	case MBUF_SC_BK_SYS:
+	case MBUF_SC_BK:
+		dscp = _DSCP_AF11;
+		break;
+
+	case MBUF_SC_BE:
+		dscp = _DSCP_DF;
+		break;
+	case MBUF_SC_RD:
+		dscp = _DSCP_AF21;
+		break;
+	case MBUF_SC_OAM:
+		dscp = _DSCP_CS2;
+		break;
+
+	case MBUF_SC_AV:
+		dscp = _DSCP_AF31;
+		break;
+	case MBUF_SC_RV:
+		dscp = _DSCP_CS4;
+		break;
+	case MBUF_SC_VI:
+		dscp = _DSCP_AF41;
+		break;
+	case MBUF_SC_SIG:
+		dscp = _DSCP_CS3;
+		break;
+
+	case MBUF_SC_VO:
+		dscp = _DSCP_EF;
+		break;
+	case MBUF_SC_CTL:
+		dscp = _DSCP_DF;
+		break;
+	default:
+		dscp = _DSCP_DF;
+		break;
+	}
+
+	return dscp;
+}
+
+uint8_t
+rfc4594_sc_to_dscp(uint32_t svc_class)
+{
+	uint8_t dscp = _DSCP_DF;
+
+	switch (svc_class) {
+	case MBUF_SC_BK_SYS:            /* Low-Priority Data */
+	case MBUF_SC_BK:
+		dscp = _DSCP_CS1;
+		break;
+
+	case MBUF_SC_BE:                        /* Standard */
+		dscp = _DSCP_DF;
+		break;
+	case MBUF_SC_RD:                        /* Low-Latency Data */
+		dscp = _DSCP_AF21;
+		break;
+
+	/* SVC_CLASS Not Defined:  High-Throughput Data */
+
+	case MBUF_SC_OAM:               /* OAM */
+		dscp = _DSCP_CS2;
+		break;
+
+	/* SVC_CLASS Not Defined:  Broadcast Video */
+
+	case MBUF_SC_AV:                        /* Multimedia Streaming */
+		dscp = _DSCP_AF31;
+		break;
+	case MBUF_SC_RV:                        /* Real-Time Interactive */
+		dscp = _DSCP_CS4;
+		break;
+	case MBUF_SC_VI:                        /* Multimedia Conferencing */
+		dscp = _DSCP_AF41;
+		break;
+	case MBUF_SC_SIG:               /* Signaling */
+		dscp = _DSCP_CS5;
+		break;
+
+	case MBUF_SC_VO:                        /* Telephony */
+		dscp = _DSCP_EF;
+		break;
+	case MBUF_SC_CTL:               /* Network Control*/
+		dscp = _DSCP_CS6;
+		break;
+	default:
+		dscp = _DSCP_DF;
+		break;
+	}
+
+	return dscp;
+}
+
+mbuf_traffic_class_t
+rfc4594_dscp_to_tc(uint8_t dscp)
+{
+	mbuf_traffic_class_t tc = MBUF_TC_BE;
+
+	switch (dscp) {
+	case _DSCP_CS1:
+		tc = MBUF_TC_BK;
+		break;
+	case _DSCP_DF:
+	case _DSCP_AF21:
+	case _DSCP_CS2:
+		tc = MBUF_TC_BE;
+		break;
+	case _DSCP_AF31:
+	case _DSCP_CS4:
+	case _DSCP_AF41:
+	case _DSCP_CS5:
+		tc = MBUF_TC_VI;
+		break;
+	case _DSCP_EF:
+	case _DSCP_CS6:
+		tc = MBUF_TC_VO;
+		break;
+	default:
+		tc = MBUF_TC_BE;
+		break;
+	}
+
+	return tc;
+}
+
 /*
  * Pass NULL ifp for default map
  */
 static errno_t
-set_netsvctype_dscp_map(size_t in_count,
+set_netsvctype_dscp_map(struct net_qos_dscp_map *net_qos_dscp_map,
     const struct netsvctype_dscp_map *netsvctype_dscp_map)
 {
 	size_t i;
-	struct net_qos_dscp_map *net_qos_dscp_map = NULL;
 	int netsvctype;
 
 	/*
 	 * Do not accept more that max number of distinct DSCPs
 	 */
-	if (in_count > _MAX_DSCP || netsvctype_dscp_map == NULL) {
+	if (net_qos_dscp_map == NULL || netsvctype_dscp_map == NULL) {
 		return EINVAL;
 	}
 
 	/*
 	 * Validate input parameters
 	 */
-	for (i = 0; i < in_count; i++) {
+	for (i = 0; i < _NET_SERVICE_TYPE_COUNT; i++) {
 		if (!IS_VALID_NET_SERVICE_TYPE(netsvctype_dscp_map[i].netsvctype)) {
 			return EINVAL;
 		}
@@ -1503,9 +1652,7 @@ set_netsvctype_dscp_map(size_t in_count,
 		}
 	}
 
-	net_qos_dscp_map = &default_net_qos_dscp_map;
-
-	for (i = 0; i < in_count; i++) {
+	for (i = 0; i < _NET_SERVICE_TYPE_COUNT; i++) {
 		netsvctype = netsvctype_dscp_map[i].netsvctype;
 
 		net_qos_dscp_map->netsvctype_to_dscp[netsvctype] =
@@ -1568,7 +1715,7 @@ get_netsvctype_dscp_map(size_t *out_count,
 		return EINVAL;
 	}
 
-	net_qos_dscp_map = &default_net_qos_dscp_map;
+	net_qos_dscp_map = &fastlane_net_qos_dscp_map;
 
 	for (i = 0; i < MIN(_NET_SERVICE_TYPE_COUNT, *out_count); i++) {
 		netsvctype_dscp_map[i].netsvctype = i;
@@ -1584,17 +1731,13 @@ net_qos_map_init()
 {
 	errno_t error;
 
-	/*
-	 * By default use the Fastlane DSCP mappngs
-	 */
-	error = set_netsvctype_dscp_map(_NET_SERVICE_TYPE_COUNT,
+	error = set_netsvctype_dscp_map(&fastlane_net_qos_dscp_map,
 	    fastlane_netsvctype_dscp_map);
 	ASSERT(error == 0);
 
-	/*
-	 * No DSCP mapping for network control
-	 */
-	default_net_qos_dscp_map.sotc_to_dscp[SOTCIX_CTL] = _DSCP_DF;
+	error = set_netsvctype_dscp_map(&rfc4594_net_qos_dscp_map,
+	    rfc4594_netsvctype_dscp_map);
+	ASSERT(error == 0);
 
 	set_dscp_to_wifi_ac_map(default_dscp_to_wifi_ac_map, 1);
 }
@@ -1604,8 +1747,6 @@ sysctl_default_netsvctype_to_dscp_map SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg1, arg2)
 	int error = 0;
-	const size_t max_netsvctype_to_dscp_map_len =
-	    _NET_SERVICE_TYPE_COUNT * sizeof(struct netsvctype_dscp_map);
 	size_t len;
 	struct netsvctype_dscp_map netsvctype_dscp_map[_NET_SERVICE_TYPE_COUNT] = {};
 	size_t count;
@@ -1627,48 +1768,37 @@ sysctl_default_netsvctype_to_dscp_map SYSCTL_HANDLER_ARGS
 		}
 	}
 
-	if (req->newptr == USER_ADDR_NULL) {
-		goto done;
+	if (req->newptr != USER_ADDR_NULL) {
+		error = EPERM;
 	}
-
-	error = proc_suser(current_proc());
-	if (error != 0) {
-		goto done;
-	}
-
-	/*
-	 * Check input length
-	 */
-	if (req->newlen > max_netsvctype_to_dscp_map_len) {
-		error = EINVAL;
-		goto done;
-	}
-	/*
-	 * Cap the number of entries to copy from input buffer
-	 */
-	error = SYSCTL_IN(req, netsvctype_dscp_map, req->newlen);
-	if (error != 0) {
-		goto done;
-	}
-
-	count = req->newlen / sizeof(struct netsvctype_dscp_map);
-	error = set_netsvctype_dscp_map(count, netsvctype_dscp_map);
 done:
 	return error;
 }
 
 __private_extern__ errno_t
 set_packet_qos(struct mbuf *m, struct ifnet *ifp, boolean_t qos_allowed,
-    int sotc, int netsvctype, u_int8_t *dscp_inout)
+    int sotc, int netsvctype, uint8_t *dscp_inout)
 {
 	if (ifp == NULL || dscp_inout == NULL) {
 		return EINVAL;
 	}
 
-	if ((ifp->if_eflags &
-	    (IFEF_QOSMARKING_ENABLED | IFEF_QOSMARKING_CAPABLE)) ==
-	    (IFEF_QOSMARKING_ENABLED | IFEF_QOSMARKING_CAPABLE)) {
-		u_int8_t dscp;
+	if ((ifp->if_eflags & IFEF_QOSMARKING_ENABLED) != 0 &&
+	    ifp->if_qosmarking_mode != IFRTYPE_QOSMARKING_MODE_NONE) {
+		uint8_t dscp;
+		const struct net_qos_dscp_map *net_qos_dscp_map = NULL;
+
+		switch (ifp->if_qosmarking_mode) {
+		case IFRTYPE_QOSMARKING_FASTLANE:
+			net_qos_dscp_map = &fastlane_net_qos_dscp_map;
+			break;
+		case IFRTYPE_QOSMARKING_RFC4594:
+			net_qos_dscp_map = &rfc4594_net_qos_dscp_map;
+			break;
+		default:
+			panic("invalid QoS marking type");
+			/* NOTREACHED */
+		}
 
 		/*
 		 * When on a Fastlane network, IP_TOS/IPV6_TCLASS are no-ops
@@ -1688,7 +1818,7 @@ set_packet_qos(struct mbuf *m, struct ifnet *ifp, boolean_t qos_allowed,
 		 */
 		if (IS_VALID_NET_SERVICE_TYPE(netsvctype) &&
 		    netsvctype != NET_SERVICE_TYPE_BE) {
-			dscp = default_net_qos_dscp_map.netsvctype_to_dscp[netsvctype];
+			dscp = net_qos_dscp_map->netsvctype_to_dscp[netsvctype];
 
 			if (qos_allowed == FALSE &&
 			    netsvctype != NET_SERVICE_TYPE_BE &&
@@ -1701,7 +1831,7 @@ set_packet_qos(struct mbuf *m, struct ifnet *ifp, boolean_t qos_allowed,
 		} else if (sotc != SO_TC_UNSPEC) {
 			size_t sotcix = sotc_index(sotc);
 			if (sotcix != SIZE_T_MAX) {
-				dscp = default_net_qos_dscp_map.sotc_to_dscp[sotcix];
+				dscp = net_qos_dscp_map->sotc_to_dscp[sotcix];
 
 				if (qos_allowed == FALSE && sotc != SO_TC_BE &&
 				    sotc != SO_TC_BK && sotc != SO_TC_BK_SYS &&
@@ -1790,7 +1920,7 @@ dscp_msc_map_from_netsvctype_dscp_map(struct netsvctype_dscp_map *netsvctype_dsc
     size_t count, struct dcsp_msc_map *dcsp_msc_map)
 {
 	errno_t error = 0;
-	u_int32_t i;
+	uint32_t i;
 
 	/*
 	 * Validate input parameters
@@ -1825,7 +1955,7 @@ sysctl_dscp_to_wifi_ac_map SYSCTL_HANDLER_ARGS
 	struct netsvctype_dscp_map netsvctype_dscp_map[DSCP_ARRAY_SIZE] = {};
 	struct dcsp_msc_map dcsp_msc_map[DSCP_ARRAY_SIZE];
 	size_t count;
-	u_int32_t i;
+	uint32_t i;
 
 	if (req->oldptr == USER_ADDR_NULL) {
 		req->oldidx = len;
@@ -1961,6 +2091,15 @@ net_qos_guideline(struct proc *p, struct net_qos_guideline_args *arg,
 	if (ipv4_primary != NULL && IFNET_IS_EXPENSIVE(ipv4_primary) &&
 	    ipv6_primary != NULL && IFNET_IS_EXPENSIVE(ipv6_primary)) {
 		if (qos_arg.nq_use_expensive) {
+			return 0;
+		} else {
+			*retval = RETURN_USE_BK;
+			return 0;
+		}
+	}
+	if (ipv4_primary != NULL && IFNET_IS_CONSTRAINED(ipv4_primary) &&
+	    ipv6_primary != NULL && IFNET_IS_CONSTRAINED(ipv6_primary)) {
+		if (qos_arg.nq_use_constrained) {
 			return 0;
 		} else {
 			*retval = RETURN_USE_BK;

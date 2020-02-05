@@ -26,45 +26,28 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-
-/*
- * APPLE NOTE: This file is compiled even if dtrace is unconfig'd. A symbol
- * from this file (_dtrace_register_anon_DOF) always needs to be exported for
- * an external kext to link against.
- */
-
-#if CONFIG_DTRACE
-
-#define MACH__POSIX_C_SOURCE_PRIVATE 1 /* pulls in suitable savearea from mach/ppc/thread_status.h */
 #include <kern/thread.h>
-#include <mach/thread_status.h>
 
-#include <stdarg.h>
-#include <string.h>
-#include <sys/malloc.h>
 #include <sys/time.h>
 #include <sys/proc.h>
-#include <sys/proc_internal.h>
 #include <sys/kauth.h>
 #include <sys/user.h>
 #include <sys/systm.h>
 #include <sys/dtrace.h>
 #include <sys/dtrace_impl.h>
-#include <libkern/OSAtomic.h>
+#include <machine/atomic.h>
 #include <libkern/OSKextLibPrivate.h>
 #include <kern/kern_types.h>
 #include <kern/timer_call.h>
 #include <kern/thread_call.h>
 #include <kern/task.h>
 #include <kern/sched_prim.h>
-#include <kern/queue.h>
 #include <miscfs/devfs/devfs.h>
 #include <kern/kalloc.h>
 
 #include <mach/vm_param.h>
 #include <mach/mach_vm.h>
 #include <mach/task.h>
-#include <vm/pmap.h>
 #include <vm/vm_map.h> /* All the bits we care about are guarded by MACH_KERNEL_PRIVATE :-( */
 
 /*
@@ -76,7 +59,6 @@
 void
 dtrace_sprlock(proc_t *p)
 {
-	lck_mtx_assert(&p->p_mlock, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(&p->p_dtrace_sprlock);
 }
 
@@ -100,8 +82,6 @@ sprlock(pid_t pid)
 
 	dtrace_sprlock(p);
 
-	proc_lock(p);
-
 	return p;
 }
 
@@ -110,8 +90,6 @@ void
 sprunlock(proc_t *p)
 {
 	if (p != PROC_NULL) {
-		proc_unlock(p);
-
 		dtrace_sprunlock(p);
 
 		task_resume_internal(p->task);
@@ -272,11 +250,6 @@ dtrace_CRED(void)
 		return uthread->uu_ucred; /* May return NOCRED which is defined to be 0 */
 	}
 }
-
-#define HAS_ALLPRIVS(cr)        priv_isfullset(&CR_OEPRIV(cr))
-#define HAS_PRIVILEGE(cr, pr)   ((pr) == PRIV_ALL ? \
-	                                HAS_ALLPRIVS(cr) : \
-	                                PRIV_ISASSERT(&CR_OEPRIV(cr), pr))
 
 int
 PRIV_POLICY_CHOICE(void* cred, int priv, int all)
@@ -603,15 +576,6 @@ cyclic_remove(cyclic_id_t cyclic)
 		wrapTC->hdlr.cyh_func = noop_cyh_func;
 		wrapTC->when.cyt_interval = NEARLY_FOREVER;
 	}
-}
-
-kern_return_t _dtrace_register_anon_DOF(char *, uchar_t *, uint_t);
-
-kern_return_t
-_dtrace_register_anon_DOF(char *name, uchar_t *data, uint_t nelements)
-{
-#pragma unused(name, data, nelements)
-	return KERN_FAILURE;
 }
 
 int
@@ -1503,25 +1467,3 @@ void
 dtrace_vtime_disable(void)
 {
 }
-
-#else /* else ! CONFIG_DTRACE */
-
-#include <sys/types.h>
-#include <mach/vm_types.h>
-#include <mach/kmod.h>
-
-/*
- * This exists to prevent build errors when dtrace is unconfigured.
- */
-
-kern_return_t _dtrace_register_anon_DOF(char *, unsigned char *, uint32_t);
-
-kern_return_t
-_dtrace_register_anon_DOF(char *arg1, unsigned char *arg2, uint32_t arg3)
-{
-#pragma unused(arg1, arg2, arg3)
-
-	return KERN_FAILURE;
-}
-
-#endif /* CONFIG_DTRACE */

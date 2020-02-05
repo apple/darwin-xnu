@@ -48,7 +48,7 @@ IOInterleavedMemoryDescriptor * IOInterleavedMemoryDescriptor::withCapacity(
 		    /* capacity  */ capacity,
 		    /* direction */ direction )) {
 		me->release();
-		me = 0;
+		me = NULL;
 	}
 
 	return me;
@@ -79,14 +79,14 @@ IOInterleavedMemoryDescriptor::initWithCapacity(
 	_direction              = (IODirection) (_flags & kIOMemoryDirectionMask);
 #endif /* !__LP64__ */
 	_length                 = 0;
-	_mappings               = 0;
+	_mappings               = NULL;
 	_tag                    = 0;
 	_descriptorCount        = 0;
 	_descriptors            = IONew(IOMemoryDescriptor *, capacity);
 	_descriptorOffsets      = IONew(IOByteCount, capacity);
 	_descriptorLengths      = IONew(IOByteCount, capacity);
 
-	if ((_descriptors == 0) || (_descriptorOffsets == 0) || (_descriptorLengths == 0)) {
+	if ((_descriptors == NULL) || (_descriptorOffsets == NULL) || (_descriptorLengths == NULL)) {
 		return false;
 	}
 
@@ -106,7 +106,7 @@ IOInterleavedMemoryDescriptor::clearMemoryDescriptors( IODirection direction )
 		}
 
 		_descriptors[index]->release();
-		_descriptors[index] = 0;
+		_descriptors[index] = NULL;
 
 		_descriptorOffsets[index] = 0;
 		_descriptorLengths[index] = 0;
@@ -121,7 +121,7 @@ IOInterleavedMemoryDescriptor::clearMemoryDescriptors( IODirection direction )
 
 	_descriptorCount = 0;
 	_length = 0;
-	_mappings = 0;
+	_mappings = NULL;
 	_tag = 0;
 };
 
@@ -166,15 +166,15 @@ IOInterleavedMemoryDescriptor::free()
 			_descriptors[index]->release();
 		}
 
-		if (_descriptors != 0) {
+		if (_descriptors != NULL) {
 			IODelete(_descriptors, IOMemoryDescriptor *, _descriptorCapacity);
 		}
 
-		if (_descriptorOffsets != 0) {
+		if (_descriptorOffsets != NULL) {
 			IODelete(_descriptorOffsets, IOMemoryDescriptor *, _descriptorCapacity);
 		}
 
-		if (_descriptorLengths != 0) {
+		if (_descriptorLengths != NULL) {
 			IODelete(_descriptorLengths, IOMemoryDescriptor *, _descriptorCapacity);
 		}
 	}

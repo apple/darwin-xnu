@@ -648,6 +648,7 @@ struct lck_mtx_thread_arg {
 	int my_locked;
 	int* other_locked;
 	thread_t other_thread;
+	int type;
 };
 
 static void
@@ -660,6 +661,8 @@ test_mtx_lock_unlock_contended_thread(
 	thread_t other_thread;
 	int* my_locked;
 	int* other_locked;
+	int type;
+	uint64_t start, stop;
 
 	printf("Starting thread %p\n", current_thread());
 
@@ -672,6 +675,7 @@ test_mtx_lock_unlock_contended_thread(
 
 	my_locked = &info->my_locked;
 	other_locked = info->other_locked;
+	type = info->type;
 
 	*my_locked = 0;
 	val = os_atomic_inc(&synch, relaxed);
@@ -682,19 +686,26 @@ test_mtx_lock_unlock_contended_thread(
 	//warming up the test
 	for (i = 0; i < WARMUP_ITER; i++) {
 		lck_mtx_test_lock();
-
-		os_atomic_xchg(my_locked, 1, relaxed);
+		int prev = os_atomic_load(other_locked, relaxed);
+		os_atomic_add(my_locked, 1, relaxed);
 		if (i != WARMUP_ITER - 1) {
-			while (os_atomic_load(&other_thread->state, relaxed) & TH_RUN) {
-				;
+			if (type == FULL_CONTENDED) {
+				while (os_atomic_load(&other_thread->state, relaxed) & TH_RUN) {
+					;
+				}
+			} else {
+				start = mach_absolute_time();
+				stop = start + (MutexSpin / 2);
+				while (mach_absolute_time() < stop) {
+					;
+				}
 			}
-			os_atomic_xchg(my_locked, 0, relaxed);
 		}
 
 		lck_mtx_test_unlock();
 
 		if (i != WARMUP_ITER - 1) {
-			while (os_atomic_load(other_locked, relaxed) == 0) {
+			while (os_atomic_load(other_locked, relaxed) == prev) {
 				;
 			}
 		}
@@ -723,18 +734,25 @@ test_mtx_lock_unlock_contended_thread(
 
 	for (i = 0; i < iterations; i++) {
 		lck_mtx_test_lock();
-
-		os_atomic_xchg(my_locked, 1, relaxed);
+		int prev = os_atomic_load(other_locked, relaxed);
+		os_atomic_add(my_locked, 1, relaxed);
 		if (i != iterations - 1) {
-			while (os_atomic_load(&other_thread->state, relaxed) & TH_RUN) {
-				;
+			if (type == FULL_CONTENDED) {
+				while (os_atomic_load(&other_thread->state, relaxed) & TH_RUN) {
+					;
+				}
+			} else {
+				start = mach_absolute_time();
+				stop = start + (MutexSpin / 2);
+				while (mach_absolute_time() < stop) {
+					;
+				}
 			}
-			os_atomic_xchg(my_locked, 0, relaxed);
 		}
 		lck_mtx_test_unlock_mtx();
 
 		if (i != iterations - 1) {
-			while (os_atomic_load(other_locked, relaxed) == 0) {
+			while (os_atomic_load(other_locked, relaxed) == prev) {
 				;
 			}
 		}
@@ -750,7 +768,8 @@ kern_return_t
 lck_mtx_test_mtx_contended(
 	int iter,
 	char* buffer,
-	int buffer_size)
+	int buffer_size,
+	int type)
 {
 	thread_t thread1, thread2;
 	kern_return_t result;
@@ -759,10 +778,17 @@ lck_mtx_test_mtx_contended(
 	wait_barrier = 0;
 	iterations = iter;
 
+	if (type < 0 || type > MAX_CONDENDED) {
+		printf("%s invalid type %d\n", __func__, type);
+		return 0;
+	}
+
 	erase_all_test_mtx_stats();
 
 	targs[0].other_thread = NULL;
 	targs[1].other_thread = NULL;
+	targs[0].type = type;
+	targs[1].type = type;
 
 	result = kernel_thread_start((thread_continue_t)test_mtx_lock_unlock_contended_thread, &targs[0], &thread1);
 	if (result != KERN_SUCCESS) {
@@ -812,6 +838,8 @@ test_mtx_lck_unlock_contended_loop_time_thread(
 	thread_t other_thread;
 	int* my_locked;
 	int* other_locked;
+	int type;
+	uint64_t start, stop;
 
 	printf("Starting thread %p\n", current_thread());
 
@@ -824,6 +852,7 @@ test_mtx_lck_unlock_contended_loop_time_thread(
 
 	my_locked = &info->my_locked;
 	other_locked = info->other_locked;
+	type = info->type;
 
 	*my_locked = 0;
 	val = os_atomic_inc(&synch, relaxed);
@@ -835,18 +864,26 @@ test_mtx_lck_unlock_contended_loop_time_thread(
 	for (i = 0; i < WARMUP_ITER; i++) {
 		lck_mtx_lock(&test_mtx);
 
-		os_atomic_xchg(my_locked, 1, relaxed);
+		int prev = os_atomic_load(other_locked, relaxed);
+		os_atomic_add(my_locked, 1, relaxed);
 		if (i != WARMUP_ITER - 1) {
-			while (os_atomic_load(&other_thread->state, relaxed) & TH_RUN) {
-				;
+			if (type == FULL_CONTENDED) {
+				while (os_atomic_load(&other_thread->state, relaxed) & TH_RUN) {
+					;
+				}
+			} else {
+				start = mach_absolute_time();
+				stop = start + (MutexSpin / 2);
+				while (mach_absolute_time() < stop) {
+					;
+				}
 			}
-			os_atomic_xchg(my_locked, 0, relaxed);
 		}
 
 		lck_mtx_unlock(&test_mtx);
 
 		if (i != WARMUP_ITER - 1) {
-			while (os_atomic_load(other_locked, relaxed) == 0) {
+			while (os_atomic_load(other_locked, relaxed) == prev) {
 				;
 			}
 		}
@@ -878,18 +915,26 @@ test_mtx_lck_unlock_contended_loop_time_thread(
 	for (i = 0; i < iterations; i++) {
 		lck_mtx_lock(&test_mtx);
 
-		os_atomic_xchg(my_locked, 1, relaxed);
+		int prev = os_atomic_load(other_locked, relaxed);
+		os_atomic_add(my_locked, 1, relaxed);
 		if (i != iterations - 1) {
-			while (os_atomic_load(&other_thread->state, relaxed) & TH_RUN) {
-				;
+			if (type == FULL_CONTENDED) {
+				while (os_atomic_load(&other_thread->state, relaxed) & TH_RUN) {
+					;
+				}
+			} else {
+				start = mach_absolute_time();
+				stop = start + (MutexSpin / 2);
+				while (mach_absolute_time() < stop) {
+					;
+				}
 			}
-			os_atomic_xchg(my_locked, 0, relaxed);
 		}
 
 		lck_mtx_unlock(&test_mtx);
 
 		if (i != iterations - 1) {
-			while (os_atomic_load(other_locked, relaxed) == 0) {
+			while (os_atomic_load(other_locked, relaxed) == prev) {
 				;
 			}
 		}
@@ -910,7 +955,8 @@ int
 lck_mtx_test_mtx_contended_loop_time(
 	int iter,
 	char *buffer,
-	int buffer_size)
+	int buffer_size,
+	int type)
 {
 	thread_t thread1, thread2;
 	kern_return_t result;
@@ -920,6 +966,11 @@ lck_mtx_test_mtx_contended_loop_time(
 	wait_barrier = 0;
 	iterations = iter;
 	uint64_t time, time_run;
+
+	if (type < 0 || type > MAX_CONDENDED) {
+		printf("%s invalid type %d\n", __func__, type);
+		return 0;
+	}
 
 	targs[0].other_thread = NULL;
 	targs[1].other_thread = NULL;
@@ -938,6 +989,8 @@ lck_mtx_test_mtx_contended_loop_time(
 	/* this are t1 args */
 	targs[0].my_locked = 0;
 	targs[0].other_locked = &targs[1].my_locked;
+	targs[0].type = type;
+	targs[1].type = type;
 
 	os_atomic_xchg(&targs[0].other_thread, thread2, release);
 

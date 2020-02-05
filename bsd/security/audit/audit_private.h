@@ -348,7 +348,7 @@ struct kaudit_record    *audit_new(int event, proc_t p, struct uthread *td);
  */
 struct au_record;
 int      kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau);
-int      bsm_rec_verify(void *rec, int length);
+int      bsm_rec_verify(void *rec, int length, boolean_t kern_events_allowed);
 
 /*
  * Kernel versions of the libbsm audit record functions.
@@ -489,6 +489,11 @@ int     audit_session_lookup(au_asid_t asid, auditinfo_addr_t *ret_aia);
 #define AU_AUDITCTL_RESERVED_ENTITLEMENT "com.apple.private.protected-audit-control"
 
 /*
+ * Entitlement required to control auditctl sys call
+ */
+#define AU_AUDIT_USER_ENTITLEMENT "com.apple.private.audit.user"
+
+/*
  * Max sizes used by the kernel for signing id and team id values of the
  * identity tokens. These lengths include space for the null terminator.
  */
@@ -498,8 +503,10 @@ int     audit_session_lookup(au_asid_t asid, auditinfo_addr_t *ret_aia);
 struct __attribute__((__packed__)) hdr_tok_partial {
 	u_char type;
 	uint32_t len;
+	u_char ver;
+	uint16_t e_type;
 };
-static_assert(sizeof(struct hdr_tok_partial) == 5);
+static_assert(sizeof(struct hdr_tok_partial) == 8);
 
 struct __attribute__((__packed__)) trl_tok_partial {
 	u_char type;

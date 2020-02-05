@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -60,66 +60,7 @@ __os_warn_unused(__const bool x)
 #define os_mul_overflow(a, b, res) __os_warn_unused(__builtin_mul_overflow((a), (b), (res)))
 
 #else
-
-/* compile-time assertion that 'x' and 'y' are equivalent types */
-#ifdef __cplusplus
-#define __OS_TYPE_CHECK(x, y) do { \
-	__typeof__(x) _x; \
-	__typeof__(y) _y; \
-	(void)(&_x == &_y, "overflow arithmetic: incompatible types"); \
-} while (0)
-#else
-#define __OS_TYPE_CHECK(x, y) do { \
-	_Static_assert(__builtin_types_compatible_p(__typeof(x),__typeof(y)), \
-	                "overflow arithmetic: incompatible types"); \
-} while (0)
-#endif
-
-#define __os_add_overflow_func(T, U, V) _Generic((T),\
-	        unsigned:           __builtin_uadd_overflow, \
-	        unsigned long:      __builtin_uaddl_overflow, \
-	        unsigned long long: __builtin_uaddll_overflow, \
-	        int:                __builtin_sadd_overflow, \
-	        long:               __builtin_saddl_overflow, \
-	        long long:          __builtin_saddll_overflow \
-	)(T,U,V)
-
-#define __os_sub_overflow_func(T, U, V) _Generic((T),\
-	        unsigned:           __builtin_usub_overflow, \
-	        unsigned long:      __builtin_usubl_overflow, \
-	        unsigned long long: __builtin_usubll_overflow, \
-	        int:                __builtin_ssub_overflow, \
-	        long:               __builtin_ssubl_overflow, \
-	        long long:          __builtin_ssubll_overflow \
-	)(T,U,V)
-
-#define __os_mul_overflow_func(T, U, V) _Generic((T),\
-	        unsigned:           __builtin_umul_overflow, \
-	        unsigned long:      __builtin_umull_overflow, \
-	        unsigned long long: __builtin_umulll_overflow, \
-	        int:                __builtin_smul_overflow, \
-	        long:               __builtin_smull_overflow, \
-	        long long:          __builtin_smulll_overflow \
-	)(T,U,V)
-
-#define os_add_overflow(a, b, res) __os_warn_unused(__extension__({ \
-	__OS_TYPE_CHECK((a), (b)); \
-	__OS_TYPE_CHECK((b), *(res)); \
-	__os_add_overflow_func((a), (b), (res)); \
-}))
-
-#define os_sub_overflow(a, b, res) __os_warn_unused(__extension__({ \
-	__OS_TYPE_CHECK((a), (b)); \
-	__OS_TYPE_CHECK((b), *(res)); \
-	__os_sub_overflow_func((a), (b), (res)); \
-}))
-
-#define os_mul_overflow(a, b, res) __os_warn_unused(__extension__({ \
-	__OS_TYPE_CHECK((a), (b)); \
-	__OS_TYPE_CHECK((b), *(res)); \
-	__os_mul_overflow_func((a), (b), (res)); \
-}))
-
+# error os_overflow expects type-generic builtins
 #endif /* __has_builtin(...) */
 
 /* os_add3_overflow(a, b, c) -> (a + b + c) */
@@ -158,6 +99,20 @@ __os_warn_unused(__const bool x)
 	_s | _t; \
 }))
 
+/* os_convert_overflow(a) -> a [converted to the result type] */
 #define os_convert_overflow(a, res) os_add_overflow((a), 0, (res))
+
+/* os_inc_overflow(res) -> *res += 1 */
+#define os_inc_overflow(res) __os_warn_unused(__extension__({ \
+	__typeof((res)) _tmp = (res); \
+	os_add_overflow(*_tmp, 1, _tmp); \
+}))
+
+/* os_dec_overflow(res) -> *res -= 1 */
+#define os_dec_overflow(res) __os_warn_unused(__extension__({ \
+	__typeof((res)) _tmp = (res); \
+	os_sub_overflow(*_tmp, 1, _tmp); \
+}))
+
 
 #endif /* _OS_OVERFLOW_H */

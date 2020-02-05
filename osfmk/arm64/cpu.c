@@ -84,10 +84,10 @@ extern void exc_vectors_table;
 
 extern void __attribute__((noreturn)) arm64_prepare_for_sleep(void);
 extern void arm64_force_wfi_clock_gate(void);
-#if (defined(APPLECYCLONE) || defined(APPLETYPHOON))
-// <rdar://problem/15827409> CPU1 Stuck in WFIWT Because of MMU Prefetch
-extern void cyclone_typhoon_prepare_for_wfi(void);
-extern void cyclone_typhoon_return_from_wfi(void);
+#if defined(APPLETYPHOON)
+// <rdar://problem/15827409>
+extern void typhoon_prepare_for_wfi(void);
+extern void typhoon_return_from_wfi(void);
 #endif
 
 
@@ -116,6 +116,8 @@ static uint64_t wfi_delay = 0;
 
 #endif /* DEVELOPMENT || DEBUG */
 
+static bool idle_wfe_to_deadline = false;
+
 #if __ARM_GLOBAL_SLEEP_BIT__
 volatile boolean_t arm64_stall_sleep = TRUE;
 #endif
@@ -136,6 +138,7 @@ static boolean_t coresight_debug_enabled = FALSE;
 
 #if defined(CONFIG_XNUPOST)
 void arm64_ipi_test_callback(void *);
+void arm64_immediate_ipi_test_callback(void *);
 
 void
 arm64_ipi_test_callback(void *parm)
@@ -148,12 +151,23 @@ arm64_ipi_test_callback(void *parm)
 	*ipi_test_data = cpu_data->cpu_number;
 }
 
-uint64_t arm64_ipi_test_data[MAX_CPUS];
+void
+arm64_immediate_ipi_test_callback(void *parm)
+{
+	volatile uint64_t *ipi_test_data = parm;
+	cpu_data_t *cpu_data;
+
+	cpu_data = getCpuDatap();
+
+	*ipi_test_data = cpu_data->cpu_number + MAX_CPUS;
+}
+
+uint64_t arm64_ipi_test_data[MAX_CPUS * 2];
 
 void
 arm64_ipi_test()
 {
-	volatile uint64_t *ipi_test_data;
+	volatile uint64_t *ipi_test_data, *immediate_ipi_test_data;
 	uint32_t timeout_ms = 100;
 	uint64_t then, now, delta;
 	int current_cpu_number = getCpuDatap()->cpu_number;
@@ -169,19 +183,34 @@ arm64_ipi_test()
 
 	for (unsigned int i = 0; i < MAX_CPUS; ++i) {
 		ipi_test_data = &arm64_ipi_test_data[i];
+		immediate_ipi_test_data = &arm64_ipi_test_data[i + MAX_CPUS];
 		*ipi_test_data = ~i;
 		kern_return_t error = cpu_xcall((int)i, (void *)arm64_ipi_test_callback, (void *)(uintptr_t)ipi_test_data);
 		if (error != KERN_SUCCESS) {
 			panic("CPU %d was unable to IPI CPU %u: error %d", current_cpu_number, i, error);
 		}
 
-		then = mach_absolute_time();
-
-		while (*ipi_test_data != i) {
+		while ((error = cpu_immediate_xcall((int)i, (void *)arm64_immediate_ipi_test_callback,
+		    (void *)(uintptr_t)immediate_ipi_test_data)) == KERN_ALREADY_WAITING) {
 			now = mach_absolute_time();
 			absolutetime_to_nanoseconds(now - then, &delta);
 			if ((delta / NSEC_PER_MSEC) > timeout_ms) {
-				panic("CPU %d tried to IPI CPU %d but didn't get correct response within %dms, respose: %llx", current_cpu_number, i, timeout_ms, *ipi_test_data);
+				panic("CPU %d was unable to immediate-IPI CPU %u within %dms", current_cpu_number, i, timeout_ms);
+			}
+		}
+
+		if (error != KERN_SUCCESS) {
+			panic("CPU %d was unable to immediate-IPI CPU %u: error %d", current_cpu_number, i, error);
+		}
+
+		then = mach_absolute_time();
+
+		while ((*ipi_test_data != i) || (*immediate_ipi_test_data != (i + MAX_CPUS))) {
+			now = mach_absolute_time();
+			absolutetime_to_nanoseconds(now - then, &delta);
+			if ((delta / NSEC_PER_MSEC) > timeout_ms) {
+				panic("CPU %d tried to IPI CPU %d but didn't get correct responses within %dms, responses: %llx, %llx",
+				    current_cpu_number, i, timeout_ms, *ipi_test_data, *immediate_ipi_test_data);
 			}
 		}
 	}
@@ -271,7 +300,29 @@ cpu_sleep(void)
 
 	CleanPoC_Dcache();
 
+	/* This calls:
+	 *
+	 * IOCPURunPlatformQuiesceActions when sleeping the boot cpu
+	 * ml_arm_sleep() on all CPUs
+	 *
+	 * It does not return.
+	 */
 	PE_cpu_machine_quiesce(cpu_data_ptr->cpu_id);
+	/*NOTREACHED*/
+}
+
+/*
+ *	Routine:	cpu_interrupt_is_pending
+ *	Function:	Returns the value of ISR.  Due to how this register is
+ *			is implemented, this returns 0 if there are no
+ *			interrupts pending, so it can be used as a boolean test.
+ */
+static int
+cpu_interrupt_is_pending(void)
+{
+	uint64_t isr_value;
+	isr_value = __builtin_arm_rsr64("ISR_EL1");
+	return (int)isr_value;
 }
 
 /*
@@ -287,9 +338,20 @@ cpu_idle(void)
 	if ((!idle_enable) || (cpu_data_ptr->cpu_signal & SIGPdisabled)) {
 		Idle_load_context();
 	}
+
 	if (!SetIdlePop()) {
+		/* If a deadline is pending, wait for it to elapse. */
+		if (idle_wfe_to_deadline) {
+			if (arm64_wfe_allowed()) {
+				while (!cpu_interrupt_is_pending()) {
+					__builtin_arm_wfe();
+				}
+			}
+		}
+
 		Idle_load_context();
 	}
+
 	lastPop = cpu_data_ptr->rtcPop;
 
 	pmap_switch_user_ttb(kernel_pmap);
@@ -335,16 +397,16 @@ cpu_idle(void)
 		}
 #endif /* DEVELOPMENT || DEBUG */
 
-#if defined(APPLECYCLONE) || defined(APPLETYPHOON)
+#if defined(APPLETYPHOON)
 		// <rdar://problem/15827409> CPU1 Stuck in WFIWT Because of MMU Prefetch
-		cyclone_typhoon_prepare_for_wfi();
+		typhoon_prepare_for_wfi();
 #endif
 		__builtin_arm_dsb(DSB_SY);
 		__builtin_arm_wfi();
 
-#if defined(APPLECYCLONE) || defined(APPLETYPHOON)
+#if defined(APPLETYPHOON)
 		// <rdar://problem/15827409> CPU1 Stuck in WFIWT Because of MMU Prefetch
-		cyclone_typhoon_return_from_wfi();
+		typhoon_return_from_wfi();
 #endif
 
 #if DEVELOPMENT || DEBUG
@@ -471,7 +533,9 @@ cpu_init(void)
 	cdp->cpu_stat.irq_ex_cnt_wake = 0;
 	cdp->cpu_stat.ipi_cnt_wake = 0;
 	cdp->cpu_stat.timer_cnt_wake = 0;
+#if MONOTONIC
 	cdp->cpu_stat.pmi_cnt_wake = 0;
+#endif /* MONOTONIC */
 	cdp->cpu_running = TRUE;
 	cdp->cpu_sleep_token_last = cdp->cpu_sleep_token;
 	cdp->cpu_sleep_token = 0x0UL;
@@ -517,11 +581,16 @@ cpu_stack_alloc(cpu_data_t *cpu_data_ptr)
 void
 cpu_data_free(cpu_data_t *cpu_data_ptr)
 {
-	if (cpu_data_ptr == &BootCpuData) {
+	if ((cpu_data_ptr == NULL) || (cpu_data_ptr == &BootCpuData)) {
 		return;
 	}
 
 	cpu_processor_free( cpu_data_ptr->cpu_processor);
+	if (CpuDataEntries[cpu_data_ptr->cpu_number].cpu_data_vaddr == cpu_data_ptr) {
+		CpuDataEntries[cpu_data_ptr->cpu_number].cpu_data_vaddr = NULL;
+		CpuDataEntries[cpu_data_ptr->cpu_number].cpu_data_paddr = 0;
+		__builtin_arm_dmb(DMB_ISH); // Ensure prior stores to cpu array are visible
+	}
 	(kfree)((void *)(cpu_data_ptr->intstack_top - INTSTACK_SIZE), INTSTACK_SIZE);
 	(kfree)((void *)(cpu_data_ptr->excepstack_top - EXCEPSTACK_SIZE), EXCEPSTACK_SIZE);
 	kmem_free(kernel_map, (vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t));
@@ -561,12 +630,6 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 
 	cpu_data_ptr->cpu_signal = SIGPdisabled;
 
-#if DEBUG || DEVELOPMENT
-	cpu_data_ptr->failed_xcall = NULL;
-	cpu_data_ptr->failed_signal = 0;
-	cpu_data_ptr->failed_signal_count = 0;
-#endif
-
 	cpu_data_ptr->cpu_get_fiq_handler = NULL;
 	cpu_data_ptr->cpu_tbd_hardware_addr = NULL;
 	cpu_data_ptr->cpu_tbd_hardware_val = NULL;
@@ -576,6 +639,8 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 	cpu_data_ptr->cpu_sleep_token_last = 0x00000000UL;
 	cpu_data_ptr->cpu_xcall_p0 = NULL;
 	cpu_data_ptr->cpu_xcall_p1 = NULL;
+	cpu_data_ptr->cpu_imm_xcall_p0 = NULL;
+	cpu_data_ptr->cpu_imm_xcall_p1 = NULL;
 
 	for (i = 0; i < CORESIGHT_REGIONS; ++i) {
 		cpu_data_ptr->coresight_base[i] = 0;
@@ -594,6 +659,9 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 	cpu_data_ptr->cpu_exc_vectors = (vm_offset_t)&exc_vectors_table;
 #endif /* __ARM_KERNEL_PROTECT__ */
 
+#if defined(HAS_APPLE_PAC)
+	cpu_data_ptr->rop_key = 0;
+#endif
 }
 
 kern_return_t
@@ -607,6 +675,7 @@ cpu_data_register(cpu_data_t *cpu_data_ptr)
 	}
 #endif
 
+	__builtin_arm_dmb(DMB_ISH); // Ensure prior stores to cpu data are visible
 	CpuDataEntries[cpu].cpu_data_vaddr = cpu_data_ptr;
 	CpuDataEntries[cpu].cpu_data_paddr = (void *)ml_vtophys((vm_offset_t)cpu_data_ptr);
 	return KERN_SUCCESS;
@@ -630,8 +699,8 @@ cpu_start(int cpu)
 
 		cpu_data_ptr->cpu_pmap_cpu_data.cpu_nested_pmap = NULL;
 
-		if (cpu_data_ptr->cpu_processor->next_thread != THREAD_NULL) {
-			first_thread = cpu_data_ptr->cpu_processor->next_thread;
+		if (cpu_data_ptr->cpu_processor->startup_thread != THREAD_NULL) {
+			first_thread = cpu_data_ptr->cpu_processor->startup_thread;
 		} else {
 			first_thread = cpu_data_ptr->cpu_processor->idle_thread;
 		}
@@ -675,6 +744,9 @@ cpu_timebase_init(boolean_t from_boot)
 		 * This ensures that mach_absolute_time() stops ticking across sleep.
 		 */
 		rtclock_base_abstime = wake_abstime - ml_get_hwclock();
+	} else if (from_boot) {
+		/* On initial boot, initialize time_since_reset to CNTPCT_EL0. */
+		ml_set_reset_time(ml_get_hwclock());
 	}
 
 	cdp->cpu_decrementer = 0x7FFFFFFFUL;
@@ -717,6 +789,7 @@ ml_arm_sleep(void)
 		 * the abstime value we'll use when we resume.
 		 */
 		wake_abstime = ml_get_timebase();
+		ml_set_reset_time(UINT64_MAX);
 	} else {
 		CleanPoU_Dcache();
 	}
@@ -841,6 +914,8 @@ cpu_machine_idle_init(boolean_t from_boot)
 			break;
 		}
 
+		PE_parse_boot_argn("idle_wfe_to_deadline", &idle_wfe_to_deadline, sizeof(idle_wfe_to_deadline));
+
 		ResetHandlerData.assist_reset_handler = 0;
 		ResetHandlerData.cpu_data_entries = ml_static_vtop((vm_offset_t)CpuDataEntries);
 
@@ -898,9 +973,9 @@ void
 machine_track_platform_idle(boolean_t entry)
 {
 	if (entry) {
-		(void)__c11_atomic_fetch_add(&cpu_idle_count, 1, __ATOMIC_RELAXED);
+		os_atomic_inc(&cpu_idle_count, relaxed);
 	} else {
-		(void)__c11_atomic_fetch_sub(&cpu_idle_count, 1, __ATOMIC_RELAXED);
+		os_atomic_dec(&cpu_idle_count, relaxed);
 	}
 }
 

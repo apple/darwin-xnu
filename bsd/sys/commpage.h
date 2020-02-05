@@ -29,6 +29,10 @@
 #define _COMMPAGE_H
 
 #ifdef  PRIVATE
+
+#define _COMM_PAGE32_SIGNATURE_STRING           "commpage 32-bit"
+#define _COMM_PAGE64_SIGNATURE_STRING           "commpage 64-bit"
+
 typedef volatile struct commpage_timeofday_data {
 	uint64_t        TimeStamp_tick;
 	uint64_t        TimeStamp_sec;
@@ -36,6 +40,7 @@ typedef volatile struct commpage_timeofday_data {
 	uint64_t        Ticks_scale;
 	uint64_t        Ticks_per_sec;
 } new_commpage_timeofday_data_t;
+
 #endif
 
 #endif

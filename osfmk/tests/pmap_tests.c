@@ -30,12 +30,18 @@
 #include <vm/pmap.h>
 #include <kern/ledger.h>
 #include <kern/thread.h>
-
+#if defined(__arm64__)
+#include <pexpert/arm64/board_config.h>
+#endif
 
 extern ledger_template_t task_ledger_template;
 
+extern boolean_t arm_force_fast_fault(ppnum_t, vm_prot_t, int, void*);
+extern kern_return_t arm_fast_fault(pmap_t, vm_map_address_t, vm_prot_t, bool, bool);
+
 kern_return_t test_pmap_enter_disconnect(unsigned int num_loops);
 kern_return_t test_pmap_iommu_disconnect(void);
+kern_return_t test_pmap_extended(void);
 
 #define PMAP_TEST_VA (0xDEAD << PAGE_SHIFT)
 
@@ -46,7 +52,7 @@ typedef struct {
 } pmap_test_thread_args;
 
 static pmap_t
-pmap_create_wrapper()
+pmap_create_wrapper(unsigned int flags)
 {
 	pmap_t new_pmap = NULL;
 	ledger_t ledger;
@@ -54,7 +60,7 @@ pmap_create_wrapper()
 	if ((ledger = ledger_instantiate(task_ledger_template, LEDGER_CREATE_ACTIVE_ENTRIES)) == NULL) {
 		return NULL;
 	}
-	new_pmap = pmap_create(ledger, 0, FALSE);
+	new_pmap = pmap_create_options(ledger, 0, flags);
 	ledger_dereference(ledger);
 	return new_pmap;
 }
@@ -74,7 +80,7 @@ test_pmap_enter_disconnect(unsigned int num_loops)
 {
 	kern_return_t kr = KERN_SUCCESS;
 	thread_t disconnect_thread;
-	pmap_t new_pmap = pmap_create_wrapper();
+	pmap_t new_pmap = pmap_create_wrapper(0);
 	if (new_pmap == NULL) {
 		return KERN_FAILURE;
 	}
@@ -115,6 +121,12 @@ test_pmap_enter_disconnect(unsigned int num_loops)
 
 kern_return_t
 test_pmap_iommu_disconnect(void)
+{
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+test_pmap_extended(void)
 {
 	return KERN_SUCCESS;
 }

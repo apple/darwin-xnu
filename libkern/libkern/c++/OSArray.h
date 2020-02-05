@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -32,8 +32,12 @@
 #define _OS_OSARRAY_H
 
 #include <libkern/c++/OSCollection.h>
+#include <libkern/c++/OSPtr.h>
 
 class OSSerialize;
+class OSArray;
+
+typedef OSPtr<OSArray> OSArrayPtr;
 
 /*!
  * @header
@@ -90,7 +94,7 @@ class OSArray : public OSCollection
 	friend class OSSet;
 	friend class OSSerialize;
 
-	OSDeclareDefaultStructors(OSArray)
+	OSDeclareDefaultStructors(OSArray);
 
 #if APPLE_KEXT_ALIGN_CONTAINERS
 
@@ -98,12 +102,12 @@ protected:
 	unsigned int             count;
 	unsigned int             capacity;
 	unsigned int             capacityIncrement;
-	const OSMetaClassBase ** array;
+	OSCollectionTaggedPtr<const OSMetaClassBase> *array;
 
 #else /* APPLE_KEXT_ALIGN_CONTAINERS */
 
 protected:
-	const OSMetaClassBase ** array;
+	OSCollectionTaggedPtr<const OSMetaClassBase> *array;
 	unsigned int             count;
 	unsigned int             capacity;
 	unsigned int             capacityIncrement;
@@ -140,7 +144,7 @@ public:
  * (<i>unlike</i> @link //apple_ref/doc/uid/20001502 CFMutableArray@/link,
  * for which the initial capacity is a hard limit).
  */
-	static OSArray * withCapacity(unsigned int capacity);
+	static OSArrayPtr withCapacity(unsigned int capacity);
 
 
 /*!
@@ -168,7 +172,7 @@ public:
  * (<i>unlike</i> @link //apple_ref/doc/uid/20001502 CFMutableArray@/link,
  * for which the initial capacity is a hard limit).
  */
-	static OSArray * withObjects(
+	static OSArrayPtr withObjects(
 		const OSObject * objects[],
 		unsigned int     count,
 		unsigned int     capacity = 0);
@@ -206,7 +210,7 @@ public:
  * for storage in the new OSArray,
  * not copied.
  */
-	static OSArray * withArray(
+	static OSArrayPtr withArray(
 		const OSArray * array,
 		unsigned int    capacity = 0);
 
@@ -698,7 +702,7 @@ public:
 	virtual unsigned setOptions(
 		unsigned   options,
 		unsigned   mask,
-		void     * context = 0) APPLE_KEXT_OVERRIDE;
+		void     * context = NULL) APPLE_KEXT_OVERRIDE;
 
 
 /*!
@@ -723,7 +727,7 @@ public:
  * Objects that are not derived from OSCollection are retained
  * rather than copied.
  */
-	OSCollection * copyCollection(OSDictionary * cycleDict = 0) APPLE_KEXT_OVERRIDE;
+	OSCollectionPtr copyCollection(OSDictionary * cycleDict = NULL) APPLE_KEXT_OVERRIDE;
 
 	OSMetaClassDeclareReservedUnused(OSArray, 0);
 	OSMetaClassDeclareReservedUnused(OSArray, 1);

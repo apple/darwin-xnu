@@ -1,0 +1,251 @@
+/*
+ * Copyright (c) 2019-2019 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ *
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ *
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ *
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
+#if !__IIG
+#if KERNEL
+#include <IOKit/IOService.h>
+#endif
+#endif
+
+#ifndef _IOKIT_UIOSERVICE_H
+#define _IOKIT_UIOSERVICE_H
+
+#include <DriverKit/OSObject.iig>
+
+class IOMemoryDescriptor;
+class IOBufferMemoryDescriptor;
+class IOUserClient;
+
+typedef char IOServiceName[128];
+typedef char IOPropertyName[128];
+typedef char IORegistryPlaneName[128];
+
+enum {
+	kIOServiceSearchPropertyParents = 0x00000001,
+};
+
+#define kIOServiceDefaultQueueName	"Default"
+
+enum {
+	kIOServicePowerCapabilityOff = 0x00000000,
+	kIOServicePowerCapabilityOn  = 0x00000002,
+	kIOServicePowerCapabilityLow = 0x00010000,
+};
+
+/*!
+ * @class IOService
+ *
+ * @abstract
+ * IOService represents an device or OS service in IOKit and DriverKit.
+ *
+ * @discussion
+ * IOKit provides driver lifecycle management through the IOService APIs. 
+ * Drivers and devices are represented as subclasses of IOService.
+ *
+
+@iig implementation
+#include <DriverKit/IOUserClient.h>
+@iig end
+*/
+
+class KERNEL IOService : public OSObject
+{
+public:
+	virtual bool
+	init() override;
+
+	virtual void
+	free() override;
+
+    /*!
+     * @brief       First call made to a matched IOService.
+     * @discussion  During matching IOKit will create an IOService object for successful matches.
+     *              Start is the first call made to the new object.
+     * @param       provider The IOService provider for the match. This should be OSRequiredCast to the expected class.
+     *              The provider is retained by DriverKit for the duration of Start() and on successful Start() until
+     *              IOService::Stop() is called.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	Start(IOService * provider) LOCAL;
+
+    /*!
+     * @brief       Terminate access to provider.
+     * @discussion  During termination IOKit will teardown any IOService objects attached to a terminated provider.
+     *              Stop should quiesce all activity and when complete, pass the call to super. After calling super, the
+     *              provider is no longer valid and this object will likely be freed.
+     * @param       provider The IOService provider for being terminated, one previously passed to Start
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	Stop(IOService * provider) LOCAL;
+
+    /*!
+     * @brief       Obtain IOKit IORegistryEntryID.
+     * @param       registryEntryID IORegistryEntryID for the IOKit object.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	GetRegistryEntryID(uint64_t * registryEntryID) LOCAL;
+
+    /*!
+     * @brief       Set the IORegistryEntry name.
+     * @param       name Name for the IOKit object. The c-string will be copied.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	SetName(
+	const IOServiceName name);
+
+    /*!
+     * @brief       Start the matching process on the IOService object.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	RegisterService();
+
+    /*!
+     * @brief       Set the IODispatchQueue for a given name on the IOService.
+     * @param       name Name for the queue. The name may be referenced by methods in the .iig class definition
+     *              with the QUEUENAME() attribute to indicate the method must be invoked on that queue. If a method
+     *              is invoked before the queue is set for the name, the default queue is used. A default queue is
+     *              created by DriverKit for every new IOService object with the name kIOServiceDefaultQueueName.
+     * @param       queue Queue to be associated with the name on this IOService.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	SetDispatchQueue(
+		const IODispatchQueueName name,
+		IODispatchQueue         * queue) override LOCAL;
+
+    /*!
+     * @brief       Obtain the IODispatchQueue for a given name on the IOService.
+     * @param       name Name for the queue.
+     * @param       queue Returned, retained queue or NULL. The caller should release this queue.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	CopyDispatchQueue(
+		const IODispatchQueueName name,
+		IODispatchQueue        ** queue) override;
+
+    /*!
+     * @brief       Obtain the IOKit registry properties for the IOService.
+     * @param       properties Returned, retained dictionary of properties or NULL. The caller should release this dictionary.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	CopyProperties(
+		OSDictionary ** properties);
+
+    /*!
+     * @brief       Obtain the an IOKit registry properties from the service or one of its parents.
+     * @param       name Name of the property as a c-string.
+     * @param       plane Name of the registry plane to be searched, if the option kIOServiceSearchPropertyParents
+     *              is used.
+     * @param       options Pass kIOServiceSearchPropertyParents to search for the property in the IOService and all
+     *              its parents in the IOKit registry.
+     * @param       property Returned, retained property object or NULL. The caller should release this property.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	SearchProperty(
+		const IOPropertyName name,
+		const IORegistryPlaneName plane,
+		uint64_t options,
+		OSContainer ** property);
+
+    /*!
+     * @brief       Send a dictionary of properties to an IOService.
+     * @discussion  By default the method will fail. A DriverKit subclass or kernel class may implement this method.
+     * @param       properties Dictionary of properties.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	SetProperties(
+		OSDictionary * properties);
+
+    /*!
+     * @brief       Notification of change in power state of a provider.
+     * @discussion  DriverKit notifies of changes in power of a provider. The driver should make itself safe for
+     *              the new state before passing the call to super. 
+     * @param       powerFlags The power capabilities of the new state. The values possible are:
+	 *	kIOServicePowerCapabilityOff the system will be entering sleep state
+	 *	kIOServicePowerCapabilityOn  the device and system are fully powered
+	 *  kIOServicePowerCapabilityLow the device is in a reduced power state while the system is running
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	SetPowerState(
+		uint32_t powerFlags) LOCAL;
+
+    /*!
+     * @brief       Allow provider to enter a low power state.
+     * @discussion  A driver may allow a device to enter a lower power state. 
+     * @param       powerFlags The power capabilities of the new state. The values possible are:
+	 *  kIOServicePowerCapabilityLow the device is in a reduced power state while the system is running
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	ChangePowerState(
+		uint32_t powerFlags);
+
+    /*!
+     * @brief       Request create a new user client for a client process.
+     * @discussion  An application may request an IOUserClient be opened with the IOKit framework
+     *              IOServiceOpen() call. The type parameter of that call is passed here. The driver should respond to
+     *              the call by calling IOService::Create() with a plist entry describing the new user client object.
+     * @param       type The type passed to IOServiceOpen().
+     * @param       userClient The object created by IOService::Create()
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	NewUserClient(
+		uint32_t type,
+		IOUserClient ** userClient);
+
+    /*!
+     * @brief       Request to create an IOService object from a plist property.
+     * @discussion  An IOService interface or IOUserClient subclass may be created from a plist property of the driver.
+     *              The plist should contain the following IOKit matching keys:
+     *              IOClass - kernel class of IOUserUserClient
+     *              IOUserClass - DriverKit class to be instantiated
+     *              IOServiceDEXTEntitlements - Array of entitlements to be checked against a user client owning task
+     * @param       provider The provider of the new object.
+     * @param       propertiesKey The name of the properties dictionary in this IOService
+     * @param       result The created object retained, to be released by the caller.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	Create(
+		IOService          * provider,
+		const IOPropertyName propertiesKey,
+		IOService         ** result);
+};
+
+#endif /* ! _IOKIT_UIOSERVICE_H */

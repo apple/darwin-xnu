@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000, 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -220,31 +220,6 @@ extern struct gmonparam _gmonparam;
 #define GMON_PROF_BUSY  1
 #define GMON_PROF_ERROR 2
 #define GMON_PROF_OFF   3
-
-/*
- * Sysctl definitions for extracting profiling information from the kernel.
- */
-#define GPROF_STATE     0       /* int: profiling enabling variable */
-#define GPROF_COUNT     1       /* struct: profile tick count buffer */
-#define GPROF_FROMS     2       /* struct: from location hash bucket */
-#define GPROF_TOS       3       /* struct: destination/count structure */
-#define GPROF_GMONPARAM 4       /* struct: profiling parameters (see above) */
-
-
-/*
- * Declarations for various profiling related functions from
- * bsd/kern/subr_prof.c
- */
-#ifdef GPROF
-#ifdef XNU_KERNEL_PRIVATE
-
-void kmstartup(void);
-void cfreemem(caddr_t, int);  /* Currently only a stub function. */
-void mcount(uintptr_t, uintptr_t);
-
-#endif /* XNU_KERNEL_PRIVATE */
-#endif /* GPROF */
-
 
 /*
  * In order to support more information than in the original mon.out and

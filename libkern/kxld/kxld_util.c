@@ -145,6 +145,30 @@ kxld_log(KXLDLogSubsystem subsystem, KXLDLogLevel level,
 /*******************************************************************************
 *******************************************************************************/
 void *
+kxld_calloc(size_t size)
+{
+	void * ptr = NULL;
+
+#if KERNEL
+	ptr = kalloc(size);
+	if (ptr) {
+		bzero(ptr, size);
+	}
+#else
+	ptr = calloc(1, size);
+#endif
+
+#if DEBUG
+	if (ptr) {
+		++num_allocations;
+		bytes_allocated += size;
+	}
+#endif
+
+	return ptr;
+}
+
+void *
 kxld_alloc(size_t size)
 {
 	void * ptr = NULL;
@@ -187,8 +211,11 @@ kxld_page_alloc_untracked(size_t size)
 			ptr = (void *) addr;
 		}
 	}
+	if (ptr) {
+		bzero(ptr, size);
+	}
 #else /* !KERNEL */
-	ptr = malloc(size);
+	ptr = calloc(1, size);
 #endif /* KERNEL */
 
 	return ptr;

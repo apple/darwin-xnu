@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -124,7 +124,7 @@ static void shmid_ds_64to32(struct user_shmid_ds *in, struct user32_shmid_ds *ou
 static void shmid_ds_32to64(struct user32_shmid_ds *in, struct user_shmid_ds *out);
 
 /* XXX casting to (sy_call_t *) is bogus, as usual. */
-static sy_call_t *shmcalls[] = {
+static sy_call_t* const shmcalls[] = {
 	(sy_call_t *)shmat, (sy_call_t *)oshmctl,
 	(sy_call_t *)shmdt, (sy_call_t *)shmget,
 	(sy_call_t *)shmctl
@@ -170,11 +170,11 @@ static int shm_delete_mapping(struct proc *, struct shmmap_state *, int);
 #define DEFAULT_SHMALL  1024
 
 struct shminfo shminfo = {
-	DEFAULT_SHMMAX,
-	DEFAULT_SHMMIN,
-	DEFAULT_SHMMNI,
-	DEFAULT_SHMSEG,
-	DEFAULT_SHMALL
+	.shmmax = DEFAULT_SHMMAX,
+	.shmmin = DEFAULT_SHMMIN,
+	.shmmni = DEFAULT_SHMMNI,
+	.shmseg = DEFAULT_SHMSEG,
+	.shmall = DEFAULT_SHMALL
 };
 
 #define SHMID_IS_VALID(x) ((x) >= 0)

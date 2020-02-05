@@ -61,7 +61,8 @@ bool IODTMatchNubWithKeys( IORegistryEntry * nub,
     const char * keys );
 
 bool IODTCompareNubName( const IORegistryEntry * regEntry,
-    OSString * name, OSString ** matchingName );
+    OSString * name,
+    LIBKERN_RETURNS_RETAINED_ON_NONZERO OSString ** matchingName );
 
 enum {
 	kIODTRecursive      = 0x00000001,

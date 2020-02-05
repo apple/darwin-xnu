@@ -9,6 +9,7 @@ include $(MakeInc_def)
 DATAFILES =
 
 EXPORT_ONLY_FILES = \
+	memory_types.h \
 	pmap.h \
 	vm_fault.h \
 	vm_kern.h \

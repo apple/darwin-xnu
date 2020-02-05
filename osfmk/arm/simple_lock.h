@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -73,109 +73,11 @@
 
 #ifdef MACH_KERNEL_PRIVATE
 
-typedef uint32_t hw_lock_bit_t;
-
-#if LOCK_STATS
-extern void     hw_lock_bit(
-	hw_lock_bit_t *,
-	unsigned int,
-	lck_grp_t*);
-
-extern void     hw_lock_bit_nopreempt(
-	hw_lock_bit_t *,
-	unsigned int,
-	lck_grp_t*);
-
-extern unsigned int hw_lock_bit_try(
-	hw_lock_bit_t *,
-	unsigned int,
-	lck_grp_t*);
-
-extern unsigned int hw_lock_bit_to(
-	hw_lock_bit_t *,
-	unsigned int,
-	uint32_t,
-	lck_grp_t*);
-
-#else
-extern void     hw_lock_bit(
-	hw_lock_bit_t *,
-	unsigned int);
-#define hw_lock_bit(lck, bit, grp) hw_lock_bit(lck, bit)
-
-extern void     hw_lock_bit_nopreempt(
-	hw_lock_bit_t *,
-	unsigned int);
-#define hw_lock_bit_nopreempt(lck, bit, grp) hw_lock_bit_nopreempt(lck, bit)
-
-extern unsigned int hw_lock_bit_try(
-	hw_lock_bit_t *,
-	unsigned int);
-#define hw_lock_bit_try(lck, bit, grp) hw_lock_bit_try(lck, bit)
-
-extern unsigned int hw_lock_bit_to(
-	hw_lock_bit_t *,
-	unsigned int,
-	uint32_t);
-#define hw_lock_bit_to(lck, bit, timeout, grp) hw_lock_bit_to(lck, bit, timeout)
-
-#endif /* LOCK_STATS */
-
-extern void     hw_unlock_bit(
-	hw_lock_bit_t *,
-	unsigned int);
-
-extern void     hw_unlock_bit_nopreempt(
-	hw_lock_bit_t *,
-	unsigned int);
-
-#define hw_lock_bit_held(l, b) (((*(l))&(1<<b))!=0)
-
-
 extern uint32_t LockTimeOut;                    /* Number of hardware ticks of a lock timeout */
 extern uint32_t LockTimeOutUsec;                /* Number of microseconds for lock timeout */
 
-/*
- * USLOCK_DEBUG is broken on ARM and has been disabled.
- * There are no callers to any of the usld_lock functions and data structures
- * don't match between between usimple_lock_data_t and lck_spin_t
- */
-
-/*
- #if MACH_LDEBUG
- #define USLOCK_DEBUG 1
- #else
- #define USLOCK_DEBUG 0
- #endif
- */
-
-#if     !USLOCK_DEBUG
-
 typedef lck_spin_t usimple_lock_data_t, *usimple_lock_t;
-
-#else
-
-typedef struct uslock_debug {
-	void                    *lock_pc;       /* pc where lock operation began    */
-	void                    *lock_thread;   /* thread that acquired lock */
-	unsigned long   duration[2];
-	unsigned short  state;
-	unsigned char   lock_cpu;
-	void                    *unlock_thread; /* last thread to release lock */
-	unsigned char   unlock_cpu;
-	void                    *unlock_pc;     /* pc where lock operation ended    */
-} uslock_debug;
-
-typedef struct {
-	hw_lock_data_t  interlock;      /* must be first... see lock.c */
-	unsigned short  lock_type;      /* must be second... see lock.c */
-#define USLOCK_TAG      0x5353
-	uslock_debug    debug;
-} usimple_lock_data_t, *usimple_lock_t;
-
-#endif  /* USLOCK_DEBUG */
-
-#else
+#else /* MACH_KERNEL_PRIVATE */
 
 #if defined(__arm__)
 typedef struct slock {
@@ -205,7 +107,7 @@ typedef usimple_lock_data_t     *simple_lock_t;
 typedef usimple_lock_data_t     simple_lock_data_t;
 
 #define decl_simple_lock_data(class, name) \
-	class	simple_lock_data_t	name;
+	class	simple_lock_data_t	name
 
 #endif  /* !defined(decl_simple_lock_data) */
 

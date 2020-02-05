@@ -67,7 +67,7 @@ multiple paths to that filesystem object may be returned.
 .Sh RETURN VALUES
 Upon successful completion,
 .Fn fsgetpath
-returns the path length. Otherwise, a value of -1 is returned and errno is set to indicate the error.
+returns the length of the path including the null terminator. Otherwise, a value of -1 is returned and errno is set to indicate the error.
 .Pp
 .Sh COMPATIBILITY
 Not all volumes support

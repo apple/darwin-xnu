@@ -44,6 +44,7 @@
 #include <vm/vm_protos.h> /* last */
 #include <sys/resource.h>
 #include <sys/signal.h>
+#include <sys/errno.h>
 
 #if MONOTONIC
 #include <kern/monotonic.h>
@@ -51,6 +52,7 @@
 #endif /* MONOTONIC */
 
 #include <machine/limits.h>
+#include <sys/codesign.h> /* CS_CDHASH_LEN */
 
 #undef thread_should_halt
 
@@ -68,13 +70,15 @@ int fill_task_rusage(task_t task, rusage_info_current *ri);
 int fill_task_io_rusage(task_t task, rusage_info_current *ri);
 int fill_task_qos_rusage(task_t task, rusage_info_current *ri);
 void fill_task_monotonic_rusage(task_t task, rusage_info_current *ri);
-uint64_t get_task_logical_writes(task_t task);
+uint64_t get_task_logical_writes(task_t task, boolean_t external);
 void fill_task_billed_usage(task_t task, rusage_info_current *ri);
 void task_bsdtask_kill(task_t);
 
 extern uint64_t get_dispatchqueue_serialno_offset_from_proc(void *p);
+extern uint64_t get_dispatchqueue_label_offset_from_proc(void *p);
 extern uint64_t proc_uniqueid(void *p);
 extern int proc_pidversion(void *p);
+extern int proc_getcdhash(void *p, char *cdhash);
 
 #if MACH_BSD
 extern void psignal(void *, int);
@@ -122,6 +126,20 @@ void *
 get_bsdthread_info(thread_t th)
 {
 	return th->uthread;
+}
+
+/*
+ * This is used to remember any FS error from VNOP_PAGEIN code when
+ * invoked under vm_fault(). The value is an errno style value. It can
+ * be retrieved by exception handlers using thread_get_state().
+ */
+void
+set_thread_pagein_error(thread_t th, int error)
+{
+	assert(th == current_thread());
+	if (error == 0 || th->t_pagein_error == 0) {
+		th->t_pagein_error = error;
+	}
 }
 
 #if defined(__x86_64__)
@@ -311,23 +329,6 @@ ipc_space_t
 get_task_ipcspace(task_t t)
 {
 	return t->itk_space;
-}
-
-int
-get_task_numactivethreads(task_t task)
-{
-	thread_t        inc;
-	int num_active_thr = 0;
-	task_lock(task);
-
-	for (inc  = (thread_t)(void *)queue_first(&task->threads);
-	    !queue_end(&task->threads, (queue_entry_t)inc); inc = (thread_t)(void *)queue_next(&inc->task_threads)) {
-		if (inc->active) {
-			num_active_thr++;
-		}
-	}
-	task_unlock(task);
-	return num_active_thr;
 }
 
 int
@@ -689,6 +690,18 @@ get_task_cpu_time(task_t task)
 	return 0;
 }
 
+uint32_t
+get_task_loadTag(task_t task)
+{
+	return os_atomic_load(&task->loadTag, relaxed);
+}
+
+uint32_t
+set_task_loadTag(task_t task, uint32_t loadTag)
+{
+	return os_atomic_xchg(&task->loadTag, loadTag, relaxed);
+}
+
 /*
  *
  */
@@ -1007,8 +1020,8 @@ fill_taskthreadinfo(task_t task, uint64_t thaddr, bool thuniqueid, struct proc_t
 				err = 1;
 				goto out;
 			}
-			ptinfo->pth_user_time = ((basic_info.user_time.seconds * (integer_t)NSEC_PER_SEC) + (basic_info.user_time.microseconds * (integer_t)NSEC_PER_USEC));
-			ptinfo->pth_system_time = ((basic_info.system_time.seconds * (integer_t)NSEC_PER_SEC) + (basic_info.system_time.microseconds * (integer_t)NSEC_PER_USEC));
+			ptinfo->pth_user_time = (((uint64_t)basic_info.user_time.seconds * NSEC_PER_SEC) + ((uint64_t)basic_info.user_time.microseconds * NSEC_PER_USEC));
+			ptinfo->pth_system_time = (((uint64_t)basic_info.system_time.seconds * NSEC_PER_SEC) + ((uint64_t)basic_info.system_time.microseconds * NSEC_PER_USEC));
 
 			ptinfo->pth_cpu_usage = basic_info.cpu_usage;
 			ptinfo->pth_policy = basic_info.policy;
@@ -1078,14 +1091,17 @@ fill_task_rusage(task_t task, rusage_info_current *ri)
 {
 	struct task_power_info powerinfo;
 
+	uint64_t runnable_time = 0;
+
 	assert(task != TASK_NULL);
 	task_lock(task);
 
-	task_power_info_locked(task, &powerinfo, NULL, NULL);
+	task_power_info_locked(task, &powerinfo, NULL, NULL, &runnable_time);
 	ri->ri_pkg_idle_wkups = powerinfo.task_platform_idle_wakeups;
 	ri->ri_interrupt_wkups = powerinfo.task_interrupt_wakeups;
 	ri->ri_user_time = powerinfo.total_user;
 	ri->ri_system_time = powerinfo.total_system;
+	ri->ri_runnable_time = runnable_time;
 
 	ledger_get_balance(task->ledger, task_ledgers.phys_footprint,
 	    (ledger_amount_t *)&ri->ri_phys_footprint);
@@ -1175,12 +1191,19 @@ fill_task_monotonic_rusage(task_t task, rusage_info_current *ri)
 }
 
 uint64_t
-get_task_logical_writes(task_t task)
+get_task_logical_writes(task_t task, boolean_t external)
 {
 	assert(task != TASK_NULL);
 	struct ledger_entry_info lei;
 
 	task_lock(task);
+
+	if (external == FALSE) {
+		ledger_get_entry_info(task->ledger, task_ledgers.logical_writes, &lei);
+	} else {
+		ledger_get_entry_info(task->ledger, task_ledgers.logical_writes_to_external, &lei);
+	}
+
 	ledger_get_entry_info(task->ledger, task_ledgers.logical_writes, &lei);
 
 	task_unlock(task);
@@ -1197,6 +1220,18 @@ get_task_dispatchqueue_serialno_offset(task_t task)
 	}
 
 	return dq_serialno_offset;
+}
+
+uint64_t
+get_task_dispatchqueue_label_offset(task_t task)
+{
+	uint64_t dq_label_offset = 0;
+
+	if (task->bsd_info) {
+		dq_label_offset = get_dispatchqueue_label_offset_from_proc(task->bsd_info);
+	}
+
+	return dq_label_offset;
 }
 
 uint64_t
@@ -1226,3 +1261,37 @@ get_task_crash_label(task_t task)
 	return task->crash_label;
 }
 #endif
+
+int
+fill_taskipctableinfo(task_t task, uint32_t *table_size, uint32_t *table_free)
+{
+	ipc_space_t space = task->itk_space;
+	if (space == NULL) {
+		return -1;
+	}
+
+	is_read_lock(space);
+	if (!is_active(space)) {
+		is_read_unlock(space);
+		return -1;
+	}
+
+	*table_size = space->is_table_size;
+	*table_free = space->is_table_free;
+
+	is_read_unlock(space);
+
+	return 0;
+}
+
+int
+get_task_cdhash(task_t task, char cdhash[static CS_CDHASH_LEN])
+{
+	int result = 0;
+
+	task_lock(task);
+	result = task->bsd_info ? proc_getcdhash(task->bsd_info, cdhash) : ESRCH;
+	task_unlock(task);
+
+	return result;
+}

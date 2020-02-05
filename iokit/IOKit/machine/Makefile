@@ -13,7 +13,7 @@ include $(MakeInc_def)
 MI_DIR = machine
 EXCLUDE_HEADERS =
 
-ALL_HEADERS = $(shell (cd $(SOURCE); echo *.h))
+ALL_HEADERS = $(notdir $(wildcard $(SOURCE)*.h))
 HEADER_LIST = $(filter-out $(EXCLUDE_HEADERS), $(ALL_HEADERS))
 
 INSTALL_MI_LIST	= ${HEADER_LIST}

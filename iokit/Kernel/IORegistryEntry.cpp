@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -90,7 +90,7 @@ static uint64_t gIORegistryLastID = kIORegistryIDReserved;
 class IORegistryPlane : public OSObject {
 	friend class IORegistryEntry;
 
-	OSDeclareAbstractStructors(IORegistryPlane)
+	OSDeclareAbstractStructors(IORegistryPlane);
 
 	const OSSymbol *    nameKey;
 	const OSSymbol *    keys[kNumSetIndex];
@@ -255,7 +255,7 @@ IORegistryEntry::makePlane( const char * name )
 		if (nameKey) {
 			nameKey->release();
 		}
-		plane = 0;
+		plane = NULL;
 	}
 
 	return plane;
@@ -450,6 +450,7 @@ IORegistryEntry::free( void )
 void
 IORegistryEntry::setPropertyTable( OSDictionary * dict )
 {
+	PLOCK;
 	if (dict) {
 		dict->retain();
 	}
@@ -458,6 +459,7 @@ IORegistryEntry::setPropertyTable( OSDictionary * dict )
 	}
 
 	fPropertyTable = dict;
+	PUNLOCK;
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -487,13 +489,13 @@ IORegistryEntry::getProperty( type *                  aKey, \
 { \
     OSObject * obj = getProperty( aKey ); \
     \
-    if ( (0 == obj) && plane && (options & kIORegistryIterateRecursively) ) { \
+    if ( (NULL == obj) && plane && (options & kIORegistryIterateRecursively) ) { \
 	IORegistryEntry * entry = (IORegistryEntry *) this; \
 	IORegistryIterator * iter; \
 	iter = IORegistryIterator::iterateOver( entry, plane, options ); \
         \
 	if(iter) { \
-	    while ( (0 == obj) && (entry = iter->getNextObject()) ) { \
+	    while ( (NULL == obj) && (entry = iter->getNextObject()) ) { \
 	        obj = entry->getProperty( aKey ); \
 	    } \
 	    iter->release(); \
@@ -511,13 +513,13 @@ IORegistryEntry::copyProperty( type *                  aKey, \
 { \
     OSObject * obj = copyProperty( aKey ); \
     \
-    if ( (0 == obj) && plane && (options & kIORegistryIterateRecursively) ) { \
+    if ( (NULL == obj) && plane && (options & kIORegistryIterateRecursively) ) { \
 	IORegistryEntry * entry = (IORegistryEntry *) this; \
 	IORegistryIterator * iter; \
 	iter = IORegistryIterator::iterateOver( entry, plane, options ); \
         \
 	if(iter) { \
-	    while ( (0 == obj) && (entry = iter->getNextObject()) ) { \
+	    while ( (NULL == obj) && (entry = iter->getNextObject()) ) { \
 	        obj = entry->copyProperty( aKey ); \
 	    } \
 	    iter->release(); \
@@ -796,14 +798,14 @@ IORegistryEntry::setIndexedProperty(uint32_t index, OSObject * anObject)
 	OSObject *  prior;
 
 	if (index >= kIORegistryEntryIndexedPropertyCount) {
-		return 0;
+		return NULL;
 	}
 
 	array = atomic_load_explicit(&reserved->fIndexedProperties, memory_order_acquire);
 	if (!array) {
 		array = IONew(OSObject *, kIORegistryEntryIndexedPropertyCount);
 		if (!array) {
-			return 0;
+			return NULL;
 		}
 		bzero(array, kIORegistryEntryIndexedPropertyCount * sizeof(array[0]));
 		if (!OSCompareAndSwapPtr(NULL, array, &reserved->fIndexedProperties)) {
@@ -811,7 +813,7 @@ IORegistryEntry::setIndexedProperty(uint32_t index, OSObject * anObject)
 		}
 	}
 	if (!reserved->fIndexedProperties) {
-		return 0;
+		return NULL;
 	}
 
 	prior = reserved->fIndexedProperties[index];
@@ -827,10 +829,10 @@ OSObject *
 IORegistryEntry::getIndexedProperty(uint32_t index) const
 {
 	if (index >= kIORegistryEntryIndexedPropertyCount) {
-		return 0;
+		return NULL;
 	}
 	if (!reserved->fIndexedProperties) {
-		return 0;
+		return NULL;
 	}
 
 	return reserved->fIndexedProperties[index];
@@ -843,7 +845,7 @@ IORegistryEntry::getIndexedProperty(uint32_t index) const
 const char *
 IORegistryEntry::getName( const IORegistryPlane * plane ) const
 {
-	OSSymbol *          sym = 0;
+	OSSymbol *          sym = NULL;
 
 	RLOCK;
 	if (plane) {
@@ -865,7 +867,7 @@ const OSSymbol *
 IORegistryEntry::copyName(
 	const IORegistryPlane * plane ) const
 {
-	OSSymbol *          sym = 0;
+	OSSymbol *          sym = NULL;
 
 	RLOCK;
 	if (plane) {
@@ -890,7 +892,7 @@ const OSSymbol *
 IORegistryEntry::copyLocation(
 	const IORegistryPlane * plane ) const
 {
-	OSSymbol *          sym = 0;
+	OSSymbol *          sym = NULL;
 
 	RLOCK;
 	if (plane) {
@@ -911,7 +913,7 @@ const char *
 IORegistryEntry::getLocation( const IORegistryPlane * plane ) const
 {
 	const OSSymbol *    sym = copyLocation( plane );
-	const char *        result = 0;
+	const char *        result = NULL;
 
 	if (sym) {
 		result = sym->getCStringNoCopy();
@@ -957,6 +959,17 @@ IORegistryEntry::setName( const char * name,
     const IORegistryPlane * plane )
 {
 	OSSymbol * sym = (OSSymbol *)OSSymbol::withCString( name );
+	if (sym) {
+		setName( sym, plane );
+		sym->release();
+	}
+}
+
+void
+IORegistryEntry::setName( const OSString * name,
+    const IORegistryPlane * plane )
+{
+	const OSSymbol * sym = OSSymbol::withString( name );
 	if (sym) {
 		setName( sym, plane );
 		sym->release();
@@ -1018,12 +1031,12 @@ IORegistryEntry::compareNames( OSObject * names, OSString ** matched ) const
 {
 	OSString *          string;
 	OSCollection *      collection;
-	OSIterator *        iter = 0;
+	OSIterator *        iter = NULL;
 	bool                result = false;
 
 	if ((collection = OSDynamicCast( OSCollection, names))) {
 		iter = OSCollectionIterator::withCollection( collection );
-		string = 0;
+		string = NULL;
 	} else {
 		string = OSDynamicCast( OSString, names);
 	}
@@ -1100,7 +1113,7 @@ IORegistryEntry::getPath(  char * path, int * length,
 		stack->setObject((OSObject *) entry );
 	}
 
-	ok = (0 != parent);
+	ok = (NULL != parent);
 	if (ok) {
 		index = stack->getCount();
 		if (0 == index) {
@@ -1184,7 +1197,7 @@ IORegistryEntry::matchPathLocation( const char * cmp,
     const IORegistryPlane * plane )
 {
 	const char  *       str;
-	const char  *       result = 0;
+	const char  *       result = NULL;
 	u_quad_t            num1, num2;
 	char                lastPathChar, lastLocationChar;
 
@@ -1233,11 +1246,11 @@ IORegistryEntry *
 IORegistryEntry::getChildFromComponent( const char ** opath,
     const IORegistryPlane * plane )
 {
-	IORegistryEntry *   entry = 0;
+	IORegistryEntry *   entry = NULL;
 	OSArray *           set;
 	unsigned int        index;
 	const char *        path;
-	const char *        cmp = 0;
+	const char *        cmp = NULL;
 	char                c;
 	size_t              len;
 	const char *        str;
@@ -1287,7 +1300,7 @@ IORegistryEntry::hasAlias( const IORegistryPlane * plane,
 	IORegistryEntry *   entry;
 	IORegistryEntry *   entry2;
 	const OSSymbol *    key;
-	const OSSymbol *    bestKey = 0;
+	const OSSymbol *    bestKey = NULL;
 	OSIterator *        iter;
 	OSData *            data;
 	const char *        path = "/aliases";
@@ -1328,7 +1341,7 @@ IORegistryEntry::dealiasPath(
 	IORegistryEntry *   entry;
 	OSData *            data;
 	const char *        path = *opath;
-	const char *        rpath = 0;
+	const char *        rpath = NULL;
 	const char *        end;
 	char                c;
 	char                temp[kIOMaxPlaneName + 1];
@@ -1371,8 +1384,8 @@ IORegistryEntry::fromPath(
 	int *                   length,
 	IORegistryEntry *       fromEntry )
 {
-	IORegistryEntry *   where = 0;
-	IORegistryEntry *   aliasEntry = 0;
+	IORegistryEntry *   where = NULL;
+	IORegistryEntry *   aliasEntry = NULL;
 	IORegistryEntry *   next;
 	const char *        alias;
 	const char *        end;
@@ -1381,11 +1394,11 @@ IORegistryEntry::fromPath(
 	char                c;
 	char                temp[kIOMaxPlaneName + 1];
 
-	if (0 == path) {
-		return 0;
+	if (NULL == path) {
+		return NULL;
 	}
 
-	if (0 == plane) {
+	if (NULL == plane) {
 		// get plane name
 		end = strchr( path, ':' );
 		if (end && ((end - path) < kIOMaxPlaneName)) {
@@ -1394,8 +1407,8 @@ IORegistryEntry::fromPath(
 			path = end + 1;
 		}
 	}
-	if (0 == plane) {
-		return 0;
+	if (NULL == plane) {
+		return NULL;
 	}
 
 	// check for alias
@@ -1417,19 +1430,19 @@ IORegistryEntry::fromPath(
 	RLOCK;
 
 	do {
-		if (0 == where) {
-			if ((0 == fromEntry) && (*path++ == '/')) {
+		if (NULL == where) {
+			if ((NULL == fromEntry) && (*path++ == '/')) {
 				fromEntry = gRegistryRoot->getChildEntry( plane );
 			}
 			where = fromEntry;
-			if (0 == where) {
+			if (NULL == where) {
 				break;
 			}
 		} else {
 			c = *path++;
 			if (c != '/') {
 				if (c && (c != ':')) { // check valid terminator
-					where = 0;
+					where = NULL;
 				}
 				break;
 			}
@@ -1455,7 +1468,7 @@ IORegistryEntry::fromPath(
 			*length = (len + len2);
 		} else if (path[0]) {
 			// no residual path => must be no tail for success
-			where = 0;
+			where = NULL;
 		}
 	}
 
@@ -1523,7 +1536,7 @@ IORegistryEntry::makeLink( IORegistryEntry * to,
 		}
 	} else {
 		links = OSArray::withObjects((const OSObject **) &to, 1, 1 );
-		result = (links != 0);
+		result = (links != NULL);
 		if (result) {
 			result = registryTable()->setObject( plane->keys[relation],
 			    links );
@@ -1564,7 +1577,7 @@ IORegistryEntry::getParentSetReference(
 		return (OSArray *) registryTable()->getObject(
 			plane->keys[kParentSetIndex]);
 	} else {
-		return 0;
+		return NULL;
 	}
 }
 
@@ -1576,12 +1589,12 @@ IORegistryEntry::getParentIterator(
 	OSIterator *        iter;
 
 	if (!plane) {
-		return 0;
+		return NULL;
 	}
 
 	RLOCK;
 	links = getParentSetReference( plane );
-	if (0 == links) {
+	if (NULL == links) {
 		links = OSArray::withCapacity( 1 );
 	} else {
 		links = OSArray::withArray( links, links->getCount());
@@ -1600,7 +1613,7 @@ IORegistryEntry::getParentIterator(
 IORegistryEntry *
 IORegistryEntry::copyParentEntry( const IORegistryPlane * plane ) const
 {
-	IORegistryEntry *   entry = 0;
+	IORegistryEntry *   entry = NULL;
 	OSArray *           links;
 
 	RLOCK;
@@ -1635,7 +1648,7 @@ IORegistryEntry::getChildSetReference( const IORegistryPlane * plane ) const
 		return (OSArray *) registryTable()->getObject(
 			plane->keys[kChildSetIndex]);
 	} else {
-		return 0;
+		return NULL;
 	}
 }
 
@@ -1646,12 +1659,12 @@ IORegistryEntry::getChildIterator( const IORegistryPlane * plane ) const
 	OSIterator *        iter;
 
 	if (!plane) {
-		return 0;
+		return NULL;
 	}
 
 	RLOCK;
 	links = getChildSetReference( plane );
-	if (0 == links) {
+	if (NULL == links) {
 		links = OSArray::withCapacity( 1 );
 	} else {
 		links = OSArray::withArray( links, links->getCount());
@@ -1687,7 +1700,7 @@ IORegistryEntry *
 IORegistryEntry::copyChildEntry(
 	const IORegistryPlane * plane ) const
 {
-	IORegistryEntry *   entry = 0;
+	IORegistryEntry *   entry = NULL;
 	OSArray *           links;
 
 	RLOCK;
@@ -1824,7 +1837,7 @@ IORegistryEntry::inPlane( const IORegistryPlane * plane ) const
 	RLOCK;
 
 	if (plane) {
-		ret = (0 != getParentSetReference( plane ));
+		ret = (NULL != getParentSetReference( plane ));
 	} else {
 		// Check to see if this is in any plane.  If it is in a plane
 		// then the registryTable will contain a key with the ParentLinks
@@ -2055,7 +2068,7 @@ IORegistryEntry::detachAll( const IORegistryPlane * plane )
 	IORegistryIterator *        regIter;
 
 	regIter = IORegistryIterator::iterateOver( this, plane, true );
-	if (0 == regIter) {
+	if (NULL == regIter) {
 		return;
 	}
 	all = regIter->iterateAll();
@@ -2134,11 +2147,11 @@ IORegistryIterator::iterateOver( IORegistryEntry * root,
 {
 	IORegistryIterator *        create;
 
-	if (0 == root) {
-		return 0;
+	if (NULL == root) {
+		return NULL;
 	}
-	if (0 == plane) {
-		return 0;
+	if (NULL == plane) {
+		return NULL;
 	}
 
 	create = new IORegistryIterator;
@@ -2152,7 +2165,7 @@ IORegistryIterator::iterateOver( IORegistryEntry * root,
 			create->options = options & ~kIORegistryIteratorInvalidFlag;
 		} else {
 			create->release();
-			create = 0;
+			create = NULL;
 		}
 	}
 	return create;
@@ -2198,7 +2211,7 @@ IORegistryIterator::enterEntry( const IORegistryPlane * enterPlane )
 	assert( where);
 
 	if (where) {
-		where->iter = 0;
+		where->iter = NULL;
 		where->next = prev;
 		where->current = prev->current;
 		plane = enterPlane;
@@ -2218,7 +2231,7 @@ IORegistryIterator::exitEntry( void )
 
 	if (where->iter) {
 		where->iter->release();
-		where->iter = 0;
+		where->iter = NULL;
 		if (where->current) {// && (where != &start))
 			where->current->release();
 		}
@@ -2242,7 +2255,7 @@ IORegistryIterator::reset( void )
 
 	if (done) {
 		done->release();
-		done = 0;
+		done = NULL;
 	}
 
 	where->current = root;
@@ -2265,12 +2278,12 @@ IORegistryIterator::free( void )
 IORegistryEntry *
 IORegistryIterator::getNextObjectFlat( void )
 {
-	IORegistryEntry *   next = 0;
-	OSArray *           links = 0;
+	IORegistryEntry *   next = NULL;
+	OSArray *           links = NULL;
 
 	RLOCK;
 
-	if ((0 == where->iter)) {
+	if ((NULL == where->iter)) {
 		// just entered - create new iter
 		if (isValid()
 		    && where->current
@@ -2309,10 +2322,10 @@ IORegistryIterator::getNextObjectRecursive( void )
 
 	do{
 		next = getNextObjectFlat();
-	} while ((0 == next) && exitEntry());
+	} while ((NULL == next) && exitEntry());
 
 	if (next) {
-		if (0 == done) {
+		if (NULL == done) {
 			done = OSOrderedSet::withCapacity( 10 );
 		}
 		if (done->setObject((OSObject *) next)) {
@@ -2339,7 +2352,7 @@ IORegistryIterator::getCurrentEntry( void )
 	if (isValid()) {
 		return where->current;
 	} else {
-		return 0;
+		return NULL;
 	}
 }
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -40,6 +40,12 @@
 #include <i386/proc_reg.h>
 #include <os/log_private.h>
 #include <libkern/section_keywords.h>
+#include <kern/processor.h>
+#include <kern/clock.h>
+#include <mach/clock_types.h>
+
+extern uint64_t LockTimeOut;
+extern processor_t      current_processor(void);
 
 /* Globals */
 void (*PE_kputc)(char c);
@@ -53,7 +59,7 @@ SECURITY_READ_ONLY_LATE(unsigned int) disable_serial_output = FALSE;
 SECURITY_READ_ONLY_LATE(unsigned int) disable_serial_output = TRUE;
 #endif
 
-decl_simple_lock_data(static, kprintf_lock)
+decl_simple_lock_data(static, kprintf_lock);
 
 void
 PE_init_kprintf(boolean_t vm_initialized)
@@ -110,6 +116,9 @@ _kprintf(const char *format, ...)
 
 static int cpu_last_locked = 0;
 
+#define KPRINTF_LOCKWAIT_PATIENT (LockTimeOut)
+#define KPRINTF_LOCKWAIT_IMPATIENT (LockTimeOut >> 4)
+
 __attribute__((noinline, not_tail_called))
 void
 kprintf(const char *fmt, ...)
@@ -117,6 +126,8 @@ kprintf(const char *fmt, ...)
 	va_list    listp;
 	va_list    listp2;
 	boolean_t  state;
+	boolean_t  in_panic_context = FALSE;
+	unsigned int kprintf_lock_grabbed;
 	void      *caller = __builtin_return_address(0);
 
 	if (!disable_serial_output) {
@@ -142,17 +153,16 @@ kprintf(const char *fmt, ...)
 			return;
 		}
 
-		/*
-		 * Spin to get kprintf lock but poll for incoming signals
-		 * while interrupts are masked.
-		 */
 		state = ml_set_interrupts_enabled(FALSE);
 
 		pal_preemption_assert();
 
-		while (!simple_lock_try(&kprintf_lock, LCK_GRP_NULL)) {
-			(void) cpu_signal_handler(NULL);
-		}
+		in_panic_context = processor_in_panic_context(current_processor());
+
+		// If current CPU is in panic context, be a little more impatient.
+		kprintf_lock_grabbed = simple_lock_try_lock_mp_signal_safe_loop_duration(&kprintf_lock,
+		    in_panic_context ? KPRINTF_LOCKWAIT_IMPATIENT : KPRINTF_LOCKWAIT_PATIENT,
+		    LCK_GRP_NULL);
 
 		if (cpu_number() != cpu_last_locked) {
 			MP_DEBUG_KPRINTF("[cpu%d...]\n", cpu_number());
@@ -164,7 +174,10 @@ kprintf(const char *fmt, ...)
 		_doprnt(fmt, &listp, PE_kputc, 16);
 		va_end(listp);
 
-		simple_unlock(&kprintf_lock);
+		if (kprintf_lock_grabbed) {
+			simple_unlock(&kprintf_lock);
+		}
+
 		ml_set_interrupts_enabled(state);
 
 		// If interrupts are enabled

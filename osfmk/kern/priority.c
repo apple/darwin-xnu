@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -76,6 +76,8 @@
 #include <kern/ledger.h>
 #include <machine/machparam.h>
 #include <kern/machine.h>
+#include <kern/policy_internal.h>
+#include <kern/sched_clutch.h>
 
 #ifdef CONFIG_MACH_APPROXIMATE_TIME
 #include <machine/commpage.h>  /* for commpage_update_mach_approximate_time */
@@ -84,8 +86,6 @@
 #if MONOTONIC
 #include <kern/monotonic.h>
 #endif /* MONOTONIC */
-
-static void sched_update_thread_bucket(thread_t thread);
 
 /*
  *	thread_quantum_expire:
@@ -156,6 +156,7 @@ thread_quantum_expire(
 	 */
 	if ((thread->sched_mode == TH_MODE_REALTIME || thread->sched_mode == TH_MODE_FIXED) &&
 	    !(thread->sched_flags & TH_SFLAG_PROMOTED) &&
+	    !(thread->kern_promotion_schedpri != 0) &&
 	    !(thread->sched_flags & TH_SFLAG_PROMOTE_REASON_MASK) &&
 	    !(thread->options & TH_OPT_SYSTEM_CRITICAL)) {
 		uint64_t new_computation;
@@ -278,6 +279,10 @@ sched_set_thread_base_priority(thread_t thread, int priority)
 	}
 
 	int old_base_pri = thread->base_pri;
+	thread->req_base_pri = priority;
+	if (thread->sched_flags & TH_SFLAG_BASE_PRI_FROZEN) {
+		priority = MAX(priority, old_base_pri);
+	}
 	thread->base_pri = priority;
 
 	if ((thread->state & TH_RUN) == TH_RUN) {
@@ -301,9 +306,47 @@ sched_set_thread_base_priority(thread_t thread, int priority)
 		machine_switch_perfcontrol_state_update(PERFCONTROL_ATTR_UPDATE,
 		    ctime, PERFCONTROL_CALLOUT_WAKE_UNSAFE, thread);
 	}
-	sched_update_thread_bucket(thread);
+#if !CONFIG_SCHED_CLUTCH
+	/* For the clutch scheduler, this operation is done in set_sched_pri() */
+	SCHED(update_thread_bucket)(thread);
+#endif /* !CONFIG_SCHED_CLUTCH */
 
 	thread_recompute_sched_pri(thread, SETPRI_DEFAULT);
+}
+
+/*
+ *	sched_set_kernel_thread_priority:
+ *
+ *	Set the absolute base priority of the thread
+ *	and reset its scheduled priority.
+ *
+ *	Called with the thread unlocked.
+ */
+void
+sched_set_kernel_thread_priority(thread_t thread, int new_priority)
+{
+	spl_t s = splsched();
+
+	thread_lock(thread);
+
+	assert(thread->sched_mode != TH_MODE_REALTIME);
+	assert(thread->effective_policy.thep_qos == THREAD_QOS_UNSPECIFIED);
+
+	if (new_priority > thread->max_priority) {
+		new_priority = thread->max_priority;
+	}
+#if CONFIG_EMBEDDED
+	if (new_priority < MAXPRI_THROTTLE) {
+		new_priority = MAXPRI_THROTTLE;
+	}
+#endif /* CONFIG_EMBEDDED */
+
+	thread->importance = new_priority - thread->task_priority;
+
+	sched_set_thread_base_priority(thread, new_priority);
+
+	thread_unlock(thread);
+	splx(s);
 }
 
 /*
@@ -340,6 +383,14 @@ thread_recompute_sched_pri(thread_t thread, set_sched_pri_options_t options)
 		/* poll-depress is overridden by mutex promotion and promote-reasons */
 		if ((sched_flags & TH_SFLAG_POLLDEPRESS)) {
 			priority = DEPRESSPRI;
+		}
+
+		if (thread->kern_promotion_schedpri > 0) {
+			priority = MAX(priority, thread->kern_promotion_schedpri);
+
+			if (sched_mode != TH_MODE_REALTIME) {
+				priority = MIN(priority, MAXPRI_PROMOTE);
+			}
 		}
 
 		if (sched_flags & TH_SFLAG_PROMOTED) {
@@ -412,6 +463,15 @@ lightweight_update_priority(thread_t thread)
 
 		thread->cpu_delta += delta;
 
+#if CONFIG_SCHED_CLUTCH
+		/*
+		 * Update the CPU usage for the thread group to which the thread belongs.
+		 * The implementation assumes that the thread ran for the entire delta
+		 * as part of the same thread group.
+		 */
+		sched_clutch_cpu_usage_update(thread, delta);
+#endif /* CONFIG_SCHED_CLUTCH */
+
 		priority = sched_compute_timeshare_priority(thread);
 
 		if (priority != thread->sched_pri) {
@@ -427,17 +487,40 @@ lightweight_update_priority(thread_t thread)
  *	is  usage = (usage >> shift1) +/- (usage >> abs(shift2))  where the
  *	+/- is determined by the sign of shift 2.
  */
-struct shift_data {
-	int     shift1;
-	int     shift2;
-};
 
-#define SCHED_DECAY_TICKS       32
-static struct shift_data        sched_decay_shifts[SCHED_DECAY_TICKS] = {
-	{1, 1}, {1, 3}, {1, -3}, {2, -7}, {3, 5}, {3, -5}, {4, -8}, {5, 7},
-	{5, -7}, {6, -10}, {7, 10}, {7, -9}, {8, -11}, {9, 12}, {9, -11}, {10, -13},
-	{11, 14}, {11, -13}, {12, -15}, {13, 17}, {13, -15}, {14, -17}, {15, 19}, {16, 18},
-	{16, -19}, {17, 22}, {18, 20}, {18, -20}, {19, 26}, {20, 22}, {20, -22}, {21, -27}
+const struct shift_data        sched_decay_shifts[SCHED_DECAY_TICKS] = {
+	{ .shift1 = 1, .shift2 = 1 },
+	{ .shift1 = 1, .shift2 = 3 },
+	{ .shift1 = 1, .shift2 = -3 },
+	{ .shift1 = 2, .shift2 = -7 },
+	{ .shift1 = 3, .shift2 = 5 },
+	{ .shift1 = 3, .shift2 = -5 },
+	{ .shift1 = 4, .shift2 = -8 },
+	{ .shift1 = 5, .shift2 = 7 },
+	{ .shift1 = 5, .shift2 = -7 },
+	{ .shift1 = 6, .shift2 = -10 },
+	{ .shift1 = 7, .shift2 = 10 },
+	{ .shift1 = 7, .shift2 = -9 },
+	{ .shift1 = 8, .shift2 = -11 },
+	{ .shift1 = 9, .shift2 = 12 },
+	{ .shift1 = 9, .shift2 = -11 },
+	{ .shift1 = 10, .shift2 = -13 },
+	{ .shift1 = 11, .shift2 = 14 },
+	{ .shift1 = 11, .shift2 = -13 },
+	{ .shift1 = 12, .shift2 = -15 },
+	{ .shift1 = 13, .shift2 = 17 },
+	{ .shift1 = 13, .shift2 = -15 },
+	{ .shift1 = 14, .shift2 = -17 },
+	{ .shift1 = 15, .shift2 = 19 },
+	{ .shift1 = 16, .shift2 = 18 },
+	{ .shift1 = 16, .shift2 = -19 },
+	{ .shift1 = 17, .shift2 = 22 },
+	{ .shift1 = 18, .shift2 = 20 },
+	{ .shift1 = 18, .shift2 = -20 },
+	{ .shift1 = 19, .shift2 = 26 },
+	{ .shift1 = 20, .shift2 = 22 },
+	{ .shift1 = 20, .shift2 = -22 },
+	{ .shift1 = 21, .shift2 = -27 }
 };
 
 /*
@@ -447,7 +530,9 @@ static struct shift_data        sched_decay_shifts[SCHED_DECAY_TICKS] = {
  */
 extern int sched_pri_decay_band_limit;
 
-#ifdef CONFIG_EMBEDDED
+
+/* Only use the decay floor logic on embedded non-clutch schedulers */
+#if CONFIG_EMBEDDED && !CONFIG_SCHED_CLUTCH
 
 int
 sched_compute_timeshare_priority(thread_t thread)
@@ -479,7 +564,7 @@ sched_compute_timeshare_priority(thread_t thread)
 	return priority;
 }
 
-#else /* CONFIG_EMBEDDED */
+#else /* CONFIG_EMBEDDED && !CONFIG_SCHED_CLUTCH */
 
 int
 sched_compute_timeshare_priority(thread_t thread)
@@ -496,7 +581,7 @@ sched_compute_timeshare_priority(thread_t thread)
 	return priority;
 }
 
-#endif /* CONFIG_EMBEDDED */
+#endif /* CONFIG_EMBEDDED && !CONFIG_SCHED_CLUTCH */
 
 /*
  *	can_update_priority
@@ -556,7 +641,16 @@ update_priority(
 		thread->cpu_usage += delta + thread->cpu_delta;
 		thread->cpu_delta = 0;
 
-		struct shift_data *shiftp = &sched_decay_shifts[ticks];
+#if CONFIG_SCHED_CLUTCH
+		/*
+		 * Update the CPU usage for the thread group to which the thread belongs.
+		 * The implementation assumes that the thread ran for the entire delta
+		 * as part of the same thread group.
+		 */
+		sched_clutch_cpu_usage_update(thread, delta);
+#endif /* CONFIG_SCHED_CLUTCH */
+
+		const struct shift_data *shiftp = &sched_decay_shifts[ticks];
 
 		if (shiftp->shift2 > 0) {
 			thread->cpu_usage =   (thread->cpu_usage >> shiftp->shift1) +
@@ -589,7 +683,11 @@ update_priority(
 	 * values. The updated pri_shift would be used to calculate the
 	 * new priority of the thread.
 	 */
+#if CONFIG_SCHED_CLUTCH
+	thread->pri_shift = sched_clutch_thread_pri_shift(thread, thread->th_sched_bucket);
+#else /* CONFIG_SCHED_CLUTCH */
 	thread->pri_shift = sched_pri_shifts[thread->th_sched_bucket];
+#endif /* CONFIG_SCHED_CLUTCH */
 
 	/* Recompute scheduled priority if appropriate. */
 	if (thread->sched_mode == TH_MODE_TIMESHARE) {
@@ -603,9 +701,13 @@ update_priority(
 /*
  * TH_BUCKET_RUN is a count of *all* runnable non-idle threads.
  * Each other bucket is a count of the runnable non-idle threads
- * with that property.
+ * with that property. All updates to these counts should be
+ * performed with os_atomic_* operations.
+ *
+ * For the clutch scheduler, this global bucket is used only for
+ * keeping the total global run count.
  */
-volatile uint32_t       sched_run_buckets[TH_BUCKET_MAX];
+uint32_t       sched_run_buckets[TH_BUCKET_MAX];
 
 static void
 sched_incr_bucket(sched_bucket_t bucket)
@@ -613,7 +715,7 @@ sched_incr_bucket(sched_bucket_t bucket)
 	assert(bucket >= TH_BUCKET_FIXPRI &&
 	    bucket <= TH_BUCKET_SHARE_BG);
 
-	hw_atomic_add(&sched_run_buckets[bucket], 1);
+	os_atomic_inc(&sched_run_buckets[bucket], relaxed);
 }
 
 static void
@@ -622,19 +724,17 @@ sched_decr_bucket(sched_bucket_t bucket)
 	assert(bucket >= TH_BUCKET_FIXPRI &&
 	    bucket <= TH_BUCKET_SHARE_BG);
 
-	assert(sched_run_buckets[bucket] > 0);
+	assert(os_atomic_load(&sched_run_buckets[bucket], relaxed) > 0);
 
-	hw_atomic_sub(&sched_run_buckets[bucket], 1);
+	os_atomic_dec(&sched_run_buckets[bucket], relaxed);
 }
-
-/* TH_RUN & !TH_IDLE controls whether a thread has a run count */
 
 uint32_t
 sched_run_incr(thread_t thread)
 {
 	assert((thread->state & (TH_RUN | TH_IDLE)) == TH_RUN);
 
-	uint32_t new_count = hw_atomic_add(&sched_run_buckets[TH_BUCKET_RUN], 1);
+	uint32_t new_count = os_atomic_inc(&sched_run_buckets[TH_BUCKET_RUN], relaxed);
 
 	sched_incr_bucket(thread->th_sched_bucket);
 
@@ -648,12 +748,12 @@ sched_run_decr(thread_t thread)
 
 	sched_decr_bucket(thread->th_sched_bucket);
 
-	uint32_t new_count = hw_atomic_sub(&sched_run_buckets[TH_BUCKET_RUN], 1);
+	uint32_t new_count = os_atomic_dec(&sched_run_buckets[TH_BUCKET_RUN], relaxed);
 
 	return new_count;
 }
 
-static void
+void
 sched_update_thread_bucket(thread_t thread)
 {
 	sched_bucket_t old_bucket = thread->th_sched_bucket;
@@ -718,7 +818,7 @@ sched_set_thread_mode(thread_t thread, sched_mode_t new_mode)
 
 	thread->sched_mode = new_mode;
 
-	sched_update_thread_bucket(thread);
+	SCHED(update_thread_bucket)(thread);
 }
 
 /*
@@ -786,95 +886,6 @@ sched_thread_mode_undemote(thread_t thread, uint32_t reason)
 
 	if (removed) {
 		thread_run_queue_reinsert(thread, SCHED_TAILQ);
-	}
-}
-
-/*
- * Promote thread to a specific priority
- *
- * Promotion must not last past syscall boundary
- * Clients must always pair promote and unpromote 1:1
- *
- * Called at splsched with thread locked
- */
-void
-sched_thread_promote_to_pri(thread_t    thread,
-    int         priority,
-    __kdebug_only uintptr_t   trace_obj /* already unslid */)
-{
-	assert((thread->sched_flags & TH_SFLAG_PROMOTED) != TH_SFLAG_PROMOTED);
-	assert(thread->promotion_priority == 0);
-	assert(priority <= MAXPRI_PROMOTE);
-	assert(priority > 0);
-
-	KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_PROMOTED),
-	    thread_tid(thread), trace_obj, priority);
-
-	thread->sched_flags |= TH_SFLAG_PROMOTED;
-	thread->promotion_priority = priority;
-
-	thread_recompute_sched_pri(thread, SETPRI_DEFAULT);
-}
-
-
-/*
- * Update a pre-existing priority promotion to have a higher priority floor
- * Priority can only go up from the previous value
- * Update must occur while a promotion is active
- *
- * Called at splsched with thread locked
- */
-void
-sched_thread_update_promotion_to_pri(thread_t   thread,
-    int        priority,
-    __kdebug_only uintptr_t  trace_obj /* already unslid */)
-{
-	assert(thread->promotions > 0);
-	assert((thread->sched_flags & TH_SFLAG_PROMOTED) == TH_SFLAG_PROMOTED);
-	assert(thread->promotion_priority > 0);
-	assert(priority <= MAXPRI_PROMOTE);
-
-	if (thread->promotion_priority < priority) {
-		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_PROMOTED_UPDATE),
-		    thread_tid(thread), trace_obj, priority);
-
-		thread->promotion_priority = priority;
-		thread_recompute_sched_pri(thread, SETPRI_DEFAULT);
-	}
-}
-
-/*
- * End a priority promotion
- * Demotes a thread back to its expected priority without the promotion in place
- *
- * Called at splsched with thread locked
- */
-void
-sched_thread_unpromote(thread_t     thread,
-    __kdebug_only uintptr_t    trace_obj /* already unslid */)
-{
-	assert((thread->sched_flags & TH_SFLAG_PROMOTED) == TH_SFLAG_PROMOTED);
-	assert(thread->promotion_priority > 0);
-
-	KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_UNPROMOTED),
-	    thread_tid(thread), trace_obj, 0);
-
-	thread->sched_flags &= ~TH_SFLAG_PROMOTED;
-	thread->promotion_priority = 0;
-
-	thread_recompute_sched_pri(thread, SETPRI_DEFAULT);
-}
-
-/* called with thread locked */
-void
-assert_promotions_invariant(thread_t thread)
-{
-	if (thread->promotions > 0) {
-		assert((thread->sched_flags & TH_SFLAG_PROMOTED) == TH_SFLAG_PROMOTED);
-	}
-
-	if (thread->promotions == 0) {
-		assert((thread->sched_flags & TH_SFLAG_PROMOTED) != TH_SFLAG_PROMOTED);
 	}
 }
 

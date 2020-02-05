@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -97,19 +97,19 @@ mach_get_vm_end(vm_map_t map)
  */
 
 const struct memory_object_pager_ops vnode_pager_ops = {
-	vnode_pager_reference,
-	vnode_pager_deallocate,
-	vnode_pager_init,
-	vnode_pager_terminate,
-	vnode_pager_data_request,
-	vnode_pager_data_return,
-	vnode_pager_data_initialize,
-	vnode_pager_data_unlock,
-	vnode_pager_synchronize,
-	vnode_pager_map,
-	vnode_pager_last_unmap,
-	NULL, /* data_reclaim */
-	"vnode pager"
+	.memory_object_reference = vnode_pager_reference,
+	.memory_object_deallocate = vnode_pager_deallocate,
+	.memory_object_init = vnode_pager_init,
+	.memory_object_terminate = vnode_pager_terminate,
+	.memory_object_data_request = vnode_pager_data_request,
+	.memory_object_data_return = vnode_pager_data_return,
+	.memory_object_data_initialize = vnode_pager_data_initialize,
+	.memory_object_data_unlock = vnode_pager_data_unlock,
+	.memory_object_synchronize = vnode_pager_synchronize,
+	.memory_object_map = vnode_pager_map,
+	.memory_object_last_unmap = vnode_pager_last_unmap,
+	.memory_object_data_reclaim = NULL,
+	.memory_object_pager_name = "vnode pager"
 };
 
 typedef struct vnode_pager {
@@ -985,7 +985,6 @@ vnode_pager_lookup_vnode(
 
 static int fill_vnodeinfoforaddr( vm_map_entry_t entry, uintptr_t * vnodeaddr, uint32_t * vid);
 
-
 int
 fill_procregioninfo(task_t task, uint64_t arg, struct proc_regioninfo_internal *pinfo, uintptr_t *vnodeaddr, uint32_t  *vid)
 {
@@ -1017,30 +1016,27 @@ fill_procregioninfo(task_t task, uint64_t arg, struct proc_regioninfo_internal *
 		if ((entry = tmp_entry->vme_next) == vm_map_to_entry(map)) {
 			if (do_region_footprint &&
 			    address == tmp_entry->vme_end) {
-				ledger_amount_t nonvol, nonvol_compressed;
+				ledger_amount_t ledger_resident;
+				ledger_amount_t ledger_compressed;
 
 				/*
 				 * This request is right after the last valid
 				 * memory region;  instead of reporting the
 				 * end of the address space, report a fake
 				 * memory region to account for non-volatile
-				 * purgeable memory owned by this task.
+				 * purgeable and/or ledger-tagged memory
+				 * owned by this task.
 				 */
-
-				ledger_get_balance(
-					task->ledger,
-					task_ledgers.purgeable_nonvolatile,
-					&nonvol);
-				ledger_get_balance(
-					task->ledger,
-					task_ledgers.purgeable_nonvolatile_compressed,
-					&nonvol_compressed);
-				if (nonvol + nonvol_compressed == 0) {
+				task_ledgers_footprint(task->ledger,
+				    &ledger_resident,
+				    &ledger_compressed);
+				if (ledger_resident + ledger_compressed == 0) {
 					/* nothing to report */
 					vm_map_unlock_read(map);
 					vm_map_deallocate(map);
 					return 0;
 				}
+
 				/* provide fake region for purgeable */
 				pinfo->pri_offset = address;
 				pinfo->pri_protection = VM_PROT_DEFAULT;
@@ -1050,22 +1046,22 @@ fill_procregioninfo(task_t task, uint64_t arg, struct proc_regioninfo_internal *
 				pinfo->pri_user_wired_count = 0;
 				pinfo->pri_user_tag = -1;
 				pinfo->pri_pages_resident =
-				    (uint32_t) (nonvol / PAGE_SIZE);
+				    (uint32_t) (ledger_resident / PAGE_SIZE);
 				pinfo->pri_pages_shared_now_private = 0;
 				pinfo->pri_pages_swapped_out =
-				    (uint32_t) (nonvol_compressed / PAGE_SIZE);
+				    (uint32_t) (ledger_compressed / PAGE_SIZE);
 				pinfo->pri_pages_dirtied =
-				    (uint32_t) (nonvol / PAGE_SIZE);
+				    (uint32_t) (ledger_resident / PAGE_SIZE);
 				pinfo->pri_ref_count = 1;
 				pinfo->pri_shadow_depth = 0;
 				pinfo->pri_share_mode = SM_PRIVATE;
 				pinfo->pri_private_pages_resident =
-				    (uint32_t) (nonvol / PAGE_SIZE);
+				    (uint32_t) (ledger_resident / PAGE_SIZE);
 				pinfo->pri_shared_pages_resident = 0;
 				pinfo->pri_obj_id = INFO_MAKE_FAKE_OBJECT_ID(map, task_ledgers.purgeable_nonvolatile);
 				pinfo->pri_address = address;
 				pinfo->pri_size =
-				    (uint64_t) (nonvol + nonvol_compressed);
+				    (uint64_t) (ledger_resident + ledger_compressed);
 				pinfo->pri_depth = 0;
 
 				vm_map_unlock_read(map);
@@ -1226,6 +1222,58 @@ fill_procregioninfo_onlymappedvnodes(task_t task, uint64_t arg, struct proc_regi
 	vm_map_unlock_read(map);
 	vm_map_deallocate(map);
 	return 0;
+}
+
+int
+find_region_details(task_t task, vm_map_offset_t offset,
+    uintptr_t *vnodeaddr, uint32_t *vid,
+    uint64_t *start, uint64_t *len)
+{
+	vm_map_t        map;
+	vm_map_entry_t  tmp_entry, entry;
+	int             rc = 0;
+
+	task_lock(task);
+	map = task->map;
+	if (map == VM_MAP_NULL) {
+		task_unlock(task);
+		return 0;
+	}
+	vm_map_reference(map);
+	task_unlock(task);
+
+	vm_map_lock_read(map);
+	if (!vm_map_lookup_entry(map, offset, &tmp_entry)) {
+		if ((entry = tmp_entry->vme_next) == vm_map_to_entry(map)) {
+			rc = 0;
+			goto ret;
+		}
+	} else {
+		entry = tmp_entry;
+	}
+
+	while (entry != vm_map_to_entry(map)) {
+		*vnodeaddr = 0;
+		*vid = 0;
+		*start = 0;
+		*len = 0;
+
+		if (entry->is_sub_map == 0) {
+			if (fill_vnodeinfoforaddr(entry, vnodeaddr, vid)) {
+				*start = entry->vme_start;
+				*len = entry->vme_end - entry->vme_start;
+				rc = 1;
+				goto ret;
+			}
+		}
+
+		entry = entry->vme_next;
+	}
+
+ret:
+	vm_map_unlock_read(map);
+	vm_map_deallocate(map);
+	return rc;
 }
 
 static int

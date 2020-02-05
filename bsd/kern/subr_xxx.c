@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2018 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -72,10 +72,6 @@
 
 #include <sys/signalvar.h>              /* for psignal() */
 #include <kern/debug.h>
-
-#ifdef GPROF
-#include <sys/gmon.h>
-#endif
 
 #if DEVELOPMENT || DEBUG
 bool send_sigsys = true;
@@ -191,17 +187,6 @@ nosys(__unused struct proc *p, __unused struct nosys_args *args, __unused int32_
 	}
 	return ENOSYS;
 }
-
-#ifdef  GPROF
-/*
- * Stub routine in case it is ever possible to free space.
- */
-void
-cfreemem(caddr_t cp, int size)
-{
-	printf("freeing %p, size %d\n", cp, size);
-}
-#endif
 
 #if !CRYPTO
 #include <crypto/rc4/rc4.h>

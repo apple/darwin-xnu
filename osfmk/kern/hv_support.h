@@ -80,6 +80,7 @@ extern void hv_release_callbacks(void);
 extern void hv_suspend(void);
 extern kern_return_t hv_task_trap(uint64_t index, uint64_t arg);
 extern kern_return_t hv_thread_trap(uint64_t index, uint64_t arg);
+extern boolean_t hv_ast_pending(void);
 
 #if defined(__cplusplus)
 }

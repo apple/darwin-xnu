@@ -33,6 +33,7 @@
 extern unsigned long __stack_chk_guard;
 
 /* Called as a consequence on stack corruption */
+__attribute__((noreturn))
 extern void __stack_chk_fail(void);
 
 #endif // _STACK_PROTECTOR_H_

@@ -168,8 +168,7 @@ ull_unlock(lock_t *lock, int id, uint opcode, uint flags)
 
 	if (prev == (ULL_WAITERS | ull_locked)) {
 		/* locked with waiters */
-		*lock = 0;
-		__c11_atomic_thread_fence(__ATOMIC_ACQ_REL);
+		__c11_atomic_store(lock, 0, __ATOMIC_SEQ_CST);
 
 		if ((flags & ULF_WAKE_THREAD) && (_os_get_self() == main_thread_name)) {
 			flags &= ~(uint)ULF_WAKE_THREAD;

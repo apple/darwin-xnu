@@ -42,8 +42,8 @@ runtime.cpo_CXXWARNFLAGS_ADD = -Wno-cast-qual
 
 
 # warnings in bison-generated code
-OSUnserializeXML.cpo_CXXWARNFLAGS_ADD += -Wno-uninitialized -Wno-unreachable-code -Wno-unreachable-code-break
-OSUnserialize.cpo_CXXWARNFLAGS_ADD += -Wno-unreachable-code
+OSUnserializeXML.cpo_CXXWARNFLAGS_ADD += -Wno-uninitialized -Wno-unreachable-code -Wno-unreachable-code-break -Wno-zero-as-null-pointer-constant
+OSUnserialize.cpo_CXXWARNFLAGS_ADD += -Wno-unreachable-code -Wno-zero-as-null-pointer-constant
 
 # Runtime support functions don't interact well with LTO (9294679)
 stack_protector.o_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG)
@@ -97,9 +97,9 @@ $(COMPONENT).filelist: $(OBJS)
 		$(SEG_HACK) -n __HIB -o $${hib_file}__ $${hib_file} || exit 1; \
 		mv $${hib_file}__ $${hib_file} || exit 1; \
 	done
-	@echo "$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0)"
+	$(call makelog,$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0))
 	$(_v)for obj in ${OBJS}; do	\
-		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
+		 $(ECHO) $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist
 
 do_all: $(COMPONENT).filelist

@@ -115,7 +115,7 @@ ml_dbgwrap_halt_cpu(int cpu_index, uint64_t timeout_ns)
 		return DBGWRAP_ERR_SELF_HALT;
 	}
 
-	if (!hw_compare_and_store((uint32_t)-1, (unsigned int)curcpu, &halt_from_cpu) &&
+	if (!os_atomic_cmpxchg(&halt_from_cpu, (uint32_t)-1, (unsigned int)curcpu, acq_rel) &&
 	    (halt_from_cpu != (uint32_t)curcpu)) {
 		return DBGWRAP_ERR_INPROGRESS;
 	}
@@ -155,7 +155,7 @@ ml_dbgwrap_stuff_instr(cpu_data_t *cdp, uint32_t instr, uint64_t timeout_ns, dbg
 	uint64_t deadline = mach_absolute_time() + interval;
 
 #if DEVELOPMENT || DEBUG
-	uint32_t stuffed_instr_index = hw_atomic_add(&stuffed_instr_count, 1);
+	uint32_t stuffed_instr_index = os_atomic_inc(&stuffed_instr_count, relaxed);
 	stuffed_instrs[(stuffed_instr_index - 1) % MAX_STUFFED_INSTRS] = instr;
 #endif
 

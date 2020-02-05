@@ -81,7 +81,7 @@ typedef int wait_result_t;
 #define THREAD_NOT_WAITING      10              /* thread didn't need to wait */
 
 typedef void (*thread_continue_t)(void *, wait_result_t);
-#define THREAD_CONTINUE_NULL    ((thread_continue_t) 0)
+#define THREAD_CONTINUE_NULL    ((thread_continue_t) NULL)
 
 /*
  * Interruptible flag for waits.

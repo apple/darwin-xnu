@@ -107,6 +107,7 @@ decl_lck_mtx_data(static, domain_proto_mtx);
 decl_lck_mtx_data(static, domain_timeout_mtx);
 
 u_int64_t _net_uptime;
+u_int64_t _net_uptime_ms;
 
 #if (DEVELOPMENT || DEBUG)
 
@@ -1003,6 +1004,10 @@ net_update_uptime_with_time(const struct timeval *tvp)
 	if (tvp->tv_usec > 500000) {
 		_net_uptime++;
 	}
+
+	/* update milliseconds variant */
+	_net_uptime_ms = (((u_int64_t)tvp->tv_sec * 1000) +
+	    ((u_int64_t)tvp->tv_usec / 1000));
 }
 
 void
@@ -1042,6 +1047,16 @@ net_uptime(void)
 	}
 
 	return _net_uptime;
+}
+
+u_int64_t
+net_uptime_ms(void)
+{
+	if (_net_uptime_ms == 0) {
+		net_update_uptime();
+	}
+
+	return _net_uptime_ms;
 }
 
 void

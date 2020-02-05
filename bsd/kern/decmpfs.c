@@ -38,6 +38,8 @@ UNUSED_SYMBOL(decmpfs_read_compressed)
 UNUSED_SYMBOL(decmpfs_cnode_cmp_type)
 UNUSED_SYMBOL(decmpfs_cnode_get_vnode_state)
 UNUSED_SYMBOL(decmpfs_cnode_get_vnode_cached_size)
+UNUSED_SYMBOL(decmpfs_cnode_get_vnode_cached_nchildren)
+UNUSED_SYMBOL(decmpfs_cnode_get_vnode_cached_total_size)
 UNUSED_SYMBOL(decmpfs_lock_compressed_data)
 UNUSED_SYMBOL(decmpfs_cnode_free)
 UNUSED_SYMBOL(decmpfs_cnode_alloc)
@@ -457,12 +459,50 @@ decmpfs_cnode_get_vnode_cached_size(decmpfs_cnode *cp)
 	return cp->uncompressed_size;
 }
 
-static void
+uint64_t
+decmpfs_cnode_get_vnode_cached_nchildren(decmpfs_cnode *cp)
+{
+	return cp->nchildren;
+}
+
+uint64_t
+decmpfs_cnode_get_vnode_cached_total_size(decmpfs_cnode *cp)
+{
+	return cp->total_size;
+}
+
+void
 decmpfs_cnode_set_vnode_cached_size(decmpfs_cnode *cp, uint64_t size)
 {
 	while (1) {
 		uint64_t old = cp->uncompressed_size;
 		if (OSCompareAndSwap64(old, size, (UInt64*)&cp->uncompressed_size)) {
+			return;
+		} else {
+			/* failed to write our value, so loop */
+		}
+	}
+}
+
+void
+decmpfs_cnode_set_vnode_cached_nchildren(decmpfs_cnode *cp, uint64_t nchildren)
+{
+	while (1) {
+		uint64_t old = cp->nchildren;
+		if (OSCompareAndSwap64(old, nchildren, (UInt64*)&cp->nchildren)) {
+			return;
+		} else {
+			/* failed to write our value, so loop */
+		}
+	}
+}
+
+void
+decmpfs_cnode_set_vnode_cached_total_size(decmpfs_cnode *cp, uint64_t total_sz)
+{
+	while (1) {
+		uint64_t old = cp->total_size;
+		if (OSCompareAndSwap64(old, total_sz, (UInt64*)&cp->total_size)) {
 			return;
 		} else {
 			/* failed to write our value, so loop */
@@ -539,7 +579,19 @@ decmpfs_fetch_compressed_header(vnode_t vp, decmpfs_cnode *cp, decmpfs_header **
 		hdr->attr_size = sizeof(decmpfs_disk_header);
 		hdr->compression_magic = DECMPFS_MAGIC;
 		hdr->compression_type  = cp->cmp_type;
-		hdr->uncompressed_size = decmpfs_cnode_get_vnode_cached_size(cp);
+		if (hdr->compression_type == DATALESS_PKG_CMPFS_TYPE) {
+			if (!vnode_isdir(vp)) {
+				err = EINVAL;
+				goto out;
+			}
+			hdr->_size.value = DECMPFS_PKG_VALUE_FROM_SIZE_COUNT(
+				decmpfs_cnode_get_vnode_cached_size(cp),
+				decmpfs_cnode_get_vnode_cached_nchildren(cp));
+		} else if (vnode_isdir(vp)) {
+			hdr->_size.value = decmpfs_cnode_get_vnode_cached_nchildren(cp);
+		} else {
+			hdr->_size.value = decmpfs_cnode_get_vnode_cached_size(cp);
+		}
 	} else {
 		/* figure out how big the xattr is on disk */
 		err = vn_getxattr(vp, DECMPFS_XATTR_NAME, NULL, &attr_size, XATTR_NOSECURITY, decmpfs_ctx);
@@ -585,7 +637,14 @@ decmpfs_fetch_compressed_header(vnode_t vp, decmpfs_cnode *cp, decmpfs_header **
 		goto out;
 	}
 
-	if (hdr->compression_type >= CMP_MAX) {
+	/*
+	 * Special-case the DATALESS compressor here; that is a valid type,
+	 * even through there will never be an entry in the decompressor
+	 * handler table for it.  If we don't do this, then the cmp_state
+	 * for this cnode will end up being marked NOT_COMPRESSED, and
+	 * we'll be stuck in limbo.
+	 */
+	if (hdr->compression_type >= CMP_MAX && !decmpfs_type_is_dataless(hdr->compression_type)) {
 		if (returnInvalid) {
 			/* return the header even though the type is out of range */
 			err = ERANGE;
@@ -686,19 +745,21 @@ decmpfs_validate_compressed_file(vnode_t vp, decmpfs_cnode *cp)
 		goto out;
 	}
 
-	lck_rw_lock_shared(decompressorsLock);
-	decmpfs_validate_compressed_file_func validate = decmp_get_func(vp, hdr->compression_type, validate);
-	if (validate) { /* make sure this validation function is valid */
-		/* is the data okay? */
-		err = validate(vp, decmpfs_ctx, hdr);
-	} else if (decmp_get_func(vp, hdr->compression_type, fetch) == NULL) {
-		/* the type isn't registered */
-		err = EIO;
-	} else {
-		/* no validate registered, so nothing to do */
-		err = 0;
+	if (!decmpfs_type_is_dataless(hdr->compression_type)) {
+		lck_rw_lock_shared(decompressorsLock);
+		decmpfs_validate_compressed_file_func validate = decmp_get_func(vp, hdr->compression_type, validate);
+		if (validate) { /* make sure this validation function is valid */
+			/* is the data okay? */
+			err = validate(vp, decmpfs_ctx, hdr);
+		} else if (decmp_get_func(vp, hdr->compression_type, fetch) == NULL) {
+			/* the type isn't registered */
+			err = EIO;
+		} else {
+			/* no validate registered, so nothing to do */
+			err = 0;
+		}
+		lck_rw_unlock_shared(decompressorsLock);
 	}
-	lck_rw_unlock_shared(decompressorsLock);
 out:
 	if (hdr) {
 		FREE(hdr, M_TEMP);
@@ -761,12 +822,6 @@ decmpfs_file_is_compressed(vnode_t vp, decmpfs_cnode *cp)
 		return 0;
 	}
 
-	if (!vnode_isreg(vp)) {
-		/* only regular files can be compressed */
-		ret = FILE_IS_NOT_COMPRESSED;
-		goto done;
-	}
-
 	is_mounted = false;
 	is_local_fs = false;
 	mp = vnode_mount(vp);
@@ -825,7 +880,16 @@ decmpfs_file_is_compressed(vnode_t vp, decmpfs_cnode *cp)
 			ret = FILE_IS_NOT_COMPRESSED;
 			goto done;
 		}
-		/* we got the xattr, so the file is compressed */
+		/*
+		 * We got the xattr, so the file is at least tagged compressed.
+		 * For DATALESS, regular files and directories can be "compressed".
+		 * For all other types, only files are allowed.
+		 */
+		if (!vnode_isreg(vp) &&
+		    !(decmpfs_type_is_dataless(hdr->compression_type) && vnode_isdir(vp))) {
+			ret = FILE_IS_NOT_COMPRESSED;
+			goto done;
+		}
 		ret = FILE_IS_COMPRESSED;
 		goto done;
 	}
@@ -847,7 +911,15 @@ done:
 			cnode_locked = 1;
 		}
 
-		decmpfs_cnode_set_vnode_cached_size(cp, hdr->uncompressed_size);
+		if (vnode_isdir(vp)) {
+			decmpfs_cnode_set_vnode_cached_size(cp, 64);
+			decmpfs_cnode_set_vnode_cached_nchildren(cp, decmpfs_get_directory_entries(hdr));
+			if (hdr->compression_type == DATALESS_PKG_CMPFS_TYPE) {
+				decmpfs_cnode_set_vnode_cached_total_size(cp, DECMPFS_PKG_SIZE(hdr->_size));
+			}
+		} else {
+			decmpfs_cnode_set_vnode_cached_size(cp, hdr->uncompressed_size);
+		}
 		decmpfs_cnode_set_vnode_state(cp, ret, 1);
 		decmpfs_cnode_set_vnode_cmp_type(cp, hdr->compression_type, 1);
 		/* remember if the xattr's size was equal to the minimal xattr */
@@ -941,11 +1013,19 @@ decmpfs_update_attributes(vnode_t vp, struct vnode_attr *vap)
 				error = decmpfs_fetch_compressed_header(vp, NULL, &hdr, 1);
 				if (error == 0) {
 					/*
-					 *  allow the flag to be set since the decmpfs attribute is present
-					 *  in that case, we also want to truncate the data fork of the file
+					 * Allow the flag to be set since the decmpfs attribute
+					 * is present.
+					 *
+					 * If we're creating a dataless file we do not want to
+					 * truncate it to zero which allows the file resolver to
+					 * have more control over when truncation should happen.
+					 * All other types of compressed files are truncated to
+					 * zero.
 					 */
-					VATTR_SET_ACTIVE(vap, va_data_size);
-					vap->va_data_size = 0;
+					if (!decmpfs_type_is_dataless(hdr->compression_type)) {
+						VATTR_SET_ACTIVE(vap, va_data_size);
+						vap->va_data_size = 0;
+					}
 				} else if (error == ERANGE) {
 					/* the file had a decmpfs attribute but the type was out of range, so don't muck with the file's data size */
 				} else {

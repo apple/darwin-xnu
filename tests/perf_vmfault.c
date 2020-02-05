@@ -55,10 +55,13 @@ static memregion_config *memregion_config_per_thread;
 static size_t pgsize;
 static int num_threads;
 static int ready_thread_count;
+static int finished_thread_count;
 static dt_stat_time_t runtime;
 static pthread_cond_t start_cvar;
 static pthread_cond_t threads_ready_cvar;
+static pthread_cond_t threads_finished_cvar;
 static pthread_mutex_t ready_thread_count_lock;
+static pthread_mutex_t finished_thread_count_lock;
 
 static void map_mem_regions_default(int fault_type, size_t memsize);
 static void map_mem_regions_single(int fault_type, size_t memsize);
@@ -275,6 +278,15 @@ thread_setup(void *arg)
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_mutex_unlock(&ready_thread_count_lock), "pthread_mutex_unlock");
 
 	fault_pages(my_index);
+
+	/* Up the finished count */
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_mutex_lock(&finished_thread_count_lock), "pthread_mutex_lock");
+	finished_thread_count++;
+	if (finished_thread_count == num_threads) {
+		/* All the threads are done. Wake up the main thread */
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_cond_signal(&threads_finished_cvar), "pthread_cond_signal");
+	}
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_mutex_unlock(&finished_thread_count_lock), "pthread_mutex_unlock");
 	return NULL;
 }
 
@@ -289,7 +301,10 @@ execute_threads(void)
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_cond_init(&threads_ready_cvar, NULL), "pthread_cond_init");
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_cond_init(&start_cvar, NULL), "pthread_cond_init");
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_mutex_init(&ready_thread_count_lock, NULL), "pthread_mutex_init");
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_cond_init(&threads_finished_cvar, NULL), "pthread_cond_init");
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_mutex_init(&finished_thread_count_lock, NULL), "pthread_mutex_init");
 	ready_thread_count = 0;
+	finished_thread_count = 0;
 
 	threads = (pthread_t *)malloc(sizeof(*threads) * (size_t)num_threads);
 	thread_indices = (int *)malloc(sizeof(*thread_indices) * (size_t)num_threads);
@@ -300,19 +315,27 @@ execute_threads(void)
 	}
 
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_mutex_lock(&ready_thread_count_lock), "pthread_mutex_lock");
-	if (ready_thread_count != num_threads) {
+	while (ready_thread_count != num_threads) {
 		T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_cond_wait(&threads_ready_cvar, &ready_thread_count_lock),
 		    "pthread_cond_wait");
 	}
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_mutex_unlock(&ready_thread_count_lock), "pthread_mutex_unlock");
 
 	T_STAT_MEASURE(runtime) {
+		/* Ungate the threads */
 		T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_cond_broadcast(&start_cvar), "pthread_cond_broadcast");
-		for (thread_index = 0; thread_index < num_threads; thread_index++) {
-			T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_join(threads[thread_index], &thread_retval_ptr),
-			    "pthread_join");
+		/* Wait for the threads to finish */
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_mutex_lock(&finished_thread_count_lock), "pthread_mutex_lock");
+		while (finished_thread_count != num_threads) {
+			T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_cond_wait(&threads_finished_cvar, &finished_thread_count_lock), "pthread_cond_wait");
 		}
 	};
+
+	/* Join the threads */
+	for (thread_index = 0; thread_index < num_threads; thread_index++) {
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(pthread_join(threads[thread_index], &thread_retval_ptr),
+		    "pthread_join");
+	}
 
 	free(threads);
 	free(thread_indices);
@@ -344,8 +367,6 @@ run_test(int fault_type, int mapping_variant, size_t memsize)
 	snprintf(metric_str, 32, "Runtime-%s", variant_str[mapping_variant]);
 	runtime = dt_stat_time_create(metric_str);
 
-	// This sets the A/B failure threshold at 50% of baseline for Runtime
-	dt_stat_set_variable((dt_stat_t)runtime, kPCFailureThresholdPctVar, 50.0);
 	while (!dt_stat_stable(runtime)) {
 		map_mem_regions(fault_type, mapping_variant, memsize);
 		execute_threads();
@@ -418,6 +439,9 @@ T_DECL(read_soft_fault_multithreaded,
 		nthreads = (int)strtol(e, NULL, 0);
 	} else {
 		nthreads = get_ncpu();
+		if (nthreads == 1) {
+			T_SKIP("Skipping multi-threaded test on single core device.");
+		}
 	}
 	setup_and_run_test(SOFT_FAULT, nthreads);
 }
@@ -439,6 +463,9 @@ T_DECL(zero_fill_fault_multithreaded,
 		nthreads = (int)strtol(e, NULL, 0);
 	} else {
 		nthreads = get_ncpu();
+		if (nthreads == 1) {
+			T_SKIP("Skipping multi-threaded test on single core device.");
+		}
 	}
 	setup_and_run_test(ZERO_FILL, nthreads);
 }

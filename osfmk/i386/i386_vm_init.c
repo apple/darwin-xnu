@@ -77,6 +77,7 @@
 #include <mach/thread_status.h>
 #include <pexpert/i386/efi.h>
 #include <i386/i386_lowmem.h>
+#include <i386/misc_protos.h>
 #include <x86_64/lowglobals.h>
 #include <i386/pal_routines.h>
 
@@ -119,9 +120,19 @@ vm_offset_t vm_kernel_builtinkmod_text_end;
 #define MAXLORESERVE    (32 * 1024 * 1024)
 
 ppnum_t         max_ppnum = 0;
-ppnum_t         lowest_lo = 0;
-ppnum_t         lowest_hi = 0;
-ppnum_t         highest_hi = 0;
+
+/*
+ * pmap_high_used* are the highest range of physical memory used for kernel
+ * internals (page tables, vm_pages) via pmap_steal_memory() that don't
+ * need to be encrypted in hibernation images. There can be one gap in
+ * the middle of this due to fragmentation when using a mix of small
+ * and large pages.  In that case, the fragment lives between the high
+ * and middle ranges.
+ */
+ppnum_t pmap_high_used_top = 0;
+ppnum_t pmap_high_used_bottom = 0;
+ppnum_t pmap_middle_used_top = 0;
+ppnum_t pmap_middle_used_bottom = 0;
 
 enum {PMAP_MAX_RESERVED_RANGES = 32};
 uint32_t pmap_reserved_pages_allocated = 0;
@@ -168,6 +179,12 @@ uint64_t firmware_MMIO_bytes;
  */
 extern void     *last_kernel_symbol;
 
+#define LG_PPNUM_PAGES (I386_LPGBYTES >> PAGE_SHIFT)
+#define LG_PPNUM_MASK (I386_LPGMASK >> PAGE_SHIFT)
+
+/* set so no region large page fragment pages exist */
+#define RESET_FRAG(r) (((r)->alloc_frag_up = 1), ((r)->alloc_frag_down = 0))
+
 boolean_t       memmap = FALSE;
 #if     DEBUG || DEVELOPMENT
 static void
@@ -181,11 +198,14 @@ kprint_memmap(vm_offset_t maddr, unsigned int msize, unsigned int mcount)
 	addr64_t             efi_start, efi_end;
 
 	for (j = 0; j < pmap_memory_region_count; j++, p++) {
-		kprintf("pmap region %d type %d base 0x%llx alloc_up 0x%llx alloc_down 0x%llx top 0x%llx\n",
+		kprintf("pmap region %d type %d base 0x%llx alloc_up 0x%llx alloc_down 0x%llx"
+		    " alloc_frag_up 0x%llx alloc_frag_down 0x%llx top 0x%llx\n",
 		    j, p->type,
 		    (addr64_t) p->base << I386_PGSHIFT,
 		    (addr64_t) p->alloc_up << I386_PGSHIFT,
 		    (addr64_t) p->alloc_down << I386_PGSHIFT,
+		    (addr64_t) p->alloc_frag_up << I386_PGSHIFT,
+		    (addr64_t) p->alloc_frag_down << I386_PGSHIFT,
 		    (addr64_t) p->end   << I386_PGSHIFT);
 		region_start = (addr64_t) p->base << I386_PGSHIFT;
 		region_end = ((addr64_t) p->end << I386_PGSHIFT) - 1;
@@ -314,7 +334,7 @@ i386_vm_init(uint64_t   maxmem,
 	segDATA = getsegbynamefromheader(&_mh_execute_header,
 	    "__DATA");
 	segCONST = getsegbynamefromheader(&_mh_execute_header,
-	    "__CONST");
+	    "__DATA_CONST");
 	cursectTEXT = lastsectTEXT = firstsect(segTEXT);
 	/* Discover the last TEXT section within the TEXT segment */
 	while ((cursectTEXT = nextsect(segTEXT, cursectTEXT)) != NULL) {
@@ -554,6 +574,7 @@ i386_vm_init(uint64_t   maxmem,
 				    (top < vm_kernel_base_page)) {
 					pmptr->alloc_up = pmptr->base;
 					pmptr->alloc_down = pmptr->end;
+					RESET_FRAG(pmptr);
 					pmap_reserved_range_indices[pmap_last_reserved_range_index++] = pmap_memory_region_count;
 				} else {
 					/*
@@ -561,6 +582,7 @@ i386_vm_init(uint64_t   maxmem,
 					 */
 					pmptr->alloc_up = top + 1;
 					pmptr->alloc_down = top;
+					RESET_FRAG(pmptr);
 				}
 				pmptr->type = pmap_type;
 				pmptr->attribute = mptr->Attribute;
@@ -574,6 +596,7 @@ i386_vm_init(uint64_t   maxmem,
 				pmptr->end = (fap - 1);
 				pmptr->alloc_up = pmptr->end + 1;
 				pmptr->alloc_down = pmptr->end;
+				RESET_FRAG(pmptr);
 				pmptr->type = pmap_type;
 				pmptr->attribute = mptr->Attribute;
 				/*
@@ -587,6 +610,7 @@ i386_vm_init(uint64_t   maxmem,
 				pmptr->type = pmap_type;
 				pmptr->attribute = mptr->Attribute;
 				pmptr->alloc_down = pmptr->end = top;
+				RESET_FRAG(pmptr);
 
 				if (mptr->Attribute & EFI_MEMORY_KERN_RESERVED) {
 					pmap_reserved_range_indices[pmap_last_reserved_range_index++] = pmap_memory_region_count;
@@ -599,6 +623,7 @@ i386_vm_init(uint64_t   maxmem,
 				pmptr->type = pmap_type;
 				pmptr->attribute = mptr->Attribute;
 				pmptr->alloc_down = pmptr->end = top;
+				RESET_FRAG(pmptr);
 				if (mptr->Attribute & EFI_MEMORY_KERN_RESERVED) {
 					pmap_reserved_range_indices[pmap_last_reserved_range_index++] = pmap_memory_region_count;
 				}
@@ -621,6 +646,7 @@ i386_vm_init(uint64_t   maxmem,
 			    (pmptr->base == (prev_pmptr->end + 1))) {
 				prev_pmptr->end = pmptr->end;
 				prev_pmptr->alloc_down = pmptr->alloc_down;
+				RESET_FRAG(pmptr);
 			} else {
 				pmap_memory_region_count++;
 				prev_pmptr = pmptr;
@@ -692,6 +718,7 @@ i386_vm_init(uint64_t   maxmem,
 			if (pages_to_use == 0) {
 				pmap_memory_regions[cur_region].end = cur_end;
 				pmap_memory_regions[cur_region].alloc_down = cur_end;
+				RESET_FRAG(&pmap_memory_regions[cur_region]);
 			}
 
 			cur_region++;
@@ -772,111 +799,218 @@ pmap_free_pages(void)
 	return (unsigned int)avail_remaining;
 }
 
-
 boolean_t pmap_next_page_reserved(ppnum_t *);
 
 /*
  * Pick a page from a "kernel private" reserved range; works around
- * errata on some hardware.
+ * errata on some hardware. EFI marks pages which can't be used for
+ * certain kinds of I/O-ish activities as reserved. We reserve them for
+ * kernel internal usage and prevent them from ever going on regular
+ * free list.
  */
 boolean_t
-pmap_next_page_reserved(ppnum_t *pn)
+pmap_next_page_reserved(
+	ppnum_t              *pn)
 {
+	uint32_t             n;
+	pmap_memory_region_t *region;
+	uint32_t             reserved_index;
+
 	if (pmap_reserved_ranges) {
-		uint32_t n;
-		pmap_memory_region_t *region;
 		for (n = 0; n < pmap_last_reserved_range_index; n++) {
-			uint32_t reserved_index = pmap_reserved_range_indices[n];
+			reserved_index = pmap_reserved_range_indices[n];
 			region = &pmap_memory_regions[reserved_index];
 			if (region->alloc_up <= region->alloc_down) {
 				*pn = region->alloc_up++;
-				avail_remaining--;
-
-				if (*pn > max_ppnum) {
-					max_ppnum = *pn;
-				}
-
-				if (lowest_lo == 0 || *pn < lowest_lo) {
-					lowest_lo = *pn;
-				}
-
-				pmap_reserved_pages_allocated++;
-#if DEBUG
-				if (region->alloc_up > region->alloc_down) {
-					kprintf("Exhausted reserved range index: %u, base: 0x%x end: 0x%x, type: 0x%x, attribute: 0x%llx\n", reserved_index, region->base, region->end, region->type, region->attribute);
-				}
-#endif
-				return TRUE;
-			}
-		}
-	}
-	return FALSE;
-}
-
-
-boolean_t
-pmap_next_page_hi(
-	ppnum_t *pn)
-{
-	pmap_memory_region_t *region;
-	int     n;
-
-	if (pmap_next_page_reserved(pn)) {
-		return TRUE;
-	}
-
-	if (avail_remaining) {
-		for (n = pmap_memory_region_count - 1; n >= 0; n--) {
-			region = &pmap_memory_regions[n];
-
-			if (region->alloc_down >= region->alloc_up) {
-				*pn = region->alloc_down--;
-				avail_remaining--;
-
-				if (*pn > max_ppnum) {
-					max_ppnum = *pn;
-				}
-
-				if (lowest_lo == 0 || *pn < lowest_lo) {
-					lowest_lo = *pn;
-				}
-
-				if (lowest_hi == 0 || *pn < lowest_hi) {
-					lowest_hi = *pn;
-				}
-
-				if (*pn > highest_hi) {
-					highest_hi = *pn;
-				}
-
-				return TRUE;
-			}
-		}
-	}
-	return FALSE;
-}
-
-
-boolean_t
-pmap_next_page(
-	ppnum_t *pn)
-{
-	if (avail_remaining) {
-		while (pmap_memory_region_current < pmap_memory_region_count) {
-			if (pmap_memory_regions[pmap_memory_region_current].alloc_up >
-			    pmap_memory_regions[pmap_memory_region_current].alloc_down) {
-				pmap_memory_region_current++;
+			} else if (region->alloc_frag_up <= region->alloc_frag_down) {
+				*pn = region->alloc_frag_up++;
+			} else {
 				continue;
 			}
-			*pn = pmap_memory_regions[pmap_memory_region_current].alloc_up++;
 			avail_remaining--;
 
 			if (*pn > max_ppnum) {
 				max_ppnum = *pn;
 			}
 
-			if (lowest_lo == 0 || *pn < lowest_lo) {
-				lowest_lo = *pn;
+			pmap_reserved_pages_allocated++;
+#if DEBUG
+			if (region->alloc_up > region->alloc_down) {
+				kprintf("Exhausted reserved range index: %u, base: 0x%x end: 0x%x, type: 0x%x, attribute: 0x%llx\n", reserved_index, region->base, region->end, region->type, region->attribute);
+			}
+#endif
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+/*
+ * Return the highest large page available. Fails once there are no more large pages.
+ */
+kern_return_t
+pmap_next_page_large(
+	ppnum_t              *pn)
+{
+	int                  r;
+	pmap_memory_region_t *region;
+	ppnum_t              frag_start;
+	ppnum_t              lgpg;
+
+	if (avail_remaining < LG_PPNUM_PAGES) {
+		return KERN_FAILURE;
+	}
+
+	for (r = pmap_memory_region_count - 1; r >= 0; r--) {
+		region = &pmap_memory_regions[r];
+
+		/*
+		 * First check if there is enough memory.
+		 */
+		if (region->alloc_down < region->alloc_up ||
+		    (region->alloc_down - region->alloc_up + 1) < LG_PPNUM_PAGES) {
+			continue;
+		}
+
+		/*
+		 * Find the starting large page, creating a fragment if needed.
+		 */
+		if ((region->alloc_down & LG_PPNUM_MASK) == LG_PPNUM_MASK) {
+			lgpg = (region->alloc_down & ~LG_PPNUM_MASK);
+		} else {
+			/* Can only have 1 fragment per region at a time */
+			if (region->alloc_frag_up <= region->alloc_frag_down) {
+				continue;
+			}
+
+			/* Check for enough room below any fragment. */
+			frag_start = (region->alloc_down & ~LG_PPNUM_MASK);
+			if (frag_start < region->alloc_up ||
+			    frag_start - region->alloc_up < LG_PPNUM_PAGES) {
+				continue;
+			}
+
+			lgpg = frag_start - LG_PPNUM_PAGES;
+			region->alloc_frag_up = frag_start;
+			region->alloc_frag_down = region->alloc_down;
+		}
+
+		*pn = lgpg;
+		region->alloc_down = lgpg - 1;
+
+
+		avail_remaining -= LG_PPNUM_PAGES;
+		if (*pn + LG_PPNUM_MASK > max_ppnum) {
+			max_ppnum = *pn + LG_PPNUM_MASK;
+		}
+
+		return KERN_SUCCESS;
+	}
+	return KERN_FAILURE;
+}
+
+boolean_t
+pmap_next_page_hi(
+	ppnum_t              *pn,
+	boolean_t            might_free)
+{
+	pmap_memory_region_t *region;
+	int                  n;
+
+	if (!might_free && pmap_next_page_reserved(pn)) {
+		return TRUE;
+	}
+
+	if (avail_remaining) {
+		for (n = pmap_memory_region_count - 1; n >= 0; n--) {
+			region = &pmap_memory_regions[n];
+			if (region->alloc_frag_up <= region->alloc_frag_down) {
+				*pn = region->alloc_frag_down--;
+			} else if (region->alloc_down >= region->alloc_up) {
+				*pn = region->alloc_down--;
+			} else {
+				continue;
+			}
+
+			avail_remaining--;
+
+			if (*pn > max_ppnum) {
+				max_ppnum = *pn;
+			}
+
+			return TRUE;
+		}
+	}
+	return FALSE;
+}
+
+/*
+ * Record which high pages have been allocated so far,
+ * so that pmap_init() can mark them PMAP_NOENCRYPT, which
+ * makes hibernation faster.
+ *
+ * Because of the code in pmap_next_page_large(), we could
+ * theoretically have fragments in several regions.
+ * In practice that just doesn't happen. The last pmap region
+ * is normally the largest and will satisfy all pmap_next_hi/large()
+ * allocations. Since this information is used as an optimization
+ * and it's ok to be conservative, we'll just record the information
+ * for the final region.
+ */
+void
+pmap_hi_pages_done(void)
+{
+	pmap_memory_region_t *r;
+
+	r = &pmap_memory_regions[pmap_memory_region_count - 1];
+	pmap_high_used_top = r->end;
+	if (r->alloc_frag_up <= r->alloc_frag_down) {
+		pmap_high_used_bottom = r->alloc_frag_down + 1;
+		pmap_middle_used_top = r->alloc_frag_up - 1;
+		if (r->alloc_up <= r->alloc_down) {
+			pmap_middle_used_bottom = r->alloc_down + 1;
+		} else {
+			pmap_high_used_bottom = r->base;
+		}
+	} else {
+		if (r->alloc_up <= r->alloc_down) {
+			pmap_high_used_bottom = r->alloc_down + 1;
+		} else {
+			pmap_high_used_bottom = r->base;
+		}
+	}
+#if     DEBUG || DEVELOPMENT
+	kprintf("pmap_high_used_top      0x%x\n", pmap_high_used_top);
+	kprintf("pmap_high_used_bottom   0x%x\n", pmap_high_used_bottom);
+	kprintf("pmap_middle_used_top    0x%x\n", pmap_middle_used_top);
+	kprintf("pmap_middle_used_bottom 0x%x\n", pmap_middle_used_bottom);
+#endif
+}
+
+/*
+ * Return the next available page from lowest memory for general use.
+ */
+boolean_t
+pmap_next_page(
+	ppnum_t              *pn)
+{
+	pmap_memory_region_t *region;
+
+	if (avail_remaining) {
+		while (pmap_memory_region_current < pmap_memory_region_count) {
+			region = &pmap_memory_regions[pmap_memory_region_current];
+			if (region->alloc_up <= region->alloc_down) {
+				*pn = region->alloc_up++;
+			} else if (region->alloc_frag_up <= region->alloc_frag_down) {
+				*pn = region->alloc_frag_up++;
+			} else {
+				pmap_memory_region_current++;
+				continue;
+			}
+			avail_remaining--;
+
+			if (*pn > max_ppnum) {
+				max_ppnum = *pn;
 			}
 
 			return TRUE;

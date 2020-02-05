@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -53,10 +53,12 @@
 #include <IOKit/pwr_mgt/IOPMpowerState.h>
 #include <IOKit/IOServicePM.h>
 #include <IOKit/IOReportTypes.h>
+#include <DriverKit/IOService.h>
 
 extern "C" {
 #include <kern/thread_call.h>
 }
+
 
 #ifndef UINT64_MAX
 #define UINT64_MAX        18446744073709551615ULL
@@ -83,6 +85,7 @@ enum {
 	// options for terminate()
 	kIOServiceRequired      = 0x00000001,
 	kIOServiceTerminate     = 0x00000004,
+	kIOServiceTerminateWithRematch = 0x00000010,
 
 	// options for registerService() & terminate()
 	kIOServiceSynchronous   = 0x00000002,
@@ -109,18 +112,33 @@ extern const IORegistryPlane *  gIOPowerPlane;
 extern const OSSymbol *     gIOResourcesKey;
 extern const OSSymbol *     gIOResourceMatchKey;
 extern const OSSymbol *     gIOResourceMatchedKey;
+extern const OSSymbol *     gIOResourceIOKitKey;
+
 extern const OSSymbol *     gIOProviderClassKey;
 extern const OSSymbol *     gIONameMatchKey;
 extern const OSSymbol *     gIONameMatchedKey;
 extern const OSSymbol *     gIOPropertyMatchKey;
+extern const OSSymbol *     gIOPropertyExistsMatchKey;
 extern const OSSymbol *     gIOLocationMatchKey;
 extern const OSSymbol *     gIOParentMatchKey;
 extern const OSSymbol *     gIOPathMatchKey;
 extern const OSSymbol *     gIOMatchCategoryKey;
 extern const OSSymbol *     gIODefaultMatchCategoryKey;
 extern const OSSymbol *     gIOMatchedServiceCountKey;
+extern const OSSymbol *     gIOMatchedPersonalityKey;
+extern const OSSymbol *     gIORematchPersonalityKey;
+extern const OSSymbol *     gIORematchCountKey;
+extern const OSSymbol *     gIODEXTMatchCountKey;
 
 extern const OSSymbol *     gIOUserClientClassKey;
+
+extern const OSSymbol *     gIOUserClassKey;
+extern const OSSymbol *     gIOUserServerClassKey;
+extern const OSSymbol *     gIOUserServerNameKey;
+extern const OSSymbol *     gIOUserServerTagKey;
+extern const OSSymbol *     gIOUserServerCDHashKey;
+extern const OSSymbol *     gIOUserUserClientKey;
+
 extern const OSSymbol *     gIOKitDebugKey;
 extern const OSSymbol *     gIOServiceKey;
 
@@ -149,6 +167,11 @@ extern const OSSymbol *     gIOBSDNameKey;
 extern const OSSymbol *     gIOBSDMajorKey;
 extern const OSSymbol *     gIOBSDMinorKey;
 extern const OSSymbol *     gIOBSDUnitKey;
+
+extern const OSSymbol *     gIODriverKitEntitlementKey;
+extern const OSSymbol *     gIOServiceDEXTEntitlementsKey;
+extern const OSSymbol *     gIODriverKitUserClientEntitlementsKey;
+extern const OSSymbol *     gIOMatchDeferKey;
 
 extern SInt32 IOServiceOrdering( const OSMetaClassBase * inObj1, const OSMetaClassBase * inObj2, void * ref );
 
@@ -309,12 +332,17 @@ class IOPlatformExpert;
 
 struct IOInterruptAccountingData;
 struct IOInterruptAccountingReporter;
+struct OSObjectUserVars;
 
 class IOService : public IORegistryEntry
 {
-	OSDeclareDefaultStructors(IOService)
+	OSDeclareDefaultStructorsWithDispatch(IOService);
 
+#if XNU_KERNEL_PRIVATE
+public:
+#else
 protected:
+#endif  /* XNU_KERNEL_PRIVATE */
 /*! @struct ExpansionData
  *   @discussion This structure will be used to expand the capablilties of this class in the future.
  */
@@ -330,6 +358,8 @@ protected:
 		IOLock * interruptStatisticsLock;
 		IOInterruptAccountingReporter * interruptStatisticsArray;
 		int interruptStatisticsArrayCount;
+
+		OSObjectUserVars * uvars;
 	};
 
 /*! @var reserved
@@ -566,7 +596,7 @@ public:
 
 	virtual bool open(   IOService *       forClient,
 	    IOOptionBits      options = 0,
-	    void *        arg = 0 );
+	    void *        arg = NULL );
 
 /*! @function close
  *   @abstract Releases active access to a provider.
@@ -583,7 +613,7 @@ public:
  *   @param forClient If non-zero, <code>isOpen</code> returns the open state for that client. If zero is passed, <code>isOpen</code> returns the open state for all clients.
  *   @result <code>true</code> if the specific, or any, client has the IOService object open. */
 
-	virtual bool isOpen( const IOService * forClient = 0 ) const;
+	virtual bool isOpen( const IOService * forClient = NULL ) const;
 
 /*! @function handleOpen
  *   @abstract Controls the open / close behavior of an IOService object (overrideable by subclasses).
@@ -632,7 +662,7 @@ public:
 
 /*! @function init
  *   @abstract Initializes generic IOService data structures (expansion data, etc). */
-	virtual bool init( OSDictionary * dictionary = 0 ) APPLE_KEXT_OVERRIDE;
+	virtual bool init( OSDictionary * dictionary = NULL ) APPLE_KEXT_OVERRIDE;
 
 /*! @function init
  *   @abstract Initializes generic IOService data structures (expansion data, etc). */
@@ -729,7 +759,8 @@ public:
  *   @param key An OSSymbol key that globally identifies the object.
  *   @param value The object to be published. */
 
-	static void publishResource( const OSSymbol * key, OSObject * value = 0 );
+	static void publishResource( const OSSymbol * key, OSObject * value = NULL );
+	static void publishUserResource( const OSSymbol * key, OSObject * value = NULL );
 
 /*! @function publishResource
  *   @abstract Uses the resource service to publish a property.
@@ -737,7 +768,7 @@ public:
  *   @param key A C string key that globally identifies the object.
  *   @param value The object to be published. */
 
-	static void publishResource( const char * key, OSObject * value = 0 );
+	static void publishResource( const char * key, OSObject * value = NULL );
 	virtual bool addNeededResource( const char * key );
 
 /* Notifications */
@@ -762,7 +793,7 @@ public:
 	static IONotifier * addNotification(
 		const OSSymbol * type, OSDictionary * matching,
 		IOServiceNotificationHandler handler,
-		void * target, void * ref = 0,
+		void * target, void * ref = NULL,
 		SInt32 priority = 0 )
 	APPLE_KEXT_DEPRECATED;
 
@@ -786,7 +817,7 @@ public:
 	static IONotifier * addMatchingNotification(
 		const OSSymbol * type, OSDictionary * matching,
 		IOServiceMatchingNotificationHandler handler,
-		void * target, void * ref = 0,
+		void * target, void * ref = NULL,
 		SInt32 priority = 0 );
 
 
@@ -804,10 +835,9 @@ public:
  *   @param timeout The maximum time to wait.
  *   @result A published IOService object matching the supplied dictionary. */
 
-	LIBKERN_RETURNS_NOT_RETAINED
-	static IOService * waitForService(
+	static LIBKERN_RETURNS_NOT_RETAINED IOService * waitForService(
 		LIBKERN_CONSUMED OSDictionary * matching,
-		mach_timespec_t * timeout = 0);
+		mach_timespec_t * timeout = NULL);
 
 /*! @function waitForMatchingService
  *   @abstract Waits for a matching to service to be published.
@@ -847,7 +877,7 @@ public:
  *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
 	static OSDictionary * serviceMatching( const char * className,
-	    OSDictionary * table = 0 );
+	    OSDictionary * table = NULL );
 
 /*! @function serviceMatching
  *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify an IOService class match.
@@ -857,7 +887,7 @@ public:
  *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
 	static OSDictionary * serviceMatching( const OSString * className,
-	    OSDictionary * table = 0 );
+	    OSDictionary * table = NULL );
 
 /*! @function nameMatching
  *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify an IOService name match.
@@ -867,7 +897,7 @@ public:
  *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
 	static OSDictionary * nameMatching( const char * name,
-	    OSDictionary * table = 0 );
+	    OSDictionary * table = NULL );
 
 /*! @function nameMatching
  *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify an IOService name match.
@@ -877,7 +907,7 @@ public:
  *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
 	static OSDictionary * nameMatching( const OSString* name,
-	    OSDictionary * table = 0 );
+	    OSDictionary * table = NULL );
 
 /*! @function resourceMatching
  *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify a resource service match.
@@ -887,7 +917,7 @@ public:
  *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
 	static OSDictionary * resourceMatching( const char * name,
-	    OSDictionary * table = 0 );
+	    OSDictionary * table = NULL );
 
 /*! @function resourceMatching
  *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify a resource service match.
@@ -897,7 +927,7 @@ public:
  *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
 	static OSDictionary * resourceMatching( const OSString * name,
-	    OSDictionary * table = 0 );
+	    OSDictionary * table = NULL );
 
 
 /*! @function propertyMatching
@@ -909,7 +939,7 @@ public:
  *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
 	static OSDictionary * propertyMatching( const OSSymbol * key, const OSObject * value,
-	    OSDictionary * table = 0 );
+	    OSDictionary * table = NULL );
 
 /*! @function registryEntryIDMatching
  *   @abstract Creates a matching dictionary, or adds matching properties to an existing dictionary, that specify a IORegistryEntryID match.
@@ -919,7 +949,7 @@ public:
  *   @result The matching dictionary created, or passed in, is returned on success, or zero on failure. */
 
 	static OSDictionary * registryEntryIDMatching( uint64_t entryID,
-	    OSDictionary * table = 0 );
+	    OSDictionary * table = NULL );
 
 
 /*! @function addLocation
@@ -1137,7 +1167,7 @@ public:
 
 	virtual IOReturn registerInterrupt(int source, OSObject *target,
 	    IOInterruptAction handler,
-	    void *refCon = 0);
+	    void *refCon = NULL);
 
 #ifdef __BLOCKS__
 /*! @function registerInterrupt
@@ -1224,7 +1254,7 @@ public:
  *   @result An IOReturn code defined by the message type. */
 
 	virtual IOReturn message( UInt32 type, IOService * provider,
-	    void * argument = 0 );
+	    void * argument = NULL );
 
 /*! @function messageClient
  *   @abstract Sends a generic message to an attached client.
@@ -1236,7 +1266,7 @@ public:
  *   @result The return code from the client message call. */
 
 	virtual IOReturn messageClient( UInt32 messageType, OSObject * client,
-	    void * messageArgument = 0, vm_size_t argSize = 0 );
+	    void * messageArgument = NULL, vm_size_t argSize = 0 );
 
 /*! @function messageClients
  *   @abstract Sends a generic message to all attached clients.
@@ -1247,11 +1277,11 @@ public:
  *   @result Any non-<code>kIOReturnSuccess</code> return codes returned by the clients, or <code>kIOReturnSuccess</code> if all return <code>kIOReturnSuccess</code>. */
 
 	virtual IOReturn messageClients( UInt32 type,
-	    void * argument = 0, vm_size_t argSize = 0 );
+	    void * argument = NULL, vm_size_t argSize = 0 );
 
 	virtual IONotifier * registerInterest( const OSSymbol * typeOfInterest,
 	    IOServiceInterestHandler handler,
-	    void * target, void * ref = 0 );
+	    void * target, void * ref = NULL );
 
 #ifdef __BLOCKS__
 	IONotifier * registerInterest(const OSSymbol * typeOfInterest,
@@ -1285,10 +1315,11 @@ public:
 
 	virtual IOReturn newUserClient( task_t owningTask, void * securityID,
 	    UInt32 type, OSDictionary * properties,
-	    IOUserClient ** handler );
+	    LIBKERN_RETURNS_RETAINED IOUserClient ** handler );
 
 	virtual IOReturn newUserClient( task_t owningTask, void * securityID,
-	    UInt32 type, IOUserClient ** handler );
+	    UInt32 type,
+	    LIBKERN_RETURNS_RETAINED IOUserClient ** handler );
 
 /* Return code utilities */
 
@@ -1347,6 +1378,9 @@ public:
 	IOReturn setAuthorizationID( uint64_t authorizationID );
 	void cpusRunning(void);
 	void scheduleFinalize(bool now);
+	static void willShutdown();
+	static void startDeferredMatches();
+	static void kextdLaunched();
 
 private:
 	static IOReturn waitMatchIdle( UInt32 ms );
@@ -1354,13 +1388,15 @@ private:
 		const OSSymbol * type, OSDictionary * matching,
 		IOServiceMatchingNotificationHandler handler,
 		void * target, void * ref,
-		SInt32 priority, OSIterator ** existing );
+		SInt32 priority,
+		LIBKERN_RETURNS_RETAINED OSIterator ** existing );
 #if !defined(__LP64__)
 	static IONotifier * installNotification(
 		const OSSymbol * type, OSDictionary * matching,
 		IOServiceNotificationHandler handler,
 		void * target, void * ref,
-		SInt32 priority, OSIterator ** existing);
+		SInt32 priority,
+		LIBKERN_RETURNS_RETAINED OSIterator ** existing);
 #endif /* !defined(__LP64__) */
 #endif
 
@@ -1427,7 +1463,7 @@ private:
 	OSArray * copyNotifiers(const OSSymbol * type,
 	    IOOptionBits orNewState, IOOptionBits andNewState);
 
-	bool invokeNotifiers(OSArray ** willSend);
+	bool invokeNotifiers(OSArray * willSend[]);
 	bool invokeNotifier( class _IOServiceNotifier * notify );
 
 	APPLE_KEXT_COMPATIBILITY_VIRTUAL
@@ -1435,7 +1471,7 @@ private:
 
 	APPLE_KEXT_COMPATIBILITY_VIRTUAL
 	IOReturn waitForState( UInt32 mask, UInt32 value,
-	    mach_timespec_t * timeout = 0 );
+	    mach_timespec_t * timeout = NULL );
 
 	IOReturn waitForState( UInt32 mask, UInt32 value, uint64_t timeout );
 
@@ -1449,7 +1485,7 @@ private:
 	static void __attribute__((__noreturn__)) terminateThread( void * arg, wait_result_t unused );
 	static void terminateWorker( IOOptionBits options );
 	static void actionWillTerminate( IOService * victim, IOOptionBits options,
-	    OSArray * doPhase2List, void*, void * );
+	    OSArray * doPhase2List, bool, void * );
 	static void actionDidTerminate( IOService * victim, IOOptionBits options,
 	    void *, void *, void *);
 
@@ -1466,7 +1502,10 @@ private:
 	APPLE_KEXT_COMPATIBILITY_VIRTUAL
 	IOReturn resolveInterrupt(IOService *nub, int source);
 	APPLE_KEXT_COMPATIBILITY_VIRTUAL
-	IOReturn lookupInterrupt(int source, bool resolve, IOInterruptController **interruptController);
+	IOReturn lookupInterrupt(
+		int source, bool resolve,
+		LIBKERN_RETURNS_NOT_RETAINED IOInterruptController *
+		*interruptController);
 
 #ifdef XNU_KERNEL_PRIVATE
 /* end xnu internals */
@@ -1846,7 +1885,7 @@ protected:
  *   Drivers may eliminate the influence of the <code>changePowerStateTo</code> method on power state one of two ways. See @link powerOverrideOnPriv powerOverrideOnPriv@/link to ignore the method's influence, or call <code>changePowerStateTo(0)</code> in the driver's <code>start</code> routine to remove the <code>changePowerStateTo</code> method's power request.
  *   @param ordinal The number of the desired power state in the power state array.
  *   @result A return code that can be ignored by the caller. */
-
+public:
 	IOReturn changePowerStateToPriv( unsigned long ordinal );
 
 /*! @function powerOverrideOnPriv
@@ -1874,8 +1913,8 @@ protected:
 public:
 	void idleTimerExpired( void );
 	void settleTimerExpired( void );
-	IOReturn synchronizePowerTree( IOOptionBits options = 0, IOService * notifyRoot = 0 );
-	bool assertPMDriverCall( IOPMDriverCallEntry * callEntry, IOOptionBits options = 0, IOPMinformee * inform = 0 );
+	IOReturn synchronizePowerTree( IOOptionBits options = 0, IOService * notifyRoot = NULL );
+	bool assertPMDriverCall( IOPMDriverCallEntry * callEntry, IOOptionBits method, const IOPMinformee * inform = NULL, IOOptionBits options = 0 );
 	void deassertPMDriverCall( IOPMDriverCallEntry * callEntry );
 	IOReturn changePowerStateWithOverrideTo( IOPMPowerStateIndex ordinal, IOPMRequestTag tag );
 	IOReturn changePowerStateForRootDomain( IOPMPowerStateIndex ordinal );
@@ -1893,6 +1932,7 @@ public:
 
 	static IOWorkLoop * getIOPMWorkloop( void );
 	bool getBlockingDriverCall(thread_t *thread, const void **callMethod);
+	void cancelIdlePowerDown(IOService * service);
 
 protected:
 	bool tellClientsWithResponse( int messageType );
@@ -1963,7 +2003,7 @@ private:
 	static IOReturn actionSpinDumpTimerExpired(OSObject *, void *, void *, void *, void * );
 
 	static IOReturn actionDriverCalloutDone(OSObject *, void *, void *, void *, void * );
-	static IOPMRequest * acquirePMRequest( IOService * target, IOOptionBits type, IOPMRequest * active = 0 );
+	static IOPMRequest * acquirePMRequest( IOService * target, IOOptionBits type, IOPMRequest * active = NULL );
 	static void releasePMRequest( IOPMRequest * request );
 	static void pmDriverCallout( IOService * from );
 	static void pmTellAppWithResponse( OSObject * object, void * context );
@@ -1971,7 +2011,7 @@ private:
 	static void pmTellCapabilityAppWithResponse( OSObject * object, void * arg );
 	static void pmTellCapabilityClientWithResponse( OSObject * object, void * arg );
 	static void submitPMRequest(LIBKERN_CONSUMED IOPMRequest * request );
-	static void submitPMRequests( IOPMRequest ** request, IOItemCount count );
+	static void submitPMRequests( IOPMRequest * requests[], IOItemCount count );
 	bool ackTimerTick( void );
 	void addPowerChild1( IOPMRequest * request );
 	void addPowerChild2( IOPMRequest * request );
@@ -2014,7 +2054,7 @@ private:
 	IOReturn updatePowerStatesReport( IOReportConfigureAction action, void *result, void *destination );
 	IOReturn configureSimplePowerReport(IOReportConfigureAction action, void *result );
 	IOReturn updateSimplePowerReport( IOReportConfigureAction action, void *result, void *destination );
-	void waitForPMDriverCall( IOService * target = 0 );
+	void waitForPMDriverCall( IOService * target = NULL );
 #endif /* XNU_KERNEL_PRIVATE */
 };
 

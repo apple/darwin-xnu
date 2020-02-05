@@ -75,9 +75,9 @@ $(SOBJS): .SFLAGS
 	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
 
 $(COMPONENT).filelist: $(OBJS)
-	@echo "$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0)"
+	$(call makelog,$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0))
 	$(_v)for obj in ${OBJS}; do	\
-		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
+		 $(ECHO) $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist
 
 do_all: $(COMPONENT).filelist

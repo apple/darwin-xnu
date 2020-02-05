@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -206,7 +206,6 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 		    (einit.flags & IFNET_INIT_INPUT_POLL)) {
 			return EINVAL;
 		}
-
 		einit.pre_enqueue = NULL;
 		einit.start = NULL;
 		einit.output_ctl = NULL;
@@ -232,7 +231,6 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 			einit.input_ctl = NULL;
 		}
 	}
-
 
 	/* Initialize external name (name + unit) */
 	(void) snprintf(if_xname, sizeof(if_xname), "%s%d",
@@ -417,6 +415,8 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 		}
 
 		ifp->if_xflags = 0;
+		/* legacy interface */
+		ifp->if_xflags |= IFXF_LEGACY;
 
 		/*
 		 * output target queue delay is specified in millisecond
@@ -633,6 +633,14 @@ ifnet_set_eflags(ifnet_t interface, u_int32_t new_flags, u_int32_t mask)
 	 */
 	if (ifnet_awdl_check_eflags(interface, &new_flags, &mask) != 0) {
 		ifnet_lock_done(interface);
+		return EINVAL;
+	}
+	/*
+	 * Currently Interface advisory reporting is supported only for
+	 * skywalk interface.
+	 */
+	if ((((new_flags & mask) & IFEF_ADV_REPORT) != 0) &&
+	    ((interface->if_eflags & IFEF_SKYWALK_NATIVE) == 0)) {
 		return EINVAL;
 	}
 	oeflags = interface->if_eflags;
@@ -2229,7 +2237,24 @@ ifnet_add_multicast(ifnet_t interface, const struct sockaddr *maddr,
 	}
 
 	/* Don't let users screw up protocols' entries. */
-	if (maddr->sa_family != AF_UNSPEC && maddr->sa_family != AF_LINK) {
+	switch (maddr->sa_family) {
+	case AF_LINK: {
+		const struct sockaddr_dl *sdl =
+		    (const struct sockaddr_dl *)(uintptr_t)maddr;
+		if (sdl->sdl_len < sizeof(struct sockaddr_dl) ||
+		    (sdl->sdl_nlen + sdl->sdl_alen + sdl->sdl_slen +
+		    offsetof(struct sockaddr_dl, sdl_data) > sdl->sdl_len)) {
+			return EINVAL;
+		}
+		break;
+	}
+	case AF_UNSPEC:
+		if (maddr->sa_len < ETHER_ADDR_LEN +
+		    offsetof(struct sockaddr, sa_data)) {
+			return EINVAL;
+		}
+		break;
+	default:
 		return EINVAL;
 	}
 
@@ -2870,8 +2895,34 @@ ifnet_notice_node_presence(ifnet_t ifp, struct sockaddr *sa, int32_t rssi,
 		return EINVAL;
 	}
 
-	dlil_node_present(ifp, sa, rssi, lqm, npm, srvinfo);
-	return 0;
+	return dlil_node_present(ifp, sa, rssi, lqm, npm, srvinfo);
+}
+
+errno_t
+ifnet_notice_node_presence_v2(ifnet_t ifp, struct sockaddr *sa, struct sockaddr_dl *sdl,
+    int32_t rssi, int lqm, int npm, u_int8_t srvinfo[48])
+{
+	/* Support older version if sdl is NULL */
+	if (sdl == NULL) {
+		return ifnet_notice_node_presence(ifp, sa, rssi, lqm, npm, srvinfo);
+	}
+
+	if (ifp == NULL || sa == NULL || srvinfo == NULL) {
+		return EINVAL;
+	}
+	if (sa->sa_len > sizeof(struct sockaddr_storage)) {
+		return EINVAL;
+	}
+
+	if (sa->sa_family != AF_INET6) {
+		return EINVAL;
+	}
+
+	if (sdl->sdl_family != AF_LINK) {
+		return EINVAL;
+	}
+
+	return dlil_node_present_v2(ifp, sa, sdl, rssi, lqm, npm, srvinfo);
 }
 
 errno_t
@@ -2970,6 +3021,8 @@ ifnet_set_delegate(ifnet_t ifp, ifnet_t delegated_ifp)
 		ifp->if_delegated.subfamily = delegated_ifp->if_subfamily;
 		ifp->if_delegated.expensive =
 		    delegated_ifp->if_eflags & IFEF_EXPENSIVE ? 1 : 0;
+		ifp->if_delegated.constrained =
+		    delegated_ifp->if_xflags & IFXF_CONSTRAINED ? 1 : 0;
 
 		/*
 		 * Propogate flags related to ECN from delegated interface
@@ -3061,7 +3114,7 @@ ifnet_get_keepalive_offload_frames(ifnet_t ifp,
 		bzero(frame, sizeof(struct ifnet_keepalive_offload_frame));
 	}
 
-	/* First collect IPSec related keep-alive frames */
+	/* First collect IPsec related keep-alive frames */
 	*used_frames_count = key_fill_offload_frames_for_savs(ifp,
 	    frames_array, frames_array_count, frame_data_offset);
 
@@ -3082,6 +3135,32 @@ ifnet_get_keepalive_offload_frames(ifnet_t ifp,
 	VERIFY(*used_frames_count <= frames_array_count);
 
 	return 0;
+}
+
+errno_t
+ifnet_notify_tcp_keepalive_offload_timeout(ifnet_t ifp,
+    struct ifnet_keepalive_offload_frame *frame)
+{
+	errno_t error = 0;
+
+	if (ifp == NULL || frame == NULL) {
+		return EINVAL;
+	}
+
+	if (frame->type != IFNET_KEEPALIVE_OFFLOAD_FRAME_TCP) {
+		return EINVAL;
+	}
+	if (frame->ether_type != IFNET_KEEPALIVE_OFFLOAD_FRAME_ETHERTYPE_IPV4 &&
+	    frame->ether_type != IFNET_KEEPALIVE_OFFLOAD_FRAME_ETHERTYPE_IPV6) {
+		return EINVAL;
+	}
+	if (frame->local_port == 0 || frame->remote_port == 0) {
+		return EINVAL;
+	}
+
+	error = tcp_notify_kao_timeout(ifp, frame);
+
+	return error;
 }
 
 errno_t
@@ -3161,7 +3240,7 @@ ifnet_link_status_report(ifnet_t ifp, const void *buffer,
 		ifp->if_link_status->ifsr_len = ifsr->ifsr_len;
 		if_cell_sr->valid_bitmask = 0;
 		bcopy(new_cell_sr, if_cell_sr, sizeof(*if_cell_sr));
-	} else if (ifp->if_subfamily == IFNET_SUBFAMILY_WIFI) {
+	} else if (IFNET_IS_WIFI(ifp)) {
 		struct if_wifi_status_v1 *if_wifi_sr, *new_wifi_sr;
 
 		/* Check version */
@@ -3252,7 +3331,7 @@ ifnet_get_fastlane_capable(ifnet_t interface, boolean_t *capable)
 	if (interface == NULL || capable == NULL) {
 		return EINVAL;
 	}
-	if (interface->if_eflags & IFEF_QOSMARKING_CAPABLE) {
+	if (interface->if_qosmarking_mode == IFRTYPE_QOSMARKING_FASTLANE) {
 		*capable = true;
 	} else {
 		*capable = false;
@@ -3355,4 +3434,18 @@ ifnet_get_low_power_mode(ifnet_t ifp, boolean_t *on)
 	*on  = !!(ifp->if_xflags & IFXF_LOW_POWER);
 
 	return 0;
+}
+
+/*************************************************************************/
+/* Interface advisory notifications                                      */
+/*************************************************************************/
+errno_t
+ifnet_interface_advisory_report(ifnet_t ifp,
+    const struct ifnet_interface_advisory *advisory)
+{
+
+#pragma unused(ifp)
+#pragma unused(advisory)
+	return ENOTSUP;
+
 }

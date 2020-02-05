@@ -37,7 +37,7 @@ void __abort_with_payload(uint32_t reason_namespace, uint64_t reason_code,
 
 static void abort_with_payload_wrapper_internal(uint32_t reason_namespace, uint64_t reason_code,
     void *payload, uint32_t payload_size, const char *reason_string,
-    uint64_t reason_flags) __attribute__((noreturn));
+    uint64_t reason_flags) __attribute__((noreturn, cold));
 
 /* System call wrappers */
 int

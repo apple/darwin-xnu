@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <inttypes.h>
 #include <libproc.h>
+#include <libgen.h>
 #include <limits.h>
 #include <mach/mach.h>
 #include <mach/policy.h>
@@ -27,6 +28,8 @@
 #include <sys/vnode.h>
 #include <unistd.h>
 #undef PRIVATE
+
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
 
 #define ACT_CHANGE_UID 1
 #define ACT_CHANGE_RUID 2
@@ -732,8 +735,7 @@ free_proc_info(void ** proc_info, int num)
 
 T_DECL(proc_info_listpids_all_pids,
     "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	/*
 	 * Get the value of nprocs with no buffer sent in
@@ -800,8 +802,7 @@ T_DECL(proc_info_listpids_all_pids,
 
 T_DECL(proc_info_listpids_pgrp_only,
     "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	proc_config_t proc_config = spawn_child_processes(CONF_PROC_COUNT, proc_info_listpids_handler);
 	T_LOG("Test to verify PROC_PGRP_ONLY returns correct value");
@@ -823,8 +824,7 @@ T_DECL(proc_info_listpids_pgrp_only,
 
 T_DECL(proc_info_listpids_ppid_only,
     "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	proc_config_t proc_config = spawn_child_processes(CONF_PROC_COUNT, proc_info_listpids_handler);
 	T_LOG("Test to verify PROC_PPID_ONLY returns correct value");
@@ -844,8 +844,7 @@ T_DECL(proc_info_listpids_ppid_only,
 
 T_DECL(proc_info_listpids_uid_only,
     "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	proc_config_t proc_config = spawn_child_processes(CONF_PROC_COUNT, proc_info_listpids_handler);
 	T_LOG("Test to verify PROC_UID_ONLY returns correct value");
@@ -864,8 +863,7 @@ T_DECL(proc_info_listpids_uid_only,
 
 T_DECL(proc_info_listpids_ruid_only,
     "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	proc_config_t proc_config = spawn_child_processes(CONF_PROC_COUNT, proc_info_listpids_handler);
 	T_LOG("Test to verify PROC_RUID_ONLY returns correct value");
@@ -884,8 +882,7 @@ T_DECL(proc_info_listpids_ruid_only,
 
 T_DECL(proc_info_listpids_tty_only,
     "proc_info API test to verify PROC_INFO_CALL_LISTPIDS",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	int ret = isatty(STDOUT_FILENO);
 	if (ret != 1) {
@@ -915,8 +912,7 @@ T_DECL(proc_info_listpids_tty_only,
 
 T_DECL(proc_info_pidinfo_proc_piduniqidentifierinfo,
     "Test to identify PROC_PIDUNIQIDENTIFIERINFO returns correct unique identifiers for process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	void * proc_info[2];
 	proc_info_caller(P_UNIQIDINFO | C_UNIQIDINFO, proc_info, NULL);
@@ -936,8 +932,7 @@ T_DECL(proc_info_pidinfo_proc_piduniqidentifierinfo,
 
 T_DECL(proc_info_pidinfo_proc_pidtbsdinfo,
     "Test to verify PROC_PIDTBSDINFO returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	void * proc_info[2];
 	int child_pid = 0;
@@ -969,8 +964,7 @@ T_DECL(proc_info_pidinfo_proc_pidtbsdinfo,
 
 T_DECL(proc_info_pidt_shortbsdinfo,
     "Test to verify PROC_PIDT_SHORTBSDINFO returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	void * proc_info[2];
 	int child_pid = 0;
@@ -999,8 +993,7 @@ T_DECL(proc_info_pidt_shortbsdinfo,
 
 T_DECL(proc_info_pidt_bsdinfowithuniqid,
     "Test to verify PROC_PIDT_BSDINFOWITHUNIQID returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	void * proc_info[4];
 	int child_pid = 0;
@@ -1044,8 +1037,7 @@ T_DECL(proc_info_pidt_bsdinfowithuniqid,
 
 T_DECL(proc_info_proc_pidtask_info,
     "Test to verify PROC_PIDTASKINFO returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	void * proc_info[2];
 	proc_info_caller(P_TASK_INFO | P_TASK_INFO_NEW, proc_info, NULL);
@@ -1102,8 +1094,7 @@ T_DECL(proc_info_proc_pidtask_info,
 
 T_DECL(proc_info_proc_pidtaskallinfo,
     "Test to verify PROC_PIDTASKALLINFO returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	void * proc_info[4];
 	int child_pid = 0;
@@ -1180,8 +1171,7 @@ T_DECL(proc_info_proc_pidtaskallinfo,
 
 T_DECL(proc_info_proc_pidlistthreads,
     "Test to verify PROC_PIDLISTTHREADS returns valid information about process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	void * proc_info[1];
 	proc_info_caller(THREAD_ADDR, proc_info, NULL);
@@ -1189,8 +1179,7 @@ T_DECL(proc_info_proc_pidlistthreads,
 
 T_DECL(proc_info_proc_pidthreadinfo,
     "Test to verify PROC_PIDTHREADINFO returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	void * proc_info[2];
 	int child_pid = 0;
@@ -1228,8 +1217,7 @@ T_DECL(proc_info_proc_pidthreadinfo,
 
 T_DECL(proc_info_proc_threadid64info,
     "Test to verify PROC_PIDTHREADID64INFO returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	void * proc_info[2];
 	proc_info_caller(PTHINFO | PTHINFO_64, proc_info, NULL);
@@ -1257,8 +1245,7 @@ T_DECL(proc_info_proc_threadid64info,
 
 T_DECL(proc_info_proc_pidthreadpathinfo,
     "Test to verify PROC_PIDTHREADPATHINFO returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	void * proc_info[2];
 	proc_info_caller(PTHINFO | PINFO_PATH, proc_info, NULL);
@@ -1289,8 +1276,7 @@ T_DECL(proc_info_proc_pidthreadpathinfo,
 
 T_DECL(proc_info_proc_pidarchinfo,
     "Test to verify PROC_PIDARCHINFO returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	void * proc_info[1];
 	proc_info_caller(PAI, proc_info, NULL);
@@ -1312,8 +1298,7 @@ T_DECL(proc_info_proc_pidarchinfo,
 
 T_DECL(proc_info_proc_pidregioninfo,
     "Test to verify PROC_PIDREGIONINFO returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	void * proc_info[3];
 	proc_info_caller(PREGINFO, proc_info, NULL);
@@ -1363,8 +1348,7 @@ T_DECL(proc_info_proc_pidregioninfo,
 
 T_DECL(proc_info_proc_pidregionpathinfo,
     "Test to verify PROC_PIDREGIONPATHINFO returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_INSTALLEDUSEROS))
+    T_META_ASROOT(true))
 {
 	void * proc_info[3];
 	proc_info_caller(PREGINFO_PATH, proc_info, NULL);
@@ -1451,8 +1435,7 @@ T_DECL(proc_info_proc_pidregionpathinfo,
 
 T_DECL(proc_info_proc_pidregionpathinfo2,
     "Test to verify PROC_PIDREGIONPATHINFO2 returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_INSTALLEDUSEROS))
+    T_META_ASROOT(true))
 {
 	void * proc_info[3];
 	proc_info_caller(PREGINFO_PATH_2, proc_info, NULL);
@@ -1544,8 +1527,7 @@ T_DECL(proc_info_proc_pidregionpathinfo2,
 
 T_DECL(proc_info_proc_pidregionpathinfo3,
     "Test to verify PROC_PIDREGIONPATHINFO3 returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_INSTALLEDUSEROS))
+    T_META_ASROOT(true))
 {
 	void * proc_info[5];
 	proc_info_caller(PREGINFO_PATH_3, proc_info, NULL);
@@ -1569,8 +1551,7 @@ T_DECL(proc_info_proc_pidregionpathinfo3,
 
 T_DECL(proc_info_proc_pidvnodepathinfo,
     "Test to verify PROC_PIDVNODEPATHINFO returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	void * proc_info[1];
 	proc_info_caller(PVNINFO, proc_info, NULL);
@@ -1605,8 +1586,7 @@ T_DECL(proc_info_proc_pidvnodepathinfo,
 
 T_DECL(proc_info_pidinfo_proc_pidlistfds,
     "proc_info API tests to verify PROC_INFO_CALL_PIDINFO/PROC_PIDLISTFDS",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	int retval;
 	int orig_nfiles              = 0;
@@ -1654,8 +1634,7 @@ T_DECL(proc_info_pidinfo_proc_pidlistfds,
 
 T_DECL(proc_info_proc_pidpathinfo,
     "Test to verify PROC_PIDPATHINFO returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	char * pid_path = NULL;
 	pid_path        = malloc(sizeof(char) * PROC_PIDPATHINFO_MAXSIZE);
@@ -1671,8 +1650,7 @@ T_DECL(proc_info_proc_pidpathinfo,
 
 T_DECL(proc_info_proc_pidlistfileports,
     "Test to verify PROC_PIDLISTFILEPORTS returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	struct proc_fileportinfo * fileport_info = NULL;
 	mach_port_t tmp_file_port                = MACH_PORT_NULL;
@@ -1723,8 +1701,7 @@ T_DECL(proc_info_proc_pidlistfileports,
 
 T_DECL(proc_info_proc_pidcoalitioninfo,
     "Test to verify PROC_PIDCOALITIONINFO returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	proc_config_t proc_config = spawn_child_processes(1, proc_info_call_pidinfo_handler);
 	int child_pid             = proc_config->child_pids[0];
@@ -1751,8 +1728,7 @@ T_DECL(proc_info_proc_pidcoalitioninfo,
 
 T_DECL(proc_info_proc_pidworkqueueinfo,
     "Test to verify PROC_PIDWORKQUEUEINFO returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	proc_config_t proc_config = spawn_child_processes(1, proc_info_call_pidinfo_handler);
 	int child_pid             = proc_config->child_pids[0];
@@ -1778,8 +1754,7 @@ T_DECL(proc_info_proc_pidworkqueueinfo,
 }
 T_DECL(proc_info_proc_pidnoteexit,
     "Test to verify PROC_PIDNOTEEXIT returns valid information about the process",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	/*
 	 * Ask the child to close pipe and quit, cleanup pipes for parent
@@ -1800,8 +1775,7 @@ T_DECL(proc_info_proc_pidnoteexit,
 
 T_DECL(proc_info_negative_tests,
     "Test to validate PROC_INFO_CALL_PIDINFO for invalid arguments",
-    T_META_ASROOT(true),
-    T_META_LTEPHASE(LTE_POSTINIT))
+    T_META_ASROOT(true))
 {
 	proc_config_t proc_config = spawn_child_processes(1, proc_info_call_pidinfo_handler);
 	int child_pid             = proc_config->child_pids[0];
@@ -2073,7 +2047,8 @@ T_DECL(dynamic_kqueue_extended_info, "the kernel should report valid extended dy
 
 #pragma mark proc_listpids
 
-T_DECL(list_kdebug_pids, "the kernel should report processes that are filtered by kdebug", T_META_ASROOT(YES))
+T_DECL(list_kdebug_pids, "the kernel should report processes that are filtered by kdebug",
+    T_META_ASROOT(YES), T_META_RUN_CONCURRENTLY(false))
 {
 	int mib[4] = {CTL_KERN, KERN_KDEBUG};
 	int npids;
@@ -2117,4 +2092,68 @@ T_DECL(list_kdebug_pids, "the kernel should report processes that are filtered b
 	ret    = sysctl(mib, 3, NULL, NULL, NULL, 0);
 	T_QUIET;
 	T_ASSERT_POSIX_SUCCESS(ret, "KERN_KDREMOVE sysctl");
+}
+
+#pragma mark misc
+
+static int prf_fd;
+static char prf_path[PATH_MAX];
+static void
+prf_end(void)
+{
+	close(prf_fd);
+	unlink(prf_path);
+}
+
+T_DECL(proc_regionfilename, "proc_regionfilename() should work")
+{
+	static char expected[] = "'very rigorous maritime engineering standards' && the front fell off";
+	static char real[sizeof(expected)];
+	int rc;
+	void *addr;
+
+	prf_fd = CONF_TMP_FILE_OPEN(prf_path);
+	T_ATEND(prf_end);
+
+	rc = (int) write(prf_fd, expected, sizeof(expected));
+	T_ASSERT_POSIX_SUCCESS(rc, "write to tmpfile");
+
+	addr = mmap(0, 0x1000, PROT_READ, MAP_PRIVATE, prf_fd, 0);
+	T_WITH_ERRNO;
+	T_ASSERT_NE_PTR(addr, MAP_FAILED, "mmap of tmpfile");
+
+	T_WITH_ERRNO;
+	T_ASSERT_GT(proc_regionfilename(getpid(), (uint64_t) addr, real, MAXPATHLEN), 0, "proc_regionfilename");
+	T_EXPECT_EQ_STR(basename(prf_path), basename(real), "filename");
+}
+
+T_DECL(proc_regionpath, "PROC_PIDREGIONPATH should return addr, length and path")
+{
+	int rc;
+	struct proc_regionpath path;
+	static char some_text[] = "'very rigorous maritime engineering standards' && the front fell off";
+	unsigned long rounded_length = (sizeof(some_text) & (unsigned long) ~(PAGE_SIZE - 1)) + PAGE_SIZE;
+	void *addr;
+
+	prf_fd = CONF_TMP_FILE_OPEN(prf_path);
+	T_ATEND(prf_end);
+
+	rc = (int) write(prf_fd, some_text, sizeof(some_text));
+	T_ASSERT_POSIX_SUCCESS(rc, "write to tmpfile");
+
+	addr = mmap(0, PAGE_SIZE, PROT_READ, MAP_PRIVATE, prf_fd, 0);
+	T_WITH_ERRNO;
+	T_ASSERT_NE_PTR(addr, MAP_FAILED, "mmap of tmpfile");
+
+	rc = proc_pidinfo(getpid(), PROC_PIDREGIONPATH, (uint64_t)addr, &path, sizeof(struct proc_regionpath));
+	T_ASSERT_POSIX_SUCCESS(rc, "proc_pidinfo");
+
+	T_ASSERT_EQ((unsigned long) path.prpo_regionlength, rounded_length, "regionlength must match");
+	T_ASSERT_EQ_PTR((void *) path.prpo_addr, addr, "addr must match");
+
+	rc = proc_pidinfo(getpid(), PROC_PIDREGIONPATH, (uint64_t)((char *) addr + 20), &path, sizeof(struct proc_regionpath));
+	T_ASSERT_POSIX_SUCCESS(rc, "proc_pidinfo 20 bytes past the base address");
+
+	T_ASSERT_EQ((unsigned long) path.prpo_regionlength, rounded_length, "regionlength must match, even when 20 bytes past the base address");
+	T_ASSERT_EQ_PTR((void *) path.prpo_addr, addr, "addr must match, even when 20 bytes past the base address");
 }

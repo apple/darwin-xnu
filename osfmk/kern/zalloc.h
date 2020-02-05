@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -122,7 +122,7 @@ struct zone {
 	int             countfree;      /* Number of free elements */
 	int     count_all_free_pages;  /* Number of pages collectable by GC */
 	lck_attr_t      lock_attr;      /* zone lock attribute */
-	decl_lck_mtx_data(, lock)        /* zone lock */
+	decl_lck_mtx_data(, lock);       /* zone lock */
 	lck_mtx_ext_t   lock_ext;       /* placeholder for indirect mutex */
 	vm_size_t       cur_size;       /* current memory utilization */
 	vm_size_t       max_size;       /* how large can this zone grow */
@@ -130,7 +130,7 @@ struct zone {
 	vm_size_t       alloc_size;     /* size used for more memory */
 	uint64_t        page_count __attribute__((aligned(8)));   /* number of pages used by this zone */
 	uint64_t        sum_count;      /* count of allocs (life of zone) */
-	uint32_t
+	uint64_t
 	/* boolean_t */ exhaustible        :1,  /* (F) merely return if empty? */
 	/* boolean_t */ collectable        :1,  /* (F) garbage collect empty pages */
 	/* boolean_t */ expandable         :1,  /* (T) expand zone (with message)? */
@@ -155,7 +155,9 @@ struct zone {
 	/* boolean_t */ zone_valid         :1,
 	/* boolean_t */ cpu_cache_enable_when_ready  :1,
 	/* boolean_t */ cpu_cache_enabled  :1,
-	/* future    */ _reserved          :3;
+	/* boolean_t */ clear_memory       :1,
+	/* boolean_t */ zone_destruction   :1,
+	/* future    */ _reserved          :33;
 
 	int             index;          /* index into zone_info arrays for this zone */
 	const char      *zone_name;     /* a name for the zone */
@@ -278,6 +280,7 @@ __BEGIN_DECLS
 #define Z_TAGS_ENABLED  11      /* Store tags */
 #endif  /* XNU_KERNEL_PRIVATE */
 #define Z_CACHING_ENABLED 12    /*enable and initialize per-cpu caches for the zone*/
+#define Z_CLEARMEMORY 13        /* Use KMA_ZERO on new allocations */
 
 #ifdef  XNU_KERNEL_PRIVATE
 
@@ -462,6 +465,15 @@ extern void             zone_change(
 /* Destroy the zone */
 extern void             zdestroy(
 	zone_t          zone);
+
+#ifdef XNU_KERNEL_PRIVATE
+
+/* Panic if a pointer is not mapped to the zone specified */
+extern void             zone_require(
+	void *addr,
+	zone_t expected_zone);
+
+#endif /* XNU_KERNEL_PRIVATE */
 
 __END_DECLS
 

@@ -50,7 +50,7 @@ __END_DECLS
 /* Class global data */
 OSObject::MetaClass OSObject::gMetaClass;
 const OSMetaClass * const OSObject::metaClass = &OSObject::gMetaClass;
-const OSMetaClass * const OSObject::superClass = 0;
+const OSMetaClass * const OSObject::superClass = NULL;
 
 /* Class member functions - Can't use defaults */
 OSObject::~OSObject()
@@ -64,7 +64,7 @@ OSObject::getMetaClass() const
 OSObject *
 OSObject::MetaClass::alloc() const
 {
-	return 0;
+	return NULL;
 }
 
 /* The OSObject::MetaClass constructor */
@@ -233,13 +233,13 @@ OSObject::taggedRelease(const void *tag, const int when) const
 void
 OSObject::release() const
 {
-	taggedRelease(0);
+	taggedRelease(NULL);
 }
 
 void
 OSObject::retain() const
 {
-	taggedRetain(0);
+	taggedRetain(NULL);
 }
 
 extern "C" void
@@ -257,7 +257,7 @@ osobject_release(void * object)
 void
 OSObject::release(int when) const
 {
-	taggedRelease(0, when);
+	taggedRelease(NULL, when);
 }
 
 bool
@@ -364,4 +364,25 @@ OSObject::OSObject(const OSMetaClass *)
 {
 	retainCount = 1;
 //    if (kIOTracking & gIOKitDebug) getMetaClass()->trackedInstance(this);
+}
+
+
+bool
+OSObject::iterateObjects(void * refcon, bool (*callback)(void * refcon, OSObject * object))
+{
+	OSCollection * col;
+	if ((col = OSDynamicCast(OSCollection, this))) {
+		return col->iterateObjects(refcon, callback);
+	}
+	return callback(refcon, this);
+}
+
+bool
+OSObject::iterateObjects(bool (^block)(OSObject * object))
+{
+	OSCollection * col;
+	if ((col = OSDynamicCast(OSCollection, this))) {
+		return col->iterateObjects(block);
+	}
+	return block(this);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -288,7 +288,8 @@ struct tcp_notify_ack_complete {
 #define MPTCP_SVCTYPE_HANDOVER          0 /* Default 0 */
 #define MPTCP_SVCTYPE_INTERACTIVE       1
 #define MPTCP_SVCTYPE_AGGREGATE         2
-#define MPTCP_SVCTYPE_MAX               3
+#define MPTCP_SVCTYPE_TARGET_BASED      3
+#define MPTCP_SVCTYPE_MAX               4
 /*
  * Specify minimum time in seconds before which an established
  * TCP connection will not be dropped when there is no response from the
@@ -299,6 +300,9 @@ struct tcp_notify_ack_complete {
 #define TCP_RXT_MINIMUM_TIMEOUT_LIMIT   (5 * 60) /* Limit is 5 minutes */
 
 #define MPTCP_ALTERNATE_PORT            0x216
+#define MPTCP_FORCE_ENABLE              0x217
+#define TCP_FASTOPEN_FORCE_ENABLE       0x218
+#define MPTCP_EXPECTED_PROGRESS_TARGET  0x219
 
 /*
  * The TCP_INFO socket option is a private API and is subject to change
@@ -479,6 +483,12 @@ struct mptcp_itf_stats {
 	uint32_t        is_expensive:1;
 	uint64_t        mpis_txbytes __attribute__((aligned(8)));
 	uint64_t        mpis_rxbytes __attribute__((aligned(8)));
+	uint64_t        mpis_wifi_txbytes __attribute__((aligned(8)));
+	uint64_t        mpis_wifi_rxbytes __attribute__((aligned(8)));
+	uint64_t        mpis_wired_txbytes __attribute__((aligned(8)));
+	uint64_t        mpis_wired_rxbytes __attribute__((aligned(8)));
+	uint64_t        mpis_cell_txbytes __attribute__((aligned(8)));
+	uint64_t        mpis_cell_rxbytes __attribute__((aligned(8)));
 };
 
 /* Version solely used to let libnetcore survive */

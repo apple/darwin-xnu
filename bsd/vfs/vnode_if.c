@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -430,6 +430,22 @@ struct vnodeop_desc vnop_revoke_desc = {
 	NULL
 };
 
+int vnop_mmap_check_vp_offsets[] = {
+	VOPARG_OFFSETOF(struct vnop_mmap_check_args, a_vp),
+	VDESC_NO_OFFSET
+};
+struct vnodeop_desc vnop_mmap_check_desc = {
+	0,
+	"vnop_mmap_check",
+	0,
+	vnop_mmap_check_vp_offsets,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	VDESC_NO_OFFSET,
+	NULL
+};
 
 int vnop_mmap_vp_offsets[] = {
 	VOPARG_OFFSETOF(struct vnop_mmap_args, a_vp),
@@ -448,7 +464,6 @@ struct vnodeop_desc vnop_mmap_desc = {
 	NULL
 };
 
-
 int vnop_mnomap_vp_offsets[] = {
 	VOPARG_OFFSETOF(struct vnop_mnomap_args, a_vp),
 	VDESC_NO_OFFSET
@@ -465,7 +480,6 @@ struct vnodeop_desc vnop_mnomap_desc = {
 	VDESC_NO_OFFSET,
 	NULL
 };
-
 
 int vnop_fsync_vp_offsets[] = {
 	VOPARG_OFFSETOF(struct vnop_fsync_args, a_vp),
@@ -895,16 +909,16 @@ int vnop_copyfile_vp_offsets[] = {
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_copyfile_desc = {
-	0,
-	"vnop_copyfile",
-	0 | VDESC_VP0_WILLRELE | VDESC_VP1_WILLRELE | VDESC_VP2_WILLRELE,
-	vnop_copyfile_vp_offsets,
-	VDESC_NO_OFFSET,
-	VDESC_NO_OFFSET,
-	VDESC_NO_OFFSET,
-	VOPARG_OFFSETOF(struct vnop_copyfile_args, a_tcnp),
-	VDESC_NO_OFFSET,
-	NULL
+	.vdesc_offset = 0,
+	.vdesc_name = "vnop_copyfile",
+	.vdesc_flags = 0 | VDESC_VP0_WILLRELE | VDESC_VP1_WILLRELE | VDESC_VP2_WILLRELE,
+	.vdesc_vp_offsets = vnop_copyfile_vp_offsets,
+	.vdesc_vpp_offset = VDESC_NO_OFFSET,
+	.vdesc_cred_offset = VDESC_NO_OFFSET,
+	.vdesc_proc_offset = VDESC_NO_OFFSET,
+	.vdesc_componentname_offset = VOPARG_OFFSETOF(struct vnop_copyfile_args, a_tcnp),
+	.vdesc_context_offset = VDESC_NO_OFFSET,
+	.vdesc_transports = NULL
 };
 
 int vnop_clonefile_vp_offsets[] = {
@@ -913,16 +927,16 @@ int vnop_clonefile_vp_offsets[] = {
 	VDESC_NO_OFFSET
 };
 struct vnodeop_desc vnop_clonefile_desc = {
-	0,
-	"vnop_clonefile",
-	0 | VDESC_VP0_WILLRELE | VDESC_VP1_WILLRELE | VDESC_VPP_WILLRELE,
-	vnop_clonefile_vp_offsets,
-	VOPARG_OFFSETOF(struct vnop_clonefile_args, a_vpp),
-	VDESC_NO_OFFSET,
-	VDESC_NO_OFFSET,
-	VOPARG_OFFSETOF(struct vnop_clonefile_args, a_cnp),
-	VOPARG_OFFSETOF(struct vnop_clonefile_args, a_context),
-	NULL
+	.vdesc_offset = 0,
+	.vdesc_name = "vnop_clonefile",
+	.vdesc_flags = 0 | VDESC_VP0_WILLRELE | VDESC_VP1_WILLRELE | VDESC_VPP_WILLRELE,
+	.vdesc_vp_offsets = vnop_clonefile_vp_offsets,
+	.vdesc_vpp_offset = VOPARG_OFFSETOF(struct vnop_clonefile_args, a_vpp),
+	.vdesc_cred_offset = VDESC_NO_OFFSET,
+	.vdesc_proc_offset = VDESC_NO_OFFSET,
+	.vdesc_componentname_offset = VOPARG_OFFSETOF(struct vnop_clonefile_args, a_cnp),
+	.vdesc_context_offset = VOPARG_OFFSETOF(struct vnop_clonefile_args, a_context),
+	.vdesc_transports = NULL
 };
 
 int vop_getxattr_vp_offsets[] = {
@@ -1205,6 +1219,7 @@ struct vnodeop_desc *vfs_op_descs[] = {
 	&vnop_kqfilt_remove_desc,
 	&vnop_setlabel_desc,
 	&vnop_revoke_desc,
+	&vnop_mmap_check_desc,
 	&vnop_mmap_desc,
 	&vnop_mnomap_desc,
 	&vnop_fsync_desc,

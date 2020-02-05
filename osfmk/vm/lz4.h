@@ -30,7 +30,7 @@
 #include <stdint.h>
 #include <stddef.h>
 #include <kern/assert.h>
-#include <machine/machlimits.h>
+#include <machine/limits.h>
 #include "lz4_assembly_select.h"
 #include "lz4_constants.h"
 

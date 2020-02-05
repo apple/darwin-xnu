@@ -82,7 +82,7 @@ IORangeAllocator::init( IORangeScalar endOfRange,
 	capacity            = 0;
 	capacityIncrement   = _capacity;
 	numElements         = 0;
-	elements            = 0;
+	elements            = NULL;
 	defaultAlignmentMask = _defaultAlignment - 1;
 	options             = _options;
 
@@ -110,7 +110,7 @@ IORangeAllocator::withRange(
 	if (thingy && !thingy->init( endOfRange, defaultAlignment,
 	    capacity, options )) {
 		thingy->release();
-		thingy = 0;
+		thingy = NULL;
 	}
 
 	return thingy;

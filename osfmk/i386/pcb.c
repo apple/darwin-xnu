@@ -103,33 +103,30 @@
  * Maps state flavor to number of words in the state:
  */
 unsigned int _MachineStateCount[] = {
-	[x86_THREAD_STATE32]      = x86_THREAD_STATE32_COUNT,
-	[x86_THREAD_STATE64]      = x86_THREAD_STATE64_COUNT,
-	[x86_THREAD_FULL_STATE64] = x86_THREAD_FULL_STATE64_COUNT,
-	[x86_THREAD_STATE]        = x86_THREAD_STATE_COUNT,
-	[x86_FLOAT_STATE32]       = x86_FLOAT_STATE32_COUNT,
-	[x86_FLOAT_STATE64]       = x86_FLOAT_STATE64_COUNT,
-	[x86_FLOAT_STATE]         = x86_FLOAT_STATE_COUNT,
-	[x86_EXCEPTION_STATE32]   = x86_EXCEPTION_STATE32_COUNT,
-	[x86_EXCEPTION_STATE64]   = x86_EXCEPTION_STATE64_COUNT,
-	[x86_EXCEPTION_STATE]     = x86_EXCEPTION_STATE_COUNT,
-	[x86_DEBUG_STATE32]       = x86_DEBUG_STATE32_COUNT,
-	[x86_DEBUG_STATE64]       = x86_DEBUG_STATE64_COUNT,
-	[x86_DEBUG_STATE]         = x86_DEBUG_STATE_COUNT,
-	[x86_AVX_STATE32]         = x86_AVX_STATE32_COUNT,
-	[x86_AVX_STATE64]         = x86_AVX_STATE64_COUNT,
-	[x86_AVX_STATE]           = x86_AVX_STATE_COUNT,
-#if !defined(RC_HIDE_XNU_J137)
-	[x86_AVX512_STATE32]      = x86_AVX512_STATE32_COUNT,
-	[x86_AVX512_STATE64]      = x86_AVX512_STATE64_COUNT,
-	[x86_AVX512_STATE]        = x86_AVX512_STATE_COUNT,
-#endif /* not RC_HIDE_XNU_J137 */
+	[x86_THREAD_STATE32]            = x86_THREAD_STATE32_COUNT,
+	[x86_THREAD_STATE64]            = x86_THREAD_STATE64_COUNT,
+	[x86_THREAD_FULL_STATE64]       = x86_THREAD_FULL_STATE64_COUNT,
+	[x86_THREAD_STATE]              = x86_THREAD_STATE_COUNT,
+	[x86_FLOAT_STATE32]             = x86_FLOAT_STATE32_COUNT,
+	[x86_FLOAT_STATE64]             = x86_FLOAT_STATE64_COUNT,
+	[x86_FLOAT_STATE]               = x86_FLOAT_STATE_COUNT,
+	[x86_EXCEPTION_STATE32]         = x86_EXCEPTION_STATE32_COUNT,
+	[x86_EXCEPTION_STATE64]         = x86_EXCEPTION_STATE64_COUNT,
+	[x86_EXCEPTION_STATE]           = x86_EXCEPTION_STATE_COUNT,
+	[x86_DEBUG_STATE32]             = x86_DEBUG_STATE32_COUNT,
+	[x86_DEBUG_STATE64]             = x86_DEBUG_STATE64_COUNT,
+	[x86_DEBUG_STATE]               = x86_DEBUG_STATE_COUNT,
+	[x86_AVX_STATE32]               = x86_AVX_STATE32_COUNT,
+	[x86_AVX_STATE64]               = x86_AVX_STATE64_COUNT,
+	[x86_AVX_STATE]                 = x86_AVX_STATE_COUNT,
+	[x86_AVX512_STATE32]            = x86_AVX512_STATE32_COUNT,
+	[x86_AVX512_STATE64]            = x86_AVX512_STATE64_COUNT,
+	[x86_AVX512_STATE]              = x86_AVX512_STATE_COUNT,
+	[x86_PAGEIN_STATE]              = x86_PAGEIN_STATE_COUNT
 };
 
 zone_t          iss_zone;               /* zone for saved_state area */
 zone_t          ids_zone;               /* zone for debug_state area */
-
-extern int      allow_64bit_proc_LDT_ops;
 
 /* Forward */
 
@@ -483,6 +480,12 @@ machine_switch_context(
 #endif
 
 	return Switch_context(old, continuation, new);
+}
+
+boolean_t
+machine_thread_on_core(thread_t thread)
+{
+	return thread->machine.specFlags & OnProc;
 }
 
 thread_t
@@ -855,15 +858,10 @@ machine_thread_set_state(
 		state = (x86_saved_state32_t *) tstate;
 
 		/*
-		 * Allow a thread in a 64-bit process to set
-		 * 32-bit state iff the code segment originates
-		 * in the LDT (the implication is that only
-		 * 32-bit code segments are allowed there, so
-		 * setting 32-bit state implies a switch to
-		 * compatibility mode on resume-to-user).
+		 * Refuse to allow 64-bit processes to set
+		 * 32-bit state.
 		 */
-		if (thread_is_64bit_addr(thr_act) &&
-		    thr_act->task->i386_ldt == 0) {
+		if (thread_is_64bit_addr(thr_act)) {
 			return KERN_INVALID_ARGUMENT;
 		}
 
@@ -996,37 +994,33 @@ machine_thread_set_state(
 
 	case x86_FLOAT_STATE32:
 	case x86_AVX_STATE32:
-#if !defined(RC_HIDE_XNU_J137)
 	case x86_AVX512_STATE32:
-#endif /* not RC_HIDE_XNU_J137 */
-		{
-			if (count != _MachineStateCount[flavor]) {
-				return KERN_INVALID_ARGUMENT;
-			}
-
-			if (thread_is_64bit_addr(thr_act)) {
-				return KERN_INVALID_ARGUMENT;
-			}
-
-			return fpu_set_fxstate(thr_act, tstate, flavor);
+	{
+		if (count != _MachineStateCount[flavor]) {
+			return KERN_INVALID_ARGUMENT;
 		}
+
+		if (thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		return fpu_set_fxstate(thr_act, tstate, flavor);
+	}
 
 	case x86_FLOAT_STATE64:
 	case x86_AVX_STATE64:
-#if !defined(RC_HIDE_XNU_J137)
 	case x86_AVX512_STATE64:
-#endif /* not RC_HIDE_XNU_J137 */
-		{
-			if (count != _MachineStateCount[flavor]) {
-				return KERN_INVALID_ARGUMENT;
-			}
-
-			if (!thread_is_64bit_addr(thr_act)) {
-				return KERN_INVALID_ARGUMENT;
-			}
-
-			return fpu_set_fxstate(thr_act, tstate, flavor);
+	{
+		if (count != _MachineStateCount[flavor]) {
+			return KERN_INVALID_ARGUMENT;
 		}
+
+		if (!thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		return fpu_set_fxstate(thr_act, tstate, flavor);
+	}
 
 	case x86_FLOAT_STATE:
 	{
@@ -1049,36 +1043,34 @@ machine_thread_set_state(
 	}
 
 	case x86_AVX_STATE:
-#if !defined(RC_HIDE_XNU_J137)
 	case x86_AVX512_STATE:
-#endif
-		{
-			x86_avx_state_t       *state;
+	{
+		x86_avx_state_t       *state;
 
-			if (count != _MachineStateCount[flavor]) {
-				return KERN_INVALID_ARGUMENT;
-			}
-
-			state = (x86_avx_state_t *)tstate;
-			/* Flavors are defined to have sequential values: 32-bit, 64-bit, non-specific */
-			/* 64-bit flavor? */
-			if (state->ash.flavor == (flavor - 1) &&
-			    state->ash.count == _MachineStateCount[flavor - 1] &&
-			    thread_is_64bit_addr(thr_act)) {
-				return fpu_set_fxstate(thr_act,
-				           (thread_state_t)&state->ufs.as64,
-				           flavor - 1);
-			}
-			/* 32-bit flavor? */
-			if (state->ash.flavor == (flavor - 2) &&
-			    state->ash.count == _MachineStateCount[flavor - 2] &&
-			    !thread_is_64bit_addr(thr_act)) {
-				return fpu_set_fxstate(thr_act,
-				           (thread_state_t)&state->ufs.as32,
-				           flavor - 2);
-			}
+		if (count != _MachineStateCount[flavor]) {
 			return KERN_INVALID_ARGUMENT;
 		}
+
+		state = (x86_avx_state_t *)tstate;
+		/* Flavors are defined to have sequential values: 32-bit, 64-bit, non-specific */
+		/* 64-bit flavor? */
+		if (state->ash.flavor == (flavor - 1) &&
+		    state->ash.count == _MachineStateCount[flavor - 1] &&
+		    thread_is_64bit_addr(thr_act)) {
+			return fpu_set_fxstate(thr_act,
+			           (thread_state_t)&state->ufs.as64,
+			           flavor - 1);
+		}
+		/* 32-bit flavor? */
+		if (state->ash.flavor == (flavor - 2) &&
+		    state->ash.count == _MachineStateCount[flavor - 2] &&
+		    !thread_is_64bit_addr(thr_act)) {
+			return fpu_set_fxstate(thr_act,
+			           (thread_state_t)&state->ufs.as32,
+			           flavor - 2);
+		}
+		return KERN_INVALID_ARGUMENT;
+	}
 
 	case x86_THREAD_STATE32:
 	{
@@ -1108,15 +1100,16 @@ machine_thread_set_state(
 
 	case x86_THREAD_FULL_STATE64:
 	{
-		if (!allow_64bit_proc_LDT_ops) {
-			return KERN_INVALID_ARGUMENT;
-		}
-
 		if (count != x86_THREAD_FULL_STATE64_COUNT) {
 			return KERN_INVALID_ARGUMENT;
 		}
 
 		if (!thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		/* If this process does not have a custom LDT, return failure */
+		if (thr_act->task->i386_ldt == 0) {
 			return KERN_INVALID_ARGUMENT;
 		}
 
@@ -1139,7 +1132,7 @@ machine_thread_set_state(
 			return set_thread_state64(thr_act, &state->uts.ts64, FALSE);
 		} else if (state->tsh.flavor == x86_THREAD_FULL_STATE64 &&
 		    state->tsh.count == x86_THREAD_FULL_STATE64_COUNT &&
-		    thread_is_64bit_addr(thr_act)) {
+		    thread_is_64bit_addr(thr_act) && thr_act->task->i386_ldt != 0) {
 			return set_thread_state64(thr_act, &state->uts.ts64, TRUE);
 		} else if (state->tsh.flavor == x86_THREAD_STATE32 &&
 		    state->tsh.count == x86_THREAD_STATE32_COUNT &&
@@ -1207,6 +1200,30 @@ machine_thread_set_state(
 	return KERN_SUCCESS;
 }
 
+mach_vm_address_t
+machine_thread_pc(thread_t thr_act)
+{
+	if (thread_is_64bit_addr(thr_act)) {
+		return (mach_vm_address_t)USER_REGS64(thr_act)->isf.rip;
+	} else {
+		return (mach_vm_address_t)USER_REGS32(thr_act)->eip;
+	}
+}
+
+void
+machine_thread_reset_pc(thread_t thr_act, mach_vm_address_t pc)
+{
+	pal_register_cache_state(thr_act, DIRTY);
+
+	if (thread_is_64bit_addr(thr_act)) {
+		if (!IS_USERADDR64_CANONICAL(pc)) {
+			pc = 0;
+		}
+		USER_REGS64(thr_act)->isf.rip = (uint64_t)pc;
+	} else {
+		USER_REGS32(thr_act)->eip = (uint32_t)pc;
+	}
+}
 
 
 /*
@@ -1268,7 +1285,6 @@ machine_thread_get_state(
 		break;
 	}
 
-#if !defined(RC_HIDE_XNU_J137)
 	case THREAD_STATE_FLAVOR_LIST_10_13:
 	{
 		if (*count < 6) {
@@ -1286,7 +1302,24 @@ machine_thread_get_state(
 		break;
 	}
 
-#endif
+	case THREAD_STATE_FLAVOR_LIST_10_15:
+	{
+		if (*count < 7) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		tstate[0] = x86_THREAD_STATE;
+		tstate[1] = x86_FLOAT_STATE;
+		tstate[2] = x86_EXCEPTION_STATE;
+		tstate[3] = x86_DEBUG_STATE;
+		tstate[4] = x86_AVX_STATE;
+		tstate[5] = x86_AVX512_STATE;
+		tstate[6] = x86_PAGEIN_STATE;
+
+		*count = 7;
+		break;
+	}
+
 	case x86_SAVED_STATE32:
 	{
 		x86_saved_state32_t     *state;
@@ -1407,70 +1440,64 @@ machine_thread_get_state(
 	}
 
 	case x86_AVX_STATE32:
-#if !defined(RC_HIDE_XNU_J137)
 	case x86_AVX512_STATE32:
-#endif
-		{
-			if (*count != _MachineStateCount[flavor]) {
-				return KERN_INVALID_ARGUMENT;
-			}
-
-			if (thread_is_64bit_addr(thr_act)) {
-				return KERN_INVALID_ARGUMENT;
-			}
-
-			*count = _MachineStateCount[flavor];
-
-			return fpu_get_fxstate(thr_act, tstate, flavor);
+	{
+		if (*count != _MachineStateCount[flavor]) {
+			return KERN_INVALID_ARGUMENT;
 		}
+
+		if (thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		*count = _MachineStateCount[flavor];
+
+		return fpu_get_fxstate(thr_act, tstate, flavor);
+	}
 
 	case x86_AVX_STATE64:
-#if !defined(RC_HIDE_XNU_J137)
 	case x86_AVX512_STATE64:
-#endif
-		{
-			if (*count != _MachineStateCount[flavor]) {
-				return KERN_INVALID_ARGUMENT;
-			}
-
-			if (!thread_is_64bit_addr(thr_act)) {
-				return KERN_INVALID_ARGUMENT;
-			}
-
-			*count = _MachineStateCount[flavor];
-
-			return fpu_get_fxstate(thr_act, tstate, flavor);
+	{
+		if (*count != _MachineStateCount[flavor]) {
+			return KERN_INVALID_ARGUMENT;
 		}
+
+		if (!thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		*count = _MachineStateCount[flavor];
+
+		return fpu_get_fxstate(thr_act, tstate, flavor);
+	}
 
 	case x86_AVX_STATE:
-#if !defined(RC_HIDE_XNU_J137)
 	case x86_AVX512_STATE:
-#endif
-		{
-			x86_avx_state_t         *state;
-			thread_state_t          fstate;
+	{
+		x86_avx_state_t         *state;
+		thread_state_t          fstate;
 
-			if (*count < _MachineStateCount[flavor]) {
-				return KERN_INVALID_ARGUMENT;
-			}
-
-			*count = _MachineStateCount[flavor];
-			state = (x86_avx_state_t *)tstate;
-
-			bzero((char *)state, *count * sizeof(int));
-
-			if (thread_is_64bit_addr(thr_act)) {
-				flavor -= 1; /* 64-bit flavor */
-				fstate = (thread_state_t) &state->ufs.as64;
-			} else {
-				flavor -= 2; /* 32-bit flavor */
-				fstate = (thread_state_t) &state->ufs.as32;
-			}
-			state->ash.flavor = flavor;
-			state->ash.count  = _MachineStateCount[flavor];
-
-			return fpu_get_fxstate(thr_act, fstate, flavor);
+		if (*count < _MachineStateCount[flavor]) {
+			return KERN_INVALID_ARGUMENT;
 		}
+
+		*count = _MachineStateCount[flavor];
+		state = (x86_avx_state_t *)tstate;
+
+		bzero((char *)state, *count * sizeof(int));
+
+		if (thread_is_64bit_addr(thr_act)) {
+			flavor -= 1;         /* 64-bit flavor */
+			fstate = (thread_state_t) &state->ufs.as64;
+		} else {
+			flavor -= 2;         /* 32-bit flavor */
+			fstate = (thread_state_t) &state->ufs.as32;
+		}
+		state->ash.flavor = flavor;
+		state->ash.count  = _MachineStateCount[flavor];
+
+		return fpu_get_fxstate(thr_act, fstate, flavor);
+	}
 
 	case x86_THREAD_STATE32:
 	{
@@ -1506,15 +1533,16 @@ machine_thread_get_state(
 
 	case x86_THREAD_FULL_STATE64:
 	{
-		if (!allow_64bit_proc_LDT_ops) {
-			return KERN_INVALID_ARGUMENT;
-		}
-
 		if (*count < x86_THREAD_FULL_STATE64_COUNT) {
 			return KERN_INVALID_ARGUMENT;
 		}
 
 		if (!thread_is_64bit_addr(thr_act)) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		/* If this process does not have a custom LDT, return failure */
+		if (thr_act->task->i386_ldt == 0) {
 			return KERN_INVALID_ARGUMENT;
 		}
 
@@ -1678,6 +1706,20 @@ machine_thread_get_state(
 			get_debug_state32(thr_act, &state->uds.ds32);
 		}
 		*count = x86_DEBUG_STATE_COUNT;
+		break;
+	}
+
+	case x86_PAGEIN_STATE:
+	{
+		if (*count < x86_PAGEIN_STATE_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		x86_pagein_state_t *state = (void *)tstate;
+
+		state->__pagein_error = thr_act->t_pagein_error;
+
+		*count = x86_PAGEIN_STATE_COUNT;
 		break;
 	}
 	default:
@@ -1981,15 +2023,16 @@ machine_stack_attach(
 	thread_initialize_kernel_state(thread);
 
 	statep = STACK_IKS(stack);
-#if defined(__x86_64__)
-	statep->k_rip = (unsigned long) Thread_continue;
-	statep->k_rbx = (unsigned long) thread_continue;
-	statep->k_rsp = (unsigned long) STACK_IKS(stack);
-#else
-	statep->k_eip = (unsigned long) Thread_continue;
-	statep->k_ebx = (unsigned long) thread_continue;
-	statep->k_esp = (unsigned long) STACK_IKS(stack);
-#endif
+
+	/*
+	 * Reset the state of the thread to resume from a continuation,
+	 * including resetting the stack and frame pointer to avoid backtracers
+	 * seeing this temporary state and attempting to walk the defunct stack.
+	 */
+	statep->k_rbp = (uint64_t) 0;
+	statep->k_rip = (uint64_t) Thread_continue;
+	statep->k_rbx = (uint64_t) thread_continue;
+	statep->k_rsp = (uint64_t) STACK_IKS(stack);
 
 	return;
 }

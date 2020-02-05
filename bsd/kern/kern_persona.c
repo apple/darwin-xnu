@@ -28,12 +28,17 @@
 #include <sys/kernel.h>
 #include <sys/kernel_types.h>
 #include <sys/persona.h>
+#include <pexpert/pexpert.h>
 
 #if CONFIG_PERSONAS
+#include <machine/atomic.h>
+
 #include <kern/assert.h>
 #include <kern/simple_lock.h>
 #include <kern/task.h>
 #include <kern/zalloc.h>
+#include <mach/thread_act.h>
+#include <kern/thread.h>
 
 #include <sys/param.h>
 #include <sys/proc_internal.h>
@@ -52,9 +57,6 @@
 #define FIRST_PERSONA_ID 501
 #define PERSONA_ID_STEP   10
 
-#define PERSONA_SYSTEM_UID    ((uid_t)99)
-#define PERSONA_SYSTEM_LOGIN  "system"
-
 #define PERSONA_ALLOC_TOKEN   (0x7a0000ae)
 #define PERSONA_INIT_TOKEN    (0x7500005e)
 #define PERSONA_MAGIC         (0x0aa55aa0)
@@ -65,8 +67,13 @@
 static LIST_HEAD(personalist, persona) all_personas;
 static uint32_t g_total_personas;
 uint32_t g_max_personas = MAX_PERSONAS;
-
-struct persona *g_system_persona = NULL;
+struct persona *system_persona = NULL;
+struct persona *proxy_system_persona = NULL;
+#if CONFIG_EMBEDDED
+int unique_persona = 1;
+#else
+int unique_persona = 0;
+#endif
 
 static uid_t g_next_persona_id;
 
@@ -80,17 +87,23 @@ os_refgrp_decl(static, persona_refgrp, "persona", NULL);
 static zone_t persona_zone;
 
 kauth_cred_t g_default_persona_cred;
+extern struct auditinfo_addr *audit_default_aia_p;
 
 #define lock_personas()    lck_mtx_lock(&all_personas_lock)
 #define unlock_personas()  lck_mtx_unlock(&all_personas_lock)
 
-
 extern void mach_kauth_cred_uthread_update(void);
+
+extern kern_return_t bank_get_bank_ledger_thread_group_and_persona(void *voucher,
+    void *bankledger, void **banktg, uint32_t *persona_id);
+void
+ipc_voucher_release(void *voucher);
 
 void
 personas_bootstrap(void)
 {
 	struct posix_cred pcred;
+	int unique_persona_bootarg;
 
 	persona_dbg("Initializing persona subsystem");
 	LIST_INIT(&all_personas);
@@ -126,20 +139,17 @@ personas_bootstrap(void)
 	if (!g_default_persona_cred) {
 		panic("couldn't create default persona credentials!");
 	}
-
-	g_system_persona = persona_alloc(PERSONA_SYSTEM_UID,
-	    PERSONA_SYSTEM_LOGIN,
-	    PERSONA_SYSTEM, NULL);
-	int err = persona_init_begin(g_system_persona);
-	assert(err == 0);
-
-	persona_init_end(g_system_persona, err);
-
-	assert(g_system_persona != NULL);
+#if CONFIG_AUDIT
+	/* posix_cred_create() sets this value to NULL */
+	g_default_persona_cred->cr_audit.as_aia_p = audit_default_aia_p;
+#endif
+	if (PE_parse_boot_argn("unique_persona", &unique_persona_bootarg, sizeof(unique_persona_bootarg))) {
+		unique_persona = !!unique_persona_bootarg;
+	}
 }
 
 struct persona *
-persona_alloc(uid_t id, const char *login, int type, int *error)
+persona_alloc(uid_t id, const char *login, int type, char *path, int *error)
 {
 	struct persona *persona;
 	int err = 0;
@@ -170,7 +180,7 @@ persona_alloc(uid_t id, const char *login, int type, int *error)
 
 	bzero(persona, sizeof(*persona));
 
-	if (hw_atomic_add(&g_total_personas, 1) > MAX_PERSONAS) {
+	if (os_atomic_inc(&g_total_personas, relaxed) > MAX_PERSONAS) {
 		/* too many personas! */
 		pna_err("too many active personas!");
 		err = EBUSY;
@@ -199,6 +209,7 @@ persona_alloc(uid_t id, const char *login, int type, int *error)
 	persona->pna_type = type;
 	persona->pna_id = id;
 	persona->pna_valid = PERSONA_ALLOC_TOKEN;
+	persona->pna_path = path;
 
 	/*
 	 * NOTE: this persona has not been fully initialized. A subsequent
@@ -211,7 +222,7 @@ persona_alloc(uid_t id, const char *login, int type, int *error)
 	return persona;
 
 out_error:
-	(void)hw_atomic_add(&g_total_personas, -1);
+	os_atomic_dec(&g_total_personas, relaxed);
 	zfree(persona_zone, persona);
 	if (error) {
 		*error = err;
@@ -375,7 +386,7 @@ persona_init_end(struct persona *persona, int error)
 	if (error != 0 || persona->pna_valid == PERSONA_ALLOC_TOKEN) {
 		persona_dbg("ERROR:%d after initialization of %d (%s)", error, persona->pna_id, persona->pna_login);
 		/* remove this persona from the global count */
-		(void)hw_atomic_add(&g_total_personas, -1);
+		os_atomic_dec(&g_total_personas, relaxed);
 	} else if (error == 0 &&
 	    persona->pna_valid == PERSONA_INIT_TOKEN) {
 		persona->pna_valid = PERSONA_MAGIC;
@@ -384,6 +395,76 @@ persona_init_end(struct persona *persona, int error)
 	}
 
 	unlock_personas();
+}
+
+/**
+ * persona_verify_and_set_uniqueness
+ *
+ * This function checks the persona, if the one being spawned is of type
+ * PERSONA_SYSTEM or PERSONA_SYSTEM_PROXY, is unique.
+ *
+ * Conditions:
+ *      global persona list is locked on entry and return.
+ *
+ * Returns:
+ *      EEXIST: if persona is system/system-proxy and is not unique.
+ *      0: Otherwise.
+ */
+int
+persona_verify_and_set_uniqueness(struct persona *persona)
+{
+	if (persona == NULL) {
+		return EINVAL;
+	}
+
+	if (!unique_persona) {
+		return 0;
+	}
+
+	if (persona->pna_type == PERSONA_SYSTEM) {
+		if (system_persona != NULL) {
+			return EEXIST;
+		}
+		system_persona = persona;
+		return 0;
+	}
+
+	if (persona->pna_type == PERSONA_SYSTEM_PROXY) {
+		if (proxy_system_persona != NULL) {
+			return EEXIST;
+		}
+		proxy_system_persona = persona;
+		return 0;
+	}
+	return 0;
+}
+
+/**
+ * persona_is_unique
+ *
+ * This function checks if the persona spawned is unique.
+ *
+ * Returns:
+ *      TRUE: if unique.
+ *      FALSE: otherwise.
+ */
+boolean_t
+persona_is_unique(struct persona *persona)
+{
+	if (persona == NULL) {
+		return FALSE;
+	}
+
+	if (!unique_persona) {
+		return FALSE;
+	}
+
+	if (persona->pna_type == PERSONA_SYSTEM ||
+	    persona->pna_type == PERSONA_SYSTEM_PROXY) {
+		return TRUE;
+	}
+
+	return FALSE;
 }
 
 static struct persona *
@@ -438,10 +519,13 @@ persona_put(struct persona *persona)
 	persona_lock(persona);
 	if (persona_valid(persona)) {
 		LIST_REMOVE(persona, pna_list);
-		if (hw_atomic_add(&g_total_personas, -1) == UINT_MAX) {
+		if (os_atomic_dec_orig(&g_total_personas, relaxed) == 0) {
 			panic("persona count underflow!\n");
 		}
 		persona_mkinvalid(persona);
+	}
+	if (persona->pna_path != NULL) {
+		FREE_ZONE(persona->pna_path, MAXPATHLEN, M_NAMEI);
 	}
 	persona_unlock(persona);
 	unlock_personas();
@@ -497,11 +581,11 @@ persona_lookup_and_invalidate(uid_t id)
 	LIST_FOREACH_SAFE(entry, &all_personas, pna_list, tmp) {
 		persona_lock(entry);
 		if (entry->pna_id == id) {
-			if (persona_valid(entry)) {
+			if (persona_valid(entry) && !persona_is_unique(entry)) {
 				persona = persona_get_locked(entry);
 				assert(persona != NULL);
 				LIST_REMOVE(persona, pna_list);
-				if (hw_atomic_add(&g_total_personas, -1) == UINT_MAX) {
+				if (os_atomic_dec_orig(&g_total_personas, relaxed) == 0) {
 					panic("persona ref count underflow!\n");
 				}
 				persona_mkinvalid(persona);
@@ -517,7 +601,20 @@ persona_lookup_and_invalidate(uid_t id)
 }
 
 int
+persona_find_by_type(int persona_type, struct persona **persona, size_t *plen)
+{
+	return persona_find_all(NULL, PERSONA_ID_NONE, persona_type, persona, plen);
+}
+
+int
 persona_find(const char *login, uid_t uid,
+    struct persona **persona, size_t *plen)
+{
+	return persona_find_all(login, uid, PERSONA_INVALID, persona, plen);
+}
+
+int
+persona_find_all(const char *login, uid_t uid, int persona_type,
     struct persona **persona, size_t *plen)
 {
 	struct persona *tmp;
@@ -529,6 +626,11 @@ persona_find(const char *login, uid_t uid,
 	}
 	if (uid != PERSONA_ID_NONE) {
 		match++;
+	}
+	if ((persona_type > PERSONA_INVALID) && (persona_type <= PERSONA_TYPE_MAX)) {
+		match++;
+	} else if (persona_type != PERSONA_INVALID) {
+		return EINVAL;
 	}
 
 	if (match == 0) {
@@ -546,6 +648,9 @@ persona_find(const char *login, uid_t uid,
 			m++;
 		}
 		if (uid != PERSONA_ID_NONE && uid == tmp->pna_id) {
+			m++;
+		}
+		if (persona_type != PERSONA_INVALID && persona_type == tmp->pna_type) {
 			m++;
 		}
 		if (m == match) {
@@ -593,13 +698,29 @@ persona_proc_get(pid_t pid)
 struct persona *
 current_persona_get(void)
 {
-	proc_t p = current_proc();
-	struct persona *persona;
+	struct persona *persona = NULL;
+	uid_t current_persona_id = PERSONA_ID_NONE;
+	ipc_voucher_t voucher;
 
-	proc_lock(p);
-	persona = persona_get(p->p_persona);
-	proc_unlock(p);
-
+	thread_get_mach_voucher(current_thread(), 0, &voucher);
+	/* returns a voucher ref */
+	if (voucher != IPC_VOUCHER_NULL) {
+		/*
+		 * If the voucher doesn't contain a bank attribute, it uses
+		 * the default bank task value to determine the persona id
+		 * which is the same as the proc's persona id
+		 */
+		bank_get_bank_ledger_thread_group_and_persona(voucher, NULL,
+		    NULL, &current_persona_id);
+		ipc_voucher_release(voucher);
+		persona = persona_lookup(current_persona_id);
+	} else {
+		/* Fallback - get the proc's persona */
+		proc_t p = current_proc();
+		proc_lock(p);
+		persona = persona_get(p->p_persona);
+		proc_unlock(p);
+	}
 	return persona;
 }
 
@@ -852,7 +973,6 @@ persona_proc_adopt(proc_t p, struct persona *persona, kauth_cred_t auth_override
 {
 	int error;
 	struct persona *old_persona;
-	struct session * sessp;
 
 	if (!persona) {
 		return EINVAL;
@@ -886,15 +1006,21 @@ persona_proc_adopt(proc_t p, struct persona *persona, kauth_cred_t auth_override
 		enterpgrp(p, persona->pna_pgid, persona->pna_pgid == uid);
 	}
 
+	/* Only Multiuser Mode needs to update the session login name to the persona name */
+#if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
+	volatile uint32_t *multiuser_flag_address = (volatile uint32_t *)(uintptr_t)(_COMM_PAGE_MULTIUSER_CONFIG);
+	uint32_t multiuser_flags = *multiuser_flag_address;
 	/* set the login name of the session */
-	sessp = proc_session(p);
-	if (sessp != SESSION_NULL) {
-		session_lock(sessp);
-		bcopy(persona->pna_login, sessp->s_login, MAXLOGNAME);
-		session_unlock(sessp);
-		session_rele(sessp);
+	if (multiuser_flags) {
+		struct session * sessp = proc_session(p);
+		if (sessp != SESSION_NULL) {
+			session_lock(sessp);
+			bcopy(persona->pna_login, sessp->s_login, MAXLOGNAME);
+			session_unlock(sessp);
+			session_rele(sessp);
+		}
 	}
-
+#endif
 	persona_unlock(persona);
 
 	set_security_token(p);
@@ -1259,8 +1385,6 @@ persona_get_login(struct persona *persona, char login[MAXLOGNAME + 1])
 
 out_unlock:
 	persona_unlock(persona);
-	login[MAXLOGNAME] = 0;
-
 	return ret;
 }
 
@@ -1269,6 +1393,10 @@ out_unlock:
 /*
  * symbol exports for kext compatibility
  */
+
+struct persona *system_persona = NULL;
+struct persona *proxy_system_persona = NULL;
+int unique_persona = 0;
 
 uid_t
 persona_get_id(__unused struct persona *persona)
@@ -1301,6 +1429,20 @@ persona_find(__unused const char *login,
     __unused size_t *plen)
 {
 	return ENOTSUP;
+}
+
+int
+persona_find_by_type(__unused int persona_type,
+    __unused struct persona **persona,
+    __unused size_t *plen)
+{
+	return ENOTSUP;
+}
+
+struct persona *
+persona_proc_get(__unused pid_t pid)
+{
+	return NULL;
 }
 
 struct persona *

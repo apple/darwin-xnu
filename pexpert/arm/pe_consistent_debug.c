@@ -52,6 +52,24 @@ consistent_debug_allocate_entry(void)
 	return NULL;
 }
 
+boolean_t
+PE_consistent_debug_lookup_entry(uint64_t record_id, uint64_t *phys_addr, uint64_t *length)
+{
+	assert(phys_addr != NULL);
+	assert(length != NULL);
+
+	for (unsigned int i = 0; i < consistent_debug_registry->top_level_header.num_records; i++) {
+		if (consistent_debug_registry->records[i].record_id == record_id) {
+			*phys_addr = consistent_debug_registry->records[i].physaddr;
+			*length = consistent_debug_registry->records[i].length;
+
+			return true;
+		}
+	}
+
+	return false;
+}
+
 int
 PE_consistent_debug_inherit(void)
 {

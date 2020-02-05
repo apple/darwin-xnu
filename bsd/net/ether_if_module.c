@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -96,6 +96,7 @@
 #include <net/ether_if_module.h>
 #include <sys/socketvar.h>
 #include <net/if_vlan_var.h>
+#include <net/if_6lowpan_var.h>
 #if BOND
 #include <net/if_bond_internal.h>
 #endif /* BOND */
@@ -105,6 +106,9 @@
 #if IF_FAKE
 #include <net/if_fake_var.h>
 #endif /* IF_FAKE */
+#if IF_HEADLESS
+extern void if_headless_init(void);
+#endif /* IF_HEADLESS */
 
 #include <net/dlil.h>
 
@@ -377,12 +381,6 @@ ether_demux(ifnet_t ifp, mbuf_t m, char *frame_header,
 		m->m_flags &= ~M_HASFCS;
 	}
 
-	if (ifp->if_eflags & IFEF_BOND) {
-		/* if we're bonded, bond "protocol" gets all the packets */
-		*protocol_family = PF_BOND;
-		return 0;
-	}
-
 	if ((eh->ether_dhost[0] & 1) == 0) {
 		/*
 		 * When the driver is put into promiscuous mode we may receive
@@ -394,6 +392,12 @@ ether_demux(ifnet_t ifp, mbuf_t m, char *frame_header,
 		if (_ether_cmp(eh->ether_dhost, IF_LLADDR(ifp))) {
 			m->m_flags |= M_PROMISC;
 		}
+	}
+
+	/* check for IEEE 802.15.4 */
+	if (ether_type == htons(ETHERTYPE_IEEE802154)) {
+		*protocol_family = PF_802154;
+		return 0;
 	}
 
 	/* check for VLAN */
@@ -655,7 +659,12 @@ ether_family_init(void)
 #if IF_FAKE
 	if_fake_init();
 #endif /* IF_FAKE */
-
+#if IF_HEADLESS
+	if_headless_init();
+#endif /* IF_HEADLESS */
+#if SIXLOWPAN
+	sixlowpan_family_init();
+#endif /* VLAN */
 done:
 
 	return error;

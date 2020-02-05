@@ -33,6 +33,8 @@ __BEGIN_DECLS
 #include <vm/vm_kern.h>
 __END_DECLS
 
+#define LIBKERN_SMART_POINTERS
+
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSSerialize.h>
 #include <libkern/c++/OSLib.h>
@@ -65,7 +67,7 @@ OSData::initWithCapacity(unsigned int inCapacity)
 			} else {
 				kmem_free(kernel_map, (vm_offset_t)data, capacity);
 			}
-			data = 0;
+			data = NULL;
 			capacity = 0;
 		}
 	}
@@ -153,66 +155,61 @@ OSData::initWithData(const OSData *inData,
 	}
 }
 
-OSData *
+OSDataPtr
 OSData::withCapacity(unsigned int inCapacity)
 {
-	OSData *me = new OSData;
+	OSDataPtr me = OSDataPtr::alloc();
 
 	if (me && !me->initWithCapacity(inCapacity)) {
-		me->release();
-		return 0;
+		return nullptr;
 	}
 
 	return me;
 }
 
-OSData *
+OSDataPtr
 OSData::withBytes(const void *bytes, unsigned int inLength)
 {
-	OSData *me = new OSData;
+	OSDataPtr me = OSDataPtr::alloc();
 
 	if (me && !me->initWithBytes(bytes, inLength)) {
-		me->release();
-		return 0;
+		return nullptr;
 	}
 	return me;
 }
 
-OSData *
+OSDataPtr
 OSData::withBytesNoCopy(void *bytes, unsigned int inLength)
 {
-	OSData *me = new OSData;
+	OSDataPtr me = OSDataPtr::alloc();
 
 	if (me && !me->initWithBytesNoCopy(bytes, inLength)) {
-		me->release();
-		return 0;
+		return nullptr;
 	}
 
 	return me;
 }
 
-OSData *
+OSDataPtr
 OSData::withData(const OSData *inData)
 {
-	OSData *me = new OSData;
+	OSDataPtr me = OSDataPtr::alloc();
 
 	if (me && !me->initWithData(inData)) {
-		me->release();
-		return 0;
+		return nullptr;
 	}
 
 	return me;
 }
 
-OSData *
+OSDataPtr
 OSData::withData(const OSData *inData,
     unsigned int start, unsigned int inLength)
 {
-	OSData *me = new OSData;
+	OSDataPtr me = OSDataPtr::alloc();
 
 	if (me && !me->initWithData(inData, start, inLength)) {
-		me->release();
-		return 0;
+		return nullptr;
 	}
 
 	return me;
@@ -401,7 +398,7 @@ const void *
 OSData::getBytesNoCopy() const
 {
 	if (!length) {
-		return 0;
+		return NULL;
 	} else {
 		return data;
 	}
@@ -411,7 +408,7 @@ const void *
 OSData::getBytesNoCopy(unsigned int start,
     unsigned int inLength) const
 {
-	const void *outData = 0;
+	const void *outData = NULL;
 
 	if (length
 	    && start < length

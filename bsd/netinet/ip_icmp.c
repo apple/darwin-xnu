@@ -445,6 +445,7 @@ icmp_input(struct mbuf *m, int hlen)
 	struct in_ifaddr *ia;
 	void (*ctlfunc)(int, struct sockaddr *, void *, struct ifnet *);
 	int code;
+	boolean_t should_log_redirect = false;
 
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
 	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
@@ -578,10 +579,14 @@ deliver:
 		 */
 		if (icmplen < ICMP_ADVLENMIN || icmplen < ICMP_ADVLEN(icp)
 		    || IP_VHL_HL(icp->icmp_ip.ip_vhl) <
-		    (sizeof(struct ip) >> 2)) {
+		    (sizeof(struct ip) >> 2) ||
+		    (m = m_pullup(m, hlen + ICMP_ADVLEN(icp))) == NULL) {
 			icmpstat.icps_badlen++;
 			goto freeit;
 		}
+
+		ip = mtod(m, struct ip *);
+		icp = (struct icmp *)(void *)(mtod(m, uint8_t *) + hlen);
 
 #if BYTE_ORDER != BIG_ENDIAN
 		NTOHS(icp->icmp_ip.ip_len);
@@ -735,21 +740,6 @@ reflect:
 		return;
 
 	case ICMP_REDIRECT:
-		if (log_redirect) {
-			u_int32_t src, dst, gw;
-
-			src = ntohl(ip->ip_src.s_addr);
-			dst = ntohl(icp->icmp_ip.ip_dst.s_addr);
-			gw = ntohl(icp->icmp_gwaddr.s_addr);
-			printf("icmp redirect from %d.%d.%d.%d: "
-			    "%d.%d.%d.%d => %d.%d.%d.%d\n",
-			    (int)(src >> 24), (int)((src >> 16) & 0xff),
-			    (int)((src >> 8) & 0xff), (int)(src & 0xff),
-			    (int)(dst >> 24), (int)((dst >> 16) & 0xff),
-			    (int)((dst >> 8) & 0xff), (int)(dst & 0xff),
-			    (int)(gw >> 24), (int)((gw >> 16) & 0xff),
-			    (int)((gw >> 8) & 0xff), (int)(gw & 0xff));
-		}
 		if (drop_redirect) {
 			break;
 		}
@@ -761,6 +751,12 @@ reflect:
 			icmpstat.icps_badlen++;
 			break;
 		}
+
+#if (DEBUG | DEVELOPMENT)
+		should_log_redirect = log_redirect || (icmpprintfs > 0);
+#else
+		should_log_redirect = log_redirect;
+#endif
 		/*
 		 * Short circuit routing redirects to force
 		 * immediate change in the kernel's routing
@@ -770,16 +766,18 @@ reflect:
 		 */
 		icmpgw.sin_addr = ip->ip_src;
 		icmpdst.sin_addr = icp->icmp_gwaddr;
-#if (DEBUG | DEVELOPMENT)
-		if (icmpprintfs > 0) {
+
+		if (should_log_redirect) {
+			char src_str[MAX_IPv4_STR_LEN];
 			char dst_str[MAX_IPv4_STR_LEN];
 			char gw_str[MAX_IPv4_STR_LEN];
 
+			inet_ntop(AF_INET, &ip->ip_src, src_str, sizeof(src_str));
 			inet_ntop(AF_INET, &icp->icmp_ip.ip_dst, dst_str, sizeof(dst_str));
 			inet_ntop(AF_INET, &icp->icmp_gwaddr, gw_str, sizeof(gw_str));
-			printf("%s: redirect dst %s to %s\n", __func__, dst_str, gw_str);
+			printf("%s: redirect dst %s to %s from %s\n", __func__,
+			    dst_str, gw_str, src_str);
 		}
-#endif
 		icmpsrc.sin_addr = icp->icmp_ip.ip_dst;
 		rtredirect(m->m_pkthdr.rcvif, (struct sockaddr *)&icmpsrc,
 		    (struct sockaddr *)&icmpdst, NULL, RTF_GATEWAY | RTF_HOST,

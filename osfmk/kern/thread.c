@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -122,6 +122,7 @@
 #include <kern/telemetry.h>
 #include <kern/policy_internal.h>
 #include <kern/turnstile.h>
+#include <kern/sched_clutch.h>
 
 #include <corpses/task_corpse.h>
 #if KPC
@@ -144,9 +145,16 @@
 #include <sys/bsdtask_info.h>
 #include <mach/sdt.h>
 #include <san/kasan.h>
+#if CONFIG_KSANCOV
+#include <san/ksancov.h>
+#endif
 
 #include <stdatomic.h>
 
+#if defined(HAS_APPLE_PAC)
+#include <ptrauth.h>
+#include <arm64/proc_reg.h>
+#endif /* defined(HAS_APPLE_PAC) */
 
 /*
  * Exported interfaces
@@ -165,25 +173,16 @@ lck_grp_t                                       thread_lck_grp;
 
 struct zone                                     *thread_qos_override_zone;
 
-decl_simple_lock_data(static, thread_stack_lock)
-static queue_head_t             thread_stack_queue;
+static struct mpsc_daemon_queue thread_stack_queue;
+static struct mpsc_daemon_queue thread_terminate_queue;
+static struct mpsc_daemon_queue thread_deallocate_queue;
+static struct mpsc_daemon_queue thread_exception_queue;
 
-decl_simple_lock_data(static, thread_terminate_lock)
-static queue_head_t             thread_terminate_queue;
-
-static queue_head_t             thread_deallocate_queue;
-
-static queue_head_t             turnstile_deallocate_queue;
-
+decl_simple_lock_data(static, crashed_threads_lock);
 static queue_head_t             crashed_threads_queue;
 
-static queue_head_t             workq_deallocate_queue;
-
-decl_simple_lock_data(static, thread_exception_lock)
-static queue_head_t             thread_exception_queue;
-
 struct thread_exception_elt {
-	queue_chain_t           elt;
+	struct mpsc_queue_chain link;
 	exception_type_t        exception_type;
 	task_t                  exception_task;
 	thread_t                exception_thread;
@@ -211,7 +210,7 @@ int task_threadmax = CONFIG_THREAD_MAX;
 
 static uint64_t         thread_unique_id = 100;
 
-struct _thread_ledger_indices thread_ledgers = { -1 };
+struct _thread_ledger_indices thread_ledgers = { .cpu_time = -1 };
 static ledger_template_t thread_ledger_template = NULL;
 static void init_thread_ledgers(void);
 
@@ -290,7 +289,6 @@ thread_bootstrap(void)
 	thread_template.sched_pri = 0;
 	thread_template.max_priority = 0;
 	thread_template.task_priority = 0;
-	thread_template.promotions = 0;
 	thread_template.rwlock_count = 0;
 	thread_template.waiting_for_mutex = NULL;
 
@@ -394,7 +392,7 @@ thread_bootstrap(void)
 	thread_template.effective_policy = (struct thread_effective_policy) {};
 
 	bzero(&thread_template.overrides, sizeof(thread_template.overrides));
-	thread_template.sync_ipc_overrides = 0;
+	thread_template.kevent_overrides = 0;
 
 	thread_template.iotier_override = THROTTLE_LEVEL_NONE;
 	thread_template.thread_io_stats = NULL;
@@ -405,6 +403,7 @@ thread_bootstrap(void)
 
 	thread_template.thread_timer_wakeups_bin_1 = thread_template.thread_timer_wakeups_bin_2 = 0;
 	thread_template.callout_woken_from_icontext = thread_template.callout_woken_from_platform_idle = 0;
+	thread_template.guard_exc_fatal = 0;
 
 	thread_template.thread_tag = 0;
 
@@ -413,6 +412,7 @@ thread_bootstrap(void)
 
 	thread_template.th_work_interval = NULL;
 
+	thread_template.decompressions = 0;
 	init_thread = thread_template;
 
 	/* fiddle with init thread to skip asserts in set_sched_pri */
@@ -491,6 +491,7 @@ thread_corpse_continue(void)
 	/*NOTREACHED*/
 }
 
+__dead2
 static void
 thread_terminate_continue(void)
 {
@@ -562,12 +563,12 @@ thread_terminate_self(void)
 
 	/*
 	 * After this subtraction, this thread should never access
-	 * task->bsd_info unless it got 0 back from the hw_atomic_sub.  It
+	 * task->bsd_info unless it got 0 back from the os_atomic_dec.  It
 	 * could be racing with other threads to be the last thread in the
 	 * process, and the last thread in the process will tear down the proc
 	 * structure and zero-out task->bsd_info.
 	 */
-	threadcnt = hw_atomic_sub(&task->active_thread_count, 1);
+	threadcnt = os_atomic_dec(&task->active_thread_count, relaxed);
 
 	/*
 	 * If we are the last thread to terminate and the task is
@@ -683,8 +684,7 @@ thread_terminate_self(void)
 	assert((thread->sched_flags & TH_SFLAG_RW_PROMOTED) == 0);
 	assert((thread->sched_flags & TH_SFLAG_EXEC_PROMOTED) == 0);
 	assert((thread->sched_flags & TH_SFLAG_PROMOTED) == 0);
-	assert(thread->promotions == 0);
-	assert(thread->was_promoted_on_wakeup == 0);
+	assert(thread->kern_promotion_schedpri == 0);
 	assert(thread->waiting_for_mutex == NULL);
 	assert(thread->rwlock_count == 0);
 
@@ -734,8 +734,6 @@ thread_deallocate_complete(
 	assert_thread_magic(thread);
 
 	assert(os_ref_get_count(&thread->ref_count) == 0);
-
-	assert(thread_owned_workloops_count(thread) == 0);
 
 	if (!(thread->state & TH_TERMINATE2)) {
 		panic("thread_deallocate: thread not properly terminated\n");
@@ -799,29 +797,6 @@ thread_deallocate_complete(
 	zfree(thread_zone, thread);
 }
 
-void
-thread_starts_owning_workloop(thread_t thread)
-{
-	atomic_fetch_add_explicit(&thread->kqwl_owning_count, 1,
-	    memory_order_relaxed);
-}
-
-void
-thread_ends_owning_workloop(thread_t thread)
-{
-	__assert_only uint32_t count;
-	count = atomic_fetch_sub_explicit(&thread->kqwl_owning_count, 1,
-	    memory_order_relaxed);
-	assert(count > 0);
-}
-
-uint32_t
-thread_owned_workloops_count(thread_t thread)
-{
-	return atomic_load_explicit(&thread->kqwl_owning_count,
-	           memory_order_relaxed);
-}
-
 /*
  *	thread_inspect_deallocate:
  *
@@ -835,49 +810,41 @@ thread_inspect_deallocate(
 }
 
 /*
- *	thread_exception_daemon:
+ *	thread_exception_queue_invoke:
  *
  *	Deliver EXC_{RESOURCE,GUARD} exception
  */
 static void
-thread_exception_daemon(void)
+thread_exception_queue_invoke(mpsc_queue_chain_t elm,
+    __assert_only mpsc_daemon_queue_t dq)
 {
 	struct thread_exception_elt *elt;
 	task_t task;
 	thread_t thread;
 	exception_type_t etype;
 
-	simple_lock(&thread_exception_lock, LCK_GRP_NULL);
-	while ((elt = (struct thread_exception_elt *)dequeue_head(&thread_exception_queue)) != NULL) {
-		simple_unlock(&thread_exception_lock);
+	assert(dq == &thread_exception_queue);
+	elt = mpsc_queue_element(elm, struct thread_exception_elt, link);
 
-		etype = elt->exception_type;
-		task = elt->exception_task;
-		thread = elt->exception_thread;
-		assert_thread_magic(thread);
+	etype = elt->exception_type;
+	task = elt->exception_task;
+	thread = elt->exception_thread;
+	assert_thread_magic(thread);
 
-		kfree(elt, sizeof(*elt));
+	kfree(elt, sizeof(*elt));
 
-		/* wait for all the threads in the task to terminate */
-		task_lock(task);
-		task_wait_till_threads_terminate_locked(task);
-		task_unlock(task);
+	/* wait for all the threads in the task to terminate */
+	task_lock(task);
+	task_wait_till_threads_terminate_locked(task);
+	task_unlock(task);
 
-		/* Consumes the task ref returned by task_generate_corpse_internal */
-		task_deallocate(task);
-		/* Consumes the thread ref returned by task_generate_corpse_internal */
-		thread_deallocate(thread);
+	/* Consumes the task ref returned by task_generate_corpse_internal */
+	task_deallocate(task);
+	/* Consumes the thread ref returned by task_generate_corpse_internal */
+	thread_deallocate(thread);
 
-		/* Deliver the notification, also clears the corpse. */
-		task_deliver_crash_notification(task, thread, etype, 0);
-
-		simple_lock(&thread_exception_lock, LCK_GRP_NULL);
-	}
-
-	assert_wait((event_t)&thread_exception_queue, THREAD_UNINT);
-	simple_unlock(&thread_exception_lock);
-
-	thread_block((thread_continue_t)thread_exception_daemon);
+	/* Deliver the notification, also clears the corpse. */
+	task_deliver_crash_notification(task, thread, etype, 0);
 }
 
 /*
@@ -897,11 +864,8 @@ thread_exception_enqueue(
 	elt->exception_task = task;
 	elt->exception_thread = thread;
 
-	simple_lock(&thread_exception_lock, LCK_GRP_NULL);
-	enqueue_tail(&thread_exception_queue, (queue_entry_t)elt);
-	simple_unlock(&thread_exception_lock);
-
-	thread_wakeup((event_t)&thread_exception_queue);
+	mpsc_daemon_enqueue(&thread_exception_queue, &elt->link,
+	    MPSC_QUEUE_DISABLE_PREEMPTION);
 }
 
 /*
@@ -934,150 +898,94 @@ thread_copy_resource_info(
 	*dst_thread->thread_io_stats = *src_thread->thread_io_stats;
 }
 
-/*
- *	thread_terminate_daemon:
- *
- *	Perform final clean up for terminating threads.
- */
 static void
-thread_terminate_daemon(void)
+thread_terminate_queue_invoke(mpsc_queue_chain_t e,
+    __assert_only mpsc_daemon_queue_t dq)
 {
-	thread_t        self, thread;
-	task_t          task;
+	thread_t thread = mpsc_queue_element(e, struct thread, mpsc_links);
+	task_t task = thread->task;
 
-	self = current_thread();
-	self->options |= TH_OPT_SYSTEM_CRITICAL;
+	assert(dq == &thread_terminate_queue);
 
-	(void)splsched();
-	simple_lock(&thread_terminate_lock, LCK_GRP_NULL);
+	task_lock(task);
 
-thread_terminate_start:
-	while ((thread = qe_dequeue_head(&thread_terminate_queue, struct thread, runq_links)) != THREAD_NULL) {
-		assert_thread_magic(thread);
-
-		/*
-		 * if marked for crash reporting, skip reaping.
-		 * The corpse delivery thread will clear bit and enqueue
-		 * for reaping when done
-		 */
-		if (thread->inspection) {
-			enqueue_tail(&crashed_threads_queue, &thread->runq_links);
-			continue;
-		}
-
-		simple_unlock(&thread_terminate_lock);
-		(void)spllo();
-
-		task = thread->task;
-
-		task_lock(task);
-		task->total_user_time += timer_grab(&thread->user_timer);
-		task->total_ptime += timer_grab(&thread->ptime);
-		task->total_runnable_time += timer_grab(&thread->runnable_timer);
-		if (thread->precise_user_kernel_time) {
-			task->total_system_time += timer_grab(&thread->system_timer);
-		} else {
-			task->total_user_time += timer_grab(&thread->system_timer);
-		}
-
-		task->c_switch += thread->c_switch;
-		task->p_switch += thread->p_switch;
-		task->ps_switch += thread->ps_switch;
-
-		task->syscalls_unix += thread->syscalls_unix;
-		task->syscalls_mach += thread->syscalls_mach;
-
-		task->task_timer_wakeups_bin_1 += thread->thread_timer_wakeups_bin_1;
-		task->task_timer_wakeups_bin_2 += thread->thread_timer_wakeups_bin_2;
-		task->task_gpu_ns += ml_gpu_stat(thread);
-		task->task_energy += ml_energy_stat(thread);
-
-#if MONOTONIC
-		mt_terminate_update(task, thread);
-#endif /* MONOTONIC */
-
-		thread_update_qos_cpu_time(thread);
-
-		queue_remove(&task->threads, thread, thread_t, task_threads);
-		task->thread_count--;
-
-		/*
-		 * If the task is being halted, and there is only one thread
-		 * left in the task after this one, then wakeup that thread.
-		 */
-		if (task->thread_count == 1 && task->halting) {
-			thread_wakeup((event_t)&task->halting);
-		}
-
+	/*
+	 * if marked for crash reporting, skip reaping.
+	 * The corpse delivery thread will clear bit and enqueue
+	 * for reaping when done
+	 *
+	 * Note: the inspection field is set under the task lock
+	 *
+	 * FIXME[mad]: why enqueue for termination before `inspection` is false ?
+	 */
+	if (__improbable(thread->inspection)) {
+		simple_lock(&crashed_threads_lock, &thread_lck_grp);
 		task_unlock(task);
 
-		lck_mtx_lock(&tasks_threads_lock);
-		queue_remove(&threads, thread, thread_t, threads);
-		threads_count--;
-		lck_mtx_unlock(&tasks_threads_lock);
-
-		thread_deallocate(thread);
-
-		(void)splsched();
-		simple_lock(&thread_terminate_lock, LCK_GRP_NULL);
+		enqueue_tail(&crashed_threads_queue, &thread->runq_links);
+		simple_unlock(&crashed_threads_lock);
+		return;
 	}
 
-	while ((thread = qe_dequeue_head(&thread_deallocate_queue, struct thread, runq_links)) != THREAD_NULL) {
-		assert_thread_magic(thread);
 
-		simple_unlock(&thread_terminate_lock);
-		(void)spllo();
-
-		thread_deallocate_complete(thread);
-
-		(void)splsched();
-		simple_lock(&thread_terminate_lock, LCK_GRP_NULL);
+	task->total_user_time += timer_grab(&thread->user_timer);
+	task->total_ptime += timer_grab(&thread->ptime);
+	task->total_runnable_time += timer_grab(&thread->runnable_timer);
+	if (thread->precise_user_kernel_time) {
+		task->total_system_time += timer_grab(&thread->system_timer);
+	} else {
+		task->total_user_time += timer_grab(&thread->system_timer);
 	}
 
-	struct turnstile *turnstile;
-	while ((turnstile = qe_dequeue_head(&turnstile_deallocate_queue, struct turnstile, ts_deallocate_link)) != TURNSTILE_NULL) {
-		simple_unlock(&thread_terminate_lock);
-		(void)spllo();
+	task->c_switch += thread->c_switch;
+	task->p_switch += thread->p_switch;
+	task->ps_switch += thread->ps_switch;
 
-		turnstile_destroy(turnstile);
+	task->syscalls_unix += thread->syscalls_unix;
+	task->syscalls_mach += thread->syscalls_mach;
 
-		(void)splsched();
-		simple_lock(&thread_terminate_lock, LCK_GRP_NULL);
-	}
+	task->task_timer_wakeups_bin_1 += thread->thread_timer_wakeups_bin_1;
+	task->task_timer_wakeups_bin_2 += thread->thread_timer_wakeups_bin_2;
+	task->task_gpu_ns += ml_gpu_stat(thread);
+	task->task_energy += ml_energy_stat(thread);
+	task->decompressions += thread->decompressions;
 
-	queue_entry_t qe;
+#if MONOTONIC
+	mt_terminate_update(task, thread);
+#endif /* MONOTONIC */
+
+	thread_update_qos_cpu_time(thread);
+
+	queue_remove(&task->threads, thread, thread_t, task_threads);
+	task->thread_count--;
 
 	/*
-	 * see workq_deallocate_enqueue: struct workqueue is opaque to thread.c and
-	 * we just link pieces of memory here
+	 * If the task is being halted, and there is only one thread
+	 * left in the task after this one, then wakeup that thread.
 	 */
-	while ((qe = dequeue_head(&workq_deallocate_queue))) {
-		simple_unlock(&thread_terminate_lock);
-		(void)spllo();
-
-		workq_destroy((struct workqueue *)qe);
-
-		(void)splsched();
-		simple_lock(&thread_terminate_lock, LCK_GRP_NULL);
+	if (task->thread_count == 1 && task->halting) {
+		thread_wakeup((event_t)&task->halting);
 	}
 
-	/*
-	 * Check if something enqueued in thread terminate/deallocate queue
-	 * while processing workq deallocate queue
-	 */
-	if (!queue_empty(&thread_terminate_queue) ||
-	    !queue_empty(&thread_deallocate_queue) ||
-	    !queue_empty(&turnstile_deallocate_queue)) {
-		goto thread_terminate_start;
-	}
+	task_unlock(task);
 
-	assert_wait((event_t)&thread_terminate_queue, THREAD_UNINT);
-	simple_unlock(&thread_terminate_lock);
-	/* splsched */
+	lck_mtx_lock(&tasks_threads_lock);
+	queue_remove(&threads, thread, thread_t, threads);
+	threads_count--;
+	lck_mtx_unlock(&tasks_threads_lock);
 
-	self->options &= ~TH_OPT_SYSTEM_CRITICAL;
-	thread_block((thread_continue_t)thread_terminate_daemon);
-	/*NOTREACHED*/
+	thread_deallocate(thread);
+}
+
+static void
+thread_deallocate_queue_invoke(mpsc_queue_chain_t e,
+    __assert_only mpsc_daemon_queue_t dq)
+{
+	thread_t thread = mpsc_queue_element(e, struct thread, mpsc_links);
+
+	assert(dq == &thread_deallocate_queue);
+
+	thread_deallocate_complete(thread);
 }
 
 /*
@@ -1093,11 +1001,8 @@ thread_terminate_enqueue(
 {
 	KDBG_RELEASE(TRACE_DATA_THREAD_TERMINATE, thread->thread_id);
 
-	simple_lock(&thread_terminate_lock, LCK_GRP_NULL);
-	enqueue_tail(&thread_terminate_queue, &thread->runq_links);
-	simple_unlock(&thread_terminate_lock);
-
-	thread_wakeup((event_t)&thread_terminate_queue);
+	mpsc_daemon_enqueue(&thread_terminate_queue, &thread->mpsc_links,
+	    MPSC_QUEUE_DISABLE_PREEMPTION);
 }
 
 /*
@@ -1109,56 +1014,8 @@ static void
 thread_deallocate_enqueue(
 	thread_t                thread)
 {
-	spl_t s = splsched();
-
-	simple_lock(&thread_terminate_lock, LCK_GRP_NULL);
-	enqueue_tail(&thread_deallocate_queue, &thread->runq_links);
-	simple_unlock(&thread_terminate_lock);
-
-	thread_wakeup((event_t)&thread_terminate_queue);
-	splx(s);
-}
-
-/*
- *	turnstile_deallocate_enqueue:
- *
- *	Enqueue a turnstile for final deallocation.
- */
-void
-turnstile_deallocate_enqueue(
-	struct turnstile *turnstile)
-{
-	spl_t s = splsched();
-
-	simple_lock(&thread_terminate_lock, LCK_GRP_NULL);
-	enqueue_tail(&turnstile_deallocate_queue, &turnstile->ts_deallocate_link);
-	simple_unlock(&thread_terminate_lock);
-
-	thread_wakeup((event_t)&thread_terminate_queue);
-	splx(s);
-}
-
-/*
- *	workq_deallocate_enqueue:
- *
- *	Enqueue a workqueue for final deallocation.
- */
-void
-workq_deallocate_enqueue(
-	struct workqueue *wq)
-{
-	spl_t s = splsched();
-
-	simple_lock(&thread_terminate_lock, LCK_GRP_NULL);
-	/*
-	 * this is just to delay a zfree(), so we link the memory with no regards
-	 * for how the struct looks like.
-	 */
-	enqueue_tail(&workq_deallocate_queue, (queue_entry_t)wq);
-	simple_unlock(&thread_terminate_lock);
-
-	thread_wakeup((event_t)&thread_terminate_queue);
-	splx(s);
+	mpsc_daemon_enqueue(&thread_deallocate_queue, &thread->mpsc_links,
+	    MPSC_QUEUE_DISABLE_PREEMPTION);
 }
 
 /*
@@ -1167,13 +1024,11 @@ workq_deallocate_enqueue(
  * who are no longer being inspected.
  */
 void
-thread_terminate_crashed_threads()
+thread_terminate_crashed_threads(void)
 {
 	thread_t th_remove;
-	boolean_t should_wake_terminate_queue = FALSE;
-	spl_t s = splsched();
 
-	simple_lock(&thread_terminate_lock, LCK_GRP_NULL);
+	simple_lock(&crashed_threads_lock, &thread_lck_grp);
 	/*
 	 * loop through the crashed threads queue
 	 * to put any threads that are not being inspected anymore
@@ -1184,58 +1039,39 @@ thread_terminate_crashed_threads()
 		assert(th_remove != current_thread());
 
 		if (th_remove->inspection == FALSE) {
-			re_queue_tail(&thread_terminate_queue, &th_remove->runq_links);
-			should_wake_terminate_queue = TRUE;
+			remqueue(&th_remove->runq_links);
+			mpsc_daemon_enqueue(&thread_terminate_queue, &th_remove->mpsc_links,
+			    MPSC_QUEUE_NONE);
 		}
 	}
 
-	simple_unlock(&thread_terminate_lock);
-	splx(s);
-	if (should_wake_terminate_queue == TRUE) {
-		thread_wakeup((event_t)&thread_terminate_queue);
-	}
+	simple_unlock(&crashed_threads_lock);
 }
 
 /*
- *	thread_stack_daemon:
+ *	thread_stack_queue_invoke:
  *
  *	Perform stack allocation as required due to
  *	invoke failures.
  */
 static void
-thread_stack_daemon(void)
+thread_stack_queue_invoke(mpsc_queue_chain_t elm,
+    __assert_only mpsc_daemon_queue_t dq)
 {
-	thread_t                thread;
-	spl_t                   s;
+	thread_t thread = mpsc_queue_element(elm, struct thread, mpsc_links);
 
-	s = splsched();
-	simple_lock(&thread_stack_lock, LCK_GRP_NULL);
+	assert(dq == &thread_stack_queue);
 
-	while ((thread = qe_dequeue_head(&thread_stack_queue, struct thread, runq_links)) != THREAD_NULL) {
-		assert_thread_magic(thread);
+	/* allocate stack with interrupts enabled so that we can call into VM */
+	stack_alloc(thread);
 
-		simple_unlock(&thread_stack_lock);
-		splx(s);
+	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_STACK_WAIT) | DBG_FUNC_END, thread_tid(thread), 0, 0, 0, 0);
 
-		/* allocate stack with interrupts enabled so that we can call into VM */
-		stack_alloc(thread);
-
-		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_STACK_WAIT) | DBG_FUNC_END, thread_tid(thread), 0, 0, 0, 0);
-
-		s = splsched();
-		thread_lock(thread);
-		thread_setrun(thread, SCHED_PREEMPT | SCHED_TAILQ);
-		thread_unlock(thread);
-
-		simple_lock(&thread_stack_lock, LCK_GRP_NULL);
-	}
-
-	assert_wait((event_t)&thread_stack_queue, THREAD_UNINT);
-	simple_unlock(&thread_stack_lock);
+	spl_t s = splsched();
+	thread_lock(thread);
+	thread_setrun(thread, SCHED_PREEMPT | SCHED_TAILQ);
+	thread_unlock(thread);
 	splx(s);
-
-	thread_block((thread_continue_t)thread_stack_daemon);
-	/*NOTREACHED*/
 }
 
 /*
@@ -1252,52 +1088,39 @@ thread_stack_enqueue(
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_STACK_WAIT) | DBG_FUNC_START, thread_tid(thread), 0, 0, 0, 0);
 	assert_thread_magic(thread);
 
-	simple_lock(&thread_stack_lock, LCK_GRP_NULL);
-	enqueue_tail(&thread_stack_queue, &thread->runq_links);
-	simple_unlock(&thread_stack_lock);
-
-	thread_wakeup((event_t)&thread_stack_queue);
+	mpsc_daemon_enqueue(&thread_stack_queue, &thread->mpsc_links,
+	    MPSC_QUEUE_DISABLE_PREEMPTION);
 }
 
 void
 thread_daemon_init(void)
 {
 	kern_return_t   result;
-	thread_t        thread = NULL;
 
-	simple_lock_init(&thread_terminate_lock, 0);
-	queue_init(&thread_terminate_queue);
-	queue_init(&thread_deallocate_queue);
-	queue_init(&workq_deallocate_queue);
-	queue_init(&turnstile_deallocate_queue);
+	thread_deallocate_daemon_init();
+
+	thread_deallocate_daemon_register_queue(&thread_terminate_queue,
+	    thread_terminate_queue_invoke);
+
+	thread_deallocate_daemon_register_queue(&thread_deallocate_queue,
+	    thread_deallocate_queue_invoke);
+
+	simple_lock_init(&crashed_threads_lock, 0);
 	queue_init(&crashed_threads_queue);
 
-	result = kernel_thread_start_priority((thread_continue_t)thread_terminate_daemon, NULL, MINPRI_KERNEL, &thread);
-	if (result != KERN_SUCCESS) {
-		panic("thread_daemon_init: thread_terminate_daemon");
-	}
-
-	thread_deallocate(thread);
-
-	simple_lock_init(&thread_stack_lock, 0);
-	queue_init(&thread_stack_queue);
-
-	result = kernel_thread_start_priority((thread_continue_t)thread_stack_daemon, NULL, BASEPRI_PREEMPT_HIGH, &thread);
+	result = mpsc_daemon_queue_init_with_thread(&thread_stack_queue,
+	    thread_stack_queue_invoke, BASEPRI_PREEMPT_HIGH,
+	    "daemon.thread-stack");
 	if (result != KERN_SUCCESS) {
 		panic("thread_daemon_init: thread_stack_daemon");
 	}
 
-	thread_deallocate(thread);
-
-	simple_lock_init(&thread_exception_lock, 0);
-	queue_init(&thread_exception_queue);
-
-	result = kernel_thread_start_priority((thread_continue_t)thread_exception_daemon, NULL, MINPRI_KERNEL, &thread);
+	result = mpsc_daemon_queue_init_with_thread(&thread_exception_queue,
+	    thread_exception_queue_invoke, MINPRI_KERNEL,
+	    "daemon.thread-exception");
 	if (result != KERN_SUCCESS) {
 		panic("thread_daemon_init: thread_exception_daemon");
 	}
-
-	thread_deallocate(thread);
 }
 
 #define TH_OPTION_NONE          0x00
@@ -1384,17 +1207,25 @@ thread_create_internal(
 	new_thread->continuation = continuation;
 	new_thread->parameter = parameter;
 	new_thread->inheritor_flags = TURNSTILE_UPDATE_FLAGS_NONE;
-	priority_queue_init(&new_thread->inheritor_queue,
+	priority_queue_init(&new_thread->sched_inheritor_queue,
 	    PRIORITY_QUEUE_BUILTIN_MAX_HEAP);
+	priority_queue_init(&new_thread->base_inheritor_queue,
+	    PRIORITY_QUEUE_BUILTIN_MAX_HEAP);
+#if CONFIG_SCHED_CLUTCH
+	priority_queue_entry_init(&new_thread->sched_clutchpri_link);
+#endif /* CONFIG_SCHED_CLUTCH */
 
 	/* Allocate I/O Statistics structure */
 	new_thread->thread_io_stats = (io_stat_info_t)kalloc(sizeof(struct io_stat_info));
 	assert(new_thread->thread_io_stats != NULL);
 	bzero(new_thread->thread_io_stats, sizeof(struct io_stat_info));
-	new_thread->sync_ipc_overrides = 0;
 
 #if KASAN
 	kasan_init_thread(&new_thread->kasan_data);
+#endif
+
+#if CONFIG_KSANCOV
+	new_thread->ksancov_data = NULL;
 #endif
 
 #if CONFIG_IOSCHED
@@ -1503,6 +1334,7 @@ thread_create_internal(
 	new_thread->max_priority = parent_task->max_priority;
 	new_thread->task_priority = parent_task->priority;
 
+
 	int new_priority = (priority < 0) ? parent_task->priority: priority;
 	new_priority = (priority < 0)? parent_task->priority: priority;
 	if (new_priority > new_thread->max_priority) {
@@ -1520,7 +1352,11 @@ thread_create_internal(
 
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
 	new_thread->sched_stamp = sched_tick;
+#if CONFIG_SCHED_CLUTCH
+	new_thread->pri_shift = sched_clutch_thread_pri_shift(new_thread, new_thread->th_sched_bucket);
+#else /* CONFIG_SCHED_CLUTCH */
 	new_thread->pri_shift = sched_pri_shifts[new_thread->th_sched_bucket];
+#endif /* CONFIG_SCHED_CLUTCH */
 #endif /* defined(CONFIG_SCHED_TIMESHARE_CORE) */
 
 #if CONFIG_EMBEDDED
@@ -1536,8 +1372,7 @@ thread_create_internal(
 	parent_task->thread_count++;
 
 	/* So terminating threads don't need to take the task lock to decrement */
-	hw_atomic_add(&parent_task->active_thread_count, 1);
-
+	os_atomic_inc(&parent_task->active_thread_count, relaxed);
 
 	queue_enter(&threads, new_thread, thread_t, threads);
 	threads_count++;
@@ -2119,8 +1954,8 @@ thread_info_internal(
 		 * the PROC_PIDTHREADINFO flavor (which can't be used on corpses)
 		 */
 		retrieve_thread_basic_info(thread, &basic_info);
-		extended_info->pth_user_time = ((basic_info.user_time.seconds * (integer_t)NSEC_PER_SEC) + (basic_info.user_time.microseconds * (integer_t)NSEC_PER_USEC));
-		extended_info->pth_system_time = ((basic_info.system_time.seconds * (integer_t)NSEC_PER_SEC) + (basic_info.system_time.microseconds * (integer_t)NSEC_PER_USEC));
+		extended_info->pth_user_time = (((uint64_t)basic_info.user_time.seconds * NSEC_PER_SEC) + ((uint64_t)basic_info.user_time.microseconds * NSEC_PER_USEC));
+		extended_info->pth_system_time = (((uint64_t)basic_info.system_time.seconds * NSEC_PER_SEC) + ((uint64_t)basic_info.system_time.microseconds * NSEC_PER_USEC));
 
 		extended_info->pth_cpu_usage = basic_info.cpu_usage;
 		extended_info->pth_policy = basic_info.policy;
@@ -2359,33 +2194,43 @@ clear_thread_rwlock_boost(void)
 	}
 }
 
-
 /*
  * XXX assuming current thread only, for now...
  */
 void
 thread_guard_violation(thread_t thread,
-    mach_exception_data_type_t code, mach_exception_data_type_t subcode)
+    mach_exception_data_type_t code, mach_exception_data_type_t subcode, boolean_t fatal)
 {
 	assert(thread == current_thread());
 
-	/* don't set up the AST for kernel threads */
+	/* Don't set up the AST for kernel threads; this check is needed to ensure
+	 * that the guard_exc_* fields in the thread structure are set only by the
+	 * current thread and therefore, don't require a lock.
+	 */
 	if (thread->task == kernel_task) {
 		return;
 	}
 
-	spl_t s = splsched();
+	assert(EXC_GUARD_DECODE_GUARD_TYPE(code));
+
 	/*
 	 * Use the saved state area of the thread structure
 	 * to store all info required to handle the AST when
-	 * returning to userspace
+	 * returning to userspace. It's possible that there is
+	 * already a pending guard exception. If it's non-fatal,
+	 * it can only be over-written by a fatal exception code.
 	 */
-	assert(EXC_GUARD_DECODE_GUARD_TYPE(code));
+	if (thread->guard_exc_info.code && (thread->guard_exc_fatal || !fatal)) {
+		return;
+	}
+
 	thread->guard_exc_info.code = code;
 	thread->guard_exc_info.subcode = subcode;
+	thread->guard_exc_fatal = fatal ? 1 : 0;
+
+	spl_t s = splsched();
 	thread_ast_set(thread, AST_GUARD);
 	ast_propagate(thread);
-
 	splx(s);
 }
 
@@ -2407,6 +2252,7 @@ guard_ast(thread_t t)
 
 	t->guard_exc_info.code = 0;
 	t->guard_exc_info.subcode = 0;
+	t->guard_exc_fatal = 0;
 
 	switch (EXC_GUARD_DECODE_GUARD_TYPE(code)) {
 	case GUARD_TYPE_NONE:
@@ -2534,20 +2380,17 @@ SENDING_NOTIFICATION__THIS_THREAD_IS_CONSUMING_TOO_MUCH_CPU(void)
 	}
 
 	/* TODO: show task total runtime (via TASK_ABSOLUTETIME_INFO)? */
-	printf("process %s[%d] thread %llu caught burning CPU! "
-	    "It used more than %d%% CPU over %u seconds "
-	    "(actual recent usage: %d%% over ~%llu seconds).  "
-	    "Thread lifetime cpu usage %d.%06ds, (%d.%06d user, %d.%06d sys) "
-	    "ledger balance: %lld mabs credit: %lld mabs debit: %lld mabs "
-	    "limit: %llu mabs period: %llu ns last refill: %llu ns%s.\n",
-	    procname, pid, tid,
-	    percentage, interval_sec,
-	    usage_percent,
-	    (lei.lei_last_refill + NSEC_PER_SEC / 2) / NSEC_PER_SEC,
+	printf("process %s[%d] thread %llu caught burning CPU! It used more than %d%% CPU over %u seconds\n",
+	    procname, pid, tid, percentage, interval_sec);
+	printf("  (actual recent usage: %d%% over ~%llu seconds)\n",
+	    usage_percent, (lei.lei_last_refill + NSEC_PER_SEC / 2) / NSEC_PER_SEC);
+	printf("  Thread lifetime cpu usage %d.%06ds, (%d.%06d user, %d.%06d sys)\n",
 	    thread_total_time.seconds, thread_total_time.microseconds,
 	    thread_user_time.seconds, thread_user_time.microseconds,
-	    thread_system_time.seconds, thread_system_time.microseconds,
-	    lei.lei_balance, lei.lei_credit, lei.lei_debit,
+	    thread_system_time.seconds, thread_system_time.microseconds);
+	printf("  Ledger balance: %lld; mabs credit: %lld; mabs debit: %lld\n",
+	    lei.lei_balance, lei.lei_credit, lei.lei_debit);
+	printf("  mabs limit: %llu; mabs period: %llu ns; last refill: %llu ns%s.\n",
 	    lei.lei_limit, lei.lei_refill_period, lei.lei_last_refill,
 	    (fatal ? " [fatal violation]" : ""));
 
@@ -3008,10 +2851,6 @@ thread_should_halt(
  * thread_set_voucher_name - reset the voucher port name bound to this thread
  *
  * Conditions:  nothing locked
- *
- *	If we already converted the previous name to a cached voucher
- *	reference, then we discard that reference here.  The next lookup
- *	will cache it again.
  */
 
 kern_return_t
@@ -3022,6 +2861,7 @@ thread_set_voucher_name(mach_port_name_t voucher_name)
 	ipc_voucher_t voucher;
 	ledger_t bankledger = NULL;
 	struct thread_group *banktg = NULL;
+	uint32_t persona_id = 0;
 
 	if (MACH_PORT_DEAD == voucher_name) {
 		return KERN_INVALID_RIGHT;
@@ -3036,7 +2876,7 @@ thread_set_voucher_name(mach_port_name_t voucher_name)
 			return KERN_INVALID_ARGUMENT;
 		}
 	}
-	bank_get_bank_ledger_and_thread_group(new_voucher, &bankledger, &banktg);
+	bank_get_bank_ledger_thread_group_and_persona(new_voucher, &bankledger, &banktg, &persona_id);
 
 	thread_mtx_lock(thread);
 	voucher = thread->ith_voucher;
@@ -3051,7 +2891,7 @@ thread_set_voucher_name(mach_port_name_t voucher_name)
 	    (uintptr_t)thread_tid(thread),
 	    (uintptr_t)voucher_name,
 	    VM_KERNEL_ADDRPERM((uintptr_t)new_voucher),
-	    1, 0);
+	    persona_id, 0);
 
 	if (IPC_VOUCHER_NULL != voucher) {
 		ipc_voucher_release(voucher);
@@ -3065,10 +2905,6 @@ thread_set_voucher_name(mach_port_name_t voucher_name)
  *
  *  Conditions:  nothing locked
  *
- *  A reference to the voucher may be lazily pending, if someone set the voucher name
- *  but nobody has done a lookup yet.  In that case, we'll have to do the equivalent
- *  lookup here.
- *
  *  NOTE:       At the moment, there is no distinction between the current and effective
  *		vouchers because we only set them at the thread level currently.
  */
@@ -3079,7 +2915,6 @@ thread_get_mach_voucher(
 	ipc_voucher_t           *voucherp)
 {
 	ipc_voucher_t           voucher;
-	mach_port_name_t        voucher_name;
 
 	if (THREAD_NULL == thread) {
 		return KERN_INVALID_ARGUMENT;
@@ -3088,7 +2923,6 @@ thread_get_mach_voucher(
 	thread_mtx_lock(thread);
 	voucher = thread->ith_voucher;
 
-	/* if already cached, just return a ref */
 	if (IPC_VOUCHER_NULL != voucher) {
 		ipc_voucher_reference(voucher);
 		thread_mtx_unlock(thread);
@@ -3096,41 +2930,9 @@ thread_get_mach_voucher(
 		return KERN_SUCCESS;
 	}
 
-	voucher_name = thread->ith_voucher_name;
+	thread_mtx_unlock(thread);
 
-	/* convert the name to a port, then voucher reference */
-	if (MACH_PORT_VALID(voucher_name)) {
-		ipc_port_t port;
-
-		if (KERN_SUCCESS !=
-		    ipc_object_copyin(thread->task->itk_space, voucher_name,
-		    MACH_MSG_TYPE_COPY_SEND, (ipc_object_t *)&port)) {
-			thread->ith_voucher_name = MACH_PORT_NULL;
-			thread_mtx_unlock(thread);
-			*voucherp = IPC_VOUCHER_NULL;
-			return KERN_SUCCESS;
-		}
-
-		/* convert to a voucher ref to return, and cache a ref on thread */
-		voucher = convert_port_to_voucher(port);
-		ipc_voucher_reference(voucher);
-		thread->ith_voucher = voucher;
-		thread_mtx_unlock(thread);
-
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		    MACHDBG_CODE(DBG_MACH_IPC, MACH_THREAD_SET_VOUCHER) | DBG_FUNC_NONE,
-		    (uintptr_t)thread_tid(thread),
-		    (uintptr_t)port,
-		    VM_KERNEL_ADDRPERM((uintptr_t)voucher),
-		    2, 0);
-
-
-		ipc_port_release_send(port);
-	} else {
-		thread_mtx_unlock(thread);
-	}
-
-	*voucherp = voucher;
+	*voucherp = IPC_VOUCHER_NULL;
 	return KERN_SUCCESS;
 }
 
@@ -3140,8 +2942,8 @@ thread_get_mach_voucher(
  *  Conditions: callers holds a reference on the voucher.
  *		nothing locked.
  *
- *  We grab another reference to the voucher and bind it to the thread.  Any lazy
- *  binding is erased.  The old voucher reference associated with the thread is
+ *  We grab another reference to the voucher and bind it to the thread.
+ *  The old voucher reference associated with the thread is
  *  discarded.
  */
 kern_return_t
@@ -3152,6 +2954,7 @@ thread_set_mach_voucher(
 	ipc_voucher_t old_voucher;
 	ledger_t bankledger = NULL;
 	struct thread_group *banktg = NULL;
+	uint32_t persona_id = 0;
 
 	if (THREAD_NULL == thread) {
 		return KERN_INVALID_ARGUMENT;
@@ -3162,7 +2965,7 @@ thread_set_mach_voucher(
 	}
 
 	ipc_voucher_reference(voucher);
-	bank_get_bank_ledger_and_thread_group(voucher, &bankledger, &banktg);
+	bank_get_bank_ledger_thread_group_and_persona(voucher, &bankledger, &banktg, &persona_id);
 
 	thread_mtx_lock(thread);
 	old_voucher = thread->ith_voucher;
@@ -3177,7 +2980,7 @@ thread_set_mach_voucher(
 	    (uintptr_t)thread_tid(thread),
 	    (uintptr_t)MACH_PORT_NULL,
 	    VM_KERNEL_ADDRPERM((uintptr_t)voucher),
-	    3, 0);
+	    persona_id, 0);
 
 	ipc_voucher_release(old_voucher);
 
@@ -3296,10 +3099,42 @@ thread_set_allocation_name(kern_allocation_name_t new_name)
 	return ret;
 }
 
+void *
+thread_iokit_tls_get(uint32_t index)
+{
+	assert(index < THREAD_SAVE_IOKIT_TLS_COUNT);
+	return current_thread()->saved.iokit.tls[index];
+}
+
+void
+thread_iokit_tls_set(uint32_t index, void * data)
+{
+	assert(index < THREAD_SAVE_IOKIT_TLS_COUNT);
+	current_thread()->saved.iokit.tls[index] = data;
+}
+
 uint64_t
 thread_get_last_wait_duration(thread_t thread)
 {
 	return thread->last_made_runnable_time - thread->last_run_time;
+}
+
+integer_t
+thread_kern_get_pri(thread_t thr)
+{
+	return thr->base_pri;
+}
+
+void
+thread_kern_set_pri(thread_t thr, integer_t pri)
+{
+	sched_set_kernel_thread_priority(thr, pri);
+}
+
+integer_t
+thread_kern_get_kernel_maxpri(void)
+{
+	return MAXPRI_KERNEL;
 }
 
 #if CONFIG_DTRACE
@@ -3343,11 +3178,11 @@ dtrace_get_thread_tracing(thread_t thread)
 	}
 }
 
-boolean_t
-dtrace_get_thread_reentering(thread_t thread)
+uint16_t
+dtrace_get_thread_inprobe(thread_t thread)
 {
 	if (thread != THREAD_NULL) {
-		return (thread->options & TH_OPT_DTRACE) ? TRUE : FALSE;
+		return thread->t_dtrace_inprobe;
 	} else {
 		return 0;
 	}
@@ -3368,6 +3203,14 @@ struct kasan_thread_data *
 kasan_get_thread_data(thread_t thread)
 {
 	return &thread->kasan_data;
+}
+#endif
+
+#if CONFIG_KSANCOV
+void **
+__sanitizer_get_thread_data(thread_t thread)
+{
+	return &thread->ksancov_data;
 }
 #endif
 
@@ -3413,14 +3256,10 @@ dtrace_set_thread_tracing(thread_t thread, int64_t accum)
 }
 
 void
-dtrace_set_thread_reentering(thread_t thread, boolean_t vbool)
+dtrace_set_thread_inprobe(thread_t thread, uint16_t inprobe)
 {
 	if (thread != THREAD_NULL) {
-		if (vbool) {
-			thread->options |= TH_OPT_DTRACE;
-		} else {
-			thread->options &= (~TH_OPT_DTRACE);
-		}
+		thread->t_dtrace_inprobe = inprobe;
 	}
 }
 
@@ -3439,7 +3278,14 @@ dtrace_set_thread_recover(thread_t thread, vm_offset_t recover)
 vm_offset_t
 dtrace_sign_and_set_thread_recover(thread_t thread, vm_offset_t recover)
 {
+#if defined(HAS_APPLE_PAC)
+	return dtrace_set_thread_recover(thread,
+	           (vm_address_t)ptrauth_sign_unauthenticated((void *)recover,
+	           ptrauth_key_function_pointer,
+	           ptrauth_blend_discriminator(&thread->recover, PAC_DISCRIMINATOR_RECOVER)));
+#else /* defined(HAS_APPLE_PAC) */
 	return dtrace_set_thread_recover(thread, recover);
+#endif /* defined(HAS_APPLE_PAC) */
 }
 
 void

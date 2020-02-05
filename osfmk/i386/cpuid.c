@@ -255,8 +255,6 @@ do_cwas(i386_cpu_info_t *cpuinfo, boolean_t on_slave)
 	 * Workaround for reclaiming perf counter 3 due to TSX memory ordering erratum.
 	 * This workaround does not support being forcibly set (since an MSR must be
 	 * enumerated, lest we #GP when forced to access it.)
-	 * When RTM_FORCE_FORCE is enabled all RTM transactions on the logical CPU will
-	 * forcefully abort, but the general purpose counter 3 will report correct values.
 	 */
 	if (cpuid_wa_required(CPU_INTEL_TSXFA) == CWA_ON) {
 		wrmsr64(MSR_IA32_TSX_FORCE_ABORT,
@@ -929,43 +927,46 @@ cpuid_set_info(void)
 	}
 	/* cpuid_set_cache_info must be invoked after set_generic_info */
 
-	if (info_p->cpuid_cpufamily == CPUFAMILY_INTEL_PENRYN) {
-		cpuid_set_cache_info(info_p);
-	}
-
 	/*
 	 * Find the number of enabled cores and threads
 	 * (which determines whether SMT/Hyperthreading is active).
 	 */
-	switch (info_p->cpuid_cpufamily) {
-	case CPUFAMILY_INTEL_PENRYN:
-		info_p->core_count   = info_p->cpuid_cores_per_package;
-		info_p->thread_count = info_p->cpuid_logical_per_package;
-		break;
-	case CPUFAMILY_INTEL_WESTMERE: {
-		uint64_t msr = rdmsr64(MSR_CORE_THREAD_COUNT);
-		info_p->core_count   = bitfield32((uint32_t)msr, 19, 16);
-		info_p->thread_count = bitfield32((uint32_t)msr, 15, 0);
-		break;
-	}
-	default: {
-		uint64_t msr = rdmsr64(MSR_CORE_THREAD_COUNT);
-		if (msr == 0) {
-			/* Provide a non-zero default for some VMMs */
-			msr = (1 << 16) + 1;
-		}
-		info_p->core_count   = bitfield32((uint32_t)msr, 31, 16);
-		info_p->thread_count = bitfield32((uint32_t)msr, 15, 0);
-		break;
-	}
-	}
-	if (info_p->core_count == 0) {
-		info_p->core_count   = info_p->cpuid_cores_per_package;
-		info_p->thread_count = info_p->cpuid_logical_per_package;
-	}
 
-	if (info_p->cpuid_cpufamily != CPUFAMILY_INTEL_PENRYN) {
+	if (0 != (info_p->cpuid_features & CPUID_FEATURE_VMM) &&
+	    PE_parse_boot_argn("-nomsr35h", NULL, 0)) {
+		info_p->core_count = 1;
+		info_p->thread_count = 1;
 		cpuid_set_cache_info(info_p);
+	} else {
+		switch (info_p->cpuid_cpufamily) {
+		case CPUFAMILY_INTEL_PENRYN:
+			cpuid_set_cache_info(info_p);
+			info_p->core_count   = info_p->cpuid_cores_per_package;
+			info_p->thread_count = info_p->cpuid_logical_per_package;
+			break;
+		case CPUFAMILY_INTEL_WESTMERE: {
+			uint64_t msr = rdmsr64(MSR_CORE_THREAD_COUNT);
+			if (0 == msr) {
+				/* Provide a non-zero default for some VMMs */
+				msr = (1 << 16) | 1;
+			}
+			info_p->core_count   = bitfield32((uint32_t)msr, 19, 16);
+			info_p->thread_count = bitfield32((uint32_t)msr, 15, 0);
+			cpuid_set_cache_info(info_p);
+			break;
+		}
+		default: {
+			uint64_t msr = rdmsr64(MSR_CORE_THREAD_COUNT);
+			if (0 == msr) {
+				/* Provide a non-zero default for some VMMs */
+				msr = (1 << 16) | 1;
+			}
+			info_p->core_count   = bitfield32((uint32_t)msr, 31, 16);
+			info_p->thread_count = bitfield32((uint32_t)msr, 15, 0);
+			cpuid_set_cache_info(info_p);
+			break;
+		}
+		}
 	}
 
 	DBG("cpuid_set_info():\n");
@@ -1093,7 +1094,11 @@ static struct table {
 	{CPUID_LEAF7_FEATURE_OSPKE, "OSPKE"},
 	{CPUID_LEAF7_FEATURE_WAITPKG, "WAITPKG"},
 	{CPUID_LEAF7_FEATURE_GFNI, "GFNI"},
-	{CPUID_LEAF7_FEATURE_AVX512VPCDQ, "AVX512VPCDQ"},
+	{CPUID_LEAF7_FEATURE_VAES, "VAES"},
+	{CPUID_LEAF7_FEATURE_VPCLMULQDQ, "VPCLMULQDQ"},
+	{CPUID_LEAF7_FEATURE_AVX512VNNI, "AVX512VNNI"},
+	{CPUID_LEAF7_FEATURE_AVX512BITALG, "AVX512BITALG"},
+	{CPUID_LEAF7_FEATURE_AVX512VPCDQ, "AVX512VPOPCNTDQ"},
 	{CPUID_LEAF7_FEATURE_RDPID, "RDPID"},
 	{CPUID_LEAF7_FEATURE_CLDEMOTE, "CLDEMOTE"},
 	{CPUID_LEAF7_FEATURE_MOVDIRI, "MOVDIRI"},
@@ -1104,6 +1109,7 @@ static struct table {
     leaf7_extfeature_map[] = {
 	{ CPUID_LEAF7_EXTFEATURE_AVX5124VNNIW, "AVX5124VNNIW" },
 	{ CPUID_LEAF7_EXTFEATURE_AVX5124FMAPS, "AVX5124FMAPS" },
+	{ CPUID_LEAF7_EXTFEATURE_FSREPMOV, "FSREPMOV" },
 	{ CPUID_LEAF7_EXTFEATURE_MDCLEAR, "MDCLEAR" },
 	{ CPUID_LEAF7_EXTFEATURE_TSXFA, "TSXFA" },
 	{ CPUID_LEAF7_EXTFEATURE_IBRS, "IBRS" },

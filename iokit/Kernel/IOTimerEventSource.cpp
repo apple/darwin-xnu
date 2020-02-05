@@ -100,29 +100,29 @@ do { \
 //
 
 __inline__ void
-IOTimerEventSource::invokeAction(IOTimerEventSource::Action action, IOTimerEventSource * ts,
-    OSObject * owner, IOWorkLoop * workLoop)
+IOTimerEventSource::invokeAction(IOTimerEventSource::Action _action, IOTimerEventSource * ts,
+    OSObject * _owner, IOWorkLoop * _workLoop)
 {
 	bool    trace = (gIOKitTrace & kIOTraceTimers) ? true : false;
 
 	if (trace) {
 		IOTimeStampStartConstant(IODBG_TIMES(IOTIMES_ACTION),
-		    VM_KERNEL_ADDRHIDE(action), VM_KERNEL_ADDRHIDE(owner));
+		    VM_KERNEL_ADDRHIDE(_action), VM_KERNEL_ADDRHIDE(_owner));
 	}
 
 	if (kActionBlock & flags) {
 		((IOTimerEventSource::ActionBlock) actionBlock)(ts);
 	} else {
-		(*action)(owner, ts);
+		(*_action)(_owner, ts);
 	}
 
 #if CONFIG_DTRACE
-	DTRACE_TMR3(iotescallout__expire, Action, action, OSObject, owner, void, workLoop);
+	DTRACE_TMR3(iotescallout__expire, Action, _action, OSObject, _owner, void, _workLoop);
 #endif
 
 	if (trace) {
 		IOTimeStampEndConstant(IODBG_TIMES(IOTIMES_ACTION),
-		    VM_KERNEL_UNSLIDE(action), VM_KERNEL_ADDRHIDE(owner));
+		    VM_KERNEL_UNSLIDE(_action), VM_KERNEL_ADDRHIDE(_owner));
 	}
 }
 
@@ -319,19 +319,19 @@ IOTimerEventSource::timerEventSource(uint32_t inOptions, OSObject *inOwner, Acti
 
 	if (me && !me->init(inOptions, inOwner, inAction)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
 }
 
 IOTimerEventSource *
-IOTimerEventSource::timerEventSource(uint32_t options, OSObject *inOwner, ActionBlock action)
+IOTimerEventSource::timerEventSource(uint32_t options, OSObject *inOwner, ActionBlock _action)
 {
 	IOTimerEventSource * tes;
 	tes = IOTimerEventSource::timerEventSource(options, inOwner, (Action) NULL);
 	if (tes) {
-		tes->setActionBlock((IOEventSource::ActionBlock) action);
+		tes->setActionBlock((IOEventSource::ActionBlock) _action);
 	}
 
 	return tes;

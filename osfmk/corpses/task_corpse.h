@@ -75,7 +75,7 @@ extern kern_return_t task_crashinfo_destroy(kcdata_descriptor_t data);
 
 extern void corpses_init(void);
 
-extern unsigned long total_corpses_count(void);
+extern unsigned long total_corpses_count(void) __attribute__((pure));
 extern boolean_t corpses_enabled(void);
 
 extern kern_return_t task_generate_corpse_internal(

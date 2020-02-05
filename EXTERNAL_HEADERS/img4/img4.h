@@ -137,18 +137,40 @@
 #include <stdbool.h>
 #include <sys/cdefs.h>
 
+#if KERNEL
+#if !defined(OS_CLOSED_ENUM)
+#define OS_CLOSED_ENUM(...) OS_ENUM(__VA_ARGS__)
+#endif
+
+#if !defined(OS_OPTIONS)
+#define OS_OPTIONS(...) OS_ENUM(__VA_ARGS__)
+#endif
+
+#if !defined(OS_CLOSED_OPTIONS)
+#define OS_CLOSED_OPTIONS(...) OS_ENUM(__VA_ARGS__)
+#endif
+#endif
+
 #define __IMG4_INDIRECT 1
 
 /*
- * This header is used in the pmap layer in xnu, which is in osfmk, which does
- * not have access to most of the BSD headers. (But for some reason it does have
- * access to sys/cdefs.h.) The only thing we need from that header is the
- * errno_t typedef though, so if we can't get to it, then just typedef it
- * ourselves.
+ * When used from the pmap layer, this header pulls in the types from libsa,
+ * which conflict with the BSD sys/types.h header that we need to pull in. But
+ * we only need it for the errno_t typedef and the vnode_t typedef. So when
+ * building MACH_KERNEL_PRIVATE, we do two things:
+ *
+ *     1. Explicitly pull in <sys/_types/_errno_t.h>, so we get errno_t and
+ *        nothing else (no transitive #include's)
+ *     2. #define _SYS_TYPES_H_ before #includ'ing <sys/kernel_types.h> so that
+ *        we don't get the transitive #include of <sys/types.h> but we still get
+ *        the definitions we need
  */
 #if MACH_KERNEL_PRIVATE
-typedef int errno_t;
+#define _SYS_TYPES_H_ 1
+#include <sys/kernel_types.h>
+#include <sys/_types/_errno_t.h>
 #else
+#include <sys/kernel_types.h>
 #include <sys/types.h>
 #endif
 
@@ -238,7 +260,7 @@ typedef void (*img4_destructor_t)(
  * It is illegal to use a manifest which possesses a CHMH tag as a first-stage
  * manifest.
  */
-OS_ENUM(img4_flags, uint64_t,
+OS_CLOSED_OPTIONS(img4_flags, uint64_t,
 	I4F_INIT = 0,
 	I4F_TRUST_MANIFEST = (1 << 0),
 	I4F_FORCE_MIXNMATCH = (1 << 1),
@@ -264,12 +286,13 @@ typedef struct _img4 {
 #endif
 } img4_t;
 
-typedef char _img4_payload_opaque_data_64[496];
+typedef char _img4_payload_opaque_data_64[504];
 
-#if __ARM_ARCH_7S__ || __i386__
-typedef char _img4_payload_opaque_data_32[324];
-#else
+#if __ARM_ARCH_7A__ || __ARM_ARCH_7S__ || __ARM_ARCH_7K__ || \
+		__ARM64_ARCH_8_32__ || __i386__
 typedef char _img4_payload_opaque_data_32[328];
+#else
+typedef char _img4_payload_opaque_data_32[332];
 #endif
 
 /*!
@@ -330,7 +353,7 @@ typedef struct _img4_payload {
  * The bytes given to this routine must represent an Image4 manifest. They may
  * optionally also represent an Image4 payload.
  */
-#if !MACH_KERNEL_PRIVATE
+#if !XNU_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20180112
 OS_EXPORT OS_WARN_RESULT OS_NONNULL1 OS_NONNULL3
 errno_t
@@ -361,7 +384,7 @@ img4_init(img4_t *i4, img4_flags_t flags, const uint8_t *bytes, size_t len,
  * though there is no nonce in the environment. Therefore, any manifests which
  * have a BNCH property constraint will fail to validate.
  */
-#if !MACH_KERNEL_PRIVATE
+#if !XNU_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20180112
 OS_EXPORT OS_NONNULL1 OS_NONNULL2
 void
@@ -384,7 +407,7 @@ img4_set_nonce(img4_t *i4, const void *bytes, size_t len);
  * @discussion
  * See discussion for {@link img4_set_nonce}.
  */
-#if !MACH_KERNEL_PRIVATE
+#if !XNU_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20181106
 OS_EXPORT OS_NONNULL1 OS_NONNULL2
 void
@@ -446,7 +469,7 @@ img4_set_nonce_domain(img4_t *i4, const img4_nonce_domain_t *nd);
  * If any one of these validation checks fails, the payload is considered
  * untrustworthy and is not returned.
  */
-#if !MACH_KERNEL_PRIVATE
+#if !XNU_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20180112
 OS_EXPORT OS_WARN_RESULT OS_NONNULL1 OS_NONNULL3 OS_NONNULL4 OS_NONNULL5
 errno_t
@@ -475,9 +498,17 @@ img4_get_trusted_payload(img4_t *i4, img4_tag_t tag,
  * A pointer to the storage where the pointer to the payload buffer will be
  * written on success.
  *
+ * If the payload objects was initialized with
+ * {@link img4_payload_init_with_vnode_4xnu}, this parameter should be NULL, as
+ * there will be no in-memory buffer to return.
+ *
  * @param len
  * A pointer to the storage where the length of the payload buffer will be
  * written on success.
+ *
+ * If the payload objects was initialized with
+ * {@link img4_payload_init_with_vnode_4xnu}, this parameter should be NULL, as
+ * there will be no in-memory buffer to return.
  *
  * @result
  * Upon success, zero is returned. The implementation may also return one of the
@@ -494,6 +525,18 @@ img4_get_trusted_payload(img4_t *i4, img4_tag_t tag,
  *     [EILSEQ]     The payload for the given tag does not match its description
  *                  in the manifest
  *     [EIO]        The payload could not be fetched
+ *     [EIO]        The payload was initialized with
+ *                  {@link img4_payload_init_with_vnode_4xnu}, and reading from
+ *                  the vnode stalled repeatedly beyond the implementation's
+ *                  tolerance
+ *
+ * If the payload was initialized with
+ * {@link img4_payload_init_with_vnode_4xnu}, any error returned by
+ * {@link vnode_getattr} or {@link vn_rdwr} may be returned.
+ *
+ * If the payload was initialized with
+ * {@link img4_payload_init_with_fd_4MSM}, any error returned by stat(2),
+ * read(2), or malloc(3) may be returned.
  *
  * Otherwise, an error from the underlying Image4 implementation will be
  * returned.
@@ -502,10 +545,9 @@ img4_get_trusted_payload(img4_t *i4, img4_tag_t tag,
  * This routine performs the same validation steps as
  * {@link img4_get_trusted_payload}.
  */
-#if !MACH_KERNEL_PRIVATE
+#if !XNU_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20180112
-OS_EXPORT OS_WARN_RESULT OS_NONNULL1 OS_NONNULL2 OS_NONNULL3 OS_NONNULL4
-OS_NONNULL5
+OS_EXPORT OS_WARN_RESULT OS_NONNULL1 OS_NONNULL2 OS_NONNULL3
 errno_t
 img4_get_trusted_external_payload(img4_t *i4, img4_payload_t *payload,
 		const img4_environment_t *env, const uint8_t **bytes, size_t *len);
@@ -525,7 +567,7 @@ img4_get_trusted_external_payload(img4_t *i4, img4_payload_t *payload,
  * The destructor passed to {@link img4_init} is called as a result of this
  * routine, if any was set.
  */
-#if !MACH_KERNEL_PRIVATE
+#if !XNU_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20180112
 OS_EXPORT OS_NONNULL1
 void

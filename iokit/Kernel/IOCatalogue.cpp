@@ -68,7 +68,8 @@ IOCatalogue    * gIOCatalogue;
 const OSSymbol * gIOClassKey;
 const OSSymbol * gIOProbeScoreKey;
 const OSSymbol * gIOModuleIdentifierKey;
-IORWLock         * gIOCatalogLock;
+const OSSymbol * gIOModuleIdentifierKernelKey;
+IORWLock       * gIOCatalogLock;
 
 #if PRAGMA_MARK
 #pragma mark Utility functions
@@ -105,9 +106,11 @@ IOCatalogue::initialize(void)
 		errorString->release();
 	}
 
-	gIOClassKey              = OSSymbol::withCStringNoCopy( kIOClassKey );
-	gIOProbeScoreKey         = OSSymbol::withCStringNoCopy( kIOProbeScoreKey );
-	gIOModuleIdentifierKey   = OSSymbol::withCStringNoCopy( kCFBundleIdentifierKey );
+	gIOClassKey                  = OSSymbol::withCStringNoCopy( kIOClassKey );
+	gIOProbeScoreKey             = OSSymbol::withCStringNoCopy( kIOProbeScoreKey );
+	gIOModuleIdentifierKey       = OSSymbol::withCStringNoCopy( kCFBundleIdentifierKey );
+	gIOModuleIdentifierKernelKey = OSSymbol::withCStringNoCopy( kCFBundleIdentifierKernelKey );
+
 
 	assert( array && gIOClassKey && gIOProbeScoreKey
 	    && gIOModuleIdentifierKey);
@@ -129,7 +132,7 @@ IOCatalogue::arrayForPersonality(OSDictionary * dict)
 
 	sym = OSDynamicCast(OSSymbol, dict->getObject(gIOProviderClassKey));
 	if (!sym) {
-		return 0;
+		return NULL;
 	}
 
 	return (OSArray *) personalities->getObject(sym);
@@ -178,7 +181,7 @@ IOCatalogue::init(OSArray * initArray)
 			continue;
 		}
 		OSKext::uniquePersonalityProperties(dict);
-		if (0 == dict->getObject( gIOClassKey )) {
+		if (NULL == dict->getObject( gIOClassKey )) {
 			IOLog("Missing or bad \"%s\" key\n",
 			    gIOClassKey->getCStringNoCopy());
 			continue;
@@ -219,7 +222,7 @@ IOCatalogue::findDrivers(
 	set = OSOrderedSet::withCapacity( 1, IOServiceOrdering,
 	    (void *)gIOProbeScoreKey );
 	if (!set) {
-		return 0;
+		return NULL;
 	}
 
 	IORWLockRead(lock);
@@ -265,12 +268,12 @@ IOCatalogue::findDrivers(
 	set = OSOrderedSet::withCapacity( 1, IOServiceOrdering,
 	    (void *)gIOProbeScoreKey );
 	if (!set) {
-		return 0;
+		return NULL;
 	}
 	iter = OSCollectionIterator::withCollection(personalities);
 	if (!iter) {
 		set->release();
-		return 0;
+		return NULL;
 	}
 
 	IORWLockRead(lock);
@@ -474,33 +477,17 @@ IOCatalogue::getGenerationCount(void) const
 	return generation;
 }
 
+// Check to see if kernel module has been loaded already, and request its load.
 bool
-IOCatalogue::isModuleLoaded(OSString * moduleName) const
+IOCatalogue::isModuleLoaded(OSDictionary * driver, OSObject ** kextRef) const
 {
-	return isModuleLoaded(moduleName->getCStringNoCopy());
-}
+	OSString * moduleName = NULL;
+	OSString * publisherName = NULL;
+	OSReturn   ret;
 
-bool
-IOCatalogue::isModuleLoaded(const char * moduleName) const
-{
-	OSReturn ret;
-	ret = OSKext::loadKextWithIdentifier(moduleName);
-	if (kOSKextReturnDeferred == ret) {
-		// a request has been queued but the module isn't necessarily
-		// loaded yet, so stall.
-		return false;
+	if (kextRef) {
+		*kextRef = NULL;
 	}
-	// module is present or never will be
-	return true;
-}
-
-// Check to see if module has been loaded already.
-bool
-IOCatalogue::isModuleLoaded(OSDictionary * driver) const
-{
-	OSString             * moduleName = NULL;
-	OSString             * publisherName = NULL;
-
 	if (!driver) {
 		return false;
 	}
@@ -515,12 +502,25 @@ IOCatalogue::isModuleLoaded(OSDictionary * driver) const
 	    driver->getObject(kIOPersonalityPublisherKey));
 	OSKext::recordIdentifierRequest(publisherName);
 
-	moduleName = OSDynamicCast(OSString, driver->getObject(gIOModuleIdentifierKey));
+	moduleName = OSDynamicCast(OSString, driver->getObject(gIOModuleIdentifierKernelKey));
 	if (moduleName) {
-		return isModuleLoaded(moduleName);
+		ret = OSKext::loadKextWithIdentifier(moduleName, kextRef);
+		if (kOSKextReturnDeferred == ret) {
+			// a request has been queued but the module isn't necessarily
+			// loaded yet, so stall.
+			return false;
+		}
+		OSString *moduleDextName = OSDynamicCast(OSString, driver->getObject(gIOModuleIdentifierKey));
+		if (moduleDextName && !(moduleName->isEqualTo(moduleDextName))) {
+			OSObject *dextRef = NULL;
+			ret = OSKext::loadKextWithIdentifier(moduleDextName, &dextRef);
+			OSSafeReleaseNULL(dextRef);
+		}
+		// module is present or never will be
+		return true;
 	}
 
-	/* If a personality doesn't hold the "CFBundleIdentifier" key
+	/* If a personality doesn't hold the "CFBundleIdentifier" or "CFBundleIdentifierKernel" key
 	 * it is assumed to be an "in-kernel" driver.
 	 */
 	return true;
@@ -531,14 +531,9 @@ IOCatalogue::isModuleLoaded(OSDictionary * driver) const
  * IOCatalogueModuleLoaded(). Sent from kextd.
  */
 void
-IOCatalogue::moduleHasLoaded(OSString * moduleName)
+IOCatalogue::moduleHasLoaded(const OSSymbol * moduleName)
 {
-	OSDictionary * dict;
-
-	dict = OSDictionary::withCapacity(2);
-	dict->setObject(gIOModuleIdentifierKey, moduleName);
-	startMatching(dict);
-	dict->release();
+	startMatching(moduleName);
 
 	(void) OSKext::setDeferredLoadSucceeded();
 	(void) OSKext::considerRebuildOfPrelinkedKernel();
@@ -547,9 +542,9 @@ IOCatalogue::moduleHasLoaded(OSString * moduleName)
 void
 IOCatalogue::moduleHasLoaded(const char * moduleName)
 {
-	OSString * name;
+	const OSSymbol * name;
 
-	name = OSString::withCString(moduleName);
+	name = OSSymbol::withCString(moduleName);
 	moduleHasLoaded(name);
 	name->release();
 }
@@ -574,7 +569,7 @@ IOCatalogue::_terminateDrivers(OSDictionary * matching)
 	}
 
 	ret = kIOReturnSuccess;
-	dict = 0;
+	dict = NULL;
 	iter = IORegistryIterator::iterateOver(gIOServicePlane,
 	    kIORegistryIterateRecursively);
 	if (!iter) {
@@ -741,15 +736,11 @@ IOCatalogue::terminateDriversForModule(
 	return ret;
 }
 
+#if defined(__i386__) || defined(__x86_64__)
 bool
 IOCatalogue::startMatching( OSDictionary * matching )
 {
-	OSCollectionIterator * iter;
-	OSDictionary         * dict;
 	OSOrderedSet         * set;
-	OSArray              * array;
-	const OSSymbol *       key;
-	unsigned int           idx;
 
 	if (!matching) {
 		return false;
@@ -761,27 +752,24 @@ IOCatalogue::startMatching( OSDictionary * matching )
 		return false;
 	}
 
-	iter = OSCollectionIterator::withCollection(personalities);
-	if (!iter) {
-		set->release();
-		return false;
-	}
-
 	IORWLockRead(lock);
 
-	while ((key = (const OSSymbol *) iter->getNextObject())) {
-		array = (OSArray *) personalities->getObject(key);
-		if (array) {
-			for (idx = 0; (dict = (OSDictionary *) array->getObject(idx)); idx++) {
-				/* This comparison must be done with only the keys in the
-				 * "matching" dict to enable general matching.
-				 */
-				if (dict->isEqualTo(matching, matching)) {
-					set->setObject(dict);
-				}
+	personalities->iterateObjects(^bool (const OSSymbol * key, OSObject * value) {
+		OSArray      * array;
+		OSDictionary * dict;
+		unsigned int   idx;
+
+		array = (OSArray *) value;
+		for (idx = 0; (dict = (OSDictionary *) array->getObject(idx)); idx++) {
+		        /* This comparison must be done with only the keys in the
+		         * "matching" dict to enable general matching.
+		         */
+		        if (dict->isEqualTo(matching, matching)) {
+		                set->setObject(dict);
 			}
 		}
-	}
+		return false;
+	});
 
 	// Start device matching.
 	if (set->getCount() > 0) {
@@ -792,7 +780,53 @@ IOCatalogue::startMatching( OSDictionary * matching )
 	IORWLockUnlock(lock);
 
 	set->release();
-	iter->release();
+
+	return true;
+}
+#endif /* defined(__i386__) || defined(__x86_64__) */
+
+bool
+IOCatalogue::startMatching( const OSSymbol * moduleName )
+{
+	OSOrderedSet         * set;
+
+	if (!moduleName) {
+		return false;
+	}
+
+	set = OSOrderedSet::withCapacity(10, IOServiceOrdering,
+	    (void *)gIOProbeScoreKey);
+	if (!set) {
+		return false;
+	}
+
+	IORWLockRead(lock);
+
+	personalities->iterateObjects(^bool (const OSSymbol * key, OSObject * value) {
+		OSArray      * array;
+		OSDictionary * dict;
+		OSObject     * obj;
+		unsigned int   idx;
+
+		array = (OSArray *) value;
+		for (idx = 0; (dict = (OSDictionary *) array->getObject(idx)); idx++) {
+		        obj = dict->getObject(gIOModuleIdentifierKernelKey);
+		        if (obj && moduleName->isEqualTo(obj)) {
+		                set->setObject(dict);
+			}
+		}
+		return false;
+	});
+
+	// Start device matching.
+	if (set->getCount() > 0) {
+		IOService::catalogNewDrivers(set);
+		generation++;
+	}
+
+	IORWLockUnlock(lock);
+
+	set->release();
 
 	return true;
 }

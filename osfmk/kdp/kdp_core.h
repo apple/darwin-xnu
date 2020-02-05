@@ -137,6 +137,7 @@ enum kern_dump_type {
 #if CONFIG_EMBEDDED
 	KERN_DUMP_HW_SHMEM_DBG, /* coordinated hardware shared memory debugger core dump */
 #endif
+	KERN_DUMP_STACKSHOT_DISK, /* local, stackshot on device coredump */
 };
 
 int kern_dump(enum kern_dump_type kd_variant);

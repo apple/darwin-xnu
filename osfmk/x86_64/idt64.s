@@ -87,7 +87,7 @@ EXT(idt64_hndl_table0):
 /* 0x00 */	.quad EXT(ks_dispatch)
 /* 0x08 */	.quad EXT(ks_64bit_return)
 /* 0x10 */	.quad 0 /* Populated with CPU shadow displacement*/
-/* 0x18 */	.quad EXT(ks_return)
+/* 0x18 */	.quad EXT(ks_32bit_return)
 #define	TBL0_OFF_DISP_USER_WITH_POPRAX	0x20
 /* 0x20 */	.quad EXT(ks_dispatch_user_with_pop_rax)
 #define	TBL0_OFF_DISP_KERN_WITH_POPRAX	0x28
@@ -244,9 +244,14 @@ Entry(idt64_mdep_scall)
  * PCB stack and then dispatch as normal.
  * For faults in kernel-space, we need to scrub for kernel exit faults and
  * treat these as user-space faults. But for all other kernel-space faults
- * we continue to run on the IST1 stack and we dispatch to handle the fault
+ * we continue to run on the IST1 stack as we dispatch to handle the fault
  * as fatal.
  */
+Entry(idt64_segnp)
+	pushq	$(HNDL_ALLTRAPS)
+	pushq	$(T_SEGMENT_NOT_PRESENT)
+	jmp	L_check_for_kern_flt
+
 Entry(idt64_gen_prot)
 	pushq	$(HNDL_ALLTRAPS)
 	pushq	$(T_GENERAL_PROTECTION)
@@ -267,6 +272,16 @@ L_check_for_kern_flt:
 	pushq	%rax
 	testb	$3, 8+ISF64_CS(%rsp)
 	jnz	L_dispatch_from_user_no_push_rax		/* Fault from user, go straight to dispatch */
+
+	/* Check if the fault occurred in the 32-bit segment restoration window (which executes with user gsb) */
+	leaq	L_32bit_seg_restore_begin(%rip), %rax
+	cmpq	%rax, 8+ISF64_RIP(%rsp)
+	jb	L_not_32bit_segrestores
+	leaq	L_32bit_seg_restore_done(%rip), %rax
+	cmpq	%rax, 8+ISF64_RIP(%rsp)
+	jae	L_not_32bit_segrestores
+	jmp	1f
+L_not_32bit_segrestores:
 	leaq	EXT(ret32_iret)(%rip), %rax
 	cmpq	%rax, 8+ISF64_RIP(%rsp)
 	je	1f
@@ -309,6 +324,7 @@ L_check_for_kern_flt:
 	/*
 	 * Fix the stack so the original trap frame is current, then jump to dispatch
 	 */
+
 	movq	%rax, 16+ISF64_CS(%rsp)
 
 	movq	ISF64_RSP-24(%rbx), %rax
@@ -326,10 +342,6 @@ L_check_for_kern_flt:
 	popq	%rbx
 	jmp	L_dispatch_from_user_no_push_rax
 
-Entry(idt64_segnp)
-	pushq	$(HNDL_ALLTRAPS)
-	pushq	$(T_SEGMENT_NOT_PRESENT)
-	jmp	L_dispatch
 
 /*
  * Fatal exception handlers:
@@ -551,6 +563,7 @@ L_dispatch_from_kernel_no_push_rax:
 	jmp *(%rax)
 /* User return: register restoration and address space switch sequence */
 Entry(ks_64bit_return)
+
 	mov	R64_R14(%r15), %r14
 	mov	R64_R13(%r15), %r13
 	mov	R64_R12(%r15), %r12
@@ -810,6 +823,176 @@ L_64bit_entry_reject:
 	movq	$(T_INVALID_OPCODE), 8+ISF64_TRAPNO(%rsp)
 	jmp 	L_dispatch_kgsb
 
+Entry(ks_32bit_return)
+
+	/* Validate CS/DS/ES/FS/GS segment selectors with the Load Access Rights instruction prior to restoration */
+	/* Exempt "known good" statically configured selectors, e.g. USER_CS, USER_DS and 0 */
+	cmpl	$(USER_CS), R32_CS(%r15)
+	jz 	11f
+	larw	R32_CS(%r15), %ax
+	jnz	L_32_reset_cs
+	/* Ensure that the segment referenced by CS in the saved state is a code segment (bit 11 == 1) */
+	testw	$0x800, %ax
+	jz	L_32_reset_cs		/* Update stored %cs with known-good selector if ZF == 1 */
+	jmp	11f
+L_32_reset_cs:
+	movl	$(USER_CS), R32_CS(%r15)
+11:
+	cmpl	$(USER_DS), R32_DS(%r15)
+	jz	22f
+	cmpl	$0, R32_DS(%r15)
+	jz 	22f
+	larw	R32_DS(%r15), %ax
+	jz	22f
+	movl	$(USER_DS), R32_DS(%r15)
+22:
+	cmpl	$(USER_DS), R32_ES(%r15)
+	jz	33f
+	cmpl	$0, R32_ES(%r15)
+	jz 	33f
+	larw	R32_ES(%r15), %ax
+	jz	33f
+	movl	$(USER_DS), R32_ES(%r15)
+33:
+	cmpl	$(USER_DS), R32_FS(%r15)
+	jz	44f
+	cmpl	$0, R32_FS(%r15)
+	jz 	44f
+	larw	R32_FS(%r15), %ax
+	jz	44f
+	movl	$(USER_DS), R32_FS(%r15)
+44:
+	cmpl	$(USER_CTHREAD), R32_GS(%r15)
+	jz	55f
+	cmpl	$0, R32_GS(%r15)
+	jz 	55f
+	larw	R32_GS(%r15), %ax
+	jz	55f
+	movl	$(USER_CTHREAD), R32_GS(%r15)
+55:
+
+	/*
+	 * Restore general 32-bit registers
+	 */
+	movl	R32_EAX(%r15), %eax
+	movl	R32_EBX(%r15), %ebx
+	movl	R32_ECX(%r15), %ecx
+	movl	R32_EDX(%r15), %edx
+	movl	R32_EBP(%r15), %ebp
+	movl	R32_ESI(%r15), %esi
+	movl	R32_EDI(%r15), %edi
+	movl	R32_DS(%r15), %r8d
+	movl	R32_ES(%r15), %r9d
+	movl	R32_FS(%r15), %r10d
+	movl	R32_GS(%r15), %r11d
+
+	/* Switch to the per-cpu (doublemapped) exception stack */
+	mov	%gs:CPU_ESTACK, %rsp
+
+	/* Now transfer the ISF to the exception stack in preparation for iret, below */
+	movl	R32_SS(%r15), %r12d
+	push	%r12
+	movl	R32_UESP(%r15), %r12d
+	push	%r12
+	movl	R32_EFLAGS(%r15), %r12d
+	push	%r12
+	movl	R32_CS(%r15), %r12d
+	push	%r12
+	movl	R32_EIP(%r15), %r12d
+	push	%r12
+
+	movl	%gs:CPU_NEED_SEGCHK, %r14d	/* %r14 will be zeroed just before we return */
+
+	/*
+	 * Finally, switch to the user pagetables.  After this, all %gs-relative
+	 * accesses MUST be to cpu shadow data ONLY.  Note that after we restore %gs
+	 * (after the swapgs), no %gs-relative accesses should be performed.
+	 */
+	/* Discover user cr3/ASID */
+	mov	%gs:CPU_UCR3, %r13
+#if	DEBUG
+	mov	%r13, %gs:CPU_EXIT_CR3
+#endif
+	mov	%r13, %cr3
+
+	swapgs
+
+	/*
+	 * Restore segment registers. A #GP taken here will push state onto IST1,
+	 * not the exception stack.  Note that the placement of the labels here
+	 * corresponds to the fault address-detection logic (so do not change them
+	 * without also changing that code).
+	 */
+L_32bit_seg_restore_begin:
+	mov	%r8, %ds
+	mov	%r9, %es
+	mov	%r10, %fs
+	mov	%r11, %gs
+L_32bit_seg_restore_done:
+
+	/* Zero 64-bit-exclusive GPRs to prevent data leaks */
+	xor	%r8, %r8
+	xor	%r9, %r9
+	xor	%r10, %r10
+	xor	%r11, %r11
+	xor	%r12, %r12
+	xor	%r13, %r13
+	xor	%r15, %r15
+
+	/*
+	 * At this point, the stack contains:
+	 *
+	 * +--------------+
+	 * |  Return SS   | +32
+	 * |  Return RSP  | +24
+	 * |  Return RFL  | +16
+	 * |  Return CS   | +8
+	 * |  Return RIP  | <-- rsp
+	 * +--------------+
+	 */
+
+	cmpl	$(SYSENTER_CS), 8(%rsp)
+					/* test for sysexit */
+	je      L_rtu_via_sysexit
+
+	cmpl	$1, %r14d
+	je	L_verw_island
+
+L_after_verw:
+	xor	%r14, %r14
+
+.globl EXT(ret32_iret)
+EXT(ret32_iret):
+	iretq				/* return from interrupt */
+
+L_verw_island:
+	verw	32(%rsp)
+	jmp	L_after_verw
+
+L_verw_island_1:
+	verw	16(%rsp)
+	jmp	L_after_verw_1
+
+L_rtu_via_sysexit:
+	pop	%rdx			/* user return eip */
+	pop	%rcx			/* pop and toss cs */
+	andl	$(~EFL_IF), (%rsp)	/* clear interrupts enable, sti below */
+
+	/*
+	 * %ss is now at 16(%rsp)
+	 */
+	cmpl	$1, %r14d
+	je	L_verw_island_1
+L_after_verw_1:
+	xor	%r14, %r14
+
+	popf				/* flags - carry denotes failure */
+	pop	%rcx			/* user return esp */
+
+
+	sti				/* interrupts enabled after sysexit */
+	sysexitl			/* 32-bit sysexit */
+
 /* End of double-mapped TEXT */
 .text
 
@@ -841,9 +1024,6 @@ Entry(ks_dispatch)
 Entry(ks_dispatch_user_with_pop_rax)
 	pop	%rax
 	jmp	EXT(ks_dispatch_user)
-
-Entry (ks_return)
-	jmp	.
 
 Entry(ks_dispatch_user)
 	cmpl	$(TASK_MAP_32BIT), %gs:CPU_TASK_MAP
@@ -1086,7 +1266,15 @@ L_cr3_switch_return:
 	movq	$0, %gs:CPU_DR7
 4:
 	cmpl	$(SS_64), SS_FLAVOR(%r15)	/* 64-bit state? */
-	je	L_64bit_return
+	jne	L_32bit_return
+
+	/*
+	 * Restore general 64-bit registers.
+	 * Here on fault stack and PCB address in R15.
+	 */
+	leaq	EXT(idt64_hndl_table0)(%rip), %rax
+	jmp	*8(%rax)
+
 
 L_32bit_return:
 #if DEBUG_IDT64
@@ -1098,155 +1286,9 @@ L_32bit_return:
 1:
 #endif /* DEBUG_IDT64 */
 
-	/*
-	 * Restore registers into the machine state for iret.
-	 * Here on fault stack and PCB address in R11.
-	 */
-	movl	R32_EIP(%r15), %eax
-	movl	%eax, R64_RIP(%r15)
-	movl	R32_EFLAGS(%r15), %eax
-	movl	%eax, R64_RFLAGS(%r15)
-	movl	R32_CS(%r15), %eax
-	movl	%eax, R64_CS(%r15)
-	movl	R32_UESP(%r15), %eax
-	movl	%eax, R64_RSP(%r15)
-	movl	R32_SS(%r15), %eax
-	movl	%eax, R64_SS(%r15)
+	leaq	EXT(idt64_hndl_table0)(%rip), %rax
+	jmp	*0x18(%rax)
 
-	/* Validate CS/DS/ES/FS/GS segment selectors with the Load Access Rights instruction prior to restoration */
-	/* Exempt "known good" statically configured selectors, e.g. USER_CS, USER_DS and 0 */
-	cmpl	$(USER_CS), R32_CS(%r15)
-	jz 	11f
-	larw	R32_CS(%r15), %ax
-	jnz	L_32_reset_cs
-	/* Ensure that the segment referenced by CS in the saved state is a code segment (bit 11 == 1) */
-	testw	$0x800, %ax
-	jz	L_32_reset_cs		/* Update stored %cs with known-good selector if ZF == 1 */
-	jmp	11f
-L_32_reset_cs:
-	movl	$(USER_CS), R32_CS(%r15)
-11:
-	cmpl	$(USER_DS), R32_DS(%r15)
-	jz	22f
-	cmpl	$0, R32_DS(%r15)
-	jz 	22f
-	larw	R32_DS(%r15), %ax
-	jz	22f
-	movl	$(USER_DS), R32_DS(%r15)
-22:
-	cmpl	$(USER_DS), R32_ES(%r15)
-	jz	33f
-	cmpl	$0, R32_ES(%r15)
-	jz 	33f
-	larw	R32_ES(%r15), %ax
-	jz	33f
-	movl	$(USER_DS), R32_ES(%r15)
-33:
-	cmpl	$(USER_DS), R32_FS(%r15)
-	jz	44f
-	cmpl	$0, R32_FS(%r15)
-	jz 	44f
-	larw	R32_FS(%r15), %ax
-	jz	44f
-	movl	$(USER_DS), R32_FS(%r15)
-44:
-	cmpl	$(USER_CTHREAD), R32_GS(%r15)
-	jz	55f
-	cmpl	$0, R32_GS(%r15)
-	jz 	55f
-	larw	R32_GS(%r15), %ax
-	jz	55f
-	movl	$(USER_CTHREAD), R32_GS(%r15)
-55:
-	/*
-	 * Restore general 32-bit registers
-	 */
-	movl	R32_EAX(%r15), %eax
-	movl	R32_EBX(%r15), %ebx
-	movl	R32_ECX(%r15), %ecx
-	movl	R32_EDX(%r15), %edx
-	movl	R32_EBP(%r15), %ebp
-	movl	R32_ESI(%r15), %esi
-	movl	R32_EDI(%r15), %edi
-
-	/*
-	 * Restore segment registers. A segment exception taken here will
-	 * push state on the IST1 stack and will not affect the "PCB stack".
-	 */
-	mov	%r15, %rsp		/* Set the PCB as the stack */
-	movl	%gs:CPU_NEED_SEGCHK, %r14d	/* %r14 will be restored below */
-	swapgs
-
-	/* Zero 64-bit-exclusive GPRs to prevent data leaks */
-	xor	%r8, %r8
-	xor	%r9, %r9
-	xor	%r10, %r10
-	xor	%r11, %r11
-	xor	%r12, %r12
-	xor	%r13, %r13
-	xor	%r15, %r15
-
-	movw	R32_DS(%rsp), %ds
-	movw	R32_ES(%rsp), %es
-	movw	R32_FS(%rsp), %fs
-	movw	R32_GS(%rsp), %gs
-
-	/* pop compat frame + trapno, trapfn and error */	
-	add	$(ISS64_OFFSET)+8+8+8, %rsp
-
-	/*
-	 * At this point, the stack contains:
-	 *
-	 * +--------------+
-	 * |  Return SS   | +32
-	 * |  Return RSP  | +24
-	 * |  Return RFL  | +16
-	 * |  Return CS   | +8
-	 * |  Return RIP  | <-- rsp
-	 * +--------------+
-	 */
-
-	cmpl	$(SYSENTER_CS), 8(%rsp)
-					/* test for sysexit */
-	je      L_rtu_via_sysexit
-
-	cmpl	$1, %r14d
-	je	L_verw_island
-
-L_after_verw:
-	xor	%r14, %r14
-
-.globl EXT(ret32_iret)
-EXT(ret32_iret):
-	iretq				/* return from interrupt */
-
-L_verw_island:
-	verw	32(%rsp)
-	jmp	L_after_verw
-
-L_verw_island_1:
-	verw	16(%rsp)
-	jmp	L_after_verw_1
-
-L_rtu_via_sysexit:
-	pop	%rdx			/* user return eip */
-	pop	%rcx			/* pop and toss cs */
-	andl	$(~EFL_IF), (%rsp)	/* clear interrupts enable, sti below */
-
-	/*
-	 * %ss is now at 16(%rsp)
-	 */
-	cmpl	$1, %r14d
-	je	L_verw_island_1
-L_after_verw_1:
-	xor	%r14, %r14
-
-	popf				/* flags - carry denotes failure */
-	pop	%rcx			/* user return esp */
-
-
-	sti				/* interrupts enabled after sysexit */
-	sysexitl			/* 32-bit sysexit */
 
 L_dr_restore_island:
 	movq    TH_PCB_IDS(%rdx),%rax   /* Obtain this thread's debug state */
@@ -1298,8 +1340,6 @@ ret_to_kernel:
 	hlt
 2:
 #endif
-
-L_64bit_return:
 	/*
 	 * Restore general 64-bit registers.
 	 * Here on fault stack and PCB address in R15.

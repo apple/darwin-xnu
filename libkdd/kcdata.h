@@ -436,45 +436,47 @@ struct kcdata_type_definition {
  * NOTE: Please update kcdata/libkdd/kcdtypes.c if you make any changes
  * in STACKSHOT_KCTYPE_* types.
  */
-#define STACKSHOT_KCTYPE_IOSTATS 0x901u                   /* io_stats_snapshot */
-#define STACKSHOT_KCTYPE_GLOBAL_MEM_STATS 0x902u          /* struct mem_and_io_snapshot */
-#define STACKSHOT_KCCONTAINER_TASK 0x903u
-#define STACKSHOT_KCCONTAINER_THREAD 0x904u
-#define STACKSHOT_KCTYPE_TASK_SNAPSHOT 0x905u             /* task_snapshot_v2 */
-#define STACKSHOT_KCTYPE_THREAD_SNAPSHOT 0x906u           /* thread_snapshot_v2, thread_snapshot_v3 */
-#define STACKSHOT_KCTYPE_DONATING_PIDS 0x907u             /* int[] */
-#define STACKSHOT_KCTYPE_SHAREDCACHE_LOADINFO 0x908u      /* same as KCDATA_TYPE_LIBRARY_LOADINFO64 */
-#define STACKSHOT_KCTYPE_THREAD_NAME 0x909u               /* char[] */
-#define STACKSHOT_KCTYPE_KERN_STACKFRAME 0x90Au           /* struct stack_snapshot_frame32 */
-#define STACKSHOT_KCTYPE_KERN_STACKFRAME64 0x90Bu         /* struct stack_snapshot_frame64 */
-#define STACKSHOT_KCTYPE_USER_STACKFRAME 0x90Cu           /* struct stack_snapshot_frame32 */
-#define STACKSHOT_KCTYPE_USER_STACKFRAME64 0x90Du         /* struct stack_snapshot_frame64 */
-#define STACKSHOT_KCTYPE_BOOTARGS 0x90Eu                  /* boot args string */
-#define STACKSHOT_KCTYPE_OSVERSION 0x90Fu                 /* os version string */
-#define STACKSHOT_KCTYPE_KERN_PAGE_SIZE 0x910u            /* kernel page size in uint32_t */
-#define STACKSHOT_KCTYPE_JETSAM_LEVEL 0x911u              /* jetsam level in uint32_t */
-#define STACKSHOT_KCTYPE_DELTA_SINCE_TIMESTAMP 0x912u     /* timestamp used for the delta stackshot */
-#define STACKSHOT_KCTYPE_KERN_STACKLR 0x913u              /* uint32_t */
-#define STACKSHOT_KCTYPE_KERN_STACKLR64 0x914u            /* uint64_t */
-#define STACKSHOT_KCTYPE_USER_STACKLR 0x915u              /* uint32_t */
-#define STACKSHOT_KCTYPE_USER_STACKLR64 0x916u            /* uint64_t */
-#define STACKSHOT_KCTYPE_NONRUNNABLE_TIDS 0x917u          /* uint64_t */
-#define STACKSHOT_KCTYPE_NONRUNNABLE_TASKS 0x918u         /* uint64_t */
-#define STACKSHOT_KCTYPE_CPU_TIMES 0x919u                 /* struct stackshot_cpu_times or stackshot_cpu_times_v2 */
-#define STACKSHOT_KCTYPE_STACKSHOT_DURATION 0x91au        /* struct stackshot_duration */
-#define STACKSHOT_KCTYPE_STACKSHOT_FAULT_STATS 0x91bu     /* struct stackshot_fault_stats */
-#define STACKSHOT_KCTYPE_KERNELCACHE_LOADINFO  0x91cu     /* kernelcache UUID -- same as KCDATA_TYPE_LIBRARY_LOADINFO64 */
-#define STACKSHOT_KCTYPE_THREAD_WAITINFO 0x91du           /* struct stackshot_thread_waitinfo */
-#define STACKSHOT_KCTYPE_THREAD_GROUP_SNAPSHOT 0x91eu     /* struct thread_group_snapshot or thread_group_snapshot_v2 */
-#define STACKSHOT_KCTYPE_THREAD_GROUP 0x91fu              /* uint64_t */
-#define STACKSHOT_KCTYPE_JETSAM_COALITION_SNAPSHOT 0x920u /* struct jetsam_coalition_snapshot */
-#define STACKSHOT_KCTYPE_JETSAM_COALITION 0x921u          /* uint64_t */
-#define STACKSHOT_KCTYPE_THREAD_POLICY_VERSION 0x922u     /* THREAD_POLICY_INTERNAL_STRUCT_VERSION in uint32 */
-#define STACKSHOT_KCTYPE_INSTRS_CYCLES 0x923u             /* struct instrs_cycles_snapshot */
-#define STACKSHOT_KCTYPE_USER_STACKTOP 0x924u             /* struct stack_snapshot_stacktop */
-#define STACKSHOT_KCTYPE_ASID 0x925u                      /* uint32_t */
-#define STACKSHOT_KCTYPE_PAGE_TABLES 0x926u               /* uint64_t */
-#define STACKSHOT_KCTYPE_SYS_SHAREDCACHE_LAYOUT 0x927u    /* same as KCDATA_TYPE_LIBRARY_LOADINFO64 */
+#define STACKSHOT_KCTYPE_IOSTATS                     0x901u /* io_stats_snapshot */
+#define STACKSHOT_KCTYPE_GLOBAL_MEM_STATS            0x902u /* struct mem_and_io_snapshot */
+#define STACKSHOT_KCCONTAINER_TASK                   0x903u
+#define STACKSHOT_KCCONTAINER_THREAD                 0x904u
+#define STACKSHOT_KCTYPE_TASK_SNAPSHOT               0x905u /* task_snapshot_v2 */
+#define STACKSHOT_KCTYPE_THREAD_SNAPSHOT             0x906u /* thread_snapshot_v2, thread_snapshot_v3 */
+#define STACKSHOT_KCTYPE_DONATING_PIDS               0x907u /* int[] */
+#define STACKSHOT_KCTYPE_SHAREDCACHE_LOADINFO        0x908u /* same as KCDATA_TYPE_LIBRARY_LOADINFO64 */
+#define STACKSHOT_KCTYPE_THREAD_NAME                 0x909u /* char[] */
+#define STACKSHOT_KCTYPE_KERN_STACKFRAME             0x90Au /* struct stack_snapshot_frame32 */
+#define STACKSHOT_KCTYPE_KERN_STACKFRAME64           0x90Bu /* struct stack_snapshot_frame64 */
+#define STACKSHOT_KCTYPE_USER_STACKFRAME             0x90Cu /* struct stack_snapshot_frame32 */
+#define STACKSHOT_KCTYPE_USER_STACKFRAME64           0x90Du /* struct stack_snapshot_frame64 */
+#define STACKSHOT_KCTYPE_BOOTARGS                    0x90Eu /* boot args string */
+#define STACKSHOT_KCTYPE_OSVERSION                   0x90Fu /* os version string */
+#define STACKSHOT_KCTYPE_KERN_PAGE_SIZE              0x910u /* kernel page size in uint32_t */
+#define STACKSHOT_KCTYPE_JETSAM_LEVEL                0x911u /* jetsam level in uint32_t */
+#define STACKSHOT_KCTYPE_DELTA_SINCE_TIMESTAMP       0x912u /* timestamp used for the delta stackshot */
+#define STACKSHOT_KCTYPE_KERN_STACKLR                0x913u /* uint32_t */
+#define STACKSHOT_KCTYPE_KERN_STACKLR64              0x914u /* uint64_t */
+#define STACKSHOT_KCTYPE_USER_STACKLR                0x915u /* uint32_t */
+#define STACKSHOT_KCTYPE_USER_STACKLR64              0x916u /* uint64_t */
+#define STACKSHOT_KCTYPE_NONRUNNABLE_TIDS            0x917u /* uint64_t */
+#define STACKSHOT_KCTYPE_NONRUNNABLE_TASKS           0x918u /* uint64_t */
+#define STACKSHOT_KCTYPE_CPU_TIMES                   0x919u /* struct stackshot_cpu_times or stackshot_cpu_times_v2 */
+#define STACKSHOT_KCTYPE_STACKSHOT_DURATION          0x91au /* struct stackshot_duration */
+#define STACKSHOT_KCTYPE_STACKSHOT_FAULT_STATS       0x91bu /* struct stackshot_fault_stats */
+#define STACKSHOT_KCTYPE_KERNELCACHE_LOADINFO        0x91cu /* kernelcache UUID -- same as KCDATA_TYPE_LIBRARY_LOADINFO64 */
+#define STACKSHOT_KCTYPE_THREAD_WAITINFO             0x91du /* struct stackshot_thread_waitinfo */
+#define STACKSHOT_KCTYPE_THREAD_GROUP_SNAPSHOT       0x91eu /* struct thread_group_snapshot or thread_group_snapshot_v2 */
+#define STACKSHOT_KCTYPE_THREAD_GROUP                0x91fu /* uint64_t */
+#define STACKSHOT_KCTYPE_JETSAM_COALITION_SNAPSHOT   0x920u /* struct jetsam_coalition_snapshot */
+#define STACKSHOT_KCTYPE_JETSAM_COALITION            0x921u /* uint64_t */
+#define STACKSHOT_KCTYPE_THREAD_POLICY_VERSION       0x922u /* THREAD_POLICY_INTERNAL_STRUCT_VERSION in uint32 */
+#define STACKSHOT_KCTYPE_INSTRS_CYCLES               0x923u /* struct instrs_cycles_snapshot */
+#define STACKSHOT_KCTYPE_USER_STACKTOP               0x924u /* struct stack_snapshot_stacktop */
+#define STACKSHOT_KCTYPE_ASID                        0x925u /* uint32_t */
+#define STACKSHOT_KCTYPE_PAGE_TABLES                 0x926u /* uint64_t */
+#define STACKSHOT_KCTYPE_SYS_SHAREDCACHE_LAYOUT      0x927u /* same as KCDATA_TYPE_LIBRARY_LOADINFO64 */
+#define STACKSHOT_KCTYPE_THREAD_DISPATCH_QUEUE_LABEL 0x928u /* dispatch queue label */
+#define STACKSHOT_KCTYPE_THREAD_TURNSTILEINFO        0x929u /* struct stackshot_thread_turnstileinfo */
 
 #define STACKSHOT_KCTYPE_TASK_DELTA_SNAPSHOT 0x940u   /* task_delta_snapshot_v2 */
 #define STACKSHOT_KCTYPE_THREAD_DELTA_SNAPSHOT 0x941u /* thread_delta_snapshot_v* */
@@ -517,6 +519,7 @@ struct user64_dyld_uuid_info {
 };
 
 enum task_snapshot_flags {
+	/* k{User,Kernel}64_p (values 0x1 and 0x2) are defined in generic_snapshot_flags */
 	kTaskRsrcFlagged                      = 0x4, // In the EXC_RESOURCE danger zone?
 	kTerminatedSnapshot                   = 0x8,
 	kPidSuspended                         = 0x10, // true for suspended task
@@ -546,6 +549,7 @@ enum task_snapshot_flags {
 };
 
 enum thread_snapshot_flags {
+	/* k{User,Kernel}64_p (values 0x1 and 0x2) are defined in generic_snapshot_flags */
 	kHasDispatchSerial    = 0x4,
 	kStacksPCOnly         = 0x8,    /* Stack traces have no frame pointers. */
 	kThreadDarwinBG       = 0x10,   /* Thread is darwinbg */
@@ -814,6 +818,18 @@ typedef struct stackshot_thread_waitinfo {
 	uint8_t wait_type;      /* The type of object that the thread is waiting on */
 } __attribute__((packed)) thread_waitinfo_t;
 
+typedef struct stackshot_thread_turnstileinfo {
+	uint64_t waiter;        /* The thread that's waiting on the object */
+	uint64_t turnstile_context; /* Associated data (either thread id, or workq addr) */
+	uint8_t turnstile_priority;
+	uint8_t number_of_hops;
+#define STACKSHOT_TURNSTILE_STATUS_UNKNOWN      (1 << 0) /* The final inheritor is unknown (bug?) */
+#define STACKSHOT_TURNSTILE_STATUS_LOCKED_WAITQ (1 << 1) /* A waitq was found to be locked */
+#define STACKSHOT_TURNSTILE_STATUS_WORKQUEUE    (1 << 2) /* The final inheritor is a workqueue */
+#define STACKSHOT_TURNSTILE_STATUS_THREAD       (1 << 3) /* The final inheritor is a thread */
+	uint64_t turnstile_flags;
+} __attribute__((packed)) thread_turnstileinfo_t;
+
 #define STACKSHOT_WAITOWNER_KERNEL         (UINT64_MAX - 1)
 #define STACKSHOT_WAITOWNER_PORT_LOCKED    (UINT64_MAX - 2)
 #define STACKSHOT_WAITOWNER_PSET_LOCKED    (UINT64_MAX - 3)
@@ -895,6 +911,8 @@ struct crashinfo_proc_uniqidentifierinfo {
 #define TASK_CRASHINFO_LEDGER_NETWORK_NONVOLATILE               0x828 /* uint64_t */
 #define TASK_CRASHINFO_LEDGER_NETWORK_NONVOLATILE_COMPRESSED    0x829 /* uint64_t */
 #define TASK_CRASHINFO_LEDGER_WIRED_MEM                         0x82A /* uint64_t */
+#define TASK_CRASHINFO_PROC_PERSONA_ID                          0x82B /* uid_t */
+#define TASK_CRASHINFO_MEMORY_LIMIT_INCREASE                    0x82C /* uint32_t */
 
 
 
@@ -971,7 +989,7 @@ kcdata_iter_unsafe(void *buffer)
 	return iter;
 }
 
-static const kcdata_iter_t kcdata_invalid_iter = { .item = 0, .end = 0 };
+static const kcdata_iter_t kcdata_invalid_iter = { .item = NULL, .end = NULL };
 
 static inline
 int

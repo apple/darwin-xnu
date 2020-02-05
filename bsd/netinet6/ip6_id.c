@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -149,27 +149,43 @@ struct randomtab {
 };
 
 static struct randomtab randomtab_32 = {
-	32,                     /* resulting bits */
-	180,                    /* Time after wich will be reseeded */
-	1000000000,             /* Uniq cycle, avoid blackjack prediction */
-	2,                      /* Starting generator */
-	2147483629,             /* RU_N-1 = 2^2*3^2*59652323 */
-	7,                      /* determine ru_a as RU_AGEN^(2*rand) */
-	1836660096,             /* RU_M = 2^7*3^15 - don't change */
-	{ 2, 3, 59652323, 0 },  /* factors of ru_n */
-	0, 0, 0, 0, 0, 0, 0, 0, 0
+	.ru_bits = 32,          /* resulting bits */
+	.ru_out = 180,          /* Time after wich will be reseeded */
+	.ru_max = 1000000000,   /* Uniq cycle, avoid blackjack prediction */
+	.ru_gen = 2,            /* Starting generator */
+	.ru_n = 2147483629,     /* RU_N-1 = 2^2*3^2*59652323 */
+	.ru_agen = 7,           /* determine ru_a as RU_AGEN^(2*rand) */
+	.ru_m = 1836660096,     /* RU_M = 2^7*3^15 - don't change */
+	.pfacts = { 2, 3, 59652323, 0 },        /* factors of ru_n */
+	.ru_counter = 0,
+	.ru_msb = 0,
+	.ru_x = 0,
+	.ru_seed = 0,
+	.ru_seed2 = 0,
+	.ru_a = 0,
+	.ru_b = 0,
+	.ru_g = 0,
+	.ru_reseed = 0
 };
 
 static struct randomtab randomtab_20 = {
-	20,                     /* resulting bits */
-	180,                    /* Time after wich will be reseeded */
-	200000,                 /* Uniq cycle, avoid blackjack prediction */
-	2,                      /* Starting generator */
-	524269,                 /* RU_N-1 = 2^2*3^2*14563 */
-	7,                      /* determine ru_a as RU_AGEN^(2*rand) */
-	279936,                 /* RU_M = 2^7*3^7 - don't change */
-	{ 2, 3, 14563, 0 },     /* factors of ru_n */
-	0, 0, 0, 0, 0, 0, 0, 0, 0
+	.ru_bits = 20,                  /* resulting bits */
+	.ru_out = 180,                  /* Time after wich will be reseeded */
+	.ru_max = 200000,                       /* Uniq cycle, avoid blackjack prediction */
+	.ru_gen = 2,                    /* Starting generator */
+	.ru_n = 524269,                 /* RU_N-1 = 2^2*3^2*14563 */
+	.ru_agen = 7,                   /* determine ru_a as RU_AGEN^(2*rand) */
+	.ru_m = 279936,                 /* RU_M = 2^7*3^7 - don't change */
+	.pfacts = { 2, 3, 14563, 0 },   /* factors of ru_n */
+	.ru_counter = 0,
+	.ru_msb = 0,
+	.ru_x = 0,
+	.ru_seed = 0,
+	.ru_seed2 = 0,
+	.ru_a = 0,
+	.ru_b = 0,
+	.ru_g = 0,
+	.ru_reseed = 0
 };
 
 static u_int32_t pmod(u_int32_t, u_int32_t, u_int32_t);

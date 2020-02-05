@@ -10,6 +10,7 @@
 #include <kern/clock.h>
 #include <kern/debug.h>
 #include <libkern/OSBase.h>
+#include <libkern/section_keywords.h>
 #include <mach/mach_time.h>
 #include <machine/atomic.h>
 #include <machine/machine_routines.h>
@@ -35,13 +36,13 @@ struct pe_serial_functions {
 	void            (*td0) (int c);
 	int             (*rr0) (void);
 	int             (*rd0) (void);
+	struct pe_serial_functions *next;
 };
 
-static struct pe_serial_functions *gPESF;
+SECURITY_READ_ONLY_LATE(static struct pe_serial_functions*) gPESF = NULL;
 
-static int      uart_initted = 0;       /* 1 if init'ed */
-
-static vm_offset_t      uart_base;
+static int         uart_initted = 0;    /* 1 if init'ed */
+static vm_offset_t uart_base = 0;
 
 /*****************************************************************************/
 
@@ -50,6 +51,8 @@ static vm_offset_t      uart_base;
 static int32_t dt_pclk      = -1;
 static int32_t dt_sampling  = -1;
 static int32_t dt_ubrdiv    = -1;
+
+static void ln2410_uart_set_baud_rate(__unused int unit, uint32_t baud_rate);
 
 static void
 ln2410_uart_init(void)
@@ -66,7 +69,7 @@ ln2410_uart_init(void)
 	rUCON0 = ucon0;
 	rUMCON0 = 0x00;         /* Clear Flow Control */
 
-	gPESF->uart_set_baud_rate(0, 115200);
+	ln2410_uart_set_baud_rate(0, 115200);
 
 	rUFCON0 = 0x03;         /* Clear & Enable FIFOs */
 	rUMCON0 = 0x01;         /* Assert RTS on UART0 */
@@ -137,15 +140,24 @@ ln2410_rd0(void)
 	return (int)rURXH0;
 }
 
-static struct pe_serial_functions ln2410_serial_functions = {
-	ln2410_uart_init, ln2410_uart_set_baud_rate,
-	ln2410_tr0, ln2410_td0, ln2410_rr0, ln2410_rd0
+SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) ln2410_serial_functions =
+{
+	.uart_init = ln2410_uart_init,
+	.uart_set_baud_rate = ln2410_uart_set_baud_rate,
+	.tr0 = ln2410_tr0,
+	.td0 = ln2410_td0,
+	.rr0 = ln2410_rr0,
+	.rd0 = ln2410_rd0
 };
 
 #endif  /* S3CUART */
 
 /*****************************************************************************/
 
+static void
+dcc_uart_init(void)
+{
+}
 
 static unsigned int
 read_dtr(void)
@@ -213,9 +225,14 @@ dcc_rd0(void)
 	return read_dtr();
 }
 
-static struct pe_serial_functions dcc_serial_functions = {
-	NULL, NULL,
-	dcc_tr0, dcc_td0, dcc_rr0, dcc_rd0
+SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) dcc_serial_functions =
+{
+	.uart_init = dcc_uart_init,
+	.uart_set_baud_rate = NULL,
+	.tr0 = dcc_tr0,
+	.td0 = dcc_td0,
+	.rr0 = dcc_rr0,
+	.rd0 = dcc_rd0
 };
 
 /*****************************************************************************/
@@ -465,7 +482,7 @@ validation_failure:
 	PE_consistent_debug_register(kDbgIdConsoleHeaderAP, pa_panic_base, panic_size);
 }
 
-static struct pe_serial_functions shmcon_serial_functions =
+SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) shmcon_serial_functions =
 {
 	.uart_init = shmcon_init,
 	.uart_set_baud_rate = shmcon_set_baud_rate,
@@ -505,6 +522,7 @@ static uint64_t prev_dockfifo_spaces;       // Previous w_stat level of the Dock
 static uint32_t dockfifo_capacity;
 static uint64_t dockfifo_stall_grace;
 
+static vm_offset_t dockfifo_uart_base = 0;
 
 //=======================
 // Local funtions
@@ -521,7 +539,7 @@ dockfifo_drain_on_stall()
 		// It's been more than DOCKFIFO_WR_MAX_STALL_US and nobody read from the FIFO
 		// Drop a character.
 		(void)rDOCKFIFO_R_DATA(DOCKFIFO_UART_READ, 1);
-		prev_dockfifo_spaces++;
+		os_atomic_inc(&prev_dockfifo_spaces, relaxed);
 		return 1;
 	}
 	return 0;
@@ -548,7 +566,7 @@ static void
 dockfifo_uart_td0(int c)
 {
 	rDOCKFIFO_W_DATA(DOCKFIFO_UART_WRITE, 1) = (unsigned)(c & 0xff);
-	prev_dockfifo_spaces--; // After writing a byte we have one fewer space than previously expected.
+	os_atomic_dec(&prev_dockfifo_spaces, relaxed); // After writing a byte we have one fewer space than previously expected.
 }
 
 static int
@@ -578,7 +596,7 @@ dockfifo_uart_init(void)
 	dockfifo_capacity = rDOCKFIFO_W_STAT(DOCKFIFO_UART_WRITE) & 0xffff;
 }
 
-static struct pe_serial_functions dockfifo_uart_serial_functions =
+SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) dockfifo_uart_serial_functions =
 {
 	.uart_init = dockfifo_uart_init,
 	.uart_set_baud_rate = NULL,
@@ -601,6 +619,7 @@ static bool             use_sw_drain;
 static uint64_t         prev_dockchannel_drained_time;  // Last time we've seen the DockChannel drained by an external agent
 static uint64_t         prev_dockchannel_spaces;        // Previous w_stat level of the DockChannel.
 static uint64_t         dockchannel_stall_grace;
+static vm_offset_t      dockchannel_uart_base = 0;
 
 //=======================
 // Local funtions
@@ -617,7 +636,7 @@ dockchannel_drain_on_stall()
 		// It's been more than DOCKCHANEL_WR_MAX_STALL_US and nobody read from the FIFO
 		// Drop a character.
 		(void)rDOCKCHANNELS_DEV_RDATA1(DOCKCHANNEL_UART_CHANNEL);
-		prev_dockchannel_spaces++;
+		os_atomic_inc(&prev_dockchannel_spaces, relaxed);
 		return 1;
 	}
 	return 0;
@@ -648,7 +667,7 @@ dockchannel_uart_td0(int c)
 {
 	rDOCKCHANNELS_DEV_WDATA1(DOCKCHANNEL_UART_CHANNEL) = (unsigned)(c & 0xff);
 	if (use_sw_drain) {
-		prev_dockchannel_spaces--; // After writing a byte we have one fewer space than previously expected.
+		os_atomic_dec(&prev_dockchannel_spaces, relaxed); // After writing a byte we have one fewer space than previously expected.
 	}
 }
 
@@ -665,6 +684,15 @@ dockchannel_uart_rd0(void)
 }
 
 static void
+dockchannel_uart_clear_intr(void)
+{
+	rDOCKCHANNELS_AGENT_AP_INTR_CTRL &= ~(0x3);
+	rDOCKCHANNELS_AGENT_AP_INTR_STATUS |= 0x3;
+	rDOCKCHANNELS_AGENT_AP_ERR_INTR_CTRL &= ~(0x3);
+	rDOCKCHANNELS_AGENT_AP_ERR_INTR_STATUS |= 0x3;
+}
+
+static void
 dockchannel_uart_init(void)
 {
 	if (use_sw_drain) {
@@ -672,10 +700,7 @@ dockchannel_uart_init(void)
 	}
 
 	// Clear all interrupt enable and status bits
-	rDOCKCHANNELS_AGENT_AP_INTR_CTRL &= ~(0x3);
-	rDOCKCHANNELS_AGENT_AP_INTR_STATUS |= 0x3;
-	rDOCKCHANNELS_AGENT_AP_ERR_INTR_CTRL &= ~(0x3);
-	rDOCKCHANNELS_AGENT_AP_ERR_INTR_STATUS |= 0x3;
+	dockchannel_uart_clear_intr();
 
 	// Setup DRAIN timer
 	rDOCKCHANNELS_DEV_DRAIN_CFG(DOCKCHANNEL_UART_CHANNEL) = max_dockchannel_drain_period;
@@ -685,7 +710,7 @@ dockchannel_uart_init(void)
 	rDOCKCHANNELS_DOCK_RDATA1(DOCKCHANNEL_UART_CHANNEL);
 }
 
-static struct pe_serial_functions dockchannel_uart_serial_functions =
+SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) dockchannel_uart_serial_functions =
 {
 	.uart_init = dockchannel_uart_init,
 	.uart_set_baud_rate = NULL,
@@ -699,8 +724,8 @@ static struct pe_serial_functions dockchannel_uart_serial_functions =
 
 /****************************************************************************/
 #ifdef  PI3_UART
-vm_offset_t pi3_gpio_base_vaddr;
-vm_offset_t pi3_aux_base_vaddr;
+vm_offset_t pi3_gpio_base_vaddr = 0;
+vm_offset_t pi3_aux_base_vaddr = 0;
 static int
 pi3_uart_tr0(void)
 {
@@ -775,7 +800,7 @@ pi3_uart_init(void)
 	BCM2837_PUT32(BCM2837_AUX_MU_CNTL_REG_V, 3);
 }
 
-static struct pe_serial_functions pi3_uart_serial_functions =
+SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) pi3_uart_serial_functions =
 {
 	.uart_init = pi3_uart_init,
 	.uart_set_baud_rate = NULL,
@@ -787,62 +812,46 @@ static struct pe_serial_functions pi3_uart_serial_functions =
 
 #endif /* PI3_UART */
 /*****************************************************************************/
+
+static void
+register_serial_functions(struct pe_serial_functions *fns)
+{
+	fns->next = gPESF;
+	gPESF = fns;
+}
+
 int
 serial_init(void)
 {
 	DTEntry         entryP = NULL;
-	uint32_t        prop_size, dccmode;
+	uint32_t        prop_size;
 	vm_offset_t     soc_base;
 	uintptr_t       *reg_prop;
-	uint32_t        *prop_value = NULL;
-	char            *serial_compat = 0;
-#ifdef SHMCON
-	uint32_t        jconmode;
-#endif
-#ifdef DOCKFIFO_UART
-	uint32_t        no_dockfifo_uart;
-#endif
-#ifdef DOCKCHANNEL_UART
-	uint32_t        no_dockchannel_uart;
-#endif
-#ifdef PI3_UART
-	uint32_t        is_pi3;
-#endif
+	uint32_t        *prop_value __unused = NULL;
+	char            *serial_compat __unused = 0;
+	uint32_t        dccmode;
 
-	if (uart_initted && gPESF) {
-		gPESF->uart_init();
+	struct pe_serial_functions *fns = gPESF;
+
+	if (uart_initted) {
+		while (fns != NULL) {
+			fns->uart_init();
+			fns = fns->next;
+		}
 		kprintf("reinit serial\n");
 		return 1;
 	}
 
 	dccmode = 0;
 	if (PE_parse_boot_argn("dcc", &dccmode, sizeof(dccmode))) {
-		gPESF = &dcc_serial_functions;
-		uart_initted = 1;
-		return 1;
+		register_serial_functions(&dcc_serial_functions);
 	}
 #ifdef SHMCON
-	jconmode = 0;
+	uint32_t jconmode = 0;
 	if (PE_parse_boot_argn("jcon", &jconmode, sizeof jconmode)) {
-		gPESF = &shmcon_serial_functions;
-		gPESF->uart_init();
-		uart_initted = 1;
-		return 1;
+		register_serial_functions(&shmcon_serial_functions);
 	}
 #endif /* SHMCON */
-
-#ifdef PI3_UART
-#pragma unused(prop_value)
-	is_pi3 = 0;
-	if (PE_parse_boot_argn("-pi3", &is_pi3, sizeof(is_pi3))) { // FIXME: remove the not operator after boot args are set up.
-		pi3_gpio_base_vaddr = ml_io_map((vm_offset_t)BCM2837_GPIO_BASE, BCM2837_GPIO_SIZE);
-		pi3_aux_base_vaddr = ml_io_map((vm_offset_t)BCM2837_AUX_BASE, BCM2837_AUX_SIZE);
-		gPESF = &pi3_uart_serial_functions;
-		gPESF->uart_init();
-		uart_initted = 1;
-		return 1;
-	}
-#endif /* PI3_UART */
 
 	soc_base = pe_arm_get_soc_base_phys();
 
@@ -850,48 +859,57 @@ serial_init(void)
 		return 0;
 	}
 
+#ifdef PI3_UART
+	if (DTFindEntry("name", "gpio", &entryP) == kSuccess) {
+		DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
+		pi3_gpio_base_vaddr = ml_io_map(soc_base + *reg_prop, *(reg_prop + 1));
+	}
+	if (DTFindEntry("name", "aux", &entryP) == kSuccess) {
+		DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
+		pi3_aux_base_vaddr = ml_io_map(soc_base + *reg_prop, *(reg_prop + 1));
+	}
+	if ((pi3_gpio_base_vaddr != 0) && (pi3_aux_base_vaddr != 0)) {
+		register_serial_functions(&pi3_uart_serial_functions);
+	}
+#endif /* PI3_UART */
+
 #ifdef DOCKFIFO_UART
-	no_dockfifo_uart = 0;
+	uint32_t no_dockfifo_uart = 0;
 	PE_parse_boot_argn("no-dockfifo-uart", &no_dockfifo_uart, sizeof(no_dockfifo_uart));
 	if (no_dockfifo_uart == 0) {
 		if (DTFindEntry("name", "dockfifo-uart", &entryP) == kSuccess) {
 			DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
-			uart_base = ml_io_map(soc_base + *reg_prop, *(reg_prop + 1));
-		} else {
-			return 0;
+			dockfifo_uart_base = ml_io_map(soc_base + *reg_prop, *(reg_prop + 1));
+			register_serial_functions(&dockfifo_uart_serial_functions);
 		}
-		gPESF = &dockfifo_uart_serial_functions;
-		gPESF->uart_init();
-		uart_initted = 1;
-		return 1;
 	}
 #endif /* DOCKFIFO_UART */
 
 #ifdef DOCKCHANNEL_UART
-	no_dockchannel_uart = 0;
-	// Keep the old name for boot-arg
-	PE_parse_boot_argn("no-dockfifo-uart", &no_dockchannel_uart, sizeof(no_dockchannel_uart));
-	if (no_dockchannel_uart == 0) {
-		if (DTFindEntry("name", "dockchannel-uart", &entryP) == kSuccess) {
-			DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
-			// Should be two reg entries
-			if (prop_size / sizeof(uintptr_t) != 4) {
-				panic("Malformed dockchannel-uart property");
-			}
-			uart_base = ml_io_map(soc_base + *reg_prop, *(reg_prop + 1));
-			dock_agent_base = ml_io_map(soc_base + *(reg_prop + 2), *(reg_prop + 3));
-			gPESF = &dockchannel_uart_serial_functions;
+	uint32_t no_dockchannel_uart = 0;
+	if (DTFindEntry("name", "dockchannel-uart", &entryP) == kSuccess) {
+		DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
+		// Should be two reg entries
+		if (prop_size / sizeof(uintptr_t) != 4) {
+			panic("Malformed dockchannel-uart property");
+		}
+		dockchannel_uart_base = ml_io_map(soc_base + *reg_prop, *(reg_prop + 1));
+		dock_agent_base = ml_io_map(soc_base + *(reg_prop + 2), *(reg_prop + 3));
+		PE_parse_boot_argn("no-dockfifo-uart", &no_dockchannel_uart, sizeof(no_dockchannel_uart));
+		// Keep the old name for boot-arg
+		if (no_dockchannel_uart == 0) {
+			register_serial_functions(&dockchannel_uart_serial_functions);
 			DTGetProperty(entryP, "max-aop-clk", (void **)&prop_value, &prop_size);
 			max_dockchannel_drain_period = (uint32_t)((prop_value)?  (*prop_value * 0.03) : DOCKCHANNEL_DRAIN_PERIOD);
 			DTGetProperty(entryP, "enable-sw-drain", (void **)&prop_value, &prop_size);
 			use_sw_drain = (prop_value)?  *prop_value : 0;
-			gPESF->uart_init();
-			uart_initted = 1;
-			return 1;
+		} else {
+			dockchannel_uart_clear_intr();
 		}
 		// If no dockchannel-uart is found in the device tree, fall back
 		// to looking for the traditional UART serial console.
 	}
+
 #endif /* DOCKCHANNEL_UART */
 
 	/*
@@ -938,24 +956,25 @@ serial_init(void)
 		}
 	}
 	if (!strcmp(serial_compat, "uart,16550")) {
-		gPESF = &ln2410_serial_functions;
+		register_serial_functions(&ln2410_serial_functions);
 	} else if (!strcmp(serial_compat, "uart-16550")) {
-		gPESF = &ln2410_serial_functions;
+		register_serial_functions(&ln2410_serial_functions);
 	} else if (!strcmp(serial_compat, "uart,s5i3000")) {
-		gPESF = &ln2410_serial_functions;
+		register_serial_functions(&ln2410_serial_functions);
 	} else if (!strcmp(serial_compat, "uart-1,samsung")) {
-		gPESF = &ln2410_serial_functions;
+		register_serial_functions(&ln2410_serial_functions);
 	}
-#elif   defined (ARM_BOARD_CONFIG_MV88F6710)
-	if (!strcmp(serial_compat, "uart16x50,mmio")) {
-		gPESF = &uart16x50_serial_functions;
-	}
-#endif
-	else {
+#endif /* S3CUART */
+
+	if (gPESF == NULL) {
 		return 0;
 	}
 
-	gPESF->uart_init();
+	fns = gPESF;
+	while (fns != NULL) {
+		fns->uart_init();
+		fns = fns->next;
+	}
 
 	uart_initted = 1;
 
@@ -965,22 +984,25 @@ serial_init(void)
 void
 uart_putc(char c)
 {
-	if (uart_initted) {
-		while (!gPESF->tr0()) {
+	struct pe_serial_functions *fns = gPESF;
+	while (fns != NULL) {
+		while (!fns->tr0()) {
 			;               /* Wait until THR is empty. */
 		}
-		gPESF->td0(c);
+		fns->td0(c);
+		fns = fns->next;
 	}
 }
 
 int
 uart_getc(void)
 {                               /* returns -1 if no data available */
-	if (uart_initted) {
-		if (!gPESF->rr0()) {
-			return -1;      /* Receive data read */
+	struct pe_serial_functions *fns = gPESF;
+	while (fns != NULL) {
+		if (fns->rr0()) {
+			return fns->rd0();
 		}
-		return gPESF->rd0();
+		fns = fns->next;
 	}
 	return -1;
 }

@@ -123,9 +123,13 @@
  *	the thread identity and state.
  */
 
+#define MACH_EXCEPTION_ERRORS           0x40000000
+/*	include additional exception specific errors, not used yet.  */
+
 #define MACH_EXCEPTION_CODES            0x80000000
 /*	Send 64-bit code and subcode in the exception header */
 
+#define MACH_EXCEPTION_MASK             (MACH_EXCEPTION_CODES | MACH_EXCEPTION_ERRORS)
 /*
  * Masks for exception definitions, above
  * bit zero is unused, therefore 1 word = 31 exception types

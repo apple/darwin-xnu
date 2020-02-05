@@ -35,7 +35,6 @@
 #include <mach/message.h>
 #include <mach/exception.h>
 #include <mach/mig_errors.h>
-#include <dlfcn.h>
 
 #include "abort.h"
 #include "exc_catcher.h"
@@ -55,7 +54,7 @@ internal_catch_exception_raise_state(
 #if defined(__DYNAMIC__)
 	static _libkernel_exc_raise_state_func_t exc_raise_state_func = (void*)-1;
 
-	if (exc_raise_state_func == ((void*)-1)) {
+	if (exc_raise_state_func == ((void*)-1) && _dlsym) {
 		exc_raise_state_func = _dlsym(RTLD_DEFAULT, "catch_exception_raise_state");
 	}
 	if (exc_raise_state_func == 0) {

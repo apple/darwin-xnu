@@ -336,20 +336,12 @@ PE_call_timebase_callback(void)
 /*
  * The default (non-functional) PE_poll_input handler.
  */
-static int
+int
 PE_stub_poll_input(__unused unsigned int options, char * c)
 {
 	*c = 0xff;
 	return 1; /* 0 for success, 1 for unsupported */
 }
-
-/*
- * Called by the kernel debugger to poll for keyboard input.
- * Keyboard drivers may replace the default stub function
- * with their polled-mode input function.
- */
-int (*PE_poll_input)(unsigned int options, char * c)
-        = PE_stub_poll_input;
 
 boolean_t
 PE_reboot_on_panic(void)

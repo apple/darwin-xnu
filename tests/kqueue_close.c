@@ -6,6 +6,8 @@
 
 #include <darwintest.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 /*
  * <rdar://problem/30231213> close() of kqueue FD races with kqueue_scan park
  *

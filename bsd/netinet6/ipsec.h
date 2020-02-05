@@ -40,11 +40,12 @@
 #include <sys/appleapiopts.h>
 
 #include <net/pfkeyv2.h>
+#include <uuid/uuid.h>
 #ifdef BSD_KERNEL_PRIVATE
 #include <netkey/keydb.h>
 #include <netinet/ip_var.h>
 
-/* lock for IPSec stats */
+/* lock for IPsec stats */
 extern lck_grp_t         *sadb_stat_mutex_grp;
 extern lck_grp_attr_t    *sadb_stat_mutex_grp_attr;
 extern lck_attr_t        *sadb_stat_mutex_attr;
@@ -66,7 +67,7 @@ struct secpolicyaddrrange {
  * specifies ICMPv6 type, and the port field in "dst" specifies ICMPv6 code.
  */
 struct secpolicyindex {
-	u_int8_t dir;                   /* direction of packet flow, see blow */
+	u_int8_t dir;                   /* direction of packet flow, see below */
 	struct sockaddr_storage src;    /* IP src address for SP */
 	struct sockaddr_storage dst;    /* IP dst address for SP */
 	u_int8_t prefs;                 /* prefix length in bits for src */
@@ -99,7 +100,7 @@ struct secpolicy {
 	/* pointer to the ipsec request tree, */
 	/* if policy == IPSEC else this value == NULL.*/
 
-	ifnet_t ipsec_if; /* IPSec interface to use */
+	ifnet_t ipsec_if; /* IPsec interface to use */
 	ifnet_t outgoing_if; /* Outgoing interface for encrypted traffic */
 
 	char disabled; /* Set to ignore policy */
@@ -232,6 +233,15 @@ struct ipsecstat {
 	u_quad_t out_comphist[256] __attribute__ ((aligned(8)));
 };
 
+#define IPSEC_MAX_WAKE_PKT_LEN  100
+struct ipsec_wake_pkt_info {
+	u_int8_t wake_pkt[IPSEC_MAX_WAKE_PKT_LEN];
+	uuid_string_t wake_uuid;
+	u_int32_t wake_pkt_spi;
+	u_int32_t wake_pkt_seq;
+	u_int16_t wake_pkt_len;
+};
+
 #ifdef BSD_KERNEL_PRIVATE
 /*
  * Definitions for IPsec & Key sysctl operations.
@@ -325,6 +335,8 @@ extern int ip4_ipsec_dfbit;
 extern int ip4_ipsec_ecn;
 extern int ip4_esp_randpad;
 
+extern bool ipsec_save_wake_pkt;
+
 #define ipseclog(x)     do { if (ipsec_debug) log x; } while (0)
 
 extern struct secpolicy *ipsec4_getpolicybysock(struct mbuf *, u_int,
@@ -349,8 +361,8 @@ extern int ipsec4_in_reject(struct mbuf *, struct inpcb *);
 
 struct secas;
 struct tcpcb;
-extern int ipsec_chkreplay(u_int32_t, struct secasvar *);
-extern int ipsec_updatereplay(u_int32_t, struct secasvar *);
+extern int ipsec_chkreplay(u_int32_t, struct secasvar *, u_int8_t);
+extern int ipsec_updatereplay(u_int32_t, struct secasvar *, u_int8_t);
 
 extern size_t ipsec4_hdrsiz(struct mbuf *, u_int, struct inpcb *);
 extern size_t ipsec_hdrsiz_tcp(struct tcpcb *);
@@ -380,6 +392,8 @@ extern struct socket *ipsec_getsocket(struct mbuf *);
 extern int ipsec_addhist(struct mbuf *, int, u_int32_t);
 extern struct ipsec_history *ipsec_gethist(struct mbuf *, int *);
 extern void ipsec_clearhist(struct mbuf *);
+extern void ipsec_monitor_sleep_wake(void);
+extern void ipsec_save_wake_packet(struct mbuf *, u_int32_t, u_int32_t);
 #endif /* BSD_KERNEL_PRIVATE */
 
 #ifndef KERNEL

@@ -256,6 +256,19 @@ IOExitThread(void)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
+void *
+IOMallocZero(vm_size_t size)
+{
+	void * result;
+	result = IOMalloc(size);
+	if (result) {
+		bzero(result, size);
+	}
+	return result;
+}
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+
 #if IOTRACKING
 struct IOLibMallocHeader {
 	IOTrackingAddress tracking;
@@ -390,7 +403,7 @@ IOMallocAligned(vm_size_t size, vm_size_t alignment)
 	IOLibPageMallocHeader * hdr;
 
 	if (size == 0) {
-		return 0;
+		return NULL;
 	}
 
 	alignment = (1UL << log2up(alignment));
@@ -672,7 +685,7 @@ IOMallocContiguous(vm_size_t size, vm_size_t alignment,
 	mach_vm_address_t   address = 0;
 
 	if (size == 0) {
-		return 0;
+		return NULL;
 	}
 	if (alignment == 0) {
 		alignment = 1;
@@ -852,10 +865,10 @@ IOMallocPageablePages(vm_size_t size, vm_size_t alignment, vm_tag_t tag)
 	struct IOMallocPageableRef ref;
 
 	if (alignment > page_size) {
-		return 0;
+		return NULL;
 	}
 	if (size > kIOPageableMaxMapSize) {
-		return 0;
+		return NULL;
 	}
 
 	ref.size = size;
@@ -871,7 +884,7 @@ IOMallocPageablePages(vm_size_t size, vm_size_t alignment, vm_tag_t tag)
 vm_map_t
 IOPageableMapForAddress( uintptr_t address )
 {
-	vm_map_t    map = 0;
+	vm_map_t    map = NULL;
 	UInt32      index;
 
 	for (index = 0; index < gIOKitPageableSpace.count; index++) {
@@ -974,7 +987,7 @@ iopa_allocinpage(iopa_page_t * pa, uint32_t count, uint64_t align)
 		pa->avail &= ~((-1ULL << (64 - count)) >> n);
 		if (!pa->avail && pa->link.next) {
 			remque(&pa->link);
-			pa->link.next = 0;
+			pa->link.next = NULL;
 		}
 		return n * gIOPageAllocChunkBytes + trunc_page((uintptr_t) pa);
 	}
@@ -1068,10 +1081,10 @@ iopa_free(iopa_t * a, uintptr_t addr, vm_size_t bytes)
 	}
 	pa->avail |= ((-1ULL << (64 - count)) >> chunk);
 	if (pa->avail != -2ULL) {
-		pa = 0;
+		pa = NULL;
 	} else {
 		remque(&pa->link);
-		pa->link.next = 0;
+		pa->link.next = NULL;
 		pa->signature = 0;
 		a->pagecount--;
 		// page to free
@@ -1239,38 +1252,28 @@ void
 IOKitKernelLogBuffer(const char * title, const void * buffer, size_t size,
     void (*output)(const char *format, ...))
 {
+	size_t idx, linestart;
+	enum { bytelen = (sizeof("0xZZ, ") - 1) };
+	char hex[(bytelen * 16) + 1];
 	uint8_t c, chars[17];
-	size_t idx;
 
-	output("%s(0x%x):\n", title, size);
+	output("%s(0x%lx):\n", title, size);
+	output("              0     1     2     3     4     5     6     7     8     9     A     B     C     D     E     F\n");
 	if (size > 4096) {
 		size = 4096;
 	}
-	chars[16] = idx = 0;
-	while (true) {
-		if (!(idx & 15)) {
-			if (idx) {
-				output(" |%s|\n", chars);
-			}
-			if (idx >= size) {
-				break;
-			}
-			output("%04x:  ", idx);
-		} else if (!(idx & 7)) {
-			output(" ");
-		}
-
-		c =  ((char *)buffer)[idx];
-		output("%02x ", c);
+	chars[16] = 0;
+	for (idx = 0, linestart = 0; idx < size;) {
+		c = ((char *)buffer)[idx];
+		snprintf(&hex[bytelen * (idx & 15)], bytelen + 1, "0x%02x, ", c);
 		chars[idx & 15] = ((c >= 0x20) && (c <= 0x7f)) ? c : ' ';
-
 		idx++;
-		if ((idx == size) && (idx & 15)) {
-			chars[idx & 15] = 0;
-			while (idx & 15) {
-				idx++;
-				output("   ");
+		if ((idx == size) || !(idx & 15)) {
+			if (idx & 15) {
+				chars[idx & 15] = 0;
 			}
+			output("/* %04lx: */ %-96s /* |%-16s| */\n", linestart, hex, chars);
+			linestart += 16;
 		}
 	}
 }

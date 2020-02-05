@@ -1,6 +1,5 @@
 /*-
- * Copyright (c) 2008-2009 Apple Inc.
- * All rights reserved.
+ * Copyright (c) 2008-2019 Apple Inc. All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -45,406 +44,405 @@ struct bsm_domain {
 #define PF_NO_LOCAL_MAPPING     -600
 
 static const struct bsm_domain bsm_domains[] = {
-	{ BSM_PF_UNSPEC, PF_UNSPEC },
-	{ BSM_PF_LOCAL, PF_LOCAL },
-	{ BSM_PF_INET, PF_INET },
-	{ BSM_PF_IMPLINK,
+	{ .bd_bsm_domain = BSM_PF_UNSPEC, .bd_local_domain = PF_UNSPEC },
+	{ .bd_bsm_domain = BSM_PF_LOCAL, .bd_local_domain = PF_LOCAL },
+	{ .bd_bsm_domain = BSM_PF_INET, .bd_local_domain = PF_INET },
+	{ .bd_bsm_domain = BSM_PF_IMPLINK,
 #ifdef PF_IMPLINK
-	  PF_IMPLINK
+	  .bd_local_domain = PF_IMPLINK
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_PUP,
+	{ .bd_bsm_domain = BSM_PF_PUP,
 #ifdef PF_PUP
-	  PF_PUP
+	  .bd_local_domain = PF_PUP
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_CHAOS,
+	{ .bd_bsm_domain = BSM_PF_CHAOS,
 #ifdef PF_CHAOS
-	  PF_CHAOS
+	  .bd_local_domain = PF_CHAOS
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_NS,
+	{ .bd_bsm_domain = BSM_PF_NS,
 #ifdef PF_NS
-	  PF_NS
+	  .bd_local_domain = PF_NS
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_NBS,
+	{ .bd_bsm_domain = BSM_PF_NBS,
 #ifdef PF_NBS
-	  PF_NBS
+	  .bd_local_domain = PF_NBS
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_ECMA,
+	{ .bd_bsm_domain = BSM_PF_ECMA,
 #ifdef PF_ECMA
-	  PF_ECMA
+	  .bd_local_domain = PF_ECMA
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_DATAKIT,
+	{ .bd_bsm_domain = BSM_PF_DATAKIT,
 #ifdef PF_DATAKIT
-	  PF_DATAKIT
+	  .bd_local_domain = PF_DATAKIT
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_CCITT,
+	{ .bd_bsm_domain = BSM_PF_CCITT,
 #ifdef PF_CCITT
-	  PF_CCITT
+	  .bd_local_domain = PF_CCITT
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_SNA, PF_SNA },
-	{ BSM_PF_DECnet, PF_DECnet },
-	{ BSM_PF_DLI,
+	{ .bd_bsm_domain = BSM_PF_SNA, .bd_local_domain = PF_SNA },
+	{ .bd_bsm_domain = BSM_PF_DECnet, .bd_local_domain = PF_DECnet },
+	{ .bd_bsm_domain = BSM_PF_DLI,
 #ifdef PF_DLI
-	  PF_DLI
+	  .bd_local_domain = PF_DLI
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_LAT,
+	{ .bd_bsm_domain = BSM_PF_LAT,
 #ifdef PF_LAT
-	  PF_LAT
+	  .bd_local_domain = PF_LAT
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_HYLINK,
+	{ .bd_bsm_domain = BSM_PF_HYLINK,
 #ifdef PF_HYLINK
-	  PF_HYLINK
+	  .bd_local_domain = PF_HYLINK
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_APPLETALK, PF_APPLETALK },
-	{ BSM_PF_NIT,
+	{ .bd_bsm_domain = BSM_PF_APPLETALK, .bd_local_domain = PF_APPLETALK },
+	{ .bd_bsm_domain = BSM_PF_NIT,
 #ifdef PF_NIT
-	  PF_NIT
+	  .bd_local_domain = PF_NIT
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_802,
+	{ .bd_bsm_domain = BSM_PF_802,
 #ifdef PF_802
-	  PF_802
+	  .bd_local_domain = PF_802
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_OSI,
+	{ .bd_bsm_domain = BSM_PF_OSI,
 #ifdef PF_OSI
-	  PF_OSI
+	  .bd_local_domain = PF_OSI
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_X25,
+	{ .bd_bsm_domain = BSM_PF_X25,
 #ifdef PF_X25
-	  PF_X25
+	  .bd_local_domain = PF_X25
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_OSINET,
+	{ .bd_bsm_domain = BSM_PF_OSINET,
 #ifdef PF_OSINET
-	  PF_OSINET
+	  .bd_local_domain = PF_OSINET
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_GOSIP,
+	{ .bd_bsm_domain = BSM_PF_GOSIP,
 #ifdef PF_GOSIP
-	  PF_GOSIP
+	  .bd_local_domain = PF_GOSIP
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_IPX, PF_IPX },
-	{ BSM_PF_ROUTE, PF_ROUTE },
-	{ BSM_PF_LINK,
+	{ .bd_bsm_domain = BSM_PF_IPX, .bd_local_domain = PF_IPX },
+	{ .bd_bsm_domain = BSM_PF_ROUTE, .bd_local_domain = PF_ROUTE },
+	{ .bd_bsm_domain = BSM_PF_LINK,
 #ifdef PF_LINK
-	  PF_LINK
+	  .bd_local_domain = PF_LINK
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_INET6, PF_INET6 },
-	{ BSM_PF_KEY, PF_KEY },
-	{ BSM_PF_NCA,
+	{ .bd_bsm_domain = BSM_PF_KEY, .bd_local_domain = PF_KEY },
+	{ .bd_bsm_domain = BSM_PF_NCA,
 #ifdef PF_NCA
-	  PF_NCA
+	  .bd_local_domain = PF_NCA
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_POLICY,
+	{ .bd_bsm_domain = BSM_PF_POLICY,
 #ifdef PF_POLICY
-	  PF_POLICY
+	  .bd_local_domain = PF_POLICY
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_INET_OFFLOAD,
+	{ .bd_bsm_domain = BSM_PF_INET_OFFLOAD,
 #ifdef PF_INET_OFFLOAD
-	  PF_INET_OFFLOAD
+	  .bd_local_domain = PF_INET_OFFLOAD
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_NETBIOS,
+	{ .bd_bsm_domain = BSM_PF_NETBIOS,
 #ifdef PF_NETBIOS
-	  PF_NETBIOS
+	  .bd_local_domain = PF_NETBIOS
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_ISO,
+	{ .bd_bsm_domain = BSM_PF_ISO,
 #ifdef PF_ISO
-	  PF_ISO
+	  .bd_local_domain = PF_ISO
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_XTP,
+	{ .bd_bsm_domain = BSM_PF_XTP,
 #ifdef PF_XTP
-	  PF_XTP
+	  .bd_local_domain = PF_XTP
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_COIP,
+	{ .bd_bsm_domain = BSM_PF_COIP,
 #ifdef PF_COIP
-	  PF_COIP
+	  .bd_local_domain = PF_COIP
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_CNT,
+	{ .bd_bsm_domain = BSM_PF_CNT,
 #ifdef PF_CNT
-	  PF_CNT
+	  .bd_local_domain = PF_CNT
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_RTIP,
+	{ .bd_bsm_domain = BSM_PF_RTIP,
 #ifdef PF_RTIP
-	  PF_RTIP
+	  .bd_local_domain = PF_RTIP
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_SIP,
+	{ .bd_bsm_domain = BSM_PF_SIP,
 #ifdef PF_SIP
-	  PF_SIP
+	  .bd_local_domain = PF_SIP
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_PIP,
+	{ .bd_bsm_domain = BSM_PF_PIP,
 #ifdef PF_PIP
-	  PF_PIP
+	  .bd_local_domain = PF_PIP
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_ISDN,
+	{ .bd_bsm_domain = BSM_PF_ISDN,
 #ifdef PF_ISDN
-	  PF_ISDN
+	  .bd_local_domain = PF_ISDN
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_E164,
+	{ .bd_bsm_domain = BSM_PF_E164,
 #ifdef PF_E164
-	  PF_E164
+	  .bd_local_domain = PF_E164
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_NATM,
+	{ .bd_bsm_domain = BSM_PF_NATM,
 #ifdef PF_NATM
-	  PF_NATM
+	  .bd_local_domain = PF_NATM
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_ATM,
+	{ .bd_bsm_domain = BSM_PF_ATM,
 #ifdef PF_ATM
-	  PF_ATM
+	  .bd_local_domain = PF_ATM
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_NETGRAPH,
+	{ .bd_bsm_domain = BSM_PF_NETGRAPH,
 #ifdef PF_NETGRAPH
-	  PF_NETGRAPH
+	  .bd_local_domain = PF_NETGRAPH
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_SLOW,
+	{ .bd_bsm_domain = BSM_PF_SLOW,
 #ifdef PF_SLOW
-	  PF_SLOW
+	  .bd_local_domain = PF_SLOW
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_SCLUSTER,
+	{ .bd_bsm_domain = BSM_PF_SCLUSTER,
 #ifdef PF_SCLUSTER
-	  PF_SCLUSTER
+	  .bd_local_domain = PF_SCLUSTER
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_ARP,
+	{ .bd_bsm_domain = BSM_PF_ARP,
 #ifdef PF_ARP
-	  PF_ARP
+	  .bd_local_domain = PF_ARP
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_BLUETOOTH,
+	{ .bd_bsm_domain = BSM_PF_BLUETOOTH,
 #ifdef PF_BLUETOOTH
-	  PF_BLUETOOTH
+	  .bd_local_domain = PF_BLUETOOTH
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_IEEE80211,
+	{ .bd_bsm_domain = BSM_PF_IEEE80211,
 #ifdef PF_IEEE80211
-	  PF_IEEE80211
+	  .bd_local_domain = PF_IEEE80211
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_AX25,
+	{ .bd_bsm_domain = BSM_PF_AX25,
 #ifdef PF_AX25
-	  PF_AX25
+	  .bd_local_domain = PF_AX25
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_ROSE,
+	{ .bd_bsm_domain = BSM_PF_ROSE,
 #ifdef PF_ROSE
-	  PF_ROSE
+	  .bd_local_domain = PF_ROSE
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_NETBEUI,
+	{ .bd_bsm_domain = BSM_PF_NETBEUI,
 #ifdef PF_NETBEUI
-	  PF_NETBEUI
+	  .bd_local_domain = PF_NETBEUI
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_SECURITY,
+	{ .bd_bsm_domain = BSM_PF_SECURITY,
 #ifdef PF_SECURITY
-	  PF_SECURITY
+	  .bd_local_domain = PF_SECURITY
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_PACKET,
+	{ .bd_bsm_domain = BSM_PF_PACKET,
 #ifdef PF_PACKET
-	  PF_PACKET
+	  .bd_local_domain = PF_PACKET
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_ASH,
+	{ .bd_bsm_domain = BSM_PF_ASH,
 #ifdef PF_ASH
-	  PF_ASH
+	  .bd_local_domain = PF_ASH
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_ECONET,
+	{ .bd_bsm_domain = BSM_PF_ECONET,
 #ifdef PF_ECONET
-	  PF_ECONET
+	  .bd_local_domain = PF_ECONET
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_ATMSVC,
+	{ .bd_bsm_domain = BSM_PF_ATMSVC,
 #ifdef PF_ATMSVC
-	  PF_ATMSVC
+	  .bd_local_domain = PF_ATMSVC
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_IRDA,
+	{ .bd_bsm_domain = BSM_PF_IRDA,
 #ifdef PF_IRDA
-	  PF_IRDA
+	  .bd_local_domain = PF_IRDA
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_PPPOX,
+	{ .bd_bsm_domain = BSM_PF_PPPOX,
 #ifdef PF_PPPOX
-	  PF_PPPOX
+	  .bd_local_domain = PF_PPPOX
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_WANPIPE,
+	{ .bd_bsm_domain = BSM_PF_WANPIPE,
 #ifdef PF_WANPIPE
-	  PF_WANPIPE
+	  .bd_local_domain = PF_WANPIPE
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_LLC,
+	{ .bd_bsm_domain = BSM_PF_LLC,
 #ifdef PF_LLC
-	  PF_LLC
+	  .bd_local_domain = PF_LLC
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_CAN,
+	{ .bd_bsm_domain = BSM_PF_CAN,
 #ifdef PF_CAN
-	  PF_CAN
+	  .bd_local_domain = PF_CAN
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_TIPC,
+	{ .bd_bsm_domain = BSM_PF_TIPC,
 #ifdef PF_TIPC
-	  PF_TIPC
+	  .bd_local_domain = PF_TIPC
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_IUCV,
+	{ .bd_bsm_domain = BSM_PF_IUCV,
 #ifdef PF_IUCV
-	  PF_IUCV
+	  .bd_local_domain = PF_IUCV
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_RXRPC,
+	{ .bd_bsm_domain = BSM_PF_RXRPC,
 #ifdef PF_RXRPC
-	  PF_RXRPC
+	  .bd_local_domain = PF_RXRPC
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
-	{ BSM_PF_PHONET,
+	{ .bd_bsm_domain = BSM_PF_PHONET,
 #ifdef PF_PHONET
-	  PF_PHONET
+	  .bd_local_domain = PF_PHONET
 #else
-	  PF_NO_LOCAL_MAPPING
+	  .bd_local_domain = PF_NO_LOCAL_MAPPING
 #endif
 	},
 };

@@ -88,7 +88,7 @@ typedef struct _lck_mtx_ {
 	union {
 		struct {
 			uint16_t                                lck_mtx_waiters;/* Number of waiters */
-			uint8_t                                 lck_mtx_pri;    /* Priority to inherit */
+			uint8_t                                 lck_mtx_pri;    /* unused */
 			uint8_t                                 lck_mtx_type;   /* Type */
 		};
 		struct {
@@ -215,13 +215,13 @@ typedef struct {
 //									23-30
 #define LCK_RW_TAG_VALID_BIT            31
 
-#define LCK_RW_INTERLOCK                (1 << LCK_RW_INTERLOCK_BIT)
-#define LCK_RW_R_WAITING                (1 << LCK_RW_R_WAITING_BIT)
-#define LCK_RW_W_WAITING                (1 << LCK_RW_W_WAITING_BIT)
-#define LCK_RW_WANT_UPGRADE             (1 << LCK_RW_WANT_UPGRADE_BIT)
-#define LCK_RW_WANT_EXCL                (1 << LCK_RW_WANT_EXCL_BIT)
-#define LCK_RW_TAG_VALID                (1 << LCK_RW_TAG_VALID_BIT)
-#define LCK_RW_PRIV_EXCL                (1 << LCK_RW_PRIV_EXCL_BIT)
+#define LCK_RW_INTERLOCK                (1U << LCK_RW_INTERLOCK_BIT)
+#define LCK_RW_R_WAITING                (1U << LCK_RW_R_WAITING_BIT)
+#define LCK_RW_W_WAITING                (1U << LCK_RW_W_WAITING_BIT)
+#define LCK_RW_WANT_UPGRADE             (1U << LCK_RW_WANT_UPGRADE_BIT)
+#define LCK_RW_WANT_EXCL                (1U << LCK_RW_WANT_EXCL_BIT)
+#define LCK_RW_TAG_VALID                (1U << LCK_RW_TAG_VALID_BIT)
+#define LCK_RW_PRIV_EXCL                (1U << LCK_RW_PRIV_EXCL_BIT)
 #define LCK_RW_SHARED_MASK              (0xffff << LCK_RW_SHARED_READER_OFFSET)
 #define LCK_RW_SHARED_READER    (0x1 << LCK_RW_SHARED_READER_OFFSET)
 
@@ -257,6 +257,9 @@ typedef struct {
 
 #define PLATFORM_LCK_ILOCK LCK_ILOCK
 
+#if defined(__ARM_ARCH_8_2__)
+#define __ARM_ATOMICS_8_1       1       // ARMv8.1 atomic instructions are available
+#endif
 
 /*
  * Lock state to thread pointer
@@ -273,8 +276,8 @@ typedef struct {
  */
 #define LCK_MTX_THREAD_MASK (~(uintptr_t)(LCK_ILOCK | ARM_LCK_WAITERS))
 
-#define disable_preemption_for_thread(t) ((volatile thread_t)t)->machine.preemption_count++
-#define preemption_disabled_for_thread(t) (((volatile thread_t)t)->machine.preemption_count > 0)
+#define disable_preemption_for_thread(t) os_atomic_store(&(t->machine.preemption_count), t->machine.preemption_count + 1, compiler_acq_rel)
+#define preemption_disabled_for_thread(t) (t->machine.preemption_count > 0)
 
 
 __unused static void

@@ -151,6 +151,10 @@ kernel_trap(mach_voucher_extract_attr_recipe_trap,-72,4)
 /* mach_voucher_attr_command */
 /* mach_voucher_debug_info */
 
+/* more mach_port traps */
+kernel_trap(_kernelrpc_mach_port_type_trap,-76,3)
+kernel_trap(_kernelrpc_mach_port_request_notification_trap,-77,7)
+
 kernel_trap(mach_timebase_info_trap,-89,1)
 
 #if		defined(__LP64__)
@@ -176,6 +180,8 @@ kernel_trap(mk_timer_arm_leeway,-95,4)
 #else
 kernel_trap(mk_timer_arm_leeway,-95,7)
 #endif
+kernel_trap(debug_control_port_for_pid,-96,3)
+
 /*
  * N.B: Trap #-100 is in use by IOTrap.s in the IOKit Framework
  * (iokit_user_client_trap)

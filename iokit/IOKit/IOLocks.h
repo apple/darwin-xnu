@@ -401,10 +401,17 @@ lck_spin_t * IOSimpleLockGetMachLock( IOSimpleLock * lock);
 
 /*! @function IOSimpleLockInit
  *   @abstract Initialize a spin lock.
- *   @discussion Initialize an embedded spin lock, to the unlocked state.
+ *   @discussion Initialize a non heap allocated spin lock to the unlocked state. Use this function when your lock is, for example, a member variable. You will need to call IOSimpleLockDestroy when you are finished with the lock to avoid lock group refcount leaks.
  *   @param lock Pointer to the lock. */
 
 void IOSimpleLockInit( IOSimpleLock * lock );
+
+/*! @function IOSimpleLockDestroy
+ *   @abstract De-initializes (destroys) a spin lock initialized with IOSimpleLockInit
+ *   @discussion Destroy / De-initialize a non heap allocated spin lock, releasing any system resources such as lock group refcounts.
+ *   @param lock Pointer to the lock. */
+
+void IOSimpleLockDestroy( IOSimpleLock * lock );
 
 /*! @function IOSimpleLockLock
  *   @abstract Lock a spin lock.

@@ -95,6 +95,23 @@ tlock_mark_owned(lck_ticket_t *tlock, thread_t cthread)
 	__c11_atomic_store((_Atomic thread_t *)&tlock->lck_owner, cthread, __ATOMIC_RELAXED);
 }
 
+#if __arm__ || __arm64__
+__unused static uint8_t
+load_exclusive_acquire8(uint8_t *target)
+{
+	uint8_t value;
+#if __arm__
+	value = __builtin_arm_ldrex(target);
+	__c11_atomic_thread_fence(__ATOMIC_ACQUIRE);
+#else
+	value = __builtin_arm_ldaex(target);    // ldaxr
+	/* "Compiler barrier", no barrier instructions are emitted */
+	atomic_signal_fence(memory_order_acquire);
+#endif
+	return value;
+}
+#endif
+
 /* On contention, poll for ownership
  * Returns when the current ticket is observed equal to "mt"
  */
@@ -117,7 +134,7 @@ tlock_contended(uint8_t *tp, uint8_t mt, lck_ticket_t *tlock, thread_t cthread)
 				 * TODO: determine specific micro-architectures
 				 * which benefit, modern CPUs may not
 				 */
-				clear_exclusive();
+				os_atomic_clear_exclusive();
 				tlock_mark_owned(tlock, cthread);
 				return;
 			}

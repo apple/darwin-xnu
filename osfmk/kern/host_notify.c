@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -37,7 +37,7 @@
 
 #include "mach/host_notify_reply.h"
 
-decl_lck_mtx_data(, host_notify_lock)
+decl_lck_mtx_data(, host_notify_lock);
 
 lck_mtx_ext_t                   host_notify_lock_ext;
 lck_grp_t                               host_notify_lock_grp;

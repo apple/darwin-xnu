@@ -41,7 +41,7 @@ int proc_clear_cpulimits(pid_t pid) __OSX_AVAILABLE_STARTING(__MAC_10_12_2, __IP
 /* CPU limits, applies to current thread only. 0% unsets limit */
 int proc_setthread_cpupercent(uint8_t percentage, uint32_t ms_refill) __OSX_AVAILABLE_STARTING(__MAC_10_10, __IPHONE_5_0);
 
-#if TARGET_OS_EMBEDDED
+#if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 
 /* CPU monitor action, continued */
 #define PROC_SETCPU_ACTION_SUSPEND      2
@@ -86,7 +86,7 @@ int proc_pidbind(int pid, uint64_t threadid, int bind);
  */
 int proc_can_use_foreground_hw(int pid, uint32_t *reason);
 
-#else /* TARGET_OS_EMBEDDED */
+#else /* (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 
 /* resume the process suspend due to low VM resource */
 int proc_clear_vmpressure(pid_t pid);
@@ -113,7 +113,7 @@ int proc_clear_delayidlesleep(void);
 int proc_disable_apptype(pid_t pid, int apptype);
 int proc_enable_apptype(pid_t pid, int apptype);
 
-#endif /* TARGET_OS_EMBEDDED */
+#endif /* (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 
 /* mark process as importance donating */
 int proc_donate_importance_boost(void);
@@ -160,7 +160,7 @@ int proc_pidoriginatorinfo(int flavor, void *buffer, int buffersize) __OSX_AVAIL
 
 int proc_listcoalitions(int flavor, int coaltype, void *buffer, int buffersize) __OSX_AVAILABLE_STARTING(__MAC_10_11, __IPHONE_8_3);
 
-#if !TARGET_IPHONE_SIMULATOR
+#if !TARGET_OS_SIMULATOR
 
 #define PROC_SUPPRESS_SUCCESS                (0)
 #define PROC_SUPPRESS_BAD_ARGUMENTS         (-1)
@@ -168,7 +168,7 @@ int proc_listcoalitions(int flavor, int coaltype, void *buffer, int buffersize) 
 #define PROC_SUPPRESS_ALREADY_SUPPRESSED    (-3)
 
 int proc_suppress(pid_t pid, uint64_t *generation);
-#endif /* !TARGET_IPHONE_SIMULATOR */
+#endif /* !TARGET_OS_SIMULATOR */
 
 __END_DECLS
 

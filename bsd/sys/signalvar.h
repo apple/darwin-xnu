@@ -224,7 +224,7 @@ struct os_reason;
  * Machine-dependent functions:
  */
 void    sendsig(struct proc *, /*sig_t*/ user_addr_t  action, int sig,
-    int returnmask, uint32_t code);
+    int returnmask, uint32_t code, sigset_t siginfo);
 
 void    psignal(struct proc *p, int sig);
 void    psignal_with_reason(struct proc *p, int sig, struct os_reason *signal_reason);
@@ -250,6 +250,13 @@ int sig_try_locked(struct proc *p);
 
 #endif  /* BSD_KERNEL_PRIVATE */
 
+#if defined(KERNEL_PRIVATE)
+/* Forward-declare these for consumers of the SDK that don't know about BSD types */
+struct proc;
+typedef struct proc * proc_t;
+struct os_reason;
+void    psignal_sigkill_with_reason(proc_t p, struct os_reason *signal_reason);
+#endif /* defined(KERNEL_PRIVATE) */
 
 #ifdef XNU_KERNEL_PRIVATE
 

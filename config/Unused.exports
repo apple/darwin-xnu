@@ -1,7 +1,4 @@
 # Symbols that are unused as KPI, but must be globally exported
-_arm64_root_pgtable_level
-_arm64_root_pgtable_num_ttes
-_arm_hardware_page_size
 _atm_mana*
 _bank_mana*
 _dtrace_zero*

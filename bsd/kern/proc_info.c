@@ -106,6 +106,7 @@ struct atalk;
 
 uint64_t get_dispatchqueue_offset_from_proc(void *);
 uint64_t get_dispatchqueue_serialno_offset_from_proc(void *);
+uint64_t get_dispatchqueue_label_offset_from_proc(void *p);
 uint64_t get_return_to_kernel_offset_from_proc(void *p);
 int proc_info_internal(int callnum, int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
 
@@ -174,6 +175,8 @@ int __attribute__ ((noinline)) proc_pidexitreasoninfo(proc_t p, struct proc_exit
 int __attribute__ ((noinline)) proc_pidoriginatorpid_uuid(uuid_t uuid, uint32_t buffersize, pid_t *pid);
 int __attribute__ ((noinline)) proc_pidlistuptrs(proc_t p, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
 int __attribute__ ((noinline)) proc_piddynkqueueinfo(pid_t pid, int flavor, kqueue_id_t id, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+int __attribute__ ((noinline)) proc_pidregionpath(proc_t p, uint64_t arg, user_addr_t buffer, __unused uint32_t buffersize, int32_t *retval);
+int __attribute__ ((noinline)) proc_pidipctableinfo(proc_t p, struct proc_ipctableinfo *table_info);
 
 #if !CONFIG_EMBEDDED
 int __attribute__ ((noinline)) proc_udata_info(pid_t pid, int flavor, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
@@ -192,7 +195,7 @@ int __attribute__ ((noinline)) pid_atalkinfo(struct atalk  * at, struct fileproc
 
 /* protos for misc */
 
-int fill_vnodeinfo(vnode_t vp, struct vnode_info *vinfo);
+int fill_vnodeinfo(vnode_t vp, struct vnode_info *vinfo, boolean_t check_fsgetpath);
 void  fill_fileinfo(struct fileproc * fp, proc_t proc, int fd, struct proc_fileinfo * finfo);
 int proc_security_policy(proc_t targetp, int callnum, int flavor, boolean_t check_same_user);
 static void munge_vinfo_stat(struct stat64 *sbp, struct vinfo_stat *vsbp);
@@ -222,6 +225,17 @@ get_dispatchqueue_serialno_offset_from_proc(void *p)
 	if (p != NULL) {
 		proc_t pself = (proc_t)p;
 		return pself->p_dispatchqueue_serialno_offset;
+	} else {
+		return (uint64_t)0;
+	}
+}
+
+uint64_t
+get_dispatchqueue_label_offset_from_proc(void *p)
+{
+	if (p != NULL) {
+		proc_t pself = (proc_t)p;
+		return pself->p_dispatchqueue_label_offset;
 	} else {
 		return (uint64_t)0;
 	}
@@ -968,7 +982,7 @@ proc_pidthreadpathinfo(proc_t p, uint64_t arg, struct proc_threadwithpathinfo *p
 	}
 
 	if ((vp != NULLVP) && ((vnode_getwithvid(vp, vid)) == 0)) {
-		error = fill_vnodeinfo(vp, &pinfo->pvip.vip_vi);
+		error = fill_vnodeinfo(vp, &pinfo->pvip.vip_vi, FALSE);
 		if (error == 0) {
 			count = MAXPATHLEN;
 			vn_getpath(vp, &pinfo->pvip.vip_path[0], &count);
@@ -1057,7 +1071,7 @@ proc_pidregionpathinfo(proc_t p, uint64_t arg, user_addr_t buffer, __unused uint
 		vp = (vnode_t)vnodeaddr;
 		if ((vnode_getwithvid(vp, vnodeid)) == 0) {
 			/* FILL THE VNODEINFO */
-			error = fill_vnodeinfo(vp, &preginfo.prp_vip.vip_vi);
+			error = fill_vnodeinfo(vp, &preginfo.prp_vip.vip_vi, FALSE);
 			count = MAXPATHLEN;
 			vn_getpath(vp, &preginfo.prp_vip.vip_path[0], &count);
 			/* Always make sure it is null terminated */
@@ -1095,7 +1109,7 @@ proc_pidregionpathinfo2(proc_t p, uint64_t arg, user_addr_t buffer, __unused uin
 	vp = (vnode_t)vnodeaddr;
 	if ((vnode_getwithvid(vp, vnodeid)) == 0) {
 		/* FILL THE VNODEINFO */
-		error = fill_vnodeinfo(vp, &preginfo.prp_vip.vip_vi);
+		error = fill_vnodeinfo(vp, &preginfo.prp_vip.vip_vi, FALSE);
 		count = MAXPATHLEN;
 		vn_getpath(vp, &preginfo.prp_vip.vip_path[0], &count);
 		/* Always make sure it is null terminated */
@@ -1108,6 +1122,45 @@ proc_pidregionpathinfo2(proc_t p, uint64_t arg, user_addr_t buffer, __unused uin
 	error = copyout(&preginfo, buffer, sizeof(struct proc_regionwithpathinfo));
 	if (error == 0) {
 		*retval = sizeof(struct proc_regionwithpathinfo);
+	}
+	return error;
+}
+
+int
+proc_pidregionpath(proc_t p, uint64_t arg, user_addr_t buffer, __unused uint32_t buffersize, int32_t *retval)
+{
+	struct proc_regionpath path;
+	int ret, error = 0;
+	uintptr_t vnodeaddr = 0;
+	uint32_t vnodeid = 0;
+	vnode_t vp;
+
+	bzero(&path, sizeof(struct proc_regionpath));
+
+	ret = find_region_details(p->task, (vm_map_offset_t) arg,
+	    (uintptr_t *)&vnodeaddr, (uint32_t *)&vnodeid,
+	    &path.prpo_addr, &path.prpo_regionlength);
+	if (ret == 0) {
+		return EINVAL;
+	}
+	if (!vnodeaddr) {
+		return EINVAL;
+	}
+
+	vp = (vnode_t)vnodeaddr;
+	if ((vnode_getwithvid(vp, vnodeid)) == 0) {
+		int count = MAXPATHLEN;
+		vn_getpath(vp, &path.prpo_path[0], &count);
+		/* Always make sure it is null terminated */
+		path.prpo_path[MAXPATHLEN - 1] = 0;
+		vnode_put(vp);
+	} else {
+		return EINVAL;
+	}
+
+	error = copyout(&path, buffer, sizeof(struct proc_regionpath));
+	if (error == 0) {
+		*retval = sizeof(struct proc_regionpath);
 	}
 	return error;
 }
@@ -1155,7 +1208,7 @@ proc_pidregionpathinfo3(proc_t p, uint64_t arg, user_addr_t buffer, __unused uin
 
 			if (vnode_get_va_fsid(&va) == arg) {
 				/* FILL THE VNODEINFO */
-				error = fill_vnodeinfo(vp, &preginfo.prp_vip.vip_vi);
+				error = fill_vnodeinfo(vp, &preginfo.prp_vip.vip_vi, FALSE);
 				count = MAXPATHLEN;
 				vn_getpath(vp, &preginfo.prp_vip.vip_path[0], &count);
 				/* Always make sure it is null terminated */
@@ -1209,7 +1262,7 @@ proc_pidvnodepathinfo(proc_t p, __unused uint64_t arg, user_addr_t buffer, __unu
 	if (vncdirvp != NULLVP) {
 		if ((error = vnode_getwithvid(vncdirvp, vncdirid)) == 0) {
 			/* FILL THE VNODEINFO */
-			error = fill_vnodeinfo(vncdirvp, &pvninfo.pvi_cdir.vip_vi);
+			error = fill_vnodeinfo(vncdirvp, &pvninfo.pvi_cdir.vip_vi, TRUE);
 			if (error == 0) {
 				count = MAXPATHLEN;
 				vn_getpath(vncdirvp, &pvninfo.pvi_cdir.vip_path[0], &count);
@@ -1224,7 +1277,7 @@ proc_pidvnodepathinfo(proc_t p, __unused uint64_t arg, user_addr_t buffer, __unu
 	if ((error == 0) && (vnrdirvp != NULLVP)) {
 		if ((error = vnode_getwithvid(vnrdirvp, vnrdirid)) == 0) {
 			/* FILL THE VNODEINFO */
-			error = fill_vnodeinfo(vnrdirvp, &pvninfo.pvi_rdir.vip_vi);
+			error = fill_vnodeinfo(vnrdirvp, &pvninfo.pvi_rdir.vip_vi, TRUE);
 			if (error == 0) {
 				count = MAXPATHLEN;
 				vn_getpath(vnrdirvp, &pvninfo.pvi_rdir.vip_path[0], &count);
@@ -1401,6 +1454,27 @@ proc_pidoriginatoruuid(uuid_t uuid, uint32_t buffersize)
 {
 	pid_t originator_pid;
 	return proc_pidoriginatorpid_uuid(uuid, buffersize, &originator_pid);
+}
+
+/*
+ * Function to get the task ipc table size.
+ */
+int
+proc_pidipctableinfo(proc_t p, struct proc_ipctableinfo *table_info)
+{
+	task_t task;
+	int error = 0;
+
+	task = p->task;
+
+	bzero(table_info, sizeof(struct proc_ipctableinfo));
+	error = fill_taskipctableinfo(task, &(table_info->table_size), &(table_info->table_free));
+
+	if (error) {
+		error = EINVAL;
+	}
+
+	return error;
 }
 
 /***************************** proc_pidoriginatorinfo ***************************/
@@ -1628,10 +1702,10 @@ proc_can_use_foreground_hw(int pid, user_addr_t u_reason, uint32_t reasonsize, i
 	}
 
 	task = p->task;
-	task_reference(task);
-	if (coalition_is_leader(task, COALITION_TYPE_JETSAM, &coal) == FALSE) {
+	if (coalition_is_leader(task, task_get_coalition(task, COALITION_TYPE_JETSAM))) {
+		task_reference(task);
+	} else {
 		/* current task is not a coalition leader: find the leader */
-		task_deallocate(task);
 		task = coalition_get_leader(coal);
 	}
 
@@ -1892,6 +1966,16 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 			size = 0;
 		}
 		break;
+	case PROC_PIDPLATFORMINFO:
+		size = PROC_PIDPLATFORMINFO_SIZE;
+		findzomb = 1;
+		break;
+	case PROC_PIDREGIONPATH:
+		size = PROC_PIDREGIONPATH_SIZE;
+		break;
+	case PROC_PIDIPCTABLEINFO:
+		size = PROC_PIDIPCTABLEINFO_SIZE;
+		break;
 	default:
 		return EINVAL;
 	}
@@ -1931,6 +2015,7 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 	case PROC_PIDUNIQIDENTIFIERINFO:
 	case PROC_PIDPATHINFO:
 	case PROC_PIDCOALITIONINFO:
+	case PROC_PIDPLATFORMINFO:
 		check_same_user = NO_CHECK_SAME_USER;
 		break;
 	default:
@@ -2232,6 +2317,31 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		kfree(vmrtfbuf, kbufsz);
 	}
 	break;
+	case PROC_PIDPLATFORMINFO: {
+		proc_lock(p);
+		uint32_t platform = p->p_platform;
+		proc_unlock(p);
+		error = copyout(&platform, buffer, sizeof(uint32_t));
+		if (error == 0) {
+			*retval = sizeof(uint32_t);
+		}
+	} break;
+	case PROC_PIDREGIONPATH: {
+		error = proc_pidregionpath(p, arg, buffer, buffersize, retval);
+	}
+	break;
+	case PROC_PIDIPCTABLEINFO: {
+		struct proc_ipctableinfo table_info;
+
+		error = proc_pidipctableinfo(p, &table_info);
+		if (error == 0) {
+			error = copyout(&table_info, buffer, sizeof(struct proc_ipctableinfo));
+			if (error == 0) {
+				*retval = sizeof(struct proc_ipctableinfo);
+			}
+		}
+	}
+	break;
 	default:
 		error = ENOTSUP;
 		break;
@@ -2258,7 +2368,7 @@ pid_vnodeinfo(vnode_t vp, uint32_t vid, struct fileproc * fp, proc_t proc, int f
 	}
 	bzero(&vfi, sizeof(struct vnode_fdinfo));
 	fill_fileinfo(fp, proc, fd, &vfi.pfi);
-	error = fill_vnodeinfo(vp, &vfi.pvi);
+	error = fill_vnodeinfo(vp, &vfi.pvi, FALSE);
 	vnode_put(vp);
 	if (error == 0) {
 		error = copyout((caddr_t)&vfi, buffer, sizeof(struct vnode_fdinfo));
@@ -2280,7 +2390,7 @@ pid_vnodeinfopath(vnode_t vp, uint32_t vid, struct fileproc * fp, proc_t proc, i
 	}
 	bzero(&vfip, sizeof(struct vnode_fdinfowithpath));
 	fill_fileinfo(fp, proc, fd, &vfip.pfi);
-	error = fill_vnodeinfo(vp, &vfip.pvip.vip_vi);
+	error = fill_vnodeinfo(vp, &vfip.pvip.vip_vi, TRUE);
 	if (error == 0) {
 		count = MAXPATHLEN;
 		vn_getpath(vp, &vfip.pvip.vip_path[0], &count);
@@ -2335,7 +2445,7 @@ fill_fileinfo(struct fileproc * fp, proc_t proc, int fd, struct proc_fileinfo * 
 
 
 int
-fill_vnodeinfo(vnode_t vp, struct vnode_info *vinfo)
+fill_vnodeinfo(vnode_t vp, struct vnode_info *vinfo, __unused boolean_t check_fsgetpath)
 {
 	vfs_context_t context;
 	struct stat64 sb;
@@ -2343,11 +2453,17 @@ fill_vnodeinfo(vnode_t vp, struct vnode_info *vinfo)
 
 	bzero(&sb, sizeof(struct stat64));
 	context = vfs_context_create((vfs_context_t)0);
-	error = vn_stat(vp, &sb, NULL, 1, context);
+#if CONFIG_MACF
+	/* Called when vnode info is used by the caller to get vnode's path */
+	if (check_fsgetpath) {
+		error = mac_vnode_check_fsgetpath(context, vp);
+	}
+#endif
+	if (!error) {
+		error = vn_stat(vp, &sb, NULL, 1, 0, context);
+		munge_vinfo_stat(&sb, &vinfo->vi_stat);
+	}
 	(void)vfs_context_rele(context);
-
-	munge_vinfo_stat(&sb, &vinfo->vi_stat);
-
 	if (error != 0) {
 		goto out;
 	}
@@ -2598,36 +2714,36 @@ proc_pidfdinfo(int pid, int flavor, int fd, user_addr_t buffer, uint32_t buffers
 	break;
 
 	case PROC_PIDFDKQUEUEINFO: {
-		struct kqueue * kq;
+		kqueue_t kqu;
 
 		if (fd == -1) {
-			if ((kq = p->p_fd->fd_wqkqueue) == NULL) {
+			if ((kqu.kqwq = p->p_fd->fd_wqkqueue) == NULL) {
 				/* wqkqueue is initialized on-demand */
 				error = 0;
 				break;
 			}
-		} else if ((error = fp_getfkq(p, fd, &fp, &kq)) != 0) {
+		} else if ((error = fp_getfkq(p, fd, &fp, &kqu.kq)) != 0) {
 			goto out1;
 		}
 
 		/* no need to be under the fdlock */
-		error = pid_kqueueinfo(kq, fp, p, fd, buffer, buffersize, retval);
+		error = pid_kqueueinfo(kqu.kq, fp, p, fd, buffer, buffersize, retval);
 	}
 	break;
 
 	case PROC_PIDFDKQUEUE_EXTINFO: {
-		struct kqueue * kq;
+		kqueue_t kqu;
 
 		if (fd == -1) {
-			if ((kq = p->p_fd->fd_wqkqueue) == NULL) {
+			if ((kqu.kqwq = p->p_fd->fd_wqkqueue) == NULL) {
 				/* wqkqueue is initialized on-demand */
 				error = 0;
 				break;
 			}
-		} else if ((error = fp_getfkq(p, fd, &fp, &kq)) != 0) {
+		} else if ((error = fp_getfkq(p, fd, &fp, &kqu.kq)) != 0) {
 			goto out1;
 		}
-		error = pid_kqueue_extinfo(p, kq, buffer, buffersize, retval);
+		error = pid_kqueue_extinfo(p, kqu.kq, buffer, buffersize, retval);
 	}
 	break;
 
@@ -3041,7 +3157,7 @@ proc_dirtycontrol(int pid, int flavor, uint64_t arg, int32_t *retval)
 	case PROC_DIRTYCONTROL_GET: {
 		/* No permissions check - dirty state is freely available */
 		if (retval) {
-			*retval = memorystatus_dirty_get(target_p);
+			*retval = memorystatus_dirty_get(target_p, FALSE);
 		} else {
 			error = EINVAL;
 		}

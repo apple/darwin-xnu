@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2019 Apple Inc. All rights reserved.
  * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  */
 #include <pexpert/pexpert.h>
@@ -13,6 +13,7 @@
 #include <pexpert/arm64/board_config.h>
 #endif
 
+#include <kern/clock.h>
 #include <machine/machine_routines.h>
 #if DEVELOPMENT || DEBUG
 #include <kern/simple_lock.h>
@@ -33,7 +34,7 @@ static uint32_t gTCFG0Value;
 static uint32_t pe_arm_init_timer(void *args);
 
 #if DEVELOPMENT || DEBUG
-decl_simple_lock_data(, panic_trace_lock; )
+decl_simple_lock_data(, panic_hook_lock);
 #endif
 /*
  * pe_identify_machine:
@@ -96,11 +97,6 @@ pe_identify_machine(boot_args * bootArgs)
 		hclk = mclk / 4;
 		pclk = hclk / 2;
 		tclk = 100000;  /* timer is at 100khz */
-	} else if (!strcmp(gPESoCDeviceType, "bcm2837-io")) {
-		mclk = 1200000000;
-		hclk = mclk / 4;
-		pclk = hclk / 2;
-		tclk = 1000000;
 	} else {
 		use_dt = 1;
 	}
@@ -278,9 +274,6 @@ pe_arm_get_soc_revision(void)
 
 extern void     fleh_fiq_generic(void);
 
-#if defined(ARM_BOARD_CLASS_S5L8960X)
-static struct tbd_ops    s5l8960x_funcs = {NULL, NULL, NULL};
-#endif /* defined(ARM_BOARD_CLASS_S5L8960X) */
 
 #if defined(ARM_BOARD_CLASS_T7000)
 static struct tbd_ops    t7000_funcs = {NULL, NULL, NULL};
@@ -321,6 +314,9 @@ static struct tbd_ops    t8015_funcs = {NULL, NULL, NULL};
 
 
 
+
+
+
 #if defined(ARM_BOARD_CLASS_BCM2837)
 static struct tbd_ops    bcm2837_funcs = {NULL, NULL, NULL};
 #endif /* defined(ARM_BOARD_CLASS_BCM2837) */
@@ -341,23 +337,31 @@ typedef enum{
 } panic_trace_t;
 static panic_trace_t bootarg_panic_trace;
 
+static int bootarg_stop_clocks;
+
 // The command buffer contains the converted commands from the device tree for commanding cpu_halt, enable_trace, etc.
 #define DEBUG_COMMAND_BUFFER_SIZE 256
 typedef struct command_buffer_element {
 	uintptr_t address;
-	uint16_t destination_cpu_selector;
 	uintptr_t value;
+	uint16_t destination_cpu_selector;
+	uint16_t delay_us;
+	bool is_32bit;
 } command_buffer_element_t;
 static command_buffer_element_t debug_command_buffer[DEBUG_COMMAND_BUFFER_SIZE];                // statically allocate to prevent needing alloc at runtime
-static uint32_t  next_command_bufffer_entry = 0;                                                                                // index of next unused slot in debug_command_buffer
+static uint32_t  next_command_buffer_entry = 0;                                                                                // index of next unused slot in debug_command_buffer
 
-#define CPU_SELECTOR_SHIFT                              ((sizeof(int)-2)*8)
-#define CPU_SELECTOR_MASK                               (0xFFFF << CPU_SELECTOR_SHIFT)
-#define REGISTER_OFFSET_MASK                    (~CPU_SELECTOR_MASK)
+#define CPU_SELECTOR_SHIFT              (16)
+#define CPU_SELECTOR_MASK               (0xFFFF << CPU_SELECTOR_SHIFT)
+#define REGISTER_OFFSET_MASK            ((1 << CPU_SELECTOR_SHIFT) - 1)
 #define REGISTER_OFFSET(register_prop)  (register_prop & REGISTER_OFFSET_MASK)
-#define CPU_SELECTOR(register_offset)   (register_offset >> CPU_SELECTOR_SHIFT) // Upper 16bits holds the cpu selector
-#define MAX_WINDOW_SIZE                                 0xFFFF
-#define PE_ISSPACE(c)                                   (c == ' ' || c == '\t' || c == '\n' || c == '\12')
+#define CPU_SELECTOR(register_offset)   ((register_offset & CPU_SELECTOR_MASK) >> CPU_SELECTOR_SHIFT) // Upper 16bits holds the cpu selector
+#define MAX_WINDOW_SIZE                 0xFFFF
+#define PE_ISSPACE(c)                   (c == ' ' || c == '\t' || c == '\n' || c == '\12')
+#define DELAY_SHIFT                     (32)
+#define DELAY_MASK                      (0xFFFFULL << DELAY_SHIFT)
+#define DELAY_US(register_offset)       ((register_offset & DELAY_MASK) >> DELAY_SHIFT)
+#define REGISTER_32BIT_MASK             (1ULL << 63)
 /*
  *  0x0000 - all cpus
  *  0x0001 - cpu 0
@@ -376,6 +380,8 @@ static command_buffer_element_t *cpu_halt;
 static command_buffer_element_t *enable_trace;
 static command_buffer_element_t *enable_alt_trace;
 static command_buffer_element_t *trace_halt;
+static command_buffer_element_t *enable_stop_clocks;
+static command_buffer_element_t *stop_clocks;
 
 // Record which CPU is currently running one of our debug commands, so we can trap panic reentrancy to PE_arm_debug_panic_hook.
 static int running_debug_command_on_cpu_number = -1;
@@ -396,13 +402,13 @@ pe_init_debug_command(DTEntry entryP, command_buffer_element_t **command_buffer,
 	}
 
 	// make sure command will fit
-	if (next_command_bufffer_entry + prop_size / sizeof(uintptr_t) > DEBUG_COMMAND_BUFFER_SIZE - 1) {
+	if (next_command_buffer_entry + prop_size / sizeof(uintptr_t) > DEBUG_COMMAND_BUFFER_SIZE - 1) {
 		panic("pe_init_debug_command: property %s is %u bytes, command buffer only has %lu bytes remaining\n",
-		    entry_name, prop_size, ((DEBUG_COMMAND_BUFFER_SIZE - 1) - next_command_bufffer_entry) * sizeof(uintptr_t));
+		    entry_name, prop_size, ((DEBUG_COMMAND_BUFFER_SIZE - 1) - next_command_buffer_entry) * sizeof(uintptr_t));
 	}
 
 	// Hold the pointer in a temp variable and later assign it to command buffer, in case we panic while half-initialized
-	command_starting_index = next_command_bufffer_entry;
+	command_starting_index = next_command_buffer_entry;
 
 	// convert to real virt addresses and stuff commands into debug_command_buffer
 	for (; prop_size; reg_prop += 2, prop_size -= 2 * sizeof(uintptr_t)) {
@@ -420,14 +426,21 @@ pe_init_debug_command(DTEntry entryP, command_buffer_element_t **command_buffer,
 			if ((REGISTER_OFFSET(*reg_prop) + sizeof(uintptr_t)) >= reg_window_size) {
 				panic("pe_init_debug_command: Command Offset is %lx, exceeds allocated size of %x\n", REGISTER_OFFSET(*reg_prop), reg_window_size );
 			}
-			debug_command_buffer[next_command_bufffer_entry].address = debug_reg_window + REGISTER_OFFSET(*reg_prop);
-			debug_command_buffer[next_command_bufffer_entry].destination_cpu_selector = CPU_SELECTOR(*reg_prop);
-			debug_command_buffer[next_command_bufffer_entry++].value = *(reg_prop + 1);
+			debug_command_buffer[next_command_buffer_entry].address = debug_reg_window + REGISTER_OFFSET(*reg_prop);
+			debug_command_buffer[next_command_buffer_entry].destination_cpu_selector = CPU_SELECTOR(*reg_prop);
+#if defined(__arm64__)
+			debug_command_buffer[next_command_buffer_entry].delay_us = DELAY_US(*reg_prop);
+			debug_command_buffer[next_command_buffer_entry].is_32bit = ((*reg_prop & REGISTER_32BIT_MASK) != 0);
+#else
+			debug_command_buffer[next_command_buffer_entry].delay_us = 0;
+			debug_command_buffer[next_command_buffer_entry].is_32bit = false;
+#endif
+			debug_command_buffer[next_command_buffer_entry++].value = *(reg_prop + 1);
 		}
 	}
 
 	// null terminate the address field of the command to end it
-	debug_command_buffer[next_command_bufffer_entry++].address = 0;
+	debug_command_buffer[next_command_buffer_entry++].address = 0;
 
 	// save pointer into table for this command
 	*command_buffer = &debug_command_buffer[command_starting_index];
@@ -437,18 +450,31 @@ static void
 pe_run_debug_command(command_buffer_element_t *command_buffer)
 {
 	// When both the CPUs panic, one will get stuck on the lock and the other CPU will be halted when the first executes the debug command
-	simple_lock(&panic_trace_lock, LCK_GRP_NULL);
+	simple_lock(&panic_hook_lock, LCK_GRP_NULL);
+
 	running_debug_command_on_cpu_number = cpu_number();
 
 	while (command_buffer && command_buffer->address) {
 		if (IS_CPU_SELECTED(running_debug_command_on_cpu_number, command_buffer->destination_cpu_selector)) {
-			*((volatile uintptr_t*)(command_buffer->address)) = command_buffer->value;      // register = value;
+			if (command_buffer->is_32bit) {
+				*((volatile uint32_t*)(command_buffer->address)) = (uint32_t)(command_buffer->value);
+			} else {
+				*((volatile uintptr_t*)(command_buffer->address)) = command_buffer->value;      // register = value;
+			}
+			if (command_buffer->delay_us != 0) {
+				uint64_t deadline;
+				nanoseconds_to_absolutetime(command_buffer->delay_us * NSEC_PER_USEC, &deadline);
+				deadline += ml_get_timebase();
+				while (ml_get_timebase() < deadline) {
+					;
+				}
+			}
 		}
 		command_buffer++;
 	}
 
 	running_debug_command_on_cpu_number = -1;
-	simple_unlock(&panic_trace_lock);
+	simple_unlock(&panic_hook_lock);
 }
 
 
@@ -470,10 +496,12 @@ PE_arm_debug_enable_trace(void)
 }
 
 static void
-PEARMDebugPanicHook(const char *str)
+PE_arm_panic_hook(const char *str __unused)
 {
 	(void)str; // not used
-
+	if (bootarg_stop_clocks != 0) {
+		pe_run_debug_command(stop_clocks);
+	}
 	// if panic trace is enabled
 	if (bootarg_panic_trace != 0) {
 		if (running_debug_command_on_cpu_number == cpu_number()) {
@@ -482,18 +510,39 @@ PEARMDebugPanicHook(const char *str)
 			return;  // allow the normal panic operation to occur.
 		}
 
-		// Stop tracing to freze the buffer and return to normal panic processing.
+		// Stop tracing to freeze the buffer and return to normal panic processing.
 		pe_run_debug_command(trace_halt);
 	}
 }
 
-void (*PE_arm_debug_panic_hook)(const char *str) = PEARMDebugPanicHook;
+void (*PE_arm_debug_panic_hook)(const char *str) = PE_arm_panic_hook;
+
+void
+PE_init_cpu(void)
+{
+	if (bootarg_stop_clocks != 0) {
+		pe_run_debug_command(enable_stop_clocks);
+	}
+}
 
 #else
 
-void (*PE_arm_debug_panic_hook)(const char *str) = NULL;
+void(*const PE_arm_debug_panic_hook)(const char *str) = NULL;
+
+void
+PE_init_cpu(void)
+{
+}
 
 #endif  // DEVELOPMENT || DEBUG
+
+void
+PE_panic_hook(const char *str __unused)
+{
+	if (PE_arm_debug_panic_hook != NULL) {
+		PE_arm_debug_panic_hook(str);
+	}
+}
 
 void
 pe_arm_init_debug(void *args)
@@ -516,7 +565,7 @@ pe_arm_init_debug(void *args)
 			// When args != NULL, this means we're being called from arm_init on the boot CPU.
 			// This controls one-time initialization of the Panic Trace infrastructure
 
-			simple_lock_init(&panic_trace_lock, 0); //assuming single threaded mode
+			simple_lock_init(&panic_hook_lock, 0); //assuming single threaded mode
 
 			// Panic_halt is deprecated. Please use panic_trace istead.
 			unsigned int temp_bootarg_panic_trace;
@@ -535,6 +584,12 @@ pe_arm_init_debug(void *args)
 
 				// start tracing now if enabled
 				PE_arm_debug_enable_trace();
+			}
+			unsigned int temp_bootarg_stop_clocks;
+			if (PE_parse_boot_argn("stop_clocks", &temp_bootarg_stop_clocks, sizeof(temp_bootarg_stop_clocks))) {
+				pe_init_debug_command(entryP, &enable_stop_clocks, "enable_stop_clocks");
+				pe_init_debug_command(entryP, &stop_clocks, "stop_clocks");
+				bootarg_stop_clocks = temp_bootarg_stop_clocks;
 			}
 #endif
 		}
@@ -615,11 +670,6 @@ pe_arm_init_timer(void *args)
 	timer_base = gTimerBase;
 	soc_phys = gSocPhys;
 
-#if defined(ARM_BOARD_CLASS_S5L8960X)
-	if (!strcmp(gPESoCDeviceType, "s5l8960x-io")) {
-		tbd_funcs = &s5l8960x_funcs;
-	} else
-#endif
 #if defined(ARM_BOARD_CLASS_T7000)
 	if (!strcmp(gPESoCDeviceType, "t7000-io") ||
 	    !strcmp(gPESoCDeviceType, "t7001-io")) {

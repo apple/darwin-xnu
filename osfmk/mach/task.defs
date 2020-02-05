@@ -504,5 +504,13 @@ routine task_inspect(
 	    flavor   : task_inspect_flavor_t;
 	out info_out : task_inspect_info_t, CountInOut);
 
+routine task_get_exc_guard_behavior(
+		task	 : task_inspect_t;
+	out behavior : task_exc_guard_behavior_t);
+
+routine task_set_exc_guard_behavior(
+		task	 : task_t;
+		behavior : task_exc_guard_behavior_t);
+		
 /* vim: set ft=c : */
 

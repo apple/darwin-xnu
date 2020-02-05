@@ -47,5 +47,7 @@ extern  void    commpage_update_multiuser_config(uint32_t);
 extern  void    commpage_update_boottime(uint64_t boottime_usec);
 extern  void    commpage_set_remotetime_params(double rate, uint64_t base_local_ts, uint64_t base_remote_ts);
 extern uint64_t commpage_increment_cpu_quiescent_counter(void);
+extern  void    commpage_update_dof(boolean_t enabled);
+extern  void    commpage_update_dyld_flags(uint64_t value);
 
 #endif /* _ARM_COMMPAGE_H */

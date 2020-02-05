@@ -29,8 +29,8 @@ extern const struct ccdigest_info ccsha1_eay_di;
 extern const struct ccdigest_info ccsha1_vng_intel_SupplementalSSE3_di;
 #endif
 
-#if  CCSHA1_VNG_ARMV7NEON
-extern const struct ccdigest_info ccsha1_vng_armv7neon_di;
+#if  CCSHA1_VNG_ARM
+extern const struct ccdigest_info ccsha1_vng_arm_di;
 #endif
 
 /* TODO: Placeholders */

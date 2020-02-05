@@ -9,7 +9,14 @@ include $(MakeInc_def)
 DATAFILES = \
           OSByteOrder.h
 
+DRIVERKIT_DATAFILES = \
+          OSByteOrder.h
+
 INSTALL_MI_LIST	= ${DATAFILES}
+
+INSTALL_DRIVERKIT_MI_LIST = ${DRIVERKIT_DATAFILES}
+
+DRIVERKITINCDIR = $(DRIVERKITSDKHEADERSROOT)/usr/local/include
 
 INSTALL_MI_DIR = libkern/machine
 

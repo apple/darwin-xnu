@@ -1805,6 +1805,22 @@ typedef int mpo_mount_check_mount_t(
 	const char *vfc_name
 	);
 /**
+ *  @brief Access control check for mounting a file system (late)
+ *  @param cred Subject credential
+ *  @param mp Mount point
+ *
+ *  Similar to mpo_mount_check_mount, but occurs after VFS_MOUNT has been
+ *  called, making it possible to access mnt_vfsstat.f_mntfromname and other
+ *  fields.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_mount_check_mount_late_t(
+	kauth_cred_t cred,
+	struct mount *mp
+	);
+/**
  *  @brief Access control check for fs_snapshot_create
  *  @param cred Subject credential
  *  @mp Filesystem mount point to create snapshot of
@@ -3074,6 +3090,24 @@ typedef int mpo_proc_check_signal_t(
 	int signum
 	);
 /**
+ *  @brief Access control check for Unix syscalls.
+ *  @param proc Subject process
+ *  @param scnum Syscall number; see bsd/kern/syscalls.master.
+ *
+ *  Determine whether the subject process can perform the passed syscall (number).
+ *
+ *  @warning Programs typically expect to be able to make syscalls as part of
+ *  their normal process lifecycle; caution should be exercised when restricting
+ *  which syscalls a process can perform.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned. Suggested failure: EPERM for lack of privilege.
+ */
+typedef int mpo_proc_check_syscall_unix_t(
+	struct proc *proc,
+	int scnum
+	);
+/**
  *  @brief Access control check for wait
  *  @param cred Subject credential
  *  @param proc Object process
@@ -3105,32 +3139,6 @@ typedef int mpo_proc_check_wait_t(
  */
 typedef void mpo_proc_notify_exit_t(
 	struct proc *proc
-	);
-/**
- *  @brief Destroy process label
- *  @param label The label to be destroyed
- *
- *  Destroy a process label.  Since the object is going
- *  out of scope, policy modules should free any internal storage
- *  associated with the label so that it may be destroyed.
- */
-typedef void mpo_proc_label_destroy_t(
-	struct label *label
-	);
-/**
- *  @brief Initialize process label
- *  @param label New label to initialize
- *  @see mpo_cred_label_init_t
- *
- *  Initialize the label for a newly instantiated BSD process structure.
- *  Normally, security policies will store the process label in the user
- *  credential rather than here in the process structure.  However,
- *  there are some floating label policies that may need to temporarily
- *  store a label in the process structure until it is safe to update
- *  the user credential label.  Sleeping is permitted.
- */
-typedef void mpo_proc_label_init_t(
-	struct label *label
 	);
 /**
  *  @brief Access control check for skywalk flow connect
@@ -3835,20 +3843,6 @@ typedef int mpo_system_check_auditctl_t(
 typedef int mpo_system_check_auditon_t(
 	kauth_cred_t cred,
 	int cmd
-	);
-/**
- *  @brief Access control check for using CHUD facilities
- *  @param cred Subject credential
- *
- *  Determine whether the subject identified by the credential can perform
- *  performance-related tasks using the CHUD system call.  This interface is
- *  deprecated.
- *
- *  @return Return 0 if access is granted, otherwise an appropriate value for
- *  errno should be returned.
- */
-typedef int mpo_system_check_chud_t(
-	kauth_cred_t cred
 	);
 /**
  *  @brief Access control check for obtaining the host control port
@@ -5859,11 +5853,12 @@ typedef int mpo_vnode_label_internalize_t(
 	);
 /**
  *  @brief Clean up a vnode label
- *  @param label The label to be cleaned for re-use
+ *  @param label The label to be cleaned or purged
  *
  *  Clean up a vnode label.  Darwin (Tiger, 8.x) allocates vnodes on demand, but
  *  typically never frees them.  Before vnodes are placed back on free lists for
- *  re-use, policies can cleanup or overwrite any information present in the label.
+ *  re-use, policies can cleanup or overwrite any information present in the label,
+ *  or free any internal resources used for the label.
  */
 typedef void mpo_vnode_label_recycle_t(
 	struct label *label
@@ -6288,7 +6283,7 @@ typedef void mpo_reserved_hook_t(void);
  * Please note that this should be kept in sync with the check assumptions
  * policy in bsd/kern/policy_check.c (policy_ops struct).
  */
-#define MAC_POLICY_OPS_VERSION 55 /* inc when new reserved slots are taken */
+#define MAC_POLICY_OPS_VERSION 58 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t            *mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t             *mpo_audit_check_preselect;
@@ -6428,8 +6423,8 @@ struct mac_policy_ops {
 	mpo_vnode_check_rename_t                *mpo_vnode_check_rename;
 	mpo_kext_check_query_t                  *mpo_kext_check_query;
 	mpo_proc_notify_exec_complete_t         *mpo_proc_notify_exec_complete;
-	mpo_reserved_hook_t                     *mpo_reserved5;
-	mpo_reserved_hook_t                     *mpo_reserved6;
+	mpo_reserved_hook_t                     *mpo_reserved4;
+	mpo_proc_check_syscall_unix_t           *mpo_proc_check_syscall_unix;
 	mpo_proc_check_expose_task_t            *mpo_proc_check_expose_task;
 	mpo_proc_check_set_host_special_port_t  *mpo_proc_check_set_host_special_port;
 	mpo_proc_check_set_host_exception_port_t *mpo_proc_check_set_host_exception_port;
@@ -6441,9 +6436,9 @@ struct mac_policy_ops {
 	mpo_exc_action_label_update_t           *mpo_exc_action_label_update;
 
 	mpo_vnode_check_trigger_resolve_t       *mpo_vnode_check_trigger_resolve;
+	mpo_mount_check_mount_late_t            *mpo_mount_check_mount_late;
 	mpo_reserved_hook_t                     *mpo_reserved1;
 	mpo_reserved_hook_t                     *mpo_reserved2;
-	mpo_reserved_hook_t                     *mpo_reserved3;
 	mpo_skywalk_flow_check_connect_t        *mpo_skywalk_flow_check_connect;
 	mpo_skywalk_flow_check_listen_t         *mpo_skywalk_flow_check_listen;
 
@@ -6479,8 +6474,8 @@ struct mac_policy_ops {
 	mpo_proc_check_setlcid_t                *mpo_proc_check_setlcid;
 	mpo_proc_check_signal_t                 *mpo_proc_check_signal;
 	mpo_proc_check_wait_t                   *mpo_proc_check_wait;
-	mpo_proc_label_destroy_t                *mpo_proc_label_destroy;
-	mpo_proc_label_init_t                   *mpo_proc_label_init;
+	mpo_reserved_hook_t                     *mpo_reserved5;
+	mpo_reserved_hook_t                     *mpo_reserved6;
 
 	mpo_socket_check_accept_t               *mpo_socket_check_accept;
 	mpo_socket_check_accepted_t             *mpo_socket_check_accepted;
@@ -6630,7 +6625,7 @@ struct mac_policy_ops {
 
 	mpo_iokit_check_set_properties_t        *mpo_iokit_check_set_properties;
 
-	mpo_system_check_chud_t                 *mpo_system_check_chud;
+	mpo_reserved_hook_t                     *mpo_reserved3;
 
 	mpo_vnode_check_searchfs_t              *mpo_vnode_check_searchfs;
 
@@ -6922,6 +6917,8 @@ int     mac_file_removexattr(struct fileglob *fg, const char *name);
  */
 intptr_t        mac_label_get(struct label *l, int slot);
 void            mac_label_set(struct label *l, int slot, intptr_t v);
+intptr_t        mac_vnode_label_get(struct vnode *vp, int slot, intptr_t sentinel);
+void            mac_vnode_label_set(struct vnode *vp, int slot, intptr_t v);
 
 #define mac_get_mpc(h)          (mac_policy_list.entries[h].mpc)
 

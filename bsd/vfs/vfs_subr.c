@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -254,8 +254,19 @@ int     ragevnodes = 0;
 #define RAGE_LIMIT_MIN  100
 #define RAGE_TIME_LIMIT 5
 
+/*
+ * ROSV definitions
+ * NOTE: These are shadowed from PlatformSupport definitions, but XNU
+ * builds standalone.
+ */
+#define PLATFORM_DATA_VOLUME_MOUNT_POINT "/System/Volumes/Data"
+#define PLATFORM_VM_VOLUME_MOUNT_POINT "/private/var/vm"
+
+
 struct mntlist mountlist;                       /* mounted filesystem list */
 static int nummounts = 0;
+
+static int print_busy_vnodes = 0;                               /* print out busy vnodes */
 
 #if DIAGNOSTIC
 #define VLISTCHECK(fun, vp, list)       \
@@ -477,6 +488,7 @@ int
 vnode_umount_preflight(mount_t mp, vnode_t skipvp, int flags)
 {
 	vnode_t vp;
+	int ret = 0;
 
 	TAILQ_FOREACH(vp, &mp->mnt_vnodelist, v_mntvnodes) {
 		if (vp->v_type == VDIR) {
@@ -497,18 +509,28 @@ vnode_umount_preflight(mount_t mp, vnode_t skipvp, int flags)
 
 		/* Look for busy vnode */
 		if ((vp->v_usecount != 0) && ((vp->v_usecount - vp->v_kusecount) != 0)) {
-			return 1;
+			ret = 1;
+			if (print_busy_vnodes && ((flags & FORCECLOSE) == 0)) {
+				vprint("vnode_umount_preflight - busy vnode", vp);
+			} else {
+				return ret;
+			}
 		} else if (vp->v_iocount > 0) {
 			/* Busy if iocount is > 0 for more than 3 seconds */
 			tsleep(&vp->v_iocount, PVFS, "vnode_drain_network", 3 * hz);
 			if (vp->v_iocount > 0) {
-				return 1;
+				ret = 1;
+				if (print_busy_vnodes && ((flags & FORCECLOSE) == 0)) {
+					vprint("vnode_umount_preflight - busy vnode", vp);
+				} else {
+					return ret;
+				}
 			}
 			continue;
 		}
 	}
 
-	return 0;
+	return ret;
 }
 
 /*
@@ -1257,6 +1279,98 @@ fail:
 	}
 	KDBG_RELEASE(DBG_MOUNTROOT | DBG_FUNC_END, error ? error : ENODEV, 4);
 	return ENODEV;
+}
+
+/*
+ * Mount the data volume of an ROSV volume group
+ */
+int
+vfs_mount_rosv_data(void)
+{
+#if CONFIG_ROSV_STARTUP
+	int error = 0;
+	int do_rosv_mounts = 0;
+
+	error = vnode_get(rootvnode);
+	if (error) {
+		/* root must be mounted first */
+		printf("vnode_get(rootvnode) failed with error %d\n", error);
+		return error;
+	}
+
+	printf("NOTE: Attempting ROSV mount\n");
+	struct vfs_attr vfsattr;
+	VFSATTR_INIT(&vfsattr);
+	VFSATTR_WANTED(&vfsattr, f_capabilities);
+	if (vfs_getattr(rootvnode->v_mount, &vfsattr, vfs_context_kernel()) == 0 &&
+	    VFSATTR_IS_SUPPORTED(&vfsattr, f_capabilities)) {
+		if ((vfsattr.f_capabilities.capabilities[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_VOL_GROUPS) &&
+		    (vfsattr.f_capabilities.valid[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_VOL_GROUPS)) {
+			printf("NOTE: DETECTED ROSV CONFIG\n");
+			do_rosv_mounts = 1;
+		}
+	}
+
+	if (!do_rosv_mounts) {
+		vnode_put(rootvnode);
+		//bail out if config not supported
+		return 0;
+	}
+
+	char datapath[] = PLATFORM_DATA_VOLUME_MOUNT_POINT; /* !const because of internal casting */
+
+	/* Mount the data volume */
+	printf("attempting kernel mount for data volume... \n");
+	error = kernel_mount(rootvnode->v_mount->mnt_vfsstat.f_fstypename, NULLVP, NULLVP,
+	    datapath, (rootvnode->v_mount), 0, 0, (KERNEL_MOUNT_DATAVOL), vfs_context_kernel());
+
+	if (error) {
+		printf("Failed to mount data volume (%d)\n", error);
+	}
+
+	vnode_put(rootvnode);
+
+	return error;
+
+#else
+	return 0;
+#endif
+}
+
+/*
+ * Mount the VM volume of a container
+ */
+int
+vfs_mount_vm(void)
+{
+#if CONFIG_MOUNT_VM
+	int error = 0;
+
+	error = vnode_get(rootvnode);
+	if (error) {
+		/* root must be mounted first */
+		printf("vnode_get(rootvnode) failed with error %d\n", error);
+		return error;
+	}
+
+	char vmpath[] = PLATFORM_VM_VOLUME_MOUNT_POINT; /* !const because of internal casting */
+
+	/* Mount the VM volume */
+	printf("attempting kernel mount for vm volume... \n");
+	error = kernel_mount(rootvnode->v_mount->mnt_vfsstat.f_fstypename, NULLVP, NULLVP,
+	    vmpath, (rootvnode->v_mount), 0, 0, (KERNEL_MOUNT_VMVOL), vfs_context_kernel());
+
+	if (error) {
+		printf("Failed to mount vm volume (%d)\n", error);
+	} else {
+		printf("mounted VM volume\n");
+	}
+
+	vnode_put(rootvnode);
+	return error;
+#else
+	return 0;
+#endif
 }
 
 /*
@@ -2035,9 +2149,6 @@ done:
  * system error). If MNT_FORCE is specified, detach any active vnodes
  * that are found.
  */
-#if DIAGNOSTIC
-int busyprt = 0;        /* print out busy vnodes */
-#endif
 
 int
 vflush(struct mount *mp, struct vnode *skipvp, int flags)
@@ -2047,6 +2158,7 @@ vflush(struct mount *mp, struct vnode *skipvp, int flags)
 	int reclaimed = 0;
 	int retval;
 	unsigned int vid;
+	bool first_try = true;
 
 	/*
 	 * See comments in vnode_iterate() for the rationale for this lock
@@ -2191,11 +2303,12 @@ loop:
 			mount_lock(mp);
 			continue;
 		}
-#if DIAGNOSTIC
-		if (busyprt) {
-			vprint("vflush: busy vnode", vp);
+
+		/* log vnodes blocking unforced unmounts */
+		if (print_busy_vnodes && first_try && ((flags & FORCECLOSE) == 0)) {
+			vprint("vflush - busy vnode", vp);
 		}
-#endif
+
 		vnode_unlock(vp);
 		mount_lock(mp);
 		busy++;
@@ -2206,6 +2319,7 @@ loop:
 		busy = 0;
 		reclaimed = 0;
 		(void)vnode_iterate_reloadq(mp);
+		first_try = false;
 		/* returned with mount lock held */
 		goto loop;
 	}
@@ -2213,6 +2327,7 @@ loop:
 	/* if new vnodes were created in between retry the reclaim */
 	if (vnode_iterate_reloadq(mp) != 0) {
 		if (!(busy && ((flags & FORCECLOSE) == 0))) {
+			first_try = false;
 			goto loop;
 		}
 	}
@@ -2367,7 +2482,7 @@ vclean(vnode_t vp, int flags)
 	}
 
 	// make sure the name & parent ptrs get cleaned out!
-	vnode_update_identity(vp, NULLVP, NULL, 0, 0, VNODE_UPDATE_PARENT | VNODE_UPDATE_NAME | VNODE_UPDATE_PURGE);
+	vnode_update_identity(vp, NULLVP, NULL, 0, 0, VNODE_UPDATE_PARENT | VNODE_UPDATE_NAME | VNODE_UPDATE_PURGE | VNODE_UPDATE_PURGEFIRMLINK);
 
 	vnode_lock(vp);
 
@@ -2697,8 +2812,9 @@ vprint(const char *label, struct vnode *vp)
 	if (label != NULL) {
 		printf("%s: ", label);
 	}
-	printf("type %s, usecount %d, writecount %d",
-	    typename[vp->v_type], vp->v_usecount, vp->v_writecount);
+	printf("name %s type %s, usecount %d, writecount %d\n",
+	    vp->v_name, typename[vp->v_type],
+	    vp->v_usecount, vp->v_writecount);
 	sbuf[0] = '\0';
 	if (vp->v_flag & VROOT) {
 		strlcat(sbuf, "|VROOT", sizeof(sbuf));
@@ -2719,7 +2835,7 @@ vprint(const char *label, struct vnode *vp)
 		strlcat(sbuf, "|VALIASED", sizeof(sbuf));
 	}
 	if (sbuf[0] != '\0') {
-		printf(" flags (%s)", &sbuf[1]);
+		printf("vnode flags (%s\n", &sbuf[1]);
 	}
 }
 
@@ -2770,6 +2886,29 @@ int
 vn_getpath_fsenter_with_parent(struct vnode *dvp, struct vnode *vp, char *pathbuf, int *len)
 {
 	return build_path_with_parent(vp, dvp, pathbuf, *len, len, 0, vfs_context_current());
+}
+
+int
+vn_getpath_ext(struct vnode *vp, struct vnode *dvp, char *pathbuf, int *len, int flags)
+{
+	int bpflags = (flags & VN_GETPATH_FSENTER) ? 0 : BUILDPATH_NO_FS_ENTER;
+
+	if (flags && (flags != VN_GETPATH_FSENTER)) {
+		if (flags & VN_GETPATH_NO_FIRMLINK) {
+			bpflags |= BUILDPATH_NO_FIRMLINK;;
+		}
+		if (flags & VN_GETPATH_VOLUME_RELATIVE) {
+			bpflags |= (BUILDPATH_VOLUME_RELATIVE | BUILDPATH_NO_FIRMLINK);
+		}
+	}
+
+	return build_path_with_parent(vp, dvp, pathbuf, *len, len, bpflags, vfs_context_current());
+}
+
+int
+vn_getpath_no_firmlink(struct vnode *vp, char *pathbuf, int *len)
+{
+	return vn_getpath_ext(vp, NULLVP, pathbuf, len, VN_GETPATH_NO_FIRMLINK);
 }
 
 int
@@ -3260,6 +3399,7 @@ vfs_init_io_attributes(vnode_t devvp, mount_t mp)
 	u_int32_t blksize;
 	u_int64_t temp;
 	u_int32_t features;
+	u_int64_t location = 0;
 	vfs_context_t ctx = vfs_context_current();
 	dk_corestorage_info_t cs_info;
 	boolean_t cs_present = FALSE;;
@@ -3494,6 +3634,16 @@ vfs_init_io_attributes(vnode_t devvp, mount_t mp)
 		if ((VNOP_IOCTL(devvp, DKIOCGETAPFSFLAVOUR, (caddr_t)&flavour, 0, ctx) == 0) &&
 		    (flavour == DK_APFS_FUSION)) {
 			mp->mnt_ioflags |= MNT_IOFLAGS_FUSION_DRIVE;
+		}
+	}
+
+	if (VNOP_IOCTL(devvp, DKIOCGETLOCATION, (caddr_t)&location, 0, ctx) == 0) {
+		if (location & DK_LOCATION_EXTERNAL) {
+			mp->mnt_ioflags |= MNT_IOFLAGS_PERIPHERAL_DRIVE;
+			/* This must be called after MNTK_VIRTUALDEV has been determined via DKIOCISVIRTUAL */
+			if ((MNTK_VIRTUALDEV & mp->mnt_kern_flag)) {
+				mp->mnt_flag |= MNT_REMOVABLE;
+			}
 		}
 	}
 
@@ -3859,11 +4009,11 @@ out:
 	return error;
 }
 
-static int      filt_fsattach(struct knote *kn, struct kevent_internal_s *kev);
+static int      filt_fsattach(struct knote *kn, struct kevent_qos_s *kev);
 static void     filt_fsdetach(struct knote *kn);
 static int      filt_fsevent(struct knote *kn, long hint);
-static int      filt_fstouch(struct knote *kn, struct kevent_internal_s *kev);
-static int      filt_fsprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
+static int      filt_fstouch(struct knote *kn, struct kevent_qos_s *kev);
+static int      filt_fsprocess(struct knote *kn, struct kevent_qos_s *kev);
 SECURITY_READ_ONLY_EARLY(struct filterops) fs_filtops = {
 	.f_attach = filt_fsattach,
 	.f_detach = filt_fsdetach,
@@ -3873,8 +4023,11 @@ SECURITY_READ_ONLY_EARLY(struct filterops) fs_filtops = {
 };
 
 static int
-filt_fsattach(struct knote *kn, __unused struct kevent_internal_s *kev)
+filt_fsattach(struct knote *kn, __unused struct kevent_qos_s *kev)
 {
+	kn->kn_flags |= EV_CLEAR; /* automatic */
+	kn->kn_sdata = 0;         /* incoming data is ignored */
+
 	lck_mtx_lock(fs_klist_lock);
 	KNOTE_ATTACH(&fs_klist, kn);
 	lck_mtx_unlock(fs_klist_lock);
@@ -3910,7 +4063,7 @@ filt_fsevent(struct knote *kn, long hint)
 }
 
 static int
-filt_fstouch(struct knote *kn, struct kevent_internal_s *kev)
+filt_fstouch(struct knote *kn, struct kevent_qos_s *kev)
 {
 	int res;
 
@@ -3936,18 +4089,14 @@ filt_fstouch(struct knote *kn, struct kevent_internal_s *kev)
 }
 
 static int
-filt_fsprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev)
+filt_fsprocess(struct knote *kn, struct kevent_qos_s *kev)
 {
-#pragma unused(data)
-	int res;
+	int res = 0;
 
 	lck_mtx_lock(fs_klist_lock);
-	res = (kn->kn_fflags != 0);
-	if (res) {
-		*kev = kn->kn_kevent;
-		kn->kn_flags |= EV_CLEAR; /* automatic */
-		kn->kn_fflags = 0;
-		kn->kn_data = 0;
+	if (kn->kn_fflags) {
+		knote_fill_kevent(kn, kev, 0);
+		res = 1;
 	}
 	lck_mtx_unlock(fs_klist_lock);
 	return res;
@@ -4062,6 +4211,12 @@ SYSCTL_INT(_vfs_generic, OID_AUTO, sync_timeout, CTLFLAG_RW | CTLFLAG_LOCKED, &s
 SYSCTL_NODE(_vfs_generic, VFS_CONF, conf,
     CTLFLAG_RD | CTLFLAG_LOCKED,
     sysctl_vfs_generic_conf, "");
+#if DEVELOPMENT || DEBUG
+SYSCTL_INT(_vfs_generic, OID_AUTO, print_busy_vnodes,
+    CTLTYPE_INT | CTLFLAG_RW,
+    &print_busy_vnodes, 0,
+    "VFS log busy vnodes blocking unmount");
+#endif
 
 /* Indicate that the root file system unmounted cleanly */
 static int vfs_root_unmounted_cleanly = 0;
@@ -4518,7 +4673,7 @@ steal_this_vp:
 	 */
 	assert((vp->v_lflag & VL_LABELWAIT) != VL_LABELWAIT);
 	assert((vp->v_lflag & VL_LABEL) != VL_LABEL);
-	if (vp->v_lflag & VL_LABELED) {
+	if (vp->v_lflag & VL_LABELED || vp->v_label != NULL) {
 		vnode_lock_convert(vp);
 		mac_vnode_label_recycle(vp);
 	} else if (mac_vnode_label_init_needed(vp)) {
@@ -4987,6 +5142,13 @@ vnode_reclaim_internal(struct vnode * vp, int locked, int reuse, int flags)
 
 	vn_clearunionwait(vp, 1);
 
+	if (vnode_istty(vp) && (flags & REVOKEALL) && vp->v_usecount &&
+	    (vp->v_iocount > 1)) {
+		vnode_unlock(vp);
+		VNOP_IOCTL(vp, TIOCREVOKE, (caddr_t)NULL, 0, vfs_context_kernel());
+		vnode_lock(vp);
+	}
+
 	vnode_drain(vp);
 
 	isfifo = (vp->v_type == VFIFO);
@@ -5178,6 +5340,11 @@ vnode_create_internal(uint32_t flavor, uint32_t size, void *data, vnode_t *vpp,
 #ifdef JOE_DEBUG
 	record_vp(vp, 1);
 #endif
+
+#if CONFIG_FIRMLINKS
+	vp->v_fmlink = NULLVP;
+#endif
+	vp->v_flag &= ~VFMLINKTARGET;
 
 #if CONFIG_TRIGGERS
 	/*
@@ -5462,6 +5629,7 @@ vfs_iterate(int flags, int (*callout)(mount_t, void *), void *arg)
 	void * allocmem;
 	int indx_start, indx_stop, indx_incr;
 	int cb_dropref = (flags & VFS_ITERATE_CB_DROPREF);
+	int noskip_unmount = (flags & VFS_ITERATE_NOSKIP_UNMOUNT);
 
 	count = mount_getvfscnt();
 	count += 10;
@@ -5493,7 +5661,8 @@ vfs_iterate(int flags, int (*callout)(mount_t, void *), void *arg)
 			continue;
 		}
 		mount_lock(mp);
-		if (mp->mnt_lflag & (MNT_LDEAD | MNT_LUNMOUNT)) {
+		if ((mp->mnt_lflag & MNT_LDEAD) ||
+		    (!noskip_unmount && (mp->mnt_lflag & MNT_LUNMOUNT))) {
 			mount_unlock(mp);
 			mount_iterdrop(mp);
 			continue;
@@ -5721,7 +5890,8 @@ out:
 }
 
 errno_t
-vnode_lookup(const char *path, int flags, vnode_t *vpp, vfs_context_t ctx)
+vnode_lookupat(const char *path, int flags, vnode_t *vpp, vfs_context_t ctx,
+    vnode_t start_dvp)
 {
 	struct nameidata nd;
 	int error;
@@ -5749,13 +5919,27 @@ vnode_lookup(const char *path, int flags, vnode_t *vpp, vfs_context_t ctx)
 	NDINIT(&nd, LOOKUP, OP_LOOKUP, ndflags, UIO_SYSSPACE,
 	    CAST_USER_ADDR_T(path), ctx);
 
+	if (start_dvp && (path[0] != '/')) {
+		nd.ni_dvp = start_dvp;
+		nd.ni_cnd.cn_flags |= USEDVP;
+	}
+
 	if ((error = namei(&nd))) {
 		return error;
 	}
+
+	nd.ni_cnd.cn_flags &= ~USEDVP;
+
 	*vpp = nd.ni_vp;
 	nameidone(&nd);
 
 	return 0;
+}
+
+errno_t
+vnode_lookup(const char *path, int flags, vnode_t *vpp, vfs_context_t ctx)
+{
+	return vnode_lookupat(path, flags, vpp, ctx, NULLVP);
 }
 
 errno_t
@@ -7673,7 +7857,7 @@ vnode_authorize_checkimmutable(mount_t mp, struct vnode_attr *vap, int rights, i
 			/* check for no-EA filesystems */
 			if ((rights & KAUTH_VNODE_WRITE_EXTATTRIBUTES) &&
 			    (vfs_flags(mp) & MNT_NOUSERXATTR)) {
-				KAUTH_DEBUG("%p    DENIED - filesystem disallowed extended attributes", vp);
+				KAUTH_DEBUG("%p    DENIED - filesystem disallowed extended attributes", vap);
 				error = EACCES;  /* User attributes disabled */
 				goto out;
 			}
@@ -7694,7 +7878,7 @@ vnode_authorize_checkimmutable(mount_t mp, struct vnode_attr *vap, int rights, i
 			}
 		}
 		if ((error = vnode_immutable(vap, append, ignore)) != 0) {
-			KAUTH_DEBUG("%p    DENIED - file is immutable", vp);
+			KAUTH_DEBUG("%p    DENIED - file is immutable", vap);
 			goto out;
 		}
 	}
@@ -7954,14 +8138,14 @@ vnode_attr_authorize_internal(vauth_ctx vcp, mount_t mp,
 		    VATTR_IS_SUPPORTED(vcp->vap, va_mode) &&
 		    !(vcp->vap->va_mode & (S_IXUSR | S_IXGRP | S_IXOTH))) {
 			result = EPERM;
-			KAUTH_DEBUG("%p    DENIED - root execute requires at least one x bit in 0x%x", vp, va.va_mode);
+			KAUTH_DEBUG("%p    DENIED - root execute requires at least one x bit in 0x%x", vcp, vcp->vap->va_mode);
 			goto out;
 		}
 
 		/* Assume that there were DENYs so we don't wrongly cache KAUTH_VNODE_SEARCHBYANYONE */
 		*found_deny = TRUE;
 
-		KAUTH_DEBUG("%p    ALLOWED - caller is superuser", vp);
+		KAUTH_DEBUG("%p    ALLOWED - caller is superuser", vcp);
 	}
 out:
 	return result;
@@ -8454,6 +8638,7 @@ vnode_authattr_new_internal(vnode_t dvp, struct vnode_attr *vap, int noauth, uin
 
 
 	if (VATTR_IS_ACTIVE(vap, va_flags)) {
+		vap->va_flags &= ~SF_SYNTHETIC;
 		if (has_priv_suser) {
 			if ((vap->va_flags & (UF_SETTABLE | SF_SETTABLE)) != vap->va_flags) {
 				error = EPERM;
@@ -8814,6 +8999,8 @@ vnode_authattr(vnode_t vp, struct vnode_attr *vap, kauth_action_t *actionp, vfs_
 	 */
 	if (VATTR_IS_ACTIVE(vap, va_flags)) {
 		/* compute changing flags bits */
+		vap->va_flags &= ~SF_SYNTHETIC;
+		ova.va_flags &= ~SF_SYNTHETIC;
 		if (VATTR_IS_SUPPORTED(&ova, va_flags)) {
 			fdelta = vap->va_flags ^ ova.va_flags;
 		} else {
@@ -9040,12 +9227,12 @@ no_guuid_change:
 		}
 
 		/* chown always clears setuid/gid bits. An exception is made for
-		 * setattrlist executed by a root process to set <uid, gid, mode> on a file:
+		 * setattrlist which can set both at the same time: <uid, gid, mode> on a file:
 		 * setattrlist is allowed to set the new mode on the file and change (chown)
 		 * uid/gid.
 		 */
 		if (newmode & (S_ISUID | S_ISGID)) {
-			if (!VATTR_IS_ACTIVE(vap, va_mode) || !has_priv_suser) {
+			if (!VATTR_IS_ACTIVE(vap, va_mode)) {
 				KAUTH_DEBUG("CHOWN - masking setugid bits from mode %o to %o",
 				    newmode, newmode & ~(S_ISUID | S_ISGID));
 				newmode &= ~(S_ISUID | S_ISGID);
@@ -9195,6 +9382,59 @@ vn_clearunionwait(vnode_t vp, int locked)
 	}
 }
 
+int
+vnode_materialize_dataless_file(vnode_t vp, uint64_t op_type)
+{
+	int error;
+
+	/* Swap files are special; ignore them */
+	if (vnode_isswap(vp)) {
+		return 0;
+	}
+
+	error = resolve_nspace_item(vp,
+	    op_type | NAMESPACE_HANDLER_NSPACE_EVENT);
+
+	/*
+	 * The file resolver owns the logic about what error to return
+	 * to the caller.  We only need to handle a couple of special
+	 * cases here:
+	 */
+	if (error == EJUSTRETURN) {
+		/*
+		 * The requesting process is allowed to interact with
+		 * dataless objects.  Make a couple of sanity-checks
+		 * here to ensure the action makes sense.
+		 */
+		switch (op_type) {
+		case NAMESPACE_HANDLER_WRITE_OP:
+		case NAMESPACE_HANDLER_TRUNCATE_OP:
+		case NAMESPACE_HANDLER_RENAME_OP:
+			/*
+			 * This handles the case of the resolver itself
+			 * writing data to the file (or throwing it
+			 * away).
+			 */
+			error = 0;
+			break;
+		case NAMESPACE_HANDLER_READ_OP:
+			/*
+			 * This handles the case of the resolver needing
+			 * to look up inside of a dataless directory while
+			 * it's in the process of materializing it (for
+			 * example, creating files or directories).
+			 */
+			error = (vnode_vtype(vp) == VDIR) ? 0 : EBADF;
+			break;
+		default:
+			error = EBADF;
+			break;
+		}
+	}
+
+	return error;
+}
+
 /*
  * Removes orphaned apple double files during a rmdir
  * Works by:
@@ -9232,6 +9472,15 @@ rmdir_remove_orphaned_appleDouble(vnode_t vp, vfs_context_t ctx, int * restart_f
 	if (error != 0) {
 		return error;
 	}
+
+	/*
+	 * Prevent dataless fault materialization while we have
+	 * a suspended vnode.
+	 */
+	uthread_t ut = get_bsdthread_info(current_thread());
+	bool saved_nodatalessfaults =
+	    (ut->uu_flag & UT_NSPACE_NODATALESSFAULTS) ? true : false;
+	ut->uu_flag |= UT_NSPACE_NODATALESSFAULTS;
 
 	/*
 	 * set up UIO
@@ -9411,8 +9660,11 @@ outsc:
 	}
 	FREE(rbuf, M_TEMP);
 
-	vnode_resume(vp);
+	if (saved_nodatalessfaults == false) {
+		ut->uu_flag &= ~UT_NSPACE_NODATALESSFAULTS;
+	}
 
+	vnode_resume(vp);
 
 	return error;
 }
@@ -9883,9 +10135,16 @@ vnode_trigger_resolve(vnode_t vp, struct nameidata *ndp, vfs_context_t ctx)
 	lck_mtx_unlock(&rp->vr_lock);
 
 #if CONFIG_MACF
-	int rv = mac_vnode_check_trigger_resolve(ctx, vp, &ndp->ni_cnd);
-	if (rv != 0) {
-		return rv;
+	if ((rp->vr_flags & VNT_KERN_RESOLVE) == 0) {
+		/*
+		 * VNT_KERN_RESOLVE indicates this trigger has no parameters
+		 * at the discression of the accessing process other than
+		 * the act of access. All other triggers must be checked
+		 */
+		int rv = mac_vnode_check_trigger_resolve(ctx, vp, &ndp->ni_cnd);
+		if (rv != 0) {
+			return rv;
+		}
 	}
 #endif
 

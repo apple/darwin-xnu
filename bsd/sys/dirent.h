@@ -141,4 +141,17 @@ struct direntry __DARWIN_STRUCT_DIRENTRY;
 #define DTTOIF(dirtype) ((dirtype) << 12)
 #endif
 
+#if PRIVATE
+/*
+ * If a buffer at least this size is passed to __getdirentries64,
+ * the the last 4 bytes will be the flags below.
+ */
+#define GETDIRENTRIES64_EXTENDED_BUFSIZE  1024
+
+__options_decl(getdirentries64_flags_t, unsigned, {
+	/* the __getdirentries64 returned all entries */
+	GETDIRENTRIES64_EOF = 1U << 0,
+});
+#endif
+
 #endif /* _SYS_DIRENT_H  */

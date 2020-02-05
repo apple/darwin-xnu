@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -94,7 +94,7 @@ extern  int nfs_mountroot(void);
 extern  struct vfsops afs_vfsops;
 extern  struct vfsops null_vfsops;
 extern  struct vfsops devfs_vfsops;
-extern  struct vfsops routefs_vfsops;
+extern  const struct vfsops routefs_vfsops;
 extern  struct vfsops nullfs_vfsops;
 
 #if MOCKFS
@@ -123,36 +123,149 @@ enum fs_type_num {
 static struct vfstable vfstbllist[] = {
 	/* Sun-compatible Network Filesystem */
 #if NFSCLIENT
-	{ &nfs_vfsops, "nfs", FT_NFS, 0, 0, NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFC_VFSPREFLIGHT | VFC_VFS64BITREADY | VFC_VFSREADDIR_EXTENDED, NULL, 0, NULL},
-#endif
+	{
+		.vfc_vfsops = &nfs_vfsops,
+		.vfc_name = "nfs",
+		.vfc_typenum = FT_NFS,
+		.vfc_refcount = 0,
+		.vfc_flags = 0,
+		.vfc_mountroot = NULL,
+		.vfc_next = NULL,
+		.vfc_reserved1 = 0,
+		.vfc_reserved2 = 0,
+		.vfc_vfsflags = VFC_VFSGENERICARGS | VFC_VFSPREFLIGHT | VFC_VFS64BITREADY | VFC_VFSREADDIR_EXTENDED,
+		.vfc_descptr = NULL,
+		.vfc_descsize = 0,
+		.vfc_sysctl = NULL
+	},
+#endif /* NFSCLIENT */
 
 	/* Device Filesystem */
 #if DEVFS
 #if CONFIG_MACF
-	{ &devfs_vfsops, "devfs", FT_DEVFS, 0, MNT_MULTILABEL, NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFC_VFS64BITREADY, NULL, 0, NULL},
-#else
-	{ &devfs_vfsops, "devfs", FT_DEVFS, 0, 0, NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFC_VFS64BITREADY, NULL, 0, NULL},
-#endif /* MAC */
-#endif
+	{
+		.vfc_vfsops = &devfs_vfsops,
+		.vfc_name = "devfs",
+		.vfc_typenum = FT_DEVFS,
+		.vfc_refcount = 0,
+		.vfc_flags = MNT_MULTILABEL,
+		.vfc_mountroot = NULL,
+		.vfc_next = NULL,
+		.vfc_reserved1 = 0,
+		.vfc_reserved2 = 0,
+		.vfc_vfsflags = VFC_VFSGENERICARGS | VFC_VFS64BITREADY,
+		.vfc_descptr = NULL,
+		.vfc_descsize = 0,
+		.vfc_sysctl = NULL
+	},
+#else /* !CONFIG_MAC */
+	{
+		.vfc_vfsops = &devfs_vfsops,
+		.vfc_name = "devfs",
+		.vfc_typenum = FT_DEVFS,
+		.vfc_refcount = 0,
+		.vfc_flags = 0,
+		.vfc_mountroot = NULL,
+		.vfc_next = NULL,
+		.vfc_reserved1 = 0,
+		.vfc_reserved2 = 0,
+		.vfc_vfsflags = VFC_VFSGENERICARGS | VFC_VFS64BITREADY,
+		.vfc_descptr = NULL,
+		.vfc_descsize = 0,
+		.vfc_sysctl = NULL
+	},
+#endif /* CONFIG_MAC */
+#endif /* DEVFS */
 
 #ifndef __LP64__
 #endif /* __LP64__ */
 
 #if NULLFS
-	{ &nullfs_vfsops, "nullfs", FT_NULLFS, 0, (MNT_DONTBROWSE | MNT_RDONLY), NULL, NULL, 0, 0, VFC_VFS64BITREADY, NULL, 0, NULL},
+	{
+		.vfc_vfsops = &nullfs_vfsops,
+		.vfc_name = "nullfs",
+		.vfc_typenum = FT_NULLFS,
+		.vfc_refcount = 0,
+		.vfc_flags = MNT_DONTBROWSE | MNT_RDONLY,
+		.vfc_mountroot = NULL,
+		.vfc_next = NULL,
+		.vfc_reserved1 = 0,
+		.vfc_reserved2 = 0,
+		.vfc_vfsflags = VFC_VFS64BITREADY,
+		.vfc_descptr = NULL,
+		.vfc_descsize = 0,
+		.vfc_sysctl = NULL
+	},
 #endif /* NULLFS */
 
 #if MOCKFS
 	/* If we are configured for it, mockfs should always be the last standard entry (and thus the last FS we attempt mountroot with) */
-	{ &mockfs_vfsops, "mockfs", FT_MOCKFS, 0, MNT_LOCAL, mockfs_mountroot, NULL, 0, 0, VFC_VFSGENERICARGS, NULL, 0, NULL},
+	{
+		.vfc_vfsops = &mockfs_vfsops,
+		.vfc_name = "mockfs",
+		.vfc_typenum = FT_MOCKFS,
+		.vfc_refcount = 0,
+		.vfc_flags = MNT_LOCAL,
+		.vfc_mountroot = mockfs_mountroot,
+		.vfc_next = NULL,
+		.vfc_reserved1 = 0,
+		.vfc_reserved2 = 0,
+		.vfc_vfsflags = VFC_VFSGENERICARGS,
+		.vfc_descptr = NULL,
+		.vfc_descsize = 0,
+		.vfc_sysctl = NULL
+	},
 #endif /* MOCKFS */
 
 #if ROUTEFS
 	/* If we are configured for it, mockfs should always be the last standard entry (and thus the last FS we attempt mountroot with) */
-	{ &routefs_vfsops, "routefs", FT_ROUTEFS, 0, MNT_LOCAL, NULL, NULL, 0, 0, VFC_VFSGENERICARGS | VFC_VFS64BITREADY, NULL, 0, NULL},
+	{
+		.vfc_vfsops = &routefs_vfsops,
+		.vfc_name = "routefs",
+		.vfc_typenum = FT_ROUTEFS,
+		.vfc_refcount = 0,
+		.vfc_flags = MNT_LOCAL,
+		.vfc_mountroot = NULL,
+		.vfc_next = NULL,
+		.vfc_reserved1 = 0,
+		.vfc_reserved2 = 0,
+		.vfc_vfsflags = VFC_VFSGENERICARGS | VFC_VFS64BITREADY,
+		.vfc_descptr = NULL,
+		.vfc_descsize = 0,
+		.vfc_sysctl = NULL
+	},
 #endif /* ROUTEFS */
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0, NULL},
-	{NULL, "<unassigned>", 0, 0, 0, NULL, NULL, 0, 0, 0, NULL, 0, NULL},
+
+	{
+		.vfc_vfsops = NULL,
+		.vfc_name = "<unassigned>",
+		.vfc_typenum = 0,
+		.vfc_refcount = 0,
+		.vfc_flags = 0,
+		.vfc_mountroot = NULL,
+		.vfc_next = NULL,
+		.vfc_reserved1 = 0,
+		.vfc_reserved2 = 0,
+		.vfc_vfsflags = 0,
+		.vfc_descptr = NULL,
+		.vfc_descsize = 0,
+		.vfc_sysctl = NULL
+	},
+	{
+		.vfc_vfsops = NULL,
+		.vfc_name = "<unassigned>",
+		.vfc_typenum = 0,
+		.vfc_refcount = 0,
+		.vfc_flags = 0,
+		.vfc_mountroot = NULL,
+		.vfc_next = NULL,
+		.vfc_reserved1 = 0,
+		.vfc_reserved2 = 0,
+		.vfc_vfsflags = 0,
+		.vfc_descptr = NULL,
+		.vfc_descsize = 0,
+		.vfc_sysctl = NULL
+	},
 };
 
 /*
@@ -172,32 +285,34 @@ struct vfstable *vfsconf = vfstbllist;
  *
  */
 extern struct vnodeopv_desc mfs_vnodeop_opv_desc;
-extern struct vnodeopv_desc dead_vnodeop_opv_desc;
+extern const struct vnodeopv_desc dead_vnodeop_opv_desc;
 #if FIFO && SOCKETS
-extern struct vnodeopv_desc fifo_vnodeop_opv_desc;
+extern const struct vnodeopv_desc fifo_vnodeop_opv_desc;
 #endif /* SOCKETS */
-extern struct vnodeopv_desc spec_vnodeop_opv_desc;
-extern struct vnodeopv_desc nfsv2_vnodeop_opv_desc;
-extern struct vnodeopv_desc spec_nfsv2nodeop_opv_desc;
-extern struct vnodeopv_desc fifo_nfsv2nodeop_opv_desc;
-extern struct vnodeopv_desc nfsv4_vnodeop_opv_desc;
-extern struct vnodeopv_desc spec_nfsv4nodeop_opv_desc;
-extern struct vnodeopv_desc fifo_nfsv4nodeop_opv_desc;
+extern const struct vnodeopv_desc spec_vnodeop_opv_desc;
+extern const struct vnodeopv_desc nfsv2_vnodeop_opv_desc;
+extern const struct vnodeopv_desc spec_nfsv2nodeop_opv_desc;
+extern const struct vnodeopv_desc fifo_nfsv2nodeop_opv_desc;
+#if CONFIG_NFS4
+extern const struct vnodeopv_desc nfsv4_vnodeop_opv_desc;
+extern const struct vnodeopv_desc spec_nfsv4nodeop_opv_desc;
+extern const struct vnodeopv_desc fifo_nfsv4nodeop_opv_desc;
+#endif
 extern struct vnodeopv_desc null_vnodeop_opv_desc;
 extern struct vnodeopv_desc devfs_vnodeop_opv_desc;
 extern struct vnodeopv_desc devfs_spec_vnodeop_opv_desc;
 #if FDESC
 extern struct vnodeopv_desc devfs_devfd_vnodeop_opv_desc;
-extern struct vnodeopv_desc devfs_fdesc_vnodeop_opv_desc;
+extern const struct vnodeopv_desc devfs_fdesc_vnodeop_opv_desc;
 #endif /* FDESC */
 
 #if MOCKFS
-extern struct vnodeopv_desc mockfs_vnodeop_opv_desc;
+extern const struct vnodeopv_desc mockfs_vnodeop_opv_desc;
 #endif /* MOCKFS */
 
-extern struct vnodeopv_desc nullfs_vnodeop_opv_desc;
+extern const struct vnodeopv_desc nullfs_vnodeop_opv_desc;
 
-struct vnodeopv_desc *vfs_opv_descs[] = {
+const struct vnodeopv_desc *vfs_opv_descs[] = {
 	&dead_vnodeop_opv_desc,
 #if FIFO && SOCKETS
 	&fifo_vnodeop_opv_desc,
@@ -209,13 +324,17 @@ struct vnodeopv_desc *vfs_opv_descs[] = {
 #if NFSCLIENT
 	&nfsv2_vnodeop_opv_desc,
 	&spec_nfsv2nodeop_opv_desc,
+#if CONFIG_NFS4
 	&nfsv4_vnodeop_opv_desc,
 	&spec_nfsv4nodeop_opv_desc,
+#endif
 #if FIFO
 	&fifo_nfsv2nodeop_opv_desc,
+#if CONFIG_NFS4
 	&fifo_nfsv4nodeop_opv_desc,
-#endif
-#endif
+#endif /* CONFIG_NFS4 */
+#endif /* FIFO */
+#endif /* NFSCLIENT */
 #if DEVFS
 	&devfs_vnodeop_opv_desc,
 	&devfs_spec_vnodeop_opv_desc,

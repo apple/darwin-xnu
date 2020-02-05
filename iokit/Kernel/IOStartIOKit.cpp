@@ -70,8 +70,12 @@ IOKitInitializeTime( void )
 
 	t.tv_sec = 30;
 	t.tv_nsec = 0;
+
+// RTC is not present on this target
+#ifndef BCM2837
 	IOService::waitForService(
 		IOService::resourceMatching("IORTC"), &t );
+#endif
 #if defined(__i386__) || defined(__x86_64__)
 	IOService::waitForService(
 		IOService::resourceMatching("IONVRAM"), &t );
@@ -116,7 +120,7 @@ iokit_post_constructor_init(void)
 /*****
  * Pointer into bootstrap KLD segment for functions never used past startup.
  */
-void (*record_startup_extensions_function)(void) = 0;
+void (*record_startup_extensions_function)(void) = NULL;
 
 void
 StartIOKit( void * p1, void * p2, void * p3, void * p4 )
@@ -143,6 +147,12 @@ StartIOKit( void * p1, void * p2, void * p3, void * p4 )
 	if (PE_parse_boot_argn( "pmtimeout", &debugFlags, sizeof(debugFlags))) {
 		gCanSleepTimeout = debugFlags;
 	}
+
+	if (PE_parse_boot_argn( "dk", &debugFlags, sizeof(debugFlags))) {
+		gIODKDebug = debugFlags;
+	}
+
+
 	//
 	// Have to start IOKit environment before we attempt to start
 	// the C++ runtime environment.  At some stage we have to clean up
@@ -152,6 +162,7 @@ StartIOKit( void * p1, void * p2, void * p3, void * p4 )
 	//
 	IOLibInit();
 	OSlibkernInit();
+	IOMachPortInitialize();
 	devsw_init();
 
 	gIOProgressBackbufferKey  = OSSymbol::withCStringNoCopy(kIOProgressBackbufferKey);
@@ -162,7 +173,7 @@ StartIOKit( void * p1, void * p2, void * p3, void * p4 )
 	rootNub = new IOPlatformExpertDevice;
 
 	if (rootNub && rootNub->initWithArgs( p1, p2, p3, p4)) {
-		rootNub->attach( 0 );
+		rootNub->attach( NULL );
 
 		/* If the bootstrap segment set up a function to record startup
 		 * extensions, call it now.

@@ -31,6 +31,7 @@
 #ifndef __BITS_H__
 #define __BITS_H__
 
+#include <kern/assert.h>
 #include <kern/kalloc.h>
 #include <stdbool.h>
 #include <stdint.h>

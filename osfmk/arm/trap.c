@@ -102,7 +102,7 @@ perfCallback tempDTraceTrapHook = NULL; /* Pointer to DTrace fbt trap hook routi
 void            sleh_undef(struct arm_saved_state *, struct arm_vfpsaved_state *);
 void            sleh_abort(struct arm_saved_state *, int);
 static kern_return_t sleh_alignment(struct arm_saved_state *);
-static void     panic_with_thread_kernel_state(const char *msg, arm_saved_state_t *regs);
+static void panic_with_thread_kernel_state(const char *msg, arm_saved_state_t *regs);
 
 int             sleh_alignment_count = 0;
 int             trap_on_alignment_fault = 0;
@@ -243,7 +243,7 @@ sleh_undef(struct arm_saved_state * regs, struct arm_vfpsaved_state * vfp_ss __u
 			 * can see the original state of this thread).
 			 */
 			vm_offset_t kstackptr = current_thread()->machine.kstackptr;
-			*((arm_saved_state_t *) kstackptr) = *regs;
+			copy_signed_thread_state((arm_saved_state_t *)kstackptr, regs);
 
 			DebuggerCall(exception, regs);
 			(void) ml_set_interrupts_enabled(intr);
@@ -274,7 +274,7 @@ sleh_abort(struct arm_saved_state * regs, int type)
 	int             status;
 	int             debug_status = 0;
 	int             spsr;
-	int             exc;
+	int             exc = EXC_BAD_ACCESS;
 	mach_exception_data_type_t codes[2];
 	vm_map_t        map;
 	vm_map_address_t vaddr;
@@ -309,7 +309,7 @@ sleh_abort(struct arm_saved_state * regs, int type)
 
 	if (ml_at_interrupt_context()) {
 #if CONFIG_DTRACE
-		if (!(thread->options & TH_OPT_DTRACE))
+		if (!(thread->t_dtrace_inprobe))
 #endif /* CONFIG_DTRACE */
 		{
 			panic_with_thread_kernel_state("sleh_abort at interrupt context", regs);
@@ -404,7 +404,7 @@ sleh_abort(struct arm_saved_state * regs, int type)
 			(void) ml_set_interrupts_enabled(intr);
 		} else if (TEST_FSR_VMFAULT(status)) {
 #if CONFIG_DTRACE
-			if (thread->options & TH_OPT_DTRACE) {  /* Executing under dtrace_probe? */
+			if (thread->t_dtrace_inprobe) {  /* Executing under dtrace_probe? */
 				if (dtrace_tally_fault(fault_addr)) { /* Should a fault under dtrace be ignored? */
 					/* Point to next instruction */
 					regs->pc += ((regs->cpsr & PSR_TF) && !IS_THUMB32(*((uint16_t*) (regs->pc)))) ? 2 : 4;
@@ -428,7 +428,7 @@ sleh_abort(struct arm_saved_state * regs, int type)
 
 			if (!TEST_FSR_TRANSLATION_FAULT(status)) {
 				/* check to see if it is just a pmap ref/modify fault */
-				result = arm_fast_fault(map->pmap, trunc_page(fault_addr), fault_type, FALSE);
+				result = arm_fast_fault(map->pmap, trunc_page(fault_addr), fault_type, (status == FSR_PACCESS), FALSE);
 				if (result == KERN_SUCCESS) {
 					goto exit;
 				}
@@ -470,22 +470,18 @@ sleh_abort(struct arm_saved_state * regs, int type)
 		}
 		intr = ml_set_interrupts_enabled(FALSE);
 
-		panic_plain("kernel abort type %d: fault_type=0x%x, fault_addr=0x%x\n"
+		panic_plain("kernel abort type %d at pc 0x%08x, lr 0x%08x: fault_type=0x%x, fault_addr=0x%x\n"
 		    "r0:   0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
 		    "r4:   0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
 		    "r8:   0x%08x  r9: 0x%08x r10: 0x%08x r11: 0x%08x\n"
 		    "r12:  0x%08x  sp: 0x%08x  lr: 0x%08x  pc: 0x%08x\n"
 		    "cpsr: 0x%08x fsr: 0x%08x far: 0x%08x\n",
-		    type, fault_type, fault_addr,
+		    type, regs->pc, regs->lr, fault_type, fault_addr,
 		    regs->r[0], regs->r[1], regs->r[2], regs->r[3],
 		    regs->r[4], regs->r[5], regs->r[6], regs->r[7],
 		    regs->r[8], regs->r[9], regs->r[10], regs->r[11],
 		    regs->r[12], regs->sp, regs->lr, regs->pc,
 		    regs->cpsr, regs->fsr, regs->far);
-
-		(void) ml_set_interrupts_enabled(intr);
-
-		goto exit;
 	}
 	/* Fault in user mode */
 
@@ -493,7 +489,7 @@ sleh_abort(struct arm_saved_state * regs, int type)
 		map = thread->map;
 
 #if CONFIG_DTRACE
-		if (thread->options & TH_OPT_DTRACE) {  /* Executing under dtrace_probe? */
+		if (thread->t_dtrace_inprobe) {  /* Executing under dtrace_probe? */
 			if (dtrace_tally_fault(fault_addr)) { /* Should a user mode fault under dtrace be ignored? */
 				if (recover) {
 					regs->pc = recover;
@@ -519,7 +515,7 @@ sleh_abort(struct arm_saved_state * regs, int type)
 
 		if (!TEST_FSR_TRANSLATION_FAULT(status)) {
 			/* check to see if it is just a pmap ref/modify fault */
-			result = arm_fast_fault(map->pmap, trunc_page(fault_addr), fault_type, TRUE);
+			result = arm_fast_fault(map->pmap, trunc_page(fault_addr), fault_type, (status == FSR_PACCESS), TRUE);
 			if (result == KERN_SUCCESS) {
 				goto exception_return;
 			}
@@ -534,22 +530,27 @@ sleh_abort(struct arm_saved_state * regs, int type)
 		if (result == KERN_SUCCESS || result == KERN_ABORTED) {
 			goto exception_return;
 		}
-		exc = EXC_BAD_ACCESS;
+
+		/*
+		 * KERN_FAILURE here means preemption was disabled when we called vm_fault.
+		 * That should never happen for a page fault from user space.
+		 */
+		if (__improbable(result == KERN_FAILURE)) {
+			panic("vm_fault() KERN_FAILURE from user fault on thread %p", thread);
+		}
+
 		codes[0] = result;
 	} else if ((status & FSR_ALIGN_MASK) == FSR_ALIGN) {
 		if (sleh_alignment(regs) == KERN_SUCCESS) {
 			goto exception_return;
 		}
-		exc = EXC_BAD_ACCESS;
 		codes[0] = EXC_ARM_DA_ALIGN;
 	} else if (status == FSR_DEBUG) {
 		exc = EXC_BREAKPOINT;
 		codes[0] = EXC_ARM_DA_DEBUG;
 	} else if ((status == FSR_SDOM) || (status == FSR_PDOM)) {
-		exc = EXC_BAD_ACCESS;
-		codes[0] = KERN_INVALID_ADDRESS;
+		panic_with_thread_kernel_state("Unexpected domain fault", regs);
 	} else {
-		exc = EXC_BAD_ACCESS;
 		codes[0] = KERN_FAILURE;
 	}
 
@@ -857,16 +858,17 @@ interrupt_stats(void)
 	SCHED_STATS_INTERRUPT(current_processor());
 }
 
+__dead2
 static void
 panic_with_thread_kernel_state(const char *msg, struct arm_saved_state *regs)
 {
-	panic_plain("%s (saved state:%p)\n"
+	panic_plain("%s at pc 0x%08x, lr 0x%08x (saved state:%p)\n"
 	    "r0:   0x%08x  r1: 0x%08x  r2: 0x%08x  r3: 0x%08x\n"
 	    "r4:   0x%08x  r5: 0x%08x  r6: 0x%08x  r7: 0x%08x\n"
 	    "r8:   0x%08x  r9: 0x%08x r10: 0x%08x r11: 0x%08x\n"
 	    "r12:  0x%08x  sp: 0x%08x  lr: 0x%08x  pc: 0x%08x\n"
 	    "cpsr: 0x%08x fsr: 0x%08x far: 0x%08x\n",
-	    msg, regs,
+	    msg, regs->pc, regs->lr, regs,
 	    regs->r[0], regs->r[1], regs->r[2], regs->r[3],
 	    regs->r[4], regs->r[5], regs->r[6], regs->r[7],
 	    regs->r[8], regs->r[9], regs->r[10], regs->r[11],

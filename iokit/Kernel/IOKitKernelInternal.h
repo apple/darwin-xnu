@@ -167,6 +167,7 @@ struct IOMemoryDescriptorReserved {
 	uint64_t                      kernReserved[4];
 	vm_tag_t                      kernelTag;
 	vm_tag_t                      userTag;
+	task_t                        creator;
 };
 
 struct iopa_t {
@@ -206,6 +207,7 @@ extern bool gCPUsRunning;
 extern OSSet * gIORemoveOnReadProperties;
 
 extern "C" void IOKitInitializeTime( void );
+extern void IOMachPortInitialize(void);
 
 extern "C" OSString * IOCopyLogNameForPID(int pid);
 

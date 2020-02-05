@@ -26,6 +26,7 @@
 
 #endif /* KERNEL */
 
+#include <machine/atomic.h>
 #include <string.h>
 #include <stdint.h>
 #ifndef os_assumes
@@ -54,8 +55,8 @@ OSAtomicCompareAndSwapInt(int oldi, int newi, int volatile *dst)
 	return original == oldi;
 }
 #else
-#define OSAtomicCompareAndSwapLong(_Old, _New, _Ptr) __sync_bool_compare_and_swap(_Ptr, _Old, _New)
-#define OSAtomicCompareAndSwapInt(_Old, _New, _Ptr) __sync_bool_compare_and_swap(_Ptr, _Old, _New)
+#define OSAtomicCompareAndSwapLong(_Old, _New, _Ptr) os_atomic_cmpxchg(_Ptr, _Old, _New, relaxed)
+#define OSAtomicCompareAndSwapInt(_Old, _New, _Ptr) os_atomic_cmpxchg(_Ptr, _Old, _New, relaxed)
 #endif
 
 

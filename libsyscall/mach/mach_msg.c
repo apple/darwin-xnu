@@ -363,9 +363,76 @@ mach_msg_destroy(mach_msg_header_t *msg)
 				daddr = (mach_msg_descriptor_t *)(dsc + 1);
 				break;
 			}
+
+			case MACH_MSG_GUARDED_PORT_DESCRIPTOR: {
+				mach_msg_guarded_port_descriptor_t *dsc;
+				mach_msg_guard_flags_t flags;
+				/*
+				 * Destroy port right carried in the message
+				 */
+				dsc = &daddr->guarded_port;
+				flags = dsc->flags;
+				if ((flags & MACH_MSG_GUARD_FLAGS_UNGUARDED_ON_SEND) == 0) {
+					/* Need to unguard before destroying the port */
+					mach_port_unguard(mach_task_self_, dsc->name, (uint64_t)dsc->context);
+				}
+				mach_msg_destroy_port(dsc->name, dsc->disposition);
+				daddr = (mach_msg_descriptor_t *)(dsc + 1);
+				break;
+			}
 			}
 		}
 	}
+}
+
+static inline boolean_t
+mach_msg_server_is_recoverable_send_error(kern_return_t kr)
+{
+	switch (kr) {
+	case MACH_SEND_INVALID_DEST:
+	case MACH_SEND_TIMED_OUT:
+	case MACH_SEND_INTERRUPTED:
+		return TRUE;
+	default:
+		/*
+		 * Other errors mean that the message may have been partially destroyed
+		 * by the kernel, and these can't be recovered and may leak resources.
+		 */
+		return FALSE;
+	}
+}
+
+static kern_return_t
+mach_msg_server_mig_return_code(mig_reply_error_t *reply)
+{
+	/*
+	 * If the message is complex, it is assumed that the reply was successful,
+	 * as the RetCode is where the count of out of line descriptors is.
+	 *
+	 * If not, we read RetCode.
+	 */
+	if (reply->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) {
+		return KERN_SUCCESS;
+	}
+	return reply->RetCode;
+}
+
+static void
+mach_msg_server_consume_unsent_message(mach_msg_header_t *hdr)
+{
+	/* mach_msg_destroy doesn't handle the local port */
+	mach_port_t port = hdr->msgh_local_port;
+	if (MACH_PORT_VALID(port)) {
+		switch (MACH_MSGH_BITS_LOCAL(hdr->msgh_bits)) {
+		case MACH_MSG_TYPE_MOVE_SEND:
+		case MACH_MSG_TYPE_MOVE_SEND_ONCE:
+			/* destroy the send/send-once right */
+			(void) mach_port_deallocate(mach_task_self_, port);
+			hdr->msgh_local_port = MACH_PORT_NULL;
+			break;
+		}
+	}
+	mach_msg_destroy(hdr);
 }
 
 /*
@@ -453,15 +520,19 @@ mach_msg_server_once(
 
 		(void) (*demux)(&bufRequest->Head, &bufReply->Head);
 
-		if (!(bufReply->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX)) {
-			if (bufReply->RetCode == MIG_NO_REPLY) {
-				bufReply->Head.msgh_remote_port = MACH_PORT_NULL;
-			} else if ((bufReply->RetCode != KERN_SUCCESS) &&
-			    (bufRequest->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX)) {
-				/* destroy the request - but not the reply port */
-				bufRequest->Head.msgh_remote_port = MACH_PORT_NULL;
-				mach_msg_destroy(&bufRequest->Head);
-			}
+		switch (mach_msg_server_mig_return_code(bufReply)) {
+		case KERN_SUCCESS:
+			break;
+		case MIG_NO_REPLY:
+			bufReply->Head.msgh_remote_port = MACH_PORT_NULL;
+			break;
+		default:
+			/*
+			 * destroy the request - but not the reply port
+			 * (MIG moved it into the bufReply).
+			 */
+			bufRequest->Head.msgh_remote_port = MACH_PORT_NULL;
+			mach_msg_destroy(&bufRequest->Head);
 		}
 
 		/*
@@ -482,18 +553,13 @@ mach_msg_server_once(
 			    bufReply->Head.msgh_size, 0, MACH_PORT_NULL,
 			    MACH_MSG_TIMEOUT_NONE, MACH_PORT_NULL);
 
-			if ((mr != MACH_SEND_INVALID_DEST) &&
-			    (mr != MACH_SEND_TIMED_OUT)) {
-				goto done_once;
+			if (mach_msg_server_is_recoverable_send_error(mr)) {
+				mach_msg_server_consume_unsent_message(&bufReply->Head);
+				mr = MACH_MSG_SUCCESS;
 			}
-			mr = MACH_MSG_SUCCESS;
-		}
-		if (bufReply->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) {
-			mach_msg_destroy(&bufReply->Head);
 		}
 	}
 
-done_once:
 	voucher_mach_msg_revert(old_state);
 
 	(void)vm_deallocate(self,
@@ -530,7 +596,7 @@ mach_msg_server(
 	voucher_mach_msg_state_t old_state = VOUCHER_MACH_MSG_STATE_UNCHANGED;
 	boolean_t buffers_swapped = FALSE;
 
-	options &= ~(MACH_SEND_MSG | MACH_RCV_MSG | MACH_RCV_VOUCHER | MACH_RCV_OVERWRITE);
+	options &= ~(MACH_SEND_MSG | MACH_RCV_MSG | MACH_RCV_VOUCHER);
 
 	reply_alloc = (mach_msg_size_t)round_page((options & MACH_SEND_TRAILER) ?
 	    (max_size + MAX_TRAILER_SIZE) : max_size);
@@ -578,15 +644,19 @@ mach_msg_server(
 
 			(void) (*demux)(&bufRequest->Head, &bufReply->Head);
 
-			if (!(bufReply->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX)) {
-				if (bufReply->RetCode == MIG_NO_REPLY) {
-					bufReply->Head.msgh_remote_port = MACH_PORT_NULL;
-				} else if ((bufReply->RetCode != KERN_SUCCESS) &&
-				    (bufRequest->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX)) {
-					/* destroy the request - but not the reply port */
-					bufRequest->Head.msgh_remote_port = MACH_PORT_NULL;
-					mach_msg_destroy(&bufRequest->Head);
-				}
+			switch (mach_msg_server_mig_return_code(bufReply)) {
+			case KERN_SUCCESS:
+				break;
+			case MIG_NO_REPLY:
+				bufReply->Head.msgh_remote_port = MACH_PORT_NULL;
+				break;
+			default:
+				/*
+				 * destroy the request - but not the reply port
+				 * (MIG moved it into the bufReply).
+				 */
+				bufRequest->Head.msgh_remote_port = MACH_PORT_NULL;
+				mach_msg_destroy(&bufRequest->Head);
 			}
 
 			/*
@@ -628,30 +698,23 @@ mach_msg_server(
 						&bufRequest->Head, 0);
 				}
 
-				if ((mr != MACH_SEND_INVALID_DEST) &&
-				    (mr != MACH_SEND_TIMED_OUT) &&
-				    (mr != MACH_RCV_TIMED_OUT)) {
+				/*
+				 * Need to destroy the reply msg in case if there was a send timeout or
+				 * invalid destination. The reply msg would be swapped with request msg
+				 * if buffers_swapped is true, thus destroy request msg instead of
+				 * reply msg in such cases.
+				 */
+				if (mach_msg_server_is_recoverable_send_error(mr)) {
+					if (buffers_swapped) {
+						mach_msg_server_consume_unsent_message(&bufRequest->Head);
+					} else {
+						mach_msg_server_consume_unsent_message(&bufReply->Head);
+					}
+				} else if (mr != MACH_RCV_TIMED_OUT) {
 					voucher_mach_msg_revert(old_state);
 					old_state = VOUCHER_MACH_MSG_STATE_UNCHANGED;
 
 					continue;
-				}
-			}
-			/*
-			 * Need to destroy the reply msg in case if there was a send timeout or
-			 * invalid destination. The reply msg would be swapped with request msg
-			 * if buffers_swapped is true, thus destroy request msg instead of
-			 * reply msg in such cases.
-			 */
-			if (mr != MACH_RCV_TIMED_OUT) {
-				if (buffers_swapped) {
-					if (bufRequest->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) {
-						mach_msg_destroy(&bufRequest->Head);
-					}
-				} else {
-					if (bufReply->Head.msgh_bits & MACH_MSGH_BITS_COMPLEX) {
-						mach_msg_destroy(&bufReply->Head);
-					}
 				}
 			}
 			voucher_mach_msg_revert(old_state);

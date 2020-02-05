@@ -11,7 +11,9 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#define TMP_FILE_PATH "/tmp/test_pwrite"
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
+#define TMP_FILE_PATH "/tmp/test_pwrite_28581610"
 
 static sigjmp_buf xfsz_jmpbuf;
 

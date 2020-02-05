@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -303,10 +303,10 @@ extern uint32_t npvhashmask;
 extern pv_hashed_entry_t        *pv_hash_table;  /* hash lists */
 extern pv_hashed_entry_t        pv_hashed_free_list;
 extern pv_hashed_entry_t        pv_hashed_kern_free_list;
-decl_simple_lock_data(extern, pv_hashed_free_list_lock)
-decl_simple_lock_data(extern, pv_hashed_kern_free_list_lock)
-decl_simple_lock_data(extern, pv_hash_table_lock)
-decl_simple_lock_data(extern, phys_backup_lock)
+decl_simple_lock_data(extern, pv_hashed_free_list_lock);
+decl_simple_lock_data(extern, pv_hashed_kern_free_list_lock);
+decl_simple_lock_data(extern, pv_hash_table_lock);
+decl_simple_lock_data(extern, phys_backup_lock);
 
 extern zone_t           pv_hashed_list_zone;    /* zone of pv_hashed_entry
                                                  * structures */
@@ -342,7 +342,7 @@ PV_HASHED_ALLOC(pv_hashed_entry_t *pvh_ep)
 	simple_unlock(&pv_hashed_free_list_lock);
 
 	if (pv_hashed_free_count <= pv_hashed_low_water_mark) {
-		if (!mappingrecurse && hw_compare_and_store(0, 1, &mappingrecurse)) {
+		if (!mappingrecurse && os_atomic_cmpxchg(&mappingrecurse, 0, 1, acq_rel)) {
 			thread_wakeup(&mapping_replenish_event);
 		}
 	}
@@ -375,7 +375,7 @@ PV_HASHED_KERN_ALLOC(pv_hashed_entry_t *pvh_e)
 	simple_unlock(&pv_hashed_kern_free_list_lock);
 
 	if (pv_hashed_kern_free_count < pv_hashed_kern_low_water_mark) {
-		if (!mappingrecurse && hw_compare_and_store(0, 1, &mappingrecurse)) {
+		if (!mappingrecurse && os_atomic_cmpxchg(&mappingrecurse, 0, 1, acq_rel)) {
 			thread_wakeup(&mapping_replenish_event);
 		}
 	}
@@ -507,9 +507,14 @@ extern uint64_t pde_mapped_size;
 extern char             *pmap_phys_attributes;
 extern ppnum_t          last_managed_page;
 
-extern ppnum_t  lowest_lo;
-extern ppnum_t  lowest_hi;
-extern ppnum_t  highest_hi;
+/*
+ * Used to record high memory allocated to kernel before
+ * pmap_init() gets called.
+ */
+extern ppnum_t pmap_high_used_top;
+extern ppnum_t pmap_high_used_bottom;
+extern ppnum_t pmap_middle_used_top;
+extern ppnum_t pmap_middle_used_bottom;
 
 /*
  * when spinning through pmap_remove
@@ -643,13 +648,14 @@ popcnt1(uint64_t distance)
  */
 
 typedef enum {
-	PTE_VALID               = 0x0,
-	PTE_INVALID             = 0x1,
-	PTE_RSVD                = 0x2,
-	PTE_SUPERVISOR          = 0x4,
-	PTE_BITFLIP             = 0x8,
-	PV_BITFLIP              = 0x10,
-	PTE_INVALID_CACHEABILITY = 0x20
+	PTE_VALID                = 0x0,
+	PTE_INVALID              = 0x1,
+	PTE_RSVD                 = 0x2,
+	PTE_SUPERVISOR           = 0x4,
+	PTE_BITFLIP              = 0x8,
+	PV_BITFLIP               = 0x10,
+	PTE_INVALID_CACHEABILITY = 0x20,
+	PTE_NXBITFLIP            = 0x40
 } pmap_pagetable_corruption_t;
 
 typedef enum {
@@ -680,6 +686,9 @@ typedef struct {
 	pmap_t pvpmap;
 	vm_map_offset_t pvva;
 	uint64_t abstime;
+	int adj_ptes_count;
+#define PMPTCR_MAX_ADJ_PTES (2)
+	uint64_t adj_ptes[PMPTCR_MAX_ADJ_PTES];
 } pmap_pagetable_corruption_record_t;
 
 extern pmap_pagetable_corruption_record_t pmap_pagetable_corruption_records[];
@@ -687,10 +696,21 @@ extern uint64_t pmap_pagetable_corruption_last_abstime;
 extern thread_call_t    pmap_pagetable_corruption_log_call;
 extern boolean_t pmap_pagetable_corruption_timeout;
 
-static inline void
-pmap_pagetable_corruption_log(pmap_pv_assertion_t incident, pmap_pagetable_corruption_t suppress_reason, pmap_pagetable_corruption_action_t action, pmap_t pmap, vm_map_offset_t vaddr, pt_entry_t *ptep, ppnum_t ppn, pmap_t pvpmap, vm_map_offset_t pvva)
+static inline pmap_pagetable_corruption_action_t
+pmap_pagetable_corruption_log(pmap_pv_assertion_t incident, pmap_pagetable_corruption_t suppress_reason,
+    pmap_pagetable_corruption_action_t action, pmap_t pmap, vm_map_offset_t vaddr, pt_entry_t *ptep,
+    ppnum_t ppn, pmap_t pvpmap, vm_map_offset_t pvva, int adj_pteps_cnt, uint64_t **adj_pteps)
 {
 	uint32_t pmap_pagetable_corruption_log_index;
+	uint64_t curtime = mach_absolute_time();
+
+	if ((curtime - pmap_pagetable_corruption_last_abstime) < pmap_pagetable_corruption_interval_abstime) {
+		pmap_pagetable_corruption_timeout = TRUE;
+		action = PMAP_ACTION_ASSERT;
+	} else {
+		pmap_pagetable_corruption_last_abstime = curtime;
+	}
+
 	pmap_pagetable_corruption_log_index = pmap_pagetable_corruption_incidents++ % PMAP_PAGETABLE_CORRUPTION_MAX_LOG;
 	pmap_pagetable_corruption_records[pmap_pagetable_corruption_log_index].incident = incident;
 	pmap_pagetable_corruption_records[pmap_pagetable_corruption_log_index].reason = suppress_reason;
@@ -701,9 +721,17 @@ pmap_pagetable_corruption_log(pmap_pv_assertion_t incident, pmap_pagetable_corru
 	pmap_pagetable_corruption_records[pmap_pagetable_corruption_log_index].ppn = ppn;
 	pmap_pagetable_corruption_records[pmap_pagetable_corruption_log_index].pvpmap = pvpmap;
 	pmap_pagetable_corruption_records[pmap_pagetable_corruption_log_index].pvva = pvva;
-	pmap_pagetable_corruption_records[pmap_pagetable_corruption_log_index].abstime = mach_absolute_time();
+	pmap_pagetable_corruption_records[pmap_pagetable_corruption_log_index].abstime = curtime;
+	if (adj_pteps_cnt > 0 && adj_pteps != NULL) {
+		pmap_pagetable_corruption_records[pmap_pagetable_corruption_log_index].adj_ptes_count = MIN(adj_pteps_cnt, PMPTCR_MAX_ADJ_PTES);
+		for (int i = 0; i < pmap_pagetable_corruption_records[pmap_pagetable_corruption_log_index].adj_ptes_count; i++) {
+			pmap_pagetable_corruption_records[pmap_pagetable_corruption_log_index].adj_ptes[i] = *adj_pteps[i];
+		}
+	}
 	/* Asynchronously log */
 	thread_call_enter(pmap_pagetable_corruption_log_call);
+
+	return action;
 }
 
 static inline pmap_pagetable_corruption_action_t
@@ -797,14 +825,49 @@ pmap_cpc_exit:
 		action = PMAP_ACTION_ASSERT;
 	}
 
-	if ((mach_absolute_time() - pmap_pagetable_corruption_last_abstime) < pmap_pagetable_corruption_interval_abstime) {
-		action = PMAP_ACTION_ASSERT;
-		pmap_pagetable_corruption_timeout = TRUE;
+	return pmap_pagetable_corruption_log(incident, suppress_reason, action, pmap, vaddr, &cpte, *ppnp, pvpmap, pvva, 0, 0);
+}
+
+static inline boolean_t
+pmap_compressed_pte_corruption_repair(uint64_t pte, uint64_t *pte_addr, uint64_t *ptep, pmap_t pmap,
+    vm_map_offset_t vaddr)
+{
+	uint64_t *adj_pteps[2];
+	int pteidx = ((uintptr_t)ptep & INTEL_OFFMASK) / sizeof(pt_entry_t);
+	pmap_pagetable_corruption_action_t action = PMAP_ACTION_IGNORE;
+
+	/*
+	 * Grab pointers to PTEs on either side of the PTE in question, unless we're at the start of
+	 * a PT (grab pointers to the next and next-next PTEs) or the end of a PT (grab the previous
+	 * 2 PTEs).
+	 */
+	if (pteidx == 0) {
+		adj_pteps[0] = ptep + 1;
+		adj_pteps[1] = ptep + 2;
+	} else if (pteidx == (NPTPG - 1)) {
+		adj_pteps[0] = ptep - 2;
+		adj_pteps[1] = ptep - 1;
 	} else {
-		pmap_pagetable_corruption_last_abstime = mach_absolute_time();
+		adj_pteps[0] = ptep - 1;
+		adj_pteps[1] = ptep + 1;
 	}
-	pmap_pagetable_corruption_log(incident, suppress_reason, action, pmap, vaddr, &cpte, *ppnp, pvpmap, pvva);
-	return action;
+
+	/*
+	 * Since the compressed PTE no longer has a PTE associated, we cannot pass in the pv data to
+	 * pmap_pagetable_corruption_log, so instead supply adjacent PTEs for logging.
+	 */
+	if (pmap_pagetable_corruption_log(ROOT_ABSENT, (pte & INTEL_PTE_NX) ? PTE_NXBITFLIP : PTE_BITFLIP,
+	    action, pmap, vaddr, ptep, (ppnum_t)~0UL, 0, 0, sizeof(adj_pteps) / sizeof(adj_pteps[0]),
+	    adj_pteps) != PMAP_ACTION_ASSERT) {
+		/* Correct the flipped bit(s) and continue */
+		pmap_store_pte(ptep, pte & INTEL_PTE_COMPRESSED_MASK);
+		pmap->corrected_compressed_ptes_count++;
+		return TRUE; /* Returning TRUE to indicate this is a now a valid compressed PTE (we hope) */
+	}
+
+	panic("compressed PTE %p 0x%llx has extra bits 0x%llx: corrupted? Adjacent PTEs: 0x%llx@%p, 0x%llx@%p",
+	    pte_addr, pte, pte & ~INTEL_PTE_COMPRESSED_MASK, *adj_pteps[0], adj_pteps[0], *adj_pteps[1], adj_pteps[1]);
+	/*NOTREACHED*/
 }
 
 /*

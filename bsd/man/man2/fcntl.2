@@ -146,7 +146,9 @@ as negative, otherwise
 .Fa arg
 is interpreted as a process ID.
 .It Dv F_GETPATH
-Get the path of the file descriptor 
+Get the path of the file descriptor
+.It Dv F_GETPATH_NOFIRMLINK
+Get the non firmlinked path of the file descriptor
 .Fa Fildes .  
 The argument must be a buffer of size
 .Sy MAXPATHLEN
@@ -176,11 +178,6 @@ disables read ahead.
 A non-zero value in
 .Fa arg
 turns read ahead on.
-.It Dv F_READBOOTSTRAP
-Read bootstrap from disk.
-.It Dv F_WRITEBOOTSTRAP
-Write bootstrap on disk.
-The calling process must have root privileges.
 .It Dv F_NOCACHE
 Turns data caching off/on. A non-zero value in
 .Fa arg
@@ -199,6 +196,29 @@ to change.
 .It Dv F_LOG2PHYS_EXT
 Variant of F_LOG2PHYS that uses the passed in
 file offset and length.
+.It Dv F_BARRIERFSYNC
+Does the same thing as
+.Xr fsync 2
+then issues a barrier command to the drive
+.Fa ( arg
+is ignored).
+The barrier applies to I/O that have been flushed with
+.Xr fsync 2
+on the same device before.  These operations are guaranteed to
+be persisted before any other I/O that would follow the barrier,
+although no assumption should be made on what has been persisted
+or not when this call returns.  After the barrier has been issued,
+operations on other FDs that have been fsync'd before can still be
+re-ordered by the device, but not after the barrier.  This is
+typically useful to guarantee valid state on disk when ordering is a
+concern but durability is not.  A barrier can be used to order two phases of operations on
+a set of file descriptors and ensure that no file can possibly get persisted
+with the effect of the second phase without the effect of the first one. To do so,
+execute operations of phase one, then
+.Xr fsync 2
+each FD and issue a single barrier.  Finally execute operations of phase two.
+This is currently implemented on HFS and APFS. It requires hardware support,
+which Apple SSDs are guaranteed to provide.
 .It Dv F_FULLFSYNC
 Does the same thing as
 .Xr fsync 2
@@ -207,8 +227,11 @@ flush all buffered data to
 the permanent storage device
 .Fa ( arg
 is ignored).
+As this drains the entire queue of the device and acts as a
+barrier, data that had been fsync'd on the same device before
+is guaranteed to be persisted when this call returns.
 This is currently implemented on HFS, MS-DOS (FAT),
-and Universal Disk Format (UDF) file systems.
+Universal Disk Format (UDF) and APFS file systems.
 The operation may take quite a while to complete.
 Certain FireWire drives have also been known
 to ignore the request to flush their buffered data.

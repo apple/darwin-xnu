@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -33,7 +33,7 @@
 
 class IOPMinformee : public OSObject
 {
-	OSDeclareDefaultStructors(IOPMinformee)
+	OSDeclareDefaultStructors(IOPMinformee);
 	friend class IOPMinformeeList;
 
 public:

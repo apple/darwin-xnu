@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -113,46 +113,46 @@ int dead_blockmap(struct vnop_blockmap_args *);
 
 #define VOPFUNC int (*)(void *)
 int(**dead_vnodeop_p)(void *);
-struct vnodeopv_entry_desc dead_vnodeop_entries[] = {
-	{ &vnop_default_desc, (VOPFUNC)vn_default_error },
-	{ &vnop_lookup_desc, (VOPFUNC)dead_lookup },    /* lookup */
-	{ &vnop_create_desc, (VOPFUNC)dead_create },    /* create */
-	{ &vnop_open_desc, (VOPFUNC)dead_open },                /* open */
-	{ &vnop_mknod_desc, (VOPFUNC)dead_mknod },              /* mknod */
-	{ &vnop_close_desc, (VOPFUNC)dead_close },      /* close */
-	{ &vnop_access_desc, (VOPFUNC)dead_access },    /* access */
-	{ &vnop_getattr_desc, (VOPFUNC)dead_getattr },  /* getattr */
-	{ &vnop_setattr_desc, (VOPFUNC)dead_setattr },  /* setattr */
-	{ &vnop_read_desc, (VOPFUNC)dead_read },                /* read */
-	{ &vnop_write_desc, (VOPFUNC)dead_write },      /* write */
-	{ &vnop_ioctl_desc, (VOPFUNC)dead_ioctl },      /* ioctl */
-	{ &vnop_select_desc, (VOPFUNC)dead_select },    /* select */
-	{ &vnop_mmap_desc, (VOPFUNC)dead_mmap },                /* mmap */
-	{ &vnop_fsync_desc, (VOPFUNC)dead_fsync },      /* fsync */
-	{ &vnop_remove_desc, (VOPFUNC)dead_remove },    /* remove */
-	{ &vnop_link_desc, (VOPFUNC)dead_link },                /* link */
-	{ &vnop_rename_desc, (VOPFUNC)dead_rename },    /* rename */
-	{ &vnop_mkdir_desc, (VOPFUNC)dead_mkdir },      /* mkdir */
-	{ &vnop_rmdir_desc, (VOPFUNC)dead_rmdir },      /* rmdir */
-	{ &vnop_symlink_desc, (VOPFUNC)dead_symlink },  /* symlink */
-	{ &vnop_readdir_desc, (VOPFUNC)dead_readdir },  /* readdir */
-	{ &vnop_readlink_desc, (VOPFUNC)dead_readlink },        /* readlink */
-	{ &vnop_inactive_desc, (VOPFUNC)dead_inactive },        /* inactive */
-	{ &vnop_reclaim_desc, (VOPFUNC)dead_reclaim },  /* reclaim */
-	{ &vnop_strategy_desc, (VOPFUNC)dead_strategy },        /* strategy */
-	{ &vnop_pathconf_desc, (VOPFUNC)dead_pathconf },        /* pathconf */
-	{ &vnop_advlock_desc, (VOPFUNC)dead_advlock },  /* advlock */
-	{ &vnop_bwrite_desc, (VOPFUNC)dead_bwrite },    /* bwrite */
-	{ &vnop_pagein_desc, (VOPFUNC)err_pagein },     /* Pagein */
-	{ &vnop_pageout_desc, (VOPFUNC)err_pageout },   /* Pageout */
-	{ &vnop_copyfile_desc, (VOPFUNC)err_copyfile }, /* Copyfile */
-	{ &vnop_blktooff_desc, (VOPFUNC)dead_blktooff },        /* blktooff */
-	{ &vnop_offtoblk_desc, (VOPFUNC)dead_offtoblk },        /* offtoblk */
-	{ &vnop_blockmap_desc, (VOPFUNC)dead_blockmap },                /* blockmap */
-	{ (struct vnodeop_desc*)NULL, (VOPFUNC)NULL }
+const struct vnodeopv_entry_desc dead_vnodeop_entries[] = {
+	{ .opve_op = &vnop_default_desc, .opve_impl = (VOPFUNC)vn_default_error },
+	{ .opve_op = &vnop_lookup_desc, .opve_impl = (VOPFUNC)dead_lookup },    /* lookup */
+	{ .opve_op = &vnop_create_desc, .opve_impl = (VOPFUNC)dead_create },    /* create */
+	{ .opve_op = &vnop_open_desc, .opve_impl = (VOPFUNC)dead_open },                /* open */
+	{ .opve_op = &vnop_mknod_desc, .opve_impl = (VOPFUNC)dead_mknod },              /* mknod */
+	{ .opve_op = &vnop_close_desc, .opve_impl = (VOPFUNC)dead_close },      /* close */
+	{ .opve_op = &vnop_access_desc, .opve_impl = (VOPFUNC)dead_access },    /* access */
+	{ .opve_op = &vnop_getattr_desc, .opve_impl = (VOPFUNC)dead_getattr },  /* getattr */
+	{ .opve_op = &vnop_setattr_desc, .opve_impl = (VOPFUNC)dead_setattr },  /* setattr */
+	{ .opve_op = &vnop_read_desc, .opve_impl = (VOPFUNC)dead_read },                /* read */
+	{ .opve_op = &vnop_write_desc, .opve_impl = (VOPFUNC)dead_write },      /* write */
+	{ .opve_op = &vnop_ioctl_desc, .opve_impl = (VOPFUNC)dead_ioctl },      /* ioctl */
+	{ .opve_op = &vnop_select_desc, .opve_impl = (VOPFUNC)dead_select },    /* select */
+	{ .opve_op = &vnop_mmap_desc, .opve_impl = (VOPFUNC)dead_mmap },                /* mmap */
+	{ .opve_op = &vnop_fsync_desc, .opve_impl = (VOPFUNC)dead_fsync },      /* fsync */
+	{ .opve_op = &vnop_remove_desc, .opve_impl = (VOPFUNC)dead_remove },    /* remove */
+	{ .opve_op = &vnop_link_desc, .opve_impl = (VOPFUNC)dead_link },                /* link */
+	{ .opve_op = &vnop_rename_desc, .opve_impl = (VOPFUNC)dead_rename },    /* rename */
+	{ .opve_op = &vnop_mkdir_desc, .opve_impl = (VOPFUNC)dead_mkdir },      /* mkdir */
+	{ .opve_op = &vnop_rmdir_desc, .opve_impl = (VOPFUNC)dead_rmdir },      /* rmdir */
+	{ .opve_op = &vnop_symlink_desc, .opve_impl = (VOPFUNC)dead_symlink },  /* symlink */
+	{ .opve_op = &vnop_readdir_desc, .opve_impl = (VOPFUNC)dead_readdir },  /* readdir */
+	{ .opve_op = &vnop_readlink_desc, .opve_impl = (VOPFUNC)dead_readlink },        /* readlink */
+	{ .opve_op = &vnop_inactive_desc, .opve_impl = (VOPFUNC)dead_inactive },        /* inactive */
+	{ .opve_op = &vnop_reclaim_desc, .opve_impl = (VOPFUNC)dead_reclaim },  /* reclaim */
+	{ .opve_op = &vnop_strategy_desc, .opve_impl = (VOPFUNC)dead_strategy },        /* strategy */
+	{ .opve_op = &vnop_pathconf_desc, .opve_impl = (VOPFUNC)dead_pathconf },        /* pathconf */
+	{ .opve_op = &vnop_advlock_desc, .opve_impl = (VOPFUNC)dead_advlock },  /* advlock */
+	{ .opve_op = &vnop_bwrite_desc, .opve_impl = (VOPFUNC)dead_bwrite },    /* bwrite */
+	{ .opve_op = &vnop_pagein_desc, .opve_impl = (VOPFUNC)err_pagein },     /* Pagein */
+	{ .opve_op = &vnop_pageout_desc, .opve_impl = (VOPFUNC)err_pageout },   /* Pageout */
+	{ .opve_op = &vnop_copyfile_desc, .opve_impl = (VOPFUNC)err_copyfile }, /* Copyfile */
+	{ .opve_op = &vnop_blktooff_desc, .opve_impl = (VOPFUNC)dead_blktooff },        /* blktooff */
+	{ .opve_op = &vnop_offtoblk_desc, .opve_impl = (VOPFUNC)dead_offtoblk },        /* offtoblk */
+	{ .opve_op = &vnop_blockmap_desc, .opve_impl = (VOPFUNC)dead_blockmap },                /* blockmap */
+	{ .opve_op = (struct vnodeop_desc*)NULL, .opve_impl = (VOPFUNC)NULL }
 };
-struct vnodeopv_desc dead_vnodeop_opv_desc =
-{ &dead_vnodeop_p, dead_vnodeop_entries };
+const struct vnodeopv_desc dead_vnodeop_opv_desc =
+{ .opv_desc_vector_p = &dead_vnodeop_p, .opv_desc_ops = dead_vnodeop_entries };
 
 /*
  * Trivial lookup routine that always fails.

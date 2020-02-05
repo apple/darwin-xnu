@@ -23,14 +23,6 @@
  * Use is subject to license terms.
  */
 
-/* #pragma ident	"@(#)sdt.c	1.6	06/03/24 SMI" */
-
-#ifdef KERNEL
-#ifndef _KERNEL
-#define _KERNEL /* Solaris vs. Darwin */
-#endif
-#endif
-
 #include <kern/cpu_data.h>
 #include <kern/debug.h>
 #include <kern/thread.h>

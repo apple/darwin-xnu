@@ -14,15 +14,20 @@ __ZN17IONVRAMController*
 __ZTV17IONVRAMController
 _cpu_broadcast_xcall
 _cpu_xcall
+_cpu_broadcast_immediate_xcall
+_cpu_immediate_xcall
 _cpu_cluster_id
 _cpu_number
 _cpu_qos_update_register
 _ecc_log_record_event
 _get_preemption_level
+_mach_vm_map:_mach_vm_map_external
+_mach_vm_remap:_mach_vm_remap_external
 _ml_arm_sleep
 _ml_get_abstime_offset
 _ml_get_conttime_offset
 _ml_get_wake_timebase
+_ml_set_reset_time
 _ml_thread_is64bit
 _pe_shmcon_set_child
 _proc_getcdhash
@@ -42,5 +47,6 @@ _pgtrace_add_probe
 _pgtrace_clear_probe
 _mach_bridge_recv_timestamps
 _mach_bridge_init_timestamp
+_mach_bridge_set_params
 _PE_panic_debugging_enabled
 _register_additional_panic_data_buffer

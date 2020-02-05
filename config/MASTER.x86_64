@@ -5,14 +5,14 @@
 #
 # All rights reserved.  The CMU software License Agreement
 # specifies the terms and conditions for use and redistribution.
-#  
+#
 ######################################################################
 #
 #  Master Apple configuration file (see the master machine independent
 #  configuration file for a description of the file format).
 #
 ######################################################################
-#  
+#
 #  Standard Apple OS Configurations:
 #  -------- ----- -- ---------------
 #
@@ -20,18 +20,18 @@
 #  KERNEL_RELEASE = [ KERNEL_BASE ]
 #  KERNEL_DEV =     [ KERNEL_BASE development mach_assert config_xnupost proc_ref_debug os_reason_debug ]
 #  KERNEL_DEBUG =   [ KERNEL_BASE debug mach_assert config_xnupost config_ltable_stats config_ltable_debug config_waitq_stats config_workloop_debug config_waitq_debug ]
-#  BSD_BASE =       [ mach_bsd sysv_sem sysv_msg sysv_shm config_imageboot config_workqueue psynch config_proc_uuid_policy config_coredump pgo config_32bit_telemetry ]
+#  BSD_BASE =       [ mach_bsd sysv_sem sysv_msg sysv_shm config_netboot config_imageboot config_imageboot_chunklist config_workqueue psynch config_proc_uuid_policy config_coredump pgo config_32bit_telemetry config_personas ]
 #  BSD_RELEASE =    [ BSD_BASE ]
 #  BSD_DEV =        [ BSD_BASE config_vnguard ]
 #  BSD_DEBUG =      [ BSD_BASE config_vnguard ]
-#  FILESYS_BASE =   [ devfs fdesc config_dev_kmem config_fse quota namedstreams config_mnt_rootsnap config_keypage_wp config_protect fifo config_volfs fs_compression config_imgsrc_access config_triggers config_ext_resolver config_searchfs config_appledouble nullfs config_mnt_suid ]
+#  FILESYS_BASE =   [ devfs fdesc config_dev_kmem config_fse quota namedstreams config_mnt_rootsnap config_rosv_startup config_mount_vm config_keypage_wp config_protect fifo config_volfs fs_compression config_imgsrc_access config_triggers config_ext_resolver config_searchfs config_appledouble nullfs config_mnt_suid config_firmlinks config_dataless_files ]
 #  FILESYS_RELEASE= [ FILESYS_BASE ]
 #  FILESYS_DEV =    [ FILESYS_BASE ]
 #  FILESYS_DEBUG =  [ FILESYS_BASE ]
-#  NFS =            [ nfsclient nfsserver ]
-#  NETWORKING =     [ inet inet6 ipv6send tcpdrop_synfin bpfilter dummynet traffic_mgt sendfile ah_all_crypto bond vlan gif stf ifnet_input_chk config_mbuf_jumbo if_bridge ipcomp_zlib MULTIPATH if_fake ]
+#  NFS =            [ nfsclient nfsserver config_nfs4 config_nfs_gss ]
+#  NETWORKING =     [ inet inet6 ipv6send tcpdrop_synfin bpfilter dummynet traffic_mgt sendfile ah_all_crypto bond vlan gif stf ifnet_input_chk config_mbuf_jumbo if_bridge MULTIPATH if_fake sixlowpan ]
 #  NETWORKING_RELEASE = [ NETWORKING ]
-#  NETWORKING_DEV = [ NETWORKING_RELEASE packet_mangler ]
+#  NETWORKING_DEV = [ NETWORKING_RELEASE packet_mangler if_headless ]
 #  NETWORKING_DEBUG = [ NETWORKING_DEV ]
 #  VPN =            [ ipsec flow_divert necp content_filter ]
 #  PF =             [ pf pflog ]
@@ -40,10 +40,10 @@
 #  IOKIT_RELEASE =  [ IOKIT_BASE ]
 #  IOKIT_DEV =      [ IOKIT_BASE iotracking ]
 #  IOKIT_DEBUG =    [ IOKIT_BASE iotracking ]
-#  LIBKERN_BASE =   [ libkerncpp config_blocks config_kxld config_kec_fips zlib crypto_sha2 config_img4 ]
-#  LIBKERN_RELEASE =[ LIBKERN_BASE ]
-#  LIBKERN_DEV =    [ LIBKERN_BASE iotracking ]
-#  LIBKERN_DEBUG =  [ LIBKERN_BASE iotracking ]
+#  LIBKERN_BASE =   [ libkerncpp config_blocks config_kxld config_kec_fips crypto_sha2 config_img4 ]
+#  LIBKERN_RELEASE =[ LIBKERN_BASE zlib ]
+#  LIBKERN_DEV =    [ LIBKERN_BASE zlib iotracking ]
+#  LIBKERN_DEBUG =  [ LIBKERN_BASE zlib iotracking ]
 #  PERF_DBG_BASE =  [ config_dtrace mach_kdp config_serial_kdp kdp_interactive_debugging kperf kpc zleaks config_gzalloc MONOTONIC_BASE ]
 #  PERF_DBG_RELEASE=[ PERF_DBG_BASE ]
 #  PERF_DBG_DEV    =[ PERF_DBG_BASE lock_stats ]
@@ -57,11 +57,11 @@
 #  SCHED_DEV =      [ SCHED_BASE ]
 #  SCHED_DEBUG =    [ SCHED_BASE config_sched_grrr config_sched_proto ]
 #  VM =             [ vm_pressure_events memorystatus dynamic_codesigning config_code_decryption encrypted_swap config_background_queue]
-#  SECURITY =       [ config_macf config_audit config_csr ]
+#  SECURITY =       [ config_macf config_audit config_csr config_arcade]
 #  RELEASE =        [ KERNEL_RELEASE BSD_RELEASE FILESYS_RELEASE NFS SKYWALK_RELEASE NETWORKING_RELEASE PF VPN IOKIT_RELEASE LIBKERN_RELEASE PERF_DBG_RELEASE MACH_RELEASE SCHED_RELEASE VM SECURITY ]
 #  DEVELOPMENT =    [ KERNEL_DEV     BSD_DEV     FILESYS_DEV     NFS SKYWALK_DEV     NETWORKING_DEV PF VPN IOKIT_DEV     LIBKERN_DEV     PERF_DBG_DEV MACH_DEV     SCHED_DEV     VM SECURITY ]
 #  DEBUG =          [ KERNEL_DEBUG   BSD_DEBUG   FILESYS_DEBUG   NFS SKYWALK_DEBUG   NETWORKING_DEBUG PF VPN IOKIT_DEBUG   LIBKERN_DEBUG   PERF_DBG_DEBUG MACH_DEBUG   SCHED_DEBUG   VM SECURITY ]
-#  KASAN =          [ DEVELOPMENT ]
+#  KASAN =          [ DEVELOPMENT config_kasan config_ubsan config_ksancov ]
 #
 ######################################################################
 #
@@ -74,6 +74,7 @@ options		PAL_I386
 options	    CONFIG_MCA			    # Machine Check Architecture	# <config_mca>
 options	    CONFIG_VMX			    # Virtual Machine Extensions	# <config_vmx>
 options	    CONFIG_MTRR			    # Memory Type Range Registers	# <config_mtrr>
+options     CONFIG_MACF_LAZY_VNODE_LABELS   # Turn on labels, don't preallocate
 
 options     NO_NESTED_PMAP                  # <no_nested_pmap>
 

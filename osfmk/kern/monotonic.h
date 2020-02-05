@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2017-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -27,6 +27,8 @@
  */
 #ifndef KERN_MONOTONIC_H
 #define KERN_MONOTONIC_H
+
+#if MONOTONIC
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -155,5 +157,7 @@ int mt_microstackshot_stop(void);
 __END_DECLS
 
 #endif /* MACH_KERNEL_PRIVATE */
+
+#endif /* MONOTONIC */
 
 #endif /* !defined(KERN_MONOTONIC_H) */

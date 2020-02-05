@@ -25,12 +25,12 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-/* $NetBSD: if_media.h,v 1.3 1997/03/26 01:19:27 thorpej Exp $ */
+/*	$NetBSD: if_media.h,v 1.3 1997/03/26 01:19:27 thorpej Exp $	*/
 /* $FreeBSD: src/sys/net/if_media.h,v 1.9.2.1 2001/07/04 00:12:38 brooks Exp $ */
 
 /*
  * Copyright (c) 1997
- * Jonathan Stone and Jason R. Thorpe.  All rights reserved.
+ *	Jonathan Stone and Jason R. Thorpe.  All rights reserved.
  *
  * This software is derived from information provided by Matt Thomas.
  *
@@ -44,8 +44,8 @@
  *    documentation and/or other materials provided with the distribution.
  * 3. All advertising materials mentioning features or use of this software
  *    must display the following acknowledgement:
- *    This product includes software developed by Jonathan Stone
- *     and Jason R. Thorpe for the NetBSD Project.
+ *	This product includes software developed by Jonathan Stone
+ *	and Jason R. Thorpe for the NetBSD Project.
  * 4. The names of the authors may not be used to endorse or promote products
  *    derived from this software without specific prior written permission.
  *
@@ -88,7 +88,7 @@
  *	Bits	Use
  *	----	-------
  *	0-4	Media variant
- *	5-7	Media type
+ *	5-7     Media type
  *	8-15	Type specific options
  *	16-19	Extended media variant bits
  *	20-27	Shared (global) options
@@ -298,12 +298,12 @@
 /*
  * Masks
  */
-#define IFM_NMASK       0x000000e0              /* Network type */
+#define IFM_NMASK       0x000000e0      /* Network type */
 #define IFM_TMASK       (IFM_TMASK_COMPAT|IFM_TMASK_EXT)    /* Media sub-type */
-#define IFM_IMASK       0xf0000000               /* Instance */
-#define IFM_ISHIFT      28                      /* Instance shift */
-#define IFM_OMASK       0x0000ff00              /* Type specific options */
-#define IFM_GMASK       0x0ff00000              /* Global options */
+#define IFM_IMASK       0xf0000000      /* Instance */
+#define IFM_ISHIFT      28              /* Instance shift */
+#define IFM_OMASK       0x0000ff00      /* Type specific options */
+#define IFM_GMASK       0x0ff00000      /* Global options */
 
 /*
  * Status bits
@@ -315,12 +315,11 @@
 /*
  * Macros to extract various bits of information from the media word.
  */
-
 #define IFM_TYPE(x)         ((x) & IFM_NMASK)
 #define IFM_SUBTYPE(x)      ((x) & IFM_TMASK)
 #define IFM_TYPE_OPTIONS(x) ((x) & IFM_OMASK)
 #define IFM_INST(x)         (((x) & IFM_IMASK) >> IFM_ISHIFT)
-#define IFM_OPTIONS(x)      ((x) & (IFM_OMASK|IFM_GMASK))
+#define IFM_OPTIONS(x)  ((x) & (IFM_OMASK|IFM_GMASK))
 
 #define IFM_INST_MAX    IFM_INST(IFM_IMASK)
 
@@ -350,21 +349,21 @@ struct ifmedia_description {
     { 0, NULL },                                    \
 }
 
-#define IFM_SUBTYPE_ETHERNET_DESCRIPTIONS {                             \
-    { IFM_10_T,                 "10baseT/UTP" },                        \
-    { IFM_10_2,                 "10base2/BNC" },                        \
-    { IFM_10_5,                 "10base5/AUI" },                        \
-    { IFM_100_TX,               "100baseTX" },                          \
-    { IFM_100_FX,               "100baseFX" },                          \
-    { IFM_100_T4,               "100baseT4" },                          \
-    { IFM_100_VG,               "100baseVG" },                          \
-    { IFM_100_T2,               "100baseT2" },                          \
-    { IFM_10_STP,               "10baseSTP" },                          \
-    { IFM_10_FL,                "10baseFL" },                           \
+#define IFM_SUBTYPE_ETHERNET_DESCRIPTIONS {         \
+    { IFM_10_T,     "10baseT/UTP" },                \
+    { IFM_10_2,     "10base2/BNC" },                \
+    { IFM_10_5,     "10base5/AUI" },                \
+    { IFM_100_TX,   "100baseTX"   },                \
+    { IFM_100_FX,   "100baseFX"   },                \
+    { IFM_100_T4,   "100baseT4"   },                \
+    { IFM_100_VG,   "100baseVG"   },                \
+    { IFM_100_T2,   "100baseT2"   },                \
+    { IFM_10_STP,   "10baseSTP"   },                \
+    { IFM_10_FL,    "10baseFL"    },                \
     { IFM_1000_SX,              "1000baseSX" },                         \
-    { IFM_1000_LX,              "1000baseLX" },                         \
-    { IFM_1000_CX,              "1000baseCX" },                         \
-    { IFM_1000_T,               "1000baseT" },                          \
+    { IFM_1000_LX,  "1000baseLX"  },                \
+    { IFM_1000_CX,  "1000baseCX"  },                \
+    { IFM_1000_T,   "1000baseT"   },                \
     { IFM_HPNA_1,               "homePNA" },                            \
     { IFM_10G_LR,               "10Gbase-LR" },                         \
     { IFM_10G_SR,               "10Gbase-SR" },                         \
@@ -377,11 +376,11 @@ struct ifmedia_description {
     { IFM_40G_CR4,              "40Gbase-CR4" },                        \
     { IFM_40G_SR4,              "40Gbase-SR4" },                        \
     { IFM_40G_LR4,              "40Gbase-LR4" },                        \
-    { IFM_1000_KX,              "1000Base-KX" },                        \
+    { IFM_1000_KX,  "1000Base-KX" },                \
     { IFM_OTHER,                "Other" },                              \
-    { IFM_10G_KX4,              "10GBase-KX4" },                        \
-    { IFM_10G_KR,               "10GBase-KR" },                         \
-    { IFM_10G_CR1,              "10GBase-CR1" },                        \
+    { IFM_10G_KX4,  "10GBase-KX4" },                \
+    { IFM_10G_KR,   "10GBase-KR" },                 \
+    { IFM_10G_CR1,  "10GBase-CR1" },                \
     { IFM_20G_KR2,              "20GBase-KR2" },                        \
     { IFM_2500_KX,              "2500Base-KX" },                        \
     { IFM_2500_T,               "2500Base-T" },                         \
@@ -393,18 +392,18 @@ struct ifmedia_description {
     { IFM_40G_XLPPI,            "40GBase-XLPPI" },                      \
     { IFM_1000_CX_SGMII,        "1000Base-CX-SGMII" },                  \
     { IFM_40G_KR4,              "40GBase-KR4" },                        \
-    { IFM_10G_ER,               "10GBase-ER" },                         \
+    { IFM_10G_ER,   "10GBase-ER" },                 \
     { IFM_100G_CR4,             "100GBase-CR4" },                       \
     { IFM_100G_SR4,             "100GBase-SR4" },                       \
     { IFM_100G_KR4,             "100GBase-KR4" },                       \
     { IFM_100G_LR4,             "100GBase-LR4" },                       \
     { IFM_56G_R4,               "56GBase-R4" },                         \
     { IFM_100_T,                "100BaseT" },                           \
-    { IFM_25G_CR,               "25GBase-CR" },                         \
-    { IFM_25G_KR,               "25GBase-KR" },                         \
-    { IFM_25G_SR,               "25GBase-SR" },                         \
-    { IFM_50G_CR2,              "50GBase-CR2" },                        \
-    { IFM_50G_KR2,              "50GBase-KR2" },                        \
+    { IFM_25G_CR,   "25GBase-CR" },                 \
+    { IFM_25G_KR,   "25GBase-KR" },                 \
+    { IFM_25G_SR,   "25GBase-SR" },                 \
+    { IFM_50G_CR2,  "50GBase-CR2" },                \
+    { IFM_50G_KR2,  "50GBase-KR2" },                \
     { IFM_25G_LR,               "25GBase-LR" },                         \
     { IFM_10G_AOC,              "10GBase-AOC" },                        \
     { IFM_25G_ACC,              "25GBase-ACC" },                        \
@@ -422,8 +421,8 @@ struct ifmedia_description {
     { IFM_40G_XLAUI,            "40G-XLAUI" },                          \
     { IFM_40G_XLAUI_AC,         "40G-XLAUI-AC" },                       \
     { IFM_40G_ER4,              "40GBase-ER4" },                        \
-    { IFM_50G_SR2,              "50GBase-SR2" },                        \
-    { IFM_50G_LR2,              "50GBase-LR2" },                        \
+    { IFM_50G_SR2,  "50GBase-SR2" },                \
+    { IFM_50G_LR2,  "50GBase-LR2" },                \
     { IFM_50G_LAUI2_AC,         "50G-LAUI2-AC" },                       \
     { IFM_50G_LAUI2,            "50G-LAUI2" },                          \
     { IFM_50G_AUI2_AC,          "50G-AUI2-AC" },                        \
@@ -465,7 +464,7 @@ struct ifmedia_description {
     { IFM_400G_DR4,             "400GBase-DR4" },                       \
     { IFM_400G_AUI8_AC,         "400G-AUI8-AC" },                       \
     { IFM_400G_AUI8,            "400G-AUI8" },                          \
-    { 0, NULL },                                                        \
+    { 0, NULL },                                    \
 }
 
 #define IFM_SUBTYPE_ETHERNET_ALIASES {              \
@@ -574,7 +573,7 @@ struct ifmedia_description {
     { IFM_FDX,      "full-duplex" },                \
     { IFM_HDX,      "half-duplex" },                \
     { IFM_FLOW,     "flow-control" },               \
-    { IFM_EEE,      "energy-efficient-ethernet" },  \
+    { IFM_EEE,	    "energy-efficient-ethernet" },  \
     { IFM_FLAG0,    "flag0" },                      \
     { IFM_FLAG1,    "flag1" },                      \
     { IFM_FLAG2,    "flag2" },                      \

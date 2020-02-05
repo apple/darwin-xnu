@@ -60,6 +60,8 @@ typedef uint8_t OSKextExcludeLevel;
 #define kOSKextExcludeKext  (1)
 #define kOSKextExcludeAll   (2)
 
+#define kOSKextManagementEntitlement "com.apple.private.security.kext-management"
+
 #if PRAGMA_MARK
 #pragma mark -
 /********************************************************************/
@@ -698,7 +700,7 @@ Boolean OSKextVersionGetString(
 /********************************************************************/
 #endif
 #ifdef XNU_KERNEL_PRIVATE
-void kext_weak_symbol_referenced(void);
+void kext_weak_symbol_referenced(void) __abortlike;
 #endif /* XNU_KERNEL_PRIVATE */
 
 #if PRAGMA_MARK

@@ -96,9 +96,13 @@ extern kern_return_t vm_fault(
 #endif
 	int             interruptible,
 	pmap_t          pmap,
-	vm_map_offset_t pmap_addr);
+	vm_map_offset_t pmap_addr)
+#if XNU_KERNEL_PRIVATE
+__XNU_INTERNAL(vm_fault)
+#endif
+;
 
-extern void vm_pre_fault(vm_map_offset_t);
+extern void vm_pre_fault(vm_map_offset_t, vm_prot_t);
 
 #ifdef  MACH_KERNEL_PRIVATE
 

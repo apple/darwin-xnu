@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -32,7 +32,7 @@ class IOPMPowerSource;
 
 class IOPMPowerSourceList : public OSObject
 {
-	OSDeclareDefaultStructors(IOPMPowerSourceList)
+	OSDeclareDefaultStructors(IOPMPowerSourceList);
 private:
 // pointer to first power source in list
 	IOPMPowerSource         *firstItem;

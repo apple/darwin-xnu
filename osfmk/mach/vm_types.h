@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -95,8 +95,8 @@ typedef struct _vm_map          *vm_map_t;
 typedef struct vm_object        *vm_object_t;
 typedef struct vm_object_fault_info     *vm_object_fault_info_t;
 
-#define PMAP_NULL               ((pmap_t) 0)
-#define VM_OBJECT_NULL  ((vm_object_t) 0)
+#define PMAP_NULL               ((pmap_t) NULL)
+#define VM_OBJECT_NULL  ((vm_object_t) NULL)
 
 #else   /* KERNEL_PRIVATE */
 
@@ -104,7 +104,11 @@ typedef mach_port_t             vm_map_t;
 
 #endif  /* KERNEL_PRIVATE */
 
+#ifdef KERNEL
+#define VM_MAP_NULL             ((vm_map_t) NULL)
+#else
 #define VM_MAP_NULL             ((vm_map_t) 0)
+#endif
 
 /*
  * Evolving definitions, likely to change.
@@ -166,7 +170,7 @@ struct vm_allocation_site {
 	uint16_t  flags;
 	uint16_t  subtotalscount;
 	struct vm_allocation_total subtotals[0];
-	char      name[0];
+	/* char      name[0]; -- this is placed after subtotals, see KA_NAME() */
 };
 typedef struct vm_allocation_site vm_allocation_site_t;
 
@@ -197,7 +201,7 @@ typedef struct upl              *upl_t;
 typedef struct vm_map_copy      *vm_map_copy_t;
 typedef struct vm_named_entry   *vm_named_entry_t;
 
-#define VM_MAP_COPY_NULL        ((vm_map_copy_t) 0)
+#define VM_MAP_COPY_NULL        ((vm_map_copy_t) NULL)
 
 #else   /* KERNEL_PRIVATE */
 
@@ -206,8 +210,14 @@ typedef mach_port_t             vm_named_entry_t;
 
 #endif  /* KERNEL_PRIVATE */
 
+#ifdef KERNEL
+#define UPL_NULL                ((upl_t) NULL)
+#define VM_NAMED_ENTRY_NULL     ((vm_named_entry_t) NULL)
+#else
 #define UPL_NULL                ((upl_t) 0)
 #define VM_NAMED_ENTRY_NULL     ((vm_named_entry_t) 0)
+#endif
+
 #ifdef PRIVATE
 typedef struct {
 	uint64_t rtfabstime; // mach_continuous_time at start of fault

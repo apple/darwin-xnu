@@ -116,6 +116,13 @@ kdebug_is_enabled(uint32_t debugid)
 	return TRUE;
 }
 
+bool
+kdebug_using_continuous_time(void)
+{
+	uint32_t state = *((volatile uint32_t *)(uintptr_t)(_COMM_PAGE_KDEBUG_ENABLE));
+	return state & KDEBUG_ENABLE_CONT_TIME;
+}
+
 int
 kdebug_trace(uint32_t debugid, uint64_t arg1, uint64_t arg2, uint64_t arg3,
     uint64_t arg4)

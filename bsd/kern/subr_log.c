@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple, Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -65,6 +65,7 @@
  * Error log buffer for kernel printf's.
  */
 
+#include <machine/atomic.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc_internal.h>
@@ -120,7 +121,7 @@ extern uint32_t oslog_s_error_count;
 /* All globals should be accessed under LOG_LOCK() */
 
 static char amsg_bufc[1024];
-static struct msgbuf aslbuf = {MSG_MAGIC, sizeof(amsg_bufc), 0, 0, amsg_bufc};
+static struct msgbuf aslbuf = {.msg_magic = MSG_MAGIC, .msg_size = sizeof(amsg_bufc), .msg_bufx = 0, .msg_bufr = 0, .msg_bufc = amsg_bufc};
 struct msgbuf *aslbufp __attribute__((used)) = &aslbuf;
 
 /* logsoftc only valid while log_open=1 */
@@ -144,8 +145,8 @@ struct firehose_chunk_s oslog_boot_buf = {
 	},
 }; /* static buffer */
 firehose_chunk_t firehose_boot_chunk = &oslog_boot_buf;
-struct msgbuf msgbuf = {MSG_MAGIC, sizeof(smsg_bufc), 0, 0, smsg_bufc};
-struct msgbuf oslog_stream_buf = {MSG_MAGIC, 0, 0, 0, NULL};
+struct msgbuf msgbuf = {.msg_magic  = MSG_MAGIC, .msg_size = sizeof(smsg_bufc), .msg_bufx = 0, .msg_bufr = 0, .msg_bufc = smsg_bufc};
+struct msgbuf oslog_stream_buf = {.msg_magic = MSG_MAGIC, .msg_size = 0, .msg_bufx = 0, .msg_bufr = 0, .msg_bufc = NULL};
 struct msgbuf *msgbufp __attribute__((used)) = &msgbuf;
 struct msgbuf *oslog_streambufp __attribute__((used)) = &oslog_stream_buf;
 
@@ -195,7 +196,7 @@ void bsd_log_init(void);
  * Ideally this file would define this lock, but bsd doesn't have the definition
  * for lock groups.
  */
-decl_lck_spin_data(extern, oslog_stream_lock)
+decl_lck_spin_data(extern, oslog_stream_lock);
 #define stream_lock() lck_spin_lock(&oslog_stream_lock)
 #define stream_unlock() lck_spin_unlock(&oslog_stream_lock)
 
@@ -609,7 +610,7 @@ oslog_streamread(__unused dev_t dev, struct uio *uio, int flag)
 	if (copy_size != 0) {
 		error = uiomove((caddr_t)logline, copy_size, uio);
 	}
-	(void)hw_atomic_add(&oslog_s_streamed_msgcount, 1);
+	os_atomic_inc(&oslog_s_streamed_msgcount, relaxed);
 
 	return error;
 }
@@ -1057,7 +1058,7 @@ oslog_streamwrite_locked(firehose_tracepoint_id_u ftid,
 
 	mbp = oslog_streambufp;
 	if (ft_length > mbp->msg_size) {
-		(void)hw_atomic_add(&oslog_s_error_count, 1);
+		os_atomic_inc(&oslog_s_error_count, relaxed);
 		return;
 	}
 

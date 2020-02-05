@@ -128,7 +128,9 @@ struct vm_object_fault_info {
 	/* boolean_t */ pmap_cs_associated:1,
 	/* boolean_t */ mark_zf_absent:1,
 	/* boolean_t */ batch_pmap_op:1,
-	    __vm_object_fault_info_unused_bits:25;
+	/* boolean_t */ resilient_media:1,
+	/* boolean_t */ no_copy_on_read:1,
+	    __vm_object_fault_info_unused_bits:23;
 	int             pmap_options;
 };
 
@@ -362,8 +364,8 @@ struct vm_object {
 #else /* VM_OBJECT_ACCESS_TRACKING */
 	__unused_access_tracking:1,
 #endif /* VM_OBJECT_ACCESS_TRACKING */
-	vo_ledger_tag:2,
-	    __object2_unused_bits:2;            /* for expansion */
+	vo_ledger_tag:3,
+	    vo_no_footprint:1;
 
 #if VM_OBJECT_ACCESS_TRACKING
 	uint32_t        access_tracking_reads;
@@ -406,12 +408,6 @@ struct vm_object {
 	void *purgeable_volatilizer_bt[16];
 #endif /* DEBUG */
 };
-
-/* values for object->vo_ledger_tag */
-#define VM_OBJECT_LEDGER_TAG_NONE       0
-#define VM_OBJECT_LEDGER_TAG_NETWORK    1
-#define VM_OBJECT_LEDGER_TAG_MEDIA      2
-#define VM_OBJECT_LEDGER_TAG_RESERVED   3
 
 #define VM_OBJECT_PURGEABLE_FAULT_ERROR(object)                         \
 	((object)->volatile_fault &&                                    \
@@ -892,9 +888,9 @@ __private_extern__ void         vm_object_reap_pages(
 
 #if CONFIG_FREEZE
 
-__private_extern__ void
+__private_extern__ uint32_t
 vm_object_compressed_freezer_pageout(
-	vm_object_t     object);
+	vm_object_t     object, uint32_t dirty_budget);
 
 __private_extern__ void
 vm_object_compressed_freezer_done(
@@ -1203,8 +1199,9 @@ extern void     vm_object_ledger_tag_ledgers(
 	boolean_t *do_footprint);
 extern kern_return_t vm_object_ownership_change(
 	vm_object_t object,
-	int ledger_tag,
-	task_t owner,
+	int new_ledger_tag,
+	task_t new_owner,
+	int new_ledger_flags,
 	boolean_t task_objq_locked);
 
 #endif  /* _VM_VM_OBJECT_H_ */

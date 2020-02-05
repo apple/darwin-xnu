@@ -504,7 +504,7 @@ devfs_kernel_mount(char * mntname)
 	return 0;
 }
 
-struct vfsops devfs_vfsops = {
+const struct vfsops devfs_vfsops = {
 	.vfs_mount   = devfs_mount,
 	.vfs_start   = devfs_start,
 	.vfs_unmount = devfs_unmount,

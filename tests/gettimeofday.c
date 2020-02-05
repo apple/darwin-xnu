@@ -4,6 +4,8 @@
 
 #include <darwintest.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 extern int __gettimeofday(struct timeval *, struct timezone *);
 
 T_DECL(gettimeofday, "gettimeofday()",

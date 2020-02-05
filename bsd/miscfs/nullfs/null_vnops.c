@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -832,7 +832,7 @@ nullfs_getxattr(struct vnop_getxattr_args * args)
 	NULLFSDEBUG("%s %p\n", __FUNCTION__, args->a_vp);
 
 	if (nullfs_checkspecialvp(args->a_vp)) {
-		return 0; /* nothing extra needed */
+		return ENOATTR; /* no xattrs on the special vnodes */
 	}
 
 	vp    = args->a_vp;
@@ -855,7 +855,7 @@ nullfs_listxattr(struct vnop_listxattr_args * args)
 	NULLFSDEBUG("%s %p\n", __FUNCTION__, args->a_vp);
 
 	if (nullfs_checkspecialvp(args->a_vp)) {
-		return 0; /* nothing extra needed */
+		return 0; /* no xattrs on the special vnodes */
 	}
 
 	vp    = args->a_vp;
@@ -1017,19 +1017,19 @@ end:
  * Global vfs data structures
  */
 
-static struct vnodeopv_entry_desc nullfs_vnodeop_entries[] = {
-	{&vnop_default_desc, (vop_t)nullfs_default}, {&vnop_getattr_desc, (vop_t)nullfs_getattr},
-	{&vnop_open_desc, (vop_t)nullfs_open}, {&vnop_close_desc, (vop_t)nullfs_close},
-	{&vnop_inactive_desc, (vop_t)null_inactive}, {&vnop_reclaim_desc, (vop_t)null_reclaim},
-	{&vnop_lookup_desc, (vop_t)null_lookup}, {&vnop_readdir_desc, (vop_t)nullfs_readdir},
-	{&vnop_readlink_desc, (vop_t)nullfs_readlink}, {&vnop_pathconf_desc, (vop_t)nullfs_pathconf},
-	{&vnop_fsync_desc, (vop_t)nullfs_fsync}, {&vnop_mmap_desc, (vop_t)nullfs_mmap},
-	{&vnop_mnomap_desc, (vop_t)nullfs_mnomap}, {&vnop_getxattr_desc, (vop_t)nullfs_getxattr},
-	{&vnop_pagein_desc, (vop_t)nullfs_pagein}, {&vnop_read_desc, (vop_t)nullfs_read},
-	{&vnop_listxattr_desc, (vop_t)nullfs_listxattr}, {NULL, NULL},
+static const struct vnodeopv_entry_desc nullfs_vnodeop_entries[] = {
+	{.opve_op = &vnop_default_desc, .opve_impl = (vop_t)nullfs_default}, {.opve_op = &vnop_getattr_desc, .opve_impl = (vop_t)nullfs_getattr},
+	{.opve_op = &vnop_open_desc, .opve_impl = (vop_t)nullfs_open}, {.opve_op = &vnop_close_desc, .opve_impl = (vop_t)nullfs_close},
+	{.opve_op = &vnop_inactive_desc, .opve_impl = (vop_t)null_inactive}, {.opve_op = &vnop_reclaim_desc, .opve_impl = (vop_t)null_reclaim},
+	{.opve_op = &vnop_lookup_desc, .opve_impl = (vop_t)null_lookup}, {.opve_op = &vnop_readdir_desc, .opve_impl = (vop_t)nullfs_readdir},
+	{.opve_op = &vnop_readlink_desc, .opve_impl = (vop_t)nullfs_readlink}, {.opve_op = &vnop_pathconf_desc, .opve_impl = (vop_t)nullfs_pathconf},
+	{.opve_op = &vnop_fsync_desc, .opve_impl = (vop_t)nullfs_fsync}, {.opve_op = &vnop_mmap_desc, .opve_impl = (vop_t)nullfs_mmap},
+	{.opve_op = &vnop_mnomap_desc, .opve_impl = (vop_t)nullfs_mnomap}, {.opve_op = &vnop_getxattr_desc, .opve_impl = (vop_t)nullfs_getxattr},
+	{.opve_op = &vnop_pagein_desc, .opve_impl = (vop_t)nullfs_pagein}, {.opve_op = &vnop_read_desc, .opve_impl = (vop_t)nullfs_read},
+	{.opve_op = &vnop_listxattr_desc, .opve_impl = (vop_t)nullfs_listxattr}, {.opve_op = NULL, .opve_impl = NULL},
 };
 
-struct vnodeopv_desc nullfs_vnodeop_opv_desc = {&nullfs_vnodeop_p, nullfs_vnodeop_entries};
+const struct vnodeopv_desc nullfs_vnodeop_opv_desc = {.opv_desc_vector_p = &nullfs_vnodeop_p, .opv_desc_ops = nullfs_vnodeop_entries};
 
 //NULLFS Specific helper function
 

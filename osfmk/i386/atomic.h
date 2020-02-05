@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -26,47 +26,13 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#ifndef _MACHINE_ATOMIC_H
+#error "Do not include <i386/atomic.h> directly, use <machine/atomic.h>"
+#endif
+
 #ifndef _I386_ATOMIC_H_
 #define _I386_ATOMIC_H_
 
-#include <i386/smp.h>
-
-#if     __SMP__
-
-#define memory_order_consume_smp memory_order_consume
-#define memory_order_acquire_smp memory_order_acquire
-#define memory_order_release_smp memory_order_release
-#define memory_order_acq_rel_smp memory_order_acq_rel
-#define memory_order_seq_cst_smp memory_order_seq_cst
-
-#else
-
-#define memory_order_consume_smp memory_order_relaxed
-#define memory_order_acquire_smp memory_order_relaxed
-#define memory_order_release_smp memory_order_relaxed
-#define memory_order_acq_rel_smp memory_order_relaxed
-#define memory_order_seq_cst_smp memory_order_relaxed
-
-#endif
-
-#ifdef ATOMIC_PRIVATE
-
-static inline boolean_t
-atomic_compare_exchange(uintptr_t *target, uintptr_t oldval, uintptr_t newval,
-    enum memory_order ord, boolean_t wait)
-{
-	(void)wait;
-	return __c11_atomic_compare_exchange_strong((_Atomic uintptr_t *)target, &oldval, newval, ord, memory_order_relaxed);
-}
-
-static inline boolean_t
-atomic_compare_exchange32(uint32_t *target, uint32_t oldval, uint32_t newval,
-    enum memory_order ord, boolean_t wait)
-{
-	(void)wait;
-	return __c11_atomic_compare_exchange_strong((_Atomic uint32_t *)target, &oldval, newval, ord, memory_order_relaxed);
-}
-
-#endif // ATOMIC_PRIVATE
+/* No special configuration for Intel */
 
 #endif // _I386_ATOMIC_H_

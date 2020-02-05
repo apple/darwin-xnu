@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -54,7 +54,7 @@
  */
 
 struct UNDReply {
-	decl_lck_mtx_data(, lock)                                /* UNDReply lock */
+	decl_lck_mtx_data(, lock);                               /* UNDReply lock */
 	int                             userLandNotificationKey;
 	KUNCUserNotificationCallBack    callback;
 	boolean_t                       inprogress;
@@ -203,18 +203,11 @@ KUNCGetNotificationID(void)
 
 	reply = (UNDReplyRef) kalloc(sizeof(struct UNDReply));
 	if (reply != UND_REPLY_NULL) {
-		reply->self_port = ipc_port_alloc_kernel();
-		if (reply->self_port == IP_NULL) {
-			kfree(reply, sizeof(struct UNDReply));
-			reply = UND_REPLY_NULL;
-		} else {
-			lck_mtx_init(&reply->lock, &LockCompatGroup, LCK_ATTR_NULL);
-			reply->userLandNotificationKey = -1;
-			reply->inprogress = FALSE;
-			ipc_kobject_set(reply->self_port,
-			    (ipc_kobject_t)reply,
-			    IKOT_UND_REPLY);
-		}
+		reply->self_port = ipc_kobject_alloc_port((ipc_kobject_t)reply,
+		    IKOT_UND_REPLY, IPC_KOBJECT_ALLOC_NONE);
+		lck_mtx_init(&reply->lock, &LockCompatGroup, LCK_ATTR_NULL);
+		reply->userLandNotificationKey = -1;
+		reply->inprogress = FALSE;
 	}
 	return (KUNCUserNotificationID) reply;
 }

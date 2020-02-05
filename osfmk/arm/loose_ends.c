@@ -53,6 +53,12 @@
 
 #define INT_SIZE        (BYTE_SIZE * sizeof (int))
 
+/* machine_routines_asm.s calls these */
+extern int copyin_validate(const user_addr_t, uintptr_t, vm_size_t);
+extern int copyin_user_validate(const user_addr_t, uintptr_t, vm_size_t);
+extern int copyout_validate(uintptr_t, const user_addr_t, vm_size_t);
+extern int copyio_user_validate(int, int, user_addr_t, vm_size_t);
+extern int copyoutstr_prevalidate(const void *, user_addr_t, size_t);
 
 void
 bcopy_phys(addr64_t src, addr64_t dst, vm_size_t bytes)
@@ -572,6 +578,36 @@ copypv(addr64_t source, addr64_t sink, unsigned int size, int which)
  */
 const int copysize_limit_panic = (64 * 1024 * 1024);
 
+static inline bool
+is_kernel_to_kernel_copy()
+{
+	return current_thread()->map->pmap == kernel_pmap;
+}
+
+static int
+copy_validate_user(const user_addr_t user_addr, vm_size_t nbytes, bool kern_to_kern_allowed)
+{
+	user_addr_t user_addr_last = user_addr + nbytes;
+	thread_t self = current_thread();
+
+	if (__improbable(!kern_to_kern_allowed && is_kernel_to_kernel_copy())) {
+		return EFAULT;
+	}
+
+	if (__improbable((user_addr_last < user_addr) ||
+	    ((user_addr + nbytes) > vm_map_max(self->map)) ||
+	    (user_addr < vm_map_min(self->map)))) {
+		return EFAULT;
+	}
+
+	if (__improbable(nbytes > copysize_limit_panic)) {
+		panic("%s(%p, ..., %u) - transfer too large", __func__,
+		    (void *)user_addr, nbytes);
+	}
+
+	return 0;
+}
+
 /*
  * Validate the arguments to copy{in,out} on this platform.
  *
@@ -581,7 +617,7 @@ const int copysize_limit_panic = (64 * 1024 * 1024);
  */
 static int
 copy_validate(const user_addr_t user_addr,
-    uintptr_t kernel_addr, vm_size_t nbytes)
+    uintptr_t kernel_addr, vm_size_t nbytes, bool kern_to_kern_allowed)
 {
 	uintptr_t kernel_addr_last = kernel_addr + nbytes;
 
@@ -593,31 +629,42 @@ copy_validate(const user_addr_t user_addr,
 		    (void *)user_addr, (void *)kernel_addr, nbytes);
 	}
 
-	user_addr_t user_addr_last = user_addr + nbytes;
-
-	if (__improbable((user_addr_last < user_addr) || ((user_addr + nbytes) > vm_map_max(current_thread()->map)) ||
-	    (user_addr < vm_map_min(current_thread()->map)))) {
-		return EFAULT;
-	}
-
-	if (__improbable(nbytes > copysize_limit_panic)) {
-		panic("%s(%p, %p, %u) - transfer too large", __func__,
-		    (void *)user_addr, (void *)kernel_addr, nbytes);
-	}
-
-	return 0;
+	return copy_validate_user(user_addr, nbytes, kern_to_kern_allowed);
 }
 
 int
 copyin_validate(const user_addr_t ua, uintptr_t ka, vm_size_t nbytes)
 {
-	return copy_validate(ua, ka, nbytes);
+	return copy_validate(ua, ka, nbytes, true);
+}
+
+int
+copyin_user_validate(const user_addr_t ua, uintptr_t ka, vm_size_t nbytes)
+{
+	return copy_validate(ua, ka, nbytes, false);
 }
 
 int
 copyout_validate(uintptr_t ka, const user_addr_t ua, vm_size_t nbytes)
 {
-	return copy_validate(ua, ka, nbytes);
+	return copy_validate(ua, ka, nbytes, true);
+}
+
+int
+copyio_user_validate(int a __unused, int b __unused,
+    user_addr_t ua, vm_size_t nbytes)
+{
+	return copy_validate_user(ua, nbytes, false);
+}
+
+int
+copyoutstr_prevalidate(const void *__unused kaddr, user_addr_t __unused uaddr, size_t __unused len)
+{
+	if (__improbable(is_kernel_to_kernel_copy())) {
+		return EFAULT;
+	}
+
+	return 0;
 }
 
 #if     MACH_ASSERT

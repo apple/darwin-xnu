@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -105,60 +105,60 @@ typedef uint32_t  pending_io_t;
 TAILQ_HEAD(vnodelst, vnode);
 
 struct mount {
-	TAILQ_ENTRY(mount) mnt_list;            /* mount list */
-	int32_t         mnt_count;              /* reference on the mount */
-	lck_mtx_t       mnt_mlock;              /* mutex that protects mount point */
-	struct vfsops   *mnt_op;                /* operations on fs */
-	struct vfstable *mnt_vtable;            /* configuration info */
-	struct vnode    *mnt_vnodecovered;      /* vnode we mounted on */
-	struct vnodelst mnt_vnodelist;          /* list of vnodes this mount */
-	struct vnodelst mnt_workerqueue;                /* list of vnodes this mount */
-	struct vnodelst mnt_newvnodes;          /* list of vnodes this mount */
-	uint32_t                mnt_flag;               /* flags */
-	uint32_t                mnt_kern_flag;          /* kernel only flags */
-	uint32_t                mnt_compound_ops;       /* Available compound operations */
-	uint32_t                mnt_lflag;                      /* mount life cycle flags */
-	uint32_t                mnt_maxsymlinklen;      /* max size of short symlink */
-	struct vfsstatfs        mnt_vfsstat;            /* cache of filesystem stats */
-	qaddr_t         mnt_data;               /* private data */
+	TAILQ_ENTRY(mount)      mnt_list;                   /* mount list */
+	int32_t                 mnt_count;                  /* reference on the mount */
+	lck_mtx_t               mnt_mlock;                  /* mutex that protects mount point */
+	const struct vfsops     *mnt_op;                    /* operations on fs */
+	struct vfstable         *mnt_vtable;                /* configuration info */
+	struct vnode            *mnt_vnodecovered;          /* vnode we mounted on */
+	struct vnodelst         mnt_vnodelist;              /* list of vnodes this mount */
+	struct vnodelst         mnt_workerqueue;            /* list of vnodes this mount */
+	struct vnodelst         mnt_newvnodes;              /* list of vnodes this mount */
+	uint32_t                mnt_flag;                   /* flags */
+	uint32_t                mnt_kern_flag;              /* kernel only flags */
+	uint32_t                mnt_compound_ops;           /* Available compound operations */
+	uint32_t                mnt_lflag;                  /* mount life cycle flags */
+	uint32_t                mnt_maxsymlinklen;          /* max size of short symlink */
+	struct vfsstatfs        mnt_vfsstat;                /* cache of filesystem stats */
+	qaddr_t                 mnt_data;                   /* private data */
 	/* Cached values of the IO constraints for the device */
-	uint32_t        mnt_maxreadcnt;         /* Max. byte count for read */
-	uint32_t        mnt_maxwritecnt;        /* Max. byte count for write */
-	uint32_t        mnt_segreadcnt;         /* Max. segment count for read */
-	uint32_t        mnt_segwritecnt;        /* Max. segment count for write */
-	uint32_t        mnt_maxsegreadsize;     /* Max. segment read size  */
-	uint32_t        mnt_maxsegwritesize;    /* Max. segment write size */
-	uint32_t        mnt_alignmentmask;      /* Mask of bits that aren't addressable via DMA */
-	uint32_t        mnt_devblocksize;       /* the underlying device block size */
-	uint32_t        mnt_ioqueue_depth;      /* the maxiumum number of commands a device can accept */
-	uint32_t        mnt_ioscale;            /* scale the various throttles/limits imposed on the amount of I/O in flight */
-	uint32_t        mnt_ioflags;            /* flags for  underlying device */
-	uint32_t        mnt_minsaturationbytecount;     /* if non-zero, mininum amount of writes (in bytes) needed to max out throughput */
-	pending_io_t    mnt_pending_write_size __attribute__((aligned(sizeof(pending_io_t))));  /* byte count of pending writes */
-	pending_io_t    mnt_pending_read_size  __attribute__((aligned(sizeof(pending_io_t))));  /* byte count of pending reads */
-	struct timeval  mnt_last_write_issued_timestamp;
-	struct timeval  mnt_last_write_completed_timestamp;
-	int64_t         mnt_max_swappin_available;
+	uint32_t                mnt_maxreadcnt;             /* Max. byte count for read */
+	uint32_t                mnt_maxwritecnt;            /* Max. byte count for write */
+	uint32_t                mnt_segreadcnt;             /* Max. segment count for read */
+	uint32_t                mnt_segwritecnt;            /* Max. segment count for write */
+	uint32_t                mnt_maxsegreadsize;         /* Max. segment read size  */
+	uint32_t                mnt_maxsegwritesize;        /* Max. segment write size */
+	uint32_t                mnt_alignmentmask;          /* Mask of bits that aren't addressable via DMA */
+	uint32_t                mnt_devblocksize;           /* the underlying device block size */
+	uint32_t                mnt_ioqueue_depth;          /* the maxiumum number of commands a device can accept */
+	uint32_t                mnt_ioscale;                /* scale the various throttles/limits imposed on the amount of I/O in flight */
+	uint32_t                mnt_ioflags;                /* flags for  underlying device */
+	uint32_t                mnt_minsaturationbytecount; /* if non-zero, mininum amount of writes (in bytes) needed to max out throughput */
+	pending_io_t            mnt_pending_write_size __attribute__((aligned(sizeof(pending_io_t))));  /* byte count of pending writes */
+	pending_io_t            mnt_pending_read_size  __attribute__((aligned(sizeof(pending_io_t))));  /* byte count of pending reads */
+	struct timeval          mnt_last_write_issued_timestamp;
+	struct timeval          mnt_last_write_completed_timestamp;
+	int64_t                 mnt_max_swappin_available;
 
-	lck_rw_t        mnt_rwlock;             /* mutex readwrite lock */
-	lck_mtx_t       mnt_renamelock;         /* mutex that serializes renames that change shape of tree */
-	vnode_t         mnt_devvp;              /* the device mounted on for local file systems */
-	uint32_t        mnt_devbsdunit;         /* the BSD unit number of the device */
-	uint64_t        mnt_throttle_mask;      /* the throttle mask of what devices will be affected by I/O from this mnt */
-	void            *mnt_throttle_info;     /* used by the throttle code */
-	int32_t         mnt_crossref;           /* refernces to cover lookups  crossing into mp */
-	int32_t         mnt_iterref;            /* refernces to cover iterations; drained makes it -ve  */
+	lck_rw_t                mnt_rwlock;                 /* mutex readwrite lock */
+	lck_mtx_t               mnt_renamelock;             /* mutex that serializes renames that change shape of tree */
+	vnode_t                 mnt_devvp;                  /* the device mounted on for local file systems */
+	uint32_t                mnt_devbsdunit;             /* the BSD unit number of the device */
+	uint64_t                mnt_throttle_mask;          /* the throttle mask of what devices will be affected by I/O from this mnt */
+	void                    *mnt_throttle_info;         /* used by the throttle code */
+	int32_t                 mnt_crossref;               /* refernces to cover lookups  crossing into mp */
+	int32_t                 mnt_iterref;                /* refernces to cover iterations; drained makes it -ve  */
 #if CONFIG_TRIGGERS
-	int32_t         mnt_numtriggers;        /* num of trigger vnodes for this mount */
-	vfs_trigger_callback_t *mnt_triggercallback;
-	void            *mnt_triggerdata;
+	int32_t                 mnt_numtriggers;            /* num of trigger vnodes for this mount */
+	vfs_trigger_callback_t  *mnt_triggercallback;
+	void                    *mnt_triggerdata;
 #endif
 	/* XXX 3762912 hack to support HFS filesystem 'owner' */
-	uid_t           mnt_fsowner;
-	gid_t           mnt_fsgroup;
+	uid_t                   mnt_fsowner;
+	gid_t                   mnt_fsgroup;
 
-	struct label    *mnt_mntlabel;          /* MAC mount label */
-	struct label    *mnt_fslabel;           /* MAC default fs label */
+	struct label            *mnt_mntlabel;              /* MAC mount label */
+	struct label            *mnt_fslabel;               /* MAC default fs label */
 
 	/*
 	 * cache the rootvp of the last mount point
@@ -174,14 +174,14 @@ struct mount {
 	 * we don't take an explicit long term reference
 	 * on it when we mount it
 	 */
-	vnode_t         mnt_realrootvp;
-	uint32_t        mnt_realrootvp_vid;
+	vnode_t                 mnt_realrootvp;
+	uint32_t                mnt_realrootvp_vid;
 	/*
 	 * bumped each time a mount or unmount
 	 * occurs... its used to invalidate
 	 * 'mnt_realrootvp' from the cache
 	 */
-	uint32_t             mnt_generation;
+	uint32_t                mnt_generation;
 	/*
 	 * if 'MNTK_AUTH_CACHE_TIMEOUT' is
 	 * set, then 'mnt_authcache_ttl' is
@@ -191,14 +191,14 @@ struct mount {
 	 * time-to-live for the cached lookup right for
 	 * volumes marked 'MNTK_AUTH_OPAQUE'.
 	 */
-	int             mnt_authcache_ttl;
-	char            fstypename_override[MFSTYPENAMELEN];
+	int                     mnt_authcache_ttl;
+	char                    fstypename_override[MFSTYPENAMELEN];
 
-	uint32_t        mnt_iobufinuse;
+	uint32_t                mnt_iobufinuse;
 
-	void *mnt_disk_conditioner_info;
+	void                    *mnt_disk_conditioner_info;
 
-	lck_mtx_t       mnt_iter_lock;          /* mutex that protects iteration of vnodes */
+	lck_mtx_t               mnt_iter_lock;              /* mutex that protects iteration of vnodes */
 };
 
 /*
@@ -216,6 +216,7 @@ struct mount {
 #define MNT_IOFLAGS_CSUNMAP_SUPPORTED   0x00000008
 #define MNT_IOFLAGS_SWAPPIN_SUPPORTED   0x00000010
 #define MNT_IOFLAGS_FUSION_DRIVE        0x00000020
+#define MNT_IOFLAGS_PERIPHERAL_DRIVE    0x00000040 /* External: Attached directly to the system (USB,TBT,FW,etc.) */
 
 /*
  * ioqueue depth for devices that don't report one
@@ -241,6 +242,7 @@ extern struct mount * dead_mountp;
  *		because the bits here were broken out from the high bits
  *		of the mount flags.
  */
+#define MNTK_SYSTEM             0x00000040     /* Volume associated with system volume (do not allow unmount) */
 #define MNTK_NOSWAP             0x00000080  /* swap files cannot be used on this mount */
 #define MNTK_SWAP_MOUNT         0x00000100      /* we are swapping to this mount */
 #define MNTK_DENY_READDIREXT 0x00000200 /* Deny Extended-style readdir's for this volume */
@@ -306,7 +308,7 @@ typedef struct fhandle  fhandle_t;
  * mount time to identify the requested filesystem.
  */
 struct vfstable {
-	struct  vfsops *vfc_vfsops;     /* filesystem operations vector */
+	const struct vfsops *vfc_vfsops;/* filesystem operations vector */
 	char    vfc_name[MFSNAMELEN];   /* filesystem type name */
 	int     vfc_typenum;            /* historic filesystem type number */
 	int     vfc_refcount;           /* number mounted of this type */
@@ -375,10 +377,10 @@ struct user64_statfs {
 	user64_long_t   f_ffree;                /* free file nodes in fs */
 	fsid_t          f_fsid;                 /* file system id */
 	uid_t           f_owner;                /* user that mounted the filesystem */
-	short           f_reserved1;    /* spare for later */
+	short           f_reserved1;            /* spare for later */
 	short           f_type;                 /* type of filesystem */
-	user64_long_t       f_flags;            /* copy of mount exported flags */
-	user64_long_t f_reserved2[2];   /* reserved for future use */
+	user64_long_t   f_flags;                /* copy of mount exported flags */
+	user64_long_t   f_reserved2[2];         /* reserved for future use */
 	char            f_fstypename[MFSNAMELEN]; /* fs type name */
 	char            f_mntonname[MNAMELEN];  /* directory on which mounted */
 	char            f_mntfromname[MNAMELEN];/* mounted filesystem */
@@ -442,6 +444,9 @@ int  mount_refdrain(mount_t);
 /* vfs_rootmountalloc should be kept as a private api */
 errno_t vfs_rootmountalloc(const char *, const char *, mount_t *mpp);
 
+int vfs_mount_rosv_data(void);
+int vfs_mount_vm(void);
+
 int     vfs_mountroot(void);
 void    vfs_unmountall(void);
 int     safedounmount(struct mount *, int, vfs_context_t);
@@ -460,11 +465,16 @@ void mount_iterdrop(mount_t);
 void mount_iterdrain(mount_t);
 void mount_iterreset(mount_t);
 
+/* These flags are used as flag bits in the `internal_flags` argument to mount_common */
 /* Private NFS spi */
 #define KERNEL_MOUNT_NOAUTH             0x01 /* Don't check the UID of the directory we are mounting on */
 #define KERNEL_MOUNT_PERMIT_UNMOUNT     0x02 /* Allow (non-forced) unmounts by users other the one who mounted the volume */
 /* used by snapshot mounting SPI */
 #define KERNEL_MOUNT_SNAPSHOT           0x04 /* Mounting a snapshot */
+#define KERNEL_MOUNT_DATAVOL            0x08 /* mount the data volume */
+#define KERNEL_MOUNT_VMVOL              0x10 /* mount the VM volume */
+
+
 #if NFSCLIENT || DEVFS || ROUTEFS
 /*
  * NOTE: kernel_mount() does not force MNT_NOSUID, MNT_NOEXEC, or MNT_NODEC for non-privileged

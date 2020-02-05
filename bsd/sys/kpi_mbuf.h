@@ -1053,7 +1053,7 @@ extern void mbuf_inbound_modified(mbuf_t mbuf);
  *               There are a number of operations that are performed in hardware,
  *               such as calculating checksums. This function will perform in
  *               software the various opterations that were scheduled to be done
- *               in hardware. Future operations may include IPSec processing or
+ *               in hardware. Future operations may include IPsec processing or
  *               vlan support. If you are redirecting a packet to a new interface
  *               which may not have the same hardware support or encapsulating
  *               the packet, you should call this function to force the stack to
@@ -1911,6 +1911,27 @@ extern errno_t mbuf_get_flowid(mbuf_t mbuf, u_int16_t *flowid);
  */
 extern errno_t mbuf_set_flowid(mbuf_t mbuf, u_int16_t flowid);
 
+/*!
+ *       @function mbuf_get_keepalive_flag
+ *       @discussion Tell if it's a keep alive packet.
+ *       @param mbuf The mbuf representing the packet.
+ *       @param is_keepalive A pointer that returns the truth value.
+ *       @result 0 upon success otherwise the errno error. If the mbuf
+ *               packet header does not have valid data bytes, the error
+ *               code will be EINVAL
+ */
+extern errno_t mbuf_get_keepalive_flag(mbuf_t mbuf, boolean_t *is_keepalive);
+
+/*!
+ *       @function mbuf_set_keepalive_flag
+ *       @discussion Set or clear the packet keep alive flag.
+ *       @param mbuf The mbuf representing the packet.
+ *       @param is_keepalive The boolean value.
+ *       @result 0 upon success otherwise the errno error. If the mbuf
+ *               packet header does not have valid data bytes, the error
+ *               code will be EINVAL
+ */
+extern errno_t mbuf_set_keepalive_flag(mbuf_t mbuf, boolean_t is_keepalive);
 
 #endif /* KERNEL_PRIVATE */
 

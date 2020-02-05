@@ -741,8 +741,8 @@ priority_queue_entry_increase(struct priority_queue *que, priority_queue_entry_t
  *              <type *> min element
  */
 #define priority_queue_min(q, type, field) ({                                                                   \
-	assert(pqueue_is_min_heap(que));                                                                         \
-	priority_queue_entry_key(pqueue_unpack_root(q), type, field);                                           \
+	assert(pqueue_is_min_heap(q));                                                                          \
+	pqe_element(pqueue_unpack_root(q), type, field);                                                        \
 })
 
 /*
@@ -807,7 +807,7 @@ priority_queue_entry_increase(struct priority_queue *que, priority_queue_entry_t
  *              <type *> min element
  */
 #define priority_queue_remove_min(q, type, field, cmp_fn) ({                                                    \
-	assert(pqueue_is_min_heap(que));                                                                         \
+	assert(pqueue_is_min_heap(q));                                                                         \
 	pqe_element(pqueue_remove_root(q, pqueue_unpack_root(q), cmp_fn), type, field);                         \
 })
 

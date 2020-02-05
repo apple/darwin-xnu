@@ -285,6 +285,11 @@ core_idle(__unused cpu_data_t *cpu)
 #pragma mark common hooks
 
 void
+mt_early_init(void)
+{
+}
+
+void
 mt_cpu_idle(cpu_data_t *cpu)
 {
 	core_idle(cpu);
@@ -332,15 +337,26 @@ mt_wake_per_core(void)
 {
 }
 
+uint64_t
+mt_count_pmis(void)
+{
+	uint64_t npmis = 0;
+	int max_cpu = ml_get_max_cpu_number();
+	for (int i = 0; i <= max_cpu; i++) {
+		cpu_data_t *cpu = (cpu_data_t *)CpuDataEntries[i].cpu_data_vaddr;
+		npmis += cpu->cpu_monotonic.mtc_npmis;
+	}
+	return npmis;
+}
+
 static void
 mt_cpu_pmi(cpu_data_t *cpu, uint64_t pmcr0)
 {
 	assert(cpu != NULL);
 	assert(ml_get_interrupts_enabled() == FALSE);
 
-	os_atomic_inc(&mt_pmis, relaxed);
-	cpu->cpu_stat.pmi_cnt++;
-	cpu->cpu_stat.pmi_cnt_wake++;
+	cpu->cpu_monotonic.mtc_npmis += 1;
+	cpu->cpu_stat.pmi_cnt_wake += 1;
 
 #if MONOTONIC_DEBUG
 	if (!PMCR0_PMI(pmcr0)) {
@@ -444,7 +460,7 @@ mt_microstackshot_start_remote(__unused void *arg)
 
 	core_set_enabled();
 
-	if (hw_atomic_sub(&mt_xc_sync, 1) == 0) {
+	if (os_atomic_dec(&mt_xc_sync, relaxed) == 0) {
 		thread_wakeup((event_t)&mt_xc_sync);
 	}
 }

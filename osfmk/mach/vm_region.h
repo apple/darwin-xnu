@@ -50,7 +50,7 @@
 
 #include <sys/cdefs.h>
 
-#pragma pack(4)
+#pragma pack(push, 4)
 
 // LP64todo: all the current tools are 32bit, obviously never worked for 64b
 // so probably should be a real 32b ID vs. ptr.
@@ -270,17 +270,24 @@ struct vm_region_submap_info_64 {
 	vm32_object_id_t        object_id;      /* obj/map name, not a handle */
 	unsigned short          user_wired_count;
 	unsigned int            pages_reusable;
+	vm_object_id_t          object_id_full;
 };
 
 typedef struct vm_region_submap_info_64         *vm_region_submap_info_64_t;
 typedef struct vm_region_submap_info_64          vm_region_submap_info_data_64_t;
 
-#define VM_REGION_SUBMAP_INFO_V1_SIZE   \
+#define VM_REGION_SUBMAP_INFO_V2_SIZE   \
 	(sizeof (vm_region_submap_info_data_64_t))
+#define VM_REGION_SUBMAP_INFO_V1_SIZE   \
+	(VM_REGION_SUBMAP_INFO_V2_SIZE - \
+	 sizeof (vm_object_id_t) /* object_id_full */ )
 #define VM_REGION_SUBMAP_INFO_V0_SIZE   \
 	(VM_REGION_SUBMAP_INFO_V1_SIZE - \
 	 sizeof (unsigned int) /* pages_reusable */ )
 
+#define VM_REGION_SUBMAP_INFO_V2_COUNT_64 \
+	((mach_msg_type_number_t) \
+	 (VM_REGION_SUBMAP_INFO_V2_SIZE / sizeof (natural_t)))
 #define VM_REGION_SUBMAP_INFO_V1_COUNT_64 \
 	((mach_msg_type_number_t) \
 	 (VM_REGION_SUBMAP_INFO_V1_SIZE / sizeof (natural_t)))
@@ -289,7 +296,7 @@ typedef struct vm_region_submap_info_64          vm_region_submap_info_data_64_t
 	 (VM_REGION_SUBMAP_INFO_V0_SIZE / sizeof (natural_t)))
 
 /* set this to the latest version */
-#define VM_REGION_SUBMAP_INFO_COUNT_64          VM_REGION_SUBMAP_INFO_V1_COUNT_64
+#define VM_REGION_SUBMAP_INFO_COUNT_64          VM_REGION_SUBMAP_INFO_V2_COUNT_64
 
 struct vm_region_submap_short_info_64 {
 	vm_prot_t               protection;     /* present access protection */
@@ -313,8 +320,6 @@ typedef struct vm_region_submap_short_info_64    vm_region_submap_short_info_dat
 #define VM_REGION_SUBMAP_SHORT_INFO_COUNT_64                            \
 	((mach_msg_type_number_t)                                       \
 	 (sizeof (vm_region_submap_short_info_data_64_t) / sizeof (natural_t)))
-
-
 
 struct mach_vm_read_entry {
 	mach_vm_address_t address;
@@ -342,7 +347,7 @@ typedef struct vm_read_entry            vm_read_entry_t[VM_MAP_ENTRY_MAX];
 typedef struct vm32_read_entry          vm32_read_entry_t[VM_MAP_ENTRY_MAX];
 #endif
 
-#pragma pack()
+#pragma pack(pop)
 
 
 #define VM_PAGE_INFO_MAX

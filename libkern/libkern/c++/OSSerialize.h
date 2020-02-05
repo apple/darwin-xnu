@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -36,6 +36,13 @@ class OSCollection;
 class OSSet;
 class OSDictionary;
 class OSArray;
+class OSData;
+
+class OSSerializer;
+typedef OSPtr<OSSerializer> OSSerializerPtr;
+
+class OSSerialize;
+typedef OSPtr<OSSerialize> OSSerializePtr;
 
 /*!
  * @header
@@ -44,7 +51,7 @@ class OSArray;
  * This header declares the OSSerialize class.
  */
 
-OSObject *
+OSObjectPtr
 OSUnserializeBinary(const void *buffer, size_t bufferSize);
 
 /*!
@@ -83,7 +90,7 @@ OSUnserializeBinary(const void *buffer, size_t bufferSize);
 
 class OSSerialize : public OSObject
 {
-	OSDeclareDefaultStructors(OSSerialize)
+	OSDeclareDefaultStructors(OSSerialize);
 	friend class OSBoolean;
 
 private:
@@ -105,14 +112,18 @@ public:
 	typedef void * Editor;
 #endif
 
-	bool   binary;
-	bool   endCollection;
-	Editor editor;
-	void * editRef;
+	bool     binary;
+	bool     endCollection;
+	Editor   editor;
+	void   * editRef;
+	OSData * indexData;
 
 	bool binarySerialize(const OSMetaClassBase *o);
+	bool binarySerializeInternal(const OSMetaClassBase *o);
 	bool addBinary(const void * data, size_t size);
-	bool addBinaryObject(const OSMetaClassBase * o, uint32_t key, const void * _bits, size_t size);
+	bool addBinaryObject(const OSMetaClassBase * o, uint32_t key, const void * _bits, size_t size,
+	    uint32_t * startCollection);
+	void endBinaryCollection(uint32_t startCollection);
 
 public:
 
@@ -132,9 +143,10 @@ public:
  * @discussion
  * The serializer will grow as needed to accommodate more data.
  */
-	static OSSerialize * withCapacity(unsigned int capacity);
+	static OSSerializePtr withCapacity(unsigned int capacity);
 
-	static OSSerialize * binaryWithCapacity(unsigned int inCapacity, Editor editor = 0, void * reference = 0);
+	static OSSerializePtr binaryWithCapacity(unsigned int inCapacity, Editor editor = NULL, void * reference = NULL);
+	void setIndexed(bool index);
 
 /*!
  * @function text
@@ -321,7 +333,7 @@ typedef bool (^OSSerializerBlock)(OSSerialize * serializer);
 
 class OSSerializer : public OSObject
 {
-	OSDeclareDefaultStructors(OSSerializer)
+	OSDeclareDefaultStructors(OSSerializer);
 
 	void * target;
 	void * ref;
@@ -329,13 +341,13 @@ class OSSerializer : public OSObject
 
 public:
 
-	static OSSerializer * forTarget(
+	static OSSerializerPtr forTarget(
 		void * target,
 		OSSerializerCallback callback,
-		void * ref = 0);
+		void * ref = NULL);
 
 #ifdef __BLOCKS__
-	static OSSerializer * withBlock(
+	static OSSerializerPtr withBlock(
 		OSSerializerBlock callback);
 #endif
 

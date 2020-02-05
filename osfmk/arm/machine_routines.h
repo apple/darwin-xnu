@@ -446,6 +446,11 @@ vm_offset_t ml_io_map_wcomb(
 	vm_offset_t phys_addr,
 	vm_size_t size);
 
+vm_offset_t ml_io_map_with_prot(
+	vm_offset_t phys_addr,
+	vm_size_t size,
+	vm_prot_t prot);
+
 void ml_get_bouncepool_info(
 	vm_offset_t *phys_addr,
 	vm_size_t   *size);
@@ -514,6 +519,17 @@ void bzero_phys(
 
 void bzero_phys_nc(addr64_t src64, vm_size_t bytes);
 
+#if MACH_KERNEL_PRIVATE
+#ifdef __arm64__
+/* Pattern-fill buffer with zeros or a 32-bit pattern;
+ * target must be 128-byte aligned and sized a multiple of 128
+ * Both variants emit stores with non-temporal properties.
+ */
+void fill32_dczva(addr64_t, vm_size_t);
+void fill32_nt(addr64_t, vm_size_t, uint32_t);
+#endif
+#endif
+
 void ml_thread_policy(
 	thread_t thread,
 	unsigned policy_id,
@@ -555,6 +571,14 @@ extern uint64_t ml_get_conttime_wake_time(void);
 
 /* Time since the system was reset (as part of boot/wake) */
 uint64_t ml_get_time_since_reset(void);
+
+/*
+ * Called by ApplePMGR to set wake time.  Units and epoch are identical
+ * to mach_continuous_time().  Has no effect on !HAS_CONTINUOUS_HWCLOCK
+ * chips.  If wake_time == UINT64_MAX, that means the wake time is
+ * unknown and calls to ml_get_time_since_reset() will return UINT64_MAX.
+ */
+void ml_set_reset_time(uint64_t wake_time);
 
 #ifdef XNU_KERNEL_PRIVATE
 /* Just a stub on ARM */
@@ -608,6 +632,8 @@ extern int      be_tracing(void);
 typedef void (*broadcastFunc) (void *);
 unsigned int cpu_broadcast_xcall(uint32_t *, boolean_t, broadcastFunc, void *);
 kern_return_t cpu_xcall(int, broadcastFunc, void *);
+unsigned int cpu_broadcast_immediate_xcall(uint32_t *, boolean_t, broadcastFunc, void *);
+kern_return_t cpu_immediate_xcall(int, broadcastFunc, void *);
 
 #ifdef  KERNEL_PRIVATE
 
@@ -932,6 +958,22 @@ typedef enum perfcontrol_callout_stat {
 uint64_t perfcontrol_callout_stat_avg(perfcontrol_callout_type_t type,
     perfcontrol_callout_stat_t stat);
 
+#if defined(HAS_APPLE_PAC)
+#define ONES(x) (BIT((x))-1)
+#define PTR_MASK ONES(64-T1SZ_BOOT)
+#define PAC_MASK ~PTR_MASK
+#define SIGN(p) ((p) & BIT(55))
+#define UNSIGN_PTR(p) \
+	SIGN(p) ? ((p) | PAC_MASK) : ((p) & ~PAC_MASK)
+
+void ml_task_set_rop_pid(task_t task, task_t parent_task, boolean_t inherit);
+void ml_task_set_disable_user_jop(task_t task, boolean_t disable_user_jop);
+void ml_thread_set_disable_user_jop(thread_t thread, boolean_t disable_user_jop);
+void ml_set_kernelkey_enabled(boolean_t enable);
+void *ml_auth_ptr_unchecked(void *ptr, unsigned key, uint64_t modifier);
+#endif /* defined(HAS_APPLE_PAC) */
+
+
 
 #endif /* KERNEL_PRIVATE */
 
@@ -940,7 +982,7 @@ void ml_get_power_state(boolean_t *, boolean_t *);
 
 uint32_t get_arm_cpu_version(void);
 boolean_t user_cont_hwclock_allowed(void);
-boolean_t user_timebase_allowed(void);
+uint8_t user_timebase_type(void);
 boolean_t ml_thread_is64bit(thread_t thread);
 
 #ifdef __arm64__

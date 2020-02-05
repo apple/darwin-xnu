@@ -133,9 +133,9 @@ __BEGIN_DECLS
 #ifdef BSD_KERNEL_PRIVATE
 int spec_blktooff(struct  vnop_blktooff_args *);
 int spec_offtoblk(struct  vnop_offtoblk_args *);
-int     spec_fsync_internal(vnode_t, int, vfs_context_t);
+int spec_fsync_internal(vnode_t, int, vfs_context_t);
 int spec_blockmap(struct  vnop_blockmap_args *);
-int spec_kqfilter(vnode_t vp, struct knote *kn, struct kevent_internal_s *kev);
+int spec_kqfilter(vnode_t vp, struct knote *kn, struct kevent_qos_s *kev);
 #endif /* BSD_KERNEL_PRIVATE */
 
 int     spec_ebadf(void *);

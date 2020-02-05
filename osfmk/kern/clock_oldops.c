@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -96,7 +96,7 @@ typedef struct alarm    alarm_data_t;
 #define ALARM_DONE      4               /* alarm has expired */
 
 /* local data declarations */
-decl_simple_lock_data(static, alarm_lock)        /* alarm synchronization */
+decl_simple_lock_data(static, alarm_lock);       /* alarm synchronization */
 static struct   zone            *alarm_zone;    /* zone for user alarms */
 static struct   alarm           *alrmfree;              /* alarm free list pointer */
 static struct   alarm           *alrmdone;              /* alarm done list pointer */
@@ -139,9 +139,10 @@ kern_return_t   rtclock_getattr(
 	mach_msg_type_number_t  *count);
 
 SECURITY_READ_ONLY_EARLY(struct clock_ops) sysclk_ops = {
-	NULL, rtclock_init,
-	rtclock_gettime,
-	rtclock_getattr,
+	.c_config   = NULL,
+	.c_init     = rtclock_init,
+	.c_gettime  = rtclock_gettime,
+	.c_getattr  = rtclock_getattr,
 };
 
 kern_return_t   calend_gettime(
@@ -153,20 +154,26 @@ kern_return_t   calend_getattr(
 	mach_msg_type_number_t  *count);
 
 SECURITY_READ_ONLY_EARLY(struct clock_ops) calend_ops = {
-	NULL, NULL,
-	calend_gettime,
-	calend_getattr,
+	.c_config   = NULL,
+	.c_init     = NULL,
+	.c_gettime  = calend_gettime,
+	.c_getattr  = calend_getattr,
 };
 
 /*
  * List of clock devices.
  */
-SECURITY_READ_ONLY_LATE(struct  clock) clock_list[] = {
-	/* SYSTEM_CLOCK */
-	{ &sysclk_ops, 0, 0 },
-
-	/* CALENDAR_CLOCK */
-	{ &calend_ops, 0, 0 }
+SECURITY_READ_ONLY_LATE(struct clock) clock_list[] = {
+	[SYSTEM_CLOCK] = {
+		.cl_ops     = &sysclk_ops,
+		.cl_service = IPC_PORT_NULL,
+		.cl_control = IPC_PORT_NULL,
+	},
+	[CALENDAR_CLOCK] = {
+		.cl_ops     = &calend_ops,
+		.cl_service = IPC_PORT_NULL,
+		.cl_control = IPC_PORT_NULL,
+	},
 };
 int     clock_count = sizeof(clock_list) / sizeof(clock_list[0]);
 

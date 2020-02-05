@@ -185,7 +185,6 @@ extern lck_attr_t       ipc_lck_attr;
 	                                                &ipc_lck_grp)
 
 #define is_write_lock(is)       lck_spin_lock_grp(&(is)->is_lock_data, &ipc_lck_grp)
-#define is_write_lock_try(is)   lck_spin_try_lock_grp(&(is)->is_lock_data, &ipc_lck_grp)
 #define is_write_unlock(is)     lck_spin_unlock(&(is)->is_lock_data)
 #define is_write_sleep(is)      lck_spin_sleep_grp(&(is)->is_lock_data,     \
 	                                                LCK_SLEEP_DEFAULT,                                      \
@@ -245,6 +244,14 @@ extern void ipc_space_rand_freelist(
 
 /* Generate a new gencount rollover point from a space's entropy pool */
 extern ipc_entry_bits_t ipc_space_get_rollpoint(ipc_space_t space);
+
+/* Allocate a new port/set/dead-name in a space */
+extern kern_return_t mach_port_allocate_internal(
+	ipc_space_t       space,
+	mach_port_right_t right,
+	mach_port_qos_t   *qosp,
+	mach_port_name_t  *namep);
+
 #endif /* MACH_KERNEL_PRIVATE */
 #endif /* __APPLE_API_PRIVATE */
 

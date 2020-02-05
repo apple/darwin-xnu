@@ -88,16 +88,12 @@
 
 #include <os/overflow.h>
 
-#if __x86_64__
-extern int bootarg_no32exec;    /* bsd_init.c */
-#endif
-
 /*
  * XXX vm/pmap.h should not treat these prototypes as MACH_KERNEL_PRIVATE
  * when KERNEL is defined.
  */
-extern pmap_t   pmap_create(ledger_t ledger, vm_map_size_t size,
-    boolean_t is_64bit);
+extern pmap_t   pmap_create_options(ledger_t ledger, vm_map_size_t size,
+    unsigned int flags);
 
 /* XXX should have prototypes in a shared header file */
 extern int      get_map_nentries(vm_map_t);
@@ -174,6 +170,13 @@ load_uuid(
 	);
 
 static load_return_t
+load_version(
+	struct version_min_command     *vmc,
+	boolean_t               *found_version_cmd,
+	load_result_t           *result
+	);
+
+static load_return_t
 load_code_signature(
 	struct linkedit_data_command    *lcp,
 	struct vnode                    *vp,
@@ -200,6 +203,14 @@ static
 load_return_t
 load_main(
 	struct entry_point_command      *epc,
+	thread_t                thread,
+	int64_t                         slide,
+	load_result_t           *result
+	);
+
+static
+load_return_t
+setup_driver_main(
 	thread_t                thread,
 	int64_t                         slide,
 	load_result_t           *result
@@ -250,6 +261,15 @@ load_dylinker(
 	load_result_t           *result,
 	struct image_params     *imgp
 	);
+
+#if __x86_64__
+extern int bootarg_no32exec;
+static boolean_t
+check_if_simulator_binary(
+	struct image_params     *imgp,
+	off_t                   file_offset,
+	off_t                   macho_size);
+#endif
 
 struct macho_data;
 
@@ -341,12 +361,12 @@ load_machfile(
 	boolean_t enforce_hard_pagezero = TRUE;
 	int in_exec = (imgp->ip_flags & IMGPF_EXEC);
 	task_t task = current_task();
-	proc_t p = current_proc();
 	int64_t                 aslr_page_offset = 0;
 	int64_t                 dyld_aslr_page_offset = 0;
 	int64_t                 aslr_section_size = 0;
 	int64_t                 aslr_section_offset = 0;
 	kern_return_t           kret;
+	unsigned int            pmap_flags = 0;
 
 	if (macho_size > file_size) {
 		return LOAD_BADMACHO;
@@ -354,6 +374,10 @@ load_machfile(
 
 	result->is_64bit_addr = ((imgp->ip_flags & IMGPF_IS_64BIT_ADDR) == IMGPF_IS_64BIT_ADDR);
 	result->is_64bit_data = ((imgp->ip_flags & IMGPF_IS_64BIT_DATA) == IMGPF_IS_64BIT_DATA);
+#if defined(HAS_APPLE_PAC)
+	pmap_flags |= (imgp->ip_flags & IMGPF_NOJOP) ? PMAP_CREATE_DISABLE_JOP : 0;
+#endif /* defined(HAS_APPLE_PAC) */
+	pmap_flags |= result->is_64bit_addr ? PMAP_CREATE_64BIT : 0;
 
 	task_t ledger_task;
 	if (imgp->ip_new_thread) {
@@ -361,9 +385,12 @@ load_machfile(
 	} else {
 		ledger_task = task;
 	}
-	pmap = pmap_create(get_task_ledger(ledger_task),
+	pmap = pmap_create_options(get_task_ledger(ledger_task),
 	    (vm_map_size_t) 0,
-	    result->is_64bit_addr);
+	    pmap_flags);
+	if (pmap == NULL) {
+		return LOAD_RESOURCE;
+	}
 	map = vm_map_create(pmap,
 	    0,
 	    vm_compute_max_offset(result->is_64bit_addr),
@@ -497,6 +524,7 @@ load_machfile(
 	 * task is not yet running, and it makes no sense.
 	 */
 	if (in_exec) {
+		proc_t p = vfs_context_proc(imgp->ip_vfs_context);
 		/*
 		 * Mark the task as halting and start the other
 		 * threads towards terminating themselves.  Then
@@ -597,14 +625,17 @@ parse_machfile(
 	size_t                  offset;
 	size_t                  oldoffset;      /* for overflow check */
 	int                     pass;
-	proc_t                  p = current_proc();             /* XXXX */
+	proc_t                  p = vfs_context_proc(imgp->ip_vfs_context);
 	int                     error;
 	int                     resid = 0;
+	int                     spawn = (imgp->ip_flags & IMGPF_SPAWN);
+	int                     vfexec = (imgp->ip_flags & IMGPF_VFORK_EXEC);
 	size_t                  mach_header_sz = sizeof(struct mach_header);
 	boolean_t               abi64;
 	boolean_t               got_code_signatures = FALSE;
 	boolean_t               found_header_segment = FALSE;
 	boolean_t               found_xhdr = FALSE;
+	boolean_t               found_version_cmd = FALSE;
 	int64_t                 slide = 0;
 	boolean_t               dyld_no_load_addr = FALSE;
 	boolean_t               is_dyld = FALSE;
@@ -637,15 +668,9 @@ parse_machfile(
 	 */
 	if (((cpu_type_t)(header->cputype & ~CPU_ARCH_MASK) != (cpu_type() & ~CPU_ARCH_MASK)) ||
 	    !grade_binary(header->cputype,
-	    header->cpusubtype & ~CPU_SUBTYPE_MASK)) {
+	    header->cpusubtype & ~CPU_SUBTYPE_MASK, TRUE)) {
 		return LOAD_BADARCH;
 	}
-
-#if __x86_64__
-	if (bootarg_no32exec && (header->cputype == CPU_TYPE_X86)) {
-		return LOAD_BADARCH_X86;
-	}
-#endif
 
 	abi64 = ((header->cputype & CPU_ARCH_ABI64) == CPU_ARCH_ABI64);
 
@@ -702,7 +727,7 @@ parse_machfile(
 	}
 
 	error = vn_rdwr(UIO_READ, vp, addr, alloc_size, file_offset,
-	    UIO_SYSSPACE, 0, kauth_cred_get(), &resid, p);
+	    UIO_SYSSPACE, 0, vfs_context_ucred(imgp->ip_vfs_context), &resid, p);
 	if (error) {
 		kfree(addr, alloc_size);
 		return LOAD_IOERROR;
@@ -811,10 +836,22 @@ parse_machfile(
 		/*
 		 * Check that the entry point is contained in an executable segments
 		 */
-		if ((pass == 3) && (!result->using_lcmain && result->validentry == 0)) {
-			thread_state_initialize(thread);
-			ret = LOAD_FAILURE;
-			break;
+		if (pass == 3) {
+			if (depth == 1 && imgp && (imgp->ip_flags & IMGPF_DRIVER)) {
+				/* Driver binaries must have driverkit platform */
+				if (result->ip_platform == PLATFORM_DRIVERKIT) {
+					/* Driver binaries have no entry point */
+					ret = setup_driver_main(thread, slide, result);
+				} else {
+					ret = LOAD_FAILURE;
+				}
+			} else if (!result->using_lcmain && result->validentry == 0) {
+				ret = LOAD_FAILURE;
+			}
+			if (ret != KERN_SUCCESS) {
+				thread_state_initialize(thread);
+				break;
+			}
 		}
 
 		/*
@@ -866,10 +903,17 @@ parse_machfile(
 			/*
 			 * Act on struct load_command's for which kernel
 			 * intervention is required.
+			 * Note that each load command implementation is expected to validate
+			 * that lcp->cmdsize is large enough to fit its specific struct type
+			 * before dereferencing fields not covered by struct load_command.
 			 */
 			switch (lcp->cmd) {
 			case LC_SEGMENT: {
 				struct segment_command *scp = (struct segment_command *) lcp;
+				if (scp->cmdsize < sizeof(*scp)) {
+					ret = LOAD_BADMACHO;
+					break;
+				}
 				if (pass == 0) {
 					if (is_dyld && scp->vmaddr == 0 && scp->fileoff == 0) {
 						dyld_no_load_addr = TRUE;
@@ -948,7 +992,10 @@ parse_machfile(
 			}
 			case LC_SEGMENT_64: {
 				struct segment_command_64 *scp64 = (struct segment_command_64 *) lcp;
-
+				if (scp64->cmdsize < sizeof(*scp64)) {
+					ret = LOAD_BADMACHO;
+					break;
+				}
 				if (pass == 0) {
 					if (is_dyld && scp64->vmaddr == 0 && scp64->fileoff == 0) {
 						dyld_no_load_addr = TRUE;
@@ -1142,27 +1189,56 @@ parse_machfile(
 						load_failure_reason = os_reason_create(OS_REASON_EXEC, EXEC_EXIT_REASON_DECRYPT);
 					}
 
-					assert(load_failure_reason != OS_REASON_NULL);
-					psignal_with_reason(p, SIGKILL, load_failure_reason);
+					/*
+					 * Don't signal the process if it was forked and in a partially constructed
+					 * state as part of a spawn -- it will just be torn down when the exec fails.
+					 */
+					if (!spawn) {
+						assert(load_failure_reason != OS_REASON_NULL);
+						if (vfexec) {
+							psignal_vfork_with_reason(p, get_threadtask(imgp->ip_new_thread), imgp->ip_new_thread, SIGKILL, load_failure_reason);
+							load_failure_reason = OS_REASON_NULL;
+						} else {
+							psignal_with_reason(p, SIGKILL, load_failure_reason);
+							load_failure_reason = OS_REASON_NULL;
+						}
+					} else {
+						os_reason_free(load_failure_reason);
+						load_failure_reason = OS_REASON_NULL;
+					}
 				}
 				break;
 #endif
-#if __arm64__
-			case LC_VERSION_MIN_IPHONEOS: {
+			case LC_VERSION_MIN_IPHONEOS:
+			case LC_VERSION_MIN_MACOSX:
+			case LC_VERSION_MIN_WATCHOS:
+			case LC_VERSION_MIN_TVOS: {
 				struct version_min_command *vmc;
 
-				if (pass != 1) {
+				if (depth != 1 || pass != 1) {
 					break;
 				}
 				vmc = (struct version_min_command *) lcp;
-				if (vmc->sdk < (12 << 16)) {
-					/* app built with a pre-iOS12 SDK: apply legacy footprint mitigation */
-					result->legacy_footprint = TRUE;
-				}
-//				printf("FBDP %s:%d vp %p (%s) sdk %d.%d.%d -> legacy_footprint=%d\n", __FUNCTION__, __LINE__, vp, vp->v_name, (vmc->sdk >> 16), ((vmc->sdk & 0xFF00) >> 8), (vmc->sdk & 0xFF), result->legacy_footprint);
+				ret = load_version(vmc, &found_version_cmd, result);
 				break;
 			}
-#endif /* __arm64__ */
+			case LC_BUILD_VERSION: {
+				if (depth != 1 || pass != 1) {
+					break;
+				}
+				struct build_version_command* bvc = (struct build_version_command*)lcp;
+				if (bvc->cmdsize < sizeof(*bvc)) {
+					ret = LOAD_BADMACHO;
+					break;
+				}
+				if (found_version_cmd == TRUE) {
+					ret = LOAD_BADMACHO;
+					break;
+				}
+				result->ip_platform = bvc->platform;
+				found_version_cmd = TRUE;
+				break;
+			}
 			default:
 				/* Other commands are ignored by the kernel */
 				ret = LOAD_SUCCESS;
@@ -1216,6 +1292,190 @@ parse_machfile(
 
 	return ret;
 }
+
+load_return_t
+validate_potential_simulator_binary(
+	cpu_type_t               exectype __unused,
+	struct image_params      *imgp __unused,
+	off_t                    file_offset __unused,
+	off_t                    macho_size __unused)
+{
+#if __x86_64__
+	/* Allow 32 bit exec only for simulator binaries */
+	if (bootarg_no32exec && imgp != NULL && exectype == CPU_TYPE_X86) {
+		if (imgp->ip_simulator_binary == IMGPF_SB_DEFAULT) {
+			boolean_t simulator_binary = check_if_simulator_binary(imgp, file_offset, macho_size);
+			imgp->ip_simulator_binary = simulator_binary ? IMGPF_SB_TRUE : IMGPF_SB_FALSE;
+		}
+
+		if (imgp->ip_simulator_binary != IMGPF_SB_TRUE) {
+			return LOAD_BADARCH;
+		}
+	}
+#endif
+	return LOAD_SUCCESS;
+}
+
+#if __x86_64__
+static boolean_t
+check_if_simulator_binary(
+	struct image_params     *imgp,
+	off_t                   file_offset,
+	off_t                   macho_size)
+{
+	struct mach_header      *header;
+	char                    *ip_vdata = NULL;
+	kauth_cred_t            cred = NULL;
+	uint32_t                ncmds;
+	struct load_command     *lcp;
+	boolean_t               simulator_binary = FALSE;
+	void *                  addr = NULL;
+	vm_size_t               alloc_size, cmds_size;
+	size_t                  offset;
+	proc_t                  p = current_proc();             /* XXXX */
+	int                     error;
+	int                     resid = 0;
+	size_t                  mach_header_sz = sizeof(struct mach_header);
+
+
+	cred =  kauth_cred_proc_ref(p);
+
+	/* Allocate page to copyin mach header */
+	ip_vdata = kalloc(PAGE_SIZE);
+	if (ip_vdata == NULL) {
+		goto bad;
+	}
+
+	/* Read the Mach-O header */
+	error = vn_rdwr(UIO_READ, imgp->ip_vp, ip_vdata,
+	    PAGE_SIZE, file_offset,
+	    UIO_SYSSPACE, (IO_UNIT | IO_NODELOCKED),
+	    cred, &resid, p);
+	if (error) {
+		goto bad;
+	}
+
+	header = (struct mach_header *)ip_vdata;
+
+	if (header->magic == MH_MAGIC_64 ||
+	    header->magic == MH_CIGAM_64) {
+		mach_header_sz = sizeof(struct mach_header_64);
+	}
+
+	/* ensure header + sizeofcmds falls within the file */
+	if (os_add_overflow(mach_header_sz, header->sizeofcmds, &cmds_size) ||
+	    (off_t)cmds_size > macho_size ||
+	    round_page_overflow(cmds_size, &alloc_size)) {
+		goto bad;
+	}
+
+	/*
+	 * Map the load commands into kernel memory.
+	 */
+	addr = kalloc(alloc_size);
+	if (addr == NULL) {
+		goto bad;
+	}
+
+	error = vn_rdwr(UIO_READ, imgp->ip_vp, addr, alloc_size, file_offset,
+	    UIO_SYSSPACE, IO_NODELOCKED, cred, &resid, p);
+	if (error) {
+		goto bad;
+	}
+
+	if (resid) {
+		/* We must be able to read in as much as the mach_header indicated */
+		goto bad;
+	}
+
+	/*
+	 * Loop through each of the load_commands indicated by the
+	 * Mach-O header; if an absurd value is provided, we just
+	 * run off the end of the reserved section by incrementing
+	 * the offset too far, so we are implicitly fail-safe.
+	 */
+	offset = mach_header_sz;
+	ncmds = header->ncmds;
+
+	while (ncmds--) {
+		/* ensure enough space for a minimal load command */
+		if (offset + sizeof(struct load_command) > cmds_size) {
+			break;
+		}
+
+		/*
+		 *	Get a pointer to the command.
+		 */
+		lcp = (struct load_command *)(addr + offset);
+
+		/*
+		 * Perform prevalidation of the struct load_command
+		 * before we attempt to use its contents.  Invalid
+		 * values are ones which result in an overflow, or
+		 * which can not possibly be valid commands, or which
+		 * straddle or exist past the reserved section at the
+		 * start of the image.
+		 */
+		if (os_add_overflow(offset, lcp->cmdsize, &offset) ||
+		    lcp->cmdsize < sizeof(struct load_command) ||
+		    offset > cmds_size) {
+			break;
+		}
+
+		/* Check if its a simulator binary. */
+		switch (lcp->cmd) {
+		case LC_VERSION_MIN_WATCHOS:
+			simulator_binary = TRUE;
+			break;
+
+		case LC_BUILD_VERSION: {
+			struct build_version_command *bvc;
+
+			bvc = (struct build_version_command *) lcp;
+			if (bvc->cmdsize < sizeof(*bvc)) {
+				/* unsafe to use this command struct if cmdsize
+				* validated above is too small for it to fit */
+				break;
+			}
+			if (bvc->platform == PLATFORM_IOSSIMULATOR ||
+			    bvc->platform == PLATFORM_WATCHOSSIMULATOR) {
+				simulator_binary = TRUE;
+			}
+
+			break;
+		}
+
+		case LC_VERSION_MIN_IPHONEOS: {
+			simulator_binary = TRUE;
+			break;
+		}
+
+		default:
+			/* ignore other load commands */
+			break;
+		}
+
+		if (simulator_binary == TRUE) {
+			break;
+		}
+	}
+
+bad:
+	if (ip_vdata) {
+		kfree(ip_vdata, PAGE_SIZE);
+	}
+
+	if (cred) {
+		kauth_cred_unref(&cred);
+	}
+
+	if (addr) {
+		kfree(addr, alloc_size);
+	}
+
+	return simulator_binary;
+}
+#endif /* __x86_64__ */
 
 #if CONFIG_CODE_DECRYPTION
 
@@ -1390,6 +1650,8 @@ map_segment(
 			cur_end = vm_start + (file_end - file_start);
 		}
 		if (control != MEMORY_OBJECT_CONTROL_NULL) {
+			/* no copy-on-read for mapped binaries */
+			vmk_flags.vmkf_no_copy_on_read = 1;
 			ret = vm_map_enter_mem_object_control(
 				map,
 				&cur_start,
@@ -1463,6 +1725,8 @@ map_segment(
 		    file_start),
 		    effective_page_mask);
 		if (control != MEMORY_OBJECT_CONTROL_NULL) {
+			/* no copy-on-read for mapped binaries */
+			cur_vmk_flags.vmkf_no_copy_on_read = 1;
 			ret = vm_map_enter_mem_object_control(
 				map,
 				&cur_start,
@@ -1507,6 +1771,8 @@ map_segment(
 		/* one 4K pager for the last page */
 		cur_end = vm_start + (file_end - file_start);
 		if (control != MEMORY_OBJECT_CONTROL_NULL) {
+			/* no copy-on-read for mapped binaries */
+			vmk_flags.vmkf_no_copy_on_read = 1;
 			ret = vm_map_enter_mem_object_control(
 				map,
 				&cur_start,
@@ -1687,7 +1953,13 @@ load_segment(
 		return LOAD_BADMACHO;
 	}
 
-	vm_offset = scp->vmaddr + slide;
+	if (os_add_overflow(scp->vmaddr, slide, &vm_offset)) {
+		if (cs_debug) {
+			printf("vmaddr too large\n");
+		}
+		return LOAD_BADMACHO;
+	}
+
 	vm_size = scp->vmsize;
 
 	if (vm_size == 0) {
@@ -1975,6 +2247,68 @@ load_uuid(
 
 static
 load_return_t
+load_version(
+	struct version_min_command     *vmc,
+	boolean_t               *found_version_cmd,
+	load_result_t           *result
+	)
+{
+	uint32_t platform = 0;
+	uint32_t sdk;
+
+	if (vmc->cmdsize < sizeof(*vmc)) {
+		return LOAD_BADMACHO;
+	}
+	if (*found_version_cmd == TRUE) {
+		return LOAD_BADMACHO;
+	}
+	*found_version_cmd = TRUE;
+	sdk = vmc->sdk;
+	switch (vmc->cmd) {
+	case LC_VERSION_MIN_MACOSX:
+		platform = PLATFORM_MACOS;
+		break;
+#if __x86_64__ /* __x86_64__ */
+	case LC_VERSION_MIN_IPHONEOS:
+		platform = PLATFORM_IOSSIMULATOR;
+		break;
+	case LC_VERSION_MIN_WATCHOS:
+		platform = PLATFORM_WATCHOSSIMULATOR;
+		break;
+	case LC_VERSION_MIN_TVOS:
+		platform = PLATFORM_TVOSSIMULATOR;
+		break;
+#else
+	case LC_VERSION_MIN_IPHONEOS: {
+#if __arm64__
+		extern int legacy_footprint_entitlement_mode;
+		if (vmc->sdk < (12 << 16)) {
+			/* app built with a pre-iOS12 SDK: apply legacy footprint mitigation */
+			result->legacy_footprint = TRUE;
+		}
+#endif /* __arm64__ */
+		platform = PLATFORM_IOS;
+		break;
+	}
+	case LC_VERSION_MIN_WATCHOS:
+		platform = PLATFORM_WATCHOS;
+		break;
+	case LC_VERSION_MIN_TVOS:
+		platform = PLATFORM_TVOS;
+		break;
+#endif /* __x86_64__ */
+	/* All LC_VERSION_MIN_* load commands are legacy and we will not be adding any more */
+	default:
+		sdk = (uint32_t)-1;
+		__builtin_unreachable();
+	}
+	result->ip_platform = platform;
+	result->lr_sdk = sdk;
+	return LOAD_SUCCESS;
+}
+
+static
+load_return_t
 load_main(
 	struct entry_point_command      *epc,
 	thread_t                thread,
@@ -2049,6 +2383,52 @@ load_main(
 	return LOAD_SUCCESS;
 }
 
+static
+load_return_t
+setup_driver_main(
+	thread_t                thread,
+	int64_t                         slide,
+	load_result_t           *result
+	)
+{
+	mach_vm_offset_t addr;
+	kern_return_t   ret;
+
+	/* Driver binaries have no LC_MAIN, use defaults */
+
+	if (thread == THREAD_NULL) {
+		return LOAD_SUCCESS;
+	}
+
+	result->user_stack_alloc_size = MAXSSIZ;
+
+	/* use default location for stack */
+	ret = thread_userstackdefault(&addr, result->is_64bit_addr);
+	if (ret != KERN_SUCCESS) {
+		return LOAD_FAILURE;
+	}
+
+	/* The stack slides down from the default location */
+	result->user_stack = addr;
+	result->user_stack -= slide;
+
+	if (result->using_lcmain || result->entry_point != MACH_VM_MIN_ADDRESS) {
+		/* Already processed LC_MAIN or LC_UNIXTHREAD */
+		return LOAD_FAILURE;
+	}
+
+	result->needs_dynlinker = TRUE;
+
+	ret = thread_state_initialize( thread );
+	if (ret != KERN_SUCCESS) {
+		return LOAD_FAILURE;
+	}
+
+	result->unixproc = TRUE;
+	result->thread_count++;
+
+	return LOAD_SUCCESS;
+}
 
 static
 load_return_t
@@ -2426,12 +2806,18 @@ load_code_signature(
 	struct cs_blob  *blob;
 	int             error;
 	vm_size_t       blob_size;
+	uint32_t        sum;
 
 	addr = 0;
 	blob = NULL;
 
-	if (lcp->cmdsize != sizeof(struct linkedit_data_command) ||
-	    lcp->dataoff + lcp->datasize > macho_size) {
+	if (lcp->cmdsize != sizeof(struct linkedit_data_command)) {
+		ret = LOAD_BADMACHO;
+		goto out;
+	}
+
+	sum = 0;
+	if (os_add_overflow(lcp->dataoff, lcp->datasize, &sum) || sum > macho_size) {
 		ret = LOAD_BADMACHO;
 		goto out;
 	}

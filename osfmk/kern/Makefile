@@ -14,16 +14,19 @@ DATAFILES = \
 	kcdata.h
 
 PRIVATE_DATAFILES = \
+	arithmetic_128.h  \
+	block_hint.h \
 	cs_blobs.h \
-	trustcache.h \
 	debug.h \
 	ecc.h \
-	block_hint.h \
 	lock_stat.h \
 	monotonic.h \
-	arithmetic_128.h  \
-	turnstile.h \
-	remote_time.h
+	remote_time.h \
+	restartable.h \
+	sched_clutch.h \
+	trustcache.h \
+	turnstile.h
+
 
 EXPORT_FILES = \
 	affinity.h \
@@ -33,6 +36,7 @@ EXPORT_FILES = \
 	bits.h \
 	btlog.h \
 	call_entry.h \
+	circle_queue.h \
 	clock.h \
 	coalition.h \
 	cpu_number.h \
@@ -59,6 +63,7 @@ EXPORT_FILES = \
 	policy_internal.h \
 	processor.h \
 	queue.h \
+	mpsc_queue.h \
 	priority_queue.h \
 	sched_prim.h \
 	sfi.h \
@@ -80,6 +85,7 @@ PRIVATE_EXPORT_FILES = \
 	copyout_shim.h
 
 XNU_ONLY_EXPORTS = \
+	arcade.h \
 	cpu_quiesce.h \
 	ipc_kobject.h \
 	ux_handler.h

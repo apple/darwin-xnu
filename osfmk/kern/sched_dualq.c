@@ -56,7 +56,8 @@ static void
 sched_dualq_thread_update_scan(sched_update_scan_context_t scan_context);
 
 static boolean_t
-sched_dualq_processor_enqueue(processor_t processor, thread_t thread, integer_t options);
+sched_dualq_processor_enqueue(processor_t processor, thread_t thread,
+    sched_options_t options);
 
 static boolean_t
 sched_dualq_processor_queue_remove(processor_t processor, thread_t thread);
@@ -126,7 +127,6 @@ const struct sched_dispatch_table sched_dualq_dispatch = {
 	.processor_runq_stats_count_sum                 = sched_dualq_runq_stats_count_sum,
 	.processor_bound_count                          = sched_dualq_processor_bound_count,
 	.thread_update_scan                             = sched_dualq_thread_update_scan,
-	.direct_dispatch_to_idle_processors             = FALSE,
 	.multiple_psets_enabled                         = TRUE,
 	.sched_groups_enabled                           = FALSE,
 	.avoid_processor_enabled                        = TRUE,
@@ -143,6 +143,10 @@ const struct sched_dispatch_table sched_dualq_dispatch = {
 	.check_spill                                    = sched_check_spill,
 	.ipi_policy                                     = sched_ipi_policy,
 	.thread_should_yield                            = sched_thread_should_yield,
+	.run_count_incr                                 = sched_run_incr,
+	.run_count_decr                                 = sched_run_decr,
+	.update_thread_bucket                           = sched_update_thread_bucket,
+	.pset_made_schedulable                          = sched_pset_made_schedulable,
 };
 
 __attribute__((always_inline))
@@ -238,7 +242,7 @@ sched_dualq_choose_thread(
 	}
 
 	if (processor->is_SMT) {
-		thread_t potential_thread = run_queue_dequeue(chosen_runq, SCHED_PEEK | SCHED_HEADQ);
+		thread_t potential_thread = run_queue_peek(chosen_runq);
 		if (potential_thread == THREAD_NULL) {
 			return THREAD_NULL;
 		}
@@ -280,7 +284,7 @@ static boolean_t
 sched_dualq_processor_enqueue(
 	processor_t       processor,
 	thread_t          thread,
-	integer_t         options)
+	sched_options_t   options)
 {
 	run_queue_t     rq = dualq_runq_for_thread(processor, thread);
 	boolean_t       result;

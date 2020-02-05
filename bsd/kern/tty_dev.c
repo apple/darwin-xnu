@@ -506,6 +506,16 @@ out:
 	return;
 }
 
+static void
+ptcwakeup_knote(struct selinfo *sip, long hint)
+{
+	if ((sip->si_flags & SI_KNPOSTING) == 0) {
+		sip->si_flags |= SI_KNPOSTING;
+		KNOTE(&sip->si_note, hint);
+		sip->si_flags &= ~SI_KNPOSTING;
+	}
+}
+
 /*
  * Locks:	Assumes tty_lock() is held over this call.
  */
@@ -520,12 +530,12 @@ ptcwakeup(struct tty *tp, int flag)
 	if (flag & FREAD) {
 		selwakeup(&pti->pt_selr);
 		wakeup(TSA_PTC_READ(tp));
-		KNOTE(&pti->pt_selr.si_note, 1);
+		ptcwakeup_knote(&pti->pt_selr, 1);
 	}
 	if (flag & FWRITE) {
 		selwakeup(&pti->pt_selw);
 		wakeup(TSA_PTC_WRITE(tp));
-		KNOTE(&pti->pt_selw.si_note, 1);
+		ptcwakeup_knote(&pti->pt_selw, 1);
 	}
 }
 
@@ -1011,6 +1021,9 @@ block:
 	goto again;
 }
 
+/*
+ * ptyioctl: Assumes dev was opened and lock was initilized
+ */
 __private_extern__ int
 ptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 {
@@ -1020,9 +1033,10 @@ ptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 	int stop, error = 0;
 	int allow_ext_ioctl = 1;
 
-	if (pti == NULL) {
+	if (pti == NULL || pti->pt_tty == NULL) {
 		return ENXIO;
 	}
+
 	tp = pti->pt_tty;
 	tty_lock(tp);
 

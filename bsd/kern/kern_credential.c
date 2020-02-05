@@ -95,7 +95,7 @@ void mach_kauth_cred_uthread_update( void );
 #endif
 
 # define K_UUID_FMT "%08x:%08x:%08x:%08x"
-# define K_UUID_ARG(_u) *(int *)&_u.g_guid[0],*(int *)&_u.g_guid[4],*(int *)&_u.g_guid[8],*(int *)&_u.g_guid[12]
+# define K_UUID_ARG(_u) &_u.g_guid_asint[0],&_u.g_guid_asint[1],&_u.g_guid_asint[2],&_u.g_guid_asint[3]
 # define KAUTH_DEBUG(fmt, args...)      do { printf("%s:%d: " fmt "\n", __PRETTY_FUNCTION__, __LINE__ , ##args); } while (0)
 #endif
 
@@ -1089,7 +1089,7 @@ kauth_resolver_complete(user_addr_t message)
 				} else if (extl.el_flags &  (KAUTH_EXTLOOKUP_VALID_PWNAM | KAUTH_EXTLOOKUP_VALID_GRNAM)) {
 					error = EFAULT;
 					KAUTH_DEBUG("RESOLVER - resolver returned mismatching extension flags (%d), request contained (%d)",
-					    extl.el_flags, request_flags);
+					    extl.el_flags, want_extend_data);
 				}
 
 				/*
@@ -4744,7 +4744,7 @@ kauth_proc_setlabel(__unused struct proc *p, __unused void *label)
 
 #define KAUTH_CRED_REF_MAX 0x0ffffffful
 
-__attribute__((noinline, cold, not_tail_called, noreturn))
+__attribute__((noinline, cold, noreturn))
 static void
 kauth_cred_panic_resurrection(kauth_cred_t cred)
 {
@@ -4752,7 +4752,7 @@ kauth_cred_panic_resurrection(kauth_cred_t cred)
 	__builtin_unreachable();
 }
 
-__attribute__((noinline, cold, not_tail_called, noreturn))
+__attribute__((noinline, cold, noreturn))
 static void
 kauth_cred_panic_over_released(kauth_cred_t cred)
 {
@@ -4760,7 +4760,7 @@ kauth_cred_panic_over_released(kauth_cred_t cred)
 	__builtin_unreachable();
 }
 
-__attribute__((noinline, cold, not_tail_called, noreturn))
+__attribute__((noinline, cold, noreturn))
 static void
 kauth_cred_panic_over_retain(kauth_cred_t cred)
 {

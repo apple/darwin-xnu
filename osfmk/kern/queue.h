@@ -71,6 +71,7 @@
 #include <kern/macro_help.h>
 
 #include <sys/cdefs.h>
+#include <string.h>
 
 __BEGIN_DECLS
 
@@ -231,14 +232,14 @@ __QUEUE_ELT_VALIDATE(queue_entry_t elt)
 {
 	queue_entry_t   elt_next, elt_prev;
 
-	if (__improbable(elt == (queue_entry_t)0)) {
+	if (__improbable(elt == (queue_entry_t)NULL)) {
 		panic("Invalid queue element %p", elt);
 	}
 
 	elt_next = elt->next;
 	elt_prev = elt->prev;
 
-	if (__improbable(elt_next == (queue_entry_t)0 || elt_prev == (queue_entry_t)0)) {
+	if (__improbable(elt_next == (queue_entry_t)NULL || elt_prev == (queue_entry_t)NULL)) {
 		panic("Invalid queue element pointers for %p: next %p prev %p", elt, elt_next, elt_prev);
 	}
 	if (__improbable(elt_next->prev != elt || elt_prev->next != elt)) {
@@ -250,8 +251,8 @@ __QUEUE_ELT_VALIDATE(queue_entry_t elt)
 static inline void
 __DEQUEUE_ELT_CLEANUP(queue_entry_t elt)
 {
-	(elt)->next = (queue_entry_t) 0;
-	(elt)->prev = (queue_entry_t) 0;
+	(elt)->next = (queue_entry_t)NULL;
+	(elt)->prev = (queue_entry_t)NULL;
 }
 #else
 #define __QUEUE_ELT_VALIDATE(elt) do { } while (0)
@@ -292,7 +293,7 @@ static __inline__ queue_entry_t
 dequeue_head(
 	queue_t que)
 {
-	queue_entry_t   elt = (queue_entry_t) 0;
+	queue_entry_t   elt = (queue_entry_t)NULL;
 	queue_entry_t   new_head;
 
 	if (que->next != que) {
@@ -311,7 +312,7 @@ static __inline__ queue_entry_t
 dequeue_tail(
 	queue_t que)
 {
-	queue_entry_t   elt = (queue_entry_t) 0;
+	queue_entry_t   elt = (queue_entry_t)NULL;
 	queue_entry_t   new_tail;
 
 	if (que->prev != que) {
@@ -449,8 +450,7 @@ re_queue_tail(queue_t que, queue_entry_t elt)
  *	Note:
  *		Do not use pointer types for <type>
  */
-#define qe_element(qe, type, field) \
-	((type *)((void *)((char *)(qe) - __offsetof(type, field))))
+#define qe_element(qe, type, field) __container_of(qe, type, field)
 
 /*
  *	Macro:		qe_foreach

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -33,8 +33,8 @@
 #include <kern/ipc_kobject.h>
 #include <kern/kalloc.h>
 #include <kern/queue.h>
-#include <os/refcnt.h>
 
+#include <vm/memory_object.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
 #include <vm/vm_pageout.h>
@@ -115,19 +115,19 @@ kern_return_t swapfile_pager_last_unmap(memory_object_t mem_obj);
  * These routines are invoked by VM via the memory_object_*() interfaces.
  */
 const struct memory_object_pager_ops swapfile_pager_ops = {
-	swapfile_pager_reference,
-	swapfile_pager_deallocate,
-	swapfile_pager_init,
-	swapfile_pager_terminate,
-	swapfile_pager_data_request,
-	swapfile_pager_data_return,
-	swapfile_pager_data_initialize,
-	swapfile_pager_data_unlock,
-	swapfile_pager_synchronize,
-	swapfile_pager_map,
-	swapfile_pager_last_unmap,
-	NULL, /* data_reclaim */
-	"swapfile pager"
+	.memory_object_reference = swapfile_pager_reference,
+	.memory_object_deallocate = swapfile_pager_deallocate,
+	.memory_object_init = swapfile_pager_init,
+	.memory_object_terminate = swapfile_pager_terminate,
+	.memory_object_data_request = swapfile_pager_data_request,
+	.memory_object_data_return = swapfile_pager_data_return,
+	.memory_object_data_initialize = swapfile_pager_data_initialize,
+	.memory_object_data_unlock = swapfile_pager_data_unlock,
+	.memory_object_synchronize = swapfile_pager_synchronize,
+	.memory_object_map = swapfile_pager_map,
+	.memory_object_last_unmap = swapfile_pager_last_unmap,
+	.memory_object_data_reclaim = NULL,
+	.memory_object_pager_name = "swapfile pager"
 };
 
 /*
@@ -140,7 +140,7 @@ typedef struct swapfile_pager {
 
 	/* pager-specific data */
 	queue_chain_t           pager_queue;    /* next & prev pagers */
-	struct os_refcnt        ref_count;      /* reference count */
+	unsigned int            ref_count;      /* reference count */
 	boolean_t               is_ready;       /* is this pager ready ? */
 	boolean_t               is_mapped;      /* is this pager mapped ? */
 	struct vnode            *swapfile_vnode;/* the swapfile's vnode */
@@ -153,7 +153,7 @@ typedef struct swapfile_pager {
  */
 int swapfile_pager_count = 0;           /* number of pagers */
 queue_head_t swapfile_pager_queue;
-decl_lck_mtx_data(, swapfile_pager_lock)
+decl_lck_mtx_data(, swapfile_pager_lock);
 
 /*
  * Statistics & counters.
@@ -334,7 +334,7 @@ swapfile_pager_data_request(
 
 	pager = swapfile_pager_lookup(mem_obj);
 	assert(pager->is_ready);
-	assert(os_ref_get_count(&pager->ref_count) > 1); /* pager is alive and mapped */
+	assert(pager->ref_count > 1); /* pager is alive and mapped */
 
 	PAGER_DEBUG(PAGER_PAGEIN, ("swapfile_pager_data_request: %p, %llx, %x, %x, pager %p\n", mem_obj, offset, length, protection_required, pager));
 
@@ -493,7 +493,8 @@ swapfile_pager_reference(
 	pager = swapfile_pager_lookup(mem_obj);
 
 	lck_mtx_lock(&swapfile_pager_lock);
-	os_ref_retain_locked(&pager->ref_count);
+	assert(pager->ref_count > 0);
+	pager->ref_count++;
 	lck_mtx_unlock(&swapfile_pager_lock);
 }
 
@@ -567,9 +568,9 @@ swapfile_pager_deallocate_internal(
 	}
 
 	/* drop a reference on this pager */
-	os_ref_count_t refcount = os_ref_release_locked(&pager->ref_count);
+	pager->ref_count--;
 
-	if (refcount == 1) {
+	if (pager->ref_count == 1) {
 		/*
 		 * Only the "named" reference is left, which means that
 		 * no one is really holding on to this pager anymore.
@@ -579,7 +580,7 @@ swapfile_pager_deallocate_internal(
 		/* the pager is all ours: no need for the lock now */
 		lck_mtx_unlock(&swapfile_pager_lock);
 		swapfile_pager_terminate_internal(pager);
-	} else if (refcount == 0) {
+	} else if (pager->ref_count == 0) {
 		/*
 		 * Dropped the existence reference;  the memory object has
 		 * been terminated.  Do some final cleanup and release the
@@ -667,7 +668,7 @@ swapfile_pager_map(
 
 	lck_mtx_lock(&swapfile_pager_lock);
 	assert(pager->is_ready);
-	assert(os_ref_get_count(&pager->ref_count) > 0); /* pager is alive */
+	assert(pager->ref_count > 0); /* pager is alive */
 	if (pager->is_mapped == FALSE) {
 		/*
 		 * First mapping of this pager:  take an extra reference
@@ -675,7 +676,7 @@ swapfile_pager_map(
 		 * are removed.
 		 */
 		pager->is_mapped = TRUE;
-		os_ref_retain_locked(&pager->ref_count);
+		pager->ref_count++;
 	}
 	lck_mtx_unlock(&swapfile_pager_lock);
 
@@ -726,7 +727,7 @@ swapfile_pager_lookup(
 
 	assert(mem_obj->mo_pager_ops == &swapfile_pager_ops);
 	__IGNORE_WCASTALIGN(pager = (swapfile_pager_t) mem_obj);
-	assert(os_ref_get_count(&pager->ref_count) > 0);
+	assert(pager->ref_count > 0);
 	return pager;
 }
 
@@ -755,7 +756,7 @@ swapfile_pager_create(
 	pager->swp_pgr_hdr.mo_control = MEMORY_OBJECT_CONTROL_NULL;
 
 	pager->is_ready = FALSE;/* not ready until it has a "name" */
-	os_ref_init(&pager->ref_count, NULL); /* setup reference */
+	pager->ref_count = 1;   /* setup reference */
 	pager->is_mapped = FALSE;
 	pager->swapfile_vnode = vp;
 
@@ -772,7 +773,7 @@ swapfile_pager_create(
 	if (!queue_end(&swapfile_pager_queue,
 	    (queue_entry_t) pager2)) {
 		/* while we hold the lock, transfer our setup ref to winner */
-		os_ref_retain_locked(&pager2->ref_count);
+		pager2->ref_count++;
 		/* we lost the race, down with the loser... */
 		lck_mtx_unlock(&swapfile_pager_lock);
 		pager->swapfile_vnode = NULL;
@@ -798,6 +799,8 @@ swapfile_pager_create(
 	    0,
 	    &control);
 	assert(kr == KERN_SUCCESS);
+
+	memory_object_mark_trusted(control);
 
 	lck_mtx_lock(&swapfile_pager_lock);
 	/* the new pager is now ready to be used */
@@ -839,7 +842,7 @@ swapfile_pager_setup(
 		pager = SWAPFILE_PAGER_NULL;
 	} else {
 		/* make sure pager doesn't disappear */
-		os_ref_retain_locked(&pager->ref_count);
+		pager->ref_count++;
 	}
 
 	lck_mtx_unlock(&swapfile_pager_lock);

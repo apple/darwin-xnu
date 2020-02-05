@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -177,7 +177,9 @@ struct nfs_socket {
 	int                     nso_error;              /* saved error/status */
 	struct nfs_rpc_record_state nso_rrs;            /* RPC record parsing state (TCP) */
 };
+
 TAILQ_HEAD(nfssocketlist, nfs_socket);
+
 /* nso_flags */
 #define NSO_UPCALL              0x0001                  /* socket upcall in progress */
 #define NSO_DEAD                0x0002                  /* socket is dead */
@@ -337,6 +339,8 @@ struct nfsmount {
 	uint8_t nm_sotype;              /* (preferred) type of socket */
 	in_port_t       nm_nfsport;     /* NFS protocol port */
 	in_port_t       nm_mountport;   /* MOUNT protocol port (v2/v3) */
+	char    *nm_nfs_localport;      /* Unix domain address (port) for nfs */
+	char    *nm_mount_localport;    /* Unix domain address (port) for mountd */
 	struct nfs_socket_search *nm_nss; /* current socket search structure */
 	struct nfs_socket *nm_nso;      /* current socket */
 	struct sockaddr *nm_saddr;      /* Address of server */

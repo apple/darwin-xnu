@@ -60,13 +60,14 @@ hibernate_alloc_page_lists(
 
 	page_list = hibernate_page_list_allocate(TRUE);
 	if (!page_list) {
+		HIBLOG("%s: failed for page_list\n", __FUNCTION__);
 		retval = KERN_RESOURCE_SHORTAGE;
 		goto done;
 	}
 	page_list_wired = hibernate_page_list_allocate(FALSE);
 	if (!page_list_wired) {
 		kfree(page_list, page_list->list_size);
-
+		HIBLOG("%s: failed for page_list_wired\n", __FUNCTION__);
 		retval = KERN_RESOURCE_SHORTAGE;
 		goto done;
 	}
@@ -74,7 +75,7 @@ hibernate_alloc_page_lists(
 	if (!page_list_pal) {
 		kfree(page_list, page_list->list_size);
 		kfree(page_list_wired, page_list_wired->list_size);
-
+		HIBLOG("%s: failed for page_list_pal\n", __FUNCTION__);
 		retval = KERN_RESOURCE_SHORTAGE;
 		goto done;
 	}

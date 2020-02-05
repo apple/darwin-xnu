@@ -7,6 +7,7 @@
  *
  */
 
+#include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/ioctl.h>
@@ -33,7 +34,11 @@ copyoutstr(const void *from, user_addr_t to, size_t maxlen, size_t * lencopied)
 {
 	size_t          slen;
 	size_t          len;
-	int             error = 0;
+	int             error = copyoutstr_prevalidate(from, to, maxlen);
+
+	if (__improbable(error)) {
+		return error;
+	}
 
 	slen = strlen(from) + 1;
 	if (slen > maxlen) {

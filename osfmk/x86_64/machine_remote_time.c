@@ -27,7 +27,7 @@
  */
 #include <kern/misc_protos.h>
 #include <x86_64/machine_remote_time.h>
-#include <stdatomic.h>
+#include <machine/atomic.h>
 #include <kern/locks.h>
 #include <kern/clock.h>
 
@@ -55,10 +55,10 @@ mach_bridge_register_regwrite_timestamp_callback(mach_bridge_regwrite_timestamp_
 {
 	static uint64_t delay_amount = 0;
 
-	if (!atomic_load(&bt_init_flag)) {
+	if (!os_atomic_load(&bt_init_flag, relaxed)) {
 		mach_bridge_timer_init();
 		nanoseconds_to_absolutetime(DELAY_INTERVAL_NS, &delay_amount);
-		bt_init_flag = 1;
+		os_atomic_store(&bt_init_flag, 1, release);
 	}
 
 	lck_spin_lock(bt_maintenance_lock);

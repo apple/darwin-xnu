@@ -66,6 +66,6 @@ cc_clear(size_t len, void *dst)
 /* This is an altarnative for clang that should work
  *  void cc_clear(size_t len, void *dst) __attribute__ ((optnone))
  *  {
- *  cc_zero(len,dst);
+ *  cc_clear(len,dst);
  *  }
  */

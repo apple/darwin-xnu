@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -36,6 +36,7 @@
 #include <IOKit/IOTypes.h>
 #include <IOKit/IOService.h>
 #include <IOKit/OSMessageNotification.h>
+#include <DriverKit/IOUserClient.h>
 
 #if IOKITSTATS
 #include <IOKit/IOStatisticsPrivate.h>
@@ -173,7 +174,7 @@ enum {
 
 class IOUserClient : public IOService
 {
-	OSDeclareAbstractStructors(IOUserClient)
+	OSDeclareAbstractStructorsWithDispatch(IOUserClient);
 #if IOKITSTATS
 	friend class IOStatistics;
 #endif
@@ -206,7 +207,7 @@ public:
 	UInt8   sharedInstance;
 	UInt8   closed;
 	UInt8   __ipcFinal;
-	UInt8   __reservedA[1];
+	UInt8   messageAppSuspended;
 	volatile SInt32 __ipc;
 	queue_head_t owners;
 	IOLock * lock;
@@ -222,10 +223,12 @@ private:
 #endif /* XNU_KERNEL_PRIVATE */
 
 public:
-	virtual IOReturn externalMethod( uint32_t selector, IOExternalMethodArguments * arguments,
-	    IOExternalMethodDispatch * dispatch = 0, OSObject * target = 0, void * reference = 0 );
+	MIG_SERVER_ROUTINE virtual IOReturn
+	externalMethod(uint32_t selector, IOExternalMethodArguments *arguments,
+	    IOExternalMethodDispatch *dispatch = NULL,
+	    OSObject *target = NULL, void *reference = NULL);
 
-	virtual IOReturn registerNotificationPort(
+	MIG_SERVER_ROUTINE virtual IOReturn registerNotificationPort(
 		mach_port_t port, UInt32 type, io_user_reference_t refCon);
 
 private:
@@ -308,6 +311,8 @@ public:
 	static OSObject * copyClientEntitlement( task_t task,
 	    const char * entitlement );
 
+	static OSDictionary * copyClientEntitlements(task_t task);
+
 /*!
  *   @function releaseAsyncReference64
  *   @abstract Release the mach_port_t reference held within the OSAsyncReference64 structure.
@@ -342,10 +347,10 @@ public:
 
 	virtual IOService * getService( void );
 
-	virtual IOReturn registerNotificationPort(
+	MIG_SERVER_ROUTINE virtual IOReturn registerNotificationPort(
 		mach_port_t port, UInt32 type, UInt32 refCon );
 
-	virtual IOReturn getNotificationSemaphore( UInt32 notification_type,
+	MIG_SERVER_ROUTINE virtual IOReturn getNotificationSemaphore( UInt32 notification_type,
 	    semaphore_t * semaphore );
 
 	virtual IOReturn connectClient( IOUserClient * client );
@@ -436,9 +441,11 @@ public:
 
 // Methods for accessing method vector.
 	virtual IOExternalMethod *
-	getTargetAndMethodForIndex( IOService ** targetP, UInt32 index );
+	getTargetAndMethodForIndex(
+		LIBKERN_RETURNS_NOT_RETAINED IOService ** targetP, UInt32 index );
 	virtual IOExternalAsyncMethod *
-	getAsyncTargetAndMethodForIndex( IOService ** targetP, UInt32 index );
+	getAsyncTargetAndMethodForIndex(
+		LIBKERN_RETURNS_NOT_RETAINED IOService ** targetP, UInt32 index );
 
 // Methods for accessing trap vector - old and new style
 	virtual IOExternalTrap *
@@ -446,7 +453,12 @@ public:
 	APPLE_KEXT_DEPRECATED;
 
 	virtual IOExternalTrap *
-	getTargetAndTrapForIndex( IOService **targetP, UInt32 index );
+	getTargetAndTrapForIndex(
+		LIBKERN_RETURNS_NOT_RETAINED IOService **targetP, UInt32 index );
 };
+
+#ifdef XNU_KERNEL_PRIVATE
+extern "C" void IOMachPortDestroyUserReferences(OSObject * obj, natural_t type);
+#endif /* XNU_KERNEL_PRIVATE */
 
 #endif /* ! _IOKIT_IOUSERCLIENT_H */

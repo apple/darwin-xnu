@@ -147,6 +147,9 @@ machine_do_mvfpid()
 #else
 	cpuid_mvfp_info.neon = 1;
 	cpuid_mvfp_info.neon_hpfp = 1;
+#if defined(__ARM_ARCH_8_2__)
+	cpuid_mvfp_info.neon_fp16 = 1;
+#endif /* defined(__ARM_ARCH_8_2__) */
 #endif /* __arm__ */
 }
 

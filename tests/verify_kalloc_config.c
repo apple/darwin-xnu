@@ -6,7 +6,8 @@
 
 T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.vm"),
-	T_META_CHECK_LEAKS(false)
+	T_META_CHECK_LEAKS(false),
+	T_META_RUN_CONCURRENTLY(true)
 	);
 
 static void run_test(void);

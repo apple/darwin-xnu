@@ -40,6 +40,7 @@
 #include <kern/thread_group.h>
 #include <kern/policy_internal.h>
 #include <machine/config.h>
+#include <machine/atomic.h>
 #include <pexpert/pexpert.h>
 
 #if MONOTONIC
@@ -262,13 +263,13 @@ perfcontrol_callout_counters_end(uint64_t *start_counters,
 {
 	uint64_t end_counters[MT_CORE_NFIXED];
 	mt_fixed_counts(end_counters);
-	atomic_fetch_add_explicit(&perfcontrol_callout_stats[type][PERFCONTROL_STAT_CYCLES],
-	    end_counters[MT_CORE_CYCLES] - start_counters[MT_CORE_CYCLES], memory_order_relaxed);
+	os_atomic_add(&perfcontrol_callout_stats[type][PERFCONTROL_STAT_CYCLES],
+	    end_counters[MT_CORE_CYCLES] - start_counters[MT_CORE_CYCLES], relaxed);
 #ifdef MT_CORE_INSTRS
-	atomic_fetch_add_explicit(&perfcontrol_callout_stats[type][PERFCONTROL_STAT_INSTRS],
-	    end_counters[MT_CORE_INSTRS] - start_counters[MT_CORE_INSTRS], memory_order_relaxed);
+	os_atomic_add(&perfcontrol_callout_stats[type][PERFCONTROL_STAT_INSTRS],
+	    end_counters[MT_CORE_INSTRS] - start_counters[MT_CORE_INSTRS], relaxed);
 #endif /* defined(MT_CORE_INSTRS) */
-	atomic_fetch_add_explicit(&perfcontrol_callout_count[type], 1, memory_order_relaxed);
+	os_atomic_inc(&perfcontrol_callout_count[type], relaxed);
 }
 #endif /* MONOTONIC */
 
@@ -279,7 +280,8 @@ perfcontrol_callout_stat_avg(perfcontrol_callout_type_t type,
 	if (!perfcontrol_callout_stats_enabled) {
 		return 0;
 	}
-	return perfcontrol_callout_stats[type][stat] / perfcontrol_callout_count[type];
+	return os_atomic_load_wide(&perfcontrol_callout_stats[type][stat], relaxed) /
+	       os_atomic_load_wide(&perfcontrol_callout_count[type], relaxed);
 }
 
 void
@@ -480,13 +482,16 @@ machine_perfcontrol_deadline_passed(uint64_t deadline)
 /*
  * ml_spin_debug_reset()
  * Reset the timestamp on a thread that has been unscheduled
- * to avoid false alarms.    Alarm will go off if interrupts are held
+ * to avoid false alarms. Alarm will go off if interrupts are held
  * disabled for too long, starting from now.
+ *
+ * Call ml_get_timebase() directly to prevent extra overhead on newer
+ * platforms that's enabled in DEVELOPMENT kernel configurations.
  */
 void
 ml_spin_debug_reset(thread_t thread)
 {
-	thread->machine.intmask_timestamp = mach_absolute_time();
+	thread->machine.intmask_timestamp = ml_get_timebase();
 }
 
 /*
@@ -519,7 +524,7 @@ ml_check_interrupts_disabled_duration(thread_t thread)
 
 	start = thread->machine.intmask_timestamp;
 	if (start != 0) {
-		now = mach_absolute_time();
+		now = ml_get_timebase();
 
 		if ((now - start) > interrupt_masked_timeout * debug_cpu_performance_degradation_factor) {
 			mach_timebase_info_data_t timebase;
@@ -554,6 +559,7 @@ ml_set_interrupts_enabled(boolean_t enable)
 	state = __builtin_arm_rsr("DAIF");
 #endif
 	if (enable && (state & INTERRUPT_MASK)) {
+		assert(getCpuDatap()->cpu_int_state == NULL); // Make sure we're not enabling interrupts from primary interrupt context
 #if INTERRUPT_MASKED_DEBUG
 		if (interrupt_masked_debug) {
 			// Interrupts are currently masked, we will enable them (after finishing this check)
@@ -588,7 +594,7 @@ ml_set_interrupts_enabled(boolean_t enable)
 #if INTERRUPT_MASKED_DEBUG
 		if (interrupt_masked_debug) {
 			// Interrupts were enabled, we just masked them
-			current_thread()->machine.intmask_timestamp = mach_absolute_time();
+			current_thread()->machine.intmask_timestamp = ml_get_timebase();
 		}
 #endif
 	}
@@ -688,6 +694,11 @@ ml_get_time_since_reset(void)
 {
 	/* The timebase resets across S2R, so just return the raw value. */
 	return ml_get_hwclock();
+}
+
+void
+ml_set_reset_time(__unused uint64_t wake_time)
+{
 }
 
 uint64_t

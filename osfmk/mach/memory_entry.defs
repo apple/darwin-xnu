@@ -32,10 +32,6 @@ subsystem
 #endif /* KERNEL_SERVER */
        memory_entry 4900;
 
-#if !KERNEL && !LIBSYSCALL_INTERFACE
-    UserPrefix _kernelrpc_;
-#endif
-
 #include <mach/std_types.defs>
 #include <mach/mach_types.defs>
 #include <mach_debug/mach_debug_types.defs>
@@ -50,3 +46,9 @@ routine mach_memory_entry_access_tracking(
 	inout	access_tracking		: int;
 	out	access_tracking_reads	: uint32_t;
 	out	access_tracking_writes	: uint32_t);
+
+routine mach_memory_entry_ownership(
+		mem_entry	: mem_entry_name_port_t;
+		owner		: task_t;
+		ledger_tag	: int;
+		ledger_flags	: int);

@@ -227,20 +227,6 @@ rtc_clock_adjust(uint64_t tsc_base_delta)
 	rtc_nanotime_set_commpage(rntp);
 }
 
-void
-rtc_clock_stepping(__unused uint32_t new_frequency,
-    __unused uint32_t old_frequency)
-{
-	panic("rtc_clock_stepping unsupported");
-}
-
-void
-rtc_clock_stepped(__unused uint32_t new_frequency,
-    __unused uint32_t old_frequency)
-{
-	panic("rtc_clock_stepped unsupported");
-}
-
 /*
  * rtc_sleep_wakeup:
  *

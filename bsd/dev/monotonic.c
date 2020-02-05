@@ -346,9 +346,11 @@ mt_sysctl SYSCTL_HANDLER_ARGS
 	case MT_SUPPORTED:
 		return sysctl_io_number(req, (int)mt_core_supported, sizeof(int), NULL, NULL);
 	case MT_PMIS:
-		return sysctl_io_number(req, mt_pmis, sizeof(mt_pmis), NULL, NULL);
-	case MT_RETROGRADE:
-		return sysctl_io_number(req, mt_retrograde, sizeof(mt_retrograde), NULL, NULL);
+		return sysctl_io_number(req, mt_count_pmis(), sizeof(uint64_t), NULL, NULL);
+	case MT_RETROGRADE: {
+		uint64_t value = os_atomic_load_wide(&mt_retrograde, relaxed);
+		return sysctl_io_number(req, value, sizeof(mt_retrograde), NULL, NULL);
+	}
 	case MT_TASK_THREAD:
 		return sysctl_io_number(req, (int)mt_core_supported, sizeof(int), NULL, NULL);
 	case MT_DEBUG: {

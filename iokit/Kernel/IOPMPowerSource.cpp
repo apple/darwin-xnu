@@ -162,6 +162,8 @@ IOPMPowerSource::free(void)
 	if (batteryInfoKey) {
 		batteryInfoKey->release();
 	}
+
+	super::free();
 }
 
 // *****************************************************************************

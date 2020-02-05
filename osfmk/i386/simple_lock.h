@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -120,7 +120,7 @@ typedef usimple_lock_data_t     *simple_lock_t;
 typedef usimple_lock_data_t     simple_lock_data_t;
 
 #define decl_simple_lock_data(class, name) \
-	class	simple_lock_data_t	name;
+	class	simple_lock_data_t	name
 
 #endif  /* !defined(decl_simple_lock_data) */
 

@@ -148,7 +148,7 @@ int nullfs_getbackingvnode(vnode_t in_vp, vnode_t* out_vpp);
 #define NULLVPTOLOWERVID(vp) (VTONULL(vp)->null_lowervid)
 #define NULLVPTOMYVID(vp) (VTONULL(vp)->null_myvid)
 
-extern struct vnodeopv_desc nullfs_vnodeop_opv_desc;
+extern const struct vnodeopv_desc nullfs_vnodeop_opv_desc;
 
 extern vop_t * nullfs_vnodeop_p;
 

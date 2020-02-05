@@ -133,12 +133,10 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	struct mbuf *n = NULL, *o = NULL;
 	int hlen = 0, tlen = 0, olen = 0;
 	int sharedcluster = 0;
-#if defined(PULLDOWN_STAT) && INET6
-	static struct mbuf *prev = NULL;
-	int prevlen = 0, prevmlen = 0;
-#endif
 
 	/* check invalid arguments. */
+	VERIFY(len >= 0 && off >= 0);
+
 	if (m == NULL) {
 		panic("m == NULL in m_pulldown()");
 	}
@@ -146,72 +144,11 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 		m_freem(m);
 		return NULL;    /* impossible */
 	}
-
-#if defined(PULLDOWN_STAT) && INET6
-	ip6stat.ip6s_pulldown++;
-#endif
-
-#if defined(PULLDOWN_STAT) && INET6
-	/* statistics for m_pullup */
-	ip6stat.ip6s_pullup++;
-	if (off + len > MHLEN) {
-		ip6stat.ip6s_pullup_fail++;
-	} else {
-		int dlen, mlen;
-
-		dlen = (prev == m) ? prevlen : m->m_len;
-		mlen = (prev == m) ? prevmlen : m->m_len + M_TRAILINGSPACE(m);
-
-		if (dlen >= off + len) {
-			ip6stat.ip6s_pullup--; /* call will not be made! */
-		} else if ((m->m_flags & M_EXT) != 0) {
-			ip6stat.ip6s_pullup_alloc++;
-			ip6stat.ip6s_pullup_copy++;
-		} else {
-			if (mlen >= off + len) {
-				ip6stat.ip6s_pullup_copy++;
-			} else {
-				ip6stat.ip6s_pullup_alloc++;
-				ip6stat.ip6s_pullup_copy++;
-			}
-		}
-
-		prevlen = off + len;
-		prevmlen = MHLEN;
+	int tmp_len = 0;
+	if (os_add_overflow(off, len, &tmp_len)) {
+		m_free(m);
+		return NULL;
 	}
-
-	/* statistics for m_pullup2 */
-	ip6stat.ip6s_pullup2++;
-	if (off + len > MCLBYTES) {
-		ip6stat.ip6s_pullup2_fail++;
-	} else {
-		int dlen, mlen;
-
-		dlen = (prev == m) ? prevlen : m->m_len;
-		mlen = (prev == m) ? prevmlen : m->m_len + M_TRAILINGSPACE(m);
-		prevlen = off + len;
-		prevmlen = mlen;
-
-		if (dlen >= off + len) {
-			ip6stat.ip6s_pullup2--; /* call will not be made! */
-		} else if ((m->m_flags & M_EXT) != 0) {
-			ip6stat.ip6s_pullup2_alloc++;
-			ip6stat.ip6s_pullup2_copy++;
-			prevmlen = (off + len > MHLEN) ? MCLBYTES : MHLEN;
-		} else {
-			if (mlen >= off + len) {
-				ip6stat.ip6s_pullup2_copy++;
-			} else {
-				ip6stat.ip6s_pullup2_alloc++;
-				ip6stat.ip6s_pullup2_copy++;
-				prevmlen = (off + len > MHLEN) ? MCLBYTES
-				    : MHLEN;
-			}
-		}
-	}
-
-	prev = m;
-#endif
 
 #ifdef PULLDOWN_DEBUG
 	{
@@ -266,10 +203,6 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	if ((off == 0 || offp) && len <= n->m_len - off) {
 		goto ok;
 	}
-
-#if defined(PULLDOWN_STAT) && INET6
-	ip6stat.ip6s_pulldown_copy++;
-#endif
 
 	/*
 	 * when len <= n->m_len - off and off != 0, it is a special case.
@@ -364,9 +297,6 @@ m_pulldown(struct mbuf *m, int off, int len, int *offp)
 	 * now, we need to do the hard way.  don't m_copy as there's no room
 	 * on both end.
 	 */
-#if defined(PULLDOWN_STAT) && INET6
-	ip6stat.ip6s_pulldown_alloc++;
-#endif
 	MGET(o, M_DONTWAIT, m->m_type);
 	if (o == NULL) {
 		m_freem(m);

@@ -6,6 +6,8 @@
 
 #include <darwintest.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 T_DECL(sigcontreturn, "checks that a call to waitid() for a child that is stopped and then continued returns correctly")
 {
 	pid_t           pid;

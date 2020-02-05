@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -602,6 +602,22 @@ int
 bufattr_quickcomplete(bufattr_t bap)
 {
 	if ((bap->ba_flags & BA_QUICK_COMPLETE)) {
+		return 1;
+	}
+	return 0;
+}
+
+void
+bufattr_markioscheduled(bufattr_t bap)
+{
+	SET(bap->ba_flags, BA_IO_SCHEDULED);
+}
+
+
+int
+bufattr_ioscheduled(bufattr_t bap)
+{
+	if ((bap->ba_flags & BA_IO_SCHEDULED)) {
 		return 1;
 	}
 	return 0;
@@ -2171,13 +2187,13 @@ struct meta_zone_entry {
 };
 
 struct meta_zone_entry meta_zones[] = {
-	{NULL, (MINMETA * 1), 128 * (MINMETA * 1), "buf.512" },
-	{NULL, (MINMETA * 2), 64 * (MINMETA * 2), "buf.1024" },
-	{NULL, (MINMETA * 4), 16 * (MINMETA * 4), "buf.2048" },
-	{NULL, (MINMETA * 8), 512 * (MINMETA * 8), "buf.4096" },
-	{NULL, (MINMETA * 16), 512 * (MINMETA * 16), "buf.8192" },
-	{NULL, (MINMETA * 32), 512 * (MINMETA * 32), "buf.16384" },
-	{NULL, 0, 0, "" } /* End */
+	{.mz_zone = NULL, .mz_size = (MINMETA * 1), .mz_max = 128 * (MINMETA * 1), .mz_name = "buf.512" },
+	{.mz_zone = NULL, .mz_size = (MINMETA * 2), .mz_max = 64 * (MINMETA * 2), .mz_name = "buf.1024" },
+	{.mz_zone = NULL, .mz_size = (MINMETA * 4), .mz_max = 16 * (MINMETA * 4), .mz_name = "buf.2048" },
+	{.mz_zone = NULL, .mz_size = (MINMETA * 8), .mz_max = 512 * (MINMETA * 8), .mz_name = "buf.4096" },
+	{.mz_zone = NULL, .mz_size = (MINMETA * 16), .mz_max = 512 * (MINMETA * 16), .mz_name = "buf.8192" },
+	{.mz_zone = NULL, .mz_size = (MINMETA * 32), .mz_max = 512 * (MINMETA * 32), .mz_name = "buf.16384" },
+	{.mz_zone = NULL, .mz_size = 0, .mz_max = 0, .mz_name = "" } /* End */
 };
 
 /*

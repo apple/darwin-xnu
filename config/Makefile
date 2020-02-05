@@ -57,14 +57,19 @@ endif
 $(OBJPATH)/allsymbols: $(OBJPATH)/$(KERNEL_FILE_NAME)
 	$(_v)$(NM) -gj $< > $@
 
-$(SYMBOL_SET_BUILD): $(OBJPATH)/%.symbolset :  %.exports %.$(EXPORT_SOURCE_ARCH_CONFIG_LC).exports $(OBJPATH)/allsymbols $(KEXT_CREATE_SYMBOL_SET)
-	@echo "$(ColorH)SYMBOLSET$(Color0)  $(ColorF)$*$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
-	$(_v)$(KEXT_CREATE_SYMBOL_SET)					\
-		$(ARCH_FLAGS_$(CURRENT_ARCH_CONFIG))			\
-		-import $(OBJPATH)/allsymbols				\
-		-export $(SOURCE)/$*.exports				\
-		-export $(SOURCE)/$*.$(EXPORT_SOURCE_ARCH_CONFIG_LC).exports	\
-		-output $@ $(_vstdout)
+define symbol_set_rule
+$(OBJPATH)/$(1).symbolset: MY_EXPORTS := $(filter $(1)%,$(EXPORTS_FILES))
+$(OBJPATH)/$(1).symbolset: MY_EXPORTS_ARGS := $$(foreach file,$$(MY_EXPORTS),-export $(SOURCE)/$$(file))
+$(OBJPATH)/$(1).symbolset: $$(MY_EXPORTS) $(OBJPATH)/allsymbols $(KEXT_CREATE_SYMBOL_SET)
+	$$(call makelog,$(ColorH)SYMBOLSET$(Color0)     $(ColorF)$(1)$(Color0) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))")
+	$(_v)$(KEXT_CREATE_SYMBOL_SET)			\
+		$(ARCH_FLAGS_$(CURRENT_ARCH_CONFIG))	\
+		-import $(OBJPATH)/allsymbols		\
+		$$(MY_EXPORTS_ARGS)			\
+		-output $$@ $(_vstdout)
+endef
+
+$(foreach symbolset,$(SYMBOL_COMPONENT_LIST),$(eval $(call symbol_set_rule,$(symbolset))))
 
 .PHONY: check_all_exports
 
@@ -85,11 +90,11 @@ check_all_exports: $(OBJPATH)/allsymbols $(KEXT_CREATE_SYMBOL_SET)
 		-output /dev/null $(_vstdout)
 
 $(OBJPATH)/$(MD_SUPPORTED_KPI_FILENAME): $(EXPORTS_FILES)
-	@echo "$(ColorH)SUPPORTED_KPI$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
+	$(call makelog,$(ColorH)SUPPORTED_KPI$(Color0) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))")
 	$(_v)$(SRCROOT)/config/list_supported.sh $(SOURCE) $(EXPORT_SOURCE_ARCH_CONFIG_LC) $@
 
 $(OBJPATH)/$(MI_SUPPORTED_KPI_FILENAME): $(EXPORTS_FILES)
-	@echo "$(ColorH)SUPPORTED_KPI$(Color0) \"($(ColorLF)all$(Color0))\""
+	$(call makelog,$(ColorH)SUPPORTED_KPI$(Color0) "($(ColorLF)all$(Color0))")
 	$(_v)$(SRCROOT)/config/list_supported.sh $(SOURCE) all $@
 
 build_symbol_sets: check_all_exports $(SYMBOL_SET_BUILD) $(OBJPATH)/allsymbols \
@@ -101,12 +106,11 @@ do_config_all::	build_symbol_sets
 # There's no simple static pattern rule for these paths, so hardcode dependencies in the command list
 $(SYMROOT_INSTALL_KEXT_MACHO_FILES): ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
+	$(call makelog,$(ColorH)INSTALLSYM$(Color0)    $(ColorF)symbolset $(notdir $@)$(Color0) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))")
 	$(_v)if [ $(OBJROOT)/.symbolset.timestamp -nt $@ ]; then		\
-		echo INSTALLSYM symbolset $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC))";	\
 		$(INSTALL) $(EXEC_INSTALL_FLAGS) $(OBJPATH)/$(@F).symbolset $@;	\
 		cmdstatus=$$?;							\
 	else									\
-		echo INSTALLSYM symbolset $(notdir $@) "($(CURRENT_ARCH_CONFIG_LC))";	\
 		$(LIPO) -create $@ $(OBJPATH)/$(@F).symbolset -output $@ 2>/dev/null || true;	\
 		cmdstatus=$$?;							\
 	fi;									\
@@ -114,23 +118,23 @@ $(SYMROOT_INSTALL_KEXT_MACHO_FILES): ALWAYS
 
 $(SYMROOT_INSTALL_KEXT_PLISTS): $(SYMROOT)/% : $(SOURCE)/%
 	$(_v)$(MKDIR) $(dir $@)
-	@echo "$(ColorH)INSTALLSYM$(ColorH) $(ColorLF)kextplist$(Color0) $(ColorF)$*$(Color0)"
+	$(call makelog,$(ColorH)INSTALLSYM$(Coloro)    $(ColorLF)kextplist$(Color0) $(ColorF)$*$(Color0))
 	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
 	$(_v)$(NEWVERS) $@ $(_vstdout)
 
 $(DSTROOT_INSTALL_KEXT_PLISTS): $(INSTALL_KEXT_DIR)/% : $(SYMROOT)/%
 	$(_v)$(MKDIR) $(dir $@)
-	@echo "$(ColorH)INSTALL$(ColorH)    $(ColorLF)kextplist$(Color0) $(ColorF)$*$(Color0)"
+	$(call makelog,$(ColorH)INSTALL$(Color0)       $(ColorLF)kextplist$(Color0) $(ColorF)$*$(Color0))
 	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
 
 $(DSTROOT_INSTALL_KEXT_MACHO_FILES): $(INSTALL_KEXT_DIR)/% : $(SYMROOT)/% ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
-	@echo "$(ColorF)INSTALL$(Color0)    $(ColorF)$(notdir $@)$(Color0) \"($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))\""
+	$(call makelog,$(ColorF)INSTALL$(Color0)       $(ColorF)$(notdir $@)$(Color0) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))")
 	$(_v)$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@
 
 $(DSTROOT)/$(KRESDIR)/$(MD_SUPPORTED_KPI_FILENAME) $(DSTROOT)/$(KRESDIR)/$(MI_SUPPORTED_KPI_FILENAME): $(DSTROOT)/$(KRESDIR)/% : $(OBJPATH)/%
 	$(_v)$(MKDIR) $(dir $@)
-	@echo "$(ColorH)INSTALL$(Color0)    $(ColorF)$*$(Color0)"
+	$(call makelog,$(ColorH)INSTALL$(Color0)       $(ColorF)$*$(Color0))
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 ifneq ($(INSTALL_KASAN_ONLY),1)

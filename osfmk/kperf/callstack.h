@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2011-2019 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -29,7 +29,8 @@
 #ifndef KPERF_CALLSTACK_H
 #define KPERF_CALLSTACK_H
 
-#define MAX_CALLSTACK_FRAMES (128)
+#define MAX_KCALLSTACK_FRAMES (128)
+#define MAX_UCALLSTACK_FRAMES (256)
 
 /* the callstack contains valid data */
 #define CALLSTACK_VALID        (1U << 0)
@@ -46,22 +47,30 @@
 /* the frames field is filled with uintptr_t, not uint64_t */
 #define CALLSTACK_KERNEL_WORDS (1U << 6)
 
-struct callstack {
-	uint32_t flags;
-	uint32_t nframes;
-	/* WARNING this can be uintptr_t instead if CALLSTACK_KERNEL_WORDS is set */
-	uint64_t frames[MAX_CALLSTACK_FRAMES];
+struct kp_ucallstack {
+	uint32_t kpuc_flags;
+	uint32_t kpuc_nframes;
+	uintptr_t kpuc_frames[MAX_UCALLSTACK_FRAMES];
+};
+
+struct kp_kcallstack {
+	uint32_t kpkc_flags;
+	uint32_t kpkc_nframes;
+	union {
+		uintptr_t kpkc_word_frames[MAX_KCALLSTACK_FRAMES];
+		uint64_t kpkc_frames[MAX_KCALLSTACK_FRAMES];
+	};
 };
 
 struct kperf_context;
 
-void kperf_kcallstack_sample(struct callstack *cs, struct kperf_context *);
-void kperf_kcallstack_log(struct callstack *cs);
-void kperf_continuation_sample(struct callstack *cs, struct kperf_context *);
-void kperf_backtrace_sample(struct callstack *cs, struct kperf_context *context);
+void kperf_kcallstack_sample(struct kp_kcallstack *cs, struct kperf_context *);
+void kperf_kcallstack_log(struct kp_kcallstack *cs);
+void kperf_continuation_sample(struct kp_kcallstack *cs, struct kperf_context *);
+void kperf_backtrace_sample(struct kp_kcallstack *cs, struct kperf_context *context);
 
-void kperf_ucallstack_sample(struct callstack *cs, struct kperf_context *);
+void kperf_ucallstack_sample(struct kp_ucallstack *cs, struct kperf_context *);
 int kperf_ucallstack_pend(struct kperf_context *, uint32_t depth);
-void kperf_ucallstack_log(struct callstack *cs);
+void kperf_ucallstack_log(struct kp_ucallstack *cs);
 
 #endif /* !defined(KPERF_CALLSTACK_H) */

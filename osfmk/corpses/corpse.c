@@ -407,7 +407,7 @@ task_generate_corpse(
 	ipc_port_t corpse_port;
 	ipc_port_t old_notify;
 
-	if (task == kernel_task || task == TASK_NULL || task == current_task()) {
+	if (task == kernel_task || task == TASK_NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
@@ -446,7 +446,7 @@ task_generate_corpse(
 	assert(IP_NULL != corpse_port);
 
 	ip_lock(corpse_port);
-	assert(ip_active(corpse_port));
+	require_ip_active(corpse_port);
 	ipc_port_nsrequest(corpse_port, corpse_port->ip_mscount, ipc_port_make_sonce_locked(corpse_port), &old_notify);
 	/* port unlocked */
 
@@ -579,6 +579,7 @@ task_generate_corpse_internal(
 	    is_64bit_data,
 	    t_flags,
 	    TPF_NONE,
+	    TWF_NONE,
 	    &new_task);
 	if (kr != KERN_SUCCESS) {
 		goto error_task_generate_corpse;

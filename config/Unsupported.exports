@@ -50,7 +50,6 @@ __ZTV9IODTNVRAM
 __ZTVN15IOWatchDogTimer9MetaClassE
 __doprnt
 __doprnt_log
-__dtrace_register_anon_DOF
 _aes_decrypt_cbc
 _aes_decrypt_key
 _aes_decrypt_key128
@@ -165,6 +164,7 @@ _sock_accept_internal
 _sock_socket_internal
 _stack_privilege
 _task_get_special_port
+_task_is_app_suspended
 _task_resume
 _task_resume2
 _task_suspend

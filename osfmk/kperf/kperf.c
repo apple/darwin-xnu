@@ -342,9 +342,11 @@ kperf_port_to_pid(mach_port_name_t portname)
 	if (task == TASK_NULL) {
 		return -1;
 	}
+
 	pid_t pid = task_pid(task);
-	/* drop the ref taken by port_name_to_task */
-	(void)task_deallocate_internal(task);
+
+	os_ref_count_t __assert_only count = task_deallocate_internal(task);
+	assert(count != 0);
 
 	return pid;
 }

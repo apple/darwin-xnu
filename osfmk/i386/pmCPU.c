@@ -750,7 +750,7 @@ pmThreadGetUrgency(uint64_t *rt_period, uint64_t *rt_deadline)
 	thread_urgency_t urgency;
 	uint64_t        arg1, arg2;
 
-	urgency = thread_get_urgency(current_processor()->next_thread, &arg1, &arg2);
+	urgency = thread_get_urgency(THREAD_NULL, &arg1, &arg2);
 
 	if (urgency == THREAD_URGENCY_REAL_TIME) {
 		if (rt_period != NULL) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1053,7 +1053,7 @@ vlan_output(struct ifnet * ifp, struct mbuf * m)
 	u_short                     tag;
 	vlan_parent_ref             vlp = NULL;
 	int                         err;
-	struct flowadv              adv = { FADV_SUCCESS };
+	struct flowadv              adv = { .code = FADV_SUCCESS };
 
 	if (m == 0) {
 		return 0;
@@ -1129,6 +1129,13 @@ vlan_output(struct ifnet * ifp, struct mbuf * m)
 		evl->evl_proto = evl->evl_encap_proto;
 		evl->evl_encap_proto = htons(ETHERTYPE_VLAN);
 		evl->evl_tag = htons(tag);
+
+		/* adjust partial checksum offload offsets */
+		if ((m->m_pkthdr.csum_flags & (CSUM_DATA_VALID |
+		    CSUM_PARTIAL)) == (CSUM_DATA_VALID | CSUM_PARTIAL)) {
+			m->m_pkthdr.csum_tx_start += ETHER_VLAN_ENCAP_LEN;
+			m->m_pkthdr.csum_tx_stuff += ETHER_VLAN_ENCAP_LEN;
+		}
 	}
 
 	err = dlil_output(p, PF_VLAN, m, NULL, NULL, 1, &adv);
@@ -1176,6 +1183,7 @@ vlan_input(ifnet_t p, __unused protocol_family_t protocol,
 		soft_vlan = 1;
 		switch (ifnet_type(p)) {
 		case IFT_ETHER:
+		case IFT_IEEE8023ADLAG:
 			if (m->m_len < ETHER_VLAN_ENCAP_LEN) {
 				m_freem(m);
 				return 0;

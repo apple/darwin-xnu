@@ -95,6 +95,8 @@ enum {
 	UBSAN_ALIGN,
 	UBSAN_POINTER_OVERFLOW,
 	UBSAN_OOB,
+	UBSAN_GENERIC,
+	UBSAN_TYPE_MISMATCH,
 	UBSAN_VIOLATION_MAX,
 };
 
@@ -109,6 +111,7 @@ struct ubsan_violation {
 		struct ubsan_align_desc *align;
 		struct ubsan_ptroverflow_desc *ptroverflow;
 		struct ubsan_oob_desc *oob;
+		const char *func;
 	};
 	struct san_src_loc *loc;
 };
@@ -121,23 +124,47 @@ size_t ubsan_format(struct ubsan_violation *, char *buf, size_t sz);
  */
 
 void __ubsan_handle_add_overflow(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
-void __ubsan_handle_sub_overflow(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
-void __ubsan_handle_mul_overflow(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
-void __ubsan_handle_divrem_overflow(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
-void __ubsan_handle_negate_overflow(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
 void __ubsan_handle_add_overflow_abort(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
-void __ubsan_handle_sub_overflow_abort(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
-void __ubsan_handle_mul_overflow_abort(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
-void __ubsan_handle_divrem_overflow_abort(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
-void __ubsan_handle_negate_overflow_abort(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
 void __ubsan_handle_builtin_unreachable(struct ubsan_unreachable_desc *);
-void __ubsan_handle_shift_out_of_bounds(struct ubsan_shift_desc *, uint64_t lhs, uint64_t rhs);
-void __ubsan_handle_shift_out_of_bounds_abort(struct ubsan_shift_desc *, uint64_t lhs, uint64_t rhs);
-void __ubsan_handle_type_mismatch_v1(struct ubsan_align_desc *, uint64_t val);
-void __ubsan_handle_type_mismatch_v1_abort(struct ubsan_align_desc *, uint64_t val);
-void __ubsan_handle_pointer_overflow(struct ubsan_ptroverflow_desc *, uint64_t lhs, uint64_t rhs);
-void __ubsan_handle_pointer_overflow_abort(struct ubsan_ptroverflow_desc *, uint64_t lhs, uint64_t rhs);
+void __ubsan_handle_divrem_overflow(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
+void __ubsan_handle_divrem_overflow_abort(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
+void __ubsan_handle_mul_overflow(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
+void __ubsan_handle_mul_overflow_abort(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
+void __ubsan_handle_negate_overflow(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
+void __ubsan_handle_negate_overflow_abort(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
 void __ubsan_handle_out_of_bounds(struct ubsan_oob_desc *, uint64_t idx);
 void __ubsan_handle_out_of_bounds_abort(struct ubsan_oob_desc *, uint64_t idx);
+void __ubsan_handle_pointer_overflow(struct ubsan_ptroverflow_desc *, uint64_t lhs, uint64_t rhs);
+void __ubsan_handle_pointer_overflow_abort(struct ubsan_ptroverflow_desc *, uint64_t lhs, uint64_t rhs);
+void __ubsan_handle_shift_out_of_bounds(struct ubsan_shift_desc *, uint64_t lhs, uint64_t rhs);
+void __ubsan_handle_shift_out_of_bounds_abort(struct ubsan_shift_desc *, uint64_t lhs, uint64_t rhs);
+void __ubsan_handle_sub_overflow(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
+void __ubsan_handle_sub_overflow_abort(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
+void __ubsan_handle_type_mismatch_v1(struct ubsan_align_desc *, uint64_t val);
+void __ubsan_handle_type_mismatch_v1_abort(struct ubsan_align_desc *, uint64_t val);
+
+/* currently unimplemented */
+void __ubsan_handle_float_cast_overflow(struct san_src_loc *);
+void __ubsan_handle_float_cast_overflow_abort(struct san_src_loc *);
+void __ubsan_handle_function_type_mismatch(struct san_src_loc *);
+void __ubsan_handle_function_type_mismatch_abort(struct san_src_loc *);
+void __ubsan_handle_implicit_conversion(struct san_src_loc *);
+void __ubsan_handle_implicit_conversion_abort(struct san_src_loc *);
+void __ubsan_handle_invalid_builtin(struct san_src_loc *);
+void __ubsan_handle_invalid_builtin_abort(struct san_src_loc *);
+void __ubsan_handle_load_invalid_value(struct san_src_loc *);
+void __ubsan_handle_load_invalid_value_abort(struct san_src_loc *);
+void __ubsan_handle_missing_return(struct san_src_loc *);
+void __ubsan_handle_missing_return_abort(struct san_src_loc *);
+void __ubsan_handle_nonnull_arg(struct san_src_loc *);
+void __ubsan_handle_nonnull_arg_abort(struct san_src_loc *);
+void __ubsan_handle_nonnull_return(struct san_src_loc *);
+void __ubsan_handle_nonnull_return_abort(struct san_src_loc *);
+void __ubsan_handle_nullability_arg(struct san_src_loc *);
+void __ubsan_handle_nullability_arg_abort(struct san_src_loc *);
+void __ubsan_handle_nullability_return(struct san_src_loc *);
+void __ubsan_handle_nullability_return_abort(struct san_src_loc *);
+void __ubsan_handle_vla_bound_not_positive(struct san_src_loc *);
+void __ubsan_handle_vla_bound_not_positive_abort(struct san_src_loc *);
 
 #endif /* _UBSAN_H_ */

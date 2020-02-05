@@ -119,11 +119,10 @@
 #define x86_AVX_STATE32                 16
 #define x86_AVX_STATE64                 (x86_AVX_STATE32 + 1)
 #define x86_AVX_STATE                   (x86_AVX_STATE32 + 2)
-#if !defined(RC_HIDE_XNU_J137)
 #define x86_AVX512_STATE32              19
 #define x86_AVX512_STATE64              (x86_AVX512_STATE32 + 1)
 #define x86_AVX512_STATE                (x86_AVX512_STATE32 + 2)
-#endif /* not RC_HIDE_XNU_J137 */
+#define x86_PAGEIN_STATE                22
 #define x86_THREAD_FULL_STATE64         23
 
 /*
@@ -138,47 +137,28 @@
  * platform. The macro must be manually updated to include all of the valid
  * exception flavors as defined above.
  */
-#if !defined(RC_HIDE_XNU_J137)
-#define VALID_THREAD_STATE_FLAVOR(x)       \
-	 ((x == x86_THREAD_STATE32)	 || \
-	  (x == x86_FLOAT_STATE32)	 || \
-	  (x == x86_EXCEPTION_STATE32)	 || \
-	  (x == x86_DEBUG_STATE32)	 || \
-	  (x == x86_THREAD_STATE64)	 || \
-	  (x == x86_THREAD_FULL_STATE64) || \
-	  (x == x86_FLOAT_STATE64)	 || \
-	  (x == x86_EXCEPTION_STATE64)	 || \
-	  (x == x86_DEBUG_STATE64)	 || \
-	  (x == x86_THREAD_STATE)	 || \
-	  (x == x86_FLOAT_STATE)	 || \
-	  (x == x86_EXCEPTION_STATE)	 || \
-	  (x == x86_DEBUG_STATE)	 || \
-	  (x == x86_AVX_STATE32)	 || \
-	  (x == x86_AVX_STATE64)	 || \
-	  (x == x86_AVX_STATE)		 || \
-	  (x == x86_AVX512_STATE32)	 || \
-	  (x == x86_AVX512_STATE64)	 || \
-	  (x == x86_AVX512_STATE)	 || \
+#define VALID_THREAD_STATE_FLAVOR(x)            \
+	 ((x == x86_THREAD_STATE32)		|| \
+	  (x == x86_FLOAT_STATE32)		|| \
+	  (x == x86_EXCEPTION_STATE32)		|| \
+	  (x == x86_DEBUG_STATE32)		|| \
+	  (x == x86_THREAD_STATE64)		|| \
+	  (x == x86_THREAD_FULL_STATE64)	|| \
+	  (x == x86_FLOAT_STATE64)		|| \
+	  (x == x86_EXCEPTION_STATE64)		|| \
+	  (x == x86_DEBUG_STATE64)		|| \
+	  (x == x86_THREAD_STATE)		|| \
+	  (x == x86_FLOAT_STATE)		|| \
+	  (x == x86_EXCEPTION_STATE)		|| \
+	  (x == x86_DEBUG_STATE)		|| \
+	  (x == x86_AVX_STATE32)		|| \
+	  (x == x86_AVX_STATE64)		|| \
+	  (x == x86_AVX_STATE)			|| \
+	  (x == x86_AVX512_STATE32)		|| \
+	  (x == x86_AVX512_STATE64)		|| \
+	  (x == x86_AVX512_STATE)		|| \
+	  (x == x86_PAGEIN_STATE)		|| \
 	  (x == THREAD_STATE_NONE))
-#else
-#define VALID_THREAD_STATE_FLAVOR(x)       \
-	 ((x == x86_THREAD_STATE32)	|| \
-	  (x == x86_FLOAT_STATE32)	|| \
-	  (x == x86_EXCEPTION_STATE32)	|| \
-	  (x == x86_DEBUG_STATE32)	|| \
-	  (x == x86_THREAD_STATE64)	|| \
-	  (x == x86_FLOAT_STATE64)	|| \
-	  (x == x86_EXCEPTION_STATE64)	|| \
-	  (x == x86_DEBUG_STATE64)	|| \
-	  (x == x86_THREAD_STATE)	|| \
-	  (x == x86_FLOAT_STATE)	|| \
-	  (x == x86_EXCEPTION_STATE)	|| \
-	  (x == x86_DEBUG_STATE)	|| \
-	  (x == x86_AVX_STATE32)	|| \
-	  (x == x86_AVX_STATE64)	|| \
-	  (x == x86_AVX_STATE)		|| \
-	  (x == THREAD_STATE_NONE))
-#endif /* not RC_HIDE_XNU_J137 */
 
 struct x86_state_hdr {
 	uint32_t        flavor;
@@ -221,11 +201,9 @@ typedef _STRUCT_X86_AVX_STATE32 x86_avx_state32_t;
 #define x86_AVX_STATE32_COUNT ((mach_msg_type_number_t) \
 	        (sizeof(x86_avx_state32_t)/sizeof(unsigned int)))
 
-#if !defined(RC_HIDE_XNU_J137)
 typedef _STRUCT_X86_AVX512_STATE32 x86_avx512_state32_t;
 #define x86_AVX512_STATE32_COUNT ((mach_msg_type_number_t) \
 	        (sizeof(x86_avx512_state32_t)/sizeof(unsigned int)))
-#endif /* not RC_HIDE_XNU_J137 */
 
 /*
  * to be deprecated in the future
@@ -262,11 +240,9 @@ typedef _STRUCT_X86_AVX_STATE64 x86_avx_state64_t;
 #define x86_AVX_STATE64_COUNT ((mach_msg_type_number_t) \
 	        (sizeof(x86_avx_state64_t)/sizeof(unsigned int)))
 
-#if !defined(RC_HIDE_XNU_J137)
 typedef _STRUCT_X86_AVX512_STATE64 x86_avx512_state64_t;
 #define x86_AVX512_STATE64_COUNT ((mach_msg_type_number_t) \
 	        (sizeof(x86_avx512_state64_t)/sizeof(unsigned int)))
-#endif /* not RC_HIDE_XNU_J137 */
 
 typedef _STRUCT_X86_EXCEPTION_STATE64 x86_exception_state64_t;
 #define x86_EXCEPTION_STATE64_COUNT     ((mach_msg_type_number_t) \
@@ -279,6 +255,12 @@ typedef _STRUCT_X86_DEBUG_STATE64 x86_debug_state64_t;
     ( sizeof (x86_debug_state64_t) / sizeof (int) ))
 
 #define X86_DEBUG_STATE64_COUNT x86_DEBUG_STATE64_COUNT
+
+typedef _STRUCT_X86_PAGEIN_STATE x86_pagein_state_t;
+#define x86_PAGEIN_STATE_COUNT \
+    ((mach_msg_type_number_t)(sizeof(x86_pagein_state_t) / sizeof(int)))
+
+#define X86_PAGEIN_STATE_COUNT x86_PAGEIN_STATE_COUNT
 
 /*
  * Combined thread, float and exception states
@@ -323,7 +305,6 @@ struct x86_avx_state {
 	} ufs;
 };
 
-#if !defined(RC_HIDE_XNU_J137)
 struct x86_avx512_state {
 	x86_state_hdr_t                 ash;
 	union {
@@ -331,7 +312,6 @@ struct x86_avx512_state {
 		x86_avx512_state64_t    as64;
 	} ufs;
 };
-#endif /* not RC_HIDE_XNU_J137 */
 
 typedef struct x86_thread_state x86_thread_state_t;
 #define x86_THREAD_STATE_COUNT  ((mach_msg_type_number_t) \
@@ -353,11 +333,9 @@ typedef struct x86_avx_state x86_avx_state_t;
 #define x86_AVX_STATE_COUNT ((mach_msg_type_number_t) \
 	        (sizeof(x86_avx_state_t)/sizeof(unsigned int)))
 
-#if !defined(RC_HIDE_XNU_J137)
 typedef struct x86_avx512_state x86_avx512_state_t;
 #define x86_AVX512_STATE_COUNT ((mach_msg_type_number_t) \
 	        (sizeof(x86_avx512_state_t)/sizeof(unsigned int)))
-#endif /* not RC_HIDE_XNU_J137 */
 
 /*
  * Machine-independent way for servers and Mach's exception mechanism to

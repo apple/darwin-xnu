@@ -69,6 +69,7 @@
 #define FLOW_DIVERT_TLV_FLAGS                   29
 #define FLOW_DIVERT_TLV_FLOW_TYPE               30
 #define FLOW_DIVERT_TLV_APP_DATA                31
+#define FLOW_DIVERT_TLV_APP_AUDIT_TOKEN         32
 
 #define FLOW_DIVERT_FLOW_TYPE_TCP               1
 #define FLOW_DIVERT_FLOW_TYPE_UDP               3

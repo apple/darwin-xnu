@@ -32,6 +32,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <corecrypto/ccdigest_priv.h>
 #include <corecrypto/cchmac.h>
 #include <corecrypto/ccn.h>
 #include <corecrypto/cc_priv.h>
@@ -67,7 +68,7 @@ cchmac_init(const struct ccdigest_info *di, cchmac_ctx_t hc,
 	}
 	/* Fill remainder of cchmac_data(di, hc) with opad. */
 	if (key_len < di->block_size) {
-		CC_MEMSET(cchmac_data(di, hc) + key_len, 0x5c, di->block_size - key_len);
+		cc_memset(cchmac_data(di, hc) + key_len, 0x5c, di->block_size - key_len);
 	}
 
 	/* Set cchmac_ostate32(di, hc) to the state of the first round of the

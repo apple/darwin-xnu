@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -75,7 +75,7 @@
 #ifdef PRIVATE
 #include <net/route.h>
 #endif
-#ifdef BSD_KERNEL_PRIVATE
+#ifdef BSD_KERN_PRIVATE
 #include <sys/eventhandler.h>
 #endif
 
@@ -98,6 +98,10 @@
 #define APPLE_IF_FAM_STF       12
 #define APPLE_IF_FAM_FIREWIRE  13
 #define APPLE_IF_FAM_BOND      14
+#define APPLE_IF_FAM_CELLULAR  15
+#define APPLE_IF_FAM_6LOWPAN   16
+#define APPLE_IF_FAM_UTUN      17
+#define APPLE_IF_FAM_IPSEC     18
 #endif /* __APPLE__ */
 
 /*
@@ -302,6 +306,37 @@ struct if_latencies {
 	u_int64_t       max_lt;         /* maximum theoretical latency */
 };
 
+#define IF_NETEM_PARAMS_PSCALE  100000
+struct if_netem_params {
+	/* bandwidth limit */
+	uint64_t        ifnetem_bandwidth_bps;
+
+	/* latency (normal distribution with jitter as stdev) */
+	uint32_t        ifnetem_latency_ms;
+	uint32_t        ifnetem_jitter_ms;
+
+	/*
+	 * NetEm probabilistic model parameters has a scaling factor of 100,000
+	 * for 5 digits precision. For instance, probability 12.345% is
+	 * expressed as uint32_t fixed point 12345 in ifnet_*_p variable below.
+	 */
+	/* random packet corruption */
+	uint32_t        ifnetem_corruption_p;
+
+	/* random packet duplication */
+	uint32_t        ifnetem_duplication_p;
+
+	/* 4 state Markov loss model */
+	uint32_t        ifnetem_loss_p_gr_gl; /* P( gap_loss   | gap_rx     ) */
+	uint32_t        ifnetem_loss_p_gr_bl; /* P( burst_loss | gap_rx     ) */
+	uint32_t        ifnetem_loss_p_bl_br; /* P( burst_rx   | burst_loss ) */
+	uint32_t        ifnetem_loss_p_bl_gr; /* P( gap_rx     | burst_loss ) */
+	uint32_t        ifnetem_loss_p_br_bl; /* P( burst_loss | burst_rx   ) */
+
+	/* random packet reordering */
+	uint32_t        ifnetem_reordering_p;
+};
+
 struct if_rxpoll_stats {
 	u_int32_t       ifi_poll_off_req;       /* total # of POLL_OFF reqs */
 	u_int32_t       ifi_poll_off_err;       /* total # of POLL_OFF errors */
@@ -328,6 +363,23 @@ struct if_rxpoll_stats {
 
 	u_int32_t       ifi_poll_packets_limit; /* max packets per poll call */
 	u_int64_t       ifi_poll_interval_time; /* poll interval (nsec) */
+};
+
+struct if_netif_stats {
+	u_int64_t       ifn_rx_mit_interval;    /* rx mitigation ival (nsec) */
+	u_int32_t       ifn_rx_mit_mode;        /* 0: static, 1: dynamic */
+	u_int32_t       ifn_rx_mit_packets_avg; /* average # of packets */
+	u_int32_t       ifn_rx_mit_packets_min; /* smallest # of packets */
+	u_int32_t       ifn_rx_mit_packets_max; /* largest # of packets */
+	u_int32_t       ifn_rx_mit_bytes_avg;   /* average # of bytes */
+	u_int32_t       ifn_rx_mit_bytes_min;   /* smallest # of bytes */
+	u_int32_t       ifn_rx_mit_bytes_max;   /* largest # of bytes */
+	u_int32_t       ifn_rx_mit_cfg_idx;     /* current config selector */
+	u_int32_t       ifn_rx_mit_cfg_packets_lowat; /* pkts low watermark */
+	u_int32_t       ifn_rx_mit_cfg_packets_hiwat; /* pkts high watermark */
+	u_int32_t       ifn_rx_mit_cfg_bytes_lowat; /* bytes low watermark */
+	u_int32_t       ifn_rx_mit_cfg_bytes_hiwat; /* bytes high watermark */
+	u_int32_t       ifn_rx_mit_cfg_interval; /* delay interval (nsec) */
 };
 
 struct if_tcp_ecn_perf_stat {
@@ -633,6 +685,77 @@ struct chain_len_stats {
 	uint64_t        cls_five_or_more;
 } __attribute__((__aligned__(sizeof(uint64_t))));
 
+/*
+ * This structure is used to define the parameters for advisory notifications
+ * on an interface.
+ */
+#pragma pack(push, 1)
+struct ifnet_interface_advisory {
+	/* The current structure version */
+	uint8_t     version;
+#define IF_INTERFACE_ADVISORY_VERSION_1    0x1
+#define IF_INTERFACE_ADVISORY_VERSION_CURRENT  IF_INTERFACE_ADVISORY_VERSION_1
+	/*  Specifies if the advisory is for transmit or receive path */
+	uint8_t     direction;
+#define IF_INTERFACE_ADVISORY_DIRECTION_TX    0x1
+#define IF_INTERFACE_ADVISORY_DIRECTION_RX    0x2
+	/* reserved for future use */
+	uint16_t    _reserved;
+	/*
+	 * suggestion for data rate change to keep the latency low.
+	 * unit: bits per second (bps)
+	 * NOTE: if the interface cannot provide suggestions in terms of bps,
+	 * it should use the following values:
+	 * INT32_MAX : ramp up
+	 * INT32_MIN : ramp down
+	 * 0         : neutral
+	 */
+#define IF_INTERFACE_ADVISORY_RATE_SUGGESTION_RAMP_UP         INT32_MAX
+#define IF_INTERFACE_ADVISORY_RATE_SUGGESTION_RAMP_DOWN       INT32_MIN
+#define IF_INTERFACE_ADVISORY_RATE_SUGGESTION_RAMP_NEUTRAL    0
+	int32_t     rate_trend_suggestion;
+	/*
+	 * Time of the issue of advisory.
+	 * Timestamp should be in the host domain.
+	 * unit: mach absolute time
+	 */
+	uint64_t    timestamp;
+	/*
+	 * Maximum theoretical bandwidth of the interface.
+	 * unit: bits per second (bps)
+	 */
+	uint64_t    max_bandwidth;
+	/*
+	 * Total bytes sent or received on the interface.
+	 * wrap around possible and the application should account for that.
+	 * unit: byte
+	 */
+	uint64_t    total_byte_count;
+	/*
+	 * average throughput observed at the driver stack.
+	 * unit: bits per second (bps)
+	 */
+	uint64_t    average_throughput;
+	/*
+	 * flushable queue size at the driver.
+	 * should be set to UINT32_MAX if not available.
+	 * unit: byte
+	 */
+	uint32_t    flushable_queue_size;
+	/*
+	 * non flushable queue size at the driver.
+	 * should be set to UINT32_MAX if not available.
+	 * unit: byte
+	 */
+	uint32_t    non_flushable_queue_size;
+	/*
+	 * average delay observed at the interface.
+	 * unit: milliseconds (ms)
+	 */
+	uint32_t    average_delay;
+} __attribute__((aligned(sizeof(uint64_t))));
+#pragma pack(pop)
+
 #endif /* PRIVATE */
 
 #pragma pack()
@@ -837,9 +960,13 @@ struct ifnet {
 	TAILQ_ENTRY(ifnet) if_detaching_link; /* list of detaching ifnets */
 	TAILQ_ENTRY(ifnet) if_ordered_link;     /* list of ordered ifnets */
 
-	decl_lck_mtx_data(, if_ref_lock)
+	decl_lck_mtx_data(, if_ref_lock);
 	u_int32_t       if_refflags;    /* see IFRF flags below */
 	u_int32_t       if_refio;       /* number of io ops to the underlying driver */
+	u_int32_t       if_threads_pending;    /* Threads created but waiting for first run */
+	u_int32_t       if_datamov;     /* number of threads moving data */
+	u_int32_t       if_drainers;    /* number of draining threads */
+	u_int32_t       if_suspend;     /* number of suspend requests */
 
 #define if_list         if_link
 	struct ifaddrhead if_addrhead;  /* linked list of addresses per if */
@@ -913,7 +1040,7 @@ struct ifnet {
 	struct if_latencies     if_output_lt;
 	struct if_latencies     if_input_lt;
 
-	decl_lck_mtx_data(, if_flt_lock)
+	decl_lck_mtx_data(, if_flt_lock);
 	u_int32_t               if_flt_busy;
 	u_int32_t               if_flt_waiters;
 	struct ifnet_filter_head if_flt_head;
@@ -924,12 +1051,64 @@ struct ifnet {
 	decl_lck_mtx_data(, if_addrconfig_lock); /* for serializing addr config */
 	struct in_multi         *if_allhostsinm; /* store all-hosts inm for this ifp */
 
+	/*
+	 * Opportunistic polling parameters.
+	 */
 	decl_lck_mtx_data(, if_poll_lock);
-	u_int16_t               if_poll_req;
-	u_int16_t               if_poll_update; /* link update */
-	u_int32_t               if_poll_active; /* polling is active */
-	struct timespec         if_poll_cycle;  /* poll interval */
-	struct thread           *if_poll_thread;
+	struct if_poll_params {
+		u_int16_t       poll_req;
+		u_int16_t       poll_update; /* link update */
+		u_int32_t       poll_flags;
+#define IF_POLLF_READY          0x1     /* poll thread is ready */
+#define IF_POLLF_RUNNING        0x2     /* poll thread is running/active */
+		struct timespec poll_cycle;  /* poll interval */
+		struct thread   *poll_thread;
+
+		ifnet_model_t   poll_mode;   /* current mode */
+		struct pktcntr  poll_tstats; /* incremental polling statistics */
+		struct if_rxpoll_stats poll_pstats;  /* polling statistics */
+		struct pktcntr  poll_sstats; /* packets and bytes per sampling */
+		struct timespec poll_mode_holdtime; /* mode holdtime in nsec */
+		struct timespec poll_mode_lasttime; /* last mode change time in nsec */
+		struct timespec poll_sample_holdtime; /* sampling holdtime in nsec */
+		struct timespec poll_sample_lasttime; /* last sampling time in nsec */
+		struct timespec poll_dbg_lasttime; /* last debug message time in nsec */
+	} rxpoll_params;
+#define if_poll_req     rxpoll_params.poll_req
+#define if_poll_update  rxpoll_params.poll_update
+#define if_poll_flags   rxpoll_params.poll_flags
+#define if_poll_cycle   rxpoll_params.poll_cycle
+#define if_poll_thread  rxpoll_params.poll_thread
+#define if_poll_mode    rxpoll_params.poll_mode
+#define if_poll_tstats  rxpoll_params.poll_tstats
+#define if_poll_sstats  rxpoll_params.poll_sstats
+#define if_poll_pstats  rxpoll_params.poll_pstats
+
+#define if_poll_mode_holdtime    rxpoll_params.poll_mode_holdtime
+#define if_poll_mode_lasttime    rxpoll_params.poll_mode_lasttime
+#define if_poll_sample_holdtime  rxpoll_params.poll_sample_holdtime
+#define if_poll_sample_lasttime  rxpoll_params.poll_sample_lasttime
+#define if_poll_dbg_lasttime     rxpoll_params.poll_dbg_lasttime
+
+#define if_rxpoll_offreq   rxpoll_params.poll_pstats.ifi_poll_off_req
+#define if_rxpoll_offerr   rxpoll_params.poll_pstats.ifi_poll_off_err
+#define if_rxpoll_onreq    rxpoll_params.poll_pstats.ifi_poll_on_req
+#define if_rxpoll_onerr    rxpoll_params.poll_pstats.ifi_poll_on_err
+#define if_rxpoll_wavg     rxpoll_params.poll_pstats.ifi_poll_wakeups_avg
+#define if_rxpoll_wlowat   rxpoll_params.poll_pstats.ifi_poll_wakeups_lowat
+#define if_rxpoll_whiwat   rxpoll_params.poll_pstats.ifi_poll_wakeups_hiwat
+#define if_rxpoll_pavg     rxpoll_params.poll_pstats.ifi_poll_packets_avg
+#define if_rxpoll_pmin     rxpoll_params.poll_pstats.ifi_poll_packets_min
+#define if_rxpoll_pmax     rxpoll_params.poll_pstats.ifi_poll_packets_max
+#define if_rxpoll_plowat   rxpoll_params.poll_pstats.ifi_poll_packets_lowat
+#define if_rxpoll_phiwat   rxpoll_params.poll_pstats.ifi_poll_packets_hiwat
+#define if_rxpoll_bavg     rxpoll_params.poll_pstats.ifi_poll_bytes_avg
+#define if_rxpoll_bmin     rxpoll_params.poll_pstats.ifi_poll_bytes_min
+#define if_rxpoll_bmax     rxpoll_params.poll_pstats.ifi_poll_bytes_max
+#define if_rxpoll_blowat   rxpoll_params.poll_pstats.ifi_poll_bytes_lowat
+#define if_rxpoll_bhiwat   rxpoll_params.poll_pstats.ifi_poll_bytes_hiwat
+#define if_rxpoll_plim     rxpoll_params.poll_pstats.ifi_poll_packets_limit
+#define if_rxpoll_ival     rxpoll_params.poll_pstats.ifi_poll_interval_time
 
 	struct dlil_threading_info *if_inp;
 
@@ -992,7 +1171,8 @@ struct ifnet {
 		u_int32_t       type;           /* delegated i/f type */
 		u_int32_t       family;         /* delegated i/f family */
 		u_int32_t       subfamily;      /* delegated i/f sub-family */
-		uint32_t        expensive:1;    /* delegated i/f expensive? */
+		uint32_t        expensive:1,    /* delegated i/f expensive? */
+		    constrained:1;              /* delegated i/f constrained? */
 	} if_delegated;
 
 	uuid_t                  *if_agentids;   /* network agents attached to interface */
@@ -1027,6 +1207,11 @@ struct ifnet {
 	struct if_tcp_ecn_stat *if_ipv6_stat;
 
 	struct if_lim_perf_stat if_lim_stat;
+
+	uint32_t        if_tcp_kao_max;
+	uint32_t        if_tcp_kao_cnt;
+
+	struct netem    *if_output_netem;
 };
 
 /* Interface event handling declarations */
@@ -1062,11 +1247,16 @@ EVENTHANDLER_DECLARE(ifnet_event, ifnet_event_fn);
 #define IFRF_EMBRYONIC  0x1     /* ifnet is allocated; awaiting attach */
 #define IFRF_ATTACHED   0x2     /* ifnet attach is completely done */
 #define IFRF_DETACHING  0x4     /* detach has been requested */
+#define IFRF_READY      0x8     /* data path is ready */
+
 #define IFRF_ATTACH_MASK        \
 	(IFRF_EMBRYONIC|IFRF_ATTACHED|IFRF_DETACHING)
 
 #define IF_FULLY_ATTACHED(_ifp) \
 	(((_ifp)->if_refflags & IFRF_ATTACH_MASK) == IFRF_ATTACHED)
+
+#define IF_FULLY_ATTACHED_AND_READY(_ifp) \
+	(IF_FULLY_ATTACHED(_ifp) && ((_ifp)->if_refflags & IFRF_READY))
 /*
  * Valid values for if_start_flags
  */
@@ -1203,6 +1393,8 @@ struct ifaddr {
 	(struct ifaddr *, int);
 	void (*ifa_attached)(struct ifaddr *); /* callback fn for attaching */
 	void (*ifa_detached)(struct ifaddr *); /* callback fn for detaching */
+	void *ifa_del_wc;               /* Wait channel to avoid address deletion races */
+	int ifa_del_waiters;            /* Threads in wait to delete the address */
 #if __arm__ && (__BIGGEST_ALIGNMENT__ > 4)
 /* For the newer ARMv7k ABI where 64-bit types are 64-bit aligned, but pointers
  * are 32-bit:
@@ -1360,8 +1552,10 @@ struct ifmultiaddr {
  * IFNET_FAMILY_ETHERNET (as well as type to IFT_ETHER) which is too generic.
  */
 #define IFNET_IS_WIFI(_ifp)                                             \
-	((_ifp)->if_subfamily == IFNET_SUBFAMILY_WIFI ||                \
-	(_ifp)->if_delegated.subfamily == IFNET_SUBFAMILY_WIFI)
+	(((_ifp)->if_family == IFNET_FAMILY_ETHERNET  &&                \
+	(_ifp)->if_subfamily == IFNET_SUBFAMILY_WIFI) ||                \
+	((_ifp)->if_delegated.family == IFNET_FAMILY_ETHERNET &&        \
+	(_ifp)->if_delegated.subfamily == IFNET_SUBFAMILY_WIFI))
 
 /*
  * Indicate whether or not the immediate interface, or the interface delegated
@@ -1389,6 +1583,17 @@ struct ifmultiaddr {
 	!((_ifp)->if_eflags & IFEF_AWDL))
 
 /*
+ * Indicate whether or not the immediate interface is a companion link
+ * interface.
+ */
+#define IFNET_IS_COMPANION_LINK(_ifp)                           \
+	((_ifp)->if_family == IFNET_FAMILY_IPSEC &&             \
+	((_ifp)->if_subfamily == IFNET_SUBFAMILY_BLUETOOTH ||   \
+	(_ifp)->if_subfamily == IFNET_SUBFAMILY_WIFI ||         \
+	(_ifp)->if_subfamily == IFNET_SUBFAMILY_QUICKRELAY ||   \
+	(_ifp)->if_subfamily == IFNET_SUBFAMILY_DEFAULT))
+
+/*
  * Indicate whether or not the immediate interface, or the interface delegated
  * by it, is marked as expensive.  The delegated interface is set/cleared
  * along with the delegated ifp; we cache the flag for performance to avoid
@@ -1397,7 +1602,7 @@ struct ifmultiaddr {
  * Note that this is meant to be used only for policy purposes.
  */
 #define IFNET_IS_EXPENSIVE(_ifp)                                        \
-	((_ifp)->if_eflags & IFEF_EXPENSIVE ||                          \
+	((_ifp)->if_eflags & IFEF_EXPENSIVE ||                              \
 	(_ifp)->if_delegated.expensive)
 
 #define IFNET_IS_LOW_POWER(_ifp)                                        \
@@ -1405,6 +1610,10 @@ struct ifmultiaddr {
 	((_ifp)->if_xflags & IFXF_LOW_POWER) ||                         \
 	((_ifp)->if_delegated.ifp != NULL &&                            \
 	((_ifp)->if_delegated.ifp->if_xflags & IFXF_LOW_POWER)))
+
+#define IFNET_IS_CONSTRAINED(_ifp)                                      \
+	((_ifp)->if_xflags & IFXF_CONSTRAINED ||                            \
+	(_ifp)->if_delegated.constrained)
 
 /*
  * We don't support AWDL interface delegation.
@@ -1499,8 +1708,15 @@ __private_extern__ void ifnet_head_assert_exclusive(void);
 __private_extern__ errno_t ifnet_set_idle_flags_locked(ifnet_t, u_int32_t,
     u_int32_t);
 __private_extern__ int ifnet_is_attached(struct ifnet *, int refio);
+__private_extern__ void ifnet_incr_pending_thread_count(struct ifnet *);
+__private_extern__ void ifnet_decr_pending_thread_count(struct ifnet *);
 __private_extern__ void ifnet_incr_iorefcnt(struct ifnet *);
 __private_extern__ void ifnet_decr_iorefcnt(struct ifnet *);
+__private_extern__ boolean_t ifnet_datamov_begin(struct ifnet *);
+__private_extern__ void ifnet_datamov_end(struct ifnet *);
+__private_extern__ void ifnet_datamov_suspend(struct ifnet *);
+__private_extern__ void ifnet_datamov_drain(struct ifnet *);
+__private_extern__ void ifnet_datamov_resume(struct ifnet *);
 __private_extern__ void ifnet_set_start_cycle(struct ifnet *,
     struct timespec *);
 __private_extern__ void ifnet_set_poll_cycle(struct ifnet *,
@@ -1743,6 +1959,8 @@ __private_extern__ void if_copy_packet_stats(struct ifnet *ifp,
     struct if_packet_stats *if_ps);
 __private_extern__ void if_copy_rxpoll_stats(struct ifnet *ifp,
     struct if_rxpoll_stats *if_rs);
+__private_extern__ void if_copy_netif_stats(struct ifnet *ifp,
+    struct if_netif_stats *if_ns);
 
 __private_extern__ struct rtentry *ifnet_cached_rtlookup_inet(struct ifnet *,
     struct in_addr);
@@ -1801,6 +2019,7 @@ __private_extern__ u_int32_t ifnet_get_generation(struct ifnet *);
 
 /* Adding and deleting netagents will take ifnet lock */
 __private_extern__ int if_add_netagent(struct ifnet *, uuid_t);
+__private_extern__ int if_add_netagent_locked(struct ifnet *, uuid_t);
 __private_extern__ int if_delete_netagent(struct ifnet *, uuid_t);
 __private_extern__ boolean_t if_check_netagent(struct ifnet *, uuid_t);
 
@@ -1811,6 +2030,7 @@ __private_extern__ void intf_event_enqueue_nwk_wq_entry(struct ifnet *ifp,
     struct sockaddr *addrp, uint32_t intf_event_code);
 __private_extern__ void ifnet_update_stats_per_flow(struct ifnet_stats_per_flow *,
     struct ifnet *);
+__private_extern__ int if_get_tcp_kao_max(struct ifnet *);
 #if !CONFIG_EMBEDDED
 __private_extern__ errno_t ifnet_framer_stub(struct ifnet *, struct mbuf **,
     const struct sockaddr *, const char *, const char *, u_int32_t *,
@@ -1820,6 +2040,8 @@ __private_extern__ void ifnet_enqueue_multi_setup(struct ifnet *, uint16_t,
     uint16_t);
 __private_extern__ errno_t ifnet_enqueue_mbuf(struct ifnet *, struct mbuf *,
     boolean_t, boolean_t *);
+__private_extern__ int ifnet_enqueue_netem(void *handle, pktsched_pkt_t *pkts,
+    uint32_t n_pkts);
 
 extern int if_low_power_verbose;
 extern int if_low_power_restricted;

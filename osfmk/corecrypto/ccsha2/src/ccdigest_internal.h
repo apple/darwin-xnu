@@ -37,8 +37,6 @@
 
 #include <corecrypto/ccdigest.h>
 
-void ccdigest_final_common(const struct ccdigest_info *di,
-    ccdigest_ctx_t ctx, void *digest);
 void ccdigest_final_64be(const struct ccdigest_info *di, ccdigest_ctx_t,
     unsigned char *digest);
 void ccdigest_final_64le(const struct ccdigest_info *di, ccdigest_ctx_t,

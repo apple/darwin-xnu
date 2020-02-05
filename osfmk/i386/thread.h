@@ -157,6 +157,8 @@ struct machine_thread {
 	int                     physwindow_busy;
 #endif
 
+	uint32_t                last_xcpm_ttd;
+	uint8_t                 last_xcpm_index;
 	int                     mthr_do_segchk;
 };
 typedef struct machine_thread *pcb_t;

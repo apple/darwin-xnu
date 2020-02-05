@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -73,6 +73,7 @@
 #include <kern/kern_cdata.h>
 #include <kern/zalloc.h>
 #include <vm/vm_kern.h>
+#include <vm/vm_map.h>
 #include <vm/pmap.h>
 #include <stdarg.h>
 #include <stdatomic.h>
@@ -85,6 +86,8 @@
 #include <kern/processor.h>
 
 #if defined(__i386__) || defined(__x86_64__)
+#include <IOKit/IOBSD.h>
+
 #include <i386/cpu_threads.h>
 #include <i386/pmCPU.h>
 #endif
@@ -173,24 +176,27 @@ uint64_t debugger_panic_options = 0;
 const char *debugger_message = NULL;
 unsigned long debugger_panic_caller = 0;
 
-void panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsigned int reason, void *ctx,
-    uint64_t panic_options_mask, void *panic_data, unsigned long panic_caller);
-static void kdp_machine_reboot_type(unsigned int type);
-__attribute__((noreturn)) void panic_spin_forever(void);
+void panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args,
+    unsigned int reason, void *ctx, uint64_t panic_options_mask, void *panic_data,
+    unsigned long panic_caller) __dead2;
+static void kdp_machine_reboot_type(unsigned int type, uint64_t debugger_flags);
+void panic_spin_forever(void) __dead2;
 extern kern_return_t do_stackshot(void);
+extern void PE_panic_hook(const char*);
 
+#if CONFIG_NONFATAL_ASSERTS
 int mach_assert = 1;
+#endif
 
 #define NESTEDDEBUGGERENTRYMAX 5
+static unsigned int max_debugger_entry_count = NESTEDDEBUGGERENTRYMAX;
 
 #if CONFIG_EMBEDDED
 #define DEBUG_BUF_SIZE (4096)
 #define KDBG_TRACE_PANIC_FILENAME "/var/log/panic.trace"
 #else
-/*
- * EXTENDED_/DEBUG_BUF_SIZE can't grow without updates to SMC and iBoot to store larger panic logs on co-processor systems */
 #define DEBUG_BUF_SIZE ((3 * PAGE_SIZE) + offsetof(struct macos_panic_header, mph_data))
-#define EXTENDED_DEBUG_BUF_SIZE 0x0013ff80
+/* EXTENDED_DEBUG_BUF_SIZE definition is now in debug.h */
 static_assert(((EXTENDED_DEBUG_BUF_SIZE % PANIC_FLUSH_BOUNDARY) == 0), "Extended debug buf size must match SMC alignment requirements");
 #define KDBG_TRACE_PANIC_FILENAME "/var/tmp/panic.trace"
 #endif
@@ -257,6 +263,14 @@ int kext_assertions_enable =
     FALSE;
 #endif
 
+/*
+ * Maintain the physically-contiguous carveout for the `phys_carveout_mb`
+ * boot-arg.
+ */
+SECURITY_READ_ONLY_LATE(vm_offset_t) phys_carveout = 0;
+SECURITY_READ_ONLY_LATE(uintptr_t) phys_carveout_pa = 0;
+SECURITY_READ_ONLY_LATE(size_t) phys_carveout_size = 0;
+
 void
 panic_init(void)
 {
@@ -269,9 +283,11 @@ panic_init(void)
 		uuid_unparse_upper(*(uuid_t *)uuid, kernel_uuid_string);
 	}
 
+#if CONFIG_NONFATAL_ASSERTS
 	if (!PE_parse_boot_argn("assertions", &mach_assert, sizeof(mach_assert))) {
 		mach_assert = 1;
 	}
+#endif
 
 	/*
 	 * Initialize the value of the debug boot-arg
@@ -298,6 +314,11 @@ panic_init(void)
 #endif
 #endif /* CONFIG_EMBEDDED */
 	}
+
+	if (!PE_parse_boot_argn("nested_panic_max", &max_debugger_entry_count, sizeof(max_debugger_entry_count))) {
+		max_debugger_entry_count = NESTEDDEBUGGERENTRYMAX;
+	}
+
 #endif /* ((CONFIG_EMBEDDED && MACH_KDP) || defined(__x86_64__)) */
 
 #if DEVELOPMENT || DEBUG
@@ -342,6 +363,15 @@ extended_debug_log_init(void)
 	debug_buf_size = (EXTENDED_DEBUG_BUF_SIZE - offsetof(struct macos_panic_header, mph_data));
 
 	extended_debug_log_enabled = TRUE;
+
+	/*
+	 * Insert a compiler barrier so we don't free the other panic stackshot buffer
+	 * until after we've marked the new one as available
+	 */
+	__compiler_barrier();
+	kmem_free(kernel_map, panic_stackshot_buf, panic_stackshot_buf_len);
+	panic_stackshot_buf = 0;
+	panic_stackshot_buf_len = 0;
 }
 #endif /* defined (__x86_64__) */
 
@@ -358,12 +388,62 @@ debug_log_init(void)
 	debug_buf_ptr = debug_buf_base;
 	debug_buf_size = gPanicSize - sizeof(struct embedded_panic_header);
 #else
+	kern_return_t kr = KERN_SUCCESS;
 	bzero(panic_info, DEBUG_BUF_SIZE);
 
 	assert(debug_buf_base != NULL);
 	assert(debug_buf_ptr != NULL);
 	assert(debug_buf_size != 0);
+
+	/*
+	 * We allocate a buffer to store a panic time stackshot. If we later discover that this is a
+	 * system that supports flushing a stackshot via an extended debug log (see above), we'll free this memory
+	 * as it's not necessary on this platform. This information won't be available until the IOPlatform has come
+	 * up.
+	 */
+	kr = kmem_alloc(kernel_map, &panic_stackshot_buf, PANIC_STACKSHOT_BUFSIZE, VM_KERN_MEMORY_DIAG);
+	assert(kr == KERN_SUCCESS);
+	if (kr == KERN_SUCCESS) {
+		panic_stackshot_buf_len = PANIC_STACKSHOT_BUFSIZE;
+	}
 #endif
+}
+
+void
+phys_carveout_init(void)
+{
+	if (!PE_i_can_has_debugger(NULL)) {
+		return;
+	}
+
+	unsigned int phys_carveout_mb = 0;
+
+	if (!PE_parse_boot_argn("phys_carveout_mb", &phys_carveout_mb,
+	    sizeof(phys_carveout_mb))) {
+		return;
+	}
+	if (phys_carveout_mb == 0) {
+		return;
+	}
+
+	size_t size = 0;
+	if (os_mul_overflow(phys_carveout_mb, 1024 * 1024, &size)) {
+		printf("phys_carveout_mb size overflowed (%uMB)\n",
+		    phys_carveout_mb);
+		return;
+	}
+
+	kern_return_t kr = kmem_alloc_contig(kernel_map, &phys_carveout, size,
+	    VM_MAP_PAGE_MASK(kernel_map), 0, 0, KMA_NOPAGEWAIT,
+	    VM_KERN_MEMORY_DIAG);
+	if (kr != KERN_SUCCESS) {
+		printf("failed to allocate %uMB for phys_carveout_mb: %u\n",
+		    phys_carveout_mb, (unsigned int)kr);
+		return;
+	}
+
+	phys_carveout_pa = kvtophys(phys_carveout);
+	phys_carveout_size = size;
 }
 
 static void
@@ -373,7 +453,7 @@ DebuggerLock()
 	int debugger_exp_cpu = DEBUGGER_NO_CPU;
 	assert(ml_get_interrupts_enabled() == FALSE);
 
-	if (debugger_cpu == my_cpu) {
+	if (atomic_load(&debugger_cpu) == my_cpu) {
 		return;
 	}
 
@@ -387,7 +467,7 @@ DebuggerLock()
 static void
 DebuggerUnlock()
 {
-	assert(debugger_cpu == cpu_number());
+	assert(atomic_load_explicit(&debugger_cpu, memory_order_relaxed) == cpu_number());
 
 	/*
 	 * We don't do an atomic exchange here in case
@@ -396,7 +476,7 @@ DebuggerUnlock()
 	 * lock so we can simply store DEBUGGER_NO_CPU and follow with
 	 * a barrier.
 	 */
-	debugger_cpu = DEBUGGER_NO_CPU;
+	atomic_store(&debugger_cpu, DEBUGGER_NO_CPU);
 	OSMemoryBarrier();
 
 	return;
@@ -486,10 +566,12 @@ Assert(
 	const char      *expression
 	)
 {
+#if CONFIG_NONFATAL_ASSERTS
 	if (!mach_assert) {
 		kprintf("%s:%d non-fatal Assertion: %s", file, line, expression);
 		return;
 	}
+#endif
 
 	panic_plain("%s:%d Assertion failed: %s", file, line, expression);
 }
@@ -513,7 +595,7 @@ DebuggerWithContext(unsigned int reason, void *ctx, const char *message,
 
 	CPUDEBUGGERCOUNT++;
 
-	if (CPUDEBUGGERCOUNT > NESTEDDEBUGGERENTRYMAX) {
+	if (CPUDEBUGGERCOUNT > max_debugger_entry_count) {
 		static boolean_t in_panic_kprintf = FALSE;
 
 		/* Notify any listeners that we've started a panic */
@@ -522,12 +604,12 @@ DebuggerWithContext(unsigned int reason, void *ctx, const char *message,
 		if (!in_panic_kprintf) {
 			in_panic_kprintf = TRUE;
 			kprintf("Detected nested debugger entry count exceeding %d\n",
-			    NESTEDDEBUGGERENTRYMAX);
+			    max_debugger_entry_count);
 			in_panic_kprintf = FALSE;
 		}
 
 		if (!panicDebugging) {
-			kdp_machine_reboot_type(kPEPanicRestartCPU);
+			kdp_machine_reboot_type(kPEPanicRestartCPU, debugger_options_mask);
 		}
 
 		panic_spin_forever();
@@ -689,8 +771,11 @@ void
 panic_with_thread_context(unsigned int reason, void *ctx, uint64_t debugger_options_mask, thread_t thread, const char *str, ...)
 {
 	va_list panic_str_args;
+	__assert_only os_ref_count_t th_ref_count;
 
 	assert_thread_magic(thread);
+	th_ref_count = os_ref_get_count(&thread->ref_count);
+	assertf(th_ref_count > 0, "panic_with_thread_context called with invalid thread %p with refcount %u", thread, th_ref_count);
 
 	/* Take a reference on the thread so it doesn't disappear by the time we try to backtrace it */
 	thread_reference(thread);
@@ -718,17 +803,12 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
 
 	if (ml_wants_panic_trap_to_debugger()) {
 		ml_panic_trap_to_debugger(panic_format_str, panic_args, reason, ctx, panic_options_mask, panic_caller);
-
-		/*
-		 * This should not return, but we return here for the tail call
-		 * as it simplifies the backtrace.
-		 */
-		return;
+		__builtin_trap();
 	}
 
 	CPUDEBUGGERCOUNT++;
 
-	if (CPUDEBUGGERCOUNT > NESTEDDEBUGGERENTRYMAX) {
+	if (CPUDEBUGGERCOUNT > max_debugger_entry_count) {
 		static boolean_t in_panic_kprintf = FALSE;
 
 		/* Notify any listeners that we've started a panic */
@@ -737,12 +817,12 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
 		if (!in_panic_kprintf) {
 			in_panic_kprintf = TRUE;
 			kprintf("Detected nested debugger entry count exceeding %d\n",
-			    NESTEDDEBUGGERENTRYMAX);
+			    max_debugger_entry_count);
 			in_panic_kprintf = FALSE;
 		}
 
 		if (!panicDebugging) {
-			kdp_machine_reboot_type(kPEPanicRestartCPU);
+			kdp_machine_reboot_type(kPEPanicRestartCPU, panic_options_mask);
 		}
 
 		panic_spin_forever();
@@ -752,11 +832,7 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
 	DEBUGGER_DEBUGGING_NESTED_PANIC_IF_REQUESTED((panic_options_mask & DEBUGGER_OPTION_RECURPANIC_ENTRY));
 #endif
 
-#if CONFIG_EMBEDDED
-	if (PE_arm_debug_panic_hook) {
-		PE_arm_debug_panic_hook(panic_format_str);
-	}
-#endif
+	PE_panic_hook(panic_format_str);
 
 #if defined (__x86_64__)
 	plctrace_disable();
@@ -805,11 +881,11 @@ panic_trap_to_debugger(const char *panic_format_str, va_list *panic_args, unsign
 	 * Not reached.
 	 */
 	panic_stop();
+	__builtin_unreachable();
 }
 
-__attribute__((noreturn))
 void
-panic_spin_forever()
+panic_spin_forever(void)
 {
 	paniclog_append_noflush("\nPlease go to https://panic.apple.com to report this panic\n");
 
@@ -818,17 +894,21 @@ panic_spin_forever()
 }
 
 static void
-kdp_machine_reboot_type(unsigned int type)
+kdp_machine_reboot_type(unsigned int type, uint64_t debugger_flags)
 {
 	printf("Attempting system restart...");
-	PEHaltRestart(type);
+	if ((type == kPEPanicRestartCPU) && (debugger_flags & DEBUGGER_OPTION_SKIP_PANICEND_CALLOUTS)) {
+		PEHaltRestart(kPEPanicRestartCPUNoPanicEndCallouts);
+	} else {
+		PEHaltRestart(type);
+	}
 	halt_all_cpus(TRUE);
 }
 
 void
 kdp_machine_reboot(void)
 {
-	kdp_machine_reboot_type(kPEPanicRestartCPU);
+	kdp_machine_reboot_type(kPEPanicRestartCPU, 0);
 }
 
 /*
@@ -930,7 +1010,7 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 
 		/* DEBUGGER_OPTION_PANICLOGANDREBOOT is used for two finger resets on embedded so we get a paniclog */
 		if (debugger_panic_options & DEBUGGER_OPTION_PANICLOGANDREBOOT) {
-			PEHaltRestart(kPEPanicRestartCPU);
+			PEHaltRestart(kPEPanicRestartCPUNoCallouts);
 		}
 	}
 
@@ -942,14 +1022,14 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 	 */
 	if ((debugger_panic_options & DEBUGGER_OPTION_SKIP_LOCAL_COREDUMP) &&
 	    (debug_boot_arg & DB_REBOOT_POST_CORE)) {
-		kdp_machine_reboot_type(kPEPanicRestartCPU);
+		kdp_machine_reboot_type(kPEPanicRestartCPU, debugger_panic_options);
 	}
 
 	/*
 	 * Consider generating a local corefile if the infrastructure is configured
 	 * and we haven't disabled on-device coredumps.
 	 */
-	if (!(debug_boot_arg & DB_DISABLE_LOCAL_CORE)) {
+	if (on_device_corefile_enabled()) {
 		if (!kdp_has_polled_corefile()) {
 			if (debug_boot_arg & (DB_KERN_DUMP_ON_PANIC | DB_KERN_DUMP_ON_NMI)) {
 				paniclog_append_noflush("skipping local kernel core because core file could not be opened prior to panic (error : 0x%x)",
@@ -992,13 +1072,13 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 			 */
 			if ((debug_boot_arg & DB_REBOOT_POST_CORE) &&
 			    ((ret == 0) || (debugger_panic_options & DEBUGGER_OPTION_ATTEMPTCOREDUMPANDREBOOT))) {
-				kdp_machine_reboot_type(kPEPanicRestartCPU);
+				kdp_machine_reboot_type(kPEPanicRestartCPU, debugger_panic_options);
 			}
 		}
 	}
 
 	if (debug_boot_arg & DB_REBOOT_ALWAYS) {
-		kdp_machine_reboot_type(kPEPanicRestartCPU);
+		kdp_machine_reboot_type(kPEPanicRestartCPU, debugger_panic_options);
 	}
 
 	/* If KDP is configured, try to trap to the debugger */
@@ -1025,7 +1105,7 @@ debugger_collect_diagnostics(unsigned int exception, unsigned int code, unsigned
 #endif /* CONFIG_KDP_INTERACTIVE_DEBUGGING */
 
 	if (!panicDebugging) {
-		kdp_machine_reboot_type(kPEPanicRestartCPU);
+		kdp_machine_reboot_type(kPEPanicRestartCPU, debugger_panic_options);
 	}
 
 	panic_spin_forever();
@@ -1372,7 +1452,24 @@ panic_display_disk_errors(void)
 		panic_disk_error_description[sizeof(panic_disk_error_description) - 1] = '\0';
 		paniclog_append_noflush("Root disk errors: \"%s\"\n", panic_disk_error_description);
 	}
-};
+}
+
+static void
+panic_display_shutdown_status(void)
+{
+#if defined(__i386__) || defined(__x86_64__)
+	paniclog_append_noflush("System shutdown begun: %s\n", IOPMRootDomainGetWillShutdown() ? "YES" : "NO");
+	if (gIOPolledCoreFileMode == kIOPolledCoreFileModeNotInitialized) {
+		paniclog_append_noflush("Panic diags file unavailable, panic occurred prior to initialization\n");
+	} else if (gIOPolledCoreFileMode != kIOPolledCoreFileModeDisabled) {
+		/*
+		 * If we haven't marked the corefile as explicitly disabled, and we've made it past initialization, then we know the current
+		 * system was configured to use disk based diagnostics at some point.
+		 */
+		paniclog_append_noflush("Panic diags file available: %s (0x%x)\n", (gIOPolledCoreFileMode != kIOPolledCoreFileModeClosed) ? "YES" : "NO", kdp_polled_corefile_error());
+	}
+#endif
+}
 
 extern const char version[];
 extern char osversion[];
@@ -1401,6 +1498,7 @@ panic_display_system_configuration(boolean_t launchd_exit)
 		}
 		panic_display_model_name();
 		panic_display_disk_errors();
+		panic_display_shutdown_status();
 		if (!launchd_exit) {
 			panic_display_uptime();
 			panic_display_zprint();
@@ -1528,7 +1626,8 @@ kern_feature_override(uint32_t fmask)
 {
 	if (kern_feature_overrides == 0) {
 		uint32_t fdisables = 0;
-		/* Expected to be first invoked early, in a single-threaded
+		/*
+		 * Expected to be first invoked early, in a single-threaded
 		 * environment
 		 */
 		if (PE_parse_boot_argn("validation_disables", &fdisables, sizeof(fdisables))) {
@@ -1539,4 +1638,33 @@ kern_feature_override(uint32_t fmask)
 		}
 	}
 	return (kern_feature_overrides & fmask) == fmask;
+}
+
+boolean_t
+on_device_corefile_enabled(void)
+{
+	assert(debug_boot_arg_inited);
+#if CONFIG_KDP_INTERACTIVE_DEBUGGING
+	if ((debug_boot_arg != 0) && !(debug_boot_arg & DB_DISABLE_LOCAL_CORE)) {
+		return TRUE;
+	}
+#endif
+	return FALSE;
+}
+
+boolean_t
+panic_stackshot_to_disk_enabled(void)
+{
+	assert(debug_boot_arg_inited);
+#if defined(__x86_64__)
+	if (PEGetCoprocessorVersion() < kCoprocessorVersion2) {
+		/* Only enabled on pre-Gibraltar machines where it hasn't been disabled explicitly */
+		if ((debug_boot_arg != 0) && (debug_boot_arg & DB_DISABLE_STACKSHOT_TO_DISK)) {
+			return FALSE;
+		}
+
+		return TRUE;
+	}
+#endif
+	return FALSE;
 }

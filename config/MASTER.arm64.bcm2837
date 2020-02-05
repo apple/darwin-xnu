@@ -1,18 +1,18 @@
 #
 # Mach Operating System
 # Copyright (c) 1986 Carnegie-Mellon University
-# Copyright 2001-2016 Apple Inc.
+# Copyright 2001-2018 Apple Inc.
 #
 # All rights reserved.  The CMU software License Agreement
 # specifies the terms and conditions for use and redistribution.
-#  
+#
 ######################################################################
 #
 #  Master Apple configuration file (see the master machine independent
 #  configuration file for a description of the file format).
 #
 ######################################################################
-#  
+#
 #  Standard Apple OS Configurations:
 #  -------- ----- -- ---------------
 #
@@ -22,16 +22,18 @@
 #  KERNEL_DEBUG =   [ KERNEL_BASE debug mach_assert config_xnupost config_ltable_stats config_ltable_debug config_waitq_stats config_workloop_debug config_waitq_debug pgtrace ]
 #  BSD_BASE =       [ mach_bsd config_workqueue psynch config_proc_uuid_policy config_personas ]
 #  BSD_RELEASE =    [ BSD_BASE no_printf_str no_kprintf_str secure_kernel ]
-#  BSD_DEV =        [ BSD_BASE config_imageboot config_coredump pgo config_vnguard ]
-#  BSD_DEBUG =      [ BSD_BASE config_imageboot config_coredump pgo config_vnguard ]
-#  FILESYS_BASE =   [ devfs fifo fs_compression config_mnt_rootsnap config_protect config_fse routefs quota namedstreams ]
+#  BSD_DEV =        [ BSD_BASE config_netboot config_imageboot config_coredump pgo config_vnguard ]
+#  BSD_DEBUG =      [ BSD_BASE config_netboot config_imageboot config_coredump pgo config_vnguard ]
+#  FILESYS_BASE =   [ devfs fifo fs_compression config_protect config_mnt_rootsnap config_fse routefs namedstreams ]
 #  FILESYS_RELEASE= [ FILESYS_BASE ]
 #  FILESYS_DEV =    [ FILESYS_BASE fdesc ]
 #  FILESYS_DEBUG =  [ FILESYS_BASE fdesc ]
-#  NFS =            [ nfsclient nfsserver ]
+#  NFS_DEV =        [ nfsclient nfsserver config_nfs_gss ]
+#  NFS_RELEASE =    [ nfsclient ]
+#  NFS_DEBUG =      [ nfsclient config_nfs_gss ]
 #  NETWORKING =     [ inet tcpdrop_synfin bpfilter inet6 ipv6send if_bridge traffic_mgt dummynet ah_all_crypto if_fake ]
 #  NETWORKING_RELEASE = [ NETWORKING ]
-#  NETWORKING_DEV = [ NETWORKING_RELEASE packet_mangler ]
+#  NETWORKING_DEV = [ NETWORKING_RELEASE packet_mangler if_headless ]
 #  NETWORKING_DEBUG = [ NETWORKING_DEV ]
 #  VPN =            [ ipsec flow_divert necp content_filter ]
 #  PF =             [ pf ]
@@ -40,7 +42,7 @@
 #  IOKIT_RELEASE =  [ IOKIT_BASE ]
 #  IOKIT_DEV =      [ IOKIT_BASE iokitstats iotracking ]
 #  IOKIT_DEBUG =    [ IOKIT_BASE iokitstats iotracking]
-#  LIBKERN_BASE =   [ libkerncpp config_kec_fips zlib crypto_sha2 ]
+#  LIBKERN_BASE =   [ libkerncpp config_blocks config_kec_fips zlib crypto_sha2 ]
 #  LIBKERN_RELEASE =[ LIBKERN_BASE ]
 #  LIBKERN_DEV =    [ LIBKERN_BASE iotracking ]
 #  LIBKERN_DEBUG =  [ LIBKERN_BASE iotracking ]
@@ -61,10 +63,10 @@
 #  VM_DEV =         [ VM_BASE dynamic_codesigning ]
 #  VM_DEBUG =       [ VM_BASE dynamic_codesigning ]
 #  SECURITY =       [ config_macf kernel_integrity ]
-#  RELEASE =        [ KERNEL_RELEASE BSD_RELEASE FILESYS_RELEASE SKYWALK_RELEASE NETWORKING_RELEASE PF MULTIPATH VPN IOKIT_RELEASE LIBKERN_RELEASE PERF_DBG_RELEASE MACH_RELEASE SCHED_RELEASE VM_RELEASE SECURITY ]
-#  DEVELOPMENT =    [ KERNEL_DEV     BSD_DEV     FILESYS_DEV NFS SKYWALK_DEV     NETWORKING_DEV PF MULTIPATH VPN IOKIT_DEV     LIBKERN_DEV     PERF_DBG_DEV     MACH_DEV     SCHED_DEV     VM_DEV     SECURITY ]
-#  DEBUG =          [ KERNEL_DEBUG   BSD_DEBUG   FILESYS_DEBUG   SKYWALK_DEBUG   NETWORKING_DEBUG PF MULTIPATH VPN IOKIT_DEBUG   LIBKERN_DEBUG   PERF_DBG_DEBUG   MACH_DEBUG   SCHED_DEBUG   VM_DEBUG   SECURITY ]
-#  KASAN =          [ DEVELOPMENT ]
+#  RELEASE =        [ KERNEL_RELEASE BSD_RELEASE FILESYS_RELEASE NFS_RELEASE SKYWALK_RELEASE NETWORKING_RELEASE PF MULTIPATH VPN IOKIT_RELEASE LIBKERN_RELEASE PERF_DBG_RELEASE MACH_RELEASE SCHED_RELEASE VM_RELEASE SECURITY ]
+#  DEVELOPMENT =    [ KERNEL_DEV     BSD_DEV     FILESYS_DEV NFS_DEV SKYWALK_DEV     NETWORKING_DEV PF MULTIPATH VPN IOKIT_DEV     LIBKERN_DEV     PERF_DBG_DEV     MACH_DEV     SCHED_DEV     VM_DEV     SECURITY ]
+#  DEBUG =          [ KERNEL_DEBUG   BSD_DEBUG   FILESYS_DEBUG NFS_DEBUG  SKYWALK_DEBUG   NETWORKING_DEBUG PF MULTIPATH VPN IOKIT_DEBUG   LIBKERN_DEBUG   PERF_DBG_DEBUG   MACH_DEBUG   SCHED_DEBUG   VM_DEBUG   SECURITY ]
+#  KASAN =          [ DEVELOPMENT config_kasan config_ubsan config_ksancov ]
 #
 ######################################################################
 #

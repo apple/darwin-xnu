@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -103,6 +103,8 @@
 #include <netinet6/scope6_var.h>
 #include <netinet/icmp6.h>
 
+#include <os/log.h>
+
 #include "loop.h"
 
 #define ND6_SLOWTIMER_INTERVAL          (60 * 60)       /* 1 hour */
@@ -175,7 +177,7 @@ static lck_attr_t       *nd_if_lock_attr = NULL;
 
 /* Protected by nd6_mutex */
 struct nd_drhead nd_defrouter;
-struct nd_prhead nd_prefix = { 0 };
+struct nd_prhead nd_prefix = { .lh_first = 0 };
 
 /*
  * nd6_timeout() is scheduled on a demand basis.  nd6_timeout_run is used
@@ -536,9 +538,9 @@ nd6_ifattach(struct ifnet *ifp)
 	lck_mtx_unlock(&ndi->lock);
 	nd6_setmtu(ifp);
 
-	nd6log0((LOG_INFO, ": ",
-	    "%s Reinit'd ND information for interface %s\n",
-	    if_name(ifp)));
+	nd6log0(info,
+	    "Reinit'd ND information for interface %s\n",
+	    if_name(ifp));
 	return;
 }
 
@@ -712,9 +714,9 @@ nd6_options(union nd_opts *ndopts)
 		case ND_OPT_REDIRECTED_HEADER:
 		case ND_OPT_NONCE:
 			if (ndopts->nd_opt_array[nd_opt->nd_opt_type]) {
-				nd6log((LOG_INFO,
+				nd6log(error,
 				    "duplicated ND6 option found (type=%d)\n",
-				    nd_opt->nd_opt_type));
+				    nd_opt->nd_opt_type);
 				/* XXX bark? */
 			} else {
 				ndopts->nd_opt_array[nd_opt->nd_opt_type] =
@@ -738,16 +740,16 @@ nd6_options(union nd_opts *ndopts)
 			 * Unknown options must be silently ignored,
 			 * to accomodate future extension to the protocol.
 			 */
-			nd6log((LOG_DEBUG,
+			nd6log(debug,
 			    "nd6_options: unsupported option %d - "
-			    "option ignored\n", nd_opt->nd_opt_type));
+			    "option ignored\n", nd_opt->nd_opt_type);
 		}
 
 skip1:
 		i++;
 		if (i > nd6_maxndopt) {
 			icmp6stat.icp6s_nd_toomanyopt++;
-			nd6log((LOG_INFO, "too many loop in nd opt\n"));
+			nd6log(info, "too many loop in nd opt\n");
 			break;
 		}
 
@@ -792,9 +794,9 @@ nd6_service(void *arg)
 	 * to run this entire operation single threaded.
 	 */
 	while (nd6_service_busy) {
-		nd6log2((LOG_DEBUG, "%s: %s is blocked by %d waiters\n",
+		nd6log2(debug, "%s: %s is blocked by %d waiters\n",
 		    __func__, ap->draining ? "drainer" : "timer",
-		    nd6_service_waiters));
+		    nd6_service_waiters);
 		nd6_service_waiters++;
 		(void) msleep(nd6_service_wc, rnh_lock, (PZERO - 1),
 		    __func__, NULL);
@@ -1201,10 +1203,10 @@ again:
 				 * learned on cellular interface. Ever.
 				 */
 				dr->expire += dr->rtlifetime;
-				nd6log2((LOG_DEBUG,
+				nd6log2(debug,
 				    "%s: Refreshing expired default router entry "
 				    "%s for interface %s\n", __func__,
-				    ip6_sprintf(&dr->rtaddr), if_name(dr->ifp)));
+				    ip6_sprintf(&dr->rtaddr), if_name(dr->ifp));
 			} else {
 				ap->killed++;
 				/*
@@ -1243,6 +1245,17 @@ again:
 		TAILQ_REMOVE(&nd_defrouter_tmp, dr, dr_entry);
 		defrtrlist_del(dr);
 		NDDR_REMREF(dr);        /* remove list reference */
+	}
+
+	/*
+	 * Also check if default router selection needs to be triggered
+	 * for default interface, to avoid an issue with co-existence of
+	 * static un-scoped default route configuration and default router
+	 * discovery/selection.
+	 */
+	if (trigger_v6_defrtr_select) {
+		defrouter_select(NULL);
+		trigger_v6_defrtr_select = FALSE;
 	}
 	lck_mtx_unlock(nd6_mutex);
 
@@ -1460,7 +1473,7 @@ void
 nd6_drain(void *arg)
 {
 #pragma unused(arg)
-	nd6log2((LOG_DEBUG, "%s: draining ND6 entries\n", __func__));
+	nd6log2(debug, "%s: draining ND6 entries\n", __func__);
 
 	lck_mtx_lock(rnh_lock);
 	nd6_need_draining = 1;
@@ -1487,9 +1500,9 @@ nd6_timeout(void *arg)
 		sarg.draining = 1;
 	}
 	nd6_service(&sarg);
-	nd6log2((LOG_DEBUG, "%s: found %u, aging_lazy %u, aging %u, "
+	nd6log2(debug, "%s: found %u, aging_lazy %u, aging %u, "
 	    "sticky %u, killed %u\n", __func__, sarg.found, sarg.aging_lazy,
-	    sarg.aging, sarg.sticky, sarg.killed));
+	    sarg.aging, sarg.sticky, sarg.killed);
 	/* re-arm the timer if there's work to do */
 	nd6_timeout_run--;
 	VERIFY(nd6_timeout_run >= 0 && nd6_timeout_run < 2);
@@ -1515,7 +1528,7 @@ nd6_timeout(void *arg)
 		}
 		nd6_sched_timeout(&atv, leeway);
 	} else if (nd6_debug) {
-		nd6log2((LOG_DEBUG, "%s: not rescheduling timer\n", __func__));
+		nd6log2(debug, "%s: not rescheduling timer\n", __func__);
 	}
 	lck_mtx_unlock(rnh_lock);
 }
@@ -1535,18 +1548,18 @@ nd6_sched_timeout(struct timeval *atv, struct timeval *ltv)
 	/* see comments on top of this file */
 	if (nd6_timeout_run == 0) {
 		if (ltv == NULL) {
-			nd6log2((LOG_DEBUG, "%s: timer scheduled in "
+			nd6log2(debug, "%s: timer scheduled in "
 			    "T+%llus.%lluu (demand %d)\n", __func__,
 			    (uint64_t)atv->tv_sec, (uint64_t)atv->tv_usec,
-			    nd6_sched_timeout_want));
+			    nd6_sched_timeout_want);
 			nd6_fast_timer_on = TRUE;
 			timeout(nd6_timeout, &nd6_fast_timer_on, tvtohz(atv));
 		} else {
-			nd6log2((LOG_DEBUG, "%s: timer scheduled in "
+			nd6log2(debug, "%s: timer scheduled in "
 			    "T+%llus.%lluu with %llus.%lluu leeway "
 			    "(demand %d)\n", __func__, (uint64_t)atv->tv_sec,
 			    (uint64_t)atv->tv_usec, (uint64_t)ltv->tv_sec,
-			    (uint64_t)ltv->tv_usec, nd6_sched_timeout_want));
+			    (uint64_t)ltv->tv_usec, nd6_sched_timeout_want);
 			nd6_fast_timer_on = FALSE;
 			timeout_with_leeway(nd6_timeout, NULL,
 			    tvtohz(atv), tvtohz(ltv));
@@ -1555,27 +1568,27 @@ nd6_sched_timeout(struct timeval *atv, struct timeval *ltv)
 		nd6_sched_timeout_want = 0;
 	} else if (nd6_timeout_run == 1 && ltv == NULL &&
 	    nd6_fast_timer_on == FALSE) {
-		nd6log2((LOG_DEBUG, "%s: fast timer scheduled in "
+		nd6log2(debug, "%s: fast timer scheduled in "
 		    "T+%llus.%lluu (demand %d)\n", __func__,
 		    (uint64_t)atv->tv_sec, (uint64_t)atv->tv_usec,
-		    nd6_sched_timeout_want));
+		    nd6_sched_timeout_want);
 		nd6_fast_timer_on = TRUE;
 		nd6_sched_timeout_want = 0;
 		nd6_timeout_run++;
 		timeout(nd6_timeout, &nd6_fast_timer_on, tvtohz(atv));
 	} else {
 		if (ltv == NULL) {
-			nd6log2((LOG_DEBUG, "%s: not scheduling timer: "
+			nd6log2(debug, "%s: not scheduling timer: "
 			    "timers %d, fast_timer %d, T+%llus.%lluu\n",
 			    __func__, nd6_timeout_run, nd6_fast_timer_on,
-			    (uint64_t)atv->tv_sec, (uint64_t)atv->tv_usec));
+			    (uint64_t)atv->tv_sec, (uint64_t)atv->tv_usec);
 		} else {
-			nd6log2((LOG_DEBUG, "%s: not scheduling timer: "
+			nd6log2(debug, "%s: not scheduling timer: "
 			    "timers %d, fast_timer %d, T+%llus.%lluu "
 			    "with %llus.%lluu leeway\n", __func__,
 			    nd6_timeout_run, nd6_fast_timer_on,
 			    (uint64_t)atv->tv_sec, (uint64_t)atv->tv_usec,
-			    (uint64_t)ltv->tv_sec, (uint64_t)ltv->tv_usec));
+			    (uint64_t)ltv->tv_sec, (uint64_t)ltv->tv_usec);
 		}
 	}
 }
@@ -2162,9 +2175,9 @@ nd6_is_addr_neighbor(struct sockaddr_in6 *addr, struct ifnet *ifp,
 void
 nd6_free(struct rtentry *rt)
 {
-	struct llinfo_nd6 *ln;
-	struct in6_addr in6;
-	struct nd_defrouter *dr;
+	struct llinfo_nd6 *ln = NULL;
+	struct in6_addr in6 = {};
+	struct nd_defrouter *dr = NULL;
 
 	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_NOTOWNED);
 	RT_LOCK_ASSERT_NOTHELD(rt);
@@ -2571,9 +2584,9 @@ nd6_rtrequest(int req, struct rtentry *rt, struct sockaddr *sa)
 				error = in6_mc_join(ifp, &llsol,
 				    NULL, &in6m, 0);
 				if (error) {
-					nd6log((LOG_ERR, "%s: failed to join "
+					nd6log(error, "%s: failed to join "
 					    "%s (errno=%d)\n", if_name(ifp),
-					    ip6_sprintf(&llsol), error));
+					    ip6_sprintf(&llsol), error);
 				} else {
 					IN6M_REMREF(in6m);
 				}
@@ -3168,7 +3181,7 @@ nd6_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp)
 
 		if (cmd == SIOCGDEFIFACE_IN6_64) {
 			u_int64_t j = nd6_defifindex;
-			bcopy(&j, &ndif_64->ifindex, sizeof(j));
+			__nochk_bcopy(&j, &ndif_64->ifindex, sizeof(j));
 		} else {
 			bcopy(&nd6_defifindex, &ndif_32->ifindex,
 			    sizeof(u_int32_t));
@@ -3186,7 +3199,7 @@ nd6_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp)
 
 		if (cmd == SIOCSDEFIFACE_IN6_64) {
 			u_int64_t j;
-			bcopy(&ndif_64->ifindex, &j, sizeof(j));
+			__nochk_bcopy(&ndif_64->ifindex, &j, sizeof(j));
 			idx = (u_int32_t)j;
 		} else {
 			bcopy(&ndif_32->ifindex, &idx, sizeof(idx));
@@ -3287,9 +3300,6 @@ nd6_cache_lladdr(struct ifnet *ifp, struct in6_addr *from, char *lladdr,
 		is_newentry = 0;
 	}
 
-	if (rt == NULL) {
-		return;
-	}
 	if ((rt->rt_flags & (RTF_GATEWAY | RTF_LLINFO)) != RTF_LLINFO) {
 fail:
 		RT_UNLOCK(rt);
@@ -4132,6 +4142,7 @@ nd6_need_cache(struct ifnet *ifp)
 #endif
 	case IFT_BRIDGE:
 	case IFT_CELLULAR:
+	case IFT_6LOWPAN:
 		return 1;
 	default:
 		return 0;
@@ -4329,7 +4340,7 @@ sysctl_nd6_lookup_ipv6 SYSCTL_HANDLER_ARGS
 	 */
 	error = proc_suser(current_proc());
 	if (error != 0) {
-		printf("%s: proc_suser() error %d\n",
+		nd6log0(error, "%s: proc_suser() error %d\n",
 		    __func__, error);
 		goto done;
 	}
@@ -4342,23 +4353,31 @@ sysctl_nd6_lookup_ipv6 SYSCTL_HANDLER_ARGS
 	if (req->oldlen != sizeof(struct nd6_lookup_ipv6_args) ||
 	    req->newlen != sizeof(struct nd6_lookup_ipv6_args)) {
 		error = EINVAL;
-		printf("%s: bad req, error %d\n",
+		nd6log0(error, "%s: bad req, error %d\n",
 		    __func__, error);
 		goto done;
 	}
 	error = SYSCTL_IN(req, &nd6_lookup_ipv6_args,
 	    sizeof(struct nd6_lookup_ipv6_args));
 	if (error != 0) {
-		printf("%s: SYSCTL_IN() error %d\n",
+		nd6log0(error, "%s: SYSCTL_IN() error %d\n",
 		    __func__, error);
 		goto done;
 	}
+
+	if (nd6_lookup_ipv6_args.ll_dest_len > sizeof(nd6_lookup_ipv6_args.ll_dest_)) {
+		error = EINVAL;
+		nd6log0(error, "%s: bad ll_dest_len, error %d\n",
+		    __func__, error);
+		goto done;
+	}
+
 	/* Make sure to terminate the string */
 	nd6_lookup_ipv6_args.ifname[IFNAMSIZ - 1] = 0;
 
 	error = ifnet_find_by_name(nd6_lookup_ipv6_args.ifname, &ifp);
 	if (error != 0) {
-		printf("%s: ifnet_find_by_name() error %d\n",
+		nd6log0(error, "%s: ifnet_find_by_name() error %d\n",
 		    __func__, error);
 		goto done;
 	}
@@ -4367,7 +4386,7 @@ sysctl_nd6_lookup_ipv6 SYSCTL_HANDLER_ARGS
 	    &nd6_lookup_ipv6_args.ll_dest_._sdl,
 	    nd6_lookup_ipv6_args.ll_dest_len, NULL, NULL);
 	if (error != 0) {
-		printf("%s: nd6_lookup_ipv6() error %d\n",
+		nd6log0(error, "%s: nd6_lookup_ipv6() error %d\n",
 		    __func__, error);
 		goto done;
 	}
@@ -4375,7 +4394,7 @@ sysctl_nd6_lookup_ipv6 SYSCTL_HANDLER_ARGS
 	error = SYSCTL_OUT(req, &nd6_lookup_ipv6_args,
 	    sizeof(struct nd6_lookup_ipv6_args));
 	if (error != 0) {
-		printf("%s: SYSCTL_OUT() error %d\n",
+		nd6log0(error, "%s: SYSCTL_OUT() error %d\n",
 		    __func__, error);
 		goto done;
 	}
@@ -4717,9 +4736,9 @@ in6_ifaddr_set_dadprogress(struct in6_ifaddr *ia)
 	ia->ia6_flags &= ~(IN6_IFF_DUPLICATED | IN6_IFF_DADPROGRESS);
 	ia->ia6_flags |= flags;
 
-	nd6log2((LOG_DEBUG, "%s - %s ifp %s ia6_flags 0x%x\n",
+	nd6log2(debug, "%s - %s ifp %s ia6_flags 0x%x\n",
 	    __func__,
 	    ip6_sprintf(&ia->ia_addr.sin6_addr),
 	    if_name(ia->ia_ifp),
-	    ia->ia6_flags));
+	    ia->ia6_flags);
 }

@@ -205,15 +205,20 @@ thread_switch(
 	thread_t                        thread = THREAD_NULL;
 	thread_t                        self = current_thread();
 	mach_port_name_t                thread_name = args->thread_name;
-	int                                             option = args->option;
+	int                             option = args->option;
 	mach_msg_timeout_t              option_time = args->option_time;
-	uint32_t                                scale_factor = NSEC_PER_MSEC;
-	boolean_t                               depress_option = FALSE;
-	boolean_t                               wait_option = FALSE;
+	uint32_t                        scale_factor = NSEC_PER_MSEC;
+	boolean_t                       depress_option = FALSE;
+	boolean_t                       wait_option = FALSE;
 	wait_interrupt_t                interruptible = THREAD_ABORTSAFE;
+	port_to_thread_options_t        ptt_options = PORT_TO_THREAD_NOT_CURRENT_THREAD;
 
 	/*
 	 *	Validate and process option.
+	 *
+	 * OSLock boosting only applies to other threads
+	 * in your same task (even if you have a port for
+	 * a thread in another task)
 	 */
 	switch (option) {
 	case SWITCH_OPTION_NONE:
@@ -232,10 +237,12 @@ thread_switch(
 	case SWITCH_OPTION_OSLOCK_DEPRESS:
 		depress_option = TRUE;
 		interruptible |= THREAD_WAIT_NOREPORT;
+		ptt_options |= PORT_TO_THREAD_IN_CURRENT_TASK;
 		break;
 	case SWITCH_OPTION_OSLOCK_WAIT:
 		wait_option = TRUE;
 		interruptible |= THREAD_WAIT_NOREPORT;
+		ptt_options |= PORT_TO_THREAD_IN_CURRENT_TASK;
 		break;
 	default:
 		return KERN_INVALID_ARGUMENT;
@@ -245,46 +252,21 @@ thread_switch(
 	 * Translate the port name if supplied.
 	 */
 	if (thread_name != MACH_PORT_NULL) {
-		ipc_port_t port;
-
-		if (ipc_port_translate_send(self->task->itk_space,
-		    thread_name, &port) == KERN_SUCCESS) {
-			ip_reference(port);
-			ip_unlock(port);
-
-			thread = convert_port_to_thread(port);
-			ip_release(port);
-
-			if (thread == self) {
-				thread_deallocate(thread);
-				thread = THREAD_NULL;
-			}
-		}
+		thread = port_name_to_thread(thread_name, ptt_options);
 	}
 
 	if (option == SWITCH_OPTION_OSLOCK_DEPRESS || option == SWITCH_OPTION_OSLOCK_WAIT) {
 		if (thread != THREAD_NULL) {
-			if (thread->task != self->task) {
-				/*
-				 * OSLock boosting only applies to other threads
-				 * in your same task (even if you have a port for
-				 * a thread in another task)
-				 */
+			/*
+			 * Attempt to kick the lock owner up to our same IO throttling tier.
+			 * If the thread is currently blocked in throttle_lowpri_io(),
+			 * it will immediately break out.
+			 *
+			 * TODO: SFI break out?
+			 */
+			int new_policy = proc_get_effective_thread_policy(self, TASK_POLICY_IO);
 
-				thread_deallocate(thread);
-				thread = THREAD_NULL;
-			} else {
-				/*
-				 * Attempt to kick the lock owner up to our same IO throttling tier.
-				 * If the thread is currently blocked in throttle_lowpri_io(),
-				 * it will immediately break out.
-				 *
-				 * TODO: SFI break out?
-				 */
-				int new_policy = proc_get_effective_thread_policy(self, TASK_POLICY_IO);
-
-				set_thread_iotier_override(thread, new_policy);
-			}
+			set_thread_iotier_override(thread, new_policy);
 		}
 	}
 
@@ -352,41 +334,6 @@ thread_yield_with_continuation(
 	__builtin_unreachable();
 }
 
-
-/* Returns a +1 thread reference */
-thread_t
-port_name_to_thread_for_ulock(mach_port_name_t thread_name)
-{
-	thread_t thread = THREAD_NULL;
-	thread_t self = current_thread();
-
-	/*
-	 * Translate the port name if supplied.
-	 */
-	if (thread_name != MACH_PORT_NULL) {
-		ipc_port_t port;
-
-		if (ipc_port_translate_send(self->task->itk_space,
-		    thread_name, &port) == KERN_SUCCESS) {
-			ip_reference(port);
-			ip_unlock(port);
-
-			thread = convert_port_to_thread(port);
-			ip_release(port);
-
-			if (thread == THREAD_NULL) {
-				return thread;
-			}
-
-			if ((thread == self) || (thread->task != self->task)) {
-				thread_deallocate(thread);
-				thread = THREAD_NULL;
-			}
-		}
-	}
-
-	return thread;
-}
 
 /* This function is called after an assert_wait(), therefore it must not
  * cause another wait until after the thread_run() or thread_block()
@@ -531,6 +478,9 @@ thread_depress_expire(void      *p0,
 
 	if (--thread->depress_timer_active == 0) {
 		thread->sched_flags &= ~TH_SFLAG_DEPRESSED_MASK;
+		if ((thread->state & TH_RUN) == TH_RUN) {
+			thread->last_basepri_change_time = mach_absolute_time();
+		}
 		thread_recompute_sched_pri(thread, SETPRI_DEFAULT);
 	}
 
@@ -579,6 +529,9 @@ thread_depress_abort_locked(thread_t thread)
 	assert((thread->sched_flags & TH_SFLAG_DEPRESSED_MASK) != TH_SFLAG_DEPRESSED_MASK);
 
 	thread->sched_flags &= ~TH_SFLAG_DEPRESSED_MASK;
+	if ((thread->state & TH_RUN) == TH_RUN) {
+		thread->last_basepri_change_time = mach_absolute_time();
+	}
 
 	thread_recompute_sched_pri(thread, SETPRI_LAZY);
 

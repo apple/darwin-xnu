@@ -44,6 +44,7 @@ extern void kperf_kernel_configure(char *);
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 #include <kern/queue.h>
+#include <kern/sched_prim.h>
 
 extern "C" void console_suspend();
 extern "C" void console_resume();
@@ -149,6 +150,7 @@ iocpu_run_platform_actions(queue_head_t * queue, uint32_t first_priority, uint32
 extern "C" kern_return_t
 IOCPURunPlatformQuiesceActions(void)
 {
+	assert(preemption_enabled() == false);
 	return iocpu_run_platform_actions(&gActionQueues[kQueueQuiesce], 0, 0U - 1,
 	           NULL, NULL, NULL, TRUE);
 }
@@ -156,6 +158,7 @@ IOCPURunPlatformQuiesceActions(void)
 extern "C" kern_return_t
 IOCPURunPlatformActiveActions(void)
 {
+	assert(preemption_enabled() == false);
 	return iocpu_run_platform_actions(&gActionQueues[kQueueActive], 0, 0U - 1,
 	           NULL, NULL, NULL, TRUE);
 }
@@ -426,7 +429,7 @@ PE_cpu_machine_quiesce(cpu_id_t target)
 }
 
 #if defined(__arm__) || defined(__arm64__)
-static perfmon_interrupt_handler_func pmi_handler = 0;
+static perfmon_interrupt_handler_func pmi_handler = NULL;
 
 kern_return_t
 PE_cpu_perfmon_interrupt_install_handler(perfmon_interrupt_handler_func handler)
@@ -446,7 +449,7 @@ PE_cpu_perfmon_interrupt_enable(cpu_id_t target, boolean_t enable)
 	}
 
 	if (enable) {
-		targetCPU->getProvider()->registerInterrupt(1, targetCPU, (IOInterruptAction)pmi_handler, 0);
+		targetCPU->getProvider()->registerInterrupt(1, targetCPU, (IOInterruptAction)pmi_handler, NULL);
 		targetCPU->getProvider()->enableInterrupt(1);
 	} else {
 		targetCPU->getProvider()->disableInterrupt(1);
@@ -495,7 +498,7 @@ IOCPUSleepKernel(void)
 	iter = IORegistryIterator::iterateOver( gIOServicePlane,
 	    kIORegistryIterateRecursively );
 	if (iter) {
-		all = 0;
+		all = NULL;
 		do{
 			if (all) {
 				all->release();
@@ -525,6 +528,18 @@ IOCPUSleepKernel(void)
 	currentShutdownTarget = NULL;
 #endif
 
+	integer_t old_pri;
+	thread_t self = current_thread();
+
+	/*
+	 * We need to boost this thread's priority to the maximum kernel priority to
+	 * ensure we can urgently preempt ANY thread currently executing on the
+	 * target CPU.  Note that realtime threads have their own mechanism to eventually
+	 * demote their priority below MAXPRI_KERNEL if they hog the CPU for too long.
+	 */
+	old_pri = thread_kern_get_pri(self);
+	thread_kern_set_pri(self, thread_kern_get_kernel_maxpri());
+
 	// Sleep the CPUs.
 	cnt = numCPUs;
 	while (cnt--) {
@@ -551,8 +566,17 @@ IOCPUSleepKernel(void)
 	rootDomain->tracePoint( kIOPMTracePointSleepPlatformDriver );
 	rootDomain->stop_watchdog_timer();
 
-	// Now sleep the boot CPU.
+	/*
+	 * Now sleep the boot CPU, including calling the kQueueQuiesce actions.
+	 * The system sleeps here.
+	 */
+
 	bootCPU->haltCPU();
+
+	/*
+	 * The system is now coming back from sleep on the boot CPU.
+	 * The kQueueActive actions have already been called.
+	 */
 
 	rootDomain->start_watchdog_timer();
 	rootDomain->tracePoint( kIOPMTracePointWakePlatformActions );
@@ -592,6 +616,8 @@ IOCPUSleepKernel(void)
 #if defined(__arm64__)
 	sched_restore_recommended_cores_after_sleep();
 #endif
+
+	thread_kern_set_pri(self, old_pri);
 }
 
 bool
@@ -639,6 +665,18 @@ IOCPU::start(IOService *provider)
 	return true;
 }
 
+void
+IOCPU::detach(IOService *provider)
+{
+	super::detach(provider);
+	IOLockLock(gIOCPUsLock);
+	unsigned int index = gIOCPUs->getNextIndexOfObject(this, 0);
+	if (index != (unsigned int)-1) {
+		gIOCPUs->removeObject(index);
+	}
+	IOLockUnlock(gIOCPUsLock);
+}
+
 OSObject *
 IOCPU::getProperty(const OSSymbol *aKey) const
 {
@@ -680,12 +718,12 @@ IOCPU::setProperties(OSObject *properties)
 	OSString     *stateStr;
 	IOReturn     result;
 
-	if (dict == 0) {
+	if (dict == NULL) {
 		return kIOReturnUnsupported;
 	}
 
 	stateStr = OSDynamicCast(OSString, dict->getObject(gIOCPUStateKey));
-	if (stateStr != 0) {
+	if (stateStr != NULL) {
 		result = IOUserClient::clientHasPrivilege(current_task(), kIOClientPrivilegeAdministrator);
 		if (result != kIOReturnSuccess) {
 			return result;
@@ -809,7 +847,7 @@ IOCPUInterruptController::initCPUInterruptController(int sources, int cpus)
 	numCPUs = cpus;
 
 	vectors = (IOInterruptVector *)IOMalloc(numSources * sizeof(IOInterruptVector));
-	if (vectors == 0) {
+	if (vectors == NULL) {
 		return kIOReturnNoMemory;
 	}
 	bzero(vectors, numSources * sizeof(IOInterruptVector));
@@ -863,8 +901,8 @@ IOCPUInterruptController::setCPUInterruptProperties(IOService *service)
 	OSData       *tmpData;
 	long         tmpLong;
 
-	if ((service->getProperty(gIOInterruptControllersKey) != 0) &&
-	    (service->getProperty(gIOInterruptSpecifiersKey) != 0)) {
+	if ((service->getProperty(gIOInterruptControllersKey) != NULL) &&
+	    (service->getProperty(gIOInterruptSpecifiersKey) != NULL)) {
 		return;
 	}
 
@@ -899,7 +937,7 @@ IOCPUInterruptController::enableCPUInterrupt(IOCPU *cpu)
 
 	assert(numCPUs > 0);
 
-	ml_install_interrupt_handler(cpu, cpu->getCPUNumber(), this, handler, 0);
+	ml_install_interrupt_handler(cpu, cpu->getCPUNumber(), this, handler, NULL);
 
 	IOTakeLock(vectors[0].interruptLock);
 	++enabledCPUs;
@@ -919,6 +957,9 @@ IOCPUInterruptController::registerInterrupt(IOService *nub,
     void *refCon)
 {
 	IOInterruptVector *vector;
+
+	// Interrupts must be enabled, as this can allocate memory.
+	assert(ml_get_interrupts_enabled() == TRUE);
 
 	if (source >= numSources) {
 		return kIOReturnNoResources;
@@ -966,7 +1007,7 @@ IOCPUInterruptController::getInterruptType(IOService */*nub*/,
     int /*source*/,
     int *interruptType)
 {
-	if (interruptType == 0) {
+	if (interruptType == NULL) {
 		return kIOReturnBadArgument;
 	}
 

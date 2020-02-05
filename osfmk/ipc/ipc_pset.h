@@ -84,13 +84,15 @@ struct ipc_pset {
 
 #define ips_references          ips_object.io_references
 
-#define ips_active(pset)        io_active(&(pset)->ips_object)
-#define ips_lock(pset)          io_lock(&(pset)->ips_object)
-#define ips_lock_try(pset)      io_lock_try(&(pset)->ips_object)
-#define ips_lock_held_kdp(pset) io_lock_held_kdp(&(pset)->ips_object)
-#define ips_unlock(pset)        io_unlock(&(pset)->ips_object)
-#define ips_reference(pset)     io_reference(&(pset)->ips_object)
-#define ips_release(pset)       io_release(&(pset)->ips_object)
+#define ips_object_to_pset(io)  __container_of(io, struct ipc_pset, ips_object)
+#define ips_to_object(pset)     (&(pset)->ips_object)
+#define ips_active(pset)        io_active(ips_to_object(pset))
+#define ips_lock(pset)          io_lock(ips_to_object(pset))
+#define ips_lock_try(pset)      io_lock_try(ips_to_object(pset))
+#define ips_lock_held_kdp(pset) io_lock_held_kdp(ips_to_object(pset))
+#define ips_unlock(pset)        io_unlock(ips_to_object(pset))
+#define ips_reference(pset)     io_reference(ips_to_object(pset))
+#define ips_release(pset)       io_release(ips_to_object(pset))
 
 /* get an ipc_pset pointer from an ipc_mqueue pointer */
 #define ips_from_mq(mq) \
@@ -144,11 +146,11 @@ extern void ipc_pset_destroy(
 	ipc_pset_t      pset);
 
 #if MACH_KERNEL_PRIVATE
-extern struct turnstile *filt_machport_kqueue_turnstile(
+extern struct turnstile *filt_ipc_kqueue_turnstile(
 	struct knote *kn);
-
-extern struct turnstile *filt_machport_stashed_special_reply_port_turnstile(
-	ipc_port_t port);
+bool
+filt_machport_kqueue_has_turnstile(
+	struct knote *kn);
 
 extern void filt_machport_turnstile_prepare_lazily(
 	struct knote *kn,

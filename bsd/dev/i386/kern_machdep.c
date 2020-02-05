@@ -40,6 +40,10 @@
 #include        <machine/exec.h>
 #include        <machine/machine_routines.h>
 
+#if __x86_64__
+extern int bootarg_no32exec;    /* bsd_init.c */
+#endif
+
 /**********************************************************************
 * Routine:	grade_binary()
 *
@@ -48,7 +52,7 @@
 *		by 32-bit binaries. 0 means unsupported.
 **********************************************************************/
 int
-grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype)
+grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype, bool allow_simulator_binary __unused)
 {
 	cpu_subtype_t hostsubtype = cpu_subtype();
 
@@ -72,6 +76,11 @@ grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype)
 		}
 		break;
 	case CPU_TYPE_X86:              /* native */
+#if __x86_64__
+		if (bootarg_no32exec && !allow_simulator_binary) {
+			return 0;
+		}
+#endif
 		return 1;
 	}
 

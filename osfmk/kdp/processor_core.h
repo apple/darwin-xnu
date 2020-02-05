@@ -169,7 +169,7 @@ typedef struct {
  * coredump infrastructure. In addition to the callback config and version of the config
  * structure, a description of the core should be provided -- i.e.: AP
  */
-kern_return_t kern_register_coredump_helper(int kern_coredump_config_vers, kern_coredump_callback_config *kc_callbacks, void *refcon,
+kern_return_t kern_register_coredump_helper(int kern_coredump_config_vers, const kern_coredump_callback_config *kc_callbacks, void *refcon,
     const char *core_description, boolean_t is64bit, uint32_t mh_magic, cpu_type_t cpu_type, cpu_subtype_t cpu_subtype);
 
 #if PRIVATE

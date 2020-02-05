@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -32,7 +32,6 @@
 #include <mach_kdp.h>
 #include <kdp/kdp_internal.h>
 #include <mach_ldebug.h>
-#include <gprof.h>
 
 #include <mach/mach_types.h>
 #include <mach/kern_return.h>
@@ -55,8 +54,6 @@
 
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
-
-#include <profiling/profile-mk.h>
 
 #include <i386/bit_routines.h>
 #include <i386/proc_reg.h>
@@ -188,24 +185,6 @@ boolean_t i386_smp_init(int nmi_vector, i386_intr_func_t nmi_handler,
 void i386_start_cpu(int lapic_id, int cpu_num);
 void i386_send_NMI(int cpu);
 void NMIPI_enable(boolean_t);
-#if GPROF
-/*
- * Initialize dummy structs for profiling. These aren't used but
- * allows hertz_tick() to be built with GPROF defined.
- */
-struct profile_vars _profile_vars;
-struct profile_vars *_profile_vars_cpus[MAX_CPUS] = { &_profile_vars };
-#define GPROF_INIT()                                                    \
-{                                                                       \
-	int	i;                                                      \
-                                                                        \
-	/* Hack to initialize pointers to unused profiling structs */   \
-	for (i = 1; i < MAX_CPUS; i++)                          \
-	        _profile_vars_cpus[i] = &_profile_vars;                 \
-}
-#else
-#define GPROF_INIT()
-#endif /* GPROF */
 
 static lck_grp_t        smp_lck_grp;
 static lck_grp_attr_t   smp_lck_grp_attr;
@@ -245,7 +224,6 @@ smp_init(void)
 
 	cpu_thread_init();
 
-	GPROF_INIT();
 	DBGLOG_CPU_INIT(master_cpu);
 
 	mp_cpus_call_init();
@@ -1500,11 +1478,8 @@ mp_broadcast(
 	 * signal other processors, which will call mp_broadcast_action()
 	 */
 	mp_bc_count = real_ncpus;                       /* assume max possible active */
-	mp_bc_ncpus = mp_cpus_call(CPUMASK_OTHERS, NOSYNC, *mp_broadcast_action, NULL) + 1;
+	mp_bc_ncpus = mp_cpus_call(CPUMASK_ALL, NOSYNC, *mp_broadcast_action, NULL);
 	atomic_decl(&mp_bc_count, real_ncpus - mp_bc_ncpus); /* subtract inactive */
-
-	/* call executor function on this cpu */
-	mp_broadcast_action(NULL);
 
 	/* block for other cpus to have run action_func */
 	if (mp_bc_ncpus > 1) {

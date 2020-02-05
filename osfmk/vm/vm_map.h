@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -80,6 +80,7 @@
 #include <mach/vm_param.h>
 #include <mach/sdt.h>
 #include <vm/pmap.h>
+#include <os/overflow.h>
 
 #ifdef  KERNEL_PRIVATE
 
@@ -113,6 +114,7 @@ __END_DECLS
 #include <kern/macro_help.h>
 
 #include <kern/thread.h>
+#include <os/refcnt.h>
 
 #define current_map_fast()      (current_thread()->map)
 #define current_map()           (current_map_fast())
@@ -130,7 +132,7 @@ __END_DECLS
  *				 used for inter-map copy operations
  */
 typedef struct vm_map_entry     *vm_map_entry_t;
-#define VM_MAP_ENTRY_NULL       ((vm_map_entry_t) 0)
+#define VM_MAP_ENTRY_NULL       ((vm_map_entry_t) NULL)
 
 
 /*
@@ -172,7 +174,7 @@ extern queue_head_t vm_named_entry_list;
  */
 
 struct vm_named_entry {
-	decl_lck_mtx_data(, Lock)               /* Synchronization */
+	decl_lck_mtx_data(, Lock);              /* Synchronization */
 	union {
 		vm_object_t     object;         /* object I point to */
 		vm_map_t        map;            /* map backing submap */
@@ -216,55 +218,6 @@ struct vm_map_links {
 	vm_map_offset_t         start;          /* start address */
 	vm_map_offset_t         end;            /* end address */
 };
-
-/*
- * IMPORTANT:
- * The "alias" field can be updated while holding the VM map lock
- * "shared".  It's OK as along as it's the only field that can be
- * updated without the VM map "exclusive" lock.
- */
-#define VME_OBJECT(entry) ((entry)->vme_object.vmo_object)
-#define VME_OBJECT_SET(entry, object)                           \
-	MACRO_BEGIN                                             \
-	(entry)->vme_object.vmo_object = (object);              \
-	MACRO_END
-#define VME_SUBMAP(entry) ((entry)->vme_object.vmo_submap)
-#define VME_SUBMAP_SET(entry, submap)                           \
-	MACRO_BEGIN                                             \
-	(entry)->vme_object.vmo_submap = (submap);              \
-	MACRO_END
-#define VME_OFFSET(entry) ((entry)->vme_offset & ~PAGE_MASK)
-#define VME_OFFSET_SET(entry, offset)           \
-	MACRO_BEGIN                             \
-	int __alias;                            \
-	__alias = VME_ALIAS((entry));           \
-	assert((offset & PAGE_MASK) == 0);      \
-	(entry)->vme_offset = offset | __alias; \
-	MACRO_END
-#define VME_OBJECT_SHADOW(entry, length)                        \
-	MACRO_BEGIN                                             \
-	vm_object_t		__object;                       \
-	vm_object_offset_t	__offset;                       \
-	__object = VME_OBJECT((entry));                         \
-	__offset = VME_OFFSET((entry));                         \
-	vm_object_shadow(&__object, &__offset, (length));       \
-	if (__object != VME_OBJECT((entry))) {                  \
-	        VME_OBJECT_SET((entry), __object);              \
-	        (entry)->use_pmap = TRUE;                       \
-	}                                                       \
-	if (__offset != VME_OFFSET((entry))) {                  \
-	        VME_OFFSET_SET((entry), __offset);              \
-	}                                                       \
-	MACRO_END
-
-#define VME_ALIAS_MASK (PAGE_MASK)
-#define VME_ALIAS(entry) ((unsigned int)((entry)->vme_offset & VME_ALIAS_MASK))
-#define VME_ALIAS_SET(entry, alias) \
-	MACRO_BEGIN                                                     \
-	vm_map_offset_t __offset;                                       \
-	__offset = VME_OFFSET((entry));                                 \
-	(entry)->vme_offset = __offset | ((alias) & VME_ALIAS_MASK);    \
-	MACRO_END
 
 /*
  * FOOTPRINT ACCOUNTING:
@@ -344,8 +297,8 @@ struct vm_map_entry {
 	/* boolean_t */ vme_resilient_codesign:1,
 	/* boolean_t */ vme_resilient_media:1,
 	/* boolean_t */ vme_atomic:1, /* entry cannot be split/coalesced */
-	__unused:4;
-	;
+	/* boolean_t */ vme_no_copy_on_read:1,
+	__unused:3;
 
 	unsigned short          wired_count;    /* can be paged if = 0 */
 	unsigned short          user_wired_count; /* for vm_wire */
@@ -361,6 +314,86 @@ struct vm_map_entry {
 	uintptr_t               vme_insertion_bt[16];
 #endif
 };
+
+#define VME_SUBMAP_PTR(entry)                   \
+	(&((entry)->vme_object.vmo_submap))
+#define VME_SUBMAP(entry)                                       \
+	((vm_map_t)((uintptr_t)0 + *VME_SUBMAP_PTR(entry)))
+#define VME_OBJECT_PTR(entry)                   \
+	(&((entry)->vme_object.vmo_object))
+#define VME_OBJECT(entry)                                       \
+	((vm_object_t)((uintptr_t)0 + *VME_OBJECT_PTR(entry)))
+#define VME_OFFSET(entry)                       \
+	((entry)->vme_offset & ~PAGE_MASK)
+#define VME_ALIAS_MASK (PAGE_MASK)
+#define VME_ALIAS(entry)                                        \
+	((unsigned int)((entry)->vme_offset & VME_ALIAS_MASK))
+
+static inline void
+VME_OBJECT_SET(
+	vm_map_entry_t entry,
+	vm_object_t object)
+{
+	entry->vme_object.vmo_object = object;
+	if (object != VM_OBJECT_NULL && !object->internal) {
+		entry->vme_resilient_media = FALSE;
+	}
+	entry->vme_resilient_codesign = FALSE;
+	entry->used_for_jit = FALSE;
+}
+static inline void
+VME_SUBMAP_SET(
+	vm_map_entry_t entry,
+	vm_map_t submap)
+{
+	entry->vme_object.vmo_submap = submap;
+}
+static inline void
+VME_OFFSET_SET(
+	vm_map_entry_t entry,
+	vm_map_offset_t offset)
+{
+	int alias;
+	alias = VME_ALIAS(entry);
+	assert((offset & PAGE_MASK) == 0);
+	entry->vme_offset = offset | alias;
+}
+/*
+ * IMPORTANT:
+ * The "alias" field can be updated while holding the VM map lock
+ * "shared".  It's OK as along as it's the only field that can be
+ * updated without the VM map "exclusive" lock.
+ */
+static inline void
+VME_ALIAS_SET(
+	vm_map_entry_t entry,
+	int alias)
+{
+	vm_map_offset_t offset;
+	offset = VME_OFFSET(entry);
+	entry->vme_offset = offset | (alias & VME_ALIAS_MASK);
+}
+
+static inline void
+VME_OBJECT_SHADOW(
+	vm_map_entry_t entry,
+	vm_object_size_t length)
+{
+	vm_object_t object;
+	vm_object_offset_t offset;
+
+	object = VME_OBJECT(entry);
+	offset = VME_OFFSET(entry);
+	vm_object_shadow(&object, &offset, length);
+	if (object != VME_OBJECT(entry)) {
+		VME_OBJECT_SET(entry, object);
+		entry->use_pmap = TRUE;
+	}
+	if (offset != VME_OFFSET(entry)) {
+		VME_OFFSET_SET(entry, offset);
+	}
+}
+
 
 /*
  * Convenience macros for dealing with superpages
@@ -426,9 +459,9 @@ struct _vm_map {
 	vm_map_size_t           size;           /* virtual size */
 	vm_map_size_t           user_wire_limit;/* rlimit on user locked memory */
 	vm_map_size_t           user_wire_size; /* current size of user locked memory in this map */
-#if __x86_64__
+#if !CONFIG_EMBEDDED
 	vm_map_offset_t         vmmap_high_start;
-#endif /* __x86_64__ */
+#endif
 
 	union {
 		/*
@@ -446,7 +479,7 @@ struct _vm_map {
 	} vmu1;
 #define highest_entry_end       vmu1.vmu1_highest_entry_end
 #define lowest_unnestable_start vmu1.vmu1_lowest_unnestable_start
-	decl_lck_mtx_data(, s_lock)             /* Lock ref, res fields */
+	decl_lck_mtx_data(, s_lock);                    /* Lock ref, res fields */
 	lck_mtx_ext_t           s_lock_ext;
 	vm_map_entry_t          hint;           /* hint for quick lookups */
 	union {
@@ -455,7 +488,7 @@ struct _vm_map {
 	} vmmap_u_1;
 #define hole_hint vmmap_u_1.vmmap_hole_hint
 #define vmmap_corpse_footprint vmmap_u_1.vmmap_corpse_footprint
-	union{
+	union {
 		vm_map_entry_t          _first_free;    /* First free space hint */
 		struct vm_map_links*    _holes;         /* links all holes between entries */
 	} f_s;                                          /* Union for free space data structures being used */
@@ -463,7 +496,7 @@ struct _vm_map {
 #define first_free              f_s._first_free
 #define holes_list              f_s._holes
 
-	int                     map_refcnt;     /* Reference count */
+	struct os_refcnt        map_refcnt;     /* Reference count */
 
 #if     TASK_SWAPPER
 	int                     res_count;      /* Residence count (swap) */
@@ -483,8 +516,7 @@ struct _vm_map {
 	/* boolean_t */ map_disallow_new_exec:1,         /* Disallow new executable code */
 	/* boolean_t */ jit_entry_exists:1,
 	/* boolean_t */ has_corpse_footprint:1,
-	/* boolean_t */ warned_delete_gap:1,
-	/* reserved */ pad:19;
+	/* reserved */ pad:20;
 	unsigned int            timestamp;      /* Version number */
 };
 
@@ -633,39 +665,14 @@ struct vm_map_copy {
 	lck_rw_lock_exclusive_to_shared(&(map)->lock); \
 	MACRO_END
 
-/*
- * lock_read_to_write() returns FALSE on failure.  This function evaluates to
- * zero on success and non-zero value on failure.
- */
-static inline int
-vm_map_lock_read_to_write(vm_map_t map)
-{
-	if (lck_rw_lock_shared_to_exclusive(&(map)->lock)) {
-		DTRACE_VM(vm_map_lock_upgrade);
-		return 0;
-	}
-	return 1;
-}
+__attribute__((always_inline))
+int vm_map_lock_read_to_write(vm_map_t map);
 
-static inline boolean_t
-vm_map_try_lock(vm_map_t map)
-{
-	if (lck_rw_try_lock_exclusive(&(map)->lock)) {
-		DTRACE_VM(vm_map_lock_w);
-		return TRUE;
-	}
-	return FALSE;
-}
+__attribute__((always_inline))
+boolean_t vm_map_try_lock(vm_map_t map);
 
-static inline boolean_t
-vm_map_try_lock_read(vm_map_t map)
-{
-	if (lck_rw_try_lock_shared(&(map)->lock)) {
-		DTRACE_VM(vm_map_lock_r);
-		return TRUE;
-	}
-	return FALSE;
-}
+__attribute__((always_inline))
+boolean_t vm_map_try_lock_read(vm_map_t map);
 
 #if MACH_ASSERT || DEBUG
 #define vm_map_lock_assert_held(map) \
@@ -767,6 +774,7 @@ extern vm_map_entry_t   vm_map_entry_insert(
 	unsigned                wired_count,
 	boolean_t               no_cache,
 	boolean_t               permanent,
+	boolean_t               no_copy_on_read,
 	unsigned int            superpage_size,
 	boolean_t               clear_map_aligned,
 	boolean_t               is_submap,
@@ -810,14 +818,14 @@ extern void             vm_map_reference_swap(
 #else   /* MACH_ASSERT */
 
 #define vm_map_reference(map)           \
-MACRO_BEGIN                                     \
-	vm_map_t Map = (map);           \
-	if (Map) {                              \
-	        lck_mtx_lock(&Map->s_lock);     \
-	        Map->res_count++;               \
-	        Map->map_refcnt++;              \
-	        lck_mtx_unlock(&Map->s_lock);   \
-	}                                       \
+MACRO_BEGIN                                      \
+	vm_map_t Map = (map);                    \
+	if (Map) {                               \
+	        lck_mtx_lock(&Map->s_lock);      \
+	        Map->res_count++;                \
+	        os_ref_retain(&Map->map_refcnt); \
+	        lck_mtx_unlock(&Map->s_lock);    \
+	}                                        \
 MACRO_END
 
 #define vm_map_res_reference(map)               \
@@ -850,7 +858,7 @@ MACRO_END
 MACRO_BEGIN                             \
 	vm_map_t Map = (map);           \
 	lck_mtx_lock(&Map->s_lock);     \
-	++Map->map_refcnt;              \
+	os_ref_retain(&Map->map_refcnt);\
 	vm_map_res_reference(Map);      \
 	lck_mtx_unlock(&Map->s_lock);   \
 MACRO_END
@@ -869,7 +877,7 @@ MACRO_BEGIN                                     \
 	vm_map_t Map = (map);                   \
 	if (Map) {                              \
 	        lck_mtx_lock(&Map->s_lock);     \
-	        Map->map_refcnt++;              \
+	        os_ref_retain(&Map->map_refcnt);\
 	        lck_mtx_unlock(&Map->s_lock);   \
 	}                                       \
 MACRO_END
@@ -1447,6 +1455,9 @@ extern void             vm_map_set_32bit(
 extern void             vm_map_set_jumbo(
 	vm_map_t                map);
 
+extern void             vm_map_set_jit_entitled(
+	vm_map_t                map);
+
 extern void             vm_map_set_max_addr(
 	vm_map_t                map, vm_map_offset_t new_max_offset);
 
@@ -1474,11 +1485,11 @@ extern kern_return_t    vm_map_raise_max_offset(
 extern kern_return_t    vm_map_raise_min_offset(
 	vm_map_t        map,
 	vm_map_offset_t new_min_offset);
-#if __x86_64__
+#if !CONFIG_EMBEDDED
 extern void vm_map_set_high_start(
 	vm_map_t        map,
 	vm_map_offset_t high_start);
-#endif /* __x86_64__ */
+#endif
 
 extern vm_map_offset_t  vm_compute_max_offset(
 	boolean_t               is64);
@@ -1533,6 +1544,20 @@ extern vm_map_offset_t  vm_map_trunc_page_mask(
 extern boolean_t        vm_map_page_aligned(
 	vm_map_offset_t         offset,
 	vm_map_offset_t         mask);
+
+static inline int
+vm_map_range_overflows(vm_map_offset_t addr, vm_map_size_t size)
+{
+	vm_map_offset_t sum;
+	return os_add_overflow(addr, size, &sum);
+}
+
+static inline int
+mach_vm_range_overflows(mach_vm_offset_t addr, mach_vm_size_t size)
+{
+	mach_vm_offset_t sum;
+	return os_add_overflow(addr, size, &sum);
+}
 
 #ifdef XNU_KERNEL_PRIVATE
 extern kern_return_t vm_map_page_info(
@@ -1590,13 +1615,16 @@ static inline void
 vm_prot_to_wimg(unsigned int prot, unsigned int *wimg)
 {
 	switch (prot) {
-	case MAP_MEM_NOOP:              break;
-	case MAP_MEM_IO:                *wimg = VM_WIMG_IO; break;
-	case MAP_MEM_COPYBACK:          *wimg = VM_WIMG_USE_DEFAULT; break;
-	case MAP_MEM_INNERWBACK:        *wimg = VM_WIMG_INNERWBACK; break;
-	case MAP_MEM_POSTED:            *wimg = VM_WIMG_POSTED; break;
-	case MAP_MEM_WTHRU:             *wimg = VM_WIMG_WTHRU; break;
-	case MAP_MEM_WCOMB:             *wimg = VM_WIMG_WCOMB; break;
+	case MAP_MEM_NOOP:                      break;
+	case MAP_MEM_IO:                        *wimg = VM_WIMG_IO; break;
+	case MAP_MEM_COPYBACK:                  *wimg = VM_WIMG_USE_DEFAULT; break;
+	case MAP_MEM_INNERWBACK:                *wimg = VM_WIMG_INNERWBACK; break;
+	case MAP_MEM_POSTED:                    *wimg = VM_WIMG_POSTED; break;
+	case MAP_MEM_POSTED_REORDERED:          *wimg = VM_WIMG_POSTED_REORDERED; break;
+	case MAP_MEM_POSTED_COMBINED_REORDERED: *wimg = VM_WIMG_POSTED_COMBINED_REORDERED; break;
+	case MAP_MEM_WTHRU:                     *wimg = VM_WIMG_WTHRU; break;
+	case MAP_MEM_WCOMB:                     *wimg = VM_WIMG_WCOMB; break;
+	case MAP_MEM_RT:                        *wimg = VM_WIMG_RT; break;
 	default:
 		panic("Unrecognized mapping type %u\n", prot);
 	}
@@ -1671,7 +1699,7 @@ extern int vm_map_disconnect_page_mappings(
 #if CONFIG_FREEZE
 
 extern kern_return_t vm_map_freeze(
-	vm_map_t     map,
+	task_t       task,
 	unsigned int *purgeable_count,
 	unsigned int *wired_count,
 	unsigned int *clean_count,

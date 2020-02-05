@@ -70,4 +70,7 @@
 
 #define TASK_PORT_REGISTER_MAX  3
 
+/* Number of watchport for task */
+#define TASK_MAX_WATCHPORT_COUNT 32
+
 #endif  /* _MACH_MACH_PARAM_H_ */

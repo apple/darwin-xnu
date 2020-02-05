@@ -228,7 +228,7 @@ OSDictionary::withCapacity(unsigned int capacity)
 
 	if (me && !me->initWithCapacity(capacity)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -244,7 +244,7 @@ OSDictionary::withObjects(const OSObject *objects[],
 
 	if (me && !me->initWithObjects(objects, keys, count, capacity)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -260,7 +260,7 @@ OSDictionary::withObjects(const OSObject *objects[],
 
 	if (me && !me->initWithObjects(objects, keys, count, capacity)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -274,7 +274,7 @@ OSDictionary::withDictionary(const OSDictionary *dict,
 
 	if (me && !me->initWithDictionary(dict, capacity)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -511,7 +511,7 @@ OSDictionary::getObject(const OSSymbol *aKey) const
 	unsigned int i, l = 0, r = count;
 
 	if (!aKey) {
-		return 0;
+		return NULL;
 	}
 
 	// if the key exists, return the object
@@ -703,10 +703,10 @@ OSDictionary::getNextObjectForIterator(void *inIterator, OSObject **ret) const
 	if (index < count) {
 		*ret = (OSObject *) dictionary[index].key;
 	} else {
-		*ret = 0;
+		*ret = NULL;
 	}
 
-	return *ret != 0;
+	return *ret != NULL;
 }
 
 bool
@@ -788,13 +788,13 @@ OSCollection *
 OSDictionary::copyCollection(OSDictionary *cycleDict)
 {
 	bool allocDict = !cycleDict;
-	OSCollection *ret = 0;
-	OSDictionary *newDict = 0;
+	OSCollection *ret = NULL;
+	OSDictionary *newDict = NULL;
 
 	if (allocDict) {
 		cycleDict = OSDictionary::withCapacity(16);
 		if (!cycleDict) {
-			return 0;
+			return NULL;
 		}
 	}
 
@@ -833,7 +833,7 @@ OSDictionary::copyCollection(OSDictionary *cycleDict)
 		}
 
 		ret = newDict;
-		newDict = 0;
+		newDict = NULL;
 	} while (false);
 
 abortCopy:
@@ -855,13 +855,13 @@ OSDictionary::copyKeys(void)
 
 	array = OSArray::withCapacity(count);
 	if (!array) {
-		return 0;
+		return NULL;
 	}
 
 	for (unsigned int i = 0; i < count; i++) {
 		if (!array->setObject(i, dictionary[i].key)) {
 			array->release();
-			array = 0;
+			array = NULL;
 			break;
 		}
 	}

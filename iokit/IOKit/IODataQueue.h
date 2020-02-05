@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -46,6 +46,14 @@ struct _notifyMsg {
 	mach_msg_header_t h;
 };
 
+
+#ifdef dequeue
+#undef dequeue
+#endif
+#ifdef enqueue
+#undef enqueue
+#endif
+
 /*!
  * @class IODataQueue : public OSObject
  * @abstract A generic queue designed to pass data from the kernel to a user process.
@@ -65,7 +73,7 @@ class __attribute__((deprecated)) IODataQueue: public OSObject
 class IODataQueue : public OSObject
 #endif
 {
-	OSDeclareDefaultStructors(IODataQueue)
+	OSDeclareDefaultStructors(IODataQueue);
 
 protected:
 	IODataQueueMemory * dataQueue;

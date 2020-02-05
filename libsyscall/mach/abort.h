@@ -34,7 +34,7 @@ extern int __getpid(void);
 extern int __kill(int pid, int signum, int posix);
 extern int __exit(int) __attribute__((noreturn));
 
-static inline void __attribute__((noreturn))
+static inline void __attribute__((noreturn, cold))
 abort(void)
 {
 	(void)__kill(__getpid(), __SIGABRT, 0);

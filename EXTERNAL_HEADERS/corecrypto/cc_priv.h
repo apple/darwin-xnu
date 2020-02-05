@@ -14,11 +14,22 @@
 #include <corecrypto/cc.h>
 #include <stdint.h>
 
+// Fork handlers for the stateful components of corecrypto.
+void cc_atfork_prepare(void);
+void cc_atfork_parent(void);
+void cc_atfork_child(void);
+
+#ifndef __has_builtin
+#define __has_builtin(x) 0
+#endif
+
+#ifndef __DECONST
+#define __DECONST(type, var) ((type)(uintptr_t)(const void *)(var))
+#endif
+
 /* defines the following macros :
 
- CC_MEMCPY  : optimized memcpy.
- CC_MEMMOVE : optimized memmove.
- CC_MEMSET  : optimized memset.
+ CC_ARRAY_LEN: returns the number of elements in an array
 
  CC_STORE32_BE : store 32 bit value in big endian in unaligned buffer.
  CC_STORE32_LE : store 32 bit value in little endian in unaligned buffer.
@@ -45,12 +56,7 @@
  CC_H2BE32 : convert a 32 bits value between host and big endian order.
  CC_H2LE32 : convert a 32 bits value between host and little endian order.
 
-The following are not defined yet... define them if needed.
-
- CC_BSWAPc   : byte swap a 32 bits constant
-
  CC_BSWAP64  : byte swap a 64 bits variable
- CC_BSWAP64c : byte swap a 64 bits constant
 
  CC_READ_LE32 : read a 32 bits little endian value
 
@@ -62,10 +68,32 @@ The following are not defined yet... define them if needed.
 
 */
 
-/* TODO: optimized versions */
-#define CC_MEMCPY(D,S,L) memcpy((D),(S),(L))
-#define CC_MEMMOVE(D,S,L) memmove((D),(S),(L))
-#define CC_MEMSET(D,V,L) memset((D),(V),(L))
+// <rdar://problem/40683103> RTKitOSPlatform should replace CC_MEMCPY with memcpy
+#define CC_MEMCPY(D,S,L) cc_memcpy((D),(S),(L))
+#define CC_MEMMOVE(D,S,L) cc_memmove((D),(S),(L))
+#define CC_MEMSET(D,V,L) cc_memset((D),(V),(L))
+
+#if __has_builtin(__builtin___memcpy_chk) && !CC_RTKIT
+#define cc_memcpy(dst, src, len) __builtin___memcpy_chk((dst), (src), (len), __builtin_object_size((dst), 1))
+#define cc_memcpy_nochk(dst, src, len) __builtin___memcpy_chk((dst), (src), (len), __builtin_object_size((dst), 0))
+#else
+#define cc_memcpy(dst, src, len) memcpy((dst), (src), (len))
+#define cc_memcpy_nochk(dst, src, len) memcpy((dst), (src), (len))
+#endif
+
+#if __has_builtin(__builtin___memmove_chk) && !CC_RTKIT
+#define cc_memmove(dst, src, len) __builtin___memmove_chk((dst), (src), (len), __builtin_object_size((dst), 1))
+#else
+#define cc_memmove(dst, src, len) memmove((dst), (src), (len))
+#endif
+
+#if __has_builtin(__builtin___memset_chk) && !CC_RTKIT
+#define cc_memset(dst, val, len) __builtin___memset_chk((dst), (val), (len), __builtin_object_size((dst), 1))
+#else
+#define cc_memset(dst, val, len) memset((dst), (val), (len))
+#endif
+
+#define CC_ARRAY_LEN(x) (sizeof((x))/sizeof((x)[0]))
 
 // MARK: - Loads and Store
 
@@ -327,32 +355,46 @@ CC_INLINE uint64_t CC_ROR64(uint64_t word, int i)
 
 // MARK: - Byte Swaps
 
-CC_INLINE uint32_t CC_BSWAP(uint32_t x)
+#if __has_builtin(__builtin_bswap32)
+#define CC_BSWAP32(x) __builtin_bswap32(x)
+#else
+CC_INLINE uint32_t CC_BSWAP32(uint32_t x)
 {
-    return (
-        ((x>>24)&0x000000FF) |
-        ((x<<24)&0xFF000000) |
-        ((x>>8) &0x0000FF00) |
-        ((x<<8) &0x00FF0000)
-    );
+    return
+        ((x & 0xff000000) >> 24) |
+        ((x & 0x00ff0000) >>  8) |
+        ((x & 0x0000ff00) <<  8) |
+        ((x & 0x000000ff) << 24);
 }
+#endif
 
-#define CC_BSWAP64(x) \
-((uint64_t)((((uint64_t)(x) & 0xff00000000000000ULL) >> 56) | \
-(((uint64_t)(x) & 0x00ff000000000000ULL) >> 40) | \
-(((uint64_t)(x) & 0x0000ff0000000000ULL) >> 24) | \
-(((uint64_t)(x) & 0x000000ff00000000ULL) >>  8) | \
-(((uint64_t)(x) & 0x00000000ff000000ULL) <<  8) | \
-(((uint64_t)(x) & 0x0000000000ff0000ULL) << 24) | \
-(((uint64_t)(x) & 0x000000000000ff00ULL) << 40) | \
-(((uint64_t)(x) & 0x00000000000000ffULL) << 56)))
+#if __has_builtin(__builtin_bswap64)
+#define CC_BSWAP64(x) __builtin_bswap64(x)
+#else
+CC_INLINE uint64_t CC_BSWAP64(uint64_t x)
+{
+    return
+        ((x & 0xff00000000000000ULL) >> 56) |
+        ((x & 0x00ff000000000000ULL) >> 40) |
+        ((x & 0x0000ff0000000000ULL) >> 24) |
+        ((x & 0x000000ff00000000ULL) >>  8) |
+        ((x & 0x00000000ff000000ULL) <<  8) |
+        ((x & 0x0000000000ff0000ULL) << 24) |
+        ((x & 0x000000000000ff00ULL) << 40) |
+        ((x & 0x00000000000000ffULL) << 56);
+}
+#endif
 
 #ifdef __LITTLE_ENDIAN__
-#define CC_H2BE32(x) CC_BSWAP(x)
+#define CC_H2BE32(x) CC_BSWAP32(x)
 #define CC_H2LE32(x) (x)
+#define CC_H2BE64(x) CC_BSWAP64(x)
+#define CC_H2LE64(x) (x)
 #else
 #define CC_H2BE32(x) (x)
-#define CC_H2LE32(x) CC_BSWAP(x)
+#define CC_H2LE32(x) CC_BSWAP32(x)
+#define CC_H2BE64(x) (x)
+#define CC_H2LE64(x) CC_BSWAP64(x)
 #endif
 
 #define	CC_READ_LE32(ptr) \
@@ -389,53 +431,155 @@ do { \
 #define cc_byte(x, n) (((x) >> (8 * (n))) & 255)
 #endif
 
+/* Count leading zeros (for nonzero inputs) */
+
+/*
+ *  On i386 and x86_64, we know clang and GCC will generate BSR for
+ *  __builtin_clzl.  This instruction IS NOT constant time on all micro-
+ *  architectures, but it *is* constant time on all micro-architectures that
+ *  have been used by Apple, and we expect that to continue to be the case.
+ *
+ *  When building for x86_64h with clang, this produces LZCNT, which is exactly
+ *  what we want.
+ *
+ *  On arm and arm64, we know that clang and GCC generate the constant-time CLZ
+ *  instruction from __builtin_clzl( ).
+ */
+
+#if defined(_WIN32)
+/* We use the Windows implementations below. */
+#elif defined(__x86_64__) || defined(__i386__) || defined(__arm64__) || defined(__arm__)
+/* We use a thought-to-be-good version of __builtin_clz. */
+#elif defined __GNUC__
+#warning Using __builtin_clz() on an unknown architecture; it may not be constant-time.
+/* If you find yourself seeing this warning, file a radar for someone to
+ * check whether or not __builtin_clz() generates a constant-time
+ * implementation on the architecture you are targeting.  If it does, append
+ * the name of that architecture to the list of "safe" architectures above.  */                                          */
+#endif
+
+
+#if defined(_WIN32)
+
+#include <windows.h>
+#include <intrin.h>
+
+CC_INLINE CC_CONST unsigned clz64_win(uint64_t value)
+{
+    DWORD leading_zero;
+    _BitScanReverse64(&leading_zero, value);
+    return 63 - leading_zero;
+}
+
+
+CC_INLINE CC_CONST unsigned clz32_win(uint32_t value)
+{
+    DWORD leading_zero;
+    _BitScanReverse(&leading_zero, value);
+    return 31 - leading_zero;
+}
+
+#endif
+
+CC_INLINE CC_CONST unsigned cc_clz32_fallback(uint32_t data)
+{
+    unsigned int b = 0;
+    unsigned int bit = 0;
+    // Work from LSB to MSB
+    for (int i = 0; i < 32; i++) {
+        bit = (data >> i) & 1;
+        // If the bit is 0, update the "leading bits are zero" counter "b".
+        b += (1 - bit);
+        /* If the bit is 0, (bit - 1) is 0xffff... therefore b is retained.
+         * If the bit is 1, (bit - 1) is 0 therefore b is set to 0.
+         */
+        b &= (bit - 1);
+    }
+    return b;
+}
+
+CC_INLINE CC_CONST unsigned cc_clz64_fallback(uint64_t data)
+{
+    unsigned int b = 0;
+    unsigned int bit = 0;
+    // Work from LSB to MSB
+    for (int i = 0; i < 64; i++) {
+        bit = (data >> i) & 1;
+        // If the bit is 0, update the "leading bits are zero" counter.
+        b += (1 - bit);
+        /* If the bit is 0, (bit - 1) is 0xffff... therefore b is retained.
+         * If the bit is 1, (bit - 1) is 0 therefore b is set to 0.
+         */
+        b &= (bit - 1);
+    }
+    return b;
+}
+
+/*!
+  @function cc_clz32
+  @abstract Count leading zeros of a nonzero 32-bit value
+
+  @param data A nonzero 32-bit value
+
+  @result Count of leading zeros of @p data
+
+  @discussion @p data is assumed to be nonzero.
+*/
+CC_INLINE CC_CONST unsigned cc_clz32(uint32_t data) {
+#if defined(_WIN32)
+    return clz32_win(data);
+#elif defined(__x86_64__) || defined(__i386__) || defined(__arm64__) || defined(__arm__) || defined(__GNUC__)
+    cc_static_assert(sizeof(unsigned) == 4, "clz relies on an unsigned int being 4 bytes");
+    return (unsigned)__builtin_clz(data);
+#else
+    return cc_clz32_fallback(data);
+#endif
+}
+
+/*!
+  @function cc_clz64
+  @abstract Count leading zeros of a nonzero 64-bit value
+
+  @param data A nonzero 64-bit value
+
+  @result Count of leading zeros of @p data
+
+  @discussion @p data is assumed to be nonzero.
+*/
+CC_INLINE CC_CONST unsigned cc_clz64(uint64_t data) {
+#if defined(_WIN32)
+    return clz64_win(data);
+#elif defined(__x86_64__) || defined(__i386__) || defined(__arm64__) || defined(__arm__) || defined(__GNUC__)
+    return (unsigned)__builtin_clzll(data);
+#else
+    return cc_clz64_fallback(data);
+#endif
+}
+
 /* HEAVISIDE_STEP (shifted by one)
-   function f(x): x->0, when x=0 
+   function f(x): x->0, when x=0
                   x->1, when x>0
-   Can also be seen as a bitwise operation: 
+   Can also be seen as a bitwise operation:
       f(x): x -> y
         y[0]=(OR x[i]) for all i (all bits)
         y[i]=0 for all i>0
-   Run in constant time (log2(<bitsize of x>))  
+   Run in constant time (log2(<bitsize of x>))
    Useful to run constant time checks
 */
-#define HEAVISIDE_STEP_UINT64(r,s) {uint64_t _t=s; \
-    _t=(((_t)>>32) | (_t)); \
-    _t=(0xFFFFFFFF + (_t & 0xFFFFFFFF)); \
-    r=_t >> 32;}
-
-#define HEAVISIDE_STEP_UINT32(r,s) {uint32_t _t=s; \
-    _t=(((_t)>>16) | (_t)); \
-    _t=(0xFFFF + (_t & 0xFFFF)); \
-    r=_t >> 16;}
-
-#define HEAVISIDE_STEP_UINT16(r,s) {uint32_t _t=s; \
-    _t=(0xFFFF + ((_t) & 0xFFFF)); \
-    r=_t >> 16;}
-
-#define HEAVISIDE_STEP_UINT8(r,s) {uint16_t _t=s; \
-    _t=(0xFF + ((_t) & 0xFF)); \
-    r=_t >> 8;}
-
-#define CC_HEAVISIDE_STEP(r,s) { \
-    if (sizeof(s) == 1)      {HEAVISIDE_STEP_UINT8(r,s);}  \
-    else if (sizeof(s) == 2) {HEAVISIDE_STEP_UINT16(r,s);} \
-    else if (sizeof(s) == 4) {HEAVISIDE_STEP_UINT32(r,s);} \
-    else if (sizeof(s) == 8) {HEAVISIDE_STEP_UINT64(r,s);} \
-    else {r=(((s)==0)?0:1);} \
-    }
+#define CC_HEAVISIDE_STEP(r, s) {                       \
+    const uint64_t _s = (uint64_t)s;                    \
+    const uint64_t _t = (_s & 0xffffffff) | (_s >> 32); \
+    r = (__typeof__(r))((0xffffffff + _t) >> 32);       \
+}
 
 /* Return 1 if x mod 4 =1,2,3, 0 otherwise */
 #define CC_CARRY_2BITS(x) (((x>>1) | x) & 0x1)
 #define CC_CARRY_3BITS(x) (((x>>2) | (x>>1) | x) & 0x1)
 
-/* Set a variable to the biggest power of 2 which can be represented */ 
+/* Set a variable to the biggest power of 2 which can be represented */
 #define MAX_POWER_OF_2(x)   ((__typeof__(x))1<<(8*sizeof(x)-1))
 #define cc_ceiling(a,b)  (((a)+((b)-1))/(b))
 #define CC_BITLEN_TO_BYTELEN(x) cc_ceiling((x), 8)
-
-//cc_try_abort() is implemented to comply with FIPS 140-2. See radar 19129408
-void cc_try_abort(const char * msg , ...);
 
 /*!
  @brief     cc_muxp(s, a, b) is equivalent to z = s ? a : b, but it executes in constant time
@@ -447,29 +591,55 @@ void cc_try_abort(const char * msg , ...);
 void *cc_muxp(int s, const void *a, const void *b);
 
 /*!
- @brief     cc_mux2p
- @param a	input pointer
- @param b	input pointer
- @param r_true	output pointer: if s is integer 1 r_true=a  is returned, otherwise r_true=b
- @param r_false	output pointer: if s is integer 1 r_false=b is returned, otherwise r_false=a
- @param s	The selection parameter s must be 0 or 1.
- @discussion Executes in constant time
+ @brief     CC_MUXU(r, s, a, b) is equivalent to r = s ? a : b, but executes in constant time
+ @param a   Input a
+ @param b   Input b
+ @param s   Selection parameter s. Must be 0 or 1.
+ @param r   Output, set to a if s=1, or b if s=0.
  */
-void cc_mux2p(int s, void **r_true, void **r_false, const void *a, const void *b);
+#define CC_MUXU(r, s, a, b)                                      \
+{                                                                \
+    __typeof__(r) _cond = ((__typeof__(r))(s)-(__typeof__(r))1); \
+    r = (~_cond&(a))|(_cond&(b));                                \
+}
+
+#define CC_PROVIDES_ABORT (!(CC_USE_SEPROM || CC_USE_S3 || CC_BASEBAND || CC_EFI || CC_IBOOT || CC_RTKITROM))
 
 /*!
- @brief     CC_MUXU(s, a, b) is equivalent to z = s ? a : b, but it executes in constant time
- @param a	input unsigned type
- @param b	input unsigned type
- @param s	The selection parameter s must be 0 or 1. if s is integer 1 a is returned. If s is integer 0, b is returned. Otherwise, the output is undefined.
- @param r	output
- @return    r = a, if s is 1 and b if s is 0
+ @function cc_abort
+ @abstract Abort execution unconditionally
  */
-#define CC_MUXU(r, s, a, b)   \
-{                       \
-    __typeof__(r) _cond = ((__typeof__(r))(s)-(__typeof__(r))1); \
-    r = (~_cond&(a))|(_cond&(b)); \
+CC_NORETURN
+void cc_abort(const char *msg);
+
+/*!
+  @function cc_try_abort
+  @abstract Abort execution iff the platform provides a function like @p abort() or @p panic()
+
+  @discussion If the platform does not provide a means to abort execution, this function does nothing; therefore, callers should return an error code after calling this function.
+*/
+#if CC_PROVIDES_ABORT
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wmissing-noreturn"
+
+CC_INLINE
+void cc_try_abort(const char *msg)
+{
+    cc_abort(msg);
 }
+
+#pragma clang diagnostic pop
+
+#else
+
+CC_INLINE
+void cc_try_abort(CC_UNUSED const char *msg)
+{
+
+}
+
+#endif
 
 /*
   Unfortunately, since we export this symbol, this declaration needs

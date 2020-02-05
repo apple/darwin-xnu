@@ -130,16 +130,15 @@ typedef natural_t       ipc_kobject_type_t;
 #define IKOT_VOUCHER_ATTR_CONTROL       38
 #define IKOT_WORK_INTERVAL              39
 #define IKOT_UX_HANDLER                 40
+#define IKOT_UEXT_OBJECT                41
+#define IKOT_ARCADE_REG                 42
 
 /*
  * Add new entries here and adjust IKOT_UNKNOWN.
  * Please keep ipc/ipc_object.c:ikot_print_array up to date.
  */
-#define IKOT_UNKNOWN                    41      /* magic catchall       */
+#define IKOT_UNKNOWN                    43      /* magic catchall       */
 #define IKOT_MAX_TYPE   (IKOT_UNKNOWN+1)        /* # of IKOT_ types	*/
-
-
-#define is_ipc_kobject(ikot)    ((ikot) != IKOT_NONE)
 
 #ifdef MACH_KERNEL_PRIVATE
 
@@ -149,26 +148,55 @@ typedef natural_t       ipc_kobject_type_t;
  */
 
 /* Dispatch a kernel server function */
-extern ipc_kmsg_t       ipc_kobject_server(
-	ipc_kmsg_t           request,
-	mach_msg_option_t    option);
+extern ipc_kmsg_t ipc_kobject_server(
+	ipc_kmsg_t                  request,
+	mach_msg_option_t           option);
 
 /* Make a port represent a kernel object of the given type */
-extern void             ipc_kobject_set(
-	ipc_port_t                      port,
-	ipc_kobject_t           kobject,
-	ipc_kobject_type_t      type);
+extern void ipc_kobject_set(
+	ipc_port_t                  port,
+	ipc_kobject_t               kobject,
+	ipc_kobject_type_t          type);
 
-extern void             ipc_kobject_set_atomically(
-	ipc_port_t                      port,
-	ipc_kobject_t           kobject,
-	ipc_kobject_type_t      type);
+extern void ipc_kobject_set_atomically(
+	ipc_port_t                  port,
+	ipc_kobject_t               kobject,
+	ipc_kobject_type_t          type);
+
+__options_decl(ipc_kobject_alloc_options_t, uint32_t, {
+	/* Just make the naked port */
+	IPC_KOBJECT_ALLOC_NONE      = 0x00000000,
+	/* Make a send right */
+	IPC_KOBJECT_ALLOC_MAKE_SEND = 0x00000001,
+	/* Register for no-more-senders */
+	IPC_KOBJECT_ALLOC_NSREQUEST = 0x00000002,
+	/* Make it no grant port */
+	IPC_KOBJECT_ALLOC_NO_GRANT  = 0x00000004,
+	/* Make all the send rights immovable */
+	IPC_KOBJECT_ALLOC_IMMOVABLE_SEND = 0x00000008,
+});
+
+/* Allocates a kobject port, never fails */
+extern ipc_port_t ipc_kobject_alloc_port(
+	ipc_kobject_t               kobject,
+	ipc_kobject_type_t          type,
+	ipc_kobject_alloc_options_t options);
+
+/* Makes a send right, lazily allocating a kobject port, arming for no-senders, never fails */
+extern boolean_t ipc_kobject_make_send_lazy_alloc_port(
+	ipc_port_t                 *port_store,
+	ipc_kobject_t               kobject,
+	ipc_kobject_type_t          type) __result_use_check;
+
 
 /* Release any kernel object resources associated with a port */
-extern void             ipc_kobject_destroy(
-	ipc_port_t                      port);
+extern void ipc_kobject_destroy(
+	ipc_port_t                  port);
 
 #define null_conversion(port)   (port)
+
+extern kern_return_t
+uext_server(ipc_kmsg_t request, ipc_kmsg_t * reply);
 
 #endif /* MACH_KERNEL_PRIVATE */
 

@@ -180,7 +180,7 @@ IOReturn IOPolledFileOpen(const char * filename,
     uint64_t setFileSize, uint64_t fsFreeSize,
     void * write_file_addr, size_t write_file_len,
     IOPolledFileIOVars ** fileVars,
-    OSData ** imagePath,
+    LIBKERN_RETURNS_RETAINED OSData ** imagePath,
     uint8_t * volumeCryptKey, size_t * keySize);
 
 IOReturn IOPolledFileClose(IOPolledFileIOVars ** pVars,

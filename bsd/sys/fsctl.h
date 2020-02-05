@@ -159,7 +159,6 @@ typedef struct namespace_handler_data {
 
 
 extern int resolve_nspace_item_ext(struct vnode *vp, uint64_t op, void *arg);
-extern int get_nspace_item_status(struct vnode *vp, int32_t *status);
 
 #else
 
@@ -216,8 +215,6 @@ int nspace_snapshot_event(vnode_t vp, time_t ctime, uint64_t op_type, void *arg)
 
 #define NAMESPACE_HANDLER_EVENT_TYPE_MASK (NAMESPACE_HANDLER_NSPACE_EVENT | NAMESPACE_HANDLER_SNAPSHOT_EVENT | NAMESPACE_HANDLER_TRACK_EVENT)
 
-#define DATALESS_CMPFS_TYPE     0x80000001
-
 
 typedef int32_t nspace_handler_info[2];
 typedef char fstypename_t[MFSTYPENAMELEN];
@@ -260,6 +257,27 @@ typedef struct disk_conditioner_info {
 	uint32_t segwritecnt;
 } disk_conditioner_info;
 
+/*
+ * BSD flags manipulation arguments.
+ *
+ * This provides a safe way to update the BSD flags field of an inode,
+ * which has some user components as well as some system components.
+ * What it provides is a compare-and-swap operation, whereby the caller
+ * fetches what the expected flags are, computes the new set, and then
+ * provides the old along with the new.  If the old that's provided matches
+ * what's actually in the inode, the new value is set.  The actual inode
+ * value is returned to the caller, and expected == actual is how the
+ * caller can determine that the operation succeeded.
+ *
+ * Some BSD flags (e.g. UF_COMPRESSED) can only be manipulated via this
+ * safe mechanism.
+ */
+struct fsioc_cas_bsdflags {
+	uint32_t expected_flags;        /* [IN] expected flags */
+	uint32_t new_flags;             /* [IN] new value to set */
+	uint32_t actual_flags;          /* [OUT] the actual flags in inode */
+};
+
 #define FSCTL_SYNC_FULLSYNC     (1<<0)  /* Flush the data fully to disk, if supported by the filesystem */
 #define FSCTL_SYNC_WAIT         (1<<1)  /* Wait for the sync to complete */
 
@@ -273,35 +291,16 @@ typedef struct disk_conditioner_info {
 /* Unsupported - previously FSIOC_WAIT_FOR_SYNC */
 #define FSIOC_UNSUPPORTED                         _IOR('A', 3, int32_t)
 
-#define FSIOC_NAMESPACE_HANDLER_GET               _IOW('A', 4, struct namespace_handler_info)
-#define FSCTL_NAMESPACE_HANDLER_GET               IOCBASECMD(FSIOC_NAMESPACE_HANDLER_GET)
-
-#define FSIOC_NAMESPACE_HANDLER_UPDATE            _IOW('A', 5, nspace_handler_info)
-#define FSCTL_NAMESPACE_HANDLER_UPDATE            IOCBASECMD(FSIOC_NAMESPACE_HANDLER_UPDATE)
-
-#define FSIOC_NAMESPACE_HANDLER_UNBLOCK           _IOW('A', 6, nspace_handler_info)
-#define FSCTL_NAMESPACE_HANDLER_UNBLOCK           IOCBASECMD(FSIOC_NAMESPACE_HANDLER_UNBLOCK)
-
-#define FSIOC_NAMESPACE_HANDLER_CANCEL            _IOW('A', 7, nspace_handler_info)
-#define FSCTL_NAMESPACE_HANDLER_CANCEL            IOCBASECMD(FSIOC_NAMESPACE_HANDLER_CANCEL)
-
-#define FSIOC_NAMESPACE_HANDLER_SET_SNAPSHOT_TIME _IOW('A', 8, int32_t)
-#define FSCTL_NAMESPACE_HANDLER_SET_SNAPSHOT_TIME IOCBASECMD(FSIOC_NAMESPACE_HANDLER_SET_SNAPSHOT_TIME)
-
-#define FSIOC_OLD_SNAPSHOT_HANDLER_GET            _IOW('A', 9, struct namespace_handler_info)
-#define FSCTL_OLD_SNAPSHOT_HANDLER_GET            IOCBASECMD(FSIOC_OLD_SNAPSHOT_HANDLER_GET)
+/* 4 - 9 was used for NAMESPACE handler operation to support dataless file faults
+ * no and no longer user */
 
 #define FSIOC_SET_FSTYPENAME_OVERRIDE             _IOW('A', 10, fstypename_t)
 #define FSCTL_SET_FSTYPENAME_OVERRIDE             IOCBASECMD(FSIOC_SET_FSTYPENAME_OVERRIDE)
 
-#define FSIOC_NAMESPACE_ALLOW_DMG_SNAPSHOT_EVENTS _IOW('A', 11, int32_t)
-#define FSCTL_NAMESPACE_ALLOW_DMG_SNAPSHOT_EVENTS IOCBASECMD(FSIOC_NAMESPACE_ALLOW_DMG_SNAPSHOT_EVENTS)
-
 /* 12 was used for TRACKED_HANDLER_GET which has now been removed
  *  as it is no longer used. */
 
-#define FSIOC_SNAPSHOT_HANDLER_GET_EXT            _IOW('A', 13, struct namespace_handler_info_ext)
-#define FSCTL_SNAPSHOT_HANDLER_GET_EXT            IOCBASECMD(FSIOC_SNAPSHOT_HANDLER_GET_EXT)
+/* 13 was used for FSIOC_SNAPSHOT_HANDLER_GET_EXT and now been removed */
 
 /* 14 was used for NAMESPACE_HANDLER_GETDATA which has now been
  *  removed as it is no longer used. */
@@ -320,6 +319,9 @@ typedef struct disk_conditioner_info {
 #define DISK_CONDITIONER_FSCTL_GET                IOCBASECMD(DISK_CONDITIONER_IOC_GET)
 #define DISK_CONDITIONER_IOC_SET                  _IOW('A', 19, disk_conditioner_info)
 #define DISK_CONDITIONER_FSCTL_SET                IOCBASECMD(DISK_CONDITIONER_IOC_SET)
+
+/* Set the value of a file's BSD flags in a safe way. */
+#define FSIOC_CAS_BSDFLAGS      _IOWR('A', 20, struct fsioc_cas_bsdflags)
 
 /* Check if a file is only open once (pass zero for the extra arg) */
 #define FSIOC_FD_ONLY_OPEN_ONCE _IOWR('A', 21, uint32_t)
@@ -345,6 +347,14 @@ typedef struct disk_conditioner_info {
 /* Clear the "frozen" status of file's extents */
 #define FSIOC_THAW_EXTENTS                              _IO('h', 21)
 #define FSCTL_THAW_EXTENTS                              IOCBASECMD(FSIOC_THAW_EXTENTS)
+
+/* this FSCTL selector is duplicated in XNU with the intent of making the VFS/generic one the only one eventually */
+#define FIRMLINK_STRUCT_LEN 1032
+typedef struct generic_firmlink {
+	uint8_t array[FIRMLINK_STRUCT_LEN];
+} generic_firmlink_t;
+
+#define FSIOC_FIRMLINK_CTL _IOWR ('J', 60, generic_firmlink_t)
 
 #ifndef KERNEL
 

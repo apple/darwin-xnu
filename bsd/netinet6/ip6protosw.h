@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -194,6 +194,12 @@ struct ip6protosw {
 	 */
 	TAILQ_HEAD(, socket_filter) pr_filter_head;
 	struct protosw_old *pr_old;
+
+	void    (*pr_update_last_owner) /* update last socket owner) */
+	(struct socket *so, struct proc *p, struct proc *ep);
+
+	void    (*pr_copy_last_owner) /* copy last socket from listener */
+	(struct socket *so, struct socket *head);
 };
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* _NETINET6_IP6PROTOSW_H_ */

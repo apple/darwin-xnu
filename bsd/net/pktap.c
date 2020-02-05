@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -252,11 +252,9 @@ pktap_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	pktap->pktp_filters[1].filter_param_if_type = IFT_IEEE1394;
 #endif /* CONFIG_EMBEDDED */
 
-#if (DEVELOPMENT || DEBUG)
 	pktap->pktp_filters[2].filter_op = PKTAP_FILTER_OP_PASS;
 	pktap->pktp_filters[2].filter_param = PKTAP_FILTER_PARAM_IF_TYPE;
 	pktap->pktp_filters[2].filter_param_if_type = IFT_OTHER;
-#endif /* DEVELOPMENT || DEBUG */
 
 	/*
 	 * We do not use a set_bpf_tap() function as we rather rely on the more
@@ -786,6 +784,8 @@ pktap_set_procinfo(struct pktap_header *hdr, struct so_procinfo *soprocinfo)
 	if (hdr->pth_comm[0] == 0) {
 		proc_name(soprocinfo->spi_pid, hdr->pth_comm, MAXCOMLEN);
 	}
+	strlcpy(&hdr->pth_comm[0], &soprocinfo->spi_proc_name[0], sizeof(hdr->pth_comm));
+
 	if (soprocinfo->spi_pid != 0) {
 		uuid_copy(hdr->pth_uuid, soprocinfo->spi_uuid);
 	}
@@ -793,9 +793,7 @@ pktap_set_procinfo(struct pktap_header *hdr, struct so_procinfo *soprocinfo)
 	if (soprocinfo->spi_delegated != 0) {
 		hdr->pth_flags |= PTH_FLAG_PROC_DELEGATED;
 		hdr->pth_epid = soprocinfo->spi_epid;
-		if (hdr->pth_ecomm[0] == 0) {
-			proc_name(soprocinfo->spi_epid, hdr->pth_ecomm, MAXCOMLEN);
-		}
+		strlcpy(&hdr->pth_ecomm[0], &soprocinfo->spi_e_proc_name[0], sizeof(hdr->pth_ecomm));
 		uuid_copy(hdr->pth_euuid, soprocinfo->spi_euuid);
 	}
 }
@@ -837,8 +835,7 @@ pktap_v2_set_procinfo(struct pktap_v2_hdr *pktap_v2_hdr,
 			char *ptr = ((char *)pktap_v2_hdr) +
 			    pktap_v2_hdr->pth_comm_offset;
 
-			proc_name(soprocinfo->spi_pid,
-			    ptr, PKTAP_MAX_COMM_SIZE);
+			strlcpy(ptr, &soprocinfo->spi_proc_name[0], PKTAP_MAX_COMM_SIZE);
 		}
 		if (pktap_v2_hdr->pth_uuid_offset != 0) {
 			uuid_t *ptr = (uuid_t *) (((char *)pktap_v2_hdr) +
@@ -864,8 +861,7 @@ pktap_v2_set_procinfo(struct pktap_v2_hdr *pktap_v2_hdr,
 			char *ptr = ((char *)pktap_v2_hdr) +
 			    pktap_v2_hdr->pth_e_comm_offset;
 
-			proc_name(soprocinfo->spi_epid,
-			    ptr, PKTAP_MAX_COMM_SIZE);
+			strlcpy(ptr, &soprocinfo->spi_e_proc_name[0], PKTAP_MAX_COMM_SIZE);
 		}
 		if (pktap_v2_hdr->pth_e_uuid_offset != 0) {
 			uuid_t *ptr = (uuid_t *) (((char *)pktap_v2_hdr) +
@@ -1213,8 +1209,8 @@ pktap_bpf_tap(struct ifnet *ifp, protocol_family_t proto, struct mbuf *m,
 				hdr->pth_dlt = DLT_APPLE_IP_OVER_IEEE1394;
 				break;
 			case IFT_OTHER:
-				if (ifp->if_subfamily == IFNET_SUBFAMILY_IPSEC ||
-				    ifp->if_subfamily == IFNET_SUBFAMILY_UTUN) {
+				if (ifp->if_family == IFNET_FAMILY_IPSEC ||
+				    ifp->if_family == IFNET_FAMILY_UTUN) {
 					/*
 					 * For utun:
 					 * - incoming packets do not have the prefix set to four

@@ -138,7 +138,7 @@ static boolean_t
 sched_grrr_processor_enqueue(
 	processor_t                    processor,
 	thread_t                       thread,
-	integer_t                      options);
+	sched_options_t                options);
 
 static void
 sched_grrr_processor_queue_shutdown(
@@ -219,7 +219,6 @@ const struct sched_dispatch_table sched_grrr_dispatch = {
 	.processor_runq_stats_count_sum                 = sched_grrr_processor_runq_stats_count_sum,
 	.processor_bound_count                          = sched_grrr_processor_bound_count,
 	.thread_update_scan                             = sched_grrr_thread_update_scan,
-	.direct_dispatch_to_idle_processors             = TRUE,
 	.multiple_psets_enabled                         = TRUE,
 	.sched_groups_enabled                           = FALSE,
 	.avoid_processor_enabled                        = FALSE,
@@ -236,6 +235,10 @@ const struct sched_dispatch_table sched_grrr_dispatch = {
 	.check_spill                                    = sched_check_spill,
 	.ipi_policy                                     = sched_ipi_policy,
 	.thread_should_yield                            = sched_thread_should_yield,
+	.run_count_incr                                 = sched_run_incr,
+	.run_count_decr                                 = sched_run_decr,
+	.update_thread_bucket                           = sched_update_thread_bucket,
+	.pset_made_schedulable                          = sched_pset_made_schedulable,
 };
 
 extern int      max_unsafe_quanta;
@@ -348,7 +351,7 @@ static boolean_t
 sched_grrr_processor_enqueue(
 	processor_t                    processor,
 	thread_t                       thread,
-	integer_t                      options __unused)
+	sched_options_t                options __unused)
 {
 	grrr_run_queue_t                rq = &processor->grrr_runq;
 	boolean_t                               result;

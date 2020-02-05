@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -31,8 +31,12 @@
 #define _OS_OSCOLLECTIONITERATOR_H
 
 #include <libkern/c++/OSIterator.h>
+#include <libkern/c++/OSCollection.h>
+#include <libkern/c++/OSPtr.h>
 
-class OSCollection;
+class OSCollectionIterator;
+
+typedef OSPtr<OSCollectionIterator> OSCollectionIteratorPtr;
 
 /*!
  * @header
@@ -90,11 +94,11 @@ class OSCollection;
  */
 class OSCollectionIterator : public OSIterator
 {
-	OSDeclareDefaultStructors(OSCollectionIterator)
+	OSDeclareDefaultStructors(OSCollectionIterator);
 
 protected:
 // xx-review: Do we want to document these?
-	const OSCollection * collection;
+	OSPtr<const OSCollection> collection;
 	void               * collIterator;
 	unsigned int         initialUpdateStamp;
 	bool                 valid;
@@ -112,7 +116,7 @@ public:
  * @result
  * A new instance of OSCollectionIterator, or <code>NULL</code> on failure.
  */
-	static OSCollectionIterator * withCollection(const OSCollection * inColl);
+	static OSCollectionIteratorPtr withCollection(const OSCollection * inColl);
 
 
 /*!

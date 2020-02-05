@@ -40,24 +40,53 @@
 extern int _bcopyin(const char *src, char *dst, vm_size_t len);
 extern int _bcopyinstr(const char *src, char *dst, vm_size_t max, vm_size_t *actual);
 extern int _bcopyout(const char *src, char *dst, vm_size_t len);
-extern int _copyin_word(const char *src, uint64_t *dst, vm_size_t len);
+extern int _copyin_atomic32(const char *src, uint32_t *dst);
+extern int _copyin_atomic32_wait_if_equals(const char *src, uint32_t dst);
+extern int _copyin_atomic64(const char *src, uint64_t *dst);
+extern int _copyout_atomic32(uint32_t u32, const char *dst);
+extern int _copyout_atomic64(uint64_t u64, const char *dst);
+
+extern int copyoutstr_prevalidate(const void *kaddr, user_addr_t uaddr, size_t len);
 
 extern pmap_t kernel_pmap;
 
 /* On by default, optionally disabled by boot-arg */
 extern boolean_t copyio_zalloc_check;
 
-typedef enum copyio_type {
-	COPYIO_IN,
-	COPYIO_IN_WORD,
-	COPYIO_INSTR,
-	COPYIO_OUT,
-} copyio_type_t;
+/*!
+ * @typedef copyio_flags_t
+ *
+ * @const COPYIO_IN
+ * The copy is user -> kernel.
+ * One of COPYIO_IN or COPYIO_OUT should always be specified.
+ *
+ * @const COPYIO_OUT
+ * The copy is kernel -> user
+ * One of COPYIO_IN or COPYIO_OUT should always be specified.
+ *
+ * @const COPYIO_ALLOW_KERNEL_TO_KERNEL
+ * The "user_address" is allowed to be in the VA space of the kernel.
+ *
+ * @const COPYIO_VALIDATE_USER_ONLY
+ * There isn't really a kernel address used, and only the user address
+ * needs to be validated.
+ *
+ * @const COPYIO_ATOMIC
+ * The copyio operation is atomic, ensure that it is properly aligned.
+ */
+__options_decl(copyio_flags_t, uint32_t, {
+	COPYIO_IN                       = 0x0001,
+	COPYIO_OUT                      = 0x0002,
+	COPYIO_ALLOW_KERNEL_TO_KERNEL   = 0x0004,
+	COPYIO_VALIDATE_USER_ONLY       = 0x0008,
+	COPYIO_ATOMIC                   = 0x0010,
+});
 
 static inline void
 user_access_enable(void)
 {
 #if __ARM_PAN_AVAILABLE__
+	assert(__builtin_arm_rsr("pan") != 0);
 	__builtin_arm_wsr("pan", 0);
 #endif  /* __ARM_PAN_AVAILABLE__ */
 }
@@ -70,78 +99,94 @@ user_access_disable(void)
 #endif  /* __ARM_PAN_AVAILABLE__ */
 }
 
-static int
-copyio(copyio_type_t copytype, const char *src, char *dst,
-    vm_size_t nbytes, vm_size_t *lencopied)
+/*
+ * Copy sizes bigger than this value will cause a kernel panic.
+ *
+ * Yes, this is an arbitrary fixed limit, but it's almost certainly
+ * a programming error to be copying more than this amount between
+ * user and wired kernel memory in a single invocation on this
+ * platform.
+ */
+const int copysize_limit_panic = (64 * 1024 * 1024);
+
+static inline bool
+is_kernel_to_kernel_copy()
 {
-	int result = 0;
-	vm_size_t bytes_copied = 0;
-	vm_size_t kernel_buf_size = 0;
-	void * kernel_addr = NULL;
+	return current_thread()->map->pmap == kernel_pmap;
+}
 
-	/* Reject TBI addresses */
-	if (copytype == COPYIO_OUT) {
-		if ((uintptr_t)dst & TBI_MASK) {
-			return EINVAL;
-		}
-	} else {
-		if ((uintptr_t)src & TBI_MASK) {
+/*
+ * Validate the arguments to copy{in,out} on this platform.
+ *
+ * Returns EXDEV when the current thread pmap is the kernel's
+ * which is non fatal for certain routines.
+ */
+static int
+copy_validate(const user_addr_t user_addr, uintptr_t kernel_addr,
+    vm_size_t nbytes, copyio_flags_t flags)
+{
+	thread_t self = current_thread();
+
+	user_addr_t user_addr_last;
+	uintptr_t kernel_addr_last;
+
+	if (__improbable(nbytes > copysize_limit_panic)) {
+		panic("%s(%p, %p, %lu) - transfer too large", __func__,
+		    (void *)user_addr, (void *)kernel_addr, nbytes);
+	}
+
+	if (__improbable((user_addr < vm_map_min(self->map)) ||
+	    os_add_overflow(user_addr, nbytes, &user_addr_last) ||
+	    (user_addr_last > vm_map_max(self->map)))) {
+		return EFAULT;
+	}
+
+	if (flags & COPYIO_ATOMIC) {
+		if (__improbable(user_addr & (nbytes - 1))) {
 			return EINVAL;
 		}
 	}
 
-	if (__probable(copyio_zalloc_check)) {
-		if (copytype == COPYIO_IN || copytype == COPYIO_INSTR || copytype == COPYIO_IN_WORD) {
-			kernel_addr = (void*)dst;
-		} else if (copytype == COPYIO_OUT) {
-			kernel_addr = (void*)(uintptr_t)src;
-		}
-		if (kernel_addr) {
-			kernel_buf_size = zone_element_size(kernel_addr, NULL);
-		}
-		if (__improbable(kernel_buf_size && kernel_buf_size < nbytes)) {
-			panic("copyio: kernel buffer %p has size %lu < nbytes %lu", kernel_addr, kernel_buf_size, nbytes);
+	if ((flags & COPYIO_VALIDATE_USER_ONLY) == 0) {
+		if (__improbable((kernel_addr < VM_MIN_KERNEL_ADDRESS) ||
+		    os_add_overflow(kernel_addr, nbytes, &kernel_addr_last) ||
+		    (kernel_addr_last > VM_MAX_KERNEL_ADDRESS))) {
+			panic("%s(%p, %p, %lu) - kaddr not in kernel", __func__,
+			    (void *)user_addr, (void *)kernel_addr, nbytes);
 		}
 	}
+
+	if (is_kernel_to_kernel_copy()) {
+		if (__improbable((flags & COPYIO_ALLOW_KERNEL_TO_KERNEL) == 0)) {
+			return EFAULT;
+		}
+		return EXDEV;
+	}
+
+	if (__improbable(user_addr & TBI_MASK)) {
+		return EINVAL;
+	}
+
+	if ((flags & COPYIO_VALIDATE_USER_ONLY) == 0) {
+		if (__probable(copyio_zalloc_check)) {
+			vm_size_t kernel_buf_size = zone_element_size((void *)kernel_addr, NULL);
+			if (__improbable(kernel_buf_size && kernel_buf_size < nbytes)) {
+				panic("copyio_preflight: kernel buffer 0x%lx has size %lu < nbytes %lu",
+				    kernel_addr, kernel_buf_size, nbytes);
+			}
+		}
 
 #if KASAN
-	/* For user copies, asan-check the kernel-side buffer */
-	if (copytype == COPYIO_IN || copytype == COPYIO_INSTR || copytype == COPYIO_IN_WORD) {
-		__asan_storeN((uintptr_t)dst, nbytes);
-	} else if (copytype == COPYIO_OUT) {
-		__asan_loadN((uintptr_t)src, nbytes);
-	}
-#endif
-
-	user_access_enable();
-
-	/* Select copy routines based on direction:
-	 *   COPYIO_IN - Use unprivileged loads to read from user address
-	 *   COPYIO_OUT - Use unprivleged stores to write to user address
-	 */
-
-	switch (copytype) {
-	case COPYIO_IN:
-		result = _bcopyin(src, dst, nbytes);
-		break;
-	case COPYIO_INSTR:
-		result = _bcopyinstr(src, dst, nbytes, &bytes_copied);
-		if (result != EFAULT) {
-			*lencopied = bytes_copied;
+		/* For user copies, asan-check the kernel-side buffer */
+		if (flags & COPYIO_IN) {
+			__asan_storeN(kernel_addr, nbytes);
+		} else {
+			__asan_loadN(kernel_addr, nbytes);
+			kasan_check_uninitialized((vm_address_t)kernel_addr, nbytes);
 		}
-		break;
-	case COPYIO_IN_WORD:
-		result = _copyin_word(src, (uint64_t *)(uintptr_t)dst, nbytes);
-		break;
-	case COPYIO_OUT:
-		result = _bcopyout(src, dst, nbytes);
-		break;
-	default:
-		result = EINVAL;
+#endif
 	}
-
-	user_access_disable();
-	return result;
+	return 0;
 }
 
 int
@@ -165,67 +210,123 @@ copyin(const user_addr_t user_addr, void *kernel_addr, vm_size_t nbytes)
 {
 	int result;
 
-	if (nbytes == 0) {
+	if (__improbable(nbytes == 0)) {
 		return 0;
 	}
 
-	result = copyin_validate(user_addr, (uintptr_t)kernel_addr, nbytes);
-	if (result) {
+	result = copy_validate(user_addr, (uintptr_t)kernel_addr, nbytes,
+	    COPYIO_IN | COPYIO_ALLOW_KERNEL_TO_KERNEL);
+	if (result == EXDEV) {
+		return copyin_kern(user_addr, kernel_addr, nbytes);
+	}
+	if (__improbable(result)) {
 		return result;
 	}
 
-	if (current_thread()->map->pmap == kernel_pmap) {
-		return copyin_kern(user_addr, kernel_addr, nbytes);
-	} else {
-		return copyio(COPYIO_IN, (const char *)(uintptr_t)user_addr, kernel_addr, nbytes, NULL);
-	}
+	user_access_enable();
+	result = _bcopyin((const char *)user_addr, kernel_addr, nbytes);
+	user_access_disable();
+	return result;
 }
 
 /*
- * copyin_word
- * Read an aligned value from userspace as a single memory transaction.
- * This function supports userspace synchronization features
+ * copy{in,out}_atomic{32,64}
+ * Read or store an aligned value from userspace as a single memory transaction.
+ * These functions support userspace synchronization features
  */
 int
-copyin_word(const user_addr_t user_addr, uint64_t *kernel_addr, vm_size_t nbytes)
+copyin_atomic32(const user_addr_t user_addr, uint32_t *kernel_addr)
 {
-	int                     result;
-
-	/* Verify sizes */
-	if ((nbytes != 4) && (nbytes != 8)) {
-		return EINVAL;
-	}
-
-	/* Test alignment */
-	if (user_addr & (nbytes - 1)) {
-		return EINVAL;
-	}
-
-	result = copyin_validate(user_addr, (uintptr_t)kernel_addr, nbytes);
-	if (result) {
+	int result = copy_validate(user_addr, (uintptr_t)kernel_addr, 4,
+	    COPYIO_IN | COPYIO_ATOMIC);
+	if (__improbable(result)) {
 		return result;
 	}
+	user_access_enable();
+	result = _copyin_atomic32((const char *)user_addr, kernel_addr);
+	user_access_disable();
+	return result;
+}
 
-	return copyio(COPYIO_IN_WORD, (const char *)user_addr, (char *)(uintptr_t)kernel_addr, nbytes, NULL);
+int
+copyin_atomic32_wait_if_equals(const user_addr_t user_addr, uint32_t value)
+{
+	int result = copy_validate(user_addr, 0, 4,
+	    COPYIO_OUT | COPYIO_ATOMIC | COPYIO_VALIDATE_USER_ONLY);
+	if (__improbable(result)) {
+		return result;
+	}
+	user_access_enable();
+	result = _copyin_atomic32_wait_if_equals((const char *)user_addr, value);
+	user_access_disable();
+	return result;
+}
+
+int
+copyin_atomic64(const user_addr_t user_addr, uint64_t *kernel_addr)
+{
+	int result = copy_validate(user_addr, (uintptr_t)kernel_addr, 8,
+	    COPYIO_IN | COPYIO_ATOMIC);
+	if (__improbable(result)) {
+		return result;
+	}
+	user_access_enable();
+	result = _copyin_atomic64((const char *)user_addr, kernel_addr);
+	user_access_disable();
+	return result;
+}
+
+int
+copyout_atomic32(uint32_t value, user_addr_t user_addr)
+{
+	int result = copy_validate(user_addr, 0, 4,
+	    COPYIO_OUT | COPYIO_ATOMIC | COPYIO_VALIDATE_USER_ONLY);
+	if (__improbable(result)) {
+		return result;
+	}
+	user_access_enable();
+	result = _copyout_atomic32(value, (const char *)user_addr);
+	user_access_disable();
+	return result;
+}
+
+int
+copyout_atomic64(uint64_t value, user_addr_t user_addr)
+{
+	int result = copy_validate(user_addr, 0, 8,
+	    COPYIO_OUT | COPYIO_ATOMIC | COPYIO_VALIDATE_USER_ONLY);
+	if (__improbable(result)) {
+		return result;
+	}
+	user_access_enable();
+	result = _copyout_atomic64(value, (const char *)user_addr);
+	user_access_disable();
+	return result;
 }
 
 int
 copyinstr(const user_addr_t user_addr, char *kernel_addr, vm_size_t nbytes, vm_size_t *lencopied)
 {
 	int result;
+	vm_size_t bytes_copied = 0;
 
 	*lencopied = 0;
-	if (nbytes == 0) {
+	if (__improbable(nbytes == 0)) {
 		return ENAMETOOLONG;
 	}
 
-	result = copyin_validate(user_addr, (uintptr_t)kernel_addr, nbytes);
-
-	if (result) {
+	result = copy_validate(user_addr, (uintptr_t)kernel_addr, nbytes, COPYIO_IN);
+	if (__improbable(result)) {
 		return result;
 	}
-
-	return copyio(COPYIO_INSTR, (const char *)(uintptr_t)user_addr, kernel_addr, nbytes, lencopied);
+	user_access_enable();
+	result = _bcopyinstr((const char *)user_addr, kernel_addr, nbytes,
+	    &bytes_copied);
+	user_access_disable();
+	if (result != EFAULT) {
+		*lencopied = bytes_copied;
+	}
+	return result;
 }
 
 int
@@ -237,69 +338,26 @@ copyout(const void *kernel_addr, user_addr_t user_addr, vm_size_t nbytes)
 		return 0;
 	}
 
-	result = copyout_validate((uintptr_t)kernel_addr, user_addr, nbytes);
-	if (result) {
+	result = copy_validate(user_addr, (uintptr_t)kernel_addr, nbytes,
+	    COPYIO_OUT | COPYIO_ALLOW_KERNEL_TO_KERNEL);
+	if (result == EXDEV) {
+		return copyout_kern(kernel_addr, user_addr, nbytes);
+	}
+	if (__improbable(result)) {
 		return result;
 	}
-
-	if (current_thread()->map->pmap == kernel_pmap) {
-		return copyout_kern(kernel_addr, user_addr, nbytes);
-	} else {
-		return copyio(COPYIO_OUT, kernel_addr, (char *)(uintptr_t)user_addr, nbytes, NULL);
-	}
+	user_access_enable();
+	result = _bcopyout(kernel_addr, (char *)user_addr, nbytes);
+	user_access_disable();
+	return result;
 }
 
-
-/*
- * Copy sizes bigger than this value will cause a kernel panic.
- *
- * Yes, this is an arbitrary fixed limit, but it's almost certainly
- * a programming error to be copying more than this amount between
- * user and wired kernel memory in a single invocation on this
- * platform.
- */
-const int copysize_limit_panic = (64 * 1024 * 1024);
-
-/*
- * Validate the arguments to copy{in,out} on this platform.
- */
-static int
-copy_validate(const user_addr_t user_addr,
-    uintptr_t kernel_addr, vm_size_t nbytes)
+int
+copyoutstr_prevalidate(const void *__unused kaddr, user_addr_t __unused uaddr, size_t __unused len)
 {
-	uintptr_t kernel_addr_last = kernel_addr + nbytes;
-
-	if (__improbable(kernel_addr < VM_MIN_KERNEL_ADDRESS ||
-	    kernel_addr > VM_MAX_KERNEL_ADDRESS ||
-	    kernel_addr_last < kernel_addr ||
-	    kernel_addr_last > VM_MAX_KERNEL_ADDRESS)) {
-		panic("%s(%p, %p, %lu) - kaddr not in kernel", __func__,
-		    (void *)user_addr, (void *)kernel_addr, nbytes);
-	}
-
-	user_addr_t user_addr_last = user_addr + nbytes;
-
-	if (__improbable((user_addr_last < user_addr) || ((user_addr + nbytes) > vm_map_max(current_thread()->map)) ||
-	    (user_addr < vm_map_min(current_thread()->map)))) {
+	if (__improbable(is_kernel_to_kernel_copy())) {
 		return EFAULT;
 	}
 
-	if (__improbable(nbytes > copysize_limit_panic)) {
-		panic("%s(%p, %p, %lu) - transfer too large", __func__,
-		    (void *)user_addr, (void *)kernel_addr, nbytes);
-	}
-
 	return 0;
-}
-
-int
-copyin_validate(const user_addr_t ua, uintptr_t ka, vm_size_t nbytes)
-{
-	return copy_validate(ua, ka, nbytes);
-}
-
-int
-copyout_validate(uintptr_t ka, const user_addr_t ua, vm_size_t nbytes)
-{
-	return copy_validate(ua, ka, nbytes);
 }

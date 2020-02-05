@@ -348,16 +348,21 @@ cdevsw_setkqueueok(int maj, struct cdevsw * csw, int extra_flags)
 int
 bsd_hostname(char * buf, int bufsize, int * len)
 {
+	int ret, hnlen;
 	/*
-	 * "hostname" is null-terminated, and "hostnamelen" is equivalent to strlen(hostname).
+	 * "hostname" is null-terminated
 	 */
-	if (hostnamelen < bufsize) {
+	lck_mtx_lock(&hostname_lock);
+	hnlen = strlen(hostname);
+	if (hnlen < bufsize) {
 		strlcpy(buf, hostname, bufsize);
-		*len = hostnamelen;
-		return 0;
+		*len = hnlen;
+		ret = 0;
 	} else {
-		return ENAMETOOLONG;
+		ret = ENAMETOOLONG;
 	}
+	lck_mtx_unlock(&hostname_lock);
+	return ret;
 }
 
 void

@@ -106,32 +106,17 @@ ipc_host_init(void)
 	/*
 	 *	Allocate and set up the two host ports.
 	 */
-	port = ipc_port_alloc_kernel();
-	if (port == IP_NULL) {
-		panic("ipc_host_init");
-	}
+	port = ipc_kobject_alloc_port((ipc_kobject_t) &realhost, IKOT_HOST_SECURITY,
+	    IPC_KOBJECT_ALLOC_MAKE_SEND);
+	kernel_set_special_port(&realhost, HOST_SECURITY_PORT, port);
 
-	ipc_kobject_set(port, (ipc_kobject_t) &realhost, IKOT_HOST_SECURITY);
-	kernel_set_special_port(&realhost, HOST_SECURITY_PORT,
-	    ipc_port_make_send(port));
+	port = ipc_kobject_alloc_port((ipc_kobject_t) &realhost, IKOT_HOST,
+	    IPC_KOBJECT_ALLOC_MAKE_SEND);
+	kernel_set_special_port(&realhost, HOST_PORT, port);
 
-	port = ipc_port_alloc_kernel();
-	if (port == IP_NULL) {
-		panic("ipc_host_init");
-	}
-
-	ipc_kobject_set(port, (ipc_kobject_t) &realhost, IKOT_HOST);
-	kernel_set_special_port(&realhost, HOST_PORT,
-	    ipc_port_make_send(port));
-
-	port = ipc_port_alloc_kernel();
-	if (port == IP_NULL) {
-		panic("ipc_host_init");
-	}
-
-	ipc_kobject_set(port, (ipc_kobject_t) &realhost, IKOT_HOST_PRIV);
-	kernel_set_special_port(&realhost, HOST_PRIV_PORT,
-	    ipc_port_make_send(port));
+	port = ipc_kobject_alloc_port((ipc_kobject_t) &realhost, IKOT_HOST_PRIV,
+	    IPC_KOBJECT_ALLOC_MAKE_SEND);
+	kernel_set_special_port(&realhost, HOST_PRIV_PORT, port);
 
 	/* the rest of the special ports will be set up later */
 
@@ -297,7 +282,7 @@ convert_port_to_host(
 		if (ip_kotype(port) == IKOT_HOST ||
 		    ip_kotype(port) == IKOT_HOST_PRIV) {
 			host = (host_t) port->ip_kobject;
-			assert(ip_active(port));
+			require_ip_active(port);
 		}
 	}
 	return host;
@@ -583,7 +568,7 @@ host_set_exception_ports(
 	}
 
 	if (IP_VALID(new_port)) {
-		switch (new_behavior & ~MACH_EXCEPTION_CODES) {
+		switch (new_behavior & ~MACH_EXCEPTION_MASK) {
 		case EXCEPTION_DEFAULT:
 		case EXCEPTION_STATE:
 		case EXCEPTION_STATE_IDENTITY:

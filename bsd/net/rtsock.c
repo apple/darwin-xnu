@@ -94,9 +94,9 @@ static struct domain *routedomain = NULL;
 
 MALLOC_DEFINE(M_RTABLE, "routetbl", "routing tables");
 
-static struct sockaddr route_dst = { 2, PF_ROUTE, { 0, } };
-static struct sockaddr route_src = { 2, PF_ROUTE, { 0, } };
-static struct sockaddr sa_zero   = { sizeof(sa_zero), AF_INET, { 0, } };
+static struct sockaddr route_dst = { .sa_len = 2, .sa_family = PF_ROUTE, .sa_data = { 0, } };
+static struct sockaddr route_src = { .sa_len = 2, .sa_family = PF_ROUTE, .sa_data = { 0, } };
+static struct sockaddr sa_zero   = { .sa_len = sizeof(sa_zero), .sa_family = AF_INET, .sa_data = { 0, } };
 
 struct route_cb {
 	u_int32_t       ip_count;       /* attached w/ AF_INET */
@@ -159,6 +159,9 @@ SYSCTL_NODE(_net, OID_AUTO, route, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "routing");
 
 #define ADVANCE32(x, n)                                                 \
 	(x += ROUNDUP32((n)->sa_len))
+
+#define RT_HAS_IFADDR(rt)                                               \
+	((rt)->rt_ifa != NULL && (rt)->rt_ifa->ifa_addr != NULL)
 
 /*
  * It really doesn't make any sense at all for this code to share much
@@ -383,7 +386,7 @@ route_output(struct mbuf *m, struct socket *so)
 	}
 
 	if (info.rti_info[RTAX_DST]->sa_family == AF_INET &&
-	    info.rti_info[RTAX_DST]->sa_len != sizeof(dst_in)) {
+	    info.rti_info[RTAX_DST]->sa_len != sizeof(struct sockaddr_in)) {
 		/* At minimum, we need up to sin_addr */
 		if (info.rti_info[RTAX_DST]->sa_len <
 		    offsetof(struct sockaddr_in, sin_zero)) {
@@ -396,22 +399,29 @@ route_output(struct mbuf *m, struct socket *so)
 		dst_in.sin_addr = SIN(info.rti_info[RTAX_DST])->sin_addr;
 		info.rti_info[RTAX_DST] = (struct sockaddr *)&dst_in;
 		dst_sa_family = info.rti_info[RTAX_DST]->sa_family;
+	} else if (info.rti_info[RTAX_DST]->sa_family == AF_INET6 &&
+	    info.rti_info[RTAX_DST]->sa_len < sizeof(struct sockaddr_in6)) {
+		senderr(EINVAL);
 	}
 
-	if (info.rti_info[RTAX_GATEWAY] != NULL &&
-	    info.rti_info[RTAX_GATEWAY]->sa_family == AF_INET &&
-	    info.rti_info[RTAX_GATEWAY]->sa_len != sizeof(gate_in)) {
-		/* At minimum, we need up to sin_addr */
-		if (info.rti_info[RTAX_GATEWAY]->sa_len <
-		    offsetof(struct sockaddr_in, sin_zero)) {
+	if (info.rti_info[RTAX_GATEWAY] != NULL) {
+		if (info.rti_info[RTAX_GATEWAY]->sa_family == AF_INET &&
+		    info.rti_info[RTAX_GATEWAY]->sa_len != sizeof(struct sockaddr_in)) {
+			/* At minimum, we need up to sin_addr */
+			if (info.rti_info[RTAX_GATEWAY]->sa_len <
+			    offsetof(struct sockaddr_in, sin_zero)) {
+				senderr(EINVAL);
+			}
+			bzero(&gate_in, sizeof(gate_in));
+			gate_in.sin_len = sizeof(gate_in);
+			gate_in.sin_family = AF_INET;
+			gate_in.sin_port = SIN(info.rti_info[RTAX_GATEWAY])->sin_port;
+			gate_in.sin_addr = SIN(info.rti_info[RTAX_GATEWAY])->sin_addr;
+			info.rti_info[RTAX_GATEWAY] = (struct sockaddr *)&gate_in;
+		} else if (info.rti_info[RTAX_GATEWAY]->sa_family == AF_INET6 &&
+		    info.rti_info[RTAX_GATEWAY]->sa_len < sizeof(struct sockaddr_in6)) {
 			senderr(EINVAL);
 		}
-		bzero(&gate_in, sizeof(gate_in));
-		gate_in.sin_len = sizeof(gate_in);
-		gate_in.sin_family = AF_INET;
-		gate_in.sin_port = SIN(info.rti_info[RTAX_GATEWAY])->sin_port;
-		gate_in.sin_addr = SIN(info.rti_info[RTAX_GATEWAY])->sin_addr;
-		info.rti_info[RTAX_GATEWAY] = (struct sockaddr *)&gate_in;
 	}
 
 	if (info.rti_info[RTAX_GENMASK]) {
@@ -755,7 +765,7 @@ flush:
 			return error;
 		}
 	} else {
-		struct sockproto route_proto = { PF_ROUTE, 0 };
+		struct sockproto route_proto = { .sp_family = PF_ROUTE, .sp_protocol = 0 };
 		if (rp != NULL) {
 			rp->rcb_proto.sp_family = 0; /* Avoid us */
 		}
@@ -1315,7 +1325,7 @@ rt_missmsg(int type, struct rt_addrinfo *rtinfo, int flags, int error)
 	struct rt_msghdr *rtm;
 	struct mbuf *m;
 	struct sockaddr *sa = rtinfo->rti_info[RTAX_DST];
-	struct sockproto route_proto = { PF_ROUTE, 0 };
+	struct sockproto route_proto = { .sp_family = PF_ROUTE, .sp_protocol = 0 };
 
 	if (route_cb.any_count == 0) {
 		return;
@@ -1342,7 +1352,7 @@ rt_ifmsg(struct ifnet *ifp)
 	struct if_msghdr *ifm;
 	struct mbuf *m;
 	struct rt_addrinfo info;
-	struct  sockproto route_proto = { PF_ROUTE, 0 };
+	struct  sockproto route_proto = { .sp_family = PF_ROUTE, .sp_protocol = 0 };
 
 	if (route_cb.any_count == 0) {
 		return;
@@ -1379,7 +1389,7 @@ rt_newaddrmsg(int cmd, struct ifaddr *ifa, int error, struct rtentry *rt)
 	int pass;
 	struct mbuf *m = 0;
 	struct ifnet *ifp = ifa->ifa_ifp;
-	struct sockproto route_proto = { PF_ROUTE, 0 };
+	struct sockproto route_proto = { .sp_family = PF_ROUTE, .sp_protocol = 0 };
 
 	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	RT_LOCK_ASSERT_HELD(rt);
@@ -1461,7 +1471,7 @@ rt_newmaddrmsg(int cmd, struct ifmultiaddr *ifma)
 	struct mbuf *m = 0;
 	struct ifnet *ifp = ifma->ifma_ifp;
 	struct ifma_msghdr *ifmam;
-	struct sockproto route_proto = { PF_ROUTE, 0 };
+	struct sockproto route_proto = { .sp_family = PF_ROUTE, .sp_protocol = 0 };
 
 	if (route_cb.any_count == 0) {
 		return;
@@ -1608,6 +1618,9 @@ sysctl_dumpentry(struct radix_node *rn, void *vw)
 	info.rti_info[RTAX_GATEWAY] = rt->rt_gateway;
 	info.rti_info[RTAX_NETMASK] = rt_mask(rt);
 	info.rti_info[RTAX_GENMASK] = rt->rt_genmask;
+	if (RT_HAS_IFADDR(rt)) {
+		info.rti_info[RTAX_IFA] = rt->rt_ifa->ifa_addr;
+	}
 
 	if (w->w_op != NET_RT_DUMP2) {
 		size = rt_msg2(RTM_GET, &info, NULL, w, credp);

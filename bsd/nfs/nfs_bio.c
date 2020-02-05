@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -96,6 +96,7 @@
 #include <nfs/nfsnode.h>
 #include <sys/buf_internal.h>
 #include <libkern/OSAtomic.h>
+#include <os/refcnt.h>
 
 #define NFS_BIO_DBG(...) NFS_DBG(NFS_FAC_BIO, 7, ## __VA_ARGS__)
 
@@ -212,7 +213,7 @@ nfs_buf_freeup(int timer)
 		if (!fbp) {
 			break;
 		}
-		if (fbp->nb_refs) {
+		if (os_ref_get_count(&fbp->nb_refs) > 1) {
 			break;
 		}
 		if (NBUFSTAMPVALID(fbp) &&
@@ -239,7 +240,7 @@ nfs_buf_freeup(int timer)
 		if (!fbp) {
 			break;
 		}
-		if (fbp->nb_refs) {
+		if (os_ref_get_count(&fbp->nb_refs) > 1) {
 			break;
 		}
 		if (NBUFSTAMPVALID(fbp) &&
@@ -609,7 +610,7 @@ nfs_buf_delwri_service(void)
 void
 nfs_buf_delwri_thread(__unused void *arg, __unused wait_result_t wr)
 {
-	struct timespec ts = { 30, 0 };
+	struct timespec ts = { .tv_sec = 30, .tv_nsec = 0 };
 	int error = 0;
 
 	lck_mtx_lock(nfs_buf_mutex);
@@ -907,6 +908,8 @@ loop:
 			NFSBUFCNTCHK();
 			/* init nfsbuf */
 			bzero(bp, sizeof(*bp));
+			os_ref_init(&bp->nb_refs, NULL);
+
 			bp->nb_free.tqe_next = NFSNOLIST;
 			bp->nb_validoff = bp->nb_validend = -1;
 			FSDBG(545, np, blkno, bp, 0);
@@ -1387,7 +1390,7 @@ nfs_buf_check_write_verifier(nfsnode_t np, struct nfsbuf *bp)
 void
 nfs_buf_refget(struct nfsbuf *bp)
 {
-	bp->nb_refs++;
+	os_ref_retain_locked(&bp->nb_refs);
 }
 /*
  * release a reference on a buffer
@@ -1396,7 +1399,7 @@ nfs_buf_refget(struct nfsbuf *bp)
 void
 nfs_buf_refrele(struct nfsbuf *bp)
 {
-	bp->nb_refs--;
+	(void) os_ref_release_locked(&bp->nb_refs);
 }
 
 /*
@@ -1609,7 +1612,7 @@ nfs_buf_read_finish(struct nfsbuf *bp)
 		    ((NBOFF(bp) + bp->nb_validend) > 0x100000000LL)) {
 			bp->nb_validend = 0x100000000LL - NBOFF(bp);
 		}
-		bp->nb_valid = (1 << (round_page_32(bp->nb_validend) / PAGE_SIZE)) - 1;
+		bp->nb_valid = (uint32_t)(1LLU << (round_page_32(bp->nb_validend) / PAGE_SIZE)) - 1;
 		if (bp->nb_validend & PAGE_MASK) {
 			/* zero-fill remainder of last page */
 			bzero(bp->nb_data + bp->nb_validend, PAGE_SIZE - (bp->nb_validend & PAGE_MASK));
@@ -1680,9 +1683,11 @@ nfs_buf_read_rpc(struct nfsbuf *bp, thread_t thd, kauth_cred_t cred)
 		len = (length > nmrsize) ? nmrsize : length;
 		cb.rcb_args[0] = offset;
 		cb.rcb_args[1] = len;
+#if CONFIG_NFS4
 		if (nmp->nm_vers >= NFS_VER4) {
 			cb.rcb_args[2] = nmp->nm_stategenid;
 		}
+#endif
 		req = NULL;
 		error = nmp->nm_funcs->nf_read_rpc_async(np, boff + offset, len, thd, cred, &cb, &req);
 		if (error) {
@@ -1794,6 +1799,7 @@ finish:
 		}
 		return;
 	}
+#if CONFIG_NFS4
 	if ((nmp->nm_vers >= NFS_VER4) && nfs_mount_state_error_should_restart(error) && !ISSET(bp->nb_flags, NB_ERROR)) {
 		lck_mtx_lock(&nmp->nm_lock);
 		if ((error != NFSERR_OLD_STATEID) && (error != NFSERR_GRACE) && (cb.rcb_args[2] == nmp->nm_stategenid)) {
@@ -1840,6 +1846,7 @@ finish:
 			}
 		}
 	}
+#endif
 	if (error) {
 		SET(bp->nb_flags, NB_ERROR);
 		bp->nb_error = error;
@@ -1867,14 +1874,18 @@ finish:
 		 * requested, so we need to issue another read for the rest.
 		 * (Don't bother if the buffer already hit an error.)
 		 */
+#if CONFIG_NFS4
 readagain:
+#endif
 		offset += rlen;
 		length -= rlen;
 		cb.rcb_args[0] = offset;
 		cb.rcb_args[1] = length;
+#if CONFIG_NFS4
 		if (nmp->nm_vers >= NFS_VER4) {
 			cb.rcb_args[2] = nmp->nm_stategenid;
 		}
+#endif
 		error = nmp->nm_funcs->nf_read_rpc_async(np, NBOFF(bp) + offset, length, thd, cred, &cb, &rreq);
 		if (!error) {
 			if (IS_VALID_CRED(cred)) {
@@ -2348,6 +2359,7 @@ buffer_ready:
 			error = uiomove(bp->nb_data + on, n, uio);
 		}
 
+
 		nfs_buf_release(bp, 1);
 		nfs_data_unlock(np);
 		nfs_node_lock_force(np);
@@ -2365,7 +2377,7 @@ int
 nfs_async_write_start(struct nfsmount *nmp)
 {
 	int error = 0, slpflag = NMFLAG(nmp, INTR) ? PCATCH : 0;
-	struct timespec ts = {1, 0};
+	struct timespec ts = { .tv_sec = 1, .tv_nsec = 0 };
 
 	if (nfs_max_async_writes <= 0) {
 		return 0;
@@ -2910,9 +2922,11 @@ nfs_buf_write_rpc(struct nfsbuf *bp, int iomode, thread_t thd, kauth_cred_t cred
 		len = (length > nmwsize) ? nmwsize : length;
 		cb.rcb_args[0] = offset;
 		cb.rcb_args[1] = len;
+#if CONFIG_NFS4
 		if (nmp->nm_vers >= NFS_VER4) {
 			cb.rcb_args[2] = nmp->nm_stategenid;
 		}
+#endif
 		if (async && ((error = nfs_async_write_start(nmp)))) {
 			break;
 		}
@@ -3029,6 +3043,7 @@ finish:
 		}
 		return;
 	}
+#if CONFIG_NFS4
 	if ((nmp->nm_vers >= NFS_VER4) && nfs_mount_state_error_should_restart(error) && !ISSET(bp->nb_flags, NB_ERROR)) {
 		lck_mtx_lock(&nmp->nm_lock);
 		if ((error != NFSERR_OLD_STATEID) && (error != NFSERR_GRACE) && (cb.rcb_args[2] == nmp->nm_stategenid)) {
@@ -3075,6 +3090,7 @@ finish:
 			}
 		}
 	}
+#endif
 	if (error) {
 		SET(bp->nb_flags, NB_ERROR);
 		bp->nb_error = error;
@@ -3111,7 +3127,9 @@ finish:
 	 * (Don't bother if the buffer hit an error or stale wverf.)
 	 */
 	if (((int)rlen < length) && !(bp->nb_flags & (NB_STALEWVERF | NB_ERROR))) {
+#if CONFIG_NFS4
 writeagain:
+#endif
 		offset += rlen;
 		length -= rlen;
 
@@ -3121,10 +3139,11 @@ writeagain:
 
 		cb.rcb_args[0] = offset;
 		cb.rcb_args[1] = length;
+#if CONFIG_NFS4
 		if (nmp->nm_vers >= NFS_VER4) {
 			cb.rcb_args[2] = nmp->nm_stategenid;
 		}
-
+#endif
 		// XXX iomode should really match the original request
 		error = nmp->nm_funcs->nf_write_rpc_async(np, auio, length, thd, cred,
 		    NFS_WRITE_FILESYNC, &cb, &wreq);
@@ -3845,7 +3864,7 @@ nfs_vinvalbuf2(vnode_t vp, int flags, thread_t thd, kauth_cred_t cred, int intrf
 	struct nfsmount *nmp = VTONMP(vp);
 	int error, slpflag, slptimeo, nflags, retry = 0;
 	int ubcflags = UBC_PUSHALL | UBC_SYNC | UBC_INVALIDATE;
-	struct timespec ts = { 2, 0 };
+	struct timespec ts = { .tv_sec = 2, .tv_nsec = 0 };
 	off_t size;
 
 	FSDBG_TOP(554, np, flags, intrflg, 0);
@@ -4085,7 +4104,9 @@ nfs_asyncio_resend(struct nfsreq *req)
 		return;
 	}
 
+#if CONFIG_NFS_GSS
 	nfs_gss_clnt_rpcdone(req);
+#endif
 	lck_mtx_lock(&nmp->nm_lock);
 	if (!(req->r_flags & R_RESENDQ)) {
 		TAILQ_INSERT_TAIL(&nmp->nm_resendq, req, r_rchain);
@@ -4119,10 +4140,12 @@ nfs_buf_readdir(struct nfsbuf *bp, vfs_context_t ctx)
 
 	if (nmp->nm_vers < NFS_VER4) {
 		error = nfs3_readdir_rpc(np, bp, ctx);
-	} else {
+	}
+#if CONFIG_NFS4
+	else {
 		error = nfs4_readdir_rpc(np, bp, ctx);
 	}
-
+#endif
 	if (error && (error != NFSERR_DIRBUFDROPPED)) {
 		SET(bp->nb_flags, NB_ERROR);
 		bp->nb_error = error;

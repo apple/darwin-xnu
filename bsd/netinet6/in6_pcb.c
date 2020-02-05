@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -109,16 +109,19 @@
 #include <net/if_types.h>
 #include <net/route.h>
 #include <net/ntstat.h>
+#include <net/restricted_in_port.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip6.h>
 #include <netinet/ip_var.h>
+
 #include <netinet6/ip6_var.h>
 #include <netinet6/nd6.h>
 #include <netinet/in_pcb.h>
 #include <netinet6/in6_pcb.h>
+
 #include <net/if_types.h>
 #include <net/if_var.h>
 
@@ -295,13 +298,16 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 				IFA_REMREF(ifa);
 			}
 		}
+
+
 		if (lport != 0) {
 			struct inpcb *t;
 			uid_t u;
 
 #if !CONFIG_EMBEDDED
 			if (ntohs(lport) < IPV6PORT_RESERVED &&
-			    !IN6_IS_ADDR_UNSPECIFIED(&sin6.sin6_addr)) {
+			    !IN6_IS_ADDR_UNSPECIFIED(&sin6.sin6_addr) &&
+			    !(inp->inp_flags2 & INP2_EXTERNAL_PORT)) {
 				cred = kauth_cred_proc_ref(p);
 				error = priv_check_cred(cred,
 				    PRIV_NETINET_RESERVEDPORT, 0);
@@ -313,19 +319,30 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 				}
 			}
 #endif /* !CONFIG_EMBEDDED */
+			/*
+			 * Check wether the process is allowed to bind to a restricted port
+			 */
+			if (!current_task_can_use_restricted_in_port(lport,
+			    so->so_proto->pr_protocol, PORT_FLAGS_BSD)) {
+				lck_rw_done(pcbinfo->ipi_lock);
+				socket_lock(so, 0);
+				return EADDRINUSE;
+			}
+
 			if (!IN6_IS_ADDR_MULTICAST(&sin6.sin6_addr) &&
 			    (u = kauth_cred_getuid(so->so_cred)) != 0) {
 				t = in6_pcblookup_local_and_cleanup(pcbinfo,
 				    &sin6.sin6_addr, lport,
 				    INPLOOKUP_WILDCARD);
-				if (t != NULL && (!IN6_IS_ADDR_UNSPECIFIED(
-					    &sin6.sin6_addr) ||
+				if (t != NULL &&
+				    (!IN6_IS_ADDR_UNSPECIFIED(&sin6.sin6_addr) ||
 				    !IN6_IS_ADDR_UNSPECIFIED(&t->in6p_laddr) ||
-				    !(t->inp_socket->so_options &
-				    SO_REUSEPORT)) && (u != kauth_cred_getuid(
-					    t->inp_socket->so_cred)) &&
-				    !(t->inp_socket->so_flags &
-				    SOF_REUSESHAREUID)) {
+				    !(t->inp_socket->so_options & SO_REUSEPORT)) &&
+				    (u != kauth_cred_getuid(t->inp_socket->so_cred)) &&
+				    !(t->inp_socket->so_flags & SOF_REUSESHAREUID) &&
+				    (!(t->inp_flags2 & INP2_EXTERNAL_PORT) ||
+				    !(inp->inp_flags2 & INP2_EXTERNAL_PORT) ||
+				    uuid_compare(t->necp_client_uuid, inp->necp_client_uuid) != 0)) {
 					lck_rw_done(pcbinfo->ipi_lock);
 					socket_lock(so, 0);
 					return EADDRINUSE;
@@ -339,23 +356,28 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 						pcbinfo, sin.sin_addr, lport,
 						INPLOOKUP_WILDCARD);
 					if (t != NULL &&
-					    !(t->inp_socket->so_options &
-					    SO_REUSEPORT) &&
+					    !(t->inp_socket->so_options & SO_REUSEPORT) &&
 					    (kauth_cred_getuid(so->so_cred) !=
-					    kauth_cred_getuid(t->inp_socket->
-					    so_cred)) && (t->inp_laddr.s_addr !=
-					    INADDR_ANY || SOCK_DOM(so) ==
-					    SOCK_DOM(t->inp_socket))) {
+					    kauth_cred_getuid(t->inp_socket->so_cred)) &&
+					    (t->inp_laddr.s_addr != INADDR_ANY ||
+					    SOCK_DOM(so) == SOCK_DOM(t->inp_socket)) &&
+					    (!(t->inp_flags2 & INP2_EXTERNAL_PORT) ||
+					    !(inp->inp_flags2 & INP2_EXTERNAL_PORT) ||
+					    uuid_compare(t->necp_client_uuid, inp->necp_client_uuid) != 0)) {
 						lck_rw_done(pcbinfo->ipi_lock);
 						socket_lock(so, 0);
 						return EADDRINUSE;
 					}
+
 				}
 			}
 			t = in6_pcblookup_local_and_cleanup(pcbinfo,
 			    &sin6.sin6_addr, lport, wild);
 			if (t != NULL &&
-			    (reuseport & t->inp_socket->so_options) == 0) {
+			    (reuseport & t->inp_socket->so_options) == 0 &&
+			    (!(t->inp_flags2 & INP2_EXTERNAL_PORT) ||
+			    !(inp->inp_flags2 & INP2_EXTERNAL_PORT) ||
+			    uuid_compare(t->necp_client_uuid, inp->necp_client_uuid) != 0)) {
 				lck_rw_done(pcbinfo->ipi_lock);
 				socket_lock(so, 0);
 				return EADDRINUSE;
@@ -370,7 +392,10 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 				if (t != NULL && (reuseport &
 				    t->inp_socket->so_options) == 0 &&
 				    (t->inp_laddr.s_addr != INADDR_ANY ||
-				    SOCK_DOM(so) == SOCK_DOM(t->inp_socket))) {
+				    SOCK_DOM(so) == SOCK_DOM(t->inp_socket)) &&
+				    (!(t->inp_flags2 & INP2_EXTERNAL_PORT) ||
+				    !(inp->inp_flags2 & INP2_EXTERNAL_PORT) ||
+				    uuid_compare(t->necp_client_uuid, inp->necp_client_uuid) != 0)) {
 					lck_rw_done(pcbinfo->ipi_lock);
 					socket_lock(so, 0);
 					return EADDRINUSE;
@@ -546,9 +571,7 @@ in6_pcbconnect(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 	struct socket *so = inp->inp_socket;
 
 #if CONTENT_FILTER
-	if (so) {
-		so->so_state_change_cnt++;
-	}
+	so->so_state_change_cnt++;
 #endif
 
 	if (so->so_proto->pr_protocol == IPPROTO_UDP &&
@@ -700,6 +723,7 @@ in6_pcbdetach(struct inpcb *inp)
 			inp->in6p_options = NULL;
 		}
 		ip6_freepcbopts(inp->in6p_outputopts);
+		inp->in6p_outputopts = NULL;
 		ROUTE_RELEASE(&inp->in6p_route);
 		/* free IPv4 related resources in case of mapped addr */
 		if (inp->inp_options != NULL) {
@@ -1180,6 +1204,12 @@ in6_pcblookup_hash_exists(struct inpcbinfo *pcbinfo, struct in6_addr *faddr,
 			continue;
 		}
 
+#if NECP
+		if (!necp_socket_is_allowed_to_recv_on_interface(inp, ifp)) {
+			continue;
+		}
+#endif /* NECP */
+
 		if (IN6_ARE_ADDR_EQUAL(&inp->in6p_faddr, faddr) &&
 		    IN6_ARE_ADDR_EQUAL(&inp->in6p_laddr, laddr) &&
 		    inp->inp_fport == fport &&
@@ -1210,6 +1240,12 @@ in6_pcblookup_hash_exists(struct inpcbinfo *pcbinfo, struct in6_addr *faddr,
 			if (inp_restricted_recv(inp, ifp)) {
 				continue;
 			}
+
+#if NECP
+			if (!necp_socket_is_allowed_to_recv_on_interface(inp, ifp)) {
+				continue;
+			}
+#endif /* NECP */
 
 			if (IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_faddr) &&
 			    inp->inp_lport == lport) {
@@ -1277,6 +1313,12 @@ in6_pcblookup_hash(struct inpcbinfo *pcbinfo, struct in6_addr *faddr,
 			continue;
 		}
 
+#if NECP
+		if (!necp_socket_is_allowed_to_recv_on_interface(inp, ifp)) {
+			continue;
+		}
+#endif /* NECP */
+
 		if (IN6_ARE_ADDR_EQUAL(&inp->in6p_faddr, faddr) &&
 		    IN6_ARE_ADDR_EQUAL(&inp->in6p_laddr, laddr) &&
 		    inp->inp_fport == fport &&
@@ -1308,6 +1350,12 @@ in6_pcblookup_hash(struct inpcbinfo *pcbinfo, struct in6_addr *faddr,
 			if (inp_restricted_recv(inp, ifp)) {
 				continue;
 			}
+
+#if NECP
+			if (!necp_socket_is_allowed_to_recv_on_interface(inp, ifp)) {
+				continue;
+			}
+#endif /* NECP */
 
 			if (IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_faddr) &&
 			    inp->inp_lport == lport) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000, 2009 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -83,7 +83,7 @@ __END_DECLS
  */
 class IOEventSource : public OSObject
 {
-	OSDeclareAbstractStructors(IOEventSource)
+	OSDeclareAbstractStructors(IOEventSource);
 	friend class IOWorkLoop;
 #if IOKITSTATS
 	friend class IOStatistics;
@@ -181,7 +181,7 @@ protected:
  *   @result true if the inherited classes and this instance initialise
  *  successfully.
  */
-	virtual bool init(OSObject *owner, IOEventSource::Action action = 0);
+	virtual bool init(OSObject *owner, IOEventSource::Action action = NULL);
 
 	virtual void free( void ) APPLE_KEXT_OVERRIDE;
 

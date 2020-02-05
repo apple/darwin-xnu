@@ -104,10 +104,10 @@ IOInterruptController::registerInterrupt(IOService *nub, int source,
 	// register as a shared interrupt.
 	if (wasAlreadyRegisterd || shouldBeShared) {
 		// If this vector is not already shared, break it out.
-		if (vector->sharedController == 0) {
+		if (vector->sharedController == NULL) {
 			// Make the IOShareInterruptController instance
 			vector->sharedController = new IOSharedInterruptController;
-			if (vector->sharedController == 0) {
+			if (vector->sharedController == NULL) {
 				IOLockUnlock(vector->interruptLock);
 				return kIOReturnNoMemory;
 			}
@@ -133,7 +133,7 @@ IOInterruptController::registerInterrupt(IOService *nub, int source,
 					enableInterrupt(originalNub, originalSource);
 				}
 				vector->sharedController->release();
-				vector->sharedController = 0;
+				vector->sharedController = NULL;
 				IOLockUnlock(vector->interruptLock);
 				return error;
 			}
@@ -163,7 +163,7 @@ IOInterruptController::registerInterrupt(IOService *nub, int source,
 					enableInterrupt(originalNub, originalSource);
 
 					vector->sharedController->release();
-					vector->sharedController = 0;
+					vector->sharedController = NULL;
 					IOLockUnlock(vector->interruptLock);
 					return error;
 				}
@@ -174,7 +174,7 @@ IOInterruptController::registerInterrupt(IOService *nub, int source,
 			vector->nub     = vector->sharedController;
 			vector->source  = 0;
 			vector->target  = vector->sharedController;
-			vector->refCon  = 0;
+			vector->refCon  = NULL;
 
 			// If the interrupt was already registered,
 			// save the driver's interrupt enablement state.
@@ -259,11 +259,11 @@ IOInterruptController::unregisterInterrupt(IOService *nub, int source)
 	vector->interruptDisabledSoft = 0;
 	vector->interruptDisabledHard = 0;
 	vector->interruptRegistered = 0;
-	vector->nub = 0;
+	vector->nub = NULL;
 	vector->source = 0;
-	vector->handler = 0;
-	vector->target = 0;
-	vector->refCon = 0;
+	vector->handler = NULL;
+	vector->target = NULL;
+	vector->refCon = NULL;
 
 	IOLockUnlock(vector->interruptLock);
 	return kIOReturnSuccess;
@@ -278,7 +278,7 @@ IOInterruptController::getInterruptType(IOService *nub, int source,
 	IOInterruptVector *vector;
 	OSData            *vectorData;
 
-	if (interruptType == 0) {
+	if (interruptType == NULL) {
 		return kIOReturnBadArgument;
 	}
 
@@ -372,7 +372,7 @@ IOInterruptController::causeInterrupt(IOService *nub, int source)
 IOInterruptAction
 IOInterruptController::getInterruptHandlerAddress(void)
 {
-	return 0;
+	return NULL;
 }
 
 IOReturn
@@ -507,7 +507,7 @@ IOSharedInterruptController::initInterruptController(IOInterruptController *pare
 
 	// Allocate the IOInterruptSource so this can act like a nub.
 	_interruptSources = (IOInterruptSource *)IOMalloc(sizeof(IOInterruptSource));
-	if (_interruptSources == 0) {
+	if (_interruptSources == NULL) {
 		return kIOReturnNoMemory;
 	}
 	_numInterruptSources = 1;
@@ -537,7 +537,7 @@ IOSharedInterruptController::initInterruptController(IOInterruptController *pare
 
 	// Allocate the lock for the controller.
 	controllerLock = IOSimpleLockAlloc();
-	if (controllerLock == 0) {
+	if (controllerLock == NULL) {
 		return kIOReturnNoResources;
 	}
 
@@ -571,7 +571,7 @@ IOSharedInterruptController::registerInterrupt(IOService *nub,
 {
 	IOInterruptSource *interruptSources;
 	IOInterruptVectorNumber vectorNumber;
-	IOInterruptVector *vector = 0;
+	IOInterruptVector *vector = NULL;
 	OSData            *vectorData;
 	IOInterruptState  interruptState;
 
@@ -607,7 +607,7 @@ IOSharedInterruptController::registerInterrupt(IOService *nub,
 
 	// Create the vectorData for the IOInterruptSource.
 	vectorData = OSData::withBytes(&vectorNumber, sizeof(vectorNumber));
-	if (vectorData == 0) {
+	if (vectorData == NULL) {
 		IOLockUnlock(vector->interruptLock);
 		return kIOReturnNoMemory;
 	}
@@ -667,11 +667,11 @@ IOSharedInterruptController::unregisterInterrupt(IOService *nub,
 		vector->interruptDisabledSoft = 0;
 		vector->interruptDisabledHard = 0;
 		vector->interruptRegistered = 0;
-		vector->nub = 0;
+		vector->nub = NULL;
 		vector->source = 0;
-		vector->handler = 0;
-		vector->target = 0;
-		vector->refCon = 0;
+		vector->handler = NULL;
+		vector->target = NULL;
+		vector->refCon = NULL;
 
 		interruptState = IOSimpleLockLockDisableInterrupt(controllerLock);
 		vectorsRegistered--;

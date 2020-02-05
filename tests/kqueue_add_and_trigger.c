@@ -3,6 +3,8 @@
 #include <sys/event.h>
 #include <darwintest.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 /* <rdar://problem/28139044> EVFILT_USER doesn't properly support add&fire atomic combination
  *
  * Chek that using EV_ADD and EV_TRIGGER on a EV_USER actually trigger the event just added.

@@ -118,6 +118,7 @@ __BEGIN_DECLS
 #define WORK_INTERVAL_TYPE_CA_RENDER_SERVER     (0x2 << 28)
 #define WORK_INTERVAL_TYPE_CA_CLIENT            (0x3 << 28)
 #define WORK_INTERVAL_TYPE_HID_DELIVERY         (0x4 << 28)
+#define WORK_INTERVAL_TYPE_COREMEDIA            (0x5 << 28)
 #define WORK_INTERVAL_TYPE_LAST                 (0xF << 28)
 
 #ifndef KERNEL

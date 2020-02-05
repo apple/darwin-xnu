@@ -369,14 +369,17 @@ typedef struct memory_object_attr_info  memory_object_attr_info_data_t;
 
 /* named entry processor mapping options */
 /* enumerated */
-#define MAP_MEM_NOOP            0
-#define MAP_MEM_COPYBACK        1
-#define MAP_MEM_IO              2
-#define MAP_MEM_WTHRU           3
-#define MAP_MEM_WCOMB           4       /* Write combining mode */
-                                        /* aka store gather     */
-#define MAP_MEM_INNERWBACK      5
-#define MAP_MEM_POSTED          6
+#define MAP_MEM_NOOP                      0
+#define MAP_MEM_COPYBACK                  1
+#define MAP_MEM_IO                        2
+#define MAP_MEM_WTHRU                     3
+#define MAP_MEM_WCOMB                     4       /* Write combining mode */
+                                                  /* aka store gather     */
+#define MAP_MEM_INNERWBACK                5
+#define MAP_MEM_POSTED                    6
+#define MAP_MEM_RT                        7
+#define MAP_MEM_POSTED_REORDERED          8
+#define MAP_MEM_POSTED_COMBINED_REORDERED 9
 
 #define GET_MAP_MEM(flags)      \
 	((((unsigned int)(flags)) >> 24) & 0xFF)
@@ -386,7 +389,7 @@ typedef struct memory_object_attr_info  memory_object_attr_info_data_t;
 	                & 0xFF000000) | ((flags) & 0xFFFFFF));
 
 /* leave room for vm_prot bits (0xFF ?) */
-#define MAP_MEM_LEDGER_TAG_NETWORK 0x002000 /* charge to "network" ledger */
+#define MAP_MEM_LEDGER_TAGGED        0x002000 /* object owned by a specific task and ledger */
 #define MAP_MEM_PURGABLE_KERNEL_ONLY 0x004000 /* volatility controlled by kernel */
 #define MAP_MEM_GRAB_SECLUDED   0x008000 /* can grab secluded pages */
 #define MAP_MEM_ONLY            0x010000 /* change processor caching  */
@@ -409,9 +412,9 @@ typedef struct memory_object_attr_info  memory_object_attr_info_data_t;
 	MAP_MEM_USE_DATA_ADDR |                            \
 	MAP_MEM_VM_COPY |                                  \
 	MAP_MEM_VM_SHARE |                                 \
+	MAP_MEM_LEDGER_TAGGED |                            \
 	MAP_MEM_4K_DATA_ADDR)
 #define MAP_MEM_FLAGS_ALL (                     \
-	MAP_MEM_LEDGER_TAG_NETWORK |            \
 	MAP_MEM_FLAGS_USER)
 
 #ifdef KERNEL

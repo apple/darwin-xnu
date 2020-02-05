@@ -97,7 +97,7 @@ static boolean_t
 sched_proto_processor_enqueue(
 	processor_t                    processor,
 	thread_t                       thread,
-	integer_t                      options);
+	sched_options_t                options);
 
 static void
 sched_proto_processor_queue_shutdown(
@@ -182,7 +182,6 @@ const struct sched_dispatch_table sched_proto_dispatch = {
 	.processor_runq_stats_count_sum                 = sched_proto_processor_runq_stats_count_sum,
 	.processor_bound_count                          = sched_proto_processor_bound_count,
 	.thread_update_scan                             = sched_proto_thread_update_scan,
-	.direct_dispatch_to_idle_processors             = TRUE,
 	.multiple_psets_enabled                         = TRUE,
 	.sched_groups_enabled                           = FALSE,
 	.avoid_processor_enabled                        = FALSE,
@@ -199,6 +198,10 @@ const struct sched_dispatch_table sched_proto_dispatch = {
 	.check_spill                                    = sched_check_spill,
 	.ipi_policy                                     = sched_ipi_policy,
 	.thread_should_yield                            = sched_thread_should_yield,
+	.run_count_incr                                 = sched_run_incr,
+	.run_count_decr                                 = sched_run_decr,
+	.update_thread_bucket                           = sched_update_thread_bucket,
+	.pset_made_schedulable                          = sched_pset_made_schedulable,
 };
 
 static struct run_queue *global_runq;
@@ -307,7 +310,7 @@ sched_proto_choose_thread(processor_t           processor,
     ast_t                         reason __unused)
 {
 	run_queue_t             rq = global_runq;
-	queue_t                 queue;
+	circle_queue_t          queue;
 	int                             pri, count;
 	thread_t                thread;
 
@@ -329,18 +332,17 @@ sched_proto_choose_thread(processor_t           processor,
 	 */
 
 	while (count > 0 && pri >= priority) {
-		thread = (thread_t)queue_first(queue);
-		while (!queue_end(queue, (queue_entry_t)thread)) {
+		cqe_foreach_element_safe(thread, queue, runq_links) {
 			if ((thread->bound_processor == PROCESSOR_NULL ||
 			    thread->bound_processor == processor) &&
 			    runqueue_generation != thread->runqueue_generation) {
-				remqueue((queue_entry_t)thread);
+				circle_dequeue(queue, &thread->runq_links);
 
 				thread->runq = PROCESSOR_NULL;
 				thread->runqueue_generation = runqueue_generation;
 				SCHED_STATS_RUNQ_CHANGE(&rq->runq_stats, rq->count);
 				rq->count--;
-				if (queue_empty(queue)) {
+				if (circle_queue_empty(queue)) {
 					bitmap_clear(rq->bitmap, pri);
 					rq->highq = bitmap_first(rq->bitmap, NRQS);
 				}
@@ -401,7 +403,7 @@ static boolean_t
 sched_proto_processor_enqueue(
 	processor_t                    processor __unused,
 	thread_t                       thread,
-	integer_t                      options)
+	sched_options_t                options)
 {
 	run_queue_t             rq = global_runq;
 	boolean_t               result;
@@ -439,20 +441,7 @@ sched_proto_processor_queue_remove(
 		 *	Thread is on a run queue and we have a lock on
 		 *	that run queue.
 		 */
-		remqueue((queue_entry_t)thread);
-		SCHED_STATS_RUNQ_CHANGE(&rq->runq_stats, rq->count);
-		rq->count--;
-		if (SCHED(priority_is_urgent)(thread->sched_pri)) {
-			rq->urgency--; assert(rq->urgency >= 0);
-		}
-
-		if (queue_empty(rq->queues + thread->sched_pri)) {
-			/* update run queue status */
-			bitmap_clear(rq->bitmap, thread->sched_pri);
-			rq->highq = bitmap_first(rq->bitmap, NRQS);
-		}
-
-		thread->runq = PROCESSOR_NULL;
+		run_queue_remove(rq, thread);
 	} else {
 		/*
 		 *	The thread left the run queue before we could

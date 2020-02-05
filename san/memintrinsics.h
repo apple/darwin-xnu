@@ -54,7 +54,7 @@ __nosan_bcmp(const void *a, const void *b, size_t sz)
 static inline void
 __nosan_bcopy(const void *src, void *dst, size_t sz)
 {
-	return bcopy(src, dst, sz);
+	bcopy(src, dst, sz);
 }
 static inline int
 __nosan_memcmp(const void *a, const void *b, size_t sz)
@@ -64,7 +64,7 @@ __nosan_memcmp(const void *a, const void *b, size_t sz)
 static inline void
 __nosan_bzero(void *dst, size_t sz)
 {
-	return bzero(dst, sz);
+	bzero(dst, sz);
 }
 
 static inline size_t

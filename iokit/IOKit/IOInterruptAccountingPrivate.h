@@ -134,13 +134,13 @@ static const char * const kInterruptAccountingStatisticNameArray[IA_NUM_INTERRUP
  * two processors at once (and the interrupt should serve to force out stores), and the second level
  * handler should be synchonized by the work loop it runs on.
  */
-#if __x86_64__ || __arm64
+#if __x86_64__ || __arm64__
 #define IA_ADD_VALUE(target, value) \
     (*(target) += (value))
-#else
+#else /* !(__x86_64__ || __arm64__) */
 #define IA_ADD_VALUE(target, value) \
     (OSAddAtomic64((value), (target)))
-#endif
+#endif /* !(__x86_64__ || __arm64__) */
 
 /*
  * TODO: Should this be an OSObject?  Or properly pull in its methods as member functions?
@@ -159,6 +159,9 @@ struct IOInterruptAccountingData {
 	 * valid for the lifetime of the owner.
 	 */
 	int interruptIndex;
+
+	bool enablePrimaryTimestamp;
+	volatile uint64_t primaryTimestamp __attribute__((aligned(8)));
 
 	/*
 	 * As long as we are based on the simple reporter, all our channels will be 64 bits.  Align the data

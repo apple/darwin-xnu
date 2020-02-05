@@ -112,6 +112,7 @@ extern struct vnodeop_desc vnop_ioctl_desc;
 extern struct vnodeop_desc vnop_select_desc;
 extern struct vnodeop_desc vnop_exchange_desc;
 extern struct vnodeop_desc vnop_revoke_desc;
+extern struct vnodeop_desc vnop_mmap_check_desc;
 extern struct vnodeop_desc vnop_mmap_desc;
 extern struct vnodeop_desc vnop_mnomap_desc;
 extern struct vnodeop_desc vnop_fsync_desc;
@@ -593,6 +594,30 @@ struct vnop_revoke_args {
 extern errno_t VNOP_REVOKE(vnode_t, int, vfs_context_t);
 #endif /* XNU_KERNEL_PRIVATE */
 
+struct vnop_mmap_check_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t a_vp;
+	int a_flags;
+	vfs_context_t a_context;
+};
+
+/*!
+ *  @function VNOP_MMAP_CHECK
+ *  @abstract Check with a filesystem if a file can be mmap-ed.
+ *  @discussion VNOP_MMAP_CHECK is used to check with the file system if a
+ *  file can be mmap-ed. It will be called before any call to VNOP_MMAP().
+ *  @param vp The vnode being mmapped.
+ *  @param flags Memory protection: PROT_READ, PROT_WRITE, PROT_EXEC.
+ *  @param ctx Context to authenticate for mmap request.
+ *  @return 0 for success; EPERM if the operation is not permitted; other
+ *  errors (except ENOTSUP) may be returned at the discretion of the file
+ *  system.  ENOTSUP will never be returned by VNOP_MMAP_CHECK().
+ */
+#ifdef XNU_KERNEL_PRIVATE
+extern errno_t VNOP_MMAP_CHECK(vnode_t, int, vfs_context_t);
+#endif /* XNU_KERNEL_PRIVATE */
+
+
 struct vnop_mmap_args {
 	struct vnodeop_desc *a_desc;
 	vnode_t a_vp;
@@ -752,6 +777,12 @@ enum {
 	VFS_RENAME_SECLUDE              = 0x00000001,
 	VFS_RENAME_SWAP                 = 0x00000002,
 	VFS_RENAME_EXCL                 = 0x00000004,
+
+	/*
+	 * VFS_RENAME_DATALESS is kernel-only and is intentionally
+	 * not included in VFS_RENAME_FLAGS_MASK.
+	 */
+	VFS_RENAME_DATALESS             = 0x00000008,
 
 	VFS_RENAME_FLAGS_MASK   = (VFS_RENAME_SECLUDE | VFS_RENAME_SWAP
 	    | VFS_RENAME_EXCL),

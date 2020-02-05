@@ -40,12 +40,16 @@
 #include <arm/cpu_data_internal.h>
 #endif
 
+#if defined(HAS_APPLE_PAC)
+#include <ptrauth.h>
+#endif
 
 
-uint32_t __attribute__((noinline))
-backtrace(uintptr_t *bt, uint32_t max_frames)
+unsigned int __attribute__((noinline))
+backtrace(uintptr_t *bt, unsigned int max_frames, bool *was_truncated_out)
 {
-	return backtrace_frame(bt, max_frames, __builtin_frame_address(0));
+	return backtrace_frame(bt, max_frames, __builtin_frame_address(0),
+	    was_truncated_out);
 }
 
 /*
@@ -57,12 +61,13 @@ backtrace(uintptr_t *bt, uint32_t max_frames)
  * inlined, it doesn't record the frame of the function it's inside (because
  * there's no stack frame).
  */
-uint32_t __attribute__((noinline, not_tail_called))
-backtrace_frame(uintptr_t *bt, uint32_t max_frames, void *start_frame)
+unsigned int __attribute__((noinline, not_tail_called))
+backtrace_frame(uintptr_t *bt, unsigned int max_frames, void *start_frame,
+    bool *was_truncated_out)
 {
 	thread_t thread = current_thread();
 	uintptr_t *fp;
-	uint32_t frame_index = 0;
+	unsigned int frame_index = 0;
 	uintptr_t top, bottom;
 	bool in_valid_stack;
 
@@ -98,13 +103,27 @@ backtrace_frame(uintptr_t *bt, uint32_t max_frames, void *start_frame)
 			break;
 		}
 
+#if defined(HAS_APPLE_PAC)
+		/* return addresses signed by arm64e ABI */
+		bt[frame_index++] = (uintptr_t) ptrauth_strip((void *)ret_addr, ptrauth_key_return_address);
+#else /* defined(HAS_APPLE_PAC) */
 		bt[frame_index++] = ret_addr;
+#endif /* !defined(HAS_APPLE_PAC) */
 
 		/* stacks grow down; backtracing should be moving to higher addresses */
 		if (next_fp <= fp) {
 			break;
 		}
 		fp = next_fp;
+	}
+
+	/* NULL-terminate the list, if space is available */
+	if (frame_index != max_frames) {
+		bt[frame_index] = 0;
+	}
+
+	if (fp != NULL && frame_index == max_frames && was_truncated_out) {
+		*was_truncated_out = true;
 	}
 
 	return frame_index;
@@ -197,8 +216,9 @@ interrupted_kernel_pc_fp(uintptr_t *pc, uintptr_t *fp)
 #error "interrupted_kernel_pc_fp: unsupported architecture"
 #endif /* !defined(__arm__) */
 
-uint32_t
-backtrace_interrupted(uintptr_t *bt, uint32_t max_frames)
+unsigned int
+backtrace_interrupted(uintptr_t *bt, unsigned int max_frames,
+    bool *was_truncated_out)
 {
 	uintptr_t pc;
 	uintptr_t fp;
@@ -218,32 +238,32 @@ backtrace_interrupted(uintptr_t *bt, uint32_t max_frames)
 		return 1;
 	}
 
-	return backtrace_frame(bt + 1, max_frames - 1, (void *)fp) + 1;
+	return backtrace_frame(bt + 1, max_frames - 1, (void *)fp,
+	    was_truncated_out) + 1;
 }
 
 int
-backtrace_user(uintptr_t *bt, uint32_t max_frames, uint32_t *frames_out,
-    bool *user_64_out)
+backtrace_user(uintptr_t *bt, unsigned int max_frames,
+    unsigned int *frames_out, bool *user_64_out, bool *was_truncated_out)
 {
-	return backtrace_thread_user(current_thread(), bt, max_frames, frames_out,
-	           user_64_out);
+	return backtrace_thread_user(current_thread(), bt, max_frames,
+	    frames_out, user_64_out, was_truncated_out);
 }
 
 int
-backtrace_thread_user(void *thread, uintptr_t *bt, uint32_t max_frames,
-    uint32_t *frames_out, bool *user_64_out)
+backtrace_thread_user(void *thread, uintptr_t *bt, unsigned int max_frames,
+    unsigned int *frames_out, bool *user_64_out, bool *was_truncated_out)
 {
 	bool user_64;
-	uintptr_t pc, fp, next_fp;
+	uintptr_t pc = 0, fp = 0, next_fp = 0;
 	vm_map_t map = NULL, old_map = NULL;
-	uint32_t frame_index = 0;
+	unsigned int frame_index = 0;
 	int err = 0;
-	size_t frame_size;
+	size_t frame_size = 0;
 
 	assert(bt != NULL);
 	assert(max_frames > 0);
 	assert(frames_out != NULL);
-	assert(user_64_out != NULL);
 
 #if defined(__x86_64__)
 
@@ -297,10 +317,6 @@ backtrace_thread_user(void *thread, uintptr_t *bt, uint32_t max_frames,
 #error "backtrace_thread_user: unsupported architecture"
 #endif /* !defined(__arm__) */
 
-	if (max_frames == 0) {
-		goto out;
-	}
-
 	bt[frame_index++] = pc;
 
 	if (frame_index >= max_frames) {
@@ -327,7 +343,7 @@ backtrace_thread_user(void *thread, uintptr_t *bt, uint32_t max_frames,
 		} u32;
 	} frame;
 
-	frame_size = 2 * (user_64 ? sizeof(uint64_t) : sizeof(uint32_t));
+	frame_size = 2 * (user_64 ? 8 : 4);
 
 	/* switch to the correct map, for copyin */
 	if (thread != current_thread()) {
@@ -343,6 +359,9 @@ backtrace_thread_user(void *thread, uintptr_t *bt, uint32_t max_frames,
 	while (fp != 0 && frame_index < max_frames) {
 		err = copyin(fp, (char *)&frame, frame_size);
 		if (err) {
+			if (was_truncated_out) {
+				*was_truncated_out = true;
+			}
 			goto out;
 		}
 
@@ -353,7 +372,13 @@ backtrace_thread_user(void *thread, uintptr_t *bt, uint32_t max_frames,
 		}
 
 		uintptr_t ret_addr = user_64 ? frame.u64.ret : frame.u32.ret;
+#if defined(HAS_APPLE_PAC)
+		/* return addresses signed by arm64e ABI */
+		bt[frame_index++] = (uintptr_t)ptrauth_strip((void *)ret_addr,
+		    ptrauth_key_return_address);
+#else /* defined(HAS_APPLE_PAC) */
 		bt[frame_index++] = ret_addr;
+#endif /* !defined(HAS_APPLE_PAC) */
 
 		/* stacks grow down; backtracing should be moving to higher addresses */
 		if (next_fp <= fp) {
@@ -368,7 +393,19 @@ out:
 		vm_map_deallocate(map);
 	}
 
-	*user_64_out = user_64;
+	/* NULL-terminate the list, if space is available */
+	if (frame_index != max_frames) {
+		bt[frame_index] = 0;
+	}
+
+	if (fp != 0 && frame_index == max_frames && was_truncated_out) {
+		*was_truncated_out = true;
+	}
+
+	if (user_64_out) {
+		*user_64_out = user_64;
+	}
+
 	*frames_out = frame_index;
 	return err;
 #undef INVALID_USER_FP

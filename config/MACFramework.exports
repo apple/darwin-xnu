@@ -18,10 +18,16 @@ _sbuf_cat
 _sbuf_data
 _sbuf_delete
 _sbuf_finish
+_sbuf_len
 _sbuf_new
+_sbuf_overflowed
 _sbuf_printf
 _sbuf_putc
+_sbuf_vprintf
 _strsep
 _sysctl__security_mac_children
 _VNOP_SETXATTR
 _VNOP_GETXATTR
+_mac_vnode_label_allocate
+_mac_vnode_label_get
+_mac_vnode_label_set

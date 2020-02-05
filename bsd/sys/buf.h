@@ -1020,6 +1020,22 @@ void buf_markstatic(buf_t bp);
  */
 int     buf_static(buf_t bp);
 
+/*!
+ *  @function bufattr_markiosched
+ *  @abstract Mark a buffer as belonging to an io scheduled mount point
+ *  @param bap Buffer attributes to mark.
+ *  @discussion Marks the buffer so that spec_strategy() will know that it belongs to an io scheduled mount point
+ */
+void bufattr_markioscheduled(bufattr_t bap);
+
+/*!
+ *  @function bufattr_iosched
+ *  @abstract Check if a buffer is marked as io scheduled
+ *  @param bap Buffer attributes to test.
+ *  @return Nonzero if the buffer is marked io scheduled, 0 otherwise.
+ */
+int bufattr_ioscheduled(bufattr_t bap);
+
 #ifdef KERNEL_PRIVATE
 void    buf_setfilter(buf_t, void (*)(buf_t, void *), void *, void(**)(buf_t, void *), void **);
 

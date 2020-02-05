@@ -18,13 +18,7 @@ T_GLOBAL_META(
 	T_META_ASROOT(true)
 	);
 
-#if TARGET_OS_WATCH
-#define SPAWN_ITERATIONS 1999
-#elif TARGET_OS_IPHONE
-#define SPAWN_ITERATIONS 4999
-#else
-#define SPAWN_ITERATIONS 9999
-#endif
+#define TEST_DURATION_NS (60 * NSEC_PER_SEC)
 
 #define REAP_INTERVAL 10
 
@@ -78,12 +72,14 @@ retry:
 	T_QUIET; T_EXPECT_POSIX_ZERO(ret, "deallocated stackshot config");
 }
 
-T_DECL(stackshot_spawn_exit, "tests taking many stackshots while children processes are spawning+exiting")
+T_DECL(stackshot_spawn_exit, "tests taking many stackshots while children processes are spawning+exiting", T_META_TIMEOUT(120))
 {
 	char path[PATH_MAX];
 	uint32_t path_size = sizeof(path);
 	T_ASSERT_POSIX_ZERO(_NSGetExecutablePath(path, &path_size), "_NSGetExecutablePath");
 	char *args[] = { path, "-n", "spawn_children_helper", NULL };
+
+	uint64_t stop_time = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) + TEST_DURATION_NS;
 
 	dispatch_queue_t stackshot_queue = dispatch_queue_create("stackshot_queue", NULL);
 	dispatch_async(stackshot_queue, ^(void) {
@@ -108,7 +104,8 @@ T_DECL(stackshot_spawn_exit, "tests taking many stackshots while children proces
 	    "set stdout of child to NULL");
 
 	int children_unreaped = 0, status;
-	for (int iterations_remaining = SPAWN_ITERATIONS; iterations_remaining > 0; iterations_remaining--) {
+	uint64_t iterations_completed = 0;
+	while (clock_gettime_nsec_np(CLOCK_UPTIME_RAW) < stop_time) {
 		pid_t pid;
 
 		int sp_ret = posix_spawn(&pid, args[0], &actions, NULL, args, NULL);
@@ -123,9 +120,10 @@ T_DECL(stackshot_spawn_exit, "tests taking many stackshots while children proces
 			}
 		}
 
-		if ((iterations_remaining % 100) == 0) {
-			T_LOG("spawned %d children thus far", (SPAWN_ITERATIONS - iterations_remaining));
+		if ((iterations_completed % 100) == 0) {
+			T_LOG("spawned %llu children thus far", iterations_completed);
 		}
+		iterations_completed++;
 	}
 
 	while (children_unreaped) {

@@ -81,6 +81,7 @@
 
 #include <libkern/OSDebug.h>
 #include <libkern/crypto/sha2.h>
+#include <libkern/section_keywords.h>
 #include <sys/kdebug.h>
 
 #include <san/kasan.h>
@@ -89,8 +90,8 @@
  *	Variables exported by this module.
  */
 
-vm_map_t        kernel_map;
-vm_map_t        kernel_pageable_map;
+SECURITY_READ_ONLY_LATE(vm_map_t) kernel_map;
+vm_map_t         kernel_pageable_map;
 
 extern boolean_t vm_kernel_ready;
 
@@ -370,8 +371,6 @@ kernel_memory_allocate(
 
 	if (!(flags & (KMA_VAONLY | KMA_PAGEABLE))) {
 		for (i = 0; i < wired_page_count; i++) {
-			uint64_t        unavailable;
-
 			for (;;) {
 				if (flags & KMA_LOMEM) {
 					mem = vm_page_grablo();
@@ -391,8 +390,11 @@ kernel_memory_allocate(
 					kr = KERN_RESOURCE_SHORTAGE;
 					goto out;
 				}
-				unavailable = (vm_page_wire_count + vm_page_free_target) * PAGE_SIZE;
 
+				/* VM privileged threads should have waited in vm_page_grab() and not get here. */
+				assert(!(current_thread()->options & TH_OPT_VMPRIV));
+
+				uint64_t unavailable = (vm_page_wire_count + vm_page_free_target) * PAGE_SIZE;
 				if (unavailable > max_mem || map_size > (max_mem - unavailable)) {
 					kr = KERN_RESOURCE_SHORTAGE;
 					goto out;

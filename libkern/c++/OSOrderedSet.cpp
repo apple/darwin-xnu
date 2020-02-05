@@ -93,7 +93,7 @@ withCapacity(unsigned int capacity,
 
 	if (me && !me->initWithCapacity(capacity, ordering, orderingRef)) {
 		me->release();
-		me = 0;
+		me = NULL;
 	}
 
 	return me;
@@ -298,7 +298,7 @@ OSObject *
 OSOrderedSet::getObject( unsigned int index ) const
 {
 	if (index >= count) {
-		return 0;
+		return NULL;
 	}
 
 //    if( pri)
@@ -313,7 +313,7 @@ OSOrderedSet::getFirstObject() const
 	if (count) {
 		return const_cast<OSObject *>((const OSObject *) array[0].obj);
 	} else {
-		return 0;
+		return NULL;
 	}
 }
 
@@ -323,14 +323,14 @@ OSOrderedSet::getLastObject() const
 	if (count) {
 		return const_cast<OSObject *>((const OSObject *) array[count - 1].obj);
 	} else {
-		return 0;
+		return NULL;
 	}
 }
 
 SInt32
 OSOrderedSet::orderObject( const OSMetaClassBase * anObject )
 {
-	return ORDER( anObject, 0 );
+	return ORDER( anObject, NULL );
 }
 
 void *
@@ -399,10 +399,10 @@ getNextObjectForIterator(void *inIterator, OSObject **ret) const
 	if (index < count) {
 		*ret = const_cast<OSObject *>((const OSObject *) array[index].obj);
 	} else {
-		*ret = 0;
+		*ret = NULL;
 	}
 
-	return *ret != 0;
+	return *ret != NULL;
 }
 
 
@@ -427,13 +427,13 @@ OSCollection *
 OSOrderedSet::copyCollection(OSDictionary *cycleDict)
 {
 	bool allocDict = !cycleDict;
-	OSCollection *ret = 0;
-	OSOrderedSet *newSet = 0;
+	OSCollection *ret = NULL;
+	OSOrderedSet *newSet = NULL;
 
 	if (allocDict) {
 		cycleDict = OSDictionary::withCapacity(16);
 		if (!cycleDict) {
-			return 0;
+			return NULL;
 		}
 	}
 
@@ -474,7 +474,7 @@ OSOrderedSet::copyCollection(OSDictionary *cycleDict)
 		;
 
 		ret = newSet;
-		newSet = 0;
+		newSet = NULL;
 	} while (false);
 
 abortCopy:

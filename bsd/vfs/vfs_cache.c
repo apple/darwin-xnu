@@ -164,6 +164,7 @@ static const char *add_name_internal(const char *, uint32_t, u_int, boolean_t, u
 static void init_string_table(void);
 static void cache_delete(struct namecache *, int);
 static void cache_enter_locked(vnode_t dvp, vnode_t vp, struct componentname *cnp, const char *strname);
+static void cache_purge_locked(vnode_t vp, kauth_cred_t *credp);
 
 #ifdef DUMP_STRING_TABLE
 /*
@@ -479,6 +480,13 @@ again:
 	 */
 	NAME_CACHE_LOCK_SHARED();
 
+#if CONFIG_FIRMLINKS
+	if (!(flags & BUILDPATH_NO_FIRMLINK) &&
+	    (vp->v_flag & VFMLINKTARGET) && vp->v_fmlink) {
+		vp = vp->v_fmlink;
+	}
+#endif
+
 	/*
 	 * Check if this is the root of a file system.
 	 */
@@ -501,6 +509,12 @@ again:
 			 * want to cross mount points.  Therefore just return
 			 * '/' as the relative path.
 			 */
+#if CONFIG_FIRMLINKS
+			if (!(flags & BUILDPATH_NO_FIRMLINK) &&
+			    (vp->v_flag & VFMLINKTARGET) && vp->v_fmlink) {
+				vp = vp->v_fmlink;
+			} else
+#endif
 			if (flags & BUILDPATH_VOLUME_RELATIVE) {
 				*--end = '/';
 				goto out_unlock;
@@ -730,6 +744,15 @@ bad_news:
 			if (tvp == proc_root_dir_vp) {
 				goto out_unlock;        /* encountered the root */
 			}
+
+#if CONFIG_FIRMLINKS
+			if (!(flags & BUILDPATH_NO_FIRMLINK) &&
+			    (tvp->v_flag & VFMLINKTARGET) && tvp->v_fmlink) {
+				tvp = tvp->v_fmlink;
+				break;
+			}
+#endif
+
 			if (!(tvp->v_flag & VROOT) || !tvp->v_mount) {
 				break;                  /* not the root of a mounted FS */
 			}
@@ -790,6 +813,9 @@ vnode_getparent(vnode_t vp)
 	int     pvid;
 
 	NAME_CACHE_LOCK_SHARED();
+
+	pvp = vp->v_parent;
+
 	/*
 	 * v_parent is stable behind the name_cache lock
 	 * however, the only thing we can really guarantee
@@ -797,7 +823,7 @@ vnode_getparent(vnode_t vp)
 	 * parent of 'vp' at the time we took the name_cache lock...
 	 * once we drop the lock, vp could get re-parented
 	 */
-	if ((pvp = vp->v_parent) != NULLVP) {
+	if (pvp != NULLVP) {
 		pvid = pvp->v_id;
 
 		NAME_CACHE_UNLOCK();
@@ -930,8 +956,33 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 			flags &= ~VNODE_UPDATE_NAME;
 		}
 	}
-	if ((flags & (VNODE_UPDATE_PURGE | VNODE_UPDATE_PARENT | VNODE_UPDATE_CACHE | VNODE_UPDATE_NAME))) {
+	if ((flags & (VNODE_UPDATE_PURGE | VNODE_UPDATE_PARENT | VNODE_UPDATE_CACHE | VNODE_UPDATE_NAME | VNODE_UPDATE_PURGEFIRMLINK))) {
 		NAME_CACHE_LOCK();
+
+#if CONFIG_FIRMLINKS
+		if (flags & VNODE_UPDATE_PURGEFIRMLINK) {
+			vnode_t old_fvp = vp->v_fmlink;
+			if (old_fvp) {
+				vnode_lock_spin(vp);
+				vp->v_flag &= ~VFMLINKTARGET;
+				vp->v_fmlink = NULLVP;
+				vnode_unlock(vp);
+				NAME_CACHE_UNLOCK();
+
+				/*
+				 * vnode_rele can result in cascading series of
+				 * usecount releases. The combination of calling
+				 * vnode_recycle and dont_reenter (3rd arg to
+				 * vnode_rele_internal) ensures we don't have
+				 * that issue.
+				 */
+				vnode_recycle(old_fvp);
+				vnode_rele_internal(old_fvp, O_EVTONLY, 1, 0);
+
+				NAME_CACHE_LOCK();
+			}
+		}
+#endif
 
 		if ((flags & VNODE_UPDATE_PURGE)) {
 			if (vp->v_parent) {
@@ -1081,6 +1132,139 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 	}
 }
 
+#if CONFIG_FIRMLINKS
+errno_t
+vnode_setasfirmlink(vnode_t vp, vnode_t target_vp)
+{
+	int error = 0;
+	vnode_t old_target_vp = NULLVP;
+	vnode_t old_target_vp_v_fmlink = NULLVP;
+	kauth_cred_t target_vp_cred = NULL;
+	kauth_cred_t old_target_vp_cred = NULL;
+
+	if (!vp) {
+		return EINVAL;
+	}
+
+	if (target_vp) {
+		if (vp->v_fmlink == target_vp) { /* Will be checked again under the name cache lock */
+			return 0;
+		}
+
+		/*
+		 * Firmlink source and target will take both a usecount
+		 * and kusecount on each other.
+		 */
+		if ((error = vnode_ref_ext(target_vp, O_EVTONLY, VNODE_REF_FORCE))) {
+			return error;
+		}
+
+		if ((error = vnode_ref_ext(vp, O_EVTONLY, VNODE_REF_FORCE))) {
+			vnode_rele_ext(target_vp, O_EVTONLY, 1);
+			return error;
+		}
+	}
+
+	NAME_CACHE_LOCK();
+
+	old_target_vp = vp->v_fmlink;
+	if (target_vp && (target_vp == old_target_vp)) {
+		NAME_CACHE_UNLOCK();
+		return 0;
+	}
+	vp->v_fmlink = target_vp;
+
+	vnode_lock_spin(vp);
+	vp->v_flag &= ~VFMLINKTARGET;
+	vnode_unlock(vp);
+
+	if (target_vp) {
+		target_vp->v_fmlink = vp;
+		vnode_lock_spin(target_vp);
+		target_vp->v_flag |= VFMLINKTARGET;
+		vnode_unlock(target_vp);
+		cache_purge_locked(vp, &target_vp_cred);
+	}
+
+	if (old_target_vp) {
+		old_target_vp_v_fmlink = old_target_vp->v_fmlink;
+		old_target_vp->v_fmlink = NULLVP;
+		vnode_lock_spin(old_target_vp);
+		old_target_vp->v_flag &= ~VFMLINKTARGET;
+		vnode_unlock(old_target_vp);
+		cache_purge_locked(vp, &old_target_vp_cred);
+	}
+
+	NAME_CACHE_UNLOCK();
+
+	if (target_vp_cred && IS_VALID_CRED(target_vp_cred)) {
+		kauth_cred_unref(&target_vp_cred);
+	}
+
+	if (old_target_vp) {
+		if (old_target_vp_cred && IS_VALID_CRED(old_target_vp_cred)) {
+			kauth_cred_unref(&old_target_vp_cred);
+		}
+
+		vnode_rele_ext(old_target_vp, O_EVTONLY, 1);
+		if (old_target_vp_v_fmlink) {
+			vnode_rele_ext(old_target_vp_v_fmlink, O_EVTONLY, 1);
+		}
+	}
+
+	return 0;
+}
+
+errno_t
+vnode_getfirmlink(vnode_t vp, vnode_t *target_vp)
+{
+	int error;
+
+	if (!vp->v_fmlink) {
+		return ENODEV;
+	}
+
+	NAME_CACHE_LOCK_SHARED();
+	if (vp->v_fmlink && !(vp->v_flag & VFMLINKTARGET) &&
+	    (vnode_get(vp->v_fmlink) == 0)) {
+		vnode_t tvp = vp->v_fmlink;
+
+		vnode_lock_spin(tvp);
+		if (tvp->v_lflag & (VL_TERMINATE | VL_DEAD)) {
+			vnode_unlock(tvp);
+			NAME_CACHE_UNLOCK();
+			vnode_put(tvp);
+			return ENOENT;
+		}
+		if (!(tvp->v_flag & VFMLINKTARGET)) {
+			panic("firmlink target for vnode %p does not have flag set", vp);
+		}
+		vnode_unlock(tvp);
+		*target_vp = tvp;
+		error = 0;
+	} else {
+		*target_vp = NULLVP;
+		error = ENODEV;
+	}
+	NAME_CACHE_UNLOCK();
+	return error;
+}
+
+#else /* CONFIG_FIRMLINKS */
+
+errno_t
+vnode_setasfirmlink(__unused vnode_t vp, __unused vnode_t src_vp)
+{
+	return ENOTSUP;
+}
+
+errno_t
+vnode_getfirmlink(__unused vnode_t vp, __unused vnode_t *target_vp)
+{
+	return ENOTSUP;
+}
+
+#endif
 
 /*
  * Mark a vnode as having multiple hard links.  HFS makes use of this
@@ -1476,6 +1660,12 @@ skiprsrcfork:
 				break;
 			}
 			if (cnp->cn_flags & ISDOTDOT) {
+#if CONFIG_FIRMLINKS
+				if (dp->v_fmlink && (dp->v_flag & VFMLINKTARGET)) {
+					dp = dp->v_fmlink;
+				}
+#endif
+
 				/*
 				 * Force directory hardlinks to go to
 				 * file system for ".." requests.
@@ -2336,20 +2526,18 @@ cache_delete(struct namecache *ncp, int free_entry)
  * purge the entry associated with the
  * specified vnode from the name cache
  */
-void
-cache_purge(vnode_t vp)
+static void
+cache_purge_locked(vnode_t vp, kauth_cred_t *credp)
 {
 	struct namecache *ncp;
-	kauth_cred_t tcred = NULL;
 
+	*credp = NULL;
 	if ((LIST_FIRST(&vp->v_nclinks) == NULL) &&
 	    (TAILQ_FIRST(&vp->v_ncchildren) == NULL) &&
 	    (vp->v_cred == NOCRED) &&
 	    (vp->v_parent == NULLVP)) {
 		return;
 	}
-
-	NAME_CACHE_LOCK();
 
 	if (vp->v_parent) {
 		vp->v_parent->v_nc_generation++;
@@ -2366,13 +2554,30 @@ cache_purge(vnode_t vp)
 	/*
 	 * Use a temp variable to avoid kauth_cred_unref() while NAME_CACHE_LOCK is held
 	 */
-	tcred = vp->v_cred;
+	*credp = vp->v_cred;
 	vp->v_cred = NOCRED;
 	vp->v_authorized_actions = 0;
+}
+
+void
+cache_purge(vnode_t vp)
+{
+	kauth_cred_t tcred = NULL;
+
+	if ((LIST_FIRST(&vp->v_nclinks) == NULL) &&
+	    (TAILQ_FIRST(&vp->v_ncchildren) == NULL) &&
+	    (vp->v_cred == NOCRED) &&
+	    (vp->v_parent == NULLVP)) {
+		return;
+	}
+
+	NAME_CACHE_LOCK();
+
+	cache_purge_locked(vp, &tcred);
 
 	NAME_CACHE_UNLOCK();
 
-	if (IS_VALID_CRED(tcred)) {
+	if (tcred && IS_VALID_CRED(tcred)) {
 		kauth_cred_unref(&tcred);
 	}
 }

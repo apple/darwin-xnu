@@ -8,6 +8,21 @@ OPTIONS/crypto						optional crypto
 OPTIONS/config_dtrace				optional config_dtrace
 OPTIONS/mach_assert				optional mach_assert
 
+# iig generated implementation files
+
+./DriverKit/OSObject.iig.cpp		optional iokitcpp
+./DriverKit/OSAction.iig.cpp		optional iokitcpp
+./DriverKit/IOService.iig.cpp		optional iokitcpp
+./DriverKit/IOUserClient.iig.cpp		optional iokitcpp
+./DriverKit/IOMemoryDescriptor.iig.cpp		optional iokitcpp
+./DriverKit/IOBufferMemoryDescriptor.iig.cpp		optional iokitcpp
+./DriverKit/IOMemoryMap.iig.cpp		optional iokitcpp
+./DriverKit/IODispatchSource.iig.cpp		optional iokitcpp
+./DriverKit/IODispatchQueue.iig.cpp		optional iokitcpp
+./DriverKit/IOInterruptDispatchSource.iig.cpp		optional iokitcpp
+./DriverKit/IODataQueueDispatchSource.iig.cpp		optional iokitcpp
+./DriverKit/IOUserServer.iig.cpp		optional iokitcpp
+
 # libIOKit
 
 iokit/Kernel/IOHibernateIO.cpp				optional hibernation
@@ -88,6 +103,8 @@ iokit/Kernel/IOReportLegend.cpp				optional iokitcpp
 iokit/Kernel/IORTC.cpp				optional iokitcpp
 
 iokit/Kernel/IOStringFuncs.c				standard
+
+iokit/Kernel/IOUserServer.cpp				optional iokitcpp
 
 # Property tables for kernel-linked objects
 

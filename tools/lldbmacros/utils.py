@@ -474,3 +474,12 @@ def print_hex_data(data, begin_offset=0, desc=""):
 def Ones(x):
     return (1 << x)-1
 
+def StripPAC(x, TySz):
+    sign_mask = 1 << 55
+    ptr_mask = Ones(64-TySz)
+    pac_mask = ~ptr_mask
+    sign = x & sign_mask
+    if sign:
+        return (x | pac_mask) + 2**64
+    else:
+        return x & ptr_mask

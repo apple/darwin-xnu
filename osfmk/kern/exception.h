@@ -50,6 +50,9 @@ struct exception_action {
 	struct label            *label;         /* MAC label associated with action */
 };
 
+/* Initialize global state needed for exceptions. */
+extern void exception_init(void);
+
 /* Make an up-call to a thread's exception server */
 extern kern_return_t exception_triage(
 	exception_type_t        exception,

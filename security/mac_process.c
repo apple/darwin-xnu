@@ -507,6 +507,26 @@ mac_proc_check_signal(proc_t curp, struct proc *proc, int signum)
 }
 
 int
+mac_proc_check_syscall_unix(proc_t curp, int scnum)
+{
+	int error;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce) {
+		return 0;
+	}
+#endif
+	if (!mac_proc_check_enforce(curp)) {
+		return 0;
+	}
+
+	MAC_CHECK(proc_check_syscall_unix, curp, scnum);
+
+	return error;
+}
+
+int
 mac_proc_check_wait(proc_t curp, struct proc *proc)
 {
 	kauth_cred_t cred;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -31,10 +31,15 @@
 #include <mach/boolean.h>
 
 #include <kern/coalition.h>
+#include <kern/exc_resource.h>
 #include <kern/host.h>
 #include <kern/kalloc.h>
 #include <kern/ledger.h>
 #include <kern/mach_param.h> /* for TASK_CHUNK */
+#if MONOTONIC
+#include <kern/monotonic.h>
+#endif /* MONOTONIC */
+#include <kern/policy_internal.h>
 #include <kern/task.h>
 #include <kern/thread_group.h>
 #include <kern/zalloc.h>
@@ -45,13 +50,16 @@
 #include <mach/host_priv.h>
 #include <mach/host_special_ports.h>
 
+#include <os/log.h>
+
 #include <sys/errno.h>
 
 /*
  * BSD interface functions
  */
 int coalitions_get_list(int type, struct procinfo_coalinfo *coal_list, int list_sz);
-boolean_t coalition_is_leader(task_t task, int coal_type, coalition_t *coal);
+coalition_t task_get_coalition(task_t task, int type);
+boolean_t coalition_is_leader(task_t task, coalition_t coal);
 task_t coalition_get_leader(coalition_t coal);
 int coalition_get_task_count(coalition_t coal);
 uint64_t coalition_get_page_count(coalition_t coal, int *ntasks);
@@ -61,6 +69,14 @@ int coalition_get_pid_list(coalition_t coal, uint32_t rolemask, int sort_order,
 /* defined in task.c */
 extern ledger_template_t task_ledger_template;
 
+/*
+ * Templates; task template is copied due to potential allocation limits on
+ * task ledgers.
+ */
+ledger_template_t coalition_task_ledger_template = NULL;
+ledger_template_t coalition_ledger_template = NULL;
+
+extern int      proc_selfpid(void);
 /*
  * Coalition zone needs limits. We expect there will be as many coalitions as
  * tasks (same order of magnitude), so use the task zone's limits.
@@ -175,6 +191,10 @@ static void          i_coal_resource_iterate_tasks(coalition_t coal, void *ctx,
 static_assert(COALITION_NUM_THREAD_QOS_TYPES == THREAD_QOS_LAST);
 
 struct i_resource_coalition {
+	/*
+	 * This keeps track of resource utilization of tasks that are no longer active
+	 * in the coalition and is updated when a task is removed from the coalition.
+	 */
 	ledger_t ledger;
 	uint64_t bytesread;
 	uint64_t byteswritten;
@@ -184,9 +204,15 @@ struct i_resource_coalition {
 	uint64_t logical_deferred_writes;
 	uint64_t logical_invalidated_writes;
 	uint64_t logical_metadata_writes;
+	uint64_t logical_immediate_writes_to_external;
+	uint64_t logical_deferred_writes_to_external;
+	uint64_t logical_invalidated_writes_to_external;
+	uint64_t logical_metadata_writes_to_external;
 	uint64_t cpu_ptime;
 	uint64_t cpu_time_eqos[COALITION_NUM_THREAD_QOS_TYPES];      /* cpu time per effective QoS class */
 	uint64_t cpu_time_rqos[COALITION_NUM_THREAD_QOS_TYPES];      /* cpu time per requested QoS class */
+	uint64_t cpu_instructions;
+	uint64_t cpu_cycles;
 
 	uint64_t task_count;      /* tasks that have started in this coalition */
 	uint64_t dead_task_count; /* tasks that have exited in this coalition;
@@ -200,6 +226,11 @@ struct i_resource_coalition {
 	uint64_t time_nonempty;
 
 	queue_head_t tasks;         /* List of active tasks in the coalition */
+	/*
+	 * This ledger is used for triggering resource exception. For the tracked resources, this is updated
+	 * when the member tasks' resource usage changes.
+	 */
+	ledger_t resource_monitor_ledger;
 };
 
 /*
@@ -212,7 +243,7 @@ static kern_return_t i_coal_jetsam_adopt_task(coalition_t coal, task_t task);
 static kern_return_t i_coal_jetsam_remove_task(coalition_t coal, task_t task);
 static kern_return_t i_coal_jetsam_set_taskrole(coalition_t coal,
     task_t task, int role);
-static int           i_coal_jetsam_get_taskrole(coalition_t coal, task_t task);
+int           i_coal_jetsam_get_taskrole(coalition_t coal, task_t task);
 static void          i_coal_jetsam_iterate_tasks(coalition_t coal, void *ctx,
     void (*callback)(coalition_t, void *, task_t));
 
@@ -256,7 +287,7 @@ struct coalition {
 
 	queue_chain_t coalitions;   /* global list of coalitions */
 
-	decl_lck_mtx_data(, lock)    /* Coalition lock. */
+	decl_lck_mtx_data(, lock);    /* Coalition lock. */
 
 	/* put coalition type-specific structures here */
 	union {
@@ -316,6 +347,178 @@ static const struct coalition_type
 #endif /* CONFIG_EMBEDDED */
 
 
+/*
+ *
+ * Coalition ledger implementation
+ *
+ */
+
+struct coalition_ledger_indices coalition_ledgers =
+{.logical_writes = -1, };
+void __attribute__((noinline)) SENDING_NOTIFICATION__THIS_COALITION_IS_CAUSING_TOO_MUCH_IO(int flavor);
+
+ledger_t
+coalition_ledger_get_from_task(task_t task)
+{
+	ledger_t ledger = LEDGER_NULL;
+	coalition_t coal = task->coalition[COALITION_TYPE_RESOURCE];
+
+	if (coal != NULL && (!queue_empty(&task->task_coalition[COALITION_TYPE_RESOURCE]))) {
+		ledger = coal->r.resource_monitor_ledger;
+		ledger_reference(ledger);
+	}
+	return ledger;
+}
+
+
+enum {
+	COALITION_IO_LEDGER_ENABLE,
+	COALITION_IO_LEDGER_DISABLE
+};
+
+void
+coalition_io_monitor_ctl(struct coalition *coalition, uint32_t flags, int64_t limit)
+{
+	ledger_t ledger = coalition->r.resource_monitor_ledger;
+
+	if (flags == COALITION_IO_LEDGER_ENABLE) {
+		/* Configure the logical I/O ledger */
+		ledger_set_limit(ledger, coalition_ledgers.logical_writes, (limit * 1024 * 1024), 0);
+		ledger_set_period(ledger, coalition_ledgers.logical_writes, (COALITION_LEDGER_MONITOR_INTERVAL_SECS * NSEC_PER_SEC));
+	} else if (flags == COALITION_IO_LEDGER_DISABLE) {
+		ledger_disable_refill(ledger, coalition_ledgers.logical_writes);
+		ledger_disable_callback(ledger, coalition_ledgers.logical_writes);
+	}
+}
+
+int
+coalition_ledger_set_logical_writes_limit(struct coalition *coalition, int64_t limit)
+{
+	int error = 0;
+
+	/*  limit = -1 will be used to disable the limit and the callback */
+	if (limit > COALITION_MAX_LOGICAL_WRITES_LIMIT || limit == 0 || limit < -1) {
+		error = EINVAL;
+		goto out;
+	}
+
+	coalition_lock(coalition);
+	if (limit == -1) {
+		coalition_io_monitor_ctl(coalition, COALITION_IO_LEDGER_DISABLE, limit);
+	} else {
+		coalition_io_monitor_ctl(coalition, COALITION_IO_LEDGER_ENABLE, limit);
+	}
+	coalition_unlock(coalition);
+out:
+	return error;
+}
+
+void __attribute__((noinline))
+SENDING_NOTIFICATION__THIS_COALITION_IS_CAUSING_TOO_MUCH_IO(int flavor)
+{
+	int pid = proc_selfpid();
+	ledger_amount_t new_limit;
+	task_t task = current_task();
+	struct ledger_entry_info lei;
+	kern_return_t kr;
+	ledger_t ledger;
+	struct coalition *coalition = task->coalition[COALITION_TYPE_RESOURCE];
+
+	assert(coalition != NULL);
+	ledger = coalition->r.resource_monitor_ledger;
+
+	switch (flavor) {
+	case FLAVOR_IO_LOGICAL_WRITES:
+		ledger_get_entry_info(ledger, coalition_ledgers.logical_writes, &lei);
+		trace_resource_violation(RMON_LOGWRITES_VIOLATED, &lei);
+		break;
+	default:
+		goto Exit;
+	}
+
+	os_log(OS_LOG_DEFAULT, "Coalition [%lld] caught causing excessive I/O (flavor: %d). Task I/O: %lld MB. [Limit : %lld MB per %lld secs]. Triggered by process [%d]\n",
+	    coalition->id, flavor, (lei.lei_balance / (1024 * 1024)), (lei.lei_limit / (1024 * 1024)),
+	    (lei.lei_refill_period / NSEC_PER_SEC), pid);
+
+	kr = send_resource_violation(send_disk_writes_violation, task, &lei, kRNFlagsNone);
+	if (kr) {
+		os_log(OS_LOG_DEFAULT, "ERROR %#x returned from send_resource_violation(disk_writes, ...)\n", kr);
+	}
+
+	/*
+	 * Continue to monitor the coalition after it hits the initital limit, but increase
+	 * the limit exponentially so that we don't spam the listener.
+	 */
+	new_limit = (lei.lei_limit / 1024 / 1024) * 4;
+	coalition_lock(coalition);
+	if (new_limit > COALITION_MAX_LOGICAL_WRITES_LIMIT) {
+		coalition_io_monitor_ctl(coalition, COALITION_IO_LEDGER_DISABLE, -1);
+	} else {
+		coalition_io_monitor_ctl(coalition, COALITION_IO_LEDGER_ENABLE, new_limit);
+	}
+	coalition_unlock(coalition);
+
+Exit:
+	return;
+}
+
+void
+coalition_io_rate_exceeded(int warning, const void *param0, __unused const void *param1)
+{
+	if (warning == 0) {
+		SENDING_NOTIFICATION__THIS_COALITION_IS_CAUSING_TOO_MUCH_IO((int)param0);
+	}
+}
+
+void
+init_coalition_ledgers(void)
+{
+	ledger_template_t t;
+	assert(coalition_ledger_template == NULL);
+
+	if ((t = ledger_template_create("Per-coalition ledgers")) == NULL) {
+		panic("couldn't create coalition ledger template");
+	}
+
+	coalition_ledgers.logical_writes = ledger_entry_add(t, "logical_writes", "res", "bytes");
+
+	if (coalition_ledgers.logical_writes < 0) {
+		panic("couldn't create entries for coaliton ledger template");
+	}
+
+	ledger_set_callback(t, coalition_ledgers.logical_writes, coalition_io_rate_exceeded, (void *)FLAVOR_IO_LOGICAL_WRITES, NULL);
+	ledger_template_complete(t);
+
+	coalition_task_ledger_template = ledger_template_copy(task_ledger_template, "Coalition task ledgers");
+
+	if (coalition_task_ledger_template == NULL) {
+		panic("couldn't create coalition task ledger template");
+	}
+
+	ledger_template_complete(coalition_task_ledger_template);
+
+	coalition_ledger_template = t;
+}
+
+void
+coalition_io_ledger_update(task_t task, int32_t flavor, boolean_t is_credit, uint32_t io_size)
+{
+	ledger_t ledger;
+	coalition_t coal = task->coalition[COALITION_TYPE_RESOURCE];
+
+	assert(coal != NULL);
+	ledger = coal->r.resource_monitor_ledger;
+	if (LEDGER_VALID(ledger)) {
+		if (flavor == FLAVOR_IO_LOGICAL_WRITES) {
+			if (is_credit) {
+				ledger_credit(ledger, coalition_ledgers.logical_writes, io_size);
+			} else {
+				ledger_debit(ledger, coalition_ledgers.logical_writes, io_size);
+			}
+		}
+	}
+}
+
 static void
 coalition_notify_user(uint64_t id, uint32_t flags)
 {
@@ -341,9 +544,15 @@ i_coal_resource_init(coalition_t coal, boolean_t privileged)
 {
 	(void)privileged;
 	assert(coal && coal->type == COALITION_TYPE_RESOURCE);
-	coal->r.ledger = ledger_instantiate(task_ledger_template,
+	coal->r.ledger = ledger_instantiate(coalition_task_ledger_template,
 	    LEDGER_CREATE_ACTIVE_ENTRIES);
 	if (coal->r.ledger == NULL) {
+		return KERN_RESOURCE_SHORTAGE;
+	}
+
+	coal->r.resource_monitor_ledger = ledger_instantiate(coalition_ledger_template,
+	    LEDGER_CREATE_ACTIVE_ENTRIES);
+	if (coal->r.resource_monitor_ledger == NULL) {
 		return KERN_RESOURCE_SHORTAGE;
 	}
 
@@ -356,7 +565,9 @@ static void
 i_coal_resource_dealloc(coalition_t coal)
 {
 	assert(coal && coal->type == COALITION_TYPE_RESOURCE);
+
 	ledger_dereference(coal->r.ledger);
+	ledger_dereference(coal->r.resource_monitor_ledger);
 }
 
 static kern_return_t
@@ -429,12 +640,24 @@ i_coal_resource_remove_task(coalition_t coal, task_t task)
 #else
 		cr->energy += task_energy(task);
 #endif
-		cr->logical_immediate_writes += task->task_immediate_writes;
-		cr->logical_deferred_writes += task->task_deferred_writes;
-		cr->logical_invalidated_writes += task->task_invalidated_writes;
-		cr->logical_metadata_writes += task->task_metadata_writes;
+		cr->logical_immediate_writes += task->task_writes_counters_internal.task_immediate_writes;
+		cr->logical_deferred_writes += task->task_writes_counters_internal.task_deferred_writes;
+		cr->logical_invalidated_writes += task->task_writes_counters_internal.task_invalidated_writes;
+		cr->logical_metadata_writes += task->task_writes_counters_internal.task_metadata_writes;
+		cr->logical_immediate_writes_to_external += task->task_writes_counters_external.task_immediate_writes;
+		cr->logical_deferred_writes_to_external += task->task_writes_counters_external.task_deferred_writes;
+		cr->logical_invalidated_writes_to_external += task->task_writes_counters_external.task_invalidated_writes;
+		cr->logical_metadata_writes_to_external += task->task_writes_counters_external.task_metadata_writes;
 		cr->cpu_ptime += task_cpu_ptime(task);
 		task_update_cpu_time_qos_stats(task, cr->cpu_time_eqos, cr->cpu_time_rqos);
+#if MONOTONIC
+		uint64_t counts[MT_CORE_NFIXED] = {};
+		(void)mt_fixed_task_counts(task, counts);
+		cr->cpu_cycles += counts[MT_CORE_CYCLES];
+#if defined(MT_CORE_INSTRS)
+		cr->cpu_instructions += counts[MT_CORE_INSTRS];
+#endif /* defined(MT_CORE_INSTRS) */
+#endif /* MONOTONIC */
 	}
 
 	/* remove the task from the coalition's list */
@@ -498,7 +721,7 @@ coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_us
 		}
 	}
 
-	ledger_t sum_ledger = ledger_instantiate(task_ledger_template, LEDGER_CREATE_ACTIVE_ENTRIES);
+	ledger_t sum_ledger = ledger_instantiate(coalition_task_ledger_template, LEDGER_CREATE_ACTIVE_ENTRIES);
 	if (sum_ledger == LEDGER_NULL) {
 		return KERN_RESOURCE_SHORTAGE;
 	}
@@ -518,6 +741,10 @@ coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_us
 	uint64_t logical_deferred_writes = coal->r.logical_deferred_writes;
 	uint64_t logical_invalidated_writes = coal->r.logical_invalidated_writes;
 	uint64_t logical_metadata_writes = coal->r.logical_metadata_writes;
+	uint64_t logical_immediate_writes_to_external = coal->r.logical_immediate_writes_to_external;
+	uint64_t logical_deferred_writes_to_external = coal->r.logical_deferred_writes_to_external;
+	uint64_t logical_invalidated_writes_to_external = coal->r.logical_invalidated_writes_to_external;
+	uint64_t logical_metadata_writes_to_external = coal->r.logical_metadata_writes_to_external;
 	int64_t cpu_time_billed_to_me = 0;
 	int64_t cpu_time_billed_to_others = 0;
 	int64_t energy_billed_to_me = 0;
@@ -527,6 +754,9 @@ coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_us
 	memcpy(cpu_time_eqos, coal->r.cpu_time_eqos, sizeof(cpu_time_eqos));
 	uint64_t cpu_time_rqos[COALITION_NUM_THREAD_QOS_TYPES];
 	memcpy(cpu_time_rqos, coal->r.cpu_time_rqos, sizeof(cpu_time_rqos));
+	uint64_t cpu_instructions = coal->r.cpu_instructions;
+	uint64_t cpu_cycles = coal->r.cpu_cycles;
+
 	/*
 	 * Add to that all the active tasks' ledgers. Tasks cannot deallocate
 	 * out from under us, since we hold the coalition lock.
@@ -549,12 +779,25 @@ coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_us
 #else
 		energy += task_energy(task);
 #endif
-		logical_immediate_writes += task->task_immediate_writes;
-		logical_deferred_writes += task->task_deferred_writes;
-		logical_invalidated_writes += task->task_invalidated_writes;
-		logical_metadata_writes += task->task_metadata_writes;
+		logical_immediate_writes += task->task_writes_counters_internal.task_immediate_writes;
+		logical_deferred_writes += task->task_writes_counters_internal.task_deferred_writes;
+		logical_invalidated_writes += task->task_writes_counters_internal.task_invalidated_writes;
+		logical_metadata_writes += task->task_writes_counters_internal.task_metadata_writes;
+		logical_immediate_writes_to_external += task->task_writes_counters_external.task_immediate_writes;
+		logical_deferred_writes_to_external += task->task_writes_counters_external.task_deferred_writes;
+		logical_invalidated_writes_to_external += task->task_writes_counters_external.task_invalidated_writes;
+		logical_metadata_writes_to_external += task->task_writes_counters_external.task_metadata_writes;
+
 		cpu_ptime += task_cpu_ptime(task);
 		task_update_cpu_time_qos_stats(task, cpu_time_eqos, cpu_time_rqos);
+#if MONOTONIC
+		uint64_t counts[MT_CORE_NFIXED] = {};
+		(void)mt_fixed_task_counts(task, counts);
+		cpu_cycles += counts[MT_CORE_CYCLES];
+#if defined(MT_CORE_INSTRS)
+		cpu_instructions += counts[MT_CORE_INSTRS];
+#endif /* defined(MT_CORE_INSTRS) */
+#endif /* MONOTONIC */
 	}
 
 	kr = ledger_get_balance(sum_ledger, task_ledgers.cpu_time_billed_to_me, (int64_t *)&cpu_time_billed_to_me);
@@ -620,9 +863,15 @@ coalition_resource_usage_internal(coalition_t coal, struct coalition_resource_us
 	cru_out->logical_deferred_writes = logical_deferred_writes;
 	cru_out->logical_invalidated_writes = logical_invalidated_writes;
 	cru_out->logical_metadata_writes = logical_metadata_writes;
+	cru_out->logical_immediate_writes_to_external = logical_immediate_writes_to_external;
+	cru_out->logical_deferred_writes_to_external = logical_deferred_writes_to_external;
+	cru_out->logical_invalidated_writes_to_external = logical_invalidated_writes_to_external;
+	cru_out->logical_metadata_writes_to_external = logical_metadata_writes_to_external;
 	cru_out->cpu_ptime = cpu_ptime;
 	cru_out->cpu_time_eqos_len = COALITION_NUM_THREAD_QOS_TYPES;
 	memcpy(cru_out->cpu_time_eqos, cpu_time_eqos, sizeof(cru_out->cpu_time_eqos));
+	cru_out->cpu_cycles = cpu_cycles;
+	cru_out->cpu_instructions = cpu_instructions;
 	ledger_dereference(sum_ledger);
 	sum_ledger = LEDGER_NULL;
 
@@ -776,7 +1025,7 @@ i_coal_jetsam_set_taskrole(coalition_t coal, task_t task, int role)
 	return KERN_SUCCESS;
 }
 
-static int
+int
 i_coal_jetsam_get_taskrole(coalition_t coal, task_t task)
 {
 	struct i_jetsam_coalition *cj;
@@ -1176,7 +1425,7 @@ task_coalition_adjust_focal_count(task_t task, int count, uint32_t *new_count)
 		return FALSE;
 	}
 
-	*new_count = hw_atomic_add(&coal->focal_task_count, count);
+	*new_count = os_atomic_add(&coal->focal_task_count, count, relaxed);
 	assert(*new_count != UINT32_MAX);
 	return TRUE;
 }
@@ -1200,7 +1449,7 @@ task_coalition_adjust_nonfocal_count(task_t task, int count, uint32_t *new_count
 		return FALSE;
 	}
 
-	*new_count = hw_atomic_add(&coal->nonfocal_task_count, count);
+	*new_count = os_atomic_add(&coal->nonfocal_task_count, count, relaxed);
 	assert(*new_count != UINT32_MAX);
 	return TRUE;
 }
@@ -1672,6 +1921,8 @@ coalitions_init(void)
 
 	init_task_ledgers();
 
+	init_coalition_ledgers();
+
 	for (i = 0, ctype = &s_coalition_types[0]; i < COALITION_NUM_TYPES; ctype++, i++) {
 		/* verify the entry in the global coalition types array */
 		if (ctype->type != i ||
@@ -1735,46 +1986,37 @@ coalitions_get_list(int type, struct procinfo_coalinfo *coal_list, int list_sz)
 }
 
 /*
- * Jetsam coalition interface
- *
+ * Return the coaltion of the given type to which the task belongs.
  */
-boolean_t
-coalition_is_leader(task_t task, int coal_type, coalition_t *coal)
+coalition_t
+task_get_coalition(task_t task, int coal_type)
 {
 	coalition_t c;
-	boolean_t ret;
 
-	if (coal) { /* handle the error cases gracefully */
-		*coal = COALITION_NULL;
-	}
-
-	if (!task) {
-		return FALSE;
-	}
-
-	if (coal_type > COALITION_TYPE_MAX) {
-		return FALSE;
+	if (task == NULL || coal_type > COALITION_TYPE_MAX) {
+		return COALITION_NULL;
 	}
 
 	c = task->coalition[coal_type];
-	if (!c) {
-		return FALSE;
+	assert(c == COALITION_NULL || (int)c->type == coal_type);
+	return c;
+}
+
+/*
+ * Report if the given task is the leader of the given jetsam coalition.
+ */
+boolean_t
+coalition_is_leader(task_t task, coalition_t coal)
+{
+	boolean_t ret = FALSE;
+
+	if (coal != COALITION_NULL) {
+		coalition_lock(coal);
+
+		ret = (coal->type == COALITION_TYPE_JETSAM && coal->j.leader == task);
+
+		coalition_unlock(coal);
 	}
-
-	assert((int)c->type == coal_type);
-
-	coalition_lock(c);
-
-	if (coal) {
-		*coal = c;
-	}
-
-	ret = FALSE;
-	if (c->type == COALITION_TYPE_JETSAM && c->j.leader == task) {
-		ret = TRUE;
-	}
-
-	coalition_unlock(c);
 
 	return ret;
 }

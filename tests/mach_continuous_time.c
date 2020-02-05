@@ -36,7 +36,7 @@ update(uint64_t *a, uint64_t *c)
 }
 
 T_DECL(mct_monotonic, "Testing mach_continuous_time returns sane, monotonic values",
-    T_META_ALL_VALID_ARCHS(true))
+    T_META_ALL_VALID_ARCHS(true), T_META_RUN_CONCURRENTLY(true))
 {
 	mach_timebase_info(&tb_info);
 #ifdef HAS_KERNEL_TIME_TRAPS
@@ -69,7 +69,7 @@ T_DECL(mct_monotonic, "Testing mach_continuous_time returns sane, monotonic valu
 }
 
 T_DECL(mat_monotonic, "Testing mach_absolute_time returns sane, monotonic values",
-    T_META_ALL_VALID_ARCHS(true))
+    T_META_ALL_VALID_ARCHS(true), T_META_RUN_CONCURRENTLY(true))
 {
 	mach_timebase_info(&tb_info);
 #ifdef HAS_KERNEL_TIME_TRAPS
@@ -100,7 +100,8 @@ T_DECL(mat_monotonic, "Testing mach_absolute_time returns sane, monotonic values
 	}
 }
 
-T_DECL(mct_pause, "Testing mach_continuous_time and mach_absolute_time don't diverge")
+T_DECL(mct_pause, "Testing mach_continuous_time and mach_absolute_time don't diverge",
+    T_META_RUN_CONCURRENTLY(true))
 {
 	mach_timebase_info(&tb_info);
 
@@ -136,7 +137,8 @@ update_kern(uint64_t *abs, uint64_t *cont)
 #endif
 
 #ifdef HAS_KERNEL_TIME_TRAPS
-T_DECL(mct_pause_kern, "Testing kernel mach_continuous_time and mach_absolute_time don't diverge")
+T_DECL(mct_pause_kern, "Testing kernel mach_continuous_time and mach_absolute_time don't diverge",
+    T_META_RUN_CONCURRENTLY(true))
 {
 	mach_timebase_info(&tb_info);
 
@@ -281,7 +283,7 @@ T_DECL(mct_settimeofday_kern, "Testing kernel mach_continuous_time behavior over
 #endif
 
 T_DECL(mct_aproximate, "Testing mach_continuous_approximate_time()",
-    T_META_ALL_VALID_ARCHS(true))
+    T_META_ALL_VALID_ARCHS(true), T_META_RUN_CONCURRENTLY(true))
 {
 	mach_timebase_info(&tb_info);
 

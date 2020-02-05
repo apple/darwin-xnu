@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -37,15 +37,6 @@
 #include <os/base.h>
 #include <sys/cdefs.h>
 
-#if MACH_KERNEL_PRIVATE
-#define _SYS_TYPES_H_ 1
-#include <sys/kernel_types.h>
-#include <sys/_types/_errno_t.h>
-#else
-#include <sys/kernel_types.h>
-#include <sys/types.h>
-#endif
-
 /*
  * We rely on img4.h's logic for either including sys/types.h or declaring
  * errno_t ourselves. So when building the kernel, include img4.h from our
@@ -63,7 +54,7 @@
  * it can be tested at build-time and not require rev-locked submissions of xnu
  * and AppleImage4.
  */
-#define IMG4_INTERFACE_VERSION (2u)
+#define IMG4_INTERFACE_VERSION (3u)
 
 /*!
  * @typedef img4_init_t
@@ -240,9 +231,6 @@ typedef errno_t (*img4_payload_init_with_vnode_4xnu_t)(
  *
  * @field i4if_v3.nonce_domain_cryptex
  * The {@link IMG4_NONCE_DOMAIN_CRYPTEX} global.
- *
- * @field i4if_v4.environment_init_identity
- * A pointer to the {@link img4_environment_init_identity} function.
  */
 
 typedef struct _img4_interface {
@@ -266,10 +254,14 @@ typedef struct _img4_interface {
 	struct {
 		img4_payload_init_with_vnode_4xnu_t payload_init_with_vnode_4xnu;
 	} i4if_v2;
-	void *__reserved[17];
+	struct {
+		const img4_nonce_domain_t *nonce_domain_pdi;
+		const img4_nonce_domain_t *nonce_domain_cryptex;
+	} i4if_v3;
+	void *__reserved[15];
 } img4_interface_t;
 
-__BEGIN_DECLS;
+__BEGIN_DECLS
 
 /*!
  * @const img4if
@@ -292,6 +284,6 @@ OS_EXPORT OS_NONNULL1
 void
 img4_interface_register(const img4_interface_t *i4);
 
-__END_DECLS;
+__END_DECLS
 
 #endif // __IMG4_INTERFACE_H

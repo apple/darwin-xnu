@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -53,7 +53,7 @@ class IOCommandGate;
  */
 class IOWorkLoop : public OSObject
 {
-	OSDeclareDefaultStructors(IOWorkLoop)
+	OSDeclareDefaultStructors(IOWorkLoop);
 
 public:
 /*!
@@ -294,8 +294,8 @@ public:
  *   @result Returns the value of the Action callout.
  */
 	virtual IOReturn runAction(Action action, OSObject *target,
-	    void *arg0 = 0, void *arg1 = 0,
-	    void *arg2 = 0, void *arg3 = 0);
+	    void *arg0 = NULL, void *arg1 = NULL,
+	    void *arg2 = NULL, void *arg3 = NULL);
 
 #ifdef __BLOCKS__
 /*! @function runAction

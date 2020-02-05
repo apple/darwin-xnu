@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -192,6 +192,7 @@ make_ifmibdata(struct ifnet *ifp, int *name, struct sysctl_req *req)
 		if_copy_data_extended(ifp, &ifmd_supp->ifmd_data_extended);
 		if_copy_packet_stats(ifp, &ifmd_supp->ifmd_packet_stats);
 		if_copy_rxpoll_stats(ifp, &ifmd_supp->ifmd_rxpoll_stats);
+		if_copy_netif_stats(ifp, &ifmd_supp->ifmd_netif_stats);
 
 		if (req->oldptr == USER_ADDR_NULL) {
 			req->oldlen = sizeof(*ifmd_supp);

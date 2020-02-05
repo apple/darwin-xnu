@@ -10,6 +10,8 @@
 #include <mach/mach.h>
 #include <darwintest.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 T_DECL(voucher_entry, "voucher_entry", T_META_CHECK_LEAKS(false), T_META_ALL_VALID_ARCHS(true))
 {
 	kern_return_t kr        = KERN_SUCCESS;

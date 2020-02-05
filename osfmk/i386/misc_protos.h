@@ -117,19 +117,15 @@ extern void     rtc_sleep_wakeup(uint64_t base);
 
 extern void     rtc_timer_start(void);
 
-extern void     rtc_clock_stepping(
-	uint32_t new_frequency,
-	uint32_t old_frequency);
-extern void     rtc_clock_stepped(
-	uint32_t new_frequency,
-	uint32_t old_frequency);
 extern void     rtc_clock_napped(uint64_t, uint64_t);
 extern void     rtc_clock_adjust(uint64_t);
 
 extern void     pmap_lowmem_finalize(void);
 
 thread_t Switch_context(thread_t, thread_continue_t, thread_t);
-thread_t Shutdown_context(thread_t thread, void (*doshutdown)(processor_t), processor_t  processor);
+
+__not_tail_called thread_t
+Shutdown_context(thread_t thread, void (*doshutdown)(processor_t), processor_t  processor);
 
 #ifdef __x86_64__
 uint64_t x86_64_pre_sleep(void);
@@ -149,6 +145,10 @@ void
 copy_debug_state64(x86_debug_state64_t *src, x86_debug_state64_t *target, boolean_t all);
 
 extern void act_machine_switch_pcb(thread_t old, thread_t new);
+
+extern void Idle_PTs_release(vm_offset_t start, vm_offset_t end);
+extern ppnum_t released_PT_ppn;
+extern uint32_t released_PT_cnt;
 
 /* Fast-restart parameters */
 #define FULL_SLAVE_INIT (NULL)

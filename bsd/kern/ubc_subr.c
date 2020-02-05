@@ -82,6 +82,8 @@ extern kern_return_t memory_object_pages_resident(memory_object_control_t,
 extern kern_return_t    memory_object_signed(memory_object_control_t control,
     boolean_t is_signed);
 extern boolean_t        memory_object_is_signed(memory_object_control_t);
+extern void             memory_object_mark_trusted(
+	memory_object_control_t         control);
 
 /* XXX Same for those. */
 
@@ -1936,6 +1938,33 @@ ubc_map(vnode_t vp, int flags)
 			 */
 			if (vnode_ref_ext(vp, 0, VNODE_REF_FORCE)) {
 				panic("%s : VNODE_REF_FORCE failed\n", __FUNCTION__);
+			}
+			/*
+			 * Vnodes that are on "unreliable" media (like disk
+			 * images, network filesystems, 3rd-party filesystems,
+			 * and possibly external devices) could see their
+			 * contents be changed via the backing store without
+			 * triggering copy-on-write, so we can't fully rely
+			 * on copy-on-write and might have to resort to
+			 * copy-on-read to protect "privileged" processes and
+			 * prevent privilege escalation.
+			 *
+			 * The root filesystem is considered "reliable" because
+			 * there's not much point in trying to protect
+			 * ourselves from such a vulnerability and the extra
+			 * cost of copy-on-read (CPU time and memory pressure)
+			 * could result in some serious regressions.
+			 */
+			if (vp->v_mount != NULL &&
+			    ((vp->v_mount->mnt_flag & MNT_ROOTFS) ||
+			    vnode_on_reliable_media(vp))) {
+				/*
+				 * This vnode is deemed "reliable" so mark
+				 * its VM object as "trusted".
+				 */
+				memory_object_mark_trusted(uip->ui_control);
+			} else {
+//				printf("BUGGYCOW: %s:%d vp %p \"%s\" in mnt %p \"%s\" is untrusted\n", __FUNCTION__, __LINE__, vp, vp->v_name, vp->v_mount, vp->v_mount->mnt_vnodecovered->v_name);
 			}
 		}
 	}

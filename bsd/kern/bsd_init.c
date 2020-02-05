@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -133,6 +133,7 @@
 #include <sys/event.h>                  /* for knote_init() */
 #include <sys/eventhandler.h>           /* for eventhandler_init() */
 #include <sys/kern_memorystatus.h>      /* for memorystatus_init() */
+#include <sys/kern_memorystatus_freeze.h> /* for memorystatus_freeze_init() */
 #include <sys/aio_kern.h>               /* for aio_init() */
 #include <sys/semaphore.h>              /* for psem_cache_init() */
 #include <net/dlil.h>                   /* for dlil_init() */
@@ -164,6 +165,7 @@
 #include <netinet/tcp_cc.h>                     /* for tcp_cc_init() */
 #include <netinet/mptcp_var.h>          /* for mptcp_control_register() */
 #include <net/nwk_wq.h>                 /* for nwk_wq_init */
+#include <net/restricted_in_port.h> /* for restricted_in_port_init() */
 #include <kern/assert.h>                /* for assert() */
 #include <sys/kern_overrides.h>         /* for init_system_override() */
 
@@ -177,7 +179,7 @@
 
 #include <machine/exec.h>
 
-#if NFSCLIENT
+#if CONFIG_NETBOOT
 #include <sys/netboot.h>
 #endif
 
@@ -236,9 +238,10 @@ dev_t   dumpdev;                /* device to take dumps on */
 long    dumplo;                 /* offset into dumpdev */
 long    hostid;
 char    hostname[MAXHOSTNAMELEN];
-int             hostnamelen;
+lck_mtx_t hostname_lock;
+lck_grp_t *hostname_lck_grp;
 char    domainname[MAXDOMNAMELEN];
-int             domainnamelen;
+lck_mtx_t domainname_lock;
 
 char rootdevice[DEVMAXNAMESIZE];
 
@@ -247,11 +250,15 @@ struct  kmemstats kmemstats[M_LAST];
 #endif
 
 struct  vnode *rootvp;
-int boothowto = RB_DEBUG;
+int boothowto;
 int minimalboot = 0;
 #if CONFIG_EMBEDDED
 int darkboot = 0;
 #endif
+
+#if __arm64__
+int legacy_footprint_entitlement_mode = LEGACY_FOOTPRINT_ENTITLEMENT_IGNORE;
+#endif /* __arm64__ */
 
 #if PROC_REF_DEBUG
 __private_extern__ int proc_ref_tracking_disabled = 0; /* disable panics on leaked proc refs across syscall boundary */
@@ -272,8 +279,19 @@ extern void oslog_setsize(int size);
 extern void throttle_init(void);
 extern void acct_init(void);
 
+#if CONFIG_LOCKERBOOT
+#define LOCKER_PROTOBOOT_MOUNT "/protoboot"
+
+const char kernel_protoboot_mount[] = LOCKER_PROTOBOOT_MOUNT;
+extern int mount_locker_protoboot(const char *fsname, const char *mntpoint,
+    const char *pbdevpath);
+#endif
+
 extern int serverperfmode;
 extern int ncl;
+#if DEVELOPMENT || DEBUG
+extern int syscallfilter_disable;
+#endif // DEVELOPMENT || DEBUG
 
 vm_map_t        bsd_pageable_map;
 vm_map_t        mb_map;
@@ -286,11 +304,10 @@ __private_extern__ vm_offset_t * execargs_cache = NULL;
 
 void bsd_exec_setup(int);
 
-#if __arm64__
-__private_extern__ int bootarg_no64exec = 0;
-#endif
+__private_extern__ int bootarg_execfailurereports = 0;
+
 #if __x86_64__
-__private_extern__ int bootarg_no32exec = 0;
+__private_extern__ int bootarg_no32exec = 1;
 #endif
 __private_extern__ int bootarg_vnode_cache_defeat = 0;
 
@@ -312,6 +329,7 @@ __private_extern__ int bootarg_disable_aslr = 0;
 #if DEVELOPMENT || DEBUG
 char dyld_alt_path[MAXPATHLEN];
 int use_alt_dyld = 0;
+extern uint64_t dyld_flags;
 #endif
 
 int     cmask = CMASK;
@@ -380,9 +398,9 @@ process_name(const char *s, proc_t p)
 
 /* To allow these values to be patched, they're globals here */
 #include <machine/vmparam.h>
-struct rlimit vm_initial_limit_stack = { DFLSSIZ, MAXSSIZ - PAGE_MAX_SIZE };
-struct rlimit vm_initial_limit_data = { DFLDSIZ, MAXDSIZ };
-struct rlimit vm_initial_limit_core = { DFLCSIZ, MAXCSIZ };
+struct rlimit vm_initial_limit_stack = { .rlim_cur = DFLSSIZ, .rlim_max = MAXSSIZ - PAGE_MAX_SIZE };
+struct rlimit vm_initial_limit_data = { .rlim_cur = DFLDSIZ, .rlim_max = MAXDSIZ };
+struct rlimit vm_initial_limit_core = { .rlim_cur = DFLCSIZ, .rlim_max = MAXCSIZ };
 
 extern thread_t cloneproc(task_t, coalition_t, proc_t, int, int);
 extern int      (*mountroot)(void);
@@ -445,11 +463,25 @@ bsd_init(void)
 	kern_return_t   ret;
 	struct ucred temp_cred;
 	struct posix_cred temp_pcred;
-#if NFSCLIENT || CONFIG_IMAGEBOOT
+#if CONFIG_NETBOOT || CONFIG_IMAGEBOOT
 	boolean_t       netboot = FALSE;
 #endif
+#if CONFIG_LOCKERBOOT
+	vnode_t pbvn = NULLVP;
+	mount_t pbmnt = NULL;
+	char *pbdevp = NULL;
+	char pbdevpath[64];
+	char pbfsname[MFSNAMELEN];
+	char *slash_dev = NULL;
+#endif
 
-#define bsd_init_kprintf(x...) /* kprintf("bsd_init: " x) */
+#define DEBUG_BSDINIT 0
+
+#if DEBUG_BSDINIT
+#define bsd_init_kprintf(x, ...) kprintf("bsd_init: " x, ## __VA_ARGS__)
+#else
+#define bsd_init_kprintf(x, ...)
+#endif
 
 	throttle_init();
 
@@ -545,6 +577,10 @@ bsd_init(void)
 #endif /* MAC */
 
 	ulock_initialize();
+
+	hostname_lck_grp = lck_grp_alloc_init("hostname", LCK_GRP_ATTR_NULL);
+	lck_mtx_init(&hostname_lock, hostname_lck_grp, LCK_ATTR_NULL);
+	lck_mtx_init(&domainname_lock, hostname_lck_grp, LCK_ATTR_NULL);
 
 	/*
 	 * Create process 0.
@@ -646,7 +682,7 @@ bsd_init(void)
 	/* Create the file descriptor table. */
 	kernproc->p_fd = &filedesc0;
 	filedesc0.fd_cmask = cmask;
-	filedesc0.fd_knlistsize = -1;
+	filedesc0.fd_knlistsize = 0;
 	filedesc0.fd_knlist = NULL;
 	filedesc0.fd_knhash = NULL;
 	filedesc0.fd_knhashmask = 0;
@@ -738,6 +774,7 @@ bsd_init(void)
 	bsd_init_kprintf("calling mbinit\n");
 	mbinit();
 	net_str_id_init(); /* for mbuf tags */
+	restricted_in_port_init();
 #endif /* SOCKETS */
 
 	/*
@@ -839,13 +876,8 @@ bsd_init(void)
 	bsd_init_kprintf("calling acct_init\n");
 	acct_init();
 
-#ifdef GPROF
-	/* Initialize kernel profiling. */
-	kmstartup();
-#endif
-
 	bsd_init_kprintf("calling sysctl_mib_init\n");
-	sysctl_mib_init()
+	sysctl_mib_init();
 
 	bsd_init_kprintf("calling bsd_autoconf\n");
 	bsd_autoconf();
@@ -928,7 +960,7 @@ bsd_init(void)
 
 		bsd_init_kprintf("calling setconf\n");
 		setconf();
-#if NFSCLIENT
+#if CONFIG_NETBOOT
 		netboot = (mountroot == netboot_mountroot);
 #endif
 
@@ -937,7 +969,7 @@ bsd_init(void)
 			break;
 		}
 		rootdevice[0] = '\0';
-#if NFSCLIENT
+#if CONFIG_NETBOOT
 		if (netboot) {
 			PE_display_icon( 0, "noroot");  /* XXX a netboot-specific icon would be nicer */
 			vc_progress_set(FALSE, 0);
@@ -970,7 +1002,7 @@ bsd_init(void)
 	(void)vnode_put(rootvnode);
 	filedesc0.fd_cdir = rootvnode;
 
-#if NFSCLIENT
+#if CONFIG_NETBOOT
 	if (netboot) {
 		int err;
 
@@ -992,17 +1024,60 @@ bsd_init(void)
 
 
 #if CONFIG_IMAGEBOOT
+#if CONFIG_LOCKERBOOT
+	/*
+	 * Stash the protoboot vnode, mount, filesystem name, and device name for
+	 * later use. Note that the mount-from name may not have the "/dev/"
+	 * component, so we must sniff out this condition and add it as needed.
+	 */
+	pbvn = rootvnode;
+	pbmnt = pbvn->v_mount;
+	pbdevp = vfs_statfs(pbmnt)->f_mntfromname;
+	slash_dev = strnstr(pbdevp, "/dev/", strlen(pbdevp));
+	if (slash_dev) {
+		/*
+		 * If the old root is a snapshot mount, it will have the form:
+		 *
+		 *     com.apple.os.update-<boot manifest hash>@<dev node path>
+		 *
+		 * So we just search the mntfromname for any occurrence of "/dev/" and
+		 * grab that as the device path. The image boot code needs a dev node to
+		 * do the re-mount, so we cannot directly mount the snapshot as the
+		 * protoboot volume currently.
+		 */
+		strlcpy(pbdevpath, slash_dev, sizeof(pbdevpath));
+	} else {
+		snprintf(pbdevpath, sizeof(pbdevpath), "/dev/%s", pbdevp);
+	}
+
+	bsd_init_kprintf("protoboot mount-from: %s\n", pbdevp);
+	bsd_init_kprintf("protoboot dev path: %s\n", pbdevpath);
+
+	strlcpy(pbfsname, pbmnt->mnt_vtable->vfc_name, sizeof(pbfsname));
+#endif
 	/*
 	 * See if a system disk image is present. If so, mount it and
 	 * switch the root vnode to point to it
 	 */
-	if (netboot == FALSE && imageboot_needed()) {
+	imageboot_type_t imageboot_type = imageboot_needed();
+	if (netboot == FALSE && imageboot_type) {
 		/*
 		 * An image was found.  No turning back: we're booted
 		 * with a kernel from the disk image.
 		 */
-		imageboot_setup();
+		bsd_init_kprintf("doing image boot: type = %d\n", imageboot_type);
+		imageboot_setup(imageboot_type);
 	}
+
+#if CONFIG_LOCKERBOOT
+	if (imageboot_type == IMAGEBOOT_LOCKER) {
+		bsd_init_kprintf("booting from locker\n");
+		if (vnode_tag(rootvnode) != VT_LOCKERFS) {
+			panic("root filesystem not a locker: fsname = %s",
+			    rootvnode->v_mount->mnt_vtable->vfc_name);
+		}
+	}
+#endif /* CONFIG_LOCKERBOOT */
 #endif /* CONFIG_IMAGEBOOT */
 
 	/* set initial time; all other resource data is  already zero'ed */
@@ -1016,6 +1091,30 @@ bsd_init(void)
 		devfs_kernel_mount(mounthere);
 	}
 #endif /* DEVFS */
+
+	if (vfs_mount_rosv_data()) {
+		panic("failed to mount data volume!");
+	}
+
+	if (vfs_mount_vm()) {
+		printf("failed to mount vm volume!");
+	}
+
+#if CONFIG_LOCKERBOOT
+	/*
+	 * We need to wait until devfs is up before remounting the protoboot volume
+	 * within the locker so that it can have a real devfs vnode backing it.
+	 */
+	if (imageboot_type == IMAGEBOOT_LOCKER) {
+		bsd_init_kprintf("re-mounting protoboot volume\n");
+		int error = mount_locker_protoboot(pbfsname, LOCKER_PROTOBOOT_MOUNT,
+		    pbdevpath);
+		if (error) {
+			panic("failed to mount protoboot volume: dev path = %s, error = %d",
+			    pbdevpath, error);
+		}
+	}
+#endif /* CONFIG_LOCKERBOOT */
 
 	/* Initialize signal state for process 0. */
 	bsd_init_kprintf("calling siginit\n");
@@ -1111,7 +1210,7 @@ setconf(void)
 		flags = 0;
 	}
 
-#if NFSCLIENT
+#if CONFIG_NETBOOT
 	if (flags & 1) {
 		/* network device */
 		mountroot = netboot_mountroot;
@@ -1119,7 +1218,7 @@ setconf(void)
 #endif
 	/* otherwise have vfs determine root filesystem */
 	mountroot = NULL;
-#if NFSCLIENT
+#if CONFIG_NETBOOT
 }
 #endif
 }
@@ -1153,21 +1252,17 @@ bsd_utaskbootstrap(void)
 	ut = (struct uthread *)get_bsdthread_info(thread);
 	ut->uu_sigmask = 0;
 	act_set_astbsd(thread);
-	task_clear_return_wait(get_threadtask(thread));
+	task_clear_return_wait(get_threadtask(thread), TCRW_CLEAR_ALL_WAIT);
 }
 
 static void
 parse_bsd_args(void)
 {
-	char namep[16];
+	char namep[48];
 	int msgbuf;
 
 	if (PE_parse_boot_argn("-s", namep, sizeof(namep))) {
 		boothowto |= RB_SINGLE;
-	}
-
-	if (PE_parse_boot_argn("-b", namep, sizeof(namep))) {
-		boothowto |= RB_NOBOOTRC;
 	}
 
 	if (PE_parse_boot_argn("-x", namep, sizeof(namep))) { /* safe boot */
@@ -1183,18 +1278,20 @@ parse_bsd_args(void)
 		minimalboot = 1;
 	}
 
-#if __arm64__
-	/* disable 64 bit grading */
-	if (PE_parse_boot_argn("-no64exec", namep, sizeof(namep))) {
-		bootarg_no64exec = 1;
-	}
-#endif
 #if __x86_64__
+	int no32exec;
+
 	/* disable 32 bit grading */
-	if (PE_parse_boot_argn("-no32exec", namep, sizeof(namep))) {
-		bootarg_no32exec = 1;
+	if (PE_parse_boot_argn("no32exec", &no32exec, sizeof(no32exec))) {
+		bootarg_no32exec = !!no32exec;
 	}
 #endif
+
+	int execfailure_crashreports;
+	/* enable crash reports on various exec failures */
+	if (PE_parse_boot_argn("execfailurecrashes", &execfailure_crashreports, sizeof(execfailure_crashreports))) {
+		bootarg_execfailurereports = !!execfailure_crashreports;
+	}
 
 	/* disable vnode_cache_is_authorized() by setting vnode_cache_defeat */
 	if (PE_parse_boot_argn("-vnode_cache_defeat", namep, sizeof(namep))) {
@@ -1266,15 +1363,48 @@ parse_bsd_args(void)
 	if (PE_parse_boot_argn("-no_sigsys", namep, sizeof(namep))) {
 		send_sigsys = false;
 	}
-#endif
 
-#if (DEVELOPMENT || DEBUG)
 	if (PE_parse_boot_argn("alt-dyld", dyld_alt_path, sizeof(dyld_alt_path))) {
 		if (strlen(dyld_alt_path) > 0) {
 			use_alt_dyld = 1;
 		}
 	}
-#endif
+	PE_parse_boot_argn("dyld_flags", &dyld_flags, sizeof(dyld_flags));
+
+	if (PE_parse_boot_argn("-disable_syscallfilter", &namep, sizeof(namep))) {
+		syscallfilter_disable = 1;
+	}
+
+#if __arm64__
+	if (PE_parse_boot_argn("legacy_footprint_entitlement_mode", &legacy_footprint_entitlement_mode, sizeof(legacy_footprint_entitlement_mode))) {
+		/*
+		 * legacy_footprint_entitlement_mode specifies the behavior we want associated
+		 * with the entitlement. The supported modes are:
+		 *
+		 * LEGACY_FOOTPRINT_ENTITLEMENT_IGNORE:
+		 *	Indicates that we want every process to have the memory accounting
+		 *	that is available in iOS 12.0 and beyond.
+		 *
+		 * LEGACY_FOOTPRINT_ENTITLEMENT_IOS11_ACCT:
+		 *	Indicates that for every process that has the 'legacy footprint entitlement',
+		 *      we want to give it the old iOS 11.0 accounting behavior which accounted some
+		 *	of the process's memory to the kernel.
+		 *
+		 * LEGACY_FOOTPRINT_ENTITLEMENT_LIMIT_INCREASE:
+		 *      Indicates that for every process that has the 'legacy footprint entitlement',
+		 *	we want it to have a higher memory limit which will help them acclimate to the
+		 *	iOS 12.0 (& beyond) accounting behavior that does the right accounting.
+		 *      The bonus added to the system-wide task limit to calculate this higher memory limit
+		 *      is available in legacy_footprint_bonus_mb.
+		 */
+
+		if (legacy_footprint_entitlement_mode < LEGACY_FOOTPRINT_ENTITLEMENT_IGNORE ||
+		    legacy_footprint_entitlement_mode > LEGACY_FOOTPRINT_ENTITLEMENT_LIMIT_INCREASE) {
+			legacy_footprint_entitlement_mode = LEGACY_FOOTPRINT_ENTITLEMENT_LIMIT_INCREASE;
+		}
+	}
+#endif /* __arm64__ */
+#endif /* DEVELOPMENT || DEBUG */
 }
 
 void
@@ -1304,7 +1434,7 @@ bsd_exec_setup(int scale)
 	bsd_pageable_map_size = (bsd_simul_execs * BSD_PAGEABLE_SIZE_PER_EXEC);
 }
 
-#if !NFSCLIENT
+#if !CONFIG_NETBOOT
 int
 netboot_root(void);
 

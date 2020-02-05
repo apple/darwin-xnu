@@ -53,7 +53,7 @@ subs_entry_t kext_identifier_prefix_subs[] = {
 	{ "com.apple.security.", '$' },
 	{ "com.apple.", '@' },
 
-	{ (char *)0, '\0' }
+	{ (char *)NULL, '\0' }
 };
 
 /* Substring substitution list. Substrings are replaced with a '!' followed
@@ -71,7 +71,7 @@ subs_entry_t kext_identifier_substring_subs[] = {
 	{ "Bluetooth", 'B' },
 	{ "Intel", 'I' },
 
-	{ (char *)0, '\0' }
+	{ (char *)NULL, '\0' }
 };
 
 __END_DECLS

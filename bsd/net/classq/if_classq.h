@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -100,16 +100,16 @@ struct ifclassq;
 enum cqdq_op;
 enum cqrq;
 
-typedef int (*ifclassq_enq_func)(struct ifclassq *, void *, classq_pkt_type_t,
+typedef int (*ifclassq_enq_func)(struct ifclassq *, classq_pkt_t *,
     boolean_t *);
-typedef void  *(*ifclassq_deq_func)(struct ifclassq *, classq_pkt_type_t *);
-typedef void *(*ifclassq_deq_sc_func)(struct ifclassq *,
-    mbuf_svc_class_t, classq_pkt_type_t *);
+typedef void  (*ifclassq_deq_func)(struct ifclassq *, classq_pkt_t *);
+typedef void (*ifclassq_deq_sc_func)(struct ifclassq *, mbuf_svc_class_t,
+    classq_pkt_t *);
 typedef int (*ifclassq_deq_multi_func)(struct ifclassq *, u_int32_t,
-    u_int32_t, void **, void **, u_int32_t *, u_int32_t *, classq_pkt_type_t *);
+    u_int32_t, classq_pkt_t *, classq_pkt_t *, u_int32_t *, u_int32_t *);
 typedef int (*ifclassq_deq_sc_multi_func)(struct ifclassq *,
-    mbuf_svc_class_t, u_int32_t, u_int32_t, void **, void **,
-    u_int32_t *, u_int32_t *, classq_pkt_type_t *);
+    mbuf_svc_class_t, u_int32_t, u_int32_t, classq_pkt_t *, classq_pkt_t *,
+    u_int32_t *, u_int32_t *);
 typedef int (*ifclassq_req_func)(struct ifclassq *, enum cqrq, void *);
 
 /*
@@ -249,24 +249,24 @@ struct if_ifclassq_stats {
 /*
  * For ifclassq operations
  */
-#define IFCQ_ENQUEUE(_ifq, _p, _t, _err, _drop) do {                    \
-	(_err) = (*(_ifq)->ifcq_enqueue)(_ifq, _p, _t, _drop);          \
+#define IFCQ_ENQUEUE(_ifq, _p, _err, _drop) do {                        \
+	(_err) = (*(_ifq)->ifcq_enqueue)(_ifq, _p, _drop);              \
 } while (0)
 
-#define IFCQ_DEQUEUE(_ifq, _p, _t) do {                                 \
-	(_p) = (*(_ifq)->ifcq_dequeue)(_ifq, _t);                       \
+#define IFCQ_DEQUEUE(_ifq, _p) do {                                     \
+	(*(_ifq)->ifcq_dequeue)(_ifq, _p);                              \
 } while (0)
 
-#define IFCQ_DEQUEUE_SC(_ifq, _sc, _p, _t) do {                         \
-	(_p) = (*(_ifq)->ifcq_dequeue_sc)(_ifq, _sc, _t);               \
+#define IFCQ_DEQUEUE_SC(_ifq, _sc, _p) do {                             \
+	(*(_ifq)->ifcq_dequeue_sc)(_ifq, _sc, _p);                      \
 } while (0)
 
-#define IFCQ_TBR_DEQUEUE(_ifcq, _p, _t) do {                            \
-	(_p) = ifclassq_tbr_dequeue(_ifcq, _t);                         \
+#define IFCQ_TBR_DEQUEUE(_ifcq, _p) do {                                \
+	ifclassq_tbr_dequeue(_ifcq, _p);                                \
 } while (0)
 
-#define IFCQ_TBR_DEQUEUE_SC(_ifcq, _sc, _p, _t) do {                    \
-	(_p) = ifclassq_tbr_dequeue_sc(_ifcq, _sc, _t);                 \
+#define IFCQ_TBR_DEQUEUE_SC(_ifcq, _sc, _p) do {                        \
+	ifclassq_tbr_dequeue_sc(_ifcq, _sc, _p);                        \
 } while (0)
 
 #define IFCQ_PURGE(_ifq) do {                                           \
@@ -338,13 +338,12 @@ extern void ifclassq_set_maxlen(struct ifclassq *, u_int32_t);
 extern u_int32_t ifclassq_get_maxlen(struct ifclassq *);
 extern int ifclassq_get_len(struct ifclassq *, mbuf_svc_class_t,
     u_int32_t *, u_int32_t *);
-extern errno_t ifclassq_enqueue(struct ifclassq *, void *, classq_pkt_type_t,
-    boolean_t *);
+extern errno_t ifclassq_enqueue(struct ifclassq *, classq_pkt_t *, boolean_t *);
 extern errno_t ifclassq_dequeue(struct ifclassq *, u_int32_t, u_int32_t,
-    void **, void **, u_int32_t *, u_int32_t *, classq_pkt_type_t *);
+    classq_pkt_t *, classq_pkt_t *, u_int32_t *, u_int32_t *);
 extern errno_t ifclassq_dequeue_sc(struct ifclassq *, mbuf_svc_class_t,
-    u_int32_t, u_int32_t, void **, void **, u_int32_t *, u_int32_t *,
-    classq_pkt_type_t *);
+    u_int32_t, u_int32_t, classq_pkt_t *, classq_pkt_t *, u_int32_t *,
+    u_int32_t *);
 extern void *ifclassq_poll(struct ifclassq *, classq_pkt_type_t *);
 extern void *ifclassq_poll_sc(struct ifclassq *, mbuf_svc_class_t,
     classq_pkt_type_t *);
@@ -357,14 +356,14 @@ extern int ifclassq_getqstats(struct ifclassq *, u_int32_t,
     void *, u_int32_t *);
 extern const char *ifclassq_ev2str(cqev_t);
 extern int ifclassq_tbr_set(struct ifclassq *, struct tb_profile *, boolean_t);
-extern void *ifclassq_tbr_dequeue(struct ifclassq *, classq_pkt_type_t *);
-extern void *ifclassq_tbr_dequeue_sc(struct ifclassq *, mbuf_svc_class_t,
-    classq_pkt_type_t *);
+extern void ifclassq_tbr_dequeue(struct ifclassq *, classq_pkt_t *);
+extern void ifclassq_tbr_dequeue_sc(struct ifclassq *, mbuf_svc_class_t,
+    classq_pkt_t *);
 extern void ifclassq_calc_target_qdelay(struct ifnet *ifp,
     u_int64_t *if_target_qdelay);
 extern void ifclassq_calc_update_interval(u_int64_t *update_interval);
 extern void ifclassq_set_packet_metadata(struct ifclassq *ifq,
-    struct ifnet *ifp, void *p, classq_pkt_type_t ptype);
+    struct ifnet *ifp, classq_pkt_t *p);
 extern void ifclassq_reap_caches(boolean_t);
 
 #endif /* BSD_KERNEL_PRIVATE */

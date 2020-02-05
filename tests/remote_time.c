@@ -4,6 +4,9 @@
 #include <stdint.h>
 #include <sys/sysctl.h>
 #include <TargetConditionals.h>
+
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 extern uint64_t __mach_bridge_remote_time(uint64_t);
 
 T_DECL(remote_time_syscall, "test mach_bridge_remote_time syscall",

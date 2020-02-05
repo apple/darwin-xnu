@@ -103,7 +103,7 @@ kernel together into a single bootable image.
 To build a kernelcache you can use the following mechanisms:
 
   * Using automatic kernelcache generation with `kextd`.
-    The kextd daemon keeps watching for changing in `/System/Library/Extensions` directory. 
+    The kextd daemon keeps watching for changing in `/System/Library/Extensions` directory.
     So you can setup new kernel as
 
         $ cp BUILD/obj/DEVELOPMENT/X86_64/kernel.development /System/Library/Kernels/
@@ -178,10 +178,12 @@ XNU installs header files at the following locations -
     a. $(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers
     b. $(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders
     c. $(DSTROOT)/usr/include/
-    d. $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
+    d. $(DSTROOT)/System/DriverKit/usr/include/
+    e. $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
 
 `Kernel.framework` is used by kernel extensions.\
 The `System.framework` and `/usr/include` are used by user level applications. \
+`/System/DriverKit/usr/include` is used by userspace drivers. \
 The header files in framework's `PrivateHeaders` are only available for ** Apple Internal Development **.
 
 The directory containing the header file should have a Makefile that
@@ -196,15 +198,18 @@ from each file list are -
     a. `DATAFILES` : To make header file available in user level -
        `$(DSTROOT)/usr/include`
 
-    b. `PRIVATE_DATAFILES` : To make header file available to Apple internal in
+    b. `DRIVERKIT_DATAFILES` : To make header file available to DriverKit userspace drivers -
+       `$(DSTROOT)/System/DriverKit/usr/include`
+
+    c. `PRIVATE_DATAFILES` : To make header file available to Apple internal in
        user level -
        `$(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders`
 
-    c. `KERNELFILES` : To make header file available in kernel level -
+    d. `KERNELFILES` : To make header file available in kernel level -
        `$(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers`
        `$(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders`
 
-    d. `PRIVATE_KERNELFILES` : To make header file available to Apple internal
+    e. `PRIVATE_KERNELFILES` : To make header file available to Apple internal
        for kernel extensions -
        `$(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders`
 
@@ -227,28 +232,35 @@ member file lists and their default location are described below -
        Definition -
            INSTALL_MI_LIST = ${DATAFILES}
 
-    b.  `INSTALL_MI_LCL_LIST` : Installs header file to a location that is available
+    b. `INSTALL_DRIVERKIT_MI_LIST` : Installs header file to a location that is
+        available to DriverKit userspace drivers.
+        Locations -
+           $(DSTROOT)/System/DriverKit/usr/include
+       Definition -
+           INSTALL_DRIVERKIT_MI_LIST = ${DRIVERKIT_DATAFILES}
+
+    c.  `INSTALL_MI_LCL_LIST` : Installs header file to a location that is available
        for Apple internal in user level.
        Locations -
            $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
        Definition -
            INSTALL_MI_LCL_LIST = ${PRIVATE_DATAFILES}
 
-    c. `INSTALL_KF_MI_LIST` : Installs header file to location that is available
+    d. `INSTALL_KF_MI_LIST` : Installs header file to location that is available
        to everyone for kernel extensions.
        Locations -
             $(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers
        Definition -
             INSTALL_KF_MI_LIST = ${KERNELFILES}
 
-    d. `INSTALL_KF_MI_LCL_LIST` : Installs header file to location that is
+    e. `INSTALL_KF_MI_LCL_LIST` : Installs header file to location that is
        available for Apple internal for kernel extensions.
        Locations -
             $(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders
        Definition -
             INSTALL_KF_MI_LCL_LIST = ${KERNELFILES} ${PRIVATE_KERNELFILES}
 
-    e. `EXPORT_MI_LIST` : Exports header file to all of xnu (bsd/, osfmk/, etc.)
+    f. `EXPORT_MI_LIST` : Exports header file to all of xnu (bsd/, osfmk/, etc.)
        for compilation only. Does not install anything into the SDK.
        Definition -
             EXPORT_MI_LIST = ${KERNELFILES} ${PRIVATE_KERNELFILES}
@@ -291,6 +303,8 @@ want to export a function only to kernel level but not user level.
 
             $(DSTROOT)/System/Library/Frameworks/Kernel.framework/Headers
             $(DSTROOT)/System/Library/Frameworks/Kernel.framework/PrivateHeaders
+    g. `DRIVERKIT`: If defined, enclosed code is visible exclusively in the
+    DriverKit SDK headers used by userspace drivers.
 
 Conditional compilation
 =======================
@@ -317,8 +331,9 @@ does not define the platform macros from `TargetConditionals.h`
 (`TARGET_OS_OSX`, `TARGET_OS_IOS`, etc.).
 
 
-There is a `TARGET_OS_EMBEDDED` macro, but this should be avoided as it is in
-general too broad a definition for most functionality.
+There is a deprecated `TARGET_OS_EMBEDDED` macro, but this should be avoided
+as it is in general too broad a definition for most functionality.
+Please refer to TargetConditionals.h for a full picture.
 
 How to add a new syscall
 ========================
@@ -375,7 +390,7 @@ common options.
 To debug a panic'ed kernel, use llvm debugger (lldb) along with unstripped symbol rich kernel binary.
 
     sh$ lldb kernel.development.unstripped
-    
+
 And then you can connect to panic'ed machine with `kdp_remote [ip addr]` or `gdb_remote [hostip : port]` commands.
 
 Each kernel is packaged with kernel specific debug scripts as part of the build process. For security reasons these special commands

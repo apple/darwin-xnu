@@ -167,13 +167,20 @@ extern mach_msg_return_t mach_msg_send_from_kernel_with_options_legacy(
 	mach_msg_size_t         send_size,
 	mach_msg_option_t       option,
 	mach_msg_timeout_t      timeout_val);
-#endif /* XNU_KERNEL_PRIVATE */
 
 extern mach_msg_return_t mach_msg_send_from_kernel_with_options(
 	mach_msg_header_t       *msg,
 	mach_msg_size_t         send_size,
 	mach_msg_option_t       option,
+	mach_msg_timeout_t      timeout_val)
+__XNU_INTERNAL(mach_msg_send_from_kernel_with_options);
+#else
+extern mach_msg_return_t mach_msg_send_from_kernel_with_options(
+	mach_msg_header_t       *msg,
+	mach_msg_size_t         send_size,
+	mach_msg_option_t       option,
 	mach_msg_timeout_t      timeout_val);
+#endif /* XNU_KERNEL_PRIVATE */
 
 __END_DECLS
 
@@ -229,9 +236,8 @@ extern mig_object_t convert_port_to_mig_object(
 	ipc_port_t              port,
 	const MIGIID            *iid);
 
-boolean_t mig_object_no_senders(
-	ipc_port_t              port,
-	mach_port_mscount_t     mscount);
+extern void mig_object_no_senders(
+	ipc_port_t              port);
 
 #endif  /* MACH_KERNEL_PRIVATE */
 

@@ -76,16 +76,21 @@
 #include <sys/file.h>
 #include <sys/filedesc.h>
 #include <sys/guarded.h>
+#include <os/refcnt.h>
 
 struct proc;
 struct uio;
 struct knote;
-struct kevent_internal_s;
+struct kevent_qos_s;
 
 #ifdef __APPLE_API_UNSTABLE
 
 struct file;
 
+__options_decl(fileproc_vflags_t, unsigned int, {
+	FPV_NONE        = 0,
+	FPV_DRAIN       = 0x01,
+});
 
 /*
  * Kernel descriptor table.
@@ -93,7 +98,8 @@ struct file;
  */
 struct fileproc {
 	unsigned int f_flags;
-	int32_t f_iocount;
+	_Atomic fileproc_vflags_t f_vflags;
+	os_refcnt_t f_iocount;
 	struct fileglob * f_fglob;
 	void *f_wset;
 };
@@ -164,36 +170,37 @@ typedef enum {
 #define FG_CONFINED     0x200   /* fileglob confined to process, immutably */
 #define FG_HAS_OFDLOCK  0x400   /* Has or has had an OFD lock */
 
+struct fileops {
+	file_type_t     fo_type;        /* descriptor type */
+	int (*fo_read)      (struct fileproc *fp, struct uio *uio,
+	    int flags, vfs_context_t ctx);
+	int (*fo_write)     (struct fileproc *fp, struct uio *uio,
+	    int flags, vfs_context_t ctx);
+#define FOF_OFFSET      0x00000001      /* offset supplied to vn_write */
+#define FOF_PCRED       0x00000002      /* cred from proc, not current thread */
+	int (*fo_ioctl)(struct fileproc *fp, u_long com,
+	    caddr_t data, vfs_context_t ctx);
+	int (*fo_select)    (struct fileproc *fp, int which,
+	    void *wql, vfs_context_t ctx);
+	int (*fo_close)     (struct fileglob *fg, vfs_context_t ctx);
+	int (*fo_kqfilter)  (struct fileproc *fp, struct knote *, struct kevent_qos_s *);
+	int (*fo_drain)     (struct fileproc *fp, vfs_context_t ctx);
+};
+
 struct fileglob {
 	LIST_ENTRY(fileglob) f_msglist;/* list of active files */
-	int32_t fg_flag;                /* see fcntl.h */
+	int32_t fg_flag;        /* see fcntl.h */
 	int32_t fg_count;       /* reference count */
 	int32_t fg_msgcount;    /* references from message queue */
 	int32_t fg_lflags;      /* file global flags */
 	kauth_cred_t fg_cred;   /* credentials associated with descriptor */
-	const struct fileops {
-		file_type_t     fo_type;        /* descriptor type */
-		int     (*fo_read)      (struct fileproc *fp, struct uio *uio,
-		    int flags, vfs_context_t ctx);
-		int     (*fo_write)     (struct fileproc *fp, struct uio *uio,
-		    int flags, vfs_context_t ctx);
-#define FOF_OFFSET      0x00000001      /* offset supplied to vn_write */
-#define FOF_PCRED       0x00000002      /* cred from proc, not current thread */
-		int     (*fo_ioctl)(struct fileproc *fp, u_long com,
-		    caddr_t data, vfs_context_t ctx);
-		int     (*fo_select)    (struct fileproc *fp, int which,
-		    void *wql, vfs_context_t ctx);
-		int     (*fo_close)     (struct fileglob *fg, vfs_context_t ctx);
-		int     (*fo_kqfilter)  (struct fileproc *fp, struct knote *kn,
-		    struct kevent_internal_s *kev, vfs_context_t ctx);
-		int     (*fo_drain)     (struct fileproc *fp, vfs_context_t ctx);
-	} *fg_ops;
+	const struct fileops *fg_ops;
 	off_t   fg_offset;
-	void    *fg_data;       /* vnode or socket or SHM or semaphore */
-	void    *fg_vn_data;    /* Per fd vnode data, used for directories */
+	void   *fg_data;        /* vnode or socket or SHM or semaphore */
+	void   *fg_vn_data;     /* Per fd vnode data, used for directories */
 	lck_mtx_t fg_lock;
 #if CONFIG_MACF
-	struct label *fg_label;  /* JMM - use the one in the cred? */
+	struct label *fg_label; /* JMM - use the one in the cred? */
 #endif
 };
 
@@ -209,20 +216,32 @@ extern int maxfilesperproc;
 
 
 __BEGIN_DECLS
+
+/* wrappers for fp->f_ops->fo_... */
 int fo_read(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx);
 int fo_write(struct fileproc *fp, struct uio *uio, int flags,
     vfs_context_t ctx);
 int fo_ioctl(struct fileproc *fp, u_long com, caddr_t data, vfs_context_t ctx);
 int fo_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx);
 int fo_close(struct fileglob *fg, vfs_context_t ctx);
-int fo_kqfilter(struct fileproc *fp, struct knote *kn,
-    struct kevent_internal_s *kev, vfs_context_t ctx);
+int fo_drain(struct fileproc *fp, vfs_context_t ctx);
+int fo_kqfilter(struct fileproc *fp, struct knote *kn, struct kevent_qos_s *kev);
+
+/* Functions to use for unsupported fileops */
+int fo_no_read(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx);
+int fo_no_write(struct fileproc *fp, struct uio *uio, int flags,
+    vfs_context_t ctx);
+int fo_no_ioctl(struct fileproc *fp, u_long com, caddr_t data, vfs_context_t ctx);
+int fo_no_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx);
+int fo_no_drain(struct fileproc *fp, vfs_context_t ctx);
+int fo_no_kqfilter(struct fileproc *, struct knote *, struct kevent_qos_s *kev);
+
 void fileproc_drain(proc_t, struct fileproc *);
 int fp_tryswap(proc_t, int fd, struct fileproc *nfp);
 int fp_drop(struct proc *p, int fd, struct fileproc *fp, int locked);
 int fp_drop_written(proc_t p, int fd, struct fileproc *fp);
 int fp_drop_event(proc_t p, int fd, struct fileproc *fp);
-int fp_free(struct proc * p, int fd, struct fileproc * fp);
+void fp_free(struct proc * p, int fd, struct fileproc * fp);
 struct kqueue;
 int fp_getfkq(struct proc *p, int fd, struct fileproc **resultfp, struct kqueue  **resultkq);
 struct psemnode;
@@ -242,12 +261,14 @@ int fp_isguarded(struct fileproc *fp, u_int attribs);
 int fp_guard_exception(proc_t p, int fd, struct fileproc *fp, u_int attribs);
 int closef_locked(struct fileproc *fp, struct fileglob *fg, struct proc *p);
 int close_internal_locked(proc_t p, int fd, struct fileproc *fp, int flags);
+int fileport_makefd_internal(proc_t p, ipc_port_t port, int uf_flags, int *fd);
 struct nameidata;
 struct vnode_attr;
 int open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
     struct vnode_attr *vap, fp_allocfn_t fp_zalloc, void *cra,
     int32_t *retval);
-int kqueue_body(struct proc *p, fp_allocfn_t, void *cra, int32_t *retval);
+int chdir_internal(proc_t p, vfs_context_t ctx, struct nameidata *ndp, int per_thread);
+int kqueue_internal(struct proc *p, fp_allocfn_t, void *cra, int32_t *retval);
 void fg_insertuipc(struct fileglob * fg);
 boolean_t fg_insertuipc_mark(struct fileglob * fg);
 void fg_removeuipc(struct fileglob * fg);
@@ -267,6 +288,8 @@ extern void fg_vn_data_free(void *fgvndata);
 extern int nameiat(struct nameidata *ndp, int dirfd);
 extern int falloc_guarded(struct proc *p, struct fileproc **fp, int *fd,
     vfs_context_t ctx, const guardid_t *guard, u_int attrs);
+extern void fileproc_modify_vflags(struct fileproc *fp, fileproc_vflags_t vflags, boolean_t clearflags);
+fileproc_vflags_t fileproc_get_vflags(struct fileproc *fp);
 __END_DECLS
 
 #endif /* __APPLE_API_UNSTABLE */

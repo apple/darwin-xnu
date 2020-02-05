@@ -221,8 +221,8 @@ public:
 	    MappingOptions   mappingOptions = kMapped,
 	    UInt64           maxTransferSize = 0,
 	    UInt32           alignment = 1,
-	    IOMapper        *mapper = 0,
-	    void            *refCon = 0);
+	    IOMapper        *mapper = NULL,
+	    void            *refCon = NULL);
 
 /*! @function weakWithSpecification
  *   @abstract Creates and initialises an IODMACommand in one operation if this version of the operating system supports it.
@@ -251,8 +251,8 @@ public:
 	    MappingOptions  mapType = kMapped,
 	    UInt64          maxTransferSize = 0,
 	    UInt32          alignment = 1,
-	    IOMapper       *mapper = 0,
-	    void           *refCon = 0) __attribute__((always_inline));
+	    IOMapper       *mapper = NULL,
+	    void           *refCon = NULL) __attribute__((always_inline));
 
 	static IODMACommand *
 	withSpecification(SegmentFunction        outSegFunc,
@@ -276,7 +276,7 @@ public:
  *   @discussion Factory function to create and initialise an IODMACommand in one operation.  The current command's specification will be duplicated in the new object, but however none of its state will be duplicated.  This means that it is safe to clone a command even if it is currently active and running, however you must be certain that the command to be duplicated does have a valid reference for the duration.
  *   @result Returns a new IODMACommand if successfully created and initialised, 0 otherwise.
  */
-	virtual IODMACommand *cloneCommand(void *refCon = 0);
+	virtual IODMACommand *cloneCommand(void *refCon = NULL);
 
 /*! @function initWithSpecification
  *   @abstract Primary initializer for the IODMACommand class.
@@ -296,8 +296,8 @@ public:
 	    MappingOptions mappingOptions = kMapped,
 	    UInt64    maxTransferSize = 0,
 	    UInt32    alignment = 1,
-	    IOMapper *mapper = 0,
-	    void     *refCon = 0);
+	    IOMapper *mapper = NULL,
+	    void     *refCon = NULL);
 
 /*! @function setMemoryDescriptor
  *   @abstract Sets and resets the DMACommand's current memory descriptor
@@ -481,7 +481,7 @@ public:
 	    MappingOptions    mappingOptions = kMapped,
 	    UInt64            maxTransferSize = 0,
 	    UInt32            alignment = 1,
-	    IOMapper          *mapper = 0,
+	    IOMapper          *mapper = NULL,
 	    UInt64            offset = 0,
 	    UInt64            length = 0,
 	    bool              flushCache = true,
@@ -515,7 +515,7 @@ public:
  */
 
 	virtual
-	bool initWithRefCon(void * refCon = 0);
+	bool initWithRefCon(void * refCon = NULL);
 
 	virtual
 	bool initWithSpecification(SegmentFunction        outSegFunc,
@@ -638,7 +638,7 @@ weakWithSpecification(IODMACommand **newCommand,
 		ret =  kIOReturnSuccess;
 	} else {
 		self->release();
-		self = 0;
+		self = NULL;
 		ret = kIOReturnError;
 	}
 

@@ -109,6 +109,7 @@
 #include <kern/telemetry.h>
 #include <kern/waitq.h>
 #include <kern/sched_prim.h>
+#include <kern/mpsc_queue.h>
 
 #include <sys/mbuf.h>
 #include <sys/domain.h>
@@ -142,10 +143,15 @@
 #include <sys/vnode_internal.h>
 /* for remote time api*/
 #include <kern/remote_time.h>
+#include <os/log.h>
+#include <sys/log_data.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
 #endif
+
+/* for entitlement check */
+#include <IOKit/IOBSD.h>
 
 /* XXX should be in a header file somewhere */
 void evsofree(struct socket *);
@@ -353,7 +359,7 @@ dofileread(vfs_context_t ctx, struct fileproc *fp,
 {
 	uio_t auio;
 	user_ssize_t bytecnt;
-	long error = 0;
+	int error = 0;
 	char uio_buf[UIO_SIZEOF(1)];
 
 	if (nbyte > INT_MAX) {
@@ -367,7 +373,10 @@ dofileread(vfs_context_t ctx, struct fileproc *fp,
 		auio = uio_createwithbuffer(1, offset, UIO_USERSPACE32, UIO_READ,
 		    &uio_buf[0], sizeof(uio_buf));
 	}
-	uio_addiov(auio, bufp, nbyte);
+	if (uio_addiov(auio, bufp, nbyte) != 0) {
+		*retval = 0;
+		return EINVAL;
+	}
 
 	bytecnt = nbyte;
 
@@ -590,7 +599,7 @@ dofilewrite(vfs_context_t ctx, struct fileproc *fp,
     user_ssize_t *retval)
 {
 	uio_t auio;
-	long error = 0;
+	int error = 0;
 	user_ssize_t bytecnt;
 	char uio_buf[UIO_SIZEOF(1)];
 
@@ -606,7 +615,10 @@ dofilewrite(vfs_context_t ctx, struct fileproc *fp,
 		auio = uio_createwithbuffer(1, offset, UIO_USERSPACE32, UIO_WRITE,
 		    &uio_buf[0], sizeof(uio_buf));
 	}
-	uio_addiov(auio, bufp, nbyte);
+	if (uio_addiov(auio, bufp, nbyte) != 0) {
+		*retval = 0;
+		return EINVAL;
+	}
 
 	bytecnt = nbyte;
 	if ((error = fo_write(fp, auio, flags, ctx))) {
@@ -911,7 +923,7 @@ ioctl(struct proc *p, struct ioctl_args *uap, __unused int32_t *retval)
 			break;
 		}
 		if (fp->f_type == DTYPE_PIPE) {
-			error = fo_ioctl(fp, (int)TIOCSPGRP, (caddr_t)&tmp, &context);
+			error = fo_ioctl(fp, TIOCSPGRP, (caddr_t)&tmp, &context);
 			break;
 		}
 		if (tmp <= 0) {
@@ -925,7 +937,7 @@ ioctl(struct proc *p, struct ioctl_args *uap, __unused int32_t *retval)
 			tmp = p1->p_pgrpid;
 			proc_rele(p1);
 		}
-		error = fo_ioctl(fp, (int)TIOCSPGRP, (caddr_t)&tmp, &context);
+		error = fo_ioctl(fp, TIOCSPGRP, (caddr_t)&tmp, &context);
 		break;
 
 	case FIOGETOWN:
@@ -1623,7 +1635,7 @@ selscan(struct proc *p, struct _select *sel, struct _select_data * seldata,
 			bits = iptr[i / NFDBITS];
 
 			while ((j = ffs(bits)) && (fd = i + --j) < nfd) {
-				bits &= ~(1 << j);
+				bits &= ~(1U << j);
 
 				if (fd < fdp->fd_nfiles) {
 					fp = fdp->fd_ofiles[fd];
@@ -1667,7 +1679,7 @@ selscan(struct proc *p, struct _select *sel, struct _select_data * seldata,
 				/* The select; set the bit, if true */
 				if (fp->f_ops && fp->f_type
 				    && fo_select(fp, flag[msk], rl_ptr, &context)) {
-					optr[fd / NFDBITS] |= (1 << (fd % NFDBITS));
+					optr[fd / NFDBITS] |= (1U << (fd % NFDBITS));
 					n++;
 				}
 				if (sel_pass == SEL_FIRSTPASS) {
@@ -1699,13 +1711,7 @@ selscan(struct proc *p, struct _select *sel, struct _select_data * seldata,
 	return 0;
 }
 
-int poll_callback(struct kqueue *, struct kevent_internal_s *, void *);
-
-struct poll_continue_args {
-	user_addr_t pca_fds;
-	u_int pca_nfds;
-	u_int pca_rfds;
-};
+static int poll_callback(struct kevent_qos_s *, kevent_ctx_t);
 
 int
 poll(struct proc *p, struct poll_args *uap, int32_t *retval)
@@ -1718,15 +1724,11 @@ poll(struct proc *p, struct poll_args *uap, int32_t *retval)
 int
 poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 {
-	struct poll_continue_args *cont;
-	struct pollfd *fds;
-	struct kqueue *kq;
-	struct timeval atv;
+	struct pollfd *fds = NULL;
+	struct kqueue *kq = NULL;
 	int ncoll, error = 0;
 	u_int nfds = uap->nfds;
 	u_int rfds = 0;
-	u_int i;
-	size_t ni;
 
 	/*
 	 * This is kinda bogus.  We have fd limits, but that is not
@@ -1740,46 +1742,30 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 		return EINVAL;
 	}
 
-	kq = kqueue_alloc(p, 0);
+	kq = kqueue_alloc(p);
 	if (kq == NULL) {
 		return EAGAIN;
 	}
 
-	ni = nfds * sizeof(struct pollfd) + sizeof(struct poll_continue_args);
-	MALLOC(cont, struct poll_continue_args *, ni, M_TEMP, M_WAITOK);
-	if (NULL == cont) {
-		error = EAGAIN;
-		goto out;
-	}
-
-	fds = (struct pollfd *)&cont[1];
-	error = copyin(uap->fds, fds, nfds * sizeof(struct pollfd));
-	if (error) {
-		goto out;
-	}
-
-	if (uap->timeout != -1) {
-		struct timeval rtv;
-
-		atv.tv_sec = uap->timeout / 1000;
-		atv.tv_usec = (uap->timeout % 1000) * 1000;
-		if (itimerfix(&atv)) {
-			error = EINVAL;
+	if (nfds) {
+		size_t ni = nfds * sizeof(struct pollfd);
+		MALLOC(fds, struct pollfd *, ni, M_TEMP, M_WAITOK);
+		if (NULL == fds) {
+			error = EAGAIN;
 			goto out;
 		}
-		getmicrouptime(&rtv);
-		timevaladd(&atv, &rtv);
-	} else {
-		atv.tv_sec = 0;
-		atv.tv_usec = 0;
+
+		error = copyin(uap->fds, fds, nfds * sizeof(struct pollfd));
+		if (error) {
+			goto out;
+		}
 	}
 
 	/* JMM - all this P_SELECT stuff is bogus */
 	ncoll = nselcoll;
 	OSBitOrAtomic(P_SELECT, &p->p_flag);
-	for (i = 0; i < nfds; i++) {
+	for (u_int i = 0; i < nfds; i++) {
 		short events = fds[i].events;
-		KNOTE_LOCK_CTX(knlc);
 		__assert_only int rc;
 
 		/* per spec, ignore fd values below zero */
@@ -1789,7 +1775,7 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 		}
 
 		/* convert the poll event into a kqueue kevent */
-		struct kevent_internal_s kev = {
+		struct kevent_qos_s kev = {
 			.ident = fds[i].fd,
 			.flags = EV_ADD | EV_ONESHOT | EV_POLL,
 			.udata = CAST_USER_ADDR_T(&fds[i])
@@ -1801,7 +1787,7 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 			if (events & (POLLPRI | POLLRDBAND)) {
 				kev.flags |= EV_OOBAND;
 			}
-			rc = kevent_register(kq, &kev, &knlc);
+			rc = kevent_register(kq, &kev, NULL);
 			assert((rc & FILTER_REGISTER_WAIT) == 0);
 		}
 
@@ -1809,7 +1795,7 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 		if ((kev.flags & EV_ERROR) == 0 &&
 		    (events & (POLLOUT | POLLWRNORM | POLLWRBAND))) {
 			kev.filter = EVFILT_WRITE;
-			rc = kevent_register(kq, &kev, &knlc);
+			rc = kevent_register(kq, &kev, NULL);
 			assert((rc & FILTER_REGISTER_WAIT) == 0);
 		}
 
@@ -1830,7 +1816,7 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 			if (events & POLLWRITE) {
 				kev.fflags |= NOTE_WRITE;
 			}
-			rc = kevent_register(kq, &kev, &knlc);
+			rc = kevent_register(kq, &kev, NULL);
 			assert((rc & FILTER_REGISTER_WAIT) == 0);
 		}
 
@@ -1854,21 +1840,27 @@ poll_nocancel(struct proc *p, struct poll_nocancel_args *uap, int32_t *retval)
 		goto done;
 	}
 
+	/* scan for, and possibly wait for, the kevents to trigger */
+	kevent_ctx_t kectx = kevent_get_context(current_thread());
+	*kectx = (struct kevent_ctx_s){
+		.kec_process_noutputs = rfds,
+		.kec_process_flags    = KEVENT_FLAG_POLL,
+		.kec_deadline         = 0, /* wait forever */
+	};
+
 	/*
 	 * If any events have trouble registering, an event has fired and we
-	 * shouldn't wait for events in kqueue_scan -- use the current time as
-	 * the deadline.
+	 * shouldn't wait for events in kqueue_scan.
 	 */
 	if (rfds) {
-		getmicrouptime(&atv);
+		kectx->kec_process_flags |= KEVENT_FLAG_IMMEDIATE;
+	} else if (uap->timeout != -1) {
+		clock_interval_to_deadline(uap->timeout, NSEC_PER_MSEC,
+		    &kectx->kec_deadline);
 	}
 
-	/* scan for, and possibly wait for, the kevents to trigger */
-	cont->pca_fds = uap->fds;
-	cont->pca_nfds = nfds;
-	cont->pca_rfds = rfds;
-	error = kqueue_scan(kq, poll_callback, NULL, cont, NULL, &atv, p);
-	rfds = cont->pca_rfds;
+	error = kqueue_scan(kq, kectx->kec_process_flags, kectx, poll_callback);
+	rfds = kectx->kec_process_noutputs;
 
 done:
 	OSBitAndAtomic(~((uint32_t)P_SELECT), &p->p_flag);
@@ -1876,27 +1868,23 @@ done:
 	if (error == ERESTART) {
 		error = EINTR;
 	}
-	if (error == EWOULDBLOCK) {
-		error = 0;
-	}
 	if (error == 0) {
 		error = copyout(fds, uap->fds, nfds * sizeof(struct pollfd));
 		*retval = rfds;
 	}
 
 out:
-	if (NULL != cont) {
-		FREE(cont, M_TEMP);
+	if (NULL != fds) {
+		FREE(fds, M_TEMP);
 	}
 
 	kqueue_dealloc(kq);
 	return error;
 }
 
-int
-poll_callback(__unused struct kqueue *kq, struct kevent_internal_s *kevp, void *data)
+static int
+poll_callback(struct kevent_qos_s *kevp, kevent_ctx_t kectx)
 {
-	struct poll_continue_args *cont = (struct poll_continue_args *)data;
 	struct pollfd *fds = CAST_DOWN(struct pollfd *, kevp->udata);
 	short prev_revents = fds->revents;
 	short mask = 0;
@@ -1945,7 +1933,7 @@ poll_callback(__unused struct kqueue *kq, struct kevent_internal_s *kevp, void *
 	}
 
 	if (fds->revents != 0 && prev_revents == 0) {
-		cont->pca_rfds++;
+		kectx->kec_process_noutputs++;
 	}
 
 	return 0;
@@ -2011,7 +1999,7 @@ selcount(struct proc *p, u_int32_t *ibits, int nfd, int *countp)
 		for (i = 0; i < nfd; i += NFDBITS) {
 			bits = iptr[i / NFDBITS];
 			while ((j = ffs(bits)) && (fd = i + --j) < nfd) {
-				bits &= ~(1 << j);
+				bits &= ~(1U << j);
 
 				if (fd < fdp->fd_nfiles) {
 					fp = fdp->fd_ofiles[fd];
@@ -2025,7 +2013,7 @@ selcount(struct proc *p, u_int32_t *ibits, int nfd, int *countp)
 					error = EBADF;
 					goto bad;
 				}
-				fp->f_iocount++;
+				os_ref_retain_locked(&fp->f_iocount);
 				n++;
 			}
 		}
@@ -2111,7 +2099,7 @@ seldrop_locked(struct proc *p, u_int32_t *ibits, int nfd, int lim, int *need_wak
 		for (i = 0; i < nfd; i += NFDBITS) {
 			bits = iptr[i / NFDBITS];
 			while ((j = ffs(bits)) && (fd = i + --j) < nfd) {
-				bits &= ~(1 << j);
+				bits &= ~(1U << j);
 				fp = fdp->fd_ofiles[fd];
 				/*
 				 * If we've already dropped as many as were
@@ -2138,12 +2126,12 @@ seldrop_locked(struct proc *p, u_int32_t *ibits, int nfd, int lim, int *need_wak
 					continue;
 				}
 
-				fp->f_iocount--;
-				if (fp->f_iocount < 0) {
+				const os_ref_count_t refc = os_ref_release_locked(&fp->f_iocount);
+				if (0 == refc) {
 					panic("f_iocount overdecrement!");
 				}
 
-				if (fp->f_iocount == 0) {
+				if (1 == refc) {
 					/*
 					 * The last iocount is responsible for clearing
 					 * selconfict flag - even if we didn't set it -
@@ -3184,7 +3172,6 @@ waitevent_close(struct proc *p, struct fileproc *fp)
  *
  * Parameters:	uuid_buf		Pointer to buffer to receive UUID
  *		timeout			Timespec for timout
- *		spi				SPI, skip sandbox check (temporary)
  *
  * Returns:	0			Success
  *		EWOULDBLOCK		Timeout is too short
@@ -3202,7 +3189,8 @@ gethostuuid(struct proc *p, struct gethostuuid_args *uap, __unused int32_t *retv
 	mach_timespec_t mach_ts;        /* for IOKit call */
 	__darwin_uuid_t uuid_kern = {}; /* for IOKit call */
 
-	if (!uap->spi) {
+	/* Check entitlement */
+	if (!IOTaskHasEntitlement(current_task(), "com.apple.private.getprivatesysid")) {
 #if CONFIG_EMBEDDED
 #if CONFIG_MACF
 		if ((error = mac_system_check_info(kauth_cred_get(), "hw.uuid")) != 0) {
@@ -3401,6 +3389,86 @@ telemetry(__unused struct proc *p, struct telemetry_args *args, __unused int32_t
 	}
 
 	return error;
+}
+
+/*
+ * Logging
+ *
+ * Description: syscall to access kernel logging from userspace
+ *
+ * Args:
+ *	tag - used for syncing with userspace on the version.
+ *	flags - flags used by the syscall.
+ *	buffer - userspace address of string to copy.
+ *	size - size of buffer.
+ */
+int
+log_data(__unused struct proc *p, struct log_data_args *args, int *retval)
+{
+	unsigned int tag = args->tag;
+	unsigned int flags = args->flags;
+	user_addr_t buffer = args->buffer;
+	unsigned int size = args->size;
+	int ret = 0;
+	char *log_msg = NULL;
+	int error;
+	*retval = 0;
+
+	/*
+	 * Tag synchronize the syscall version with userspace.
+	 * Tag == 0 => flags == OS_LOG_TYPE
+	 */
+	if (tag != 0) {
+		return EINVAL;
+	}
+
+	/*
+	 * OS_LOG_TYPE are defined in libkern/os/log.h
+	 * In userspace they are defined in libtrace/os/log.h
+	 */
+	if (flags != OS_LOG_TYPE_DEFAULT &&
+	    flags != OS_LOG_TYPE_INFO &&
+	    flags != OS_LOG_TYPE_DEBUG &&
+	    flags != OS_LOG_TYPE_ERROR &&
+	    flags != OS_LOG_TYPE_FAULT) {
+		return EINVAL;
+	}
+
+	if (size == 0) {
+		return EINVAL;
+	}
+
+	/* truncate to OS_LOG_DATA_MAX_SIZE */
+	if (size > OS_LOG_DATA_MAX_SIZE) {
+		printf("%s: WARNING msg is going to be truncated from %u to %u\n", __func__, size, OS_LOG_DATA_MAX_SIZE);
+		size = OS_LOG_DATA_MAX_SIZE;
+	}
+
+	log_msg = kalloc(size);
+	if (!log_msg) {
+		return ENOMEM;
+	}
+
+	error = copyin(buffer, log_msg, size);
+	if (error) {
+		ret = EFAULT;
+		goto out;
+	}
+	log_msg[size - 1] = '\0';
+
+	/*
+	 * This will log to dmesg and logd.
+	 * The call will fail if the current
+	 * process is not a driverKit process.
+	 */
+	os_log_driverKit(&ret, OS_LOG_DEFAULT, flags, "%s", log_msg);
+
+out:
+	if (log_msg != NULL) {
+		kfree(log_msg, size);
+	}
+
+	return ret;
 }
 
 #if DEVELOPMENT || DEBUG
@@ -3835,6 +3903,30 @@ SYSCTL_PROC(_kern, OID_AUTO, n_ltable_entries, CTLFLAG_RD | CTLFLAG_LOCKED,
     0, 0, sysctl_waitq_set_nelem, "I", "ltable elementis currently used");
 
 
+static int
+sysctl_mpsc_test_pingpong SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	uint64_t value = 0;
+	int error;
+
+	error = SYSCTL_IN(req, &value, sizeof(value));
+	if (error) {
+		return error;
+	}
+
+	if (error == 0 && req->newptr) {
+		error = mpsc_test_pingpong(value, &value);
+		if (error == 0) {
+			error = SYSCTL_OUT(req, &value, sizeof(value));
+		}
+	}
+
+	return error;
+}
+SYSCTL_PROC(_kern, OID_AUTO, mpsc_test_pingpong, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, sysctl_mpsc_test_pingpong, "Q", "MPSC tests: pingpong");
+
 #endif /* DEVELOPMENT || DEBUG */
 
 /*Remote Time api*/
@@ -3858,7 +3950,7 @@ static int sysctl_mach_bridge_timer_enable SYSCTL_HANDLER_ARGS
 		req->oldidx = sizeof(value);
 		return 0;
 	}
-	if (bt_init_flag) {
+	if (os_atomic_load(&bt_init_flag, acquire)) {
 		if (req->newptr) {
 			int new_value = 0;
 			error = SYSCTL_IN(req, &new_value, sizeof(new_value));
@@ -3931,6 +4023,13 @@ SYSCTL_PROC(_machdep_remotetime, OID_AUTO, conversion_params,
 
 #endif /* CONFIG_MACH_BRIDGE_RECV_TIME */
 
+#if DEVELOPMENT || DEBUG
+#endif /* DEVELOPMENT || DEBUG */
+
+extern uint32_t task_exc_guard_default;
+
+SYSCTL_INT(_kern, OID_AUTO, task_exc_guard_default,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &task_exc_guard_default, 0, "");
 
 
 static int
@@ -4022,4 +4121,4 @@ sysctl_kern_sched_thread_set_no_smt(__unused struct sysctl_oid *oidp, __unused v
 SYSCTL_PROC(_kern, OID_AUTO, sched_thread_set_no_smt,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY,
     0, 0, sysctl_kern_sched_thread_set_no_smt, "I", "");
-#endif
+#endif /* DEVELOPMENT || DEBUG */

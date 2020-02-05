@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -364,20 +364,15 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	 */
 	if ((ip6f->ip6f_offlg & ~IP6F_RESERVED_MASK) == 0) {
 		/*
+		 * Mark packet as reassembled.
 		 * In ICMPv6 processing, we drop certain
 		 * NDP messages that are not expected to
 		 * have fragment header based on recommendations
 		 * against security vulnerability as described in
 		 * RFC 6980.
-		 * We set PKTF_REASSEMBLED flag to let ICMPv6 NDP
-		 * drop such packets.
-		 * However there are already devices running software
-		 * that are creating interface with MTU < IPv6 Min
-		 * MTU. We should not have allowed that but they are
-		 * out, and sending atomic NDP fragments.
-		 * For that reason, we do not set the same flag here
-		 * and relax the check.
+		 * Treat atomic fragments as re-assembled packets as well.
 		 */
+		m->m_pkthdr.pkt_flags |= PKTF_REASSEMBLED;
 		ip6stat.ip6s_atmfrag_rcvd++;
 		in6_ifstat_inc(dstifp, ifs6_atmfrag_rcvd);
 		*offp = offset;
@@ -785,7 +780,6 @@ insert:
 	    (m->m_pkthdr.pkt_flags & PKTF_LOOP)) {
 		/* loopback checksums are always OK */
 		m->m_pkthdr.csum_data = 0xffff;
-		m->m_pkthdr.csum_flags &= ~CSUM_PARTIAL;
 		m->m_pkthdr.csum_flags = CSUM_DATA_VALID | CSUM_PSEUDO_HDR;
 	}
 

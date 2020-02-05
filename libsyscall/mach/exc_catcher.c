@@ -51,7 +51,7 @@ internal_catch_exception_raise(
 #if defined(__DYNAMIC__)
 	static _libkernel_exc_raise_func_t exc_raise_func = (void*)-1;
 
-	if (exc_raise_func == ((void*)-1)) {
+	if (exc_raise_func == ((void*)-1) && _dlsym) {
 		exc_raise_func = _dlsym(RTLD_DEFAULT, "catch_exception_raise");
 	}
 	if (exc_raise_func == 0) {

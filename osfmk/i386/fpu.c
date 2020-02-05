@@ -259,21 +259,6 @@ vzeroupper(void)
 
 static boolean_t fpu_thread_promote_avx512(thread_t);   /* Forward */
 
-/*
- * Define a wrapper for bcopy to defeat destination size checka.
- * This is needed to treat repeated objects such as
- *	_STRUCT_XMM_REG		fpu_ymmh0;
- *	...
- *	_STRUCT_XMM_REG		fpu_ymmh7;
- * as an array and to copy like so:
- *	bcopy_nockch(src,&dst->fpu_ymmh0,8*sizeof(_STRUCT_XMM_REG));
- * without the compiler throwing a __builtin__memmove_chk error.
- */
-static inline void
-bcopy_nochk(void *_src, void *_dst, size_t _len)
-{
-	bcopy(_src, _dst, _len);
-}
 
 /*
  * Furthermore, make compile-time asserts that no padding creeps into structures
@@ -878,7 +863,7 @@ Retry:
 
 		state->fpu_mxcsr &= mxcsr_capability_mask;
 
-		bcopy((char *)&state->fpu_fcw, (char *)ifps, fp_state_size[FP]);
+		__nochk_bcopy((char *)&state->fpu_fcw, (char *)ifps, fp_state_size[FP]);
 
 		switch (thread_xstate(thr_act)) {
 		case UNDEFINED_FULL:
@@ -906,9 +891,9 @@ Retry:
 			iavx->_xh.xcomp_bv  = 0;
 
 			if (f == x86_AVX_STATE32) {
-				bcopy_nochk(&xs->fpu_ymmh0, iavx->x_YMM_Hi128, 8 * sizeof(_STRUCT_XMM_REG));
+				__nochk_bcopy(&xs->fpu_ymmh0, iavx->x_YMM_Hi128, 8 * sizeof(_STRUCT_XMM_REG));
 			} else if (f == x86_AVX_STATE64) {
-				bcopy_nochk(&xs->fpu_ymmh0, iavx->x_YMM_Hi128, 16 * sizeof(_STRUCT_XMM_REG));
+				__nochk_bcopy(&xs->fpu_ymmh0, iavx->x_YMM_Hi128, 16 * sizeof(_STRUCT_XMM_REG));
 			} else {
 				iavx->_xh.xstate_bv = (XFEM_SSE | XFEM_X87);
 			}
@@ -932,23 +917,23 @@ Retry:
 
 			switch (f) {
 			case x86_AVX512_STATE32:
-				bcopy_nochk(&xs.s32->fpu_k0, iavx->x_Opmask, 8 * sizeof(_STRUCT_OPMASK_REG));
-				bcopy_nochk(&xs.s32->fpu_zmmh0, iavx->x_ZMM_Hi256, 8 * sizeof(_STRUCT_YMM_REG));
-				bcopy_nochk(&xs.s32->fpu_ymmh0, iavx->x_YMM_Hi128, 8 * sizeof(_STRUCT_XMM_REG));
+				__nochk_bcopy(&xs.s32->fpu_k0, iavx->x_Opmask, 8 * sizeof(_STRUCT_OPMASK_REG));
+				__nochk_bcopy(&xs.s32->fpu_zmmh0, iavx->x_ZMM_Hi256, 8 * sizeof(_STRUCT_YMM_REG));
+				__nochk_bcopy(&xs.s32->fpu_ymmh0, iavx->x_YMM_Hi128, 8 * sizeof(_STRUCT_XMM_REG));
 				DBG_AVX512_STATE(iavx);
 				break;
 			case x86_AVX_STATE32:
-				bcopy_nochk(&xs.s32->fpu_ymmh0, iavx->x_YMM_Hi128, 8 * sizeof(_STRUCT_XMM_REG));
+				__nochk_bcopy(&xs.s32->fpu_ymmh0, iavx->x_YMM_Hi128, 8 * sizeof(_STRUCT_XMM_REG));
 				break;
 			case x86_AVX512_STATE64:
-				bcopy_nochk(&xs.s64->fpu_k0, iavx->x_Opmask, 8 * sizeof(_STRUCT_OPMASK_REG));
-				bcopy_nochk(&xs.s64->fpu_zmm16, iavx->x_Hi16_ZMM, 16 * sizeof(_STRUCT_ZMM_REG));
-				bcopy_nochk(&xs.s64->fpu_zmmh0, iavx->x_ZMM_Hi256, 16 * sizeof(_STRUCT_YMM_REG));
-				bcopy_nochk(&xs.s64->fpu_ymmh0, iavx->x_YMM_Hi128, 16 * sizeof(_STRUCT_XMM_REG));
+				__nochk_bcopy(&xs.s64->fpu_k0, iavx->x_Opmask, 8 * sizeof(_STRUCT_OPMASK_REG));
+				__nochk_bcopy(&xs.s64->fpu_zmm16, iavx->x_Hi16_ZMM, 16 * sizeof(_STRUCT_ZMM_REG));
+				__nochk_bcopy(&xs.s64->fpu_zmmh0, iavx->x_ZMM_Hi256, 16 * sizeof(_STRUCT_YMM_REG));
+				__nochk_bcopy(&xs.s64->fpu_ymmh0, iavx->x_YMM_Hi128, 16 * sizeof(_STRUCT_XMM_REG));
 				DBG_AVX512_STATE(iavx);
 				break;
 			case x86_AVX_STATE64:
-				bcopy_nochk(&xs.s64->fpu_ymmh0, iavx->x_YMM_Hi128, 16 * sizeof(_STRUCT_XMM_REG));
+				__nochk_bcopy(&xs.s64->fpu_ymmh0, iavx->x_YMM_Hi128, 16 * sizeof(_STRUCT_XMM_REG));
 				break;
 			}
 			break;
@@ -1024,7 +1009,7 @@ fpu_get_fxstate(
 		 * No valid floating-point state.
 		 */
 
-		bcopy((char *)&initial_fp_state, (char *)&state->fpu_fcw,
+		__nochk_bcopy((char *)&initial_fp_state, (char *)&state->fpu_fcw,
 		    fp_state_size[FP]);
 
 		simple_unlock(&pcb->lock);
@@ -1047,7 +1032,7 @@ fpu_get_fxstate(
 		(void)ml_set_interrupts_enabled(intr);
 	}
 	if (ifps->fp_valid) {
-		bcopy((char *)ifps, (char *)&state->fpu_fcw, fp_state_size[FP]);
+		__nochk_bcopy((char *)ifps, (char *)&state->fpu_fcw, fp_state_size[FP]);
 		switch (thread_xstate(thr_act)) {
 		case UNDEFINED_FULL:
 		case FP_FULL:
@@ -1065,9 +1050,9 @@ fpu_get_fxstate(
 			struct x86_avx_thread_state *iavx = (void *) ifps;
 			x86_avx_state64_t *xs = (x86_avx_state64_t *) state;
 			if (f == x86_AVX_STATE32) {
-				bcopy_nochk(iavx->x_YMM_Hi128, &xs->fpu_ymmh0, 8 * sizeof(_STRUCT_XMM_REG));
+				__nochk_bcopy(iavx->x_YMM_Hi128, &xs->fpu_ymmh0, 8 * sizeof(_STRUCT_XMM_REG));
 			} else if (f == x86_AVX_STATE64) {
-				bcopy_nochk(iavx->x_YMM_Hi128, &xs->fpu_ymmh0, 16 * sizeof(_STRUCT_XMM_REG));
+				__nochk_bcopy(iavx->x_YMM_Hi128, &xs->fpu_ymmh0, 16 * sizeof(_STRUCT_XMM_REG));
 			}
 			break;
 		}
@@ -1081,23 +1066,23 @@ fpu_get_fxstate(
 			} xs = { .ts = tstate };
 			switch (f) {
 			case x86_AVX512_STATE32:
-				bcopy_nochk(iavx->x_Opmask, &xs.s32->fpu_k0, 8 * sizeof(_STRUCT_OPMASK_REG));
-				bcopy_nochk(iavx->x_ZMM_Hi256, &xs.s32->fpu_zmmh0, 8 * sizeof(_STRUCT_YMM_REG));
-				bcopy_nochk(iavx->x_YMM_Hi128, &xs.s32->fpu_ymmh0, 8 * sizeof(_STRUCT_XMM_REG));
+				__nochk_bcopy(iavx->x_Opmask, &xs.s32->fpu_k0, 8 * sizeof(_STRUCT_OPMASK_REG));
+				__nochk_bcopy(iavx->x_ZMM_Hi256, &xs.s32->fpu_zmmh0, 8 * sizeof(_STRUCT_YMM_REG));
+				__nochk_bcopy(iavx->x_YMM_Hi128, &xs.s32->fpu_ymmh0, 8 * sizeof(_STRUCT_XMM_REG));
 				DBG_AVX512_STATE(iavx);
 				break;
 			case x86_AVX_STATE32:
-				bcopy_nochk(iavx->x_YMM_Hi128, &xs.s32->fpu_ymmh0, 8 * sizeof(_STRUCT_XMM_REG));
+				__nochk_bcopy(iavx->x_YMM_Hi128, &xs.s32->fpu_ymmh0, 8 * sizeof(_STRUCT_XMM_REG));
 				break;
 			case x86_AVX512_STATE64:
-				bcopy_nochk(iavx->x_Opmask, &xs.s64->fpu_k0, 8 * sizeof(_STRUCT_OPMASK_REG));
-				bcopy_nochk(iavx->x_Hi16_ZMM, &xs.s64->fpu_zmm16, 16 * sizeof(_STRUCT_ZMM_REG));
-				bcopy_nochk(iavx->x_ZMM_Hi256, &xs.s64->fpu_zmmh0, 16 * sizeof(_STRUCT_YMM_REG));
-				bcopy_nochk(iavx->x_YMM_Hi128, &xs.s64->fpu_ymmh0, 16 * sizeof(_STRUCT_XMM_REG));
+				__nochk_bcopy(iavx->x_Opmask, &xs.s64->fpu_k0, 8 * sizeof(_STRUCT_OPMASK_REG));
+				__nochk_bcopy(iavx->x_Hi16_ZMM, &xs.s64->fpu_zmm16, 16 * sizeof(_STRUCT_ZMM_REG));
+				__nochk_bcopy(iavx->x_ZMM_Hi256, &xs.s64->fpu_zmmh0, 16 * sizeof(_STRUCT_YMM_REG));
+				__nochk_bcopy(iavx->x_YMM_Hi128, &xs.s64->fpu_ymmh0, 16 * sizeof(_STRUCT_XMM_REG));
 				DBG_AVX512_STATE(iavx);
 				break;
 			case x86_AVX_STATE64:
-				bcopy_nochk(iavx->x_YMM_Hi128, &xs.s64->fpu_ymmh0, 16 * sizeof(_STRUCT_XMM_REG));
+				__nochk_bcopy(iavx->x_YMM_Hi128, &xs.s64->fpu_ymmh0, 16 * sizeof(_STRUCT_XMM_REG));
 				break;
 			}
 			break;
@@ -1163,7 +1148,7 @@ fpu_dup_fxstate(
 		if (ifps->fp_valid) {
 			child->machine.ifps = new_ifps;
 			child->machine.xstate = xstate;
-			bcopy((char *)(ppcb->ifps),
+			__nochk_bcopy((char *)(ppcb->ifps),
 			    (char *)(child->machine.ifps),
 			    fp_state_size[xstate]);
 
@@ -1249,7 +1234,7 @@ fpnoextflt(void)
 
 	if (pcb->ifps == 0 && !get_interrupt_level()) {
 		ifps = fp_state_alloc(xstate);
-		bcopy((char *)&initial_fp_state, (char *)ifps,
+		__nochk_bcopy((char *)&initial_fp_state, (char *)ifps,
 		    fp_state_size[xstate]);
 		if (!thread_is_64bit_addr(thr_act)) {
 			ifps->fp_save_layout = fpu_YMM_capable ? XSAVE32 : FXSAVE32;
@@ -1555,7 +1540,7 @@ fpu_savearea_promote_avx512(thread_t thread)
 
 	/* Allocate an AVX512 savearea and copy AVX state into it */
 	if (pcb->xstate != AVX512) {
-		bcopy(ifps, ifps512, fp_state_size[AVX]);
+		__nochk_bcopy(ifps, ifps512, fp_state_size[AVX]);
 		pcb->ifps = ifps512;
 		pcb->xstate = AVX512;
 		ifps512 = NULL;

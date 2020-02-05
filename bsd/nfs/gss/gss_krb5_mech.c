@@ -1333,6 +1333,9 @@ gss_krb5_cfx_verify_mic_mbuf(uint32_t *minor,   /* minor_status */
 	header.value = mic->value;
 
 	*minor = krb5_mic_mbuf(cctx, NULL, mbp, offset, len, &header, digest, &verified, 0, 0);
+	if (*minor) {
+		return GSS_S_FAILURE;
+	}
 
 	//XXX  errors and such? Sequencing and replay? Not Supported RPCSEC_GSS
 	memcpy(&seq, token->SND_SEQ, sizeof(uint64_t));
@@ -2171,7 +2174,7 @@ gss_krb5_3des_unwrap_mbuf(uint32_t *minor,
 			break;
 		}
 		wrap.Seal_Alg[0] = 0xff;
-		wrap.Seal_Alg[0] = 0xff;
+		wrap.Seal_Alg[1] = 0xff;
 	}
 	if (*minor) {
 		return GSS_S_FAILURE;
@@ -2204,11 +2207,11 @@ gss_krb5_3des_unwrap_mbuf(uint32_t *minor,
 	header.value = &wrap;
 
 	*minor = krb5_mic_mbuf(cctx, &header, smb, 0, length, NULL, hashval, &verified, 0, 0);
-	if (!verified) {
-		return GSS_S_BAD_SIG;
-	}
 	if (*minor) {
 		return GSS_S_FAILURE;
+	}
+	if (!verified) {
+		return GSS_S_BAD_SIG;
 	}
 
 	/* Get the pad bytes */

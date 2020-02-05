@@ -85,6 +85,7 @@
 #include <kern/processor.h>
 #include <kern/queue.h>
 #include <kern/sched.h>
+#include <kern/startup.h>
 #include <kern/task.h>
 #include <kern/thread.h>
 
@@ -111,8 +112,14 @@ extern void (*dtrace_cpu_state_changed_hook)(int, boolean_t);
 struct machine_info     machine_info;
 
 /* Forwards */
-void                    processor_doshutdown(
-	processor_t                     processor);
+static void
+processor_doshutdown(processor_t processor);
+
+static void
+processor_offline(void * parameter, __unused wait_result_t result);
+
+static void
+processor_offline_intstack(processor_t processor) __dead2;
 
 /*
  *	processor_up:
@@ -126,19 +133,32 @@ processor_up(
 {
 	processor_set_t         pset;
 	spl_t                           s;
+	boolean_t pset_online = false;
 
 	s = splsched();
 	init_ast_check(processor);
 	pset = processor->processor_set;
 	pset_lock(pset);
+	if (pset->online_processor_count == 0) {
+		/* About to bring the first processor of a pset online */
+		pset_online = true;
+	}
 	++pset->online_processor_count;
 	pset_update_processor_state(pset, processor, PROCESSOR_RUNNING);
-	(void)hw_atomic_add(&processor_avail_count, 1);
+	os_atomic_inc(&processor_avail_count, relaxed);
 	if (processor->is_recommended) {
-		(void)hw_atomic_add(&processor_avail_count_user, 1);
+		os_atomic_inc(&processor_avail_count_user, relaxed);
 	}
 	commpage_update_active_cpus();
-	pset_unlock(pset);
+	if (pset_online) {
+		/* New pset is coming up online; callout to the
+		 * scheduler in case it wants to adjust runqs.
+		 */
+		SCHED(pset_made_schedulable)(processor, pset, true);
+		/* pset lock dropped */
+	} else {
+		pset_unlock(pset);
+	}
 	ml_cpu_up();
 	splx(s);
 
@@ -252,20 +272,22 @@ processor_shutdown(
 /*
  * Called with interrupts disabled.
  */
-void
+static void
 processor_doshutdown(
-	processor_t                     processor)
+	processor_t processor)
 {
-	thread_t                        old_thread, self = current_thread();
-	processor_t                     prev;
-	processor_set_t                 pset;
+	thread_t self = current_thread();
 
 	/*
 	 *	Get onto the processor to shutdown
 	 */
-	prev = thread_bind(processor);
+	processor_t prev = thread_bind(processor);
 	thread_block(THREAD_CONTINUE_NULL);
 
+	/* interrupts still disabled */
+	assert(ml_get_interrupts_enabled() == FALSE);
+
+	assert(processor == current_processor());
 	assert(processor->state == PROCESSOR_SHUTDOWN);
 
 #if CONFIG_DTRACE
@@ -283,88 +305,127 @@ processor_doshutdown(
 	}
 #endif
 
-	pset = processor->processor_set;
+	processor_set_t pset = processor->processor_set;
+
 	pset_lock(pset);
 	pset_update_processor_state(pset, processor, PROCESSOR_OFF_LINE);
 	--pset->online_processor_count;
-	(void)hw_atomic_sub(&processor_avail_count, 1);
+	os_atomic_dec(&processor_avail_count, relaxed);
 	if (processor->is_recommended) {
-		(void)hw_atomic_sub(&processor_avail_count_user, 1);
+		os_atomic_dec(&processor_avail_count_user, relaxed);
 	}
 	commpage_update_active_cpus();
 	SCHED(processor_queue_shutdown)(processor);
 	/* pset lock dropped */
 	SCHED(rt_queue_shutdown)(processor);
 
-	/*
-	 * Continue processor shutdown in shutdown context.
-	 *
-	 * We save the current context in machine_processor_shutdown in such a way
-	 * that when this thread is next invoked it will return from here instead of
-	 * from the machine_switch_context() in thread_invoke like a normal context switch.
-	 *
-	 * As such, 'old_thread' is neither the idle thread nor the current thread - it's whatever
-	 * thread invoked back to this one. (Usually, it's another processor's idle thread.)
-	 *
-	 * TODO: Make this a real thread_run of the idle_thread, so we don't have to keep this in sync
-	 * with thread_invoke.
-	 */
 	thread_bind(prev);
-	old_thread = machine_processor_shutdown(self, processor_offline, processor);
 
-	thread_dispatch(old_thread, self);
+	/* interrupts still disabled */
+
+	/*
+	 * Continue processor shutdown on the processor's idle thread.
+	 * The handoff won't fail because the idle thread has a reserved stack.
+	 * Switching to the idle thread leaves interrupts disabled,
+	 * so we can't accidentally take an interrupt after the context switch.
+	 */
+	thread_t shutdown_thread = processor->idle_thread;
+	shutdown_thread->continuation = processor_offline;
+	shutdown_thread->parameter = processor;
+
+	thread_run(self, NULL, NULL, shutdown_thread);
+}
+
+/*
+ * Called in the context of the idle thread to shut down the processor
+ *
+ * A shut-down processor looks like it's 'running' the idle thread parked
+ * in this routine, but it's actually been powered off and has no hardware state.
+ */
+static void
+processor_offline(
+	void * parameter,
+	__unused wait_result_t result)
+{
+	processor_t processor = (processor_t) parameter;
+	thread_t self = current_thread();
+	__assert_only thread_t old_thread = THREAD_NULL;
+
+	assert(processor == current_processor());
+	assert(self->state & TH_IDLE);
+	assert(processor->idle_thread == self);
+	assert(ml_get_interrupts_enabled() == FALSE);
+	assert(self->continuation == NULL);
+	assert(processor->processor_offlined == false);
+
+	bool enforce_quiesce_safety = gEnforceQuiesceSafety;
+
+	/*
+	 * Scheduling is now disabled for this processor.
+	 * Ensure that primitives that need scheduling (like mutexes) know this.
+	 */
+	if (enforce_quiesce_safety) {
+		disable_preemption();
+	}
+
+	/* convince slave_main to come back here */
+	processor->processor_offlined = true;
+
+	/*
+	 * Switch to the interrupt stack and shut down the processor.
+	 *
+	 * When the processor comes back, it will eventually call load_context which
+	 * restores the context saved by machine_processor_shutdown, returning here.
+	 */
+	old_thread = machine_processor_shutdown(self, processor_offline_intstack, processor);
+
+	/* old_thread should be NULL because we got here through Load_context */
+	assert(old_thread == THREAD_NULL);
+
+	assert(processor == current_processor());
+	assert(processor->idle_thread == current_thread());
+
+	assert(ml_get_interrupts_enabled() == FALSE);
+	assert(self->continuation == NULL);
+
+	/* Extract the machine_param value stashed by slave_main */
+	void * machine_param = self->parameter;
+	self->parameter = NULL;
+
+	/* Re-initialize the processor */
+	slave_machine_init(machine_param);
+
+	assert(processor->processor_offlined == true);
+	processor->processor_offlined = false;
+
+	if (enforce_quiesce_safety) {
+		enable_preemption();
+	}
+
+	/*
+	 * Now that the processor is back, invoke the idle thread to find out what to do next.
+	 * idle_thread will enable interrupts.
+	 */
+	thread_block(idle_thread);
+	/*NOTREACHED*/
 }
 
 /*
  * Complete the shutdown and place the processor offline.
  *
- * Called at splsched in the shutdown context.
- * This performs a minimal thread_invoke() to the idle thread,
- * so it needs to be kept in sync with what thread_invoke() does.
+ * Called at splsched in the shutdown context
+ * (i.e. on the idle thread, on the interrupt stack)
  *
  * The onlining half of this is done in load_context().
  */
-void
-processor_offline(
-	processor_t                     processor)
+static void
+processor_offline_intstack(
+	processor_t processor)
 {
 	assert(processor == current_processor());
 	assert(processor->active_thread == current_thread());
 
-	thread_t old_thread = processor->active_thread;
-	thread_t new_thread = processor->idle_thread;
-
-	if (!new_thread->kernel_stack) {
-		/* the idle thread has a reserved stack, so this will never fail */
-		if (!stack_alloc_try(new_thread)) {
-			panic("processor_offline");
-		}
-	}
-
-	processor->active_thread = new_thread;
-	processor_state_update_idle(processor);
-	processor->starting_pri = IDLEPRI;
-	processor->deadline = UINT64_MAX;
-	new_thread->last_processor = processor;
-
-	uint64_t ctime = mach_absolute_time();
-
-	processor->last_dispatch = ctime;
-	old_thread->last_run_time = ctime;
-
-	/* Update processor->thread_timer and ->kernel_timer to point to the new thread */
-	processor_timer_switch_thread(ctime, &new_thread->system_timer);
-	PROCESSOR_DATA(processor, kernel_timer) = &new_thread->system_timer;
-	timer_stop(PROCESSOR_DATA(processor, current_state), ctime);
-
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-	    MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED) | DBG_FUNC_NONE,
-	    old_thread->reason, (uintptr_t)thread_tid(new_thread),
-	    old_thread->sched_pri, new_thread->sched_pri, 0);
-
-	machine_set_current_thread(new_thread);
-
-	thread_dispatch(old_thread, new_thread);
+	timer_stop(PROCESSOR_DATA(processor, current_state), processor->last_dispatch);
 
 	cpu_quiescent_counter_leave(processor->last_dispatch);
 

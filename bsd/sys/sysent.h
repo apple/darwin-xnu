@@ -58,7 +58,7 @@ struct sysent {         /* system call table */
 extern struct sysent sysent[];
 #endif  /* __INIT_SYSENT_C__ */
 
-extern unsigned int nsysent;
+extern const unsigned int nsysent;
 
 /*
  * Valid values for sy_cancel

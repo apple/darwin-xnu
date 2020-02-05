@@ -375,6 +375,16 @@ commpage_init_cpu_capabilities( void )
 		    CPUID_LEAF7_FEATURE_AVX512IFMA);
 		setif(bits, kHasAVX512VBMI, cpuid_leaf7_features() &
 		    CPUID_LEAF7_FEATURE_AVX512VBMI);
+		setif(bits, kHasVAES, cpuid_leaf7_features() &
+		    CPUID_LEAF7_FEATURE_VAES);
+		setif(bits, kHasVPCLMULQDQ, cpuid_leaf7_features() &
+		    CPUID_LEAF7_FEATURE_VPCLMULQDQ);
+		setif(bits, kHasAVX512VNNI, cpuid_leaf7_features() &
+		    CPUID_LEAF7_FEATURE_AVX512VNNI);
+		setif(bits, kHasAVX512BITALG, cpuid_leaf7_features() &
+		    CPUID_LEAF7_FEATURE_AVX512BITALG);
+		setif(bits, kHasAVX512VPOPCNTDQ, cpuid_leaf7_features() &
+		    CPUID_LEAF7_FEATURE_AVX512VPCDQ);
 	}
 
 	uint64_t misc_enable = rdmsr64(MSR_IA32_MISC_ENABLE);
@@ -482,6 +492,7 @@ commpage_stuff_routine(
 	commpage_stuff(rd->commpage_address, rd->code_address, rd->code_length);
 }
 
+
 /* Fill in the 32- or 64-bit commpage.  Called once for each.
  */
 
@@ -568,7 +579,7 @@ commpage_populate( void )
 	    _COMM_PAGE32_BASE_ADDRESS,
 	    &time_data32,
 	    &gtod_time_data32,
-	    "commpage 32-bit",
+	    _COMM_PAGE32_SIGNATURE_STRING,
 	    VM_PROT_READ);
 #ifndef __LP64__
 	pmap_commpage32_init((vm_offset_t) commPagePtr32, _COMM_PAGE32_BASE_ADDRESS,
@@ -584,7 +595,7 @@ commpage_populate( void )
 		    _COMM_PAGE32_START_ADDRESS,                     /* commpage address are relative to 32-bit commpage placement */
 		    &time_data64,
 		    &gtod_time_data64,
-		    "commpage 64-bit",
+		    _COMM_PAGE64_SIGNATURE_STRING,
 		    VM_PROT_READ);
 #ifndef __LP64__
 		pmap_commpage64_init((vm_offset_t) commPagePtr64, _COMM_PAGE64_BASE_ADDRESS,
@@ -882,6 +893,54 @@ commpage_update_atm_diagnostic_config(uint32_t diagnostic_config)
 		*saved_data_ptr = diagnostic_config;
 	}
 }
+
+/*
+ * update the commpage with if dtrace user land probes are enabled
+ */
+void
+commpage_update_dof(boolean_t enabled)
+{
+#if CONFIG_DTRACE
+	char *cp;
+
+	cp = commPagePtr32;
+	if (cp) {
+		cp += (_COMM_PAGE_DTRACE_DOF_ENABLED - _COMM_PAGE32_BASE_ADDRESS);
+		*cp = (enabled ? 1 : 0);
+	}
+
+	cp = commPagePtr64;
+	if (cp) {
+		cp += (_COMM_PAGE_DTRACE_DOF_ENABLED - _COMM_PAGE32_START_ADDRESS);
+		*cp = (enabled ? 1 : 0);
+	}
+#else
+	(void)enabled;
+#endif
+}
+
+
+/*
+ * update the dyld global config flags
+ */
+void
+commpage_update_dyld_flags(uint64_t value)
+{
+	char *cp;
+
+	cp = commPagePtr32;
+	if (cp) {
+		cp += (_COMM_PAGE_DYLD_SYSTEM_FLAGS - _COMM_PAGE32_BASE_ADDRESS);
+		*(uint64_t *)cp = value;
+	}
+
+	cp = commPagePtr64;
+	if (cp) {
+		cp += (_COMM_PAGE_DYLD_SYSTEM_FLAGS - _COMM_PAGE32_BASE_ADDRESS);
+		*(uint64_t *)cp = value;
+	}
+}
+
 
 /*
  * update the commpage data for last known value of mach_absolute_time()

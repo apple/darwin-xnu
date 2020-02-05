@@ -63,11 +63,11 @@ typedef enum {
 	TCF_COUNT       = 2,
 } thread_call_flavor_t;
 
-typedef enum {
+__options_decl(thread_call_group_flags_t, uint32_t, {
 	TCG_NONE                = 0x0,
 	TCG_PARALLEL            = 0x1,
 	TCG_DEALLOC_ACTIVE      = 0x2,
-} thread_call_group_flags_t;
+});
 
 static struct thread_call_group {
 	const char *            tcg_name;

@@ -49,49 +49,21 @@ extern "C" {
 #define ROOTDEVICETIMEOUT       60
 #endif
 
-int panic_on_exception_triage = 0;
-
 extern dev_t mdevadd(int devid, uint64_t base, unsigned int size, int phys);
 extern dev_t mdevlookup(int devid);
 extern void mdevremoveall(void);
 extern int mdevgetrange(int devid, uint64_t *base, uint64_t *size);
 extern void di_root_ramfile(IORegistryEntry * entry);
 
-#if CONFIG_EMBEDDED
+#define ROUNDUP(a, b) (((a) + ((b) - 1)) & (~((b) - 1)))
+
 #define IOPOLLED_COREFILE       (CONFIG_KDP_INTERACTIVE_DEBUGGING)
 
 #if defined(XNU_TARGET_OS_BRIDGE)
-
-#define kIOCoreDumpSize         150ULL*1024ULL*1024ULL
-// leave free space on volume:
-#define kIOCoreDumpFreeSize     150ULL*1024ULL*1024ULL
 #define kIOCoreDumpPath         "/private/var/internal/kernelcore"
-
-#else /* defined(XNU_TARGET_OS_BRIDGE) */
-#define kIOCoreDumpMinSize      350ULL*1024ULL*1024ULL
-#define kIOCoreDumpLargeSize    500ULL*1024ULL*1024ULL
-// leave free space on volume:
-#define kIOCoreDumpFreeSize     350ULL*1024ULL*1024ULL
+#else
 #define kIOCoreDumpPath         "/private/var/vm/kernelcore"
-
-#endif /* defined(XNU_TARGET_OS_BRIDGE) */
-
-#elif DEVELOPMENT /* CONFIG_EMBEDDED */
-#define IOPOLLED_COREFILE       1
-// no sizing
-#define kIOCoreDumpSize         0ULL
-#define kIOCoreDumpFreeSize     0ULL
-#else /* CONFIG_EMBEDDED */
-#define IOPOLLED_COREFILE       0
-#endif /* CONFIG_EMBEDDED */
-
-
-#if IOPOLLED_COREFILE
-static bool
-NewKernelCoreMedia(void * target, void * refCon,
-    IOService * newService,
-    IONotifier * notifier);
-#endif /* IOPOLLED_COREFILE */
+#endif
 
 #if CONFIG_KDP_INTERACTIVE_DEBUGGING
 /*
@@ -101,10 +73,20 @@ extern uint64_t kdp_core_ramdisk_addr;
 extern uint64_t kdp_core_ramdisk_size;
 #endif
 
+#if IOPOLLED_COREFILE
+static void IOOpenPolledCoreFile(thread_call_param_t __unused, thread_call_param_t corefilename);
+
+thread_call_t corefile_open_call = NULL;
+#endif
+
 kern_return_t
 IOKitBSDInit( void )
 {
 	IOService::publishResource("IOBSD");
+
+#if IOPOLLED_COREFILE
+	corefile_open_call = thread_call_allocate_with_options(IOOpenPolledCoreFile, NULL, THREAD_CALL_PRIORITY_KERNEL, THREAD_CALL_OPTIONS_ONCE);
+#endif
 
 	return kIOReturnSuccess;
 }
@@ -122,8 +104,8 @@ IOServicePublishResource( const char * property, boolean_t value )
 boolean_t
 IOServiceWaitForMatchingResource( const char * property, uint64_t timeout )
 {
-	OSDictionary *      dict = 0;
-	IOService *         match = 0;
+	OSDictionary *      dict = NULL;
+	IOService *         match = NULL;
 	boolean_t           found = false;
 
 	do {
@@ -150,8 +132,8 @@ IOServiceWaitForMatchingResource( const char * property, uint64_t timeout )
 boolean_t
 IOCatalogueMatchingDriversPresent( const char * property )
 {
-	OSDictionary *      dict = 0;
-	OSOrderedSet *      set = 0;
+	OSDictionary *      dict = NULL;
+	OSOrderedSet *      set = NULL;
 	SInt32              generationCount = 0;
 	boolean_t           found = false;
 
@@ -181,7 +163,7 @@ OSDictionary *
 IOBSDNameMatching( const char * name )
 {
 	OSDictionary *      dict;
-	const OSSymbol *    str = 0;
+	const OSSymbol *    str = NULL;
 
 	do {
 		dict = IOService::serviceMatching( gIOServiceKey );
@@ -205,7 +187,7 @@ IOBSDNameMatching( const char * name )
 		str->release();
 	}
 
-	return 0;
+	return NULL;
 }
 
 OSDictionary *
@@ -218,29 +200,29 @@ OSDictionary *
 IONetworkNamePrefixMatching( const char * prefix )
 {
 	OSDictionary *       matching;
-	OSDictionary *   propDict = 0;
-	const OSSymbol * str      = 0;
+	OSDictionary *   propDict = NULL;
+	const OSSymbol * str      = NULL;
 	char networkType[128];
 
 	do {
 		matching = IOService::serviceMatching( "IONetworkInterface" );
-		if (matching == 0) {
+		if (matching == NULL) {
 			continue;
 		}
 
 		propDict = OSDictionary::withCapacity(1);
-		if (propDict == 0) {
+		if (propDict == NULL) {
 			continue;
 		}
 
 		str = OSSymbol::withCString( prefix );
-		if (str == 0) {
+		if (str == NULL) {
 			continue;
 		}
 
 		propDict->setObject( "IOInterfaceNamePrefix", (OSObject *) str );
 		str->release();
-		str = 0;
+		str = NULL;
 
 		// see if we're contrained to netroot off of specific network type
 		if (PE_parse_boot_argn( "network-type", networkType, 128 )) {
@@ -248,7 +230,7 @@ IONetworkNamePrefixMatching( const char * prefix )
 			if (str) {
 				propDict->setObject( "IONetworkRootType", str);
 				str->release();
-				str = 0;
+				str = NULL;
 			}
 		}
 
@@ -258,7 +240,7 @@ IONetworkNamePrefixMatching( const char * prefix )
 		}
 
 		propDict->release();
-		propDict = 0;
+		propDict = NULL;
 
 		return matching;
 	} while (false);
@@ -273,7 +255,7 @@ IONetworkNamePrefixMatching( const char * prefix )
 		str->release();
 	}
 
-	return 0;
+	return NULL;
 }
 
 static bool
@@ -287,32 +269,32 @@ IORegisterNetworkInterface( IOService * netif )
 	// device is handed to BSD.
 
 	IOService *    stack;
-	OSNumber *     zero    = 0;
-	OSString *     path    = 0;
-	OSDictionary * dict    = 0;
-	char *         pathBuf = 0;
+	OSNumber *     zero    = NULL;
+	OSString *     path    = NULL;
+	OSDictionary * dict    = NULL;
+	char *         pathBuf = NULL;
 	int            len;
 	enum { kMaxPathLen = 512 };
 
 	do {
 		stack = IOService::waitForService(
 			IOService::serviceMatching("IONetworkStack"));
-		if (stack == 0) {
+		if (stack == NULL) {
 			break;
 		}
 
 		dict = OSDictionary::withCapacity(3);
-		if (dict == 0) {
+		if (dict == NULL) {
 			break;
 		}
 
 		zero = OSNumber::withNumber((UInt64) 0, 32);
-		if (zero == 0) {
+		if (zero == NULL) {
 			break;
 		}
 
 		pathBuf = (char *) IOMalloc( kMaxPathLen );
-		if (pathBuf == 0) {
+		if (pathBuf == NULL) {
 			break;
 		}
 
@@ -323,7 +305,7 @@ IORegisterNetworkInterface( IOService * netif )
 		}
 
 		path = OSString::withCStringNoCopy( pathBuf );
-		if (path == 0) {
+		if (path == NULL) {
 			break;
 		}
 
@@ -346,7 +328,7 @@ IORegisterNetworkInterface( IOService * netif )
 		IOFree(pathBuf, kMaxPathLen);
 	}
 
-	return netif->getProperty( kIOBSDNameKey ) != 0;
+	return netif->getProperty( kIOBSDNameKey ) != NULL;
 }
 
 OSDictionary *
@@ -393,7 +375,7 @@ IOOFPathMatching( const char * path, char * buf, int maxLen )
 		matching->release();
 	}
 
-	return 0;
+	return NULL;
 }
 
 static int didRam = 0;
@@ -406,19 +388,20 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 	mach_timespec_t     t;
 	IOService *         service;
 	IORegistryEntry *   regEntry;
-	OSDictionary *      matching = 0;
+	OSDictionary *      matching = NULL;
 	OSString *          iostr;
 	OSNumber *          off;
-	OSData *            data = 0;
+	OSData *            data = NULL;
 
 	UInt32              flags = 0;
 	int                 mnr, mjr;
-	const char *        mediaProperty = 0;
+	const char *        mediaProperty = NULL;
 	char *              rdBootVar;
 	char *              str;
-	const char *        look = 0;
+	const char *        look = NULL;
 	int                 len;
 	bool                debugInfoPrintedOnce = false;
+	bool                needNetworkKexts = false;
 	const char *        uuidStr = NULL;
 
 	static int          mountAttempts = 0;
@@ -556,6 +539,7 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 
 		if (strncmp( look, "en", strlen( "en" )) == 0) {
 			matching = IONetworkNamePrefixMatching( "en" );
+			needNetworkKexts = true;
 		} else if (strncmp( look, "uuid", strlen( "uuid" )) == 0) {
 			char *uuid;
 			OSString *uuidString;
@@ -607,6 +591,12 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 		}
 	}
 
+	char namep[8];
+	if (needNetworkKexts
+	    || PE_parse_boot_argn("-s", namep, sizeof(namep))) {
+		IOService::startDeferredMatches();
+	}
+
 	do {
 		t.tv_sec = ROOTDEVICETIMEOUT;
 		t.tv_nsec = 0;
@@ -648,7 +638,7 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 	if (service
 	    && service->metaCast( "IONetworkInterface" )
 	    && !IORegisterNetworkInterface( service )) {
-		service = 0;
+		service = NULL;
 	}
 
 	if (service) {
@@ -726,7 +716,6 @@ void
 IOSecureBSDRoot(const char * rootName)
 {
 #if CONFIG_EMBEDDED
-	int              tmpInt;
 	IOReturn         result;
 	IOPlatformExpert *pe;
 	OSDictionary     *matching;
@@ -739,20 +728,12 @@ IOSecureBSDRoot(const char * rootName)
 	assert(pe);
 	// Returns kIOReturnNotPrivileged is the root device is not secure.
 	// Returns kIOReturnUnsupported if "SecureRootName" is not implemented.
-	result = pe->callPlatformFunction(functionName, false, (void *)rootName, (void *)0, (void *)0, (void *)0);
+	result = pe->callPlatformFunction(functionName, false, (void *)rootName, (void *)NULL, (void *)NULL, (void *)NULL);
 	functionName->release();
 	OSSafeReleaseNULL(pe);
 
 	if (result == kIOReturnNotPrivileged) {
 		mdevremoveall();
-	} else if (result == kIOReturnSuccess) {
-		// If we are booting with a secure root, and we have the right
-		// boot-arg, we will want to panic on exception triage.  This
-		// behavior is intended as a debug aid (we can look at why an
-		// exception occured in the kernel debugger).
-		if (PE_parse_boot_argn("-panic_on_exception_triage", &tmpInt, sizeof(tmpInt))) {
-			panic_on_exception_triage = 1;
-		}
 	}
 
 #endif  // CONFIG_EMBEDDED
@@ -796,13 +777,13 @@ IOBSDGetPlatformUUID( uuid_t uuid, mach_timespec_t timeout )
 	IOService * resources;
 	OSString *  string;
 
-	resources = IOService::waitForService( IOService::resourceMatching( kIOPlatformUUIDKey ), (timeout.tv_sec || timeout.tv_nsec) ? &timeout : 0 );
-	if (resources == 0) {
+	resources = IOService::waitForService( IOService::resourceMatching( kIOPlatformUUIDKey ), (timeout.tv_sec || timeout.tv_nsec) ? &timeout : NULL );
+	if (resources == NULL) {
 		return KERN_OPERATION_TIMED_OUT;
 	}
 
 	string = (OSString *) IOService::getPlatform()->getProvider()->getProperty( kIOPlatformUUIDKey );
-	if (string == 0) {
+	if (string == NULL) {
 		return KERN_NOT_SUPPORTED;
 	}
 
@@ -823,179 +804,167 @@ IOBSDGetPlatformUUID( uuid_t uuid, mach_timespec_t timeout )
 
 IOPolledFileIOVars * gIOPolledCoreFileVars;
 kern_return_t gIOPolledCoreFileOpenRet = kIOReturnNotReady;
+IOPolledCoreFileMode_t gIOPolledCoreFileMode = kIOPolledCoreFileModeNotInitialized;
+
 #if IOPOLLED_COREFILE
 
-static IOReturn
-IOOpenPolledCoreFile(const char * filename)
+#if defined(XNU_TARGET_OS_BRIDGE)
+// On bridgeOS allocate a 150MB corefile and leave 150MB free
+#define kIOCoreDumpSize         150ULL*1024ULL*1024ULL
+#define kIOCoreDumpFreeSize     150ULL*1024ULL*1024ULL
+
+#elif CONFIG_EMBEDDED /* defined(XNU_TARGET_OS_BRIDGE) */
+// On embedded devices with >3GB DRAM we allocate a 500MB corefile
+// otherwise allocate a 350MB corefile. Leave 350 MB free
+
+#define kIOCoreDumpMinSize      350ULL*1024ULL*1024ULL
+#define kIOCoreDumpLargeSize    500ULL*1024ULL*1024ULL
+
+#define kIOCoreDumpFreeSize     350ULL*1024ULL*1024ULL
+
+#else /* defined(XNU_TARGET_OS_BRIDGE) */
+// on macOS devices allocate a corefile sized at 1GB / 32GB of DRAM,
+// fallback to a 1GB corefile and leave at least 1GB free
+#define kIOCoreDumpMinSize              1024ULL*1024ULL*1024ULL
+#define kIOCoreDumpIncrementalSize      1024ULL*1024ULL*1024ULL
+
+#define kIOCoreDumpFreeSize     1024ULL*1024ULL*1024ULL
+
+// on older macOS devices we allocate a 1MB file at boot
+// to store a panic time stackshot
+#define kIOStackshotFileSize    1024ULL*1024ULL
+
+#endif /* defined(XNU_TARGET_OS_BRIDGE) */
+
+static IOPolledCoreFileMode_t
+GetCoreFileMode()
 {
-	IOReturn err;
-	unsigned int debug;
-	uint64_t corefile_size_bytes = 0;
-
-	if (gIOPolledCoreFileVars) {
-		return kIOReturnBusy;
+	if (on_device_corefile_enabled()) {
+		return kIOPolledCoreFileModeCoredump;
+	} else if (panic_stackshot_to_disk_enabled()) {
+		return kIOPolledCoreFileModeStackshot;
+	} else {
+		return kIOPolledCoreFileModeDisabled;
 	}
-	if (!IOPolledInterface::gMetaClass.getInstanceCount()) {
-		return kIOReturnUnsupported;
-	}
+}
 
-	debug = 0;
-	PE_parse_boot_argn("debug", &debug, sizeof(debug));
-	if (DB_DISABLE_LOCAL_CORE & debug) {
-		return kIOReturnUnsupported;
-	}
-
-#if CONFIG_EMBEDDED
+static void
+IOCoreFileGetSize(uint64_t *ideal_size, uint64_t *fallback_size, uint64_t *free_space_to_leave, IOPolledCoreFileMode_t mode)
+{
 	unsigned int requested_corefile_size = 0;
+
+	*ideal_size = *fallback_size = *free_space_to_leave = 0;
+
+#if defined(XNU_TARGET_OS_BRIDGE)
+#pragma unused(mode)
+	*ideal_size = *fallback_size = kIOCoreDumpSize;
+	*free_space_to_leave = kIOCoreDumpFreeSize;
+#elif CONFIG_EMBEDDED /* defined(XNU_TARGET_OS_BRIDGE) */
+#pragma unused(mode)
+	*ideal_size = *fallback_size = kIOCoreDumpMinSize;
+
+	if (max_mem > (3 * 1024ULL * 1024ULL * 1024ULL)) {
+		*ideal_size = kIOCoreDumpLargeSize;
+	}
+
+	*free_space_to_leave = kIOCoreDumpFreeSize;
+#else /* defined(XNU_TARGET_OS_BRIDGE) */
+	if (mode == kIOPolledCoreFileModeCoredump) {
+		*ideal_size = *fallback_size = kIOCoreDumpMinSize;
+		if (kIOCoreDumpIncrementalSize != 0 && max_mem > (32 * 1024ULL * 1024ULL * 1024ULL)) {
+			*ideal_size = ((ROUNDUP(max_mem, (32 * 1024ULL * 1024ULL * 1024ULL)) / (32 * 1024ULL * 1024ULL * 1024ULL)) * kIOCoreDumpIncrementalSize);
+		}
+		*free_space_to_leave = kIOCoreDumpFreeSize;
+	} else if (mode == kIOPolledCoreFileModeStackshot) {
+		*ideal_size = *fallback_size = *free_space_to_leave = kIOStackshotFileSize;
+	}
+#endif /* defined(XNU_TARGET_OS_BRIDGE) */
+	// If a custom size was requested, override the ideal and requested sizes
 	if (PE_parse_boot_argn("corefile_size_mb", &requested_corefile_size, sizeof(requested_corefile_size))) {
 		IOLog("Boot-args specify %d MB kernel corefile\n", requested_corefile_size);
 
-		corefile_size_bytes = (requested_corefile_size * 1024ULL * 1024ULL);
+		*ideal_size = *fallback_size = (requested_corefile_size * 1024ULL * 1024ULL);
 	}
-#endif
 
+	return;
+}
+
+static void
+IOOpenPolledCoreFile(thread_call_param_t __unused, thread_call_param_t corefilename)
+{
+	assert(corefilename != NULL);
+
+	IOReturn err;
+	char *filename = (char *) corefilename;
+	uint64_t corefile_size_bytes = 0, corefile_fallback_size_bytes = 0, free_space_to_leave_bytes = 0;
+	IOPolledCoreFileMode_t mode_to_init = GetCoreFileMode();
+
+	if (gIOPolledCoreFileVars) {
+		return;
+	}
+	if (!IOPolledInterface::gMetaClass.getInstanceCount()) {
+		return;
+	}
+
+	if (mode_to_init == kIOPolledCoreFileModeDisabled) {
+		gIOPolledCoreFileMode = kIOPolledCoreFileModeDisabled;
+		return;
+	}
+
+	// We'll overwrite this once we open the file, we update this to mark that we have made
+	// it past initialization
+	gIOPolledCoreFileMode = kIOPolledCoreFileModeClosed;
+
+	IOCoreFileGetSize(&corefile_size_bytes, &corefile_fallback_size_bytes, &free_space_to_leave_bytes, mode_to_init);
 
 	do {
-#if defined(kIOCoreDumpLargeSize)
-		if (0 == corefile_size_bytes) {
-			// If no custom size was requested and we're on a device with >3GB of DRAM, attempt
-			// to allocate a large corefile otherwise use a small file.
-			if (max_mem > (3 * 1024ULL * 1024ULL * 1024ULL)) {
-				corefile_size_bytes = kIOCoreDumpLargeSize;
-				err = IOPolledFileOpen(filename,
-				    kIOPolledFileCreate,
-				    corefile_size_bytes, kIOCoreDumpFreeSize,
-				    NULL, 0,
-				    &gIOPolledCoreFileVars, NULL, NULL, 0);
-				if (kIOReturnSuccess == err) {
-					break;
-				} else if (kIOReturnNoSpace == err) {
-					IOLog("Failed to open corefile of size %llu MB (low disk space)",
-					    (corefile_size_bytes / (1024ULL * 1024ULL)));
-					if (corefile_size_bytes == kIOCoreDumpMinSize) {
-						gIOPolledCoreFileOpenRet = err;
-						return err;
-					}
-					// Try to open a smaller corefile (set size and fall-through)
-					corefile_size_bytes = kIOCoreDumpMinSize;
-				} else {
-					IOLog("Failed to open corefile of size %llu MB (returned error 0x%x)\n",
-					    (corefile_size_bytes / (1024ULL * 1024ULL)), err);
-					gIOPolledCoreFileOpenRet = err;
-					return err;
-				}
-			} else {
-				corefile_size_bytes = kIOCoreDumpMinSize;
+		err = IOPolledFileOpen(filename, kIOPolledFileCreate, corefile_size_bytes, free_space_to_leave_bytes,
+		    NULL, 0, &gIOPolledCoreFileVars, NULL, NULL, NULL);
+		if (kIOReturnSuccess == err) {
+			break;
+		} else if (kIOReturnNoSpace == err) {
+			IOLog("Failed to open corefile of size %llu MB (low disk space)",
+			    (corefile_size_bytes / (1024ULL * 1024ULL)));
+			if (corefile_size_bytes == corefile_fallback_size_bytes) {
+				gIOPolledCoreFileOpenRet = err;
+				return;
 			}
-		}
-#else /* defined(kIOCoreDumpLargeSize) */
-		if (0 == corefile_size_bytes) {
-			corefile_size_bytes = kIOCoreDumpSize;
-		}
-#endif /* defined(kIOCoreDumpLargeSize) */
-		err = IOPolledFileOpen(filename,
-		    kIOPolledFileCreate,
-		    corefile_size_bytes, kIOCoreDumpFreeSize,
-		    NULL, 0,
-		    &gIOPolledCoreFileVars, NULL, NULL, 0);
-		if (kIOReturnSuccess != err) {
+		} else {
 			IOLog("Failed to open corefile of size %llu MB (returned error 0x%x)\n",
 			    (corefile_size_bytes / (1024ULL * 1024ULL)), err);
 			gIOPolledCoreFileOpenRet = err;
-			return err;
+			return;
+		}
+
+		err = IOPolledFileOpen(filename, kIOPolledFileCreate, corefile_fallback_size_bytes, free_space_to_leave_bytes,
+		    NULL, 0, &gIOPolledCoreFileVars, NULL, NULL, NULL);
+		if (kIOReturnSuccess != err) {
+			IOLog("Failed to open corefile of size %llu MB (returned error 0x%x)\n",
+			    (corefile_fallback_size_bytes / (1024ULL * 1024ULL)), err);
+			gIOPolledCoreFileOpenRet = err;
+			return;
 		}
 	} while (false);
 
-	err = IOPolledFilePollersSetup(gIOPolledCoreFileVars, kIOPolledPreflightCoreDumpState);
-	if (kIOReturnSuccess != err) {
-		IOPolledFileClose(&gIOPolledCoreFileVars, NULL, NULL, 0, 0, 0);
+	gIOPolledCoreFileOpenRet = IOPolledFilePollersSetup(gIOPolledCoreFileVars, kIOPolledPreflightCoreDumpState);
+	if (kIOReturnSuccess != gIOPolledCoreFileOpenRet) {
+		IOPolledFileClose(&gIOPolledCoreFileVars, 0, NULL, 0, 0, 0);
 		IOLog("IOPolledFilePollersSetup for corefile failed with error: 0x%x\n", err);
-		gIOPolledCoreFileOpenRet = err;
 	} else {
 		IOLog("Opened corefile of size %llu MB\n", (corefile_size_bytes / (1024ULL * 1024ULL)));
+		gIOPolledCoreFileMode = mode_to_init;
 	}
 
-	return err;
+	return;
 }
 
 static void
 IOClosePolledCoreFile(void)
 {
 	gIOPolledCoreFileOpenRet = kIOReturnNotOpen;
+	gIOPolledCoreFileMode = kIOPolledCoreFileModeClosed;
 	IOPolledFilePollersClose(gIOPolledCoreFileVars, kIOPolledPostflightCoreDumpState);
-	IOPolledFileClose(&gIOPolledCoreFileVars, NULL, NULL, 0, 0, 0);
-}
-
-static thread_call_t gIOOpenPolledCoreFileTC;
-static IONotifier  * gIOPolledCoreFileNotifier;
-static IONotifier  * gIOPolledCoreFileInterestNotifier;
-
-static IOReturn
-KernelCoreMediaInterest(void * target, void * refCon,
-    UInt32 messageType, IOService * provider,
-    void * messageArgument, vm_size_t argSize )
-{
-	if (kIOMessageServiceIsTerminated == messageType) {
-		gIOPolledCoreFileInterestNotifier->remove();
-		gIOPolledCoreFileInterestNotifier = 0;
-		IOClosePolledCoreFile();
-	}
-
-	return kIOReturnSuccess;
-}
-
-static void
-OpenKernelCoreMedia(thread_call_param_t p0, thread_call_param_t p1)
-{
-	IOService * newService;
-	OSString  * string;
-	char        filename[16];
-
-	newService = (IOService *) p1;
-	do{
-		if (gIOPolledCoreFileVars) {
-			break;
-		}
-		string = OSDynamicCast(OSString, newService->getProperty(kIOBSDNameKey));
-		if (!string) {
-			break;
-		}
-		snprintf(filename, sizeof(filename), "/dev/%s", string->getCStringNoCopy());
-		if (kIOReturnSuccess != IOOpenPolledCoreFile(filename)) {
-			break;
-		}
-		gIOPolledCoreFileInterestNotifier = newService->registerInterest(
-			gIOGeneralInterest, &KernelCoreMediaInterest, NULL, 0);
-	}while (false);
-
-	newService->release();
-}
-
-static bool
-NewKernelCoreMedia(void * target, void * refCon,
-    IOService * newService,
-    IONotifier * notifier)
-{
-	static volatile UInt32 onlyOneCorePartition = 0;
-	do{
-		if (!OSCompareAndSwap(0, 1, &onlyOneCorePartition)) {
-			break;
-		}
-		if (gIOPolledCoreFileVars) {
-			break;
-		}
-		if (!gIOOpenPolledCoreFileTC) {
-			break;
-		}
-		newService = newService->getProvider();
-		if (!newService) {
-			break;
-		}
-		newService->retain();
-		thread_call_enter1(gIOOpenPolledCoreFileTC, newService);
-	}while (false);
-
-	return false;
+	IOPolledFileClose(&gIOPolledCoreFileVars, 0, NULL, 0, 0, 0);
 }
 
 #endif /* IOPOLLED_COREFILE */
@@ -1004,37 +973,6 @@ extern "C" void
 IOBSDMountChange(struct mount * mp, uint32_t op)
 {
 #if IOPOLLED_COREFILE
-
-	OSDictionary * bsdMatching;
-	OSDictionary * mediaMatching;
-	OSString     * string;
-
-	if (!gIOPolledCoreFileNotifier) {
-		do{
-			if (!gIOOpenPolledCoreFileTC) {
-				gIOOpenPolledCoreFileTC = thread_call_allocate(&OpenKernelCoreMedia, NULL);
-			}
-			bsdMatching = IOService::serviceMatching("IOMediaBSDClient");
-			if (!bsdMatching) {
-				break;
-			}
-			mediaMatching = IOService::serviceMatching("IOMedia");
-			string = OSString::withCStringNoCopy("5361644D-6163-11AA-AA11-00306543ECAC");
-			if (!string || !mediaMatching) {
-				break;
-			}
-			mediaMatching->setObject("Content", string);
-			string->release();
-			bsdMatching->setObject(gIOParentMatchKey, mediaMatching);
-			mediaMatching->release();
-
-			gIOPolledCoreFileNotifier = IOService::addMatchingNotification(
-				gIOFirstMatchNotification, bsdMatching,
-				&NewKernelCoreMedia, NULL, NULL, -1000);
-		}while (false);
-	}
-
-#if CONFIG_EMBEDDED
 	uint64_t flags;
 	char path[128];
 	int pathLen;
@@ -1080,17 +1018,18 @@ IOBSDMountChange(struct mount * mp, uint32_t op)
 		if (0 != strncmp(path, kIOCoreDumpPath, pathLen - 1)) {
 			break;
 		}
-		IOOpenPolledCoreFile(kIOCoreDumpPath);
+
+		thread_call_enter1(corefile_open_call, (void *) kIOCoreDumpPath);
 		break;
 
 	case kIOMountChangeUnmount:
 	case kIOMountChangeWillResize:
 		if (gIOPolledCoreFileVars && (mp == kern_file_mount(gIOPolledCoreFileVars->fileRef))) {
+			thread_call_cancel_wait(corefile_open_call);
 			IOClosePolledCoreFile();
 		}
 		break;
 	}
-#endif /* CONFIG_EMBEDDED */
 #endif /* IOPOLLED_COREFILE */
 }
 

@@ -7,6 +7,7 @@
 
 #include <sys/coalition.h>
 #include <sys/errno.h>
+#include <sys/kauth.h>
 #include <sys/kernel.h>
 #include <sys/sysproto.h>
 #include <sys/systm.h>
@@ -260,6 +261,27 @@ coalition_info_efficiency(coalition_t coal, user_addr_t buffer, user_size_t bufs
 	return error;
 }
 
+static int
+coalition_ledger_logical_writes_limit(coalition_t coal, user_addr_t buffer, user_size_t bufsize)
+{
+	int error = 0;
+	int64_t limit = 0;
+
+	if (coalition_type(coal) != COALITION_TYPE_RESOURCE) {
+		error = EINVAL;
+		goto out;
+	}
+	error = copyin(buffer, &limit, MIN(bufsize, sizeof(limit)));
+	if (error) {
+		goto out;
+	}
+
+
+	error = coalition_ledger_set_logical_writes_limit(coal, limit);
+out:
+	return error;
+}
+
 int
 coalition_info(proc_t p, struct coalition_info_args *uap, __unused int32_t *retval)
 {
@@ -315,6 +337,60 @@ bad:
 	return error;
 }
 
+int
+coalition_ledger(__unused proc_t p, __unused struct coalition_ledger_args *uap, __unused int32_t *retval)
+{
+	user_addr_t cidp = uap->cid;
+	user_addr_t buffer = uap->buffer;
+	user_addr_t bufsizep = uap->bufsize;
+	user_size_t bufsize;
+	uint32_t operation = uap->operation;
+	int error;
+	uint64_t cid;
+	coalition_t coal = COALITION_NULL;
+
+	if (!kauth_cred_issuser(kauth_cred_get())) {
+		error = EPERM;
+		goto out;
+	}
+
+	error = copyin(cidp, &cid, sizeof(cid));
+	if (error) {
+		goto out;
+	}
+
+	coal = coalition_find_by_id(cid);
+	if (coal == COALITION_NULL) {
+		error = ESRCH;
+		goto out;
+	}
+
+	if (IS_64BIT_PROCESS(p)) {
+		user64_size_t size64;
+		error = copyin(bufsizep, &size64, sizeof(size64));
+		bufsize = (user_size_t)size64;
+	} else {
+		user32_size_t size32;
+		error = copyin(bufsizep, &size32, sizeof(size32));
+		bufsize = (user_size_t)size32;
+	}
+	if (error) {
+		goto out;
+	}
+
+	switch (operation) {
+	case COALITION_LEDGER_SET_LOGICAL_WRITES_LIMIT:
+		error = coalition_ledger_logical_writes_limit(coal, buffer, bufsize);
+		break;
+	default:
+		error = EINVAL;
+	}
+out:
+	if (coal != COALITION_NULL) {
+		coalition_release(coal);
+	}
+	return error;
+}
 #if DEVELOPMENT || DEBUG
 static int sysctl_coalition_get_ids SYSCTL_HANDLER_ARGS
 {
@@ -418,8 +494,7 @@ static int sysctl_coalition_get_page_count SYSCTL_HANDLER_ARGS
 	memset(pgcount, 0, sizeof(pgcount));
 
 	for (int t = 0; t < COALITION_NUM_TYPES; t++) {
-		coal = COALITION_NULL;
-		coalition_is_leader(tproc->task, t, &coal);
+		coal = task_get_coalition(tproc->task, t);
 		if (coal != COALITION_NULL) {
 			int ntasks = 0;
 			pgcount[t] = coalition_get_page_count(coal, &ntasks);
@@ -484,7 +559,7 @@ static int sysctl_coalition_get_pid_list SYSCTL_HANDLER_ARGS
 		return ESRCH;
 	}
 
-	(void)coalition_is_leader(tproc->task, type, &coal);
+	coal = task_get_coalition(tproc->task, type);
 	if (coal == COALITION_NULL) {
 		goto out;
 	}

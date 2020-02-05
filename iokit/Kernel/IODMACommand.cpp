@@ -109,7 +109,7 @@ IODMACommand::withRefCon(void * refCon)
 
 	if (me && !me->initWithRefCon(refCon)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -127,7 +127,7 @@ IODMACommand::withSpecification(SegmentFunction  outSegFunc,
 	if (me && !me->initWithSpecification(outSegFunc, segmentOptions, mappingOptions,
 	    mapper, refCon)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -150,7 +150,7 @@ IODMACommand::withSpecification(SegmentFunction outSegFunc,
 	    mappingOptions, maxTransferSize,
 	    alignment, mapper, refCon)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -244,7 +244,7 @@ IODMACommand::setSpecification(SegmentFunction        outSegFunc,
     uint32_t               mappingOptions,
     IOMapper             * mapper)
 {
-	IOService * device = 0;
+	IOService * device = NULL;
 	UInt8       numAddressBits;
 	UInt64      maxSegmentSize;
 	UInt64      maxTransferSize;
@@ -284,7 +284,7 @@ IODMACommand::setSpecification(SegmentFunction        outSegFunc,
 	}
 	if (mapper && !OSDynamicCast(IOMapper, mapper)) {
 		device = mapper;
-		mapper = 0;
+		mapper = NULL;
 	}
 	if (!mapper && (kUnmapped != MAPTYPE(mappingOptions))) {
 		IOMapper::checkForSystemMapper();
@@ -434,7 +434,7 @@ IODMACommand::clearMemoryDescriptor(bool autoComplete)
 			fMemory->dmaCommandOperation(kIOMDSetDMAInactive, this, 0);
 		}
 		fMemory->release();
-		fMemory = 0;
+		fMemory = NULL;
 	}
 
 	return kIOReturnSuccess;
@@ -603,10 +603,10 @@ IODMACommand::walkAll(UInt8 op)
 		state->fDoubleBuffer   = false;
 		state->fPrepared       = false;
 		state->fCopyNext       = NULL;
-		state->fCopyPageAlloc  = 0;
+		state->fCopyPageAlloc  = NULL;
 		state->fCopyPageCount  = 0;
 		state->fNextRemapPage  = NULL;
-		state->fCopyMD         = 0;
+		state->fCopyMD         = NULL;
 
 		if (!(kWalkDoubleBuffer & op)) {
 			offset = 0;
@@ -703,12 +703,12 @@ IODMACommand::walkAll(UInt8 op)
 	if (kWalkComplete & op) {
 		if (state->fCopyPageAlloc) {
 			vm_page_free_list(state->fCopyPageAlloc, FALSE);
-			state->fCopyPageAlloc = 0;
+			state->fCopyPageAlloc = NULL;
 			state->fCopyPageCount = 0;
 		}
 		if (state->fCopyMD) {
 			state->fCopyMD->release();
-			state->fCopyMD = 0;
+			state->fCopyMD = NULL;
 		}
 
 		state->fPrepared = false;
@@ -833,10 +833,10 @@ IODMACommand::prepare(UInt64 offset, UInt64 length, bool flushCache, bool synchr
 		state->fDoubleBuffer   = false;
 		state->fPrepared       = false;
 		state->fCopyNext       = NULL;
-		state->fCopyPageAlloc  = 0;
+		state->fCopyPageAlloc  = NULL;
 		state->fCopyPageCount  = 0;
 		state->fNextRemapPage  = NULL;
-		state->fCopyMD         = 0;
+		state->fCopyMD         = NULL;
 		state->fLocalMapperAlloc       = 0;
 		state->fLocalMapperAllocValid  = false;
 		state->fLocalMapperAllocLength = 0;

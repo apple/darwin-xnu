@@ -69,8 +69,10 @@ mach_host_special_port_description(int port)
 		[HOST_RESOURCE_NOTIFY_PORT] = "resource notify",
 		[HOST_CLOSURED_PORT] = "closured",
 		[HOST_SYSPOLICYD_PORT] = "syspolicyd",
+		[HOST_FILECOORDINATIOND_PORT] = "filecoordinationd",
+		[HOST_FAIRPLAYD_PORT] = "fairplayd",
 	};
-	_Static_assert(HOST_SYSPOLICYD_PORT == HOST_MAX_SPECIAL_PORT,
+	_Static_assert(HOST_FAIRPLAYD_PORT == HOST_MAX_SPECIAL_PORT,
 	    "all host special ports must have descriptions");
 
 	return hsp_descs[port_index];
@@ -149,6 +151,7 @@ mach_host_special_port_for_id(const char *id)
 		SP_ENTRY(HOST_RESOURCE_NOTIFY_PORT),
 		SP_ENTRY(HOST_CLOSURED_PORT),
 		SP_ENTRY(HOST_SYSPOLICYD_PORT),
+		SP_ENTRY(HOST_FILECOORDINATIOND_PORT),
 	};
 
 	return port_for_id_internal(id, hsp_ids,

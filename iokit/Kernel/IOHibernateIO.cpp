@@ -494,11 +494,13 @@ IOHibernateSystemSleep(void)
 		    &vars->page_list_wired,
 		    &vars->page_list_pal);
 		if (KERN_SUCCESS != err) {
+			HIBLOG("%s err, hibernate_alloc_page_lists return 0x%x\n", __FUNCTION__, err);
 			break;
 		}
 
 		err = hibernate_pin_swap(TRUE);
 		if (KERN_SUCCESS != err) {
+			HIBLOG("%s error, hibernate_pin_swap return 0x%x\n", __FUNCTION__, err);
 			break;
 		}
 		swapPinned = true;
@@ -702,7 +704,7 @@ IOHibernateSystemSleep(void)
 				}
 				// set BootNext
 				if (!gIOHibernateBoot0082Data) {
-					OSData * fileData = 0;
+					OSData * fileData = NULL;
 					data = OSDynamicCast(OSData, gIOChosenEntry->getProperty("boot-device-path"));
 					if (data && data->getLength() >= 4) {
 						fileData = OSDynamicCast(OSData, gIOChosenEntry->getProperty("boot-file-path"));
@@ -1018,7 +1020,7 @@ IOHibernateSystemHasSlept(void)
 {
 	IOReturn          ret = kIOReturnSuccess;
 	IOHibernateVars * vars  = &gIOHibernateVars;
-	OSObject        * obj = 0;
+	OSObject        * obj = NULL;
 	OSData          * data;
 
 	IOLockLock(gFSLock);
@@ -1041,7 +1043,7 @@ IOHibernateSystemHasSlept(void)
 	vars->consoleMapping = NULL;
 	if (vars->previewBuffer && (kIOReturnSuccess != vars->previewBuffer->prepare())) {
 		vars->previewBuffer->release();
-		vars->previewBuffer = 0;
+		vars->previewBuffer = NULL;
 	}
 
 	if ((kIOHibernateOptionProgress & gIOHibernateCurrentHeader->options)
@@ -1148,7 +1150,7 @@ IOHibernateDone(IOHibernateVars * vars)
 
 	if (vars->previewBuffer) {
 		vars->previewBuffer->release();
-		vars->previewBuffer = 0;
+		vars->previewBuffer = NULL;
 	}
 
 	if (kIOHibernateStateWakingFromHibernate == gIOHibernateState) {
@@ -1300,7 +1302,7 @@ IOReturn
 IOHibernateSystemPostWake(bool now)
 {
 	gIOHibernateCurrentHeader->signature = kIOHibernateHeaderInvalidSignature;
-	IOSetBootImageNVRAM(0);
+	IOSetBootImageNVRAM(NULL);
 
 	IOLockLock(gFSLock);
 	if (kFSTrimDelay == gFSState) {
@@ -1486,7 +1488,7 @@ hibernate_write_image(void)
 	uint32_t     zvPageCount;
 
 	IOPolledFileCryptVars _cryptvars;
-	IOPolledFileCryptVars * cryptvars = 0;
+	IOPolledFileCryptVars * cryptvars = NULL;
 
 	wiredPagesEncrypted = 0;
 	dirtyPagesEncrypted = 0;
@@ -1658,7 +1660,7 @@ hibernate_write_image(void)
 			}
 		}
 		err = IOHibernatePolledFileWrite(vars->fileVars,
-		    (uint8_t *) 0,
+		    (uint8_t *) NULL,
 		    &gIOHibernateRestoreStackEnd[0] - &gIOHibernateRestoreStack[0],
 		    cryptvars);
 		if (kIOReturnSuccess != err) {
@@ -1967,7 +1969,7 @@ hibernate_write_image(void)
 
 			if (kWiredEncrypt != pageType) {
 				// end of image1/2 - fill to next block
-				err = IOHibernatePolledFileWrite(vars->fileVars, 0, 0, cryptvars);
+				err = IOHibernatePolledFileWrite(vars->fileVars, NULL, 0, cryptvars);
 				if (kIOReturnSuccess != err) {
 					break;
 				}
@@ -2029,7 +2031,7 @@ hibernate_write_image(void)
 		if (kIOReturnSuccess != err) {
 			break;
 		}
-		err = IOHibernatePolledFileWrite(vars->fileVars, 0, 0, cryptvars);
+		err = IOHibernatePolledFileWrite(vars->fileVars, NULL, 0, cryptvars);
 	}while (false);
 
 	clock_get_uptime(&endTime);
@@ -2112,7 +2114,7 @@ hibernate_machine_init(void)
 	uint64_t     compBytes;
 	uint32_t     lastProgressStamp = 0;
 	uint32_t     progressStamp;
-	IOPolledFileCryptVars * cryptvars = 0;
+	IOPolledFileCryptVars * cryptvars = NULL;
 
 	IOHibernateVars * vars  = &gIOHibernateVars;
 	bzero(gIOHibernateStats, sizeof(hibernate_statistics_t));
@@ -2174,7 +2176,7 @@ hibernate_machine_init(void)
 		hibernate_page_list_discard(vars->page_list);
 	}
 
-	cryptvars = (kIOHibernateModeEncrypt & gIOHibernateMode) ? &gIOHibernateCryptWakeContext : 0;
+	cryptvars = (kIOHibernateModeEncrypt & gIOHibernateMode) ? &gIOHibernateCryptWakeContext : NULL;
 
 	if (gIOHibernateCurrentHeader->handoffPageCount > gIOHibernateHandoffPageCount) {
 		panic("handoff overflow");
@@ -2300,7 +2302,7 @@ hibernate_machine_init(void)
 		if (kIOReturnSuccess != err) {
 			panic("IOPolledFilePollersSetEncryptionKey(0x%x)", err);
 		}
-		cryptvars = 0;
+		cryptvars = NULL;
 	}
 
 	IOPolledFileSeek(vars->fileVars, gIOHibernateCurrentHeader->image1Size);
@@ -2314,7 +2316,7 @@ hibernate_machine_init(void)
 	vars->fileVars->cryptBytes   = 0;
 	AbsoluteTime_to_scalar(&vars->fileVars->cryptTime) = 0;
 
-	err = IOPolledFileRead(vars->fileVars, 0, 0, cryptvars);
+	err = IOPolledFileRead(vars->fileVars, NULL, 0, cryptvars);
 	vars->fileVars->bufferOffset = vars->fileVars->bufferLimit;
 	// --
 

@@ -141,13 +141,10 @@ T_GLOBAL_META(
  * a robust implementation should determine the proper range to use via
  * another means.
  */
-#define FIXED_STACK_ADDR ((uintptr_t)0x10000000)        /* must be page-aligned */
 #ifndef STANDALONE
 /* libdarwintest needs LOTs of stack */
 #endif
 #define FIXED_STACK_SIZE (PAGE_SIZE * 16)
-
-#define FIXED_TRAMP_ADDR (FIXED_STACK_ADDR + FIXED_STACK_SIZE + PAGE_SIZE)
 #define FIXED_TRAMP_MAXLEN (PAGE_SIZE * 8)
 
 #pragma pack(1)
@@ -185,7 +182,8 @@ static far_call_t input_desc = { .seg = COMPAT_MODE_CS_SELECTOR, .off = 0 };
 static uint64_t stackAddr = 0;
 static compat_tramp_t thunkit = NULL;
 static uint64_t thunk64_addr;
-static stackaddr_to_gsbase_t stack2gs[] = { { FIXED_STACK_ADDR, FIXED_STACK_ADDR + FIXED_STACK_SIZE, 0 } };
+/* stack2gs[0] is initialized in map_lowmem_stack() */
+static stackaddr_to_gsbase_t stack2gs[] = { { 0 } };
 
 extern int compat_mode_trampoline(far_call_t *, void *, uint64_t);
 extern void long_mode_trampoline(void);
@@ -303,9 +301,9 @@ handle_arithmetic_exception(_STRUCT_X86_THREAD_FULL_STATE64 *xtfs64, uint64_t *i
 {
 	fprintf(stderr, "Caught divide-error exception\n");
 	fprintf(stderr, "cs=0x%x rip=0x%x gs=0x%x ss=0x%x rsp=0x%llx\n",
-	    (unsigned)xtfs64->ss64.__cs,
-	    (unsigned)xtfs64->ss64.__rip, (unsigned)xtfs64->ss64.__gs,
-	    (unsigned)xtfs64->__ss, xtfs64->ss64.__rsp);
+	    (unsigned)xtfs64->__ss64.__cs,
+	    (unsigned)xtfs64->__ss64.__rip, (unsigned)xtfs64->__ss64.__gs,
+	    (unsigned)xtfs64->__ss, xtfs64->__ss64.__rsp);
 	*ip_skip_countp = 2;
 }
 
@@ -320,9 +318,9 @@ handle_badinsn_exception(_STRUCT_X86_THREAD_FULL_STATE64 *xtfs64, uint64_t __unu
 
 	fprintf(stderr, "Caught invalid opcode exception\n");
 	fprintf(stderr, "cs=%x rip=%x gs=%x ss=0x%x rsp=0x%llx | handling between 0x%llx and 0x%llx\n",
-	    (unsigned)xtfs64->ss64.__cs,
-	    (unsigned)xtfs64->ss64.__rip, (unsigned)xtfs64->ss64.__gs,
-	    (unsigned)xtfs64->__ss, xtfs64->ss64.__rsp,
+	    (unsigned)xtfs64->__ss64.__cs,
+	    (unsigned)xtfs64->__ss64.__rip, (unsigned)xtfs64->__ss64.__gs,
+	    (unsigned)xtfs64->__ss, xtfs64->__ss64.__rsp,
 	    start_addr, end_addr);
 
 	/*
@@ -334,14 +332,14 @@ handle_badinsn_exception(_STRUCT_X86_THREAD_FULL_STATE64 *xtfs64, uint64_t __unu
 	 * (Note that due to the way the invalid opcode indication was implemented,
 	 * %rip is already set to the next instruction.)
 	 */
-	if (xtfs64->ss64.__rip >= start_addr && xtfs64->ss64.__rip <= end_addr) {
+	if (xtfs64->__ss64.__rip >= start_addr && xtfs64->__ss64.__rip <= end_addr) {
 		/*
 		 * On return from the failed sysenter, %cs is changed to the
 		 * sysenter code selector and %ss is set to 0x23, so switch them
 		 * back to sane values.
 		 */
-		if ((unsigned)xtfs64->ss64.__cs == SYSENTER_SELECTOR) {
-			xtfs64->ss64.__cs = COMPAT_MODE_CS_SELECTOR;
+		if ((unsigned)xtfs64->__ss64.__cs == SYSENTER_SELECTOR) {
+			xtfs64->__ss64.__cs = COMPAT_MODE_CS_SELECTOR;
 			xtfs64->__ss = 0x23; /* XXX */
 		}
 	}
@@ -393,8 +391,8 @@ catch_mach_exception_raise_state_identity(mach_port_t exception_port,
 	default:
 		fprintf(stderr, "Unsupported catch_mach_exception_raise_state_identity: code 0x%llx sub 0x%llx\n",
 		    code[0], codeCnt > 1 ? code[1] : 0LL);
-		fprintf(stderr, "flavor=%d %%cs=0x%x %%rip=0x%llx\n", *flavor, (unsigned)xtfs64->ss64.__cs,
-		    xtfs64->ss64.__rip);
+		fprintf(stderr, "flavor=%d %%cs=0x%x %%rip=0x%llx\n", *flavor, (unsigned)xtfs64->__ss64.__cs,
+		    xtfs64->__ss64.__rip);
 	}
 
 	/*
@@ -403,12 +401,12 @@ catch_mach_exception_raise_state_identity(mach_port_t exception_port,
 	 * new state's cs register to just after the div instruction
 	 * to enable the thread to resume.
 	 */
-	if ((unsigned)xtfs64->ss64.__cs == COMPAT_MODE_CS_SELECTOR) {
+	if ((unsigned)xtfs64->__ss64.__cs == COMPAT_MODE_CS_SELECTOR) {
 		*new_stateCnt = old_stateCnt;
 		*new_xtfs64 = *xtfs64;
-		new_xtfs64->ss64.__rip += rip_skip_count;
-		fprintf(stderr, "new cs=0x%x rip=0x%llx\n", (unsigned)new_xtfs64->ss64.__cs,
-		    new_xtfs64->ss64.__rip);
+		new_xtfs64->__ss64.__rip += rip_skip_count;
+		fprintf(stderr, "new cs=0x%x rip=0x%llx\n", (unsigned)new_xtfs64->__ss64.__cs,
+		    new_xtfs64->__ss64.__rip);
 		return KERN_SUCCESS;
 	} else {
 		return KERN_NOT_SUPPORTED;
@@ -500,7 +498,7 @@ signal_handler(int signo, siginfo_t *sinfop, void *ucontext)
 #ifndef STANDALONE
 		T_ASSERT_FAIL("Unexpected signal %d\n", signo);
 #else
-		restore_gsbase(mctx.fp_fullp->__ss.ss64.__rsp);
+		restore_gsbase(mctx.fp_fullp->__ss.__ss64.__rsp);
 		fprintf(stderr, "Not handling signal %d\n", signo);
 		abort();
 #endif
@@ -521,10 +519,10 @@ signal_handler(int signo, siginfo_t *sinfop, void *ucontext)
 			int cnt = i386_set_ldt((int)idx, &descs[idx], 1);
 			if (cnt != (int)idx) {
 #ifdef DEBUG
-				fprintf(stderr, "i386_set_ldt unexpectedly returned %d\n", cnt);
+				fprintf(stderr, "i386_set_ldt unexpectedly returned %d (errno = %s)\n", cnt, strerror(errno));
 #endif
 #ifndef STANDALONE
-				T_LOG("i386_set_ldt unexpectedly returned %d\n", cnt);
+				T_LOG("i386_set_ldt unexpectedly returned %d (errno: %s)\n", cnt, strerror(errno));
 				T_ASSERT_FAIL("i386_set_ldt failure");
 #else
 				exit(1);
@@ -567,9 +565,9 @@ signal_handler(int signo, siginfo_t *sinfop, void *ucontext)
 		 * Since we're handing this signal on the same thread, we may need to
 		 * restore GSbase.
 		 */
-		uint64_t orig_gsbase = stack_range_to_GSbase(ss64->ss64.__rsp, 0);
+		uint64_t orig_gsbase = stack_range_to_GSbase(ss64->__ss64.__rsp, 0);
 		if (orig_gsbase != 0 && orig_gsbase != ss64->__gsbase) {
-			restore_gsbase(ss64->ss64.__rsp);
+			restore_gsbase(ss64->__ss64.__rsp);
 		}
 
 		if (signo == SIGFPE) {
@@ -584,10 +582,10 @@ signal_handler(int signo, siginfo_t *sinfop, void *ucontext)
 		 * new state's cs register to just after the div instruction
 		 * to enable the thread to resume.
 		 */
-		if ((unsigned)ss64->ss64.__cs == COMPAT_MODE_CS_SELECTOR) {
-			ss64->ss64.__rip += rip_skip_count;
-			fprintf(stderr, "new cs=0x%x rip=0x%llx\n", (unsigned)ss64->ss64.__cs,
-			    ss64->ss64.__rip);
+		if ((unsigned)ss64->__ss64.__cs == COMPAT_MODE_CS_SELECTOR) {
+			ss64->__ss64.__rip += rip_skip_count;
+			fprintf(stderr, "new cs=0x%x rip=0x%llx\n", (unsigned)ss64->__ss64.__cs,
+			    ss64->__ss64.__rip);
 		}
 	} else {
 		_STRUCT_X86_THREAD_STATE64 *ss64 = &mctx.fp_basep->__ss;
@@ -675,28 +673,42 @@ dump_desc(union ldt_entry *entp)
 static int
 map_lowmem_stack(void **lowmemstk)
 {
-	void *addr, *redzone;
+	void *addr;
+	int err;
 
-	if ((redzone = mmap((void *)(FIXED_STACK_ADDR - PAGE_SIZE), PAGE_SIZE, PROT_READ,
-	    MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0)) == MAP_FAILED) {
+	if ((addr = mmap(0, FIXED_STACK_SIZE + PAGE_SIZE, PROT_READ | PROT_WRITE,
+	    MAP_32BIT | MAP_PRIVATE | MAP_ANON, -1, 0)) == MAP_FAILED) {
 		return errno;
 	}
 
-	if ((addr = mmap((void *)FIXED_STACK_ADDR, FIXED_STACK_SIZE, PROT_READ | PROT_WRITE,
-	    MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0)) == MAP_FAILED) {
-		(void)munmap(redzone, PAGE_SIZE);
-		return errno;
+	if ((uintptr_t)addr > 0xFFFFF000ULL) {
+		/* Error: This kernel does not support MAP_32BIT or there's a bug. */
+#ifndef STANDALONE
+		T_ASSERT_FAIL("%s: failed to map a 32-bit-accessible stack", __func__);
+#else
+		fprintf(stderr, "This kernel returned a virtual address > 4G (%p) despite MAP_32BIT.  Aborting.\n", addr);
+		exit(1);
+#endif
+	}
+
+	/* Enforce one page of redzone at the bottom of the stack */
+	if (mprotect(addr, PAGE_SIZE, PROT_NONE) < 0) {
+		err = errno;
+		(void) munmap(addr, FIXED_STACK_SIZE + PAGE_SIZE);
+		return err;
 	}
 
 	if (lowmemstk) {
-		*lowmemstk = addr;
+		stack2gs[0].stack_base = (uintptr_t)addr + PAGE_SIZE;
+		stack2gs[0].stack_limit = stack2gs[0].stack_base + FIXED_STACK_SIZE;
+		*lowmemstk = (void *)((uintptr_t)addr + PAGE_SIZE);
 	}
 
 	return 0;
 }
 
 static int
-map_32bit_code_impl(uint8_t *code_src, size_t code_len, void **codeptr, void *baseaddr,
+map_32bit_code_impl(uint8_t *code_src, size_t code_len, void **codeptr,
     size_t szlimit)
 {
 	void *addr;
@@ -707,12 +719,22 @@ map_32bit_code_impl(uint8_t *code_src, size_t code_len, void **codeptr, void *ba
 	}
 
 #ifdef DEBUG
-	printf("baseaddr = %p, size = %lu, szlimit = %u\n", baseaddr, sz, (unsigned)szlimit);
+	printf("size = %lu, szlimit = %u\n", sz, (unsigned)szlimit);
 #endif
 
-	if ((addr = mmap(baseaddr, sz, PROT_READ | PROT_WRITE | PROT_EXEC,
-	    MAP_FIXED | MAP_PRIVATE | MAP_ANON, -1, 0)) == MAP_FAILED) {
+	if ((addr = mmap(0, sz, PROT_READ | PROT_WRITE | PROT_EXEC,
+	    MAP_32BIT | MAP_PRIVATE | MAP_ANON, -1, 0)) == MAP_FAILED) {
 		return errno;
+	}
+
+	if ((uintptr_t)addr > 0xFFFFF000ULL) {
+		/* Error: This kernel does not support MAP_32BIT or there's a bug. */
+#ifndef STANDALONE
+		T_ASSERT_FAIL("%s: failed to map a 32-bit-accessible trampoline", __func__);
+#else
+		fprintf(stderr, "This kernel returned a virtual address > 4G (%p) despite MAP_32BIT.  Aborting.\n", addr);
+		exit(1);
+#endif
 	}
 
 #ifdef DEBUG
@@ -724,7 +746,9 @@ map_32bit_code_impl(uint8_t *code_src, size_t code_len, void **codeptr, void *ba
 	bcopy(code_src, addr, code_len);
 
 	/* Fill the rest of the page with NOPs */
-	memset((void *)((uintptr_t)addr + code_len), 0x90, sz - code_len);
+	if ((sz - code_len) > 0) {
+		memset((void *)((uintptr_t)addr + code_len), 0x90, sz - code_len);
+	}
 
 	if (codeptr) {
 		*codeptr = addr;
@@ -740,31 +764,7 @@ map_32bit_trampoline(compat_tramp_t *lowmemtrampp)
 
 	return map_32bit_code_impl((uint8_t *)&compat_mode_trampoline,
 	           (size_t)compat_mode_trampoline_len, (void **)lowmemtrampp,
-	           (void *)FIXED_TRAMP_ADDR, FIXED_TRAMP_MAXLEN);
-}
-
-static int
-enable_ldt64(int *val)
-{
-	int ldt64_enable_value = 1;
-	int ldt64_enable_old = 0;
-	size_t ldt64_value_sz = sizeof(ldt64_enable_value);
-	int err;
-
-	/* Enable the feature for this test (development kernels only) */
-	if ((err = sysctlbyname("machdep.ldt64", 0, 0, &ldt64_enable_value,
-	    ldt64_value_sz)) != 0) {
-		if (errno == EPERM) {
-			if ((err = sysctlbyname("machdep.ldt64", &ldt64_enable_old,
-			    &ldt64_value_sz, 0, 0)) == 0) {
-				*val = ldt64_enable_old;
-			}
-		}
-		return errno;
-	}
-
-	*val = ldt64_enable_value;
-	return 0;
+	           FIXED_TRAMP_MAXLEN);
 }
 
 static uint64_t
@@ -922,7 +922,6 @@ ldt64_test_setup(pthread_t *cmthreadp, thread_arg_t *cmargp, boolean_t setldt_in
 	void *addr;
 	uintptr_t code_addr;
 	uintptr_t thunk64_movabs_addr;
-	int enable_status = 0;
 
 	descs = malloc(sizeof(union ldt_entry) * 256);
 	if (descs == 0) {
@@ -934,29 +933,15 @@ ldt64_test_setup(pthread_t *cmthreadp, thread_arg_t *cmargp, boolean_t setldt_in
 #endif
 	}
 
-	if ((err = enable_ldt64(&enable_status)) != 0 && enable_status == 0) {
-#ifndef STANDALONE
-		T_LOG("Warning: Couldn't set ldt64=1 via sysctl: %s\n",
-		    strerror(err));
-		T_ASSERT_FAIL("Couldn't enable ldt64 feature.\n");
-#else
-		fprintf(stderr, "Warning: Couldn't set ldt64=1 via sysctl: %s\n",
-		    strerror(err));
-		exit(1);
-#endif
-	}
-
 #ifdef DEBUG
 	printf("32-bit code is at %p\n", (void *)&code_32);
 #endif
 
 	if ((err = map_lowmem_stack(&addr)) != 0) {
-#ifdef DEBUG
-		fprintf(stderr, "Failed to mmap lowmem stack: %s\n", strerror(err));
-#endif
 #ifndef STANDALONE
-		T_ASSERT_FAIL("failed to mmap lowmem stack");
+		T_ASSERT_FAIL("failed to mmap lowmem stack: %s", strerror(err));
 #else
+		fprintf(stderr, "Failed to mmap lowmem stack: %s\n", strerror(err));
 		exit(1);
 #endif
 	}
@@ -966,28 +951,12 @@ ldt64_test_setup(pthread_t *cmthreadp, thread_arg_t *cmargp, boolean_t setldt_in
 	printf("lowstack addr = %p\n", (void *)stackAddr);
 #endif
 
-	if ((err = create_worker_thread(cmargp, (uint32_t)stackAddr, cmthreadp)) != 0) {
-#ifdef DEBUG
-		fprintf(stderr, "Fatal: Could not create thread: %s\n", strerror(err));
-#endif
-#ifndef STANDALONE
-		T_LOG("Fatal: Could not create thread: %s\n", strerror(err));
-		T_ASSERT_FAIL("Thread creation failure");
-#else
-		exit(1);
-#endif
-	}
-
-
 	if ((err = map_32bit_trampoline(&thunkit)) != 0) {
-#ifdef DEBUG
-		fprintf(stderr, "Failed to map trampoline into lowmem: %s\n", strerror(err));
-#endif
-		join_32bit_thread(cmthreadp, cmargp);
 #ifndef STANDALONE
 		T_LOG("Failed to map trampoline into lowmem: %s\n", strerror(err));
 		T_ASSERT_FAIL("Failed to map trampoline into lowmem");
 #else
+		fprintf(stderr, "Failed to map trampoline into lowmem: %s\n", strerror(err));
 		exit(1);
 #endif
 	}
@@ -1002,12 +971,11 @@ ldt64_test_setup(pthread_t *cmthreadp, thread_arg_t *cmargp, boolean_t setldt_in
 	bzero(descs, sizeof(union ldt_entry) * 256);
 
 	if ((cnt = i386_get_ldt(0, descs, 1)) <= 0) {
-		fprintf(stderr, "i386_get_ldt unexpectedly returned %d\n", cnt);
-		join_32bit_thread(cmthreadp, cmargp);
 #ifndef STANDALONE
-		T_LOG("i386_get_ldt unexpectedly returned %d\n", cnt);
+		T_LOG("i386_get_ldt unexpectedly returned %d (errno: %s)\n", cnt, strerror(errno));
 		T_ASSERT_FAIL("i386_get_ldt failure");
 #else
+		fprintf(stderr, "i386_get_ldt unexpectedly returned %d (errno: %s)\n", cnt, strerror(errno));
 		exit(1);
 #endif
 	}
@@ -1041,14 +1009,11 @@ ldt64_test_setup(pthread_t *cmthreadp, thread_arg_t *cmargp, boolean_t setldt_in
 		/* Set the LDT: */
 		cnt = i386_set_ldt((int)idx, &descs[idx], 1);
 		if (cnt != (int)idx) {
-#ifdef DEBUG
-			fprintf(stderr, "i386_set_ldt unexpectedly returned %d\n", cnt);
-#endif
-			join_32bit_thread(cmthreadp, cmargp);
 #ifndef STANDALONE
-			T_LOG("i386_set_ldt unexpectedly returned %d\n", cnt);
+			T_LOG("i386_set_ldt unexpectedly returned %d (errno: %s)\n", cnt, strerror(errno));
 			T_ASSERT_FAIL("i386_set_ldt failure");
 #else
+			fprintf(stderr, "i386_set_ldt unexpectedly returned %d (errno: %s)\n", cnt, strerror(errno));
 			exit(1);
 #endif
 		}
@@ -1068,19 +1033,28 @@ ldt64_test_setup(pthread_t *cmthreadp, thread_arg_t *cmargp, boolean_t setldt_in
 		}
 #endif
 	} else {
-#ifdef DEBUG
-		fprintf(stderr, "i386_get_ldt unexpectedly returned %d\n", cnt);
-#endif
-		join_32bit_thread(cmthreadp, cmargp);
 #ifndef STANDALONE
-		T_LOG("i386_get_ldt unexpectedly returned %d\n", cnt);
+		T_LOG("i386_get_ldt unexpectedly returned %d (errno: %s)\n", cnt, strerror(errno));
 		T_ASSERT_FAIL("i386_get_ldt failure");
 #else
+		fprintf(stderr, "i386_get_ldt unexpectedly returned %d (errno: %s)\n", cnt, strerror(errno));
 		exit(1);
 #endif
 	}
 
 	free(descs);
+
+	if ((err = create_worker_thread(cmargp, (uint32_t)stackAddr, cmthreadp)) != 0) {
+#ifdef DEBUG
+		fprintf(stderr, "Fatal: Could not create thread: %s\n", strerror(err));
+#endif
+#ifndef STANDALONE
+		T_LOG("Fatal: Could not create thread: %s\n", strerror(err));
+		T_ASSERT_FAIL("Thread creation failure");
+#else
+		exit(1);
+#endif
+	}
 }
 
 #ifdef STANDALONE

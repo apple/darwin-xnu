@@ -32,7 +32,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#include <corecrypto/ccdigest.h>
+#include <corecrypto/ccdigest_priv.h>
 #include <corecrypto/cc_priv.h>
 
 void

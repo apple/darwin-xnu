@@ -64,10 +64,10 @@ xts_start(uint32_t cipher __unused, // ignored - we're doing this for xts-aes on
 		panic("%s: inconsistent size for AES-XTS context", __FUNCTION__);
 	}
 
-	enc->init(enc, xts->enc, keylen, key1, key2);
-	dec->init(dec, xts->dec, keylen, key1, key2);
+	int rc = enc->init(enc, xts->enc, keylen, key1, key2);
+	rc |= dec->init(dec, xts->dec, keylen, key1, key2);
 
-	return 0;         //never fails
+	return rc;
 }
 
 int
@@ -83,10 +83,13 @@ xts_encrypt(const uint8_t *pt, unsigned long ptlen,
 		panic("xts encrypt not a multiple of block size\n");
 	}
 
-	xtsenc->set_tweak(xts->enc, tweak, iv);
-	xtsenc->xts(xts->enc, tweak, ptlen / 16, pt, ct);
+	int rc = xtsenc->set_tweak(xts->enc, tweak, iv);
+	if (rc) {
+		return rc;
+	}
 
-	return 0; //never fails
+	xtsenc->xts(xts->enc, tweak, ptlen / 16, pt, ct);
+	return 0;
 }
 
 int
@@ -102,10 +105,13 @@ xts_decrypt(const uint8_t *ct, unsigned long ptlen,
 		panic("xts decrypt not a multiple of block size\n");
 	}
 
-	xtsdec->set_tweak(xts->dec, tweak, iv);
-	xtsdec->xts(xts->dec, tweak, ptlen / 16, ct, pt);
+	int rc = xtsdec->set_tweak(xts->dec, tweak, iv);
+	if (rc) {
+		return rc;
+	}
 
-	return 0; //never fails
+	xtsdec->xts(xts->dec, tweak, ptlen / 16, ct, pt);
+	return 0;
 }
 
 void

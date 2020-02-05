@@ -98,6 +98,7 @@
 #include <vm/vm_protos.h>
 
 #include <sys/kern_memorystatus.h>
+#include <sys/kern_memorystatus_freeze.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
@@ -106,6 +107,7 @@
 #if CONFIG_CSR
 #include <sys/csr.h>
 #endif /* CONFIG_CSR */
+#include <IOKit/IOBSD.h>
 
 int _shared_region_map_and_slide(struct proc*, int, unsigned int, struct shared_file_mapping_np*, uint32_t, user_addr_t, user_addr_t);
 int shared_region_copyin_mappings(struct proc*, user_addr_t, unsigned int, struct shared_file_mapping_np *);
@@ -230,6 +232,10 @@ SYSCTL_UINT(_vm, OID_AUTO, user_tte_pages, CTLFLAG_RD | CTLFLAG_LOCKED, &inuse_u
 SYSCTL_UINT(_vm, OID_AUTO, kernel_tte_pages, CTLFLAG_RD | CTLFLAG_LOCKED, &inuse_kernel_ttepages_count, 0, "");
 SYSCTL_UINT(_vm, OID_AUTO, user_pte_pages, CTLFLAG_RD | CTLFLAG_LOCKED, &inuse_user_ptepages_count, 0, "");
 SYSCTL_UINT(_vm, OID_AUTO, kernel_pte_pages, CTLFLAG_RD | CTLFLAG_LOCKED, &inuse_kernel_ptepages_count, 0, "");
+#if DEVELOPMENT || DEBUG
+extern unsigned long pmap_asid_flushes;
+SYSCTL_ULONG(_vm, OID_AUTO, pmap_asid_flushes, CTLFLAG_RD | CTLFLAG_LOCKED, &pmap_asid_flushes, "");
+#endif
 #endif /* __arm__ || __arm64__ */
 
 #if __arm64__
@@ -1042,6 +1048,7 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 	proc_t  targetproc = PROC_NULL;
 	int     pid = args->pid;
 	int     error = 0;
+	mach_port_t tfpport = MACH_PORT_NULL;
 
 #if CONFIG_MACF
 	error = mac_proc_check_suspend_resume(p, MAC_PROC_CHECK_SUSPEND);
@@ -1062,7 +1069,8 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 		goto out;
 	}
 
-	if (!task_for_pid_posix_check(targetproc)) {
+	if (!task_for_pid_posix_check(targetproc) &&
+	    !IOTaskHasEntitlement(current_task(), PROCESS_RESUME_SUSPEND_ENTITLEMENT)) {
 		error = EPERM;
 		goto out;
 	}
@@ -1070,8 +1078,6 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 	target = targetproc->task;
 #ifndef CONFIG_EMBEDDED
 	if (target != TASK_NULL) {
-		mach_port_t tfpport;
-
 		/* If we aren't root and target's task access port is set... */
 		if (!kauth_cred_issuser(kauth_cred_get()) &&
 		    targetproc != current_proc() &&
@@ -1115,10 +1121,149 @@ pid_suspend(struct proc *p __unused, struct pid_suspend_args *args, int *ret)
 	task_deallocate(target);
 
 out:
+	if (tfpport != IPC_PORT_NULL) {
+		ipc_port_release_send(tfpport);
+	}
+
 	if (targetproc != PROC_NULL) {
 		proc_rele(targetproc);
 	}
 	*ret = error;
+	return error;
+}
+
+kern_return_t
+debug_control_port_for_pid(struct debug_control_port_for_pid_args *args)
+{
+	mach_port_name_t        target_tport = args->target_tport;
+	int                     pid = args->pid;
+	user_addr_t             task_addr = args->t;
+	proc_t                  p = PROC_NULL;
+	task_t                  t1 = TASK_NULL;
+	task_t                  task = TASK_NULL;
+	mach_port_name_t        tret = MACH_PORT_NULL;
+	ipc_port_t              tfpport = MACH_PORT_NULL;
+	ipc_port_t              sright = NULL;
+	int                     error = 0;
+
+
+	AUDIT_MACH_SYSCALL_ENTER(AUE_DBGPORTFORPID);
+	AUDIT_ARG(pid, pid);
+	AUDIT_ARG(mach_port1, target_tport);
+
+	/* Always check if pid == 0 */
+	if (pid == 0) {
+		(void) copyout((char *)&t1, task_addr, sizeof(mach_port_name_t));
+		AUDIT_MACH_SYSCALL_EXIT(KERN_FAILURE);
+		return KERN_FAILURE;
+	}
+
+	t1 = port_name_to_task(target_tport);
+	if (t1 == TASK_NULL) {
+		(void) copyout((char *)&t1, task_addr, sizeof(mach_port_name_t));
+		AUDIT_MACH_SYSCALL_EXIT(KERN_FAILURE);
+		return KERN_FAILURE;
+	}
+
+
+	p = proc_find(pid);
+	if (p == PROC_NULL) {
+		error = KERN_FAILURE;
+		goto tfpout;
+	}
+
+#if CONFIG_AUDIT
+	AUDIT_ARG(process, p);
+#endif
+
+	if (!(task_for_pid_posix_check(p))) {
+		error = KERN_FAILURE;
+		goto tfpout;
+	}
+
+	if (p->task == TASK_NULL) {
+		error = KERN_SUCCESS;
+		goto tfpout;
+	}
+
+	/* Grab a task reference since the proc ref might be dropped if an upcall to task access server is made */
+	task = p->task;
+	task_reference(task);
+
+
+	if (!IOTaskHasEntitlement(current_task(), DEBUG_PORT_ENTITLEMENT)) {
+#if CONFIG_MACF
+		error = mac_proc_check_get_task(kauth_cred_get(), p);
+		if (error) {
+			error = KERN_FAILURE;
+			goto tfpout;
+		}
+#endif
+
+		/* If we aren't root and target's task access port is set... */
+		if (!kauth_cred_issuser(kauth_cred_get()) &&
+		    p != current_proc() &&
+		    (task_get_task_access_port(task, &tfpport) == 0) &&
+		    (tfpport != IPC_PORT_NULL)) {
+			if (tfpport == IPC_PORT_DEAD) {
+				error = KERN_PROTECTION_FAILURE;
+				goto tfpout;
+			}
+
+			/*
+			 * Drop the proc_find proc ref before making an upcall
+			 * to taskgated, since holding a proc_find
+			 * ref while making an upcall can cause deadlock.
+			 */
+			proc_rele(p);
+			p = PROC_NULL;
+
+			/* Call up to the task access server */
+			error = __KERNEL_WAITING_ON_TASKGATED_CHECK_ACCESS_UPCALL__(tfpport, proc_selfpid(), kauth_getgid(), pid);
+
+			if (error != MACH_MSG_SUCCESS) {
+				if (error == MACH_RCV_INTERRUPTED) {
+					error = KERN_ABORTED;
+				} else {
+					error = KERN_FAILURE;
+				}
+				goto tfpout;
+			}
+		}
+	}
+
+	/* Check if the task has been corpsified */
+	if (is_corpsetask(task)) {
+		error = KERN_FAILURE;
+		goto tfpout;
+	}
+
+	error = task_get_debug_control_port(task, &sright);
+	if (error != KERN_SUCCESS) {
+		goto tfpout;
+	}
+
+	tret = ipc_port_copyout_send(
+		sright,
+		get_task_ipcspace(current_task()));
+
+	error = KERN_SUCCESS;
+
+tfpout:
+	task_deallocate(t1);
+	AUDIT_ARG(mach_port2, tret);
+	(void) copyout((char *) &tret, task_addr, sizeof(mach_port_name_t));
+
+	if (tfpport != IPC_PORT_NULL) {
+		ipc_port_release_send(tfpport);
+	}
+	if (task != TASK_NULL) {
+		task_deallocate(task);
+	}
+	if (p != PROC_NULL) {
+		proc_rele(p);
+	}
+	AUDIT_MACH_SYSCALL_EXIT(error);
 	return error;
 }
 
@@ -1129,6 +1274,7 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 	proc_t  targetproc = PROC_NULL;
 	int     pid = args->pid;
 	int     error = 0;
+	mach_port_t tfpport = MACH_PORT_NULL;
 
 #if CONFIG_MACF
 	error = mac_proc_check_suspend_resume(p, MAC_PROC_CHECK_RESUME);
@@ -1149,7 +1295,8 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 		goto out;
 	}
 
-	if (!task_for_pid_posix_check(targetproc)) {
+	if (!task_for_pid_posix_check(targetproc) &&
+	    !IOTaskHasEntitlement(current_task(), PROCESS_RESUME_SUSPEND_ENTITLEMENT)) {
 		error = EPERM;
 		goto out;
 	}
@@ -1157,8 +1304,6 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 	target = targetproc->task;
 #ifndef CONFIG_EMBEDDED
 	if (target != TASK_NULL) {
-		mach_port_t tfpport;
-
 		/* If we aren't root and target's task access port is set... */
 		if (!kauth_cred_issuser(kauth_cred_get()) &&
 		    targetproc != current_proc() &&
@@ -1213,6 +1358,10 @@ pid_resume(struct proc *p __unused, struct pid_resume_args *args, int *ret)
 	task_deallocate(target);
 
 out:
+	if (tfpport != IPC_PORT_NULL) {
+		ipc_port_release_send(tfpport);
+	}
+
 	if (targetproc != PROC_NULL) {
 		proc_rele(targetproc);
 	}
@@ -1402,7 +1551,8 @@ pid_shutdown_sockets(struct proc *p __unused, struct pid_shutdown_sockets_args *
 		goto out;
 	}
 
-	if (!task_for_pid_posix_check(targetproc)) {
+	if (!task_for_pid_posix_check(targetproc) &&
+	    !IOTaskHasEntitlement(current_task(), PROCESS_RESUME_SUSPEND_ENTITLEMENT)) {
 		error = EPERM;
 		goto out;
 	}
@@ -1689,32 +1839,22 @@ _shared_region_map_and_slide(
 	}
 #endif /* MAC */
 
-	/* make sure vnode is on the process's root volume */
+	/* The calling process cannot be chroot-ed. */
 	root_vp = p->p_fd->fd_rdir;
 	if (root_vp == NULL) {
 		root_vp = rootvnode;
 	} else {
-		/*
-		 * Chroot-ed processes can't use the shared_region.
-		 */
-		error = EINVAL;
-		goto done;
-	}
-
-	if (vp->v_mount != root_vp->v_mount) {
 		SHARED_REGION_TRACE_ERROR(
-			("shared_region: %p [%d(%s)] map(%p:'%s'): "
-			"not on process's root volume\n",
-			(void *)VM_KERNEL_ADDRPERM(current_thread()),
-			p->p_pid, p->p_comm,
-			(void *)VM_KERNEL_ADDRPERM(vp), vp->v_name));
+			("calling process [%d(%s)] is chroot-ed, permission denied\n",
+			p->p_pid, p->p_comm));
 		error = EPERM;
 		goto done;
 	}
 
-	/* make sure vnode is owned by "root" */
+	/* The shared cache file must be owned by root */
 	VATTR_INIT(&va);
 	VATTR_WANTED(&va, va_uid);
+	VATTR_WANTED(&va, va_flags);
 	error = vnode_getattr(vp, &va, vfs_context_current());
 	if (error) {
 		SHARED_REGION_TRACE_ERROR(
@@ -1737,6 +1877,37 @@ _shared_region_map_and_slide(
 		error = EPERM;
 		goto done;
 	}
+
+#if CONFIG_CSR
+	if (csr_check(CSR_ALLOW_UNRESTRICTED_FS) != 0 &&
+	    !(va.va_flags & SF_RESTRICTED)) {
+		/*
+		 * CSR is not configured in CSR_ALLOW_UNRESTRICTED_FS mode, and
+		 * the shared cache file is NOT SIP-protected, so reject the
+		 * mapping request
+		 */
+		SHARED_REGION_TRACE_ERROR(
+			("shared_region: %p [%d(%s)] map(%p:'%s'), "
+			"vnode is not SIP-protected. \n",
+			(void *)VM_KERNEL_ADDRPERM(current_thread()),
+			p->p_pid, p->p_comm, (void *)VM_KERNEL_ADDRPERM(vp),
+			vp->v_name));
+		error = EPERM;
+		goto done;
+	}
+#else
+	/* Devices without SIP/ROSP need to make sure that the shared cache is on the root volume. */
+	if (vp->v_mount != root_vp->v_mount) {
+		SHARED_REGION_TRACE_ERROR(
+			("shared_region: %p [%d(%s)] map(%p:'%s'): "
+			"not on process's root volume\n",
+			(void *)VM_KERNEL_ADDRPERM(current_thread()),
+			p->p_pid, p->p_comm,
+			(void *)VM_KERNEL_ADDRPERM(vp), vp->v_name));
+		error = EPERM;
+		goto done;
+	}
+#endif /* CONFIG_CSR */
 
 	if (scdir_enforce) {
 		/* get vnode for scdir_path */
@@ -2032,6 +2203,10 @@ extern unsigned int     vm_page_purgeable_wired_count;
 SYSCTL_INT(_vm, OID_AUTO, page_purgeable_wired_count, CTLFLAG_RD | CTLFLAG_LOCKED,
     &vm_page_purgeable_wired_count, 0, "Wired purgeable page count");
 
+extern unsigned int vm_page_kern_lpage_count;
+SYSCTL_INT(_vm, OID_AUTO, kern_lpage_count, CTLFLAG_RD | CTLFLAG_LOCKED,
+    &vm_page_kern_lpage_count, 0, "kernel used large pages");
+
 #if DEVELOPMENT || DEBUG
 extern uint64_t get_pages_grabbed_count(void);
 
@@ -2171,10 +2346,12 @@ extern unsigned int vm_page_secluded_target;
 extern unsigned int vm_page_secluded_count;
 extern unsigned int vm_page_secluded_count_free;
 extern unsigned int vm_page_secluded_count_inuse;
+extern unsigned int vm_page_secluded_count_over_target;
 SYSCTL_UINT(_vm, OID_AUTO, page_secluded_target, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded_target, 0, "");
 SYSCTL_UINT(_vm, OID_AUTO, page_secluded_count, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded_count, 0, "");
 SYSCTL_UINT(_vm, OID_AUTO, page_secluded_count_free, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded_count_free, 0, "");
 SYSCTL_UINT(_vm, OID_AUTO, page_secluded_count_inuse, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded_count_inuse, 0, "");
+SYSCTL_UINT(_vm, OID_AUTO, page_secluded_count_over_target, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded_count_over_target, 0, "");
 
 extern struct vm_page_secluded_data vm_page_secluded;
 SYSCTL_UINT(_vm, OID_AUTO, page_secluded_eligible, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_secluded.eligible_for_secluded, 0, "");
@@ -2344,6 +2521,12 @@ SYSCTL_UINT(_vm, OID_AUTO, pages, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_pages, 0
 extern uint32_t vm_page_busy_absent_skipped;
 SYSCTL_UINT(_vm, OID_AUTO, page_busy_absent_skipped, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_busy_absent_skipped, 0, "");
 
+extern uint32_t vm_page_upl_tainted;
+SYSCTL_UINT(_vm, OID_AUTO, upl_pages_tainted, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_upl_tainted, 0, "");
+
+extern uint32_t vm_page_iopl_tainted;
+SYSCTL_UINT(_vm, OID_AUTO, iopl_pages_tainted, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_iopl_tainted, 0, "");
+
 #if (__arm__ || __arm64__) && (DEVELOPMENT || DEBUG)
 extern int vm_footprint_suspend_allowed;
 SYSCTL_INT(_vm, OID_AUTO, footprint_suspend_allowed, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_footprint_suspend_allowed, 0, "");
@@ -2425,3 +2608,10 @@ SYSCTL_QUAD(_vm, OID_AUTO, shared_region_pager_reclaimed,
 extern int pmap_ledgers_panic_leeway;
 SYSCTL_INT(_vm, OID_AUTO, pmap_ledgers_panic_leeway, CTLFLAG_RW | CTLFLAG_LOCKED, &pmap_ledgers_panic_leeway, 0, "");
 #endif /* MACH_ASSERT */
+
+extern int vm_protect_privileged_from_untrusted;
+SYSCTL_INT(_vm, OID_AUTO, protect_privileged_from_untrusted,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &vm_protect_privileged_from_untrusted, 0, "");
+extern uint64_t vm_copied_on_read;
+SYSCTL_QUAD(_vm, OID_AUTO, copied_on_read,
+    CTLFLAG_RD | CTLFLAG_LOCKED, &vm_copied_on_read, "");

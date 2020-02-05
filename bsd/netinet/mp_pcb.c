@@ -59,6 +59,15 @@ static boolean_t mp_ticking;
 static void mp_sched_timeout(void);
 static void mp_timeout(void *);
 
+static void
+mpp_lock_assert_held(struct mppcb *mp)
+{
+#if !MACH_ASSERT
+#pragma unused(mp)
+#endif
+	LCK_MTX_ASSERT(&mp->mpp_lock, LCK_MTX_ASSERT_OWNED);
+}
+
 void
 mp_pcbinit(void)
 {
@@ -222,7 +231,7 @@ mp_pcballoc(struct socket *so, struct mppcbinfo *mppi)
 	mpp->mpp_socket = so;
 	so->so_pcb = mpp;
 
-	error = mptcp_sescreate(mpp);
+	error = mptcp_session_create(mpp);
 	if (error) {
 		lck_mtx_destroy(&mpp->mpp_lock, mppi->mppi_lock_grp);
 		zfree(mppi->mppi_zone, mpp);
@@ -233,6 +242,7 @@ mp_pcballoc(struct socket *so, struct mppcbinfo *mppi)
 	mpp->mpp_flags |= MPP_ATTACHED;
 	TAILQ_INSERT_TAIL(&mppi->mppi_pcbs, mpp, mpp_entry);
 	mppi->mppi_count++;
+
 	lck_mtx_unlock(&mppi->mppi_lock);
 
 	return 0;
@@ -244,9 +254,6 @@ mp_pcbdetach(struct socket *mp_so)
 	struct mppcb *mpp = mpsotomppcb(mp_so);
 
 	mpp->mpp_state = MPPCB_STATE_DEAD;
-	if (!(mp_so->so_flags & SOF_PCBCLEARING)) {
-		mp_so->so_flags |= SOF_PCBCLEARING;
-	}
 
 	mp_gc_sched();
 }
@@ -269,6 +276,16 @@ mp_pcbdispose(struct mppcb *mpp)
 	VERIFY(mppi->mppi_count != 0);
 	mppi->mppi_count--;
 
+	if (mppi->mppi_count == 0) {
+		if (mptcp_cellicon_refcount) {
+			os_log_error(mptcp_log_handle, "%s: No more MPTCP-flows, but cell icon counter is %u\n",
+			    __func__, mptcp_cellicon_refcount);
+			mptcp_clear_cellicon();
+			mptcp_cellicon_refcount = 0;
+		}
+	}
+
+	VERIFY(mpp->mpp_inside == 0);
 	mpp_unlock(mpp);
 
 #if NECP

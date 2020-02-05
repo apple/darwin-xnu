@@ -119,16 +119,6 @@ struct plimit {
 };
 
 #ifdef KERNEL
-/* add user profiling from AST */
-#define ADDUPROF(p)                                                     \
-    addupc_task(p,                                                      \
-	        (proc_is64bit((p)) ? (p)->p_stats->user_p_prof.pr_addr \
-	                           : CAST_USER_ADDR_T((p)->p_stats->p_prof.pr_addr)), \
-	        (proc_is64bit((p)) ? (p)->p_stats->user_p_prof.pr_ticks \
-	                           : (p)->p_stats->p_prof.pr_ticks))
-
-void     addupc_intr(struct proc *p, uint32_t pc, u_int ticks);
-void     addupc_task(struct proc *p, user_addr_t pc, u_int ticks);
 void     calcru(struct proc *p, struct timeval *up, struct timeval *sp,
     struct timeval *ip);
 void     ruadd(struct rusage *ru, struct rusage *ru2);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -84,7 +84,7 @@ struct purgeable_q purgeable_queues[PURGEABLE_Q_TYPE_MAX];
 queue_head_t purgeable_nonvolatile_queue;
 int purgeable_nonvolatile_count;
 
-decl_lck_mtx_data(, vm_purgeable_queue_lock)
+decl_lck_mtx_data(, vm_purgeable_queue_lock);
 
 static token_idx_t vm_purgeable_token_remove_first(purgeable_q_t queue);
 
@@ -100,14 +100,16 @@ vm_purgeable_token_check_queue(purgeable_q_t queue)
 	token_idx_t     unripe = 0;
 	int             our_inactive_count;
 
+
 #if DEVELOPMENT
-	static unsigned lightweight_check = 0;
+	static int lightweight_check = 0;
 
 	/*
-	 * Due to performance impact, only perform this check
-	 * every 100 times on DEVELOPMENT kernels.
+	 * Due to performance impact, perform this check less frequently on DEVELOPMENT kernels.
+	 * Checking the queue scales linearly with its length, so we compensate by
+	 * by performing this check less frequently as the queue grows.
 	 */
-	if (lightweight_check++ < 100) {
+	if (lightweight_check++ < (100 + queue->debug_count_tokens / 512)) {
 		return;
 	}
 
@@ -1287,105 +1289,6 @@ vm_purgeable_account(
 }
 #endif /* DEVELOPMENT || DEBUG */
 
-void
-vm_purgeable_disown(
-	task_t  task)
-{
-	vm_object_t     next_object;
-	vm_object_t     object;
-	int             collisions;
-
-	if (task == NULL) {
-		return;
-	}
-
-	/*
-	 * Scan the purgeable objects queues for objects owned by "task".
-	 * This has to be done "atomically" under the "vm_purgeable_queue"
-	 * lock, to ensure that no new purgeable object get associated
-	 * with this task or moved between queues while we're scanning.
-	 */
-
-	/*
-	 * Scan non-volatile queue for objects owned by "task".
-	 */
-
-	collisions = 0;
-
-again:
-	if (task->task_purgeable_disowned) {
-		/* task has already disowned its purgeable memory */
-		assert(task->task_volatile_objects == 0);
-		assert(task->task_nonvolatile_objects == 0);
-		return;
-	}
-
-	lck_mtx_lock(&vm_purgeable_queue_lock);
-	task_objq_lock(task);
-
-	task->task_purgeable_disowning = TRUE;
-
-	for (object = (vm_object_t) queue_first(&task->task_objq);
-	    !queue_end(&task->task_objq, (queue_entry_t) object);
-	    object = next_object) {
-		if (task->task_nonvolatile_objects == 0 &&
-		    task->task_volatile_objects == 0) {
-			/* no more purgeable objects owned by "task" */
-			break;
-		}
-
-		next_object = (vm_object_t) queue_next(&object->task_objq);
-		if (object->purgable == VM_PURGABLE_DENY) {
-			/* not a purgeable object: skip */
-			continue;
-		}
-
-#if DEBUG
-		assert(object->vo_purgeable_volatilizer == NULL);
-#endif /* DEBUG */
-		assert(object->vo_owner == task);
-		if (!vm_object_lock_try(object)) {
-			lck_mtx_unlock(&vm_purgeable_queue_lock);
-			task_objq_unlock(task);
-			mutex_pause(collisions++);
-			goto again;
-		}
-		/* transfer ownership to the kernel */
-		assert(VM_OBJECT_OWNER(object) != kernel_task);
-		vm_object_ownership_change(
-			object,
-			object->vo_ledger_tag, /* unchanged */
-			VM_OBJECT_OWNER_DISOWNED, /* new owner */
-			TRUE);  /* old_owner->task_objq locked */
-		assert(object->vo_owner == VM_OBJECT_OWNER_DISOWNED);
-		vm_object_unlock(object);
-	}
-
-	if (__improbable(task->task_volatile_objects != 0 ||
-	    task->task_nonvolatile_objects != 0)) {
-		panic("%s(%p): volatile=%d nonvolatile=%d q=%p q_first=%p q_last=%p",
-		    __FUNCTION__,
-		    task,
-		    task->task_volatile_objects,
-		    task->task_nonvolatile_objects,
-		    &task->task_objq,
-		    queue_first(&task->task_objq),
-		    queue_last(&task->task_objq));
-	}
-
-	/* there shouldn't be any purgeable objects owned by task now */
-	assert(task->task_volatile_objects == 0);
-	assert(task->task_nonvolatile_objects == 0);
-	assert(task->task_purgeable_disowning);
-
-	/* and we don't need to try and disown again */
-	task->task_purgeable_disowned = TRUE;
-
-	lck_mtx_unlock(&vm_purgeable_queue_lock);
-	task_objq_unlock(task);
-}
-
-
 static uint64_t
 vm_purgeable_queue_purge_task_owned(
 	purgeable_q_t   queue,
@@ -1505,6 +1408,9 @@ vm_purgeable_nonvolatile_enqueue(
 	vm_object_t     object,
 	task_t          owner)
 {
+	int ledger_flags;
+	kern_return_t kr;
+
 	vm_object_lock_assert_exclusive(object);
 
 	assert(object->purgable == VM_PURGABLE_NONVOLATILE);
@@ -1513,7 +1419,7 @@ vm_purgeable_nonvolatile_enqueue(
 	lck_mtx_lock(&vm_purgeable_queue_lock);
 
 	if (owner != NULL &&
-	    owner->task_purgeable_disowning) {
+	    owner->task_objects_disowning) {
 		/* task is exiting and no longer tracking purgeable objects */
 		owner = VM_OBJECT_OWNER_DISOWNED;
 	}
@@ -1526,10 +1432,16 @@ vm_purgeable_nonvolatile_enqueue(
 	object->vo_purgeable_volatilizer = NULL;
 #endif /* DEBUG */
 
-	vm_object_ownership_change(object,
-	    object->vo_ledger_tag,                        /* tag unchanged */
+	ledger_flags = 0;
+	if (object->vo_no_footprint) {
+		ledger_flags |= VM_LEDGER_FLAG_NO_FOOTPRINT;
+	}
+	kr = vm_object_ownership_change(object,
+	    object->vo_ledger_tag,                             /* tag unchanged */
 	    owner,
+	    ledger_flags,
 	    FALSE);                             /* task_objq_locked */
+	assert(kr == KERN_SUCCESS);
 
 	assert(object->objq.next == NULL);
 	assert(object->objq.prev == NULL);
@@ -1549,6 +1461,7 @@ vm_purgeable_nonvolatile_dequeue(
 	vm_object_t     object)
 {
 	task_t  owner;
+	kern_return_t kr;
 
 	vm_object_lock_assert_exclusive(object);
 
@@ -1563,11 +1476,13 @@ vm_purgeable_nonvolatile_dequeue(
 		 */
 		/* transfer ownership to the kernel */
 		assert(VM_OBJECT_OWNER(object) != kernel_task);
-		vm_object_ownership_change(
+		kr = vm_object_ownership_change(
 			object,
 			object->vo_ledger_tag,  /* unchanged */
 			VM_OBJECT_OWNER_DISOWNED, /* new owner */
+			0, /* ledger_flags */
 			FALSE); /* old_owner->task_objq locked */
+		assert(kr == KERN_SUCCESS);
 		assert(object->vo_owner == VM_OBJECT_OWNER_DISOWNED);
 	}
 
@@ -1763,7 +1678,7 @@ vm_object_owner_compressed_update(
 	switch (object->purgable) {
 	case VM_PURGABLE_DENY:
 		/* not purgeable: must be ledger-tagged */
-		assert(object->vo_ledger_tag != VM_OBJECT_LEDGER_TAG_NONE);
+		assert(object->vo_ledger_tag != VM_LEDGER_TAG_NONE);
 	/* fallthru */
 	case VM_PURGABLE_NONVOLATILE:
 		if (delta > 0) {

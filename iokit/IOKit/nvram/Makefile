@@ -13,7 +13,7 @@ include $(MakeInc_def)
 MI_DIR = nvram
 NOT_EXPORT_HEADERS =
 
-ALL_HEADERS = $(shell (cd $(SOURCE); echo *.h))
+ALL_HEADERS = $(notdir $(wildcard $(SOURCE)*.h))
 
 INSTALL_MI_LIST	=
 INSTALL_MI_LCL_LIST =

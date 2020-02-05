@@ -177,7 +177,7 @@ kperf_timer_handler(void *param0, __unused void *param1)
 
 	uint32_t actionid = KPERF_TMR_ACTION(action_state);
 	if (actionid == 0) {
-		return;
+		goto deactivate;
 	}
 
 #if DEVELOPMENT || DEBUG

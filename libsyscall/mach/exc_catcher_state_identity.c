@@ -35,7 +35,6 @@
 #include <mach/message.h>
 #include <mach/exception.h>
 #include <mach/mig_errors.h>
-#include <dlfcn.h>
 
 #include "abort.h"
 #include "exc_catcher.h"
@@ -57,7 +56,7 @@ internal_catch_exception_raise_state_identity(
 #if defined(__DYNAMIC__)
 	static _libkernel_exec_raise_state_identity_t exc_raise_state_identity_func = (void*)-1;
 
-	if (exc_raise_state_identity_func == ((void*)-1)) {
+	if (exc_raise_state_identity_func == ((void*)-1) && _dlsym) {
 		exc_raise_state_identity_func = _dlsym(RTLD_DEFAULT, "catch_exception_raise_state_identity");
 	}
 	if (exc_raise_state_identity_func == 0) {

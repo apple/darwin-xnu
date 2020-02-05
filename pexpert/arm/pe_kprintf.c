@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  */
 /*
  * file: pe_kprintf.c
@@ -18,7 +18,9 @@ void            (*PE_kputc)(char c) = 0;
 
 SECURITY_READ_ONLY_LATE(unsigned int)    disable_serial_output = TRUE;
 
-decl_simple_lock_data(static, kprintf_lock)
+decl_simple_lock_data(static, kprintf_lock);
+
+static void serial_putc_crlf(char c);
 
 void
 PE_init_kprintf(boolean_t vm_initialized)
@@ -39,7 +41,7 @@ PE_init_kprintf(boolean_t vm_initialized)
 		}
 
 		if (serial_init()) {
-			PE_kputc = serial_putc;
+			PE_kputc = serial_putc_crlf;
 		} else {
 			PE_kputc = cnputc;
 		}
@@ -129,6 +131,15 @@ kprintf(const char *fmt, ...)
 			va_end(listp);
 		}
 	}
+}
+
+static void
+serial_putc_crlf(char c)
+{
+	if (c == '\n') {
+		uart_putc('\r');
+	}
+	uart_putc(c);
 }
 
 void

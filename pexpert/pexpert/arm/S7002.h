@@ -25,13 +25,13 @@
 #define DOCKFIFO_W_SPACING              (0x1000)
 #define DOCKFIFO_SPACING                (0x3000)
 
-#define rDOCKFIFO_R_DATA(_f, _n)        (*(volatile uint32_t *)(uart_base + ((_f) * DOCKFIFO_SPACING) + ((_n) * 4)))
-#define rDOCKFIFO_R_STAT(_f)            (*(volatile uint32_t *)(uart_base + ((_f) * DOCKFIFO_SPACING) + 0x14))
-#define rDOCKFIFO_W_DATA(_f, _n)        (*(volatile uint32_t *)(uart_base + ((_f) * DOCKFIFO_SPACING) + DOCKFIFO_W_SPACING + ((_n) * 4)))
-#define rDOCKFIFO_W_STAT(_f)            (*(volatile uint32_t *)(uart_base + ((_f) * DOCKFIFO_SPACING) + DOCKFIFO_W_SPACING + 0x14))
-#define rDOCKFIFO_CNFG(_f)              (*(volatile uint32_t *)(uart_base + ((_f) * DOCKFIFO_SPACING) + 0x2000))
-#define rDOCKFIFO_DRAIN(_f)             (*(volatile uint32_t *)(uart_base + ((_f) * DOCKFIFO_SPACING) + 0x2004))
-#define rDOCKFIFO_INTMASK(_f)           (*(volatile uint32_t *)(uart_base + ((_f) * DOCKFIFO_SPACING) + 0x2008))
+#define rDOCKFIFO_R_DATA(_f, _n)        (*(volatile uint32_t *)(dockfifo_uart_base + ((_f) * DOCKFIFO_SPACING) + ((_n) * 4)))
+#define rDOCKFIFO_R_STAT(_f)            (*(volatile uint32_t *)(dockfifo_uart_base + ((_f) * DOCKFIFO_SPACING) + 0x14))
+#define rDOCKFIFO_W_DATA(_f, _n)        (*(volatile uint32_t *)(dockfifo_uart_base + ((_f) * DOCKFIFO_SPACING) + DOCKFIFO_W_SPACING + ((_n) * 4)))
+#define rDOCKFIFO_W_STAT(_f)            (*(volatile uint32_t *)(dockfifo_uart_base + ((_f) * DOCKFIFO_SPACING) + DOCKFIFO_W_SPACING + 0x14))
+#define rDOCKFIFO_CNFG(_f)              (*(volatile uint32_t *)(dockfifo_uart_base + ((_f) * DOCKFIFO_SPACING) + 0x2000))
+#define rDOCKFIFO_DRAIN(_f)             (*(volatile uint32_t *)(dockfifo_uart_base + ((_f) * DOCKFIFO_SPACING) + 0x2004))
+#define rDOCKFIFO_INTMASK(_f)           (*(volatile uint32_t *)(dockfifo_uart_base + ((_f) * DOCKFIFO_SPACING) + 0x2008))
 
 #endif
 

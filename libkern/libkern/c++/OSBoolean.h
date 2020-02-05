@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -31,8 +31,12 @@
 #define _OS_OSBOOLEAN_H
 
 #include <libkern/c++/OSObject.h>
+#include <libkern/c++/OSPtr.h>
 
 class OSString;
+class OSBoolean;
+
+typedef OSPtr<OSBoolean> OSBooleanPtr;
 
 /*!
  * @header
@@ -62,7 +66,7 @@ class OSString;
  */
 class OSBoolean : public OSObject
 {
-	OSDeclareDefaultStructors(OSBoolean)
+	OSDeclareDefaultStructors(OSBoolean);
 	friend class OSSerialize;
 
 protected:
@@ -102,7 +106,7 @@ public:
  * <code>@link kOSBooleanFalse kOSBooleanFalse@/link</code>,
  * so that you can always use pointer comparison with OSBoolean objects.
  */
-	static OSBoolean * withBoolean(bool value);
+	static OSBooleanPtr withBoolean(bool value);
 
 /*!
  * @function free

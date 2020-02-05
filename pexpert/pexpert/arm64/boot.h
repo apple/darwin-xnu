@@ -9,11 +9,21 @@
 #ifndef _PEXPERT_ARM64_BOOT_H_
 #define _PEXPERT_ARM64_BOOT_H_
 
+#ifdef KERNEL
 #include <kern/kern_types.h>
+#endif
 #include <pexpert/arm/consistent_debug.h>
 #include <pexpert/arm/protos.h>
 
-#define BOOT_LINE_LENGTH        256
+/*
+ * Maximum size of an environment variable value. This particular value is
+ * chosen to accommodate the maximum encoded size of the system token as
+ * computed in https://confluence.sd.apple.com/display/TK/System+Token.
+ *
+ * This value matches iBoot's IBOOT_MAX_ENV_VAR_DATA_SIZE.
+ * There are no iBoot headers so have to duplicate it here for now.
+ */
+#define BOOT_LINE_LENGTH        608
 
 /*
  * Video information..

@@ -109,6 +109,12 @@ The checks for accessibility are performed using the effective user and group
 IDs instead of the real user and group ID as required in a call to
 .Fn access .
 .El
+.Bl -tag -width indent
+.It Dv AT_SYMLINK_NOFOLLOW
+If
+.Fa path
+names a symbolic link, the status of the symbolic link is returned.
+.El
 .Pp
 Even if a process has appropriate privileges and indicates success for
 .Dv X_OK ,

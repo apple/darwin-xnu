@@ -54,8 +54,8 @@ extern void cpu_quiescent_counter_ast(void);
 extern void cpu_quiescent_counter_init(void);
 
 /* use of these is guarded by the config */
-extern uint32_t cpu_checkin_min_interval_us;
 extern void cpu_quiescent_counter_set_min_interval_us(uint32_t new_value);
+extern uint32_t cpu_quiescent_counter_get_min_interval_us(void);
 
 #else /* CONFIG_QUIESCE_COUNTER */
 

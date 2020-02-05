@@ -38,7 +38,7 @@ IOSyncer * IOSyncer::create(bool twoRetains)
 
 	if (me && !me->init(twoRetains)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;

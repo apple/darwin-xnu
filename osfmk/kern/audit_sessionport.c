@@ -57,53 +57,13 @@
 ipc_port_t
 audit_session_mksend(struct auditinfo_addr *aia_p, ipc_port_t *sessionport)
 {
-	ipc_port_t sendport = IPC_PORT_NULL;
-	ipc_port_t port;
-
-	/*
-	 * If we don't have an existing session port, then create one.
-	 */
-	port = *sessionport;
-	if (!IP_VALID(port)) {
-		ipc_port_t new_port = ipc_port_alloc_kernel();
-		if (!IP_VALID(new_port)) {
-			return new_port;
-		}
-		ipc_kobject_set(new_port, (ipc_kobject_t)aia_p, IKOT_AU_SESSIONPORT);
-		if (!OSCompareAndSwapPtr(port, new_port, sessionport)) {
-			ipc_port_dealloc_kernel(new_port);
-		}
-		port = *sessionport;
+	audit_session_aiaref(aia_p);
+	if (!ipc_kobject_make_send_lazy_alloc_port(sessionport,
+	    (ipc_kobject_t)aia_p, IKOT_AU_SESSIONPORT)) {
+		audit_session_aiaunref(aia_p);
 	}
 
-	assert(ip_active(port) && IKOT_AU_SESSIONPORT == ip_kotype(port));
-	sendport = ipc_port_make_send(port);
-
-	/*
-	 * If we don't have a no-senders notification outstanding against
-	 * the port, take a reference on the session and request one.
-	 */
-	if (IP_NULL == port->ip_nsrequest) {
-		ipc_port_t notifyport;
-
-		audit_session_aiaref(aia_p);
-
-
-		ip_lock(port);
-		/* Need a send-once right for the target of the notification */
-		notifyport = ipc_port_make_sonce_locked(port);
-		/* Request a no-senders notification (at the new make-send threshold) */
-		ipc_port_nsrequest(port, port->ip_mscount, notifyport, &notifyport);
-		/* port unlocked */
-
-		if (IP_NULL != notifyport) {
-			/* race requesting notification */
-			audit_session_aiaunref(aia_p);
-			ipc_port_release_sonce(notifyport);
-		}
-	}
-
-	return sendport;
+	return *sessionport;
 }
 
 
@@ -129,7 +89,7 @@ audit_session_porttoaia(ipc_port_t port)
 	if (IP_VALID(port)) {
 		ip_lock(port);
 		if (IKOT_AU_SESSIONPORT == ip_kotype(port)) {
-			assert(ip_active(port));
+			require_ip_active(port);
 			aia_p = (struct auditinfo_addr *)port->ip_kobject;
 		}
 		ip_unlock(port);
@@ -147,53 +107,21 @@ audit_session_porttoaia(ipc_port_t port)
  * Parameters: msg		A Mach no-senders notification message.
  *
  * Notes: It is possible that new send rights are created after a
- *	  no-senders notification has been sent (i.e. via audit_session_mksend).
- *	  We check the port's mscount against the notification's not_count
- *	  to detect when this happens, and re-arm the notification in that
- *	  case.
- *
- *	  In the normal case (no new senders), we first mark the port
- *	  as dying by setting its object type to IKOT_NONE so that
- *	  audit_session_mksend will no longer use it to create
- *	  additional send rights.  We can then safely call
- *	  audit_session_port_destroy with no locks.
+ *	  no-senders notification has been sent, but they will be protected
+ *	  by another aia reference.
  */
 void
 audit_session_nosenders(mach_msg_header_t *msg)
 {
 	mach_no_senders_notification_t *notification = (void *)msg;
 	ipc_port_t port = notification->not_header.msgh_remote_port;
-	ipc_port_t notifyport;
 	struct auditinfo_addr *port_aia_p = NULL;
 
+	require_ip_active(port);
 	assert(IKOT_AU_SESSIONPORT == ip_kotype(port));
-	ip_lock(port);
-	assert(ip_active(port));
 	port_aia_p = (struct auditinfo_addr *)port->ip_kobject;
 	assert(NULL != port_aia_p);
 
-	/*
-	 * if new send rights have been made since the last notify
-	 * request, re-arm the notification with the new threshold.
-	 */
-	if (port->ip_mscount > notification->not_count) {
-		notifyport = ipc_port_make_sonce_locked(port);
-		ipc_port_nsrequest(port, port->ip_mscount, notifyport, &notifyport);
-		/* port unlocked */
-
-		if (IP_NULL != notifyport) {
-			/* race re-arming the notification */
-			ipc_port_release_sonce(notifyport);
-			audit_session_aiaunref(port_aia_p);
-		}
-		return;
-	}
-
-	/*
-	 * Otherwise, no more extant send rights, so release the
-	 * reference held on the session by those send rights.
-	 */
-	ip_unlock(port);
 	audit_session_aiaunref(port_aia_p);
 }
 
@@ -203,7 +131,7 @@ audit_session_portdestroy(ipc_port_t *sessionport)
 	ipc_port_t port = *sessionport;
 
 	if (IP_VALID(port)) {
-		assert(ip_active(port));
+		require_ip_active(port);
 		assert(IKOT_AU_SESSIONPORT == ip_kotype(port));
 		ipc_kobject_set_atomically(port, IKO_NULL, IKOT_NONE);
 		ipc_port_dealloc_kernel(port);

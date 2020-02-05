@@ -586,7 +586,6 @@ tcp_lro_process_pkt(struct mbuf *lro_mb, int drop_hdrlen)
 	default:
 		lck_mtx_unlock(&tcp_lro_lock);
 		panic_plain("%s: unrecognized type %d", __func__, retval);
-		break;
 	}
 
 	if (ret_response == TCP_LRO_FLOW_NOTFOUND) {

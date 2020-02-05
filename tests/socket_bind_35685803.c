@@ -11,6 +11,9 @@
 #include <errno.h>
 #include <pthread.h>
 #include <stdbool.h>
+#include <TargetConditionals.h>
+
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
 
 static bool debug;
 
@@ -167,10 +170,14 @@ multithreaded_bind_test(bool v6, int socket_count)
 static void
 run_multithreaded_bind_test(int number_of_runs, bool v6, int socket_count)
 {
+#if TARGET_OS_BRIDGE
+	T_SKIP("Not enough memory to handle this test");
+#else /* TARGET_OS_BRIDGE */
 	for (int i = 0; i < number_of_runs; i++) {
 		multithreaded_bind_test(v6, socket_count);
 	}
 	T_PASS("multithreaded_bind_test %s", v6 ? "IPv6" : "IPv4");
+#endif /* TARGET_OS_BRIDGE */
 }
 
 T_DECL(socket_bind_35685803,

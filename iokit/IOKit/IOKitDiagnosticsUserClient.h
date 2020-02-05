@@ -1,10 +1,12 @@
+/* * Copyright (c) 2019 Apple Inc. All rights reserved. */
+
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
 
 
 class IOKitDiagnosticsClient : public IOUserClient
 {
-	OSDeclareDefaultStructors(IOKitDiagnosticsClient)
+	OSDeclareDefaultStructors(IOKitDiagnosticsClient);
 
 public:
 	static  IOUserClient * withTask(task_t owningTask);

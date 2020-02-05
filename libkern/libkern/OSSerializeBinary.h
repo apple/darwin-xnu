@@ -44,7 +44,7 @@ enum{
 	kOSSerializeEndCollecton = 0x80000000U,
 };
 
-#define kOSSerializeBinarySignature "\323\0\0"
-
+#define kOSSerializeBinarySignature        "\323\0\0"
+#define kOSSerializeIndexedBinarySignature 0x000000D4
 
 #endif /* _OS_OSSERIALIZEBINARY_H */

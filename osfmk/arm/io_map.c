@@ -70,6 +70,16 @@ extern vm_offset_t      virtual_space_start;     /* Next available kernel VA */
 vm_offset_t
 io_map(vm_map_offset_t phys_addr, vm_size_t size, unsigned int flags)
 {
+	return io_map_with_prot(phys_addr, size, flags, VM_PROT_READ | VM_PROT_WRITE);
+}
+
+/*
+ * Allocate and map memory for devices that may need to be mapped before
+ * Mach VM is running. Allows caller to specify mapping protection
+ */
+vm_offset_t
+io_map_with_prot(vm_map_offset_t phys_addr, vm_size_t size, unsigned int flags, vm_prot_t prot)
+{
 	vm_offset_t     start, start_offset;
 
 	start_offset = phys_addr & PAGE_MASK;
@@ -87,15 +97,15 @@ io_map(vm_map_offset_t phys_addr, vm_size_t size, unsigned int flags)
 
 		if (flags == VM_WIMG_WCOMB) {
 			(void) pmap_map_bd_with_options(start, phys_addr, phys_addr + round_page(size),
-			    VM_PROT_READ | VM_PROT_WRITE, PMAP_MAP_BD_WCOMB);
+			    prot, PMAP_MAP_BD_WCOMB);
 		} else {
 			(void) pmap_map_bd(start, phys_addr, phys_addr + round_page(size),
-			    VM_PROT_READ | VM_PROT_WRITE);
+			    prot);
 		}
 	} else {
 		(void) kmem_alloc_pageable(kernel_map, &start, round_page(size), VM_KERN_MEMORY_IOKIT);
 		(void) pmap_map(start, phys_addr, phys_addr + round_page(size),
-		    VM_PROT_READ | VM_PROT_WRITE, flags);
+		    prot, flags);
 	}
 #if KASAN
 	kasan_notify_address(start + start_offset, size);

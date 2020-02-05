@@ -9,11 +9,15 @@
 #include <sys/ioctl.h>
 #include <sys/mount.h>
 
-#if !TARGET_OS_EMBEDDED
+#if !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 #include <sys/csr.h>
 #endif
 
-T_GLOBAL_META(T_META_NAMESPACE("xnu.quicktest"), T_META_CHECK_LEAKS(false));
+T_GLOBAL_META(
+	T_META_NAMESPACE("xnu.quicktest"),
+	T_META_CHECK_LEAKS(false),
+	T_META_RUN_CONCURRENTLY(true)
+	);
 
 
 /*  **************************************************************************************************************
@@ -31,7 +35,7 @@ T_DECL(ioctl, "Sanity check of ioctl by exercising DKIOCGETBLOCKCOUNT and DKIOCG
 	long long                       my_block_count;
 	char                            my_name[MAXPATHLEN];
 
-#if !TARGET_OS_EMBEDDED
+#if !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 	/*
 	 * this test won't be able to open the root disk device unless CSR is
 	 * disabled or in AppleInternal mode

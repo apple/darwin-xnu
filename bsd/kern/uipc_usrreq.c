@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -161,7 +161,7 @@ struct mdns_ipc_msg_hdr {
  *	need a proper out-of-band
  *	lock pushdown
  */
-static struct   sockaddr sun_noname = { sizeof(sun_noname), AF_LOCAL, { 0 } };
+static struct   sockaddr sun_noname = { .sa_len = sizeof(sun_noname), .sa_family = AF_LOCAL, .sa_data = { 0 } };
 static ino_t    unp_ino;                /* prototype for fake inode numbers */
 
 static int      unp_attach(struct socket *);
@@ -392,7 +392,9 @@ uipc_rcvd(struct socket *so, __unused int flags)
 		unp->unp_mbcnt = rcv->sb_mbcnt;
 		snd->sb_hiwat += unp->unp_cc - rcv->sb_cc;
 		unp->unp_cc = rcv->sb_cc;
-		sowwakeup(so2);
+		if (sb_notify(&so2->so_snd)) {
+			sowakeup(so2, &so2->so_snd, so);
+		}
 
 		socket_unlock(so2, 1);
 
@@ -495,7 +497,9 @@ uipc_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 		 */
 		if (sbappendaddr(&so2->so_rcv, from, m, control, &error)) {
 			control = NULL;
-			sorwakeup(so2);
+			if (sb_notify(&so2->so_rcv)) {
+				sowakeup(so2, &so2->so_rcv, so);
+			}
 		} else if (control != NULL && error == 0) {
 			/* A socket filter took control; don't touch it */
 			control = NULL;
@@ -587,7 +591,9 @@ uipc_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 		unp->unp_conn->unp_cc = rcv->sb_cc;
 		if (didreceive) {
 			control = NULL;
-			sorwakeup(so2);
+			if (sb_notify(&so2->so_rcv)) {
+				sowakeup(so2, &so2->so_rcv, so);
+			}
 		} else if (control != NULL && error == 0) {
 			/* A socket filter took control; don't touch it */
 			control = NULL;
@@ -1736,12 +1742,12 @@ unp_pcblist SYSCTL_HANDLER_ARGS
 			 * connect/disconnect races for SMP.
 			 */
 			if (unp->unp_addr) {
-				bcopy(unp->unp_addr, &xu.xu_addr,
+				bcopy(unp->unp_addr, &xu.xu_au,
 				    unp->unp_addr->sun_len);
 			}
 			if (unp->unp_conn && unp->unp_conn->unp_addr) {
 				bcopy(unp->unp_conn->unp_addr,
-				    &xu.xu_caddr,
+				    &xu.xu_cau,
 				    unp->unp_conn->unp_addr->sun_len);
 			}
 			unpcb_to_compat(unp, &xu.xu_unp);
@@ -1890,12 +1896,12 @@ unp_pcblist64 SYSCTL_HANDLER_ARGS
 			 * connect/disconnect races for SMP.
 			 */
 			if (unp->unp_addr) {
-				bcopy(unp->unp_addr, &xu.xunp_addr,
+				bcopy(unp->unp_addr, &xu.xu_au,
 				    unp->unp_addr->sun_len);
 			}
 			if (unp->unp_conn && unp->unp_conn->unp_addr) {
 				bcopy(unp->unp_conn->unp_addr,
-				    &xu.xunp_caddr,
+				    &xu.xu_cau,
 				    unp->unp_conn->unp_addr->sun_len);
 			}
 
@@ -2019,14 +2025,13 @@ unp_externalize(struct mbuf *rights)
 		if (fp == NULL) {
 			panic("unp_externalize: MALLOC_ZONE");
 		}
-		fp->f_iocount = 0;
 		fp->f_fglob = rp[i];
 		if (fg_removeuipc_mark(rp[i])) {
 			/*
 			 * Take an iocount on the fp for completing the
 			 * removal from the global msg queue
 			 */
-			fp->f_iocount++;
+			os_ref_retain_locked(&fp->f_iocount);
 			fileproc_l[i] = fp;
 		} else {
 			fileproc_l[i] = NULL;

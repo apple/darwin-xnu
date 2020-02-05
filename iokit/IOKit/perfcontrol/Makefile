@@ -13,7 +13,7 @@ include $(MakeInc_def)
 MI_DIR = perfcontrol
 NOT_EXPORT_HEADERS =
 
-ALL_HEADERS = $(shell (cd $(SOURCE); echo *.h))
+ALL_HEADERS = $(notdir $(wildcard $(SOURCE)*.h))
 
 # Install these only in Kernel.framework's PrivateHeaders (not Headers).
 NOT_KF_MI_HEADERS  = $(NOT_EXPORT_HEADERS)			\

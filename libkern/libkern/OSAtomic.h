@@ -37,6 +37,7 @@
 #define _OS_OSATOMIC_H
 
 #include <libkern/OSBase.h>
+#include <string.h>
 
 #if defined(__cplusplus)
 extern "C" {
@@ -53,7 +54,7 @@ extern "C" {
  * -- var is used, but sizeof does not evaluate the
  *    argument, i.e. we're safe against "++" etc. in var --
  */
-#define __SAFE_CAST_PTR(type, var) (((type)(var))+(0/(sizeof(*var) == sizeof(*(type)0) ? 1 : 0)))
+#define __SAFE_CAST_PTR(type, var) (((type)(var))+(0/(sizeof(*var) == sizeof(*(type)NULL) ? 1 : 0)))
 #else
 #define __SAFE_CAST_PTR(type, var) ((type)(var))
 #endif

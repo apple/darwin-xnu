@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -102,7 +102,7 @@
 /* XXX following three prototypes should be in a header file somewhere */
 extern dev_t    chrtoblk(dev_t dev);
 extern boolean_t        iskmemdev(dev_t dev);
-extern int      bpfkqfilter(dev_t dev, struct knote *kn);
+extern int bpfkqfilter(dev_t dev, struct knote *kn);
 extern int ptsd_kqfilter(dev_t, struct knote *);
 extern int ptmx_kqfilter(dev_t, struct knote *);
 
@@ -120,47 +120,47 @@ char    devcls[] = "devcls";
 #define VOPFUNC int (*)(void *)
 
 int(**spec_vnodeop_p)(void *);
-struct vnodeopv_entry_desc spec_vnodeop_entries[] = {
-	{ &vnop_default_desc, (VOPFUNC)vn_default_error },
-	{ &vnop_lookup_desc, (VOPFUNC)spec_lookup },            /* lookup */
-	{ &vnop_create_desc, (VOPFUNC)err_create },             /* create */
-	{ &vnop_mknod_desc, (VOPFUNC)err_mknod },               /* mknod */
-	{ &vnop_open_desc, (VOPFUNC)spec_open },                        /* open */
-	{ &vnop_close_desc, (VOPFUNC)spec_close },              /* close */
-	{ &vnop_access_desc, (VOPFUNC)spec_access },            /* access */
-	{ &vnop_getattr_desc, (VOPFUNC)spec_getattr },          /* getattr */
-	{ &vnop_setattr_desc, (VOPFUNC)spec_setattr },          /* setattr */
-	{ &vnop_read_desc, (VOPFUNC)spec_read },                        /* read */
-	{ &vnop_write_desc, (VOPFUNC)spec_write },              /* write */
-	{ &vnop_ioctl_desc, (VOPFUNC)spec_ioctl },              /* ioctl */
-	{ &vnop_select_desc, (VOPFUNC)spec_select },            /* select */
-	{ &vnop_revoke_desc, (VOPFUNC)nop_revoke },             /* revoke */
-	{ &vnop_mmap_desc, (VOPFUNC)err_mmap },                 /* mmap */
-	{ &vnop_fsync_desc, (VOPFUNC)spec_fsync },              /* fsync */
-	{ &vnop_remove_desc, (VOPFUNC)err_remove },             /* remove */
-	{ &vnop_link_desc, (VOPFUNC)err_link },                 /* link */
-	{ &vnop_rename_desc, (VOPFUNC)err_rename },             /* rename */
-	{ &vnop_mkdir_desc, (VOPFUNC)err_mkdir },               /* mkdir */
-	{ &vnop_rmdir_desc, (VOPFUNC)err_rmdir },               /* rmdir */
-	{ &vnop_symlink_desc, (VOPFUNC)err_symlink },           /* symlink */
-	{ &vnop_readdir_desc, (VOPFUNC)err_readdir },           /* readdir */
-	{ &vnop_readlink_desc, (VOPFUNC)err_readlink },         /* readlink */
-	{ &vnop_inactive_desc, (VOPFUNC)nop_inactive },         /* inactive */
-	{ &vnop_reclaim_desc, (VOPFUNC)nop_reclaim },           /* reclaim */
-	{ &vnop_strategy_desc, (VOPFUNC)spec_strategy },                /* strategy */
-	{ &vnop_pathconf_desc, (VOPFUNC)spec_pathconf },                /* pathconf */
-	{ &vnop_advlock_desc, (VOPFUNC)err_advlock },           /* advlock */
-	{ &vnop_bwrite_desc, (VOPFUNC)spec_bwrite },            /* bwrite */
-	{ &vnop_pagein_desc, (VOPFUNC)err_pagein },             /* Pagein */
-	{ &vnop_pageout_desc, (VOPFUNC)err_pageout },           /* Pageout */
-	{ &vnop_copyfile_desc, (VOPFUNC)err_copyfile },         /* Copyfile */
-	{ &vnop_blktooff_desc, (VOPFUNC)spec_blktooff },                /* blktooff */
-	{ &vnop_offtoblk_desc, (VOPFUNC)spec_offtoblk },                /* offtoblk */
-	{ &vnop_blockmap_desc, (VOPFUNC)spec_blockmap },                /* blockmap */
-	{ (struct vnodeop_desc*)NULL, (int (*)(void *))NULL }
+const struct vnodeopv_entry_desc spec_vnodeop_entries[] = {
+	{ .opve_op = &vnop_default_desc, .opve_impl = (VOPFUNC)vn_default_error },
+	{ .opve_op = &vnop_lookup_desc, .opve_impl = (VOPFUNC)spec_lookup },            /* lookup */
+	{ .opve_op = &vnop_create_desc, .opve_impl = (VOPFUNC)err_create },             /* create */
+	{ .opve_op = &vnop_mknod_desc, .opve_impl = (VOPFUNC)err_mknod },               /* mknod */
+	{ .opve_op = &vnop_open_desc, .opve_impl = (VOPFUNC)spec_open },                        /* open */
+	{ .opve_op = &vnop_close_desc, .opve_impl = (VOPFUNC)spec_close },              /* close */
+	{ .opve_op = &vnop_access_desc, .opve_impl = (VOPFUNC)spec_access },            /* access */
+	{ .opve_op = &vnop_getattr_desc, .opve_impl = (VOPFUNC)spec_getattr },          /* getattr */
+	{ .opve_op = &vnop_setattr_desc, .opve_impl = (VOPFUNC)spec_setattr },          /* setattr */
+	{ .opve_op = &vnop_read_desc, .opve_impl = (VOPFUNC)spec_read },                        /* read */
+	{ .opve_op = &vnop_write_desc, .opve_impl = (VOPFUNC)spec_write },              /* write */
+	{ .opve_op = &vnop_ioctl_desc, .opve_impl = (VOPFUNC)spec_ioctl },              /* ioctl */
+	{ .opve_op = &vnop_select_desc, .opve_impl = (VOPFUNC)spec_select },            /* select */
+	{ .opve_op = &vnop_revoke_desc, .opve_impl = (VOPFUNC)nop_revoke },             /* revoke */
+	{ .opve_op = &vnop_mmap_desc, .opve_impl = (VOPFUNC)err_mmap },                 /* mmap */
+	{ .opve_op = &vnop_fsync_desc, .opve_impl = (VOPFUNC)spec_fsync },              /* fsync */
+	{ .opve_op = &vnop_remove_desc, .opve_impl = (VOPFUNC)err_remove },             /* remove */
+	{ .opve_op = &vnop_link_desc, .opve_impl = (VOPFUNC)err_link },                 /* link */
+	{ .opve_op = &vnop_rename_desc, .opve_impl = (VOPFUNC)err_rename },             /* rename */
+	{ .opve_op = &vnop_mkdir_desc, .opve_impl = (VOPFUNC)err_mkdir },               /* mkdir */
+	{ .opve_op = &vnop_rmdir_desc, .opve_impl = (VOPFUNC)err_rmdir },               /* rmdir */
+	{ .opve_op = &vnop_symlink_desc, .opve_impl = (VOPFUNC)err_symlink },           /* symlink */
+	{ .opve_op = &vnop_readdir_desc, .opve_impl = (VOPFUNC)err_readdir },           /* readdir */
+	{ .opve_op = &vnop_readlink_desc, .opve_impl = (VOPFUNC)err_readlink },         /* readlink */
+	{ .opve_op = &vnop_inactive_desc, .opve_impl = (VOPFUNC)nop_inactive },         /* inactive */
+	{ .opve_op = &vnop_reclaim_desc, .opve_impl = (VOPFUNC)nop_reclaim },           /* reclaim */
+	{ .opve_op = &vnop_strategy_desc, .opve_impl = (VOPFUNC)spec_strategy },                /* strategy */
+	{ .opve_op = &vnop_pathconf_desc, .opve_impl = (VOPFUNC)spec_pathconf },                /* pathconf */
+	{ .opve_op = &vnop_advlock_desc, .opve_impl = (VOPFUNC)err_advlock },           /* advlock */
+	{ .opve_op = &vnop_bwrite_desc, .opve_impl = (VOPFUNC)spec_bwrite },            /* bwrite */
+	{ .opve_op = &vnop_pagein_desc, .opve_impl = (VOPFUNC)err_pagein },             /* Pagein */
+	{ .opve_op = &vnop_pageout_desc, .opve_impl = (VOPFUNC)err_pageout },           /* Pageout */
+	{ .opve_op = &vnop_copyfile_desc, .opve_impl = (VOPFUNC)err_copyfile },         /* Copyfile */
+	{ .opve_op = &vnop_blktooff_desc, .opve_impl = (VOPFUNC)spec_blktooff },                /* blktooff */
+	{ .opve_op = &vnop_offtoblk_desc, .opve_impl = (VOPFUNC)spec_offtoblk },                /* offtoblk */
+	{ .opve_op = &vnop_blockmap_desc, .opve_impl = (VOPFUNC)spec_blockmap },                /* blockmap */
+	{ .opve_op = (struct vnodeop_desc*)NULL, .opve_impl = (int (*)(void *))NULL }
 };
-struct vnodeopv_desc spec_vnodeop_opv_desc =
-{ &spec_vnodeop_p, spec_vnodeop_entries };
+const struct vnodeopv_desc spec_vnodeop_opv_desc =
+{ .opv_desc_vector_p = &spec_vnodeop_p, .opv_desc_ops = spec_vnodeop_entries };
 
 
 static void set_blocksize(vnode_t, dev_t);
@@ -315,6 +315,7 @@ spec_open(struct vnop_open_args *ap)
 			return ENXIO;
 		}
 		if (cred != FSCRED && (ap->a_mode & FWRITE)) {
+#if 0
 			/*
 			 * When running in very secure mode, do not allow
 			 * opens for writing of any disk character devices.
@@ -322,6 +323,7 @@ spec_open(struct vnop_open_args *ap)
 			if (securelevel >= 2 && isdisk(dev, VCHR)) {
 				return EPERM;
 			}
+#endif
 
 			/* Never allow writing to /dev/mem or /dev/kmem */
 			if (iskmemdev(dev)) {
@@ -485,12 +487,48 @@ spec_read(struct vnop_read_args *ap)
 	{
 		struct _throttle_io_info_t *throttle_info = NULL;
 		int thread_throttle_level;
-		if (cdevsw[major(vp->v_rdev)].d_type == D_DISK && vp->v_un.vu_specinfo->si_throttleable) {
+		uint64_t blkno = 0;
+		uint32_t iolen = 0;
+		int ddisk = 0;
+		int ktrace_code = DKIO_READ;
+		devBlockSize = vp->v_specsize;
+		uintptr_t our_id;
+
+		if (cdevsw[major(vp->v_rdev)].d_type == D_DISK) {
+			ddisk = 1;
+		}
+
+		if (ddisk && vp->v_un.vu_specinfo->si_throttleable) {
 			throttle_info = &_throttle_io_info[vp->v_un.vu_specinfo->si_devbsdunit];
 			thread_throttle_level = throttle_info_update_internal(throttle_info, NULL, 0, vp->v_un.vu_specinfo->si_isssd, TRUE, NULL);
 		}
+
+		if (kdebug_enable && ddisk) {
+			if (devBlockSize == 0) {
+				devBlockSize = 512;  // default sector size
+			}
+
+			if (uio_offset(uio) && devBlockSize) {
+				blkno = ((uint64_t) uio_offset(uio) / ((uint64_t)devBlockSize));
+			}
+			iolen = (int) uio_resid(uio);
+			our_id = (uintptr_t)thread_tid(current_thread());
+			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON,
+			    (FSDBG_CODE(DBG_DKRW, ktrace_code)) | DBG_FUNC_NONE, our_id,
+			    vp->v_rdev, blkno, iolen, 0);
+		}
+
 		error = (*cdevsw[major(vp->v_rdev)].d_read)
 		    (vp->v_rdev, uio, ap->a_ioflag);
+
+
+		if (kdebug_enable && ddisk) {
+			uint32_t residual = (uint32_t)uio_resid(uio);
+			ktrace_code |= DKIO_DONE;
+			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON,
+			    (FSDBG_CODE(DBG_DKRW, ktrace_code)) | DBG_FUNC_NONE, our_id,
+			    (uintptr_t)VM_KERNEL_ADDRPERM(vp), residual, error, 0);
+		}
 
 		if (throttle_info) {
 			throttle_info_end_io_internal(throttle_info, thread_throttle_level);
@@ -589,15 +627,50 @@ spec_write(struct vnop_write_args *ap)
 	{
 		struct _throttle_io_info_t *throttle_info = NULL;
 		int thread_throttle_level;
-		if (cdevsw[major(vp->v_rdev)].d_type == D_DISK && vp->v_un.vu_specinfo->si_throttleable) {
+		dev = vp->v_rdev;
+		devBlockSize = vp->v_specsize;
+		uint32_t iolen = 0;
+		uint64_t blkno = 0;
+		int ddisk = 0;
+		int ktrace_code = 0;  // write is implied; read must be OR'd in.
+		uintptr_t our_id;
+
+		if (cdevsw[major(dev)].d_type == D_DISK) {
+			ddisk = 1;
+		}
+
+		if (ddisk && vp->v_un.vu_specinfo->si_throttleable) {
 			throttle_info = &_throttle_io_info[vp->v_un.vu_specinfo->si_devbsdunit];
 
 			thread_throttle_level = throttle_info_update_internal(throttle_info, NULL, 0, vp->v_un.vu_specinfo->si_isssd, TRUE, NULL);
 
 			microuptime(&throttle_info->throttle_last_write_timestamp);
 		}
+
+		if (kdebug_enable && ddisk) {
+			if (devBlockSize == 0) {
+				devBlockSize = 512; // default sector size
+			}
+			if ((uio_offset(uio) != 0) && devBlockSize) {
+				blkno = ((uint64_t)uio_offset(uio)) / ((uint64_t)devBlockSize);
+			}
+			iolen = (int)uio_resid(uio);
+			our_id = (uintptr_t)thread_tid(current_thread());
+			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON,
+			    (FSDBG_CODE(DBG_DKRW, ktrace_code)) | DBG_FUNC_NONE, our_id,
+			    vp->v_rdev, blkno, iolen, 0);
+		}
 		error = (*cdevsw[major(vp->v_rdev)].d_write)
 		    (vp->v_rdev, uio, ap->a_ioflag);
+
+		if (kdebug_enable && ddisk) {
+			//emit the I/O completion
+			uint32_t residual = (uint32_t)uio_resid(uio);
+			ktrace_code |= DKIO_DONE;
+			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_COMMON,
+			    (FSDBG_CODE(DBG_DKRW, ktrace_code)) | DBG_FUNC_NONE, our_id,
+			    (uintptr_t)VM_KERNEL_ADDRPERM(vp), residual, error, 0);
+		}
 
 		if (throttle_info) {
 			throttle_info_end_io_internal(throttle_info, thread_throttle_level);
@@ -746,10 +819,10 @@ spec_select(struct vnop_select_args *ap)
 	}
 }
 
-static int filt_specattach(struct knote *kn, struct kevent_internal_s *kev);
+static int filt_specattach(struct knote *kn, struct kevent_qos_s *kev);
 
 int
-spec_kqfilter(vnode_t vp, struct knote *kn, struct kevent_internal_s *kev)
+spec_kqfilter(vnode_t vp, struct knote *kn, struct kevent_qos_s *kev)
 {
 	dev_t dev;
 
@@ -765,7 +838,7 @@ spec_kqfilter(vnode_t vp, struct knote *kn, struct kevent_internal_s *kev)
 	 * other attaches.
 	 */
 	int32_t tmp_flags = kn->kn_flags;
-	int64_t tmp_data = kn->kn_data;
+	int64_t tmp_sdata = kn->kn_sdata;
 	int res;
 
 	res = bpfkqfilter(dev, kn);
@@ -773,7 +846,7 @@ spec_kqfilter(vnode_t vp, struct knote *kn, struct kevent_internal_s *kev)
 		return res;
 	}
 	kn->kn_flags = tmp_flags;
-	kn->kn_data = tmp_data;
+	kn->kn_sdata = tmp_sdata;
 #endif
 
 	if (major(dev) > nchrdev) {
@@ -1976,6 +2049,50 @@ done:
 }
 
 /*
+ *  returns TRUE if the throttle_lowpri_io called with the same sleep_amount would've slept
+ *  This function mimics the most of the throttle_lowpri_io checks but without actual sleeping
+ */
+int
+throttle_lowpri_io_will_be_throttled(int sleep_amount)
+{
+	if (sleep_amount == 0) {
+		return FALSE;
+	}
+
+	uthread_t ut = get_bsdthread_info(current_thread());
+	if (ut->uu_lowpri_window == 0) {
+		return FALSE;
+	}
+
+	struct _throttle_io_info_t *info = ut->uu_throttle_info;
+	if (info == NULL) {
+		return FALSE;
+	}
+
+	lck_mtx_lock(&info->throttle_lock);
+	assert(ut->uu_on_throttlelist < THROTTLE_LEVEL_THROTTLED);
+
+	if (sleep_amount == 1 && !ut->uu_throttle_bc) {
+		sleep_amount = 0;
+	}
+
+	int result = FALSE;
+
+	int throttle_type = throttle_io_will_be_throttled_internal(info, NULL, NULL);
+	if (throttle_type > THROTTLE_DISENGAGED) {
+		result = TRUE;
+		if ((throttle_type == THROTTLE_ENGAGED) && (sleep_amount == 0)) {
+			result = FALSE;
+		}
+	}
+
+	lck_mtx_unlock(&info->throttle_lock);
+
+	return result;
+}
+
+
+/*
  * KPI routine
  *
  * set a kernel thread's IO policy.  policy can be:
@@ -2379,7 +2496,7 @@ spec_strategy(struct vnop_strategy_args *ap)
 	 * For metadata writes, unconditionally mark them as IOSCHED_METADATA_TIER and passive
 	 */
 	if (bap->ba_flags & BA_META) {
-		if (mp && (mp->mnt_ioflags & MNT_IOFLAGS_IOSCHED_SUPPORTED)) {
+		if ((mp && (mp->mnt_ioflags & MNT_IOFLAGS_IOSCHED_SUPPORTED)) || (bap->ba_flags & BA_IO_SCHEDULED)) {
 			if (bp->b_flags & B_READ) {
 				if (io_tier > IOSCHED_METADATA_TIER) {
 					io_tier = IOSCHED_METADATA_TIER;
@@ -2748,8 +2865,8 @@ spec_offtoblk(struct vnop_offtoblk_args *ap)
 
 static void filt_specdetach(struct knote *kn);
 static int filt_specevent(struct knote *kn, long hint);
-static int filt_spectouch(struct knote *kn, struct kevent_internal_s *kev);
-static int filt_specprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
+static int filt_spectouch(struct knote *kn, struct kevent_qos_s *kev);
+static int filt_specprocess(struct knote *kn, struct kevent_qos_s *kev);
 static int filt_specpeek(struct knote *kn);
 
 SECURITY_READ_ONLY_EARLY(struct filterops) spec_filtops = {
@@ -2789,7 +2906,7 @@ spec_knote_select_and_link(struct knote *kn)
 	ctx = vfs_context_current();
 	vp = (vnode_t)kn->kn_fp->f_fglob->fg_data;
 
-	int error = vnode_getwithvid(vp, kn->kn_hookid);
+	int error = vnode_getwithvid(vp, vnode_vid(vp));
 	if (error != 0) {
 		knote_set_error(kn, ENOENT);
 		return 0;
@@ -2798,7 +2915,7 @@ spec_knote_select_and_link(struct knote *kn)
 	/*
 	 * This function may be called many times to link or re-link the
 	 * underlying vnode to the kqueue.  If we've already linked the two,
-	 * we will have a valid kn_hook_data which ties us to the underlying
+	 * we will have a valid kn_hook64 which ties us to the underlying
 	 * device's waitq via a the waitq's prepost table object. However,
 	 * devices can abort any select action by calling selthreadclear().
 	 * This is OK because the table object will be invalidated by the
@@ -2868,13 +2985,13 @@ spec_knote_select_and_link(struct knote *kn)
 		 * the table object's ID to us.  It will also set the
 		 * waitq_prepost_id field within the waitq structure.
 		 *
-		 * We can just overwrite kn_hook_data because it's simply a
+		 * We can just overwrite kn_hook64 because it's simply a
 		 * table ID used to grab a reference when needed.
 		 *
 		 * We have a reference on the vnode, so we know that the
 		 * device won't go away while we get this ID.
 		 */
-		kn->kn_hook_data = waitq_get_prepost_id(wq);
+		kn->kn_hook64 = waitq_get_prepost_id(wq);
 	} else if (selres == 0) {
 		/*
 		 * The device indicated that there's no data to read, but didn't call
@@ -2890,22 +3007,33 @@ spec_knote_select_and_link(struct knote *kn)
 	return selres;
 }
 
-static void
-filt_spec_common(struct knote *kn, int selres)
+static int
+filt_spec_common(struct knote *kn, struct kevent_qos_s *kev, int selres)
 {
+	int64_t data;
+	int ret;
+
 	if (kn->kn_vnode_use_ofst) {
 		if (kn->kn_fp->f_fglob->fg_offset >= (uint32_t)selres) {
-			kn->kn_data = 0;
+			data = 0;
 		} else {
-			kn->kn_data = ((uint32_t)selres) - kn->kn_fp->f_fglob->fg_offset;
+			data = ((uint32_t)selres) - kn->kn_fp->f_fglob->fg_offset;
 		}
 	} else {
-		kn->kn_data = selres;
+		data = selres;
 	}
+
+	ret = data >= knote_low_watermark(kn);
+
+	if (ret && kev) {
+		knote_fill_kevent(kn, kev, data);
+	}
+
+	return ret;
 }
 
 static int
-filt_specattach(struct knote *kn, __unused struct kevent_internal_s *kev)
+filt_specattach(struct knote *kn, __unused struct kevent_qos_s *kev)
 {
 	vnode_t vp;
 	dev_t dev;
@@ -2941,8 +3069,7 @@ filt_specattach(struct knote *kn, __unused struct kevent_internal_s *kev)
 	}
 
 	kn->kn_filtid = EVFILTID_SPEC;
-	kn->kn_hook_data = 0;
-	kn->kn_hookid = vnode_vid(vp);
+	kn->kn_hook64 = 0;
 
 	knote_markstayactive(kn);
 	return spec_knote_select_and_link(kn);
@@ -2957,7 +3084,7 @@ filt_specdetach(struct knote *kn)
 	 * This is potentially tricky: the device's selinfo waitq that was
 	 * tricked into being part of this knote's waitq set may not be a part
 	 * of any other set, and the device itself may have revoked the memory
-	 * in which the waitq was held. We use the knote's kn_hook_data field
+	 * in which the waitq was held. We use the knote's kn_hook64 field
 	 * to keep the ID of the waitq's prepost table object. This
 	 * object keeps a pointer back to the waitq, and gives us a safe way
 	 * to decouple the dereferencing of driver allocated memory: if the
@@ -2965,9 +3092,9 @@ filt_specdetach(struct knote *kn)
 	 * object will be invalidated. The waitq details are handled in the
 	 * waitq API invoked here.
 	 */
-	if (kn->kn_hook_data) {
-		waitq_unlink_by_prepost_id(kn->kn_hook_data, &(knote_get_kq(kn)->kq_wqs));
-		kn->kn_hook_data = 0;
+	if (kn->kn_hook64) {
+		waitq_unlink_by_prepost_id(kn->kn_hook64, &(knote_get_kq(kn)->kq_wqs));
+		kn->kn_hook64 = 0;
 	}
 }
 
@@ -2982,7 +3109,7 @@ filt_specevent(struct knote *kn, __unused long hint)
 }
 
 static int
-filt_spectouch(struct knote *kn, struct kevent_internal_s *kev)
+filt_spectouch(struct knote *kn, struct kevent_qos_s *kev)
 {
 	kn->kn_sdata = kev->data;
 	kn->kn_sfflags = kev->fflags;
@@ -2995,9 +3122,8 @@ filt_spectouch(struct knote *kn, struct kevent_internal_s *kev)
 }
 
 static int
-filt_specprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev)
+filt_specprocess(struct knote *kn, struct kevent_qos_s *kev)
 {
-#pragma unused(data)
 	vnode_t vp;
 	uthread_t uth;
 	vfs_context_t ctx;
@@ -3009,28 +3135,17 @@ filt_specprocess(struct knote *kn, struct filt_process_s *data, struct kevent_in
 	ctx = vfs_context_current();
 	vp = (vnode_t)kn->kn_fp->f_fglob->fg_data;
 
-	error = vnode_getwithvid(vp, kn->kn_hookid);
+	error = vnode_getwithvid(vp, vnode_vid(vp));
 	if (error != 0) {
 		kn->kn_flags |= (EV_EOF | EV_ONESHOT);
-		*kev = kn->kn_kevent;
+		knote_fill_kevent(kn, kev, 0);
 		return 1;
 	}
 
 	selres = spec_knote_select_and_link(kn);
-	filt_spec_common(kn, selres);
+	res = filt_spec_common(kn, kev, selres);
 
 	vnode_put(vp);
-
-	res = ((kn->kn_sfflags & NOTE_LOWAT) != 0) ?
-	    (kn->kn_data >= kn->kn_sdata) : kn->kn_data;
-
-	if (res) {
-		*kev = kn->kn_kevent;
-		if (kn->kn_flags & EV_CLEAR) {
-			kn->kn_fflags = 0;
-			kn->kn_data = 0;
-		}
-	}
 
 	return res;
 }
@@ -3041,7 +3156,5 @@ filt_specpeek(struct knote *kn)
 	int selres = 0;
 
 	selres = spec_knote_select_and_link(kn);
-	filt_spec_common(kn, selres);
-
-	return kn->kn_data != 0;
+	return filt_spec_common(kn, NULL, selres);
 }

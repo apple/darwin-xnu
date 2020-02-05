@@ -24,7 +24,8 @@ static void perf_setup(char **path, int *fd);
 
 T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.vfs.dmc"),
-	T_META_ASROOT(true)
+	T_META_ASROOT(true),
+	T_META_RUN_CONCURRENTLY(true)
 	);
 
 #pragma mark Entitled Tests
@@ -271,7 +272,8 @@ T_DECL(fsctl_set_nonroot,
 }
 
 T_DECL(fsctl_delays,
-    "Validate I/O delays when DMC is enabled")
+    "Validate I/O delays when DMC is enabled",
+    T_META_RUN_CONCURRENTLY(false))
 {
 	char *path;
 	int fd;

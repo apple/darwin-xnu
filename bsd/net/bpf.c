@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -156,9 +156,15 @@ typedef void (*pktcopyfunc_t)(const void *, void *, size_t);
 static unsigned int bpf_bufsize = BPF_BUFSIZE;
 SYSCTL_INT(_debug, OID_AUTO, bpf_bufsize, CTLFLAG_RW | CTLFLAG_LOCKED,
     &bpf_bufsize, 0, "");
+
+static int sysctl_bpf_maxbufsize SYSCTL_HANDLER_ARGS;
+extern const int copysize_limit_panic;
+#define BPF_MAXSIZE_CAP (copysize_limit_panic >> 1)
 __private_extern__ unsigned int bpf_maxbufsize = BPF_MAXBUFSIZE;
-SYSCTL_INT(_debug, OID_AUTO, bpf_maxbufsize, CTLFLAG_RW | CTLFLAG_LOCKED,
-    &bpf_maxbufsize, 0, "");
+SYSCTL_PROC(_debug, OID_AUTO, bpf_maxbufsize, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &bpf_maxbufsize, 0,
+    sysctl_bpf_maxbufsize, "I", "Default BPF max buffer size");
+
 static unsigned int bpf_maxdevices = 256;
 SYSCTL_UINT(_debug, OID_AUTO, bpf_maxdevices, CTLFLAG_RW | CTLFLAG_LOCKED,
     &bpf_maxdevices, 0, "");
@@ -248,20 +254,20 @@ select_fcn_t        bpfselect;
 /* Darwin's cdevsw struct differs slightly from BSDs */
 #define CDEV_MAJOR 23
 static struct cdevsw bpf_cdevsw = {
-	/* open */ bpfopen,
-	/* close */ bpfclose,
-	/* read */ bpfread,
-	/* write */ bpfwrite,
-	/* ioctl */ bpfioctl,
-	/* stop */ eno_stop,
-	/* reset */ eno_reset,
-	/* tty */ NULL,
-	/* select */ bpfselect,
-	/* mmap */ eno_mmap,
-	/* strategy */ eno_strat,
-	/* getc */ eno_getc,
-	/* putc */ eno_putc,
-	/* type */ 0
+	.d_open       = bpfopen,
+	.d_close      = bpfclose,
+	.d_read       = bpfread,
+	.d_write      = bpfwrite,
+	.d_ioctl      = bpfioctl,
+	.d_stop       = eno_stop,
+	.d_reset      = eno_reset,
+	.d_ttys       = NULL,
+	.d_select     = bpfselect,
+	.d_mmap       = eno_mmap,
+	.d_strategy   = eno_strat,
+	.d_reserved_1 = eno_getc,
+	.d_reserved_2 = eno_putc,
+	.d_type       = 0
 };
 
 #define SOCKADDR_HDR_LEN           offsetof(struct sockaddr, sa_data)
@@ -1221,8 +1227,7 @@ bpfread(dev_t dev, struct uio *uio, int ioflag)
 				}
 				if (found == 1) {
 					ehp->bh_pid = soprocinfo.spi_pid;
-					proc_name(ehp->bh_pid, ehp->bh_comm,
-					    MAXCOMLEN);
+					strlcpy(&ehp->bh_comm[0], &soprocinfo.spi_proc_name[0], sizeof(ehp->bh_comm));
 				}
 				ehp->bh_flowid = 0;
 			}
@@ -2526,9 +2531,8 @@ bpfselect(dev_t dev, int which, void * wql, struct proc *p)
 int bpfkqfilter(dev_t dev, struct knote *kn);
 static void filt_bpfdetach(struct knote *);
 static int filt_bpfread(struct knote *, long);
-static int filt_bpftouch(struct knote *kn, struct kevent_internal_s *kev);
-static int filt_bpfprocess(struct knote *kn, struct filt_process_s *data,
-    struct kevent_internal_s *kev);
+static int filt_bpftouch(struct knote *kn, struct kevent_qos_s *kev);
+static int filt_bpfprocess(struct knote *kn, struct kevent_qos_s *kev);
 
 SECURITY_READ_ONLY_EARLY(struct filterops) bpfread_filtops = {
 	.f_isfd = 1,
@@ -2539,9 +2543,10 @@ SECURITY_READ_ONLY_EARLY(struct filterops) bpfread_filtops = {
 };
 
 static int
-filt_bpfread_common(struct knote *kn, struct bpf_d *d)
+filt_bpfread_common(struct knote *kn, struct kevent_qos_s *kev, struct bpf_d *d)
 {
 	int ready = 0;
+	int64_t data = 0;
 
 	if (d->bd_immediate) {
 		/*
@@ -2558,17 +2563,13 @@ filt_bpfread_common(struct knote *kn, struct bpf_d *d)
 		 * If there's no data in either buffer, we're not
 		 * ready to read.
 		 */
-		kn->kn_data = (d->bd_hlen == 0 || d->bd_hbuf_read != 0 ?
+		data = (d->bd_hlen == 0 || d->bd_hbuf_read != 0 ?
 		    d->bd_slen : d->bd_hlen);
-		int64_t lowwat = 1;
-		if (kn->kn_sfflags & NOTE_LOWAT) {
-			if (kn->kn_sdata > d->bd_bufsize) {
-				lowwat = d->bd_bufsize;
-			} else if (kn->kn_sdata > lowwat) {
-				lowwat = kn->kn_sdata;
-			}
+		int64_t lowwat = knote_low_watermark(kn);
+		if (lowwat > d->bd_bufsize) {
+			lowwat = d->bd_bufsize;
 		}
-		ready = (kn->kn_data >= lowwat);
+		ready = (data >= lowwat);
 	} else {
 		/*
 		 * If there's data in the hold buffer, it's the
@@ -2585,12 +2586,14 @@ filt_bpfread_common(struct knote *kn, struct bpf_d *d)
 		 * no data in the hold buffer and the timer hasn't
 		 * expired, we're not ready to read.
 		 */
-		kn->kn_data = ((d->bd_hlen == 0 || d->bd_hbuf_read != 0) &&
+		data = ((d->bd_hlen == 0 || d->bd_hbuf_read != 0) &&
 		    d->bd_state == BPF_TIMED_OUT ? d->bd_slen : d->bd_hlen);
-		ready = (kn->kn_data > 0);
+		ready = (data > 0);
 	}
 	if (!ready) {
 		bpf_start_timer(d);
+	} else if (kev) {
+		knote_fill_kevent(kn, kev, data);
 	}
 
 	return ready;
@@ -2605,10 +2608,8 @@ bpfkqfilter(dev_t dev, struct knote *kn)
 	/*
 	 * Is this device a bpf?
 	 */
-	if (major(dev) != CDEV_MAJOR ||
-	    kn->kn_filter != EVFILT_READ) {
-		kn->kn_flags = EV_ERROR;
-		kn->kn_data = EINVAL;
+	if (major(dev) != CDEV_MAJOR || kn->kn_filter != EVFILT_READ) {
+		knote_set_error(kn, EINVAL);
 		return 0;
 	}
 
@@ -2620,8 +2621,7 @@ bpfkqfilter(dev_t dev, struct knote *kn)
 	    (d->bd_flags & BPF_CLOSING) != 0 ||
 	    d->bd_bif == NULL) {
 		lck_mtx_unlock(bpf_mlock);
-		kn->kn_flags = EV_ERROR;
-		kn->kn_data = ENXIO;
+		knote_set_error(kn, ENXIO);
 		return 0;
 	}
 
@@ -2631,7 +2631,7 @@ bpfkqfilter(dev_t dev, struct knote *kn)
 	d->bd_flags |= BPF_KNOTE;
 
 	/* capture the current state */
-	res = filt_bpfread_common(kn, d);
+	res = filt_bpfread_common(kn, NULL, d);
 
 	lck_mtx_unlock(bpf_mlock);
 
@@ -2657,11 +2657,11 @@ filt_bpfread(struct knote *kn, long hint)
 #pragma unused(hint)
 	struct bpf_d *d = (struct bpf_d *)kn->kn_hook;
 
-	return filt_bpfread_common(kn, d);
+	return filt_bpfread_common(kn, NULL, d);
 }
 
 static int
-filt_bpftouch(struct knote *kn, struct kevent_internal_s *kev)
+filt_bpftouch(struct knote *kn, struct kevent_qos_s *kev)
 {
 	struct bpf_d *d = (struct bpf_d *)kn->kn_hook;
 	int res;
@@ -2673,7 +2673,7 @@ filt_bpftouch(struct knote *kn, struct kevent_internal_s *kev)
 	kn->kn_sfflags = kev->fflags;
 
 	/* output data will be re-generated here */
-	res = filt_bpfread_common(kn, d);
+	res = filt_bpfread_common(kn, NULL, d);
 
 	lck_mtx_unlock(bpf_mlock);
 
@@ -2681,18 +2681,13 @@ filt_bpftouch(struct knote *kn, struct kevent_internal_s *kev)
 }
 
 static int
-filt_bpfprocess(struct knote *kn, struct filt_process_s *data,
-    struct kevent_internal_s *kev)
+filt_bpfprocess(struct knote *kn, struct kevent_qos_s *kev)
 {
-#pragma unused(data)
 	struct bpf_d *d = (struct bpf_d *)kn->kn_hook;
 	int res;
 
 	lck_mtx_lock(bpf_mlock);
-	res = filt_bpfread_common(kn, d);
-	if (res) {
-		*kev = kn->kn_kevent;
-	}
+	res = filt_bpfread_common(kn, kev, d);
 	lck_mtx_unlock(bpf_mlock);
 
 	return res;
@@ -3233,7 +3228,7 @@ get_pkt_trunc_len(u_char *p, u_int len)
 	 * pre is the offset to the L3 header after the bpfp_header, or length
 	 * of L2 header after bpfp_header, if present.
 	 */
-	uint32_t pre = pktap->pth_frame_pre_length -
+	int32_t pre = pktap->pth_frame_pre_length -
 	    (pkt->bpfp_header_length - pktap->pth_length);
 
 	/* Length of the input packet starting from  L3 header */
@@ -3242,7 +3237,7 @@ get_pkt_trunc_len(u_char *p, u_int len)
 	    pktap->pth_protocol_family == AF_INET6) {
 		/* Contains L2 header */
 		if (pre > 0) {
-			if (pre < sizeof(struct ether_header)) {
+			if (pre < (int32_t)sizeof(struct ether_header)) {
 				goto too_short;
 			}
 
@@ -3720,7 +3715,7 @@ bpf_init(__unused void *unused)
 }
 
 #ifndef __APPLE__
-SYSINIT(bpfdev, SI_SUB_DRIVERS, SI_ORDER_MIDDLE + CDEV_MAJOR, bpf_drvinit, NULL)
+SYSINIT(bpfdev, SI_SUB_DRIVERS, SI_ORDER_MIDDLE + CDEV_MAJOR, bpf_drvinit, NULL);
 #endif
 
 #if CONFIG_MACF_NET
@@ -3736,3 +3731,24 @@ mac_bpfdesc_label_set(struct bpf_d *d, struct label *label)
 	d->bd_label = label;
 }
 #endif
+
+static int
+sysctl_bpf_maxbufsize SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int i, err;
+
+	i = bpf_maxbufsize;
+
+	err = sysctl_handle_int(oidp, &i, 0, req);
+	if (err != 0 || req->newptr == USER_ADDR_NULL) {
+		return err;
+	}
+
+	if (i < 0 || i > BPF_MAXSIZE_CAP) {
+		i = BPF_MAXSIZE_CAP;
+	}
+
+	bpf_maxbufsize = i;
+	return err;
+}

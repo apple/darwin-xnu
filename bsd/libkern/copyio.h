@@ -32,13 +32,13 @@
 
 __BEGIN_DECLS
 
-int     copyin(const user_addr_t uaddr, void *kaddr, size_t len);
+int     copyin(const user_addr_t uaddr, void *kaddr, size_t len) OS_WARN_RESULT;
 int     copyout(const void *kaddr, user_addr_t udaddr, size_t len);
 
 #if defined (_FORTIFY_SOURCE) && _FORTIFY_SOURCE == 0
 /* FORTIFY_SOURCE disabled */
 #else
-__attribute__((always_inline)) static inline int
+OS_ALWAYS_INLINE OS_WARN_RESULT static inline int
 __copyin_chk(const user_addr_t uaddr, void *kaddr, size_t len, size_t chk_size)
 {
 	if (chk_size < len) {
@@ -47,7 +47,7 @@ __copyin_chk(const user_addr_t uaddr, void *kaddr, size_t len, size_t chk_size)
 	return copyin(uaddr, kaddr, len);
 }
 
-__attribute__((always_inline)) static inline int
+OS_ALWAYS_INLINE static inline int
 __copyout_chk(const void *kaddr, user_addr_t uaddr, size_t len, size_t chk_size)
 {
 	if (chk_size < len) {

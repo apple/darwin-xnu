@@ -26,8 +26,13 @@
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
 #include <sys/kauth.h>
+#include <sys/bitstring.h>
 
 #include <security/audit/audit.h>
+
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
 
 #if CONFIG_DTRACE
 extern int32_t dtrace_systrace_syscall(struct proc *, void *, int *);
@@ -88,8 +93,8 @@ unix_syscall(
 {
 	struct sysent  *callp;
 	int             error;
-	unsigned short  code;
-	pid_t		pid;
+	unsigned short  code, syscode;
+	pid_t			pid;
 
 #if defined(__arm__)
 	assert(is_saved_state32(state));
@@ -101,16 +106,15 @@ unix_syscall(
 
 #define unix_syscall_kprintf(x...)	/* kprintf("unix_syscall: " x) */
 
-#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST)
 	if (kdebug_enable && !code_is_kdebug_trace(code)) {
 		arm_trace_unix_syscall(code, state);
 	}
-#endif
 
 	if ((uthread->uu_flag & UT_VFORK))
 		proc = current_proc();
 
-	callp = (code >= nsysent) ? &sysent[SYS_invalid] : &sysent[code];
+    syscode = (code < nsysent) ? code : SYS_invalid;
+	callp   = &sysent[syscode];
 
 	/*
 	 * sy_narg is inaccurate on ARM if a 64 bit parameter is specified. Since user_addr_t
@@ -157,9 +161,21 @@ unix_syscall(
 	unix_syscall_kprintf("code %d (pid %d - %s, tid %lld)\n", code,
 			pid, proc->p_comm, thread_tid(current_thread()));
 
+#if CONFIG_MACF
+	if (__improbable(proc->syscall_filter_mask != NULL && !bitstr_test(proc->syscall_filter_mask, syscode))) {
+		error = mac_proc_check_syscall_unix(proc, syscode);
+		if (error)
+			goto skip_syscall;
+	}
+#endif /* CONFIG_MACF */
+
 	AUDIT_SYSCALL_ENTER(code, proc, uthread);
 	error = (*(callp->sy_call)) (proc, &uthread->uu_arg[0], &(uthread->uu_rval[0]));
 	AUDIT_SYSCALL_EXIT(code, proc, uthread, error);
+
+#if CONFIG_MACF
+skip_syscall:
+#endif /* CONFIG_MACF */
 
 	unix_syscall_kprintf("code %d, error %d, results %x, %x (pid %d - %s, tid %lld)\n", code, error, 
 			uthread->uu_rval[0], uthread->uu_rval[1], 
@@ -194,13 +210,10 @@ unix_syscall(
 		 */
 		throttle_lowpri_io(1);
 	}
-#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST)
 	if (kdebug_enable && !code_is_kdebug_trace(code)) {
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-			BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-			error, uthread->uu_rval[0], uthread->uu_rval[1], pid, 0);
+		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+			error, uthread->uu_rval[0], uthread->uu_rval[1], pid);
 	}
-#endif
 
 #if PROC_REF_DEBUG
 	if (__improbable(uthread_get_proc_refcount(uthread) != 0)) {
@@ -264,13 +277,10 @@ unix_syscall_return(int error)
 		 */
 		throttle_lowpri_io(1);
 	}
-#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST)
 	if (kdebug_enable && !code_is_kdebug_trace(code)) {
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-			BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-			error, uthread->uu_rval[0], uthread->uu_rval[1], proc->p_pid, 0);
+		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+		    error, uthread->uu_rval[0], uthread->uu_rval[1], proc->p_pid);
 	}
-#endif
 
 	thread_exception_return();
 	/* NOTREACHED */
@@ -321,15 +331,14 @@ arm_prepare_u32_syscall_return(struct sysent *callp, arm_saved_state_t *regs, ut
 static void
 arm_trace_u32_unix_syscall(int code, arm_saved_state32_t *regs) 
 {
-	boolean_t indirect = (regs->save_r12 == 0);
-	if (indirect)
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-			BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-			regs->save_r1, regs->save_r2, regs->save_r3, regs->save_r4, 0);
-	else
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-			BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-			regs->save_r0, regs->save_r1, regs->save_r2, regs->save_r3, 0);
+	bool indirect = (regs->save_r12 == 0);
+	if (indirect) {
+		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+		    regs->save_r1, regs->save_r2, regs->save_r3, regs->save_r4);
+	} else {
+		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+		    regs->save_r0, regs->save_r1, regs->save_r2, regs->save_r3);
+	}
 }
 
 static void
@@ -597,7 +606,7 @@ arm_prepare_u64_syscall_return(struct sysent *callp, arm_saved_state_t *regs, ut
 	arm_saved_state64_t *ss64 = saved_state64(regs);
 
 	if (error == ERESTART) {
-		ss64->pc -= 4;
+		add_saved_state_pc(regs, -4);
 	} else if (error != EJUSTRETURN) {
 		if (error) {
 			ss64->x[0] = error;
@@ -642,15 +651,14 @@ arm_prepare_u64_syscall_return(struct sysent *callp, arm_saved_state_t *regs, ut
 static void
 arm_trace_u64_unix_syscall(int code, arm_saved_state64_t *regs) 
 {
-	boolean_t indirect = (regs->x[ARM64_SYSCALL_CODE_REG_NUM] == 0);
-	if (indirect)
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-			BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-			regs->x[1], regs->x[2], regs->x[3], regs->x[4], 0);
-	else
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, 
-			BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-			regs->x[0], regs->x[1], regs->x[2], regs->x[3], 0);
+	bool indirect = (regs->x[ARM64_SYSCALL_CODE_REG_NUM] == 0);
+	if (indirect) {
+		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+		    regs->x[1], regs->x[2], regs->x[3], regs->x[4]);
+	} else {
+		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+		    regs->x[0], regs->x[1], regs->x[2], regs->x[3]);
+	}
 }
 
 static void

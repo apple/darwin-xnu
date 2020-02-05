@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -95,7 +95,7 @@ class IOPMprot : public OSObject
 {
 	friend class IOService;
 
-	OSDeclareDefaultStructors(IOPMprot)
+	OSDeclareDefaultStructors(IOPMprot);
 
 public:
 	const char *            ourName;

@@ -218,7 +218,7 @@ IOInterruptEventSource::interruptEventSource(OSObject *inOwner,
 
 	if (me && !me->init(inOwner, inAction, inProvider, inIntIndex)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -456,6 +456,9 @@ IOInterruptEventSource::normalInterruptOccurred
 	}
 
 	if (reserved->statistics) {
+		if (reserved->statistics->enablePrimaryTimestamp) {
+			reserved->statistics->primaryTimestamp = mach_absolute_time();
+		}
 		if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelCountIndex)) {
 			IA_ADD_VALUE(&reserved->statistics->interruptStatistics[kInterruptAccountingFirstLevelCountIndex], 1);
 		}
@@ -484,6 +487,9 @@ IOInterruptEventSource::disableInterruptOccurred
 	}
 
 	if (reserved->statistics) {
+		if (reserved->statistics->enablePrimaryTimestamp) {
+			reserved->statistics->primaryTimestamp = mach_absolute_time();
+		}
 		if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelCountIndex)) {
 			IA_ADD_VALUE(&reserved->statistics->interruptStatistics[kInterruptAccountingFirstLevelCountIndex], 1);
 		}
@@ -498,12 +504,12 @@ IOInterruptEventSource::disableInterruptOccurred
 
 void
 IOInterruptEventSource::interruptOccurred
-(void *refcon, IOService *prov, int source)
+(void *_refcon, IOService *prov, int source)
 {
 	if (autoDisable && prov) {
-		disableInterruptOccurred(refcon, prov, source);
+		disableInterruptOccurred(_refcon, prov, source);
 	} else {
-		normalInterruptOccurred(refcon, prov, source);
+		normalInterruptOccurred(_refcon, prov, source);
 	}
 }
 
@@ -512,4 +518,21 @@ IOInterruptEventSource::warmCPU
 (uint64_t abstime)
 {
 	return ml_interrupt_prewarm(abstime);
+}
+
+void
+IOInterruptEventSource::enablePrimaryInterruptTimestamp(bool enable)
+{
+	if (reserved->statistics) {
+		reserved->statistics->enablePrimaryTimestamp = enable;
+	}
+}
+
+uint64_t
+IOInterruptEventSource::getPimaryInterruptTimestamp()
+{
+	if (reserved->statistics && reserved->statistics->enablePrimaryTimestamp) {
+		return reserved->statistics->primaryTimestamp;
+	}
+	return -1ULL;
 }

@@ -256,7 +256,7 @@ mach_port_space_info(
 		iin->iin_type = IE_BITS_TYPE(bits);
 		if ((entry->ie_bits & MACH_PORT_TYPE_PORT_RIGHTS) != MACH_PORT_TYPE_NONE &&
 		    entry->ie_request != IE_REQ_NONE) {
-			__IGNORE_WCASTALIGN(ipc_port_t port = (ipc_port_t) entry->ie_object);
+			ipc_port_t port = ip_object_to_port(entry->ie_object);
 
 			assert(IP_VALID(port));
 			ip_lock(port);
@@ -488,7 +488,7 @@ mach_port_kobject(
 		return KERN_INVALID_RIGHT;
 	}
 
-	__IGNORE_WCASTALIGN(port = (ipc_port_t) entry->ie_object);
+	port = ip_object_to_port(entry->ie_object);
 	assert(port != IP_NULL);
 
 	ip_lock(port);
@@ -501,18 +501,18 @@ mach_port_kobject(
 
 	*typep = (unsigned int) ip_kotype(port);
 	kaddr = (mach_vm_address_t)port->ip_kobject;
-	ip_unlock(port);
-
-#if (DEVELOPMENT || DEBUG)
-	if (0 != kaddr && is_ipc_kobject(*typep)) {
-		*addrp = VM_KERNEL_UNSLIDE_OR_PERM(kaddr);
-	} else
-#endif
 	*addrp = 0;
+#if (DEVELOPMENT || DEBUG)
+	if (kaddr && ip_is_kobject(port)) {
+		*addrp = VM_KERNEL_UNSLIDE_OR_PERM(kaddr);
+	}
+#endif
+	ip_unlock(port);
 
 	return KERN_SUCCESS;
 }
 #endif /* MACH_IPC_DEBUG */
+
 /*
  *	Routine:	mach_port_kernel_object [Legacy kernel call]
  *	Purpose:

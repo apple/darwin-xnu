@@ -73,6 +73,8 @@ protected:
 
 public:
 	virtual bool           start(IOService *provider) APPLE_KEXT_OVERRIDE;
+	virtual void           detach(IOService *provider) APPLE_KEXT_OVERRIDE;
+
 	virtual OSObject       *getProperty(const OSSymbol *aKey) const APPLE_KEXT_OVERRIDE;
 	virtual bool           setProperty(const OSSymbol *aKey, OSObject *anObject) APPLE_KEXT_OVERRIDE;
 	virtual bool           serializeProperties(OSSerialize *serialize) const APPLE_KEXT_OVERRIDE;

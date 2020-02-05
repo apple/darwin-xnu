@@ -107,7 +107,6 @@ int get_task_userstop(task_t);
 #define CLR(t, f)       (t) &= ~(f)
 #define ISSET(t, f)     ((t) & (f))
 
-extern thread_t port_name_to_thread(mach_port_name_t port_name);
 extern thread_t get_firstthread(task_t);
 
 
@@ -451,7 +450,8 @@ resume:
 			error = EINVAL;
 			goto out;
 		}
-		th_act = port_name_to_thread(CAST_MACH_PORT_TO_NAME(uap->addr));
+		th_act = port_name_to_thread(CAST_MACH_PORT_TO_NAME(uap->addr),
+		    PORT_TO_THREAD_NONE);
 		if (th_act == THREAD_NULL) {
 			error = ESRCH;
 			goto out;

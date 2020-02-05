@@ -89,7 +89,13 @@
 #define NFS_V2MAXDATA   8192
 #define NFS_MAXDGRAMDATA 16384
 #define NFS_PREFDGRAMDATA 8192
-#define NFS_MAXDATA     (64*1024) // XXX not ready for >64K
+
+#ifdef XNU_TARGET_OS_IOS
+#define NFS_MAXDATA     (32 * PAGE_SIZE) /* Same as NFS_MAXBSIZE from nfsnode.h */
+#else /*  TARGET_OS_IOS */
+#define NFS_MAXDATA     (64*1024)
+#endif /*  TARGET_OS_IOS */
+
 #define NFSRV_MAXDATA   (64*1024) // XXX not ready for >64K
 #define NFS_MAXPATHLEN  1024
 #define NFS_MAXNAMLEN   255
@@ -348,9 +354,9 @@ typedef enum { NFNON=0, NFREG=1, NFDIR=2, NFBLK=3, NFCHR=4, NFLNK=5,
  * NFS attribute management stuff
  */
 #define NFS_ATTR_BITMAP_LEN     2
-#define NFS_BITMAP_SET(B, I)    (((uint32_t *)(B))[(I)/32] |= 1<<((I)%32))
-#define NFS_BITMAP_CLR(B, I)    (((uint32_t *)(B))[(I)/32] &= ~(1<<((I)%32)))
-#define NFS_BITMAP_ISSET(B, I)  (((uint32_t *)(B))[(I)/32] & (1<<((I)%32)))
+#define NFS_BITMAP_SET(B, I)    (((uint32_t *)(B))[(I)/32] |= 1U<<((I)%32))
+#define NFS_BITMAP_CLR(B, I)    (((uint32_t *)(B))[(I)/32] &= ~(1U<<((I)%32)))
+#define NFS_BITMAP_ISSET(B, I)  (((uint32_t *)(B))[(I)/32] & (1U<<((I)%32)))
 #define NFS_BITMAP_ZERO(B, L) \
 	do { \
 	        int __i; \

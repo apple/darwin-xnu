@@ -6,26 +6,36 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-LCLDIR = /usr/local/include
-
 KERNELFILES = \
 	base.h \
 	object.h \
 	log.h \
 	trace.h \
-	overflow.h
+	overflow.h \
+	smart_ptr.h \
+	cpp_util.h
 
 PRIVATE_KERNELFILES = \
 	hash.h \
 	object_private.h \
+	ptrtools.h \
 	reason_private.h \
-	refcnt.h
+	refcnt.h \
+	refcnt_internal.h
+
+DATAFILES = \
+	overflow.h
+
+DRIVERKIT_DATAFILES = \
+	base.h \
+	overflow.h
 
 PRIVATE_DATAFILES = \
 	reason_private.h
 
-INSTALL_MI_LIST	= \
-	overflow.h
+INSTALL_MI_LIST = ${DATAFILES}
+
+INSTALL_DRIVERKIT_MI_LIST = ${DRIVERKIT_DATAFILES}
 
 INSTALL_MI_DIR = os
 

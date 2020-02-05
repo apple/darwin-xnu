@@ -2,7 +2,7 @@
 #BEGIN	Machine dependent Makefile fragment for x86_64
 ######################################################################
 
-CWARNFLAGS = $(CWARNFLAGS_STD) -Wshorten-64-to-32
+CWARNFLAGS = $(CWARNFLAGS_STD) -Wshorten-64-to-32 -Wno-atomic-implicit-seq-cst
 
 # Files that must go in the __HIB segment:
 UNCONFIGURED_HIB_FILES=					\

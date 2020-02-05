@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -312,6 +312,8 @@
 
 #define SIOCSIFDISABLEOUTPUT    _IOWR('i', 187, struct ifreq)
 
+#define SIOCSIFSUBFAMILY        _IOWR('i', 188, struct ifreq)
+
 #define SIOCGIFAGENTLIST        _IOWR('i', 190, struct netagentlist_req) /* Get netagent dump */
 
 #ifdef BSD_KERNEL_PRIVATE
@@ -334,13 +336,28 @@
 #endif /* BSD_KERNEL_PRIVATE */
 #endif /* PRIVATE */
 
+#define SIOCSIF6LOWPAN  _IOW('i', 196, struct ifreq)    /* set 6LOWPAN config */
+#define SIOCGIF6LOWPAN  _IOWR('i', 197, struct ifreq)   /* get 6LOWPAN config */
+
 #ifdef PRIVATE
+#define SIOCGIFTCPKAOMAX        _IOWR('i', 198, struct ifreq)   /* Max TCP keep alive offload slots */
 #define SIOCGIFLOWPOWER _IOWR('i', 199, struct ifreq)   /* Low Power Mode */
 #define SIOCSIFLOWPOWER _IOWR('i', 200, struct ifreq)   /* Low Power Mode */
 
 #if INET6
 #define SIOCGIFCLAT46ADDR       _IOWR('i', 201, struct if_clat46req)
 #endif /* INET6 */
+
+#define SIOCGIFMPKLOG _IOWR('i', 202, struct ifreq)     /* Multi-layer Packet Logging */
+#define SIOCSIFMPKLOG _IOWR('i', 203, struct ifreq)     /* Multi-layer Packet Logging */
+
+#define SIOCGIFCONSTRAINED _IOWR('i', 204, struct ifreq) /* get interface constrained flag */
+#define SIOCSIFCONSTRAINED _IOWR('i', 205, struct ifreq) /* mark interface constrained */
+
+#define SIOCGIFXFLAGS           _IOWR('i', 206, struct ifreq)   /* get extended ifnet flags */
+
+#define SIOCGIFNOACKPRIO _IOWR('i', 207, struct ifreq) /* get interface no ack prioritization flag */
+#define SIOCSIFNOACKPRIO _IOWR('i', 208, struct ifreq) /* mark interface no ack prioritization flagd */
 #endif /* PRIVATE */
 
 #endif /* !_SYS_SOCKIO_H_ */

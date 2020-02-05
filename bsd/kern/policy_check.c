@@ -121,7 +121,7 @@ common_hook(void)
 	return rv;
 }
 
-#if (MAC_POLICY_OPS_VERSION != 55)
+#if (MAC_POLICY_OPS_VERSION != 58)
 # error "struct mac_policy_ops doesn't match definition in mac_policy.h"
 #endif
 /*
@@ -271,8 +271,8 @@ const static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(vnode_check_rename)
 	CHECK_SET_HOOK(kext_check_query)
 	CHECK_SET_HOOK(proc_notify_exec_complete)
-	.mpo_reserved5 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved6 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved4 = (mpo_reserved_hook_t *)common_hook,
+	CHECK_SET_HOOK(proc_check_syscall_unix)
 	CHECK_SET_HOOK(proc_check_expose_task)
 	CHECK_SET_HOOK(proc_check_set_host_special_port)
 	CHECK_SET_HOOK(proc_check_set_host_exception_port)
@@ -284,9 +284,9 @@ const static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(exc_action_label_update)
 
 	CHECK_SET_HOOK(vnode_check_trigger_resolve)
+	CHECK_SET_HOOK(mount_check_mount_late)
 	.mpo_reserved1 = (mpo_reserved_hook_t *)common_hook,
 	.mpo_reserved2 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved3 = (mpo_reserved_hook_t *)common_hook,
 	CHECK_SET_HOOK(skywalk_flow_check_connect)
 	CHECK_SET_HOOK(skywalk_flow_check_listen)
 
@@ -322,8 +322,9 @@ const static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(proc_check_setlcid)
 	CHECK_SET_HOOK(proc_check_signal)
 	CHECK_SET_HOOK(proc_check_wait)
-	CHECK_SET_HOOK(proc_label_destroy)
-	CHECK_SET_HOOK(proc_label_init)
+
+	.mpo_reserved5 = (mpo_reserved_hook_t *)common_hook,
+	.mpo_reserved6 = (mpo_reserved_hook_t *)common_hook,
 
 	CHECK_SET_HOOK(socket_check_accept)
 	CHECK_SET_HOOK(socket_check_accepted)
@@ -472,6 +473,8 @@ const static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(thread_userret)
 
 	CHECK_SET_HOOK(iokit_check_set_properties)
+
+	.mpo_reserved3 = (mpo_reserved_hook_t *)common_hook,
 
 	CHECK_SET_HOOK(vnode_check_searchfs)
 

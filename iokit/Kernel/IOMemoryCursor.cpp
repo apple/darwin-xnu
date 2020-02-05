@@ -52,7 +52,7 @@ IOMemoryCursor::withSpecification(SegmentFunction  inSegFunc,
 	    inMaxTransferSize,
 	    inAlignment)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -215,7 +215,7 @@ IONaturalMemoryCursor::withSpecification(IOPhysicalLength inMaxSegmentSize,
 	    inMaxTransferSize,
 	    inAlignment)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -266,7 +266,7 @@ IOBigMemoryCursor::withSpecification(IOPhysicalLength inMaxSegmentSize,
 	    inMaxTransferSize,
 	    inAlignment)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -317,7 +317,7 @@ IOLittleMemoryCursor::withSpecification(IOPhysicalLength inMaxSegmentSize,
 	    inMaxTransferSize,
 	    inAlignment)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;

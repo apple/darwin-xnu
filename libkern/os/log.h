@@ -53,6 +53,16 @@ extern bool startup_serial_logging_active;
 extern uint64_t startup_serial_num_procs;
 #endif /* XNU_KERNEL_PRIVATE */
 
+#ifdef KERNEL
+#define OS_LOG_BUFFER_MAX_SIZE 256
+#else
+#define OS_LOG_BUFFER_MAX_SIZE 1024
+#endif
+
+// The OS_LOG_BUFFER_MAX_SIZE limit includes the metadata that
+// must be included in the os_log firehose buffer
+#define OS_LOG_DATA_MAX_SIZE (OS_LOG_BUFFER_MAX_SIZE - 16)
+
 OS_ALWAYS_INLINE static inline void _os_log_verify_format_str(__unused const char *msg, ...) __attribute__((format(os_log, 1, 2)));
 OS_ALWAYS_INLINE static inline void
 _os_log_verify_format_str(__unused const char *msg, ...)                                       /* placeholder */
@@ -453,6 +463,38 @@ os_log_debug_enabled(os_log_t log);
 })
 
 /*!
+ * @function os_log_driverKit
+ *
+ * @abstract
+ * Log a message using a specific type. This variant should be called only from dexts.
+ *
+ * @discussion
+ * Will log a message with the provided os_log_type_t.
+ *
+ * @param log
+ * Pass OS_LOG_DEFAULT or a log object previously created with os_log_create.
+ *
+ * @param type
+ * Pass a valid type from os_log_type_t.
+ *
+ * @param format
+ * A format string to generate a human-readable log message when the log
+ * line is decoded.  This string must be a constant string, not dynamically
+ * generated.  Supports all standard printf types and %@ (objects).
+ *
+ * @result
+ * Returns EPERM if the caller is not a driverKit process, 0 in case of success.
+ */
+#define os_log_driverKit(out, log, type, format, ...) __extension__({                            \
+    _Static_assert(__builtin_constant_p(format), "format string must be constant");         \
+    __attribute__((section("__TEXT,__os_log"))) static const char _os_log_fmt[] = format;   \
+    _os_log_verify_format_str(format, ##__VA_ARGS__);                                       \
+    (*(out)) = _os_log_internal_driverKit(&__dso_handle, log, type, _os_log_fmt, ##__VA_ARGS__);                 \
+    __asm__(""); /* avoid tailcall */                                                       \
+})
+
+
+/*!
  * @function os_log_sensitive_debug
  *
  * @abstract
@@ -511,6 +553,16 @@ OS_EXPORT OS_NOTHROW
 void
 _os_log_internal(void *dso, os_log_t log, os_log_type_t type, const char *message, ...);
 
+/*!
+ * @function _os_log_internal_driverKit
+ *
+ * @abstract
+ * Internal function used by macros.
+ */
+__WATCHOS_AVAILABLE(6.0) __OSX_AVAILABLE(10.15) __IOS_AVAILABLE(13.0) __TVOS_AVAILABLE(13.0)
+OS_EXPORT OS_NOTHROW
+int
+_os_log_internal_driverKit(void *dso, os_log_t log, os_log_type_t type, const char *message, ...);
 __END_DECLS
 
 #endif /* __os_log_h */

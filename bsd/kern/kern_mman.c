@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All Rights Reserved.
+ * Copyright (c) 2007-2019 Apple Inc. All Rights Reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -131,6 +131,13 @@
 #if CONFIG_MACF
 #include <security/mac_framework.h>
 #endif
+#include <os/overflow.h>
+
+#ifndef CONFIG_EMBEDDED
+#include <IOKit/IOBSD.h> /* for IOTaskHasEntitlement */
+#include <sys/csr.h> /* for csr_check */
+#define MAP_32BIT_ENTITLEMENT "com.apple.security.mmap-map-32bit"
+#endif
 
 /*
  * XXX Internally, we use VM_PROT_* somewhat interchangeably, but the correct
@@ -151,6 +158,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	vm_map_t                user_map;
 	kern_return_t           result;
 	vm_map_offset_t         user_addr;
+	vm_map_offset_t         sum;
 	vm_map_size_t           user_size;
 	vm_object_offset_t      pageoff;
 	vm_object_offset_t      file_pos;
@@ -183,6 +191,9 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	AUDIT_ARG(len, user_size);
 	AUDIT_ARG(fd, uap->fd);
 
+	if (vm_map_range_overflows(user_addr, user_size)) {
+		return EINVAL;
+	}
 	prot = (uap->prot & VM_PROT_ALL);
 #if 3777787
 	/*
@@ -200,7 +211,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	vp = NULLVP;
 
 	/*
-	 * The vm code does not have prototypes & compiler doesn't do the'
+	 * The vm code does not have prototypes & compiler doesn't do
 	 * the right thing when you cast 64bit value and pass it in function
 	 * call. So here it is.
 	 */
@@ -208,7 +219,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 
 
 	/* make sure mapping fits into numeric range etc */
-	if (file_pos + user_size > (vm_object_offset_t)-PAGE_SIZE_64) {
+	if (os_add3_overflow(file_pos, user_size, PAGE_SIZE_64 - 1, &sum)) {
 		return EINVAL;
 	}
 
@@ -241,8 +252,29 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		    (flags & MAP_JIT)) {
 			return EINVAL;
 		}
+	}
+	if (flags & MAP_RESILIENT_CODESIGN) {
 		if (prot & (VM_PROT_WRITE | VM_PROT_EXECUTE)) {
 			return EPERM;
+		}
+	}
+	if (flags & MAP_SHARED) {
+		/*
+		 * MAP_RESILIENT_MEDIA is not valid with MAP_SHARED because
+		 * there is no place to inject zero-filled pages without
+		 * actually adding them to the file.
+		 * Since we didn't reject that combination before, there might
+		 * already be callers using it and getting a valid MAP_SHARED
+		 * mapping but without the resilience.
+		 * For backwards compatibility's sake, let's keep ignoring
+		 * MAP_RESILIENT_MEDIA in that case.
+		 */
+		flags &= ~MAP_RESILIENT_MEDIA;
+	}
+	if (flags & MAP_RESILIENT_MEDIA) {
+		if ((flags & MAP_ANON) ||
+		    (flags & MAP_SHARED)) {
+			return EINVAL;
 		}
 	}
 
@@ -450,7 +482,21 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 				goto bad;
 			}
 #endif /* MAC */
+			/*
+			 * Consult the file system to determine if this
+			 * particular file object can be mapped.
+			 */
+			error = VNOP_MMAP_CHECK(vp, prot, ctx);
+			if (error) {
+				(void)vnode_put(vp);
+				goto bad;
+			}
 		}
+
+		/*
+		 * No copy-on-read for mmap() mappings themselves.
+		 */
+		vmk_flags.vmkf_no_copy_on_read = 1;
 	}
 
 	if (user_size == 0) {
@@ -514,6 +560,21 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	if (flags & MAP_RESILIENT_CODESIGN) {
 		alloc_flags |= VM_FLAGS_RESILIENT_CODESIGN;
 	}
+	if (flags & MAP_RESILIENT_MEDIA) {
+		alloc_flags |= VM_FLAGS_RESILIENT_MEDIA;
+	}
+
+#ifndef CONFIG_EMBEDDED
+	if (flags & MAP_32BIT) {
+		if (csr_check(CSR_ALLOW_UNTRUSTED_KEXTS) == 0 ||
+		    IOTaskHasEntitlement(current_task(), MAP_32BIT_ENTITLEMENT)) {
+			vmk_flags.vmkf_32bit_map_va = TRUE;
+		} else {
+			error = EPERM;
+			goto bad;
+		}
+	}
+#endif
 
 	/*
 	 * Lookup/allocate object.
@@ -616,8 +677,7 @@ map_anon_retry:
 #endif  /* radar 3777787 */
 
 map_file_retry:
-		if ((flags & MAP_RESILIENT_CODESIGN) ||
-		    (flags & MAP_RESILIENT_MEDIA)) {
+		if (flags & MAP_RESILIENT_CODESIGN) {
 			if (prot & (VM_PROT_WRITE | VM_PROT_EXECUTE)) {
 				assert(!mapanon);
 				vnode_put(vp);
@@ -716,10 +776,13 @@ msync_nocancel(__unused proc_t p, struct msync_nocancel_args *uap, __unused int3
 
 	user_map = current_map();
 	addr = (mach_vm_offset_t) uap->addr;
-	size = (mach_vm_size_t)uap->len;
+	size = (mach_vm_size_t) uap->len;
 #ifndef CONFIG_EMBEDDED
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO, SYS_msync) | DBG_FUNC_NONE), (uint32_t)(addr >> 32), (uint32_t)(size >> 32), 0, 0, 0);
 #endif
+	if (mach_vm_range_overflows(addr, size)) {
+		return EINVAL;
+	}
 	if (addr & vm_map_page_mask(user_map)) {
 		/* UNIX SPEC: user address is not page-aligned, return EINVAL */
 		return EINVAL;
@@ -797,7 +860,7 @@ munmap(__unused proc_t p, struct munmap_args *uap, __unused int32_t *retval)
 		return EINVAL;
 	}
 
-	if (user_addr + user_size < user_addr) {
+	if (mach_vm_range_overflows(user_addr, user_size)) {
 		return EINVAL;
 	}
 
@@ -834,6 +897,9 @@ mprotect(__unused proc_t p, struct mprotect_args *uap, __unused int32_t *retval)
 	user_size = (mach_vm_size_t) uap->len;
 	prot = (vm_prot_t)(uap->prot & (VM_PROT_ALL | VM_PROT_TRUSTED | VM_PROT_STRIP_READ));
 
+	if (mach_vm_range_overflows(user_addr, user_size)) {
+		return EINVAL;
+	}
 	if (user_addr & vm_map_page_mask(user_map)) {
 		/* UNIX SPEC: user address is not page-aligned, return EINVAL */
 		return EINVAL;
@@ -939,7 +1005,9 @@ minherit(__unused proc_t p, struct minherit_args *uap, __unused int32_t *retval)
 	addr = (mach_vm_offset_t)uap->addr;
 	size = (mach_vm_size_t)uap->len;
 	inherit = uap->inherit;
-
+	if (mach_vm_range_overflows(addr, size)) {
+		return EINVAL;
+	}
 	user_map = current_map();
 	result = mach_vm_inherit(user_map, addr, size,
 	    inherit);
@@ -1009,7 +1077,9 @@ madvise(__unused proc_t p, struct madvise_args *uap, __unused int32_t *retval)
 
 	start = (mach_vm_offset_t) uap->addr;
 	size = (mach_vm_size_t) uap->len;
-
+	if (mach_vm_range_overflows(start, size)) {
+		return EINVAL;
+	}
 #if __arm64__
 	if (start == 0 &&
 	    size != 0 &&
@@ -1203,8 +1273,7 @@ mlock(__unused proc_t p, struct mlock_args *uap, __unused int32_t *retvalval)
 	addr = (vm_map_offset_t) uap->addr;
 	size = (vm_map_size_t)uap->len;
 
-	/* disable wrap around */
-	if (addr + size < addr) {
+	if (vm_map_range_overflows(addr, size)) {
 		return EINVAL;
 	}
 
@@ -1240,12 +1309,14 @@ munlock(__unused proc_t p, struct munlock_args *uap, __unused int32_t *retval)
 	kern_return_t   result;
 
 	AUDIT_ARG(addr, uap->addr);
-	AUDIT_ARG(addr, uap->len);
+	AUDIT_ARG(len, uap->len);
 
 	addr = (mach_vm_offset_t) uap->addr;
 	size = (mach_vm_size_t)uap->len;
 	user_map = current_map();
-
+	if (mach_vm_range_overflows(addr, size)) {
+		return EINVAL;
+	}
 	/* JMM - need to remove all wirings by spec - this just removes one */
 	result = mach_vm_wire_kernel(host_priv_self(), user_map, addr, size, VM_PROT_NONE, VM_KERN_MEMORY_MLOCK);
 	return result == KERN_SUCCESS ? 0 : ENOMEM;
@@ -1295,6 +1366,9 @@ mremap_encrypted(__unused struct proc *p, struct mremap_encrypted_args *uap, __u
 	cputype = uap->cputype;
 	cpusubtype = uap->cpusubtype;
 
+	if (mach_vm_range_overflows(user_addr, user_size)) {
+		return EINVAL;
+	}
 	if (user_addr & vm_map_page_mask(user_map)) {
 		/* UNIX SPEC: user address is not page-aligned, return EINVAL */
 		return EINVAL;

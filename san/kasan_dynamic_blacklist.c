@@ -363,7 +363,8 @@ kasan_is_blacklisted(access_t type)
 		return false;
 	}
 
-	nframes = backtrace_frame(bt, MAX_FRAMES, __builtin_frame_address(0));
+	nframes = backtrace_frame(bt, MAX_FRAMES, __builtin_frame_address(0),
+	    NULL);
 	boolean_t flag;
 
 	if (nframes >= 1) {

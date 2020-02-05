@@ -157,7 +157,7 @@ int     ubc_create_upl_external(vnode_t, off_t, int, upl_t *, upl_page_info_t **
 int     ubc_create_upl_kernel(vnode_t, off_t, int, upl_t *, upl_page_info_t **, int, vm_tag_t);
 #endif  /* XNU_KERNEL_PRIVATE */
 
-__attribute__((pure)) boolean_t ubc_is_mapped(const struct vnode *, boolean_t *writable);
+boolean_t ubc_is_mapped(const struct vnode *, boolean_t *writable);
 __attribute__((pure)) boolean_t ubc_is_mapped_writable(const struct vnode *);
 
 uint32_t cluster_max_io_size(mount_t, int);

@@ -41,7 +41,7 @@ COMP_FILES = ${MIG_KUSRC}
 do_build_all:: $(COMP_FILES)
 
 ${MIG_KUSRC} : kextd_mach.defs
-	@echo "$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0)"
+	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}	\
 		-user    kextd_mach.c		\
 		-header  kextd_mach.h		\

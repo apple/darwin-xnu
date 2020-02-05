@@ -51,6 +51,7 @@ struct pbuf_memory {
 	uint32_t pm_flowid;
 	uint32_t pm_flags;
 	struct pf_mtag pm_pftag;
+	struct pf_fragment_tag  pm_pf_fragtag;
 	int (*pm_action)(struct pbuf_memory *, enum pbuf_action);
 	void *pm_action_cookie;
 };
@@ -74,6 +75,7 @@ typedef struct pbuf {
 	uint32_t        *pb_flowid;
 	uint32_t        *pb_flags;
 	struct pf_mtag  *pb_pftag;
+	struct pf_fragment_tag  *pb_pf_fragtag;
 	struct ifnet    *pb_ifp;
 	struct pbuf     *pb_next;
 } pbuf_t;

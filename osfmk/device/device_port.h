@@ -74,8 +74,21 @@ extern mach_port_t      master_device_port;
 #define DEVICE_PAGER_COHERENT           0x2
 #define DEVICE_PAGER_CACHE_INHIB        0x4
 #define DEVICE_PAGER_WRITE_THROUGH      0x8
-#define DEVICE_PAGER_EARLY_ACK          0x20
 #define DEVICE_PAGER_CONTIGUOUS         0x100
 #define DEVICE_PAGER_NOPHYSCACHE        0x200
+
+#ifdef XNU_KERNEL_PRIVATE
+#include <vm/memory_types.h>
+
+_Static_assert(((DEVICE_PAGER_CONTIGUOUS | DEVICE_PAGER_NOPHYSCACHE) & VM_WIMG_MASK) == 0,
+    "device pager flags overlap WIMG mask");
+
+/* Assert on the backwards-compatible DEVICE_PAGER* values */
+_Static_assert(DEVICE_PAGER_GUARDED == VM_MEM_GUARDED, "DEVICE_PAGER_GUARDED != VM_MEM_GUARDED");
+_Static_assert(DEVICE_PAGER_COHERENT == VM_MEM_COHERENT, "DEVICE_PAGER_COHERENT != VM_MEM_COHERENT");
+_Static_assert(DEVICE_PAGER_CACHE_INHIB == VM_MEM_NOT_CACHEABLE, "DEVICE_PAGER_CACHE_INHIB != VM_MEM_NOT_CACHEABLE");
+_Static_assert(DEVICE_PAGER_WRITE_THROUGH == VM_MEM_WRITE_THROUGH, "DEVICE_PAGER_WRITE_THROUGH != VM_MEM_WRITE_THROUGH");
+
+#endif /* KERNEL_PRIVATE */
 
 #endif  /* _DEVICE_DEVICE_PORT_H_ */

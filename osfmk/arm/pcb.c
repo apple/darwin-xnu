@@ -115,6 +115,12 @@ machine_switch_context(
 	return retval;
 }
 
+boolean_t
+machine_thread_on_core(thread_t thread)
+{
+	return thread->machine.machine_thread_flags & MACHINE_THREAD_FLAGS_ON_CPU;
+}
+
 /*
  * Routine:	machine_thread_create
  *
@@ -143,7 +149,7 @@ machine_thread_create(
 	struct pmap *new_pmap = vm_map_pmap(task->map);
 
 	thread->machine.kptw_ttb = ((unsigned int) kernel_pmap->ttep) | TTBR_SETUP;
-	thread->machine.asid = new_pmap->asid;
+	thread->machine.asid = new_pmap->hw_asid;
 	if (new_pmap->tte_index_max == NTTES) {
 		thread->machine.uptw_ttc = 2;
 		thread->machine.uptw_ttb = ((unsigned int) new_pmap->ttep) | TTBR_SETUP;

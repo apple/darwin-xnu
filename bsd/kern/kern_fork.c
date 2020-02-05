@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007, 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -720,7 +720,7 @@ vfork_return(proc_t child_proc, int32_t *retval, int rval)
 	/* restore thread-set-id state */
 	if (uth->uu_flag & UT_WASSETUID) {
 		uth->uu_flag |= UT_SETUID;
-		uth->uu_flag &= UT_WASSETUID;
+		uth->uu_flag &= ~UT_WASSETUID;
 	}
 	uth->uu_proc = 0;
 	uth->uu_sigmask = uth->uu_vforkmask;
@@ -792,8 +792,9 @@ fork_create_child(task_t parent_task,
 	    inherit_memory,
 	    is_64bit_addr,
 	    is_64bit_data,
-	    TF_LRETURNWAIT | TF_LRETURNWAITER,                                     /* All created threads will wait in task_wait_to_return */
-	    in_exec ? TPF_EXEC_COPY : TPF_NONE,                               /* Mark the task exec copy if in execve */
+	    TF_NONE,
+	    in_exec ? TPF_EXEC_COPY : TPF_NONE,                        /* Mark the task exec copy if in execve */
+	    (TRW_LRETURNWAIT | TRW_LRETURNWAITER),                     /* All created threads will wait in task_wait_to_return */
 	    &child_task);
 	if (result != KERN_SUCCESS) {
 		printf("%s: task_create_internal failed.  Code: %d\n",
@@ -922,7 +923,7 @@ fork(proc_t parent_proc, __unused struct fork_args *uap, int32_t *retval)
 #endif
 
 		/* "Return" to the child */
-		task_clear_return_wait(get_threadtask(child_thread));
+		task_clear_return_wait(get_threadtask(child_thread), TCRW_CLEAR_ALL_WAIT);
 
 		/* drop the extra references we got during the creation */
 		if ((child_task = (task_t)get_threadtask(child_thread)) != NULL) {
@@ -1107,9 +1108,6 @@ forkproc_free(proc_t p)
 		p->p_textvp = NULL;
 	}
 
-	/* Stop the profiling clock */
-	stopprofclock(p);
-
 	/* Update the audit session proc count */
 	AUDIT_SESSION_PROCEXIT(p);
 
@@ -1246,7 +1244,6 @@ retry:
 	}
 	nprocs++;
 	child_proc->p_pid = nextpid;
-	child_proc->p_responsible_pid = nextpid;        /* initially responsible for self */
 	child_proc->p_idversion = OSIncrementAtomic(&nextpidversion);
 	/* kernel process is handcrafted and not from fork, so start from 1 */
 	child_proc->p_uniqueid = ++nextuniqueid;
@@ -1282,7 +1279,7 @@ retry:
 	 * for insertion to hash.  Copy the section that is to be copied
 	 * directly from the parent.
 	 */
-	bcopy(&parent_proc->p_startcopy, &child_proc->p_startcopy,
+	__nochk_bcopy(&parent_proc->p_startcopy, &child_proc->p_startcopy,
 	    (unsigned) ((caddr_t)&child_proc->p_endcopy - (caddr_t)&child_proc->p_startcopy));
 
 	/*
@@ -1296,11 +1293,10 @@ retry:
 #else /*  !CONFIG_EMBEDDED */
 	child_proc->p_flag = (parent_proc->p_flag & (P_LP64 | P_DISABLE_ASLR | P_SUGID));
 #endif /* !CONFIG_EMBEDDED */
-	if (parent_proc->p_flag & P_PROFIL) {
-		startprofclock(child_proc);
-	}
 
 	child_proc->p_vfs_iopolicy = (parent_proc->p_vfs_iopolicy & (P_VFS_IOPOLICY_VALID_MASK));
+
+	child_proc->p_responsible_pid = parent_proc->p_responsible_pid;
 
 	/*
 	 * Note that if the current thread has an assumed identity, this
@@ -1414,6 +1410,7 @@ retry:
 	}
 	child_proc->p_dispatchqueue_offset = parent_proc->p_dispatchqueue_offset;
 	child_proc->p_dispatchqueue_serialno_offset = parent_proc->p_dispatchqueue_serialno_offset;
+	child_proc->p_dispatchqueue_label_offset = parent_proc->p_dispatchqueue_label_offset;
 	child_proc->p_return_to_kernel_offset = parent_proc->p_return_to_kernel_offset;
 	child_proc->p_mach_thread_self_offset = parent_proc->p_mach_thread_self_offset;
 	child_proc->p_pth_tsd_offset = parent_proc->p_pth_tsd_offset;
@@ -1437,12 +1434,14 @@ retry:
 	child_proc->p_memstat_state = 0;
 	child_proc->p_memstat_effectivepriority = JETSAM_PRIORITY_DEFAULT;
 	child_proc->p_memstat_requestedpriority = JETSAM_PRIORITY_DEFAULT;
+	child_proc->p_memstat_assertionpriority = 0;
 	child_proc->p_memstat_userdata          = 0;
 	child_proc->p_memstat_idle_start        = 0;
 	child_proc->p_memstat_idle_delta        = 0;
 	child_proc->p_memstat_memlimit          = 0;
 	child_proc->p_memstat_memlimit_active   = 0;
 	child_proc->p_memstat_memlimit_inactive = 0;
+	child_proc->p_memstat_relaunch_flags    = P_MEMSTAT_RELAUNCH_UNKNOWN;
 #if CONFIG_FREEZE
 	child_proc->p_memstat_freeze_sharedanon_pages = 0;
 #endif

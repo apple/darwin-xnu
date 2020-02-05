@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -998,7 +998,7 @@ struct omb_stat *omb_stat;      /* For backwards compatibility */
 #define MB_STAT_SIZE(n) \
 	__builtin_offsetof(mb_stat_t, mbs_class[n])
 #define OMB_STAT_SIZE(n) \
-	((size_t)(&((struct omb_stat *)0)->mbs_class[n]))
+	__builtin_offsetof(struct omb_stat, mbs_class[n])
 
 /*
  * The legacy structure holding all of the mbuf allocation statistics.
@@ -1038,7 +1038,7 @@ typedef struct {
 static mbuf_mtypes_t *mbuf_mtypes;      /* per-CPU statistics */
 
 #define MBUF_MTYPES_SIZE(n) \
-	((size_t)(&((mbuf_mtypes_t *)0)->mbs_cpu[n]))
+	__builtin_offsetof(mbuf_mtypes_t, mbs_cpu[n])
 
 #define MTYPES_CPU(p) \
 	((mtypes_cpu_t *)(void *)((char *)(p) + MBUF_MTYPES_SIZE(cpu_number())))
@@ -1268,7 +1268,7 @@ m_incref(struct mbuf *m)
 	do {
 		old = *addr;
 		new = old + 1;
-		ASSERT(new != 0);
+		VERIFY(new != 0);
 	} while (!OSCompareAndSwap16(old, new, addr));
 
 	/*
@@ -1290,7 +1290,7 @@ m_decref(struct mbuf *m)
 	do {
 		old = *addr;
 		new = old - 1;
-		ASSERT(old != 0);
+		VERIFY(old != 0);
 	} while (!OSCompareAndSwap16(old, new, addr));
 
 	return new;
@@ -4686,7 +4686,7 @@ fail:
 		mcache_free_ext(rcp, rmp_list);
 	}
 	if (wantall && top != NULL) {
-		m_freem(top);
+		m_freem_list(top);
 		return NULL;
 	}
 	*numlist = num;
@@ -5576,6 +5576,8 @@ m_copyup(struct mbuf *n, int len, int dstoff)
 	struct mbuf *m;
 	int count, space;
 
+	VERIFY(len >= 0 && dstoff >= 0);
+
 	if (len > (MHLEN - dstoff)) {
 		goto bad;
 	}
@@ -6348,6 +6350,9 @@ m_dup(struct mbuf *m, int how)
 				(void) m_free(n);
 				goto nospace;
 			}
+		} else {
+			VERIFY((copyhdr == 1 && m->m_len <= MHLEN) ||
+			    (copyhdr == 0 && m->m_len <= MLEN));
 		}
 		*np = n;
 		if (copyhdr) {
@@ -7455,6 +7460,7 @@ mcl_audit_scratch(mcache_audit_t *mca)
 	}
 }
 
+__abortlike
 static void
 mcl_audit_mcheck_panic(struct mbuf *m)
 {
@@ -7535,7 +7541,7 @@ mleak_logger(u_int32_t num, mcache_obj_t *addr, boolean_t alloc)
 
 	if ((temp % mleak_table.mleak_sample_factor) == 0 && addr != NULL) {
 		uintptr_t bt[MLEAK_STACK_DEPTH];
-		int logged = backtrace(bt, MLEAK_STACK_DEPTH);
+		int logged = backtrace(bt, MLEAK_STACK_DEPTH, NULL);
 		mleak_log(bt, addr, logged, num);
 	}
 }
@@ -8800,7 +8806,7 @@ mtracelarge_register(size_t size)
 	uintptr_t bt[MLEAK_STACK_DEPTH];
 	unsigned int depth;
 
-	depth = backtrace(bt, MLEAK_STACK_DEPTH);
+	depth = backtrace(bt, MLEAK_STACK_DEPTH, NULL);
 	/* Check if this entry is already on the list. */
 	for (i = 0; i < MTRACELARGE_NUM_TRACES; i++) {
 		trace = &mtracelarge_table[i];

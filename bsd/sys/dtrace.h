@@ -34,8 +34,6 @@
 #ifndef _SYS_DTRACE_H
 #define _SYS_DTRACE_H
 
-/* #pragma ident	"@(#)dtrace.h	1.37	07/06/05 SMI" */
-
 #ifdef  __cplusplus
 extern "C" {
 #endif
@@ -73,12 +71,6 @@ extern "C" {
 #endif
 #endif
 
-#ifdef KERNEL
-#ifndef _KERNEL
-#define _KERNEL /* Solaris vs. Darwin */
-#endif
-#endif
-
 #if defined(__BIG_ENDIAN__)
 #if !defined(_BIG_ENDIAN)
 #define _BIG_ENDIAN /* Solaris vs. Darwin */
@@ -89,6 +81,12 @@ extern "C" {
 #endif
 #else
 #error Unknown endian-ness
+#endif
+
+#ifdef KERNEL
+#ifndef _KERNEL
+#define _KERNEL /* Solaris vs. Darwin */
+#endif
 #endif
 
 #include <sys/types.h>
@@ -286,6 +284,7 @@ typedef enum dtrace_probespec {
 #define	DIF_OP_RLDX	77		/* rldx  [r1], rd */
 #define	DIF_OP_XLATE	78		/* xlate xlrindex, rd */
 #define	DIF_OP_XLARG	79		/* xlarg xlrindex, rd */
+#define	DIF_OP_STRIP	80		/* strip r1, key, rd */
 
 #define	DIF_INTOFF_MAX		0xffff	/* highest integer table offset */
 #define	DIF_STROFF_MAX		0xffff	/* highest string table offset */
@@ -394,7 +393,10 @@ typedef enum dtrace_probespec {
 #define	DIF_SUBR_INET_NTOA6		43
 #define	DIF_SUBR_TOUPPER		44
 #define	DIF_SUBR_TOLOWER		45
-#define DIF_SUBR_MAX			46      /* max subroutine value */
+#define DIF_SUBR_JSON			46
+#define DIF_SUBR_STRTOLL		47
+#define DIF_SUBR_STRIP			48
+#define DIF_SUBR_MAX			48      /* max subroutine value */
 
 /* Apple-specific subroutines */
 #if defined(__APPLE__)
@@ -412,6 +414,7 @@ typedef uint32_t dif_instr_t;
 #define DIF_INSTR_R2(i)                 (((i) >>  8) & 0xff)
 #define DIF_INSTR_RD(i)                 ((i) & 0xff)
 #define DIF_INSTR_RS(i)                 ((i) & 0xff)
+#define DIF_INSTR_IMM2(i)               (((i) >>  8) & 0xff)
 #define DIF_INSTR_LABEL(i)              ((i) & 0xffffff)
 #define DIF_INSTR_VAR(i)                (((i) >>  8) & 0xffff)
 #define DIF_INSTR_INTEGER(i)            (((i) >>  8) & 0xffff)
@@ -2558,25 +2561,6 @@ extern void dtrace_sync(void);
 extern void dtrace_toxic_ranges(void (*)(uintptr_t, uintptr_t));
 extern void dtrace_xcall(processorid_t, dtrace_xcall_t, void *);
 
-extern int dtrace_safe_defer_signal(void);
-extern void dtrace_safe_synchronous_signal(void);
-
-extern int dtrace_mach_aframes(void);
-
-#if !defined(__APPLE__)
-#if defined(__i386) || defined(__amd64)
-extern int dtrace_instr_size(uchar_t *instr);
-extern int dtrace_instr_size_isa(uchar_t *, model_t, int *);
-extern void dtrace_invop_add(int (*)(uintptr_t, uintptr_t *, uintptr_t));
-extern void dtrace_invop_remove(int (*)(uintptr_t, uintptr_t *, uintptr_t));
-extern void dtrace_invop_callsite(void);
-#endif
-
-#ifdef __sparc
-extern int dtrace_blksuword32(uintptr_t, uint32_t *, int);
-extern void dtrace_getfsr(uint64_t *);
-#endif
-#else
 #if defined(__i386__) || defined(__x86_64__)
 extern int dtrace_instr_size(uchar_t *instr);
 extern int dtrace_instr_size_isa(uchar_t *, model_t, int *);
@@ -2586,16 +2570,17 @@ extern void *dtrace_invop_callsite_pre;
 extern void *dtrace_invop_callsite_post;
 #endif
 
-#if defined(__arm__) || defined(__arm64__)
+#if defined(__arm__)
 extern int dtrace_instr_size(uint32_t instr, int thumb_mode);
+#endif
+#if defined(__arm__) || defined(__arm64__)
 extern void dtrace_invop_add(int (*)(uintptr_t, uintptr_t *, uintptr_t));    
 extern void dtrace_invop_remove(int (*)(uintptr_t, uintptr_t *, uintptr_t));
 extern void *dtrace_invop_callsite_pre;
 extern void *dtrace_invop_callsite_post;
 #endif
-    
+
 #undef proc_t
-#endif /* __APPLE__ */
 
 #define DTRACE_CPUFLAG_ISSET(flag) \
         (cpu_core[CPU->cpu_id].cpuc_dtrace_flags & (flag))
@@ -2610,17 +2595,6 @@ extern void *dtrace_invop_callsite_post;
 
 #endif  /* _ASM */
 
-#if !defined(__APPLE__)
-#if defined(__i386) || defined(__amd64)
-
-#define	DTRACE_INVOP_PUSHL_EBP		1
-#define	DTRACE_INVOP_POPL_EBP		2
-#define	DTRACE_INVOP_LEAVE		3
-#define	DTRACE_INVOP_NOP		4
-#define	DTRACE_INVOP_RET		5
-
-#endif
-#else
 #if defined(__i386__) || defined(__x86_64__)
 
 #define DTRACE_INVOP_PUSHL_EBP          1
@@ -2638,8 +2612,6 @@ extern void *dtrace_invop_callsite_post;
 #define DTRACE_INVOP_B			6
 
 #endif
-
-#endif /* __APPLE__ */
 
 #ifdef  __cplusplus
 }

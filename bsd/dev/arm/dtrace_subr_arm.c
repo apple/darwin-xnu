@@ -27,10 +27,6 @@
  * Use is subject to license terms.
  */
 
-/*
- * #pragma ident	"@(#)dtrace_subr.c	1.12	05/06/08 SMI"
- */
-
 #include <sys/dtrace.h>
 #include <sys/dtrace_glue.h>
 #include <sys/dtrace_impl.h>
@@ -171,17 +167,4 @@ dtrace_user_probe(arm_saved_state_t *regs, unsigned int instr)
 	}
 
 	return KERN_FAILURE;
-}
-
-void
-dtrace_safe_synchronous_signal(void)
-{
-	/* Not implemented */
-}
-
-int
-dtrace_safe_defer_signal(void)
-{
-	/* Not implemented */
-	return 0;
 }

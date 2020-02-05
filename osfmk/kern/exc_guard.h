@@ -56,9 +56,9 @@
  */
 
 #define EXC_GUARD_DECODE_GUARD_TYPE(code) \
-	(((code) >> 61) & 0x7ull)
+	((((uint64_t)(code)) >> 61) & 0x7ull)
 #define EXC_GUARD_DECODE_GUARD_FLAVOR(code) \
-	(((code) >> 32) & 0x1fffffff)
+	((((uint64_t)(code)) >> 32) & 0x1fffffff)
 #define EXC_GUARD_DECODE_GUARD_TARGET(code) \
 	((uint32_t)(code))
 

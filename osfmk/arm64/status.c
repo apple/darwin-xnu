@@ -34,16 +34,19 @@
 #include <arm/vmparam.h>
 #include <arm/cpu_data_internal.h>
 #include <arm64/proc_reg.h>
+#if __has_feature(ptrauth_calls)
+#include <ptrauth.h>
+#endif
 
 struct arm_vfpv2_state {
-	__uint32_t        __r[32];
-	__uint32_t        __fpscr;
+	__uint32_t __r[32];
+	__uint32_t __fpscr;
 };
 
-typedef struct arm_vfpv2_state  arm_vfpv2_state_t;
+typedef struct arm_vfpv2_state arm_vfpv2_state_t;
 
-#define ARM_VFPV2_STATE_COUNT ((mach_msg_type_number_t) \
-	(sizeof (arm_vfpv2_state_t)/sizeof(uint32_t)))
+#define ARM_VFPV2_STATE_COUNT \
+	((mach_msg_type_number_t)(sizeof (arm_vfpv2_state_t)/sizeof(uint32_t)))
 
 /*
  * Forward definitions
@@ -55,31 +58,19 @@ void thread_set_parent(thread_t parent, int pid);
  * Maps state flavor to number of words in the state:
  */
 /* __private_extern__ */
-unsigned int    _MachineStateCount[] = {
-	/* FLAVOR_LIST */ 0,
-	ARM_UNIFIED_THREAD_STATE_COUNT,
-	ARM_VFP_STATE_COUNT,
-	ARM_EXCEPTION_STATE_COUNT,
-	ARM_DEBUG_STATE_COUNT,
-	/* THREAD_STATE_NONE (legacy) */ 0,
-	ARM_THREAD_STATE64_COUNT,
-	ARM_EXCEPTION_STATE64_COUNT,
-	/* THREAD_STATE_LAST (legacy) */ 0,
-	ARM_THREAD_STATE32_COUNT,
-	/* UNALLOCATED */ 0,
-	/* UNALLOCATED */ 0,
-	/* UNALLOCATED */ 0,
-	/* UNALLOCATED */ 0,
-	ARM_DEBUG_STATE32_COUNT,
-	ARM_DEBUG_STATE64_COUNT,
-	ARM_NEON_STATE_COUNT,
-	ARM_NEON_STATE64_COUNT,
-	/* UNALLOCATED */ 0,
-	/* UNALLOCATED */ 0,
-	/* ARM_SAVED_STATE32_COUNT */ 0,
-	/* ARM_SAVED_STATE64_COUNT */ 0,
-	/* ARM_NEON_SAVED_STATE32_COUNT */ 0,
-	/* ARM_NEON_SAVED_STATE64_COUNT */ 0,
+unsigned int _MachineStateCount[] = {
+	[ARM_UNIFIED_THREAD_STATE] = ARM_UNIFIED_THREAD_STATE_COUNT,
+	[ARM_VFP_STATE] = ARM_VFP_STATE_COUNT,
+	[ARM_EXCEPTION_STATE] = ARM_EXCEPTION_STATE_COUNT,
+	[ARM_DEBUG_STATE] = ARM_DEBUG_STATE_COUNT,
+	[ARM_THREAD_STATE64] = ARM_THREAD_STATE64_COUNT,
+	[ARM_EXCEPTION_STATE64] = ARM_EXCEPTION_STATE64_COUNT,
+	[ARM_THREAD_STATE32] = ARM_THREAD_STATE32_COUNT,
+	[ARM_DEBUG_STATE32] = ARM_DEBUG_STATE32_COUNT,
+	[ARM_DEBUG_STATE64] = ARM_DEBUG_STATE64_COUNT,
+	[ARM_NEON_STATE] = ARM_NEON_STATE_COUNT,
+	[ARM_NEON_STATE64] = ARM_NEON_STATE64_COUNT,
+	[ARM_PAGEIN_STATE] = ARM_PAGEIN_STATE_COUNT,
 };
 
 extern zone_t ads_zone;
@@ -89,7 +80,8 @@ extern zone_t ads_zone;
  * Copy values from saved_state to ts64.
  */
 void
-saved_state_to_thread_state64(const arm_saved_state_t *saved_state, arm_thread_state64_t *ts64)
+saved_state_to_thread_state64(const arm_saved_state_t * saved_state,
+    arm_thread_state64_t *    ts64)
 {
 	uint32_t i;
 
@@ -109,7 +101,8 @@ saved_state_to_thread_state64(const arm_saved_state_t *saved_state, arm_thread_s
  * Copy values from ts64 to saved_state
  */
 void
-thread_state64_to_saved_state(const arm_thread_state64_t *ts64, arm_saved_state_t *saved_state)
+thread_state64_to_saved_state(const arm_thread_state64_t * ts64,
+    arm_saved_state_t *          saved_state)
 {
 	uint32_t i;
 
@@ -124,13 +117,13 @@ thread_state64_to_saved_state(const arm_thread_state64_t *ts64, arm_saved_state_
 		set_saved_state_reg(saved_state, i, ts64->x[i]);
 	}
 }
-#endif
 
-kern_return_t
-handle_get_arm32_thread_state(
-	thread_state_t tstate,
-	mach_msg_type_number_t * count,
-	const arm_saved_state_t *saved_state)
+#endif /* __arm64__ */
+
+static kern_return_t
+handle_get_arm32_thread_state(thread_state_t            tstate,
+    mach_msg_type_number_t *  count,
+    const arm_saved_state_t * saved_state)
 {
 	if (*count < ARM_THREAD_STATE32_COUNT) {
 		return KERN_INVALID_ARGUMENT;
@@ -144,11 +137,10 @@ handle_get_arm32_thread_state(
 	return KERN_SUCCESS;
 }
 
-kern_return_t
-handle_get_arm64_thread_state(
-	thread_state_t tstate,
-	mach_msg_type_number_t * count,
-	const arm_saved_state_t *saved_state)
+static kern_return_t
+handle_get_arm64_thread_state(thread_state_t            tstate,
+    mach_msg_type_number_t *  count,
+    const arm_saved_state_t * saved_state)
 {
 	if (*count < ARM_THREAD_STATE64_COUNT) {
 		return KERN_INVALID_ARGUMENT;
@@ -163,11 +155,10 @@ handle_get_arm64_thread_state(
 }
 
 
-kern_return_t
-handle_get_arm_thread_state(
-	thread_state_t tstate,
-	mach_msg_type_number_t * count,
-	const arm_saved_state_t *saved_state)
+static kern_return_t
+handle_get_arm_thread_state(thread_state_t            tstate,
+    mach_msg_type_number_t *  count,
+    const arm_saved_state_t * saved_state)
 {
 	/* In an arm64 world, this flavor can be used to retrieve the thread
 	 * state of a 32-bit or 64-bit thread into a unified structure, but we
@@ -196,11 +187,11 @@ handle_get_arm_thread_state(
 	return KERN_SUCCESS;
 }
 
-kern_return_t
-handle_set_arm32_thread_state(
-	const thread_state_t tstate,
-	mach_msg_type_number_t count,
-	arm_saved_state_t *saved_state)
+
+static kern_return_t
+handle_set_arm32_thread_state(const thread_state_t   tstate,
+    mach_msg_type_number_t count,
+    arm_saved_state_t *    saved_state)
 {
 	if (count != ARM_THREAD_STATE32_COUNT) {
 		return KERN_INVALID_ARGUMENT;
@@ -210,11 +201,10 @@ handle_set_arm32_thread_state(
 	return KERN_SUCCESS;
 }
 
-kern_return_t
-handle_set_arm64_thread_state(
-	const thread_state_t tstate,
-	mach_msg_type_number_t count,
-	arm_saved_state_t *saved_state)
+static kern_return_t
+handle_set_arm64_thread_state(const thread_state_t   tstate,
+    mach_msg_type_number_t count,
+    arm_saved_state_t *    saved_state)
 {
 	if (count != ARM_THREAD_STATE64_COUNT) {
 		return KERN_INVALID_ARGUMENT;
@@ -225,11 +215,10 @@ handle_set_arm64_thread_state(
 }
 
 
-kern_return_t
-handle_set_arm_thread_state(
-	const thread_state_t tstate,
-	mach_msg_type_number_t count,
-	arm_saved_state_t *saved_state)
+static kern_return_t
+handle_set_arm_thread_state(const thread_state_t   tstate,
+    mach_msg_type_number_t count,
+    arm_saved_state_t *    saved_state)
 {
 	/* In an arm64 world, this flavor can be used to set the thread state of a
 	 * 32-bit or 64-bit thread from a unified structure, but we need to support
@@ -262,6 +251,7 @@ handle_set_arm_thread_state(
 	return KERN_SUCCESS;
 }
 
+
 /*
  * Translate thread state arguments to userspace representation
  */
@@ -273,9 +263,80 @@ machine_thread_state_convert_to_user(
 	thread_state_t tstate,
 	mach_msg_type_number_t *count)
 {
+#if __has_feature(ptrauth_calls)
+	arm_thread_state64_t *ts64;
+
+	switch (flavor) {
+	case ARM_THREAD_STATE:
+	{
+		arm_unified_thread_state_t *unified_state = (arm_unified_thread_state_t *)tstate;
+
+		if (*count < ARM_UNIFIED_THREAD_STATE_COUNT || !is_thread_state64(unified_state)) {
+			return KERN_SUCCESS;
+		}
+		ts64 = thread_state64(unified_state);
+		break;
+	}
+	case ARM_THREAD_STATE64:
+	{
+		if (*count < ARM_THREAD_STATE64_COUNT) {
+			return KERN_SUCCESS;
+		}
+		ts64 = (arm_thread_state64_t *)tstate;
+		break;
+	}
+	default:
+		return KERN_SUCCESS;
+	}
+
+	// Note that kernel threads never have disable_user_jop set
+	if (current_thread()->machine.disable_user_jop || !thread_is_64bit_addr(current_thread()) ||
+	    thread->machine.disable_user_jop || !thread_is_64bit_addr(thread) ||
+	    (BootArgs->bootFlags & kBootFlagsDisableUserThreadStateJOP)) {
+		ts64->flags = __DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH;
+		return KERN_SUCCESS;
+	}
+
+	ts64->flags = 0;
+	if (ts64->lr) {
+		// lr might contain an IB-signed return address (strip is a no-op on unsigned addresses)
+		uintptr_t stripped_lr = (uintptr_t)ptrauth_strip((void *)ts64->lr,
+		    ptrauth_key_return_address);
+		if (ts64->lr != stripped_lr) {
+			// Need to allow already-signed lr value to round-trip as is
+			ts64->flags |= __DARWIN_ARM_THREAD_STATE64_FLAGS_IB_SIGNED_LR;
+		}
+		// Note that an IB-signed return address that happens to have a 0 signature value
+		// will round-trip correctly even if IA-signed again below (and IA-authd later)
+	}
+
+	if (BootArgs->bootFlags & kBootFlagsDisableUserJOP) {
+		return KERN_SUCCESS;
+	}
+
+	if (ts64->pc) {
+		ts64->pc = (uintptr_t)pmap_sign_user_ptr((void*)ts64->pc,
+		    ptrauth_key_process_independent_code, ptrauth_string_discriminator("pc"));
+	}
+	if (ts64->lr && !(ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_IB_SIGNED_LR)) {
+		ts64->lr = (uintptr_t)pmap_sign_user_ptr((void*)ts64->lr,
+		    ptrauth_key_process_independent_code, ptrauth_string_discriminator("lr"));
+	}
+	if (ts64->sp) {
+		ts64->sp = (uintptr_t)pmap_sign_user_ptr((void*)ts64->sp,
+		    ptrauth_key_process_independent_data, ptrauth_string_discriminator("sp"));
+	}
+	if (ts64->fp) {
+		ts64->fp = (uintptr_t)pmap_sign_user_ptr((void*)ts64->fp,
+		    ptrauth_key_process_independent_data, ptrauth_string_discriminator("fp"));
+	}
+
+	return KERN_SUCCESS;
+#else
 	// No conversion to userspace representation on this platform
 	(void)thread; (void)flavor; (void)tstate; (void)count;
 	return KERN_SUCCESS;
+#endif /* __has_feature(ptrauth_calls) */
 }
 
 /*
@@ -289,9 +350,94 @@ machine_thread_state_convert_from_user(
 	thread_state_t tstate,
 	mach_msg_type_number_t count)
 {
+#if __has_feature(ptrauth_calls)
+	arm_thread_state64_t *ts64;
+
+	switch (flavor) {
+	case ARM_THREAD_STATE:
+	{
+		arm_unified_thread_state_t *unified_state = (arm_unified_thread_state_t *)tstate;
+
+		if (count < ARM_UNIFIED_THREAD_STATE_COUNT || !is_thread_state64(unified_state)) {
+			return KERN_SUCCESS;
+		}
+		ts64 = thread_state64(unified_state);
+		break;
+	}
+	case ARM_THREAD_STATE64:
+	{
+		if (count != ARM_THREAD_STATE64_COUNT) {
+			return KERN_SUCCESS;
+		}
+		ts64 = (arm_thread_state64_t *)tstate;
+		break;
+	}
+	default:
+		return KERN_SUCCESS;
+	}
+
+	// Note that kernel threads never have disable_user_jop set
+	if (current_thread()->machine.disable_user_jop || !thread_is_64bit_addr(current_thread())) {
+		if (thread->machine.disable_user_jop || !thread_is_64bit_addr(thread)) {
+			ts64->flags = __DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH;
+			return KERN_SUCCESS;
+		}
+		// A JOP-disabled process must not set thread state on a JOP-enabled process
+		return KERN_PROTECTION_FAILURE;
+	}
+
+	if (ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH) {
+		if (thread->machine.disable_user_jop || !thread_is_64bit_addr(thread) ||
+		    (BootArgs->bootFlags & kBootFlagsDisableUserThreadStateJOP)) {
+			return KERN_SUCCESS;
+		}
+		// Disallow setting unsigned thread state on JOP-enabled processes.
+		// Ignore flag and treat thread state arguments as signed, ptrauth
+		// poisoning will cause resulting thread state to be invalid
+		ts64->flags &= ~__DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH;
+	}
+
+	if (ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_IB_SIGNED_LR) {
+		// lr might contain an IB-signed return address (strip is a no-op on unsigned addresses)
+		uintptr_t stripped_lr = (uintptr_t)ptrauth_strip((void *)ts64->lr,
+		    ptrauth_key_return_address);
+		if (ts64->lr == stripped_lr) {
+			// Don't allow unsigned pointer to be passed through as is. Ignore flag and
+			// treat as IA-signed below (where auth failure may poison the value).
+			ts64->flags &= ~__DARWIN_ARM_THREAD_STATE64_FLAGS_IB_SIGNED_LR;
+		}
+		// Note that an IB-signed return address that happens to have a 0 signature value
+		// will also have been IA-signed (without this flag being set) and so will IA-auth
+		// correctly below.
+	}
+
+	if (BootArgs->bootFlags & kBootFlagsDisableUserJOP) {
+		return KERN_SUCCESS;
+	}
+
+	if (ts64->pc) {
+		ts64->pc = (uintptr_t)pmap_auth_user_ptr((void*)ts64->pc,
+		    ptrauth_key_process_independent_code, ptrauth_string_discriminator("pc"));
+	}
+	if (ts64->lr && !(ts64->flags & __DARWIN_ARM_THREAD_STATE64_FLAGS_IB_SIGNED_LR)) {
+		ts64->lr = (uintptr_t)pmap_auth_user_ptr((void*)ts64->lr,
+		    ptrauth_key_process_independent_code, ptrauth_string_discriminator("lr"));
+	}
+	if (ts64->sp) {
+		ts64->sp = (uintptr_t)pmap_auth_user_ptr((void*)ts64->sp,
+		    ptrauth_key_process_independent_data, ptrauth_string_discriminator("sp"));
+	}
+	if (ts64->fp) {
+		ts64->fp = (uintptr_t)pmap_auth_user_ptr((void*)ts64->fp,
+		    ptrauth_key_process_independent_data, ptrauth_string_discriminator("fp"));
+	}
+
+	return KERN_SUCCESS;
+#else
 	// No conversion from userspace representation on this platform
 	(void)thread; (void)flavor; (void)tstate; (void)count;
 	return KERN_SUCCESS;
+#endif /* __has_feature(ptrauth_calls) */
 }
 
 /*
@@ -303,9 +449,27 @@ machine_thread_siguctx_pointer_convert_to_user(
 	__assert_only thread_t thread,
 	user_addr_t *uctxp)
 {
+#if __has_feature(ptrauth_calls)
+	if (current_thread()->machine.disable_user_jop || !thread_is_64bit_addr(current_thread())) {
+		assert(thread->machine.disable_user_jop || !thread_is_64bit_addr(thread));
+		return KERN_SUCCESS;
+	}
+
+	if (BootArgs->bootFlags & kBootFlagsDisableUserJOP) {
+		return KERN_SUCCESS;
+	}
+
+	if (*uctxp) {
+		*uctxp = (uintptr_t)pmap_sign_user_ptr((void*)*uctxp,
+		    ptrauth_key_process_independent_data, ptrauth_string_discriminator("uctx"));
+	}
+
+	return KERN_SUCCESS;
+#else
 	// No conversion to userspace representation on this platform
 	(void)thread; (void)uctxp;
 	return KERN_SUCCESS;
+#endif /* __has_feature(ptrauth_calls) */
 }
 
 /*
@@ -318,21 +482,41 @@ machine_thread_function_pointers_convert_from_user(
 	user_addr_t *fptrs,
 	uint32_t count)
 {
+#if __has_feature(ptrauth_calls)
+	if (current_thread()->machine.disable_user_jop || !thread_is_64bit_addr(current_thread())) {
+		assert(thread->machine.disable_user_jop || !thread_is_64bit_addr(thread));
+		return KERN_SUCCESS;
+	}
+
+	if (BootArgs->bootFlags & kBootFlagsDisableUserJOP) {
+		return KERN_SUCCESS;
+	}
+
+	while (count--) {
+		if (*fptrs) {
+			*fptrs = (uintptr_t)pmap_auth_user_ptr((void*)*fptrs,
+			    ptrauth_key_function_pointer, 0);
+		}
+		fptrs++;
+	}
+
+	return KERN_SUCCESS;
+#else
 	// No conversion from userspace representation on this platform
 	(void)thread; (void)fptrs; (void)count;
 	return KERN_SUCCESS;
+#endif /* __has_feature(ptrauth_calls) */
 }
 
 /*
- * Routine:	machine_thread_get_state
+ * Routine: machine_thread_get_state
  *
  */
 kern_return_t
-machine_thread_get_state(
-	thread_t thread,
-	thread_flavor_t flavor,
-	thread_state_t tstate,
-	mach_msg_type_number_t * count)
+machine_thread_get_state(thread_t                 thread,
+    thread_flavor_t          flavor,
+    thread_state_t           tstate,
+    mach_msg_type_number_t * count)
 {
 	switch (flavor) {
 	case THREAD_STATE_FLAVOR_LIST:
@@ -357,6 +541,19 @@ machine_thread_get_state(
 		tstate[2] = thread_is_64bit_data(thread) ? ARM_EXCEPTION_STATE64 : ARM_EXCEPTION_STATE;
 		tstate[3] = thread_is_64bit_data(thread) ? ARM_DEBUG_STATE64 : ARM_DEBUG_STATE32;
 		*count = 4;
+		break;
+
+	case THREAD_STATE_FLAVOR_LIST_10_15:
+		if (*count < 5) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		tstate[0] = ARM_THREAD_STATE;
+		tstate[1] = ARM_VFP_STATE;
+		tstate[2] = thread_is_64bit_data(thread) ? ARM_EXCEPTION_STATE64 : ARM_EXCEPTION_STATE;
+		tstate[3] = thread_is_64bit_data(thread) ? ARM_DEBUG_STATE64 : ARM_DEBUG_STATE32;
+		tstate[4] = ARM_PAGEIN_STATE;
+		*count = 5;
 		break;
 
 	case ARM_THREAD_STATE:
@@ -512,7 +709,7 @@ machine_thread_get_state(
 	case ARM_VFP_STATE:{
 		struct arm_vfp_state *state;
 		arm_neon_saved_state32_t *thread_state;
-		unsigned int    max;
+		unsigned int max;
 
 		if (*count < ARM_VFP_STATE_COUNT) {
 			if (*count < ARM_VFPV2_STATE_COUNT) {
@@ -581,6 +778,22 @@ machine_thread_get_state(
 		break;
 	}
 
+
+	case ARM_PAGEIN_STATE: {
+		arm_pagein_state_t *state;
+
+		if (*count < ARM_PAGEIN_STATE_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		state = (arm_pagein_state_t *)tstate;
+		state->__pagein_error = thread->t_pagein_error;
+
+		*count = ARM_PAGEIN_STATE_COUNT;
+		break;
+	}
+
+
 	default:
 		return KERN_INVALID_ARGUMENT;
 	}
@@ -589,15 +802,14 @@ machine_thread_get_state(
 
 
 /*
- * Routine:	machine_thread_get_kern_state
+ * Routine: machine_thread_get_kern_state
  *
  */
 kern_return_t
-machine_thread_get_kern_state(
-	thread_t thread,
-	thread_flavor_t flavor,
-	thread_state_t tstate,
-	mach_msg_type_number_t * count)
+machine_thread_get_kern_state(thread_t                 thread,
+    thread_flavor_t          flavor,
+    thread_state_t           tstate,
+    mach_msg_type_number_t * count)
 {
 	/*
 	 * This works only for an interrupted kernel thread
@@ -670,15 +882,14 @@ machine_thread_switch_addrmode(thread_t thread)
 extern long long arm_debug_get(void);
 
 /*
- * Routine:	machine_thread_set_state
+ * Routine: machine_thread_set_state
  *
  */
 kern_return_t
-machine_thread_set_state(
-	thread_t thread,
-	thread_flavor_t flavor,
-	thread_state_t tstate,
-	mach_msg_type_number_t count)
+machine_thread_set_state(thread_t               thread,
+    thread_flavor_t        flavor,
+    thread_state_t         tstate,
+    mach_msg_type_number_t count)
 {
 	kern_return_t rn;
 
@@ -761,7 +972,6 @@ machine_thread_set_state(
 				enabled = TRUE;
 			}
 		}
-
 
 		if (!enabled) {
 			arm_debug_state32_t *thread_state = find_debug_state32(thread);
@@ -902,7 +1112,7 @@ machine_thread_set_state(
 	{
 		arm_debug_state64_t *state;
 		boolean_t enabled = FALSE;
-		unsigned int    i;
+		unsigned int i;
 
 		if (count != ARM_DEBUG_STATE64_COUNT) {
 			return KERN_INVALID_ARGUMENT;
@@ -957,7 +1167,7 @@ machine_thread_set_state(
 			for (i = 0; i < 16; i++) {
 				/* set appropriate privilege; mask out unknown bits */
 				thread_state->bcr[i] = (state->bcr[i] & (0         /* Was ARM_DBG_CR_ADDRESS_MASK_MASK deprecated in v8 */
-				    | 0                                                  /* Was ARM_DBGBCR_MATCH_MASK, ignored in AArch64 state */
+				    | 0                             /* Was ARM_DBGBCR_MATCH_MASK, ignored in AArch64 state */
 				    | ARM_DBG_CR_BYTE_ADDRESS_SELECT_MASK
 				    | ARM_DBG_CR_ENABLE_MASK))
 				    | ARM_DBGBCR_TYPE_IVA
@@ -1055,19 +1265,32 @@ machine_thread_set_state(
 		break;
 	}
 
+
 	default:
 		return KERN_INVALID_ARGUMENT;
 	}
 	return KERN_SUCCESS;
 }
 
+mach_vm_address_t
+machine_thread_pc(thread_t thread)
+{
+	struct arm_saved_state *ss = get_user_regs(thread);
+	return (mach_vm_address_t)get_saved_state_pc(ss);
+}
+
+void
+machine_thread_reset_pc(thread_t thread, mach_vm_address_t pc)
+{
+	set_saved_state_pc(get_user_regs(thread), (register_t)pc);
+}
+
 /*
- * Routine:	machine_thread_state_initialize
+ * Routine: machine_thread_state_initialize
  *
  */
 kern_return_t
-machine_thread_state_initialize(
-	thread_t thread)
+machine_thread_state_initialize(thread_t thread)
 {
 	arm_context_t *context = thread->machine.contextData;
 
@@ -1090,19 +1313,24 @@ machine_thread_state_initialize(
 
 	thread->machine.DebugData = NULL;
 
+#if defined(HAS_APPLE_PAC)
+	/* Sign the initial user-space thread state */
+	if (thread->machine.upcb != NULL) {
+		ml_sign_thread_state(thread->machine.upcb, 0, 0, 0, 0, 0);
+	}
+#endif /* defined(HAS_APPLE_PAC) */
 
 	return KERN_SUCCESS;
 }
 
 /*
- * Routine:	machine_thread_dup
+ * Routine: machine_thread_dup
  *
  */
 kern_return_t
-machine_thread_dup(
-	thread_t self,
-	thread_t target,
-	__unused boolean_t is_corpse)
+machine_thread_dup(thread_t self,
+    thread_t target,
+    __unused boolean_t is_corpse)
 {
 	struct arm_saved_state *self_saved_state;
 	struct arm_saved_state *target_saved_state;
@@ -1113,46 +1341,47 @@ machine_thread_dup(
 	self_saved_state = self->machine.upcb;
 	target_saved_state = target->machine.upcb;
 	bcopy(self_saved_state, target_saved_state, sizeof(struct arm_saved_state));
+#if defined(HAS_APPLE_PAC)
+	if (!is_corpse && is_saved_state64(self_saved_state)) {
+		check_and_sign_copied_thread_state(target_saved_state, self_saved_state);
+	}
+#endif /* defined(HAS_APPLE_PAC) */
 
 	return KERN_SUCCESS;
 }
 
 /*
- * Routine:	get_user_regs
+ * Routine: get_user_regs
  *
  */
 struct arm_saved_state *
-get_user_regs(
-	thread_t thread)
+get_user_regs(thread_t thread)
 {
 	return thread->machine.upcb;
 }
 
 arm_neon_saved_state_t *
-get_user_neon_regs(
-	thread_t thread)
+get_user_neon_regs(thread_t thread)
 {
 	return thread->machine.uNeon;
 }
 
 /*
- * Routine:	find_user_regs
+ * Routine: find_user_regs
  *
  */
 struct arm_saved_state *
-find_user_regs(
-	thread_t thread)
+find_user_regs(thread_t thread)
 {
 	return thread->machine.upcb;
 }
 
 /*
- * Routine:	find_kern_regs
+ * Routine: find_kern_regs
  *
  */
 struct arm_saved_state *
-find_kern_regs(
-	thread_t thread)
+find_kern_regs(thread_t thread)
 {
 	/*
 	 * This works only for an interrupted kernel thread
@@ -1165,8 +1394,7 @@ find_kern_regs(
 }
 
 arm_debug_state32_t *
-find_debug_state32(
-	thread_t thread)
+find_debug_state32(thread_t thread)
 {
 	if (thread && thread->machine.DebugData) {
 		return &(thread->machine.DebugData->uds.ds32);
@@ -1176,8 +1404,7 @@ find_debug_state32(
 }
 
 arm_debug_state64_t *
-find_debug_state64(
-	thread_t thread)
+find_debug_state64(thread_t thread)
 {
 	if (thread && thread->machine.DebugData) {
 		return &(thread->machine.DebugData->uds.ds64);
@@ -1187,19 +1414,18 @@ find_debug_state64(
 }
 
 /*
- * Routine:	thread_userstack
+ * Routine: thread_userstack
  *
  */
 kern_return_t
-thread_userstack(
-	__unused thread_t thread,
-	int flavor,
-	thread_state_t tstate,
-	unsigned int count,
-	mach_vm_offset_t * user_stack,
-	int *customstack,
-	boolean_t is_64bit_data
-	)
+thread_userstack(__unused thread_t  thread,
+    int                flavor,
+    thread_state_t     tstate,
+    unsigned int       count,
+    mach_vm_offset_t * user_stack,
+    int *              customstack,
+    boolean_t          is_64bit_data
+    )
 {
 	register_t sp;
 
@@ -1267,9 +1493,8 @@ thread_userstack(
  * thread, if otherwise unknown.
  */
 kern_return_t
-thread_userstackdefault(
-	mach_vm_offset_t *default_user_stack,
-	boolean_t is64bit)
+thread_userstackdefault(mach_vm_offset_t * default_user_stack,
+    boolean_t          is64bit)
 {
 	if (is64bit) {
 		*default_user_stack = USRSTACK64;
@@ -1281,11 +1506,12 @@ thread_userstackdefault(
 }
 
 /*
- * Routine:	thread_setuserstack
+ * Routine: thread_setuserstack
  *
  */
 void
-thread_setuserstack(thread_t thread, mach_vm_address_t user_stack)
+thread_setuserstack(thread_t          thread,
+    mach_vm_address_t user_stack)
 {
 	struct arm_saved_state *sv;
 
@@ -1297,11 +1523,12 @@ thread_setuserstack(thread_t thread, mach_vm_address_t user_stack)
 }
 
 /*
- * Routine:	thread_adjuserstack
+ * Routine: thread_adjuserstack
  *
  */
 uint64_t
-thread_adjuserstack(thread_t thread, int adjust)
+thread_adjuserstack(thread_t thread,
+    int      adjust)
 {
 	struct arm_saved_state *sv;
 	uint64_t sp;
@@ -1316,11 +1543,12 @@ thread_adjuserstack(thread_t thread, int adjust)
 }
 
 /*
- * Routine:	thread_setentrypoint
+ * Routine: thread_setentrypoint
  *
  */
 void
-thread_setentrypoint(thread_t thread, mach_vm_offset_t entry)
+thread_setentrypoint(thread_t         thread,
+    mach_vm_offset_t entry)
 {
 	struct arm_saved_state *sv;
 
@@ -1332,17 +1560,16 @@ thread_setentrypoint(thread_t thread, mach_vm_offset_t entry)
 }
 
 /*
- * Routine:	thread_entrypoint
+ * Routine: thread_entrypoint
  *
  */
 kern_return_t
-thread_entrypoint(
-	__unused thread_t thread,
-	int flavor,
-	thread_state_t tstate,
-	unsigned int count __unused,
-	mach_vm_offset_t * entry_point
-	)
+thread_entrypoint(__unused thread_t  thread,
+    int                flavor,
+    thread_state_t     tstate,
+    unsigned int       count __unused,
+    mach_vm_offset_t * entry_point
+    )
 {
 	switch (flavor) {
 	case ARM_THREAD_STATE:
@@ -1388,13 +1615,12 @@ thread_entrypoint(
 
 
 /*
- * Routine:	thread_set_child
+ * Routine: thread_set_child
  *
  */
 void
-thread_set_child(
-	thread_t child,
-	int pid)
+thread_set_child(thread_t child,
+    int      pid)
 {
 	struct arm_saved_state *child_state;
 
@@ -1406,13 +1632,12 @@ thread_set_child(
 
 
 /*
- * Routine:	thread_set_parent
+ * Routine: thread_set_parent
  *
  */
 void
-thread_set_parent(
-	thread_t parent,
-	int pid)
+thread_set_parent(thread_t parent,
+    int      pid)
 {
 	struct arm_saved_state *parent_state;
 
@@ -1431,10 +1656,10 @@ struct arm_act_context {
 };
 
 /*
- * Routine:	act_thread_csave
+ * Routine: act_thread_csave
  *
  */
-void           *
+void *
 act_thread_csave(void)
 {
 	struct arm_act_context *ic;
@@ -1459,13 +1684,13 @@ act_thread_csave(void)
 		val = ARM_NEON_STATE64_COUNT;
 		kret = machine_thread_get_state(thread,
 		    ARM_NEON_STATE64,
-		    (thread_state_t) &ic->ns,
+		    (thread_state_t)&ic->ns,
 		    &val);
 	} else {
 		val = ARM_NEON_STATE_COUNT;
 		kret = machine_thread_get_state(thread,
 		    ARM_NEON_STATE,
-		    (thread_state_t) &ic->ns,
+		    (thread_state_t)&ic->ns,
 		    &val);
 	}
 	if (kret != KERN_SUCCESS) {
@@ -1477,11 +1702,11 @@ act_thread_csave(void)
 }
 
 /*
- * Routine:	act_thread_catt
+ * Routine: act_thread_catt
  *
  */
 void
-act_thread_catt(void *ctx)
+act_thread_catt(void * ctx)
 {
 	struct arm_act_context *ic;
 	kern_return_t   kret;
@@ -1501,12 +1726,12 @@ act_thread_catt(void *ctx)
 	if (thread_is_64bit_data(thread)) {
 		kret = machine_thread_set_state(thread,
 		    ARM_NEON_STATE64,
-		    (thread_state_t) &ic->ns,
+		    (thread_state_t)&ic->ns,
 		    ARM_NEON_STATE64_COUNT);
 	} else {
 		kret = machine_thread_set_state(thread,
 		    ARM_NEON_STATE,
-		    (thread_state_t) &ic->ns,
+		    (thread_state_t)&ic->ns,
 		    ARM_NEON_STATE_COUNT);
 	}
 	if (kret != KERN_SUCCESS) {
@@ -1518,7 +1743,7 @@ out:
 }
 
 /*
- * Routine:	act_thread_catt
+ * Routine: act_thread_catt
  *
  */
 void
@@ -1528,7 +1753,8 @@ act_thread_cfree(void *ctx)
 }
 
 kern_return_t
-thread_set_wq_state32(thread_t thread, thread_state_t tstate)
+thread_set_wq_state32(thread_t       thread,
+    thread_state_t tstate)
 {
 	arm_thread_state_t *state;
 	struct arm_saved_state *saved_state;
@@ -1565,7 +1791,8 @@ thread_set_wq_state32(thread_t thread, thread_state_t tstate)
 }
 
 kern_return_t
-thread_set_wq_state64(thread_t thread, thread_state_t tstate)
+thread_set_wq_state64(thread_t       thread,
+    thread_state_t tstate)
 {
 	arm_thread_state64_t *state;
 	struct arm_saved_state *saved_state;

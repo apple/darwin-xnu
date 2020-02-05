@@ -30,10 +30,6 @@ T_DECL(settime_32089962_not_entitled_root,
 	struct timeval adj_time;
 	struct timex ntptime;
 
-	if (geteuid() != 0) {
-		T_SKIP("settimeofday_root_29193041 test requires root privileges to run.");
-	}
-
 	/* test settimeofday */
 	T_QUIET; T_ASSERT_POSIX_ZERO(gettimeofday(&settimeofdaytime, NULL), NULL);
 	T_ASSERT_POSIX_ZERO(settimeofday(&settimeofdaytime, NULL), NULL);
@@ -67,7 +63,7 @@ T_DECL(settime_32089962_not_entitled_not_root,
 	T_QUIET; T_ASSERT_POSIX_ZERO(gettimeofday(&settimeofdaytime, NULL), NULL);
 
 	/* test settimeofday */
-#if TARGET_OS_EMBEDDED
+#if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 	T_ASSERT_POSIX_ZERO(settimeofday(&settimeofdaytime, NULL), NULL);
 #else
 	res = settimeofday(&settimeofdaytime, NULL);
@@ -94,10 +90,6 @@ T_DECL(settimeofday_29193041_not_entitled_root,
 {
 	struct timeval time;
 	long new_time;
-
-	if (geteuid() != 0) {
-		T_SKIP("settimeofday_root_29193041 test requires root privileges to run.");
-	}
 
 	T_QUIET; T_ASSERT_POSIX_ZERO(gettimeofday(&time, NULL), NULL);
 
@@ -137,7 +129,7 @@ T_DECL(settimeofday_29193041_not_entitled_not_root,
 	time.tv_sec = new_time;
 	time.tv_usec = 0;
 
-#if TARGET_OS_EMBEDDED
+#if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 	T_ASSERT_POSIX_ZERO(settimeofday(&time, NULL), NULL);
 #else
 	int res = settimeofday(&time, NULL);
@@ -146,7 +138,7 @@ T_DECL(settimeofday_29193041_not_entitled_not_root,
 
 	T_QUIET; T_ASSERT_POSIX_ZERO(gettimeofday(&time, NULL), NULL);
 
-#if TARGET_OS_EMBEDDED
+#if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 	/* expext to be past new_time */
 	T_EXPECT_GE_LONG(time.tv_sec, new_time, "Time successfully changed without root and without entitlement");
 	time.tv_sec -= DAY;

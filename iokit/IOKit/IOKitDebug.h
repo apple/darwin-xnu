@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -40,7 +40,7 @@
 
 class IOKitDiagnostics : public OSObject
 {
-	OSDeclareDefaultStructors(IOKitDiagnostics)
+	OSDeclareDefaultStructors(IOKitDiagnostics);
 
 public:
 	static OSObject * diagnostics( void );
@@ -128,8 +128,31 @@ enum {
 	kIOTraceCompatBootArgs  =               kIOTraceIOService | kIOTracePowerMgmt
 };
 
+enum {
+	kIODKEnable             = 0x00000001ULL,
+	kIODKLogSetup   = 0x00000002ULL,
+	kIODKLogIPC             = 0x00000004ULL,
+	kIODKLogPM             = 0x00000008ULL,
+	kIODKLogMessages = 0x00000010ULL,
+
+	kIODKDisablePM = 0x000000100ULL,
+	kIODKDisableDextLaunch = 0x00001000ULL,
+	kIODKDisableDextTag    = 0x00002000ULL,
+	kIODKDisableCDHashChecking  = 0x00004000ULL,
+	kIODKDisableEntitlementChecking = 0x00008000ULL,
+};
+
+#if XNU_KERNEL_PRIVATE
+
+#define DKLOG(fmt, args...) { IOLog("DK: " fmt, ## args); }
+#define DKS                "%s-0x%qx"
+#define DKN(s)              s->getName(), s->getRegistryEntryID()
+
+#endif /* XNU_KERNEL_PRIVATE */
+
 extern SInt64    gIOKitDebug;
 extern SInt64    gIOKitTrace;
+extern SInt64    gIODKDebug;
 
 #ifdef __cplusplus
 extern "C" {

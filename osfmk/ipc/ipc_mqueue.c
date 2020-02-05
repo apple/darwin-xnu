@@ -84,6 +84,7 @@
 #include <kern/thread.h>
 #include <kern/waitq.h>
 
+#include <ipc/port.h>
 #include <ipc/ipc_mqueue.h>
 #include <ipc/ipc_kmsg.h>
 #include <ipc/ipc_port.h>
@@ -106,7 +107,7 @@ int ipc_mqueue_full;            /* address is event for queue space */
 int ipc_mqueue_rcv;             /* address is event for message arrival */
 
 /* forward declarations */
-void ipc_mqueue_receive_results(wait_result_t result);
+static void ipc_mqueue_receive_results(wait_result_t result);
 static void ipc_mqueue_peek_on_thread(
 	ipc_mqueue_t        port_mq,
 	mach_msg_option_t   option,
@@ -132,6 +133,7 @@ ipc_mqueue_init(
 		mqueue->imq_seqno = 0;
 		mqueue->imq_msgcount = 0;
 		mqueue->imq_qlimit = MACH_PORT_QLIMIT_DEFAULT;
+		mqueue->imq_context = 0;
 		mqueue->imq_fullwaiters = FALSE;
 #if MACH_FLIPC
 		mqueue->imq_fport = FPORT_NULL;
@@ -417,6 +419,26 @@ leave:
 	return KERN_SUCCESS;
 }
 
+
+/*
+ *	Routine:	ipc_mqueue_has_klist
+ *	Purpose:
+ *		Returns whether the given mqueue imq_klist field can be used as a klist.
+ */
+static inline bool
+ipc_mqueue_has_klist(ipc_mqueue_t mqueue)
+{
+	ipc_object_t object = imq_to_object(mqueue);
+	if (io_otype(object) != IOT_PORT) {
+		return true;
+	}
+	ipc_port_t port = ip_from_mq(mqueue);
+	if (port->ip_specialreply) {
+		return false;
+	}
+	return port->ip_sync_link_state == PORT_SYNC_LINK_ANY;
+}
+
 /*
  *	Routine:	ipc_mqueue_changed
  *	Purpose:
@@ -429,7 +451,7 @@ ipc_mqueue_changed(
 	ipc_space_t     space,
 	ipc_mqueue_t    mqueue)
 {
-	if (IMQ_KLIST_VALID(mqueue) && SLIST_FIRST(&mqueue->imq_klist)) {
+	if (ipc_mqueue_has_klist(mqueue) && SLIST_FIRST(&mqueue->imq_klist)) {
 		/*
 		 * Indicate that this message queue is vanishing
 		 *
@@ -440,7 +462,7 @@ ipc_mqueue_changed(
 		 * The new process may want to register the port it gets back with an
 		 * EVFILT_MACHPORT filter again, and may have pending sync IPC on this
 		 * port pending already, in which case we want the imq_klist field to be
-		 * reusable for nefarious purposes (see IMQ_SET_INHERITOR).
+		 * reusable for nefarious purposes.
 		 *
 		 * Fortunately, we really don't need this linkage anymore after this
 		 * point as EV_VANISHED / EV_EOF will be the last thing delivered ever.
@@ -458,6 +480,11 @@ ipc_mqueue_changed(
 		 */
 		assert(space);
 		knote_vanish(&mqueue->imq_klist, is_active(space));
+	}
+
+	if (io_otype(imq_to_object(mqueue)) == IOT_PORT) {
+		ipc_port_adjust_sync_link_state_locked(ip_from_mq(mqueue), PORT_SYNC_LINK_ANY, NULL);
+	} else {
 		klist_init(&mqueue->imq_klist);
 	}
 
@@ -516,7 +543,6 @@ ipc_mqueue_send(
 		thread_t cur_thread = current_thread();
 		ipc_port_t port = ip_from_mq(mqueue);
 		struct turnstile *send_turnstile = TURNSTILE_NULL;
-		turnstile_inheritor_t inheritor = TURNSTILE_INHERITOR_NULL;
 		uint64_t deadline;
 
 		/*
@@ -544,17 +570,8 @@ ipc_mqueue_send(
 		    port_send_turnstile_address(port),
 		    TURNSTILE_NULL, TURNSTILE_SYNC_IPC);
 
-		/* Check if the port in is in transit, get the destination port's turnstile */
-		if (ip_active(port) &&
-		    port->ip_receiver_name == MACH_PORT_NULL &&
-		    port->ip_destination != NULL) {
-			inheritor = port_send_turnstile(port->ip_destination);
-		} else {
-			inheritor = ipc_port_get_inheritor(port);
-		}
-
-		turnstile_update_inheritor(send_turnstile, inheritor,
-		    TURNSTILE_DELAYED_UPDATE | TURNSTILE_INHERITOR_TURNSTILE);
+		ipc_port_send_update_inheritor(port, send_turnstile,
+		    TURNSTILE_DELAYED_UPDATE);
 
 		wresult = waitq_assert_wait64_leeway(
 			&send_turnstile->ts_waitq,
@@ -575,7 +592,7 @@ ipc_mqueue_send(
 
 		/* Call turnstile complete with interlock held */
 		imq_lock(mqueue);
-		turnstile_complete((uintptr_t)port, port_send_turnstile_address(port), NULL);
+		turnstile_complete((uintptr_t)port, port_send_turnstile_address(port), NULL, TURNSTILE_SYNC_IPC);
 		imq_unlock(mqueue);
 
 		/* Call cleanup after dropping the interlock */
@@ -636,11 +653,13 @@ ipc_mqueue_override_send(
 		ipc_kmsg_t first = ipc_kmsg_queue_first(&mqueue->imq_messages);
 
 		if (first && ipc_kmsg_override_qos(&mqueue->imq_messages, first, override)) {
-			ipc_port_t port = ip_from_mq(mqueue);
+			ipc_object_t object = imq_to_object(mqueue);
+			assert(io_otype(object) == IOT_PORT);
+			ipc_port_t port = ip_object_to_port(object);
 			if (ip_active(port) &&
 			    port->ip_receiver_name != MACH_PORT_NULL &&
 			    is_active(port->ip_receiver) &&
-			    IMQ_KLIST_VALID(mqueue)) {
+			    ipc_mqueue_has_klist(mqueue)) {
 				KNOTE(&mqueue->imq_klist, 0);
 			}
 		}
@@ -787,11 +806,13 @@ ipc_mqueue_post(
 			if (mqueue->imq_msgcount > 0) {
 				if (ipc_kmsg_enqueue_qos(&mqueue->imq_messages, kmsg)) {
 					/* if the space is dead there is no point calling KNOTE */
-					ipc_port_t port = ip_from_mq(mqueue);
+					ipc_object_t object = imq_to_object(mqueue);
+					assert(io_otype(object) == IOT_PORT);
+					ipc_port_t port = ip_object_to_port(object);
 					if (ip_active(port) &&
 					    port->ip_receiver_name != MACH_PORT_NULL &&
 					    is_active(port->ip_receiver) &&
-					    IMQ_KLIST_VALID(mqueue)) {
+					    ipc_mqueue_has_klist(mqueue)) {
 						KNOTE(&mqueue->imq_klist, 0);
 					}
 				}
@@ -902,7 +923,7 @@ out_unlock:
 }
 
 
-/* static */ void
+static void
 ipc_mqueue_receive_results(wait_result_t saved_wait_result)
 {
 	thread_t                self = current_thread();
@@ -1077,7 +1098,6 @@ ipc_mqueue_receive_on_thread(
 	wait_result_t           wresult;
 	uint64_t                deadline;
 	struct turnstile        *rcv_turnstile = TURNSTILE_NULL;
-	turnstile_inheritor_t   inheritor = NULL;
 
 	/* called with mqueue locked */
 
@@ -1179,8 +1199,10 @@ ipc_mqueue_receive_on_thread(
 	}
 
 	/*
-	 * Threads waiting on a port (not portset)
-	 * will wait on port's receive turnstile.
+	 * Threads waiting on a special reply port
+	 * (not portset or regular ports)
+	 * will wait on its receive turnstile.
+	 *
 	 * Donate waiting thread's turnstile and
 	 * setup inheritor for special reply port.
 	 * Based on the state of the special reply
@@ -1195,18 +1217,14 @@ ipc_mqueue_receive_on_thread(
 	 * will be converted to to turnstile waitq
 	 * in waitq_assert_wait instead of global waitqs.
 	 */
-	if (imq_is_queue(mqueue)) {
+	if (imq_is_queue(mqueue) && ip_from_mq(mqueue)->ip_specialreply) {
 		ipc_port_t port = ip_from_mq(mqueue);
 		rcv_turnstile = turnstile_prepare((uintptr_t)port,
 		    port_rcv_turnstile_address(port),
 		    TURNSTILE_NULL, TURNSTILE_SYNC_IPC);
 
-		if (port->ip_specialreply) {
-			inheritor = ipc_port_get_special_reply_port_inheritor(port);
-		}
-
-		turnstile_update_inheritor(rcv_turnstile, inheritor,
-		    (TURNSTILE_INHERITOR_TURNSTILE | TURNSTILE_DELAYED_UPDATE));
+		ipc_port_recv_update_inheritor(port, rcv_turnstile,
+		    TURNSTILE_DELAYED_UPDATE);
 	}
 
 	thread_set_pending_block_hint(thread, kThreadWaitPortReceive);
@@ -1592,7 +1610,7 @@ ipc_mqueue_set_gather_member_names(
 
 		/* only receive rights can be members of port sets */
 		if ((entry->ie_bits & MACH_PORT_TYPE_RECEIVE) != MACH_PORT_TYPE_NONE) {
-			__IGNORE_WCASTALIGN(ipc_port_t port = (ipc_port_t)entry->ie_object);
+			ipc_port_t port = ip_object_to_port(entry->ie_object);
 			ipc_mqueue_t mq = &port->ip_messages;
 
 			assert(IP_VALID(port));
@@ -1780,6 +1798,7 @@ ipc_mqueue_copyin(
 	ipc_object_t            *objectp)
 {
 	ipc_entry_t entry;
+	ipc_entry_bits_t bits;
 	ipc_object_t object;
 	ipc_mqueue_t mqueue;
 
@@ -1795,24 +1814,23 @@ ipc_mqueue_copyin(
 		return MACH_RCV_INVALID_NAME;
 	}
 
+	bits = entry->ie_bits;
 	object = entry->ie_object;
 
-	if (entry->ie_bits & MACH_PORT_TYPE_RECEIVE) {
-		ipc_port_t port;
+	if (bits & MACH_PORT_TYPE_RECEIVE) {
+		ipc_port_t port = ip_object_to_port(object);
 
-		__IGNORE_WCASTALIGN(port = (ipc_port_t) object);
 		assert(port != IP_NULL);
 
 		ip_lock(port);
-		assert(ip_active(port));
+		require_ip_active(port);
 		assert(port->ip_receiver_name == name);
 		assert(port->ip_receiver == space);
 		is_read_unlock(space);
 		mqueue = &port->ip_messages;
-	} else if (entry->ie_bits & MACH_PORT_TYPE_PORT_SET) {
-		ipc_pset_t pset;
+	} else if (bits & MACH_PORT_TYPE_PORT_SET) {
+		ipc_pset_t pset = ips_object_to_pset(object);
 
-		__IGNORE_WCASTALIGN(pset = (ipc_pset_t) object);
 		assert(pset != IPS_NULL);
 
 		ips_lock(pset);
@@ -1822,6 +1840,10 @@ ipc_mqueue_copyin(
 		mqueue = &pset->ips_messages;
 	} else {
 		is_read_unlock(space);
+		/* guard exception if we never held the receive right in this entry */
+		if ((bits & MACH_PORT_TYPE_EX_RECEIVE) == 0) {
+			mach_port_guard_exception(name, 0, 0, kGUARD_EXC_RCV_INVALID_NAME);
+		}
 		return MACH_RCV_INVALID_NAME;
 	}
 
@@ -1836,4 +1858,20 @@ ipc_mqueue_copyin(
 	*objectp = object;
 	*mqueuep = mqueue;
 	return MACH_MSG_SUCCESS;
+}
+
+void
+imq_lock(ipc_mqueue_t mq)
+{
+	ipc_object_t object = imq_to_object(mq);
+	ipc_object_validate(object);
+	waitq_lock(&(mq)->imq_wait_queue);
+}
+
+unsigned int
+imq_lock_try(ipc_mqueue_t mq)
+{
+	ipc_object_t object = imq_to_object(mq);
+	ipc_object_validate(object);
+	return waitq_lock_try(&(mq)->imq_wait_queue);
 }

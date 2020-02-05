@@ -44,6 +44,6 @@ cc_cmp_safe(size_t num, const void * ptr1, const void * ptr2)
 	for (i = 0; i < num; i++) {
 		flag |= (s[i] ^ t[i]);
 	}
-	HEAVISIDE_STEP_UINT8(flag, flag); // flag=(flag==0)?0:1;
+	CC_HEAVISIDE_STEP(flag, flag); // flag=(flag==0)?0:1;
 	return flag; // 0 iff all bytes were equal, 1 if there is any difference
 }

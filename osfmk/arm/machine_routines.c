@@ -50,6 +50,7 @@
 #include <kern/coalition.h>
 #include <pexpert/device_tree.h>
 #include <arm/cpuid_internal.h>
+#include <arm/cpu_capabilities.h>
 
 #include <IOKit/IOPlatformExpert.h>
 
@@ -69,7 +70,9 @@ uint64_t TLockTimeOut;
 uint64_t MutexSpin;
 boolean_t is_clock_configured = FALSE;
 
+#if CONFIG_NONFATAL_ASSERTS
 extern int mach_assert;
+#endif
 extern volatile uint32_t debug_enabled;
 
 void machine_conf(void);
@@ -79,7 +82,9 @@ machine_startup(__unused boot_args * args)
 {
 	int boot_arg;
 
+#if CONFIG_NONFATAL_ASSERTS
 	PE_parse_boot_argn("assert", &mach_assert, sizeof(mach_assert));
+#endif
 
 	if (PE_parse_boot_argn("preempt", &boot_arg, sizeof(boot_arg))) {
 		default_preemption_rate = boot_arg;
@@ -222,8 +227,8 @@ ml_init_lock_timeout(void)
 void
 ml_cpu_up(void)
 {
-	hw_atomic_add(&machine_info.physical_cpu, 1);
-	hw_atomic_add(&machine_info.logical_cpu, 1);
+	os_atomic_inc(&machine_info.physical_cpu, relaxed);
+	os_atomic_inc(&machine_info.logical_cpu, relaxed);
 }
 
 /*
@@ -235,8 +240,8 @@ ml_cpu_down(void)
 {
 	cpu_data_t      *cpu_data_ptr;
 
-	hw_atomic_sub(&machine_info.physical_cpu, 1);
-	hw_atomic_sub(&machine_info.logical_cpu, 1);
+	os_atomic_dec(&machine_info.physical_cpu, relaxed);
+	os_atomic_dec(&machine_info.logical_cpu, relaxed);
 
 	/*
 	 * If we want to deal with outstanding IPIs, we need to
@@ -617,7 +622,7 @@ ml_processor_register(ml_processor_info_t *in_processor_info,
 #endif
 
 	if (!is_boot_cpu) {
-		early_random_cpu_init(this_cpu_datap->cpu_number);
+		random_cpu_init(this_cpu_datap->cpu_number);
 	}
 
 	return KERN_SUCCESS;
@@ -693,6 +698,16 @@ ml_io_map(
 	return io_map(phys_addr, size, VM_WIMG_IO);
 }
 
+/* Map memory map IO space (with protections specified) */
+vm_offset_t
+ml_io_map_with_prot(
+	vm_offset_t phys_addr,
+	vm_size_t size,
+	vm_prot_t prot)
+{
+	return io_map_with_prot(phys_addr, size, VM_WIMG_IO, prot);
+}
+
 vm_offset_t
 ml_io_map_wcomb(
 	vm_offset_t phys_addr,
@@ -728,10 +743,26 @@ vm_offset_t
 ml_static_vtop(
 	vm_offset_t vaddr)
 {
-	if (((vm_address_t)(vaddr) - gVirtBase) >= gPhysSize) {
-		panic("ml_static_ptovirt(): illegal vaddr: %p\n", (void*)vaddr);
-	}
+	assertf(((vm_address_t)(vaddr) - gVirtBase) < gPhysSize, "%s: illegal vaddr: %p", __func__, (void*)vaddr);
 	return (vm_address_t)(vaddr) - gVirtBase + gPhysBase;
+}
+
+/*
+ * Return the maximum contiguous KVA range that can be accessed from this
+ * physical address.  For arm64, we employ a segmented physical aperture
+ * relocation table which can limit the available range for a given PA to
+ * something less than the extent of physical memory.  But here, we still
+ * have a flat physical aperture, so no such requirement exists.
+ */
+vm_map_address_t
+phystokv_range(pmap_paddr_t pa, vm_size_t *max_len)
+{
+	vm_size_t len = gPhysSize - (pa - gPhysBase);
+	if (*max_len > len) {
+		*max_len = len;
+	}
+	assertf((pa - gPhysBase) < gPhysSize, "%s: illegal PA: 0x%lx", __func__, (unsigned long)pa);
+	return pa - gPhysBase + gVirtBase;
 }
 
 vm_offset_t
@@ -811,9 +842,6 @@ ml_static_protect(
 
 			ptmp = (ptmp & ~(ARM_PTE_APMASK | ARM_PTE_NX_MASK)) | arm_prot;
 			*pte_p = ptmp;
-#ifndef  __ARM_L1_PTW__
-			FlushPoC_DcacheRegion((vm_offset_t) pte_p, sizeof(*pte_p));
-#endif
 		}
 	}
 
@@ -1142,13 +1170,13 @@ user_cont_hwclock_allowed(void)
 	return FALSE;
 }
 
-boolean_t
-user_timebase_allowed(void)
+uint8_t
+user_timebase_type(void)
 {
 #if __ARM_TIME__
-	return TRUE;
+	return USER_TIMEBASE_SPEC;
 #else
-	return FALSE;
+	return USER_TIMEBASE_NONE;
 #endif
 }
 
@@ -1156,7 +1184,7 @@ user_timebase_allowed(void)
  * The following are required for parts of the kernel
  * that cannot resolve these functions as inlines:
  */
-extern thread_t current_act(void);
+extern thread_t current_act(void) __attribute__((const));
 thread_t
 current_act(void)
 {
@@ -1164,7 +1192,7 @@ current_act(void)
 }
 
 #undef current_thread
-extern thread_t current_thread(void);
+extern thread_t current_thread(void) __attribute__((const));
 thread_t
 current_thread(void)
 {

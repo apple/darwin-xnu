@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -109,12 +109,14 @@
 #include <net/if.h>
 #include <net/if_types.h>
 #include <net/route.h>
+#include <net/restricted_in_port.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
 #include <netinet/in_pcb.h>
+
 #include <netinet6/in6_var.h>
 #include <netinet/ip6.h>
 #include <netinet6/in6_pcb.h>
@@ -257,10 +259,8 @@ in6_selectsrc_core_ifa(struct sockaddr_in6 *addr, struct ifnet *ifp, int srcsel_
 	if ((ifa->ifa_debug & IFD_DETACHING) != 0) {
 		err = EHOSTUNREACH;
 		ifnet_lock_done(ifp);
-		if (ifa != NULL) {
-			IFA_REMREF(ifa);
-			ifa = NULL;
-		}
+		IFA_REMREF(ifa);
+		ifa = NULL;
 		goto done;
 	}
 	ifnet_lock_done(ifp);
@@ -672,6 +672,9 @@ in6_selectsrc(struct sockaddr_in6 *dstsock, struct ip6_pktopts *opts,
 		if (INP_NO_EXPENSIVE(inp)) {
 			ip6oa.ip6oa_flags |= IP6OAF_NO_EXPENSIVE;
 		}
+		if (INP_NO_CONSTRAINED(inp)) {
+			ip6oa.ip6oa_flags |= IP6OAF_NO_CONSTRAINED;
+		}
 		if (INP_AWDL_UNRESTRICTED(inp)) {
 			ip6oa.ip6oa_flags |= IP6OAF_AWDL_UNRESTRICTED;
 		}
@@ -843,6 +846,7 @@ selectroute(struct sockaddr_in6 *srcsock, struct sockaddr_in6 *dstsock,
 	boolean_t select_srcif, proxied_ifa = FALSE, local_dst = FALSE;
 	unsigned int ifscope = ((ip6oa != NULL) ?
 	    ip6oa->ip6oa_boundif : IFSCOPE_NONE);
+	boolean_t is_direct = FALSE;
 
 	if (retifp != NULL) {
 		*retifp = NULL;
@@ -868,15 +872,49 @@ selectroute(struct sockaddr_in6 *srcsock, struct sockaddr_in6 *dstsock,
 	}
 
 	/*
-	 * Perform source interface selection only if Scoped Routing
+	 * Perform source interface selection if Scoped Routing
 	 * is enabled and a source address that isn't unspecified.
 	 */
 	select_srcif = (srcsock != NULL &&
 	    !IN6_IS_ADDR_UNSPECIFIED(&srcsock->sin6_addr));
 
+	/*
+	 * For scoped routing, if interface scope is 0 or src/dst addr is linklocal
+	 * or dst addr is multicast, source interface selection should be performed even
+	 * if the destination is directly reachable.
+	 */
+	if (ifscope != IFSCOPE_NONE &&
+	    !(srcsock != NULL && IN6_IS_ADDR_LINKLOCAL(&srcsock->sin6_addr)) &&
+	    !IN6_IS_ADDR_MULTICAST(dst) && !IN6_IS_ADDR_LINKLOCAL(dst)) {
+		struct rtentry *temp_rt = NULL;
+
+		lck_mtx_lock(rnh_lock);
+		temp_rt = rt_lookup(TRUE, (struct sockaddr *)dstsock,
+		    NULL, rt_tables[AF_INET6], ifscope);
+		lck_mtx_unlock(rnh_lock);
+
+		/*
+		 * If the destination is directly reachable, relax
+		 * the behavior around select_srcif, i.e. don't force
+		 * the packet to go out from the interface that is hosting
+		 * the source address.
+		 * It happens when we share v6 with NAT66 and want
+		 * the external interface's v6 address to be reachable
+		 * to the clients we are sharing v6 connectivity with
+		 * using NAT.
+		 */
+		if (temp_rt != NULL) {
+			if ((temp_rt->rt_flags & RTF_GATEWAY) == 0) {
+				select_srcif = FALSE;
+				is_direct = TRUE;
+			}
+			rtfree(temp_rt);
+		}
+	}
+
 	if (ip6_select_srcif_debug) {
-		printf("%s src %s dst %s ifscope %d select_srcif %d\n",
-		    __func__, s_src, s_dst, ifscope, select_srcif);
+		printf("%s src %s dst %s ifscope %d is_direct %d select_srcif %d\n",
+		    __func__, s_src, s_dst, ifscope, is_direct, select_srcif);
 	}
 
 	/* If the caller specified the outgoing interface explicitly, use it */
@@ -1292,6 +1330,8 @@ done:
 	    IFNET_IS_CELLULAR(_ifp)) ||                         \
 	(((_ip6oa)->ip6oa_flags & IP6OAF_NO_EXPENSIVE) &&       \
 	    IFNET_IS_EXPENSIVE(_ifp)) ||                        \
+	(((_ip6oa)->ip6oa_flags & IP6OAF_NO_CONSTRAINED) &&     \
+	    IFNET_IS_CONSTRAINED(_ifp)) ||                      \
 	(!((_ip6oa)->ip6oa_flags & IP6OAF_INTCOPROC_ALLOWED) && \
 	    IFNET_IS_INTCOPROC(_ifp)) ||                        \
 	(!((_ip6oa)->ip6oa_flags & IP6OAF_AWDL_UNRESTRICTED) && \
@@ -1594,6 +1634,15 @@ in6_pcbsetport(struct in6_addr *laddr, struct inpcb *inp, struct proc *p,
 			}
 		}
 		lport = htons(*lastport);
+
+		/*
+		 * Skip if this is a restricted port as we do not want to
+		 * restricted ports as ephemeral
+		 */
+		if (IS_RESTRICTED_IN_PORT(lport)) {
+			continue;
+		}
+
 		found = (in6_pcblookup_local(pcbinfo, &inp->in6p_laddr,
 		    lport, wild) == NULL);
 	} while (!found);

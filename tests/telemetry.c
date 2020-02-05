@@ -7,6 +7,7 @@
 #include <kern/debug.h>
 #include <notify.h>
 #include <sys/kdebug.h>
+#include <sys/sysctl.h>
 #include <TargetConditionals.h>
 
 enum telemetry_pmi {
@@ -22,6 +23,26 @@ T_GLOBAL_META(T_META_NAMESPACE("xnu.debugging.telemetry"),
 
 extern int __telemetry(uint64_t cmd, uint64_t deadline, uint64_t interval,
     uint64_t leeway, uint64_t arg4, uint64_t arg5);
+
+/*
+ * Microstackshots based on PMI are only supported on devices with monotonic
+ * support.
+ */
+
+static void
+skip_if_pmi_unsupported(void)
+{
+	int supported = 0;
+	int ret = sysctlbyname("kern.monotonic.supported", &supported,
+	    &(size_t){ sizeof(supported), }, NULL, 0);
+	if (ret < 0) {
+		T_SKIP("monotonic sysctl generated an error: %d (%s)", errno,
+		    strerror(errno));
+	}
+	if (!supported) {
+		T_SKIP("monotonic must be supported for microstackshots");
+	}
+}
 
 /*
  * Data Analytics (da) also has a microstackshot configuration -- set a PMI
@@ -50,7 +71,11 @@ disable_da_microstackshots(void)
 	CFNumberRef num = CFNumberCreate(NULL, kCFNumberSInt64Type, &zero);
 	set_da_microstackshot_period(num);
 	T_LOG("notified da of tasking change, sleeping");
+#if TARGET_OS_WATCH
+	sleep(8);
+#else /* TARGET_OS_WATCH */
 	sleep(3);
+#endif /* !TARGET_OS_WATCH */
 }
 
 /*
@@ -68,8 +93,7 @@ reenable_da_microstackshots(void)
 static void
 telemetry_cleanup(void)
 {
-	int ret = __telemetry(TELEMETRY_CMD_PMI_SETUP, TELEMETRY_PMI_NONE, 0, 0, 0, 0);
-	T_EXPECT_POSIX_SUCCESS(ret, "telemetry(... NONE ...)");
+	(void)__telemetry(TELEMETRY_CMD_PMI_SETUP, TELEMETRY_PMI_NONE, 0, 0, 0, 0);
 	reenable_da_microstackshots();
 }
 
@@ -107,9 +131,7 @@ thread_spin(__unused void *arg)
 
 T_DECL(microstackshot_pmi, "attempt to configure microstackshots on PMI")
 {
-#if TARGET_OS_WATCH
-	T_SKIP("unsupported platform");
-#endif /* TARGET_OS_WATCH */
+	skip_if_pmi_unsupported();
 
 	T_SETUPBEGIN;
 	ktrace_session_t s = ktrace_session_create();
@@ -122,6 +144,7 @@ T_DECL(microstackshot_pmi, "attempt to configure microstackshots on PMI")
 	__block int interrupt_records = 0;
 	__block int timer_arm_records = 0;
 	__block int unknown_records = 0;
+	__block int empty_records = 0;
 
 	ktrace_events_single(s, MT_MICROSTACKSHOT, ^(__unused struct trace_point *tp) {
 		pmi_events++;
@@ -141,6 +164,14 @@ T_DECL(microstackshot_pmi, "attempt to configure microstackshots on PMI")
 		        timer_arm_records++;
 		}
 
+		if (start->arg2 == end->arg2) {
+			/*
+			 * The buffer didn't grow for this record -- there was
+			 * an error.
+			 */
+			empty_records++;
+		}
+
 		const uint8_t any_record = kPMIRecord | kIORecord | kInterruptRecord |
 		kTimerArmingRecord;
 		if ((start->arg1 & any_record) == 0) {
@@ -158,8 +189,11 @@ T_DECL(microstackshot_pmi, "attempt to configure microstackshots on PMI")
 		pmi_records / (double)SLEEP_SECS);
 		T_EXPECT_EQ(unknown_records, 0, "saw zero unknown record events");
 		T_EXPECT_GT(microstackshot_record_events, 0,
-		"saw non-zero microstackshot record events (%g/sec)",
+		"saw non-zero microstackshot record events (%d -- %g/sec)",
+		microstackshot_record_events,
 		microstackshot_record_events / (double)SLEEP_SECS);
+		T_EXPECT_NE(empty_records, microstackshot_record_events,
+		"saw non-empty records (%d empty)", empty_records);
 
 		if (interrupt_records > 0) {
 		        T_LOG("saw %g interrupt records per second",
@@ -216,6 +250,8 @@ T_DECL(microstackshot_pmi, "attempt to configure microstackshots on PMI")
 T_DECL(error_handling,
     "ensure that error conditions for the telemetry syscall are observed")
 {
+	skip_if_pmi_unsupported();
+
 	telemetry_init();
 
 	int ret = __telemetry(TELEMETRY_CMD_PMI_SETUP, TELEMETRY_PMI_INSTRS,

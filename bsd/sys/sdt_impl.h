@@ -27,13 +27,6 @@
 #ifndef _SDT_IMPL_H
 #define _SDT_IMPL_H
 
-/*
- * This file has been created by splitting up the original DTrace sdt.h
- * header. Keep the pragma notice here to allow version tracking.
- */
-
-/* #pragma ident	"@(#)sdt.h	1.7	05/06/08 SMI" */
-
 #ifdef  __cplusplus
 extern "C" {
 #endif
@@ -50,8 +43,6 @@ typedef struct sdt_probedesc {
 #ifdef  __cplusplus
 }
 #endif
-
-/* #pragma ident	"@(#)sdt_impl.h	1.3	05/06/08 SMI" */
 
 #ifdef  __cplusplus
 extern "C" {

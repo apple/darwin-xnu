@@ -65,8 +65,7 @@ port_name_to_semaphore(
 		return KERN_INVALID_NAME;
 	}
 
-	kr = ipc_object_translate(current_space(), name, MACH_PORT_RIGHT_SEND,
-	    (ipc_object_t *) &kern_port);
+	kr = ipc_port_translate_send(current_space(), name, &kern_port);
 	if (kr != KERN_SUCCESS) {
 		*semaphorep = SEMAPHORE_NULL;
 		return kr;
@@ -108,7 +107,7 @@ convert_port_to_semaphore(ipc_port_t port)
 		 * keeps the semaphore bound to the port (and active).
 		 */
 		if (ip_kotype(port) == IKOT_SEMAPHORE) {
-			assert(ip_active(port));
+			require_ip_active(port);
 			semaphore = (semaphore_t) port->ip_kobject;
 			semaphore_reference(semaphore);
 			return semaphore;
@@ -132,47 +131,19 @@ convert_port_to_semaphore(ipc_port_t port)
 ipc_port_t
 convert_semaphore_to_port(semaphore_t semaphore)
 {
-	ipc_port_t port, send;
-
 	if (semaphore == SEMAPHORE_NULL) {
 		return IP_NULL;
 	}
 
-	/* caller is donating a reference */
-	port = semaphore->port;
-
-	if (!IP_VALID(port)) {
-		port = ipc_port_alloc_kernel();
-		assert(IP_VALID(port));
-		ipc_kobject_set_atomically(port, (ipc_kobject_t) semaphore, IKOT_SEMAPHORE);
-
-		/* If we lose the race, deallocate and pick up the other guy's port */
-		if (!OSCompareAndSwapPtr(IP_NULL, port, &semaphore->port)) {
-			ipc_port_dealloc_kernel(port);
-			port = semaphore->port;
-			assert(ip_kotype(port) == IKOT_SEMAPHORE);
-			assert(port->ip_kobject == (ipc_kobject_t)semaphore);
-		}
-	}
-
-	ip_lock(port);
-	assert(ip_active(port));
-	send = ipc_port_make_send_locked(port);
-
-	if (1 == port->ip_srights) {
-		ipc_port_t old_notify;
-
-		/* transfer our ref to the port, and arm the no-senders notification */
-		assert(IP_NULL == port->ip_nsrequest);
-		ipc_port_nsrequest(port, port->ip_mscount, ipc_port_make_sonce_locked(port), &old_notify);
-		/* port unlocked */
-		assert(IP_NULL == old_notify);
-	} else {
-		/* piggyback on the existing port reference, so consume ours */
-		ip_unlock(port);
+	/*
+	 * make a send right and donate our reference for
+	 * semaphore_notify if this is the first send right
+	 */
+	if (!ipc_kobject_make_send_lazy_alloc_port(&semaphore->port,
+	    (ipc_kobject_t) semaphore, IKOT_SEMAPHORE)) {
 		semaphore_dereference(semaphore);
 	}
-	return send;
+	return semaphore->port;
 }
 
 /*
@@ -194,13 +165,11 @@ semaphore_notify(mach_msg_header_t *msg)
 {
 	mach_no_senders_notification_t *notification = (void *)msg;
 	ipc_port_t port = notification->not_header.msgh_remote_port;
-	semaphore_t semaphore;
 
-	assert(ip_active(port));
+	require_ip_active(port);
 	assert(IKOT_SEMAPHORE == ip_kotype(port));
-	semaphore = (semaphore_t)port->ip_kobject;
 
-	semaphore_dereference(semaphore);
+	semaphore_dereference((semaphore_t)port->ip_kobject);
 }
 
 lock_set_t

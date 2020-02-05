@@ -64,3 +64,17 @@ memset_s(void *s, size_t smax, int c, size_t n)
 
 	return err;
 }
+
+int
+timingsafe_bcmp(const void *b1, const void *b2, size_t n)
+{
+	const unsigned char *p1 = b1, *p2 = b2;
+	unsigned char ret = 0;
+
+	for (; n > 0; n--) {
+		ret |= *p1++ ^ *p2++;
+	}
+
+	/* map zero to zero and nonzero to one */
+	return (ret + 0xff) >> 8;
+}

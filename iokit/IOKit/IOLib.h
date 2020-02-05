@@ -41,6 +41,7 @@
 
 #include <stdarg.h>
 #include <sys/cdefs.h>
+#include <os/overflow.h>
 
 #include <sys/appleapiopts.h>
 
@@ -80,7 +81,8 @@ typedef void (*IOThreadFunc)(void *argument);
  *   @param size Size of the memory requested.
  *   @result Pointer to the allocated memory, or zero on failure. */
 
-void * IOMalloc(vm_size_t size)  __attribute__((alloc_size(1)));
+void * IOMalloc(vm_size_t size)      __attribute__((alloc_size(1)));
+void * IOMallocZero(vm_size_t size)  __attribute__((alloc_size(1)));
 
 /*! @function IOFree
  *   @abstract Frees memory allocated with IOMalloc.
@@ -147,14 +149,40 @@ void * IOMallocPageable(vm_size_t size, vm_size_t alignment) __attribute__((allo
 void IOFreePageable(void * address, vm_size_t size);
 
 /*
- * Typed memory allocation macros. Both may block.
+ * Typed memory allocation macros. All may block.
  */
-#define IONew(type, number) \
-( ((number) != 0 && ((vm_size_t) ((sizeof(type) * (number) / (number))) != sizeof(type)) /* overflow check 20847256 */ \
-  ? 0 \
-  : ((type*)IOMalloc(sizeof(type) * (number)))) )
 
-#define IODelete(ptr, type, number) IOFree( (ptr) , sizeof(type) * (number) )
+#define IONew(type, count)                              \
+({                                                      \
+    size_t __size;                                      \
+    (os_mul_overflow(sizeof(type), (count), &__size)    \
+    ? ((type *) NULL)                                   \
+    : ((type *) IOMalloc(__size)));                     \
+})
+
+#define IONewZero(type, count)                          \
+({                                                      \
+    size_t __size;                                      \
+    (os_mul_overflow(sizeof(type), (count), &__size)    \
+    ? ((type *) NULL)                                   \
+    : ((type *) IOMallocZero(__size)));                 \
+})
+
+#define IODelete(ptr, type, count)                          \
+({                                                          \
+    size_t __size;                                          \
+    if (!os_mul_overflow(sizeof(type), (count), &__size)) { \
+	IOFree(ptr, __size);                                \
+    }                                                       \
+})
+
+#define IOSafeDeleteNULL(ptr, type, count)              \
+    do {                                                \
+	if (NULL != (ptr)) {                            \
+	    IODelete((ptr), type, count);               \
+	    (ptr) = NULL;                               \
+	}                                               \
+    } while (0)                                         \
 
 /////////////////////////////////////////////////////////////////////////////
 //
@@ -344,7 +372,7 @@ void Debugger(const char * reason);
 #if __LP64__
 #define IOPanic(reason) panic("%s", reason)
 #else
-void IOPanic(const char *reason) __attribute__((deprecated));
+void IOPanic(const char *reason) __attribute__((deprecated)) __abortlike;
 #endif
 
 #ifdef __cplusplus

@@ -49,5 +49,6 @@ void kperf_kpc_thread_sample(struct kpcdata *, int);
 void kperf_kpc_cpu_sample(struct kpcdata *, int);
 void kperf_kpc_thread_log(const struct kpcdata *);
 void kperf_kpc_cpu_log(const struct kpcdata *);
+void kperf_kpc_config_log(const struct kpcdata *);
 
 #endif /* __KPERF_KPC_H__ */

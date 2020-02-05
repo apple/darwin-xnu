@@ -37,10 +37,6 @@
 #endif /* BSD_KERNEL_PRIVATE */
 
 extern int
-kern_asl_msg_va(int level, const char *facility, int num_pairs,
-    va_list vargs, ...);
-
-extern int
 kern_asl_msg(int level, const char *facility, int num_pairs, ...);
 
 extern int escape_str(char *str, int len, int buflen);

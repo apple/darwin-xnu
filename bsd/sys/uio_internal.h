@@ -76,21 +76,21 @@
  * WARNING - make sure to check when adding flags!  Be sure new flags
  * don't overlap the definitions in uio.h
  */
-//	UIO_USERSPACE                           0	defined in uio.h
-#define UIO_USERISPACE                  1
-//	UIO_SYSSPACE				2	defined in uio.h
-#define UIO_PHYS_USERSPACE              3
-#define UIO_PHYS_SYSSPACE               4
-//	UIO_USERSPACE32				5	defined in uio.h
-#define UIO_USERISPACE32                6
-#define UIO_PHYS_USERSPACE32    7
-//	UIO_USERSPACE64				8	defined in uio.h
-#define UIO_USERISPACE64                9
-#define UIO_PHYS_USERSPACE64    10
-//	UIO_SYSSPACE32				11	defined in uio.h
-//  UIO_PHYS_SYSSPACE32			12	reserved, never used. Use UIO_PHYS_SYSSPACE
-//  UIO_SYSSPACE64				13	reserved, never used. Use UIO_SYSSPACE
-//  UIO_PHYS_SYSSPACE64			14	reserved, never used. Use UIO_PHYS_SYSSPACE
+//      UIO_USERSPACE           0       defined in uio.h
+#define UIO_USERISPACE          ((enum uio_seg)1)
+//      UIO_SYSSPACE            2       defined in uio.h
+#define UIO_PHYS_USERSPACE      ((enum uio_seg)3)
+#define UIO_PHYS_SYSSPACE       ((enum uio_seg)4)
+//      UIO_USERSPACE32         5       defined in uio.h
+#define UIO_USERISPACE32        ((enum uio_seg)6)
+#define UIO_PHYS_USERSPACE32    ((enum uio_seg)7)
+//      UIO_USERSPACE64         8       defined in uio.h
+#define UIO_USERISPACE64        ((enum uio_seg)9)
+#define UIO_PHYS_USERSPACE64    ((enum uio_seg)10)
+//      UIO_SYSSPACE32          11      defined in uio.h
+//      UIO_PHYS_SYSSPACE32     12      reserved, never used. Use UIO_PHYS_SYSSPACE
+//      UIO_SYSSPACE64          13      reserved, never used. Use UIO_SYSSPACE
+//      UIO_PHYS_SYSSPACE64     14      reserved, never used. Use UIO_PHYS_SYSSPACE
 
 __BEGIN_DECLS
 struct user_iovec;

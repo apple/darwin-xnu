@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1583,118 +1583,118 @@ devfs_update(struct vnode *vp, struct timeval *access, struct timeval *modify)
 
 /* The following ops are used by directories and symlinks */
 int(**devfs_vnodeop_p)(void *);
-static struct vnodeopv_entry_desc devfs_vnodeop_entries[] = {
-	{ &vnop_default_desc, (VOPFUNC)vn_default_error },
-	{ &vnop_lookup_desc, (VOPFUNC)devfs_lookup },           /* lookup */
-	{ &vnop_create_desc, (VOPFUNC)err_create },             /* create */
-	{ &vnop_whiteout_desc, (VOPFUNC)err_whiteout },         /* whiteout */
-	{ &vnop_mknod_desc, (VOPFUNC)devfs_mknod },             /* mknod */
-	{ &vnop_open_desc, (VOPFUNC)nop_open },                 /* open */
-	{ &vnop_close_desc, (VOPFUNC)devfs_close },             /* close */
-	{ &vnop_getattr_desc, (VOPFUNC)devfs_getattr },         /* getattr */
-	{ &vnop_setattr_desc, (VOPFUNC)devfs_setattr },         /* setattr */
-	{ &vnop_read_desc, (VOPFUNC)devfs_read },               /* read */
-	{ &vnop_write_desc, (VOPFUNC)devfs_write },             /* write */
-	{ &vnop_ioctl_desc, (VOPFUNC)err_ioctl },               /* ioctl */
-	{ &vnop_select_desc, (VOPFUNC)err_select },             /* select */
-	{ &vnop_revoke_desc, (VOPFUNC)err_revoke },             /* revoke */
-	{ &vnop_mmap_desc, (VOPFUNC)err_mmap },                 /* mmap */
-	{ &vnop_fsync_desc, (VOPFUNC)nop_fsync },               /* fsync */
-	{ &vnop_remove_desc, (VOPFUNC)devfs_vnop_remove },      /* remove */
-	{ &vnop_link_desc, (VOPFUNC)devfs_link },               /* link */
-	{ &vnop_rename_desc, (VOPFUNC)devfs_rename },           /* rename */
-	{ &vnop_mkdir_desc, (VOPFUNC)devfs_mkdir },             /* mkdir */
-	{ &vnop_rmdir_desc, (VOPFUNC)devfs_rmdir },             /* rmdir */
-	{ &vnop_symlink_desc, (VOPFUNC)devfs_symlink },         /* symlink */
-	{ &vnop_readdir_desc, (VOPFUNC)devfs_readdir },         /* readdir */
-	{ &vnop_readlink_desc, (VOPFUNC)devfs_readlink },       /* readlink */
-	{ &vnop_inactive_desc, (VOPFUNC)devfs_inactive },       /* inactive */
-	{ &vnop_reclaim_desc, (VOPFUNC)devfs_reclaim },         /* reclaim */
-	{ &vnop_strategy_desc, (VOPFUNC)err_strategy },         /* strategy */
-	{ &vnop_pathconf_desc, (VOPFUNC)devs_vnop_pathconf },   /* pathconf */
-	{ &vnop_advlock_desc, (VOPFUNC)err_advlock },           /* advlock */
-	{ &vnop_bwrite_desc, (VOPFUNC)err_bwrite },
-	{ &vnop_pagein_desc, (VOPFUNC)err_pagein },             /* Pagein */
-	{ &vnop_pageout_desc, (VOPFUNC)err_pageout },           /* Pageout */
-	{ &vnop_copyfile_desc, (VOPFUNC)err_copyfile },         /* Copyfile */
-	{ &vnop_blktooff_desc, (VOPFUNC)err_blktooff },         /* blktooff */
-	{ &vnop_offtoblk_desc, (VOPFUNC)err_offtoblk },         /* offtoblk */
-	{ &vnop_blockmap_desc, (VOPFUNC)err_blockmap },         /* blockmap */
+const static struct vnodeopv_entry_desc devfs_vnodeop_entries[] = {
+	{ .opve_op = &vnop_default_desc, .opve_impl = (VOPFUNC)vn_default_error },
+	{ .opve_op = &vnop_lookup_desc, .opve_impl = (VOPFUNC)devfs_lookup },           /* lookup */
+	{ .opve_op = &vnop_create_desc, .opve_impl = (VOPFUNC)err_create },             /* create */
+	{ .opve_op = &vnop_whiteout_desc, .opve_impl = (VOPFUNC)err_whiteout },         /* whiteout */
+	{ .opve_op = &vnop_mknod_desc, .opve_impl = (VOPFUNC)devfs_mknod },             /* mknod */
+	{ .opve_op = &vnop_open_desc, .opve_impl = (VOPFUNC)nop_open },                 /* open */
+	{ .opve_op = &vnop_close_desc, .opve_impl = (VOPFUNC)devfs_close },             /* close */
+	{ .opve_op = &vnop_getattr_desc, .opve_impl = (VOPFUNC)devfs_getattr },         /* getattr */
+	{ .opve_op = &vnop_setattr_desc, .opve_impl = (VOPFUNC)devfs_setattr },         /* setattr */
+	{ .opve_op = &vnop_read_desc, .opve_impl = (VOPFUNC)devfs_read },               /* read */
+	{ .opve_op = &vnop_write_desc, .opve_impl = (VOPFUNC)devfs_write },             /* write */
+	{ .opve_op = &vnop_ioctl_desc, .opve_impl = (VOPFUNC)err_ioctl },               /* ioctl */
+	{ .opve_op = &vnop_select_desc, .opve_impl = (VOPFUNC)err_select },             /* select */
+	{ .opve_op = &vnop_revoke_desc, .opve_impl = (VOPFUNC)err_revoke },             /* revoke */
+	{ .opve_op = &vnop_mmap_desc, .opve_impl = (VOPFUNC)err_mmap },                 /* mmap */
+	{ .opve_op = &vnop_fsync_desc, .opve_impl = (VOPFUNC)nop_fsync },               /* fsync */
+	{ .opve_op = &vnop_remove_desc, .opve_impl = (VOPFUNC)devfs_vnop_remove },      /* remove */
+	{ .opve_op = &vnop_link_desc, .opve_impl = (VOPFUNC)devfs_link },               /* link */
+	{ .opve_op = &vnop_rename_desc, .opve_impl = (VOPFUNC)devfs_rename },           /* rename */
+	{ .opve_op = &vnop_mkdir_desc, .opve_impl = (VOPFUNC)devfs_mkdir },             /* mkdir */
+	{ .opve_op = &vnop_rmdir_desc, .opve_impl = (VOPFUNC)devfs_rmdir },             /* rmdir */
+	{ .opve_op = &vnop_symlink_desc, .opve_impl = (VOPFUNC)devfs_symlink },         /* symlink */
+	{ .opve_op = &vnop_readdir_desc, .opve_impl = (VOPFUNC)devfs_readdir },         /* readdir */
+	{ .opve_op = &vnop_readlink_desc, .opve_impl = (VOPFUNC)devfs_readlink },       /* readlink */
+	{ .opve_op = &vnop_inactive_desc, .opve_impl = (VOPFUNC)devfs_inactive },       /* inactive */
+	{ .opve_op = &vnop_reclaim_desc, .opve_impl = (VOPFUNC)devfs_reclaim },         /* reclaim */
+	{ .opve_op = &vnop_strategy_desc, .opve_impl = (VOPFUNC)err_strategy },         /* strategy */
+	{ .opve_op = &vnop_pathconf_desc, .opve_impl = (VOPFUNC)devs_vnop_pathconf },   /* pathconf */
+	{ .opve_op = &vnop_advlock_desc, .opve_impl = (VOPFUNC)err_advlock },           /* advlock */
+	{ .opve_op = &vnop_bwrite_desc, .opve_impl = (VOPFUNC)err_bwrite },
+	{ .opve_op = &vnop_pagein_desc, .opve_impl = (VOPFUNC)err_pagein },             /* Pagein */
+	{ .opve_op = &vnop_pageout_desc, .opve_impl = (VOPFUNC)err_pageout },           /* Pageout */
+	{ .opve_op = &vnop_copyfile_desc, .opve_impl = (VOPFUNC)err_copyfile },         /* Copyfile */
+	{ .opve_op = &vnop_blktooff_desc, .opve_impl = (VOPFUNC)err_blktooff },         /* blktooff */
+	{ .opve_op = &vnop_offtoblk_desc, .opve_impl = (VOPFUNC)err_offtoblk },         /* offtoblk */
+	{ .opve_op = &vnop_blockmap_desc, .opve_impl = (VOPFUNC)err_blockmap },         /* blockmap */
 #if CONFIG_MACF
-	{ &vnop_setlabel_desc, (VOPFUNC)devfs_setlabel },       /* setlabel */
+	{ .opve_op = &vnop_setlabel_desc, .opve_impl = (VOPFUNC)devfs_setlabel },       /* setlabel */
 #endif
-	{ (struct vnodeop_desc*)NULL, (int (*)(void *))NULL }
+	{ .opve_op = (struct vnodeop_desc*)NULL, .opve_impl = (int (*)(void *))NULL }
 };
-struct vnodeopv_desc devfs_vnodeop_opv_desc =
-{ &devfs_vnodeop_p, devfs_vnodeop_entries };
+const struct vnodeopv_desc devfs_vnodeop_opv_desc =
+{ .opv_desc_vector_p = &devfs_vnodeop_p, .opv_desc_ops = devfs_vnodeop_entries };
 
 /* The following ops are used by the device nodes */
 int(**devfs_spec_vnodeop_p)(void *);
-static struct vnodeopv_entry_desc devfs_spec_vnodeop_entries[] = {
-	{ &vnop_default_desc, (VOPFUNC)vn_default_error },
-	{ &vnop_lookup_desc, (VOPFUNC)spec_lookup },            /* lookup */
-	{ &vnop_create_desc, (VOPFUNC)spec_create },            /* create */
-	{ &vnop_mknod_desc, (VOPFUNC)spec_mknod },              /* mknod */
-	{ &vnop_open_desc, (VOPFUNC)spec_open },                        /* open */
-	{ &vnop_close_desc, (VOPFUNC)devfsspec_close },         /* close */
-	{ &vnop_getattr_desc, (VOPFUNC)devfs_getattr },         /* getattr */
-	{ &vnop_setattr_desc, (VOPFUNC)devfs_setattr },         /* setattr */
-	{ &vnop_read_desc, (VOPFUNC)devfsspec_read },           /* read */
-	{ &vnop_write_desc, (VOPFUNC)devfsspec_write },         /* write */
-	{ &vnop_ioctl_desc, (VOPFUNC)spec_ioctl },              /* ioctl */
-	{ &vnop_select_desc, (VOPFUNC)spec_select },            /* select */
-	{ &vnop_revoke_desc, (VOPFUNC)spec_revoke },            /* revoke */
-	{ &vnop_mmap_desc, (VOPFUNC)spec_mmap },                        /* mmap */
-	{ &vnop_fsync_desc, (VOPFUNC)spec_fsync },              /* fsync */
-	{ &vnop_remove_desc, (VOPFUNC)devfs_vnop_remove },      /* remove */
-	{ &vnop_link_desc, (VOPFUNC)devfs_link },               /* link */
-	{ &vnop_rename_desc, (VOPFUNC)spec_rename },            /* rename */
-	{ &vnop_mkdir_desc, (VOPFUNC)spec_mkdir },              /* mkdir */
-	{ &vnop_rmdir_desc, (VOPFUNC)spec_rmdir },              /* rmdir */
-	{ &vnop_symlink_desc, (VOPFUNC)spec_symlink },          /* symlink */
-	{ &vnop_readdir_desc, (VOPFUNC)spec_readdir },          /* readdir */
-	{ &vnop_readlink_desc, (VOPFUNC)spec_readlink },                /* readlink */
-	{ &vnop_inactive_desc, (VOPFUNC)devfs_inactive },       /* inactive */
-	{ &vnop_reclaim_desc, (VOPFUNC)devfs_reclaim },         /* reclaim */
-	{ &vnop_strategy_desc, (VOPFUNC)spec_strategy },                /* strategy */
-	{ &vnop_pathconf_desc, (VOPFUNC)spec_pathconf },                /* pathconf */
-	{ &vnop_advlock_desc, (VOPFUNC)spec_advlock },          /* advlock */
-	{ &vnop_bwrite_desc, (VOPFUNC)vn_bwrite },
-	{ &vnop_pagein_desc, (VOPFUNC)err_pagein },             /* Pagein */
-	{ &vnop_pageout_desc, (VOPFUNC)err_pageout },           /* Pageout */
-	{ &vnop_copyfile_desc, (VOPFUNC)err_copyfile },         /* Copyfile */
-	{ &vnop_blktooff_desc, (VOPFUNC)spec_blktooff },        /* blktooff */
-	{ &vnop_blktooff_desc, (VOPFUNC)spec_offtoblk  },       /* blkofftoblk */
-	{ &vnop_blockmap_desc, (VOPFUNC)spec_blockmap },        /* blockmap */
+const static struct vnodeopv_entry_desc devfs_spec_vnodeop_entries[] = {
+	{ .opve_op = &vnop_default_desc, .opve_impl = (VOPFUNC)vn_default_error },
+	{ .opve_op = &vnop_lookup_desc, .opve_impl = (VOPFUNC)spec_lookup },            /* lookup */
+	{ .opve_op = &vnop_create_desc, .opve_impl = (VOPFUNC)spec_create },            /* create */
+	{ .opve_op = &vnop_mknod_desc, .opve_impl = (VOPFUNC)spec_mknod },              /* mknod */
+	{ .opve_op = &vnop_open_desc, .opve_impl = (VOPFUNC)spec_open },                        /* open */
+	{ .opve_op = &vnop_close_desc, .opve_impl = (VOPFUNC)devfsspec_close },         /* close */
+	{ .opve_op = &vnop_getattr_desc, .opve_impl = (VOPFUNC)devfs_getattr },         /* getattr */
+	{ .opve_op = &vnop_setattr_desc, .opve_impl = (VOPFUNC)devfs_setattr },         /* setattr */
+	{ .opve_op = &vnop_read_desc, .opve_impl = (VOPFUNC)devfsspec_read },           /* read */
+	{ .opve_op = &vnop_write_desc, .opve_impl = (VOPFUNC)devfsspec_write },         /* write */
+	{ .opve_op = &vnop_ioctl_desc, .opve_impl = (VOPFUNC)spec_ioctl },              /* ioctl */
+	{ .opve_op = &vnop_select_desc, .opve_impl = (VOPFUNC)spec_select },            /* select */
+	{ .opve_op = &vnop_revoke_desc, .opve_impl = (VOPFUNC)spec_revoke },            /* revoke */
+	{ .opve_op = &vnop_mmap_desc, .opve_impl = (VOPFUNC)spec_mmap },                        /* mmap */
+	{ .opve_op = &vnop_fsync_desc, .opve_impl = (VOPFUNC)spec_fsync },              /* fsync */
+	{ .opve_op = &vnop_remove_desc, .opve_impl = (VOPFUNC)devfs_vnop_remove },      /* remove */
+	{ .opve_op = &vnop_link_desc, .opve_impl = (VOPFUNC)devfs_link },               /* link */
+	{ .opve_op = &vnop_rename_desc, .opve_impl = (VOPFUNC)spec_rename },            /* rename */
+	{ .opve_op = &vnop_mkdir_desc, .opve_impl = (VOPFUNC)spec_mkdir },              /* mkdir */
+	{ .opve_op = &vnop_rmdir_desc, .opve_impl = (VOPFUNC)spec_rmdir },              /* rmdir */
+	{ .opve_op = &vnop_symlink_desc, .opve_impl = (VOPFUNC)spec_symlink },          /* symlink */
+	{ .opve_op = &vnop_readdir_desc, .opve_impl = (VOPFUNC)spec_readdir },          /* readdir */
+	{ .opve_op = &vnop_readlink_desc, .opve_impl = (VOPFUNC)spec_readlink },                /* readlink */
+	{ .opve_op = &vnop_inactive_desc, .opve_impl = (VOPFUNC)devfs_inactive },       /* inactive */
+	{ .opve_op = &vnop_reclaim_desc, .opve_impl = (VOPFUNC)devfs_reclaim },         /* reclaim */
+	{ .opve_op = &vnop_strategy_desc, .opve_impl = (VOPFUNC)spec_strategy },                /* strategy */
+	{ .opve_op = &vnop_pathconf_desc, .opve_impl = (VOPFUNC)spec_pathconf },                /* pathconf */
+	{ .opve_op = &vnop_advlock_desc, .opve_impl = (VOPFUNC)spec_advlock },          /* advlock */
+	{ .opve_op = &vnop_bwrite_desc, .opve_impl = (VOPFUNC)vn_bwrite },
+	{ .opve_op = &vnop_pagein_desc, .opve_impl = (VOPFUNC)err_pagein },             /* Pagein */
+	{ .opve_op = &vnop_pageout_desc, .opve_impl = (VOPFUNC)err_pageout },           /* Pageout */
+	{ .opve_op = &vnop_copyfile_desc, .opve_impl = (VOPFUNC)err_copyfile },         /* Copyfile */
+	{ .opve_op = &vnop_blktooff_desc, .opve_impl = (VOPFUNC)spec_blktooff },        /* blktooff */
+	{ .opve_op = &vnop_blktooff_desc, .opve_impl = (VOPFUNC)spec_offtoblk  },       /* blkofftoblk */
+	{ .opve_op = &vnop_blockmap_desc, .opve_impl = (VOPFUNC)spec_blockmap },        /* blockmap */
 #if CONFIG_MACF
-	{ &vnop_setlabel_desc, (VOPFUNC)devfs_setlabel },       /* setlabel */
+	{ .opve_op = &vnop_setlabel_desc, .opve_impl = (VOPFUNC)devfs_setlabel },       /* setlabel */
 #endif
-	{ (struct vnodeop_desc*)NULL, (int (*)(void *))NULL }
+	{ .opve_op = (struct vnodeop_desc*)NULL, .opve_impl = (int (*)(void *))NULL }
 };
-struct vnodeopv_desc devfs_spec_vnodeop_opv_desc =
-{ &devfs_spec_vnodeop_p, devfs_spec_vnodeop_entries };
+const struct vnodeopv_desc devfs_spec_vnodeop_opv_desc =
+{ .opv_desc_vector_p = &devfs_spec_vnodeop_p, .opv_desc_ops = devfs_spec_vnodeop_entries };
 
 
 #if FDESC
 int(**devfs_devfd_vnodeop_p)(void*);
-static struct vnodeopv_entry_desc devfs_devfd_vnodeop_entries[] = {
-	{ &vnop_default_desc, (VOPFUNC)vn_default_error },
-	{ &vnop_lookup_desc, (VOPFUNC)devfs_devfd_lookup},      /* lookup */
-	{ &vnop_open_desc, (VOPFUNC)nop_open },                 /* open */
-	{ &vnop_close_desc, (VOPFUNC)devfs_close },             /* close */
-	{ &vnop_getattr_desc, (VOPFUNC)devfs_getattr },         /* getattr */
-	{ &vnop_setattr_desc, (VOPFUNC)devfs_setattr },         /* setattr */
-	{ &vnop_revoke_desc, (VOPFUNC)err_revoke },             /* revoke */
-	{ &vnop_fsync_desc, (VOPFUNC)nop_fsync },               /* fsync */
-	{ &vnop_readdir_desc, (VOPFUNC)devfs_devfd_readdir},            /* readdir */
-	{ &vnop_inactive_desc, (VOPFUNC)devfs_inactive },       /* inactive */
-	{ &vnop_reclaim_desc, (VOPFUNC)devfs_reclaim },         /* reclaim */
-	{ &vnop_pathconf_desc, (VOPFUNC)devs_vnop_pathconf },   /* pathconf */
+const static struct vnodeopv_entry_desc devfs_devfd_vnodeop_entries[] = {
+	{ .opve_op = &vnop_default_desc, .opve_impl = (VOPFUNC)vn_default_error },
+	{ .opve_op = &vnop_lookup_desc, .opve_impl = (VOPFUNC)devfs_devfd_lookup},      /* lookup */
+	{ .opve_op = &vnop_open_desc, .opve_impl = (VOPFUNC)nop_open },                 /* open */
+	{ .opve_op = &vnop_close_desc, .opve_impl = (VOPFUNC)devfs_close },             /* close */
+	{ .opve_op = &vnop_getattr_desc, .opve_impl = (VOPFUNC)devfs_getattr },         /* getattr */
+	{ .opve_op = &vnop_setattr_desc, .opve_impl = (VOPFUNC)devfs_setattr },         /* setattr */
+	{ .opve_op = &vnop_revoke_desc, .opve_impl = (VOPFUNC)err_revoke },             /* revoke */
+	{ .opve_op = &vnop_fsync_desc, .opve_impl = (VOPFUNC)nop_fsync },               /* fsync */
+	{ .opve_op = &vnop_readdir_desc, .opve_impl = (VOPFUNC)devfs_devfd_readdir},            /* readdir */
+	{ .opve_op = &vnop_inactive_desc, .opve_impl = (VOPFUNC)devfs_inactive },       /* inactive */
+	{ .opve_op = &vnop_reclaim_desc, .opve_impl = (VOPFUNC)devfs_reclaim },         /* reclaim */
+	{ .opve_op = &vnop_pathconf_desc, .opve_impl = (VOPFUNC)devs_vnop_pathconf },   /* pathconf */
 #if CONFIG_MACF
-	{ &vnop_setlabel_desc, (VOPFUNC)devfs_setlabel },       /* setlabel */
+	{ .opve_op = &vnop_setlabel_desc, .opve_impl = (VOPFUNC)devfs_setlabel },       /* setlabel */
 #endif
-	{ (struct vnodeop_desc*)NULL, (int (*)(void *))NULL }
+	{ .opve_op = (struct vnodeop_desc*)NULL, .opve_impl = (int (*)(void *))NULL }
 };
-struct vnodeopv_desc devfs_devfd_vnodeop_opv_desc =
-{ &devfs_devfd_vnodeop_p, devfs_devfd_vnodeop_entries};
+const struct vnodeopv_desc devfs_devfd_vnodeop_opv_desc =
+{ .opv_desc_vector_p = &devfs_devfd_vnodeop_p, .opv_desc_ops = devfs_devfd_vnodeop_entries};
 #endif /* FDESC */

@@ -92,7 +92,7 @@
 
 #include <pexpert/pexpert.h>
 
-extern int panic_on_exception_triage;
+bool panic_on_exception_triage = false;
 
 unsigned long c_thr_exc_raise = 0;
 unsigned long c_thr_exc_raise_state = 0;
@@ -122,6 +122,23 @@ kern_return_t bsd_exception(
 	mach_exception_data_t   code,
 	mach_msg_type_number_t  codeCnt);
 #endif /* MACH_BSD */
+
+/*
+ * Routine: exception_init
+ * Purpose:
+ *   Global initialization of state for exceptions.
+ * Conditions:
+ *   None.
+ */
+void
+exception_init(void)
+{
+	int tmp = 0;
+
+	if (PE_parse_boot_argn("-panic_on_exception_triage", &tmp, sizeof(tmp))) {
+		panic_on_exception_triage = true;
+	}
+}
 
 /*
  *	Routine:	exception_deliver
@@ -204,7 +221,7 @@ exception_deliver(
 	lck_mtx_unlock(mutex);
 
 	code64 = (behavior & MACH_EXCEPTION_CODES);
-	behavior &= ~MACH_EXCEPTION_CODES;
+	behavior &= ~MACH_EXCEPTION_MASK;
 
 	if (!code64) {
 		small_code[0] = CAST_DOWN_EXPLICIT(exception_data_type_t, code[0]);
@@ -230,17 +247,12 @@ exception_deliver(
 #endif
 
 	if (behavior != EXCEPTION_STATE) {
-		if (thread != current_thread() || exception == EXC_CORPSE_NOTIFY) {
-			task_reference(task);
-			task_port = convert_task_to_port(task);
-			/* task ref consumed */
-			thread_reference(thread);
-			thread_port = convert_thread_to_port(thread);
-			/* thread ref consumed */
-		} else {
-			task_port = retrieve_task_self_fast(thread->task);
-			thread_port = retrieve_thread_self_fast(thread);
-		}
+		task_reference(task);
+		task_port = convert_task_to_port(task);
+		/* task ref consumed */
+		thread_reference(thread);
+		thread_port = convert_thread_to_port(thread);
+		/* thread ref consumed */
 	}
 
 	switch (behavior) {

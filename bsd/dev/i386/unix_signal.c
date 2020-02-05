@@ -37,6 +37,7 @@
 #include <mach/exception.h>
 
 #include <kern/thread.h>
+#include <kern/ast.h>
 
 #include <sys/systm.h>
 #include <sys/param.h>
@@ -160,7 +161,7 @@ siginfo_user_to_user64_x86(user_siginfo_t *in, user64_siginfo_t *out)
 }
 
 void
-sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint32_t code)
+sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint32_t code, sigset_t siginfo)
 {
 	union {
 		struct mcontext_avx32           mctx_avx32;
@@ -198,7 +199,7 @@ sendsig(struct proc *p, user_addr_t ua_catcher, int sig, int mask, __unused uint
 	thread = current_thread();
 	ut = get_bsdthread_info(thread);
 
-	if (p->p_sigacts->ps_siginfo & sigmask(sig)) {
+	if (siginfo & sigmask(sig)) {
 		infostyle = UC_FLAVOR;
 	}
 
@@ -801,6 +802,9 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 		ut->uu_sigstk.ss_flags &= ~SA_ONSTACK;
 		return 0;
 	}
+
+	/* see osfmk/kern/restartable.c */
+	act_set_ast_reset_pcs(thread);
 
 	bzero(mctxp, sizeof(*mctxp));
 

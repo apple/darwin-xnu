@@ -16,9 +16,11 @@
 #include <mach-o/swap.h>
 #include <libkern/OSByteOrder.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 #define MAX_LEN 1024
 
-#if TARGET_OS_MAC && !TARGET_OS_EMBEDDED
+#if TARGET_OS_MAC && !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 	//running on macOS
 	#define KERNEL_SEARCH_DIR "/System/Library/Kernels/*"
 #else

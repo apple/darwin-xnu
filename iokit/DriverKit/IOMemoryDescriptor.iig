@@ -1,0 +1,167 @@
+/*
+ * Copyright (c) 2019-2019 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ *
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ *
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ *
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
+#if !__IIG
+#if KERNEL
+#include <IOKit/IOMemoryDescriptor.h>
+#endif
+#endif
+
+#ifndef _IOKIT_UIOMEMORYDESCRIPTOR_H
+#define _IOKIT_UIOMEMORYDESCRIPTOR_H
+
+#include <DriverKit/OSObject.iig>
+
+class IOService;
+class IOMemoryMap;
+
+
+// IOMemoryDescriptor Create options
+enum {
+	kIOMemoryDirectionIn    = 0x00000001,
+	kIOMemoryDirectionOut   = 0x00000002,
+	kIOMemoryDirectionOutIn = kIOMemoryDirectionIn | kIOMemoryDirectionOut,
+	kIOMemoryDirectionInOut = kIOMemoryDirectionOutIn,
+};
+
+// IOMemoryDescriptor CreateMapping options
+enum {
+	kIOMemoryMapFixedAddress          = 0x00000001,
+	kIOMemoryMapReadOnly              = 0x00000002,
+	kIOMemoryMapCacheModeDefault      = 0x00000000,
+	kIOMemoryMapCacheModeInhibit      = 0x00000100,
+	kIOMemoryMapCacheModeCopyback     = 0x00000200,
+	kIOMemoryMapCacheModeWriteThrough = 0x00000400,
+};
+
+struct IOAddressSegment {
+	uint64_t address;
+	uint64_t length;
+};
+
+struct IOMDPrivateState {
+	uint64_t length;
+	uint64_t options;
+};
+
+/*!
+ * @class IOMemoryDescriptor
+ *
+ * @abstract
+ * IOMemoryDescriptor describes a memory buffer. 
+ *
+ * @discussion
+ * To allocate memory for I/O or sharing, use IOBufferMemoryDescriptor::Create()
+ * Methods in this class are used for memory that was supplied as a parameter.
+ *
+
+@iig implementation
+#include <DriverKit/IOService.h>
+@iig end
+*/
+
+class KERNEL IOMemoryDescriptor : public OSObject
+{
+public:
+
+
+	virtual bool
+	init() override;
+
+	virtual void
+	free() override;
+
+    /*!
+     * @brief       Obtain the length of the memory described.
+     * @param       returnLength Returned length.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	kern_return_t
+	GetLength(
+		uint64_t * returnLength) LOCALONLY;
+
+    /*!
+     * @brief       Create a mapping of the memory in the callers address space.
+     * @param       options
+	 *              kIOMemoryMapFixedAddress map at the address requested
+	 *              kIOMemoryMapReadOnly create a read only mapping
+	 *              kIOMemoryMapCacheModeDefault default cache mode
+	 *              kIOMemoryMapCacheModeInhibit inhibited cache mode
+	 *              kIOMemoryMapCacheModeCopyback copyback cache mode
+	 *              kIOMemoryMapCacheModeWriteThrough write through cache mode
+	 * @param       address Requested address if kIOMemoryMapFixedAddress was passed
+	 * @param       offset Start offset of the mapping in the descriptor.
+	 * @param       length Pass zero to map the entire memory, or a value <= the length of the descriptor.
+	 * @param       alignment of the memory virtual mapping. Only zero for no alignment is supported.
+	 * @param       map Returned IOMemoryMap object with +1 retain count. 
+	 *              It should be retained until the map is no longer required.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	CreateMapping(
+		uint64_t options,
+		uint64_t address,
+		uint64_t offset,
+		uint64_t length,
+		uint64_t alignment,
+		IOMemoryMap ** map);
+
+private:
+	virtual kern_return_t
+	PrepareForDMA(
+		uint64_t options,
+		IOService * device,
+		uint64_t offset,
+		uint64_t length,
+
+		uint64_t * flags,
+		uint64_t * returnLength,
+		uint32_t * segmentsCount,
+		IOAddressSegment segments[32]);
+
+	kern_return_t
+	Map(
+		uint64_t options,
+		uint64_t address,
+		uint64_t length,
+		uint64_t alignment,
+
+		uint64_t * returnAddress,
+		uint64_t * returnLength) LOCALONLY;
+};
+
+class EXTENDS (IOMemoryDescriptor) IOMemoryDescriptorPrivate
+{
+	virtual kern_return_t
+	_CopyState(
+		IOMDPrivateState * state);
+};
+
+
+
+#endif /* ! _IOKIT_UIOMEMORYDESCRIPTOR_H */

@@ -145,14 +145,14 @@ rtc_lapic_set_tsc_deadline_timer(uint64_t deadline, uint64_t now)
  * Definitions for timer operations table
  */
 
-rtc_timer_t     rtc_timer_lapic  = {
-	rtc_lapic_config_timer,
-	rtc_lapic_set_timer
+rtc_timer_t rtc_timer_lapic = {
+	.rtc_config = rtc_lapic_config_timer,
+	.rtc_set    = rtc_lapic_set_timer,
 };
 
-rtc_timer_t     rtc_timer_tsc_deadline  = {
-	rtc_lapic_config_tsc_deadline_timer,
-	rtc_lapic_set_tsc_deadline_timer
+rtc_timer_t rtc_timer_tsc_deadline = {
+	.rtc_config = rtc_lapic_config_tsc_deadline_timer,
+	.rtc_set    = rtc_lapic_set_tsc_deadline_timer,
 };
 
 rtc_timer_t     *rtc_timer = &rtc_timer_lapic; /* defaults to LAPIC timer */

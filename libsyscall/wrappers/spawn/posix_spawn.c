@@ -37,6 +37,7 @@
 #include <string.h>
 #include <strings.h>
 #include <mach/port.h>
+#include <mach/mach_param.h> /* for TASK_PORT_REGISTER_MAX */
 #include <mach/exception_types.h>
 #include <mach/coalition.h> /* for COALITION_TYPE_MAX */
 #include <sys/kern_memorystatus.h>
@@ -137,6 +138,8 @@ posix_spawnattr_init(posix_spawnattr_t *attr)
 
 		(*psattrp)->psa_persona_info = NULL;
 
+		(*psattrp)->psa_posix_cred_info = NULL;
+
 		/*
 		 * old coalition field
 		 * For backwards compatibility reasons, we set this to 1
@@ -183,6 +186,8 @@ posix_spawnattr_init(posix_spawnattr_t *attr)
 static int posix_spawn_destroyportactions_np(posix_spawnattr_t *);
 static int posix_spawn_destroycoalition_info_np(posix_spawnattr_t *);
 static int posix_spawn_destroypersona_info_np(posix_spawnattr_t *);
+static int posix_spawn_destroyposix_cred_info_np(posix_spawnattr_t *);
+static int posix_spawn_destroymacpolicy_info_np(posix_spawnattr_t *);
 
 int
 posix_spawnattr_destroy(posix_spawnattr_t *attr)
@@ -197,6 +202,8 @@ posix_spawnattr_destroy(posix_spawnattr_t *attr)
 	posix_spawn_destroyportactions_np(attr);
 	posix_spawn_destroycoalition_info_np(attr);
 	posix_spawn_destroypersona_info_np(attr);
+	posix_spawn_destroyposix_cred_info_np(attr);
+	posix_spawn_destroymacpolicy_info_np(attr);
 
 	free(psattr);
 	*attr = NULL;
@@ -842,6 +849,31 @@ posix_spawn_destroypersona_info_np(posix_spawnattr_t *attr)
 }
 
 /*
+ * posix_spawn_destroyposix_cred_info_np
+ * Description: clean up posix_cred_info struct in posix_spawnattr_t attr
+ */
+static int
+posix_spawn_destroyposix_cred_info_np(posix_spawnattr_t *attr)
+{
+	_posix_spawnattr_t psattr;
+	struct _posix_spawn_posix_cred_info *pspci;
+
+	if (attr == NULL || *attr == NULL) {
+		return EINVAL;
+	}
+
+	psattr = *(_posix_spawnattr_t *)attr;
+	pspci = psattr->psa_posix_cred_info;
+	if (pspci == NULL) {
+		return EINVAL;
+	}
+
+	psattr->psa_posix_cred_info = NULL;
+	free(pspci);
+	return 0;
+}
+
+/*
  * posix_spawn_appendportaction_np
  * Description: append a port action, grow the array if necessary
  */
@@ -1276,7 +1308,69 @@ posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *file_actions,
 
 	psfileact->psfaa_type = PSFA_DUP2;
 	psfileact->psfaa_filedes = filedes;
-	psfileact->psfaa_openargs.psfao_oflag = newfiledes;
+	psfileact->psfaa_dup2args.psfad_newfiledes = newfiledes;
+
+	return 0;
+}
+
+/*
+ * posix_spawn_file_actions_add_fileportdup2_np
+ *
+ * Description:	Add a dup2 action to the object referenced by 'file_actions'
+ *		that will cause the file referenced by 'fileport' to be
+ *		attempted to be dup2'ed to the descriptor 'newfiledes' in the
+ *		spawned process.
+ *
+ * Parameters:	file_actions		File action object to augment
+ *		filedes			fileport to dup2
+ *		newfiledes		fd to dup2 it to
+ *
+ * Returns:	0			Success
+ *		EBADF			fileport isn't a valid port, or the
+ *					value specified by newfiledes is
+ *					negative or greater than or equal to
+ *					{OPEN_MAX}.
+ *		ENOMEM			Insufficient memory exists to add to
+ *					the spawn file actions object.
+ *
+ * NOTIMP:	Allowed failures (checking NOT required):
+ *		EINVAL	The value specified by file_actions is invalid.
+ */
+int
+posix_spawn_file_actions_add_fileportdup2_np(
+	posix_spawn_file_actions_t *file_actions,
+	mach_port_t fileport, int newfiledes)
+{
+	_posix_spawn_file_actions_t *psactsp;
+	_psfa_action_t *psfileact;
+
+	if (file_actions == NULL || *file_actions == NULL) {
+		return EINVAL;
+	}
+
+	psactsp = (_posix_spawn_file_actions_t *)file_actions;
+	/* Range check; required by POSIX */
+	if (!MACH_PORT_VALID(fileport) ||
+	    newfiledes < 0 || newfiledes >= OPEN_MAX) {
+		return EBADF;
+	}
+
+	/* If we do not have enough slots, grow the structure */
+	if ((*psactsp)->psfa_act_count == (*psactsp)->psfa_act_alloc) {
+		/* need to grow file actions structure */
+		if (_posix_spawn_file_actions_grow(psactsp)) {
+			return ENOMEM;
+		}
+	}
+
+	/*
+	 * Allocate next available slot and fill it out
+	 */
+	psfileact = &(*psactsp)->psfa_act_acts[(*psactsp)->psfa_act_count++];
+
+	psfileact->psfaa_type = PSFA_FILEPORT_DUP2;
+	psfileact->psfaa_fileport = fileport;
+	psfileact->psfaa_dup2args.psfad_newfiledes = newfiledes;
 
 	return 0;
 }
@@ -1351,6 +1445,117 @@ posix_spawn_file_actions_addinherit_np(posix_spawn_file_actions_t *file_actions,
 	return 0;
 }
 
+
+/*
+ * posix_spawn_file_actions_addchdir_np
+ *
+ * Description:	Add a chdir action to the object referenced by 'file_actions'
+ *		that will cause the current working directory to attempt to be changed
+ *      to that referenced by 'path' in the spawned process.
+ *
+ * Parameters:	file_actions		File action object to augment
+ *		path			path of the desired working directory
+ *
+ * Returns:	0			Success
+ *		ENOMEM			Insufficient memory exists to add to
+ *					the spawn file actions object.
+ *		ENAMETOOLONG	The supplied path exceeded PATH_MAX.
+ *
+ * NOTIMP:	Allowed failures (checking NOT required):
+ *		EINVAL	The value specified by file_actions is invalid.
+ */
+int
+posix_spawn_file_actions_addchdir_np(
+	posix_spawn_file_actions_t * __restrict file_actions,
+	const char * __restrict path)
+{
+	_posix_spawn_file_actions_t *psactsp;
+	_psfa_action_t *psfileact;
+
+	if (file_actions == NULL || *file_actions == NULL) {
+		return EINVAL;
+	}
+
+	psactsp = (_posix_spawn_file_actions_t *)file_actions;
+
+	/* If we do not have enough slots, grow the structure */
+	if ((*psactsp)->psfa_act_count == (*psactsp)->psfa_act_alloc) {
+		/* need to grow file actions structure */
+		if (_posix_spawn_file_actions_grow(psactsp)) {
+			return ENOMEM;
+		}
+	}
+
+	/*
+	 * Allocate next available slot and fill it out
+	 */
+	psfileact = &(*psactsp)->psfa_act_acts[(*psactsp)->psfa_act_count++];
+
+	psfileact->psfaa_type = PSFA_CHDIR;
+	if (strlcpy(psfileact->psfaa_chdirargs.psfac_path, path, PATH_MAX) >= PATH_MAX) {
+		(*psactsp)->psfa_act_count--;
+		return ENAMETOOLONG;
+	}
+
+	return 0;
+}
+
+
+/*
+ * posix_spawn_file_actions_fchdir_np
+ *
+ * Description:	Add a fchdir action to the object referenced by 'file_actions'
+ *		that will cause the current working directory to attempt to be changed
+ *      to that referenced by the descriptor 'filedes' in the spawned process.
+ *
+ * Parameters:	file_actions		File action object to augment
+ *		filedes			fd to chdir to
+ *
+ * Returns:	0			Success
+ *		EBADF			The value specified by either fildes is negative or
+ *                              greater than or equal to {OPEN_MAX}.
+ *		ENOMEM			Insufficient memory exists to add to
+ *					the spawn file actions object.
+ *
+ * NOTIMP:	Allowed failures (checking NOT required):
+ *		EINVAL	The value specified by file_actions is invalid.
+ */
+int
+posix_spawn_file_actions_addfchdir_np(posix_spawn_file_actions_t *file_actions,
+    int filedes)
+{
+	_posix_spawn_file_actions_t *psactsp;
+	_psfa_action_t *psfileact;
+
+	if (file_actions == NULL || *file_actions == NULL) {
+		return EINVAL;
+	}
+
+	psactsp = (_posix_spawn_file_actions_t *)file_actions;
+	/* Range check; in spirit of POSIX */
+	if (filedes < 0 || filedes >= OPEN_MAX) {
+		return EBADF;
+	}
+
+	/* If we do not have enough slots, grow the structure */
+	if ((*psactsp)->psfa_act_count == (*psactsp)->psfa_act_alloc) {
+		/* need to grow file actions structure */
+		if (_posix_spawn_file_actions_grow(psactsp)) {
+			return ENOMEM;
+		}
+	}
+
+	/*
+	 * Allocate next available slot and fill it out
+	 */
+	psfileact = &(*psactsp)->psfa_act_acts[(*psactsp)->psfa_act_count++];
+
+	psfileact->psfaa_type = PSFA_FCHDIR;
+	psfileact->psfaa_filedes = filedes;
+
+	return 0;
+}
+
 int
 posix_spawnattr_setcpumonitor_default(posix_spawnattr_t * __restrict attr)
 {
@@ -1393,7 +1598,7 @@ posix_spawnattr_getcpumonitor(posix_spawnattr_t * __restrict attr,
 	return 0;
 }
 
-#if TARGET_OS_EMBEDDED
+#if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 /*
  * posix_spawnattr_setjetsam
  *
@@ -1427,7 +1632,7 @@ posix_spawnattr_setjetsam(posix_spawnattr_t * __restrict attr,
 
 	return posix_spawnattr_setjetsam_ext(attr, flags_ext, priority, memlimit, memlimit);
 }
-#endif /* TARGET_OS_EMBEDDED */
+#endif /* (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 
 /*
  * posix_spawnattr_setjetsam_ext
@@ -1520,7 +1725,7 @@ posix_spawnattr_set_importancewatch_port_np(posix_spawnattr_t * __restrict attr,
 			.port_type = PSPA_IMP_WATCHPORTS,
 			.new_port = portarray[i],
 		};
-		int err = posix_spawn_appendportaction_np(attr, &action);
+		err = posix_spawn_appendportaction_np(attr, &action);
 		if (err) {
 			break;
 		}
@@ -1528,6 +1733,28 @@ posix_spawnattr_set_importancewatch_port_np(posix_spawnattr_t * __restrict attr,
 	return err;
 }
 
+int
+posix_spawnattr_set_registered_ports_np(posix_spawnattr_t * __restrict attr,
+    mach_port_t portarray[], uint32_t count)
+{
+	int err = 0;
+
+	if (count > TASK_PORT_REGISTER_MAX) {
+		return EINVAL;
+	}
+
+	for (uint32_t i = 0; i < count; i++) {
+		_ps_port_action_t action = {
+			.port_type = PSPA_REGISTERED_PORTS,
+			.new_port = portarray[i],
+		};
+		err = posix_spawn_appendportaction_np(attr, &action);
+		if (err) {
+			break;
+		}
+	}
+	return err;
+}
 
 
 static
@@ -1618,6 +1845,31 @@ posix_spawnattr_setmacpolicyinfo_np(posix_spawnattr_t * __restrict attr,
 	extension->data = (uintptr_t)data;
 	extension->datalen = datalen;
 	psmx->psmx_count += 1;
+	return 0;
+}
+
+/*
+ * posix_spawn_destroymacpolicy_info_np
+ * Description: cleanup the macpolicy struct in posix_spawnattr_t attr
+ */
+static int
+posix_spawn_destroymacpolicy_info_np(posix_spawnattr_t *attr)
+{
+	_posix_spawnattr_t psattr;
+	_posix_spawn_mac_policy_extensions_t psmx;
+
+	if (attr == NULL || *attr == NULL) {
+		return EINVAL;
+	}
+
+	psattr = *(_posix_spawnattr_t *)attr;
+	psmx = psattr->psa_mac_extensions;
+	if (psmx == NULL) {
+		return EINVAL;
+	}
+
+	psattr->psa_mac_extensions = NULL;
+	free(psmx);
 	return 0;
 }
 
@@ -1745,6 +1997,7 @@ posix_spawnattr_set_persona_np(const posix_spawnattr_t * __restrict attr, uid_t 
 		persona->pspi_gid = 0;
 		persona->pspi_ngroups = 0;
 		persona->pspi_groups[0] = 0;
+		persona->pspi_gmuid = 0;
 
 		psattr->psa_persona_info = persona;
 	}
@@ -1864,6 +2117,199 @@ posix_spawnattr_set_max_addr_np(const posix_spawnattr_t * __restrict attr, uint6
 	return 0;
 }
 
+static struct _posix_spawn_posix_cred_info *
+_posix_spawnattr_get_posix_creds_info(_posix_spawnattr_t psattr)
+{
+	struct _posix_spawn_posix_cred_info *pspci = psattr->psa_posix_cred_info;
+
+	if (pspci == NULL) {
+		pspci = malloc(sizeof(struct _posix_spawn_posix_cred_info));
+		if (pspci != NULL) {
+			pspci->pspci_flags = 0;
+			pspci->pspci_uid = 0;
+			pspci->pspci_gid = 0;
+			pspci->pspci_ngroups = 0;
+			pspci->pspci_groups[0] = 0;
+			pspci->pspci_gmuid = 0;
+			pspci->pspci_login[0] = '\0';
+			psattr->psa_posix_cred_info = pspci;
+		}
+	}
+	return pspci;
+}
+
+int
+posix_spawnattr_set_uid_np(const posix_spawnattr_t *attr, uid_t uid)
+{
+	struct _posix_spawn_posix_cred_info *pspci;
+
+	if (attr == NULL || *attr == NULL) {
+		return EINVAL;
+	}
+
+	pspci = _posix_spawnattr_get_posix_creds_info(*(_posix_spawnattr_t *)attr);
+	if (pspci == NULL) {
+		return ENOMEM;
+	}
+
+	pspci->pspci_uid = uid;
+
+	pspci->pspci_flags |= POSIX_SPAWN_POSIX_CRED_UID;
+
+	return 0;
+}
+
+int
+posix_spawnattr_set_gid_np(const posix_spawnattr_t *attr, gid_t gid)
+{
+	struct _posix_spawn_posix_cred_info *pspci;
+
+	if (attr == NULL || *attr == NULL) {
+		return EINVAL;
+	}
+
+	pspci = _posix_spawnattr_get_posix_creds_info(*(_posix_spawnattr_t *)attr);
+	if (pspci == NULL) {
+		return ENOMEM;
+	}
+
+	pspci->pspci_gid = gid;
+
+	pspci->pspci_flags |= POSIX_SPAWN_POSIX_CRED_GID;
+
+	return 0;
+}
+
+int
+posix_spawnattr_set_groups_np(const posix_spawnattr_t *attr,
+    int ngroups, gid_t *gidarray, uid_t gmuid)
+{
+	struct _posix_spawn_posix_cred_info *pspci;
+
+	if (attr == NULL || *attr == NULL) {
+		return EINVAL;
+	}
+
+	if (gidarray == NULL) {
+		return EINVAL;
+	}
+
+	if (ngroups > NGROUPS || ngroups < 0) {
+		return EINVAL;
+	}
+
+	pspci = _posix_spawnattr_get_posix_creds_info(*(_posix_spawnattr_t *)attr);
+	if (pspci == NULL) {
+		return ENOMEM;
+	}
+
+	pspci->pspci_ngroups = ngroups;
+	for (int i = 0; i < ngroups; i++) {
+		pspci->pspci_groups[i] = gidarray[i];
+	}
+
+	pspci->pspci_gmuid = gmuid;
+
+	pspci->pspci_flags |= POSIX_SPAWN_POSIX_CRED_GROUPS;
+
+	return 0;
+}
+
+int
+posix_spawnattr_set_login_np(const posix_spawnattr_t *attr, const char *login)
+{
+	struct _posix_spawn_posix_cred_info *pspci;
+
+	if (attr == NULL || *attr == NULL) {
+		return EINVAL;
+	}
+
+	if (strlen(login) > MAXLOGNAME) {
+		return ERANGE;
+	}
+
+	pspci = _posix_spawnattr_get_posix_creds_info(*(_posix_spawnattr_t *)attr);
+	if (pspci == NULL) {
+		return ENOMEM;
+	}
+
+	strlcpy(pspci->pspci_login, login, sizeof(pspci->pspci_login));
+
+	pspci->pspci_flags |= POSIX_SPAWN_POSIX_CRED_LOGIN;
+
+	return 0;
+}
+
+/*
+ * posix_spawnattr_set_jetsam_ttr_np
+ *
+ * Description: Pass data regarding recent relaunch behavior when jetsammed for the process.
+ *              The recent history is effectively converted into a histogram and the highest
+ *              frequency bucket defines the "type" of the process. The type is passed along
+ *              to the jetsam code as part of psa_jetsam_flags.
+ *
+ * Parameters:	count           Number of entries in the ttrs_millis array
+ *              ttrs_millis     Array of raw data for relaunch behavior
+ *
+ * Returns:     0       Success
+ *              EINVAL  Bad attr pointer or empty data array
+ */
+int
+posix_spawnattr_set_jetsam_ttr_np(const posix_spawnattr_t * __restrict attr, uint32_t count, uint32_t *ttrs_millis)
+{
+	_posix_spawnattr_t psattr;
+
+	/*
+	 * Define the bucketizing policy which would be used to generate the histogram. These
+	 * values are based on looking at data from various Avg. Joanna runs.
+	 */
+	static const uint32_t relaunch_buckets_msecs[POSIX_SPAWN_JETSAM_RELAUNCH_BEHAVIOR_BUCKETS] = {
+		5000,
+		10000,
+		UINT32_MAX
+	};
+	static const uint32_t relaunch_jetsam_flags[POSIX_SPAWN_JETSAM_RELAUNCH_BEHAVIOR_BUCKETS] = {
+		POSIX_SPAWN_JETSAM_RELAUNCH_BEHAVIOR_HIGH,
+		POSIX_SPAWN_JETSAM_RELAUNCH_BEHAVIOR_MED,
+		POSIX_SPAWN_JETSAM_RELAUNCH_BEHAVIOR_LOW
+	};
+
+	/* Make sure the attr pointer is valid */
+	if (attr == NULL || *attr == NULL) {
+		return EINVAL;
+	}
+
+	/* Make sure the count of entries is non-zero */
+	if (count == 0) {
+		return EINVAL;
+	}
+
+	psattr = *(_posix_spawnattr_t *)attr;
+
+	/* Generate a histogram based on the relaunch data while maintaining highest frequency bucket info */
+	int relaunch_histogram[POSIX_SPAWN_JETSAM_RELAUNCH_BEHAVIOR_BUCKETS] = {0};
+	int max_frequency = -1;
+	int highest_frequency_bucket = -1;
+
+	for (uint32_t i = 0; i < count; i++) {
+		/* For each data point passed in via launchd, find the bucket it lands in */
+		for (uint32_t bucket = 0; bucket < POSIX_SPAWN_JETSAM_RELAUNCH_BEHAVIOR_BUCKETS; bucket++) {
+			if (ttrs_millis[i] <= relaunch_buckets_msecs[bucket]) {
+				relaunch_histogram[bucket]++;
+
+				/* Check if the bucket is the highest frequency bucket now */
+				if (relaunch_histogram[bucket] > max_frequency) {
+					max_frequency = relaunch_histogram[bucket];
+					highest_frequency_bucket = bucket;
+				}
+				break;
+			}
+		}
+	}
+	psattr->psa_jetsam_flags |= relaunch_jetsam_flags[highest_frequency_bucket];
+	return 0;
+}
+
 /*
  * posix_spawn
  *
@@ -1954,6 +2400,10 @@ posix_spawn(pid_t * __restrict pid, const char * __restrict path,
 			if (psattr->psa_persona_info != NULL) {
 				ad.persona_info_size = sizeof(struct _posix_spawn_persona_info);
 				ad.persona_info = psattr->psa_persona_info;
+			}
+			if (psattr->psa_posix_cred_info != NULL) {
+				ad.posix_cred_info_size = sizeof(struct _posix_spawn_posix_cred_info);
+				ad.posix_cred_info = psattr->psa_posix_cred_info;
 			}
 		}
 		if (file_actions != NULL && *file_actions != NULL) {

@@ -1846,6 +1846,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 		}
 		break;
 
+	case AUE_FSGETPATH_EXTENDED:
 	case AUE_FSGETPATH:
 		if (ARG_IS_VALID(kar, ARG_VALUE32)) {
 			tok = au_to_arg32(3, "volfsid", ar->ar_arg_value32);
@@ -2068,7 +2069,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
  * record is good, 0 otherwise.
  */
 int
-bsm_rec_verify(void *rec, int length)
+bsm_rec_verify(void *rec, int length, boolean_t kern_events_allowed)
 {
 	/* Used to partially deserialize the buffer */
 	struct hdr_tok_partial *hdr;
@@ -2102,6 +2103,10 @@ bsm_rec_verify(void *rec, int length)
 
 	/* Ensure the trailer token has a proper magic value */
 	if (ntohs(trl->magic) != AUT_TRAILER_MAGIC) {
+		return 0;
+	}
+
+	if (!kern_events_allowed && AUE_IS_A_KEVENT(ntohs(hdr->e_type))) {
 		return 0;
 	}
 

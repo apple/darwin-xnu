@@ -501,6 +501,27 @@ getwgroups(__unused proc_t p, __unused struct getwgroups_args *uap, __unused int
 	return ENOTSUP;
 }
 
+/*
+ * setsid_internal
+ *
+ * Description:	Core implementation of setsid().
+ */
+int
+setsid_internal(proc_t p)
+{
+	struct pgrp * pg = PGRP_NULL;
+
+	if (p->p_pgrpid == p->p_pid || (pg = pgfind(p->p_pid)) || p->p_lflag & P_LINVFORK) {
+		if (pg != PGRP_NULL) {
+			pg_rele(pg);
+		}
+		return EPERM;
+	} else {
+		/* enter pgrp works with its own pgrp refcount */
+		(void)enterpgrp(p, p->p_pid, 1);
+		return 0;
+	}
+}
 
 /*
  * setsid
@@ -529,19 +550,11 @@ getwgroups(__unused proc_t p, __unused struct getwgroups_args *uap, __unused int
 int
 setsid(proc_t p, __unused struct setsid_args *uap, int32_t *retval)
 {
-	struct pgrp * pg = PGRP_NULL;
-
-	if (p->p_pgrpid == p->p_pid || (pg = pgfind(p->p_pid)) || p->p_lflag & P_LINVFORK) {
-		if (pg != PGRP_NULL) {
-			pg_rele(pg);
-		}
-		return EPERM;
-	} else {
-		/* enter pgrp works with its own pgrp refcount */
-		(void)enterpgrp(p, p->p_pid, 1);
+	int rc = setsid_internal(p);
+	if (rc == 0) {
 		*retval = p->p_pid;
-		return 0;
 	}
+	return rc;
 }
 
 
@@ -1640,35 +1653,44 @@ settid_with_pid(proc_t p, struct settid_with_pid_args *uap, __unused int32_t *re
  *		flag the process as having set privilege since the last exec.
  */
 static int
-setgroups1(proc_t p, u_int gidsetsize, user_addr_t gidset, uid_t gmuid, __unused int32_t *retval)
+setgroups1(proc_t p, u_int ngrp, user_addr_t gidset, uid_t gmuid, __unused int32_t *retval)
 {
-	u_int ngrp;
 	gid_t   newgroups[NGROUPS] = { 0 };
 	int     error;
-	kauth_cred_t my_cred, my_new_cred;
-	struct uthread *uthread = get_bsdthread_info(current_thread());
 
-	DEBUG_CRED_ENTER("setgroups1 (%d/%d): %d 0x%016x %d\n", p->p_pid, (p->p_pptr ? p->p_pptr->p_pid : 0), gidsetsize, gidset, gmuid);
+	DEBUG_CRED_ENTER("setgroups1 (%d/%d): %d 0x%016x %d\n", p->p_pid,
+	    (p->p_pptr ? p->p_pptr->p_pid : 0), ngrp, gidset, gmuid);
 
-	ngrp = gidsetsize;
 	if (ngrp > NGROUPS) {
 		return EINVAL;
 	}
 
-	if (ngrp < 1) {
-		ngrp = 1;
-	} else {
+	if (ngrp >= 1) {
 		error = copyin(gidset,
 		    (caddr_t)newgroups, ngrp * sizeof(gid_t));
 		if (error) {
 			return error;
 		}
 	}
+	return setgroups_internal(p, ngrp, newgroups, gmuid);
+}
+
+int
+setgroups_internal(proc_t p, u_int ngrp, gid_t *newgroups, uid_t gmuid)
+{
+	struct uthread *uthread = get_bsdthread_info(current_thread());
+	kauth_cred_t my_cred, my_new_cred;
+	int     error;
 
 	my_cred = kauth_cred_proc_ref(p);
 	if ((error = suser(my_cred, &p->p_acflag))) {
 		kauth_cred_unref(&my_cred);
 		return error;
+	}
+
+	if (ngrp < 1) {
+		ngrp = 1;
+		newgroups[0] = 0;
 	}
 
 	if ((uthread->uu_flag & UT_SETUID) != 0) {
@@ -1942,6 +1964,18 @@ getlogin(proc_t p, struct getlogin_args *uap, __unused int32_t *retval)
 	return copyout((caddr_t)buffer, uap->namebuf, uap->namelen);
 }
 
+void
+setlogin_internal(proc_t p, const char login[static MAXLOGNAME])
+{
+	struct session *sessp = proc_session(p);
+
+	if (sessp != SESSION_NULL) {
+		session_lock(sessp);
+		bcopy(login, sessp->s_login, MAXLOGNAME);
+		session_unlock(sessp);
+		session_rele(sessp);
+	}
+}
 
 /*
  * setlogin
@@ -1965,7 +1999,6 @@ setlogin(proc_t p, struct setlogin_args *uap, __unused int32_t *retval)
 	int error;
 	size_t dummy = 0;
 	char buffer[MAXLOGNAME + 1];
-	struct session * sessp;
 
 	if ((error = proc_suser(p))) {
 		return error;
@@ -1978,15 +2011,7 @@ setlogin(proc_t p, struct setlogin_args *uap, __unused int32_t *retval)
 	    (caddr_t) &buffer[0],
 	    MAXLOGNAME - 1, (size_t *)&dummy);
 
-	sessp = proc_session(p);
-
-	if (sessp != SESSION_NULL) {
-		session_lock(sessp);
-		bcopy(buffer, sessp->s_login, MAXLOGNAME);
-		session_unlock(sessp);
-		session_rele(sessp);
-	}
-
+	setlogin_internal(p, buffer);
 
 	if (!error) {
 		AUDIT_ARG(text, buffer);

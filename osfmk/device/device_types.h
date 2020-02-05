@@ -72,7 +72,7 @@
 #include <mach/port.h>
 
 #if PRIVATE
-#define IOKIT_SERVER_VERSION    20150715
+#define IOKIT_SERVER_VERSION    20190423
 #endif
 
 
@@ -121,12 +121,14 @@ typedef uint64_t                io_async_ref64_t[8];
 
 typedef struct IOObject * io_object_t;
 typedef io_object_t io_connect_t;
+typedef io_object_t uext_object_t;
 
 extern void iokit_remove_reference( io_object_t obj );
 extern void iokit_remove_connect_reference( io_object_t obj );
 
 extern io_object_t iokit_lookup_object_port( ipc_port_t port );
 extern io_connect_t iokit_lookup_connect_port( ipc_port_t port );
+extern uext_object_t iokit_lookup_uext_object_port( ipc_port_t port );
 
 extern ipc_port_t iokit_make_object_port( io_object_t obj );
 extern ipc_port_t iokit_make_connect_port( io_connect_t obj );

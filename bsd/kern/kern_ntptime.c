@@ -334,7 +334,7 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, int32_t *retval)
 		return error;
 	}
 
-#if DEVELOPEMNT || DEBUG
+#if DEVELOPMENT || DEBUG
 	if (g_should_log_clock_adjustments) {
 		os_log(OS_LOG_DEFAULT, "%s: BEFORE modes %u offset %ld freq %ld status %d constant %ld time_adjtime %lld\n",
 		    __func__, ntv.modes, ntv.offset, ntv.freq, ntv.status, ntv.constant, time_adjtime);
@@ -438,7 +438,7 @@ ntp_adjtime(struct proc *p, struct ntp_adjtime_args *uap, int32_t *retval)
 
 	ret = ntp_is_time_error(time_status) ? TIME_ERROR : time_state;
 
-#if DEVELOPEMNT || DEBUG
+#if DEVELOPMENT || DEBUG
 	if (g_should_log_clock_adjustments) {
 		os_log(OS_LOG_DEFAULT, "%s: AFTER modes %u offset %lld freq %lld status %d constant %ld time_adjtime %lld\n",
 		    __func__, modes, time_offset, time_freq, time_status, time_constant, time_adjtime);
@@ -572,7 +572,7 @@ ntp_update_second(int64_t *adjustment, clock_sec_t secs)
 		updated = 0;
 	}
 
-#if DEVELOPEMNT || DEBUG
+#if DEVELOPMENT || DEBUG
 	if (g_should_log_clock_adjustments) {
 		int64_t nano = (time_adj > 0)? time_adj >> 32 : -((-time_adj) >> 32);
 		int64_t frac = (time_adj > 0)? ((uint32_t) time_adj) : -((uint32_t) (-time_adj));
@@ -675,7 +675,7 @@ kern_adjtime(struct timeval *delta)
 	NTP_LOCK(enable);
 	ltr = time_adjtime;
 	time_adjtime = ltw;
-#if DEVELOPEMNT || DEBUG
+#if DEVELOPMENT || DEBUG
 	if (g_should_log_clock_adjustments) {
 		os_log(OS_LOG_DEFAULT, "%s:AFTER offset %lld freq %lld status %d constant %ld time_adjtime %lld\n",
 		    __func__, time_offset, time_freq, time_status, time_constant, time_adjtime);

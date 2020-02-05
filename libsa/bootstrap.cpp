@@ -164,7 +164,7 @@ public:
 	~KLDBootstrap(void);
 };
 
-static KLDBootstrap sBootstrapObject;
+LIBKERN_ALWAYS_DESTROY static KLDBootstrap sBootstrapObject;
 
 /*********************************************************************
 * Set the function pointers for the entry points into the bootstrap
@@ -190,8 +190,8 @@ KLDBootstrap::~KLDBootstrap(void)
 	}
 
 
-	record_startup_extensions_function = 0;
-	load_security_extensions_function = 0;
+	record_startup_extensions_function = NULL;
+	load_security_extensions_function = NULL;
 }
 
 /*********************************************************************
@@ -725,7 +725,6 @@ KLDBootstrap::loadSecurityExtensions(void)
 	OSCollectionIterator * keyIterator    = NULL;// must release
 	OSString             * bundleID       = NULL;// don't release
 	OSKext               * theKext        = NULL;// don't release
-	OSBoolean            * isSecurityKext = NULL;// don't release
 
 	OSKextLog(/* kext */ NULL,
 	    kOSKextLogStepLevel |
@@ -761,9 +760,7 @@ KLDBootstrap::loadSecurityExtensions(void)
 			continue;
 		}
 
-		isSecurityKext = OSDynamicCast(OSBoolean,
-		    theKext->getPropertyForHostArch(kAppleSecurityExtensionKey));
-		if (isSecurityKext && isSecurityKext->isTrue()) {
+		if (kOSBooleanTrue == theKext->getPropertyForHostArch(kAppleSecurityExtensionKey)) {
 			OSKextLog(/* kext */ NULL,
 			    kOSKextLogStepLevel |
 			    kOSKextLogLoadFlag,

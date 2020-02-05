@@ -44,6 +44,17 @@
 			name = "MIG headers";
 			productName = "MIG headers";
 		};
+		E46CB80621FBAC32005D1E53 /* Libsyscall_driverkit */ = {
+			isa = PBXAggregateTarget;
+			buildConfigurationList = E46CB80F21FBAC32005D1E53 /* Build configuration list for PBXAggregateTarget "Libsyscall_driverkit" */;
+			buildPhases = (
+			);
+			dependencies = (
+				E46CB80721FBAC32005D1E53 /* PBXTargetDependency */,
+			);
+			name = Libsyscall_driverkit;
+			productName = Build;
+		};
 /* End PBXAggregateTarget section */
 
 /* Begin PBXBuildFile section */
@@ -107,6 +118,7 @@
 		29A59AE2183B0DE000E8B896 /* renameat.c in Sources */ = {isa = PBXBuildFile; fileRef = 29A59AE1183B0DE000E8B896 /* renameat.c */; };
 		29A59AE6183B110C00E8B896 /* unlinkat.c in Sources */ = {isa = PBXBuildFile; fileRef = 29A59AE5183B110C00E8B896 /* unlinkat.c */; };
 		2BA88DCC1810A3CE00EB63F6 /* coalition.c in Sources */ = {isa = PBXBuildFile; fileRef = 2BA88DCB1810A3CE00EB63F6 /* coalition.c */; };
+		2C4853EC221C82160008D1F5 /* os_channel_event.c in Sources */ = {isa = PBXBuildFile; fileRef = 2C4853EB221C82160008D1F5 /* os_channel_event.c */; settings = {COMPILER_FLAGS = "-fno-builtin"; }; };
 		3695DCC91F3D2C5F0072C0B3 /* reboot.c in Sources */ = {isa = PBXBuildFile; fileRef = 3695DCC81F3D2C5A0072C0B3 /* reboot.c */; };
 		374A36E314748F1300AAF39D /* varargs_wrappers.s in Sources */ = {isa = PBXBuildFile; fileRef = 374A36E214748EE400AAF39D /* varargs_wrappers.s */; };
 		3F538F891A659C5600B37EFD /* persona.c in Sources */ = {isa = PBXBuildFile; fileRef = 3F538F881A659C5600B37EFD /* persona.c */; };
@@ -124,9 +136,15 @@
 		4BCDD8B220741C2F00FA37A3 /* mach_right.c in Sources */ = {isa = PBXBuildFile; fileRef = 4BCDD8B120741C2F00FA37A3 /* mach_right.c */; };
 		4BDD5F1D1891AB2F004BF300 /* mach_approximate_time.c in Sources */ = {isa = PBXBuildFile; fileRef = 4BDD5F1B1891AB2F004BF300 /* mach_approximate_time.c */; };
 		4BDD5F1E1891AB2F004BF300 /* mach_approximate_time.s in Sources */ = {isa = PBXBuildFile; fileRef = 4BDD5F1C1891AB2F004BF300 /* mach_approximate_time.s */; };
+		6E6EAA8121EA5AC6001C5D04 /* restartable.defs in Sources */ = {isa = PBXBuildFile; fileRef = 6E6EAA8021EA5AAE001C5D04 /* restartable.defs */; };
 		726D915520ACD7FC0039A2FE /* mach_bridge_remote_time.c in Sources */ = {isa = PBXBuildFile; fileRef = 726D915420ACD7FC0039A2FE /* mach_bridge_remote_time.c */; };
+		72950DF822418FAC00EFD5E0 /* proc.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = 72AAD8692241878C001511C3 /* proc.h */; };
 		729B7D0A15C8938C000E2501 /* carbon_delete.c in Sources */ = {isa = PBXBuildFile; fileRef = FB50F1B315AB7DE700F814BA /* carbon_delete.c */; };
+		72AAD86A22418795001511C3 /* proc.h in Headers */ = {isa = PBXBuildFile; fileRef = 72AAD8692241878C001511C3 /* proc.h */; };
 		72B1E6ED190723DB00FB3FA2 /* guarded_open_dprotected_np.c in Sources */ = {isa = PBXBuildFile; fileRef = 72B1E6EC190723DB00FB3FA2 /* guarded_open_dprotected_np.c */; };
+		72D6AFCF22421725004CD782 /* proc.h in Headers */ = {isa = PBXBuildFile; fileRef = 72AAD8692241878C001511C3 /* proc.h */; };
+		72D6AFD122421753004CD782 /* proc.h in CopyFiles */ = {isa = PBXBuildFile; fileRef = 72AAD8692241878C001511C3 /* proc.h */; };
+		72DE4B6A224174D0007844CB /* proc.c in Sources */ = {isa = PBXBuildFile; fileRef = 72DE4B69224174D0007844CB /* proc.c */; };
 		72E09E941B444B19006F11A4 /* mach_continuous_time.c in Sources */ = {isa = PBXBuildFile; fileRef = 72FB18801B437F7A00181A5B /* mach_continuous_time.c */; };
 		74119F46188F3B6A00C6F48F /* vm_page_size.h in Headers */ = {isa = PBXBuildFile; fileRef = 7466C923170CB99B004557CC /* vm_page_size.h */; };
 		7466C924170CBA53004557CC /* vm_page_size.h in Headers */ = {isa = PBXBuildFile; fileRef = 7466C923170CB99B004557CC /* vm_page_size.h */; };
@@ -141,6 +159,7 @@
 		929FD46F1C5711DB0087B9C8 /* mach_timebase_info.c in Sources */ = {isa = PBXBuildFile; fileRef = 929FD46E1C5711CF0087B9C8 /* mach_timebase_info.c */; };
 		978228281B8678DC008385AC /* pselect-darwinext.c in Sources */ = {isa = PBXBuildFile; fileRef = 978228271B8678CB008385AC /* pselect-darwinext.c */; };
 		978228291B8678DF008385AC /* pselect-darwinext-cancel.c in Sources */ = {isa = PBXBuildFile; fileRef = 978228261B8678C2008385AC /* pselect-darwinext-cancel.c */; };
+		9C4B507422273E0F00F068C1 /* log_data.c in Sources */ = {isa = PBXBuildFile; fileRef = 9C4B507322273E0F00F068C1 /* log_data.c */; };
 		9C6DA3D220A3D09F0090330B /* mach_sync_ipc.h in Headers */ = {isa = PBXBuildFile; fileRef = 9C6DA3D120A3D09F0090330B /* mach_sync_ipc.h */; };
 		9C6DA3D320A3D09F0090330B /* mach_sync_ipc.h in Headers */ = {isa = PBXBuildFile; fileRef = 9C6DA3D120A3D09F0090330B /* mach_sync_ipc.h */; };
 		9CCF28271E68E993002EE6CD /* pid_shutdown_networking.c in Sources */ = {isa = PBXBuildFile; fileRef = 9CCF28261E68E993002EE6CD /* pid_shutdown_networking.c */; };
@@ -150,6 +169,7 @@
 		A50BD5301DDA5500006622C8 /* thread_self_restrict.h in Headers */ = {isa = PBXBuildFile; fileRef = A50BD52E1DDA548F006622C8 /* thread_self_restrict.h */; };
 		A59CB95616669EFB00B064B3 /* stack_logging_internal.h in Headers */ = {isa = PBXBuildFile; fileRef = A59CB95516669DB700B064B3 /* stack_logging_internal.h */; };
 		A59CB9581666A1A200B064B3 /* munmap.c in Sources */ = {isa = PBXBuildFile; fileRef = A59CB9571666A1A200B064B3 /* munmap.c */; };
+		AE69785A22405C21001445CE /* memory_entry.defs in Sources */ = {isa = PBXBuildFile; fileRef = AE69785922405C21001445CE /* memory_entry.defs */; };
 		BA0D9FB1199031AD007E8A73 /* kdebug_trace.c in Sources */ = {isa = PBXBuildFile; fileRef = BA0D9FB0199031AD007E8A73 /* kdebug_trace.c */; };
 		BA4414AA18336A5F00AAE813 /* mach in CopyFiles */ = {isa = PBXBuildFile; fileRef = BA4414A51833697C00AAE813 /* mach */; };
 		BA4414AB18336A6400AAE813 /* servers in CopyFiles */ = {isa = PBXBuildFile; fileRef = BA4414A6183369A100AAE813 /* servers */; };
@@ -315,9 +335,36 @@
 			remoteGlobalIDString = BA4414A1183366E600AAE813;
 			remoteInfo = "MIG headers";
 		};
+		E46CB80821FBAC32005D1E53 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 08FB7793FE84155DC02AAC07 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 249C60FE1194747600ED73F3;
+			remoteInfo = Libmach;
+		};
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXCopyFilesBuildPhase section */
+		72950DF722418F7F00EFD5E0 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 8;
+			dstPath = "${OS_PUBLIC_HEADERS_FOLDER_PATH}";
+			dstSubfolderSpec = 0;
+			files = (
+				72950DF822418FAC00EFD5E0 /* proc.h in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
+		72D6AFD02242173F004CD782 /* CopyFiles */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 8;
+			dstPath = "${OS_PUBLIC_HEADERS_FOLDER_PATH}";
+			dstSubfolderSpec = 0;
+			files = (
+				72D6AFD122421753004CD782 /* proc.h in CopyFiles */,
+			);
+			runOnlyForDeploymentPostprocessing = 1;
+		};
 		BA4414A818336A1300AAE813 /* CopyFiles */ = {
 			isa = PBXCopyFilesBuildPhase;
 			buildActionMask = 8;
@@ -502,6 +549,7 @@
 		29A59AE1183B0DE000E8B896 /* renameat.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = renameat.c; sourceTree = "<group>"; };
 		29A59AE5183B110C00E8B896 /* unlinkat.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = unlinkat.c; sourceTree = "<group>"; };
 		2BA88DCB1810A3CE00EB63F6 /* coalition.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = coalition.c; sourceTree = "<group>"; };
+		2C4853EB221C82160008D1F5 /* os_channel_event.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; name = os_channel_event.c; path = skywalk/os_channel_event.c; sourceTree = "<group>"; };
 		3695DCC81F3D2C5A0072C0B3 /* reboot.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = reboot.c; sourceTree = "<group>"; };
 		374A36E214748EE400AAF39D /* varargs_wrappers.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; path = varargs_wrappers.s; sourceTree = "<group>"; };
 		37DDFB7614748713009D3355 /* syscall.map */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text; path = syscall.map; sourceTree = "<group>"; };
@@ -519,8 +567,11 @@
 		4BCDD8B120741C2F00FA37A3 /* mach_right.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = mach_right.c; sourceTree = "<group>"; };
 		4BDD5F1B1891AB2F004BF300 /* mach_approximate_time.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = mach_approximate_time.c; sourceTree = "<group>"; };
 		4BDD5F1C1891AB2F004BF300 /* mach_approximate_time.s */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.asm; path = mach_approximate_time.s; sourceTree = "<group>"; };
-		726D915420ACD7FC0039A2FE /* mach_bridge_remote_time.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; name = mach_bridge_remote_time.c; path = wrappers/mach_bridge_remote_time.c; sourceTree = "<group>"; };
+		6E6EAA8021EA5AAE001C5D04 /* restartable.defs */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.mig; path = restartable.defs; sourceTree = "<group>"; };
+		726D915420ACD7FC0039A2FE /* mach_bridge_remote_time.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = mach_bridge_remote_time.c; sourceTree = "<group>"; };
+		72AAD8692241878C001511C3 /* proc.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = proc.h; sourceTree = "<group>"; };
 		72B1E6EC190723DB00FB3FA2 /* guarded_open_dprotected_np.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = guarded_open_dprotected_np.c; sourceTree = "<group>"; };
+		72DE4B69224174D0007844CB /* proc.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = proc.c; sourceTree = "<group>"; };
 		72FB18801B437F7A00181A5B /* mach_continuous_time.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = mach_continuous_time.c; sourceTree = "<group>"; };
 		7466C923170CB99B004557CC /* vm_page_size.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = vm_page_size.h; sourceTree = "<group>"; };
 		7AE28FDE18AC41B1006A5626 /* csr.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = csr.c; sourceTree = "<group>"; };
@@ -532,11 +583,13 @@
 		929FD46E1C5711CF0087B9C8 /* mach_timebase_info.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = mach_timebase_info.c; sourceTree = "<group>"; };
 		978228261B8678C2008385AC /* pselect-darwinext-cancel.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = "pselect-darwinext-cancel.c"; sourceTree = "<group>"; };
 		978228271B8678CB008385AC /* pselect-darwinext.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = "pselect-darwinext.c"; sourceTree = "<group>"; };
+		9C4B507322273E0F00F068C1 /* log_data.c */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.c; path = log_data.c; sourceTree = "<group>"; };
 		9C6DA3D120A3D09F0090330B /* mach_sync_ipc.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = mach_sync_ipc.h; sourceTree = "<group>"; };
 		9CCF28261E68E993002EE6CD /* pid_shutdown_networking.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = pid_shutdown_networking.c; sourceTree = "<group>"; };
 		A50BD52E1DDA548F006622C8 /* thread_self_restrict.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = thread_self_restrict.h; sourceTree = "<group>"; };
 		A59CB95516669DB700B064B3 /* stack_logging_internal.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = stack_logging_internal.h; sourceTree = "<group>"; };
 		A59CB9571666A1A200B064B3 /* munmap.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = munmap.c; sourceTree = "<group>"; };
+		AE69785922405C21001445CE /* memory_entry.defs */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.mig; path = memory_entry.defs; sourceTree = "<group>"; };
 		BA0D9FB0199031AD007E8A73 /* kdebug_trace.c */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.c; path = kdebug_trace.c; sourceTree = "<group>"; };
 		BA4414A51833697C00AAE813 /* mach */ = {isa = PBXFileReference; lastKnownFileType = text; name = mach; path = mig_hdr/include/mach; sourceTree = BUILT_PRODUCTS_DIR; };
 		BA4414A6183369A100AAE813 /* servers */ = {isa = PBXFileReference; lastKnownFileType = text; name = servers; path = mig_hdr/include/servers; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -669,7 +722,6 @@
 		08FB7794FE84155DC02AAC07 /* mach */ = {
 			isa = PBXGroup;
 			children = (
-				726D915420ACD7FC0039A2FE /* mach_bridge_remote_time.c */,
 				C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */,
 				24D1158911E672270063D54D /* Platforms */,
 				24D1156511E671B20063D54D /* custom */,
@@ -687,7 +739,6 @@
 		08FB7795FE84155DC02AAC07 /* mach */ = {
 			isa = PBXGroup;
 			children = (
-				C9001751206B00850070D674 /* port_descriptions.c */,
 				247A08FF11F8E18000E4693F /* abort.h */,
 				C9D9BCC5114B00600000D8B9 /* clock_priv.defs */,
 				C9D9BCC6114B00600000D8B9 /* clock_reply.defs */,
@@ -702,18 +753,18 @@
 				C9D9BCCF114B00600000D8B9 /* err_us.sub */,
 				C9D9BCD0114B00600000D8B9 /* error_codes.c */,
 				C9D9BCD1114B00600000D8B9 /* errorlib.h */,
-				247A091611F8E7A800E4693F /* exc_catcher.h */,
 				C9D9BCD2114B00600000D8B9 /* exc_catcher_state_identity.c */,
 				C9D9BCD3114B00600000D8B9 /* exc_catcher_state.c */,
 				C9D9BCD4114B00600000D8B9 /* exc_catcher.c */,
+				247A091611F8E7A800E4693F /* exc_catcher.h */,
 				C9D9BCD5114B00600000D8B9 /* exc.defs */,
 				C9D9BCD6114B00600000D8B9 /* externs.h */,
 				C9D9BCD7114B00600000D8B9 /* fprintf_stderr.c */,
-				C9D9BCD8114B00600000D8B9 /* mach */,
 				C9D9BCE4114B00600000D8B9 /* host_priv.defs */,
-				BABA36CA1A856C4700BBBCF7 /* host.c */,
 				C9D9BCE5114B00600000D8B9 /* host_security.defs */,
+				BABA36CA1A856C4700BBBCF7 /* host.c */,
 				C9D9BCEA114B00600000D8B9 /* lock_set.defs */,
+				C9D9BCD8114B00600000D8B9 /* mach */,
 				C9D9BCEB114B00600000D8B9 /* mach_error_string.c */,
 				C9D9BCEC114B00600000D8B9 /* mach_error.c */,
 				C9D9BCED114B00600000D8B9 /* mach_host.defs */,
@@ -725,25 +776,28 @@
 				4BCDD8B120741C2F00FA37A3 /* mach_right.c */,
 				C9D9BCF3114B00600000D8B9 /* mach_traps.s */,
 				291D3C271354FDD100D46061 /* mach_vm.c */,
-				E4216C301822D404006F2632 /* mach_voucher.defs */,
 				C9D9BCF4114B00600000D8B9 /* mach_vm.defs */,
+				AE69785922405C21001445CE /* memory_entry.defs */,
+				E4216C301822D404006F2632 /* mach_voucher.defs */,
 				C9D9BCF6114B00600000D8B9 /* mig_allocate.c */,
 				C9D9BCF7114B00600000D8B9 /* mig_deallocate.c */,
+				24484A9311F61D1900E10CD2 /* mig_reply_port.c */,
 				C9D9BCF8114B00600000D8B9 /* mig_reply_setup.c */,
 				C9D9BCF9114B00600000D8B9 /* mig_strncpy.c */,
-				24484A9311F61D1900E10CD2 /* mig_reply_port.c */,
 				C9D9BCFA114B00600000D8B9 /* ms_thread_switch.c */,
 				C9D9BCFB114B00600000D8B9 /* notify.defs */,
 				C9D9BCFC114B00600000D8B9 /* panic.c */,
+				C9001751206B00850070D674 /* port_descriptions.c */,
 				C9D9BCFD114B00600000D8B9 /* port_obj.c */,
 				C9D9BD03114B00600000D8B9 /* processor_set.defs */,
 				C9D9BD04114B00600000D8B9 /* processor.defs */,
+				6E6EAA8021EA5AAE001C5D04 /* restartable.defs */,
 				C9D9BD06114B00600000D8B9 /* semaphore.c */,
 				C9D9BD07114B00600000D8B9 /* servers */,
 				C9D9BD0E114B00600000D8B9 /* slot_name.c */,
 				A59CB95516669DB700B064B3 /* stack_logging_internal.h */,
-				24484A7311F51E9800E10CD2 /* string.h */,
 				24484A7411F51E9800E10CD2 /* string.c */,
+				24484A7311F51E9800E10CD2 /* string.h */,
 				C9D9BD0F114B00600000D8B9 /* task.defs */,
 				C962B16D18DBB43F0031244A /* thread_act.c */,
 				C9D9BD10114B00600000D8B9 /* thread_act.defs */,
@@ -816,6 +870,7 @@
 				E4D45C2316F856900002AF25 /* mach_absolute_time.s */,
 				4BDD5F1B1891AB2F004BF300 /* mach_approximate_time.c */,
 				4BDD5F1C1891AB2F004BF300 /* mach_approximate_time.s */,
+				726D915420ACD7FC0039A2FE /* mach_bridge_remote_time.c */,
 				925559911CBBBBB300E527CE /* mach_boottime.c */,
 				72FB18801B437F7A00181A5B /* mach_continuous_time.c */,
 				14FE60EB1B7D3BED00ACB44C /* mach_get_times.c */,
@@ -824,6 +879,7 @@
 				3F538F881A659C5600B37EFD /* persona.c */,
 				9CCF28261E68E993002EE6CD /* pid_shutdown_networking.c */,
 				C6BEE9171806840200D25AAB /* posix_sem_obsolete.c */,
+				72DE4B69224174D0007844CB /* proc.c */,
 				BA9973461C3B4C8A00B14D8C /* quota_obsolete.c */,
 				24B8C2611237F53900D36CC3 /* remove-counter.c */,
 				248AA966122C7CDA0085F5B1 /* rename.c */,
@@ -984,6 +1040,7 @@
 		401BB7141BCAE523005080D3 /* skywalk */ = {
 			isa = PBXGroup;
 			children = (
+				2C4853EB221C82160008D1F5 /* os_channel_event.c */,
 				405FA3381E0C669D007D66EA /* os_packet.c */,
 				40DD162F1E4ACCAA003297CC /* cpu_copy_in_cksum.s */,
 				409A78301E4EB3D900E0699B /* cpu_in_cksum.s */,
@@ -1009,8 +1066,10 @@
 			isa = PBXGroup;
 			children = (
 				C9C1824F15338C0B00933F23 /* alloc_once.c */,
-				C9EE57F51669673D00337E4B /* tsd.h */,
+				9C4B507322273E0F00F068C1 /* log_data.c */,
+				72AAD8692241878C001511C3 /* proc.h */,
 				A50BD52E1DDA548F006622C8 /* thread_self_restrict.h */,
+				C9EE57F51669673D00337E4B /* tsd.h */,
 			);
 			path = os;
 			sourceTree = "<group>";
@@ -1108,6 +1167,7 @@
 				A50BD52F1DDA548F006622C8 /* thread_self_restrict.h in Headers */,
 				C6D3EFC116542C510052CF30 /* vm_task.h in Headers */,
 				C6D3EFC216542C510052CF30 /* key_defs.h in Headers */,
+				72D6AFCF22421725004CD782 /* proc.h in Headers */,
 				C6D3EFC316542C510052CF30 /* ls_defs.h in Headers */,
 				C6D3EFC416542C510052CF30 /* netname_defs.h in Headers */,
 				C6D3EFC516542C510052CF30 /* nm_defs.h in Headers */,
@@ -1157,6 +1217,7 @@
 				A59CB95616669EFB00B064B3 /* stack_logging_internal.h in Headers */,
 				E4D45C3F16FB20D30002AF25 /* spawn.h in Headers */,
 				E4512B8C21AFDF1600673F73 /* mach_right_private.h in Headers */,
+				72AAD86A22418795001511C3 /* proc.h in Headers */,
 				9C6DA3D220A3D09F0090330B /* mach_sync_ipc.h in Headers */,
 				E4D45C4016FB20DC0002AF25 /* spawn_private.h in Headers */,
 				E4D45C2F16F868ED0002AF25 /* libproc.h in Headers */,
@@ -1193,6 +1254,7 @@
 				C6D3EFCA16542C510052CF30 /* CopyFiles */,
 				BA4414B418336E1A00AAE813 /* Copy Files */,
 				BA4414B718336E5600AAE813 /* CopyFiles */,
+				72D6AFD02242173F004CD782 /* CopyFiles */,
 				C6D3EFCD16542C510052CF30 /* Sources */,
 			);
 			buildRules = (
@@ -1213,6 +1275,7 @@
 				C63F480B1654203800A1F78F /* CopyFiles */,
 				BA4414A818336A1300AAE813 /* CopyFiles */,
 				BA4414AC18336A7700AAE813 /* CopyFiles */,
+				72950DF722418F7F00EFD5E0 /* CopyFiles */,
 				D2AAC0610554660B00DB518D /* Sources */,
 				D289988505E68E00004EDB86 /* Frameworks */,
 			);
@@ -1252,6 +1315,7 @@
 				249C61101194755D00ED73F3 /* Build */,
 				24614EF311E7C98600E78584 /* Syscalls */,
 				BA4414A1183366E600AAE813 /* MIG headers */,
+				E46CB80621FBAC32005D1E53 /* Libsyscall_driverkit */,
 				D2AAC0620554660B00DB518D /* Libsyscall_static */,
 				249C60FE1194747600ED73F3 /* Libsyscall_dynamic */,
 				C6D3EFB216542C510052CF30 /* Libsyscall_headers_Sim */,
@@ -1272,7 +1336,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -x\n[[ $ACTION == \"installhdrs\" ]] && exit 0\n\nmkdir -p $OBJROOT/sys\n\n$SRCROOT/xcodescripts/create-syscalls.pl \\\n\t$SRCROOT/../bsd/kern/syscalls.master \\\n\t$SRCROOT/custom \\\n\t$SRCROOT/Platforms \\\n\t$MAP_PLATFORM \\\n\t$OBJROOT/sys\n";
+			shellScript = "set -x\n[[ $ACTION == \"installhdrs\" ]] && exit 0\n# workaround 48125283\n[ -n \"$DRIVERKIT_DEPLOYMENT_TARGET\" ] && unset MACOSX_DEPLOYMENT_TARGET\n\nmkdir -p $OBJROOT/sys\n\n$SRCROOT/xcodescripts/create-syscalls.pl \\\n\t$SRCROOT/../bsd/kern/syscalls.master \\\n\t$SRCROOT/custom \\\n\t$SRCROOT/Platforms \\\n\t$MAP_PLATFORM \\\n\t$OBJROOT/sys\n";
 		};
 		24614EF611E7C9A000E78584 /* Compile Syscalls */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -1287,7 +1351,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "set -x\n[[ $ACTION == \"installhdrs\" ]] && exit 0\n\nmkdir -p $OBJROOT/UninstalledProducts\n\n$SRCROOT/xcodescripts/compile-syscalls.pl \\\n\t$OBJROOT/sys/stubs.list \\\n\t$BUILD_ROOT/syscalls.a";
+			shellScript = "set -x\n[[ $ACTION == \"installhdrs\" ]] && exit 0\n# workaround 48125283\n[ -n \"$DRIVERKIT_DEPLOYMENT_TARGET\" ] && unset MACOSX_DEPLOYMENT_TARGET\n\nmkdir -p $OBJROOT/UninstalledProducts\n\n$SRCROOT/xcodescripts/compile-syscalls.pl \\\n\t$OBJROOT/sys/stubs.list \\\n\t$BUILD_ROOT/syscalls.a\n";
 		};
 		BA4414A41833672200AAE813 /* Generate MIG Headers */ = {
 			isa = PBXShellScriptBuildPhase;
@@ -1301,7 +1365,7 @@
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
-			shellScript = "\"$PROJECT_DIR\"/xcodescripts/mach_install_mig.sh";
+			shellScript = "# workaround 48125283\n[ -n \"$DRIVERKIT_DEPLOYMENT_TARGET\" ] && unset MACOSX_DEPLOYMENT_TARGET\n\n\"$PROJECT_DIR\"/xcodescripts/mach_install_mig.sh\n";
 		};
 /* End PBXShellScriptBuildPhase section */
 
@@ -1381,6 +1445,7 @@
 				E4D45C2416F856900002AF25 /* __commpage_gettimeofday.c in Sources */,
 				C9D9BD43114B00600000D8B9 /* mig_reply_setup.c in Sources */,
 				24484A9411F61D2B00E10CD2 /* mig_reply_port.c in Sources */,
+				6E6EAA8121EA5AC6001C5D04 /* restartable.defs in Sources */,
 				C9D9BD44114B00600000D8B9 /* mig_strncpy.c in Sources */,
 				C9D9BD45114B00600000D8B9 /* ms_thread_switch.c in Sources */,
 				C9D9BD47114B00600000D8B9 /* panic.c in Sources */,
@@ -1393,6 +1458,7 @@
 				2485235511582D8F0051B413 /* mach_legacy.c in Sources */,
 				242AB66611EBDC1200107336 /* errno.c in Sources */,
 				4BCDD8B220741C2F00FA37A3 /* mach_right.c in Sources */,
+				72DE4B6A224174D0007844CB /* proc.c in Sources */,
 				E4D45C2E16F868ED0002AF25 /* libproc.c in Sources */,
 				24A7C5BC11FF8DA6007669EB /* accept.c in Sources */,
 				24A7C5BD11FF8DA6007669EB /* bind.c in Sources */,
@@ -1409,6 +1475,7 @@
 				C962B16E18DBB43F0031244A /* thread_act.c in Sources */,
 				24A7C5C511FF8DA6007669EB /* recvmsg.c in Sources */,
 				24A7C5C611FF8DA6007669EB /* sendmsg.c in Sources */,
+				AE69785A22405C21001445CE /* memory_entry.defs in Sources */,
 				24A7C5C711FF8DA6007669EB /* sendto.c in Sources */,
 				24A7C5C811FF8DA6007669EB /* setattrlist.c in Sources */,
 				24A7C5C911FF8DA6007669EB /* socketpair.c in Sources */,
@@ -1416,6 +1483,7 @@
 				9002401118FC9A7F00D73BFA /* renamex.c in Sources */,
 				2419382B12135FF6003CDE41 /* chmod.c in Sources */,
 				248BA01D121C56BF008C073F /* connect.c in Sources */,
+				9C4B507422273E0F00F068C1 /* log_data.c in Sources */,
 				248BA01F121C607E008C073F /* fchmod.c in Sources */,
 				E4D45C3616F86BD80002AF25 /* posix_spawn.c in Sources */,
 				13B598941A142F6400DB2D5A /* stackshot.c in Sources */,
@@ -1466,6 +1534,7 @@
 				402AF43F1E5CD88600F1A4B9 /* cpu_in_cksum_gen.c in Sources */,
 				030B179B135377B400DAD1F0 /* open_dprotected_np.c in Sources */,
 				E4D45C3116F868ED0002AF25 /* proc_listpidspath.c in Sources */,
+				2C4853EC221C82160008D1F5 /* os_channel_event.c in Sources */,
 				374A36E314748F1300AAF39D /* varargs_wrappers.s in Sources */,
 				291D3C281354FDD100D46061 /* mach_port.c in Sources */,
 				291D3C291354FDD100D46061 /* mach_vm.c in Sources */,
@@ -1506,6 +1575,11 @@
 			target = BA4414A1183366E600AAE813 /* MIG headers */;
 			targetProxy = BA4414B218336D8D00AAE813 /* PBXContainerItemProxy */;
 		};
+		E46CB80721FBAC32005D1E53 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 249C60FE1194747600ED73F3 /* Libsyscall_dynamic */;
+			targetProxy = E46CB80821FBAC32005D1E53 /* PBXContainerItemProxy */;
+		};
 /* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
@@ -1513,9 +1587,10 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */;
 			buildSettings = {
-				CLANG_ENABLE_OBJC_WEAK = YES;
 				COPY_PHASE_STRIP = NO;
 				INSTALL_PATH = /usr/local/lib/dyld;
+				SKIP_INSTALL = "$(SKIP_INSTALL_$(SDK_INSTALL_VARIANT))";
+				SKIP_INSTALL_driverkit = YES;
 				STRIP_INSTALLED_PRODUCT = NO;
 			};
 			name = Release;
@@ -1524,35 +1599,6 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */;
 			buildSettings = {
-				CLANG_ANALYZER_LOCALIZABILITY_NONLOCALIZED = YES;
-				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
-				CLANG_WARN_BOOL_CONVERSION = YES;
-				CLANG_WARN_COMMA = YES;
-				CLANG_WARN_CONSTANT_CONVERSION = YES;
-				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
-				CLANG_WARN_EMPTY_BODY = YES;
-				CLANG_WARN_ENUM_CONVERSION = YES;
-				CLANG_WARN_INFINITE_RECURSION = YES;
-				CLANG_WARN_INT_CONVERSION = NO;
-				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
-				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
-				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
-				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
-				CLANG_WARN_STRICT_PROTOTYPES = YES;
-				CLANG_WARN_SUSPICIOUS_MOVE = YES;
-				CLANG_WARN_UNREACHABLE_CODE = YES;
-				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
-				ENABLE_STRICT_OBJC_MSGSEND = YES;
-				GCC_C_LANGUAGE_STANDARD = gnu99;
-				GCC_NO_COMMON_BLOCKS = YES;
-				GCC_WARN_64_TO_32_BIT_CONVERSION = NO;
-				GCC_WARN_ABOUT_RETURN_TYPE = YES;
-				GCC_WARN_UNDECLARED_SELECTOR = YES;
-				GCC_WARN_UNINITIALIZED_AUTOS = YES;
-				GCC_WARN_UNUSED_FUNCTION = YES;
-				GCC_WARN_UNUSED_PARAMETER = YES;
-				GCC_WARN_UNUSED_VARIABLE = YES;
-				OTHER_MIGFLAGS = "-novouchers";
 			};
 			name = Release;
 		};
@@ -1560,15 +1606,15 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */;
 			buildSettings = {
-				CLANG_ENABLE_OBJC_WEAK = YES;
 				COPY_PHASE_STRIP = YES;
-				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
 				MAP_PLATFORM = "$(MAP_PLATFORM_$(PLATFORM_NAME))";
 				MAP_PLATFORM_appletvos = iPhoneOS;
 				MAP_PLATFORM_bridgeos = iPhoneOS;
 				MAP_PLATFORM_iphoneos = iPhoneOS;
 				MAP_PLATFORM_iphoneosnano = iPhoneOS;
-				MAP_PLATFORM_macosx = MacOSX;
+				MAP_PLATFORM_macosx = "$(MAP_PLATFORM_macosx_$(SDK_INSTALL_VARIANT))";
+				MAP_PLATFORM_macosx_default = MacOSX;
+				MAP_PLATFORM_macosx_driverkit = DriverKit;
 				MAP_PLATFORM_tvos = iPhoneOS;
 				MAP_PLATFORM_watchos = iPhoneOS;
 				PRODUCT_NAME = Syscalls;
@@ -1580,8 +1626,10 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */;
 			buildSettings = {
-				CLANG_ENABLE_OBJC_WEAK = YES;
-				OTHER_LDFLAGS = "$(DYLIB_LDFLAGS)";
+				OTHER_LDFLAGS = (
+					"$(SIMULATOR_LDFLAGS)",
+					"$(DYLIB_LDFLAGS)",
+				);
 				VERSION_INFO_PREFIX = "___";
 			};
 			name = Release;
@@ -1590,7 +1638,6 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */;
 			buildSettings = {
-				CLANG_ENABLE_OBJC_WEAK = YES;
 				COPY_PHASE_STRIP = NO;
 				INSTALLHDRS_COPY_PHASE = NO;
 				PRODUCT_NAME = Build;
@@ -1602,7 +1649,6 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */;
 			buildSettings = {
-				CLANG_ENABLE_OBJC_WEAK = YES;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 			};
 			name = Release;
@@ -1611,10 +1657,19 @@
 			isa = XCBuildConfiguration;
 			baseConfigurationReference = C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */;
 			buildSettings = {
-				CLANG_ENABLE_OBJC_WEAK = YES;
 				COPY_PHASE_STRIP = NO;
 				PRODUCT_NAME = Libsyscall_headers_Sim;
 				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
+		E46CB81021FBAC32005D1E53 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = C9D9BE0F114FFADC0000D8B9 /* Libsyscall.xcconfig */;
+			buildSettings = {
+				COPY_PHASE_STRIP = NO;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				STRIP_STYLE = debugging;
 			};
 			name = Release;
 		};
@@ -1673,6 +1728,14 @@
 			isa = XCConfigurationList;
 			buildConfigurations = (
 				C6D3F02D16542C510052CF30 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		E46CB80F21FBAC32005D1E53 /* Build configuration list for PBXAggregateTarget "Libsyscall_driverkit" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				E46CB81021FBAC32005D1E53 /* Release */,
 			);
 			defaultConfigurationIsVisible = 0;
 			defaultConfigurationName = Release;

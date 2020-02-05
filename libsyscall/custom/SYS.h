@@ -450,6 +450,7 @@ pseudo:									;\
    PUSH_FRAME			%%\
    bl    _##cerror		%%\
    POP_FRAME			%%\
+   ret					%%\
 2:			
 
 #define MI_GET_ADDRESS(reg,var)  \

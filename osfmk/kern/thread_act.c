@@ -1132,10 +1132,30 @@ act_set_astbsd(
 void
 act_set_astkevent(thread_t thread, uint16_t bits)
 {
-	atomic_fetch_or(&thread->kevent_ast_bits, bits);
+	os_atomic_or(&thread->kevent_ast_bits, bits, relaxed);
 
 	/* kevent AST shouldn't send immediate IPIs */
 	act_set_ast_async(thread, AST_KEVENT);
+}
+
+uint16_t
+act_clear_astkevent(thread_t thread, uint16_t bits)
+{
+	/*
+	 * avoid the atomic operation if none of the bits is set,
+	 * which will be the common case.
+	 */
+	uint16_t cur = os_atomic_load(&thread->kevent_ast_bits, relaxed);
+	if (cur & bits) {
+		cur = os_atomic_andnot_orig(&thread->kevent_ast_bits, bits, relaxed);
+	}
+	return cur & bits;
+}
+
+void
+act_set_ast_reset_pcs(thread_t thread)
+{
+	act_set_ast(thread, AST_RESET_PCS);
 }
 
 void

@@ -76,6 +76,7 @@
 #include <sys/kernel.h>
 #include <sys/syslog.h>
 #include <sys/sysctl.h>
+#include <sys/priv.h>
 #include <kern/locks.h>
 #include <sys/kauth.h>
 #include <libkern/OSAtomic.h>
@@ -121,15 +122,13 @@
 #include <netinet6/esp6.h>
 #endif
 #endif
-#include <netinet6/ipcomp.h>
-#if INET6
-#include <netinet6/ipcomp6.h>
-#endif
 #include <netkey/key.h>
 #include <netkey/keydb.h>
 #include <netkey/key_debug.h>
 
 #include <net/net_osdep.h>
+
+#include <IOKit/pwr_mgt/IOPM.h>
 
 #if IPSEC_DEBUG
 int ipsec_debug = 1;
@@ -163,6 +162,9 @@ extern int natt_keepalive_interval;
 extern u_int64_t natt_now;
 
 struct ipsec_tag;
+
+void *sleep_wake_handle = NULL;
+bool ipsec_save_wake_pkt = false;
 
 SYSCTL_DECL(_net_inet_ipsec);
 #if INET6
@@ -238,6 +240,10 @@ SYSCTL_INT(_net_inet6_ipsec6, IPSECCTL_ESP_RANDPAD,
     esp_randpad, CTLFLAG_RW | CTLFLAG_LOCKED, &ip6_esp_randpad, 0, "");
 #endif /* INET6 */
 
+SYSCTL_DECL(_net_link_generic_system);
+
+struct ipsec_wake_pkt_info ipsec_wake_pkt;
+
 static int ipsec_setspidx_interface(struct secpolicyindex *, u_int, struct mbuf *,
     int, int, int);
 static int ipsec_setspidx_mbuf(struct secpolicyindex *, u_int, u_int,
@@ -271,23 +277,27 @@ static void ipsec_optaux(struct mbuf *, struct ipsec_tag *);
 int ipsec_send_natt_keepalive(struct secasvar *sav);
 bool ipsec_fill_offload_frame(ifnet_t ifp, struct secasvar *sav, struct ifnet_keepalive_offload_frame *frame, size_t frame_data_offset);
 
+extern bool IOPMCopySleepWakeUUIDKey(char *, size_t);
+extern void *registerSleepWakeInterest(void *, void *, void *);
+
 static int
 sysctl_def_policy SYSCTL_HANDLER_ARGS
 {
-	int old_policy = ip4_def_policy.policy;
-	int error = sysctl_handle_int(oidp, oidp->oid_arg1, oidp->oid_arg2, req);
+	int new_policy = ip4_def_policy.policy;
+	int error = sysctl_handle_int(oidp, &new_policy, 0, req);
 
 #pragma unused(arg1, arg2)
+	if (error == 0) {
+		if (new_policy != IPSEC_POLICY_NONE &&
+		    new_policy != IPSEC_POLICY_DISCARD) {
+			return EINVAL;
+		}
+		ip4_def_policy.policy = new_policy;
 
-	if (ip4_def_policy.policy != IPSEC_POLICY_NONE &&
-	    ip4_def_policy.policy != IPSEC_POLICY_DISCARD) {
-		ip4_def_policy.policy = old_policy;
-		return EINVAL;
-	}
-
-	/* Turn off the bypass if the default security policy changes */
-	if (ipsec_bypass != 0 && ip4_def_policy.policy != IPSEC_POLICY_NONE) {
-		ipsec_bypass = 0;
+		/* Turn off the bypass if the default security policy changes */
+		if (ipsec_bypass != 0 && ip4_def_policy.policy != IPSEC_POLICY_NONE) {
+			ipsec_bypass = 0;
+		}
 	}
 
 	return error;
@@ -627,7 +637,7 @@ ipsec4_getpolicybyinterface(struct mbuf *m,
 			/* Disabled policies go in the clear */
 			key_freesp(*sp, KEY_SADB_UNLOCKED);
 			*sp = NULL;
-			*flags |= IP_NOIPSEC; /* Avoid later IPSec check */
+			*flags |= IP_NOIPSEC; /* Avoid later IPsec check */
 		} else {
 			/* If policy is enabled, redirect to ipsec interface */
 			ipoa->ipoa_boundif = (*sp)->ipsec_if->if_index;
@@ -939,7 +949,7 @@ ipsec6_getpolicybyinterface(struct mbuf *m,
 			/* Disabled policies go in the clear */
 			key_freesp(*sp, KEY_SADB_UNLOCKED);
 			*sp = NULL;
-			*noipsec = 1; /* Avoid later IPSec check */
+			*noipsec = 1; /* Avoid later IPsec check */
 		} else {
 			/* If policy is enabled, redirect to ipsec interface */
 			ip6oap->ip6oa_boundif = (*sp)->ipsec_if->if_index;
@@ -1894,11 +1904,8 @@ ipsec_get_reqlevel(struct ipsecrequest *isr)
 			}
 			break;
 		case IPPROTO_IPCOMP:
-			/*
-			 * we don't really care, as IPcomp document says that
-			 * we shouldn't compress small packets
-			 */
-			level = IPSEC_LEVEL_USE;
+			ipseclog((LOG_ERR, "ipsec_get_reqlevel: "
+			    "still got IPCOMP - exiting\n"));
 			break;
 		default:
 			panic("ipsec_get_reqlevel: "
@@ -2183,8 +2190,10 @@ ipsec_hdrsiz(struct secpolicy *sp)
 		case IPPROTO_AH:
 			clen = ah_hdrsiz(isr);
 			break;
-		case IPPROTO_IPCOMP:
-			clen = sizeof(struct ipcomp);
+		default:
+			ipseclog((LOG_ERR, "ipsec_hdrsiz: "
+			    "unknown protocol %u\n",
+			    isr->saidx.proto));
 			break;
 		}
 
@@ -2679,9 +2688,6 @@ ipsec6_update_routecache_and_output(
 	case IPPROTO_AH:
 		error = ah6_output(state->m, &ip6->ip6_nxt, state->m->m_next, sav);
 		break;
-	case IPPROTO_IPCOMP:
-	/* XXX code should be here */
-	/*FALLTHROUGH*/
 	default:
 		ipseclog((LOG_ERR, "%s: unknown ipsec protocol %d\n", __FUNCTION__, sav->sah->saidx.proto));
 		m_freem(state->m);
@@ -2875,7 +2881,7 @@ ipsec46_encapsulate(struct ipsec_output_state *state, struct secasvar *sav)
  * based on RFC 2401.
  */
 int
-ipsec_chkreplay(u_int32_t seq, struct secasvar *sav)
+ipsec_chkreplay(u_int32_t seq, struct secasvar *sav, u_int8_t replay_index)
 {
 	const struct secreplay *replay;
 	u_int32_t diff;
@@ -2890,7 +2896,7 @@ ipsec_chkreplay(u_int32_t seq, struct secasvar *sav)
 	}
 
 	lck_mtx_lock(sadb_mutex);
-	replay = sav->replay;
+	replay = sav->replay[replay_index];
 
 	if (replay->wsize == 0) {
 		lck_mtx_unlock(sadb_mutex);
@@ -2947,7 +2953,7 @@ ipsec_chkreplay(u_int32_t seq, struct secasvar *sav)
  *	1:	NG
  */
 int
-ipsec_updatereplay(u_int32_t seq, struct secasvar *sav)
+ipsec_updatereplay(u_int32_t seq, struct secasvar *sav, u_int8_t replay_index)
 {
 	struct secreplay *replay;
 	u_int32_t diff;
@@ -2961,7 +2967,7 @@ ipsec_updatereplay(u_int32_t seq, struct secasvar *sav)
 	}
 
 	lck_mtx_lock(sadb_mutex);
-	replay = sav->replay;
+	replay = sav->replay[replay_index];
 
 	if (replay->wsize == 0) {
 		goto ok;        /* no need to check replay. */
@@ -3351,19 +3357,13 @@ ipsec4_output_internal(struct ipsec_output_state *state, struct secasvar *sav)
 			goto bad;
 		}
 		break;
-	case IPPROTO_IPCOMP:
-		if ((error = ipcomp4_output(state->m, sav)) != 0) {
-			state->m = NULL;
-			goto bad;
-		}
-		break;
 	default:
 		ipseclog((LOG_ERR,
 		    "ipsec4_output: unknown ipsec protocol %d\n",
 		    sav->sah->saidx.proto));
 		m_freem(state->m);
 		state->m = NULL;
-		error = EINVAL;
+		error = EPROTONOSUPPORT;
 		goto bad;
 	}
 
@@ -3607,15 +3607,12 @@ ipsec6_output_trans_internal(
 	case IPPROTO_AH:
 		error = ah6_output(state->m, nexthdrp, mprev->m_next, sav);
 		break;
-	case IPPROTO_IPCOMP:
-		error = ipcomp6_output(state->m, nexthdrp, mprev->m_next, sav);
-		break;
 	default:
 		ipseclog((LOG_ERR, "ipsec6_output_trans: "
 		    "unknown ipsec protocol %d\n", sav->sah->saidx.proto));
 		m_freem(state->m);
 		IPSEC_STAT_INCREMENT(ipsec6stat.out_inval);
-		error = EINVAL;
+		error = EPROTONOSUPPORT;
 		break;
 	}
 	if (error) {
@@ -3907,20 +3904,13 @@ ipsec6_output_tunnel_internal(struct ipsec_output_state *state, struct secasvar 
 					goto bad;
 				}
 				break;
-			case IPPROTO_IPCOMP:
-				if ((error = ipcomp4_output(state->m, sav)) != 0) {
-					state->m = NULL;
-					ROUTE_RELEASE(&ro4_copy);
-					goto bad;
-				}
-				break;
 			default:
 				ipseclog((LOG_ERR,
 				    "ipsec4_output: unknown ipsec protocol %d\n",
 				    sav->sah->saidx.proto));
 				m_freem(state->m);
 				state->m = NULL;
-				error = EINVAL;
+				error = EPROTONOSUPPORT;
 				ROUTE_RELEASE(&ro4_copy);
 				goto bad;
 			}
@@ -4027,9 +4017,6 @@ ipsec6_output_tunnel_internal(struct ipsec_output_state *state, struct secasvar 
 	case IPPROTO_AH:
 		error = ah6_output(state->m, &ip6->ip6_nxt, state->m->m_next, sav);
 		break;
-	case IPPROTO_IPCOMP:
-	/* XXX code should be here */
-	/*FALLTHROUGH*/
 	default:
 		ipseclog((LOG_ERR, "ipsec6_output_tunnel: "
 		    "unknown ipsec protocol %d\n", sav->sah->saidx.proto));
@@ -4892,7 +4879,7 @@ ipsec_send_natt_keepalive(
 	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
 	lck_mtx_lock(sadb_mutex);
 
-	if ((esp_udp_encap_port & 0xFFFF) == 0 || sav->remote_ike_port == 0) {
+	if (((esp_udp_encap_port & 0xFFFF) == 0 && sav->natt_encapsulated_src_port == 0) || sav->remote_ike_port == 0) {
 		lck_mtx_unlock(sadb_mutex);
 		return FALSE;
 	}
@@ -4952,6 +4939,11 @@ ipsec_send_natt_keepalive(
 		} else {
 			ip->ip_src = ((struct sockaddr_in*)&sav->sah->saidx.dst)->sin_addr;
 			ip->ip_dst = ((struct sockaddr_in*)&sav->sah->saidx.src)->sin_addr;
+		}
+		if (sav->natt_encapsulated_src_port != 0) {
+			uh->uh_sport = (u_short)sav->natt_encapsulated_src_port;
+		} else {
+			uh->uh_sport = htons((u_short)esp_udp_encap_port);
 		}
 		uh->uh_sport = htons((u_short)esp_udp_encap_port);
 		uh->uh_dport = htons(sav->remote_ike_port);
@@ -5018,7 +5010,11 @@ ipsec_send_natt_keepalive(
 			ip6->ip6_dst.s6_addr16[1] = 0;
 		}
 
-		uh->uh_sport = htons((u_short)esp_udp_encap_port);
+		if (sav->natt_encapsulated_src_port != 0) {
+			uh->uh_sport = (u_short)sav->natt_encapsulated_src_port;
+		} else {
+			uh->uh_sport = htons((u_short)esp_udp_encap_port);
+		}
 		uh->uh_dport = htons(sav->remote_ike_port);
 		uh->uh_ulen = htons(1 + sizeof(*uh));
 		*(u_int8_t*)((char*)m_mtod(m) + sizeof(*ip6) + sizeof(*uh)) = 0xFF;
@@ -5073,7 +5069,7 @@ ipsec_fill_offload_frame(ifnet_t ifp,
 	    !(sav->flags & SADB_X_EXT_NATT_KEEPALIVE) ||
 	    !(sav->flags & SADB_X_EXT_NATT_KEEPALIVE_OFFLOAD) ||
 	    sav->flags & SADB_X_EXT_ESP_KEEPALIVE ||
-	    (esp_udp_encap_port & 0xFFFF) == 0 ||
+	    ((esp_udp_encap_port & 0xFFFF) == 0 && sav->natt_encapsulated_src_port == 0) ||
 	    sav->remote_ike_port == 0 ||
 	    (natt_keepalive_interval == 0 && sav->natt_interval == 0 && sav->natt_offload_interval == 0)) {
 		/* SA is not eligible for keepalive offload on this interface */
@@ -5127,7 +5123,12 @@ ipsec_fill_offload_frame(ifnet_t ifp,
 		ip->ip_dst = ((struct sockaddr_in*)&sav->sah->saidx.src)->sin_addr;
 	}
 	ip->ip_sum = in_cksum_hdr_opt(ip);
-	uh->uh_sport = htons((u_short)esp_udp_encap_port);
+	/* Fill out the UDP header */
+	if (sav->natt_encapsulated_src_port != 0) {
+		uh->uh_sport = (u_short)sav->natt_encapsulated_src_port;
+	} else {
+		uh->uh_sport = htons((u_short)esp_udp_encap_port);
+	}
 	uh->uh_dport = htons(sav->remote_ike_port);
 	uh->uh_ulen = htons(1 + sizeof(*uh));
 	uh->uh_sum = 0;
@@ -5141,4 +5142,97 @@ ipsec_fill_offload_frame(ifnet_t ifp,
 		frame->interval = natt_keepalive_interval;
 	}
 	return TRUE;
+}
+
+static int
+sysctl_ipsec_wake_packet SYSCTL_HANDLER_ARGS
+{
+ #pragma unused(oidp, arg1, arg2)
+	if (req->newptr != USER_ADDR_NULL) {
+		ipseclog((LOG_ERR, "ipsec: invalid parameters"));
+		return EINVAL;
+	}
+
+	struct proc *p = current_proc();
+	if (p != NULL) {
+		uid_t uid = kauth_cred_getuid(proc_ucred(p));
+		if (uid != 0 && priv_check_cred(kauth_cred_get(), PRIV_NET_PRIVILEGED_IPSEC_WAKE_PACKET, 0) != 0) {
+			ipseclog((LOG_ERR, "process does not hold necessary entitlement to get ipsec wake packet"));
+			return EPERM;
+		}
+
+		int result = sysctl_io_opaque(req, &ipsec_wake_pkt, sizeof(ipsec_wake_pkt), NULL);
+		return result;
+	}
+
+	return EINVAL;
+}
+
+SYSCTL_PROC(_net_link_generic_system, OID_AUTO, ipsec_wake_pkt, CTLTYPE_STRUCT | CTLFLAG_RD |
+    CTLFLAG_LOCKED, 0, 0, &sysctl_ipsec_wake_packet, "S,ipsec wake packet", "");
+
+void
+ipsec_save_wake_packet(struct mbuf *wake_mbuf, u_int32_t spi, u_int32_t seq)
+{
+	if (wake_mbuf == NULL) {
+		ipseclog((LOG_ERR, "ipsec: bad wake packet"));
+		return;
+	}
+
+	lck_mtx_lock(sadb_mutex);
+	if (__probable(!ipsec_save_wake_pkt)) {
+		goto done;
+	}
+
+	u_int16_t max_len = (wake_mbuf->m_pkthdr.len > IPSEC_MAX_WAKE_PKT_LEN) ? IPSEC_MAX_WAKE_PKT_LEN : wake_mbuf->m_pkthdr.len;
+	m_copydata(wake_mbuf, 0, max_len, (void *)ipsec_wake_pkt.wake_pkt);
+	ipsec_wake_pkt.wake_pkt_len = max_len;
+
+	ipsec_wake_pkt.wake_pkt_spi = spi;
+	ipsec_wake_pkt.wake_pkt_seq = seq;
+
+	ipsec_save_wake_pkt = false;
+done:
+	lck_mtx_unlock(sadb_mutex);
+	return;
+}
+
+static IOReturn
+ipsec_sleep_wake_handler(void *target, void *refCon, UInt32 messageType,
+    void *provider, void *messageArgument, vm_size_t argSize)
+{
+#pragma unused(target, refCon, provider, messageArgument, argSize)
+	switch (messageType) {
+	case kIOMessageSystemWillSleep:
+		memset(&ipsec_wake_pkt, 0, sizeof(ipsec_wake_pkt));
+		IOPMCopySleepWakeUUIDKey(ipsec_wake_pkt.wake_uuid,
+		    sizeof(ipsec_wake_pkt.wake_uuid));
+		ipseclog((LOG_INFO,
+		    "ipsec: system will sleep"));
+		break;
+	case kIOMessageSystemHasPoweredOn:
+		ipsec_save_wake_pkt = true;
+		ipseclog((LOG_INFO,
+		    "ipsec: system has powered on"));
+		break;
+	default:
+		break;
+	}
+
+	return IOPMAckImplied;
+}
+
+void
+ipsec_monitor_sleep_wake(void)
+{
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_OWNED);
+
+	if (sleep_wake_handle == NULL) {
+		sleep_wake_handle = registerSleepWakeInterest(ipsec_sleep_wake_handler,
+		    NULL, NULL);
+		if (sleep_wake_handle != NULL) {
+			ipseclog((LOG_INFO,
+			    "ipsec: monitoring sleep wake"));
+		}
+	}
 }

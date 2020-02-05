@@ -107,49 +107,6 @@ wi_release(struct work_interval *work_interval)
 }
 
 /*
- * work_interval_port_alloc
- *
- * Description: Obtain a send right for the given work interval struct.
- *
- * Parameters:  work_interval - A work_interval struct
- *              Consumes a +1 ref count on work_interval, now owned by the port.
- *
- * Returns:     Port of type IKOT_WORK_INTERVAL with work_interval set as its kobject.
- *              Returned with a +1 send right and no-senders notification armed.
- *              Work interval struct reference is held by the port.
- */
-static ipc_port_t
-work_interval_port_alloc(struct work_interval *work_interval)
-{
-	ipc_port_t work_interval_port = ipc_port_alloc_kernel();
-
-	if (work_interval_port == IP_NULL) {
-		panic("failed to allocate work interval port");
-	}
-
-	assert(work_interval->wi_port == IP_NULL);
-
-	ip_lock(work_interval_port);
-	ipc_kobject_set_atomically(work_interval_port, (ipc_kobject_t)work_interval,
-	    IKOT_WORK_INTERVAL);
-
-	ipc_port_t notify_port = ipc_port_make_sonce_locked(work_interval_port);
-	ipc_port_t old_notify_port = IP_NULL;
-	ipc_port_nsrequest(work_interval_port, 1, notify_port, &old_notify_port);
-	/* port unlocked */
-
-	assert(old_notify_port == IP_NULL);
-
-	/* This is the only make-send that will happen on this port */
-	ipc_port_t send_port = ipc_port_make_send(work_interval_port);
-	assert(IP_VALID(send_port));
-
-	work_interval->wi_port = work_interval_port;
-
-	return send_port;
-}
-
-/*
  * work_interval_port_convert
  *
  * Called with port locked, returns reference to work interval
@@ -390,12 +347,11 @@ kern_work_interval_create(thread_t thread,
 	task_t creating_task = current_task();
 	if ((create_flags & WORK_INTERVAL_TYPE_MASK) == WORK_INTERVAL_TYPE_CA_CLIENT) {
 		/*
-		 * CA_CLIENT work intervals do not create new thread groups
-		 * and are non-joinable.
-		 * There can only be one CA_CLIENT work interval (created by UIKit)
+		 * CA_CLIENT work intervals do not create new thread groups.
+		 * There can only be one CA_CLIENT work interval (created by UIKit or AppKit)
 		 * per each application task
 		 */
-		if (create_flags & (WORK_INTERVAL_FLAG_JOINABLE | WORK_INTERVAL_FLAG_GROUP)) {
+		if (create_flags & WORK_INTERVAL_FLAG_GROUP) {
 			return KERN_FAILURE;
 		}
 		if (!task_is_app(creating_task)) {
@@ -417,11 +373,14 @@ kern_work_interval_create(thread_t thread,
 
 
 	if (create_flags & WORK_INTERVAL_FLAG_JOINABLE) {
-		/* work_interval has a +1 ref, moves to the port */
-		ipc_port_t port = work_interval_port_alloc(work_interval);
 		mach_port_name_t name = MACH_PORT_NULL;
 
-		name = ipc_port_copyout_send(port, current_space());
+		/* work_interval has a +1 ref, moves to the port */
+		work_interval->wi_port = ipc_kobject_alloc_port(
+			(ipc_kobject_t)work_interval, IKOT_WORK_INTERVAL,
+			IPC_KOBJECT_ALLOC_MAKE_SEND | IPC_KOBJECT_ALLOC_NSREQUEST);
+
+		name = ipc_port_copyout_send(work_interval->wi_port, current_space());
 
 		if (!MACH_PORT_VALID(name)) {
 			/*

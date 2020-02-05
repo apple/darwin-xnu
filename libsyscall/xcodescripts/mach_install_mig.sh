@@ -40,6 +40,11 @@ MIG_PRIVATE_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/local/include/mach"
 SERVER_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/include/servers"
 MACH_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/include/mach"
 MACH_PRIVATE_HEADER_DST="$BUILT_PRODUCTS_DIR/mig_hdr/local/include/mach"
+MIG_INTERNAL_HEADER_DST="$BUILT_PRODUCTS_DIR/internal_hdr/include/mach"
+MIG_INCFLAGS="-I${SDKROOT}/${SDK_INSTALL_HEADERS_ROOT}/usr/include -I${SDKROOT}/${SDK_INSTALL_HEADERS_ROOT}/usr/local/include"
+MIG_PRIVATE_DEFS_INCFLAGS="-I${SDKROOT}/${SDK_INSTALL_HEADERS_ROOT}/System/Library/Frameworks/System.framework/PrivateHeaders"
+SRC="$SRCROOT/mach"
+FILTER_MIG="$SRCROOT/xcodescripts/filter_mig.awk"
 
 # from old Libsystem makefiles
 MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 1`
@@ -63,11 +68,6 @@ then
 	MACHINE_ARCH="i386"
 fi
 
-SRC="$SRCROOT/mach"
-MIG_INTERNAL_HEADER_DST="$BUILT_PRODUCTS_DIR/internal_hdr/include/mach"
-MIG_PRIVATE_DEFS_INCFLAGS="-I${SDKROOT}/System/Library/Frameworks/System.framework/PrivateHeaders"
-FILTER_MIG="$SRCROOT/xcodescripts/filter_mig.awk"
-
 ASROOT=""
 if [ `whoami` = "root" ]; then
 	ASROOT="-o 0"
@@ -83,6 +83,7 @@ MIGS="clock.defs
 	mach_host.defs
 	mach_port.defs
 	mach_voucher.defs
+	memory_entry.defs
 	processor.defs
 	processor_set.defs
 	task.defs
@@ -146,7 +147,7 @@ for hdr in $MACH_PRIVATE_HDRS; do
 done
 
 # special case because we only have one to do here
-$MIG -novouchers -arch $MACHINE_ARCH -header "$SERVER_HEADER_DST/netname.h" $SRC/servers/netname.defs
+$MIG -novouchers -arch $MACHINE_ARCH -cc $MIGCC -header "$SERVER_HEADER_DST/netname.h" $MIG_INCFLAGS $SRC/servers/netname.defs
 
 # install /usr/include/mach mig headers
 
@@ -155,7 +156,7 @@ mkdir -p $MIG_HEADER_OBJ
 
 for mig in $MIGS $MIGS_DUAL_PUBLIC_PRIVATE; do
 	MIG_NAME=`basename $mig .defs`
-	$MIG -novouchers -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_HEADER_OBJ/$MIG_NAME.h" $MIG_DEFINES $SRC/$mig
+	$MIG -novouchers -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_HEADER_OBJ/$MIG_NAME.h" $MIG_DEFINES $MIG_INCFLAGS $SRC/$mig
 	for filter in $MIG_FILTERS; do
 		$FILTER_MIG $SRC/$filter $MIG_HEADER_OBJ/$MIG_NAME.h > $MIG_HEADER_OBJ/$MIG_NAME.tmp.h
 		mv $MIG_HEADER_OBJ/$MIG_NAME.tmp.h $MIG_HEADER_OBJ/$MIG_NAME.h
@@ -167,7 +168,7 @@ mkdir -p $MIG_PRIVATE_HEADER_DST
 
 for mig in $MIGS_PRIVATE $MIGS_DUAL_PUBLIC_PRIVATE; do
 	MIG_NAME=`basename $mig .defs`
-	$MIG -novouchers -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_PRIVATE_HEADER_DST/$MIG_NAME.h" $MIG_DEFINES $MIG_PRIVATE_DEFS_INCFLAGS $SRC/$mig
+	$MIG -novouchers -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_PRIVATE_HEADER_DST/$MIG_NAME.h" $MIG_DEFINES $MIG_INCFLAGS $MIG_PRIVATE_DEFS_INCFLAGS $SRC/$mig
 	if [ ! -e "$MIG_HEADER_DST/$MIG_NAME.h" ]; then
 		echo "#error $MIG_NAME.h unsupported." > "$MIG_HEADER_DST/$MIG_NAME.h"
 	fi
@@ -182,6 +183,6 @@ mkdir -p $MIG_INTERNAL_HEADER_DST
  
 for mig in $MIGS_INTERNAL; do
 	MIG_NAME=`basename $mig .defs`
-	$MIG -novouchers -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_INTERNAL_HEADER_DST/${MIG_NAME}_internal.h" $SRC/$mig
+	$MIG -novouchers -arch $MACHINE_ARCH -cc $MIGCC -header "$MIG_INTERNAL_HEADER_DST/${MIG_NAME}_internal.h" $MIG_INCFLAGS $SRC/$mig
 done
  

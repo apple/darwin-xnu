@@ -9,15 +9,17 @@
 #include <sys/mman.h>
 #include <sys/sysctl.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 #define USER_FRAMES (12)
 
-#define NON_RECURSE_FRAMES (5)
+#define NON_RECURSE_FRAMES (4)
 
 static const char *user_bt[USER_FRAMES] = {
-	NULL, NULL,
+	NULL,
 	"backtrace_thread",
 	"recurse_a", "recurse_b", "recurse_a", "recurse_b",
-	"recurse_a", "recurse_b", "recurse_a",
+	"recurse_a", "recurse_b", "recurse_a", "recurse_b",
 	"expect_stack", NULL
 };
 
@@ -28,13 +30,15 @@ expect_frame(const char **bt, unsigned int bt_len, CSSymbolRef symbol,
 	const char *name;
 	unsigned int frame_idx = max_frames - bt_idx - 1;
 
-	if (bt[frame_idx] == NULL) {
-		T_LOG("frame %2u: skipping system frame", frame_idx);
+	if (CSIsNull(symbol)) {
+		T_FAIL("invalid symbol for address %#lx at frame %d", addr,
+		    frame_idx);
 		return;
 	}
 
-	if (CSIsNull(symbol)) {
-		T_FAIL("invalid symbol for address %#lx at frame %d", addr, frame_idx);
+	if (bt[frame_idx] == NULL) {
+		T_LOG("frame %2u: skipping system frame %s", frame_idx,
+		    CSSymbolGetName(symbol));
 		return;
 	}
 

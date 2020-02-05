@@ -1,8 +1,8 @@
 /*!
  * @header
  * Provides an interface for managing nonces to govern the lifetime of a
- * personalization performed with Tatsu. A nonce managed by this interface may
- * be used in a Tatsu signing request as the value for the BNCH tag.
+ * personalization performed with TSS. A nonce managed by this interface may
+ * be used in a TSS signing request as the value for the BNCH tag.
  *
  * These interfaces require the caller to possess the
  *
@@ -48,6 +48,10 @@
 #ifndef __IMG4_INDIRECT
 #error "Please #include <img4/img4.h> instead of this file directly"
 #endif // __IMG4_INDIRECT
+
+#if IMG4_TAPI
+#include "tapi.h"
+#endif
 
 /*!
  * @typedef img4_nonce_domain_t
@@ -116,13 +120,49 @@ typedef struct _img4_nonce {
  *
  * entitlement.
  */
-#if !MACH_KERNEL_PRIVATE
+#if !XNU_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20181106
 OS_EXPORT
 const struct _img4_nonce_domain _img4_nonce_domain_trust_cache;
 #define IMG4_NONCE_DOMAIN_TRUST_CACHE (&_img4_nonce_domain_trust_cache)
 #else
 #define IMG4_NONCE_DOMAIN_TRUST_CACHE (img4if->i4if_v1.nonce_domain_trust_cache)
+#endif
+
+/*!
+ * @const IMG4_NONCE_DOMAIN_PDI
+ * The nonce domain governing disk image personalizations. Use of this domain
+ * requires the
+ *
+ *     com.apple.private.img4.nonce.pdi
+ *
+ * entitlement. The nonce for this domain is regenerated once every boot.
+ */
+#if !XNU_KERNEL_PRIVATE
+IMG4_API_AVAILABLE_20181106
+OS_EXPORT
+const struct _img4_nonce_domain _img4_nonce_domain_pdi;
+#define IMG4_NONCE_DOMAIN_PDI (&_img4_nonce_domain_pdi)
+#else
+#define IMG4_NONCE_DOMAIN_PDI (img4if->i4if_v3.nonce_domain_pdi)
+#endif
+
+/*!
+ * @const IMG4_NONCE_DOMAIN_CRYPTEX
+ * The nonce domain governing cryptex personalizations. Use of this domain
+ * requires the
+ *
+ *     com.apple.private.img4.nonce.cryptex
+ *
+ * entitlement.
+ */
+#if !XNU_KERNEL_PRIVATE
+IMG4_API_AVAILABLE_20181106
+OS_EXPORT
+const struct _img4_nonce_domain _img4_nonce_domain_cryptex;
+#define IMG4_NONCE_DOMAIN_CRYPTEX (&_img4_nonce_domain_cryptex)
+#else
+#define IMG4_NONCE_DOMAIN_CRYPTEX (img4if->i4if_v1.nonce_domain_cryptex)
 #endif
 
 /*!
@@ -146,7 +186,7 @@ const struct _img4_nonce_domain _img4_nonce_domain_trust_cache;
  *     [EPERM]      The caller lacked the entitlement necessary to read the
  *                  given nonce
  */
-#if !MACH_KERNEL_PRIVATE
+#if !XNU_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20181106
 OS_EXPORT OS_WARN_RESULT OS_NONNULL1 OS_NONNULL2
 errno_t
@@ -172,7 +212,7 @@ img4_nonce_domain_copy_nonce(const img4_nonce_domain_t *nd, img4_nonce_t *n);
  *     [EPERM]      The caller lacked the entitlement necessary to roll the
  *                  given nonce
  */
-#if !MACH_KERNEL_PRIVATE
+#if !XNU_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20181106
 OS_EXPORT OS_NONNULL1
 errno_t

@@ -43,6 +43,7 @@
 #include <mach/mach_types.h>
 #include <mach/vm_param.h>
 #include <mach/machine/vm_param.h>
+#include <mach/sdt.h>
 #include <libkern/libkern.h>
 #include <libkern/OSAtomic.h>
 #include <libkern/kernel_mach_header.h>
@@ -66,9 +67,11 @@ vm_offset_t kernel_vtop;
 
 static unsigned kasan_enabled;
 static unsigned quarantine_enabled;
-static unsigned enabled_checks = TYPE_ALL; /* bitmask of enabled checks */
-static unsigned report_ignored;            /* issue non-fatal report for disabled/blacklisted checks */
-static unsigned free_yield = 0;            /* ms yield after each free */
+static unsigned enabled_checks = TYPE_ALL & ~TYPE_LEAK; /* bitmask of enabled checks */
+static unsigned report_ignored;                         /* issue non-fatal report for disabled/blacklisted checks */
+static unsigned free_yield = 0;                         /* ms yield after each free */
+static unsigned leak_threshold = 3;                     /* threshold for uninitialized memory leak detection */
+static unsigned leak_fatal_threshold = 0;               /* threshold for treating leaks as fatal errors (0 means never) */
 
 /* forward decls */
 static void kasan_crash_report(uptr p, uptr width, access_t access, violation_t reason);
@@ -90,6 +93,8 @@ extern vm_size_t ml_stack_size(void);
 
 static const size_t BACKTRACE_BITS       = 4;
 static const size_t BACKTRACE_MAXFRAMES  = (1UL << BACKTRACE_BITS) - 1;
+
+static vm_size_t kasan_alloc_retrieve_bt(vm_address_t addr, uintptr_t frames[static BACKTRACE_MAXFRAMES]);
 
 decl_simple_lock_data(, kasan_vm_lock);
 static thread_t kasan_lock_holder;
@@ -317,6 +322,67 @@ kasan_check_shadow(vm_address_t base, vm_size_t sz, uint8_t shadow)
 	return true;
 }
 
+static void
+kasan_report_leak(vm_address_t base, vm_size_t sz, vm_offset_t offset, vm_size_t leak_sz)
+{
+	if (leak_fatal_threshold > leak_threshold && leak_sz >= leak_fatal_threshold){
+		kasan_violation(base + offset, leak_sz, TYPE_LEAK, REASON_UNINITIALIZED);
+	}
+
+	char string_rep[BACKTRACE_MAXFRAMES * 20] = {};
+	vm_offset_t stack_base = dtrace_get_kernel_stack(current_thread());
+	bool is_stack = (base >= stack_base && base < (stack_base + kernel_stack_size));
+
+	if (!is_stack) {
+		uintptr_t alloc_bt[BACKTRACE_MAXFRAMES] = {};
+		vm_size_t num_frames = 0;
+		size_t l = 0;
+		num_frames = kasan_alloc_retrieve_bt(base, alloc_bt);
+		for (vm_size_t i = 0; i < num_frames; i++) {
+			l += snprintf(string_rep + l, sizeof(string_rep) - l, " %lx", alloc_bt[i]);
+		}
+	}
+
+	DTRACE_KASAN5(leak_detected,
+				  vm_address_t, base,
+				  vm_size_t, sz,
+				  vm_offset_t, offset,
+				  vm_size_t, leak_sz,
+				  char *, string_rep);
+}
+
+/*
+ * Check for possible uninitialized memory contained in [base, base+sz).
+ */
+void
+kasan_check_uninitialized(vm_address_t base, vm_size_t sz)
+{
+	if (!(enabled_checks & TYPE_LEAK) || sz < leak_threshold) {
+		return;
+	}
+
+	vm_address_t cur = base;
+	vm_address_t end = base + sz;
+	vm_size_t count = 0;
+	vm_size_t max_count = 0;
+	vm_address_t leak_offset = 0;
+	uint8_t byte = 0;
+
+	while (cur < end) {
+		byte = *(uint8_t *)cur;
+		count = (byte == KASAN_UNINITIALIZED_HEAP) ? (count + 1) : 0;
+		if (count > max_count) {
+			max_count = count;
+			leak_offset = cur - (count - 1) - base;
+		}
+		cur += 1;
+	}
+
+	if (max_count >= leak_threshold) {
+		kasan_report_leak(base, sz, leak_offset, max_count);
+	}
+}
+
 /*
  *
  * KASAN violation reporting
@@ -332,6 +398,8 @@ access_str(access_t type)
 		return "store to";
 	} else if (type & TYPE_FREE) {
 		return "free of";
+	} else if (type & TYPE_LEAK) {
+		return "leak from";
 	} else {
 		return "access of";
 	}
@@ -468,7 +536,8 @@ kasan_log_report(uptr p, uptr width, access_t access, violation_t reason)
 	 * print a backtrace
 	 */
 
-	nframes = backtrace_frame(bt, nframes, __builtin_frame_address(0)); /* ignore current frame */
+	nframes = backtrace_frame(bt, nframes, __builtin_frame_address(0),
+	    NULL); /* ignore current frame */
 
 	buf[0] = '\0';
 	l += snprintf(buf+l, len-l, "Backtrace: ");
@@ -483,8 +552,8 @@ kasan_log_report(uptr p, uptr width, access_t access, violation_t reason)
 #define REPORT_DECLARE(n) \
 	void OS_NORETURN __asan_report_load##n(uptr p)  { kasan_crash_report(p, n, TYPE_LOAD,  0); } \
 	void OS_NORETURN __asan_report_store##n(uptr p) { kasan_crash_report(p, n, TYPE_STORE, 0); } \
-	void UNSUPPORTED_API(__asan_report_exp_load##n, uptr a, int32_t b); \
-	void UNSUPPORTED_API(__asan_report_exp_store##n, uptr a, int32_t b);
+	void OS_NORETURN UNSUPPORTED_API(__asan_report_exp_load##n, uptr a, int32_t b); \
+	void OS_NORETURN UNSUPPORTED_API(__asan_report_exp_store##n, uptr a, int32_t b);
 
 REPORT_DECLARE(1)
 REPORT_DECLARE(2)
@@ -731,10 +800,21 @@ kasan_init(void)
 		if (arg & KASAN_ARGS_NOPOISON_GLOBAL) {
 			enabled_checks &= ~TYPE_POISON_GLOBAL;
 		}
+		if (arg & KASAN_ARGS_CHECK_LEAKS) {
+			enabled_checks |= TYPE_LEAK;
+		}
 	}
 
 	if (PE_parse_boot_argn("kasan.free_yield_ms", &arg, sizeof(arg))) {
 		free_yield = arg;
+	}
+
+	if (PE_parse_boot_argn("kasan.leak_threshold", &arg, sizeof(arg))) {
+		leak_threshold = arg;
+	}
+
+	if (PE_parse_boot_argn("kasan.leak_fatal_threshold", &arg, sizeof(arg))) {
+		leak_fatal_threshold = arg;
 	}
 
 	/* kasan.bl boot-arg handled in kasan_init_dybl() */
@@ -870,7 +950,7 @@ kasan_alloc_bt(uint32_t *ptr, vm_size_t sz, vm_size_t skip)
 
 	if (frames > 0) {
 		frames = min(frames + skip, BACKTRACE_MAXFRAMES);
-		frames = backtrace(bt, frames);
+		frames = backtrace(bt, frames, NULL);
 
 		while (frames > sz && skip > 0) {
 			bt++;
@@ -906,6 +986,40 @@ kasan_alloc_crc(vm_offset_t addr)
 	return crc;
 }
 
+static vm_size_t
+kasan_alloc_retrieve_bt(vm_address_t addr, uintptr_t frames[static BACKTRACE_MAXFRAMES])
+{
+	vm_size_t num_frames = 0;
+	uptr shadow = (uptr)SHADOW_FOR_ADDRESS(addr);
+	uptr max_search = shadow - 4096;
+	vm_address_t alloc_base = 0;
+	size_t fsize = 0;
+
+	/* walk the shadow backwards to find the allocation base */
+	while (shadow >= max_search) {
+		if (*(uint8_t *)shadow == ASAN_HEAP_LEFT_RZ) {
+			alloc_base = ADDRESS_FOR_SHADOW(shadow) + 8;
+			break;
+		}
+		shadow--;
+	}
+
+	if (alloc_base) {
+		struct kasan_alloc_header *header = header_for_user_addr(alloc_base);
+		if (magic_for_addr(alloc_base, LIVE_XOR) == header->magic) {
+			struct kasan_alloc_footer *footer = footer_for_user_addr(alloc_base, &fsize);
+			if ((fsize/sizeof(footer->backtrace[0])) >= header->frames) {
+				num_frames = header->frames;
+				for (size_t i = 0; i < num_frames; i++) {
+					frames[i] = footer->backtrace[i] + vm_kernel_slid_base;
+				}
+			}
+		}
+	}
+
+	return num_frames;
+}
+
 /*
  * addr: base address of full allocation (including redzones)
  * size: total size of allocation (include redzones)
@@ -929,6 +1043,10 @@ kasan_alloc(vm_offset_t addr, vm_size_t size, vm_size_t req, vm_size_t leftrz)
 	kasan_rz_clobber(addr, req, leftrz, rightrz);
 
 	addr += leftrz;
+
+	if (enabled_checks & TYPE_LEAK) {
+		__nosan_memset((void *)addr, KASAN_UNINITIALIZED_HEAP, req);
+	}
 
 	/* stash the allocation sizes in the left redzone */
 	struct kasan_alloc_header *h = header_for_user_addr(addr);
@@ -1206,11 +1324,32 @@ __asan_poison_cxx_array_cookie(uptr p)
 	*shadow = ASAN_ARRAY_COOKIE;
 }
 
+/*
+ * Unpoison the C++ array cookie (if it exists). We don't know exactly where it
+ * lives relative to the start of the buffer, but it's always the word immediately
+ * before the start of the array data, so for naturally-aligned objects we need to
+ * search at most 2 shadow bytes.
+ */
+void
+kasan_unpoison_cxx_array_cookie(void *ptr)
+{
+	uint8_t *shadow = SHADOW_FOR_ADDRESS((uptr)ptr);
+	for (size_t i = 0; i < 2; i++) {
+		if (shadow[i] == ASAN_ARRAY_COOKIE) {
+			shadow[i] = ASAN_VALID;
+			return;
+		} else if (shadow[i] != ASAN_VALID) {
+			/* must have seen the cookie by now */
+			return;
+		}
+	}
+}
+
 #define ACCESS_CHECK_DECLARE(type, sz, access) \
 	void __asan_##type##sz(uptr addr) { \
 		kasan_check_range((const void *)addr, sz, access); \
 	} \
-	void UNSUPPORTED_API(__asan_exp_##type##sz, uptr a, int32_t b);
+	void OS_NORETURN UNSUPPORTED_API(__asan_exp_##type##sz, uptr a, int32_t b);
 
 ACCESS_CHECK_DECLARE(load,  1,  TYPE_LOAD);
 ACCESS_CHECK_DECLARE(load,  2,  TYPE_LOAD);
@@ -1314,17 +1453,18 @@ UNUSED_ABI(__asan_version_mismatch_check_apple_900, void);
 UNUSED_ABI(__asan_version_mismatch_check_apple_902, void);
 UNUSED_ABI(__asan_version_mismatch_check_apple_1000, void);
 UNUSED_ABI(__asan_version_mismatch_check_apple_1001, void);
+UNUSED_ABI(__asan_version_mismatch_check_apple_clang_1100, void);
 
-void UNSUPPORTED_API(__asan_init_v5, void);
-void UNSUPPORTED_API(__asan_register_globals, uptr a, uptr b);
-void UNSUPPORTED_API(__asan_unregister_globals, uptr a, uptr b);
-void UNSUPPORTED_API(__asan_register_elf_globals, uptr a, uptr b, uptr c);
-void UNSUPPORTED_API(__asan_unregister_elf_globals, uptr a, uptr b, uptr c);
+void OS_NORETURN UNSUPPORTED_API(__asan_init_v5, void);
+void OS_NORETURN UNSUPPORTED_API(__asan_register_globals, uptr a, uptr b);
+void OS_NORETURN UNSUPPORTED_API(__asan_unregister_globals, uptr a, uptr b);
+void OS_NORETURN UNSUPPORTED_API(__asan_register_elf_globals, uptr a, uptr b, uptr c);
+void OS_NORETURN UNSUPPORTED_API(__asan_unregister_elf_globals, uptr a, uptr b, uptr c);
 
-void UNSUPPORTED_API(__asan_exp_loadN, uptr addr, size_t sz, int32_t e);
-void UNSUPPORTED_API(__asan_exp_storeN, uptr addr, size_t sz, int32_t e);
-void UNSUPPORTED_API(__asan_report_exp_load_n, uptr addr, unsigned long b, int32_t c);
-void UNSUPPORTED_API(__asan_report_exp_store_n, uptr addr, unsigned long b, int32_t c);
+void OS_NORETURN UNSUPPORTED_API(__asan_exp_loadN, uptr addr, size_t sz, int32_t e);
+void OS_NORETURN UNSUPPORTED_API(__asan_exp_storeN, uptr addr, size_t sz, int32_t e);
+void OS_NORETURN UNSUPPORTED_API(__asan_report_exp_load_n, uptr addr, unsigned long b, int32_t c);
+void OS_NORETURN UNSUPPORTED_API(__asan_report_exp_store_n, uptr addr, unsigned long b, int32_t c);
 
 /*
  *
@@ -1370,6 +1510,8 @@ SYSCTL_UINT(_kern_kasan, OID_AUTO, checks, CTLFLAG_RW, &enabled_checks, 0, "");
 SYSCTL_UINT(_kern_kasan, OID_AUTO, quarantine, CTLFLAG_RW, &quarantine_enabled, 0, "");
 SYSCTL_UINT(_kern_kasan, OID_AUTO, report_ignored, CTLFLAG_RW, &report_ignored, 0, "");
 SYSCTL_UINT(_kern_kasan, OID_AUTO, free_yield_ms, CTLFLAG_RW, &free_yield, 0, "");
+SYSCTL_UINT(_kern_kasan, OID_AUTO, leak_threshold, CTLFLAG_RW, &leak_threshold, 0, "");
+SYSCTL_UINT(_kern_kasan, OID_AUTO, leak_fatal_threshold, CTLFLAG_RW, &leak_fatal_threshold, 0, "");
 SYSCTL_UINT(_kern_kasan, OID_AUTO, memused, CTLFLAG_RD, &shadow_pages_used, 0, "");
 SYSCTL_UINT(_kern_kasan, OID_AUTO, memtotal, CTLFLAG_RD, &shadow_pages_total, 0, "");
 SYSCTL_UINT(_kern_kasan, OID_AUTO, kexts, CTLFLAG_RD, &kexts_loaded, 0, "");

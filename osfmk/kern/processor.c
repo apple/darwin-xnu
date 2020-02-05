@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -94,7 +94,7 @@
 
 struct processor_set    pset0;
 struct pset_node                pset_node0;
-decl_simple_lock_data(static, pset_node_lock)
+decl_simple_lock_data(static, pset_node_lock);
 
 lck_grp_t pset_lck_grp;
 
@@ -105,13 +105,13 @@ int                                             tasks_count;
 int                                             terminated_tasks_count;
 queue_head_t                    threads;
 int                                             threads_count;
-decl_lck_mtx_data(, tasks_threads_lock)
-decl_lck_mtx_data(, tasks_corpse_lock)
+decl_lck_mtx_data(, tasks_threads_lock);
+decl_lck_mtx_data(, tasks_corpse_lock);
 
 processor_t                             processor_list;
 unsigned int                    processor_count;
 static processor_t              processor_list_tail;
-decl_simple_lock_data(, processor_list_lock)
+decl_simple_lock_data(, processor_list_lock);
 
 uint32_t                                processor_avail_count;
 uint32_t                                processor_avail_count_user;
@@ -198,7 +198,7 @@ processor_init(
 	assert(cpu_id < MAX_SCHED_CPUS);
 
 	processor->state = PROCESSOR_OFF_LINE;
-	processor->active_thread = processor->next_thread = processor->idle_thread = THREAD_NULL;
+	processor->active_thread = processor->startup_thread = processor->idle_thread = THREAD_NULL;
 	processor->processor_set = pset;
 	processor_state_update_idle(processor);
 	processor->starting_pri = MINPRI;
@@ -207,10 +207,11 @@ processor_init(
 	processor->quantum_end = UINT64_MAX;
 	processor->deadline = UINT64_MAX;
 	processor->first_timeslice = FALSE;
+	processor->processor_offlined = false;
 	processor->processor_primary = processor; /* no SMT relationship known at this point */
 	processor->processor_secondary = NULL;
-	processor->is_SMT = FALSE;
-	processor->is_recommended = (pset->recommended_bitmask & (1ULL << cpu_id)) ? TRUE : FALSE;
+	processor->is_SMT = false;
+	processor->is_recommended = true;
 	processor->processor_self = IP_NULL;
 	processor_data_init(processor);
 	processor->processor_list = NULL;
@@ -221,6 +222,9 @@ processor_init(
 	s = splsched();
 	pset_lock(pset);
 	bit_set(pset->cpu_bitmask, cpu_id);
+	bit_set(pset->recommended_bitmask, cpu_id);
+	bit_set(pset->primary_map, cpu_id);
+	bit_set(pset->cpu_state_map[PROCESSOR_OFF_LINE], cpu_id);
 	if (pset->cpu_set_count++ == 0) {
 		pset->cpu_set_low = pset->cpu_set_hi = cpu_id;
 	} else {
@@ -402,10 +406,9 @@ pset_init(
 	pset->cpu_set_count = 0;
 	pset->last_chosen = -1;
 	pset->cpu_bitmask = 0;
-	pset->recommended_bitmask = ~0ULL;
-	pset->primary_map = ~0ULL;
-	pset->cpu_state_map[PROCESSOR_OFF_LINE] = ~0ULL;
-	for (uint i = PROCESSOR_SHUTDOWN; i < PROCESSOR_STATE_LEN; i++) {
+	pset->recommended_bitmask = 0;
+	pset->primary_map = 0;
+	for (uint i = 0; i < PROCESSOR_STATE_LEN; i++) {
 		pset->cpu_state_map[i] = 0;
 	}
 	pset->pending_AST_URGENT_cpu_mask = 0;
@@ -662,8 +665,8 @@ processor_start(
 	 *	start up thread.
 	 */
 	if (processor->active_thread == THREAD_NULL &&
-	    processor->next_thread == THREAD_NULL) {
-		result = kernel_thread_create((thread_continue_t)processor_start_thread, NULL, MAXPRI_KERNEL, &thread);
+	    processor->startup_thread == THREAD_NULL) {
+		result = kernel_thread_create(processor_start_thread, NULL, MAXPRI_KERNEL, &thread);
 		if (result != KERN_SUCCESS) {
 			s = splsched();
 			pset_lock(pset);
@@ -677,7 +680,7 @@ processor_start(
 		s = splsched();
 		thread_lock(thread);
 		thread->bound_processor = processor;
-		processor->next_thread = thread;
+		processor->startup_thread = thread;
 		thread->state = TH_RUN;
 		thread->last_made_runnable_time = mach_absolute_time();
 		thread_unlock(thread);
@@ -1416,9 +1419,39 @@ pset_reference(
 	return;
 }
 
+
+#if CONFIG_SCHED_CLUTCH
+
+/*
+ * The clutch scheduler decides the recommendation of a thread based
+ * on its thread group's properties and recommendations. The only thread
+ * level property it looks at is the bucket for the thread to implement
+ * the policy of not running Utility & BG buckets on the P-cores. Any
+ * other policy being added to this routine might need to be reflected
+ * in places such as sched_clutch_hierarchy_thread_pset() &
+ * sched_clutch_migrate_thread_group() which rely on getting the recommendations
+ * right.
+ *
+ * Note: The current implementation does not support TH_SFLAG_ECORE_ONLY &
+ * TH_SFLAG_PCORE_ONLY flags which are used for debugging utilities. A similar
+ * version of that functionality can be implemented by putting these flags
+ * on a thread group instead of individual thread basis.
+ *
+ */
 pset_cluster_type_t
 recommended_pset_type(thread_t thread)
 {
 	(void)thread;
 	return PSET_SMP;
 }
+
+#else /* CONFIG_SCHED_CLUTCH */
+
+pset_cluster_type_t
+recommended_pset_type(thread_t thread)
+{
+	(void)thread;
+	return PSET_SMP;
+}
+
+#endif /* CONFIG_SCHED_CLUTCH */

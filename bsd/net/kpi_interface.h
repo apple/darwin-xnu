@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -43,6 +43,7 @@
 
 #ifdef KERNEL_PRIVATE
 struct if_interface_state;
+struct ifnet_interface_advisory;
 #include <sys/kpi_mbuf.h>
 #endif /* KERNEL_PRIVATE */
 
@@ -55,7 +56,7 @@ struct if_interface_state;
 #define KPI_INTERFACE_EMBEDDED 0
 #endif
 #else
-#if TARGET_OS_EMBEDDED
+#if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 #define KPI_INTERFACE_EMBEDDED 1
 #else
 #define KPI_INTERFACE_EMBEDDED 0
@@ -88,6 +89,9 @@ struct ifnet_demux_desc;
  *       @constant IFNET_FAMILY_FIREWIRE An IEEE 1394 [Firewire] interface.
  *       @constant IFNET_FAMILY_BOND A virtual bonded interface.
  *       @constant IFNET_FAMILY_CELLULAR A cellular interface.
+ *       @constant IFNET_FAMILY_6LOWPAN A 6LoWPAN interface.
+ *       @constant IFNET_FAMILY_UTUN A utun interface.
+ *       @constant IFNET_FAMILY_IPSEC An IPsec interface.
  */
 enum {
 	IFNET_FAMILY_ANY                = 0,
@@ -105,7 +109,10 @@ enum {
 	IFNET_FAMILY_STF                = 12,
 	IFNET_FAMILY_FIREWIRE           = 13,
 	IFNET_FAMILY_BOND               = 14,
-	IFNET_FAMILY_CELLULAR           = 15
+	IFNET_FAMILY_CELLULAR           = 15,
+	IFNET_FAMILY_6LOWPAN            = 16,
+	IFNET_FAMILY_UTUN               = 17,
+	IFNET_FAMILY_IPSEC              = 18
 };
 
 /*!
@@ -131,8 +138,8 @@ enum {
 	IFNET_SUBFAMILY_THUNDERBOLT     = 4,
 	IFNET_SUBFAMILY_RESERVED        = 5,
 	IFNET_SUBFAMILY_INTCOPROC       = 6,
-	IFNET_SUBFAMILY_UTUN            = 7,
-	IFNET_SUBFAMILY_IPSEC           = 8,
+	IFNET_SUBFAMILY_QUICKRELAY      = 7,
+	IFNET_SUBFAMILY_DEFAULT         = 8,
 };
 
 /*
@@ -3326,11 +3333,35 @@ ifnet_notice_node_presence(ifnet_t ifp, struct sockaddr *sa, int32_t rssi,
  *               system that the absence of the specified node has been detected.
  *       @param ifp The interface attached to the link where the absence of the
  *               specified node has been detected.
- *       @param sa The AF_LINK family address of the node whose absence has been
- *               detected.
+ *       @param sa The AF_INET6 or AF_LINK family address of the node whose absence has been
+ *               detected. If AF_LINK is specified, AF_INET6 address is derived from the
+ *               AF_LINK address.
  *       @result Returns 0 on success, or EINVAL if arguments are invalid.
  */
 extern errno_t ifnet_notice_node_absence(ifnet_t ifp, struct sockaddr *sa);
+
+/*
+ *       @function ifnet_notice_node_presence_v2
+ *       @discussion Provided for network interface drivers to notify the
+ *               system of a change detected in the presence of the specified
+ *               node.
+ *       @param ifp The interface attached to the link where the specified node
+ *               is present.
+ *       @param sa The AF_INET6 family address of the node whose presence is
+ *               changing.
+ *       @param sdl The AF_LINK family address of the node whose presence is
+ *               changing.
+ *       @param rssi The received signal strength indication as measured in
+ *               dBm by a radio receiver.
+ *       @param lqm A link quality metric associated with the specified node.
+ *       @param npm A node proximity metric associated with the specified node.
+ *       @param srvinfo A fixed-size array of octets containing opaque service
+ *               information data used by the mDNS responder subsystem.
+ *       @result Returns 0 on success, or EINVAL if arguments are invalid.
+ */
+extern errno_t
+ifnet_notice_node_presence_v2(ifnet_t ifp, struct sockaddr *sa, struct sockaddr_dl *sdl, int32_t rssi,
+    int lqm, int npm, u_int8_t srvinfo[48]);
 
 /*
  *       @function ifnet_notice_master_elected
@@ -3392,7 +3423,7 @@ ifnet_get_delegate(ifnet_t ifp, ifnet_t *pdelegated_ifp);
  *       @struct ifnet_keepalive_offload_frame
  *       @discussion This structure is used to define various opportunistic
  *               polling parameters for an interface.
- *               For IPSec and AirPlay UDP keep alive only a subset of the
+ *               For IPsec and AirPlay UDP keep alive only a subset of the
  *               fields are relevant.
  *               An incoming TCP keep alive probe has the sequence number
  *               in the TCP header equal to "remote_seq" and the
@@ -3415,6 +3446,7 @@ ifnet_get_delegate(ifnet_t ifp, ifnet_t *pdelegated_ifp);
  *       @field keep_retry Interval before retrying if previous probe was not answered (TCP only)
  *       @field reply_length The length of the frame in the reply_data field (TCP only)
  *       @field addr_length Length in bytes of local_addr and remote_addr (TCP only)
+ *       @field flags Flags (TCP only)
  *       @field reply_data Keep alive reply to be sent to incoming probe (TCP only)
  *       @field local_addr Local address: 4 bytes IPv4 or 16 bytes IPv6 address (TCP only)
  *       @field remote_addr Remote address: 4 bytes IPv4 or 16 bytes IPv6 address (TCP only)
@@ -3442,7 +3474,9 @@ struct ifnet_keepalive_offload_frame {
 	u_int16_t keep_retry; /* interval before retrying if previous probe was not answered */
 	u_int8_t reply_length; /* Length of valid reply_data bytes including offset */
 	u_int8_t addr_length; /* Length of valid bytes in local_addr and remote_addr */
-	u_int8_t reserved[2];
+#define  IFNET_KEEPALIVE_OFFLOAD_FLAG_NOWAKEFROMSLEEP   0x01
+	u_int8_t flags;
+	u_int8_t reserved[1];
 	u_int8_t reply_data[IFNET_KEEPALIVE_OFFLOAD_FRAME_DATA_SIZE]; /* Response packet */
 	u_int8_t local_addr[IFNET_KEEPALIVE_OFFLOAD_MAX_ADDR_SIZE]; /* in network byte order  */
 	u_int8_t remote_addr[IFNET_KEEPALIVE_OFFLOAD_MAX_ADDR_SIZE]; /* in network byte order  */
@@ -3457,13 +3491,13 @@ struct ifnet_keepalive_offload_frame {
  *       @discussion Fills out frames_array with IP packets to send at
  *               periodic intervals as Keep-alive or heartbeat messages.
  *               This can be used to offload keep alives for UDP or TCP.
- *               Note: The frames are returned in this order: first the IPSec
+ *               Note: The frames are returned in this order: first the IPsec
  *               frames, then the AirPlay frames and finally the TCP frames.
  *               If a device does not support one kind of keep alive frames_array
  *               it should provide a frames_array large enough to accomodate
  *               the other frames
  *       @param ifp The interface to send frames out on. This is used to
- *               select which sockets or IPSec SAs should generate the
+ *               select which sockets or IPsec SAs should generate the
  *               packets.
  *       @param frames_array An array of ifnet_keepalive_offload_frame
  *               structs. This is allocated by the caller, and has
@@ -3480,6 +3514,28 @@ extern errno_t ifnet_get_keepalive_offload_frames(ifnet_t ifp,
     struct ifnet_keepalive_offload_frame *frames_array,
     u_int32_t frames_array_count, size_t frame_data_offset,
     u_int32_t *used_frames_count);
+
+
+/*
+ *       @function ifnet_notify_tcp_keepalive_offload_timeout
+ *       @discussion Used by an interface to notify a TCP connection whose
+ *               keep alive was offloaded did experience a timeout.
+ *       @param ifp The interface for which the TCP keep alive offload timed out
+ *       @param frame The ifnet_keepalive_offload_frame structure that identifies
+ *               the TCP connection that experienced the timeout.
+ *               All the fields must be zeroed by the caller except for:
+ *               - type: must be IFNET_KEEPALIVE_OFFLOAD_FRAME_TCP
+ *               and for the fields identifying the 5-tup;e of the
+ *               TCP connection:
+ *               - ether_type
+ *               - local_addr
+ *               - remote_addr
+ *               - local_port
+ *               - remote_port
+ *       @result Returns 0 on success, error number otherwise.
+ */
+extern errno_t ifnet_notify_tcp_keepalive_offload_timeout(ifnet_t ifp,
+    struct ifnet_keepalive_offload_frame *frame);
 
 /*************************************************************************/
 /* Link level notifications                                              */
@@ -3593,6 +3649,21 @@ extern errno_t ifnet_touch_lastupdown(ifnet_t interface);
  *  to.
  */
 extern errno_t ifnet_updown_delta(ifnet_t interface, struct timeval *updown_delta);
+
+/*************************************************************************/
+/* Interface advisory notifications                                      */
+/*************************************************************************/
+/*!
+ *       @function ifnet_interface_advisory_report
+ *       @discussion KPI to let the driver provide interface advisory
+ *       notifications to the user space.
+ *       @param ifp The interface that is generating the advisory report.
+ *       @param advisory structure containing the advisory notification
+ *              information.
+ *       @result Returns 0 on success, error number otherwise.
+ */
+extern errno_t ifnet_interface_advisory_report(ifnet_t ifp,
+    const struct ifnet_interface_advisory *advisory);
 
 #endif /* KERNEL_PRIVATE */
 

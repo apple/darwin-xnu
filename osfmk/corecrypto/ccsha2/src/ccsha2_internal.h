@@ -37,6 +37,12 @@
 
 #include <corecrypto/ccdigest.h>
 
+#ifndef CCSHA2_DISABLE_SHA512
+#define CCSHA2_DISABLE_SHA512 0
+#endif
+
+#define CCSHA2_SHA256_USE_SHA512_K (CC_SMALL_CODE && !CCSHA2_DISABLE_SHA512)
+
 extern const struct ccdigest_info ccsha256_v6m_di;
 void ccsha256_v6m_compress(ccdigest_state_t state, size_t nblocks, const void *buf);
 
@@ -45,12 +51,20 @@ void ccsha512_ltc_compress(ccdigest_state_t state, size_t nblocks, const void *i
 
 #if  CCSHA2_VNG_INTEL
 #if defined __x86_64__
-void ccsha256_vng_intel_avx2_compress(ccdigest_state_t state, size_t nblocks, const void *in);
-void ccsha256_vng_intel_avx1_compress(ccdigest_state_t state, size_t nblocks, const void *in);
-void ccsha256_vng_intel_ssse3_compress(ccdigest_state_t state, size_t nblocks, const void *in);
-void ccsha512_vng_intel_avx2_compress(ccdigest_state_t state, size_t nblocks, const void *in);
-void ccsha512_vng_intel_avx1_compress(ccdigest_state_t state, size_t nblocks, const void *in);
-void ccsha512_vng_intel_ssse3_compress(ccdigest_state_t state, size_t nblocks, const void *in);
+void ccsha256_vng_intel_avx2_compress(ccdigest_state_t state, size_t nblocks, const void *in) __asm__("_ccsha256_vng_intel_avx2_compress");
+void ccsha256_vng_intel_avx1_compress(ccdigest_state_t state, size_t nblocks, const void *in) __asm__("_ccsha256_vng_intel_avx1_compress");
+void ccsha256_vng_intel_ssse3_compress(ccdigest_state_t state, size_t nblocks, const void *in) __asm__("_ccsha256_vng_intel_sse3_compress");
+void ccsha512_vng_intel_avx2_compress(ccdigest_state_t state, size_t nblocks, const void *in) __asm__("_ccsha512_vng_intel_avx2_compress");
+void ccsha512_vng_intel_avx1_compress(ccdigest_state_t state, size_t nblocks, const void *in) __asm__("_ccsha512_vng_intel_avx1_compress");
+void ccsha512_vng_intel_ssse3_compress(ccdigest_state_t state, size_t nblocks, const void *in) __asm__("_ccsha512_vng_intel_ssse3_compress");
+
+#if CC_ACCELERATECRYPTO
+// AccelerateCrypto
+extern const struct ccdigest_info ccsha224_vng_intel_di;
+extern const struct ccdigest_info ccsha256_vng_intel_di;
+extern const struct ccdigest_info ccsha384_vng_intel_di;
+extern const struct ccdigest_info ccsha512_vng_intel_di;
+#endif
 
 extern const struct ccdigest_info ccsha224_vng_intel_AVX2_di;
 extern const struct ccdigest_info ccsha224_vng_intel_AVX1_di;
@@ -63,14 +77,7 @@ extern const struct ccdigest_info ccsha512_vng_intel_AVX2_di;
 extern const struct ccdigest_info ccsha512_vng_intel_AVX1_di;
 extern const struct ccdigest_info ccsha512_vng_intel_SupplementalSSE3_di;
 #endif
-void ccsha256_vng_intel_sse3_compress(ccdigest_state_t state, size_t nblocks, const void *in);
-#endif
-
-#if  CCSHA2_VNG_ARMV7NEON
-extern const struct ccdigest_info ccsha384_vng_arm64_di;
-extern const struct ccdigest_info ccsha384_vng_armv7neon_di;
-extern const struct ccdigest_info ccsha512_vng_arm64_di;
-extern const struct ccdigest_info ccsha512_vng_armv7neon_di;
+void ccsha256_vng_intel_sse3_compress(ccdigest_state_t state, size_t nblocks, const void *in) __asm__("_ccsha256_vng_intel_sse3_compress");
 #endif
 
 extern const uint32_t ccsha256_K[64];

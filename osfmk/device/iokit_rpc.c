@@ -75,7 +75,7 @@
  * Lookup a device by its port.
  * Doesn't consume the naked send right; produces a device reference.
  */
-static io_object_t
+io_object_t
 iokit_lookup_io_object(ipc_port_t port, ipc_kobject_type_t type)
 {
 	io_object_t     obj;
@@ -111,6 +111,13 @@ iokit_lookup_connect_port(
 	return iokit_lookup_io_object(port, IKOT_IOKIT_CONNECT);
 }
 
+MIGEXTERN io_object_t
+iokit_lookup_uext_object_port(
+	ipc_port_t      port)
+{
+	return iokit_lookup_io_object(port, IKOT_UEXT_OBJECT);
+}
+
 static io_object_t
 iokit_lookup_object_in_space_with_port_name(mach_port_name_t name, ipc_kobject_type_t type, ipc_space_t space)
 {
@@ -120,16 +127,16 @@ iokit_lookup_object_in_space_with_port_name(mach_port_name_t name, ipc_kobject_t
 		ipc_port_t port;
 		kern_return_t kr;
 
-		kr = ipc_object_translate(space, name, MACH_PORT_RIGHT_SEND, (ipc_object_t *)&port);
+		kr = ipc_port_translate_send(space, name, &port);
 
 		if (kr == KERN_SUCCESS) {
 			assert(IP_VALID(port));
-
+			require_ip_active(port);
 			ip_reference(port);
 			ip_unlock(port);
 
 			iokit_lock_port(port);
-			if (ip_active(port) && (ip_kotype(port) == type)) {
+			if (ip_kotype(port) == type) {
 				obj = (io_object_t) port->ip_kobject;
 				iokit_add_reference(obj, type);
 			}
@@ -152,6 +159,12 @@ EXTERN io_object_t
 iokit_lookup_connect_ref_current_task(mach_port_name_t name)
 {
 	return iokit_lookup_object_in_space_with_port_name(name, IKOT_IOKIT_CONNECT, current_space());
+}
+
+EXTERN io_object_t
+iokit_lookup_uext_ref_current_task(mach_port_name_t name)
+{
+	return iokit_lookup_object_in_space_with_port_name(name, IKOT_UEXT_OBJECT, current_space());
 }
 
 EXTERN void
@@ -233,31 +246,14 @@ int gIOKitPortCount;
 EXTERN ipc_port_t
 iokit_alloc_object_port( io_object_t obj, ipc_kobject_type_t type )
 {
-	ipc_port_t          notify;
-	ipc_port_t          port;
-
-	do {
-		/* Allocate port, keeping a reference for it. */
-		port = ipc_port_alloc_kernel();
-		if (port == IP_NULL) {
-			continue;
-		}
-
-		/* set kobject & type */
-		ipc_kobject_set( port, (ipc_kobject_t) obj, type);
-
-		/* Request no-senders notifications on the port. */
-		ip_lock( port);
-		notify = ipc_port_make_sonce_locked( port);
-		ipc_port_nsrequest( port, 1, notify, &notify);
-		/* port unlocked */
-		assert( notify == IP_NULL);
-		gIOKitPortCount++;
-	} while (FALSE);
-
-	return port;
+	/* Allocate port, keeping a reference for it. */
+	gIOKitPortCount++;
+	ipc_kobject_alloc_options_t options = IPC_KOBJECT_ALLOC_NSREQUEST;
+	if (type == IKOT_IOKIT_CONNECT) {
+		options |= IPC_KOBJECT_ALLOC_IMMOVABLE_SEND;
+	}
+	return ipc_kobject_alloc_port((ipc_kobject_t) obj, type, options);
 }
-
 
 EXTERN kern_return_t
 iokit_destroy_object_port( ipc_port_t port )
@@ -304,8 +300,12 @@ iokit_make_send_right( task_t task, io_object_t obj, ipc_kobject_type_t type )
 
 	if (IP_VALID( sendPort )) {
 		kern_return_t   kr;
-		kr = ipc_object_copyout( task->itk_space, (ipc_object_t) sendPort,
-		    MACH_MSG_TYPE_PORT_SEND, TRUE, &name);
+		// Remove once <rdar://problem/45522961> is fixed.
+		// We need to make ith_knote NULL as ipc_object_copyout() uses
+		// thread-argument-passing and its value should not be garbage
+		current_thread()->ith_knote = ITH_KNOTE_NULL;
+		kr = ipc_object_copyout( task->itk_space, ip_to_object(sendPort),
+		    MACH_MSG_TYPE_PORT_SEND, NULL, NULL, &name);
 		if (kr != KERN_SUCCESS) {
 			ipc_port_release_send( sendPort );
 			name = MACH_PORT_NULL;
@@ -339,7 +339,7 @@ iokit_no_senders( mach_no_senders_notification_t * notification )
 	ipc_kobject_type_t  type = IKOT_NONE;
 	ipc_port_t          notify;
 
-	port = (ipc_port_t) notification->not_header.msgh_remote_port;
+	port = notification->not_header.msgh_remote_port;
 
 	// convert a port to io_object_t.
 	if (IP_VALID(port)) {
@@ -349,7 +349,8 @@ iokit_no_senders( mach_no_senders_notification_t * notification )
 			type = ip_kotype( port );
 			if ((IKOT_IOKIT_OBJECT == type)
 			    || (IKOT_IOKIT_CONNECT == type)
-			    || (IKOT_IOKIT_IDENT == type)) {
+			    || (IKOT_IOKIT_IDENT == type)
+			    || (IKOT_UEXT_OBJECT == type)) {
 				iokit_add_reference( obj, IKOT_IOKIT_OBJECT );
 			} else {
 				obj = NULL;
@@ -449,6 +450,10 @@ IOMapPages(vm_map_t map, mach_vm_address_t va, mach_vm_address_t pa,
 	case kIOMapPostedWrite:
 		flags = VM_WIMG_POSTED;
 		break;
+
+	case kIOMapRealTimeCache:
+		flags = VM_WIMG_RT;
+		break;
 	}
 
 	pmap_set_cache_attributes(pagenum, flags);
@@ -512,6 +517,10 @@ IOProtectCacheMode(vm_map_t __unused map, mach_vm_address_t __unused va,
 
 	case kIOMapPostedWrite:
 		flags = VM_WIMG_POSTED;
+		break;
+
+	case kIOMapRealTimeCache:
+		flags = VM_WIMG_RT;
 		break;
 	}
 

@@ -293,5 +293,5 @@ IOEventSource::getWorkLoop() const
 bool
 IOEventSource::onThread() const
 {
-	return (workLoop != 0) && workLoop->onThread();
+	return (workLoop != NULL) && workLoop->onThread();
 }

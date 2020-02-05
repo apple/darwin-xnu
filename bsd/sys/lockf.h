@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -87,29 +87,22 @@ MALLOC_DECLARE(M_LOCKF);
  */
 TAILQ_HEAD(locklist, lockf);
 
-#pragma pack(4)
-
 struct lockf {
 	short   lf_flags;           /* Semantics: F_POSIX, F_FLOCK, F_WAIT */
-	short   lf_type;         /* Lock type: F_RDLCK, F_WRLCK */
+	short   lf_type;            /* Lock type: F_RDLCK, F_WRLCK */
+#if IMPORTANCE_INHERITANCE
+	int     lf_boosted;         /* Is the owner of the lock boosted */
+#endif
 	off_t   lf_start;           /* Byte # of the start of the lock */
 	off_t   lf_end;             /* Byte # of the end of the lock (-1=EOF) */
 	caddr_t lf_id;              /* Id of the resource holding the lock */
 	struct  lockf **lf_head;    /* Back pointer to the head of the locf list */
-	struct vnode *lf_vnode;     /* Back pointer to the inode */
+	struct  vnode *lf_vnode;    /* Back pointer to the inode */
 	struct  lockf *lf_next;     /* Pointer to the next lock on this inode */
 	struct  locklist lf_blkhd;  /* List of requests blocked on this lock */
 	TAILQ_ENTRY(lockf) lf_block;/* A request waiting for a lock */
-#if IMPORTANCE_INHERITANCE
-	int     lf_boosted;         /* Is the owner of the lock boosted */
-#endif
-	struct proc *lf_owner;      /* The proc that did the SETLK, if known */
+	struct  proc *lf_owner;     /* The proc that did the SETLK, if known */
 };
-
-#pragma pack()
-
-/* Maximum length of sleep chains to traverse to try and detect deadlock. */
-#define MAXDEPTH 50
 
 __BEGIN_DECLS
 

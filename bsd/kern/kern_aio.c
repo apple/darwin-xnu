@@ -1340,6 +1340,44 @@ out:
 }
 
 /*
+ * validate user_sigevent.  at this point we only support
+ * sigev_notify equal to SIGEV_SIGNAL or SIGEV_NONE.  this means
+ * sigev_value, sigev_notify_function, and sigev_notify_attributes
+ * are ignored, since SIGEV_THREAD is unsupported.  This is consistent
+ * with no [RTS] (RalTime Signal) option group support.
+ */
+static int
+aio_sigev_validate( const struct user_sigevent *sigev )
+{
+	switch (sigev->sigev_notify) {
+	case SIGEV_SIGNAL:
+	{
+		int signum;
+
+		/* make sure we have a valid signal number */
+		signum = sigev->sigev_signo;
+		if (signum <= 0 || signum >= NSIG ||
+		    signum == SIGKILL || signum == SIGSTOP) {
+			return EINVAL;
+		}
+	}
+	break;
+
+	case SIGEV_NONE:
+		break;
+
+	case SIGEV_THREAD:
+	/* Unsupported [RTS] */
+
+	default:
+		return EINVAL;
+	}
+
+	return 0;
+}
+
+
+/*
  * aio_enqueue_work
  *
  * Queue up the entry on the aio asynchronous work queue in priority order
@@ -1517,6 +1555,10 @@ lio_listio(proc_t p, struct lio_listio_args *uap, int *retval )
 		if (call_result) {
 			goto ExitRoutine;
 		}
+		call_result = aio_sigev_validate(&aiosigev);
+		if (call_result) {
+			goto ExitRoutine;
+		}
 	}
 
 	/* process list of aio requests */
@@ -1603,9 +1645,9 @@ lio_listio(proc_t p, struct lio_listio_args *uap, int *retval )
 		    0 );
 	}
 
+	aio_proc_lock_spin(p);
 	switch (uap->mode) {
 	case LIO_WAIT:
-		aio_proc_lock_spin(p);
 		while (lio_context->io_completed < lio_context->io_issued) {
 			result = msleep(lio_context, aio_proc_mutex(p), PCATCH | PRIBIO | PSPIN, "lio_listio", 0);
 
@@ -1622,12 +1664,16 @@ lio_listio(proc_t p, struct lio_listio_args *uap, int *retval )
 			free_context = TRUE;
 		}
 
-		aio_proc_unlock(p);
 		break;
 
 	case LIO_NOWAIT:
+		/* If no IOs were issued must free it (rdar://problem/45717887) */
+		if (lio_context->io_issued == 0) {
+			free_context = TRUE;
+		}
 		break;
 	}
+	aio_proc_unlock(p);
 
 	/* call_result == -1 means we had no trouble queueing up requests */
 	if (call_result == -1) {
@@ -2128,35 +2174,9 @@ aio_validate( aio_workq_entry *entryp )
 		}
 	}
 
-	/*
-	 * validate aiocb.aio_sigevent.  at this point we only support
-	 * sigev_notify equal to SIGEV_SIGNAL or SIGEV_NONE.  this means
-	 * sigev_value, sigev_notify_function, and sigev_notify_attributes
-	 * are ignored, since SIGEV_THREAD is unsupported.  This is consistent
-	 * with no [RTS] (RalTime Signal) option group support.
-	 */
-	switch (entryp->aiocb.aio_sigevent.sigev_notify) {
-	case SIGEV_SIGNAL:
-	{
-		int             signum;
-
-		/* make sure we have a valid signal number */
-		signum = entryp->aiocb.aio_sigevent.sigev_signo;
-		if (signum <= 0 || signum >= NSIG ||
-		    signum == SIGKILL || signum == SIGSTOP) {
-			return EINVAL;
-		}
-	}
-	break;
-
-	case SIGEV_NONE:
-		break;
-
-	case SIGEV_THREAD:
-	/* Unsupported [RTS] */
-
-	default:
-		return EINVAL;
+	result = aio_sigev_validate(&entryp->aiocb.aio_sigevent);
+	if (result) {
+		return result;
 	}
 
 	/* validate the file descriptor and that the file was opened

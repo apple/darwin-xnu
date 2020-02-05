@@ -619,8 +619,7 @@ kxld_reloc_export_macho(const KXLDRelocator *relocator,
 	if (kaslr_offsets == NULL) {
 		kaslr_offsets_index = 0;
 		kaslr_offsets_count = locrelocs->nitems + extrelocs->nitems;
-		kaslr_offsets = (uint32_t *)malloc(kaslr_offsets_count * sizeof(*kaslr_offsets));
-		bzero(kaslr_offsets, kaslr_offsets_count * sizeof(*kaslr_offsets));
+		kaslr_offsets = (uint32_t *)calloc(kaslr_offsets_count, sizeof(*kaslr_offsets));
 	}
 
 	// copies the reloc data into the __LINKEDIT segment

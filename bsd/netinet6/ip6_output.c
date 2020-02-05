@@ -170,7 +170,7 @@ static int ip6_insert_jumboopt(struct ip6_exthdrs *, u_int32_t);
 static int ip6_insertfraghdr(struct mbuf *, struct mbuf *, int,
     struct ip6_frag **);
 static int ip6_getpmtu(struct route_in6 *, struct route_in6 *,
-    struct ifnet *, struct in6_addr *, u_int32_t *, boolean_t *);
+    struct ifnet *, struct in6_addr *, u_int32_t *);
 static int ip6_pcbopts(struct ip6_pktopts **, struct mbuf *, struct socket *,
     struct sockopt *sopt);
 static int ip6_pcbopt(int, u_char *, int, struct ip6_pktopts **, int);
@@ -185,7 +185,7 @@ static void ip6_output_checksum(struct ifnet *, uint32_t, struct mbuf *,
 extern int udp_ctloutput(struct socket *, struct sockopt *);
 static int ip6_fragment_packet(struct mbuf **m,
     struct ip6_pktopts *opt, struct ip6_exthdrs *exthdrsp, struct ifnet *ifp,
-    uint32_t mtu, boolean_t alwaysfrag, uint32_t unfragpartlen,
+    uint32_t mtu, uint32_t unfragpartlen,
     struct route_in6 *ro_pmtu, int nxt0, uint32_t optlen);
 
 SYSCTL_DECL(_net_inet6_ip6);
@@ -285,7 +285,6 @@ ip6_output_list(struct mbuf *m0, int packetchain, struct ip6_pktopts *opt,
 	int error = 0;
 	struct in6_ifaddr *ia = NULL, *src_ia = NULL;
 	u_int32_t mtu = 0;
-	boolean_t alwaysfrag = FALSE;
 	u_int32_t optlen = 0, plen = 0, unfragpartlen = 0;
 	struct ip6_rthdr *rh;
 	struct in6_addr finaldst;
@@ -295,6 +294,11 @@ ip6_output_list(struct mbuf *m0, int packetchain, struct ip6_pktopts *opt,
 	uint32_t pktcnt = 0;
 	uint32_t packets_processed = 0;
 	struct timeval start_tv;
+#if PF
+	boolean_t skip_pf = (ip6oa != NULL) &&
+	    (ip6oa->ip6oa_flags & IP6OAF_SKIP_PF);
+#endif
+
 #if DUMMYNET
 	struct m_tag *tag;
 	struct ip6_out_args saved_ip6oa;
@@ -399,7 +403,6 @@ ip6_output_list(struct mbuf *m0, int packetchain, struct ip6_pktopts *opt,
 			ifnet_reference(origifp);
 		}
 		mtu = dn_tag->dn_mtu;
-		alwaysfrag = (dn_tag->dn_alwaysfrag != 0);
 		unfragpartlen = dn_tag->dn_unfragpartlen;
 
 		bcopy(&dn_tag->dn_exthdrs, &exthdrs, sizeof(exthdrs));
@@ -473,6 +476,9 @@ tags_done:
 		if (ip6oa->ip6oa_flags & IP6OAF_NO_EXPENSIVE) {
 			ipf_pktopts.ippo_flags |= IPPOF_NO_IFF_EXPENSIVE;
 		}
+		if (ip6oa->ip6oa_flags & IP6OAF_NO_CONSTRAINED) {
+			ipf_pktopts.ippo_flags |= IPPOF_NO_IFF_CONSTRAINED;
+		}
 		adv = &ip6oa->ip6oa_flowadv;
 		adv->code = FADV_SUCCESS;
 		ip6oa->ip6oa_retflags = 0;
@@ -501,7 +507,7 @@ tags_done:
 	 * only needs to happen once per function entry.
 	 */
 	necp_matched_policy_id = necp_ip6_output_find_policy_match(m, flags,
-	    (flags & IPV6_OUTARGS) ? ip6oa : NULL, &necp_result,
+	    (flags & IPV6_OUTARGS) ? ip6oa : NULL, ro ? ro->ro_rt : NULL, &necp_result,
 	    &necp_result_parameter);
 #endif /* NECP */
 
@@ -576,6 +582,9 @@ loopit:
 		case NECP_KERNEL_POLICY_RESULT_PASS:
 			goto skip_ipsec;
 		case NECP_KERNEL_POLICY_RESULT_DROP:
+			error = EHOSTUNREACH;
+			ip6stat.ip6s_necp_policy_drop++;
+			goto freehdrs;
 		case NECP_KERNEL_POLICY_RESULT_SOCKET_DIVERT:
 			/*
 			 * Flow divert packets should be blocked at the IP
@@ -824,7 +833,11 @@ skip_ipsec:
 
 	if (!TAILQ_EMPTY(&ipv6_filters) &&
 	    !((flags & IPV6_OUTARGS) &&
-	    (ip6oa->ip6oa_flags & IP6OAF_INTCOPROC_ALLOWED))) {
+	    (ip6oa->ip6oa_flags & IP6OAF_INTCOPROC_ALLOWED)
+#if NECP
+	    && !necp_packet_should_skip_filters(m)
+#endif // NECP
+	    )) {
 		struct ipfilter *filter;
 		int seen = (inject_filter_ref == NULL);
 		int fixscope = 0;
@@ -1354,8 +1367,7 @@ routefound:
 	}
 
 	/* Determine path MTU. */
-	if ((error = ip6_getpmtu(ro_pmtu, ro, ifp, &finaldst, &mtu,
-	    &alwaysfrag)) != 0) {
+	if ((error = ip6_getpmtu(ro_pmtu, ro, ifp, &finaldst, &mtu)) != 0) {
 		goto bad;
 	}
 
@@ -1430,7 +1442,7 @@ routefound:
 check_with_pf:
 #endif /* DUMMYNET */
 #if PF
-	if (PF_IS_ENABLED) {
+	if (PF_IS_ENABLED && !skip_pf) {
 #if DUMMYNET
 
 		/*
@@ -1448,7 +1460,6 @@ check_with_pf:
 		args.fwa_ro6_pmtu = ro_pmtu;
 		args.fwa_origifp = origifp;
 		args.fwa_mtu = mtu;
-		args.fwa_alwaysfrag = alwaysfrag;
 		args.fwa_unfragpartlen = unfragpartlen;
 		args.fwa_exthdrs = &exthdrs;
 		/* Invoke outbound packet filter */
@@ -1497,7 +1508,7 @@ check_with_pf:
 	 * is unchanged.
 	 */
 	error = ip6_fragment_packet(&m, opt,
-	    &exthdrs, ifp, mtu, alwaysfrag, unfragpartlen, ro_pmtu, nxt0,
+	    &exthdrs, ifp, mtu, unfragpartlen, ro_pmtu, nxt0,
 	    optlen);
 
 	if (error) {
@@ -1654,25 +1665,19 @@ bad:
 /* ip6_fragment_packet
  *
  * The fragmentation logic is rather complex:
- * 1: normal case (dontfrag == 0, alwaysfrag == 0)
+ * 1: normal case (dontfrag == 0)
  * 1-a:	send as is if tlen <= path mtu
  * 1-b:	fragment if tlen > path mtu
  *
  * 2: if user asks us not to fragment (dontfrag == 1)
  * 2-a:	send as is if tlen <= interface mtu
  * 2-b:	error if tlen > interface mtu
- *
- * 3: if we always need to attach fragment header (alwaysfrag == 1)
- *	always fragment
- *
- * 4: if dontfrag == 1 && alwaysfrag == 1
- *	error, as we cannot handle this conflicting request
  */
 
 static int
 ip6_fragment_packet(struct mbuf **mptr, struct ip6_pktopts *opt,
     struct ip6_exthdrs *exthdrsp, struct ifnet *ifp, uint32_t mtu,
-    boolean_t alwaysfrag, uint32_t unfragpartlen, struct route_in6 *ro_pmtu,
+    uint32_t unfragpartlen, struct route_in6 *ro_pmtu,
     int nxt0, uint32_t optlen)
 {
 	VERIFY(NULL != mptr);
@@ -1693,11 +1698,6 @@ ip6_fragment_packet(struct mbuf **mptr, struct ip6_pktopts *opt,
 			m->m_pkthdr.csum_flags &= ~CSUM_TX_FLAGS;
 			m->m_pkthdr.csum_data = 0;
 		}
-	}
-
-	if (dontfrag && alwaysfrag) {   /* case 4 */
-		/* conflicting request - can't transmit */
-		return EMSGSIZE;
 	}
 
 	/* Access without acquiring nd_ifinfo lock for performance */
@@ -1723,9 +1723,9 @@ ip6_fragment_packet(struct mbuf **mptr, struct ip6_pktopts *opt,
 	/*
 	 * transmit packet without fragmentation
 	 */
-	if (dontfrag || (!alwaysfrag &&         /* case 1-a and 2-a */
+	if (dontfrag ||
 	    (tlen <= mtu || TSO_IPV6_OK(ifp, m) ||
-	    (ifp->if_hwassist & CSUM_FRAGMENT_IPV6)))) {
+	    (ifp->if_hwassist & CSUM_FRAGMENT_IPV6))) {
 		/*
 		 * mppn not updated in this case because no new chain is formed
 		 * and inserted
@@ -1733,12 +1733,24 @@ ip6_fragment_packet(struct mbuf **mptr, struct ip6_pktopts *opt,
 		ip6_output_checksum(ifp, mtu, m, nxt0, tlen, optlen);
 	} else {
 		/*
-		 * time to fragment - cases 1-b and 3 are handled inside
+		 * time to fragment - cases 1-b is handled inside
 		 * ip6_do_fragmentation().
 		 * mppn is passed down to be updated to point at fragment chain.
 		 */
+		u_int8_t *lexthdrsp;
+
+		if (exthdrsp->ip6e_rthdr != NULL) {
+			lexthdrsp = mtod(exthdrsp->ip6e_rthdr, uint8_t *);
+		} else if (exthdrsp->ip6e_dest1 != NULL) {
+			lexthdrsp = mtod(exthdrsp->ip6e_dest1, uint8_t *);
+		} else if (exthdrsp->ip6e_hbh != NULL) {
+			lexthdrsp = mtod(exthdrsp->ip6e_hbh, uint8_t *);
+		} else {
+			lexthdrsp = NULL;
+		}
 		error = ip6_do_fragmentation(mptr, optlen, ifp,
-		    unfragpartlen, mtod(m, struct ip6_hdr *), exthdrsp, mtu, nxt0);
+		    unfragpartlen, mtod(m, struct ip6_hdr *), lexthdrsp, mtu,
+		    nxt0, htonl(ip6_randomid()));
 	}
 
 	return error;
@@ -1749,11 +1761,19 @@ ip6_fragment_packet(struct mbuf **mptr, struct ip6_pktopts *opt,
  * the packet needs to be fragmented. on success, morig is freed and a chain
  * of fragments is linked into the packet chain where morig existed. Otherwise,
  * an errno is returned.
+ * optlen:        total length of all extension headers (excludes the IPv6 header).
+ * unfragpartlen: length of the per-fragment headers which consist of the IPv6
+ *                header plus any extension headers that must be processed by nodes
+ *                en route to the destination.
+ * lexthdrsp:     pointer to the last extension header in the unfragmentable part
+ *                or NULL.
+ * nxt0:          upper-layer protocol number.
+ * id:            Identification value to be used in the fragment header.
  */
 int
 ip6_do_fragmentation(struct mbuf **mptr, uint32_t optlen, struct ifnet *ifp,
-    uint32_t unfragpartlen, struct ip6_hdr *ip6, struct ip6_exthdrs *exthdrsp,
-    uint32_t mtu, int nxt0)
+    uint32_t unfragpartlen, struct ip6_hdr *ip6, uint8_t *lexthdrsp,
+    uint32_t mtu, int nxt0, uint32_t id)
 {
 	VERIFY(NULL != mptr);
 	int error = 0;
@@ -1764,9 +1784,7 @@ ip6_do_fragmentation(struct mbuf **mptr, uint32_t optlen, struct ifnet *ifp,
 
 	size_t tlen = morig->m_pkthdr.len;
 
-	/*
-	 * try to fragment the packet.  case 1-b and 3
-	 */
+	/* try to fragment the packet. case 1-b */
 	if ((morig->m_pkthdr.csum_flags & CSUM_TSO_IPV6)) {
 		/* TSO and fragment aren't compatible */
 		in6_ifstat_inc(ifp, ifs6_out_fragfail);
@@ -1783,7 +1801,6 @@ ip6_do_fragmentation(struct mbuf **mptr, uint32_t optlen, struct ifnet *ifp,
 		size_t hlen, len, off;
 		struct mbuf **mnext = NULL;
 		struct ip6_frag *ip6f;
-		u_int32_t id = htonl(ip6_randomid());
 		u_char nextproto;
 
 		/*
@@ -1806,15 +1823,9 @@ ip6_do_fragmentation(struct mbuf **mptr, uint32_t optlen, struct ifnet *ifp,
 		 * Change the next header field of the last header in the
 		 * unfragmentable part.
 		 */
-		if (exthdrsp->ip6e_rthdr != NULL) {
-			nextproto = *mtod(exthdrsp->ip6e_rthdr, u_char *);
-			*mtod(exthdrsp->ip6e_rthdr, u_char *) = IPPROTO_FRAGMENT;
-		} else if (exthdrsp->ip6e_dest1 != NULL) {
-			nextproto = *mtod(exthdrsp->ip6e_dest1, u_char *);
-			*mtod(exthdrsp->ip6e_dest1, u_char *) = IPPROTO_FRAGMENT;
-		} else if (exthdrsp->ip6e_hbh != NULL) {
-			nextproto = *mtod(exthdrsp->ip6e_hbh, u_char *);
-			*mtod(exthdrsp->ip6e_hbh, u_char *) = IPPROTO_FRAGMENT;
+		if (lexthdrsp != NULL) {
+			nextproto = *lexthdrsp;
+			*lexthdrsp = IPPROTO_FRAGMENT;
 		} else {
 			nextproto = ip6->ip6_nxt;
 			ip6->ip6_nxt = IPPROTO_FRAGMENT;
@@ -2257,17 +2268,11 @@ ip6_insertfraghdr(struct mbuf *m0, struct mbuf *m, int hlen,
 
 static int
 ip6_getpmtu(struct route_in6 *ro_pmtu, struct route_in6 *ro,
-    struct ifnet *ifp, struct in6_addr *dst, u_int32_t *mtup,
-    boolean_t *alwaysfragp)
+    struct ifnet *ifp, struct in6_addr *dst, u_int32_t *mtup)
 {
 	u_int32_t mtu = 0;
-	boolean_t alwaysfrag = FALSE;
 	int error = 0;
-	boolean_t is_local = FALSE;
 
-	if (IN6_IS_SCOPE_LINKLOCAL(dst)) {
-		is_local = TRUE;
-	}
 
 	if (ro_pmtu != ro) {
 		/* The first hop and the final destination may differ. */
@@ -2319,17 +2324,6 @@ ip6_getpmtu(struct route_in6 *ro_pmtu, struct route_in6 *ro,
 			if (!(ro_pmtu->ro_rt->rt_rmx.rmx_locks & RTV_MTU)) {
 				ro_pmtu->ro_rt->rt_rmx.rmx_mtu = mtu; /* XXX */
 			}
-		} else if (mtu < IPV6_MMTU) {
-			/*
-			 * RFC2460 section 5, last paragraph:
-			 * if we record ICMPv6 too big message with
-			 * mtu < IPV6_MMTU, transmit packets sized IPV6_MMTU
-			 * or smaller, with framgent header attached.
-			 * (fragment header is needed regardless from the
-			 * packet size, for translators to identify packets)
-			 */
-			alwaysfrag = TRUE;
-			mtu = IPV6_MMTU;
 		}
 	} else {
 		if (ifp) {
@@ -2341,9 +2335,6 @@ ip6_getpmtu(struct route_in6 *ro_pmtu, struct route_in6 *ro,
 	}
 
 	*mtup = mtu;
-	if ((alwaysfragp != NULL) && !is_local) {
-		*alwaysfragp = alwaysfrag;
-	}
 	return error;
 }
 
@@ -2361,6 +2352,7 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 	int level, op = -1, optname = 0;
 	int optlen = 0;
 	struct proc *p;
+	lck_mtx_t *mutex_held = NULL;
 
 	VERIFY(sopt != NULL);
 
@@ -2377,6 +2369,22 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 		boolean_t capture_exthdrstat_in = FALSE;
 		switch (op) {
 		case SOPT_SET:
+			mutex_held = socket_getlock(so, PR_F_WILLUNLOCK);
+			/*
+			 * Wait if we are in the middle of ip6_output
+			 * as we unlocked the socket there and don't
+			 * want to overwrite the IP options
+			 */
+			if (in6p->inp_sndinprog_cnt > 0) {
+				in6p->inp_sndingprog_waiters++;
+
+				while (in6p->inp_sndinprog_cnt > 0) {
+					msleep(&in6p->inp_sndinprog_cnt, mutex_held,
+					    PSOCK | PCATCH, "inp_sndinprog_cnt",
+					    NULL);
+				}
+				in6p->inp_sndingprog_waiters--;
+			}
 			switch (optname) {
 			case IPV6_2292PKTOPTIONS: {
 				struct mbuf *m;
@@ -2923,7 +2931,7 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 				 * the outgoing interface.
 				 */
 				error = ip6_getpmtu(&sro, NULL, NULL,
-				    &in6p->in6p_faddr, &pmtu, NULL);
+				    &in6p->in6p_faddr, &pmtu);
 				ROUTE_RELEASE(&sro);
 				if (error) {
 					break;
@@ -3783,7 +3791,7 @@ ip6_setpktopt(int optname, u_char *buf, int len, struct ip6_pktopts *opt,
 			return EINVAL;
 		}
 		hlimp = (int *)(void *)buf;
-		if (*hlimp < -1 || *hlimp > 255) {
+		if (*hlimp < -1 || *hlimp > IPV6_MAXHLIM) {
 			return EINVAL;
 		}
 

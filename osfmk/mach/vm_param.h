@@ -327,7 +327,12 @@ extern vm_offset_t              vm_kernel_builtinkmod_text_end;
  */
 
 __BEGIN_DECLS
+#if XNU_KERNEL_PRIVATE
+extern vm_offset_t vm_kernel_addrhash(vm_offset_t addr)
+__XNU_INTERNAL(vm_kernel_addrhash);
+#else
 extern vm_offset_t vm_kernel_addrhash(vm_offset_t addr);
+#endif
 __END_DECLS
 
 #define __DO_UNSLIDE(_v) ((vm_offset_t)VM_KERNEL_STRIP_PTR(_v) - vm_kernel_slide)

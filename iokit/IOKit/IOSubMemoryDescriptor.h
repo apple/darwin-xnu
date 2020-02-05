@@ -94,6 +94,10 @@ public:
 	virtual IOReturn setPurgeable( IOOptionBits newState,
 	    IOOptionBits * oldState ) APPLE_KEXT_OVERRIDE;
 
+	IOReturn setOwnership( task_t newOwner,
+	    int newLedgerTag,
+	    IOOptionBits newLedgerOptions );
+
 // support map() on kIOMemoryTypeVirtual without prepare()
 	virtual IOMemoryMap *       makeMapping(
 		IOMemoryDescriptor *    owner,

@@ -27,6 +27,7 @@
  */
 #include <machine/asm.h>
 #include <arm64/machine_machdep.h>
+#include <arm64/machine_routines_asm.h>
 #include <arm64/proc_reg.h>
 #include "assym.s"
 
@@ -51,6 +52,30 @@
 	stp		x25, x26, [$0, SS64_X25]
 	stp		x27, x28, [$0, SS64_X27]
 	stp		fp, lr, [$0, SS64_FP]
+#ifdef HAS_APPLE_PAC
+	stp		x0, x1, [sp, #-16]!
+	stp		x2, x3, [sp, #-16]!
+	stp		x4, x5, [sp, #-16]!
+
+	/*
+	 * Arg0: The ARM context pointer
+	 * Arg1: PC value to sign
+	 * Arg2: CPSR value to sign
+	 * Arg3: LR to sign
+	 */
+	mov		x0, $0
+	ldr		x1, [x0, SS64_PC]
+	ldr		w2, [x0, SS64_CPSR]
+	mov		x3, lr
+	mov		x4, x16
+	mov		x5, x17
+	bl		EXT(ml_sign_thread_state)
+
+	ldp		x4, x5, [sp], #16
+	ldp		x2, x3, [sp], #16
+	ldp		x0, x1, [sp], #16
+	ldp		fp, lr, [$0, SS64_FP]
+#endif /* defined(HAS_APPLE_PAC) */
 	mov		$1, sp
 	str		$1, [$0, SS64_SP]
 
@@ -78,14 +103,25 @@
  *   arg1 - Scratch register
  */
 .macro	load_general_registers
+	mov		x20, x0
+	mov		x21, x1
+	mov		x22, x2
 
-	ldp		x16, x17, [$0, SS64_X16]
+	mov		x0, $0
+	AUTH_THREAD_STATE_IN_X0	x23, x24, x25, x26, x27
+
+	mov		x0, x20
+	mov		x1, x21
+	mov		x2, x22
+
+	// Skip x16, x17 - already loaded + authed by AUTH_THREAD_STATE_IN_X0
 	ldp		x19, x20, [$0, SS64_X19]
 	ldp		x21, x22, [$0, SS64_X21]
 	ldp		x23, x24, [$0, SS64_X23]
 	ldp		x25, x26, [$0, SS64_X25]
 	ldp		x27, x28, [$0, SS64_X27]
-	ldp		fp, lr, [$0, SS64_FP]
+	ldr		fp, [$0, SS64_FP]
+	// Skip lr - already loaded + authed by AUTH_THREAD_STATE_IN_X0
 	ldr		$1, [$0, SS64_SP]
 	mov		sp, $1
 
@@ -98,6 +134,7 @@
 	ldr		d14,[$0, NS64_D14]
 	ldr		d15,[$0, NS64_D15]
 .endmacro
+
 
 /*
  * set_thread_registers
@@ -120,6 +157,36 @@
 	mov		x18, $1								// ... and trash reserved x18
 .endmacro
 
+#if defined(HAS_APPLE_PAC)
+/*
+ * set_process_dependent_keys
+ *
+ * Updates process dependent keys during context switch if necessary
+ *  Per CPU Data rop_key is initialized in arm_init() for bootstrap processor
+ *  and in cpu_data_init for slave processors
+ *
+ *  arg0 - New thread pointer/Current CPU key
+ *  arg1 - Scratch register: New Thread Key
+ *  arg2 - Scratch register: Current CPU Data pointer
+ */
+.macro set_process_dependent_keys
+	ldr		$1, [$0, TH_ROP_PID]
+	ldr		$2, [$0, ACT_CPUDATAP]
+	ldr		$0, [$2, CPU_ROP_KEY]
+	cmp		$0, $1
+	b.eq	1f
+	str		$1, [$2, CPU_ROP_KEY]
+	msr		APIBKeyLo_EL1, $1
+	add		$1, $1, #1
+	msr		APIBKeyHi_EL1, $1
+	add		$1, $1, #1
+	msr		APDBKeyLo_EL1, $1
+	add		$1, $1, #1
+	msr		APDBKeyHi_EL1, $1
+	isb 	sy
+1:
+.endmacro
+#endif /* defined(HAS_APPLE_PAC) */
 
 /*
  * void     machine_load_context(thread_t        thread)
@@ -135,6 +202,9 @@ LEXT(machine_load_context)
 	set_thread_registers 	x0, x1, x2
 	ldr		x1, [x0, TH_KSTACKPTR]				// Get top of kernel stack
 	load_general_registers 	x1, x2
+#ifdef HAS_APPLE_PAC
+	set_process_dependent_keys	x0, x1, x2
+#endif
 	mov		x0, #0								// Clear argument to thread_continue
 	ret
 
@@ -158,6 +228,9 @@ LEXT(Call_continuation)
 	mov		sp, x5								// Set stack pointer
 	mov		fp, #0								// Clear the frame pointer
 
+#if defined(HAS_APPLE_PAC)
+	set_process_dependent_keys	x4, x5, x6
+#endif
 
     mov x20, x0  //continuation
     mov x21, x1  //continuation parameter
@@ -165,12 +238,16 @@ LEXT(Call_continuation)
 
     cbz x3, 1f
     mov x0, #1
-    bl _ml_set_interrupts_enabled
+    bl EXT(ml_set_interrupts_enabled)
 1:
 
 	mov		x0, x21								// Set the first parameter
 	mov		x1, x22								// Set the wait result arg
+#ifdef HAS_APPLE_PAC
+	blraaz	x20									// Branch to the continuation
+#else
 	blr		x20									// Branch to the continuation
+#endif
 	mrs		x0, TPIDR_EL1						// Get the current thread pointer
 	b		EXT(thread_terminate)				// Kill the thread
 
@@ -192,6 +269,9 @@ Lswitch_threads:
 	set_thread_registers	x2, x3, x4
 	ldr		x3, [x2, TH_KSTACKPTR]
 	load_general_registers	x3, x4
+#if defined(HAS_APPLE_PAC)
+	set_process_dependent_keys	x2, x3, x4
+#endif
 	ret
 
 /*
@@ -211,7 +291,6 @@ LEXT(Shutdown_context)
 	ldr		x12, [x11, CPU_ISTACKPTR]				// Switch to interrupt stack
 	mov		sp, x12
 	b		EXT(cpu_doshutdown)
-
 
 /*
  *	thread_t Idle_context(void)
@@ -242,6 +321,9 @@ LEXT(Idle_load_context)
 	mrs		x0, TPIDR_EL1						// Get thread pointer
 	ldr		x1, [x0, TH_KSTACKPTR]				// Get the top of the kernel stack
 	load_general_registers	x1, x2
+#ifdef HAS_APPLE_PAC
+	set_process_dependent_keys	x0, x1, x2
+#endif
 	ret
 
 	.align	2
@@ -249,3 +331,5 @@ LEXT(Idle_load_context)
 LEXT(machine_set_current_thread)
 	set_thread_registers x0, x1, x2
 	ret
+
+

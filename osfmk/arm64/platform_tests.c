@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -63,7 +63,6 @@
 #include <kern/thread.h>
 #include <kern/processor.h>
 #include <kern/sched_prim.h>
-#include <kern/xpr.h>
 #include <kern/debug.h>
 #include <string.h>
 #include <tests/xnupost.h>
@@ -85,6 +84,15 @@ kern_return_t arm64_lock_test(void);
 kern_return_t arm64_munger_test(void);
 kern_return_t ex_cb_test(void);
 kern_return_t arm64_pan_test(void);
+kern_return_t arm64_late_pan_test(void);
+#if defined(HAS_APPLE_PAC)
+#include <ptrauth.h>
+kern_return_t arm64_ropjop_test(void);
+#endif
+#if HAS_TWO_STAGE_SPR_LOCK
+kern_return_t arm64_spr_lock_test(void);
+extern void arm64_msr_lock_test(uint64_t);
+#endif
 
 // exception handler ignores this fault address during PAN test
 #if __ARM_PAN_AVAILABLE__
@@ -1060,14 +1068,172 @@ ex_cb_test()
 	return KERN_SUCCESS;
 }
 
+#if defined(HAS_APPLE_PAC)
+
+/*
+ *
+ *  arm64_ropjop_test - basic xnu ROP/JOP test plan
+ *
+ *  - assert ROP/JOP configured and running status match
+ *  - assert all AppleMode ROP/JOP features enabled
+ *  - ensure ROP/JOP keys are set and diversified
+ *  - sign a KVA (the address of this function),assert it was signed (changed)
+ *  - authenticate the newly signed KVA
+ *  - assert the authed KVA is the original KVA
+ *  - corrupt a signed ptr, auth it, ensure auth failed
+ *  - assert the failed authIB of corrupted pointer is tagged
+ *
+ */
+
+kern_return_t
+arm64_ropjop_test()
+{
+	T_LOG("Testing ROP/JOP");
+
+	/* how is ROP/JOP configured */
+	boolean_t config_rop_enabled = TRUE;
+	boolean_t config_jop_enabled = !(BootArgs->bootFlags & kBootFlagsDisableJOP);
+
+
+	/* assert all AppleMode ROP/JOP features enabled */
+	uint64_t apctl = __builtin_arm_rsr64(ARM64_REG_APCTL_EL1);
+#if __APSTS_SUPPORTED__
+	uint64_t apsts = __builtin_arm_rsr64(ARM64_REG_APSTS_EL1);
+	T_ASSERT(apsts & APSTS_EL1_MKEYVld, NULL);
+#else
+	T_ASSERT(apctl & APCTL_EL1_MKEYVld, NULL);
+#endif /* __APSTS_SUPPORTED__ */
+	T_ASSERT(apctl & APCTL_EL1_AppleMode, NULL);
+	T_ASSERT(apctl & APCTL_EL1_KernKeyEn, NULL);
+
+	/* ROP/JOP keys enabled current status */
+	bool status_jop_enabled, status_rop_enabled;
+#if __APSTS_SUPPORTED__ /* H13+ */
+	// TODO: update unit test to understand ROP/JOP enabled config for H13+
+	status_jop_enabled = status_rop_enabled = apctl & APCTL_EL1_EnAPKey1;
+#elif __APCFG_SUPPORTED__ /* H12 */
+	uint64_t apcfg_el1 = __builtin_arm_rsr64(APCFG_EL1);
+	status_jop_enabled = status_rop_enabled = apcfg_el1 & APCFG_EL1_ELXENKEY;
+#else /* !__APCFG_SUPPORTED__ H11 */
+	uint64_t sctlr_el1 = __builtin_arm_rsr64("SCTLR_EL1");
+	status_jop_enabled = sctlr_el1 & SCTLR_PACIA_ENABLED;
+	status_rop_enabled = sctlr_el1 & SCTLR_PACIB_ENABLED;
+#endif /* __APSTS_SUPPORTED__ */
+
+	/* assert configured and running status match */
+	T_ASSERT(config_rop_enabled == status_rop_enabled, NULL);
+	T_ASSERT(config_jop_enabled == status_jop_enabled, NULL);
+
+
+	if (config_jop_enabled) {
+		/* jop key */
+		uint64_t apiakey_hi = __builtin_arm_rsr64(ARM64_REG_APIAKEYHI_EL1);
+		uint64_t apiakey_lo = __builtin_arm_rsr64(ARM64_REG_APIAKEYLO_EL1);
+
+		/* ensure JOP key is set and diversified */
+		T_EXPECT(apiakey_hi != KERNEL_ROP_ID && apiakey_lo != KERNEL_ROP_ID, NULL);
+		T_EXPECT(apiakey_hi != 0 && apiakey_lo != 0, NULL);
+	}
+
+	if (config_rop_enabled) {
+		/* rop key */
+		uint64_t apibkey_hi = __builtin_arm_rsr64(ARM64_REG_APIBKEYHI_EL1);
+		uint64_t apibkey_lo = __builtin_arm_rsr64(ARM64_REG_APIBKEYLO_EL1);
+
+		/* ensure ROP key is set and diversified */
+		T_EXPECT(apibkey_hi != KERNEL_ROP_ID && apibkey_lo != KERNEL_ROP_ID, NULL);
+		T_EXPECT(apibkey_hi != 0 && apibkey_lo != 0, NULL);
+
+		/* sign a KVA (the address of this function) */
+		uint64_t kva_signed = (uint64_t) ptrauth_sign_unauthenticated((void *)&config_rop_enabled, ptrauth_key_asib, 0);
+
+		/* assert it was signed (changed) */
+		T_EXPECT(kva_signed != (uint64_t)&config_rop_enabled, NULL);
+
+		/* authenticate the newly signed KVA */
+		uint64_t kva_authed = (uint64_t) ml_auth_ptr_unchecked((void *)kva_signed, ptrauth_key_asib, 0);
+
+		/* assert the authed KVA is the original KVA */
+		T_EXPECT(kva_authed == (uint64_t)&config_rop_enabled, NULL);
+
+		/* corrupt a signed ptr, auth it, ensure auth failed */
+		uint64_t kva_corrupted = kva_signed ^ 1;
+
+		/* authenticate the corrupted pointer */
+		kva_authed = (uint64_t) ml_auth_ptr_unchecked((void *)kva_corrupted, ptrauth_key_asib, 0);
+
+		/* when AuthIB fails, bits 63:62 will be set to 2'b10 */
+		uint64_t auth_fail_mask = 3ULL << 61;
+		uint64_t authib_fail = 2ULL << 61;
+
+		/* assert the failed authIB of corrupted pointer is tagged */
+		T_EXPECT((kva_authed & auth_fail_mask) == authib_fail, NULL);
+	}
+
+	return KERN_SUCCESS;
+}
+#endif /* defined(HAS_APPLE_PAC) */
 
 #if __ARM_PAN_AVAILABLE__
+
+struct pan_test_thread_args {
+	volatile bool join;
+};
+
+static void
+arm64_pan_test_thread(void *arg, wait_result_t __unused wres)
+{
+	T_ASSERT(__builtin_arm_rsr("pan") != 0, NULL);
+
+	struct pan_test_thread_args *args = arg;
+
+	for (processor_t p = processor_list; p != NULL; p = p->processor_list) {
+		thread_bind(p);
+		thread_block(THREAD_CONTINUE_NULL);
+		kprintf("Running PAN test on cpu %d\n", p->cpu_id);
+		arm64_pan_test();
+	}
+
+	/* unbind thread from specific cpu */
+	thread_bind(PROCESSOR_NULL);
+	thread_block(THREAD_CONTINUE_NULL);
+
+	while (!args->join) {
+		;
+	}
+
+	thread_wakeup(args);
+}
+
+kern_return_t
+arm64_late_pan_test()
+{
+	thread_t thread;
+	kern_return_t kr;
+
+	struct pan_test_thread_args args;
+	args.join = false;
+
+	kr = kernel_thread_start(arm64_pan_test_thread, &args, &thread);
+	assert(kr == KERN_SUCCESS);
+
+	thread_deallocate(thread);
+
+	assert_wait(&args, THREAD_UNINT);
+	args.join = true;
+	thread_block(THREAD_CONTINUE_NULL);
+	return KERN_SUCCESS;
+}
+
 kern_return_t
 arm64_pan_test()
 {
 	vm_offset_t priv_addr = _COMM_PAGE_SIGNATURE;
 
 	T_LOG("Testing PAN.");
+
+
+	T_ASSERT((__builtin_arm_rsr("SCTLR_EL1") & SCTLR_PAN_UNCHANGED) == 0, "SCTLR_EL1.SPAN must be cleared");
 
 	T_ASSERT(__builtin_arm_rsr("pan") != 0, NULL);
 
@@ -1107,9 +1273,10 @@ arm64_pan_test()
 	pan_ro_addr = 0;
 
 	__builtin_arm_wsr("pan", 1);
+
 	return KERN_SUCCESS;
 }
-#endif
+#endif /* __ARM_PAN_AVAILABLE__ */
 
 
 kern_return_t
@@ -1125,3 +1292,44 @@ arm64_munger_test()
 	return 0;
 }
 
+
+#if HAS_TWO_STAGE_SPR_LOCK
+
+#define STR1(x) #x
+#define STR(x) STR1(x)
+
+volatile vm_offset_t spr_lock_test_addr;
+volatile uint32_t spr_lock_exception_esr;
+
+kern_return_t
+arm64_spr_lock_test()
+{
+	processor_t p;
+
+	for (p = processor_list; p != NULL; p = p->processor_list) {
+		thread_bind(p);
+		thread_block(THREAD_CONTINUE_NULL);
+		T_LOG("Running SPR lock test on cpu %d\n", p->cpu_id);
+
+		uint64_t orig_value = __builtin_arm_rsr64(STR(ARM64_REG_HID8));
+		spr_lock_test_addr = (vm_offset_t)VM_KERNEL_STRIP_PTR(arm64_msr_lock_test);
+		spr_lock_exception_esr = 0;
+		arm64_msr_lock_test(~orig_value);
+		T_EXPECT(spr_lock_exception_esr != 0, "MSR write generated synchronous abort");
+
+		uint64_t new_value = __builtin_arm_rsr64(STR(ARM64_REG_HID8));
+		T_EXPECT(orig_value == new_value, "MSR write did not succeed");
+
+		spr_lock_test_addr = 0;
+	}
+
+	/* unbind thread from specific cpu */
+	thread_bind(PROCESSOR_NULL);
+	thread_block(THREAD_CONTINUE_NULL);
+
+	T_PASS("Done running SPR lock tests");
+
+	return KERN_SUCCESS;
+}
+
+#endif /* HAS_TWO_STAGE_SPR_LOCK */

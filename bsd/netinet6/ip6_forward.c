@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -132,7 +132,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	boolean_t proxy = FALSE;
 	struct mbuf *mcopy = NULL;
 	struct ifnet *ifp, *rcvifp, *origifp;   /* maybe unnecessary */
-	u_int32_t inzone, outzone, len;
+	u_int32_t inzone, outzone, len = 0, pktcnt = 0;
 	struct in6_addr src_in6, dst_in6;
 	uint64_t curtime = net_uptime();
 #if IPSEC
@@ -141,7 +141,10 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 	unsigned int ifscope = IFSCOPE_NONE;
 #if PF
 	struct pf_mtag *pf_mtag;
+	struct pf_fragment_tag *pf_ftagp, pf_ftag;
+	boolean_t pf_ftag_valid = FALSE;
 #endif /* PF */
+	uint32_t mpktlen = 0;
 
 	/*
 	 * In the prefix proxying case, the route to the proxied node normally
@@ -164,10 +167,23 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 
 #if PF
 	pf_mtag = pf_find_mtag(m);
+	/*
+	 * save the PF fragmentation metadata as m_copy() removes the
+	 * mbufs tags from the original mbuf.
+	 */
+	pf_ftagp = pf_find_fragment_tag(m);
+	if (pf_ftagp != NULL) {
+		ASSERT(pf_mtag->pftag_flags & PF_TAG_REASSEMBLED);
+		pf_ftag = *pf_ftagp;
+		pf_ftag_valid = TRUE;
+		mpktlen = pf_ftag.ft_maxlen;
+		ASSERT(mpktlen);
+	}
 	if (pf_mtag != NULL && pf_mtag->pftag_rtableid != IFSCOPE_NONE) {
 		ifscope = pf_mtag->pftag_rtableid;
 	}
-
+	pf_mtag = NULL;
+	pf_ftagp = NULL;
 	/*
 	 * If the caller provides a route which is on a different interface
 	 * than the one specified for scoped forwarding, discard the route
@@ -543,7 +559,11 @@ skip_ipsec:
 		return NULL;
 	}
 
-	if (m->m_pkthdr.len > rt->rt_ifp->if_mtu) {
+	if (mpktlen == 0) {
+		mpktlen = m->m_pkthdr.len;
+	}
+
+	if (mpktlen > rt->rt_ifp->if_mtu) {
 		in6_ifstat_inc(rt->rt_ifp, ifs6_in_toobig);
 		if (mcopy) {
 			uint32_t mtu;
@@ -704,6 +724,14 @@ skip_ipsec:
 
 #if PF
 	if (PF_IS_ENABLED) {
+		/*
+		 * PF refragments any packet which it reassembled due to scrub
+		 * rules, in which case it will set the PF_TAG_REFRAGMENTED
+		 * flag in PF mbuf tag.
+		 */
+		if (pf_ftag_valid) {
+			pf_copy_fragment_tag(m, &pf_ftag, M_DONTWAIT);
+		}
 #if DUMMYNET
 		struct ip_fw_args args;
 		bzero(&args, sizeof(args));
@@ -729,6 +757,31 @@ skip_ipsec:
 			/* Already freed by callee */
 			goto senderr;
 		}
+
+		pf_mtag = pf_find_mtag(m);
+		/*
+		 * refragmented packets from PF.
+		 */
+		if ((pf_mtag->pftag_flags & PF_TAG_REFRAGMENTED) != 0) {
+			struct mbuf *t;
+
+			pf_mtag->pftag_flags &= ~PF_TAG_REFRAGMENTED;
+			/* for statistics */
+			t = m;
+			while (t != NULL) {
+				pktcnt++;
+				len += m_pktlen(t);
+				t = t->m_nextpkt;
+			}
+
+			/*
+			 * nd6_output() frees packetchain in both success and
+			 * failure cases.
+			 */
+			error = nd6_output(ifp, origifp, m, dst, rt, NULL);
+			m = NULL;
+			goto sent;
+		}
 		/*
 		 * We do not use ip6 header again in the code below,
 		 * however still adding the bit here so that any new
@@ -740,21 +793,23 @@ skip_ipsec:
 #endif /* PF */
 
 	len = m_pktlen(m);
+	pktcnt = 1;
 	error = nd6_output(ifp, origifp, m, dst, rt, NULL);
+sent:
 	if (error) {
-		in6_ifstat_inc(ifp, ifs6_out_discard);
-		ip6stat.ip6s_cantforward++;
+		in6_ifstat_add(ifp, ifs6_out_discard, pktcnt);
+		ip6stat.ip6s_cantforward += pktcnt;
 	} else {
 		/*
 		 * Increment stats on the source interface; the ones
 		 * for destination interface has been taken care of
 		 * during output above by virtue of PKTF_FORWARDED.
 		 */
-		rcvifp->if_fpackets++;
+		rcvifp->if_fpackets += pktcnt;
 		rcvifp->if_fbytes += len;
 
-		ip6stat.ip6s_forward++;
-		in6_ifstat_inc(ifp, ifs6_out_forward);
+		ip6stat.ip6s_forward += pktcnt;
+		in6_ifstat_add(ifp, ifs6_out_forward, pktcnt);
 		if (type) {
 			ip6stat.ip6s_redirectsent++;
 		} else {

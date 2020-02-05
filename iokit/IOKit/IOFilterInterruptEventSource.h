@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -51,7 +51,7 @@ class IOService;
  */
 class IOFilterInterruptEventSource : public IOInterruptEventSource
 {
-	OSDeclareDefaultStructors(IOFilterInterruptEventSource)
+	OSDeclareDefaultStructors(IOFilterInterruptEventSource);
 
 public:
 /*!
@@ -73,14 +73,14 @@ public:
 private:
 // Hide the superclass initializers
 	virtual bool init(OSObject *inOwner,
-	    IOInterruptEventSource::Action inAction = 0,
-	    IOService *inProvider = 0,
+	    IOInterruptEventSource::Action inAction = NULL,
+	    IOService *inProvider = NULL,
 	    int inIntIndex = 0) APPLE_KEXT_OVERRIDE;
 
 	static IOInterruptEventSource *
 	interruptEventSource(OSObject *inOwner,
-	    IOInterruptEventSource::Action inAction = 0,
-	    IOService *inProvider = 0,
+	    IOInterruptEventSource::Action inAction = NULL,
+	    IOService *inProvider = NULL,
 	    int inIntIndex = 0);
 
 protected:

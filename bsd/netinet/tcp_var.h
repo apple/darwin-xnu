@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -380,6 +380,7 @@ struct tcpcb {
 /* Receiver state for stretch-ack algorithm */
 	u_int32_t       rcv_unackwin;   /* to measure win for stretching acks */
 	u_int32_t       rcv_by_unackwin; /* bytes seen during the last ack-stretching win */
+	u_int32_t       rcv_by_unackhalfwin;
 	u_int32_t       rcv_nostrack_ts; /* timestamp when stretch ack was disabled automatically */
 	u_int32_t       rcv_nostrack_pkts; /* pkts received since strech ack was disabled */
 	u_int16_t       rcv_waitforss;  /* wait for packets during slow-start */
@@ -449,7 +450,7 @@ struct tcpcb {
 		u_int32_t       rxoutoforderbytes;
 		u_int32_t       txretransmitbytes;
 		u_int8_t        synrxtshift;
-		u_int8_t        unused;
+		u_int8_t        rxmitsyns;
 		u_int16_t       unused_pad_to_8;
 		u_int32_t       rxmitpkts;
 	} t_stat;
@@ -479,10 +480,11 @@ struct tcpcb {
 #define TF_DISABLE_DSACK        0x40000         /* Ignore DSACK due to n/w duplication */
 #define TF_RESCUE_RXT           0x80000         /* SACK rescue retransmit */
 #define TF_CWND_NONVALIDATED    0x100000        /* cwnd non validated */
-#define TF_PROBING              0x200000        /* Trigger probe timeout */
+#define TF_IF_PROBING           0x200000        /* Trigger interface probe timeout */
 #define TF_FASTOPEN             0x400000        /* TCP Fastopen is enabled */
 #define TF_REASS_INPROG         0x800000        /* Reassembly is in progress */
-#define TF_FASTOPEN_HEUR        0x1000000       /* Make sure that heuristics get never skipped */
+#define TF_FASTOPEN_FORCE_ENABLE 0x1000000      /* Force-enable TCP Fastopen */
+#define TF_LOGGED_CONN_SUMMARY  0x2000000       /* Connection summary was logged */
 
 #if TRAFFIC_MGT
 	/* Inter-arrival jitter related state */
@@ -621,6 +623,9 @@ struct tcpcb {
 	u_int32_t       t_rxt_minimum_timeout;  /* minimum retransmit timeout in ms */
 	uint32_t        t_challengeack_last;    /* last time challenge ACK was sent per sec */
 	uint32_t        t_challengeack_count;   /* # of challenge ACKs already sent per sec */
+
+	u_int32_t       t_log_flags;            /* TCP logging flags*/
+	u_int32_t       t_connect_time;         /* time when the connection started */
 };
 
 #define IN_FASTRECOVERY(tp)     (tp->t_flags & TF_FASTRECOVERY)
@@ -722,30 +727,9 @@ extern int tcprexmtthresh;
 #define TCP_AUTORCVBUF_MAX(_ifp_) (((_ifp_) != NULL && (IFNET_IS_CELLULAR((_ifp_))) && ((_ifp_)->if_eflags & IFEF_3CA)) ? \
 	        (tcp_autorcvbuf_max << 1) : tcp_autorcvbuf_max)
 
-enum tcp_cc_event {
-	TCP_CC_CWND_INIT,       /* 0 */
-	TCP_CC_INSEQ_ACK_RCVD,  /* 1 */
-	TCP_CC_ACK_RCVD,        /* 2 */
-	TCP_CC_ENTER_FASTRECOVERY, /* 3 */
-	TCP_CC_IN_FASTRECOVERY, /* 4 */
-	TCP_CC_EXIT_FASTRECOVERY,  /* 5 */
-	TCP_CC_PARTIAL_ACK,     /* 6 */
-	TCP_CC_IDLE_TIMEOUT,    /* 7 */
-	TCP_CC_REXMT_TIMEOUT,   /* 8 */
-	TCP_CC_ECN_RCVD,        /* 9 */
-	TCP_CC_BAD_REXMT_RECOVERY, /* 10 */
-	TCP_CC_OUTPUT_ERROR,    /* 11 */
-	TCP_CC_CHANGE_ALGO,     /* 12 */
-	TCP_CC_FLOW_CONTROL,    /* 13 */
-	TCP_CC_SUSPEND,         /* 14 */
-	TCP_CC_LIMITED_TRANSMIT, /* 15 */
-	TCP_CC_EARLY_RETRANSMIT, /* 16 */
-	TCP_CC_TLP_RECOVERY,    /* 17 */
-	TCP_CC_TLP_RECOVER_LASTPACKET, /* 18 */
-	TCP_CC_DELAY_FASTRECOVERY, /* 19 */
-	TCP_CC_TLP_IN_FASTRECOVERY, /* 20 */
-	TCP_CC_DSACK_BAD_REXMT  /* 21 */
-};
+#define TCP_IF_STATE_CHANGED(tp, probe_if_index)                        \
+	(probe_if_index > 0 && tp->t_inpcb->inp_last_outifp != NULL &&  \
+	probe_if_index == tp->t_inpcb->inp_last_outifp->if_index)
 
 /*
  * Structure to hold TCP options that are only used during segment
@@ -1205,6 +1189,10 @@ struct  tcpstat {
 	u_int32_t       tcps_mptcp_back_to_wifi;        /* Total number of connections that succeed to move traffic away from cell (when starting on cell) */
 	u_int32_t       tcps_mptcp_wifi_proxy;          /* Total number of new subflows that fell back to regular TCP on cell */
 	u_int32_t       tcps_mptcp_cell_proxy;          /* Total number of new subflows that fell back to regular TCP on WiFi */
+
+	/* TCP offload statistics */
+	u_int32_t       tcps_ka_offload_drops;  /* Keep alive drops for timeout reported by firmware */
+
 	u_int32_t       tcps_mptcp_triggered_cell;      /* Total number of times an MPTCP-connection triggered cell bringup */
 };
 
@@ -1444,17 +1432,17 @@ struct  xtcpprogress_indicators {
 	u_int64_t       xp_recentflows_rxooo;   /* Total of "recent" flows received out of order bytes */
 	u_int64_t       xp_recentflows_rxdup;   /* Total of "recent" flows received duplicate bytes */
 	u_int64_t       xp_recentflows_retx;    /* Total of "recent" flows retransmitted bytes */
-	u_int64_t       xp_reserved1;                   /* Expansion */
-	u_int64_t       xp_reserved2;                   /* Expansion */
-	u_int64_t       xp_reserved3;                   /* Expansion */
-	u_int64_t       xp_reserved4;                   /* Expansion */
+	u_int64_t       xp_reserved1;           /* Expansion */
+	u_int64_t       xp_reserved2;           /* Expansion */
+	u_int64_t       xp_reserved3;           /* Expansion */
+	u_int64_t       xp_reserved4;           /* Expansion */
 };
 
 struct tcpprogressreq {
-	u_int64_t       ifindex;                                /* Interface index for progress indicators */
+	u_int64_t       ifindex;                /* Interface index for progress indicators */
 	u_int64_t       recentflow_maxduration; /* In mach_absolute_time, max duration for flow to be counted as "recent" */
-	u_int64_t       xp_reserved1;                   /* Expansion */
-	u_int64_t       xp_reserved2;                   /* Expansion */
+	u_int64_t       filter_flags;           /* Optional additional filtering, values are interface properties per ntstat.h */
+	u_int64_t       xp_reserved2;           /* Expansion */
 };
 
 #endif /* PRIVATE */
@@ -1504,6 +1492,8 @@ struct tcpprogressreq {
 	{ "v6mssdflt", CTLTYPE_INT }, \
 }
 
+extern int tcp_TCPTV_MIN;
+
 #ifdef SYSCTL_DECL
 SYSCTL_DECL(_net_inet_tcp);
 #endif /* SYSCTL_DECL */
@@ -1550,7 +1540,9 @@ struct tcp_respond_args {
 	unsigned int nocell:1,
 	    noexpensive:1,
 	    awdl_unrestricted:1,
-	    intcoproc_allowed:1;
+	    intcoproc_allowed:1,
+	    keep_alive:1,
+	    noconstrained:1;
 };
 
 void     tcp_canceltimers(struct tcpcb *);
@@ -1660,8 +1652,11 @@ extern void tcp_probe_connectivity(struct ifnet *ifp, u_int32_t enable);
 extern void tcp_get_connectivity_status(struct tcpcb *,
     struct tcp_conn_status *);
 
+extern void tcp_clear_keep_alive_offload(struct socket *so);
 extern void tcp_fill_keepalive_offload_frames(struct ifnet *,
     struct ifnet_keepalive_offload_frame *, u_int32_t, size_t, u_int32_t *);
+extern int tcp_notify_kao_timeout(ifnet_t ifp,
+    struct ifnet_keepalive_offload_frame *frame);
 
 extern boolean_t tfo_enabled(const struct tcpcb *tp);
 extern void tcp_disable_tfo(struct tcpcb *tp);
@@ -1693,6 +1688,6 @@ extern void mptcp_insert_rmap(struct tcpcb *tp, struct mbuf *m, struct tcphdr *t
 __private_extern__ void tcp_update_stats_per_flow(
 	struct ifnet_stats_per_flow *, struct ifnet *);
 
-#endif /* BSD_KERNEL_RPIVATE */
+#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* _NETINET_TCP_VAR_H_ */

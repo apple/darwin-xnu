@@ -85,7 +85,9 @@ __private_extern__ void
 ipf_ref(void)
 {
 	lck_mtx_lock(kipf_lock);
-	kipf_ref++;
+	if (os_inc_overflow(&kipf_ref)) {
+		panic("kipf_ref overflow");
+	}
 	lck_mtx_unlock(kipf_lock);
 }
 
@@ -94,11 +96,10 @@ ipf_unref(void)
 {
 	lck_mtx_lock(kipf_lock);
 
-	if (kipf_ref == 0) {
-		panic("ipf_unref: kipf_ref == 0\n");
+	if (os_dec_overflow(&kipf_ref)) {
+		panic("kipf_ref underflow");
 	}
 
-	kipf_ref--;
 	if (kipf_ref == 0 && kipf_delayed_remove != 0) {
 		struct ipfilter *filter;
 
@@ -434,6 +435,9 @@ ipf_injectv4_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 		if (options->ippo_flags & IPPOF_NO_IFF_EXPENSIVE) {
 			ipoa.ipoa_flags |= IPOAF_NO_EXPENSIVE;
 		}
+		if (options->ippo_flags & IPPOF_NO_IFF_CONSTRAINED) {
+			ipoa.ipoa_flags |= IPOAF_NO_CONSTRAINED;
+		}
 	}
 
 	bzero(&ro, sizeof(struct route));
@@ -520,6 +524,9 @@ ipf_injectv6_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 		}
 		if (options->ippo_flags & IPPOF_NO_IFF_EXPENSIVE) {
 			ip6oa.ip6oa_flags |= IP6OAF_NO_EXPENSIVE;
+		}
+		if (options->ippo_flags & IPPOF_NO_IFF_CONSTRAINED) {
+			ip6oa.ip6oa_flags |= IP6OAF_NO_CONSTRAINED;
 		}
 	}
 

@@ -92,6 +92,9 @@ int csproc_forced_lv(struct proc* p);
 int     cs_system_require_lv(void);
 uint32_t cs_entitlement_flags(struct proc *p);
 int     cs_entitlements_blob_get(struct proc *, void **, size_t *);
+#ifdef KERNEL_PRIVATE
+int     cs_entitlements_dictionary_copy(struct proc *, void **);
+#endif
 int     cs_restricted(struct proc *);
 uint8_t * cs_get_cdhash(struct proc *);
 

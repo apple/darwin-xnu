@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1225,9 +1225,6 @@ ipfw_tags_done:
 		ip_input_adjust(m, ip, inifp);
 	}
 
-	/* for consistency */
-	m->m_pkthdr.pkt_proto = ip->ip_p;
-
 	/* for netstat route statistics */
 	src_ip = ip->ip_src;
 	len = m->m_pkthdr.len;
@@ -2121,9 +2118,6 @@ tooshort:
 		ip_input_adjust(m, ip, inifp);
 	}
 
-	/* for consistency */
-	m->m_pkthdr.pkt_proto = ip->ip_p;
-
 #if DUMMYNET
 check_with_pf:
 #endif
@@ -2732,6 +2726,8 @@ found:
 
 		ASSERT(trailer >= 0);
 		if ((start != 0 && start != hlen) || trailer != 0) {
+			uint32_t datalen = ip->ip_len - hlen;
+
 #if BYTE_ORDER != BIG_ENDIAN
 			if (start < hlen) {
 				HTONS(ip->ip_len);
@@ -2739,8 +2735,7 @@ found:
 			}
 #endif /* BYTE_ORDER != BIG_ENDIAN */
 			/* callee folds in sum */
-			csum = m_adj_sum16(m, start, hlen,
-			    (ip->ip_len - hlen), csum);
+			csum = m_adj_sum16(m, start, hlen, datalen, csum);
 			if (hlen > start) {
 				swbytes += (hlen - start);
 			} else {
@@ -3053,7 +3048,6 @@ found:
 	    (m->m_pkthdr.pkt_flags & PKTF_LOOP)) {
 		/* loopback checksums are always OK */
 		m->m_pkthdr.csum_data = 0xffff;
-		m->m_pkthdr.csum_flags &= ~CSUM_PARTIAL;
 		m->m_pkthdr.csum_flags =
 		    CSUM_DATA_VALID | CSUM_PSEUDO_HDR |
 		    CSUM_IP_CHECKED | CSUM_IP_VALID;
@@ -3308,7 +3302,11 @@ ip_dooptions(struct mbuf *m, int pass, struct sockaddr_in *next_hop)
 	struct in_addr *sin, dst;
 	u_int32_t ntime;
 	struct sockaddr_in ipaddr = {
-		sizeof(ipaddr), AF_INET, 0, { 0 }, { 0, }
+		.sin_len = sizeof(ipaddr),
+		.sin_family = AF_INET,
+		.sin_port = 0,
+		.sin_addr = { .s_addr = 0 },
+		.sin_zero = { 0, }
 	};
 
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
@@ -3822,6 +3820,24 @@ ip_stripoptions(struct mbuf *m)
 #endif /* BYTE_ORDER != BIG_ENDIAN */
 
 	ip->ip_len -= sizeof(struct ip);
+
+	/*
+	 * Given that we've just stripped IP options from the header,
+	 * we need to adjust the start offset accordingly if this
+	 * packet had gone thru partial checksum offload.
+	 */
+	if ((m->m_pkthdr.csum_flags & (CSUM_DATA_VALID | CSUM_PARTIAL)) ==
+	    (CSUM_DATA_VALID | CSUM_PARTIAL)) {
+		if (m->m_pkthdr.csum_rx_start >= (sizeof(struct ip) + olen)) {
+			/* most common case */
+			m->m_pkthdr.csum_rx_start -= olen;
+		} else {
+			/* compute checksum in software instead */
+			m->m_pkthdr.csum_flags &= ~CSUM_DATA_VALID;
+			m->m_pkthdr.csum_data = 0;
+			ipstat.ips_adj_hwcsum_clr++;
+		}
+	}
 }
 
 u_char inetctlerrmap[PRC_NCMDS] = {
@@ -3829,7 +3845,7 @@ u_char inetctlerrmap[PRC_NCMDS] = {
 	0, EMSGSIZE, EHOSTDOWN, EHOSTUNREACH,
 	ENETUNREACH, EHOSTUNREACH, ECONNREFUSED, ECONNREFUSED,
 	EMSGSIZE, EHOSTUNREACH, 0, 0,
-	0, 0, 0, 0,
+	0, 0, EHOSTUNREACH, 0,
 	ENOPROTOOPT, ECONNREFUSED
 };
 

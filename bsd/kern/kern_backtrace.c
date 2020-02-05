@@ -57,7 +57,6 @@ backtrace_sysctl SYSCTL_HANDLER_ARGS
 	uint32_t bt_len = 0, bt_filled = 0;
 	size_t bt_size = 0;
 	int error = 0;
-	bool user_64 = false;
 
 	if (type != BACKTRACE_USER) {
 		return EINVAL;
@@ -74,7 +73,7 @@ backtrace_sysctl SYSCTL_HANDLER_ARGS
 		return ENOBUFS;
 	}
 	memset(bt, 0, bt_size);
-	error = backtrace_user(bt, bt_len, &bt_filled, &user_64);
+	error = backtrace_user(bt, bt_len, &bt_filled, NULL, NULL);
 	if (error) {
 		goto out;
 	}

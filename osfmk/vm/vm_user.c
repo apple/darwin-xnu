@@ -122,6 +122,7 @@
 #include <san/kasan.h>
 
 #include <libkern/OSDebug.h>
+#include <IOKit/IOBSD.h>
 
 vm_size_t        upl_offset_to_pagelist = 0;
 
@@ -2286,6 +2287,8 @@ mach_make_memory_entry_64(
 	ipc_port_t              *object_handle,
 	ipc_port_t              parent_handle)
 {
+	vm_named_entry_kernel_flags_t   vmne_kflags;
+
 	if ((permission & MAP_MEM_FLAGS_MASK) & ~MAP_MEM_FLAGS_USER) {
 		/*
 		 * Unknown flag: reject for forward compatibility.
@@ -2293,10 +2296,15 @@ mach_make_memory_entry_64(
 		return KERN_INVALID_VALUE;
 	}
 
+	vmne_kflags = VM_NAMED_ENTRY_KERNEL_FLAGS_NONE;
+	if (permission & MAP_MEM_LEDGER_TAGGED) {
+		vmne_kflags.vmnekf_ledger_tag = VM_LEDGER_TAG_DEFAULT;
+	}
 	return mach_make_memory_entry_internal(target_map,
 	           size,
 	           offset,
 	           permission,
+	           vmne_kflags,
 	           object_handle,
 	           parent_handle);
 }
@@ -2305,8 +2313,9 @@ kern_return_t
 mach_make_memory_entry_internal(
 	vm_map_t                target_map,
 	memory_object_size_t    *size,
-	memory_object_offset_t offset,
+	memory_object_offset_t  offset,
 	vm_prot_t               permission,
+	vm_named_entry_kernel_flags_t   vmne_kflags,
 	ipc_port_t              *object_handle,
 	ipc_port_t              parent_handle)
 {
@@ -2423,6 +2432,9 @@ mach_make_memory_entry_internal(
 		}
 		return KERN_SUCCESS;
 	} else if (permission & MAP_MEM_NAMED_CREATE) {
+		int     ledger_flags = 0;
+		task_t  owner;
+
 		map_end = vm_map_round_page(offset + *size, PAGE_MASK);
 		map_size = map_end - map_start;
 
@@ -2451,48 +2463,78 @@ mach_make_memory_entry_internal(
 		object = vm_object_allocate(map_size);
 		assert(object != VM_OBJECT_NULL);
 
-		if (permission & MAP_MEM_PURGABLE) {
-			task_t owner;
+		/*
+		 * XXX
+		 * We use this path when we want to make sure that
+		 * nobody messes with the object (coalesce, for
+		 * example) before we map it.
+		 * We might want to use these objects for transposition via
+		 * vm_object_transpose() too, so we don't want any copy or
+		 * shadow objects either...
+		 */
+		object->copy_strategy = MEMORY_OBJECT_COPY_NONE;
+		object->true_share = TRUE;
 
-			if (!(permission & VM_PROT_WRITE)) {
-				/* if we can't write, we can't purge */
-				vm_object_deallocate(object);
-				kr = KERN_INVALID_ARGUMENT;
-				goto make_mem_done;
-			}
-			object->purgable = VM_PURGABLE_NONVOLATILE;
-			if (permission & MAP_MEM_PURGABLE_KERNEL_ONLY) {
-				object->purgeable_only_by_kernel = TRUE;
-			}
+		owner = current_task();
+		if ((permission & MAP_MEM_PURGABLE) ||
+		    vmne_kflags.vmnekf_ledger_tag) {
 			assert(object->vo_owner == NULL);
 			assert(object->resident_page_count == 0);
 			assert(object->wired_page_count == 0);
-			vm_object_lock(object);
-			owner = current_task();
-#if __arm64__
-			if (owner->task_legacy_footprint) {
-				/*
-				 * For ios11, we failed to account for
-				 * this memory.  Keep doing that for
-				 * legacy apps (built before ios12),
-				 * for backwards compatibility's sake...
-				 */
-				owner = kernel_task;
+			assert(owner != TASK_NULL);
+			if (vmne_kflags.vmnekf_ledger_no_footprint) {
+				ledger_flags |= VM_LEDGER_FLAG_NO_FOOTPRINT;
+				object->vo_no_footprint = TRUE;
 			}
+			if (permission & MAP_MEM_PURGABLE) {
+				if (!(permission & VM_PROT_WRITE)) {
+					/* if we can't write, we can't purge */
+					vm_object_deallocate(object);
+					kr = KERN_INVALID_ARGUMENT;
+					goto make_mem_done;
+				}
+				object->purgable = VM_PURGABLE_NONVOLATILE;
+				if (permission & MAP_MEM_PURGABLE_KERNEL_ONLY) {
+					object->purgeable_only_by_kernel = TRUE;
+				}
+#if __arm64__
+				if (owner->task_legacy_footprint) {
+					/*
+					 * For ios11, we failed to account for
+					 * this memory.  Keep doing that for
+					 * legacy apps (built before ios12),
+					 * for backwards compatibility's sake...
+					 */
+					owner = kernel_task;
+				}
 #endif /* __arm64__ */
-			vm_purgeable_nonvolatile_enqueue(object, owner);
-			vm_object_unlock(object);
+				vm_object_lock(object);
+				vm_purgeable_nonvolatile_enqueue(object, owner);
+				vm_object_unlock(object);
+			}
 		}
 
-		if (permission & MAP_MEM_LEDGER_TAG_NETWORK) {
-			/* make this object owned by the calling task */
+		if (vmne_kflags.vmnekf_ledger_tag) {
+			/*
+			 * Bill this object to the current task's
+			 * ledgers for the given tag.
+			 */
+			if (vmne_kflags.vmnekf_ledger_no_footprint) {
+				ledger_flags |= VM_LEDGER_FLAG_NO_FOOTPRINT;
+			}
 			vm_object_lock(object);
-			vm_object_ownership_change(
+			object->vo_ledger_tag = vmne_kflags.vmnekf_ledger_tag;
+			kr = vm_object_ownership_change(
 				object,
-				VM_OBJECT_LEDGER_TAG_NETWORK,
-				current_task(), /* new owner */
+				vmne_kflags.vmnekf_ledger_tag,
+				owner, /* new owner */
+				ledger_flags,
 				FALSE); /* task_objq locked? */
 			vm_object_unlock(object);
+			if (kr != KERN_SUCCESS) {
+				vm_object_deallocate(object);
+				goto make_mem_done;
+			}
 		}
 
 #if CONFIG_SECLUDED_MEMORY
@@ -2526,18 +2568,6 @@ mach_make_memory_entry_internal(
 		}
 
 		/* the object has no pages, so no WIMG bits to update here */
-
-		/*
-		 * XXX
-		 * We use this path when we want to make sure that
-		 * nobody messes with the object (coalesce, for
-		 * example) before we map it.
-		 * We might want to use these objects for transposition via
-		 * vm_object_transpose() too, so we don't want any copy or
-		 * shadow objects either...
-		 */
-		object->copy_strategy = MEMORY_OBJECT_COPY_NONE;
-		object->true_share = TRUE;
 
 		user_entry->backing.object = object;
 		user_entry->internal = TRUE;
@@ -3297,10 +3327,11 @@ redo_lookup:
 		}
 
 		if (parent_entry->is_sub_map) {
-			user_entry->backing.map = parent_entry->backing.map;
-			vm_map_lock(user_entry->backing.map);
-			user_entry->backing.map->map_refcnt++;
-			vm_map_unlock(user_entry->backing.map);
+			vm_map_t map = parent_entry->backing.map;
+			user_entry->backing.map = map;
+			lck_mtx_lock(&map->s_lock);
+			os_ref_retain_locked(&map->map_refcnt);
+			lck_mtx_unlock(&map->s_lock);
 		} else {
 			object = parent_entry->backing.object;
 			assert(object != VM_OBJECT_NULL);
@@ -3455,7 +3486,6 @@ mach_memory_entry_allocate(
 {
 	vm_named_entry_t        user_entry;
 	ipc_port_t              user_handle;
-	ipc_port_t              previous;
 
 	user_entry = (vm_named_entry_t) kalloc(sizeof *user_entry);
 	if (user_entry == NULL) {
@@ -3464,25 +3494,6 @@ mach_memory_entry_allocate(
 	bzero(user_entry, sizeof(*user_entry));
 
 	named_entry_lock_init(user_entry);
-
-	user_handle = ipc_port_alloc_kernel();
-	if (user_handle == IP_NULL) {
-		kfree(user_entry, sizeof *user_entry);
-		return KERN_FAILURE;
-	}
-	ip_lock(user_handle);
-
-	/* make a sonce right */
-	user_handle->ip_sorights++;
-	ip_reference(user_handle);
-
-	/* make a send right */
-	user_handle->ip_mscount++;
-	user_handle->ip_srights++;
-	ip_reference(user_handle);
-
-	ipc_port_nsrequest(user_handle, 1, user_handle, &previous);
-	/* nsrequest unlocks user_handle */
 
 	user_entry->backing.object = NULL;
 	user_entry->is_sub_map = FALSE;
@@ -3494,8 +3505,9 @@ mach_memory_entry_allocate(
 	user_entry->protection = VM_PROT_NONE;
 	user_entry->ref_count = 1;
 
-	ipc_kobject_set(user_handle, (ipc_kobject_t) user_entry,
-	    IKOT_NAMED_ENTRY);
+	user_handle = ipc_kobject_alloc_port((ipc_kobject_t)user_entry,
+	    IKOT_NAMED_ENTRY,
+	    IPC_KOBJECT_ALLOC_MAKE_SEND | IPC_KOBJECT_ALLOC_NSREQUEST);
 
 	*user_entry_p = user_entry;
 	*user_handle_p = user_handle;
@@ -3727,6 +3739,88 @@ memory_entry_access_tracking_internal(
 #endif /* VM_OBJECT_ACCESS_TRACKING */
 
 	named_entry_unlock(mem_entry);
+
+	return kr;
+}
+
+kern_return_t
+mach_memory_entry_ownership(
+	ipc_port_t      entry_port,
+	task_t          owner,
+	int             ledger_tag,
+	int             ledger_flags)
+{
+	task_t                  cur_task;
+	kern_return_t           kr;
+	vm_named_entry_t        mem_entry;
+	vm_object_t             object;
+
+	cur_task = current_task();
+	if (cur_task != kernel_task &&
+	    (owner != cur_task ||
+	    (ledger_flags & VM_LEDGER_FLAG_NO_FOOTPRINT) ||
+	    ledger_tag == VM_LEDGER_TAG_NETWORK)) {
+		/*
+		 * An entitlement is required to:
+		 * + tranfer memory ownership to someone else,
+		 * + request that the memory not count against the footprint,
+		 * + tag as "network" (since that implies "no footprint")
+		 */
+		if (!cur_task->task_can_transfer_memory_ownership &&
+		    IOTaskHasEntitlement(cur_task,
+		    "com.apple.private.memory.ownership_transfer")) {
+			cur_task->task_can_transfer_memory_ownership = TRUE;
+		}
+		if (!cur_task->task_can_transfer_memory_ownership) {
+			return KERN_NO_ACCESS;
+		}
+	}
+
+	if (ledger_flags & ~VM_LEDGER_FLAGS) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	if (ledger_tag <= 0 ||
+	    ledger_tag > VM_LEDGER_TAG_MAX) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (!IP_VALID(entry_port) ||
+	    ip_kotype(entry_port) != IKOT_NAMED_ENTRY) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	mem_entry = (vm_named_entry_t) entry_port->ip_kobject;
+
+	named_entry_lock(mem_entry);
+
+	if (mem_entry->is_sub_map ||
+	    mem_entry->is_copy) {
+		named_entry_unlock(mem_entry);
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	object = mem_entry->backing.object;
+	if (object == VM_OBJECT_NULL) {
+		named_entry_unlock(mem_entry);
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	vm_object_lock(object);
+
+	/* check that named entry covers entire object ? */
+	if (mem_entry->offset != 0 || object->vo_size != mem_entry->size) {
+		vm_object_unlock(object);
+		named_entry_unlock(mem_entry);
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	named_entry_unlock(mem_entry);
+
+	kr = vm_object_ownership_change(object,
+	    ledger_tag,
+	    owner,
+	    ledger_flags,
+	    FALSE);                             /* task_objq_locked */
+	vm_object_unlock(object);
 
 	return kr;
 }

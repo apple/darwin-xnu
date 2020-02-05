@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -79,6 +79,25 @@ typedef enum classq_pkt_type {
 	QP_INVALID = 0,
 	QP_MBUF,        /* mbuf packet */
 } classq_pkt_type_t;
+
+/*
+ * Packet
+ */
+typedef struct classq_pkt {
+	union {
+		struct mbuf             *cp_mbuf;       /* mbuf packet */
+	};
+	classq_pkt_type_t       cp_ptype;
+} classq_pkt_t;
+
+#define CLASSQ_PKT_INITIALIZER(_p)      \
+	(classq_pkt_t){ .cp_mbuf = NULL, .cp_ptype = QP_INVALID }
+
+#define CLASSQ_PKT_INIT_MBUF(_p, _m)    do {    \
+	(_p)->cp_ptype = QP_MBUF;               \
+	(_p)->cp_mbuf = (_m);                   \
+} while (0)
+
 
 /*
  * Packet Queue types
@@ -168,15 +187,17 @@ extern u_int32_t classq_verbose;
 SYSCTL_DECL(_net_classq);
 
 extern void _qinit(class_queue_t *, int, int, classq_pkt_type_t);
-extern void _addq(class_queue_t *, void *);
-extern void _addq_multi(class_queue_t *, void *, void *, u_int32_t, u_int32_t);
-extern void *_getq(class_queue_t *);
-extern void *_getq_all(class_queue_t *, void **, u_int32_t *, u_int64_t *);
-extern void *_getq_tail(class_queue_t *);
-extern void *_getq_random(class_queue_t *);
-extern void *_getq_flow(class_queue_t *, u_int32_t);
-extern void *_getq_scidx_lt(class_queue_t *, u_int32_t);
-extern void _removeq(class_queue_t *, void *);
+extern void _addq(class_queue_t *, classq_pkt_t *);
+extern void _addq_multi(class_queue_t *, classq_pkt_t *, classq_pkt_t *,
+    u_int32_t, u_int32_t);
+extern void _getq(class_queue_t *, classq_pkt_t *);
+extern void _getq_all(class_queue_t *, classq_pkt_t *, classq_pkt_t *,
+    u_int32_t *, u_int64_t *);
+extern void _getq_tail(class_queue_t *, classq_pkt_t *);
+extern void _getq_random(class_queue_t *, classq_pkt_t *);
+extern void _getq_flow(class_queue_t *, classq_pkt_t *, u_int32_t);
+extern void _getq_scidx_lt(class_queue_t *, classq_pkt_t *, u_int32_t);
+extern void _removeq(class_queue_t *, classq_pkt_t *);
 extern void _flushq(class_queue_t *);
 extern void _flushq_flow(class_queue_t *, u_int32_t, u_int32_t *, u_int32_t *);
 

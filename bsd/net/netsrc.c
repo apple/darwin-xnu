@@ -137,7 +137,7 @@ netsrc_common(struct rtentry *rt, struct netsrc_rep *reply)
 	}
 	reply->nrp_ifindex = rt->rt_ifp ? rt->rt_ifp->if_index : 0;
 
-	if (rt->rt_ifp->if_eflags & IFEF_AWDL) {
+	if (rt->rt_ifp != NULL && (rt->rt_ifp->if_eflags & IFEF_AWDL)) {
 		reply->nrp_flags |= NETSRC_FLAG_AWDL;
 	}
 	if (rt->rt_flags & RTF_LOCAL) {

@@ -17,6 +17,7 @@ _cpuid_leaf7_features
 _cpuid_info
 _csr_check
 _csr_get_active_config
+_hv_ast_pending
 _hv_ept_pmap_create
 _hv_get*
 _hv_release*
@@ -55,6 +56,21 @@ _xts_encrypt
 _xts_start
 _aes_decrypt
 _PE_reboot_on_panic
+_dqfileclose
+_dqfileopen
+_dqflush
+_dqget
+_dqhashinit
+_dqisinitialized
+_dqlock
+_dqrele
+_dqsync
+_dqsync_orphans
+_dqunlock
+_qf_get
+_qf_put
+_dqfileinit
+_dqreclaim
 
 # HFS Kext Requirements
 _file_vnode
@@ -77,3 +93,7 @@ _csproc_mark_invalid_allowed
 _csproc_check_invalid_allowed
 _csproc_hardened_runtime
 _csproc_forced_lv
+
+#exports for vmware/, virtualbox, ...
+_mach_vm_map
+_mach_vm_remap

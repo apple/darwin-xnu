@@ -30,8 +30,6 @@
 #ifndef _MACH_ARM_SDT_ISA_H
 #define	_MACH_ARM_SDT_ISA_H
 
-/* #pragma ident	"@(#)sdt.h	1.7	05/06/08 SMI" */
-
 /*
  * Only define when testing.  This makes the calls into actual calls to
  * test functions.

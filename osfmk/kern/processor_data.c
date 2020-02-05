@@ -47,3 +47,10 @@ processor_data_init(
 
 	PROCESSOR_DATA(processor, debugger_state).db_current_op = DBOP_NONE;
 }
+
+boolean_t
+processor_in_panic_context(
+	processor_t             processor)
+{
+	return PROCESSOR_DATA(processor, debugger_state).db_entry_count > 0;
+}

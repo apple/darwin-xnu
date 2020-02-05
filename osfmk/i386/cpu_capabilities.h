@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -73,7 +73,6 @@
 #define kHasADX                 0x0000000400000000ULL
 #define kHasMPX                 0x0000001000000000ULL
 #define kHasSGX                 0x0000002000000000ULL
-#if !defined(RC_HIDE_XNU_J137)
 #define kHasAVX512F             0x0000004000000000ULL
 #define kHasAVX512CD            0x0000008000000000ULL
 #define kHasAVX512DQ            0x0000010000000000ULL
@@ -81,7 +80,11 @@
 #define kHasAVX512IFMA          0x0000040000000000ULL
 #define kHasAVX512VBMI          0x0000080000000000ULL
 #define kHasAVX512VL            0x0000100000000000ULL
-#endif /* not RC_HIDE_XNU_J137 */
+#define kHasVAES                0x0000200000000000ULL
+#define kHasVPCLMULQDQ          0x0000400000000000ULL
+#define kHasAVX512VNNI          0x0000800000000000ULL
+#define kHasAVX512BITALG        0x0001000000000000ULL
+#define kHasAVX512VPOPCNTDQ     0x0002000000000000ULL
 
 
 #ifndef __ASSEMBLER__
@@ -192,7 +195,7 @@ _NumCPUs( void )
 
 #define _COMM_PAGE_ACTIVE_CPUS          (_COMM_PAGE_START_ADDRESS+0x034)        /* uint8_t number of active CPUs (hw.activecpu) */
 #define _COMM_PAGE_PHYSICAL_CPUS        (_COMM_PAGE_START_ADDRESS+0x035)        /* uint8_t number of physical CPUs (hw.physicalcpu_max) */
-#define _COMM_PAGE_LOGICAL_CPUS (_COMM_PAGE_START_ADDRESS+0x036)        /* uint8_t number of logical CPUs (hw.logicalcpu_max) */
+#define _COMM_PAGE_LOGICAL_CPUS         (_COMM_PAGE_START_ADDRESS+0x036)        /* uint8_t number of logical CPUs (hw.logicalcpu_max) */
 #define _COMM_PAGE_UNUSED1              (_COMM_PAGE_START_ADDRESS+0x037)        /* 1 unused bytes */
 #define _COMM_PAGE_MEMORY_SIZE          (_COMM_PAGE_START_ADDRESS+0x038)        /* uint64_t max memory size */
 
@@ -200,7 +203,8 @@ _NumCPUs( void )
 #define _COMM_PAGE_KDEBUG_ENABLE        (_COMM_PAGE_START_ADDRESS+0x044)        /* uint32_t export "kdebug_enable" to userspace */
 #define _COMM_PAGE_ATM_DIAGNOSTIC_CONFIG        (_COMM_PAGE_START_ADDRESS+0x48) /* uint32_t export "atm_diagnostic_config" to userspace */
 
-#define _COMM_PAGE_UNUSED2              (_COMM_PAGE_START_ADDRESS+0x04C)        /* [0x4C,0x50) unused */
+#define _COMM_PAGE_DTRACE_DOF_ENABLED   (_COMM_PAGE_START_ADDRESS+0x04C)        /* uint8_t 0 if userspace DOF disable, 1 if enabled */
+#define _COMM_PAGE_UNUSED2              (_COMM_PAGE_START_ADDRESS+0x04D)        /* [0x4D,0x50) unused */
 
 #define _COMM_PAGE_TIME_DATA_START      (_COMM_PAGE_START_ADDRESS+0x050)        /* base of offsets below (_NT_SCALE etc) */
 #define _COMM_PAGE_NT_TSC_BASE          (_COMM_PAGE_START_ADDRESS+0x050)        /* used by nanotime() */
@@ -220,6 +224,9 @@ _NumCPUs( void )
 #define _COMM_PAGE_CONT_TIMEBASE        (_COMM_PAGE_START_ADDRESS+0x0C0)        /* used by mach_continuous_time() */
 #define _COMM_PAGE_BOOTTIME_USEC        (_COMM_PAGE_START_ADDRESS+0x0C8)        /* uint64_t boottime */
 #define _COMM_PAGE_NEWTIMEOFDAY_DATA    (_COMM_PAGE_START_ADDRESS+0x0D0)        /* used by gettimeofday(). Currently, sizeof(new_commpage_timeofday_data_t) = 40 */
+
+/* Resume packed values to the next cacheline */
+#define _COMM_PAGE_DYLD_SYSTEM_FLAGS    (_COMM_PAGE_START_ADDRESS+0x100)        /* uint64_t export kern.dyld_system_flags to userspace */
 
 #define _COMM_PAGE_END                  (_COMM_PAGE_START_ADDRESS+0xfff)        /* end of common page */
 

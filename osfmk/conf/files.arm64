@@ -36,6 +36,7 @@ osfmk/arm/io_map.c		standard
 osfmk/arm64/loose_ends.c	standard
 osfmk/arm/locks_arm.c	standard
 osfmk/arm64/locore.s	standard
+osfmk/arm64/gxf_exceptions.s	standard
 osfmk/arm64/lowmem_vectors.c	standard
 osfmk/arm64/sleh.c			standard
 osfmk/arm64/start.s	standard
@@ -77,13 +78,11 @@ osfmk/arm64/kpc.c		optional kpc
 
 osfmk/arm64/monotonic_arm64.c optional monotonic
 
-osfmk/arm64/platform_tests.c	optional config_xnupost
+osfmk/arm64/platform_tests.c			optional config_xnupost
+osfmk/arm64/platform_tests_asm.s		optional config_xnupost
 
 osfmk/arm64/alternate_debugger.c		optional alternate_debugger
 osfmk/arm64/alternate_debugger_asm.s		optional alternate_debugger
-
-# Support for early_random()
-osfmk/corecrypto/ccn/src/ccn_set.c		standard
 
 osfmk/arm64/pgtrace.c           standard
 osfmk/arm64/pgtrace_decoder.c   optional config_pgtrace_nonkext

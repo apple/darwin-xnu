@@ -174,7 +174,7 @@ OSObject * IOKitDiagnostics::diagnostics( void )
 	diags = new IOKitDiagnostics;
 	if (diags && !diags->init()) {
 		diags->release();
-		diags = 0;
+		diags = NULL;
 	}
 
 	return diags;
@@ -304,7 +304,7 @@ IOTRecursiveLockLock(IOTRecursiveLock * lock)
 		lock->count++;
 	} else {
 		lck_mtx_lock(lock->mutex);
-		assert(lock->thread == 0);
+		assert(lock->thread == NULL);
 		assert(lock->count == 0);
 		lock->thread = current_thread();
 		lock->count = 1;
@@ -316,7 +316,7 @@ IOTRecursiveLockUnlock(IOTRecursiveLock * lock)
 {
 	assert(lock->thread == current_thread());
 	if (0 == (--lock->count)) {
-		lock->thread = 0;
+		lock->thread = NULL;
 		lck_mtx_unlock(lock->mutex);
 	}
 }
@@ -488,13 +488,13 @@ IOTrackingAddUser(IOTrackingQueue * queue, IOTrackingUser * mem, vm_size_t size)
 
 	assert(!mem->link.next);
 
-	num = backtrace(&mem->bt[0], kIOTrackingCallSiteBTs);
+	num = backtrace(&mem->bt[0], kIOTrackingCallSiteBTs, NULL);
 	num = 0;
 	if ((kernel_task != current_task()) && (self = proc_self())) {
-		bool user_64;
+		bool user_64 = false;
 		mem->btPID  = proc_pid(self);
 		(void)backtrace_user(&mem->btUser[0], kIOTrackingCallSiteBTs - 1, &num,
-		    &user_64);
+		    &user_64, NULL);
 		mem->user32 = !user_64;
 		proc_rele(self);
 	}
@@ -545,7 +545,7 @@ IOTrackingAdd(IOTrackingQueue * queue, IOTracking * mem, size_t size, bool addre
 
 	assert(!mem->link.next);
 
-	num  = backtrace(&bt[0], kIOTrackingCallSiteBTs + 1);
+	num  = backtrace(&bt[0], kIOTrackingCallSiteBTs + 1, NULL);
 	if (!num) {
 		return;
 	}
@@ -1083,9 +1083,9 @@ IOTrackingDebug(uint32_t selector, uint32_t options, uint64_t value,
 	OSData                 * data;
 
 	if (result) {
-		*result = 0;
+		*result = NULL;
 	}
-	data = 0;
+	data = NULL;
 	ret = kIOReturnNotReady;
 
 #if IOTRACKING
@@ -1426,7 +1426,7 @@ IOUserClient * IOKitDiagnosticsClient::withTask(task_t owningTask)
 	inst = new IOKitDiagnosticsClient;
 	if (inst && !inst->init()) {
 		inst->release();
-		inst = 0;
+		inst = NULL;
 	}
 
 	return inst;
@@ -1464,7 +1464,7 @@ IOKitDiagnosticsClient::externalMethod(uint32_t selector, IOExternalMethodArgume
 		return kIOReturnBadArgument;
 	}
 
-	names = 0;
+	names = NULL;
 	namesLen = args->structureInputSize - sizeof(IOKitDiagnosticsParameters);
 	if (namesLen) {
 		names = (typeof(names))(params + 1);

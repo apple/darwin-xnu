@@ -94,7 +94,7 @@ uint32_t coredump_registered_count = 0;
 struct kern_coredump_core *kernel_helper = NULL;
 
 static struct kern_coredump_core *
-kern_register_coredump_helper_internal(int kern_coredump_config_vers, kern_coredump_callback_config *kc_callbacks,
+kern_register_coredump_helper_internal(int kern_coredump_config_vers, const kern_coredump_callback_config *kc_callbacks,
     void *refcon, const char *core_description, boolean_t xnu_callback, boolean_t is64bit,
     uint32_t mh_magic, cpu_type_t cpu_type, cpu_subtype_t cpu_subtype)
 {
@@ -166,7 +166,7 @@ kern_register_coredump_helper_internal(int kern_coredump_config_vers, kern_cored
 }
 
 kern_return_t
-kern_register_coredump_helper(int kern_coredump_config_vers, kern_coredump_callback_config *kc_callbacks,
+kern_register_coredump_helper(int kern_coredump_config_vers, const kern_coredump_callback_config *kc_callbacks,
     void *refcon, const char *core_description, boolean_t is64bit, uint32_t mh_magic,
     cpu_type_t cpu_type, cpu_subtype_t cpu_subtype)
 {
@@ -720,7 +720,7 @@ kern_do_coredump(void *core_outvars, boolean_t kernel_only, uint64_t first_file_
 #else /* CONFIG_KDP_INTERACTIVE_DEBUGGING */
 
 kern_return_t
-kern_register_coredump_helper(int kern_coredump_config_vers, kern_coredump_callback_config *kc_callbacks, void* refcon,
+kern_register_coredump_helper(int kern_coredump_config_vers, const kern_coredump_callback_config *kc_callbacks, void* refcon,
     const char *core_description, boolean_t is64bit, uint32_t mh_magic,
     cpu_type_t cpu_type, cpu_subtype_t cpu_subtype)
 {

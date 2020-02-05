@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -79,6 +79,7 @@
 #include <sys/vnode_internal.h>
 #include <sys/kpi_mbuf.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <sys/stat.h>
 #include <sys/malloc.h>
 #include <sys/syscall.h>
@@ -88,6 +89,7 @@
 #include <sys/domain.h>
 #include <libkern/OSAtomic.h>
 #include <kern/thread_call.h>
+#include <kern/task.h>
 
 #include <sys/vm.h>
 #include <sys/vmparam.h>
@@ -889,7 +891,10 @@ nfsm_chain_add_v2sattr_f(struct nfsm_chain *nmc, struct vnode_attr *vap, uint32_
  * Add an NFSv3 "sattr" structure to an mbuf chain
  */
 int
-nfsm_chain_add_v3sattr_f(struct nfsm_chain *nmc, struct vnode_attr *vap)
+nfsm_chain_add_v3sattr_f(
+	struct nfsmount *nmp,
+	struct nfsm_chain *nmc,
+	struct vnode_attr *vap)
 {
 	int error = 0;
 
@@ -937,6 +942,7 @@ nfsm_chain_add_v3sattr_f(struct nfsm_chain *nmc, struct vnode_attr *vap)
 		}
 	}
 
+
 	return error;
 }
 
@@ -948,6 +954,7 @@ nfsm_chain_add_v3sattr_f(struct nfsm_chain *nmc, struct vnode_attr *vap)
  */
 int
 nfsm_chain_get_fh_attr(
+	struct nfsmount *nmp,
 	struct nfsm_chain *nmc,
 	nfsnode_t dnp,
 	vfs_context_t ctx,
@@ -976,7 +983,7 @@ nfsm_chain_get_fh_attr(
 		if (!gotfh) { /* skip attributes */
 			nfsm_chain_adv(error, nmc, NFSX_V3FATTR);
 		} else { /* get attributes */
-			error = nfs_parsefattr(nmc, nfsvers, nvap);
+			error = nfs_parsefattr(nmp, nmc, nfsvers, nvap);
 		}
 	} else if (gotfh) {
 		/* we need valid attributes in order to call nfs_nget() */
@@ -1146,6 +1153,7 @@ nfsm_rpchead2(struct nfsmount *nmp, int sotype, int prog, int vers, int proc, in
 		auth_len = ((uint32_t)groupcount + 5) * NFSX_UNSIGNED;
 		break;
 	}
+#if CONFIG_NFS_GSS
 	case RPCAUTH_KRB5:
 	case RPCAUTH_KRB5I:
 	case RPCAUTH_KRB5P:
@@ -1154,6 +1162,7 @@ nfsm_rpchead2(struct nfsmount *nmp, int sotype, int prog, int vers, int proc, in
 		}
 		auth_len = 5 * NFSX_UNSIGNED + 0;         // zero context handle for now
 		break;
+#endif /* CONFIG_NFS_GSS */
 	default:
 		return EINVAL;
 	}
@@ -1207,7 +1216,9 @@ nfsm_rpchead2(struct nfsmount *nmp, int sotype, int prog, int vers, int proc, in
 	nfsm_chain_add_32(error, &nmreq, vers);
 	nfsm_chain_add_32(error, &nmreq, proc);
 
+#if CONFIG_NFS_GSS
 add_cred:
+#endif
 	switch (auth_type) {
 	case RPCAUTH_NONE:
 		nfsm_chain_add_32(error, &nmreq, RPCAUTH_NONE); /* auth */
@@ -1223,7 +1234,9 @@ add_cred:
 	case RPCAUTH_SYS: {
 		nfsm_chain_add_32(error, &nmreq, RPCAUTH_SYS);
 		nfsm_chain_add_32(error, &nmreq, authsiz);
-		nfsm_chain_add_32(error, &nmreq, 0);    /* stamp */
+		{
+			nfsm_chain_add_32(error, &nmreq, 0);    /* stamp */
+		}
 		nfsm_chain_add_32(error, &nmreq, 0);    /* zero-length hostname */
 		nfsm_chain_add_32(error, &nmreq, kauth_cred_getuid(cred));      /* UID */
 		nfsm_chain_add_32(error, &nmreq, kauth_cred_getgid(cred));      /* GID */
@@ -1243,6 +1256,7 @@ add_cred:
 		}
 		break;
 	}
+#if CONFIG_NFS_GSS
 	case RPCAUTH_KRB5:
 	case RPCAUTH_KRB5I:
 	case RPCAUTH_KRB5P:
@@ -1264,6 +1278,7 @@ add_cred:
 			goto add_cred;
 		}
 		break;
+#endif /* CONFIG_NFS_GSS */
 	}
 	;
 
@@ -1304,7 +1319,11 @@ add_cred:
  * Parse an NFS file attribute structure out of an mbuf chain.
  */
 int
-nfs_parsefattr(struct nfsm_chain *nmc, int nfsvers, struct nfs_vattr *nvap)
+nfs_parsefattr(
+	struct nfsmount *nmp,
+	struct nfsm_chain *nmc,
+	int nfsvers,
+	struct nfs_vattr *nvap)
 {
 	int error = 0;
 	enum vtype vtype;
@@ -1407,9 +1426,11 @@ nfs_parsefattr(struct nfsm_chain *nmc, int nfsvers, struct nfs_vattr *nvap)
 	nfsm_chain_get_time(error, nmc, nfsvers,
 	    nvap->nva_timesec[NFSTIME_CHANGE],
 	    nvap->nva_timensec[NFSTIME_CHANGE]);
+
 nfsmout:
 	return error;
 }
+
 
 /*
  * Load the attribute cache (that lives in the nfsnode entry) with
@@ -1531,6 +1552,7 @@ nfs_loadattrcache(
 		} else if (NFS_BITMAP_ISSET(nvap->nva_bitmap, NFS_FATTR_OWNER_GROUP) &&
 		    (nvap->nva_gid != npnvap->nva_gid)) {
 			events |= VNODE_EVENT_ATTRIB | VNODE_EVENT_PERMS;
+#if CONFIG_NFS4
 		} else if (nmp->nm_vers >= NFS_VER4) {
 			if (NFS_BITMAP_ISSET(nvap->nva_bitmap, NFS_FATTR_OWNER) &&
 			    !kauth_guid_equal(&nvap->nva_uuuid, &npnvap->nva_uuuid)) {
@@ -1544,11 +1566,15 @@ nfs_loadattrcache(
 			    bcmp(nvap->nva_acl, npnvap->nva_acl, KAUTH_ACL_COPYSIZE(nvap->nva_acl))))) {
 				events |= VNODE_EVENT_ATTRIB | VNODE_EVENT_PERMS;
 			}
+#endif
 		}
-		if (((nmp->nm_vers >= NFS_VER4) && (nvap->nva_change != npnvap->nva_change)) ||
-		    (NFS_BITMAP_ISSET(npnvap->nva_bitmap, NFS_FATTR_TIME_MODIFY) &&
-		    ((nvap->nva_timesec[NFSTIME_MODIFY] != npnvap->nva_timesec[NFSTIME_MODIFY]) ||
-		    (nvap->nva_timensec[NFSTIME_MODIFY] != npnvap->nva_timensec[NFSTIME_MODIFY])))) {
+		if (/* Oh, C... */
+#if CONFIG_NFS4
+			((nmp->nm_vers >= NFS_VER4) && (nvap->nva_change != npnvap->nva_change)) ||
+#endif
+			(NFS_BITMAP_ISSET(npnvap->nva_bitmap, NFS_FATTR_TIME_MODIFY) &&
+			((nvap->nva_timesec[NFSTIME_MODIFY] != npnvap->nva_timesec[NFSTIME_MODIFY]) ||
+			(nvap->nva_timensec[NFSTIME_MODIFY] != npnvap->nva_timensec[NFSTIME_MODIFY])))) {
 			events |= VNODE_EVENT_ATTRIB | VNODE_EVENT_WRITE;
 		}
 		if (!events && NFS_BITMAP_ISSET(npnvap->nva_bitmap, NFS_FATTR_RAWDEV) &&
@@ -1625,6 +1651,7 @@ nfs_loadattrcache(
 	}
 
 #if CONFIG_TRIGGERS
+#if CONFIG_NFS4
 	/*
 	 * For NFSv4, if the fsid doesn't match the fsid for the mount, then
 	 * this node is for a different file system on the server.  So we mark
@@ -1635,7 +1662,8 @@ nfs_loadattrcache(
 	    (np->n_vattr.nva_fsid.minor != nmp->nm_fsid.minor))) {
 		np->n_vattr.nva_flags |= NFS_FFLAG_TRIGGER;
 	}
-#endif
+#endif /* CONFIG_NFS4 */
+#endif /* CONFIG_TRIGGERS */
 
 	if (!vp || (nvap->nva_type != VREG)) {
 		np->n_size = nvap->nva_size;
@@ -1703,11 +1731,13 @@ nfs_attrcachetimeout(nfsnode_t np)
 	}
 
 	isdir = vnode_isdir(NFSTOV(np));
-
+#if CONFIG_NFS4
 	if ((nmp->nm_vers >= NFS_VER4) && (np->n_openflags & N_DELEG_MASK)) {
 		/* If we have a delegation, we always use the max timeout. */
 		timeo = isdir ? nmp->nm_acdirmax : nmp->nm_acregmax;
-	} else if ((np)->n_flag & NMODIFIED) {
+	} else
+#endif
+	if ((np)->n_flag & NMODIFIED) {
 		/* If we have modifications, we always use the min timeout. */
 		timeo = isdir ? nmp->nm_acdirmin : nmp->nm_acregmin;
 	} else {
@@ -1914,8 +1944,19 @@ nfs_uaddr2sockaddr(const char *uaddr, struct sockaddr *addr)
 	unsigned long val;      /* decoded value */
 	int s;                  /* index used for sliding array to insert elided zeroes */
 
+	/* AF_LOCAL address are paths that start with '/' or are empty */
+	if (*uaddr == '/' || *uaddr == '\0') { /* AF_LOCAL address */
+		struct sockaddr_un *sun = (struct sockaddr_un *)addr;
+		sun->sun_family = AF_LOCAL;
+		sun->sun_len = sizeof(struct sockaddr_un);
+		strlcpy(sun->sun_path, uaddr, sizeof(sun->sun_path));
+
+		return 1;
+	}
+
 #define HEXVALUE        0
 #define DECIMALVALUE    1
+
 #define GET(TYPE) \
 	do { \
 	        if ((dcount <= 0) || (dcount > (((TYPE) == DECIMALVALUE) ? 3 : 4))) \
@@ -2104,20 +2145,57 @@ uint32_t nfs_debug_ctl;
 #include <stdarg.h>
 
 void
-nfs_printf(int facility, int level, const char *fmt, ...)
+nfs_printf(unsigned int facility, unsigned int level, const char *fmt, ...)
 {
 	va_list ap;
 
-	if ((uint32_t)level > NFS_DEBUG_LEVEL) {
-		return;
+	if (NFS_IS_DBG(facility, level)) {
+		va_start(ap, fmt);
+		vprintf(fmt, ap);
+		va_end(ap);
 	}
-	if (NFS_DEBUG_FACILITY && !((uint32_t)facility & NFS_DEBUG_FACILITY)) {
-		return;
-	}
+}
 
-	va_start(ap, fmt);
-	vprintf(fmt, ap);
-	va_end(ap);
+
+#define DISPLAYLEN 16
+
+static bool
+isprint(int ch)
+{
+	return ch >= 0x20 && ch <= 0x7e;
+}
+
+static void
+hexdump(void *data, size_t len)
+{
+	size_t i, j;
+	unsigned char *d = data;
+	char *p, disbuf[3 * DISPLAYLEN + 1];
+
+	for (i = 0; i < len; i += DISPLAYLEN) {
+		for (p = disbuf, j = 0; (j + i) < len && j < DISPLAYLEN; j++, p += 3) {
+			snprintf(p, 4, "%2.2x ", d[i + j]);
+		}
+		for (; j < DISPLAYLEN; j++, p += 3) {
+			snprintf(p, 4, "   ");
+		}
+		printf("%s    ", disbuf);
+		for (p = disbuf, j = 0; (j + i) < len && j < DISPLAYLEN; j++, p++) {
+			snprintf(p, 2, "%c", isprint(d[i + j]) ? d[i + j] : '.');
+		}
+		printf("%s\n", disbuf);
+	}
+}
+
+void
+nfs_dump_mbuf(const char *func, int lineno, const char *msg, mbuf_t mb)
+{
+	mbuf_t m;
+
+	printf("%s:%d %s\n", func, lineno, msg);
+	for (m = mb; m; m = mbuf_next(m)) {
+		hexdump(mbuf_data(m), mbuf_len(m));
+	}
 }
 
 /* Is a mount gone away? */

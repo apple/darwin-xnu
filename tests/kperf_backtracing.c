@@ -7,18 +7,23 @@
 #include <dispatch/dispatch.h>
 #include <kperf/kperf.h>
 #include <ktrace/session.h>
+#include <ktrace/private.h>
 #include <System/sys/kdebug.h>
 #include <pthread.h>
 
 #include "kperf_helpers.h"
+#include "ktrace_helpers.h"
 
 #define PERF_STK_KHDR  UINT32_C(0x25020014)
 #define PERF_STK_UHDR  UINT32_C(0x25020018)
 #define PERF_STK_KDATA UINT32_C(0x2502000c)
 #define PERF_STK_UDATA UINT32_C(0x25020010)
 
+#define CALLSTACK_VALID 0x1
+#define CALLSTACK_TRUNCATED 0x10
+
 T_GLOBAL_META(
-	T_META_NAMESPACE("xnu.kperf"),
+	T_META_NAMESPACE("xnu.ktrace"),
 	T_META_CHECK_LEAKS(false));
 
 static void
@@ -29,12 +34,14 @@ expect_frame(const char **bt, unsigned int bt_len, CSSymbolRef symbol,
 	unsigned int frame_idx = max_frames - bt_idx - 1;
 
 	if (!bt[frame_idx]) {
-		T_LOG("frame %2u: skipping system frame", frame_idx);
+		T_LOG("frame %2u: skipping system frame '%s'", frame_idx,
+		    CSSymbolGetName(symbol));
 		return;
 	}
 
 	if (CSIsNull(symbol)) {
-		T_FAIL("invalid symbol for address %#lx at frame %d", addr, frame_idx);
+		T_FAIL("invalid symbol for address %#lx at frame %d", addr,
+		    frame_idx);
 		return;
 	}
 
@@ -105,11 +112,11 @@ expect_backtrace(ktrace_session_t s, uint64_t tid, unsigned int *stacks_seen,
 		        return;
 		}
 
-		T_LOG("found stack from thread %#lx", tp->threadid);
+		T_LOG("found stack from thread %#" PRIx64, tp->threadid);
 		stacks++;
 		if (!(tp->arg1 & 1)) {
-		        T_FAIL("invalid %s stack on thread %#lx", kern ? "kernel" : "user",
-		        tp->threadid);
+		        T_FAIL("invalid %s stack on thread %#" PRIx64,
+		        kern ? "kernel" : "user", tp->threadid);
 		        return;
 		}
 
@@ -209,26 +216,36 @@ recurse_b(dispatch_semaphore_t spinning, unsigned int frames)
 	return recurse_a(spinning, frames - 1) + 1;
 }
 
-#define USER_FRAMES       (12)
+#define USER_FRAMES (12)
 
 #if defined(__x86_64__)
-#define RECURSE_START_OFFSET (4)
-#else /* defined(__x86_64__) */
+
 #define RECURSE_START_OFFSET (3)
-#endif /* defined(__x86_64__) */
+
+#else /* defined(__x86_64__) */
+
+#define RECURSE_START_OFFSET (2)
+
+#endif /* !defined(__x86_64__) */
 
 static const char *user_bt[USER_FRAMES] = {
 #if defined(__x86_64__)
+	/*
+	 * x86_64 has an extra "thread_start" frame here.
+	 */
 	NULL,
 #endif /* defined(__x86_64__) */
-	NULL, NULL,
+	NULL,
 	"backtrace_thread",
 	"recurse_a", "recurse_b", "recurse_a", "recurse_b",
-	"recurse_a", "recurse_b", "recurse_a",
+	"recurse_a", "recurse_b", "recurse_a", "recurse_b",
 #if !defined(__x86_64__)
-	"recurse_b",
+	/*
+	 * Pick up the slack to make the number of frames constant.
+	 */
+	"recurse_a",
 #endif /* !defined(__x86_64__) */
-	NULL
+	NULL,
 };
 
 #if defined(__arm__)
@@ -300,7 +317,8 @@ backtrace_thread(void *arg)
 }
 
 static uint64_t
-create_backtrace_thread(dispatch_semaphore_t notify_spinning)
+create_backtrace_thread(void *(*thread_fn)(void *),
+    dispatch_semaphore_t notify_spinning)
 {
 	pthread_t thread = NULL;
 	uint64_t tid;
@@ -315,7 +333,7 @@ create_backtrace_thread(dispatch_semaphore_t notify_spinning)
 		}
 	});
 
-	T_QUIET; T_ASSERT_POSIX_ZERO(pthread_create(&thread, NULL, backtrace_thread,
+	T_QUIET; T_ASSERT_POSIX_ZERO(pthread_create(&thread, NULL, thread_fn,
 	    (void *)notify_spinning), NULL);
 	T_QUIET; T_ASSERT_NOTNULL(thread, "backtrace thread created");
 	dispatch_semaphore_wait(backtrace_started, DISPATCH_TIME_FOREVER);
@@ -343,7 +361,7 @@ start_backtrace_thread(void)
 #define TEST_TIMEOUT_NS (5 * NSEC_PER_SEC)
 #endif /* !TARGET_OS_WATCH */
 
-T_DECL(backtraces_kdebug_trigger,
+T_DECL(kdebug_trigger,
     "test that backtraces from kdebug trigger are correct",
     T_META_ASROOT(true))
 {
@@ -352,12 +370,16 @@ T_DECL(backtraces_kdebug_trigger,
 	kperf_kdebug_filter_t filter;
 	uint64_t tid;
 
+	start_controlling_ktrace();
+
 	s = ktrace_session_create();
 	T_ASSERT_NOTNULL(s, "ktrace session was created");
 
+	ktrace_set_collection_interval(s, 100);
+
 	T_ASSERT_POSIX_ZERO(ktrace_filter_pid(s, getpid()), NULL);
 
-	tid = create_backtrace_thread(NULL);
+	tid = create_backtrace_thread(backtrace_thread, NULL);
 	expect_backtrace(s, tid, &stacks_seen, false, user_bt, USER_FRAMES, 0);
 	expect_backtrace(s, tid, &stacks_seen, true, kernel_bt, KERNEL_FRAMES, 0);
 
@@ -403,7 +425,7 @@ T_DECL(backtraces_kdebug_trigger,
 	dispatch_main();
 }
 
-T_DECL(backtraces_user_timer,
+T_DECL(user_timer,
     "test that user backtraces on a timer are correct",
     T_META_ASROOT(true))
 {
@@ -412,14 +434,18 @@ T_DECL(backtraces_user_timer,
 	uint64_t tid;
 	dispatch_semaphore_t wait_for_spinning = dispatch_semaphore_create(0);
 
+	start_controlling_ktrace();
+
 	s = ktrace_session_create();
 	T_QUIET; T_ASSERT_NOTNULL(s, "ktrace_session_create");
+
+	ktrace_set_collection_interval(s, 100);
 
 	ktrace_filter_pid(s, getpid());
 
 	configure_kperf_stacks_timer(getpid(), 10);
 
-	tid = create_backtrace_thread(wait_for_spinning);
+	tid = create_backtrace_thread(backtrace_thread, wait_for_spinning);
 	/* potentially calling dispatch function and system call */
 	expect_backtrace(s, tid, &stacks_seen, false, user_bt, USER_FRAMES - 1, 2);
 
@@ -447,7 +473,144 @@ T_DECL(backtraces_user_timer,
 	dispatch_main();
 }
 
+static volatile bool spin = true;
+
+__attribute__((noinline, not_tail_called))
+static void
+recurse_spin(dispatch_semaphore_t notify_sema, int depth)
+{
+	if (depth > 0) {
+		recurse_spin(notify_sema, depth - 1);
+	} else {
+		dispatch_semaphore_signal(notify_sema);
+		while (spin);
+	}
+}
+
+static void *
+spin_thread(void *arg)
+{
+	dispatch_semaphore_t notify_sema = arg;
+	dispatch_semaphore_signal(backtrace_started);
+	recurse_spin(notify_sema, 257);
+	return NULL;
+}
+
+T_DECL(truncated_user_stacks, "ensure stacks are marked as truncated")
+{
+	start_controlling_ktrace();
+
+	ktrace_session_t s = ktrace_session_create();
+	T_ASSERT_NOTNULL(s, "ktrace session was created");
+
+	ktrace_set_collection_interval(s, 100);
+
+	T_QUIET;
+	T_ASSERT_POSIX_ZERO(ktrace_filter_pid(s, getpid()), NULL);
+
+	configure_kperf_stacks_timer(getpid(), 10);
+
+	__block bool saw_stack = false;
+	ktrace_set_completion_handler(s, ^{
+	    T_EXPECT_TRUE(saw_stack, "saw the user stack");
+	    T_END;
+	});
+
+	dispatch_semaphore_t notify_sema = dispatch_semaphore_create(0);
+	uint64_t tid = create_backtrace_thread(spin_thread, notify_sema);
+
+	ktrace_events_single(s, PERF_STK_UHDR, ^(struct trace_point *tp) {
+		if (tp->threadid != tid) {
+			return;
+		}
+		T_LOG("found %llu frame stack", tp->arg2);
+		T_EXPECT_BITS_SET(tp->arg1, CALLSTACK_VALID,
+		    "found valid callstack");
+		T_EXPECT_BITS_SET(tp->arg1, CALLSTACK_TRUNCATED,
+		    "found truncated callstack");
+		saw_stack = true;
+		ktrace_end(s, 1);
+	});
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(kperf_sample_set(1), NULL);
+
+	T_ASSERT_POSIX_ZERO(ktrace_start(s, dispatch_get_main_queue()),
+	    "start tracing");
+
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, TEST_TIMEOUT_NS),
+	    dispatch_get_main_queue(), ^(void)
+	{
+		T_LOG("ending test after timeout");
+		ktrace_end(s, 0);
+	});
+
+	dispatch_main();
+}
+
+T_DECL(max_user_stacks, "ensure stacks up to 256 frames can be captured")
+{
+	start_controlling_ktrace();
+
+	ktrace_session_t s = ktrace_session_create();
+	T_ASSERT_NOTNULL(s, "ktrace session was created");
+
+	ktrace_set_collection_interval(s, 100);
+
+	T_QUIET;
+	T_ASSERT_POSIX_ZERO(ktrace_filter_pid(s, getpid()), NULL);
+
+	configure_kperf_stacks_timer(getpid(), 10);
+
+	__block bool saw_stack = false;
+	__block bool saw_stack_data = false;
+	__block uint64_t nevents = 0;
+	ktrace_set_completion_handler(s, ^{
+	    T_EXPECT_TRUE(saw_stack, "saw the user stack");
+	    T_LOG("saw %" PRIu64 " stack data events", nevents);
+	    T_EXPECT_TRUE(saw_stack_data, "saw all frames of the user stack");
+	    T_END;
+	});
+
+	dispatch_semaphore_t notify_sema = dispatch_semaphore_create(0);
+	uint64_t tid = create_backtrace_thread(spin_thread, notify_sema);
+
+	ktrace_events_single(s, PERF_STK_UHDR, ^(struct trace_point *tp) {
+		if (tp->threadid != tid) {
+			return;
+		}
+		T_LOG("found %llu frame stack", tp->arg2);
+		T_EXPECT_BITS_SET(tp->arg1, CALLSTACK_VALID,
+		    "found valid callstack");
+		T_EXPECT_EQ(tp->arg2, UINT64_C(256),
+		    "found the correct number of frames");
+		saw_stack = true;
+	});
+
+	ktrace_events_single(s, PERF_STK_UDATA, ^(struct trace_point *tp) {
+		if (tp->threadid != tid && !saw_stack) {
+			return;
+		}
+		nevents++;
+		if (nevents == 256 / 4) {
+			ktrace_end(s, 1);
+		}
+		saw_stack_data = true;
+	});
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(kperf_sample_set(1), NULL);
+
+	T_ASSERT_POSIX_ZERO(ktrace_start(s, dispatch_get_main_queue()),
+	    "start tracing");
+
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, TEST_TIMEOUT_NS),
+	    dispatch_get_main_queue(), ^(void)
+	{
+		T_LOG("ending test after timeout");
+		ktrace_end(s, 0);
+	});
+
+	dispatch_main();
+}
+
 /* TODO test kernel stacks in all modes */
 /* TODO legacy PET mode backtracing */
-/* TODO test deep stacks, further than 128 frames, make sure they are truncated */
-/* TODO test constrained stacks */

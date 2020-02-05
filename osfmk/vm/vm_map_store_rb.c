@@ -57,14 +57,15 @@ rb_node_compare(struct vm_map_store *node, struct vm_map_store *parent)
 	return 0;
 }
 
+__dead2
 void
-vm_map_store_walk_rb( vm_map_t map, vm_map_entry_t *wrong_vme, vm_map_entry_t *vm_entry)
+vm_map_store_walk_rb(vm_map_t map, vm_map_entry_t *wrong_vme, vm_map_entry_t *vm_entry)
 {
-	struct vm_map_header hdr = map->hdr;
-	struct vm_map_store *rb_entry = RB_ROOT(&(hdr.rb_head_store));
-	vm_map_entry_t cur = *vm_entry;
+	struct vm_map_header *hdr = &map->hdr;
+	struct vm_map_store  *rb_entry = RB_ROOT(&hdr->rb_head_store);
+	vm_map_entry_t       cur = *vm_entry;
 
-	rb_entry = RB_FIND( rb_head, &(hdr.rb_head_store), &(cur->store));
+	rb_entry = RB_FIND(rb_head, &hdr->rb_head_store, &(cur->store));
 	if (rb_entry == NULL) {
 		panic("NO SUCH ENTRY %p. Gave back %p", *vm_entry, *wrong_vme);
 	} else {
@@ -74,12 +75,12 @@ vm_map_store_walk_rb( vm_map_t map, vm_map_entry_t *wrong_vme, vm_map_entry_t *v
 
 
 boolean_t
-vm_map_store_lookup_entry_rb( vm_map_t map, vm_map_offset_t address, vm_map_entry_t *vm_entry)
+vm_map_store_lookup_entry_rb(vm_map_t map, vm_map_offset_t address, vm_map_entry_t *vm_entry)
 {
-	struct vm_map_header hdr = map->hdr;
-	struct vm_map_store *rb_entry = RB_ROOT(&(hdr.rb_head_store));
-	vm_map_entry_t cur = vm_map_to_entry(map);
-	vm_map_entry_t prev = VM_MAP_ENTRY_NULL;
+	struct vm_map_header *hdr = &map->hdr;
+	struct vm_map_store  *rb_entry = RB_ROOT(&hdr->rb_head_store);
+	vm_map_entry_t       cur = vm_map_to_entry(map);
+	vm_map_entry_t       prev = VM_MAP_ENTRY_NULL;
 
 	while (rb_entry != (struct vm_map_store*)NULL) {
 		cur =  VME_FOR_STORE(rb_entry);
@@ -226,7 +227,7 @@ check_map_sanity(vm_map_t map, vm_map_entry_t old_hole_entry)
 		return;
 	}
 
-	hole_entry = (vm_map_entry_t) map->holes_list;
+	hole_entry = CAST_DOWN(vm_map_entry_t, map->holes_list);
 	next_hole_entry = hole_entry->vme_next;
 
 	map_entry = vm_map_first_entry(map);
@@ -236,7 +237,7 @@ check_map_sanity(vm_map_t map, vm_map_entry_t old_hole_entry)
 		hole_entry = next_hole_entry;
 		next_hole_entry = hole_entry->vme_next;
 
-		if (hole_entry == (vm_map_entry_t)map->holes_list) {
+		if (hole_entry == CAST_DOWN(vm_map_entry_t, map->holes_list)) {
 			break;
 		}
 	}
@@ -264,7 +265,7 @@ check_map_sanity(vm_map_t map, vm_map_entry_t old_hole_entry)
 			hole_entry = next_hole_entry;
 			next_hole_entry = hole_entry->vme_next;
 
-			if (hole_entry == (vm_map_entry_t)map->holes_list) {
+			if (hole_entry == CAST_DOWN(vm_map_entry_t, map->holes_list)) {
 				break;
 			}
 		}

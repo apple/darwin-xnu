@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -118,19 +118,19 @@ kern_return_t shared_region_pager_last_unmap(memory_object_t mem_obj);
  * These routines are invoked by VM via the memory_object_*() interfaces.
  */
 const struct memory_object_pager_ops shared_region_pager_ops = {
-	shared_region_pager_reference,
-	shared_region_pager_deallocate,
-	shared_region_pager_init,
-	shared_region_pager_terminate,
-	shared_region_pager_data_request,
-	shared_region_pager_data_return,
-	shared_region_pager_data_initialize,
-	shared_region_pager_data_unlock,
-	shared_region_pager_synchronize,
-	shared_region_pager_map,
-	shared_region_pager_last_unmap,
-	NULL, /* data_reclaim */
-	"shared_region"
+	.memory_object_reference = shared_region_pager_reference,
+	.memory_object_deallocate = shared_region_pager_deallocate,
+	.memory_object_init = shared_region_pager_init,
+	.memory_object_terminate = shared_region_pager_terminate,
+	.memory_object_data_request = shared_region_pager_data_request,
+	.memory_object_data_return = shared_region_pager_data_return,
+	.memory_object_data_initialize = shared_region_pager_data_initialize,
+	.memory_object_data_unlock = shared_region_pager_data_unlock,
+	.memory_object_synchronize = shared_region_pager_synchronize,
+	.memory_object_map = shared_region_pager_map,
+	.memory_object_last_unmap = shared_region_pager_last_unmap,
+	.memory_object_data_reclaim = NULL,
+	.memory_object_pager_name = "shared_region"
 };
 
 /*
@@ -159,7 +159,7 @@ typedef struct shared_region_pager {
 int shared_region_pager_count = 0;              /* number of pagers */
 int shared_region_pager_count_mapped = 0;       /* number of unmapped pagers */
 queue_head_t shared_region_pager_queue;
-decl_lck_mtx_data(, shared_region_pager_lock)
+decl_lck_mtx_data(, shared_region_pager_lock);
 
 /*
  * Maximum number of unmapped pagers we're willing to keep around.
@@ -513,24 +513,12 @@ retry_src_fault:
 		dst_pnum = (ppnum_t)
 		    upl_phys_page(upl_pl, (int)(cur_offset / PAGE_SIZE));
 		assert(dst_pnum != 0);
-#if __x86_64__
-		src_vaddr = (vm_map_offset_t)
-		    PHYSMAP_PTOV((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page)
-		        << PAGE_SHIFT);
-		dst_vaddr = (vm_map_offset_t)
-		    PHYSMAP_PTOV((pmap_paddr_t)dst_pnum << PAGE_SHIFT);
 
-#elif __arm__ || __arm64__
 		src_vaddr = (vm_map_offset_t)
 		    phystokv((pmap_paddr_t)VM_PAGE_GET_PHYS_PAGE(src_page)
 		        << PAGE_SHIFT);
 		dst_vaddr = (vm_map_offset_t)
 		    phystokv((pmap_paddr_t)dst_pnum << PAGE_SHIFT);
-#else
-#error "vm_paging_map_object: no 1-to-1 kernel mapping of physical memory..."
-		src_vaddr = 0;
-		dst_vaddr = 0;
-#endif
 		src_page_object = VM_PAGE_OBJECT(src_page);
 
 		/*
@@ -983,6 +971,7 @@ shared_region_pager_create(
 	shared_region_pager_t   pager;
 	memory_object_control_t control;
 	kern_return_t           kr;
+	vm_object_t             object;
 
 	pager = (shared_region_pager_t) kalloc(sizeof(*pager));
 	if (pager == SHARED_REGION_PAGER_NULL) {
@@ -1027,9 +1016,19 @@ shared_region_pager_create(
 	    &control);
 	assert(kr == KERN_SUCCESS);
 
+	memory_object_mark_trusted(control);
+
 	lck_mtx_lock(&shared_region_pager_lock);
 	/* the new pager is now ready to be used */
 	pager->is_ready = TRUE;
+	object = memory_object_to_vm_object((memory_object_t) pager);
+	assert(object);
+	/*
+	 * No one knows about this object and so we get away without the object lock.
+	 * This object is _eventually_ backed by the dyld shared cache and so we want
+	 * to benefit from the lock priority boosting.
+	 */
+	object->object_is_shared_cache = TRUE;
 	lck_mtx_unlock(&shared_region_pager_lock);
 
 	/* wakeup anyone waiting for this pager to be ready */

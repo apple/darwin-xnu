@@ -49,6 +49,7 @@ int coalition_reap(uint64_t cid, uint32_t flags);
 int coalition_info_resource_usage(uint64_t cid, struct coalition_resource_usage *cru, size_t sz);
 int coalition_info_set_name(uint64_t cid, const char *name, size_t size);
 int coalition_info_set_efficiency(uint64_t cid, uint64_t flags);
+int coalition_ledger_set_logical_writes_limit(uint64_t cid, int64_t limit);
 
 #else /* KERNEL */
 
@@ -86,25 +87,31 @@ extern int coalitions_get_list(int type, struct procinfo_coalinfo *coal_list, in
 
 
 /*
- * coalition_is_leader:
- * Determine if a task is a coalition leader.
+ * task_get_coalition:
+ * Return the coalition of a task.
  *
  * Parameters:
  *      task      : The task to investigate
  *      coal_type : The COALITION_TYPE of the coalition to investigate.
  *                  Valid types can be found in <mach/coalition.h>
- *      coal      : If 'task' is a valid task, and is a member of a coalition
- *                  of type 'coal_type', then 'coal' will be filled in with
- *                  the corresponding coalition_t object.
- *                  NOTE: This will be filled in whether or not the 'task' is
- *                        a leader in the coalition. However, if 'task' is
- *                        not a member of a coalition of type 'coal_type' then
- *                        'coal' will be filled in with COALITION_NULL.
- *                  NOTE: This can be NULL
  *
- * Returns: TRUE if 'task' is a coalition leader, FALSE otherwise.
+ * Returns: valid coalition_t or COALITION_NULL
  */
-extern boolean_t coalition_is_leader(task_t task, int coal_type, coalition_t *coal);
+extern coalition_t task_get_coalition(task_t task, int coal_type);
+
+
+/*
+ * coalition_is_leader:
+ * Determine if a task is a coalition leader.
+ *
+ * Parameters:
+ *      task      : The task to investigate
+ *      coal      : The coalition to test against.
+ *                  NOTE: This can be COALITION_NULL, in case FALSE is returned.
+ *
+ * Returns: TRUE if 'task' is the coalition's leader, FALSE otherwise.
+ */
+extern boolean_t coalition_is_leader(task_t task, coalition_t coal);
 
 /*
  * coalition_get_leader:
@@ -203,12 +210,17 @@ coalitions_get_list(__unused int type,
 	return 0;
 }
 
+static inline coalition_t
+coalition_get_leader(__unused task_t task,
+    __unused int coal_type)
+{
+	return COALITION_NULL;
+}
+
 static inline boolean_t
 coalition_is_leader(__unused task_t task,
-    __unused int coal_type,
-    coalition_t *coal)
+    __unused coalition_t coal)
 {
-	*coal = COALITION_NULL;
 	return FALSE;
 }
 

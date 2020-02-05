@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,18 +22,18 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
  * @OSF_FREE_COPYRIGHT@
- * 
+ *
  */
 /*
  * @APPLE_FREE_COPYRIGHT@
  */
 /*
- *	NetBSD: ite.c,v 1.16 1995/07/17 01:24:34 briggs Exp	
+ *	NetBSD: ite.c,v 1.16 1995/07/17 01:24:34 briggs Exp
  *
  * Copyright (c) 1988 University of Utah.
  * Copyright (c) 1990, 1993
@@ -196,7 +196,7 @@ MACRO_END
 #endif
 
 /*
-# Attribute codes: 
+# Attribute codes:
 # 00=none 01=bold 04=underscore 05=blink 07=reverse 08=concealed
 # Text color codes:
 # 30=black 31=red 32=green 33=yellow 34=blue 35=magenta 36=cyan 37=white
@@ -241,7 +241,7 @@ enum vt100state_e {
 } gc_vt100state = ESnormal;
 
 
-enum 
+enum
 {
     /* secs */
     kProgressAcquireDelay   = 0,
@@ -295,7 +295,7 @@ static void gc_set_tab_stop(unsigned int column, boolean_t enabled);
 static void gc_show_cursor(unsigned int xx, unsigned int yy);
 static void gc_update_color(int color, boolean_t fore);
 
-static void 
+static void
 gc_clear_line(unsigned int xx, unsigned int yy, int which)
 {
 	unsigned int start, end, i;
@@ -329,7 +329,7 @@ gc_clear_line(unsigned int xx, unsigned int yy, int which)
 	}
 }
 
-static void 
+static void
 gc_clear_screen(unsigned int xx, unsigned int yy, int top, unsigned int bottom,
 		int which)
 {
@@ -538,7 +538,7 @@ gc_paint_char(unsigned int xx, unsigned int yy, unsigned char ch, int attrs)
 	if ( xx < gc_buffer_columns && yy < gc_buffer_rows )
 	{
 		uint32_t index = (yy * gc_buffer_columns) + xx;
- 
+
 		gc_buffer_attributes[index] = attrs;
 		gc_buffer_characters[index] = ch;
 		gc_buffer_colorcodes[index] = gc_color_code;
@@ -547,7 +547,7 @@ gc_paint_char(unsigned int xx, unsigned int yy, unsigned char ch, int attrs)
 	gc_ops.paint_char(xx, yy, ch, attrs, 0, 0);
 }
 
-static void 
+static void
 gc_putchar(char ch)
 {
 	if (!ch) {
@@ -1871,7 +1871,7 @@ static int8_t			vc_uiscale = 1;
 vc_progress_user_options        vc_progress_options;
 vc_progress_user_options        vc_user_options;
 
-decl_simple_lock_data(,vc_progress_lock)
+decl_simple_lock_data(,vc_progress_lock);
 
 #if !CONFIG_EMBEDDED
 static int           		vc_progress_withmeter = 3;
@@ -3306,6 +3306,3 @@ vc_set_progressmeter(int new_value)
 }
 
 #endif /* !CONFIG_EMBEDDED */
-
-
-

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -113,6 +113,7 @@
 #define MAX_SBUF_LEN            2000
 
 extern lck_mtx_t *sadb_mutex;
+os_log_t esp_mpkl_log_object = NULL;
 
 static int esp_null_mature(struct secasvar *);
 static int esp_null_decrypt(struct mbuf *, size_t,
@@ -151,47 +152,119 @@ static int esp_gcm_mature(struct secasvar *);
 #define ESP_AESGCM_KEYLEN192 224 // 24-bytes key + 4 bytes salt
 #define ESP_AESGCM_KEYLEN256 288 // 32-bytes key + 4 bytes salt
 
-static const struct esp_algorithm des_cbc =
-{ 8, -1, esp_descbc_mature, 64, 64, esp_des_schedlen,
-  "des-cbc",
-  esp_descbc_ivlen, esp_cbc_decrypt,
-  esp_cbc_encrypt, esp_des_schedule,
-  esp_des_blockdecrypt, esp_des_blockencrypt,
-  0, 0, 0 };
-static const struct esp_algorithm des3_cbc =
-{ 8, 8, esp_cbc_mature, 192, 192, esp_3des_schedlen,
-  "3des-cbc",
-  esp_common_ivlen, esp_cbc_decrypt,
-  esp_cbc_encrypt, esp_3des_schedule,
-  esp_3des_blockdecrypt, esp_3des_blockencrypt,
-  0, 0, 0 };
-static const struct esp_algorithm null_esp =
-{ 1, 0, esp_null_mature, 0, 2048, 0, "null",
-  esp_common_ivlen, esp_null_decrypt,
-  esp_null_encrypt, NULL, NULL, NULL,
-  0, 0, 0 };
-static const struct esp_algorithm aes_cbc =
-{ 16, 16, esp_cbc_mature, 128, 256, esp_aes_schedlen,
-  "aes-cbc",
-  esp_common_ivlen, esp_cbc_decrypt_aes,
-  esp_cbc_encrypt_aes, esp_aes_schedule,
-  0, 0,
-  0, 0, 0 };
-static const struct esp_algorithm aes_gcm =
-{ 4, 8, esp_gcm_mature, ESP_AESGCM_KEYLEN128, ESP_AESGCM_KEYLEN256, esp_gcm_schedlen,
-  "aes-gcm",
-  esp_common_ivlen, esp_gcm_decrypt_aes,
-  esp_gcm_encrypt_aes, esp_gcm_schedule,
-  0, 0,
-  16, esp_gcm_decrypt_finalize, esp_gcm_encrypt_finalize};
-static const struct esp_algorithm chacha_poly =
-{ ESP_CHACHAPOLY_PAD_BOUND, ESP_CHACHAPOLY_IV_LEN,
-  esp_chachapoly_mature, ESP_CHACHAPOLY_KEYBITS_WITH_SALT,
-  ESP_CHACHAPOLY_KEYBITS_WITH_SALT, esp_chachapoly_schedlen,
-  "chacha-poly", esp_chachapoly_ivlen, esp_chachapoly_decrypt,
-  esp_chachapoly_encrypt, esp_chachapoly_schedule,
-  NULL, NULL, ESP_CHACHAPOLY_ICV_LEN,
-  esp_chachapoly_decrypt_finalize, esp_chachapoly_encrypt_finalize};
+static const struct esp_algorithm des_cbc = {
+	.padbound = 8,
+	.ivlenval = -1,
+	.mature = esp_descbc_mature,
+	.keymin = 64,
+	.keymax = 64,
+	.schedlen = esp_des_schedlen,
+	.name = "des-cbc",
+	.ivlen = esp_descbc_ivlen,
+	.decrypt = esp_cbc_decrypt,
+	.encrypt = esp_cbc_encrypt,
+	.schedule = esp_des_schedule,
+	.blockdecrypt = esp_des_blockdecrypt,
+	.blockencrypt = esp_des_blockencrypt,
+	.icvlen = 0,
+	.finalizedecrypt = NULL,
+	.finalizeencrypt = NULL
+};
+
+static const struct esp_algorithm des3_cbc = {
+	.padbound = 8,
+	.ivlenval = 8,
+	.mature = esp_cbc_mature,
+	.keymin = 192,
+	.keymax = 192,
+	.schedlen = esp_3des_schedlen,
+	.name = "3des-cbc",
+	.ivlen = esp_common_ivlen,
+	.decrypt = esp_cbc_decrypt,
+	.encrypt = esp_cbc_encrypt,
+	.schedule = esp_3des_schedule,
+	.blockdecrypt = esp_3des_blockdecrypt,
+	.blockencrypt = esp_3des_blockencrypt,
+	.icvlen = 0,
+	.finalizedecrypt = NULL,
+	.finalizeencrypt = NULL
+};
+
+static const struct esp_algorithm null_esp = {
+	.padbound = 1,
+	.ivlenval = 0,
+	.mature = esp_null_mature,
+	.keymin = 0,
+	.keymax = 2048,
+	.schedlen = NULL,
+	.name = "null",
+	.ivlen = esp_common_ivlen,
+	.decrypt = esp_null_decrypt,
+	.encrypt = esp_null_encrypt,
+	.schedule = NULL,
+	.blockdecrypt = NULL,
+	.blockencrypt = NULL,
+	.icvlen = 0,
+	.finalizedecrypt = NULL,
+	.finalizeencrypt = NULL
+};
+
+static const struct esp_algorithm aes_cbc = {
+	.padbound = 16,
+	.ivlenval = 16,
+	.mature = esp_cbc_mature,
+	.keymin = 128,
+	.keymax = 256,
+	.schedlen = esp_aes_schedlen,
+	.name = "aes-cbc",
+	.ivlen = esp_common_ivlen,
+	.decrypt = esp_cbc_decrypt_aes,
+	.encrypt = esp_cbc_encrypt_aes,
+	.schedule = esp_aes_schedule,
+	.blockdecrypt = NULL,
+	.blockencrypt = NULL,
+	.icvlen = 0,
+	.finalizedecrypt = NULL,
+	.finalizeencrypt = NULL
+};
+
+static const struct esp_algorithm aes_gcm = {
+	.padbound = 4,
+	.ivlenval = 8,
+	.mature = esp_gcm_mature,
+	.keymin = ESP_AESGCM_KEYLEN128,
+	.keymax = ESP_AESGCM_KEYLEN256,
+	.schedlen = esp_gcm_schedlen,
+	.name = "aes-gcm",
+	.ivlen = esp_common_ivlen,
+	.decrypt = esp_gcm_decrypt_aes,
+	.encrypt = esp_gcm_encrypt_aes,
+	.schedule = esp_gcm_schedule,
+	.blockdecrypt = NULL,
+	.blockencrypt = NULL,
+	.icvlen = 16,
+	.finalizedecrypt = esp_gcm_decrypt_finalize,
+	.finalizeencrypt = esp_gcm_encrypt_finalize
+};
+
+static const struct esp_algorithm chacha_poly = {
+	.padbound = ESP_CHACHAPOLY_PAD_BOUND,
+	.ivlenval = ESP_CHACHAPOLY_IV_LEN,
+	.mature = esp_chachapoly_mature,
+	.keymin = ESP_CHACHAPOLY_KEYBITS_WITH_SALT,
+	.keymax = ESP_CHACHAPOLY_KEYBITS_WITH_SALT,
+	.schedlen = esp_chachapoly_schedlen,
+	.name = "chacha-poly",
+	.ivlen = esp_chachapoly_ivlen,
+	.decrypt = esp_chachapoly_decrypt,
+	.encrypt = esp_chachapoly_encrypt,
+	.schedule = esp_chachapoly_schedule,
+	.blockdecrypt = NULL,
+	.blockencrypt = NULL,
+	.icvlen = ESP_CHACHAPOLY_ICV_LEN,
+	.finalizedecrypt = esp_chachapoly_decrypt_finalize,
+	.finalizeencrypt = esp_chachapoly_encrypt_finalize
+};
 
 static const struct esp_algorithm *esp_algorithms[] = {
 	&des_cbc,
@@ -425,9 +498,8 @@ esp_des_blockdecrypt(
 {
 	/* assumption: d has a good alignment */
 	bcopy(s, d, sizeof(DES_LONG) * 2);
-	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d,
-	    (des_ecb_key_schedule *)sav->sched, DES_DECRYPT);
-	return 0;
+	return des_ecb_encrypt((des_cblock *)d, (des_cblock *)d,
+	           (des_ecb_key_schedule *)sav->sched, DES_DECRYPT);
 }
 
 static int
@@ -439,9 +511,8 @@ esp_des_blockencrypt(
 {
 	/* assumption: d has a good alignment */
 	bcopy(s, d, sizeof(DES_LONG) * 2);
-	des_ecb_encrypt((des_cblock *)d, (des_cblock *)d,
-	    (des_ecb_key_schedule *)sav->sched, DES_ENCRYPT);
-	return 0;
+	return des_ecb_encrypt((des_cblock *)d, (des_cblock *)d,
+	           (des_ecb_key_schedule *)sav->sched, DES_ENCRYPT);
 }
 
 static int
@@ -597,9 +668,8 @@ esp_3des_blockdecrypt(
 {
 	/* assumption: d has a good alignment */
 	bcopy(s, d, sizeof(DES_LONG) * 2);
-	des3_ecb_encrypt((des_cblock *)d, (des_cblock *)d,
-	    (des3_ecb_key_schedule *)sav->sched, DES_DECRYPT);
-	return 0;
+	return des3_ecb_encrypt((des_cblock *)d, (des_cblock *)d,
+	           (des3_ecb_key_schedule *)sav->sched, DES_DECRYPT);
 }
 
 static int
@@ -611,9 +681,8 @@ esp_3des_blockencrypt(
 {
 	/* assumption: d has a good alignment */
 	bcopy(s, d, sizeof(DES_LONG) * 2);
-	des3_ecb_encrypt((des_cblock *)d, (des_cblock *)d,
-	    (des3_ecb_key_schedule *)sav->sched, DES_ENCRYPT);
-	return 0;
+	return des3_ecb_encrypt((des_cblock *)d, (des_cblock *)d,
+	           (des3_ecb_key_schedule *)sav->sched, DES_ENCRYPT);
 }
 
 static int
@@ -1205,4 +1274,23 @@ esp_auth(
 	bcopy(sumbuf, sum, siz);        /*XXX*/
 	KERNEL_DEBUG(DBG_FNC_ESPAUTH | DBG_FUNC_END, 6, 0, 0, 0, 0);
 	return 0;
+}
+
+void
+esp_init(void)
+{
+	static int esp_initialized = 0;
+
+	if (esp_initialized) {
+		return;
+	}
+
+	esp_initialized = 1;
+
+	esp_mpkl_log_object = MPKL_CREATE_LOGOBJECT("com.apple.xnu.esp");
+	if (esp_mpkl_log_object == NULL) {
+		panic("MPKL_CREATE_LOGOBJECT for ESP failed");
+	}
+
+	return;
 }

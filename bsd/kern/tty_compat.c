@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -99,25 +99,25 @@ static int ttcompatspeedtab(int speed, struct speedtab *table);
  */
 static struct speedtab compatspeeds[] = {
 #define MAX_SPEED       17
-	{ 115200, 17 },
-	{ 57600, 16 },
-	{ 38400, 15 },
-	{ 19200, 14 },
-	{ 9600, 13 },
-	{ 4800, 12 },
-	{ 2400, 11 },
-	{ 1800, 10 },
-	{ 1200, 9 },
-	{ 600, 8 },
-	{ 300, 7 },
-	{ 200, 6 },
-	{ 150, 5 },
-	{ 134, 4 },
-	{ 110, 3 },
-	{ 75, 2 },
-	{ 50, 1 },
-	{ 0, 0 },
-	{ -1, -1 },
+	{ .sp_speed = 115200, .sp_code = 17 },
+	{ .sp_speed = 57600, .sp_code = 16 },
+	{ .sp_speed = 38400, .sp_code = 15 },
+	{ .sp_speed = 19200, .sp_code = 14 },
+	{ .sp_speed = 9600, .sp_code = 13 },
+	{ .sp_speed = 4800, .sp_code = 12 },
+	{ .sp_speed = 2400, .sp_code = 11 },
+	{ .sp_speed = 1800, .sp_code = 10 },
+	{ .sp_speed = 1200, .sp_code = 9 },
+	{ .sp_speed = 600, .sp_code = 8 },
+	{ .sp_speed = 300, .sp_code = 7 },
+	{ .sp_speed = 200, .sp_code = 6 },
+	{ .sp_speed = 150, .sp_code = 5 },
+	{ .sp_speed = 134, .sp_code = 4 },
+	{ .sp_speed = 110, .sp_code = 3 },
+	{ .sp_speed = 75, .sp_code = 2 },
+	{ .sp_speed = 50, .sp_code = 1 },
+	{ .sp_speed = 0, .sp_code = 0 },
+	{ .sp_speed = -1, .sp_code = -1 },
 };
 static int compatspcodes[] = {
 	0, 50, 75, 110, 134, 150, 200, 300, 600, 1200,

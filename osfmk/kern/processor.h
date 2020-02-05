@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -83,6 +83,9 @@
 #include <mach/sfi_class.h>
 #include <kern/processor_data.h>
 #include <kern/cpu_quiesce.h>
+#include <kern/sched_clutch.h>
+#include <kern/assert.h>
+#include <machine/limits.h>
 
 /*
  *	Processor state is accessed by locking the scheduling lock
@@ -131,14 +134,16 @@
  */
 #endif
 
-#define PROCESSOR_OFF_LINE              0       /* Not available */
-#define PROCESSOR_SHUTDOWN              1       /* Going off-line */
-#define PROCESSOR_START                 2       /* Being started */
-/*                                      3	   Formerly Inactive (unavailable) */
-#define PROCESSOR_IDLE                  4       /* Idle (available) */
-#define PROCESSOR_DISPATCHING   5       /* Dispatching (idle -> active) */
-#define PROCESSOR_RUNNING               6       /* Normal execution */
-#define PROCESSOR_STATE_LEN             (PROCESSOR_RUNNING+1)
+typedef enum {
+	PROCESSOR_OFF_LINE      = 0,    /* Not available */
+	PROCESSOR_SHUTDOWN      = 1,    /* Going off-line */
+	PROCESSOR_START         = 2,    /* Being started */
+	PROCESSOR_UNUSED        = 3,    /* Formerly Inactive (unavailable) */
+	PROCESSOR_IDLE          = 4,    /* Idle (available) */
+	PROCESSOR_DISPATCHING   = 5,    /* Dispatching (idle -> active) */
+	PROCESSOR_RUNNING       = 6,    /* Normal execution */
+	PROCESSOR_STATE_LEN     = (PROCESSOR_RUNNING + 1)
+} processor_state_t;
 
 typedef enum {
 	PSET_SMP,
@@ -160,10 +165,10 @@ struct processor_set {
 #define SCHED_PSET_TLOCK (1)
 #if __SMP__
 #if     defined(SCHED_PSET_TLOCK)
-	/* TODO: reorder struct for temporal cache locality */
+/* TODO: reorder struct for temporal cache locality */
 	__attribute__((aligned(128))) lck_ticket_t      sched_lock;
 #else /* SCHED_PSET_TLOCK*/
-	__attribute__((aligned(128))) simple_lock_data_t        sched_lock;
+	__attribute__((aligned(128))) lck_spin_t        sched_lock;     /* lock for above */
 #endif /* SCHED_PSET_TLOCK*/
 #endif
 
@@ -171,6 +176,9 @@ struct processor_set {
 	struct run_queue        pset_runq;      /* runq for this processor set */
 #endif
 	struct rt_queue         rt_runq;        /* realtime runq for this processor set */
+#if CONFIG_SCHED_CLUTCH
+	struct sched_clutch_root                pset_clutch_root; /* clutch hierarchy root */
+#endif /* CONFIG_SCHED_CLUTCH */
 
 #if defined(CONFIG_SCHED_TRADITIONAL)
 	int                                     pset_runq_bound_count;
@@ -221,16 +229,16 @@ extern struct pset_node pset_node0;
 
 extern queue_head_t             tasks, terminated_tasks, threads, corpse_tasks; /* Terminated tasks are ONLY for stackshot */
 extern int                              tasks_count, terminated_tasks_count, threads_count;
-decl_lck_mtx_data(extern, tasks_threads_lock)
-decl_lck_mtx_data(extern, tasks_corpse_lock)
+decl_lck_mtx_data(extern, tasks_threads_lock);
+decl_lck_mtx_data(extern, tasks_corpse_lock);
 
 struct processor {
-	int                     state;                  /* See above */
+	processor_state_t       state;                  /* See above */
 	bool                    is_SMT;
 	bool                    is_recommended;
 	struct thread           *active_thread;         /* thread running on processor */
-	struct thread           *next_thread;           /* next thread when dispatched */
 	struct thread           *idle_thread;           /* this processor's idle thread. */
+	struct thread           *startup_thread;
 
 	processor_set_t         processor_set;  /* assigned set */
 
@@ -255,6 +263,7 @@ struct processor {
 
 	uint64_t                        deadline;               /* current deadline */
 	bool                    first_timeslice;        /* has the quantum expired since context switch */
+	bool                    processor_offlined;        /* has the processor been explicitly processor_offline'ed */
 	bool                    must_idle;              /* Needs to be forced idle as next selected thread is allowed on this processor */
 
 	processor_t             processor_primary;      /* pointer to primary processor for
@@ -279,7 +288,7 @@ struct processor {
 };
 
 extern processor_t              processor_list;
-decl_simple_lock_data(extern, processor_list_lock)
+decl_simple_lock_data(extern, processor_list_lock);
 
 #define MAX_SCHED_CPUS          64 /* Maximum number of CPUs supported by the scheduler.  bits.h:bitmap_*() macros need to be used to support greater than 64 */
 extern processor_t              processor_array[MAX_SCHED_CPUS]; /* array indexed by cpuid */
@@ -304,20 +313,16 @@ extern lck_grp_t pset_lck_grp;
 #define pset_unlock(p)                  lck_ticket_unlock(&(p)->sched_lock)
 #define pset_assert_locked(p)           lck_ticket_assert_owned(&(p)->sched_lock)
 #else /* SCHED_PSET_TLOCK*/
-#define pset_lock(p)                    simple_lock(&(p)->sched_lock, &pset_lck_grp)
-#define pset_unlock(p)                  simple_unlock(&(p)->sched_lock)
-#define pset_lock_init(p)               simple_lock_init(&(p)->sched_lock, 0)
-#if defined(__arm__) || defined(__arm64__)
+#define pset_lock_init(p)               lck_spin_init(&(p)->sched_lock, &pset_lck_grp, NULL)
+#define pset_lock(p)                    lck_spin_lock_grp(&(p)->sched_lock, &pset_lck_grp)
+#define pset_unlock(p)                  lck_spin_unlock(&(p)->sched_lock)
 #define pset_assert_locked(p)           LCK_SPIN_ASSERT(&(p)->sched_lock, LCK_ASSERT_OWNED)
-#else /* arm || arm64 */
-/* See <rdar://problem/39630910> pset_lock() should be converted to use lck_spin_lock() instead of simple_lock() */
-#define pset_assert_locked(p)           do { (void)p; } while(0)
-#endif /* !arm && !arm64 */
-#endif /* !SCHED_PSET_TLOCK */
+#endif /*!SCHED_PSET_TLOCK*/
+
 #define rt_lock_lock(p)                 simple_lock(&SCHED(rt_runq)(p)->rt_lock, &pset_lck_grp)
 #define rt_lock_unlock(p)               simple_unlock(&SCHED(rt_runq)(p)->rt_lock)
 #define rt_lock_init(p)                 simple_lock_init(&SCHED(rt_runq)(p)->rt_lock, 0)
-#else /* !SMP */
+#else
 #define pset_lock(p)                    do { (void)p; } while(0)
 #define pset_unlock(p)                  do { (void)p; } while(0)
 #define pset_lock_init(p)               do { (void)p; } while(0)
@@ -468,6 +473,8 @@ extern unsigned int             processor_count;
 extern processor_t      cpu_to_processor(int cpu);
 
 extern kern_return_t    enable_smt_processors(bool enable);
+
+extern boolean_t        processor_in_panic_context(processor_t processor);
 __END_DECLS
 
 #endif /* KERNEL_PRIVATE */

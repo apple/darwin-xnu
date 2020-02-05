@@ -9,6 +9,7 @@
 #include <ktrace/session.h>
 #include <ktrace/private.h>
 #include <System/sys/kdebug.h>
+#include <kperf/kpc.h>
 #include <kperf/kperf.h>
 #include <kperfdata/kpdecode.h>
 #include <os/assumes.h>
@@ -16,6 +17,7 @@
 #include <sys/sysctl.h>
 
 #include "kperf_helpers.h"
+#include "ktrace_helpers.h"
 
 T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.kperf"),
@@ -40,12 +42,16 @@ spinning_thread(void *semp)
 	return NULL;
 }
 
-#define PERF_STK_KHDR  UINT32_C(0x25020014)
-#define PERF_STK_UHDR  UINT32_C(0x25020018)
-#define PERF_TMR_FIRE  KDBG_EVENTID(DBG_PERF, 3, 0)
-#define PERF_TMR_HNDLR KDBG_EVENTID(DBG_PERF, 3, 2)
-#define PERF_TMR_PEND  KDBG_EVENTID(DBG_PERF, 3, 3)
-#define PERF_TMR_SKIP  KDBG_EVENTID(DBG_PERF, 3, 4)
+#define PERF_STK_KHDR   UINT32_C(0x25020014)
+#define PERF_STK_UHDR   UINT32_C(0x25020018)
+#define PERF_TMR_FIRE   KDBG_EVENTID(DBG_PERF, 3, 0)
+#define PERF_TMR_HNDLR  KDBG_EVENTID(DBG_PERF, 3, 2)
+#define PERF_TMR_PEND   KDBG_EVENTID(DBG_PERF, 3, 3)
+#define PERF_TMR_SKIP   KDBG_EVENTID(DBG_PERF, 3, 4)
+#define PERF_KPC_CONFIG KDBG_EVENTID(DBG_PERF, 6, 4)
+#define PERF_KPC_REG    KDBG_EVENTID(DBG_PERF, 6, 5)
+#define PERF_KPC_REG32  KDBG_EVENTID(DBG_PERF, 6, 7)
+#define PERF_INSTR_DATA KDBG_EVENTID(DBG_PERF, 1, 17)
 
 #define SCHED_HANDOFF KDBG_EVENTID(DBG_MACH, DBG_MACH_SCHED, \
 	        MACH_STACK_HANDOFF)
@@ -59,12 +65,6 @@ spinning_thread(void *semp)
 
 #define TIMER_PERIOD_NS (1 * NSEC_PER_MSEC)
 
-static void
-reset_ktrace(void)
-{
-	kperf_reset();
-}
-
 /*
  * Ensure that kperf is correctly IPIing CPUs that are actively scheduling by
  * bringing up threads and ensuring that threads on-core are sampled by each
@@ -74,6 +74,8 @@ reset_ktrace(void)
 T_DECL(ipi_active_cpus,
     "make sure that kperf IPIs all active CPUs")
 {
+	start_controlling_ktrace();
+
 	int ncpus = dt_ncpu();
 	T_QUIET;
 	T_ASSERT_LT(ncpus, MAX_CPUS,
@@ -282,7 +284,6 @@ T_DECL(ipi_active_cpus,
 	T_ASSERT_POSIX_SUCCESS(kperf_timer_action_set(0, 1), NULL);
 
 	T_ASSERT_POSIX_SUCCESS(kperf_sample_set(1), "start kperf sampling");
-	T_ATEND(reset_ktrace);
 
 	T_ASSERT_POSIX_ZERO(ktrace_start(s,
 	    dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0)),
@@ -297,9 +298,9 @@ T_DECL(ipi_active_cpus,
 
 #define KDEBUG_TRIGGER_TIMEOUT_NS (10 * NSEC_PER_SEC)
 
-#define NON_TRIGGER_CLASS    UINT8_C(0xfd)
-#define NON_TRIGGER_SUBCLASS UINT8_C(0xff)
-#define NON_TRIGGER_CODE     UINT8_C(0xff)
+#define NON_TRIGGER_CLASS    UINT32_C(0xfd)
+#define NON_TRIGGER_SUBCLASS UINT32_C(0xff)
+#define NON_TRIGGER_CODE     UINT32_C(0xff)
 
 #define NON_TRIGGER_EVENT \
 	        (KDBG_EVENTID(NON_TRIGGER_CLASS, NON_TRIGGER_SUBCLASS, \
@@ -319,13 +320,13 @@ expect_kdebug_trigger(const char *filter_desc, const uint32_t *debugids,
 
 	ktrace_events_single(s, PERF_STK_KHDR, ^(struct trace_point *tp) {
 		missing_kernel_stacks--;
-		T_LOG("saw kernel stack with %lu frames, flags = %#lx", tp->arg2,
-		tp->arg1);
+		T_LOG("saw kernel stack with %" PRIu64 " frames, flags = %#"
+		PRIx64, tp->arg2, tp->arg1);
 	});
 	ktrace_events_single(s, PERF_STK_UHDR, ^(struct trace_point *tp) {
 		missing_user_stacks--;
-		T_LOG("saw user stack with %lu frames, flags = %#lx", tp->arg2,
-		tp->arg1);
+		T_LOG("saw user stack with %" PRIu64 " frames, flags = %#"
+		PRIx64, tp->arg2, tp->arg1);
 	});
 
 	for (unsigned int i = 0; i < n_debugids; i++) {
@@ -386,16 +387,18 @@ expect_kdebug_trigger(const char *filter_desc, const uint32_t *debugids,
 	});
 }
 
-#define TRIGGER_CLASS     UINT8_C(0xfe)
-#define TRIGGER_CLASS_END UINT8_C(0xfd)
-#define TRIGGER_SUBCLASS  UINT8_C(0xff)
-#define TRIGGER_CODE      UINT8_C(0)
+#define TRIGGER_CLASS     UINT32_C(0xfe)
+#define TRIGGER_CLASS_END UINT32_C(0xfd)
+#define TRIGGER_SUBCLASS  UINT32_C(0xff)
+#define TRIGGER_CODE      UINT32_C(0)
 #define TRIGGER_DEBUGID \
 	        (KDBG_EVENTID(TRIGGER_CLASS, TRIGGER_SUBCLASS, TRIGGER_CODE))
 
 T_DECL(kdebug_trigger_classes,
     "test that kdebug trigger samples on classes")
 {
+	start_controlling_ktrace();
+
 	const uint32_t class_debugids[] = {
 		KDBG_EVENTID(TRIGGER_CLASS, 1, 1),
 		KDBG_EVENTID(TRIGGER_CLASS, 2, 1),
@@ -411,6 +414,8 @@ T_DECL(kdebug_trigger_classes,
 T_DECL(kdebug_trigger_subclasses,
     "test that kdebug trigger samples on subclasses")
 {
+	start_controlling_ktrace();
+
 	const uint32_t subclass_debugids[] = {
 		KDBG_EVENTID(TRIGGER_CLASS, TRIGGER_SUBCLASS, 0),
 		KDBG_EVENTID(TRIGGER_CLASS, TRIGGER_SUBCLASS, 1),
@@ -426,6 +431,8 @@ T_DECL(kdebug_trigger_subclasses,
 T_DECL(kdebug_trigger_debugids,
     "test that kdebug trigger samples on debugids")
 {
+	start_controlling_ktrace();
+
 	const uint32_t debugids[] = {
 		TRIGGER_DEBUGID
 	};
@@ -440,9 +447,17 @@ T_DECL(kdebug_trigger_debugids,
  * events from that class.
  */
 
+static void
+reset_kperf(void)
+{
+	(void)kperf_reset();
+}
+
 T_DECL(kdbg_callstacks,
     "test that the kdbg_callstacks samples on syscalls")
 {
+	start_controlling_ktrace();
+
 	ktrace_session_t s;
 	__block bool saw_user_stack = false;
 
@@ -471,7 +486,7 @@ T_DECL(kdbg_callstacks,
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 	T_ASSERT_POSIX_SUCCESS(kperf_kdbg_callstacks_set(1), NULL);
 #pragma clang diagnostic pop
-	T_ATEND(kperf_reset);
+	T_ATEND(reset_kperf);
 
 	T_ASSERT_POSIX_ZERO(ktrace_start(s, dispatch_get_main_queue()), NULL);
 
@@ -526,6 +541,8 @@ expect_stacks_traced(void (^cb)(void))
 
 T_DECL(pet, "test that PET mode samples kernel and user stacks")
 {
+	start_controlling_ktrace();
+
 	configure_kperf_stacks_timer(-1, 10);
 	T_ASSERT_POSIX_SUCCESS(kperf_timer_pet_set(0), NULL);
 
@@ -540,6 +557,8 @@ T_DECL(lightweight_pet,
     "test that lightweight PET mode samples kernel and user stacks",
     T_META_ASROOT(true))
 {
+	start_controlling_ktrace();
+
 	int set = 1;
 
 	configure_kperf_stacks_timer(-1, 10);
@@ -556,6 +575,8 @@ T_DECL(lightweight_pet,
 
 T_DECL(pet_stress, "repeatedly enable and disable PET mode")
 {
+	start_controlling_ktrace();
+
 	int niters = 1000;
 	while (niters--) {
 		configure_kperf_stacks_timer(-1, 10);
@@ -568,6 +589,8 @@ T_DECL(pet_stress, "repeatedly enable and disable PET mode")
 
 T_DECL(timer_stress, "repeatedly enable and disable timers")
 {
+	start_controlling_ktrace();
+
 	int niters = 1000;
 	while (niters--) {
 		configure_kperf_stacks_timer(-1, 1);
@@ -576,3 +599,153 @@ T_DECL(timer_stress, "repeatedly enable and disable timers")
 	}
 	;
 }
+
+T_DECL(pmc_config_only, "shouldn't show PMC config events unless requested")
+{
+	start_controlling_ktrace();
+
+	__block bool saw_kpc_config = false;
+	__block bool saw_kpc_reg = false;
+
+	ktrace_session_t s = ktrace_session_create();
+	T_ASSERT_NOTNULL(s, "ktrace_session_create");
+
+	/*
+	 * Make sure BSD events are traced in order to trigger samples on syscalls.
+	 */
+	ktrace_events_single(s, PERF_KPC_CONFIG,
+	    ^(__unused struct trace_point *tp) {
+		saw_kpc_config = true;
+	});
+	ktrace_events_single(s, PERF_KPC_REG,
+	    ^(__unused struct trace_point *tp) {
+		saw_kpc_reg = true;
+	});
+	ktrace_events_single(s, PERF_KPC_REG32,
+	    ^(__unused struct trace_point *tp) {
+		saw_kpc_reg = true;
+	});
+
+	ktrace_set_completion_handler(s, ^{
+		ktrace_session_destroy(s);
+		T_EXPECT_FALSE(saw_kpc_config,
+		"should see no KPC configs without sampler enabled");
+		T_EXPECT_FALSE(saw_kpc_reg,
+		"should see no KPC registers without sampler enabled");
+		T_END;
+	});
+
+	uint32_t nconfigs = kpc_get_config_count(KPC_CLASS_CONFIGURABLE_MASK);
+	uint64_t *config = calloc(nconfigs, sizeof(*config));
+	config[0] = 0x02;
+	int ret = kpc_set_config(KPC_CLASS_CONFIGURABLE_MASK, config);
+	T_ASSERT_POSIX_SUCCESS(ret, "configured kpc");
+	T_QUIET;
+	T_ASSERT_POSIX_SUCCESS(kpc_set_counting(KPC_CLASS_CONFIGURABLE_MASK),
+	    "kpc_set_counting");
+
+	(void)kperf_action_count_set(1);
+	T_ATEND(reset_kperf);
+	T_QUIET;
+	T_ASSERT_POSIX_SUCCESS(kperf_action_samplers_set(1, KPERF_SAMPLER_PMC_CPU),
+	    NULL);
+
+	(void)kperf_timer_count_set(1);
+	T_QUIET;
+	T_ASSERT_POSIX_SUCCESS(kperf_timer_period_set(0,
+	    kperf_ns_to_ticks(TIMER_PERIOD_NS)), NULL);
+	T_QUIET;
+	T_ASSERT_POSIX_SUCCESS(kperf_timer_action_set(0, 1), NULL);
+
+	T_ASSERT_POSIX_SUCCESS(kperf_sample_set(1), "start kperf sampling");
+
+	T_ASSERT_POSIX_ZERO(ktrace_start(s, dispatch_get_main_queue()), NULL);
+
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC),
+	    dispatch_get_main_queue(), ^(void) {
+		ktrace_end(s, 1);
+	});
+
+	dispatch_main();
+}
+
+static void
+skip_if_monotonic_unsupported(void)
+{
+	int r;
+	int supported = 0;
+	size_t supported_size = sizeof(supported);
+
+	r = sysctlbyname("kern.monotonic.supported", &supported, &supported_size,
+	    NULL, 0);
+	if (r < 0) {
+		T_WITH_ERRNO;
+		T_SKIP("could not find \"kern.monotonic.supported\" sysctl");
+	}
+
+	if (!supported) {
+		T_SKIP("monotonic is not supported on this platform");
+	}
+}
+
+#define INSTRS_CYCLES_UPPER 500
+#define INSTRS_CYCLES_LOWER 50
+
+T_DECL(instrs_cycles, "ensure instructions and cycles are sampled")
+{
+	skip_if_monotonic_unsupported();
+
+	start_controlling_ktrace();
+
+	ktrace_session_t sess = ktrace_session_create();
+
+	__block uint64_t ninstrs_cycles = 0;
+	__block uint64_t nzeroes = 0;
+	ktrace_events_single(sess, PERF_INSTR_DATA,
+	    ^(__unused struct trace_point *tp) {
+		ninstrs_cycles++;
+		if (tp->arg1 == 0) {
+			T_LOG("%llx (%s)\n", tp->threadid, tp->command);
+			nzeroes++;
+		}
+		if (ninstrs_cycles >= INSTRS_CYCLES_UPPER) {
+			ktrace_end(sess, 1);
+		}
+	});
+
+	ktrace_set_collection_interval(sess, 200);
+
+	ktrace_set_completion_handler(sess, ^{
+		T_EXPECT_GE(ninstrs_cycles, (uint64_t)INSTRS_CYCLES_LOWER,
+		    "saw enough instructions and cycles events");
+		T_EXPECT_EQ(nzeroes, UINT64_C(0),
+		    "saw no events with 0 instructions");
+		T_END;
+	});
+
+	(void)kperf_action_count_set(1);
+	T_ATEND(reset_kperf);
+	T_QUIET;
+	T_ASSERT_POSIX_SUCCESS(kperf_action_samplers_set(1,
+	    KPERF_SAMPLER_TH_INSTRS_CYCLES), NULL);
+
+	(void)kperf_timer_count_set(1);
+	T_QUIET;
+	T_ASSERT_POSIX_SUCCESS(kperf_timer_period_set(0,
+	    kperf_ns_to_ticks(TIMER_PERIOD_NS)), NULL);
+	T_QUIET;
+	T_ASSERT_POSIX_SUCCESS(kperf_timer_action_set(0, 1), NULL);
+
+	T_ASSERT_POSIX_SUCCESS(kperf_sample_set(1), "start kperf sampling");
+
+	T_ASSERT_POSIX_ZERO(ktrace_start(sess, dispatch_get_main_queue()),
+	    NULL);
+
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 10 * NSEC_PER_SEC),
+	    dispatch_get_main_queue(), ^(void) {
+		ktrace_end(sess, 1);
+	});
+
+	dispatch_main();
+}
+

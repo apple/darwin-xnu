@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -68,7 +68,7 @@
 
 class IOCommand : public OSObject
 {
-	OSDeclareDefaultStructors(IOCommand)
+	OSDeclareDefaultStructors(IOCommand);
 
 public:
 	virtual bool init(void) APPLE_KEXT_OVERRIDE;

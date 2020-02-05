@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -30,9 +30,13 @@
 #define _OS_OSORDEREDSET_H
 
 #include <libkern/c++/OSCollection.h>
+#include <libkern/c++/OSPtr.h>
 #include <libkern/OSTypes.h>
 
 class OSOffset;
+class OSOrderedSet;
+
+typedef OSPtr<OSOrderedSet> OSOrderedSetPtr;
 
 /*!
  * @header
@@ -94,7 +98,7 @@ class OSOffset;
  */
 class OSOrderedSet : public OSCollection
 {
-	OSDeclareDefaultStructors(OSOrderedSet)
+	OSDeclareDefaultStructors(OSOrderedSet);
 
 public:
 /*!
@@ -180,10 +184,10 @@ public:
  * See
  * <code>@link getOrderingRef getOrderingRef@/link</code>.
  */
-	static OSOrderedSet * withCapacity(
+	static OSOrderedSetPtr withCapacity(
 		unsigned int      capacity,
-		OSOrderFunction   orderFunc = 0,
-		void            * orderingContext = 0);
+		OSOrderFunction   orderFunc = NULL,
+		void            * orderingContext = NULL);
 
 
 /*!
@@ -231,8 +235,8 @@ public:
  */
 	virtual bool initWithCapacity(
 		unsigned int      capacity,
-		OSOrderFunction   orderFunc = 0,
-		void            * orderingContext = 0);
+		OSOrderFunction   orderFunc = NULL,
+		void            * orderingContext = NULL);
 
 
 /*!
@@ -728,7 +732,7 @@ public:
 	virtual unsigned setOptions(
 		unsigned   options,
 		unsigned   mask,
-		void     * context = 0) APPLE_KEXT_OVERRIDE;
+		void     * context = NULL) APPLE_KEXT_OVERRIDE;
 
 
 /*!
@@ -753,7 +757,7 @@ public:
  * Objects that are not derived from OSCollection are retained
  * rather than copied.
  */
-	OSCollection *copyCollection(OSDictionary * cycleDict = 0) APPLE_KEXT_OVERRIDE;
+	OSCollectionPtr copyCollection(OSDictionary * cycleDict = NULL) APPLE_KEXT_OVERRIDE;
 
 	OSMetaClassDeclareReservedUnused(OSOrderedSet, 0);
 	OSMetaClassDeclareReservedUnused(OSOrderedSet, 1);

@@ -68,13 +68,8 @@ SECURITY_READ_ONLY_LATE(ipc_port_t)     ux_handler_port       = IP_NULL;
 void
 ux_handler_init(void)
 {
-	ux_handler_port = ipc_port_alloc_kernel();
-
-	if (ux_handler_port == IP_NULL) {
-		panic("can't allocate unix exception port");
-	}
-
-	ipc_kobject_set(ux_handler_port, (ipc_kobject_t)&ux_handler_kobject, IKOT_UX_HANDLER);
+	ux_handler_port = ipc_kobject_alloc_port((ipc_kobject_t)&ux_handler_kobject,
+	    IKOT_UX_HANDLER, IPC_KOBJECT_ALLOC_NONE);
 }
 
 /*

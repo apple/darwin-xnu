@@ -67,7 +67,7 @@ typedef kern_return_t kmod_stop_func_t(struct kmod_info * ki, void * data);
 *
 * All structures must be #pragma pack(4).
 ***********************************************************************/
-#pragma pack(4)
+#pragma pack(push, 4)
 
 /* Run-time struct only; never saved to a file */
 typedef struct kmod_reference {
@@ -133,7 +133,7 @@ typedef struct kmod_info_64_v1 {
 	uint64_t            stop_addr;
 } kmod_info_64_v1_t;
 
-#pragma pack()
+#pragma pack(pop)
 
 #if PRAGMA_MARK
 #pragma mark Kmod structure declaration macros

@@ -95,6 +95,9 @@
 #include <vm/vm_purgeable_internal.h>
 #include <vm/vm_pageout.h>
 
+#include <IOKit/IOBSD.h> // IOTaskHasEntitlement
+#include <IOKit/IOKitKeys.h> // DriverKit entitlement strings
+
 
 #if CONFIG_ATM
 #include <atm/atm_internal.h>
@@ -340,11 +343,19 @@ host_info(host_t host, host_flavor_t flavor, host_info_t info, mach_msg_type_num
 		user_arch_info = (host_preferred_user_arch_t)info;
 
 #if defined(PREFERRED_USER_CPU_TYPE) && defined(PREFERRED_USER_CPU_SUBTYPE)
-		user_arch_info->cpu_type = PREFERRED_USER_CPU_TYPE;
-		user_arch_info->cpu_subtype = PREFERRED_USER_CPU_SUBTYPE;
+		cpu_type_t preferred_cpu_type;
+		cpu_subtype_t preferred_cpu_subtype;
+		if (!PE_get_default("kern.preferred_cpu_type", &preferred_cpu_type, sizeof(cpu_type_t))) {
+			preferred_cpu_type = PREFERRED_USER_CPU_TYPE;
+		}
+		if (!PE_get_default("kern.preferred_cpu_subtype", &preferred_cpu_subtype, sizeof(cpu_subtype_t))) {
+			preferred_cpu_subtype = PREFERRED_USER_CPU_SUBTYPE;
+		}
+		user_arch_info->cpu_type    = preferred_cpu_type;
+		user_arch_info->cpu_subtype = preferred_cpu_subtype;
 #else
-		int master_id = master_processor->cpu_id;
-		user_arch_info->cpu_type = slot_type(master_id);
+		int master_id               = master_processor->cpu_id;
+		user_arch_info->cpu_type    = slot_type(master_id);
 		user_arch_info->cpu_subtype = slot_subtype(master_id);
 #endif
 
@@ -1314,6 +1325,10 @@ host_set_special_port(host_priv_t host_priv, int id, ipc_port_t port)
 		return KERN_INVALID_ARGUMENT;
 	}
 
+	if (task_is_driver(current_task())) {
+		return KERN_NO_ACCESS;
+	}
+
 #if CONFIG_MACF
 	if (mac_task_check_set_host_special_port(current_task(), id, port) != 0) {
 		return KERN_NO_ACCESS;
@@ -1341,6 +1356,17 @@ host_get_special_port(host_priv_t host_priv, __unused int node, int id, ipc_port
 		return KERN_INVALID_ARGUMENT;
 	}
 
+	task_t task = current_task();
+	if (task && task_is_driver(task) && id > HOST_MAX_SPECIAL_KERNEL_PORT) {
+		/* allow HID drivers to get the sysdiagnose port for keychord handling */
+		if (IOTaskHasEntitlement(task, kIODriverKitHIDFamilyEventServiceEntitlementKey) &&
+		    id == HOST_SYSDIAGNOSE_PORT) {
+			goto get_special_port;
+		}
+		return KERN_NO_ACCESS;
+	}
+
+get_special_port:
 	host_lock(host_priv);
 	port = realhost.special[id];
 	*portp = ipc_port_copy_send(port);

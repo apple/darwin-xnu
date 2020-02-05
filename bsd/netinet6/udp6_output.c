@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -199,6 +199,9 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 	}
 	if (INP_NO_EXPENSIVE(in6p)) {
 		ip6oa.ip6oa_flags |= IP6OAF_NO_EXPENSIVE;
+	}
+	if (INP_NO_CONSTRAINED(in6p)) {
+		ip6oa.ip6oa_flags |= IP6OAF_NO_CONSTRAINED;
 	}
 	if (INP_AWDL_UNRESTRICTED(in6p)) {
 		ip6oa.ip6oa_flags |= IP6OAF_AWDL_UNRESTRICTED;
@@ -568,6 +571,9 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		VERIFY(in6p->inp_sndinprog_cnt > 0);
 		if (--in6p->inp_sndinprog_cnt == 0) {
 			in6p->inp_flags &= ~(INP_FC_FEEDBACK);
+			if (in6p->inp_sndingprog_waiters > 0) {
+				wakeup(&in6p->inp_sndinprog_cnt);
+			}
 		}
 
 		if (ro.ro_rt != NULL) {
@@ -612,16 +618,27 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 			 * If the destination route is unicast, update outif
 			 * with that of the route interface used by IP.
 			 */
-			if (rt != NULL &&
-			    (outif = rt->rt_ifp) != in6p->in6p_last_outifp) {
-				in6p->in6p_last_outifp = outif;
+			if (rt != NULL) {
+				/*
+				 * When an NECP IP tunnel policy forces the outbound interface,
+				 * ip6_output_list() informs the transport layer what is the actual
+				 * outgoing interface
+				 */
+				if (ip6oa.ip6oa_flags & IP6OAF_BOUND_IF) {
+					outif = ifindex2ifnet[ip6oa.ip6oa_boundif];
+				} else {
+					outif = rt->rt_ifp;
+				}
+				if (outif != NULL && outif != in6p->in6p_last_outifp) {
+					in6p->in6p_last_outifp = outif;
 
-				so->so_pktheadroom = P2ROUNDUP(
-					sizeof(struct udphdr) +
-					hlen +
-					ifnet_hdrlen(outif) +
-					ifnet_mbuf_packetpreamblelen(outif),
-					sizeof(u_int32_t));
+					so->so_pktheadroom = P2ROUNDUP(
+						sizeof(struct udphdr) +
+						hlen +
+						ifnet_hdrlen(outif) +
+						ifnet_mbuf_packetpreamblelen(outif),
+						sizeof(u_int32_t));
+				}
 			}
 		} else {
 			ROUTE_RELEASE(&in6p->in6p_route);
@@ -632,7 +649,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		 * socket is denied access to it, generate an event.
 		 */
 		if (error != 0 && (ip6oa.ip6oa_retflags & IP6OARF_IFDENIED) &&
-		    (INP_NO_CELLULAR(in6p) || INP_NO_EXPENSIVE(in6p))) {
+		    (INP_NO_CELLULAR(in6p) || INP_NO_EXPENSIVE(in6p) || INP_NO_CONSTRAINED(in6p))) {
 			soevent(in6p->inp_socket, (SO_FILT_HINT_LOCKED |
 			    SO_FILT_HINT_IFDENIED));
 		}

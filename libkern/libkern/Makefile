@@ -34,6 +34,10 @@ DATAFILES = \
 	OSReturn.h \
 	OSTypes.h
 
+DRIVERKIT_DATAFILES = \
+	OSByteOrder.h \
+	_OSByteOrder.h
+
 KERNELFILES = \
 	${DATAFILES} \
 	OSAtomic.h \
@@ -62,6 +66,10 @@ PRIVATE_DATAFILES = \
 
 INSTALL_MI_LIST	= ${DATAFILES}
 
+INSTALL_DRIVERKIT_MI_LIST = ${DRIVERKIT_DATAFILES}
+
+DRIVERKITINCDIR = $(DRIVERKITSDKHEADERSROOT)/usr/local/include
+
 INSTALL_MI_DIR = libkern
 
 INSTALL_MI_LCL_LIST =        \
@@ -85,9 +93,9 @@ EXPORT_MI_GEN_LIST = version.h
 EXPORT_MI_DIR = libkern
 
 version.h: version.h.template $(SRCROOT)/config/MasterVersion
-	@echo "[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)libkern/$@$(Color0) from $(ColorF)$<$(Color0)";
+	$(call makelog,[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)libkern/$@$(Color0) from $(ColorF)$<$(Color0))
 	$(_v)install $(DATA_INSTALL_FLAGS) $< $@
-	$(_v)$(NEWVERS) $@ > /dev/null;
+	$(_v)$(NEWVERS) $@ > /dev/null
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

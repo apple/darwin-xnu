@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -103,11 +103,15 @@ void kasan_notify_address_nopoison(vm_offset_t address, vm_size_t size);
 void kasan_unpoison_stack(vm_offset_t stack, vm_size_t size);
 void kasan_unpoison_curstack(bool whole_stack);
 bool kasan_check_shadow(vm_address_t base, vm_size_t sz, uint8_t shadow);
+void kasan_unpoison_cxx_array_cookie(void *ptr);
 
 void kasan_fakestack_drop(thread_t thread); /* mark all fakestack entries for thread as unused */
 void kasan_fakestack_gc(thread_t thread);   /* free and poison all unused fakestack objects for thread */
 void kasan_fakestack_suspend(void);
 void kasan_fakestack_resume(void);
+
+/* check for uninitialized memory */
+void kasan_check_uninitialized(vm_address_t base, vm_size_t sz);
 
 struct kasan_test;
 void __kasan_runtests(struct kasan_test *, int numtests);
@@ -172,7 +176,7 @@ extern const uintptr_t __asan_shadow_memory_dynamic_address;
 	ret func ## 2(__VA_ARGS__); \
 	ret func ## 4(__VA_ARGS__); \
 	ret func ## 8(__VA_ARGS__); \
-	ret func ## 16(__VA_ARGS__); \
+	ret func ## 16(__VA_ARGS__)
 
 __BEGIN_DECLS
 

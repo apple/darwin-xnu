@@ -81,7 +81,6 @@
 #include <i386/cpu_capabilities.h>
 #include <i386/cpuid.h>
 #include <i386/pmCPU.h>
-#include <i386/pmap.h>
 #include <mach/i386/vm_param.h>
 #include <mach/i386/thread_status.h>
 #include <machine/commpage.h>
@@ -104,7 +103,7 @@
 	__asm("DEFINITION__define__" SYM ":\t .ascii \"%0\"" : : "n"  ((u_int)(VAL)))
 
 #define DECLAREULL(SYM, VAL) \
-	__asm("DEFINITION__define__" SYM ":\t .ascii \"%0\"" : : "n"  ((unsigned long long)(VAL)))
+	__asm("DEFINITION__define__" SYM ":\t .ascii \"%0\"" : : "i"  ((unsigned long long)(VAL)))
 
 int     main(
 	int             argc,
@@ -153,7 +152,6 @@ main(
 	DECLARE("TH_CONTINUATION", offsetof(struct thread, continuation));
 	DECLARE("TH_KERNEL_STACK", offsetof(struct thread, kernel_stack));
 	DECLARE("TH_MUTEX_COUNT", offsetof(struct thread, mutex_count));
-	DECLARE("TH_WAS_PROMOTED_ON_WAKEUP", offsetof(struct thread, was_promoted_on_wakeup));
 	DECLARE("TH_IOTIER_OVERRIDE", offsetof(struct thread, iotier_override));
 
 	DECLARE("TH_SYSCALLS_MACH", offsetof(struct thread, syscalls_mach));

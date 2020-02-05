@@ -93,6 +93,7 @@ cpu_sleep(void)
 {
 	cpu_data_t      *cdp = current_cpu_datap();
 
+	/* This calls IOCPURunPlatformQuiesceActions when sleeping the boot cpu */
 	PE_cpu_machine_quiesce(cdp->cpu_id);
 
 	cpu_thread_halt();

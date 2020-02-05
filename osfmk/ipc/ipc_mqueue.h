@@ -90,6 +90,9 @@ typedef struct ipc_mqueue {
 			mach_port_name_t        receiver_name;
 			uint16_t                msgcount;
 			uint16_t                qlimit;
+#ifdef __LP64__
+			uint32_t                qcontext;
+#endif
 #if MACH_FLIPC
 			struct flipc_port       *fport; // Null for local port, or ptr to flipc port
 #endif
@@ -99,29 +102,31 @@ typedef struct ipc_mqueue {
 		} pset;
 	} data;
 	union {
+		/*
+		 * Port Sets:
+		 *   only use imq_klist
+		 *
+		 * Special Reply Ports (ip_specialreply == true):
+		 *   only use imq_srp_owner_thread
+		 *
+		 * Ports, based on ip_sync_link_state, use:
+		 * - PORT_SYNC_LINK_ANY:            imq_klist
+		 * - PORT_SYNC_LINK_WORKLOOP_KNOTE: imq_inheritor_knote
+		 * - PORT_SYNC_LINK_WORKLOOP_STASH: imq_inheritor_turnstile
+		 * - PORT_SYNC_LINK_RCV_THREAD: imq_inheritor_thread_ref
+		 */
 		struct klist imq_klist;
-		uintptr_t imq_inheritor;
+		struct knote *imq_inheritor_knote;
+		struct turnstile *imq_inheritor_turnstile;
+		thread_t imq_inheritor_thread_ref;
+		thread_t imq_srp_owner_thread;
 	};
+#ifndef __LP64__
+	uint32_t qcontext;
+#endif
 } *ipc_mqueue_t;
 
 #define IMQ_NULL                ((ipc_mqueue_t) 0)
-
-/*
- * When a receive right is in flight, before it can ever be registered with
- * a new knote, its imq_klist field can be overloaded to hold a pointer
- * to the knote that the port is pushing on through his turnstile.
- *
- * if IMQ_KLIST_VALID() returns true, then the imq_klist field can be used,
- * else IMQ_INHERITOR() can be used to get the pointer to the knote currently
- * being the port turnstile inheritor.
- */
-#define IMQ_KLIST_VALID(imq) (((imq)->imq_inheritor & 1) == 0)
-#define IMQ_INHERITOR(imq) ((struct turnstile *)((imq)->imq_inheritor ^ 1))
-#define IMQ_SET_INHERITOR(imq, inheritor) \
-MACRO_BEGIN                                                                   \
-	        assert(((imq)->imq_inheritor & 1) || SLIST_EMPTY(&(imq)->imq_klist)); \
-	        ((imq)->imq_inheritor = (uintptr_t)(inheritor) | 1);                  \
-MACRO_END
 
 #define imq_wait_queue          data.port.waitq
 #define imq_messages            data.port.messages
@@ -131,6 +136,16 @@ MACRO_END
 #define imq_receiver_name       data.port.receiver_name
 #if MACH_FLIPC
 #define imq_fport               data.port.fport
+#endif
+
+/*
+ * The qcontext structure member fills in a 32-bit padding gap in ipc_mqueue.
+ * However, the 32-bits are in slightly different places on 32 and 64 bit systems.
+ */
+#ifdef __LP64__
+#define imq_context             data.port.qcontext
+#else
+#define imq_context             qcontext
 #endif
 
 /*
@@ -146,11 +161,12 @@ MACRO_END
 #define imq_is_queue(mq)        waitq_is_queue(&(mq)->imq_wait_queue)
 #define imq_is_valid(mq)        waitq_is_valid(&(mq)->imq_wait_queue)
 
-#define imq_lock(mq)            waitq_lock(&(mq)->imq_wait_queue)
-#define imq_lock_try(mq)        waitq_lock_try(&(mq)->imq_wait_queue)
 #define imq_unlock(mq)          waitq_unlock(&(mq)->imq_wait_queue)
 #define imq_held(mq)            waitq_held(&(mq)->imq_wait_queue)
 #define imq_valid(mq)           waitq_valid(&(mq)->imq_wait_queue)
+
+extern void imq_lock(ipc_mqueue_t mq);
+extern unsigned int imq_lock_try(ipc_mqueue_t mq);
 
 /*
  * Get an ipc_mqueue pointer from a waitq pointer. These are traditionally the
@@ -158,16 +174,11 @@ MACRO_END
  * member positions - it should allow the waitq to move around in either the
  * port-set mqueue or the port mqueue independently.
  */
-#define imq_from_waitq(waitq)   (waitq_is_set(waitq) ? \
-	                                ((struct ipc_mqueue *)((void *)( \
-	                                        (uintptr_t)(waitq) - \
-	                                        __offsetof(struct ipc_mqueue, imq_set_queue)) \
-	                                )) : \
-	                                ((struct ipc_mqueue *)((void *)( \
-	                                        (uintptr_t)(waitq) - \
-	                                        __offsetof(struct ipc_mqueue, imq_wait_queue)) \
-	                                )) \
-	                         )
+#define imq_from_waitq(waitq)  (waitq_is_set(waitq) ? \
+	        __container_of(waitq, struct ipc_mqueue, imq_set_queue.wqset_q) : \
+	        __container_of(waitq, struct ipc_mqueue, imq_wait_queue))
+
+#define imq_to_object(mq) ip_to_object(ip_from_mq(mq))
 
 extern void imq_reserve_and_lock(ipc_mqueue_t mq,
     uint64_t *reserved_prepost);

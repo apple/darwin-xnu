@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -397,6 +397,9 @@ rip6_output(
 	if (INP_NO_EXPENSIVE(in6p)) {
 		ip6oa.ip6oa_flags |= IP6OAF_NO_EXPENSIVE;
 	}
+	if (INP_NO_CONSTRAINED(in6p)) {
+		ip6oa.ip6oa_flags |= IP6OAF_NO_CONSTRAINED;
+	}
 	if (INP_AWDL_UNRESTRICTED(in6p)) {
 		ip6oa.ip6oa_flags |= IP6OAF_AWDL_UNRESTRICTED;
 	}
@@ -710,9 +713,20 @@ rip6_output(
 		 * route is not multicast, update outif with that of
 		 * the route interface index used by IP.
 		 */
-		if (rt != NULL &&
-		    (outif = rt->rt_ifp) != in6p->in6p_last_outifp) {
-			in6p->in6p_last_outifp = outif;
+		if (rt != NULL) {
+			/*
+			 * When an NECP IP tunnel policy forces the outbound interface,
+			 * ip6_output_list() informs the transport layer what is the actual
+			 * outgoing interface
+			 */
+			if (ip6oa.ip6oa_flags & IP6OAF_BOUND_IF) {
+				outif = ifindex2ifnet[ip6oa.ip6oa_boundif];
+			} else {
+				outif = rt->rt_ifp;
+			}
+			if (outif != NULL) {
+				in6p->in6p_last_outifp = outif;
+			}
 		}
 	} else {
 		ROUTE_RELEASE(&in6p->in6p_route);
@@ -723,7 +737,7 @@ rip6_output(
 	 * denied access to it, generate an event.
 	 */
 	if (error != 0 && (ip6oa.ip6oa_retflags & IP6OARF_IFDENIED) &&
-	    (INP_NO_CELLULAR(in6p) || INP_NO_EXPENSIVE(in6p))) {
+	    (INP_NO_CELLULAR(in6p) || INP_NO_EXPENSIVE(in6p) || INP_NO_CONSTRAINED(in6p))) {
 		soevent(in6p->inp_socket, (SO_FILT_HINT_LOCKED |
 		    SO_FILT_HINT_IFDENIED));
 	}

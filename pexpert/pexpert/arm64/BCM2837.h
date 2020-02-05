@@ -18,29 +18,6 @@
 
 #define PI3_BREAK                               asm volatile("brk #0");
 
-#define BCM2837_GPIO_BASE       0x3F200000
-#define BCM2837_GPIO_SIZE       0xA0
-#define BCM2837_GPFSEL0         0x3F200000
-#define BCM2837_GPSET0          0x3F20001C
-#define BCM2837_GPCLR0          0x3F200028
-#define BCM2837_GPPUD           0x3F200094
-#define BCM2837_GPPUDCLK0       0x3F200098
-
-#define BCM2837_AUX_BASE        0x3F215000
-#define BCM2837_AUX_SIZE        0x70
-#define BCM2837_AUX_ENABLES     0x3F215004
-#define BCM2837_AUX_MU_IO_REG   0x3F215040
-#define BCM2837_AUX_MU_IER_REG  0x3F215044
-#define BCM2837_AUX_MU_IIR_REG  0x3F215048
-#define BCM2837_AUX_MU_LCR_REG  0x3F21504C
-#define BCM2837_AUX_MU_MCR_REG  0x3F215050
-#define BCM2837_AUX_MU_LSR_REG  0x3F215054
-#define BCM2837_AUX_MU_MSR_REG  0x3F215058
-#define BCM2837_AUX_MU_SCRATCH  0x3F21505C
-#define BCM2837_AUX_MU_CNTL_REG 0x3F215060
-#define BCM2837_AUX_MU_STAT_REG 0x3F215064
-#define BCM2837_AUX_MU_BAUD_REG 0x3F215068
-
 #define BCM2837_GPFSEL0_V               (pi3_gpio_base_vaddr + 0x0)
 #define BCM2837_GPSET0_V                (pi3_gpio_base_vaddr + 0x1C)
 #define BCM2837_GPCLR0_V                (pi3_gpio_base_vaddr + 0x28)

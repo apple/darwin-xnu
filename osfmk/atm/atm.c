@@ -76,16 +76,13 @@ static void atm_hash_table_init(void);
 static kern_return_t atm_value_hash_table_insert(atm_value_t new_atm_value);
 static void atm_value_hash_table_delete(atm_value_t atm_value);
 static atm_value_t get_atm_value_from_aid(aid_t aid) __unused;
-static void atm_value_get_ref(atm_value_t atm_value);
 static kern_return_t atm_listener_insert(atm_value_t atm_value, atm_task_descriptor_t task_descriptor, atm_guard_t guard);
 static void atm_listener_delete_all(atm_value_t atm_value);
 static atm_task_descriptor_t atm_task_descriptor_alloc_init(mach_port_t trace_buffer, uint64_t buffer_size, __assert_only task_t task);
-static void atm_descriptor_get_reference(atm_task_descriptor_t task_descriptor);
 static void atm_task_descriptor_dealloc(atm_task_descriptor_t task_descriptor);
 static kern_return_t atm_value_unregister(atm_value_t atm_value, atm_task_descriptor_t task_descriptor, atm_guard_t guard);
 static kern_return_t atm_value_register(atm_value_t atm_value, atm_task_descriptor_t task_descriptor, atm_guard_t guard);
 static kern_return_t atm_listener_delete(atm_value_t atm_value, atm_task_descriptor_t task_descriptor, atm_guard_t guard);
-static void atm_link_get_reference(atm_link_object_t link_object) __unused;
 static void atm_link_dealloc(atm_link_object_t link_object);
 
 kern_return_t
@@ -136,7 +133,7 @@ atm_release(ipc_voucher_attr_manager_t __assert_only manager);
 /*
  * communication channel from voucher system to ATM
  */
-struct ipc_voucher_attr_manager atm_manager = {
+const struct ipc_voucher_attr_manager atm_manager = {
 	.ivam_release_value    = atm_release_value,
 	.ivam_get_value        = atm_get_value,
 	.ivam_extract_content  = atm_extract_content,
@@ -609,7 +606,7 @@ atm_value_alloc_init(aid_t aid)
 	queue_init(&new_atm_value->listeners);
 	new_atm_value->sync = 1;
 	new_atm_value->listener_count = 0;
-	new_atm_value->reference_count = 1;
+	os_ref_init(&new_atm_value->reference_count, NULL);
 	lck_mtx_init(&new_atm_value->listener_lock, &atm_lock_grp, &atm_lock_attr);
 
 #if DEVELOPMENT || DEBUG
@@ -658,24 +655,19 @@ get_subaid()
 static void
 atm_value_dealloc(atm_value_t atm_value)
 {
-	if (0 < atm_value_release_internal(atm_value)) {
-		return;
-	}
+	if (os_ref_release(&atm_value->reference_count) == 0) {
+		/* Free up the atm value and also remove all the listeners. */
+		atm_listener_delete_all(atm_value);
 
-	assert(atm_value->reference_count == 0);
-
-	/* Free up the atm value and also remove all the listeners. */
-	atm_listener_delete_all(atm_value);
-
-	lck_mtx_destroy(&atm_value->listener_lock, &atm_lock_grp);
+		lck_mtx_destroy(&atm_value->listener_lock, &atm_lock_grp);
 
 #if DEVELOPMENT || DEBUG
-	lck_mtx_lock(&atm_values_list_lock);
-	queue_remove(&atm_values_list, atm_value, atm_value_t, value_elt);
-	lck_mtx_unlock(&atm_values_list_lock);
+		lck_mtx_lock(&atm_values_list_lock);
+		queue_remove(&atm_values_list, atm_value, atm_value_t, value_elt);
+		lck_mtx_unlock(&atm_values_list_lock);
 #endif
-	zfree(atm_value_zone, atm_value);
-	return;
+		zfree(atm_value_zone, atm_value);
+	}
 }
 
 
@@ -780,25 +772,13 @@ get_atm_value_from_aid(aid_t aid)
 			 * Aid found. Incerease ref count and return
 			 * the atm value structure.
 			 */
-			atm_value_get_ref(next);
+			os_ref_retain(&next->reference_count);
 			lck_mtx_unlock(&hash_list_head->hash_list_lock);
 			return next;
 		}
 	}
 	lck_mtx_unlock(&hash_list_head->hash_list_lock);
 	return ATM_VALUE_NULL;
-}
-
-
-/*
- * Routine: atm_value_get_ref
- * Purpose: Get a reference on atm value.
- * Returns: None.
- */
-static void
-atm_value_get_ref(atm_value_t atm_value)
-{
-	atm_value_reference_internal(atm_value);
 }
 
 
@@ -822,11 +802,11 @@ atm_listener_insert(
 
 	new_link_object = (atm_link_object_t) zalloc(atm_link_objects_zone);
 	new_link_object->descriptor = task_descriptor;
-	new_link_object->reference_count = 1;
+	os_ref_init(&new_link_object->reference_count, NULL);
 	new_link_object->guard = guard;
 
 	/* Get a reference on the task descriptor */
-	atm_descriptor_get_reference(task_descriptor);
+	os_ref_retain(&task_descriptor->reference_count);
 	queue_init(&free_listeners);
 	listener_count = atm_value->listener_count;
 
@@ -857,7 +837,7 @@ atm_listener_insert(
 
 		if (elem->descriptor == task_descriptor) {
 			/* Increment reference count on Link object. */
-			atm_link_get_reference(elem);
+			os_ref_retain(&elem->reference_count);
 
 			/* Replace the guard with the new one, the old guard is anyways on unregister path. */
 			elem->guard = guard;
@@ -945,16 +925,16 @@ atm_listener_delete(
 			if (elem->guard == guard) {
 				KERNEL_DEBUG_CONSTANT((ATM_CODE(ATM_UNREGISTER_INFO,
 				    (ATM_VALUE_UNREGISTERED))) | DBG_FUNC_NONE,
-				    VM_KERNEL_ADDRPERM(atm_value), atm_value->aid, guard, elem->reference_count, 0);
+				    VM_KERNEL_ADDRPERM(atm_value), atm_value->aid, guard, os_ref_get_count(&elem->reference_count), 0);
 				elem->guard = 0;
 				kr = KERN_SUCCESS;
 			} else {
 				KERNEL_DEBUG_CONSTANT((ATM_CODE(ATM_UNREGISTER_INFO,
 				    (ATM_VALUE_DIFF_MAILBOX))) | DBG_FUNC_NONE,
-				    VM_KERNEL_ADDRPERM(atm_value), atm_value->aid, elem->guard, elem->reference_count, 0);
+				    VM_KERNEL_ADDRPERM(atm_value), atm_value->aid, elem->guard, os_ref_get_count(&elem->reference_count), 0);
 				kr = KERN_INVALID_VALUE;
 			}
-			if (0 == atm_link_object_release_internal(elem)) {
+			if (os_ref_release(&elem->reference_count) == 0) {
 				queue_remove(&atm_value->listeners, elem, atm_link_object_t, listeners_element);
 				queue_enter(&free_listeners, elem, atm_link_object_t, listeners_element);
 				atm_listener_count_decr_internal(atm_value);
@@ -992,7 +972,7 @@ atm_task_descriptor_alloc_init(
 
 	new_task_descriptor->trace_buffer = trace_buffer;
 	new_task_descriptor->trace_buffer_size = buffer_size;
-	new_task_descriptor->reference_count = 1;
+	os_ref_init(&new_task_descriptor->reference_count, NULL);
 	new_task_descriptor->flags = 0;
 	lck_mtx_init(&new_task_descriptor->lock, &atm_lock_grp, &atm_lock_attr);
 
@@ -1008,18 +988,6 @@ atm_task_descriptor_alloc_init(
 
 
 /*
- * Routine: atm_descriptor_get_reference
- * Purpose: Get a reference count on task descriptor.
- * Returns: None.
- */
-static void
-atm_descriptor_get_reference(atm_task_descriptor_t task_descriptor)
-{
-	atm_task_desc_reference_internal(task_descriptor);
-}
-
-
-/*
  * Routine: atm_task_descriptor_dealloc
  * Prupose: Drops the reference on atm descriptor.
  * Returns: None.
@@ -1027,34 +995,17 @@ atm_descriptor_get_reference(atm_task_descriptor_t task_descriptor)
 static void
 atm_task_descriptor_dealloc(atm_task_descriptor_t task_descriptor)
 {
-	if (0 < atm_task_desc_release_internal(task_descriptor)) {
-		return;
-	}
-
-	assert(task_descriptor->reference_count == 0);
-
+	if (os_ref_release(&task_descriptor->reference_count) == 0) {
 #if DEVELOPMENT || DEBUG
-	lck_mtx_lock(&atm_descriptors_list_lock);
-	queue_remove(&atm_descriptors_list, task_descriptor, atm_task_descriptor_t, descriptor_elt);
-	lck_mtx_unlock(&atm_descriptors_list_lock);
+		lck_mtx_lock(&atm_descriptors_list_lock);
+		queue_remove(&atm_descriptors_list, task_descriptor, atm_task_descriptor_t, descriptor_elt);
+		lck_mtx_unlock(&atm_descriptors_list_lock);
 #endif
-	/* release the send right for the named memory entry */
-	ipc_port_release_send(task_descriptor->trace_buffer);
-	lck_mtx_destroy(&task_descriptor->lock, &atm_lock_grp);
-	zfree(atm_descriptors_zone, task_descriptor);
-	return;
-}
-
-
-/*
- * Routine: atm_link_get_reference
- * Purpose: Get a reference count on atm link object.
- * Returns: None.
- */
-static void
-atm_link_get_reference(atm_link_object_t link_object)
-{
-	atm_link_object_reference_internal(link_object);
+		/* release the send right for the named memory entry */
+		ipc_port_release_send(task_descriptor->trace_buffer);
+		lck_mtx_destroy(&task_descriptor->lock, &atm_lock_grp);
+		zfree(atm_descriptors_zone, task_descriptor);
+	}
 }
 
 

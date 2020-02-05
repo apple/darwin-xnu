@@ -54,7 +54,7 @@ IOMultiMemoryDescriptor * IOMultiMemoryDescriptor::withDescriptors(
 		    /* withDirection */ withDirection,
 		    /* asReference   */ asReference ) == false) {
 		me->release();
-		me = 0;
+		me = NULL;
 	}
 
 	return me;
@@ -97,7 +97,7 @@ IOMultiMemoryDescriptor::initWithDescriptors(
 
 	// Initialize our minimal state.
 
-	_descriptors            = 0;
+	_descriptors            = NULL;
 	_descriptorsCount       = withCount;
 	_descriptorsIsAllocated = asReference ? false : true;
 	_flags                  = withDirection;
@@ -105,14 +105,14 @@ IOMultiMemoryDescriptor::initWithDescriptors(
 	_direction              = (IODirection) (_flags & kIOMemoryDirectionMask);
 #endif /* !__LP64__ */
 	_length                 = 0;
-	_mappings               = 0;
+	_mappings               = NULL;
 	_tag                    = 0;
 
 	if (asReference) {
 		_descriptors = descriptors;
 	} else {
 		_descriptors = IONew(IOMemoryDescriptor *, withCount);
-		if (_descriptors == 0) {
+		if (_descriptors == NULL) {
 			return false;
 		}
 
@@ -391,6 +391,28 @@ IOMultiMemoryDescriptor::setPurgeable( IOOptionBits newState,
 	}
 	if (oldState) {
 		*oldState = totalState;
+	}
+
+	return err;
+}
+
+IOReturn
+IOMultiMemoryDescriptor::setOwnership( task_t newOwner,
+    int newLedgerTag,
+    IOOptionBits newLedgerOptions )
+{
+	IOReturn     err;
+
+	if (iokit_iomd_setownership_enabled == FALSE) {
+		return kIOReturnUnsupported;
+	}
+
+	err = kIOReturnSuccess;
+	for (unsigned index = 0; index < _descriptorsCount; index++) {
+		err = _descriptors[index]->setOwnership(newOwner, newLedgerTag, newLedgerOptions);
+		if (kIOReturnSuccess != err) {
+			break;
+		}
 	}
 
 	return err;

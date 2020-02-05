@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -76,15 +76,16 @@
 
 #ifdef BSD_KERNEL_PRIVATE
 #include <stdbool.h>
+#include <kern/locks.h>
 
 /* Global variables for the kernel. */
 
 /* 1.1 */
 extern long hostid;
 extern char hostname[MAXHOSTNAMELEN];
-extern int hostnamelen;
+extern lck_mtx_t hostname_lock;
 extern char domainname[MAXHOSTNAMELEN];
-extern int domainnamelen;
+extern lck_mtx_t domainname_lock;
 
 /* 1.2 */
 extern int stathz;              /* statistics clock's frequency */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -118,22 +118,18 @@ struct  llinfo_nd6 {
 #ifdef BSD_KERNEL_PRIVATE
 
 #define ND6_CACHE_STATE_TRANSITION(ln, nstate) do {\
-	struct rtentry *ln_rt = (ln)->ln_rt; \
 	if (nd6_debug >= 1) {\
-	        nd6log((LOG_INFO,\
-	            "[%s:%d]: NDP cache entry changed from %s -> %s",\
+	        struct rtentry *ln_rt = ln != NULL ? (ln)->ln_rt : NULL; \
+	        nd6log(info,\
+	            "[%s:%d]: NDP cache entry changed from %s -> %s for address %s.\n",\
 	            __func__,\
 	            __LINE__,\
 	            ndcache_state2str((ln)->ln_state),\
-	            ndcache_state2str(nstate)));\
-	        if (ln_rt != NULL)\
-	                nd6log((LOG_INFO,\
-	                    " for address: %s.\n",\
-	                    ip6_sprintf(&SIN6(rt_key(ln_rt))->sin6_addr)));\
-	        else\
-	                nd6log((LOG_INFO, "\n"));\
+	            ndcache_state2str(nstate),\
+	            ln_rt != NULL ? ip6_sprintf(&SIN6(rt_key(ln_rt))->sin6_addr) : "N/A");\
 	}\
-	(ln)->ln_state = nstate;\
+	if (ln != NULL)\
+	        (ln)->ln_state = nstate;\
 } while(0)
 
 #define ND6_IS_LLINFO_PROBREACH(n) ((n)->ln_state > ND6_LLINFO_INCOMPLETE)
@@ -444,7 +440,7 @@ struct  in6_ndifreq_32 {
 
 struct  in6_ndifreq_64 {
 	char ifname[IFNAMSIZ];
-	u_long ifindex  __attribute__((aligned(8)));
+	u_int64_t ifindex  __attribute__((aligned(8)));
 };
 #endif /* BSD_KERNEL_PRIVATE */
 
@@ -758,9 +754,11 @@ extern int nd6_debug;
 extern int nd6_onlink_ns_rfc4861;
 extern int nd6_optimistic_dad;
 
-#define nd6log0(x)      do { log x; } while (0)
-#define nd6log(x)       do { if (nd6_debug >= 1) log x; } while (0)
-#define nd6log2(x)      do { if (nd6_debug >= 2) log x; } while (0)
+#include <os/log.h>
+
+#define nd6log0(type, ...)      do { os_log_##type(OS_LOG_DEFAULT, __VA_ARGS__); } while (0)
+#define nd6log(type, ...)       do { if (nd6_debug >= 1) os_log_##type(OS_LOG_DEFAULT, __VA_ARGS__); } while (0)
+#define nd6log2(type, ...)      do { if (nd6_debug >= 2) os_log_##type(OS_LOG_DEFAULT, __VA_ARGS__); } while (0)
 
 #define ND6_OPTIMISTIC_DAD_LINKLOCAL    (1 << 0)
 #define ND6_OPTIMISTIC_DAD_AUTOCONF     (1 << 1)
@@ -867,9 +865,9 @@ extern void nd6_llreach_set_reachable(struct ifnet *, void *, unsigned int);
 extern void nd6_llreach_use(struct llinfo_nd6 *);
 extern void nd6_alt_node_addr_decompose(struct ifnet *, struct sockaddr *,
     struct sockaddr_dl *, struct sockaddr_in6 *);
-extern void nd6_alt_node_present(struct ifnet *, struct sockaddr_in6 *,
+extern int nd6_alt_node_present(struct ifnet *, struct sockaddr_in6 *,
     struct sockaddr_dl *, int32_t, int, int);
-extern void nd6_alt_node_absent(struct ifnet *, struct sockaddr_in6 *);
+extern void nd6_alt_node_absent(struct ifnet *, struct sockaddr_in6 *, struct sockaddr_dl *);
 
 /* nd6_rtr.c */
 extern struct in6_ifaddr *in6_pfx_newpersistaddr(struct nd_prefix *, int,

@@ -618,6 +618,7 @@ vnode_pagein(
 			 */
 			if ((error = VNOP_PAGEIN(vp, NULL, upl_offset, (off_t)f_offset,
 			    size, flags, vfs_context_current()))) {
+				set_thread_pagein_error(current_thread(), error);
 				result = PAGER_ERROR;
 				error  = PAGER_ERROR;
 			}
@@ -761,6 +762,7 @@ vnode_pagein(
 						ubc_upl_abort_range(upl, (upl_offset_t) xoff, xsize, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
 					}
 				}
+				set_thread_pagein_error(current_thread(), error);
 				result = PAGER_ERROR;
 				error  = PAGER_ERROR;
 			}

@@ -367,17 +367,21 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	/* Restart timer interrupts */
 	rtc_timer_start();
 
-#if HIBERNATION
 
+#if MONOTONIC
+	mt_cpu_up(cdp);
+#endif /* MONOTONIC */
+
+#if HIBERNATION
 	kprintf("ret from acpi_sleep_cpu hib=%d\n", did_hibernate);
-#endif
+#endif /* HIBERNATION */
 
 #if CONFIG_SLEEP
 	/* Becase we don't save the bootstrap page, and we share it
 	 * between sleep and mp slave init, we need to recreate it
 	 * after coming back from sleep or hibernate */
 	install_real_mode_bootstrap(slave_pstart);
-#endif
+#endif /* CONFIG_SLEEP */
 }
 
 /*
@@ -402,9 +406,17 @@ acpi_idle_kernel(acpi_sleep_callback func, void *refcon)
 
 	assert(cpu_number() == master_cpu);
 
+#if MONOTONIC
+	mt_cpu_down(cpu_datap(0));
+#endif /* MONOTONIC */
+
 	/* Cancel any pending deadline */
 	setPop(0);
-	while (lapic_is_interrupting(LAPIC_TIMER_VECTOR)) {
+	while (lapic_is_interrupting(LAPIC_TIMER_VECTOR)
+#if MONOTONIC
+	    || lapic_is_interrupting(LAPIC_VECTOR(PERFCNT))
+#endif /* MONOTONIC */
+	    ) {
 		(void) ml_set_interrupts_enabled(TRUE);
 		setPop(0);
 		ml_set_interrupts_enabled(FALSE);

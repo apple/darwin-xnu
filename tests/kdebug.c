@@ -16,13 +16,18 @@
 #include <sys/kdebug.h>
 #include <sys/kdebug_signpost.h>
 #include <sys/sysctl.h>
+#include <stdint.h>
+
+#include "ktrace_helpers.h"
 
 T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.ktrace"),
 	T_META_ASROOT(true));
 
-#define KDBG_TEST_MACROS    1
-#define KDBG_TEST_OLD_TIMES 2
+#define KDBG_TEST_MACROS         1
+#define KDBG_TEST_OLD_TIMES      2
+#define KDBG_TEST_FUTURE_TIMES   3
+#define KDBG_TEST_IOP_SYNC_FLUSH 4
 
 static void
 assert_kdebug_test(unsigned int flavor)
@@ -39,6 +44,8 @@ assert_kdebug_test(unsigned int flavor)
 
 T_DECL(kdebug_trace_syscall, "test that kdebug_trace(2) emits correct events")
 {
+	start_controlling_ktrace();
+
 	ktrace_session_t s = ktrace_session_create();
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
 
@@ -49,10 +56,16 @@ T_DECL(kdebug_trace_syscall, "test that kdebug_trace(2) emits correct events")
 		events_seen++;
 		T_PASS("saw traced event");
 
-		T_EXPECT_EQ(tp->arg1, 1UL, "argument 1 of traced event is correct");
-		T_EXPECT_EQ(tp->arg2, 2UL, "argument 2 of traced event is correct");
-		T_EXPECT_EQ(tp->arg3, 3UL, "argument 3 of traced event is correct");
-		T_EXPECT_EQ(tp->arg4, 4UL, "argument 4 of traced event is correct");
+		if (ktrace_is_kernel_64_bit(s)) {
+			T_EXPECT_EQ(tp->arg1, UINT64_C(0xfeedfacefeedface),
+					"argument 1 of traced event is correct");
+		} else {
+			T_EXPECT_EQ(tp->arg1, UINT64_C(0xfeedface),
+					"argument 1 of traced event is correct");
+		}
+		T_EXPECT_EQ(tp->arg2, 2ULL, "argument 2 of traced event is correct");
+		T_EXPECT_EQ(tp->arg3, 3ULL, "argument 3 of traced event is correct");
+		T_EXPECT_EQ(tp->arg4, 4ULL, "argument 4 of traced event is correct");
 
 		ktrace_end(s, 1);
 	});
@@ -66,7 +79,8 @@ T_DECL(kdebug_trace_syscall, "test that kdebug_trace(2) emits correct events")
 	ktrace_filter_pid(s, getpid());
 
 	T_ASSERT_POSIX_ZERO(ktrace_start(s, dispatch_get_main_queue()), NULL);
-	T_ASSERT_POSIX_SUCCESS(kdebug_trace(TRACE_DEBUGID, 1, 2, 3, 4), NULL);
+	T_ASSERT_POSIX_SUCCESS(kdebug_trace(TRACE_DEBUGID, 0xfeedfacefeedface, 2,
+			3, 4), NULL);
 	ktrace_end(s, 0);
 
 	dispatch_main();
@@ -78,6 +92,8 @@ T_DECL(kdebug_trace_syscall, "test that kdebug_trace(2) emits correct events")
 T_DECL(kdebug_signpost_syscall,
     "test that kdebug_signpost(2) emits correct events")
 {
+	start_controlling_ktrace();
+
 	ktrace_session_t s = ktrace_session_create();
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
 
@@ -92,10 +108,10 @@ T_DECL(kdebug_signpost_syscall,
 		single_seen++;
 		T_PASS("single signpost is traced");
 
-		T_EXPECT_EQ(tp->arg1, 1UL, "argument 1 of single signpost is correct");
-		T_EXPECT_EQ(tp->arg2, 2UL, "argument 2 of single signpost is correct");
-		T_EXPECT_EQ(tp->arg3, 3UL, "argument 3 of single signpost is correct");
-		T_EXPECT_EQ(tp->arg4, 4UL, "argument 4 of single signpost is correct");
+		T_EXPECT_EQ(tp->arg1, 1ULL, "argument 1 of single signpost is correct");
+		T_EXPECT_EQ(tp->arg2, 2ULL, "argument 2 of single signpost is correct");
+		T_EXPECT_EQ(tp->arg3, 3ULL, "argument 3 of single signpost is correct");
+		T_EXPECT_EQ(tp->arg4, 4ULL, "argument 4 of single signpost is correct");
 	});
 
 	ktrace_events_single_paired(s,
@@ -104,18 +120,17 @@ T_DECL(kdebug_signpost_syscall,
 		paired_seen++;
 		T_PASS("paired signposts are traced");
 
-		T_EXPECT_EQ(start->arg1, 5UL, "argument 1 of start signpost is correct");
-		T_EXPECT_EQ(start->arg2, 6UL, "argument 2 of start signpost is correct");
-		T_EXPECT_EQ(start->arg3, 7UL, "argument 3 of start signpost is correct");
-		T_EXPECT_EQ(start->arg4, 8UL, "argument 4 of start signpost is correct");
+		T_EXPECT_EQ(start->arg1, 5ULL, "argument 1 of start signpost is correct");
+		T_EXPECT_EQ(start->arg2, 6ULL, "argument 2 of start signpost is correct");
+		T_EXPECT_EQ(start->arg3, 7ULL, "argument 3 of start signpost is correct");
+		T_EXPECT_EQ(start->arg4, 8ULL, "argument 4 of start signpost is correct");
 
-		T_EXPECT_EQ(end->arg1, 9UL, "argument 1 of end signpost is correct");
-		T_EXPECT_EQ(end->arg2, 10UL, "argument 2 of end signpost is correct");
-		T_EXPECT_EQ(end->arg3, 11UL, "argument 3 of end signpost is correct");
-		T_EXPECT_EQ(end->arg4, 12UL, "argument 4 of end signpost is correct");
+		T_EXPECT_EQ(end->arg1, 9ULL, "argument 1 of end signpost is correct");
+		T_EXPECT_EQ(end->arg2, 10ULL, "argument 2 of end signpost is correct");
+		T_EXPECT_EQ(end->arg3, 11ULL, "argument 3 of end signpost is correct");
+		T_EXPECT_EQ(end->arg4, 12ULL, "argument 4 of end signpost is correct");
 
-		T_EXPECT_EQ(single_seen, 1,
-		"signposts are traced in the correct order");
+		T_EXPECT_EQ(single_seen, 1, "signposts are traced in the correct order");
 
 		ktrace_end(s, 1);
 	});
@@ -134,6 +149,8 @@ T_DECL(kdebug_signpost_syscall,
 	T_ASSERT_POSIX_ZERO(ktrace_start(s, dispatch_get_main_queue()),
 	    "started tracing");
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
 	T_EXPECT_POSIX_SUCCESS(kdebug_signpost(SIGNPOST_SINGLE_CODE, 1, 2, 3, 4),
 	    "emitted single signpost");
 	T_EXPECT_POSIX_SUCCESS(
@@ -142,7 +159,66 @@ T_DECL(kdebug_signpost_syscall,
 	T_EXPECT_POSIX_SUCCESS(
 		kdebug_signpost_end(SIGNPOST_PAIRED_CODE, 9, 10, 11, 12),
 		"emitted end signpost");
+#pragma clang diagnostic pop
 	ktrace_end(s, 0);
+
+	dispatch_main();
+}
+
+T_DECL(syscall_tracing,
+		"ensure that syscall arguments are traced propertly")
+{
+	ktrace_session_t s = ktrace_session_create();
+	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
+
+	__block bool seen = 0;
+
+	ktrace_filter_pid(s, getpid());
+
+	static const int telemetry_syscall_no = 451;
+	static const uint64_t arg1 = 0xfeedfacefeedface;
+
+	ktrace_events_single(s, BSDDBG_CODE(DBG_BSD_EXCP_SC, telemetry_syscall_no),
+			^(struct trace_point *evt){
+		if (KDBG_EXTRACT_CODE(evt->debugid) != telemetry_syscall_no || seen) {
+			return;
+		}
+
+		seen = true;
+		if (ktrace_is_kernel_64_bit(s)) {
+			T_EXPECT_EQ(evt->arg1, arg1,
+					"argument 1 of syscall event is correct");
+		} else {
+			T_EXPECT_EQ(evt->arg1, (uint64_t)(uint32_t)(arg1),
+					"argument 1 of syscall event is correct");
+		}
+
+		ktrace_end(s, 1);
+	});
+
+	ktrace_set_completion_handler(s, ^{
+		T_ASSERT_TRUE(seen,
+				"should have seen a syscall event for kevent_id(2)");
+		ktrace_session_destroy(s);
+		T_END;
+	});
+
+	int error = ktrace_start(s, dispatch_get_main_queue());
+	T_ASSERT_POSIX_ZERO(error, "started tracing");
+
+	/*
+	 * telemetry(2) has a 64-bit argument that will definitely be traced, and
+	 * is unlikely to be used elsewhere by this process.
+	 */
+	extern int __telemetry(uint64_t cmd, uint64_t deadline, uint64_t interval,
+			uint64_t leeway, uint64_t arg4, uint64_t arg5);
+	(void)__telemetry(arg1, 0, 0, 0, 0, 0);
+
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
+			dispatch_get_main_queue(), ^{
+		T_LOG("ending test due to timeout");
+		ktrace_end(s, 0);
+	});
 
 	dispatch_main();
 }
@@ -160,6 +236,8 @@ T_DECL(wrapping,
 	kbufinfo_t buf_info;
 	int wait_wrapping_secs = (WRAPPING_EVENTS_COUNT / TRACE_ITERATIONS) + 5;
 	int current_secs = wait_wrapping_secs;
+
+	start_controlling_ktrace();
 
 	/* use sysctls manually to bypass libktrace assumptions */
 
@@ -239,12 +317,14 @@ T_DECL(reject_old_events,
 {
 	__block uint64_t event_horizon_ts;
 
+	start_controlling_ktrace();
+
 	ktrace_session_t s = ktrace_session_create();
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
 
 	__block int events = 0;
-	ktrace_events_range(s, KDBG_EVENTID(DBG_BSD, DBG_BSD_KDEBUG_TEST, 0),
-	    KDBG_EVENTID(DBG_BSD + 1, 0, 0), ^(struct trace_point *tp) {
+	ktrace_events_single(s, KDBG_EVENTID(DBG_BSD, DBG_BSD_KDEBUG_TEST, 1),
+	    ^(struct trace_point *tp) {
 		events++;
 		T_EXPECT_GT(tp->timestamp, event_horizon_ts,
 		"events in trace should be from after tracing began");
@@ -278,6 +358,8 @@ T_DECL(ascending_time_order,
 	__block uint32_t prev_debugid = 0;
 	__block unsigned int prev_cpu = 0;
 	__block bool in_order = true;
+
+	start_controlling_ktrace();
 
 	ktrace_session_t s = ktrace_session_create();
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
@@ -450,6 +532,8 @@ T_DECL(dyld_events, "test that dyld registering libraries emits events")
 	uint8_t *saw_mapping = &(saw_events[0]);
 	uint8_t *saw_unmapping = &(saw_events[1]);
 	uint8_t *saw_shared_cache = &(saw_events[2]);
+
+	start_controlling_ktrace();
 
 	ktrace_session_t s = ktrace_session_create();
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
@@ -651,6 +735,8 @@ expect_kdbg_test_events(ktrace_session_t s, bool use_all_callback,
 
 T_DECL(kernel_events, "ensure kernel macros work")
 {
+	start_controlling_ktrace();
+
 	ktrace_session_t s = ktrace_session_create();
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
 
@@ -665,7 +751,7 @@ T_DECL(kernel_events, "ensure kernel macros work")
 		 * OS.
 		 */
 		unsigned int dev_exp;
-#if TARGET_OS_EMBEDDED
+#if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 		dev_exp = is_development_kernel() ? EXP_KERNEL_EVENTS : 0U;
 #else
 		dev_exp = EXP_KERNEL_EVENTS;
@@ -685,6 +771,8 @@ T_DECL(kernel_events, "ensure kernel macros work")
 
 T_DECL(kernel_events_filtered, "ensure that the filtered kernel macros work")
 {
+	start_controlling_ktrace();
+
 	ktrace_session_t s = ktrace_session_create();
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
 
@@ -713,6 +801,8 @@ T_DECL(kernel_events_filtered, "ensure that the filtered kernel macros work")
 T_DECL(kernel_events_noprocfilt,
     "ensure that the no process filter kernel macros work")
 {
+	start_controlling_ktrace();
+
 	ktrace_session_t s = ktrace_session_create();
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
 
@@ -744,7 +834,7 @@ T_DECL(kernel_events_noprocfilt,
 static volatile bool continue_abuse = true;
 
 #define STRESS_DEBUGID (0xfeedfac0)
-#define ABUSE_SECS (10)
+#define ABUSE_SECS (2)
 #define TIMER_NS (100 * NSEC_PER_USEC)
 /*
  * Use the quantum as the gap threshold.
@@ -767,6 +857,8 @@ kdebug_abuser_thread(void *ctx)
 T_DECL(stress, "emit events on all but one CPU with a small buffer",
     T_META_CHECK_LEAKS(false))
 {
+	start_controlling_ktrace();
+
 	T_SETUPBEGIN;
 	ktrace_session_t s = ktrace_session_create();
 	T_WITH_ERRNO; T_QUIET; T_ASSERT_NOTNULL(s, "ktrace_session_create");
@@ -875,7 +967,7 @@ T_DECL(stress, "emit events on all but one CPU with a small buffer",
 			prev_timestamp = tp->timestamp;
 		});
 		ktrace_events_single(sread, TRACE_LOST_EVENTS, ^(struct trace_point *tp){
-			T_LOG("lost: %llu on %d (%lu)", tp->timestamp, tp->cpuid, tp->arg1);
+			T_LOG("lost: %llu on %d (%llu)", tp->timestamp, tp->cpuid, tp->arg1);
 		});
 
 		__block uint64_t last_write = 0;
@@ -891,7 +983,7 @@ T_DECL(stress, "emit events on all but one CPU with a small buffer",
 			end->timestamp - start->timestamp, &dur_ns);
 			T_QUIET; T_ASSERT_POSIX_ZERO(converror, "convert timestamp to ns");
 
-			T_LOG("write: %llu (+%gs): %gus on %d: %lu events", start->timestamp,
+			T_LOG("write: %llu (+%gs): %gus on %d: %llu events", start->timestamp,
 			(double)delta_ns / 1e9, (double)dur_ns / 1e3, end->cpuid, end->arg1);
 			last_write = end->timestamp;
 		});
@@ -974,6 +1066,8 @@ T_DECL(stress, "emit events on all but one CPU with a small buffer",
 T_DECL(round_trips,
     "test sustained tracing with multiple round-trips through the kernel")
 {
+	start_controlling_ktrace();
+
 	ktrace_session_t s = ktrace_session_create();
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
 
@@ -1037,6 +1131,8 @@ T_DECL(round_trips,
  */
 T_DECL(event_coverage, "ensure events appear up to the end of tracing")
 {
+	start_controlling_ktrace();
+
 	ktrace_session_t s = ktrace_session_create();
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
 
@@ -1131,6 +1227,8 @@ set_nevents(unsigned int nevents)
 
 T_DECL(set_buffer_size, "ensure large buffer sizes can be set")
 {
+	start_controlling_ktrace();
+
 	uint64_t memsize = 0;
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("hw.memsize", &memsize,
 	    &(size_t){ sizeof(memsize) }, NULL, 0), "get memory size");
@@ -1157,4 +1255,206 @@ T_DECL(set_buffer_size, "ensure large buffer sizes can be set")
 		T_ASSERT_GE(actualevents, i - minevents,
 		    "%u events in kernel when %u requested", actualevents, i);
 	}
+}
+
+static void *
+donothing(__unused void *arg)
+{
+	return NULL;
+}
+
+T_DECL(long_names, "ensure long command names are reported")
+{
+	start_controlling_ktrace();
+
+	char longname[] = "thisisaverylongprocessname!";
+	char *longname_ptr = longname;
+	static_assert(sizeof(longname) > 16,
+	    "the name should be longer than MAXCOMLEN");
+
+	int ret = sysctlbyname("kern.procname", NULL, NULL, longname,
+	    sizeof(longname));
+	T_ASSERT_POSIX_SUCCESS(ret,
+	    "use sysctl kern.procname to lengthen the name");
+
+	ktrace_session_t ktsess = ktrace_session_create();
+
+	/*
+	 * 32-bit kernels can only trace 16 bytes of the string in their event
+	 * arguments.
+	 */
+	if (!ktrace_is_kernel_64_bit(ktsess)) {
+		longname[16] = '\0';
+	}
+
+	ktrace_filter_pid(ktsess, getpid());
+
+	__block bool saw_newthread = false;
+	ktrace_events_single(ktsess, TRACE_STRING_NEWTHREAD,
+	    ^(struct trace_point *tp) {
+		if (ktrace_get_pid_for_thread(ktsess, tp->threadid) ==
+		    getpid()) {
+			saw_newthread = true;
+
+			char argname[32] = {};
+			strncat(argname, (char *)&tp->arg1, sizeof(tp->arg1));
+			strncat(argname, (char *)&tp->arg2, sizeof(tp->arg2));
+			strncat(argname, (char *)&tp->arg3, sizeof(tp->arg3));
+			strncat(argname, (char *)&tp->arg4, sizeof(tp->arg4));
+
+			T_EXPECT_EQ_STR((char *)argname, longname_ptr,
+			    "process name of new thread should be long");
+
+			ktrace_end(ktsess, 1);
+		}
+	});
+
+	ktrace_set_completion_handler(ktsess, ^{
+		ktrace_session_destroy(ktsess);
+		T_EXPECT_TRUE(saw_newthread,
+		    "should have seen the new thread");
+		T_END;
+	});
+
+	int error = ktrace_start(ktsess, dispatch_get_main_queue());
+	T_ASSERT_POSIX_ZERO(error, "started tracing");
+
+	pthread_t thread = NULL;
+	error = pthread_create(&thread, NULL, donothing, NULL);
+	T_ASSERT_POSIX_ZERO(error, "create new thread");
+
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
+	    dispatch_get_main_queue(), ^{
+		ktrace_end(ktsess, 0);
+	});
+
+	error = pthread_join(thread, NULL);
+	T_ASSERT_POSIX_ZERO(error, "join to thread");
+
+	dispatch_main();
+}
+
+T_DECL(continuous_time, "make sure continuous time status can be queried",
+	T_META_RUN_CONCURRENTLY(true))
+{
+	bool cont_time = kdebug_using_continuous_time();
+	T_ASSERT_FALSE(cont_time, "should not be using continuous time yet");
+}
+
+static const uint32_t frame_eventid = KDBG_EVENTID(DBG_BSD,
+    DBG_BSD_KDEBUG_TEST, 1);
+
+static ktrace_session_t
+future_events_session(void)
+{
+	ktrace_session_t ktsess = ktrace_session_create();
+	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(ktsess, "failed to create session");
+
+	ktrace_events_single(ktsess, KDBG_EVENTID(DBG_BSD, DBG_BSD_KDEBUG_TEST, 0),
+	    ^(struct trace_point *tp __unused) {
+		T_FAIL("saw future test event from IOP");
+	});
+	ktrace_events_single(ktsess, frame_eventid, ^(struct trace_point *tp) {
+		if (tp->debugid & DBG_FUNC_START) {
+			T_LOG("saw start event");
+		} else {
+			T_LOG("saw event traced after trying to trace future event, ending");
+			ktrace_end(ktsess, 1);
+		}
+	});
+
+	ktrace_set_collection_interval(ktsess, 100);
+	return ktsess;
+}
+
+T_DECL(future_iop_events,
+    "make sure IOPs cannot trace events in the future while live tracing")
+{
+	start_controlling_ktrace();
+	ktrace_session_t ktsess = future_events_session();
+	ktrace_set_completion_handler(ktsess, ^{
+		ktrace_session_destroy(ktsess);
+		T_END;
+	});
+
+	T_ASSERT_POSIX_ZERO(ktrace_start(ktsess, dispatch_get_main_queue()),
+	    "start tracing");
+	kdebug_trace(frame_eventid | DBG_FUNC_START, 0, 0, 0, 0);
+	assert_kdebug_test(KDBG_TEST_FUTURE_TIMES);
+	kdebug_trace(frame_eventid | DBG_FUNC_END, 0, 0, 0, 0);
+
+	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC),
+	    dispatch_get_main_queue(), ^{
+		T_FAIL("ending tracing after timeout");
+		ktrace_end(ktsess, 0);
+	});
+
+	dispatch_main();
+}
+
+T_DECL(future_iop_events_disabled,
+    "make sure IOPs cannot trace events in the future after disabling tracing")
+{
+	start_controlling_ktrace();
+	ktrace_session_t ktsess = future_events_session();
+	T_ASSERT_POSIX_ZERO(ktrace_configure(ktsess), "configure tracing");
+
+	kdebug_trace(frame_eventid | DBG_FUNC_START, 0, 0, 0, 0);
+	assert_kdebug_test(KDBG_TEST_FUTURE_TIMES);
+	kdebug_trace(frame_eventid | DBG_FUNC_END, 0, 0, 0, 0);
+
+	T_ASSERT_POSIX_ZERO(ktrace_disable_configured(ktsess),
+	    "disable tracing");
+	ktrace_session_destroy(ktsess);
+
+	ktsess = future_events_session();
+	T_QUIET;
+	T_ASSERT_POSIX_ZERO(ktrace_set_use_existing(ktsess), "use existing trace");
+	ktrace_set_completion_handler(ktsess, ^{
+		ktrace_session_destroy(ktsess);
+		T_END;
+	});
+
+	T_ASSERT_POSIX_ZERO(ktrace_start(ktsess, dispatch_get_main_queue()),
+	    "start tracing existing session");
+
+	dispatch_main();
+}
+
+T_DECL(iop_events_disable,
+    "make sure IOP events are flushed before disabling trace")
+{
+	start_controlling_ktrace();
+	ktrace_session_t ktsess = future_events_session();
+
+	assert_kdebug_test(KDBG_TEST_IOP_SYNC_FLUSH);
+	T_ASSERT_POSIX_ZERO(ktrace_configure(ktsess), "configure tracing");
+
+	kdebug_trace(frame_eventid | DBG_FUNC_START, 0, 0, 0, 0);
+
+	T_ASSERT_POSIX_ZERO(ktrace_disable_configured(ktsess),
+	    "disable tracing");
+	ktrace_session_destroy(ktsess);
+
+	ktsess = ktrace_session_create();
+	T_QUIET; T_WITH_ERRNO;
+	T_ASSERT_NOTNULL(ktsess, "create session");
+
+	ktrace_events_single(ktsess,
+	    KDBG_EVENTID(DBG_BSD, DBG_BSD_KDEBUG_TEST, 0xff),
+	    ^(struct trace_point *tp __unused) {
+		T_PASS("saw IOP event from sync flush");
+	});
+
+	T_QUIET;
+	T_ASSERT_POSIX_ZERO(ktrace_set_use_existing(ktsess), "use existing trace");
+	ktrace_set_completion_handler(ktsess, ^{
+		ktrace_session_destroy(ktsess);
+		T_END;
+	});
+
+	T_ASSERT_POSIX_ZERO(ktrace_start(ktsess, dispatch_get_main_queue()),
+	    "start tracing existing session");
+
+	dispatch_main();
 }

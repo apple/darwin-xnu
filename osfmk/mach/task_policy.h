@@ -337,6 +337,7 @@ typedef struct task_policy_state *task_policy_state_t;
 #define TASK_APPTYPE_DAEMON_BACKGROUND   4
 #define TASK_APPTYPE_APP_DEFAULT         5
 #define TASK_APPTYPE_APP_TAL             6
+#define TASK_APPTYPE_DRIVER              7
 
 /* task policy state flags */
 #define TASK_IMP_RECEIVER                    0x00000001

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2018-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -135,7 +135,7 @@ if_low_power_evhdlr_init(void)
 {
 	eventhandler_lists_ctxt_init(&if_low_power_evhdlr_ctx);
 
-	(void) EVENTHANDLER_REGISTER(&if_low_power_evhdlr_ctx,
+	(void)EVENTHANDLER_REGISTER(&if_low_power_evhdlr_ctx,
 	    if_low_power_event,
 	    if_low_power_evhdlr_callback,
 	    eventhandler_entry_dummy_arg,

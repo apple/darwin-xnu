@@ -112,50 +112,54 @@ sotoxsocket_n(struct socket *so, struct xsocket_n *xso)
 	xso->xso_len = sizeof(struct xsocket_n);
 	xso->xso_kind = XSO_SOCKET;
 
-	if (so != NULL) {
-		xso->xso_so = (uint64_t)VM_KERNEL_ADDRPERM(so);
-		xso->so_type = so->so_type;
-		xso->so_options = so->so_options;
-		xso->so_linger = so->so_linger;
-		xso->so_state = so->so_state;
-		xso->so_pcb = (uint64_t)VM_KERNEL_ADDRPERM(so->so_pcb);
-		if (so->so_proto) {
-			xso->xso_protocol = SOCK_PROTO(so);
-			xso->xso_family = SOCK_DOM(so);
-		} else {
-			xso->xso_protocol = xso->xso_family = 0;
-		}
-		xso->so_qlen = so->so_qlen;
-		xso->so_incqlen = so->so_incqlen;
-		xso->so_qlimit = so->so_qlimit;
-		xso->so_timeo = so->so_timeo;
-		xso->so_error = so->so_error;
-		xso->so_pgid = so->so_pgid;
-		xso->so_oobmark = so->so_oobmark;
-		xso->so_uid = kauth_cred_getuid(so->so_cred);
-		xso->so_last_pid = so->last_pid;
-		xso->so_e_pid = so->e_pid;
+	if (so == NULL) {
+		return;
 	}
+
+	xso->xso_so = (uint64_t)VM_KERNEL_ADDRPERM(so);
+	xso->so_type = so->so_type;
+	xso->so_options = so->so_options;
+	xso->so_linger = so->so_linger;
+	xso->so_state = so->so_state;
+	xso->so_pcb = (uint64_t)VM_KERNEL_ADDRPERM(so->so_pcb);
+	if (so->so_proto) {
+		xso->xso_protocol = SOCK_PROTO(so);
+		xso->xso_family = SOCK_DOM(so);
+	} else {
+		xso->xso_protocol = xso->xso_family = 0;
+	}
+	xso->so_qlen = so->so_qlen;
+	xso->so_incqlen = so->so_incqlen;
+	xso->so_qlimit = so->so_qlimit;
+	xso->so_timeo = so->so_timeo;
+	xso->so_error = so->so_error;
+	xso->so_pgid = so->so_pgid;
+	xso->so_oobmark = so->so_oobmark;
+	xso->so_uid = kauth_cred_getuid(so->so_cred);
+	xso->so_last_pid = so->last_pid;
+	xso->so_e_pid = so->e_pid;
 }
 
 __private_extern__ void
 sbtoxsockbuf_n(struct sockbuf *sb, struct xsockbuf_n *xsb)
 {
 	xsb->xsb_len = sizeof(struct xsockbuf_n);
-	xsb->xsb_kind = (sb->sb_flags & SB_RECV) ? XSO_RCVBUF : XSO_SNDBUF;
 
-	if (sb != NULL) {
-		xsb->sb_cc = sb->sb_cc;
-		xsb->sb_hiwat = sb->sb_hiwat;
-		xsb->sb_mbcnt = sb->sb_mbcnt;
-		xsb->sb_mbmax = sb->sb_mbmax;
-		xsb->sb_lowat = sb->sb_lowat;
-		xsb->sb_flags = sb->sb_flags;
-		xsb->sb_timeo = (short)(sb->sb_timeo.tv_sec * hz) +
-		    sb->sb_timeo.tv_usec / tick;
-		if (xsb->sb_timeo == 0 && sb->sb_timeo.tv_usec != 0) {
-			xsb->sb_timeo = 1;
-		}
+	if (sb == NULL) {
+		return;
+	}
+
+	xsb->xsb_kind = (sb->sb_flags & SB_RECV) ? XSO_RCVBUF : XSO_SNDBUF;
+	xsb->sb_cc = sb->sb_cc;
+	xsb->sb_hiwat = sb->sb_hiwat;
+	xsb->sb_mbcnt = sb->sb_mbcnt;
+	xsb->sb_mbmax = sb->sb_mbmax;
+	xsb->sb_lowat = sb->sb_lowat;
+	xsb->sb_flags = sb->sb_flags;
+	xsb->sb_timeo = (short)(sb->sb_timeo.tv_sec * hz) +
+	    sb->sb_timeo.tv_usec / tick;
+	if (xsb->sb_timeo == 0 && sb->sb_timeo.tv_usec != 0) {
+		xsb->sb_timeo = 1;
 	}
 }
 
@@ -166,6 +170,10 @@ sbtoxsockstat_n(struct socket *so, struct xsockstat_n *xst)
 
 	xst->xst_len = sizeof(struct xsockstat_n);
 	xst->xst_kind = XSO_STATS;
+
+	if (so == NULL) {
+		return;
+	}
 
 	for (i = 0; i < SO_TC_STATS_MAX; i++) {
 		xst->xst_tc_stats[i].rxpackets = so->so_tc_stats[i].rxpackets;

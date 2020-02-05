@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -220,7 +220,7 @@ static void mld_sched_timeout(void);
 /*
  * Normative references: RFC 2710, RFC 3590, RFC 3810.
  */
-static struct timeval mld_gsrdelay = {10, 0};
+static struct timeval mld_gsrdelay = {.tv_sec = 10, .tv_usec = 0};
 static LIST_HEAD(, mld_ifinfo) mli_head;
 
 static int querier_present_timers_running6;
@@ -304,8 +304,8 @@ struct mld_raopt {
  * Router Alert hop-by-hop option header.
  */
 static struct mld_raopt mld_ra = {
-	.hbh = { 0, 0 },
-	.pad = { .ip6o_type = IP6OPT_PADN, 0 },
+	.hbh = { .ip6h_nxt = 0, .ip6h_len = 0 },
+	.pad = { .ip6o_type = IP6OPT_PADN, .ip6o_len = 0 },
 	.ra = {
 		.ip6or_type = (u_int8_t)IP6OPT_ROUTER_ALERT,
 		.ip6or_len = (u_int8_t)(IP6OPT_RTALERT_LEN - 2),
@@ -449,7 +449,7 @@ sysctl_mld_v2enable SYSCTL_HANDLER_ARGS
 	int error;
 	int i;
 	struct mld_ifinfo *mli;
-	struct mld_tparams mtp = { 0, 0, 0, 0 };
+	struct mld_tparams mtp = { .qpt = 0, .it = 0, .cst = 0, .sct = 0 };
 
 	MLD_LOCK();
 
@@ -860,7 +860,7 @@ mld_v1_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 	struct in6_multi        *inm;
 	int                      err = 0, is_general_query;
 	uint16_t                 timer;
-	struct mld_tparams       mtp = { 0, 0, 0, 0 };
+	struct mld_tparams       mtp = { .qpt = 0, .it = 0, .cst = 0, .sct = 0 };
 
 	MLD_LOCK_ASSERT_NOTHELD();
 
@@ -907,7 +907,7 @@ mld_v1_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 		 * Embed scope ID of receiving interface in MLD query for
 		 * lookup whilst we don't hold other locks.
 		 */
-		in6_setscope(&mld->mld_addr, ifp, NULL);
+		(void)in6_setscope(&mld->mld_addr, ifp, NULL);
 	}
 
 	/*
@@ -1049,7 +1049,7 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 	int                      err = 0, is_general_query;
 	uint16_t                 timer;
 	uint8_t                  qrv;
-	struct mld_tparams       mtp = { 0, 0, 0, 0 };
+	struct mld_tparams       mtp = { .qpt = 0, .it = 0, .cst = 0, .sct = 0 };
 
 	MLD_LOCK_ASSERT_NOTHELD();
 
@@ -1132,7 +1132,7 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 		 * lookup whilst we don't hold other locks (due to KAME
 		 * locking lameness). We own this mbuf chain just now.
 		 */
-		in6_setscope(&mld->mld_addr, ifp, NULL);
+		(void)in6_setscope(&mld->mld_addr, ifp, NULL);
 	}
 
 	mli = MLD_IFINFO(ifp);
@@ -1432,7 +1432,7 @@ mld_v1_input_report(struct ifnet *ifp, struct mbuf *m,
 	 * whilst we don't hold other locks (due to KAME locking lameness).
 	 */
 	if (!IN6_IS_ADDR_UNSPECIFIED(&mld->mld_addr)) {
-		in6_setscope(&mld->mld_addr, ifp, NULL);
+		(void)in6_setscope(&mld->mld_addr, ifp, NULL);
 	}
 
 	/*
@@ -3651,7 +3651,7 @@ mld_dispatch_packet(struct mbuf *m)
 	m0->m_pkthdr.rcvif = lo_ifp;
 
 	ip6 = mtod(m0, struct ip6_hdr *);
-	(void) in6_setscope(&ip6->ip6_dst, ifp, NULL);
+	(void)in6_setscope(&ip6->ip6_dst, ifp, NULL);
 
 	/*
 	 * Retrieve the ICMPv6 type before handoff to ip6_output(),

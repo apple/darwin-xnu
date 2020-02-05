@@ -619,10 +619,10 @@ nd6_proxy_find_fwdroute(struct ifnet *ifp, struct route_in6 *ro6)
 	if ((rt = ro6->ro_rt) != NULL) {
 		RT_LOCK(rt);
 		if (!(rt->rt_flags & RTF_PROXY) || rt->rt_ifp == ifp) {
-			nd6log2((LOG_DEBUG, "%s: found incorrect prefix "
+			nd6log2(debug, "%s: found incorrect prefix "
 			    "proxy route for dst %s on %s\n", if_name(ifp),
 			    ip6_sprintf(dst6),
-			    if_name(rt->rt_ifp)));
+			    if_name(rt->rt_ifp));
 			RT_UNLOCK(rt);
 			/* look it up below */
 		} else {
@@ -701,9 +701,9 @@ nd6_proxy_find_fwdroute(struct ifnet *ifp, struct route_in6 *ro6)
 			rtfree_locked(rt);
 			rt = NULL;
 		} else {
-			nd6log2((LOG_DEBUG, "%s: found prefix proxy route "
+			nd6log2(debug, "%s: found prefix proxy route "
 			    "for dst %s\n", if_name(rt->rt_ifp),
-			    ip6_sprintf(dst6)));
+			    ip6_sprintf(dst6));
 			RT_UNLOCK(rt);
 			ro6->ro_rt = rt;        /* refcnt held by rtalloc1 */
 			lck_mtx_unlock(rnh_lock);
@@ -723,9 +723,9 @@ nd6_proxy_find_fwdroute(struct ifnet *ifp, struct route_in6 *ro6)
 			rtfree_locked(rt);
 			rt = NULL;
 		} else {
-			nd6log2((LOG_DEBUG, "%s: allocated prefix proxy "
+			nd6log2(debug, "%s: allocated prefix proxy "
 			    "route for dst %s\n", if_name(rt->rt_ifp),
-			    ip6_sprintf(dst6)));
+			    ip6_sprintf(dst6));
 			RT_UNLOCK(rt);
 			ro6->ro_rt = rt;        /* refcnt held by rtalloc1 */
 		}
@@ -733,9 +733,9 @@ nd6_proxy_find_fwdroute(struct ifnet *ifp, struct route_in6 *ro6)
 	VERIFY(rt != NULL || ro6->ro_rt == NULL);
 
 	if (fwd_ifp == NULL || rt == NULL) {
-		nd6log2((LOG_ERR, "%s: failed to find forwarding prefix "
+		nd6log2(error, "%s: failed to find forwarding prefix "
 		    "proxy entry for dst %s\n", if_name(ifp),
-		    ip6_sprintf(dst6)));
+		    ip6_sprintf(dst6));
 	}
 	lck_mtx_unlock(rnh_lock);
 }
@@ -929,12 +929,12 @@ nd6_prproxy_ns_output(struct ifnet *ifp, struct ifnet *exclifp,
 	}
 
 	if (exclifp == NULL) {
-		nd6log2((LOG_DEBUG, "%s: sending NS who has %s on ALL\n",
-		    if_name(ifp), ip6_sprintf(taddr)));
+		nd6log2(debug, "%s: sending NS who has %s on ALL\n",
+		    if_name(ifp), ip6_sprintf(taddr));
 	} else {
-		nd6log2((LOG_DEBUG, "%s: sending NS who has %s on ALL "
+		nd6log2(debug, "%s: sending NS who has %s on ALL "
 		    "(except %s)\n", if_name(ifp),
-		    ip6_sprintf(taddr), if_name(exclifp)));
+		    ip6_sprintf(taddr), if_name(exclifp));
 	}
 
 	SLIST_INIT(&ndprl_head);
@@ -1001,10 +1001,10 @@ nd6_prproxy_ns_output(struct ifnet *ifp, struct ifnet *exclifp,
 		NDPR_LOCK(pr);
 		if (pr->ndpr_stateflags & NDPRF_ONLINK) {
 			NDPR_UNLOCK(pr);
-			nd6log2((LOG_DEBUG,
+			nd6log2(debug,
 			    "%s: Sending cloned NS who has %s, originally "
 			    "on %s\n", if_name(fwd_ifp),
-			    ip6_sprintf(taddr), if_name(ifp)));
+			    ip6_sprintf(taddr), if_name(ifp));
 
 			nd6_ns_output(fwd_ifp, daddr, taddr, NULL, NULL);
 		} else {
@@ -1133,12 +1133,12 @@ nd6_prproxy_ns_input(struct ifnet *ifp, struct in6_addr *saddr,
 		NDPR_LOCK(pr);
 		if (pr->ndpr_stateflags & NDPRF_ONLINK) {
 			NDPR_UNLOCK(pr);
-			nd6log2((LOG_DEBUG,
+			nd6log2(debug,
 			    "%s: Forwarding NS (%s) from %s to %s who "
 			    "has %s, originally on %s\n", if_name(fwd_ifp),
 			    ndprl->ndprl_sol ? "NUD/AR" :
 			    "DAD", ip6_sprintf(saddr), ip6_sprintf(daddr),
-			    ip6_sprintf(taddr), if_name(ifp)));
+			    ip6_sprintf(taddr), if_name(ifp));
 
 			nd6_ns_output(fwd_ifp, ndprl->ndprl_sol ? taddr : NULL,
 			    taddr, NULL, nonce);
@@ -1278,20 +1278,20 @@ nd6_prproxy_na_input(struct ifnet *ifp, struct in6_addr *saddr,
 
 		if (send_na) {
 			if (!ndprl->ndprl_sol) {
-				nd6log2((LOG_DEBUG,
+				nd6log2(debug,
 				    "%s: Forwarding NA (DAD) from %s to %s "
 				    "tgt is %s, originally on %s\n",
 				    if_name(fwd_ifp),
 				    ip6_sprintf(saddr), ip6_sprintf(&daddr),
-				    ip6_sprintf(taddr), if_name(ifp)));
+				    ip6_sprintf(taddr), if_name(ifp));
 			} else {
-				nd6log2((LOG_DEBUG,
+				nd6log2(debug,
 				    "%s: Forwarding NA (NUD/AR) from %s to "
 				    "%s (was %s) tgt is %s, originally on "
 				    "%s\n", if_name(fwd_ifp),
 				    ip6_sprintf(saddr),
 				    ip6_sprintf(&daddr), ip6_sprintf(daddr0),
-				    ip6_sprintf(taddr), if_name(ifp)));
+				    ip6_sprintf(taddr), if_name(ifp));
 			}
 
 			nd6_na_output(fwd_ifp, &daddr, taddr, flags, 1, NULL);

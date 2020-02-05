@@ -36,12 +36,12 @@
 #include <kern/debug.h>
 #include <kern/thread_call.h>
 #include <kern/thread.h>
+#include <machine/atomic.h>
 #include <machine/machine_routines.h>
 #include <sys/syslog.h>
 #include <sys/ucred.h>
 #include <stdarg.h>
 #include <mach/kmod.h>
-#include <libkern/OSAtomic.h>
 
 #if defined(__i386__) || defined(__x86_64__)
 #include <i386/mp.h>
@@ -226,8 +226,6 @@ typedef struct modctl {
 #define MODCTL_SDT_PROBES_PROVIDED              0x10  // sdt probes have been provided
 #define MODCTL_SDT_INVALID                      0x20  // Module is invalid for sdt probes
 #define MODCTL_HAS_UUID                         0x40  // Module has UUID
-#define MODCTL_FBT_PRIVATE_PROBES_PROVIDED      0x80  // fbt private probes have been provided
-#define MODCTL_FBT_PROVIDE_PRIVATE_PROBES       0x100 // fbt provider must provide private probes
 #define MODCTL_FBT_PROVIDE_BLACKLISTED_PROBES   0x200 // fbt provider must provide blacklisted probes
 #define MODCTL_FBT_BLACKLISTED_PROBES_PROVIDED  0x400 // fbt blacklisted probes have been provided
 #define MODCTL_IS_STATIC_KEXT                   0x800 // module is a static kext
@@ -241,16 +239,13 @@ typedef struct modctl {
 #define MOD_SDT_PROBES_PROVIDED(mod)            (mod->mod_flags & MODCTL_SDT_PROBES_PROVIDED)
 #define MOD_SDT_INVALID(mod)                    (mod->mod_flags & MODCTL_SDT_INVALID)
 #define MOD_HAS_UUID(mod)                       (mod->mod_flags & MODCTL_HAS_UUID)
-#define MOD_FBT_PRIVATE_PROBES_PROVIDED(mod)    (mod->mod_flags & MODCTL_FBT_PRIVATE_PROBES_PROVIDED)
-#define MOD_FBT_PROVIDE_PRIVATE_PROBES(mod)     (mod->mod_flags & MODCTL_FBT_PROVIDE_PRIVATE_PROBES)
 #define MOD_FBT_BLACKLISTED_PROBES_PROVIDED(mod) (mod->mod_flags & MODCTL_FBT_BLACKLISTED_PROBES_PROVIDED)
 #define MOD_FBT_PROVIDE_BLACKLISTED_PROBES(mod) (mod->mod_flags & MODCTL_FBT_PROVIDE_BLACKLISTED_PROBES)
 #define MOD_IS_STATIC_KEXT(mod)                 (mod->mod_flags & MODCTL_IS_STATIC_KEXT)
 
 /* Compound accessors */
-#define MOD_FBT_PRIVATE_PROBES_DONE(mod)        (MOD_FBT_PRIVATE_PROBES_PROVIDED(mod) || !MOD_FBT_PROVIDE_PRIVATE_PROBES(mod))
 #define MOD_FBT_BLACKLISTED_PROBES_DONE(mod)    (MOD_FBT_BLACKLISTED_PROBES_PROVIDED(mod) || !MOD_FBT_PROVIDE_BLACKLISTED_PROBES(mod))
-#define MOD_FBT_DONE(mod)                       ((MOD_FBT_PROBES_PROVIDED(mod) && MOD_FBT_PRIVATE_PROBES_DONE(mod) && MOD_FBT_BLACKLISTED_PROBES_DONE(mod)) || MOD_FBT_INVALID(mod))
+#define MOD_FBT_DONE(mod)                       ((MOD_FBT_PROBES_PROVIDED(mod) && MOD_FBT_BLACKLISTED_PROBES_DONE(mod)) || MOD_FBT_INVALID(mod))
 #define MOD_SDT_DONE(mod)                       (MOD_SDT_PROBES_PROVIDED(mod) || MOD_SDT_INVALID(mod))
 #define MOD_SYMBOLS_DONE(mod)                   (MOD_FBT_DONE(mod) && MOD_SDT_DONE(mod))
 
@@ -450,60 +445,6 @@ extern void vmem_destroy(vmem_t *);
 extern void vmem_free(vmem_t *vmp, void *vaddr, size_t size);
 
 /*
- * Atomic
- */
-
-static inline uint8_t
-atomic_or_8(uint8_t *addr, uint8_t mask)
-{
-	return OSBitOrAtomic8(mask, addr);
-}
-
-static inline uint32_t
-atomic_and_32( uint32_t *addr, int32_t mask)
-{
-	return OSBitAndAtomic(mask, addr);
-}
-
-static inline uint32_t
-atomic_add_32( uint32_t *theAddress, int32_t theAmount )
-{
-	return OSAddAtomic( theAmount, theAddress );
-}
-
-#if defined(__i386__) || defined(__x86_64__)
-static inline void
-atomic_add_64( uint64_t *theAddress, int64_t theAmount )
-{
-	(void)OSAddAtomic64( theAmount, (SInt64 *)theAddress );
-}
-#elif defined(__arm__)
-static inline void
-atomic_add_64( uint64_t *theAddress, int64_t theAmount )
-{
-	// FIXME
-	// atomic_add_64() is at present only called from fasttrap.c to increment
-	// or decrement a 64bit counter. Narrow to 32bits since arm has
-	// no convenient 64bit atomic op.
-
-	(void)OSAddAtomic((int32_t)theAmount, &(((SInt32 *)theAddress)[0]));
-}
-#elif defined (__arm64__)
-static inline void
-atomic_add_64( uint64_t *theAddress, int64_t theAmount )
-{
-	(void)OSAddAtomic64( theAmount, (SInt64 *)theAddress );
-}
-#endif
-
-static inline uint32_t
-atomic_or_32(uint32_t *addr, uint32_t mask)
-{
-	return OSBitOrAtomic(mask, addr);
-}
-
-
-/*
  * Miscellaneous
  */
 
@@ -514,7 +455,6 @@ typedef uintptr_t greg_t; /* For dtrace_impl.h prototype of dtrace_getfp() */
 #endif
 extern struct regs *find_user_regs( thread_t thread);
 extern vm_offset_t dtrace_get_cpu_int_stack_top(void);
-extern vm_offset_t max_valid_stack_address(void); /* kern/thread.h */
 
 #define panic_quiesce (panic_active())
 
@@ -541,13 +481,6 @@ int dtrace_buffer_copyout(const void*, user_addr_t, vm_size_t);
  * can participate in the comparison.
  */
 #define LIT_STRNEQL(s1, lit_s2) (0 == strncmp( (s1), (lit_s2), sizeof((lit_s2)) ))
-
-/*
- * Safe counted string compare of a literal against the beginning of a string. Here
- * the sizeof() is reduced by 1 so that the trailing null of the literal does not
- * participate in the comparison.
- */
-#define LIT_STRNSTART(s1, lit_s2) (0 == strncmp( (s1), (lit_s2), sizeof((lit_s2)) - 1 ))
 
 #define KERNELBASE VM_MIN_KERNEL_ADDRESS
 #endif /* KERNEL_BUILD */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -174,7 +174,12 @@ const struct in6_addr in6mask96 = IN6MASK96;
 const struct in6_addr in6mask128 = IN6MASK128;
 
 const struct sockaddr_in6 sa6_any = {
-	sizeof(sa6_any), AF_INET6, 0, 0, IN6ADDR_ANY_INIT, 0
+	.sin6_len = sizeof(sa6_any),
+	.sin6_family = AF_INET6,
+	.sin6_port = 0,
+	.sin6_flowinfo = 0,
+	.sin6_addr = IN6ADDR_ANY_INIT,
+	.sin6_scope_id = 0
 };
 
 static int in6ctl_associd(struct socket *, u_long, caddr_t);
@@ -816,7 +821,7 @@ in6ctl_llstop(struct ifnet *ifp)
 	pr0.ndpr_plen = 64;
 	pr0.ndpr_ifp = ifp;
 	pr0.ndpr_prefix.sin6_addr.s6_addr16[0] = IPV6_ADDR_INT16_ULL;
-	in6_setscope(&pr0.ndpr_prefix.sin6_addr, ifp, NULL);
+	(void)in6_setscope(&pr0.ndpr_prefix.sin6_addr, ifp, NULL);
 	pr = nd6_prefix_lookup(&pr0, ND6_PREFIX_EXPIRY_UNSPEC);
 	if (pr) {
 		lck_mtx_lock(nd6_mutex);
@@ -1007,7 +1012,7 @@ in6ctl_alifetime(struct in6_ifaddr *ia, u_long cmd, struct in6_ifreq *ifr,
 			lt.ia6t_preferred = ia6_lt.ia6t_preferred;
 			lt.ia6t_vltime = ia6_lt.ia6t_vltime;
 			lt.ia6t_pltime = ia6_lt.ia6t_pltime;
-			bcopy(&lt, &ifr->ifr_ifru.ifru_lifetime, sizeof(lt));
+			bcopy(&lt, &ifr->ifr_ifru.ifru_lifetime, sizeof(ifr->ifr_ifru.ifru_lifetime));
 		} else {
 			struct in6_addrlifetime_32 lt;
 
@@ -1016,7 +1021,7 @@ in6ctl_alifetime(struct in6_ifaddr *ia, u_long cmd, struct in6_ifreq *ifr,
 			lt.ia6t_preferred = (uint32_t)ia6_lt.ia6t_preferred;
 			lt.ia6t_vltime = (uint32_t)ia6_lt.ia6t_vltime;
 			lt.ia6t_pltime = (uint32_t)ia6_lt.ia6t_pltime;
-			bcopy(&lt, &ifr->ifr_ifru.ifru_lifetime, sizeof(lt));
+			bcopy(&lt, &ifr->ifr_ifru.ifru_lifetime, sizeof(ifr->ifr_ifru.ifru_lifetime));
 		}
 		IFA_UNLOCK(&ia->ia_ifa);
 		break;
@@ -1153,8 +1158,8 @@ in6ctl_clat46start(struct ifnet *ifp)
 
 	if (pr != NULL) {
 		if ((ia6 = in6_pfx_newpersistaddr(pr, FALSE, &error, TRUE)) == NULL) {
-			nd6log0((LOG_ERR, "Could not configure CLAT46 address on interface "
-			    "%s.\n", ifp->if_xname));
+			nd6log0(error, "Could not configure CLAT46 address on interface "
+			    "%s.\n", ifp->if_xname);
 		} else {
 			IFA_LOCK(&ia6->ia_ifa);
 			NDPR_LOCK(pr);
@@ -1981,12 +1986,12 @@ in6_ifaupdate_aux(struct in6_ifaddr *ia, struct ifnet *ifp, int ifaupflags)
 	ifa = &ia->ia_ifa;
 	in6m_sol = NULL;
 
-	nd6log2((LOG_DEBUG, "%s - %s ifp %s ia6_flags 0x%x ifaupflags 0x%x\n",
+	nd6log2(debug, "%s - %s ifp %s ia6_flags 0x%x ifaupflags 0x%x\n",
 	    __func__,
 	    ip6_sprintf(&ia->ia_addr.sin6_addr),
 	    if_name(ia->ia_ifp),
 	    ia->ia6_flags,
-	    ifaupflags));
+	    ifaupflags);
 
 	/*
 	 * Just to be safe, always clear certain flags when address
@@ -2045,10 +2050,10 @@ in6_ifaupdate_aux(struct in6_ifaddr *ia, struct ifnet *ifp, int ifaupflags)
 		}
 		imm = in6_joingroup(ifp, &llsol, &error, delay);
 		if (imm == NULL) {
-			nd6log((LOG_WARNING,
+			nd6log(info,
 			    "%s: addmulti failed for %s on %s (errno=%d)\n",
 			    __func__, ip6_sprintf(&llsol), if_name(ifp),
-			    error));
+			    error);
 			VERIFY(error != 0);
 			goto unwind;
 		}
@@ -2106,10 +2111,10 @@ in6_ifaupdate_aux(struct in6_ifaddr *ia, struct ifnet *ifp, int ifaupflags)
 
 		imm = in6_joingroup(ifp, &mltaddr.sin6_addr, &error, 0);
 		if (!imm) {
-			nd6log((LOG_WARNING,
+			nd6log(info,
 			    "%s: addmulti failed for %s on %s (errno=%d)\n",
 			    __func__, ip6_sprintf(&mltaddr.sin6_addr),
-			    if_name(ifp), error));
+			    if_name(ifp), error);
 			VERIFY(error != 0);
 			goto unwind;
 		}
@@ -2129,16 +2134,18 @@ in6_ifaupdate_aux(struct in6_ifaddr *ia, struct ifnet *ifp, int ifaupflags)
 			 */
 			delay = random() % MAX_RTR_SOLICITATION_DELAY;
 		}
-		if (in6_nigroup(ifp, hostname, hostnamelen, &mltaddr.sin6_addr)
-		    == 0) {
+		lck_mtx_lock(&hostname_lock);
+		int n = in6_nigroup(ifp, hostname, hostnamelen, &mltaddr.sin6_addr);
+		lck_mtx_unlock(&hostname_lock);
+		if (n == 0) {
 			imm = in6_joingroup(ifp, &mltaddr.sin6_addr, &error,
 			    delay); /* XXX jinmei */
 			if (!imm) {
-				nd6log((LOG_WARNING,
+				nd6log(info,
 				    "%s: addmulti failed for %s on %s "
 				    "(errno=%d)\n",
 				    __func__, ip6_sprintf(&mltaddr.sin6_addr),
-				    if_name(ifp), error));
+				    if_name(ifp), error);
 				/* XXX not very fatal, go on... */
 				error = 0;
 			} else {
@@ -2183,10 +2190,10 @@ in6_ifaupdate_aux(struct in6_ifaddr *ia, struct ifnet *ifp, int ifaupflags)
 
 		imm = in6_joingroup(ifp, &mltaddr.sin6_addr, &error, 0);
 		if (!imm) {
-			nd6log((LOG_WARNING,
+			nd6log(info,
 			    "%s: addmulti failed for %s on %s (errno=%d)\n",
 			    __func__, ip6_sprintf(&mltaddr.sin6_addr),
-			    if_name(ifp), error));
+			    if_name(ifp), error);
 			VERIFY(error != 0);
 			goto unwind;
 		}
@@ -2200,13 +2207,14 @@ in6_ifaupdate_aux(struct in6_ifaddr *ia, struct ifnet *ifp, int ifaupflags)
 	++nd6_sched_timeout_want;
 
 	/*
-	 * Perform DAD, if needed.
-	 * XXX It may be of use, if we can administratively
-	 * disable DAD.
+	 * Perform DAD, if:
+	 * * Interface is marked to perform DAD, AND
+	 * * Address is not marked to skip DAD, AND
+	 * * Address is in a pre-DAD state (Tentative or Optimistic)
 	 */
 	IFA_LOCK_SPIN(ifa);
-	if (in6if_do_dad(ifp) && ((ifa->ifa_flags & IN6_IFF_NODAD) == 0) &&
-	    (ia->ia6_flags & IN6_IFF_DADPROGRESS)) {
+	if (in6if_do_dad(ifp) && (ia->ia6_flags & IN6_IFF_NODAD) == 0 &&
+	    (ia->ia6_flags & IN6_IFF_DADPROGRESS) != 0) {
 		int mindelay, maxdelay;
 		int *delayptr, delayval;
 
@@ -3711,8 +3719,8 @@ in6if_do_dad(
 		return 0;
 	}
 
-	if (ifp->if_subfamily == IFNET_SUBFAMILY_IPSEC ||
-	    ifp->if_subfamily == IFNET_SUBFAMILY_UTUN) {
+	if (ifp->if_family == IFNET_FAMILY_IPSEC ||
+	    ifp->if_family == IFNET_FAMILY_UTUN) {
 		/*
 		 * Ignore DAD for tunneling virtual interfaces, which get
 		 * their IPv6 address explicitly assigned.
@@ -3832,6 +3840,8 @@ in6_if2idlen(struct ifnet *ifp)
 		return 64;    /* Packet Data over Cellular */
 	case IFT_BRIDGE:
 		return 64;    /* Transparent bridge interface */
+	case IFT_6LOWPAN:
+		return 64;    /* 6LoWPAN */
 	default:
 		/*
 		 * Unknown link type:
@@ -4016,6 +4026,8 @@ in6_ifaddr_alloc(int how)
 		bzero(in6ifa, in6ifa_size);
 		in6ifa->ia_ifa.ifa_free = in6_ifaddr_free;
 		in6ifa->ia_ifa.ifa_debug |= IFD_ALLOC;
+		in6ifa->ia_ifa.ifa_del_wc = &in6ifa->ia_ifa.ifa_debug;
+		in6ifa->ia_ifa.ifa_del_waiters = 0;
 		ifa_lock_init(&in6ifa->ia_ifa);
 		if (in6ifa_debug != 0) {
 			struct in6_ifaddr_dbg *in6ifa_dbg =
@@ -4804,9 +4816,9 @@ in6_eventhdlr_callback(struct eventhandler_entry_arg arg0 __unused,
 	bzero(&ev_msg, sizeof(ev_msg));
 	bzero(&nd6_event, sizeof(nd6_event));
 
-	nd6log0((LOG_INFO, "%s Event %s received for %s\n",
+	nd6log0(info, "%s Event %s received for %s\n",
 	    __func__, in6_event2kev_array[in6_ev_code].in6_event_str,
-	    ip6_sprintf(p_addr6)));
+	    ip6_sprintf(p_addr6));
 
 	ev_msg.vendor_code      = KEV_VENDOR_APPLE;
 	ev_msg.kev_class        = KEV_NETWORK_CLASS;

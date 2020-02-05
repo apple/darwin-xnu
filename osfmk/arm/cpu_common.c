@@ -150,7 +150,9 @@ cpu_info(processor_flavor_t flavor, int slot_num, processor_info_t info,
 		cpu_stat->vfp_shortv_cnt = 0;
 		cpu_stat->data_ex_cnt = cpu_data_ptr->cpu_stat.data_ex_cnt;
 		cpu_stat->instr_ex_cnt = cpu_data_ptr->cpu_stat.instr_ex_cnt;
-		cpu_stat->pmi_cnt = cpu_data_ptr->cpu_stat.pmi_cnt;
+#if MONOTONIC
+		cpu_stat->pmi_cnt = cpu_data_ptr->cpu_monotonic.mtc_npmis;
+#endif /* MONOTONIC */
 
 		*count = PROCESSOR_CPU_STAT64_COUNT;
 
@@ -207,7 +209,7 @@ cpu_handle_xcall(cpu_data_t *cpu_data_ptr)
 	broadcastFunc   xfunc;
 	void            *xparam;
 
-	__c11_atomic_thread_fence(memory_order_acquire_smp);
+	os_atomic_thread_fence(acquire);
 	/* Come back around if cpu_signal_internal is running on another CPU and has just
 	* added SIGPxcall to the pending mask, but hasn't yet assigned the call params.*/
 	if (cpu_data_ptr->cpu_xcall_p0 != NULL && cpu_data_ptr->cpu_xcall_p1 != NULL) {
@@ -215,14 +217,24 @@ cpu_handle_xcall(cpu_data_t *cpu_data_ptr)
 		xparam = cpu_data_ptr->cpu_xcall_p1;
 		cpu_data_ptr->cpu_xcall_p0 = NULL;
 		cpu_data_ptr->cpu_xcall_p1 = NULL;
-		__c11_atomic_thread_fence(memory_order_acq_rel_smp);
-		hw_atomic_and_noret(&cpu_data_ptr->cpu_signal, ~SIGPxcall);
+		os_atomic_thread_fence(acq_rel);
+		os_atomic_andnot(&cpu_data_ptr->cpu_signal, SIGPxcall, relaxed);
+		xfunc(xparam);
+	}
+	if (cpu_data_ptr->cpu_imm_xcall_p0 != NULL && cpu_data_ptr->cpu_imm_xcall_p1 != NULL) {
+		xfunc = cpu_data_ptr->cpu_imm_xcall_p0;
+		xparam = cpu_data_ptr->cpu_imm_xcall_p1;
+		cpu_data_ptr->cpu_imm_xcall_p0 = NULL;
+		cpu_data_ptr->cpu_imm_xcall_p1 = NULL;
+		os_atomic_thread_fence(acq_rel);
+		os_atomic_andnot(&cpu_data_ptr->cpu_signal, SIGPxcallImm, relaxed);
 		xfunc(xparam);
 	}
 }
 
-unsigned int
-cpu_broadcast_xcall(uint32_t *synch,
+static unsigned int
+cpu_broadcast_xcall_internal(unsigned int signal,
+    uint32_t *synch,
     boolean_t self_xcall,
     broadcastFunc func,
     void *parm)
@@ -232,7 +244,7 @@ cpu_broadcast_xcall(uint32_t *synch,
 	cpu_data_t      *target_cpu_datap;
 	unsigned int    failsig;
 	int             cpu;
-	int             max_cpu;
+	int             max_cpu = ml_get_max_cpu_number() + 1;
 
 	intr = ml_set_interrupts_enabled(FALSE);
 	cpu_data_ptr = getCpuDatap();
@@ -240,19 +252,19 @@ cpu_broadcast_xcall(uint32_t *synch,
 	failsig = 0;
 
 	if (synch != NULL) {
-		*synch = real_ncpus;
+		*synch = max_cpu;
 		assert_wait((event_t)synch, THREAD_UNINT);
 	}
 
-	max_cpu = ml_get_max_cpu_number();
-	for (cpu = 0; cpu <= max_cpu; cpu++) {
+	for (cpu = 0; cpu < max_cpu; cpu++) {
 		target_cpu_datap = (cpu_data_t *)CpuDataEntries[cpu].cpu_data_vaddr;
 
-		if ((target_cpu_datap == NULL) || (target_cpu_datap == cpu_data_ptr)) {
+		if (target_cpu_datap == cpu_data_ptr) {
 			continue;
 		}
 
-		if (KERN_SUCCESS != cpu_signal(target_cpu_datap, SIGPxcall, (void *)func, parm)) {
+		if ((target_cpu_datap == NULL) ||
+		    KERN_SUCCESS != cpu_signal(target_cpu_datap, signal, (void *)func, parm)) {
 			failsig++;
 		}
 	}
@@ -265,7 +277,7 @@ cpu_broadcast_xcall(uint32_t *synch,
 	(void) ml_set_interrupts_enabled(intr);
 
 	if (synch != NULL) {
-		if (hw_atomic_sub(synch, (!self_xcall)? failsig + 1 : failsig) == 0) {
+		if (os_atomic_sub(synch, (!self_xcall) ? failsig + 1 : failsig, relaxed) == 0) {
 			clear_wait(current_thread(), THREAD_AWAKENED);
 		} else {
 			thread_block(THREAD_CONTINUE_NULL);
@@ -273,18 +285,40 @@ cpu_broadcast_xcall(uint32_t *synch,
 	}
 
 	if (!self_xcall) {
-		return real_ncpus - failsig - 1;
+		return max_cpu - failsig - 1;
 	} else {
-		return real_ncpus - failsig;
+		return max_cpu - failsig;
 	}
 }
 
-kern_return_t
-cpu_xcall(int cpu_number, broadcastFunc func, void *param)
+unsigned int
+cpu_broadcast_xcall(uint32_t *synch,
+    boolean_t self_xcall,
+    broadcastFunc func,
+    void *parm)
+{
+	return cpu_broadcast_xcall_internal(SIGPxcall, synch, self_xcall, func, parm);
+}
+
+unsigned int
+cpu_broadcast_immediate_xcall(uint32_t *synch,
+    boolean_t self_xcall,
+    broadcastFunc func,
+    void *parm)
+{
+	return cpu_broadcast_xcall_internal(SIGPxcallImm, synch, self_xcall, func, parm);
+}
+
+static kern_return_t
+cpu_xcall_internal(unsigned int signal, int cpu_number, broadcastFunc func, void *param)
 {
 	cpu_data_t      *target_cpu_datap;
 
 	if ((cpu_number < 0) || (cpu_number > ml_get_max_cpu_number())) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (func == NULL || param == NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
@@ -293,7 +327,19 @@ cpu_xcall(int cpu_number, broadcastFunc func, void *param)
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	return cpu_signal(target_cpu_datap, SIGPxcall, (void*)func, param);
+	return cpu_signal(target_cpu_datap, signal, (void*)func, param);
+}
+
+kern_return_t
+cpu_xcall(int cpu_number, broadcastFunc func, void *param)
+{
+	return cpu_xcall_internal(SIGPxcall, cpu_number, func, param);
+}
+
+kern_return_t
+cpu_immediate_xcall(int cpu_number, broadcastFunc func, void *param)
+{
+	return cpu_xcall_internal(SIGPxcallImm, cpu_number, func, param);
 }
 
 static kern_return_t
@@ -320,39 +366,40 @@ cpu_signal_internal(cpu_data_t *target_proc,
 		Check_SIGPdisabled = 0;
 	}
 
-	if (signal == SIGPxcall) {
+	if ((signal == SIGPxcall) || (signal == SIGPxcallImm)) {
 		do {
 			current_signals = target_proc->cpu_signal;
 			if ((current_signals & SIGPdisabled) == SIGPdisabled) {
-#if DEBUG || DEVELOPMENT
-				target_proc->failed_signal = SIGPxcall;
-				target_proc->failed_xcall = p0;
-				OSIncrementAtomicLong(&target_proc->failed_signal_count);
-#endif
 				ml_set_interrupts_enabled(interruptible);
 				return KERN_FAILURE;
 			}
-			swap_success = OSCompareAndSwap(current_signals & (~SIGPxcall), current_signals | SIGPxcall,
+			swap_success = OSCompareAndSwap(current_signals & (~signal), current_signals | signal,
 			    &target_proc->cpu_signal);
+
+			if (!swap_success && (signal == SIGPxcallImm) && (target_proc->cpu_signal & SIGPxcallImm)) {
+				ml_set_interrupts_enabled(interruptible);
+				return KERN_ALREADY_WAITING;
+			}
 
 			/* Drain pending xcalls on this cpu; the CPU we're trying to xcall may in turn
 			 * be trying to xcall us.  Since we have interrupts disabled that can deadlock,
 			 * so break the deadlock by draining pending xcalls. */
-			if (!swap_success && (current_proc->cpu_signal & SIGPxcall)) {
+			if (!swap_success && (current_proc->cpu_signal & signal)) {
 				cpu_handle_xcall(current_proc);
 			}
 		} while (!swap_success);
 
-		target_proc->cpu_xcall_p0 = p0;
-		target_proc->cpu_xcall_p1 = p1;
+		if (signal == SIGPxcallImm) {
+			target_proc->cpu_imm_xcall_p0 = p0;
+			target_proc->cpu_imm_xcall_p1 = p1;
+		} else {
+			target_proc->cpu_xcall_p0 = p0;
+			target_proc->cpu_xcall_p1 = p1;
+		}
 	} else {
 		do {
 			current_signals = target_proc->cpu_signal;
 			if ((Check_SIGPdisabled != 0) && (current_signals & Check_SIGPdisabled) == SIGPdisabled) {
-#if DEBUG || DEVELOPMENT
-				target_proc->failed_signal = signal;
-				OSIncrementAtomicLong(&target_proc->failed_signal_count);
-#endif
 				ml_set_interrupts_enabled(interruptible);
 				return KERN_FAILURE;
 			}
@@ -424,48 +471,48 @@ cpu_signal_handler_internal(boolean_t disable_signal)
 
 	SCHED_STATS_IPI(current_processor());
 
-	cpu_signal = hw_atomic_or(&cpu_data_ptr->cpu_signal, 0);
+	cpu_signal = os_atomic_or(&cpu_data_ptr->cpu_signal, 0, relaxed);
 
 	if ((!(cpu_signal & SIGPdisabled)) && (disable_signal == TRUE)) {
-		(void)hw_atomic_or(&cpu_data_ptr->cpu_signal, SIGPdisabled);
+		os_atomic_or(&cpu_data_ptr->cpu_signal, SIGPdisabled, relaxed);
 	} else if ((cpu_signal & SIGPdisabled) && (disable_signal == FALSE)) {
-		(void)hw_atomic_and(&cpu_data_ptr->cpu_signal, ~SIGPdisabled);
+		os_atomic_andnot(&cpu_data_ptr->cpu_signal, SIGPdisabled, relaxed);
 	}
 
 	while (cpu_signal & ~SIGPdisabled) {
 		if (cpu_signal & SIGPdec) {
-			(void)hw_atomic_and(&cpu_data_ptr->cpu_signal, ~SIGPdec);
+			os_atomic_andnot(&cpu_data_ptr->cpu_signal, SIGPdec, relaxed);
 			rtclock_intr(FALSE);
 		}
 #if KPERF
 		if (cpu_signal & SIGPkptimer) {
-			(void)hw_atomic_and(&cpu_data_ptr->cpu_signal, ~SIGPkptimer);
+			os_atomic_andnot(&cpu_data_ptr->cpu_signal, SIGPkptimer, relaxed);
 			kperf_signal_handler((unsigned int)cpu_data_ptr->cpu_number);
 		}
 #endif
-		if (cpu_signal & SIGPxcall) {
+		if (cpu_signal & (SIGPxcall | SIGPxcallImm)) {
 			cpu_handle_xcall(cpu_data_ptr);
 		}
 		if (cpu_signal & SIGPast) {
-			(void)hw_atomic_and(&cpu_data_ptr->cpu_signal, ~SIGPast);
+			os_atomic_andnot(&cpu_data_ptr->cpu_signal, SIGPast, relaxed);
 			ast_check(cpu_data_ptr->cpu_processor);
 		}
 		if (cpu_signal & SIGPdebug) {
-			(void)hw_atomic_and(&cpu_data_ptr->cpu_signal, ~SIGPdebug);
+			os_atomic_andnot(&cpu_data_ptr->cpu_signal, SIGPdebug, relaxed);
 			DebuggerXCall(cpu_data_ptr->cpu_int_state);
 		}
 #if     __ARM_SMP__ && defined(ARMA7)
 		if (cpu_signal & SIGPLWFlush) {
-			(void)hw_atomic_and(&cpu_data_ptr->cpu_signal, ~SIGPLWFlush);
+			os_atomic_andnot(&cpu_data_ptr->cpu_signal, SIGPLWFlush, relaxed);
 			cache_xcall_handler(LWFlush);
 		}
 		if (cpu_signal & SIGPLWClean) {
-			(void)hw_atomic_and(&cpu_data_ptr->cpu_signal, ~SIGPLWClean);
+			os_atomic_andnot(&cpu_data_ptr->cpu_signal, SIGPLWClean, relaxed);
 			cache_xcall_handler(LWClean);
 		}
 #endif
 
-		cpu_signal = hw_atomic_or(&cpu_data_ptr->cpu_signal, 0);
+		cpu_signal = os_atomic_or(&cpu_data_ptr->cpu_signal, 0, relaxed);
 	}
 }
 
@@ -499,7 +546,10 @@ cpu_machine_init(void)
 	if (cpu_data_ptr->cpu_cache_dispatch != (cache_dispatch_t) NULL) {
 		platform_cache_init();
 	}
+
+	/* Note: this calls IOCPURunPlatformActiveActions when resuming on boot cpu */
 	PE_cpu_machine_init(cpu_data_ptr->cpu_id, !started);
+
 	cpu_data_ptr->cpu_flags |= StartedState;
 	ml_init_interrupt();
 }

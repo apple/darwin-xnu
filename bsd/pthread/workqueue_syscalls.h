@@ -35,14 +35,15 @@
 
 #ifdef __PTHREAD_EXPOSE_INTERNALS__
 /* workq_kernreturn commands */
-#define WQOPS_THREAD_RETURN        0x04 /* parks the thread back into the kernel */
-#define WQOPS_QUEUE_NEWSPISUPP     0x10 /* this is to check for newer SPI support */
-#define WQOPS_QUEUE_REQTHREADS     0x20 /* request number of threads of a prio */
-#define WQOPS_QUEUE_REQTHREADS2    0x30 /* request a number of threads in a given priority bucket */
-#define WQOPS_THREAD_KEVENT_RETURN 0x40 /* parks the thread after delivering the passed kevent array */
-#define WQOPS_SET_EVENT_MANAGER_PRIORITY 0x80   /* max() in the provided priority in the the priority of the event manager */
-#define WQOPS_THREAD_WORKLOOP_RETURN 0x100      /* parks the thread after delivering the passed kevent array */
-#define WQOPS_SHOULD_NARROW 0x200       /* checks whether we should narrow our concurrency */
+#define WQOPS_THREAD_RETURN              0x004 /* parks the thread back into the kernel */
+#define WQOPS_QUEUE_NEWSPISUPP           0x010 /* this is to check for newer SPI support */
+#define WQOPS_QUEUE_REQTHREADS           0x020 /* request number of threads of a prio */
+#define WQOPS_QUEUE_REQTHREADS2          0x030 /* request a number of threads in a given priority bucket */
+#define WQOPS_THREAD_KEVENT_RETURN       0x040 /* parks the thread after delivering the passed kevent array */
+#define WQOPS_SET_EVENT_MANAGER_PRIORITY 0x080 /* max() in the provided priority in the the priority of the event manager */
+#define WQOPS_THREAD_WORKLOOP_RETURN     0x100 /* parks the thread after delivering the passed kevent array */
+#define WQOPS_SHOULD_NARROW              0x200 /* checks whether we should narrow our concurrency */
+#define WQOPS_SETUP_DISPATCH             0x400 /* setup pthread workqueue-related operations */
 
 /* flag values for upcall flags field, only 8 bits per struct threadlist */
 #define WQ_FLAG_THREAD_PRIO_SCHED               0x00008000
@@ -53,7 +54,7 @@
 #define WQ_FLAG_THREAD_REUSE                    0x00020000  /* thread is being reused */
 #define WQ_FLAG_THREAD_NEWSPI                   0x00040000  /* the call is with new SPIs */
 #define WQ_FLAG_THREAD_KEVENT                   0x00080000  /* thread is response to kevent req */
-#define WQ_FLAG_THREAD_EVENT_MANAGER    0x00100000  /* event manager thread */
+#define WQ_FLAG_THREAD_EVENT_MANAGER            0x00100000  /* event manager thread */
 #define WQ_FLAG_THREAD_TSD_BASE_SET             0x00200000  /* tsd base has already been set */
 #define WQ_FLAG_THREAD_WORKLOOP                 0x00400000  /* workloop thread */
 #define WQ_FLAG_THREAD_OUTSIDEQOS               0x00800000  /* thread qos changes should not be sent to kernel */
@@ -93,10 +94,22 @@ int
 __kqueue_workloop_ctl(uintptr_t cmd, uint64_t options, void *addr, size_t sz);
 
 /* SPI flags between WQ and workq_setup_thread in pthread.kext */
+#define WQ_SETUP_NONE           0
 #define WQ_SETUP_FIRST_USE      1
 #define WQ_SETUP_CLEAR_VOUCHER  2
 // was  WQ_SETUP_SET_SCHED_CALL 4
 #define WQ_SETUP_EXIT_THREAD    8
 
 #endif // __PTHREAD_EXPOSE_INTERNALS__
+
+#define WORKQ_DISPATCH_CONFIG_VERSION        2
+#define WORKQ_DISPATCH_MIN_SUPPORTED_VERSION 1
+#define WORKQ_DISPATCH_SUPPORTED_FLAGS       0
+struct workq_dispatch_config {
+	uint32_t wdc_version;
+	uint32_t wdc_flags;
+	uint64_t wdc_queue_serialno_offs;
+	uint64_t wdc_queue_label_offs;
+} __attribute__((packed, aligned(4)));
+
 #endif // _PTHREAD_WORKQUEUE_PRIVATE_H_

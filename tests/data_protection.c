@@ -750,8 +750,8 @@ set_passcode(char * new_passcode, char * old_passcode)
 	}
 
 	char * const keystorectl_args[] = {
-		KEYSTORECTL_PATH,
-		"change-password",
+		KEYBAGDTEST_PATH,
+		"syspass",
 		old_passcode,
 		new_passcode,
 		NULL

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -126,7 +126,7 @@ kmod_control(
 {
 	NOT_SUPPORTED_KERNEL();
 	return KERN_NOT_SUPPORTED;
-};
+}
 
 /********************************************************************/
 kern_return_t

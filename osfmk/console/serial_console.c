@@ -310,10 +310,10 @@ _cnputs(char * c, int size)
 	}
 
 	while (size-- > 0) {
-		cons_ops[cons_ops_index].putc(0, 0, *c);
 		if (*c == '\n') {
 			cons_ops[cons_ops_index].putc(0, 0, '\r');
 		}
+		cons_ops[cons_ops_index].putc(0, 0, *c);
 		c++;
 	}
 
@@ -407,7 +407,7 @@ console_ring_try_empty(void)
 		boolean_t state = ml_set_interrupts_enabled(FALSE);
 
 		/* Indicate that we're in the process of writing a block of data to the console. */
-		(void)hw_atomic_add(&console_output, 1);
+		os_atomic_inc(&console_output, relaxed);
 
 		simple_lock_try_lock_loop(&console_ring.write_lock, LCK_GRP_NULL);
 
@@ -430,7 +430,7 @@ console_ring_try_empty(void)
 
 		simple_unlock(&console_ring.write_lock);
 
-		(void)hw_atomic_sub(&console_output, 1);
+		os_atomic_dec(&console_output, relaxed);
 
 		simple_unlock(&console_ring.read_lock);
 
@@ -658,7 +658,7 @@ vcgetc(__unused int l, __unused int u, __unused boolean_t wait, __unused boolean
 {
 	char c;
 
-	if (0 == (*PE_poll_input)(0, &c)) {
+	if (0 == PE_stub_poll_input(0, &c)) {
 		return c;
 	} else {
 		return 0;
@@ -681,7 +681,7 @@ alloc_free_func(void * arg, wait_result_t wres __unused)
 	T_LOG("Doing %d iterations of console cpu alloc and free.", count);
 
 	while (count-- > 0) {
-		(void)hw_atomic_add(&cons_test_ops_count, 1);
+		os_atomic_inc(&cons_test_ops_count, relaxed);
 		cbp = (console_buf_t *)console_cpu_alloc(0);
 		if (cbp == NULL) {
 			T_ASSERT_NOTNULL(cbp, "cpu allocation failed");
@@ -702,7 +702,7 @@ log_to_console_func(void * arg __unused, wait_result_t wres __unused)
 	uint64_t thread_id = current_thread()->thread_id;
 	char somedata[10] = "123456789";
 	for (int i = 0; i < 26; i++) {
-		(void)hw_atomic_add(&cons_test_ops_count, 1);
+		os_atomic_inc(&cons_test_ops_count, relaxed);
 		printf(" thid: %llu printf iteration %d\n", thread_id, i);
 		cnputc_unbuffered((char)('A' + i));
 		cnputc_unbuffered('\n');

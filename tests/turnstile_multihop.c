@@ -34,6 +34,12 @@ T_GLOBAL_META(T_META_NAMESPACE("xnu.turnstile_multihop"));
 
 #define HELPER_TIMEOUT_SECS (3000)
 
+struct test_msg {
+	mach_msg_header_t header;
+	mach_msg_body_t body;
+	mach_msg_port_descriptor_t port_descriptor;
+};
+
 static boolean_t spin_for_ever = false;
 
 static void
@@ -220,46 +226,106 @@ get_user_promotion_basepri(void)
 	return thread_policy.thps_user_promotion_basepri;
 }
 
-static int messages_received = 0;
+#define LISTENER_WLID  0x100
+#define CONN_WLID      0x200
+
+static uint32_t
+register_port_options(void)
+{
+	return MACH_RCV_MSG | MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY |
+	       MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_CTX) |
+	       MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0) |
+	       MACH_RCV_VOUCHER;
+}
+
+static void
+register_port(uint64_t wlid, mach_port_t port)
+{
+	int r;
+
+	struct kevent_qos_s kev = {
+		.ident  = port,
+		.filter = EVFILT_MACHPORT,
+		.flags  = EV_ADD | EV_UDATA_SPECIFIC | EV_DISPATCH | EV_VANISHED,
+		.fflags = register_port_options(),
+		.data   = 1,
+		.qos    = (int32_t)_pthread_qos_class_encode(QOS_CLASS_MAINTENANCE, 0, 0)
+	};
+
+	struct kevent_qos_s kev_err = { 0 };
+
+	/* Setup workloop for mach msg rcv */
+	r = kevent_id(wlid, &kev, 1, &kev_err, 1, NULL,
+	    NULL, KEVENT_FLAG_WORKLOOP | KEVENT_FLAG_ERROR_EVENTS);
+
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(r, "kevent_id");
+	T_QUIET; T_ASSERT_EQ(r, 0, "no errors returned from kevent_id");
+}
+
 /*
  * Basic WL handler callback, it checks the
  * effective Qos of the servicer thread.
  */
 static void
-workloop_cb_test_intransit(uint64_t *workloop_id __unused, void **eventslist __unused, int *events)
+workloop_cb_test_intransit(uint64_t *workloop_id, void **eventslist, int *events)
 {
-	messages_received++;
-	T_LOG("Workloop handler workloop_cb_test_intransit called. Received message no %d",
-	    messages_received);
+	static bool got_peer;
 
+	struct kevent_qos_s *kev = eventslist[0];
+	mach_msg_header_t *hdr;
+	struct test_msg *tmsg;
+
+	T_LOG("Workloop handler %s called. Received message on 0x%llx",
+	    __func__, *workloop_id);
 
 	/* Skip the test if we can't check Qos */
 	if (geteuid() != 0) {
 		T_SKIP("kevent_qos test requires root privileges to run.");
 	}
 
-	if (messages_received == 1) {
-		sleep(5);
-		T_LOG("Do some CPU work.");
-		do_work(5000);
+	T_QUIET; T_ASSERT_EQ(*events, 1, "should have one event");
 
-		/* Check if the override now is IN + 60 boost */
-		T_EXPECT_EFFECTIVE_QOS_EQ(QOS_CLASS_USER_INITIATED,
-		    "dispatch_source event handler QoS should be QOS_CLASS_USER_INITIATED");
-		T_EXPECT_EQ(get_user_promotion_basepri(), 60u,
-		    "dispatch_source event handler should be overridden at 60");
+	hdr = (mach_msg_header_t *)kev->ext[0];
+	T_ASSERT_NOTNULL(hdr, "has a message");
+	T_ASSERT_EQ(hdr->msgh_size, (uint32_t)sizeof(struct test_msg), "of the right size");
+	tmsg = (struct test_msg *)hdr;
 
-		/* Enable the knote to get 2nd message */
-		struct kevent_qos_s *kev = *eventslist;
+	switch (*workloop_id) {
+	case LISTENER_WLID:
+		T_LOG("Registering peer connection");
+		T_QUIET; T_ASSERT_FALSE(got_peer, "Should not have seen peer yet");
+		got_peer = true;
+		break;
+
+	case CONN_WLID:
+		T_LOG("Received message on peer");
+		break;
+
+	default:
+		T_FAIL("???");
+	}
+
+	sleep(5);
+	T_LOG("Do some CPU work.");
+	do_work(5000);
+
+	/* Check if the override now is IN + 60 boost */
+	T_EXPECT_EFFECTIVE_QOS_EQ(QOS_CLASS_USER_INITIATED,
+	    "dispatch_source event handler QoS should be QOS_CLASS_USER_INITIATED");
+	T_EXPECT_EQ(get_user_promotion_basepri(), 60u,
+	    "dispatch_source event handler should be overridden at 60");
+
+	if (*workloop_id == LISTENER_WLID) {
+		register_port(CONN_WLID, tmsg->port_descriptor.name);
+
 		kev->flags = EV_ADD | EV_ENABLE | EV_UDATA_SPECIFIC | EV_DISPATCH | EV_VANISHED;
-		kev->fflags = (MACH_RCV_MSG | MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY |
-		    MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_CTX) |
-		    MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0) |
-		    MACH_RCV_VOUCHER);
+		kev->fflags = register_port_options();
+		kev->ext[0] = kev->ext[1] = kev->ext[2] = kev->ext[3] = 0;
 		*events = 1;
 	} else {
+		/* this will unblock the waiter */
+		mach_msg_destroy(hdr);
 		*events = 0;
-		exit(0);
 	}
 }
 
@@ -331,11 +397,7 @@ send(
 {
 	kern_return_t ret = 0;
 
-	struct {
-		mach_msg_header_t header;
-		mach_msg_body_t body;
-		mach_msg_port_descriptor_t port_descriptor;
-	} send_msg = {
+	struct test_msg send_msg = {
 		.header = {
 			.msgh_remote_port = send_port,
 			.msgh_local_port  = reply_port,
@@ -598,7 +660,7 @@ thread_at_sixty(void *arg __unused)
 
 	T_QUIET; T_LOG("The time for priority 60 thread to acquire lock was %llu \n",
 	    (after_lock_time - before_lock_time));
-	exit(0);
+	T_END;
 }
 
 static void *
@@ -669,35 +731,44 @@ thread_at_default(void *arg __unused)
 static void *
 thread_at_maintenance(void *arg __unused)
 {
-	mach_port_t qos_send_port;
+	mach_port_t service_port;
+	mach_port_t conn_port;
 	mach_port_t special_reply_port;
+	mach_port_options_t opts = {
+		.flags = MPO_INSERT_SEND_RIGHT,
+	};
 
 	main_thread_port = mach_thread_self();
 
 	set_thread_name(__FUNCTION__);
 
 	kern_return_t kr = bootstrap_look_up(bootstrap_port,
-	    TURNSTILE_MULTIHOP_SERVICE_NAME, &qos_send_port);
+	    TURNSTILE_MULTIHOP_SERVICE_NAME, &service_port);
 	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "client bootstrap_look_up");
+
+	kr = mach_port_construct(mach_task_self(), &opts, 0ull, &conn_port);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "mach_port_construct");
 
 	special_reply_port = thread_get_special_reply_port();
 	T_QUIET; T_ASSERT_TRUE(MACH_PORT_VALID(special_reply_port), "get_thread_special_reply_port");
 
 	/* Become the dispatch sync owner, dispatch_sync_owner will be set in dispatch_sync_wait function */
 
-	/* Send an async message */
-	send(qos_send_port, MACH_PORT_NULL, MACH_PORT_NULL,
+	/* Send a sync message */
+	send(conn_port, special_reply_port, MACH_PORT_NULL,
 	    (uint32_t)_pthread_qos_class_encode(QOS_CLASS_MAINTENANCE, 0, 0), 0);
 
-	/* Send a sync message */
-	send(qos_send_port, special_reply_port, MACH_PORT_NULL,
+	/* Send an async checkin message */
+	send(service_port, MACH_PORT_NULL, conn_port,
 	    (uint32_t)_pthread_qos_class_encode(QOS_CLASS_MAINTENANCE, 0, 0), 0);
 
 	/* Create a new thread at QOS_CLASS_DEFAULT qos */
 	thread_create_at_qos(QOS_CLASS_DEFAULT, thread_at_default);
 
 	/* Block on Sync IPC */
-	receive(special_reply_port, qos_send_port);
+	receive(special_reply_port, service_port);
+
+	T_LOG("received reply");
 
 	dispatch_sync_cancel(def_thread_port, QOS_CLASS_DEFAULT);
 	return NULL;
@@ -706,19 +777,8 @@ thread_at_maintenance(void *arg __unused)
 T_HELPER_DECL(three_ulock_sync_ipc_hop,
     "Create chain of 4 threads with 3 ulocks and 1 sync IPC at different qos")
 {
-	dt_stat_time_t roundtrip_stat = dt_stat_time_create("multihop_lock_acquire");
-
-	T_STAT_MEASURE_LOOP(roundtrip_stat) {
-		if (fork() == 0) {
-			thread_create_at_qos(QOS_CLASS_MAINTENANCE, thread_at_maintenance);
-			sigsuspend(0);
-			exit(0);
-		}
-		wait(NULL);
-	}
-
-	dt_stat_finalize(roundtrip_stat);
-	T_END;
+	thread_create_at_qos(QOS_CLASS_MAINTENANCE, thread_at_maintenance);
+	sigsuspend(0);
 }
 
 static void
@@ -744,41 +804,14 @@ thread_create_at_qos(qos_class_t qos, void * (*function)(void *))
 
 #pragma mark Mach receive - kevent_qos
 
-static void
-expect_kevent_id_recv(mach_port_t port)
+T_HELPER_DECL(server_kevent_id,
+    "Reply with the QoS that a dispatch source event handler ran with")
 {
-	int r;
-
 	T_QUIET; T_ASSERT_POSIX_ZERO(_pthread_workqueue_init_with_workloop(
 		    worker_cb, event_cb,
 		    (pthread_workqueue_function_workloop_t)workloop_cb_test_intransit, 0, 0), NULL);
 
-	struct kevent_qos_s kev[] = {{
-					     .ident = port,
-					     .filter = EVFILT_MACHPORT,
-					     .flags = EV_ADD | EV_UDATA_SPECIFIC | EV_DISPATCH | EV_VANISHED,
-					     .fflags = (MACH_RCV_MSG | MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY |
-	    MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_CTX) |
-	    MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0) |
-	    MACH_RCV_VOUCHER),
-					     .data = 1,
-					     .qos = (int32_t)_pthread_qos_class_encode(QOS_CLASS_MAINTENANCE, 0, 0)
-				     }};
-
-	struct kevent_qos_s kev_err[] = {{ 0 }};
-
-	/* Setup workloop for mach msg rcv */
-	r = kevent_id(25, kev, 1, kev_err, 1, NULL,
-	    NULL, KEVENT_FLAG_WORKLOOP | KEVENT_FLAG_ERROR_EVENTS);
-
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(r, "kevent_id");
-	T_QUIET; T_ASSERT_EQ(r, 0, "no errors returned from kevent_id");
-}
-
-T_HELPER_DECL(server_kevent_id,
-    "Reply with the QoS that a dispatch source event handler ran with")
-{
-	expect_kevent_id_recv(get_server_port());
+	register_port(LISTENER_WLID, get_server_port());
 	sigsuspend(0);
 	T_ASSERT_FAIL("should receive a message");
 }

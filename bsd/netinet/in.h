@@ -205,13 +205,16 @@
 #define IPPROTO_ENCAP           98              /* encapsulation header */
 #define IPPROTO_APES            99              /* any private encr. scheme */
 #define IPPROTO_GMTP            100             /* GMTP*/
-/* 101-254: Partly Unassigned */
+/* 101-252: Partly Unassigned */
 #define IPPROTO_PIM             103             /* Protocol Independent Mcast */
 #define IPPROTO_IPCOMP          108             /* payload compression (IPComp) */
 #define IPPROTO_PGM             113             /* PGM */
 #define IPPROTO_SCTP            132             /* SCTP */
-/* 255: Reserved */
+/* 253-254: Experimentation and testing; 255: Reserved (RFC3692) */
 /* BSD Private, local use, namespace incursion */
+#ifdef PRIVATE
+#define IPPROTO_QUIC            253             /* QUIC protocol (Over UDP) */
+#endif /* PRIVATE */
 #define IPPROTO_DIVERT          254             /* divert pseudo-protocol */
 #endif  /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 #define IPPROTO_RAW             255             /* raw IP packet */
@@ -814,7 +817,6 @@ union sockaddr_in_4_6 {
 	struct sockaddr_in      sin;
 	struct sockaddr_in6     sin6;
 };
-
 #define CLAT46_HDR_EXPANSION_OVERHD     (sizeof(struct ip6_hdr) - sizeof(struct ip))
 
 /*

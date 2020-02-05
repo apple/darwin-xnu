@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -136,7 +136,13 @@ static u_int32_t        div_sendspace = DIVSNDQ;        /* XXX sysctl ? */
 static u_int32_t        div_recvspace = DIVRCVQ;        /* XXX sysctl ? */
 
 /* Optimization: have this preinitialized */
-static struct sockaddr_in divsrc = { sizeof(divsrc), AF_INET, 0, { 0 }, { 0, 0, 0, 0, 0, 0, 0, 0 } };
+static struct sockaddr_in divsrc = {
+	.sin_len = sizeof(divsrc),
+	.sin_family = AF_INET,
+	.sin_port = 0,
+	.sin_addr = { .s_addr = 0 },
+	.sin_zero = { 0, 0, 0, 0, 0, 0, 0, 0 }
+};
 
 /* Internal functions */
 static int div_output(struct socket *so,

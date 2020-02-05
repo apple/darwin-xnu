@@ -43,7 +43,7 @@ def ShowInterrupts(cmd_args=None):
             cpu_data_entry = Cast(element, 'cpu_data_t *')
             print "CPU {} IRQ: {:d}\n".format(y, cpu_data_entry.cpu_stat.irq_ex_cnt)
             print "CPU {} IPI: {:d}\n".format(y, cpu_data_entry.cpu_stat.ipi_cnt)
-            print "CPU {} PMI: {:d}\n".format(y, cpu_data_entry.cpu_stat.pmi_cnt)
+            print "CPU {} PMI: {:d}\n".format(y, cpu_data_entry.cpu_monotonic.mtc_npmis)
             print "CPU {} TMR: {:d}\n".format(y, cpu_data_entry.cpu_stat.timer_cnt)
             x = x + 1
         y = y + 1
@@ -162,6 +162,127 @@ def ShowCurremtAbsTime(cmd_args=None):
 
     print "Last dispatch time known: %d MATUs" % cur_abstime
 
+bucketStr = ["", "FIXPRI (>UI)", "TIMESHARE_FG", "TIMESHARE_IN", "TIMESHARE_DF", "TIMESHARE_UT", "TIMESHARE_BG"]
+
+@header("     {:>18s} | {:>20s} | {:>20s} | {:>10s} | {:>10s}".format('Thread Group', 'Interactivity Score', 'Last Timeshare Tick', 'pri_shift', 'highq'))
+def GetSchedClutchBucketSummary(clutch_bucket):
+    return "     0x{:>16x} | {:>20d} | {:>20d} | {:>10d} | {:>10d}".format(clutch_bucket.scb_clutch.sc_tg, clutch_bucket.scb_interactivity_score, clutch_bucket.scb_timeshare_tick, clutch_bucket.scb_pri_shift, clutch_bucket.scb_runq.highq)
+
+def ShowSchedClutchForPset(pset):
+    root_clutch = pset.pset_clutch_root
+    print "\n{:s} : {:d}\n\n".format("Current Timestamp", GetRecentTimestamp())
+    print "{:>10s} | {:>20s} | {:>30s} | {:>18s} | {:>10s} | {:>10s} | {:>30s} | {:>30s} | {:>15s} | ".format("Root", "Root Buckets", "Clutch Buckets", "Address", "Priority", "Count", "CPU Usage (MATUs)", "CPU Blocked (MATUs)", "Deadline (abs)") + GetSchedClutchBucketSummary.header
+    print "=" * 300
+    print "{:>10s} | {:>20s} | {:>30s} | 0x{:16x} | {:>10d} | {:>10d} | {:>30s} | {:>30s} | {:>15s} | ".format("Root", "*", "*", addressof(root_clutch), root_clutch.scr_priority, root_clutch.scr_thr_count, "*", "*", "*")
+    print "-" * 300
+
+    for i in range(1, 7):
+        root_bucket = root_clutch.scr_buckets[i]
+        print "{:>10s} | {:>20s} | {:>30s} | 0x{:16x} | {:>10s} | {:>10s} | {:>30s} | {:>30s} | {:>15d} | ".format("*", bucketStr[i], "*", addressof(root_bucket), "*", "*", "*", "*", root_bucket.scrb_deadline)
+        prioq = root_bucket.scrb_clutch_buckets
+        clutch_bucket_list = []
+        for clutch_bucket in IteratePriorityQueue(prioq, 'struct sched_clutch_bucket', 'scb_pqlink'):
+            clutch_bucket_list.append(clutch_bucket)
+        if len(clutch_bucket_list) > 0:
+            clutch_bucket_list.sort(key=lambda x: x.scb_priority, reverse=True)
+            for clutch_bucket in clutch_bucket_list:
+                cpu_used = clutch_bucket.scb_cpu_data.cpu_data.scbcd_cpu_used
+                cpu_blocked = clutch_bucket.scb_cpu_data.cpu_data.scbcd_cpu_blocked
+                print "{:>10s} | {:>20s} | {:>30s} | 0x{:16x} | {:>10d} | {:>10d} | {:>30d} | {:>30d} | {:>15s} | ".format("*", "*", clutch_bucket.scb_clutch.sc_tg.tg_name, clutch_bucket, clutch_bucket.scb_priority, clutch_bucket.scb_thr_count, cpu_used, cpu_blocked, "*") + GetSchedClutchBucketSummary(clutch_bucket)
+        print "-" * 300
+
+@lldb_command('showschedclutch')
+def ShowSchedClutch(cmd_args=[]):
+    """ Routine to print the clutch scheduler hierarchy.
+        Usage: showschedclutch <pset>
+    """
+    if not cmd_args:
+        raise ArgumentError("Invalid argument")
+    pset = kern.GetValueFromAddress(cmd_args[0], "processor_set_t")
+    ShowSchedClutchForPset(pset)
+
+@lldb_command('showschedclutchroot')
+def ShowSchedClutchRoot(cmd_args=[]):
+    """ show information about the root of the sched clutch hierarchy
+        Usage: showschedclutchroot <root>
+    """
+    if not cmd_args:
+        raise ArgumentError("Invalid argument")
+    root = kern.GetValueFromAddress(cmd_args[0], "struct sched_clutch_root *")
+    if not root:
+        print "unknown arguments:", str(cmd_args)
+        return False
+    print "{:>30s} : 0x{:16x}".format("Root", root)
+    print "{:>30s} : 0x{:16x}".format("Pset", root.scr_pset)
+    print "{:>30s} : {:d}".format("Priority", root.scr_priority)
+    print "{:>30s} : {:d}".format("Urgency", root.scr_urgency)
+    print "{:>30s} : {:d}".format("Threads", root.scr_thr_count)
+    print "{:>30s} : {:d}".format("Current Timestamp", GetRecentTimestamp())
+    print "{:>30s} : {:b} (BG/UT/DF/IN/FG/FIX/NULL)".format("Runnable Root Buckets Bitmap", int(root.scr_runnable_bitmap[0]))
+
+@lldb_command('showschedclutchrootbucket')
+def ShowSchedClutchRootBucket(cmd_args=[]):
+    """ show information about a root bucket in the sched clutch hierarchy
+        Usage: showschedclutchrootbucket <root_bucket>
+    """
+    if not cmd_args:
+        raise ArgumentError("Invalid argument")
+    root_bucket = kern.GetValueFromAddress(cmd_args[0], "struct sched_clutch_root_bucket *")
+    if not root_bucket:
+        print "unknown arguments:", str(cmd_args)
+        return False
+    print "{:<30s} : 0x{:16x}".format("Root Bucket", root_bucket)
+    print "{:<30s} : {:s}".format("Bucket Name", bucketStr[int(root_bucket.scrb_bucket)])
+    print "{:<30s} : {:d}".format("Deadline", root_bucket.scrb_deadline)
+    print "{:<30s} : {:d}".format("Current Timestamp", GetRecentTimestamp())
+    print "\n"
+    prioq = root_bucket.scrb_clutch_buckets
+    clutch_bucket_list = []
+    for clutch_bucket in IteratePriorityQueue(prioq, 'struct sched_clutch_bucket', 'scb_pqlink'):
+        clutch_bucket_list.append(clutch_bucket)
+    if len(clutch_bucket_list) > 0:
+        print "=" * 240
+        print "{:>30s} | {:>18s} | {:>20s} | {:>20s} | ".format("Name", "Clutch Bucket", "Priority", "Count") + GetSchedClutchBucketSummary.header
+        print "=" * 240
+        clutch_bucket_list.sort(key=lambda x: x.scb_priority, reverse=True)
+        for clutch_bucket in clutch_bucket_list:
+            print "{:>30s} | 0x{:16x} | {:>20d} | {:>20d} | ".format(clutch_bucket.scb_clutch.sc_tg.tg_name, clutch_bucket, clutch_bucket.scb_priority, clutch_bucket.scb_thr_count) + GetSchedClutchBucketSummary(clutch_bucket)
+
+@lldb_command('showschedclutchbucket')
+def ShowSchedClutchBucket(cmd_args=[]):
+    """ show information about a clutch bucket in the sched clutch hierarchy
+        Usage: showschedclutchbucket <clutch_bucket>
+    """
+    if not cmd_args:
+        raise ArgumentError("Invalid argument")
+    clutch_bucket = kern.GetValueFromAddress(cmd_args[0], "struct sched_clutch_bucket *")
+    if not clutch_bucket:
+        print "unknown arguments:", str(cmd_args)
+        return False
+    print "{:<30s} : 0x{:16x}".format("Clutch Bucket", clutch_bucket)
+    print "{:<30s} : {:s}".format("TG Name", clutch_bucket.scb_clutch.sc_tg.tg_name)
+    print "{:<30s} : {:d}".format("Priority", clutch_bucket.scb_priority)
+    print "{:<30s} : {:d}".format("Thread Count", clutch_bucket.scb_thr_count)
+    print "{:<30s} : 0x{:16x}".format("Thread Group", clutch_bucket.scb_clutch.sc_tg)
+    cpu_used = clutch_bucket.scb_cpu_data.cpu_data.scbcd_cpu_used
+    cpu_blocked = clutch_bucket.scb_cpu_data.cpu_data.scbcd_cpu_blocked
+    print "{:<30s} : {:d}".format("CPU Used (MATUs)", cpu_used)
+    print "{:<30s} : {:d}".format("CPU Blocked (MATUs)", cpu_blocked) 
+    print "{:<30s} : {:d}".format("Interactivity Score", clutch_bucket.scb_interactivity_score)
+    print "{:<30s} : {:d}".format("Last Timeshare Update Tick", clutch_bucket.scb_timeshare_tick)
+    print "{:<30s} : {:d}".format("Priority Shift", clutch_bucket.scb_pri_shift) 
+    print "\n"
+    runq = clutch_bucket.scb_clutchpri_prioq
+    thread_list = []
+    for thread in IteratePriorityQueue(runq, 'struct thread', 'sched_clutchpri_link'):
+        thread_list.append(thread)
+    if len(thread_list) > 0:
+        print "=" * 240
+        print GetThreadSummary.header + "{:s}".format("Process Name")
+        print "=" * 240
+        for thread in thread_list:
+            proc = Cast(thread.task.bsd_info, 'proc *')
+            print GetThreadSummary(thread) + "{:s}".format(str(proc.p_comm))
 
 @lldb_command('abs2nano')
 def ShowAbstimeToNanoTime(cmd_args=[]):
@@ -436,11 +557,11 @@ def ShowGroupSetSummary(runq, task_map):
         if unsigned(runq_queue_p) != unsigned(runq_queue_head):
             runq_queue_this_count = 0
 
-            for entry in ParanoidIterateLinkageChain(runq_queue_head, "sched_entry_t", "entry_links"):
+            for entry in ParanoidIterateLinkageChain(runq_queue_head, "sched_entry_t", "entry_links", circleQueue=True):
                 runq_queue_this_count += 1
 
             print "      Queue [{: <#012x}] Priority {: <3d} count {:d}\n".format(runq_queue_head, runq_queue_i, runq_queue_this_count)
-            for entry in ParanoidIterateLinkageChain(runq_queue_head, "sched_entry_t", "entry_links"):
+            for entry in ParanoidIterateLinkageChain(runq_queue_head, "sched_entry_t", "entry_links", circleQueue=True):
                 group_addr = unsigned(entry) - (sizeof(dereference(entry)) * unsigned(entry.sched_pri))
                 group = kern.GetValueFromAddress(unsigned(group_addr), 'sched_group_t')
                 task = task_map.get(unsigned(group), 0x0)
@@ -474,17 +595,17 @@ def ShowRunQSummary(runq):
 
     for runq_queue_i in xrange(runq_queue_count) :
         runq_queue_head = addressof(runq.queues[runq_queue_i])
-        runq_queue_p = runq_queue_head.next
+        runq_queue_p = runq_queue_head.head
 
-        if unsigned(runq_queue_p) != unsigned(runq_queue_head):
+        if unsigned(runq_queue_p):
             runq_queue_this_count = 0
 
-            for thread in ParanoidIterateLinkageChain(runq_queue_head, "thread_t", "runq_links"):
+            for thread in ParanoidIterateLinkageChain(runq_queue_head, "thread_t", "runq_links", circleQueue=True):
                 runq_queue_this_count += 1
 
             print "      Queue [{: <#012x}] Priority {: <3d} count {:d}\n".format(runq_queue_head, runq_queue_i, runq_queue_this_count)
             print "\t" + GetThreadSummary.header + "\n"
-            for thread in ParanoidIterateLinkageChain(runq_queue_head, "thread_t", "runq_links"):
+            for thread in ParanoidIterateLinkageChain(runq_queue_head, "thread_t", "runq_links", circleQueue=True):
                 print "\t" + GetThreadSummary(thread) + "\n"
                 if config['verbosity'] > vHUMAN :
                     print "\t" + GetThreadBackTrace(thread, prefix="\t\t") + "\n"
@@ -496,7 +617,7 @@ def ShowRTRunQSummary(rt_runq):
     print "    Realtime Queue ({:<#012x}) Count {:d}\n".format(addressof(rt_runq.queue), rt_runq.count)
     if rt_runq.count != 0:
         print "\t" + GetThreadSummary.header + "\n"
-        for rt_runq_thread in ParanoidIterateLinkageChain(rt_runq.queue, "thread_t", "runq_links"):
+        for rt_runq_thread in ParanoidIterateLinkageChain(rt_runq.queue, "thread_t", "runq_links", circleQueue=True):
             print "\t" + GetThreadSummary(rt_runq_thread) + "\n"
 
 def ShowGrrrSummary(grrr_runq):
@@ -514,16 +635,10 @@ def ShowGrrrSummary(grrr_runq):
             print "Count {:d} Weight {:d}\n".format(grrr_group.count, grrr_group.weight)
             grrr_group_client_head = addressof(grrr_group.clients)
             print GetThreadSummary.header
-            for thread in ParanoidIterateLinkageChain(grrr_group_client_head, "thread_t", "runq_links"):
+            for thread in ParanoidIterateLinkageChain(grrr_group_client_head, "thread_t", "runq_links", circleQueue=True):
                 print "\t" + GetThreadSummary(thread) + "\n"
                 if config['verbosity'] > vHUMAN :
                     print "\t" + GetThreadBackTrace(thread, prefix="\t\t") + "\n"
-
-def ShowNextThread(processor):
-    if (processor.next_thread != 0) :
-        print "      " + "Next thread:\n"
-        print "\t" + GetThreadSummary.header + "\n"
-        print "\t" + GetThreadSummary(processor.next_thread) + "\n"
 
 def ShowActiveThread(processor):
     if (processor.active_thread != 0) :
@@ -541,10 +656,8 @@ def ShowScheduler(cmd_args=None):
     show_priority_runq = 0
     show_priority_pset_runq = 0
     show_group_pset_runq = 0
-    if unsigned(kern.globals.sched_current_dispatch) != 0 :
-        sched_string = str(kern.globals.sched_current_dispatch.sched_name)
-    else :
-        sched_string = str(kern.globals.sched_string)
+    show_clutch = 0
+    sched_string = str(kern.globals.sched_string)
 
     if sched_string == "traditional":
         show_priority_runq = 1
@@ -561,24 +674,28 @@ def ShowScheduler(cmd_args=None):
     elif sched_string == "amp":
         show_priority_pset_runq = 1
         show_priority_runq = 1
+    elif sched_string == "clutch":
+        show_clutch = 1
     else :
         print "Unknown sched_string {:s}".format(sched_string)
 
-    if unsigned(kern.globals.sched_current_dispatch) != 0 :
-        print "Scheduler: {:s} ({:s})\n".format(sched_string,
-                kern.Symbolicate(unsigned(kern.globals.sched_current_dispatch)))
+    print "Scheduler: {:s}\n".format(sched_string)
 
-    run_buckets = kern.globals.sched_run_buckets
-
-    run_count      = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_RUN')]
-    fixpri_count   = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_FIXPRI')]
-    share_fg_count = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_FG')]
-    share_df_count = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_DF')]
-    share_ut_count = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_UT')]
-    share_bg_count = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_BG')]
-
-    print "Processors: {g.processor_avail_count:d} Runnable threads: {:d} Fixpri threads: {:d}\n".format(run_count, fixpri_count, g=kern.globals)
-    print "FG Timeshare threads: {:d} DF Timeshare threads: {:d} UT Timeshare threads: {:d} BG Timeshare threads: {:d}\n".format(share_fg_count, share_df_count, share_ut_count, share_bg_count)
+    if show_clutch == 0:
+        run_buckets = kern.globals.sched_run_buckets
+        run_count      = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_RUN')]
+        fixpri_count   = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_FIXPRI')]
+        share_fg_count = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_FG')]
+        share_df_count = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_DF')]
+        share_ut_count = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_UT')]
+        share_bg_count = run_buckets[GetEnumValue('sched_bucket_t::TH_BUCKET_SHARE_BG')]
+        print "Processors: {g.processor_avail_count:d} Runnable threads: {:d} Fixpri threads: {:d}\n".format(run_count, fixpri_count, g=kern.globals)
+        print "FG Timeshare threads: {:d} DF Timeshare threads: {:d} UT Timeshare threads: {:d} BG Timeshare threads: {:d}\n".format(share_fg_count, share_df_count, share_ut_count, share_bg_count)
+    
+    processor_offline     = GetEnumValue('processor_state_t::PROCESSOR_OFF_LINE')
+    processor_idle        = GetEnumValue('processor_state_t::PROCESSOR_IDLE')
+    processor_dispatching = GetEnumValue('processor_state_t::PROCESSOR_DISPATCHING')
+    processor_running     = GetEnumValue('processor_state_t::PROCESSOR_RUNNING')
 
     if show_group_pset_runq:
         if hasattr(kern.globals, "multiq_sanity_check"):
@@ -626,13 +743,12 @@ def ShowScheduler(cmd_args=None):
             processor_array = kern.globals.processor_array
 
             print "Active Processors:\n"
-            active_bitmap = int(pset.cpu_state_map[5]) | int(pset.cpu_state_map[6])
+            active_bitmap = int(pset.cpu_state_map[processor_dispatching]) | int(pset.cpu_state_map[processor_running])
             for cpuid in IterateBitmap(active_bitmap):
                 processor = processor_array[cpuid]
                 if processor != 0:
                     print "    " + GetProcessorSummary(processor)
                     ShowActiveThread(processor)
-                    ShowNextThread(processor)
 
                     if show_priority_runq:
                         runq = processor.runq
@@ -644,13 +760,12 @@ def ShowScheduler(cmd_args=None):
 
 
             print "Idle Processors:\n"
-            idle_bitmap = int(pset.cpu_state_map[4]) & int(pset.primary_map)
+            idle_bitmap = int(pset.cpu_state_map[processor_idle]) & int(pset.primary_map)
             for cpuid in IterateBitmap(idle_bitmap):
                 processor = processor_array[cpuid]
                 if processor != 0:
                     print "    " + GetProcessorSummary(processor)
                     ShowActiveThread(processor)
-                    ShowNextThread(processor)
 
                     if show_priority_runq:
                         ShowRunQSummary(processor.runq)
@@ -658,13 +773,12 @@ def ShowScheduler(cmd_args=None):
 
 
             print "Idle Secondary Processors:\n"
-            idle_bitmap = int(pset.cpu_state_map[4]) & ~(int(pset.primary_map))
+            idle_bitmap = int(pset.cpu_state_map[processor_idle]) & ~(int(pset.primary_map))
             for cpuid in IterateBitmap(idle_bitmap):
                 processor = processor_array[cpuid]
                 if processor != 0:
                     print "    " + GetProcessorSummary(processor)
                     ShowActiveThread(processor)
-                    ShowNextThread(processor)
 
                     if show_priority_runq:
                         print ShowRunQSummary(processor.runq)
@@ -673,7 +787,7 @@ def ShowScheduler(cmd_args=None):
 
             print "Other Processors:\n"
             other_bitmap = 0
-            for i in range(0, 4):
+            for i in range(processor_offline, processor_idle):
                 other_bitmap |= int(pset.cpu_state_map[i])
             other_bitmap &= int(pset.cpu_bitmask)
             for cpuid in IterateBitmap(other_bitmap):
@@ -681,40 +795,41 @@ def ShowScheduler(cmd_args=None):
                 if processor != 0:
                     print "    " + GetProcessorSummary(processor)
                     ShowActiveThread(processor)
-                    ShowNextThread(processor)
 
                     if show_priority_runq:
                         ShowRunQSummary(processor.runq)
             print " \n"
 
+            if show_clutch:
+                print "=== Clutch Scheduler Hierarchy ===\n\n"
+                ShowSchedClutchForPset(pset)
 
             pset = pset.pset_list
 
         node = node.node_list
 
-    print "\nTerminate Queue: ({:<#012x})\n".format(addressof(kern.globals.thread_terminate_queue))
-    first = False
-    for thread in ParanoidIterateLinkageChain(kern.globals.thread_terminate_queue, "thread_t", "runq_links"):
-        if first:
-            print "\t" + GetThreadSummary.header + "\n"
-            first = True
-        print "\t" + GetThreadSummary(thread) + "\n"
-
     print "\nCrashed Threads Queue: ({:<#012x})\n".format(addressof(kern.globals.crashed_threads_queue))
-    first = False
+    first = True
     for thread in ParanoidIterateLinkageChain(kern.globals.crashed_threads_queue, "thread_t", "runq_links"):
         if first:
-            print "\t" + GetThreadSummary.header + "\n"
-            first = True
-        print "\t" + GetThreadSummary(thread) + "\n"
+            print "\t" + GetThreadSummary.header
+            first = False
+        print "\t" + GetThreadSummary(thread)
 
-    print "\nWaiting For Kernel Stacks Queue: ({:<#012x})\n".format(addressof(kern.globals.thread_stack_queue))
-    first = False
-    for thread in ParanoidIterateLinkageChain(kern.globals.thread_stack_queue, "thread_t", "runq_links"):
-        if first:
-            print "\t" + GetThreadSummary.header + "\n"
-            first = True
-        print "\t" + GetThreadSummary(thread) + "\n"
+    def dump_mpsc_thread_queue(name, head):
+        head = addressof(head)
+        print "\n{:s}: ({:<#012x})\n".format(name, head)
+        first = True
+        for thread in IterateMPSCQueue(head.mpd_queue, 'struct thread', 'mpsc_links'):
+            if first:
+                print "\t" + GetThreadSummary.header
+                first = False
+            print "\t" + GetThreadSummary(thread)
+
+    dump_mpsc_thread_queue("Terminate Queue", kern.globals.thread_terminate_queue)
+    dump_mpsc_thread_queue("Waiting For Kernel Stacks Queue", kern.globals.thread_stack_queue)
+    dump_mpsc_thread_queue("Thread Exception Queue", kern.globals.thread_exception_queue)
+    dump_mpsc_thread_queue("Thread Deallocate Queue", kern.globals.thread_deallocate_queue)
 
     print "\n"
 
@@ -723,8 +838,8 @@ def ShowScheduler(cmd_args=None):
 # EndMacro: showallprocessors
 
 
-def ParanoidIterateLinkageChain(queue_head, element_type, field_name, field_ofst=0):
-    """ Iterate over a Linkage Chain queue in kernel of type queue_head_t. (osfmk/kern/queue.h method 1)
+def ParanoidIterateLinkageChain(queue_head, element_type, field_name, field_ofst=0, circleQueue=False):
+    """ Iterate over a Linkage Chain queue in kernel of type queue_head_t or circle_queue_head_t. (osfmk/kern/queue.h method 1 or circle_queue.h)
         This is equivalent to the qe_foreach_element() macro
         Blows up aggressively and descriptively when something goes wrong iterating a queue.
         Prints correctness errors, and throws exceptions on 'cannot proceed' errors
@@ -754,11 +869,15 @@ def ParanoidIterateLinkageChain(queue_head, element_type, field_name, field_ofst
     if not queue_head.GetSBValue().GetType().IsPointerType() :
         queue_head = addressof(queue_head)
 
-    # Mosh the value into a brand new value, to really get rid of its old cvalue history
-    queue_head = kern.GetValueFromAddress(unsigned(queue_head), 'struct queue_entry *')
+    if circleQueue:
+        # Mosh the value into a brand new value, to really get rid of its old cvalue history
+        queue_head = kern.GetValueFromAddress(unsigned(queue_head), 'struct circle_queue_head *').head
+    else:
+        # Mosh the value into a brand new value, to really get rid of its old cvalue history
+        queue_head = kern.GetValueFromAddress(unsigned(queue_head), 'struct queue_entry *')
 
     if unsigned(queue_head) == 0:
-        if ParanoidIterateLinkageChain.enable_paranoia:
+        if not circleQueue and ParanoidIterateLinkageChain.enable_paranoia:
             print "bad queue_head_t: {:s}".format(queue_head)
         return
 
@@ -792,7 +911,9 @@ def ParanoidIterateLinkageChain(queue_head, element_type, field_name, field_ofst
     obj = 0
 
     try:
-        while (unsigned(queue_head) != unsigned(link)):
+        while True:
+            if not circleQueue and unsigned(queue_head) == unsigned(link):
+                break;
             if ParanoidIterateLinkageChain.enable_paranoia:
                 if unsigned(link.next) == 0:
                     raise ValueError("NULL next pointer: queue_head {:>#18x} link: {:>#18x} next: {:>#18x} prev: {:>#18x}".format(queue_head, link, link.next, link.prev))
@@ -809,6 +930,8 @@ def ParanoidIterateLinkageChain(queue_head, element_type, field_name, field_ofst
             yield obj
             last_link = link
             link = link.next
+            if circleQueue and unsigned(queue_head) == unsigned(link):
+                break;
     except:
         exc_info = sys.exc_info()
         try:

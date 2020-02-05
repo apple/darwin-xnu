@@ -176,6 +176,8 @@ extern int              setPop(uint64_t time);
 
 extern void             timer_resync_deadlines(void);
 
+extern void             timer_queue_expire_local(void *arg);
+
 extern void             timer_set_deadline(uint64_t deadline);
 
 extern void             quantum_timer_set_deadline(uint64_t deadline);

@@ -38,32 +38,42 @@
 
 /* This can be used for SHA1, SHA256 and SHA224 */
 void
-ccdigest_final_64be(const struct ccdigest_info *di, ccdigest_ctx_t ctx,
-    unsigned char *digest)
+ccdigest_final_64be(const struct ccdigest_info *di, ccdigest_ctx_t ctx, unsigned char *digest)
 {
-	ccdigest_nbits(di, ctx) += ccdigest_num(di, ctx) * 8;
-	ccdigest_data(di, ctx)[ccdigest_num(di, ctx)++] = 0x80;
-
-	/* If we don't have at least 8 bytes (for the length) left we need to add
-	 *  a second block. */
-	if (ccdigest_num(di, ctx) > 64 - 8) {
-		while (ccdigest_num(di, ctx) < 64) {
-			ccdigest_data(di, ctx)[ccdigest_num(di, ctx)++] = 0;
-		}
-		di->compress(ccdigest_state(di, ctx), 1, ccdigest_data(di, ctx));
+	// Sanity check to recover from ctx corruptions.
+	if (ccdigest_num(di, ctx) >= di->block_size) {
 		ccdigest_num(di, ctx) = 0;
 	}
 
-	/* pad upto block_size minus 8 with 0s */
-	while (ccdigest_num(di, ctx) < 64 - 8) {
-		ccdigest_data(di, ctx)[ccdigest_num(di, ctx)++] = 0;
+	// Clone the state.
+	ccdigest_di_decl(di, tmp);
+	cc_memcpy(tmp, ctx, ccdigest_di_size(di));
+
+	ccdigest_nbits(di, tmp) += ccdigest_num(di, tmp) * 8;
+	ccdigest_data(di, tmp)[ccdigest_num(di, tmp)++] = 0x80;
+
+	/* If we don't have at least 8 bytes (for the length) left we need to add
+	 *  a second block. */
+	if (ccdigest_num(di, tmp) > 64 - 8) {
+		while (ccdigest_num(di, tmp) < 64) {
+			ccdigest_data(di, tmp)[ccdigest_num(di, tmp)++] = 0;
+		}
+		di->compress(ccdigest_state(di, tmp), 1, ccdigest_data(di, tmp));
+		ccdigest_num(di, tmp) = 0;
 	}
 
-	CC_STORE64_BE(ccdigest_nbits(di, ctx), ccdigest_data(di, ctx) + 64 - 8);
-	di->compress(ccdigest_state(di, ctx), 1, ccdigest_data(di, ctx));
+	/* pad upto block_size minus 8 with 0s */
+	while (ccdigest_num(di, tmp) < 64 - 8) {
+		ccdigest_data(di, tmp)[ccdigest_num(di, tmp)++] = 0;
+	}
+
+	CC_STORE64_BE(ccdigest_nbits(di, tmp), ccdigest_data(di, tmp) + 64 - 8);
+	di->compress(ccdigest_state(di, tmp), 1, ccdigest_data(di, tmp));
 
 	/* copy output */
 	for (unsigned int i = 0; i < di->output_size / 4; i++) {
-		CC_STORE32_BE(ccdigest_state_u32(di, ctx)[i], digest + (4 * i));
+		CC_STORE32_BE(ccdigest_state_u32(di, tmp)[i], digest + (4 * i));
 	}
+
+	ccdigest_di_clear(di, tmp);
 }

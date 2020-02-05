@@ -166,6 +166,7 @@ hibernate_page_list_allocate(boolean_t log)
 	}
 
 	if (num_banks >= MAX_BANKS) {
+		HIBLOG("%s error, num_banks exceed MAX_BANKS(0x%x)\n", __FUNCTION__, MAX_BANKS);
 		return NULL;
 	}
 

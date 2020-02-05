@@ -254,7 +254,7 @@ you should be careful to support the behaviour specified by this document.
 .
 .Pp
 If the directory contains a mount point, then
-.Dv DIR_MNTSTATUS_MNTPOINT
+.Dq DIR_MNTSTATUS_MNTPOINT
 will be set in the
 .Dv ATTR_DIR_MOUNTSTATUS
 for that entry; all other attributes for that entry, however,
@@ -262,6 +262,17 @@ will be for the underlying file system (as opposed to the mounted
 file system).
 .Xr getattrlist 2
 should be used to get the attributes for the mount point.
+.Pp
+A directory which is a firmlink will have the
+.Dq SF_FIRMLINK
+flag set in its
+ATTR_CMN_FLAGS attribute entry.
+However the attributes returned by
+.Fn getdirentriesattr
+will be those from the firmlink, not the firmlink's target.
+To get the attributes of the firmlink's target, call
+.Xr getattrlist 2
+on the firmlink.
 .Sh ERRORS
 .Fn getdirentriesattr
 will fail if:

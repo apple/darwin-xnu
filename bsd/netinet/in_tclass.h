@@ -67,7 +67,8 @@ struct so_tcdbg {
 struct net_qos_param {
 	u_int64_t nq_transfer_size;     /* transfer size in bytes */
 	u_int32_t nq_use_expensive:1,   /* allowed = 1 otherwise 0 */
-	    nq_uplink:1;                /* uplink = 1 otherwise 0 */
+	    nq_uplink:1,                /* uplink = 1 otherwise 0 */
+	    nq_use_constrained:1;       /* allowed = 1 otherwise 0 */
 	u_int32_t nq_unused;            /* for future expansion */
 };
 
@@ -91,13 +92,17 @@ extern int net_qos_guideline(struct net_qos_param *param, size_t param_len);
 
 extern int net_qos_policy_restricted;
 extern int net_qos_policy_wifi_enabled;
-extern int net_qos_policy_none_wifi_enabled;
 extern int net_qos_policy_capable_enabled;
 
 extern void net_qos_map_init(void);
+extern void net_qos_map_change(uint32_t mode);
 extern errno_t set_packet_qos(struct mbuf *, struct ifnet *, boolean_t, int,
     int, u_int8_t *);
 extern int so_get_netsvc_marking_level(struct socket *);
+
+extern uint8_t fastlane_sc_to_dscp(uint32_t svc_class);
+extern uint8_t rfc4594_sc_to_dscp(uint32_t svc_class);
+extern mbuf_traffic_class_t rfc4594_dscp_to_tc(uint8_t dscp);
 
 #endif /* BSD_KERNEL_PRIVATE */
 

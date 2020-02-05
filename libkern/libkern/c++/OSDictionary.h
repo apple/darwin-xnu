@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -38,10 +38,15 @@
 #define _IOKIT_IODICTIONARY_H
 
 #include <libkern/c++/OSCollection.h>
+#include <libkern/c++/OSArray.h>
+#include <libkern/c++/OSPtr.h>
 
 class OSArray;
 class OSSymbol;
 class OSString;
+class OSDictionary;
+
+typedef OSPtr<OSDictionary> OSDictionaryPtr;
 
 /*!
  * @header
@@ -114,7 +119,7 @@ class OSDictionary : public OSCollection
 {
 	friend class OSSerialize;
 
-	OSDeclareDefaultStructors(OSDictionary)
+	OSDeclareDefaultStructors(OSDictionary);
 
 #if APPLE_KEXT_ALIGN_CONTAINERS
 
@@ -123,8 +128,8 @@ protected:
 	unsigned int   capacity;
 	unsigned int   capacityIncrement;
 	struct dictEntry {
-		const OSSymbol        * key;
-		const OSMetaClassBase * value;
+		OSCollectionTaggedPtr<const OSSymbol>        key;
+		OSCollectionTaggedPtr<const OSMetaClassBase> value;
 #if XNU_KERNEL_PRIVATE
 		static int compare(const void *, const void *);
 #endif
@@ -135,8 +140,8 @@ protected:
 
 protected:
 	struct dictEntry {
-		const OSSymbol        * key;
-		const OSMetaClassBase * value;
+		OSCollectionTaggedPtr<const OSSymbol>        key;
+		OSCollectionTaggedPtr<const OSMetaClassBase> value;
 #if XNU_KERNEL_PRIVATE
 		static int compare(const void *, const void *);
 #endif
@@ -179,7 +184,7 @@ public:
  * (<i>unlike</i> @link //apple_ref/doc/uid/20001497 CFMutableDictionary@/link,
  * for which the initial capacity is a hard limit).
  */
-	static OSDictionary * withCapacity(unsigned int capacity);
+	static OSDictionaryPtr withCapacity(unsigned int capacity);
 
 
 /*!
@@ -214,7 +219,7 @@ public:
  * @link //apple_ref/doc/uid/20001497 CFMutableDictionary@/link,
  * for which the initial capacity is a hard limit).
  */
-	static OSDictionary * withObjects(
+	static OSDictionaryPtr withObjects(
 		const OSObject * objects[],
 		const OSSymbol * keys[],
 		unsigned int     count,
@@ -252,7 +257,7 @@ public:
  * @link //apple_ref/doc/uid/20001497 CFMutableDictionary@/link,
  * for which the initial capacity is a hard limit).
  */
-	static OSDictionary * withObjects(
+	static OSDictionaryPtr withObjects(
 		const OSObject * objects[],
 		const OSString * keys[],
 		unsigned int     count,
@@ -293,7 +298,7 @@ public:
  * in the new OSDictionary,
  * not copied.
  */
-	static OSDictionary * withDictionary(
+	static OSDictionaryPtr withDictionary(
 		const OSDictionary * dict,
 		unsigned int         capacity = 0);
 
@@ -898,7 +903,7 @@ public:
 	virtual unsigned setOptions(
 		unsigned   options,
 		unsigned   mask,
-		void     * context = 0) APPLE_KEXT_OVERRIDE;
+		void     * context = NULL) APPLE_KEXT_OVERRIDE;
 
 
 /*!
@@ -924,12 +929,12 @@ public:
  * Objects that are not derived from OSCollection are retained
  * rather than copied.
  */
-	OSCollection * copyCollection(OSDictionary * cycleDict = 0) APPLE_KEXT_OVERRIDE;
+	OSCollectionPtr copyCollection(OSDictionary * cycleDict = NULL) APPLE_KEXT_OVERRIDE;
 
 #if XNU_KERNEL_PRIVATE
 	bool setObject(const OSSymbol *aKey, const OSMetaClassBase *anObject, bool onlyAdd);
-	OSArray * copyKeys(void);
 	void sortBySymbol(void);
+	OSArrayPtr copyKeys(void);
 #endif /* XNU_KERNEL_PRIVATE */
 
 

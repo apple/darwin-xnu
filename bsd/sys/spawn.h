@@ -61,7 +61,9 @@
 #ifdef  PRIVATE
 #define _POSIX_SPAWN_DISABLE_ASLR       0x0100
 #define _POSIX_SPAWN_NANO_ALLOCATOR     0x0200
-/* unused                               0x0400 */
+#endif  /* PRIVATE */
+#define POSIX_SPAWN_SETSID              0x0400
+#ifdef  PRIVATE
 /* unused                               0x0800 */
 /* unused                               0x1000 */
 #define _POSIX_SPAWN_ALLOW_DATA_EXEC    0x2000

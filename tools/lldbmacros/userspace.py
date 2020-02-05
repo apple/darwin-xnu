@@ -77,6 +77,7 @@ def ShowX86UserStack(thread, user_lib_info = None):
     return
 
 def _PrintARMUserStack(task, cur_pc, cur_fp, framesize, frametype, frameformat, user_lib_info=None):
+    cur_pc = kern.StripUserPAC(cur_pc)
     if cur_pc == 0:
         "No valid user context for this activation."
         return
@@ -87,6 +88,7 @@ def _PrintARMUserStack(task, cur_pc, cur_fp, framesize, frametype, frameformat, 
         frame = GetUserDataAsString(task, cur_fp, framesize)
         cur_fp = _ExtractDataFromString(frame, 0, frametype)
         cur_pc = _ExtractDataFromString(frame, (framesize / 2), frametype)
+        cur_pc = kern.StripUserPAC(cur_pc)
         if not cur_fp:
             break
         print frameformat.format(frameno, cur_fp, cur_pc, GetBinaryNameForPC(cur_pc, user_lib_info))
@@ -864,6 +866,38 @@ def ShowOSMalloc(cmd_args=None):
 
 # EndMacro: showosmalloc
 
+def SaveDataToFile(start_addr, length, outputfile, task=None,):
+    """ Save the data at the specified address (of the specified length) to the file.
+        params: start_addr : start address of the region of memory to save
+                length : length of the region of memory to save
+                outputfile : file to save the data in
+                task (optional) : task containing the memory region (if from user data)
+        returns: True if we saved the requested data, False otherwise
+    """
+    if task:
+        memory_data = GetUserDataAsString(task, start_addr, length)
+    else:
+        data_ptr = kern.GetValueFromAddress(start_addr, 'uint8_t *')
+        if data_ptr == 0:
+            print "invalid kernel start address specified"
+            return False
+        memory_data = []
+        for i in range(length):
+            memory_data.append(chr(data_ptr[i]))
+            if i % 50000 == 0:
+                print "%d of %d            \r" % (i, length),
+        memory_data = ''.join(memory_data)
+
+    if len(memory_data) != length:
+        print "Failed to read {:d} bytes from address {: <#020x}".format(length, start_addr)
+        return False
+
+    fh = open(outputfile, 'w')
+    fh.write(memory_data)
+    fh.close()
+    print "Saved {:d} bytes to file {:s}".format(length, outputfile)
+    return True
+
 
 @lldb_command('savekcdata', 'T:O:')
 def SaveKCDataToFile(cmd_args=None, cmd_options={}):
@@ -891,28 +925,6 @@ def SaveKCDataToFile(cmd_args=None, cmd_options={}):
     if flags_copyout:
         if not task:
             raise ArgumentError('Invalid task pointer provided.')
-        memory_data = GetUserDataAsString(task, memory_begin_address, memory_size)
+        return SaveDataToFile(memory_begin_address, memory_size, outputfile, task)
     else:
-        data_ptr = kern.GetValueFromAddress(memory_begin_address, 'uint8_t *')
-        if data_ptr == 0:
-            print "Kcdata descriptor is NULL"
-            return False
-        memory_data = []
-        for i in range(memory_size):
-            memory_data.append(chr(data_ptr[i]))
-            if i % 50000 == 0:
-                print "%d of %d            \r" % (i, memory_size),
-        memory_data = ''.join(memory_data)
-
-    if len(memory_data) != memory_size:
-        print "Failed to read {:d} bytes from address {: <#020x}".format(memory_size, memory_begin_address)
-        return False
-
-    fh = open(outputfile, 'w')
-    fh.write(memory_data)
-    fh.close()
-    print "Saved {:d} bytes to file {:s}".format(memory_size, outputfile)
-    return True
-
-
-
+        return SaveDataToFile(memory_begin_address, memory_size, outputfile, None)

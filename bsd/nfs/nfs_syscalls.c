@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -170,8 +170,12 @@ SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, is_mobile, CTLFLAG_RW | CTLFLAG_LO
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, squishy_flags, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_squishy_flags, 0, "");
 SYSCTL_UINT(_vfs_generic_nfs_client, OID_AUTO, debug_ctl, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_debug_ctl, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, readlink_nocache, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_readlink_nocache, 0, "");
+#if CONFIG_NFS_GSS
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, root_steals_gss_context, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_root_steals_ctx, 0, "");
+#endif
+#if CONFIG_NFS4
 SYSCTL_STRING(_vfs_generic_nfs_client, OID_AUTO, default_nfs4domain, CTLFLAG_RW | CTLFLAG_LOCKED, nfs4_default_domain, sizeof(nfs4_default_domain), "");
+#endif
 #endif /* NFSCLIENT */
 
 #if NFSSERVER
@@ -203,11 +207,11 @@ SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, upcall_queue_count, CTLFLAG_RD | C
 
 #if NFSCLIENT
 
+#if CONFIG_NFS4
 static int
 mapname2id(struct nfs_testmapid *map)
 {
 	int error;
-
 	error = nfs4_id2guid(map->ntm_name, &map->ntm_guid, map->ntm_grpflag);
 	if (error) {
 		return error;
@@ -257,6 +261,8 @@ nfsclnt_testidmap(proc_t p, user_addr_t argp)
 	}
 
 	error = copyin(argp, &mapid, sizeof(mapid));
+	mapid.ntm_name[MAXIDNAMELEN - 1] = '\0';
+
 	if (error) {
 		return error;
 	}
@@ -281,6 +287,7 @@ nfsclnt_testidmap(proc_t p, user_addr_t argp)
 
 	return error ? error : coerror;
 }
+#endif
 
 int
 nfsclnt(proc_t p, struct nfsclnt_args *uap, __unused int *retval)
@@ -298,9 +305,11 @@ nfsclnt(proc_t p, struct nfsclnt_args *uap, __unused int *retval)
 	case NFSCLNT_LOCKDNOTIFY:
 		error = nfslockdnotify(p, uap->argp);
 		break;
+#if CONFIG_NFS4
 	case NFSCLNT_TESTIDMAP:
 		error = nfsclnt_testidmap(p, uap->argp);
 		break;
+#endif
 	default:
 		error = EINVAL;
 	}
@@ -907,6 +916,8 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 	if (sotype == SOCK_STREAM) {
 		error = nfsrv_check_exports_allow_address(mynam);
 		if (error) {
+			log(LOG_INFO, "nfsvc_addsock:: nfsrv_check_exports_allow_address(myname) returned %d\n", error);
+			mbuf_freem(mynam);
 			return error;
 		}
 		sock_setsockopt(so, SOL_SOCKET, SO_KEEPALIVE, &on, sizeof(on));
@@ -914,8 +925,8 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 	if ((sodomain == AF_INET) && (soprotocol == IPPROTO_TCP)) {
 		sock_setsockopt(so, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
 	}
-	if (sotype == SOCK_DGRAM) { /* set socket buffer sizes for UDP */
-		int reserve = NFS_UDPSOCKBUF;
+	if (sotype == SOCK_DGRAM || sodomain == AF_LOCAL) { /* set socket buffer sizes for UDP */
+		int reserve = (sotype == SOCK_DGRAM) ? NFS_UDPSOCKBUF : (2 * 1024 * 1024);
 		error |= sock_setsockopt(so, SOL_SOCKET, SO_SNDBUF, &reserve, sizeof(reserve));
 		error |= sock_setsockopt(so, SOL_SOCKET, SO_RCVBUF, &reserve, sizeof(reserve));
 		if (error) {
@@ -977,7 +988,7 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 	/* add the socket to the list */
 	first = TAILQ_EMPTY(&nfsrv_socklist);
 	TAILQ_INSERT_TAIL(&nfsrv_socklist, slp, ns_chain);
-	if (soprotocol == IPPROTO_TCP) {
+	if (sotype == SOCK_STREAM) {
 		nfsrv_sock_tcp_cnt++;
 		if (nfsrv_sock_idle_timeout < 0) {
 			nfsrv_sock_idle_timeout = 0;

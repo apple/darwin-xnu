@@ -1,4 +1,4 @@
-.Dd April 30, 2013
+.Dd February 11, 2019
 .Dt getiopolicy_np 3
 .Os
 .Sh NAME
@@ -110,7 +110,7 @@ This
 lets users change the access time updates policy for the files accessed
 by the current thread or process.
 .Pp
-IOPOL_TYPE_VFS_ATIME_UPDATES supports following values for
+IOPOL_TYPE_VFS_ATIME_UPDATES supports the following values for
 .Fa policy:
 .Bl -tag -width IOPOL_ATIME_UPDATES_DEFAULT
 .It IOPOL_ATIME_UPDATES_OFF
@@ -120,12 +120,37 @@ to reduce the metadata I/O writes.
 .It IOPOL_ATIME_UPDATES_DEFAULT
 This is the default I/O policy for new threads.
 .El
-.El
 .Pp
 Like with IOPOL_TYPE_DISK, the I/O policy of a newly created process is
 inherited from its parent process.  Access time updates are turned off if the
 I/O policy is set to IOPOL_ATIME_UPDATES_OFF for the current thread or current
 process.
+.It IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES
+This
+.Fa iotype
+lets users change the materialization policy for dataless files accessed
+by the current thread or process.
+.Pp
+IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES supports the following values for
+.Fa policy:
+.Bl -tag -width IOPOL_MATERIALIZE_DATALESS
+.It IOPOL_MATERIALIZE_DATALESS_FILES_DEFAULT
+Selects the default materialization policy.
+For IOPOL_SCOPE_THREAD, all accesses by the current thread will follow the
+process policy.
+For IOPOL_SCOPE_PROCESS, all accesses will follow the system default
+policy
+.Pq IOPOL_MATERIALIZE_DATALESS_FILES_OFF .
+.It IOPOL_MATERIALIZE_DATALESS_FILES_OFF
+Disables materialization of dataless files by the current thread or
+process.
+.It IOPOL_MATERIALIZE_DATALESS_FILES_ON
+Enables materialization of dataless files by the current thread or
+process.
+.El
+.Pp
+New processes inherit the policy of their parent process.
+.El
 .Sh RETURN VALUES
 The
 .Fn getiopolicy_np

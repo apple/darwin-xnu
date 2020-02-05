@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -70,26 +70,26 @@ struct _s_x {
 #if FW2_DEBUG_VERBOSE
 
 static struct _s_x f_tcpflags[] = {
-	{ "syn", TH_SYN },
-	{ "fin", TH_FIN },
-	{ "ack", TH_ACK },
-	{ "psh", TH_PUSH },
-	{ "rst", TH_RST },
-	{ "urg", TH_URG },
-	{ "tcp flag", 0 },
-	{ NULL, 0 }
+	{ .s = "syn", .x = TH_SYN },
+	{ .s = "fin", .x = TH_FIN },
+	{ .s = "ack", .x = TH_ACK },
+	{ .s = "psh", .x = TH_PUSH },
+	{ .s = "rst", .x = TH_RST },
+	{ .s = "urg", .x = TH_URG },
+	{ .s = "tcp flag", .x = 0 },
+	{ .s = NULL, .x = 0 }
 };
 
 static struct _s_x f_tcpopts[] = {
-	{ "mss", IP_FW_TCPOPT_MSS },
-	{ "maxseg", IP_FW_TCPOPT_MSS },
-	{ "window", IP_FW_TCPOPT_WINDOW },
-	{ "sack", IP_FW_TCPOPT_SACK },
-	{ "ts", IP_FW_TCPOPT_TS },
-	{ "timestamp", IP_FW_TCPOPT_TS },
-	{ "cc", IP_FW_TCPOPT_CC },
-	{ "tcp option", 0 },
-	{ NULL, 0 }
+	{ .s = "mss", .x = IP_FW_TCPOPT_MSS },
+	{ .s = "maxseg", .x = IP_FW_TCPOPT_MSS },
+	{ .s = "window", .x = IP_FW_TCPOPT_WINDOW },
+	{ .s = "sack", .x = IP_FW_TCPOPT_SACK },
+	{ .s = "ts", .x = IP_FW_TCPOPT_TS },
+	{ .s = "timestamp", .x = IP_FW_TCPOPT_TS },
+	{ .s = "cc", .x = IP_FW_TCPOPT_CC },
+	{ .s = "tcp option", .x = 0 },
+	{ .s = NULL, .x = 0 }
 };
 
 
@@ -98,32 +98,32 @@ static struct _s_x f_tcpopts[] = {
  * (though in fact only the low 5 bits are significant).
  */
 static struct _s_x f_ipopts[] = {
-	{ "ssrr", IP_FW_IPOPT_SSRR},
-	{ "lsrr", IP_FW_IPOPT_LSRR},
-	{ "rr", IP_FW_IPOPT_RR},
-	{ "ts", IP_FW_IPOPT_TS},
-	{ "ip option", 0 },
-	{ NULL, 0 }
+	{ .s = "ssrr", .x = IP_FW_IPOPT_SSRR},
+	{ .s = "lsrr", .x = IP_FW_IPOPT_LSRR},
+	{ .s = "rr", .x = IP_FW_IPOPT_RR},
+	{ .s = "ts", .x = IP_FW_IPOPT_TS},
+	{ .s = "ip option", .x = 0 },
+	{ .s = NULL, .x = 0 }
 };
 
 static struct _s_x f_iptos[] = {
-	{ "lowdelay", IPTOS_LOWDELAY},
-	{ "throughput", IPTOS_THROUGHPUT},
-	{ "reliability", IPTOS_RELIABILITY},
-	{ "mincost", IPTOS_MINCOST},
-	{ "congestion", IPTOS_CE},
-	{ "ecntransport", IPTOS_ECT},
-	{ "ip tos option", 0},
-	{ NULL, 0 }
+	{ .s = "lowdelay", .x = IPTOS_LOWDELAY},
+	{ .s = "throughput", .x = IPTOS_THROUGHPUT},
+	{ .s = "reliability", .x = IPTOS_RELIABILITY},
+	{ .s = "mincost", .x = IPTOS_MINCOST},
+	{ .s = "congestion", .x = IPTOS_CE},
+	{ .s = "ecntransport", .x = IPTOS_ECT},
+	{ .s = "ip tos option", .x = 0},
+	{ .s = NULL, .x = 0 }
 };
 
 static struct _s_x limit_masks[] = {
-	{"all", DYN_SRC_ADDR | DYN_SRC_PORT | DYN_DST_ADDR | DYN_DST_PORT},
-	{"src-addr", DYN_SRC_ADDR},
-	{"src-port", DYN_SRC_PORT},
-	{"dst-addr", DYN_DST_ADDR},
-	{"dst-port", DYN_DST_PORT},
-	{NULL, 0}
+	{ .s = "all", .x = DYN_SRC_ADDR | DYN_SRC_PORT | DYN_DST_ADDR | DYN_DST_PORT},
+	{ .s = "src-addr", .x = DYN_SRC_ADDR},
+	{ .s = "src-port", .x = DYN_SRC_PORT},
+	{ .s = "dst-addr", .x = DYN_DST_ADDR},
+	{ .s = "dst-port", .x = DYN_DST_PORT},
+	{ .s = NULL, .x = 0}
 };
 
 #endif /* !FW2_DEBUG_VERBOSE */

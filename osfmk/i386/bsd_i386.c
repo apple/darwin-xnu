@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -451,7 +451,17 @@ mach_call_munger(x86_saved_state_t *state)
 	int call_number;
 	mach_call_t mach_call;
 	kern_return_t retval;
-	struct mach_call_args args = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+	struct mach_call_args args = {
+		.arg1 = 0,
+		.arg2 = 0,
+		.arg3 = 0,
+		.arg4 = 0,
+		.arg5 = 0,
+		.arg6 = 0,
+		.arg7 = 0,
+		.arg8 = 0,
+		.arg9 = 0
+	};
 	x86_saved_state32_t     *regs;
 
 	struct uthread *ut = get_bsdthread_info(current_thread());
@@ -542,7 +552,17 @@ mach_call_munger64(x86_saved_state_t *state)
 	int call_number;
 	int argc;
 	mach_call_t mach_call;
-	struct mach_call_args args = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+	struct mach_call_args args = {
+		.arg1 = 0,
+		.arg2 = 0,
+		.arg3 = 0,
+		.arg4 = 0,
+		.arg5 = 0,
+		.arg6 = 0,
+		.arg7 = 0,
+		.arg8 = 0,
+		.arg9 = 0
+	};
 	x86_saved_state64_t     *regs;
 
 	struct uthread *ut = get_bsdthread_info(current_thread());
@@ -574,8 +594,7 @@ mach_call_munger64(x86_saved_state_t *state)
 	argc = mach_trap_table[call_number].mach_trap_arg_count;
 	if (argc) {
 		int args_in_regs = MIN(6, argc);
-
-		memcpy(&args.arg1, &regs->rdi, args_in_regs * sizeof(syscall_arg_t));
+		__nochk_memcpy(&args.arg1, &regs->rdi, args_in_regs * sizeof(syscall_arg_t));
 
 		if (argc > 6) {
 			int copyin_count;

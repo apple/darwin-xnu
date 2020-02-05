@@ -29,6 +29,10 @@
 #ifndef _SYS_ULOCK_H
 #define _SYS_ULOCK_H
 
+#include <mach/mach_port.h>
+#include <sys/cdefs.h>
+#include <stdint.h>
+
 __BEGIN_DECLS
 
 #if PRIVATE
@@ -64,23 +68,30 @@ extern int __ulock_wake(uint32_t operation, void *addr, uint64_t wake_value);
 #endif /* !KERNEL */
 
 /*
- * operation bits [7, 0] contain the operation code
+ * operation bits [7, 0] contain the operation code.
+ *
+ * NOTE: make sure to add logic for handling any new
+ *       types to kdp_ulock_find_owner()
  */
-#define UL_COMPARE_AND_WAIT                             1
-#define UL_UNFAIR_LOCK                                  2
+#define UL_COMPARE_AND_WAIT             1
+#define UL_UNFAIR_LOCK                  2
+#define UL_COMPARE_AND_WAIT_SHARED      3
+#define UL_UNFAIR_LOCK64_SHARED         4
+#define UL_COMPARE_AND_WAIT64           5
+#define UL_COMPARE_AND_WAIT64_SHARED    6
 /* obsolete names */
-#define UL_OSSPINLOCK                                   UL_COMPARE_AND_WAIT
-#define UL_HANDOFFLOCK                                  UL_UNFAIR_LOCK
+#define UL_OSSPINLOCK                   UL_COMPARE_AND_WAIT
+#define UL_HANDOFFLOCK                  UL_UNFAIR_LOCK
 /* These operation code are only implemented in (DEVELOPMENT || DEBUG) kernels */
 #define UL_DEBUG_SIMULATE_COPYIN_FAULT  253
-#define UL_DEBUG_HASH_DUMP_ALL                  254
-#define UL_DEBUG_HASH_DUMP_PID                  255
+#define UL_DEBUG_HASH_DUMP_ALL          254
+#define UL_DEBUG_HASH_DUMP_PID          255
 
 /*
  * operation bits [15, 8] contain the flags for __ulock_wake
  */
-#define ULF_WAKE_ALL                                    0x00000100
-#define ULF_WAKE_THREAD                                 0x00000200
+#define ULF_WAKE_ALL                    0x00000100
+#define ULF_WAKE_THREAD                 0x00000200
 
 /*
  * operation bits [23, 16] contain the flags for __ulock_wait
@@ -92,14 +103,19 @@ extern int __ulock_wake(uint32_t operation, void *addr, uint64_t wake_value);
  *
  * @const ULF_WAIT_CANCEL_POINT
  * This wait is a cancelation point
+ *
+ * @const ULF_WAIT_ADAPTIVE_SPIN
+ * Use adaptive spinning when the thread that currently holds the unfair lock
+ * is on core.
  */
 #define ULF_WAIT_WORKQ_DATA_CONTENTION  0x00010000
 #define ULF_WAIT_CANCEL_POINT           0x00020000
+#define ULF_WAIT_ADAPTIVE_SPIN          0x00040000
 
 /*
  * operation bits [31, 24] contain the generic flags
  */
-#define ULF_NO_ERRNO                                    0x01000000
+#define ULF_NO_ERRNO                    0x01000000
 
 /*
  * masks
@@ -109,12 +125,12 @@ extern int __ulock_wake(uint32_t operation, void *addr, uint64_t wake_value);
 #define ULF_GENERIC_MASK        0xFFFF0000
 
 #define ULF_WAIT_MASK           (ULF_NO_ERRNO | \
-	                                                 ULF_WAIT_WORKQ_DATA_CONTENTION | \
-	                                                 ULF_WAIT_CANCEL_POINT)
+	                         ULF_WAIT_WORKQ_DATA_CONTENTION | \
+	                         ULF_WAIT_CANCEL_POINT | ULF_WAIT_ADAPTIVE_SPIN)
 
-#define ULF_WAKE_MASK           (ULF_WAKE_ALL | \
-	                                                 ULF_WAKE_THREAD | \
-	                                                 ULF_NO_ERRNO)
+#define ULF_WAKE_MASK           (ULF_NO_ERRNO | \
+	                         ULF_WAKE_ALL | \
+	                         ULF_WAKE_THREAD)
 
 #endif /* PRIVATE */
 

@@ -112,6 +112,7 @@ nwk_wq_thread_cont(int err)
 	}
 }
 
+__dead2
 static void
 nwk_wq_thread_func(void *v, wait_result_t w)
 {

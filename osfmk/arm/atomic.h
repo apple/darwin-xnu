@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -26,281 +26,200 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#ifndef _MACHINE_ATOMIC_H
+#error "Do not include <arm/atomic.h> directly, use <machine/atomic.h>"
+#endif
+
 #ifndef _ARM_ATOMIC_H_
 #define _ARM_ATOMIC_H_
 
 #include <mach/boolean.h>
-#include <arm/smp.h>
 
 // Parameter for __builtin_arm_dmb
+#define DMB_OSHLD       0x1
+#define DMB_OSHST       0x2
+#define DMB_OSH         0x3
+#define DMB_NSHLD       0x5
+#define DMB_NSHST       0x6
 #define DMB_NSH         0x7
 #define DMB_ISHLD       0x9
 #define DMB_ISHST       0xa
 #define DMB_ISH         0xb
+#define DMB_LD          0xd
+#define DMB_ST          0xe
 #define DMB_SY          0xf
 
 // Parameter for __builtin_arm_dsb
+#define DSB_OSHLD       0x1
+#define DSB_OSHST       0x2
+#define DSB_OSH         0x3
+#define DSB_NSHLD       0x5
+#define DSB_NSHST       0x6
 #define DSB_NSH         0x7
 #define DSB_ISHLD       0x9
 #define DSB_ISHST       0xa
 #define DSB_ISH         0xb
+#define DSB_LD          0xd
+#define DSB_ST          0xe
 #define DSB_SY          0xf
 
 // Parameter for __builtin_arm_isb
 #define ISB_SY          0xf
 
-#if     __SMP__
+#undef OS_ATOMIC_HAS_LLSC
+#define OS_ATOMIC_HAS_LLSC  1
 
-#define memory_order_consume_smp memory_order_consume
-#define memory_order_acquire_smp memory_order_acquire
-#define memory_order_release_smp memory_order_release
-#define memory_order_acq_rel_smp memory_order_acq_rel
-#define memory_order_seq_cst_smp memory_order_seq_cst
-
-#else
-
-#define memory_order_consume_smp memory_order_relaxed
-#define memory_order_acquire_smp memory_order_relaxed
-#define memory_order_release_smp memory_order_relaxed
-#define memory_order_acq_rel_smp memory_order_relaxed
-#define memory_order_seq_cst_smp memory_order_relaxed
-
+#if defined(__ARM_ARCH_8_2__) && defined(__arm64__)
+#undef OS_ATOMIC_USE_LLSC
+#define OS_ATOMIC_USE_LLSC  0
 #endif
+
 
 /*
- * Atomic operations functions
- *
- * These static functions are designed for inlining
- * It is expected that the memory_order arguments are
- * known at compile time.  This collapses these
- * functions into a simple atomic operation
+ * On armv7 & arm64, we do provide fine grained dependency injection, so
+ * memory_order_dependency maps to relaxed as far as thread fences are concerned
  */
+#undef memory_order_dependency_smp
+#define memory_order_dependency_smp  memory_order_relaxed
 
-static inline boolean_t
-memory_order_has_acquire(enum memory_order ord)
-{
-	switch (ord) {
-	case memory_order_consume:
-	case memory_order_acquire:
-	case memory_order_acq_rel:
-	case memory_order_seq_cst:
-		return TRUE;
-	default:
-		return FALSE;
-	}
-}
-
-static inline boolean_t
-memory_order_has_release(enum memory_order ord)
-{
-	switch (ord) {
-	case memory_order_release:
-	case memory_order_acq_rel:
-	case memory_order_seq_cst:
-		return TRUE;
-	default:
-		return FALSE;
-	}
-}
-
-#ifdef ATOMIC_PRIVATE
-
-#define clear_exclusive()       __builtin_arm_clrex()
-
-__unused static uint32_t
-load_exclusive32(uint32_t *target, enum memory_order ord)
-{
-	uint32_t        value;
+#define os_atomic_clear_exclusive()  __builtin_arm_clrex()
 
 #if __arm__
-	if (memory_order_has_release(ord)) {
-		// Pre-load release barrier
-		atomic_thread_fence(memory_order_release);
-	}
-	value = __builtin_arm_ldrex(target);
-#else
-	if (memory_order_has_acquire(ord)) {
-		value = __builtin_arm_ldaex(target);    // ldaxr
-	} else {
-		value = __builtin_arm_ldrex(target);    // ldxr
-	}
-#endif  // __arm__
-	return value;
-}
 
-__unused static boolean_t
-store_exclusive32(uint32_t *target, uint32_t value, enum memory_order ord)
-{
-	boolean_t err;
+#define os_atomic_load_exclusive(p, m)  ({ \
+	        _os_atomic_basetypeof(p) _r; \
+	        _r = __builtin_arm_ldrex(p); \
+	        _os_memory_fence_after_atomic(m); \
+	        _os_compiler_barrier_after_atomic(m); \
+	        _r; \
+})
 
-#if __arm__
-	err = __builtin_arm_strex(value, target);
-	if (memory_order_has_acquire(ord)) {
-		// Post-store acquire barrier
-		atomic_thread_fence(memory_order_acquire);
-	}
-#else
-	if (memory_order_has_release(ord)) {
-		err = __builtin_arm_stlex(value, target);       // stlxr
-	} else {
-		err = __builtin_arm_strex(value, target);       // stxr
-	}
-#endif  // __arm__
-	return !err;
-}
+#define os_atomic_store_exclusive(p, v, m)  ({ \
+	        _os_compiler_barrier_before_atomic(m); \
+	        _os_memory_fence_before_atomic(m); \
+	        !__builtin_arm_strex(p, v); \
+})
 
-__unused static uintptr_t
-load_exclusive(uintptr_t *target, enum memory_order ord)
-{
-#if !__LP64__
-	return load_exclusive32((uint32_t *)target, ord);
-#else
-	uintptr_t       value;
+/*
+ * armv7 override of os_atomic_make_dependency
+ * documentation for os_atomic_make_dependency is in <machine/atomic.h>
+ */
+#undef os_atomic_make_dependency
+#define os_atomic_make_dependency(v) ({ \
+	        os_atomic_dependency_t _dep; \
+	        __asm__ __volatile__("and %[_dep], %[_v], #0" \
+	                        : [_dep] "=r" (_dep.__opaque_zero) : [_v] "r" (v)); \
+	        os_compiler_barrier(acquire); \
+	        _dep; \
+})
 
-	if (memory_order_has_acquire(ord)) {
-		value = __builtin_arm_ldaex(target);    // ldaxr
-	} else {
-		value = __builtin_arm_ldrex(target);    // ldxr
-	}
-	return value;
-#endif  // __arm__
-}
-
-__unused static uint8_t
-load_exclusive_acquire8(uint8_t *target)
-{
-	uint8_t value;
-#if __arm__
-	value = __builtin_arm_ldrex(target);
-	__c11_atomic_thread_fence(__ATOMIC_ACQUIRE);
-#else
-	value = __builtin_arm_ldaex(target);    // ldaxr
-	/* "Compiler barrier", no barrier instructions are emitted */
-	atomic_signal_fence(memory_order_acquire);
-#endif
-	return value;
-}
-
-__unused static boolean_t
-store_exclusive(uintptr_t *target, uintptr_t value, enum memory_order ord)
-{
-#if !__LP64__
-	return store_exclusive32((uint32_t *)target, value, ord);
-#else
-	boolean_t err;
-
-	if (memory_order_has_release(ord)) {
-		err = __builtin_arm_stlex(value, target);       // stlxr
-	} else {
-		err = __builtin_arm_strex(value, target);       // stxr
-	}
-	return !err;
-#endif
-}
-
-__unused static boolean_t
-atomic_compare_exchange(uintptr_t *target, uintptr_t oldval, uintptr_t newval,
-    enum memory_order orig_ord, boolean_t wait)
-{
-	enum memory_order       ord = orig_ord;
-	uintptr_t                       value;
-
-
-#if __arm__
-	ord = memory_order_relaxed;
-	if (memory_order_has_release(orig_ord)) {
-		atomic_thread_fence(memory_order_release);
-	}
-#endif
-	do {
-		value = load_exclusive(target, ord);
-		if (value != oldval) {
-			if (wait) {
-				wait_for_event();       // Wait with monitor held
-			} else {
-				clear_exclusive();      // Clear exclusive monitor
-			}
-			return FALSE;
-		}
-	} while (!store_exclusive(target, newval, ord));
-#if __arm__
-	if (memory_order_has_acquire(orig_ord)) {
-		atomic_thread_fence(memory_order_acquire);
-	}
-#endif
-	return TRUE;
-}
-
-#endif // ATOMIC_PRIVATE
-
-#if __arm__
+/*
+ * armv7 override of os_atomic_rmw_loop
+ * documentation for os_atomic_rmw_loop is in <machine/atomic.h>
+ */
 #undef os_atomic_rmw_loop
 #define os_atomic_rmw_loop(p, ov, nv, m, ...)  ({ \
-	        boolean_t _result = FALSE; uint32_t _err = 0; \
-	        typeof(atomic_load(p)) *_p = (typeof(atomic_load(p)) *)(p); \
+	        int _result = 0; uint32_t _err = 0; \
+	        _os_atomic_basetypeof(p) *_p; \
+	        _p = (_os_atomic_basetypeof(p) *)(p); \
+	        _os_compiler_barrier_before_atomic(m); \
 	        for (;;) { \
 	                ov = __builtin_arm_ldrex(_p); \
 	                __VA_ARGS__; \
-	                if (!_err && memory_order_has_release(memory_order_##m)) { \
-	/* only done for the first loop iteration */ \
-	                        atomic_thread_fence(memory_order_release); \
+	                if (!_err) { \
+	/* release barrier only done for the first loop iteration */ \
+	                        _os_memory_fence_before_atomic(m); \
 	                } \
 	                _err = __builtin_arm_strex(nv, _p); \
 	                if (__builtin_expect(!_err, 1)) { \
-	                        if (memory_order_has_acquire(memory_order_##m)) { \
-	                                atomic_thread_fence(memory_order_acquire); \
-	                        } \
-	                        _result = TRUE; \
+	                        _os_memory_fence_after_atomic(m); \
+	                        _result = 1; \
 	                        break; \
 	                } \
 	        } \
+	        _os_compiler_barrier_after_atomic(m); \
 	        _result; \
 	})
 
+/*
+ * armv7 override of os_atomic_rmw_loop_give_up
+ * documentation for os_atomic_rmw_loop_give_up is in <machine/atomic.h>
+ */
 #undef os_atomic_rmw_loop_give_up
-#define os_atomic_rmw_loop_give_up(expr) \
-	        ({ __builtin_arm_clrex(); expr; __builtin_trap(); })
+#define os_atomic_rmw_loop_give_up(...) \
+	        ({ os_atomic_clear_exclusive(); __VA_ARGS__; break; })
 
-#else
+#else // __arm64__
 
+#define os_atomic_load_exclusive(p, m)  ({ \
+	        _os_atomic_basetypeof(p) _r; \
+	        if (memory_order_has_acquire(memory_order_##m##_smp)) { \
+	                _r = __builtin_arm_ldaex(p); \
+	        } else { \
+	                _r = __builtin_arm_ldrex(p); \
+	        } \
+	        _os_compiler_barrier_after_atomic(m); \
+	        _r; \
+})
+
+#define os_atomic_store_exclusive(p, v, m)  ({ \
+	        _os_compiler_barrier_before_atomic(m); \
+	        (memory_order_has_release(memory_order_##m##_smp) ? \
+	                        !__builtin_arm_stlex(p, v) : !__builtin_arm_strex(p, v)); \
+})
+
+/*
+ * arm64 override of os_atomic_make_dependency
+ * documentation for os_atomic_make_dependency is in <machine/atomic.h>
+ */
+#undef os_atomic_make_dependency
+#define os_atomic_make_dependency(v) ({ \
+	        os_atomic_dependency_t _dep; \
+	        __asm__ __volatile__("and %[_dep], %[_v], xzr" \
+	                        : [_dep] "=r" (_dep.__opaque_zero) : [_v] "r" (v)); \
+	        os_compiler_barrier(acquire); \
+	        _dep; \
+})
+
+#if OS_ATOMIC_USE_LLSC
+
+/*
+ * arm64 (without armv81 atomics) override of os_atomic_rmw_loop
+ * documentation for os_atomic_rmw_loop is in <machine/atomic.h>
+ */
 #undef os_atomic_rmw_loop
 #define os_atomic_rmw_loop(p, ov, nv, m, ...)  ({ \
-	        boolean_t _result = FALSE; \
-	        typeof(atomic_load(p)) *_p = (typeof(atomic_load(p)) *)(p); \
+	        int _result = 0; \
+	        _os_atomic_basetypeof(p) *_p; \
+	        _p = (_os_atomic_basetypeof(p) *)(p); \
+	        _os_compiler_barrier_before_atomic(m); \
 	        do { \
-	                if (memory_order_has_acquire(memory_order_##m)) { \
+	                if (memory_order_has_acquire(memory_order_##m##_smp)) { \
 	                        ov = __builtin_arm_ldaex(_p); \
 	                } else { \
 	                        ov = __builtin_arm_ldrex(_p); \
 	                } \
 	                __VA_ARGS__; \
-	                if (memory_order_has_release(memory_order_##m)) { \
+	                if (memory_order_has_release(memory_order_##m##_smp)) { \
 	                        _result = !__builtin_arm_stlex(nv, _p); \
 	                } else { \
 	                        _result = !__builtin_arm_strex(nv, _p); \
 	                } \
 	        } while (__builtin_expect(!_result, 0)); \
+	        _os_compiler_barrier_after_atomic(m); \
 	        _result; \
 	})
 
+/*
+ * arm64 override of os_atomic_rmw_loop_give_up
+ * documentation for os_atomic_rmw_loop_give_up is in <machine/atomic.h>
+ */
 #undef os_atomic_rmw_loop_give_up
-#define os_atomic_rmw_loop_give_up(expr) \
-	        ({ __builtin_arm_clrex(); expr; __builtin_trap(); })
-#endif
+#define os_atomic_rmw_loop_give_up(...) \
+	        ({ os_atomic_clear_exclusive(); __VA_ARGS__; break; })
 
-#undef os_atomic_force_dependency_on
-#if defined(__arm64__)
-#define os_atomic_force_dependency_on(p, e) ({ \
-	        unsigned long _v; \
-	        __asm__("and %x[_v], %x[_e], xzr" : [_v] "=r" (_v) : [_e] "r" (e)); \
-	        (typeof(*(p)) *)((char *)(p) + _v); \
-	})
-#else
-#define os_atomic_force_dependency_on(p, e) ({ \
-	        unsigned long _v; \
-	        __asm__("and %[_v], %[_e], #0" : [_v] "=r" (_v) : [_e] "r" (e)); \
-	        (typeof(*(p)) *)((char *)(p) + _v); \
-	})
-#endif // defined(__arm64__)
+#endif // OS_ATOMIC_USE_LLSC
+
+#endif // __arm64__
 
 #endif // _ARM_ATOMIC_H_

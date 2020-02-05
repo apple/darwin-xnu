@@ -1027,9 +1027,28 @@ SYSCTL_INT(_machdep, OID_AUTO, fpsimd_fault_popc,
     CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
     &fpsimd_fault_popc, 0, "");
 
-extern int allow_64bit_proc_LDT_ops;
-SYSCTL_INT(_machdep, OID_AUTO, ldt64,
-    CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
-    &allow_64bit_proc_LDT_ops, 0, "");
+volatile int stop_spinning;
+static int
+spin_in_the_kernel(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	int new = 0, old = 0, changed = 0, error;
+
+	error = sysctl_io_number(req, old, sizeof(int), &new, &changed);
+	if (error == 0 && changed) {
+		stop_spinning = FALSE;
+		while (stop_spinning == FALSE) {
+			__builtin_ia32_pause();
+		}
+	} else if (error == 0) {
+		stop_spinning = TRUE;
+	}
+
+	return error;
+}
+
+SYSCTL_PROC(_machdep_misc, OID_AUTO, spin_forever,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_MASKED,
+    0, 0,
+    spin_in_the_kernel, "I", "Spin forever");
 
 #endif /* DEVELOPMENT || DEBUG */

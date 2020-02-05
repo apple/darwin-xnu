@@ -46,7 +46,7 @@ kern_return_t
 host_get_multiuser_config_flags(host_t host __unused,
     uint32_t *multiuser_flags)
 {
-#if TARGET_OS_EMBEDDED
+#if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 	volatile uint32_t *multiuser_flag_address = (volatile uint32_t *)(uintptr_t)(_COMM_PAGE_MULTIUSER_CONFIG);
 	*multiuser_flags = *multiuser_flag_address;
 	return KERN_SUCCESS;
@@ -60,7 +60,7 @@ kern_return_t
 host_check_multiuser_mode(host_t host __unused,
     uint32_t *multiuser_mode)
 {
-#if TARGET_OS_EMBEDDED
+#if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 	uint32_t multiuser_flags;
 	kern_return_t kr;
 

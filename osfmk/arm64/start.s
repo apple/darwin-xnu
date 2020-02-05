@@ -32,10 +32,12 @@
 #include <mach_assert.h>
 #include <machine/asm.h>
 #include "assym.s"
+#include <arm64/exception_asm.h>
 
 #if __ARM_KERNEL_PROTECT__
 #include <arm/pmap.h>
 #endif /* __ARM_KERNEL_PROTECT__ */
+
 
 
 .macro MSR_VBAR_EL1_X0
@@ -52,7 +54,7 @@
 #if defined(KERNEL_INTEGRITY_KTRR)
 	mov		x0, x1
 	mov		x1, lr
-	bl		_pinst_set_tcr
+	bl		EXT(pinst_set_tcr)
 	mov		lr, x1
 #else
 	msr		TCR_EL1, x1
@@ -62,7 +64,7 @@
 .macro MSR_TTBR1_EL1_X0
 #if defined(KERNEL_INTEGRITY_KTRR)
 	mov		x1, lr
-	bl		_pinst_set_ttbr1
+	bl		EXT(pinst_set_ttbr1)
 	mov		lr, x1
 #else
 	msr		TTBR1_EL1, x0
@@ -74,9 +76,9 @@
 	mov		x1, lr
 
 	// This may abort, do so on SP1
-	bl		_pinst_spsel_1
+	bl		EXT(pinst_spsel_1)
 
-	bl		_pinst_set_sctlr
+	bl		EXT(pinst_set_sctlr)
 	msr		SPSel, #0									// Back to SP0
 	mov		lr, x1
 #else
@@ -98,8 +100,30 @@
 	.align 12
 	.globl EXT(LowResetVectorBase)
 LEXT(LowResetVectorBase)
-	// Preserve x0 for start_first_cpu, if called
+	/*
+	 * On reset, both RVBAR_EL1 and VBAR_EL1 point here.  SPSel.SP is 1,
+	 * so on reset the CPU will jump to offset 0x0 and on exceptions
+	 * the CPU will jump to offset 0x200, 0x280, 0x300, or 0x380.
+	 * In order for both the reset vector and exception vectors to
+	 * coexist in the same space, the reset code is moved to the end
+	 * of the exception vector area.
+	 */
+	b		EXT(reset_vector)
 
+	/* EL1 SP1: These vectors trap errors during early startup on non-boot CPUs. */
+	.align	9
+	b		.
+	.align	7
+	b		.
+	.align	7
+	b		.
+	.align	7
+	b		.
+
+	.align	7
+	.globl EXT(reset_vector)
+LEXT(reset_vector)
+	// Preserve x0 for start_first_cpu, if called
 	// Unlock the core for debugging
 	msr		OSLAR_EL1, xzr
 	msr		DAIFSet, #(DAIFSC_ALL)				// Disable all interrupts
@@ -122,6 +146,11 @@ LEXT(LowResetVectorBase)
 	 * If either values are zero, we're debugging kernel so skip programming KTRR.
 	 */
 
+	/* spin until bootstrap core has completed machine lockdown */
+	adrp	x17, EXT(lockdown_done)@page
+1:
+	ldr	x18, [x17, EXT(lockdown_done)@pageoff]
+	cbz	x18, 1b
 
 	// load stashed rorgn_begin
 	adrp	x17, EXT(rorgn_begin)@page
@@ -144,7 +173,7 @@ LEXT(LowResetVectorBase)
 	mov		x17, #1
 	msr		ARM64_REG_KTRR_LOCK_EL1, x17
 Lskip_ktrr:
-#endif /* defined(KERNEL_INTEGRITY_KTRR)*/
+#endif /* defined(KERNEL_INTEGRITY_KTRR) */
 
 	// Process reset handlers
 	adrp	x19, EXT(ResetHandlerData)@page			// Get address of the reset handler data
@@ -158,14 +187,14 @@ Lcheck_cpu_data_entry:
 	cbz		x21, Lnext_cpu_data_entry
 	ldr		w2, [x21, CPU_PHYS_ID]				// Load ccc cpu phys id
 	cmp		x0, x2						// Compare cpu data phys cpu and MPIDR_EL1 phys cpu
-	b.eq		Lfound_cpu_data_entry				// Branch if match
+	b.eq	Lfound_cpu_data_entry				// Branch if match
 Lnext_cpu_data_entry:
 	add		x1, x1, #16					// Increment to the next cpu data entry
 	cmp		x1, x3
-	b.eq		Lskip_cpu_reset_handler				// Not found
+	b.eq	Lskip_cpu_reset_handler				// Not found
 	b		Lcheck_cpu_data_entry	// loop
 Lfound_cpu_data_entry:
-	adrp		x20, EXT(const_boot_args)@page
+	adrp	x20, EXT(const_boot_args)@page
 	add		x20, x20, EXT(const_boot_args)@pageoff
 	ldr		x0, [x21, CPU_RESET_HANDLER]		// Call CPU reset handler
 	cbz		x0, Lskip_cpu_reset_handler
@@ -178,7 +207,7 @@ Lfound_cpu_data_entry:
 	adrp	x2, EXT(start_cpu)@page
 	add		x2, x2, EXT(start_cpu)@pageoff
 	cmp		x0, x2
-	bne	Lskip_cpu_reset_handler
+	bne		Lskip_cpu_reset_handler
 1:
 
 
@@ -196,12 +225,7 @@ Lfound_cpu_data_entry:
 Lskip_cpu_reset_handler:
 	b		.									// Hang if the handler is NULL or returns
 
-	.align	3
-	.globl  EXT(ResetHandlerData)
-LEXT(ResetHandlerData)
-	.space  (rhdSize_NUM),0		// (filled with 0s)
-
-	.align	3
+	.align 3
 	.global EXT(LowResetVectorEnd)
 LEXT(LowResetVectorEnd)
 	.global	EXT(SleepToken)
@@ -209,6 +233,13 @@ LEXT(LowResetVectorEnd)
 LEXT(SleepToken)
 	.space	(stSize_NUM),0
 #endif
+
+	.section __DATA_CONST,__const
+	.align	3
+	.globl  EXT(ResetHandlerData)
+LEXT(ResetHandlerData)
+	.space  (rhdSize_NUM),0		// (filled with 0s)
+	.text
 
 
 /*
@@ -276,6 +307,7 @@ LEXT(LowExceptionVectorBase)
 .align ARM_PGSHIFT
 .globl EXT(bootstrap_instructions)
 LEXT(bootstrap_instructions)
+
 #endif /* defined(KERNEL_INTEGRITY_KTRR)*/
 	.align 2
 	.globl EXT(resume_idle_cpu)
@@ -311,6 +343,7 @@ start_cpu:
 	ldr		x25, [x20, BA_TOP_OF_KERNEL_DATA]	// Get the top of the kernel data
 	ldr		x26, [x20, BA_BOOT_FLAGS]			// Get the kernel boot flags
 
+
 	// Set TPIDRRO_EL0 with the CPU number
 	ldr		x0, [x21, CPU_NUMBER_GS]
 	msr		TPIDRRO_EL0, x0
@@ -322,7 +355,7 @@ start_cpu:
 	// Set SP_EL1 to exception stack
 #if defined(KERNEL_INTEGRITY_KTRR)
 	mov		x1, lr
-	bl		_pinst_spsel_1
+	bl		EXT(pinst_spsel_1)
 	mov		lr, x1
 #else
 	msr		SPSel, #1
@@ -452,6 +485,7 @@ LEXT(start_first_cpu)
 	// Unlock the core for debugging
 	msr		OSLAR_EL1, xzr
 	msr		DAIFSet, #(DAIFSC_ALL)				// Disable all interrupts
+
 	mov		x20, x0
 	mov		x21, #0
 
@@ -481,7 +515,7 @@ LEXT(start_first_cpu)
 
 	// Set SP_EL1 to exception stack
 #if defined(KERNEL_INTEGRITY_KTRR)
-	bl		_pinst_spsel_1
+	bl		EXT(pinst_spsel_1)
 #else
 	msr		SPSel, #1
 #endif
@@ -511,23 +545,13 @@ LEXT(start_first_cpu)
 	 *	Page 3 - KVA L1 table
 	 *	Page 4 - KVA L2 table
 	 */
-#if __ARM64_TWO_LEVEL_PMAP__
-	/*
-	 * If we are using a two level scheme, we don't need the L1 entries, so:
-	 *      Page 1 - V=P L2 table
-	 *      Page 2 - KVA L2 table
-	 */
-#endif
 
 	// Invalidate all entries in the bootstrap page tables
 	mov		x0, #(ARM_TTE_EMPTY)				// Load invalid entry template
 	mov		x1, x25								// Start at top of kernel
 	mov		x2, #(TTE_PGENTRIES)				// Load number of entries per page
-#if __ARM64_TWO_LEVEL_PMAP__
-	lsl		x2, x2, #1							// Shift by 1 for num entries on 2 pages
-#else
 	lsl		x2, x2, #2							// Shift by 2 for num entries on 4 pages
-#endif
+
 Linvalidate_bootstrap:							// do {
 	str		x0, [x1], #(1 << TTE_SHIFT)			//   Invalidate and advance
 	subs	x2, x2, #1							//   entries--
@@ -603,6 +627,7 @@ Linvalidate_bootstrap:							// do {
 	/* Ensure TTEs are visible */
 	dsb		ish
 
+
 	b		common_start
 
 /*
@@ -659,6 +684,10 @@ common_start:
 	orr		x0, x0, x1
 	mov		x1, #(MAIR_POSTED << MAIR_ATTR_SHIFT(CACHE_ATTRINDX_POSTED))
 	orr		x0, x0, x1
+	mov		x1, #(MAIR_POSTED_REORDERED << MAIR_ATTR_SHIFT(CACHE_ATTRINDX_POSTED_REORDERED))
+	orr		x0, x0, x1
+	mov		x1, #(MAIR_POSTED_COMBINED_REORDERED << MAIR_ATTR_SHIFT(CACHE_ATTRINDX_POSTED_COMBINED_REORDERED))
+	orr		x0, x0, x1
 	msr		MAIR_EL1, x0
 
 #if defined(APPLEHURRICANE)
@@ -684,6 +713,7 @@ common_start:
 	str		w1, [x0]
 	isb		sy
 #endif
+
 
 
 #ifndef __ARM_IC_NOALIAS_ICACHE__
@@ -723,13 +753,107 @@ common_start:
 1:
 	MSR_VBAR_EL1_X0
 
+1:
+#ifdef HAS_APPLE_PAC
+#ifdef __APSTS_SUPPORTED__
+	mrs		x0, ARM64_REG_APSTS_EL1
+	and		x1, x0, #(APSTS_EL1_MKEYVld)
+	cbz		x1, 1b 										// Poll APSTS_EL1.MKEYVld
+	mrs		x0, ARM64_REG_APCTL_EL1
+	orr		x0, x0, #(APCTL_EL1_AppleMode)
+	orr		x0, x0, #(APCTL_EL1_KernKeyEn)
+	and		x0, x0, #~(APCTL_EL1_EnAPKey0)
+	msr		ARM64_REG_APCTL_EL1, x0
+#else
+	mrs		x0, ARM64_REG_APCTL_EL1
+	and		x1, x0, #(APCTL_EL1_MKEYVld)
+	cbz		x1, 1b 										// Poll APCTL_EL1.MKEYVld
+	orr		x0, x0, #(APCTL_EL1_AppleMode)
+	orr		x0, x0, #(APCTL_EL1_KernKeyEn)
+	msr		ARM64_REG_APCTL_EL1, x0
+#endif /* APSTS_SUPPORTED */
+
+	/* ISB necessary to ensure APCTL_EL1_AppleMode logic enabled before proceeding */
+	isb		sy
+	/* Load static kernel key diversification values */
+	ldr		x0, =KERNEL_ROP_ID
+	/* set ROP key. must write at least once to pickup mkey per boot diversification */
+	msr		APIBKeyLo_EL1, x0
+	add		x0, x0, #1
+	msr		APIBKeyHi_EL1, x0
+	add		x0, x0, #1
+	msr		APDBKeyLo_EL1, x0
+	add		x0, x0, #1
+	msr		APDBKeyHi_EL1, x0
+	add		x0, x0, #1
+	msr		ARM64_REG_KERNELKEYLO_EL1, x0
+	add		x0, x0, #1
+	msr		ARM64_REG_KERNELKEYHI_EL1, x0
+	/* set JOP key. must write at least once to pickup mkey per boot diversification */
+	add		x0, x0, #1
+	msr		APIAKeyLo_EL1, x0
+	add		x0, x0, #1
+	msr		APIAKeyHi_EL1, x0
+	add		x0, x0, #1
+	msr		APDAKeyLo_EL1, x0
+	add		x0, x0, #1
+	msr		APDAKeyHi_EL1, x0
+	/* set G key */
+	add		x0, x0, #1
+	msr		APGAKeyLo_EL1, x0
+	add		x0, x0, #1
+	msr		APGAKeyHi_EL1, x0
+
+	// Enable caches, MMU, ROP and JOP
+	mov		x0, #(SCTLR_EL1_DEFAULT & 0xFFFF)
+	mov		x1, #(SCTLR_EL1_DEFAULT & 0xFFFF0000)
+	orr		x0, x0, x1
+	orr		x0, x0, #(SCTLR_PACIB_ENABLED) /* IB is ROP */
+
+#if DEBUG || DEVELOPMENT
+	and		x2, x26, BA_BOOT_FLAGS_DISABLE_JOP
+#if __APCFG_SUPPORTED__
+	// for APCFG systems, JOP keys are always on for EL1 unless ELXENKEY is cleared.
+	// JOP keys for EL0 will be toggled on the first time we pmap_switch to a pmap that has JOP enabled
+	cbz		x2, Lenable_mmu
+	mrs		x3, APCFG_EL1
+	and		x3, x3, #~(APCFG_EL1_ELXENKEY)
+	msr		APCFG_EL1, x3
+#else /* __APCFG_SUPPORTED__ */
+	cbnz	x2, Lenable_mmu
+#endif /* __APCFG_SUPPORTED__ */
+#endif /* DEBUG || DEVELOPMENT */
+
+#if !__APCFG_SUPPORTED__
+	MOV64	x1, SCTLR_JOP_KEYS_ENABLED
+	orr 	x0, x0, x1
+#endif /* !__APCFG_SUPPORTED__ */
+Lenable_mmu:
+#else  /* HAS_APPLE_PAC */
 
 	// Enable caches and MMU
 	mov		x0, #(SCTLR_EL1_DEFAULT & 0xFFFF)
 	mov		x1, #(SCTLR_EL1_DEFAULT & 0xFFFF0000)
 	orr		x0, x0, x1
+#endif /* HAS_APPLE_PAC */
 	MSR_SCTLR_EL1_X0
 	isb		sy
+
+	MOV32	x1, SCTLR_EL1_DEFAULT
+#if HAS_APPLE_PAC
+	orr		x1, x1, #(SCTLR_PACIB_ENABLED)
+#if !__APCFG_SUPPORTED__
+	MOV64	x2, SCTLR_JOP_KEYS_ENABLED
+#if (DEBUG || DEVELOPMENT)
+	// Ignore the JOP bits, since we can't predict at compile time whether BA_BOOT_FLAGS_DISABLE_JOP is set
+	bic		x0, x0, x2
+#else
+	orr		x1, x1, x2
+#endif /* (DEBUG || DEVELOPMENT) */
+#endif /* !__APCFG_SUPPORTED__ */
+#endif /* HAS_APPLE_PAC */
+	cmp		x0, x1
+	bne		.
 
 #if (!CONFIG_KERNEL_INTEGRITY || (CONFIG_KERNEL_INTEGRITY && !defined(KERNEL_INTEGRITY_WT)))
 	/* Watchtower
@@ -756,27 +880,24 @@ common_start:
 	ARM64_WRITE_EP_SPR x15, x12, ARM64_REG_EHID4, ARM64_REG_HID4
 #endif  // APPLE_ARM64_ARCH_FAMILY
 
-#if defined(APPLECYCLONE) || defined(APPLETYPHOON)
+#if defined(APPLETYPHOON)
 	//
-	// Cyclone/Typhoon-Specific initialization
-	// For tunable summary, see <rdar://problem/13503621> Alcatraz/H6: Confirm Cyclone CPU tunables have been set
+	// Typhoon-Specific initialization
+	// For tunable summary, see <rdar://problem/13503621>
 	//
 
 	//
 	// Disable LSP flush with context switch to work around bug in LSP
-	// that can cause Cyclone to wedge when CONTEXTIDR is written.
-	// <rdar://problem/12387704> Innsbruck11A175: panic(cpu 0 caller 0xffffff800024e30c): "wait queue deadlock - wq=0xffffff805a7a63c0, cpu=0\n"
+	// that can cause Typhoon to wedge when CONTEXTIDR is written.
+	// <rdar://problem/12387704>
 	//
 
 	mrs		x12, ARM64_REG_HID0
 	orr		x12, x12, ARM64_REG_HID0_LoopBuffDisb
 	msr		ARM64_REG_HID0, x12
-	
+
 	mrs		x12, ARM64_REG_HID1
 	orr		x12, x12, ARM64_REG_HID1_rccDisStallInactiveIexCtl
-#if defined(APPLECYCLONE)
-	orr		x12, x12, ARM64_REG_HID1_disLspFlushWithContextSwitch
-#endif
 	msr		ARM64_REG_HID1, x12
 
 	mrs		x12, ARM64_REG_HID3
@@ -796,7 +917,7 @@ common_start:
 #endif	// ARM64_BOARD_CONFIG_T7001
 	msr		ARM64_REG_HID8, x12
 	isb		sy
-#endif	// APPLECYCLONE || APPLETYPHOON
+#endif	// APPLETYPHOON
 
 #if defined(APPLETWISTER)
 
@@ -955,6 +1076,11 @@ Lskip_skye_post_a1_workarounds:
 #endif /* defined(APPLEMONSOON) */
 
 
+
+
+
+
+
 	// If x21 != 0, we're doing a warm reset, so we need to trampoline to the kernel pmap.
 	cbnz	x21, Ltrampoline
 
@@ -969,7 +1095,7 @@ Lskip_skye_post_a1_workarounds:
 	// x0: boot args
 	// x1: KVA page table phys base
 	mrs	x1, TTBR1_EL1
-	bl	_kasan_bootstrap
+	bl	EXT(kasan_bootstrap)
 
 	mov	x0, x20
 	mov	lr, x21
@@ -1023,6 +1149,7 @@ arm_init_tramp:
 	 *         ...
 	 *  +---Kernel Base---+
 	 */
+
 
 	mov		x19, lr
 	// Convert CPU data PA to VA and set as first argument

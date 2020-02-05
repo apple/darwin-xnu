@@ -623,4 +623,39 @@ routine mach_port_special_reply_port_reset_link(
 #else
 skip;
 #endif
+
+/*
+ *	Guard an already existing port. Allows guarding
+ *	receive rights only. Uses the context field in the
+ *	port structure to store the guard.
+ */
+routine mach_port_guard_with_flags(
+		task		: ipc_space_t;
+		name		: mach_port_name_t;
+#ifdef LIBSYSCALL_INTERFACE
+		guard		: mach_port_context_t;
+#else
+		guard		: uint64_t;
+#endif
+		flags		: uint64_t);
+
+/*
+ *	Swap guard value of an existing guarded port. Works
+ *	only if it is not a strict guard.
+ */
+routine mach_port_swap_guard(
+		task		: ipc_space_t;
+		name		: mach_port_name_t;
+#ifdef LIBSYSCALL_INTERFACE
+		old_guard	: mach_port_context_t;
+#else
+		old_guard	: uint64_t;
+#endif
+
+#ifdef LIBSYSCALL_INTERFACE
+		new_guard	: mach_port_context_t);
+#else
+		new_guard	: uint64_t);
+#endif
+
 /* vim: set ft=c : */

@@ -111,6 +111,63 @@ IOBufferMemoryDescriptor::initWithOptions(
 }
 #endif /* !__LP64__ */
 
+IOBufferMemoryDescriptor *
+IOBufferMemoryDescriptor::withCopy(
+	task_t                inTask,
+	IOOptionBits      options,
+	vm_map_t              sourceMap,
+	mach_vm_address_t source,
+	mach_vm_size_t    size)
+{
+	IOBufferMemoryDescriptor * inst;
+	kern_return_t              err;
+	vm_map_copy_t              copy;
+	vm_map_address_t           address;
+
+	copy = NULL;
+	do {
+		err = kIOReturnNoMemory;
+		inst = new IOBufferMemoryDescriptor;
+		if (!inst) {
+			break;
+		}
+		inst->_ranges.v64 = IONew(IOAddressRange, 1);
+		if (!inst->_ranges.v64) {
+			break;
+		}
+
+		err = vm_map_copyin(sourceMap, source, size,
+		    false /* src_destroy */, &copy);
+		if (KERN_SUCCESS != err) {
+			break;
+		}
+
+		err = vm_map_copyout(get_task_map(inTask), &address, copy);
+		if (KERN_SUCCESS != err) {
+			break;
+		}
+		copy = NULL;
+
+		inst->_ranges.v64->address = address;
+		inst->_ranges.v64->length  = size;
+
+		if (!inst->initWithPhysicalMask(inTask, options, size, page_size, 0)) {
+			err = kIOReturnError;
+		}
+	} while (false);
+
+	if (KERN_SUCCESS == err) {
+		return inst;
+	}
+
+	if (copy) {
+		vm_map_copy_discard(copy);
+	}
+	OSSafeReleaseNULL(inst);
+	return NULL;
+}
+
+
 bool
 IOBufferMemoryDescriptor::initWithPhysicalMask(
 	task_t            inTask,
@@ -125,6 +182,7 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 	IOOptionBits          iomdOptions = kIOMemoryTypeVirtual64 | kIOMemoryAsReference;
 	IODMAMapSpecification mapSpec;
 	bool                  mapped = false;
+	bool                  withCopy = false;
 	bool                  needZero;
 
 	if (!capacity) {
@@ -135,14 +193,28 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 	_capacity         = capacity;
 	_internalFlags    = 0;
 	_internalReserved = 0;
-	_buffer           = 0;
+	_buffer           = NULL;
 
-	_ranges.v64 = IONew(IOAddressRange, 1);
 	if (!_ranges.v64) {
-		return false;
+		_ranges.v64 = IONew(IOAddressRange, 1);
+		if (!_ranges.v64) {
+			return false;
+		}
+		_ranges.v64->address = 0;
+		_ranges.v64->length  = 0;
+	} else {
+		if (!_ranges.v64->address) {
+			return false;
+		}
+		if (!(kIOMemoryPageable & options)) {
+			return false;
+		}
+		if (!inTask) {
+			return false;
+		}
+		_buffer = (void *) _ranges.v64->address;
+		withCopy = true;
 	}
-	_ranges.v64->address = 0;
-	_ranges.v64->length  = 0;
 	//  make sure super::free doesn't dealloc _ranges before super::init
 	_flags = kIOMemoryAsReference;
 
@@ -151,7 +223,7 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 
 	if (!(kIOMemoryMapperNone & options)) {
 		IOMapper::checkForSystemMapper();
-		mapped = (0 != IOMapper::gSystem);
+		mapped = (NULL != IOMapper::gSystem);
 	}
 	needZero = (mapped || (0 != (kIOMemorySharingTypeMask & options)));
 
@@ -261,13 +333,17 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 		vm_size_t       size = round_page(capacity);
 
 		// initWithOptions will create memory entry
-		iomdOptions |= kIOMemoryPersistent;
+		if (!withCopy) {
+			iomdOptions |= kIOMemoryPersistent;
+		}
 
 		if (options & kIOMemoryPageable) {
 #if IOALLOCDEBUG
 			OSAddAtomicLong(size, &debug_iomallocpageable_size);
 #endif
-			mapTask = inTask;
+			if (!withCopy) {
+				mapTask = inTask;
+			}
 			if (NULL == inTask) {
 				inTask = kernel_task;
 			}
@@ -284,11 +360,11 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 		}
 	}
 
-	_ranges.v64->address = (mach_vm_address_t) _buffer;;
+	_ranges.v64->address = (mach_vm_address_t) _buffer;
 	_ranges.v64->length  = _capacity;
 
 	if (!super::initWithOptions(_ranges.v64, 1, 0,
-	    inTask, iomdOptions, /* System mapper */ 0)) {
+	    inTask, iomdOptions, /* System mapper */ NULL)) {
 		return false;
 	}
 
@@ -315,7 +391,7 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 		reserved->map = createMappingInTask(mapTask, 0,
 		    kIOMapAnywhere | (options & kIOMapPrefault) | (options & kIOMapCacheMask), 0, 0);
 		if (!reserved->map) {
-			_buffer = 0;
+			_buffer = NULL;
 			return false;
 		}
 		release();  // map took a retain on this
@@ -344,7 +420,7 @@ IOBufferMemoryDescriptor::inTaskWithOptions(
 
 	if (me && !me->initWithPhysicalMask(inTask, options, capacity, alignment, 0)) {
 		me->release();
-		me = 0;
+		me = NULL;
 	}
 	return me;
 }
@@ -360,7 +436,7 @@ IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
 
 	if (me && !me->initWithPhysicalMask(inTask, options, capacity, 1, physicalMask)) {
 		me->release();
-		me = 0;
+		me = NULL;
 	}
 	return me;
 }
@@ -386,7 +462,7 @@ IOBufferMemoryDescriptor::withOptions(
 
 	if (me && !me->initWithPhysicalMask(kernel_task, options, capacity, alignment, 0)) {
 		me->release();
-		me = 0;
+		me = NULL;
 	}
 	return me;
 }
@@ -458,7 +534,7 @@ IOBufferMemoryDescriptor::withBytes(const void * inBytes,
 		    | (inContiguous ? kIOMemoryPhysicallyContiguous : 0),
 		    inLength, inLength, 0 )) {
 		me->release();
-		me = 0;
+		me = NULL;
 	}
 
 	if (me) {
@@ -467,7 +543,7 @@ IOBufferMemoryDescriptor::withBytes(const void * inBytes,
 
 		if (!me->appendBytes(inBytes, inLength)) {
 			me->release();
-			me = 0;
+			me = NULL;
 		}
 	}
 	return me;
@@ -488,7 +564,7 @@ IOBufferMemoryDescriptor::free()
 	IOOptionBits     options   = _options;
 	vm_size_t        size      = _capacity;
 	void *           buffer    = _buffer;
-	IOMemoryMap *    map       = 0;
+	IOMemoryMap *    map       = NULL;
 	IOAddressRange * range     = _ranges.v64;
 	vm_offset_t      alignment = _alignment;
 
@@ -653,7 +729,7 @@ IOBufferMemoryDescriptor::getBytesNoCopy(vm_size_t start, vm_size_t withLength)
 	IOVirtualAddress address;
 
 	if ((start + withLength) < start) {
-		return 0;
+		return NULL;
 	}
 
 	if (kIOMemoryTypePhysical64 == (_flags & kIOMemoryTypeMask)) {
@@ -665,7 +741,7 @@ IOBufferMemoryDescriptor::getBytesNoCopy(vm_size_t start, vm_size_t withLength)
 	if (start < _length && (start + withLength) <= _length) {
 		return (void *)(address + start);
 	}
-	return 0;
+	return NULL;
 }
 
 #ifndef __LP64__

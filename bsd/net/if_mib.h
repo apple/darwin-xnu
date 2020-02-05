@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -77,6 +77,7 @@ struct ifmibdata_supplemental {
 	struct if_data_extended ifmd_data_extended;
 	struct if_packet_stats  ifmd_packet_stats;
 	struct if_rxpoll_stats  ifmd_rxpoll_stats;
+	struct if_netif_stats   ifmd_netif_stats;
 };
 #endif /* PRIVATE */
 

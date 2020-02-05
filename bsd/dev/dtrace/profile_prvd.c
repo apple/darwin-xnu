@@ -23,14 +23,6 @@
  * Use is subject to license terms.
  */
 
-/* #pragma ident	"@(#)profile.c	1.7	07/01/10 SMI" */
-
-#ifdef KERNEL
-#ifndef _KERNEL
-#define _KERNEL /* Solaris vs. Darwin */
-#endif
-#endif
-
 #include <kern/cpu_data.h>
 #include <kern/thread.h>
 #include <kern/assert.h>
@@ -324,9 +316,9 @@ profile_create(hrtime_t interval, const char *name, int kind)
 		return;
 	}
 
-	atomic_add_32(&profile_total, 1);
+	os_atomic_inc(&profile_total, relaxed);
 	if (profile_total > profile_max) {
-		atomic_add_32(&profile_total, -1);
+		os_atomic_dec(&profile_total, relaxed);
 		return;
 	}
 
@@ -503,7 +495,7 @@ profile_destroy(void *arg, dtrace_id_t id, void *parg)
 	}
 
 	ASSERT(profile_total >= 1);
-	atomic_add_32(&profile_total, -1);
+	os_atomic_dec(&profile_total, relaxed);
 }
 
 /*ARGSUSED*/

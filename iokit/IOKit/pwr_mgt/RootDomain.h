@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -34,6 +34,9 @@
 #include <sys/vnode.h>
 
 #ifdef XNU_KERNEL_PRIVATE
+
+#include <IOKit/pwr_mgt/IOPMPrivate.h>
+
 struct AggressivesRecord;
 struct IOPMMessageFilterContext;
 struct IOPMActions;
@@ -43,6 +46,7 @@ class PMTraceWorker;
 class IOPMPowerStateQueue;
 class RootDomainUserClient;
 class PMAssertionsTracker;
+class IOTimerEventSource;
 
 #define OBFUSCATE(x) (void *)VM_KERNEL_UNSLIDE_OR_PERM(x)
 
@@ -130,11 +134,11 @@ typedef IOReturn (*IOPMSettingControllerCallback)
 
 __BEGIN_DECLS
 IONotifier *    registerSleepWakeInterest(
-	IOServiceInterestHandler, void *, void * = 0);
+	IOServiceInterestHandler, void *, void * = NULL);
 
 IONotifier *    registerPrioritySleepWakeInterest(
 	IOServiceInterestHandler handler,
-	void * self, void * ref = 0);
+	void * self, void * ref = NULL);
 
 IOReturn        acknowledgeSleepWakeNotification(void * );
 
@@ -145,7 +149,7 @@ __END_DECLS
 
 class IOPMrootDomain : public IOService
 {
-	OSDeclareFinalStructors(IOPMrootDomain)
+	OSDeclareFinalStructors(IOPMrootDomain);
 
 public:
 	static IOPMrootDomain * construct( void );
@@ -243,7 +247,7 @@ public:
 	void                                claimSystemWakeEvent( IOService     *device,
 	    IOOptionBits  flags,
 	    const char    *reason,
-	    OSObject      *details = 0 );
+	    OSObject      *details = NULL );
 
 	virtual IOReturn    receivePowerNotification( UInt32 msg );
 
@@ -324,7 +328,7 @@ public:
 	virtual IONotifier * registerInterest(
 		const OSSymbol * typeOfInterest,
 		IOServiceInterestHandler handler,
-		void * target, void * ref = 0 ) APPLE_KEXT_OVERRIDE;
+		void * target, void * ref = NULL ) APPLE_KEXT_OVERRIDE;
 
 	virtual IOReturn    callPlatformFunction(
 		const OSSymbol *functionName,
@@ -386,7 +390,11 @@ public:
  */
 	IOReturn restartWithStackshot();
 
+	IOReturn    setWakeTime(uint64_t wakeContinuousTime);
+
 private:
+	unsigned long getRUN_STATE(void);
+
 	virtual IOReturn    changePowerStateTo( unsigned long ordinal ) APPLE_KEXT_COMPATIBILITY_OVERRIDE;
 	virtual IOReturn    changePowerStateToPriv( unsigned long ordinal );
 	virtual IOReturn    requestPowerDomainState( IOPMPowerFlags, IOPowerConnection *, unsigned long ) APPLE_KEXT_OVERRIDE;
@@ -524,6 +532,10 @@ public:
 	void        updatePreventSystemSleepList(
 		IOService * service, bool addNotRemove );
 
+	bool        updatePreventIdleSleepListInternal(
+		IOService * service, bool addNotRemove, unsigned int oldCount);
+	unsigned int idleSleepPreventersCount();
+
 	void        publishPMSetting(
 		const OSSymbol * feature, uint32_t where, uint32_t * featureID );
 
@@ -549,14 +561,15 @@ public:
 		uint32_t *  hibernateFreeTime );
 	bool        mustHibernate( void );
 #endif
-	void        takeStackshot(bool restart, bool isOSXWatchdog, bool isSpinDump);
+	void        takeStackshot(bool restart);
 	void        sleepWakeDebugTrig(bool restart);
 	void        sleepWakeDebugEnableWdog();
 	bool        sleepWakeDebugIsWdogEnabled();
 	void        sleepWakeDebugSaveSpinDumpFile();
 	bool        checkShutdownTimeout();
-	void        panicWithShutdownLog(uint32_t timeoutInMs);
+	void        panicWithShutdownLog(uint32_t timeoutInMs) __abortlike;
 	uint32_t    getWatchdogTimeout();
+	void        deleteStackshot();
 
 private:
 	friend class PMSettingObject;
@@ -646,6 +659,8 @@ private:
 
 // Used to wait between say display idle and system idle
 	thread_call_t           extraSleepTimer;
+	thread_call_t           powerButtonDown;
+	thread_call_t           powerButtonUp;
 	thread_call_t           diskSyncCalloutEntry;
 	thread_call_t           fullWakeThreadCall;
 	thread_call_t           updateConsoleUsersEntry;
@@ -693,6 +708,7 @@ private:
 	unsigned int            wranglerTickled         :1;
 	unsigned int            _preventUserActive      :1;
 	unsigned int            graphicsSuppressed      :1;
+	unsigned int            isRTCAlarmWake          :1;
 
 	unsigned int            capabilityLoss          :1;
 	unsigned int            pciCantSleepFlag        :1;
@@ -719,6 +735,7 @@ private:
 	unsigned int            displayPowerOnRequested:1;
 
 	uint8_t                 tasksSuspended;
+	uint8_t                 tasksSuspendState;
 	uint32_t                hibernateMode;
 	AbsoluteTime            userActivityTime;
 	AbsoluteTime            userActivityTime_prev;
@@ -772,6 +789,7 @@ private:
 
 	UInt32                  _scheduledAlarms;
 	UInt32                  _userScheduledAlarm;
+	clock_sec_t             _scheduledAlarmUTC;
 
 #if HIBERNATION
 	clock_sec_t             _standbyTimerResetSeconds;
@@ -790,6 +808,39 @@ private:
 	OSArray *               _systemWakeEventsArray;
 	bool                    _acceptSystemWakeEvents;
 
+#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
+	// AOT --
+	IOPMCalendarStruct   _aotWakeTimeCalendar;
+	IOTimerEventSource * _aotTimerES;
+	clock_sec_t          _aotWakeTimeUTC;
+	uint64_t             _aotTestTime;
+	uint64_t             _aotTestInterval;
+	uint32_t             _aotPendingFlags;
+public:
+	IOPMAOTMetrics     * _aotMetrics;
+	uint8_t              _aotMode;
+private:
+	uint8_t              _aotNow;
+	uint8_t              _aotTasksSuspended;
+	uint8_t              _aotExit;
+	uint8_t              _aotTimerScheduled;
+	uint8_t              _aotReadyToFullWake;
+	uint64_t             _aotLastWakeTime;
+	uint64_t             _aotWakeTimeContinuous;
+	uint64_t             _aotWakePreWindow;
+	uint64_t             _aotWakePostWindow;
+	uint64_t             _aotLingerTime;
+
+	bool        aotShouldExit(bool checkTimeSet, bool software);
+	void        aotExit(bool cps);
+	void        aotEvaluate(IOTimerEventSource * timer);
+public:
+	bool        isAOTMode(void);
+private:
+	// -- AOT
+#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
+
+	void        updateTasksSuspend(void);
 	int         findSuspendedPID(uint32_t pid, uint32_t *outRefCount);
 
 // IOPMrootDomain internal sleep call
@@ -807,6 +858,7 @@ private:
 	void        restoreUserSpinDownTimeout( void );
 
 	bool        shouldSleepOnClamshellClosed(void );
+	bool        shouldSleepOnRTCAlarmWake(void );
 	void        sendClientClamshellNotification( void );
 
 // Inform PMCPU of changes to state like lid, AC vs. battery
@@ -874,13 +926,14 @@ private:
 	void        preventTransitionToUserActive( bool prevent );
 	void        setThermalState(OSObject *value);
 	void        copySleepPreventersList(OSArray  **idleSleepList, OSArray  **systemSleepList);
+	void        copySleepPreventersListWithID(OSArray  **idleSleepList, OSArray  **systemSleepList);
 #endif /* XNU_KERNEL_PRIVATE */
 };
 
 #ifdef XNU_KERNEL_PRIVATE
 class IORootParent : public IOService
 {
-	OSDeclareFinalStructors(IORootParent)
+	OSDeclareFinalStructors(IORootParent);
 
 public:
 	static void initialize( void );

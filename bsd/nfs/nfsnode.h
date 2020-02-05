@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -98,7 +98,7 @@ struct nfsbuf {
 	TAILQ_ENTRY(nfsbuf)     nb_free;        /* free list position if not active. */
 	volatile uint32_t       nb_flags;       /* NB_* flags. */
 	volatile uint32_t       nb_lflags;      /* NBL_* flags. */
-	volatile uint32_t       nb_refs;        /* outstanding references. */
+	os_refcnt_t             nb_refs;        /* outstanding references. */
 	uint32_t                nb_bufsize;     /* buffer size */
 	daddr64_t               nb_lblkno;      /* logical block number. */
 	uint64_t                nb_verf;        /* V3 write verifier */
@@ -300,7 +300,8 @@ struct nfsdmap {
 #define NFSTIME_CHANGE  2       /* time file changed */
 #define NFSTIME_CREATE  3       /* time file created */
 #define NFSTIME_BACKUP  4       /* time of last backup */
-#define NFSTIME_COUNT   5
+#define NFSTIME_ADDED   5       /* time added (FPnfs only) */
+#define NFSTIME_COUNT   6
 
 #define NFS_COMPARE_MTIME(TVP, NVAP, CMP) \
 	(((TVP)->tv_sec == (NVAP)->nva_timesec[NFSTIME_MODIFY]) ?       \
@@ -332,6 +333,11 @@ struct nfs_vattr {
 	int64_t         nva_timesec[NFSTIME_COUNT];
 	int32_t         nva_timensec[NFSTIME_COUNT];
 	uint32_t        nva_bitmap[NFS_ATTR_BITMAP_LEN]; /* attributes that are valid */
+
+	/* FPnfs only. */
+	uint32_t        nva_bsd_flags;  /* BSD flags */
+	uint64_t        nva_parentid;   /* parent file id */
+	uint64_t        nva_allocsize;  /* size allocated on disk */
 };
 
 /* nva_flags */
@@ -341,6 +347,10 @@ struct nfs_vattr {
 #define NFS_FFLAG_TRIGGER               0x0008  /* node is a trigger/mirror mount point */
 #define NFS_FFLAG_TRIGGER_REFERRAL      0x0010  /* trigger is a referral */
 #define NFS_FFLAG_IS_ATTR               0x8000  /* file is a named attribute file/directory */
+/* FPnfs only */
+#define NFS_FFLAG_FPNFS_BSD_FLAGS   0x01000000
+#define NFS_FFLAG_FPNFS_PARENTID    0x02000000
+#define NFS_FFLAG_FPNFS_ADDEDTIME   0x04000000
 
 /* flags for nfs_getattr() */
 #define NGA_CACHED      0x0001  /* use cached attributes (if still valid) */
@@ -692,6 +702,7 @@ struct nfsnode {
 #define NISMAPPED       0x10000 /* node is mmapped   */
 #define NREFRESH        0x20000 /* node's fh needs to be refreshed */
 #define NREFRESHWANT    0x40000 /* Waiting for fh to be refreshed */
+#define NDISARMTRIGGER  0x80000 /* Ignore node's mirror mount trigger */
 
 /*
  * Flags for n_hflag
@@ -793,11 +804,13 @@ extern lck_mtx_t *nfsiod_mutex;
 typedef int     vnop_t(void *);
 extern  vnop_t  **fifo_nfsv2nodeop_p;
 extern  vnop_t  **nfsv2_vnodeop_p;
+extern  vnop_t  **fpnfs_vnodeop_p;
 extern  vnop_t  **spec_nfsv2nodeop_p;
+#if CONFIG_NFS4
 extern  vnop_t  **fifo_nfsv4nodeop_p;
 extern  vnop_t  **nfsv4_vnodeop_p;
 extern  vnop_t  **spec_nfsv4nodeop_p;
-
+#endif
 /*
  * Prototypes for NFS vnode operations
  */
@@ -875,7 +888,7 @@ int nfs_flushcommits(nfsnode_t, int);
 int nfs_flush(nfsnode_t, int, thread_t, int);
 void nfs_buf_delwri_push(int);
 void nfs_buf_delwri_service(void);
-void nfs_buf_delwri_thread(void *, wait_result_t);;
+void nfs_buf_delwri_thread(void *, wait_result_t);
 
 int nfsiod_start(void);
 void nfsiod_terminate(struct nfsiod *);

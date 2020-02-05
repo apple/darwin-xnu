@@ -30,6 +30,7 @@
 /* Syscall entry points */
 int __coalition(uint32_t operation, uint64_t *cid, uint32_t flags);
 int __coalition_info(uint32_t operation, uint64_t *cid, void *buffer, size_t *bufsize);
+int __coalition_ledger(uint32_t operation, uint64_t *cid, void *buffer, size_t *bufsize);
 
 int
 coalition_create(uint64_t *cid_out, uint32_t flags)
@@ -66,4 +67,11 @@ coalition_info_set_efficiency(uint64_t cid, uint64_t flags)
 {
 	size_t size = sizeof(flags);
 	return __coalition_info(COALITION_INFO_SET_EFFICIENCY, &cid, (void *)&flags, &size);
+}
+
+int
+coalition_ledger_set_logical_writes_limit(uint64_t cid, int64_t limit)
+{
+	size_t size = sizeof(limit);
+	return __coalition_ledger(COALITION_LEDGER_SET_LOGICAL_WRITES_LIMIT, &cid, (void *)&limit, &size);
 }

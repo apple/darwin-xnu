@@ -127,8 +127,6 @@ OBJS_NO_SIGN_COMPARE =		\
 		in6_ifattach.o	\
 		ip6_input.o	\
 		ip6_output.o	\
-		ipcomp_input.o	\
-		ipcomp_output.o	\
 		in6_proto.o	\
 		mld6.o	\
 		nd6.o	\
@@ -250,6 +248,7 @@ OBJS_NO_PACKED_ADDRESS =    \
 		nd6_prproxy.o       \
 		nd6_rtr.o           \
 		necp.o              \
+		packet_mangler.o    \
 		pf.o                \
 		pf_norm.o           \
 		pktap.o             \
@@ -258,7 +257,8 @@ OBJS_NO_PACKED_ADDRESS =    \
 		tcp_subr.o          \
 		udp6_output.o       \
 		udp6_usrreq.o       \
-		udp_usrreq.o
+		udp_usrreq.o        \
+		sixxlowpan.o
 
 $(foreach file,$(OBJS_NO_PACKED_ADDRESS),$(eval $(call add_perfile_cflags,$(file),-Wno-address-of-packed-member)))
 
@@ -284,27 +284,27 @@ $(SOBJS): .SFLAGS
 	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
 
 $(COMPONENT).filelist: $(OBJS)
-	@echo "$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0)"
+	$(call makelog,$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0))
 	$(_v)for obj in ${OBJS}; do	\
-		 echo $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
+		 $(ECHO) $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist
 
 MAKESYSCALLS = $(SRCROOT)/bsd/kern/makesyscalls.sh
 
 init_sysent.c: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
-	@echo "[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0)";
+	$(call makelog,[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0))
 	$(_v)$(MAKESYSCALLS) $< table > /dev/null
 
 syscalls.c: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
-	@echo "[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0)";
+	$(call makelog,[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0))
 	$(_v)$(MAKESYSCALLS) $< names > /dev/null
 
 audit_kevents.c: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
-	@echo "[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0)";
+	$(call makelog,[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0))
 	$(_v)$(MAKESYSCALLS) $< audit > /dev/null
 
 systrace_args.c:  $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
-	@echo "[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0)";
+	$(call makelog,[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0))
 	$(_v)$(MAKESYSCALLS) $< systrace > /dev/null
 
 do_all: $(COMPONENT).filelist

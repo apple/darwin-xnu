@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -32,8 +32,13 @@
 #define _OS_OSSTRING_H
 
 #include <libkern/c++/OSObject.h>
+#include <libkern/c++/OSPtr.h>
 
 class OSData;
+class OSString;
+
+typedef OSPtr<OSString> OSStringPtr;
+typedef OSPtr<const OSString> OSStringConstPtr;
 
 
 /*!
@@ -102,7 +107,7 @@ enum { kOSStringNoCopy = 0x00000001 };
  */
 class OSString : public OSObject
 {
-	OSDeclareDefaultStructors(OSString)
+	OSDeclareDefaultStructors(OSString);
 
 	enum { kMaxStringLength  = 262142 };
 
@@ -145,7 +150,7 @@ public:
  * with the reference count incremented.
  * Changes to one will not be reflected in the other.
  */
-	static OSString * withString(const OSString * aString);
+	static OSStringPtr withString(const OSString * aString);
 
 
 /*!
@@ -162,7 +167,7 @@ public:
  * and with a reference count of 1;
  * <code>NULL</code> on failure.
  */
-	static OSString * withCString(const char * cString);
+	static OSStringPtr withCString(const char * cString);
 
 
 /*!
@@ -191,10 +196,10 @@ public:
  * An OSString object created with this function does not
  * allow changing the string via <code>@link setChar setChar@/link</code>.
  */
-	static OSString * withCStringNoCopy(const char * cString);
+	static OSStringPtr withCStringNoCopy(const char * cString);
 
 #if XNU_KERNEL_PRIVATE
-	static OSString * withStringOfLength(const char *cString, size_t length);
+	static OSStringPtr withStringOfLength(const char *cString, size_t length);
 #endif  /* XNU_KERNEL_PRIVATE */
 
 /*!

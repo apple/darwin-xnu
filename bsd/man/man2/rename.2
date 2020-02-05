@@ -204,6 +204,14 @@ The requested operation requires writing in a directory
 .Fa new ,
 new/.., or old/..) whose modes disallow this.
 .\" ===========
+.It Bq Er EACCES
+.Fa old
+is a directory and it, or some descendent in the namespace, is open
+and the file system format does does not support renaming a directory
+with open descendents (see
+.Xr getattrlist 2
+.Dv VOL_CAP_INT_RENAME_OPENFAIL Ns ).
+.\" ===========
 .It Bq Er EDQUOT
 The directory in which the entry for the new name
 is being placed cannot be extended because the

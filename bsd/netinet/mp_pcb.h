@@ -54,6 +54,7 @@ struct mppcb {
 	struct socket           *mpp_socket;    /* back pointer to socket */
 	uint32_t                mpp_flags;      /* PCB flags */
 	mppcb_state_t           mpp_state;      /* PCB state */
+	int32_t                 mpp_inside;     /* Indicates whether or not a thread is processing MPTCP */
 
 #if NECP
 	uuid_t necp_client_uuid;
@@ -72,19 +73,17 @@ mpsotomppcb(struct socket *mp_so)
 #define MPP_ATTACHED            0x001
 #define MPP_INSIDE_OUTPUT       0x002           /* MPTCP-stack is inside mptcp_subflow_output */
 #define MPP_INSIDE_INPUT        0x004           /* MPTCP-stack is inside mptcp_subflow_input */
-#define MPP_RUPCALL             0x008           /* MPTCP-stack is handling a read upcall */
+#define MPP_INPUT_HANDLE        0x008           /* MPTCP-stack is handling input */
 #define MPP_WUPCALL             0x010           /* MPTCP-stack is handling a read upcall */
 #define MPP_SHOULD_WORKLOOP     0x020           /* MPTCP-stack should call the workloop function */
 #define MPP_SHOULD_RWAKEUP      0x040           /* MPTCP-stack should call sorwakeup */
 #define MPP_SHOULD_WWAKEUP      0x080           /* MPTCP-stack should call sowwakeup */
 #define MPP_CREATE_SUBFLOWS     0x100           /* This connection needs to create subflows */
-#define MPP_SET_CELLICON        0x200           /* Set the cellicon (deferred) */
-#define MPP_UNSET_CELLICON      0x400           /* Unset the cellicon (deferred) */
 
 static inline boolean_t
 mptcp_should_defer_upcall(struct mppcb *mpp)
 {
-	return !!(mpp->mpp_flags & (MPP_INSIDE_OUTPUT | MPP_INSIDE_INPUT | MPP_RUPCALL | MPP_WUPCALL));
+	return !!(mpp->mpp_flags & (MPP_INSIDE_OUTPUT | MPP_INSIDE_INPUT | MPP_INPUT_HANDLE | MPP_WUPCALL));
 }
 
 /*

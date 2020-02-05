@@ -28,13 +28,23 @@
 #ifndef _IMAGEBOOT_H_
 #define _IMAGEBOOT_H_
 
-int     imageboot_needed(void);
-void    imageboot_setup(void);
+typedef enum imageboot_type {
+	IMAGEBOOT_NONE,
+	IMAGEBOOT_DMG,
+	IMAGEBOOT_LOCKER,
+} imageboot_type_t;
+
+imageboot_type_t        imageboot_needed(void);
+void    imageboot_setup(imageboot_type_t type);
 int     imageboot_format_is_valid(const char *root_path);
-int     imageboot_mount_image(const char *root_path, int height);
+int     imageboot_mount_image(const char *root_path, int height, imageboot_type_t type);
 
 #define IMAGEBOOT_CONTAINER_ARG         "container-dmg"
 #define IMAGEBOOT_ROOT_ARG              "root-dmg"
 #define IMAGEBOOT_AUTHROOT_ARG          "auth-root-dmg"
+#if CONFIG_LOCKERBOOT
+#define IMAGEBOOT_LOCKER_ARG "locker"
+#define LOCKERFS_NAME "lockerfs"
+#endif
 
 #endif

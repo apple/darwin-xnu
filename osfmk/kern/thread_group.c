@@ -40,6 +40,7 @@
 #include <kern/queue.h>
 #include <kern/locks.h>
 #include <kern/thread_group.h>
+#include <kern/sched_clutch.h>
 
 
 #if CONFIG_EMBEDDED

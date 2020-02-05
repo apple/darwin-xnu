@@ -45,6 +45,7 @@
 #include <sys/types.h>
 #include <sys/mount.h>
 #ifdef __APPLE_API_PRIVATE
+#include <sys/attr.h>
 #include <sys/syscall.h>
 #include <unistd.h>
 #endif  /* __APPLE_API_PRIVATE */
@@ -59,6 +60,18 @@ ssize_t fsgetpath(char *, size_t, fsid_t *, uint64_t) __OSX_AVAILABLE(10.13) __I
 
 #ifdef PRIVATE
 #include <sys/_types/_fsobj_id_t.h>
+
+#ifndef FSOPT_NOFIRMLINKPATH     /* also in attr.h */
+#define FSOPT_NOFIRMLINKPATH     0x00000080
+#endif
+
+#ifndef FSOPT_ISREALFSID     /* also in attr.h */
+#ifdef  FSOPT_RETURN_REALDEV
+#define FSOPT_ISREALFSID         FSOPT_RETURN_REALDEV
+#else
+#define FSOPT_ISREALFSID         0x00000200
+#endif
+#endif /* FSOPT_ISREALFSID */
 
 #ifdef __APPLE_API_PRIVATE
 
@@ -80,6 +93,8 @@ ssize_t fsgetpath(char *, size_t, fsid_t *, uint64_t) __OSX_AVAILABLE(10.13) __I
  * resolve to a path for which access validation can fail.
  */
 int openbyid_np(fsid_t* fsid, fsobj_id_t* objid, int flags);
+
+ssize_t fsgetpath_ext(char *, size_t, fsid_t *, uint64_t, uint32_t) __OSX_AVAILABLE(10.15) __IOS_AVAILABLE(13.0) __TVOS_AVAILABLE(13.0) __WATCHOS_AVAILABLE(6.0);
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* PRIVATE */

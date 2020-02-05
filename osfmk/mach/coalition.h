@@ -138,11 +138,17 @@ struct coalition_resource_usage {
 	uint64_t logical_deferred_writes;
 	uint64_t logical_invalidated_writes;
 	uint64_t logical_metadata_writes;
+	uint64_t logical_immediate_writes_to_external;
+	uint64_t logical_deferred_writes_to_external;
+	uint64_t logical_invalidated_writes_to_external;
+	uint64_t logical_metadata_writes_to_external;
 	uint64_t energy_billed_to_me;
 	uint64_t energy_billed_to_others;
 	uint64_t cpu_ptime;
 	uint64_t cpu_time_eqos_len;     /* Stores the number of thread QoS types */
 	uint64_t cpu_time_eqos[COALITION_NUM_THREAD_QOS_TYPES];
+	uint64_t cpu_instructions;
+	uint64_t cpu_cycles;
 };
 
 #ifdef PRIVATE
@@ -157,6 +163,9 @@ struct coalition_resource_usage {
 #define COALITION_INFO_RESOURCE_USAGE 1
 #define COALITION_INFO_SET_NAME 2
 #define COALITION_INFO_SET_EFFICIENCY 3
+
+/* coalition_ledger_set operations */
+#define COALITION_LEDGER_SET_LOGICAL_WRITES_LIMIT 1
 
 #define COALITION_EFFICIENCY_VALID_FLAGS    (COALITION_FLAGS_EFFICIENT)
 

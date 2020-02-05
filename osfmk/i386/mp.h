@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -65,6 +65,7 @@
 
 #include <i386/apic.h>
 #include <i386/mp_events.h>
+#include <machine/limits.h>
 
 #define MAX_CPUS        64              /* 8 * sizeof(cpumask_t) */
 
@@ -76,13 +77,14 @@
 #include <mach/i386/thread_status.h>
 #include <mach/vm_types.h>
 #include <kern/simple_lock.h>
+#include <kern/assert.h>
 
 __BEGIN_DECLS
 
 extern kern_return_t intel_startCPU(int slot_num);
 extern kern_return_t intel_startCPU_fast(int slot_num);
-extern void i386_init_slave(void);
-extern void i386_init_slave_fast(void);
+extern void i386_init_slave(void) __dead2;
+extern void i386_init_slave_fast(void) __dead2;
 extern void smp_init(void);
 
 extern void cpu_interrupt(int cpu);
@@ -90,7 +92,7 @@ __END_DECLS
 
 extern  unsigned int    real_ncpus;             /* real number of cpus */
 extern  unsigned int    max_ncpus;              /* max number of cpus */
-decl_simple_lock_data(extern, kdb_lock)  /* kdb lock		*/
+decl_simple_lock_data(extern, kdb_lock); /* kdb lock		*/
 
 __BEGIN_DECLS
 
@@ -153,6 +155,9 @@ typedef enum    {KDP_XCPU_NONE = 0xffff, KDP_CURRENT_LCPU = 0xfffe} kdp_cpu_t;
 
 typedef uint32_t cpu_t;
 typedef volatile uint64_t cpumask_t;
+
+static_assert(sizeof(cpumask_t) * CHAR_BIT >= MAX_CPUS, "cpumask_t bitvector is too small for current MAX_CPUS value");
+
 static inline cpumask_t
 cpu_to_cpumask(cpu_t cpu)
 {

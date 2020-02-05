@@ -912,14 +912,10 @@ void
 fillPage(ppnum_t pa, unsigned int fill)
 {
 	uint64_t        src;
-	int             i;
 	int             cnt = PAGE_SIZE / sizeof(unsigned int);
-	unsigned int   *addr;
 
 	src = i386_ptob(pa);
-	for (i = 0, addr = (unsigned int *)PHYSMAP_PTOV(src); i < cnt; i++) {
-		*addr++ = fill;
-	}
+	memset_word((int *)PHYSMAP_PTOV(src), fill, cnt);
 }
 
 static inline void

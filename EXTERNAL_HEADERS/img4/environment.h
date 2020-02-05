@@ -9,6 +9,10 @@
 #error "Please #include <img4/img4.h> instead of this file directly"
 #endif // __IMG4_INDIRECT
 
+#if IMG4_TAPI
+#include "tapi.h"
+#endif
+
 /*!
  * @typedef img4_environment_t
  * An opaque type describing an Image4 environment.
@@ -21,7 +25,7 @@ typedef struct _img4_environment img4_environment_t;
  * resolve the environment. This is the environment against which manifests are
  * personalized.
  */
-#if !MACH_KERNEL_PRIVATE
+#if !XNU_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20180112
 OS_EXPORT
 const struct _img4_environment _img4_environment_platform;
@@ -37,7 +41,7 @@ const struct _img4_environment _img4_environment_platform;
  * environment should be used as a fallback when validation against the platform
  * fails, and the caller is handling a loadable trust cache.
  */
-#if !MACH_KERNEL_PRIVATE
+#if !XNU_KERNEL_PRIVATE
 IMG4_API_AVAILABLE_20181004
 OS_EXPORT
 const struct _img4_environment _img4_environment_trust_cache;

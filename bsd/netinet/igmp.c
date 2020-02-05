@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -202,7 +202,7 @@ static struct igmpstat_v3 igmpstat_v3 = {
 	.igps_len = sizeof(struct igmpstat_v3),
 };
 static struct igmpstat igmpstat; /* old IGMPv2 stats structure */
-static struct timeval igmp_gsrdelay = {10, 0};
+static struct timeval igmp_gsrdelay = {.tv_sec = 10, .tv_usec = 0};
 
 static int igmp_recvifkludge = 1;
 static int igmp_sendra = 1;
@@ -847,7 +847,7 @@ igmp_input_v1_query(struct ifnet *ifp, const struct ip *ip,
 	struct igmp_ifinfo      *igi;
 	struct in_multi         *inm;
 	struct in_multistep     step;
-	struct igmp_tparams     itp = { 0, 0, 0, 0 };
+	struct igmp_tparams     itp = { .qpt = 0, .it = 0, .cst = 0, .sct = 0 };
 
 	IGMP_LOCK_ASSERT_NOTHELD();
 
@@ -937,7 +937,7 @@ igmp_input_v2_query(struct ifnet *ifp, const struct ip *ip,
 	struct in_multi         *inm;
 	int                      is_general_query;
 	uint16_t                 timer;
-	struct igmp_tparams      itp = { 0, 0, 0, 0 };
+	struct igmp_tparams      itp = { .qpt = 0, .it = 0, .cst = 0, .sct = 0 };
 
 	IGMP_LOCK_ASSERT_NOTHELD();
 
@@ -1104,7 +1104,7 @@ igmp_input_v3_query(struct ifnet *ifp, const struct ip *ip,
 	uint32_t                 maxresp, nsrc, qqi;
 	uint16_t                 timer;
 	uint8_t                  qrv;
-	struct igmp_tparams      itp = { 0, 0, 0, 0 };
+	struct igmp_tparams      itp = { .qpt = 0, .it = 0, .cst = 0, .sct = 0 };
 
 	IGMP_LOCK_ASSERT_NOTHELD();
 

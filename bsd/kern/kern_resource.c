@@ -133,7 +133,7 @@ int fill_task_rusage(task_t task, rusage_info_current *ri);
 void fill_task_billed_usage(task_t task, rusage_info_current *ri);
 int fill_task_io_rusage(task_t task, rusage_info_current *ri);
 int fill_task_qos_rusage(task_t task, rusage_info_current *ri);
-uint64_t get_task_logical_writes(task_t task);
+uint64_t get_task_logical_writes(task_t task, boolean_t external);
 void fill_task_monotonic_rusage(task_t task, rusage_info_current *ri);
 
 int proc_get_rusage(proc_t p, int flavor, user_addr_t buffer, __unused int is_zombie);
@@ -780,7 +780,11 @@ do_background_socket(struct proc *p, thread_t thread)
 #if SOCKETS
 	struct filedesc                     *fdp;
 	struct fileproc                     *fp;
-	int                                 i, background;
+	int                                 i = 0;
+	int                                                                     background = false;
+#if NECP
+	int                                                                     update_necp = false;
+#endif /* NECP */
 
 	proc_fdlock(p);
 
@@ -811,7 +815,9 @@ do_background_socket(struct proc *p, thread_t thread)
 				}
 #if NECP
 				else if (FILEGLOB_DTYPE(fp->f_fglob) == DTYPE_NETPOLICY) {
-					necp_set_client_as_background(p, fp, background);
+					if (necp_set_client_as_background(p, fp, background)) {
+						update_necp = true;
+					}
 				}
 #endif /* NECP */
 			}
@@ -841,13 +847,21 @@ do_background_socket(struct proc *p, thread_t thread)
 			}
 #if NECP
 			else if (FILEGLOB_DTYPE(fp->f_fglob) == DTYPE_NETPOLICY) {
-				necp_set_client_as_background(p, fp, background);
+				if (necp_set_client_as_background(p, fp, background)) {
+					update_necp = true;
+				}
 			}
 #endif /* NECP */
 		}
 	}
 
 	proc_fdunlock(p);
+
+#if NECP
+	if (update_necp) {
+		necp_update_all_clients();
+	}
+#endif /* NECP */
 #else
 #pragma unused(p, thread)
 #endif
@@ -1480,6 +1494,10 @@ static int
 iopolicysys_vfs_hfs_case_sensitivity(struct proc *p, int cmd, int scope, int policy, struct _iopol_param_t *iop_param);
 static int
 iopolicysys_vfs_atime_updates(struct proc *p, int cmd, int scope, int policy, struct _iopol_param_t *iop_param);
+static int
+iopolicysys_vfs_materialize_dataless_files(struct proc *p, int cmd, int scope, int policy, struct _iopol_param_t *iop_param);
+static int
+iopolicysys_vfs_statfs_no_data_volume(struct proc *p, int cmd, int scope, int policy, struct _iopol_param_t *iop_param);
 
 /*
  * iopolicysys
@@ -1526,6 +1544,17 @@ iopolicysys(struct proc *p, struct iopolicysys_args *uap, int32_t *retval)
 			goto out;
 		}
 		break;
+	case IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES:
+		error = iopolicysys_vfs_materialize_dataless_files(p, uap->cmd, iop_param.iop_scope, iop_param.iop_policy, &iop_param);
+		if (error) {
+			goto out;
+		}
+		break;
+	case IOPOL_TYPE_VFS_STATFS_NO_DATA_VOLUME:
+		error = iopolicysys_vfs_statfs_no_data_volume(p, uap->cmd, iop_param.iop_scope, iop_param.iop_policy, &iop_param);
+		if (error) {
+			goto out;
+		}
 	default:
 		error = EINVAL;
 		goto out;
@@ -1823,6 +1852,184 @@ out:
 	return error;
 }
 
+static inline int
+get_thread_materialize_policy(struct uthread *ut)
+{
+	if (ut->uu_flag & UT_NSPACE_NODATALESSFAULTS) {
+		return IOPOL_MATERIALIZE_DATALESS_FILES_OFF;
+	} else if (ut->uu_flag & UT_NSPACE_FORCEDATALESSFAULTS) {
+		return IOPOL_MATERIALIZE_DATALESS_FILES_ON;
+	}
+	/* Default thread behavior is "inherit process behavior". */
+	return IOPOL_MATERIALIZE_DATALESS_FILES_DEFAULT;
+}
+
+static inline void
+set_thread_materialize_policy(struct uthread *ut, int policy)
+{
+	if (policy == IOPOL_MATERIALIZE_DATALESS_FILES_OFF) {
+		ut->uu_flag &= ~UT_NSPACE_FORCEDATALESSFAULTS;
+		ut->uu_flag |= UT_NSPACE_NODATALESSFAULTS;
+	} else if (policy == IOPOL_MATERIALIZE_DATALESS_FILES_ON) {
+		ut->uu_flag &= ~UT_NSPACE_NODATALESSFAULTS;
+		ut->uu_flag |= UT_NSPACE_FORCEDATALESSFAULTS;
+	} else {
+		ut->uu_flag &= ~(UT_NSPACE_NODATALESSFAULTS | UT_NSPACE_FORCEDATALESSFAULTS);
+	}
+}
+
+static inline void
+set_proc_materialize_policy(struct proc *p, int policy)
+{
+	if (policy == IOPOL_MATERIALIZE_DATALESS_FILES_DEFAULT) {
+		/*
+		 * Caller has specified "use the default policy".
+		 * The default policy is to NOT materialize dataless
+		 * files.
+		 */
+		policy = IOPOL_MATERIALIZE_DATALESS_FILES_OFF;
+	}
+	if (policy == IOPOL_MATERIALIZE_DATALESS_FILES_ON) {
+		OSBitOrAtomic16((uint16_t)P_VFS_IOPOLICY_MATERIALIZE_DATALESS_FILES, &p->p_vfs_iopolicy);
+	} else {
+		OSBitAndAtomic16(~((uint16_t)P_VFS_IOPOLICY_MATERIALIZE_DATALESS_FILES), &p->p_vfs_iopolicy);
+	}
+}
+
+static int
+get_proc_materialize_policy(struct proc *p)
+{
+	return (p->p_vfs_iopolicy & P_VFS_IOPOLICY_MATERIALIZE_DATALESS_FILES) ? IOPOL_MATERIALIZE_DATALESS_FILES_ON : IOPOL_MATERIALIZE_DATALESS_FILES_OFF;
+}
+
+static int
+iopolicysys_vfs_materialize_dataless_files(struct proc *p __unused, int cmd, int scope, int policy, struct _iopol_param_t *iop_param)
+{
+	int                     error = 0;
+	thread_t                thread;
+
+	/* Validate scope */
+	switch (scope) {
+	case IOPOL_SCOPE_THREAD:
+		thread = current_thread();
+		break;
+	case IOPOL_SCOPE_PROCESS:
+		thread = THREAD_NULL;
+		break;
+	default:
+		error = EINVAL;
+		goto out;
+	}
+
+	/* Validate policy */
+	if (cmd == IOPOL_CMD_SET) {
+		switch (policy) {
+		case IOPOL_MATERIALIZE_DATALESS_FILES_DEFAULT:
+		case IOPOL_MATERIALIZE_DATALESS_FILES_OFF:
+		case IOPOL_MATERIALIZE_DATALESS_FILES_ON:
+			break;
+		default:
+			error = EINVAL;
+			goto out;
+		}
+	}
+
+	/* Perform command */
+	switch (cmd) {
+	case IOPOL_CMD_SET:
+		if (thread != THREAD_NULL) {
+			set_thread_materialize_policy(get_bsdthread_info(thread), policy);
+		} else {
+			set_proc_materialize_policy(p, policy);
+		}
+		break;
+	case IOPOL_CMD_GET:
+		if (thread != THREAD_NULL) {
+			policy = get_thread_materialize_policy(get_bsdthread_info(thread));
+		} else {
+			policy = get_proc_materialize_policy(p);
+		}
+		iop_param->iop_policy = policy;
+		break;
+	default:
+		error = EINVAL;         /* unknown command */
+		break;
+	}
+
+out:
+	return error;
+}
+
+static int
+iopolicysys_vfs_statfs_no_data_volume(struct proc *p __unused, int cmd,
+    int scope, int policy, struct _iopol_param_t *iop_param)
+{
+	int error = 0;
+
+	/* Validate scope */
+	switch (scope) {
+	case IOPOL_SCOPE_PROCESS:
+		/* Only process OK */
+		break;
+	default:
+		error = EINVAL;
+		goto out;
+	}
+
+	/* Validate policy */
+	if (cmd == IOPOL_CMD_SET) {
+		switch (policy) {
+		case IOPOL_VFS_STATFS_NO_DATA_VOLUME_DEFAULT:
+		/* fall-through */
+		case IOPOL_VFS_STATFS_FORCE_NO_DATA_VOLUME:
+			/* These policies are OK */
+			break;
+		default:
+			error = EINVAL;
+			goto out;
+		}
+	}
+
+	/* Perform command */
+	switch (cmd) {
+	case IOPOL_CMD_SET:
+		if (0 == kauth_cred_issuser(kauth_cred_get())) {
+			/* If it's a non-root process, it needs to have the entitlement to set the policy */
+			boolean_t entitled = FALSE;
+			entitled = IOTaskHasEntitlement(current_task(), "com.apple.private.iopol.case_sensitivity");
+			if (!entitled) {
+				error = EPERM;
+				goto out;
+			}
+		}
+
+		switch (policy) {
+		case IOPOL_VFS_STATFS_NO_DATA_VOLUME_DEFAULT:
+			OSBitAndAtomic16(~((uint32_t)P_VFS_IOPOLICY_STATFS_NO_DATA_VOLUME), &p->p_vfs_iopolicy);
+			break;
+		case IOPOL_VFS_STATFS_FORCE_NO_DATA_VOLUME:
+			OSBitOrAtomic16((uint32_t)P_VFS_IOPOLICY_STATFS_NO_DATA_VOLUME, &p->p_vfs_iopolicy);
+			break;
+		default:
+			error = EINVAL;
+			goto out;
+		}
+
+		break;
+	case IOPOL_CMD_GET:
+		iop_param->iop_policy = (p->p_vfs_iopolicy & P_VFS_IOPOLICY_STATFS_NO_DATA_VOLUME)
+		    ? IOPOL_VFS_STATFS_FORCE_NO_DATA_VOLUME
+		    : IOPOL_VFS_STATFS_NO_DATA_VOLUME_DEFAULT;
+		break;
+	default:
+		error = EINVAL;         /* unknown command */
+		break;
+	}
+
+out:
+	return error;
+}
+
 /* BSD call back function for task_policy networking changes */
 void
 proc_apply_task_networkbg(void * bsd_info, thread_t thread)
@@ -1850,7 +2057,7 @@ gather_rusage_info(proc_t p, rusage_info_current *ru, int flavor)
 	memset(ru, 0, sizeof(*ru));
 	switch (flavor) {
 	case RUSAGE_INFO_V4:
-		ru->ri_logical_writes = get_task_logical_writes(p->task);
+		ru->ri_logical_writes = get_task_logical_writes(p->task, FALSE);
 		ru->ri_lifetime_max_phys_footprint = get_task_phys_footprint_lifetime_max(p->task);
 #if CONFIG_LEDGER_INTERVAL_MAX
 		ru->ri_interval_max_phys_footprint = get_task_phys_footprint_interval_max(p->task, FALSE);

@@ -23,8 +23,6 @@
  * Use is subject to license terms.
  */
 
-/* #pragma ident	"@(#)sdt_subr.c	1.13	08/06/13 SMI" */
-
 #include <sys/sdt_impl.h>
 
 static dtrace_pattr_t vtrace_attr = {
@@ -93,6 +91,10 @@ sdt_provider_t sdt_providers[] = {
 	{ "sysevent", "__sysevent____", &stab_attr, 0 },
 	{ "sdt", "__sdt____", &sdt_attr, 0 },
 	{ "boost", "__boost____", &stab_attr, 0},
+	{ "route", "__route____", &stab_attr, 0 },
+#if KASAN
+	{ "kasan", "__kasan____", &stab_attr, 0 },
+#endif
 	{ NULL, NULL, NULL, 0 }
 };
 

@@ -52,102 +52,98 @@
 
 #if !CC_KERNEL || !CC_USE_ASM
 
+#if CCSHA2_SHA256_USE_SHA512_K
+#define K(i) ((uint32_t)(ccsha512_K[i] >> 32))
+#else
+#define K(i) ccsha256_K[i]
+#endif
+
 // Various logical functions
-#define Ch(x, y, z)       (z ^ (x & (y ^ z)))
-#define Maj(x, y, z)      (((x | y) & z) | (x & y))
-#define S(x, n)         ror((x),(n))
-#define R(x, n)         ((x)>>(n))
+#define Ch(x, y, z) (z ^ (x & (y ^ z)))
+#define Maj(x, y, z) (((x | y) & z) | (x & y))
+#define S(x, n) CC_RORc(x, n)
+#define R(x, n) ((x) >> (n))
+#define Sigma0(x) (S(x, 2) ^ S(x, 13) ^ S(x, 22))
+#define Sigma1(x) (S(x, 6) ^ S(x, 11) ^ S(x, 25))
+#define Gamma0(x) (S(x, 7) ^ S(x, 18) ^ R(x, 3))
+#define Gamma1(x) (S(x, 17) ^ S(x, 19) ^ R(x, 10))
 
-#define Sigma0(x)       (S(x, 2) ^ S(x, 13) ^ S(x, 22))
-#define Sigma1(x)       (S(x, 6) ^ S(x, 11) ^ S(x, 25))
-
-#define Gamma0(x)       (S(x, 7)  ^ S(x, 18) ^ R(x, 3))
-#define Gamma1(x)       (S(x, 17) ^ S(x, 19) ^ R(x, 10))
-
-//It is beter if the following macros are defined as inline functions,
-//but I found some compilers do not inline them.
-#ifdef __CC_ARM
-    #define ror(val, shift) __ror(val,shift)
-#else
-    #define ror(val, shift) ((val >> shift) | (val << (32 - shift)))
-#endif
-
-#ifdef __CC_ARM
-    #define byte_swap32(x) __rev(x)
-#elif defined(__clang__) && !defined(_MSC_VER)
-    #define byte_swap32(x) __builtin_bswap32(x);
-#else
-   #define byte_swap32(x) ((ror(x, 8) & 0xff00ff00) | (ror(x, 24) & 0x00ff00ff))
-#endif
-
-#if CC_HANDLE_UNALIGNED_DATA
-    #define set_W(i) CC_LOAD32_BE(W[i], buf + (4*(i)))
-#else
-    #define set_W(i) W[i] = byte_swap32(buf[i])
-#endif
+#define set_W(i) CC_LOAD32_BE(W[i], buf + (4 * (i)))
 
 // the round function
-#define RND(a, b, c, d, e, f, g, h, i)                                 \
-    t0 = h + Sigma1(e) + Ch(e, f, g) + ccsha256_K[i] + W[i];   \
-    t1 = Sigma0(a) + Maj(a, b, c);                             \
-    d += t0;                                                   \
-    h  = t0 + t1;
+#define RND(a, b, c, d, e, f, g, h, i)              \
+    t0 = h + Sigma1(e) + Ch(e, f, g) + K(i) + W[i]; \
+    t1 = Sigma0(a) + Maj(a, b, c);                  \
+    d += t0;                                        \
+    h = t0 + t1;
 
 // compress 512-bits
 void
 ccsha256_ltc_compress(ccdigest_state_t state, size_t nblocks, const void *in)
 {
 	uint32_t W[64], t0, t1;
-	uint32_t S0, S1, S2, S3, S4, S5, S6, S7;
+	uint32_t S[8];
 	int i;
 	uint32_t *s = ccdigest_u32(state);
-#if CC_HANDLE_UNALIGNED_DATA
 	const unsigned char *buf = in;
-#else
-	const uint32_t *buf = in;
-#endif
 
 	while (nblocks--) {
 		// schedule W 0..15
-		set_W(0); set_W(1); set_W(2); set_W(3); set_W(4); set_W(5); set_W(6); set_W(7);
-		set_W(8); set_W(9); set_W(10); set_W(11); set_W(12); set_W(13); set_W(14); set_W(15);
+		for (i = 0; i < 16; i += 1) {
+			set_W(i);
+		}
 
 		// schedule W 16..63
-		for (i = 16; i < 64; i++) {
+		for (; i < 64; i++) {
 			W[i] = Gamma1(W[i - 2]) + W[i - 7] + Gamma0(W[i - 15]) + W[i - 16];
 		}
 
 		// copy state into S
-		S0 = s[0];
-		S1 = s[1];
-		S2 = s[2];
-		S3 = s[3];
-		S4 = s[4];
-		S5 = s[5];
-		S6 = s[6];
-		S7 = s[7];
+		S[0] = s[0];
+		S[1] = s[1];
+		S[2] = s[2];
+		S[3] = s[3];
+		S[4] = s[4];
+		S[5] = s[5];
+		S[6] = s[6];
+		S[7] = s[7];
 
 		// Compress
-		for (i = 0; i < 64; i += 8) {
-			RND(S0, S1, S2, S3, S4, S5, S6, S7, i + 0);
-			RND(S7, S0, S1, S2, S3, S4, S5, S6, i + 1);
-			RND(S6, S7, S0, S1, S2, S3, S4, S5, i + 2);
-			RND(S5, S6, S7, S0, S1, S2, S3, S4, i + 3);
-			RND(S4, S5, S6, S7, S0, S1, S2, S3, i + 4);
-			RND(S3, S4, S5, S6, S7, S0, S1, S2, i + 5);
-			RND(S2, S3, S4, S5, S6, S7, S0, S1, i + 6);
-			RND(S1, S2, S3, S4, S5, S6, S7, S0, i + 7);
+#if CC_SMALL_CODE
+		for (i = 0; i < 64; i += 1) {
+			t0 = S[7] + Sigma1(S[4]) + Ch(S[4], S[5], S[6]) + K(i) + W[i];
+			t1 = Sigma0(S[0]) + Maj(S[0], S[1], S[2]);
+			S[7] = S[6];
+			S[6] = S[5];
+			S[5] = S[4];
+			S[4] = S[3] + t0;
+			S[3] = S[2];
+			S[2] = S[1];
+			S[1] = S[0];
+			S[0] = t0 + t1;
 		}
+#else
+		for (i = 0; i < 64; i += 8) {
+			RND(S[0], S[1], S[2], S[3], S[4], S[5], S[6], S[7], i + 0);
+			RND(S[7], S[0], S[1], S[2], S[3], S[4], S[5], S[6], i + 1);
+			RND(S[6], S[7], S[0], S[1], S[2], S[3], S[4], S[5], i + 2);
+			RND(S[5], S[6], S[7], S[0], S[1], S[2], S[3], S[4], i + 3);
+			RND(S[4], S[5], S[6], S[7], S[0], S[1], S[2], S[3], i + 4);
+			RND(S[3], S[4], S[5], S[6], S[7], S[0], S[1], S[2], i + 5);
+			RND(S[2], S[3], S[4], S[5], S[6], S[7], S[0], S[1], i + 6);
+			RND(S[1], S[2], S[3], S[4], S[5], S[6], S[7], S[0], i + 7);
+		}
+#endif
 
 		// feedback
-		s[0] += S0;
-		s[1] += S1;
-		s[2] += S2;
-		s[3] += S3;
-		s[4] += S4;
-		s[5] += S5;
-		s[6] += S6;
-		s[7] += S7;
+		s[0] += S[0];
+		s[1] += S[1];
+		s[2] += S[2];
+		s[3] += S[3];
+		s[4] += S[4];
+		s[5] += S[5];
+		s[6] += S[6];
+		s[7] += S[7];
 
 		buf += CCSHA256_BLOCK_SIZE / sizeof(buf[0]);
 	}

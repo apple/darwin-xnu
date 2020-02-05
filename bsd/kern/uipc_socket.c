@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -104,6 +104,7 @@
 #include <netinet/in.h>
 #include <netinet/in_pcb.h>
 #include <netinet/in_tclass.h>
+#include <netinet/in_var.h>
 #include <netinet/tcp_var.h>
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
@@ -159,23 +160,23 @@ static lck_mtx_t        *so_cache_mtx;
 
 #include <machine/limits.h>
 
-static int      filt_sorattach(struct knote *kn, struct kevent_internal_s *kev);
+static int      filt_sorattach(struct knote *kn, struct kevent_qos_s *kev);
 static void     filt_sordetach(struct knote *kn);
 static int      filt_soread(struct knote *kn, long hint);
-static int      filt_sortouch(struct knote *kn, struct kevent_internal_s *kev);
-static int      filt_sorprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
+static int      filt_sortouch(struct knote *kn, struct kevent_qos_s *kev);
+static int      filt_sorprocess(struct knote *kn, struct kevent_qos_s *kev);
 
-static int      filt_sowattach(struct knote *kn, struct kevent_internal_s *kev);
+static int      filt_sowattach(struct knote *kn, struct kevent_qos_s *kev);
 static void     filt_sowdetach(struct knote *kn);
 static int      filt_sowrite(struct knote *kn, long hint);
-static int      filt_sowtouch(struct knote *kn, struct kevent_internal_s *kev);
-static int      filt_sowprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
+static int      filt_sowtouch(struct knote *kn, struct kevent_qos_s *kev);
+static int      filt_sowprocess(struct knote *kn, struct kevent_qos_s *kev);
 
-static int      filt_sockattach(struct knote *kn, struct kevent_internal_s *kev);
+static int      filt_sockattach(struct knote *kn, struct kevent_qos_s *kev);
 static void     filt_sockdetach(struct knote *kn);
 static int      filt_sockev(struct knote *kn, long hint);
-static int      filt_socktouch(struct knote *kn, struct kevent_internal_s *kev);
-static int      filt_sockprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev);
+static int      filt_socktouch(struct knote *kn, struct kevent_qos_s *kev);
+static int      filt_sockprocess(struct knote *kn, struct kevent_qos_s *kev);
 
 static int sooptcopyin_timeval(struct sockopt *, struct timeval *);
 static int sooptcopyout_timeval(struct sockopt *, const struct timeval *);
@@ -550,6 +551,9 @@ so_update_last_owner_locked(struct socket *so, proc_t self)
 			so->last_pid = proc_pid(self);
 			proc_getexecutableuuid(self, so->last_uuid,
 			    sizeof(so->last_uuid));
+			if (so->so_proto != NULL && so->so_proto->pr_update_last_owner != NULL) {
+				(*so->so_proto->pr_update_last_owner)(so, self, NULL);
+			}
 		}
 		proc_pidoriginatoruuid(so->so_vuuid, sizeof(so->so_vuuid));
 	}
@@ -736,7 +740,7 @@ socreate_internal(int dom, struct socket **aso, int type, int proto,
 		break;
 	}
 
-	if (flags & SOCF_ASYNC) {
+	if (flags & SOCF_MPTCP) {
 		so->so_state |= SS_NBIO;
 	}
 
@@ -791,6 +795,13 @@ socreate_internal(int dom, struct socket **aso, int type, int proto,
 		return error;
 	}
 
+	/*
+	 * Note: needs so_pcb to be set after pru_attach
+	 */
+	if (prp->pr_update_last_owner != NULL) {
+		(*prp->pr_update_last_owner)(so, p, ep);
+	}
+
 	atomic_add_32(&prp->pr_domain->dom_refs, 1);
 	TAILQ_INIT(&so->so_evlist);
 
@@ -807,8 +818,8 @@ socreate_internal(int dom, struct socket **aso, int type, int proto,
 	 * If this thread or task is marked to create backgrounded sockets,
 	 * mark the socket as background.
 	 */
-	if (proc_get_effective_thread_policy(current_thread(),
-	    TASK_POLICY_NEW_SOCKETS_BG)) {
+	if (!(flags & SOCF_MPTCP) &&
+	    proc_get_effective_thread_policy(current_thread(), TASK_POLICY_NEW_SOCKETS_BG)) {
 		socket_set_traffic_mgt_flags(so, TRAFFIC_MGT_SO_BACKGROUND);
 		so->so_background_thread = current_thread();
 	}
@@ -1979,7 +1990,7 @@ defunct:
 			    !(so->so_flags1 & SOF1_PRECONNECT_DATA)) {
 				return ENOTCONN;
 			}
-		} else if (addr == 0 && !(flags & MSG_HOLD)) {
+		} else if (addr == 0) {
 			return (so->so_proto->pr_flags & PR_CONNREQUIRED) ?
 			       ENOTCONN : EDESTADDRREQ;
 		}
@@ -2049,10 +2060,6 @@ defunct:
  * Returns nonzero on error, timeout or signal; callers
  * must check for short counts if EINTR/ERESTART are returned.
  * Data and control buffers are freed on return.
- * Experiment:
- * MSG_HOLD: go thru most of sosend(), but just enqueue the mbuf
- * MSG_SEND: go thru as for MSG_HOLD on current fragment, then
- *  point at the mbuf chain being constructed and go from there.
  *
  * Returns:	0			Success
  *		EOPNOTSUPP
@@ -2446,29 +2453,6 @@ sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
 				}
 			}
 
-			if (flags & (MSG_HOLD | MSG_SEND)) {
-				/* Enqueue for later, go away if HOLD */
-				struct mbuf *mb1;
-				if (so->so_temp && (flags & MSG_FLUSH)) {
-					m_freem(so->so_temp);
-					so->so_temp = NULL;
-				}
-				if (so->so_temp) {
-					so->so_tail->m_next = top;
-				} else {
-					so->so_temp = top;
-				}
-				mb1 = top;
-				while (mb1->m_next) {
-					mb1 = mb1->m_next;
-				}
-				so->so_tail = mb1;
-				if (flags & MSG_HOLD) {
-					top = NULL;
-					goto out_locked;
-				}
-				top = so->so_temp;
-			}
 			if (dontroute) {
 				so->so_options |= SO_DONTROUTE;
 			}
@@ -2531,10 +2515,6 @@ sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
 			error = (*so->so_proto->pr_usrreqs->pru_send)
 			    (so, sendflags, top, addr, control, p);
 
-			if (flags & MSG_SEND) {
-				so->so_temp = NULL;
-			}
-
 			if (dontroute) {
 				so->so_options &= ~SO_DONTROUTE;
 			}
@@ -2587,7 +2567,7 @@ out_locked:
 int
 sosend_reinject(struct socket *so, struct sockaddr *addr, struct mbuf *top, struct mbuf *control, uint32_t sendflags)
 {
-	struct mbuf *m0, *control_end;
+	struct mbuf *m0 = NULL, *control_end = NULL;
 
 	socket_lock_assert_owned(so);
 
@@ -4566,6 +4546,33 @@ out:
 	return error;
 }
 
+static int
+so_statistics_event_to_nstat_event(int64_t *input_options,
+    uint64_t *nstat_event)
+{
+	int error = 0;
+	switch (*input_options) {
+	case SO_STATISTICS_EVENT_ENTER_CELLFALLBACK:
+		*nstat_event = NSTAT_EVENT_SRC_ENTER_CELLFALLBACK;
+		break;
+	case SO_STATISTICS_EVENT_EXIT_CELLFALLBACK:
+		*nstat_event = NSTAT_EVENT_SRC_EXIT_CELLFALLBACK;
+		break;
+#if (DEBUG || DEVELOPMENT)
+	case SO_STATISTICS_EVENT_RESERVED_1:
+		*nstat_event = NSTAT_EVENT_SRC_RESERVED_1;
+		break;
+	case SO_STATISTICS_EVENT_RESERVED_2:
+		*nstat_event = NSTAT_EVENT_SRC_RESERVED_2;
+		break;
+#endif /* (DEBUG || DEVELOPMENT) */
+	default:
+		error = EINVAL;
+		break;
+	}
+	return error;
+}
+
 /*
  * Returns:	0			Success
  *		EINVAL
@@ -4906,14 +4913,15 @@ sooptcopyin_timeval(struct sockopt *sopt, struct timeval *tv_p)
 }
 
 int
-soopt_cred_check(struct socket *so, int priv, boolean_t allow_root)
+soopt_cred_check(struct socket *so, int priv, boolean_t allow_root,
+    boolean_t ignore_delegate)
 {
 	kauth_cred_t cred =  NULL;
 	proc_t ep = PROC_NULL;
 	uid_t uid;
 	int error = 0;
 
-	if (so->so_flags & SOF_DELEGATED) {
+	if (ignore_delegate == false && so->so_flags & SOF_DELEGATED) {
 		ep = proc_find(so->e_pid);
 		if (ep) {
 			cred = kauth_cred_proc_ref(ep);
@@ -4960,6 +4968,7 @@ int
 sosetoptlock(struct socket *so, struct sockopt *sopt, int dolock)
 {
 	int     error, optval;
+	int64_t long_optval;
 	struct  linger l;
 	struct  timeval tv;
 #if CONFIG_MACF_SOCKET
@@ -5240,7 +5249,7 @@ sosetoptlock(struct socket *so, struct sockopt *sopt, int dolock)
 			}
 			if (optval != 0) {
 				error = soopt_cred_check(so,
-				    PRIV_NET_RESTRICTED_AWDL, false);
+				    PRIV_NET_RESTRICTED_AWDL, false, false);
 				if (error == 0) {
 					inp_set_awdl_unrestricted(
 						sotoinpcb(so));
@@ -5262,7 +5271,7 @@ sosetoptlock(struct socket *so, struct sockopt *sopt, int dolock)
 			if (optval != 0 &&
 			    inp_get_intcoproc_allowed(sotoinpcb(so)) == FALSE) {
 				error = soopt_cred_check(so,
-				    PRIV_NET_RESTRICTED_INTCOPROC, false);
+				    PRIV_NET_RESTRICTED_INTCOPROC, false, false);
 				if (error == 0) {
 					inp_set_intcoproc_allowed(
 						sotoinpcb(so));
@@ -5524,7 +5533,7 @@ sosetoptlock(struct socket *so, struct sockopt *sopt, int dolock)
 				break;
 			}
 
-			error = so_set_effective_pid(so, optval, sopt->sopt_p);
+			error = so_set_effective_pid(so, optval, sopt->sopt_p, true);
 			break;
 
 		case SO_DELEGATED_UUID: {
@@ -5535,7 +5544,7 @@ sosetoptlock(struct socket *so, struct sockopt *sopt, int dolock)
 				break;
 			}
 
-			error = so_set_effective_uuid(so, euuid, sopt->sopt_p);
+			error = so_set_effective_uuid(so, euuid, sopt->sopt_p, true);
 			break;
 		}
 
@@ -5544,7 +5553,7 @@ sosetoptlock(struct socket *so, struct sockopt *sopt, int dolock)
 			error = necp_set_socket_attributes(so, sopt);
 			break;
 
-		case SO_NECP_CLIENTUUID:
+		case SO_NECP_CLIENTUUID: {
 			if (SOCK_DOM(so) == PF_MULTIPATH) {
 				/* Handled by MPTCP itself */
 				break;
@@ -5572,7 +5581,8 @@ sosetoptlock(struct socket *so, struct sockopt *sopt, int dolock)
 				goto out;
 			}
 
-			error = necp_client_register_socket_flow(so->last_pid,
+			pid_t current_pid = proc_pid(current_proc());
+			error = necp_client_register_socket_flow(current_pid,
 			    inp->necp_client_uuid, inp);
 			if (error != 0) {
 				uuid_clear(inp->necp_client_uuid);
@@ -5580,12 +5590,48 @@ sosetoptlock(struct socket *so, struct sockopt *sopt, int dolock)
 			}
 
 			if (inp->inp_lport != 0) {
-				// There is bound local port, so this is not
+				// There is a bound local port, so this is not
 				// a fresh socket. Assign to the client.
-				necp_client_assign_from_socket(so->last_pid, inp->necp_client_uuid, inp);
+				necp_client_assign_from_socket(current_pid, inp->necp_client_uuid, inp);
 			}
 
 			break;
+		}
+		case SO_NECP_LISTENUUID: {
+			if (SOCK_DOM(so) != PF_INET && SOCK_DOM(so) != PF_INET6) {
+				error = EINVAL;
+				goto out;
+			}
+
+			struct inpcb *inp = sotoinpcb(so);
+			if (!uuid_is_null(inp->necp_client_uuid)) {
+				error = EINVAL;
+				goto out;
+			}
+
+			error = sooptcopyin(sopt, &inp->necp_client_uuid,
+			    sizeof(uuid_t), sizeof(uuid_t));
+			if (error != 0) {
+				goto out;
+			}
+
+			if (uuid_is_null(inp->necp_client_uuid)) {
+				error = EINVAL;
+				goto out;
+			}
+
+			error = necp_client_register_socket_listener(proc_pid(current_proc()),
+			    inp->necp_client_uuid, inp);
+			if (error != 0) {
+				uuid_clear(inp->necp_client_uuid);
+				goto out;
+			}
+
+			// Mark that the port registration is held by NECP
+			inp->inp_flags2 |= INP2_EXTERNAL_PORT;
+
+			break;
+		}
 #endif /* NECP */
 
 		case SO_EXTENDED_BK_IDLE:
@@ -5611,6 +5657,21 @@ sosetoptlock(struct socket *so, struct sockopt *sopt, int dolock)
 			} else {
 				so->so_flags1 |= SOF1_CELLFALLBACK;
 			}
+			break;
+
+		case SO_STATISTICS_EVENT:
+			error = sooptcopyin(sopt, &long_optval,
+			    sizeof(long_optval), sizeof(long_optval));
+			if (error != 0) {
+				goto out;
+			}
+			u_int64_t nstat_event = 0;
+			error = so_statistics_event_to_nstat_event(
+				&long_optval, &nstat_event);
+			if (error != 0) {
+				goto out;
+			}
+			nstat_pcb_event(sotoinpcb(so), nstat_event);
 			break;
 
 		case SO_NET_SERVICE_TYPE: {
@@ -5641,6 +5702,24 @@ sosetoptlock(struct socket *so, struct sockopt *sopt, int dolock)
 			}
 			break;
 
+		case SO_MPKL_SEND_INFO: {
+			struct so_mpkl_send_info so_mpkl_send_info;
+
+			error = sooptcopyin(sopt, &so_mpkl_send_info,
+			    sizeof(struct so_mpkl_send_info), sizeof(struct so_mpkl_send_info));
+			if (error != 0) {
+				goto out;
+			}
+			uuid_copy(so->so_mpkl_send_uuid, so_mpkl_send_info.mpkl_uuid);
+			so->so_mpkl_send_proto = so_mpkl_send_info.mpkl_proto;
+
+			if (uuid_is_null(so->so_mpkl_send_uuid) && so->so_mpkl_send_proto == 0) {
+				so->so_flags1 &= ~SOF1_MPKL_SEND_INFO;
+			} else {
+				so->so_flags1 |= SOF1_MPKL_SEND_INFO;
+			}
+			break;
+		}
 		default:
 			error = ENOPROTOOPT;
 			break;
@@ -5837,17 +5916,13 @@ integer:
 
 				m1 = so->so_rcv.sb_mb;
 				while (m1 != NULL) {
-					if (m1->m_type == MT_DATA ||
-					    m1->m_type == MT_HEADER ||
-					    m1->m_type == MT_OOBDATA) {
-						cnt += 1;
-					}
+					cnt += 1;
 					m1 = m1->m_nextpkt;
 				}
 				optval = cnt;
 				goto integer;
 			} else {
-				error = EINVAL;
+				error = ENOPROTOOPT;
 				break;
 			}
 
@@ -6050,8 +6125,7 @@ integer:
 			error = necp_get_socket_attributes(so, sopt);
 			break;
 
-		case SO_NECP_CLIENTUUID:
-		{
+		case SO_NECP_CLIENTUUID: {
 			uuid_t *ncu;
 
 			if (SOCK_DOM(so) == PF_MULTIPATH) {
@@ -6064,6 +6138,25 @@ integer:
 			}
 
 			error = sooptcopyout(sopt, ncu, sizeof(uuid_t));
+			break;
+		}
+
+		case SO_NECP_LISTENUUID: {
+			uuid_t *nlu;
+
+			if (SOCK_DOM(so) == PF_INET || SOCK_DOM(so) == PF_INET6) {
+				if (sotoinpcb(so)->inp_flags2 & INP2_EXTERNAL_PORT) {
+					nlu = &sotoinpcb(so)->necp_client_uuid;
+				} else {
+					error = ENOENT;
+					goto out;
+				}
+			} else {
+				error = EINVAL;
+				goto out;
+			}
+
+			error = sooptcopyout(sopt, nlu, sizeof(uuid_t));
 			break;
 		}
 #endif /* NECP */
@@ -6099,6 +6192,15 @@ integer:
 			optval = so_get_netsvc_marking_level(so);
 			goto integer;
 
+		case SO_MPKL_SEND_INFO: {
+			struct so_mpkl_send_info so_mpkl_send_info;
+
+			uuid_copy(so_mpkl_send_info.mpkl_uuid, so->so_mpkl_send_uuid);
+			so_mpkl_send_info.mpkl_proto = so->so_mpkl_send_proto;
+			error = sooptcopyout(sopt, &so_mpkl_send_info,
+			    sizeof(struct so_mpkl_send_info));
+			break;
+		}
 		default:
 			error = ENOPROTOOPT;
 			break;
@@ -6312,14 +6414,9 @@ sopoll(struct socket *so, int events, kauth_cred_t cred, void * wql)
 }
 
 int
-soo_kqfilter(struct fileproc *fp, struct knote *kn,
-    struct kevent_internal_s *kev, vfs_context_t ctx)
+soo_kqfilter(struct fileproc *fp, struct knote *kn, struct kevent_qos_s *kev)
 {
-#pragma unused(fp)
-#if !CONFIG_MACF_SOCKET
-#pragma unused(ctx)
-#endif /* MAC_SOCKET */
-	struct socket *so = (struct socket *)kn->kn_fp->f_fglob->fg_data;
+	struct socket *so = (struct socket *)fp->f_fglob->fg_data;
 	int result;
 
 	socket_lock(so, 1);
@@ -6327,11 +6424,10 @@ soo_kqfilter(struct fileproc *fp, struct knote *kn,
 	so_update_policy(so);
 
 #if CONFIG_MACF_SOCKET
-	if (mac_socket_check_kqfilter(proc_ucred(vfs_context_proc(ctx)),
-	    kn, so) != 0) {
+	proc_t p = knote_get_kq(kn)->kq_p;
+	if (mac_socket_check_kqfilter(proc_ucred(p), kn, so) != 0) {
 		socket_unlock(so, 1);
-		kn->kn_flags = EV_ERROR;
-		kn->kn_data = EPERM;
+		knote_set_error(kn, EPERM);
 		return 0;
 	}
 #endif /* MAC_SOCKET */
@@ -6351,8 +6447,7 @@ soo_kqfilter(struct fileproc *fp, struct knote *kn,
 		break;
 	default:
 		socket_unlock(so, 1);
-		kn->kn_flags = EV_ERROR;
-		kn->kn_data = EINVAL;
+		knote_set_error(kn, EINVAL);
 		return 0;
 	}
 
@@ -6368,21 +6463,21 @@ soo_kqfilter(struct fileproc *fp, struct knote *kn,
 }
 
 static int
-filt_soread_common(struct knote *kn, struct socket *so)
+filt_soread_common(struct knote *kn, struct kevent_qos_s *kev, struct socket *so)
 {
-	if (so->so_options & SO_ACCEPTCONN) {
-		int is_not_empty;
+	int retval = 0;
+	int64_t data = 0;
 
+	if (so->so_options & SO_ACCEPTCONN) {
 		/*
 		 * Radar 6615193 handle the listen case dynamically
 		 * for kqueue read filter. This allows to call listen()
 		 * after registering the kqueue EVFILT_READ.
 		 */
 
-		kn->kn_data = so->so_qlen;
-		is_not_empty = !TAILQ_EMPTY(&so->so_comp);
-
-		return is_not_empty;
+		retval = !TAILQ_EMPTY(&so->so_comp);
+		data = so->so_qlen;
+		goto out;
 	}
 
 	/* socket isn't a listener */
@@ -6391,13 +6486,14 @@ filt_soread_common(struct knote *kn, struct socket *so)
 	 * the bytes of protocol data. We therefore exclude any
 	 * control bytes.
 	 */
-	kn->kn_data = so->so_rcv.sb_cc - so->so_rcv.sb_ctl;
+	data = so->so_rcv.sb_cc - so->so_rcv.sb_ctl;
 
 	if (kn->kn_sfflags & NOTE_OOB) {
 		if (so->so_oobmark || (so->so_state & SS_RCVATMARK)) {
 			kn->kn_fflags |= NOTE_OOB;
-			kn->kn_data -= so->so_oobmark;
-			return 1;
+			data -= so->so_oobmark;
+			retval = 1;
+			goto out;
 		}
 	}
 
@@ -6408,11 +6504,13 @@ filt_soread_common(struct knote *kn, struct socket *so)
 	    ) {
 		kn->kn_flags |= EV_EOF;
 		kn->kn_fflags = so->so_error;
-		return 1;
+		retval = 1;
+		goto out;
 	}
 
 	if (so->so_error) {     /* temporary udp error */
-		return 1;
+		retval = 1;
+		goto out;
 	}
 
 	int64_t lowwat = so->so_rcv.sb_lowat;
@@ -6429,20 +6527,17 @@ filt_soread_common(struct knote *kn, struct socket *so)
 		}
 	}
 
-	/*
-	 * The order below is important. Since NOTE_LOWAT
-	 * overrides sb_lowat, check for NOTE_LOWAT case
-	 * first.
-	 */
-	if (kn->kn_sfflags & NOTE_LOWAT) {
-		return kn->kn_data >= lowwat;
-	}
+	retval = (data >= lowwat);
 
-	return so->so_rcv.sb_cc >= lowwat;
+out:
+	if (retval && kev) {
+		knote_fill_kevent(kn, kev, data);
+	}
+	return retval;
 }
 
 static int
-filt_sorattach(struct knote *kn, __unused struct kevent_internal_s *kev)
+filt_sorattach(struct knote *kn, __unused struct kevent_qos_s *kev)
 {
 	struct socket *so = (struct socket *)kn->kn_fp->f_fglob->fg_data;
 
@@ -6456,16 +6551,16 @@ filt_sorattach(struct knote *kn, __unused struct kevent_internal_s *kev)
 	if (kn->kn_filter == EVFILT_READ &&
 	    kn->kn_flags & EV_OOBAND) {
 		kn->kn_flags &= ~EV_OOBAND;
-		kn->kn_hookid = EV_OOBAND;
+		kn->kn_hook32 = EV_OOBAND;
 	} else {
-		kn->kn_hookid = 0;
+		kn->kn_hook32 = 0;
 	}
 	if (KNOTE_ATTACH(&so->so_rcv.sb_sel.si_note, kn)) {
 		so->so_rcv.sb_flags |= SB_KNOTE;
 	}
 
 	/* indicate if event is already fired */
-	return filt_soread_common(kn, so);
+	return filt_soread_common(kn, NULL, so);
 }
 
 static void
@@ -6493,7 +6588,7 @@ filt_soread(struct knote *kn, long hint)
 		socket_lock(so, 1);
 	}
 
-	retval = filt_soread_common(kn, so);
+	retval = filt_soread_common(kn, NULL, so);
 
 	if ((hint & SO_FILT_HINT_LOCKED) == 0) {
 		socket_unlock(so, 1);
@@ -6503,7 +6598,7 @@ filt_soread(struct knote *kn, long hint)
 }
 
 static int
-filt_sortouch(struct knote *kn, struct kevent_internal_s *kev)
+filt_sortouch(struct knote *kn, struct kevent_qos_s *kev)
 {
 	struct socket *so = (struct socket *)kn->kn_fp->f_fglob->fg_data;
 	int retval;
@@ -6515,7 +6610,7 @@ filt_sortouch(struct knote *kn, struct kevent_internal_s *kev)
 	kn->kn_sdata = kev->data;
 
 	/* determine if changes result in fired events */
-	retval = filt_soread_common(kn, so);
+	retval = filt_soread_common(kn, NULL, so);
 
 	socket_unlock(so, 1);
 
@@ -6523,21 +6618,13 @@ filt_sortouch(struct knote *kn, struct kevent_internal_s *kev)
 }
 
 static int
-filt_sorprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev)
+filt_sorprocess(struct knote *kn, struct kevent_qos_s *kev)
 {
-#pragma unused(data)
 	struct socket *so = (struct socket *)kn->kn_fp->f_fglob->fg_data;
 	int retval;
 
 	socket_lock(so, 1);
-	retval = filt_soread_common(kn, so);
-	if (retval) {
-		*kev = kn->kn_kevent;
-		if (kn->kn_flags & EV_CLEAR) {
-			kn->kn_fflags = 0;
-			kn->kn_data = 0;
-		}
-	}
+	retval = filt_soread_common(kn, kev, so);
 	socket_unlock(so, 1);
 
 	return retval;
@@ -6557,26 +6644,35 @@ so_wait_for_if_feedback(struct socket *so)
 }
 
 static int
-filt_sowrite_common(struct knote *kn, struct socket *so)
+filt_sowrite_common(struct knote *kn, struct kevent_qos_s *kev, struct socket *so)
 {
 	int ret = 0;
+	int64_t data = sbspace(&so->so_snd);
 
-	kn->kn_data = sbspace(&so->so_snd);
 	if (so->so_state & SS_CANTSENDMORE) {
 		kn->kn_flags |= EV_EOF;
 		kn->kn_fflags = so->so_error;
-		return 1;
+		ret = 1;
+		goto out;
 	}
+
 	if (so->so_error) {     /* temporary udp error */
-		return 1;
+		ret = 1;
+		goto out;
 	}
+
 	if (!socanwrite(so)) {
-		return 0;
+		ret = 0;
+		goto out;
 	}
+
 	if (so->so_flags1 & SOF1_PRECONNECT_DATA) {
-		return 1;
+		ret = 1;
+		goto out;
 	}
+
 	int64_t lowwat = so->so_snd.sb_lowat;
+
 	if (kn->kn_sfflags & NOTE_LOWAT) {
 		if (kn->kn_sdata > so->so_snd.sb_hiwat) {
 			lowwat = so->so_snd.sb_hiwat;
@@ -6584,7 +6680,8 @@ filt_sowrite_common(struct knote *kn, struct socket *so)
 			lowwat = kn->kn_sdata;
 		}
 	}
-	if (kn->kn_data >= lowwat) {
+
+	if (data >= lowwat) {
 		if ((so->so_flags & SOF_NOTSENT_LOWAT)
 #if (DEBUG || DEVELOPMENT)
 		    && so_notsent_lowat_check == 1
@@ -6602,7 +6699,8 @@ filt_sowrite_common(struct knote *kn, struct socket *so)
 			}
 #endif
 			else {
-				return 1;
+				ret = 1;
+				goto out;
 			}
 		} else {
 			ret = 1;
@@ -6611,11 +6709,16 @@ filt_sowrite_common(struct knote *kn, struct socket *so)
 	if (so_wait_for_if_feedback(so)) {
 		ret = 0;
 	}
+
+out:
+	if (ret && kev) {
+		knote_fill_kevent(kn, kev, data);
+	}
 	return ret;
 }
 
 static int
-filt_sowattach(struct knote *kn, __unused struct kevent_internal_s *kev)
+filt_sowattach(struct knote *kn, __unused struct kevent_qos_s *kev)
 {
 	struct socket *so = (struct socket *)kn->kn_fp->f_fglob->fg_data;
 
@@ -6625,7 +6728,7 @@ filt_sowattach(struct knote *kn, __unused struct kevent_internal_s *kev)
 	}
 
 	/* determine if its already fired */
-	return filt_sowrite_common(kn, so);
+	return filt_sowrite_common(kn, NULL, so);
 }
 
 static void
@@ -6653,7 +6756,7 @@ filt_sowrite(struct knote *kn, long hint)
 		socket_lock(so, 1);
 	}
 
-	ret = filt_sowrite_common(kn, so);
+	ret = filt_sowrite_common(kn, NULL, so);
 
 	if ((hint & SO_FILT_HINT_LOCKED) == 0) {
 		socket_unlock(so, 1);
@@ -6663,7 +6766,7 @@ filt_sowrite(struct knote *kn, long hint)
 }
 
 static int
-filt_sowtouch(struct knote *kn, struct kevent_internal_s *kev)
+filt_sowtouch(struct knote *kn, struct kevent_qos_s *kev)
 {
 	struct socket *so = (struct socket *)kn->kn_fp->f_fglob->fg_data;
 	int ret;
@@ -6675,7 +6778,7 @@ filt_sowtouch(struct knote *kn, struct kevent_internal_s *kev)
 	kn->kn_sdata = kev->data;
 
 	/* determine if these changes result in a triggered event */
-	ret = filt_sowrite_common(kn, so);
+	ret = filt_sowrite_common(kn, NULL, so);
 
 	socket_unlock(so, 1);
 
@@ -6683,29 +6786,24 @@ filt_sowtouch(struct knote *kn, struct kevent_internal_s *kev)
 }
 
 static int
-filt_sowprocess(struct knote *kn, struct filt_process_s *data, struct kevent_internal_s *kev)
+filt_sowprocess(struct knote *kn, struct kevent_qos_s *kev)
 {
-#pragma unused(data)
 	struct socket *so = (struct socket *)kn->kn_fp->f_fglob->fg_data;
 	int ret;
 
 	socket_lock(so, 1);
-	ret = filt_sowrite_common(kn, so);
-	if (ret) {
-		*kev = kn->kn_kevent;
-		if (kn->kn_flags & EV_CLEAR) {
-			kn->kn_fflags = 0;
-			kn->kn_data = 0;
-		}
-	}
+	ret = filt_sowrite_common(kn, kev, so);
 	socket_unlock(so, 1);
+
 	return ret;
 }
 
 static int
-filt_sockev_common(struct knote *kn, struct socket *so, long ev_hint)
+filt_sockev_common(struct knote *kn, struct kevent_qos_s *kev,
+    struct socket *so, long ev_hint)
 {
 	int ret = 0;
+	int64_t data = 0;
 	uint32_t level_trigger = 0;
 
 	if (ev_hint & SO_FILT_HINT_CONNRESET) {
@@ -6770,7 +6868,7 @@ filt_sockev_common(struct knote *kn, struct socket *so, long ev_hint)
 		kn->kn_fflags &= ~(NOTE_SUSPEND | NOTE_RESUME);
 
 		/* If resume event was delivered before, reset it */
-		kn->kn_hookid &= ~NOTE_RESUME;
+		kn->kn_hook32 &= ~NOTE_RESUME;
 
 		kn->kn_fflags |= NOTE_SUSPEND;
 		level_trigger |= NOTE_SUSPEND;
@@ -6781,7 +6879,7 @@ filt_sockev_common(struct knote *kn, struct socket *so, long ev_hint)
 		kn->kn_fflags &= ~(NOTE_SUSPEND | NOTE_RESUME);
 
 		/* If suspend event was delivered before, reset it */
-		kn->kn_hookid &= ~NOTE_SUSPEND;
+		kn->kn_hook32 &= ~NOTE_SUSPEND;
 
 		kn->kn_fflags |= NOTE_RESUME;
 		level_trigger |= NOTE_RESUME;
@@ -6789,10 +6887,12 @@ filt_sockev_common(struct knote *kn, struct socket *so, long ev_hint)
 
 	if (so->so_error != 0) {
 		ret = 1;
-		kn->kn_data = so->so_error;
+		data = so->so_error;
 		kn->kn_flags |= EV_EOF;
 	} else {
-		get_sockev_state(so, (u_int32_t *)&(kn->kn_data));
+		u_int32_t data32;
+		get_sockev_state(so, &data32);
+		data = data32;
 	}
 
 	/* Reset any events that are not requested on this knote */
@@ -6800,7 +6900,7 @@ filt_sockev_common(struct knote *kn, struct socket *so, long ev_hint)
 	level_trigger &= (kn->kn_sfflags & EVFILT_SOCK_ALL_MASK);
 
 	/* Find the level triggerred events that are already delivered */
-	level_trigger &= kn->kn_hookid;
+	level_trigger &= kn->kn_hook32;
 	level_trigger &= EVFILT_SOCK_LEVEL_TRIGGER_MASK;
 
 	/* Do not deliver level triggerred events more than once */
@@ -6808,22 +6908,48 @@ filt_sockev_common(struct knote *kn, struct socket *so, long ev_hint)
 		ret = 1;
 	}
 
+	if (ret && kev) {
+		/*
+		 * Store the state of the events being delivered. This
+		 * state can be used to deliver level triggered events
+		 * ateast once and still avoid waking up the application
+		 * multiple times as long as the event is active.
+		 */
+		if (kn->kn_fflags != 0) {
+			kn->kn_hook32 |= (kn->kn_fflags &
+			    EVFILT_SOCK_LEVEL_TRIGGER_MASK);
+		}
+
+		/*
+		 * NOTE_RESUME and NOTE_SUSPEND are an exception, deliver
+		 * only one of them and remember the last one that was
+		 * delivered last
+		 */
+		if (kn->kn_fflags & NOTE_SUSPEND) {
+			kn->kn_hook32 &= ~NOTE_RESUME;
+		}
+		if (kn->kn_fflags & NOTE_RESUME) {
+			kn->kn_hook32 &= ~NOTE_SUSPEND;
+		}
+
+		knote_fill_kevent(kn, kev, data);
+	}
 	return ret;
 }
 
 static int
-filt_sockattach(struct knote *kn, __unused struct kevent_internal_s *kev)
+filt_sockattach(struct knote *kn, __unused struct kevent_qos_s *kev)
 {
 	struct socket *so = (struct socket *)kn->kn_fp->f_fglob->fg_data;
 
 	/* socket locked */
-	kn->kn_hookid = 0;
+	kn->kn_hook32 = 0;
 	if (KNOTE_ATTACH(&so->so_klist, kn)) {
 		so->so_flags |= SOF_KNOTE;
 	}
 
 	/* determine if event already fired */
-	return filt_sockev_common(kn, so, 0);
+	return filt_sockev_common(kn, NULL, so, 0);
 }
 
 static void
@@ -6852,7 +6978,7 @@ filt_sockev(struct knote *kn, long hint)
 		locked = 1;
 	}
 
-	ret = filt_sockev_common(kn, so, ev_hint);
+	ret = filt_sockev_common(kn, NULL, so, ev_hint);
 
 	if (locked) {
 		socket_unlock(so, 1);
@@ -6869,7 +6995,7 @@ filt_sockev(struct knote *kn, long hint)
 static int
 filt_socktouch(
 	struct knote *kn,
-	struct kevent_internal_s *kev)
+	struct kevent_qos_s *kev)
 {
 	struct socket *so = (struct socket *)kn->kn_fp->f_fglob->fg_data;
 	uint32_t changed_flags;
@@ -6878,7 +7004,7 @@ filt_socktouch(
 	socket_lock(so, 1);
 
 	/* save off the [result] data and fflags */
-	changed_flags = (kn->kn_sfflags ^ kn->kn_hookid);
+	changed_flags = (kn->kn_sfflags ^ kn->kn_hook32);
 
 	/* save off the new input fflags and data */
 	kn->kn_sfflags = kev->fflags;
@@ -6896,11 +7022,10 @@ filt_socktouch(
 	 * delivered, if any of those events are not requested
 	 * anymore the state related to them can be reset
 	 */
-	kn->kn_hookid &=
-	    ~(changed_flags & EVFILT_SOCK_LEVEL_TRIGGER_MASK);
+	kn->kn_hook32 &= ~(changed_flags & EVFILT_SOCK_LEVEL_TRIGGER_MASK);
 
 	/* determine if we have events to deliver */
-	ret = filt_sockev_common(kn, so, 0);
+	ret = filt_sockev_common(kn, NULL, so, 0);
 
 	socket_unlock(so, 1);
 
@@ -6911,50 +7036,14 @@ filt_socktouch(
  *	filt_sockprocess - query event fired state and return data
  */
 static int
-filt_sockprocess(
-	struct knote *kn,
-	struct filt_process_s *data,
-	struct kevent_internal_s *kev)
+filt_sockprocess(struct knote *kn, struct kevent_qos_s *kev)
 {
-#pragma unused(data)
-
 	struct socket *so = (struct socket *)kn->kn_fp->f_fglob->fg_data;
 	int ret = 0;
 
 	socket_lock(so, 1);
 
-	ret = filt_sockev_common(kn, so, 0);
-	if (ret) {
-		*kev = kn->kn_kevent;
-
-		/*
-		 * Store the state of the events being delivered. This
-		 * state can be used to deliver level triggered events
-		 * ateast once and still avoid waking up the application
-		 * multiple times as long as the event is active.
-		 */
-		if (kn->kn_fflags != 0) {
-			kn->kn_hookid |= (kn->kn_fflags &
-			    EVFILT_SOCK_LEVEL_TRIGGER_MASK);
-		}
-
-		/*
-		 * NOTE_RESUME and NOTE_SUSPEND are an exception, deliver
-		 * only one of them and remember the last one that was
-		 * delivered last
-		 */
-		if (kn->kn_fflags & NOTE_SUSPEND) {
-			kn->kn_hookid &= ~NOTE_RESUME;
-		}
-		if (kn->kn_fflags & NOTE_RESUME) {
-			kn->kn_hookid &= ~NOTE_SUSPEND;
-		}
-
-		if (kn->kn_flags & EV_CLEAR) {
-			kn->kn_data = 0;
-			kn->kn_fflags = 0;
-		}
-	}
+	ret = filt_sockev_common(kn, kev, so, 0);
 
 	socket_unlock(so, 1);
 
@@ -7001,6 +7090,16 @@ solockhistory_nr(struct socket *so)
 		    so->unlock_lr[(so->next_unlock_lr + i) % SO_LCKDBG_MAX]);
 	}
 	return lock_history_str;
+}
+
+lck_mtx_t *
+socket_getlock(struct socket *so, int flags)
+{
+	if (so->so_proto->pr_getlock != NULL) {
+		return (*so->so_proto->pr_getlock)(so, flags);
+	} else {
+		return so->so_proto->pr_domain->dom_mtx;
+	}
 }
 
 void
@@ -7062,12 +7161,12 @@ socket_unlock(struct socket *so, int refcount)
 
 	lr_saved = __builtin_return_address(0);
 
-	if (so->so_proto == NULL) {
+	if (so == NULL || so->so_proto == NULL) {
 		panic("%s: null so_proto so=%p\n", __func__, so);
 		/* NOTREACHED */
 	}
 
-	if (so && so->so_proto->pr_unlock) {
+	if (so->so_proto->pr_unlock) {
 		(*so->so_proto->pr_unlock)(so, refcount, lr_saved);
 	} else {
 		mutex_held = so->so_proto->pr_domain->dom_mtx;
@@ -7625,6 +7724,7 @@ so_set_restrictions(struct socket *so, uint32_t vals)
 {
 	int nocell_old, nocell_new;
 	int noexpensive_old, noexpensive_new;
+	int noconstrained_old, noconstrained_new;
 
 	/*
 	 * Deny-type restrictions are trapdoors; once set they cannot be
@@ -7641,15 +7741,18 @@ so_set_restrictions(struct socket *so, uint32_t vals)
 	 */
 	nocell_old = (so->so_restrictions & SO_RESTRICT_DENY_CELLULAR);
 	noexpensive_old = (so->so_restrictions & SO_RESTRICT_DENY_EXPENSIVE);
+	noconstrained_old = (so->so_restrictions & SO_RESTRICT_DENY_CONSTRAINED);
 	so->so_restrictions |= (vals & (SO_RESTRICT_DENY_IN |
 	    SO_RESTRICT_DENY_OUT | SO_RESTRICT_DENY_CELLULAR |
-	    SO_RESTRICT_DENY_EXPENSIVE));
+	    SO_RESTRICT_DENY_EXPENSIVE | SO_RESTRICT_DENY_CONSTRAINED));
 	nocell_new = (so->so_restrictions & SO_RESTRICT_DENY_CELLULAR);
 	noexpensive_new = (so->so_restrictions & SO_RESTRICT_DENY_EXPENSIVE);
+	noconstrained_new = (so->so_restrictions & SO_RESTRICT_DENY_CONSTRAINED);
 
 	/* we can only set, not clear restrictions */
 	if ((nocell_new - nocell_old) == 0 &&
-	    (noexpensive_new - noexpensive_old) == 0) {
+	    (noexpensive_new - noexpensive_old) == 0 &&
+	    (noconstrained_new - noconstrained_old) == 0) {
 		return 0;
 	}
 #if INET6
@@ -7666,6 +7769,9 @@ so_set_restrictions(struct socket *so, uint32_t vals)
 		}
 		if (noexpensive_new - noexpensive_old != 0) {
 			inp_set_noexpensive(sotoinpcb(so));
+		}
+		if (noconstrained_new - noconstrained_old != 0) {
+			inp_set_noconstrained(sotoinpcb(so));
 		}
 	}
 
@@ -7685,7 +7791,7 @@ so_get_restrictions(struct socket *so)
 }
 
 int
-so_set_effective_pid(struct socket *so, int epid, struct proc *p)
+so_set_effective_pid(struct socket *so, int epid, struct proc *p, boolean_t check_cred)
 {
 	struct proc *ep = PROC_NULL;
 	int error = 0;
@@ -7712,7 +7818,7 @@ so_set_effective_pid(struct socket *so, int epid, struct proc *p)
 	 * the process's own pid, then proceed.  Otherwise ensure
 	 * that the issuing process has the necessary privileges.
 	 */
-	if (epid != so->last_pid || epid != proc_pid(p)) {
+	if (check_cred && (epid != so->last_pid || epid != proc_pid(p))) {
 		if ((error = priv_check_cred(kauth_cred_get(),
 		    PRIV_NET_PRIVILEGED_SOCKET_DELEGATE, 0))) {
 			error = EACCES;
@@ -7746,6 +7852,9 @@ so_set_effective_pid(struct socket *so, int epid, struct proc *p)
 		so->e_upid = proc_uniqueid(ep);
 		so->e_pid = proc_pid(ep);
 		proc_getexecutableuuid(ep, so->e_uuid, sizeof(so->e_uuid));
+	}
+	if (so->so_proto != NULL && so->so_proto->pr_update_last_owner != NULL) {
+		(*so->so_proto->pr_update_last_owner)(so, NULL, ep);
 	}
 done:
 	if (error == 0 && net_io_policy_log) {
@@ -7784,7 +7893,7 @@ done:
 }
 
 int
-so_set_effective_uuid(struct socket *so, uuid_t euuid, struct proc *p)
+so_set_effective_uuid(struct socket *so, uuid_t euuid, struct proc *p, boolean_t check_cred)
 {
 	uuid_string_t buf;
 	uuid_t uuid;
@@ -7815,8 +7924,9 @@ so_set_effective_uuid(struct socket *so, uuid_t euuid, struct proc *p)
 	 * the process's own uuid, then proceed.  Otherwise ensure
 	 * that the issuing process has the necessary privileges.
 	 */
-	if (uuid_compare(euuid, so->last_uuid) != 0 ||
-	    uuid_compare(euuid, uuid) != 0) {
+	if (check_cred &&
+	    (uuid_compare(euuid, so->last_uuid) != 0 ||
+	    uuid_compare(euuid, uuid) != 0)) {
 		if ((error = priv_check_cred(kauth_cred_get(),
 		    PRIV_NET_PRIVILEGED_SOCKET_DELEGATE, 0))) {
 			error = EACCES;
@@ -7851,7 +7961,13 @@ so_set_effective_uuid(struct socket *so, uuid_t euuid, struct proc *p)
 		so->e_pid = so->last_pid;
 		uuid_copy(so->e_uuid, euuid);
 	}
-
+	/*
+	 * The following will clear the effective process name as it's the same
+	 * as the real process
+	 */
+	if (so->so_proto != NULL && so->so_proto->pr_update_last_owner != NULL) {
+		(*so->so_proto->pr_update_last_owner)(so, NULL, NULL);
+	}
 done:
 	if (error == 0 && net_io_policy_log) {
 		uuid_unparse(so->e_uuid, buf);

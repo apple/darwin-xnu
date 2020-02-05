@@ -107,8 +107,8 @@ private:
 	    UInt32 *propType, UInt32 *propOffset);
 	virtual bool convertPropToObject(UInt8 *propName, UInt32 propNameLength,
 	    UInt8 *propData, UInt32 propDataLength,
-	    const OSSymbol **propSymbol,
-	    OSObject **propObject);
+	    LIBKERN_RETURNS_RETAINED const OSSymbol **propSymbol,
+	    LIBKERN_RETURNS_RETAINED OSObject **propObject);
 	virtual bool convertObjectToProp(UInt8 *buffer, UInt32 *length,
 	    const OSSymbol *propSymbol, OSObject *propObject);
 	virtual UInt16 generateOWChecksum(UInt8 *buffer);
@@ -137,6 +137,8 @@ private:
 	void initNVRAMImage(void);
 	void initProxyData(void);
 	IOReturn syncVariables(void);
+	IOReturn setPropertyInternal(const OSSymbol *aKey, OSObject *anObject);
+
 
 public:
 	virtual bool init(IORegistryEntry *old, const IORegistryPlane *plane) APPLE_KEXT_OVERRIDE;

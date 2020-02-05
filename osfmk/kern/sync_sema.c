@@ -480,7 +480,7 @@ semaphore_signal_thread_trap(
 	 * pre-post the semaphore.
 	 */
 	if (thread_name != MACH_PORT_NULL) {
-		thread = port_name_to_thread(thread_name);
+		thread = port_name_to_thread(thread_name, PORT_TO_THREAD_NONE);
 		if (thread == THREAD_NULL) {
 			return KERN_INVALID_ARGUMENT;
 		}

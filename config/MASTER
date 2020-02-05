@@ -5,7 +5,7 @@
 #
 # All rights reserved.  The CMU software License Agreement
 # specifies the terms and conditions for use and redistribution.
-#  
+#
 #######################################################################
 #
 #	Master machine independent configuration file.
@@ -48,7 +48,7 @@
 #	medium = medium scale system configuration
 #	small  = small scale system configuration
 #	xsmall = extra small scale system configuration
-#	bsmall = special extra small scale system configuration 
+#	bsmall = special extra small scale system configuration
 #
 #######################################################################
 #
@@ -68,13 +68,14 @@ options 	MACH_NP		# Mach IPC support		# <np>
 options		MACH_NBC	# No buffer cache		# <nbc>
 options		MACH_NET	# Fast network access		# <mach_net>
 options		MACH_XP		# external pager support	# <xp>
-options		NO_DIRECT_RPC	# for untyped mig servers	# 
+options		NO_DIRECT_RPC	# for untyped mig servers	#
 options		LOOP		# loopback support		# <loop>
 options		VLAN		#				# <vlan>
+options		SIXLOWPAN	# 6LoWPAN support		# <sixlowpan>
 options		BOND		#				# <bond>
 options		IF_FAKE		#				# <if_fake>
+options		IF_HEADLESS	#				# <if_headless>
 options		AH_ALL_CRYPTO	# AH all crypto algs		# <ah_all_crypto>
-options		IPCOMP_ZLIB	# IP compression using zlib	# <ipcomp_zlib>
 options		PF		# Packet Filter			# <pf>
 options		PF_ECN		# PF use ECN marking		# <pf_ecn>
 options		PFLOG		# PF log interface		# <pflog>
@@ -96,30 +97,32 @@ options		FLOW_DIVERT								# <flow_divert>
 options		NECP									# <necp>
 options		CONTENT_FILTER	#						# <content_filter>
 options 	PACKET_MANGLER	#						# <packet_mangler>
-
+options 	SIXLOWPAN	#		# <sixlowpan>
 # secure_kernel - secure kernel from user programs
-options     SECURE_KERNEL       # <secure_kernel> 
+options     SECURE_KERNEL       # <secure_kernel>
 
 options     OLD_SEMWAIT_SIGNAL  # old semwait_signal handler
 
 #
-#	4.4 general kernel 
+#	4.4 general kernel
 #
 options		SOCKETS		# socket support		# <inet, inet6>
 options 	DIAGNOSTIC	# diagnostics			# <diagnostic>
-options		GPROF		# build profiling		# <profile>
 options		PROFILE		# kernel profiling		# <profile>
 options		SENDFILE	# sendfile					# <sendfile>
 options		NETWORKING	# networking layer		# <inet, inet6>
 options		CONFIG_FSE	# file system events		# <config_fse>
 options		CONFIG_IMAGEBOOT	# local image boot	# <config_imageboot>
+options		CONFIG_LOCKERBOOT 	# locker boot 	# <config_lockerboot>
 options		CONFIG_MBUF_JUMBO	# jumbo cluster pool	# <config_mbuf_jumbo>
+options		CONFIG_IMAGEBOOT_IMG4	# authenticate image with AppleImage4	# <config_imageboot_img4>
+options		CONFIG_IMAGEBOOT_CHUNKLIST	# authenticate image with a chunk list	# <config_imageboot_chunklist>
 
 options		CONFIG_WORKQUEUE	# <config_workqueue>
 options		CONFIG_WORKLOOP_DEBUG	# <config_workloop_debug>
 
 #
-#	4.4 filesystems 
+#	4.4 filesystems
 #
 options		MOCKFS		# Boot from an executable	# <mockfs>
 options		FIFO		# fifo support			# <fifo>
@@ -143,21 +146,28 @@ options		CONFIG_EXT_RESOLVER # e.g. memberd		# <config_ext_resolver>
 options		CONFIG_SEARCHFS	# searchfs syscall support	# <config_searchfs>
 options		CONFIG_MNT_SUID # allow suid binaries  # <config_mnt_suid>
 options		CONFIG_MNT_ROOTSNAP # allow rooting from snapshot # <config_mnt_rootsnap>
+options 	CONFIG_ROSV_STARTUP # allow read-only system volume startup # <config_rosv_startup>
+options		CONFIG_FIRMLINKS # support "firmlinks" # <config_firmlinks>
+options 	CONFIG_MOUNT_VM # mount VM volume on startup # <config_mount_vm>
+options		CONFIG_DATALESS_FILES # support dataless file materialization # <config_dataless_files>
 
 #
 # NFS support
 #
 options		NFSCLIENT	# Be an NFS client		# <nfsclient>
 options		NFSSERVER	# Be an NFS server		# <nfsserver>
+options		CONFIG_NFS_GSS	# Support NFS GSSAPI		# <config_nfs_gss>
+options		CONFIG_NFS4	# Use NFSv4			# <config_nfs4>
+options		CONFIG_NETBOOT	# network booting (requires NFSCLIENT) # <config_netboot>
 
 #
 # Machine Independent Apple Features
 #
 profile				# build a profiling kernel	# <profile>
 
-#       
+#
 # IPv6 Support
-#       
+#
 options         "INET6"         # kernel IPv6 Support           # <inet6>
 options         IPV6SEND	# Secure Neighbor Discovery	# <ipv6send>
 options         IPSEC           # IP security            	# <ipsec>
@@ -177,26 +187,27 @@ options			ENCRYPTED_SWAP			# <encrypted_swap>
 options			CONFIG_IMG4			# <config_img4>
 
 options		ZLIB	# inflate/deflate support	# <zlib>
+options		ZLIBC	# inflate/deflate support	# <zlibc>
 
 options		IF_BRIDGE				# <if_bridge>
 
 #
-#  configurable kernel event related resources 
+#  configurable kernel event related resources
 #
 options   CONFIG_KN_HASHSIZE=64		# <medium,large,xlarge>
 options   CONFIG_KN_HASHSIZE=48		# <small,xsmall>
 options   CONFIG_KN_HASHSIZE=20		# <bsmall>
 
 #
-#  configurable vfs related resources 
-#  CONFIG_VNODES - used to pre allocate vnode related resources 
+#  configurable vfs related resources
+#  CONFIG_VNODES - used to pre allocate vnode related resources
 #  CONFIG_NC_HASH - name cache hash table allocation
 #  CONFIG_VFS_NAMES - name strings
 #
-#  263168 magic number for medium CONFIG_VNODES is based on memory 
-#  Number vnodes  is (memsize/64k) + 1024 
+#  263168 magic number for medium CONFIG_VNODES is based on memory
+#  Number vnodes  is (memsize/64k) + 1024
 #  This is the calculation that is used by launchd in tiger
-#  we are clipping the max based on 16G 
+#  we are clipping the max based on 16G
 #  ie ((16*1024*1024*1024)/(64 *1024)) + 1024 = 263168;
 
 options   CONFIG_VNODES=263168		# <large,xlarge>
@@ -218,7 +229,7 @@ options   CONFIG_MAX_CLUSTERS=8		# <xlarge,large,medium>
 options   CONFIG_MAX_CLUSTERS=4		# <small,xsmall,bsmall>
 
 #
-#  configurable options for minumum number of buffers for kernel memory 
+#  configurable options for minumum number of buffers for kernel memory
 #
 options   CONFIG_MIN_NBUF=256		# <medium,large,xlarge>
 options   CONFIG_MIN_NBUF=128		# <small>
@@ -249,7 +260,7 @@ options CONFIG_ICMP_BANDLIM=250		# <medium,large,xlarge>
 options CONFIG_ICMP_BANDLIM=50		# <xsmall,small,bsmall>
 
 #
-#  configurable async IO options 
+#  configurable async IO options
 #  CONFIG_AIO_MAX - system wide limit of async IO requests.
 #  CONFIG_AIO_PROCESS_MAX - process limit of async IO requests.
 #  CONFIG_AIO_THREAD_COUNT - number of async IO worker threads created.
@@ -317,7 +328,7 @@ options   CONFIG_EMBEDDED			# <config_embedded>
 #
 options		CONFIG_DYNAMIC_CODE_SIGNING	# <dynamic_codesigning>
 
-# enforce library validation on all processes. 
+# enforce library validation on all processes.
 #
 options		CONFIG_ENFORCE_LIBRARY_VALIDATION  # <config_library_validation>
 
@@ -333,6 +344,11 @@ options		CONFIG_PROTECT			# <config_protect>
 
 #allow write-protection of key page
 options		CONFIG_KEYPAGE_WP		# <config_keypage_wp>
+
+#
+# allow vm_pageout_scan to dynamically adjust its priority based on priorities of waiters
+#
+options		CONFIG_VPS_DYNAMIC_PRIO		# <vps_dynamic_prio>
 
 #
 # enable per-process memory priority tracking
@@ -408,7 +424,7 @@ options		CONFIG_PROC_UUID_POLICY		# <config_proc_uuid_policy>
 
 #
 # ECC data logging
-# 
+#
 options		CONFIG_ECC_LOGGING		# <config_ecc_logging>
 
 #
@@ -526,6 +542,7 @@ options		CONFIG_MACF_SOCKET_SUBSET	# MAC socket subest (no labels)	# <config_mac
 
 options		CONFIG_AUDIT	    # Kernel auditing	    # <config_audit>
 
+options		CONFIG_ARCADE		# Arcade validation support	# <config_arcade>
 
 #
 # MACH configuration options.
@@ -582,20 +599,12 @@ options		CONFIG_TASK_ZONE_INFO		# <task_zone_info>
 # available when the kernel is being debugged.
 #
 options		CONFIG_DEBUGGER_FOR_ZONE_INFO	# <debugger_for_zone_info>
-# 
-# XPR_DEBUG enables the gathering of data through the XPR macros inserted
-#	into various subsystems. This option is normally only enabled for
-#	specific performance or behavior studies, as the overhead in both
-#	code and data space is large. The data is normally retrieved through
-#	the kernel debugger (kdb) or by reading /dev/kmem.
-#	
-options		XPR_DEBUG	#		# <debug>
-# 
+#
 # MACH_LDEBUG controls the internal consistency checks and
 #	data gathering in the locking package. This also enables a debug-only
 #	version of simple-locks on uniprocessor machines. The code size and
 #	performance impact of this option is significant.
-# 
+#
 options		MACH_LDEBUG	#		# <debug>
 
 #
@@ -621,7 +630,7 @@ options     KPC                    # <kpc>
 options     PGO                    # <pgo>
 
 # MACH_COUNTERS enables code that handles various counters in the system.
-# 
+#
 options		MACH_COUNTERS	#			    # <debug>
 
 # DEVELOPMENT define for development builds
@@ -629,6 +638,7 @@ options		DEVELOPMENT	# dev kernel	    	    # <development>
 
 # DEBUG kernel
 options		DEBUG		# general debugging code    # <debug>
+options		CONFIG_NONFATAL_ASSERTS	# non fatal asserts	# <softasserts>
 
 ##########################################################
 #
@@ -653,7 +663,7 @@ options		MACH_BSD	# BSD subsystem on top of Mach	# <mach_bsd>
 options         IOKIT		#				# <iokit>
 
 #
-#  configurable kernel related resources (CONFIG_THREAD_MAX needs to stay in 
+#  configurable kernel related resources (CONFIG_THREAD_MAX needs to stay in
 #  sync with bsd/conf/MASTER until we fix the config system... todo XXX
 #
 options   CONFIG_THREAD_MAX=2560		# <medium,large,xlarge>
@@ -669,8 +679,8 @@ options   CONFIG_TASK_MAX=512			# <xsmall,bsmall>
 #
 options   CONFIG_ZONE_MAP_MIN=120586240	# <xsmall,bsmall,small,medium,large,xlarge>
 
-# Sizes must be a power of two for the zhash to 
-# be able to just mask off bits instead of mod 
+# Sizes must be a power of two for the zhash to
+# be able to just mask off bits instead of mod
 options	  CONFIG_ZLEAK_ALLOCATION_MAP_NUM=16384 #<medium,large,xlarge>
 options	  CONFIG_ZLEAK_ALLOCATION_MAP_NUM=8192	#<small,xsmall,bsmall>
 options   CONFIG_ZLEAK_TRACE_MAP_NUM=8192 #<medium,large,xlarge>
@@ -688,6 +698,7 @@ options		CONFIG_SCHED_GRRR		# <config_sched_grrr>
 options		CONFIG_SCHED_GRRR_CORE		# <config_sched_grrr>
 options		CONFIG_SCHED_MULTIQ		# <config_sched_multiq>
 options		CONFIG_SCHED_TIMESHARE_CORE	# <config_sched_traditional,config_sched_multiq>
+options		CONFIG_CLUTCH			# <config_clutch>
 
 options		CONFIG_SCHED_IDLE_IN_PLACE	# <config_sched_idle_in_place>
 options		CONFIG_SCHED_SFI		# <config_sched_sfi>
@@ -754,7 +765,7 @@ options		CONFIG_REQUIRES_U32_MUNGING	# incoming U32 argument structures must be 
 options		COPYOUT_SHIM			# Shim for copyout memory analysis via kext #<copyout_shim>
 
 #
-# Enable hardware correlation of mach absolute time 
+# Enable hardware correlation of mach absolute time
 # across intel/arm boundary
 options		CONFIG_MACH_BRIDGE_SEND_TIME #  # <config_mach_bridge_send_time>
 options		CONFIG_MACH_BRIDGE_RECV_TIME #  # <config_mach_bridge_recv_time>
@@ -766,3 +777,11 @@ options		CONFIG_32BIT_TELEMETRY # # <config_32bit_telemetry>
 
 options		CONFIG_QUIESCE_COUNTER # Support for _COMM_PAGE_CPU_QUIESCENT_COUNTER # <config_quiesce_counter>
 
+#
+# Sanitizers
+#
+options		CONFIG_KASAN		# <config_kasan>
+options		CONFIG_UBSAN		# <config_ubsan>
+options		CONFIG_KSANCOV		# <config_ksancov>
+
+pseudo-device ksancov 1 init ksancov_init_dev # <config_ksancov>

@@ -28,11 +28,13 @@
 #include <darwintest.h>
 #include <mach/port_descriptions.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 static void
-expect_special_port_description(const char *(*fn)(mach_port_t),
+expect_special_port_description(const char *(*fn)(int),
     mach_port_t port, const char *namestr)
 {
-	const char *desc = fn(port);
+	const char *desc = fn((int)port);
 	T_EXPECT_NOTNULL(desc, "%s is %s", namestr, desc);
 	if (desc) {
 		T_QUIET; T_EXPECT_GT(strlen(desc), strlen(""),
@@ -72,10 +74,12 @@ T_DECL(host_special_port_descriptions,
 	TEST_HSP(HOST_RESOURCE_NOTIFY_PORT);
 	TEST_HSP(HOST_CLOSURED_PORT);
 	TEST_HSP(HOST_SYSPOLICYD_PORT);
+	TEST_HSP(HOST_FILECOORDINATIOND_PORT);
+	TEST_HSP(HOST_FAIRPLAYD_PORT);
 
 #undef TEST_HSP
 
-	T_EXPECT_EQ(HOST_SYSPOLICYD_PORT, HOST_MAX_SPECIAL_PORT,
+	T_EXPECT_EQ(HOST_FAIRPLAYD_PORT, HOST_MAX_SPECIAL_PORT,
 	    "checked all of the ports");
 
 	const char *invalid_hsp =
@@ -151,6 +155,7 @@ T_DECL(host_special_port_mapping,
 	TEST_HSP(HOST_RESOURCE_NOTIFY_PORT);
 	TEST_HSP(HOST_CLOSURED_PORT);
 	TEST_HSP(HOST_SYSPOLICYD_PORT);
+	TEST_HSP(HOST_FILECOORDINATIOND_PORT);
 
 #undef TEST_HSP
 

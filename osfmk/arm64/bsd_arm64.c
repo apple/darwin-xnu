@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -143,7 +143,17 @@ mach_syscall(struct arm_saved_state *state)
 {
 	kern_return_t retval;
 	mach_call_t mach_call;
-	struct mach_call_args args = { 0, 0, 0, 0, 0, 0, 0, 0, 0 };
+	struct mach_call_args args = {
+		.arg1 = 0,
+		.arg2 = 0,
+		.arg3 = 0,
+		.arg4 = 0,
+		.arg5 = 0,
+		.arg6 = 0,
+		.arg7 = 0,
+		.arg8 = 0,
+		.arg9 = 0
+	};
 	int call_number = get_saved_state_svc_number(state);
 	int64_t exc_code;
 	int argc;

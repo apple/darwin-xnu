@@ -79,6 +79,23 @@ void coalition_for_each_task(coalition_t coal, void *ctx,
 
 void coalition_set_efficient(coalition_t coal);
 
+/*  Coalition ledger  */
+struct coalition_ledger_indices {
+	int logical_writes;
+};
+void init_coalition_ledgers(void);
+int coalition_ledger_set_logical_writes_limit(coalition_t coal, int64_t limit);
+void coalition_io_monitor_ctl(struct coalition *coalition, uint32_t flags, int64_t limit);
+ledger_t coalition_ledger_get_from_task(task_t task);
+void coalition_io_rate_exceeded(int warning, const void *param0, __unused const void *param1);
+void coalition_io_ledger_update(task_t task, int32_t flavor, boolean_t is_credit, uint32_t io_size);
+
+/* Max limit for coalition logical_writes ledger in MB. Setting to 16 TB */
+#define COALITION_MAX_LOGICAL_WRITES_LIMIT ((ledger_amount_t)(1ULL << 24))
+/* logical_writes ledger's refill time interval */
+#define COALITION_LEDGER_MONITOR_INTERVAL_SECS (24 * 60 * 60)
+
+
 typedef void (*coalition_iterate_fn_t)(void*, int, coalition_t);
 kern_return_t coalition_iterate_stackshot(coalition_iterate_fn_t callout, void *arg, uint32_t coalition_type);
 

@@ -1199,13 +1199,10 @@ pfr_walktree(struct radix_node *rn, void *arg)
 		if (w->pfrw_free-- > 0) {
 			struct pfr_astats as;
 
+			bzero(&as, sizeof(as));
+
 			pfr_copyout_addr(&as.pfras_a, ke);
 
-#if !defined(__LP64__)
-			/* Initialized to avoid potential info leak to
-			 * userspace */
-			as._pad = 0;
-#endif
 			bcopy(ke->pfrke_packets, as.pfras_packets,
 			    sizeof(as.pfras_packets));
 			bcopy(ke->pfrke_bytes, as.pfras_bytes,

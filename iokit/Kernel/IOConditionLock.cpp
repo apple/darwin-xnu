@@ -67,7 +67,7 @@ IOConditionLock::withCondition(int condition, bool intr)
 
 	if (me && !me->initWithCondition(condition, intr)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;

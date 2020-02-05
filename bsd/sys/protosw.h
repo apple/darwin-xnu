@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -127,6 +127,7 @@ struct uio;
 struct ifnet;
 #ifdef XNU_KERNEL_PRIVATE
 struct domain_old;
+struct proc;
 #endif /* XNU_KERNEL_PRIVATE */
 
 #pragma pack(4)
@@ -269,6 +270,12 @@ struct protosw {
 	 */
 	TAILQ_HEAD(, socket_filter) pr_filter_head;
 	struct protosw_old *pr_old;
+
+	void    (*pr_update_last_owner) /* update last socket owner */
+	(struct socket *so, struct proc *p, struct proc *ep);
+
+	void    (*pr_copy_last_owner) /* copy last socket from listener */
+	(struct socket *so, struct socket *head);
 };
 
 /*
@@ -562,20 +569,25 @@ extern struct protosw *pffindproto_locked(int, int, int);
 extern struct protosw *pffindprotonotype(int, int);
 extern struct protosw *pffindtype(int, int);
 extern struct protosw_old *pffindproto_old(int, int, int);
-extern int net_add_proto(struct protosw *, struct domain *, int);
+extern int net_add_proto(struct protosw *, struct domain *, int)
+__XNU_INTERNAL(net_add_proto);
 extern void net_init_proto(struct protosw *, struct domain *);
-extern int net_del_proto(int, int, struct domain *);
+extern int net_del_proto(int, int, struct domain *)
+__XNU_INTERNAL(net_del_proto);
 extern int net_add_proto_old(struct protosw_old *, struct domain_old *);
 extern int net_del_proto_old(int, int, struct domain_old *);
 extern void net_update_uptime(void);
 extern void net_update_uptime_with_time(const struct timeval *);
 extern u_int64_t net_uptime(void);
+extern u_int64_t net_uptime_ms(void);
 extern void net_uptime2timeval(struct timeval *);
+extern struct protosw *pffindproto(int family, int protocol, int type)
+__XNU_INTERNAL(pffindproto);
 #else
 extern int net_add_proto(struct protosw *, struct domain *);
 extern int net_del_proto(int, int, struct domain *);
-#endif /* XNU_KERNEL_PRIVATE */
 extern struct protosw *pffindproto(int family, int protocol, int type);
+#endif /* XNU_KERNEL_PRIVATE */
 __END_DECLS
 #endif /* KERNEL_PRIVATE */
 #endif  /* !_SYS_PROTOSW_H_ */

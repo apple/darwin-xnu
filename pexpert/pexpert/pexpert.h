@@ -91,6 +91,8 @@ uint32_t PE_get_random_seed(
 uint32_t PE_i_can_has_debugger(
 	uint32_t *);
 
+int PE_stub_poll_input(unsigned int options, char *c);
+
 #if defined(__arm__) || defined(__arm64__)
 boolean_t PE_panic_debugging_enabled(void);
 
@@ -230,10 +232,6 @@ enum {
 	kPEWaitForInput     = 0x00000001,
 	kPERawInput         = 0x00000002
 };
-extern int (*PE_poll_input)(
-	unsigned int options,
-	char * c);
-
 extern int (*PE_write_IIC)(
 	unsigned char addr,
 	unsigned char reg,
@@ -314,12 +312,6 @@ extern PE_state_t PE_state;
 extern char * PE_boot_args(
 	void);
 
-#if !defined(__LP64__) && !defined(__arm__)
-extern boolean_t PE_parse_boot_arg(
-	const char      *arg_string,
-	void            *arg_ptr) __deprecated;
-#endif
-
 extern boolean_t PE_parse_boot_argn(
 	const char      *arg_string,
 	void            *arg_ptr,
@@ -384,14 +376,20 @@ extern void pe_init_debug(void);
 
 extern boolean_t PE_imgsrc_mount_supported(void);
 
+extern void PE_panic_hook(const char *str);
+
+extern void PE_init_cpu(void);
+
 #if defined(__arm__) || defined(__arm64__)
 typedef void (*perfmon_interrupt_handler_func)(cpu_id_t source);
 extern kern_return_t PE_cpu_perfmon_interrupt_install_handler(perfmon_interrupt_handler_func handler);
 extern void PE_cpu_perfmon_interrupt_enable(cpu_id_t target, boolean_t enable);
 
-extern void (*PE_arm_debug_panic_hook)(const char *str);
 #if DEVELOPMENT || DEBUG
 extern void PE_arm_debug_enable_trace(void);
+extern void (*PE_arm_debug_panic_hook)(const char *str);
+#else
+extern void(*const PE_arm_debug_panic_hook)(const char *str);
 #endif
 #endif
 

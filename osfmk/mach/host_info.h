@@ -125,7 +125,7 @@ typedef struct host_can_has_debugger_info       *host_can_has_debugger_info_t;
 #define HOST_CAN_HAS_DEBUGGER_COUNT ((mach_msg_type_number_t) \
 	        (sizeof(host_can_has_debugger_info_data_t)/sizeof(integer_t)))
 
-#pragma pack(4)
+#pragma pack(push, 4)
 
 struct host_basic_info {
 	integer_t               max_cpus;               /* max number of CPUs possible */
@@ -141,7 +141,7 @@ struct host_basic_info {
 	uint64_t                max_mem;                /* actual size of physical memory */
 };
 
-#pragma pack()
+#pragma pack(pop)
 
 typedef struct host_basic_info  host_basic_info_data_t;
 typedef struct host_basic_info  *host_basic_info_t;

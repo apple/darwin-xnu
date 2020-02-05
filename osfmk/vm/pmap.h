@@ -119,6 +119,7 @@ extern boolean_t pmap_has_managed_page(ppnum_t first, ppnum_t last);
 #include <mach_assert.h>
 
 #include <machine/pmap.h>
+#include <vm/memory_types.h>
 
 /*
  *	Routines used for initialization.
@@ -133,14 +134,13 @@ extern boolean_t pmap_has_managed_page(ppnum_t first, ppnum_t last);
  */
 
 extern void *pmap_steal_memory(vm_size_t size); /* Early memory allocation */
+extern void *pmap_steal_freeable_memory(vm_size_t size); /* Early memory allocation */
 
 extern uint_t pmap_free_pages(void); /* report remaining unused physical pages */
 
 extern void pmap_startup(vm_offset_t *startp, vm_offset_t *endp); /* allocate vm_page structs */
 
 extern void pmap_init(void); /* Initialization, once we have kernel virtual memory.  */
-
-extern void pmap_pv_fixup(vm_offset_t start, vm_size_t size);
 
 extern void mapping_adjust(void); /* Adjust free mapping count */
 
@@ -150,7 +150,7 @@ extern void mapping_free_prime(void); /* Primes the mapping block release list *
 /*
  *	If machine/pmap.h defines MACHINE_PAGES, it must implement
  *	the above functions.  The pmap module has complete control.
- *	Otherwise, it must implement
+ *	Otherwise, it must implement the following functions:
  *		pmap_free_pages
  *		pmap_virtual_space
  *		pmap_next_page
@@ -163,34 +163,31 @@ extern void mapping_free_prime(void); /* Primes the mapping block release list *
  *	However, for best performance pmap_free_pages should be accurate.
  */
 
-extern boolean_t        pmap_next_page(ppnum_t *pnum);
-extern boolean_t        pmap_next_page_hi(ppnum_t *pnum);
-/* During VM initialization,
- * return the next unused
- * physical page.
+/*
+ * Routines to return the next unused physical page.
  */
-extern void             pmap_virtual_space(
+extern boolean_t pmap_next_page(ppnum_t *pnum);
+extern boolean_t pmap_next_page_hi(ppnum_t *pnum, boolean_t might_free);
+#ifdef __x86_64__
+extern kern_return_t pmap_next_page_large(ppnum_t *pnum);
+extern void pmap_hi_pages_done(void);
+#endif
+
+/*
+ * Report virtual space available for the kernel.
+ */
+extern void pmap_virtual_space(
 	vm_offset_t     *virtual_start,
 	vm_offset_t     *virtual_end);
-/* During VM initialization,
- * report virtual space
- * available for the kernel.
- */
 #endif  /* MACHINE_PAGES */
 
 /*
- *	Routines to manage the physical map data structure.
+ * Routines to manage the physical map data structure.
  */
-extern pmap_t           pmap_create(    /* Create a pmap_t. */
+extern pmap_t           pmap_create_options(    /* Create a pmap_t. */
 	ledger_t        ledger,
 	vm_map_size_t   size,
-	boolean_t       is_64bit);
-#if __x86_64__
-extern pmap_t           pmap_create_options(
-	ledger_t        ledger,
-	vm_map_size_t   size,
-	int             flags);
-#endif
+	unsigned int    flags);
 
 extern pmap_t(pmap_kernel)(void);               /* Return the kernel's pmap */
 extern void             pmap_reference(pmap_t pmap);    /* Gain a reference. */
@@ -330,9 +327,9 @@ extern void pmap_sync_page_attributes_phys(ppnum_t pa);
  * the given physical page is mapped into no pmap.
  * pmap_assert_free() will panic() if pn is not free.
  */
-extern boolean_t pmap_verify_free(ppnum_t pn);
+extern boolean_t        pmap_verify_free(ppnum_t pn);
 #if MACH_ASSERT
-extern void      pmap_assert_free(ppnum_t pn);
+extern void pmap_assert_free(ppnum_t pn);
 #endif
 
 /*
@@ -649,24 +646,14 @@ extern void             pmap_clear_noencrypt(ppnum_t pn);
 extern pmap_t   kernel_pmap;                    /* The kernel's map */
 #define         pmap_kernel()   (kernel_pmap)
 
-/* machine independent WIMG bits */
-
-#define VM_MEM_GUARDED          0x1             /* (G) Guarded Storage */
-#define VM_MEM_COHERENT         0x2             /* (M) Memory Coherency */
-#define VM_MEM_NOT_CACHEABLE    0x4             /* (I) Cache Inhibit */
-#define VM_MEM_WRITE_THROUGH    0x8             /* (W) Write-Through */
-
-#define VM_WIMG_USE_DEFAULT     0x80
-#define VM_WIMG_MASK            0xFF
-
 #define VM_MEM_SUPERPAGE        0x100           /* map a superpage instead of a base page */
 #define VM_MEM_STACK            0x200
 
-#if __x86_64__
 /* N.B. These use the same numerical space as the PMAP_EXPAND_OPTIONS
  * definitions in i386/pmap_internal.h
  */
 #define PMAP_CREATE_64BIT       0x1
+#if __x86_64__
 #define PMAP_CREATE_EPT         0x2
 #define PMAP_CREATE_KNOWN_FLAGS (PMAP_CREATE_64BIT | PMAP_CREATE_EPT)
 #endif
@@ -718,7 +705,9 @@ extern void             pmap_remove_options(    /* Remove mappings. */
 extern void             fillPage(ppnum_t pa, unsigned int fill);
 
 #if defined(__LP64__)
-void pmap_pre_expand(pmap_t pmap, vm_map_offset_t vaddr);
+extern void pmap_pre_expand(pmap_t pmap, vm_map_offset_t vaddr);
+extern kern_return_t pmap_pre_expand_large(pmap_t pmap, vm_map_offset_t vaddr);
+extern vm_size_t pmap_query_pagesize(pmap_t map, vm_map_offset_t vaddr);
 #endif
 
 mach_vm_size_t pmap_query_resident(pmap_t pmap,
@@ -774,12 +763,16 @@ kern_return_t pmap_pgtrace_fault(pmap_t pmap, vm_map_offset_t va, arm_saved_stat
 #endif
 
 
+#ifdef PLATFORM_BridgeOS
 struct pmap_legacy_trust_cache {
 	struct pmap_legacy_trust_cache *next;
 	uuid_t uuid;
 	uint32_t num_hashes;
 	uint8_t hashes[][CS_CDHASH_LEN];
 };
+#else
+struct pmap_legacy_trust_cache;
+#endif
 
 extern kern_return_t pmap_load_legacy_trust_cache(struct pmap_legacy_trust_cache *trust_cache,
     const vm_size_t trust_cache_len);
@@ -814,6 +807,15 @@ extern pmap_tc_ret_t pmap_load_image4_trust_cache(
 	vm_size_t img4_manifest_buffer_len,
 	vm_size_t img4_manifest_actual_len,
 	bool dry_run);
+
+extern bool pmap_is_trust_cache_loaded(const uuid_t uuid);
+extern uint32_t pmap_lookup_in_static_trust_cache(const uint8_t cdhash[CS_CDHASH_LEN]);
+extern bool pmap_lookup_in_loaded_trust_caches(const uint8_t cdhash[CS_CDHASH_LEN]);
+
+extern bool pmap_in_ppl(void);
+
+extern void *pmap_claim_reserved_ppl_page(void);
+extern void pmap_free_reserved_ppl_page(void *kva);
 
 extern void pmap_ledger_alloc_init(size_t);
 extern ledger_t pmap_ledger_alloc(void);

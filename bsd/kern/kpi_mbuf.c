@@ -528,8 +528,12 @@ errno_t
 mbuf_copydata(const mbuf_t m0, size_t off, size_t len, void *out_data)
 {
 	/* Copied m_copydata, added error handling (don't just panic) */
-	int count;
+	size_t count;
 	mbuf_t  m = m0;
+
+	if (off >= INT_MAX || len >= INT_MAX) {
+		return EINVAL;
+	}
 
 	while (off > 0) {
 		if (m == 0) {
@@ -2013,4 +2017,32 @@ m_do_tx_compl_callback(struct mbuf *m, struct ifnet *ifp)
 		}
 	}
 #endif /* (DEBUG || DEVELOPMENT) */
+}
+
+errno_t
+mbuf_get_keepalive_flag(mbuf_t m, boolean_t *is_keepalive)
+{
+	if (m == NULL || is_keepalive == NULL || !(m->m_flags & M_PKTHDR)) {
+		return EINVAL;
+	}
+
+	*is_keepalive = (m->m_pkthdr.pkt_flags & PKTF_KEEPALIVE);
+
+	return 0;
+}
+
+errno_t
+mbuf_set_keepalive_flag(mbuf_t m, boolean_t is_keepalive)
+{
+	if (m == NULL || !(m->m_flags & M_PKTHDR)) {
+		return EINVAL;
+	}
+
+	if (is_keepalive) {
+		m->m_pkthdr.pkt_flags |= PKTF_KEEPALIVE;
+	} else {
+		m->m_pkthdr.pkt_flags &= ~PKTF_KEEPALIVE;
+	}
+
+	return 0;
 }

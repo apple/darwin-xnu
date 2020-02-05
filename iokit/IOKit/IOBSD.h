@@ -61,8 +61,17 @@ enum{
 extern void IOBSDMountChange(struct mount * mp, uint32_t op);
 extern boolean_t IOTaskHasEntitlement(task_t task, const char * entitlement);
 
+typedef enum {
+	kIOPolledCoreFileModeNotInitialized,
+	kIOPolledCoreFileModeDisabled,
+	kIOPolledCoreFileModeClosed,
+	kIOPolledCoreFileModeStackshot,
+	kIOPolledCoreFileModeCoredump,
+} IOPolledCoreFileMode_t;
+
 extern struct IOPolledFileIOVars * gIOPolledCoreFileVars;
 extern kern_return_t gIOPolledCoreFileOpenRet;
+extern IOPolledCoreFileMode_t gIOPolledCoreFileMode;
 
 #ifdef __cplusplus
 }

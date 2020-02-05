@@ -394,13 +394,16 @@ putchar(int c, void *arg)
 }
 
 int
-vprintf_log_locked(const char *fmt, va_list ap)
+vprintf_log_locked(const char *fmt, va_list ap, bool addcr)
 {
 	struct putchar_args pca;
 
 	pca.flags = TOLOGLOCKED;
 	pca.tty   = NULL;
 	__doprnt(fmt, ap, putchar, &pca, 10, TRUE);
+	if (addcr) {
+		putchar('\n', &pca);
+	}
 	return 0;
 }
 

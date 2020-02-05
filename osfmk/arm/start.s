@@ -244,8 +244,9 @@ doneveqp:
 	add		r5, r4, r5, LSL #2					// convert to tte pointer
 
 	add		r6, r4, PGBYTES * 9					// get page table base (past 4 + 4 + 1 tte/pte pages)
+	add		r6, r6, #0xc00						// adjust to last 1MB section
 	mov		r7, #(ARM_TTE_TABLE_MASK & 0xFFFF) 	// ARM_TTE_TABLE_MASK low halfword
-	movt	r7, #(ARM_TTE_TABLE_MASK >> 16)		// ARM_TTE_TABLE_MASK top halfword 
+	movt		r7, #(ARM_TTE_TABLE_MASK >> 16)		// ARM_TTE_TABLE_MASK top halfword 
 	and		r11, r6, r7							// apply mask
 	orr		r11, r11, #ARM_TTE_TYPE_TABLE		// mark it as a coarse page table
 	str		r11, [r5]							// store tte entry for page table

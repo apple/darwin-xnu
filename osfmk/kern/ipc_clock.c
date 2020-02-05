@@ -194,7 +194,7 @@ port_name_to_clock(
 	if (ipc_port_translate_send(space, clock_name, &port) != KERN_SUCCESS) {
 		return clock;
 	}
-	if (ip_active(port) && (ip_kotype(port) == IKOT_CLOCK)) {
+	if (ip_kotype(port) == IKOT_CLOCK) {
 		clock = (clock_t) port->ip_kobject;
 	}
 	ip_unlock(port);

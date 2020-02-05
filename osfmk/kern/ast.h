@@ -118,7 +118,8 @@ typedef uint32_t ast_t;
 #define AST_BSD                 0x80
 #define AST_KPERF               0x100   /* kernel profiling */
 #define AST_MACF                0x200   /* MACF user ret pending */
-/* 0x400, 0x800 unused */
+#define AST_RESET_PCS           0x400   /* restartable ranges */
+#define AST_ARCADE              0x800   /* arcade subsciption support */
 #define AST_GUARD               0x1000
 #define AST_TELEMETRY_USER      0x2000  /* telemetry sample requested on interrupt from userspace */
 #define AST_TELEMETRY_KERNEL    0x4000  /* telemetry sample requested on interrupt from kernel */
@@ -140,7 +141,8 @@ typedef uint32_t ast_t;
 	        AST_TELEMETRY_PMI | AST_TELEMETRY_IO)
 
 /* Per-thread ASTs follow the thread at context-switch time. */
-#define AST_PER_THREAD  (AST_APC | AST_BSD | AST_MACF | AST_LEDGER | AST_GUARD | AST_TELEMETRY_ALL | AST_KEVENT)
+#define AST_PER_THREAD  (AST_APC | AST_BSD | AST_MACF | AST_RESET_PCS | \
+	AST_ARCADE | AST_LEDGER | AST_GUARD | AST_TELEMETRY_ALL | AST_KEVENT)
 
 /* Handle AST_URGENT detected while in the kernel */
 extern void ast_taken_kernel(void);
@@ -180,8 +182,8 @@ extern void ast_propagate(thread_t thread);
  *
  *	See act_set_ast() for an example.
  */
-#define thread_ast_set(act, reason)     (hw_atomic_or_noret(&(act)->ast, (reason)))
-#define thread_ast_clear(act, reason)   (hw_atomic_and_noret(&(act)->ast, ~(reason)))
+#define thread_ast_set(act, reason)     ((void)os_atomic_or(&(act)->ast, (reason), relaxed))
+#define thread_ast_clear(act, reason)   ((void)os_atomic_andnot(&(act)->ast, (reason), relaxed))
 
 #ifdef MACH_BSD
 
@@ -197,5 +199,7 @@ extern void dtrace_ast(void);
 
 extern void kevent_ast(thread_t thread, uint16_t bits);
 extern void act_set_astkevent(thread_t thread, uint16_t bits);
+extern uint16_t act_clear_astkevent(thread_t thread, uint16_t bits);
+extern void act_set_ast_reset_pcs(thread_t thread);
 
 #endif  /* _KERN_AST_H_ */

@@ -1,13 +1,14 @@
 /*
- * Copyright (c) 2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2014-2018 Apple Inc. All rights reserved.
  */
 
 #ifndef _PEXPERT_ARM_HURRICANE_H
 #define _PEXPERT_ARM_HURRICANE_H
 
-#define NO_MONITOR      1 /* No EL3 for this CPU -- ever */
-#define HAS_MIGSTS      1 /* Has MIGSTS register, and supports migration between p-core and e-core */
-#define HAS_KTRR        1 /* Has KTRR registers */
+#define NO_MONITOR          1 /* No EL3 for this CPU -- ever */
+#define HAS_MIGSTS          1 /* Has MIGSTS register, and supports migration between p-core and e-core */
+#define HAS_KTRR            1 /* Has KTRR registers */
+#define HAS_CPMU_L2C_EVENTS 1 /* Has L2 cache events in CPMU */
 
 #ifdef APPLEHURRICANE
 #include "arm64_common.h"

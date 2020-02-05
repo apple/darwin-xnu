@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -265,7 +265,7 @@ static void kdp_serial_send(void *rpkt, unsigned int rpkt_len);
 #endif
 
 static uint32_t kdp_current_ip_address = 0;
-static struct kdp_ether_addr kdp_current_mac_address = {{0, 0, 0, 0, 0, 0}};
+static struct kdp_ether_addr kdp_current_mac_address = {.ether_addr_octet = {0, 0, 0, 0, 0, 0}};
 static void *kdp_current_ifp;
 
 static void kdp_handler( void *);
@@ -282,12 +282,12 @@ static boolean_t router_specified = FALSE;
 static boolean_t corename_specified = FALSE;
 static unsigned int panicd_port = CORE_REMOTE_PORT;
 
-static struct kdp_ether_addr etherbroadcastaddr = {{0xff, 0xff, 0xff, 0xff, 0xff, 0xff}};
+static struct kdp_ether_addr etherbroadcastaddr = {.ether_addr_octet = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff}};
 
-static struct kdp_ether_addr router_mac = {{0, 0, 0, 0, 0, 0}};
-static struct kdp_ether_addr destination_mac = {{0, 0, 0, 0, 0, 0}};
-static struct kdp_ether_addr temp_mac = {{0, 0, 0, 0, 0, 0}};
-static struct kdp_ether_addr current_resolved_MAC = {{0, 0, 0, 0, 0, 0}};
+static struct kdp_ether_addr router_mac = {.ether_addr_octet = {0, 0, 0, 0, 0, 0}};
+static struct kdp_ether_addr destination_mac = {.ether_addr_octet = {0, 0, 0, 0, 0, 0}};
+static struct kdp_ether_addr temp_mac = {.ether_addr_octet = {0, 0, 0, 0, 0, 0}};
+static struct kdp_ether_addr current_resolved_MAC = {.ether_addr_octet = {0, 0, 0, 0, 0, 0}};
 
 static boolean_t flag_panic_dump_in_progress = FALSE;
 static boolean_t flag_router_mac_initialized = FALSE;
@@ -703,7 +703,7 @@ void
 kdp_set_interface(void *ifp, const struct kdp_ether_addr *macaddr)
 {
 	char kdpstr[80];
-	struct kdp_in_addr addr = { 0 };
+	struct kdp_in_addr addr = { .s_addr = 0 };
 	unsigned int len;
 
 	kdp_current_ifp = ifp;
@@ -1556,18 +1556,33 @@ create_panic_header(unsigned int request, const char *corename,
 
 	if (request == KDP_WRQ) {
 		char *cp;
+		size_t length_remaining = (sizeof(pkt.data) - pkt.off), bytes_filled = 0;
 
 		cp = coreh->th_u.tu_rpl;
-		cp += strlcpy(cp, corename, KDP_MAXPACKET);
+		bytes_filled = strlcpy(cp, corename, length_remaining);
+		cp += bytes_filled;
 		*cp++ = '\0';
-		cp += strlcpy(cp, mode, KDP_MAXPACKET - strlen(corename));
+		/* account for the extra NULL character that has been added historically */
+		length_remaining -= (bytes_filled + 1);
+
+		bytes_filled = strlcpy(cp, mode, length_remaining);
+		cp += bytes_filled;
 		*cp++ = '\0';
-		cp += strlcpy(cp, KDP_FEATURE_MASK_STRING, sizeof(KDP_FEATURE_MASK_STRING));
-		*cp++ = '\0'; /* Redundant */
+		/* account for the extra NULL character that has been added historically */
+		length_remaining -= (bytes_filled + 1);
+
+		bytes_filled = strlcpy(cp, KDP_FEATURE_MASK_STRING, length_remaining);
+		cp += bytes_filled;
+		*cp++ = '\0';
+		/* account for the extra NULL character that has been added historically */
+		length_remaining -= (bytes_filled + 1);
+
 		bcopy(&kdp_crashdump_feature_mask, cp, sizeof(kdp_crashdump_feature_mask));
 		kdp_crashdump_pkt_size = KDP_LARGE_CRASHDUMP_PKT_SIZE;
-		PE_parse_boot_argn("kdp_crashdump_pkt_size", &kdp_crashdump_pkt_size, sizeof(kdp_crashdump_pkt_size));
 		cp += sizeof(kdp_crashdump_feature_mask);
+		length_remaining -= sizeof(kdp_crashdump_feature_mask);
+
+		PE_parse_boot_argn("kdp_crashdump_pkt_size", &kdp_crashdump_pkt_size, sizeof(kdp_crashdump_pkt_size));
 		*(uint32_t *)cp = htonl(kdp_crashdump_pkt_size);
 	} else {
 		coreh->th_block = htonl((unsigned int) block);
@@ -1803,6 +1818,7 @@ kdp_get_xnu_version(char *versionbuf)
 	char vstr[20];
 	int retval = -1;
 	char *vptr;
+	size_t length_remaining = (sizeof(pkt.data) - pkt.off);
 
 	strlcpy(vstr, "custom", 10);
 	if (kdp_machine_vm_read((mach_vm_address_t)(uintptr_t)version, versionbuf, 128)) {
@@ -1823,7 +1839,7 @@ kdp_get_xnu_version(char *versionbuf)
 			retval = 0;
 		}
 	}
-	strlcpy(versionbuf, vstr, KDP_MAXPACKET);
+	strlcpy(versionbuf, vstr, length_remaining);
 	return retval;
 }
 
@@ -2279,7 +2295,7 @@ kdp_init(void)
 #endif /* CONFIG_KDP_INTERACTIVE_DEBUGGING */
 
 #if !(MACH_KDP && CONFIG_KDP_INTERACTIVE_DEBUGGING)
-static struct kdp_ether_addr kdp_current_mac_address = {{0, 0, 0, 0, 0, 0}};
+static struct kdp_ether_addr kdp_current_mac_address = {.ether_addr_octet = {0, 0, 0, 0, 0, 0}};
 
 /* XXX ugly forward declares to stop warnings */
 void *kdp_get_interface(void);

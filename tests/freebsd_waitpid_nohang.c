@@ -31,6 +31,8 @@
 #include <signal.h>
 #include <unistd.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 T_DECL(waitpid_nohang, "FreeBSDarwin--waitpid_nohang")
 {
 	pid_t child, pid;

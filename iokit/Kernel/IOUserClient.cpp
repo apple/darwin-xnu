@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -41,13 +41,16 @@
 #include <IOKit/IOStatisticsPrivate.h>
 #include <IOKit/IOTimeStamp.h>
 #include <IOKit/IODeviceTreeSupport.h>
+#include <IOKit/IOUserServer.h>
 #include <IOKit/system.h>
 #include <libkern/OSDebug.h>
+#include <DriverKit/OSAction.h>
 #include <sys/proc.h>
 #include <sys/kauth.h>
 #include <sys/codesign.h>
 
 #include <mach/sdt.h>
+#include <os/hash.h>
 
 #if CONFIG_MACF
 
@@ -132,28 +135,36 @@ extern "C" {
 #include <vm/vm_map.h>
 } /* extern "C" */
 
+struct IOMachPortHashList;
+
+static_assert(IKOT_MAX_TYPE <= 255);
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 // IOMachPort maps OSObjects to ports, avoiding adding an ivar to OSObject.
-
 class IOMachPort : public OSObject
 {
-	OSDeclareDefaultStructors(IOMachPort)
+	OSDeclareDefaultStructors(IOMachPort);
 public:
-	OSObject *  object;
+	SLIST_ENTRY(IOMachPort) link;
 	ipc_port_t  port;
+	OSObject*   object;
 	UInt32      mscount;
 	UInt8       holdDestroy;
+	UInt8       type;
 
-	static IOMachPort * portForObject( OSObject * obj,
-	    ipc_kobject_type_t type );
+	static IOMachPort* withObjectAndType(OSObject *obj, ipc_kobject_type_t type);
+
+	static IOMachPortHashList* bucketForObject(OSObject *obj,
+	    ipc_kobject_type_t type);
+
+	static IOMachPort* portForObjectInBucket(IOMachPortHashList *bucket, OSObject *obj, ipc_kobject_type_t type);
+
 	static bool noMoreSendersForObject( OSObject * obj,
 	    ipc_kobject_type_t type, mach_port_mscount_t * mscount );
 	static void releasePortForObject( OSObject * obj,
 	    ipc_kobject_type_t type );
 	static void setHoldDestroy( OSObject * obj, ipc_kobject_type_t type );
-
-	static OSDictionary * dictForType( ipc_kobject_type_t type );
 
 	static mach_port_name_t makeSendRightForTask( task_t task,
 	    io_object_t obj, ipc_kobject_type_t type );
@@ -165,116 +176,109 @@ public:
 OSDefineMetaClassAndStructors(IOMachPort, OSObject)
 
 static IOLock *         gIOObjectPortLock;
+IOLock *                gIOUserServerLock;
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-// not in dictForType() for debugging ease
-static OSDictionary *   gIOObjectPorts;
-static OSDictionary *   gIOConnectPorts;
-static OSDictionary *   gIOIdentifierPorts;
+SLIST_HEAD(IOMachPortHashList, IOMachPort);
 
-OSDictionary *
-IOMachPort::dictForType( ipc_kobject_type_t type )
+#if CONFIG_EMBEDDED
+#define PORT_HASH_SIZE 256
+#else
+#define PORT_HASH_SIZE 4096
+#endif /* CONFIG_EMBEDDED */
+
+IOMachPortHashList ports[PORT_HASH_SIZE];
+
+void
+IOMachPortInitialize(void)
 {
-	OSDictionary **             dict;
-
-	switch (type) {
-	case IKOT_IOKIT_OBJECT:
-		dict = &gIOObjectPorts;
-		break;
-	case IKOT_IOKIT_CONNECT:
-		dict = &gIOConnectPorts;
-		break;
-	case IKOT_IOKIT_IDENT:
-		dict = &gIOIdentifierPorts;
-		break;
-	default:
-		panic("dictForType %d", type);
-		dict = NULL;
-		break;
+	for (size_t i = 0; i < PORT_HASH_SIZE; i++) {
+		SLIST_INIT(&ports[i]);
 	}
-
-	if (0 == *dict) {
-		*dict = OSDictionary::withCapacity( 1 );
-	}
-
-	return *dict;
 }
 
-IOMachPort *
-IOMachPort::portForObject( OSObject * obj,
-    ipc_kobject_type_t type )
+IOMachPortHashList*
+IOMachPort::bucketForObject(OSObject *obj, ipc_kobject_type_t type )
 {
-	IOMachPort *        inst = 0;
-	OSDictionary *      dict;
+	return &ports[os_hash_kernel_pointer(obj) % PORT_HASH_SIZE];
+}
 
-	IOTakeLock( gIOObjectPortLock);
+IOMachPort*
+IOMachPort::portForObjectInBucket(IOMachPortHashList *bucket, OSObject *obj, ipc_kobject_type_t type)
+{
+	IOMachPort *machPort;
 
-	do {
-		dict = dictForType( type );
-		if (!dict) {
-			continue;
+	SLIST_FOREACH(machPort, bucket, link) {
+		if (machPort->object == obj && machPort->type == type) {
+			return machPort;
 		}
+	}
+	return NULL;
+}
 
-		if ((inst = (IOMachPort *)
-		    dict->getObject((const OSSymbol *) obj ))) {
-			inst->mscount++;
-			inst->retain();
-			continue;
-		}
+IOMachPort*
+IOMachPort::withObjectAndType(OSObject *obj, ipc_kobject_type_t type)
+{
+	IOMachPort *machPort = NULL;
 
-		inst = new IOMachPort;
-		if (inst && !inst->init()) {
-			inst = 0;
-			continue;
-		}
+	machPort = new IOMachPort;
+	if (__improbable(machPort && !machPort->init())) {
+		return NULL;
+	}
 
-		inst->port = iokit_alloc_object_port( obj, type );
-		if (inst->port) {
-			// retains obj
-			dict->setObject((const OSSymbol *) obj, inst );
-			inst->mscount++;
-		} else {
-			inst->release();
-			inst = 0;
-		}
-	} while (false);
+	machPort->object = obj;
+	machPort->type = (typeof(machPort->type))type;
+	machPort->port = iokit_alloc_object_port(obj, type);
 
-	IOUnlock( gIOObjectPortLock);
+	obj->taggedRetain(OSTypeID(OSCollection));
+	machPort->mscount++;
 
-	return inst;
+	return machPort;
 }
 
 bool
 IOMachPort::noMoreSendersForObject( OSObject * obj,
     ipc_kobject_type_t type, mach_port_mscount_t * mscount )
 {
-	OSDictionary *      dict;
-	IOMachPort *        machPort;
-	IOUserClient *      uc;
-	bool                destroyed = true;
+	IOMachPort *machPort = NULL;
+	IOUserClient *uc;
+	OSAction *action;
+	bool destroyed = true;
 
-	IOTakeLock( gIOObjectPortLock);
+	IOMachPortHashList *bucket = IOMachPort::bucketForObject(obj, type);
 
-	if ((dict = dictForType( type ))) {
-		obj->retain();
+	obj->retain();
 
-		machPort = (IOMachPort *) dict->getObject((const OSSymbol *) obj );
-		if (machPort) {
-			destroyed = (machPort->mscount <= *mscount);
-			if (!destroyed) {
-				*mscount = machPort->mscount;
-			} else {
-				if ((IKOT_IOKIT_CONNECT == type) && (uc = OSDynamicCast(IOUserClient, obj))) {
-					uc->noMoreSenders();
-				}
-				dict->removeObject((const OSSymbol *) obj );
+	lck_mtx_lock(gIOObjectPortLock);
+
+	machPort = IOMachPort::portForObjectInBucket(bucket, obj, type);
+
+	if (machPort) {
+		destroyed = (machPort->mscount <= *mscount);
+		if (!destroyed) {
+			*mscount = machPort->mscount;
+			lck_mtx_unlock(gIOObjectPortLock);
+		} else {
+			if ((IKOT_IOKIT_CONNECT == type) && (uc = OSDynamicCast(IOUserClient, obj))) {
+				uc->noMoreSenders();
 			}
+			SLIST_REMOVE(bucket, machPort, IOMachPort, link);
+
+			lck_mtx_unlock(gIOObjectPortLock);
+
+			machPort->release();
+			obj->taggedRelease(OSTypeID(OSCollection));
 		}
-		obj->release();
+	} else {
+		lck_mtx_unlock(gIOObjectPortLock);
 	}
 
-	IOUnlock( gIOObjectPortLock);
+	if ((IKOT_UEXT_OBJECT == type) && (action = OSDynamicCast(OSAction, obj))) {
+		action->Aborted();
+	}
+
+	obj->release();
 
 	return destroyed;
 }
@@ -283,76 +287,108 @@ void
 IOMachPort::releasePortForObject( OSObject * obj,
     ipc_kobject_type_t type )
 {
-	OSDictionary *      dict;
-	IOMachPort *        machPort;
+	IOMachPort *machPort;
+	IOMachPortHashList *bucket = IOMachPort::bucketForObject(obj, type);
 
 	assert(IKOT_IOKIT_CONNECT != type);
 
-	IOTakeLock( gIOObjectPortLock);
+	lck_mtx_lock(gIOObjectPortLock);
 
-	if ((dict = dictForType( type ))) {
+	machPort = IOMachPort::portForObjectInBucket(bucket, obj, type);
+
+	if (machPort && !machPort->holdDestroy) {
 		obj->retain();
-		machPort = (IOMachPort *) dict->getObject((const OSSymbol *) obj );
-		if (machPort && !machPort->holdDestroy) {
-			dict->removeObject((const OSSymbol *) obj );
-		}
-		obj->release();
-	}
+		SLIST_REMOVE(bucket, machPort, IOMachPort, link);
 
-	IOUnlock( gIOObjectPortLock);
+		lck_mtx_unlock(gIOObjectPortLock);
+
+		machPort->release();
+		obj->taggedRelease(OSTypeID(OSCollection));
+		obj->release();
+	} else {
+		lck_mtx_unlock(gIOObjectPortLock);
+	}
 }
 
 void
 IOMachPort::setHoldDestroy( OSObject * obj, ipc_kobject_type_t type )
 {
-	OSDictionary *      dict;
 	IOMachPort *        machPort;
 
-	IOLockLock( gIOObjectPortLock );
+	IOMachPortHashList *bucket = IOMachPort::bucketForObject(obj, type);
+	lck_mtx_lock(gIOObjectPortLock);
 
-	if ((dict = dictForType( type ))) {
-		machPort = (IOMachPort *) dict->getObject((const OSSymbol *) obj );
-		if (machPort) {
-			machPort->holdDestroy = true;
-		}
+	machPort = IOMachPort::portForObjectInBucket(bucket, obj, type);
+
+	if (machPort) {
+		machPort->holdDestroy = true;
 	}
 
-	IOLockUnlock( gIOObjectPortLock );
+	lck_mtx_unlock(gIOObjectPortLock);
+}
+
+void
+IOMachPortDestroyUserReferences(OSObject * obj, natural_t type)
+{
+	IOMachPort::releasePortForObject(obj, type);
 }
 
 void
 IOUserClient::destroyUserReferences( OSObject * obj )
 {
+	IOMachPort *machPort;
+
 	IOMachPort::releasePortForObject( obj, IKOT_IOKIT_OBJECT );
 
 	// panther, 3160200
 	// IOMachPort::releasePortForObject( obj, IKOT_IOKIT_CONNECT );
 
-	OSDictionary * dict;
-
-	IOTakeLock( gIOObjectPortLock);
 	obj->retain();
+	IOMachPortHashList *bucket = IOMachPort::bucketForObject(obj, IKOT_IOKIT_CONNECT);
+	IOMachPortHashList *mappingBucket = NULL;
 
-	if ((dict = IOMachPort::dictForType( IKOT_IOKIT_CONNECT ))) {
-		IOMachPort * port;
-		port = (IOMachPort *) dict->getObject((const OSSymbol *) obj );
-		if (port) {
-			IOUserClient * uc;
-			if ((uc = OSDynamicCast(IOUserClient, obj))) {
-				uc->noMoreSenders();
-				if (uc->mappings) {
-					dict->setObject((const OSSymbol *) uc->mappings, port);
-					iokit_switch_object_port(port->port, uc->mappings, IKOT_IOKIT_CONNECT);
+	lck_mtx_lock(gIOObjectPortLock);
 
-					uc->mappings->release();
-					uc->mappings = 0;
-				}
-			}
-			dict->removeObject((const OSSymbol *) obj );
-		}
+	IOUserClient * uc = OSDynamicCast(IOUserClient, obj);
+	if (uc && uc->mappings) {
+		mappingBucket = IOMachPort::bucketForObject(uc->mappings, IKOT_IOKIT_CONNECT);
 	}
+
+	machPort = IOMachPort::portForObjectInBucket(bucket, obj, IKOT_IOKIT_CONNECT);
+
+	if (machPort == NULL) {
+		lck_mtx_unlock(gIOObjectPortLock);
+		goto end;
+	}
+
+	SLIST_REMOVE(bucket, machPort, IOMachPort, link);
+	obj->taggedRelease(OSTypeID(OSCollection));
+
+	if (uc) {
+		uc->noMoreSenders();
+		if (uc->mappings) {
+			uc->mappings->taggedRetain(OSTypeID(OSCollection));
+			machPort->object = uc->mappings;
+			SLIST_INSERT_HEAD(mappingBucket, machPort, link);
+			iokit_switch_object_port(machPort->port, uc->mappings, IKOT_IOKIT_CONNECT);
+
+			lck_mtx_unlock(gIOObjectPortLock);
+
+			uc->mappings->release();
+			uc->mappings = NULL;
+		} else {
+			lck_mtx_unlock(gIOObjectPortLock);
+			machPort->release();
+		}
+	} else {
+		lck_mtx_unlock(gIOObjectPortLock);
+		machPort->release();
+	}
+
+
+end:
+
 	obj->release();
-	IOUnlock( gIOObjectPortLock);
 }
 
 mach_port_name_t
@@ -375,7 +411,7 @@ IOMachPort::free( void )
 
 class IOUserIterator : public OSIterator
 {
-	OSDeclareDefaultStructors(IOUserIterator)
+	OSDeclareDefaultStructors(IOUserIterator);
 public:
 	OSObject    *       userIteratorObject;
 	IOLock      *       lock;
@@ -394,7 +430,7 @@ public:
 
 class IOUserNotification : public IOUserIterator
 {
-	OSDeclareDefaultStructors(IOUserNotification)
+	OSDeclareDefaultStructors(IOUserNotification);
 
 #define holdNotify      userIteratorObject
 
@@ -418,13 +454,13 @@ IOUserIterator::withIterator(OSIterator * iter)
 	IOUserIterator * me;
 
 	if (!iter) {
-		return 0;
+		return NULL;
 	}
 
 	me = new IOUserIterator;
 	if (me && !me->init()) {
 		me->release();
-		me = 0;
+		me = NULL;
 	}
 	if (!me) {
 		return me;
@@ -581,19 +617,30 @@ IOUserClient::finalizeUserReferences(OSObject * obj)
 ipc_port_t
 iokit_port_for_object( io_object_t obj, ipc_kobject_type_t type )
 {
-	IOMachPort * machPort;
-	ipc_port_t   port;
+	IOMachPort *machPort = NULL;
+	ipc_port_t   port = NULL;
 
-	if ((machPort = IOMachPort::portForObject( obj, type ))) {
-		port = machPort->port;
-		if (port) {
-			iokit_retain_port( port );
+	IOMachPortHashList *bucket = IOMachPort::bucketForObject(obj, type);
+
+	lck_mtx_lock(gIOObjectPortLock);
+
+	machPort = IOMachPort::portForObjectInBucket(bucket, obj, type);
+
+	if (__improbable(machPort == NULL)) {
+		machPort = IOMachPort::withObjectAndType(obj, type);
+		if (__improbable(machPort == NULL)) {
+			goto end;
 		}
-
-		machPort->release();
+		SLIST_INSERT_HEAD(bucket, machPort, link);
 	} else {
-		port = NULL;
+		machPort->mscount++;
 	}
+
+	iokit_retain_port(machPort->port);
+	port = machPort->port;
+
+end:
+	lck_mtx_unlock(gIOObjectPortLock);
 
 	return port;
 }
@@ -621,7 +668,7 @@ iokit_client_died( io_object_t obj, ipc_port_t /* port */,
 		if ((map = OSDynamicCast( IOMemoryMap, obj ))) {
 			map->taskDied();
 		} else if ((notify = OSDynamicCast( IOUserNotification, obj ))) {
-			notify->setNotification( 0 );
+			notify->setNotification( NULL );
 		}
 	}
 
@@ -633,7 +680,7 @@ iokit_client_died( io_object_t obj, ipc_port_t /* port */,
 
 class IOServiceUserNotification : public IOUserNotification
 {
-	OSDeclareDefaultStructors(IOServiceUserNotification)
+	OSDeclareDefaultStructors(IOServiceUserNotification);
 
 	struct PingMsg {
 		mach_msg_header_t               msgHdr;
@@ -666,7 +713,7 @@ public:
 
 class IOServiceMessageUserNotification : public IOUserNotification
 {
-	OSDeclareDefaultStructors(IOServiceMessageUserNotification)
+	OSDeclareDefaultStructors(IOServiceMessageUserNotification);
 
 	struct PingMsg {
 		mach_msg_header_t               msgHdr;
@@ -706,8 +753,8 @@ public:
 
 #undef super
 #define super IOUserIterator
-OSDefineMetaClass( IOUserNotification, IOUserIterator )
-OSDefineAbstractStructors( IOUserNotification, IOUserIterator )
+OSDefineMetaClass( IOUserNotification, IOUserIterator );
+OSDefineAbstractStructors( IOUserNotification, IOUserIterator );
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -717,7 +764,7 @@ IOUserNotification::free( void )
 	if (holdNotify) {
 		assert(OSDynamicCast(IONotifier, holdNotify));
 		((IONotifier *)holdNotify)->remove();
-		holdNotify = 0;
+		holdNotify = NULL;
 	}
 	// can't be in handler now
 
@@ -912,7 +959,7 @@ IOServiceUserNotification::copyNextObject()
 		result->retain();
 		newSet->removeObject( count - 1);
 	} else {
-		result = 0;
+		result = NULL;
 		armed = true;
 	}
 
@@ -963,7 +1010,7 @@ IOServiceMessageUserNotification::init( mach_port_t port, natural_t type,
 
 	pingMsg->msgBody.msgh_descriptor_count = 1;
 
-	pingMsg->ports[0].name              = 0;
+	pingMsg->ports[0].name              = NULL;
 	pingMsg->ports[0].disposition       = MACH_MSG_TYPE_MAKE_SEND;
 	pingMsg->ports[0].type              = MACH_MSG_PORT_DESCRIPTOR;
 
@@ -1062,7 +1109,7 @@ IOServiceMessageUserNotification::handler( void * ref,
 		}
 		thisMsg = (typeof(thisMsg))allocMsg;
 	} else {
-		allocMsg = 0;
+		allocMsg = NULL;
 		thisMsg  = (typeof(thisMsg))stackMsg;
 	}
 
@@ -1116,7 +1163,7 @@ IOServiceMessageUserNotification::handler( void * ref,
 OSObject *
 IOServiceMessageUserNotification::getNextObject()
 {
-	return 0;
+	return NULL;
 }
 
 OSObject *
@@ -1138,6 +1185,7 @@ IOUserClient::initialize( void )
 {
 	gIOObjectPortLock       = IOLockAlloc();
 	gIOUserClientOwnersLock = IOLockAlloc();
+	gIOUserServerLock       = IOLockAlloc();
 	assert(gIOObjectPortLock && gIOUserClientOwnersLock);
 }
 
@@ -1178,7 +1226,7 @@ static OSDictionary *
 CopyConsoleUser(UInt32 uid)
 {
 	OSArray * array;
-	OSDictionary * user = 0;
+	OSDictionary * user = NULL;
 
 	if ((array = OSDynamicCast(OSArray,
 	    IORegistryEntry::getRegistryRoot()->copyProperty(gIOConsoleUsersKey)))) {
@@ -1202,7 +1250,7 @@ static OSDictionary *
 CopyUserOnConsole(void)
 {
 	OSArray * array;
-	OSDictionary * user = 0;
+	OSDictionary * user = NULL;
 
 	if ((array = OSDynamicCast(OSArray,
 	    IORegistryEntry::getRegistryRoot()->copyProperty(gIOConsoleUsersKey)))) {
@@ -1335,29 +1383,31 @@ IOUserClient::clientHasPrivilege( void * securityToken,
 	return kr;
 }
 
-OSObject *
-IOUserClient::copyClientEntitlement( task_t task,
-    const char * entitlement )
+OSDictionary *
+IOUserClient::copyClientEntitlements(task_t task)
 {
 #define MAX_ENTITLEMENTS_LEN    (128 * 1024)
 
 	proc_t p = NULL;
 	pid_t pid = 0;
-	char procname[MAXCOMLEN + 1] = "";
 	size_t len = 0;
 	void *entitlements_blob = NULL;
 	char *entitlements_data = NULL;
 	OSObject *entitlements_obj = NULL;
 	OSDictionary *entitlements = NULL;
 	OSString *errorString = NULL;
-	OSObject *value = NULL;
 
 	p = (proc_t)get_bsdtask_info(task);
 	if (p == NULL) {
 		goto fail;
 	}
 	pid = proc_pid(p);
-	proc_name(pid, procname, (int)sizeof(procname));
+
+	if (cs_entitlements_dictionary_copy(p, (void **)&entitlements) == 0) {
+		if (entitlements) {
+			return entitlements;
+		}
+	}
 
 	if (cs_entitlements_blob_get(p, &entitlements_blob, &len) != 0) {
 		goto fail;
@@ -1373,7 +1423,8 @@ IOUserClient::copyClientEntitlement( task_t task,
 	 */
 	len -= offsetof(CS_GenericBlob, data);
 	if (len > MAX_ENTITLEMENTS_LEN) {
-		IOLog("failed to parse entitlements for %s[%u]: %lu bytes of entitlements exceeds maximum of %u\n", procname, pid, len, MAX_ENTITLEMENTS_LEN);
+		IOLog("failed to parse entitlements for %s[%u]: %lu bytes of entitlements exceeds maximum of %u\n",
+		    proc_best_name(p), pid, len, MAX_ENTITLEMENTS_LEN);
 		goto fail;
 	}
 
@@ -1391,7 +1442,8 @@ IOUserClient::copyClientEntitlement( task_t task,
 
 	entitlements_obj = OSUnserializeXML(entitlements_data, len + 1, &errorString);
 	if (errorString != NULL) {
-		IOLog("failed to parse entitlements for %s[%u]: %s\n", procname, pid, errorString->getCStringNoCopy());
+		IOLog("failed to parse entitlements for %s[%u]: %s\n",
+		    proc_best_name(p), pid, errorString->getCStringNoCopy());
 		goto fail;
 	}
 	if (entitlements_obj == NULL) {
@@ -1402,12 +1454,7 @@ IOUserClient::copyClientEntitlement( task_t task,
 	if (entitlements == NULL) {
 		goto fail;
 	}
-
-	/* Fetch the entitlement value from the dictionary. */
-	value = entitlements->getObject(entitlement);
-	if (value != NULL) {
-		value->retain();
-	}
+	entitlements_obj = NULL;
 
 fail:
 	if (entitlements_data != NULL) {
@@ -1419,6 +1466,28 @@ fail:
 	if (errorString != NULL) {
 		errorString->release();
 	}
+	return entitlements;
+}
+
+OSObject *
+IOUserClient::copyClientEntitlement( task_t task,
+    const char * entitlement )
+{
+	OSDictionary *entitlements;
+	OSObject *value;
+
+	entitlements = copyClientEntitlements(task);
+	if (entitlements == NULL) {
+		return NULL;
+	}
+
+	/* Fetch the entitlement value from the dictionary. */
+	value = entitlements->getObject(entitlement);
+	if (value != NULL) {
+		value->retain();
+	}
+
+	entitlements->release();
 	return value;
 }
 
@@ -1523,6 +1592,9 @@ IOUserClient::registerOwner(task_t task)
 			owner->uc   = this;
 			queue_enter_first(&owners, owner, IOUserClientOwner *, ucLink);
 			queue_enter_first(task_io_user_clients(task), owner, IOUserClientOwner *, taskLink);
+			if (messageAppSuspended) {
+				task_set_message_app_suspended(task, true);
+			}
 		}
 	}
 
@@ -1535,13 +1607,25 @@ void
 IOUserClient::noMoreSenders(void)
 {
 	IOUserClientOwner * owner;
+	IOUserClientOwner * iter;
+	queue_head_t      * taskque;
+	bool                hasMessageAppSuspended;
 
 	IOLockLock(gIOUserClientOwnersLock);
 
 	if (owners.next) {
 		while (!queue_empty(&owners)) {
 			owner = (IOUserClientOwner *)(void *) queue_first(&owners);
-			queue_remove(task_io_user_clients(owner->task), owner, IOUserClientOwner *, taskLink);
+			taskque = task_io_user_clients(owner->task);
+			queue_remove(taskque, owner, IOUserClientOwner *, taskLink);
+			hasMessageAppSuspended = false;
+			queue_iterate(taskque, iter, IOUserClientOwner *, taskLink) {
+				hasMessageAppSuspended = iter->uc->messageAppSuspended;
+				if (hasMessageAppSuspended) {
+					break;
+				}
+			}
+			task_set_message_app_suspended(owner->task, hasMessageAppSuspended);
 			queue_remove(&owners, owner, IOUserClientOwner *, ucLink);
 			IODelete(owner, IOUserClientOwner, 1);
 		}
@@ -1549,6 +1633,55 @@ IOUserClient::noMoreSenders(void)
 	}
 
 	IOLockUnlock(gIOUserClientOwnersLock);
+}
+
+
+extern "C" void
+iokit_task_app_suspended_changed(task_t task)
+{
+	queue_head_t      * taskque;
+	IOUserClientOwner * owner;
+	OSSet             * set;
+
+	IOLockLock(gIOUserClientOwnersLock);
+
+	taskque = task_io_user_clients(task);
+	set = NULL;
+	queue_iterate(taskque, owner, IOUserClientOwner *, taskLink) {
+		if (!owner->uc->messageAppSuspended) {
+			continue;
+		}
+		if (!set) {
+			set = OSSet::withCapacity(4);
+			if (!set) {
+				break;
+			}
+		}
+		set->setObject(owner->uc);
+	}
+
+	IOLockUnlock(gIOUserClientOwnersLock);
+
+	if (set) {
+		set->iterateObjects(^bool (OSObject * obj) {
+			IOUserClient      * uc;
+
+			uc = (typeof(uc))obj;
+#if 0
+			{
+			        OSString          * str;
+			        str = IOCopyLogNameForPID(task_pid(task));
+			        IOLog("iokit_task_app_suspended_changed(%s) %s %d\n", str ? str->getCStringNoCopy() : "",
+			        uc->getName(), task_is_app_suspended(task));
+			        OSSafeReleaseNULL(str);
+			}
+#endif
+			uc->message(kIOMessageTaskAppSuspendedChange, NULL);
+
+			return false;
+		});
+		set->release();
+	}
 }
 
 extern "C" kern_return_t
@@ -1638,7 +1771,7 @@ IOUserClient::clientClose( void )
 IOService *
 IOUserClient::getService( void )
 {
-	return 0;
+	return NULL;
 }
 
 IOReturn
@@ -1701,8 +1834,8 @@ IOUserClient::mapClientMemory64(
 {
 	IOReturn            err;
 	IOOptionBits        options = 0;
-	IOMemoryDescriptor * memory = 0;
-	IOMemoryMap *       map = 0;
+	IOMemoryDescriptor * memory = NULL;
+	IOMemoryMap *       map = NULL;
 
 	err = clientMemoryForType((UInt32) type, &options, &memory );
 
@@ -1772,13 +1905,13 @@ IOUserClient::adjustPortNameReferencesInTask(task_t task, mach_port_name_t port_
 IOExternalMethod *
 IOUserClient::getExternalMethodForIndex( UInt32 /* index */)
 {
-	return 0;
+	return NULL;
 }
 
 IOExternalAsyncMethod *
 IOUserClient::getExternalAsyncMethodForIndex( UInt32 /* index */)
 {
-	return 0;
+	return NULL;
 }
 
 IOExternalTrap *
@@ -1930,7 +2063,7 @@ IOUserClient::_sendAsyncResult64(OSAsyncReference64 reference,
 	replyMsg.msgHdr.msgh_bits = MACH_MSGH_BITS(MACH_MSG_TYPE_COPY_SEND /*remote*/,
 	    0 /*local*/);
 	replyMsg.msgHdr.msgh_remote_port = replyPort;
-	replyMsg.msgHdr.msgh_local_port  = 0;
+	replyMsg.msgHdr.msgh_local_port  = NULL;
 	replyMsg.msgHdr.msgh_id          = kOSNotificationMessageID;
 	if (kIOUCAsync64Flag & reference[0]) {
 		replyMsg.msgHdr.msgh_size =
@@ -2077,7 +2210,7 @@ is_io_object_get_superclass(
 	}
 
 	ret = kIOReturnNotFound;
-	meta = 0;
+	meta = NULL;
 	do{
 		name = OSSymbol::withCString(obj_name);
 		if (!name) {
@@ -2128,7 +2261,7 @@ is_io_object_get_bundle_identifier(
 	}
 
 	ret = kIOReturnNotFound;
-	meta = 0;
+	meta = NULL;
 	do{
 		name = OSSymbol::withCString(obj_name);
 		if (!name) {
@@ -2169,7 +2302,7 @@ is_io_object_conforms_to(
 		return kIOReturnBadArgument;
 	}
 
-	*conforms = (0 != object->metaCast( className ));
+	*conforms = (NULL != object->metaCast( className ));
 
 	return kIOReturnSuccess;
 }
@@ -2385,7 +2518,7 @@ is_io_service_get_matching_services_ool(
 	if (KERN_SUCCESS == kr) {
 		// must return success after vm_map_copyout() succeeds
 		// and mig will copy out objects on success
-		*existing = 0;
+		*existing = NULL;
 		*result = internal_io_service_get_matching_services(master_port,
 		    (const char *) data, matchingCnt, existing);
 		vm_deallocate( kernel_map, data, matchingCnt );
@@ -2467,7 +2600,7 @@ is_io_service_get_matching_service_ool(
 	if (KERN_SUCCESS == kr) {
 		// must return success after vm_map_copyout() succeeds
 		// and mig will copy out objects on success
-		*service = 0;
+		*service = NULL;
 		*result = internal_io_service_get_matching_service(master_port,
 		    (const char *) data, matchingCnt, service );
 		vm_deallocate( kernel_map, data, matchingCnt );
@@ -2499,8 +2632,8 @@ internal_io_service_add_notification(
 	bool client64,
 	io_object_t * notification )
 {
-	IOServiceUserNotification * userNotify = 0;
-	IONotifier *                notify = 0;
+	IOServiceUserNotification * userNotify = NULL;
+	IONotifier *                notify = NULL;
 	const OSSymbol *            sym;
 	OSDictionary *              dict;
 	IOReturn                    err;
@@ -2546,7 +2679,7 @@ internal_io_service_add_notification(
 		if (userNotify && !userNotify->init( port, userMsgType,
 		    reference, referenceSize, client64)) {
 			userNotify->release();
-			userNotify = 0;
+			userNotify = NULL;
 		}
 		if (!userNotify) {
 			continue;
@@ -2566,7 +2699,7 @@ internal_io_service_add_notification(
 	if ((kIOReturnSuccess != err) && userNotify) {
 		userNotify->invalidatePort();
 		userNotify->release();
-		userNotify = 0;
+		userNotify = NULL;
 	}
 
 	if (sym) {
@@ -2683,7 +2816,7 @@ internal_io_service_add_notification_ool(
 	if (KERN_SUCCESS == kr) {
 		// must return success after vm_map_copyout() succeeds
 		// and mig will copy out objects on success
-		*notification = 0;
+		*notification = NULL;
 		*result = internal_io_service_add_notification( master_port, notification_type,
 		    (char *) data, matchingCnt, wake_port, reference, referenceSize, client64, notification );
 		vm_deallocate( kernel_map, data, matchingCnt );
@@ -2770,8 +2903,8 @@ internal_io_service_add_interest_notification(
 	bool client64,
 	io_object_t * notification )
 {
-	IOServiceMessageUserNotification *  userNotify = 0;
-	IONotifier *                        notify = 0;
+	IOServiceMessageUserNotification *  userNotify = NULL;
+	IONotifier *                        notify = NULL;
 	const OSSymbol *                    sym;
 	IOReturn                            err;
 
@@ -2787,7 +2920,7 @@ internal_io_service_add_interest_notification(
 			    kIOUserNotifyMaxMessageSize,
 			    client64 )) {
 				userNotify->release();
-				userNotify = 0;
+				userNotify = NULL;
 			}
 			if (!userNotify) {
 				continue;
@@ -2810,7 +2943,7 @@ internal_io_service_add_interest_notification(
 	if ((kIOReturnSuccess != err) && userNotify) {
 		userNotify->invalidatePort();
 		userNotify->release();
-		userNotify = 0;
+		userNotify = NULL;
 	}
 
 	return err;
@@ -3017,7 +3150,7 @@ is_io_registry_entry_from_path_ool(
 	}
 
 	map_data = 0;
-	entry    = 0;
+	entry    = NULL;
 	res = err = KERN_SUCCESS;
 	if (path[0]) {
 		cpath = path;
@@ -3158,7 +3291,7 @@ is_io_registry_entry_get_name_in_plane(
 	if (planeName[0]) {
 		plane = IORegistryEntry::getPlane( planeName );
 	} else {
-		plane = 0;
+		plane = NULL;
 	}
 
 	strncpy( name, entry->getName( plane), sizeof(io_name_t));
@@ -3179,7 +3312,7 @@ is_io_registry_entry_get_location_in_plane(
 	if (planeName[0]) {
 		plane = IORegistryEntry::getPlane( planeName );
 	} else {
-		plane = 0;
+		plane = NULL;
 	}
 
 	const char * cstr = entry->getLocation( plane );
@@ -3220,7 +3353,7 @@ is_io_registry_entry_get_property_bytes(
 	OSNumber    *       off;
 	UInt64              offsetBytes;
 	unsigned int        len = 0;
-	const void *        bytes = 0;
+	const void *        bytes = NULL;
 	IOReturn            ret = kIOReturnSuccess;
 
 	CHECK( IORegistryEntry, registry_entry, entry );
@@ -3404,7 +3537,7 @@ GetPropertiesEditor(void                  * reference,
 	}
 	if (ref->root == container) {
 		if (0 != mac_iokit_check_get_property(ref->cred, ref->entry, name->getCStringNoCopy())) {
-			value = 0;
+			value = NULL;
 		}
 	}
 	if (value) {
@@ -3425,8 +3558,8 @@ is_io_registry_entry_get_properties_bin(
 	kern_return_t              err = kIOReturnSuccess;
 	vm_size_t                  len;
 	OSSerialize          * s;
-	OSSerialize::Editor    editor = 0;
-	void                 * editRef = 0;
+	OSSerialize::Editor    editor = NULL;
+	void                 * editRef = NULL;
 
 	CHECK(IORegistryEntry, registry_entry, entry);
 
@@ -3437,7 +3570,7 @@ is_io_registry_entry_get_properties_bin(
 		editRef   = &ref;
 		ref.cred  = kauth_cred_get();
 		ref.entry = entry;
-		ref.root  = 0;
+		ref.root  = NULL;
 	}
 #endif
 
@@ -3717,10 +3850,10 @@ is_io_service_open_extended(
 	kern_return_t * result,
 	io_object_t *connection )
 {
-	IOUserClient * client = 0;
+	IOUserClient * client = NULL;
 	kern_return_t  err = KERN_SUCCESS;
 	IOReturn       res = kIOReturnSuccess;
-	OSDictionary * propertiesDict = 0;
+	OSDictionary * propertiesDict = NULL;
 	bool           crossEndian;
 	bool           disallowAccess;
 
@@ -3792,7 +3925,8 @@ is_io_service_open_extended(
 		if (res == kIOReturnSuccess) {
 			assert( OSDynamicCast(IOUserClient, client));
 
-			client->sharedInstance = (0 != client->getProperty(kIOUserClientSharedInstanceKey));
+			client->sharedInstance = (NULL != client->getProperty(kIOUserClientSharedInstanceKey));
+			client->messageAppSuspended = (NULL != client->getProperty(kIOUserClientMessageAppSuspendedKey));
 			client->closed = false;
 			client->lock = IOLockAlloc();
 
@@ -3816,7 +3950,7 @@ is_io_service_open_extended(
 				IOStatisticsClientCall();
 				client->clientClose();
 				client->release();
-				client = 0;
+				client = NULL;
 				break;
 			}
 			OSString * creatorName = IOCopyLogNameForPID(proc_selfpid());
@@ -3959,7 +4093,7 @@ is_io_connect_map_memory_into_task
 		} else {
 			// keep it with the user client
 			IOLockLock( gIOObjectPortLock);
-			if (0 == client->mappings) {
+			if (NULL == client->mappings) {
 				client->mappings = OSSet::withCapacity(2);
 			}
 			if (client->mappings) {
@@ -4006,7 +4140,7 @@ IOMemoryMap *
 IOUserClient::removeMappingForDescriptor(IOMemoryDescriptor * mem)
 {
 	OSIterator *  iter;
-	IOMemoryMap * map = 0;
+	IOMemoryMap * map = NULL;
 
 	IOLockLock(gIOObjectPortLock);
 
@@ -4039,7 +4173,7 @@ is_io_connect_unmap_memory_from_task
 {
 	IOReturn            err;
 	IOOptionBits        options = 0;
-	IOMemoryDescriptor * memory = 0;
+	IOMemoryDescriptor * memory = NULL;
 	IOMemoryMap *       map;
 
 	CHECK( IOUserClient, connection, client );
@@ -4155,8 +4289,8 @@ is_io_connect_method_var_output
 
 	IOExternalMethodArguments args;
 	IOReturn ret;
-	IOMemoryDescriptor * inputMD  = 0;
-	OSObject *           structureVariableOutputData = 0;
+	IOMemoryDescriptor * inputMD  = NULL;
+	OSObject *           structureVariableOutputData = NULL;
 
 	bzero(&args.__reserved[0], sizeof(args.__reserved));
 	args.__reservedA = 0;
@@ -4165,7 +4299,7 @@ is_io_connect_method_var_output
 	args.selector = selector;
 
 	args.asyncWakePort               = MACH_PORT_NULL;
-	args.asyncReference              = 0;
+	args.asyncReference              = NULL;
 	args.asyncReferenceCount         = 0;
 	args.structureVariableOutputData = &structureVariableOutputData;
 
@@ -4252,8 +4386,8 @@ is_io_connect_method
 
 	IOExternalMethodArguments args;
 	IOReturn ret;
-	IOMemoryDescriptor * inputMD  = 0;
-	IOMemoryDescriptor * outputMD = 0;
+	IOMemoryDescriptor * inputMD  = NULL;
+	IOMemoryDescriptor * outputMD = NULL;
 
 	bzero(&args.__reserved[0], sizeof(args.__reserved));
 	args.__reservedA = 0;
@@ -4262,9 +4396,9 @@ is_io_connect_method
 	args.selector = selector;
 
 	args.asyncWakePort               = MACH_PORT_NULL;
-	args.asyncReference              = 0;
+	args.asyncReference              = NULL;
 	args.asyncReferenceCount         = 0;
-	args.structureVariableOutputData = 0;
+	args.structureVariableOutputData = NULL;
 
 	args.scalarInput = scalar_input;
 	args.scalarInputCount = scalar_inputCnt;
@@ -4344,8 +4478,8 @@ is_io_connect_async_method
 
 	IOExternalMethodArguments args;
 	IOReturn ret;
-	IOMemoryDescriptor * inputMD  = 0;
-	IOMemoryDescriptor * outputMD = 0;
+	IOMemoryDescriptor * inputMD  = NULL;
+	IOMemoryDescriptor * outputMD = NULL;
 
 	bzero(&args.__reserved[0], sizeof(args.__reserved));
 	args.__reservedA = 0;
@@ -4362,7 +4496,7 @@ is_io_connect_async_method
 	args.asyncReference      = reference;
 	args.asyncReferenceCount = referenceCnt;
 
-	args.structureVariableOutputData = 0;
+	args.structureVariableOutputData = NULL;
 
 	args.scalarInput = scalar_input;
 	args.scalarInputCount = scalar_inputCnt;
@@ -4401,6 +4535,7 @@ is_io_connect_async_method
 	IOStatisticsClientCall();
 	ret = client->externalMethod( selector, &args );
 
+	*scalar_outputCnt = args.scalarOutputCount;
 	*inband_outputCnt = args.structureOutputSize;
 	*ool_output_size  = args.structureOutputDescriptorSize;
 
@@ -4547,10 +4682,14 @@ is_io_async_method_scalarI_scalarO(
 	io_scalar_inband64_t _output;
 	io_async_ref64_t _reference;
 
+	if (referenceCnt > ASYNC_REF64_COUNT) {
+		return kIOReturnBadArgument;
+	}
 	bzero(&_output[0], sizeof(_output));
 	for (i = 0; i < referenceCnt; i++) {
 		_reference[i] = REF64(reference[i]);
 	}
+	bzero(&_reference[referenceCnt], (ASYNC_REF64_COUNT - referenceCnt) * sizeof(_reference[0]));
 
 	mach_msg_type_number_t struct_outputCnt = 0;
 	mach_vm_size_t ool_output_size = 0;
@@ -4592,9 +4731,13 @@ is_io_async_method_scalarI_structureO(
 	io_scalar_inband64_t _input;
 	io_async_ref64_t _reference;
 
+	if (referenceCnt > ASYNC_REF64_COUNT) {
+		return kIOReturnBadArgument;
+	}
 	for (i = 0; i < referenceCnt; i++) {
 		_reference[i] = REF64(reference[i]);
 	}
+	bzero(&_reference[referenceCnt], (ASYNC_REF64_COUNT - referenceCnt) * sizeof(_reference[0]));
 
 	mach_msg_type_number_t scalar_outputCnt = 0;
 	mach_vm_size_t ool_output_size = 0;
@@ -4631,9 +4774,13 @@ is_io_async_method_scalarI_structureI(
 	io_scalar_inband64_t _input;
 	io_async_ref64_t _reference;
 
+	if (referenceCnt > ASYNC_REF64_COUNT) {
+		return kIOReturnBadArgument;
+	}
 	for (i = 0; i < referenceCnt; i++) {
 		_reference[i] = REF64(reference[i]);
 	}
+	bzero(&_reference[referenceCnt], (ASYNC_REF64_COUNT - referenceCnt) * sizeof(_reference[0]));
 
 	mach_msg_type_number_t scalar_outputCnt = 0;
 	mach_msg_type_number_t inband_outputCnt = 0;
@@ -4672,9 +4819,13 @@ is_io_async_method_structureI_structureO(
 	mach_vm_size_t ool_output_size = 0;
 	io_async_ref64_t _reference;
 
+	if (referenceCnt > ASYNC_REF64_COUNT) {
+		return kIOReturnBadArgument;
+	}
 	for (i = 0; i < referenceCnt; i++) {
 		_reference[i] = REF64(reference[i]);
 	}
+	bzero(&_reference[referenceCnt], (ASYNC_REF64_COUNT - referenceCnt) * sizeof(_reference[0]));
 
 	return is_io_connect_async_method(connect,
 	           wake_port, _reference, referenceCnt,
@@ -4853,18 +5004,18 @@ shim_io_connect_method_scalarI_structureO(
 			break;
 		case 3:
 			err = (object->*func)(  ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
-			    output, (void *)outputCount, 0 );
+			    output, (void *)outputCount, NULL );
 			break;
 		case 2:
 			err = (object->*func)(  ARG32(input[0]), ARG32(input[1]),
-			    output, (void *)outputCount, 0, 0 );
+			    output, (void *)outputCount, NULL, NULL );
 			break;
 		case 1:
 			err = (object->*func)(  ARG32(input[0]),
-			    output, (void *)outputCount, 0, 0, 0 );
+			    output, (void *)outputCount, NULL, NULL, NULL );
 			break;
 		case 0:
-			err = (object->*func)(  output, (void *)outputCount, 0, 0, 0, 0 );
+			err = (object->*func)(  output, (void *)outputCount, NULL, NULL, NULL, NULL );
 			break;
 
 		default:
@@ -4929,21 +5080,21 @@ shim_io_async_method_scalarI_structureO(
 		case 3:
 			err = (object->*func)(  reference,
 			    ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
-			    output, (void *)outputCount, 0 );
+			    output, (void *)outputCount, NULL );
 			break;
 		case 2:
 			err = (object->*func)(  reference,
 			    ARG32(input[0]), ARG32(input[1]),
-			    output, (void *)outputCount, 0, 0 );
+			    output, (void *)outputCount, NULL, NULL );
 			break;
 		case 1:
 			err = (object->*func)(  reference,
 			    ARG32(input[0]),
-			    output, (void *)outputCount, 0, 0, 0 );
+			    output, (void *)outputCount, NULL, NULL, NULL );
 			break;
 		case 0:
 			err = (object->*func)(  reference,
-			    output, (void *)outputCount, 0, 0, 0, 0 );
+			    output, (void *)outputCount, NULL, NULL, NULL, NULL );
 			break;
 
 		default:
@@ -5025,21 +5176,21 @@ shim_io_connect_method_scalarI_structureI(
 		case 3:
 			err = (object->*func)( ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
 			    inputStruct, (void *)(uintptr_t)inputStructCount,
-			    0 );
+			    NULL );
 			break;
 		case 2:
 			err = (object->*func)( ARG32(input[0]), ARG32(input[1]),
 			    inputStruct, (void *)(uintptr_t)inputStructCount,
-			    0, 0 );
+			    NULL, NULL );
 			break;
 		case 1:
 			err = (object->*func)( ARG32(input[0]),
 			    inputStruct, (void *)(uintptr_t)inputStructCount,
-			    0, 0, 0 );
+			    NULL, NULL, NULL );
 			break;
 		case 0:
 			err = (object->*func)( inputStruct, (void *)(uintptr_t)inputStructCount,
-			    0, 0, 0, 0 );
+			    NULL, NULL, NULL, NULL );
 			break;
 
 		default:
@@ -5103,24 +5254,24 @@ shim_io_async_method_scalarI_structureI(
 			err = (object->*func)(  reference,
 			    ARG32(input[0]), ARG32(input[1]), ARG32(input[2]),
 			    inputStruct, (void *)(uintptr_t)inputStructCount,
-			    0 );
+			    NULL );
 			break;
 		case 2:
 			err = (object->*func)(  reference,
 			    ARG32(input[0]), ARG32(input[1]),
 			    inputStruct, (void *)(uintptr_t)inputStructCount,
-			    0, 0 );
+			    NULL, NULL );
 			break;
 		case 1:
 			err = (object->*func)(  reference,
 			    ARG32(input[0]),
 			    inputStruct, (void *)(uintptr_t)inputStructCount,
-			    0, 0, 0 );
+			    NULL, NULL, NULL );
 			break;
 		case 0:
 			err = (object->*func)(  reference,
 			    inputStruct, (void *)(uintptr_t)inputStructCount,
-			    0, 0, 0, 0 );
+			    NULL, NULL, NULL, NULL );
 			break;
 
 		default:
@@ -5184,12 +5335,12 @@ shim_io_connect_method_structureI_structureO(
 		if (method->count1) {
 			if (method->count0) {
 				err = (object->*func)( input, output,
-				    (void *)(uintptr_t)inputCount, outputCount, 0, 0 );
+				    (void *)(uintptr_t)inputCount, outputCount, NULL, NULL );
 			} else {
-				err = (object->*func)( output, outputCount, 0, 0, 0, 0 );
+				err = (object->*func)( output, outputCount, NULL, NULL, NULL, NULL );
 			}
 		} else {
-			err = (object->*func)( input, (void *)(uintptr_t)inputCount, 0, 0, 0, 0 );
+			err = (object->*func)( input, (void *)(uintptr_t)inputCount, NULL, NULL, NULL, NULL );
 		}
 	}while (false);
 
@@ -5239,14 +5390,14 @@ shim_io_async_method_structureI_structureO(
 			if (method->count0) {
 				err = (object->*func)( reference,
 				    input, output,
-				    (void *)(uintptr_t)inputCount, outputCount, 0, 0 );
+				    (void *)(uintptr_t)inputCount, outputCount, NULL, NULL );
 			} else {
 				err = (object->*func)( reference,
-				    output, outputCount, 0, 0, 0, 0 );
+				    output, outputCount, NULL, NULL, NULL, NULL );
 			}
 		} else {
 			err = (object->*func)( reference,
-			    input, (void *)(uintptr_t)inputCount, 0, 0, 0, 0 );
+			    input, (void *)(uintptr_t)inputCount, NULL, NULL, NULL, NULL );
 		}
 	}while (false);
 
@@ -5269,7 +5420,7 @@ is_io_catalog_send_data(
 #if NO_KEXTD
 	return kIOReturnNotPrivileged;
 #else /* NO_KEXTD */
-	OSObject * obj = 0;
+	OSObject * obj = NULL;
 	vm_offset_t data;
 	kern_return_t kr = kIOReturnError;
 
@@ -5279,14 +5430,14 @@ is_io_catalog_send_data(
 		return kIOReturnNotPrivileged;
 	}
 
-	if ((flag != kIOCatalogRemoveKernelLinker &&
+	if ((flag != kIOCatalogRemoveKernelLinker__Removed &&
 	    flag != kIOCatalogKextdActive &&
 	    flag != kIOCatalogKextdFinishedLaunching) &&
 	    (!inData || !inDataCount)) {
 		return kIOReturnBadArgument;
 	}
 
-	if (!IOTaskHasEntitlement(current_task(), "com.apple.rootless.kext-secure-management")) {
+	if (!IOTaskHasEntitlement(current_task(), kOSKextManagementEntitlement)) {
 		OSString * taskName = IOCopyLogNameForPID(proc_selfpid());
 		IOLog("IOCatalogueSendData(%s): Not entitled\n", taskName ? taskName->getCStringNoCopy() : "");
 		OSSafeReleaseNULL(taskName);
@@ -5370,21 +5521,8 @@ is_io_catalog_send_data(
 	}
 	break;
 
-	case kIOCatalogStartMatching: {
-		OSDictionary * dict;
-
-		dict = OSDynamicCast(OSDictionary, obj);
-		if (dict) {
-			if (!gIOCatalogue->startMatching( dict )) {
-				kr = kIOReturnError;
-			}
-		} else {
-			kr = kIOReturnBadArgument;
-		}
-	}
-	break;
-
-	case kIOCatalogRemoveKernelLinker:
+	case kIOCatalogStartMatching__Removed:
+	case kIOCatalogRemoveKernelLinker__Removed:
 		kr = KERN_NOT_SUPPORTED;
 		break;
 
@@ -5404,12 +5542,8 @@ is_io_catalog_send_data(
 	case kIOCatalogKextdFinishedLaunching: {
 #if !NO_KEXTD
 		if (!gIOKextdClearedBusy) {
-			IOService * serviceRoot = IOService::getServiceRoot();
-			if (serviceRoot) {
-				IOServiceTrace(IOSERVICE_KEXTD_READY, 0, 0, 0, 0);
-				serviceRoot->adjustBusy(-1);
-				gIOKextdClearedBusy = true;
-			}
+			IOService::kextdLaunched();
+			gIOKextdClearedBusy = true;
 		}
 #endif
 		kr = kIOReturnSuccess;
@@ -5604,11 +5738,19 @@ is_io_catalog_reset(
 kern_return_t
 iokit_user_client_trap(struct iokit_user_client_trap_args *args)
 {
-	kern_return_t result = kIOReturnBadArgument;
-	IOUserClient *userClient;
+	kern_return_t  result = kIOReturnBadArgument;
+	IOUserClient * userClient;
+	OSObject     * object;
+	uintptr_t      ref;
 
-	if ((userClient = OSDynamicCast(IOUserClient,
-	    iokit_lookup_connect_ref_current_task((mach_port_name_t)(uintptr_t)args->userClientRef)))) {
+	ref = (uintptr_t) args->userClientRef;
+	if ((1ULL << 32) & ref) {
+		object = iokit_lookup_uext_ref_current_task((mach_port_name_t) ref);
+		if (object) {
+			result = IOUserServerUEXTTrap(object, args->p1, args->p2, args->p3, args->p4, args->p5, args->p6);
+		}
+		OSSafeReleaseNULL(object);
+	} else if ((userClient = OSDynamicCast(IOUserClient, iokit_lookup_connect_ref_current_task((mach_port_name_t) ref)))) {
 		IOExternalTrap *trap;
 		IOService *target = NULL;
 
@@ -5704,7 +5846,7 @@ IOUserClient::externalMethod( uint32_t selector, IOExternalMethodArguments * arg
 
 	if (args->asyncWakePort) {
 		IOExternalAsyncMethod * method;
-		object = 0;
+		object = NULL;
 		if (!(method = getAsyncTargetAndMethodForIndex(&object, selector)) || !object) {
 			return kIOReturnUnsupported;
 		}
@@ -5751,7 +5893,7 @@ IOUserClient::externalMethod( uint32_t selector, IOExternalMethodArguments * arg
 		}
 	} else {
 		IOExternalMethod *      method;
-		object = 0;
+		object = NULL;
 		if (!(method = getTargetAndMethodForIndex(&object, selector)) || !object) {
 			return kIOReturnUnsupported;
 		}

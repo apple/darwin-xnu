@@ -31,8 +31,7 @@
 #include <kern/queue.h>
 #include <mach/mach_types.h>
 
-#define LCK_GRP_NULL    (lck_grp_t *)0
-
+#define LCK_GRP_NULL    (lck_grp_t *)NULL
 
 typedef unsigned int    lck_type_t;
 
@@ -42,6 +41,7 @@ typedef unsigned int    lck_type_t;
 
 #if XNU_KERNEL_PRIVATE
 
+#include <os/refcnt.h>
 /*
  * Arguments wrapped in LCK_GRP_ARG() will be elided
  * when LOCK_STATS is not set.
@@ -86,7 +86,7 @@ typedef struct _lck_grp_stats_ {
 
 typedef struct _lck_grp_ {
 	queue_chain_t           lck_grp_link;
-	uint32_t                lck_grp_refcnt;
+	os_refcnt_t             lck_grp_refcnt;
 	uint32_t                lck_grp_spincnt;
 	uint32_t                lck_grp_mtxcnt;
 	uint32_t                lck_grp_rwcnt;
@@ -98,6 +98,7 @@ typedef struct _lck_grp_ {
 #else
 typedef struct _lck_grp_ lck_grp_t;
 #endif /* XNU_KERNEL_PRIVATE */
+
 
 #ifdef  MACH_KERNEL_PRIVATE
 typedef struct _lck_grp_attr_ {
@@ -113,7 +114,7 @@ extern lck_grp_attr_t  LockDefaultGroupAttr;
 typedef struct __lck_grp_attr__ lck_grp_attr_t;
 #endif /* MACH_KERNEL_PRIVATE */
 
-#define LCK_GRP_ATTR_NULL       (lck_grp_attr_t *)0
+#define LCK_GRP_ATTR_NULL       (lck_grp_attr_t *)NULL
 
 __BEGIN_DECLS
 
@@ -157,7 +158,6 @@ extern  void                    lck_grp_lckcnt_incr(
 extern  void                    lck_grp_lckcnt_decr(
 	lck_grp_t               *grp,
 	lck_type_t              lck_type);
-
 #endif /* MACH_KERNEL_PRIVATE */
 
 #endif /* _KERN_LOCK_GROUP_H */

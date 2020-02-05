@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -29,13 +29,6 @@
 #ifndef _IOKIT_IOSHAREDDATAQUEUE_H
 #define _IOKIT_IOSHAREDDATAQUEUE_H
 
-#ifdef dequeue
-#undef dequeue
-#endif
-#ifdef enqueue
-#undef enqueue
-#endif
-
 #define DISABLE_DATAQUEUE_WARNING /* IODataQueue is deprecated, please use IOSharedDataQueue instead */
 
 #include <IOKit/IODataQueue.h>
@@ -57,7 +50,7 @@ typedef struct _IODataQueueEntry IODataQueueEntry;
  */
 class IOSharedDataQueue : public IODataQueue
 {
-	OSDeclareDefaultStructors(IOSharedDataQueue)
+	OSDeclareDefaultStructors(IOSharedDataQueue);
 
 	struct ExpansionData {
 		UInt32 queueSize;

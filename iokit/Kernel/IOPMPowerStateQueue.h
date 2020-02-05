@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2001-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2001-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -37,7 +37,7 @@ typedef void (*IOPMPowerStateQueueAction)(OSObject *, uint32_t event, void *, ui
 
 class IOPMPowerStateQueue : public IOEventSource
 {
-	OSDeclareDefaultStructors(IOPMPowerStateQueue)
+	OSDeclareDefaultStructors(IOPMPowerStateQueue);
 
 private:
 	struct PowerEventEntry {
@@ -57,7 +57,7 @@ protected:
 public:
 	static IOPMPowerStateQueue * PMPowerStateQueue( OSObject * owner, Action action );
 
-	bool submitPowerEvent( uint32_t eventType, void * arg0 = 0, uint64_t arg1 = 0 );
+	bool submitPowerEvent( uint32_t eventType, void * arg0 = NULL, uint64_t arg1 = 0 );
 };
 
 #endif /* _IOPMPOWERSTATEQUEUE_H_ */

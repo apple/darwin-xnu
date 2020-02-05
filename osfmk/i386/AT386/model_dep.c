@@ -114,6 +114,7 @@
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>
 
+#include <IOKit/IOBSD.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IOHibernatePrivate.h>
 
@@ -198,11 +199,10 @@ extern void             kdp_snapshot_preflight(int pid, void *tracebuf,
     boolean_t enable_faulting);
 extern int              kdp_stack_snapshot_bytes_traced(void);
 
-#if DEVELOPMENT || DEBUG
 vm_offset_t panic_stackshot_buf = 0;
-size_t panic_stackshot_len = 0;
-#endif
+size_t panic_stackshot_buf_len = 0;
 
+size_t panic_stackshot_len = 0;
 /*
  * Backtrace a single frame.
  */
@@ -765,7 +765,8 @@ uint64_t panic_restart_timeout = ~(0ULL);
 void
 RecordPanicStackshot()
 {
-	int err = 0, bytes_traced = 0, bytes_used = 0, bytes_remaining = 0;
+	int err = 0;
+	size_t bytes_traced = 0, bytes_used = 0, bytes_remaining = 0;
 	char *stackshot_begin_loc = NULL;
 
 	/* Don't re-enter this code if we panic here */
@@ -786,136 +787,125 @@ RecordPanicStackshot()
 		return;
 	}
 
-	/*
-	 * Try to capture an in memory panic_stackshot (enabled during boot
-	 * on systems with co-processors).
-	 */
+	if (stackshot_active()) {
+		panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_NESTED;
+		panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
+		kdb_printf("Panicked during stackshot, skipping panic stackshot\n");
+		return;
+	}
+
+	/* Try to capture an in memory panic_stackshot */
 	if (extended_debug_log_enabled) {
-		if (stackshot_active()) {
-			panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_NESTED;
-			panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
-			kdb_printf("Panicked during stackshot, skipping panic stackshot\n");
-			return;
-		} else {
-			stackshot_begin_loc = debug_buf_ptr;
-
-			bytes_remaining = debug_buf_size - (unsigned int)((uintptr_t)stackshot_begin_loc - (uintptr_t)debug_buf_base);
-			err = kcdata_memory_static_init(&kc_panic_data, (mach_vm_address_t)stackshot_begin_loc,
-			    KCDATA_BUFFER_BEGIN_STACKSHOT, bytes_remaining, KCFLAG_USE_MEMCOPY);
-			if (err != KERN_SUCCESS) {
-				panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_ERROR;
-				panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
-				kdb_printf("Failed to initialize kcdata buffer for in-memory panic stackshot, skipping ...\n");
-				return;
-			}
-
-			kdp_snapshot_preflight(-1, (void *) stackshot_begin_loc, bytes_remaining,
-			    (STACKSHOT_SAVE_KEXT_LOADINFO | STACKSHOT_SAVE_LOADINFO | STACKSHOT_KCDATA_FORMAT |
-			    STACKSHOT_ENABLE_BT_FAULTING | STACKSHOT_ENABLE_UUID_FAULTING | STACKSHOT_FROM_PANIC |
-			    STACKSHOT_NO_IO_STATS | STACKSHOT_THREAD_WAITINFO), &kc_panic_data, 0);
-			err = do_stackshot(NULL);
-			bytes_traced = (int) kdp_stack_snapshot_bytes_traced();
-			bytes_used = (int) kcdata_memory_get_used_bytes(&kc_panic_data);
-
-			if ((err != KERN_SUCCESS) && (bytes_used > 0)) {
-				/*
-				 * We ran out of space while trying to capture a stackshot, try again without user frames.
-				 * It's not safe to log from here, but append a flag to the panic flags.
-				 */
-				panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_KERNEL_ONLY;
-				panic_stackshot_reset_state();
-
-				/* Erase the stackshot data (this region is pre-populated with the NULL character) */
-				memset(stackshot_begin_loc, '\0', bytes_used);
-
-				err = kcdata_memory_static_init(&kc_panic_data, (mach_vm_address_t)stackshot_begin_loc,
-				    KCDATA_BUFFER_BEGIN_STACKSHOT, bytes_remaining, KCFLAG_USE_MEMCOPY);
-				if (err != KERN_SUCCESS) {
-					panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_ERROR;
-					panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
-					kdb_printf("Failed to re-initialize kcdata buffer for kernel only in-memory panic stackshot, skipping ...\n");
-					return;
-				}
-
-				kdp_snapshot_preflight(-1, (void *) stackshot_begin_loc, bytes_remaining, (STACKSHOT_KCDATA_FORMAT |
-				    STACKSHOT_NO_IO_STATS | STACKSHOT_SAVE_KEXT_LOADINFO | STACKSHOT_ACTIVE_KERNEL_THREADS_ONLY |
-				    STACKSHOT_FROM_PANIC | STACKSHOT_THREAD_WAITINFO), &kc_panic_data, 0);
-				err = do_stackshot(NULL);
-				bytes_traced = (int) kdp_stack_snapshot_bytes_traced();
-				bytes_used = (int) kcdata_memory_get_used_bytes(&kc_panic_data);
-			}
-
-			if (err == KERN_SUCCESS) {
-				debug_buf_ptr += bytes_traced;
-				panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_SUCCEEDED;
-				panic_info->mph_stackshot_offset = PE_get_offset_into_panic_region(stackshot_begin_loc);
-				panic_info->mph_stackshot_len = bytes_traced;
-
-				panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
-				kdb_printf("\n** In Memory Panic Stackshot Succeeded ** Bytes Traced %d **\n", bytes_traced);
-			} else {
-				if (bytes_used > 0) {
-					/* Erase the stackshot data (this region is pre-populated with the NULL character) */
-					memset(stackshot_begin_loc, '\0', bytes_used);
-					panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_INCOMPLETE;
-
-					panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
-					kdb_printf("\n** In Memory Panic Stackshot Incomplete ** Bytes Filled %d ** Err %d\n", bytes_used, err);
-				} else {
-					bzero(stackshot_begin_loc, bytes_used);
-					panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_ERROR;
-
-					panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
-					kdb_printf("\n** In Memory Panic Stackshot Failed ** Bytes Traced %d, err %d\n", bytes_traced, err);
-				}
-			}
-		}
-#if DEVELOPMENT || DEBUG
-		if (panic_stackshot_buf != 0) {
-			/* We're going to try to take another stackshot, reset the state. */
-			panic_stackshot_reset_state();
-		}
-#endif /* DEVELOPMENT || DEBUG */
+		/* On coprocessor systems we write this into the extended debug log */
+		stackshot_begin_loc = debug_buf_ptr;
+		bytes_remaining = debug_buf_size - (unsigned int)((uintptr_t)stackshot_begin_loc - (uintptr_t)debug_buf_base);
+	} else if (panic_stackshot_buf != 0) {
+		/* On other systems we use the panic stackshot_buf */
+		stackshot_begin_loc = (char *) panic_stackshot_buf;
+		bytes_remaining = panic_stackshot_buf_len;
 	} else {
 		panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
-	}
-
-#if DEVELOPMENT || DEBUG
-
-	if (panic_stackshot_buf == 0) {
-		kdb_printf("No stackshot buffer allocated for file backed panic stackshot, skipping...\n");
 		return;
 	}
 
-	if (stackshot_active()) {
-		kdb_printf("Panicked during stackshot, skipping file backed panic stackshot\n");
-		return;
-	}
 
-	err = kcdata_memory_static_init(&kc_panic_data, (mach_vm_address_t)panic_stackshot_buf, KCDATA_BUFFER_BEGIN_STACKSHOT,
-	    PANIC_STACKSHOT_BUFSIZE, KCFLAG_USE_MEMCOPY);
+	err = kcdata_memory_static_init(&kc_panic_data, (mach_vm_address_t)stackshot_begin_loc,
+	    KCDATA_BUFFER_BEGIN_STACKSHOT, (unsigned int) bytes_remaining, KCFLAG_USE_MEMCOPY);
 	if (err != KERN_SUCCESS) {
-		kdb_printf("Failed to initialize kcdata buffer for file backed panic stackshot, skipping ...\n");
+		panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_ERROR;
+		panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
+		kdb_printf("Failed to initialize kcdata buffer for in-memory panic stackshot, skipping ...\n");
 		return;
 	}
 
-	kdp_snapshot_preflight(-1, (void *) panic_stackshot_buf, PANIC_STACKSHOT_BUFSIZE, (STACKSHOT_GET_GLOBAL_MEM_STATS | STACKSHOT_SAVE_LOADINFO | STACKSHOT_KCDATA_FORMAT |
-	    STACKSHOT_ENABLE_BT_FAULTING | STACKSHOT_ENABLE_UUID_FAULTING | STACKSHOT_FROM_PANIC | STACKSHOT_NO_IO_STATS
-	    | STACKSHOT_THREAD_WAITINFO), &kc_panic_data, 0);
+	uint32_t stackshot_flags = (STACKSHOT_SAVE_KEXT_LOADINFO | STACKSHOT_SAVE_LOADINFO | STACKSHOT_KCDATA_FORMAT |
+	    STACKSHOT_ENABLE_BT_FAULTING | STACKSHOT_ENABLE_UUID_FAULTING | STACKSHOT_FROM_PANIC |
+	    STACKSHOT_NO_IO_STATS | STACKSHOT_THREAD_WAITINFO);
+#if DEVELOPMENT
+	/*
+	 * Include the shared cache layout in panic stackshots on DEVELOPMENT kernels so that we can symbolicate
+	 * panic stackshots from corefiles.
+	 */
+	stackshot_flags |= STACKSHOT_COLLECT_SHAREDCACHE_LAYOUT;
+#endif
+
+	kdp_snapshot_preflight(-1, (void *) stackshot_begin_loc, (uint32_t) bytes_remaining, stackshot_flags, &kc_panic_data, 0);
 	err = do_stackshot(NULL);
 	bytes_traced = (int) kdp_stack_snapshot_bytes_traced();
-	if (bytes_traced > 0 && !err) {
-		panic_stackshot_len = bytes_traced;
-		kdb_printf("File backed panic stackshot succeeded, length: %u bytes\n", bytes_traced);
-	} else {
+	bytes_used = (int) kcdata_memory_get_used_bytes(&kc_panic_data);
+
+	if ((err != KERN_SUCCESS) && (bytes_used > 0)) {
+		/*
+		 * We ran out of space while trying to capture a stackshot, try again without user frames.
+		 * It's not safe to log from here (in case we're writing in the middle of the debug buffer on coprocessor systems)
+		 * but append a flag to the panic flags.
+		 */
+		panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_KERNEL_ONLY;
+		panic_stackshot_reset_state();
+
+		/* Erase the stackshot data (this region is pre-populated with the NULL character) */
+		memset(stackshot_begin_loc, '\0', bytes_used);
+
+		err = kcdata_memory_static_init(&kc_panic_data, (mach_vm_address_t)stackshot_begin_loc,
+		    KCDATA_BUFFER_BEGIN_STACKSHOT, (unsigned int) bytes_remaining, KCFLAG_USE_MEMCOPY);
+		if (err != KERN_SUCCESS) {
+			panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_ERROR;
+			panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
+			kdb_printf("Failed to re-initialize kcdata buffer for kernel only in-memory panic stackshot, skipping ...\n");
+			return;
+		}
+
+		stackshot_flags = (STACKSHOT_SAVE_KEXT_LOADINFO | STACKSHOT_KCDATA_FORMAT | STACKSHOT_FROM_PANIC |
+		    STACKSHOT_NO_IO_STATS | STACKSHOT_THREAD_WAITINFO | STACKSHOT_ACTIVE_KERNEL_THREADS_ONLY);
+#if DEVELOPMENT
+		/*
+		 * Include the shared cache layout in panic stackshots on DEVELOPMENT kernels so that we can symbolicate
+		 * panic stackshots from corefiles.
+		 */
+		stackshot_flags |= STACKSHOT_COLLECT_SHAREDCACHE_LAYOUT;
+#endif
+
+		kdp_snapshot_preflight(-1, (void *) stackshot_begin_loc, (uint32_t) bytes_remaining, stackshot_flags, &kc_panic_data, 0);
+		err = do_stackshot(NULL);
+		bytes_traced = (int) kdp_stack_snapshot_bytes_traced();
 		bytes_used = (int) kcdata_memory_get_used_bytes(&kc_panic_data);
+	}
+
+	if (err == KERN_SUCCESS) {
+		if (extended_debug_log_enabled) {
+			debug_buf_ptr += bytes_traced;
+		}
+		panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_SUCCEEDED;
+		panic_info->mph_stackshot_offset = PE_get_offset_into_panic_region(stackshot_begin_loc);
+		panic_info->mph_stackshot_len = (uint32_t) bytes_traced;
+
+		panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
+		kdb_printf("\n** In Memory Panic Stackshot Succeeded ** Bytes Traced %zu **\n", bytes_traced);
+
+		/* Used by the code that writes the buffer to disk */
+		panic_stackshot_buf = (vm_offset_t) stackshot_begin_loc;
+		panic_stackshot_len = bytes_traced;
+
+		if (!extended_debug_log_enabled && (gIOPolledCoreFileMode == kIOPolledCoreFileModeStackshot)) {
+			/* System configured to write panic stackshot to disk */
+			kern_dump(KERN_DUMP_STACKSHOT_DISK);
+		}
+	} else {
 		if (bytes_used > 0) {
-			kdb_printf("File backed panic stackshot incomplete, consumed %u bytes, error : %d \n", bytes_used, err);
+			/* Erase the stackshot data (this region is pre-populated with the NULL character) */
+			memset(stackshot_begin_loc, '\0', bytes_used);
+			panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_INCOMPLETE;
+
+			panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
+			kdb_printf("\n** In Memory Panic Stackshot Incomplete ** Bytes Filled %zu ** Err %d\n", bytes_used, err);
 		} else {
-			kdb_printf("File backed panic stackshot incomplete, consumed %u bytes, error : %d \n", bytes_used, err);
+			bzero(stackshot_begin_loc, bytes_used);
+			panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_ERROR;
+
+			panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
+			kdb_printf("\n** In Memory Panic Stackshot Failed ** Bytes Traced %zu, err %d\n", bytes_traced, err);
 		}
 	}
-#endif /* DEVELOPMENT || DEBUG */
 
 	return;
 }
@@ -991,9 +981,7 @@ SavePanicInfo(
 	 * Flush the panic log again with the stackshot or any relevant logging
 	 * from when we tried to capture it.
 	 */
-	if (extended_debug_log_enabled) {
-		paniclog_flush_internal(kPaniclogFlushStackshot);
-	}
+	paniclog_flush_internal(kPaniclogFlushStackshot);
 }
 
 void
@@ -1261,7 +1249,7 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 	boolean_t old_doprnt_hide_pointers = doprnt_hide_pointers;
 
 	if (pbtcpu != cn) {
-		hw_atomic_add(&pbtcnt, 1);
+		os_atomic_inc(&pbtcnt, relaxed);
 		/* Spin on print backtrace lock, which serializes output
 		 * Continue anyway if a timeout occurs.
 		 */
@@ -1382,7 +1370,7 @@ out:
 	 * event of panics on multiple processors.
 	 */
 	hw_lock_unlock(&pbtlock);
-	hw_atomic_sub(&pbtcnt, 1);
+	os_atomic_dec(&pbtcnt, relaxed);
 	/* Wait for other processors to complete output
 	 * Timeout and continue after PBT_TIMEOUT_CYCLES.
 	 */
@@ -1562,7 +1550,7 @@ print_launchd_info(void)
 	int             cn = cpu_number();
 
 	if (pbtcpu != cn) {
-		hw_atomic_add(&pbtcnt, 1);
+		os_atomic_inc(&pbtcnt, relaxed);
 		/* Spin on print backtrace lock, which serializes output
 		 * Continue anyway if a timeout occurs.
 		 */
@@ -1581,7 +1569,7 @@ print_launchd_info(void)
 	 * event of panics on multiple processors.
 	 */
 	hw_lock_unlock(&pbtlock);
-	hw_atomic_sub(&pbtcnt, 1);
+	os_atomic_dec(&pbtcnt, relaxed);
 	/* Wait for other processors to complete output
 	 * Timeout and continue after PBT_TIMEOUT_CYCLES.
 	 */

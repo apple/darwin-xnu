@@ -1,9 +1,49 @@
+/*
+ * Copyright (c) 2017-2019 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ *
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ *
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ *
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
 #ifndef SYS_MONOTONIC_H
 #define SYS_MONOTONIC_H
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <sys/cdefs.h>
+
+__BEGIN_DECLS
+
+struct mt_cpu_inscyc {
+	uint64_t mtci_instructions;
+	uint64_t mtci_cycles;
+};
+
+__END_DECLS
+
+#if !MACH_KERNEL_PRIVATE
+
 #include <sys/ioccom.h>
 
 __BEGIN_DECLS
@@ -13,10 +53,17 @@ __BEGIN_DECLS
  */
 
 #define MT_IOC(x) _IO('m', (x))
-
 #define MT_IOC_RESET MT_IOC(0)
-
 #define MT_IOC_ADD MT_IOC(1)
+#define MT_IOC_ENABLE MT_IOC(2)
+#define MT_IOC_COUNTS MT_IOC(3)
+#define MT_IOC_GET_INFO MT_IOC(4)
+
+__END_DECLS
+
+#endif /* !MACH_KERNEL_PRIVATE */
+
+__BEGIN_DECLS
 
 struct monotonic_config {
 	uint64_t event;
@@ -34,19 +81,12 @@ union monotonic_ctl_add {
 	} out;
 };
 
-/*
- * - Consider a separate IOC for disable -- to avoid the copyin to determine
- *   which way to set it.
- */
-#define MT_IOC_ENABLE MT_IOC(2)
-
 union monotonic_ctl_enable {
 	struct {
 		bool enable;
 	} in;
 };
 
-#define MT_IOC_COUNTS MT_IOC(3)
 
 union monotonic_ctl_counts {
 	struct {
@@ -58,7 +98,6 @@ union monotonic_ctl_counts {
 	} out;
 };
 
-#define MT_IOC_GET_INFO MT_IOC(4)
 
 union monotonic_ctl_info {
 	struct {
@@ -67,12 +106,18 @@ union monotonic_ctl_info {
 	} out;
 };
 
+__END_DECLS
+
 #if XNU_KERNEL_PRIVATE
+
+#if MONOTONIC
 
 #include <kern/monotonic.h>
 #include <machine/monotonic.h>
 #include <sys/kdebug.h>
 #include <kern/locks.h>
+
+__BEGIN_DECLS
 
 #ifdef MT_CORE_INSTRS
 #define COUNTS_INSTRS __counts[MT_CORE_INSTRS]
@@ -131,6 +176,10 @@ union monotonic_ctl_info {
 #define MT_KDBG_TMPTH_START(CODE) MT_KDBG_TMPTH_(CODE, DBG_FUNC_START)
 #define MT_KDBG_TMPTH_END(CODE) MT_KDBG_TMPTH_(CODE, DBG_FUNC_END)
 
+extern lck_grp_t * mt_lock_grp;
+
+int mt_dev_init(void);
+
 struct mt_device {
 	const char *mtd_name;
 	int(*const mtd_init)(struct mt_device *dev);
@@ -148,12 +197,10 @@ typedef struct mt_device *mt_device_t;
 
 extern struct mt_device mt_devices[];
 
-extern lck_grp_t *mt_lock_grp;
+__END_DECLS
 
-int mt_dev_init(void);
+#endif /* MONOTONIC */
 
 #endif /* XNU_KERNEL_PRIVATE */
-
-__END_DECLS
 
 #endif /* !defined(SYS_MONOTONIC_H) */

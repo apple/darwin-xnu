@@ -59,6 +59,17 @@ vm_offset_t gPanicBase;
 unsigned int gPanicSize;
 struct embedded_panic_header *panic_info = NULL;
 
+#if (DEVELOPMENT || DEBUG) && defined(XNU_TARGET_OS_BRIDGE)
+/*
+ * On DEVELOPMENT bridgeOS, we map the x86 panic region
+ * so we can include this data in bridgeOS corefiles
+ */
+uint64_t macos_panic_base = 0;
+unsigned int macos_panic_size = 0;
+
+struct macos_panic_header *mac_panic_header = NULL;
+#endif
+
 /* Maximum size of panic log excluding headers, in bytes */
 static unsigned int panic_text_len;
 
@@ -83,7 +94,20 @@ check_for_panic_log(void)
 	uint32_t *panic_region_length;
 
 	/*
-	 * Find the vram node in the device tree
+	 * DT properties for the panic region are populated by UpdateDeviceTree() in iBoot:
+	 *
+	 * chosen {
+	 *   embedded-panic-log-size = <0x00080000>;
+	 *   [a bunch of other stuff]
+	 * };
+	 *
+	 * pram {
+	 *   reg = <0x00000008_fbc48000 0x00000000_000b4000>;
+	 * };
+	 *
+	 * reg[0] is the physical address
+	 * reg[1] is the size of iBoot's kMemoryRegion_Panic (not used)
+	 * embedded-panic-log-size is the maximum amount of data to store in the buffer
 	 */
 	if (kSuccess != DTLookupEntry(0, "pram", &entry)) {
 		return;
@@ -101,16 +125,25 @@ check_for_panic_log(void)
 		return;
 	}
 
-	/*
-	 * Map the first page of VRAM into the kernel for use in case of
-	 * panic
-	 */
-	/* Note: map as normal memory. */
 	gPanicBase = ml_io_map_wcomb(reg_prop[0], panic_region_length[0]);
 
 	/* Deduct the size of the panic header from the panic region size */
 	panic_text_len = panic_region_length[0] - sizeof(struct embedded_panic_header);
 	gPanicSize = panic_region_length[0];
+
+#if DEVELOPMENT && defined(XNU_TARGET_OS_BRIDGE)
+	if (PE_consistent_debug_enabled()) {
+		uint64_t macos_panic_physbase = 0;
+		uint64_t macos_panic_physlen = 0;
+		/* Populate the macOS panic region data if it's present in consistent debug */
+		if (PE_consistent_debug_lookup_entry(kDbgIdMacOSPanicRegion, &macos_panic_physbase, &macos_panic_physlen)) {
+			macos_panic_base = ml_io_map_with_prot(macos_panic_physbase, macos_panic_physlen, VM_PROT_READ);
+			mac_panic_header = (struct macos_panic_header *) ((void *) macos_panic_base);
+			macos_panic_size = macos_panic_physlen;
+		}
+	}
+#endif /* DEVELOPMENT && defined(XNU_TARGET_OS_BRIDGE) */
+
 #endif
 	panic_info = (struct embedded_panic_header *)gPanicBase;
 
@@ -476,19 +509,12 @@ PE_call_timebase_callback(void)
 /*
  * The default PE_poll_input handler.
  */
-static int
+int
 PE_stub_poll_input(__unused unsigned int options, char *c)
 {
 	*c = uart_getc();
 	return 0;               /* 0 for success, 1 for unsupported */
 }
-
-/*
- * Called by the kernel debugger to poll for keyboard input.
- * Keyboard drivers may replace the default stub function
- * with their polled-mode input function.
- */
-int             (*PE_poll_input) (unsigned int options, char *c) = PE_stub_poll_input;
 
 /*
  * This routine will return 1 if you are running on a device with a variant

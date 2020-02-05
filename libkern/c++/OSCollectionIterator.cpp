@@ -45,7 +45,7 @@ OSCollectionIterator::initWithCollection(const OSCollection *inColl)
 
 	inColl->retain();
 	collection = inColl;
-	collIterator = 0;
+	collIterator = NULL;
 	initialUpdateStamp = 0;
 	valid = false;
 
@@ -59,7 +59,7 @@ OSCollectionIterator::withCollection(const OSCollection *inColl)
 
 	if (me && !me->initWithCollection(inColl)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -71,12 +71,12 @@ OSCollectionIterator::free()
 	if (collIterator) {
 		kfree(collIterator, collection->iteratorSize());
 		OSCONTAINER_ACCUMSIZE(-((size_t) collection->iteratorSize()));
-		collIterator = 0;
+		collIterator = NULL;
 	}
 
 	if (collection) {
 		collection->release();
-		collection = 0;
+		collection = NULL;
 	}
 
 	super::free();
@@ -128,9 +128,9 @@ OSCollectionIterator::getNextObject()
 	bool retVal;
 
 	if (!isValid()) {
-		return 0;
+		return NULL;
 	}
 
 	retVal = collection->getNextObjectForIterator(collIterator, &retObj);
-	return (retVal)? retObj : 0;
+	return (retVal)? retObj : NULL;
 }

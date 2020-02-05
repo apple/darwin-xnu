@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -48,7 +48,7 @@
 
 class IOPowerConnection : public IOService
 {
-	OSDeclareDefaultStructors(IOPowerConnection)
+	OSDeclareDefaultStructors(IOPowerConnection);
 
 protected:
 /*! @field parentKnowsState	true: parent knows state of its domain

@@ -48,6 +48,11 @@ struct mt_cpu {
 	uint64_t mtc_snaps[MT_CORE_NFIXED];
 	uint64_t mtc_counts[MT_CORE_NFIXED];
 	uint64_t mtc_counts_last[MT_CORE_NFIXED];
+	uint64_t mtc_npmis;
+	/*
+	 * Whether this CPU should be using PMCs.
+	 */
+	bool mtc_active;
 };
 
 struct mt_thread {
@@ -60,6 +65,8 @@ struct mt_task {
 };
 
 struct mt_cpu *mt_cur_cpu(void);
+
+uint64_t mt_count_pmis(void);
 void mt_mtc_update_fixed_counts(struct mt_cpu *mtc, uint64_t *counts,
     uint64_t *counts_since);
 uint64_t mt_mtc_update_count(struct mt_cpu *mtc, unsigned int ctr);

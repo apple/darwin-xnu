@@ -57,73 +57,56 @@ __BEGIN_DECLS
  * a dummy argument name is added.
  */
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
 int     posix_spawn(pid_t * __restrict, const char * __restrict,
     const posix_spawn_file_actions_t *,
     const posix_spawnattr_t * __restrict,
     char *const __argv[__restrict],
-    char *const __envp[__restrict]) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+    char *const __envp[__restrict]) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
 int     posix_spawnp(pid_t * __restrict, const char * __restrict,
     const posix_spawn_file_actions_t *,
     const posix_spawnattr_t * __restrict,
     char *const __argv[__restrict],
-    char *const __envp[__restrict]) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+    char *const __envp[__restrict]) __API_AVAILABLE(macos(10.5), ios(2.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
-int     posix_spawn_file_actions_addclose(posix_spawn_file_actions_t *, int) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+int     posix_spawn_file_actions_addclose(posix_spawn_file_actions_t *, int) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
 int     posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *, int,
-    int) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+    int) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
 int     posix_spawn_file_actions_addopen(
 	posix_spawn_file_actions_t * __restrict, int,
-	const char * __restrict, int, mode_t) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+	const char * __restrict, int, mode_t) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
-int     posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+int     posix_spawn_file_actions_destroy(posix_spawn_file_actions_t *) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
-int     posix_spawn_file_actions_init(posix_spawn_file_actions_t *) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+int     posix_spawn_file_actions_init(posix_spawn_file_actions_t *) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
-int     posix_spawnattr_destroy(posix_spawnattr_t *) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+int     posix_spawnattr_destroy(posix_spawnattr_t *) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
 int     posix_spawnattr_getsigdefault(const posix_spawnattr_t * __restrict,
-    sigset_t * __restrict) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+    sigset_t * __restrict) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
 int     posix_spawnattr_getflags(const posix_spawnattr_t * __restrict,
-    short * __restrict) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+    short * __restrict) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
 int     posix_spawnattr_getpgroup(const posix_spawnattr_t * __restrict,
-    pid_t * __restrict) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+    pid_t * __restrict) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
 int     posix_spawnattr_getsigmask(const posix_spawnattr_t * __restrict,
-    sigset_t * __restrict) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+    sigset_t * __restrict) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
-int     posix_spawnattr_init(posix_spawnattr_t *) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+int     posix_spawnattr_init(posix_spawnattr_t *) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
 int     posix_spawnattr_setsigdefault(posix_spawnattr_t * __restrict,
-    const sigset_t * __restrict) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+    const sigset_t * __restrict) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
-int     posix_spawnattr_setflags(posix_spawnattr_t *, short) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+int     posix_spawnattr_setflags(posix_spawnattr_t *, short) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
-int     posix_spawnattr_setpgroup(posix_spawnattr_t *, pid_t) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+int     posix_spawnattr_setpgroup(posix_spawnattr_t *, pid_t) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
 int     posix_spawnattr_setsigmask(posix_spawnattr_t * __restrict,
-    const sigset_t * __restrict) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+    const sigset_t * __restrict) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
 #if 0   /* _POSIX_PRIORITY_SCHEDULING [PS] : not supported */
 int     posix_spawnattr_setschedparam(posix_spawnattr_t * __restrict,
@@ -149,30 +132,30 @@ __END_DECLS
 
 __BEGIN_DECLS
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
 int     posix_spawnattr_getbinpref_np(const posix_spawnattr_t * __restrict,
-    size_t, cpu_type_t *__restrict, size_t *__restrict) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+    size_t, cpu_type_t *__restrict, size_t *__restrict) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
 int     posix_spawnattr_setauditsessionport_np(posix_spawnattr_t * __restrict,
-    mach_port_t) __OSX_AVAILABLE_STARTING(__MAC_10_6, __IPHONE_3_2);
+    mach_port_t) __API_AVAILABLE(macos(10.6), ios(3.2));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
 int     posix_spawnattr_setbinpref_np(posix_spawnattr_t * __restrict,
-    size_t, cpu_type_t *__restrict, size_t *__restrict) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+    size_t, cpu_type_t *__restrict, size_t *__restrict) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
 int     posix_spawnattr_setexceptionports_np(posix_spawnattr_t * __restrict,
     exception_mask_t, mach_port_t,
-    exception_behavior_t, thread_state_flavor_t) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+    exception_behavior_t, thread_state_flavor_t) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
 int     posix_spawnattr_setspecialport_np(posix_spawnattr_t * __restrict,
-    mach_port_t, int) __OSX_AVAILABLE_STARTING(__MAC_10_5, __IPHONE_2_0);
+    mach_port_t, int) __API_AVAILABLE(macos(10.5), ios(2.0)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
 
-__WATCHOS_PROHIBITED  __TVOS_PROHIBITED
 int     posix_spawn_file_actions_addinherit_np(posix_spawn_file_actions_t *,
-    int) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
+    int) __API_AVAILABLE(macos(10.7), ios(4.3)) __SPI_AVAILABLE(watchos(2.0), tvos(9.0), bridgeos(1.0));
+
+int     posix_spawn_file_actions_addchdir_np(posix_spawn_file_actions_t *,
+    const char * __restrict) __API_AVAILABLE(macos(10.15)) __SPI_AVAILABLE(ios(13.0), tvos(13.0), watchos(6.0), bridgeos(4.0));
+
+int     posix_spawn_file_actions_addfchdir_np(posix_spawn_file_actions_t *,
+    int) __API_AVAILABLE(macos(10.15)) __SPI_AVAILABLE(ios(13.0), tvos(13.0), watchos(6.0), bridgeos(4.0));
 
 __END_DECLS
 

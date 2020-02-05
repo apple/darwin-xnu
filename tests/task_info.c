@@ -13,6 +13,8 @@
 #include <sys/sysctl.h>
 #include <unistd.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 /* *************************************************************************************
  * Test the task_info API.
  *
@@ -163,6 +165,42 @@ T_DECL(task_vm_info, "tests task vm info", T_META_ASROOT(true), T_META_LTEPHASE(
 	    "task_info --rev2 call returned value 0x%llx for vm_info.max_address. Expected anything other than 0x%llx since "
 	    "this value should be modified by rev2",
 	    vm_info.max_address, CANARY);
+
+	/*
+	 * Test the REV4 version of TASK_VM_INFO.
+	 */
+
+	count                         = TASK_VM_INFO_REV4_COUNT;
+	vm_info.phys_footprint        = TESTPHYSFOOTPRINTVAL;
+	vm_info.min_address           = CANARY;
+	vm_info.max_address           = CANARY;
+	vm_info.limit_bytes_remaining = CANARY;
+
+	err = task_info(mach_task_self(), TASK_VM_INFO_PURGEABLE, (task_info_t)&vm_info, &count);
+
+	T_ASSERT_MACH_SUCCESS(err, "verify task_info call succeeded");
+
+	T_EXPECT_EQ(count, TASK_VM_INFO_REV4_COUNT, "task_info count(%d) is equal to TASK_VM_INFO_REV4_COUNT\n", count);
+
+	T_EXPECT_NE(vm_info.phys_footprint, (unsigned long long)TESTPHYSFOOTPRINTVAL,
+	    "task_info --rev4 call returned value %llu for vm_info.phys_footprint.  Expected anything other than %u since this "
+	    "value should be modified by rev4",
+	    vm_info.phys_footprint, TESTPHYSFOOTPRINTVAL);
+
+	T_EXPECT_NE(vm_info.min_address, CANARY,
+	    "task_info --rev4 call returned value 0x%llx for vm_info.min_address. Expected anything other than 0x%llx since "
+	    "this value should be modified by rev4",
+	    vm_info.min_address, CANARY);
+
+	T_EXPECT_NE(vm_info.max_address, CANARY,
+	    "task_info --rev4 call returned value 0x%llx for vm_info.max_address. Expected anything other than 0x%llx since "
+	    "this value should be modified by rev4",
+	    vm_info.max_address, CANARY);
+
+	T_EXPECT_NE(vm_info.limit_bytes_remaining, CANARY,
+	    "task_info --rev4 call returned value 0x%llx for vm_info.limit_bytes_remaining. Expected anything other than 0x%llx since "
+	    "this value should be modified by rev4",
+	    vm_info.limit_bytes_remaining, CANARY);
 }
 
 T_DECL(host_debug_info, "tests host debug info", T_META_ASROOT(true), T_META_LTEPHASE(LTE_POSTINIT))

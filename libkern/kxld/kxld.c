@@ -137,9 +137,8 @@ kxld_create_context(KXLDContext **_context,
 	check(logging_callback);
 	*_context = NULL;
 
-	context = kxld_alloc(sizeof(*context));
+	context = kxld_calloc(sizeof(*context));
 	require_action(context, finish, rval = KERN_RESOURCE_SHORTAGE);
-	bzero(context, sizeof(*context));
 
 	context->flags = flags;
 	context->allocate_callback = allocate_callback;
@@ -154,9 +153,8 @@ kxld_create_context(KXLDContext **_context,
 
 	kxld_set_logging_callback(logging_callback);
 
-	context->kext = kxld_alloc(kxld_kext_sizeof());
+	context->kext = kxld_calloc(kxld_kext_sizeof());
 	require_action(context->kext, finish, rval = KERN_RESOURCE_SHORTAGE);
-	bzero(context->kext, kxld_kext_sizeof());
 
 	/* Check if we already have an order array for this arch */
 
@@ -166,9 +164,8 @@ kxld_create_context(KXLDContext **_context,
 #else
 	/* In userspace, create the dictionary if it doesn't already exist */
 	if (!s_order_dict) {
-		s_order_dict = kxld_alloc(sizeof(*s_order_dict));
+		s_order_dict = kxld_calloc(sizeof(*s_order_dict));
 		require_action(s_order_dict, finish, rval = KERN_RESOURCE_SHORTAGE);
-		bzero(s_order_dict, sizeof(*s_order_dict));
 
 		rval = kxld_dict_init(s_order_dict, kxld_dict_uint32_hash,
 		    kxld_dict_uint32_cmp, 0);
@@ -181,9 +178,8 @@ kxld_create_context(KXLDContext **_context,
 	/* Create an order array for this arch if needed */
 
 	if (!context->section_order) {
-		section_order = kxld_alloc(sizeof(*section_order));
+		section_order = kxld_calloc(sizeof(*section_order));
 		require_action(section_order, finish, rval = KERN_RESOURCE_SHORTAGE);
-		bzero(section_order, sizeof(*section_order));
 
 #if KERNEL
 		s_section_order = section_order;
@@ -620,8 +616,6 @@ allocate_split_kext(KXLDContext *context, splitKextLinkInfo * link_info)
 	linked_object = kxld_page_alloc_untracked(link_info->linkedKextSize);
 	require(linked_object, finish);
 	link_info->linkedKext = linked_object;
-
-	bzero(linked_object, vmsize);
 	rval = KERN_SUCCESS;
 
 finish:
@@ -653,8 +647,14 @@ allocate_kext(KXLDContext *context,
 	    "Load address %p is not page-aligned.",
 	    (void *) (uintptr_t) vmaddr));
 
+	/* Zero out the memory before we fill it.  We fill this buffer in a
+	 * sparse fashion, and it's simpler to clear it now rather than
+	 * track and zero any pieces we didn't touch after we've written
+	 * all of the sections to memory.
+	 */
 	if (flags & kKxldAllocateWritable) {
 		linked_object = (u_char *) (u_long) vmaddr;
+		bzero(linked_object, vmsize);
 	} else {
 		linked_object = kxld_page_alloc_untracked(vmsize);
 		require(linked_object, finish);
@@ -664,12 +664,6 @@ allocate_kext(KXLDContext *context,
 
 	kxld_kext_set_linked_object_size(context->kext, vmsize);
 
-	/* Zero out the memory before we fill it.  We fill this buffer in a
-	 * sparse fashion, and it's simpler to clear it now rather than
-	 * track and zero any pieces we didn't touch after we've written
-	 * all of the sections to memory.
-	 */
-	bzero(linked_object, vmsize);
 	*vmaddr_out = vmaddr;
 	*vmsize_out = vmsize;
 

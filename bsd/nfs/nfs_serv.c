@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc.  All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -449,7 +449,7 @@ nfsrv_getattr(
 	error = nfsrv_credcheck(nd, ctx, nx, nxo);
 	nfsmerr_if(error);
 
-#if CONFIG_MAC
+#if CONFIG_MACF
 	if (mac_vnode_check_open(ctx, vp, FREAD)) {
 		error = ESTALE;
 	}
@@ -459,7 +459,7 @@ nfsrv_getattr(
 	nfsm_srv_vattr_init(&vattr, nd->nd_vers);
 	error = vnode_getattr(vp, &vattr, ctx);
 
-#if CONFIG_MAC
+#if CONFIG_MACF
 	/* XXXab: Comment in the VFS code makes it sound like
 	 *        some arguments can be filtered out, but not
 	 *        what it actually means. Hopefully not like
@@ -511,7 +511,7 @@ nfsrv_setattr(
 	struct nfs_export_options *nxo;
 	int error, preattrerr, postattrerr, gcheck;
 	struct nfs_filehandle nfh;
-	struct timespec guard = { 0, 0 };
+	struct timespec guard = { .tv_sec = 0, .tv_nsec = 0 };
 	kauth_action_t action;
 	uid_t saved_uid;
 

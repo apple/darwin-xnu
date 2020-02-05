@@ -26,10 +26,6 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-/*
- * kdebug.h - kernel_debug definitions
- */
-
 #ifndef BSD_SYS_KDEBUG_H
 #define BSD_SYS_KDEBUG_H
 
@@ -40,17 +36,12 @@ __BEGIN_DECLS
 
 #ifdef __APPLE_API_UNSTABLE
 
-#include <mach/clock_types.h>
-#include <stdint.h>
-
-#ifndef KERNEL
-#include <Availability.h>
-#endif
-
 /*
- * Kdebug is a facility for tracing events occurring on a system.
+ * Kdebug is a kernel facility for tracing events occurring on a system.  User
+ * space processes should prefer os_signpost, instead.
  *
- * All events are tagged with a 32-bit debugid:
+ * This header defines reserved debugids, which are 32-bit values that describe
+ * each event:
  *
  * +----------------+----------------+----------------------------+----+
  * |   Class (8)    |  Subclass (8)  |          Code (14)         |Func|
@@ -91,9 +82,9 @@ __BEGIN_DECLS
 
 /* Generate an eventid corresponding to Class, SubClass, and Code. */
 #define KDBG_EVENTID(Class, SubClass, Code)                \
-	((((Class)    &   0xff) << KDBG_CLASS_OFFSET)    | \
-	 (((SubClass) &   0xff) << KDBG_SUBCLASS_OFFSET) | \
-	 (((Code)     & 0x3fff) << KDBG_CODE_OFFSET))
+	(((unsigned)((Class)    &   0xff) << KDBG_CLASS_OFFSET)    | \
+	 ((unsigned)((SubClass) &   0xff) << KDBG_SUBCLASS_OFFSET) | \
+	 ((unsigned)((Code)     & 0x3fff) << KDBG_CODE_OFFSET))
 /* Deprecated macro using old naming convention. */
 #define KDBG_CODE(Class, SubClass, Code) \
 	KDBG_EVENTID(Class, SubClass, Code)
@@ -107,77 +98,16 @@ __BEGIN_DECLS
 	((uint16_t)(((Debugid) & KDBG_CSC_MASK) >> KDBG_CSC_OFFSET))
 #define KDBG_EXTRACT_CODE(Debugid) \
 	((uint16_t)(((Debugid) & KDBG_CODE_MASK) >> KDBG_CODE_OFFSET))
+#define KDBG_CLASS_ENCODE(Class, SubClass) KDBG_EVENTID(Class, SubClass, 0)
+#define KDBG_CLASS_DECODE(Debugid) (Debugid & KDBG_CSC_MASK)
 
 /* function qualifiers  */
-#define DBG_FUNC_START 1
-#define DBG_FUNC_END   2
-#define DBG_FUNC_NONE  0
-
-/*
- * Definitions to support IOP tracing.
- */
-
-#ifdef KERNEL_PRIVATE
-
-typedef enum {
-	/* Trace is now enabled; no arguments.  */
-	KD_CALLBACK_KDEBUG_ENABLED,
-	/* Trace is now disabled; no arguments.  */
-	KD_CALLBACK_KDEBUG_DISABLED,
-	/*
-	 * Request the latest entries from the IOP and block until complete; no
-	 * arguments.
-	 */
-	KD_CALLBACK_SYNC_FLUSH,
-	/*
-	 * The typefilter is enabled; a read-only pointer to the typefilter is
-	 * provided, valid only while in the callback.
-	 */
-	KD_CALLBACK_TYPEFILTER_CHANGED,
-} kd_callback_type;
-typedef void (*kd_callback_fn) (void* context, kd_callback_type reason, void* arg);
-
-struct kd_callback {
-	kd_callback_fn func;
-	void *context;
-	/* name of IOP, NUL-terminated */
-	char iop_name[8];
-};
-
-typedef struct kd_callback kd_callback_t;
-
-/*
- * Registers an IOP for participation in tracing.
- *
- * The registered callback function will be called with the
- * supplied context as the first argument, followed by a
- * kd_callback_type and an associated void* argument.
- *
- * The return value is a nonzero coreid that shall be used in
- * kernel_debug_enter() to refer to your IOP. If the allocation
- * failed, then 0 will be returned.
- *
- * Caveats:
- * Note that not all callback calls will indicate a change in
- * state (e.g. disabling trace twice would send two disable
- * notifications).
- */
-extern int kernel_debug_register_callback(kd_callback_t callback);
-
-extern void kernel_debug_enter(
-	uint32_t coreid,
-	uint32_t debugid,
-	uint64_t timestamp,
-	uintptr_t arg1,
-	uintptr_t arg2,
-	uintptr_t arg3,
-	uintptr_t arg4,
-	uintptr_t threadid
-	);
-
-#endif /* KERNEL_PRIVATE */
+#define DBG_FUNC_START 1U
+#define DBG_FUNC_END   2U
+#define DBG_FUNC_NONE  0U
 
 /* The Kernel Debug Classes  */
+
 #define DBG_MACH        1
 #define DBG_NETWORK     2
 #define DBG_FSYSTEM     3
@@ -196,6 +126,7 @@ extern void kernel_debug_enter(
 #define DBG_QT          32
 #define DBG_APPS        33
 #define DBG_LAUNCHD     34
+#define DBG_SILICON     35
 #define DBG_PERF        37
 #define DBG_IMPORTANCE  38
 #define DBG_BANK        40
@@ -209,148 +140,7 @@ extern void kernel_debug_enter(
 #define DBG_UMALLOC     51
 #define DBG_TURNSTILE   53
 
-
 #define DBG_MIG         255
-
-#ifdef PRIVATE
-
-/*
- * Private kdebug userspace API
- */
-#ifndef KERNEL
-#include <stdbool.h>
-
-/*
- * OS components can use the full precision of the "code" field
- * (Class, SubClass, Code) to inject events using kdebug_trace() by
- * using:
- *
- * kdebug_trace(KDBG_CODE(DBG_XPC, 15, 1) | DBG_FUNC_NONE, 1, 2, 3, 4);
- *
- * These trace points can be included in production code, since they
- * use reserved, non-overlapping ranges. The performance impact when
- * kernel tracing is not enabled is minimal. Classes can be reserved
- * by filing a Radar in xnu|all.
- *
- * 64-bit arguments may be truncated if the system is using a 32-bit
- * kernel.
- *
- * On error, -1 will be returned and errno will indicate the error.
- */
-extern int kdebug_trace(
-	uint32_t code,
-	uint64_t arg1,
-	uint64_t arg2,
-	uint64_t arg3,
-	uint64_t arg4)
-__OSX_AVAILABLE(10.10.2) __IOS_AVAILABLE(8.2);
-
-/*!
- * @function kdebug_trace_string
- *
- * @discussion
- * This function emits strings to kdebug trace along with an ID and allows
- * for previously-traced strings to be overwritten and invalidated.
- *
- * To start tracing a string and generate an ID to use to refer to it:
- *
- *      string_id = kdebug_trace_string(debugid, 0, "string");
- *
- * To replace a string previously traced:
- *
- *      string_id = kdebug_trace_string(debugid, string_id, "new string");
- *
- * To invalidate a string ID:
- *
- *      string_id = kdebug_trace_string(debugid, string_id, NULL);
- *
- * To check for errors:
- *
- *      if ((int64_t)string_id == -1) { perror("string error") }
- *
- * @param debugid
- * The `debugid` to check if its enabled before tracing and include as
- * an argument in the event containing the string.
- *
- * Some classes or subclasses are reserved for specific uses and are not
- * allowed to be used with this function.  No function qualifiers are
- * allowed on `debugid`.
- *
- * @param str_id
- * When 0, a new ID will be generated and returned if tracing is
- * enabled.
- *
- * Otherwise `str_id` must contain an ID that was previously generated
- * with this function.  Clents should pass NULL in `str` if `str_id`
- * is no longer in use.  Otherwise, the string previously mapped to
- * `str_id` will be overwritten with the contents of `str`.
- *
- * @param str
- * A NUL-terminated 'C' string containing the characters that should be
- * traced alongside `str_id`.
- *
- * If necessary, the string will be truncated at an
- * implementation-defined length.  The string must not be the empty
- * string, but can be NULL if a valid `str_id` is provided.
- *
- * @return
- * 0 if tracing is disabled or `debugid` is being filtered out of trace.
- * It can also return (int64_t)-1 if an error occured. Otherwise,
- * it returns the ID to use to refer to the string in future
- * kdebug_trace(2) calls.
- *
- * The errors that can occur are:
- *
- * EINVAL
- *      There are function qualifiers on `debugid`, `str` is empty, or
- *      `str_id` was not generated by this function.
- * EPERM
- *      The `debugid`'s class or subclass is reserved for internal use.
- * EFAULT
- *      `str` is an invalid address or NULL when `str_id` is 0.
- */
-extern uint64_t kdebug_trace_string(uint32_t debugid, uint64_t str_id,
-    const char *str)
-__OSX_AVAILABLE(10.11) __IOS_AVAILABLE(9.0);
-
-/*
- * Although the performance impact of kdebug_trace() when kernel
- * tracing is not enabled is minimal, it may require the caller to
- * perform an expensive calculation/summarization. This cost can be
- * skipped by checking the kdebug_is_enabled() predicate:
- *
- * if (kdebug_is_enabled(KDBG_CODE(DBG_XPC, 15, 1))) {
- *     uint64_t arg1 = ...;
- *     uint64_t arg2 = ...;
- *     kdebug_trace(KDBG_CODE(DBG_XPC, 15, 1) | DBG_FUNC_NONE, arg1, arg2, 0, 0);
- * }
- *
- * If tracing is enabled for the code at the time of the check, 1
- * will be returned. Otherwise, 0 will be returned.
- */
-extern bool kdebug_is_enabled(uint32_t code)
-__OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0)
-__WATCHOS_AVAILABLE(3.0) __TVOS_AVAILABLE(10.0);
-
-/*
- * Returns a pointer to the userspace typefilter, if one is available.
- * May return NULL.
- */
-extern void *kdebug_typefilter(void)
-__OSX_AVAILABLE(10.12) __IOS_AVAILABLE(10.0)
-__WATCHOS_AVAILABLE(3.0) __TVOS_AVAILABLE(10.0);
-
-#endif /* !KERNEL (Private kdebug userspace API) */
-#endif /* PRIVATE */
-
-#ifdef XNU_KERNEL_PRIVATE
-/* Used in early boot to log strings spanning only a single tracepoint. */
-extern void kernel_debug_string_early(const char *message);
-/* Used to trace strings within kdebug tracepoints on arbitrary eventids. */
-extern void kernel_debug_string_simple(uint32_t eventid, const char *str);
-/* Only used by ktrace to reset kdebug.  ktrace_lock must be held. */
-extern void kdebug_reset(void);
-#endif /* XNU_KERNEL_PRIVATE */
 
 /* **** The Kernel Debug Sub Classes for Mach (DBG_MACH) **** */
 #define DBG_MACH_EXCP_KTRAP_x86 0x02 /* Kernel Traps on x86 */
@@ -387,6 +177,7 @@ extern void kdebug_reset(void);
 #define DBG_MACH_THREAD_GROUP   0xA6 /* Thread groups */
 #define DBG_MACH_COALITION      0xA7 /* Coalitions */
 #define DBG_MACH_SHAREDREGION   0xA8 /* Shared region */
+#define DBG_MACH_SCHED_CLUTCH   0xA9 /* Clutch scheduler */
 #define DBG_MACH_IO             0xAA /* I/O */
 
 /* Codes for DBG_MACH_IO */
@@ -456,10 +247,20 @@ extern void kdebug_reset(void);
 #define MACH_AMP_SIGNAL_SPILL      0x32 /* AMP spill signal sent to cpuid */
 #define MACH_AMP_STEAL             0x33 /* AMP thread stolen or spilled */
 #define MACH_SCHED_LOAD_EFFECTIVE  0x34 /* Effective scheduler load */
-#define MACH_PROMOTED              0x35 /* thread promoted due to mutex priority promotion */
-#define MACH_UNPROMOTED            0x36 /* thread unpromoted due to mutex priority promotion */
-#define MACH_PROMOTED_UPDATE       0x37 /* thread already promoted, but promotion priority changed */
+/* unused  MACH_PROMOTED              0x35 was: thread promoted due to mutex priority promotion */
+/* unused  MACH_UNPROMOTED            0x36 was: thread unpromoted due to mutex priority promotion */
+/* unused  MACH_PROMOTED_UPDATE       0x37 was: thread already promoted, but promotion priority changed */
 #define MACH_QUIESCENT_COUNTER     0x38 /* quiescent counter tick */
+#define MACH_TURNSTILE_USER_CHANGE 0x39 /* base priority change because of turnstile */
+#define MACH_AMP_RECOMMENDATION_CHANGE 0x3a /* Thread group recommendation change */
+#define MACH_TURNSTILE_KERNEL_CHANGE 0x40 /* sched priority change because of turnstile */
+
+/* Codes for Clutch Scheduler (DBG_MACH_SCHED_CLUTCH) */
+#define MACH_SCHED_CLUTCH_ROOT_BUCKET_STATE     0x0
+#define MACH_SCHED_CLUTCH_TG_BUCKET_STATE       0x1
+#define MACH_SCHED_CLUTCH_THREAD_SELECT         0x2
+#define MACH_SCHED_CLUTCH_THREAD_STATE          0x3
+#define MACH_SCHED_CLUTCH_TG_BUCKET_PRI         0x4
 
 /* Variants for MACH_MULTIQ_DEQUEUE */
 #define MACH_MULTIQ_BOUND     1
@@ -491,7 +292,8 @@ extern void kdebug_reset(void);
 #define MACH_IPC_VOUCHER_DESTROY                0x9     /* Voucher removed from global voucher hashtable */
 #define MACH_IPC_KMSG_INFO                      0xa     /* Send/Receive info for a kmsg */
 #define MACH_IPC_KMSG_LINK                      0xb     /* link a kernel kmsg pointer to user mach_msg_header_t */
-#define MACH_IPC_PORT_ENTRY_MODIFY      0xc     /* A port space gained or lost a port right (reference) */
+#define MACH_IPC_PORT_ENTRY_MODIFY              0xc     /* A port space gained or lost a port right (reference) */
+#define MACH_IPC_DESTROY_GUARDED_DESC           0xd     /* Unable to receive a guarded descriptor */
 
 /* Codes for thread groups (DBG_MACH_THREAD_GROUP) */
 #define MACH_THREAD_GROUP_NEW           0x0
@@ -530,6 +332,7 @@ extern void kdebug_reset(void);
 #define PMAP__SWITCH            0x12
 #define PMAP__TTE               0x13
 #define PMAP__SWITCH_USER_TTB   0x14
+#define PMAP__UPDATE_CACHING    0x15
 
 /* Codes for clock (DBG_MACH_CLOCK) */
 #define MACH_EPOCH_CHANGE       0x0     /* wake epoch change */
@@ -654,6 +457,12 @@ extern void kdebug_reset(void);
 #define DBG_HIBERNATE           51      /* hibernation related events */
 #define DBG_IOTHUNDERBOLT       52      /* Thunderbolt */
 #define DBG_BOOTER              53      /* booter related events */
+#define DBG_IOAUDIO2            54      /* Audio (extended) */
+
+#define DBG_IOSURFACEPA         64      /* IOSurface page mappings */
+#define DBG_IOMDPA              65      /* IOMemoryDescriptor page mappings */
+#define DBG_IODARTPA            66      /* DART page mappings */
+/* **** 67-79 reserved for physical address mapping information **** */
 
 /* Backwards compatibility */
 #define DBG_IOPOINTING          DBG_IOHID                       /* OBSOLETE: Use DBG_IOHID instead */
@@ -686,6 +495,9 @@ extern void kdebug_reset(void);
 #define DBG_DRVSMC           25 /* System Management Controller */
 #define DBG_DRVMACEFIMANAGER 26 /* Mac EFI Manager */
 #define DBG_DRVANE           27 /* ANE */
+#define DBG_DRVETHERNET      28 /* Ethernet */
+#define DBG_DRVMCC           29 /* Memory Cache Controller */
+#define DBG_DRVACCESSORY     30 /* Accessories */
 
 /* Backwards compatibility */
 #define DBG_DRVPOINTING         DBG_DRVHID      /* OBSOLETE: Use DBG_DRVHID instead */
@@ -698,12 +510,7 @@ extern void kdebug_reset(void);
 #define DBG_DLIL_PR_FLT 4       /* DLIL Protocol Filter */
 #define DBG_DLIL_IF_FLT 5       /* DLIL Interface FIlter */
 
-
-/*
- * The Kernel Debug Sub Classes for File System (DBG_FSYSTEM)
- *
- * Please NOTE: sub class values 0xC and 0xD are currently unused.
- */
+/* The Kernel Debug Sub Classes for File System (DBG_FSYSTEM) */
 #define DBG_FSRW      0x1     /* reads and writes to the filesystem */
 #define DBG_DKRW      0x2     /* reads and writes to the disk */
 #define DBG_FSVN      0x3     /* vnode operations (inc. locking/unlocking) */
@@ -720,6 +527,8 @@ extern void kdebug_reset(void);
 #define DBG_ACFS      0x10    /* Xsan-specific events; see the XsanFS project */
 #define DBG_THROTTLE  0x11    /* I/O Throttling events */
 #define DBG_DECMP     0x12    /* Decmpfs-specific events */
+#define DBG_VFS       0x13    /* VFS layer events */
+#define DBG_LIVEFS    0x14    /* LiveFS events; see the UserFS project */
 #define DBG_CONTENT_PROT 0xCF /* Content Protection Events: see bsd/sys/cprotect.h */
 
 /*
@@ -756,7 +565,7 @@ extern void kdebug_reset(void);
 #define BSD_MEMSTAT_JETSAM           2  /* LRU jetsam */
 #define BSD_MEMSTAT_JETSAM_HIWAT     3  /* highwater jetsam */
 #define BSD_MEMSTAT_FREEZE           4  /* freeze process */
-#define BSD_MEMSTAT_LATENCY_COALESCE 5  /* delay imposed to coalesce jetsam reports */
+#define BSD_MEMSTAT_FREEZE_SCAN      5  /* select a process to freeze and freeze it */
 #define BSD_MEMSTAT_UPDATE           6  /* priority update */
 #define BSD_MEMSTAT_IDLE_DEMOTE      7  /* idle demotion fired */
 #define BSD_MEMSTAT_CLEAR_ERRORS     8  /* reset termination error state */
@@ -769,6 +578,9 @@ extern void kdebug_reset(void);
 #define BSD_MEMSTAT_CHANGE_PRIORITY 14  /* priority changed */
 #endif /* PRIVATE */
 #define BSD_MEMSTAT_FAST_JETSAM     15  /* Aggressive jetsam ("clear-the-deck") */
+#define BSD_MEMSTAT_COMPACTOR_RUN   16  /* run VM compactor after process kill */
+#define BSD_MEMSTAT_FREEZE_DISABLE  17  /* disable freeze and kill frozen processes */
+#define BSD_MEMSTAT_RELAUNCH_FLAGS  18  /* flags representing jetsam behavior; based on launchd data */
 
 /* Codes for BSD subcode class DBG_BSD_KEVENT */
 #define BSD_KEVENT_KQ_PROCESS_BEGIN   1
@@ -833,9 +645,11 @@ extern void kdebug_reset(void);
 #define DBG_MT_TMPCPU 0xff
 
 /* The Kernel Debug Sub Classes for DBG_MISC */
-#define DBG_EVENT       0x10
-#define DBG_MISC_LAYOUT 0x1a
-#define DBG_BUFFER      0x20
+#define DBG_EVENT              0x10
+#define DBG_MISC_INSTRUMENTS   0x11
+#define DBG_MISC_INSTRUMENTSBT 0x12
+#define DBG_MISC_LAYOUT        0x1a
+#define DBG_BUFFER             0x20
 
 /* The Kernel Debug Sub Classes for DBG_DYLD */
 #define DBG_DYLD_UUID (5)
@@ -890,21 +704,57 @@ extern void kdebug_reset(void);
 #define IO_THROTTLE_DISABLE     0x3
 #define IO_TIER_UPL_MISMATCH    0x4
 
-
 /* Subclasses for MACH Importance Policies (DBG_IMPORTANCE) */
 /* TODO: Split up boost and task policy? */
-#define IMP_ASSERTION           0x10    /* Task takes/drops a boost assertion */
-#define IMP_BOOST               0x11    /* Task boost level changed */
-#define IMP_MSG                 0x12    /* boosting message sent by donating task on donating port */
-#define IMP_WATCHPORT           0x13    /* port marked as watchport, and boost was transferred to the watched task */
-#define IMP_TASK_SUPPRESSION    0x17    /* Task changed suppression behaviors */
-#define IMP_TASK_APPTYPE        0x18    /* Task launched with apptype */
-#define IMP_UPDATE              0x19    /* Requested -> effective calculation */
-#define IMP_USYNCH_QOS_OVERRIDE 0x1A    /* Userspace synchronization applied QoS override to resource owning thread */
-#define IMP_DONOR_CHANGE        0x1B    /* The iit_donor bit changed */
-#define IMP_MAIN_THREAD_QOS     0x1C    /* The task's main thread QoS was set */
-#define IMP_SYNC_IPC_QOS        0x1D    /* Sync IPC QOS override */
-/* DBG_IMPORTANCE subclasses  0x20 - 0x3F reserved for task policy flavors */
+#define IMP_ASSERTION                       0x10    /* Task takes/drops a boost assertion */
+#define IMP_BOOST                           0x11    /* Task boost level changed */
+#define IMP_MSG                             0x12    /* boosting message sent by donating task on donating port */
+#define IMP_WATCHPORT                       0x13    /* port marked as watchport, and boost was transferred to the watched task */
+#define IMP_TASK_SUPPRESSION                0x17    /* Task changed suppression behaviors */
+#define IMP_TASK_APPTYPE                    0x18    /* Task launched with apptype */
+#define IMP_UPDATE                          0x19    /* Requested -> effective calculation */
+#define IMP_USYNCH_QOS_OVERRIDE             0x1A    /* Userspace synchronization applied QoS override to resource owning thread */
+#define IMP_DONOR_CHANGE                    0x1B    /* The iit_donor bit changed */
+#define IMP_MAIN_THREAD_QOS                 0x1C    /* The task's main thread QoS was set */
+#define IMP_SYNC_IPC_QOS                    0x1D    /* Sync IPC QOS override */
+/* DBG_IMPORTANCE subclasses  0x20 - 0x3F are reserved for task policy flavors */
+
+/* thread and task attributes */
+#define IMP_TASK_POLICY_DARWIN_BG           0x21
+#define IMP_TASK_POLICY_IOPOL               0x22
+#define IMP_TASK_POLICY_IO                  0x23
+#define IMP_TASK_POLICY_PASSIVE_IO          0x24
+
+/* task only attributes */
+#define IMP_TASK_POLICY_DARWIN_BG_IOPOL     0x27
+#define IMP_TASK_POLICY_TAL                 0x28
+#define IMP_TASK_POLICY_BOOST               0x29
+#define IMP_TASK_POLICY_ROLE                0x2A
+/* unused                                   0x2B */
+#define IMP_TASK_POLICY_TERMINATED          0x2C
+#define IMP_TASK_POLICY_NEW_SOCKETS_BG      0x2D
+#define IMP_TASK_POLICY_SUP_ACTIVE          0x2E
+#define IMP_TASK_POLICY_LATENCY_QOS         0x2F
+#define IMP_TASK_POLICY_THROUGH_QOS         0x30
+#define IMP_TASK_POLICY_WATCHERS_BG         0x31
+
+#define IMP_TASK_POLICY_SFI_MANAGED         0x34
+#define IMP_TASK_POLICY_ALL_SOCKETS_BG      0x37
+
+#define IMP_TASK_POLICY_BASE_LATENCY_AND_THROUGHPUT_QOS  0x39 /* latency as value1, throughput as value2 */
+#define IMP_TASK_POLICY_OVERRIDE_LATENCY_AND_THROUGHPUT_QOS  0x3A /* latency as value1, throughput as value2 */
+
+/* thread only attributes */
+#define IMP_TASK_POLICY_PIDBIND_BG          0x32
+/* unused                                   0x33 */
+/* reserved                                 0x35 */
+#define IMP_TASK_POLICY_QOS_OVERRIDE        0x36
+#define IMP_TASK_POLICY_QOS_AND_RELPRIO     0x38 /* QoS as value1, relative priority as value2 */
+#define IMP_TASK_POLICY_QOS_WORKQ_OVERRIDE  0x3B
+#define IMP_TASK_POLICY_QOS_PROMOTE         0x3C
+#define IMP_TASK_POLICY_QOS_KEVENT_OVERRIDE 0x3D
+#define IMP_TASK_POLICY_QOS_IPC_OVERRIDE    IMP_TASK_POLICY_QOS_KEVENT_OVERRIDE /* legacy name */
+#define IMP_TASK_POLICY_QOS_SERVICER_OVERRIDE 0x3E
 
 /* Codes for IMP_ASSERTION */
 #define IMP_HOLD                0x2     /* Task holds a boost assertion */
@@ -998,8 +848,8 @@ extern void kdebug_reset(void);
 
 /**********************************************************************/
 
-#define KDBG_MIGCODE(msgid) ((DBG_MIG << KDBG_CLASS_OFFSET) | \
-	                     (((msgid) & 0x3fffff) << KDBG_CODE_OFFSET))
+#define KDBG_MIGCODE(msgid) (((unsigned)DBG_MIG << KDBG_CLASS_OFFSET) | \
+	                     ((unsigned)((msgid) & 0x3fffff) << KDBG_CODE_OFFSET))
 
 #define MACHDBG_CODE(SubClass, code) KDBG_CODE(DBG_MACH, SubClass, code)
 #define NETDBG_CODE(SubClass, code) KDBG_CODE(DBG_NETWORK, SubClass, code)
@@ -1008,6 +858,7 @@ extern void kdebug_reset(void);
 #define IOKDBG_CODE(SubClass, code) KDBG_CODE(DBG_IOKIT, SubClass, code)
 #define DRVDBG_CODE(SubClass, code) KDBG_CODE(DBG_DRIVERS, SubClass, code)
 #define TRACEDBG_CODE(SubClass, code) KDBG_CODE(DBG_TRACE, SubClass, code)
+#define SILICONDBG_CODE(SubClass, code) KDBG_CODE(DBG_SILICON, SubClass, code)
 #define MISCDBG_CODE(SubClass, code) KDBG_CODE(DBG_MISC, SubClass, code)
 #define DLILDBG_CODE(SubClass, code) KDBG_CODE(DBG_DLIL, SubClass, code)
 #define SECURITYDBG_CODE(SubClass, code) KDBG_CODE(DBG_SECURITY, SubClass, code)
@@ -1029,7 +880,6 @@ extern void kdebug_reset(void);
 
 #define PMAP_CODE(code) MACHDBG_CODE(DBG_MACH_PMAP, code)
 
-
 #define IMPORTANCE_CODE(SubClass, code) KDBG_CODE(DBG_IMPORTANCE, (SubClass), (code))
 #define BANK_CODE(SubClass, code) KDBG_CODE(DBG_BANK, (SubClass), (code))
 #define ATM_CODE(SubClass, code) KDBG_CODE(DBG_ATM, (SubClass), (code))
@@ -1039,824 +889,20 @@ extern void kdebug_reset(void);
 #define COREDUETDBG_CODE(code) DAEMONDBG_CODE(DBG_DAEMON_COREDUET, code)
 #define POWERDDBG_CODE(code) DAEMONDBG_CODE(DBG_DAEMON_POWERD, code)
 
-/*
- * To use kdebug in the kernel:
- *
- * #include <sys/kdebug.h>
- *
- * #define DBG_NETIPINIT NETDBG_CODE(DBG_NETIP, 1)
- *
- * void
- * ip_init(void)
- * {
- *     KDBG(DBG_NETIPINIT | DBG_FUNC_START, 1, 2, 3, 4);
- *     ...
- *     KDBG(DBG_NETIPINIT);
- *     ...
- *     KDBG(DBG_NETIPINIT | DBG_FUNC_END);
- * }
- */
-
-#ifdef KERNEL_PRIVATE
-
-/*
- * The KDBG{,_DEBUG,_RELEASE,_FILTERED} macros are the preferred method of
- * making tracepoints.
- *
- * Kernel pointers must be unslid or permuted using VM_KERNEL_UNSLIDE_OR_PERM.
- * Do not trace any sensitive data.
- */
-
-/*
- * Traced on debug and development (and release macOS) kernels.
- */
-#define KDBG(x, ...) KDBG_(, x, ## __VA_ARGS__, 4, 3, 2, 1, 0)
-
-/*
- * Traced on debug and development (and release macOS) kernels if explicitly
- * requested.  Omitted from tracing without a typefilter.
- */
-#define KDBG_FILTERED(x, ...) KDBG_(_FILTERED, x, ## __VA_ARGS__, 4, 3, 2, 1, 0)
-
-/*
- * Traced on debug and development (and release macOS) kernels, even if the
- * process filter would reject it.
- */
-#define KDBG_RELEASE_NOPROCFILT(x, ...) \
-	        KDBG_(_RELEASE_NOPROCFILT, x, ## __VA_ARGS__, 4, 3, 2, 1, 0)
-
-/*
- * Traced on debug, development, and release kernels.
- *
- * Only use this tracepoint if the events are required for a shipping trace
- * tool.
- */
-#define KDBG_RELEASE(x, ...) KDBG_(_RELEASE, x, ## __VA_ARGS__, 4, 3, 2, 1, 0)
-
-/*
- * Traced only on debug kernels.
- */
-#define KDBG_DEBUG(x, ...) KDBG_(_DEBUG, x, ## __VA_ARGS__, 4, 3, 2, 1, 0)
-
-#define KDBG_(f, x, a, b, c, d, n, ...) KDBG##n(f, x, a, b, c, d)
-#define KDBG0(f, x, a, b, c, d) KERNEL_DEBUG_CONSTANT##f(x, 0, 0, 0, 0, 0)
-#define KDBG1(f, x, a, b, c, d) KERNEL_DEBUG_CONSTANT##f(x, a, 0, 0, 0, 0)
-#define KDBG2(f, x, a, b, c, d) KERNEL_DEBUG_CONSTANT##f(x, a, b, 0, 0, 0)
-#define KDBG3(f, x, a, b, c, d) KERNEL_DEBUG_CONSTANT##f(x, a, b, c, 0, 0)
-#define KDBG4(f, x, a, b, c, d) KERNEL_DEBUG_CONSTANT##f(x, a, b, c, d, 0)
-
-#endif /* defined(KERNEL_PRIVATE) */
-
-extern unsigned int kdebug_enable;
-
-/*
- * Bits used by kdebug_enable.  These control which events are traced at
- * runtime.
- */
-#define KDEBUG_ENABLE_TRACE   (1U << 0)
-#define KDEBUG_ENABLE_ENTROPY (1U << 1) /* obsolete */
-#define KDEBUG_ENABLE_CHUD    (1U << 2) /* obsolete */
-#define KDEBUG_ENABLE_PPT     (1U << 3)
-#define KDEBUG_ENABLE_SERIAL  (1U << 4)
-
-#define KDEBUG_TRACE (KDEBUG_ENABLE_TRACE)
-
-/*
- * Specify KDEBUG_PPT to indicate that the event belongs to the limited PPT set.
- * PPT is deprecated -- use a typefilter and the PPTDBG class instead.
- */
-#define KDEBUG_PPT    (KDEBUG_ENABLE_PPT)
-#define KDEBUG_COMMON (KDEBUG_ENABLE_TRACE | KDEBUG_ENABLE_PPT)
-
-/*
- * The kernel debug configuration level.  These values control which events are
- * compiled in under different build configurations.
- *
- * Infer the supported kernel debug event level from config option.  Use
- * (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) as a guard to protect unaudited debug
- * code.
- */
-#define KDEBUG_LEVEL_NONE     0
-#define KDEBUG_LEVEL_IST      1
-#define KDEBUG_LEVEL_STANDARD 2
-#define KDEBUG_LEVEL_FULL     3
-
-#if NO_KDEBUG
-#define KDEBUG_LEVEL KDEBUG_LEVEL_NONE
-#elif IST_KDEBUG
-#define KDEBUG_LEVEL KDEBUG_LEVEL_IST
-// currently configured for the iOS release kernel
-#elif KDEBUG
-#define KDEBUG_LEVEL KDEBUG_LEVEL_FULL
-#else
-#define KDEBUG_LEVEL KDEBUG_LEVEL_STANDARD
-/*
- * Currently, all other kernel configurations (development, etc) build with
- * KDEBUG_LEVEL_STANDARD.  As a result, KERNEL_DEBUG_CONSTANT*() are on by
- * default but KERNEL_DEBUG*() are not.
- */
-#endif
-
-#ifdef XNU_KERNEL_PRIVATE
-#define KDBG_IMPROBABLE __improbable
-#else
-#define KDBG_IMPROBABLE
-#endif
-
-/*
- * KERNEL_DEBUG_CONSTANT_FILTERED events are omitted from tracing unless they
- * are explicitly requested in the typefilter.  They are not emitted when
- * tracing without a typefilter.
- */
-#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD)
-#define KERNEL_DEBUG_CONSTANT_FILTERED(x, a, b, c, d, ...)           \
-	do {                                                             \
-	        if (KDBG_IMPROBABLE(kdebug_enable & ~KDEBUG_ENABLE_PPT)) {   \
-	                kernel_debug_filtered((x), (uintptr_t)(a), (uintptr_t)(b),  \
-	                        (uintptr_t)(c), (uintptr_t)(d)); \
-	        }                                                            \
-	} while (0)
-#else /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) */
-#define KERNEL_DEBUG_CONSTANT_FILTERED(type, x, a, b, c, d, ...) do {} while (0)
-#endif /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) */
-
-#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST)
-#define KERNEL_DEBUG_CONSTANT_RELEASE_NOPROCFILT(x, a, b, c, d, ...)   \
-	do {                                                               \
-	        if (KDBG_IMPROBABLE(kdebug_enable & ~KDEBUG_ENABLE_PPT)) {     \
-	                kernel_debug_flags((x), (uintptr_t)(a), (uintptr_t)(b),    \
-	                        (uintptr_t)(c), (uintptr_t)(d), KDBG_FLAG_NOPROCFILT); \
-	        }                                                              \
-	} while (0)
-#else /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST) */
-#define KERNEL_DEBUG_CONSTANT_RELEASE_NOPROCFILT(x, a, b, c, d, ...) \
-	do { } while (0)
-#endif /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST) */
-
-
-#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD)
-#define KERNEL_DEBUG_CONSTANT(x, a, b, c, d, e)                               \
-	do {                                                                      \
-	        if (KDBG_IMPROBABLE(kdebug_enable & ~KDEBUG_ENABLE_PPT)) {            \
-	                kernel_debug((x), (uintptr_t)(a), (uintptr_t)(b), (uintptr_t)(c), \
-	                        (uintptr_t)(d),(uintptr_t)(e));                               \
-	        }                                                                     \
-	} while (0)
-
-/*
- * DO NOT USE THIS MACRO -- it breaks fundamental assumptions about ktrace and
- * is only meant to be used by the pthread kext and other points in the kernel
- * where the thread ID must be provided explicitly.
- */
-#define KERNEL_DEBUG_CONSTANT1(x, a, b, c, d, e)                               \
-	do {                                                                       \
-	        if (KDBG_IMPROBABLE(kdebug_enable & ~KDEBUG_ENABLE_PPT)) {             \
-	                kernel_debug1((x), (uintptr_t)(a), (uintptr_t)(b), (uintptr_t)(c), \
-	                (uintptr_t)(d), (uintptr_t)(e));                                   \
-	        }                                                                      \
-	} while (0)
-
-#define KERNEL_DEBUG_EARLY(x, a, b, c, d)                                 \
-	do {                                                                  \
-	        kernel_debug_early((uint32_t)(x), (uintptr_t)(a), (uintptr_t)(b), \
-	                (uintptr_t)(c), (uintptr_t)(d));                              \
-	} while (0)
-#else /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) */
-#define KERNEL_DEBUG_CONSTANT(x, a, b, c, d, e) do {} while (0)
-#define KERNEL_DEBUG_CONSTANT1(x, a, b, c, d, e) do {} while (0)
-#define KERNEL_DEBUG_EARLY(x, a, b, c, d) do {} while (0)
-#endif /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) */
-
-/*
- * KERNEL_DEBUG_CONSTANT_IST (in-system trace) events provide an audited subset
- * of tracepoints for userland system tracing tools.  This tracing level was
- * created by 8857227 to protect fairplayd and other PT_DENY_ATTACH processes.
- * It has two effects: only KERNEL_DEBUG_CONSTANT_IST() traces are emitted and
- * any PT_DENY_ATTACH processes will only emit basic traces as defined by the
- * kernel_debug_filter() routine.
- */
-#define KERNEL_DEBUG_CONSTANT_RELEASE(x, a, b, c, d, e) \
-	KERNEL_DEBUG_CONSTANT_IST(~KDEBUG_ENABLE_PPT, x, a, b, c, d, 0)
-
-#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST)
-#define KERNEL_DEBUG_CONSTANT_IST(type, x, a, b, c, d, e)                     \
-	do {                                                                      \
-	        if (KDBG_IMPROBABLE(kdebug_enable & (type))) {                        \
-	                kernel_debug((x), (uintptr_t)(a), (uintptr_t)(b), (uintptr_t)(c), \
-	                        (uintptr_t)(d), 0);                                           \
-	        }                                                                     \
-	} while (0)
-#define KERNEL_DEBUG_CONSTANT_IST1(x, a, b, c, d, e)                     \
-	do {                                                                       \
-	        if (KDBG_IMPROBABLE(kdebug_enable)) {                         \
-	                kernel_debug1((x), (uintptr_t)(a), (uintptr_t)(b), (uintptr_t)(c), \
-	                        (uintptr_t)(d), (uintptr_t)(e));                               \
-	        }                                                                      \
-	} while (0)
-#else /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST) */
-#define KERNEL_DEBUG_CONSTANT_IST(type, x, a, b, c, d, e) do {} while (0)
-#define KERNEL_DEBUG_CONSTANT_IST1(x, a, b, c, d, e) do {} while (0)
-#endif /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST) */
-
-#if NO_KDEBUG
-#define __kdebug_constant_only __unused
-#endif
-
-/*
- * KERNEL_DEBUG events are only traced for DEBUG kernels.
- */
-#define KERNEL_DEBUG_CONSTANT_DEBUG(x, a, b, c, d, e) \
-	KERNEL_DEBUG(x, a, b, c, d, e)
-
-#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_FULL)
-#define __kdebug_only
-
-#define KERNEL_DEBUG(x, a, b, c, d, e)                                  \
-	do {                                                                \
-	        if (KDBG_IMPROBABLE(kdebug_enable & ~KDEBUG_ENABLE_PPT)) {      \
-	                kernel_debug((uint32_t)(x), (uintptr_t)(a), (uintptr_t)(b), \
-	                        (uintptr_t)(c), (uintptr_t)(d), (uintptr_t)(e));        \
-	        }                                                               \
-	} while (0)
-
-/*
- * DO NOT USE THIS MACRO -- see warning above for KERNEL_DEBUG_CONSTANT1.
- */
-#define KERNEL_DEBUG1(x, a, b, c, d, e)                                  \
-	do {                                                                 \
-	        if (KDBG_IMPROBABLE(kdebug_enable & ~KDEBUG_ENABLE_PPT)) {       \
-	                kernel_debug1((uint32_t)(x), (uintptr_t)(a), (uintptr_t)(b), \
-	                        (uintptr_t)(c), (uintptr_t)(d), (uintptr_t)(e));         \
-	        }                                                                \
-	} while (0)
-
-#else /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_FULL) */
-#define __kdebug_only __unused
-
-#define KERNEL_DEBUG(x, a, b, c, d, e) do {} while (0)
-#define KERNEL_DEBUG1(x, a, b, c, d, e) do {} while (0)
-#endif /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_FULL) */
-
-
-extern void kernel_debug(
-	uint32_t  debugid,
-	uintptr_t arg1,
-	uintptr_t arg2,
-	uintptr_t arg3,
-	uintptr_t arg4,
-	uintptr_t arg5);
-
-extern void kernel_debug1(
-	uint32_t  debugid,
-	uintptr_t arg1,
-	uintptr_t arg2,
-	uintptr_t arg3,
-	uintptr_t arg4,
-	uintptr_t arg5);
-
-#define KDBG_FLAG_FILTERED 0x01
-#define KDBG_FLAG_NOPROCFILT 0x02
-
-extern void kernel_debug_flags(
-	uint32_t  debugid,
-	uintptr_t arg1,
-	uintptr_t arg2,
-	uintptr_t arg3,
-	uintptr_t arg4,
-	uint64_t flags);
-
-extern void kernel_debug_filtered(
-	uint32_t  debugid,
-	uintptr_t arg1,
-	uintptr_t arg2,
-	uintptr_t arg3,
-	uintptr_t arg4);
-
-extern void kernel_debug_early(
-	uint32_t  debugid,
-	uintptr_t arg1,
-	uintptr_t arg2,
-	uintptr_t arg3,
-	uintptr_t arg4);
-
-/*
- * EnergyTracing macros.
- */
-
-#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST)
-// whether to bother calculating EnergyTracing inputs
-// could change in future to see if DBG_ENERGYTRACE is active
-#define ENTR_SHOULDTRACE kdebug_enable
-// encode logical EnergyTracing into 32/64 KDebug trace
-#define ENTR_KDTRACE(component, opcode, lifespan, id, quality, value)   \
-do {                                                                    \
-    uint32_t kdcode__;                                                  \
-    uintptr_t highval__, lowval__, mask__ = 0xffffffff;                 \
-    kdcode__ = KDBG_CODE(DBG_ENERGYTRACE,component,opcode)|(lifespan);  \
-    highval__ = ((value) >> 32) & mask__;                               \
-    lowval__ = (value) & mask__;                                        \
-    ENTR_KDTRACEFUNC(kdcode__, id, quality, highval__, lowval__);       \
-} while(0)
-
-/*
- *   Trace the association of two existing activations.
- *
- *   An association is traced as a modification to the parent activation.
- *   In order to fit the sub-activation's component, activation code, and
- *   activation ID into a kdebug tracepoint, the arguments that would hold
- *   the value are left separate, and one stores the component and opcode
- *   of the sub-activation, while the other stores the pointer-sized
- *   activation ID.
- *
- *           arg2                   arg3               arg4
- +-----------------+  +~+----+----+--------+   +----------+
- |kEnTrModAssociate|  | |    |    |        |   |          |
- +-----------------+  +~+----+----+--------+   +----------+
- *                           8-bits unused       sub-activation ID
- *                                8-bit sub-component
- *                                     16-bit sub-opcode
- *
- */
-#define kEnTrModAssociate (1 << 28)
-#define ENTR_KDASSOCIATE(par_comp, par_opcode, par_act_id,              \
-	    sub_comp, sub_opcode, sub_act_id)              \
-do {                                                                    \
-    unsigned sub_compcode = ((unsigned)sub_comp << 16) | sub_opcode;    \
-    ENTR_KDTRACEFUNC(KDBG_CODE(DBG_ENERGYTRACE,par_comp,par_opcode),    \
-	             par_act_id, kEnTrModAssociate, sub_compcode,       \
-	             sub_act_id);                                       \
-} while(0)
-
-#else /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST) */
-
-#define ENTR_SHOULDTRACE FALSE
-#define ENTR_KDTRACE(component, opcode, lifespan, id, quality, value)   \
-	                            do {} while (0)
-#define ENTR_KDASSOCIATE(par_comp, par_opcode, par_act_id,              \
-	    sub_comp, sub_opcode, sub_act_id)              \
-	                            do {} while (0)
-
-#endif /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST) */
-
-#ifdef KERNEL_PRIVATE
-/*
- * kernel_debug_string provides the same functionality as the
- * kdebug_trace_string syscall as a KPI.  str_id is an in/out
- * parameter that, if it's pointing to a string ID of 0, will
- * receive a generated ID.  If it provides a value in str_id,
- * then that will be used, instead.
- *
- * Returns an errno indicating the type of failure.
- */
-extern int
-kernel_debug_string(uint32_t debugid, uint64_t *str_id, const char *str);
-
-/*
- * kernel_debug_disable disables event logging, but leaves any buffers
- * intact.
- */
-extern void kernel_debug_disable(void);
-#endif
-
-/*
- * Bits set in the comm page for kdebug.
- */
-#define KDEBUG_COMMPAGE_ENABLE_TRACE      0x1
-#define KDEBUG_COMMPAGE_ENABLE_TYPEFILTER 0x2 /* Forced to false if ENABLE_TRACE is 0 */
-
-// for EnergyTracing user space & clients
-#define kEnTrCompKernel     2
-
-/*
- *   EnergyTracing opcodes
- *
- *   Activations use DBG_FUNC_START/END.
- *   Events are DBG_FUNC_NONE.
- */
-
-/* Socket reads and writes are uniquely identified by the (sanitized)
- *  pointer to the socket struct in question.  To associate this address
- *  with the user space file descriptor, we have a socket activation with
- *  the FD as its identifier and the socket struct pointer as its value.
- */
-#define kEnTrActKernSocket      1
-#define kEnTrActKernSockRead    2
-#define kEnTrActKernSockWrite   3
-
-#define kEnTrActKernPoll        10
-#define kEnTrActKernSelect      11
-#define kEnTrActKernKQWait      12
-
-// events
-#define kEnTrEvUnblocked        256
-
-// EnergyTracing flags (the low-order 16 bits of 'quality')
-#define kEnTrFlagNonBlocking    1 << 0
-#define kEnTrFlagNoWork         1 << 1
-
-// and now the internal mechanism
-#ifdef KERNEL_PRIVATE
-
-// 20452597 requests that the trace macros not take an argument it throws away
-#define KERNEL_DBG_IST_SANE(x, a, b, c, d)                              \
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, x, a, b, c, d,          \
-	                          0 /*__unused in kernel_debug()*/ )
-#define ENTR_KDTRACEFUNC KERNEL_DBG_IST_SANE
-
-// value is int64_t, quality is uint32_t
-#define KERNEL_ENERGYTRACE(opcode, lifespan, id, quality, value)        \
-	    ENTR_KDTRACE(kEnTrCompKernel, opcode, lifespan, id,         \
-	                 quality, value)
-#define KERNEL_ENTR_ASSOCIATE(par_opcode, par_act_id, sub_opcode, sub_act_id) \
-	    ENTR_KDASSOCIATE(kEnTrCompKernel, par_opcode, par_act_id,   \
-	                     kEnTrCompKernel, sub_opcode, sub_act_id)
-
-// end EnergyTracing
-
-
-#include <mach/boolean.h>
-
-#define NUMPARMS 23
-
-struct proc;
-
-/*
- * Returns false if the debugid is disabled by filters, and true if the
- * debugid is allowed to be traced.  A debugid may not be traced if the
- * typefilter disables its class and subclass, it's outside a range
- * check, or if it's not an allowed debugid in a value check.  Trace
- * system events bypass this check.
- */
-boolean_t kdebug_debugid_enabled(uint32_t debugid);
-
-/*
- * Returns true only if the debugid is explicitly enabled by filters.  Returns
- * false otherwise, including when no filters are active.
- */
-boolean_t kdebug_debugid_explicitly_enabled(uint32_t debugid);
-
-uint32_t kdebug_commpage_state(void);
-
-#define KDBG_VFS_LOOKUP_FLAG_LOOKUP 0x01
-#define KDBG_VFS_LOOKUP_FLAG_NOPROCFILT 0x02
-void kdebug_vfs_lookup(long *dbg_parms, int dbg_namelen, void *dp,
-    uint32_t flags);
-
-void kdebug_lookup_gen_events(long *dbg_parms, int dbg_namelen, void *dp,
-    boolean_t lookup);
-
-void kdbg_trace_data(struct proc *proc, long *arg_pid, long *arg_uniqueid);
-
-void kdbg_trace_string(struct proc *proc, long *arg1, long *arg2, long *arg3, long *arg4);
-
-void kdbg_dump_trace_to_file(const char *);
-void kdebug_init(unsigned int n_events, char *filterdesc, boolean_t wrapping);
-void kdebug_trace_start(unsigned int n_events, const char *filterdesc,
-    boolean_t wrapping, boolean_t at_wake);
-void kdebug_free_early_buf(void);
-struct task;
-void release_storage_unit(int cpu, uint32_t storage_unit);
-int allocate_storage_unit(int cpu);
-
-#define KDBG_CLASS_ENCODE(Class, SubClass) KDBG_EVENTID(Class, SubClass, 0)
-#define KDBG_CLASS_DECODE(Debugid)         (Debugid & KDBG_CSC_MASK)
-
-#endif /* KERNEL_PRIVATE */
-#endif /* __APPLE_API_UNSTABLE */
-__END_DECLS
-
-#ifdef PRIVATE
-#ifdef __APPLE_API_PRIVATE
-/*
- * private kernel_debug definitions
- */
-
-/*
- * Ensure that both LP32 and LP64 variants of arm64 use the same kd_buf
- * structure.
- */
-#if defined(__arm64__)
-typedef uint64_t kd_buf_argtype;
-#else
-typedef uintptr_t kd_buf_argtype;
-#endif
-
-typedef struct {
-	uint64_t timestamp;
-	kd_buf_argtype arg1;
-	kd_buf_argtype arg2;
-	kd_buf_argtype arg3;
-	kd_buf_argtype arg4;
-	kd_buf_argtype arg5; /* the thread ID */
-	uint32_t debugid;
-/*
- * Ensure that both LP32 and LP64 variants of arm64 use the same kd_buf
- * structure.
- */
-#if defined(__LP64__) || defined(__arm64__)
-	uint32_t cpuid;
-	kd_buf_argtype unused;
-#endif
-} kd_buf;
-
-#if defined(__LP64__) || defined(__arm64__)
-#define KDBG_TIMESTAMP_MASK             0xffffffffffffffffULL
-static inline void
-kdbg_set_cpu(kd_buf *kp, int cpu)
-{
-	kp->cpuid = (unsigned int)cpu;
-}
-static inline int
-kdbg_get_cpu(kd_buf *kp)
-{
-	return (int)kp->cpuid;
-}
-static inline void
-kdbg_set_timestamp(kd_buf *kp, uint64_t thetime)
-{
-	kp->timestamp = thetime;
-}
-static inline uint64_t
-kdbg_get_timestamp(kd_buf *kp)
-{
-	return kp->timestamp;
-}
-static inline void
-kdbg_set_timestamp_and_cpu(kd_buf *kp, uint64_t thetime, int cpu)
-{
-	kdbg_set_timestamp(kp, thetime);
-	kdbg_set_cpu(kp, cpu);
-}
-#else
-#define KDBG_TIMESTAMP_MASK 0x00ffffffffffffffULL
-#define KDBG_CPU_MASK       0xff00000000000000ULL
-#define KDBG_CPU_SHIFT      56
-static inline void
-kdbg_set_cpu(kd_buf *kp, int cpu)
-{
-	kp->timestamp = (kp->timestamp & KDBG_TIMESTAMP_MASK) |
-	    (((uint64_t) cpu) << KDBG_CPU_SHIFT);
-}
-static inline int
-kdbg_get_cpu(kd_buf *kp)
-{
-	return (int) (((kp)->timestamp & KDBG_CPU_MASK) >> KDBG_CPU_SHIFT);
-}
-static inline void
-kdbg_set_timestamp(kd_buf *kp, uint64_t thetime)
-{
-	kp->timestamp = thetime & KDBG_TIMESTAMP_MASK;
-}
-static inline uint64_t
-kdbg_get_timestamp(kd_buf *kp)
-{
-	return kp->timestamp & KDBG_TIMESTAMP_MASK;
-}
-static inline void
-kdbg_set_timestamp_and_cpu(kd_buf *kp, uint64_t thetime, int cpu)
-{
-	kp->timestamp = (thetime & KDBG_TIMESTAMP_MASK) |
-	    (((uint64_t) cpu) << KDBG_CPU_SHIFT);
-}
-#endif
-
-/*
- * 2^16 bits (8 kilobytes), one for each possible class/subclass combination
- */
-#define KDBG_TYPEFILTER_BITMAP_SIZE ((256 * 256) / 8)
-
-/*
- * Bits for kd_ctrl_page.flags, KERN_KD{D,E}FLAGS.
- */
-#define KDBG_INIT       (1U << 0) /* obsolete */
-/* disable tracing when buffers are full */
-#define KDBG_NOWRAP     (1U << 1)
-#define KDBG_FREERUN    (1U << 2) /* obsolete */
-/* buffer has wrapped */
-#define KDBG_WRAPPED    (1U << 3)
-/* flags that are allowed to be set by user space */
-#define KDBG_USERFLAGS  (KDBG_FREERUN | KDBG_NOWRAP | KDBG_INIT)
-/* only include processes with kdebug bit set in proc */
-#define KDBG_PIDCHECK   (1U << 4)
-/* thread map is initialized */
-#define KDBG_MAPINIT    (1U << 5)
-/* exclude processes based on kdebug bit in proc */
-#define KDBG_PIDEXCLUDE (1U << 6)
-/* whether the kdebug locks are intialized */
-#define KDBG_LOCKINIT   (1U << 7)
-/* word size of the kernel */
-#define KDBG_LP64       (1U << 8)
-
-/* bits for kd_ctrl_page.flags and kbufinfo_t.flags */
-
-/* only trace events within a range */
-#define KDBG_RANGECHECK       0x00100000U
-/* only trace at most 4 types of events, at the code granularity */
-#define KDBG_VALCHECK         0x00200000U
-/* check class and subclass against the typefilter */
-#define KDBG_TYPEFILTER_CHECK 0x00400000U
-/* kdebug trace buffers are initialized */
-#define KDBG_BUFINIT          0x80000000U
-
-/* bits for the type field of kd_regtype */
-#define KDBG_CLASSTYPE  0x10000
-#define KDBG_SUBCLSTYPE 0x20000
-#define KDBG_RANGETYPE  0x40000
-#define KDBG_TYPENONE   0x80000
-#define KDBG_CKTYPES    0xF0000
-
-typedef struct {
-	unsigned int type;
-	unsigned int value1;
-	unsigned int value2;
-	unsigned int value3;
-	unsigned int value4;
-} kd_regtype;
-
-typedef struct {
-	/* number of events that can fit in the buffers */
-	int nkdbufs;
-	/* set if trace is disabled */
-	int nolog;
-	/* kd_ctrl_page.flags */
-	unsigned int flags;
-	/* number of threads in thread map */
-	int nkdthreads;
-	/* the owning pid */
-	int bufid;
-} kbufinfo_t;
-
-typedef struct {
-	/* the thread ID */
-#if defined(__arm64__)
-	uint64_t thread;
-#else
-	uintptr_t thread;
-#endif
-	/* 0 for invalid, otherwise the PID (or 1 for kernel_task) */
-	int valid;
-	/* the name of the process owning the thread */
-	char command[20];
-} kd_threadmap;
-
-typedef struct {
-	uint32_t version_no;
-	uint32_t cpu_count;
-} kd_cpumap_header;
-
-/* cpumap flags */
-#define KDBG_CPUMAP_IS_IOP      0x1
-
-typedef struct {
-	uint32_t cpu_id;
-	uint32_t flags;
-	char name[8];
-} kd_cpumap;
-
-/*
- * TRACE file formats...
- *
- * RAW_VERSION0
- *
- * uint32_t #threadmaps
- * kd_threadmap[]
- * kd_buf[]
- *
- * RAW_VERSION1
- *
- * RAW_header, with version_no set to RAW_VERSION1
- * kd_threadmap[]
- * Empty space to pad alignment to the nearest page boundary.
- * kd_buf[]
- *
- * RAW_VERSION1+
- *
- * RAW_header, with version_no set to RAW_VERSION1
- * kd_threadmap[]
- * kd_cpumap_header, with version_no set to RAW_VERSION1
- * kd_cpumap[]
- * Empty space to pad alignment to the nearest page boundary.
- * kd_buf[]
- *
- * V1+ implementation details...
- *
- * It would have been nice to add the cpumap data "correctly", but there were
- * several obstacles. Existing code attempts to parse both V1 and V0 files.
- * Due to the fact that V0 has no versioning or header, the test looks like
- * this:
- *
- * // Read header
- * if (header.version_no != RAW_VERSION1) { // Assume V0 }
- *
- * If we add a VERSION2 file format, all existing code is going to treat that
- * as a VERSION0 file when reading it, and crash terribly when trying to read
- * RAW_VERSION2 threadmap entries.
- *
- * To differentiate between a V1 and V1+ file, read as V1 until you reach
- * the padding bytes. Then:
- *
- * boolean_t is_v1plus = FALSE;
- * if (padding_bytes >= sizeof(kd_cpumap_header)) {
- *     kd_cpumap_header header = // read header;
- *     if (header.version_no == RAW_VERSION1) {
- *         is_v1plus = TRUE;
- *     }
- * }
- *
- */
-
-typedef struct {
-	int             version_no;
-	int             thread_count;
-	uint64_t        TOD_secs;
-	uint32_t        TOD_usecs;
-} RAW_header;
-
-// Version 3 header
-// The header chunk has the tag 0x00001000 which also serves as a magic word
-// that identifies the file as a version 3 trace file. The header payload is
-// a set of fixed fields followed by a variable number of sub-chunks:
-/*
- *  ____________________________________________________________________________
- | Offset | Size | Field                                                    |
- |  ----------------------------------------------------------------------------
- |    0   |  4   | Tag (0x00001000)                                         |
- |    4   |  4   | Sub-tag. Represents the version of the header.           |
- |    8   |  8   | Length of header payload (40+8x)                         |
- |   16   |  8   | Time base info. Two 32-bit numbers, numer/denom,         |
- |        |      | for converting timestamps to nanoseconds.                |
- |   24   |  8   | Timestamp of trace start.                                |
- |   32   |  8   | Wall time seconds since Unix epoch.                      |
- |        |      | As returned by gettimeofday().                           |
- |   40   |  4   | Wall time microseconds. As returned by gettimeofday().   |
- |   44   |  4   | Local time zone offset in minutes. ( " )                 |
- |   48   |  4   | Type of daylight savings time correction to apply. ( " ) |
- |   52   |  4   | Flags. 1 = 64-bit. Remaining bits should be written      |
- |        |      | as 0 and ignored when reading.                           |
- |   56   |  8x  | Variable number of sub-chunks. None are required.        |
- |        |      | Ignore unknown chunks.                                   |
- |  ----------------------------------------------------------------------------
- */
-// NOTE: The header sub-chunks are considered part of the header chunk,
-// so they must be included in the header chunk’s length field.
-// The CPU map is an optional sub-chunk of the header chunk. It provides
-// information about the CPUs that are referenced from the trace events.
-typedef struct {
-	uint32_t tag;
-	uint32_t sub_tag;
-	uint64_t length;
-	uint32_t timebase_numer;
-	uint32_t timebase_denom;
-	uint64_t timestamp;
-	uint64_t walltime_secs;
-	uint32_t walltime_usecs;
-	uint32_t timezone_minuteswest;
-	uint32_t timezone_dst;
-	uint32_t flags;
-} __attribute__((packed)) kd_header_v3;
-
-typedef struct {
-	uint32_t tag;
-	uint32_t sub_tag;
-	uint64_t length;
-} __attribute__((packed)) kd_chunk_header_v3;
-
-#define RAW_VERSION0    0x55aa0000
-#define RAW_VERSION1    0x55aa0101
-#define RAW_VERSION2    0x55aa0200 /* Only used by kperf and Instruments */
-#define RAW_VERSION3    0x00001000
-
-#define V3_CONFIG       0x00001b00
-#define V3_CPU_MAP      0x00001c00
-#define V3_THREAD_MAP   0x00001d00
-#define V3_RAW_EVENTS   0x00001e00
-#define V3_NULL_CHUNK   0x00002000
-
-// The current version of all kernel managed chunks is 1. The
-// V3_CURRENT_CHUNK_VERSION is added to ease the simple case
-// when most/all the kernel managed chunks have the same version.
-
-#define V3_CURRENT_CHUNK_VERSION 1
-#define V3_HEADER_VERSION     V3_CURRENT_CHUNK_VERSION
-#define V3_CPUMAP_VERSION     V3_CURRENT_CHUNK_VERSION
-#define V3_THRMAP_VERSION     V3_CURRENT_CHUNK_VERSION
-#define V3_EVENT_DATA_VERSION V3_CURRENT_CHUNK_VERSION
-
-// Apis to support writing v3 chunks in the kernel
-int kdbg_write_v3_chunk_header_to_buffer(void *buffer, uint32_t tag, uint32_t sub_tag, uint64_t length);
-int kdbg_write_v3_chunk_to_fd(uint32_t tag, uint32_t sub_tag, uint64_t length, void *payload, uint64_t payload_size, int fd);
-
 /* VFS lookup events for serial traces */
 #define VFS_LOOKUP      (FSDBG_CODE(DBG_FSRW,36))
 #define VFS_LOOKUP_DONE (FSDBG_CODE(DBG_FSRW,39))
 
-#if !CONFIG_EMBEDDED
-#if defined(XNU_KERNEL_PRIVATE) && (DEVELOPMENT || DEBUG)
-#define KDEBUG_MOJO_TRACE 1
-#endif
-#endif
+#endif /* __APPLE_API_UNSTABLE */
 
-#endif /* __APPLE_API_PRIVATE */
-#endif /* PRIVATE */
+__END_DECLS
 
-#endif /* !BSD_SYS_KDEBUG_H */
+#if defined(__has_include) && __has_include(<sys/kdebug_private.h>)
+#include <sys/kdebug_private.h>
+#endif /* __has_include(<sys/kdebug_private.h>) */
+
+#ifdef KERNEL
+#include <sys/kdebug_kernel.h>
+#endif /* defined(KERNEL) */
+
+#endif /* !defined(BSD_SYS_KDEBUG_H) */

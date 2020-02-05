@@ -71,3 +71,8 @@ pe_identify_machine(__unused boot_args *args)
 	gPEClockFrequencyInfo.bus_to_dec_rate_den =
 	    gPEClockFrequencyInfo.bus_clock_rate_hz / gPEClockFrequencyInfo.dec_clock_rate_hz;
 }
+
+void
+PE_panic_hook(const char *str __unused)
+{
+}

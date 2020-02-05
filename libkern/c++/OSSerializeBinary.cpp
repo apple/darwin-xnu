@@ -51,11 +51,11 @@ OSSerialize::binaryWithCapacity(unsigned int inCapacity,
 	OSSerialize *me;
 
 	if (inCapacity < sizeof(uint32_t)) {
-		return 0;
+		return NULL;
 	}
 	me = OSSerialize::withCapacity(inCapacity);
 	if (!me) {
-		return 0;
+		return NULL;
 	}
 
 	me->binary        = true;
@@ -98,17 +98,38 @@ OSSerialize::addBinary(const void * bits, size_t size)
 	return true;
 }
 
+void
+OSSerialize::setIndexed(bool index __unused)
+{
+	assert(index && !indexData);
+	indexData = OSData::withCapacity(256);
+	assert(indexData);
+}
+
 bool
 OSSerialize::addBinaryObject(const OSMetaClassBase * o, uint32_t key,
-    const void * bits, size_t size)
+    const void * bits, size_t size,
+    uint32_t * startCollection)
 {
 	unsigned int newCapacity;
 	size_t       alignSize;
+	size_t       headerSize;
 
 	// add to tag array
 	tags->setObject(o);
 
-	if (os_add3_overflow(size, sizeof(key), 3, &alignSize)) {
+	headerSize = sizeof(key);
+	if (indexData) {
+		uint32_t offset = length;
+		if (startCollection) {
+			*startCollection = offset;
+			headerSize += sizeof(uint32_t);
+		}
+		offset /= sizeof(uint32_t);
+		indexData->appendBytes(&offset, sizeof(offset));
+	}
+
+	if (os_add3_overflow(size, headerSize, 3, &alignSize)) {
 		return false;
 	}
 	alignSize &= ~3L;
@@ -131,14 +152,58 @@ OSSerialize::addBinaryObject(const OSMetaClassBase * o, uint32_t key,
 	}
 
 	bcopy(&key, &data[length], sizeof(key));
-	bcopy(bits, &data[length + sizeof(key)], size);
+	bcopy(bits, &data[length + headerSize], size);
 	length += alignSize;
 
 	return true;
 }
 
+void
+OSSerialize::endBinaryCollection(uint32_t startCollection)
+{
+	uint32_t clength;
+
+	if (!indexData) {
+		return;
+	}
+
+	assert(length > startCollection);
+	if (length <= startCollection) {
+		return;
+	}
+
+	clength = length - startCollection;
+	assert(!(clength & 3));
+	clength /= sizeof(uint32_t);
+
+	memcpy(&data[startCollection + sizeof(uint32_t)], &clength, sizeof(clength));
+}
+
 bool
 OSSerialize::binarySerialize(const OSMetaClassBase *o)
+{
+	bool ok;
+	uint32_t header;
+
+	ok = binarySerializeInternal(o);
+	if (!ok) {
+		return ok;
+	}
+
+	if (indexData) {
+		header = indexData->getLength() / sizeof(uint32_t);
+		assert(header <= kOSSerializeDataMask);
+		header <<= 8;
+		header |= kOSSerializeIndexedBinarySignature;
+
+		memcpy(&data[0], &header, sizeof(header));
+	}
+
+	return ok;
+}
+
+bool
+OSSerialize::binarySerializeInternal(const OSMetaClassBase *o)
 {
 	OSDictionary * dict;
 	OSArray      * array;
@@ -150,13 +215,18 @@ OSSerialize::binarySerialize(const OSMetaClassBase *o)
 	OSBoolean    * boo;
 
 	unsigned int  tagIdx;
-	uint32_t   i, key;
+	uint32_t   i, key, startCollection;
 	size_t     len;
 	bool       ok;
 
 	tagIdx = tags->getNextIndexOfObject(o, 0);
 	// does it exist?
 	if (-1U != tagIdx) {
+		if (indexData) {
+			assert(indexData->getLength() > (tagIdx * sizeof(uint32_t)));
+			tagIdx = ((const uint32_t *)indexData->getBytesNoCopy())[tagIdx];
+			assert(tagIdx <= kOSSerializeDataMask);
+		}
 		key = (kOSSerializeObject | tagIdx);
 		if (endCollection) {
 			endCollection = false;
@@ -168,11 +238,11 @@ OSSerialize::binarySerialize(const OSMetaClassBase *o)
 
 	if ((dict = OSDynamicCast(OSDictionary, o))) {
 		key = (kOSSerializeDictionary | dict->count);
-		ok = addBinaryObject(o, key, NULL, 0);
+		ok = addBinaryObject(o, key, NULL, 0, &startCollection);
 		for (i = 0; ok && (i < dict->count);) {
 			const OSSymbol        * dictKey;
 			const OSMetaClassBase * dictValue;
-			const OSMetaClassBase * nvalue = 0;
+			const OSMetaClassBase * nvalue = NULL;
 
 			dictKey = dict->dictionary[i].key;
 			dictValue = dict->dictionary[i].value;
@@ -197,9 +267,10 @@ OSSerialize::binarySerialize(const OSMetaClassBase *o)
 			}
 //			if (!ok) ok = binarySerialize(kOSBooleanFalse);
 		}
+		endBinaryCollection(startCollection);
 	} else if ((array = OSDynamicCast(OSArray, o))) {
 		key = (kOSSerializeArray | array->count);
-		ok = addBinaryObject(o, key, NULL, 0);
+		ok = addBinaryObject(o, key, NULL, 0, &startCollection);
 		for (i = 0; ok && (i < array->count);) {
 			i++;
 			endCollection = (i == array->count);
@@ -209,9 +280,10 @@ OSSerialize::binarySerialize(const OSMetaClassBase *o)
 			}
 //			if (!ok) ok = binarySerialize(kOSBooleanFalse);
 		}
+		endBinaryCollection(startCollection);
 	} else if ((set = OSDynamicCast(OSSet, o))) {
 		key = (kOSSerializeSet | set->members->count);
-		ok = addBinaryObject(o, key, NULL, 0);
+		ok = addBinaryObject(o, key, NULL, 0, &startCollection);
 		for (i = 0; ok && (i < set->members->count);) {
 			i++;
 			endCollection = (i == set->members->count);
@@ -221,27 +293,28 @@ OSSerialize::binarySerialize(const OSMetaClassBase *o)
 			}
 //			if (!ok) ok = binarySerialize(kOSBooleanFalse);
 		}
+		endBinaryCollection(startCollection);
 	} else if ((num = OSDynamicCast(OSNumber, o))) {
 		key = (kOSSerializeNumber | num->size);
-		ok = addBinaryObject(o, key, &num->value, sizeof(num->value));
+		ok = addBinaryObject(o, key, &num->value, sizeof(num->value), NULL);
 	} else if ((boo = OSDynamicCast(OSBoolean, o))) {
 		key = (kOSSerializeBoolean | (kOSBooleanTrue == boo));
-		ok = addBinaryObject(o, key, NULL, 0);
+		ok = addBinaryObject(o, key, NULL, 0, NULL);
 	} else if ((sym = OSDynamicCast(OSSymbol, o))) {
 		len = (sym->getLength() + 1);
 		key = (kOSSerializeSymbol | len);
-		ok = addBinaryObject(o, key, sym->getCStringNoCopy(), len);
+		ok = addBinaryObject(o, key, sym->getCStringNoCopy(), len, NULL);
 	} else if ((str = OSDynamicCast(OSString, o))) {
-		len = (str->getLength() + 0);
+		len = (str->getLength() + ((indexData != NULL) ? 1 : 0));
 		key = (kOSSerializeString | len);
-		ok = addBinaryObject(o, key, str->getCStringNoCopy(), len);
+		ok = addBinaryObject(o, key, str->getCStringNoCopy(), len, NULL);
 	} else if ((ldata = OSDynamicCast(OSData, o))) {
 		len = ldata->getLength();
 		if (ldata->reserved && ldata->reserved->disableSerialization) {
 			len = 0;
 		}
 		key = (kOSSerializeData | len);
-		ok = addBinaryObject(o, key, ldata->getBytesNoCopy(), len);
+		ok = addBinaryObject(o, key, ldata->getBytesNoCopy(), len, NULL);
 	} else {
 		return false;
 	}
@@ -303,23 +376,28 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 
 	size_t           bufferPos;
 	const uint32_t * next;
-	uint32_t         key, len, wordLen;
+	uint32_t         key, len, wordLen, length;
 	bool             end, newCollect, isRef;
 	unsigned long long value;
-	bool ok;
+	bool ok, indexed, hasLength;
 
+	indexed = false;
 	if (errorString) {
-		*errorString = 0;
+		*errorString = NULL;
 	}
+
 	if (bufferSize < sizeof(kOSSerializeBinarySignature)) {
 		return NULL;
 	}
-	if (0 != strcmp(kOSSerializeBinarySignature, buffer)) {
+	if (kOSSerializeIndexedBinarySignature == (((const uint8_t *) buffer)[0])) {
+		indexed = true;
+	} else if (0 != strcmp(kOSSerializeBinarySignature, buffer)) {
 		return NULL;
 	}
 	if (3 & ((uintptr_t) buffer)) {
 		return NULL;
 	}
+
 	bufferPos = sizeof(kOSSerializeBinarySignature);
 	next = (typeof(next))(((uintptr_t) buffer) + bufferPos);
 
@@ -329,12 +407,12 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 	objsIdx   = objsCapacity  = 0;
 	stackIdx  = stackCapacity = 0;
 
-	result   = 0;
-	parent   = 0;
-	dict     = 0;
-	array    = 0;
-	set      = 0;
-	sym      = 0;
+	result   = NULL;
+	parent   = NULL;
+	dict     = NULL;
+	array    = NULL;
+	set      = NULL;
+	sym      = NULL;
 
 	ok = true;
 	while (ok) {
@@ -343,27 +421,31 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 			break;
 		}
 		key = *next++;
+		length = 0;
 
 		len = (key & kOSSerializeDataMask);
 		wordLen = (len + 3) >> 2;
 		end = (0 != (kOSSerializeEndCollecton & key));
 		DEBG("key 0x%08x: 0x%04x, %d\n", key, len, end);
 
-		newCollect = isRef = false;
-		o = 0; newDict = 0; newArray = 0; newSet = 0;
+		newCollect = isRef = hasLength = false;
+		o = NULL; newDict = NULL; newArray = NULL; newSet = NULL;
 
 		switch (kOSSerializeTypeMask & key) {
 		case kOSSerializeDictionary:
 			o = newDict = OSDictionary::withCapacity(len);
 			newCollect = (len != 0);
+			hasLength  = indexed;
 			break;
 		case kOSSerializeArray:
 			o = newArray = OSArray::withCapacity(len);
 			newCollect = (len != 0);
+			hasLength  = indexed;
 			break;
 		case kOSSerializeSet:
 			o = newSet = OSSet::withCapacity(len);
 			newCollect = (len != 0);
+			hasLength  = indexed;
 			break;
 
 		case kOSSerializeObject:
@@ -430,8 +512,16 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 			break;
 		}
 
-		if (!(ok = (o != 0))) {
+		if (!(ok = (o != NULL))) {
 			break;
+		}
+
+		if (hasLength) {
+			bufferPos += sizeof(*next);
+			if (!(ok = (bufferPos <= bufferSize))) {
+				break;
+			}
+			length = *next++;
 		}
 
 		if (!isRef) {
@@ -451,7 +541,7 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 				sym = OSDynamicCast(OSSymbol, sym);
 				if (!sym && (str = OSDynamicCast(OSString, str))) {
 					sym = const_cast<OSSymbol *>(OSSymbol::withString(str));
-					ok = (sym != 0);
+					ok = (sym != NULL);
 					if (!ok) {
 						break;
 					}
@@ -463,7 +553,7 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 				if (sym && (sym != str)) {
 					sym->release();
 				}
-				sym = 0;
+				sym = NULL;
 			}
 		} else if (array) {
 			ok = array->setObject(o);
@@ -481,7 +571,7 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 		}
 
 		if (end) {
-			parent = 0;
+			parent = NULL;
 		}
 		if (newCollect) {
 			stackIdx++;
@@ -509,12 +599,12 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 			if (!parent) {
 				break;
 			}
-			set   = 0;
-			dict  = 0;
-			array = 0;
+			set   = NULL;
+			dict  = NULL;
+			array = NULL;
 			if (!(dict = OSDynamicCast(OSDictionary, parent))) {
 				if (!(array = OSDynamicCast(OSArray, parent))) {
-					ok = (0 != (set = OSDynamicCast(OSSet, parent)));
+					ok = (NULL != (set = OSDynamicCast(OSSet, parent)));
 				}
 			}
 		}
@@ -522,11 +612,11 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 	DEBG("ret %p\n", result);
 
 	if (!ok) {
-		result = 0;
+		result = NULL;
 	}
 
 	if (objsCapacity) {
-		for (len = (result != 0); len < objsIdx; len++) {
+		for (len = (result != NULL); len < objsIdx; len++) {
 			objsArray[len]->release();
 		}
 		kfree(objsArray, objsCapacity  * sizeof(*objsArray));

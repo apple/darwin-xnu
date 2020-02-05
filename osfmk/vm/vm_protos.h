@@ -109,6 +109,14 @@ extern kern_return_t vm_map_purgable_control(
 	vm_purgable_t           control,
 	int                     *state);
 
+#if MACH_ASSERT
+extern void vm_map_pmap_check_ledgers(
+	pmap_t          pmap,
+	ledger_t        ledger,
+	int             pid,
+	char            *procname);
+#endif /* MACH_ASSERT */
+
 extern kern_return_t
 vnode_pager_get_object_vnode(
 	memory_object_t mem_obj,
@@ -191,11 +199,11 @@ extern void swapfile_pager_bootstrap(void);
 extern memory_object_t swapfile_pager_setup(struct vnode *vp);
 extern memory_object_control_t swapfile_pager_control(memory_object_t mem_obj);
 
-#if __arm64__ || ((__ARM_ARCH_7K__ >= 2) && defined(PLATFORM_WatchOS))
+#if __arm64__ || (__ARM_ARCH_7K__ >= 2)
 #define SIXTEENK_PAGE_SIZE      0x4000
 #define SIXTEENK_PAGE_MASK      0x3FFF
 #define SIXTEENK_PAGE_SHIFT     14
-#endif /* __arm64__ || ((__ARM_ARCH_7K__ >= 2) && defined(PLATFORM_WatchOS)) */
+#endif /* __arm64__ || (__ARM_ARCH_7K__ >= 2) */
 
 #if __arm64__
 #define FOURK_PAGE_SIZE         0x1000
@@ -473,6 +481,7 @@ extern void log_unnest_badness(
 	vm_map_offset_t lowest_unnestable_addr);
 
 struct proc;
+struct proc *current_proc(void);
 extern int cs_allow_invalid(struct proc *p);
 extern int cs_invalid_page(addr64_t vaddr, boolean_t *cs_killed);
 
@@ -566,11 +575,11 @@ extern int proc_get_memstat_priority(struct proc*, boolean_t);
 /* the object purger. purges the next eligible object from memory. */
 /* returns TRUE if an object was purged, otherwise FALSE. */
 boolean_t vm_purgeable_object_purge_one_unlocked(int force_purge_below_group);
-void vm_purgeable_disown(task_t task);
 void vm_purgeable_nonvolatile_owner_update(task_t       owner,
     int          delta);
 void vm_purgeable_volatile_owner_update(task_t          owner,
     int             delta);
+void vm_owned_objects_disown(task_t task);
 
 
 struct trim_list {
@@ -622,6 +631,7 @@ extern int secluded_for_filecache;
 extern int secluded_for_fbdp;
 #endif
 
+extern uint64_t vm_page_secluded_drain(void);
 extern void             memory_object_mark_eligible_for_secluded(
 	memory_object_control_t         control,
 	boolean_t                       eligible_for_secluded);
@@ -635,6 +645,7 @@ extern kern_return_t mach_make_memory_entry_internal(
 	memory_object_size_t    *size,
 	memory_object_offset_t offset,
 	vm_prot_t               permission,
+	vm_named_entry_kernel_flags_t vmne_kflags,
 	ipc_port_t              *object_handle,
 	ipc_port_t              parent_handle);
 
@@ -654,6 +665,17 @@ extern kern_return_t mach_make_memory_entry_internal(
 #define VM_SWAP_FLAGS_NONE             0
 #define VM_SWAP_FLAGS_FORCE_DEFRAG     1
 #define VM_SWAP_FLAGS_FORCE_RECLAIM    2
+
+#if __arm64__
+/*
+ * Flags to control the behavior of
+ * the legacy footprint entitlement.
+ */
+#define LEGACY_FOOTPRINT_ENTITLEMENT_IGNORE             (1)
+#define LEGACY_FOOTPRINT_ENTITLEMENT_IOS11_ACCT         (2)
+#define LEGACY_FOOTPRINT_ENTITLEMENT_LIMIT_INCREASE     (3)
+
+#endif /* __arm64__ */
 
 #endif  /* _VM_VM_PROTOS_H_ */
 

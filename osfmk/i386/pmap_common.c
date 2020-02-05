@@ -291,10 +291,21 @@ __private_extern__ void
 pmap_pagetable_corruption_msg_log(int (*log_func)(const char * fmt, ...)__printflike(1, 2))
 {
 	if (pmap_pagetable_corruption_incidents > 0) {
-		int i, e = MIN(pmap_pagetable_corruption_incidents, PMAP_PAGETABLE_CORRUPTION_MAX_LOG);
+		int i, j, e = MIN(pmap_pagetable_corruption_incidents, PMAP_PAGETABLE_CORRUPTION_MAX_LOG);
 		(*log_func)("%u pagetable corruption incident(s) detected, timeout: %u\n", pmap_pagetable_corruption_incidents, pmap_pagetable_corruption_timeout);
 		for (i = 0; i < e; i++) {
-			(*log_func)("Incident 0x%x, reason: 0x%x, action: 0x%x, time: 0x%llx\n", pmap_pagetable_corruption_records[i].incident, pmap_pagetable_corruption_records[i].reason, pmap_pagetable_corruption_records[i].action, pmap_pagetable_corruption_records[i].abstime);
+			(*log_func)("Incident 0x%x, reason: 0x%x, action: 0x%x, time: 0x%llx\n",
+			    pmap_pagetable_corruption_records[i].incident,
+			    pmap_pagetable_corruption_records[i].reason,
+			    pmap_pagetable_corruption_records[i].action,
+			    pmap_pagetable_corruption_records[i].abstime);
+
+			if (pmap_pagetable_corruption_records[i].adj_ptes_count > 0) {
+				for (j = 0; j < pmap_pagetable_corruption_records[i].adj_ptes_count; j++) {
+					(*log_func)("\tAdjacent PTE[%d] = 0x%llx\n", j,
+					    pmap_pagetable_corruption_records[i].adj_ptes[j]);
+				}
+			}
 		}
 	}
 }

@@ -86,7 +86,7 @@ IOCommandGate::commandGate(OSObject *inOwner, Action inAction)
 
 	if (me && !me->init(inOwner, inAction)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -117,7 +117,7 @@ IOCommandGate::enable()
 IOCommandGate::free()
 {
 	if (workLoop) {
-		setWorkLoop(0);
+		setWorkLoop(NULL);
 	}
 	super::free();
 }
@@ -146,7 +146,7 @@ IOCommandGate::setWorkLoop(IOWorkLoop *inWorkLoop)
 		*sleepersP &= ~kSleepersWaitEnabled;
 		defer = (0 != (kSleepersActionsMask & *sleepersP));
 		if (!defer) {
-			super::setWorkLoop(0);
+			super::setWorkLoop(NULL);
 			*sleepersP &= ~kSleepersRemoved;
 		}
 		wl->openGate();
@@ -180,9 +180,9 @@ IOCommandGateActionToBlock(OSObject *owner,
 }
 
 IOReturn
-IOCommandGate::runActionBlock(ActionBlock action)
+IOCommandGate::runActionBlock(ActionBlock _action)
 {
-	return runAction(&IOCommandGateActionToBlock, action);
+	return runAction(&IOCommandGateActionToBlock, _action);
 }
 
 IOReturn
@@ -250,7 +250,7 @@ IOCommandGate::runAction(Action inAction,
 	if (kSleepersRemoved == ((kSleepersActionsMask | kSleepersRemoved) & *sleepersP)) {
 		// no actions outstanding
 		*sleepersP &= ~kSleepersRemoved;
-		super::setWorkLoop(0);
+		super::setWorkLoop(NULL);
 	}
 
 	wl->openGate();

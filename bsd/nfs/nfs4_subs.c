@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -69,6 +69,7 @@
 #include <netinet/in.h>
 #include <net/kpi_interface.h>
 
+#if CONFIG_NFS4
 /*
  * NFS_MAX_WHO is the maximum length of a string representation used
  * in as an ace who, owner, or group. There is no explicit limit in the
@@ -527,6 +528,7 @@ nfs4_secinfo_rpc(struct nfsmount *nmp, struct nfsreq_secinfo_args *siap, kauth_c
 		dnp = nsp->nsr_dnp;
 		dvp = NFSTOV(dnp);
 		if ((error = vnode_get(dvp))) {
+			dvp = NULLVP;
 			nfs_node_unlock(np);
 			goto nfsmout;
 		}
@@ -602,6 +604,7 @@ nfsmout:
 	}
 	return error;
 }
+#endif /* CONFIG_NFS4 */
 
 /*
  * Parse an NFSv4 SECINFO array to an array of pseudo flavors.
@@ -611,8 +614,12 @@ int
 nfsm_chain_get_secinfo(struct nfsm_chain *nmc, uint32_t *sec, int *seccountp)
 {
 	int error = 0, secmax, seccount, srvcount;
-	uint32_t flavor, val;
+	uint32_t flavor;
+
+#if CONFIG_NFS_GSS
+	uint32_t val;
 	u_char oid[12];
+#endif
 
 	seccount = srvcount = 0;
 	secmax = *seccountp;
@@ -625,11 +632,14 @@ nfsm_chain_get_secinfo(struct nfsm_chain *nmc, uint32_t *sec, int *seccountp)
 		switch (flavor) {
 		case RPCAUTH_NONE:
 		case RPCAUTH_SYS:
+#if CONFIG_NFS_GSS
 		case RPCAUTH_KRB5:
 		case RPCAUTH_KRB5I:
 		case RPCAUTH_KRB5P:
+#endif /* CONFIG_NFS_GSS */
 			sec[seccount++] = flavor;
 			break;
+#if CONFIG_NFS_GSS
 		case RPCSEC_GSS:
 			/* we only recognize KRB5, KRB5I, KRB5P */
 			nfsm_chain_get_32(error, nmc, val); /* OID length */
@@ -660,6 +670,7 @@ nfsm_chain_get_secinfo(struct nfsm_chain *nmc, uint32_t *sec, int *seccountp)
 				break;
 			}
 			break;
+#endif /* CONFIG_NFS_GSS */
 		}
 		srvcount--;
 	}
@@ -670,7 +681,7 @@ nfsmout:
 	return error;
 }
 
-
+#if CONFIG_NFS4
 /*
  * Fetch the FS_LOCATIONS attribute for the node found at directory/name.
  */
@@ -2634,6 +2645,7 @@ nfsmout:
 	}
 	return error;
 }
+#endif /* CONFIG_NFS4 */
 
 /*
  * Got the given error and need to start recovery (if not already started).
@@ -2655,6 +2667,7 @@ nfs_need_recover(struct nfsmount *nmp, int error)
 	}
 }
 
+#if CONFIG_NFS4
 /*
  * After recovery due to state expiry, check each node and
  * drop any lingering delegation we thought we had.
@@ -2722,6 +2735,7 @@ nfs4_expired_check_delegation(nfsnode_t np, vfs_context_t ctx)
 
 	lck_mtx_unlock(&np->n_openlock);
 }
+#endif /* CONFIG_NFS4*/
 
 /*
  * Recover state for an NFS mount.
@@ -2731,14 +2745,16 @@ nfs4_expired_check_delegation(nfsnode_t np, vfs_context_t ctx)
 void
 nfs_recover(struct nfsmount *nmp)
 {
-	struct timespec ts = { 1, 0 };
+	struct timespec ts = { .tv_sec = 1, .tv_nsec = 0 };
 	int error, lost, reopen;
 	struct nfs_open_owner *noop;
 	struct nfs_open_file *nofp;
 	struct nfs_file_lock *nflp, *nextnflp;
 	struct nfs_lock_owner *nlop;
 	thread_t thd = current_thread();
+#if CONFIG_NFS4
 	nfsnode_t np, nextnp;
+#endif
 	struct timeval now;
 
 restart:
@@ -2804,6 +2820,7 @@ restart:
 			if (nmp->nm_vers < NFS_VER4) {
 				goto reclaim_locks;
 			}
+#if CONFIG_NFS4
 			if (nofp->nof_rw_drw) {
 				error = nfs4_open_reclaim_rpc(nofp, NFS_OPEN_SHARE_ACCESS_BOTH, NFS_OPEN_SHARE_DENY_BOTH);
 			}
@@ -2912,7 +2929,7 @@ restart:
 				nofp->nof_flags &= ~NFS_OPEN_FILE_REOPEN;
 				lck_mtx_unlock(&nofp->nof_lock);
 			}
-
+#endif /* CONFIG_NFS4 */
 			/*
 			 * Scan this node's lock owner list for entries with this open owner,
 			 * then walk the lock owner's held lock list recovering each lock.
@@ -2959,7 +2976,7 @@ reclaim_locks:
 					break;
 				}
 			}
-
+#if CONFIG_NFS4
 			/*
 			 * If we've determined that we need to reopen the file then we probably
 			 * didn't receive any delegation we think we hold.  We should attempt to
@@ -2979,7 +2996,7 @@ reclaim_locks:
 					goto restart;
 				}
 			}
-
+#endif
 			if (lost) {
 				/* revoke open file state */
 				NP(nofp->nof_np, "nfs_recover: state lost for %d %p 0x%x",
@@ -2992,6 +3009,7 @@ reclaim_locks:
 	if (!error) {
 		/* If state expired, make sure we're not holding onto any stale delegations */
 		lck_mtx_lock(&nmp->nm_lock);
+#if CONFIG_NFS4
 		if ((nmp->nm_vers >= NFS_VER4) && (nmp->nm_state & NFSSTA_RECOVER_EXPIRED)) {
 recheckdeleg:
 			TAILQ_FOREACH_SAFE(np, &nmp->nm_delegations, n_dlink, nextnp) {
@@ -3003,6 +3021,7 @@ recheckdeleg:
 				}
 			}
 		}
+#endif
 		nmp->nm_state &= ~(NFSSTA_RECOVER | NFSSTA_RECOVER_EXPIRED);
 		wakeup(&nmp->nm_state);
 		printf("nfs recovery completed for %s, 0x%x\n",

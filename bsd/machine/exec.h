@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -32,6 +32,7 @@
 #define _BSD_MACHINE_EXEC_H_
 
 #include <sys/param.h>
+#include <stdbool.h>
 
 struct exec_info {
 	char    path[MAXPATHLEN];
@@ -41,15 +42,7 @@ struct exec_info {
 	char    **ev;
 };
 
-int grade_binary(cpu_type_t, cpu_subtype_t);
+int grade_binary(cpu_type_t, cpu_subtype_t, bool allow_simulator_binary);
 boolean_t pie_required(cpu_type_t, cpu_subtype_t);
-
-#if defined (__i386__) || defined(__x86_64__)
-#include "i386/exec.h"
-#elif defined (__arm__) || defined (__arm64__)
-#include "arm/exec.h"
-#else
-#error architecture not supported
-#endif
 
 #endif /* _BSD_MACHINE_EXEC_H_ */

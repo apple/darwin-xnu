@@ -258,8 +258,7 @@
  #define CCN_OSX				   1
 #endif
 
-#if CC_USE_L4 || CC_USE_S3
-/* No dynamic linking allowed in L4, e.g. avoid nonlazy symbols */
+#if CC_USE_S3
 /* For corecrypto kext, CC_STATIC should be undefined */
  #define CC_STATIC              1
 #endif
@@ -296,9 +295,9 @@
 
 // see rdar://problem/26636018
 #if (CCN_UNIT_SIZE == 8) && !( defined(_MSC_VER) && defined(__clang__))
-#define CCEC25519_CURVE25519DONNA_64BIT 1
+#define CCEC25519_CURVE25519_64BIT 1
 #else
-#define CCEC25519_CURVE25519DONNA_64BIT 0
+#define CCEC25519_CURVE25519_64BIT 0
 #endif
 
 //- functions implemented in assembly ------------------------------------------
@@ -307,10 +306,15 @@
  #warning "You are using the default corecrypto configuration, assembly optimizations may not be available for your platform"
 #endif
 
+// Enable assembler in Linux if CC_LINUX_ASM is defined
+#if CC_LINUX && defined(CC_LINUX_ASM) && CC_LINUX_ASM
+#define CC_USE_ASM 1
+#endif
+
 // Use this macro to strictly disable assembly regardless of cpu/os/compiler/etc.
 // Our assembly code is not gcc compatible. Clang defines the __GNUC__ macro as well.
 #if !defined(CC_USE_ASM)
- #if defined(_WIN32) || CC_EFI || CC_BASEBAND || CC_XNU_KERNEL_PRIVATE || (defined(__GNUC__) && !defined(__clang__)) || defined(__ANDROID_API__) || CC_RTKIT || CC_RTKITROM
+ #if defined(_WIN32) || CC_EFI || CC_BASEBAND || CC_XNU_KERNEL_PRIVATE || (defined(__GNUC__) && !defined(__clang__)) || defined(__ANDROID_API__) || CC_LINUX
   #define CC_USE_ASM 0
  #else
   #define CC_USE_ASM 1
@@ -327,11 +331,18 @@
  #define CCN_ADDMUL1_ASM        1
  #define CCN_MUL1_ASM           1
  #define CCN_CMP_ASM            1
- #define CCN_ADD1_ASM           0
- #define CCN_SUB1_ASM           0
+ #define CCN_ADD1_ASM           1
+ #define CCN_SUB1_ASM           1
  #define CCN_N_ASM              1
  #define CCN_SET_ASM            1
  #define CCN_SHIFT_RIGHT_ASM    1
+ #if defined(__ARM_NEON__) 
+ #define CCN_SHIFT_LEFT_ASM     1
+ #else
+ #define CCN_SHIFT_LEFT_ASM     0
+ #endif
+ #define CCN_MOD_224_ASM        1
+ #define CCN_MULMOD_256_ASM     1
  #define CCAES_ARM_ASM          1
  #define CCAES_INTEL_ASM        0
  #if CC_KERNEL || CC_USE_L4 || CC_IBOOT || CC_RTKIT || CC_RTKITROM || CC_USE_SEPROM || CC_USE_S3
@@ -344,13 +355,15 @@
  #define CCSHA2_VNG_INTEL       0
 
  #if defined(__ARM_NEON__) || CC_KERNEL
-  #define CCSHA1_VNG_ARMV7NEON   1
-  #define CCSHA2_VNG_ARMV7NEON   1
+  #define CCSHA1_VNG_ARM        1
+  #define CCSHA2_VNG_ARM        1
  #else /* !defined(__ARM_NEON__) */
-  #define CCSHA1_VNG_ARMV7NEON   0
-  #define CCSHA2_VNG_ARMV7NEON   0
+  #define CCSHA1_VNG_ARM        0
+  #define CCSHA2_VNG_ARM        0
  #endif /* !defined(__ARM_NEON__) */
  #define CCSHA256_ARMV6M_ASM 0
+
+ #define CC_ACCELERATECRYPTO    1
 
 //-(2) ARM 64
 #elif defined(__arm64__) && __clang__ && CC_USE_ASM
@@ -367,15 +380,20 @@
  #define CCN_N_ASM              1
  #define CCN_SET_ASM            0
  #define CCN_SHIFT_RIGHT_ASM    1
+ #define CCN_SHIFT_LEFT_ASM     1
+ #define CCN_MOD_224_ASM        0
+ #define CCN_MULMOD_256_ASM     1
  #define CCAES_ARM_ASM          1
  #define CCAES_INTEL_ASM        0
  #define CCAES_MUX              0        // On 64bit SoC, asm is much faster than HW
  #define CCN_USE_BUILTIN_CLZ    1
  #define CCSHA1_VNG_INTEL       0
  #define CCSHA2_VNG_INTEL       0
- #define CCSHA1_VNG_ARMV7NEON   1		// reused this to avoid making change to xcode project, put arm64 assembly code with armv7 code
- #define CCSHA2_VNG_ARMV7NEON   1
+ #define CCSHA1_VNG_ARM         1
+ #define CCSHA2_VNG_ARM         1
  #define CCSHA256_ARMV6M_ASM    0
+
+ #define CC_ACCELERATECRYPTO    1
 
 //-(3) Intel 32/64
 #elif (defined(__x86_64__) || defined(__i386__)) && __clang__ && CC_USE_ASM
@@ -396,12 +414,16 @@
   #define CCN_CMP_ASM            1
   #define CCN_N_ASM              1
   #define CCN_SHIFT_RIGHT_ASM    1
+  #define CCN_SHIFT_LEFT_ASM     1
  #else
   #define CCN_CMP_ASM            0
   #define CCN_N_ASM              0
   #define CCN_SHIFT_RIGHT_ASM    0
+  #define CCN_SHIFT_LEFT_ASM     0
  #endif
 
+ #define CCN_MOD_224_ASM        0
+ #define CCN_MULMOD_256_ASM     0
  #define CCN_ADDMUL1_ASM        0
  #define CCN_MUL1_ASM           0
  #define CCN_ADD1_ASM           0
@@ -413,9 +435,11 @@
  #define CCN_USE_BUILTIN_CLZ    0
  #define CCSHA1_VNG_INTEL       1
  #define CCSHA2_VNG_INTEL       1
- #define CCSHA1_VNG_ARMV7NEON   0
- #define CCSHA2_VNG_ARMV7NEON   0
+ #define CCSHA1_VNG_ARM         0
+ #define CCSHA2_VNG_ARM         0
  #define CCSHA256_ARMV6M_ASM    0
+
+ #define CC_ACCELERATECRYPTO    1
 
 //-(4) disable assembly
 #else
@@ -436,15 +460,20 @@
  #define CCN_N_ASM              0
  #define CCN_SET_ASM            0
  #define CCN_SHIFT_RIGHT_ASM    0
+ #define CCN_SHIFT_LEFT_ASM     0
+ #define CCN_MOD_224_ASM        0
+ #define CCN_MULMOD_256_ASM     0
  #define CCAES_ARM_ASM          0
  #define CCAES_INTEL_ASM        0
  #define CCAES_MUX              0
  #define CCN_USE_BUILTIN_CLZ    0
  #define CCSHA1_VNG_INTEL       0
  #define CCSHA2_VNG_INTEL       0
- #define CCSHA1_VNG_ARMV7NEON   0
- #define CCSHA2_VNG_ARMV7NEON   0
+ #define CCSHA1_VNG_ARM         0
+ #define CCSHA2_VNG_ARM         0
  #define CCSHA256_ARMV6M_ASM    0
+
+ #define CC_ACCELERATECRYPTO    0
 
 #endif
 
@@ -457,10 +486,12 @@
  #define CC_NONNULL4 CC_NONNULL((4))
  #define CC_NONNULL_ALL __attribute__((__nonnull__))
  #define CC_SENTINEL __attribute__((__sentinel__))
+ // Only apply the `CC_CONST` attribute to functions with no side-effects where the output is a strict function of pass by value input vars with no exterior side-effects.
+ // Specifically, do not apply CC_CONST if the function has any arguments that are pointers (directly, or indirectly)
  #define CC_CONST __attribute__((__const__))
  #define CC_PURE __attribute__((__pure__))
  #define CC_WARN_RESULT __attribute__((__warn_unused_result__))
- #define CC_MALLOC __attribute__((__malloc__))
+ #define CC_MALLOC_CLEAR __attribute__((__malloc__))
  #define CC_UNUSED __attribute__((unused))
 #else /* !__GNUC__ */
 /*! @parseOnly */
@@ -484,8 +515,23 @@
 /*! @parseOnly */
  #define CC_WARN_RESULT
 /*! @parseOnly */
- #define CC_MALLOC
+ #define CC_MALLOC_CLEAR
 #endif /* !__GNUC__ */
+
+
+// Bridge differences between MachO and ELF compiler/assemblers. */
+#if CC_USE_ASM
+#if CC_LINUX
+#define CC_ASM_SECTION_CONST .rodata
+#define CC_ASM_PRIVATE_EXTERN .hidden
+#define CC_C_LABEL(_sym) _sym
+#else /* !CC_LINUX */
+#define CC_ASM_SECTION_CONST .const
+#define CC_ASM_PRIVATE_EXTERN .private_extern
+#define CC_C_LABEL(_sym) _##_sym
+#endif /* !CC_LINUX */
+#endif /* CC_USE_ASM */
+
 
 // Enable FIPSPOST function tracing only when supported. */
 #ifdef CORECRYPTO_POST_TRACE

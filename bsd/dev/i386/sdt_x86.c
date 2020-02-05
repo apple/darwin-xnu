@@ -23,15 +23,6 @@
  * Use is subject to license terms.
  */
 
-/* #pragma ident	"@(#)sdt.c	1.9	08/07/01 SMI" */
-
-#ifdef KERNEL
-#ifndef _KERNEL
-#define _KERNEL /* Solaris vs. Darwin */
-#endif
-#endif
-
-#define MACH__POSIX_C_SOURCE_PRIVATE 1 /* pulls in suitable savearea from mach/ppc/thread_status.h */
 #include <kern/cpu_data.h>
 #include <kern/thread.h>
 #include <mach/thread_status.h>

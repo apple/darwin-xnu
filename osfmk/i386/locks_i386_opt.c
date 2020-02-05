@@ -26,7 +26,6 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#define ATOMIC_PRIVATE 1
 #define LOCK_PRIVATE 1
 
 #include <mach_ldebug.h>
@@ -39,7 +38,6 @@
 #include <kern/cpu_data.h>
 #include <kern/cpu_number.h>
 #include <kern/sched_prim.h>
-#include <kern/xpr.h>
 #include <kern/debug.h>
 #include <string.h>
 
@@ -138,7 +136,7 @@ lck_mtx_lock(
 	state = prev | LCK_MTX_ILOCKED_MSK | LCK_MTX_MLOCKED_MSK;
 
 	disable_preemption();
-	if (!atomic_compare_exchange32(&lock->lck_mtx_state, prev, state, memory_order_acquire_smp, FALSE)) {
+	if (!os_atomic_cmpxchg(&lock->lck_mtx_state, prev, state, acquire)) {
 		enable_preemption();
 		return lck_mtx_lock_slow(lock);
 	}
@@ -192,7 +190,7 @@ lck_mtx_try_lock(
 	state = prev | LCK_MTX_ILOCKED_MSK | LCK_MTX_MLOCKED_MSK;
 
 	disable_preemption();
-	if (!atomic_compare_exchange32(&lock->lck_mtx_state, prev, state, memory_order_acquire_smp, FALSE)) {
+	if (!os_atomic_cmpxchg(&lock->lck_mtx_state, prev, state, acquire)) {
 		enable_preemption();
 		return lck_mtx_try_lock_slow(lock);
 	}
@@ -255,7 +253,7 @@ lck_mtx_lock_spin_always(
 	state = prev | LCK_MTX_ILOCKED_MSK | LCK_MTX_SPIN_MSK;
 
 	disable_preemption();
-	if (!atomic_compare_exchange32(&lock->lck_mtx_state, prev, state, memory_order_acquire_smp, FALSE)) {
+	if (!os_atomic_cmpxchg(&lock->lck_mtx_state, prev, state, acquire)) {
 		enable_preemption();
 		return lck_mtx_lock_spin_slow(lock);
 	}
@@ -342,7 +340,7 @@ lck_mtx_try_lock_spin_always(
 	state = prev | LCK_MTX_ILOCKED_MSK | LCK_MTX_SPIN_MSK;
 
 	disable_preemption();
-	if (!atomic_compare_exchange32(&lock->lck_mtx_state, prev, state, memory_order_acquire_smp, FALSE)) {
+	if (!os_atomic_cmpxchg(&lock->lck_mtx_state, prev, state, acquire)) {
 		enable_preemption();
 		return lck_mtx_try_lock_spin_slow(lock);
 	}
@@ -395,7 +393,7 @@ lck_mtx_try_lock_spin(
  * Unlocks a mutex held by current thread.
  * It tries the fast path first, and falls
  * through the slow path in case waiters need to
- * be woken up or promotions need to be dropped.
+ * be woken up.
  *
  * Interlock can be held, and the slow path will
  * unlock the mutex for this case.
@@ -417,7 +415,7 @@ lck_mtx_unlock(
 	 * Only full mutex will go through the fast path
 	 * (if the lock was acquired as a spinlock it will
 	 * fall through the slow path).
-	 * If there are waiters or promotions it will fall
+	 * If there are waiters it will fall
 	 * through the slow path.
 	 * If it is indirect it will fall through the slow path.
 	 */
@@ -426,7 +424,7 @@ lck_mtx_unlock(
 	 * Fast path state:
 	 * interlock not held, no waiters, no promotion and mutex held.
 	 */
-	prev = state & ~(LCK_MTX_ILOCKED_MSK | LCK_MTX_WAITERS_MSK | LCK_MTX_PROMOTED_MSK);
+	prev = state & ~(LCK_MTX_ILOCKED_MSK | LCK_MTX_WAITERS_MSK);
 	prev |= LCK_MTX_MLOCKED_MSK;
 
 	state = prev | LCK_MTX_ILOCKED_MSK;
@@ -435,7 +433,7 @@ lck_mtx_unlock(
 	disable_preemption();
 
 	/* the memory order needs to be acquire because it is acquiring the interlock */
-	if (!atomic_compare_exchange32(&lock->lck_mtx_state, prev, state, memory_order_acquire_smp, FALSE)) {
+	if (!os_atomic_cmpxchg(&lock->lck_mtx_state, prev, state, acquire)) {
 		enable_preemption();
 		return lck_mtx_unlock_slow(lock);
 	}
@@ -445,7 +443,7 @@ lck_mtx_unlock(
 #if DEVELOPMENT | DEBUG
 	thread_t owner = (thread_t)lock->lck_mtx_owner;
 	if (__improbable(owner != current_thread())) {
-		return lck_mtx_owner_check_panic(lock);
+		lck_mtx_owner_check_panic(lock);
 	}
 #endif
 

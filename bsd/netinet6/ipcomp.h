@@ -53,18 +53,4 @@ struct ipcomp {
 
 #define IPCOMP_CPI_NEGOTIATE_MIN        256
 
-#ifdef BSD_KERNEL_PRIVATE
-struct ipcomp_algorithm {
-	int (*compress)(struct mbuf *, struct mbuf *, size_t *);
-	int (*decompress)(struct mbuf *, struct mbuf *, size_t *);
-	size_t minplen;         /* minimum required length for compression */
-};
-
-struct ipsecrequest;
-extern void ipcomp_init(struct protosw *, struct domain *);
-extern const struct ipcomp_algorithm *ipcomp_algorithm_lookup(int);
-extern void ipcomp4_input(struct mbuf *, int);
-extern int ipcomp4_output(struct mbuf *, struct secasvar *);
-#endif /* BSD_KERNEL_PRIVATE */
-
 #endif /* _NETINET6_IPCOMP_H_ */

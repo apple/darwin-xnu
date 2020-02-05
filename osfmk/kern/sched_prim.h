@@ -78,6 +78,7 @@
 #ifdef  MACH_KERNEL_PRIVATE
 
 #include <kern/sched_urgency.h>
+#include <kern/thread_group.h>
 
 /* Initialization */
 extern void             sched_init(void);
@@ -140,24 +141,23 @@ extern int                      thread_run(
 	thread_t                        new_thread);
 
 /* Resume thread with new stack */
-extern void                     thread_continue(
-	thread_t                old_thread);
+extern __dead2 void     thread_continue(thread_t old_thread);
 
 /* Invoke continuation */
-extern void             call_continuation(
+extern __dead2 void     call_continuation(
 	thread_continue_t       continuation,
-	void                            *parameter,
+	void                    *parameter,
 	wait_result_t           wresult,
-	boolean_t           enable_interrupts);
+	boolean_t               enable_interrupts);
 
 /*
  * Flags that can be passed to set_sched_pri
  * to skip side effects
  */
-typedef enum {
+__options_decl(set_sched_pri_options_t, uint32_t, {
 	SETPRI_DEFAULT  = 0x0,
 	SETPRI_LAZY     = 0x1,  /* Avoid setting AST flags or sending IPIs */
-} set_sched_pri_options_t;
+});
 
 /* Set the current scheduled priority */
 extern void set_sched_pri(
@@ -170,6 +170,12 @@ extern void             sched_set_thread_base_priority(
 	thread_t                thread,
 	int                             priority);
 
+/* Set absolute base priority of the specified thread */
+extern void             sched_set_kernel_thread_priority(
+	thread_t                thread,
+	int                             priority);
+
+
 /* Set the thread's true scheduling mode */
 extern void             sched_set_thread_mode(thread_t thread,
     sched_mode_t mode);
@@ -179,12 +185,6 @@ extern void             sched_thread_mode_demote(thread_t thread,
 /* Un-demote the true scheduler mode */
 extern void             sched_thread_mode_undemote(thread_t thread,
     uint32_t reason);
-
-extern void sched_thread_promote_to_pri(thread_t thread, int priority, uintptr_t trace_obj);
-extern void sched_thread_update_promotion_to_pri(thread_t thread, int priority, uintptr_t trace_obj);
-extern void sched_thread_unpromote(thread_t thread, uintptr_t trace_obj);
-
-extern void assert_promotions_invariant(thread_t thread);
 
 extern void sched_thread_promote_reason(thread_t thread, uint32_t reason, uintptr_t trace_obj);
 extern void sched_thread_unpromote_reason(thread_t thread, uint32_t reason, uintptr_t trace_obj);
@@ -212,8 +212,10 @@ extern void             lightweight_update_priority(
 
 extern void             sched_default_quantum_expire(thread_t thread);
 
-/* Idle processor thread */
-extern void             idle_thread(void);
+/* Idle processor thread continuation */
+extern void             idle_thread(
+	void*           parameter,
+	wait_result_t   result);
 
 extern kern_return_t    idle_thread_create(
 	processor_t             processor);
@@ -228,19 +230,18 @@ extern wait_result_t    thread_block_reason(
 	void                            *parameter,
 	ast_t                           reason);
 
-/* Reschedule thread for execution */
-extern void             thread_setrun(
-	thread_t        thread,
-	integer_t       options);
-
-typedef enum {
+__options_decl(sched_options_t, uint32_t, {
 	SCHED_NONE      = 0x0,
 	SCHED_TAILQ     = 0x1,
 	SCHED_HEADQ     = 0x2,
 	SCHED_PREEMPT   = 0x4,
 	SCHED_REBALANCE = 0x8,
-	SCHED_PEEK      = 0x10,
-} sched_options_t;
+});
+
+/* Reschedule thread for execution */
+extern void             thread_setrun(
+	thread_t        thread,
+	sched_options_t options);
 
 extern processor_set_t  task_choose_pset(
 	task_t                  task);
@@ -267,16 +268,19 @@ extern void             run_queue_init(
 
 extern thread_t run_queue_dequeue(
 	run_queue_t           runq,
-	integer_t             options);
+	sched_options_t       options);
 
 extern boolean_t        run_queue_enqueue(
 	run_queue_t           runq,
-	thread_t                      thread,
-	integer_t             options);
+	thread_t              thread,
+	sched_options_t       options);
 
 extern void     run_queue_remove(
 	run_queue_t            runq,
 	thread_t                       thread);
+
+extern thread_t run_queue_peek(
+	run_queue_t            runq);
 
 struct sched_update_scan_context {
 	uint64_t        earliest_bg_make_runnable_time;
@@ -286,6 +290,11 @@ struct sched_update_scan_context {
 typedef struct sched_update_scan_context *sched_update_scan_context_t;
 
 extern void             sched_rtglobal_runq_scan(sched_update_scan_context_t scan_context);
+
+extern void sched_pset_made_schedulable(
+	processor_t processor,
+	processor_set_t pset,
+	boolean_t drop_lock);
 
 /*
  * Enum to define various events which need IPIs. The IPI policy
@@ -351,7 +360,7 @@ extern boolean_t        thread_run_queue_remove(thread_t thread);
 thread_t thread_run_queue_remove_for_handoff(thread_t thread);
 
 /* Put a thread back in the run queue after being yanked */
-extern void thread_run_queue_reinsert(thread_t thread, integer_t options);
+extern void thread_run_queue_reinsert(thread_t thread, sched_options_t options);
 
 extern void             thread_timer_expire(
 	void                    *thread,
@@ -469,8 +478,6 @@ extern void             thread_exception_return(void) __dead2;
 /* String declaring the name of the current scheduler */
 extern char sched_string[SCHED_STRING_MAX_LENGTH];
 
-extern thread_t port_name_to_thread_for_ulock(mach_port_name_t  thread_name);
-
 /* Attempt to context switch to a specific runnable thread */
 extern wait_result_t thread_handoff_deallocate(thread_t thread);
 
@@ -572,22 +579,19 @@ extern boolean_t preemption_enabled(void);
  * a function pointer table.
  */
 
-#if   !defined(CONFIG_SCHED_TRADITIONAL) && !defined(CONFIG_SCHED_PROTO) && !defined(CONFIG_SCHED_GRRR) && !defined(CONFIG_SCHED_MULTIQ)
+#if   !defined(CONFIG_SCHED_TRADITIONAL) && !defined(CONFIG_SCHED_PROTO) && !defined(CONFIG_SCHED_GRRR) && !defined(CONFIG_SCHED_MULTIQ) && !defined(CONFIG_SCHED_CLUTCH)
 #error Enable at least one scheduler algorithm in osfmk/conf/MASTER.XXX
 #endif
 
-#if DEBUG
-#define SCHED(f) (sched_current_dispatch->f)
-#else /* DEBUG */
 
-/*
- * For DEV & REL kernels, use a static dispatch table instead of
- * using the indirect function table.
- */
+#if CONFIG_SCHED_CLUTCH
+extern const struct sched_dispatch_table sched_clutch_dispatch;
+#define SCHED(f) (sched_clutch_dispatch.f)
+#else /* CONFIG_SCHED_CLUTCH */
 extern const struct sched_dispatch_table sched_dualq_dispatch;
 #define SCHED(f) (sched_dualq_dispatch.f)
+#endif /* CONFIG_SCHED_CLUTCH */
 
-#endif /* DEBUG */
 
 struct sched_dispatch_table {
 	const char *sched_name;
@@ -636,7 +640,7 @@ struct sched_dispatch_table {
 	boolean_t (*processor_enqueue)(
 		processor_t                    processor,
 		thread_t                       thread,
-		integer_t                      options);
+		sched_options_t                options);
 
 	/* Migrate threads away in preparation for processor shutdown */
 	void (*processor_queue_shutdown)(
@@ -713,13 +717,6 @@ struct sched_dispatch_table {
 
 	void            (*thread_update_scan)(sched_update_scan_context_t scan_context);
 
-	/*
-	 * Use processor->next_thread to pin a thread to an idle
-	 * processor. If FALSE, threads are enqueued and can
-	 * be stolen by other processors.
-	 */
-	boolean_t   direct_dispatch_to_idle_processors;
-
 	/* Supports more than one pset */
 	boolean_t   multiple_psets_enabled;
 	/* Supports scheduler groups */
@@ -747,6 +744,16 @@ struct sched_dispatch_table {
 	void    (*check_spill)(processor_set_t pset, thread_t thread);
 	sched_ipi_type_t (*ipi_policy)(processor_t dst, thread_t thread, boolean_t dst_idle, sched_ipi_event_t event);
 	bool    (*thread_should_yield)(processor_t processor, thread_t thread);
+
+	/* Routine to update run counts */
+	uint32_t (*run_count_incr)(thread_t thread);
+	uint32_t (*run_count_decr)(thread_t thread);
+
+	/* Routine to update scheduling bucket for a thread */
+	void (*update_thread_bucket)(thread_t thread);
+
+	/* Routine to inform the scheduler when a new pset becomes schedulable */
+	void (*pset_made_schedulable)(processor_t processor, processor_set_t pset, boolean_t drop_lock);
 };
 
 #if defined(CONFIG_SCHED_TRADITIONAL)
@@ -767,11 +774,9 @@ extern const struct sched_dispatch_table sched_proto_dispatch;
 extern const struct sched_dispatch_table sched_grrr_dispatch;
 #endif
 
-/*
- * It is an error to invoke any scheduler-related code
- * before this is set up
- */
-extern const struct sched_dispatch_table *sched_current_dispatch;
+#if defined(CONFIG_SCHED_CLUTCH)
+extern const struct sched_dispatch_table sched_clutch_dispatch;
+#endif
 
 #endif  /* MACH_KERNEL_PRIVATE */
 

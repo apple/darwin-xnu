@@ -28,6 +28,8 @@
 #ifndef __IOKIT_IOTYPES_H
 #define __IOKIT_IOTYPES_H
 
+#ifndef PLATFORM_DriverKit
+
 #ifndef IOKIT
 #define IOKIT 1
 #endif /* !IOKIT */
@@ -47,7 +49,11 @@ extern "C" {
 
 #ifndef NULL
 #if defined (__cplusplus)
+#if __cplusplus >= 201103L
+#define NULL nullptr
+#else
 #define NULL    0
+#endif
 #else
 #define NULL ((void *)0)
 #endif
@@ -173,6 +179,7 @@ typedef io_object_t     io_enumerator_t;
 typedef io_object_t     io_iterator_t;
 typedef io_object_t     io_registry_entry_t;
 typedef io_object_t     io_service_t;
+typedef io_object_t     uext_object_t;
 
 #define IO_OBJECT_NULL  ((io_object_t) 0)
 
@@ -190,35 +197,41 @@ enum {
 	kIOCopybackCache            = 3,
 	kIOWriteCombineCache        = 4,
 	kIOCopybackInnerCache       = 5,
-	kIOPostedWrite              = 6
+	kIOPostedWrite              = 6,
+	kIORealTimeCache            = 7,
+	kIOPostedReordered          = 8,
+	kIOPostedCombinedReordered  = 9,
 };
 
 // IOMemory mapping options
 enum {
-	kIOMapAnywhere              = 0x00000001,
+	kIOMapAnywhere                = 0x00000001,
 
-	kIOMapCacheMask             = 0x00000700,
-	kIOMapCacheShift            = 8,
-	kIOMapDefaultCache          = kIODefaultCache       << kIOMapCacheShift,
-	kIOMapInhibitCache          = kIOInhibitCache       << kIOMapCacheShift,
-	kIOMapWriteThruCache        = kIOWriteThruCache     << kIOMapCacheShift,
-	kIOMapCopybackCache         = kIOCopybackCache      << kIOMapCacheShift,
-	kIOMapWriteCombineCache     = kIOWriteCombineCache  << kIOMapCacheShift,
-	kIOMapCopybackInnerCache    = kIOCopybackInnerCache << kIOMapCacheShift,
-	kIOMapPostedWrite           = kIOPostedWrite        << kIOMapCacheShift,
+	kIOMapCacheMask               = 0x00000f00,
+	kIOMapCacheShift              = 8,
+	kIOMapDefaultCache            = kIODefaultCache            << kIOMapCacheShift,
+	kIOMapInhibitCache            = kIOInhibitCache            << kIOMapCacheShift,
+	kIOMapWriteThruCache          = kIOWriteThruCache          << kIOMapCacheShift,
+	kIOMapCopybackCache           = kIOCopybackCache           << kIOMapCacheShift,
+	kIOMapWriteCombineCache       = kIOWriteCombineCache       << kIOMapCacheShift,
+	kIOMapCopybackInnerCache      = kIOCopybackInnerCache      << kIOMapCacheShift,
+	kIOMapPostedWrite             = kIOPostedWrite             << kIOMapCacheShift,
+	kIOMapRealTimeCache           = kIORealTimeCache           << kIOMapCacheShift,
+	kIOMapPostedReordered         = kIOPostedReordered         << kIOMapCacheShift,
+	kIOMapPostedCombinedReordered = kIOPostedCombinedReordered << kIOMapCacheShift,
 
-	kIOMapUserOptionsMask       = 0x00000fff,
+	kIOMapUserOptionsMask         = 0x00000fff,
 
-	kIOMapReadOnly              = 0x00001000,
+	kIOMapReadOnly                = 0x00001000,
 
-	kIOMapStatic                = 0x01000000,
-	kIOMapReference             = 0x02000000,
-	kIOMapUnique                = 0x04000000,
+	kIOMapStatic                  = 0x01000000,
+	kIOMapReference               = 0x02000000,
+	kIOMapUnique                  = 0x04000000,
 #ifdef XNU_KERNEL_PRIVATE
-	kIOMap64Bit                 = 0x08000000,
+	kIOMap64Bit                   = 0x08000000,
 #endif
-	kIOMapPrefault              = 0x10000000,
-	kIOMapOverwrite     = 0x20000000
+	kIOMapPrefault                = 0x10000000,
+	kIOMapOverwrite               = 0x20000000
 };
 
 /*! @enum Scale Factors
@@ -252,5 +265,31 @@ typedef unsigned int IODeviceNumber;
 #ifdef __cplusplus
 }
 #endif
+
+#else /* !PLATFORM_DriverKit */
+
+#include <stdint.h>
+
+typedef uint32_t          IOOptionBits;
+typedef int32_t           IOFixed;
+typedef uint32_t          IOVersion;
+typedef uint32_t          IOItemCount;
+typedef uint32_t          IOCacheMode;
+
+typedef uint32_t          IOByteCount32;
+typedef uint64_t          IOByteCount64;
+typedef IOByteCount64     IOByteCount;
+
+typedef uint32_t  IOPhysicalAddress32;
+typedef uint64_t  IOPhysicalAddress64;
+typedef uint32_t  IOPhysicalLength32;
+typedef uint64_t  IOPhysicalLength64;
+
+typedef IOPhysicalAddress64      IOPhysicalAddress;
+typedef IOPhysicalLength64       IOPhysicalLength;
+
+typedef uint64_t       IOVirtualAddress;
+
+#endif /* PLATFORM_DriverKit */
 
 #endif /* ! __IOKIT_IOTYPES_H */

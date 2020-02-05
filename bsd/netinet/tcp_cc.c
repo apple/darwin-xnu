@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2013-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -42,40 +42,6 @@
 #include <mach/sdt.h>
 #include <libkern/OSAtomic.h>
 
-struct tcp_cc_debug_state {
-	u_int64_t ccd_tsns;
-	char ccd_srcaddr[INET6_ADDRSTRLEN];
-	uint16_t ccd_srcport;
-	char ccd_destaddr[INET6_ADDRSTRLEN];
-	uint16_t ccd_destport;
-	uint32_t ccd_snd_cwnd;
-	uint32_t ccd_snd_wnd;
-	uint32_t ccd_snd_ssthresh;
-	uint32_t ccd_pipeack;
-	uint32_t ccd_rttcur;
-	uint32_t ccd_rxtcur;
-	uint32_t ccd_srtt;
-	uint32_t ccd_event;
-	uint32_t ccd_sndcc;
-	uint32_t ccd_sndhiwat;
-	uint32_t ccd_bytes_acked;
-	u_int8_t ccd_cc_index;
-	u_int8_t ccd_unused_1__;
-	u_int16_t ccd_unused_2__;
-	union {
-		struct {
-			uint32_t ccd_last_max;
-			uint32_t ccd_tcp_win;
-			uint32_t ccd_target_win;
-			uint32_t ccd_avg_lastmax;
-			uint32_t ccd_mean_deviation;
-		} cubic_state;
-		struct {
-			u_int32_t led_base_rtt;
-		} ledbat_state;
-	} u;
-};
-
 SYSCTL_SKMEM_TCP_INT(OID_AUTO, cc_debug, CTLFLAG_RW | CTLFLAG_LOCKED,
     int, tcp_cc_debug, 0, "Enable debug data collection");
 
@@ -113,8 +79,6 @@ SYSCTL_INT(_net_inet_tcp, OID_AUTO, cwnd_nonvalidated,
 struct tcp_cc_algo* tcp_cc_algo_list[TCP_CC_ALGO_COUNT];
 struct zone *tcp_cc_zone;
 
-/* Information for colelcting TCP debug information using control socket */
-#define TCP_CCDEBUG_CONTROL_NAME "com.apple.network.tcp_ccdebug"
 #define TCP_CCDBG_NOUNIT 0xffffffff
 static kern_ctl_ref tcp_ccdbg_ctlref = NULL;
 volatile UInt32 tcp_ccdbg_unit = TCP_CCDBG_NOUNIT;
@@ -151,12 +115,13 @@ tcp_cc_control_register(void)
 	errno_t err;
 
 	bzero(&ccdbg_control, sizeof(ccdbg_control));
-	strlcpy(ccdbg_control.ctl_name, TCP_CCDEBUG_CONTROL_NAME,
+	strlcpy(ccdbg_control.ctl_name, TCP_CC_CONTROL_NAME,
 	    sizeof(ccdbg_control.ctl_name));
 	ccdbg_control.ctl_connect = tcp_ccdbg_control_connect;
 	ccdbg_control.ctl_disconnect = tcp_ccdbg_control_disconnect;
 	ccdbg_control.ctl_flags |= CTL_FLAG_PRIVILEGED;
 	ccdbg_control.ctl_flags |= CTL_FLAG_REG_SOCK_STREAM;
+	ccdbg_control.ctl_sendsize = 32 * 1024;
 
 	err = ctl_register(&ccdbg_control, &tcp_ccdbg_ctlref);
 	if (err != 0) {
@@ -340,7 +305,7 @@ tcp_cc_cwnd_init_or_reset(struct tcpcb *tp)
 /*
  * Indicate whether this ack should be delayed.
  * Here is the explanation for different settings of tcp_delack_enabled:
- *  - when set to 1, the bhavior is same as when set to 2. We kept this
+ *  - when set to 1, the behavior is same as when set to 2. We kept this
  *    for binary compatibility.
  *  - when set to 2, will "ack every other packet"
  *      - if our last ack wasn't a 0-sized window.
@@ -372,8 +337,8 @@ tcp_cc_delay_ack(struct tcpcb *tp, struct tcphdr *th)
 		if ((tp->t_flags & TF_RXWIN0SENT) == 0 &&
 		    (th->th_flags & TH_PUSH) == 0 &&
 		    ((tp->t_unacksegs == 1) ||
-		    ((tp->t_flags & TF_STRETCHACK) != 0 &&
-		    tp->t_unacksegs < (maxseg_unacked)))) {
+		    ((tp->t_flags & TF_STRETCHACK) &&
+		    tp->t_unacksegs < maxseg_unacked))) {
 			return 1;
 		}
 		break;

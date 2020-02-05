@@ -34,12 +34,14 @@
 
 #define MACH_VOUCHER_ATTR_BANK_NULL             ((mach_voucher_attr_recipe_command_t)601)
 #define MACH_VOUCHER_ATTR_BANK_CREATE           ((mach_voucher_attr_recipe_command_t)610)
+#define MACH_VOUCHER_ATTR_BANK_MODIFY_PERSONA   ((mach_voucher_attr_recipe_command_t)611)
 
 #define MACH_VOUCHER_BANK_CONTENT_SIZE (500)
 
 typedef uint32_t bank_action_t;
 #define BANK_ORIGINATOR_PID     0x1
 #define BANK_PERSONA_TOKEN      0x2
+#define BANK_PERSONA_ID         0x3
 
 struct proc_persona_info {
 	uint64_t unique_pid;
@@ -57,8 +59,15 @@ struct persona_token {
 	struct proc_persona_info proximate;
 };
 
+struct persona_modify_info {
+	uint32_t persona_id;
+	uint64_t unique_pid;
+};
+
 #ifdef PRIVATE
-#define ENTITLEMENT_PERSONA_PROPAGATE "com.apple.private.personas.propagate"
+/* Redeem bank voucher on behalf of another process while changing the persona */
+#define ENTITLEMENT_PERSONA_MODIFY    "com.apple.private.persona.modify"
+#define ENTITLEMENT_PERSONA_NO_PROPAGATE "com.apple.private.personas.no.propagate"
 #endif /* PRIVATE */
 
 #endif /* _BANK_BANK_TYPES_H_ */

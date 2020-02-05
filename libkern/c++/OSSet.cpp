@@ -119,7 +119,7 @@ OSSet::withCapacity(unsigned int capacity)
 
 	if (me && !me->initWithCapacity(capacity)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -134,7 +134,7 @@ OSSet::withObjects(const OSObject *objects[],
 
 	if (me && !me->initWithObjects(objects, count, capacity)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -148,7 +148,7 @@ OSSet::withArray(const OSArray *array,
 
 	if (me && !me->initWithArray(array, capacity)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -162,7 +162,7 @@ OSSet::withSet(const OSSet *set,
 
 	if (me && !me->initWithSet(set, capacity)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -230,7 +230,7 @@ OSSet::setObject(const OSMetaClassBase *anObject)
 bool
 OSSet::merge(const OSArray * array)
 {
-	const OSMetaClassBase * anObject = 0;
+	const OSMetaClassBase * anObject = NULL;
 	bool                    result   = true;
 
 	for (int i = 0; (anObject = array->getObject(i)); i++) {
@@ -367,10 +367,10 @@ OSSet::getNextObjectForIterator(void *inIterator, OSObject **ret) const
 	if (index < members->count) {
 		*ret = members->getObject(index);
 	} else {
-		*ret = 0;
+		*ret = NULL;
 	}
 
-	return *ret != 0;
+	return *ret != NULL;
 }
 
 bool
@@ -410,13 +410,13 @@ OSCollection *
 OSSet::copyCollection(OSDictionary *cycleDict)
 {
 	bool allocDict = !cycleDict;
-	OSCollection *ret = 0;
-	OSSet *newSet = 0;
+	OSCollection *ret = NULL;
+	OSSet *newSet = NULL;
 
 	if (allocDict) {
 		cycleDict = OSDictionary::withCapacity(16);
 		if (!cycleDict) {
-			return 0;
+			return NULL;
 		}
 	}
 
@@ -455,7 +455,7 @@ OSSet::copyCollection(OSDictionary *cycleDict)
 		;
 
 		ret = newSet;
-		newSet = 0;
+		newSet = NULL;
 	} while (false);
 
 abortCopy:

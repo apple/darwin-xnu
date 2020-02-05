@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <signal.h>
 #include <sys/sysctl.h>
+#include <sys/kern_memorystatus.h>
 #include <mach-o/dyld.h>
 #include <perfcheck_keys.h>
 
@@ -32,6 +33,8 @@ enum {
 	X(DISPATCH_SOURCE_CREATE_FAILED) \
 	X(INITIAL_SIGNAL_TO_PARENT_FAILED) \
 	X(SIGNAL_TO_PARENT_FAILED) \
+	X(MEMORYSTATUS_CONTROL_FAILED) \
+	X(IS_FREEZABLE_NOT_AS_EXPECTED) \
 	X(EXIT_CODE_MAX)
 
 #define EXIT_CODES_ENUM(VAR) VAR,
@@ -47,8 +50,9 @@ static const char *exit_codes_str[] = {
 #define SYSCTL_FREEZE_TO_MEMORY         "kern.memorystatus_freeze_to_memory=1"
 
 static pid_t pid = -1;
-static dt_stat_t r;
-static dt_stat_time_t s;
+static dt_stat_t ratio;
+static dt_stat_time_t compr_time;
+static dt_stat_time_t decompr_time;
 
 void allocate_zero_pages(char **buf, int num_pages, int vmpgsize);
 void allocate_mostly_zero_pages(char **buf, int num_pages, int vmpgsize);
@@ -128,7 +132,7 @@ freeze_helper_process(void)
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("vm.compressor_input_bytes", &input_before, &length, NULL, 0),
 	    "failed to query vm.compressor_input_bytes");
 
-	T_STAT_MEASURE(s) {
+	T_STAT_MEASURE(compr_time) {
 		ret = sysctlbyname("kern.memorystatus_freeze", NULL, NULL, &pid, sizeof(pid));
 		errno_sysctl_freeze = errno;
 	};
@@ -152,7 +156,7 @@ freeze_helper_process(void)
 		T_END;
 	}
 
-	dt_stat_add(r, (double)(input_after - input_before) / (double)(compressed_after - compressed_before));
+	dt_stat_add(ratio, (double)(input_after - input_before) / (double)(compressed_after - compressed_before));
 
 	ret = sysctlbyname("kern.memorystatus_thaw", NULL, NULL, &pid, sizeof(pid));
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "sysctl kern.memorystatus_thaw failed");
@@ -163,8 +167,6 @@ freeze_helper_process(void)
 void
 cleanup(void)
 {
-	int status = 0;
-
 	/* No helper process. */
 	if (pid == -1) {
 		return;
@@ -182,9 +184,10 @@ run_compressor_test(int size_mb, int page_type)
 	char **launch_tool_args;
 	char testpath[PATH_MAX];
 	uint32_t testpath_buf_size;
-	dispatch_source_t ds_freeze, ds_proc;
+	dispatch_source_t ds_freeze, ds_proc, ds_decompr;
 	int freeze_enabled;
 	size_t length;
+	__block bool decompr_latency_is_stable = false;
 
 	length = sizeof(freeze_enabled);
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("vm.freeze_enabled", &freeze_enabled, &length, NULL, 0),
@@ -196,24 +199,35 @@ run_compressor_test(int size_mb, int page_type)
 
 	T_ATEND(cleanup);
 
-	r = dt_stat_create("(input bytes / compressed bytes)", "compression_ratio");
-	s = dt_stat_time_create("compressor_latency");
+	ratio = dt_stat_create("(input bytes / compressed bytes)", "compression_ratio");
+	compr_time = dt_stat_time_create("compressor_latency");
+
 	// This sets the A/B failure threshold at 50% of baseline for compressor_latency
-	dt_stat_set_variable(s, kPCFailureThresholdPctVar, 50.0);
+	dt_stat_set_variable((struct dt_stat *)compr_time, kPCFailureThresholdPctVar, 50.0);
+
+	signal(SIGUSR2, SIG_IGN);
+	ds_decompr = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGUSR2, 0, dispatch_get_main_queue());
+	T_QUIET; T_ASSERT_NOTNULL(ds_decompr, "dispatch_source_create (ds_decompr)");
+
+	dispatch_source_set_event_handler(ds_decompr, ^{
+		decompr_latency_is_stable = true;
+	});
+	dispatch_activate(ds_decompr);
 
 	signal(SIGUSR1, SIG_IGN);
 	ds_freeze = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGUSR1, 0, dispatch_get_main_queue());
 	T_QUIET; T_ASSERT_NOTNULL(ds_freeze, "dispatch_source_create (ds_freeze)");
 
 	dispatch_source_set_event_handler(ds_freeze, ^{
-		if (!dt_stat_stable(s)) {
+		if (!(dt_stat_stable(compr_time) && decompr_latency_is_stable)) {
 		        freeze_helper_process();
 		} else {
-		        dt_stat_finalize(s);
-		        dt_stat_finalize(r);
+		        dt_stat_finalize(compr_time);
+		        dt_stat_finalize(ratio);
 
 		        kill(pid, SIGKILL);
 		        dispatch_source_cancel(ds_freeze);
+		        dispatch_source_cancel(ds_decompr);
 		}
 	});
 	dispatch_activate(ds_freeze);
@@ -266,7 +280,7 @@ run_compressor_test(int size_mb, int page_type)
 }
 
 T_HELPER_DECL(allocate_pages, "allocates pages to compress") {
-	int i, j, ret, size_mb, page_type, vmpgsize;
+	int i, j, ret, size_mb, page_type, vmpgsize, freezable_state;
 	size_t vmpgsize_length;
 	__block int num_pages;
 	__block char **buf;
@@ -312,6 +326,20 @@ T_HELPER_DECL(allocate_pages, "allocates pages to compress") {
 		i = buf[j][0];
 	}
 
+	decompr_time = dt_stat_time_create("decompression_latency");
+
+	/* Opt in to freezing. */
+	printf("[%d] Setting state to freezable\n", getpid());
+	if (memorystatus_control(MEMORYSTATUS_CMD_SET_PROCESS_IS_FREEZABLE, getpid(), 1, NULL, 0) != KERN_SUCCESS) {
+		exit(MEMORYSTATUS_CONTROL_FAILED);
+	}
+
+	/* Verify that the state has been set correctly */
+	freezable_state = memorystatus_control(MEMORYSTATUS_CMD_GET_PROCESS_IS_FREEZABLE, getpid(), 0, NULL, 0);
+	if (freezable_state != 1) {
+		exit(IS_FREEZABLE_NOT_AS_EXPECTED);
+	}
+
 	dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC), dispatch_get_main_queue(), ^{
 		/* Signal to the parent that we're done allocating and it's ok to freeze us */
 		printf("[%d] Sending initial signal to parent to begin freezing\n", getpid());
@@ -326,13 +354,33 @@ T_HELPER_DECL(allocate_pages, "allocates pages to compress") {
 		exit(DISPATCH_SOURCE_CREATE_FAILED);
 	}
 
+	__block bool collect_dt_stat_measurements = true;
+
 	dispatch_source_set_event_handler(ds_signal, ^{
 		volatile int tmp;
+		uint64_t decompr_start_time, decompr_end_time;
+
+		decompr_start_time = mach_absolute_time();
 
 		/* Make sure all the pages are accessed before trying to freeze again */
 		for (int x = 0; x < num_pages; x++) {
 		        tmp = buf[x][0];
 		}
+
+		decompr_end_time = mach_absolute_time();
+
+		if (collect_dt_stat_measurements) {
+			if (dt_stat_stable(decompr_time)) {
+				collect_dt_stat_measurements = false;
+				dt_stat_finalize(decompr_time);
+				if (kill(getppid(), SIGUSR2) != 0) {
+					exit(SIGNAL_TO_PARENT_FAILED);
+				}
+			} else {
+				dt_stat_mach_time_add(decompr_time, decompr_end_time - decompr_start_time);
+			}
+		}
+
 		if (kill(getppid(), SIGUSR1) != 0) {
 		        exit(SIGNAL_TO_PARENT_FAILED);
 		}
@@ -348,42 +396,49 @@ T_HELPER_DECL(allocate_pages, "allocates pages to compress") {
 #ifndef DT_IOSMARK
 T_DECL(compr_10MB_zero,
     "Compression latency for 10MB - zero pages",
+    T_META_ASROOT(true),
     T_META_SYSCTL_INT(SYSCTL_FREEZE_TO_MEMORY)) {
 	run_compressor_test(10, ALL_ZEROS);
 }
 
 T_DECL(compr_10MB_mostly_zero,
     "Compression latency for 10MB - mostly zero pages",
+    T_META_ASROOT(true),
     T_META_SYSCTL_INT(SYSCTL_FREEZE_TO_MEMORY)) {
 	run_compressor_test(10, MOSTLY_ZEROS);
 }
 
 T_DECL(compr_10MB_random,
     "Compression latency for 10MB - random pages",
+    T_META_ASROOT(true),
     T_META_SYSCTL_INT(SYSCTL_FREEZE_TO_MEMORY)) {
 	run_compressor_test(10, RANDOM);
 }
 
 T_DECL(compr_10MB_typical,
     "Compression latency for 10MB - typical pages",
+    T_META_ASROOT(true),
     T_META_SYSCTL_INT(SYSCTL_FREEZE_TO_MEMORY)) {
 	run_compressor_test(10, TYPICAL);
 }
 
 T_DECL(compr_100MB_zero,
     "Compression latency for 100MB - zero pages",
+    T_META_ASROOT(true),
     T_META_SYSCTL_INT(SYSCTL_FREEZE_TO_MEMORY)) {
 	run_compressor_test(100, ALL_ZEROS);
 }
 
 T_DECL(compr_100MB_mostly_zero,
     "Compression latency for 100MB - mostly zero pages",
+    T_META_ASROOT(true),
     T_META_SYSCTL_INT(SYSCTL_FREEZE_TO_MEMORY)) {
 	run_compressor_test(100, MOSTLY_ZEROS);
 }
 
 T_DECL(compr_100MB_random,
     "Compression latency for 100MB - random pages",
+    T_META_ASROOT(true),
     T_META_SYSCTL_INT(SYSCTL_FREEZE_TO_MEMORY)) {
 	run_compressor_test(100, RANDOM);
 }
@@ -391,6 +446,7 @@ T_DECL(compr_100MB_random,
 
 T_DECL(compr_100MB_typical,
     "Compression latency for 100MB - typical pages",
+    T_META_ASROOT(true),
     T_META_SYSCTL_INT(SYSCTL_FREEZE_TO_MEMORY)) {
 	run_compressor_test(100, TYPICAL);
 }

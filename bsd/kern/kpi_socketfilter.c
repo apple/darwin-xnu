@@ -106,21 +106,40 @@ errno_t sflt_register(const struct sflt_filter *filter, int domain,
 __private_extern__ int
 sflt_permission_check(struct inpcb *inp)
 {
-	/*
-	 * All these permissions only apply to the co-processor interface,
-	 * so ignore IPv4.
-	 */
-	if (!(inp->inp_vflag & INP_IPV6)) {
+	/* Only IPv4 or IPv6 sockets can bypass filters */
+	if (!(inp->inp_vflag & INP_IPV4) &&
+	    !(inp->inp_vflag & INP_IPV6)) {
 		return 0;
 	}
 	/* Sockets that have this entitlement bypass socket filters. */
 	if (INP_INTCOPROC_ALLOWED(inp)) {
 		return 1;
 	}
+	/* Sockets bound to an intcoproc interface bypass socket filters. */
 	if ((inp->inp_flags & INP_BOUND_IF) &&
 	    IFNET_IS_INTCOPROC(inp->inp_boundifp)) {
 		return 1;
 	}
+#if NECP
+	/*
+	 * Make sure that the NECP policy is populated.
+	 * If result is not populated, the policy ID will be
+	 * NECP_KERNEL_POLICY_ID_NONE. Note that if the result
+	 * is populated, but there was no match, it will be
+	 * NECP_KERNEL_POLICY_ID_NO_MATCH.
+	 * Do not call inp_update_necp_policy() to avoid scoping
+	 * a socket prior to calls to bind().
+	 */
+	if (inp->inp_policyresult.policy_id == NECP_KERNEL_POLICY_ID_NONE) {
+		necp_socket_find_policy_match(inp, NULL, NULL, 0);
+	}
+
+	/* If the filter unit is marked to be "no filter", bypass filters */
+	if (inp->inp_policyresult.results.filter_control_unit ==
+	    NECP_FILTER_UNIT_NO_FILTER) {
+		return 1;
+	}
+#endif /* NECP */
 	return 0;
 }
 

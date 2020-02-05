@@ -83,6 +83,7 @@
 #include <sys/signalvar.h>
 #include <sys/sysctl.h>
 #include <sys/syslog.h>
+#include <sys/unpcb.h>
 #include <sys/ev.h>
 #include <kern/locks.h>
 #include <net/route.h>
@@ -185,6 +186,15 @@ soisconnecting(struct socket *so)
 void
 soisconnected(struct socket *so)
 {
+	/*
+	 * If socket is subject to filter and is pending initial verdict,
+	 * delay marking socket as connected and do not present the connected
+	 * socket to user just yet.
+	 */
+	if (cfil_sock_connected_pending_verdict(so)) {
+		return;
+	}
+
 	so->so_state &= ~(SS_ISCONNECTING | SS_ISDISCONNECTING | SS_ISCONFIRMING);
 	so->so_state |= SS_ISCONNECTED;
 
@@ -381,6 +391,7 @@ sonewconn_internal(struct socket *head, int connstatus)
 	    SOF_NOTIFYCONFLICT | SOF_BINDRANDOMPORT | SOF_NPX_SETOPTSHUT |
 	    SOF_NODEFUNCT | SOF_PRIVILEGED_TRAFFIC_CLASS | SOF_NOTSENT_LOWAT |
 	    SOF_USELRO | SOF_DELEGATED);
+	so->so_flags1 |= SOF1_INBOUND;
 	so->so_usecount = 1;
 	so->next_lock_lr = 0;
 	so->next_unlock_lr = 0;
@@ -395,9 +406,11 @@ sonewconn_internal(struct socket *head, int connstatus)
 
 	/* inherit traffic management properties of listener */
 	so->so_flags1 |=
-	    head->so_flags1 & (SOF1_TRAFFIC_MGT_SO_BACKGROUND);
+	    head->so_flags1 & (SOF1_TRAFFIC_MGT_SO_BACKGROUND | SOF1_TC_NET_SERV_TYPE |
+	    SOF1_QOSMARKING_ALLOWED | SOF1_QOSMARKING_POLICY_OVERRIDE);
 	so->so_background_thread = head->so_background_thread;
 	so->so_traffic_class = head->so_traffic_class;
+	so->so_netsvctype = head->so_netsvctype;
 
 	if (soreserve(so, head->so_snd.sb_hiwat, head->so_rcv.sb_hiwat)) {
 		sodealloc(so);
@@ -434,6 +447,9 @@ sonewconn_internal(struct socket *head, int connstatus)
 		}
 	}
 
+	if (so->so_proto->pr_copy_last_owner != NULL) {
+		(*so->so_proto->pr_copy_last_owner)(so, head);
+	}
 	atomic_add_32(&so->so_proto->pr_domain->dom_refs, 1);
 
 	/* Insert in head appropriate lists */
@@ -605,7 +621,7 @@ sbwakeup(struct sockbuf *sb)
  * if the socket has the SS_ASYNC flag set.
  */
 void
-sowakeup(struct socket *so, struct sockbuf *sb)
+sowakeup(struct socket *so, struct sockbuf *sb, struct socket *so2)
 {
 	if (so->so_flags & SOF_DEFUNCT) {
 		SODEFUNCTLOG("%s[%d, %s]: defunct so 0x%llx [%d,%d] si 0x%x, "
@@ -640,11 +656,42 @@ sowakeup(struct socket *so, struct sockbuf *sb)
 		so->so_upcallusecount++;
 
 		if (lock) {
+			if (so2) {
+				struct unpcb *unp = sotounpcb(so2);
+				unp->unp_flags |= UNP_DONTDISCONNECT;
+				unp->rw_thrcount++;
+
+				socket_unlock(so2, 0);
+			}
 			socket_unlock(so, 0);
 		}
 		(*sb_upcall)(so, sb_upcallarg, M_DONTWAIT);
 		if (lock) {
+			if (so2 && so > so2) {
+				struct unpcb *unp;
+				socket_lock(so2, 0);
+
+				unp = sotounpcb(so2);
+				unp->rw_thrcount--;
+				if (unp->rw_thrcount == 0) {
+					unp->unp_flags &= ~UNP_DONTDISCONNECT;
+					wakeup(unp);
+				}
+			}
+
 			socket_lock(so, 0);
+
+			if (so2 && so < so2) {
+				struct unpcb *unp;
+				socket_lock(so2, 0);
+
+				unp = sotounpcb(so2);
+				unp->rw_thrcount--;
+				if (unp->rw_thrcount == 0) {
+					unp->unp_flags &= ~UNP_DONTDISCONNECT;
+					wakeup(unp);
+				}
+			}
 		}
 
 		so->so_upcallusecount--;
@@ -1083,82 +1130,6 @@ sbappendrecord(struct sockbuf *sb, struct mbuf *m0)
 	}
 	sbcompress(sb, m, m0);
 	SBLASTRECORDCHK(sb, "sbappendrecord 3");
-	return 1;
-}
-
-/*
- * As above except that OOB data
- * is inserted at the beginning of the sockbuf,
- * but after any other OOB data.
- */
-int
-sbinsertoob(struct sockbuf *sb, struct mbuf *m0)
-{
-	struct mbuf *m;
-	struct mbuf **mp;
-
-	if (m0 == 0) {
-		return 0;
-	}
-
-	SBLASTRECORDCHK(sb, "sbinsertoob 1");
-
-	if ((sb->sb_flags & SB_RECV && !(m0->m_flags & M_SKIPCFIL)) != 0) {
-		int error = sflt_data_in(sb->sb_so, NULL, &m0, NULL,
-		    sock_data_filt_flag_oob);
-
-		SBLASTRECORDCHK(sb, "sbinsertoob 2");
-
-#if CONTENT_FILTER
-		if (error == 0) {
-			error = cfil_sock_data_in(sb->sb_so, NULL, m0, NULL, 0);
-		}
-#endif /* CONTENT_FILTER */
-
-		if (error) {
-			if (error != EJUSTRETURN) {
-				m_freem(m0);
-			}
-			return 0;
-		}
-	} else if (m0) {
-		m0->m_flags &= ~M_SKIPCFIL;
-	}
-
-	for (mp = &sb->sb_mb; *mp; mp = &((*mp)->m_nextpkt)) {
-		m = *mp;
-again:
-		switch (m->m_type) {
-		case MT_OOBDATA:
-			continue;               /* WANT next train */
-
-		case MT_CONTROL:
-			m = m->m_next;
-			if (m) {
-				goto again;     /* inspect THIS train further */
-			}
-		}
-		break;
-	}
-	/*
-	 * Put the first mbuf on the queue.
-	 * Note this permits zero length records.
-	 */
-	sballoc(sb, m0);
-	m0->m_nextpkt = *mp;
-	if (*mp == NULL) {
-		/* m0 is actually the new tail */
-		sb->sb_lastrecord = m0;
-	}
-	*mp = m0;
-	m = m0->m_next;
-	m0->m_next = 0;
-	if (m && (m0->m_flags & M_EOR)) {
-		m0->m_flags &= ~M_EOR;
-		m->m_flags |= M_EOR;
-	}
-	sbcompress(sb, m, m0);
-	SBLASTRECORDCHK(sb, "sbinsertoob 3");
 	return 1;
 }
 
@@ -2845,21 +2816,25 @@ sbunlock(struct sockbuf *sb, boolean_t keeplocked)
 	}
 
 	if (!keeplocked) {      /* unlock on exit */
-		lck_mtx_t *mutex_held;
-
-		if (so->so_proto->pr_getlock != NULL) {
-			mutex_held = (*so->so_proto->pr_getlock)(so, PR_F_WILLUNLOCK);
+		if (so->so_flags & SOF_MP_SUBFLOW || SOCK_DOM(so) == PF_MULTIPATH) {
+			(*so->so_proto->pr_unlock)(so, 1, lr_saved);
 		} else {
-			mutex_held = so->so_proto->pr_domain->dom_mtx;
+			lck_mtx_t *mutex_held;
+
+			if (so->so_proto->pr_getlock != NULL) {
+				mutex_held = (*so->so_proto->pr_getlock)(so, PR_F_WILLUNLOCK);
+			} else {
+				mutex_held = so->so_proto->pr_domain->dom_mtx;
+			}
+
+			LCK_MTX_ASSERT(mutex_held, LCK_MTX_ASSERT_OWNED);
+
+			VERIFY(so->so_usecount > 0);
+			so->so_usecount--;
+			so->unlock_lr[so->next_unlock_lr] = lr_saved;
+			so->next_unlock_lr = (so->next_unlock_lr + 1) % SO_LCKDBG_MAX;
+			lck_mtx_unlock(mutex_held);
 		}
-
-		LCK_MTX_ASSERT(mutex_held, LCK_MTX_ASSERT_OWNED);
-
-		VERIFY(so->so_usecount > 0);
-		so->so_usecount--;
-		so->unlock_lr[so->next_unlock_lr] = lr_saved;
-		so->next_unlock_lr = (so->next_unlock_lr + 1) % SO_LCKDBG_MAX;
-		lck_mtx_unlock(mutex_held);
 	}
 }
 
@@ -2867,7 +2842,7 @@ void
 sorwakeup(struct socket *so)
 {
 	if (sb_notify(&so->so_rcv)) {
-		sowakeup(so, &so->so_rcv);
+		sowakeup(so, &so->so_rcv, NULL);
 	}
 }
 
@@ -2875,7 +2850,7 @@ void
 sowwakeup(struct socket *so)
 {
 	if (sb_notify(&so->so_snd)) {
-		sowakeup(so, &so->so_snd);
+		sowakeup(so, &so->so_snd, NULL);
 	}
 }
 
@@ -2895,7 +2870,8 @@ soevent(struct socket *so, long hint)
 	if ((hint & SO_FILT_HINT_IFDENIED) &&
 	    !(so->so_flags & SOF_MP_SUBFLOW) &&
 	    !(so->so_restrictions & SO_RESTRICT_DENY_CELLULAR) &&
-	    !(so->so_restrictions & SO_RESTRICT_DENY_EXPENSIVE)) {
+	    !(so->so_restrictions & SO_RESTRICT_DENY_EXPENSIVE) &&
+	    !(so->so_restrictions & SO_RESTRICT_DENY_CONSTRAINED)) {
 		soevent_ifdenied(so);
 	}
 }

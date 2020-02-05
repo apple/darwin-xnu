@@ -40,6 +40,13 @@ extern vm_offset_t      io_map(
 	vm_map_offset_t         phys_addr,
 	vm_size_t               size,
 	unsigned int            flags);
+
+extern vm_offset_t      io_map_with_prot(
+	vm_map_offset_t                   phys_addr,
+	vm_size_t                         size,
+	unsigned int                      flags,
+	vm_prot_t                         prot);
+
 extern vm_offset_t io_map_spec(vm_map_offset_t phys_addr, vm_size_t size, unsigned int flags);
 #endif  /* __APPLE_API_PRIVATE */
 

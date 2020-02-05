@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -226,17 +226,6 @@ extern int      kernPhysPML4EntryCount;
 #define KERNEL_BASE                     (0ULL - (NBPML4 * KERNEL_PML4_COUNT))
 #define KERNEL_BASEMENT                 (KERNEL_BASE - NBPML4)  /* Basement uses one PML4 entry */
 
-#define VM_WIMG_COPYBACK        VM_MEM_COHERENT
-#define VM_WIMG_COPYBACKLW      VM_WIMG_COPYBACK
-#define VM_WIMG_DEFAULT         VM_MEM_COHERENT
-/* ?? intel ?? */
-#define VM_WIMG_IO              (VM_MEM_COHERENT |      \
-	                        VM_MEM_NOT_CACHEABLE | VM_MEM_GUARDED)
-#define VM_WIMG_POSTED          VM_WIMG_IO
-#define VM_WIMG_WTHRU           (VM_MEM_WRITE_THROUGH | VM_MEM_COHERENT | VM_MEM_GUARDED)
-/* write combining mode, aka store gather */
-#define VM_WIMG_WCOMB           (VM_MEM_NOT_CACHEABLE | VM_MEM_COHERENT)
-#define VM_WIMG_INNERWBACK      VM_MEM_COHERENT
 /*
  * Pte related macros
  */
@@ -324,37 +313,11 @@ extern int      kernPhysPML4EntryCount;
 
 #define INTEL_PTE_COMPRESSED_MASK (INTEL_PTE_COMPRESSED | \
 	                           INTEL_PTE_COMPRESSED_ALT | INTEL_PTE_SWLOCK)
-#define PTE_IS_COMPRESSED(x, ptep)                                        \
-	((((x) & INTEL_PTE_VALID) == 0) && /* PTE is not valid... */    \
+#define PTE_IS_COMPRESSED(x, ptep, pmap, vaddr)                            \
+	((((x) & INTEL_PTE_VALID) == 0) && /* PTE is not valid... */       \
 	 ((x) & INTEL_PTE_COMPRESSED) && /* ...has "compressed" marker" */ \
-	 ((!((x) & ~INTEL_PTE_COMPRESSED_MASK)) || /* ...no other bits */ \
-	  (panic_compressed_pte_corrupt((x), &(x), (ptep)), FALSE)))
-
-static inline void
-panic_compressed_pte_corrupt(uint64_t pte, uint64_t *pte_addr, uint64_t *ptep)
-{
-	uint64_t *adj_pteps[2];
-	int pteidx = ((uintptr_t)ptep & INTEL_OFFMASK) / sizeof(pt_entry_t);
-	/*
-	 * Grab pointers to PTEs on either side of the PTE in question, unless we're at the start of
-	 * a PT (grab pointers to the next and next-next PTEs) or the end of a PT (grab the previous
-	 * 2 PTEs).
-	 */
-	if (pteidx == 0) {
-		adj_pteps[0] = ptep + 1;
-		adj_pteps[1] = ptep + 2;
-	} else if (pteidx == (NPTPG - 1)) {
-		adj_pteps[0] = ptep - 2;
-		adj_pteps[1] = ptep - 1;
-	} else {
-		adj_pteps[0] = ptep - 1;
-		adj_pteps[1] = ptep + 1;
-	}
-
-	panic("compressed PTE %p 0x%llx has extra bits 0x%llx: corrupted? Adjacent PTEs: 0x%llx@%p, 0x%llx@%p",
-	    pte_addr, pte, pte & ~INTEL_PTE_COMPRESSED_MASK, *adj_pteps[0], adj_pteps[0], *adj_pteps[1], adj_pteps[1]);
-	/*NOTREACHED*/
-}
+	 ((!((x) & ~INTEL_PTE_COMPRESSED_MASK)) || /* ...no other bits */  \
+	  pmap_compressed_pte_corruption_repair((x), &(x), (ptep), (pmap), (vaddr))))
 
 #define pa_to_pte(a)            ((a) & INTEL_PTE_PFN) /* XXX */
 #define pte_to_pa(p)            ((p) & INTEL_PTE_PFN) /* XXX */
@@ -519,6 +482,7 @@ PHYSMAP_PTOV_check(void *paddr)
 }
 
 #define PHYSMAP_PTOV(x) (PHYSMAP_PTOV_check((void*) (x)))
+#define phystokv(x) ((vm_offset_t)(PHYSMAP_PTOV(x)))
 #if MACH_KERNEL_PRIVATE
 extern uint64_t dblmap_base, dblmap_max, dblmap_dist;
 
@@ -580,21 +544,24 @@ struct pmap {
 	pml4_entry_t    *pm_pml4;       /* VKA of top level */
 	pml4_entry_t    *pm_upml4;      /* Shadow VKA of top level */
 	pmap_paddr_t    pm_eptp;        /* EPTP */
+
 	task_map_t      pm_task_map;
 	boolean_t       pagezero_accessible;
 #define PMAP_PCID_MAX_CPUS      MAX_CPUS        /* Must be a multiple of 8 */
 	pcid_t          pmap_pcid_cpus[PMAP_PCID_MAX_CPUS];
 	volatile uint8_t pmap_pcid_coherency_vector[PMAP_PCID_MAX_CPUS];
 	boolean_t       pm_shared;
+	os_refcnt_t     ref_count;
+	pdpt_entry_t    *pm_pdpt;       /* KVA of 3rd level page */
 	vm_object_t     pm_obj;         /* object to hold pde's */
 	vm_object_t     pm_obj_pdpt;    /* holds pdpt pages */
 	vm_object_t     pm_obj_pml4;    /* holds pml4 pages */
 #if     DEVELOPMENT || DEBUG
 	int             nx_enabled;
 #endif
-	int             ref_count;
 	ledger_t        ledger;         /* ledger tracking phys mappings */
 	struct pmap_statistics  stats;  /* map statistics */
+	uint64_t        corrected_compressed_ptes_count;
 #if MACH_ASSERT
 	boolean_t       pmap_stats_assert;
 	int             pmap_pid;
@@ -647,10 +614,12 @@ extern void         pmap_put_mapwindow(mapwindow_t *map);
 #endif
 
 typedef struct pmap_memory_regions {
-	ppnum_t base;           /* first page of this region */
-	ppnum_t alloc_up;       /* pages below this one have been "stolen" */
-	ppnum_t alloc_down;     /* pages above this one have been "stolen" */
-	ppnum_t end;            /* last page of this region */
+	ppnum_t base;            /* first page of this region */
+	ppnum_t alloc_up;        /* pages below this one have been "stolen" */
+	ppnum_t alloc_down;      /* pages above this one have been "stolen" */
+	ppnum_t alloc_frag_up;   /* low page of fragment after large page alloc */
+	ppnum_t alloc_frag_down; /* high page of fragment after large page alloc */
+	ppnum_t end;             /* last page of this region */
 	uint32_t type;
 	uint64_t attribute;
 } pmap_memory_region_t;
@@ -786,6 +755,7 @@ extern void pt_fake_zone_info(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_s
     uint64_t *, int *, int *, int *);
 extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__printflike(1, 2));
 
+extern void x86_64_protect_data_const(void);
 /*
  *	Macros for speed.
  */

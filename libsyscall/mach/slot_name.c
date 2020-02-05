@@ -43,7 +43,6 @@
  */
 
 #include <mach/mach.h>
-#include <mach-o/arch.h>
 #include <stddef.h>
 
 kern_return_t

@@ -23,14 +23,6 @@
  * Use is subject to license terms.
  */
 
-/* #pragma ident	"@(#)systrace.c	1.6	06/09/19 SMI" */
-
-#ifdef KERNEL
-#ifndef _KERNEL
-#define _KERNEL /* Solaris vs. Darwin */
-#endif
-#endif
-
 #include <kern/thread.h>
 #include <mach/thread_status.h>
 

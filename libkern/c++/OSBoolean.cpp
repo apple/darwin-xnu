@@ -44,8 +44,8 @@ OSMetaClassDefineReservedUnused(OSBoolean, 5);
 OSMetaClassDefineReservedUnused(OSBoolean, 6);
 OSMetaClassDefineReservedUnused(OSBoolean, 7);
 
-static OSBoolean * gOSBooleanTrue  = 0;
-static OSBoolean * gOSBooleanFalse = 0;
+static OSBoolean * gOSBooleanTrue  = NULL;
+static OSBoolean * gOSBooleanFalse = NULL;
 
 OSBoolean * const & kOSBooleanTrue  = gOSBooleanTrue;
 OSBoolean * const & kOSBooleanFalse = gOSBooleanFalse;

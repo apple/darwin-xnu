@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -79,7 +79,6 @@
 #include <sys/proc.h>
 #include <mach/resource_monitors.h>     // command/proc_name_t
 
-
 __BEGIN_DECLS
 #include <kern/locks.h>
 #if PSYNCH
@@ -121,7 +120,7 @@ struct  session {
 	int                     s_listflags;
 };
 
-#define SESSION_NULL (struct session *)0
+#define SESSION_NULL (struct session *)NULL
 
 /*
  * accessor for s_ttyp which treats it as invalid if s_ttyvp is not valid;
@@ -167,10 +166,10 @@ struct  pgrp {
 #define PGRP_FLAG_ITERABEGIN    8
 #define PGRP_FLAG_ITERWAIT      0x10
 
-#define PGRP_NULL (struct pgrp *)0
+#define PGRP_NULL (struct pgrp *)NULL
 struct proc;
 
-#define PROC_NULL (struct proc *)0
+#define PROC_NULL (struct proc *)NULL
 
 #define PROC_UPDATE_CREDS_ONPROC(p) { \
 	p->p_uid =  kauth_cred_getuid(p->p_ucred); \
@@ -197,6 +196,7 @@ struct  proc {
 	void *          task;                   /* corresponding task (static)*/
 	struct  proc *  p_pptr;                 /* Pointer to parent process.(LL) */
 	pid_t           p_ppid;                 /* process's parent pid number */
+	pid_t           p_original_ppid;        /* process's original parent pid number, doesn't change if reparented */
 	pid_t           p_pgrpid;               /* process group id of the process (LL)*/
 	uid_t           p_uid;
 	gid_t           p_gid;
@@ -331,6 +331,10 @@ struct  proc {
 	cpu_type_t      p_cputype;
 	cpu_subtype_t   p_cpusubtype;
 
+	uint8_t  *syscall_filter_mask;          /* syscall filter bitmask (length: nsysent bits) */
+	uint32_t        p_platform;
+	uint32_t        p_sdk;
+
 /* End area that is copied on creation. */
 /* XXXXXXXXXXXXX End of BCOPY'ed on fork (AIOLOCK)XXXXXXXXXXXXXXXX */
 #define p_endcopy       p_aio_total_count
@@ -374,6 +378,7 @@ struct  proc {
 #endif /* DIAGNOSTIC */
 	uint64_t        p_dispatchqueue_offset;
 	uint64_t        p_dispatchqueue_serialno_offset;
+	uint64_t        p_dispatchqueue_label_offset;
 	uint64_t        p_return_to_kernel_offset;
 	uint64_t        p_mach_thread_self_offset;
 #if VM_PRESSURE_EVENTS
@@ -383,9 +388,10 @@ struct  proc {
 #if CONFIG_MEMORYSTATUS
 	/* Fields protected by proc list lock */
 	TAILQ_ENTRY(proc) p_memstat_list;               /* priority bucket link */
-	uint32_t          p_memstat_state;              /* state */
+	uint32_t          p_memstat_state;              /* state. Also used as a wakeup channel when the memstat's LOCKED bit changes */
 	int32_t           p_memstat_effectivepriority;  /* priority after transaction state accounted for */
 	int32_t           p_memstat_requestedpriority;  /* active priority */
+	int32_t           p_memstat_assertionpriority;  /* assertion driven priority */
 	uint32_t          p_memstat_dirty;              /* dirty state */
 	uint64_t          p_memstat_userdata;           /* user state */
 	uint64_t          p_memstat_idledeadline;       /* time at which process became clean */
@@ -394,6 +400,7 @@ struct  proc {
 	int32_t           p_memstat_memlimit;           /* cached memory limit, toggles between active and inactive limits */
 	int32_t           p_memstat_memlimit_active;    /* memory limit enforced when process is in active jetsam state */
 	int32_t           p_memstat_memlimit_inactive;  /* memory limit enforced when process is in inactive jetsam state */
+	int32_t           p_memstat_relaunch_flags;     /* flags indicating relaunch behavior for the process */
 #if CONFIG_FREEZE
 	uint32_t          p_memstat_freeze_sharedanon_pages; /* shared pages left behind after freeze */
 	uint32_t          p_memstat_frozen_count;
@@ -404,6 +411,8 @@ struct  proc {
 	/* cached proc-specific data required for corpse inspection */
 	pid_t             p_responsible_pid;    /* pid resonsible for this process */
 	_Atomic uint32_t  p_user_faults; /* count the number of user faults generated */
+
+	uint32_t          p_memlimit_increase; /* byte increase for memory limit for dyld SPI rdar://problem/49950264, structure packing 32-bit and 64-bit */
 
 	struct os_reason     *p_exit_reason;
 
@@ -465,6 +474,7 @@ struct  proc {
 #define P_LVMRSRCOWNER  0x01000000      /* can handle the resource ownership of  */
 #define P_LTERM_DECRYPTFAIL     0x04000000      /* process terminating due to key failure to decrypt */
 #define P_LTERM_JETSAM          0x08000000      /* process is being jetsam'd */
+
 #define P_JETSAM_VMPAGESHORTAGE 0x00000000      /* jetsam: lowest jetsam priority proc, killed due to vm page shortage */
 #define P_JETSAM_VMTHRASHING    0x10000000      /* jetsam: lowest jetsam priority proc, killed due to vm thrashing */
 #define P_JETSAM_HIWAT          0x20000000      /* jetsam: high water mark */
@@ -473,6 +483,7 @@ struct  proc {
 #define P_JETSAM_VNODE          0x50000000      /* jetsam: vnode kill */
 #define P_JETSAM_FCTHRASHING    0x60000000      /* jetsam: lowest jetsam priority proc, killed due to filecache thrashing */
 #define P_JETSAM_MASK           0x70000000      /* jetsam type mask */
+#define P_LNSPACE_RESOLVER      0x80000000      /* process is the namespace resolver */
 
 /* Process control state for resource starvation */
 #define P_PCTHROTTLE    1
@@ -498,7 +509,9 @@ struct  proc {
 /* p_vfs_iopolicy flags */
 #define P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY       0x0001
 #define P_VFS_IOPOLICY_ATIME_UPDATES                    0x0002
-#define P_VFS_IOPOLICY_VALID_MASK                       (P_VFS_IOPOLICY_ATIME_UPDATES | P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY)
+#define P_VFS_IOPOLICY_MATERIALIZE_DATALESS_FILES       0x0004
+#define P_VFS_IOPOLICY_STATFS_NO_DATA_VOLUME            0x0008
+#define P_VFS_IOPOLICY_VALID_MASK                       (P_VFS_IOPOLICY_ATIME_UPDATES | P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY | P_VFS_IOPOLICY_MATERIALIZE_DATALESS_FILES | P_VFS_IOPOLICY_STATFS_NO_DATA_VOLUME)
 
 /* process creation arguments */
 #define PROC_CREATE_FORK        0       /* independent child (running) */
@@ -701,6 +714,11 @@ __private_extern__ void proc_drop_zombref(struct proc * p);     /* Find zombie b
 
 extern int      chgproccnt(uid_t uid, int diff);
 extern void     pinsertchild(struct proc *parent, struct proc *child);
+extern int      setsid_internal(struct proc *p);
+#ifndef __cplusplus
+extern void     setlogin_internal(proc_t p, const char login[static MAXLOGNAME]);
+#endif // __cplusplus
+extern int      setgroups_internal(proc_t p, u_int gidsetsize, gid_t *gidset, uid_t gmuid);
 extern int      enterpgrp(struct proc *p, pid_t pgid, int mksess);
 extern void     fixjobc(struct proc *p, struct pgrp *pgrp, int entering);
 extern int      inferior(struct proc *p);
@@ -819,7 +837,7 @@ typedef int (*proc_iterate_fn_t)(proc_t, void *);
  */
 #define PGRP_DROPREF (1)
 
-extern int pgrp_iterate(struct pgrp *pgrp, unsigned int flags, proc_iterate_fn_t callout, void *arg, proc_iterate_fn_t filterfn, void *filterarg);
+extern void pgrp_iterate(struct pgrp *pgrp, unsigned int flags, proc_iterate_fn_t callout, void *arg, proc_iterate_fn_t filterfn, void *filterarg);
 
 /*
  * proc_iterate walks the `allproc` and/or `zombproc` lists, calling `filterfn`
@@ -834,7 +852,7 @@ extern int pgrp_iterate(struct pgrp *pgrp, unsigned int flags, proc_iterate_fn_t
 #define PROC_ZOMBPROCLIST (1U << 1) /* walk the zombie list */
 #define PROC_NOWAITTRANS  (1U << 2) /* do not wait for transitions (checkdirs only) */
 
-extern int proc_iterate(unsigned int flags, proc_iterate_fn_t callout, void *arg, proc_iterate_fn_t filterfn, void *filterarg);
+extern void proc_iterate(unsigned int flags, proc_iterate_fn_t callout, void *arg, proc_iterate_fn_t filterfn, void *filterarg);
 
 /*
  * proc_childrenwalk walks the children of process `p`, calling `callout` for
@@ -843,7 +861,7 @@ extern int proc_iterate(unsigned int flags, proc_iterate_fn_t callout, void *arg
  * `PCHILDREN_FOREACH` might also be used under the `proc_list_lock` to achieve
  * a similar effect.
  */
-extern int proc_childrenwalk(proc_t p, proc_iterate_fn_t callout, void *arg);
+extern void proc_childrenwalk(proc_t p, proc_iterate_fn_t callout, void *arg);
 
 /*
  * proc_rebootscan should only be used by kern_shutdown.c

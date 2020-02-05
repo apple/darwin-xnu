@@ -127,6 +127,7 @@ struct selinfo {
 #define SI_RECORDED     0x0004          /* select has been recorded */
 #define SI_INITED       0x0008          /* selinfo has been inited */
 #define SI_CLEAR        0x0010          /* selinfo has been cleared */
+#define SI_KNPOSTING    0x0020          /* posting to knotes */
 
 #else
 struct selinfo;

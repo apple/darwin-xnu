@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -89,7 +89,7 @@
 uint32_t        hz_tick_interval = 1;
 static uint64_t has_monotonic_clock = 0;
 
-decl_simple_lock_data(, clock_lock)
+decl_simple_lock_data(, clock_lock);
 lck_grp_attr_t * settime_lock_grp_attr;
 lck_grp_t * settime_lock_grp;
 lck_attr_t * settime_lock_attr;
@@ -295,7 +295,7 @@ static void print_all_clock_variables_internal(const char *, struct clock_calend
  *
  *	The trick is to use a generation count and set the low bit when it is
  *	being updated/read; by doing this, we guarantee, through use of the
- *	hw_atomic functions, that the generation is incremented when the bit
+ *	os_atomic functions, that the generation is incremented when the bit
  *	is cleared atomically (by using a 1 bit add).
  */
 static struct unlocked_clock_calend {
@@ -1673,7 +1673,7 @@ clock_get_calendar_nanotime_nowait(
 		 * off the "in progress" bit to get the current generation
 		 * count.
 		 */
-		(void)hw_atomic_and(&stable.gen, ~(uint32_t)1);
+		os_atomic_andnot(&stable.gen, 1, relaxed);
 
 		/*
 		 * If an update _is_ in progress, the generation count will be
@@ -1712,7 +1712,7 @@ clock_track_calend_nowait(void)
 		 * will flag an update in progress to an async caller trying
 		 * to examine the contents.
 		 */
-		(void)hw_atomic_or(&flipflop[i].gen, 1);
+		os_atomic_or(&flipflop[i].gen, 1, relaxed);
 
 		flipflop[i].calend = tmp;
 
@@ -1722,7 +1722,7 @@ clock_track_calend_nowait(void)
 		 * count after taking a copy while in progress, the count
 		 * will be off by two.
 		 */
-		(void)hw_atomic_add(&flipflop[i].gen, 1);
+		os_atomic_inc(&flipflop[i].gen, relaxed);
 	}
 }
 

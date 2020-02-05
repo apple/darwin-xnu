@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -74,12 +74,13 @@ typedef struct flowq {
 
 #define fq_empty(_q)    MBUFQ_EMPTY(&(_q)->fq_mbufq)
 
-#define fq_enqueue(_q, _p)      MBUFQ_ENQUEUE(&(_q)->fq_mbufq, (mbuf_t)_p)
+#define fq_enqueue(_q, _p)      MBUFQ_ENQUEUE(&(_q)->fq_mbufq, _p.cp_mbuf)
 
 #define fq_dequeue(_q, _p) do {                                         \
-	mbuf_t _m;                                                      \
-	MBUFQ_DEQUEUE(&(_q)->fq_mbufq, _m);                             \
-	(_p) = _m;                                                      \
+	MBUFQ_DEQUEUE(&(_q)->fq_mbufq, (_p)->cp_mbuf);                  \
+	if (__probable((_p)->cp_mbuf != NULL)) {                        \
+	        CLASSQ_PKT_INIT_MBUF((_p), (_p)->cp_mbuf);              \
+	}                                                               \
 } while (0)
 
 struct fq_codel_sched_data;
@@ -92,9 +93,9 @@ extern fq_t *fq_alloc(classq_pkt_type_t);
 extern void fq_destroy(fq_t *);
 extern int fq_addq(struct fq_codel_sched_data *, pktsched_pkt_t *,
     struct fq_if_classq *);
-extern void *fq_getq_flow(struct fq_codel_sched_data *, fq_t *,
+extern void fq_getq_flow(struct fq_codel_sched_data *, fq_t *,
     pktsched_pkt_t *);
-extern void *fq_getq_flow_internal(struct fq_codel_sched_data *,
+extern void fq_getq_flow_internal(struct fq_codel_sched_data *,
     fq_t *, pktsched_pkt_t *);
 extern void fq_head_drop(struct fq_codel_sched_data *, fq_t *);
 

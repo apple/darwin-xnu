@@ -85,15 +85,15 @@ struct lt_elem {
 };
 
 /* reference count bits should _always_ be the low-order bits */
-#define LT_BITS_REFCNT_MASK  (0x1FFFFFFF)
+#define LT_BITS_REFCNT_MASK  (0x1FFFFFFFU)
 #define LT_BITS_REFCNT_SHIFT (0)
 #define LT_BITS_REFCNT       (LT_BITS_REFCNT_MASK << LT_BITS_REFCNT_SHIFT)
 
-#define LT_BITS_TYPE_MASK    (0x3)
+#define LT_BITS_TYPE_MASK    (0x3U)
 #define LT_BITS_TYPE_SHIFT   (29)
 #define LT_BITS_TYPE         (LT_BITS_TYPE_MASK << LT_BITS_TYPE_SHIFT)
 
-#define LT_BITS_VALID_MASK   (0x1)
+#define LT_BITS_VALID_MASK   (0x1U)
 #define LT_BITS_VALID_SHIFT  (31)
 #define LT_BITS_VALID        (LT_BITS_VALID_MASK << LT_BITS_VALID_SHIFT)
 

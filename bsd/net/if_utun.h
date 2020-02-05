@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -37,7 +37,6 @@
 void* utun_alloc(size_t size);
 void utun_free(void *ptr);
 errno_t utun_register_control(void);
-boolean_t utun_interface_needs_netagent(ifnet_t interface);
 
 #endif
 
@@ -49,30 +48,33 @@ boolean_t utun_interface_needs_netagent(ifnet_t interface);
 /*
  * Socket option names to manage utun
  */
-#define UTUN_OPT_FLAGS                                                  1
-#define UTUN_OPT_IFNAME                                                 2
-#define UTUN_OPT_EXT_IFDATA_STATS                               3       /* get|set (type int) */
+#define UTUN_OPT_FLAGS                                  1
+#define UTUN_OPT_IFNAME                                 2
+#define UTUN_OPT_EXT_IFDATA_STATS                       3       /* get|set (type int) */
 #define UTUN_OPT_INC_IFDATA_STATS_IN                    4       /* set to increment stat counters (type struct utun_stats_param) */
 #define UTUN_OPT_INC_IFDATA_STATS_OUT                   5       /* set to increment stat counters (type struct utun_stats_param) */
 
 #define UTUN_OPT_SET_DELEGATE_INTERFACE                 15      /* set the delegate interface (char[]) */
 #define UTUN_OPT_MAX_PENDING_PACKETS                    16      /* the number of packets that can be waiting to be read
-	                                                         *                                                       from the control socket at a time */
+	                                                         * from the control socket at a time */
 #define UTUN_OPT_ENABLE_CHANNEL                         17
 #define UTUN_OPT_GET_CHANNEL_UUID                       18
 #define UTUN_OPT_ENABLE_FLOWSWITCH                      19
 
-#define UTUN_OPT_ENABLE_NETIF                           20              /* Must be set before connecting */
-#define UTUN_OPT_SLOT_SIZE                                      21              /* Must be set before connecting */
-#define UTUN_OPT_NETIF_RING_SIZE                        22              /* Must be set before connecting */
-#define UTUN_OPT_TX_FSW_RING_SIZE                       23              /* Must be set before connecting */
-#define UTUN_OPT_RX_FSW_RING_SIZE                       24              /* Must be set before connecting */
+#define UTUN_OPT_ENABLE_NETIF                           20      /* Must be set before connecting */
+#define UTUN_OPT_SLOT_SIZE                              21      /* Must be set before connecting */
+#define UTUN_OPT_NETIF_RING_SIZE                        22      /* Must be set before connecting */
+#define UTUN_OPT_TX_FSW_RING_SIZE                       23      /* Must be set before connecting */
+#define UTUN_OPT_RX_FSW_RING_SIZE                       24      /* Must be set before connecting */
+#define UTUN_OPT_KPIPE_TX_RING_SIZE                     25      /* Must be set before connecting */
+#define UTUN_OPT_KPIPE_RX_RING_SIZE                     26      /* Must be set before connecting */
+#define UTUN_OPT_ATTACH_FLOWSWITCH                      27      /* Must be set before connecting */
 
 /*
  * Flags for by UTUN_OPT_FLAGS
  */
 #define UTUN_FLAGS_NO_OUTPUT            0x0001
-#define UTUN_FLAGS_NO_INPUT                     0x0002
+#define UTUN_FLAGS_NO_INPUT             0x0002
 #define UTUN_FLAGS_ENABLE_PROC_UUID     0x0004
 
 /*

@@ -19,6 +19,8 @@
 
 #include <excserver.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 static dispatch_semaphore_t sync_sema;
 
 kern_return_t

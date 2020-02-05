@@ -199,6 +199,20 @@ timer_resync_deadlines(void)
 	splx(s);
 }
 
+void
+timer_queue_expire_local(
+	__unused void                   *arg)
+{
+	rtclock_timer_t         *mytimer = &getCpuDatap()->rtclock_timer;
+	uint64_t                abstime;
+
+	abstime = mach_absolute_time();
+	mytimer->has_expired = TRUE;
+	mytimer->deadline = timer_queue_expire(&mytimer->queue, abstime);
+	mytimer->has_expired = FALSE;
+
+	timer_resync_deadlines();
+}
 
 boolean_t
 timer_resort_threshold(__unused uint64_t skew)

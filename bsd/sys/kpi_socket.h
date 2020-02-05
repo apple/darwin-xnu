@@ -41,6 +41,13 @@
 #include <sys/kernel_types.h>
 #include <sys/socket.h>
 
+#ifndef PRIVATE
+#include <Availability.h>
+#define __NKE_API_DEPRECATED __API_DEPRECATED("Network Kernel Extension KPI is deprecated", macos(10.4, 10.15))
+#else
+#define __NKE_API_DEPRECATED
+#endif /* PRIVATE */
+
 __BEGIN_DECLS
 
 struct timeval;
@@ -114,7 +121,8 @@ extern errno_t sock_accept_internal(socket_t so, struct sockaddr *from, int from
 	(cookie), (new_so))
 #else
 extern errno_t sock_accept(socket_t so, struct sockaddr *from, int fromlen,
-    int flags, sock_upcall callback, void *cookie, socket_t *new_so);
+    int flags, sock_upcall callback, void *cookie, socket_t *new_so)
+__NKE_API_DEPRECATED;
 #endif /* KERNEL_PRIVATE */
 
 /*!
@@ -125,7 +133,8 @@ extern errno_t sock_accept(socket_t so, struct sockaddr *from, int fromlen,
  *       @param to The local address the socket should be bound to.
  *       @result 0 on success otherwise the errno error.
  */
-extern errno_t sock_bind(socket_t so, const struct sockaddr *to);
+extern errno_t sock_bind(socket_t so, const struct sockaddr *to)
+__NKE_API_DEPRECATED;
 
 /*!
  *       @function sock_connect
@@ -141,7 +150,8 @@ extern errno_t sock_bind(socket_t so, const struct sockaddr *to);
  *       @result 0 on success, EINPROGRESS for a non-blocking connect that
  *               has not completed, otherwise the errno error.
  */
-extern errno_t sock_connect(socket_t so, const struct sockaddr *to, int flags);
+extern errno_t sock_connect(socket_t so, const struct sockaddr *to, int flags)
+__NKE_API_DEPRECATED;
 
 #ifdef KERNEL_PRIVATE
 /*
@@ -174,7 +184,8 @@ extern errno_t sock_connectwait(socket_t so, const struct timeval *tv);
  *       @result 0 on success otherwise the errno error.
  */
 extern errno_t sock_getpeername(socket_t so, struct sockaddr *peername,
-    int peernamelen);
+    int peernamelen)
+__NKE_API_DEPRECATED;
 
 /*!
  *       @function sock_getsockname
@@ -186,7 +197,8 @@ extern errno_t sock_getpeername(socket_t so, struct sockaddr *peername,
  *       @result 0 on success otherwise the errno error.
  */
 extern errno_t sock_getsockname(socket_t so, struct sockaddr *sockname,
-    int socknamelen);
+    int socknamelen)
+__NKE_API_DEPRECATED;
 
 /*!
  *       @function sock_getsockopt
@@ -199,7 +211,8 @@ extern errno_t sock_getsockname(socket_t so, struct sockaddr *sockname,
  *       @result 0 on success otherwise the errno error.
  */
 extern errno_t sock_getsockopt(socket_t so, int level, int optname,
-    void *optval, int *optlen);
+    void *optval, int *optlen)
+__NKE_API_DEPRECATED;
 
 /*!
  *       @function sock_ioctl
@@ -209,7 +222,8 @@ extern errno_t sock_getsockopt(socket_t so, int level, int optname,
  *       @param argp The argument.
  *       @result 0 on success otherwise the errno error.
  */
-extern errno_t sock_ioctl(socket_t so, unsigned long request, void *argp);
+extern errno_t sock_ioctl(socket_t so, unsigned long request, void *argp)
+__NKE_API_DEPRECATED;
 
 /*!
  *       @function sock_setsockopt
@@ -222,7 +236,8 @@ extern errno_t sock_ioctl(socket_t so, unsigned long request, void *argp);
  *       @result 0 on success otherwise the errno error.
  */
 extern errno_t sock_setsockopt(socket_t so, int level, int optname,
-    const void *optval, int optlen);
+    const void *optval, int optlen)
+__NKE_API_DEPRECATED;
 
 #ifdef KERNEL_PRIVATE
 /*
@@ -277,7 +292,8 @@ extern errno_t sock_receive_internal(socket_t, struct msghdr *, mbuf_t *,
  *       @param backlog The maximum length of the queue of pending connections.
  *       @result 0 on success otherwise the errno error.
  */
-extern errno_t sock_listen(socket_t so, int backlog);
+extern errno_t sock_listen(socket_t so, int backlog)
+__NKE_API_DEPRECATED;
 
 /*!
  *       @function sock_receive
@@ -292,7 +308,8 @@ extern errno_t sock_listen(socket_t so, int backlog);
  *               would cause the thread to block, otherwise the errno error.
  */
 extern errno_t sock_receive(socket_t so, struct msghdr *msg, int flags,
-    size_t *recvdlen);
+    size_t *recvdlen)
+__NKE_API_DEPRECATED;
 
 /*!
  *       @function sock_receivembuf
@@ -313,7 +330,8 @@ extern errno_t sock_receive(socket_t so, struct msghdr *msg, int flags,
  *               would cause the thread to block, otherwise the errno error.
  */
 extern errno_t sock_receivembuf(socket_t so, struct msghdr *msg, mbuf_t *data,
-    int flags, size_t *recvlen);
+    int flags, size_t *recvlen)
+__NKE_API_DEPRECATED;
 
 /*!
  *       @function sock_send
@@ -328,7 +346,8 @@ extern errno_t sock_receivembuf(socket_t so, struct msghdr *msg, mbuf_t *data,
  *               would cause the thread to block, otherwise the errno error.
  */
 extern errno_t sock_send(socket_t so, const struct msghdr *msg, int flags,
-    size_t *sentlen);
+    size_t *sentlen)
+__NKE_API_DEPRECATED;
 
 /*!
  *       @function sock_sendmbuf
@@ -345,7 +364,8 @@ extern errno_t sock_send(socket_t so, const struct msghdr *msg, int flags,
  *               Regardless of return value, the mbuf chain 'data' will be freed.
  */
 extern errno_t sock_sendmbuf(socket_t so, const struct msghdr *msg, mbuf_t data,
-    int flags, size_t *sentlen);
+    int flags, size_t *sentlen)
+__NKE_API_DEPRECATED;
 
 /*!
  *       @function sock_shutdown
@@ -357,7 +377,8 @@ extern errno_t sock_sendmbuf(socket_t so, const struct msghdr *msg, mbuf_t data,
  *               SHUT_RDWR - shutdown both.
  *       @result 0 on success otherwise the errno error.
  */
-extern errno_t sock_shutdown(socket_t so, int how);
+extern errno_t sock_shutdown(socket_t so, int how)
+__NKE_API_DEPRECATED;
 
 /*!
  *       @function sock_socket
@@ -382,7 +403,8 @@ extern errno_t sock_socket_internal(int domain, int type, int protocol,
 	(callback), (cookie), (new_so))
 #else
 extern errno_t sock_socket(int domain, int type, int protocol,
-    sock_upcall callback, void *cookie, socket_t *new_so);
+    sock_upcall callback, void *cookie, socket_t *new_so)
+__NKE_API_DEPRECATED;
 #endif /* KERNEL_PRIVATE */
 
 /*!
@@ -393,7 +415,8 @@ extern errno_t sock_socket(int domain, int type, int protocol,
  *               using sock_close may leave a file descriptor pointing to the
  *               closed socket, resulting in undefined behavior.
  */
-extern void sock_close(socket_t so);
+extern void sock_close(socket_t so)
+__NKE_API_DEPRECATED;
 
 #ifdef KERNEL_PRIVATE
 /*
@@ -427,7 +450,8 @@ extern void sock_release(socket_t so);
  *       @param on Indicate whether or not the SS_PRIV flag should be set.
  *       @result 0 on success otherwise the errno error.
  */
-extern errno_t sock_setpriv(socket_t so, int on);
+extern errno_t sock_setpriv(socket_t so, int on)
+__NKE_API_DEPRECATED;
 
 /*!
  *       @function sock_isconnected
@@ -435,7 +459,8 @@ extern errno_t sock_setpriv(socket_t so, int on);
  *       @param so The socket to check.
  *       @result 0 - socket is not connected. 1 - socket is connected.
  */
-extern int sock_isconnected(socket_t so);
+extern int sock_isconnected(socket_t so)
+__NKE_API_DEPRECATED;
 
 /*!
  *       @function sock_isnonblocking
@@ -448,7 +473,8 @@ extern int sock_isconnected(socket_t so);
  *               If the parameter is non-zero, the socket will not block.
  *       @result 0 - socket will block. 1 - socket will not block.
  */
-extern int sock_isnonblocking(socket_t so);
+extern int sock_isnonblocking(socket_t so)
+__NKE_API_DEPRECATED;
 
 /*!
  *       @function sock_gettype
@@ -462,7 +488,8 @@ extern int sock_isnonblocking(socket_t so);
  *       @param protocol The socket protocol. May be NULL.
  *       @result 0 on success otherwise the errno error.
  */
-extern errno_t sock_gettype(socket_t so, int *domain, int *type, int *protocol);
+extern errno_t sock_gettype(socket_t so, int *domain, int *type, int *protocol)
+__NKE_API_DEPRECATED;
 
 #ifdef KERNEL_PRIVATE
 /*

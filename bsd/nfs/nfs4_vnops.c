@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -79,6 +79,7 @@
 #include <kern/task.h>
 #include <kern/sched_prim.h>
 
+#if CONFIG_NFS4
 int
 nfs4_access_rpc(nfsnode_t np, u_int32_t *access, int rpcflags, vfs_context_t ctx)
 {
@@ -1752,6 +1753,7 @@ nfsmout:
 	}
 	return error;
 }
+#endif /* CONFIG_NFS4 */
 
 /*
  * Wait for any pending recovery to complete.
@@ -1759,7 +1761,7 @@ nfsmout:
 int
 nfs_mount_state_wait_for_recovery(struct nfsmount *nmp)
 {
-	struct timespec ts = { 1, 0 };
+	struct timespec ts = { .tv_sec = 1, .tv_nsec = 0 };
 	int error = 0, slpflag = NMFLAG(nmp, INTR) ? PCATCH : 0;
 
 	lck_mtx_lock(&nmp->nm_lock);
@@ -1785,7 +1787,7 @@ nfs_mount_state_wait_for_recovery(struct nfsmount *nmp)
 int
 nfs_mount_state_in_use_start(struct nfsmount *nmp, thread_t thd)
 {
-	struct timespec ts = { 1, 0 };
+	struct timespec ts = { .tv_sec = 1, .tv_nsec = 0 };
 	int error = 0, slpflag = (NMFLAG(nmp, INTR) && thd) ? PCATCH : 0;
 
 	if (nfs_mount_gone(nmp)) {
@@ -1903,7 +1905,7 @@ int
 nfs_open_state_set_busy(nfsnode_t np, thread_t thd)
 {
 	struct nfsmount *nmp;
-	struct timespec ts = {2, 0};
+	struct timespec ts = { .tv_sec = 2, .tv_nsec = 0 };
 	int error = 0, slpflag;
 
 	nmp = NFSTONMP(np);
@@ -2061,7 +2063,7 @@ int
 nfs_open_owner_set_busy(struct nfs_open_owner *noop, thread_t thd)
 {
 	struct nfsmount *nmp;
-	struct timespec ts = {2, 0};
+	struct timespec ts = { .tv_sec = 2, .tv_nsec = 0 };
 	int error = 0, slpflag;
 
 	nmp = noop->noo_mount;
@@ -2256,7 +2258,7 @@ int
 nfs_open_file_set_busy(struct nfs_open_file *nofp, thread_t thd)
 {
 	struct nfsmount *nmp;
-	struct timespec ts = {2, 0};
+	struct timespec ts = { .tv_sec = 2, .tv_nsec = 0 };
 	int error = 0, slpflag;
 
 	nmp = nofp->nof_owner->noo_mount;
@@ -2617,7 +2619,7 @@ nfs_open_file_remove_open(struct nfs_open_file *nofp, uint32_t accessMode, uint3
 	lck_mtx_unlock(&nofp->nof_lock);
 }
 
-
+#if CONFIG_NFS4
 /*
  * Get the current (delegation, lock, open, default) stateid for this node.
  * If node has a delegation, use that stateid.
@@ -2882,6 +2884,7 @@ out:
 	}
 	return error;
 }
+#endif /* CONFIG_NFS4 */
 
 int
 nfs_vnop_mmap(
@@ -2946,6 +2949,7 @@ restart:
 		NP(np, "nfs_vnop_mmap: no open file for owner, error %d, %d", error, kauth_cred_getuid(noop->noo_cred));
 		error = EPERM;
 	}
+#if CONFIG_NFS4
 	if (!error && (nofp->nof_flags & NFS_OPEN_FILE_REOPEN)) {
 		nfs_mount_state_in_use_end(nmp, 0);
 		error = nfs4_reopen(nofp, NULL);
@@ -2954,6 +2958,7 @@ restart:
 			goto restart;
 		}
 	}
+#endif
 	if (!error) {
 		error = nfs_open_file_set_busy(nofp, NULL);
 	}
@@ -2996,9 +3001,12 @@ restart:
 			/* NFS v2/v3 opens are always allowed - so just add it. */
 			nfs_open_file_add_open(nofp, NFS_OPEN_SHARE_ACCESS_READ, NFS_OPEN_SHARE_DENY_NONE, 0);
 			error = 0;
-		} else {
+		}
+#if CONFIG_NFS4
+		else {
 			error = nfs4_open(np, nofp, NFS_OPEN_SHARE_ACCESS_READ, NFS_OPEN_SHARE_DENY_NONE, ctx);
 		}
+#endif
 		if (!error) {
 			nofp->nof_flags |= NFS_OPEN_FILE_NEEDCLOSE;
 		}
@@ -3201,6 +3209,7 @@ loop:
 			continue;
 		}
 		lck_mtx_unlock(&np->n_openlock);
+#if CONFIG_NFS4
 		if (nofp->nof_flags & NFS_OPEN_FILE_REOPEN) {
 			nfs_mount_state_in_use_end(nmp, 0);
 			error = nfs4_reopen(nofp, NULL);
@@ -3208,6 +3217,7 @@ loop:
 				goto loop;
 			}
 		}
+#endif
 		if (!error) {
 			error = nfs_open_file_set_busy(nofp, NULL);
 		}
@@ -3364,7 +3374,7 @@ int
 nfs_lock_owner_set_busy(struct nfs_lock_owner *nlop, thread_t thd)
 {
 	struct nfsmount *nmp;
-	struct timespec ts = {2, 0};
+	struct timespec ts = { .tv_sec = 2, .tv_nsec = 0 };
 	int error = 0, slpflag;
 
 	nmp = nlop->nlo_open_owner->noo_mount;
@@ -3518,6 +3528,7 @@ nfs_file_lock_conflict(struct nfs_file_lock *nflp1, struct nfs_file_lock *nflp2,
 	return 1;
 }
 
+#if CONFIG_NFS4
 /*
  * Send an NFSv4 LOCK RPC to the server.
  */
@@ -3816,7 +3827,7 @@ nfsmout:
 	nfsm_chain_cleanup(&nmrep);
 	return error;
 }
-
+#endif /* CONFIG_NFS4 */
 
 /*
  * Check for any conflicts with the given lock.
@@ -3917,7 +3928,7 @@ nfs_advlock_setlock(
 	struct nfs_file_lock *newnflp, *nflp, *nflp2 = NULL, *nextnflp, *flocknflp = NULL;
 	struct nfs_file_lock *coalnflp;
 	int error = 0, error2, willsplit = 0, delay, slpflag, busy = 0, inuse = 0, restart, inqueue = 0;
-	struct timespec ts = {1, 0};
+	struct timespec ts = { .tv_sec = 1, .tv_nsec = 0 };
 
 	nmp = NFSTONMP(np);
 	if (nfs_mount_gone(nmp)) {
@@ -3973,6 +3984,7 @@ restart:
 		inuse = 0;
 		goto error_out;
 	}
+#if CONFIG_NFS4
 	if (nofp->nof_flags & NFS_OPEN_FILE_REOPEN) {
 		nfs_mount_state_in_use_end(nmp, 0);
 		inuse = 0;
@@ -3982,6 +3994,7 @@ restart:
 		}
 		goto restart;
 	}
+#endif
 
 	lck_mtx_lock(&np->n_openlock);
 	if (!inqueue) {
@@ -4085,6 +4098,7 @@ restart:
 	busy = 1;
 	delay = 0;
 	do {
+#if CONFIG_NFS4
 		/* do we have a delegation? (that we're not returning?) */
 		if ((np->n_openflags & N_DELEG_MASK) && !(np->n_openflags & N_DELEG_RETURN)) {
 			if (np->n_openflags & N_DELEG_WRITE) {
@@ -4117,6 +4131,7 @@ restart:
 				}
 			}
 		}
+#endif
 		if (np->n_flag & NREVOKE) {
 			error = EIO;
 		}
@@ -4358,7 +4373,11 @@ error_out:
 int
 nfs_advlock_unlock(
 	nfsnode_t np,
-	struct nfs_open_file *nofp,
+	struct nfs_open_file *nofp
+#if !CONFIG_NFS4
+	__unused
+#endif
+	,
 	struct nfs_lock_owner *nlop,
 	uint64_t start,
 	uint64_t end,
@@ -4378,6 +4397,7 @@ restart:
 	if ((error = nfs_mount_state_in_use_start(nmp, NULL))) {
 		return error;
 	}
+#if CONFIG_NFS4
 	if (nofp->nof_flags & NFS_OPEN_FILE_REOPEN) {
 		nfs_mount_state_in_use_end(nmp, 0);
 		error = nfs4_reopen(nofp, NULL);
@@ -4386,6 +4406,7 @@ restart:
 		}
 		goto restart;
 	}
+#endif
 	if ((error = nfs_open_state_set_busy(np, NULL))) {
 		nfs_mount_state_in_use_end(nmp, error);
 		return error;
@@ -4752,7 +4773,9 @@ nfs_vnop_advlock(
 			goto out;
 		}
 		/* find the open file */
+#if CONFIG_NFS4
 restart:
+#endif
 		error = nfs_open_file_find(np, noop, &nofp, 0, 0, 0);
 		if (error) {
 			error = EBADF;
@@ -4761,6 +4784,7 @@ restart:
 			NP(np, "nfs_vnop_advlock: LOST %d", kauth_cred_getuid(nofp->nof_owner->noo_cred));
 			error = EIO;
 		}
+#if CONFIG_NFS4
 		if (!error && (nofp->nof_flags & NFS_OPEN_FILE_REOPEN)) {
 			error = nfs4_reopen(nofp, ((op == F_UNLCK) ? NULL : vfs_context_thread(ctx)));
 			nofp = NULL;
@@ -4768,6 +4792,7 @@ restart:
 				goto restart;
 			}
 		}
+#endif
 		if (error) {
 			NP(np, "nfs_vnop_advlock: no open file %d, %d", error, kauth_cred_getuid(noop->noo_cred));
 			goto out;
@@ -4814,6 +4839,7 @@ nfs_check_for_locks(struct nfs_open_owner *noop, struct nfs_open_file *nofp)
 	return nlop ? 1 : 0;
 }
 
+#if CONFIG_NFS4
 /*
  * Reopen simple (no deny, no locks) open state that was lost.
  */
@@ -4832,7 +4858,7 @@ nfs4_reopen(struct nfs_open_file *nofp, thread_t thd)
 	char smallname[128];
 	char *filename = NULL;
 	int error = 0, done = 0, slpflag = NMFLAG(nmp, INTR) ? PCATCH : 0;
-	struct timespec ts = { 1, 0 };
+	struct timespec ts = { .tv_sec = 1, .tv_nsec = 0 };
 
 	lck_mtx_lock(&nofp->nof_lock);
 	while (nofp->nof_flags & NFS_OPEN_FILE_REOPENING) {
@@ -4858,6 +4884,7 @@ nfs4_reopen(struct nfs_open_file *nofp, thread_t thd)
 		struct nfs_sillyrename *nsp = np->n_sillyrename;
 		dvp = NFSTOV(nsp->nsr_dnp);
 		if ((error = vnode_get(dvp))) {
+			dvp = NULLVP;
 			nfs_node_unlock(np);
 			goto out;
 		}
@@ -5473,6 +5500,7 @@ nfs4_claim_delegated_open_rpc(
 		struct nfs_sillyrename *nsp = np->n_sillyrename;
 		dvp = NFSTOV(nsp->nsr_dnp);
 		if ((error = vnode_get(dvp))) {
+			dvp = NULLVP;
 			nfs_node_unlock(np);
 			goto out;
 		}
@@ -6266,6 +6294,7 @@ nfs4_claim_delegated_state_for_open_file(struct nfs_open_file *nofp, int flags)
 
 	return error;
 }
+#endif /* CONFIG_NFS4*/
 
 /*
  * Release all open state for the given node.
@@ -6318,9 +6347,11 @@ nfs_release_open_state_for_node(nfsnode_t np, int force)
 		nofp->nof_flags |= NFS_OPEN_FILE_LOST;
 
 		lck_mtx_unlock(&nofp->nof_lock);
+#if CONFIG_NFS4
 		if (!force && nmp && (nmp->nm_vers >= NFS_VER4)) {
 			nfs4_close_rpc(np, nofp, NULL, nofp->nof_owner->noo_cred, R_RECOVER);
 		}
+#endif
 	}
 
 	lck_mtx_unlock(&np->n_openlock);
@@ -6358,6 +6389,7 @@ nfs_revoke_open_state_for_node(nfsnode_t np)
 	}
 }
 
+#if CONFIG_NFS4
 /*
  * Claim the delegated open combinations that each of this node's open files hold.
  */
@@ -6537,7 +6569,7 @@ nfsmout:
 	nfsm_chain_cleanup(&nmrep);
 	return error;
 }
-
+#endif /* CONFIG_NFS4 */
 
 /*
  * NFS read call.
@@ -6587,6 +6619,7 @@ restart:
 		NP(np, "nfs_vnop_read: LOST %d", kauth_cred_getuid(noop->noo_cred));
 		error = EIO;
 	}
+#if CONFIG_NFS4
 	if (!error && (nofp->nof_flags & NFS_OPEN_FILE_REOPEN)) {
 		error = nfs4_reopen(nofp, vfs_context_thread(ctx));
 		nofp = NULL;
@@ -6594,6 +6627,7 @@ restart:
 			goto restart;
 		}
 	}
+#endif
 	if (error) {
 		nfs_open_owner_rele(noop);
 		return error;
@@ -6652,9 +6686,12 @@ restart:
 		if (nmp->nm_vers < NFS_VER4) {
 			/* NFS v2/v3 opens are always allowed - so just add it. */
 			nfs_open_file_add_open(nofp, NFS_OPEN_SHARE_ACCESS_READ, NFS_OPEN_SHARE_DENY_NONE, 0);
-		} else {
+		}
+#if CONFIG_NFS4
+		else {
 			error = nfs4_open(np, nofp, NFS_OPEN_SHARE_ACCESS_READ, NFS_OPEN_SHARE_DENY_NONE, ctx);
 		}
+#endif
 		if (!error) {
 			nofp->nof_flags |= NFS_OPEN_FILE_NEEDCLOSE;
 		}
@@ -6674,6 +6711,7 @@ do_read:
 	return nfs_bioread(VTONFS(ap->a_vp), ap->a_uio, ap->a_ioflag, ap->a_context);
 }
 
+#if CONFIG_NFS4
 /*
  * Note: the NFSv4 CREATE RPC is for everything EXCEPT regular files.
  * Files are created using the NFSv4 OPEN RPC.  So we must open the
@@ -8913,3 +8951,4 @@ nfs4_vnop_removenamedstream(
 }
 
 #endif
+#endif /* CONFIG_NFS4 */

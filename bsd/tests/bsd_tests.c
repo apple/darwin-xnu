@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -51,13 +51,27 @@ extern kern_return_t arm64_lock_test(void);
 #endif
 kern_return_t kalloc_test(void);
 kern_return_t ipi_test(void);
+#if __ARM_PAN_AVAILABLE__
+extern kern_return_t arm64_late_pan_test(void);
+#endif
+#if HAS_TWO_STAGE_SPR_LOCK
+extern kern_return_t arm64_spr_lock_test(void);
+#endif
+extern kern_return_t copyio_test(void);
 
 struct xnupost_test bsd_post_tests[] = {
 #ifdef __arm64__
 	XNUPOST_TEST_CONFIG_BASIC(arm64_lock_test),
 #endif
+#if __ARM_PAN_AVAILABLE__
+	XNUPOST_TEST_CONFIG_BASIC(arm64_late_pan_test),
+#endif
 	XNUPOST_TEST_CONFIG_BASIC(kalloc_test),
-	XNUPOST_TEST_CONFIG_BASIC(ipi_test)
+	XNUPOST_TEST_CONFIG_BASIC(ipi_test),
+#if HAS_TWO_STAGE_SPR_LOCK
+	XNUPOST_TEST_CONFIG_BASIC(arm64_spr_lock_test),
+#endif
+	XNUPOST_TEST_CONFIG_BASIC(copyio_test),
 };
 
 uint32_t bsd_post_tests_count = sizeof(bsd_post_tests) / sizeof(xnupost_test_data_t);
@@ -130,17 +144,17 @@ kalloc_test()
 #define XNUPOST_TNAME_MAXLEN 132
 
 struct kcdata_subtype_descriptor kc_xnupost_test_def[] = {
-	{KCS_SUBTYPE_FLAGS_NONE, KC_ST_UINT16, 0, sizeof(uint16_t), "config"},
-	{KCS_SUBTYPE_FLAGS_NONE, KC_ST_UINT16, 1 * sizeof(uint16_t), sizeof(uint16_t), "test_num"},
-	{KCS_SUBTYPE_FLAGS_NONE, KC_ST_INT32, 2 * sizeof(uint16_t), sizeof(int32_t), "retval"},
-	{KCS_SUBTYPE_FLAGS_NONE, KC_ST_INT32, 2 * sizeof(uint16_t) + sizeof(int32_t), sizeof(int32_t), "expected_retval"},
-	{KCS_SUBTYPE_FLAGS_NONE, KC_ST_UINT64, 2 * (sizeof(uint16_t) + sizeof(int32_t)), sizeof(uint64_t), "begin_time"},
-	{KCS_SUBTYPE_FLAGS_NONE, KC_ST_UINT64, 2 * (sizeof(uint16_t) + sizeof(int32_t)) + sizeof(uint64_t), sizeof(uint64_t), "end_time"},
-	{KCS_SUBTYPE_FLAGS_ARRAY,
-	 KC_ST_CHAR,
-	 2 * (sizeof(uint16_t) + sizeof(int32_t) + sizeof(uint64_t)),
-	 KCS_SUBTYPE_PACK_SIZE(XNUPOST_TNAME_MAXLEN * sizeof(char), sizeof(char)),
-	 "test_name"}
+	{.kcs_flags = KCS_SUBTYPE_FLAGS_NONE, .kcs_elem_type = KC_ST_UINT16, .kcs_elem_offset = 0, .kcs_elem_size = sizeof(uint16_t), .kcs_name = "config"},
+	{.kcs_flags = KCS_SUBTYPE_FLAGS_NONE, .kcs_elem_type = KC_ST_UINT16, .kcs_elem_offset = 1 * sizeof(uint16_t), .kcs_elem_size = sizeof(uint16_t), .kcs_name = "test_num"},
+	{.kcs_flags = KCS_SUBTYPE_FLAGS_NONE, .kcs_elem_type = KC_ST_INT32, .kcs_elem_offset = 2 * sizeof(uint16_t), .kcs_elem_size = sizeof(int32_t), .kcs_name = "retval"},
+	{.kcs_flags = KCS_SUBTYPE_FLAGS_NONE, .kcs_elem_type = KC_ST_INT32, .kcs_elem_offset = 2 * sizeof(uint16_t) + sizeof(int32_t), .kcs_elem_size = sizeof(int32_t), .kcs_name = "expected_retval"},
+	{.kcs_flags = KCS_SUBTYPE_FLAGS_NONE, .kcs_elem_type = KC_ST_UINT64, .kcs_elem_offset = 2 * (sizeof(uint16_t) + sizeof(int32_t)), .kcs_elem_size = sizeof(uint64_t), .kcs_name = "begin_time"},
+	{.kcs_flags = KCS_SUBTYPE_FLAGS_NONE, .kcs_elem_type = KC_ST_UINT64, .kcs_elem_offset = 2 * (sizeof(uint16_t) + sizeof(int32_t)) + sizeof(uint64_t), .kcs_elem_size = sizeof(uint64_t), .kcs_name = "end_time"},
+	{.kcs_flags = KCS_SUBTYPE_FLAGS_ARRAY,
+	 .kcs_elem_type = KC_ST_CHAR,
+	 .kcs_elem_offset = 2 * (sizeof(uint16_t) + sizeof(int32_t) + sizeof(uint64_t)),
+	 .kcs_elem_size = KCS_SUBTYPE_PACK_SIZE(XNUPOST_TNAME_MAXLEN * sizeof(char), sizeof(char)),
+	 .kcs_name = "test_name"}
 };
 
 const uint32_t kc_xnupost_test_def_count = sizeof(kc_xnupost_test_def) / sizeof(struct kcdata_subtype_descriptor);

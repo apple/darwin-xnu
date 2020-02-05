@@ -30,15 +30,16 @@
 #include <mach_kdp.h>
 #include <debug.h>
 
+#include <kern/assert.h>
+#include <kern/misc_protos.h>
+#include <kern/monotonic.h>
 #include <mach/vm_types.h>
 #include <mach/vm_param.h>
-#include <kern/misc_protos.h>
-#include <kern/assert.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_page.h>
 #include <vm/pmap.h>
 
-#include <arm/atomic.h>
+#include <machine/atomic.h>
 #include <arm64/proc_reg.h>
 #include <arm64/lowglobals.h>
 #include <arm/cpu_data_internal.h>
@@ -118,8 +119,8 @@ SECURITY_READ_ONLY_LATE(unsigned long) gPhysSize;
 SECURITY_READ_ONLY_LATE(unsigned long) gT0Sz = T0SZ_BOOT;
 SECURITY_READ_ONLY_LATE(unsigned long) gT1Sz = T1SZ_BOOT;
 
-/* 23543331 - step 1 of kext / kernel __TEXT and __DATA colocation is to move 
- * all kexts before the kernel.  This is only for arm64 devices and looks 
+/* 23543331 - step 1 of kext / kernel __TEXT and __DATA colocation is to move
+ * all kexts before the kernel.  This is only for arm64 devices and looks
  * something like the following:
  * -- vmaddr order --
  * 0xffffff8004004000 __PRELINK_TEXT
@@ -188,6 +189,7 @@ SECURITY_READ_ONLY_LATE(vm_offset_t)		  segEXTRADATA;
 SECURITY_READ_ONLY_LATE(unsigned long)		  segSizeEXTRADATA;
 
 SECURITY_READ_ONLY_LATE(vm_offset_t)          segLOWESTTEXT;
+SECURITY_READ_ONLY_LATE(vm_offset_t)          segLOWEST;
 
 SECURITY_READ_ONLY_LATE(static vm_offset_t)   segTEXTB;
 SECURITY_READ_ONLY_LATE(static unsigned long) segSizeTEXT;
@@ -266,18 +268,12 @@ SECURITY_READ_ONLY_LATE(vm_offset_t)     static_memory_end;
 SECURITY_READ_ONLY_LATE(pmap_paddr_t)    avail_start;
 SECURITY_READ_ONLY_LATE(pmap_paddr_t)    avail_end;
 SECURITY_READ_ONLY_LATE(pmap_paddr_t)    real_avail_end;
+SECURITY_READ_ONLY_LATE(unsigned long)   real_phys_size;
 
 #if __ARM_KERNEL_PROTECT__
 extern void ExceptionVectorsBase;
 extern void ExceptionVectorsEnd;
 #endif /* __ARM_KERNEL_PROTECT__ */
-
-#if defined(KERNEL_INTEGRITY_KTRR)
-#if __ARM64_TWO_LEVEL_PMAP__
-/* We could support this configuration, but it adds memory overhead. */
-#error This configuration is not supported
-#endif
-#endif
 
 typedef struct {
 	pmap_paddr_t pa;
@@ -297,6 +293,7 @@ phystokv(pmap_paddr_t pa)
 		if ((pa >= ptov_table[i].pa) && (pa < (ptov_table[i].pa + ptov_table[i].len)))
 			return (pa - ptov_table[i].pa + ptov_table[i].va);
 	}
+	assertf((pa - gPhysBase) < real_phys_size, "%s: illegal PA: 0x%llx", __func__, (uint64_t)pa);
 	return (pa - gPhysBase + gVirtBase);
 }
 
@@ -315,6 +312,7 @@ phystokv_range(pmap_paddr_t pa, vm_size_t *max_len)
 	len = PAGE_SIZE - (pa & PAGE_MASK);
 	if (*max_len > len)
 		*max_len = len;
+	assertf((pa - gPhysBase) < real_phys_size, "%s: illegal PA: 0x%llx", __func__, (uint64_t)pa);
 	return (pa - gPhysBase + gVirtBase);
 }
 
@@ -325,8 +323,7 @@ ml_static_vtop(vm_offset_t va)
 		if ((va >= ptov_table[i].va) && (va < (ptov_table[i].va + ptov_table[i].len)))
 			return (va - ptov_table[i].va + ptov_table[i].pa);
 	}
-	if (((vm_address_t)(va) - gVirtBase) >= gPhysSize)
-		panic("ml_static_vtop(): illegal VA: %p\n", (void*)va);
+	assertf(((vm_address_t)(va) - gVirtBase) < gPhysSize, "%s: illegal VA: %p", __func__, (void*)va);
 	return ((vm_address_t)(va) - gVirtBase + gPhysBase);
 }
 
@@ -446,7 +443,6 @@ void dump_kva_space() {
 
 	printf("Root page table: %s\n", root_static ? "Static" : "Dynamic");
 
-#if !__ARM64_TWO_LEVEL_PMAP__
 	for(unsigned int i=0; i<TTE_PGENTRIES; i++) {
 		pmap_paddr_t cur;
 		boolean_t cur_ro;
@@ -471,9 +467,6 @@ void dump_kva_space() {
 		tot_rosz += rosz;
 		tot_rwsz += rwsz;
 	}
-#else
-	dump_kva_l2(kva_base, cpu_tte, 0, &tot_rosz, &tot_rwsz);
-#endif /* !_ARM64_TWO_LEVEL_PMAP__ */
 
 	printf("L2 Address space mapped: Static %lluMB Dynamic %lluMB Total %lluMB\n",
 	  tot_rosz >> 20,
@@ -503,10 +496,8 @@ arm_vm_map(tt_entry_t * root_ttp, vm_offset_t vaddr, pt_entry_t pte)
 	vm_offset_t ptpage = 0;
 	tt_entry_t * ttp = root_ttp;
 
-#if !__ARM64_TWO_LEVEL_PMAP__
 	tt_entry_t * l1_ttep = NULL;
 	tt_entry_t l1_tte = 0;
-#endif
 
 	tt_entry_t * l2_ttep = NULL;
 	tt_entry_t l2_tte = 0;
@@ -517,7 +508,6 @@ arm_vm_map(tt_entry_t * root_ttp, vm_offset_t vaddr, pt_entry_t pte)
 	 * Walk the target page table to find the PTE for the given virtual
 	 * address.  Allocate any page table pages needed to do this.
 	 */
-#if !__ARM64_TWO_LEVEL_PMAP__
 	l1_ttep = ttp + ((vaddr & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
 	l1_tte = *l1_ttep;
 
@@ -532,7 +522,6 @@ arm_vm_map(tt_entry_t * root_ttp, vm_offset_t vaddr, pt_entry_t pte)
 	}
 
 	ttp = (tt_entry_t *)phystokv(l1_tte & ARM_TTE_TABLE_MASK);
-#endif
 
 	l2_ttep = ttp + ((vaddr & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
 	l2_tte = *l2_ttep;
@@ -565,6 +554,10 @@ arm_vm_map(tt_entry_t * root_ttp, vm_offset_t vaddr, pt_entry_t pte)
 
 	*ptep = pte;
 }
+
+#endif // __ARM_KERNEL_PROTECT
+
+#if __ARM_KERNEL_PROTECT__
 
 /*
  * arm_vm_kernel_el0_map:
@@ -611,7 +604,6 @@ arm_vm_kernel_pte(vm_offset_t vaddr)
 	pt_entry_t * ptep = NULL;
 	pt_entry_t pte = 0;
 
-#if !__ARM64_TWO_LEVEL_PMAP__
 	ttep = ttp + ((vaddr & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
 	tte = *ttep;
 
@@ -627,7 +619,6 @@ arm_vm_kernel_pte(vm_offset_t vaddr)
 	}
 
 	ttp = (tt_entry_t *)phystokv(tte & ARM_TTE_TABLE_MASK);
-#endif
 	ttep = ttp + ((vaddr & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
 	tte = *ttep;
 
@@ -736,11 +727,9 @@ static void arm_replace_identity_map(boot_args * args)
 	vm_offset_t addr;
 	pmap_paddr_t paddr;
 
-#if !__ARM64_TWO_LEVEL_PMAP__
 	pmap_paddr_t l1_ptp_phys = 0;
 	tt_entry_t *l1_ptp_virt = NULL;
 	tt_entry_t *tte1 = NULL;
-#endif
 	pmap_paddr_t l2_ptp_phys = 0;
 	tt_entry_t *l2_ptp_virt = NULL;
 	tt_entry_t *tte2 = NULL;
@@ -795,17 +784,16 @@ tt_entry_t *arm_kva_to_tte(vm_offset_t);
 tt_entry_t *
 arm_kva_to_tte(vm_offset_t va)
 {
-#if __ARM64_TWO_LEVEL_PMAP__
-	tt_entry_t *tte2;
-	tte2 = cpu_tte + L2_TABLE_INDEX(va);
-#else
 	tt_entry_t *tte1, *tte2;
 	tte1 = cpu_tte + L1_TABLE_INDEX(va);
 	tte2 = L2_TABLE_VA(tte1) + L2_TABLE_INDEX(va);
-#endif
+
 	return tte2;
 }
 
+
+#define ARM64_GRANULE_ALLOW_BLOCK (1 << 0)
+#define ARM64_GRANULE_ALLOW_HINT (1 << 1)
 
 /*
  * arm_vm_page_granular_helper updates protections at the L3 level.  It will (if
@@ -815,13 +803,13 @@ arm_kva_to_tte(vm_offset_t va)
  * not be invoked from a context that does not do L2 iteration separately (basically,
  * don't call this except from arm_vm_page_granular_prot).
  *
- * bool force_page_granule: true: will force page level mappings for this entry
- *                        false: will try to use block level mappings
+ * unsigned granule: 0 => force to page granule, or a combination of
+ * ARM64_GRANULE_* flags declared above.
  */
 
 static void
 arm_vm_page_granular_helper(vm_offset_t start, vm_offset_t _end, vm_offset_t va, pmap_paddr_t pa_offset,
-                            int pte_prot_APX, int pte_prot_XN, bool force_page_granule,
+                            int pte_prot_APX, int pte_prot_XN, unsigned granule,
                             pt_entry_t **deferred_pte, pt_entry_t *deferred_ptmp)
 {
 	if (va & ARM_TT_L2_OFFMASK) { /* ragged edge hanging over a ARM_TT_L2_SIZE  boundary */
@@ -886,9 +874,13 @@ arm_vm_page_granular_helper(vm_offset_t start, vm_offset_t _end, vm_offset_t va,
 				 * be fully covered by this mapping request.
 				 */
 				if ((va >= round_up_pte_hint_address(start)) && (round_up_pte_hint_address(va + 1) <= _end) &&
-				    !force_page_granule && use_contiguous_hint) {
+				    (granule & ARM64_GRANULE_ALLOW_HINT) && use_contiguous_hint) {
 					assert((va & ((1 << ARM_PTE_HINT_ADDR_SHIFT) - 1)) == ((pa & ((1 << ARM_PTE_HINT_ADDR_SHIFT) - 1))));
 					ptmp |= ARM_PTE_HINT;
+					/* Do not attempt to reapply the hint bit to an already-active mapping.
+					 * This very likely means we're attempting to change attributes on an already-active mapping,
+					 * which violates the requirement of the hint bit.*/
+					assert(!kva_active || (ppte[i] == ARM_PTE_TYPE_FAULT));
 				}
 				/*
 				 * Do not change the contiguous bit on an active mapping.  Even in a single-threaded
@@ -899,18 +891,18 @@ arm_vm_page_granular_helper(vm_offset_t start, vm_offset_t _end, vm_offset_t va,
 				 */
 				assert(!kva_active || (ppte[i] == ARM_PTE_TYPE_FAULT) || ((ppte[i] & ARM_PTE_HINT) == (ptmp & ARM_PTE_HINT)));
 
-				/* 
+				/*
 				 * If we reach an entry that maps the current pte page, delay updating it until the very end.
 				 * Otherwise we might end up making the PTE page read-only, leading to a fault later on in
 				 * this function if we manage to outrun the TLB.  This can happen on KTRR-enabled devices when
 				 * marking segDATACONST read-only.  Mappings for this region may straddle a PT page boundary,
 				 * so we must also defer assignment of the following PTE.  We will assume that if the region
 				 * were to require one or more full L3 pages, it would instead use L2 blocks where possible,
-				 * therefore only requiring at most one L3 page at the beginning and one at the end. 
+				 * therefore only requiring at most one L3 page at the beginning and one at the end.
 				 */
 				if (kva_active && ((pt_entry_t*)(phystokv(pa)) == ppte)) {
-					assert(recursive_pte == NULL);	
-					assert(!force_page_granule);
+					assert(recursive_pte == NULL);
+					assert(granule & ARM64_GRANULE_ALLOW_BLOCK);
 					recursive_pte = &ppte[i];
 					recursive_ptmp = ptmp;
 				} else if ((deferred_pte != NULL) && (&ppte[i] == &recursive_pte[1])) {
@@ -940,7 +932,7 @@ arm_vm_page_granular_helper(vm_offset_t start, vm_offset_t _end, vm_offset_t va,
 static void
 arm_vm_page_granular_prot(vm_offset_t start, unsigned long size, pmap_paddr_t pa_offset,
                           int tte_prot_XN, int pte_prot_APX, int pte_prot_XN,
-                          bool force_page_granule)
+                          unsigned granule)
 {
 	pt_entry_t *deferred_pte = NULL, deferred_ptmp = 0;
 	vm_offset_t _end = start + size;
@@ -950,19 +942,19 @@ arm_vm_page_granular_prot(vm_offset_t start, unsigned long size, pmap_paddr_t pa
 		return;
 
 	if (align_start > _end) {
-		arm_vm_page_granular_helper(start, _end, start, pa_offset, pte_prot_APX, pte_prot_XN, force_page_granule, NULL, NULL);
+		arm_vm_page_granular_helper(start, _end, start, pa_offset, pte_prot_APX, pte_prot_XN, granule, NULL, NULL);
 		return;
 	}
 
-	arm_vm_page_granular_helper(start, align_start, start, pa_offset, pte_prot_APX, pte_prot_XN, force_page_granule, &deferred_pte, &deferred_ptmp);
+	arm_vm_page_granular_helper(start, align_start, start, pa_offset, pte_prot_APX, pte_prot_XN, granule, &deferred_pte, &deferred_ptmp);
 
 	while ((_end - align_start) >= ARM_TT_L2_SIZE) {
-		if (force_page_granule)
+		if (!(granule & ARM64_GRANULE_ALLOW_BLOCK)) {
 			arm_vm_page_granular_helper(align_start, align_start+ARM_TT_L2_SIZE, align_start + 1, pa_offset,
-			                            pte_prot_APX, pte_prot_XN, force_page_granule, NULL, NULL);
-		else {
+			                            pte_prot_APX, pte_prot_XN, granule, NULL, NULL);
+		} else {
 			pmap_paddr_t pa = align_start - gVirtBase + gPhysBase - pa_offset;
-			assert((pa & ARM_TT_L2_OFFMASK) == 0); 
+			assert((pa & ARM_TT_L2_OFFMASK) == 0);
 			tt_entry_t *tte2;
 			tt_entry_t tmplate;
 
@@ -973,7 +965,7 @@ arm_vm_page_granular_prot(vm_offset_t start, unsigned long size, pmap_paddr_t pa
 					| ARM_TTE_VALID | ARM_TTE_BLOCK_AF | ARM_TTE_BLOCK_NX
 					| ARM_TTE_BLOCK_AP(pte_prot_APX) | ARM_TTE_BLOCK_SH(SH_OUTER_MEMORY)
 					| ARM_TTE_BLOCK_ATTRINDX(CACHE_ATTRINDX_WRITEBACK);
-				
+
 #if __ARM_KERNEL_PROTECT__
 				tmplate = tmplate | ARM_TTE_BLOCK_NG;
 #endif /* __ARM_KERNEL_PROTECT__ */
@@ -987,34 +979,28 @@ arm_vm_page_granular_prot(vm_offset_t start, unsigned long size, pmap_paddr_t pa
 	}
 
 	if (align_start < _end)
-		arm_vm_page_granular_helper(align_start, _end, _end, pa_offset, pte_prot_APX, pte_prot_XN, force_page_granule, &deferred_pte, &deferred_ptmp);
+		arm_vm_page_granular_helper(align_start, _end, _end, pa_offset, pte_prot_APX, pte_prot_XN, granule, &deferred_pte, &deferred_ptmp);
 
 	if (deferred_pte != NULL)
 		*deferred_pte = deferred_ptmp;
 }
 
 static inline void
-arm_vm_page_granular_RNX(vm_offset_t start, unsigned long size, bool force_page_granule)
+arm_vm_page_granular_RNX(vm_offset_t start, unsigned long size, unsigned granule)
 {
-	arm_vm_page_granular_prot(start, size, 0, 1, AP_RONA, 1, force_page_granule);
+	arm_vm_page_granular_prot(start, size, 0, 1, AP_RONA, 1, granule);
 }
 
 static inline void
-arm_vm_page_granular_ROX(vm_offset_t start, unsigned long size, bool force_page_granule)
+arm_vm_page_granular_ROX(vm_offset_t start, unsigned long size, unsigned granule)
 {
-	arm_vm_page_granular_prot(start, size, 0, 0, AP_RONA, 0, force_page_granule);
+	arm_vm_page_granular_prot(start, size, 0, 0, AP_RONA, 0, granule);
 }
 
 static inline void
-arm_vm_page_granular_RWNX(vm_offset_t start, unsigned long size, bool force_page_granule)
+arm_vm_page_granular_RWNX(vm_offset_t start, unsigned long size, unsigned granule)
 {
-	arm_vm_page_granular_prot(start, size, 0, 1, AP_RWNA, 1, force_page_granule);
-}
-
-static inline void
-arm_vm_page_granular_RWX(vm_offset_t start, unsigned long size, bool force_page_granule)
-{
-	arm_vm_page_granular_prot(start, size, 0, 0, AP_RWNA, 0, force_page_granule);
+	arm_vm_page_granular_prot(start, size, 0, 1, AP_RWNA, 1, granule);
 }
 
 /* used in the chosen/memory-map node, populated by iBoot. */
@@ -1022,7 +1008,6 @@ typedef struct MemoryMapFileInfo {
        vm_offset_t paddr;
        size_t length;
 } MemoryMapFileInfo;
-
 
 void
 arm_vm_prot_init(boot_args * args)
@@ -1036,6 +1021,8 @@ arm_vm_prot_init(boot_args * args)
 
 	segEXTRADATA = segLOWESTTEXT;
 	segSizeEXTRADATA = 0;
+
+	segLOWEST = segLOWESTTEXT;
 
 	DTEntry memory_map;
 	MemoryMapFileInfo *trustCacheRange;
@@ -1052,24 +1039,38 @@ arm_vm_prot_init(boot_args * args)
 		segEXTRADATA = phystokv(trustCacheRange->paddr);
 		segSizeEXTRADATA = trustCacheRange->length;
 
-		arm_vm_page_granular_RNX(segEXTRADATA, segSizeEXTRADATA, FALSE);
+		if (segEXTRADATA <= segLOWEST) {
+			segLOWEST = segEXTRADATA;
+		}
+#if !(DEBUG || DEVELOPMENT)
+
+
+		else {
+			panic("EXTRADATA is in an unexpected place: %#lx > %#lx", segEXTRADATA, segLOWEST);
+		}
+#endif /* !(DEBUG || DEVELOPMENT) */
+
+		arm_vm_page_granular_RNX(segEXTRADATA, segSizeEXTRADATA, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
+
 	}
 
 	/* Map coalesced kext TEXT segment RWNX for now */
-	arm_vm_page_granular_RWNX(segPRELINKTEXTB, segSizePRELINKTEXT, FALSE); // Refined in OSKext::readPrelinkedExtensions
+	arm_vm_page_granular_RWNX(segPRELINKTEXTB, segSizePRELINKTEXT, ARM64_GRANULE_ALLOW_BLOCK); // Refined in OSKext::readPrelinkedExtensions
 
 	/* Map coalesced kext DATA_CONST segment RWNX (could be empty) */
-	arm_vm_page_granular_RWNX(segPLKDATACONSTB, segSizePLKDATACONST, FALSE); // Refined in OSKext::readPrelinkedExtensions
+	arm_vm_page_granular_RWNX(segPLKDATACONSTB, segSizePLKDATACONST, ARM64_GRANULE_ALLOW_BLOCK); // Refined in OSKext::readPrelinkedExtensions
 
-	/* Map coalesced kext TEXT_EXEC segment RWX (could be empty) */
-	arm_vm_page_granular_ROX(segPLKTEXTEXECB, segSizePLKTEXTEXEC, FALSE); // Refined in OSKext::readPrelinkedExtensions
+	/* Map coalesced kext TEXT_EXEC segment RX (could be empty) */
+	arm_vm_page_granular_ROX(segPLKTEXTEXECB, segSizePLKTEXTEXEC, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT); // Refined in OSKext::readPrelinkedExtensions
 
 	/* if new segments not present, set space between PRELINK_TEXT and xnu TEXT to RWNX
 	 * otherwise we no longer expect any space between the coalesced kext read only segments and xnu rosegments
 	 */
 	if (!segSizePLKDATACONST && !segSizePLKTEXTEXEC) {
-		if (segSizePRELINKTEXT)
-			arm_vm_page_granular_RWNX(segPRELINKTEXTB + segSizePRELINKTEXT, segTEXTB - (segPRELINKTEXTB + segSizePRELINKTEXT), FALSE);
+		if (segSizePRELINKTEXT) {
+			arm_vm_page_granular_RWNX(segPRELINKTEXTB + segSizePRELINKTEXT, segTEXTB - (segPRELINKTEXTB + segSizePRELINKTEXT),
+			    ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
+		}
 	} else {
 		/*
 		 * If we have the new segments, we should still protect the gap between kext
@@ -1077,7 +1078,8 @@ arm_vm_prot_init(boot_args * args)
 		 * exists.
 		 */
 		if ((segPLKDATACONSTB + segSizePLKDATACONST) < segTEXTB) {
-			arm_vm_page_granular_RWNX(segPLKDATACONSTB + segSizePLKDATACONST, segTEXTB - (segPLKDATACONSTB + segSizePLKDATACONST), FALSE);
+			arm_vm_page_granular_RWNX(segPLKDATACONSTB + segSizePLKDATACONST, segTEXTB - (segPLKDATACONSTB + segSizePLKDATACONST),
+			    ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
 		}
 	}
 
@@ -1088,39 +1090,38 @@ arm_vm_prot_init(boot_args * args)
 	 *
 	 * TEXT segment contains mach headers and other non-executable data. This will become RONX later.
 	 */
-	arm_vm_page_granular_RNX(segTEXTB, segSizeTEXT, FALSE);
+	arm_vm_page_granular_RNX(segTEXTB, segSizeTEXT, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
 
 	/* Can DATACONST start out and stay RNX?
 	 * NO, stuff in this segment gets modified during startup (viz. mac_policy_init()/mac_policy_list)
 	 * Make RNX in prot_finalize
 	 */
-	arm_vm_page_granular_RWNX(segDATACONSTB, segSizeDATACONST, FALSE);
+	arm_vm_page_granular_RWNX(segDATACONSTB, segSizeDATACONST, ARM64_GRANULE_ALLOW_BLOCK);
 
-	/* TEXTEXEC contains read only executable code: becomes ROX in prot_finalize */
-	arm_vm_page_granular_RWX(segTEXTEXECB, segSizeTEXTEXEC, FALSE);
+	arm_vm_page_granular_ROX(segTEXTEXECB, segSizeTEXTEXEC, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
 
 
 	/* DATA segment will remain RWNX */
-	arm_vm_page_granular_RWNX(segDATAB, segSizeDATA, FALSE);
+	arm_vm_page_granular_RWNX(segDATAB, segSizeDATA, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
 
-	arm_vm_page_granular_RWNX(segBOOTDATAB, segSizeBOOTDATA, TRUE);
-	arm_vm_page_granular_RNX((vm_offset_t)&intstack_low_guard, PAGE_MAX_SIZE, TRUE);
-	arm_vm_page_granular_RNX((vm_offset_t)&intstack_high_guard, PAGE_MAX_SIZE, TRUE);
-	arm_vm_page_granular_RNX((vm_offset_t)&excepstack_high_guard, PAGE_MAX_SIZE, TRUE);
+	arm_vm_page_granular_RWNX(segBOOTDATAB, segSizeBOOTDATA, 0);
+	arm_vm_page_granular_RNX((vm_offset_t)&intstack_low_guard, PAGE_MAX_SIZE, 0);
+	arm_vm_page_granular_RNX((vm_offset_t)&intstack_high_guard, PAGE_MAX_SIZE, 0);
+	arm_vm_page_granular_RNX((vm_offset_t)&excepstack_high_guard, PAGE_MAX_SIZE, 0);
 
-	arm_vm_page_granular_ROX(segKLDB, segSizeKLD, FALSE);
-	arm_vm_page_granular_RWNX(segLINKB, segSizeLINK, FALSE);
-	arm_vm_page_granular_RWNX(segPLKLINKEDITB, segSizePLKLINKEDIT, FALSE); // Coalesced kext LINKEDIT segment
-	arm_vm_page_granular_ROX(segLASTB, segSizeLAST, FALSE); // __LAST may be empty, but we cannot assume this
+	arm_vm_page_granular_ROX(segKLDB, segSizeKLD, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
+	arm_vm_page_granular_RWNX(segLINKB, segSizeLINK, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
+	arm_vm_page_granular_RWNX(segPLKLINKEDITB, segSizePLKLINKEDIT, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT); // Coalesced kext LINKEDIT segment
+	arm_vm_page_granular_ROX(segLASTB, segSizeLAST, ARM64_GRANULE_ALLOW_BLOCK); // __LAST may be empty, but we cannot assume this
 
-	arm_vm_page_granular_RWNX(segPRELINKDATAB, segSizePRELINKDATA, FALSE); // Prelink __DATA for kexts (RW data)
+	arm_vm_page_granular_RWNX(segPRELINKDATAB, segSizePRELINKDATA, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT); // Prelink __DATA for kexts (RW data)
 
 	if (segSizePLKLLVMCOV > 0)
-		arm_vm_page_granular_RWNX(segPLKLLVMCOVB, segSizePLKLLVMCOV, FALSE); // LLVM code coverage data
+		arm_vm_page_granular_RWNX(segPLKLLVMCOVB, segSizePLKLLVMCOV, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT); // LLVM code coverage data
 
-	arm_vm_page_granular_RWNX(segPRELINKINFOB, segSizePRELINKINFO, FALSE); /* PreLinkInfoDictionary */
+	arm_vm_page_granular_RWNX(segPRELINKINFOB, segSizePRELINKINFO, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT); /* PreLinkInfoDictionary */
 
-	arm_vm_page_granular_RNX(phystokv(args->topOfKernelData), BOOTSTRAP_TABLE_SIZE, FALSE); // Boot page tables; they should not be mutable.
+	arm_vm_page_granular_RNX(phystokv(args->topOfKernelData), BOOTSTRAP_TABLE_SIZE, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT); // Boot page tables; they should not be mutable.
 }
 
 /*
@@ -1152,7 +1153,7 @@ SECURITY_READ_ONLY_LATE(static unsigned int) ptov_index = 0;
 #define ROUND_TWIG(addr) (((addr) + ARM_TT_TWIG_OFFMASK) & ~(ARM_TT_TWIG_OFFMASK))
 
 static void
-arm_vm_physmap_slide(ptov_table_entry *temp_ptov_table, vm_map_address_t physmap_base, vm_map_address_t orig_va, vm_size_t len, int pte_prot_APX, boolean_t force_page_granule)
+arm_vm_physmap_slide(ptov_table_entry *temp_ptov_table, vm_map_address_t physmap_base, vm_map_address_t orig_va, vm_size_t len, int pte_prot_APX, unsigned granule)
 {
 	pmap_paddr_t pa_offset;
 
@@ -1163,7 +1164,7 @@ arm_vm_physmap_slide(ptov_table_entry *temp_ptov_table, vm_map_address_t physmap
 		temp_ptov_table[ptov_index].va = physmap_base;
 	else
 		temp_ptov_table[ptov_index].va = temp_ptov_table[ptov_index - 1].va + temp_ptov_table[ptov_index - 1].len;
-	if (!force_page_granule) {
+	if (granule & ARM64_GRANULE_ALLOW_BLOCK) {
 		vm_map_address_t orig_offset = temp_ptov_table[ptov_index].pa & ARM_TT_TWIG_OFFMASK;
 		vm_map_address_t new_offset = temp_ptov_table[ptov_index].va & ARM_TT_TWIG_OFFMASK;
 		if (new_offset < orig_offset)
@@ -1173,8 +1174,8 @@ arm_vm_physmap_slide(ptov_table_entry *temp_ptov_table, vm_map_address_t physmap
 	}
 	assert((temp_ptov_table[ptov_index].va & ARM_PGMASK) == 0);
 	temp_ptov_table[ptov_index].len = round_page(len);
-	pa_offset = temp_ptov_table[ptov_index].va - orig_va; 
-	arm_vm_page_granular_prot(temp_ptov_table[ptov_index].va, temp_ptov_table[ptov_index].len, pa_offset, 1, pte_prot_APX, 1, force_page_granule);
+	pa_offset = temp_ptov_table[ptov_index].va - orig_va;
+	arm_vm_page_granular_prot(temp_ptov_table[ptov_index].va, temp_ptov_table[ptov_index].len, pa_offset, 1, pte_prot_APX, 1, granule);
 	++ptov_index;
 }
 
@@ -1186,18 +1187,20 @@ arm_vm_physmap_init(boot_args *args, vm_map_address_t physmap_base, vm_map_addre
 	bzero(temp_ptov_table, sizeof(temp_ptov_table));
 
 	// Will be handed back to VM layer through ml_static_mfree() in arm_vm_prot_finalize()
-	arm_vm_physmap_slide(temp_ptov_table, physmap_base, gVirtBase, segEXTRADATA - gVirtBase, AP_RWNA, FALSE);
+	arm_vm_physmap_slide(temp_ptov_table, physmap_base, gVirtBase, segLOWEST - gVirtBase, AP_RWNA,
+	    ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
 
-	arm_vm_page_granular_RWNX(end_kern, phystokv(args->topOfKernelData) - end_kern, FALSE); /* Device Tree, RAM Disk (if present), bootArgs */
+	arm_vm_page_granular_RWNX(end_kern, phystokv(args->topOfKernelData) - end_kern,
+	    ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT); /* Device Tree, RAM Disk (if present), bootArgs */
 
 	arm_vm_physmap_slide(temp_ptov_table, physmap_base, (args->topOfKernelData + BOOTSTRAP_TABLE_SIZE - gPhysBase + gVirtBase),
-			     real_avail_end - (args->topOfKernelData + BOOTSTRAP_TABLE_SIZE), AP_RWNA, FALSE); // rest of physmem
+	    real_avail_end - (args->topOfKernelData + BOOTSTRAP_TABLE_SIZE), AP_RWNA, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT); // rest of physmem
 
 	assert((temp_ptov_table[ptov_index - 1].va + temp_ptov_table[ptov_index - 1].len) <= dynamic_memory_begin);
 
 	// Sort in descending order of segment length.  LUT traversal is linear, so largest (most likely used)
 	// segments should be placed earliest in the table to optimize lookup performance.
-	qsort(temp_ptov_table, PTOV_TABLE_SIZE, sizeof(temp_ptov_table[0]), cmp_ptov_entries); 
+	qsort(temp_ptov_table, PTOV_TABLE_SIZE, sizeof(temp_ptov_table[0]), cmp_ptov_entries);
 
 	memcpy(ptov_table, temp_ptov_table, sizeof(ptov_table));
 }
@@ -1222,7 +1225,7 @@ arm_vm_prot_finalize(boot_args * args __unused)
 	 * should be immediately followed by XNU's TEXT segment
 	 */
 
-	ml_static_mfree(phystokv(gPhysBase), segEXTRADATA - gVirtBase);
+	ml_static_mfree(phystokv(gPhysBase), segLOWEST - gVirtBase);
 
 	/*
 	 * KTRR support means we will be mucking with these pages and trying to
@@ -1233,18 +1236,9 @@ arm_vm_prot_finalize(boot_args * args __unused)
 		ml_static_mfree(segPRELINKTEXTB + segSizePRELINKTEXT, segTEXTB - (segPRELINKTEXTB + segSizePRELINKTEXT));
 	}
 
-	/*
-	 * LowResetVectorBase patching should be done by now, so tighten executable
-	 * protections.
-	 */
-	arm_vm_page_granular_ROX(segTEXTEXECB, segSizeTEXTEXEC, FALSE);
-
 	/* tighten permissions on kext read only data and code */
-	if (segSizePLKDATACONST && segSizePLKTEXTEXEC) {
-		arm_vm_page_granular_RNX(segPRELINKTEXTB, segSizePRELINKTEXT, FALSE);
-		arm_vm_page_granular_ROX(segPLKTEXTEXECB, segSizePLKTEXTEXEC, FALSE);
-		arm_vm_page_granular_RNX(segPLKDATACONSTB, segSizePLKDATACONST, FALSE);
-	}
+	arm_vm_page_granular_RNX(segPRELINKTEXTB, segSizePRELINKTEXT, ARM64_GRANULE_ALLOW_BLOCK);
+	arm_vm_page_granular_RNX(segPLKDATACONSTB, segSizePLKDATACONST, ARM64_GRANULE_ALLOW_BLOCK);
 
 	cpu_stack_alloc(&BootCpuData);
 	arm64_replace_bootstack(&BootCpuData);
@@ -1259,7 +1253,7 @@ arm_vm_prot_finalize(boot_args * args __unused)
 	/*
 	 * __LAST,__pinst should no longer be executable.
 	 */
-	arm_vm_page_granular_RNX(segLASTB, segSizeLAST, FALSE);
+	arm_vm_page_granular_RNX(segLASTB, segSizeLAST, ARM64_GRANULE_ALLOW_BLOCK);
 
 	/*
 	 * Must wait until all other region permissions are set before locking down DATA_CONST
@@ -1268,11 +1262,8 @@ arm_vm_prot_finalize(boot_args * args __unused)
 	 */
 #endif
 
-	arm_vm_page_granular_RNX(segDATACONSTB, segSizeDATACONST, FALSE);
+	arm_vm_page_granular_RNX(segDATACONSTB, segSizeDATACONST, ARM64_GRANULE_ALLOW_BLOCK);
 
-#ifndef __ARM_L1_PTW__
-	FlushPoC_Dcache();
-#endif
 	__builtin_arm_dsb(DSB_ISH);
 	flush_mmu_tlb();
 }
@@ -1302,7 +1293,16 @@ set_tbi(void)
 		user_tbi = ((tbi & TBI_USER) == TBI_USER);
 	old_tcr = new_tcr = get_tcr();
 	new_tcr |= (user_tbi) ? TCR_TBI0_TOPBYTE_IGNORED : 0;
+
+#if !defined(HAS_APPLE_PAC)
+	/*
+	 * arm_vm_init() runs after rebase_threaded_starts(), so enabling TBI1
+	 * at this point will break the computed pointer signatures.  TBID1
+	 * could help mitigate this problem, but for now we'll just disable
+	 * kernel TBI if PAC is being used.
+	 */
 	new_tcr |= (tbi & TBI_KERNEL) ? TCR_TBI1_TOPBYTE_IGNORED : 0;
+#endif
 
 	if (old_tcr != new_tcr) {
 		set_tcr(new_tcr);
@@ -1317,19 +1317,8 @@ set_tbi(void)
 void
 arm_vm_init(uint64_t memory_size, boot_args * args)
 {
-#if !__ARM64_TWO_LEVEL_PMAP__
 	vm_map_address_t va_l1, va_l1_end;
 	tt_entry_t       *cpu_l1_tte;
-#else
-	/*
-	 * If we are using two level page tables, rather than the
-	 * 3 level page tables that xnu defaults to for ARM64,
-	 * then a great deal of the code in this path becomes
-	 * redundant.  As a result, most of the logic having to
-	 * do with L1 pages will be excluded from such
-	 * configurations in this function.
-	 */
-#endif
 	vm_map_address_t va_l2, va_l2_end;
 	tt_entry_t       *cpu_l2_tte;
 	pmap_paddr_t     boot_ttep;
@@ -1345,8 +1334,22 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	 */
 	gVirtBase = args->virtBase;
 	gPhysBase = args->physBase;
-	gPhysSize = args->memSize;
-	mem_size = args->memSize;
+#if KASAN
+	real_phys_size = args->memSize + (shadow_ptop - shadow_pbase);
+#else
+	real_phys_size = args->memSize;
+#endif
+	/*
+	 * Ensure the physical region we specify for the VM to manage ends on a
+	 * software page boundary.  Note that the software page size (PAGE_SIZE)
+	 * may be a multiple of the hardware page size specified in ARM_PGBYTES.
+	 * We must round the reported memory size down to the nearest PAGE_SIZE
+	 * boundary to ensure the VM does not try to manage a page it does not
+	 * completely own.  The KASAN shadow region, if present, is managed entirely
+	 * in units of the hardware page size and should not need similar treatment.
+	 */
+	gPhysSize = mem_size = ((gPhysBase + args->memSize) & ~PAGE_MASK) - gPhysBase;
+
 	if ((memory_size != 0) && (mem_size > memory_size))
 		mem_size = memory_size;
 	if (mem_size >= ((VM_MAX_KERNEL_ADDRESS - VM_MIN_KERNEL_ADDRESS) / 4))
@@ -1403,21 +1406,14 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	/*
 	 * Initialize l1 page table page
 	 */
-#if __ARM64_TWO_LEVEL_PMAP__
-	/*
-	 * If we're using a two level page table, we still need to
-	 * set the cpu_ttep to avail_start, as this will be the root
-	 * of our page table regardless of how many levels we are
-	 * using.
-	 */
-#endif
 	cpu_tte = (tt_entry_t *)alloc_ptpage(TRUE);
 	cpu_ttep = kvtophys((vm_offset_t)cpu_tte);
 	bzero(cpu_tte, ARM_PGBYTES);
 	avail_end = gPhysBase + mem_size;
+	assert(!(avail_end & PAGE_MASK));
 
 #if KASAN
-	real_avail_end = avail_end + (shadow_ptop - shadow_pbase);
+	real_avail_end = gPhysBase + real_phys_size;
 #else
 	real_avail_end = avail_end;
 #endif
@@ -1429,9 +1425,8 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	 *
 	 *   the so called physical aperture should be statically mapped
 	 */
-#if !__ARM64_TWO_LEVEL_PMAP__
 	va_l1 = gVirtBase;
-	va_l1_end = dynamic_memory_begin; 
+	va_l1_end = dynamic_memory_begin;
 	cpu_l1_tte = cpu_tte + ((va_l1 & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
 
 	while (va_l1 < va_l1_end) {
@@ -1450,7 +1445,6 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 		va_l1 += ARM_TT_L1_SIZE;
 		cpu_l1_tte++;
 	}
-#endif
 
 #if __ARM_KERNEL_PROTECT__
 	/* Expand the page tables to prepare for the EL0 mappings. */
@@ -1519,14 +1513,9 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	 *   cover this address range:
 	 *     LOW_GLOBAL_BASE_ADDRESS + 2MB
 	 */
-#if __ARM64_TWO_LEVEL_PMAP__
-	va_l2 = LOW_GLOBAL_BASE_ADDRESS;
-	cpu_l2_tte = cpu_tte + ((va_l2 & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
-#else
 	va_l1 = va_l2 = LOW_GLOBAL_BASE_ADDRESS;
 	cpu_l1_tte = cpu_tte + ((va_l1 & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
 	cpu_l2_tte = ((tt_entry_t *) phystokv(((*cpu_l1_tte) & ARM_TTE_TABLE_MASK))) + ((va_l2 & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
-#endif
 	ptpage_vaddr = alloc_ptpage(TRUE);
 	*cpu_l2_tte = (kvtophys(ptpage_vaddr) & ARM_TTE_TABLE_MASK) | ARM_TTE_TYPE_TABLE | ARM_TTE_VALID | ARM_TTE_TABLE_PXN | ARM_TTE_TABLE_XN;
 	bzero((void *)ptpage_vaddr, ARM_PGBYTES);
@@ -1536,7 +1525,6 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	 *   cover this address range:
 	 *    KERNEL_DYNAMIC_ADDR - VM_MAX_KERNEL_ADDRESS
 	 */
-#if !__ARM64_TWO_LEVEL_PMAP__
 	va_l1 = dynamic_memory_begin;
 	va_l1_end = VM_MAX_KERNEL_ADDRESS;
 	cpu_l1_tte = cpu_tte + ((va_l1 & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
@@ -1557,20 +1545,26 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 		va_l1 += ARM_TT_L1_SIZE;
 		cpu_l1_tte++;
 	}
-#endif
 
 #if KASAN
 	/* record the extent of the physmap */
 	physmap_vbase = physmap_base;
 	physmap_vtop = static_memory_end;
 	kasan_init();
-#endif
+#endif /* KASAN */
+
+#if MONOTONIC
+	mt_early_init();
+#endif /* MONOTONIC */
 
 	set_tbi();
-	set_mmu_ttb(invalid_ttep & TTBR_BADDR_MASK);
 
 	arm_vm_physmap_init(args, physmap_base, dynamic_memory_begin);
 	set_mmu_ttb_alternate(cpu_ttep & TTBR_BADDR_MASK);
+
+
+	set_mmu_ttb(invalid_ttep & TTBR_BADDR_MASK);
+
 	flush_mmu_tlb();
 	kva_active = TRUE;
 	// global table pointers may need to be different due to physical aperture remapping
@@ -1600,7 +1594,6 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 
 	mem_segments = (mem_size + 0x0FFFFFFF) >> 28;
 
-#if !__ARM64_TWO_LEVEL_PMAP__
 	va_l1 = dynamic_memory_begin;
 	va_l1_end = va_l1 + ((2 + (mem_segments * 10)) << 20);
 	va_l1_end += round_page(args->Video.v_height * args->Video.v_rowBytes);
@@ -1620,13 +1613,6 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 		}
 
 		cpu_l2_tte = ((tt_entry_t *) phystokv(((*cpu_l1_tte) & ARM_TTE_TABLE_MASK))) + ((va_l2 & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
-#else
-		va_l2 = dynamic_memory_begin;
-		va_l2_end = va_l2 + ((2 + (mem_segments * 10)) << 20);
-		va_l2_end += round_page(args->Video.v_height * args->Video.v_rowBytes);
-		va_l2_end = (va_l2_end + 0x00000000007FFFFFULL) & 0xFFFFFFFFFF800000ULL;
-		cpu_l2_tte = cpu_tte + ((va_l2 & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
-#endif
 
 		while (va_l2 < va_l2_end) {
 			pt_entry_t *    ptp;
@@ -1636,25 +1622,23 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 			ptp = (pt_entry_t *) alloc_ptpage(FALSE);
 			ptp_phys = (pmap_paddr_t)kvtophys((vm_offset_t)ptp);
 
-			pmap_init_pte_page(kernel_pmap, ptp, va_l2, 3, TRUE);
+			pmap_init_pte_page(kernel_pmap, ptp, va_l2, 3, TRUE, TRUE);
 
 			*cpu_l2_tte = (pa_to_tte (ptp_phys)) | ARM_TTE_TYPE_TABLE | ARM_TTE_VALID | ARM_DYNAMIC_TABLE_XN;
 
 			va_l2 += ARM_TT_L2_SIZE;
 			cpu_l2_tte++;
 		};
-#if !__ARM64_TWO_LEVEL_PMAP__
+
 		va_l1 = va_l2_end;
 		cpu_l1_tte++;
 	}
-#endif
 
 	/*
 	 * Initialize l3 page table pages :
 	 *   cover this address range:
 	 *   (VM_MAX_KERNEL_ADDRESS & CPUWINDOWS_BASE_MASK) - VM_MAX_KERNEL_ADDRESS
 	 */
-#if !__ARM64_TWO_LEVEL_PMAP__
 	va_l1 = VM_MAX_KERNEL_ADDRESS & CPUWINDOWS_BASE_MASK;
 	va_l1_end = VM_MAX_KERNEL_ADDRESS;
 
@@ -1672,11 +1656,6 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 		}
 
 		cpu_l2_tte = ((tt_entry_t *) phystokv(((*cpu_l1_tte) & ARM_TTE_TABLE_MASK))) + ((va_l2 & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
-#else
-		va_l2 = VM_MAX_KERNEL_ADDRESS & CPUWINDOWS_BASE_MASK;
-		va_l2_end = VM_MAX_KERNEL_ADDRESS;
-		cpu_l2_tte = cpu_tte + ((va_l2 & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
-#endif
 
 		while (va_l2 < va_l2_end) {
 			pt_entry_t *    ptp;
@@ -1686,18 +1665,17 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 			ptp = (pt_entry_t *) alloc_ptpage(FALSE);
 			ptp_phys = (pmap_paddr_t)kvtophys((vm_offset_t)ptp);
 
-			pmap_init_pte_page(kernel_pmap, ptp, va_l2, 3, TRUE);
+			pmap_init_pte_page(kernel_pmap, ptp, va_l2, 3, TRUE, TRUE);
 
 			*cpu_l2_tte = (pa_to_tte (ptp_phys)) | ARM_TTE_TYPE_TABLE | ARM_TTE_VALID | ARM_DYNAMIC_TABLE_XN;
 
 			va_l2 += ARM_TT_L2_SIZE;
 			cpu_l2_tte++;
 		};
-#if !__ARM64_TWO_LEVEL_PMAP__
+
 		va_l1 = va_l2_end;
 		cpu_l1_tte++;
 	}
-#endif
 
 #if __ARM64_PMAP_SUBPAGE_L1__ && __ARM_16K_PG__
 	/*

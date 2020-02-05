@@ -12,6 +12,8 @@
 
 #if !TARGET_OS_IPHONE
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 static pthread_t workq_thread;
 static bool signal_received;
 

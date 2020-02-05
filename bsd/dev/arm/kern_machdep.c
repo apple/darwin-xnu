@@ -17,7 +17,6 @@
 #include        <pexpert/arm64/board_config.h>
 
 #if __arm64__
-extern int bootarg_no64exec;    /* bsd_init.c */
 static cpu_subtype_t cpu_subtype32(void);
 #endif /* __arm64__ */
 
@@ -47,7 +46,7 @@ cpu_subtype32()
 *		not acceptable.
 **********************************************************************/
 int
-grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype)
+grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype, bool allow_simulator_binary __unused)
 {
 #if __arm64__
 	cpu_subtype_t hostsubtype =
@@ -59,10 +58,6 @@ grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype)
 	switch (exectype) {
 #if __arm64__
 	case CPU_TYPE_ARM64:
-		if (bootarg_no64exec) {
-			return 0;
-		}
-
 		switch (hostsubtype) {
 		case CPU_SUBTYPE_ARM64_V8:
 			switch (execsubtype) {

@@ -153,8 +153,11 @@ extern unsigned         PAGE_SHIFT_CONST;
 #define VM_MAX_ADDRESS          ((vm_address_t) 0x0000000080000000ULL)
 
 /* system-wide values */
-#define MACH_VM_MIN_ADDRESS     ((mach_vm_offset_t) 0x0ULL)
-#define MACH_VM_MAX_ADDRESS     ((mach_vm_offset_t) 0x0000000FC0000000ULL)
+#define MACH_VM_MIN_ADDRESS_RAW 0x0ULL
+#define MACH_VM_MAX_ADDRESS_RAW 0x0000000FC0000000ULL
+#define MACH_VM_MIN_ADDRESS     ((mach_vm_offset_t) MACH_VM_MIN_ADDRESS_RAW)
+#define MACH_VM_MAX_ADDRESS     ((mach_vm_offset_t) MACH_VM_MAX_ADDRESS_RAW)
+
 
 #else
 #error architecture not supported
@@ -177,7 +180,7 @@ extern unsigned         PAGE_SHIFT_CONST;
  */
 #define VM_KERNEL_POINTER_SIGNIFICANT_BITS  37
 #define VM_MIN_KERNEL_ADDRESS   ((vm_address_t) 0xffffffe000000000ULL)
-#define VM_MAX_KERNEL_ADDRESS   ((vm_address_t) 0xfffffff3ffffffffULL)
+#define VM_MAX_KERNEL_ADDRESS   ((vm_address_t) 0xfffffffbffffffffULL)
 #else
 #error architecture not supported
 #endif
@@ -185,7 +188,12 @@ extern unsigned         PAGE_SHIFT_CONST;
 #define VM_MIN_KERNEL_AND_KEXT_ADDRESS  \
 	                        VM_MIN_KERNEL_ADDRESS
 
+#if __has_feature(ptrauth_calls)
+#include <ptrauth.h>
+#define VM_KERNEL_STRIP_PTR(_v) (ptrauth_strip((void *)(uintptr_t)(_v), ptrauth_key_asia))
+#else /* !ptrauth_calls */
 #define VM_KERNEL_STRIP_PTR(_v) (_v)
+#endif /* ptrauth_calls */
 
 #define VM_KERNEL_ADDRESS(_va)  \
 	((((vm_address_t)VM_KERNEL_STRIP_PTR(_va)) >= VM_MIN_KERNEL_ADDRESS) && \
@@ -198,11 +206,18 @@ extern unsigned         PAGE_SHIFT_CONST;
 extern unsigned long            gVirtBase, gPhysBase, gPhysSize;
 
 #define isphysmem(a)            (((vm_address_t)(a) - gPhysBase) < gPhysSize)
+#define physmap_enclosed(a)     isphysmem(a)
 
 #if KASAN
 /* Increase the stack sizes to account for the redzones that get added to every
  * stack object. */
 # define KERNEL_STACK_SIZE      (4*4*4096)
+#elif DEBUG
+/**
+ * Increase the stack size to account for less efficient use of stack space when
+ * compiling with -O0.
+ */
+# define KERNEL_STACK_SIZE      (2*4*4096)
 #else
 # define KERNEL_STACK_SIZE      (4*4096)
 #endif

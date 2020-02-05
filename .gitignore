@@ -25,6 +25,9 @@ compile_commands.json
 # /libkern/kmod/libkmod.xcodeproj/
 /libkern/kmod/libkmod.xcodeproj/xcuserdata
 
+# /libkdd/kdd.xcodeproj/
+/libkdd/kdd.xcodeproj/xcuserdata
+
 # /libsyscall/Libsyscall.xcodeproj/
 /libsyscall/Libsyscall.xcodeproj/xcuserdata
 /libsyscall/Libsyscall.xcodeproj/project.xcworkspace
@@ -44,8 +47,14 @@ compile_commands.json
 # /tools/tests/testkext/testkext.xcodeproj/
 /tools/tests/testkext/testkext.xcodeproj/xcuserdata
 
+#/tools/tests/unit_tests/cpu_monitor_tests_11646922_src/CatchRN/CatchRN.xcodeproj/
+/tools/tests/unit_tests/cpu_monitor_tests_11646922_src/CatchRN/CatchRN.xcodeproj/xcuserdata
+
 # /tools/tests/unit_tests/cpu_monitor_tests_11646922_src/cpu_hog/cpu_hog.xcodeproj/
 /tools/tests/unit_tests/cpu_monitor_tests_11646922_src/cpu_hog/cpu_hog.xcodeproj/xcuserdata
+
+# /tools/tests/unit_tests/mach_test_15789220_src/mach_test.xcodeproj/
+/tools/tests/unit_tests/mach_test_15789220_src/mach_test.xcodeproj/xcuserdata
 
 # /tools/tests/unit_tests/monitor_stress_12901965_src/monitor_stress.xcodeproj/
 /tools/tests/unit_tests/monitor_stress_12901965_src/monitor_stress.xcodeproj/xcuserdata
@@ -53,5 +62,10 @@ compile_commands.json
 # /tools/tests/unit_tests/monitor_stress_12901965_src/monitor_stress.xcodeproj/project.xcworkspace/
 /tools/tests/unit_tests/monitor_stress_12901965_src/monitor_stress.xcodeproj/project.xcworkspace/xcuserdata
 
+#/tools/tests/unit_tests/test_14395574/test_14395574.xcodeproj/
+/tools/tests/unit_tests/test_14395574/test_14395574.xcodeproj/xcuserdata
+
 # /tools/tests/zero-to-n
 /tools/tests/zero-to-n/zn*
+
+# do not add *.orig, *.rej, use `git clean` instead

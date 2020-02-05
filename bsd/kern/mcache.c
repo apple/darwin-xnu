@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -146,13 +146,11 @@ static unsigned int mcache_slab_alloc(void *, mcache_obj_t ***,
 static void mcache_slab_free(void *, mcache_obj_t *, boolean_t);
 static void mcache_slab_audit(void *, mcache_obj_t *, boolean_t);
 static void mcache_cpu_refill(mcache_cpu_t *, mcache_bkt_t *, int);
-static mcache_bkt_t *mcache_bkt_alloc(mcache_t *, mcache_bktlist_t *,
-    mcache_bkttype_t **);
+static mcache_bkt_t *mcache_bkt_alloc(mcache_t *, mcache_bktlist_t *);
 static void mcache_bkt_free(mcache_t *, mcache_bktlist_t *, mcache_bkt_t *);
 static void mcache_cache_bkt_enable(mcache_t *);
 static void mcache_bkt_purge(mcache_t *);
-static void mcache_bkt_destroy(mcache_t *, mcache_bkttype_t *,
-    mcache_bkt_t *, int);
+static void mcache_bkt_destroy(mcache_t *, mcache_bkt_t *, int);
 static void mcache_bkt_ws_update(mcache_t *);
 static void mcache_bkt_ws_zero(mcache_t *);
 static void mcache_bkt_ws_reap(mcache_t *);
@@ -201,12 +199,16 @@ mcache_init(void)
 	mcache_update_tcall = thread_call_allocate(mcache_update, NULL);
 	if (mcache_reap_tcall == NULL || mcache_update_tcall == NULL) {
 		panic("mcache_init: thread_call_allocate failed");
+		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
 	mcache_zone = zinit(MCACHE_ALLOC_SIZE, 256 * MCACHE_ALLOC_SIZE,
 	    PAGE_SIZE, "mcache");
 	if (mcache_zone == NULL) {
 		panic("mcache_init: failed to allocate mcache zone\n");
+		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 	zone_change(mcache_zone, Z_CALLERACCT, FALSE);
 
@@ -346,6 +348,8 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 
 	if ((align & (align - 1)) != 0) {
 		panic("mcache_create: bad alignment %lu", align);
+		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
 	cp->mc_align = align;
@@ -548,7 +552,7 @@ retry_alloc:
 		 * bucket from the bucket layer.  Upon success, refill this
 		 * CPU and place any empty bucket into the empty list.
 		 */
-		bkt = mcache_bkt_alloc(cp, &cp->mc_full, NULL);
+		bkt = mcache_bkt_alloc(cp, &cp->mc_full);
 		if (bkt != NULL) {
 			if (ccp->cc_pfilled != NULL) {
 				mcache_bkt_free(cp, &cp->mc_empty,
@@ -616,6 +620,8 @@ debug_alloc:
 			panic("mcache_alloc_ext: %s cp %p corrupted list "
 			    "(got %d actual %d)\n", cp->mc_name,
 			    (void *)cp, num - need, n);
+			/* NOTREACHED */
+			__builtin_unreachable();
 		}
 	}
 
@@ -810,7 +816,7 @@ mcache_free_ext(mcache_t *cp, mcache_obj_t *list)
 		 * bucket from the bucket layer.  Upon success, empty this
 		 * CPU and place any full bucket into the full list.
 		 */
-		bkt = mcache_bkt_alloc(cp, &cp->mc_empty, &btp);
+		bkt = mcache_bkt_alloc(cp, &cp->mc_empty);
 		if (bkt != NULL) {
 			if (ccp->cc_pfilled != NULL) {
 				mcache_bkt_free(cp, &cp->mc_full,
@@ -819,6 +825,7 @@ mcache_free_ext(mcache_t *cp, mcache_obj_t *list)
 			mcache_cpu_refill(ccp, bkt, 0);
 			continue;
 		}
+		btp = cp->cache_bkttype;
 
 		/*
 		 * We need an empty bucket to put our freed objects into
@@ -843,6 +850,14 @@ mcache_free_ext(mcache_t *cp, mcache_obj_t *list)
 				MCACHE_LOCK(&ccp->cc_lock);
 				continue;
 			}
+
+			/*
+			 * Store it in the bucket object since we'll
+			 * need to refer to it during bucket destroy;
+			 * we can't safely refer to cache_bkttype as
+			 * the bucket lock may not be acquired then.
+			 */
+			bkt->bkt_type = btp;
 
 			/*
 			 * We have an empty bucket of the right size;
@@ -1082,7 +1097,7 @@ mcache_cpu_refill(mcache_cpu_t *ccp, mcache_bkt_t *bkt, int objs)
  * Allocate a bucket from the bucket layer.
  */
 static mcache_bkt_t *
-mcache_bkt_alloc(mcache_t *cp, mcache_bktlist_t *blp, mcache_bkttype_t **btp)
+mcache_bkt_alloc(mcache_t *cp, mcache_bktlist_t *blp)
 {
 	mcache_bkt_t *bkt;
 
@@ -1102,10 +1117,6 @@ mcache_bkt_alloc(mcache_t *cp, mcache_bktlist_t *blp, mcache_bkttype_t **btp)
 			blp->bl_min = blp->bl_total;
 		}
 		blp->bl_alloc++;
-	}
-
-	if (btp != NULL) {
-		*btp = cp->cache_bkttype;
 	}
 
 	MCACHE_UNLOCK(&cp->mc_bkt_lock);
@@ -1157,7 +1168,6 @@ mcache_bkt_purge(mcache_t *cp)
 {
 	mcache_cpu_t *ccp;
 	mcache_bkt_t *bp, *pbp;
-	mcache_bkttype_t *btp;
 	int cpu, objs, pobjs;
 
 	for (cpu = 0; cpu < ncpu; cpu++) {
@@ -1165,7 +1175,6 @@ mcache_bkt_purge(mcache_t *cp)
 
 		MCACHE_LOCK(&ccp->cc_lock);
 
-		btp = cp->cache_bkttype;
 		bp = ccp->cc_filled;
 		pbp = ccp->cc_pfilled;
 		objs = ccp->cc_objs;
@@ -1179,10 +1188,10 @@ mcache_bkt_purge(mcache_t *cp)
 		MCACHE_UNLOCK(&ccp->cc_lock);
 
 		if (bp != NULL) {
-			mcache_bkt_destroy(cp, btp, bp, objs);
+			mcache_bkt_destroy(cp, bp, objs);
 		}
 		if (pbp != NULL) {
-			mcache_bkt_destroy(cp, btp, pbp, pobjs);
+			mcache_bkt_destroy(cp, pbp, pobjs);
 		}
 	}
 
@@ -1195,8 +1204,7 @@ mcache_bkt_purge(mcache_t *cp)
  * and also free the bucket itself.
  */
 static void
-mcache_bkt_destroy(mcache_t *cp, mcache_bkttype_t *btp, mcache_bkt_t *bkt,
-    int nobjs)
+mcache_bkt_destroy(mcache_t *cp, mcache_bkt_t *bkt, int nobjs)
 {
 	if (nobjs > 0) {
 		mcache_obj_t *top = bkt->bkt_obj[nobjs - 1];
@@ -1219,6 +1227,8 @@ mcache_bkt_destroy(mcache_t *cp, mcache_bkttype_t *btp, mcache_bkt_t *bkt,
 				    "list in bkt %p (nobjs %d actual %d)\n",
 				    cp->mc_name, (void *)cp, (void *)bkt,
 				    nobjs, cnt);
+				/* NOTREACHED */
+				__builtin_unreachable();
 			}
 		}
 
@@ -1226,7 +1236,7 @@ mcache_bkt_destroy(mcache_t *cp, mcache_bkttype_t *btp, mcache_bkt_t *bkt,
 		(*cp->mc_slab_free)(cp->mc_private, top,
 		    (cp->mc_flags & MCF_DEBUG) || cp->mc_purge_cnt);
 	}
-	mcache_free(btp->bt_cache, bkt);
+	mcache_free(bkt->bkt_type->bt_cache, bkt);
 }
 
 /*
@@ -1269,18 +1279,17 @@ mcache_bkt_ws_reap(mcache_t *cp)
 {
 	long reap;
 	mcache_bkt_t *bkt;
-	mcache_bkttype_t *btp;
 
 	reap = MIN(cp->mc_full.bl_reaplimit, cp->mc_full.bl_min);
 	while (reap-- &&
-	    (bkt = mcache_bkt_alloc(cp, &cp->mc_full, &btp)) != NULL) {
-		mcache_bkt_destroy(cp, btp, bkt, btp->bt_bktsize);
+	    (bkt = mcache_bkt_alloc(cp, &cp->mc_full)) != NULL) {
+		mcache_bkt_destroy(cp, bkt, bkt->bkt_type->bt_bktsize);
 	}
 
 	reap = MIN(cp->mc_empty.bl_reaplimit, cp->mc_empty.bl_min);
 	while (reap-- &&
-	    (bkt = mcache_bkt_alloc(cp, &cp->mc_empty, &btp)) != NULL) {
-		mcache_bkt_destroy(cp, btp, bkt, 0);
+	    (bkt = mcache_bkt_alloc(cp, &cp->mc_empty)) != NULL) {
+		mcache_bkt_destroy(cp, bkt, 0);
 	}
 }
 
@@ -1487,7 +1496,7 @@ __private_extern__ void
 mcache_buffer_log(mcache_audit_t *mca, void *addr, mcache_t *cp,
     struct timeval *base_ts)
 {
-	struct timeval now, base = { 0, 0 };
+	struct timeval now, base = { .tv_sec = 0, .tv_usec = 0 };
 	void *stack[MCACHE_STACK_DEPTH + 1];
 	struct mca_trn *transaction;
 
@@ -1670,17 +1679,21 @@ mcache_audit_panic(mcache_audit_t *mca, void *addr, size_t offset,
 		    "offset 0x%lx (0x%llx instead of 0x%llx)\n", addr,
 		    offset, got, expected);
 		/* NOTREACHED */
+		__builtin_unreachable();
 	}
 
 	panic("mcache_audit: buffer %p modified after free at offset 0x%lx "
 	    "(0x%llx instead of 0x%llx)\n%s\n",
 	    addr, offset, got, expected, mcache_dump_mca(mca));
 	/* NOTREACHED */
+	__builtin_unreachable();
 }
 
+__attribute__((noinline, cold, not_tail_called, noreturn))
 __private_extern__ int
 assfail(const char *a, const char *f, int l)
 {
 	panic("assertion failed: %s, file: %s, line: %d", a, f, l);
-	return 0;
+	/* NOTREACHED */
+	__builtin_unreachable();
 }

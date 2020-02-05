@@ -247,6 +247,11 @@ static int arp_verbose;
 SYSCTL_INT(_net_link_ether_inet, OID_AUTO, verbose,
     CTLFLAG_RW | CTLFLAG_LOCKED, &arp_verbose, 0, "");
 
+static uint32_t arp_maxhold_total = 1024; /* max total packets in the holdq */
+SYSCTL_INT(_net_link_ether_inet, OID_AUTO, maxhold_total,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &arp_maxhold_total, 0, "");
+
+
 /*
  * Generally protected by rnh_lock; use atomic operations on fields
  * that are also modified outside of that lock (if needed).
@@ -324,15 +329,29 @@ arp_llinfo_free(void *arg)
 	zfree(llinfo_arp_zone, la);
 }
 
-static void
+static bool
 arp_llinfo_addq(struct llinfo_arp *la, struct mbuf *m)
 {
+	classq_pkt_t pkt = CLASSQ_PKT_INITIALIZER(pkt);
+
+	if (arpstat.held >= arp_maxhold_total) {
+		if (arp_verbose) {
+			log(LOG_DEBUG,
+			    "%s: dropping packet due to maxhold_total\n",
+			    __func__);
+		}
+		atomic_add_32(&arpstat.dropped, 1);
+		return false;
+	}
+
 	if (qlen(&la->la_holdq) >= qlimit(&la->la_holdq)) {
 		struct mbuf *_m;
 		/* prune less than CTL, else take what's at the head */
-		_m = _getq_scidx_lt(&la->la_holdq, SCIDX_CTL);
+		_getq_scidx_lt(&la->la_holdq, &pkt, SCIDX_CTL);
+		_m = pkt.cp_mbuf;
 		if (_m == NULL) {
-			_m = _getq(&la->la_holdq);
+			_getq(&la->la_holdq, &pkt);
+			_m = pkt.cp_mbuf;
 		}
 		VERIFY(_m != NULL);
 		if (arp_verbose) {
@@ -343,13 +362,16 @@ arp_llinfo_addq(struct llinfo_arp *la, struct mbuf *m)
 		atomic_add_32(&arpstat.dropped, 1);
 		atomic_add_32(&arpstat.held, -1);
 	}
-	_addq(&la->la_holdq, m);
+	CLASSQ_PKT_INIT_MBUF(&pkt, m);
+	_addq(&la->la_holdq, &pkt);
 	atomic_add_32(&arpstat.held, 1);
 	if (arp_verbose) {
 		log(LOG_DEBUG, "%s: enqueued packet (scidx %u), qlen now %u\n",
 		    __func__, MBUF_SCIDX(mbuf_get_service_class(m)),
 		    qlen(&la->la_holdq));
 	}
+
+	return true;
 }
 
 static uint32_t
@@ -1250,6 +1272,7 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 	uint32_t rtflags;
 	struct sockaddr_dl sdl;
 	boolean_t send_probe_notif = FALSE;
+	boolean_t enqueued = FALSE;
 
 	if (ifp == NULL || net_dest == NULL) {
 		return EINVAL;
@@ -1455,7 +1478,7 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 	 * we still hold the route's rt_lock.
 	 */
 	if (packet != NULL) {
-		arp_llinfo_addq(llinfo, packet);
+		enqueued = arp_llinfo_addq(llinfo, packet);
 	} else {
 		llinfo->la_prbreq_cnt++;
 	}
@@ -1545,14 +1568,15 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 				 * from the time of _addq() above, this packet
 				 * must be at the tail.
 				 */
-				if (packet != NULL) {
-					struct mbuf *_m =
-					    _getq_tail(&llinfo->la_holdq);
+				if (packet != NULL && enqueued) {
+					classq_pkt_t pkt =
+					    CLASSQ_PKT_INITIALIZER(pkt);
+
+					_getq_tail(&llinfo->la_holdq, &pkt);
 					atomic_add_32(&arpstat.held, -1);
-					VERIFY(_m == packet);
+					VERIFY(pkt.cp_mbuf == packet);
 				}
 				result = EHOSTUNREACH;
-
 				/*
 				 * Enqueue work item to invoke callback for this route entry
 				 */
@@ -1563,8 +1587,12 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 		}
 	}
 
-	/* The packet is now held inside la_holdq */
+	/* The packet is now held inside la_holdq or dropped */
 	result = EJUSTRETURN;
+	if (packet != NULL && !enqueued) {
+		mbuf_free(packet);
+		packet = NULL;
+	}
 
 release:
 	if (result == EHOSTUNREACH) {
@@ -1659,14 +1687,11 @@ arp_ip_handle_input(ifnet_t ifp, u_short arpop,
 
 	/*
 	 * Determine if this ARP is for us
-	 * For a bridge, we want to check the address irrespective
-	 * of the receive interface.
 	 */
 	lck_rw_lock_shared(in_ifaddr_rwlock);
 	TAILQ_FOREACH(ia, INADDR_HASH(target_ip->sin_addr.s_addr), ia_hash) {
 		IFA_LOCK_SPIN(&ia->ia_ifa);
-		if (((bridged && ia->ia_ifp->if_bridge != NULL) ||
-		    (ia->ia_ifp == ifp)) &&
+		if (ia->ia_ifp == ifp &&
 		    ia->ia_addr.sin_addr.s_addr == target_ip->sin_addr.s_addr) {
 			best_ia = ia;
 			best_ia_sin = best_ia->ia_addr;
@@ -1680,8 +1705,7 @@ arp_ip_handle_input(ifnet_t ifp, u_short arpop,
 
 	TAILQ_FOREACH(ia, INADDR_HASH(sender_ip->sin_addr.s_addr), ia_hash) {
 		IFA_LOCK_SPIN(&ia->ia_ifa);
-		if (((bridged && ia->ia_ifp->if_bridge != NULL) ||
-		    (ia->ia_ifp == ifp)) &&
+		if (ia->ia_ifp == ifp &&
 		    ia->ia_addr.sin_addr.s_addr == sender_ip->sin_addr.s_addr) {
 			best_ia = ia;
 			best_ia_sin = best_ia->ia_addr;
@@ -2132,8 +2156,11 @@ match:
 
 	if (!qempty(&llinfo->la_holdq)) {
 		uint32_t held;
-		struct mbuf *m0 =
-		    _getq_all(&llinfo->la_holdq, NULL, &held, NULL);
+		struct mbuf *m0;
+		classq_pkt_t pkt = CLASSQ_PKT_INITIALIZER(pkt);
+
+		_getq_all(&llinfo->la_holdq, &pkt, NULL, &held, NULL);
+		m0 = pkt.cp_mbuf;
 		if (arp_verbose) {
 			log(LOG_DEBUG, "%s: sending %u held packets\n",
 			    __func__, held);

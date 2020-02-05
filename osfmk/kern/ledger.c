@@ -34,6 +34,7 @@
 #include <kern/kalloc.h>
 #include <kern/task.h>
 #include <kern/thread.h>
+#include <kern/coalition.h>
 
 #include <kern/processor.h>
 #include <kern/machine.h>
@@ -96,6 +97,7 @@ struct entry_template {
 };
 
 lck_grp_t ledger_lck_grp;
+os_refgrp_decl(static, ledger_refgrp, "ledger", NULL);
 
 /*
  * Modifying the reference count, table size, or table contents requires
@@ -206,6 +208,41 @@ ledger_template_create(const char *name)
 	return template;
 }
 
+ledger_template_t
+ledger_template_copy(ledger_template_t template, const char *name)
+{
+	struct entry_template * new_entries = NULL;
+	ledger_template_t new_template = ledger_template_create(name);
+
+	if (new_template == NULL) {
+		return new_template;
+	}
+
+	template_lock(template);
+	assert(template->lt_initialized);
+
+	new_entries = (struct entry_template *)
+	    kalloc(sizeof(struct entry_template) * template->lt_table_size);
+
+	if (new_entries) {
+		/* Copy the template entries. */
+		bcopy(template->lt_entries, new_entries, sizeof(struct entry_template) * template->lt_table_size);
+		kfree(new_template->lt_entries, sizeof(struct entry_template) * new_template->lt_table_size);
+
+		new_template->lt_entries = new_entries;
+		new_template->lt_table_size = template->lt_table_size;
+		new_template->lt_cnt = template->lt_cnt;
+	} else {
+		/* Tear down the new template; we've failed. :( */
+		ledger_template_dereference(new_template);
+		new_template = NULL;
+	}
+
+	template_unlock(template);
+
+	return new_template;
+}
+
 void
 ledger_template_dereference(ledger_template_t template)
 {
@@ -214,6 +251,8 @@ ledger_template_dereference(ledger_template_t template)
 	template_unlock(template);
 
 	if (template->lt_refs == 0) {
+		kfree(template->lt_entries, sizeof(struct entry_template) * template->lt_table_size);
+		lck_mtx_destroy(&template->lt_lock, &ledger_lck_grp);
 		kfree(template, sizeof(*template));
 	}
 }
@@ -385,7 +424,7 @@ ledger_instantiate(ledger_template_t template, int entry_type)
 
 	ledger->l_template = template;
 	ledger->l_id = ledger_cnt++;
-	os_ref_init(&ledger->l_refs, NULL);
+	os_ref_init(&ledger->l_refs, &ledger_refgrp);
 	ledger->l_size = (int32_t)cnt;
 
 	template_lock(template);
@@ -433,35 +472,25 @@ flag_clear(volatile uint32_t *flags, uint32_t bit)
 /*
  * Take a reference on a ledger
  */
-kern_return_t
+void
 ledger_reference(ledger_t ledger)
 {
 	if (!LEDGER_VALID(ledger)) {
-		return KERN_INVALID_ARGUMENT;
+		return;
 	}
+
 	os_ref_retain(&ledger->l_refs);
-	return KERN_SUCCESS;
-}
-
-int
-ledger_reference_count(ledger_t ledger)
-{
-	if (!LEDGER_VALID(ledger)) {
-		return -1;
-	}
-
-	return os_ref_get_count(&ledger->l_refs);
 }
 
 /*
  * Remove a reference on a ledger.  If this is the last reference,
  * deallocate the unused ledger.
  */
-kern_return_t
+void
 ledger_dereference(ledger_t ledger)
 {
 	if (!LEDGER_VALID(ledger)) {
-		return KERN_INVALID_ARGUMENT;
+		return;
 	}
 
 	if (os_ref_release(&ledger->l_refs) == 0) {
@@ -471,8 +500,6 @@ ledger_dereference(ledger_t ledger)
 			pmap_ledger_free(ledger);
 		}
 	}
-
-	return KERN_SUCCESS;
 }
 
 /*
@@ -828,7 +855,7 @@ ledger_rollup(ledger_t to_ledger, ledger_t from_ledger)
 {
 	int i;
 
-	assert(to_ledger->l_template == from_ledger->l_template);
+	assert(to_ledger->l_template->lt_cnt == from_ledger->l_template->lt_cnt);
 
 	for (i = 0; i < to_ledger->l_size; i++) {
 		ledger_rollup_entry(to_ledger, from_ledger, i);
@@ -847,7 +874,7 @@ ledger_rollup_entry(ledger_t to_ledger, ledger_t from_ledger, int entry)
 {
 	struct ledger_entry *from_le, *to_le;
 
-	assert(to_ledger->l_template == from_ledger->l_template);
+	assert(to_ledger->l_template->lt_cnt == from_ledger->l_template->lt_cnt);
 	if (ENTRY_VALID(from_ledger, entry) && ENTRY_VALID(to_ledger, entry)) {
 		from_le = &from_ledger->l_entries[entry];
 		to_le   =   &to_ledger->l_entries[entry];
@@ -1305,6 +1332,7 @@ ledger_ast(thread_t thread)
 {
 	struct ledger   *l = thread->t_ledger;
 	struct ledger   *thl;
+	struct ledger   *coalition_ledger;
 	uint32_t        block;
 	uint64_t        now;
 	uint8_t         task_flags;
@@ -1388,6 +1416,11 @@ top:
 	}
 	block |= ledger_check_needblock(l, now);
 
+	coalition_ledger = coalition_ledger_get_from_task(task);
+	if (LEDGER_VALID(coalition_ledger)) {
+		block |= ledger_check_needblock(coalition_ledger, now);
+	}
+	ledger_dereference(coalition_ledger);
 	/*
 	 * If we are supposed to block on the availability of one or more
 	 * resources, find the first entry in deficit for which we should wait.
@@ -1453,7 +1486,7 @@ ledger_check_needblock(ledger_t l, uint64_t now)
 		if (le->le_flags & LF_REFILL_SCHEDULED) {
 			assert(!(le->le_flags & LF_TRACKING_MAX));
 
-			if ((le->_le.le_refill.le_last_refill + le->_le.le_refill.le_refill_period) > now) {
+			if ((le->_le.le_refill.le_last_refill + le->_le.le_refill.le_refill_period) <= now) {
 				ledger_refill(now, l, i);
 				if (limit_exceeded(le) == FALSE) {
 					continue;

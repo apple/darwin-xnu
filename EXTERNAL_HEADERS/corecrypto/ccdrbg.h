@@ -32,7 +32,7 @@
 #define CCDRBG_MAX_ADDITIONALINPUT_SIZE ((uint32_t)1<<16)
 #define CCDRBG_MAX_PSINPUT_SIZE         ((uint32_t)1<<16)
 #define CCDRBG_MAX_REQUEST_SIZE         ((uint32_t)1<<16) //this is the absolute maximum in NIST 800-90A
-#define CCDRBG_RESEED_INTERVAL          ((uint64_t)1<<30) // must be able to fit the NIST maximum of 2^48
+#define CCDRBG_RESEED_INTERVAL          ((uint64_t)1<<48) // must be able to fit the NIST maximum of 2^48
 
 
 /*

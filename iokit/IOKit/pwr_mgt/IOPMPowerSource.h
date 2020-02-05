@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -170,7 +170,7 @@ enum {
 
 class IOPMPowerSource : public IOService
 {
-	OSDeclareDefaultStructors(IOPMPowerSource)
+	OSDeclareDefaultStructors(IOPMPowerSource);
 
 	friend class IOPMPowerSourceList;
 

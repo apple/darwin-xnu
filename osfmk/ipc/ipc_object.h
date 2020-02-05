@@ -99,8 +99,8 @@ typedef natural_t ipc_object_type_t;
 struct ipc_object {
 	ipc_object_bits_t io_bits;
 	ipc_object_refs_t io_references;
-	lck_spin_t      io_lock_data;
-};
+	lck_spin_t        io_lock_data;
+} __attribute__((aligned(8)));
 
 /*
  * If another object type needs to participate in io_kotype()-based
@@ -131,7 +131,8 @@ struct ipc_object_header {
  *	definitions in ipc_port.h.
  */
 #define IO_BITS_PORT_INFO       0x0000f000      /* stupid port tricks */
-#define IO_BITS_KOTYPE          0x00000fff      /* used by the object */
+#define IO_BITS_KOTYPE          0x000007ff      /* used by the object */
+#define IO_BITS_KOBJECT         0x00000800      /* port belongs to a kobject */
 #define IO_BITS_OTYPE           0x7fff0000      /* determines a zone */
 #define IO_BITS_ACTIVE          0x80000000      /* is object alive? */
 
@@ -139,6 +140,7 @@ struct ipc_object_header {
 
 #define io_otype(io)            (((io)->io_bits & IO_BITS_OTYPE) >> 16)
 #define io_kotype(io)           ((io)->io_bits & IO_BITS_KOTYPE)
+#define io_is_kobject(io)       (((io)->io_bits & IO_BITS_KOBJECT) != IKOT_NONE)
 
 #define io_makebits(active, otype, kotype)      \
 	(((active) ? IO_BITS_ACTIVE : 0) | ((otype) << 16) | (kotype))
@@ -151,6 +153,7 @@ struct ipc_object_header {
 #define IOT_NUMBER              2               /* number of types used */
 
 extern zone_t ipc_object_zones[IOT_NUMBER];
+extern lck_grp_t        ipc_lck_grp;
 
 #define io_alloc(otype)         \
 	        ((ipc_object_t) zalloc(ipc_object_zones[(otype)]))
@@ -167,14 +170,17 @@ extern void     io_free(
 	lck_spin_init(&(io)->io_lock_data, &ipc_lck_grp, &ipc_lck_attr)
 #define io_lock_destroy(io) \
 	lck_spin_destroy(&(io)->io_lock_data, &ipc_lck_grp)
-#define io_lock(io) \
-	lck_spin_lock_grp(&(io)->io_lock_data, &ipc_lck_grp)
-#define io_lock_try(io) \
-	lck_spin_try_lock_grp(&(io)->io_lock_data, &ipc_lck_grp)
+#define io_lock_held(io) \
+	LCK_SPIN_ASSERT(&(io)->io_lock_data, LCK_ASSERT_OWNED)
 #define io_lock_held_kdp(io) \
 	kdp_lck_spin_is_acquired(&(io)->io_lock_data)
 #define io_unlock(io) \
 	lck_spin_unlock(&(io)->io_lock_data)
+
+extern void io_lock(
+	ipc_object_t io);
+extern boolean_t io_lock_try(
+	ipc_object_t io);
 
 #define _VOLATILE_ volatile
 
@@ -191,7 +197,7 @@ extern void     io_free(
  * and zfree modifies that to point to the next free zone element.
  */
 #define IO_MAX_REFERENCES                                               \
-	(unsigned)(~0 ^ (1 << (sizeof(int)*BYTE_SIZE - 1)))
+	(unsigned)(~0 ^ (1U << (sizeof(int)*BYTE_SIZE - 1)))
 
 static inline void
 io_reference(ipc_object_t io)
@@ -199,8 +205,10 @@ io_reference(ipc_object_t io)
 	ipc_object_refs_t new_io_references;
 	ipc_object_refs_t old_io_references;
 
-	assert((io)->io_references > 0 &&
-	    (io)->io_references < IO_MAX_REFERENCES);
+	if ((io)->io_references == 0 ||
+	    (io)->io_references >= IO_MAX_REFERENCES) {
+		panic("%s: reference count %u is invalid\n", __func__, (io)->io_references);
+	}
 
 	do {
 		old_io_references = (io)->io_references;
@@ -219,8 +227,10 @@ io_release(ipc_object_t io)
 	ipc_object_refs_t new_io_references;
 	ipc_object_refs_t old_io_references;
 
-	assert((io)->io_references > 0 &&
-	    (io)->io_references < IO_MAX_REFERENCES);
+	if ((io)->io_references == 0 ||
+	    (io)->io_references >= IO_MAX_REFERENCES) {
+		panic("%s: reference count %u is invalid\n", __func__, (io)->io_references);
+	}
 
 	do {
 		old_io_references = (io)->io_references;
@@ -277,6 +287,10 @@ extern kern_return_t ipc_object_translate_two(
 	mach_port_right_t       right2,
 	ipc_object_t            *objectp2);
 
+/* Validate an object as belonging to the correct zone */
+extern void ipc_object_validate(
+	ipc_object_t object);
+
 /* Allocate a dead-name entry */
 extern kern_return_t
 ipc_object_alloc_dead(
@@ -315,7 +329,10 @@ extern kern_return_t ipc_object_copyin(
 	ipc_space_t             space,
 	mach_port_name_t        name,
 	mach_msg_type_name_t    msgt_name,
-	ipc_object_t            *objectp);
+	ipc_object_t            *objectp,
+	mach_port_context_t     context,
+	mach_msg_guard_flags_t  *guard_flags,
+	uint32_t                kmsg_flags);
 
 /* Copyin a naked capability from the kernel */
 extern void ipc_object_copyin_from_kernel(
@@ -332,12 +349,19 @@ extern void ipc_object_destroy_dest(
 	ipc_object_t            object,
 	mach_msg_type_name_t    msgt_name);
 
+/* Insert a send right into an object already in the current space */
+extern kern_return_t ipc_object_insert_send_right(
+	ipc_space_t             space,
+	mach_port_name_t        name,
+	mach_msg_type_name_t    msgt_name);
+
 /* Copyout a capability, placing it into a space */
 extern kern_return_t ipc_object_copyout(
 	ipc_space_t             space,
 	ipc_object_t            object,
 	mach_msg_type_name_t    msgt_name,
-	boolean_t               overflow,
+	mach_port_context_t     *context,
+	mach_msg_guard_flags_t  *guard_flags,
 	mach_port_name_t        *namep);
 
 /* Copyout a capability with a name, placing it into a space */
@@ -345,7 +369,6 @@ extern kern_return_t ipc_object_copyout_name(
 	ipc_space_t             space,
 	ipc_object_t            object,
 	mach_msg_type_name_t    msgt_name,
-	boolean_t               overflow,
 	mach_port_name_t        name);
 
 /* Translate/consume the destination right of a message */
@@ -354,11 +377,5 @@ extern void ipc_object_copyout_dest(
 	ipc_object_t            object,
 	mach_msg_type_name_t    msgt_name,
 	mach_port_name_t        *namep);
-
-/* Rename an entry in a space */
-extern kern_return_t ipc_object_rename(
-	ipc_space_t             space,
-	mach_port_name_t        oname,
-	mach_port_name_t        nname);
 
 #endif  /* _IPC_IPC_OBJECT_H_ */

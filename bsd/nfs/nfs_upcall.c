@@ -333,7 +333,7 @@ nfsrv_uc_proxy(socket_t so, void *arg, int waitflag)
 	TAILQ_INSERT_TAIL(myqueue->ucq_queue, uap, nua_svcq);
 
 	uap->nua_flags |= NFS_UC_QUEUED;
-	if (myqueue->ucq_flags | NFS_UC_QUEUE_SLEEPING) {
+	if (myqueue->ucq_flags & NFS_UC_QUEUE_SLEEPING) {
 		wakeup(myqueue);
 	}
 

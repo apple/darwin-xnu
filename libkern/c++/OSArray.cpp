@@ -133,7 +133,7 @@ OSArray::withCapacity(unsigned int capacity)
 
 	if (me && !me->initWithCapacity(capacity)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -148,7 +148,7 @@ OSArray::withObjects(const OSObject *objects[],
 
 	if (me && !me->initWithObjects(objects, count, capacity)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -162,7 +162,7 @@ OSArray::withArray(const OSArray *array,
 
 	if (me && !me->initWithArray(array, capacity)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -403,7 +403,7 @@ OSObject *
 OSArray::getObject(unsigned int index) const
 {
 	if (index >= count) {
-		return 0;
+		return NULL;
 	} else {
 		return (OSObject *) (const_cast<OSMetaClassBase *>(array[index]));
 	}
@@ -413,7 +413,7 @@ OSObject *
 OSArray::getLastObject() const
 {
 	if (count == 0) {
-		return 0;
+		return NULL;
 	} else {
 		return (OSObject *) (const_cast<OSMetaClassBase *>(array[count - 1]));
 	}
@@ -457,7 +457,7 @@ OSArray::getNextObjectForIterator(void *inIterator, OSObject **ret) const
 		*ret = (OSObject *)(const_cast<OSMetaClassBase *> (array[index]));
 		return true;
 	} else {
-		*ret = 0;
+		*ret = NULL;
 		return false;
 	}
 }
@@ -503,13 +503,13 @@ OSCollection *
 OSArray::copyCollection(OSDictionary *cycleDict)
 {
 	bool allocDict = !cycleDict;
-	OSCollection *ret = 0;
-	OSArray *newArray = 0;
+	OSCollection *ret = NULL;
+	OSArray *newArray = NULL;
 
 	if (allocDict) {
 		cycleDict = OSDictionary::withCapacity(16);
 		if (!cycleDict) {
-			return 0;
+			return NULL;
 		}
 	}
 
@@ -546,7 +546,7 @@ OSArray::copyCollection(OSDictionary *cycleDict)
 		;
 
 		ret = newArray;
-		newArray = 0;
+		newArray = NULL;
 	} while (false);
 
 abortCopy:

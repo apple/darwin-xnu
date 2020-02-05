@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -32,6 +32,7 @@
 #include <stdint.h>
 #include <mach/mach_types.h>
 #include <atm/atm_types.h>
+#include <os/refcnt.h>
 
 #ifdef  MACH_KERNEL_PRIVATE
 
@@ -49,10 +50,10 @@
 typedef mach_voucher_attr_value_handle_t atm_voucher_id_t;
 
 struct atm_task_descriptor {
-	decl_lck_mtx_data(, lock)                /* lock to protect reference count */
+	decl_lck_mtx_data(, lock);                /* lock to protect reference count */
 	mach_port_t     trace_buffer;           /* named memory entry registered by user */
 	uint64_t        trace_buffer_size;      /* size of the trace_buffer registered */
-	uint32_t        reference_count;
+	os_refcnt_t     reference_count;
 	uint8_t         flags;
 #if DEVELOPMENT || DEBUG
 	task_t          task;                   /* task pointer for debugging purposes */
@@ -60,42 +61,31 @@ struct atm_task_descriptor {
 #endif
 };
 
-#define atm_task_desc_reference_internal(elem)  \
-	(hw_atomic_add(&(elem)->reference_count, 1))
-
-#define atm_task_desc_release_internal(elem)    \
-	(hw_atomic_sub(&(elem)->reference_count, 1))
-
 typedef struct atm_task_descriptor *atm_task_descriptor_t;
 #define ATM_TASK_DESCRIPTOR_NULL NULL
 
 struct atm_value {
 	aid_t            aid;                   /* activity id */
 	queue_head_t     listeners;             /* List of listeners who register for this activity */
-	decl_lck_mtx_data(, listener_lock)      /* Lock to protect listener list */
+	decl_lck_mtx_data(, listener_lock);      /* Lock to protect listener list */
 	queue_chain_t    vid_hash_elt;          /* Next hash element in the global hash table */
 #if DEVELOPMENT || DEBUG
 	queue_chain_t    value_elt;             /* global chain of all values */
 #endif
 	uint32_t         sync;                  /* Made ref count given to voucher sub system. */
-	uint32_t         listener_count;        /* Number of Listerners listening on the value. */
-	uint32_t         reference_count;       /* use count on the atm value, 1 taken by the global hash table */
+
+	uint32_t         listener_count;
+	os_refcnt_t      reference_count;               /* use count on the atm value, 1 taken by the global hash table */
 };
 
-#define atm_value_reference_internal(elem)      \
-	(hw_atomic_add(&(elem)->reference_count, 1))
-
-#define atm_value_release_internal(elem)        \
-	(hw_atomic_sub(&(elem)->reference_count, 1))
-
 #define atm_listener_count_incr_internal(elem)  \
-	(hw_atomic_add(&(elem)->listener_count, 1))
+	(os_atomic_inc(&(elem)->listener_count, relaxed))
 
 #define atm_listener_count_decr_internal(elem)  \
-	(hw_atomic_sub(&(elem)->listener_count, 1))
+	(os_atomic_dec(&(elem)->listener_count, relaxed))
 
 #define atm_sync_reference_internal(elem)       \
-	(hw_atomic_add(&(elem)->sync, 1))
+	(os_atomic_inc(&(elem)->sync, relaxed))
 
 typedef struct atm_value *atm_value_t;
 #define ATM_VALUE_NULL NULL
@@ -107,20 +97,14 @@ struct atm_link_object {
 	atm_task_descriptor_t  descriptor;
 	queue_chain_t          listeners_element;    /* Head is atm_value->listeners. */
 	atm_guard_t            guard;                /* Guard registered by the user for an activity. */
-	uint32_t               reference_count;      /* Refernece count for link object */
+	os_refcnt_t            reference_count;
 };
 
 typedef struct atm_link_object *atm_link_object_t;
 
-#define atm_link_object_reference_internal(elem)        \
-	(hw_atomic_add(&(elem)->reference_count, 1))
-
-#define atm_link_object_release_internal(elem)  \
-	(hw_atomic_sub(&(elem)->reference_count, 1))
-
 struct atm_value_hash {
 	queue_head_t    hash_list;
-	decl_lck_mtx_data(, hash_list_lock)     /* lock to protect bucket list. */
+	decl_lck_mtx_data(, hash_list_lock);    /* lock to protect bucket list. */
 };
 
 typedef struct atm_value_hash *atm_value_hash_t;

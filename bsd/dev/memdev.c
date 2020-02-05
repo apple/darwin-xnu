@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2004-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -131,30 +131,30 @@ extern ppnum_t  pmap_find_phys(pmap_t pmap, addr64_t va);
  */
 
 static struct bdevsw mdevbdevsw = {
-	/* open */ mdevopen,
-	/* close */ mdevclose,
-	/* strategy */ mdevstrategy,
-	/* ioctl */ mdevbioctl,
-	/* dump */ eno_dump,
-	/* psize */ mdevsize,
-	/* flags */ D_DISK,
+	.d_open     = mdevopen,
+	.d_close    = mdevclose,
+	.d_strategy = mdevstrategy,
+	.d_ioctl    = mdevbioctl,
+	.d_dump     = eno_dump,
+	.d_psize    = mdevsize,
+	.d_type     = D_DISK,
 };
 
 static struct cdevsw mdevcdevsw = {
-	/* open */ mdevopen,
-	/* close */ mdevclose,
-	/* read */ mdevrw,
-	/* write */ mdevrw,
-	/* ioctl */ mdevcioctl,
-	/* stop */ eno_stop,
-	/* reset */ eno_reset,
-	/* ttys */ NULL,
-	/* select */ eno_select,
-	/* mmap */ eno_mmap,
-	/* strategy */ eno_strat,
-	/* getc */ eno_getc,
-	/* putc */ eno_putc,
-	/* flags */ D_DISK,
+	.d_open       = mdevopen,
+	.d_close      = mdevclose,
+	.d_read       = mdevrw,
+	.d_write      = mdevrw,
+	.d_ioctl      = mdevcioctl,
+	.d_stop       = eno_stop,
+	.d_reset      = eno_reset,
+	.d_ttys       = NULL,
+	.d_select     = eno_select,
+	.d_mmap       = eno_mmap,
+	.d_strategy   = eno_strat,
+	.d_reserved_1 = eno_getc,
+	.d_reserved_2 = eno_putc,
+	.d_type       = D_DISK,
 };
 
 struct mdev {

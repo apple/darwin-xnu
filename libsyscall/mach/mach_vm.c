@@ -58,7 +58,7 @@ mach_vm_allocate(
 		rv = _kernelrpc_mach_vm_allocate(target, address, size, flags);
 	}
 
-	if (__syscall_logger) {
+	if (__syscall_logger && rv == KERN_SUCCESS && !(flags & VM_MAKE_TAG(VM_MEMORY_STACK))) {
 		int userTagFlags = flags & VM_FLAGS_ALIAS_MASK;
 		__syscall_logger(stack_logging_type_vm_allocate | userTagFlags, (uintptr_t)target, (uintptr_t)size, 0, (uintptr_t)*address, 0);
 	}
@@ -184,7 +184,7 @@ mach_vm_map(
 		    offset, copy, cur_protection, max_protection, inheritance);
 	}
 
-	if (__syscall_logger) {
+	if (__syscall_logger && rv == KERN_SUCCESS && !(flags & VM_MAKE_TAG(VM_MEMORY_STACK))) {
 		int eventTypeFlags = stack_logging_type_vm_allocate | stack_logging_type_mapped_file_or_shared_mem;
 		int userTagFlags = flags & VM_FLAGS_ALIAS_MASK;
 		__syscall_logger(eventTypeFlags | userTagFlags, (uintptr_t)target, (uintptr_t)size, 0, (uintptr_t)*address, 0);
@@ -213,7 +213,7 @@ mach_vm_remap(
 	    src_task, src_address, copy, cur_protection, max_protection,
 	    inheritance);
 
-	if (__syscall_logger) {
+	if (__syscall_logger && rv == KERN_SUCCESS) {
 		int eventTypeFlags = stack_logging_type_vm_allocate | stack_logging_type_mapped_file_or_shared_mem;
 		int userTagFlags = flags & VM_FLAGS_ALIAS_MASK;
 		__syscall_logger(eventTypeFlags | userTagFlags, (uintptr_t)target, (uintptr_t)size, 0, (uintptr_t)*address, 0);
@@ -234,7 +234,7 @@ mach_vm_read(
 
 	rv = _kernelrpc_mach_vm_read(target, address, size, data, dataCnt);
 
-	if (__syscall_logger) {
+	if (__syscall_logger && rv == KERN_SUCCESS) {
 		int eventTypeFlags = stack_logging_type_vm_allocate | stack_logging_type_mapped_file_or_shared_mem;
 		// The target argument is the remote task from which data is being read,
 		// so pass mach_task_self() as the destination task receiving the allocation.
@@ -263,7 +263,7 @@ vm_map(
 	rv = _kernelrpc_vm_map(target, address, size, mask, flags, object,
 	    offset, copy, cur_protection, max_protection, inheritance);
 
-	if (__syscall_logger) {
+	if (__syscall_logger && rv == KERN_SUCCESS) {
 		int eventTypeFlags = stack_logging_type_vm_allocate | stack_logging_type_mapped_file_or_shared_mem;
 		int userTagFlags = flags & VM_FLAGS_ALIAS_MASK;
 		__syscall_logger(eventTypeFlags | userTagFlags, (uintptr_t)target, (uintptr_t)size, 0, (uintptr_t)*address, 0);
@@ -313,7 +313,7 @@ vm_read(
 
 	rv = _kernelrpc_vm_read(target, address, size, data, dataCnt);
 
-	if (__syscall_logger) {
+	if (__syscall_logger && rv == KERN_SUCCESS) {
 		int eventTypeFlags = stack_logging_type_vm_allocate | stack_logging_type_mapped_file_or_shared_mem;
 		// The target argument is the remote task from which data is being read,
 		// so pass mach_task_self() as the destination task receiving the allocation.

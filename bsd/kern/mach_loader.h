@@ -86,6 +86,8 @@ typedef struct _load_result {
 	off_t                   cs_end_offset;
 	void                    *threadstate;
 	size_t                  threadstate_sz;
+	uint32_t                ip_platform;
+	uint32_t                lr_sdk;
 } load_result_t;
 
 struct image_params;
@@ -95,6 +97,13 @@ load_return_t load_machfile(
 	thread_t                thread,
 	vm_map_t                *mapp,
 	load_result_t           *result);
+
+load_return_t
+validate_potential_simulator_binary(
+	cpu_type_t               exectype,
+	struct image_params      *imgp,
+	off_t                    file_offset,
+	off_t                    macho_size);
 
 #define LOAD_SUCCESS            0
 #define LOAD_BADARCH            1       /* CPU type/subtype not found */

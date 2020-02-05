@@ -50,6 +50,7 @@
 #include <netinet/tcp.h>
 #include <netinet/tcp_var.h>
 #include <netinet/ip.h>
+#include <netinet/ip6.h>
 #include <netinet/kpi_ipfilter.h>
 #include <string.h>
 #include <libkern/libkern.h>
@@ -840,6 +841,7 @@ static errno_t
 pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u_int8_t protocol)
 {
 	struct packet_mangler *p_pkt_mnglr = (struct packet_mangler *)cookie;
+	struct ip6_hdr ip6;
 	struct ip ip;
 	struct tcphdr tcp;
 	int ip_pld_len;
@@ -871,6 +873,14 @@ pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u_int8_t protoco
 		goto input_done;
 	}
 
+	if (ip.ip_v == 6) {
+		error = mbuf_copydata(*data, 0, sizeof(ip6), &ip6);
+		if (error) {
+			PKT_MNGLR_LOG(LOG_ERR, "Could not make local IPv6 header copy");
+			goto input_done;
+		}
+	}
+
 	if ((p_pkt_mnglr->lsaddr.ss_family == AF_INET6) && (ip.ip_v == 4)) {
 		PKT_MNGLR_LOG(LOG_INFO, "Skipping filtering as address family of packet is IPv4 but local "
 		    "address is set to IPv6");
@@ -888,6 +898,11 @@ pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u_int8_t protoco
 		if (ip.ip_dst.s_addr != laddr.sin_addr.s_addr) {
 			goto input_done;
 		}
+	} else if (p_pkt_mnglr->lsaddr.ss_family == AF_INET6) {
+		struct sockaddr_in6 laddr = *(struct sockaddr_in6 *)(&(p_pkt_mnglr->lsaddr));
+		if (!IN6_ARE_ADDR_EQUAL(&ip6.ip6_dst, &laddr.sin6_addr)) {
+			goto input_done;
+		}
 	}
 
 	if (p_pkt_mnglr->rsaddr.ss_family == AF_INET) {
@@ -898,13 +913,25 @@ pktmnglr_ipfilter_input(void *cookie, mbuf_t *data, int offset, u_int8_t protoco
 		PKT_MNGLR_LOG(LOG_INFO, "Remote IP: %x Source IP: %x in input path",
 		    raddr.sin_addr.s_addr,
 		    ip.ip_src.s_addr);
+	} else if (p_pkt_mnglr->rsaddr.ss_family == AF_INET6) {
+		struct sockaddr_in6 raddr = *(struct sockaddr_in6 *)(&(p_pkt_mnglr->rsaddr));
+		if (!IN6_ARE_ADDR_EQUAL(&ip6.ip6_src, &raddr.sin6_addr)) {
+			goto input_done;
+		}
 	}
 
-	if (ip.ip_v != 4) {
+	if (ip.ip_v == 4) {
+		ip_pld_len = ntohs(ip.ip_len) - (ip.ip_hl << 2);
+	} else if (ip.ip_v == 6) {
+		if (ip6.ip6_nxt != p_pkt_mnglr->proto) {
+			/* Don't support IPv6 extension headers */
+			goto input_done;
+		}
+		ip_pld_len = ntohs(ip6.ip6_plen) + sizeof(struct ip6_hdr);
+	} else {
 		goto input_done;
 	}
 
-	ip_pld_len = ntohs(ip.ip_len) - (ip.ip_hl << 2);
 
 	if (protocol != p_pkt_mnglr->proto) {
 		PKT_MNGLR_LOG(LOG_INFO, "Skip: Protocol mismatch");

@@ -91,6 +91,7 @@
 #include <net/if.h>
 #include <net/content_filter.h>
 #include <net/ntstat.h>
+#include <net/multi_layer_pkt_log.h>
 
 #define tcp_minmssoverload fring
 #define _IP_VHL
@@ -129,6 +130,8 @@
 #if TCPDEBUG
 #include <netinet/tcp_debug.h>
 #endif
+#include <netinet/tcp_log.h>
+
 #include <netinet6/ip6protosw.h>
 
 #if IPSEC
@@ -153,6 +156,8 @@
 #include <libkern/crypto/md5.h>
 #include <sys/kdebug.h>
 #include <mach/sdt.h>
+#include <atm/atm_internal.h>
+#include <pexpert/pexpert.h>
 
 #include <netinet/lro_ext.h>
 
@@ -257,6 +262,16 @@ SYSCTL_SKMEM_TCP_INT(OID_AUTO, randomize_ports, CTLFLAG_RW | CTLFLAG_LOCKED,
 SYSCTL_SKMEM_TCP_INT(OID_AUTO, win_scale_factor, CTLFLAG_RW | CTLFLAG_LOCKED,
     __private_extern__ int, tcp_win_scale, 3, "Window scaling factor");
 
+#if (DEVELOPMENT || DEBUG)
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, init_rtt_from_cache,
+    CTLFLAG_RW | CTLFLAG_LOCKED, static int, tcp_init_rtt_from_cache, 1,
+    "Initalize RTT from route cache");
+#else
+SYSCTL_SKMEM_TCP_INT(OID_AUTO, init_rtt_from_cache,
+    CTLFLAG_RD | CTLFLAG_LOCKED, static int, tcp_init_rtt_from_cache, 1,
+    "Initalize RTT from route cache");
+#endif /* (DEVELOPMENT || DEBUG) */
+
 static void     tcp_cleartaocache(void);
 static void     tcp_notify(struct inpcb *, int);
 
@@ -306,6 +321,8 @@ struct  inp_tp {
 
 int  get_inpcb_str_size(void);
 int  get_tcp_str_size(void);
+
+os_log_t tcp_mpkl_log_object = NULL;
 
 static void tcpcb_to_otcpcb(struct tcpcb *, struct otcpcb *);
 
@@ -462,6 +479,7 @@ tcp_init(struct protosw *pp, struct domain *dp)
 	static int tcp_initialized = 0;
 	vm_size_t str_size;
 	struct inpcbinfo *pcbinfo;
+	uint32_t logging_config;
 
 	VERIFY((pp->pr_flags & (PR_INITIALIZED | PR_ATTACHED)) == PR_ATTACHED);
 
@@ -638,6 +656,18 @@ tcp_init(struct protosw *pp, struct domain *dp)
 
 	/* Initialize TCP Cache */
 	tcp_cache_init();
+
+	tcp_mpkl_log_object = MPKL_CREATE_LOGOBJECT("com.apple.xnu.tcp");
+	if (tcp_mpkl_log_object == NULL) {
+		panic("MPKL_CREATE_LOGOBJECT failed");
+	}
+
+	logging_config = atm_get_diagnostic_config();
+	if (logging_config & 0x80000000) {
+		tcp_log_privacy = 1;
+	}
+
+	PE_parse_boot_argn("tcp_log", &tcp_log_enable_flags, sizeof(tcp_log_enable_flags));
 
 	/*
 	 * If more than 60 MB of mbuf pool is available, increase the
@@ -875,6 +905,9 @@ tcp_respond(struct tcpcb *tp, void *ipgen, struct tcphdr *th, struct mbuf *m,
 	m->m_len = tlen;
 	m->m_pkthdr.len = tlen;
 	m->m_pkthdr.rcvif = 0;
+	if (tra->keep_alive) {
+		m->m_pkthdr.pkt_flags |= PKTF_KEEPALIVE;
+	}
 #if CONFIG_MACF_NET
 	if (tp != NULL && tp->t_inpcb != NULL) {
 		/*
@@ -973,6 +1006,9 @@ tcp_respond(struct tcpcb *tp, void *ipgen, struct tcphdr *th, struct mbuf *m,
 		if (tra->noexpensive) {
 			ip6oa.ip6oa_flags |= IP6OAF_NO_EXPENSIVE;
 		}
+		if (tra->noconstrained) {
+			ip6oa.ip6oa_flags |= IP6OAF_NO_CONSTRAINED;
+		}
 		if (tra->awdl_unrestricted) {
 			ip6oa.ip6oa_flags |= IP6OAF_AWDL_UNRESTRICTED;
 		}
@@ -1016,6 +1052,9 @@ tcp_respond(struct tcpcb *tp, void *ipgen, struct tcphdr *th, struct mbuf *m,
 		}
 		if (tra->noexpensive) {
 			ipoa.ipoa_flags |= IPOAF_NO_EXPENSIVE;
+		}
+		if (tra->noconstrained) {
+			ipoa.ipoa_flags |= IPOAF_NO_CONSTRAINED;
 		}
 		if (tra->awdl_unrestricted) {
 			ipoa.ipoa_flags |= IPOAF_AWDL_UNRESTRICTED;
@@ -1123,6 +1162,7 @@ tcp_newtcpcb(struct inpcb *inp)
 	tp->snd_ssthresh_prev = TCP_MAXWIN << TCP_MAX_WINSHIFT;
 	tp->t_rcvtime = tcp_now;
 	tp->tentry.timer_start = tcp_now;
+	tp->rcv_unackwin = tcp_now;
 	tp->t_persist_timeout = tcp_max_persist_timeout;
 	tp->t_persist_stop = 0;
 	tp->t_flagsext |= TF_RCVUNACK_WAITSS;
@@ -1177,6 +1217,9 @@ tcp_drop(struct tcpcb *tp, int errno)
 		errno = tp->t_softerror;
 	}
 	so->so_error = errno;
+
+	TCP_LOG_CONNECTION_SUMMARY(tp);
+
 	return tcp_close(tp);
 }
 
@@ -1186,7 +1229,9 @@ tcp_getrt_rtt(struct tcpcb *tp, struct rtentry *rt)
 	u_int32_t rtt = rt->rt_rmx.rmx_rtt;
 	int isnetlocal = (tp->t_flags & TF_LOCAL);
 
-	if (rtt != 0) {
+	TCP_LOG_RTM_RTT(tp, rt);
+
+	if (rtt != 0 && tcp_init_rtt_from_cache != 0) {
 		/*
 		 * XXX the lock bit for RTT indicates that the value
 		 * is also a minimum value; this is subject to time.
@@ -1197,9 +1242,11 @@ tcp_getrt_rtt(struct tcpcb *tp, struct rtentry *rt)
 			tp->t_rttmin = isnetlocal ? tcp_TCPTV_MIN :
 			    TCPTV_REXMTMIN;
 		}
+
 		tp->t_srtt =
 		    rtt / (RTM_RTTUNIT / (TCP_RETRANSHZ * TCP_RTT_SCALE));
 		tcpstat.tcps_usedrtt++;
+
 		if (rt->rt_rmx.rmx_rttvar) {
 			tp->t_rttvar = rt->rt_rmx.rmx_rttvar /
 			    (RTM_RTTUNIT / (TCP_RETRANSHZ * TCP_RTTVAR_SCALE));
@@ -1209,11 +1256,19 @@ tcp_getrt_rtt(struct tcpcb *tp, struct rtentry *rt)
 			tp->t_rttvar =
 			    tp->t_srtt * TCP_RTTVAR_SCALE / TCP_RTT_SCALE;
 		}
+
+		/*
+		 * The RTO formula in the route metric case is based on:
+		 *     4 * srtt + 8 * rttvar
+		 * modulo the min, max and slop
+		 */
 		TCPT_RANGESET(tp->t_rxtcur,
 		    ((tp->t_srtt >> 2) + tp->t_rttvar) >> 1,
 		    tp->t_rttmin, TCPTV_REXMTMAX,
 		    TCP_ADD_REXMTSLOP(tp));
 	}
+
+	TCP_LOG_RTT_INFO(tp);
 }
 
 static inline void
@@ -1415,6 +1470,8 @@ tcp_close(struct tcpcb *tp)
 		return NULL;
 	}
 
+	TCP_LOG_CONNECTION_SUMMARY(tp);
+
 	DTRACE_TCP4(state__change, void, NULL, struct inpcb *, inp,
 	    struct tcpcb *, tp, int32_t, TCPS_CLOSED);
 
@@ -1441,6 +1498,7 @@ tcp_close(struct tcpcb *tp)
 	 */
 	if (tp->t_rttupdated >= 16) {
 		u_int32_t i = 0;
+		bool log_rtt = false;
 
 #if INET6
 		if (isipv6) {
@@ -1481,6 +1539,7 @@ tcp_close(struct tcpcb *tp)
 				rt->rt_rmx.rmx_rtt = i;
 			}
 			tcpstat.tcps_cachedrtt++;
+			log_rtt = true;
 		}
 		if ((rt->rt_rmx.rmx_locks & RTV_RTTVAR) == 0) {
 			i = tp->t_rttvar *
@@ -1492,6 +1551,11 @@ tcp_close(struct tcpcb *tp)
 				rt->rt_rmx.rmx_rttvar = i;
 			}
 			tcpstat.tcps_cachedrttvar++;
+			log_rtt = true;
+		}
+		if (log_rtt) {
+			TCP_LOG_RTM_RTT(tp, rt);
+			TCP_LOG_RTT_INFO(tp);
 		}
 		/*
 		 * The old comment here said:
@@ -1597,6 +1661,11 @@ no_valid_rt:
 		    inp->inp_lport, inp->inp_fport);
 		tp->t_flagsext &= ~TF_LRO_OFFLOADED;
 	}
+	/*
+	 * Make sure to clear the TCP Keep Alive Offload as it is
+	 * ref counted on the interface
+	 */
+	tcp_clear_keep_alive_offload(so);
 
 	/*
 	 * If this is a socket that does not want to wakeup the device
@@ -1742,11 +1811,6 @@ tcp_notify(struct inpcb *inp, int error)
 	} else {
 		tp->t_softerror = error;
 	}
-#if 0
-	wakeup((caddr_t) &so->so_timeo);
-	sorwakeup(so);
-	sowwakeup(so);
-#endif
 }
 
 struct bwmeas *
@@ -2229,9 +2293,9 @@ tcp_handle_msgsize(struct ip *ip, struct inpcb *inp)
 	u_short ifscope = IFSCOPE_NONE;
 	int mtu;
 	struct sockaddr_in icmpsrc = {
-		sizeof(struct sockaddr_in),
-		AF_INET, 0, { 0 },
-		{ 0, 0, 0, 0, 0, 0, 0, 0 }
+		.sin_len = sizeof(struct sockaddr_in),
+		.sin_family = AF_INET, .sin_port = 0, .sin_addr = { .s_addr = 0 },
+		.sin_zero = { 0, 0, 0, 0, 0, 0, 0, 0 }
 	};
 	struct icmp *icp = NULL;
 
@@ -2699,13 +2763,20 @@ tcp_mtudisc(
 #if INET6
 	int isipv6 = (tp->t_inpcb->inp_vflag & INP_IPV6) != 0;
 
+	/*
+	 * Nothing left to send after the socket is defunct or TCP is in the closed state
+	 */
+	if ((so->so_state & SS_DEFUNCT) || (tp != NULL && tp->t_state == TCPS_CLOSED)) {
+		return;
+	}
+
 	if (isipv6) {
 		protoHdrOverhead = sizeof(struct ip6_hdr) +
 		    sizeof(struct tcphdr);
 	}
 #endif /* INET6 */
 
-	if (tp) {
+	if (tp != NULL) {
 #if INET6
 		if (isipv6) {
 			rt = tcp_rtlookup6(inp, IFSCOPE_NONE);
@@ -3103,18 +3174,16 @@ retry:
 	if (so->so_pcb != NULL) {
 		if (so->so_flags & SOF_MP_SUBFLOW) {
 			struct mptcb *mp_tp = tptomptp(sototcpcb(so));
-			VERIFY(mp_tp);
+			struct socket *mp_so = mptetoso(mp_tp->mpt_mpte);
 
-			mpte_lock_assert_notheld(mp_tp->mpt_mpte);
-
-			mpte_lock(mp_tp->mpt_mpte);
+			socket_lock(mp_so, refcount);
 
 			/*
 			 * Check if we became non-MPTCP while waiting for the lock.
 			 * If yes, we have to retry to grab the right lock.
 			 */
 			if (!(so->so_flags & SOF_MP_SUBFLOW)) {
-				mpte_unlock(mp_tp->mpt_mpte);
+				socket_unlock(mp_so, refcount);
 				goto retry;
 			}
 		} else {
@@ -3186,11 +3255,11 @@ tcp_unlock(struct socket *so, int refcount, void *lr)
 
 		if (so->so_flags & SOF_MP_SUBFLOW) {
 			struct mptcb *mp_tp = tptomptp(sototcpcb(so));
+			struct socket *mp_so = mptetoso(mp_tp->mpt_mpte);
 
-			VERIFY(mp_tp);
-			mpte_lock_assert_held(mp_tp->mpt_mpte);
+			socket_lock_assert_owned(mp_so);
 
-			mpte_unlock(mp_tp->mpt_mpte);
+			socket_unlock(mp_so, refcount);
 		} else {
 			LCK_MTX_ASSERT(&((struct inpcb *)so->so_pcb)->inpcb_mtx,
 			    LCK_MTX_ASSERT_OWNED);
@@ -3213,8 +3282,9 @@ tcp_getlock(struct socket *so, int flags)
 
 		if (so->so_flags & SOF_MP_SUBFLOW) {
 			struct mptcb *mp_tp = tptomptp(sototcpcb(so));
+			struct socket *mp_so = mptetoso(mp_tp->mpt_mpte);
 
-			return mpte_getlock(mp_tp->mpt_mpte, flags);
+			return mp_so->so_proto->pr_getlock(mp_so, flags);
 		} else {
 			return &inp->inpcb_mtx;
 		}
@@ -3271,6 +3341,13 @@ tcp_sbspace(struct tcpcb *tp)
 	u_int32_t rcvbuf;
 	int32_t space;
 	int32_t pending = 0;
+
+	if (so->so_flags & SOF_MP_SUBFLOW) {
+		/* We still need to grow TCP's buffer to have a BDP-estimate */
+		tcp_sbrcv_grow_rwin(tp, sb);
+
+		return mptcp_sbspace(tptomptp(tp));
+	}
 
 	tcp_sbrcv_grow_rwin(tp, sb);
 
@@ -3390,7 +3467,7 @@ void
 calculate_tcp_clock(void)
 {
 	struct timeval tv = tcp_uptime;
-	struct timeval interval = {0, TCP_RETRANSHZ_TO_USEC};
+	struct timeval interval = {.tv_sec = 0, .tv_usec = TCP_RETRANSHZ_TO_USEC};
 	struct timeval now, hold_now;
 	uint32_t incr = 0;
 
@@ -3929,6 +4006,10 @@ tcp_fill_keepalive_offload_frames(ifnet_t ifp,
 		    tcp_keepidle;
 		frame->keep_cnt = TCP_CONN_KEEPCNT(tp);
 		frame->keep_retry = TCP_CONN_KEEPINTVL(tp);
+		if (so->so_options & SO_NOWAKEFROMSLEEP) {
+			frame->flags |=
+			    IFNET_KEEPALIVE_OFFLOAD_FLAG_NOWAKEFROMSLEEP;
+		}
 		frame->local_port = ntohs(inp->inp_lport);
 		frame->remote_port = ntohs(inp->inp_fport);
 		frame->local_seq = tp->snd_nxt;
@@ -3993,6 +4074,110 @@ tcp_fill_keepalive_offload_frames(ifnet_t ifp,
 	}
 	lck_rw_done(tcbinfo.ipi_lock);
 	*used_frames_count = frame_index;
+}
+
+static bool
+inp_matches_kao_frame(ifnet_t ifp, struct ifnet_keepalive_offload_frame *frame,
+    struct inpcb *inp)
+{
+	if (inp->inp_ppcb == NULL) {
+		return false;
+	}
+	/* Release the want count */
+	if (in_pcb_checkstate(inp, WNT_RELEASE, 1) == WNT_STOPUSING) {
+		return false;
+	}
+	if (inp->inp_last_outifp == NULL ||
+	    inp->inp_last_outifp->if_index != ifp->if_index) {
+		return false;
+	}
+	if (frame->local_port != ntohs(inp->inp_lport) ||
+	    frame->remote_port != ntohs(inp->inp_fport)) {
+		return false;
+	}
+	if (inp->inp_vflag & INP_IPV4) {
+		if (memcmp(&inp->inp_laddr, frame->local_addr,
+		    sizeof(struct in_addr)) != 0 ||
+		    memcmp(&inp->inp_faddr, frame->remote_addr,
+		    sizeof(struct in_addr)) != 0) {
+			return false;
+		}
+	} else if (inp->inp_vflag & INP_IPV6) {
+		if (memcmp(&inp->inp_laddr, frame->local_addr,
+		    sizeof(struct in6_addr)) != 0 ||
+		    memcmp(&inp->inp_faddr, frame->remote_addr,
+		    sizeof(struct in6_addr)) != 0) {
+			return false;
+		}
+	} else {
+		return false;
+	}
+	return true;
+}
+
+int
+tcp_notify_kao_timeout(ifnet_t ifp,
+    struct ifnet_keepalive_offload_frame *frame)
+{
+	struct inpcb *inp = NULL;
+	struct socket *so = NULL;
+	bool found = false;
+
+	/*
+	 *  Unlock the list before posting event on the matching socket
+	 */
+	lck_rw_lock_shared(tcbinfo.ipi_lock);
+
+	LIST_FOREACH(inp, tcbinfo.ipi_listhead, inp_list) {
+		if ((so = inp->inp_socket) == NULL ||
+		    (so->so_state & SS_DEFUNCT)) {
+			continue;
+		}
+		if (!(inp->inp_flags2 & INP2_KEEPALIVE_OFFLOAD)) {
+			continue;
+		}
+		if (!(inp->inp_vflag & (INP_IPV4 | INP_IPV6))) {
+			continue;
+		}
+		if (inp->inp_ppcb == NULL ||
+		    in_pcb_checkstate(inp, WNT_ACQUIRE, 0) == WNT_STOPUSING) {
+			continue;
+		}
+		socket_lock(so, 1);
+		if (inp_matches_kao_frame(ifp, frame, inp)) {
+			/*
+			 * Keep the matching socket locked
+			 */
+			found = true;
+			break;
+		}
+		socket_unlock(so, 1);
+	}
+	lck_rw_done(tcbinfo.ipi_lock);
+
+	if (found) {
+		ASSERT(inp != NULL);
+		ASSERT(so != NULL);
+		ASSERT(so == inp->inp_socket);
+		/*
+		 * Drop the TCP connection like tcptimers() does
+		 */
+		struct tcpcb *tp = inp->inp_ppcb;
+
+		tcpstat.tcps_keepdrops++;
+		postevent(so, 0, EV_TIMEOUT);
+		soevent(so,
+		    (SO_FILT_HINT_LOCKED | SO_FILT_HINT_TIMEOUT));
+		tp = tcp_drop(tp, ETIMEDOUT);
+
+		tcpstat.tcps_ka_offload_drops++;
+		os_log_info(OS_LOG_DEFAULT, "%s: dropped lport %u fport %u\n",
+		    __func__, frame->local_port, frame->remote_port);
+
+		socket_unlock(so, 1);
+	}
+
+	return 0;
 }
 
 errno_t

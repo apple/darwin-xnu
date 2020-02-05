@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -32,8 +32,13 @@
 #define _OS_OSDATA_H
 
 #include <libkern/c++/OSObject.h>
+#include <libkern/c++/OSPtr.h>
 
+class OSData;
 class OSString;
+
+typedef OSPtr<OSData> OSDataPtr;
+typedef OSPtr<const OSData> OSDataConstPtr;
 
 /*!
  * @header
@@ -75,7 +80,7 @@ class OSData : public OSObject
 {
 	friend class OSSerialize;
 
-	OSDeclareDefaultStructors(OSData)
+	OSDeclareDefaultStructors(OSData);
 
 #if APPLE_KEXT_ALIGN_CONTAINERS
 
@@ -135,7 +140,7 @@ public:
  * (<i>unlike</i> @link //apple_ref/doc/uid/20001498 CFMutableData@/link,
  * for which a nonzero initial capacity is a hard limit).
  */
-	static OSData * withCapacity(unsigned int capacity);
+	static OSDataPtr withCapacity(unsigned int capacity);
 
 
 /*!
@@ -158,7 +163,7 @@ public:
  * (<i>unlike</i> @link //apple_ref/doc/uid/20001498 CFMutableData@/link,
  * for which a nonzero initial capacity is a hard limit).
  */
-	static OSData * withBytes(
+	static OSDataPtr withBytes(
 		const void   * bytes,
 		unsigned int   numBytes);
 
@@ -191,7 +196,7 @@ public:
  * but you can get the byte pointer and
  * modify bytes within the shared buffer.
  */
-	static OSData * withBytesNoCopy(
+	static OSDataPtr withBytesNoCopy(
 		void         * bytes,
 		unsigned int   numBytes);
 
@@ -215,7 +220,7 @@ public:
  * (<i>unlike</i> @link //apple_ref/doc/uid/20001498 CFMutableData@/link,
  * for which a nonzero initial capacity is a hard limit).
  */
-	static OSData * withData(const OSData * inData);
+	static OSDataPtr withData(const OSData * inData);
 
 
 /*!
@@ -240,7 +245,7 @@ public:
  * (<i>unlike</i> @link //apple_ref/doc/uid/20001498 CFMutableData@/link,
  * for which a nonzero initial capacity is a hard limit).
  */
-	static OSData * withData(
+	static OSDataPtr withData(
 		const OSData * inData,
 		unsigned int   start,
 		unsigned int   numBytes);

@@ -27,16 +27,6 @@
  * Use is subject to license terms.
  */
 
-/*
- * #pragma ident	"@(#)fasttrap_isa.c	1.19	05/09/14 SMI"
- */
-
-#ifdef KERNEL
-#ifndef _KERNEL
-#define _KERNEL                 /* Solaris vs. Darwin */
-#endif
-#endif
-
 #include <sys/fasttrap_isa.h>
 #include <sys/fasttrap_impl.h>
 #include <sys/dtrace.h>
@@ -293,8 +283,8 @@ fasttrap_return_common(proc_t *p, arm_saved_state_t *regs, user_addr_t pc, user_
 		}
 
 		if (probe->ftp_prov->ftp_provider_type == DTFTP_PROVIDER_ONESHOT) {
-			uint8_t already_triggered = atomic_or_8(&probe->ftp_triggered, 1);
-			if (already_triggered) {
+			if (os_atomic_xchg(&probe->ftp_triggered, 1, relaxed)) {
+				/* already triggered */
 				continue;
 			}
 		}
@@ -326,6 +316,9 @@ fasttrap_return_common(proc_t *p, arm_saved_state_t *regs, user_addr_t pc, user_
 	lck_mtx_unlock(pid_mtx);
 }
 
+#if DEBUG
+__dead2
+#endif
 static void
 fasttrap_sigsegv(proc_t *p, uthread_t t, user_addr_t addr, arm_saved_state_t *regs)
 {
@@ -522,8 +515,8 @@ fasttrap_pid_probe(arm_saved_state_t *regs)
 #endif
 			} else {
 				if (probe->ftp_prov->ftp_provider_type == DTFTP_PROVIDER_ONESHOT) {
-					uint8_t already_triggered = atomic_or_8(&probe->ftp_triggered, 1);
-					if (already_triggered) {
+					if (os_atomic_xchg(&probe->ftp_triggered, 1, relaxed)) {
+						/* already triggered */
 						continue;
 					}
 				}

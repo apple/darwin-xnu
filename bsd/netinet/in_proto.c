@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -102,7 +102,6 @@
 #if IPSEC_ESP
 #include <netinet6/esp.h>
 #endif
-#include <netinet6/ipcomp.h>
 #endif /* IPSEC */
 
 static void in_dinit(struct domain *);
@@ -139,6 +138,8 @@ static struct protosw inetsw[] = {
 		.pr_lock =              udp_lock,
 		.pr_unlock =            udp_unlock,
 		.pr_getlock =           udp_getlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 	{
 		.pr_type =              SOCK_STREAM,
@@ -155,6 +156,8 @@ static struct protosw inetsw[] = {
 		.pr_lock =              tcp_lock,
 		.pr_unlock =            tcp_unlock,
 		.pr_getlock =           tcp_getlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 	{
 		.pr_type =              SOCK_RAW,
@@ -165,6 +168,8 @@ static struct protosw inetsw[] = {
 		.pr_ctloutput =         rip_ctloutput,
 		.pr_usrreqs =           &rip_usrreqs,
 		.pr_unlock =            rip_unlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 	{
 		.pr_type =              SOCK_RAW,
@@ -174,6 +179,8 @@ static struct protosw inetsw[] = {
 		.pr_ctloutput =         rip_ctloutput,
 		.pr_usrreqs =           &rip_usrreqs,
 		.pr_unlock =            rip_unlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 	{
 		.pr_type =              SOCK_DGRAM,
@@ -183,6 +190,8 @@ static struct protosw inetsw[] = {
 		.pr_ctloutput =         icmp_dgram_ctloutput,
 		.pr_usrreqs =           &icmp_dgram_usrreqs,
 		.pr_unlock =            rip_unlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 	{
 		.pr_type =              SOCK_RAW,
@@ -193,6 +202,8 @@ static struct protosw inetsw[] = {
 		.pr_init =              igmp_init,
 		.pr_usrreqs =           &rip_usrreqs,
 		.pr_unlock =            rip_unlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 	{
 		.pr_type =              SOCK_RAW,
@@ -203,6 +214,8 @@ static struct protosw inetsw[] = {
 		.pr_ctloutput =         rip_ctloutput,
 		.pr_usrreqs =           &rip_usrreqs,
 		.pr_unlock =            rip_unlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 #if IPSEC
 	{
@@ -221,14 +234,6 @@ static struct protosw inetsw[] = {
 		.pr_usrreqs =           &nousrreqs,
 	},
 #endif /* IPSEC_ESP */
-	{
-		.pr_type =              SOCK_RAW,
-		.pr_protocol =          IPPROTO_IPCOMP,
-		.pr_flags =             PR_ATOMIC | PR_ADDR | PR_PROTOLOCK,
-		.pr_input =             ipcomp4_input,
-		.pr_init =              ipcomp_init,
-		.pr_usrreqs =           &nousrreqs,
-	},
 #endif /* IPSEC */
 	{
 		.pr_type =              SOCK_RAW,
@@ -239,6 +244,8 @@ static struct protosw inetsw[] = {
 		.pr_init =              encap4_init,
 		.pr_usrreqs =           &rip_usrreqs,
 		.pr_unlock =            rip_unlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 #if INET6
 	{
@@ -250,6 +257,8 @@ static struct protosw inetsw[] = {
 		.pr_init =              encap4_init,
 		.pr_usrreqs =           &rip_usrreqs,
 		.pr_unlock =            rip_unlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 #endif /* INET6 */
 #if IPDIVERT
@@ -275,6 +284,8 @@ static struct protosw inetsw[] = {
 		.pr_init =              rip_init,
 		.pr_usrreqs =           &rip_usrreqs,
 		.pr_unlock =            rip_unlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 };
 

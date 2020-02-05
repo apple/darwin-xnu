@@ -266,6 +266,7 @@ int     mac_mount_check_getattr(vfs_context_t ctx, struct mount *mp,
 int     mac_mount_check_label_update(vfs_context_t ctx, struct mount *mp);
 int     mac_mount_check_mount(vfs_context_t ctx, struct vnode *vp,
     struct componentname *cnp, const char *vfc_name);
+int     mac_mount_check_mount_late(vfs_context_t ctx, struct mount *mp);
 int     mac_mount_check_snapshot_create(vfs_context_t ctx, struct mount *mp,
     const char *name);
 int     mac_mount_check_snapshot_delete(vfs_context_t ctx, struct mount *mp,
@@ -364,6 +365,7 @@ int     mac_proc_check_setlcid(proc_t proc1, proc_t proc2,
     pid_t pid1, pid_t pid2);
 int     mac_proc_check_signal(proc_t proc1, proc_t proc2,
     int signum);
+int     mac_proc_check_syscall_unix(proc_t proc, int scnum);
 int     mac_proc_check_wait(proc_t proc1, proc_t proc2);
 void    mac_proc_notify_exit(proc_t proc);
 int     mac_setsockopt_label(kauth_cred_t cred, struct socket *so,
@@ -411,7 +413,6 @@ int     mac_system_check_acct(kauth_cred_t cred, struct vnode *vp);
 int     mac_system_check_audit(kauth_cred_t cred, void *record, int length);
 int     mac_system_check_auditctl(kauth_cred_t cred, struct vnode *vp);
 int     mac_system_check_auditon(kauth_cred_t cred, int cmd);
-int     mac_system_check_chud(kauth_cred_t cred);
 int     mac_system_check_host_priv(kauth_cred_t cred);
 int     mac_system_check_info(kauth_cred_t, const char *info_type);
 int     mac_system_check_nfsd(kauth_cred_t cred);
@@ -563,6 +564,7 @@ int     mac_vnode_label_externalize_audit(struct vnode *vp, struct mac *mac);
 void    mac_vnode_label_free(struct label *label);
 void    mac_vnode_label_init(struct vnode *vp);
 int     mac_vnode_label_init_needed(struct vnode *vp);
+struct label *mac_vnode_label_allocate(vnode_t vp);
 void    mac_vnode_label_recycle(struct vnode *vp);
 void    mac_vnode_label_update(vfs_context_t ctx, struct vnode *vp,
     struct label *newlabel);

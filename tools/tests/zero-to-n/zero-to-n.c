@@ -67,6 +67,7 @@ typedef enum my_policy_type { MY_POLICY_REALTIME, MY_POLICY_TIMESHARE, MY_POLICY
 #define CONSTRAINT_NANOS        (20000000ll)    /* 20 ms */
 #define COMPUTATION_NANOS       (10000000ll)    /* 10 ms */
 #define TRACEWORTHY_NANOS       (10000000ll)    /* 10 ms */
+#define TRACEWORTHY_NANOS_TEST  ( 2000000ll)    /*  2 ms */
 
 #if DEBUG
 #define debug_log(args ...) printf(args)
@@ -130,6 +131,9 @@ static boolean_t                g_test_rt_smt = FALSE;
 
 /* Test whether realtime threads are successfully avoiding CPU 0 on Intel */
 static boolean_t                g_test_rt_avoid0 = FALSE;
+
+/* Print a histgram showing how many threads ran on each CPU */
+static boolean_t                g_histogram = FALSE;
 
 /* One randomly chosen thread holds up the train for a certain duration. */
 static boolean_t                g_do_one_long_spin = FALSE;
@@ -681,6 +685,11 @@ main(int argc, char **argv)
 		}
 		g_policy = MY_POLICY_REALTIME;
 		g_do_all_spin = TRUE;
+		g_histogram = true;
+		/* Don't change g_traceworthy_latency_ns if it's explicity been set to something other than the default */
+		if (g_traceworthy_latency_ns == TRACEWORTHY_NANOS) {
+			g_traceworthy_latency_ns = TRACEWORTHY_NANOS_TEST;
+		}
 	} else if (g_test_rt_smt) {
 		if (g_nlogicalcpu != 2 * g_nphysicalcpu) {
 			/* Not SMT */
@@ -693,6 +702,7 @@ main(int argc, char **argv)
 		}
 		g_policy = MY_POLICY_REALTIME;
 		g_do_all_spin = TRUE;
+		g_histogram = true;
 	} else if (g_test_rt_avoid0) {
 #if defined(__x86_64__) || defined(__i386__)
 		if (g_numthreads == 0) {
@@ -704,6 +714,7 @@ main(int argc, char **argv)
 		}
 		g_policy = MY_POLICY_REALTIME;
 		g_do_all_spin = TRUE;
+		g_histogram = true;
 #else
 		printf("Attempt to run --test-rt-avoid0 on a non-Intel device\n");
 		exit(0);
@@ -948,13 +959,15 @@ main(int argc, char **argv)
 	}
 #endif
 
-	if (g_test_rt || g_test_rt_smt || g_test_rt_avoid0) {
+	if (g_histogram) {
 		putchar('\n');
 
 		for (uint32_t i = 0; i < g_numcpus; i++) {
 			printf("%d\t%d\n", i, g_cpu_histogram[i].accum);
 		}
+	}
 
+	if (g_test_rt || g_test_rt_smt || g_test_rt_avoid0) {
 #define PRIMARY   0x5555555555555555ULL
 #define SECONDARY 0xaaaaaaaaaaaaaaaaULL
 
@@ -970,7 +983,7 @@ main(int argc, char **argv)
 				/* Test for threads running on both primary and secondary cpus of the same core (FAIL) */
 				fail = ((map & PRIMARY) & ((map & SECONDARY) >> 1));
 			} else if (g_test_rt) {
-				fail = __builtin_popcountll(map) != g_numthreads;
+				fail = (__builtin_popcountll(map) != g_numthreads) && (worst_latencies_ns[i] > g_traceworthy_latency_ns);
 			} else if (g_test_rt_avoid0) {
 				fail = ((map & 0x1) == 0x1);
 			}
@@ -1109,6 +1122,7 @@ parse_args(int argc, char *argv[])
 		{ "test-rt",            no_argument,            (int*)&g_test_rt,               TRUE },
 		{ "test-rt-smt",        no_argument,            (int*)&g_test_rt_smt,           TRUE },
 		{ "test-rt-avoid0",     no_argument,            (int*)&g_test_rt_avoid0,        TRUE },
+		{ "histogram",          no_argument,            (int*)&g_histogram,             TRUE },
 		{ "verbose",            no_argument,            (int*)&g_verbose,               TRUE },
 		{ "help",               no_argument,            NULL,                           'h' },
 		{ NULL,                 0,                      NULL,                           0 }

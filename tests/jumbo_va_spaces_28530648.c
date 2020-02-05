@@ -7,6 +7,7 @@
 #include <darwintest.h>
 #include <darwintest_utils.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
 
 #define GB (1ULL * 1024 * 1024 * 1024)
 

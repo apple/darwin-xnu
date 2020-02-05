@@ -282,7 +282,7 @@ kpc_set_running_xcall( void *vstate )
 	set_running_configurable(mp_config->cfg_target_mask,
 	    mp_config->cfg_state_mask);
 
-	if (hw_atomic_sub(&kpc_xcall_sync, 1) == 0) {
+	if (os_atomic_dec(&kpc_xcall_sync, relaxed) == 0) {
 		thread_wakeup((event_t) &kpc_xcall_sync);
 	}
 }
@@ -674,7 +674,7 @@ kpc_set_reload_xcall(void *vmp_config)
 
 	ml_set_interrupts_enabled(enabled);
 
-	if (hw_atomic_sub(&kpc_reload_sync, 1) == 0) {
+	if (os_atomic_dec(&kpc_reload_sync, relaxed) == 0) {
 		thread_wakeup((event_t) &kpc_reload_sync);
 	}
 }
@@ -749,7 +749,7 @@ kpc_set_config_xcall(void *vmp_config)
 		new_config += kpc_popcount(mp_config->pmc_mask);
 	}
 
-	if (hw_atomic_sub(&kpc_config_sync, 1) == 0) {
+	if (os_atomic_dec(&kpc_config_sync, relaxed) == 0) {
 		thread_wakeup((event_t) &kpc_config_sync);
 	}
 }
@@ -795,9 +795,9 @@ kpc_get_curcpu_counters_xcall(void *args)
 	r = kpc_get_curcpu_counters(handler->classes, NULL, &handler->buf[offset]);
 
 	/* number of counters added by this CPU, needs to be atomic  */
-	hw_atomic_add(&(handler->nb_counters), r);
+	os_atomic_add(&(handler->nb_counters), r, relaxed);
 
-	if (hw_atomic_sub(&kpc_xread_sync, 1) == 0) {
+	if (os_atomic_dec(&kpc_xread_sync, relaxed) == 0) {
 		thread_wakeup((event_t) &kpc_xread_sync);
 	}
 }

@@ -47,6 +47,7 @@
 #include <sys/sysproto.h>
 #include <sys/kauth.h>
 #include <sys/systm.h>
+#include <sys/bitstring.h>
 
 #include <security/audit/audit.h>
 
@@ -55,6 +56,10 @@
 #include <mach/i386/syscall_sw.h>
 
 #include <machine/pal_routines.h>
+
+#if CONFIG_MACF
+#include <security/mac_framework.h>
+#endif
 
 #if CONFIG_DTRACE
 extern int32_t dtrace_systrace_syscall(struct proc *, void *, int *);
@@ -85,7 +90,7 @@ unix_syscall(x86_saved_state_t *state)
 {
 	thread_t                thread;
 	void                    *vt;
-	unsigned int            code;
+	unsigned int            code, syscode;
 	struct sysent           *callp;
 
 	int                     error;
@@ -116,19 +121,21 @@ unix_syscall(x86_saved_state_t *state)
 		p = (struct proc *)get_bsdtask_info(current_task());
 	}
 
-	code = regs->eax & I386_SYSCALL_NUMBER_MASK;
+	code    = regs->eax & I386_SYSCALL_NUMBER_MASK;
+	syscode = (code < nsysent) ? code : SYS_invalid;
 	DEBUG_KPRINT_SYSCALL_UNIX("unix_syscall: code=%d(%s) eip=%u\n",
-	    code, syscallnames[code >= nsysent ? SYS_invalid : code], (uint32_t)regs->eip);
+	    code, syscallnames[syscode], (uint32_t)regs->eip);
 	params = (vm_offset_t) (regs->uesp + sizeof(int));
 
 	regs->efl &= ~(EFL_CF);
 
-	callp = (code >= nsysent) ? &sysent[SYS_invalid] : &sysent[code];
+	callp = &sysent[syscode];
 
 	if (__improbable(callp == sysent)) {
 		code = fuword(params);
 		params += sizeof(int);
-		callp = (code >= nsysent) ? &sysent[SYS_invalid] : &sysent[code];
+		syscode = (code < nsysent) ? code : SYS_invalid;
+		callp = &sysent[syscode];
 	}
 
 	vt = (void *)uthread->uu_arg;
@@ -152,11 +159,9 @@ unix_syscall(x86_saved_state_t *state)
 		}
 
 		if (__probable(!code_is_kdebug_trace(code))) {
-			int *ip = (int *)vt;
-
-			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-			    BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-			    *ip, *(ip + 1), *(ip + 2), *(ip + 3), 0);
+			uint32_t *uip = vt;
+			KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+			    uip[0], uip[1], uip[2], uip[3]);
 		}
 
 #if CONFIG_REQUIRES_U32_MUNGING
@@ -167,9 +172,7 @@ unix_syscall(x86_saved_state_t *state)
 		}
 #endif
 	} else {
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		    BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-		    0, 0, 0, 0, 0);
+		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START);
 	}
 
 	/*
@@ -189,9 +192,22 @@ unix_syscall(x86_saved_state_t *state)
 	uthread->uu_vpindex = 0;
 #endif
 
+#if CONFIG_MACF
+	if (__improbable(p->syscall_filter_mask != NULL && !bitstr_test(p->syscall_filter_mask, syscode))) {
+		error = mac_proc_check_syscall_unix(p, syscode);
+		if (error) {
+			goto skip_syscall;
+		}
+	}
+#endif /* CONFIG_MACF */
+
 	AUDIT_SYSCALL_ENTER(code, p, uthread);
 	error = (*(callp->sy_call))((void *) p, (void *) vt, &(uthread->uu_rval[0]));
 	AUDIT_SYSCALL_EXIT(code, p, uthread, error);
+
+#if CONFIG_MACF
+skip_syscall:
+#endif /* CONFIG_MACF */
 
 #ifdef JOE_DEBUG
 	if (uthread->uu_iocount) {
@@ -250,9 +266,8 @@ unix_syscall(x86_saved_state_t *state)
 		throttle_lowpri_io(1);
 	}
 	if (__probable(!code_is_kdebug_trace(code))) {
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		    BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-		    error, uthread->uu_rval[0], uthread->uu_rval[1], pid, 0);
+		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+		    error, uthread->uu_rval[0], uthread->uu_rval[1], pid);
 	}
 
 	if (__improbable(!is_vfork && callp->sy_call == (sy_call_t *)execve && !error)) {
@@ -275,7 +290,7 @@ unix_syscall64(x86_saved_state_t *state)
 {
 	thread_t        thread;
 	void                    *vt;
-	unsigned int    code;
+	unsigned int    code, syscode;
 	struct sysent   *callp;
 	int             args_in_regs;
 	boolean_t       args_start_at_rdi;
@@ -313,11 +328,12 @@ unix_syscall64(x86_saved_state_t *state)
 		/* NOTREACHED */
 	}
 
-	code = regs->rax & SYSCALL_NUMBER_MASK;
+	code    = regs->rax & SYSCALL_NUMBER_MASK;
+	syscode = (code < nsysent) ? code : SYS_invalid;
 	DEBUG_KPRINT_SYSCALL_UNIX(
 		"unix_syscall64: code=%d(%s) rip=%llx\n",
-		code, syscallnames[code >= nsysent ? SYS_invalid : code], regs->isf.rip);
-	callp = (code >= nsysent) ? &sysent[SYS_invalid] : &sysent[code];
+		code, syscallnames[syscode], regs->isf.rip);
+	callp = &sysent[syscode];
 
 	vt = (void *)uthread->uu_arg;
 
@@ -326,8 +342,9 @@ unix_syscall64(x86_saved_state_t *state)
 		 * indirect system call... system call number
 		 * passed as 'arg0'
 		 */
-		code = regs->rdi;
-		callp = (code >= nsysent) ? &sysent[SYS_invalid] : &sysent[code];
+		code    = regs->rdi;
+		syscode = (code < nsysent) ? code : SYS_invalid;
+		callp   = &sysent[syscode];
 		args_start_at_rdi = FALSE;
 		args_in_regs = 5;
 	} else {
@@ -341,13 +358,11 @@ unix_syscall64(x86_saved_state_t *state)
 		args_in_regs = MIN(args_in_regs, callp->sy_narg);
 		memcpy(vt, args_start_at_rdi ? &regs->rdi : &regs->rsi, args_in_regs * sizeof(syscall_arg_t));
 
-
 		if (!code_is_kdebug_trace(code)) {
-			uint64_t *ip = (uint64_t *)vt;
+			uint64_t *uip = vt;
 
-			KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-			    BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-			    (int)(*ip), (int)(*(ip + 1)), (int)(*(ip + 2)), (int)(*(ip + 3)), 0);
+			KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
+			    uip[0], uip[1], uip[2], uip[3]);
 		}
 
 		if (__improbable(callp->sy_narg > args_in_regs)) {
@@ -364,9 +379,7 @@ unix_syscall64(x86_saved_state_t *state)
 			}
 		}
 	} else {
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		    BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START,
-		    0, 0, 0, 0, 0);
+		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_START);
 	}
 
 	/*
@@ -386,9 +399,22 @@ unix_syscall64(x86_saved_state_t *state)
 	uthread->uu_vpindex = 0;
 #endif
 
+#if CONFIG_MACF
+	if (__improbable(p->syscall_filter_mask != NULL && !bitstr_test(p->syscall_filter_mask, syscode))) {
+		error = mac_proc_check_syscall_unix(p, syscode);
+		if (error) {
+			goto skip_syscall;
+		}
+	}
+#endif /* CONFIG_MACF */
+
 	AUDIT_SYSCALL_ENTER(code, p, uthread);
 	error = (*(callp->sy_call))((void *) p, vt, &(uthread->uu_rval[0]));
 	AUDIT_SYSCALL_EXIT(code, p, uthread, error);
+
+#if CONFIG_MACF
+skip_syscall:
+#endif /* CONFIG_MACF */
 
 #ifdef JOE_DEBUG
 	if (uthread->uu_iocount) {
@@ -463,9 +489,8 @@ unix_syscall64(x86_saved_state_t *state)
 		throttle_lowpri_io(1);
 	}
 	if (__probable(!code_is_kdebug_trace(code))) {
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		    BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-		    error, uthread->uu_rval[0], uthread->uu_rval[1], pid, 0);
+		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+		    error, uthread->uu_rval[0], uthread->uu_rval[1], pid);
 	}
 
 #if PROC_REF_DEBUG
@@ -602,9 +627,8 @@ unix_syscall_return(int error)
 		throttle_lowpri_io(1);
 	}
 	if (!code_is_kdebug_trace(code)) {
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		    BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-		    error, uthread->uu_rval[0], uthread->uu_rval[1], p->p_pid, 0);
+		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
+		    error, uthread->uu_rval[0], uthread->uu_rval[1], p->p_pid);
 	}
 
 	thread_exception_return();

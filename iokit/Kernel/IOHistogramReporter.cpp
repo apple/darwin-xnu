@@ -65,7 +65,7 @@ IOHistogramReporter::with(IOService *reportingService,
 	OSSafeReleaseNULL(reporter);
 	OSSafeReleaseNULL(tmpChannelName);
 
-	return 0;
+	return NULL;
 }
 
 

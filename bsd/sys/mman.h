@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -144,6 +144,10 @@
  */
 #define MAP_RESILIENT_CODESIGN  0x2000 /* no code-signing failures */
 #define MAP_RESILIENT_MEDIA     0x4000 /* no backing-store failures */
+
+#if !defined(CONFIG_EMBEDDED)
+#define MAP_32BIT       0x8000          /* Return virtual addresses <4G only: Requires entitlement */
+#endif  /* !defined(CONFIG_EMBEDDED) */
 
 #endif  /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 

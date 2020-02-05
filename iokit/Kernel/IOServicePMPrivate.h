@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -158,7 +158,7 @@ class IOServicePM : public OSObject
 	friend class IOService;
 	friend class IOPMWorkQueue;
 
-	OSDeclareDefaultStructors( IOServicePM )
+	OSDeclareDefaultStructors( IOServicePM );
 
 private:
 // Link IOServicePM objects on IOPMWorkQueue.
@@ -368,7 +368,6 @@ private:
 #define fWatchdogLock               pwrMgt->WatchdogLock
 #define fBlockedArray               pwrMgt->BlockedArray
 #define fPendingResponseDeadline    pwrMgt->PendingResponseDeadline
-#define fSpinDumpTimer              pwrMgt->SpinDumpTimer
 #define fSettleTimeUS               pwrMgt->SettleTimeUS
 #define fIdleTimerGeneration        pwrMgt->IdleTimerGeneration
 #define fHeadNoteChangeFlags        pwrMgt->HeadNoteChangeFlags
@@ -542,6 +541,8 @@ struct IOPMInterestContext {
 	uint32_t                maxTimeRequested;
 	uint32_t                messageType;
 	uint32_t                notifyType;
+	uint32_t                skippedInDark;
+	uint32_t                notSkippedInDark;
 	IOService *             us;
 	IOPMPowerStateIndex     stateNumber;
 	IOPMPowerFlags          stateFlags;
@@ -552,7 +553,17 @@ struct IOPMInterestContext {
 
 // assertPMDriverCall() options
 enum {
-	kIOPMADC_NoInactiveCheck = 1
+	kIOPMDriverCallNoInactiveCheck = 1
+};
+
+// assertPMDriverCall() method
+enum {
+	kIOPMDriverCallMethodUnknown       = 0,
+	kIOPMDriverCallMethodSetPowerState = 1,
+	kIOPMDriverCallMethodWillChange    = 2,
+	kIOPMDriverCallMethodDidChange     = 3,
+	kIOPMDriverCallMethodChangeDone    = 4,
+	kIOPMDriverCallMethodSetAggressive = 5
 };
 
 //******************************************************************************
@@ -571,7 +582,7 @@ extern const OSSymbol *gIOPMStatsDriverPSChangeSlow;
 
 class IOPMRequest : public IOCommand
 {
-	OSDeclareDefaultStructors( IOPMRequest )
+	OSDeclareDefaultStructors( IOPMRequest );
 
 protected:
 	IOService *          fTarget;       // request target
@@ -621,7 +632,7 @@ public:
 			return (IOPMRequest *) this;
 		}
 #endif
-		return 0;
+		return NULL;
 	}
 
 	inline uint32_t
@@ -652,7 +663,7 @@ public:
 	isQuiesceType( void ) const
 	{
 		return (kIOPMRequestTypeQuiescePowerTree == fRequestType) &&
-		       (fCompletionAction != 0) && (fCompletionTarget != 0);
+		       (fCompletionAction != NULL) && (fCompletionTarget != NULL);
 	}
 
 	inline void
@@ -681,7 +692,7 @@ public:
 
 class IOPMRequestQueue : public IOEventSource
 {
-	OSDeclareDefaultStructors( IOPMRequestQueue )
+	OSDeclareDefaultStructors( IOPMRequestQueue );
 
 public:
 	typedef bool (*Action)( IOService *, IOPMRequest *, IOPMRequestQueue * );
@@ -710,7 +721,7 @@ public:
 
 class IOPMWorkQueue : public IOEventSource
 {
-	OSDeclareDefaultStructors( IOPMWorkQueue )
+	OSDeclareDefaultStructors( IOPMWorkQueue );
 
 public:
 	typedef bool (*Action)( IOService *, IOPMRequest *, IOPMWorkQueue * );
@@ -752,7 +763,7 @@ public:
 
 class IOPMCompletionQueue : public IOEventSource
 {
-	OSDeclareDefaultStructors( IOPMCompletionQueue )
+	OSDeclareDefaultStructors( IOPMCompletionQueue );
 
 public:
 	typedef bool (*Action)( IOService *, IOPMRequest *, IOPMCompletionQueue * );

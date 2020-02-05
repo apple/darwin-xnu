@@ -215,12 +215,7 @@ struct cdevsw cdevsw[] = {
 		kmioctl, nullstop, nullreset, km_tty, ttselect,
 		eno_mmap, eno_strat, eno_getc, eno_putc, 0
 	},
-	[13 ... 41] = NO_CDEVICE,
-	[42] = {
-		volopen, volclose, eno_rdwrt, eno_rdwrt,
-		volioctl, eno_stop, eno_reset, 0, (select_fcn_t *) seltrue,
-		eno_mmap, eno_strat, eno_getc, eno_putc, 0
-	}
+	[13 ... 42] = NO_CDEVICE,
 };
 const int nchrdev = sizeof(cdevsw) / sizeof(cdevsw[0]);
 
@@ -237,7 +232,7 @@ isdisk(dev_t dev, int type)
 
 	switch (type) {
 	case VCHR:
-		maj = chrtoblk(maj);
+		maj = chrtoblk(dev);
 		if (maj == NODEV) {
 			break;
 		}
@@ -251,32 +246,7 @@ isdisk(dev_t dev, int type)
 	return 0;
 }
 
-static int      chrtoblktab[] = {
-	/* CHR *//* BLK *//* CHR *//* BLK */
-	/* 0 */ NODEV, /* 1 */ NODEV,
-	/* 2 */ NODEV, /* 3 */ NODEV,
-	/* 4 */ NODEV, /* 5 */ NODEV,
-	/* 6 */ NODEV, /* 7 */ NODEV,
-	/* 8 */ NODEV, /* 9 */ NODEV,
-	/* 10 */ NODEV, /* 11 */ NODEV,
-	/* 12 */ NODEV, /* 13 */ NODEV,
-	/* 14 */ NODEV, /* 15 */ NODEV,
-	/* 16 */ NODEV, /* 17 */ NODEV,
-	/* 18 */ NODEV, /* 19 */ NODEV,
-	/* 20 */ NODEV, /* 21 */ NODEV,
-	/* 22 */ NODEV, /* 23 */ NODEV,
-	/* 24 */ NODEV, /* 25 */ NODEV,
-	/* 26 */ NODEV, /* 27 */ NODEV,
-	/* 28 */ NODEV, /* 29 */ NODEV,
-	/* 30 */ NODEV, /* 31 */ NODEV,
-	/* 32 */ NODEV, /* 33 */ NODEV,
-	/* 34 */ NODEV, /* 35 */ NODEV,
-	/* 36 */ NODEV, /* 37 */ NODEV,
-	/* 38 */ NODEV, /* 39 */ NODEV,
-	/* 40 */ NODEV, /* 41 */ NODEV,
-	/* 42 */ NODEV, /* 43 */ NODEV,
-	/* 44 */ NODEV,
-};
+static int chrtoblktab[] = {[0 ... nchrdev] = NODEV };
 
 /*
  * convert chr dev to blk dev

@@ -240,7 +240,7 @@
 	 || (((op) & THUMB_SIMD_VFP_MASK3) == THUMB_SIMD_VFP_CODE3))
 
 extern boolean_t arm_force_fast_fault(ppnum_t, vm_prot_t, int, void *);
-extern kern_return_t arm_fast_fault(pmap_t, vm_map_address_t, vm_prot_t, boolean_t);
+extern kern_return_t arm_fast_fault(pmap_t, vm_map_address_t, vm_prot_t, bool, bool);
 
 /*
  * Determines if the aborted instruction is read or write operation

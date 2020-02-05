@@ -507,7 +507,9 @@ kauth_filesec_t kauth_filesec_alloc(int size);
 void            kauth_filesec_free(kauth_filesec_t fsp);
 extern kauth_scope_t kauth_register_scope(const char *_identifier, kauth_scope_callback_t _callback, void *_idata);
 extern void     kauth_deregister_scope(kauth_scope_t _scope);
+__kpi_deprecated("Use EndpointSecurity instead")
 extern kauth_listener_t kauth_listen_scope(const char *_identifier, kauth_scope_callback_t _callback, void *_idata);
+__kpi_deprecated("Use EndpointSecurity instead")
 extern void     kauth_unlisten_scope(kauth_listener_t _scope);
 extern int      kauth_authorize_action(kauth_scope_t _scope, kauth_cred_t _credential, kauth_action_t _action,
     uintptr_t _arg0, uintptr_t _arg1, uintptr_t _arg2, uintptr_t _arg3);
@@ -624,29 +626,29 @@ __END_DECLS
 /* Actions, also rights bits in an ACE */
 
 #if defined(KERNEL) || defined (_SYS_ACL_H)
-#define KAUTH_VNODE_READ_DATA                   (1<<1)
+#define KAUTH_VNODE_READ_DATA                   (1U<<1)
 #define KAUTH_VNODE_LIST_DIRECTORY              KAUTH_VNODE_READ_DATA
-#define KAUTH_VNODE_WRITE_DATA                  (1<<2)
+#define KAUTH_VNODE_WRITE_DATA                  (1U<<2)
 #define KAUTH_VNODE_ADD_FILE                    KAUTH_VNODE_WRITE_DATA
-#define KAUTH_VNODE_EXECUTE                     (1<<3)
+#define KAUTH_VNODE_EXECUTE                     (1U<<3)
 #define KAUTH_VNODE_SEARCH                      KAUTH_VNODE_EXECUTE
-#define KAUTH_VNODE_DELETE                      (1<<4)
-#define KAUTH_VNODE_APPEND_DATA                 (1<<5)
+#define KAUTH_VNODE_DELETE                      (1U<<4)
+#define KAUTH_VNODE_APPEND_DATA                 (1U<<5)
 #define KAUTH_VNODE_ADD_SUBDIRECTORY            KAUTH_VNODE_APPEND_DATA
-#define KAUTH_VNODE_DELETE_CHILD                (1<<6)
-#define KAUTH_VNODE_READ_ATTRIBUTES             (1<<7)
-#define KAUTH_VNODE_WRITE_ATTRIBUTES            (1<<8)
-#define KAUTH_VNODE_READ_EXTATTRIBUTES          (1<<9)
-#define KAUTH_VNODE_WRITE_EXTATTRIBUTES         (1<<10)
-#define KAUTH_VNODE_READ_SECURITY               (1<<11)
-#define KAUTH_VNODE_WRITE_SECURITY              (1<<12)
-#define KAUTH_VNODE_TAKE_OWNERSHIP              (1<<13)
+#define KAUTH_VNODE_DELETE_CHILD                (1U<<6)
+#define KAUTH_VNODE_READ_ATTRIBUTES             (1U<<7)
+#define KAUTH_VNODE_WRITE_ATTRIBUTES            (1U<<8)
+#define KAUTH_VNODE_READ_EXTATTRIBUTES          (1U<<9)
+#define KAUTH_VNODE_WRITE_EXTATTRIBUTES         (1U<<10)
+#define KAUTH_VNODE_READ_SECURITY               (1U<<11)
+#define KAUTH_VNODE_WRITE_SECURITY              (1U<<12)
+#define KAUTH_VNODE_TAKE_OWNERSHIP              (1U<<13)
 
 /* backwards compatibility only */
 #define KAUTH_VNODE_CHANGE_OWNER                KAUTH_VNODE_TAKE_OWNERSHIP
 
 /* For Windows interoperability only */
-#define KAUTH_VNODE_SYNCHRONIZE                 (1<<20)
+#define KAUTH_VNODE_SYNCHRONIZE                 (1U<<20)
 
 /* (1<<21) - (1<<24) are reserved for generic rights bits */
 
@@ -654,13 +656,13 @@ __END_DECLS
 /*
  * Authorizes the vnode as the target of a hard link.
  */
-#define KAUTH_VNODE_LINKTARGET                  (1<<25)
+#define KAUTH_VNODE_LINKTARGET                  (1U<<25)
 
 /*
  * Indicates that other steps have been taken to authorise the action,
  * but authorisation should be denied for immutable objects.
  */
-#define KAUTH_VNODE_CHECKIMMUTABLE              (1<<26)
+#define KAUTH_VNODE_CHECKIMMUTABLE              (1U<<26)
 
 /* Action modifiers */
 /*
@@ -671,7 +673,7 @@ __END_DECLS
  *
  * This bit will never be present in an ACE.
  */
-#define KAUTH_VNODE_ACCESS                      (1<<31)
+#define KAUTH_VNODE_ACCESS                      (1U<<31)
 
 /*
  * The KAUTH_VNODE_NOIMMUTABLE bit is passed to the callback along with the
@@ -681,7 +683,7 @@ __END_DECLS
  * The system immutable flags are only ignored when the system securelevel
  * is low enough to allow their removal.
  */
-#define KAUTH_VNODE_NOIMMUTABLE                 (1<<30)
+#define KAUTH_VNODE_NOIMMUTABLE                 (1U<<30)
 
 
 /*
@@ -692,7 +694,7 @@ __END_DECLS
  * for an exact match on the last credential to lookup
  * the component being acted on
  */
-#define KAUTH_VNODE_SEARCHBYANYONE              (1<<29)
+#define KAUTH_VNODE_SEARCHBYANYONE              (1U<<29)
 
 
 /*
@@ -758,7 +760,7 @@ void kprintf(const char *fmt, ...);
 # endif /* !_FN_KPRINTF */
 # define KAUTH_DEBUG_ENABLE
 # define K_UUID_FMT "%08x:%08x:%08x:%08x"
-# define K_UUID_ARG(_u) *(int *)&_u.g_guid[0],*(int *)&_u.g_guid[4],*(int *)&_u.g_guid[8],*(int *)&_u.g_guid[12]
+# define K_UUID_ARG(_u) &_u.g_guid_asint[0],&_u.g_guid_asint[1],&_u.g_guid_asint[2],&_u.g_guid_asint[3]
 # define KAUTH_DEBUG(fmt, args...)      do { kprintf("%s:%d: " fmt "\n", __PRETTY_FUNCTION__, __LINE__ , ##args); } while (0)
 # define KAUTH_DEBUG_CTX(_c)            KAUTH_DEBUG("p = %p c = %p", _c->vc_proc, _c->vc_ucred)
 # define VFS_DEBUG(_ctx, _vp, fmt, args...)                                             \

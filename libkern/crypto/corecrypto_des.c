@@ -45,22 +45,22 @@ des_ecb_key_sched(des_cblock *key, des_ecb_key_schedule *ks)
 		panic("%s: inconsistent size for DES-ECB context", __FUNCTION__);
 	}
 
-	enc->init(enc, ks->enc, CCDES_KEY_SIZE, key);
-	dec->init(dec, ks->dec, CCDES_KEY_SIZE, key);
+	int rc = enc->init(enc, ks->enc, CCDES_KEY_SIZE, key);
+	if (rc) {
+		return rc;
+	}
 
-	/* The old DES interface could return -1 or -2 for weak keys and wrong parity,
-	 *  but this was disabled all the time, so we never fail here */
-	return 0;
+	return dec->init(dec, ks->dec, CCDES_KEY_SIZE, key);
 }
 
 /* Simple des - 1 block */
-void
+int
 des_ecb_encrypt(des_cblock *in, des_cblock *out, des_ecb_key_schedule *ks, int enc)
 {
 	const struct ccmode_ecb *ecb = enc ? g_crypto_funcs->ccdes_ecb_encrypt : g_crypto_funcs->ccdes_ecb_decrypt;
 	ccecb_ctx *ctx = enc ? ks->enc : ks->dec;
 
-	ecb->ecb(ctx, 1, in, out);
+	return ecb->ecb(ctx, 1, in, out);
 }
 
 
@@ -68,7 +68,6 @@ des_ecb_encrypt(des_cblock *in, des_cblock *out, des_ecb_key_schedule *ks, int e
 int
 des3_ecb_key_sched(des_cblock *key, des3_ecb_key_schedule *ks)
 {
-	int rc;
 	const struct ccmode_ecb *enc = g_crypto_funcs->cctdes_ecb_encrypt;
 	const struct ccmode_ecb *dec = g_crypto_funcs->cctdes_ecb_decrypt;
 
@@ -77,20 +76,22 @@ des3_ecb_key_sched(des_cblock *key, des3_ecb_key_schedule *ks)
 		panic("%s: inconsistent size for 3DES-ECB context", __FUNCTION__);
 	}
 
-	rc = enc->init(enc, ks->enc, CCDES_KEY_SIZE * 3, key);
-	rc |= dec->init(dec, ks->dec, CCDES_KEY_SIZE * 3, key);
+	int rc = enc->init(enc, ks->enc, CCDES_KEY_SIZE * 3, key);
+	if (rc) {
+		return rc;
+	}
 
-	return rc;
+	return dec->init(dec, ks->dec, CCDES_KEY_SIZE * 3, key);
 }
 
 /* Simple des - 1 block */
-void
+int
 des3_ecb_encrypt(des_cblock *in, des_cblock *out, des3_ecb_key_schedule *ks, int enc)
 {
 	const struct ccmode_ecb *ecb = enc ? g_crypto_funcs->cctdes_ecb_encrypt : g_crypto_funcs->cctdes_ecb_decrypt;
 	ccecb_ctx *ctx = enc ? ks->enc : ks->dec;
 
-	ecb->ecb(ctx, 1, in, out);
+	return ecb->ecb(ctx, 1, in, out);
 }
 
 /* Raw key helper functions */

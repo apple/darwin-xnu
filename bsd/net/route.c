@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -76,6 +76,7 @@
 #include <sys/mcache.h>
 #include <sys/priv.h>
 #include <sys/protosw.h>
+#include <sys/sdt.h>
 #include <sys/kernel.h>
 #include <kern/locks.h>
 #include <kern/zalloc.h>
@@ -215,7 +216,14 @@
 
 extern void kdp_set_gateway_mac(void *gatewaymac);
 
-__private_extern__ struct rtstat rtstat  = { 0, 0, 0, 0, 0, 0 };
+__private_extern__ struct rtstat rtstat  = {
+	.rts_badredirect = 0,
+	.rts_dynamic = 0,
+	.rts_newgateway = 0,
+	.rts_unreach = 0,
+	.rts_wildcard = 0,
+	.rts_badrtgwroute = 0
+};
 struct radix_node_head *rt_tables[AF_MAX+1];
 
 decl_lck_mtx_data(, rnh_lock_data);	/* global routing tables mutex */
@@ -231,6 +239,7 @@ static lck_grp_attr_t	*rte_mtx_grp_attr;
 
 int rttrash = 0;		/* routes not in table but not freed */
 
+boolean_t trigger_v6_defrtr_select = FALSE;
 unsigned int rte_debug = 0;
 
 /* Possible flags for rte_debug */
@@ -362,11 +371,18 @@ struct matchleaf_arg {
  * of sockaddr_in for convenience).
  */
 static struct sockaddr sin_def = {
-	sizeof (struct sockaddr_in), AF_INET, { 0, }
+	.sa_len = sizeof (struct sockaddr_in),
+	.sa_family = AF_INET,
+	.sa_data = { 0, }
 };
 
 static struct sockaddr_in6 sin6_def = {
-	sizeof (struct sockaddr_in6), AF_INET6, 0, 0, IN6ADDR_ANY_INIT, 0
+	.sin6_len = sizeof (struct sockaddr_in6),
+	.sin6_family = AF_INET6,
+	.sin6_port = 0,
+	.sin6_flowinfo = 0,
+	.sin6_addr = IN6ADDR_ANY_INIT,
+	.sin6_scope_id = 0
 };
 
 /*
@@ -1765,6 +1781,10 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 
 #define	senderr(x) { error = x; goto bad; }
 
+	DTRACE_ROUTE6(rtrequest, int, req, struct sockaddr *, dst0,
+	    struct sockaddr *, gateway, struct sockaddr *, netmask,
+	    int, flags, unsigned int, ifscope);
+
 	LCK_MTX_ASSERT(rnh_lock, LCK_MTX_ASSERT_OWNED);
 	/*
 	 * Find the correct routing tree to use for this Address Family
@@ -1930,6 +1950,10 @@ rtrequest_common_locked(int req, struct sockaddr *dst0,
 		if (rt_primary_default(rt, rt_key(rt))) {
 			set_primary_ifscope(rt_key(rt)->sa_family,
 			    IFSCOPE_NONE);
+			if ((rt->rt_flags & RTF_STATIC) &&
+			    rt_key(rt)->sa_family == PF_INET6) {
+				trigger_v6_defrtr_select = TRUE;
+			}
 		}
 
 #if NECP
@@ -2453,7 +2477,7 @@ delete_rt:
  * Round up sockaddr len to multiples of 32-bytes.  This will reduce
  * or even eliminate the need to re-allocate the chunk of memory used
  * for rt_key and rt_gateway in the event the gateway portion changes.
- * Certain code paths (e.g. IPSec) are notorious for caching the address
+ * Certain code paths (e.g. IPsec) are notorious for caching the address
  * of rt_gateway; this rounding-up would help ensure that the gateway
  * portion never gets deallocated (though it may change contents) and
  * thus greatly simplifies things.
@@ -2823,7 +2847,7 @@ node_lookup(struct sockaddr *dst, struct sockaddr *netmask,
 	struct radix_node *rn;
 	struct sockaddr_storage ss, mask;
 	int af = dst->sa_family;
-	struct matchleaf_arg ma = { ifscope };
+	struct matchleaf_arg ma = { .ifscope = ifscope };
 	rn_matchf_t *f = rn_match_ifscope;
 	void *w = &ma;
 
@@ -4410,7 +4434,7 @@ route_op_entitlement_check(struct socket *so,
 			 * allowed accesses.
 			 */
 			if (soopt_cred_check(so, PRIV_NET_RESTRICTED_ROUTE_NC_READ,
-			    allow_root) == 0)
+			    allow_root, false) == 0)
 				return (0);
 			else
 				return (-1);

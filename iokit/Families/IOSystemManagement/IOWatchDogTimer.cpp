@@ -59,7 +59,7 @@ IOWatchDogTimer::start(IOService *provider)
 	}
 
 	notifier = registerSleepWakeInterest(IOWatchDogTimerSleepHandler, this);
-	if (notifier == 0) {
+	if (notifier == NULL) {
 		return false;
 	}
 
@@ -92,7 +92,7 @@ IOWatchDogTimer::setProperties(OSObject *properties)
 	}
 
 	theNumber = OSDynamicCast(OSNumber, properties);
-	if (theNumber == 0) {
+	if (theNumber == NULL) {
 		return kIOReturnBadArgument;
 	}
 

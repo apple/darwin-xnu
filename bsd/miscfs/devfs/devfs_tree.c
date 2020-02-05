@@ -99,6 +99,7 @@
 #include <sys/vnode_internal.h>
 #include <stdarg.h>
 #include <libkern/OSAtomic.h>
+#include <os/refcnt.h>
 #define BSD_KERNEL_PRIVATE      1       /* devfs_make_link() prototype */
 #include "devfs.h"
 #include "devfsdefs.h"
@@ -149,6 +150,8 @@ lck_grp_attr_t  * devfs_lck_grp_attr;
 lck_attr_t      * devfs_lck_attr;
 lck_mtx_t         devfs_mutex;
 lck_mtx_t         devfs_attr_mutex;
+
+os_refgrp_decl(static, devfs_refgrp, "devfs", NULL);
 
 devdirent_t *           dev_root = NULL;        /* root of backing tree */
 struct devfs_stats      devfs_stats;            /* hold stats */
@@ -515,6 +518,7 @@ dev_add_node(int entrytype, devnode_type_t * typeinfo, devnode_t * proto,
     devnode_t * *dn_pp, struct devfsmount *dvm)
 {
 	devnode_t *     dnp = NULL;
+	int     error = 0;
 
 #if defined SPLIT_DEVS
 	/*
@@ -587,7 +591,9 @@ dev_add_node(int entrytype, devnode_type_t * typeinfo, devnode_t * proto,
 #endif
 	}
 	dnp->dn_dvm = dvm;
-	dnp->dn_refcount = 0;
+
+	/* Note: this inits the reference count to 1, this is considered unreferenced */
+	os_ref_init_raw(&dnp->dn_refcount, &devfs_refgrp);
 	dnp->dn_ino = devfs_unique_fileno;
 	devfs_unique_fileno++;
 
@@ -627,8 +633,8 @@ dev_add_node(int entrytype, devnode_type_t * typeinfo, devnode_t * proto,
 		    typeinfo->Slnk.namelen + 1,
 		    M_DEVFSNODE, M_WAITOK);
 		if (!dnp->dn_typeinfo.Slnk.name) {
-			FREE(dnp, M_DEVFSNODE);
-			return ENOMEM;
+			error = ENOMEM;
+			break;
 		}
 		strlcpy(dnp->dn_typeinfo.Slnk.name, typeinfo->Slnk.name,
 		    typeinfo->Slnk.namelen + 1);
@@ -656,12 +662,17 @@ dev_add_node(int entrytype, devnode_type_t * typeinfo, devnode_t * proto,
 
 	#endif /* FDESC */
 	default:
-		return EINVAL;
+		error = EINVAL;
 	}
 
-	*dn_pp = dnp;
-	DEVFS_INCR_NODES();
-	return 0;
+	if (error) {
+		FREE(dnp, M_DEVFSNODE);
+	} else {
+		*dn_pp = dnp;
+		DEVFS_INCR_NODES();
+	}
+
+	return error;
 }
 
 
@@ -698,7 +709,10 @@ devfs_dn_free(devnode_t * dnp)
 		}
 
 		/* Can only free if there are no references; otherwise, wait for last vnode to be reclaimed */
-		if (dnp->dn_refcount == 0) {
+		os_ref_count_t rc = os_ref_get_count_raw(&dnp->dn_refcount);
+		if (rc == 1) {
+			/* release final reference from dev_add_node */
+			(void) os_ref_release_locked_raw(&dnp->dn_refcount, &devfs_refgrp);
 			devnode_free(dnp);
 		} else {
 			dnp->dn_lflags |= DN_DELETE;
@@ -1362,20 +1376,22 @@ out:
 void
 devfs_ref_node(devnode_t *dnp)
 {
-	dnp->dn_refcount++;
+	os_ref_retain_locked_raw(&dnp->dn_refcount, &devfs_refgrp);
 }
 
 /*
  * Release a reference on a devnode.  If the devnode is marked for
- * free and the refcount is dropped to zero, do the free.
+ * free and the refcount is dropped to one, do the free.
  */
 void
 devfs_rele_node(devnode_t *dnp)
 {
-	dnp->dn_refcount--;
-	if (dnp->dn_refcount < 0) {
-		panic("devfs_rele_node: devnode with a negative refcount!\n");
-	} else if ((dnp->dn_refcount == 0) && (dnp->dn_lflags & DN_DELETE)) {
+	os_ref_count_t rc = os_ref_release_locked_raw(&dnp->dn_refcount, &devfs_refgrp);
+	if (rc < 1) {
+		panic("devfs_rele_node: devnode without a refcount!\n");
+	} else if ((rc == 1) && (dnp->dn_lflags & DN_DELETE)) {
+		/* release final reference from dev_add_node */
+		(void) os_ref_release_locked_raw(&dnp->dn_refcount, &devfs_refgrp);
 		devnode_free(dnp);
 	}
 }

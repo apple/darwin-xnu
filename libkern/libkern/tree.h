@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -408,6 +408,7 @@ void name##_RB_REMOVE_COLOR(struct name *, struct type *, struct type *);\
 struct type *name##_RB_REMOVE(struct name *, struct type *);            \
 struct type *name##_RB_INSERT(struct name *, struct type *);            \
 struct type *name##_RB_FIND(struct name *, struct type *);              \
+struct type *name##_RB_NFIND(struct name *, struct type *);             \
 struct type *name##_RB_NEXT(struct type *);                             \
 struct type *name##_RB_MINMAX(struct name *, int);                      \
 struct type *name##_RB_GETPARENT(struct type*);                         \
@@ -422,12 +423,13 @@ _sc_ void name##_RB_REMOVE_COLOR(struct name *, struct type *, struct type *); \
 _sc_ struct type *name##_RB_REMOVE(struct name *, struct type *);       \
 _sc_ struct type *name##_RB_INSERT(struct name *, struct type *);       \
 _sc_ struct type *name##_RB_FIND(struct name *, struct type *);         \
+_sc_ struct type *name##_RB_NFIND(struct name *, struct type *);        \
 _sc_ struct type *name##_RB_NEXT(struct type *);                        \
 _sc_ struct type *name##_RB_MINMAX(struct name *, int);                 \
 _sc_ struct type *name##_RB_GETPARENT(struct type*);                    \
 _sc_ struct type *name##_RB_SETPARENT(struct type*, struct type*);                      \
 _sc_ int name##_RB_GETCOLOR(struct type*);                      \
-_sc_ void name##_RB_SETCOLOR(struct type*,int);
+_sc_ void name##_RB_SETCOLOR(struct type*,int)
 
 
 /* Main rb operation.
@@ -698,6 +700,28 @@ name##_RB_FIND(struct name *head, struct type *elm)                     \
 	return (NULL);                                                  \
 }                                                                       \
                                                                         \
+/* Finds the first node greater than or equal to the search key */      \
+__attribute__((unused))                                                 \
+struct type *                                                           \
+name##_RB_NFIND(struct name *head, struct type *elm)                    \
+{                                                                       \
+	struct type *tmp = RB_ROOT(head);                               \
+	struct type *res = NULL;                                        \
+	int comp;                                                       \
+	while (tmp) {                                                   \
+	        comp = cmp(elm, tmp);                                   \
+	        if (comp < 0) {                                         \
+	                res = tmp;                                      \
+	                tmp = RB_LEFT(tmp, field);                      \
+	        }                                                       \
+	        else if (comp > 0)                                      \
+	                tmp = RB_RIGHT(tmp, field);                     \
+	        else                                                    \
+	                return (tmp);                                   \
+	}                                                               \
+	return (res);                                                   \
+}                                                                       \
+                                                                        \
 /* ARGSUSED */                                                          \
 struct type *                                                           \
 name##_RB_NEXT(struct type *elm)                                        \
@@ -742,11 +766,11 @@ struct type *name##_RB_PREV(struct type *);
 
 
 #define RB_PROTOTYPE_SC_PREV(_sc_, name, type, field, cmp)              \
-	RB_PROTOTYPE_SC(_sc_, name, type, field, cmp)                   \
-_sc_ struct type *name##_RB_PREV(struct type *);
+	RB_PROTOTYPE_SC(_sc_, name, type, field, cmp);                  \
+_sc_ struct type *name##_RB_PREV(struct type *)
 
 #define RB_GENERATE_PREV(name, type, field, cmp)                        \
-	RB_GENERATE(name, type, field, cmp)                             \
+	RB_GENERATE(name, type, field, cmp);                            \
 struct type *                                                           \
 name##_RB_PREV(struct type *elm)                                        \
 {                                                                       \
@@ -774,6 +798,7 @@ name##_RB_PREV(struct type *elm)                                        \
 #define RB_INSERT(name, x, y)   name##_RB_INSERT(x, y)
 #define RB_REMOVE(name, x, y)   name##_RB_REMOVE(x, y)
 #define RB_FIND(name, x, y)     name##_RB_FIND(x, y)
+#define RB_NFIND(name, x, y)    name##_RB_NFIND(x, y)
 #define RB_NEXT(name, x, y)     name##_RB_NEXT(y)
 #define RB_PREV(name, x, y)     name##_RB_PREV(y)
 #define RB_MIN(name, x)         name##_RB_MINMAX(x, RB_NEGINF)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -345,6 +345,7 @@ ip_output_list(struct mbuf *m0, int packetchain, struct mbuf *opt,
 			boolean_t isbroadcast : 1;
 			boolean_t didfilter : 1;
 			boolean_t noexpensive : 1;      /* set once */
+			boolean_t noconstrained : 1;      /* set once */
 			boolean_t awdl_unrestricted : 1;        /* set once */
 #if IPFIREWALL_FORWARD
 			boolean_t fwd_rewrite_src : 1;
@@ -362,7 +363,8 @@ ip_output_list(struct mbuf *m0, int packetchain, struct mbuf *opt,
 #define IP_CHECK_RESTRICTIONS(_ifp, _ipobf)                             \
 	(((_ipobf).nocell && IFNET_IS_CELLULAR(_ifp)) ||                \
 	 ((_ipobf).noexpensive && IFNET_IS_EXPENSIVE(_ifp)) ||          \
-	 (IFNET_IS_INTCOPROC(_ifp)) ||                                  \
+	 ((_ipobf).noconstrained && IFNET_IS_CONSTRAINED(_ifp)) ||      \
+	  (IFNET_IS_INTCOPROC(_ifp)) ||                                 \
 	 (!(_ipobf).awdl_unrestricted && IFNET_IS_AWDL_RESTRICTED(_ifp)))
 
 	if (ip_output_measure) {
@@ -496,6 +498,10 @@ ipfw_tags_done:
 		if (ipoa->ipoa_flags & IPOAF_NO_EXPENSIVE) {
 			ipobf.noexpensive = TRUE;
 			ipf_pktopts.ippo_flags |= IPPOF_NO_IFF_EXPENSIVE;
+		}
+		if (ipoa->ipoa_flags & IPOAF_NO_CONSTRAINED) {
+			ipobf.noconstrained = TRUE;
+			ipf_pktopts.ippo_flags |= IPPOF_NO_IFF_CONSTRAINED;
 		}
 		if (ipoa->ipoa_flags & IPOAF_AWDL_UNRESTRICTED) {
 			ipobf.awdl_unrestricted = TRUE;
@@ -1007,7 +1013,11 @@ loopit:
 			 * on the outgoing interface, and the caller did not
 			 * forbid loopback, loop back a copy.
 			 */
-			if (!TAILQ_EMPTY(&ipv4_filters)) {
+			if (!TAILQ_EMPTY(&ipv4_filters)
+#if NECP
+			    && !necp_packet_should_skip_filters(m)
+#endif // NECP
+			    ) {
 				struct ipfilter *filter;
 				int seen = (inject_filter_ref == NULL);
 
@@ -1186,7 +1196,12 @@ sendit:
 		}
 	}
 
-	if (!ipobf.didfilter && !TAILQ_EMPTY(&ipv4_filters)) {
+	if (!ipobf.didfilter &&
+	    !TAILQ_EMPTY(&ipv4_filters)
+#if NECP
+	    && !necp_packet_should_skip_filters(m)
+#endif // NECP
+	    ) {
 		struct ipfilter *filter;
 		int seen = (inject_filter_ref == NULL);
 		ipf_pktopts.ippo_flags &= ~IPPOF_MCAST_OPTS;
@@ -1241,7 +1256,7 @@ sendit:
 #if NECP
 	/* Process Network Extension Policy. Will Pass, Drop, or Rebind packet. */
 	necp_matched_policy_id = necp_ip_output_find_policy_match(m,
-	    flags, (flags & IP_OUTARGS) ? ipoa : NULL, &necp_result, &necp_result_parameter);
+	    flags, (flags & IP_OUTARGS) ? ipoa : NULL, ro ? ro->ro_rt : NULL, &necp_result, &necp_result_parameter);
 	if (necp_matched_policy_id) {
 		necp_mark_packet_from_ip(m, necp_matched_policy_id);
 		switch (necp_result) {
@@ -1512,7 +1527,11 @@ sendit:
 	    7, 0xff, 0xff, 0xff, 0xff);
 
 	/* Pass to filters again */
-	if (!TAILQ_EMPTY(&ipv4_filters)) {
+	if (!TAILQ_EMPTY(&ipv4_filters)
+#if NECP
+	    && !necp_packet_should_skip_filters(m)
+#endif // NECP
+	    ) {
 		struct ipfilter *filter;
 
 		ipf_pktopts.ippo_flags &= ~IPPOF_MCAST_OPTS;
@@ -1848,16 +1867,6 @@ pass:
 			printf("%s if_dscp_for_mbuf() error %d\n", __func__, error);
 			error = 0;
 		}
-	}
-
-	/*
-	 * Some Wi-Fi AP implementations do not correctly handle multicast IP
-	 * packets with DSCP bits set -- see radr://9331522 -- so as a
-	 * workaround we clear the DSCP bits and set the service class to BE
-	 */
-	if (IN_MULTICAST(ntohl(pkt_dst.s_addr)) && IFNET_IS_WIFI_INFRA(ifp)) {
-		ip->ip_tos &= IPTOS_ECN_MASK;
-		mbuf_set_service_class(m, MBUF_SC_BE);
 	}
 
 	ip_output_checksum(ifp, m, (IP_VHL_HL(ip->ip_vhl) << 2),
@@ -2559,6 +2568,7 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 {
 	struct  inpcb *inp = sotoinpcb(so);
 	int     error, optval;
+	lck_mtx_t *mutex_held = NULL;
 
 	error = optval = 0;
 	if (sopt->sopt_level != IPPROTO_IP) {
@@ -2567,6 +2577,21 @@ ip_ctloutput(struct socket *so, struct sockopt *sopt)
 
 	switch (sopt->sopt_dir) {
 	case SOPT_SET:
+		mutex_held = socket_getlock(so, PR_F_WILLUNLOCK);
+		/*
+		 *  Wait if we are in the middle of ip_output
+		 *  as we unlocked the socket there and don't
+		 *  want to overwrite the IP options
+		 */
+		if (inp->inp_sndinprog_cnt > 0) {
+			inp->inp_sndingprog_waiters++;
+
+			while (inp->inp_sndinprog_cnt > 0) {
+				msleep(&inp->inp_sndinprog_cnt, mutex_held,
+				    PSOCK | PCATCH, "inp_sndinprog_cnt", NULL);
+			}
+			inp->inp_sndingprog_waiters--;
+		}
 		switch (sopt->sopt_name) {
 #ifdef notyet
 		case IP_RETOPTS:

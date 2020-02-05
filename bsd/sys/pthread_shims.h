@@ -234,7 +234,7 @@ typedef const struct pthread_callbacks_s {
 	void *__unused_was_zfree;
 	void *__unused_was_zinit;
 
-	/* bsd/kerb/kern_sig.c */
+	/* bsd/kern/kern_sig.c */
 	void (*__pthread_testcancel)(int);
 
 	/* calls without portfolio */
@@ -251,7 +251,13 @@ typedef const struct pthread_callbacks_s {
 	/* mach/thread_act.h */
 	kern_return_t (*thread_resume)(thread_act_t target_act);
 
-	void *__unused_was_ml_get_max_cpus;
+	/* bsd/sys/event.h */
+	int (*kevent_workq_internal)(struct proc *p,
+	    user_addr_t changelist, int nchanges,
+	    user_addr_t eventlist, int nevents,
+	    user_addr_t data_out, user_size_t *data_available,
+	    unsigned int flags, int32_t *retval);
+
 #if defined(__arm__)
 	void *__unused_was_map_is_1gb;
 #endif

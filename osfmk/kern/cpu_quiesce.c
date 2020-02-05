@@ -80,7 +80,7 @@ static uint64_t cpu_checkin_last_commit;
 #define CPU_CHECKIN_MIN_INTERVAL_US     4000 /* 4ms */
 #define CPU_CHECKIN_MIN_INTERVAL_MAX_US USEC_PER_SEC /* 1s */
 static uint64_t cpu_checkin_min_interval;
-uint32_t cpu_checkin_min_interval_us;
+static uint32_t cpu_checkin_min_interval_us;
 
 #if __LP64__
 static_assert(MAX_CPUS <= 32);
@@ -134,6 +134,12 @@ cpu_quiescent_counter_set_min_interval_us(uint32_t new_value_us)
 	cpu_checkin_min_interval = abstime;
 }
 
+uint32_t
+cpu_quiescent_counter_get_min_interval_us(void)
+{
+	return cpu_checkin_min_interval_us;
+}
+
 
 /*
  * Called when all running CPUs have checked in.
@@ -151,7 +157,7 @@ cpu_quiescent_counter_commit(uint64_t ctime)
 
 	cpu_checkin_last_commit = ctime;
 
-	old_state = os_atomic_and(&cpu_quiescing_checkin_state, ~CPU_CHECKIN_MASK, release);
+	old_state = os_atomic_andnot(&cpu_quiescing_checkin_state, CPU_CHECKIN_MASK, release);
 
 	KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_QUIESCENT_COUNTER), old_gen, old_state, ctime, 0);
 }
@@ -272,8 +278,8 @@ cpu_quiescent_counter_leave(uint64_t ctime)
 
 	checkin_mask_t mask = cpu_checked_in_bit(cpuid) | cpu_expected_bit(cpuid);
 
-	checkin_mask_t orig_state = os_atomic_and_orig(&cpu_quiescing_checkin_state,
-	    ~mask, acq_rel);
+	checkin_mask_t orig_state = os_atomic_andnot_orig(&cpu_quiescing_checkin_state,
+	    mask, acq_rel);
 
 	assert((orig_state & cpu_expected_bit(cpuid)));
 

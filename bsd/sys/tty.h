@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -146,7 +146,7 @@ struct tty {
 	int     t_refcnt;               /* reference count */
 };
 
-#define TTY_NULL (struct tty *)0
+#define TTY_NULL (struct tty *)NULL
 
 #define t_cc            t_termios.c_cc
 #define t_cflag         t_termios.c_cflag

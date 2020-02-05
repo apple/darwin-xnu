@@ -155,8 +155,8 @@ mach_msg_rcv_link_special_reply_port(
 void
 mach_msg_receive_results_complete(ipc_object_t object);
 
-security_token_t KERNEL_SECURITY_TOKEN = KERNEL_SECURITY_TOKEN_VALUE;
-audit_token_t KERNEL_AUDIT_TOKEN = KERNEL_AUDIT_TOKEN_VALUE;
+const security_token_t KERNEL_SECURITY_TOKEN = KERNEL_SECURITY_TOKEN_VALUE;
+const audit_token_t KERNEL_AUDIT_TOKEN = KERNEL_AUDIT_TOKEN_VALUE;
 
 mach_msg_format_0_trailer_t trailer_template = {
 	/* mach_msg_trailer_type_t */ MACH_MSG_TRAILER_FORMAT_0,
@@ -568,14 +568,13 @@ mach_msg_overwrite_trap(
 
 		mr = ipc_mqueue_copyin(space, rcv_name, &mqueue, &object);
 		if (mr != MACH_MSG_SUCCESS) {
-			mach_port_guard_exception(rcv_name, 0, 0, kGUARD_EXC_RCV_INVALID_NAME);
 			return mr;
 		}
 		/* hold ref for object */
 
 		if ((option & MACH_RCV_SYNC_WAIT) && !(option & MACH_SEND_SYNC_OVERRIDE)) {
 			ipc_port_t special_reply_port;
-			__IGNORE_WCASTALIGN(special_reply_port = (ipc_port_t) object);
+			special_reply_port = ip_object_to_port(object);
 			/* link the special reply port to the destination */
 			mr = mach_msg_rcv_link_special_reply_port(special_reply_port,
 			    (mach_port_name_t)override);
@@ -635,20 +634,19 @@ mach_msg_rcv_link_special_reply_port(
 		return MACH_RCV_INVALID_NOTIFY;
 	}
 
-	kr = ipc_object_copyin(current_space(),
-	    dest_name_port, MACH_MSG_TYPE_COPY_SEND,
-	    (ipc_object_t *) &dest_port);
+	kr = ipc_port_translate_send(current_space(), dest_name_port, &dest_port);
+	if (kr == KERN_SUCCESS) {
+		ip_reference(dest_port);
+		ip_unlock(dest_port);
 
-	/*
-	 * The receive right of dest port might have gone away,
-	 * do not fail the receive in that case.
-	 */
-	if (kr == KERN_SUCCESS && IP_VALID(dest_port)) {
+		/*
+		 * The receive right of dest port might have gone away,
+		 * do not fail the receive in that case.
+		 */
 		ipc_port_link_special_reply_port(special_reply_port,
-		    dest_port);
+		    dest_port, FALSE);
 
-		/* release the send right */
-		ipc_port_release_send(dest_port);
+		ip_release(dest_port);
 	}
 	return MACH_MSG_SUCCESS;
 }
@@ -672,7 +670,7 @@ mach_msg_receive_results_complete(ipc_object_t object)
 	boolean_t get_turnstile = self->turnstile ? FALSE : TRUE;
 
 	if (io_otype(object) == IOT_PORT) {
-		__IGNORE_WCASTALIGN(port = (ipc_port_t) object);
+		port = ip_object_to_port(object);
 	} else {
 		assert(self->turnstile != TURNSTILE_NULL);
 		return;

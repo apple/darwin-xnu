@@ -118,10 +118,12 @@ struct image_params {
 	void            *ip_px_spa;
 	void            *ip_px_smpx;            /* MAC-specific spawn attrs. */
 	void            *ip_px_persona;         /* persona args */
+	void            *ip_px_pcred_info;      /* posix cred args */
 	void            *ip_cs_error;           /* codesigning error reason */
 
 	uint64_t ip_dyld_fsid;
 	uint64_t ip_dyld_fsobjid;
+	unsigned int    ip_simulator_binary;    /* simulator binary flags */
 };
 
 /*
@@ -139,6 +141,14 @@ struct image_params {
 #define IMGPF_EXEC                              0x00000100      /* exec */
 #define IMGPF_HIGH_BITS_ASLR    0x00000200      /* randomize high bits of ASLR slide */
 #define IMGPF_IS_64BIT_DATA             0x00000400      /* exec to a 64Bit register state */
+#define IMGPF_DRIVER             0x00000800      /* exec of a driver binary (no LC_MAIN) */
+#define IMGPF_NOJOP             0x80000000
 
+/*
+ * Simulator binary flags
+ */
+#define IMGPF_SB_DEFAULT         0               /* Default value, did not check if it is a simulator binary */
+#define IMGPF_SB_TRUE            1               /* Binary is a simulator binary */
+#define IMGPF_SB_FALSE           2               /* Binary is not a simulator binary */
 
 #endif  /* !_SYS_IMGACT */

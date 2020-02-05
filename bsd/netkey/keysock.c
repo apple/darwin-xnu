@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -87,8 +87,8 @@
 extern lck_mtx_t *raw_mtx;
 extern void key_init(struct protosw *, struct domain *);
 
-struct sockaddr key_dst = { 2, PF_KEY, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, } };
-struct sockaddr key_src = { 2, PF_KEY, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, } };
+struct sockaddr key_dst = { .sa_len = 2, .sa_family = PF_KEY, .sa_data = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, } };
+struct sockaddr key_src = { .sa_len = 2, .sa_family = PF_KEY, .sa_data = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, } };
 
 static void key_dinit(struct domain *);
 static int key_sendup0(struct rawcb *, struct mbuf *, int);

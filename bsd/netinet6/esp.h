@@ -65,7 +65,7 @@
 #ifndef _NETINET6_ESP_H_
 #define _NETINET6_ESP_H_
 #include <sys/appleapiopts.h>
-
+#include <net/multi_layer_pkt_log.h>
 
 struct esp {
 	u_int32_t       esp_spi;        /* ESP */
@@ -123,6 +123,8 @@ struct esp_algorithm {
 	int (*finalizeencrypt)(struct secasvar *, u_int8_t *, uint);
 };
 
+extern os_log_t esp_mpkl_log_object;
+
 extern const struct esp_algorithm *esp_algorithm_lookup(int);
 extern int esp_max_ivlen(void);
 
@@ -135,6 +137,8 @@ extern size_t esp_hdrsiz(struct ipsecrequest *);
 extern int esp_schedule(const struct esp_algorithm *, struct secasvar *);
 extern int esp_auth(struct mbuf *, size_t, size_t,
     struct secasvar *, u_char *);
+
+extern void esp_init(void);
 #endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* _NETINET6_ESP_H_ */

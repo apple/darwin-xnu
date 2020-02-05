@@ -808,9 +808,13 @@ nat464_translate_proto(pbuf_t *pbuf, struct nat464_addr *osrc,
 		proto = &ip6h->ip6_nxt;
 		break;
 	}
+	default:
+		return NT_DROP; /* We should never come here */
 	}
 
-	VERIFY(*proto == oproto);
+	if (*proto != oproto) {
+		return NT_DROP;
+	}
 
 	/*
 	 * We may want to manipulate csum flags in some cases

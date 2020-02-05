@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -74,7 +74,7 @@
 
 class IOCommandPool : public OSObject
 {
-	OSDeclareDefaultStructors(IOCommandPool)
+	OSDeclareDefaultStructors(IOCommandPool);
 
 
 protected:
@@ -199,7 +199,8 @@ protected:
  * doesn't wish to block until one does become available.
  * kIOReturnSuccess if the vCommand argument is valid.
  */
-	virtual IOReturn gatedGetCommand(IOCommand **command, bool blockForCommand);
+	virtual IOReturn gatedGetCommand(
+		LIBKERN_RETURNS_NOT_RETAINED IOCommand **command, bool blockForCommand);
 
 /*!
  * @function gatedReturnCommand

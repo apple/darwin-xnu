@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -328,12 +328,12 @@ extern struct pool pfr_kentry_pl;
 extern int path_mtu_discovery;
 
 struct pf_pool_limit pf_pool_limits[PF_LIMIT_MAX] = {
-	{ &pf_state_pl, PFSTATE_HIWAT },
-	{ &pf_app_state_pl, PFAPPSTATE_HIWAT },
-	{ &pf_src_tree_pl, PFSNODE_HIWAT },
-	{ &pf_frent_pl, PFFRAG_FRENT_HIWAT },
-	{ &pfr_ktable_pl, PFR_KTABLE_HIWAT },
-	{ &pfr_kentry_pl, PFR_KENTRY_HIWAT },
+	{ .pp = &pf_state_pl, .limit = PFSTATE_HIWAT },
+	{ .pp = &pf_app_state_pl, .limit = PFAPPSTATE_HIWAT },
+	{ .pp = &pf_src_tree_pl, .limit = PFSNODE_HIWAT },
+	{ .pp = &pf_frent_pl, .limit = PFFRAG_FRENT_HIWAT },
+	{ .pp = &pfr_ktable_pl, .limit = PFR_KTABLE_HIWAT },
+	{ .pp = &pfr_kentry_pl, .limit = PFR_KENTRY_HIWAT },
 };
 
 void *
@@ -2381,8 +2381,10 @@ pf_change_addr(struct pf_addr *a, u_int16_t *c, struct pf_addr *an, u_int8_t u,
 {
 	struct pf_addr  ao;
 
-	PF_ACPY(&ao, a, af);
-	PF_ACPY(a, an, afn);
+	if (af != afn) {
+		PF_ACPY(&ao, a, af);
+		PF_ACPY(a, an, afn);
+	}
 
 	switch (af) {
 	case AF_INET:
@@ -6081,24 +6083,6 @@ pf_is_dummynet_enabled(void)
 #endif /* DUMMYNET */
 }
 
-boolean_t
-pf_is_nlc_enabled(void)
-{
-#if DUMMYNET
-	if (__probable(!pf_is_dummynet_enabled())) {
-		return FALSE;
-	}
-
-	if (__probable(!is_nlc_enabled_glb)) {
-		return FALSE;
-	}
-
-	return TRUE;
-#else
-	return FALSE;
-#endif /* DUMMYNET */
-}
-
 #if DUMMYNET
 /*
  * When pf_test_dummynet() returns PF_PASS, the rule matching parameter "rm"
@@ -6347,7 +6331,6 @@ pf_test_dummynet(struct pf_rule **rm, int direction, struct pfi_kif *kif,
 			dnflow.fwa_ro6_pmtu = fwa->fwa_ro6_pmtu;
 			dnflow.fwa_origifp = fwa->fwa_origifp;
 			dnflow.fwa_mtu = fwa->fwa_mtu;
-			dnflow.fwa_alwaysfrag = fwa->fwa_alwaysfrag;
 			dnflow.fwa_unfragpartlen = fwa->fwa_unfragpartlen;
 			dnflow.fwa_exthdrs = fwa->fwa_exthdrs;
 		}
@@ -7826,7 +7809,7 @@ pf_test_state_icmp(struct pf_state **state, int direction, struct pfi_kif *kif,
 					pf_change_a6(saddr,
 					    &pd->hdr.icmp6->icmp6_cksum,
 					    &sk->gwy.addr, 0);
-					if (pf_lazy_makewritable(pd, NULL,
+					if (pf_lazy_makewritable(pd, pbuf,
 					    off + sizeof(struct icmp6_hdr)) ==
 					    NULL) {
 						return PF_DROP;
@@ -9340,6 +9323,7 @@ pf_route6(pbuf_t **pbufp, struct pf_rule *r, int dir, struct ifnet *oifp,
 	struct pf_addr           naddr;
 	struct pf_src_node      *sn = NULL;
 	int                      error = 0;
+	struct pf_mtag          *pf_mtag;
 
 	if (pbufp == NULL || !pbuf_is_valid(*pbufp) || r == NULL ||
 	    (dir != PF_IN && dir != PF_OUT) || oifp == NULL) {
@@ -9388,11 +9372,8 @@ pf_route6(pbuf_t **pbufp, struct pf_rule *r, int dir, struct ifnet *oifp,
 
 	/* Cheat. XXX why only in the v6addr case??? */
 	if (r->rt == PF_FASTROUTE) {
-		struct pf_mtag *pf_mtag;
-
-		if ((pf_mtag = pf_get_mtag(m0)) == NULL) {
-			goto bad;
-		}
+		pf_mtag = pf_get_mtag(m0);
+		ASSERT(pf_mtag != NULL);
 		pf_mtag->pftag_flags |= PF_TAG_GENERATED;
 		ip6_output(m0, NULL, NULL, 0, NULL, NULL, NULL);
 		return;
@@ -9433,6 +9414,24 @@ pf_route6(pbuf_t **pbufp, struct pf_rule *r, int dir, struct ifnet *oifp,
 			    "< sizeof (struct ip6_hdr)\n"));
 			goto bad;
 		}
+		pf_mtag = pf_get_mtag(m0);
+		/*
+		 * send refragmented packets.
+		 */
+		if ((pf_mtag->pftag_flags & PF_TAG_REFRAGMENTED) != 0) {
+			pf_mtag->pftag_flags &= ~PF_TAG_REFRAGMENTED;
+			/*
+			 * nd6_output() frees packet chain in both success and
+			 * failure cases.
+			 */
+			error = nd6_output(ifp, ifp, m0, dst, NULL, NULL);
+			m0 = NULL;
+			if (error) {
+				DPFPRINTF(PF_DEBUG_URGENT, ("pf_route6:"
+				    "dropped refragmented packet\n"));
+			}
+			goto done;
+		}
 		ip6 = mtod(m0, struct ip6_hdr *);
 	}
 
@@ -9460,6 +9459,7 @@ done:
 bad:
 	if (m0) {
 		m_freem(m0);
+		m0 = NULL;
 	}
 	goto done;
 }
@@ -9648,6 +9648,11 @@ pf_test(int dir, struct ifnet *ifp, pbuf_t **pbufp,
 		return PF_PASS;
 	}
 
+	if (pbuf->pb_packet_len < (int)sizeof(*h)) {
+		REASON_SET(&reason, PFRES_SHORT);
+		return PF_DROP;
+	}
+
 	/* initialize enough of pd for the done label */
 	h = pbuf->pb_data;
 	pd.mp = pbuf;
@@ -9665,13 +9670,6 @@ pf_test(int dir, struct ifnet *ifp, pbuf_t **pbufp,
 	pd.ttl = h->ip_ttl;
 	pd.tot_len = ntohs(h->ip_len);
 	pd.eh = eh;
-
-	if (pbuf->pb_packet_len < (int)sizeof(*h)) {
-		action = PF_DROP;
-		REASON_SET(&reason, PFRES_SHORT);
-		log = 1;
-		goto done;
-	}
 
 #if DUMMYNET
 	if (fwa != NULL && fwa->fwa_pf_rule != NULL) {
@@ -10209,8 +10207,14 @@ pf_test6(int dir, struct ifnet *ifp, pbuf_t **pbufp,
 	struct pf_pdesc          pd;
 	int                      off, terminal = 0, dirndx, rh_cnt = 0;
 	u_int8_t                 nxt;
+	boolean_t                fwd = FALSE;
 
 	LCK_MTX_ASSERT(pf_lock, LCK_MTX_ASSERT_OWNED);
+
+	ASSERT(ifp != NULL);
+	if ((dir == PF_OUT) && (pbuf->pb_ifp) && (ifp != pbuf->pb_ifp)) {
+		fwd = TRUE;
+	}
 
 	if (!pf_status.running) {
 		return PF_PASS;
@@ -10239,8 +10243,12 @@ pf_test6(int dir, struct ifnet *ifp, pbuf_t **pbufp,
 		return PF_PASS;
 	}
 
-	h = pbuf->pb_data;
+	if (pbuf->pb_packet_len < (int)sizeof(*h)) {
+		REASON_SET(&reason, PFRES_SHORT);
+		return PF_DROP;
+	}
 
+	h = pbuf->pb_data;
 	nxt = h->ip6_nxt;
 	off = ((caddr_t)h - (caddr_t)pbuf->pb_data) + sizeof(struct ip6_hdr);
 	pd.mp = pbuf;
@@ -10264,13 +10272,6 @@ pf_test6(int dir, struct ifnet *ifp, pbuf_t **pbufp,
 		pd.flowsrc = *pbuf->pb_flowsrc;
 		pd.flowhash = *pbuf->pb_flowid;
 		pd.pktflags = (*pbuf->pb_flags & PKTF_FLOW_MASK);
-	}
-
-	if (pbuf->pb_packet_len < (int)sizeof(*h)) {
-		action = PF_DROP;
-		REASON_SET(&reason, PFRES_SHORT);
-		log = 1;
-		goto done;
 	}
 
 #if DUMMYNET
@@ -10302,7 +10303,6 @@ nonormalize:
 		goto done;
 	}
 #endif
-
 	pd.src = (struct pf_addr *)(uintptr_t)&h->ip6_src;
 	pd.dst = (struct pf_addr *)(uintptr_t)&h->ip6_dst;
 	PF_ACPY(&pd.baddr, pd.src, AF_INET6);
@@ -10322,7 +10322,7 @@ nonormalize:
 	pd.pf_mtag = pf_get_mtag_pbuf(pbuf);
 
 	do {
-		switch (nxt) {
+		switch (pd.proto) {
 		case IPPROTO_FRAGMENT: {
 			struct ip6_frag ip6f;
 
@@ -10336,7 +10336,7 @@ nonormalize:
 				log = 1;
 				goto done;
 			}
-			pd.proto = nxt = ip6f.ip6f_nxt;
+			pd.proto = ip6f.ip6f_nxt;
 #if DUMMYNET
 			/* Traffic goes through dummynet first */
 			action = pf_test_dummynet(&r, dir, kif, &pbuf, &pd,
@@ -10377,7 +10377,7 @@ nonormalize:
 			} else {
 				off += (opt6.ip6e_len + 1) * 8;
 			}
-			nxt = opt6.ip6e_nxt;
+			pd.proto = opt6.ip6e_nxt;
 			/* goto the next header */
 			break;
 		}
@@ -10800,11 +10800,17 @@ done:
 		*pbufp = NULL;
 		action = PF_PASS;
 	} else if (r->rt) {
-		/* pf_route6 can free the mbuf causing *m0 to become NULL */
+		/* pf_route6 can free the mbuf causing *pbufp to become NULL */
 		pf_route6(pbufp, r, dir, kif->pfik_ifp, s, &pd);
 	}
 #endif /* 0 */
 
+	/* if reassembled packet passed, create new fragments */
+	struct pf_fragment_tag *ftag = NULL;
+	if ((action == PF_PASS) && (*pbufp != NULL) && (fwd) &&
+	    ((ftag = pf_find_fragment_tag_pbuf(*pbufp)) != NULL)) {
+		action = pf_refragment6(ifp, pbufp, ftag);
+	}
 	return action;
 }
 #endif /* INET6 */
@@ -10907,6 +10913,51 @@ struct pf_mtag *
 pf_get_mtag_pbuf(pbuf_t *pbuf)
 {
 	return pf_find_mtag_pbuf(pbuf);
+}
+
+struct pf_fragment_tag *
+pf_copy_fragment_tag(struct mbuf *m, struct pf_fragment_tag *ftag, int how)
+{
+	struct m_tag *tag;
+	struct pf_mtag *pftag = pf_find_mtag(m);
+
+	tag = m_tag_create(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_PF_REASS,
+	    sizeof(*ftag), how, m);
+	if (tag == NULL) {
+		return NULL;
+	} else {
+		m_tag_prepend(m, tag);
+		tag = tag + 1;
+	}
+	bcopy(ftag, tag, sizeof(*ftag));
+	pftag->pftag_flags |= PF_TAG_REASSEMBLED;
+	return (struct pf_fragment_tag *)tag;
+}
+
+struct pf_fragment_tag *
+pf_find_fragment_tag(struct mbuf *m)
+{
+	struct m_tag *tag;
+	struct pf_fragment_tag *ftag;
+	struct pf_mtag *pftag = pf_find_mtag(m);
+
+	tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_PF_REASS,
+	    NULL);
+	VERIFY((tag == NULL) || (pftag->pftag_flags & PF_TAG_REASSEMBLED));
+	if (tag != NULL) {
+		tag = tag + 1;
+	}
+	ftag = (struct pf_fragment_tag *)tag;
+	return ftag;
+}
+
+struct pf_fragment_tag *
+pf_find_fragment_tag_pbuf(pbuf_t *pbuf)
+{
+	struct pf_mtag *mtag = pf_find_mtag_pbuf(pbuf);
+
+	return (mtag->pftag_flags & PF_TAG_REASSEMBLED) ?
+	       pbuf->pb_pf_fragtag : NULL;
 }
 
 uint64_t

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -80,13 +80,13 @@
 #include <sys/shm_internal.h>
 #include <sys/aio_kern.h>
 
-struct  timezone tz = { 0, 0 };
+struct  timezone tz = { .tz_minuteswest = 0, .tz_dsttime = 0 };
 
 #if CONFIG_EMBEDDED
 #define NPROC 1000          /* Account for TOTAL_CORPSES_ALLOWED by making this slightly lower than we can. */
 #define NPROC_PER_UID 950
 #else
-#define NPROC (20 + 16 * 32)
+#define NPROC (20 + 32 * 32)
 #define NPROC_PER_UID (NPROC/2)
 #endif
 

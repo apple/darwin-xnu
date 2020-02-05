@@ -114,6 +114,10 @@ kxld_sym_init_from_macho64(KXLDSym *sym, char *strtab, const struct nlist_64 *sr
 	sym->base_addr = src->n_value;
 	sym->link_addr = sym->base_addr;
 
+	if (!strcmp("__ZN15OSMetaClassBase25_RESERVEDOSMetaClassBase3Ev", sym->name)) {
+		sym->name = (char *)(uintptr_t) "__ZN15OSMetaClassBase8DispatchE5IORPC";
+	}
+
 	rval = init_predicates(sym, src->n_type, src->n_desc);
 	require_noerr(rval, finish);
 

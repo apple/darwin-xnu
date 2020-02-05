@@ -65,6 +65,7 @@ kcdata_type_def = {
     'STACKSHOT_KCCONTAINER_THREAD':     0x904,
     'STACKSHOT_KCTYPE_DONATING_PIDS':   0x907,
     'STACKSHOT_KCTYPE_SHAREDCACHE_LOADINFO': 0x908,
+    'STACKSHOT_KCTYPE_THREAD_NAME':     0x909,
     'STACKSHOT_KCTYPE_KERN_STACKFRAME': 0x90A,
     'STACKSHOT_KCTYPE_KERN_STACKFRAME64': 0x90B,
     'STACKSHOT_KCTYPE_USER_STACKFRAME': 0x90C,
@@ -95,6 +96,8 @@ kcdata_type_def = {
     'STACKSHOT_KCTYPE_ASID' : 0x925,
     'STACKSHOT_KCTYPE_PAGE_TABLES' : 0x926,
     'STACKSHOT_KCTYPE_SYS_SHAREDCACHE_LAYOUT' : 0x927,
+    'STACKSHOT_KCTYPE_THREAD_DISPATCH_QUEUE_LABEL' : 0x928,
+    'STACKSHOT_KCTYPE_THREAD_TURNSTILEINFO' : 0x929,
 
     'STACKSHOT_KCTYPE_TASK_DELTA_SNAPSHOT': 0x940,
     'STACKSHOT_KCTYPE_THREAD_DELTA_SNAPSHOT': 0x941,
@@ -821,6 +824,9 @@ KNOWN_TYPES_COLLECTION[0x906] = KCTypeDescription(0x906, (
     legacy_size = 0x68
 )
 
+KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_THREAD_DISPATCH_QUEUE_LABEL')] = KCSubTypeElement('dispatch_queue_label', KCSUBTYPE_TYPE.KC_ST_CHAR,
+                          KCSubTypeElement.GetSizeForArray(64, 1), 0, 1)
+
 KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_THREAD_DELTA_SNAPSHOT')] = KCTypeDescription(GetTypeForName('STACKSHOT_KCTYPE_THREAD_DELTA_SNAPSHOT'), (
     KCSubTypeElement.FromBasicCtype('tds_thread_id', KCSUBTYPE_TYPE.KC_ST_UINT64, 0),
     KCSubTypeElement.FromBasicCtype('tds_voucher_identifier', KCSUBTYPE_TYPE.KC_ST_UINT64, 8),
@@ -860,7 +866,7 @@ KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_TASK_DELTA_SNAPSHOT')] =
 )
 
 
-KNOWN_TYPES_COLLECTION[0x909] = KCSubTypeElement('pth_name', KCSUBTYPE_TYPE.KC_ST_CHAR, KCSubTypeElement.GetSizeForArray(64, 1), 0, 1)
+KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_THREAD_NAME')] = KCSubTypeElement('pth_name', KCSUBTYPE_TYPE.KC_ST_CHAR, KCSubTypeElement.GetSizeForArray(64, 1), 0, 1)
 
 KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_SYS_SHAREDCACHE_LAYOUT')] = KCTypeDescription(GetTypeForName('STACKSHOT_KCTYPE_SYS_SHAREDCACHE_LAYOUT'), (
     KCSubTypeElement('imageLoadAddress', KCSUBTYPE_TYPE.KC_ST_UINT64, 8, 0, 0),
@@ -996,6 +1002,16 @@ KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_THREAD_WAITINFO')] = KCT
                         KCSubTypeElement.FromBasicCtype('wait_type', KCSUBTYPE_TYPE.KC_ST_UINT8, 24)
             ),
             'thread_waitinfo')
+
+KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_THREAD_TURNSTILEINFO')] = KCTypeDescription(GetTypeForName('STACKSHOT_KCTYPE_THREAD_TURNSTILEINFO'),
+            (
+                        KCSubTypeElement.FromBasicCtype('waiter', KCSUBTYPE_TYPE.KC_ST_UINT64, 0),
+                        KCSubTypeElement.FromBasicCtype('turnstile_context', KCSUBTYPE_TYPE.KC_ST_UINT64, 8),
+                        KCSubTypeElement.FromBasicCtype('turnstile_priority', KCSUBTYPE_TYPE.KC_ST_UINT8, 16),
+                        KCSubTypeElement.FromBasicCtype('number_of_hops', KCSUBTYPE_TYPE.KC_ST_UINT8, 17),
+                        KCSubTypeElement.FromBasicCtype('turnstile_flags', KCSUBTYPE_TYPE.KC_ST_UINT64, 18),
+            ),
+            'thread_turnstileinfo')
 
 KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_THREAD_GROUP_SNAPSHOT')] = KCTypeDescription(GetTypeForName('STACKSHOT_KCTYPE_THREAD_GROUP'),
             (
@@ -1187,7 +1203,7 @@ KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_PAGE_TABLES')] = KCTypeD
 )
 
 def GetSecondsFromMATime(mat, tb):
-    return (float(mat) * tb['numer']) / tb['denom']
+    return (float(long(mat) * tb['numer']) / tb['denom']) / 1e9
 
 def FindLibraryForAddress(liblist, address):
     current_lib = None
@@ -1283,6 +1299,11 @@ STACKSHOT_WAITOWNER_MTXSPIN     = (UINT64_MAX - 5)
 STACKSHOT_WAITOWNER_THREQUESTED = (UINT64_MAX - 6)
 STACKSHOT_WAITOWNER_SUSPENDED   = (UINT64_MAX - 7)
 
+STACKSHOT_TURNSTILE_STATUS_UNKNOWN      = 0x01
+STACKSHOT_TURNSTILE_STATUS_LOCKED_WAITQ = 0x02
+STACKSHOT_TURNSTILE_STATUS_WORKQUEUE    = 0x04
+STACKSHOT_TURNSTILE_STATUS_THREAD       = 0x08
+
 def formatWaitInfo(info):
     s = 'thread %d: ' % info['waiter'];
     type = info['wait_type']
@@ -1370,13 +1391,50 @@ def formatWaitInfo(info):
             s += ", unknown owner"
         s += ", workloop id %x" % context
     elif type == kThreadWaitOnProcess:
-        s += "waitpid, for pid %d" % owner
+        if owner == 2**64-1:
+            s += "waitpid, for any children"
+        elif 2**32 <= owner and owner < 2**64-1:
+            s += "waitpid, for process group %d" % abs(owner - 2**64)
+        else:
+            s += "waitpid, for pid %d" % owner
 
     else:
         s += "unknown type %d (owner %d, context %x)" % (type, owner, context)
 
     return s
+
+def formatTurnstileInfo(ti):
+    if ti is None:
+        return " [no turnstile]"
+
+    ts_flags = int(ti['turnstile_flags'])
+    ctx = int(ti['turnstile_context'])
+    hop = int(ti['number_of_hops'])
+    prio = int(ti['turnstile_priority'])
+    if ts_flags & STACKSHOT_TURNSTILE_STATUS_LOCKED_WAITQ:
+        return " [turnstile was in process of being updated]"
+    if ts_flags & STACKSHOT_TURNSTILE_STATUS_WORKQUEUE:
+        return " [blocked on workqueue: 0x%x, hops: %x, priority: %d]" % (ctx, hop, prio)
+    if ts_flags & STACKSHOT_TURNSTILE_STATUS_THREAD:
+        return " [blocked on: %d, hops: %x, priority: %d]" % (ctx, hop, prio)
+    if ts_flags & STACKSHOT_TURNSTILE_STATUS_UNKNOWN:
+        return " [turnstile with unknown inheritor]"
+
+    return " [unknown turnstile status!]"
         
+def formatWaitInfoWithTurnstiles(waitinfos, tsinfos):
+    wis_tis = []
+    for w in waitinfos:
+        found_pair = False
+        for t in tsinfos:
+            if int(w['waiter']) == int(t['waiter']):
+                wis_tis.append((w, t))
+                found_pair = True
+                break
+        if not found_pair:
+            wis_tis.append((w, None))
+
+    return map(lambda (wi, ti): formatWaitInfo(wi) + formatTurnstileInfo(ti), wis_tis)
 
 def SaveStackshotReport(j, outfile_name, incomplete):
     import time
@@ -1514,6 +1572,9 @@ def SaveStackshotReport(j, outfile_name, incomplete):
             thsnap["qosEffective"] = threadsnap["ths_eqos"]
             thsnap["qosRequested"] = threadsnap["ths_rqos"]
 
+            if "pth_name" in thdata:
+                thsnap["name"] = thdata["pth_name"];
+
             if threadsnap['ths_continuation']:
                 thsnap["continuation"] = GetSymbolInfoForFrame(AllImageCatalog, pr_libs, threadsnap['ths_continuation'])
             if "kernel_stack_frames" in thdata:
@@ -1535,7 +1596,9 @@ def SaveStackshotReport(j, outfile_name, incomplete):
             if threadsnap['ths_wait_event']:
                 thsnap["waitEvent"] = GetSymbolInfoForFrame(AllImageCatalog, pr_libs, threadsnap['ths_wait_event'])
 
-        if 'thread_waitinfo' in piddata:
+        if 'thread_waitinfo' in piddata and 'thread_turnstileinfo' in piddata:
+            tsnap['waitInfo'] = formatWaitInfoWithTurnstiles(piddata['thread_waitinfo'] , piddata['thread_turnstileinfo'])
+        elif 'thread_waitinfo' in piddata:
             tsnap['waitInfo'] = map(formatWaitInfo, piddata['thread_waitinfo'])
 
     obj['binaryImages'] = AllImageCatalog
@@ -1616,6 +1679,9 @@ def iterate_kcdatas(kcdata_file):
         iterator = kcdata_item_iterator(data)
         kcdata_buffer = KCObject.FromKCItem(iterator.next())
         if not isinstance(kcdata_buffer, KCBufferObject):
+            iterator = kcdata_item_iterator(data[16:])
+            kcdata_buffer = KCObject.FromKCItem(iterator.next())
+        if not isinstance(kcdata_buffer, KCBufferObject):
             try:
                 decoded = base64.b64decode(data)
             except:
@@ -1641,6 +1707,8 @@ def iterate_kcdatas(kcdata_file):
 
         for magic in iterator:
             kcdata_buffer = KCObject.FromKCItem(magic)
+            if kcdata_buffer.i_type == 0:
+                continue
             if not isinstance(kcdata_buffer, KCBufferObject):
                 raise Exception, "unknown file type"
             kcdata_buffer.ReadItems(iterator)

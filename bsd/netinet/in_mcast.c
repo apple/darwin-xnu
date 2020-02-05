@@ -2772,11 +2772,6 @@ inp_set_multicast_if(struct inpcb *inp, struct sockopt *sopt)
 				return EADDRNOTAVAIL;
 			}
 		}
-		/* XXX remove? */
-#ifdef IGMP_DEBUG0
-		IGMP_PRINTF(("%s: ifp = 0x%llx, addr = %s\n", __func__,
-		    (uint64_t)VM_KERNEL_ADDRPERM(ifp), inet_ntoa(addr)));
-#endif
 	}
 
 	/* Reject interfaces which do not support multicast. */

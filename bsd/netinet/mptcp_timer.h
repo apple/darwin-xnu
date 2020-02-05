@@ -35,10 +35,12 @@
 #define MPT_TIMEWAIT    1       /* timewait timer */
 
 __BEGIN_DECLS
-extern uint32_t mptcp_timer(struct mppcbinfo *);
-extern void mptcp_start_timer(struct mptses *, int);
-extern void mptcp_cancel_timer(struct mptcb *, int);
-extern void mptcp_cancel_all_timers(struct mptcb *);
+extern uint32_t mptcp_timer(struct mppcbinfo *mppi);
+extern void mptcp_start_timer(struct mptses *mpte, int timer_type);
+extern void mptcp_cancel_timer(struct mptcb *mp_tp, int timer_type);
+extern void mptcp_cancel_all_timers(struct mptcb *mp_tp);
+extern void mptcp_init_urgency_timer(struct mptses *mpte);
+extern void mptcp_set_urgency_timer(struct mptses *mpte);
 __END_DECLS
 
 #endif /* BSD_KERNEL_PRIVATE */

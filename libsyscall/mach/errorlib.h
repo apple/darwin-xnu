@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -97,7 +97,7 @@ struct error_subsystem {
 	const struct error_sparse_map   *map_table;
 	int                             map_count;
 };
-#define errorlib_system_null    { 0, NULL, NULL, NULL, 0 }
+#define errorlib_system_null    { NULL, 0, NULL, NULL, 0 }
 
 struct error_system {
 	int                             max_sub;
@@ -106,7 +106,7 @@ struct error_system {
 	const struct error_sparse_map   *map_table;
 	int                             map_count;
 };
-#define errorlib_sub_null       { NULL, 0, NULL, NULL, 0 }
+#define errorlib_sub_null       { 0, NULL, NULL, NULL, 0 }
 
 extern const struct error_system        _mach_errors[err_max_system + 1];
 char *mach_error_string_int(mach_error_t, boolean_t *);

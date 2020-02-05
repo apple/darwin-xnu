@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005-2008 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2005-2018 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -26,8 +26,6 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#define MACH__POSIX_C_SOURCE_PRIVATE 1  /* pulls in suitable savearea from
-	                                 * mach/ppc/thread_status.h */
 #include <arm/caches_internal.h>
 #include <arm/proc_reg.h>
 
@@ -44,7 +42,7 @@
 #include <sys/kauth.h>
 #include <sys/dtrace.h>
 #include <sys/dtrace_impl.h>
-#include <libkern/OSAtomic.h>
+#include <machine/atomic.h>
 #include <kern/simple_lock.h>
 #include <kern/sched_prim.h>            /* for thread_wakeup() */
 #include <kern/thread_call.h>
@@ -123,7 +121,7 @@ xcRemote(void *foo)
 		(pArg->f)(pArg->arg);
 	}
 
-	if (hw_atomic_sub(&dt_xc_sync, 1) == 0) {
+	if (os_atomic_dec(&dt_xc_sync, relaxed) == 0) {
 		thread_wakeup((event_t) &dt_xc_sync);
 	}
 }

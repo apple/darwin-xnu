@@ -654,13 +654,13 @@ zcache_canary_validate(zone_t zone, void *element)
 
 	vm_offset_t primary_value = (*primary ^ (uintptr_t)element);
 	if (primary_value != zcache_canary) {
-		panic("Zone cache element was used after free! Element %p was corrupted at beginning; Expected %p but found %p; canary %p",
-		    element, (void *)(zcache_canary ^ (uintptr_t)element), (void *)(*primary), (void *)zcache_canary);
+		panic("Zone cache element was used after free! Element %p was corrupted at beginning; Expected %p but found %p; canary %p; zone %p (%s)",
+		    element, (void *)(zcache_canary ^ (uintptr_t)element), (void *)(*primary), (void *)zcache_canary, zone, zone->zone_name);
 	}
 
 	vm_offset_t backup_value = (*backup ^ (uintptr_t)element);
 	if (backup_value != zcache_canary) {
-		panic("Zone cache element was used after free! Element %p was corrupted at end; Expected %p but found %p; canary %p",
-		    element, (void *)(zcache_canary ^ (uintptr_t)element), (void *)(*backup), (void *)zcache_canary);
+		panic("Zone cache element was used after free! Element %p was corrupted at end; Expected %p but found %p; canary %p; zone %p (%s)",
+		    element, (void *)(zcache_canary ^ (uintptr_t)element), (void *)(*backup), (void *)zcache_canary, zone, zone->zone_name);
 	}
 }

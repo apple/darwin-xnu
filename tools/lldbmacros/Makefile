@@ -38,11 +38,13 @@ LLDBMACROS_PYTHON_FILES = $(LLDBMACROS_USERDEBUG_FILES) \
 	core/xnu_lldb_init.py \
 	plugins/__init__.py \
 	plugins/zprint_perf_log.py \
+	sysregdoc/AArch64-esr_el1.xml \
 	atm.py \
 	bank.py \
 	turnstile.py \
 	kevent.py \
 	workqueue.py \
+	ulock.py \
 	xnu.py \
 	xnudefines.py \
 	ktrace.py \
@@ -75,7 +77,8 @@ LLDBMACROS_PYTHON_FILES = $(LLDBMACROS_USERDEBUG_FILES) \
 	waitq.py \
 	pgtrace.py \
 	xnutriage.py \
-	zonetriage.py
+	zonetriage.py \
+	sysreg.py
 
 ifneq ($(PLATFORM),MacOSX)
 	LLDBMACROS_PYTHON_FILES+= \

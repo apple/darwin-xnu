@@ -5,7 +5,11 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 
-T_GLOBAL_META(T_META_NAMESPACE("xnu.quicktest"), T_META_CHECK_LEAKS(false));
+T_GLOBAL_META(
+	T_META_NAMESPACE("xnu.quicktest"),
+	T_META_CHECK_LEAKS(false),
+	T_META_RUN_CONCURRENTLY(true)
+	);
 
 T_DECL(getpriority_setpriority, "Tests getpriority and setpriority system calls", T_META_ASROOT(true))
 {

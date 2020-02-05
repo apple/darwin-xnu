@@ -206,7 +206,7 @@ IOWorkLoop::workLoopWithOptions(IOOptionBits options)
 		me->reserved = IONew(ExpansionData, 1);
 		if (!me->reserved) {
 			me->release();
-			return 0;
+			return NULL;
 		}
 		bzero(me->reserved, sizeof(ExpansionData));
 		me->reserved->options = options;
@@ -214,7 +214,7 @@ IOWorkLoop::workLoopWithOptions(IOOptionBits options)
 
 	if (me && !me->init()) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -250,45 +250,45 @@ IOWorkLoop::free()
 
 		for (event = eventChain; event; event = next) {
 			next = event->getNext();
-			event->setWorkLoop(0);
-			event->setNext(0);
+			event->setWorkLoop(NULL);
+			event->setNext(NULL);
 			event->release();
 		}
-		eventChain = 0;
+		eventChain = NULL;
 
 		for (event = passiveEventChain; event; event = next) {
 			next = event->getNext();
-			event->setWorkLoop(0);
-			event->setNext(0);
+			event->setWorkLoop(NULL);
+			event->setNext(NULL);
 			event->release();
 		}
-		passiveEventChain = 0;
+		passiveEventChain = NULL;
 
 		// Either we have a partial initialization to clean up
 		// or the workThread itself is performing hari-kari.
 		// Either way clean up all of our resources and return.
 
 		if (controlG) {
-			controlG->workLoop = 0;
+			controlG->workLoop = NULL;
 			controlG->release();
-			controlG = 0;
+			controlG = NULL;
 		}
 
 		if (workToDoLock) {
 			IOSimpleLockFree(workToDoLock);
-			workToDoLock = 0;
+			workToDoLock = NULL;
 		}
 
 		if (gateLock) {
 			IORecursiveLockFree(gateLock);
-			gateLock = 0;
+			gateLock = NULL;
 		}
 
 		IOStatisticsUnregisterCounter();
 
 		if (reserved) {
 			IODelete(reserved, ExpansionData, 1);
-			reserved = 0;
+			reserved = NULL;
 		}
 
 		super::free();
@@ -457,7 +457,7 @@ restartThread:
 exitThread:
 	closeGate();
 	thread_t thread = workThread;
-	workThread = 0; // Say we don't have a loop and free ourselves
+	workThread = NULL; // Say we don't have a loop and free ourselves
 	openGate();
 
 	free();
@@ -589,7 +589,7 @@ IOWorkLoop::_maintRequest(void *inC, void *inD, void *, void *)
 
 			inEvent->retain();
 			inEvent->setWorkLoop(this);
-			inEvent->setNext(0);
+			inEvent->setNext(NULL);
 
 			/* Check if this is a passive or active event source being added */
 			if (eventSourcePerformsWork(inEvent)) {
@@ -627,7 +627,7 @@ IOWorkLoop::_maintRequest(void *inC, void *inD, void *, void *)
 				if (eventChain == inEvent) {
 					eventChain = inEvent->getNext();
 				} else {
-					IOEventSource *event, *next = 0;
+					IOEventSource *event, *next = NULL;
 
 					event = eventChain;
 					if (event) {
@@ -646,7 +646,7 @@ IOWorkLoop::_maintRequest(void *inC, void *inD, void *, void *)
 				if (passiveEventChain == inEvent) {
 					passiveEventChain = inEvent->getNext();
 				} else {
-					IOEventSource *event, *next = 0;
+					IOEventSource *event, *next = NULL;
 
 					event = passiveEventChain;
 					if (event) {
@@ -663,8 +663,8 @@ IOWorkLoop::_maintRequest(void *inC, void *inD, void *, void *)
 				}
 			}
 
-			inEvent->setWorkLoop(0);
-			inEvent->setNext(0);
+			inEvent->setWorkLoop(NULL);
+			inEvent->setNext(NULL);
 			inEvent->release();
 			SETP(&fFlags, kLoopRestart);
 		}

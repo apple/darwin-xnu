@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -32,6 +32,12 @@
 #define _OS_OSSYMBOL_H
 
 #include <libkern/c++/OSString.h>
+#include <libkern/c++/OSPtr.h>
+
+class OSSymbol;
+
+typedef OSPtr<OSSymbol> OSSymbolPtr;
+typedef OSPtr<const OSSymbol> OSSymbolConstPtr;
 
 /*!
  * @header
@@ -82,7 +88,7 @@ class OSSymbol : public OSString
 {
 	friend class OSSymbolPool;
 
-	OSDeclareAbstractStructors(OSSymbol)
+	OSDeclareAbstractStructors(OSSymbol);
 
 private:
 
@@ -245,7 +251,7 @@ public:
  * new OSSymbol with a retain count of 1,
  * or increments the retain count of the existing instance.
  */
-	static const OSSymbol * withString(const OSString * aString);
+	static OSSymbolConstPtr withString(const OSString * aString);
 
 
 /*!
@@ -272,7 +278,7 @@ public:
  * new OSSymbol with a retain count of 1,
  * or increments the retain count of the existing instance.
  */
-	static const OSSymbol * withCString(const char * cString);
+	static OSSymbolConstPtr withCString(const char * cString);
 
 
 /*!
@@ -302,7 +308,7 @@ public:
  * new OSSymbol with a retain count of 1,
  * or increments the retain count of the existing instance.
  */
-	static const OSSymbol * withCStringNoCopy(const char * cString);
+	static OSSymbolConstPtr withCStringNoCopy(const char * cString);
 
 /*!
  * @function existingSymbolForString
@@ -321,7 +327,7 @@ public:
  * The returned OSSymbol object is returned with an incremented refcount
  * that needs to be released.
  */
-	static const OSSymbol* existingSymbolForString(const OSString *aString);
+	static OSSymbolConstPtr existingSymbolForString(const OSString *aString);
 
 /*!
  * @function existingSymbolForCString
@@ -340,7 +346,7 @@ public:
  * The returned OSSymbol object is returned with an incremented refcount
  * that needs to be released.
  */
-	static const OSSymbol* existingSymbolForCString(const char *aCString);
+	static OSSymbolConstPtr existingSymbolForCString(const char *aCString);
 
 /*!
  * @function isEqualTo

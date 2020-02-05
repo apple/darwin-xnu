@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2002-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -457,20 +457,20 @@ struct test {
 };
 
 struct test tests[] = {
-	{ "empty", test_empty, sizeof(test_empty), TRUE },
-	{ "simple", test_simple, sizeof(test_simple), TRUE },
-	{ "vendor", test_vendor, sizeof(test_vendor), TRUE },
-	{ "no_end", test_no_end, sizeof(test_no_end), TRUE },
-	{ "no magic", test_no_magic, sizeof(test_no_magic), FALSE },
-	{ "short", test_short, sizeof(test_short), FALSE },
-	{ NULL, NULL, 0, FALSE },
+	{ .name = "empty", .data = test_empty, .len = sizeof(test_empty), .result = TRUE },
+	{ .name = "simple", .data = test_simple, .len = sizeof(test_simple), .result = TRUE },
+	{ .name = "vendor", .data = test_vendor, .len = sizeof(test_vendor), .result = TRUE },
+	{ .name = "no_end", .data = test_no_end, .len = sizeof(test_no_end), .result = TRUE },
+	{ .name = "no magic", .data = test_no_magic, .len = sizeof(test_no_magic), .result = FALSE },
+	{ .name = "short", .data = test_short, .len = sizeof(test_short), .result =  FALSE },
+	{ .name = NULL, .data = NULL, .len = 0, .result = FALSE },
 };
 
 
 static char buf[2048];
 
 int
-main()
+main(void)
 {
 	int         i;
 	dhcpol_t    options;

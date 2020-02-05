@@ -484,13 +484,14 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 #if IPSEC
 	/*
 	 * UDP to port 4500 with a payload where the first four bytes are
-	 * not zero is a UDP encapsulated IPSec packet. Packets where
+	 * not zero is a UDP encapsulated IPsec packet. Packets where
 	 * the payload is one byte and that byte is 0xFF are NAT keepalive
-	 * packets. Decapsulate the ESP packet and carry on with IPSec input
+	 * packets. Decapsulate the ESP packet and carry on with IPsec input
 	 * or discard the NAT keep-alive.
 	 */
 	if (ipsec_bypass == 0 && (esp_udp_encap_port & 0xFFFF) != 0 &&
-	    uh->uh_dport == ntohs((u_short)esp_udp_encap_port)) {
+	    (uh->uh_dport == ntohs((u_short)esp_udp_encap_port) ||
+	    uh->uh_sport == ntohs((u_short)esp_udp_encap_port))) {
 		int payload_len = ulen - sizeof(struct udphdr) > 4 ? 4 :
 		    ulen - sizeof(struct udphdr);
 
@@ -515,7 +516,7 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 			goto bad;
 		} else if (payload_len == 4 && *(u_int32_t*)(void *)
 		    ((caddr_t)uh + sizeof(struct udphdr)) != 0) {
-			/* UDP encapsulated IPSec packet to pass through NAT */
+			/* UDP encapsulated IPsec packet to pass through NAT */
 			/* preserve the udp header */
 			*offp = off + sizeof(struct udphdr);
 			return esp6_input(mp, offp, IPPROTO_UDP);

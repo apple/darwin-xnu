@@ -45,6 +45,10 @@ __BEGIN_DECLS
 #include <libkern/prelink.h>
 #include <stdarg.h>
 
+#if KASAN
+#include <san/kasan.h>
+#endif
+
 #if PRAGMA_MARK
 #pragma mark Constants &c.
 #endif /* PRAGMA_MARK */
@@ -95,12 +99,12 @@ kern_os_malloc(size_t size)
 {
 	void *mem;
 	if (size == 0) {
-		return 0;
+		return NULL;
 	}
 
 	mem = kallocp_tag_bt((vm_size_t *)&size, VM_KERN_MEMORY_LIBKERN);
 	if (!mem) {
-		return 0;
+		return NULL;
 	}
 
 #if OSALLOCDEBUG
@@ -147,13 +151,13 @@ kern_os_realloc(
 
 	if (nsize == 0) {
 		kfree_addr(addr);
-		return 0;
+		return NULL;
 	}
 
 	nmem = kallocp_tag_bt((vm_size_t *)&nsize, VM_KERN_MEMORY_LIBKERN);
 	if (!nmem) {
 		kfree_addr(addr);
-		return 0;
+		return NULL;
 	}
 
 #if OSALLOCDEBUG
@@ -177,13 +181,13 @@ kern_os_realloc(
 *********************************************************************/
 
 #if __GNUC__ >= 3
-void
+void __dead2
 __cxa_pure_virtual( void )
 {
 	panic("%s", __FUNCTION__);
 }
 #else
-void
+void __dead2
 __pure_virtual( void )
 {
 	panic("%s", __FUNCTION__);
@@ -236,6 +240,9 @@ __END_DECLS
 * kern_os C++ Runtime Load/Unload
 *********************************************************************/
 
+#if defined(HAS_APPLE_PAC)
+#include <ptrauth.h>
+#endif /* defined(HAS_APPLE_PAC) */
 
 typedef void (*structor_t)(void);
 
@@ -310,6 +317,10 @@ OSRuntimeCallStructorsInSection(
 					break;
 				}
 
+#if !defined(XXX) && defined(HAS_APPLE_PAC)
+				structor = __builtin_ptrauth_strip(structor, ptrauth_key_function_pointer);
+				structor = __builtin_ptrauth_sign_unauthenticated(structor, ptrauth_key_function_pointer, 0);
+#endif
 				(*structor)();
 			} else if (!hit_null_structor) {
 				hit_null_structor = 1;
@@ -393,7 +404,7 @@ OSRuntimeFinalizeCPP(
 	segment = firstsegfromheader(header);
 
 	for (segment = firstsegfromheader(header);
-	    segment != 0;
+	    segment != NULL;
 	    segment = nextsegfromheader(header, segment)) {
 		OSRuntimeCallStructorsInSection(theKext, kmodInfo, NULL, segment,
 		    sectionNames[kOSSectionNameFinalizer], textStart, textEnd);
@@ -487,7 +498,7 @@ OSRuntimeInitializeCPP(
 		 * segment, and invoke the constructors within those sections.
 		 */
 		for (segment = firstsegfromheader(header);
-		    segment != failure_segment && segment != 0;
+		    segment != failure_segment && segment != NULL;
 		    segment = nextsegfromheader(header, segment)) {
 			OSRuntimeCallStructorsInSection(theKext, kmodInfo, NULL, segment,
 			    sectionNames[kOSSectionNameFinalizer], textStart, textEnd);
@@ -572,10 +583,41 @@ noexcept
 #endif
 {
 	if (ptr) {
+#if KASAN
+		/*
+		 * Unpoison the C++ array cookie inserted (but not removed) by the
+		 * compiler on new[].
+		 */
+		kasan_unpoison_cxx_array_cookie(ptr);
+#endif
 		kern_os_free(ptr);
 	}
 	return;
 }
+
+#if __cplusplus >= 201103L
+
+void
+operator delete(void * addr, size_t sz) noexcept
+{
+#if OSALLOCDEBUG
+	OSAddAtomic(-sz, &debug_iomalloc_size);
+#endif /* OSALLOCDEBUG */
+	kfree(addr, sz);
+}
+
+void
+operator delete[](void * addr, size_t sz) noexcept
+{
+	if (addr) {
+#if OSALLOCDEBUG
+		OSAddAtomic(-sz, &debug_iomalloc_size);
+#endif /* OSALLOCDEBUG */
+		kfree(addr, sz);
+	}
+}
+
+#endif /* __cplusplus >= 201103L */
 
 /* PR-6481964 - The compiler is going to check for size overflows in calls to
  * new[], and if there is an overflow, it will call __throw_length_error.
@@ -585,7 +627,7 @@ noexcept
  * compiler expects the name to be mangled.
  */
 namespace std {
-void
+void __dead2
 __throw_length_error(const char *msg __unused)
 {
 	panic("Size of array created by new[] has overflowed");

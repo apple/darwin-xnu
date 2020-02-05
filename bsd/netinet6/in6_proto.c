@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -143,10 +143,6 @@
 #include <netinet6/esp6.h>
 #endif
 #endif
-#include <netinet6/ipcomp.h>
-#if INET6
-#include <netinet6/ipcomp6.h>
-#endif
 #endif /*IPSEC*/
 
 #include <netinet6/ip6protosw.h>
@@ -190,6 +186,8 @@ struct ip6protosw inet6sw[] = {
 		.pr_lock =              udp_lock,
 		.pr_unlock =            udp_unlock,
 		.pr_getlock =           udp_getlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 	{
 		.pr_type =              SOCK_STREAM,
@@ -208,6 +206,8 @@ struct ip6protosw inet6sw[] = {
 		.pr_lock =              tcp_lock,
 		.pr_unlock =            tcp_unlock,
 		.pr_getlock =           tcp_getlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 	{
 		.pr_type =              SOCK_RAW,
@@ -222,6 +222,8 @@ struct ip6protosw inet6sw[] = {
 #endif /* !INET */
 		.pr_usrreqs =           &rip6_usrreqs,
 		.pr_unlock =            rip_unlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 	{
 		.pr_type =              SOCK_RAW,
@@ -234,6 +236,8 @@ struct ip6protosw inet6sw[] = {
 		.pr_init =              icmp6_init,
 		.pr_usrreqs =           &rip6_usrreqs,
 		.pr_unlock =            rip_unlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 	{
 		.pr_type =              SOCK_DGRAM,
@@ -246,6 +250,8 @@ struct ip6protosw inet6sw[] = {
 		.pr_init =              icmp6_init,
 		.pr_usrreqs =           &icmp6_dgram_usrreqs,
 		.pr_unlock =            rip_unlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 	{
 		.pr_type =              SOCK_RAW,
@@ -286,16 +292,6 @@ struct ip6protosw inet6sw[] = {
 		.pr_usrreqs =           &nousrreqs,
 	},
 #endif /* IPSEC_ESP */
-	{
-		.pr_type =              SOCK_RAW,
-		.pr_protocol =          IPPROTO_IPCOMP,
-		.pr_flags =             PR_ATOMIC | PR_ADDR | PR_PROTOLOCK,
-		.pr_input =             ipcomp6_input,
-#if !INET       /* don't call initialization and timeout routines twice */
-		.pr_init =              ipcomp_init,
-#endif /* !INET */
-		.pr_usrreqs =           &nousrreqs,
-	},
 #endif /* IPSEC */
 #if INET
 	{
@@ -308,6 +304,8 @@ struct ip6protosw inet6sw[] = {
 		.pr_init =              encap6_init,
 		.pr_usrreqs =           &rip6_usrreqs,
 		.pr_unlock =            rip_unlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 #endif /*INET*/
 	{
@@ -320,6 +318,8 @@ struct ip6protosw inet6sw[] = {
 		.pr_init =              encap6_init,
 		.pr_usrreqs =           &rip6_usrreqs,
 		.pr_unlock =            rip_unlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 /* raw wildcard */
 	{
@@ -331,6 +331,8 @@ struct ip6protosw inet6sw[] = {
 		.pr_ctloutput =         rip6_ctloutput,
 		.pr_usrreqs =           &rip6_usrreqs,
 		.pr_unlock =            rip_unlock,
+		.pr_update_last_owner = inp_update_last_owner,
+		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
 };
 
@@ -398,6 +400,10 @@ in6_dinit(struct domain *dp)
 	    offsetof(struct protosw, pr_filter_head));
 	_CASSERT(offsetof(struct ip6protosw, pr_old) ==
 	    offsetof(struct protosw, pr_old));
+	_CASSERT(offsetof(struct ip6protosw, pr_update_last_owner) ==
+	    offsetof(struct protosw, pr_update_last_owner));
+	_CASSERT(offsetof(struct ip6protosw, pr_copy_last_owner) ==
+	    offsetof(struct protosw, pr_copy_last_owner));
 
 	/*
 	 * Attach first, then initialize.  ip6_init() needs raw IP6 handler.

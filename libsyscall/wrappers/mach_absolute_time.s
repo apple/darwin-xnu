@@ -178,7 +178,7 @@ _mach_absolute_time:
 	movw	ip, #((_COMM_PAGE_TIMEBASE_OFFSET) & 0x0000FFFF)
 	movt	ip, #(((_COMM_PAGE_TIMEBASE_OFFSET) >> 16) & 0x0000FFFF)
 	ldrb	r0, [ip, #((_COMM_PAGE_USER_TIMEBASE) - (_COMM_PAGE_TIMEBASE_OFFSET))]
-	cmp	r0, #0				// Are userspace reads supported?
+	cmp	r0, #USER_TIMEBASE_NONE		// Are userspace reads supported?
 	beq	_mach_absolute_time_kernel	// If not, go to the kernel
 	isb					// Prevent speculation on CNTPCT across calls
 						// (see ARMV7C.b section B8.1.2, ARMv8 section D6.1.2)
@@ -242,7 +242,7 @@ _mach_absolute_time:
 	movk	x3, #(((_COMM_PAGE_TIMEBASE_OFFSET) >> 16) & 0x000000000000FFFF), lsl #16
 	movk	x3, #((_COMM_PAGE_TIMEBASE_OFFSET) & 0x000000000000FFFF)
 	ldrb	w2, [x3, #((_COMM_PAGE_USER_TIMEBASE) - (_COMM_PAGE_TIMEBASE_OFFSET))]
-	cmp	x2, #0				// Are userspace reads supported?
+	cmp	x2, #USER_TIMEBASE_NONE		// Are userspace reads supported?
 	b.eq	_mach_absolute_time_kernel	// If not, go to the kernel
 	isb					// Prevent speculation on CNTPCT across calls
 						// (see ARMV7C.b section B8.1.2, ARMv8 section D6.1.2)
@@ -253,7 +253,9 @@ L_mach_absolute_time_user:
 	cmp	x1, x2				// Compare our offset values...
 	b.ne	L_mach_absolute_time_user	// If they changed, try again
 	add	x0, x0, x1			// Construct mach_absolute_time
-	ret	
+	ret
+
+
 
 	.text
 	.align 2

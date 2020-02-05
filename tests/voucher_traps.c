@@ -20,6 +20,7 @@
 
 #include <darwintest.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
 
 static mach_port_t
 get_atm_voucher(void)

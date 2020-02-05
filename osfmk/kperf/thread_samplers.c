@@ -159,8 +159,10 @@ kperf_thread_scheduling_sample(struct kperf_thread_scheduling *thsc,
 	thsc->kpthsc_requested_qos_override = MAX(thread->requested_policy.thrp_qos_override,
 	    thread->requested_policy.thrp_qos_workq_override);
 	thsc->kpthsc_requested_qos_promote = thread->requested_policy.thrp_qos_promote;
-	thsc->kpthsc_requested_qos_ipc_override = thread->requested_policy.thrp_qos_ipc_override;
-	thsc->kpthsc_requested_qos_sync_ipc_override = thread->requested_policy.thrp_qos_sync_ipc_override;
+	thsc->kpthsc_requested_qos_kevent_override = MAX(
+		thread->requested_policy.thrp_qos_kevent_override,
+		thread->requested_policy.thrp_qos_wlsvc_override);
+	thsc->kpthsc_requested_qos_sync_ipc_override = THREAD_QOS_UNSPECIFIED;
 	thsc->kpthsc_effective_latency_qos = thread->effective_policy.thep_latency_qos;
 
 	BUF_INFO(PERF_TI_SCHEDSAMPLE | DBG_FUNC_END);
@@ -182,8 +184,7 @@ kperf_thread_scheduling_log(struct kperf_thread_scheduling *thsc)
 	    | thsc->kpthsc_requested_qos_override,
 	    ((uint64_t)thsc->kpthsc_effective_latency_qos << 61)
 	    | ((uint64_t)thsc->kpthsc_requested_qos_promote << 58)
-	    | ((uint64_t)thsc->kpthsc_requested_qos_ipc_override << 55)
-	    | ((uint64_t)thsc->kpthsc_requested_qos_sync_ipc_override << 52)
+	    | ((uint64_t)thsc->kpthsc_requested_qos_kevent_override << 55)
 	    );
 	BUF_DATA(PERF_TI_SCHEDDATA_3, thsc->kpthsc_runnable_time);
 #else
@@ -200,8 +201,7 @@ kperf_thread_scheduling_log(struct kperf_thread_scheduling *thsc)
 	    | thsc->kpthsc_requested_qos_override,
 	    ((uint32_t)thsc->kpthsc_effective_latency_qos << 29)
 	    | ((uint32_t)thsc->kpthsc_requested_qos_promote << 26)
-	    | ((uint32_t)thsc->kpthsc_requested_qos_ipc_override << 23)
-	    | ((uint32_t)thsc->kpthsc_requested_qos_sync_ipc_override << 20)
+	    | ((uint32_t)thsc->kpthsc_requested_qos_kevent_override << 23)
 	    );
 	BUF_DATA(PERF_TI_SCHEDDATA3_32, UPPER_32(thsc->kpthsc_runnable_time),
 	    LOWER_32(thsc->kpthsc_runnable_time));
@@ -353,12 +353,8 @@ kperf_thread_inscyc_log(struct kperf_context *context)
 		return;
 	}
 
-	uint64_t counts[MT_CORE_NFIXED];
-
-	int ret = mt_fixed_thread_counts(cur_thread, counts);
-	if (ret) {
-		return;
-	}
+	uint64_t counts[MT_CORE_NFIXED] = { 0 };
+	mt_cur_thread_fixed_counts(counts);
 
 #if defined(__LP64__)
 	BUF_DATA(PERF_TI_INSCYCDATA, counts[MT_CORE_INSTRS], counts[MT_CORE_CYCLES]);

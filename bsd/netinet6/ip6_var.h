@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -448,6 +448,8 @@ struct ip6_out_args {
 #define IP6OAF_QOSMARKING_ALLOWED 0x00000080    /* policy allows Fastlane DSCP marking */
 #define IP6OAF_INTCOPROC_ALLOWED 0x00000100     /* access to internal coproc interfaces */
 #define IP6OAF_NO_LOW_POWER     0x00000200      /* skip low power */
+#define IP6OAF_NO_CONSTRAINED   0x00000400      /* skip IFXF_CONSTRAINED */
+#define IP6OAF_SKIP_PF          0x00000800      /* skip PF */
 	u_int32_t       ip6oa_retflags; /* IP6OARF return flags (see below) */
 #define IP6OARF_IFDENIED        0x00000001      /* denied access to interface */
 	int             ip6oa_sotc;             /* traffic class for Fastlane DSCP mapping */
@@ -556,7 +558,7 @@ extern struct ip6_pktopts *ip6_copypktopts(struct ip6_pktopts *, int);
 extern int ip6_optlen(struct inpcb *);
 extern void ip6_drain(void);
 extern int ip6_do_fragmentation(struct mbuf **, uint32_t, struct ifnet *, uint32_t,
-    struct ip6_hdr *, struct ip6_exthdrs *, uint32_t, int);
+    struct ip6_hdr *, uint8_t *, uint32_t, int, uint32_t);
 
 extern int route6_input(struct mbuf **, int *, int);
 

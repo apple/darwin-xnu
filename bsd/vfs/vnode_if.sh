@@ -1,7 +1,7 @@
 #!/bin/sh -
 copyright='
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -266,15 +266,16 @@ echo '
 #include <sys/vnode.h>
 
 struct vnodeop_desc vop_default_desc = {
-	0,
-	"default",
-	0,
-	NULL,
-	VDESC_NO_OFFSET,
-	VDESC_NO_OFFSET,
-	VDESC_NO_OFFSET,
-	VDESC_NO_OFFSET,
-	NULL,
+	.vdesc_offset = 0,
+	.vdesc_name = "default",
+	.vdesc_flags = 0,
+	.vdesc_vp_offsets = NULL,
+	.vdesc_vpp_offset = VDESC_NO_OFFSET,
+	.vdesc_cred_offset = VDESC_NO_OFFSET,
+	.vdesc_proc_offset = VDESC_NO_OFFSET,
+	.vdesc_componentname_offset = VDESC_NO_OFFSET,
+	.vdesc_context_offset = VDESC_NO_OFFSET,
+	.vdesc_transports = NULL,
 };
 '
 

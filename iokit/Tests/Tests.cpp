@@ -426,6 +426,27 @@ sysctl_iokittest(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused
 		data->release();
 	}
 
+	if (changed && (newValue >= 6666) && (newValue <= 6669)) {
+		OSIterator * iter;
+		IOService  * service;
+
+		service = NULL;
+		iter = IOService::getMatchingServices(IOService::nameMatching("XHC1"));
+		if (iter && (service = (IOService *) iter->getNextObject())) {
+			if (newValue == 6666) {
+				IOLog("terminating 0x%qx\n", service->getRegistryEntryID());
+				service->terminate();
+			} else if (newValue == 6667) {
+				IOLog("register 0x%qx\n", service->getRegistryEntryID());
+				service->registerService();
+			}
+		}
+		OSSafeReleaseNULL(iter);
+		if (service) {
+			return 0;
+		}
+	}
+
 
 	if (changed && newValue) {
 		error = IOWorkLoopTest(newValue);
@@ -444,4 +465,4 @@ sysctl_iokittest(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused
 
 SYSCTL_PROC(_kern, OID_AUTO, iokittest,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
-    0, 0, sysctl_iokittest, "I", "");
+    NULL, 0, sysctl_iokittest, "I", "");

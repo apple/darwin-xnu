@@ -82,6 +82,10 @@
 #include <ipc/ipc_object.h>
 #include <sys/kdebug.h>
 
+typedef uint32_t ipc_kmsg_flags_t;
+
+#define IPC_KMSG_FLAGS_ALLOW_IMMOVABLE_SEND 0x1       /* Dest port contains an immovable send right */
+
 /*
  *	This structure is only the header for a kmsg buffer;
  *	the actual buffer is normally larger.  The rest of the buffer
@@ -99,6 +103,7 @@
 
 struct ipc_kmsg {
 	mach_msg_size_t            ikm_size;
+	ipc_kmsg_flags_t           ikm_flags;
 	struct ipc_kmsg            *ikm_next;        /* next message on port/discard queue */
 	struct ipc_kmsg            *ikm_prev;        /* prev message on port/discard queue */
 	mach_msg_header_t          *ikm_header;
@@ -165,6 +170,7 @@ MACRO_END
 #define ikm_init(kmsg, size)                                    \
 MACRO_BEGIN                                                     \
 	(kmsg)->ikm_size = (size);                                  \
+	(kmsg)->ikm_flags = 0;                                      \
 	(kmsg)->ikm_prealloc = IP_NULL;                             \
 	(kmsg)->ikm_voucher = IP_NULL;                              \
 	(kmsg)->ikm_importance = IIE_NULL;                          \
@@ -348,6 +354,8 @@ extern mach_msg_return_t ipc_kmsg_copyout_object(
 	ipc_space_t             space,
 	ipc_object_t            object,
 	mach_msg_type_name_t    msgt_name,
+	mach_port_context_t     *context,
+	mach_msg_guard_flags_t  *guard_flags,
 	mach_port_name_t        *namep);
 
 /* Copyout the header and body to a user message */
@@ -363,6 +371,7 @@ extern mach_msg_return_t ipc_kmsg_copyout_body(
 	ipc_kmsg_t              kmsg,
 	ipc_space_t             space,
 	vm_map_t                map,
+	mach_msg_option_t       option,
 	mach_msg_body_t         *slist);
 
 /* Copyout port rights and out-of-line memory to a user message,
@@ -406,5 +415,8 @@ extern void ipc_kmsg_trace_send(ipc_kmsg_t kmsg,
 #else
 #define ipc_kmsg_trace_send(a, b) do { } while (0)
 #endif
+
+extern mach_msg_header_t *
+    ipc_kmsg_msg_header(ipc_kmsg_t);
 
 #endif  /* _IPC_IPC_KMSG_H_ */

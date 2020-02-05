@@ -35,7 +35,16 @@
 #include <sys/persona.h>
 #include <sys/proc.h>
 
+#include <kern/task.h>
+#include <kern/thread.h>
+#include <mach/thread_act.h>
+#include <mach/mach_types.h>
+
 #include <libkern/libkern.h>
+#include <IOKit/IOBSD.h>
+
+extern kern_return_t bank_get_bank_ledger_thread_group_and_persona(void *voucher,
+    void *bankledger, void **banktg, uint32_t *persona_id);
 
 static int
 kpersona_copyin(user_addr_t infop, struct kpersona_info *kinfo)
@@ -84,19 +93,16 @@ kpersona_copyout(struct kpersona_info *kinfo, user_addr_t infop)
 
 
 static int
-kpersona_alloc_syscall(user_addr_t infop, user_addr_t idp)
+kpersona_alloc_syscall(user_addr_t infop, user_addr_t idp, user_addr_t path)
 {
 	int error;
 	struct kpersona_info kinfo;
-	struct persona *persona;
+	struct persona *persona = NULL;
 	uid_t id = PERSONA_ID_NONE;
 	const char *login;
+	char *pna_path = NULL;
 
-	/*
-	 * TODO: rdar://problem/19981151
-	 * Add entitlement check!
-	 */
-	if (!kauth_cred_issuser(kauth_cred_get())) {
+	if (!IOTaskHasEntitlement(current_task(), PERSONA_MGMT_ENTITLEMENT)) {
 		return EPERM;
 	}
 
@@ -110,11 +116,30 @@ kpersona_alloc_syscall(user_addr_t infop, user_addr_t idp)
 		id = kinfo.persona_id;
 	}
 
+	if (path) {
+		MALLOC_ZONE(pna_path, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK | M_ZERO);
+		if (pna_path == NULL) {
+			return ENOMEM;
+		}
+		size_t pathlen;
+		error = copyinstr(path, (void *)pna_path, MAXPATHLEN, &pathlen);
+		if (error) {
+			FREE_ZONE(pna_path, MAXPATHLEN, M_NAMEI);
+			return error;
+		}
+	}
+
 	error = 0;
-	persona = persona_alloc(id, login, kinfo.persona_type, &error);
+	persona = persona_alloc(id, login, kinfo.persona_type, pna_path, &error);
 	if (!persona) {
+		if (pna_path != NULL) {
+			FREE_ZONE(pna_path, MAXPATHLEN, M_NAMEI);
+		}
 		return error;
 	}
+
+	/* persona struct contains a reference to pna_path */
+	pna_path = NULL;
 
 	error = persona_init_begin(persona);
 	if (error) {
@@ -153,6 +178,11 @@ kpersona_alloc_syscall(user_addr_t infop, user_addr_t idp)
 		goto out_persona_err;
 	}
 
+	error = persona_verify_and_set_uniqueness(persona);
+	if (error) {
+		goto out_persona_err;
+	}
+
 	persona_init_end(persona, error);
 
 	/*
@@ -182,7 +212,7 @@ kpersona_dealloc_syscall(user_addr_t idp)
 	uid_t persona_id;
 	struct persona *persona;
 
-	if (!kauth_cred_issuser(kauth_cred_get())) {
+	if (!IOTaskHasEntitlement(current_task(), PERSONA_MGMT_ENTITLEMENT)) {
 		return EPERM;
 	}
 
@@ -211,7 +241,9 @@ static int
 kpersona_get_syscall(user_addr_t idp)
 {
 	int error;
-	struct persona *persona = current_persona_get();
+	struct persona *persona;
+
+	persona = current_persona_get();
 
 	if (!persona) {
 		return ESRCH;
@@ -224,9 +256,59 @@ kpersona_get_syscall(user_addr_t idp)
 }
 
 static int
+kpersona_getpath_syscall(user_addr_t idp, user_addr_t path)
+{
+	int error;
+	uid_t persona_id;
+	struct persona *persona;
+	size_t pathlen;
+	uid_t current_persona_id = PERSONA_ID_NONE;
+
+	if (!path) {
+		return EINVAL;
+	}
+
+	error = copyin(idp, &persona_id, sizeof(persona_id));
+	if (error) {
+		return error;
+	}
+
+	/* Get current thread's persona id to compare if the
+	 * input persona_id matches the current persona id
+	 */
+	persona = current_persona_get();
+	if (persona) {
+		current_persona_id = persona->pna_id;
+	}
+
+	if (persona_id && persona_id != current_persona_id) {
+		/* Release the reference on the current persona id's persona */
+		persona_put(persona);
+		if (!kauth_cred_issuser(kauth_cred_get()) &&
+		    !IOTaskHasEntitlement(current_task(), PERSONA_MGMT_ENTITLEMENT)) {
+			return EPERM;
+		}
+		persona = persona_lookup(persona_id);
+	}
+
+	if (!persona) {
+		return ESRCH;
+	}
+
+	if (persona->pna_path) {
+		error = copyoutstr((void *)persona->pna_path, path, MAXPATHLEN, &pathlen);
+	}
+
+	persona_put(persona);
+
+	return error;
+}
+
+static int
 kpersona_info_syscall(user_addr_t idp, user_addr_t infop)
 {
 	int error;
+	uid_t current_persona_id = PERSONA_ID_NONE;
 	uid_t persona_id;
 	struct persona *persona;
 	struct kpersona_info kinfo;
@@ -236,12 +318,24 @@ kpersona_info_syscall(user_addr_t idp, user_addr_t infop)
 		return error;
 	}
 
-	/*
-	 * TODO: rdar://problem/19981151
-	 * Add entitlement check!
+	/* Get current thread's persona id to compare if the
+	 * input persona_id matches the current persona id
 	 */
+	persona = current_persona_get();
+	if (persona) {
+		current_persona_id = persona->pna_id;
+	}
 
-	persona = persona_lookup(persona_id);
+	if (persona_id && persona_id != current_persona_id) {
+		/* Release the reference on the current persona id's persona */
+		persona_put(persona);
+		if (!kauth_cred_issuser(kauth_cred_get()) &&
+		    !IOTaskHasEntitlement(current_task(), PERSONA_MGMT_ENTITLEMENT)) {
+			return EPERM;
+		}
+		persona = persona_lookup(persona_id);
+	}
+
 	if (!persona) {
 		return ESRCH;
 	}
@@ -350,7 +444,7 @@ kpersona_find_syscall(user_addr_t infop, user_addr_t idp, user_addr_t idlenp)
 	}
 
 	k_idlen = u_idlen;
-	error = persona_find(login, kinfo.persona_id, persona, &k_idlen);
+	error = persona_find_all(login, kinfo.persona_id, kinfo.persona_type, persona, &k_idlen);
 	if (error) {
 		goto out;
 	}
@@ -381,7 +475,6 @@ out:
 	return error;
 }
 
-
 /*
  * Syscall entry point / demux.
  */
@@ -393,16 +486,23 @@ persona(__unused proc_t p, struct persona_args *pargs, __unused int32_t *retval)
 	/* uint32_t flags = pargs->flags; */
 	user_addr_t infop = pargs->info;
 	user_addr_t idp = pargs->id;
+	user_addr_t path = pargs->path;
 
 	switch (op) {
 	case PERSONA_OP_ALLOC:
-		error = kpersona_alloc_syscall(infop, idp);
+		error = kpersona_alloc_syscall(infop, idp, USER_ADDR_NULL);
+		break;
+	case PERSONA_OP_PALLOC:
+		error = kpersona_alloc_syscall(infop, idp, path);
 		break;
 	case PERSONA_OP_DEALLOC:
 		error = kpersona_dealloc_syscall(idp);
 		break;
 	case PERSONA_OP_GET:
 		error = kpersona_get_syscall(idp);
+		break;
+	case PERSONA_OP_GETPATH:
+		error = kpersona_getpath_syscall(idp, path);
 		break;
 	case PERSONA_OP_INFO:
 		error = kpersona_info_syscall(idp, infop);
@@ -411,6 +511,7 @@ persona(__unused proc_t p, struct persona_args *pargs, __unused int32_t *retval)
 		error = kpersona_pidinfo_syscall(idp, infop);
 		break;
 	case PERSONA_OP_FIND:
+	case PERSONA_OP_FIND_BY_TYPE:
 		error = kpersona_find_syscall(infop, idp, pargs->idlen);
 		break;
 	default:

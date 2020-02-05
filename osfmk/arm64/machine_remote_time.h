@@ -34,6 +34,7 @@
 __BEGIN_DECLS
 void mach_bridge_recv_timestamps(uint64_t bridgeTimestamp, uint64_t localTimestamp);
 void mach_bridge_init_timestamp(void);
+void mach_bridge_set_params(uint64_t local_timestamp, uint64_t remote_timestamp, double rate);
 __END_DECLS
 
 #endif /* MACHINE_ARM64_REMOTE_TIME_H */

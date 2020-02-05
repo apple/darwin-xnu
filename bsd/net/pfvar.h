@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -634,8 +634,8 @@ struct pf_os_fingerprint {
 #define PF_OSFP_TCPOPT_TS       0x4             /* TCP timestamp option */
 #define PF_OSFP_TCPOPT_BITS     3               /* bits used by each option */
 #define PF_OSFP_MAX_OPTS \
-    (sizeof(((struct pf_os_fingerprint *)0)->fp_tcpopts) * 8) \
-    / PF_OSFP_TCPOPT_BITS
+    ((sizeof(pf_tcpopts_t) * 8) \
+    / PF_OSFP_TCPOPT_BITS)
 
 	SLIST_ENTRY(pf_os_fingerprint)  fp_next;
 };
@@ -1432,8 +1432,7 @@ struct pf_pdesc {
 	struct pf_rule  *nat_rule;      /* nat/rdr rule applied to packet */
 	struct pf_addr  *src;
 	struct pf_addr  *dst;
-	struct ether_header
-	*eh;
+	struct ether_header     *eh;
 	pbuf_t          *mp;
 	int             lmw;            /* lazy writable offset */
 	struct pf_mtag  *pf_mtag;
@@ -2186,7 +2185,7 @@ extern struct pool pf_app_state_pl;
 extern struct thread *pf_purge_thread;
 
 __private_extern__ void pfinit(void);
-__private_extern__ void pf_purge_thread_fn(void *, wait_result_t);
+__private_extern__ void pf_purge_thread_fn(void *, wait_result_t) __dead2;
 __private_extern__ void pf_purge_expired_src_nodes(void);
 __private_extern__ void pf_purge_expired_states(u_int32_t);
 __private_extern__ void pf_unlink_state(struct pf_state *);
@@ -2212,7 +2211,6 @@ __private_extern__ void pf_rm_rule(struct pf_rulequeue *, struct pf_rule *);
 struct ip_fw_args;
 
 extern boolean_t is_nlc_enabled_glb;
-extern boolean_t pf_is_nlc_enabled(void);
 
 #if INET
 __private_extern__ int pf_test(int, struct ifnet *, pbuf_t **,
@@ -2229,6 +2227,10 @@ __private_extern__ int pf_test6_mbuf(int, struct ifnet *, struct mbuf **,
 __private_extern__ void pf_poolmask(struct pf_addr *, struct pf_addr *,
     struct pf_addr *, struct pf_addr *, u_int8_t);
 __private_extern__ void pf_addr_inc(struct pf_addr *, sa_family_t);
+__private_extern__ int pf_normalize_ip6(pbuf_t *, int, struct pfi_kif *,
+    u_short *, struct pf_pdesc *);
+__private_extern__ int pf_refragment6(struct ifnet *, pbuf_t **,
+    struct pf_fragment_tag *);
 #endif /* INET6 */
 
 __private_extern__ void *pf_lazy_makewritable(struct pf_pdesc *,
@@ -2253,8 +2255,6 @@ __private_extern__ int pf_match_gid(u_int8_t, gid_t, gid_t, gid_t);
 __private_extern__ void pf_normalize_init(void);
 __private_extern__ int pf_normalize_isempty(void);
 __private_extern__ int pf_normalize_ip(pbuf_t *, int, struct pfi_kif *,
-    u_short *, struct pf_pdesc *);
-__private_extern__ int pf_normalize_ip6(pbuf_t *, int, struct pfi_kif *,
     u_short *, struct pf_pdesc *);
 __private_extern__ int pf_normalize_tcp(int, struct pfi_kif *, pbuf_t *,
     int, int, void *, struct pf_pdesc *);
@@ -2413,6 +2413,10 @@ __private_extern__ struct pf_mtag *pf_find_mtag(struct mbuf *);
 __private_extern__ struct pf_mtag *pf_find_mtag_pbuf(pbuf_t *);
 __private_extern__ struct pf_mtag *pf_get_mtag(struct mbuf *);
 __private_extern__ struct pf_mtag *pf_get_mtag_pbuf(pbuf_t *);
+__private_extern__ struct pf_fragment_tag * pf_find_fragment_tag_pbuf(pbuf_t *);
+__private_extern__ struct pf_fragment_tag * pf_find_fragment_tag(struct mbuf *);
+__private_extern__ struct pf_fragment_tag * pf_copy_fragment_tag(struct mbuf *,
+    struct pf_fragment_tag *, int);
 #else /* !KERNEL */
 extern struct pf_anchor_global pf_anchors;
 extern struct pf_anchor pf_main_anchor;

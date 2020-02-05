@@ -53,8 +53,8 @@ protected:
 public:
 	static IODMAEventSource *dmaEventSource(OSObject *owner,
 	    IOService *provider,
-	    Action completion = 0,
-	    Action notification = 0,
+	    Action completion = NULL,
+	    Action notification = NULL,
 	    UInt32 dmaIndex = 0);
 
 	virtual IOReturn startDMACommand(IODMACommand *dmaCommand, IODirection direction, IOByteCount byteCount = 0, IOByteCount byteOffset = 0);
@@ -83,8 +83,8 @@ private:
 
 	virtual bool init(OSObject *owner,
 	    IOService *provider,
-	    Action completion = 0,
-	    Action notification = 0,
+	    Action completion = NULL,
+	    Action notification = NULL,
 	    UInt32 dmaIndex = 0);
 	virtual bool checkForWork(void) APPLE_KEXT_OVERRIDE;
 	virtual void free(void) APPLE_KEXT_OVERRIDE;

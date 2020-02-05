@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Project</key>
+	<string>libkdd</string>
+
+    <key>RadarComponents</key>
+    <dict>
+        <key>Name</key>
+        <string>xnu</string>
+        <key>Version</key>
+        <string>debugging</string>
+    </dict>
+
+
+	<key>Tests</key>
+	<array>
+		<dict>
+			<key>TestName</key>
+			<string>libkdd_tests</string>
+			<key>AsRoot</key>
+			<false/>
+			<key>Arch</key>
+			<string>platform-native</string>
+			<key>Command</key>
+			<array>
+				<string>BATS_XCTEST_CMD</string>
+				<string>/AppleInternal/XCTests/com.apple.libkdd/tests.xctest</string>
+			</array>
+		</dict>
+	</array>
+
+</dict>
+</plist>

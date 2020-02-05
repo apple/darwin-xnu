@@ -62,8 +62,9 @@
 #include <pexpert/pexpert.h>
 #include <IOKit/IOPolledInterface.h>
 
-#define HIBERNATE_MIN_PHYSICAL_LBA    (34)
-#define HIBERNATE_MIN_FILE_SIZE       (1024*1024)
+#define HIBERNATE_MIN_PHYSICAL_LBA_512    (34)
+#define HIBERNATE_MIN_PHYSICAL_LBA_4096   (6)
+#define HIBERNATE_MIN_FILE_SIZE           (1024*1024)
 
 /* This function is called from kern_sysctl in the current process context;
  * it is exported with the System6.0.exports, but this appears to be a legacy
@@ -379,7 +380,11 @@ kern_open_file_for_direct_io(const char * name,
 		goto out;
 	}
 
-	minoffset = HIBERNATE_MIN_PHYSICAL_LBA * ref->blksize;
+	if (ref->blksize == 4096) {
+		minoffset = HIBERNATE_MIN_PHYSICAL_LBA_4096 * ref->blksize;
+	} else {
+		minoffset = HIBERNATE_MIN_PHYSICAL_LBA_512 * ref->blksize;
+	}
 
 	if (ref->vp->v_type != VREG) {
 		error = do_ioctl(p1, p2, DKIOCGETBLOCKCOUNT, (caddr_t) &fileblk);

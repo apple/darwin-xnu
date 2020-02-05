@@ -72,9 +72,9 @@ serial_keyboard_start(void)
 {
 	/* Go see if there are any characters pending now */
 	serial_keyboard_poll();
-	panic("serial_keyboard_start: we can't get back here\n");
 }
 
+__dead2
 void
 serial_keyboard_poll(void)
 {

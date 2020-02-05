@@ -81,7 +81,8 @@ static void
 sched_traditional_processor_queue_shutdown(processor_t processor);
 
 static boolean_t
-sched_traditional_processor_enqueue(processor_t processor, thread_t thread, integer_t options);
+sched_traditional_processor_enqueue(processor_t processor, thread_t thread,
+    sched_options_t options);
 
 static boolean_t
 sched_traditional_processor_queue_remove(processor_t processor, thread_t thread);
@@ -160,7 +161,6 @@ const struct sched_dispatch_table sched_traditional_dispatch = {
 	.processor_runq_stats_count_sum                 = sched_traditional_processor_runq_stats_count_sum,
 	.processor_bound_count                          = sched_traditional_processor_bound_count,
 	.thread_update_scan                             = sched_traditional_thread_update_scan,
-	.direct_dispatch_to_idle_processors             = TRUE,
 	.multiple_psets_enabled                         = TRUE,
 	.sched_groups_enabled                           = FALSE,
 	.avoid_processor_enabled                        = FALSE,
@@ -177,6 +177,10 @@ const struct sched_dispatch_table sched_traditional_dispatch = {
 	.check_spill                                    = sched_check_spill,
 	.ipi_policy                                     = sched_ipi_policy,
 	.thread_should_yield                            = sched_thread_should_yield,
+	.run_count_incr                                 = sched_run_incr,
+	.run_count_decr                                 = sched_run_decr,
+	.update_thread_bucket                           = sched_update_thread_bucket,
+	.pset_made_schedulable                          = sched_pset_made_schedulable,
 };
 
 const struct sched_dispatch_table sched_traditional_with_pset_runqueue_dispatch = {
@@ -208,7 +212,6 @@ const struct sched_dispatch_table sched_traditional_with_pset_runqueue_dispatch 
 	.processor_runq_stats_count_sum                 = sched_traditional_with_pset_runqueue_processor_runq_stats_count_sum,
 	.processor_bound_count                          = sched_traditional_processor_bound_count,
 	.thread_update_scan                             = sched_traditional_thread_update_scan,
-	.direct_dispatch_to_idle_processors             = FALSE,
 	.multiple_psets_enabled                         = TRUE,
 	.sched_groups_enabled                           = FALSE,
 	.avoid_processor_enabled                        = FALSE,
@@ -225,6 +228,10 @@ const struct sched_dispatch_table sched_traditional_with_pset_runqueue_dispatch 
 	.check_spill                                    = sched_check_spill,
 	.ipi_policy                                     = sched_ipi_policy,
 	.thread_should_yield                            = sched_thread_should_yield,
+	.run_count_incr                                 = sched_run_incr,
+	.run_count_decr                                 = sched_run_decr,
+	.update_thread_bucket                           = sched_update_thread_bucket,
+	.pset_made_schedulable                          = sched_pset_made_schedulable,
 };
 
 static void
@@ -337,17 +344,16 @@ sched_traditional_choose_thread_from_runq(
 	run_queue_t     rq,
 	int             priority)
 {
-	queue_t         queue   = rq->queues + rq->highq;
+	circle_queue_t  queue   = rq->queues + rq->highq;
 	int             pri     = rq->highq;
 	int             count   = rq->count;
 	thread_t        thread;
 
 	while (count > 0 && pri >= priority) {
-		thread = (thread_t)(uintptr_t)queue_first(queue);
-		while (!queue_end(queue, (queue_entry_t)thread)) {
+		cqe_foreach_element_safe(thread, queue, runq_links) {
 			if (thread->bound_processor == PROCESSOR_NULL ||
 			    thread->bound_processor == processor) {
-				remqueue((queue_entry_t)thread);
+				circle_dequeue(queue, &thread->runq_links);
 
 				thread->runq = PROCESSOR_NULL;
 				SCHED_STATS_RUNQ_CHANGE(&rq->runq_stats, rq->count);
@@ -355,16 +361,13 @@ sched_traditional_choose_thread_from_runq(
 				if (SCHED(priority_is_urgent)(pri)) {
 					rq->urgency--; assert(rq->urgency >= 0);
 				}
-				if (queue_empty(queue)) {
+				if (circle_queue_empty(queue)) {
 					bitmap_clear(rq->bitmap, pri);
 					rq->highq = bitmap_first(rq->bitmap, NRQS);
 				}
-
 				return thread;
 			}
 			count--;
-
-			thread = (thread_t)(uintptr_t)queue_next((queue_entry_t)thread);
 		}
 
 		queue--; pri--;
@@ -397,8 +400,8 @@ sched_traditional_initial_thread_sched_mode(task_t parent_task)
  */
 static boolean_t
 sched_traditional_processor_enqueue(processor_t   processor,
-    thread_t      thread,
-    integer_t     options)
+    thread_t        thread,
+    sched_options_t options)
 {
 	run_queue_t     rq = runq_for_processor(processor);
 	boolean_t       result;
@@ -521,21 +524,18 @@ sched_traditional_processor_queue_shutdown(processor_t processor)
 {
 	processor_set_t         pset    = processor->processor_set;
 	run_queue_t             rq      = runq_for_processor(processor);
-	queue_t                 queue   = rq->queues + rq->highq;
+	circle_queue_t          queue   = rq->queues + rq->highq;
 	int                     pri     = rq->highq;
 	int                     count   = rq->count;
-	thread_t                next, thread;
-	queue_head_t            tqueue;
+	thread_t                thread;
+	circle_queue_head_t     tqueue;
 
-	queue_init(&tqueue);
+	circle_queue_init(&tqueue);
 
 	while (count > 0) {
-		thread = (thread_t)(uintptr_t)queue_first(queue);
-		while (!queue_end(queue, (queue_entry_t)thread)) {
-			next = (thread_t)(uintptr_t)queue_next((queue_entry_t)thread);
-
+		cqe_foreach_element_safe(thread, queue, runq_links) {
 			if (thread->bound_processor == PROCESSOR_NULL) {
-				remqueue((queue_entry_t)thread);
+				circle_dequeue(queue, &thread->runq_links);
 
 				thread->runq = PROCESSOR_NULL;
 				SCHED_STATS_RUNQ_CHANGE(&rq->runq_stats, rq->count);
@@ -544,16 +544,14 @@ sched_traditional_processor_queue_shutdown(processor_t processor)
 				if (SCHED(priority_is_urgent)(pri)) {
 					rq->urgency--; assert(rq->urgency >= 0);
 				}
-				if (queue_empty(queue)) {
+				if (circle_queue_empty(queue)) {
 					bitmap_clear(rq->bitmap, pri);
 					rq->highq = bitmap_first(rq->bitmap, NRQS);
 				}
 
-				enqueue_tail(&tqueue, (queue_entry_t)thread);
+				circle_enqueue_tail(&tqueue, &thread->runq_links);
 			}
 			count--;
-
-			thread = next;
 		}
 
 		queue--; pri--;
@@ -561,7 +559,7 @@ sched_traditional_processor_queue_shutdown(processor_t processor)
 
 	pset_unlock(pset);
 
-	while ((thread = (thread_t)(uintptr_t)dequeue_head(&tqueue)) != THREAD_NULL) {
+	while ((thread = cqe_dequeue_head(&tqueue, struct thread, runq_links)) != THREAD_NULL) {
 		thread_lock(thread);
 
 		thread_setrun(thread, SCHED_TAILQ);
@@ -652,16 +650,15 @@ static thread_t
 sched_traditional_steal_processor_thread(processor_t processor)
 {
 	run_queue_t     rq      = runq_for_processor(processor);
-	queue_t         queue   = rq->queues + rq->highq;
+	circle_queue_t  queue   = rq->queues + rq->highq;
 	int             pri     = rq->highq;
 	int             count   = rq->count;
 	thread_t        thread;
 
 	while (count > 0) {
-		thread = (thread_t)(uintptr_t)queue_first(queue);
-		while (!queue_end(queue, (queue_entry_t)thread)) {
+		cqe_foreach_element_safe(thread, queue, runq_links) {
 			if (thread->bound_processor == PROCESSOR_NULL) {
-				remqueue((queue_entry_t)thread);
+				circle_dequeue(queue, &thread->runq_links);
 
 				thread->runq = PROCESSOR_NULL;
 				SCHED_STATS_RUNQ_CHANGE(&rq->runq_stats, rq->count);
@@ -670,7 +667,7 @@ sched_traditional_steal_processor_thread(processor_t processor)
 				if (SCHED(priority_is_urgent)(pri)) {
 					rq->urgency--; assert(rq->urgency >= 0);
 				}
-				if (queue_empty(queue)) {
+				if (circle_queue_empty(queue)) {
 					bitmap_clear(rq->bitmap, pri);
 					rq->highq = bitmap_first(rq->bitmap, NRQS);
 				}
@@ -678,8 +675,6 @@ sched_traditional_steal_processor_thread(processor_t processor)
 				return thread;
 			}
 			count--;
-
-			thread = (thread_t)(uintptr_t)queue_next((queue_entry_t)thread);
 		}
 
 		queue--; pri--;

@@ -224,6 +224,9 @@ cs_allow_invalid(struct proc *p)
 	}
 	proc_unlock(p);
 
+	/* allow a debugged process to hide some (debug-only!) memory */
+	task_set_memory_ownership_transfer(p->task, TRUE);
+
 	vm_map_switch_protect(get_task_map(p->task), FALSE);
 #endif
 	return (p->p_csflags & (CS_KILL | CS_HARD)) == 0;
@@ -1135,6 +1138,39 @@ cs_entitlements_blob_get(proc_t p, void **out_start, size_t *out_length)
 	}
 
 	return csblob_get_entitlements(csblob, out_start, out_length);
+}
+
+
+/* Retrieve the cached entitlements for a process
+ * Returns:
+ *   EINVAL	no text vnode associated with the process
+ *   EBADEXEC   invalid code signing data
+ *   0		no error occurred
+ *
+ * Note: the entitlements may be NULL if there is nothing cached.
+ */
+
+int
+cs_entitlements_dictionary_copy(proc_t p, void **entitlements)
+{
+	struct cs_blob *csblob;
+
+	*entitlements = NULL;
+
+	if ((p->p_csflags & CS_SIGNED) == 0) {
+		return 0;
+	}
+
+	if (NULL == p->p_textvp) {
+		return EINVAL;
+	}
+
+	if ((csblob = ubc_cs_blob_get(p->p_textvp, -1, p->p_textoff)) == NULL) {
+		return 0;
+	}
+
+	*entitlements = csblob_entitlements_dictionary_copy(csblob);
+	return 0;
 }
 
 /* Retrieve the codesign identity for a process.

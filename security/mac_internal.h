@@ -169,6 +169,7 @@ extern unsigned int mac_label_mbufs;
 #endif
 
 extern unsigned int mac_label_vnodes;
+extern unsigned int mac_vnode_label_count;
 
 static bool mac_proc_check_enforce(proc_t p);
 

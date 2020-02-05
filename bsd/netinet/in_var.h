@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -135,6 +135,20 @@ struct kev_in_arpalive {
 	struct net_event_data link_data; /* link where ARP was received */
 };
 
+#ifdef PRIVATE
+/*
+ * Common structure for KEV_SOCKET_SUBCLASS
+ * Have to place here to avoid declaration dependencies.
+ */
+struct kev_socket_event_data {
+	union sockaddr_in_4_6 kev_sockname;
+	union sockaddr_in_4_6 kev_peername;
+};
+
+struct kev_socket_closed {
+	struct kev_socket_event_data ev_data;
+};
+#endif /* PRIVATE */
 
 #ifdef __APPLE_API_PRIVATE
 struct kev_in_portinuse {
@@ -145,6 +159,10 @@ struct kev_in_portinuse {
 #endif /* __APPLE_API_PRIVATE */
 
 #ifdef BSD_KERNEL_PRIVATE
+extern void socket_post_kev_msg(uint32_t, struct kev_socket_event_data *,
+    uint32_t);
+extern void socket_post_kev_msg_closed(struct socket *);
+
 #include <net/if.h>
 #include <net/if_var.h>
 #include <net/if_llatbl.h>

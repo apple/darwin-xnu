@@ -51,7 +51,7 @@ extern void tcp_heuristic_tfo_success(struct tcpcb *tp);
 extern void tcp_heuristic_mptcp_success(struct tcpcb *tp);
 extern void tcp_heuristic_ecn_success(struct tcpcb *tp);
 extern boolean_t tcp_heuristic_do_tfo(struct tcpcb *tp);
-extern boolean_t tcp_heuristic_do_mptcp(struct tcpcb *tp);
+extern int tcp_heuristic_do_mptcp(struct tcpcb *tp);
 extern boolean_t tcp_heuristic_do_ecn(struct tcpcb *tp);
 extern void tcp_heuristic_ecn_droprst(struct tcpcb *tp);
 extern void tcp_heuristic_ecn_droprxmt(struct tcpcb *tp);

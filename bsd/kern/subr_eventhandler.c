@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -72,7 +72,7 @@ SYSCTL_NODE(_kern, OID_AUTO, eventhandler, CTLFLAG_RW | CTLFLAG_LOCKED,
 SYSCTL_INT(_kern_eventhandler, OID_AUTO, debug, CTLFLAG_RW | CTLFLAG_LOCKED,
     &evh_debug, 0, "Eventhandler debug mode");
 
-struct eventhandler_entry_arg eventhandler_entry_dummy_arg = { { 0 }, { 0 } };
+struct eventhandler_entry_arg eventhandler_entry_dummy_arg = { .ee_fm_uuid = { 0 }, .ee_fr_uuid = { 0 } };
 
 /* List of 'slow' lists */
 static struct eventhandler_lists_ctxt evthdlr_lists_ctxt_glb;
@@ -177,6 +177,11 @@ eventhandler_register_internal(
 		if (list == NULL) {
 			lck_mtx_convert_spin(&evthdlr_lists_ctxt->eventhandler_mutex);
 			new_list = mcache_alloc(el_cache, MCR_SLEEP);
+			if (new_list == NULL) {
+				evhlog((LOG_DEBUG, "%s: Can't allocate list \"%s\"", __func__, name));
+				lck_mtx_unlock(&evthdlr_lists_ctxt->eventhandler_mutex);
+				return NULL;
+			}
 			bzero(new_list, el_size);
 			evhlog((LOG_DEBUG, "%s: creating list \"%s\"", __func__, name));
 			list = new_list;
@@ -224,6 +229,11 @@ eventhandler_register(struct eventhandler_lists_ctxt *evthdlr_lists_ctxt,
 
 	/* allocate an entry for this handler, populate it */
 	eg = mcache_alloc(eg_cache, MCR_SLEEP);
+	if (eg == NULL) {
+		evhlog((LOG_DEBUG, "%s: Can't allocate entry to register for event list "
+		    "\"%s\"", __func__, name));
+		return NULL;
+	}
 	bzero(eg, eg_size);
 	eg->func = func;
 	eg->ee.ee_arg = arg;

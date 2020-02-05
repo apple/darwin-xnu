@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2017 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -38,7 +38,7 @@ typedef void (*RTC_tick_handler)( IOService * );
 
 class IORTCController : public IOService
 {
-	OSDeclareAbstractStructors(IORTCController)
+	OSDeclareAbstractStructors(IORTCController);
 
 public:
 

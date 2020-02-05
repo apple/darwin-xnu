@@ -269,6 +269,16 @@ extern "C" {
  */
 #define kKextRequestPredicateRequestKextdExit    "Kextd Exit"
 
+/* Predicate: Dext Daemon Launch
+ * Argument: kKextRequestArgumentBundleIdentifierKey
+ * Argument: IOUserServerName
+ * Response: Asynchronous via a DriverKit daemon checking in
+ * Op result: OSReturn indicating result (see OSKextLib.h)
+ *
+ * Requests kextd to launch a driver extension userspace daemon.
+ */
+#define kKextRequestPredicateRequestDaemonLaunch "Dext Daemon Launch"
+
 #if PRAGMA_MARK
 /********************************************************************/
 #pragma mark -
@@ -435,6 +445,30 @@ extern "C" {
  * dependents will not attempt to terminate and will return kOSKextReturnInUse.
  */
 #define kKextRequestArgumentTerminateIOServicesKey     "Terminate IOServices"
+
+#if PRAGMA_MARK
+#pragma mark Daemon Launch Request Arguments
+#endif
+
+/* Argument: Server tag
+ * Type:     Integer
+ * Default:  N/A
+ *
+ * A DriverKit daemon launch request must include a "server tag" that
+ * is unique to every launch request. Userspace daemons include this
+ * tag in their messages when attempting to rendez-vous with IOKit.
+ */
+#define kKextRequestArgumentDriverExtensionServerTag   "Driver Extension Server Tag"
+
+/* Argument: Server name
+ * Type:     String
+ * Default:  N/A
+ *
+ * A DriverKit daemon launch request must include a "server name" that
+ * can be used to identify what personality the driver is matching on.
+ * This name is also used for the launchd service name of the daemon.
+ */
+#define kKextRequestArgumentDriverExtensionServerName  "Driver Extension Server Name"
 
 #if PRAGMA_MARK
 #pragma mark Internal Tracking Properties

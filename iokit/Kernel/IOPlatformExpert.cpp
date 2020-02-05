@@ -40,6 +40,7 @@
 #include <IOKit/IOTimeStamp.h>
 #include <IOKit/IOUserClient.h>
 #include <IOKit/IOKitDiagnosticsUserClient.h>
+#include <IOKit/IOUserServer.h>
 
 #include <IOKit/system.h>
 #include <sys/csr.h>
@@ -56,14 +57,25 @@ extern "C" {
 
 #define kShutdownTimeout    30 //in secs
 
-#if !CONFIG_EMBEDDED
+#if defined(XNU_TARGET_OS_OSX)
 
 boolean_t coprocessor_cross_panic_enabled = TRUE;
-#define APPLE_SECURE_BOOT_VARIABLE_GUID "94b73556-2197-4702-82a8-3e1337dafbfb"
-#endif /* !CONFIG_EMBEDDED */
+#define APPLE_VENDOR_VARIABLE_GUID "4d1ede05-38c7-4a6a-9cc6-4bcca8b38c14"
+#endif /* defined(XNU_TARGET_OS_OSX) */
 
 void printDictionaryKeys(OSDictionary * inDictionary, char * inMsg);
 static void getCStringForObject(OSObject *inObj, char *outStr, size_t outStrLen);
+
+/*
+ * There are drivers which take mutexes in the quiesce callout or pass
+ * the quiesce/active action to super.  Even though it sometimes panics,
+ * because it doesn't *always* panic, they get away with it.
+ * We need a chicken bit to diagnose and fix them all before this
+ * can be enabled by default.
+ *
+ * <rdar://problem/33831837> tracks turning this on by default.
+ */
+uint32_t gEnforceQuiesceSafety = 0;
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -133,7 +145,7 @@ IOPlatformExpert::start( IOService * provider )
 
 	// Register the presence or lack thereof a system
 	// PCI address mapper with the IOMapper class
-	IOMapper::setMapperRequired(0 != getProperty(kIOPlatformMapperPresentKey));
+	IOMapper::setMapperRequired(NULL != getProperty(kIOPlatformMapperPresentKey));
 
 	gIOInterruptControllers = OSDictionary::withCapacity(1);
 	gIOInterruptControllersLock = IOLockAlloc();
@@ -172,6 +184,9 @@ IOPlatformExpert::start( IOService * provider )
 	}
 #endif
 
+	PE_parse_boot_argn("enforce_quiesce_safety", &gEnforceQuiesceSafety,
+	    sizeof(gEnforceQuiesceSafety));
+
 	return configure(provider);
 }
 
@@ -190,7 +205,7 @@ IOPlatformExpert::configure( IOService * provider )
 			dict->retain();
 			topLevel->removeObject( dict );
 			nub = createNub( dict );
-			if (0 == nub) {
+			if (NULL == nub) {
 				continue;
 			}
 			dict->release();
@@ -211,7 +226,7 @@ IOPlatformExpert::createNub( OSDictionary * from )
 	if (nub) {
 		if (!nub->init( from )) {
 			nub->release();
-			nub = 0;
+			nub = NULL;
 		}
 	}
 	return nub;
@@ -291,7 +306,7 @@ IOPlatformExpert::getPhysicalRangeAllocator(void)
 	           getProperty("Platform Memory Ranges"));
 }
 
-int (*PE_halt_restart)(unsigned int type) = 0;
+int (*PE_halt_restart)(unsigned int type) = NULL;
 
 int
 IOPlatformExpert::haltRestart(unsigned int type)
@@ -408,7 +423,7 @@ IOPlatformExpert::lookUpInterruptController(OSSymbol *name)
 	while (1) {
 		object = gIOInterruptControllers->getObject(name);
 
-		if (object != 0) {
+		if (object != NULL) {
 			break;
 		}
 
@@ -825,6 +840,9 @@ getCStringForObject(OSObject *inObj, char *outStr, size_t outStrLen)
 /* IOShutdownNotificationsTimedOut
  * - Called from a timer installed by PEHaltRestart
  */
+#ifdef CONFIG_EMBEDDED
+__abortlike
+#endif
 static void
 IOShutdownNotificationsTimedOut(
 	thread_call_param_t p0,
@@ -900,6 +918,13 @@ PEHaltRestart(unsigned int type)
 	static boolean_t  panic_begin_called = FALSE;
 
 	if (type == kPEHaltCPU || type == kPERestartCPU || type == kPEUPSDelayHaltCPU) {
+		/* If we're in the panic path, the locks and memory allocations required below
+		 *  could fail. So just try to reboot instead of risking a nested panic.
+		 */
+		if (panic_begin_called) {
+			goto skip_to_haltRestart;
+		}
+
 		pmRootDomain = IOService::getPMRootDomain();
 		/* Notify IOKit PM clients of shutdown/restart
 		 *  Clients subscribe to this message with a call to
@@ -924,10 +949,20 @@ PEHaltRestart(unsigned int type)
 			}
 		}
 
-		shutdown_hang = thread_call_allocate( &IOShutdownNotificationsTimedOut,
-		    (thread_call_param_t)(uintptr_t) type);
-		clock_interval_to_deadline( timeout, kSecondScale, &deadline );
-		thread_call_enter1_delayed( shutdown_hang, (thread_call_param_t)(uintptr_t)timeout, deadline );
+#if (DEVELOPMENT || DEBUG)
+		/* Override the default timeout via a boot-arg */
+		uint32_t boot_arg_val;
+		if (PE_parse_boot_argn("halt_restart_timeout", &boot_arg_val, sizeof(boot_arg_val))) {
+			timeout = boot_arg_val;
+		}
+#endif
+
+		if (timeout) {
+			shutdown_hang = thread_call_allocate( &IOShutdownNotificationsTimedOut,
+			    (thread_call_param_t)(uintptr_t) type);
+			clock_interval_to_deadline( timeout, kSecondScale, &deadline );
+			thread_call_enter1_delayed( shutdown_hang, (thread_call_param_t)(uintptr_t)timeout, deadline );
+		}
 
 		pmRootDomain->handlePlatformHaltRestart(type);
 		/* This notification should have few clients who all do
@@ -938,7 +973,8 @@ PEHaltRestart(unsigned int type)
 		 *  later. PM internals make it very hard to wait for asynchronous
 		 *  replies.
 		 */
-	} else if (type == kPEPanicRestartCPU || type == kPEPanicSync) {
+	} else if (type == kPEPanicRestartCPU || type == kPEPanicSync || type == kPEPanicRestartCPUNoPanicEndCallouts ||
+	    type == kPEPanicRestartCPUNoCallouts) {
 		if (type == kPEPanicRestartCPU) {
 			// Notify any listeners that we're done collecting
 			// panic data before we call through to do the restart
@@ -946,11 +982,18 @@ PEHaltRestart(unsigned int type)
 			if (coprocessor_cross_panic_enabled)
 #endif
 			IOCPURunPlatformPanicActions(kPEPanicEnd);
+		}
 
+		if ((type == kPEPanicRestartCPU) || (type == kPEPanicRestartCPUNoPanicEndCallouts)) {
 			// Callout to shutdown the disk driver once we've returned from the
-			// kPEPanicEnd callback (and we know all core dumps on this system
-			// are complete).
+			// kPEPanicEnd callbacks (if appropriate) and we know all coredumps
+			// on this system are complete).
 			IOCPURunPlatformPanicActions(kPEPanicDiskShutdown);
+		}
+
+		if (type == kPEPanicRestartCPUNoPanicEndCallouts || type == kPEPanicRestartCPUNoCallouts) {
+			// Replace the wrapper type with the type drivers handle
+			type = kPEPanicRestartCPU;
 		}
 
 		// Do an initial sync to flush as much panic data as possible,
@@ -978,6 +1021,7 @@ PEHaltRestart(unsigned int type)
 		}
 	}
 
+skip_to_haltRestart:
 	if (gIOPlatform) {
 		return gIOPlatform->haltRestart(type);
 	} else {
@@ -988,7 +1032,7 @@ PEHaltRestart(unsigned int type)
 UInt32
 PESavePanicInfo(UInt8 *buffer, UInt32 length)
 {
-	if (gIOPlatform != 0) {
+	if (gIOPlatform != NULL) {
 		return gIOPlatform->savePanicInfo(buffer, length);
 	} else {
 		return 0;
@@ -1268,7 +1312,7 @@ IOPlatformExpert::registerNVRAMController(IONVRAMController * caller)
 {
 	OSData *          data;
 	IORegistryEntry * entry;
-	OSString *        string = 0;
+	OSString *        string = NULL;
 	uuid_string_t     uuid;
 
 #if CONFIG_EMBEDDED
@@ -1302,20 +1346,22 @@ IOPlatformExpert::registerNVRAMController(IONVRAMController * caller)
 
 		entry->release();
 	}
-#else /* !CONFIG_EMBEDDED */
+#endif /* CONFIG_EMBEDDED */
+
+#if defined(XNU_TARGET_OS_OSX)
 	/*
-	 * If we have panic debugging enabled and a prod-fused coprocessor,
+	 * If we have panic debugging enabled and the bridgeOS panic SoC watchdog is enabled,
 	 * disable cross panics so that the co-processor doesn't cause the system
 	 * to reset when we enter the debugger or hit a panic on the x86 side.
 	 */
 	if (panicDebugging) {
 		entry = IORegistryEntry::fromPath( "/options", gIODTPlane );
 		if (entry) {
-			data = OSDynamicCast( OSData, entry->getProperty( APPLE_SECURE_BOOT_VARIABLE_GUID":EffectiveProductionStatus" ));
+			data = OSDynamicCast( OSData, entry->getProperty( APPLE_VENDOR_VARIABLE_GUID":BridgeOSPanicWatchdogEnabled" ));
 			if (data && (data->getLength() == sizeof(UInt8))) {
-				UInt8 *isProdFused = (UInt8 *) data->getBytesNoCopy();
+				UInt8 *panicWatchdogEnabled = (UInt8 *) data->getBytesNoCopy();
 				UInt32 debug_flags = 0;
-				if (*isProdFused || (PE_i_can_has_debugger(&debug_flags) &&
+				if (*panicWatchdogEnabled || (PE_i_can_has_debugger(&debug_flags) &&
 				    (debug_flags & DB_DISABLE_CROSS_PANIC))) {
 					coprocessor_cross_panic_enabled = FALSE;
 				}
@@ -1346,9 +1392,9 @@ IOPlatformExpert::registerNVRAMController(IONVRAMController * caller)
 
 		entry->release();
 	}
-#endif /* !CONFIG_EMBEDDED */
+#endif /* defined(XNU_TARGET_OS_OSX) */
 
-	if (string == 0) {
+	if (string == NULL) {
 		entry = IORegistryEntry::fromPath( "/options", gIODTPlane );
 		if (entry) {
 			data = OSDynamicCast( OSData, entry->getProperty( "platform-uuid" ));
@@ -1379,17 +1425,29 @@ IOPlatformExpert::callPlatformFunction(const OSSymbol *functionName,
 {
 	IOService *service, *_resources;
 
+	if (functionName == gIOPlatformQuiesceActionKey ||
+	    functionName == gIOPlatformActiveActionKey) {
+		/*
+		 * Services which register for IOPlatformQuiesceAction / IOPlatformActiveAction
+		 * must consume that event themselves, without passing it up to super/IOPlatformExpert.
+		 */
+		if (gEnforceQuiesceSafety) {
+			panic("Class %s passed the quiesce/active action to IOPlatformExpert",
+			    getMetaClass()->getClassName());
+		}
+	}
+
 	if (waitForFunction) {
 		_resources = waitForService(resourceMatching(functionName));
 	} else {
 		_resources = getResourceService();
 	}
-	if (_resources == 0) {
+	if (_resources == NULL) {
 		return kIOReturnUnsupported;
 	}
 
 	service = OSDynamicCast(IOService, _resources->getProperty(functionName));
-	if (service == 0) {
+	if (service == NULL) {
 		return kIOReturnUnsupported;
 	}
 
@@ -1426,12 +1484,12 @@ IODTPlatformExpert::probe( IOService * provider,
     SInt32 * score )
 {
 	if (!super::probe( provider, score)) {
-		return 0;
+		return NULL;
 	}
 
 	// check machine types
 	if (!provider->compareNames( getProperty( gIONameMatchKey ))) {
-		return 0;
+		return NULL;
 	}
 
 	return this;
@@ -1458,7 +1516,7 @@ IODTPlatformExpert::createNub( IORegistryEntry * from )
 	if (nub) {
 		if (!nub->init( from, gIODTPlane )) {
 			nub->free();
-			nub = 0;
+			nub = NULL;
 		}
 	}
 	return nub;
@@ -1473,7 +1531,7 @@ IODTPlatformExpert::createNubs( IOService * parent, OSIterator * iter )
 
 	if (iter) {
 		while ((next = (IORegistryEntry *) iter->getNextObject())) {
-			if (0 == (nub = createNub( next ))) {
+			if (NULL == (nub = createNub( next ))) {
 				continue;
 			}
 
@@ -1510,7 +1568,7 @@ IODTPlatformExpert::processTopLevel( IORegistryEntry * rootEntry )
 		if (dtNVRAM) {
 			if (!dtNVRAM->init(options, gIODTPlane)) {
 				dtNVRAM->release();
-				dtNVRAM = 0;
+				dtNVRAM = NULL;
 			} else {
 				dtNVRAM->attach(this);
 				dtNVRAM->registerService();
@@ -1522,7 +1580,7 @@ IODTPlatformExpert::processTopLevel( IORegistryEntry * rootEntry )
 	// Publish the cpus.
 	cpus = rootEntry->childFromPath( "cpus", gIODTPlane);
 	if (cpus) {
-		createNubs( this, IODTFindMatchingEntries( cpus, kIODTExclusive, 0));
+		createNubs( this, IODTFindMatchingEntries( cpus, kIODTExclusive, NULL));
 		cpus->release();
 	}
 
@@ -1537,7 +1595,7 @@ IODTPlatformExpert::getNubResources( IOService * nub )
 		return kIOReturnSuccess;
 	}
 
-	IODTResolveAddressing( nub, "reg", 0);
+	IODTResolveAddressing( nub, "reg", NULL);
 
 	return kIOReturnSuccess;
 }
@@ -1595,7 +1653,7 @@ IODTPlatformExpert::getMachineName( char * name, int maxLength )
 
 	maxLength--;
 	prop = (OSData *) getProvider()->getProperty( gIODTModelKey );
-	ok = (0 != prop);
+	ok = (NULL != prop);
 
 	if (ok) {
 		strlcpy( name, (const char *) prop->getBytesNoCopy(), maxLength );
@@ -1678,7 +1736,7 @@ IODTPlatformExpert::getNVRAMPartitions(void)
 	if (dtNVRAM) {
 		return dtNVRAM->getNVRAMPartitions();
 	} else {
-		return 0;
+		return NULL;
 	}
 }
 
@@ -1786,7 +1844,7 @@ bool
 IOPlatformExpertDevice::initWithArgs(
 	void * dtTop, void * p2, void * p3, void * p4 )
 {
-	IORegistryEntry *   dt = 0;
+	IORegistryEntry *   dt = NULL;
 	bool                ok;
 
 	// dtTop may be zero on non- device tree systems
@@ -1826,12 +1884,18 @@ IOPlatformExpertDevice::newUserClient( task_t owningTask, void * securityID,
     IOUserClient ** handler )
 {
 	IOReturn            err = kIOReturnSuccess;
-	IOUserClient *      newConnect = 0;
-	IOUserClient *      theConnect = 0;
+	IOUserClient *      newConnect = NULL;
+	IOUserClient *      theConnect = NULL;
 
 	switch (type) {
 	case kIOKitDiagnosticsClientType:
 		newConnect = IOKitDiagnosticsClient::withTask(owningTask);
+		if (!newConnect) {
+			err = kIOReturnNotPermitted;
+		}
+		break;
+	case kIOKitUserServerClientType:
+		newConnect = IOUserServer::withTask(owningTask);
 		if (!newConnect) {
 			err = kIOReturnNotPermitted;
 		}

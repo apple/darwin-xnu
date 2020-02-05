@@ -57,6 +57,8 @@
  * DKIOCREQUESTIDLE                      idle media
  * DKIOCUNMAP                            delete unused data
  *
+ * DKIOCGETLOCATION                      get device's physical location
+ *
  * DKIOCGETMAXBLOCKCOUNTREAD             get maximum block count for reads
  * DKIOCGETMAXBLOCKCOUNTWRITE            get maximum block count for writes
  * DKIOCGETMAXBYTECOUNTREAD              get maximum byte count for reads
@@ -135,7 +137,6 @@ typedef struct{
 #endif /* !__LP64__ */
 } dk_unmap_t;
 
-
 typedef struct{
 	uint64_t           flags;
 	uint64_t           hotfile_size;           /* in bytes */
@@ -176,6 +177,8 @@ typedef struct{
 	char *                 description;
 } dk_error_description_t;
 
+#define DK_LOCATION_INTERNAL                   0x00000000
+#define DK_LOCATION_EXTERNAL                   0x00000001
 
 #ifdef KERNEL
 #ifdef PRIVATE
@@ -202,6 +205,8 @@ typedef struct{
 #define DKIOCREQUESTIDLE                      _IO('d', 30)
 #define DKIOCUNMAP                            _IOW('d', 31, dk_unmap_t)
 #define DKIOCCORESTORAGE                      _IOR('d', 32, dk_corestorage_info_t)
+
+#define DKIOCGETLOCATION                      _IOR('d', 33, uint64_t)
 
 #define DKIOCGETMAXBLOCKCOUNTREAD             _IOR('d', 64, uint64_t)
 #define DKIOCGETMAXBLOCKCOUNTWRITE            _IOR('d', 65, uint64_t)
@@ -344,9 +349,9 @@ typedef struct dk_apfs_wbc_range {
 #endif /* KERNEL */
 
 #ifdef PRIVATE
-#if TARGET_OS_EMBEDDED
+#if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 #define _DKIOCSETSTATIC                       _IO('d', 84)
-#endif /* TARGET_OS_EMBEDDED */
+#endif /* (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 #endif /* PRIVATE */
 
 #endif  /* _SYS_DISK_H_ */

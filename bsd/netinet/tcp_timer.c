@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -84,6 +84,7 @@
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/in_pcb.h>
+#include <netinet/in_var.h>
 #if INET6
 #include <netinet6/in6_pcb.h>
 #endif
@@ -102,6 +103,8 @@
 #if TCPDEBUG
 #include <netinet/tcp_debug.h>
 #endif
+#include <netinet/tcp_log.h>
+
 #include <sys/kdebug.h>
 #include <mach/sdt.h>
 #include <netinet/mptcp_var.h>
@@ -128,7 +131,10 @@ sysctl_msec_to_ticks SYSCTL_HANDLER_ARGS
 	int error, s, tt;
 
 	tt = *(int *)arg1;
-	s = tt * 1000 / TCP_RETRANSHZ;;
+	if (tt < 0 || tt >= INT_MAX / 1000) {
+		return EINVAL;
+	}
+	s = tt * 1000 / TCP_RETRANSHZ;
 
 	error = sysctl_handle_int(oidp, &s, 0, req);
 	if (error || !req->newptr) {
@@ -265,6 +271,13 @@ SYSCTL_SKMEM_TCP_INT(OID_AUTO, pmtud_blackhole_detection,
 SYSCTL_SKMEM_TCP_INT(OID_AUTO, pmtud_blackhole_mss,
     CTLFLAG_RW | CTLFLAG_LOCKED, int, tcp_pmtud_black_hole_mss, 1200,
     "Path MTU Discovery Black Hole Detection lowered MSS");
+
+#if (DEBUG || DEVELOPMENT)
+int tcp_probe_if_fix_port = 0;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, probe_if_fix_port,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &tcp_probe_if_fix_port, 0, "");
+#endif /* (DEBUG || DEVELOPMENT) */
 
 static u_int32_t tcp_mss_rec_medium = 1200;
 static u_int32_t tcp_mss_rec_low = 512;
@@ -477,7 +490,7 @@ inline int32_t
 timer_diff(uint32_t t1, uint32_t toff1, uint32_t t2, uint32_t toff2)
 {
 	return (int32_t)((t1 + toff1) - (t2 + toff2));
-};
+}
 
 /*
  * Add to tcp timewait list, delay is given in milliseconds.
@@ -565,7 +578,19 @@ tcp_garbage_collect(struct inpcb *inp, int istimewait)
 			active = TRUE;
 			goto out;
 		}
+		if (mpsotomppcb(mp_so)->mpp_inside > 0) {
+			os_log(mptcp_log_handle, "%s - %lx: Still inside %d usecount %d\n", __func__,
+			    (unsigned long)VM_KERNEL_ADDRPERM(mpsotompte(mp_so)),
+			    mpsotomppcb(mp_so)->mpp_inside,
+			    mp_so->so_usecount);
+			socket_unlock(mp_so, 0);
+			mp_so = NULL;
+			active = TRUE;
+			goto out;
+		}
+		/* We call socket_unlock with refcount further below */
 		mp_so->so_usecount++;
+		tptomptp(tp)->mpt_mpte->mpte_mppcb->mpp_inside++;
 	}
 
 	/*
@@ -1004,6 +1029,7 @@ retransmit_packet:
 			 * is spurious.
 			 */
 			tcp_rexmt_save_state(tp);
+			tcp_ccdbg_trace(tp, NULL, TCP_CC_FIRST_REXMT);
 		}
 #if MPTCP
 		if ((tp->t_rxtshift >= mptcp_fail_thresh) &&
@@ -1012,10 +1038,13 @@ retransmit_packet:
 			mptcp_act_on_txfail(so);
 		}
 
-		if (so->so_flags & SOF_MP_SUBFLOW) {
+		if (TCPS_HAVEESTABLISHED(tp->t_state) &&
+		    (so->so_flags & SOF_MP_SUBFLOW)) {
 			struct mptses *mpte = tptomptp(tp)->mpt_mpte;
 
-			mptcp_check_subflows_and_add(mpte);
+			if (mpte->mpte_svctype == MPTCP_SVCTYPE_HANDOVER) {
+				mptcp_check_subflows_and_add(mpte);
+			}
 		}
 #endif /* MPTCP */
 
@@ -1049,11 +1078,13 @@ retransmit_packet:
 			tp->t_flagsext &= ~(TF_DELAY_RECOVERY);
 		}
 
-		if (tp->t_state == TCPS_SYN_RECEIVED) {
+		if (!(tp->t_flagsext & TF_FASTOPEN_FORCE_ENABLE) &&
+		    tp->t_state == TCPS_SYN_RECEIVED) {
 			tcp_disable_tfo(tp);
 		}
 
-		if (!(tp->t_tfo_flags & TFO_F_HEURISTIC_DONE) &&
+		if (!(tp->t_flagsext & TF_FASTOPEN_FORCE_ENABLE) &&
+		    !(tp->t_tfo_flags & TFO_F_HEURISTIC_DONE) &&
 		    (tp->t_tfo_stats & TFO_S_SYN_DATA_SENT) &&
 		    !(tp->t_tfo_flags & TFO_F_NO_SNDPROBING) &&
 		    ((tp->t_state != TCPS_SYN_SENT && tp->t_rxtshift > 1) ||
@@ -1070,6 +1101,8 @@ retransmit_packet:
 			tcp_heuristic_tfo_middlebox(tp);
 
 			so->so_error = ENODATA;
+			soevent(so,
+			    (SO_FILT_HINT_LOCKED | SO_FILT_HINT_MP_SUB_ERROR));
 			sorwakeup(so);
 			sowwakeup(so);
 
@@ -1077,13 +1110,16 @@ retransmit_packet:
 			tcpstat.tcps_tfo_sndblackhole++;
 		}
 
-		if (!(tp->t_tfo_flags & TFO_F_HEURISTIC_DONE) &&
+		if (!(tp->t_flagsext & TF_FASTOPEN_FORCE_ENABLE) &&
+		    !(tp->t_tfo_flags & TFO_F_HEURISTIC_DONE) &&
 		    (tp->t_tfo_stats & TFO_S_SYN_DATA_ACKED) &&
 		    tp->t_rxtshift > 3) {
 			if (TSTMP_GT(tp->t_sndtime - 10 * TCP_RETRANSHZ, tp->t_rcvtime)) {
 				tcp_heuristic_tfo_middlebox(tp);
 
 				so->so_error = ENODATA;
+				soevent(so,
+				    (SO_FILT_HINT_LOCKED | SO_FILT_HINT_MP_SUB_ERROR));
 				sorwakeup(so);
 				sowwakeup(so);
 			}
@@ -1092,12 +1128,12 @@ retransmit_packet:
 		if (tp->t_state == TCPS_SYN_SENT) {
 			rexmt = TCP_REXMTVAL(tp) * tcp_syn_backoff[tp->t_rxtshift];
 			tp->t_stat.synrxtshift = tp->t_rxtshift;
+			tp->t_stat.rxmitsyns++;
 
 			/* When retransmitting, disable TFO */
 			if (tfo_enabled(tp) &&
-			    (!(so->so_flags1 & SOF1_DATA_AUTHENTICATED) ||
-			    (tp->t_flagsext & TF_FASTOPEN_HEUR))) {
-				tp->t_flagsext &= ~TF_FASTOPEN;
+			    !(tp->t_flagsext & TF_FASTOPEN_FORCE_ENABLE)) {
+				tcp_disable_tfo(tp);
 				tp->t_tfo_flags |= TFO_F_SYN_LOSS;
 			}
 		} else {
@@ -1107,6 +1143,8 @@ retransmit_packet:
 		TCPT_RANGESET(tp->t_rxtcur, rexmt, tp->t_rttmin, TCPTV_REXMTMAX,
 		    TCP_ADD_REXMTSLOP(tp));
 		tp->t_timer[TCPT_REXMT] = OFFSET_FROM_START(tp, tp->t_rxtcur);
+
+		TCP_LOG_RTT_INFO(tp);
 
 		if (INP_WAIT_FOR_IF_FEEDBACK(tp->t_inpcb)) {
 			goto fc_output;
@@ -1347,8 +1385,10 @@ fc_output:
 				bzero(&tra, sizeof(tra));
 				tra.nocell = INP_NO_CELLULAR(inp);
 				tra.noexpensive = INP_NO_EXPENSIVE(inp);
+				tra.noconstrained = INP_NO_CONSTRAINED(inp);
 				tra.awdl_unrestricted = INP_AWDL_UNRESTRICTED(inp);
 				tra.intcoproc_allowed = INP_INTCOPROC_ALLOWED(inp);
+				tra.keep_alive = 1;
 				if (tp->t_inpcb->inp_flags & INP_BOUND_IF) {
 					tra.ifscope = tp->t_inpcb->inp_boundifp->if_index;
 				} else {
@@ -1362,6 +1402,9 @@ fc_output:
 					tp->t_rtimo_probes++;
 				}
 			}
+
+			TCP_LOG_KEEP_ALIVE(tp, idle_time);
+
 			tp->t_timer[TCPT_KEEP] = OFFSET_FROM_START(tp,
 			    TCP_CONN_KEEPINTVL(tp));
 		} else {
@@ -1418,12 +1461,15 @@ fc_output:
 			tp->t_timer[TCPT_KEEP] = min(OFFSET_FROM_START(
 				    tp, tcp_backoff[ind] * TCP_REXMTVAL(tp)),
 			    tp->t_timer[TCPT_KEEP]);
-		} else if (!(tp->t_tfo_flags & TFO_F_HEURISTIC_DONE) &&
+		} else if (!(tp->t_flagsext & TF_FASTOPEN_FORCE_ENABLE) &&
+		    !(tp->t_tfo_flags & TFO_F_HEURISTIC_DONE) &&
 		    tp->t_tfo_probe_state == TFO_PROBE_WAIT_DATA) {
 			/* Still no data! Let's assume a TFO-error and err out... */
 			tcp_heuristic_tfo_middlebox(tp);
 
 			so->so_error = ENODATA;
+			soevent(so,
+			    (SO_FILT_HINT_LOCKED | SO_FILT_HINT_MP_SUB_ERROR));
 			sorwakeup(so);
 			tp->t_tfo_stats |= TFO_S_RECV_BLACKHOLE;
 			tcpstat.tcps_tfo_blackhole++;
@@ -1508,51 +1554,101 @@ fc_output:
 
 	case TCPT_PTO:
 	{
-		int32_t snd_len;
-		tp->t_flagsext &= ~(TF_SENT_TLPROBE);
+		int32_t ret = 0;
 
+		if (!(tp->t_flagsext & TF_IF_PROBING)) {
+			tp->t_flagsext &= ~(TF_SENT_TLPROBE);
+		}
 		/*
 		 * Check if the connection is in the right state to
 		 * send a probe
 		 */
-		if (tp->t_state != TCPS_ESTABLISHED ||
-		    (tp->t_rxtshift > 0 && !(tp->t_flagsext & TF_PROBING)) ||
+		if ((tp->t_state != TCPS_ESTABLISHED ||
+		    tp->t_rxtshift > 0 ||
 		    tp->snd_max == tp->snd_una ||
 		    !SACK_ENABLED(tp) ||
 		    !TAILQ_EMPTY(&tp->snd_holes) ||
-		    IN_FASTRECOVERY(tp)) {
+		    IN_FASTRECOVERY(tp)) &&
+		    !(tp->t_flagsext & TF_IF_PROBING)) {
 			break;
 		}
 
 		/*
-		 * If there is no new data to send or if the
-		 * connection is limited by receive window then
-		 * retransmit the last segment, otherwise send
-		 * new data.
+		 * When the interface state is changed explicitly reset the retransmission
+		 * timer state for both SYN and data packets because we do not want to
+		 * wait unnecessarily or timeout too quickly if the link characteristics
+		 * have changed drastically
 		 */
-		snd_len = min(so->so_snd.sb_cc, tp->snd_wnd)
-		    - (tp->snd_max - tp->snd_una);
-		if (snd_len > 0) {
-			tp->snd_nxt = tp->snd_max;
+		if (tp->t_flagsext & TF_IF_PROBING) {
+			tp->t_rxtshift = 0;
+			if (tp->t_state == TCPS_SYN_SENT) {
+				tp->t_stat.synrxtshift = tp->t_rxtshift;
+			}
+			/*
+			 * Reset to the the default RTO
+			 */
+			tp->t_srtt = TCPTV_SRTTBASE;
+			tp->t_rttvar =
+			    ((TCPTV_RTOBASE - TCPTV_SRTTBASE) << TCP_RTTVAR_SHIFT) / 4;
+			tp->t_rttmin = tp->t_flags & TF_LOCAL ? tcp_TCPTV_MIN :
+			    TCPTV_REXMTMIN;
+			TCPT_RANGESET(tp->t_rxtcur, TCP_REXMTVAL(tp),
+			    tp->t_rttmin, TCPTV_REXMTMAX, TCP_ADD_REXMTSLOP(tp));
+			TCP_LOG_RTT_INFO(tp);
+		}
+
+		if (tp->t_state == TCPS_SYN_SENT) {
+			/*
+			 * The PTO for SYN_SENT reinitializes TCP as if it was a fresh
+			 * connection attempt
+			 */
+			tp->snd_nxt = tp->snd_una;
+			/*
+			 * Note:  We overload snd_recover to function also as the
+			 * snd_last variable described in RFC 2582
+			 */
+			tp->snd_recover = tp->snd_max;
+			/*
+			 * Force a segment to be sent.
+			 */
+			tp->t_flags |= TF_ACKNOW;
+
+			/* If timing a segment in this window, stop the timer */
+			tp->t_rtttime = 0;
 		} else {
-			snd_len = min((tp->snd_max - tp->snd_una),
-			    tp->t_maxseg);
-			tp->snd_nxt = tp->snd_max - snd_len;
+			int32_t snd_len;
+
+			/*
+			 * If there is no new data to send or if the
+			 * connection is limited by receive window then
+			 * retransmit the last segment, otherwise send
+			 * new data.
+			 */
+			snd_len = min(so->so_snd.sb_cc, tp->snd_wnd)
+			    - (tp->snd_max - tp->snd_una);
+			if (snd_len > 0) {
+				tp->snd_nxt = tp->snd_max;
+			} else {
+				snd_len = min((tp->snd_max - tp->snd_una),
+				    tp->t_maxseg);
+				tp->snd_nxt = tp->snd_max - snd_len;
+			}
 		}
 
 		tcpstat.tcps_pto++;
-		if (tp->t_flagsext & TF_PROBING) {
+		if (tp->t_flagsext & TF_IF_PROBING) {
 			tcpstat.tcps_probe_if++;
 		}
 
 		/* If timing a segment in this window, stop the timer */
 		tp->t_rtttime = 0;
-		/* Note that tail loss probe is being sent */
-		tp->t_flagsext |= TF_SENT_TLPROBE;
-		tp->t_tlpstart = tcp_now;
+		/* Note that tail loss probe is being sent. Exclude IF probe */
+		if (!(tp->t_flagsext & TF_IF_PROBING)) {
+			tp->t_flagsext |= TF_SENT_TLPROBE;
+			tp->t_tlpstart = tcp_now;
+		}
 
 		tp->snd_cwnd += tp->t_maxseg;
-
 		/*
 		 * When tail-loss-probe fires, we reset the RTO timer, because
 		 * a probe just got sent, so we are good to push out the timer.
@@ -1560,11 +1656,57 @@ fc_output:
 		 * Set to 0 to ensure that tcp_output() will reschedule it
 		 */
 		tp->t_timer[TCPT_REXMT] = 0;
+		ret = tcp_output(tp);
 
-		(void)tcp_output(tp);
+#if (DEBUG || DEVELOPMENT)
+		if ((tp->t_flagsext & TF_IF_PROBING) &&
+		    ((IFNET_IS_COMPANION_LINK(tp->t_inpcb->inp_last_outifp)) ||
+		    tp->t_state == TCPS_SYN_SENT)) {
+			if (ret == 0 && tcp_probe_if_fix_port > 0 &&
+			    tcp_probe_if_fix_port <= IPPORT_HILASTAUTO) {
+				tp->t_timer[TCPT_REXMT] = 0;
+				tcp_set_lotimer_index(tp);
+			}
+
+			os_log(OS_LOG_DEFAULT,
+			    "%s: sent %s probe for %u > %u on interface %s"
+			    " (%u) %s(%d)",
+			    __func__,
+			    tp->t_state == TCPS_SYN_SENT ? "SYN" : "data",
+			    ntohs(tp->t_inpcb->inp_lport),
+			    ntohs(tp->t_inpcb->inp_fport),
+			    if_name(tp->t_inpcb->inp_last_outifp),
+			    tp->t_inpcb->inp_last_outifp->if_index,
+			    ret == 0 ? "succeeded" :"failed", ret);
+		}
+#endif /* DEBUG || DEVELOPMENT */
+
+		/*
+		 * When the connection is not idle, make sure the retransmission timer
+		 * is armed because it was set to zero above
+		 */
+		if ((tp->t_timer[TCPT_REXMT] == 0 || tp->t_timer[TCPT_PERSIST] == 0) &&
+		    (tp->t_inpcb->inp_socket->so_snd.sb_cc != 0 || tp->t_state == TCPS_SYN_SENT ||
+		    tp->t_state == TCPS_SYN_RECEIVED)) {
+			tp->t_timer[TCPT_REXMT] =
+			    OFFSET_FROM_START(tp, tp->t_rxtcur);
+
+			os_log(OS_LOG_DEFAULT,
+			    "%s: tcp_output() returned %u with retransmission timer disabled "
+			    "for %u > %u in state %d, reset timer to %d",
+			    __func__, ret,
+			    ntohs(tp->t_inpcb->inp_lport),
+			    ntohs(tp->t_inpcb->inp_fport),
+			    tp->t_state,
+			    tp->t_timer[TCPT_REXMT]);
+
+			tcp_check_timer_state(tp);
+		}
 		tp->snd_cwnd -= tp->t_maxseg;
 
-		tp->t_tlphighrxt = tp->snd_nxt;
+		if (!(tp->t_flagsext & TF_IF_PROBING)) {
+			tp->t_tlphighrxt = tp->snd_nxt;
+		}
 		break;
 	}
 	case TCPT_DELAYFR:
@@ -1762,12 +1904,11 @@ tcp_run_conn_timer(struct tcpcb *tp, u_int16_t *te_mode,
 	 * If this connection is over an interface that needs to
 	 * be probed, send probe packets to reinitiate communication.
 	 */
-	if (probe_if_index > 0 && tp->t_inpcb->inp_last_outifp != NULL &&
-	    tp->t_inpcb->inp_last_outifp->if_index == probe_if_index) {
-		tp->t_flagsext |= TF_PROBING;
+	if (TCP_IF_STATE_CHANGED(tp, probe_if_index)) {
+		tp->t_flagsext |= TF_IF_PROBING;
 		tcp_timers(tp, TCPT_PTO);
 		tp->t_timer[TCPT_PTO] = 0;
-		tp->t_flagsext &= ~TF_PROBING;
+		tp->t_flagsext &= ~TF_IF_PROBING;
 	}
 
 	/*
@@ -1907,7 +2048,14 @@ tcp_run_timerlist(void * arg1, void * arg2)
 	LIST_FOREACH_SAFE(te, &listp->lhead, le, next_te) {
 		uint32_t offset = 0;
 		uint32_t runtime = te->runtime;
-		if (te->index < TCPT_NONE && TSTMP_GT(runtime, tcp_now)) {
+
+		tp = TIMERENTRY_TO_TP(te);
+
+		/*
+		 * An interface probe may need to happen before the previously scheduled runtime
+		 */
+		if (te->index < TCPT_NONE && TSTMP_GT(runtime, tcp_now) &&
+		    !TCP_IF_STATE_CHANGED(tp, listp->probe_if_index)) {
 			offset = timer_diff(runtime, 0, tcp_now, 0);
 			if (next_timer == 0 || offset < next_timer) {
 				next_timer = offset;
@@ -1915,8 +2063,6 @@ tcp_run_timerlist(void * arg1, void * arg2)
 			list_mode |= te->mode;
 			continue;
 		}
-
-		tp = TIMERENTRY_TO_TP(te);
 
 		/*
 		 * Acquire an inp wantcnt on the inpcb so that the socket
@@ -2473,13 +2619,19 @@ tcp_interface_send_probe(u_int16_t probe_if_index)
 	calculate_tcp_clock();
 
 	lck_mtx_lock(listp->mtx);
-	if (listp->probe_if_index > 0) {
+	if (listp->probe_if_index > 0 && listp->probe_if_index != probe_if_index) {
 		tcpstat.tcps_probe_if_conflict++;
+		os_log(OS_LOG_DEFAULT,
+		    "%s: probe_if_index %u conflicts with %u, tcps_probe_if_conflict %u\n",
+		    __func__, probe_if_index, listp->probe_if_index,
+		    tcpstat.tcps_probe_if_conflict);
 		goto done;
 	}
 
 	listp->probe_if_index = probe_if_index;
 	if (listp->running) {
+		os_log(OS_LOG_DEFAULT, "%s: timer list already running for if_index %u\n",
+		    __func__, probe_if_index);
 		goto done;
 	}
 
@@ -2493,6 +2645,9 @@ tcp_interface_send_probe(u_int16_t probe_if_index)
 		diff = timer_diff(listp->runtime, 0, tcp_now, offset);
 		if (diff <= 0) {
 			/* The timer will fire sooner than what's needed */
+			os_log(OS_LOG_DEFAULT,
+			    "%s: timer will fire sooner than needed for if_index %u\n",
+			    __func__, probe_if_index);
 			goto done;
 		}
 	}

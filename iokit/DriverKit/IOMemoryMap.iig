@@ -1,0 +1,97 @@
+/*
+ * Copyright (c) 2019-2019 Apple Inc. All rights reserved.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+ *
+ * This file contains Original Code and/or Modifications of Original Code
+ * as defined in and that are subject to the Apple Public Source License
+ * Version 2.0 (the 'License'). You may not use this file except in
+ * compliance with the License. The rights granted to you under the License
+ * may not be used to create, or enable the creation or redistribution of,
+ * unlawful or unlicensed copies of an Apple operating system, or to
+ * circumvent, violate, or enable the circumvention or violation of, any
+ * terms of an Apple operating system software license agreement.
+ *
+ * Please obtain a copy of the License at
+ * http://www.opensource.apple.com/apsl/ and read it before using this file.
+ *
+ * The Original Code and all software distributed under the License are
+ * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+ * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+ * INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+ * Please see the License for the specific language governing rights and
+ * limitations under the License.
+ *
+ * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+ */
+
+#if !__IIG
+#if KERNEL
+#include <IOKit/IOMemoryDescriptor.h>
+#endif
+#endif
+
+#ifndef _IOKIT_UIOMEMORYMAP_H
+#define _IOKIT_UIOMEMORYMAP_H
+
+#include <DriverKit/OSObject.iig>
+
+struct IOMemoryMapPrivateState {
+	uint64_t length;
+	uint64_t offset;
+	uint64_t options;
+	uint64_t address;
+};
+
+/*!
+ * @class IOMemoryMap
+ *
+ * @abstract
+ * IOMemoryMap describes a memory mapping created with IOMemoryDescriptor::CreateMapping()
+ *
+ * @discussion
+ * To allocate memory for I/O or sharing, use IOBufferMemoryDescriptor::Create()
+ * Methods in this class are used for memory that was supplied as a parameter.
+ */
+
+class KERNEL IOMemoryMap : public OSObject
+{
+public:
+
+	virtual bool
+	init() override;
+
+	virtual void
+	free() override;
+	
+    /*!
+     * @brief       Obtain the address of the memory mapping.
+     * @return      Address.
+     */
+	uint64_t
+	GetAddress() LOCALONLY;
+
+    /*!
+     * @brief       Obtain the length of the memory mapping.
+     * @return      Length.
+     */
+	uint64_t
+	GetLength() LOCALONLY;
+
+    /*!
+     * @brief       Obtain the offset of the memory mapping.
+     * @return      Offset.
+     */
+	uint64_t
+	GetOffset() LOCALONLY;
+};
+
+class EXTENDS (IOMemoryMap) IOMemoryMapPrivate
+{
+	virtual kern_return_t
+	_CopyState(
+		IOMemoryMapPrivateState * state);
+};
+
+#endif /* ! _IOKIT_UIOMEMORYMAP_H */

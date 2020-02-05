@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2005-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -26,7 +26,6 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#define MACH__POSIX_C_SOURCE_PRIVATE 1 /* pulls in suitable savearea from mach/ppc/thread_status.h */
 #include <kern/thread.h>
 #include <mach/thread_status.h>
 

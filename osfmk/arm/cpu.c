@@ -305,11 +305,17 @@ cpu_stack_alloc(cpu_data_t *cpu_data_ptr)
 void
 cpu_data_free(cpu_data_t *cpu_data_ptr)
 {
-	if (cpu_data_ptr == &BootCpuData) {
+	if ((cpu_data_ptr == NULL) || (cpu_data_ptr == &BootCpuData)) {
 		return;
 	}
 
 	cpu_processor_free( cpu_data_ptr->cpu_processor);
+	if (CpuDataEntries[cpu_data_ptr->cpu_number].cpu_data_vaddr == cpu_data_ptr) {
+		OSDecrementAtomic((SInt32*)&real_ncpus);
+		CpuDataEntries[cpu_data_ptr->cpu_number].cpu_data_vaddr = NULL;
+		CpuDataEntries[cpu_data_ptr->cpu_number].cpu_data_paddr = 0;
+		__builtin_arm_dmb(DMB_ISH); // Ensure prior stores to cpu array are visible
+	}
 	(kfree)((void *)(cpu_data_ptr->intstack_top - INTSTACK_SIZE), INTSTACK_SIZE);
 	(kfree)((void *)(cpu_data_ptr->fiqstack_top - FIQSTACK_SIZE), FIQSTACK_SIZE);
 	kmem_free(kernel_map, (vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t));
@@ -351,12 +357,6 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 
 	cpu_data_ptr->cpu_signal = SIGPdisabled;
 
-#if DEBUG || DEVELOPMENT
-	cpu_data_ptr->failed_xcall = NULL;
-	cpu_data_ptr->failed_signal = 0;
-	cpu_data_ptr->failed_signal_count = 0;
-#endif
-
 	cpu_data_ptr->cpu_get_fiq_handler = NULL;
 	cpu_data_ptr->cpu_tbd_hardware_addr = NULL;
 	cpu_data_ptr->cpu_tbd_hardware_val = NULL;
@@ -366,6 +366,8 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 	cpu_data_ptr->cpu_sleep_token_last = 0x00000000UL;
 	cpu_data_ptr->cpu_xcall_p0 = NULL;
 	cpu_data_ptr->cpu_xcall_p1 = NULL;
+	cpu_data_ptr->cpu_imm_xcall_p0 = NULL;
+	cpu_data_ptr->cpu_imm_xcall_p1 = NULL;
 
 #if     __ARM_SMP__ && defined(ARMA7)
 	cpu_data_ptr->cpu_CLWFlush_req = 0x0ULL;
@@ -398,6 +400,7 @@ cpu_data_register(cpu_data_t *cpu_data_ptr)
 	}
 
 	cpu_data_ptr->cpu_number = cpu;
+	__builtin_arm_dmb(DMB_ISH); // Ensure prior stores to cpu data are visible
 	CpuDataEntries[cpu].cpu_data_vaddr = cpu_data_ptr;
 	CpuDataEntries[cpu].cpu_data_paddr = (void *)ml_vtophys((vm_offset_t)cpu_data_ptr);
 	return KERN_SUCCESS;
@@ -420,8 +423,8 @@ cpu_start(int cpu)
 
 		cpu_data_ptr->cpu_pmap_cpu_data.cpu_user_pmap = NULL;
 
-		if (cpu_data_ptr->cpu_processor->next_thread != THREAD_NULL) {
-			first_thread = cpu_data_ptr->cpu_processor->next_thread;
+		if (cpu_data_ptr->cpu_processor->startup_thread != THREAD_NULL) {
+			first_thread = cpu_data_ptr->cpu_processor->startup_thread;
 		} else {
 			first_thread = cpu_data_ptr->cpu_processor->idle_thread;
 		}
@@ -594,8 +597,8 @@ void
 machine_track_platform_idle(boolean_t entry)
 {
 	if (entry) {
-		(void)__c11_atomic_fetch_add(&cpu_idle_count, 1, __ATOMIC_RELAXED);
+		os_atomic_inc(&cpu_idle_count, relaxed);
 	} else {
-		(void)__c11_atomic_fetch_sub(&cpu_idle_count, 1, __ATOMIC_RELAXED);
+		os_atomic_dec(&cpu_idle_count, relaxed);
 	}
 }

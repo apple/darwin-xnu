@@ -157,7 +157,6 @@ lookup_btrecord_byhash(btlog_t *btlog, uint32_t md5_hash, void *bt[], size_t btc
 	recindex = btlog->head;
 	record = lookup_btrecord(btlog, recindex);
 	while (recindex != BTLOG_RECORDINDEX_NONE) {
-		assert(record->bthash);
 		assert(!TAILQ_EMPTY(&record->element_record_queue));
 		if (record->bthash == md5_hash) {
 			/*
@@ -676,8 +675,6 @@ retry:
 
 	hashidx = calculate_hashidx_for_element((uintptr_t)element, btlog);
 	hashelem = btlog_get_elem_from_freelist(btlog);
-
-	assert(record->bthash);
 
 	hashelem->elem = ~((uintptr_t)element);
 	hashelem->operation = record->operation;

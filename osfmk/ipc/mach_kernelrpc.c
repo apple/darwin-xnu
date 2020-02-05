@@ -277,18 +277,30 @@ _kernelrpc_mach_port_insert_right_trap(struct _kernelrpc_mach_port_insert_right_
 		goto done;
 	}
 
+	if (args->name == args->poly) {
+		switch (args->polyPoly) {
+		case MACH_MSG_TYPE_MAKE_SEND:
+		case MACH_MSG_TYPE_COPY_SEND:
+			/* fastpath MAKE_SEND / COPY_SEND which is the most common case */
+			rv = ipc_object_insert_send_right(task->itk_space, args->poly,
+			    args->polyPoly);
+			goto done;
+
+		default:
+			break;
+		}
+	}
+
 	rv = ipc_object_copyin(task->itk_space, args->poly, args->polyPoly,
-	    (ipc_object_t *)&port);
+	    (ipc_object_t *)&port, 0, NULL, IPC_KMSG_FLAGS_ALLOW_IMMOVABLE_SEND);
 	if (rv != KERN_SUCCESS) {
 		goto done;
 	}
 	disp = ipc_object_copyin_type(args->polyPoly);
 
 	rv = mach_port_insert_right(task->itk_space, args->name, port, disp);
-	if (rv != KERN_SUCCESS) {
-		if (IO_VALID((ipc_object_t)port)) {
-			ipc_object_destroy((ipc_object_t)port, disp);
-		}
+	if (rv != KERN_SUCCESS && IP_VALID(port)) {
+		ipc_object_destroy(ip_to_object(port), disp);
 	}
 
 done:
@@ -464,6 +476,88 @@ _kernelrpc_mach_port_unguard_trap(struct _kernelrpc_mach_port_unguard_args *args
 	}
 
 	rv = mach_port_unguard(task->itk_space, args->name, args->guard);
+
+done:
+	if (task) {
+		task_deallocate(task);
+	}
+	return rv;
+}
+
+int
+_kernelrpc_mach_port_type_trap(struct _kernelrpc_mach_port_type_args *args)
+{
+	task_t task = port_name_to_task(args->target);
+	int rv = MACH_SEND_INVALID_DEST;
+	mach_port_type_t type;
+
+	if (task != current_task()) {
+		goto done;
+	}
+
+	rv = mach_port_type(task->itk_space, args->name, &type);
+	if (rv == KERN_SUCCESS) {
+		rv = copyout(&type, args->ptype, sizeof(type));
+	}
+
+done:
+	if (task) {
+		task_deallocate(task);
+	}
+	return rv;
+}
+
+int
+_kernelrpc_mach_port_request_notification_trap(
+	struct _kernelrpc_mach_port_request_notification_args *args)
+{
+	task_t task = port_name_to_task(args->target);
+	int rv = MACH_SEND_INVALID_DEST;
+	ipc_port_t notify, previous;
+	mach_msg_type_name_t disp;
+	mach_port_name_t previous_name = MACH_PORT_NULL;
+
+	if (task != current_task()) {
+		goto done;
+	}
+
+	disp = ipc_object_copyin_type(args->notifyPoly);
+	if (disp != MACH_MSG_TYPE_PORT_SEND_ONCE) {
+		goto done;
+	}
+
+	if (MACH_PORT_VALID(args->notify)) {
+		rv = ipc_object_copyin(task->itk_space, args->notify, args->notifyPoly,
+		    (ipc_object_t *)&notify, 0, NULL, 0);
+	} else {
+		notify = CAST_MACH_NAME_TO_PORT(args->notify);
+	}
+	if (rv != KERN_SUCCESS) {
+		goto done;
+	}
+
+	rv = mach_port_request_notification(task->itk_space, args->name,
+	    args->msgid, args->sync, notify, &previous);
+	if (rv != KERN_SUCCESS) {
+		ipc_object_destroy(ip_to_object(notify), disp);
+		goto done;
+	}
+
+	if (IP_VALID(previous)) {
+		// Remove once <rdar://problem/45522961> is fixed.
+		// We need to make ith_knote NULL as ipc_object_copyout() uses
+		// thread-argument-passing and its value should not be garbage
+		current_thread()->ith_knote = ITH_KNOTE_NULL;
+		rv = ipc_object_copyout(task->itk_space, ip_to_object(previous),
+		    MACH_MSG_TYPE_PORT_SEND_ONCE, NULL, NULL, &previous_name);
+		if (rv != KERN_SUCCESS) {
+			ipc_object_destroy(ip_to_object(previous),
+			    MACH_MSG_TYPE_PORT_SEND_ONCE);
+			goto done;
+		}
+	}
+
+	rv = copyout(&previous_name, args->previous, sizeof(previous_name));
 
 done:
 	if (task) {

@@ -43,6 +43,9 @@ void kperf_thread_info_sample(struct kperf_thread_info *,
     struct kperf_context *);
 void kperf_thread_info_log(struct kperf_thread_info *);
 
+// legacy names
+#define kpthsc_requested_qos_ipc_override kpthsc_requested_qos_kevent_override
+
 /* scheduling information */
 struct kperf_thread_scheduling {
 	uint64_t kpthsc_user_time;
@@ -55,8 +58,8 @@ struct kperf_thread_scheduling {
 	    kpthsc_requested_qos :3,
 	    kpthsc_requested_qos_override :3,
 	    kpthsc_requested_qos_promote :3,
-	    kpthsc_requested_qos_ipc_override :3,
-	    kpthsc_requested_qos_sync_ipc_override :3,
+	    kpthsc_requested_qos_kevent_override :3,
+	    kpthsc_requested_qos_sync_ipc_override :3,             /* obsolete */
 	    kpthsc_effective_latency_qos :3;
 };
 

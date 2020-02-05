@@ -107,6 +107,7 @@ struct route_old {
 #include <sys/eventhandler.h>
 #include <net/if_dl.h>
 
+extern boolean_t trigger_v6_defrtr_select;
 /*
  * Kernel resident routing tables.
  *

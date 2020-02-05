@@ -29,9 +29,6 @@
 
 #include <sys/cdefs.h>
 
-// <rdar://problem/26158937> panic() should be marked noreturn
-extern void panic(const char *string, ...) __printflike(1, 2) __dead2;
-
 #include <kern/assert.h>
 #include <kern/ast.h>
 #include <kern/clock.h>
@@ -82,10 +79,9 @@ extern void panic(const char *string, ...) __printflike(1, 2) __dead2;
 
 #include <os/log.h>
 
-extern thread_t port_name_to_thread(mach_port_name_t port_name); /* osfmk/kern/ipc_tt.h   */
-
 static void workq_unpark_continue(void *uth, wait_result_t wr) __dead2;
-static void workq_schedule_creator(proc_t p, struct workqueue *wq, int flags);
+static void workq_schedule_creator(proc_t p, struct workqueue *wq,
+    workq_kern_threadreq_flags_t flags);
 
 static bool workq_threadreq_admissible(struct workqueue *wq, struct uthread *uth,
     workq_threadreq_t req);
@@ -116,6 +112,7 @@ static lck_attr_t     *workq_lck_attr;
 static lck_grp_attr_t *workq_lck_grp_attr;
 os_refgrp_decl(static, workq_refgrp, "workq", NULL);
 
+static struct mpsc_daemon_queue workq_deallocate_queue;
 static zone_t workq_zone_workqueue;
 static zone_t workq_zone_threadreq;
 
@@ -184,10 +181,10 @@ proc_init_wqptr_or_wait(struct proc *p)
 	struct workqueue *wq;
 
 	proc_lock(p);
-	wq = p->p_wqptr;
+	wq = os_atomic_load(&p->p_wqptr, relaxed);
 
 	if (wq == NULL) {
-		p->p_wqptr = WQPTR_IS_INITING_VALUE;
+		os_atomic_store(&p->p_wqptr, WQPTR_IS_INITING_VALUE, relaxed);
 		proc_unlock(p);
 		return true;
 	}
@@ -211,9 +208,7 @@ workq_parked_wait_event(struct uthread *uth)
 static inline void
 workq_thread_wakeup(struct uthread *uth)
 {
-	if ((uth->uu_workq_flags & UT_WORKQ_IDLE_CLEANUP) == 0) {
-		thread_wakeup_thread(workq_parked_wait_event(uth), uth->uu_thread);
-	}
+	thread_wakeup_thread(workq_parked_wait_event(uth), uth->uu_thread);
 }
 
 #pragma mark wq_thactive
@@ -242,7 +237,7 @@ static_assert(sizeof(wq_thactive_t) * CHAR_BIT - WQ_THACTIVE_QOS_SHIFT >= 3,
 static inline wq_thactive_t
 _wq_thactive(struct workqueue *wq)
 {
-	return os_atomic_load(&wq->wq_thactive, relaxed);
+	return os_atomic_load_wide(&wq->wq_thactive, relaxed);
 }
 
 static inline int
@@ -323,7 +318,7 @@ _wq_thactive_move(struct workqueue *wq,
 {
 	wq_thactive_t v = _wq_thactive_offset_for_qos(new_qos) -
 	    _wq_thactive_offset_for_qos(old_qos);
-	os_atomic_add_orig(&wq->wq_thactive, v, relaxed);
+	os_atomic_add(&wq->wq_thactive, v, relaxed);
 	wq->wq_thscheduled_count[_wq_bucket(old_qos)]--;
 	wq->wq_thscheduled_count[_wq_bucket(new_qos)]++;
 }
@@ -388,13 +383,6 @@ workq_is_exiting(struct proc *p)
 	return !wq || _wq_exiting(wq);
 }
 
-struct turnstile *
-workq_turnstile(struct proc *p)
-{
-	struct workqueue *wq = proc_get_wqptr(p);
-	return wq ? wq->wq_turnstile : TURNSTILE_NULL;
-}
-
 #pragma mark workqueue lock
 
 static bool
@@ -450,7 +438,7 @@ workq_thread_needs_params_change(workq_threadreq_t req, struct uthread *uth)
 	workq_threadreq_param_t cur_trp, req_trp = { };
 
 	cur_trp.trp_value = uth->uu_save.uus_workq_park_data.workloop_params;
-	if (req->tr_flags & TR_FLAG_WL_PARAMS) {
+	if (req->tr_flags & WORKQ_TR_FLAG_WL_PARAMS) {
 		req_trp = kqueue_threadreq_workloop_param(req);
 	}
 
@@ -537,7 +525,7 @@ workq_thread_reset_cpupercent(workq_threadreq_t req, struct uthread *uth)
 	assert(uth == current_uthread());
 	workq_threadreq_param_t trp = { };
 
-	if (req && (req->tr_flags & TR_FLAG_WL_PARAMS)) {
+	if (req && (req->tr_flags & WORKQ_TR_FLAG_WL_PARAMS)) {
 		trp = kqueue_threadreq_workloop_param(req);
 	}
 
@@ -560,7 +548,7 @@ workq_thread_reset_cpupercent(workq_threadreq_t req, struct uthread *uth)
 
 static void
 workq_thread_reset_pri(struct workqueue *wq, struct uthread *uth,
-    workq_threadreq_t req)
+    workq_threadreq_t req, bool unpark)
 {
 	thread_t th = uth->uu_thread;
 	thread_qos_t qos = req ? req->tr_qos : WORKQ_THREAD_QOS_CLEANUP;
@@ -568,16 +556,18 @@ workq_thread_reset_pri(struct workqueue *wq, struct uthread *uth,
 	int priority = 31;
 	int policy = POLICY_TIMESHARE;
 
-	if (req && (req->tr_flags & TR_FLAG_WL_PARAMS)) {
+	if (req && (req->tr_flags & WORKQ_TR_FLAG_WL_PARAMS)) {
 		trp = kqueue_threadreq_workloop_param(req);
 	}
 
 	uth->uu_workq_pri = WORKQ_POLICY_INIT(qos);
 	uth->uu_workq_flags &= ~UT_WORKQ_OUTSIDE_QOS;
-	uth->uu_save.uus_workq_park_data.workloop_params = trp.trp_value;
 
-	// qos sent out to userspace (may differ from uu_workq_pri on param threads)
-	uth->uu_save.uus_workq_park_data.qos = qos;
+	if (unpark) {
+		uth->uu_save.uus_workq_park_data.workloop_params = trp.trp_value;
+		// qos sent out to userspace (may differ from uu_workq_pri on param threads)
+		uth->uu_save.uus_workq_park_data.qos = qos;
+	}
 
 	if (qos == WORKQ_THREAD_QOS_MANAGER) {
 		uint32_t mgr_pri = wq->wq_event_manager_priority;
@@ -611,12 +601,12 @@ workq_thread_reset_pri(struct workqueue *wq, struct uthread *uth,
  * every time a servicer is being told about a new max QoS.
  */
 void
-workq_thread_set_max_qos(struct proc *p, struct kqrequest *kqr)
+workq_thread_set_max_qos(struct proc *p, workq_threadreq_t kqr)
 {
 	struct uu_workq_policy old_pri, new_pri;
-	struct uthread *uth = get_bsdthread_info(kqr->kqr_thread);
+	struct uthread *uth = current_uthread();
 	struct workqueue *wq = proc_get_wqptr_fast(p);
-	thread_qos_t qos = kqr->kqr_qos_index;
+	thread_qos_t qos = kqr->tr_kq_qos_index;
 
 	if (uth->uu_workq_pri.qos_max == qos) {
 		return;
@@ -729,7 +719,9 @@ workq_death_policy_evaluate(struct workqueue *wq, uint16_t decrement)
 		    wq, wq->wq_thidlecount, 0, 0, 0);
 		wq->wq_thdying_count++;
 		uth->uu_workq_flags |= UT_WORKQ_DYING;
-		workq_thread_wakeup(uth);
+		if ((uth->uu_workq_flags & UT_WORKQ_IDLE_CLEANUP) == 0) {
+			workq_thread_wakeup(uth);
+		}
 		return;
 	}
 
@@ -770,14 +762,15 @@ workq_kill_old_threads_call(void *param0, void *param1 __unused)
 
 	workq_lock_spin(wq);
 	WQ_TRACE_WQ(TRACE_wq_death_call | DBG_FUNC_START, wq, 0, 0, 0, 0);
-	os_atomic_and(&wq->wq_flags, ~WQ_DEATH_CALL_SCHEDULED, relaxed);
+	os_atomic_andnot(&wq->wq_flags, WQ_DEATH_CALL_SCHEDULED, relaxed);
 	workq_death_policy_evaluate(wq, 0);
 	WQ_TRACE_WQ(TRACE_wq_death_call | DBG_FUNC_END, wq, 0, 0, 0, 0);
 	workq_unlock(wq);
 }
 
 static struct uthread *
-workq_pop_idle_thread(struct workqueue *wq)
+workq_pop_idle_thread(struct workqueue *wq, uint8_t uu_flags,
+    bool *needs_wakeup)
 {
 	struct uthread *uth;
 
@@ -790,13 +783,21 @@ workq_pop_idle_thread(struct workqueue *wq)
 	TAILQ_INSERT_TAIL(&wq->wq_thrunlist, uth, uu_workq_entry);
 
 	assert((uth->uu_workq_flags & UT_WORKQ_RUNNING) == 0);
-	uth->uu_workq_flags |= UT_WORKQ_RUNNING | UT_WORKQ_OVERCOMMIT;
+	uth->uu_workq_flags |= UT_WORKQ_RUNNING | uu_flags;
+	if ((uu_flags & UT_WORKQ_OVERCOMMIT) == 0) {
+		wq->wq_constrained_threads_scheduled++;
+	}
 	wq->wq_threads_scheduled++;
 	wq->wq_thidlecount--;
 
 	if (__improbable(uth->uu_workq_flags & UT_WORKQ_DYING)) {
 		uth->uu_workq_flags ^= UT_WORKQ_DYING;
 		workq_death_policy_evaluate(wq, 1);
+		*needs_wakeup = false;
+	} else if (uth->uu_workq_flags & UT_WORKQ_IDLE_CLEANUP) {
+		*needs_wakeup = false;
+	} else {
+		*needs_wakeup = true;
 	}
 	return uth;
 }
@@ -814,6 +815,7 @@ workq_thread_init_and_wq_lock(task_t task, thread_t th)
 	uth->uu_workq_pri = WORKQ_POLICY_INIT(THREAD_QOS_LEGACY);
 	uth->uu_workq_thport = MACH_PORT_NULL;
 	uth->uu_workq_stackaddr = 0;
+	uth->uu_workq_pthread_kill_allowed = 0;
 
 	thread_set_tag(th, THREAD_TAG_PTHREAD | THREAD_TAG_WORKQUEUE);
 	thread_reset_workq_qos(th, THREAD_QOS_LEGACY);
@@ -886,13 +888,13 @@ out:
 __attribute__((noreturn, noinline))
 static void
 workq_unpark_for_death_and_unlock(proc_t p, struct workqueue *wq,
-    struct uthread *uth, uint32_t death_flags)
+    struct uthread *uth, uint32_t death_flags, uint32_t setup_flags)
 {
 	thread_qos_t qos = workq_pri_override(uth->uu_workq_pri);
 	bool first_use = uth->uu_workq_flags & UT_WORKQ_NEW;
 
 	if (qos > WORKQ_THREAD_QOS_CLEANUP) {
-		workq_thread_reset_pri(wq, uth, NULL);
+		workq_thread_reset_pri(wq, uth, NULL, /*unpark*/ true);
 		qos = WORKQ_THREAD_QOS_CLEANUP;
 	}
 
@@ -910,8 +912,13 @@ workq_unpark_for_death_and_unlock(proc_t p, struct workqueue *wq,
 
 	workq_unlock(wq);
 
+	if (setup_flags & WQ_SETUP_CLEAR_VOUCHER) {
+		__assert_only kern_return_t kr;
+		kr = thread_set_voucher_name(MACH_PORT_NULL);
+		assert(kr == KERN_SUCCESS);
+	}
+
 	uint32_t flags = WQ_FLAG_THREAD_NEWSPI | qos | WQ_FLAG_THREAD_PRIO_QOS;
-	uint32_t setup_flags = WQ_SETUP_EXIT_THREAD;
 	thread_t th = uth->uu_thread;
 	vm_map_t vmap = get_task_map(p->task);
 
@@ -920,7 +927,7 @@ workq_unpark_for_death_and_unlock(proc_t p, struct workqueue *wq,
 	}
 
 	pthread_functions->workq_setup_thread(p, th, vmap, uth->uu_workq_stackaddr,
-	    uth->uu_workq_thport, 0, setup_flags, flags);
+	    uth->uu_workq_thport, 0, WQ_SETUP_EXIT_THREAD, flags);
 	__builtin_unreachable();
 }
 
@@ -946,6 +953,10 @@ workq_turnstile_update_inheritor(struct workqueue *wq,
     turnstile_inheritor_t inheritor,
     turnstile_update_flags_t flags)
 {
+	if (wq->wq_inheritor == inheritor) {
+		return;
+	}
+	wq->wq_inheritor = inheritor;
 	workq_perform_turnstile_operation_locked(wq, ^{
 		turnstile_update_inheritor(wq->wq_turnstile, inheritor,
 		flags | TURNSTILE_IMMEDIATE_UPDATE);
@@ -955,35 +966,44 @@ workq_turnstile_update_inheritor(struct workqueue *wq,
 }
 
 static void
-workq_push_idle_thread(proc_t p, struct workqueue *wq, struct uthread *uth)
+workq_push_idle_thread(proc_t p, struct workqueue *wq, struct uthread *uth,
+    uint32_t setup_flags)
 {
 	uint64_t now = mach_absolute_time();
+	bool is_creator = (uth == wq->wq_creator);
 
-	uth->uu_workq_flags &= ~UT_WORKQ_RUNNING;
 	if ((uth->uu_workq_flags & UT_WORKQ_OVERCOMMIT) == 0) {
 		wq->wq_constrained_threads_scheduled--;
 	}
+	uth->uu_workq_flags &= ~(UT_WORKQ_RUNNING | UT_WORKQ_OVERCOMMIT);
 	TAILQ_REMOVE(&wq->wq_thrunlist, uth, uu_workq_entry);
 	wq->wq_threads_scheduled--;
 
-	if (wq->wq_creator == uth) {
+	if (is_creator) {
+		wq->wq_creator = NULL;
 		WQ_TRACE_WQ(TRACE_wq_creator_select, wq, 3, 0,
 		    uth->uu_save.uus_workq_park_data.yields, 0);
-		wq->wq_creator = NULL;
+	}
+
+	if (wq->wq_inheritor == uth->uu_thread) {
+		assert(wq->wq_creator == NULL);
 		if (wq->wq_reqcount) {
 			workq_turnstile_update_inheritor(wq, wq, TURNSTILE_INHERITOR_WORKQ);
 		} else {
 			workq_turnstile_update_inheritor(wq, TURNSTILE_INHERITOR_NULL, 0);
 		}
-		if (uth->uu_workq_flags & UT_WORKQ_NEW) {
-			TAILQ_INSERT_TAIL(&wq->wq_thnewlist, uth, uu_workq_entry);
-			wq->wq_thidlecount++;
-			return;
-		}
-	} else {
+	}
+
+	if (uth->uu_workq_flags & UT_WORKQ_NEW) {
+		assert(is_creator || (_wq_flags(wq) & WQ_EXITING));
+		TAILQ_INSERT_TAIL(&wq->wq_thnewlist, uth, uu_workq_entry);
+		wq->wq_thidlecount++;
+		return;
+	}
+
+	if (!is_creator) {
 		_wq_thactive_dec(wq, uth->uu_workq_pri.qos_bucket);
 		wq->wq_thscheduled_count[_wq_bucket(uth->uu_workq_pri.qos_bucket)]--;
-		assert(!(uth->uu_workq_flags & UT_WORKQ_NEW));
 		uth->uu_workq_flags |= UT_WORKQ_IDLE_CLEANUP;
 	}
 
@@ -1014,7 +1034,7 @@ workq_push_idle_thread(proc_t p, struct workqueue *wq, struct uthread *uth)
 		wq->wq_thdying_count++;
 		uth->uu_workq_flags |= UT_WORKQ_DYING;
 		uth->uu_workq_flags &= ~UT_WORKQ_IDLE_CLEANUP;
-		workq_unpark_for_death_and_unlock(p, wq, uth, 0);
+		workq_unpark_for_death_and_unlock(p, wq, uth, 0, setup_flags);
 		__builtin_unreachable();
 	}
 
@@ -1045,7 +1065,7 @@ workq_priority_for_req(workq_threadreq_t req)
 {
 	thread_qos_t qos = req->tr_qos;
 
-	if (req->tr_flags & TR_FLAG_WL_OUTSIDE_QOS) {
+	if (req->tr_flags & WORKQ_TR_FLAG_WL_OUTSIDE_QOS) {
 		workq_threadreq_param_t trp = kqueue_threadreq_workloop_param(req);
 		assert(trp.trp_flags & TRP_PRIORITY);
 		return trp.trp_pri;
@@ -1056,9 +1076,9 @@ workq_priority_for_req(workq_threadreq_t req)
 static inline struct priority_queue *
 workq_priority_queue_for_req(struct workqueue *wq, workq_threadreq_t req)
 {
-	if (req->tr_flags & TR_FLAG_WL_OUTSIDE_QOS) {
+	if (req->tr_flags & WORKQ_TR_FLAG_WL_OUTSIDE_QOS) {
 		return &wq->wq_special_queue;
-	} else if (req->tr_flags & TR_FLAG_OVERCOMMIT) {
+	} else if (req->tr_flags & WORKQ_TR_FLAG_OVERCOMMIT) {
 		return &wq->wq_overcommit_queue;
 	} else {
 		return &wq->wq_constrained_queue;
@@ -1072,14 +1092,14 @@ workq_priority_queue_for_req(struct workqueue *wq, workq_threadreq_t req)
 static bool
 workq_threadreq_enqueue(struct workqueue *wq, workq_threadreq_t req)
 {
-	assert(req->tr_state == TR_STATE_NEW);
+	assert(req->tr_state == WORKQ_TR_STATE_NEW);
 
-	req->tr_state = TR_STATE_QUEUED;
+	req->tr_state = WORKQ_TR_STATE_QUEUED;
 	wq->wq_reqcount += req->tr_count;
 
 	if (req->tr_qos == WORKQ_THREAD_QOS_MANAGER) {
 		assert(wq->wq_event_manager_threadreq == NULL);
-		assert(req->tr_flags & TR_FLAG_KEVENT);
+		assert(req->tr_flags & WORKQ_TR_FLAG_KEVENT);
 		assert(req->tr_count == 1);
 		wq->wq_event_manager_threadreq = req;
 		return true;
@@ -1087,7 +1107,7 @@ workq_threadreq_enqueue(struct workqueue *wq, workq_threadreq_t req)
 	if (priority_queue_insert(workq_priority_queue_for_req(wq, req),
 	    &req->tr_entry, workq_priority_for_req(req),
 	    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
-		if ((req->tr_flags & TR_FLAG_OVERCOMMIT) == 0) {
+		if ((req->tr_flags & WORKQ_TR_FLAG_OVERCOMMIT) == 0) {
 			_wq_thactive_refresh_best_constrained_req_qos(wq);
 		}
 		return true;
@@ -1113,7 +1133,7 @@ workq_threadreq_dequeue(struct workqueue *wq, workq_threadreq_t req)
 		}
 		if (priority_queue_remove(workq_priority_queue_for_req(wq, req),
 		    &req->tr_entry, PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
-			if ((req->tr_flags & TR_FLAG_OVERCOMMIT) == 0) {
+			if ((req->tr_flags & WORKQ_TR_FLAG_OVERCOMMIT) == 0) {
 				_wq_thactive_refresh_best_constrained_req_qos(wq);
 			}
 			return true;
@@ -1125,111 +1145,12 @@ workq_threadreq_dequeue(struct workqueue *wq, workq_threadreq_t req)
 static void
 workq_threadreq_destroy(proc_t p, workq_threadreq_t req)
 {
-	req->tr_state = TR_STATE_IDLE;
-	if (req->tr_flags & (TR_FLAG_WORKLOOP | TR_FLAG_KEVENT)) {
+	req->tr_state = WORKQ_TR_STATE_CANCELED;
+	if (req->tr_flags & (WORKQ_TR_FLAG_WORKLOOP | WORKQ_TR_FLAG_KEVENT)) {
 		kqueue_threadreq_cancel(p, req);
 	} else {
 		zfree(workq_zone_threadreq, req);
 	}
-}
-
-/*
- * Mark a thread request as complete.  At this point, it is treated as owned by
- * the submitting subsystem and you should assume it could be freed.
- *
- * Called with the workqueue lock held.
- */
-static void
-workq_threadreq_bind_and_unlock(proc_t p, struct workqueue *wq,
-    workq_threadreq_t req, struct uthread *uth)
-{
-	uint8_t tr_flags = req->tr_flags;
-	bool needs_commit = false;
-	int creator_flags = 0;
-
-	wq->wq_fulfilled++;
-
-	if (req->tr_state == TR_STATE_QUEUED) {
-		workq_threadreq_dequeue(wq, req);
-		creator_flags = WORKQ_THREADREQ_CAN_CREATE_THREADS;
-	}
-
-	if (wq->wq_creator == uth) {
-		WQ_TRACE_WQ(TRACE_wq_creator_select, wq, 4, 0,
-		    uth->uu_save.uus_workq_park_data.yields, 0);
-		creator_flags = WORKQ_THREADREQ_CAN_CREATE_THREADS |
-		    WORKQ_THREADREQ_CREATOR_TRANSFER;
-		wq->wq_creator = NULL;
-		_wq_thactive_inc(wq, req->tr_qos);
-		wq->wq_thscheduled_count[_wq_bucket(req->tr_qos)]++;
-	} else if (uth->uu_workq_pri.qos_bucket != req->tr_qos) {
-		_wq_thactive_move(wq, uth->uu_workq_pri.qos_bucket, req->tr_qos);
-	}
-	workq_thread_reset_pri(wq, uth, req);
-
-	if (tr_flags & TR_FLAG_OVERCOMMIT) {
-		if ((uth->uu_workq_flags & UT_WORKQ_OVERCOMMIT) == 0) {
-			uth->uu_workq_flags |= UT_WORKQ_OVERCOMMIT;
-			wq->wq_constrained_threads_scheduled--;
-		}
-	} else {
-		if ((uth->uu_workq_flags & UT_WORKQ_OVERCOMMIT) != 0) {
-			uth->uu_workq_flags &= ~UT_WORKQ_OVERCOMMIT;
-			wq->wq_constrained_threads_scheduled++;
-		}
-	}
-
-	if (tr_flags & (TR_FLAG_KEVENT | TR_FLAG_WORKLOOP)) {
-		if (req->tr_state == TR_STATE_NEW) {
-			/*
-			 * We're called from workq_kern_threadreq_initiate()
-			 * due to an unbind, with the kq req held.
-			 */
-			assert(!creator_flags);
-			req->tr_state = TR_STATE_IDLE;
-			kqueue_threadreq_bind(p, req, uth->uu_thread, 0);
-		} else {
-			assert(req->tr_count == 0);
-			workq_perform_turnstile_operation_locked(wq, ^{
-				kqueue_threadreq_bind_prepost(p, req, uth->uu_thread);
-			});
-			needs_commit = true;
-		}
-		req = NULL;
-	} else if (req->tr_count > 0) {
-		req = NULL;
-	}
-
-	if (creator_flags) {
-		/* This can drop the workqueue lock, and take it again */
-		workq_schedule_creator(p, wq, creator_flags);
-	}
-
-	workq_unlock(wq);
-
-	if (req) {
-		zfree(workq_zone_threadreq, req);
-	}
-	if (needs_commit) {
-		kqueue_threadreq_bind_commit(p, uth->uu_thread);
-	}
-
-	/*
-	 * Run Thread, Run!
-	 */
-	uint32_t upcall_flags = WQ_FLAG_THREAD_NEWSPI;
-	if (uth->uu_workq_pri.qos_bucket == WORKQ_THREAD_QOS_MANAGER) {
-		upcall_flags |= WQ_FLAG_THREAD_EVENT_MANAGER;
-	} else if (tr_flags & TR_FLAG_OVERCOMMIT) {
-		upcall_flags |= WQ_FLAG_THREAD_OVERCOMMIT;
-	}
-	if (tr_flags & TR_FLAG_KEVENT) {
-		upcall_flags |= WQ_FLAG_THREAD_KEVENT;
-	}
-	if (tr_flags & TR_FLAG_WORKLOOP) {
-		upcall_flags |= WQ_FLAG_THREAD_WORKLOOP | WQ_FLAG_THREAD_KEVENT;
-	}
-	uth->uu_save.uus_workq_park_data.upcall_flags = upcall_flags;
 }
 
 #pragma mark workqueue thread creation thread calls
@@ -1332,8 +1253,8 @@ workq_proc_resumed(struct proc *p)
 		return;
 	}
 
-	wq_flags = os_atomic_and_orig(&wq->wq_flags, ~(WQ_PROC_SUSPENDED |
-	    WQ_DELAYED_CALL_PENDED | WQ_IMMEDIATE_CALL_PENDED), relaxed);
+	wq_flags = os_atomic_andnot_orig(&wq->wq_flags, WQ_PROC_SUSPENDED |
+	    WQ_DELAYED_CALL_PENDED | WQ_IMMEDIATE_CALL_PENDED, relaxed);
 	if ((wq_flags & WQ_EXITING) == 0) {
 		disable_preemption();
 		if (wq_flags & WQ_IMMEDIATE_CALL_PENDED) {
@@ -1352,7 +1273,7 @@ workq_proc_resumed(struct proc *p)
 static bool
 workq_thread_is_busy(uint64_t now, _Atomic uint64_t *lastblocked_tsp)
 {
-	uint64_t lastblocked_ts = os_atomic_load(lastblocked_tsp, relaxed);
+	uint64_t lastblocked_ts = os_atomic_load_wide(lastblocked_tsp, relaxed);
 	if (now <= lastblocked_ts) {
 		/*
 		 * Because the update of the timestamp when a thread blocks
@@ -1392,7 +1313,7 @@ workq_add_new_threads_call(void *_p, void *flags)
 	workq_lock_spin(wq);
 
 	wq->wq_thread_call_last_run = mach_absolute_time();
-	os_atomic_and(&wq->wq_flags, ~my_flag, release);
+	os_atomic_andnot(&wq->wq_flags, my_flag, release);
 
 	/* This can drop the workqueue lock, and take it again */
 	workq_schedule_creator(p, wq, WORKQ_THREADREQ_CAN_CREATE_THREADS);
@@ -1434,7 +1355,7 @@ workq_sched_callback(int type, thread_t thread)
 		 * get scheduled and then block after we start down this path), it's
 		 * not a problem.  Either timestamp is adequate, so no need to retry
 		 */
-		os_atomic_store(&wq->wq_lastblocked_ts[_wq_bucket(qos)],
+		os_atomic_store_wide(&wq->wq_lastblocked_ts[_wq_bucket(qos)],
 		    thread_last_run_time(thread), relaxed);
 
 		if (req_qos == THREAD_QOS_UNSPECIFIED) {
@@ -1506,12 +1427,17 @@ workq_reference(struct workqueue *wq)
 	os_ref_retain(&wq->wq_refcnt);
 }
 
-void
-workq_destroy(struct workqueue *wq)
+static void
+workq_deallocate_queue_invoke(mpsc_queue_chain_t e,
+    __assert_only mpsc_daemon_queue_t dq)
 {
+	struct workqueue *wq;
 	struct turnstile *ts;
 
-	turnstile_complete((uintptr_t)wq, &wq->wq_turnstile, &ts);
+	wq = mpsc_queue_element(e, struct workqueue, wq_destroy_link);
+	assert(dq == &workq_deallocate_queue);
+
+	turnstile_complete((uintptr_t)wq, &wq->wq_turnstile, &ts, TURNSTILE_WORKQS);
 	assert(ts);
 	turnstile_cleanup();
 	turnstile_deallocate(ts);
@@ -1524,7 +1450,8 @@ static void
 workq_deallocate(struct workqueue *wq)
 {
 	if (os_ref_release_relaxed(&wq->wq_refcnt) == 0) {
-		workq_destroy(wq);
+		workq_deallocate_queue_invoke(&wq->wq_destroy_link,
+		    &workq_deallocate_queue);
 	}
 }
 
@@ -1532,7 +1459,8 @@ void
 workq_deallocate_safe(struct workqueue *wq)
 {
 	if (__improbable(os_ref_release_relaxed(&wq->wq_refcnt) == 0)) {
-		workq_deallocate_enqueue(wq);
+		mpsc_daemon_enqueue(&workq_deallocate_queue, &wq->wq_destroy_link,
+		    MPSC_QUEUE_DISABLE_PREEMPTION);
 	}
 }
 
@@ -1677,7 +1605,8 @@ workq_mark_exiting(struct proc *p)
 	mgr_req = wq->wq_event_manager_threadreq;
 	wq->wq_event_manager_threadreq = NULL;
 	wq->wq_reqcount = 0; /* workq_schedule_creator must not look at queues */
-	workq_turnstile_update_inheritor(wq, NULL, 0);
+	wq->wq_creator = NULL;
+	workq_turnstile_update_inheritor(wq, TURNSTILE_INHERITOR_NULL, 0);
 
 	workq_unlock(wq);
 
@@ -1809,18 +1738,18 @@ bsdthread_set_self(proc_t p, thread_t th, pthread_priority_t priority,
 			goto qos;
 		}
 
-		struct kqrequest *kqr = uth->uu_kqr_bound;
+		workq_threadreq_t kqr = uth->uu_kqr_bound;
 		if (kqr == NULL) {
 			unbind_rv = EALREADY;
 			goto qos;
 		}
 
-		if (kqr->kqr_state & KQR_WORKLOOP) {
+		if (kqr->tr_flags & WORKQ_TR_FLAG_WORKLOOP) {
 			unbind_rv = EINVAL;
 			goto qos;
 		}
 
-		kqueue_threadreq_unbind(p, uth->uu_kqr_bound);
+		kqueue_threadreq_unbind(p, kqr);
 	}
 
 qos:
@@ -1840,9 +1769,10 @@ qos:
 				qos_rv = EPERM;
 				goto voucher;
 			}
-		} else if (uth->uu_workq_pri.qos_bucket == WORKQ_THREAD_QOS_MANAGER) {
+		} else if (uth->uu_workq_pri.qos_bucket == WORKQ_THREAD_QOS_MANAGER ||
+		    uth->uu_workq_pri.qos_bucket == WORKQ_THREAD_QOS_ABOVEUI) {
 			/*
-			 * Workqueue manager threads can't change QoS
+			 * Workqueue manager threads or threads above UI can't change QoS
 			 */
 			qos_rv = EINVAL;
 			goto voucher;
@@ -1960,7 +1890,8 @@ bsdthread_add_explicit_override(proc_t p, mach_port_name_t kport,
 		return EINVAL;
 	}
 
-	thread_t th = port_name_to_thread(kport);
+	thread_t th = port_name_to_thread(kport,
+	    PORT_TO_THREAD_IN_CURRENT_TASK);
 	if (th == THREAD_NULL) {
 		return ESRCH;
 	}
@@ -1976,7 +1907,8 @@ static int
 bsdthread_remove_explicit_override(proc_t p, mach_port_name_t kport,
     user_addr_t resource)
 {
-	thread_t th = port_name_to_thread(kport);
+	thread_t th = port_name_to_thread(kport,
+	    PORT_TO_THREAD_IN_CURRENT_TASK);
 	if (th == THREAD_NULL) {
 		return ESRCH;
 	}
@@ -2000,7 +1932,8 @@ workq_thread_add_dispatch_override(proc_t p, mach_port_name_t kport,
 		return EINVAL;
 	}
 
-	thread_t thread = port_name_to_thread(kport);
+	thread_t thread = port_name_to_thread(kport,
+	    PORT_TO_THREAD_IN_CURRENT_TASK);
 	if (thread == THREAD_NULL) {
 		return ESRCH;
 	}
@@ -2017,16 +1950,16 @@ workq_thread_add_dispatch_override(proc_t p, mach_port_name_t kport,
 	thread_mtx_lock(thread);
 
 	if (ulock_addr) {
-		uint64_t val;
+		uint32_t val;
 		int rc;
 		/*
 		 * Workaround lack of explicit support for 'no-fault copyin'
 		 * <rdar://problem/24999882>, as disabling preemption prevents paging in
 		 */
 		disable_preemption();
-		rc = copyin_word(ulock_addr, &val, sizeof(kport));
+		rc = copyin_atomic32(ulock_addr, &val);
 		enable_preemption();
-		if (rc == 0 && ulock_owner_value_to_port_name((uint32_t)val) != kport) {
+		if (rc == 0 && ulock_owner_value_to_port_name(val) != kport) {
 			goto out;
 		}
 	}
@@ -2073,6 +2006,23 @@ workq_thread_reset_dispatch_override(proc_t p, thread_t thread)
 	new_pri.qos_override = THREAD_QOS_UNSPECIFIED;
 	workq_thread_update_bucket(p, wq, uth, old_pri, new_pri, false);
 	workq_unlock(wq);
+	return 0;
+}
+
+static int
+workq_thread_allow_kill(__unused proc_t p, thread_t thread, bool enable)
+{
+	if (!(thread_get_tag(thread) & THREAD_TAG_WORKQUEUE)) {
+		// If the thread isn't a workqueue thread, don't set the
+		// kill_allowed bit; however, we still need to return 0
+		// instead of an error code since this code is executed
+		// on the abort path which needs to not depend on the
+		// pthread_t (returning an error depends on pthread_t via
+		// cerror_nocancel)
+		return 0;
+	}
+	struct uthread *uth = get_bsdthread_info(thread);
+	uth->uu_workq_pthread_kill_allowed = enable;
 	return 0;
 }
 
@@ -2131,6 +2081,10 @@ bsdthread_ctl(struct proc *p, struct bsdthread_ctl_args *uap, int *retval)
 		ENSURE_UNUSED(uap->arg3);
 		return bsdthread_get_max_parallelism((thread_qos_t)uap->arg1,
 		           (unsigned long)uap->arg2, retval);
+	case BSDTHREAD_CTL_WORKQ_ALLOW_KILL:
+		ENSURE_UNUSED(uap->arg2);
+		ENSURE_UNUSED(uap->arg3);
+		return workq_thread_allow_kill(p, current_thread(), (bool)uap->arg1);
 
 	case BSDTHREAD_CTL_SET_QOS:
 	case BSDTHREAD_CTL_QOS_DISPATCH_ASYNCHRONOUS_OVERRIDE_ADD:
@@ -2146,8 +2100,12 @@ bsdthread_ctl(struct proc *p, struct bsdthread_ctl_args *uap, int *retval)
 #pragma mark workqueue thread manipulation
 
 static void __dead2
+workq_unpark_select_threadreq_or_park_and_unlock(proc_t p, struct workqueue *wq,
+    struct uthread *uth, uint32_t setup_flags);
+
+static void __dead2
 workq_select_threadreq_or_park_and_unlock(proc_t p, struct workqueue *wq,
-    struct uthread *uth);
+    struct uthread *uth, uint32_t setup_flags);
 
 static void workq_setup_and_run(proc_t p, struct uthread *uth, int flags) __dead2;
 
@@ -2156,8 +2114,8 @@ static inline uint64_t
 workq_trace_req_id(workq_threadreq_t req)
 {
 	struct kqworkloop *kqwl;
-	if (req->tr_flags & TR_FLAG_WORKLOOP) {
-		kqwl = __container_of(req, struct kqworkloop, kqwl_request.kqr_req);
+	if (req->tr_flags & WORKQ_TR_FLAG_WORKLOOP) {
+		kqwl = __container_of(req, struct kqworkloop, kqwl_request);
 		return kqwl->kqwl_dynamicid;
 	}
 
@@ -2185,12 +2143,12 @@ workq_reqthreads(struct proc *p, uint32_t reqcount, pthread_priority_t pp)
 
 	workq_threadreq_t req = zalloc(workq_zone_threadreq);
 	priority_queue_entry_init(&req->tr_entry);
-	req->tr_state = TR_STATE_NEW;
+	req->tr_state = WORKQ_TR_STATE_NEW;
 	req->tr_flags = 0;
 	req->tr_qos   = qos;
 
 	if (pp & _PTHREAD_PRIORITY_OVERCOMMIT_FLAG) {
-		req->tr_flags |= TR_FLAG_OVERCOMMIT;
+		req->tr_flags |= WORKQ_TR_FLAG_OVERCOMMIT;
 		upcall_flags |= WQ_FLAG_THREAD_OVERCOMMIT;
 	}
 
@@ -2213,7 +2171,7 @@ workq_reqthreads(struct proc *p, uint32_t reqcount, pthread_priority_t pp)
 		 * If there aren't enough threads, add one, but re-evaluate everything
 		 * as conditions may now have changed.
 		 */
-		if (reqcount > 1 && (req->tr_flags & TR_FLAG_OVERCOMMIT) == 0) {
+		if (reqcount > 1 && (req->tr_flags & WORKQ_TR_FLAG_OVERCOMMIT) == 0) {
 			unpaced = workq_constrained_allowance(wq, qos, NULL, false);
 			if (unpaced >= reqcount - 1) {
 				unpaced = reqcount - 1;
@@ -2226,27 +2184,32 @@ workq_reqthreads(struct proc *p, uint32_t reqcount, pthread_priority_t pp)
 		 * This path does not currently handle custom workloop parameters
 		 * when creating threads for parallelism.
 		 */
-		assert(!(req->tr_flags & TR_FLAG_WL_PARAMS));
+		assert(!(req->tr_flags & WORKQ_TR_FLAG_WL_PARAMS));
 
 		/*
 		 * This is a trimmed down version of workq_threadreq_bind_and_unlock()
 		 */
 		while (unpaced > 0 && wq->wq_thidlecount) {
-			struct uthread *uth = workq_pop_idle_thread(wq);
+			struct uthread *uth;
+			bool needs_wakeup;
+			uint8_t uu_flags = UT_WORKQ_EARLY_BOUND;
+
+			if (req->tr_flags & WORKQ_TR_FLAG_OVERCOMMIT) {
+				uu_flags |= UT_WORKQ_OVERCOMMIT;
+			}
+
+			uth = workq_pop_idle_thread(wq, uu_flags, &needs_wakeup);
 
 			_wq_thactive_inc(wq, qos);
 			wq->wq_thscheduled_count[_wq_bucket(qos)]++;
-			workq_thread_reset_pri(wq, uth, req);
+			workq_thread_reset_pri(wq, uth, req, /*unpark*/ true);
 			wq->wq_fulfilled++;
 
-			uth->uu_workq_flags |= UT_WORKQ_EARLY_BOUND;
-			if ((req->tr_flags & TR_FLAG_OVERCOMMIT) == 0) {
-				uth->uu_workq_flags &= ~UT_WORKQ_OVERCOMMIT;
-				wq->wq_constrained_threads_scheduled++;
-			}
 			uth->uu_save.uus_workq_park_data.upcall_flags = upcall_flags;
 			uth->uu_save.uus_workq_park_data.thread_request = req;
-			workq_thread_wakeup(uth);
+			if (needs_wakeup) {
+				workq_thread_wakeup(uth);
+			}
 			unpaced--;
 			reqcount--;
 		}
@@ -2272,41 +2235,27 @@ exiting:
 }
 
 bool
-workq_kern_threadreq_initiate(struct proc *p, struct kqrequest *kqr,
-    struct turnstile *workloop_ts, thread_qos_t qos, int flags)
+workq_kern_threadreq_initiate(struct proc *p, workq_threadreq_t req,
+    struct turnstile *workloop_ts, thread_qos_t qos,
+    workq_kern_threadreq_flags_t flags)
 {
 	struct workqueue *wq = proc_get_wqptr_fast(p);
-	workq_threadreq_t req = &kqr->kqr_req;
 	struct uthread *uth = NULL;
-	uint8_t tr_flags = 0;
 
-	if (kqr->kqr_state & KQR_WORKLOOP) {
-		tr_flags = TR_FLAG_WORKLOOP;
+	assert(req->tr_flags & (WORKQ_TR_FLAG_WORKLOOP | WORKQ_TR_FLAG_KEVENT));
 
+	if (req->tr_flags & WORKQ_TR_FLAG_WL_OUTSIDE_QOS) {
 		workq_threadreq_param_t trp = kqueue_threadreq_workloop_param(req);
-		if (trp.trp_flags & TRP_PRIORITY) {
-			tr_flags |= TR_FLAG_WL_OUTSIDE_QOS;
-			qos = thread_workq_qos_for_pri(trp.trp_pri);
-			if (qos == THREAD_QOS_UNSPECIFIED) {
-				qos = WORKQ_THREAD_QOS_ABOVEUI;
-			}
+		qos = thread_workq_qos_for_pri(trp.trp_pri);
+		if (qos == THREAD_QOS_UNSPECIFIED) {
+			qos = WORKQ_THREAD_QOS_ABOVEUI;
 		}
-		if (trp.trp_flags) {
-			tr_flags |= TR_FLAG_WL_PARAMS;
-		}
-	} else {
-		tr_flags = TR_FLAG_KEVENT;
-	}
-	if (qos != WORKQ_THREAD_QOS_MANAGER &&
-	    (kqr->kqr_state & KQR_THOVERCOMMIT)) {
-		tr_flags |= TR_FLAG_OVERCOMMIT;
 	}
 
-	assert(req->tr_state == TR_STATE_IDLE);
+	assert(req->tr_state == WORKQ_TR_STATE_IDLE);
 	priority_queue_entry_init(&req->tr_entry);
 	req->tr_count = 1;
-	req->tr_state = TR_STATE_NEW;
-	req->tr_flags = tr_flags;
+	req->tr_state = WORKQ_TR_STATE_NEW;
 	req->tr_qos   = qos;
 
 	WQ_TRACE_WQ(TRACE_wq_thread_request_initiate | DBG_FUNC_NONE, wq,
@@ -2324,13 +2273,25 @@ workq_kern_threadreq_initiate(struct proc *p, struct kqrequest *kqr,
 
 	workq_lock_spin(wq);
 	if (_wq_exiting(wq)) {
+		req->tr_state = WORKQ_TR_STATE_IDLE;
 		workq_unlock(wq);
 		return false;
 	}
 
 	if (uth && workq_threadreq_admissible(wq, uth, req)) {
 		assert(uth != wq->wq_creator);
-		workq_threadreq_bind_and_unlock(p, wq, req, uth);
+		if (uth->uu_workq_pri.qos_bucket != req->tr_qos) {
+			_wq_thactive_move(wq, uth->uu_workq_pri.qos_bucket, req->tr_qos);
+			workq_thread_reset_pri(wq, uth, req, /*unpark*/ false);
+		}
+		/*
+		 * We're called from workq_kern_threadreq_initiate()
+		 * due to an unbind, with the kq req held.
+		 */
+		WQ_TRACE_WQ(TRACE_wq_thread_logical_run | DBG_FUNC_START, wq,
+		    workq_trace_req_id(req), 0, 0, 0);
+		wq->wq_fulfilled++;
+		kqueue_threadreq_bind(p, req, uth->uu_thread, 0);
 	} else {
 		if (workloop_ts) {
 			workq_perform_turnstile_operation_locked(wq, ^{
@@ -2343,21 +2304,21 @@ workq_kern_threadreq_initiate(struct proc *p, struct kqrequest *kqr,
 		if (workq_threadreq_enqueue(wq, req)) {
 			workq_schedule_creator(p, wq, flags);
 		}
-		workq_unlock(wq);
 	}
+
+	workq_unlock(wq);
 
 	return true;
 }
 
 void
-workq_kern_threadreq_modify(struct proc *p, struct kqrequest *kqr,
-    thread_qos_t qos, int flags)
+workq_kern_threadreq_modify(struct proc *p, workq_threadreq_t req,
+    thread_qos_t qos, workq_kern_threadreq_flags_t flags)
 {
 	struct workqueue *wq = proc_get_wqptr_fast(p);
-	workq_threadreq_t req = &kqr->kqr_req;
-	bool change_overcommit = false;
+	bool make_overcommit = false;
 
-	if (req->tr_flags & TR_FLAG_WL_OUTSIDE_QOS) {
+	if (req->tr_flags & WORKQ_TR_FLAG_WL_OUTSIDE_QOS) {
 		/* Requests outside-of-QoS shouldn't accept modify operations */
 		return;
 	}
@@ -2365,24 +2326,25 @@ workq_kern_threadreq_modify(struct proc *p, struct kqrequest *kqr,
 	workq_lock_spin(wq);
 
 	assert(req->tr_qos != WORKQ_THREAD_QOS_MANAGER);
-	assert(req->tr_flags & (TR_FLAG_KEVENT | TR_FLAG_WORKLOOP));
+	assert(req->tr_flags & (WORKQ_TR_FLAG_KEVENT | WORKQ_TR_FLAG_WORKLOOP));
 
-	if (req->tr_state == TR_STATE_BINDING) {
-		kqueue_threadreq_bind(p, req, req->tr_binding_thread, 0);
+	if (req->tr_state == WORKQ_TR_STATE_BINDING) {
+		kqueue_threadreq_bind(p, req, req->tr_thread, 0);
 		workq_unlock(wq);
 		return;
 	}
 
-	change_overcommit = (bool)(kqr->kqr_state & KQR_THOVERCOMMIT) !=
-	    (bool)(req->tr_flags & TR_FLAG_OVERCOMMIT);
+	if (flags & WORKQ_THREADREQ_MAKE_OVERCOMMIT) {
+		make_overcommit = (req->tr_flags & WORKQ_TR_FLAG_OVERCOMMIT) == 0;
+	}
 
-	if (_wq_exiting(wq) || (req->tr_qos == qos && !change_overcommit)) {
+	if (_wq_exiting(wq) || (req->tr_qos == qos && !make_overcommit)) {
 		workq_unlock(wq);
 		return;
 	}
 
 	assert(req->tr_count == 1);
-	if (req->tr_state != TR_STATE_QUEUED) {
+	if (req->tr_state != WORKQ_TR_STATE_QUEUED) {
 		panic("Invalid thread request (%p) state %d", req, req->tr_state);
 	}
 
@@ -2400,7 +2362,7 @@ workq_kern_threadreq_modify(struct proc *p, struct kqrequest *kqr,
 	 */
 	if (priority_queue_remove(pq, &req->tr_entry,
 	    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
-		if ((req->tr_flags & TR_FLAG_OVERCOMMIT) == 0) {
+		if ((req->tr_flags & WORKQ_TR_FLAG_OVERCOMMIT) == 0) {
 			_wq_thactive_refresh_best_constrained_req_qos(wq);
 		}
 	}
@@ -2411,8 +2373,8 @@ workq_kern_threadreq_modify(struct proc *p, struct kqrequest *kqr,
 	 * If the item will not become the root of the priority queue it belongs to,
 	 * then we need to wait in line, just enqueue and return quickly.
 	 */
-	if (__improbable(change_overcommit)) {
-		req->tr_flags ^= TR_FLAG_OVERCOMMIT;
+	if (__improbable(make_overcommit)) {
+		req->tr_flags ^= WORKQ_TR_FLAG_OVERCOMMIT;
 		pq = workq_priority_queue_for_req(wq, req);
 	}
 	req->tr_qos = qos;
@@ -2430,11 +2392,11 @@ workq_kern_threadreq_modify(struct proc *p, struct kqrequest *kqr,
 	 *
 	 * Pretend the thread request is new again:
 	 * - adjust wq_reqcount to not count it anymore.
-	 * - make its state TR_STATE_NEW (so that workq_threadreq_bind_and_unlock
+	 * - make its state WORKQ_TR_STATE_NEW (so that workq_threadreq_bind_and_unlock
 	 *   properly attempts a synchronous bind)
 	 */
 	wq->wq_reqcount--;
-	req->tr_state = TR_STATE_NEW;
+	req->tr_state = WORKQ_TR_STATE_NEW;
 	if (workq_threadreq_enqueue(wq, req)) {
 		workq_schedule_creator(p, wq, flags);
 	}
@@ -2454,20 +2416,19 @@ workq_kern_threadreq_unlock(struct proc *p)
 }
 
 void
-workq_kern_threadreq_update_inheritor(struct proc *p, struct kqrequest *kqr,
+workq_kern_threadreq_update_inheritor(struct proc *p, workq_threadreq_t req,
     thread_t owner, struct turnstile *wl_ts,
     turnstile_update_flags_t flags)
 {
 	struct workqueue *wq = proc_get_wqptr_fast(p);
-	workq_threadreq_t req = &kqr->kqr_req;
 	turnstile_inheritor_t inheritor;
 
 	assert(req->tr_qos != WORKQ_THREAD_QOS_MANAGER);
-	assert(req->tr_flags & TR_FLAG_WORKLOOP);
+	assert(req->tr_flags & WORKQ_TR_FLAG_WORKLOOP);
 	workq_lock_held(wq);
 
-	if (req->tr_state == TR_STATE_BINDING) {
-		kqueue_threadreq_bind(p, req, req->tr_binding_thread,
+	if (req->tr_state == WORKQ_TR_STATE_BINDING) {
+		kqueue_threadreq_bind(p, req, req->tr_thread,
 		    KQUEUE_THREADERQ_BIND_NO_INHERITOR_UPDATE);
 		return;
 	}
@@ -2475,7 +2436,7 @@ workq_kern_threadreq_update_inheritor(struct proc *p, struct kqrequest *kqr,
 	if (_wq_exiting(wq)) {
 		inheritor = TURNSTILE_INHERITOR_NULL;
 	} else {
-		if (req->tr_state != TR_STATE_QUEUED) {
+		if (req->tr_state != WORKQ_TR_STATE_QUEUED) {
 			panic("Invalid thread request (%p) state %d", req, req->tr_state);
 		}
 
@@ -2494,7 +2455,7 @@ workq_kern_threadreq_update_inheritor(struct proc *p, struct kqrequest *kqr,
 }
 
 void
-workq_kern_threadreq_redrive(struct proc *p, int flags)
+workq_kern_threadreq_redrive(struct proc *p, workq_kern_threadreq_flags_t flags)
 {
 	struct workqueue *wq = proc_get_wqptr_fast(p);
 
@@ -2506,12 +2467,10 @@ workq_kern_threadreq_redrive(struct proc *p, int flags)
 void
 workq_schedule_creator_turnstile_redrive(struct workqueue *wq, bool locked)
 {
-	if (!locked) {
-		workq_lock_spin(wq);
-	}
-	workq_schedule_creator(NULL, wq, WORKQ_THREADREQ_CREATOR_SYNC_UPDATE);
-	if (!locked) {
-		workq_unlock(wq);
+	if (locked) {
+		workq_schedule_creator(NULL, wq, WORKQ_THREADREQ_NONE);
+	} else {
+		workq_schedule_immediate_thread_creation(wq);
 	}
 }
 
@@ -2521,7 +2480,7 @@ workq_thread_return(struct proc *p, struct workq_kernreturn_args *uap,
 {
 	thread_t th = current_thread();
 	struct uthread *uth = get_bsdthread_info(th);
-	struct kqrequest *kqr = uth->uu_kqr_bound;
+	workq_threadreq_t kqr = uth->uu_kqr_bound;
 	workq_threadreq_param_t trp = { };
 	int nevents = uap->affinity, error;
 	user_addr_t eventlist = uap->item;
@@ -2542,17 +2501,26 @@ workq_thread_return(struct proc *p, struct workq_kernreturn_args *uap,
 		proc_unlock(p);
 	}
 
-	if (kqr && kqr->kqr_req.tr_flags & TR_FLAG_WL_PARAMS) {
+	if (kqr && kqr->tr_flags & WORKQ_TR_FLAG_WL_PARAMS) {
 		/*
 		 * Ensure we store the threadreq param before unbinding
 		 * the kqr from this thread.
 		 */
-		trp = kqueue_threadreq_workloop_param(&kqr->kqr_req);
+		trp = kqueue_threadreq_workloop_param(kqr);
 	}
+
+	/*
+	 * Freeze thee base pri while we decide the fate of this thread.
+	 *
+	 * Either:
+	 * - we return to user and kevent_cleanup will have unfrozen the base pri,
+	 * - or we proceed to workq_select_threadreq_or_park_and_unlock() who will.
+	 */
+	thread_freeze_base_pri(th);
 
 	if (kqr) {
 		uint32_t upcall_flags = WQ_FLAG_THREAD_NEWSPI | WQ_FLAG_THREAD_REUSE;
-		if (kqr->kqr_state & KQR_WORKLOOP) {
+		if (kqr->tr_flags & WORKQ_TR_FLAG_WORKLOOP) {
 			upcall_flags |= WQ_FLAG_THREAD_WORKLOOP | WQ_FLAG_THREAD_KEVENT;
 		} else {
 			upcall_flags |= WQ_FLAG_THREAD_KEVENT;
@@ -2575,6 +2543,7 @@ workq_thread_return(struct proc *p, struct workq_kernreturn_args *uap,
 		    get_task_map(p->task), uth->uu_workq_stackaddr,
 		    uth->uu_workq_thport, eventlist, nevents, upcall_flags);
 		if (error) {
+			assert(uth->uu_kqr_bound == kqr);
 			return error;
 		}
 
@@ -2597,7 +2566,8 @@ workq_thread_return(struct proc *p, struct workq_kernreturn_args *uap,
 	workq_lock_spin(wq);
 	WQ_TRACE_WQ(TRACE_wq_thread_logical_run | DBG_FUNC_END, wq, 0, 0, 0, 0);
 	uth->uu_save.uus_workq_park_data.workloop_params = trp.trp_value;
-	workq_select_threadreq_or_park_and_unlock(p, wq, uth);
+	workq_select_threadreq_or_park_and_unlock(p, wq, uth,
+	    WQ_SETUP_CLEAR_VOUCHER);
 	__builtin_unreachable();
 }
 
@@ -2714,6 +2684,35 @@ workq_kernreturn(struct proc *p, struct workq_kernreturn_args *uap, int32_t *ret
 		*retval = should_narrow;
 		break;
 	}
+	case WQOPS_SETUP_DISPATCH: {
+		/*
+		 * item = pointer to workq_dispatch_config structure
+		 * arg2 = sizeof(item)
+		 */
+		struct workq_dispatch_config cfg;
+		bzero(&cfg, sizeof(cfg));
+
+		error = copyin(uap->item, &cfg, MIN(sizeof(cfg), (unsigned long) arg2));
+		if (error) {
+			break;
+		}
+
+		if (cfg.wdc_flags & ~WORKQ_DISPATCH_SUPPORTED_FLAGS ||
+		    cfg.wdc_version < WORKQ_DISPATCH_MIN_SUPPORTED_VERSION) {
+			error = ENOTSUP;
+			break;
+		}
+
+		/* Load fields from version 1 */
+		p->p_dispatchqueue_serialno_offset = cfg.wdc_queue_serialno_offs;
+
+		/* Load fields from version 2 */
+		if (cfg.wdc_version >= 2) {
+			p->p_dispatchqueue_label_offset = cfg.wdc_queue_label_offs;
+		}
+
+		break;
+	}
 	default:
 		error = EINVAL;
 		break;
@@ -2729,15 +2728,17 @@ workq_kernreturn(struct proc *p, struct workq_kernreturn_args *uap, int32_t *ret
  */
 __attribute__((noreturn, noinline))
 static void
-workq_park_and_unlock(proc_t p, struct workqueue *wq, struct uthread *uth)
+workq_park_and_unlock(proc_t p, struct workqueue *wq, struct uthread *uth,
+    uint32_t setup_flags)
 {
 	assert(uth == current_uthread());
 	assert(uth->uu_kqr_bound == NULL);
-	workq_push_idle_thread(p, wq, uth); // may not return
+	workq_push_idle_thread(p, wq, uth, setup_flags); // may not return
 
 	workq_thread_reset_cpupercent(NULL, uth);
 
-	if (uth->uu_workq_flags & UT_WORKQ_IDLE_CLEANUP) {
+	if ((uth->uu_workq_flags & UT_WORKQ_IDLE_CLEANUP) &&
+	    !(uth->uu_workq_flags & UT_WORKQ_DYING)) {
 		workq_unlock(wq);
 
 		/*
@@ -2762,6 +2763,7 @@ workq_park_and_unlock(proc_t p, struct workqueue *wq, struct uthread *uth)
 
 		workq_lock_spin(wq);
 		uth->uu_workq_flags &= ~UT_WORKQ_IDLE_CLEANUP;
+		setup_flags &= ~WQ_SETUP_CLEAR_VOUCHER;
 	}
 
 	if (uth->uu_workq_flags & UT_WORKQ_RUNNING) {
@@ -2772,13 +2774,13 @@ workq_park_and_unlock(proc_t p, struct workqueue *wq, struct uthread *uth)
 		 * we just run the continuation ourselves.
 		 */
 		WQ_TRACE_WQ(TRACE_wq_thread_logical_run | DBG_FUNC_END, wq, 0, 0, 0, 0);
-		workq_select_threadreq_or_park_and_unlock(p, wq, uth);
+		workq_unpark_select_threadreq_or_park_and_unlock(p, wq, uth, setup_flags);
 		__builtin_unreachable();
 	}
 
 	if (uth->uu_workq_flags & UT_WORKQ_DYING) {
 		workq_unpark_for_death_and_unlock(p, wq, uth,
-		    WORKQ_UNPARK_FOR_DEATH_WAS_IDLE);
+		    WORKQ_UNPARK_FOR_DEATH_WAS_IDLE, setup_flags);
 		__builtin_unreachable();
 	}
 
@@ -2883,7 +2885,7 @@ workq_threadreq_admissible(struct workqueue *wq, struct uthread *uth,
 	if (req->tr_qos == WORKQ_THREAD_QOS_MANAGER) {
 		return workq_may_start_event_mgr_thread(wq, uth);
 	}
-	if ((req->tr_flags & TR_FLAG_OVERCOMMIT) == 0) {
+	if ((req->tr_flags & WORKQ_TR_FLAG_OVERCOMMIT) == 0) {
 		return workq_constrained_allowance(wq, req->tr_qos, uth, true);
 	}
 	return true;
@@ -2990,8 +2992,8 @@ workq_threadreq_select(struct workqueue *wq, struct uthread *uth)
 	    &proprietor);
 	if (pri) {
 		struct kqworkloop *kqwl = (struct kqworkloop *)proprietor;
-		req_pri = &kqwl->kqwl_request.kqr_req;
-		if (req_pri->tr_state != TR_STATE_QUEUED) {
+		req_pri = &kqwl->kqwl_request;
+		if (req_pri->tr_state != WORKQ_TR_STATE_QUEUED) {
 			panic("Invalid thread request (%p) state %d",
 			    req_pri, req_pri->tr_state);
 		}
@@ -3063,10 +3065,12 @@ workq_threadreq_select(struct workqueue *wq, struct uthread *uth)
  * efficient scheduling and reduced context switches.
  */
 static void
-workq_schedule_creator(proc_t p, struct workqueue *wq, int flags)
+workq_schedule_creator(proc_t p, struct workqueue *wq,
+    workq_kern_threadreq_flags_t flags)
 {
 	workq_threadreq_t req;
 	struct uthread *uth;
+	bool needs_wakeup;
 
 	workq_lock_held(wq);
 	assert(p || (flags & WORKQ_THREADREQ_CAN_CREATE_THREADS) == 0);
@@ -3075,6 +3079,14 @@ again:
 	uth = wq->wq_creator;
 
 	if (!wq->wq_reqcount) {
+		/*
+		 * There is no thread request left.
+		 *
+		 * If there is a creator, leave everything in place, so that it cleans
+		 * up itself in workq_push_idle_thread().
+		 *
+		 * Else, make sure the turnstile state is reset to no inheritor.
+		 */
 		if (uth == NULL) {
 			workq_turnstile_update_inheritor(wq, TURNSTILE_INHERITOR_NULL, 0);
 		}
@@ -3083,13 +3095,16 @@ again:
 
 	req = workq_threadreq_select_for_creator(wq);
 	if (req == NULL) {
-		if (flags & WORKQ_THREADREQ_CREATOR_SYNC_UPDATE) {
-			assert((flags & WORKQ_THREADREQ_CREATOR_TRANSFER) == 0);
-			/*
-			 * turnstile propagation code is reaching out to us,
-			 * and we still don't want to do anything, do not recurse.
-			 */
-		} else {
+		/*
+		 * There isn't a thread request that passes the admission check.
+		 *
+		 * If there is a creator, do not touch anything, the creator will sort
+		 * it out when it runs.
+		 *
+		 * Else, set the inheritor to "WORKQ" so that the turnstile propagation
+		 * code calls us if anything changes.
+		 */
+		if (uth == NULL) {
 			workq_turnstile_update_inheritor(wq, wq, TURNSTILE_INHERITOR_WORKQ);
 		}
 		return;
@@ -3102,15 +3117,17 @@ again:
 		if (workq_thread_needs_priority_change(req, uth)) {
 			WQ_TRACE_WQ(TRACE_wq_creator_select | DBG_FUNC_NONE,
 			    wq, 1, thread_tid(uth->uu_thread), req->tr_qos, 0);
-			workq_thread_reset_pri(wq, uth, req);
+			workq_thread_reset_pri(wq, uth, req, /*unpark*/ true);
 		}
+		assert(wq->wq_inheritor == uth->uu_thread);
 	} else if (wq->wq_thidlecount) {
 		/*
 		 * We need to unpark a creator thread
 		 */
-		wq->wq_creator = uth = workq_pop_idle_thread(wq);
+		wq->wq_creator = uth = workq_pop_idle_thread(wq, UT_WORKQ_OVERCOMMIT,
+		    &needs_wakeup);
 		if (workq_thread_needs_priority_change(req, uth)) {
-			workq_thread_reset_pri(wq, uth, req);
+			workq_thread_reset_pri(wq, uth, req, /*unpark*/ true);
 		}
 		workq_turnstile_update_inheritor(wq, uth->uu_thread,
 		    TURNSTILE_INHERITOR_THREAD);
@@ -3118,13 +3135,16 @@ again:
 		    wq, 2, thread_tid(uth->uu_thread), req->tr_qos, 0);
 		uth->uu_save.uus_workq_park_data.fulfilled_snapshot = wq->wq_fulfilled;
 		uth->uu_save.uus_workq_park_data.yields = 0;
-		workq_thread_wakeup(uth);
+		if (needs_wakeup) {
+			workq_thread_wakeup(uth);
+		}
 	} else {
 		/*
 		 * We need to allocate a thread...
 		 */
 		if (__improbable(wq->wq_nthreads >= wq_max_threads)) {
 			/* out of threads, just go away */
+			flags = WORKQ_THREADREQ_NONE;
 		} else if (flags & WORKQ_THREADREQ_SET_AST_ON_FAILURE) {
 			act_set_astkevent(current_thread(), AST_KEVENT_REDRIVE_THREADREQ);
 		} else if (!(flags & WORKQ_THREADREQ_CAN_CREATE_THREADS)) {
@@ -3136,16 +3156,173 @@ again:
 			workq_schedule_delayed_thread_creation(wq, 0);
 		}
 
-		if (flags & WORKQ_THREADREQ_CREATOR_TRANSFER) {
-			/*
-			 * workq_schedule_creator() failed at creating a thread,
-			 * and the responsibility of redriving is now with a thread-call.
-			 *
-			 * We still need to tell the turnstile the previous creator is gone.
-			 */
-			workq_turnstile_update_inheritor(wq, NULL, 0);
+		/*
+		 * If the current thread is the inheritor:
+		 *
+		 * If we set the AST, then the thread will stay the inheritor until
+		 * either the AST calls workq_kern_threadreq_redrive(), or it parks
+		 * and calls workq_push_idle_thread().
+		 *
+		 * Else, the responsibility of the thread creation is with a thread-call
+		 * and we need to clear the inheritor.
+		 */
+		if ((flags & WORKQ_THREADREQ_SET_AST_ON_FAILURE) == 0 &&
+		    wq->wq_inheritor == current_thread()) {
+			workq_turnstile_update_inheritor(wq, TURNSTILE_INHERITOR_NULL, 0);
 		}
 	}
+}
+
+/**
+ * Same as workq_unpark_select_threadreq_or_park_and_unlock,
+ * but do not allow early binds.
+ *
+ * Called with the base pri frozen, will unfreeze it.
+ */
+__attribute__((noreturn, noinline))
+static void
+workq_select_threadreq_or_park_and_unlock(proc_t p, struct workqueue *wq,
+    struct uthread *uth, uint32_t setup_flags)
+{
+	workq_threadreq_t req = NULL;
+	bool is_creator = (wq->wq_creator == uth);
+	bool schedule_creator = false;
+
+	if (__improbable(_wq_exiting(wq))) {
+		WQ_TRACE_WQ(TRACE_wq_select_threadreq | DBG_FUNC_NONE, wq, 0, 0, 0, 0);
+		goto park;
+	}
+
+	if (wq->wq_reqcount == 0) {
+		WQ_TRACE_WQ(TRACE_wq_select_threadreq | DBG_FUNC_NONE, wq, 1, 0, 0, 0);
+		goto park;
+	}
+
+	req = workq_threadreq_select(wq, uth);
+	if (__improbable(req == NULL)) {
+		WQ_TRACE_WQ(TRACE_wq_select_threadreq | DBG_FUNC_NONE, wq, 2, 0, 0, 0);
+		goto park;
+	}
+
+	uint8_t tr_flags = req->tr_flags;
+	struct turnstile *req_ts = kqueue_threadreq_get_turnstile(req);
+
+	/*
+	 * Attempt to setup ourselves as the new thing to run, moving all priority
+	 * pushes to ourselves.
+	 *
+	 * If the current thread is the creator, then the fact that we are presently
+	 * running is proof that we'll do something useful, so keep going.
+	 *
+	 * For other cases, peek at the AST to know whether the scheduler wants
+	 * to preempt us, if yes, park instead, and move the thread request
+	 * turnstile back to the workqueue.
+	 */
+	if (req_ts) {
+		workq_perform_turnstile_operation_locked(wq, ^{
+			turnstile_update_inheritor(req_ts, uth->uu_thread,
+			TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_THREAD);
+			turnstile_update_inheritor_complete(req_ts,
+			TURNSTILE_INTERLOCK_HELD);
+		});
+	}
+
+	if (is_creator) {
+		WQ_TRACE_WQ(TRACE_wq_creator_select, wq, 4, 0,
+		    uth->uu_save.uus_workq_park_data.yields, 0);
+		wq->wq_creator = NULL;
+		_wq_thactive_inc(wq, req->tr_qos);
+		wq->wq_thscheduled_count[_wq_bucket(req->tr_qos)]++;
+	} else if (uth->uu_workq_pri.qos_bucket != req->tr_qos) {
+		_wq_thactive_move(wq, uth->uu_workq_pri.qos_bucket, req->tr_qos);
+	}
+
+	workq_thread_reset_pri(wq, uth, req, /*unpark*/ true);
+
+	if (__improbable(thread_unfreeze_base_pri(uth->uu_thread) && !is_creator)) {
+		if (req_ts) {
+			workq_perform_turnstile_operation_locked(wq, ^{
+				turnstile_update_inheritor(req_ts, wq->wq_turnstile,
+				TURNSTILE_IMMEDIATE_UPDATE | TURNSTILE_INHERITOR_TURNSTILE);
+				turnstile_update_inheritor_complete(req_ts,
+				TURNSTILE_INTERLOCK_HELD);
+			});
+		}
+		WQ_TRACE_WQ(TRACE_wq_select_threadreq | DBG_FUNC_NONE, wq, 3, 0, 0, 0);
+		goto park_thawed;
+	}
+
+	/*
+	 * We passed all checks, dequeue the request, bind to it, and set it up
+	 * to return to user.
+	 */
+	WQ_TRACE_WQ(TRACE_wq_thread_logical_run | DBG_FUNC_START, wq,
+	    workq_trace_req_id(req), 0, 0, 0);
+	wq->wq_fulfilled++;
+	schedule_creator = workq_threadreq_dequeue(wq, req);
+
+	if (tr_flags & (WORKQ_TR_FLAG_KEVENT | WORKQ_TR_FLAG_WORKLOOP)) {
+		kqueue_threadreq_bind_prepost(p, req, uth);
+		req = NULL;
+	} else if (req->tr_count > 0) {
+		req = NULL;
+	}
+
+	workq_thread_reset_cpupercent(req, uth);
+	if (uth->uu_workq_flags & UT_WORKQ_NEW) {
+		uth->uu_workq_flags ^= UT_WORKQ_NEW;
+		setup_flags |= WQ_SETUP_FIRST_USE;
+	}
+	if (tr_flags & WORKQ_TR_FLAG_OVERCOMMIT) {
+		if ((uth->uu_workq_flags & UT_WORKQ_OVERCOMMIT) == 0) {
+			uth->uu_workq_flags |= UT_WORKQ_OVERCOMMIT;
+			wq->wq_constrained_threads_scheduled--;
+		}
+	} else {
+		if ((uth->uu_workq_flags & UT_WORKQ_OVERCOMMIT) != 0) {
+			uth->uu_workq_flags &= ~UT_WORKQ_OVERCOMMIT;
+			wq->wq_constrained_threads_scheduled++;
+		}
+	}
+
+	if (is_creator || schedule_creator) {
+		/* This can drop the workqueue lock, and take it again */
+		workq_schedule_creator(p, wq, WORKQ_THREADREQ_CAN_CREATE_THREADS);
+	}
+
+	workq_unlock(wq);
+
+	if (req) {
+		zfree(workq_zone_threadreq, req);
+	}
+
+	/*
+	 * Run Thread, Run!
+	 */
+	uint32_t upcall_flags = WQ_FLAG_THREAD_NEWSPI;
+	if (uth->uu_workq_pri.qos_bucket == WORKQ_THREAD_QOS_MANAGER) {
+		upcall_flags |= WQ_FLAG_THREAD_EVENT_MANAGER;
+	} else if (tr_flags & WORKQ_TR_FLAG_OVERCOMMIT) {
+		upcall_flags |= WQ_FLAG_THREAD_OVERCOMMIT;
+	}
+	if (tr_flags & WORKQ_TR_FLAG_KEVENT) {
+		upcall_flags |= WQ_FLAG_THREAD_KEVENT;
+	}
+	if (tr_flags & WORKQ_TR_FLAG_WORKLOOP) {
+		upcall_flags |= WQ_FLAG_THREAD_WORKLOOP | WQ_FLAG_THREAD_KEVENT;
+	}
+	uth->uu_save.uus_workq_park_data.upcall_flags = upcall_flags;
+
+	if (tr_flags & (WORKQ_TR_FLAG_KEVENT | WORKQ_TR_FLAG_WORKLOOP)) {
+		kqueue_threadreq_bind_commit(p, uth->uu_thread);
+	}
+	workq_setup_and_run(p, uth, setup_flags);
+	__builtin_unreachable();
+
+park:
+	thread_unfreeze_base_pri(uth->uu_thread);
+park_thawed:
+	workq_park_and_unlock(p, wq, uth, setup_flags);
 }
 
 /**
@@ -3161,16 +3338,14 @@ again:
  *   Either way, the thread request object serviced will be moved to state
  *   BINDING and attached to the uthread.
  *
- *   Should be called with the workqueue lock held.  Will drop it.
+ * Should be called with the workqueue lock held.  Will drop it.
+ * Should be called with the base pri not frozen.
  */
 __attribute__((noreturn, noinline))
 static void
-workq_select_threadreq_or_park_and_unlock(proc_t p, struct workqueue *wq,
-    struct uthread *uth)
+workq_unpark_select_threadreq_or_park_and_unlock(proc_t p, struct workqueue *wq,
+    struct uthread *uth, uint32_t setup_flags)
 {
-	uint32_t setup_flags = 0;
-	workq_threadreq_t req;
-
 	if (uth->uu_workq_flags & UT_WORKQ_EARLY_BOUND) {
 		if (uth->uu_workq_flags & UT_WORKQ_NEW) {
 			setup_flags |= WQ_SETUP_FIRST_USE;
@@ -3179,33 +3354,17 @@ workq_select_threadreq_or_park_and_unlock(proc_t p, struct workqueue *wq,
 		/*
 		 * This pointer is possibly freed and only used for tracing purposes.
 		 */
-		req = uth->uu_save.uus_workq_park_data.thread_request;
+		workq_threadreq_t req = uth->uu_save.uus_workq_park_data.thread_request;
 		workq_unlock(wq);
 		WQ_TRACE_WQ(TRACE_wq_thread_logical_run | DBG_FUNC_START, wq,
 		    VM_KERNEL_ADDRHIDE(req), 0, 0, 0);
-		goto run;
-	} else if (_wq_exiting(wq)) {
-		WQ_TRACE_WQ(TRACE_wq_select_threadreq | DBG_FUNC_NONE, wq, 0, 0, 0, 0);
-	} else if (wq->wq_reqcount == 0) {
-		WQ_TRACE_WQ(TRACE_wq_select_threadreq | DBG_FUNC_NONE, wq, 1, 0, 0, 0);
-	} else if ((req = workq_threadreq_select(wq, uth)) == NULL) {
-		WQ_TRACE_WQ(TRACE_wq_select_threadreq | DBG_FUNC_NONE, wq, 2, 0, 0, 0);
-	} else {
-		WQ_TRACE_WQ(TRACE_wq_thread_logical_run | DBG_FUNC_START, wq,
-		    workq_trace_req_id(req), 0, 0, 0);
-		if (uth->uu_workq_flags & UT_WORKQ_NEW) {
-			uth->uu_workq_flags ^= UT_WORKQ_NEW;
-			setup_flags |= WQ_SETUP_FIRST_USE;
-		}
-		workq_thread_reset_cpupercent(req, uth);
-		workq_threadreq_bind_and_unlock(p, wq, req, uth);
-run:
+		(void)req;
 		workq_setup_and_run(p, uth, setup_flags);
 		__builtin_unreachable();
 	}
 
-	workq_park_and_unlock(p, wq, uth);
-	__builtin_unreachable();
+	thread_freeze_base_pri(uth->uu_thread);
+	workq_select_threadreq_or_park_and_unlock(p, wq, uth, setup_flags);
 }
 
 static bool
@@ -3250,7 +3409,8 @@ __attribute__((noreturn, noinline))
 static void
 workq_unpark_continue(void *parameter __unused, wait_result_t wr __unused)
 {
-	struct uthread *uth = current_uthread();
+	thread_t th = current_thread();
+	struct uthread *uth = get_bsdthread_info(th);
 	proc_t p = current_proc();
 	struct workqueue *wq = proc_get_wqptr_fast(p);
 
@@ -3270,7 +3430,7 @@ workq_unpark_continue(void *parameter __unused, wait_result_t wr __unused)
 	}
 
 	if (__probable(uth->uu_workq_flags & UT_WORKQ_RUNNING)) {
-		workq_select_threadreq_or_park_and_unlock(p, wq, uth);
+		workq_unpark_select_threadreq_or_park_and_unlock(p, wq, uth, WQ_SETUP_NONE);
 		__builtin_unreachable();
 	}
 
@@ -3294,7 +3454,7 @@ workq_unpark_continue(void *parameter __unused, wait_result_t wr __unused)
 	}
 
 	workq_unpark_for_death_and_unlock(p, wq, uth,
-	    WORKQ_UNPARK_FOR_DEATH_WAS_IDLE);
+	    WORKQ_UNPARK_FOR_DEATH_WAS_IDLE, WQ_SETUP_NONE);
 	__builtin_unreachable();
 }
 
@@ -3490,4 +3650,7 @@ workq_init(void)
 	    NSEC_PER_USEC, &wq_reduce_pool_window.abstime);
 	clock_interval_to_absolutetime_interval(wq_max_timer_interval.usecs,
 	    NSEC_PER_USEC, &wq_max_timer_interval.abstime);
+
+	thread_deallocate_daemon_register_queue(&workq_deallocate_queue,
+	    workq_deallocate_queue_invoke);
 }

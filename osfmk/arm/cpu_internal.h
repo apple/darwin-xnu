@@ -64,6 +64,7 @@ extern void                     cpu_signal_cancel(
 #define SIGPLWFlush             0x00000020UL            /* Request LWFlush call */
 #define SIGPLWClean             0x00000040UL            /* Request LWClean call */
 #define SIGPkptimer             0x00000100U             /* Request kperf timer */
+#define SIGPxcallImm            0x00000200U             /* Send a cross-call, fail if already pending */
 
 #define SIGPdisabled            0x80000000U             /* Signal disabled */
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -156,6 +156,14 @@
 #define RQUOTA_STAT_OK          1
 #define RQUOTA_STAT_NOQUOTA     2
 #define RQUOTA_STAT_EPERM       3
+
+/* Local transports for rpcbind */
+#define RPCB_TICOTSORD_PATH "/var/run/rpcb.ticotsord"
+#define RPCB_TICLTS_PATH "/var/run/rpcb.ticlst"
+
+/* Local transport for nfs */
+#define NFS_TICOTSORD_PATH "/var/ran/nfs.ticotsord"
+#define NFS_TICLTS_PATH "/var/run/nfs.ticlts"
 
 #endif /* __APPLE_API_PRIVATE */
 #endif /* _NFS_RPCV2_H_ */

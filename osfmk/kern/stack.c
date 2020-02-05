@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -55,7 +55,7 @@
  *	because stack_alloc_try/thread_invoke operate at splsched.
  */
 
-decl_simple_lock_data(static, stack_lock_data)
+decl_simple_lock_data(static, stack_lock_data);
 #define stack_lock()            simple_lock(&stack_lock_data, LCK_GRP_NULL)
 #define stack_unlock()          simple_unlock(&stack_lock_data)
 

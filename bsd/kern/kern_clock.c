@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -78,10 +78,6 @@
 #include <sys/proc_internal.h>
 #include <sys/vm.h>
 #include <sys/sysctl.h>
-
-#ifdef GPROF
-#include <sys/gmon.h>
-#endif
 
 #include <kern/thread.h>
 #include <kern/ast.h>
@@ -330,61 +326,6 @@ tvtohz(struct timeval *tv)
 		ticks = INT_MAX;
 	}
 	return (int)ticks;
-}
-
-
-/*
- * Start profiling on a process.
- *
- * Kernel profiling passes kernel_proc which never exits and hence
- * keeps the profile clock running constantly.
- */
-void
-startprofclock(struct proc *p)
-{
-	if ((p->p_flag & P_PROFIL) == 0) {
-		OSBitOrAtomic(P_PROFIL, &p->p_flag);
-	}
-}
-
-/*
- * Stop profiling on a process.
- */
-void
-stopprofclock(struct proc *p)
-{
-	if (p->p_flag & P_PROFIL) {
-		OSBitAndAtomic(~((uint32_t)P_PROFIL), &p->p_flag);
-	}
-}
-
-/* TBD locking user profiling is not resolved yet */
-void
-bsd_uprofil(struct time_value *syst, user_addr_t pc)
-{
-	struct proc *p = current_proc();
-	int             ticks;
-	struct timeval  *tv;
-	struct timeval st;
-
-	if (p == NULL) {
-		return;
-	}
-	if (!(p->p_flag & P_PROFIL)) {
-		return;
-	}
-
-	st.tv_sec = syst->seconds;
-	st.tv_usec = syst->microseconds;
-
-	tv = &(p->p_stats->p_ru.ru_stime);
-
-	ticks = ((tv->tv_sec - st.tv_sec) * 1000 +
-	    (tv->tv_usec - st.tv_usec) / 1000) /
-	    (tick / 1000);
-	if (ticks) {
-		addupc_task(p, pc, ticks);
-	}
 }
 
 /* TBD locking user profiling is not resolved yet */

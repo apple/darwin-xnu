@@ -31,15 +31,6 @@
 
 #ifdef BSD_KERNEL_PRIVATE
 
-/*
- * Try setting up an MPTCP connection by making atleast 3 attempts,
- * that is 2 retransmissions - needed for Weak WiFi and long delay cellular.
- * This number must be bumped higher when we are assured that middleboxes
- * are not the reason for retries. Generally, on weak wifi and cold start
- * cellular, more than 2 retries are necessary.
- */
-#define MPTCP_CAPABLE_RETRIES   (2)
-
 __BEGIN_DECLS
 extern void mptcp_data_ack_rcvd(struct mptcb *mp_tp, struct tcpcb *tp, u_int64_t full_dack);
 extern void mptcp_update_window_wakeup(struct tcpcb *tp);

@@ -181,12 +181,19 @@ _pthread_default_priority(unsigned long flags)
 
 __attribute__((always_inline, const))
 static inline thread_qos_t
+_pthread_priority_thread_qos_fast(pthread_priority_t pp)
+{
+	pp &= _PTHREAD_PRIORITY_QOS_CLASS_MASK;
+	pp >>= _PTHREAD_PRIORITY_QOS_CLASS_SHIFT;
+	return (thread_qos_t)__builtin_ffs((int)pp);
+}
+
+__attribute__((always_inline, const))
+static inline thread_qos_t
 _pthread_priority_thread_qos(pthread_priority_t pp)
 {
 	if (_pthread_priority_has_qos(pp)) {
-		pp &= _PTHREAD_PRIORITY_QOS_CLASS_MASK;
-		pp >>= _PTHREAD_PRIORITY_QOS_CLASS_SHIFT;
-		return (thread_qos_t)__builtin_ffs((int)pp);
+		return _pthread_priority_thread_qos_fast(pp);
 	}
 	return THREAD_QOS_UNSPECIFIED;
 }

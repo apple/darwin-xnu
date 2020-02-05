@@ -52,27 +52,8 @@ extern void fileport_releasefg(struct fileglob *);
 ipc_port_t
 fileport_alloc(struct fileglob *fg)
 {
-	ipc_port_t fileport;
-	ipc_port_t sendport;
-	ipc_port_t notifyport;
-
-	fileport = ipc_port_alloc_kernel();
-	if (fileport == IP_NULL) {
-		goto out;
-	}
-
-	ipc_kobject_set(fileport, (ipc_kobject_t)fg, IKOT_FILEPORT);
-	ip_lock(fileport); /* unlocked by ipc_port_nsrequest */
-	notifyport = ipc_port_make_sonce_locked(fileport);
-	ipc_port_nsrequest(fileport, 1, notifyport, &notifyport);
-
-	sendport = ipc_port_make_send(fileport);
-	if (!IP_VALID(sendport)) {
-		panic("Couldn't allocate send right for fileport!\n");
-	}
-
-out:
-	return fileport;
+	return ipc_kobject_alloc_port((ipc_kobject_t)fg, IKOT_FILEPORT,
+	           IPC_KOBJECT_ALLOC_MAKE_SEND | IPC_KOBJECT_ALLOC_NSREQUEST);
 }
 
 
@@ -174,7 +155,8 @@ fileport_invoke(task_t task, mach_port_name_t name,
 	struct fileglob *fg;
 
 	kr = ipc_object_copyin(task->itk_space, name,
-	    MACH_MSG_TYPE_COPY_SEND, (ipc_object_t *)&fileport);
+	    MACH_MSG_TYPE_COPY_SEND, (ipc_object_t *)&fileport, 0, NULL,
+	    IPC_KMSG_FLAGS_ALLOW_IMMOVABLE_SEND);
 	if (kr != KERN_SUCCESS) {
 		return kr;
 	}

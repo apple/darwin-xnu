@@ -94,7 +94,7 @@ typedef uint8_t bitstr_t;
 
 /* set bit N of bitstring name (atomic) */
 #define bitstr_set_atomic(name, bit)                                    \
-	atomic_bitset_8(&((name)[_bitstr_byte(bit)]), _bitstr_mask(bit))
+	(void)os_atomic_or(&((name)[_bitstr_byte(bit)]), _bitstr_mask(bit), relaxed)
 
 /* clear bit N of bitstring name */
 #define bitstr_clear(name, bit)                                         \
@@ -102,7 +102,7 @@ typedef uint8_t bitstr_t;
 
 /* clear bit N of bitstring name (atomic) */
 #define bitstr_clear_atomic(name, bit)                                  \
-	atomic_bitclear_8(&((name)[_bitstr_byte(bit)]), _bitstr_mask(bit))
+	(void)os_atomic_andnot(&((name)[_bitstr_byte(bit)]), _bitstr_mask(bit), relaxed)
 
 /* clear bits start ... stop in bitstring */
 #define bitstr_nclear(name, start, stop) do {                           \

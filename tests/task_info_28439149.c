@@ -12,6 +12,8 @@
 #include <sys/wait.h>
 #include <stdlib.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
+
 static void
 do_child(int *pipefd)
 {

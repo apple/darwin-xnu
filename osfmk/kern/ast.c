@@ -62,6 +62,7 @@
 #include <kern/sched_prim.h>
 #include <kern/thread.h>
 #include <kern/processor.h>
+#include <kern/restartable.h>
 #include <kern/spl.h>
 #include <kern/sfi.h>
 #if CONFIG_TELEMETRY
@@ -74,6 +75,10 @@
 #include <mach/policy.h>
 #include <security/mac_mach_internal.h> // for MACF AST hook
 #include <stdatomic.h>
+
+#if CONFIG_ARCADE
+#include <kern/arcade.h>
+#endif
 
 static void __attribute__((noinline, noreturn, disable_tail_calls))
 thread_preempted(__unused void* parameter, __unused wait_result_t result)
@@ -217,6 +222,13 @@ ast_taken_user(void)
 	}
 #endif
 
+#if CONFIG_ARCADE
+	if (reasons & AST_ARCADE) {
+		thread_ast_clear(thread, AST_ARCADE);
+		arcade_ast(thread);
+	}
+#endif
+
 	if (reasons & AST_APC) {
 		thread_ast_clear(thread, AST_APC);
 		thread_apc_ast(thread);
@@ -235,6 +247,11 @@ ast_taken_user(void)
 	if (reasons & AST_KPERF) {
 		thread_ast_clear(thread, AST_KPERF);
 		kperf_kpc_thread_ast(thread);
+	}
+
+	if (reasons & AST_RESET_PCS) {
+		thread_ast_clear(thread, AST_RESET_PCS);
+		thread_reset_pcs_ast(thread);
 	}
 
 	if (reasons & AST_KEVENT) {
@@ -319,8 +336,7 @@ ast_taken_user(void)
 	assert((thread->sched_flags & TH_SFLAG_PROMOTED) == 0);
 	assert((thread->sched_flags & TH_SFLAG_DEPRESS) == 0);
 
-	assert(thread->promotions == 0);
-	assert(thread->was_promoted_on_wakeup == 0);
+	assert(thread->kern_promotion_schedpri == 0);
 	assert(thread->waiting_for_mutex == NULL);
 	assert(thread->rwlock_count == 0);
 }

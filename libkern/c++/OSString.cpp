@@ -165,7 +165,7 @@ OSString::withString(const OSString *aString)
 
 	if (me && !me->initWithString(aString)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -178,7 +178,7 @@ OSString::withCString(const char *cString)
 
 	if (me && !me->initWithCString(cString)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -191,7 +191,7 @@ OSString::withCStringNoCopy(const char *cString)
 
 	if (me && !me->initWithCStringNoCopy(cString)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -204,7 +204,7 @@ OSString::withStringOfLength(const char *cString, size_t length)
 
 	if (me && !me->initWithStringOfLength(cString, length)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;

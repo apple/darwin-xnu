@@ -24,6 +24,7 @@
 #include <arm/proc_reg.h>
 
 #include <kern/assert.h>
+#include <kern/ast.h>
 #include <pexpert/pexpert.h>
 
 extern struct arm_saved_state *get_user_regs(thread_t);
@@ -264,7 +265,8 @@ sendsig(
 	user_addr_t catcher,
 	int sig,
 	int mask,
-	__unused uint32_t code
+	__unused uint32_t code,
+	sigset_t siginfo
 	)
 {
 	union {
@@ -300,7 +302,7 @@ sendsig(
 	bzero(&ts, sizeof(ts));
 	bzero(&user_frame, sizeof(user_frame));
 
-	if (p->p_sigacts->ps_siginfo & sigmask(sig)) {
+	if (siginfo & sigmask(sig)) {
 		infostyle = UC_FLAVOR;
 	} else {
 		infostyle = UC_TRAD;
@@ -409,6 +411,30 @@ sendsig(
 		break;
 
 	case SIGFPE:
+		switch (ut->uu_code) {
+		case EXC_ARM_FP_UF:
+			sinfo.si_code = FPE_FLTUND;
+			break;
+		case EXC_ARM_FP_OF:
+			sinfo.si_code = FPE_FLTOVF;
+			break;
+		case EXC_ARM_FP_IO:
+			sinfo.si_code = FPE_FLTINV;
+			break;
+		case EXC_ARM_FP_DZ:
+			sinfo.si_code = FPE_FLTDIV;
+			break;
+		case EXC_ARM_FP_ID:
+			sinfo.si_code = FPE_FLTINV;
+			break;
+		case EXC_ARM_FP_IX:
+			sinfo.si_code = FPE_FLTRES;
+			break;
+		default:
+			sinfo.si_code = FPE_NOOP;
+			break;
+		}
+
 		break;
 
 	case SIGBUS:
@@ -729,6 +755,9 @@ sigreturn(
 
 	th_act = current_thread();
 	ut = (struct uthread *) get_bsdthread_info(th_act);
+
+	/* see osfmk/kern/restartable.c */
+	act_set_ast_reset_pcs(th_act);
 
 	if (proc_is64bit_data(p)) {
 #if defined(__arm64__)

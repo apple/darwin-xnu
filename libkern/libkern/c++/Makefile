@@ -23,6 +23,7 @@ DATAFILES = \
           OSNumber.h \
           OSObject.h \
           OSOrderedSet.h \
+          OSPtr.h \
           OSSerialize.h \
           OSSet.h \
           OSString.h \

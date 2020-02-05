@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008,2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2008,2011,2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -42,7 +42,7 @@
 #include "net/net_str_id.h"
 
 #define NET_ID_STR_ENTRY_SIZE(__str) \
-	((size_t)&(((struct net_str_id_entry*)0)->nsi_string[0]) + \
+	(__builtin_offsetof(struct net_str_id_entry, nsi_string[0]) + \
 	strlen(__str) + 1)
 
 #define FIRST_NET_STR_ID                                1000

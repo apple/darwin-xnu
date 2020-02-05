@@ -131,8 +131,15 @@ struct vnguard_set {
 	guardid_t vns_guard;
 };
 
+struct vnguard_getattr {
+	int vga_fd;             /* in */
+	unsigned vga_attrs;     /* out */
+	guardid_t vga_guard;    /* in */
+};
+
 #define VNG_SYSC_PING           0
 #define VNG_SYSC_SET_GUARD      1
+#define VNG_SYSC_GET_ATTR       2
 
 #define VNG_POLICY_NAME         "vnguard"
 

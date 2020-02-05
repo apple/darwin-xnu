@@ -93,6 +93,7 @@ boolean_t vm_kernel_ready = FALSE;
 boolean_t kmem_ready = FALSE;
 boolean_t kmem_alloc_ready = FALSE;
 boolean_t zlog_ready = FALSE;
+boolean_t iokit_iomd_setownership_enabled = TRUE;
 
 vm_offset_t kmapoff_kaddr;
 unsigned int kmapoff_pgcnt;
@@ -180,7 +181,7 @@ vm_mem_bootstrap(void)
 		zsize += zsize >> 1;
 #endif /* __LP64__ */
 
-#if defined(__x86_64__)
+#if !CONFIG_EMBEDDED
 		/*
 		 * The max_zonemap_size was based on physical memory and might make the
 		 * end of the zone go beyond what vm_page_[un]pack_ptr() can handle.
@@ -249,6 +250,13 @@ vm_mem_bootstrap(void)
 	zcache_bootstrap();
 #endif
 	vm_rtfault_record_init();
+
+	PE_parse_boot_argn("iokit_iomd_setownership_enabled", &iokit_iomd_setownership_enabled, sizeof(iokit_iomd_setownership_enabled));
+	if (!iokit_iomd_setownership_enabled) {
+		kprintf("IOKit IOMD setownership DISABLED\n");
+	} else {
+		kprintf("IOKit IOMD setownership ENABLED\n");
+	}
 }
 
 void

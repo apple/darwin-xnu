@@ -261,9 +261,12 @@ __BEGIN_DECLS
 /* Define C-string versions of the CFBundle keys for use in the kernel.
  */
 #define kCFBundleIdentifierKey                  "CFBundleIdentifier"
+#define kCFBundleIdentifierKernelKey            "CFBundleIdentifierKernel"
 #define kCFBundleVersionKey                     "CFBundleVersion"
 #define kCFBundleNameKey                        "CFBundleName"
 #define kCFBundleExecutableKey                  "CFBundleExecutable"
+#define kCFBundlePackageTypeKey                 "CFBundlePackageType"
+#define kCFBundleDriverKitUUIDKey               "CFBundleDriverKitUUID"
 #endif /* KERNEL */
 
 /*!
@@ -340,6 +343,13 @@ __BEGIN_DECLS
 #define kOSKernelResourceKey                    "OSKernelResource"
 
 /*!
+ * @define   kOSKextVariantOverrideKey
+ * @abstract A dictionary with target names as key and a target-specific variant
+ *           name as value.
+ */
+#define kOSKextVariantOverrideKey               "OSKextVariantOverride"
+
+/*!
  * @define   kIOKitPersonalitiesKey
  * @abstract A dictionary of dictionaries used in matching for I/O Kit drivers.
  */
@@ -409,6 +419,20 @@ __BEGIN_DECLS
 #define kOSKextKernelIdentifier                 "__kernel__"
 
 /*!
+ * @define  kOSKextBundlePackageTypeKext
+ * @abstract
+ * The bundle type value for Kernel Extensions.
+ */
+#define kOSKextBundlePackageTypeKext        "KEXT"
+
+/*!
+ * @define  kOSKextBundlePackageTypeDriverKit
+ * @abstract
+ * The bundle type value for Driver Extensions.
+ */
+#define kOSKextBundlePackageTypeDriverKit   "DEXT"
+
+/*!
  * @define   kOSBundleRequiredRoot
  * @abstract
  * This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
@@ -457,6 +481,19 @@ __BEGIN_DECLS
  */
 #define kOSBundleRequiredConsole                "Console"
 
+/*!
+ * @define   kOSBundleRequiredDriverKit
+ * @abstract
+ * This <code>@link kOSBundleRequiredKey OSBundleRequired@/link</code>
+ * value indicates that the driver extension's (DriverKit driver's)
+ * personalities must be present in the kernel at early boot (specifically
+ * before <code>@link //apple_ref/doc/man/8/kextd kextd(8)@/link</code> starts)
+ * in order to compete with kexts built into the prelinkedkernel. Note that
+ * kextd is still required to launch the user space driver binary. The IOKit
+ * matching will happen during early boot, and the actual driver launch
+ * will happen after kextd starts.
+ */
+#define kOSBundleRequiredDriverKit              "DriverKit"
 
 #if PRAGMA_MARK
 #pragma mark -
@@ -973,7 +1010,7 @@ OSKextResetPgoCounters(void);
  * @/textblock
  * </pre>
  */
-extern const void * gOSKextUnresolved;
+extern const void * const gOSKextUnresolved;
 
 /*!
  * @define OSKextSymbolIsResolved

@@ -101,6 +101,7 @@
 #include <vm/vm_protos.h>
 #include <mach/host_info.h>
 #include <kern/pms.h>
+#include <pexpert/device_tree.h>
 
 extern vm_map_t bsd_pageable_map;
 
@@ -135,6 +136,16 @@ static int      cputype, cpusubtype, cputhreadtype, cpufamily, cpu64bit;
 static uint64_t cacheconfig[10], cachesize[10];
 static int      packages;
 
+static char *   osenvironment;
+static uint32_t osenvironment_size = 0;
+static uint32_t ephemeral_storage = 0;
+static uint32_t use_recovery_securityd = 0;
+
+static struct {
+	uint32_t ephemeral_storage:1;
+	uint32_t use_recovery_securityd:1;
+} property_existence = {0, 0};
+
 SYSCTL_NODE(, 0, sysctl, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
     "Sysctl internal magic");
 SYSCTL_NODE(, CTL_KERN, kern, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
@@ -163,8 +174,8 @@ SYSCTL_NODE(_kern, OID_AUTO, bridge, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
  * hw.* MIB
  */
 
-#define CTLHW_RETQUAD   (1 << 31)
-#define CTLHW_LOCAL     (1 << 30)
+#define CTLHW_RETQUAD   (1U << 31)
+#define CTLHW_LOCAL     (1U << 30)
 
 #define HW_LOCAL_CPUTHREADTYPE  (1 | CTLHW_LOCAL)
 #define HW_LOCAL_PHYSICALCPU    (2 | CTLHW_LOCAL)
@@ -367,6 +378,83 @@ sysctl_tbfrequency
 }
 
 /*
+ * Create sysctl entries coming from device tree.
+ *
+ * Entries from device tree are loaded here because DTLookupEntry() only works before
+ * PE_init_iokit(). Doing this also avoids the extern-C hackery to access these entries
+ * from IORegistry (which requires C++).
+ */
+void
+sysctl_load_devicetree_entries(void)
+{
+	DTEntry chosen;
+	void *value;
+	unsigned int size;
+
+	if (kSuccess != DTLookupEntry(0, "/chosen", &chosen)) {
+		return;
+	}
+
+	/* load osenvironment */
+	if (kSuccess == DTGetProperty(chosen, "osenvironment", (void **) &value, &size)) {
+		MALLOC(osenvironment, char *, size, M_TEMP, M_WAITOK);
+		if (osenvironment) {
+			memcpy(osenvironment, value, size);
+			osenvironment_size = size;
+		}
+	}
+
+	/* load ephemeral_storage */
+	if (kSuccess == DTGetProperty(chosen, "ephemeral-storage", (void **) &value, &size)) {
+		if (size == sizeof(uint32_t)) {
+			ephemeral_storage = *(uint32_t *)value;
+			property_existence.ephemeral_storage = 1;
+		}
+	}
+
+	/* load use_recovery_securityd */
+	if (kSuccess == DTGetProperty(chosen, "use-recovery-securityd", (void **) &value, &size)) {
+		if (size == sizeof(uint32_t)) {
+			use_recovery_securityd = *(uint32_t *)value;
+			property_existence.use_recovery_securityd = 1;
+		}
+	}
+}
+
+static int
+sysctl_osenvironment
+(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	if (osenvironment_size > 0) {
+		return SYSCTL_OUT(req, osenvironment, osenvironment_size);
+	} else {
+		return EINVAL;
+	}
+}
+
+static int
+sysctl_ephemeral_storage
+(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	if (property_existence.ephemeral_storage) {
+		return SYSCTL_OUT(req, &ephemeral_storage, sizeof(ephemeral_storage));
+	} else {
+		return EINVAL;
+	}
+}
+
+static int
+sysctl_use_recovery_securityd
+(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	if (property_existence.use_recovery_securityd) {
+		return SYSCTL_OUT(req, &use_recovery_securityd, sizeof(use_recovery_securityd));
+	} else {
+		return EINVAL;
+	}
+}
+
+/*
  * hw.* MIB variables.
  */
 SYSCTL_PROC(_hw, HW_NCPU, ncpu, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, HW_NCPU, sysctl_hw_generic, "I", "");
@@ -409,6 +497,9 @@ SYSCTL_QUAD(_hw, OID_AUTO, fixfrequency, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOC
 SYSCTL_PROC(_hw, OID_AUTO, tbfrequency, CTLTYPE_QUAD | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, 0, sysctl_tbfrequency, "Q", "");
 SYSCTL_QUAD(_hw, HW_MEMSIZE, memsize, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &max_mem, "");
 SYSCTL_INT(_hw, OID_AUTO, packages, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &packages, 0, "");
+SYSCTL_PROC(_hw, OID_AUTO, osenvironment, CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, 0, sysctl_osenvironment, "A", "");
+SYSCTL_PROC(_hw, OID_AUTO, ephemeral_storage, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, 0, sysctl_ephemeral_storage, "I", "");
+SYSCTL_PROC(_hw, OID_AUTO, use_recovery_securityd, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, 0, 0, sysctl_use_recovery_securityd, "I", "");
 
 /*
  * Optional CPU features can register nodes below hw.optional.
@@ -512,6 +603,7 @@ int gNeonHpfp = -1;
 int gNeonFp16 = -1;
 int gARMv81Atomics = 0;
 int gARMv8Crc32 = 0;
+int gARMv82FHM = 0;
 
 #if defined (__arm__)
 int arm64_flag = 0;
@@ -528,6 +620,7 @@ SYSCTL_INT(_hw_optional, OID_AUTO, neon_hpfp, CTLFLAG_RD | CTLFLAG_KERN | CTLFLA
 SYSCTL_INT(_hw_optional, OID_AUTO, neon_fp16, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gNeonFp16, 0, "");
 SYSCTL_INT(_hw_optional, OID_AUTO, armv8_1_atomics, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gARMv81Atomics, 0, "");
 SYSCTL_INT(_hw_optional, OID_AUTO, armv8_crc32, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gARMv8Crc32, 0, "");
+SYSCTL_INT(_hw_optional, OID_AUTO, armv8_2_fhm, CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, &gARMv82FHM, 0, "");
 
 /*
  * Without this little ifdef dance, the preprocessor replaces "arm64" with "1",
@@ -627,6 +720,7 @@ sysctl_mib_init(void)
 	cachesize[4] = 0;
 
 	packages = 1;
+
 #else
 #error unknown architecture
 #endif /* !__i386__ && !__x86_64 && !__arm__ && !__arm64__ */

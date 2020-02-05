@@ -33,7 +33,7 @@ getiopolicy_np(int iotype, int scope)
 	int policy, error;
 	struct _iopol_param_t iop_param;
 
-	if ((iotype != IOPOL_TYPE_DISK && iotype != IOPOL_TYPE_VFS_ATIME_UPDATES) ||
+	if ((iotype != IOPOL_TYPE_DISK && iotype != IOPOL_TYPE_VFS_ATIME_UPDATES && iotype != IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES) ||
 	    (scope != IOPOL_SCOPE_PROCESS && scope != IOPOL_SCOPE_THREAD)) {
 		errno = EINVAL;
 		policy = -1;

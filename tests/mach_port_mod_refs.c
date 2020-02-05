@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
 
 T_DECL(mach_port_mod_refs, "mach_port_mod_refs"){
 	mach_port_t port_set;

@@ -6,6 +6,7 @@
 
 #include <darwintest.h>
 
+T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
 
 static int exitcode = 0x6789BEEF;
 int should_exit = 0;

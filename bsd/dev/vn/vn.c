@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -142,30 +142,30 @@ static int      vndevice_cdev_major;
  */
 
 static struct bdevsw vn_bdevsw = {
-	/* open */ vnopen,
-	/* close */ vnclose,
-	/* strategy */ vnstrategy,
-	/* ioctl */ vnioctl_blk,
-	/* dump */ eno_dump,
-	/* psize */ vnsize,
-	/* flags */ D_DISK,
+	.d_open     = vnopen,
+	.d_close    = vnclose,
+	.d_strategy = vnstrategy,
+	.d_ioctl    = vnioctl_blk,
+	.d_dump     = eno_dump,
+	.d_psize    = vnsize,
+	.d_type     = D_DISK,
 };
 
 static struct cdevsw vn_cdevsw = {
-	/* open */ vnopen,
-	/* close */ vnclose,
-	/* read */ vnread,
-	/* write */ vnwrite,
-	/* ioctl */ vnioctl_chr,
-	/* stop */ eno_stop,
-	/* reset */ eno_reset,
-	/* ttys */ NULL,
-	/* select */ eno_select,
-	/* mmap */ eno_mmap,
-	/* strategy */ eno_strat,
-	/* getc */ eno_getc,
-	/* putc */ eno_putc,
-	/* flags */ D_DISK,
+	.d_open       = vnopen,
+	.d_close      = vnclose,
+	.d_read       = vnread,
+	.d_write      = vnwrite,
+	.d_ioctl      = vnioctl_chr,
+	.d_stop       = eno_stop,
+	.d_reset      = eno_reset,
+	.d_ttys       = NULL,
+	.d_select     = eno_select,
+	.d_mmap       = eno_mmap,
+	.d_strategy   = eno_strat,
+	.d_reserved_1 = eno_getc,
+	.d_reserved_2 = eno_putc,
+	.d_type       = D_DISK,
 };
 
 struct vn_softc {

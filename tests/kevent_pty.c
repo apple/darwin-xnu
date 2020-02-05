@@ -17,7 +17,8 @@
 
 T_GLOBAL_META(
 	T_META_NAMESPACE("xnu.kevent"),
-	T_META_CHECK_LEAKS(false));
+	T_META_CHECK_LEAKS(false),
+	T_META_RUN_CONCURRENTLY(true));
 
 #define TIMEOUT_SECS 10
 
@@ -147,7 +148,8 @@ reader_thread(void *arg)
 			if (errno == EINTR) {
 				continue;
 			} else if (errno == EBADF) {
-				T_LOG("reader got an error (%s), shutting down", strerror(errno));
+				T_LOG("reader got an error (%s), shutting down",
+				    strerror(errno));
 				return NULL;
 			} else {
 				T_ASSERT_POSIX_SUCCESS(rdsize, "read on PTY");
@@ -178,7 +180,8 @@ writer_thread(void *arg)
 			if (errno == EINTR) {
 				continue;
 			} else {
-				T_LOG("writer got an error (%s), shutting down", strerror(errno));
+				T_LOG("writer got an error (%s), shutting down",
+				    strerror(errno));
 				return NULL;
 			}
 		}
@@ -191,16 +194,6 @@ writer_thread(void *arg)
 
 static int attach_master, attach_slave;
 static pthread_t reader, writer;
-
-static void
-join_threads(void)
-{
-	close(attach_slave);
-	close(attach_master);
-	writing = false;
-	pthread_join(reader, NULL);
-	pthread_join(writer, NULL);
-}
 
 static void
 redispatch(dispatch_group_t grp, dispatch_source_type_t type, int fd)
@@ -246,7 +239,6 @@ T_DECL(attach_while_tty_wakeups,
 	    (void *)(uintptr_t)attach_master), NULL);
 	T_ASSERT_POSIX_ZERO(pthread_create(&writer, NULL, writer_thread,
 	    (void *)(uintptr_t)attach_slave), NULL);
-	T_ATEND(join_threads);
 	T_SETUPEND;
 
 	redispatch(grp, DISPATCH_SOURCE_TYPE_READ, attach_master);

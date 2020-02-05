@@ -205,7 +205,7 @@ OSSerialize::initWithCapacity(unsigned int inCapacity)
 	}
 	if (round_page_overflow(inCapacity, &capacity)) {
 		tags->release();
-		tags = 0;
+		tags = NULL;
 		return false;
 	}
 
@@ -217,7 +217,7 @@ OSSerialize::initWithCapacity(unsigned int inCapacity)
 	kern_return_t rc = kmem_alloc(kernel_map, (vm_offset_t *)&data, capacity, IOMemoryTag(kernel_map));
 	if (rc) {
 		tags->release();
-		tags = 0;
+		tags = NULL;
 		return false;
 	}
 	bzero((void *)data, capacity);
@@ -235,7 +235,7 @@ OSSerialize::withCapacity(unsigned int inCapacity)
 
 	if (me && !me->initWithCapacity(inCapacity)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -303,9 +303,8 @@ OSSerialize::ensureCapacity(unsigned int newCapacity)
 void
 OSSerialize::free()
 {
-	if (tags) {
-		tags->release();
-	}
+	OSSafeReleaseNULL(tags);
+	OSSafeReleaseNULL(indexData);
 
 	if (data) {
 		kmem_free(kernel_map, (vm_offset_t)data, capacity);
@@ -325,7 +324,7 @@ OSSerializer * OSSerializer::forTarget( void * target,
 	thing = new OSSerializer;
 	if (thing && !thing->init()) {
 		thing->release();
-		thing = 0;
+		thing = NULL;
 	}
 
 	if (thing) {
@@ -352,7 +351,7 @@ OSSerializer::withBlock(
 
 	block = Block_copy(callback);
 	if (!block) {
-		return 0;
+		return NULL;
 	}
 
 	serializer = (OSSerializer::forTarget(NULL, &OSSerializer::callbackToBlock, block));

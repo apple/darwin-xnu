@@ -84,7 +84,7 @@ IOFilterInterruptEventSource::interruptEventSource(OSObject *inOwner,
     IOService *inProvider,
     int inIntIndex)
 {
-	return 0;
+	return NULL;
 }
 
 bool
@@ -122,7 +122,7 @@ IOFilterInterruptEventSource
 	if (me
 	    && !me->init(inOwner, inAction, inFilterAction, inProvider, inIntIndex)) {
 		me->release();
-		return 0;
+		return NULL;
 	}
 
 	return me;
@@ -141,14 +141,15 @@ IOFilterInterruptEventSource
 
 	FilterBlock filter = Block_copy(inFilterAction);
 	if (!filter) {
-		return 0;
+		OSSafeReleaseNULL(me);
+		return NULL;
 	}
 
 	if (me
 	    && !me->init(inOwner, (Action) NULL, (Filter) filter, inProvider, inIntIndex)) {
 		me->release();
 		Block_release(filter);
-		return 0;
+		return NULL;
 	}
 	me->flags |= kFilterBlock;
 	me->setActionBlock((IOEventSource::ActionBlock) inAction);
@@ -220,8 +221,12 @@ IOFilterInterruptEventSource::normalInterruptOccurred
 	}
 
 	if (IOInterruptEventSource::reserved->statistics) {
-		if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelTimeIndex)) {
+		if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelTimeIndex)
+		    || IOInterruptEventSource::reserved->statistics->enablePrimaryTimestamp) {
 			startTime = mach_absolute_time();
+		}
+		if (IOInterruptEventSource::reserved->statistics->enablePrimaryTimestamp) {
+			IOInterruptEventSource::reserved->statistics->primaryTimestamp = startTime;
 		}
 	}
 
@@ -269,8 +274,12 @@ IOFilterInterruptEventSource::disableInterruptOccurred
 	}
 
 	if (IOInterruptEventSource::reserved->statistics) {
-		if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelTimeIndex)) {
+		if (IA_GET_STATISTIC_ENABLED(kInterruptAccountingFirstLevelTimeIndex)
+		    || IOInterruptEventSource::reserved->statistics->enablePrimaryTimestamp) {
 			startTime = mach_absolute_time();
+		}
+		if (IOInterruptEventSource::reserved->statistics->enablePrimaryTimestamp) {
+			IOInterruptEventSource::reserved->statistics->primaryTimestamp = startTime;
 		}
 	}
 
