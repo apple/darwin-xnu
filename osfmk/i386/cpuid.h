@@ -476,7 +476,7 @@ typedef struct {
 
 typedef enum {
 	CPU_INTEL_SEGCHK = 1,
-	CPU_INTEL_TSXFA
+	CPU_INTEL_TSXFA = 2
 } cpu_wa_e;
 
 typedef enum {

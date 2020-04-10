@@ -55,18 +55,8 @@ kpersona_dealloc(uid_t id)
 int
 kpersona_get(uid_t *id)
 {
-	/* persona is a process-static identifier: cache it in a global */
-	static uid_t p_id = PERSONA_ID_NONE;
-	if (p_id == PERSONA_ID_NONE) {
-		int ret = 0;
-		size_t idlen = 1;
-		ret = __persona(PERSONA_OP_GET, 0, NULL, &p_id, &idlen, NULL);
-		if (ret != 0) {
-			return ret;
-		}
-	}
-	*id = p_id;
-	return 0;
+	size_t idlen = 1;
+	return __persona(PERSONA_OP_GET, 0, NULL, id, &idlen, NULL);
 }
 
 int

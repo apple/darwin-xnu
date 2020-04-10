@@ -738,6 +738,7 @@ def DumpRawTraceFile(cmd_args=[], cmd_options={}):
 
     if lp64 :
         KDBG_TIMESTAMP_MASK = 0xffffffffffffffff
+        KDBG_CPU_SHIFT      = 0
     else :
         KDBG_TIMESTAMP_MASK = 0x00ffffffffffffff
         KDBG_CPU_SHIFT      = 56
@@ -967,7 +968,8 @@ def DumpRawTraceFile(cmd_args=[], cmd_options={}):
                 htab[min_kdbp].kd_prev_timebase += 1
 
                 e.timestamp = htab[min_kdbp].kd_prev_timebase & KDBG_TIMESTAMP_MASK
-                e.timestamp |= (min_cpu << KDBG_CPU_SHIFT)
+                if not lp64:
+                    e.timestamp |= (min_cpu << KDBG_CPU_SHIFT)
             else :
                 htab[min_kdbp].kd_prev_timebase = earliest_time
 

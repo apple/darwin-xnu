@@ -260,6 +260,9 @@
 0x132000c	RealFaultAddressPurgeable
 0x1320010	RealFaultAddressExternal
 0x1320014	RealFaultAddressSharedCache
+0x1320018   vm_fast_fault
+0x132001c   vm_slow_fault
+0x1320020   vm_map_lookup_object
 0x1400000	MACH_SCHED
 0x1400004	MACH_STKATTACH
 0x1400008	MACH_STKHANDOFF

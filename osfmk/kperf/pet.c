@@ -363,7 +363,8 @@ pet_sample_thread(int pid, task_t task, thread_t thread, uint32_t idle_rate)
 {
 	lck_mtx_assert(pet_lock, LCK_MTX_ASSERT_OWNED);
 
-	uint32_t sample_flags = SAMPLE_FLAG_IDLE_THREADS | SAMPLE_FLAG_THREAD_ONLY;
+	uint32_t sample_flags = SAMPLE_FLAG_IDLE_THREADS |
+	    SAMPLE_FLAG_THREAD_ONLY;
 
 	BUF_VERB(PERF_PET_SAMPLE_THREAD | DBG_FUNC_START);
 
@@ -388,6 +389,8 @@ pet_sample_thread(int pid, task_t task, thread_t thread, uint32_t idle_rate)
 	thread->kperf_pet_cnt++;
 
 	kperf_sample(pet_sample, &ctx, pet_action_id, sample_flags);
+	kperf_sample_user(&pet_sample->usample, &ctx, pet_action_id,
+	    sample_flags);
 
 	BUF_VERB(PERF_PET_SAMPLE_THREAD | DBG_FUNC_END);
 }

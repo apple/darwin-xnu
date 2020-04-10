@@ -116,7 +116,6 @@ extern void kprint_state(x86_saved_state64_t *saved_state);
 /*
  * Forward declarations
  */
-static void user_page_fault_continue(kern_return_t kret);
 static void panic_trap(x86_saved_state64_t *saved_state, uint32_t pl, kern_return_t fault_result) __dead2;
 static void set_recovery_ip(x86_saved_state64_t *saved_state, vm_offset_t ip);
 
@@ -203,36 +202,6 @@ thread_syscall_return(
 	throttle_lowpri_io(1);
 
 	thread_exception_return();
-	/*NOTREACHED*/
-}
-
-
-static inline void
-user_page_fault_continue(
-	kern_return_t  kr)
-{
-	thread_t        thread = current_thread();
-	user_addr_t     vaddr;
-
-	if (thread_is_64bit_addr(thread)) {
-		x86_saved_state64_t     *uregs;
-
-		uregs = USER_REGS64(thread);
-
-		vaddr = (user_addr_t)uregs->cr2;
-	} else {
-		x86_saved_state32_t     *uregs;
-
-		uregs = USER_REGS32(thread);
-
-		vaddr = uregs->cr2;
-	}
-
-
-	/* PAL debug hook */
-	pal_dbg_page_fault( thread, vaddr, kr );
-
-	i386_exception(EXC_BAD_ACCESS, kr, vaddr);
 	/*NOTREACHED*/
 }
 
@@ -374,6 +343,11 @@ interrupt(x86_saved_state_t *state)
 		user_mode = TRUE;
 	}
 
+#if DEVELOPMENT || DEBUG
+	uint64_t frameptr = is_saved_state64(state) ? state64->rbp : saved_state32(state)->ebp;
+	uint32_t traptrace_index = traptrace_start(interrupt_num, rip, mach_absolute_time(), frameptr);
+#endif
+
 	if (cpu_data_ptr[cnum]->lcpu.package->num_idle == topoParms.nLThreadsPerPackage) {
 		cpu_data_ptr[cnum]->cpu_hwIntpexits[interrupt_num]++;
 	}
@@ -492,6 +466,12 @@ interrupt(x86_saved_state_t *state)
 	    interrupt_num);
 
 	assert(ml_get_interrupts_enabled() == FALSE);
+
+#if DEVELOPMENT || DEBUG
+	if (traptrace_index != TRAPTRACE_INVALID_INDEX) {
+		traptrace_end(traptrace_index, mach_absolute_time());
+	}
+#endif
 }
 
 static inline void
@@ -553,6 +533,10 @@ kernel_trap(
 
 	is_user = (vaddr < VM_MAX_USER_PAGE_ADDRESS);
 
+#if DEVELOPMENT || DEBUG
+	uint32_t traptrace_index = traptrace_start(type, kern_ip, mach_absolute_time(), saved_state->rbp);
+#endif
+
 #if CONFIG_DTRACE
 	/*
 	 * Is there a DTrace hook?
@@ -562,7 +546,7 @@ kernel_trap(
 			/*
 			 * If it succeeds, we are done...
 			 */
-			return;
+			goto common_return;
 		}
 	}
 #endif /* CONFIG_DTRACE */
@@ -578,7 +562,8 @@ kernel_trap(
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 		    (MACHDBG_CODE(DBG_MACH_EXCP_KTRAP_x86, type)) | DBG_FUNC_NONE,
 		    0, 0, 0, VM_KERNEL_UNSLIDE(kern_ip), 0);
-		return;
+
+		goto common_return;
 	}
 
 	user_addr_t     kd_vaddr = is_user ? vaddr : VM_KERNEL_UNSLIDE(vaddr);
@@ -675,19 +660,19 @@ kernel_trap(
 	switch (type) {
 	case T_NO_FPU:
 		fpnoextflt();
-		return;
+		goto common_return;
 
 	case T_FPU_FAULT:
 		fpextovrflt();
-		return;
+		goto common_return;
 
 	case T_FLOATING_POINT_ERROR:
 		fpexterrflt();
-		return;
+		goto common_return;
 
 	case T_SSE_FLOAT_ERROR:
 		fpSSEexterrflt();
-		return;
+		goto common_return;
 
 	case T_INVALID_OPCODE:
 		fpUDflt(kern_ip);
@@ -701,7 +686,7 @@ kernel_trap(
 			 * This isn't supposed to happen.
 			 */
 			reset_dr7();
-			return;
+			goto common_return;
 		}
 		goto debugger_entry;
 	case T_INT3:
@@ -745,7 +730,7 @@ kernel_trap(
 				(void) ml_set_interrupts_enabled(intr);
 			}
 #endif /* NCOPY_WINDOWS > 0 */
-			return;
+			goto common_return;
 		}
 		/*
 		 * fall through
@@ -762,7 +747,7 @@ FALL_THROUGH:
 		for (rp = recover_table; rp < recover_table_end; rp++) {
 			if (kern_ip == rp->fault_addr) {
 				set_recovery_ip(saved_state, rp->recover_addr);
-				return;
+				goto common_return;
 			}
 		}
 
@@ -772,7 +757,7 @@ FALL_THROUGH:
 		if (thread != THREAD_NULL && thread->recover) {
 			set_recovery_ip(saved_state, thread->recover);
 			thread->recover = 0;
-			return;
+			goto common_return;
 		}
 	/*
 	 * Unanticipated page-fault errors in kernel
@@ -787,7 +772,7 @@ FALL_THROUGH:
 		 */
 		if (type == 15) {
 			kprintf("kernel_trap() ignoring spurious trap 15\n");
-			return;
+			goto common_return;
 		}
 debugger_entry:
 		/* Ensure that the i386_kernel_state at the base of the
@@ -798,7 +783,7 @@ debugger_entry:
 		sync_iss_to_iks(state);
 #if  MACH_KDP
 		if (kdp_i386_trap(type, saved_state, result, (vm_offset_t)vaddr)) {
-			return;
+			goto common_return;
 		}
 #endif
 	}
@@ -807,6 +792,14 @@ debugger_entry:
 	/*
 	 * NO RETURN
 	 */
+
+common_return:
+#if DEVELOPMENT || DEBUG
+	if (traptrace_index != TRAPTRACE_INVALID_INDEX) {
+		traptrace_end(traptrace_index, mach_absolute_time());
+	}
+#endif
+	return;
 }
 
 static void
@@ -907,7 +900,9 @@ user_trap(
 	kern_return_t           kret;
 	user_addr_t             rip;
 	unsigned long           dr6 = 0; /* 32 bit for i386, 64 bit for x86_64 */
-
+#if DEVELOPMENT || DEBUG
+	uint32_t                traptrace_index;
+#endif
 	assert((is_saved_state32(saved_state) && !thread_is_64bit_addr(thread)) ||
 	    (is_saved_state64(saved_state) && thread_is_64bit_addr(thread)));
 
@@ -923,6 +918,9 @@ user_trap(
 		err  = (int)regs->isf.err & 0xffff;
 		vaddr = (user_addr_t)regs->cr2;
 		rip   = (user_addr_t)regs->isf.rip;
+#if DEVELOPMENT || DEBUG
+		traptrace_index = traptrace_start(type, rip, mach_absolute_time(), regs->rbp);
+#endif
 	} else {
 		x86_saved_state32_t     *regs;
 
@@ -935,7 +933,11 @@ user_trap(
 		err   = regs->err & 0xffff;
 		vaddr = (user_addr_t)regs->cr2;
 		rip   = (user_addr_t)regs->eip;
+#if DEVELOPMENT || DEBUG
+		traptrace_index = traptrace_start(type, rip, mach_absolute_time(), regs->ebp);
+#endif
 	}
+
 
 	if ((type == T_DEBUG) && thread->machine.ids) {
 		unsigned long clear = 0;
@@ -1023,20 +1025,25 @@ user_trap(
 		break;
 
 	case T_INVALID_OPCODE:
-#if !defined(RC_HIDE_XNU_J137)
-		fpUDflt(rip);   /* May return from exception directly */
-#endif
-		exc = EXC_BAD_INSTRUCTION;
-		code = EXC_I386_INVOP;
+		if (fpUDflt(rip) == 1) {
+			exc = EXC_BAD_INSTRUCTION;
+			code = EXC_I386_INVOP;
+		}
 		break;
 
 	case T_NO_FPU:
 		fpnoextflt();
-		return;
+		break;
 
 	case T_FPU_FAULT:
-		fpextovrflt(); /* Propagates exception directly, doesn't return */
-		return;
+		fpextovrflt();
+		/*
+		 * Raise exception.
+		 */
+		exc = EXC_BAD_ACCESS;
+		code = VM_PROT_READ | VM_PROT_EXECUTE;
+		subcode = 0;
+		break;
 
 	case T_INVALID_TSS:     /* invalid TSS == iret with NT flag set */
 		exc = EXC_BAD_INSTRUCTION;
@@ -1114,30 +1121,37 @@ user_trap(
 		}
 #endif
 		if (__probable((kret == KERN_SUCCESS) || (kret == KERN_ABORTED))) {
-			thread_exception_return();
-			/*NOTREACHED*/
-		}
-
-		/*
-		 * For a user trap, vm_fault() should never return KERN_FAILURE.
-		 * If it does, we're leaking preemption disables somewhere in the kernel.
-		 */
-		if (__improbable(kret == KERN_FAILURE)) {
+			break;
+		} else if (__improbable(kret == KERN_FAILURE)) {
+			/*
+			 * For a user trap, vm_fault() should never return KERN_FAILURE.
+			 * If it does, we're leaking preemption disables somewhere in the kernel.
+			 */
 			panic("vm_fault() KERN_FAILURE from user fault on thread %p", thread);
 		}
 
-		user_page_fault_continue(kret);
-	}       /* NOTREACHED */
+		/* PAL debug hook (empty on x86) */
+		pal_dbg_page_fault(thread, vaddr, kret);
+		exc = EXC_BAD_ACCESS;
+		code = kret;
+		subcode = vaddr;
+	}
 	break;
 
 	case T_SSE_FLOAT_ERROR:
-		fpSSEexterrflt(); /* Propagates exception directly, doesn't return */
-		return;
+		fpSSEexterrflt();
+		exc = EXC_ARITHMETIC;
+		code = EXC_I386_SSEEXTERR;
+		subcode = ((struct x86_fx_thread_state *)thread->machine.ifps)->fx_MXCSR;
+		break;
 
 
 	case T_FLOATING_POINT_ERROR:
-		fpexterrflt(); /* Propagates exception directly, doesn't return */
-		return;
+		fpexterrflt();
+		exc = EXC_ARITHMETIC;
+		code = EXC_I386_EXTERR;
+		subcode = ((struct x86_fx_thread_state *)thread->machine.ifps)->fx_status;
+		break;
 
 	case T_DTRACE_RET:
 #if CONFIG_DTRACE
@@ -1156,11 +1170,21 @@ user_trap(
 	default:
 		panic("Unexpected user trap, type %d", type);
 	}
-	/* Note: Codepaths that directly return from user_trap() have pending
-	 * ASTs processed in locore
-	 */
-	i386_exception(exc, code, subcode);
-	/* NOTREACHED */
+
+#if DEVELOPMENT || DEBUG
+	if (traptrace_index != TRAPTRACE_INVALID_INDEX) {
+		traptrace_end(traptrace_index, mach_absolute_time());
+	}
+#endif
+
+	if (exc != 0) {
+		/*
+		 * Note: Codepaths that directly return from user_trap() have pending
+		 * ASTs processed in locore
+		 */
+		i386_exception(exc, code, subcode);
+		/* NOTREACHED */
+	}
 }
 
 /*

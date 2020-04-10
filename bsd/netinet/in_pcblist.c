@@ -438,29 +438,37 @@ inpcb_get_ports_used(uint32_t ifindex, int protocol, uint32_t flags,
 	bool iswildcard, wildcardok, nowakeok;
 	bool recvanyifonly, extbgidleok;
 	bool activeonly;
+	bool anytcpstateok;
 
-	wildcardok = ((flags & INPCB_GET_PORTS_USED_WILDCARDOK) != 0);
-	nowakeok = ((flags & INPCB_GET_PORTS_USED_NOWAKEUPOK) != 0);
-	recvanyifonly = ((flags & INPCB_GET_PORTS_USED_RECVANYIFONLY) != 0);
-	extbgidleok = ((flags & INPCB_GET_PORTS_USED_EXTBGIDLEONLY) != 0);
-	activeonly = ((flags & INPCB_GET_PORTS_USED_ACTIVEONLY) != 0);
+	wildcardok = ((flags & IFNET_GET_LOCAL_PORTS_WILDCARDOK) != 0);
+	nowakeok = ((flags & IFNET_GET_LOCAL_PORTS_NOWAKEUPOK) != 0);
+	recvanyifonly = ((flags & IFNET_GET_LOCAL_PORTS_RECVANYIFONLY) != 0);
+	extbgidleok = ((flags & IFNET_GET_LOCAL_PORTS_EXTBGIDLEONLY) != 0);
+	activeonly = ((flags & IFNET_GET_LOCAL_PORTS_ACTIVEONLY) != 0);
+	anytcpstateok = ((flags & IFNET_GET_LOCAL_PORTS_ANYTCPSTATEOK) != 0);
 
 	lck_rw_lock_shared(pcbinfo->ipi_lock);
 	gencnt = pcbinfo->ipi_gencnt;
 
 	for (inp = LIST_FIRST(pcbinfo->ipi_listhead); inp;
 	    inp = LIST_NEXT(inp, inp_list)) {
-		uint16_t port;
-
 		if (inp->inp_gencnt > gencnt ||
 		    inp->inp_state == INPCB_STATE_DEAD ||
 		    inp->inp_wantcnt == WNT_STOPUSING) {
 			continue;
 		}
 
-		if ((so = inp->inp_socket) == NULL ||
-		    (so->so_state & SS_DEFUNCT) ||
-		    (so->so_state & SS_ISDISCONNECTED)) {
+		if ((so = inp->inp_socket) == NULL || inp->inp_lport == 0) {
+			continue;
+		}
+
+		/*
+		 * ANYTCPSTATEOK means incoming packets cannot be filtered
+		 * reception so cast a wide net of possibilities
+		 */
+		if (!anytcpstateok &&
+		    ((so->so_state & SS_DEFUNCT) ||
+		    (so->so_state & SS_ISDISCONNECTED))) {
 			continue;
 		}
 
@@ -551,6 +559,15 @@ inpcb_get_ports_used(uint32_t ifindex, int protocol, uint32_t flags,
 
 			switch (tp->t_state) {
 			case TCPS_CLOSED:
+				if (anytcpstateok && inp->inp_fport != 0) {
+					/*
+					 * A foreign port means we had a 4 tuple at
+					 * least a connection attempt so packets
+					 * may be received for the 4 tuple after the
+					 * connection is gone
+					 */
+					break;
+				}
 				continue;
 			/* NOT REACHED */
 			case TCPS_LISTEN:
@@ -570,26 +587,28 @@ inpcb_get_ports_used(uint32_t ifindex, int protocol, uint32_t flags,
 			case TCPS_FIN_WAIT_2:
 				/*
 				 * In the closing states, the connection
-				 * is not idle when there is outgoing
+				 * is active when there is outgoing
 				 * data having to be acknowledged
 				 */
-				if (activeonly && so->so_snd.sb_cc == 0) {
+				if (!anytcpstateok &&
+				    (activeonly && so->so_snd.sb_cc == 0)) {
 					continue;
 				}
 				break;
 			case TCPS_TIME_WAIT:
+				if (anytcpstateok) {
+					/*
+					 * Packets may still be received for the 4 tuple
+					 * after the connection is gone
+					 */
+					break;
+				}
 				continue;
 				/* NOT REACHED */
 			}
 		}
-		/*
-		 * Final safeguard to exclude unspecified local port
-		 */
-		port = ntohs(inp->inp_lport);
-		if (port == 0) {
-			continue;
-		}
-		bitstr_set(bitfield, port);
+
+		bitstr_set(bitfield, ntohs(inp->inp_lport));
 
 		if_ports_used_add_inpcb(ifindex, inp);
 	}

@@ -522,6 +522,23 @@ worktodo:
  * getfh() lives here too, but maybe should move to kern/vfs_syscalls.c
  */
 
+static struct nfs_exportfs *
+nfsrv_find_exportfs(const char *ptr)
+{
+	struct nfs_exportfs *nxfs;
+
+	LIST_FOREACH(nxfs, &nfsrv_exports, nxfs_next) {
+		if (!strncmp(nxfs->nxfs_path, ptr, MAXPATHLEN)) {
+			break;
+		}
+	}
+	if (nxfs && strncmp(nxfs->nxfs_path, ptr, strlen(nxfs->nxfs_path))) {
+		nxfs = NULL;
+	}
+
+	return nxfs;
+}
+
 /*
  * Get file handle system call
  */
@@ -532,7 +549,7 @@ getfh(proc_t p, struct getfh_args *uap, __unused int *retval)
 	struct nfs_filehandle nfh;
 	int error, fhlen, fidlen;
 	struct nameidata nd;
-	char path[MAXPATHLEN], *ptr;
+	char path[MAXPATHLEN], real_mntonname[MAXPATHLEN], *ptr;
 	size_t pathlen;
 	struct nfs_exportfs *nxfs;
 	struct nfs_export *nx;
@@ -575,12 +592,28 @@ getfh(proc_t p, struct getfh_args *uap, __unused int *retval)
 	// find exportfs that matches f_mntonname
 	lck_rw_lock_shared(&nfsrv_export_rwlock);
 	ptr = vnode_mount(vp)->mnt_vfsstat.f_mntonname;
-	LIST_FOREACH(nxfs, &nfsrv_exports, nxfs_next) {
-		if (!strncmp(nxfs->nxfs_path, ptr, MAXPATHLEN)) {
-			break;
+	if ((nxfs = nfsrv_find_exportfs(ptr)) == NULL) {
+		/*
+		 * The f_mntonname might be a firmlink path.  Resolve
+		 * it into a physical path and try again.
+		 */
+		int pathbuflen = MAXPATHLEN;
+		vnode_t rvp;
+
+		error = VFS_ROOT(vnode_mount(vp), &rvp, vfs_context_current());
+		if (error) {
+			goto out;
 		}
+		error = vn_getpath_ext(rvp, NULLVP, real_mntonname, &pathbuflen,
+		    VN_GETPATH_FSENTER | VN_GETPATH_NO_FIRMLINK);
+		vnode_put(rvp);
+		if (error) {
+			goto out;
+		}
+		ptr = real_mntonname;
+		nxfs = nfsrv_find_exportfs(ptr);
 	}
-	if (!nxfs || strncmp(nxfs->nxfs_path, path, strlen(nxfs->nxfs_path))) {
+	if (nxfs == NULL) {
 		error = EINVAL;
 		goto out;
 	}

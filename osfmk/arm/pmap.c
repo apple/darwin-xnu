@@ -1395,11 +1395,15 @@ static void pmap_tte_deallocate(
 #ifdef __ARM64_PMAP_SUBPAGE_L1__
 #if (__ARM_VMSA__ <= 7)
 #error This is not supported for old-style page tables
-#endif
+#endif /* (__ARM_VMSA__ <= 7) */
 #define PMAP_ROOT_ALLOC_SIZE (((ARM_TT_L1_INDEX_MASK >> ARM_TT_L1_SHIFT) + 1) * sizeof(tt_entry_t))
-#else
+#else /* !defined(__ARM64_PMAP_SUBPAGE_L1__) */
+#if (__ARM_VMSA__ <= 7)
+#define PMAP_ROOT_ALLOC_SIZE (ARM_PGBYTES * 2)
+#else /* (__ARM_VMSA__ > 7) */
 #define PMAP_ROOT_ALLOC_SIZE (ARM_PGBYTES)
-#endif
+#endif /* (__ARM_VMSA__ > 7) */
+#endif /* !defined(__ARM64_PMAP_SUBPAGE_L1__) */
 
 const unsigned int arm_hardware_page_size = ARM_PGBYTES;
 const unsigned int arm_pt_desc_size = sizeof(pt_desc_t);
@@ -3458,15 +3462,10 @@ pmap_bootstrap(
 #if (__ARM_VMSA__ == 7)
 	kernel_pmap->tte_index_max = 4 * NTTES;
 #endif
-	kernel_pmap->prev_tte = (tt_entry_t *) NULL;
 	kernel_pmap->hw_asid = 0;
 	kernel_pmap->sw_asid = 0;
 
 	PMAP_LOCK_INIT(kernel_pmap);
-#if     (__ARM_VMSA__ == 7)
-	simple_lock_init(&kernel_pmap->tt1_lock, 0);
-	kernel_pmap->cpu_ref = 0;
-#endif
 	memset((void *) &kernel_pmap->stats, 0, sizeof(kernel_pmap->stats));
 
 	/* allocate space for and initialize the bookkeeping structures */
@@ -3887,13 +3886,14 @@ pmap_create_options_internal(
 	p->ledger = ledger;
 
 	PMAP_LOCK_INIT(p);
-#if     (__ARM_VMSA__ == 7)
-	simple_lock_init(&p->tt1_lock, 0);
-	p->cpu_ref = 0;
-#endif
 	memset((void *) &p->stats, 0, sizeof(p->stats));
 
 	p->tt_entry_free = (tt_entry_t *)0;
+	tte_index_max = PMAP_ROOT_ALLOC_SIZE / sizeof(tt_entry_t);
+
+#if     (__ARM_VMSA__ == 7)
+	p->tte_index_max = tte_index_max;
+#endif
 
 	p->tte = pmap_tt1_allocate(p, PMAP_ROOT_ALLOC_SIZE, 0);
 	if (!(p->tte)) {
@@ -3902,13 +3902,6 @@ pmap_create_options_internal(
 
 	p->ttep = ml_static_vtop((vm_offset_t)p->tte);
 	PMAP_TRACE(3, PMAP_CODE(PMAP__TTE), VM_KERNEL_ADDRHIDE(p), VM_KERNEL_ADDRHIDE(p->min), VM_KERNEL_ADDRHIDE(p->max), p->ttep);
-
-#if (__ARM_VMSA__ == 7)
-	tte_index_max = p->tte_index_max = NTTES;
-#else
-	tte_index_max = (PMAP_ROOT_ALLOC_SIZE / sizeof(tt_entry_t));
-#endif
-	p->prev_tte = (tt_entry_t *) NULL;
 
 	/* nullify the translation table */
 	for (i = 0; i < tte_index_max; i++) {
@@ -4088,15 +4081,6 @@ pmap_destroy_internal(
 	queue_remove(&map_pmap_list, pmap, pmap_t, pmaps);
 	pmap_simple_unlock(&pmaps_lock);
 
-#if (__ARM_VMSA__ == 7)
-	if (pmap->cpu_ref != 0) {
-		panic("%s: cpu_ref=%u, "
-		    "pmap=%p",
-		    __FUNCTION__, pmap->cpu_ref,
-		    pmap);
-	}
-#endif /* (__ARM_VMSA__ == 7) */
-
 	pmap_trim_self(pmap);
 
 	/*
@@ -4143,13 +4127,6 @@ pmap_destroy_internal(
 		pmap->tte = (tt_entry_t *) NULL;
 		pmap->ttep = 0;
 	}
-
-#if (__ARM_VMSA__ == 7)
-	if (pmap->prev_tte) {
-		pmap_tt1_deallocate(pmap, pmap->prev_tte, PMAP_ROOT_ALLOC_SIZE, 0);
-		pmap->prev_tte = (tt_entry_t *) NULL;
-	}
-#endif /* (__ARM_VMSA__ == 7) */
 
 	assert((tt_free_entry_t*)pmap->tt_entry_free == NULL);
 
@@ -5210,10 +5187,7 @@ pmap_switch_internal(
 	asid_index >>= 1;
 #endif
 
-#if     (__ARM_VMSA__ == 7)
-	assert(not_in_kdp);
-	pmap_simple_lock(&pmap->tt1_lock);
-#else
+#if     (__ARM_VMSA__ > 7)
 	pmap_t           last_nested_pmap = cpu_data_ptr->cpu_nested_pmap;
 #endif
 
@@ -5257,10 +5231,6 @@ pmap_switch_internal(
 		os_atomic_inc(&pmap_asid_flushes, relaxed);
 #endif
 	}
-
-#if     (__ARM_VMSA__ == 7)
-	pmap_simple_unlock(&pmap->tt1_lock);
-#endif
 }
 
 void
@@ -7046,65 +7016,20 @@ pmap_expand(
 	tt_entry_t              *tt_p;
 	unsigned int    i;
 
-	while (tte_index(pmap, pt_attr, v) >= pmap->tte_index_max) {
-		tte_p = pmap_tt1_allocate(pmap, 2 * ARM_PGBYTES, ((options & PMAP_OPTIONS_NOWAIT)? PMAP_TT_ALLOCATE_NOWAIT : 0));
-		if (tte_p == (tt_entry_t *)0) {
-			return KERN_RESOURCE_SHORTAGE;
-		}
+#if DEVELOPMENT || DEBUG
+	/*
+	 * We no longer support root level expansion; panic in case something
+	 * still attempts to trigger it.
+	 */
+	i = tte_index(pmap, pt_attr, v);
 
-		PMAP_LOCK(pmap);
-		if (pmap->tte_index_max > NTTES) {
-			pmap_tt1_deallocate(pmap, tte_p, 2 * ARM_PGBYTES, PMAP_TT_DEALLOCATE_NOBLOCK);
-			PMAP_UNLOCK(pmap);
-			break;
-		}
-
-		pmap_simple_lock(&pmap->tt1_lock);
-		for (i = 0; i < pmap->tte_index_max; i++) {
-			tte_p[i] = pmap->tte[i];
-		}
-		for (i = NTTES; i < 2 * NTTES; i++) {
-			tte_p[i] = ARM_TTE_TYPE_FAULT;
-		}
-
-		FLUSH_PTE_RANGE(tte_p, tte_p + (2 * NTTES)); // DMB
-
-		/* Order is important here, so that pmap_switch_user_ttb() sees things
-		 * in the correct sequence.
-		 * --update of pmap->tte[p] must happen prior to updating pmap->tte_index_max,
-		 *   separated by at least a DMB, so that context switch does not see a 1 GB
-		 *   L1 table with a 2GB size.
-		 * --update of pmap->tte[p] must also happen prior to setting pmap->prev_tte,
-		 *   separated by at least a DMB, so that context switch does not see an L1
-		 *   table to be freed without also seeing its replacement.*/
-
-		tt_entry_t *prev_tte = pmap->tte;
-
-		pmap->tte = tte_p;
-		pmap->ttep = ml_static_vtop((vm_offset_t)pmap->tte);
-
-		__builtin_arm_dmb(DMB_ISH);
-
-		pmap->tte_index_max = 2 * NTTES;
-		pmap->stamp = os_atomic_inc(&pmap_stamp, relaxed);
-
-		for (i = 0; i < NTTES; i++) {
-			prev_tte[i] = ARM_TTE_TYPE_FAULT;
-		}
-
-		/* We need a strong flush here because a TLB flush will be
-		 * issued from pmap_switch_user_ttb() as soon as this pmap
-		 * is no longer active on any CPU.  We need to ensure all
-		 * prior stores to the TTE region have retired before that. */
-		FLUSH_PTE_RANGE_STRONG(prev_tte, prev_tte + NTTES); // DSB
-		pmap->prev_tte = prev_tte;
-
-		pmap_simple_unlock(&pmap->tt1_lock);
-		PMAP_UNLOCK(pmap);
-		if (current_pmap() == pmap) {
-			pmap_set_pmap(pmap, current_thread());
-		}
+	if (i >= pmap->tte_index_max) {
+		panic("%s: index out of range, index=%u, max=%u, "
+		    "pmap=%p, addr=%p, options=%u, level=%u",
+		    __func__, i, pmap->tte_index_max,
+		    pmap, (void *)v, options, level);
 	}
+#endif /* DEVELOPMENT || DEBUG */
 
 	if (level == 1) {
 		return KERN_SUCCESS;
@@ -7823,33 +7748,8 @@ pmap_switch_user_ttb_internal(
 	cpu_data_ptr = pmap_get_cpu_data();
 
 #if     (__ARM_VMSA__ == 7)
-
-	if ((cpu_data_ptr->cpu_user_pmap != PMAP_NULL)
-	    && (cpu_data_ptr->cpu_user_pmap != kernel_pmap)) {
-		unsigned int    c;
-		tt_entry_t      *tt_entry = cpu_data_ptr->cpu_user_pmap->prev_tte;
-
-		c = os_atomic_dec(&cpu_data_ptr->cpu_user_pmap->cpu_ref, acq_rel);
-		if ((c == 0) && (tt_entry != NULL)) {
-			/* We saved off the old 1-page tt1 in pmap_expand() in case other cores were still using it.
-			 * Now that the user pmap's cpu_ref is 0, we should be able to safely free it.*/
-
-			cpu_data_ptr->cpu_user_pmap->prev_tte = NULL;
-#if !__ARM_USER_PROTECT__
-			set_mmu_ttb(kernel_pmap->ttep);
-			set_context_id(kernel_pmap->hw_asid);
-#endif
-			/* Now that we can guarantee the old 1-page L1 table is no longer active on any CPU,
-			 * flush any cached intermediate translations that may point to it.  Note that to be truly
-			 * safe from prefetch-related issues, this table PA must have been cleared from TTBR0 prior
-			 * to this call.  __ARM_USER_PROTECT__ effectively guarantees that for all current configurations.*/
-			flush_mmu_tlb_asid(cpu_data_ptr->cpu_user_pmap->hw_asid);
-			pmap_tt1_deallocate(cpu_data_ptr->cpu_user_pmap, tt_entry, ARM_PGBYTES, PMAP_TT_DEALLOCATE_NOBLOCK);
-		}
-	}
 	cpu_data_ptr->cpu_user_pmap = pmap;
 	cpu_data_ptr->cpu_user_pmap_stamp = pmap->stamp;
-	os_atomic_inc(&pmap->cpu_ref, acq_rel);
 
 #if     MACH_ASSERT && __ARM_USER_PROTECT__
 	{
@@ -10429,7 +10329,7 @@ pmap_max_32bit_offset(
 	if (option == ARM_PMAP_MAX_OFFSET_DEFAULT) {
 		max_offset_ret = arm_pmap_max_offset_default;
 	} else if (option == ARM_PMAP_MAX_OFFSET_MIN) {
-		max_offset_ret = 0x66000000;
+		max_offset_ret = 0x80000000;
 	} else if (option == ARM_PMAP_MAX_OFFSET_MAX) {
 		max_offset_ret = VM_MAX_ADDRESS;
 	} else if (option == ARM_PMAP_MAX_OFFSET_DEVICE) {
@@ -10438,7 +10338,7 @@ pmap_max_32bit_offset(
 		} else if (max_mem > 0x20000000) {
 			max_offset_ret = 0x80000000;
 		} else {
-			max_offset_ret = 0x66000000;
+			max_offset_ret = 0x80000000;
 		}
 	} else if (option == ARM_PMAP_MAX_OFFSET_JUMBO) {
 		max_offset_ret = 0x80000000;

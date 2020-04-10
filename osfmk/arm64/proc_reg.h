@@ -1632,6 +1632,9 @@ typedef enum {
 #define APCTL_EL1_KernKeyEn  (1ULL << 2)
 #endif
 
+#define ACTLR_EL1_DisHWP_OFFSET  3
+#define ACTLR_EL1_DisHWP_MASK    (1ULL << ACTLR_EL1_DisHWP_OFFSET)
+#define ACTLR_EL1_DisHWP         ACTLR_EL1_DisHWP_MASK
 
 
 #if defined(HAS_APPLE_PAC)

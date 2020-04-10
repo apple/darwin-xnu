@@ -159,6 +159,8 @@ typedef struct ipc_mqueue {
 #define imq_set_queue           data.pset.setq
 #define imq_is_set(mq)          waitqs_is_set(&(mq)->imq_set_queue)
 #define imq_is_queue(mq)        waitq_is_queue(&(mq)->imq_wait_queue)
+#define imq_is_turnstile_proxy(mq) \
+	        waitq_is_turnstile_proxy(&(mq)->imq_wait_queue)
 #define imq_is_valid(mq)        waitq_is_valid(&(mq)->imq_wait_queue)
 
 #define imq_unlock(mq)          waitq_unlock(&(mq)->imq_wait_queue)
@@ -199,10 +201,16 @@ extern int ipc_mqueue_full;
  * Exported interfaces
  */
 
+__enum_closed_decl(ipc_mqueue_kind_t, int, {
+	IPC_MQUEUE_KIND_NONE,   /* this mqueue really isn't used */
+	IPC_MQUEUE_KIND_PORT,   /* this queue is a regular port queue */
+	IPC_MQUEUE_KIND_SET,    /* this queue is a portset queue */
+});
+
 /* Initialize a newly-allocated message queue */
 extern void ipc_mqueue_init(
 	ipc_mqueue_t            mqueue,
-	boolean_t               is_set);
+	ipc_mqueue_kind_t       kind);
 
 /* de-initialize / cleanup an mqueue (specifically waitq resources) */
 extern void ipc_mqueue_deinit(

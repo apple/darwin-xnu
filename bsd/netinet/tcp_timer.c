@@ -311,7 +311,6 @@ static void tcp_remove_timer(struct tcpcb *tp);
 static void tcp_sched_timerlist(uint32_t offset);
 static u_int32_t tcp_run_conn_timer(struct tcpcb *tp, u_int16_t *mode,
     u_int16_t probe_if_index);
-static void tcp_sched_timers(struct tcpcb *tp);
 static inline void tcp_set_lotimer_index(struct tcpcb *);
 __private_extern__ void tcp_remove_from_time_wait(struct inpcb *inp);
 static inline void tcp_update_mss_core(struct tcpcb *tp, struct ifnet *ifp);
@@ -1550,6 +1549,27 @@ fc_output:
 			(void) tcp_output(tp);
 		}
 		break;
+	case TCPT_CELLICON:
+	{
+		struct mptses *mpte = tptomptp(tp)->mpt_mpte;
+
+		tp->t_timer[TCPT_CELLICON] = 0;
+
+		if (mpte->mpte_cellicon_increments == 0) {
+			/* Cell-icon not set by this connection */
+			break;
+		}
+
+		if (TSTMP_LT(mpte->mpte_last_cellicon_set + MPTCP_CELLICON_TOGGLE_RATE, tcp_now)) {
+			mptcp_unset_cellicon(mpte, NULL, 1);
+		}
+
+		if (mpte->mpte_cellicon_increments) {
+			tp->t_timer[TCPT_CELLICON] = OFFSET_FROM_START(tp, MPTCP_CELLICON_TOGGLE_RATE);
+		}
+
+		break;
+	}
 #endif /* MPTCP */
 
 	case TCPT_PTO:

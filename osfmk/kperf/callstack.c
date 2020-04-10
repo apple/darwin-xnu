@@ -254,7 +254,7 @@ kperf_backtrace_sample(struct kp_kcallstack *cs, struct kperf_context *context)
 		cs->kpkc_nframes += 1;
 	}
 	if (trunc) {
-		cs->kpkc_nframes |= CALLSTACK_TRUNCATED;
+		cs->kpkc_flags |= CALLSTACK_TRUNCATED;
 	}
 
 	BUF_VERB(PERF_CS_BACKTRACE | DBG_FUNC_END, cs->kpkc_nframes);
@@ -437,12 +437,15 @@ kperf_ucallstack_log(struct kp_ucallstack *cs)
 }
 
 int
-kperf_ucallstack_pend(struct kperf_context * context, uint32_t depth)
+kperf_ucallstack_pend(struct kperf_context * context, uint32_t depth,
+    unsigned int actionid)
 {
-	int did_pend = kperf_ast_pend(context->cur_thread, T_KPERF_AST_CALLSTACK);
+	if (depth < 2) {
+		panic("HUH");
+	}
 	kperf_ast_set_callstack_depth(context->cur_thread, depth);
-
-	return did_pend;
+	return kperf_ast_pend(context->cur_thread, T_KPERF_AST_CALLSTACK,
+	    actionid);
 }
 
 static kern_return_t

@@ -250,19 +250,6 @@ kperf_on_cpu_update(void)
 	    kperf_lazy_wait_action != 0;
 }
 
-/* random misc-ish functions */
-uint32_t
-kperf_get_thread_flags(thread_t thread)
-{
-	return thread->kperf_flags;
-}
-
-void
-kperf_set_thread_flags(thread_t thread, uint32_t flags)
-{
-	thread->kperf_flags = flags;
-}
-
 unsigned int
 kperf_sampling_status(void)
 {

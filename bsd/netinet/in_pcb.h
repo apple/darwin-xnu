@@ -796,11 +796,6 @@ extern void inpcb_to_xinpcb64(struct inpcb *, struct xinpcb64 *);
 #endif
 
 extern int get_pcblist_n(short, struct sysctl_req *, struct inpcbinfo *);
-#define INPCB_GET_PORTS_USED_WILDCARDOK 0x01
-#define INPCB_GET_PORTS_USED_NOWAKEUPOK 0x02
-#define INPCB_GET_PORTS_USED_RECVANYIFONLY 0x04
-#define INPCB_GET_PORTS_USED_EXTBGIDLEONLY 0x08
-#define INPCB_GET_PORTS_USED_ACTIVEONLY 0x10
 
 extern void inpcb_get_ports_used(u_int32_t, int, u_int32_t, bitstr_t *,
     struct inpcbinfo *);

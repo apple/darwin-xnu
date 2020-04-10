@@ -1390,6 +1390,11 @@ sendto_nocancel(struct proc *p,
 	KERNEL_DEBUG(DBG_FNC_SENDTO | DBG_FUNC_START, 0, 0, 0, 0, 0);
 	AUDIT_ARG(fd, uap->s);
 
+	if (uap->flags & MSG_SKIPCFIL) {
+		error = EPERM;
+		goto done;
+	}
+
 	auio = uio_create(1, 0,
 	    (IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32),
 	    UIO_WRITE);
@@ -1459,6 +1464,12 @@ sendmsg_nocancel(struct proc *p, struct sendmsg_nocancel_args *uap,
 
 	KERNEL_DEBUG(DBG_FNC_SENDMSG | DBG_FUNC_START, 0, 0, 0, 0, 0);
 	AUDIT_ARG(fd, uap->s);
+
+	if (uap->flags & MSG_SKIPCFIL) {
+		error = EPERM;
+		goto done;
+	}
+
 	if (IS_64BIT_PROCESS(p)) {
 		msghdrp = (caddr_t)&msg64;
 		size_of_msghdr = sizeof(msg64);
@@ -1571,6 +1582,11 @@ sendmsg_x(struct proc *p, struct sendmsg_x_args *uap, user_ssize_t *retval)
 	int has_addr_or_ctl = 0;
 
 	KERNEL_DEBUG(DBG_FNC_SENDMSG_X | DBG_FUNC_START, 0, 0, 0, 0, 0);
+
+	if (uap->flags & MSG_SKIPCFIL) {
+		error = EPERM;
+		goto out;
+	}
 
 	error = file_socket(uap->s, &so);
 	if (error) {

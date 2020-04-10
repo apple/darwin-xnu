@@ -511,8 +511,7 @@ machine_thread_state_initialize(
 	savestate->cpsr = PSR_USERDFLT;
 
 #if __ARM_VFP__
-	vfp_state_initialize(&thread->machine.uVFPdata);
-	vfp_state_initialize(&thread->machine.kVFPdata);
+	vfp_state_initialize(&thread->machine.PcbData.VFPdata);
 #endif
 
 	thread->machine.DebugData = NULL;
@@ -561,15 +560,14 @@ machine_thread_dup(
 #endif
 
 	target->machine.cthread_self = self->machine.cthread_self;
-	target->machine.cthread_data = self->machine.cthread_data;
 
 	self_saved_state = &self->machine.PcbData;
 	target_saved_state = &target->machine.PcbData;
 	bcopy(self_saved_state, target_saved_state, sizeof(struct arm_saved_state));
 
 #if	__ARM_VFP__
-	self_vfp_state = &self->machine.uVFPdata;
-	target_vfp_state = &target->machine.uVFPdata;
+	self_vfp_state = &self->machine.PcbData.VFPdata;
+	target_vfp_state = &target->machine.PcbData.VFPdata;
 	bcopy(self_vfp_state, target_vfp_state, sizeof(struct arm_vfpsaved_state));
 #endif
 
@@ -626,7 +624,7 @@ struct arm_vfpsaved_state *
 find_user_vfp(
 	      thread_t thread)
 {
-	return &thread->machine.uVFPdata;
+	return &thread->machine.PcbData.VFPdata;
 }
 #endif /* __ARM_VFP__ */
 

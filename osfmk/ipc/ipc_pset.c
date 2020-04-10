@@ -110,7 +110,7 @@ ipc_pset_alloc(
 	}
 	/* pset and space are locked */
 
-	ipc_mqueue_init(&pset->ips_messages, TRUE /* set */);
+	ipc_mqueue_init(&pset->ips_messages, IPC_MQUEUE_KIND_SET);
 	is_write_unlock(space);
 
 	*namep = name;
@@ -149,7 +149,7 @@ ipc_pset_alloc_name(
 	}
 	/* pset is locked */
 
-	ipc_mqueue_init(&pset->ips_messages, TRUE /* set */);
+	ipc_mqueue_init(&pset->ips_messages, IPC_MQUEUE_KIND_SET);
 
 	*psetp = pset;
 	return KERN_SUCCESS;
@@ -186,7 +186,7 @@ ipc_pset_alloc_special(
 	pset->ips_references = 1;
 	pset->ips_object.io_bits = io_makebits(TRUE, IOT_PORT_SET, 0);
 
-	ipc_mqueue_init(&pset->ips_messages, TRUE /* set */);
+	ipc_mqueue_init(&pset->ips_messages, IPC_MQUEUE_KIND_SET);
 
 	return pset;
 }

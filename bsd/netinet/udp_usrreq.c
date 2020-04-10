@@ -107,6 +107,7 @@
 #if IPSEC
 #include <netinet6/ipsec.h>
 #include <netinet6/esp.h>
+#include <netkey/key.h>
 extern int ipsec_bypass;
 extern int esp_udp_encap_port;
 #endif /* IPSEC */
@@ -615,41 +616,56 @@ udp_input(struct mbuf *m, int iphlen)
 	if (ipsec_bypass == 0 && (esp_udp_encap_port & 0xFFFF) != 0 &&
 	    (uh->uh_dport == ntohs((u_short)esp_udp_encap_port) ||
 	    uh->uh_sport == ntohs((u_short)esp_udp_encap_port))) {
-		int payload_len = len - sizeof(struct udphdr) > 4 ? 4 :
-		    len - sizeof(struct udphdr);
+		/*
+		 * Check if ESP or keepalive:
+		 *      1. If the destination port of the incoming packet is 4500.
+		 *      2. If the source port of the incoming packet is 4500,
+		 *         then check the SADB to match IP address and port.
+		 */
+		bool check_esp = true;
+		if (uh->uh_dport != ntohs((u_short)esp_udp_encap_port)) {
+			check_esp = key_checksa_present(AF_INET, (caddr_t)&ip->ip_dst,
+			    (caddr_t)&ip->ip_src, uh->uh_dport,
+			    uh->uh_sport);
+		}
 
-		if (m->m_len < iphlen + sizeof(struct udphdr) + payload_len) {
-			if ((m = m_pullup(m, iphlen + sizeof(struct udphdr) +
-			    payload_len)) == NULL) {
-				udpstat.udps_hdrops++;
+		if (check_esp) {
+			int payload_len = len - sizeof(struct udphdr) > 4 ? 4 :
+			    len - sizeof(struct udphdr);
+
+			if (m->m_len < iphlen + sizeof(struct udphdr) + payload_len) {
+				if ((m = m_pullup(m, iphlen + sizeof(struct udphdr) +
+				    payload_len)) == NULL) {
+					udpstat.udps_hdrops++;
+					KERNEL_DEBUG(DBG_FNC_UDP_INPUT | DBG_FUNC_END,
+					    0, 0, 0, 0, 0);
+					return;
+				}
+				/*
+				 * Expect 32-bit aligned data pointer on strict-align
+				 * platforms.
+				 */
+				MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
+
+				ip = mtod(m, struct ip *);
+				uh = (struct udphdr *)(void *)((caddr_t)ip + iphlen);
+			}
+			/* Check for NAT keepalive packet */
+			if (payload_len == 1 && *(u_int8_t *)
+			    ((caddr_t)uh + sizeof(struct udphdr)) == 0xFF) {
+				m_freem(m);
 				KERNEL_DEBUG(DBG_FNC_UDP_INPUT | DBG_FUNC_END,
 				    0, 0, 0, 0, 0);
 				return;
+			} else if (payload_len == 4 && *(u_int32_t *)(void *)
+			    ((caddr_t)uh + sizeof(struct udphdr)) != 0) {
+				/* UDP encapsulated IPsec packet to pass through NAT */
+				KERNEL_DEBUG(DBG_FNC_UDP_INPUT | DBG_FUNC_END,
+				    0, 0, 0, 0, 0);
+				/* preserve the udp header */
+				esp4_input(m, iphlen + sizeof(struct udphdr));
+				return;
 			}
-			/*
-			 * Expect 32-bit aligned data pointer on strict-align
-			 * platforms.
-			 */
-			MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
-
-			ip = mtod(m, struct ip *);
-			uh = (struct udphdr *)(void *)((caddr_t)ip + iphlen);
-		}
-		/* Check for NAT keepalive packet */
-		if (payload_len == 1 && *(u_int8_t *)
-		    ((caddr_t)uh + sizeof(struct udphdr)) == 0xFF) {
-			m_freem(m);
-			KERNEL_DEBUG(DBG_FNC_UDP_INPUT | DBG_FUNC_END,
-			    0, 0, 0, 0, 0);
-			return;
-		} else if (payload_len == 4 && *(u_int32_t *)(void *)
-		    ((caddr_t)uh + sizeof(struct udphdr)) != 0) {
-			/* UDP encapsulated IPsec packet to pass through NAT */
-			KERNEL_DEBUG(DBG_FNC_UDP_INPUT | DBG_FUNC_END,
-			    0, 0, 0, 0, 0);
-			/* preserve the udp header */
-			esp4_input(m, iphlen + sizeof(struct udphdr));
-			return;
 		}
 	}
 #endif /* IPSEC */
@@ -1478,6 +1494,7 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	int netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 	struct ifnet *origoutifp = NULL;
 	int flowadv = 0;
+	int tos = IPTOS_UNSPEC;
 
 	/* Enable flow advisory only when connected */
 	flowadv = (so->so_state & SS_ISCONNECTED) ? 1 : 0;
@@ -1516,6 +1533,7 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 #endif
 
 	if (control != NULL) {
+		tos = so_tos_from_control(control);
 		sotc = so_tc_from_control(control, &netsvctype);
 		VERIFY(outif == NULL);
 		error = udp_check_pktinfo(control, &outif, &pi_laddr);
@@ -1799,7 +1817,11 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	}
 	((struct ip *)ui)->ip_len = sizeof(struct udpiphdr) + len;
 	((struct ip *)ui)->ip_ttl = inp->inp_ip_ttl;    /* XXX */
-	((struct ip *)ui)->ip_tos = inp->inp_ip_tos;    /* XXX */
+	if (tos != IPTOS_UNSPEC) {
+		((struct ip *)ui)->ip_tos = (uint8_t)(tos & IPTOS_MASK);
+	} else {
+		((struct ip *)ui)->ip_tos = inp->inp_ip_tos;    /* XXX */
+	}
 	udpstat.udps_opackets++;
 
 	KERNEL_DEBUG(DBG_LAYER_OUT_END, ui->ui_dport, ui->ui_sport,

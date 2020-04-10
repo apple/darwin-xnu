@@ -120,15 +120,19 @@ static void ipc_mqueue_peek_on_thread(
  */
 void
 ipc_mqueue_init(
-	ipc_mqueue_t    mqueue,
-	boolean_t       is_set)
+	ipc_mqueue_t            mqueue,
+	ipc_mqueue_kind_t       kind)
 {
-	if (is_set) {
+	switch (kind) {
+	case IPC_MQUEUE_KIND_SET:
 		waitq_set_init(&mqueue->imq_set_queue,
 		    SYNC_POLICY_FIFO | SYNC_POLICY_PREPOST,
 		    NULL, NULL);
-	} else {
-		waitq_init(&mqueue->imq_wait_queue, SYNC_POLICY_FIFO | SYNC_POLICY_PORT);
+		break;
+	case IPC_MQUEUE_KIND_NONE: /* cheat: we really should have "no" mqueue */
+	case IPC_MQUEUE_KIND_PORT:
+		waitq_init(&mqueue->imq_wait_queue,
+		    SYNC_POLICY_FIFO | SYNC_POLICY_TURNSTILE_PROXY);
 		ipc_kmsg_queue_init(&mqueue->imq_messages);
 		mqueue->imq_seqno = 0;
 		mqueue->imq_msgcount = 0;
@@ -138,6 +142,7 @@ ipc_mqueue_init(
 #if MACH_FLIPC
 		mqueue->imq_fport = FPORT_NULL;
 #endif
+		break;
 	}
 	klist_init(&mqueue->imq_klist);
 }
@@ -1147,7 +1152,7 @@ ipc_mqueue_receive_on_thread(
 			imq_unlock(port_mq);
 			return THREAD_NOT_WAITING;
 		}
-	} else if (imq_is_queue(mqueue)) {
+	} else if (imq_is_queue(mqueue) || imq_is_turnstile_proxy(mqueue)) {
 		ipc_kmsg_queue_t kmsgs;
 
 		/*
@@ -1199,8 +1204,7 @@ ipc_mqueue_receive_on_thread(
 	}
 
 	/*
-	 * Threads waiting on a special reply port
-	 * (not portset or regular ports)
+	 * Threads waiting on a reply port (not portset)
 	 * will wait on its receive turnstile.
 	 *
 	 * Donate waiting thread's turnstile and
@@ -1217,7 +1221,7 @@ ipc_mqueue_receive_on_thread(
 	 * will be converted to to turnstile waitq
 	 * in waitq_assert_wait instead of global waitqs.
 	 */
-	if (imq_is_queue(mqueue) && ip_from_mq(mqueue)->ip_specialreply) {
+	if (imq_is_turnstile_proxy(mqueue)) {
 		ipc_port_t port = ip_from_mq(mqueue);
 		rcv_turnstile = turnstile_prepare((uintptr_t)port,
 		    port_rcv_turnstile_address(port),

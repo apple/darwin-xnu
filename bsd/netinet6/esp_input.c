@@ -378,7 +378,7 @@ esp4_input_extended(struct mbuf *m, int off, ifnet_t interface)
 		}
 		if (AH_MAXSUMSIZE < siz) {
 			ipseclog((LOG_DEBUG,
-			    "internal error: AH_MAXSUMSIZE must be larger than %lu\n",
+			    "internal error: AH_MAXSUMSIZE must be larger than %u\n",
 			    (u_int32_t)siz));
 			IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 			goto bad;
@@ -811,7 +811,7 @@ noreplaycheck:
 				int mlen;
 				if ((mlen = m_length2(m, NULL)) < hlen) {
 					ipseclog((LOG_DEBUG,
-					    "IPv4 ESP input: decrypted packet too short %d < %d\n",
+					    "IPv4 ESP input: decrypted packet too short %d < %zu\n",
 					    mlen, hlen));
 					IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 					ifnet_release(ipsec_if);
@@ -1055,7 +1055,7 @@ esp6_input_extended(struct mbuf **mp, int *offp, int proto, ifnet_t interface)
 		}
 		if (AH_MAXSUMSIZE < siz) {
 			ipseclog((LOG_DEBUG,
-			    "internal error: AH_MAXSUMSIZE must be larger than %lu\n",
+			    "internal error: AH_MAXSUMSIZE must be larger than %u\n",
 			    (u_int32_t)siz));
 			IPSEC_STAT_INCREMENT(ipsec6stat.in_inval);
 			goto bad;

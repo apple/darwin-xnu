@@ -868,7 +868,8 @@ mach_reply_port(
 	mach_port_name_t name;
 	kern_return_t kr;
 
-	kr = ipc_port_alloc(current_task()->itk_space, FALSE, &name, &port);
+	kr = ipc_port_alloc(current_task()->itk_space, IPC_PORT_INIT_MESSAGE_QUEUE,
+	    &name, &port);
 	if (kr == KERN_SUCCESS) {
 		ip_unlock(port);
 	} else {
@@ -897,6 +898,8 @@ thread_get_special_reply_port(
 	mach_port_name_t name;
 	kern_return_t kr;
 	thread_t thread = current_thread();
+	ipc_port_init_flags_t flags = IPC_PORT_INIT_MESSAGE_QUEUE |
+	    IPC_PORT_INIT_MAKE_SEND_RIGHT | IPC_PORT_INIT_SPECIAL_REPLY;
 
 	/* unbind the thread special reply port */
 	if (IP_VALID(thread->ith_special_reply_port)) {
@@ -906,7 +909,7 @@ thread_get_special_reply_port(
 		}
 	}
 
-	kr = ipc_port_alloc(current_task()->itk_space, TRUE, &name, &port);
+	kr = ipc_port_alloc(current_task()->itk_space, flags, &name, &port);
 	if (kr == KERN_SUCCESS) {
 		ipc_port_bind_special_reply_port_locked(port);
 		ip_unlock(port);
@@ -932,11 +935,11 @@ ipc_port_bind_special_reply_port_locked(
 {
 	thread_t thread = current_thread();
 	assert(thread->ith_special_reply_port == NULL);
+	assert(port->ip_specialreply);
+	assert(port->ip_sync_link_state == PORT_SYNC_LINK_ANY);
 
 	ip_reference(port);
 	thread->ith_special_reply_port = port;
-	port->ip_specialreply = 1;
-	port->ip_sync_link_state = PORT_SYNC_LINK_ANY;
 	port->ip_messages.imq_srp_owner_thread = thread;
 
 	ipc_special_reply_port_bits_reset(port);
@@ -1386,6 +1389,8 @@ mach_ports_lookup(
 	return KERN_SUCCESS;
 }
 
+extern zone_t task_zone;
+
 kern_return_t
 task_conversion_eval(task_t caller, task_t victim)
 {
@@ -1408,6 +1413,8 @@ task_conversion_eval(task_t caller, task_t victim)
 	if (victim == TASK_NULL || victim == kernel_task) {
 		return KERN_INVALID_SECURITY;
 	}
+
+	zone_require(victim, task_zone);
 
 #if CONFIG_EMBEDDED
 	/*

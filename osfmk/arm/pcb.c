@@ -143,7 +143,6 @@ machine_thread_create(
 	}
 	thread->machine.preemption_count = 0;
 	thread->machine.cthread_self = 0;
-	thread->machine.cthread_data = 0;
 #if	__ARM_USER_PROTECT__
 	{
 	struct pmap *new_pmap = vm_map_pmap(task->map);
@@ -252,6 +251,7 @@ machine_stack_attach(
 	savestate->r[7] = 0x0UL;
 	savestate->r[9] = (uint32_t) NULL;
 	savestate->cpsr = PSR_SVC_MODE | PSR_INTMASK;
+	vfp_state_initialize(&savestate->VFPdata);
 	machine_stack_attach_kprintf("thread = %x pc = %x, sp = %x\n", thread, savestate->lr, savestate->sp);
 }
 

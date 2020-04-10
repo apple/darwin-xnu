@@ -281,9 +281,9 @@ struct kqworkloop {
 #define KQWL_STAYACTIVE_FIRED_BIT     (1 << 0)
 	uint8_t             kqwl_wakeup_indexes;          /* QoS/override levels that woke */
 	kq_index_t          kqwl_stayactive_qos;          /* max QoS of statyactive knotes */
+	struct turnstile   *kqwl_turnstile;               /* turnstile for sync IPC/waiters */
 	kqueue_id_t         kqwl_dynamicid;               /* dynamic identity */
 	uint64_t            kqwl_params;                  /* additional parameters */
-	struct turnstile   *kqwl_turnstile;               /* turnstile for sync IPC/waiters */
 	LIST_ENTRY(kqworkloop) kqwl_hashlink;             /* linkage for search list */
 #if CONFIG_WORKLOOP_DEBUG
 #define KQWL_HISTORY_COUNT 32

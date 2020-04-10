@@ -1278,6 +1278,10 @@ kernel_set_special_port(host_priv_t host_priv, int id, ipc_port_t port)
 
 	host_lock(host_priv);
 	old_port = host_priv->special[id];
+	if ((id == HOST_AMFID_PORT) && (task_pid(current_task()) != 1)) {
+		host_unlock(host_priv);
+		return KERN_NO_ACCESS;
+	}
 	host_priv->special[id] = port;
 	host_unlock(host_priv);
 

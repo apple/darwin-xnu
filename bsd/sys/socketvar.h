@@ -960,6 +960,7 @@ extern void set_packet_service_class(struct mbuf *, struct socket *,
     mbuf_svc_class_t, u_int32_t);
 extern void so_tc_update_stats(struct mbuf *, struct socket *,
     mbuf_svc_class_t);
+extern int so_tos_from_control(struct mbuf *);
 extern int so_tc_from_control(struct mbuf *, int *);
 extern mbuf_svc_class_t so_tc2msc(int);
 extern int so_svc2tc(mbuf_svc_class_t);

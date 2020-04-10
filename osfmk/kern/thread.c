@@ -356,7 +356,7 @@ thread_bootstrap(void)
 #endif /* CONFIG_DTRACE */
 
 #if KPERF
-	thread_template.kperf_flags = 0;
+	thread_template.kperf_ast = 0;
 	thread_template.kperf_pet_gen = 0;
 	thread_template.kperf_c_switch = 0;
 	thread_template.kperf_pet_cnt = 0;

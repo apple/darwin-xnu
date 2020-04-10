@@ -1068,6 +1068,32 @@ so_tc_from_control(struct mbuf *control, int *out_netsvctype)
 	return sotc;
 }
 
+__private_extern__ int
+so_tos_from_control(struct mbuf *control)
+{
+	struct cmsghdr *cm;
+	int tos = IPTOS_UNSPEC;
+
+	for (cm = M_FIRST_CMSGHDR(control);
+	    is_cmsg_valid(control, cm);
+	    cm = M_NXT_CMSGHDR(control, cm)) {
+		if (cm->cmsg_len != CMSG_LEN(sizeof(int))) {
+			continue;
+		}
+
+		if ((cm->cmsg_level == IPPROTO_IP &&
+		    cm->cmsg_type == IP_TOS) ||
+		    (cm->cmsg_level == IPPROTO_IPV6 &&
+		    cm->cmsg_type == IPV6_TCLASS)) {
+			tos = *(int *)(void *)CMSG_DATA(cm) & IPTOS_MASK;
+			/* The first valid option wins */
+			break;
+		}
+	}
+
+	return tos;
+}
+
 __private_extern__ void
 so_recv_data_stat(struct socket *so, struct mbuf *m, size_t off)
 {

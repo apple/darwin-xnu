@@ -84,8 +84,6 @@
 /*
  * IOP(s)
  *
- * https://coreoswiki.apple.com/wiki/pages/U6z3i0q9/Consistent_Logging_Implementers_Guide.html
- *
  * IOP(s) are auxiliary cores that want to participate in kdebug event logging.
  * They are registered dynamically. Each is assigned a cpu_id at registration.
  *

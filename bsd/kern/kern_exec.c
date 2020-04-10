@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -144,6 +144,10 @@
 #if CONFIG_MACF
 #include <security/mac_framework.h>
 #include <security/mac_mach_internal.h>
+#endif
+
+#if CONFIG_AUDIT
+#include <bsm/audit_kevents.h>
 #endif
 
 #if CONFIG_ARCADE
@@ -1627,6 +1631,7 @@ encapsulated_binary:
 			 */
 			if (imgp->ip_scriptvp) {
 				vnode_put(imgp->ip_scriptvp);
+				imgp->ip_scriptvp = NULLVP;
 			}
 			if (vnode_getwithref(imgp->ip_vp) == 0) {
 				imgp->ip_scriptvp = imgp->ip_vp;
@@ -2013,6 +2018,9 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 	proc_t p = vfs_context_proc(imgp->ip_vfs_context);
 	_posix_spawn_file_actions_t px_sfap = imgp->ip_px_sfa;
 	int ival[2];            /* dummy retval for system calls) */
+#if CONFIG_AUDIT
+	struct uthread *uthread = get_bsdthread_info(current_thread());
+#endif
 
 	for (action = 0; action < px_sfap->psfa_act_count; action++) {
 		_psfa_action_t *psfa = &px_sfap->psfa_act_acts[action];
@@ -2049,6 +2057,8 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 			mode = ((mode & ~p->p_fd->fd_cmask) & ALLPERMS) & ~S_ISTXT;
 			VATTR_SET(vap, va_mode, mode & ACCESSPERMS);
 
+			AUDIT_SUBCALL_ENTER(OPEN, p, uthread);
+
 			NDINIT(ndp, LOOKUP, OP_OPEN, FOLLOW | AUDITVNPATH1, UIO_SYSSPACE,
 			    CAST_USER_ADDR_T(psfa->psfaa_openargs.psfao_path),
 			    imgp->ip_vfs_context);
@@ -2061,6 +2071,8 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 			    ival);
 
 			FREE(bufp, M_TEMP);
+
+			AUDIT_SUBCALL_EXIT(uthread, error);
 
 			/*
 			 * If there's an error, or we get the right fd by
@@ -2087,7 +2099,9 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 			 * can ignore that, since if we didn't get the
 			 * fd we wanted, the error will stop us.
 			 */
+			AUDIT_SUBCALL_ENTER(DUP2, p, uthread);
 			error = dup2(p, &dup2a, ival);
+			AUDIT_SUBCALL_EXIT(uthread, error);
 			if (error) {
 				break;
 			}
@@ -2097,7 +2111,9 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 			 */
 			ca.fd = origfd;
 
+			AUDIT_SUBCALL_ENTER(CLOSE, p, uthread);
 			error = close_nocancel(p, &ca, ival);
+			AUDIT_SUBCALL_EXIT(uthread, error);
 		}
 		break;
 
@@ -2113,7 +2129,9 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 			 * can ignore that, since if we didn't get the
 			 * fd we wanted, the error will stop us.
 			 */
+			AUDIT_SUBCALL_ENTER(DUP2, p, uthread);
 			error = dup2(p, &dup2a, ival);
+			AUDIT_SUBCALL_EXIT(uthread, error);
 		}
 		break;
 
@@ -2149,12 +2167,16 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 
 			dup2a.from = ca.fd = ival[0];
 			dup2a.to = psfa->psfaa_dup2args.psfad_newfiledes;
+			AUDIT_SUBCALL_ENTER(DUP2, p, uthread);
 			error = dup2(p, &dup2a, ival);
+			AUDIT_SUBCALL_EXIT(uthread, error);
 			if (error) {
 				break;
 			}
 
+			AUDIT_SUBCALL_ENTER(CLOSE, p, uthread);
 			error = close_nocancel(p, &ca, ival);
+			AUDIT_SUBCALL_EXIT(uthread, error);
 		}
 		break;
 
@@ -2163,7 +2185,9 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 
 			ca.fd = psfa->psfaa_filedes;
 
+			AUDIT_SUBCALL_ENTER(CLOSE, p, uthread);
 			error = close_nocancel(p, &ca, ival);
+			AUDIT_SUBCALL_EXIT(uthread, error);
 		}
 		break;
 
@@ -2203,11 +2227,13 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 			 */
 			struct nameidata nd;
 
+			AUDIT_SUBCALL_ENTER(CHDIR, p, uthread);
 			NDINIT(&nd, LOOKUP, OP_CHDIR, FOLLOW | AUDITVNPATH1, UIO_SYSSPACE,
 			    CAST_USER_ADDR_T(psfa->psfaa_chdirargs.psfac_path),
 			    imgp->ip_vfs_context);
 
 			error = chdir_internal(p, imgp->ip_vfs_context, &nd, 0);
+			AUDIT_SUBCALL_EXIT(uthread, error);
 		}
 		break;
 
@@ -2216,7 +2242,9 @@ exec_handle_file_actions(struct image_params *imgp, short psa_flags)
 
 			fchdira.fd = psfa->psfaa_filedes;
 
+			AUDIT_SUBCALL_ENTER(FCHDIR, p, uthread);
 			error = fchdir(p, &fchdira, ival);
+			AUDIT_SUBCALL_EXIT(uthread, error);
 		}
 		break;
 
@@ -2560,6 +2588,20 @@ proc_legacy_footprint_entitled(proc_t p, task_t task, const char *caller)
 		break;
 	default:
 		break;
+	}
+}
+
+static inline void
+proc_ios13extended_footprint_entitled(proc_t p, task_t task, const char *caller)
+{
+#pragma unused(p, caller)
+	boolean_t ios13extended_footprint_entitled;
+
+	/* the entitlement grants a footprint limit increase */
+	ios13extended_footprint_entitled = IOTaskHasEntitlement(task,
+	    "com.apple.developer.memory.ios13extended_footprint");
+	if (ios13extended_footprint_entitled) {
+		task_set_ios13extended_footprint_limit(task);
 	}
 }
 #endif /* __arm64__ */
@@ -3133,15 +3175,41 @@ do_fork1:
 		 * The POSIX_SPAWN_CLOEXEC_DEFAULT flag
 		 * is handled in exec_handle_file_actions().
 		 */
-		if ((error = exec_handle_file_actions(imgp,
-		    imgp->ip_px_sa != NULL ? px_sa.psa_flags : 0)) != 0) {
+#if CONFIG_AUDIT
+		/*
+		 * The file actions auditing can overwrite the upath of
+		 * AUE_POSIX_SPAWN audit record.  Save the audit record.
+		 */
+		struct kaudit_record *save_uu_ar = uthread->uu_ar;
+		uthread->uu_ar = NULL;
+#endif
+		error = exec_handle_file_actions(imgp,
+		    imgp->ip_px_sa != NULL ? px_sa.psa_flags : 0);
+#if CONFIG_AUDIT
+		/* Restore the AUE_POSIX_SPAWN audit record. */
+		uthread->uu_ar = save_uu_ar;
+#endif
+		if (error != 0) {
 			goto bad;
 		}
 	}
 
 	/* Has spawn port actions? */
 	if (imgp->ip_px_spa != NULL) {
-		if ((error = exec_handle_port_actions(imgp, &port_actions)) != 0) {
+#if CONFIG_AUDIT
+		/*
+		 * Do the same for the port actions as we did for the file
+		 * actions.  Save the AUE_POSIX_SPAWN audit record.
+		 */
+		struct kaudit_record *save_uu_ar = uthread->uu_ar;
+		uthread->uu_ar = NULL;
+#endif
+		error = exec_handle_port_actions(imgp, &port_actions);
+#if CONFIG_AUDIT
+		/* Restore the AUE_POSIX_SPAWN audit record. */
+		uthread->uu_ar = save_uu_ar;
+#endif
+		if (error != 0) {
 			goto bad;
 		}
 	}
@@ -3536,6 +3604,7 @@ bad:
 
 #if __arm64__
 		proc_legacy_footprint_entitled(p, new_task, __FUNCTION__);
+		proc_ios13extended_footprint_entitled(p, new_task, __FUNCTION__);
 #endif /* __arm64__ */
 	}
 
@@ -4207,6 +4276,7 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 
 #if __arm64__
 		proc_legacy_footprint_entitled(p, new_task, __FUNCTION__);
+		proc_ios13extended_footprint_entitled(p, new_task, __FUNCTION__);
 #endif /* __arm64__ */
 
 		/* Sever any extant thread affinity */

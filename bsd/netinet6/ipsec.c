@@ -79,11 +79,14 @@
 #include <sys/priv.h>
 #include <kern/locks.h>
 #include <sys/kauth.h>
+#include <sys/bitstring.h>
+
 #include <libkern/OSAtomic.h>
 
 #include <net/if.h>
 #include <net/route.h>
 #include <net/if_ipsec.h>
+#include <net/if_ports_used.h>
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
@@ -129,6 +132,8 @@
 #include <net/net_osdep.h>
 
 #include <IOKit/pwr_mgt/IOPM.h>
+
+#include <os/log_private.h>
 
 #if IPSEC_DEBUG
 int ipsec_debug = 1;
@@ -5162,6 +5167,15 @@ sysctl_ipsec_wake_packet SYSCTL_HANDLER_ARGS
 		}
 
 		int result = sysctl_io_opaque(req, &ipsec_wake_pkt, sizeof(ipsec_wake_pkt), NULL);
+
+		ipseclog((LOG_NOTICE, "%s: uuid %s spi %u seq %u len %u result %d",
+		    __func__,
+		    ipsec_wake_pkt.wake_uuid,
+		    ipsec_wake_pkt.wake_pkt_spi,
+		    ipsec_wake_pkt.wake_pkt_seq,
+		    ipsec_wake_pkt.wake_pkt_len,
+		    result));
+
 		return result;
 	}
 
@@ -5191,10 +5205,61 @@ ipsec_save_wake_packet(struct mbuf *wake_mbuf, u_int32_t spi, u_int32_t seq)
 	ipsec_wake_pkt.wake_pkt_spi = spi;
 	ipsec_wake_pkt.wake_pkt_seq = seq;
 
+	ipseclog((LOG_NOTICE, "%s: uuid %s spi %u seq %u len %u",
+	    __func__,
+	    ipsec_wake_pkt.wake_uuid,
+	    ipsec_wake_pkt.wake_pkt_spi,
+	    ipsec_wake_pkt.wake_pkt_seq,
+	    ipsec_wake_pkt.wake_pkt_len));
+
+	struct kev_msg ev_msg = { 0 };
+	ev_msg.vendor_code      = KEV_VENDOR_APPLE;
+	ev_msg.kev_class        = KEV_NETWORK_CLASS;
+	ev_msg.kev_subclass     = KEV_IPSEC_SUBCLASS;
+	ev_msg.kev_subclass     = KEV_IPSEC_WAKE_PACKET;
+	int result = kev_post_msg(&ev_msg);
+	if (result != 0) {
+		os_log_error(OS_LOG_DEFAULT, "%s: kev_post_msg() failed with error %d for wake uuid %s",
+		    __func__, result, ipsec_wake_pkt.wake_uuid);
+	}
+
 	ipsec_save_wake_pkt = false;
 done:
 	lck_mtx_unlock(sadb_mutex);
 	return;
+}
+
+static void
+ipsec_get_local_ports(void)
+{
+	errno_t error;
+	ifnet_t *ifp_list;
+	uint32_t count, i;
+	static uint8_t port_bitmap[bitstr_size(IP_PORTRANGE_SIZE)];
+
+	error = ifnet_list_get_all(IFNET_FAMILY_IPSEC, &ifp_list, &count);
+	if (error != 0) {
+		os_log_error(OS_LOG_DEFAULT, "%s: ifnet_list_get_all() failed %d",
+		    __func__, error);
+		return;
+	}
+	for (i = 0; i < count; i++) {
+		ifnet_t ifp = ifp_list[i];
+
+		/*
+		 * Get all the TCP and UDP ports for IPv4 and IPv6
+		 */
+		error = ifnet_get_local_ports_extended(ifp, PF_UNSPEC,
+		    IFNET_GET_LOCAL_PORTS_WILDCARDOK |
+		    IFNET_GET_LOCAL_PORTS_NOWAKEUPOK |
+		    IFNET_GET_LOCAL_PORTS_ANYTCPSTATEOK,
+		    port_bitmap);
+		if (error != 0) {
+			os_log_error(OS_LOG_DEFAULT, "%s: ifnet_get_local_ports_extended(%s) failed %d",
+			    __func__, if_name(ifp), error);
+		}
+	}
+	ifnet_list_free(ifp_list);
 }
 
 static IOReturn
@@ -5204,16 +5269,17 @@ ipsec_sleep_wake_handler(void *target, void *refCon, UInt32 messageType,
 #pragma unused(target, refCon, provider, messageArgument, argSize)
 	switch (messageType) {
 	case kIOMessageSystemWillSleep:
+		ipsec_get_local_ports();
 		memset(&ipsec_wake_pkt, 0, sizeof(ipsec_wake_pkt));
 		IOPMCopySleepWakeUUIDKey(ipsec_wake_pkt.wake_uuid,
 		    sizeof(ipsec_wake_pkt.wake_uuid));
-		ipseclog((LOG_INFO,
-		    "ipsec: system will sleep"));
+		ipseclog((LOG_NOTICE,
+		    "ipsec: system will sleep, uuid: %s", ipsec_wake_pkt.wake_uuid));
 		break;
-	case kIOMessageSystemHasPoweredOn:
+	case kIOMessageSystemWillPowerOn:
 		ipsec_save_wake_pkt = true;
-		ipseclog((LOG_INFO,
-		    "ipsec: system has powered on"));
+		ipseclog((LOG_NOTICE,
+		    "ipsec: system will powered on, uuid: %s", ipsec_wake_pkt.wake_uuid));
 		break;
 	default:
 		break;

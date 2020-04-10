@@ -276,8 +276,8 @@ extern pmap_paddr_t mmu_uvtop(vm_offset_t va);
 #define PMAP_GC_WAIT            2
 
 #if DEVELOPMENT || DEBUG
-#define pmap_cs_log(msg, args...) printf("PMAP_CS: " msg "\n", args)
 #define pmap_cs_log_h(msg, args...) { if(pmap_cs_log_hacks) printf("PMAP_CS: " msg "\n", args); }
+#define pmap_cs_log pmap_cs_log_h
 
 #define PMAP_CS_EXCEPTION_LIST_HACK 1
 
@@ -309,7 +309,6 @@ struct pmap {
 	struct pmap_statistics  stats;          /* map statistics */
 	queue_chain_t           pmaps;                  /* global list of pmaps */
 	tt_entry_t                      *tt_entry_free; /* free translation table entries */
-	tt_entry_t                      *prev_tte;              /* previous translation table */
 	struct pmap                     *nested_pmap;   /* nested pmap */
 	vm_map_address_t        nested_region_grand_addr;
 	vm_map_address_t        nested_region_subord_addr;
@@ -319,8 +318,6 @@ struct pmap {
 	unsigned int            *nested_region_asid_bitmap;
 
 #if (__ARM_VMSA__ <= 7)
-	decl_simple_lock_data(, tt1_lock);       /* lock on tt1 */
-	unsigned int            cpu_ref;                /* number of cpus using pmap */
 	unsigned int            tte_index_max;          /* max tte index in translation table entries */
 #endif
 

@@ -192,8 +192,8 @@ KALLOC_ZINFO_SFREE(vm_size_t bytes)
  * 6144       N                    N                   N
  * 8192       Y                    N                   N
  * 12288      N                    X                   X
- * 16384      N                    N                   N
- * 32768      X                    N                   N
+ * 16384      N                    X                   N
+ * 32768      X                    X                   N
  *
  */
 static const struct kalloc_zone_config {
@@ -266,8 +266,15 @@ static const struct kalloc_zone_config {
 	KZC_ENTRY(4096, false),
 	KZC_ENTRY(6144, false),
 	KZC_ENTRY(8192, false),
+	/* To limit internal fragmentation, only add the following zones if the
+	 * page size is greater than 4K.
+	 * Note that we use ARM_PGBYTES here (instead of one of the VM macros)
+	 * since it's guaranteed to be a compile time constant.
+	 */
+#if ARM_PGBYTES > 4096
 	KZC_ENTRY(16384, false),
 	KZC_ENTRY(32768, false),
+#endif /* ARM_PGBYTES > 4096 */
 
 #else
 #error missing or invalid zone size parameters for kalloc

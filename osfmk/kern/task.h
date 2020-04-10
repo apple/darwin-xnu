@@ -427,6 +427,7 @@ struct task {
 #if __arm64__
 	unsigned int    task_legacy_footprint:1;
 	unsigned int    task_extra_footprint_limit:1;
+	unsigned int    task_ios13extended_footprint_limit:1;
 #endif /* __arm64__ */
 	unsigned int    task_region_footprint:1;
 	unsigned int    task_has_crossed_thread_limit:1;
@@ -1004,6 +1005,7 @@ extern boolean_t task_get_darkwake_mode(task_t);
 #if __arm64__
 extern void task_set_legacy_footprint(task_t task);
 extern void task_set_extra_footprint_limit(task_t task);
+extern void task_set_ios13extended_footprint_limit(task_t task);
 #endif /* __arm64__ */
 
 #if CONFIG_MACF

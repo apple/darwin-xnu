@@ -234,6 +234,8 @@ static void record_vp(vnode_t vp, int count);
 extern int bootarg_no_vnode_jetsam;    /* from bsd_init.c default value is 0 */
 #endif /* CONFIG_JETSAM && (DEVELOPMENT || DEBUG) */
 
+extern int bootarg_no_vnode_drain;    /* from bsd_init.c default value is 0 */
+
 boolean_t root_is_CF_drive = FALSE;
 
 #if CONFIG_TRIGGERS
@@ -250,6 +252,7 @@ TAILQ_HEAD(ragelst, vnode) vnode_rage_list;     /* vnode rapid age list */
 struct timeval rage_tv;
 int     rage_limit = 0;
 int     ragevnodes = 0;
+static  int vfs_unmountall_started = 0;
 
 #define RAGE_LIMIT_MIN  100
 #define RAGE_TIME_LIMIT 5
@@ -3311,6 +3314,8 @@ vfs_unmountall(void)
 	int mounts, sec = 1;
 	struct unmount_info ui;
 
+	vfs_unmountall_started = 1;
+
 retry:
 	ui.u_errs = ui.u_busy = 0;
 	vfs_iterate(VFS_ITERATE_CB_DROPREF | VFS_ITERATE_TAIL_FIRST, unmount_callback, &ui);
@@ -3454,6 +3459,7 @@ vfs_init_io_attributes(vnode_t devvp, mount_t mp)
 	if (VNOP_IOCTL(devvp, DKIOCISVIRTUAL, (caddr_t)&isvirtual, 0, ctx) == 0) {
 		if (isvirtual) {
 			mp->mnt_kern_flag |= MNTK_VIRTUALDEV;
+			mp->mnt_flag |= MNT_REMOVABLE;
 		}
 	}
 	if (VNOP_IOCTL(devvp, DKIOCISSOLIDSTATE, (caddr_t)&isssd, 0, ctx) == 0) {
@@ -3640,10 +3646,7 @@ vfs_init_io_attributes(vnode_t devvp, mount_t mp)
 	if (VNOP_IOCTL(devvp, DKIOCGETLOCATION, (caddr_t)&location, 0, ctx) == 0) {
 		if (location & DK_LOCATION_EXTERNAL) {
 			mp->mnt_ioflags |= MNT_IOFLAGS_PERIPHERAL_DRIVE;
-			/* This must be called after MNTK_VIRTUALDEV has been determined via DKIOCISVIRTUAL */
-			if ((MNTK_VIRTUALDEV & mp->mnt_kern_flag)) {
-				mp->mnt_flag |= MNT_REMOVABLE;
-			}
+			mp->mnt_flag |= MNT_REMOVABLE;
 		}
 	}
 
@@ -4972,7 +4975,25 @@ vnode_drain(vnode_t vp)
 	vp->v_owner = current_thread();
 
 	while (vp->v_iocount > 1) {
-		msleep(&vp->v_iocount, &vp->v_lock, PVFS, "vnode_drain", NULL);
+		if (bootarg_no_vnode_drain) {
+			struct timespec ts = {.tv_sec = 10, .tv_nsec = 0};
+			int error;
+
+			if (vfs_unmountall_started) {
+				ts.tv_sec = 1;
+			}
+
+			error = msleep(&vp->v_iocount, &vp->v_lock, PVFS, "vnode_drain_with_timeout", &ts);
+
+			/* Try to deal with leaked iocounts under bootarg and shutting down */
+			if (vp->v_iocount > 1 && error == EWOULDBLOCK &&
+			    ts.tv_sec == 1 && vp->v_numoutput == 0) {
+				vp->v_iocount = 1;
+				break;
+			}
+		} else {
+			msleep(&vp->v_iocount, &vp->v_lock, PVFS, "vnode_drain", NULL);
+		}
 	}
 
 	vp->v_lflag &= ~VL_DRAIN;

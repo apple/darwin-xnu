@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 1999-2009 Apple Inc.
+ * Copyright (c) 1999-2019 Apple Inc.
  * Copyright (c) 2006-2007 Robert N. M. Watson
  * All rights reserved.
  *
@@ -751,6 +751,77 @@ audit_syscall_exit(int error, __unsed proc_t proc, struct uthread *uthread)
 	audit_commit(uthread->uu_ar, error, retval);
 
 out:
+	uthread->uu_ar = NULL;
+}
+
+/*
+ * For system calls such as posix_spawn(2) the sub operations (i.e., file actions
+ * and port actions) need to be audited as their own events. Like with system
+ * calls we need to determine if the sub operation needs to be audited by
+ * examining preselection masks.
+ */
+void
+audit_subcall_enter(au_event_t event, proc_t proc, struct uthread *uthread)
+{
+	struct au_mask *aumask;
+	au_class_t class;
+	au_id_t auid;
+	kauth_cred_t cred;
+
+	/*
+	 * Check which audit mask to use; either the kernel non-attributable
+	 * event mask or the process audit mask.
+	 */
+	cred = kauth_cred_proc_ref(proc);
+	auid = cred->cr_audit.as_aia_p->ai_auid;
+	if (auid == AU_DEFAUDITID) {
+		aumask = &audit_nae_mask;
+	} else {
+		aumask = &cred->cr_audit.as_mask;
+	}
+
+	/*
+	 * Allocate an audit record, if preselection allows it, and store in
+	 * the thread for later use.
+	 */
+	class = au_event_class(event);
+
+	if (au_preselect(event, class, aumask, AU_PRS_BOTH)) {
+		/*
+		 * If we're out of space and need to suspend unprivileged
+		 * processes, do that here rather than trying to allocate
+		 * another audit record.
+		 *
+		 * Note: we might wish to be able to continue here in the
+		 * future, if the system recovers.  That should be possible
+		 * by means of checking the condition in a loop around
+		 * cv_wait().  It might be desirable to reevaluate whether an
+		 * audit record is still required for this event by
+		 * re-calling au_preselect().
+		 */
+		if (audit_in_failure &&
+		    suser(cred, &proc->p_acflag) != 0) {
+			cv_wait(&audit_fail_cv, &audit_mtx);
+			panic("audit_failing_stop: thread continued");
+		}
+		if (uthread->uu_ar == NULL) {
+			uthread->uu_ar = audit_new(event, proc, uthread);
+		}
+	} else if (audit_pipe_preselect(auid, event, class, AU_PRS_BOTH, 0)) {
+		if (uthread->uu_ar == NULL) {
+			uthread->uu_ar = audit_new(event, proc, uthread);
+		}
+	}
+
+	kauth_cred_unref(&cred);
+}
+
+void
+audit_subcall_exit(int error, struct uthread *uthread)
+{
+	/* A subcall doesn't have a return value so always zero. */
+	audit_commit(uthread->uu_ar, error, 0 /* retval */);
+
 	uthread->uu_ar = NULL;
 }
 

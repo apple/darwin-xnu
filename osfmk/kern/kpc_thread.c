@@ -116,7 +116,7 @@ kpc_set_thread_counting(uint32_t classes)
 
 		/* and schedule an AST for this thread... */
 		if (!current_thread()->kpc_buf) {
-			current_thread()->kperf_flags |= T_KPC_ALLOC;
+			current_thread()->kperf_ast |= T_KPC_ALLOC;
 			act_set_kperf(current_thread());
 		}
 	}
@@ -150,7 +150,7 @@ kpc_update_thread_counters( thread_t thread )
 
 	/* schedule any necessary allocations */
 	if (!current_thread()->kpc_buf) {
-		current_thread()->kperf_flags |= T_KPC_ALLOC;
+		current_thread()->kperf_ast |= T_KPC_ALLOC;
 		act_set_kperf(current_thread());
 	}
 
@@ -234,12 +234,10 @@ kpc_thread_destroy(thread_t thread)
 	kpc_counterbuf_free(buf);
 }
 
-/* ast callback on a thread */
 void
-kpc_thread_ast_handler( thread_t thread )
+kpc_thread_ast_handler(thread_t thread)
 {
-	/* see if we want an alloc */
-	if (thread->kperf_flags & T_KPC_ALLOC) {
+	if (thread->kperf_ast & T_KPC_ALLOC) {
 		thread->kpc_buf = kpc_counterbuf_alloc();
 	}
 }

@@ -49,7 +49,10 @@ class value(object):
                 other = long(other)
             return me.__cmp__(other)
         if type(other) is value:
-            return int(self).__cmp__(int(other))
+            try:
+                return int(self).__cmp__(int(other))
+            except TypeError: # Try promoting to long
+                return long(self).__cmp__(long(other))
         raise TypeError("Cannot compare value with type {}".format(type(other)))
     
     def __str__(self):

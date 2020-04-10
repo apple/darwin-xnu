@@ -5975,7 +5975,7 @@ nfs_dir_buf_search(
 		if ((cnp->cn_namelen == dp->d_namlen) && !strcmp(cnp->cn_nameptr, dp->d_name)) {
 			fhlen = dp->d_name[dp->d_namlen + 1];
 			nvattrp = NFS_DIR_BUF_NVATTR(bp, i);
-			if ((ndbhp->ndbh_ncgen != bp->nb_np->n_ncgen) || (fhp->fh_len == 0) ||
+			if ((ndbhp->ndbh_ncgen != bp->nb_np->n_ncgen) || (fhlen == 0) ||
 			    (nvattrp->nva_type == VNON) || (nvattrp->nva_fileid == 0)) {
 				/* entry is not valid */
 				error = ENOENT;

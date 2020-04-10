@@ -72,8 +72,9 @@ struct ledger_template_info {
  */
 struct ledger_entry {
 	volatile uint32_t        le_flags;
+#define LEDGER_PERCENT_NONE  UINT16_MAX
+	uint16_t                 le_warn_percent;
 	ledger_amount_t          le_limit;
-	ledger_amount_t          le_warn_level;
 	volatile ledger_amount_t le_credit __attribute__((aligned(8)));
 	volatile ledger_amount_t le_debit  __attribute__((aligned(8)));
 	union {

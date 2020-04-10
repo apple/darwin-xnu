@@ -143,7 +143,7 @@ extern void             fpu_switch_addrmode(
 extern xstate_t         fpu_default;
 extern xstate_t         fpu_capability;
 extern xstate_t         current_xstate(void);
-extern void             fpUDflt(user_addr_t rip);
+extern int              fpUDflt(user_addr_t rip);
 #ifdef MACH_KERNEL_PRIVATE
 extern uint32_t thread_fpsimd_hash(thread_t);
 extern void vzeroall(void);

@@ -195,7 +195,6 @@ LEXT(set_mmu_ttb)
 LEXT(set_aux_control)
 	msr		ACTLR_EL1, x0
 	// Synchronize system
-	dsb		sy
 	isb		sy
 	ret
 

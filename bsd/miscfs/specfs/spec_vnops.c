@@ -2915,7 +2915,7 @@ spec_knote_select_and_link(struct knote *kn)
 	/*
 	 * This function may be called many times to link or re-link the
 	 * underlying vnode to the kqueue.  If we've already linked the two,
-	 * we will have a valid kn_hook64 which ties us to the underlying
+	 * we will have a valid kn_hook_waitqid which ties us to the underlying
 	 * device's waitq via a the waitq's prepost table object. However,
 	 * devices can abort any select action by calling selthreadclear().
 	 * This is OK because the table object will be invalidated by the
@@ -2985,13 +2985,15 @@ spec_knote_select_and_link(struct knote *kn)
 		 * the table object's ID to us.  It will also set the
 		 * waitq_prepost_id field within the waitq structure.
 		 *
-		 * We can just overwrite kn_hook64 because it's simply a
+		 * We can just overwrite kn_hook_waitqid because it's simply a
 		 * table ID used to grab a reference when needed.
 		 *
 		 * We have a reference on the vnode, so we know that the
 		 * device won't go away while we get this ID.
+		 *
+		 * Note: on 32bit this field is 32bit only.
 		 */
-		kn->kn_hook64 = waitq_get_prepost_id(wq);
+		kn->kn_hook_waitqid = (typeof(kn->kn_hook_waitqid))waitq_get_prepost_id(wq);
 	} else if (selres == 0) {
 		/*
 		 * The device indicated that there's no data to read, but didn't call
@@ -3069,7 +3071,7 @@ filt_specattach(struct knote *kn, __unused struct kevent_qos_s *kev)
 	}
 
 	kn->kn_filtid = EVFILTID_SPEC;
-	kn->kn_hook64 = 0;
+	kn->kn_hook_waitqid = 0;
 
 	knote_markstayactive(kn);
 	return spec_knote_select_and_link(kn);
@@ -3084,7 +3086,7 @@ filt_specdetach(struct knote *kn)
 	 * This is potentially tricky: the device's selinfo waitq that was
 	 * tricked into being part of this knote's waitq set may not be a part
 	 * of any other set, and the device itself may have revoked the memory
-	 * in which the waitq was held. We use the knote's kn_hook64 field
+	 * in which the waitq was held. We use the knote's kn_hook_waitqid field
 	 * to keep the ID of the waitq's prepost table object. This
 	 * object keeps a pointer back to the waitq, and gives us a safe way
 	 * to decouple the dereferencing of driver allocated memory: if the
@@ -3092,9 +3094,9 @@ filt_specdetach(struct knote *kn)
 	 * object will be invalidated. The waitq details are handled in the
 	 * waitq API invoked here.
 	 */
-	if (kn->kn_hook64) {
-		waitq_unlink_by_prepost_id(kn->kn_hook64, &(knote_get_kq(kn)->kq_wqs));
-		kn->kn_hook64 = 0;
+	if (kn->kn_hook_waitqid) {
+		waitq_unlink_by_prepost_id(kn->kn_hook_waitqid, &(knote_get_kq(kn)->kq_wqs));
+		kn->kn_hook_waitqid = 0;
 	}
 }
 

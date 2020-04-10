@@ -1321,12 +1321,13 @@ retry:
 	if (child_proc->p_textvp != NULLVP) {
 		/* bump references to the text vnode */
 		/* Need to hold iocount across the ref call */
-		if (vnode_getwithref(child_proc->p_textvp) == 0) {
+		if ((error = vnode_getwithref(child_proc->p_textvp)) == 0) {
 			error = vnode_ref(child_proc->p_textvp);
 			vnode_put(child_proc->p_textvp);
-			if (error != 0) {
-				child_proc->p_textvp = NULLVP;
-			}
+		}
+
+		if (error != 0) {
+			child_proc->p_textvp = NULLVP;
 		}
 	}
 

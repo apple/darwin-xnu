@@ -667,7 +667,7 @@ mach_msg_receive_results_complete(ipc_object_t object)
 {
 	thread_t self = current_thread();
 	ipc_port_t port = IPC_PORT_NULL;
-	boolean_t get_turnstile = self->turnstile ? FALSE : TRUE;
+	boolean_t get_turnstile = (self->turnstile == TURNSTILE_NULL);
 
 	if (io_otype(object) == IOT_PORT) {
 		port = ip_object_to_port(object);
@@ -689,8 +689,12 @@ mach_msg_receive_results_complete(ipc_object_t object)
 		flags |= IPC_PORT_ADJUST_SR_RECEIVED_MSG;
 	}
 
-	ipc_port_adjust_special_reply_port(port,
-	    flags, get_turnstile);
+	if (port->ip_specialreply || get_turnstile) {
+		ip_lock(port);
+		ipc_port_adjust_special_reply_port_locked(port, NULL,
+		    flags, get_turnstile);
+	}
+	assert(self->turnstile != TURNSTILE_NULL);
 	/* thread now has a turnstile */
 }
 

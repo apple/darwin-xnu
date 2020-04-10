@@ -1465,6 +1465,10 @@ mptcp_session_necp_cb(void *handle, int action, uint32_t interface_index,
 			goto out;
 		}
 
+		if (IFNET_IS_COMPANION_LINK(ifp)) {
+			goto out;
+		}
+
 		if (IFNET_IS_EXPENSIVE(ifp) &&
 		    (mp_so->so_restrictions & SO_RESTRICT_DENY_EXPENSIVE)) {
 			goto out;

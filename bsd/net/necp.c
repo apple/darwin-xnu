@@ -406,7 +406,7 @@ static bool necp_is_addr_in_subnet(struct sockaddr *addr, struct sockaddr *subne
 static int necp_addr_compare(struct sockaddr *sa1, struct sockaddr *sa2, int check_port);
 static bool necp_buffer_compare_with_bit_prefix(u_int8_t *p1, u_int8_t *p2, u_int32_t bits);
 static bool necp_addr_is_empty(struct sockaddr *addr);
-static bool necp_is_loopback(struct sockaddr *local_addr, struct sockaddr *remote_addr, struct inpcb *inp, struct mbuf *packet);
+static bool necp_is_loopback(struct sockaddr *local_addr, struct sockaddr *remote_addr, struct inpcb *inp, struct mbuf *packet, u_int32_t bound_interface_index);
 static bool necp_is_intcoproc(struct inpcb *inp, struct mbuf *packet);
 
 struct necp_uuid_id_mapping {
@@ -7063,6 +7063,15 @@ necp_application_find_policy_match_internal(proc_t proc,
 		offset += sizeof(u_int8_t) + sizeof(u_int32_t) + length;
 	}
 
+	// Check for loopback exception
+	if (necp_pass_loopback > 0 && necp_is_loopback(&local_addr.sa, &remote_addr.sa, NULL, NULL, bound_interface_index)) {
+		returned_result->policy_id = NECP_KERNEL_POLICY_ID_NO_MATCH;
+		returned_result->routing_result = NECP_KERNEL_POLICY_RESULT_PASS;
+		returned_result->routed_interface_index = lo_ifp->if_index;
+		*flags |= (NECP_CLIENT_RESULT_FLAG_IS_LOCAL | NECP_CLIENT_RESULT_FLAG_IS_DIRECT);
+		return 0;
+	}
+
 	// Lock
 	lck_rw_lock_shared(&necp_kernel_policy_lock);
 
@@ -8253,7 +8262,7 @@ necp_socket_is_connected(struct inpcb *inp)
 static inline bool
 necp_socket_bypass(struct sockaddr *override_local_addr, struct sockaddr *override_remote_addr, struct inpcb *inp)
 {
-	if (necp_pass_loopback > 0 && necp_is_loopback(override_local_addr, override_remote_addr, inp, NULL)) {
+	if (necp_pass_loopback > 0 && necp_is_loopback(override_local_addr, override_remote_addr, inp, NULL, IFSCOPE_NONE)) {
 		return true;
 	} else if (necp_is_intcoproc(inp, NULL)) {
 		return true;
@@ -8728,7 +8737,7 @@ necp_ip_output_find_policy_match_locked(necp_kernel_policy_id socket_policy_id, 
 static inline bool
 necp_output_bypass(struct mbuf *packet)
 {
-	if (necp_pass_loopback > 0 && necp_is_loopback(NULL, NULL, NULL, packet)) {
+	if (necp_pass_loopback > 0 && necp_is_loopback(NULL, NULL, NULL, packet, IFSCOPE_NONE)) {
 		return true;
 	}
 	if (necp_pass_keepalives > 0 && necp_get_is_keepalive_from_packet(packet)) {
@@ -10297,7 +10306,7 @@ necp_addr_is_loopback(struct sockaddr *address)
 }
 
 static bool
-necp_is_loopback(struct sockaddr *local_addr, struct sockaddr *remote_addr, struct inpcb *inp, struct mbuf *packet)
+necp_is_loopback(struct sockaddr *local_addr, struct sockaddr *remote_addr, struct inpcb *inp, struct mbuf *packet, u_int32_t bound_interface_index)
 {
 	// Note: This function only checks for the loopback addresses.
 	// In the future, we may want to expand to also allow any traffic
@@ -10327,6 +10336,8 @@ necp_is_loopback(struct sockaddr *local_addr, struct sockaddr *remote_addr, stru
 				return TRUE;
 			}
 		}
+	} else if (bound_interface_index != IFSCOPE_NONE && lo_ifp->if_index == bound_interface_index) {
+		return TRUE;
 	}
 
 	if (packet != NULL) {

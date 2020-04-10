@@ -453,6 +453,7 @@ IMPL(IOBufferMemoryDescriptor, Create)
 		return kIOReturnBadArgument;
 	}
 	options &= kIOMemoryDirectionOutIn;
+	options |= kIOMemoryKernelUserShared;
 	bmd = IOBufferMemoryDescriptor::inTaskWithOptions(
 		kernel_task, options, capacity, alignment);
 

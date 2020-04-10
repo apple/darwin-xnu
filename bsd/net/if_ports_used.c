@@ -47,6 +47,8 @@
 #include <net/if_ports_used.h>
 
 #include <netinet/in_pcb.h>
+#include <netinet/tcp_var.h>
+#include <netinet/tcp_fsm.h>
 
 
 #include <stdbool.h>
@@ -662,7 +664,12 @@ if_ports_used_add_inpcb(const uint32_t ifindex, const struct inpcb *inp)
 	npi.npi_timestamp.tv_usec = wakeuiid_last_check.tv_usec;
 
 	if (SOCK_PROTO(so) == IPPROTO_TCP) {
+		struct tcpcb *tp = intotcpcb(inp);
+
 		npi.npi_flags |= NPIF_TCP;
+		if (tp != NULL && tp->t_state == TCPS_LISTEN) {
+			npi.npi_flags |= NPIF_LISTEN;
+		}
 	} else if (SOCK_PROTO(so) == IPPROTO_UDP) {
 		npi.npi_flags |= NPIF_UDP;
 	} else {
@@ -675,7 +682,15 @@ if_ports_used_add_inpcb(const uint32_t ifindex, const struct inpcb *inp)
 	npi.npi_local_port = inp->inp_lport;
 	npi.npi_foreign_port = inp->inp_fport;
 
-	if (inp->inp_vflag & INP_IPV4) {
+	/*
+	 * Take in account IPv4 addresses mapped on IPv6
+	 */
+	if ((inp->inp_vflag & INP_IPV6) != 0 && (inp->inp_flags & IN6P_IPV6_V6ONLY) == 0 &&
+	    (inp->inp_vflag & (INP_IPV6 | INP_IPV4)) == (INP_IPV6 | INP_IPV4)) {
+		npi.npi_flags |= NPIF_IPV6 | NPIF_IPV4;
+		memcpy(&npi.npi_local_addr_in6,
+		    &inp->in6p_laddr, sizeof(struct in6_addr));
+	} else if (inp->inp_vflag & INP_IPV4) {
 		npi.npi_flags |= NPIF_IPV4;
 		npi.npi_local_addr_in = inp->inp_laddr;
 		npi.npi_foreign_addr_in = inp->inp_faddr;

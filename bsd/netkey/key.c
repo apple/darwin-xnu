@@ -1471,6 +1471,157 @@ found:
 	return match;
 }
 
+/*
+ * This function checks whether a UDP packet with a random local port
+ * and a remote port of 4500 matches an SA in the kernel. If does match,
+ * send the packet to the ESP engine. If not, send the packet to the UDP protocol.
+ */
+bool
+key_checksa_present(u_int family,
+    caddr_t local_addr,
+    caddr_t remote_addr,
+    u_int16_t local_port,
+    u_int16_t remote_port)
+{
+	LCK_MTX_ASSERT(sadb_mutex, LCK_MTX_ASSERT_NOTOWNED);
+
+	/* sanity check */
+	if (local_addr == NULL || remote_addr == NULL) {
+		panic("key_allocsa: NULL pointer is passed.\n");
+	}
+
+	/*
+	 * searching SAD.
+	 * XXX: to be checked internal IP header somewhere.  Also when
+	 * IPsec tunnel packet is received.  But ESP tunnel mode is
+	 * encrypted so we can't check internal IP header.
+	 */
+	/*
+	 * search a valid state list for inbound packet.
+	 * the search order is not important.
+	 */
+	struct secashead *sah = NULL;
+	bool found_sa = false;
+
+	lck_mtx_lock(sadb_mutex);
+	LIST_FOREACH(sah, &sahtree, chain) {
+		if (sah->state == SADB_SASTATE_DEAD) {
+			continue;
+		}
+
+		if (sah->dir != IPSEC_DIR_OUTBOUND) {
+			continue;
+		}
+
+		if (family != sah->saidx.src.ss_family) {
+			continue;
+		}
+
+		struct sockaddr_in src_in = {};
+		struct sockaddr_in6 src_in6 = {};
+
+		/* check src address */
+		switch (family) {
+		case AF_INET:
+			src_in.sin_family = AF_INET;
+			src_in.sin_len = sizeof(src_in);
+			memcpy(&src_in.sin_addr, local_addr, sizeof(src_in.sin_addr));
+			if (key_sockaddrcmp((struct sockaddr*)&src_in,
+			    (struct sockaddr *)&sah->saidx.src, 0) != 0) {
+				continue;
+			}
+			break;
+		case AF_INET6:
+			src_in6.sin6_family = AF_INET6;
+			src_in6.sin6_len = sizeof(src_in6);
+			memcpy(&src_in6.sin6_addr, local_addr, sizeof(src_in6.sin6_addr));
+			if (IN6_IS_SCOPE_LINKLOCAL(&src_in6.sin6_addr)) {
+				/* kame fake scopeid */
+				src_in6.sin6_scope_id =
+				    ntohs(src_in6.sin6_addr.s6_addr16[1]);
+				src_in6.sin6_addr.s6_addr16[1] = 0;
+			}
+			if (key_sockaddrcmp((struct sockaddr*)&src_in6,
+			    (struct sockaddr *)&sah->saidx.src, 0) != 0) {
+				continue;
+			}
+			break;
+		default:
+			ipseclog((LOG_DEBUG, "key_checksa_present: "
+			    "unknown address family=%d.\n",
+			    family));
+			continue;
+		}
+
+		struct sockaddr_in dest_in = {};
+		struct sockaddr_in6 dest_in6 = {};
+
+		/* check dst address */
+		switch (family) {
+		case AF_INET:
+			dest_in.sin_family = AF_INET;
+			dest_in.sin_len = sizeof(dest_in);
+			memcpy(&dest_in.sin_addr, remote_addr, sizeof(dest_in.sin_addr));
+			if (key_sockaddrcmp((struct sockaddr*)&dest_in,
+			    (struct sockaddr *)&sah->saidx.dst, 0) != 0) {
+				continue;
+			}
+
+			break;
+		case AF_INET6:
+			dest_in6.sin6_family = AF_INET6;
+			dest_in6.sin6_len = sizeof(dest_in6);
+			memcpy(&dest_in6.sin6_addr, remote_addr, sizeof(dest_in6.sin6_addr));
+			if (IN6_IS_SCOPE_LINKLOCAL(&dest_in6.sin6_addr)) {
+				/* kame fake scopeid */
+				dest_in6.sin6_scope_id =
+				    ntohs(dest_in6.sin6_addr.s6_addr16[1]);
+				dest_in6.sin6_addr.s6_addr16[1] = 0;
+			}
+			if (key_sockaddrcmp((struct sockaddr*)&dest_in6,
+			    (struct sockaddr *)&sah->saidx.dst, 0) != 0) {
+				continue;
+			}
+
+			break;
+		default:
+			ipseclog((LOG_DEBUG, "key_checksa_present: "
+			    "unknown address family=%d.\n", family));
+			continue;
+		}
+
+		struct secasvar *nextsav = NULL;
+		for (u_int stateidx = 0; stateidx < _ARRAYLEN(saorder_state_alive); stateidx++) {
+			u_int state = saorder_state_alive[stateidx];
+			for (struct secasvar *sav = LIST_FIRST(&sah->savtree[state]); sav != NULL; sav = nextsav) {
+				nextsav = LIST_NEXT(sav, chain);
+				/* sanity check */
+				if (sav->state != state) {
+					ipseclog((LOG_DEBUG, "key_checksa_present: "
+					    "invalid sav->state "
+					    "(state: %d SA: %d)\n",
+					    state, sav->state));
+					continue;
+				}
+
+				if (sav->remote_ike_port != ntohs(remote_port)) {
+					continue;
+				}
+
+				if (sav->natt_encapsulated_src_port != local_port) {
+					continue;
+				}
+				found_sa = true;;
+				break;
+			}
+		}
+	}
+
+	/* not found */
+	lck_mtx_unlock(sadb_mutex);
+	return found_sa;
+}
+
 u_int16_t
 key_natt_get_translated_port(
 	struct secasvar *outsav)
@@ -1999,7 +2150,8 @@ key_msg2sp(
 				paddr = (struct sockaddr *)(xisr + 1);
 				uint8_t src_len = paddr->sa_len;
 
-				if (xisr->sadb_x_ipsecrequest_len < src_len) {
+				/* +sizeof(uint8_t) for dst_len below */
+				if (xisr->sadb_x_ipsecrequest_len < sizeof(*xisr) + src_len + sizeof(uint8_t)) {
 					ipseclog((LOG_DEBUG, "key_msg2sp: invalid request "
 					    "invalid source address length.\n"));
 					key_freesp(newsp, KEY_SADB_UNLOCKED);
@@ -2023,7 +2175,7 @@ key_msg2sp(
 				paddr = (struct sockaddr *)((caddr_t)paddr + paddr->sa_len);
 				uint8_t dst_len = paddr->sa_len;
 
-				if (xisr->sadb_x_ipsecrequest_len < (src_len + dst_len)) {
+				if (xisr->sadb_x_ipsecrequest_len < sizeof(*xisr) + src_len + dst_len) {
 					ipseclog((LOG_DEBUG, "key_msg2sp: invalid request "
 					    "invalid dest address length.\n"));
 					key_freesp(newsp, KEY_SADB_UNLOCKED);
@@ -4086,8 +4238,8 @@ key_delsav(
 	/* remove from SA header */
 	if (__LIST_CHAINED(sav)) {
 		LIST_REMOVE(sav, chain);
+		ipsec_sav_count--;
 	}
-	ipsec_sav_count--;
 
 	if (sav->spihash.le_prev || sav->spihash.le_next) {
 		LIST_REMOVE(sav, spihash);

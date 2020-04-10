@@ -152,6 +152,9 @@ static _Atomic uint32_t inflight_corpses;
 unsigned long  total_corpses_created = 0;
 boolean_t corpse_enabled_config = TRUE;
 
+/* bootarg to generate corpse with size up to max_footprint_mb */
+boolean_t corpse_threshold_system_limit = FALSE;
+
 /* bootarg to turn on corpse forking for EXC_RESOURCE */
 int exc_via_corpse_forking = 1;
 
@@ -189,6 +192,11 @@ corpses_init()
 	if (PE_parse_boot_argn("corpse_for_fatal_memkill", &fatal_memkill, sizeof(fatal_memkill))) {
 		corpse_for_fatal_memkill = fatal_memkill;
 	}
+#if DEBUG || DEVELOPMENT
+	if (PE_parse_boot_argn("-corpse_threshold_system_limit", &corpse_threshold_system_limit, sizeof(corpse_threshold_system_limit))) {
+		corpse_threshold_system_limit = TRUE;
+	}
+#endif /* DEBUG || DEVELOPMENT */
 }
 
 /*

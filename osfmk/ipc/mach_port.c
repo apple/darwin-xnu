@@ -725,9 +725,11 @@ mach_port_allocate_internal(
 		}
 
 		if (qosp->name) {
-			kr = ipc_port_alloc_name(space, *namep, &port);
+			kr = ipc_port_alloc_name(space, IPC_PORT_INIT_MESSAGE_QUEUE,
+			    *namep, &port);
 		} else {
-			kr = ipc_port_alloc(space, FALSE, namep, &port);
+			kr = ipc_port_alloc(space, IPC_PORT_INIT_MESSAGE_QUEUE,
+			    namep, &port);
 		}
 		if (kr == KERN_SUCCESS) {
 			if (kmsg != IKM_NULL) {
@@ -2499,14 +2501,18 @@ mach_port_construct(
 {
 	kern_return_t           kr;
 	ipc_port_t              port;
+	ipc_port_init_flags_t   init_flags = IPC_PORT_INIT_MESSAGE_QUEUE;
 
 	if (space == IS_NULL) {
 		return KERN_INVALID_TASK;
 	}
 
+	if (options->flags & MPO_INSERT_SEND_RIGHT) {
+		init_flags |= IPC_PORT_INIT_MAKE_SEND_RIGHT;
+	}
+
 	/* Allocate a new port in the IPC space */
-	kr = ipc_port_alloc(space, (options->flags & MPO_INSERT_SEND_RIGHT),
-	    name, &port);
+	kr = ipc_port_alloc(space, init_flags, name, &port);
 	if (kr != KERN_SUCCESS) {
 		return kr;
 	}

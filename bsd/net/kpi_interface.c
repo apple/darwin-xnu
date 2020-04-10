@@ -2826,7 +2826,6 @@ ifnet_get_local_ports_extended(ifnet_t ifp, protocol_family_t protocol,
     u_int32_t flags, u_int8_t *bitfield)
 {
 	u_int32_t ifindex;
-	u_int32_t inp_flags = 0;
 
 	if (bitfield == NULL) {
 		return EINVAL;
@@ -2847,26 +2846,15 @@ ifnet_get_local_ports_extended(ifnet_t ifp, protocol_family_t protocol,
 	if_ports_used_update_wakeuuid(ifp);
 
 
-	inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_WILDCARDOK) ?
-	    INPCB_GET_PORTS_USED_WILDCARDOK : 0);
-	inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_NOWAKEUPOK) ?
-	    INPCB_GET_PORTS_USED_NOWAKEUPOK : 0);
-	inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_RECVANYIFONLY) ?
-	    INPCB_GET_PORTS_USED_RECVANYIFONLY : 0);
-	inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_EXTBGIDLEONLY) ?
-	    INPCB_GET_PORTS_USED_EXTBGIDLEONLY : 0);
-	inp_flags |= ((flags & IFNET_GET_LOCAL_PORTS_ACTIVEONLY) ?
-	    INPCB_GET_PORTS_USED_ACTIVEONLY : 0);
-
 	ifindex = (ifp != NULL) ? ifp->if_index : 0;
 
 	if (!(flags & IFNET_GET_LOCAL_PORTS_TCPONLY)) {
-		udp_get_ports_used(ifindex, protocol, inp_flags,
+		udp_get_ports_used(ifindex, protocol, flags,
 		    bitfield);
 	}
 
 	if (!(flags & IFNET_GET_LOCAL_PORTS_UDPONLY)) {
-		tcp_get_ports_used(ifindex, protocol, inp_flags,
+		tcp_get_ports_used(ifindex, protocol, flags,
 		    bitfield);
 	}
 

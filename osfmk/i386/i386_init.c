@@ -854,9 +854,6 @@ do_init_slave(boolean_t fast_restart)
 #endif
 		/* update CPU microcode */
 		ucode_update_wake();
-
-		/* Do CPU workarounds after the microcode update */
-		cpuid_do_was();
 	} else {
 		init_param = FAST_SLAVE_INIT;
 	}

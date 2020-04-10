@@ -630,7 +630,7 @@ esp_gcm_mature(struct secasvar *sav)
 		break;
 	default:
 		ipseclog((LOG_ERR,
-		    "esp_gcm_mature %s: invalid algo %d.\n", sav->alg_enc));
+		    "esp_gcm_mature %s: invalid algo %d.\n", algo->name, sav->alg_enc));
 		return 1;
 	}
 
@@ -777,7 +777,7 @@ esp_cbc_decrypt(struct mbuf *m, size_t off, struct secasvar *sav,
 	}
 
 	if (m->m_pkthdr.len < bodyoff) {
-		ipseclog((LOG_ERR, "esp_cbc_decrypt %s: bad len %d/%lu\n",
+		ipseclog((LOG_ERR, "esp_cbc_decrypt %s: bad len %d/%u\n",
 		    algo->name, m->m_pkthdr.len, (u_int32_t)bodyoff));
 		m_freem(m);
 		return EINVAL;
@@ -1020,14 +1020,14 @@ esp_cbc_encrypt(
 	}
 
 	if (m->m_pkthdr.len < bodyoff) {
-		ipseclog((LOG_ERR, "esp_cbc_encrypt %s: bad len %d/%lu\n",
+		ipseclog((LOG_ERR, "esp_cbc_encrypt %s: bad len %d/%u\n",
 		    algo->name, m->m_pkthdr.len, (u_int32_t)bodyoff));
 		m_freem(m);
 		return EINVAL;
 	}
 	if ((m->m_pkthdr.len - bodyoff) % blocklen) {
 		ipseclog((LOG_ERR, "esp_cbc_encrypt %s: "
-		    "payload length must be multiple of %lu\n",
+		    "payload length must be multiple of %u\n",
 		    algo->name, (u_int32_t)algo->padbound));
 		m_freem(m);
 		return EINVAL;
@@ -1228,7 +1228,7 @@ esp_auth(
 	siz = (((*algo->sumsiz)(sav) + 3) & ~(4 - 1));
 	if (sizeof(sumbuf) < siz) {
 		ipseclog((LOG_DEBUG,
-		    "esp_auth: AH_MAXSUMSIZE is too small: siz=%lu\n",
+		    "esp_auth: AH_MAXSUMSIZE is too small: siz=%u\n",
 		    (u_int32_t)siz));
 		KERNEL_DEBUG(DBG_FNC_ESPAUTH | DBG_FUNC_END, 4, 0, 0, 0, 0);
 		return EINVAL;

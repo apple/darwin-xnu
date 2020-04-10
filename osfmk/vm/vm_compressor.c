@@ -598,12 +598,7 @@ vm_compressor_init(void)
 	PE_parse_boot_argn("vm_compression_limit", &vm_compression_limit, sizeof(vm_compression_limit));
 
 #ifdef CONFIG_EMBEDDED
-#if XNU_TARGET_OS_WATCH
-	// rdar://problem/51012698
-	vm_compressor_minorcompact_threshold_divisor = 40;
-#else
 	vm_compressor_minorcompact_threshold_divisor = 20;
-#endif
 	vm_compressor_majorcompact_threshold_divisor = 30;
 	vm_compressor_unthrottle_threshold_divisor = 40;
 	vm_compressor_catchup_threshold_divisor = 60;

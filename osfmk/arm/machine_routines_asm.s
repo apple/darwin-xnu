@@ -41,7 +41,7 @@ LEXT(machine_set_current_thread)
 	and		r2, r2, #3							// Extract cpu number
 	orr		r1, r1, r2							//
 	mcr		p15, 0, r1, c13, c0, 3				// Write TPIDRURO
-	ldr		r1, [r0, TH_CTH_DATA]
+	mov		r1, #0
 	mcr		p15, 0, r1, c13, c0, 2				// Write TPIDRURW
 	bx		lr
 

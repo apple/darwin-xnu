@@ -645,11 +645,12 @@ __BEGIN_DECLS
 #define DBG_MT_TMPCPU 0xff
 
 /* The Kernel Debug Sub Classes for DBG_MISC */
-#define DBG_EVENT              0x10
-#define DBG_MISC_INSTRUMENTS   0x11
-#define DBG_MISC_INSTRUMENTSBT 0x12
-#define DBG_MISC_LAYOUT        0x1a
-#define DBG_BUFFER             0x20
+#define DBG_MISC_COREBRIGHTNESS 0x01
+#define DBG_EVENT               0x10
+#define DBG_MISC_INSTRUMENTS    0x11
+#define DBG_MISC_INSTRUMENTSBT  0x12
+#define DBG_MISC_LAYOUT         0x1a
+#define DBG_BUFFER              0x20
 
 /* The Kernel Debug Sub Classes for DBG_DYLD */
 #define DBG_DYLD_UUID (5)

@@ -1051,4 +1051,10 @@ SYSCTL_PROC(_machdep_misc, OID_AUTO, spin_forever,
     0, 0,
     spin_in_the_kernel, "I", "Spin forever");
 
+
+extern int traptrace_enabled;
+SYSCTL_INT(_machdep_misc, OID_AUTO, traptrace_enabled,
+    CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &traptrace_enabled, 0, "Enabled/disable trap trace");
+
 #endif /* DEVELOPMENT || DEBUG */

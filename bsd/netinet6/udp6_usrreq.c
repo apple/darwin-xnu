@@ -133,6 +133,7 @@
 #include <netinet6/ipsec.h>
 #include <netinet6/ipsec6.h>
 #include <netinet6/esp6.h>
+#include <netkey/key.h>
 extern int ipsec_bypass;
 extern int esp_udp_encap_port;
 #endif /* IPSEC */
@@ -492,34 +493,49 @@ udp6_input(struct mbuf **mp, int *offp, int proto)
 	if (ipsec_bypass == 0 && (esp_udp_encap_port & 0xFFFF) != 0 &&
 	    (uh->uh_dport == ntohs((u_short)esp_udp_encap_port) ||
 	    uh->uh_sport == ntohs((u_short)esp_udp_encap_port))) {
-		int payload_len = ulen - sizeof(struct udphdr) > 4 ? 4 :
-		    ulen - sizeof(struct udphdr);
-
-		if (m->m_len < off + sizeof(struct udphdr) + payload_len) {
-			if ((m = m_pullup(m, off + sizeof(struct udphdr) +
-			    payload_len)) == NULL) {
-				udpstat.udps_hdrops++;
-				goto bad;
-			}
-			/*
-			 * Expect 32-bit aligned data pointer on strict-align
-			 * platforms.
-			 */
-			MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
-
-			ip6 = mtod(m, struct ip6_hdr *);
-			uh = (struct udphdr *)(void *)((caddr_t)ip6 + off);
+		/*
+		 * Check if ESP or keepalive:
+		 *      1. If the destination port of the incoming packet is 4500.
+		 *      2. If the source port of the incoming packet is 4500,
+		 *         then check the SADB to match IP address and port.
+		 */
+		bool check_esp = true;
+		if (uh->uh_dport != ntohs((u_short)esp_udp_encap_port)) {
+			check_esp = key_checksa_present(AF_INET6, (caddr_t)&ip6->ip6_dst,
+			    (caddr_t)&ip6->ip6_src, uh->uh_dport,
+			    uh->uh_sport);
 		}
-		/* Check for NAT keepalive packet */
-		if (payload_len == 1 && *(u_int8_t*)
-		    ((caddr_t)uh + sizeof(struct udphdr)) == 0xFF) {
-			goto bad;
-		} else if (payload_len == 4 && *(u_int32_t*)(void *)
-		    ((caddr_t)uh + sizeof(struct udphdr)) != 0) {
-			/* UDP encapsulated IPsec packet to pass through NAT */
-			/* preserve the udp header */
-			*offp = off + sizeof(struct udphdr);
-			return esp6_input(mp, offp, IPPROTO_UDP);
+
+		if (check_esp) {
+			int payload_len = ulen - sizeof(struct udphdr) > 4 ? 4 :
+			    ulen - sizeof(struct udphdr);
+
+			if (m->m_len < off + sizeof(struct udphdr) + payload_len) {
+				if ((m = m_pullup(m, off + sizeof(struct udphdr) +
+				    payload_len)) == NULL) {
+					udpstat.udps_hdrops++;
+					goto bad;
+				}
+				/*
+				 * Expect 32-bit aligned data pointer on strict-align
+				 * platforms.
+				 */
+				MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
+
+				ip6 = mtod(m, struct ip6_hdr *);
+				uh = (struct udphdr *)(void *)((caddr_t)ip6 + off);
+			}
+			/* Check for NAT keepalive packet */
+			if (payload_len == 1 && *(u_int8_t*)
+			    ((caddr_t)uh + sizeof(struct udphdr)) == 0xFF) {
+				goto bad;
+			} else if (payload_len == 4 && *(u_int32_t*)(void *)
+			    ((caddr_t)uh + sizeof(struct udphdr)) != 0) {
+				/* UDP encapsulated IPsec packet to pass through NAT */
+				/* preserve the udp header */
+				*offp = off + sizeof(struct udphdr);
+				return esp6_input(mp, offp, IPPROTO_UDP);
+			}
 		}
 	}
 #endif /* IPSEC */

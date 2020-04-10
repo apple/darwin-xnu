@@ -108,6 +108,8 @@
  *  taken when the port was destroyed.
  */
 
+struct task_watchport_elem;
+
 typedef unsigned int ipc_port_timestamp_t;
 
 struct ipc_port {
@@ -140,8 +142,6 @@ struct ipc_port {
 		struct ipc_kmsg *premsg;
 		struct turnstile *send_turnstile;
 	} kdata2;
-
-	struct task_watchport_elem *ip_watchport_elem;
 
 	mach_vm_address_t ip_context;
 
@@ -213,7 +213,7 @@ MACRO_END
 (IP_PREALLOC(port) ? &((port)->ip_premsg->ikm_turnstile) : &((port)->ip_send_turnstile))
 
 #define port_rcv_turnstile_address(port) \
-	(NULL)
+	&(port)->ip_messages.imq_wait_queue.waitq_ts
 
 
 /*
@@ -472,22 +472,31 @@ extern boolean_t ipc_port_clear_receiver(
 	ipc_port_t              port,
 	boolean_t               should_destroy);
 
+__options_decl(ipc_port_init_flags_t, uint32_t, {
+	IPC_PORT_INIT_NONE            = 0x00000000,
+	IPC_PORT_INIT_MAKE_SEND_RIGHT = 0x00000001,
+	IPC_PORT_INIT_MESSAGE_QUEUE   = 0x00000002,
+	IPC_PORT_INIT_SPECIAL_REPLY   = 0x00000004,
+});
+
 /* Initialize a newly-allocated port */
 extern void ipc_port_init(
 	ipc_port_t              port,
 	ipc_space_t             space,
+	ipc_port_init_flags_t   flags,
 	mach_port_name_t        name);
 
 /* Allocate a port */
 extern kern_return_t ipc_port_alloc(
 	ipc_space_t             space,
-	bool                    make_send_right,
+	ipc_port_init_flags_t   flags,
 	mach_port_name_t        *namep,
 	ipc_port_t              *portp);
 
 /* Allocate a port, with a specific name */
 extern kern_return_t ipc_port_alloc_name(
 	ipc_space_t             space,
+	ipc_port_init_flags_t   flags,
 	mach_port_name_t        name,
 	ipc_port_t              *portp);
 
@@ -559,8 +568,7 @@ ipc_port_adjust_sync_link_state_locked(
 void
 ipc_port_adjust_special_reply_port(
 	ipc_port_t special_reply_port,
-	uint8_t flags,
-	boolean_t get_turnstile);
+	uint8_t flags);
 
 void
 ipc_port_adjust_port_locked(
@@ -686,7 +694,8 @@ extern void ipc_port_finalize(
 
 /* Allocate a port in a special space */
 extern ipc_port_t ipc_port_alloc_special(
-	ipc_space_t     space);
+	ipc_space_t             space,
+	ipc_port_init_flags_t   flags);
 
 /* Deallocate a port in a special space */
 extern void ipc_port_dealloc_special(
@@ -711,12 +720,12 @@ extern void ipc_port_send_update_inheritor(ipc_port_t port,
     turnstile_update_flags_t flags);
 
 #define ipc_port_alloc_kernel()         \
-	        ipc_port_alloc_special(ipc_space_kernel)
+	        ipc_port_alloc_special(ipc_space_kernel, IPC_PORT_INIT_NONE)
 #define ipc_port_dealloc_kernel(port)   \
 	        ipc_port_dealloc_special((port), ipc_space_kernel)
 
 #define ipc_port_alloc_reply()          \
-	        ipc_port_alloc_special(ipc_space_reply)
+	        ipc_port_alloc_special(ipc_space_reply, IPC_PORT_INIT_MESSAGE_QUEUE)
 #define ipc_port_dealloc_reply(port)    \
 	        ipc_port_dealloc_special((port), ipc_space_reply)
 

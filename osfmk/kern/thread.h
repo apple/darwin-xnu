@@ -178,9 +178,8 @@ struct thread {
 		struct priority_queue_entry     wait_prioq_links;       /* priority ordered waitq links */
 	};
 
-	processor_t             runq;           /* run queue assignment */
-
 	event64_t               wait_event;     /* wait queue event */
+	processor_t             runq;           /* run queue assignment */
 	struct waitq           *waitq;          /* wait queue this thread is enqueued on */
 	struct turnstile       *turnstile;      /* thread's turnstile, protected by primitives interlock */
 	void                   *inheritor;      /* inheritor of the primitive the thread will block on */
@@ -204,7 +203,7 @@ struct thread {
 	decl_simple_lock_data(, sched_lock);     /* scheduling lock (thread_lock()) */
 	decl_simple_lock_data(, wake_lock);      /* for thread stop / wait (wake_lock()) */
 #endif
-	integer_t               options;                        /* options set by thread itself */
+	uint16_t                options;                        /* options set by thread itself */
 #define TH_OPT_INTMASK          0x0003          /* interrupt / abort level */
 #define TH_OPT_VMPRIV           0x0004          /* may allocate reserved memory */
 #define TH_OPT_SYSTEM_CRITICAL  0x0010          /* Thread must always be allowed to run - even under heavy load */
@@ -217,8 +216,8 @@ struct thread {
 #define TH_OPT_SEND_IMPORTANCE  0x0800          /* Thread will allow importance donation from kernel rpc */
 #define TH_OPT_ZONE_GC          0x1000          /* zone_gc() called on this thread */
 
-	boolean_t                       wake_active;    /* wake event on stop */
-	int                                     at_safe_point;  /* thread_abort_safely allowed */
+	bool                            wake_active;    /* wake event on stop */
+	bool                            at_safe_point;  /* thread_abort_safely allowed */
 	ast_t                           reason;                 /* why we blocked */
 	uint32_t                        quantum_remaining;
 	wait_result_t                   wait_result;    /* outcome of wait -
@@ -349,9 +348,8 @@ struct thread {
 	uint64_t                        safe_release;   /* when to release fail-safe */
 
 	/* Call out from scheduler */
-	void                            (*sched_call)(
-		int                     type,
-		thread_t        thread);
+	void                            (*sched_call)(int type, thread_t thread);
+
 #if defined(CONFIG_SCHED_PROTO)
 	uint32_t                        runqueue_generation;    /* last time runqueue was drained */
 #endif
@@ -388,18 +386,16 @@ struct thread {
 	uint64_t                wait_sfi_begin_time;    /* start time for thread waiting in SFI */
 #endif
 
-	/* Timed wait expiration */
-	timer_call_data_t       wait_timer;
-	integer_t                       wait_timer_active;
-	boolean_t                       wait_timer_is_set;
-
-
 	/*
 	 * Processor/cache affinity
 	 * - affinity_threads links task threads with the same affinity set
 	 */
-	affinity_set_t                  affinity_set;
 	queue_chain_t                   affinity_threads;
+	affinity_set_t                  affinity_set;
+
+#if CONFIG_EMBEDDED
+	task_watch_t *  taskwatch;              /* task watch */
+#endif /* CONFIG_EMBEDDED */
 
 	/* Various bits of state to stash across a continuation, exclusive to the current thread block point */
 	union {
@@ -407,7 +403,7 @@ struct thread {
 			mach_msg_return_t       state;          /* receive state */
 			mach_port_seqno_t       seqno;          /* seqno of recvd message */
 			ipc_object_t            object;         /* object received on */
-			mach_vm_address_t       msg_addr;       /* receive buffer pointer */
+			vm_address_t            msg_addr;       /* receive buffer pointer */
 			mach_msg_size_t         rsize;          /* max size for recvd msg */
 			mach_msg_size_t         msize;          /* actual size for recvd msg */
 			mach_msg_option_t       option;         /* options for receive */
@@ -463,26 +459,28 @@ struct thread {
 	struct ipc_kmsg_queue ith_messages;             /* messages to reap */
 	mach_port_t ith_rpc_reply;                      /* reply port for kernel RPCs */
 
+	/* Pending thread ast(s) */
+	ast_t                                   ast;
+
 	/* Ast/Halt data structures */
-	vm_offset_t                                     recover;                /* page fault recover(copyin/out) */
+	vm_offset_t                             recover;                /* page fault recover(copyin/out) */
 
 	queue_chain_t                           threads;                /* global list of all threads */
 
 	/* Activation */
-	queue_chain_t                   task_threads;
+	queue_chain_t                           task_threads;
 
 	/* Task membership */
 	struct task                             *task;
 	vm_map_t                                map;
 #if DEVELOPMENT || DEBUG
-	boolean_t pmap_footprint_suspended;
+	bool      pmap_footprint_suspended;
 #endif /* DEVELOPMENT || DEBUG */
 
-	decl_lck_mtx_data(, mutex);
-
-
-	/* Pending thread ast(s) */
-	ast_t                                   ast;
+	/* Timed wait expiration */
+	timer_call_data_t       wait_timer;
+	uint16_t                wait_timer_active;
+	bool                    wait_timer_is_set;
 
 	/* Miscellaneous bits guarded by mutex */
 	uint32_t
@@ -494,6 +492,8 @@ struct thread {
 	    suspend_parked:1,                           /* thread parked in thread_suspended */
 	    corpse_dup:1,                               /* TRUE when thread is an inactive duplicate in a corpse */
 	:0;
+
+	decl_lck_mtx_data(, mutex);
 
 	/* Ports associated with this thread */
 	struct ipc_port                 *ith_self;                      /* not a right, doesn't hold ref */
@@ -528,15 +528,21 @@ struct thread {
 #define T_KPERF_CALLSTACK_DEPTH_OFFSET     (24)
 #define T_KPERF_SET_CALLSTACK_DEPTH(DEPTH) (((uint32_t)(DEPTH)) << T_KPERF_CALLSTACK_DEPTH_OFFSET)
 #define T_KPERF_GET_CALLSTACK_DEPTH(FLAGS) ((FLAGS) >> T_KPERF_CALLSTACK_DEPTH_OFFSET)
+#define T_KPERF_ACTIONID_OFFSET            (18)
+#define T_KPERF_SET_ACTIONID(AID)          (((uint32_t)(AID)) << T_KPERF_ACTIONID_OFFSET)
+#define T_KPERF_GET_ACTIONID(FLAGS)        ((FLAGS) >> T_KPERF_ACTIONID_OFFSET)
 #endif
 
-#define T_KPERF_AST_CALLSTACK (1U << 0) /* dump a callstack on thread's next AST */
-#define T_KPERF_AST_DISPATCH  (1U << 1) /* dump a name on thread's next AST */
-#define T_KPC_ALLOC           (1U << 2) /* thread needs a kpc_buf allocated */
-/* only go up to T_KPERF_CALLSTACK_DEPTH_OFFSET - 1 */
+#define T_KPERF_AST_CALLSTACK 0x1 /* dump a callstack on thread's next AST */
+#define T_KPERF_AST_DISPATCH  0x2 /* dump a name on thread's next AST */
+#define T_KPC_ALLOC           0x4 /* thread needs a kpc_buf allocated */
+
+#define T_KPERF_AST_ALL \
+    (T_KPERF_AST_CALLSTACK | T_KPERF_AST_DISPATCH | T_KPC_ALLOC)
+/* only go up to T_KPERF_ACTIONID_OFFSET - 1 */
 
 #ifdef KPERF
-	uint32_t kperf_flags;
+	uint32_t kperf_ast;
 	uint32_t kperf_pet_gen;  /* last generation of PET that sampled this thread*/
 	uint32_t kperf_c_switch; /* last dispatch detection */
 	uint32_t kperf_pet_cnt;  /* how many times a thread has been sampled by PET */
@@ -552,8 +558,6 @@ struct thread {
 	void *hv_thread_target;
 #endif /* HYPERVISOR */
 
-	uint64_t thread_id;             /*system wide unique thread-id*/
-
 	/* Statistics accumulated per-thread and aggregated per-task */
 	uint32_t                syscalls_unix;
 	uint32_t                syscalls_mach;
@@ -562,6 +566,8 @@ struct thread {
 	ledger_t                t_bankledger;                /* ledger to charge someone */
 	uint64_t                t_deduct_bank_ledger_time;   /* cpu time to be deducted from bank ledger */
 	uint64_t                t_deduct_bank_ledger_energy; /* energy to be deducted from bank ledger */
+
+	uint64_t thread_id;             /*system wide unique thread-id*/
 
 #if MONOTONIC
 	struct mt_thread t_monotonic;
@@ -584,15 +590,11 @@ struct thread {
 	} *overrides;
 
 	uint32_t        kevent_overrides;
-	uint16_t        user_promotion_basepri;
-	uint16_t         kern_promotion_schedpri;
+	uint8_t         user_promotion_basepri;
+	uint8_t         kern_promotion_schedpri;
 	_Atomic uint16_t kevent_ast_bits;
 
 	io_stat_info_t                  thread_io_stats; /* per-thread I/O statistics */
-
-#if CONFIG_EMBEDDED
-	task_watch_t *  taskwatch;              /* task watch */
-#endif /* CONFIG_EMBEDDED */
 
 	uint32_t                        thread_callout_interrupt_wakeups;
 	uint32_t                        thread_callout_platform_idle_wakeups;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2011-2019 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -26,6 +26,13 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-/* pend ast bits on a thread */
-extern int kperf_ast_pend(thread_t thread, uint32_t flags);
-extern void kperf_ast_set_callstack_depth(thread_t thread, uint32_t depth);
+/*
+ * Ensure that kperf is informed the next time this thread goes back to user
+ * space, to handle an action.
+ */
+int kperf_ast_pend(thread_t thread, uint32_t flags, unsigned int actionid);
+
+/*
+ * Set the depth for the user callstack sample.
+ */
+void kperf_ast_set_callstack_depth(thread_t thread, uint32_t depth);

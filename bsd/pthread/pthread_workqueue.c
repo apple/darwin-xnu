@@ -1856,6 +1856,7 @@ fixedpri:
 		}
 	}
 
+
 done:
 	if (qos_rv && voucher_rv) {
 		/* Both failed, give that a unique error. */
@@ -3239,6 +3240,8 @@ workq_select_threadreq_or_park_and_unlock(proc_t p, struct workqueue *wq,
 
 	workq_thread_reset_pri(wq, uth, req, /*unpark*/ true);
 
+	thread_unfreeze_base_pri(uth->uu_thread);
+#if 0 // <rdar://problem/55259863> to turn this back on
 	if (__improbable(thread_unfreeze_base_pri(uth->uu_thread) && !is_creator)) {
 		if (req_ts) {
 			workq_perform_turnstile_operation_locked(wq, ^{
@@ -3251,6 +3254,7 @@ workq_select_threadreq_or_park_and_unlock(proc_t p, struct workqueue *wq,
 		WQ_TRACE_WQ(TRACE_wq_select_threadreq | DBG_FUNC_NONE, wq, 3, 0, 0, 0);
 		goto park_thawed;
 	}
+#endif
 
 	/*
 	 * We passed all checks, dequeue the request, bind to it, and set it up
@@ -3321,7 +3325,9 @@ workq_select_threadreq_or_park_and_unlock(proc_t p, struct workqueue *wq,
 
 park:
 	thread_unfreeze_base_pri(uth->uu_thread);
+#if 0 // <rdar://problem/55259863>
 park_thawed:
+#endif
 	workq_park_and_unlock(p, wq, uth, setup_flags);
 }
 

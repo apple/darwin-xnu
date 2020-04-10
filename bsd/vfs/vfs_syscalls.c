@@ -1966,11 +1966,10 @@ checkdirs_callback(proc_t p, void * arg)
 	vnode_t olddp = cdrp->olddp;
 	vnode_t newdp = cdrp->newdp;
 	struct filedesc *fdp;
-	vnode_t tvp;
-	vnode_t fdp_cvp;
-	vnode_t fdp_rvp;
-	int cdir_changed = 0;
-	int rdir_changed = 0;
+	vnode_t new_cvp = newdp;
+	vnode_t new_rvp = newdp;
+	vnode_t old_cvp = NULL;
+	vnode_t old_rvp = NULL;
 
 	/*
 	 * XXX Also needs to iterate each thread in the process to see if it
@@ -1978,36 +1977,68 @@ checkdirs_callback(proc_t p, void * arg)
 	 * XXX update that as well.
 	 */
 
+	/*
+	 * First, with the proc_fdlock held, check to see if we will need
+	 * to do any work.  If not, we will get out fast.
+	 */
 	proc_fdlock(p);
 	fdp = p->p_fd;
-	if (fdp == (struct filedesc *)0) {
+	if (fdp == NULL ||
+	    (fdp->fd_cdir != olddp && fdp->fd_rdir != olddp)) {
 		proc_fdunlock(p);
 		return PROC_RETURNED;
 	}
-	fdp_cvp = fdp->fd_cdir;
-	fdp_rvp = fdp->fd_rdir;
 	proc_fdunlock(p);
 
-	if (fdp_cvp == olddp) {
-		vnode_ref(newdp);
-		tvp = fdp->fd_cdir;
-		fdp_cvp = newdp;
-		cdir_changed = 1;
-		vnode_rele(tvp);
+	/*
+	 * Ok, we will have to do some work.  Always take two refs
+	 * because we might need that many.  We'll dispose of whatever
+	 * we ended up not using.
+	 */
+	if (vnode_ref(newdp) != 0) {
+		return PROC_RETURNED;
 	}
-	if (fdp_rvp == olddp) {
-		vnode_ref(newdp);
-		tvp = fdp->fd_rdir;
-		fdp_rvp = newdp;
-		rdir_changed = 1;
-		vnode_rele(tvp);
+	if (vnode_ref(newdp) != 0) {
+		vnode_rele(newdp);
+		return PROC_RETURNED;
 	}
-	if (cdir_changed || rdir_changed) {
-		proc_fdlock(p);
-		fdp->fd_cdir = fdp_cvp;
-		fdp->fd_rdir = fdp_rvp;
-		proc_fdunlock(p);
+
+	/*
+	 * Now do the work.  Note: we dropped the proc_fdlock, so we
+	 * have to do all of the checks again.
+	 */
+	proc_fdlock(p);
+	fdp = p->p_fd;
+	if (fdp != NULL) {
+		if (fdp->fd_cdir == olddp) {
+			old_cvp = olddp;
+			fdp->fd_cdir = newdp;
+			new_cvp = NULL;
+		}
+		if (fdp->fd_rdir == olddp) {
+			old_rvp = olddp;
+			fdp->fd_rdir = newdp;
+			new_rvp = NULL;
+		}
 	}
+	proc_fdunlock(p);
+
+	/*
+	 * Dispose of any references that are no longer needed.
+	 */
+	if (old_cvp != NULL) {
+		vnode_rele(old_cvp);
+	}
+	if (old_rvp != NULL) {
+		vnode_rele(old_rvp);
+	}
+	if (new_cvp != NULL) {
+		vnode_rele(new_cvp);
+	}
+	if (new_rvp != NULL) {
+		vnode_rele(new_rvp);
+	}
+
 	return PROC_RETURNED;
 }
 

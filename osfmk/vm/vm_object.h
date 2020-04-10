@@ -184,6 +184,7 @@ struct vm_object {
 	                                         * copy_call.
 	                                         */
 	struct vm_object        *shadow;        /* My shadow */
+	memory_object_t         pager;          /* Where to get data */
 
 	union {
 		vm_object_offset_t vou_shadow_offset;   /* Offset into shadow */
@@ -196,7 +197,6 @@ struct vm_object {
 		                                 */
 	} vo_un2;
 
-	memory_object_t         pager;          /* Where to get data */
 	vm_object_offset_t      paging_offset;  /* Offset into memory object */
 	memory_object_control_t pager_control;  /* Where data comes back */
 
@@ -328,12 +328,12 @@ struct vm_object {
 	 * they are updated via atomic compare and swap
 	 */
 	vm_object_offset_t      last_alloc;     /* last allocation offset */
+	vm_offset_t             cow_hint;       /* last page present in     */
+	                                        /* shadow but not in object */
 	int                     sequential;     /* sequential access size */
 
 	uint32_t                pages_created;
 	uint32_t                pages_used;
-	vm_offset_t             cow_hint;       /* last page present in     */
-	                                        /* shadow but not in object */
 	/* hold object lock when altering */
 	unsigned        int
 	    wimg_bits:8,                /* cache WIMG bits         */
@@ -373,8 +373,8 @@ struct vm_object {
 #endif /* VM_OBJECT_ACCESS_TRACKING */
 
 	uint8_t                 scan_collisions;
+	uint8_t                 __object4_unused_bits[1];
 	vm_tag_t                wire_tag;
-	uint8_t                 __object4_unused_bits[2];
 
 #if CONFIG_PHANTOM_CACHE
 	uint32_t                phantom_object_id;

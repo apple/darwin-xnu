@@ -35,6 +35,7 @@
 
 #include <mach/machine/_structs.h>
 #include <mach/message.h>
+#include <mach/vm_types.h>
 #include <mach/arm/thread_state.h>
 
 /*
@@ -277,6 +278,21 @@ const_thread_state64(const arm_unified_thread_state_t *its)
 
 #define ARM_SAVED_STATE (THREAD_STATE_NONE + 1)
 
+#if __ARM_VFP__
+#define VFPSAVE_ALIGN  16
+#define VFPSAVE_ATTRIB __attribute__((aligned (VFPSAVE_ALIGN)))
+#define THREAD_ALIGN   VFPSAVE_ALIGN
+
+/*
+ * vector floating point saved state
+ */
+struct arm_vfpsaved_state {
+	uint32_t r[64];
+	uint32_t fpscr;
+	uint32_t fpexc;
+};
+#endif
+
 struct arm_saved_state {
 	uint32_t r[13];     /* General purpose register r0-r12 */
 	uint32_t sp;        /* Stack pointer r13 */
@@ -286,6 +302,15 @@ struct arm_saved_state {
 	uint32_t fsr;       /* Fault status */
 	uint32_t far;       /* Virtual Fault Address */
 	uint32_t exception; /* exception number */
+
+#if __ARM_VFP__
+	/* VFP state */
+	struct arm_vfpsaved_state VFPdata VFPSAVE_ATTRIB;
+	// for packing reasons chtread_self and DebugData
+	// are inside the the PcbData when __ARM_VFP__ is set
+	arm_debug_state_t        *VFPpadding_DebugData;
+	vm_address_t              VFPpadding_cthread_self;
+#endif
 };
 typedef struct arm_saved_state arm_saved_state_t;
 

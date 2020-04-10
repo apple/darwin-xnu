@@ -35,17 +35,26 @@
 #include "kperf_kpc.h"
 #include "meminfo.h"
 
+/*
+ * For data that must be sampled in a fault-able context.
+ */
+struct kperf_usample {
+	struct kperf_thread_dispatch th_dispatch;
+	struct kp_ucallstack ucallstack;
+	struct kperf_thread_info th_info;
+};
+
 struct kperf_sample {
 	struct kperf_thread_info       th_info;
 	struct kperf_thread_scheduling th_scheduling;
 	struct kperf_thread_snapshot   th_snapshot;
-	struct kperf_thread_dispatch   th_dispatch;
 
 	struct kperf_task_snapshot tk_snapshot;
 
 	struct kp_kcallstack kcallstack;
-	struct kp_ucallstack ucallstack;
 	struct meminfo     meminfo;
+
+	struct kperf_usample usample;
 
 #if KPC
 	struct kpcdata    kpcdata;

@@ -258,7 +258,6 @@ block:
 		if ((thread_continue_t)continuation != THREAD_CONTINUE_NULL) {
 			ut->uu_continuation = continuation;
 			ut->uu_pri  = pri;
-			ut->uu_timo = abstime? 1: 0;
 			ut->uu_mtx  = mtx;
 			(void) thread_block(_sleep_continue);
 			/* NOTREACHED */

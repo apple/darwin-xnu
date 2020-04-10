@@ -562,6 +562,7 @@ void memorystatus_proc_flags_unsafe(void * v, boolean_t *is_dirty, boolean_t *is
 
 #if __arm64__
 void memorystatus_act_on_legacy_footprint_entitlement(proc_t p, boolean_t footprint_increase);
+void memorystatus_act_on_ios13extended_footprint_entitlement(proc_t p);
 #endif /* __arm64__ */
 
 #endif /* CONFIG_MEMORYSTATUS */

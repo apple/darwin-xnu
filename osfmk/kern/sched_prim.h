@@ -454,6 +454,8 @@ __BEGIN_DECLS
 
 #ifdef  XNU_KERNEL_PRIVATE
 
+extern void thread_bind_cluster_type(char cluster_type);
+
 /* Toggles a global override to turn off CPU Throttling */
 extern void     sys_override_cpu_throttle(boolean_t enable_override);
 

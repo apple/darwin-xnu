@@ -69,22 +69,6 @@
 #include <arm/proc_reg.h>
 #endif
 
-#if __ARM_VFP__
-
-#define VFPSAVE_ALIGN  16
-#define VFPSAVE_ATTRIB __attribute__((aligned (VFPSAVE_ALIGN)))
-#define THREAD_ALIGN   VFPSAVE_ALIGN
-
-/*
- * vector floating point saved state
- */
-struct arm_vfpsaved_state {
-	uint32_t r[64];
-	uint32_t fpscr;
-	uint32_t fpexc;
-};
-#endif
-
 struct perfcontrol_state {
 	uint64_t opaque[8] __attribute__((aligned(8)));
 };
@@ -103,26 +87,31 @@ typedef struct arm_saved_state machine_thread_kernel_state;
 #include <kern/thread_kernel_state.h>
 
 struct machine_thread {
+#if __ARM_USER_PROTECT__
+	unsigned int              uptw_ttc;
+	unsigned int              uptw_ttb;
+	unsigned int              kptw_ttb;
+	unsigned int              asid;
+#endif
+
 #if __arm64__
 	arm_context_t *           contextData;             /* allocated user context */
 	arm_saved_state_t *       upcb;                    /* pointer to user GPR state */
 	arm_neon_saved_state_t *  uNeon;                   /* pointer to user VFP state */
 #elif __arm__
 	struct arm_saved_state    PcbData;
-#if __ARM_VFP__
-	struct arm_vfpsaved_state uVFPdata VFPSAVE_ATTRIB;
-	struct arm_vfpsaved_state kVFPdata VFPSAVE_ATTRIB;
-#endif /* __ARM_VFP__ */
-
 #else
 #error Unknown arch
 #endif
 
-#if __ARM_USER_PROTECT__
-	unsigned int              uptw_ttc;
-	unsigned int              uptw_ttb;
-	unsigned int              kptw_ttb;
-	unsigned int              asid;
+#if defined(__arm__) && defined(__ARM_VFP__)
+	// for packing reasons chtread_self and DebugData
+	// are inside the the PcbData when __ARM_VFP__ is set
+#define DebugData    PcbData.VFPpadding_DebugData
+#define cthread_self PcbData.VFPpadding_cthread_self
+#else
+	arm_debug_state_t        *DebugData;
+	vm_address_t              cthread_self;               /* for use of cthread package */
 #endif
 
 	vm_offset_t               kstackptr;                  /* top of kernel stack */
@@ -138,10 +127,6 @@ struct machine_thread {
 
 	uint8_t                   machine_thread_flags;
 #endif /* __ARM_SMP__ */
-
-	arm_debug_state_t *       DebugData;
-	mach_vm_address_t         cthread_self;               /* for use of cthread package */
-	mach_vm_address_t         cthread_data;               /* for use of cthread package */
 
 	struct perfcontrol_state  perfctrl_state;
 #if __arm64__

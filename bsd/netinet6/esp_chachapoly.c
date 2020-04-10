@@ -442,7 +442,7 @@ esp_chachapoly_decrypt(struct mbuf *m, // head of mbuf chain
 
 	// check if total packet length is enough to contain ESP + IV
 	if (m->m_pkthdr.len < bodyoff) {
-		esp_packet_log_err("ChaChaPoly Packet too short %d < %zu, SPI 0x%08x",
+		esp_packet_log_err("ChaChaPoly Packet too short %d < %u, SPI 0x%08x",
 		    m->m_pkthdr.len, bodyoff, ntohl(sav->spi));
 		m_freem(m);
 		return EINVAL;

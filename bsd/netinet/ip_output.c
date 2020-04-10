@@ -3074,7 +3074,7 @@ ip_pcbopts(int optname, struct mbuf **pcbopt, struct mbuf *m)
 			ovbcopy((caddr_t)(&cp[IPOPT_OFFSET + 1] +
 			    sizeof(struct in_addr)),
 			    (caddr_t)&cp[IPOPT_OFFSET + 1],
-			    (unsigned)cnt + sizeof(struct in_addr));
+			    (unsigned)cnt - (IPOPT_MINOFF - 1));
 			break;
 		}
 	}

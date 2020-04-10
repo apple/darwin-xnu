@@ -295,12 +295,14 @@ void workq_kern_threadreq_unlock(struct proc *p);
 
 void workq_kern_threadreq_redrive(struct proc *p, workq_kern_threadreq_flags_t flags);
 
+// This enum matches _pthread_set_flags in libpthread's qos_private.h
 enum workq_set_self_flags {
-	WORKQ_SET_SELF_QOS_FLAG = 0x1,
-	WORKQ_SET_SELF_VOUCHER_FLAG = 0x2,
-	WORKQ_SET_SELF_FIXEDPRIORITY_FLAG = 0x4,
-	WORKQ_SET_SELF_TIMESHARE_FLAG = 0x8,
-	WORKQ_SET_SELF_WQ_KEVENT_UNBIND = 0x10,
+	WORKQ_SET_SELF_QOS_FLAG             = 0x01,
+	WORKQ_SET_SELF_VOUCHER_FLAG         = 0x02,
+	WORKQ_SET_SELF_FIXEDPRIORITY_FLAG   = 0x04,
+	WORKQ_SET_SELF_TIMESHARE_FLAG       = 0x08,
+	WORKQ_SET_SELF_WQ_KEVENT_UNBIND     = 0x10,
+	WORKQ_SET_SELF_ALTERNATE_AMX        = 0x20,
 };
 
 void workq_proc_suspended(struct proc *p);

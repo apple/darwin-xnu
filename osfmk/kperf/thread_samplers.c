@@ -321,9 +321,11 @@ out:
 }
 
 int
-kperf_thread_dispatch_pend(struct kperf_context *context)
+kperf_thread_dispatch_pend(struct kperf_context *context,
+    unsigned int actionid)
 {
-	return kperf_ast_pend(context->cur_thread, T_KPERF_AST_DISPATCH);
+	return kperf_ast_pend(context->cur_thread, T_KPERF_AST_DISPATCH,
+	           actionid);
 }
 
 void

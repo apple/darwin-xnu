@@ -68,13 +68,14 @@ union in_addr_4_6 {
 	struct in6_addr _in_a_6;
 };
 
-#define NPIF_IPV4       0x00000001
-#define NPIF_IPV6       0x00000002
-#define NPIF_TCP        0x00000004
-#define NPIF_UDP        0x00000008
-#define NPIF_DELEGATED  0x00000010
-#define NPIF_SOCKET     0x00000020
-#define NPIF_CHANNEL    0x00000040
+#define NPIF_IPV4       0x0001
+#define NPIF_IPV6       0x0002
+#define NPIF_TCP        0x0004
+#define NPIF_UDP        0x0008
+#define NPIF_DELEGATED  0x0010
+#define NPIF_SOCKET     0x0020
+#define NPIF_CHANNEL    0x0040
+#define NPIF_LISTEN     0x0080
 
 struct net_port_info {
 	uint16_t                npi_if_index;

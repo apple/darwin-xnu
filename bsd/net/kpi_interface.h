@@ -3193,6 +3193,7 @@ extern errno_t ifnet_get_local_ports(ifnet_t ifp, u_int8_t *bitfield);
 #define IFNET_GET_LOCAL_PORTS_RECVANYIFONLY     0x10
 #define IFNET_GET_LOCAL_PORTS_EXTBGIDLEONLY     0x20
 #define IFNET_GET_LOCAL_PORTS_ACTIVEONLY        0x40
+#define IFNET_GET_LOCAL_PORTS_ANYTCPSTATEOK     0x80
 /*
  *       @function ifnet_get_local_ports_extended
  *       @discussion Returns a bitfield indicating which local ports of the
@@ -3230,6 +3231,9 @@ extern errno_t ifnet_get_local_ports(ifnet_t ifp, u_int8_t *bitfield);
  *               IFNET_GET_LOCAL_PORTS_ACTIVEONLY: When bit is set, the
  *               port is in the list only if the socket is not in a final TCP
  *               state or the connection is not idle in a final TCP state
+ *               IFNET_GET_LOCAL_PORTS_ANYTCPSTATEOK: When bit is set, the
+ *               port is in the list for all the TCP states except CLOSED
+ *               and TIME_WAIT
  *       @param bitfield A pointer to 8192 bytes.
  *       @result Returns 0 on success.
  */

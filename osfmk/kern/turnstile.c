@@ -1896,9 +1896,8 @@ thread_get_waiting_turnstile(thread_t thread)
 		return turnstile;
 	}
 
-	/* Get the safeq if the waitq is a port queue */
-	if (waitq_is_port_queue(waitq)) {
-		waitq = waitq_get_safeq(waitq);
+	if (waitq_is_turnstile_proxy(waitq)) {
+		return waitq->waitq_ts;
 	}
 
 	/* Check if the waitq is a turnstile queue */
@@ -1952,8 +1951,11 @@ thread_get_update_flags_for_turnstile_propagation_stoppage(thread_t thread)
 	}
 
 	/* Get the safeq if the waitq is a port queue */
-	if (waitq_is_port_queue(waitq)) {
-		waitq = waitq_get_safeq(waitq);
+	if (waitq_is_turnstile_proxy(waitq)) {
+		if (waitq->waitq_ts) {
+			return TSU_NO_PRI_CHANGE_NEEDED;
+		}
+		return TSU_NO_TURNSTILE;
 	}
 
 	/* Check if the waitq is a turnstile queue */

@@ -270,42 +270,6 @@ lt_upgrade_downgrade_rw()
 	lck_rw_done(&lt_rwlock);
 }
 
-const int limit = 1000000;
-static int lt_stress_local_counters[MAX_CPUS];
-
-static void
-lt_stress_hw_lock()
-{
-	int local_counter = 0;
-
-	uint cpuid = current_processor()->cpu_id;
-
-	kprintf("%s>cpu %d starting\n", __FUNCTION__, cpuid);
-
-	hw_lock_lock(&lt_hw_lock, LCK_GRP_NULL);
-	lt_counter++;
-	local_counter++;
-	hw_lock_unlock(&lt_hw_lock);
-
-	while (lt_counter < lt_target_done_threads) {
-		;
-	}
-
-	kprintf("%s>cpu %d started\n", __FUNCTION__, cpuid);
-
-	while (lt_counter < limit) {
-		hw_lock_lock(&lt_hw_lock, LCK_GRP_NULL);
-		if (lt_counter < limit) {
-			lt_counter++;
-			local_counter++;
-		}
-		hw_lock_unlock(&lt_hw_lock);
-	}
-
-	lt_stress_local_counters[cpuid] = local_counter;
-
-	kprintf("%s>final counter %d cpu %d incremented the counter %d times\n", __FUNCTION__, lt_counter, cpuid, local_counter);
-}
 
 static void
 lt_grab_hw_lock()
@@ -596,29 +560,6 @@ lt_thread(void *arg, wait_result_t wres __unused)
 }
 
 static void
-lt_bound_thread(void *arg, wait_result_t wres __unused)
-{
-	void (*func)(void) = (void (*)(void))arg;
-
-	int cpuid = OSIncrementAtomic((volatile SInt32 *)&lt_cpu_bind_id);
-
-	processor_t processor = processor_list;
-	while ((processor != NULL) && (processor->cpu_id != cpuid)) {
-		processor = processor->processor_list;
-	}
-
-	if (processor != NULL) {
-		thread_bind(processor);
-	}
-
-	thread_block(THREAD_CONTINUE_NULL);
-
-	func();
-
-	OSIncrementAtomic((volatile SInt32*) &lt_done_threads);
-}
-
-static void
 lt_start_lock_thread(thread_continue_t func)
 {
 	thread_t thread;
@@ -630,18 +571,6 @@ lt_start_lock_thread(thread_continue_t func)
 	thread_deallocate(thread);
 }
 
-
-static void
-lt_start_lock_thread_bound(thread_continue_t func)
-{
-	thread_t thread;
-	kern_return_t kr;
-
-	kr = kernel_thread_start(lt_bound_thread, func, &thread);
-	assert(kr == KERN_SUCCESS);
-
-	thread_deallocate(thread);
-}
 
 static kern_return_t
 lt_test_locks()
@@ -832,29 +761,6 @@ lt_test_locks()
 	lt_start_lock_thread(lt_grab_hw_lock);
 	lt_wait_for_lock_test_threads();
 	T_EXPECT_EQ_UINT(lt_counter, LOCK_TEST_ITERATIONS * lt_target_done_threads, NULL);
-
-	/* HW locks stress test */
-	T_LOG("Running HW locks stress test with hw_lock_lock()");
-	extern unsigned int real_ncpus;
-	lt_reset();
-	lt_target_done_threads = real_ncpus;
-	for (processor_t processor = processor_list; processor != NULL; processor = processor->processor_list) {
-		lt_start_lock_thread_bound(lt_stress_hw_lock);
-	}
-	lt_wait_for_lock_test_threads();
-	bool starvation = false;
-	uint total_local_count = 0;
-	for (processor_t processor = processor_list; processor != NULL; processor = processor->processor_list) {
-		starvation = starvation || (lt_stress_local_counters[processor->cpu_id] < 10);
-		total_local_count += lt_stress_local_counters[processor->cpu_id];
-	}
-	if (total_local_count != lt_counter) {
-		T_FAIL("Lock failure\n");
-	} else if (starvation) {
-		T_FAIL("Lock starvation found\n");
-	} else {
-		T_PASS("HW locks stress test with hw_lock_lock()");
-	}
 
 
 	/* HW locks: trylocks */

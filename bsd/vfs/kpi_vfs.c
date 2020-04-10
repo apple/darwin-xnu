@@ -1331,6 +1331,56 @@ vfs_context_cwd(vfs_context_t ctx)
 }
 
 /*
+ * vfs_context_get_cwd
+ *
+ * Description:	Returns a vnode for the current working	directory for the
+ *              supplied context. The returned vnode has an iocount on it
+ *              which must be released with a vnode_put().
+ *
+ * Parameters:	vfs_context_t			The context to use
+ *
+ * Returns:	vnode_t				The current working directory
+ *						for this context
+ *
+ * Notes:	The function first attempts to obtain the current directory
+ *		from the thread, and if it is not present there, falls back
+ *		to obtaining it from the process instead.  If it can't be
+ *		obtained from either place, we return NULLVP.
+ */
+vnode_t
+vfs_context_get_cwd(vfs_context_t ctx)
+{
+	vnode_t cwd = NULLVP;
+
+	if (ctx != NULL && ctx->vc_thread != NULL) {
+		uthread_t uth = get_bsdthread_info(ctx->vc_thread);
+		proc_t proc;
+
+		/*
+		 * Get the cwd from the thread; if there isn't one, get it
+		 * from the process, instead.
+		 */
+		cwd = uth->uu_cdir;
+
+		if (cwd) {
+			if ((vnode_get(cwd) != 0)) {
+				cwd = NULLVP;
+			}
+		} else if ((proc = (proc_t)get_bsdthreadtask_info(ctx->vc_thread)) != NULL &&
+		    proc->p_fd != NULL) {
+			proc_fdlock(proc);
+			cwd = proc->p_fd->fd_cdir;
+			if (cwd && (vnode_get(cwd) != 0)) {
+				cwd = NULLVP;
+			}
+			proc_fdunlock(proc);
+		}
+	}
+
+	return cwd;
+}
+
+/*
  * vfs_context_create
  *
  * Description: Allocate and initialize a new context.

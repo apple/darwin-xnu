@@ -55,6 +55,7 @@ extern cpu_data_t cpshadows[];
 
 #if DEVELOPMENT || DEBUG
 void iotrace_init(int ncpus);
+void traptrace_init(int ncpus);
 #endif /* DEVELOPMENT || DEBUG */
 
 
@@ -151,6 +152,7 @@ cpu_topology_sort(int ncpus)
 
 #if DEVELOPMENT || DEBUG
 	iotrace_init(ncpus);
+	traptrace_init(ncpus);
 #endif /* DEVELOPMENT || DEBUG */
 
 	/*
@@ -316,65 +318,117 @@ int iotrace_entries_per_cpu = 0;
 int *iotrace_next;
 iotrace_entry_t **iotrace_ring;
 
-void
-init_iotrace_bufs(int cpucnt, int entries_per_cpu)
+volatile int traptrace_enabled = 1;
+int traptrace_generators = 0;
+int traptrace_entries_per_cpu = 0;
+int *traptrace_next;
+traptrace_entry_t **traptrace_ring;
+
+static void
+init_trace_bufs(int cpucnt, int entries_per_cpu, void ***ring, int entry_size,
+    int **next_array, int *allocated_entries_per_cpu, int *allocated_generator_count)
 {
 	int i;
 
-	iotrace_next = kalloc_tag(cpucnt * sizeof(int), VM_KERN_MEMORY_DIAG);
-	if (__improbable(iotrace_next == NULL)) {
-		iotrace_generators = 0;
+	*next_array = kalloc_tag(cpucnt * sizeof(int), VM_KERN_MEMORY_DIAG);
+	if (__improbable(*next_array == NULL)) {
+		*allocated_generator_count = 0;
 		return;
 	} else {
-		bzero(iotrace_next, cpucnt * sizeof(int));
+		bzero(*next_array, cpucnt * sizeof(int));
 	}
 
-	iotrace_ring = kalloc_tag(cpucnt * sizeof(iotrace_entry_t *), VM_KERN_MEMORY_DIAG);
-	if (__improbable(iotrace_ring == NULL)) {
-		kfree(iotrace_next, cpucnt * sizeof(int));
-		iotrace_generators = 0;
+	*ring = kalloc_tag(cpucnt * sizeof(void *), VM_KERN_MEMORY_DIAG);
+	if (__improbable(*ring == NULL)) {
+		kfree(*next_array, cpucnt * sizeof(int));
+		*next_array = NULL;
+		*allocated_generator_count = 0;
 		return;
 	}
 	for (i = 0; i < cpucnt; i++) {
-		iotrace_ring[i] = kalloc_tag(entries_per_cpu * sizeof(iotrace_entry_t), VM_KERN_MEMORY_DIAG);
-		if (__improbable(iotrace_ring[i] == NULL)) {
-			kfree(iotrace_next, cpucnt * sizeof(int));
-			iotrace_next = NULL;
+		(*ring)[i] = kalloc_tag(entries_per_cpu * entry_size, VM_KERN_MEMORY_DIAG);
+		if (__improbable((*ring)[i] == NULL)) {
+			kfree(*next_array, cpucnt * sizeof(int));
+			*next_array = NULL;
 			for (int j = 0; j < i; j++) {
-				kfree(iotrace_ring[j], entries_per_cpu * sizeof(iotrace_entry_t));
+				kfree((*ring)[j], entries_per_cpu * entry_size);
 			}
-			kfree(iotrace_ring, cpucnt * sizeof(iotrace_entry_t *));
-			iotrace_ring = NULL;
+			kfree(*ring, cpucnt * sizeof(void *));
+			*ring = NULL;
 			return;
 		}
-		bzero(iotrace_ring[i], entries_per_cpu * sizeof(iotrace_entry_t));
+		bzero((*ring)[i], entries_per_cpu * entry_size);
 	}
 
-	iotrace_entries_per_cpu = entries_per_cpu;
-	iotrace_generators = cpucnt;
+	*allocated_entries_per_cpu = entries_per_cpu;
+	*allocated_generator_count = cpucnt;
+}
+
+
+static void
+init_iotrace_bufs(int cpucnt, int entries_per_cpu)
+{
+	init_trace_bufs(cpucnt, entries_per_cpu, (void ***)&iotrace_ring, sizeof(iotrace_entry_t),
+	    &iotrace_next, &iotrace_entries_per_cpu, &iotrace_generators);
+}
+
+static void
+init_traptrace_bufs(int cpucnt, int entries_per_cpu)
+{
+	init_trace_bufs(cpucnt, entries_per_cpu, (void ***)&traptrace_ring, sizeof(traptrace_entry_t),
+	    &traptrace_next, &traptrace_entries_per_cpu, &traptrace_generators);
+}
+
+static void
+gentrace_configure_from_bootargs(const char *ena_prop, int *ena_valp, const char *epc_prop,
+    int *epcp, int max_epc, int def_epc, int override)
+{
+	if (kern_feature_override(override)) {
+		*ena_valp = 0;
+	}
+
+	(void) PE_parse_boot_argn(ena_prop, ena_valp, sizeof(*ena_valp));
+
+	if (*ena_valp == 0) {
+		return;
+	}
+
+	if (PE_parse_boot_argn(epc_prop, epcp, sizeof(*epcp)) &&
+	    (*epcp < 1 || *epcp > max_epc)) {
+		*epcp = def_epc;
+	}
 }
 
 void
 iotrace_init(int ncpus)
 {
-	int iot, epc;
-	int entries_per_cpu;
+	int entries_per_cpu = DEFAULT_IOTRACE_ENTRIES_PER_CPU;
+	int enable = mmiotrace_enabled;
 
-	if (PE_parse_boot_argn("iotrace", &iot, sizeof(iot))) {
-		mmiotrace_enabled = iot;
+	gentrace_configure_from_bootargs("iotrace", &enable, "iotrace_epc", &entries_per_cpu,
+	    IOTRACE_MAX_ENTRIES_PER_CPU, DEFAULT_IOTRACE_ENTRIES_PER_CPU, KF_IOTRACE_OVRD);
+
+	mmiotrace_enabled = enable;
+
+	if (mmiotrace_enabled) {
+		init_iotrace_bufs(ncpus, entries_per_cpu);
 	}
-
-	if (mmiotrace_enabled == 0) {
-		return;
-	}
-
-	if (PE_parse_boot_argn("iotrace_epc", &epc, sizeof(epc)) &&
-	    epc >= 1 && epc <= IOTRACE_MAX_ENTRIES_PER_CPU) {
-		entries_per_cpu = epc;
-	} else {
-		entries_per_cpu = DEFAULT_IOTRACE_ENTRIES_PER_CPU;
-	}
-
-	init_iotrace_bufs(ncpus, entries_per_cpu);
 }
+
+void
+traptrace_init(int ncpus)
+{
+	int entries_per_cpu = DEFAULT_TRAPTRACE_ENTRIES_PER_CPU;
+	int enable = traptrace_enabled;
+
+	gentrace_configure_from_bootargs("traptrace", &enable, "traptrace_epc", &entries_per_cpu,
+	    TRAPTRACE_MAX_ENTRIES_PER_CPU, DEFAULT_TRAPTRACE_ENTRIES_PER_CPU, KF_TRAPTRACE_OVRD);
+
+	traptrace_enabled = enable;
+
+	if (traptrace_enabled) {
+		init_traptrace_bufs(ncpus, entries_per_cpu);
+	}
+}
+
 #endif /* DEVELOPMENT || DEBUG */

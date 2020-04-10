@@ -182,7 +182,7 @@ esp_cbc_decrypt_aes(
 	}
 
 	if (m->m_pkthdr.len < bodyoff) {
-		ipseclog((LOG_ERR, "esp_cbc_decrypt %s: bad len %d/%lu\n",
+		ipseclog((LOG_ERR, "esp_cbc_decrypt %s: bad len %d/%u\n",
 		    algo->name, m->m_pkthdr.len, (u_int32_t)bodyoff));
 		m_freem(m);
 		return EINVAL;
@@ -399,14 +399,14 @@ esp_cbc_encrypt_aes(
 	ivp = (u_int8_t *) sav->iv;
 
 	if (m->m_pkthdr.len < bodyoff) {
-		ipseclog((LOG_ERR, "esp_cbc_encrypt %s: bad len %d/%lu\n",
+		ipseclog((LOG_ERR, "esp_cbc_encrypt %s: bad len %d/%u\n",
 		    algo->name, m->m_pkthdr.len, (u_int32_t)bodyoff));
 		m_freem(m);
 		return EINVAL;
 	}
 	if ((m->m_pkthdr.len - bodyoff) % AES_BLOCKLEN) {
 		ipseclog((LOG_ERR, "esp_cbc_encrypt %s: "
-		    "payload length must be multiple of %lu\n",
+		    "payload length must be multiple of %d\n",
 		    algo->name, AES_BLOCKLEN));
 		m_freem(m);
 		return EINVAL;
@@ -705,7 +705,7 @@ esp_gcm_encrypt_aes(
 	bzero(nonce, ESP_GCM_SALT_LEN + ivlen);
 
 	if (m->m_pkthdr.len < bodyoff) {
-		ipseclog((LOG_ERR, "%s: bad len %d/%lu\n", __FUNCTION__,
+		ipseclog((LOG_ERR, "%s: bad len %d/%u\n", __FUNCTION__,
 		    m->m_pkthdr.len, (u_int32_t)bodyoff));
 		m_freem(m);
 		return EINVAL;
@@ -906,7 +906,7 @@ esp_gcm_decrypt_aes(
 	}
 
 	if (m->m_pkthdr.len < bodyoff) {
-		ipseclog((LOG_ERR, "%s: bad len %d/%lu\n", __FUNCTION__,
+		ipseclog((LOG_ERR, "%s: bad len %d/%u\n", __FUNCTION__,
 		    m->m_pkthdr.len, (u_int32_t)bodyoff));
 		m_freem(m);
 		return EINVAL;

@@ -86,7 +86,7 @@ struct kperf_thread_dispatch {
 
 void kperf_thread_dispatch_sample(struct kperf_thread_dispatch *,
     struct kperf_context *);
-int kperf_thread_dispatch_pend(struct kperf_context *);
+int kperf_thread_dispatch_pend(struct kperf_context *, unsigned int actionid);
 void kperf_thread_dispatch_log(struct kperf_thread_dispatch *);
 
 void kperf_thread_inscyc_log(struct kperf_context *);

@@ -122,7 +122,6 @@ main(int     argc,
 	/* These fields are being added on demand */
 	DECLARE("ACT_CONTEXT", offsetof(struct thread, machine.contextData));
 	DECLARE("TH_CTH_SELF", offsetof(struct thread, machine.cthread_self));
-	DECLARE("TH_CTH_DATA", offsetof(struct thread, machine.cthread_data));
 	DECLARE("ACT_PREEMPT_CNT", offsetof(struct thread, machine.preemption_count));
 	DECLARE("ACT_CPUDATAP", offsetof(struct thread, machine.CpuDatap));
 	DECLARE("ACT_DEBUGDATA", offsetof(struct thread, machine.DebugData));

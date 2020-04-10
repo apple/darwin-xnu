@@ -87,7 +87,7 @@ LEXT(machine_load_context)
 	and		r2, r2, #3							// Extract cpu number
 	orr		r1, r1, r2							// 
 	mcr		p15, 0, r1, c13, c0, 3				// Write TPIDRURO
-	ldr		r1, [r0, TH_CTH_DATA]
+	mov		r1, #0
 	mcr		p15, 0, r1, c13, c0, 2				// Write TPIDRURW
 	mov		r7, #0								// Clear frame pointer
 	ldr		r3, [r0, TH_KSTACKPTR]				// Get kernel stack top
@@ -146,7 +146,8 @@ LEXT(Switch_context)
 	bne		switch_threads						// No need to save GPR/NEON state if we are
 #if     __ARM_VFP__
 	mov		r1, r2								// r2 will be clobbered by the save, so preserve it
-	add		r3, r0, ACT_KVFP					// Get the kernel VFP save area for the old thread...
+	ldr		r3, [r0, TH_KSTACKPTR]				// Get old kernel stack top
+	add		r3, r3, SS_KVFP						// Get the kernel VFP save area for the old thread...
 	save_vfp_registers							// ...and save our VFP state to it
 	mov		r2, r1								// Restore r2 (the new thread pointer)
 #endif /* __ARM_VFP__ */
@@ -161,13 +162,14 @@ switch_threads:
 	and		r5, r5, #3							// Extract cpu number
 	orr		r6, r6, r5
 	mcr		p15, 0, r6, c13, c0, 3				// Write TPIDRURO
-	ldr		r6, [r2, TH_CTH_DATA]
+	mov		r6, #0
 	mcr		p15, 0, r6, c13, c0, 2				// Write TPIDRURW
 load_reg:	
 	add		r3, r3, SS_R4
 	ldmia	r3!, {r4-r14}						// Restore new thread status
 #if     __ARM_VFP__
-	add		r3, r2, ACT_KVFP					// Get the kernel VFP save area for the new thread...
+	ldr		r3, [r2, TH_KSTACKPTR]				// get kernel stack top
+	add		r3, r3, SS_KVFP						// Get the kernel VFP save area for the new thread...
 	load_vfp_registers							// ...and load the saved state
 #endif /* __ARM_VFP__ */
 	bx		lr									// Return
@@ -183,7 +185,8 @@ load_reg:
 LEXT(Shutdown_context)
 	mrc		p15, 0, r9, c13, c0, 4				// Read TPIDRPRW
 #if __ARM_VFP__
-	add		r3, r9, ACT_KVFP					// Get the kernel VFP save area for the current thread...
+	ldr		r3, [r9, TH_KSTACKPTR]				// get kernel stack top
+	add		r3, r3, SS_KVFP						// Get the kernel VFP save area for the current thread...
 	save_vfp_registers							// ...and save our VFP state to it
 #endif
 	ldr		r3, [r9, TH_KSTACKPTR]				// Get kernel stack top
@@ -207,7 +210,8 @@ LEXT(Idle_context)
 
 	mrc		p15, 0, r9, c13, c0, 4				// Read TPIDRPRW
 #if	__ARM_VFP__
-	add		r3, r9, ACT_KVFP					// Get the kernel VFP save area for the current thread...
+	ldr		r3, [r9, TH_KSTACKPTR]				// get kernel stack top
+	add		r3, r3, SS_KVFP						// Get the kernel VFP save area for the current thread...
 	save_vfp_registers							// ...and save our VFP state to it
 #endif
 	ldr		r3, [r9, TH_KSTACKPTR]				// Get kernel stack top
@@ -233,7 +237,8 @@ LEXT(Idle_load_context)
 	add		r3, r3, SS_R4
 	ldmia	r3!, {r4-r14}						// Restore new thread status
 #if __ARM_VFP__
-	add		r3, r9, ACT_KVFP					// Get the kernel VFP save area for the current thread...
+	ldr		r3, [r9, TH_KSTACKPTR]				// get kernel stack top
+	add		r3, r3, SS_KVFP						// Get the kernel VFP save area for the current thread...
 	load_vfp_registers							// ...and load the saved state
 #endif
 	bx		lr									// Return

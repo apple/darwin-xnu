@@ -1336,7 +1336,6 @@ machine_thread_dup(thread_t self,
 	struct arm_saved_state *target_saved_state;
 
 	target->machine.cthread_self = self->machine.cthread_self;
-	target->machine.cthread_data = self->machine.cthread_data;
 
 	self_saved_state = self->machine.upcb;
 	target_saved_state = target->machine.upcb;

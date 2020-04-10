@@ -874,6 +874,10 @@ IOTrackingLeakScan(void * refcon)
 
 		for (ptrIdx = 0; ptrIdx < (page_size / sizeof(uintptr_t)); ptrIdx++) {
 			ptr = ((uintptr_t *)vphysaddr)[ptrIdx];
+#if defined(HAS_APPLE_PAC)
+			// strip possible ptrauth signature from candidate data pointer
+			ptr = (uintptr_t)ptrauth_strip((void*)ptr, ptrauth_key_process_independent_data);
+#endif /* defined(HAS_APPLE_PAC) */
 
 			for (lim = count, baseIdx = 0; lim; lim >>= 1) {
 				inst = instances[baseIdx + (lim >> 1)];

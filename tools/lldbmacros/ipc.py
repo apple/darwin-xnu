@@ -1549,7 +1549,7 @@ def ShowMQueue(cmd_args=None, cmd_options={}):
         pset = unsigned(ArgumentStringToInt(cmd_args[0])) - unsigned(psetoff)
         print PrintPortSetSummary.header
         PrintPortSetSummary(kern.GetValueFromAddress(pset, 'struct ipc_pset *'), space)
-    elif int(wq_type) == 2:
+    elif int(wq_type) in [2, 1]:
         portoff = getfieldoffset('struct ipc_port', 'ip_messages')
         port = unsigned(ArgumentStringToInt(cmd_args[0])) - unsigned(portoff)
         print PrintPortSummary.header

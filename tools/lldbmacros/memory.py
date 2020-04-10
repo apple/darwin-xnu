@@ -2772,12 +2772,13 @@ def ShowTaskVMEntries(task, show_pager_info, show_all_shadows):
         return None
     showmapvme(task.map, 0, 0, show_pager_info, show_all_shadows, False)
 
-@lldb_command("showmapvme", "A:B:PRST")
+@lldb_command("showmapvme", "A:B:F:PRST")
 def ShowMapVME(cmd_args=None, cmd_options={}):
     """Routine to print out info about the specified vm_map and its vm entries
         usage: showmapvme <vm_map> [-A start] [-B end] [-S] [-P]
         Use -A <start> flag to start at virtual address <start>
         Use -B <end> flag to end at virtual address <end>
+        Use -F <virtaddr> flag to find just the VME containing the given VA
         Use -S flag to show VM object shadow chains
         Use -P flag to show pager info (mapped file, compressed pages, ...)
         Use -R flag to reverse order
@@ -2796,6 +2797,9 @@ def ShowMapVME(cmd_args=None, cmd_options={}):
         start_vaddr = unsigned(int(cmd_options['-A'], 16))
     if "-B" in cmd_options:
         end_vaddr = unsigned(int(cmd_options['-B'], 16))
+    if "-F" in cmd_options:
+        start_vaddr = unsigned(int(cmd_options['-F'], 16))
+        end_vaddr = start_vaddr
     if "-P" in cmd_options:
         show_pager_info = True
     if "-S" in cmd_options:
@@ -3117,7 +3121,7 @@ def showvmtags(cmd_args=None, cmd_options={}):
     if "-A" in cmd_options:
         all_tags = True
     page_size = unsigned(kern.globals.page_size)
-    nsites = unsigned(kern.globals.vm_allocation_tag_highest)
+    nsites = unsigned(kern.globals.vm_allocation_tag_highest) + 1
     tagcounts = [0] * nsites
     tagpeaks = [0] * nsites
     tagmapped = [0] * nsites
@@ -3139,7 +3143,7 @@ def showvmtags(cmd_args=None, cmd_options={}):
 
     total = 0
     totalmapped = 0
-    print " vm_allocation_tag_highest: {:<7d}  ".format(nsites)
+    print " vm_allocation_tag_highest: {:<7d}  ".format(nsites - 1)
     print " {:<7s}  {:>7s}   {:>7s}   {:>7s}  {:<50s}".format("tag.kmod", "peak", "size", "mapped", "name")
     for tag in range(nsites):
         if all_tags or tagcounts[tag] or tagmapped[tag]:
@@ -4432,7 +4436,7 @@ def showmemoryentry(entry, idx=0, queue_len=0):
     if entry.is_sub_map == 1:
         showmapvme(entry.backing.map, 0, 0, show_pager_info, show_all_shadows)
     if entry.is_copy == 1:
-        showmapcopyvme(entry.backing.copy, 0, 0, 0, show_pager_info, show_all_shadows, 0)
+        showmapcopyvme(entry.backing.copy, 0, 0, show_pager_info, show_all_shadows, 0)
     if entry.is_sub_map == 0 and entry.is_copy == 0:
         showvmobject(entry.backing.object, entry.offset, entry.size, show_pager_info, show_all_shadows)
 

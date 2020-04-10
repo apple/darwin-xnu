@@ -213,6 +213,7 @@ static cpuid_cache_descriptor_t intel_cpuid_leaf2_descriptor_table[] = {
 	                        sizeof(cpuid_cache_descriptor_t))
 
 static void do_cwas(i386_cpu_info_t *cpuinfo, boolean_t on_slave);
+static void cpuid_do_precpuid_was(void);
 
 static inline cpuid_cache_descriptor_t *
 cpuid_leaf2_find(uint8_t value)
@@ -257,6 +258,7 @@ do_cwas(i386_cpu_info_t *cpuinfo, boolean_t on_slave)
 	 * enumerated, lest we #GP when forced to access it.)
 	 */
 	if (cpuid_wa_required(CPU_INTEL_TSXFA) == CWA_ON) {
+		/* This must be executed on all logical processors */
 		wrmsr64(MSR_IA32_TSX_FORCE_ABORT,
 		    rdmsr64(MSR_IA32_TSX_FORCE_ABORT) | MSR_IA32_TSXFA_RTM_FORCE_ABORT);
 	}
@@ -897,6 +899,9 @@ cpuid_set_info(void)
 	i386_cpu_info_t         *info_p = &cpuid_cpu_info;
 	boolean_t               enable_x86_64h = TRUE;
 
+	/* Perform pre-cpuid workarounds (since their effects impact values returned via cpuid) */
+	cpuid_do_precpuid_was();
+
 	cpuid_set_generic_info(info_p);
 
 	/* verify we are running on a supported CPU */
@@ -1370,10 +1375,10 @@ cpuid_vmm_family(void)
 cwa_classifier_e
 cpuid_wa_required(cpu_wa_e wa)
 {
+	i386_cpu_info_t *info_p = &cpuid_cpu_info;
 	static uint64_t bootarg_cpu_wa_enables = 0;
 	static uint64_t bootarg_cpu_wa_disables = 0;
 	static int bootargs_overrides_processed = 0;
-	i386_cpu_info_t *info_p = &cpuid_cpu_info;
 
 	if (!bootargs_overrides_processed) {
 		if (!PE_parse_boot_argn("cwae", &bootarg_cpu_wa_enables, sizeof(bootarg_cpu_wa_enables))) {
@@ -1420,7 +1425,7 @@ cpuid_wa_required(cpu_wa_e wa)
 
 	case CPU_INTEL_TSXFA:
 		/*
-		 * If this CPU supports RTM and supports FORCE_ABORT, return that
+		 * Otherwise, if the CPU supports both TSX(HLE) and FORCE_ABORT, return that
 		 * the workaround should be enabled.
 		 */
 		if ((info_p->cpuid_leaf7_extfeatures & CPUID_LEAF7_EXTFEATURE_TSXFA) != 0 &&
@@ -1434,4 +1439,15 @@ cpuid_wa_required(cpu_wa_e wa)
 	}
 
 	return CWA_OFF;
+}
+
+static void
+cpuid_do_precpuid_was(void)
+{
+	/*
+	 * Note that care must be taken not to use any data from the cached cpuid data since it is
+	 * likely uninitialized at this point.  That includes calling functions that make use of
+	 * that data as well.
+	 */
+
 }

@@ -45,6 +45,8 @@
 #include <netkey/keydb.h>
 #include <netinet/ip_var.h>
 
+#include <os/log.h>
+
 /* lock for IPsec stats */
 extern lck_grp_t         *sadb_stat_mutex_grp;
 extern lck_grp_attr_t    *sadb_stat_mutex_grp_attr;
@@ -337,7 +339,26 @@ extern int ip4_esp_randpad;
 
 extern bool ipsec_save_wake_pkt;
 
-#define ipseclog(x)     do { if (ipsec_debug) log x; } while (0)
+#define _ipsec_log(level, fmt, ...) do {                            \
+	os_log_type_t type;                                         \
+	switch (level) {                                            \
+	default:                                                    \
+	        type = OS_LOG_TYPE_DEFAULT;                         \
+	        break;                                              \
+	case LOG_INFO:                                              \
+	        type = OS_LOG_TYPE_INFO;                            \
+	        break;                                              \
+	case LOG_DEBUG:                                             \
+	        type = OS_LOG_TYPE_DEBUG;                           \
+	        break;                                              \
+	case LOG_ERR:                                               \
+	        type = OS_LOG_TYPE_ERROR;                           \
+	        break;                                              \
+	}                                                           \
+	os_log_with_type(OS_LOG_DEFAULT, type, fmt, ##__VA_ARGS__); \
+} while (0)
+
+#define ipseclog(x)     do { if (ipsec_debug != 0) _ipsec_log x; } while (0)
 
 extern struct secpolicy *ipsec4_getpolicybysock(struct mbuf *, u_int,
     struct socket *, int *);

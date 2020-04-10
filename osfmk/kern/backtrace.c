@@ -329,7 +329,7 @@ backtrace_thread_user(void *thread, uintptr_t *bt, unsigned int max_frames,
 
 	assert(ml_get_interrupts_enabled() == TRUE);
 	if (!ml_get_interrupts_enabled()) {
-		return EINVAL;
+		goto out;
 	}
 
 	union {
@@ -349,7 +349,7 @@ backtrace_thread_user(void *thread, uintptr_t *bt, unsigned int max_frames,
 	if (thread != current_thread()) {
 		map = get_task_map_reference(get_threadtask(thread));
 		if (map == NULL) {
-			return EINVAL;
+			goto out;
 		}
 		old_map = vm_map_switch(map);
 	} else {

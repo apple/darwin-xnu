@@ -1484,6 +1484,23 @@ necp_client_flow_is_viable(proc_t proc, struct necp_client *client,
 	    &flow->local_addr, &flow->remote_addr, NULL, NULL,
 	    NULL, ignore_address, true);
 
+	// Check for blocking agents
+	for (int i = 0; i < NECP_MAX_NETAGENTS; i++) {
+		if (uuid_is_null(result.netagents[i])) {
+			// Passed end of valid agents
+			break;
+		}
+
+		u_int32_t flags = netagent_get_flags(result.netagents[i]);
+		if ((flags & NETAGENT_FLAG_REGISTERED) &&
+		    !(flags & NETAGENT_FLAG_VOLUNTARY) &&
+		    !(flags & NETAGENT_FLAG_ACTIVE) &&
+		    !(flags & NETAGENT_FLAG_SPECIFIC_USE_ONLY)) {
+			// A required agent is not active, cause the flow to be marked non-viable
+			return false;
+		}
+	}
+
 	return error == 0 &&
 	       result.routed_interface_index != IFSCOPE_NONE &&
 	       result.routing_result != NECP_KERNEL_POLICY_RESULT_DROP;

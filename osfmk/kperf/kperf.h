@@ -41,9 +41,8 @@ extern lck_grp_t kperf_lck_grp;
 #define TRIGGER_TYPE_LAZY_WAIT (3)
 #define TRIGGER_TYPE_LAZY_CPU  (3)
 
-/* helpers to get and set AST flags on a thread */
-uint32_t kperf_get_thread_flags(thread_t thread);
-void kperf_set_thread_flags(thread_t thread, uint32_t flags);
+uint32_t kperf_get_thread_ast(thread_t thread);
+void kperf_set_thread_ast(thread_t thread, uint32_t flags);
 
 /*
  * Get and set dirtiness of thread, so kperf can track whether the thread

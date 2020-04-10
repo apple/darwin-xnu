@@ -43,6 +43,8 @@
 #include <kperf/context.h>
 #include <kperf/action.h>
 
+#include <kern/monotonic.h>
+
 /* Fixed counter mask -- three counters, each with OS and USER */
 #define IA32_FIXED_CTR_ENABLE_ALL_CTRS_ALL_RINGS (0x333)
 #define IA32_FIXED_CTR_ENABLE_ALL_PMI (0x888)
@@ -65,16 +67,6 @@ static uint64_t
 IA32_FIXED_CTR_CTRL(void)
 {
 	return rdmsr64( MSR_IA32_PERF_FIXED_CTR_CTRL );
-}
-
-static uint64_t
-IA32_FIXED_CTRx(uint32_t ctr)
-{
-#ifdef USE_RDPMC
-	return rdpmc64(RDPMC_FIXED_COUNTER_SELECTOR | ctr);
-#else /* !USE_RDPMC */
-	return rdmsr64(MSR_IA32_PERF_FIXED_CTR0 + ctr);
-#endif /* !USE_RDPMC */
 }
 
 #ifdef FIXED_COUNTER_RELOAD
@@ -326,37 +318,13 @@ kpc_set_fixed_config(kpc_config_t *configv)
 int
 kpc_get_fixed_counters(uint64_t *counterv)
 {
-	int i, n = kpc_fixed_count();
-
-#ifdef FIXED_COUNTER_SHADOW
-	uint64_t status;
-
-	/* snap the counters */
-	for (i = 0; i < n; i++) {
-		counterv[i] = FIXED_SHADOW(ctr) +
-		    (IA32_FIXED_CTRx(i) - FIXED_RELOAD(ctr));
-	}
-
-	/* Grab the overflow bits */
-	status = rdmsr64(MSR_IA32_PERF_GLOBAL_STATUS);
-
-	/* If the overflow bit is set for a counter, our previous read may or may not have been
-	 * before the counter overflowed. Re-read any counter with it's overflow bit set so
-	 * we know for sure that it has overflowed. The reason this matters is that the math
-	 * is different for a counter that has overflowed. */
-	for (i = 0; i < n; i++) {
-		if ((1ull << (i + 32)) & status) {
-			counterv[i] = FIXED_SHADOW(ctr) +
-			    (kpc_fixed_max() - FIXED_RELOAD(ctr) + 1 /* Wrap */) + IA32_FIXED_CTRx(i);
-		}
-	}
-#else
-	for (i = 0; i < n; i++) {
-		counterv[i] = IA32_FIXED_CTRx(i);
-	}
-#endif
-
+#if MONOTONIC
+	mt_fixed_counts(counterv);
 	return 0;
+#else /* MONOTONIC */
+#pragma unused(counterv)
+	return ENOTSUP;
+#endif /* !MONOTONIC */
 }
 
 int

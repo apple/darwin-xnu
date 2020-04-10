@@ -3597,6 +3597,65 @@ nfsrv_fhtoexport(struct nfs_filehandle *nfhp)
 	return nx;
 }
 
+struct nfsrv_getvfs_by_mntonname_callback_args {
+	const char      *path;          /* IN */
+	mount_t         mp;             /* OUT */
+};
+
+static int
+nfsrv_getvfs_by_mntonname_callback(mount_t mp, void *v)
+{
+	struct nfsrv_getvfs_by_mntonname_callback_args * const args = v;
+	char real_mntonname[MAXPATHLEN];
+	int pathbuflen = MAXPATHLEN;
+	vnode_t rvp;
+	int error;
+
+	error = VFS_ROOT(mp, &rvp, vfs_context_current());
+	if (error) {
+		goto out;
+	}
+	error = vn_getpath_ext(rvp, NULLVP, real_mntonname, &pathbuflen,
+	    VN_GETPATH_FSENTER | VN_GETPATH_NO_FIRMLINK);
+	vnode_put(rvp);
+	if (error) {
+		goto out;
+	}
+	if (strcmp(args->path, real_mntonname) == 0) {
+		error = vfs_busy(mp, LK_NOWAIT);
+		if (error == 0) {
+			args->mp = mp;
+		}
+		return VFS_RETURNED_DONE;
+	}
+out:
+	return VFS_RETURNED;
+}
+
+static mount_t
+nfsrv_getvfs_by_mntonname(char *path)
+{
+	struct nfsrv_getvfs_by_mntonname_callback_args args = {
+		.path = path,
+		.mp = NULL,
+	};
+	mount_t mp;
+	int error;
+
+	mp = vfs_getvfs_by_mntonname(path);
+	if (mp) {
+		error = vfs_busy(mp, LK_NOWAIT);
+		mount_iterdrop(mp);
+		if (error) {
+			mp = NULL;
+		}
+	} else if (vfs_iterate(0, nfsrv_getvfs_by_mntonname_callback,
+	    &args) == 0) {
+		mp = args.mp;
+	}
+	return mp;
+}
+
 /*
  * nfsrv_fhtovp() - convert FH to vnode and export info
  */
@@ -3690,14 +3749,7 @@ nfsrv_fhtovp(
 	}
 
 	/* find mount structure */
-	mp = vfs_getvfs_by_mntonname((*nxp)->nx_fs->nxfs_path);
-	if (mp) {
-		error = vfs_busy(mp, LK_NOWAIT);
-		mount_iterdrop(mp);
-		if (error) {
-			mp = NULL;
-		}
-	}
+	mp = nfsrv_getvfs_by_mntonname((*nxp)->nx_fs->nxfs_path);
 	if (!mp) {
 		/*
 		 * We have an export, but no mount?

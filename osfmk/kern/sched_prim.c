@@ -6267,3 +6267,10 @@ sysctl_task_get_no_smt(void)
 	return '0';
 }
 #endif /* DEVELOPMENT || DEBUG */
+
+
+__private_extern__ void
+thread_bind_cluster_type(char cluster_type)
+{
+	(void)cluster_type;
+}

@@ -1640,6 +1640,7 @@ task_create_internal(
 #if __arm64__
 	new_task->task_legacy_footprint = FALSE;
 	new_task->task_extra_footprint_limit = FALSE;
+	new_task->task_ios13extended_footprint_limit = FALSE;
 #endif /* __arm64__ */
 	new_task->task_region_footprint = FALSE;
 	new_task->task_has_crossed_thread_limit = FALSE;
@@ -7312,6 +7313,7 @@ task_set_exc_guard_behavior(
 #if __arm64__
 extern int legacy_footprint_entitlement_mode;
 extern void memorystatus_act_on_legacy_footprint_entitlement(proc_t, boolean_t);
+extern void memorystatus_act_on_ios13extended_footprint_entitlement(proc_t);
 
 void
 task_set_legacy_footprint(
@@ -7330,11 +7332,30 @@ task_set_extra_footprint_limit(
 		return;
 	}
 	task_lock(task);
-	if (!task->task_extra_footprint_limit) {
-		memorystatus_act_on_legacy_footprint_entitlement(task->bsd_info, TRUE);
-		task->task_extra_footprint_limit = TRUE;
+	if (task->task_extra_footprint_limit) {
+		task_unlock(task);
+		return;
 	}
+	task->task_extra_footprint_limit = TRUE;
 	task_unlock(task);
+	memorystatus_act_on_legacy_footprint_entitlement(task->bsd_info, TRUE);
+}
+
+void
+task_set_ios13extended_footprint_limit(
+	task_t task)
+{
+	if (task->task_ios13extended_footprint_limit) {
+		return;
+	}
+	task_lock(task);
+	if (task->task_ios13extended_footprint_limit) {
+		task_unlock(task);
+		return;
+	}
+	task->task_ios13extended_footprint_limit = TRUE;
+	task_unlock(task);
+	memorystatus_act_on_ios13extended_footprint_entitlement(task->bsd_info);
 }
 #endif /* __arm64__ */
 

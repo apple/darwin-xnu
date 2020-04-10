@@ -86,6 +86,12 @@ extern int precise_user_kernel_time;
  * Definitions for high resolution timers.
  */
 
+#if __LP64__
+#define TIMER_ALIGNMENT
+#else
+#define TIMER_ALIGNMENT __attribute__((packed, aligned(4)))
+#endif
+
 struct timer {
 	uint64_t tstamp;
 #if defined(__LP64__)
@@ -96,7 +102,7 @@ struct timer {
 	uint32_t high_bits;
 	uint32_t high_bits_check;
 #endif /* !defined(__LP64__) */
-};
+} TIMER_ALIGNMENT;
 
 typedef struct timer timer_data_t, *timer_t;
 

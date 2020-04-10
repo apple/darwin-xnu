@@ -70,7 +70,8 @@ void kperf_continuation_sample(struct kp_kcallstack *cs, struct kperf_context *)
 void kperf_backtrace_sample(struct kp_kcallstack *cs, struct kperf_context *context);
 
 void kperf_ucallstack_sample(struct kp_ucallstack *cs, struct kperf_context *);
-int kperf_ucallstack_pend(struct kperf_context *, uint32_t depth);
+int kperf_ucallstack_pend(struct kperf_context *, uint32_t depth,
+    unsigned int actionid);
 void kperf_ucallstack_log(struct kp_ucallstack *cs);
 
 #endif /* !defined(KPERF_CALLSTACK_H) */

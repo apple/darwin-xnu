@@ -826,12 +826,11 @@ socreate_internal(int dom, struct socket **aso, int type, int proto,
 
 	switch (dom) {
 	/*
-	 * Don't mark Unix domain, system or multipath sockets as
+	 * Don't mark Unix domain or system
 	 * eligible for defunct by default.
 	 */
 	case PF_LOCAL:
 	case PF_SYSTEM:
-	case PF_MULTIPATH:
 		so->so_flags |= SOF_NODEFUNCT;
 		break;
 	default:

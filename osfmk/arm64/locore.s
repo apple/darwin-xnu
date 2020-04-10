@@ -904,8 +904,7 @@ exception_return_unint_tpidr_x3:
 	mov		sp, x21						// Reload the pcb pointer
 
 	/* ARM64_TODO Reserve x18 until we decide what to do with it */
-	ldr		x0, [x3, TH_CTH_DATA]				// Load cthread data pointer
-	str		x0, [sp, SS64_X18]					// and use it to trash x18
+	str		xzr, [sp, SS64_X18]
 
 #if __ARM_KERNEL_PROTECT__
 	/*

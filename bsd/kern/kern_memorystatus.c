@@ -631,6 +631,83 @@ memorystatus_act_on_legacy_footprint_entitlement(proc_t p, boolean_t footprint_i
 	proc_list_unlock();
 }
 
+void
+memorystatus_act_on_ios13extended_footprint_entitlement(proc_t p)
+{
+	int memlimit_mb_active = 0, memlimit_mb_inactive = 0;
+	boolean_t memlimit_active_is_fatal = FALSE, memlimit_inactive_is_fatal = 0, use_active_limit = FALSE;
+
+	if (max_mem < 1500ULL * 1024 * 1024 ||
+	    max_mem > 2ULL * 1024 * 1024 * 1024) {
+		/* ios13extended_footprint is only for 2GB devices */
+		return;
+	}
+
+	proc_list_lock();
+
+	if (p->p_memstat_memlimit_active > 0) {
+		memlimit_mb_active = p->p_memstat_memlimit_active;
+	} else if (p->p_memstat_memlimit_active == -1) {
+		memlimit_mb_active = max_task_footprint_mb;
+	} else {
+		/*
+		 * Nothing to do for '0' which is
+		 * a special value only used internally
+		 * to test 'no limits'.
+		 */
+		proc_list_unlock();
+		return;
+	}
+
+	if (p->p_memstat_memlimit_inactive > 0) {
+		memlimit_mb_inactive = p->p_memstat_memlimit_inactive;
+	} else if (p->p_memstat_memlimit_inactive == -1) {
+		memlimit_mb_inactive = max_task_footprint_mb;
+	} else {
+		/*
+		 * Nothing to do for '0' which is
+		 * a special value only used internally
+		 * to test 'no limits'.
+		 */
+		proc_list_unlock();
+		return;
+	}
+
+	/* limit to "almost 2GB" */
+	int ios13extended_footprint_mb = 1800;
+	if (memlimit_mb_active > ios13extended_footprint_mb) {
+		/* do not lower the current limit */
+		proc_list_unlock();
+		return;
+	}
+	memlimit_mb_active = ios13extended_footprint_mb;
+	memlimit_mb_inactive = ios13extended_footprint_mb;
+
+	memlimit_active_is_fatal = (p->p_memstat_state & P_MEMSTAT_MEMLIMIT_ACTIVE_FATAL);
+	memlimit_inactive_is_fatal = (p->p_memstat_state & P_MEMSTAT_MEMLIMIT_INACTIVE_FATAL);
+
+	SET_ACTIVE_LIMITS_LOCKED(p, memlimit_mb_active, memlimit_active_is_fatal);
+	SET_INACTIVE_LIMITS_LOCKED(p, memlimit_mb_inactive, memlimit_inactive_is_fatal);
+
+	if (proc_jetsam_state_is_active_locked(p) == TRUE) {
+		use_active_limit = TRUE;
+		CACHE_ACTIVE_LIMITS_LOCKED(p, memlimit_active_is_fatal);
+	} else {
+		CACHE_INACTIVE_LIMITS_LOCKED(p, memlimit_inactive_is_fatal);
+	}
+
+
+	if (memorystatus_highwater_enabled) {
+		task_set_phys_footprint_limit_internal(p->task,
+		    (p->p_memstat_memlimit > 0) ? p->p_memstat_memlimit : -1,
+		    NULL,                                    /*return old value */
+		    use_active_limit,                                    /*active limit?*/
+		    (use_active_limit ? memlimit_active_is_fatal : memlimit_inactive_is_fatal));
+	}
+
+	proc_list_unlock();
+}
+
 #endif /* CONFIG_MEMORYSTATUS */
 #endif /* __arm64__ */
 
@@ -4482,11 +4559,12 @@ set_vm_map_fork_pidwatch(task_t task, uint64_t x)
  *	then the vm_map_fork is allowed.
  *
  *	And if a process's memory footprint calculates less
- *	than or equal to half of the system-wide task limit,
+ *	than or equal to quarter of the system-wide task limit,
  *	then the vm_map_fork is allowed.  This calculation
  *	is based on the assumption that a process can
  *	munch memory up to the system-wide task limit.
  */
+extern boolean_t corpse_threshold_system_limit;
 boolean_t
 memorystatus_allowed_vm_map_fork(task_t task)
 {
@@ -4505,9 +4583,15 @@ memorystatus_allowed_vm_map_fork(task_t task)
 	footprint_in_bytes = get_task_phys_footprint(task);
 
 	/*
-	 * Maximum is 1/4 of the system-wide task limit.
+	 * Maximum is 1/4 of the system-wide task limit by default.
 	 */
 	max_allowed_bytes = ((uint64_t)max_task_footprint_mb * 1024 * 1024) >> 2;
+
+#if DEBUG || DEVELOPMENT
+	if (corpse_threshold_system_limit) {
+		max_allowed_bytes = (uint64_t)max_task_footprint_mb * (1UL << 20);
+	}
+#endif /* DEBUG || DEVELOPMENT */
 
 	if (footprint_in_bytes > max_allowed_bytes) {
 		printf("memorystatus disallowed vm_map_fork %lld  %lld\n", footprint_in_bytes, max_allowed_bytes);
@@ -6256,7 +6340,7 @@ memorystatus_update_levels_locked(boolean_t critical_only)
 	}
 
 #if VM_PRESSURE_EVENTS
-	memorystatus_available_pages_pressure = (pressure_threshold_percentage / delta_percentage) * memorystatus_delta;
+	memorystatus_available_pages_pressure = pressure_threshold_percentage * (atop_64(max_mem) / 100);
 #endif
 }
 

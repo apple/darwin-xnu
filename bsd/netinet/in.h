@@ -918,6 +918,9 @@ extern struct in_ifaddr * inifa_ifpclatv4(struct ifnet *);
 #define satosin(sa)     SIN(sa)
 #define sintosa(sin)    ((struct sockaddr *)(void *)(sin))
 #define SINIFSCOPE(s)   ((struct sockaddr_inifscope *)(void *)(s))
+
+#define IPTOS_UNSPEC                    (-1)    /* TOS byte not set */
+#define IPTOS_MASK                      0xFF    /* TOS byte mask */
 #endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef KERNEL_PRIVATE

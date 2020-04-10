@@ -638,6 +638,7 @@ void
 ipc_port_init(
 	ipc_port_t              port,
 	ipc_space_t             space,
+	ipc_port_init_flags_t   flags,
 	mach_port_name_t        name)
 {
 	/* port->ip_kobject doesn't have to be initialized */
@@ -648,6 +649,10 @@ ipc_port_init(
 	port->ip_mscount = 0;
 	port->ip_srights = 0;
 	port->ip_sorights = 0;
+	if (flags & IPC_PORT_INIT_MAKE_SEND_RIGHT) {
+		port->ip_srights = 1;
+		port->ip_mscount = 1;
+	}
 
 	port->ip_nsrequest = IP_NULL;
 	port->ip_pdrequest = IP_NULL;
@@ -669,17 +674,19 @@ ipc_port_init(
 	port->ip_immovable_send = 0;
 	port->ip_impcount    = 0;
 
-	port->ip_specialreply = 0;
+	port->ip_specialreply = (flags & IPC_PORT_INIT_SPECIAL_REPLY) != 0;
 	port->ip_sync_link_state = PORT_SYNC_LINK_ANY;
 	port->ip_sync_bootstrap_checkin = 0;
-	port->ip_watchport_elem = NULL;
 
 	ipc_special_reply_port_bits_reset(port);
 
 	port->ip_send_turnstile = TURNSTILE_NULL;
 
-	ipc_mqueue_init(&port->ip_messages,
-	    FALSE /* !set */);
+	ipc_mqueue_kind_t kind = IPC_MQUEUE_KIND_NONE;
+	if (flags & IPC_PORT_INIT_MESSAGE_QUEUE) {
+		kind = IPC_MQUEUE_KIND_PORT;
+	}
+	ipc_mqueue_init(&port->ip_messages, kind);
 }
 
 /*
@@ -699,7 +706,7 @@ ipc_port_init(
 kern_return_t
 ipc_port_alloc(
 	ipc_space_t             space,
-	bool                    make_send_right,
+	ipc_port_init_flags_t   flags,
 	mach_port_name_t        *namep,
 	ipc_port_t              *portp)
 {
@@ -714,7 +721,7 @@ ipc_port_alloc(
 	ipc_port_callstack_init_debug(&buf[0], IP_CALLSTACK_MAX);
 #endif /* MACH_ASSERT */
 
-	if (make_send_right) {
+	if (flags & IPC_PORT_INIT_MAKE_SEND_RIGHT) {
 		type |= MACH_PORT_TYPE_SEND;
 		urefs = 1;
 	}
@@ -725,13 +732,7 @@ ipc_port_alloc(
 	}
 
 	/* port and space are locked */
-	ipc_port_init(port, space, name);
-
-	if (make_send_right) {
-		/* ipc_object_alloc() already made the entry reference */
-		port->ip_srights++;
-		port->ip_mscount++;
-	}
+	ipc_port_init(port, space, flags, name);
 
 #if     MACH_ASSERT
 	ipc_port_init_debug(port, &buf[0], IP_CALLSTACK_MAX);
@@ -763,19 +764,25 @@ ipc_port_alloc(
 kern_return_t
 ipc_port_alloc_name(
 	ipc_space_t             space,
+	ipc_port_init_flags_t   flags,
 	mach_port_name_t        name,
 	ipc_port_t              *portp)
 {
 	ipc_port_t port;
 	kern_return_t kr;
+	mach_port_type_t type = MACH_PORT_TYPE_RECEIVE;
+	mach_port_urefs_t urefs = 0;
 
 #if     MACH_ASSERT
 	uintptr_t buf[IP_CALLSTACK_MAX];
 	ipc_port_callstack_init_debug(&buf[0], IP_CALLSTACK_MAX);
 #endif /* MACH_ASSERT */
 
-	kr = ipc_object_alloc_name(space, IOT_PORT,
-	    MACH_PORT_TYPE_RECEIVE, 0,
+	if (flags & IPC_PORT_INIT_MAKE_SEND_RIGHT) {
+		type |= MACH_PORT_TYPE_SEND;
+		urefs = 1;
+	}
+	kr = ipc_object_alloc_name(space, IOT_PORT, type, urefs,
 	    name, (ipc_object_t *) &port);
 	if (kr != KERN_SUCCESS) {
 		return kr;
@@ -783,7 +790,7 @@ ipc_port_alloc_name(
 
 	/* port is locked */
 
-	ipc_port_init(port, space, name);
+	ipc_port_init(port, space, flags, name);
 
 #if     MACH_ASSERT
 	ipc_port_init_debug(port, &buf[0], IP_CALLSTACK_MAX);
@@ -985,7 +992,7 @@ ipc_port_destroy(ipc_port_t port)
 
 		if (special_reply) {
 			ipc_port_adjust_special_reply_port(port,
-			    IPC_PORT_ADJUST_SR_ALLOW_SYNC_LINKAGE, FALSE);
+			    IPC_PORT_ADJUST_SR_ALLOW_SYNC_LINKAGE);
 		}
 
 		if (watchport_elem) {
@@ -1058,7 +1065,7 @@ ipc_port_destroy(ipc_port_t port)
 	/* unlink the kmsg from special reply port */
 	if (special_reply) {
 		ipc_port_adjust_special_reply_port(port,
-		    IPC_PORT_ADJUST_SR_ALLOW_SYNC_LINKAGE, FALSE);
+		    IPC_PORT_ADJUST_SR_ALLOW_SYNC_LINKAGE);
 	}
 
 	/* throw away no-senders request */
@@ -1311,6 +1318,36 @@ not_circular:
 }
 
 /*
+ *	Routine:	ipc_port_watchport_elem
+ *	Purpose:
+ *		Get the port's watchport elem field
+ *
+ *	Conditions:
+ *		mqueue locked
+ */
+static struct task_watchport_elem *
+ipc_port_watchport_elem(ipc_port_t port)
+{
+	return port->ip_messages.imq_wait_queue.waitq_tspriv;
+}
+
+/*
+ *	Routine:	ipc_port_update_watchport_elem
+ *	Purpose:
+ *		Set the port's watchport elem field
+ *
+ *	Conditions:
+ *		mqueue locked
+ */
+static inline struct task_watchport_elem *
+ipc_port_update_watchport_elem(ipc_port_t port, struct task_watchport_elem *we)
+{
+	struct task_watchport_elem *old_we = ipc_port_watchport_elem(port);
+	port->ip_messages.imq_wait_queue.waitq_tspriv = we;
+	return old_we;
+}
+
+/*
  * Update the recv turnstile inheritor for a port.
  *
  * Sync IPC through the port receive turnstile only happens for the special
@@ -1414,7 +1451,7 @@ ipc_port_send_update_inheritor(
 	    port->ip_destination != NULL) {
 		/* Case 2. */
 		inheritor = port_send_turnstile(port->ip_destination);
-	} else if (port->ip_watchport_elem != NULL) {
+	} else if (ipc_port_watchport_elem(port) != NULL) {
 		/* Case 3. */
 		if (prioritize_launch) {
 			assert(port->ip_sync_link_state == PORT_SYNC_LINK_ANY);
@@ -1539,35 +1576,7 @@ ipc_port_send_turnstile_complete(ipc_port_t port)
 static struct turnstile *
 ipc_port_rcv_turnstile(ipc_port_t port)
 {
-	return turnstile_lookup_by_proprietor((uintptr_t)port, TURNSTILE_SYNC_IPC);
-}
-
-
-/*
- *	Routine:	ipc_port_rcv_turnstile_waitq
- *	Purpose:
- *		Given the mqueue's waitq, find the port's
- *              rcv turnstile and return its waitq.
- *
- *	Conditions:
- *		mqueue locked or thread waiting on turnstile is locked.
- */
-struct waitq *
-ipc_port_rcv_turnstile_waitq(struct waitq *waitq)
-{
-	struct waitq *safeq;
-
-	ipc_mqueue_t mqueue = imq_from_waitq(waitq);
-	ipc_port_t port = ip_from_mq(mqueue);
-	struct turnstile *rcv_turnstile = ipc_port_rcv_turnstile(port);
-
-	/* Check if the port has a rcv turnstile */
-	if (rcv_turnstile != TURNSTILE_NULL) {
-		safeq = &rcv_turnstile->ts_waitq;
-	} else {
-		safeq = global_eventq(waitq);
-	}
-	return safeq;
+	return *port_rcv_turnstile_address(port);
 }
 
 
@@ -1702,10 +1711,14 @@ ipc_port_adjust_special_reply_port_locked(
 	turnstile_inheritor_t inheritor = TURNSTILE_INHERITOR_NULL;
 	struct turnstile *ts = TURNSTILE_NULL;
 
-	assert(special_reply_port->ip_specialreply);
-
 	ip_lock_held(special_reply_port); // ip_sync_link_state is touched
 	imq_lock(&special_reply_port->ip_messages);
+
+	if (!special_reply_port->ip_specialreply) {
+		// only mach_msg_receive_results_complete() calls this with any port
+		assert(get_turnstile);
+		goto not_special;
+	}
 
 	if (flags & IPC_PORT_ADJUST_SR_RECEIVED_MSG) {
 		ipc_special_reply_port_msg_sent_reset(special_reply_port);
@@ -1721,6 +1734,7 @@ ipc_port_adjust_special_reply_port_locked(
 
 	/* Check if the special reply port is marked non-special */
 	if (special_reply_port->ip_sync_link_state == PORT_SYNC_LINK_ANY) {
+not_special:
 		if (get_turnstile) {
 			turnstile_complete((uintptr_t)special_reply_port,
 			    port_rcv_turnstile_address(special_reply_port), NULL, TURNSTILE_SYNC_IPC);
@@ -1822,18 +1836,12 @@ ipc_port_adjust_special_reply_port_locked(
  */
 void
 ipc_port_adjust_special_reply_port(
-	ipc_port_t special_reply_port,
-	uint8_t flags,
-	boolean_t get_turnstile)
+	ipc_port_t port,
+	uint8_t flags)
 {
-	if (special_reply_port->ip_specialreply) {
-		ip_lock(special_reply_port);
-		ipc_port_adjust_special_reply_port_locked(special_reply_port, NULL,
-		    flags, get_turnstile);
-		/* special_reply_port unlocked */
-	}
-	if (get_turnstile) {
-		assert(current_thread()->turnstile != TURNSTILE_NULL);
+	if (port->ip_specialreply) {
+		ip_lock(port);
+		ipc_port_adjust_special_reply_port_locked(port, NULL, flags, FALSE);
 	}
 }
 
@@ -1988,8 +1996,7 @@ ipc_port_add_watchport_elem_locked(
 		ipc_port_adjust_sync_link_state_locked(port, PORT_SYNC_LINK_ANY, NULL);
 	}
 
-	*old_elem = port->ip_watchport_elem;
-	port->ip_watchport_elem = watchport_elem;
+	*old_elem = ipc_port_update_watchport_elem(port, watchport_elem);
 
 	ipc_port_send_turnstile_recompute_push_locked(port);
 	/* port and mqueue unlocked */
@@ -2015,7 +2022,7 @@ ipc_port_clear_watchport_elem_internal_conditional_locked(
 	ip_lock_held(port);
 	imq_held(&port->ip_messages);
 
-	if (port->ip_watchport_elem != watchport_elem) {
+	if (ipc_port_watchport_elem(port) != watchport_elem) {
 		imq_unlock(&port->ip_messages);
 		ip_unlock(port);
 		return KERN_FAILURE;
@@ -2047,13 +2054,13 @@ ipc_port_replace_watchport_elem_conditional_locked(
 	ip_lock_held(port);
 	imq_held(&port->ip_messages);
 
-	if (port->ip_watchport_elem != old_watchport_elem) {
+	if (ipc_port_watchport_elem(port) != old_watchport_elem) {
 		imq_unlock(&port->ip_messages);
 		ip_unlock(port);
 		return KERN_FAILURE;
 	}
 
-	port->ip_watchport_elem = new_watchport_elem;
+	ipc_port_update_watchport_elem(port, new_watchport_elem);
 	ipc_port_send_turnstile_recompute_push_locked(port);
 	/* port and mqueue unlocked */
 	return KERN_SUCCESS;
@@ -2073,15 +2080,10 @@ struct task_watchport_elem *
 ipc_port_clear_watchport_elem_internal(
 	ipc_port_t                 port)
 {
-	struct task_watchport_elem *watchport_elem;
-
 	ip_lock_held(port);
 	imq_held(&port->ip_messages);
 
-	watchport_elem = port->ip_watchport_elem;
-	port->ip_watchport_elem = NULL;
-
-	return watchport_elem;
+	return ipc_port_update_watchport_elem(port, NULL);
 }
 
 /*
@@ -2129,7 +2131,7 @@ ipc_port_get_watchport_inheritor(
 	ipc_port_t port)
 {
 	imq_held(&port->ip_messages);
-	return port->ip_watchport_elem->twe_task->watchports->tw_thread;
+	return ipc_port_watchport_elem(port)->twe_task->watchports->tw_thread;
 }
 
 /*
@@ -2638,7 +2640,7 @@ ipc_port_release_sonce(
 		return;
 	}
 
-	ipc_port_adjust_special_reply_port(port, IPC_PORT_ADJUST_RESET_BOOSTRAP_CHECKIN, FALSE);
+	ipc_port_adjust_special_reply_port(port, IPC_PORT_ADJUST_RESET_BOOSTRAP_CHECKIN);
 
 	ip_lock(port);
 
@@ -2697,7 +2699,8 @@ ipc_port_release_receive(
 
 ipc_port_t
 ipc_port_alloc_special(
-	ipc_space_t     space)
+	ipc_space_t             space,
+	ipc_port_init_flags_t   flags)
 {
 	ipc_port_t port;
 
@@ -2716,7 +2719,7 @@ ipc_port_alloc_special(
 	port->ip_references = 1;
 	port->ip_object.io_bits = io_makebits(TRUE, IOT_PORT, 0);
 
-	ipc_port_init(port, space, 1);
+	ipc_port_init(port, space, flags, 1);
 
 #if     MACH_ASSERT
 	ipc_port_init_debug(port, &buf[0], IP_CALLSTACK_MAX);
@@ -2777,7 +2780,9 @@ ipc_port_finalize(
 	ipc_port_request_t requests = port->ip_requests;
 
 	assert(port_send_turnstile(port) == TURNSTILE_NULL);
-	assert(ipc_port_rcv_turnstile(port) == TURNSTILE_NULL);
+	if (imq_is_turnstile_proxy(&port->ip_messages)) {
+		assert(ipc_port_rcv_turnstile(port) == TURNSTILE_NULL);
+	}
 
 	if (ip_active(port)) {
 		panic("Trying to free an active port. port %p", port);

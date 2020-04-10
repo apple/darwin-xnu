@@ -126,7 +126,6 @@ static void mptcp_subflow_abort(struct mptsub *, int);
 
 static void mptcp_send_dfin(struct socket *so);
 static void mptcp_set_cellicon(struct mptses *mpte, struct mptsub *mpts);
-static void mptcp_unset_cellicon(struct mptses *mpte, struct mptsub *mpts, long val);
 static int mptcp_freeq(struct mptcb *mp_tp);
 
 /*
@@ -215,7 +214,6 @@ static uint32_t mptcp_kern_skt_unit;
 static symptoms_advisory_t mptcp_advisory;
 
 uint32_t mptcp_cellicon_refcount = 0;
-#define MPTCP_CELLICON_TOGGLE_RATE      (5 * TCP_RETRANSHZ) /* Only toggle every 5 seconds */
 
 /*
  * XXX The order of the event handlers below is really
@@ -852,9 +850,6 @@ mptcp_trigger_cell_bringup(struct mptses *mpte)
 static boolean_t
 mptcp_subflow_disconnecting(struct mptsub *mpts)
 {
-	/* Split out in if-statements for readability. Compile should
-	 * optimize that.
-	 */
 	if (mpts->mpts_socket->so_state & SS_ISDISCONNECTED) {
 		return true;
 	}
@@ -2699,11 +2694,15 @@ mptcp_subflow_abort(struct mptsub *mpts, int error)
 void
 mptcp_subflow_disconnect(struct mptses *mpte, struct mptsub *mpts)
 {
-	struct socket *so;
+	struct socket *so, *mp_so;
 	struct mptcb *mp_tp;
 	int send_dfin = 0;
 
-	socket_lock_assert_owned(mptetoso(mpte));
+	so = mpts->mpts_socket;
+	mp_tp = mpte->mpte_mptcb;
+	mp_so = mptetoso(mpte);
+
+	socket_lock_assert_owned(mp_so);
 
 	if (mpts->mpts_flags & (MPTSF_DISCONNECTING | MPTSF_DISCONNECTED)) {
 		return;
@@ -2713,8 +2712,6 @@ mptcp_subflow_disconnect(struct mptses *mpte, struct mptsub *mpts)
 
 	mpts->mpts_flags |= MPTSF_DISCONNECTING;
 
-	so = mpts->mpts_socket;
-	mp_tp = mpte->mpte_mptcb;
 	if (mp_tp->mpt_state > MPTCPS_CLOSE_WAIT) {
 		send_dfin = 1;
 	}
@@ -2728,10 +2725,29 @@ mptcp_subflow_disconnect(struct mptses *mpte, struct mptsub *mpts)
 		if (send_dfin) {
 			mptcp_send_dfin(so);
 		}
-		(void) soshutdownlock(so, SHUT_RD);
-		(void) soshutdownlock(so, SHUT_WR);
-		(void) sodisconnectlocked(so);
+
+		if (mp_so->so_flags & SOF_DEFUNCT) {
+			errno_t ret;
+
+			ret = sosetdefunct(NULL, so, SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL, TRUE);
+			if (ret == 0) {
+				ret = sodefunct(NULL, so, SHUTDOWN_SOCKET_LEVEL_DISCONNECT_ALL);
+
+				if (ret != 0) {
+					os_log_error(mptcp_log_handle, "%s - %lx: sodefunct failed with %d\n",
+					    __func__, (unsigned long)VM_KERNEL_ADDRPERM(mpte), ret);
+				}
+			} else {
+				os_log_error(mptcp_log_handle, "%s - %lx: sosetdefunct failed with %d\n",
+				    __func__, (unsigned long)VM_KERNEL_ADDRPERM(mpte), ret);
+			}
+		} else {
+			(void) soshutdownlock(so, SHUT_RD);
+			(void) soshutdownlock(so, SHUT_WR);
+			(void) sodisconnectlocked(so);
+		}
 	}
+
 	/*
 	 * Generate a disconnect event for this subflow socket, in case
 	 * the lower layer doesn't do it; this is needed because the
@@ -6525,6 +6541,7 @@ mptcp_post_event(u_int32_t event_code, int value)
 static void
 mptcp_set_cellicon(struct mptses *mpte, struct mptsub *mpts)
 {
+	struct tcpcb *tp = sototcpcb(mpts->mpts_socket);
 	int error;
 
 	/* First-party apps (Siri) don't flip the cellicon */
@@ -6537,8 +6554,16 @@ mptcp_set_cellicon(struct mptses *mpte, struct mptsub *mpts)
 		return;
 	}
 
+	/* Fallen back connections are not triggering the cellicon */
+	if (mpte->mpte_mptcb->mpt_flags & MPTCPF_FALLBACK_TO_TCP) {
+		return;
+	}
+
 	/* Remember the last time we set the cellicon. Needed for debouncing */
 	mpte->mpte_last_cellicon_set = tcp_now;
+
+	tp->t_timer[TCPT_CELLICON] = OFFSET_FROM_START(tp, MPTCP_CELLICON_TOGGLE_RATE);
+	tcp_sched_timers(tp);
 
 	if (mpts->mpts_flags & MPTSF_CELLICON_SET &&
 	    mpte->mpte_cellicon_increments != 0) {
@@ -6612,8 +6637,8 @@ __mptcp_unset_cellicon(long val)
 	return true;
 }
 
-static void
-mptcp_unset_cellicon(struct mptses *mpte, struct mptsub *mpts, long val)
+void
+mptcp_unset_cellicon(struct mptses *mpte, struct mptsub *mpts, uint32_t val)
 {
 	/* First-party apps (Siri) don't flip the cellicon */
 	if (mpte->mpte_flags & MPTE_FIRSTPARTY) {
@@ -6640,7 +6665,13 @@ mptcp_unset_cellicon(struct mptses *mpte, struct mptsub *mpts, long val)
 		mpts->mpts_flags &= ~MPTSF_CELLICON_SET;
 	}
 
-	mpte->mpte_cellicon_increments--;
+	if (mpte->mpte_cellicon_increments < val) {
+		os_log_error(mptcp_log_handle, "%s - %lx: Increments is %u but want to dec by %u.\n",
+		    __func__, (unsigned long)VM_KERNEL_ADDRPERM(mpte), mpte->mpte_cellicon_increments, val);
+		val = mpte->mpte_cellicon_increments;
+	}
+
+	mpte->mpte_cellicon_increments -= val;
 
 	if (__mptcp_unset_cellicon(val) == false) {
 		return;

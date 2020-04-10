@@ -168,6 +168,7 @@
 #include <net/restricted_in_port.h> /* for restricted_in_port_init() */
 #include <kern/assert.h>                /* for assert() */
 #include <sys/kern_overrides.h>         /* for init_system_override() */
+#include <sys/lockf.h>                  /* for lf_init() */
 
 #include <net/init.h>
 
@@ -314,6 +315,8 @@ __private_extern__ int bootarg_vnode_cache_defeat = 0;
 #if CONFIG_JETSAM && (DEVELOPMENT || DEBUG)
 __private_extern__ int bootarg_no_vnode_jetsam = 0;
 #endif /* CONFIG_JETSAM && (DEVELOPMENT || DEBUG) */
+
+__private_extern__ int bootarg_no_vnode_drain = 0;
 
 /*
  * Prevent kernel-based ASLR from being used, for testing.
@@ -759,6 +762,10 @@ bsd_init(void)
 	/* Initialize the file systems. */
 	bsd_init_kprintf("calling vfsinit\n");
 	vfsinit();
+
+	/* Initialize file locks. */
+	bsd_init_kprintf("calling lf_init\n");
+	lf_init();
 
 #if CONFIG_PROC_UUID_POLICY
 	/* Initial proc_uuid_policy subsystem */
@@ -1331,6 +1338,9 @@ parse_bsd_args(void)
 	}
 #endif /* CONFIG_JETSAM && (DEVELOPMENT || DEBUG) */
 
+	if (PE_parse_boot_argn("-no_vnode_drain", namep, sizeof(namep))) {
+		bootarg_no_vnode_drain = 1;
+	}
 
 #if CONFIG_EMBEDDED
 	/*

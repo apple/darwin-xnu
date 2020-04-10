@@ -2369,6 +2369,7 @@ int     vfs_context_issuser(vfs_context_t);
 int vfs_context_iskernel(vfs_context_t);
 vfs_context_t vfs_context_kernel(void);         /* get from 1st kernel thread */
 vnode_t vfs_context_cwd(vfs_context_t);
+vnode_t vfs_context_get_cwd(vfs_context_t); /* get cwd with iocount */
 int vnode_isnoflush(vnode_t);
 void vnode_setnoflush(vnode_t);
 void vnode_clearnoflush(vnode_t);

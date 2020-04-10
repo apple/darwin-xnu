@@ -1295,7 +1295,7 @@ fpextovrflt(void)
 	intr = ml_set_interrupts_enabled(FALSE);
 
 	if (get_interrupt_level()) {
-		panic("FPU segment overrun exception  at interrupt context\n");
+		panic("FPU segment overrun exception at interrupt context\n");
 	}
 	if (current_task() == kernel_task) {
 		panic("FPU segment overrun exception in kernel thread context\n");
@@ -1327,12 +1327,6 @@ fpextovrflt(void)
 	if (ifps) {
 		fp_state_free(ifps, xstate);
 	}
-
-	/*
-	 * Raise exception.
-	 */
-	i386_exception(EXC_BAD_ACCESS, VM_PROT_READ | VM_PROT_EXECUTE, 0);
-	/*NOTREACHED*/
 }
 
 extern void fpxlog(int, uint32_t, uint32_t, uint32_t);
@@ -1369,16 +1363,6 @@ fpexterrflt(void)
 	const uint32_t xcpt = ~mask & (ifps->fx_status &
 	    (FPS_IE | FPS_DE | FPS_ZE | FPS_OE | FPS_UE | FPS_PE));
 	fpxlog(EXC_I386_EXTERR, ifps->fx_status, ifps->fx_control, xcpt);
-	/*
-	 * Raise FPU exception.
-	 * Locking not needed on pcb->ifps,
-	 * since thread is running.
-	 */
-	i386_exception(EXC_ARITHMETIC,
-	    EXC_I386_EXTERR,
-	    ifps->fx_status);
-
-	/*NOTREACHED*/
 }
 
 /*
@@ -1473,11 +1457,6 @@ fpSSEexterrflt(void)
 	const uint32_t xcpt = ~mask & (ifps->fx_MXCSR &
 	    (FPS_IE | FPS_DE | FPS_ZE | FPS_OE | FPS_UE | FPS_PE));
 	fpxlog(EXC_I386_SSEEXTERR, ifps->fx_MXCSR, ifps->fx_MXCSR, xcpt);
-
-	i386_exception(EXC_ARITHMETIC,
-	    EXC_I386_SSEEXTERR,
-	    ifps->fx_MXCSR);
-	/*NOTREACHED*/
 }
 
 
@@ -1592,8 +1571,8 @@ fpu_thread_promote_avx512(thread_t thread)
  * return directly via thread_exception_return().
  * Otherwise simply return.
  */
-#define MAX_X86_INSN_LENGTH (16)
-void
+#define MAX_X86_INSN_LENGTH (15)
+int
 fpUDflt(user_addr_t rip)
 {
 	uint8_t         instruction_prefix;
@@ -1605,7 +1584,7 @@ fpUDflt(user_addr_t rip)
 		 * rather than issue multiple copyins
 		 */
 		if (copyin(rip, (char *) &instruction_prefix, 1)) {
-			return;
+			return 1;
 		}
 		DBG("fpUDflt(0x%016llx) prefix: 0x%x\n",
 		    rip, instruction_prefix);
@@ -1624,7 +1603,7 @@ fpUDflt(user_addr_t rip)
 			/* Skip optional prefixes */
 			rip++;
 			if ((rip - original_rip) > MAX_X86_INSN_LENGTH) {
-				return;
+				return 1;
 			}
 			break;
 		case 0x62:      /* EVEX */
@@ -1633,7 +1612,7 @@ fpUDflt(user_addr_t rip)
 			is_AVX512_instruction = TRUE;
 			break;
 		default:
-			return;
+			return 1;
 		}
 	} while (!is_AVX512_instruction);
 
@@ -1643,7 +1622,7 @@ fpUDflt(user_addr_t rip)
 	 * Fail if this machine doesn't support AVX512
 	 */
 	if (fpu_capability != AVX512) {
-		return;
+		return 1;
 	}
 
 	assert(xgetbv(XCR0) == AVX_XMASK);
@@ -1651,8 +1630,7 @@ fpUDflt(user_addr_t rip)
 	DBG("fpUDflt() switching xstate to AVX512\n");
 	(void) fpu_thread_promote_avx512(current_thread());
 
-	thread_exception_return();
-	/* NOT REACHED */
+	return 0;
 }
 #endif /* !defined(RC_HIDE_XNU_J137) */
 

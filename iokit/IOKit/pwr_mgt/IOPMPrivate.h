@@ -106,6 +106,9 @@ enum {
 #define kIOPMMessageLaunchBootSpinDump \
                 iokit_family_msg(sub_iokit_powermanagement, 0x440)
 
+#define kIOPMMessageProModeStateChange \
+                iokit_family_msg(sub_iokit_powermanagement, 0x450)
+
 /* @enum SystemSleepReasons
  * @abstract The potential causes for system sleep as logged in the system event record.
  */
@@ -676,6 +679,11 @@ enum {
 #define kIOPMWakeEventFlagsKey              "Flags"
 #define kIOPMWakeEventReasonKey             "Reason"
 #define kIOPMWakeEventDetailsKey            "Details"
+
+/* kIOPMFeatureProModeKey
+ * Feature published if ProMode is supported
+ */
+#define kIOPMFeatureProModeKey              "ProMode"
 
 /*****************************************************************************
  *

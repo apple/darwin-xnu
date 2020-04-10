@@ -1547,8 +1547,8 @@ def GetLedgerEntrySummary(ledger_template, ledger, i, show_footprint_interval_ma
     else:
         out_str += "        - "
 
-    if (unsigned(ledger.le_warn_level) != ledger_limit_infinity):
-        out_str += "{:9d} ".format((unsigned(ledger.le_warn_level) * 100) / unsigned(ledger.le_limit))
+    if (unsigned(ledger.le_warn_percent) < 65535):
+        out_str += "{:9d} ".format(unsigned(ledger.le_warn_percent * 100. / 65536))
     else:
         out_str += "        - "
 

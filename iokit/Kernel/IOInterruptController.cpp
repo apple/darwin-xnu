@@ -317,7 +317,9 @@ IOInterruptController::enableInterrupt(IOService *nub, int source)
 		}
 		if (vector->interruptDisabledHard) {
 			vector->interruptDisabledHard = 0;
-
+#if !defined(__i386__) && !defined(__x86_64__)
+			OSMemoryBarrier();
+#endif
 			enableVector(vectorNumber, vector);
 		}
 	}

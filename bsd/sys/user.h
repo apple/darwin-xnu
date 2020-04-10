@@ -123,7 +123,7 @@ struct uthread {
 	 * relies on single copy atomicity and cannot be changed to a bitfield.
 	 */
 	bool uu_workq_pthread_kill_allowed;
-	unsigned int syscall_code; /* current syscall code */
+	uint16_t syscall_code; /* current syscall code */
 
 	/* thread exception handling */
 	int     uu_exception;
@@ -191,12 +191,6 @@ struct uthread {
 		uint    nbytes; /* number of bytes in ibits and obits */
 	} uu_select;                    /* saved state for select() */
 
-	/* internal support for continuation framework */
-	int (*uu_continuation)(int);
-	int uu_pri;
-	int uu_timo;
-	caddr_t uu_wchan;                       /* sleeping thread wait channel */
-	const char *uu_wmesg;                   /* ... wait message */
 	struct proc *uu_proc;
 	thread_t uu_thread;
 	void * uu_userstate;
@@ -223,12 +217,19 @@ struct uthread {
 	lck_spin_t      uu_rethrottle_lock;     /* locks was_rethrottled and is_throttled */
 	TAILQ_ENTRY(uthread) uu_throttlelist;   /* List of uthreads currently throttled */
 	void    *       uu_throttle_info;       /* pointer to throttled I/Os info */
-	int             uu_on_throttlelist;
-	int             uu_lowpri_window;
+	int8_t          uu_on_throttlelist;
+	bool            uu_lowpri_window;
 	/* These boolean fields are protected by different locks */
 	bool            uu_was_rethrottled;
 	bool            uu_is_throttled;
 	bool            uu_throttle_bc;
+	bool            uu_defer_reclaims;
+
+	/* internal support for continuation framework */
+	uint16_t uu_pri;                        /* pri | PCATCH | PVFS, ... */
+	caddr_t uu_wchan;                       /* sleeping thread wait channel */
+	int (*uu_continuation)(int);
+	const char *uu_wmesg;                   /* ... wait message */
 
 	u_int32_t       uu_network_marks;       /* network control flow marks */
 
@@ -236,7 +237,6 @@ struct uthread {
 	vnode_t         uu_vreclaims;
 	vnode_t         uu_cdir;                /* per thread CWD */
 	int             uu_dupfd;               /* fd in fdesc_open/dupfdopen */
-	int             uu_defer_reclaims;
 
 	/*
 	 * Bound kqueue request. This field is only cleared by the current thread,
@@ -244,7 +244,7 @@ struct uthread {
 	 */
 	struct workq_threadreq_s *uu_kqr_bound;
 	TAILQ_ENTRY(uthread) uu_workq_entry;
-	mach_vm_offset_t uu_workq_stackaddr;
+	vm_offset_t uu_workq_stackaddr;
 	mach_port_name_t uu_workq_thport;
 	struct uu_workq_policy {
 		uint16_t qos_req : 4;         /* requested QoS */

@@ -2554,6 +2554,9 @@ ipsec_ctl_connect(kern_ctl_ref kctlref,
 	}
 
 	struct ipsec_pcb *pcb = *unitinfo;
+	if (pcb == NULL) {
+		return EINVAL;
+	}
 
 	lck_mtx_lock(&ipsec_lock);
 
@@ -2995,8 +2998,11 @@ ipsec_ctl_setopt(__unused kern_ctl_ref  kctlref,
     void                                   *data,
     size_t                                 len)
 {
-	struct ipsec_pcb                        *pcb = unitinfo;
 	errno_t                                 result = 0;
+	struct ipsec_pcb                        *pcb = unitinfo;
+	if (pcb == NULL) {
+		return EINVAL;
+	}
 
 	/* check for privileges for privileged options */
 	switch (opt) {
@@ -3364,8 +3370,11 @@ ipsec_ctl_getopt(__unused kern_ctl_ref kctlref,
     void *data,
     size_t *len)
 {
-	struct ipsec_pcb *pcb = unitinfo;
 	errno_t result = 0;
+	struct ipsec_pcb *pcb = unitinfo;
+	if (pcb == NULL) {
+		return EINVAL;
+	}
 
 	switch (opt) {
 	case IPSEC_OPT_FLAGS: {

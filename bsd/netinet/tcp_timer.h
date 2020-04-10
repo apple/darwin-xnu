@@ -134,7 +134,8 @@
 #define TCPT_2MSL       6       /* 2*msl quiet time timer */
 #if MPTCP
 #define TCPT_JACK_RXMT  7       /* retransmit timer for join ack */
-#define TCPT_MAX        7
+#define TCPT_CELLICON   8       /* Timer to check for cell-activity */
+#define TCPT_MAX        8
 #else /* MPTCP */
 #define TCPT_MAX        6
 #endif /* !MPTCP */

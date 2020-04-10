@@ -1414,6 +1414,7 @@ mptcp_usr_socheckopt(struct socket *mp_so, struct sockopt *sopt)
 	case SO_NOADDRERR:                      /* MP */
 	case SO_LABEL:                          /* MP */
 	case SO_PEERLABEL:                      /* MP */
+	case SO_DEFUNCTIT:                      /* MP */
 	case SO_DEFUNCTOK:                      /* MP */
 	case SO_ISDEFUNCT:                      /* MP */
 	case SO_TRAFFIC_CLASS_DBG:              /* MP */
@@ -2185,6 +2186,8 @@ mptcp_sopt2str(int level, int optname)
 			return "SO_TRAFFIC_CLASS_DBG";
 		case SO_PRIVILEGED_TRAFFIC_CLASS:
 			return "SO_PRIVILEGED_TRAFFIC_CLASS";
+		case SO_DEFUNCTIT:
+			return "SO_DEFUNCTIT";
 		case SO_DEFUNCTOK:
 			return "SO_DEFUNCTOK";
 		case SO_ISDEFUNCT:

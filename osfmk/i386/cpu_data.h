@@ -125,6 +125,7 @@ typedef struct {
 	uint64_t plbt[MAX_TRACE_BTFRAMES];
 } plrecord_t;
 
+#if     DEVELOPMENT || DEBUG
 typedef enum {
 	IOTRACE_PHYS_READ = 1,
 	IOTRACE_PHYS_WRITE,
@@ -145,7 +146,17 @@ typedef struct {
 	uint64_t        backtrace[MAX_TRACE_BTFRAMES];
 } iotrace_entry_t;
 
-#if     DEVELOPMENT || DEBUG
+typedef struct {
+	int             vector;                 /* Vector number of interrupt */
+	thread_t        curthread;              /* Current thread at the time of the interrupt */
+	uint64_t        interrupted_pc;
+	int             curpl;                  /* Current preemption level */
+	int             curil;                  /* Current interrupt level */
+	uint64_t        start_time_abs;
+	uint64_t        duration;
+	uint64_t        backtrace[MAX_TRACE_BTFRAMES];
+} traptrace_entry_t;
+
 #define DEFAULT_IOTRACE_ENTRIES_PER_CPU (64)
 #define IOTRACE_MAX_ENTRIES_PER_CPU (256)
 extern volatile int mmiotrace_enabled;
@@ -154,7 +165,14 @@ extern int iotrace_entries_per_cpu;
 extern int *iotrace_next;
 extern iotrace_entry_t **iotrace_ring;
 
-extern void init_iotrace_bufs(int cpucnt, int entries_per_cpu);
+#define TRAPTRACE_INVALID_INDEX (~0U)
+#define DEFAULT_TRAPTRACE_ENTRIES_PER_CPU (16)
+#define TRAPTRACE_MAX_ENTRIES_PER_CPU (256)
+extern volatile int traptrace_enabled;
+extern int traptrace_generators;
+extern int traptrace_entries_per_cpu;
+extern int *traptrace_next;
+extern traptrace_entry_t **traptrace_ring;
 #endif /* DEVELOPMENT || DEBUG */
 
 /*
@@ -490,11 +508,12 @@ current_cpu_datap(void)
  */
 #if DEVELOPMENT || DEBUG
 static inline void
-rbtrace_bt(uint64_t *rets, int maxframes, cpu_data_t *cdata)
+rbtrace_bt(uint64_t *rets, int maxframes, cpu_data_t *cdata, uint64_t frameptr, bool use_cursp)
 {
 	extern uint32_t         low_intstack[];         /* bottom */
 	extern uint32_t         low_eintstack[];        /* top */
 	extern char             mp_slave_stack[];
+	int                     btidx = 0;
 
 	uint64_t kstackb, kstackt;
 
@@ -502,16 +521,21 @@ rbtrace_bt(uint64_t *rets, int maxframes, cpu_data_t *cdata)
 	 * element. This will also indicate if we were unable to
 	 * trace further up the stack for some reason
 	 */
-	__asm__ volatile ("leaq 1f(%%rip), %%rax; mov %%rax, %0\n1:"
-             : "=m" (rets[0])
-             :
-             : "rax");
-
+	if (use_cursp) {
+		__asm__ volatile ("leaq 1f(%%rip), %%rax; mov %%rax, %0\n1:"
+                     : "=m" (rets[btidx++])
+                     :
+                     : "rax");
+	}
 
 	thread_t cplthread = cdata->cpu_active_thread;
 	if (cplthread) {
 		uintptr_t csp;
-		__asm__ __volatile__ ("movq %%rsp, %0": "=r" (csp):);
+		if (use_cursp == true) {
+			__asm__ __volatile__ ("movq %%rsp, %0": "=r" (csp):);
+		} else {
+			csp = frameptr;
+		}
 		/* Determine which stack we're on to populate stack bounds.
 		 * We don't need to trace across stack boundaries for this
 		 * routine.
@@ -539,10 +563,10 @@ rbtrace_bt(uint64_t *rets, int maxframes, cpu_data_t *cdata)
 		}
 
 		if (__probable(kstackb && kstackt)) {
-			uint64_t *cfp = (uint64_t *) __builtin_frame_address(0);
+			uint64_t *cfp = (uint64_t *) frameptr;
 			int rbbtf;
 
-			for (rbbtf = 1; rbbtf < maxframes; rbbtf++) {
+			for (rbbtf = btidx; rbbtf < maxframes; rbbtf++) {
 				if (((uint64_t)cfp == 0) || (((uint64_t)cfp < kstackb) || ((uint64_t)cfp > kstackt))) {
 					rets[rbbtf] = 0;
 					continue;
@@ -577,7 +601,7 @@ pltrace_internal(boolean_t enable)
 
 	cdata->cpu_plri = cplrecord;
 
-	rbtrace_bt(plbts, MAX_TRACE_BTFRAMES - 1, cdata);
+	rbtrace_bt(plbts, MAX_TRACE_BTFRAMES - 1, cdata, (uint64_t)__builtin_frame_address(0), true);
 }
 
 extern int plctrace_enabled;
@@ -610,8 +634,55 @@ iotrace(iotrace_type_e type, uint64_t vaddr, uint64_t paddr, int size, uint64_t 
 	iotrace_next[cpu_num] = ((nextidx + 1) >= iotrace_entries_per_cpu) ? 0 : (nextidx + 1);
 
 	rbtrace_bt(&cur_iotrace_ring[nextidx].backtrace[0],
-	    MAX_TRACE_BTFRAMES - 1, cdata);
+	    MAX_TRACE_BTFRAMES - 1, cdata, (uint64_t)__builtin_frame_address(0), true);
 }
+
+static inline uint32_t
+traptrace_start(int vecnum, uint64_t ipc, uint64_t sabs, uint64_t frameptr)
+{
+	cpu_data_t *cdata;
+	int cpu_num, nextidx;
+	traptrace_entry_t *cur_traptrace_ring;
+
+	if (__improbable(traptrace_enabled == 0 || traptrace_generators == 0)) {
+		return TRAPTRACE_INVALID_INDEX;
+	}
+
+	assert(ml_get_interrupts_enabled() == FALSE);
+	cdata = current_cpu_datap();
+	cpu_num = cdata->cpu_number;
+	nextidx = traptrace_next[cpu_num];
+	/* prevent nested interrupts from clobbering this record */
+	traptrace_next[cpu_num] = ((nextidx + 1) >= traptrace_entries_per_cpu) ? 0 : (nextidx + 1);
+
+	cur_traptrace_ring = traptrace_ring[cpu_num];
+
+	cur_traptrace_ring[nextidx].vector = vecnum;
+	cur_traptrace_ring[nextidx].curthread = current_thread();
+	cur_traptrace_ring[nextidx].interrupted_pc = ipc;
+	cur_traptrace_ring[nextidx].curpl = cdata->cpu_preemption_level;
+	cur_traptrace_ring[nextidx].curil = cdata->cpu_interrupt_level;
+	cur_traptrace_ring[nextidx].start_time_abs = sabs;
+	cur_traptrace_ring[nextidx].duration = ~0ULL;
+
+	rbtrace_bt(&cur_traptrace_ring[nextidx].backtrace[0],
+	    MAX_TRACE_BTFRAMES - 1, cdata, frameptr, false);
+
+	assert(nextidx <= 0xFFFF);
+
+	return ((unsigned)cpu_num << 16) | nextidx;
+}
+
+static inline void
+traptrace_end(uint32_t index, uint64_t eabs)
+{
+	if (index != TRAPTRACE_INVALID_INDEX) {
+		traptrace_entry_t *ttentp = &traptrace_ring[index >> 16][index & 0xFFFF];
+
+		ttentp->duration = eabs - ttentp->start_time_abs;
+	}
+}
+
 #endif /* DEVELOPMENT || DEBUG */
 
 static inline void

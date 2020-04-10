@@ -33,8 +33,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-/* fwd decl */
 struct kperf_sample;
+struct kperf_usample;
 struct kperf_context;
 
 /* bits for defining what to do on an action */
@@ -85,6 +85,12 @@ kern_return_t kperf_sample(struct kperf_sample *sbuf,
     struct kperf_context *ctx,
     unsigned actionid,
     unsigned sample_flags);
+
+/*
+ * Sample user space.
+ */
+void kperf_sample_user(struct kperf_usample *sbuf, struct kperf_context *ctx,
+    unsigned int actionid, unsigned int sample_flags);
 
 /* Whether the action provided samples non-system values. */
 bool kperf_action_has_non_system(unsigned actionid);

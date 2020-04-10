@@ -1123,52 +1123,52 @@ filt_procevent(struct knote *kn, long hint)
 
 	/*
 	 * The kernel has a wrapper in place that returns the same data
-	 * as is collected here, in kn_hook64.  Any changes to how
+	 * as is collected here, in kn_hook32.  Any changes to how
 	 * NOTE_EXITSTATUS and NOTE_EXIT_DETAIL are collected
 	 * should also be reflected in the proc_pidnoteexit() wrapper.
 	 */
 	if (event == NOTE_EXIT) {
-		kn->kn_hook64 = 0;
+		kn->kn_hook32 = 0;
 		if ((kn->kn_sfflags & NOTE_EXITSTATUS) != 0) {
 			kn->kn_fflags |= NOTE_EXITSTATUS;
-			kn->kn_hook64 |= (hint & NOTE_PDATAMASK);
+			kn->kn_hook32 |= (hint & NOTE_PDATAMASK);
 		}
 		if ((kn->kn_sfflags & NOTE_EXIT_DETAIL) != 0) {
 			kn->kn_fflags |= NOTE_EXIT_DETAIL;
 			if ((kn->kn_proc->p_lflag &
 			    P_LTERM_DECRYPTFAIL) != 0) {
-				kn->kn_hook64 |= NOTE_EXIT_DECRYPTFAIL;
+				kn->kn_hook32 |= NOTE_EXIT_DECRYPTFAIL;
 			}
 			if ((kn->kn_proc->p_lflag &
 			    P_LTERM_JETSAM) != 0) {
-				kn->kn_hook64 |= NOTE_EXIT_MEMORY;
+				kn->kn_hook32 |= NOTE_EXIT_MEMORY;
 				switch (kn->kn_proc->p_lflag & P_JETSAM_MASK) {
 				case P_JETSAM_VMPAGESHORTAGE:
-					kn->kn_hook64 |= NOTE_EXIT_MEMORY_VMPAGESHORTAGE;
+					kn->kn_hook32 |= NOTE_EXIT_MEMORY_VMPAGESHORTAGE;
 					break;
 				case P_JETSAM_VMTHRASHING:
-					kn->kn_hook64 |= NOTE_EXIT_MEMORY_VMTHRASHING;
+					kn->kn_hook32 |= NOTE_EXIT_MEMORY_VMTHRASHING;
 					break;
 				case P_JETSAM_FCTHRASHING:
-					kn->kn_hook64 |= NOTE_EXIT_MEMORY_FCTHRASHING;
+					kn->kn_hook32 |= NOTE_EXIT_MEMORY_FCTHRASHING;
 					break;
 				case P_JETSAM_VNODE:
-					kn->kn_hook64 |= NOTE_EXIT_MEMORY_VNODE;
+					kn->kn_hook32 |= NOTE_EXIT_MEMORY_VNODE;
 					break;
 				case P_JETSAM_HIWAT:
-					kn->kn_hook64 |= NOTE_EXIT_MEMORY_HIWAT;
+					kn->kn_hook32 |= NOTE_EXIT_MEMORY_HIWAT;
 					break;
 				case P_JETSAM_PID:
-					kn->kn_hook64 |= NOTE_EXIT_MEMORY_PID;
+					kn->kn_hook32 |= NOTE_EXIT_MEMORY_PID;
 					break;
 				case P_JETSAM_IDLEEXIT:
-					kn->kn_hook64 |= NOTE_EXIT_MEMORY_IDLE;
+					kn->kn_hook32 |= NOTE_EXIT_MEMORY_IDLE;
 					break;
 				}
 			}
 			if ((kn->kn_proc->p_csflags &
 			    CS_KILLED) != 0) {
-				kn->kn_hook64 |= NOTE_EXIT_CSERROR;
+				kn->kn_hook32 |= NOTE_EXIT_CSERROR;
 			}
 		}
 	}
@@ -1208,8 +1208,8 @@ filt_procprocess(struct knote *kn, struct kevent_qos_s *kev)
 
 	proc_klist_lock();
 	if (kn->kn_fflags) {
-		knote_fill_kevent(kn, kev, kn->kn_hook64);
-		kn->kn_hook64 = 0;
+		knote_fill_kevent(kn, kev, kn->kn_hook32);
+		kn->kn_hook32 = 0;
 		res = 1;
 	}
 	proc_klist_unlock();
@@ -3700,14 +3700,14 @@ kevent_register(struct kqueue *kq, struct kevent_qos_s *kev,
 	}
 
 	if (kq->kq_state & KQ_WORKLOOP) {
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_REGISTER),
+		KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWL_REGISTER),
 		    ((struct kqworkloop *)kq)->kqwl_dynamicid,
 		    kev->udata, kev->flags, kev->filter);
 	} else if (kq->kq_state & KQ_WORKQ) {
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWQ_REGISTER),
+		KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWQ_REGISTER),
 		    0, kev->udata, kev->flags, kev->filter);
 	} else {
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQ_REGISTER),
+		KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQ_REGISTER),
 		    VM_KERNEL_UNSLIDE_OR_PERM(kq),
 		    kev->udata, kev->flags, kev->filter);
 	}
@@ -3995,16 +3995,16 @@ knote_process(struct knote *kn, kevent_ctx_t kectx,
 	assert(!(kn->kn_status & (KN_DISABLED | KN_SUPPRESSED | KN_DROPPING)));
 
 	if (kq->kq_state & KQ_WORKLOOP) {
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_PROCESS),
+		KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWL_PROCESS),
 		    ((struct kqworkloop *)kq)->kqwl_dynamicid,
 		    kn->kn_udata, kn->kn_status | (kn->kn_id << 32),
 		    kn->kn_filtid);
 	} else if (kq->kq_state & KQ_WORKQ) {
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWQ_PROCESS),
+		KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWQ_PROCESS),
 		    0, kn->kn_udata, kn->kn_status | (kn->kn_id << 32),
 		    kn->kn_filtid);
 	} else {
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQ_PROCESS),
+		KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQ_PROCESS),
 		    VM_KERNEL_UNSLIDE_OR_PERM(kq), kn->kn_udata,
 		    kn->kn_status | (kn->kn_id << 32), kn->kn_filtid);
 	}
@@ -4125,7 +4125,7 @@ knote_process(struct knote *kn, kevent_ctx_t kectx,
 	}
 
 	if (kev.flags & EV_VANISHED) {
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KNOTE_VANISHED),
+		KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KNOTE_VANISHED),
 		    kev.ident, kn->kn_udata, kn->kn_status | (kn->kn_id << 32),
 		    kn->kn_filtid);
 	}
@@ -4225,13 +4225,13 @@ kqworkq_begin_processing(struct kqworkq *kqwq, workq_threadreq_t kqr,
 {
 	int rc = 0;
 
-	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWQ_PROCESS_BEGIN) | DBG_FUNC_START,
+	KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWQ_PROCESS_BEGIN) | DBG_FUNC_START,
 	    0, kqr->tr_kq_qos_index);
 
 	rc = kqworkq_acknowledge_events(kqwq, kqr, kevent_flags,
 	    KQWQAE_BEGIN_PROCESSING);
 
-	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWQ_PROCESS_BEGIN) | DBG_FUNC_END,
+	KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWQ_PROCESS_BEGIN) | DBG_FUNC_END,
 	    thread_tid(kqr_thread(kqr)), kqr->tr_kq_wakeup);
 
 	return rc;
@@ -4274,7 +4274,7 @@ kqworkloop_begin_processing(struct kqworkloop *kqwl, unsigned int kevent_flags)
 
 	kqlock_held(kq);
 
-	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_PROCESS_BEGIN) | DBG_FUNC_START,
+	KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWL_PROCESS_BEGIN) | DBG_FUNC_START,
 	    kqwl->kqwl_dynamicid, 0, 0);
 
 	/* nobody else should still be processing */
@@ -4352,7 +4352,7 @@ kqworkloop_begin_processing(struct kqworkloop *kqwl, unsigned int kevent_flags)
 	}
 
 done:
-	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_PROCESS_BEGIN) | DBG_FUNC_END,
+	KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWL_PROCESS_BEGIN) | DBG_FUNC_END,
 	    kqwl->kqwl_dynamicid, 0, 0);
 
 	return rc;
@@ -4375,13 +4375,13 @@ kqfile_begin_processing(struct kqfile *kq)
 	kqlock_held(kq);
 
 	assert((kq->kqf_state & (KQ_WORKQ | KQ_WORKLOOP)) == 0);
-	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQ_PROCESS_BEGIN) | DBG_FUNC_START,
+	KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQ_PROCESS_BEGIN) | DBG_FUNC_START,
 	    VM_KERNEL_UNSLIDE_OR_PERM(kq), 0);
 
 	/* wait to become the exclusive processing thread */
 	for (;;) {
 		if (kq->kqf_state & KQ_DRAIN) {
-			KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQ_PROCESS_BEGIN) | DBG_FUNC_END,
+			KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQ_PROCESS_BEGIN) | DBG_FUNC_END,
 			    VM_KERNEL_UNSLIDE_OR_PERM(kq), 2);
 			return EBADF;
 		}
@@ -4410,7 +4410,7 @@ kqfile_begin_processing(struct kqfile *kq)
 
 	/* anything left to process? */
 	if (TAILQ_EMPTY(&kq->kqf_queue)) {
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQ_PROCESS_BEGIN) | DBG_FUNC_END,
+		KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQ_PROCESS_BEGIN) | DBG_FUNC_END,
 		    VM_KERNEL_UNSLIDE_OR_PERM(kq), 1);
 		return -1;
 	}
@@ -4418,7 +4418,7 @@ kqfile_begin_processing(struct kqfile *kq)
 	/* convert to processing mode */
 	kq->kqf_state |= KQ_PROCESSING;
 
-	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQ_PROCESS_BEGIN) | DBG_FUNC_END,
+	KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQ_PROCESS_BEGIN) | DBG_FUNC_END,
 	    VM_KERNEL_UNSLIDE_OR_PERM(kq));
 
 	return 0;
@@ -4476,7 +4476,7 @@ kqworkloop_end_processing(struct kqworkloop *kqwl, int flags, int kevent_flags)
 
 	kqlock_held(kq);
 
-	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_PROCESS_END) | DBG_FUNC_START,
+	KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWL_PROCESS_END) | DBG_FUNC_START,
 	    kqwl->kqwl_dynamicid, 0, 0);
 
 	if (flags & KQ_PROCESSING) {
@@ -4533,7 +4533,7 @@ kqworkloop_end_processing(struct kqworkloop *kqwl, int flags, int kevent_flags)
 		kqworkloop_unbind_delayed_override_drop(thread);
 	}
 
-	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_PROCESS_END) | DBG_FUNC_END,
+	KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWL_PROCESS_END) | DBG_FUNC_END,
 	    kqwl->kqwl_dynamicid, 0, 0);
 
 	return rc;
@@ -4557,7 +4557,7 @@ kqfile_end_processing(struct kqfile *kq)
 
 	assert((kq->kqf_state & (KQ_WORKQ | KQ_WORKLOOP)) == 0);
 
-	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQ_PROCESS_END),
+	KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQ_PROCESS_END),
 	    VM_KERNEL_UNSLIDE_OR_PERM(kq), 0);
 
 	/*
@@ -4663,6 +4663,7 @@ kqueue_workloop_ctl_internal(proc_t p, uintptr_t cmd, uint64_t __unused options,
 		trp.trp_value = kqwl->kqwl_params;
 		if (trp.trp_flags && !(trp.trp_flags & TRP_RELEASED)) {
 			trp.trp_flags |= TRP_RELEASED;
+			kqwl->kqwl_params = trp.trp_value;
 			kqworkloop_release_live(kqwl);
 		} else {
 			error = EINVAL;
@@ -5045,14 +5046,14 @@ kqueue_threadreq_initiate(struct kqueue *kq, workq_threadreq_t kqr,
 		__assert_only struct kqworkloop *kqwl = (struct kqworkloop *)kq;
 
 		assert(kqwl->kqwl_owner == THREAD_NULL);
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_THREQUEST),
+		KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWL_THREQUEST),
 		    kqwl->kqwl_dynamicid, 0, qos, kqr->tr_kq_wakeup);
 		ts = kqwl->kqwl_turnstile;
 		/* Add a thread request reference on the kqueue. */
 		kqworkloop_retain(kqwl);
 	} else {
 		assert(kq->kq_state & KQ_WORKQ);
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWQ_THREQUEST),
+		KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWQ_THREQUEST),
 		    -1, 0, qos, kqr->tr_kq_wakeup);
 	}
 
@@ -5192,7 +5193,7 @@ kqueue_threadreq_bind(struct proc *p, workq_threadreq_t kqr, thread_t thread,
 			turnstile_update_inheritor_complete(ts, TURNSTILE_INTERLOCK_HELD);
 		}
 
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_BIND), kqu.kqwl->kqwl_dynamicid,
+		KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWL_BIND), kqu.kqwl->kqwl_dynamicid,
 		    thread_tid(thread), kqr->tr_kq_qos_index,
 		    (kqr->tr_kq_override_index << 16) | kqr->tr_kq_wakeup);
 
@@ -5203,7 +5204,7 @@ kqueue_threadreq_bind(struct proc *p, workq_threadreq_t kqr, thread_t thread,
 	} else {
 		assert(kqr->tr_kq_override_index == 0);
 
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWQ_BIND), -1,
+		KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWQ_BIND), -1,
 		    thread_tid(thread), kqr->tr_kq_qos_index,
 		    (kqr->tr_kq_override_index << 16) | kqr->tr_kq_wakeup);
 	}
@@ -5432,7 +5433,7 @@ recompute:
 	if (kqwl_owner) {
 #if 0
 		/* JMM - need new trace hooks for owner overrides */
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_THADJUST),
+		KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWL_THADJUST),
 		    kqwl->kqwl_dynamicid, thread_tid(kqwl_owner), kqr->tr_kq_qos_index,
 		    (kqr->tr_kq_override_index << 16) | kqr->tr_kq_wakeup);
 #endif
@@ -5503,7 +5504,7 @@ recompute:
 	}
 
 	if (qos_changed) {
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_THADJUST), kqwl->kqwl_dynamicid,
+		KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWL_THADJUST), kqwl->kqwl_dynamicid,
 		    thread_tid(servicer), kqr->tr_kq_qos_index,
 		    (kqr->tr_kq_override_index << 16) | kqr->tr_kq_wakeup);
 	}
@@ -5696,7 +5697,7 @@ kqworkloop_unbind_locked(struct kqworkloop *kqwl, thread_t thread,
 	struct uthread *ut = get_bsdthread_info(thread);
 	workq_threadreq_t kqr = &kqwl->kqwl_request;
 
-	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWL_UNBIND), kqwl->kqwl_dynamicid,
+	KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWL_UNBIND), kqwl->kqwl_dynamicid,
 	    thread_tid(thread), 0, 0);
 
 	kqlock_held(kqwl);
@@ -5789,7 +5790,7 @@ kqworkq_unbind_locked(struct kqworkq *kqwq,
 	struct uthread *ut = get_bsdthread_info(thread);
 	kq_index_t old_override = kqr->tr_kq_override_index;
 
-	KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KQWQ_UNBIND), -1,
+	KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KQWQ_UNBIND), -1,
 	    thread_tid(kqr_thread(kqr)), kqr->tr_kq_qos_index, 0);
 
 	kqlock_held(kqwq);
@@ -6625,7 +6626,7 @@ static inline void
 knote_mark_active(struct knote *kn)
 {
 	if ((kn->kn_status & KN_ACTIVE) == 0) {
-		KDBG_FILTERED(KEV_EVTID(BSD_KEVENT_KNOTE_ACTIVATE),
+		KDBG_DEBUG(KEV_EVTID(BSD_KEVENT_KNOTE_ACTIVATE),
 		    kn->kn_udata, kn->kn_status | (kn->kn_id << 32),
 		    kn->kn_filtid);
 	}

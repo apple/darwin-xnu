@@ -1574,6 +1574,7 @@ void     tcp_gc(struct inpcbinfo *);
 void     tcp_itimer(struct inpcbinfo *ipi);
 void     tcp_check_timer_state(struct tcpcb *tp);
 void     tcp_run_timerlist(void *arg1, void *arg2);
+void     tcp_sched_timers(struct tcpcb *tp);
 
 struct tcptemp *tcp_maketemplate(struct tcpcb *);
 void     tcp_fillheaders(struct tcpcb *, void *, void *);
