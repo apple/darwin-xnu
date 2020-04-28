@@ -1253,7 +1253,7 @@ vfs_context_get_special_port(vfs_context_t ctx, int which, ipc_port_t *portp)
  *              int				Index of special port
  *              ipc_port_t			New special port
  *
- * Returns:	kern_return_t			see task_set_special_port()
+ * Returns:	kern_return_t			see task_set_special_port_internal()
  */
 kern_return_t
 vfs_context_set_special_port(vfs_context_t ctx, int which, ipc_port_t port)
@@ -1264,7 +1264,7 @@ vfs_context_set_special_port(vfs_context_t ctx, int which, ipc_port_t port)
 		task = get_threadtask(ctx->vc_thread);
 	}
 
-	return task_set_special_port(task, which, port);
+	return task_set_special_port_internal(task, which, port);
 }
 
 /*

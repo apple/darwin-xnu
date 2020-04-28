@@ -263,7 +263,7 @@ xnupost_export_testdata(void * outp, uint32_t size, uint32_t * lenp)
 	kret = copyout(&version[0], user_addr, length_to_copy);
 	RET_IF_OP_FAIL;
 
-	length_to_copy = MIN((uint32_t)(strlen(PE_boot_args()) + 1), OSVERSIZE);
+	length_to_copy = MIN((uint32_t)(strlen(PE_boot_args()) + 1), BOOT_LINE_LENGTH);
 	kret           = kcdata_get_memory_addr(&kcd, STACKSHOT_KCTYPE_BOOTARGS, length_to_copy, &user_addr);
 	RET_IF_OP_FAIL;
 	kret = copyout(PE_boot_args(), user_addr, length_to_copy);

@@ -806,6 +806,7 @@ typedef struct pmap_io_range {
 	uint64_t addr;
 	uint64_t len;
 	#define PMAP_IO_RANGE_STRONG_SYNC (1UL << 31) // Strong DSB required for pages in this range
+	#define PMAP_IO_RANGE_CARVEOUT (1UL << 30) // Corresponds to memory carved out by bootloader
 	uint32_t wimg; // lower 16 bits treated as pp_attr_t, upper 16 bits contain additional mapping flags
 	uint32_t signature; // 4CC
 } __attribute__((packed)) pmap_io_range_t;
@@ -1493,7 +1494,7 @@ PMAP_SUPPORT_PROTOTYPES(
 
 PMAP_SUPPORT_PROTOTYPES(
 	kern_return_t,
-	mapping_replenish, (void), MAPPING_REPLENISH_INDEX);
+	mapping_replenish, (uint32_t kern_target_count, uint32_t user_target_count), MAPPING_REPLENISH_INDEX);
 
 PMAP_SUPPORT_PROTOTYPES(
 	boolean_t,
@@ -2134,15 +2135,10 @@ uint32_t pv_kern_alloc_chunk MARK_AS_PMAP_DATA;
 
 thread_t mapping_replenish_thread;
 event_t mapping_replenish_event;
-event_t pmap_user_pv_throttle_event;
 volatile uint32_t mappingrecurse = 0;
 
-uint64_t pmap_pv_throttle_stat;
-uint64_t pmap_pv_throttled_waiters;
-
 unsigned pmap_mapping_thread_wakeups;
-unsigned pmap_kernel_reserve_replenish_stat MARK_AS_PMAP_DATA;
-unsigned pmap_user_reserve_replenish_stat MARK_AS_PMAP_DATA;
+unsigned pmap_reserve_replenish_stat MARK_AS_PMAP_DATA;
 unsigned pmap_kern_reserve_alloc_stat MARK_AS_PMAP_DATA;
 
 
@@ -2160,10 +2156,7 @@ pv_init(
 
 static inline void      PV_ALLOC(pv_entry_t **pv_ep);
 static inline void      PV_KERN_ALLOC(pv_entry_t **pv_e);
-static inline void      PV_FREE_LIST(pv_entry_t *pv_eh, pv_entry_t *pv_et, int pv_cnt);
-static inline void      PV_KERN_FREE_LIST(pv_entry_t *pv_eh, pv_entry_t *pv_et, int pv_cnt);
-
-static inline void      pmap_pv_throttle(pmap_t p);
+static inline void      PV_FREE_LIST(pv_entry_t *pv_eh, pv_entry_t *pv_et, int pv_cnt, uint32_t kern_target);
 
 static boolean_t
 pv_alloc(
@@ -2225,7 +2218,7 @@ pv_alloc(
 					pv_cnt++;
 					pv_e++;
 				}
-				PV_KERN_FREE_LIST(pv_eh, pv_et, pv_cnt);
+				PV_FREE_LIST(pv_eh, pv_et, pv_cnt, pv_kern_low_water_mark);
 				if (pmap != NULL) {
 					PMAP_LOCK(pmap);
 				}
@@ -2235,45 +2228,45 @@ pv_alloc(
 		} else {
 			UNLOCK_PVH(pai);
 			PMAP_UNLOCK(pmap);
-			pmap_pv_throttle(pmap);
-			{
-				pv_entry_t              *pv_e;
-				pv_entry_t              *pv_eh;
-				pv_entry_t              *pv_et;
-				int                             pv_cnt;
-				unsigned                j;
-				pmap_paddr_t    pa;
-				kern_return_t   ret;
 
-				ret = pmap_pages_alloc(&pa, PAGE_SIZE, 0);
+			pv_entry_t              *pv_e;
+			pv_entry_t              *pv_eh;
+			pv_entry_t              *pv_et;
+			int                             pv_cnt;
+			unsigned                j;
+			pmap_paddr_t    pa;
+			kern_return_t   ret;
 
-				if (ret != KERN_SUCCESS) {
-					panic("%s: failed to alloc page, ret=%d, "
-					    "pmap=%p, pai=%u, pvepp=%p",
-					    __FUNCTION__, ret,
-					    pmap, pai, pvepp);
-				}
+			ret = pmap_pages_alloc(&pa, PAGE_SIZE, 0);
 
-				pv_page_count++;
-
-				pv_e = (pv_entry_t *)phystokv(pa);
-				pv_cnt = 0;
-				pv_eh = pv_et = PV_ENTRY_NULL;
-				*pvepp = pv_e;
-				pv_e++;
-
-				for (j = 1; j < (PAGE_SIZE / sizeof(pv_entry_t)); j++) {
-					pv_e->pve_next = pv_eh;
-					pv_eh = pv_e;
-
-					if (pv_et == PV_ENTRY_NULL) {
-						pv_et = pv_e;
-					}
-					pv_cnt++;
-					pv_e++;
-				}
-				PV_FREE_LIST(pv_eh, pv_et, pv_cnt);
+			if (ret != KERN_SUCCESS) {
+				panic("%s: failed to alloc page, ret=%d, "
+				    "pmap=%p, pai=%u, pvepp=%p",
+				    __FUNCTION__, ret,
+				    pmap, pai, pvepp);
 			}
+
+			pv_page_count++;
+
+			pv_e = (pv_entry_t *)phystokv(pa);
+			pv_cnt = 0;
+			pv_eh = pv_et = PV_ENTRY_NULL;
+			*pvepp = pv_e;
+			pv_e++;
+
+			for (j = 1; j < (PAGE_SIZE / sizeof(pv_entry_t)); j++) {
+				pv_e->pve_next = pv_eh;
+				pv_eh = pv_e;
+
+				if (pv_et == PV_ENTRY_NULL) {
+					pv_et = pv_e;
+				}
+				pv_cnt++;
+				pv_e++;
+			}
+
+			PV_FREE_LIST(pv_eh, pv_et, pv_cnt, pv_kern_low_water_mark);
+
 			PMAP_LOCK(pmap);
 			LOCK_PVH(pai);
 			return FALSE;
@@ -2287,7 +2280,7 @@ static void
 pv_free(
 	pv_entry_t *pvep)
 {
-	PV_FREE_LIST(pvep, pvep, 1);
+	PV_FREE_LIST(pvep, pvep, 1, pv_kern_low_water_mark);
 }
 
 static void
@@ -2296,7 +2289,7 @@ pv_list_free(
 	pv_entry_t *pvetp,
 	unsigned int cnt)
 {
-	PV_FREE_LIST(pvehp, pvetp, cnt);
+	PV_FREE_LIST(pvehp, pvetp, cnt, pv_kern_low_water_mark);
 }
 
 static inline void
@@ -2313,12 +2306,16 @@ static inline void
 PV_ALLOC(pv_entry_t **pv_ep)
 {
 	assert(*pv_ep == PV_ENTRY_NULL);
+	if (pv_kern_free_count < pv_kern_low_water_mark) {
+		/*
+		 * If the kernel reserved pool is low, let non-kernel mappings wait for a page
+		 * from the VM.
+		 */
+		return;
+	}
 	pmap_simple_lock(&pv_free_list_lock);
-	/*
-	 * If the kernel reserved pool is low, let non-kernel mappings allocate
-	 * synchronously, possibly subject to a throttle.
-	 */
-	if ((pv_kern_free_count >= pv_kern_low_water_mark) && ((*pv_ep = pv_free_list) != 0)) {
+
+	if ((*pv_ep = pv_free_list) != 0) {
 		pv_free_list = (pv_entry_t *)(*pv_ep)->pve_next;
 		(*pv_ep)->pve_next = PV_ENTRY_NULL;
 		pv_free_count--;
@@ -2328,13 +2325,25 @@ PV_ALLOC(pv_entry_t **pv_ep)
 }
 
 static inline void
-PV_FREE_LIST(pv_entry_t *pv_eh, pv_entry_t *pv_et, int pv_cnt)
+PV_FREE_LIST(pv_entry_t *pv_eh, pv_entry_t *pv_et, int pv_cnt, uint32_t kern_target)
 {
-	pmap_simple_lock(&pv_free_list_lock);
-	pv_et->pve_next = (pv_entry_t *)pv_free_list;
-	pv_free_list = pv_eh;
-	pv_free_count += pv_cnt;
-	pmap_simple_unlock(&pv_free_list_lock);
+	bool use_kernel_list = false;
+	pmap_simple_lock(&pv_kern_free_list_lock);
+	if (pv_kern_free_count < kern_target) {
+		pv_et->pve_next = pv_kern_free_list;
+		pv_kern_free_list = pv_eh;
+		pv_kern_free_count += pv_cnt;
+		use_kernel_list = true;
+	}
+	pmap_simple_unlock(&pv_kern_free_list_lock);
+
+	if (!use_kernel_list) {
+		pmap_simple_lock(&pv_free_list_lock);
+		pv_et->pve_next = (pv_entry_t *)pv_free_list;
+		pv_free_list = pv_eh;
+		pv_free_count += pv_cnt;
+		pmap_simple_unlock(&pv_free_list_lock);
+	}
 }
 
 static inline void
@@ -2353,32 +2362,6 @@ PV_KERN_ALLOC(pv_entry_t **pv_e)
 	pmap_simple_unlock(&pv_kern_free_list_lock);
 }
 
-static inline void
-PV_KERN_FREE_LIST(pv_entry_t *pv_eh, pv_entry_t *pv_et, int pv_cnt)
-{
-	pmap_simple_lock(&pv_kern_free_list_lock);
-	pv_et->pve_next = pv_kern_free_list;
-	pv_kern_free_list = pv_eh;
-	pv_kern_free_count += pv_cnt;
-	pmap_simple_unlock(&pv_kern_free_list_lock);
-}
-
-static inline void
-pmap_pv_throttle(__unused pmap_t p)
-{
-	assert(p != kernel_pmap);
-	/* Apply throttle on non-kernel mappings */
-	if (pv_kern_free_count < (pv_kern_low_water_mark / 2)) {
-		pmap_pv_throttle_stat++;
-		/* This doesn't need to be strictly accurate, merely a hint
-		 * to eliminate the timeout when the reserve is replenished.
-		 */
-		pmap_pv_throttled_waiters++;
-		assert_wait_timeout(&pmap_user_pv_throttle_event, THREAD_UNINT, 1, 1000 * NSEC_PER_USEC);
-		thread_block(THREAD_CONTINUE_NULL);
-	}
-}
-
 /*
  * Creates a target number of free pv_entry_t objects for the kernel free list
  * and the general free list.
@@ -2386,17 +2369,6 @@ pmap_pv_throttle(__unused pmap_t p)
 MARK_AS_PMAP_TEXT static kern_return_t
 mapping_free_prime_internal(void)
 {
-	unsigned       j;
-	pmap_paddr_t   pa;
-	kern_return_t  ret;
-	pv_entry_t    *pv_e;
-	pv_entry_t    *pv_eh;
-	pv_entry_t    *pv_et;
-	int            pv_cnt;
-	int            alloc_options = 0;
-	int            needed_pv_cnt = 0;
-	int            target_pv_free_cnt = 0;
-
 	SECURITY_READ_ONLY_LATE(static boolean_t) mapping_free_prime_internal_called = FALSE;
 	SECURITY_READ_ONLY_LATE(static boolean_t) mapping_free_prime_internal_done = FALSE;
 
@@ -2416,85 +2388,7 @@ mapping_free_prime_internal(void)
 		pv_alloc_chunk = PV_ALLOC_CHUNK_INITIAL;
 	}
 
-	pv_cnt = 0;
-	pv_eh = pv_et = PV_ENTRY_NULL;
-	target_pv_free_cnt = PV_ALLOC_INITIAL_TARGET;
-
-	/*
-	 * We don't take the lock to read pv_free_count, as we should not be
-	 * invoking this from a multithreaded context.
-	 */
-	needed_pv_cnt = target_pv_free_cnt - pv_free_count;
-
-	if (needed_pv_cnt > target_pv_free_cnt) {
-		needed_pv_cnt = 0;
-	}
-
-	while (pv_cnt < needed_pv_cnt) {
-		ret = pmap_pages_alloc(&pa, PAGE_SIZE, alloc_options);
-
-		assert(ret == KERN_SUCCESS);
-
-		pv_page_count++;
-
-		pv_e = (pv_entry_t *)phystokv(pa);
-
-		for (j = 0; j < (PAGE_SIZE / sizeof(pv_entry_t)); j++) {
-			pv_e->pve_next = pv_eh;
-			pv_eh = pv_e;
-
-			if (pv_et == PV_ENTRY_NULL) {
-				pv_et = pv_e;
-			}
-			pv_cnt++;
-			pv_e++;
-		}
-	}
-
-	if (pv_cnt) {
-		PV_FREE_LIST(pv_eh, pv_et, pv_cnt);
-	}
-
-	pv_cnt = 0;
-	pv_eh = pv_et = PV_ENTRY_NULL;
-	target_pv_free_cnt = PV_KERN_ALLOC_INITIAL_TARGET;
-
-	/*
-	 * We don't take the lock to read pv_kern_free_count, as we should not
-	 * be invoking this from a multithreaded context.
-	 */
-	needed_pv_cnt = target_pv_free_cnt - pv_kern_free_count;
-
-	if (needed_pv_cnt > target_pv_free_cnt) {
-		needed_pv_cnt = 0;
-	}
-
-	while (pv_cnt < needed_pv_cnt) {
-		ret = pmap_pages_alloc(&pa, PAGE_SIZE, alloc_options);
-
-		assert(ret == KERN_SUCCESS);
-		pv_page_count++;
-
-		pv_e = (pv_entry_t *)phystokv(pa);
-
-		for (j = 0; j < (PAGE_SIZE / sizeof(pv_entry_t)); j++) {
-			pv_e->pve_next = pv_eh;
-			pv_eh = pv_e;
-
-			if (pv_et == PV_ENTRY_NULL) {
-				pv_et = pv_e;
-			}
-			pv_cnt++;
-			pv_e++;
-		}
-	}
-
-	if (pv_cnt) {
-		PV_KERN_FREE_LIST(pv_eh, pv_et, pv_cnt);
-	}
-
-	mapping_free_prime_internal_done = TRUE;
-	return KERN_SUCCESS;
+	return mapping_replenish_internal(PV_KERN_ALLOC_INITIAL_TARGET, PV_ALLOC_INITIAL_TARGET);
 }
 
 void
@@ -2529,7 +2423,7 @@ mapping_adjust(void)
  * Fills the kernel and general PV free lists back up to their low watermarks.
  */
 MARK_AS_PMAP_TEXT static kern_return_t
-mapping_replenish_internal(void)
+mapping_replenish_internal(uint32_t kern_target_count, uint32_t user_target_count)
 {
 	pv_entry_t    *pv_e;
 	pv_entry_t    *pv_eh;
@@ -2539,7 +2433,7 @@ mapping_replenish_internal(void)
 	pmap_paddr_t   pa;
 	kern_return_t  ret = KERN_SUCCESS;
 
-	while (pv_kern_free_count < pv_kern_low_water_mark) {
+	while ((pv_free_count < user_target_count) || (pv_kern_free_count < kern_target_count)) {
 		pv_cnt = 0;
 		pv_eh = pv_et = PV_ENTRY_NULL;
 
@@ -2560,33 +2454,8 @@ mapping_replenish_internal(void)
 			pv_cnt++;
 			pv_e++;
 		}
-		pmap_kernel_reserve_replenish_stat += pv_cnt;
-		PV_KERN_FREE_LIST(pv_eh, pv_et, pv_cnt);
-	}
-
-	while (pv_free_count < pv_low_water_mark) {
-		pv_cnt = 0;
-		pv_eh = pv_et = PV_ENTRY_NULL;
-
-		ret = pmap_pages_alloc(&pa, PAGE_SIZE, 0);
-		assert(ret == KERN_SUCCESS);
-
-		pv_page_count++;
-
-		pv_e = (pv_entry_t *)phystokv(pa);
-
-		for (j = 0; j < (PAGE_SIZE / sizeof(pv_entry_t)); j++) {
-			pv_e->pve_next = pv_eh;
-			pv_eh = pv_e;
-
-			if (pv_et == PV_ENTRY_NULL) {
-				pv_et = pv_e;
-			}
-			pv_cnt++;
-			pv_e++;
-		}
-		pmap_user_reserve_replenish_stat += pv_cnt;
-		PV_FREE_LIST(pv_eh, pv_et, pv_cnt);
+		pmap_reserve_replenish_stat += pv_cnt;
+		PV_FREE_LIST(pv_eh, pv_et, pv_cnt, kern_target_count);
 	}
 
 	return ret;
@@ -2606,18 +2475,10 @@ mapping_replenish(void)
 	current_thread()->options |= TH_OPT_VMPRIV;
 
 	for (;;) {
-		kr = mapping_replenish_internal();
+		kr = mapping_replenish_internal(pv_kern_low_water_mark, pv_low_water_mark);
 
 		if (kr != KERN_SUCCESS) {
 			panic("%s: failed, kr=%d", __FUNCTION__, kr);
-		}
-
-		/*
-		 * Wake threads throttled while the kernel reserve was being replenished.
-		 */
-		if (pmap_pv_throttled_waiters) {
-			pmap_pv_throttled_waiters = 0;
-			thread_wakeup(&pmap_user_pv_throttle_event);
 		}
 
 		/* Check if the kernel pool has been depleted since the
@@ -10188,6 +10049,19 @@ pmap_valid_page(
 	ppnum_t pn)
 {
 	return pa_valid(ptoa(pn));
+}
+
+boolean_t
+pmap_bootloader_page(
+	ppnum_t pn)
+{
+	pmap_paddr_t paddr = ptoa(pn);
+
+	if (pa_valid(paddr)) {
+		return FALSE;
+	}
+	pmap_io_range_t *io_rgn = pmap_find_io_attr(paddr);
+	return (io_rgn != NULL) && (io_rgn->wimg & PMAP_IO_RANGE_CARVEOUT);
 }
 
 MARK_AS_PMAP_TEXT static boolean_t

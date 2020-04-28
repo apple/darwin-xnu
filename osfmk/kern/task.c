@@ -2213,7 +2213,7 @@ task_mark_corpse(task_t task)
 
 	ipc_task_reset(task);
 	/* Remove the naked send right for task port, needed to arm no sender notification */
-	task_set_special_port(task, TASK_KERNEL_PORT, IPC_PORT_NULL);
+	task_set_special_port_internal(task, TASK_KERNEL_PORT, IPC_PORT_NULL);
 	ipc_task_enable(task);
 
 	task_unlock(task);
@@ -4338,7 +4338,6 @@ host_security_set_task_token(
 	task_lock(task);
 	task->sec_token = sec_token;
 	task->audit_token = audit_token;
-
 	task_unlock(task);
 
 	if (host_priv != HOST_PRIV_NULL) {
@@ -4347,7 +4346,8 @@ host_security_set_task_token(
 		kr = host_get_host_port(host_priv_self(), &host_port);
 	}
 	assert(kr == KERN_SUCCESS);
-	kr = task_set_special_port(task, TASK_HOST_PORT, host_port);
+
+	kr = task_set_special_port_internal(task, TASK_HOST_PORT, host_port);
 	return kr;
 }
 

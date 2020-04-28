@@ -472,6 +472,7 @@ extern void pt_fake_zone_info(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_s
     uint64_t *, int *, int *, int *);
 
 extern boolean_t pmap_valid_page(ppnum_t pn);
+extern boolean_t pmap_bootloader_page(ppnum_t pn);
 
 #define MACHINE_PMAP_IS_EMPTY 1
 extern boolean_t pmap_is_empty(pmap_t pmap, vm_map_offset_t start, vm_map_offset_t end);

@@ -697,6 +697,11 @@ extern kern_return_t    task_create_internal(
 	uint8_t         t_returnwaitflags,
 	task_t          *child_task);                                                   /* OUT */
 
+extern kern_return_t    task_set_special_port_internal(
+	task_t                  task,
+	int                     which,
+	ipc_port_t              port);
+
 extern kern_return_t    task_info(
 	task_t                  task,
 	task_flavor_t           flavor,

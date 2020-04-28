@@ -72,7 +72,7 @@
 #include <mach/port.h>
 
 #if PRIVATE
-#define IOKIT_SERVER_VERSION    20190423
+#define IOKIT_SERVER_VERSION    20190926
 #endif
 
 

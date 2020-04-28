@@ -339,7 +339,7 @@ kasan_report_leak(vm_address_t base, vm_size_t sz, vm_offset_t offset, vm_size_t
 		size_t l = 0;
 		num_frames = kasan_alloc_retrieve_bt(base, alloc_bt);
 		for (vm_size_t i = 0; i < num_frames; i++) {
-			l += snprintf(string_rep + l, sizeof(string_rep) - l, " %lx", alloc_bt[i]);
+			l += scnprintf(string_rep + l, sizeof(string_rep) - l, " %lx", alloc_bt[i]);
 		}
 	}
 
@@ -445,7 +445,7 @@ kasan_shadow_crashlog(uptr p, char *buf, size_t len)
 	shadow &= ~((uptr)0xf);
 	shadow -= 16 * before;
 
-	n += snprintf(buf+n, len-n,
+	n += scnprintf(buf+n, len-n,
 			" Shadow             0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f\n");
 
 	for (i = 0; i < 1 + before + after; i++, shadow += 16) {
@@ -454,7 +454,7 @@ kasan_shadow_crashlog(uptr p, char *buf, size_t len)
 			continue;
 		}
 
-		n += snprintf(buf+n, len-n, " %16lx:", shadow);
+		n += scnprintf(buf+n, len-n, " %16lx:", shadow);
 
 		char *left = " ";
 		char *right;
@@ -470,13 +470,13 @@ kasan_shadow_crashlog(uptr p, char *buf, size_t len)
 				right = "";
 			}
 
-			n += snprintf(buf+n, len-n, "%s%02x%s", left, (unsigned)*x, right);
+			n += scnprintf(buf+n, len-n, "%s%02x%s", left, (unsigned)*x, right);
 			left = "";
 		}
-		n += snprintf(buf+n, len-n, "\n");
+		n += scnprintf(buf+n, len-n, "\n");
 	}
 
-	n += snprintf(buf+n, len-n, "\n");
+	n += scnprintf(buf+n, len-n, "\n");
 	return n;
 }
 
@@ -496,11 +496,11 @@ kasan_report_internal(uptr p, uptr width, access_t access, violation_t reason, b
 	buf[0] = '\0';
 
 	if (reason == REASON_MOD_OOB || reason == REASON_BAD_METADATA) {
-		n += snprintf(buf+n, len-n, "KASan: free of corrupted/invalid object %#lx\n", p);
+		n += scnprintf(buf+n, len-n, "KASan: free of corrupted/invalid object %#lx\n", p);
 	} else if (reason == REASON_MOD_AFTER_FREE) {
-		n += snprintf(buf+n, len-n, "KASan: UaF of quarantined object %#lx\n", p);
+		n += scnprintf(buf+n, len-n, "KASan: UaF of quarantined object %#lx\n", p);
 	} else {
-		n += snprintf(buf+n, len-n, "KASan: invalid %lu-byte %s %#lx [%s]\n",
+		n += scnprintf(buf+n, len-n, "KASan: invalid %lu-byte %s %#lx [%s]\n",
 				width, access_str(access), p, shadow_str);
 	}
 	n += kasan_shadow_crashlog(p, buf+n, len-n);
@@ -540,11 +540,11 @@ kasan_log_report(uptr p, uptr width, access_t access, violation_t reason)
 	    NULL); /* ignore current frame */
 
 	buf[0] = '\0';
-	l += snprintf(buf+l, len-l, "Backtrace: ");
+	l += scnprintf(buf+l, len-l, "Backtrace: ");
 	for (uint32_t i = 0; i < nframes; i++) {
-		l += snprintf(buf+l, len-l, "%lx,", VM_KERNEL_UNSLIDE(bt[i]));
+		l += scnprintf(buf+l, len-l, "%lx,", VM_KERNEL_UNSLIDE(bt[i]));
 	}
-	l += snprintf(buf+l, len-l, "\n");
+	l += scnprintf(buf+l, len-l, "\n");
 
 	printf("%s", buf);
 }

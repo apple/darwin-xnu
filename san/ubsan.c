@@ -37,7 +37,7 @@ static const char *get_type_check_kind(uint8_t kind);
 static size_t
 format_loc(struct san_src_loc *loc, char *dst, size_t sz)
 {
-	return snprintf(dst, sz, "  loc: %s:%d:%d\n",
+	return scnprintf(dst, sz, "  loc: %s:%d:%d\n",
 	           loc->filename,
 	           loc->line & ~line_acquired,
 	           loc->col
@@ -73,7 +73,7 @@ static size_t
 format_overflow(struct ubsan_violation *v, char *buf, size_t sz)
 {
 	struct san_type_desc *ty = v->overflow->ty;
-	return snprintf(buf, sz,
+	return scnprintf(buf, sz,
 	           "%s overflow, op = %s, ty = %s, width = %d, lhs = 0x%llx, rhs = 0x%llx\n",
 	           ty->issigned ? "signed" : "unsigned",
 	           overflow_str[v->ubsan_type],
@@ -91,9 +91,9 @@ format_shift(struct ubsan_violation *v, char *buf, size_t sz)
 	struct san_type_desc *l = v->shift->lhs_t;
 	struct san_type_desc *r = v->shift->rhs_t;
 
-	n += snprintf(buf + n, sz - n, "bad shift\n");
-	n += snprintf(buf + n, sz - n, "  lhs: 0x%llx, ty = %s, signed = %d, width = %d\n", v->lhs, l->name, l->issigned, 1 << l->width);
-	n += snprintf(buf + n, sz - n, "  rhs: 0x%llx, ty = %s, signed = %d, width = %d\n", v->rhs, r->name, r->issigned, 1 << r->width);
+	n += scnprintf(buf + n, sz - n, "bad shift\n");
+	n += scnprintf(buf + n, sz - n, "  lhs: 0x%llx, ty = %s, signed = %d, width = %d\n", v->lhs, l->name, l->issigned, 1 << l->width);
+	n += scnprintf(buf + n, sz - n, "  rhs: 0x%llx, ty = %s, signed = %d, width = %d\n", v->rhs, r->name, r->issigned, 1 << r->width);
 
 	return n;
 }
@@ -122,14 +122,14 @@ format_type_mismatch(struct ubsan_violation *v, char *buf, size_t sz)
 	const char * kind = get_type_check_kind(v->align->kind);
 	if (NULL == ptr) {
 		//null pointer use
-		n += snprintf(buf + n, sz - n, "%s NULL pointer of type %s\n", kind, v->align->ty->name);
+		n += scnprintf(buf + n, sz - n, "%s NULL pointer of type %s\n", kind, v->align->ty->name);
 	} else if (alignment && ((uintptr_t)ptr & (alignment - 1))) {
 		//misaligned pointer use
-		n += snprintf(buf + n, sz - n, "%s mis-aligned address %p for type %s ", kind, (void*)v->lhs, v->align->ty->name);
-		n += snprintf(buf + n, sz - n, "which requires %d byte alignment\n", 1 << v->align->align);
+		n += scnprintf(buf + n, sz - n, "%s mis-aligned address %p for type %s ", kind, (void*)v->lhs, v->align->ty->name);
+		n += scnprintf(buf + n, sz - n, "which requires %d byte alignment\n", 1 << v->align->align);
 	} else {
 		//insufficient object size
-		n += snprintf(buf + n, sz - n, "%s address %p with insufficient space for an object of type %s\n",
+		n += scnprintf(buf + n, sz - n, "%s address %p with insufficient space for an object of type %s\n",
 		    kind, ptr, v->align->ty->name);
 	}
 
@@ -144,10 +144,10 @@ format_oob(struct ubsan_violation *v, char *buf, size_t sz)
 	struct san_type_desc *ity = v->oob->index_ty;
 	uintptr_t idx = v->lhs;
 
-	n += snprintf(buf + n, sz - n, "OOB array access\n");
-	n += snprintf(buf + n, sz - n, "  idx %ld\n", idx);
-	n += snprintf(buf + n, sz - n, "  aty: ty = %s, signed = %d, width = %d\n", aty->name, aty->issigned, 1 << aty->width);
-	n += snprintf(buf + n, sz - n, "  ity: ty = %s, signed = %d, width = %d\n", ity->name, ity->issigned, 1 << ity->width);
+	n += scnprintf(buf + n, sz - n, "OOB array access\n");
+	n += scnprintf(buf + n, sz - n, "  idx %ld\n", idx);
+	n += scnprintf(buf + n, sz - n, "  aty: ty = %s, signed = %d, width = %d\n", aty->name, aty->issigned, 1 << aty->width);
+	n += scnprintf(buf + n, sz - n, "  ity: ty = %s, signed = %d, width = %d\n", ity->name, ity->issigned, 1 << ity->width);
 
 	return n;
 }
@@ -162,7 +162,7 @@ ubsan_format(struct ubsan_violation *v, char *buf, size_t sz)
 		n += format_overflow(v, buf + n, sz - n);
 		break;
 	case UBSAN_UNREACHABLE:
-		n += snprintf(buf + n, sz - n, "unreachable\n");
+		n += scnprintf(buf + n, sz - n, "unreachable\n");
 		break;
 	case UBSAN_SHIFT:
 		n += format_shift(v, buf + n, sz - n);
@@ -171,13 +171,13 @@ ubsan_format(struct ubsan_violation *v, char *buf, size_t sz)
 		n += format_type_mismatch(v, buf + n, sz - n);
 		break;
 	case UBSAN_POINTER_OVERFLOW:
-		n += snprintf(buf + n, sz - n, "pointer overflow, before = 0x%llx, after = 0x%llx\n", v->lhs, v->rhs);
+		n += scnprintf(buf + n, sz - n, "pointer overflow, before = 0x%llx, after = 0x%llx\n", v->lhs, v->rhs);
 		break;
 	case UBSAN_OOB:
 		n += format_oob(v, buf + n, sz - n);
 		break;
 	case UBSAN_GENERIC:
-		n += snprintf(buf + n, sz - n, "%s\n", v->func);
+		n += scnprintf(buf + n, sz - n, "%s\n", v->func);
 		break;
 	default:
 		panic("unknown violation");

@@ -405,6 +405,11 @@ kernel_bootstrap(void)
 	/* initialize exceptions */
 	exception_init();
 
+#if CONFIG_SCHED_SFI
+	kernel_bootstrap_log("sfi_init");
+	sfi_init();
+#endif
+
 	/*
 	 *	Create a kernel thread to execute the kernel bootstrap.
 	 */
@@ -634,11 +639,6 @@ kernel_bootstrap_thread(void)
 	 *  Finalize protections on statically mapped pages now that comm page mapping is established.
 	 */
 	arm_vm_prot_finalize(PE_state.bootArgs);
-#endif
-
-#if CONFIG_SCHED_SFI
-	kernel_bootstrap_log("sfi_init");
-	sfi_init();
 #endif
 
 	/*

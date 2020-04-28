@@ -999,7 +999,6 @@ DebuggerXCall(
 	/* Any cleanup for our pushed context should go here */
 }
 
-
 void
 DebuggerCall(
 	unsigned int    reason,
@@ -1018,4 +1017,10 @@ DebuggerCall(
 #else
 	/* TODO: decide what to do if no debugger config */
 #endif
+}
+
+boolean_t
+bootloader_valid_page(ppnum_t ppn)
+{
+	return pmap_bootloader_page(ppn);
 }

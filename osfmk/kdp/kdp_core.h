@@ -174,12 +174,7 @@ int kern_dump_record_file(void *kdp_core_out_vars, const char *filename, uint64_
 
 int kern_dump_seek_to_next_file(void *kdp_core_out_varss, uint64_t next_file_offset);
 
-extern boolean_t efi_valid_page(ppnum_t ppn);
-#if defined(__x86_64__)
-#define EFI_VALID_PAGE(x)       efi_valid_page(x)
-#elif defined(__arm__) || defined(__arm64__)
-#define EFI_VALID_PAGE(x)       (FALSE)
-#endif /* defined (__x86_64__) */
+extern boolean_t bootloader_valid_page(ppnum_t ppn);
 
 #endif /* PRIVATE */
 

@@ -561,7 +561,7 @@ efi_init(void)
 
 /* Returns TRUE if a page belongs to the EFI Runtime Services (code or data) */
 boolean_t
-efi_valid_page(ppnum_t ppn)
+bootloader_valid_page(ppnum_t ppn)
 {
 	boot_args *args = (boot_args *)PE_state.bootArgs;
 	ppnum_t    pstart = args->efiRuntimeServicesPageStart;

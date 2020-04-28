@@ -38,7 +38,7 @@
 #include <net/if.h>
 
 /*
- * Name registered by the ipsec kernel control
+ * Name registered by the NECP
  */
 #define NECP_CONTROL_NAME "com.apple.net.necp_control"
 

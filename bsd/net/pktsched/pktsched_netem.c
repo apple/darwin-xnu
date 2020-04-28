@@ -35,6 +35,16 @@
 #include <net/pktsched/pktsched.h>
 #include <net/pktsched/pktsched_netem.h>
 
+/* <rdar://problem/55953523> M8 Perf: Remove norm_dist_table on armv7k (16K wired win) */
+/* compile out netem on platforms where skywalk is not enabled by default */
+#if __LP64__
+#define CONFIG_NETEM 1
+#else
+#define CONFIG_NETEM 0
+#endif
+
+#if CONFIG_NETEM
+
 enum {
 	NETEM_LOG_ERROR = 0,
 	NETEM_LOG_INFO = 1,
@@ -1521,3 +1531,55 @@ done:
 	netem_log(NETEM_LOG_INFO, "netem config ret %d", ret);
 	return ret;
 }
+
+#else /* !CONFIG_NETEM */
+
+int
+netem_init(void)
+{
+	return 0;
+}
+
+int
+netem_config(struct netem **ne, const char *name,
+    const struct if_netem_params *p, void *output_handle,
+    int (*output_func)(void *handle, pktsched_pkt_t *pkts, uint32_t n_pkts),
+    uint32_t output_max_batch_size)
+{
+#pragma unused(ne, name, p, output_handle, output_func, output_max_batch_size)
+	printf("%s error %d: unavailable on this platform\n", __func__, ENOTSUP);
+	return ENOTSUP;
+}
+
+void
+__attribute__((noreturn))
+netem_get_params(struct netem *ne, struct if_netem_params *p)
+{
+#pragma unused(ne, p)
+	panic("unexpected netem call");
+}
+
+void
+__attribute__((noreturn))
+netem_destroy(struct netem *ne)
+{
+#pragma unused(ne)
+	panic("unexpected netem call");
+}
+
+int
+netem_enqueue(struct netem *ne, classq_pkt_t *p, boolean_t *pdrop)
+{
+#pragma unused(ne, p, pdrop)
+	panic("unexpected netem call");
+	return 0;
+}
+
+int
+netem_dequeue(struct netem *ne, pktsched_pkt_t *p, boolean_t *ppending)
+{
+#pragma unused(ne, p, ppending)
+	panic("unexpected netem call");
+	return 0;
+}
+#endif /* !CONFIG_NETEM */

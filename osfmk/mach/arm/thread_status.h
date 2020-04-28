@@ -412,7 +412,7 @@ static inline void
 mask_saved_state_cpsr(arm_saved_state_t *iss, uint32_t set_bits, uint32_t clear_bits)
 {
 	iss->cpsr |= set_bits;
-	iss->cpsr &= clear_bits;
+	iss->cpsr &= ~clear_bits;
 }
 
 static inline void

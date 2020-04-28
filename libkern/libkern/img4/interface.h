@@ -54,7 +54,7 @@
  * it can be tested at build-time and not require rev-locked submissions of xnu
  * and AppleImage4.
  */
-#define IMG4_INTERFACE_VERSION (3u)
+#define IMG4_INTERFACE_VERSION (4u)
 
 /*!
  * @typedef img4_init_t
@@ -161,11 +161,21 @@ typedef errno_t (*const img4_nonce_domain_roll_nonce_t)(
  * @typedef img4_payload_init_with_vnode_4xnu_t
  * A type describing the {@link img4_payload_init_with_vnode_4xnu} function.
  */
-typedef errno_t (*img4_payload_init_with_vnode_4xnu_t)(
+typedef errno_t (*const img4_payload_init_with_vnode_4xnu_t)(
 	img4_payload_t *i4p,
 	img4_tag_t tag,
 	vnode_t vn,
 	img4_payload_flags_t flags
+	);
+
+/*!
+ * @typedef img4_environment_init_identity_t
+ * A type describing the {@link img4_environment_init_identity} function.
+ */
+typedef errno_t (*const img4_environment_init_identity_t)(
+	img4_environment_t *i4e,
+	size_t len,
+	const img4_identity_t *i4id
 	);
 
 /*!
@@ -231,6 +241,9 @@ typedef errno_t (*img4_payload_init_with_vnode_4xnu_t)(
  *
  * @field i4if_v3.nonce_domain_cryptex
  * The {@link IMG4_NONCE_DOMAIN_CRYPTEX} global.
+ *
+ * @field i4if_v4.environment_init_identity
+ * A pointer to the {@link img4_environment_init_identity} function.
  */
 
 typedef struct _img4_interface {
@@ -258,7 +271,10 @@ typedef struct _img4_interface {
 		const img4_nonce_domain_t *nonce_domain_pdi;
 		const img4_nonce_domain_t *nonce_domain_cryptex;
 	} i4if_v3;
-	void *__reserved[15];
+	struct {
+		const img4_environment_init_identity_t environment_init_identity;
+	} i4if_v4;
+	void *__reserved[14];
 } img4_interface_t;
 
 __BEGIN_DECLS

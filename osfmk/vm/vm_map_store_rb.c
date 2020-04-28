@@ -217,6 +217,8 @@ vm_map_delete_hole(vm_map_t map, vm_map_entry_t hole_entry)
  */
 
 #if DEBUG
+extern int vm_check_map_sanity;
+
 static void
 check_map_sanity(vm_map_t map, vm_map_entry_t old_hole_entry)
 {
@@ -369,7 +371,9 @@ update_holes_on_entry_deletion(vm_map_t map, vm_map_entry_t old_entry)
 				}
 				create_new_hole = FALSE;
 #if DEBUG
-				check_map_sanity(map, &old_hole_entry);
+				if (vm_check_map_sanity) {
+					check_map_sanity(map, &old_hole_entry);
+				}
 #endif /* DEBUG */
 				break;
 			}
@@ -386,7 +390,9 @@ update_holes_on_entry_deletion(vm_map_t map, vm_map_entry_t old_entry)
 				create_new_hole = FALSE;
 
 #if DEBUG
-				check_map_sanity(map, &old_hole_entry);
+				if (vm_check_map_sanity) {
+					check_map_sanity(map, &old_hole_entry);
+				}
 #endif /* DEBUG */
 				break;
 			}
@@ -461,7 +467,9 @@ update_holes_on_entry_deletion(vm_map_t map, vm_map_entry_t old_entry)
 	}
 
 #if DEBUG
-	check_map_sanity(map, &old_hole_entry);
+	if (vm_check_map_sanity) {
+		check_map_sanity(map, &old_hole_entry);
+	}
 #endif /* DEBUG */
 
 	SAVE_HINT_HOLE_WRITE(map, (struct vm_map_links*) hole_entry);
@@ -535,7 +543,7 @@ update_holes_on_entry_creation(vm_map_t map, vm_map_entry_t new_entry)
 			vm_map_delete_hole(map, hole_entry);
 
 #if DEBUG
-			if (check_map_with_hole_sanity) {
+			if (vm_check_map_sanity && check_map_with_hole_sanity) {
 				check_map_sanity(map, &old_hole_entry);
 			}
 #endif /* DEBUG */
@@ -564,7 +572,7 @@ update_holes_on_entry_creation(vm_map_t map, vm_map_entry_t new_entry)
 			assert(new_hole_entry->start < new_hole_entry->end);
 
 #if DEBUG
-			if (check_map_with_hole_sanity) {
+			if (vm_check_map_sanity && check_map_with_hole_sanity) {
 				check_map_sanity(map, &old_hole_entry);
 			}
 #endif /* DEBUG */
@@ -588,7 +596,7 @@ update_holes_on_entry_creation(vm_map_t map, vm_map_entry_t new_entry)
 			}
 
 #if DEBUG
-			if (check_map_with_hole_sanity) {
+			if (vm_check_map_sanity && check_map_with_hole_sanity) {
 				check_map_sanity(map, &old_hole_entry);
 			}
 #endif /* DEBUG */
@@ -611,7 +619,7 @@ update_holes_on_entry_creation(vm_map_t map, vm_map_entry_t new_entry)
 			}
 
 #if DEBUG
-			if (check_map_with_hole_sanity) {
+			if (vm_check_map_sanity && check_map_with_hole_sanity) {
 				check_map_sanity(map, &old_hole_entry);
 			}
 #endif /* DEBUG */

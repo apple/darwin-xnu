@@ -38,6 +38,8 @@
 /* MAC flags used by F_ADDFILESIGS_* */
 #define MAC_VNODE_CHECK_DYLD_SIM 0x1   /* tells the MAC framework that dyld-sim is being loaded */
 
+#define CLEAR_LV_ENTITLEMENT "com.apple.private.security.clear-library-validation"
+
 /* csops  operations */
 #define CS_OPS_STATUS           0       /* return status */
 #define CS_OPS_MARKINVALID      1       /* invalidate process */
@@ -56,6 +58,7 @@
 #define CS_OPS_CLEARINSTALLER   12      /* clear INSTALLER flag */
 #define CS_OPS_CLEARPLATFORM 13 /* clear platform binary status (DEVELOPMENT-only) */
 #define CS_OPS_TEAMID       14  /* get team id */
+#define CS_OPS_CLEAR_LV     15  /* clear the library validation flag */
 
 #define CS_MAX_TEAMID_LEN       64
 

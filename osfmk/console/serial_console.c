@@ -288,7 +288,7 @@ _cnputs(char * c, int size)
 #ifdef __x86_64__
 	uint32_t lock_timeout_ticks = UINT32_MAX;
 #else
-	uint32_t lock_timeout_ticks = LockTimeOut;
+	uint32_t lock_timeout_ticks = LockTimeOut * 2; // 250ms is not enough, 500 is just right
 #endif
 
 	mp_disable_preemption();

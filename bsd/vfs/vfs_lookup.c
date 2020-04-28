@@ -374,17 +374,23 @@ retry_copy:
 	 * we can release the icoount which we used to get our usecount.
 	 */
 	proc_fdlock(p);
+	if (!(fdp->fd_flags & FD_CHROOT)) {
+		ndp->ni_rootdir = rootvnode;
+	} else {
+		ndp->ni_rootdir = fdp->fd_rdir;
+	}
 
-	if ((ndp->ni_rootdir = fdp->fd_rdir) == NULLVP) {
+	if (!ndp->ni_rootdir) {
 		if (!(fdp->fd_flags & FD_CHROOT)) {
-			ndp->ni_rootdir = rootvnode;
+			proc_fdunlock(p);
+			printf("rootvnode is not set\n");
 		} else {
 			proc_fdunlock(p);
 			/* This should be a panic */
-			printf("proc is chrooted but does not have a root directory set\n");
-			error = ENOENT;
-			goto error_out;
+			printf("fdp->fd_rdir is not set\n");
 		}
+		error = ENOENT;
+		goto error_out;
 	}
 
 	/*

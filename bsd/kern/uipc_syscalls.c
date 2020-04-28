@@ -965,7 +965,6 @@ connectit(struct socket *so, struct sockaddr *sa)
 	}
 	error = soconnectlock(so, sa, 0);
 	if (error != 0) {
-		so->so_state &= ~SS_ISCONNECTING;
 		goto out;
 	}
 	if ((so->so_state & SS_NBIO) && (so->so_state & SS_ISCONNECTING)) {
@@ -1064,7 +1063,6 @@ connectitx(struct socket *so, struct sockaddr *src,
 	error = soconnectxlocked(so, src, dst, p, ifscope,
 	    aid, pcid, 0, NULL, 0, auio, bytes_written);
 	if (error != 0) {
-		so->so_state &= ~SS_ISCONNECTING;
 		goto out;
 	}
 	/*

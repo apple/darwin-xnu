@@ -5016,11 +5016,11 @@ exec_add_entropy_key(struct image_params *imgp,
 		entropy[0] &= ~(0xffull << 8);
 	}
 
-	int len = snprintf(str, sizeof(str), "%s0x%llx", key, entropy[0]);
+	int len = scnprintf(str, sizeof(str), "%s0x%llx", key, entropy[0]);
 	int remaining = sizeof(str) - len;
 	for (int i = 1; i < values && remaining > 0; ++i) {
 		int start = sizeof(str) - remaining;
-		len = snprintf(&str[start], remaining, ",0x%llx", entropy[i]);
+		len = scnprintf(&str[start], remaining, ",0x%llx", entropy[i]);
 		remaining -= len;
 	}
 

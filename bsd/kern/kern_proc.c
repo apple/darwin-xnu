@@ -113,6 +113,7 @@
 #include <sys/persona.h>
 #include <sys/sysent.h>
 #include <sys/reason.h>
+#include <IOKit/IOBSD.h>        /* IOTaskHasEntitlement() */
 
 #ifdef CONFIG_32BIT_TELEMETRY
 #include <sys/kasl.h>
@@ -2193,6 +2194,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 	case CS_OPS_IDENTITY:
 	case CS_OPS_BLOB:
 	case CS_OPS_TEAMID:
+	case CS_OPS_CLEAR_LV:
 		break;          /* not restricted to root */
 	default:
 		if (forself == 0 && kauth_cred_issuser(kauth_cred_get()) != TRUE) {
@@ -2229,6 +2231,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 	case CS_OPS_SET_STATUS:
 	case CS_OPS_CLEARINSTALLER:
 	case CS_OPS_CLEARPLATFORM:
+	case CS_OPS_CLEAR_LV:
 		if ((error = mac_proc_check_set_cs_info(current_proc(), pt, ops))) {
 			goto out;
 		}
@@ -2394,6 +2397,45 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 		}
 		proc_unlock(pt);
 
+		break;
+	}
+	case CS_OPS_CLEAR_LV: {
+		/*
+		 * This option is used to remove library validation from
+		 * a running process. This is used in plugin architectures
+		 * when a program needs to load untrusted libraries. This
+		 * allows the process to maintain library validation as
+		 * long as possible, then drop it only when required.
+		 * Once a process has loaded the untrusted library,
+		 * relying on library validation in the future will
+		 * not be effective. An alternative is to re-exec
+		 * your application without library validation, or
+		 * fork an untrusted child.
+		 */
+#ifdef CONFIG_EMBEDDED
+		// On embedded platforms, we don't support dropping LV
+		error = ENOTSUP;
+#else
+		/*
+		 * if we have the flag set, and the caller wants
+		 * to remove it, and they're entitled to, then
+		 * we remove it from the csflags
+		 *
+		 * NOTE: We are fine to poke into the task because
+		 * we get a ref to pt when we do the proc_find
+		 * at the beginning of this function.
+		 *
+		 * We also only allow altering ourselves.
+		 */
+		if (forself == 1 && IOTaskHasEntitlement(pt->task, CLEAR_LV_ENTITLEMENT)) {
+			proc_lock(pt);
+			pt->p_csflags &= (~(CS_REQUIRE_LV & CS_FORCED_LV));
+			proc_unlock(pt);
+			error = 0;
+		} else {
+			error = EPERM;
+		}
+#endif
 		break;
 	}
 	case CS_OPS_BLOB: {
@@ -3768,7 +3810,7 @@ proc_log_32bit_telemetry(proc_t p)
 	 * Get proc name and parent proc name; if the parent execs, we'll get a
 	 * garbled name.
 	 */
-	bytes_printed = snprintf(signature_cur_end,
+	bytes_printed = scnprintf(signature_cur_end,
 	    signature_buf_end - signature_cur_end,
 	    "%s,%s,", p->p_name,
 	    (p->p_pptr ? p->p_pptr->p_name : ""));
@@ -3799,7 +3841,7 @@ proc_log_32bit_telemetry(proc_t p)
 		identity = "";
 	}
 
-	bytes_printed = snprintf(signature_cur_end,
+	bytes_printed = scnprintf(signature_cur_end,
 	    signature_buf_end - signature_cur_end,
 	    "%s,%s", teamid, identity);
 

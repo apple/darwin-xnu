@@ -7291,7 +7291,7 @@ dlil_alloc_lladdr(struct ifnet *ifp, const struct sockaddr_dl *ll_addr)
 	ifnet_lock_assert(ifp, IFNET_LCK_ASSERT_EXCLUSIVE);
 	VERIFY(ll_addr == NULL || ll_addr->sdl_alen == ifp->if_addrlen);
 
-	namelen = snprintf(workbuf, sizeof(workbuf), "%s",
+	namelen = scnprintf(workbuf, sizeof(workbuf), "%s",
 	    if_name(ifp));
 	masklen = offsetof(struct sockaddr_dl, sdl_data[0])
 	    + ((namelen > 0) ? namelen : 0);

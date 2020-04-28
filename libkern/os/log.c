@@ -753,7 +753,7 @@ kern_return_t test_os_log_parallel(void);
 	T_LOG("Doing os_log of %llu TESTLOG msgs for fn " ident, count);                                   \
 	for (uint64_t i = 0; i < count; i++)                                                               \
 	{                                                                                                  \
-	    datalen = snprintf(databuffer, sizeof(databuffer), TESTOSLOGFMT(ident), uniqid, i + 1, count); \
+	    datalen = scnprintf(databuffer, sizeof(databuffer), TESTOSLOGFMT(ident), uniqid, i + 1, count); \
 	    checksum = crc32(0, databuffer, datalen);                                                      \
 	    callout_f(OS_LOG_DEFAULT, TESTOSLOG(ident), checksum, uniqid, i + 1, count);                   \
 	/*T_LOG(TESTOSLOG(ident), checksum, uniqid, i + 1, count);*/                                   \
@@ -797,16 +797,16 @@ test_os_log()
 	T_ASSERT_NE_UINT(0, uniqid, "random number should not be zero");
 	T_ASSERT_NE_ULLONG(0, a, "absolute time should not be zero");
 
-	datalen = snprintf(databuffer, sizeof(databuffer), TESTOSLOGFMT("printf_only"), uniqid, seqno, total_seqno);
+	datalen = scnprintf(databuffer, sizeof(databuffer), TESTOSLOGFMT("printf_only"), uniqid, seqno, total_seqno);
 	checksum = crc32(0, databuffer, datalen);
 	printf(TESTOSLOG("printf_only") "mat%llu\n", checksum, uniqid, seqno, total_seqno, a);
 
 	seqno += 1;
-	datalen = snprintf(databuffer, sizeof(databuffer), TESTOSLOGFMT("printf_only"), uniqid, seqno, total_seqno);
+	datalen = scnprintf(databuffer, sizeof(databuffer), TESTOSLOGFMT("printf_only"), uniqid, seqno, total_seqno);
 	checksum = crc32(0, databuffer, datalen);
 	printf(TESTOSLOG("printf_only") "mat%llu\n", checksum, uniqid, seqno, total_seqno, a);
 
-	datalen = snprintf(databuffer, sizeof(databuffer), "kernel^0^test^printf_only#mat%llu", a);
+	datalen = scnprintf(databuffer, sizeof(databuffer), "kernel^0^test^printf_only#mat%llu", a);
 	match_count = find_pattern_in_buffer(databuffer, datalen, total_seqno);
 	T_EXPECT_EQ_UINT(match_count, 2, "verify printf_only goes to systemlog buffer");
 
@@ -827,12 +827,12 @@ test_os_log()
 	total_msg = oslog_p_total_msgcount;
 	saved_msg = oslog_p_saved_msgcount;
 	dropped_msg = oslog_p_dropped_msgcount;
-	datalen = snprintf(databuffer, sizeof(databuffer), TESTOSLOGFMT("oslog_info"), uniqid, seqno, total_seqno);
+	datalen = scnprintf(databuffer, sizeof(databuffer), TESTOSLOGFMT("oslog_info"), uniqid, seqno, total_seqno);
 	checksum = crc32(0, databuffer, datalen);
 	os_log_info(log_handle, TESTOSLOG("oslog_info") "mat%llu", checksum, uniqid, seqno, total_seqno, a);
 	T_EXPECT_GE_UINT((oslog_p_total_msgcount - total_msg), 1, "total message count in buffer");
 
-	datalen = snprintf(databuffer, sizeof(databuffer), "kernel^0^test^oslog_info#mat%llu", a);
+	datalen = scnprintf(databuffer, sizeof(databuffer), "kernel^0^test^oslog_info#mat%llu", a);
 	match_count = find_pattern_in_buffer(databuffer, datalen, total_seqno);
 	T_EXPECT_EQ_UINT(match_count, 1, "verify oslog_info does not go to systemlog buffer");
 

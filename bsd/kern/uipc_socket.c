@@ -1727,6 +1727,9 @@ soconnectlock(struct socket *so, struct sockaddr *nam, int dolock)
 		} else {
 			error = (*so->so_proto->pr_usrreqs->pru_connect)
 			    (so, nam, p);
+			if (error != 0) {
+				so->so_state &= ~SS_ISCONNECTING;
+			}
 		}
 	}
 	if (dolock) {
@@ -1826,6 +1829,9 @@ soconnectxlocked(struct socket *so, struct sockaddr *src,
 			error = (*so->so_proto->pr_usrreqs->pru_connectx)
 			    (so, src, dst, p, ifscope, aid, pcid,
 			    flags, arg, arglen, auio, bytes_written);
+			if (error != 0) {
+				so->so_state &= ~SS_ISCONNECTING;
+			}
 		}
 	}
 
@@ -7083,7 +7089,7 @@ solockhistory_nr(struct socket *so)
 
 	bzero(lock_history_str, sizeof(lock_history_str));
 	for (i = SO_LCKDBG_MAX - 1; i >= 0; i--) {
-		n += snprintf(lock_history_str + n,
+		n += scnprintf(lock_history_str + n,
 		    SO_LOCK_HISTORY_STR_LEN - n, "%p:%p ",
 		    so->lock_lr[(so->next_lock_lr + i) % SO_LCKDBG_MAX],
 		    so->unlock_lr[(so->next_unlock_lr + i) % SO_LCKDBG_MAX]);

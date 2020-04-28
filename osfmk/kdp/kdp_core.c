@@ -828,7 +828,7 @@ pmap_traverse_present_mappings(pmap_t __unused pmap,
 	if (ppn != 0)
 	{
 	    if (((vcur < debug_start) || (vcur >= debug_end))
-		&& !(EFI_VALID_PAGE(ppn) || pmap_valid_page(ppn))
+		&& !(pmap_valid_page(ppn) || bootloader_valid_page(ppn))
 #if defined(XNU_TARGET_OS_BRIDGE)
 		// include the macOS panic region if it's mapped
 		&& ((vcur < macos_panic_start) || (vcur >= macos_panic_end))

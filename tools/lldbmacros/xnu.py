@@ -948,7 +948,7 @@ def WalkQueueHead(cmd_args=[], cmd_options={}):
 
 
 
-@lldb_command('walklist_entry', 'S')
+@lldb_command('walklist_entry', 'SE')
 def WalkList(cmd_args=[], cmd_options={}):
     """ iterate over a list as defined with LIST_ENTRY in bsd/sys/queue.h
         params:
@@ -956,7 +956,9 @@ def WalkList(cmd_args=[], cmd_options={}):
             element_type - str   : Type of the next element
             field_name   - str   : Name of the field in next element's structure
 
-        Option: -S - suppress summary output.
+        Options: -S - suppress summary output.
+                 -E - Iterate using SLIST_ENTRYs
+
         Usage: (lldb) walklist_entry  <obj with list_entry *> <struct type> <fieldname>
         ex:    (lldb) walklist_entry  0x7fffff80 "struct proc *" "p_sibling"
 
@@ -969,16 +971,19 @@ def WalkList(cmd_args=[], cmd_options={}):
     el_type = cmd_args[1]
     queue_head = kern.GetValueFromAddress(cmd_args[0], el_type)
     field_name = cmd_args[2]
-
     showsummary = False
     if el_type in lldb_summary_definitions:
         showsummary = True
     if '-S' in cmd_options:
         showsummary = False
+    if '-E' in cmd_options:
+        prefix = 's'
+    else:
+        prefix = ''
     elt = queue_head
     while unsigned(elt) != 0:
         i = elt
-        elt = elt.__getattr__(field_name).le_next
+        elt = elt.__getattr__(field_name).__getattr__(prefix + 'le_next')
         if showsummary:
             print lldb_summary_definitions[el_type](i)
         else:
@@ -1158,6 +1163,42 @@ def TrapTrace_cmd(cmd_args=[], cmd_options={}):
     Trace_cmd(cmd_args, cmd_options, hdrString, entryString, kern.globals.traptrace_ring,
         kern.globals.traptrace_entries_per_cpu, MAX_TRAPTRACE_BACKTRACES)
                 
+
+@lldb_command('showsysctls', 'P:')
+def ShowSysctls(cmd_args=[], cmd_options={}):
+    """ Walks the list of sysctl data structures, printing out each during traversal.
+        Arguments:
+          -P <string> : Limit output to sysctls starting with the specified prefix.
+    """
+    if '-P' in cmd_options:
+        _ShowSysctl_prefix = cmd_options['-P']
+        allowed_prefixes = _ShowSysctl_prefix.split('.')
+        if allowed_prefixes:
+            for x in xrange(1, len(allowed_prefixes)):
+                allowed_prefixes[x] = allowed_prefixes[x - 1] + "." + allowed_prefixes[x]
+    else:
+        _ShowSysctl_prefix = ''
+        allowed_prefixes = []
+    def IterateSysctls(oid, parent_str, i):
+        headp = oid
+        parentstr = "<none>" if parent_str is None else parent_str
+        for pp in IterateListEntry(headp, 'struct sysctl_oid *', 'oid_link', 's'):
+            type = pp.oid_kind & 0xf
+            next_parent = str(pp.oid_name)
+            if parent_str is not None:
+                next_parent = parent_str + "." + next_parent
+            st = (" " * i) + str(pp.GetSBValue().Dereference()).replace("\n", "\n" + (" " * i))
+            if type == 1 and pp.oid_arg1 != 0:
+                # Check allowed_prefixes to see if we can recurse from root to the allowed prefix.
+                # To recurse further, we need to check only the the next parent starts with the user-specified
+                # prefix
+                if next_parent not in allowed_prefixes and next_parent.startswith(_ShowSysctl_prefix) is False:
+                    continue
+                print 'parent = "%s"' % parentstr, st[st.find("{"):]
+                IterateSysctls(Cast(pp.oid_arg1, "struct sysctl_oid_list *"), next_parent, i + 2)
+            elif _ShowSysctl_prefix == '' or next_parent.startswith(_ShowSysctl_prefix):
+                print ('parent = "%s"' % parentstr), st[st.find("{"):]
+    IterateSysctls(kern.globals.sysctl__children, None, 0)
 
 
 

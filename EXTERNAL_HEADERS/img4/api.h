@@ -40,7 +40,7 @@
  * individual preprocessor macros in this header that declare new behavior as
  * required.
  */
-#define IMG4_API_VERSION (20190125u)
+#define IMG4_API_VERSION (20191001u)
 
 #if !defined(KERNEL) && !IMG4_PROJECT_BUILD
 #define IMG4_API_AVAILABLE_20180112 \
@@ -54,11 +54,14 @@
 		API_AVAILABLE(ios(12.2), tvos(12.2), watchos(5.2))
 #define IMG4_API_AVAILABLE_20190125 \
 		API_AVAILABLE(macos(10.15), ios(13.0), tvos(13.0), watchos(6.0))
+#define IMG4_API_AVAILABLE_20191001 \
+		API_AVAILABLE(macos(10.15.2), ios(13.3), tvos(13.3), watchos(6.1.1))
 #else
 #define IMG4_API_AVAILABLE_20180112
 #define IMG4_API_AVAILABLE_20181004
 #define IMG4_API_AVAILABLE_20181106
 #define IMG4_API_AVAILABLE_20190125
+#define IMG4_API_AVAILABLE_20191001
 #endif // !defined(KERNEL) && !IMG4_PROJECT_BUILD
 
 #if !defined(OS_CLOSED_ENUM)

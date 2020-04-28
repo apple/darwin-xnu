@@ -1084,6 +1084,9 @@ rt_xaddrs(caddr_t cp, caddr_t cplim, struct rt_addrinfo *rtinfo)
 		if ((cp + sa->sa_len) > cplim) {
 			return EINVAL;
 		}
+		if (sa->sa_len > sizeof(struct sockaddr_storage)) {
+			return EINVAL;
+		}
 		/*
 		 * there are no more.. quit now
 		 * If there are more bits, they are in error.

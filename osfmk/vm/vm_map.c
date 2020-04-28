@@ -867,6 +867,9 @@ int malloc_no_cow = 0;
 #define VM_PROTECT_WX_FAIL 1
 #endif /* CONFIG_EMBEDDED */
 uint64_t vm_memory_malloc_no_cow_mask = 0ULL;
+#if DEBUG
+int vm_check_map_sanity = 0;
+#endif
 
 /*
  *	vm_map_init:
@@ -1016,6 +1019,15 @@ vm_map_init(
 		    &vm_memory_malloc_no_cow_mask,
 		    sizeof(vm_memory_malloc_no_cow_mask));
 	}
+
+#if DEBUG
+	PE_parse_boot_argn("vm_check_map_sanity", &vm_check_map_sanity, sizeof(vm_check_map_sanity));
+	if (vm_check_map_sanity) {
+		kprintf("VM sanity checking enabled\n");
+	} else {
+		kprintf("VM sanity checking disabled. Set bootarg vm_check_map_sanity=1 to enable\n");
+	}
+#endif /* DEBUG */
 }
 
 void
@@ -6135,14 +6147,13 @@ add_wire_counts(
 			/*
 			 * Since this is the first time the user is wiring this map entry, check to see if we're
 			 * exceeding the user wire limits.  There is a per map limit which is the smaller of either
-			 * the process's rlimit or the global vm_user_wire_limit which caps this value.  There is also
+			 * the process's rlimit or the global vm_per_task_user_wire_limit which caps this value.  There is also
 			 * a system-wide limit on the amount of memory all users can wire.  If the user is over either
 			 * limit, then we fail.
 			 */
 
-			if (size + map->user_wire_size > MIN(map->user_wire_limit, vm_user_wire_limit) ||
-			    size + ptoa_64(total_wire_count) > vm_global_user_wire_limit ||
-			    size + ptoa_64(total_wire_count) > max_mem - vm_global_no_user_wire_amount) {
+			if (size + map->user_wire_size > MIN(map->user_wire_limit, vm_per_task_user_wire_limit) ||
+			    size + ptoa_64(total_wire_count) > vm_global_user_wire_limit) {
 				return KERN_RESOURCE_SHORTAGE;
 			}
 
@@ -11376,37 +11387,20 @@ vm_map_copyin_internal(
 		 *	Attempt non-blocking copy-on-write optimizations.
 		 */
 
-		if (src_destroy &&
-		    (src_object == VM_OBJECT_NULL ||
-		    (src_object->internal &&
-		    src_object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC &&
-		    src_entry->vme_start <= src_addr &&
-		    src_entry->vme_end >= src_end &&
-		    !map_share))) {
-			/*
-			 * If we are destroying the source, and the object
-			 * is internal, we can move the object reference
-			 * from the source to the copy.  The copy is
-			 * copy-on-write only if the source is.
-			 * We make another reference to the object, because
-			 * destroying the source entry will deallocate it.
-			 *
-			 * This memory transfer has to be atomic (to prevent
-			 * the VM object from being shared or copied while
-			 * it's being moved here), so we can only do this
-			 * if we won't have to unlock the VM map, i.e. the
-			 * entire range must be covered by this map entry.
-			 */
-			vm_object_reference(src_object);
-
-			/*
-			 * Copy is always unwired.  vm_map_copy_entry
-			 * set its wired count to zero.
-			 */
-
-			goto CopySuccessful;
-		}
-
+		/*
+		 * If we are destroying the source, and the object
+		 * is internal, we could move the object reference
+		 * from the source to the copy.  The copy is
+		 * copy-on-write only if the source is.
+		 * We make another reference to the object, because
+		 * destroying the source entry will deallocate it.
+		 *
+		 * This memory transfer has to be atomic, (to prevent
+		 * the VM object from being shared or copied while
+		 * it's being moved here), so we could only do this
+		 * if we won't have to unlock the VM map until the
+		 * original mapping has been fully removed.
+		 */
 
 RestartCopy:
 		if ((src_object == VM_OBJECT_NULL ||

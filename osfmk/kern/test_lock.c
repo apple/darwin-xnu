@@ -172,7 +172,7 @@ print_test_mtx_stats_string_name(
 		break;
 	}
 
-	return snprintf(buffer, size, "%s ", type);
+	return scnprintf(buffer, size, "%s ", type);
 }
 
 int
@@ -183,7 +183,7 @@ get_test_mtx_stats_string(
 	int string_off = 0;
 	int ret = 0;
 
-	ret = snprintf(&buffer[string_off], size, "\n");
+	ret = scnprintf(&buffer[string_off], size, "\n");
 	size -= ret;
 	string_off += ret;
 
@@ -191,40 +191,40 @@ get_test_mtx_stats_string(
 	for (i = 0; i < TEST_MTX_MAX_STATS; i++) {
 		struct lck_mtx_test_stats_elem* stat = &lck_mtx_test_stats[i];
 
-		ret = snprintf(&buffer[string_off], size, "{ ");
+		ret = scnprintf(&buffer[string_off], size, "{ ");
 		size -= ret;
 		string_off += ret;
 
 		lck_spin_lock(&stat->lock);
 		uint64_t time;
 
-		ret = snprintf(&buffer[string_off], size, "samples %llu, ", stat->samples);
+		ret = scnprintf(&buffer[string_off], size, "samples %llu, ", stat->samples);
 		size -= ret;
 		string_off += ret;
 
 		absolutetime_to_nanoseconds(stat->tot, &time);
-		ret = snprintf(&buffer[string_off], size, "tot %llu ns, ", time);
+		ret = scnprintf(&buffer[string_off], size, "tot %llu ns, ", time);
 		size -= ret;
 		string_off += ret;
 
 		absolutetime_to_nanoseconds(stat->avg, &time);
-		ret = snprintf(&buffer[string_off], size, "avg %llu ns, ", time);
+		ret = scnprintf(&buffer[string_off], size, "avg %llu ns, ", time);
 		size -= ret;
 		string_off += ret;
 
 		absolutetime_to_nanoseconds(stat->max, &time);
-		ret = snprintf(&buffer[string_off], size, "max %llu ns, ", time);
+		ret = scnprintf(&buffer[string_off], size, "max %llu ns, ", time);
 		size -= ret;
 		string_off += ret;
 
 		absolutetime_to_nanoseconds(stat->min, &time);
-		ret = snprintf(&buffer[string_off], size, "min %llu ns", time);
+		ret = scnprintf(&buffer[string_off], size, "min %llu ns", time);
 		size -= ret;
 		string_off += ret;
 
 		lck_spin_unlock(&stat->lock);
 
-		ret = snprintf(&buffer[string_off], size, " } ");
+		ret = scnprintf(&buffer[string_off], size, " } ");
 		size -= ret;
 		string_off += ret;
 
@@ -232,7 +232,7 @@ get_test_mtx_stats_string(
 		size -= ret;
 		string_off += ret;
 
-		ret = snprintf(&buffer[string_off], size, "\n");
+		ret = scnprintf(&buffer[string_off], size, "\n");
 		size -= ret;
 		string_off += ret;
 	}
@@ -494,12 +494,12 @@ lck_mtx_test_mtx_uncontended_loop_time(
 	int string_off = 0;
 	int ret = 0;
 
-	ret = snprintf(&buffer[string_off], size, "\n");
+	ret = scnprintf(&buffer[string_off], size, "\n");
 	size -= ret;
 	string_off += ret;
 
 	for (i = 0; i < TEST_MTX_MAX_STATS - 2; i++) {
-		ret = snprintf(&buffer[string_off], size, "total time %llu ns total run time %llu ns ", tot_time[i], run_time[i]);
+		ret = scnprintf(&buffer[string_off], size, "total time %llu ns total run time %llu ns ", tot_time[i], run_time[i]);
 		size -= ret;
 		string_off += ret;
 
@@ -507,7 +507,7 @@ lck_mtx_test_mtx_uncontended_loop_time(
 		size -= ret;
 		string_off += ret;
 
-		ret = snprintf(&buffer[string_off], size, "\n");
+		ret = scnprintf(&buffer[string_off], size, "\n");
 		size -= ret;
 		string_off += ret;
 	}
@@ -1015,10 +1015,10 @@ lck_mtx_test_mtx_contended_loop_time(
 	absolutetime_to_nanoseconds(end_loop_time - start_loop_time, &time);
 	absolutetime_to_nanoseconds(end_loop_time_run - start_loop_time_run, &time_run);
 
-	ret = snprintf(buffer, buffer_size, "\n");
-	ret += snprintf(&buffer[ret], buffer_size - ret, "total time %llu ns total run time %llu ns ", time, time_run);
+	ret = scnprintf(buffer, buffer_size, "\n");
+	ret += scnprintf(&buffer[ret], buffer_size - ret, "total time %llu ns total run time %llu ns ", time, time_run);
 	ret += print_test_mtx_stats_string_name(TEST_MTX_LOCK_STATS, &buffer[ret], buffer_size - ret);
-	ret += snprintf(&buffer[ret], buffer_size - ret, "\n");
+	ret += scnprintf(&buffer[ret], buffer_size - ret, "\n");
 
 	return ret;
 }

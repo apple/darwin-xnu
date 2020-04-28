@@ -426,6 +426,28 @@ IOBufferMemoryDescriptor::inTaskWithOptions(
 }
 
 IOBufferMemoryDescriptor *
+IOBufferMemoryDescriptor::inTaskWithOptions(
+	task_t       inTask,
+	IOOptionBits options,
+	vm_size_t    capacity,
+	vm_offset_t  alignment,
+	uint32_t     kernTag,
+	uint32_t     userTag)
+{
+	IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
+
+	if (me) {
+		me->setVMTags(kernTag, userTag);
+
+		if (!me->initWithPhysicalMask(inTask, options, capacity, alignment, 0)) {
+			me->release();
+			me = NULL;
+		}
+	}
+	return me;
+}
+
+IOBufferMemoryDescriptor *
 IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
 	task_t            inTask,
 	IOOptionBits      options,

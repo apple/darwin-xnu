@@ -302,7 +302,6 @@ enum workq_set_self_flags {
 	WORKQ_SET_SELF_FIXEDPRIORITY_FLAG   = 0x04,
 	WORKQ_SET_SELF_TIMESHARE_FLAG       = 0x08,
 	WORKQ_SET_SELF_WQ_KEVENT_UNBIND     = 0x10,
-	WORKQ_SET_SELF_ALTERNATE_AMX        = 0x20,
 };
 
 void workq_proc_suspended(struct proc *p);

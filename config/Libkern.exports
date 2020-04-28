@@ -720,6 +720,7 @@ _sha1_init:_SHA1Init
 _sha1_loop:_SHA1Update
 _sha1_result:_SHA1Final_r
 _snprintf
+_scnprintf
 _sscanf
 _strcasecmp
 _strchr
@@ -758,6 +759,7 @@ _version_stage
 _version_variant
 _vprintf
 _vsnprintf
+_vscnprintf
 _vsscanf
 _zError
 _zlibVersion

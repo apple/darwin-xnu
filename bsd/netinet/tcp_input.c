@@ -2794,6 +2794,7 @@ findpcb:
 				TCP_LOG_DROP_PCB(TCP_LOG_HDR, th, tp, false, " in_pcbinshash failed");
 				goto drop;
 			}
+			socket_lock(oso, 0);
 #if INET6
 			if (isipv6) {
 				/*
@@ -2822,7 +2823,6 @@ findpcb:
 				inp->inp_options = ip_srcroute();
 				inp->inp_ip_tos = oinp->inp_ip_tos;
 			}
-			socket_lock(oso, 0);
 #if IPSEC
 			/* copy old policy into new socket's */
 			if (sotoinpcb(oso)->inp_sp) {
@@ -3207,8 +3207,6 @@ findpcb:
 					tp->t_rexmtthresh = tcprexmtthresh;
 				}
 
-				m_freem(m);
-
 				/*
 				 * If all outstanding data are acked, stop
 				 * retransmit timer, otherwise restart timer
@@ -3247,6 +3245,8 @@ findpcb:
 				}
 
 				tcp_tfo_rcv_ack(tp, th);
+
+				m_freem(m);
 
 				tcp_check_timer_state(tp);
 

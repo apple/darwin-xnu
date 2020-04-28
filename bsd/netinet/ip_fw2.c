@@ -368,7 +368,7 @@ ipfwsyslog( int level, const char *format, ...)
 	bzero(msgBuf, msgsize);
 	bzero(&ev_msg, sizeof(struct kev_msg));
 	va_start( ap, format );
-	loglen = vsnprintf(msgBuf, msgsize, format, ap);
+	loglen = vscnprintf(msgBuf, msgsize, format, ap);
 	va_end( ap );
 
 	ev_msg.vendor_code    = KEV_VENDOR_APPLE;
@@ -1251,7 +1251,7 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ether_header *eh,
 			if (f->reserved_1 == IPFW_RULE_INACTIVE) {
 				break;
 			}
-			len = snprintf(SNPARGS(action2, 0), "Forward to %s",
+			len = scnprintf(SNPARGS(action2, 0), "Forward to %s",
 			    inet_ntop(AF_INET, &sa->sa.sin_addr, ipv4str, sizeof(ipv4str)));
 			if (sa->sa.sin_port) {
 				snprintf(SNPARGS(action2, len), ":%d",
@@ -1288,7 +1288,7 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ether_header *eh,
 		offset = ip_off & IP_OFFMASK;
 		switch (ip->ip_p) {
 		case IPPROTO_TCP:
-			len = snprintf(SNPARGS(proto, 0), "TCP %s",
+			len = scnprintf(SNPARGS(proto, 0), "TCP %s",
 			    inet_ntop(AF_INET, &ip->ip_src, ipv4str, sizeof(ipv4str)));
 			if (offset == 0) {
 				snprintf(SNPARGS(proto, len), ":%d %s:%d",
@@ -1302,7 +1302,7 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ether_header *eh,
 			break;
 
 		case IPPROTO_UDP:
-			len = snprintf(SNPARGS(proto, 0), "UDP %s",
+			len = scnprintf(SNPARGS(proto, 0), "UDP %s",
 			    inet_ntop(AF_INET, &ip->ip_src, ipv4str, sizeof(ipv4str)));
 			if (offset == 0) {
 				snprintf(SNPARGS(proto, len), ":%d %s:%d",
@@ -1317,20 +1317,20 @@ ipfw_log(struct ip_fw *f, u_int hlen, struct ether_header *eh,
 
 		case IPPROTO_ICMP:
 			if (offset == 0) {
-				len = snprintf(SNPARGS(proto, 0),
+				len = scnprintf(SNPARGS(proto, 0),
 				    "ICMP:%u.%u ",
 				    icmp->icmp_type, icmp->icmp_code);
 			} else {
-				len = snprintf(SNPARGS(proto, 0), "ICMP ");
+				len = scnprintf(SNPARGS(proto, 0), "ICMP ");
 			}
-			len += snprintf(SNPARGS(proto, len), "%s",
+			len += scnprintf(SNPARGS(proto, len), "%s",
 			    inet_ntop(AF_INET, &ip->ip_src, ipv4str, sizeof(ipv4str)));
 			snprintf(SNPARGS(proto, len), " %s",
 			    inet_ntop(AF_INET, &ip->ip_dst, ipv4str, sizeof(ipv4str)));
 			break;
 
 		default:
-			len = snprintf(SNPARGS(proto, 0), "P:%d %s", ip->ip_p,
+			len = scnprintf(SNPARGS(proto, 0), "P:%d %s", ip->ip_p,
 			    inet_ntop(AF_INET, &ip->ip_src, ipv4str, sizeof(ipv4str)));
 			snprintf(SNPARGS(proto, len), " %s",
 			    inet_ntop(AF_INET, &ip->ip_dst, ipv4str, sizeof(ipv4str)));

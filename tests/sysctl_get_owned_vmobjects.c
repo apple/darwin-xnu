@@ -32,16 +32,16 @@ main_test(void)
 	kr = vm_allocate(__self, &tmp_buf, tmp_size, VM_FLAGS_ANYWHERE | VM_FLAGS_PURGABLE);
 	T_QUIET;
 	T_EXPECT_EQ(kr, KERN_SUCCESS, "vm_allocate(%zu) error 0x%x (%s)",
-	    tmp_size, kr, mach_error_string(kr));
+	    (size_t) tmp_size, kr, mach_error_string(kr));
 	T_QUIET;
-	T_EXPECT_NE(tmp_buf, 0UL, "failed to allocate temporary purgable buffer\n");
+	T_EXPECT_NE(tmp_buf, (vm_address_t) 0, "failed to allocate temporary purgable buffer\n");
 
 	kr = vm_allocate(__self, &tmp_buf2, tmp_size, VM_FLAGS_ANYWHERE | VM_FLAGS_PURGABLE);
 	T_QUIET;
 	T_EXPECT_EQ(kr, KERN_SUCCESS, "vm_allocate(%zu) error 0x%x (%s)",
-	    tmp_size, kr, mach_error_string(kr));
+	    (size_t) tmp_size, kr, mach_error_string(kr));
 	T_QUIET;
-	T_EXPECT_NE(tmp_buf2, 0UL, "failed to allocate temporary purgable buffer\n");
+	T_EXPECT_NE(tmp_buf2, (vm_address_t) 0, "failed to allocate temporary purgable buffer\n");
 
 	/* expected failures */
 	out_size = tmp_size;

@@ -85,6 +85,14 @@ struct kctl {
 	u_int32_t               lastunit;
 };
 
+#if DEVELOPMENT || DEBUG
+enum ctl_status {
+	KCTL_DISCONNECTED = 0,
+	KCTL_CONNECTING = 1,
+	KCTL_CONNECTED = 2
+};
+#endif /* DEVELOPMENT || DEBUG */
+
 struct ctl_cb {
 	TAILQ_ENTRY(ctl_cb)     next;           /* controller chain */
 	lck_mtx_t               *mtx;
@@ -94,6 +102,9 @@ struct ctl_cb {
 	struct sockaddr_ctl     sac;
 	u_int32_t               usecount;
 	u_int32_t               kcb_usecount;
+#if DEVELOPMENT || DEBUG
+	enum ctl_status         status;
+#endif /* DEVELOPMENT || DEBUG */
 };
 
 #ifndef ROUNDUP64
@@ -224,6 +235,12 @@ SYSCTL_INT(_net_systm_kctl, OID_AUTO, autorcvbufhigh,
 u_int32_t ctl_debug = 0;
 SYSCTL_INT(_net_systm_kctl, OID_AUTO, debug,
     CTLFLAG_RW | CTLFLAG_LOCKED, &ctl_debug, 0, "");
+
+#if DEVELOPMENT || DEBUG
+u_int32_t ctl_panic_debug = 0;
+SYSCTL_INT(_net_systm_kctl, OID_AUTO, panicdebug,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &ctl_panic_debug, 0, "");
+#endif /* DEVELOPMENT || DEBUG */
 
 #define KCTL_TBL_INC 16
 
@@ -398,6 +415,9 @@ ctl_detach(struct socket *so)
 	}
 
 	soisdisconnected(so);
+#if DEVELOPMENT || DEBUG
+	kcb->status = KCTL_DISCONNECTED;
+#endif /* DEVELOPMENT || DEBUG */
 	so->so_flags |= SOF_PCBCLEARING;
 	clt_kcb_decrement_use_count(kcb);
 	return 0;
@@ -526,6 +546,9 @@ ctl_setup_kctl(struct socket *so, struct sockaddr *nam, struct proc *p)
 done:
 	if (error) {
 		soisdisconnected(so);
+#if DEVELOPMENT || DEBUG
+		kcb->status = KCTL_DISCONNECTED;
+#endif /* DEVELOPMENT || DEBUG */
 		lck_mtx_lock(ctl_mtx);
 		TAILQ_REMOVE(&kctl->kcb_head, kcb, next);
 		kcb->kctl = NULL;
@@ -587,6 +610,13 @@ ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 	lck_mtx_t *mtx_held = socket_getlock(so, PR_F_WILLUNLOCK);
 	ctl_kcb_increment_use_count(kcb, mtx_held);
 
+#if DEVELOPMENT || DEBUG
+	if (kcb->status != KCTL_DISCONNECTED && ctl_panic_debug) {
+		panic("kctl already connecting/connected");
+	}
+	kcb->status = KCTL_CONNECTING;
+#endif /* DEVELOPMENT || DEBUG */
+
 	error = ctl_setup_kctl(so, nam, p);
 	if (error) {
 		goto out;
@@ -604,6 +634,9 @@ ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 		goto end;
 	}
 	soisconnected(so);
+#if DEVELOPMENT || DEBUG
+	kcb->status = KCTL_CONNECTED;
+#endif /* DEVELOPMENT || DEBUG */
 
 end:
 	if (error && kcb->kctl->disconnect) {
@@ -622,6 +655,9 @@ end:
 	}
 	if (error) {
 		soisdisconnected(so);
+#if DEVELOPMENT || DEBUG
+		kcb->status = KCTL_DISCONNECTED;
+#endif /* DEVELOPMENT || DEBUG */
 		lck_mtx_lock(ctl_mtx);
 		TAILQ_REMOVE(&kcb->kctl->kcb_head, kcb, next);
 		kcb->kctl = NULL;
@@ -654,6 +690,9 @@ ctl_disconnect(struct socket *so)
 		}
 
 		soisdisconnected(so);
+#if DEVELOPMENT || DEBUG
+		kcb->status = KCTL_DISCONNECTED;
+#endif /* DEVELOPMENT || DEBUG */
 
 		socket_unlock(so, 0);
 		lck_mtx_lock(ctl_mtx);

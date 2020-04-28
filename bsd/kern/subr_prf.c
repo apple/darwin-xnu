@@ -465,6 +465,30 @@ vsnprintf(char *str, size_t size, const char *format, va_list ap)
 	return retval;
 }
 
+int
+vscnprintf(char *buf, size_t size, const char *fmt, va_list args)
+{
+	ssize_t ssize = size;
+	int i;
+
+	i = vsnprintf(buf, size, fmt, args);
+
+	return (i >= ssize) ? (ssize - 1) : i;
+}
+
+int
+scnprintf(char *buf, size_t size, const char *fmt, ...)
+{
+	va_list args;
+	int i;
+
+	va_start(args, fmt);
+	i = vscnprintf(buf, size, fmt, args);
+	va_end(args);
+
+	return i;
+}
+
 static void
 snprintf_func(int ch, void *arg)
 {

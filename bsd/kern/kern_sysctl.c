@@ -3443,7 +3443,7 @@ SYSCTL_PROC(_kern, OID_AUTO, slide,
  *
  * vm_global_user_wire_limit - system wide limit on wired memory from all processes combined.
  *
- * vm_user_wire_limit - per address space limit on wired memory.  This puts a cap on the process's rlimit value.
+ * vm_per_task_user_wire_limit - per address space limit on wired memory.  This puts a cap on the process's rlimit value.
  *
  * These values are initialized to reasonable defaults at boot time based on the available physical memory in
  * kmem_init().
@@ -3451,22 +3451,56 @@ SYSCTL_PROC(_kern, OID_AUTO, slide,
  * All values are in bytes.
  */
 
-vm_map_size_t   vm_global_no_user_wire_amount;
 vm_map_size_t   vm_global_user_wire_limit;
-vm_map_size_t   vm_user_wire_limit;
+vm_map_size_t   vm_per_task_user_wire_limit;
+extern uint64_t max_mem;
 
+/*
+ * We used to have a global in the kernel called vm_global_no_user_wire_limit which was the inverse
+ * of vm_global_user_wire_limit. But maintaining both of those is silly, and vm_global_user_wire_limit is the
+ * real limit.
+ * This function is for backwards compatibility with userspace
+ * since we exposed the old global via a sysctl.
+ */
+STATIC int
+sysctl_global_no_user_wire_amount(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	vm_map_size_t old_value;
+	vm_map_size_t new_value;
+	int changed;
+	int error;
+
+	old_value = max_mem - vm_global_user_wire_limit;
+	error = sysctl_io_number(req, old_value, sizeof(vm_map_size_t), &new_value, &changed);
+	if (changed) {
+		if ((uint64_t)new_value > max_mem) {
+			error = EINVAL;
+		} else {
+			vm_global_user_wire_limit = max_mem - new_value;
+		}
+	}
+	return error;
+}
 /*
  * There needs to be a more automatic/elegant way to do this
  */
 #if defined(__ARM__)
-SYSCTL_INT(_vm, OID_AUTO, global_no_user_wire_amount, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_global_no_user_wire_amount, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, global_user_wire_limit, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_global_user_wire_limit, 0, "");
-SYSCTL_INT(_vm, OID_AUTO, user_wire_limit, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_user_wire_limit, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, user_wire_limit, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_per_task_user_wire_limit, 0, "");
+SYSCTL_PROC(_vm, OID_AUTO, global_no_user_wire_amount, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0, &sysctl_global_no_user_wire_amount, "I", "");
 #else
-SYSCTL_QUAD(_vm, OID_AUTO, global_no_user_wire_amount, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_global_no_user_wire_amount, "");
 SYSCTL_QUAD(_vm, OID_AUTO, global_user_wire_limit, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_global_user_wire_limit, "");
-SYSCTL_QUAD(_vm, OID_AUTO, user_wire_limit, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_user_wire_limit, "");
+SYSCTL_QUAD(_vm, OID_AUTO, user_wire_limit, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_per_task_user_wire_limit, "");
+SYSCTL_PROC(_vm, OID_AUTO, global_no_user_wire_amount, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0, &sysctl_global_no_user_wire_amount, "Q", "");
 #endif
+
+#if DEVELOPMENT || DEBUG
+/* These sysyctls are used to test the wired limit. */
+extern unsigned int    vm_page_wire_count;
+extern uint32_t        vm_lopage_free_count;
+SYSCTL_INT(_vm, OID_AUTO, page_wire_count, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_page_wire_count, 0, "");
+SYSCTL_INT(_vm, OID_AUTO, lopage_free_count, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_lopage_free_count, 0, "");
+#endif /* DEVELOPMENT */
 
 extern int vm_map_copy_overwrite_aligned_src_not_internal;
 extern int vm_map_copy_overwrite_aligned_src_not_symmetric;
@@ -4433,6 +4467,22 @@ wedge_thread SYSCTL_HANDLER_ARGS
 
 SYSCTL_PROC(_kern, OID_AUTO, wedge_thread, CTLFLAG_RW | CTLFLAG_ANYBODY | CTLFLAG_LOCKED, 0, 0, wedge_thread, "I", "wedge this thread so it cannot be cleaned up");
 
+extern unsigned long
+total_corpses_count(void);
+
+static int
+sysctl_total_corpses_count SYSCTL_HANDLER_ARGS;
+
+static int
+sysctl_total_corpses_count SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int corpse_count = total_corpses_count();
+	return sysctl_io_opaque(req, &corpse_count, sizeof(int), NULL);
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, total_corpses_count, CTLFLAG_RD | CTLFLAG_ANYBODY | CTLFLAG_LOCKED, 0, 0, sysctl_total_corpses_count, "I", "total corpses on the system");
+
 static int
 sysctl_turnstile_test_prim_lock SYSCTL_HANDLER_ARGS;
 static int
@@ -4616,10 +4666,10 @@ sysctl_test_mtx_uncontended SYSCTL_HANDLER_ARGS
 
 	printf("%s starting uncontended mutex test with %d iterations\n", __func__, iter);
 
-	offset = snprintf(buffer, buffer_size, "STATS INNER LOOP");
+	offset = scnprintf(buffer, buffer_size, "STATS INNER LOOP");
 	offset += lck_mtx_test_mtx_uncontended(iter, &buffer[offset], buffer_size - offset);
 
-	offset += snprintf(&buffer[offset], buffer_size - offset, "\nSTATS OUTER LOOP");
+	offset += scnprintf(&buffer[offset], buffer_size - offset, "\nSTATS OUTER LOOP");
 	offset += lck_mtx_test_mtx_uncontended_loop_time(iter, &buffer[offset], buffer_size - offset);
 
 	error = SYSCTL_OUT(req, buffer, offset);
@@ -4680,22 +4730,22 @@ sysctl_test_mtx_contended SYSCTL_HANDLER_ARGS
 
 	printf("%s starting contended mutex test with %d iterations FULL_CONTENDED\n", __func__, iter);
 
-	offset = snprintf(buffer, buffer_size, "STATS INNER LOOP");
+	offset = scnprintf(buffer, buffer_size, "STATS INNER LOOP");
 	offset += lck_mtx_test_mtx_contended(iter, &buffer[offset], buffer_size - offset, FULL_CONTENDED);
 
 	printf("%s starting contended mutex loop test with %d iterations FULL_CONTENDED\n", __func__, iter);
 
-	offset += snprintf(&buffer[offset], buffer_size - offset, "\nSTATS OUTER LOOP");
+	offset += scnprintf(&buffer[offset], buffer_size - offset, "\nSTATS OUTER LOOP");
 	offset += lck_mtx_test_mtx_contended_loop_time(iter, &buffer[offset], buffer_size - offset, FULL_CONTENDED);
 
 	printf("%s starting contended mutex test with %d iterations HALF_CONTENDED\n", __func__, iter);
 
-	offset += snprintf(&buffer[offset], buffer_size - offset, "STATS INNER LOOP");
+	offset += scnprintf(&buffer[offset], buffer_size - offset, "STATS INNER LOOP");
 	offset += lck_mtx_test_mtx_contended(iter, &buffer[offset], buffer_size - offset, HALF_CONTENDED);
 
 	printf("%s starting contended mutex loop test with %d iterations HALF_CONTENDED\n", __func__, iter);
 
-	offset += snprintf(&buffer[offset], buffer_size - offset, "\nSTATS OUTER LOOP");
+	offset += scnprintf(&buffer[offset], buffer_size - offset, "\nSTATS OUTER LOOP");
 	offset += lck_mtx_test_mtx_contended_loop_time(iter, &buffer[offset], buffer_size - offset, HALF_CONTENDED);
 
 	error = SYSCTL_OUT(req, buffer, offset);

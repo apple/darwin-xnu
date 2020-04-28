@@ -1020,22 +1020,28 @@ unsigned int    vm_cache_geometry_colors; /* optimal #colors based on cache geom
  * Wired memory is a very limited resource and we can't let users exhaust it
  * and deadlock the entire system.  We enforce the following limits:
  *
- * vm_user_wire_limit (default: all memory minus vm_global_no_user_wire_amount)
+ * vm_per_task_user_wire_limit
  *      how much memory can be user-wired in one user task
  *
- * vm_global_user_wire_limit (default: same as vm_user_wire_limit)
+ * vm_global_user_wire_limit (default: same as vm_per_task_user_wire_limit)
  *      how much memory can be user-wired in all user tasks
  *
- * vm_global_no_user_wire_amount (default: VM_NOT_USER_WIREABLE)
- *	how much memory must remain user-unwired at any time
+ * These values are set to defaults based on the number of pages managed
+ * by the VM system. They can be overriden via sysctls.
+ * See kmem_set_user_wire_limits for details on the default values.
+ *
+ * Regardless of the amount of memory in the system, we never reserve
+ * more than VM_NOT_USER_WIREABLE_MAX bytes as unlockable.
  */
-#define VM_NOT_USER_WIREABLE (64*1024*1024)     /* 64MB */
+#if defined(__LP64__)
+#define VM_NOT_USER_WIREABLE_MAX (32ULL*1024*1024*1024)     /* 32GB */
+#else
+#define VM_NOT_USER_WIREABLE_MAX (1UL*1024*1024*1024)     /* 1GB */
+#endif /* __LP64__ */
 extern
-vm_map_size_t   vm_user_wire_limit;
+vm_map_size_t   vm_per_task_user_wire_limit;
 extern
 vm_map_size_t   vm_global_user_wire_limit;
-extern
-vm_map_size_t   vm_global_no_user_wire_amount;
 
 /*
  *	Each pageable resident page falls into one of three lists:

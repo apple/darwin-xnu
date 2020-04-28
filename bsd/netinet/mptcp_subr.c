@@ -5414,6 +5414,14 @@ mptcp_output_getm_dsnmap64(struct socket *so, int off, uint64_t *dsn,
 
 	VERIFY(off >= 0);
 
+	if (m == NULL && (so->so_flags & SOF_DEFUNCT)) {
+		*dsn = 0;
+		*relseq = 0;
+		*data_len = 0;
+		*dss_csum = 0;
+		return;
+	}
+
 	/*
 	 * In the subflow socket, the DSN sequencing can be discontiguous,
 	 * but the subflow sequence mapping is contiguous. Use the subflow
@@ -5433,7 +5441,6 @@ mptcp_output_getm_dsnmap64(struct socket *so, int off, uint64_t *dsn,
 		}
 	}
 
-	VERIFY(m);
 	VERIFY(off >= 0);
 	VERIFY(m->m_pkthdr.mp_rlen <= UINT16_MAX);
 
@@ -5567,6 +5574,10 @@ mptcp_adj_sendlen(struct socket *so, int32_t off)
 	uint16_t mdss_data_len;
 	uint16_t dss_csum;
 
+	if (so->so_snd.sb_mb == NULL && (so->so_flags & SOF_DEFUNCT)) {
+		return 0;
+	}
+
 	mptcp_output_getm_dsnmap64(so, off, &mdss_dsn, &mdss_subflow_seq,
 	    &mdss_data_len, &dss_csum);
 
@@ -5584,15 +5595,8 @@ mptcp_adj_sendlen(struct socket *so, int32_t off)
 		mdss_subflow_off--;
 	}
 
-	if (off < mdss_subflow_off) {
-		printf("%s off %d mdss_subflow_off %d mdss_subflow_seq %u iss %u suna %u\n", __func__,
-		    off, mdss_subflow_off, mdss_subflow_seq, mpts->mpts_iss, tp->snd_una);
-	}
 	VERIFY(off >= mdss_subflow_off);
 
-	mptcplog((LOG_DEBUG, "%s dlen %u off %d sub_off %d sub_seq %u iss %u suna %u\n",
-	    __func__, mdss_data_len, off, mdss_subflow_off, mdss_subflow_seq,
-	    mpts->mpts_iss, tp->snd_una), MPTCP_SENDER_DBG, MPTCP_LOGLVL_VERBOSE);
 	return mdss_data_len - (off - mdss_subflow_off);
 }
 

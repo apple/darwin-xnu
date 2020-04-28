@@ -2304,7 +2304,7 @@ utun_ctl_getopt(__unused kern_ctl_ref kctlref,
 				result = EINVAL;
 				break;
 			}
-			*len = snprintf(data, *len, "%s", pcb->utun_if_xname) + 1;
+			*len = scnprintf(data, *len, "%s", pcb->utun_if_xname) + 1;
 		}
 		break;
 

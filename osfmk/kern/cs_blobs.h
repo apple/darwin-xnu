@@ -129,11 +129,12 @@ enum {
 	CS_HASH_MAX_SIZE = 48, /* max size of the hash we'll support */
 
 /*
- * Currently only to support Legacy VPN plugins,
+ * Currently only to support Legacy VPN plugins, and Mac App Store
  * but intended to replace all the various platform code, dev code etc. bits.
  */
 	CS_SIGNER_TYPE_UNKNOWN = 0,
 	CS_SIGNER_TYPE_LEGACYVPN = 5,
+	CS_SIGNER_TYPE_MAC_APP_STORE = 6,
 };
 
 #define KERNEL_HAVE_CS_CODEDIRECTORY 1

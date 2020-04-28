@@ -66,7 +66,10 @@ def NewBt(cmd_args=None):
         if len(cmd_out) != 0:
             cmd_out1 = cmd_out.split('\n')
             if len(cmd_out1) != 0:
-                print OutputAddress([unsigned(link_register)]) + ": " + cmd_out1[0].split(':')[1]
+                address = OutputAddress([unsigned(link_register)])
+                if address is None:
+                    address = '0x%x <???>' % unsigned(link_register)
+                print address + ": " + cmd_out1[1].split(':', 1)[1]
         a = dereference(kern.GetValueFromAddress(unsigned(a), 'uintptr_t *'))
 
 # EndMacro: newbt

@@ -328,9 +328,9 @@ nfs_location_mntfromname(struct nfs_fs_locations *locs, struct nfs_location_inde
 			if (*fsl->nl_servers[idx.nli_serv]->ns_addresses[idx.nli_addr]) {
 				name = fsl->nl_servers[idx.nli_serv]->ns_addresses[idx.nli_addr];
 			}
-			cnt = snprintf(p, size, "<%s>:", name);
+			cnt = scnprintf(p, size, "<%s>:", name);
 		} else {
-			cnt = snprintf(p, size, "%s:", name);
+			cnt = scnprintf(p, size, "%s:", name);
 		}
 		p += cnt;
 		size -= cnt;
@@ -345,7 +345,7 @@ nfs_location_mntfromname(struct nfs_fs_locations *locs, struct nfs_location_inde
 	}
 	/* append each server path component */
 	for (i = 0; (size > 0) && (i < (int)fsl->nl_path.np_compcount); i++) {
-		cnt = snprintf(p, size, "/%s", fsl->nl_path.np_components[i]);
+		cnt = scnprintf(p, size, "/%s", fsl->nl_path.np_components[i]);
 		p += cnt;
 		size -= cnt;
 	}

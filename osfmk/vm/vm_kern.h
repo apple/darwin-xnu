@@ -278,7 +278,6 @@ extern void             kmem_init(
 	vm_offset_t     start,
 	vm_offset_t     end);
 
-
 extern kern_return_t    copyinmap(
 	vm_map_t        map,
 	vm_map_offset_t fromaddr,

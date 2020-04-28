@@ -597,7 +597,7 @@ devfs_devfd_readdir(struct vnop_readdir_args *ap)
 
 			bzero((caddr_t) dp, UIO_MX);
 
-			dp->d_namlen = snprintf(dp->d_name, sizeof(dp->d_name),
+			dp->d_namlen = scnprintf(dp->d_name, sizeof(dp->d_name),
 			    "%d", i);
 			dp->d_reclen = UIO_MX;
 			dp->d_type = DT_UNKNOWN;

@@ -603,10 +603,12 @@ sa_copy(struct sockaddr *src, struct sockaddr_storage *dst,
 
 	if (af == AF_INET) {
 		bcopy(src, dst, sizeof (struct sockaddr_in));
+		dst->ss_len = sizeof(struct sockaddr_in);
 		if (pifscope == NULL || ifscope != IFSCOPE_NONE)
 			sin_set_ifscope(SA(dst), ifscope);
 	} else {
 		bcopy(src, dst, sizeof (struct sockaddr_in6));
+		dst->ss_len = sizeof(struct sockaddr_in6);
 		if (pifscope != NULL &&
 		    IN6_IS_SCOPE_EMBED(&SIN6(dst)->sin6_addr)) {
 			unsigned int eifscope;

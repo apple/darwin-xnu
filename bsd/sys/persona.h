@@ -322,7 +322,7 @@ persona_desc(struct persona *persona, int locked)
 	char *end = p + sizeof(persona->pna_desc) - 1;
 
 	*end = 0;
-	p += snprintf(p, end - p, "%s/%d:%d",
+	p += scnprintf(p, end - p, "%s/%d:%d",
 	    persona->pna_login,
 	    kauth_cred_getuid(persona->pna_cred),
 	    kauth_cred_getgid(persona->pna_cred));

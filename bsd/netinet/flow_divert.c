@@ -2348,11 +2348,15 @@ flow_divert_handle_app_map_create(struct flow_divert_group *group, mbuf_t packet
 	FDLOG(LOG_INFO, &nil_pcb, "Nodes count = %lu, child maps count = %lu, bytes_count = %lu",
 	    new_trie.nodes_count, new_trie.child_maps_count, new_trie.bytes_count);
 
-	nodes_mem_size = (sizeof(*new_trie.nodes) * new_trie.nodes_count);
-	child_maps_mem_size = (sizeof(*new_trie.child_maps) * CHILD_MAP_SIZE * new_trie.child_maps_count);
-	bytes_mem_size = (sizeof(*new_trie.bytes) * new_trie.bytes_count);
+	if (os_mul_overflow(sizeof(*new_trie.nodes), new_trie.nodes_count, &nodes_mem_size) ||
+	    os_mul3_overflow(sizeof(*new_trie.child_maps), CHILD_MAP_SIZE, new_trie.child_maps_count, &child_maps_mem_size) ||
+	    os_mul_overflow(sizeof(*new_trie.bytes), new_trie.bytes_count, &bytes_mem_size) ||
+	    os_add3_overflow(nodes_mem_size, child_maps_mem_size, bytes_mem_size, &trie_memory_size)) {
+		FDLOG0(LOG_ERR, &nil_pcb, "Overflow while computing trie memory sizes");
+		lck_rw_done(&group->lck);
+		return;
+	}
 
-	trie_memory_size = nodes_mem_size + child_maps_mem_size + bytes_mem_size;
 	if (trie_memory_size > FLOW_DIVERT_MAX_TRIE_MEMORY) {
 		FDLOG(LOG_ERR, &nil_pcb, "Trie memory size (%lu) is too big (maximum is %u)", trie_memory_size, FLOW_DIVERT_MAX_TRIE_MEMORY);
 		lck_rw_done(&group->lck);

@@ -453,20 +453,20 @@ OSKextVersionGetString(
 		return TRUE;
 	}
 
-	cpos = snprintf(buffer, bufferLength, "%u", (uint32_t)vers_major);
+	cpos = scnprintf(buffer, bufferLength, "%u", (uint32_t)vers_major);
 
 	/* Always include the minor version; it just looks weird without.
 	 */
 	buffer[cpos] = '.';
 	cpos++;
-	cpos += snprintf(buffer + cpos, bufferLength - cpos, "%u", (uint32_t)vers_minor);
+	cpos += scnprintf(buffer + cpos, bufferLength - cpos, "%u", (uint32_t)vers_minor);
 
 	/* The revision is displayed only if nonzero.
 	 */
 	if (vers_revision) {
 		buffer[cpos] = '.';
 		cpos++;
-		cpos += snprintf(buffer + cpos, bufferLength - cpos, "%u",
+		cpos += scnprintf(buffer + cpos, bufferLength - cpos, "%u",
 		    (uint32_t)vers_revision);
 	}
 

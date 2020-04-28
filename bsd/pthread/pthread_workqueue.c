@@ -461,7 +461,7 @@ workq_thread_needs_params_change(workq_threadreq_t req, struct uthread *uth)
 		return true;
 	}
 
-	if ((req_flags & TRP_POLICY) && cur_trp.trp_pol != cur_trp.trp_pol) {
+	if ((req_flags & TRP_POLICY) && req_trp.trp_pol != cur_trp.trp_pol) {
 		return true;
 	}
 
@@ -1856,7 +1856,6 @@ fixedpri:
 		}
 	}
 
-
 done:
 	if (qos_rv && voucher_rv) {
 		/* Both failed, give that a unique error. */
@@ -3127,9 +3126,8 @@ again:
 		 */
 		wq->wq_creator = uth = workq_pop_idle_thread(wq, UT_WORKQ_OVERCOMMIT,
 		    &needs_wakeup);
-		if (workq_thread_needs_priority_change(req, uth)) {
-			workq_thread_reset_pri(wq, uth, req, /*unpark*/ true);
-		}
+		/* Always reset the priorities on the newly chosen creator */
+		workq_thread_reset_pri(wq, uth, req, /*unpark*/ true);
 		workq_turnstile_update_inheritor(wq, uth->uu_thread,
 		    TURNSTILE_INHERITOR_THREAD);
 		WQ_TRACE_WQ(TRACE_wq_creator_select | DBG_FUNC_NONE,

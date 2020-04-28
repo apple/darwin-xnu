@@ -9883,7 +9883,7 @@ IOPMrootDomain::acceptSystemWakeEvents( bool accept )
 		}
 		_acceptSystemWakeEvents = (_systemWakeEventsArray != NULL);
 #if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
-		if (!(kIOPMWakeEventAOTExitFlags & _aotPendingFlags))
+		if (!(_aotNow && (kIOPMWakeEventAOTExitFlags & _aotPendingFlags)))
 #endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 		{
 			gWakeReasonString[0] = '\0';

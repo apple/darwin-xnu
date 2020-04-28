@@ -2816,20 +2816,26 @@ get_xattrinfo(vnode_t xvp, int setting, attr_info_t *ainfop, vfs_context_t conte
 			/* We found the Finder Info entry. */
 			ainfop->finderinfo = &filehdr->entries[i];
 
-			/*
-			 * Is the Finder Info "empty" (all zeroes)?  If so,
-			 * we'll pretend like the Finder Info extended attribute
-			 * does not exist.
+			/* At this point check_and_swap_apple_double_header() call above
+			 * verified that all apple double entires are valid:
+			 * they point somewhere within the file.
 			 *
-			 * Note: we have to make sure the Finder Info is
-			 * contained within the buffer we have already read,
-			 * to avoid accidentally accessing a bogus address.
-			 * If it is outside the buffer, we just assume the
-			 * Finder Info is non-empty.
+			 * Now for finderinfo make sure that the fixed portion
+			 * is within the buffer we read in.
 			 */
-			if (ainfop->finderinfo->offset + FINDERINFOSIZE <= ainfop->rawsize &&
-			    bcmp((u_int8_t*)ainfop->filehdr + ainfop->finderinfo->offset, emptyfinfo, sizeof(emptyfinfo)) == 0) {
-				ainfop->emptyfinderinfo = 1;
+			if (((ainfop->finderinfo->offset + FINDERINFOSIZE) > ainfop->finderinfo->offset) &&
+			    ((ainfop->finderinfo->offset + FINDERINFOSIZE) <= ainfop->rawsize)) {
+				/*
+				 * Is the Finder Info "empty" (all zeroes)?  If so,
+				 * we'll pretend like the Finder Info extended attribute
+				 * does not exist.
+				 */
+				if (bcmp((u_int8_t*)ainfop->filehdr + ainfop->finderinfo->offset, emptyfinfo, sizeof(emptyfinfo)) == 0) {
+					ainfop->emptyfinderinfo = 1;
+				}
+			} else {
+				error = ENOATTR;
+				goto bail;
 			}
 		}
 		if (filehdr->entries[i].type == AD_RESOURCE) {
