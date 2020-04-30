@@ -1238,7 +1238,7 @@ nfs_close(
 	struct nfs_open_file *nofp,
 	uint32_t accessMode,
 	uint32_t denyMode,
-	vfs_context_t ctx)
+	__unused vfs_context_t ctx)
 {
 #if CONFIG_NFS4
 	struct nfs_lock_owner *nlop;
@@ -1827,20 +1827,6 @@ nfsmout:
 	return error;
 }
 
-static int
-nfs_parse_user_access(
-	mount_t mp,
-	enum vtype type)
-{
-	int user_access = R_OK;
-	if ((vfs_flags(mp) & MNT_RDONLY) == 0) {
-		user_access |= W_OK;
-	}
-	if (type == VDIR) {
-		user_access |= X_OK;
-	}
-	return user_access;
-}
 
 /*
  * NFS getattr call from vfs.

@@ -90,6 +90,9 @@ extern void typhoon_prepare_for_wfi(void);
 extern void typhoon_return_from_wfi(void);
 #endif
 
+#if HAS_RETENTION_STATE
+extern void arm64_retention_wfi(void);
+#endif
 
 vm_address_t   start_cpu_paddr;
 
@@ -402,7 +405,11 @@ cpu_idle(void)
 		typhoon_prepare_for_wfi();
 #endif
 		__builtin_arm_dsb(DSB_SY);
+#if HAS_RETENTION_STATE
+		arm64_retention_wfi();
+#else
 		__builtin_arm_wfi();
+#endif
 
 #if defined(APPLETYPHOON)
 		// <rdar://problem/15827409> CPU1 Stuck in WFIWT Because of MMU Prefetch
@@ -646,6 +653,7 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 		cpu_data_ptr->coresight_base[i] = 0;
 	}
 
+#if !XNU_MONITOR
 	pmap_cpu_data_t * pmap_cpu_data_ptr = &cpu_data_ptr->cpu_pmap_cpu_data;
 
 	pmap_cpu_data_ptr->cpu_nested_pmap = (struct pmap *) NULL;
@@ -654,6 +662,7 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 	for (i = 0; i < (sizeof(pmap_cpu_data_ptr->cpu_asid_high_bits) / sizeof(*pmap_cpu_data_ptr->cpu_asid_high_bits)); i++) {
 		pmap_cpu_data_ptr->cpu_asid_high_bits[i] = 0;
 	}
+#endif
 	cpu_data_ptr->halt_status = CPU_NOT_HALTED;
 #if __ARM_KERNEL_PROTECT__
 	cpu_data_ptr->cpu_exc_vectors = (vm_offset_t)&exc_vectors_table;
@@ -681,6 +690,20 @@ cpu_data_register(cpu_data_t *cpu_data_ptr)
 	return KERN_SUCCESS;
 }
 
+#if defined(KERNEL_INTEGRITY_CTRR)
+
+lck_spin_t ctrr_cpu_start_lck;
+bool ctrr_cluster_locked[__ARM_CLUSTER_COUNT__];
+
+void
+init_ctrr_cpu_start_lock(void)
+{
+	lck_grp_t *ctrr_cpu_start_lock_grp = lck_grp_alloc_init("ctrr_cpu_start_lock", 0);
+	assert(ctrr_cpu_start_lock_grp);
+	lck_spin_init(&ctrr_cpu_start_lck, ctrr_cpu_start_lock_grp, NULL);
+}
+
+#endif
 
 kern_return_t
 cpu_start(int cpu)
@@ -697,7 +720,9 @@ cpu_start(int cpu)
 
 		cpu_data_ptr->cpu_reset_handler = (vm_offset_t) start_cpu_paddr;
 
+#if !XNU_MONITOR
 		cpu_data_ptr->cpu_pmap_cpu_data.cpu_nested_pmap = NULL;
+#endif
 
 		if (cpu_data_ptr->cpu_processor->startup_thread != THREAD_NULL) {
 			first_thread = cpu_data_ptr->cpu_processor->startup_thread;
@@ -711,6 +736,22 @@ cpu_start(int cpu)
 
 		flush_dcache((vm_offset_t)&CpuDataEntries[cpu], sizeof(cpu_data_entry_t), FALSE);
 		flush_dcache((vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t), FALSE);
+#if defined(KERNEL_INTEGRITY_CTRR)
+		/* first time CPU starts, if not cluster master, and if cluster is not already locked,
+		 * block until cluster becomes locked. */
+		if (cpu_data_ptr->cpu_processor->active_thread == THREAD_NULL
+		    && !cpu_data_ptr->cluster_master) {
+			lck_spin_lock(&ctrr_cpu_start_lck);
+			if (ctrr_cluster_locked[cpu_data_ptr->cpu_cluster_id] == 0) {
+				assert_wait(&ctrr_cluster_locked[cpu_data_ptr->cpu_cluster_id], THREAD_UNINT);
+				lck_spin_unlock(&ctrr_cpu_start_lck);
+				thread_block(THREAD_CONTINUE_NULL);
+				assert(ctrr_cluster_locked[cpu_data_ptr->cpu_cluster_id] == 1);
+			} else {
+				lck_spin_unlock(&ctrr_cpu_start_lck);
+			}
+		}
+#endif
 		(void) PE_cpu_start(cpu_data_ptr->cpu_id, (vm_offset_t)NULL, (vm_offset_t)NULL);
 	}
 

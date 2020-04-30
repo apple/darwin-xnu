@@ -64,19 +64,18 @@ _toggle_atm_diagnostic_flag(void)
 		    "Ignoring host_set_atm_diagnostic_flag functionality. "
 		    "Bailing gracefully.");
 	}
-	T_EXPECT_MACH_ERROR(KERN_NO_ACCESS, kr,
-	    "Deny change to atm_diagnostic_flag");
+	T_EXPECT_MACH_SUCCESS(kr, "Set atm_diagnostic_flag");
 }
 
-T_DECL(atm_diagnostic_flag_unentitled_privileged,
-    "expect to fail to set the atm_diagnostic_flag (unentitled, privileged)",
+T_DECL(atm_diagnostic_flag_entitled_privileged,
+    "change the atm_diagnostic_flag (entitled, privileged)",
     T_META_ASROOT(true))
 {
 	_toggle_atm_diagnostic_flag();
 }
 
-T_DECL(atm_diagnostic_flag_unentitled_unprivileged,
-    "expect to fail to set the atm_diagnostic_flag (unentitled, unprivileged)",
+T_DECL(atm_diagnostic_flag_entitled_unprivileged,
+    "change the atm_diagnostic_flag (entitled, unprivileged)",
     T_META_ASROOT(false))
 {
 	drop_priv();

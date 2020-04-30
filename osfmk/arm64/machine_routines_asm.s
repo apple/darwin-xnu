@@ -58,7 +58,62 @@ LEXT(ml_set_kernelkey_enabled)
 
 #endif /* defined(HAS_APPLE_PAC) */
 
+#if HAS_BP_RET
 
+/*
+ * void set_bp_ret(void)
+ * Helper function to enable branch predictor state retention
+ * across ACC sleep
+ */
+
+	.align 2
+	.globl EXT(set_bp_ret)
+LEXT(set_bp_ret)
+	// Load bpret boot-arg
+	adrp		x14, EXT(bp_ret)@page
+	add		x14, x14, EXT(bp_ret)@pageoff
+	ldr		w14, [x14]
+
+	mrs		x13, ARM64_REG_ACC_CFG
+	and		x13, x13, (~(ARM64_REG_ACC_CFG_bpSlp_mask << ARM64_REG_ACC_CFG_bpSlp_shift))
+	and		x14, x14, #(ARM64_REG_ACC_CFG_bpSlp_mask)
+	orr		x13, x13, x14, lsl #(ARM64_REG_ACC_CFG_bpSlp_shift)
+	msr		ARM64_REG_ACC_CFG, x13
+
+	ret
+#endif // HAS_BP_RET
+
+#if HAS_NEX_PG
+	.align 2
+	.globl EXT(set_nex_pg)
+LEXT(set_nex_pg)
+	mrs		x14, MPIDR_EL1
+	// Skip if this isn't a p-core; NEX powergating isn't available for e-cores
+	and		x14, x14, #(MPIDR_PNE)
+	cbz		x14, Lnex_pg_done
+
+	// Set the SEG-recommended value of 12 additional reset cycles
+	mrs		x14, ARM64_REG_HID13
+	and		x14, x14, (~ARM64_REG_HID13_RstCyc_mask)
+	orr		x14, x14, ARM64_REG_HID13_RstCyc_val
+	msr		ARM64_REG_HID13, x14
+
+	// Load nexpg boot-arg
+	adrp		x14, EXT(nex_pg)@page
+	add		x14, x14, EXT(nex_pg)@pageoff
+	ldr		w14, [x14]
+
+	mrs		x13, ARM64_REG_HID14
+	and		x13, x13, (~ARM64_REG_HID14_NexPwgEn)
+	cbz		w14, Lset_nex_pg
+	orr		x13, x13, ARM64_REG_HID14_NexPwgEn
+Lset_nex_pg:
+	msr		ARM64_REG_HID14, x13
+
+Lnex_pg_done:
+	ret
+
+#endif // HAS_NEX_PG
 
 /*	uint32_t get_fpscr(void):
  *		Returns (FPSR | FPCR).
@@ -168,12 +223,21 @@ LEXT(set_mmu_ttb_alternate)
 	bl		EXT(pinst_set_ttbr1)
 	mov		lr, x1
 #else
+#if defined(HAS_VMSA_LOCK)
+	mrs		x1, ARM64_REG_VMSA_LOCK_EL1
+	and		x1, x1, #(VMSA_LOCK_TTBR1_EL1)
+	cbnz		x1, L_set_locked_reg_panic
+#endif /* defined(HAS_VMSA_LOCK) */
 	msr		TTBR1_EL1, x0
 #endif /* defined(KERNEL_INTEGRITY_KTRR) */
 	isb		sy
 	ret
 
+#if XNU_MONITOR
+	.section __PPLTEXT,__text,regular,pure_instructions
+#else
 	.text
+#endif
 	.align 2
 	.globl EXT(set_mmu_ttb)
 LEXT(set_mmu_ttb)
@@ -211,6 +275,19 @@ LEXT(set_vbar_el1)
 #endif
 #endif /* __ARM_KERNEL_PROTECT__ */
 
+#if defined(HAS_VMSA_LOCK)
+	.text
+	.align 2
+	.globl EXT(vmsa_lock)
+LEXT(vmsa_lock)
+	isb sy
+	mov x1, #(VMSA_LOCK_SCTLR_M_BIT)
+	mov x0, #(VMSA_LOCK_TTBR1_EL1 | VMSA_LOCK_TCR_EL1 | VMSA_LOCK_VBAR_EL1)
+	orr x0, x0, x1
+	msr ARM64_REG_VMSA_LOCK_EL1, x0
+	isb sy
+	ret
+#endif /* defined(HAS_VMSA_LOCK) */
 
 /*
  *	set translation control register
@@ -229,6 +306,12 @@ LEXT(set_tcr)
 	bl		EXT(pinst_set_tcr)
 	mov		lr, x1
 #else
+#if defined(HAS_VMSA_LOCK)
+	// assert TCR unlocked
+	mrs 		x1, ARM64_REG_VMSA_LOCK_EL1
+	and		x1, x1, #(VMSA_LOCK_TCR_EL1)
+	cbnz		x1, L_set_locked_reg_panic
+#endif /* defined(HAS_VMSA_LOCK) */
 	msr		TCR_EL1, x0
 #endif /* defined(KERNEL_INTRITY_KTRR) */
 	isb		sy
@@ -256,7 +339,7 @@ L_set_tcr_panic_str:
 L_set_locked_reg_panic_str:
 	.asciz	"attempt to set locked register: (%llx)\n"
 #else
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 	mov		x1, lr
 	bl		EXT(pinst_set_tcr)
 	mov		lr, x1
@@ -690,6 +773,9 @@ LEXT(arm64_prepare_for_sleep)
 	orr		x1, x1, #(  ARM64_REG_ACC_OVRD_ok2TrDnLnk_deepsleep)
 	and		x1, x1, #(~(ARM64_REG_ACC_OVRD_ok2PwrDnCPM_mask))
 	orr		x1, x1, #(  ARM64_REG_ACC_OVRD_ok2PwrDnCPM_deepsleep)
+#if HAS_RETENTION_STATE
+	orr		x1, x1, #(ARM64_REG_ACC_OVRD_disPioOnWfiCpu)
+#endif
 	msr		ARM64_REG_ACC_OVRD, x1
 
 
@@ -701,9 +787,12 @@ LEXT(arm64_prepare_for_sleep)
 	// Set "OK to power down" (<rdar://problem/12390433>)
 	mrs		x0, ARM64_REG_CYC_OVRD
 	orr		x0, x0, #(ARM64_REG_CYC_OVRD_ok2pwrdn_force_down)
+#if HAS_RETENTION_STATE
+	orr		x0, x0, #(ARM64_REG_CYC_OVRD_disWfiRetn)
+#endif
 	msr		ARM64_REG_CYC_OVRD, x0
 
-#if defined(APPLEMONSOON)
+#if defined(APPLEMONSOON) || defined(APPLEVORTEX)
 	ARM64_IS_PCORE x0
 	cbz		x0, Lwfi_inst // skip if not p-core 
 
@@ -717,6 +806,12 @@ LEXT(arm64_prepare_for_sleep)
 	 * and re-enabling GUPS, which forces the prefetch queue to
 	 * drain.  This should be done as close to wfi as possible, i.e.
 	 * at the very end of arm64_prepare_for_sleep(). */
+#if defined(APPLEVORTEX)
+	/* <rdar://problem/32821461>: Cyprus A0/A1 parts have a similar
+	 * bug in the HSP prefetcher that can be worked around through
+	 * the same method mentioned above for Skye. */
+	SKIP_IF_CPU_VERSION_GREATER_OR_EQUAL x0, VORTEX_CPU_VERSION_B0, Lwfi_inst
+#endif
 	mrs		x0, ARM64_REG_HID10
 	orr		x0, x0, #(ARM64_REG_HID10_DisHwpGups)
 	msr		ARM64_REG_HID10, x0
@@ -750,6 +845,21 @@ LEXT(arm64_force_wfi_clock_gate)
 	ARM64_STACK_EPILOG
 
 
+#if HAS_RETENTION_STATE
+	.text
+	.align 2
+	.globl EXT(arm64_retention_wfi)
+LEXT(arm64_retention_wfi)
+	wfi
+	cbz		lr, Lwfi_retention	// If lr is 0, we entered retention state and lost all GPRs except sp and pc
+	ret					// Otherwise just return to cpu_idle()
+Lwfi_retention:
+	mov		x0, #1
+	bl		EXT(ClearIdlePop)
+	mov		x0, #0 
+	bl		EXT(cpu_idle_exit)	// cpu_idle_exit(from_reset = FALSE)
+	b		.			// cpu_idle_exit() should never return
+#endif
 
 #if defined(APPLETYPHOON)
 
@@ -931,7 +1041,7 @@ LEXT(arm64_replace_bootstack)
 	mrs		x4, DAIF					// Load current DAIF; use x4 as pinst may trash x1-x3
 	msr		DAIFSet, #(DAIFSC_IRQF | DAIFSC_FIQF | DAIFSC_ASYNCF)		// Disable IRQ/FIQ/serror
 	// Set SP_EL1 to exception stack
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 	mov		x1, lr
 	bl		EXT(pinst_spsel_1)
 	mov		lr, x1

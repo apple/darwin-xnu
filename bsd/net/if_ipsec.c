@@ -234,8 +234,6 @@ struct ipsec_pcb {
 #define IPSEC_FLAGS_KPIPE_ALLOCATED 1
 
 /* data movement refcounting functions */
-static boolean_t ipsec_data_move_begin(struct ipsec_pcb *pcb);
-static void ipsec_data_move_end(struct ipsec_pcb *pcb);
 static void ipsec_wait_data_move_drain(struct ipsec_pcb *pcb);
 
 /* Data path states */
@@ -2705,6 +2703,7 @@ ipsec_ctl_connect(kern_ctl_ref kctlref,
 		bpfattach(pcb->ipsec_ifp, DLT_NULL, 0);
 	}
 
+#if IPSEC_NEXUS
 	/*
 	 * Mark the data path as ready.
 	 * If kpipe nexus is being used then the data path is marked ready only when a kpipe channel is connected.
@@ -2714,6 +2713,7 @@ ipsec_ctl_connect(kern_ctl_ref kctlref,
 		IPSEC_SET_DATA_PATH_READY(pcb);
 		lck_mtx_unlock(&pcb->ipsec_pcb_data_move_lock);
 	}
+#endif
 
 	/* The interfaces resoures allocated, mark it as running */
 	ifnet_set_flags(pcb->ipsec_ifp, IFF_RUNNING, IFF_RUNNING);
@@ -4083,34 +4083,6 @@ ipsec_set_ip6oa_for_interface(ifnet_t interface, struct ip6_out_args *ip6oa)
 	}
 }
 
-static boolean_t
-ipsec_data_move_begin(struct ipsec_pcb *pcb)
-{
-	boolean_t ret = 0;
-
-	lck_mtx_lock_spin(&pcb->ipsec_pcb_data_move_lock);
-	if ((ret = IPSEC_IS_DATA_PATH_READY(pcb))) {
-		pcb->ipsec_pcb_data_move++;
-	}
-	lck_mtx_unlock(&pcb->ipsec_pcb_data_move_lock);
-
-	return ret;
-}
-
-static void
-ipsec_data_move_end(struct ipsec_pcb *pcb)
-{
-	lck_mtx_lock_spin(&pcb->ipsec_pcb_data_move_lock);
-	VERIFY(pcb->ipsec_pcb_data_move > 0);
-	/*
-	 * if there's no more thread moving data, wakeup any
-	 * drainers that's blocked waiting for this.
-	 */
-	if (--pcb->ipsec_pcb_data_move == 0 && pcb->ipsec_pcb_drainers > 0) {
-		wakeup(&(pcb->ipsec_pcb_data_move));
-	}
-	lck_mtx_unlock(&pcb->ipsec_pcb_data_move_lock);
-}
 
 static void
 ipsec_data_move_drain(struct ipsec_pcb *pcb)

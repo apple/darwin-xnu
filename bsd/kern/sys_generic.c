@@ -4024,6 +4024,104 @@ SYSCTL_PROC(_machdep_remotetime, OID_AUTO, conversion_params,
 #endif /* CONFIG_MACH_BRIDGE_RECV_TIME */
 
 #if DEVELOPMENT || DEBUG
+#if __AMP__
+#include <pexpert/pexpert.h>
+extern int32_t sysctl_get_bound_cpuid(void);
+extern void sysctl_thread_bind_cpuid(int32_t cpuid);
+static int
+sysctl_kern_sched_thread_bind_cpu SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+
+	if (!PE_parse_boot_argn("enable_skstb", NULL, 0)) {
+		return ENOENT;
+	}
+
+	int32_t cpuid = sysctl_get_bound_cpuid();
+
+	int32_t new_value;
+	int changed;
+	int error = sysctl_io_number(req, cpuid, sizeof cpuid, &new_value, &changed);
+	if (error) {
+		return error;
+	}
+
+	if (changed) {
+		sysctl_thread_bind_cpuid(new_value);
+	}
+
+	return error;
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, sched_thread_bind_cpu, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, sysctl_kern_sched_thread_bind_cpu, "I", "");
+
+extern char sysctl_get_bound_cluster_type(void);
+extern void sysctl_thread_bind_cluster_type(char cluster_type);
+static int
+sysctl_kern_sched_thread_bind_cluster_type SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	char buff[4];
+
+	if (!PE_parse_boot_argn("enable_skstb", NULL, 0)) {
+		return ENOENT;
+	}
+
+	int error = SYSCTL_IN(req, buff, 1);
+	if (error) {
+		return error;
+	}
+	char cluster_type = buff[0];
+
+	if (!req->newptr) {
+		goto out;
+	}
+
+	sysctl_thread_bind_cluster_type(cluster_type);
+out:
+	cluster_type = sysctl_get_bound_cluster_type();
+	buff[0] = cluster_type;
+
+	return SYSCTL_OUT(req, buff, 1);
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, sched_thread_bind_cluster_type, CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, sysctl_kern_sched_thread_bind_cluster_type, "A", "");
+
+extern char sysctl_get_task_cluster_type(void);
+extern void sysctl_task_set_cluster_type(char cluster_type);
+static int
+sysctl_kern_sched_task_set_cluster_type SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	char buff[4];
+
+	if (!PE_parse_boot_argn("enable_skstsct", NULL, 0)) {
+		return ENOENT;
+	}
+
+	int error = SYSCTL_IN(req, buff, 1);
+	if (error) {
+		return error;
+	}
+	char cluster_type = buff[0];
+
+	if (!req->newptr) {
+		goto out;
+	}
+
+	sysctl_task_set_cluster_type(cluster_type);
+out:
+	cluster_type = sysctl_get_task_cluster_type();
+	buff[0] = cluster_type;
+
+	return SYSCTL_OUT(req, buff, 1);
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, sched_task_set_cluster_type, CTLTYPE_STRING | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, sysctl_kern_sched_task_set_cluster_type, "A", "");
+#endif /* __AMP__ */
 #endif /* DEVELOPMENT || DEBUG */
 
 extern uint32_t task_exc_guard_default;

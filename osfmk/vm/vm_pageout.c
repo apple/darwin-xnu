@@ -347,6 +347,11 @@ uint32_t vm_pageout_memorystatus_fb_factor_dr = 2;
 
 #endif
 
+#if __AMP__
+int vm_compressor_ebound = 1;
+int vm_pgo_pbound = 0;
+extern void thread_bind_cluster_type(char);
+#endif /* __AMP__ */
 
 
 /*
@@ -3932,7 +3937,16 @@ vm_pageout_iothread_internal_continue(struct cq *cq)
 	KERNEL_DEBUG(0xe040000c | DBG_FUNC_END, 0, 0, 0, 0, 0);
 
 	q = cq->q;
+#if __AMP__
+	if (vm_compressor_ebound && (vm_pageout_state.vm_compressor_thread_count > 1)) {
+		local_batch_size = (q->pgo_maxlaundry >> 3);
+		local_batch_size = MAX(local_batch_size, 16);
+	} else {
+		local_batch_size = q->pgo_maxlaundry / (vm_pageout_state.vm_compressor_thread_count * 2);
+	}
+#else
 	local_batch_size = q->pgo_maxlaundry / (vm_pageout_state.vm_compressor_thread_count * 2);
+#endif
 
 #if RECORD_THE_COMPRESSED_DATA
 	if (q->pgo_laundry) {
@@ -4317,6 +4331,11 @@ vm_pageout_iothread_internal(struct cq *cq)
 	}
 
 
+#if __AMP__
+	if (vm_compressor_ebound) {
+		thread_bind_cluster_type('E');
+	}
+#endif /* __AMP__ */
 
 	thread_set_thread_name(current_thread(), "VM_compressor");
 #if DEVELOPMENT || DEBUG
@@ -4723,6 +4742,12 @@ vm_pageout(void)
 
 
 
+#if __AMP__
+	PE_parse_boot_argn("vmpgo_pcluster", &vm_pgo_pbound, sizeof(vm_pgo_pbound));
+	if (vm_pgo_pbound) {
+		thread_bind_cluster_type('P');
+	}
+#endif /* __AMP__ */
 
 	splx(s);
 
@@ -4996,6 +5021,12 @@ vm_pageout_internal_start(void)
 	PE_parse_boot_argn("vmcomp_threads", &vm_pageout_state.vm_compressor_thread_count,
 	    sizeof(vm_pageout_state.vm_compressor_thread_count));
 
+#if     __AMP__
+	PE_parse_boot_argn("vmcomp_ecluster", &vm_compressor_ebound, sizeof(vm_compressor_ebound));
+	if (vm_compressor_ebound) {
+		vm_pageout_state.vm_compressor_thread_count = 2;
+	}
+#endif
 	if (vm_pageout_state.vm_compressor_thread_count >= hinfo.max_cpus) {
 		vm_pageout_state.vm_compressor_thread_count = hinfo.max_cpus - 1;
 	}

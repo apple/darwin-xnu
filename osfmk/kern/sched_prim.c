@@ -4139,7 +4139,11 @@ choose_processor(
 			 * platforms, simply return the master_processor.
 			 */
 			fallback_processor = true;
+#if CONFIG_SCHED_CLUTCH && __AMP__
+			processor = processor_array[lsb_first(starting_pset->primary_map)];
+#else /* CONFIG_SCHED_CLUTCH && __AMP__ */
 			processor = master_processor;
+#endif /* CONFIG_SCHED_CLUTCH && __AMP__ */
 		}
 
 		/*
@@ -6069,6 +6073,11 @@ sched_update_pset_load_average(processor_set_t pset)
 	pset->load_average = new_load_average;
 
 #if (DEVELOPMENT || DEBUG)
+#if __AMP__
+	if (pset->pset_cluster_type == PSET_AMP_P) {
+		KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_PSET_LOAD_AVERAGE) | DBG_FUNC_NONE, sched_get_pset_load_average(pset), (bit_count(pset->cpu_state_map[PROCESSOR_RUNNING]) + pset->pset_runq.count + rt_runq_count(pset)));
+	}
+#endif
 #endif
 }
 
@@ -6272,5 +6281,29 @@ sysctl_task_get_no_smt(void)
 __private_extern__ void
 thread_bind_cluster_type(char cluster_type)
 {
+#if __AMP__
+	thread_t thread = current_thread();
+
+	spl_t s = splsched();
+	thread_lock(thread);
+	thread->sched_flags &= ~(TH_SFLAG_ECORE_ONLY | TH_SFLAG_PCORE_ONLY);
+	switch (cluster_type) {
+	case 'e':
+	case 'E':
+		thread->sched_flags |= TH_SFLAG_ECORE_ONLY;
+		break;
+	case 'p':
+	case 'P':
+		thread->sched_flags |= TH_SFLAG_PCORE_ONLY;
+		break;
+	default:
+		break;
+	}
+	thread_unlock(thread);
+	splx(s);
+
+	thread_block(THREAD_CONTINUE_NULL);
+#else /* __AMP__ */
 	(void)cluster_type;
+#endif /* __AMP__ */
 }

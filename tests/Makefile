@@ -38,6 +38,9 @@ CODESIGN_ALLOCATE:=$(shell xcrun -sdk "$(TARGETSDK)" -find codesign_allocate)
 
 atm_diagnostic_flag: OTHER_CFLAGS += drop_priv.c
 
+atm_diagnostic_flag_entitled: CODE_SIGN_ENTITLEMENTS = atm_diagnostic_flag.entitlements
+atm_diagnostic_flag_entitled: OTHER_CFLAGS += drop_priv.c
+
 testposixshm: INVALID_ARCHS = i386
 
 avx: INVALID_ARCHS = i386

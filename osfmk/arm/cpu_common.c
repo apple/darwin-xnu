@@ -68,6 +68,9 @@ unsigned int    real_ncpus = 1;
 boolean_t       idle_enable = FALSE;
 uint64_t        wake_abstime = 0x0ULL;
 
+#if defined(HAS_IPI)
+extern unsigned int gFastIPI;
+#endif /* defined(HAS_IPI) */
 
 cpu_data_t *
 cpu_datap(int cpu)
@@ -419,9 +422,25 @@ cpu_signal_internal(cpu_data_t *target_proc,
 
 	if (!(target_proc->cpu_signal & SIGPdisabled)) {
 		if (defer) {
+#if defined(HAS_IPI)
+			if (gFastIPI) {
+				ml_cpu_signal_deferred(target_proc->cpu_phys_id);
+			} else {
+				PE_cpu_signal_deferred(getCpuDatap()->cpu_id, target_proc->cpu_id);
+			}
+#else
 			PE_cpu_signal_deferred(getCpuDatap()->cpu_id, target_proc->cpu_id);
+#endif /* defined(HAS_IPI) */
 		} else {
+#if defined(HAS_IPI)
+			if (gFastIPI) {
+				ml_cpu_signal(target_proc->cpu_phys_id);
+			} else {
+				PE_cpu_signal(getCpuDatap()->cpu_id, target_proc->cpu_id);
+			}
+#else
 			PE_cpu_signal(getCpuDatap()->cpu_id, target_proc->cpu_id);
+#endif /* defined(HAS_IPI) */
 		}
 	}
 
@@ -449,7 +468,15 @@ cpu_signal_cancel(cpu_data_t *target_proc)
 {
 	/* TODO: Should we care about the state of a core as far as squashing deferred IPIs goes? */
 	if (!(target_proc->cpu_signal & SIGPdisabled)) {
+#if defined(HAS_IPI)
+		if (gFastIPI) {
+			ml_cpu_signal_retract(target_proc->cpu_phys_id);
+		} else {
+			PE_cpu_signal_cancel(getCpuDatap()->cpu_id, target_proc->cpu_id);
+		}
+#else
 		PE_cpu_signal_cancel(getCpuDatap()->cpu_id, target_proc->cpu_id);
+#endif /* defined(HAS_IPI) */
 	}
 }
 

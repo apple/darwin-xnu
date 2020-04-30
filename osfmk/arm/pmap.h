@@ -79,6 +79,13 @@
 #define CPUWINDOWS_MAX              4
 
 struct pmap_cpu_data {
+#if XNU_MONITOR
+	uint64_t cpu_id;
+	void * ppl_kern_saved_sp;
+	void * ppl_stack;
+	arm_context_t * save_area;
+	unsigned int ppl_state;
+#endif
 #if defined(__arm64__)
 	pmap_t cpu_nested_pmap;
 #else
@@ -212,6 +219,9 @@ extern void set_mmu_ttb_alternate(uint64_t);
 extern uint64_t get_tcr(void);
 extern void set_tcr(uint64_t);
 extern uint64_t pmap_get_arm64_prot(pmap_t, vm_offset_t);
+#if defined(HAS_VMSA_LOCK)
+extern void vmsa_lock(void);
+#endif
 #else
 extern uint32_t get_mmu_control(void);
 extern void set_mmu_control(uint32_t);
@@ -393,6 +403,10 @@ extern  void pmap_gc(void);
 #if defined(__arm64__)
 extern vm_offset_t pmap_extract(pmap_t pmap, vm_map_offset_t va);
 #endif
+#if HAS_APPLE_PAC && XNU_MONITOR
+extern void * pmap_sign_user_ptr(void *value, ptrauth_key key, uint64_t data);
+extern void * pmap_auth_user_ptr(void *value, ptrauth_key key, uint64_t data);
+#endif /* HAS_APPLE_PAC && XNU_MONITOR */
 
 /*
  * Interfaces implemented as macros.
@@ -538,6 +552,10 @@ boolean_t pmap_enforces_execute_only(pmap_t pmap);
 #define PMAP_LEDGER_ALLOC_INDEX 66
 #define PMAP_LEDGER_FREE_INDEX 67
 
+#if HAS_APPLE_PAC && XNU_MONITOR
+#define PMAP_SIGN_USER_PTR 68
+#define PMAP_AUTH_USER_PTR 69
+#endif /* HAS_APPLE_PAC && XNU_MONITOR */
 
 
 #define PMAP_COUNT 71
@@ -554,23 +572,82 @@ extern void pmap_cpu_data_init(void);
 /* Get the pmap per-CPU data for the current CPU. */
 extern pmap_cpu_data_t * pmap_get_cpu_data(void);
 
+#if XNU_MONITOR
+extern boolean_t pmap_ppl_locked_down;
+
+/*
+ * Denotes the bounds of the PPL stacks.  These are visible so that other code
+ * can check if addresses are part of the PPL stacks.
+ */
+extern void * pmap_stacks_start;
+extern void * pmap_stacks_end;
+
+/* Asks if a page belongs to the monitor. */
+extern boolean_t pmap_is_monitor(ppnum_t pn);
+
+/*
+ * Indicates that we are done with our static bootstrap
+ * allocations, so the monitor may now mark the pages
+ * that it owns.
+ */
+extern void pmap_static_allocations_done(void);
+
+/*
+ * Indicates that we are done mutating sensitive state in the system, and that
+ * the PPL may now restict write access to PPL owned mappings.
+ */
+extern void pmap_lockdown_ppl(void);
+
+
+#ifdef KASAN
+#define PPL_STACK_SIZE (PAGE_SIZE << 2)
+#else
+#define PPL_STACK_SIZE PAGE_SIZE
+#endif
+
+/* One stack for each CPU, plus a guard page below each stack and above the last stack */
+#define PPL_STACK_REGION_SIZE ((MAX_CPUS * (PPL_STACK_SIZE + ARM_PGBYTES)) + ARM_PGBYTES)
+
+#define PPL_DATA_SEGMENT_SECTION_NAME "__PPLDATA,__data"
+#define PPL_TEXT_SEGMENT_SECTION_NAME "__PPLTEXT,__text,regular,pure_instructions"
+#define PPL_DATACONST_SEGMENT_SECTION_NAME "__PPLDATA,__const"
+
+#define MARK_AS_PMAP_DATA \
+	__PLACE_IN_SECTION(PPL_DATA_SEGMENT_SECTION_NAME)
+#define MARK_AS_PMAP_TEXT \
+	__attribute__((used, section(PPL_TEXT_SEGMENT_SECTION_NAME), noinline))
+#define MARK_AS_PMAP_RODATA \
+	__PLACE_IN_SECTION(PPL_DATACONST_SEGMENT_SECTION_NAME)
+
+#else /* XNU_MONITOR */
 
 #define MARK_AS_PMAP_TEXT
 #define MARK_AS_PMAP_DATA
 #define MARK_AS_PMAP_RODATA
 
+#endif /* !XNU_MONITOR */
 
 
 extern kern_return_t pmap_return(boolean_t do_panic, boolean_t do_recurse);
 
 extern lck_grp_t pmap_lck_grp;
 
+#if XNU_MONITOR
+extern void CleanPoC_DcacheRegion_Force_nopreempt(vm_offset_t va, unsigned length);
+#define pmap_force_dcache_clean(va, sz) CleanPoC_DcacheRegion_Force_nopreempt(va, sz)
+#define pmap_simple_lock(l)             simple_lock_nopreempt(l, &pmap_lck_grp)
+#define pmap_simple_unlock(l)           simple_unlock_nopreempt(l)
+#define pmap_simple_lock_try(l)         simple_lock_try_nopreempt(l, &pmap_lck_grp)
+#define pmap_lock_bit(l, i)             hw_lock_bit_nopreempt(l, i, &pmap_lck_grp)
+#define pmap_unlock_bit(l, i)           hw_unlock_bit_nopreempt(l, i)
+#else
 #define pmap_force_dcache_clean(va, sz) CleanPoC_DcacheRegion_Force(va, sz)
 #define pmap_simple_lock(l)             simple_lock(l, &pmap_lck_grp)
 #define pmap_simple_unlock(l)           simple_unlock(l)
 #define pmap_simple_lock_try(l)         simple_lock_try(l, &pmap_lck_grp)
 #define pmap_lock_bit(l, i)             hw_lock_bit(l, i, &pmap_lck_grp)
 #define pmap_unlock_bit(l, i)           hw_unlock_bit(l, i)
+#endif
 
 #endif /* #ifndef ASSEMBLER */
 

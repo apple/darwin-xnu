@@ -2132,6 +2132,28 @@ SYSCTL_PROC(_kern_perfcontrol_callout, OID_AUTO, update_cycles,
     (void *)PERFCONTROL_STAT_CYCLES, PERFCONTROL_CALLOUT_STATE_UPDATE,
     sysctl_perfcontrol_callout_stat, "I", "");
 
+#if __AMP__
+extern int sched_amp_idle_steal;
+SYSCTL_INT(_kern, OID_AUTO, sched_amp_idle_steal,
+    CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &sched_amp_idle_steal, 0, "");
+extern int sched_amp_spill_steal;
+SYSCTL_INT(_kern, OID_AUTO, sched_amp_spill_steal,
+    CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &sched_amp_spill_steal, 0, "");
+extern int sched_amp_spill_count;
+SYSCTL_INT(_kern, OID_AUTO, sched_amp_spill_count,
+    CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &sched_amp_spill_count, 0, "");
+extern int sched_amp_spill_deferred_ipi;
+SYSCTL_INT(_kern, OID_AUTO, sched_amp_spill_deferred_ipi,
+    CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &sched_amp_spill_deferred_ipi, 0, "");
+extern int sched_amp_pcores_preempt_immediate_ipi;
+SYSCTL_INT(_kern, OID_AUTO, sched_amp_pcores_preempt_immediate_ipi,
+    CTLFLAG_KERN | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &sched_amp_pcores_preempt_immediate_ipi, 0, "");
+#endif /* __AMP__ */
 #endif /* __arm__ || __arm64__ */
 
 #if __arm64__

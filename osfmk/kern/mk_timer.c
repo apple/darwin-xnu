@@ -73,29 +73,40 @@ mk_timer_create_trap(
 		return MACH_PORT_NULL;
 	}
 
-	result = mach_port_allocate_internal(myspace, MACH_PORT_RIGHT_RECEIVE,
-	    &mk_timer_qos, &name);
-	if (result == KERN_SUCCESS) {
-		result = ipc_port_translate_receive(myspace, name, &port);
-	}
-
-	if (result != KERN_SUCCESS) {
+	/* Pre-allocate a kmsg for the timer messages */
+	ipc_kmsg_t kmsg;
+	kmsg = ipc_kmsg_prealloc(mk_timer_qos.len + MAX_TRAILER_SIZE);
+	if (kmsg == IKM_NULL) {
 		zfree(mk_timer_zone, timer);
-
 		return MACH_PORT_NULL;
 	}
 
+	/* Allocate an in-transit kobject port with a send right */
+	ipc_kobject_alloc_options_t options;
+	options = (IPC_KOBJECT_ALLOC_IN_TRANSIT | IPC_KOBJECT_ALLOC_MAKE_SEND);
+	port = ipc_kobject_alloc_port((ipc_kobject_t)timer, IKOT_TIMER, options);
+	assert(port != IP_NULL);
+
+	/* Associate the kmsg */
+	ipc_kmsg_set_prealloc(kmsg, port);
+
+	/* Initialize the timer object and bind port to it */
 	simple_lock_init(&timer->lock, 0);
 	thread_call_setup(&timer->call_entry, mk_timer_expire, timer);
 	timer->is_armed = timer->is_dead = FALSE;
 	timer->active = 0;
-
 	timer->port = port;
-	ipc_kobject_set_atomically(port, (ipc_kobject_t)timer, IKOT_TIMER);
 
-	port->ip_srights++;
-	ip_reference(port);
-	ip_unlock(port);
+	/* Copyout the receive right for the timer port to user-space */
+	current_thread()->ith_knote = ITH_KNOTE_NULL;
+	result = ipc_object_copyout(myspace, ip_to_object(port),
+	    MACH_MSG_TYPE_MOVE_RECEIVE,
+	    NULL, NULL, &name);
+	if (result != KERN_SUCCESS) {
+		ipc_object_destroy(ip_to_object(port), MACH_MSG_TYPE_MOVE_RECEIVE);
+		/* should trigger mk_timer_port_destroy() call */
+		return MACH_PORT_NULL;
+	}
 
 	return name;
 }

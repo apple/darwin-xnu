@@ -309,10 +309,25 @@ static struct tbd_ops    t8011_funcs = {NULL, NULL, NULL};
 static struct tbd_ops    t8015_funcs = {NULL, NULL, NULL};
 #endif /* defined(ARM_BOARD_CLASS_T8015) */
 
+#if defined(ARM_BOARD_CLASS_T8020)
+static struct tbd_ops    t8020_funcs = {NULL, NULL, NULL};
+#endif /* defined(ARM_BOARD_CLASS_T8020) */
 
+#if defined(ARM_BOARD_CLASS_T8006)
+static struct tbd_ops    t8006_funcs = {NULL, NULL, NULL};
+#endif /* defined(ARM_BOARD_CLASS_T8006) */
 
+#if defined(ARM_BOARD_CLASS_T8027)
+static struct tbd_ops    t8027_funcs = {NULL, NULL, NULL};
+#endif /* defined(ARM_BOARD_CLASS_T8027) */
 
+#if defined(ARM_BOARD_CLASS_T8028)
+static struct tbd_ops    t8028_funcs = {NULL, NULL, NULL};
+#endif /* defined(ARM_BOARD_CLASS_T8028) */
 
+#if defined(ARM_BOARD_CLASS_T8030)
+static struct tbd_ops    t8030_funcs = {NULL, NULL, NULL};
+#endif /* defined(ARM_BOARD_CLASS_T8030) */
 
 
 
@@ -731,6 +746,31 @@ pe_arm_init_timer(void *args)
 #if defined(ARM_BOARD_CLASS_T8015)
 	if (!strcmp(gPESoCDeviceType, "t8015-io")) {
 		tbd_funcs = &t8015_funcs;
+	} else
+#endif
+#if defined(ARM_BOARD_CLASS_T8020)
+	if (!strcmp(gPESoCDeviceType, "t8020-io")) {
+		tbd_funcs = &t8020_funcs;
+	} else
+#endif
+#if defined(ARM_BOARD_CLASS_T8006)
+	if (!strcmp(gPESoCDeviceType, "t8006-io")) {
+		tbd_funcs = &t8006_funcs;
+	} else
+#endif
+#if defined(ARM_BOARD_CLASS_T8027)
+	if (!strcmp(gPESoCDeviceType, "t8027-io")) {
+		tbd_funcs = &t8027_funcs;
+	} else
+#endif
+#if defined(ARM_BOARD_CLASS_T8028)
+	if (!strcmp(gPESoCDeviceType, "t8028-io")) {
+		tbd_funcs = &t8028_funcs;
+	} else
+#endif
+#if defined(ARM_BOARD_CLASS_T8030)
+	if (!strcmp(gPESoCDeviceType, "t8030-io")) {
+		tbd_funcs = &t8030_funcs;
 	} else
 #endif
 #if defined(ARM_BOARD_CLASS_BCM2837)

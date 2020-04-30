@@ -32,6 +32,9 @@
 #include <kern/thread.h>
 #if defined(__arm64__)
 #include <pexpert/arm64/board_config.h>
+#if XNU_MONITOR
+#include <arm64/ppl/tests/shart.h>
+#endif
 #endif
 
 extern ledger_template_t task_ledger_template;
@@ -122,7 +125,152 @@ test_pmap_enter_disconnect(unsigned int num_loops)
 kern_return_t
 test_pmap_iommu_disconnect(void)
 {
+#if XNU_MONITOR
+	kern_return_t kr = KERN_SUCCESS;
+	pmap_t new_pmap = pmap_create_wrapper(0);
+
+	vm_page_t m = vm_page_grab();
+
+	vm_page_lock_queues();
+	if (m != VM_PAGE_NULL) {
+		vm_page_wire(m, VM_KERN_MEMORY_PTE, TRUE);
+	}
+	vm_page_unlock_queues();
+
+	shart_ppl *iommu = NULL;
+	kr = pmap_iommu_init(shart_get_desc(), "sharttest0", NULL, 0, (ppl_iommu_state**)(&iommu));
+
+	if (kr != KERN_SUCCESS) {
+		goto cleanup;
+	}
+
+	if ((new_pmap == NULL) || (m == VM_PAGE_NULL) || (iommu == NULL)) {
+		kr = KERN_FAILURE;
+		goto cleanup;
+	}
+
+	ppnum_t phys_page = VM_PAGE_GET_PHYS_PAGE(m);
+
+	const ppl_iommu_seg shart_segs[] = {
+		{.iova = 0,
+		 .paddr = ptoa(phys_page),
+		 .nbytes = PAGE_SIZE,
+		 .prot = VM_PROT_READ,
+		 .refcon = 0},
+
+		{.iova = 1,
+		 .paddr = ptoa(phys_page),
+		 .nbytes = PAGE_SIZE,
+		 .prot = VM_PROT_READ | VM_PROT_WRITE,
+		 .refcon = 0},
+
+		{.iova = 2,
+		 .paddr = ptoa(phys_page),
+		 .nbytes = PAGE_SIZE,
+		 .prot = VM_PROT_READ,
+		 .refcon = 0},
+
+		{.iova = 3,
+		 .paddr = ptoa(phys_page),
+		 .nbytes = PAGE_SIZE,
+		 .prot = VM_PROT_READ,
+		 .refcon = 0}
+	};
+
+	/* Phase 1: one CPU mapping */
+	kr = pmap_enter(new_pmap, PMAP_TEST_VA, phys_page, VM_PROT_READ, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, FALSE);
+	assert(kr == KERN_SUCCESS);
+	assert(!pmap_verify_free(phys_page));
+	pmap_disconnect(phys_page);
+	assert(pmap_verify_free(phys_page));
+
+	/* Phase 2: two CPU mappings */
+	kr = pmap_enter(new_pmap, PMAP_TEST_VA, phys_page, VM_PROT_READ, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, FALSE);
+	assert(kr == KERN_SUCCESS);
+	kr = pmap_enter(new_pmap, PMAP_TEST_VA + PAGE_SIZE, phys_page, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, FALSE);
+	assert(kr == KERN_SUCCESS);
+	assert(!pmap_verify_free(phys_page));
+	pmap_disconnect(phys_page);
+	assert(pmap_verify_free(phys_page));
+
+	/* Phase 3: one IOMMU mapping */
+	kr = pmap_iommu_map(&iommu->super, shart_segs, 1, 0, NULL);
+	assert(kr == KERN_SUCCESS);
+	assert(!pmap_verify_free(phys_page));
+	pmap_disconnect(phys_page);
+	assert(!pmap_verify_free(phys_page));
+	pmap_iommu_unmap(&iommu->super, shart_segs, 1, 0, NULL);
+	assert(pmap_verify_free(phys_page));
+
+	/* Phase 4: two IOMMU mappings */
+	kr = pmap_iommu_map(&iommu->super, shart_segs, 2, 0, NULL);
+	assert(kr == KERN_SUCCESS);
+	assert(!pmap_verify_free(phys_page));
+	pmap_disconnect(phys_page);
+	assert(!pmap_verify_free(phys_page));
+	pmap_iommu_unmap(&iommu->super, &shart_segs[1], 1, 0, NULL);
+	assert(!pmap_verify_free(phys_page));
+	pmap_disconnect(phys_page);
+	assert(!pmap_verify_free(phys_page));
+	pmap_iommu_unmap(&iommu->super, shart_segs, 1, 0, NULL);
+	assert(pmap_verify_free(phys_page));
+
+	/* Phase 5: combined CPU and IOMMU mappings */
+	kr = pmap_iommu_map(&iommu->super, shart_segs, 1, 0, NULL);
+	assert(kr == KERN_SUCCESS);
+	kr = pmap_enter(new_pmap, PMAP_TEST_VA, phys_page, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, FALSE);
+	assert(kr == KERN_SUCCESS);
+	kr = pmap_iommu_map(&iommu->super, &shart_segs[1], 2, 0, NULL);
+	assert(kr == KERN_SUCCESS);
+	kr = pmap_enter(new_pmap, PMAP_TEST_VA + PAGE_SIZE, phys_page, VM_PROT_READ, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, FALSE);
+	assert(kr == KERN_SUCCESS);
+	kr = pmap_iommu_map(&iommu->super, &shart_segs[3], 1, 0, NULL);
+	assert(kr == KERN_SUCCESS);
+	assert(!pmap_verify_free(phys_page));
+	pmap_disconnect(phys_page);
+	assert(!pmap_verify_free(phys_page));
+	pmap_iommu_unmap(&iommu->super, shart_segs, 4, 0, NULL);
+	assert(pmap_verify_free(phys_page));
+
+	/* Phase 6: differently combined CPU and IOMMU mappings */
+	kr = pmap_enter(new_pmap, PMAP_TEST_VA, phys_page, VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, FALSE);
+	assert(kr == KERN_SUCCESS);
+	kr = pmap_iommu_map(&iommu->super, &shart_segs[1], 3, 0, NULL);
+	assert(kr == KERN_SUCCESS);
+	kr = pmap_enter(new_pmap, PMAP_TEST_VA + PAGE_SIZE, phys_page, VM_PROT_READ, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, FALSE);
+	assert(kr == KERN_SUCCESS);
+	kr = pmap_iommu_map(&iommu->super, shart_segs, 1, 0, NULL);
+	assert(kr == KERN_SUCCESS);
+	kr = pmap_enter(new_pmap, PMAP_TEST_VA + (2 * PAGE_SIZE), phys_page, VM_PROT_READ, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, FALSE);
+	assert(kr == KERN_SUCCESS);
+	assert(!pmap_verify_free(phys_page));
+	pmap_iommu_unmap(&iommu->super, &shart_segs[2], 1, 0, NULL);
+	assert(!pmap_verify_free(phys_page));
+	pmap_disconnect(phys_page);
+	assert(!pmap_verify_free(phys_page));
+	pmap_iommu_unmap(&iommu->super, shart_segs, 4, 0, NULL);
+	assert(pmap_verify_free(phys_page));
+	pmap_disconnect(phys_page);
+	assert(pmap_verify_free(phys_page));
+
+cleanup:
+
+	if (iommu != NULL) {
+		pmap_iommu_ioctl(&iommu->super, SHART_IOCTL_TEARDOWN, NULL, 0, NULL, 0);
+	}
+	vm_page_lock_queues();
+	if (m != VM_PAGE_NULL) {
+		vm_page_free(m);
+	}
+	vm_page_unlock_queues();
+	if (new_pmap != NULL) {
+		pmap_destroy(new_pmap);
+	}
+
+	return kr;
+#else
 	return KERN_SUCCESS;
+#endif
 }
 
 kern_return_t

@@ -74,5 +74,10 @@ extern unsigned int real_ncpus;
 extern void arm64_ipi_test(void);
 #endif /* defined(CONFIG_XNUPOST) && __arm64__ */
 
+#if defined(KERNEL_INTEGRITY_CTRR)
+extern void init_ctrr_cpu_start_lock(void);
+extern lck_spin_t ctrr_cpu_start_lck;
+extern bool ctrr_cluster_locked[__ARM_CLUSTER_COUNT__];
+#endif /* defined(KERNEL_INTEGRITY_CTRR) */
 
 #endif  /* _ARM_CPU_INTERNAL_H_ */

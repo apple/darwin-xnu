@@ -283,6 +283,10 @@ struct thread {
 #define TH_SFLAG_BASE_PRI_FROZEN        0x0800          /* (effective) base_pri is frozen */
 #define TH_SFLAG_WAITQ_PROMOTED         0x1000          /* promote reason: waitq wakeup (generally for IPC receive) */
 
+#if __AMP__
+#define TH_SFLAG_ECORE_ONLY             0x2000          /* Bind thread to E core processor set */
+#define TH_SFLAG_PCORE_ONLY             0x4000          /* Bind thread to P core processor set */
+#endif
 
 #define TH_SFLAG_EXEC_PROMOTED          0x8000          /* promote reason: thread is in an exec */
 

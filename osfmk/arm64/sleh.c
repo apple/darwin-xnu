@@ -203,6 +203,8 @@ extern volatile uint32_t spr_lock_exception_esr;
 #define CPU_NAME "Twister"
 #elif defined(APPLEHURRICANE)
 #define CPU_NAME "Hurricane"
+#elif defined(APPLELIGHTNING)
+#define CPU_NAME "Lightning"
 #else
 #define CPU_NAME "Unknown"
 #endif
@@ -222,6 +224,10 @@ extern volatile uint32_t spr_lock_exception_esr;
 #define WT_REASON_REG_VIOLATION  8
 #endif
 
+#if defined(HAS_IPI)
+void cpu_signal_handler(void);
+extern unsigned int gFastIPI;
+#endif /* defined(HAS_IPI) */
 
 extern vm_offset_t static_memory_end;
 
@@ -502,6 +508,18 @@ sleh_synchronous(arm_context_t *context, uint32_t esr, vm_offset_t far)
 		thread_exception_return();
 
 	case ESR_EC_IABORT_EL1:
+#if defined(KERNEL_INTEGRITY_CTRR) && defined(CONFIG_XNUPOST)
+		{
+			extern volatile vm_offset_t ctrr_test_va;
+			if (ctrr_test_va && far == ctrr_test_va) {
+				extern volatile uint64_t ctrr_exception_esr;
+				ctrr_exception_esr = esr;
+				/* return to the instruction immediately after the call to NX page */
+				set_saved_state_pc(state, get_saved_state_lr(state));
+				break;
+			}
+		}
+#endif
 
 		panic_with_thread_kernel_state("Kernel instruction fetch abort", state);
 
@@ -944,7 +962,7 @@ is_translation_fault(fault_status_t status)
 	}
 }
 
-#if __ARM_PAN_AVAILABLE__
+#if __ARM_PAN_AVAILABLE__ || defined(KERNEL_INTEGRITY_CTRR)
 static int
 is_permission_fault(fault_status_t status)
 {
@@ -1189,6 +1207,15 @@ handle_kernel_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_ad
 		 * when running with KTRR.
 		 */
 
+#if defined(KERNEL_INTEGRITY_CTRR) && defined(CONFIG_XNUPOST)
+		extern volatile vm_offset_t ctrr_test_va;
+		if (ctrr_test_va && fault_addr == ctrr_test_va && is_permission_fault(fault_code)) {
+			extern volatile uint64_t ctrr_exception_esr;
+			ctrr_exception_esr = esr;
+			add_saved_state_pc(state, 4);
+			return;
+		}
+#endif
 
 #if __ARM_PAN_AVAILABLE__ && defined(CONFIG_XNUPOST)
 		if (is_permission_fault(fault_code) && !(get_saved_state_cpsr(state) & PSR64_PAN) &&
@@ -1497,6 +1524,22 @@ sleh_fiq(arm_saved_state_t *state)
 	uint64_t pmcr0 = 0, upmsr = 0;
 #endif /* MONOTONIC_FIQ */
 
+#if defined(HAS_IPI)
+	boolean_t    is_ipi = FALSE;
+	uint64_t     ipi_sr = 0;
+
+	if (gFastIPI) {
+		MRS(ipi_sr, ARM64_REG_IPI_SR);
+
+		if (ipi_sr & 1) {
+			is_ipi = TRUE;
+		}
+	}
+
+	if (is_ipi) {
+		type = DBG_INTR_TYPE_IPI;
+	} else
+#endif /* defined(HAS_IPI) */
 #if MONOTONIC_FIQ
 	if (mt_pmi_pending(&pmcr0, &upmsr)) {
 		type = DBG_INTR_TYPE_PMI;
@@ -1508,6 +1551,21 @@ sleh_fiq(arm_saved_state_t *state)
 
 	sleh_interrupt_handler_prologue(state, type);
 
+#if defined(HAS_IPI)
+	if (is_ipi) {
+		/*
+		 * Order is important here: we must ack the IPI by writing IPI_SR
+		 * before we call cpu_signal_handler().  Otherwise, there will be
+		 * a window between the completion of pending-signal processing in
+		 * cpu_signal_handler() and the ack during which a newly-issued
+		 * IPI to this CPU may be lost.  ISB is required to ensure the msr
+		 * is retired before execution of cpu_signal_handler().
+		 */
+		MSR(ARM64_REG_IPI_SR, ipi_sr);
+		__builtin_arm_isb(ISB_SY);
+		cpu_signal_handler();
+	} else
+#endif /* defined(HAS_IPI) */
 #if MONOTONIC_FIQ
 	if (type == DBG_INTR_TYPE_PMI) {
 		mt_fiq(getCpuDatap(), pmcr0, upmsr);

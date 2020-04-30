@@ -213,6 +213,10 @@ struct sched_clutch_bucket {
 	/* (P) linkage for all clutch_buckets in a root bucket; used for tick operations */
 	queue_chain_t                   scb_listlink;
 
+#if __AMP__
+	/* (P) linkage for all "foreign" clutch buckets in the root clutch */
+	queue_chain_t                   scb_foreignlink;
+#endif /* __AMP__ */
 
 	/* (P) timestamp for the last time the interactivity score was updated */
 	uint64_t                        scb_interactivity_ts;

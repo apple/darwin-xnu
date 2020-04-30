@@ -39,6 +39,33 @@
 #endif /* __ARM_KERNEL_PROTECT__ */
 
 
+#if __APRR_SUPPORTED__
+
+.macro MSR_APRR_EL1_X0
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
+	bl		EXT(pinst_set_aprr_el1)
+#else
+	msr		APRR_EL1, x0
+#endif
+.endmacro
+
+.macro MSR_APRR_EL0_X0
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
+	bl		EXT(pinst_set_aprr_el0)
+#else
+	msr		APRR_EL0, x0
+#endif
+.endmacro
+
+.macro MSR_APRR_SHADOW_MASK_EN_EL1_X0
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
+	bl		EXT(pinst_set_aprr_shadow_mask_en_el1)
+#else
+	msr		APRR_SHADOW_MASK_EN_EL1, x0
+#endif
+.endmacro
+
+#endif /* __APRR_SUPPORTED__ */
 
 .macro MSR_VBAR_EL1_X0
 #if defined(KERNEL_INTEGRITY_KTRR)
@@ -128,13 +155,32 @@ LEXT(reset_vector)
 	msr		OSLAR_EL1, xzr
 	msr		DAIFSet, #(DAIFSC_ALL)				// Disable all interrupts
 
-#if !(defined(KERNEL_INTEGRITY_KTRR))
+#if !(defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR))
 	// Set low reset vector before attempting any loads
 	adrp    x0, EXT(LowExceptionVectorBase)@page
 	add     x0, x0, EXT(LowExceptionVectorBase)@pageoff
 	msr     VBAR_EL1, x0
 #endif
 
+#if __APRR_SUPPORTED__
+	MOV64	x0, APRR_EL1_DEFAULT
+#if XNU_MONITOR
+	adrp	x4, EXT(pmap_ppl_locked_down)@page
+	ldrb	w5, [x4, #EXT(pmap_ppl_locked_down)@pageoff]
+	cmp		w5, #0
+	b.ne	1f
+
+	// If the PPL is not locked down, we start in PPL mode.
+	MOV64	x0, APRR_EL1_PPL
+1:
+#endif /* XNU_MONITOR */
+
+	MSR_APRR_EL1_X0
+
+	// Load up the default APRR_EL0 value.
+	MOV64	x0, APRR_EL0_DEFAULT
+	MSR_APRR_EL0_X0
+#endif /* __APRR_SUPPORTED__ */
 
 #if defined(KERNEL_INTEGRITY_KTRR)
 	/*
@@ -179,7 +225,11 @@ Lskip_ktrr:
 	adrp	x19, EXT(ResetHandlerData)@page			// Get address of the reset handler data
 	add		x19, x19, EXT(ResetHandlerData)@pageoff
 	mrs		x15, MPIDR_EL1						// Load MPIDR to get CPU number
+#if HAS_CLUSTER
+	and		x0, x15, #0xFFFF					// CPU number in Affinity0, cluster ID in Affinity1
+#else
 	and		x0, x15, #0xFF						// CPU number is in MPIDR Affinity Level 0
+#endif
 	ldr		x1, [x19, CPU_DATA_ENTRIES]			// Load start of data entries
 	add		x3, x1, MAX_CPUS * 16				// end addr of data entries = start + (16 * MAX_CPUS)  
 Lcheck_cpu_data_entry:
@@ -194,6 +244,57 @@ Lnext_cpu_data_entry:
 	b.eq	Lskip_cpu_reset_handler				// Not found
 	b		Lcheck_cpu_data_entry	// loop
 Lfound_cpu_data_entry:
+#if defined(KERNEL_INTEGRITY_CTRR)
+	/*
+	 * Program and lock CTRR if this CPU is non-boot cluster master. boot cluster will be locked
+	 * in machine_lockdown. pinst insns protected by VMSA_LOCK
+	 * A_PXN and A_MMUON_WRPROTECT options provides something close to KTRR behavior
+	 */
+
+	/* spin until bootstrap core has completed machine lockdown */
+	adrp	x17, EXT(lockdown_done)@page
+1:
+	ldr	x18, [x17, EXT(lockdown_done)@pageoff]
+	cbz	x18, 1b
+
+	// load stashed rorgn_begin
+	adrp	x17, EXT(rorgn_begin)@page
+	add		x17, x17, EXT(rorgn_begin)@pageoff
+	ldr		x17, [x17]
+	// if rorgn_begin is zero, we're debugging. skip enabling ctrr
+	cbz		x17, Lskip_ctrr
+
+	// load stashed rorgn_end
+	adrp	x19, EXT(rorgn_end)@page
+	add		x19, x19, EXT(rorgn_end)@pageoff
+	ldr		x19, [x19]
+	cbz		x19, Lskip_ctrr
+
+	mrs		x18, ARM64_REG_CTRR_LOCK_EL1
+	cbnz	x18, Lskip_ctrr  /* don't touch if already locked */
+	ldr		w18, [x21, CLUSTER_MASTER] /* cluster master is unsigned int (32bit) */
+	cbz		w18, Lspin_ctrr_unlocked /* non-cluster master spins if CTRR unlocked (unexpected) */
+	msr		ARM64_REG_CTRR_A_LWR_EL1, x17
+	msr		ARM64_REG_CTRR_A_UPR_EL1, x19
+	mov		x18, #(CTRR_CTL_EL1_A_PXN | CTRR_CTL_EL1_A_MMUON_WRPROTECT)
+	msr		ARM64_REG_CTRR_CTL_EL1, x18
+	mov		x18, #1
+	msr		ARM64_REG_CTRR_LOCK_EL1, x18
+
+
+	isb
+	tlbi 	vmalle1
+	dsb 	ish
+	isb
+Lspin_ctrr_unlocked:
+	/* we shouldn't ever be here as cpu start is serialized by cluster in cpu_start(),
+	 * and first core started in cluster is designated cluster master and locks
+	 * both core and cluster. subsequent cores in same cluster will run locked from
+	 * from reset vector */
+	mrs		x18, ARM64_REG_CTRR_LOCK_EL1
+	cbz		x18, Lspin_ctrr_unlocked
+Lskip_ctrr:
+#endif
 	adrp	x20, EXT(const_boot_args)@page
 	add		x20, x20, EXT(const_boot_args)@pageoff
 	ldr		x0, [x21, CPU_RESET_HANDLER]		// Call CPU reset handler
@@ -210,7 +311,13 @@ Lfound_cpu_data_entry:
 	bne		Lskip_cpu_reset_handler
 1:
 
+#if HAS_NEX_PG
+	bl		EXT(set_nex_pg)
+#endif
 
+#if HAS_BP_RET
+	bl		EXT(set_bp_ret)
+#endif
 
 #if __ARM_KERNEL_PROTECT__ && defined(KERNEL_INTEGRITY_KTRR)
 	/*
@@ -299,7 +406,7 @@ LEXT(LowExceptionVectorBase)
 	b		.
 	.align 12, 0
 
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 /*
  * Provide a global symbol so that we can narrow the V=P mapping to cover
  * this page during arm_vm_init.
@@ -308,7 +415,7 @@ LEXT(LowExceptionVectorBase)
 .globl EXT(bootstrap_instructions)
 LEXT(bootstrap_instructions)
 
-#endif /* defined(KERNEL_INTEGRITY_KTRR)*/
+#endif /* defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) */
 	.align 2
 	.globl EXT(resume_idle_cpu)
 LEXT(resume_idle_cpu)
@@ -325,13 +432,13 @@ LEXT(start_cpu)
 
 	.align 2
 start_cpu:
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 	// This is done right away in reset vector for pre-KTRR devices
 	// Set low reset vector now that we are in the KTRR-free zone
 	adrp	x0, EXT(LowExceptionVectorBase)@page
 	add		x0, x0, EXT(LowExceptionVectorBase)@pageoff
 	MSR_VBAR_EL1_X0
-#endif /* defined(KERNEL_INTEGRITY_KTRR)*/
+#endif /* defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) */
 
 	// x20 set to BootArgs phys address
 	// x21 set to cpu data phys address
@@ -353,7 +460,7 @@ start_cpu:
 
 
 	// Set SP_EL1 to exception stack
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 	mov		x1, lr
 	bl		EXT(pinst_spsel_1)
 	mov		lr, x1
@@ -494,6 +601,29 @@ LEXT(start_first_cpu)
 	add		x0, x0, EXT(LowExceptionVectorBase)@pageoff
 	MSR_VBAR_EL1_X0
 
+#if __APRR_SUPPORTED__
+	// Save the LR
+	mov		x1, lr
+
+#if XNU_MONITOR
+	// If the PPL is supported, we start out in PPL mode.
+	MOV64	x0, APRR_EL1_PPL
+#else
+	// Otherwise, we start out in default mode.
+	MOV64	x0, APRR_EL1_DEFAULT
+#endif
+
+	// Set the APRR state for EL1.
+	MSR_APRR_EL1_X0
+
+	// Set the APRR state for EL0.
+	MOV64	x0, APRR_EL0_DEFAULT
+	MSR_APRR_EL0_X0
+
+
+	// Restore the LR.
+	mov	lr, x1
+#endif /* __APRR_SUPPORTED__ */
 
 	// Get the kernel memory parameters from the boot args
 	ldr		x22, [x20, BA_VIRT_BASE]			// Get the kernel virt base
@@ -514,7 +644,7 @@ LEXT(start_first_cpu)
 	sub		x0, x0, x23
 
 	// Set SP_EL1 to exception stack
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 	bl		EXT(pinst_spsel_1)
 #else
 	msr		SPSel, #1
@@ -657,7 +787,7 @@ common_start:
 	 *	TTBR0 - V=P table @ top of kernel
 	 *	TTBR1 - KVA table @ top of kernel + 1 page
 	 */
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 	/* Note that for KTRR configurations, the V=P map will be modified by
 	 * arm_vm_init.c.
 	 */
@@ -1075,9 +1205,186 @@ Lskip_skye_post_a1_workarounds:
 
 #endif /* defined(APPLEMONSOON) */
 
+#if defined(APPLEVORTEX)
 
+	ARM64_IS_PCORE x15
 
+	// Skip if not P-core
+	cbz		x15, Lskip_cyprus_pcore_only
 
+	mrs		x12, ARM64_REG_HID1
+
+	mrs		x13, MIDR_EL1
+	ubfx		x14, x13, #MIDR_EL1_PNUM_SHIFT, #12
+	// Should be applied to all Aruba variants, but only Cyprus variants B0 and later
+	cmp		x14, #0xb	// Part number 11 => Cyprus, 16 => Aruba
+	bne		Lbr_kill
+	ubfx		x14, x13, #MIDR_EL1_VAR_SHIFT, #4
+	cbz		x14, Lskip_br_kill		// variant 0 => Cyprus AX, 1 => Cyprus BX
+
+Lbr_kill:
+
+	// rdar://problem/36716477: data corruption due to incorrect branch predictor resolution
+	orr		x12, x12, ARM64_REG_HID1_enaBrKillLimit
+
+Lskip_br_kill:
+
+	// rdar://problem/34435356: segfaults due to IEX clock-gating
+	orr		x12, x12, ARM64_REG_HID1_rccForceAllIexL3ClksOn
+	msr		ARM64_REG_HID1, x12
+
+#if ARM64_BOARD_CONFIG_T8027
+	// rdar://problem/40695685: Enable BIF fill buffer stall logic to prevent skid buffer overflow (Aruba A1 only)
+	mrs		x12, ARM64_REG_HID5
+	orr		x12, x12, ARM64_REG_HID5_EnableDnFIFORdStall
+	msr		ARM64_REG_HID5, x12
+
+#endif	/* ARM64_BOARD_CONFIG_T8027 */
+
+	// Prevent ordered loads from being dispatched from LSU until all prior loads have completed. 
+	// rdar://problem/34095873: AF2 ordering rules allow ARM device ordering violations
+	mrs		x12, ARM64_REG_HID4
+	orr		x12, x12, ARM64_REG_HID4_ForceNsOrdLdReqNoOlderLd
+	msr		ARM64_REG_HID4, x12
+
+	// rdar://problem/38482968: [Cyprus Tunable] Poisoned cache line crossing younger load is not redirected by older load-barrier
+	mrs		x12, ARM64_REG_HID3
+	orr		x12, x12, ARM64_REG_HID3_DisColorOpt
+	msr		ARM64_REG_HID3, x12
+
+	// rdar://problem/41056604: disable faster launches of uncacheable unaligned stores to workaround load/load ordering violation
+	mrs		x12, ARM64_REG_HID11
+	orr		x12, x12, ARM64_REG_HID11_DisX64NTLnchOpt
+	msr		ARM64_REG_HID11, x12
+
+	b		Lskip_cyprus_ecore_only
+
+Lskip_cyprus_pcore_only:
+
+	// Prevent ordered loads from being dispatched from LSU until all prior loads have completed. 
+	// rdar://problem/34095873: AF2 ordering rules allow ARM device ordering violations
+	mrs		x12, ARM64_REG_EHID4
+	orr		x12, x12, ARM64_REG_HID4_ForceNsOrdLdReqNoOlderLd
+	msr		ARM64_REG_EHID4, x12
+
+	// rdar://problem/36595004: Poisoned younger load is not redirected by older load-acquire
+	mrs		x12, ARM64_REG_EHID3
+	orr		x12, x12, ARM64_REG_EHID3_DisColorOpt
+	msr		ARM64_REG_EHID3, x12
+
+	// rdar://problem/37949166: Disable the extension of prefetcher training pipe clock gating, revert to default gating
+	mrs		x12, ARM64_REG_EHID10
+	orr		x12, x12, ARM64_REG_EHID10_rccDisPwrSavePrfClkOff
+	msr		ARM64_REG_EHID10, x12
+
+Lskip_cyprus_ecore_only:
+
+#endif /* defined (APPLEVORTEX) */
+
+#if defined(ARM64_BOARD_CONFIG_T8030)
+	// Cebu <B0 is deprecated and unsupported (see rdar://problem/42835678)
+	SKIP_IF_CPU_VERSION_LESS_THAN x12, LIGHTNING_CPU_VERSION_B0, .
+
+	ARM64_IS_PCORE x15
+
+	// Skip if not P-core
+	cbz		x15, Lskip_cebu_pcore_only
+
+	// rdar://problem/50664291: [Cebu B0/B1 Tunables][PerfVerif][LSU] Post-silicon tuning of STNT widget contiguous counter threshold
+	mrs		x12, ARM64_REG_HID4
+	and		x12, x12, ~ARM64_REG_HID4_CnfCntrThresh_mask
+	orr		x12, x12, 3 << ARM64_REG_HID4_CnfCntrThresh_shift
+	msr		ARM64_REG_HID4, x12
+
+	mrs		x12, ARM64_REG_HID9
+	// rdar://problem/47744434: Barrier Load Ordering property is not satisfied for x64-loads
+	orr		x12, x12, ARM64_REG_HID9_EnableFixBug47221499
+	// rdar://problem/50664291: [Cebu B0/B1 Tunables][PerfVerif][LSU] Post-silicon tuning of STNT widget contiguous counter threshold
+	orr		x12, x12, ARM64_REG_HID9_DisSTNTWidgetForUnalign
+	msr		ARM64_REG_HID9, x12
+
+	// rdar://problem/47865629: RF bank and Multipass conflict forward progress widget does not handle 3+ cycle livelock
+	mrs		x12, ARM64_REG_HID16
+	orr		x12, x12, ARM64_REG_HID16_EnRs4Sec
+	and		x12, x12, ~ARM64_REG_HID16_DisxPickRs45
+	orr		x12, x12, ARM64_REG_HID16_EnMPxPick45
+	orr		x12, x12, ARM64_REG_HID16_EnMPCyc7
+	msr		ARM64_REG_HID16, x12
+
+	mrs		x12, ARM64_REG_HID4
+	// Prevent ordered loads from being dispatched from LSU until all prior loads have completed.
+	// rdar://problem/34095873: AF2 ordering rules allow ARM device ordering violations
+	orr		x12, x12, ARM64_REG_HID4_ForceNsOrdLdReqNoOlderLd
+	// rdar://problem/51690962: Disable Store-Non-Temporal downgrade widget
+	orr		x12, x12, ARM64_REG_HID4_DisSTNTWidget
+	msr		ARM64_REG_HID4, x12
+
+	// rdar://problem/41056604: disable faster launches of uncacheable unaligned stores to workaround load/load ordering violation
+	mrs		x12, ARM64_REG_HID11
+	orr		x12, x12, ARM64_REG_HID11_DisX64NTLnchOpt
+	msr		ARM64_REG_HID11, x12
+
+	// rdar://problem/41029832: configure dummy cycles to work around incorrect temp sensor readings on NEX power gating
+	mrs		x12, ARM64_REG_HID13
+	and		x12, x12, ~ARM64_REG_HID13_PreCyc_mask
+	orr		x12, x12, 4 << ARM64_REG_HID13_PreCyc_shift
+	msr		ARM64_REG_HID13, x12
+
+	// rdar://problem/45024523: enable aggressive LEQ throttling to work around LEQ credit leak
+	mrs		x12, ARM64_REG_HID16
+	orr		x12, x12, ARM64_REG_HID16_leqThrottleAggr
+	msr		ARM64_REG_HID16, x12
+
+	b		Lskip_cebu_ecore_only
+
+Lskip_cebu_pcore_only:
+
+	// Prevent ordered loads from being dispatched from LSU until all prior loads have completed.
+	// rdar://problem/34095873: AF2 ordering rules allow ARM device ordering violations
+	mrs		x12, ARM64_REG_EHID4
+	orr		x12, x12, ARM64_REG_HID4_ForceNsOrdLdReqNoOlderLd
+	msr		ARM64_REG_EHID4, x12
+
+	// rdar://problem/37949166: Disable the extension of prefetcher training pipe clock gating, revert to default gating
+	mrs		x12, ARM64_REG_EHID10
+	orr		x12, x12, ARM64_REG_EHID10_rccDisPwrSavePrfClkOff
+	msr		ARM64_REG_EHID10, x12
+
+Lskip_cebu_ecore_only:
+#endif /* defined(ARM64_BOARD_CONFIG_T8030) */
+
+#if defined(APPLELIGHTNING)
+	// rdar://54225210 (Incorrect fusing of a direct branch with AMX/EAS instruction at cross-beat location)
+	ARM64_IS_PCORE x15
+	cbz		x15, not_cebu_pcore
+
+	mrs		x12, ARM64_REG_HID0
+	orr		x12, x12, ARM64_REG_HID0_CacheFusionDisable
+	msr		ARM64_REG_HID0, x12
+
+not_cebu_pcore:
+#endif /* defined(APPLELIGHTNING) */
+
+#if defined(APPLELIGHTNING)
+
+	// rdar://53907283 ([Cebu ACC Errata] Sibling Merge in LLC can cause UC load to violate ARM Memory Ordering Rules.)
+	mrs		x12, ARM64_REG_HID5
+	orr		x12, x12, ARM64_REG_HID5_DisFill2cMerge
+	msr		ARM64_REG_HID5, x12
+
+	// Skip if not E-core or not a two-cluster CPU
+#if defined(CPU_CLUSTER_OFFSETS)
+	ARM64_IS_PCORE x15
+	cbnz	x15, Lskip_h12_h13_ecore_only
+
+	// rdar://problem/48476033: Prevent store-to-load forwarding for UC memory to avoid barrier ordering violation
+	mrs		x12, ARM64_REG_EHID10
+	orr		x12, x12, ARM64_REG_EHID10_ForceWStDrainUc
+	msr		ARM64_REG_EHID10, x12
+
+Lskip_h12_h13_ecore_only:
+#endif /* defined(CPU_CLUSTER_OFFSETS) */
+#endif /* defined(APPLELIGHTNING)*/
 
 
 
@@ -1152,6 +1459,9 @@ arm_init_tramp:
 
 
 	mov		x19, lr
+#if defined(HAS_VMSA_LOCK)
+	bl		EXT(vmsa_lock)
+#endif
 	// Convert CPU data PA to VA and set as first argument
 	mov		x0, x21
 	bl		EXT(phystokv)

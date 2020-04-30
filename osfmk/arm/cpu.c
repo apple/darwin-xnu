@@ -377,6 +377,7 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 	cpu_data_ptr->cpu_CLW_active = 0x1UL;
 #endif
 
+#if !XNU_MONITOR
 	pmap_cpu_data_t * pmap_cpu_data_ptr = &cpu_data_ptr->cpu_pmap_cpu_data;
 
 	pmap_cpu_data_ptr->cpu_user_pmap = (struct pmap *) NULL;
@@ -386,6 +387,7 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 	for (i = 0; i < (sizeof(pmap_cpu_data_ptr->cpu_asid_high_bits) / sizeof(*pmap_cpu_data_ptr->cpu_asid_high_bits)); i++) {
 		pmap_cpu_data_ptr->cpu_asid_high_bits[i] = 0;
 	}
+#endif
 	cpu_data_ptr->halt_status = CPU_NOT_HALTED;
 }
 
@@ -421,7 +423,9 @@ cpu_start(int cpu)
 		cpu_data_ptr = CpuDataEntries[cpu].cpu_data_vaddr;
 		cpu_data_ptr->cpu_reset_handler = (vm_offset_t) start_cpu_paddr;
 
+#if !XNU_MONITOR
 		cpu_data_ptr->cpu_pmap_cpu_data.cpu_user_pmap = NULL;
+#endif
 
 		if (cpu_data_ptr->cpu_processor->startup_thread != THREAD_NULL) {
 			first_thread = cpu_data_ptr->cpu_processor->startup_thread;

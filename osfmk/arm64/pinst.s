@@ -104,7 +104,7 @@ _pinst_set_sctlr:
 
 #endif /* defined(KERNEL_INTEGRITY_KTRR) */
 
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 
 	.text
 	.section	__LAST,__pinst
@@ -123,5 +123,48 @@ _pinst_spsel_1:
 	check_instruction x2, x3, __pinst_spsel_1, 0xd65f03c0d50041bf
 	b __pinst_spsel_1
 
-#endif /* defined(KERNEL_INTEGRITY_KTRR)*/
+#if __APRR_SUPPORTED__
+
+/*
+ * APRR registers aren't covered by VMSA lockdown, so we'll keep these
+ * gadgets in pinst for protection against undesired execution. 
+ */
+
+	.text
+	.section	__LAST,__pinst
+	.align 2
+
+__pinst_set_aprr_el0:
+	msr		APRR_EL0, x0
+	ret
+
+__pinst_set_aprr_el1:
+	msr		APRR_EL1, x0
+	ret
+
+__pinst_set_aprr_shadow_mask_en_el1:
+	msr		APRR_SHADOW_MASK_EN_EL1, x0
+
+	ret
+
+	.text
+	.section	__TEXT_EXEC,__text
+	.align 2
+
+	.globl _pinst_set_aprr_el0
+_pinst_set_aprr_el0:
+	check_instruction x2, x3, __pinst_set_aprr_el0, 0xd65f03c0d51cf200
+	b __pinst_set_aprr_el0
+
+	.globl _pinst_set_aprr_el1
+_pinst_set_aprr_el1:
+	check_instruction x2, x3, __pinst_set_aprr_el1, 0xd65f03c0d51cf220
+	b __pinst_set_aprr_el1
+
+	.globl _pinst_set_aprr_shadow_mask_en_el1
+_pinst_set_aprr_shadow_mask_en_el1:
+	check_instruction x2, x3, __pinst_set_aprr_shadow_mask_en_el1, 0xd65f03c0d51cf2c0
+	b __pinst_set_aprr_shadow_mask_en_el1
+#endif /* __APRR_SUPPORTED__ */
+#endif /* defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) */
 

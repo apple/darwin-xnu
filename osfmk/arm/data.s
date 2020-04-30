@@ -106,14 +106,14 @@ LEXT(vfptrash_data)
 #if __arm64__
         .section __DATA, __const
 
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 /* reserve space for read only page tables */
         .align 14
 LEXT(ropagetable_begin)
         .space 14*16*1024,0
 #else
 LEXT(ropagetable_begin)
-#endif /* defined(KERNEL_INTEGRITY_KTRR)*/
+#endif /* defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) */
 
 LEXT(ropagetable_end)
 

@@ -30,6 +30,71 @@
 #include <pexpert/arm64/board_config.h>
 #endif
 
+#if XNU_MONITOR
+/* Exit path defines; for controlling PPL -> kernel transitions. */
+#define PPL_EXIT_DISPATCH   0 /* This is a clean exit after a PPL request. */
+#define PPL_EXIT_PANIC_CALL 1 /* The PPL has called panic. */
+#define PPL_EXIT_BAD_CALL   2 /* The PPL request failed. */
+#define PPL_EXIT_EXCEPTION  3 /* The PPL took an exception. */
+
+#define KERNEL_MODE_ELR      ELR_GL11
+#define KERNEL_MODE_FAR      FAR_GL11
+#define KERNEL_MODE_ESR      ESR_GL11
+#define KERNEL_MODE_SPSR     SPSR_GL11
+#define KERNEL_MODE_ASPSR    ASPSR_GL11
+#define KERNEL_MODE_VBAR     VBAR_GL11
+#define KERNEL_MODE_TPIDR    TPIDR_GL11
+
+#define GUARDED_MODE_ELR     ELR_EL1
+#define GUARDED_MODE_FAR     FAR_EL1
+#define GUARDED_MODE_ESR     ESR_EL1
+#define GUARDED_MODE_SPSR    SPSR_EL1
+#define GUARDED_MODE_ASPSR   ASPSR_EL1
+#define GUARDED_MODE_VBAR    VBAR_EL1
+#define GUARDED_MODE_TPIDR   TPIDR_EL1
+
+/*
+ * GET_PMAP_CPU_DATA
+ *
+ * Retrieves the PPL per-CPU data for the current CPU.
+ *   arg0 - Address of the PPL per-CPU data is returned through this
+ *   arg1 - Scratch register
+ *   arg2 - Scratch register
+ *
+ */
+.macro GET_PMAP_CPU_DATA
+/* Get the CPU ID. */
+mrs		$0, MPIDR_EL1
+#ifdef CPU_CLUSTER_OFFSETS
+ubfx		$1, $0, MPIDR_AFF1_SHIFT, MPIDR_AFF1_WIDTH
+cmp		$1, __ARM_CLUSTER_COUNT__
+b.hs	.
+adrp	$2, EXT(pmap_cluster_offsets)@page
+add		$2, $2, EXT(pmap_cluster_offsets)@pageoff
+ldr		$1, [$2, $1, lsl #3]
+and		$0, $0, MPIDR_AFF0_MASK
+add		$0, $0, $1
+#else
+and		$0, $0, MPIDR_AFF0_MASK
+#endif
+
+/* Get the PPL CPU data array. */
+adrp	$1, EXT(pmap_cpu_data_array)@page
+add		$1, $1, EXT(pmap_cpu_data_array)@pageoff
+
+/*
+ * Sanity check the CPU ID (this is not a panic because this pertains to
+ * the hardware configuration; this should only fail if our
+ * understanding of the hardware is incorrect).
+ */
+cmp		$0, MAX_CPUS
+b.hs	.
+
+mov		$2, PMAP_CPU_DATA_ARRAY_ENTRY_SIZE
+/* Get the PPL per-CPU data. */
+madd	$0, $0, $2, $1
+.endmacro
+#endif /* XNU_MONITOR */
 
 /*
  * INIT_SAVED_STATE_FLAVORS

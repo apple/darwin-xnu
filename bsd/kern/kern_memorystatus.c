@@ -1321,7 +1321,11 @@ int max_jetsam_threads = JETSAM_THREADS_LIMIT;
  * - Raise the jetsam threshold ("clear-the-deck")
  * - Enabled parallel jetsam on eligible devices
  */
+#if __AMP__
+int fast_jetsam_enabled = 1;
+#else /* __AMP__ */
 int fast_jetsam_enabled = 0;
+#endif /* __AMP__ */
 
 /* Routine to find the jetsam state structure for the current jetsam thread */
 static inline struct jetsam_thread_state *

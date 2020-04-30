@@ -89,6 +89,10 @@ kern_return_t arm64_late_pan_test(void);
 #include <ptrauth.h>
 kern_return_t arm64_ropjop_test(void);
 #endif
+#if defined(KERNEL_INTEGRITY_CTRR)
+kern_return_t ctrr_test(void);
+kern_return_t ctrr_test_cpu(void);
+#endif
 #if HAS_TWO_STAGE_SPR_LOCK
 kern_return_t arm64_spr_lock_test(void);
 extern void arm64_msr_lock_test(uint64_t);
@@ -270,6 +274,46 @@ lt_upgrade_downgrade_rw()
 	lck_rw_done(&lt_rwlock);
 }
 
+#if __AMP__
+const int limit = 1000000;
+static int lt_stress_local_counters[MAX_CPUS];
+
+lck_ticket_t lt_ticket_lock;
+
+static void
+lt_stress_ticket_lock()
+{
+	int local_counter = 0;
+
+	uint cpuid = current_processor()->cpu_id;
+
+	kprintf("%s>cpu %d starting\n", __FUNCTION__, cpuid);
+
+	lck_ticket_lock(&lt_ticket_lock);
+	lt_counter++;
+	local_counter++;
+	lck_ticket_unlock(&lt_ticket_lock);
+
+	while (lt_counter < lt_target_done_threads) {
+		;
+	}
+
+	kprintf("%s>cpu %d started\n", __FUNCTION__, cpuid);
+
+	while (lt_counter < limit) {
+		lck_ticket_lock(&lt_ticket_lock);
+		if (lt_counter < limit) {
+			lt_counter++;
+			local_counter++;
+		}
+		lck_ticket_unlock(&lt_ticket_lock);
+	}
+
+	lt_stress_local_counters[cpuid] = local_counter;
+
+	kprintf("%s>final counter %d cpu %d incremented the counter %d times\n", __FUNCTION__, lt_counter, cpuid, local_counter);
+}
+#endif
 
 static void
 lt_grab_hw_lock()
@@ -571,6 +615,106 @@ lt_start_lock_thread(thread_continue_t func)
 	thread_deallocate(thread);
 }
 
+#if __AMP__
+static void
+lt_bound_thread(void *arg, wait_result_t wres __unused)
+{
+	void (*func)(void) = (void (*)(void))arg;
+
+	int cpuid = OSIncrementAtomic((volatile SInt32 *)&lt_cpu_bind_id);
+
+	processor_t processor = processor_list;
+	while ((processor != NULL) && (processor->cpu_id != cpuid)) {
+		processor = processor->processor_list;
+	}
+
+	if (processor != NULL) {
+		thread_bind(processor);
+	}
+
+	thread_block(THREAD_CONTINUE_NULL);
+
+	func();
+
+	OSIncrementAtomic((volatile SInt32*) &lt_done_threads);
+}
+
+static void
+lt_e_thread(void *arg, wait_result_t wres __unused)
+{
+	void (*func)(void) = (void (*)(void))arg;
+
+	thread_t thread = current_thread();
+
+	spl_t s = splsched();
+	thread_lock(thread);
+	thread->sched_flags |= TH_SFLAG_ECORE_ONLY;
+	thread_unlock(thread);
+	splx(s);
+
+	thread_block(THREAD_CONTINUE_NULL);
+
+	func();
+
+	OSIncrementAtomic((volatile SInt32*) &lt_done_threads);
+}
+
+static void
+lt_p_thread(void *arg, wait_result_t wres __unused)
+{
+	void (*func)(void) = (void (*)(void))arg;
+
+	thread_t thread = current_thread();
+
+	spl_t s = splsched();
+	thread_lock(thread);
+	thread->sched_flags |= TH_SFLAG_PCORE_ONLY;
+	thread_unlock(thread);
+	splx(s);
+
+	thread_block(THREAD_CONTINUE_NULL);
+
+	func();
+
+	OSIncrementAtomic((volatile SInt32*) &lt_done_threads);
+}
+
+static void
+lt_start_lock_thread_e(thread_continue_t func)
+{
+	thread_t thread;
+	kern_return_t kr;
+
+	kr = kernel_thread_start(lt_e_thread, func, &thread);
+	assert(kr == KERN_SUCCESS);
+
+	thread_deallocate(thread);
+}
+
+static void
+lt_start_lock_thread_p(thread_continue_t func)
+{
+	thread_t thread;
+	kern_return_t kr;
+
+	kr = kernel_thread_start(lt_p_thread, func, &thread);
+	assert(kr == KERN_SUCCESS);
+
+	thread_deallocate(thread);
+}
+
+static void
+lt_start_lock_thread_bound(thread_continue_t func)
+{
+	thread_t thread;
+	kern_return_t kr;
+
+	kr = kernel_thread_start(lt_bound_thread, func, &thread);
+	assert(kr == KERN_SUCCESS);
+
+	thread_deallocate(thread);
+}
+#endif
 
 static kern_return_t
 lt_test_locks()
@@ -762,6 +906,47 @@ lt_test_locks()
 	lt_wait_for_lock_test_threads();
 	T_EXPECT_EQ_UINT(lt_counter, LOCK_TEST_ITERATIONS * lt_target_done_threads, NULL);
 
+#if __AMP__
+	/* Ticket locks stress test */
+	T_LOG("Running Ticket locks stress test with lck_ticket_lock()");
+	extern unsigned int real_ncpus;
+	lck_ticket_init(&lt_ticket_lock);
+	lt_reset();
+	lt_target_done_threads = real_ncpus;
+	for (processor_t processor = processor_list; processor != NULL; processor = processor->processor_list) {
+		lt_start_lock_thread_bound(lt_stress_ticket_lock);
+	}
+	lt_wait_for_lock_test_threads();
+	bool starvation = false;
+	uint total_local_count = 0;
+	for (processor_t processor = processor_list; processor != NULL; processor = processor->processor_list) {
+		starvation = starvation || (lt_stress_local_counters[processor->cpu_id] < 10);
+		total_local_count += lt_stress_local_counters[processor->cpu_id];
+	}
+	if (total_local_count != lt_counter) {
+		T_FAIL("Lock failure\n");
+	} else if (starvation) {
+		T_FAIL("Lock starvation found\n");
+	} else {
+		T_PASS("Ticket locks stress test with lck_ticket_lock()");
+	}
+
+	/* AMP ticket locks stress test */
+	T_LOG("Running AMP Ticket locks stress test bound to clusters with lck_ticket_lock()");
+	lt_reset();
+	lt_target_done_threads = real_ncpus;
+	for (processor_t processor = processor_list; processor != NULL; processor = processor->processor_list) {
+		processor_set_t pset = processor->processor_set;
+		if (pset->pset_cluster_type == PSET_AMP_P) {
+			lt_start_lock_thread_p(lt_stress_ticket_lock);
+		} else if (pset->pset_cluster_type == PSET_AMP_E) {
+			lt_start_lock_thread_e(lt_stress_ticket_lock);
+		} else {
+			lt_start_lock_thread(lt_stress_ticket_lock);
+		}
+	}
+	lt_wait_for_lock_test_threads();
+#endif
 
 	/* HW locks: trylocks */
 	T_LOG("Running test with hw_lock_try()");
@@ -1198,6 +1383,136 @@ arm64_munger_test()
 	return 0;
 }
 
+#if defined(KERNEL_INTEGRITY_CTRR) && defined(CONFIG_XNUPOST)
+SECURITY_READ_ONLY_LATE(uint64_t) ctrr_ro_test;
+uint64_t ctrr_nx_test = 0xd65f03c0; /* RET */
+volatile uint64_t ctrr_exception_esr;
+vm_offset_t ctrr_test_va;
+vm_offset_t ctrr_test_page;
+
+kern_return_t
+ctrr_test(void)
+{
+	processor_t p;
+	boolean_t ctrr_disable = FALSE;
+
+	PE_parse_boot_argn("-unsafe_kernel_text", &ctrr_disable, sizeof(ctrr_disable));
+
+	if (ctrr_disable) {
+		T_LOG("Skipping CTRR test when -unsafe_kernel_text boot-arg present");
+		return KERN_SUCCESS;
+	}
+
+	T_LOG("Running CTRR test.");
+
+	for (p = processor_list; p != NULL; p = p->processor_list) {
+		thread_bind(p);
+		thread_block(THREAD_CONTINUE_NULL);
+		T_LOG("Running CTRR test on cpu %d\n", p->cpu_id);
+		ctrr_test_cpu();
+	}
+
+	/* unbind thread from specific cpu */
+	thread_bind(PROCESSOR_NULL);
+	thread_block(THREAD_CONTINUE_NULL);
+
+	return KERN_SUCCESS;
+}
+
+/* test CTRR on a cpu, caller to bind thread to desired cpu */
+/* ctrr_test_page was reserved during bootstrap process */
+kern_return_t
+ctrr_test_cpu(void)
+{
+	ppnum_t ro_pn, nx_pn;
+	uint64_t *ctrr_ro_test_ptr;
+	void (*ctrr_nx_test_ptr)(void);
+	kern_return_t kr;
+	uint64_t prot = 0;
+	extern uint64_t rorgn_begin, rorgn_end;
+	extern vm_offset_t virtual_space_start;
+
+	/* rorgn = [rorgn_begin_va, rorgn_end_va) */
+
+	vm_offset_t rorgn_begin_va = phystokv(rorgn_begin);
+	vm_offset_t rorgn_end_va = phystokv(rorgn_end) + PAGE_SIZE;
+	vm_offset_t ro_test_va = (vm_offset_t)&ctrr_ro_test;
+	vm_offset_t nx_test_va = (vm_offset_t)&ctrr_nx_test;
+
+	T_EXPECT(rorgn_begin_va <= ro_test_va && ro_test_va < rorgn_end_va, "Expect ro_test_va to be inside the CTRR region");
+	T_EXPECT((nx_test_va < rorgn_begin_va) ^ (nx_test_va >= rorgn_end_va), "Expect nx_test_va to be outside the CTRR region");
+
+	ro_pn = pmap_find_phys(kernel_pmap, ro_test_va);
+	nx_pn = pmap_find_phys(kernel_pmap, nx_test_va);
+	T_EXPECT(ro_pn && nx_pn, "Expect ro page number and nx page number to be non zero");
+
+	T_LOG("test virtual page: %p, ctrr_ro_test: %p, ctrr_nx_test: %p, ro_pn: %x, nx_pn: %x ",
+	    (void *)ctrr_test_page, &ctrr_ro_test, &ctrr_nx_test, ro_pn, nx_pn);
+
+	prot = pmap_get_arm64_prot(kernel_pmap, ctrr_test_page);
+	T_EXPECT(~prot & ARM_TTE_VALID, "Expect ctrr_test_page to be unmapped");
+
+	T_LOG("Read only region test mapping virtual page %p to CTRR RO page number %d", ctrr_test_page, ro_pn);
+	kr = pmap_enter(kernel_pmap, ctrr_test_page, ro_pn,
+	    VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, FALSE);
+	T_EXPECT(kr == KERN_SUCCESS, "Expect pmap_enter of RW mapping to succeed");
+
+	// assert entire mmu prot path (Hierarchical protection model) is NOT RO
+	// fetch effective block level protections from table/block entries
+	prot = pmap_get_arm64_prot(kernel_pmap, ctrr_test_page);
+	T_EXPECT(ARM_PTE_EXTRACT_AP(prot) == AP_RWNA && (prot & ARM_PTE_PNX), "Mapping is EL1 RWNX");
+
+	ctrr_test_va = ctrr_test_page + (ro_test_va & PAGE_MASK);
+	ctrr_ro_test_ptr = (void *)ctrr_test_va;
+
+	T_LOG("Read only region test writing to %p to provoke data abort", ctrr_ro_test_ptr);
+
+	// should cause data abort
+	*ctrr_ro_test_ptr = 1;
+
+	// ensure write permission fault at expected level
+	// data abort handler will set ctrr_exception_esr when ctrr_test_va takes a permission fault
+
+	T_EXPECT(ESR_EC(ctrr_exception_esr) == ESR_EC_DABORT_EL1, "Data Abort from EL1 expected");
+	T_EXPECT(ISS_DA_FSC(ESR_ISS(ctrr_exception_esr)) == FSC_PERMISSION_FAULT_L3, "Permission Fault Expected");
+	T_EXPECT(ESR_ISS(ctrr_exception_esr) & ISS_DA_WNR, "Write Fault Expected");
+
+	ctrr_test_va = 0;
+	ctrr_exception_esr = 0;
+	pmap_remove(kernel_pmap, ctrr_test_page, ctrr_test_page + PAGE_SIZE);
+
+	T_LOG("No execute test mapping virtual page %p to CTRR PXN page number %d", ctrr_test_page, nx_pn);
+
+	kr = pmap_enter(kernel_pmap, ctrr_test_page, nx_pn,
+	    VM_PROT_READ | VM_PROT_EXECUTE, VM_PROT_NONE, VM_WIMG_USE_DEFAULT, FALSE);
+	T_EXPECT(kr == KERN_SUCCESS, "Expect pmap_enter of RX mapping to succeed");
+
+	// assert entire mmu prot path (Hierarchical protection model) is NOT XN
+	prot = pmap_get_arm64_prot(kernel_pmap, ctrr_test_page);
+	T_EXPECT(ARM_PTE_EXTRACT_AP(prot) == AP_RONA && (~prot & ARM_PTE_PNX), "Mapping is EL1 ROX");
+
+	ctrr_test_va = ctrr_test_page + (nx_test_va & PAGE_MASK);
+	ctrr_nx_test_ptr = (void *)ctrr_test_va;
+
+	T_LOG("No execute test calling ctrr_nx_test_ptr(): %p to provoke instruction abort", ctrr_nx_test_ptr);
+
+#if __has_feature(ptrauth_calls)
+	// must sign before calling if we're creating function pointers out of thin air
+	ctrr_nx_test_ptr = ptrauth_sign_unauthenticated(ctrr_nx_test_ptr, ptrauth_key_function_pointer, 0);
+#endif
+	// should cause prefetch abort
+	ctrr_nx_test_ptr();
+
+	// TODO: ensure execute permission fault at expected level
+	T_EXPECT(ESR_EC(ctrr_exception_esr) == ESR_EC_IABORT_EL1, "Instruction abort from EL1 Expected");
+	T_EXPECT(ISS_DA_FSC(ESR_ISS(ctrr_exception_esr)) == FSC_PERMISSION_FAULT_L3, "Permission Fault Expected");
+
+	ctrr_test_va = 0;
+	ctrr_exception_esr = 0;
+	pmap_remove(kernel_pmap, ctrr_test_page, ctrr_test_page + PAGE_SIZE);
+	return KERN_SUCCESS;
+}
+#endif /* defined(KERNEL_INTEGRITY_CTRR) && defined(CONFIG_XNUPOST) */
 
 #if HAS_TWO_STAGE_SPR_LOCK
 

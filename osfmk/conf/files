@@ -155,6 +155,10 @@ osfmk/kern/processor.c		standard
 osfmk/kern/processor_data.c		standard
 osfmk/kern/restartable.c		standard
 osfmk/kern/sched_average.c		standard
+#ifdef __AMP__
+osfmk/kern/sched_amp.c		optional config_sched_multiq
+osfmk/kern/sched_amp_common.c	optional config_sched_multiq
+#endif
 osfmk/kern/sched_dualq.c	optional config_sched_multiq
 osfmk/kern/sched_clutch.c	optional config_clutch
 osfmk/kern/sched_prim.c		standard

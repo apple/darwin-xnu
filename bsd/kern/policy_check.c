@@ -121,7 +121,7 @@ common_hook(void)
 	return rv;
 }
 
-#if (MAC_POLICY_OPS_VERSION != 58)
+#if (MAC_POLICY_OPS_VERSION != 59)
 # error "struct mac_policy_ops doesn't match definition in mac_policy.h"
 #endif
 /*
@@ -322,9 +322,9 @@ const static struct mac_policy_ops policy_ops = {
 	CHECK_SET_HOOK(proc_check_setlcid)
 	CHECK_SET_HOOK(proc_check_signal)
 	CHECK_SET_HOOK(proc_check_wait)
+	CHECK_SET_HOOK(proc_check_dump_core)
 
 	.mpo_reserved5 = (mpo_reserved_hook_t *)common_hook,
-	.mpo_reserved6 = (mpo_reserved_hook_t *)common_hook,
 
 	CHECK_SET_HOOK(socket_check_accept)
 	CHECK_SET_HOOK(socket_check_accepted)

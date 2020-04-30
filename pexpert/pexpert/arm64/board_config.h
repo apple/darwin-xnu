@@ -146,10 +146,125 @@
 #endif
 #endif  /* ARM64_BOARD_CONFIG_T8015 */
 
+#ifdef ARM64_BOARD_CONFIG_T8020
+/*
+ * The LLC size for Vortex is 8MB, but the LLC on Tempest is only 2MB.
+ * We use the larger cache size here.  The expectation is
+ * that this may cause flushes from Tempest to be less efficient
+ * (cycles will be wasted on unnecessary way/set operations), but it
+ * will be technically correct... the best kind of correct.
+ */
+#define APPLE_ARM64_ARCH_FAMILY  1
+#define APPLEVORTEX
+#define ARM_ARCH_TIMER
+#define KERNEL_INTEGRITY_CTRR
+#include <pexpert/arm64/T8020.h>
+#define __ARM_L2CACHE_SIZE_LOG__ 23
+#define ARM_BOARD_WFE_TIMEOUT_NS 1000
+#define ARM_BOARD_CLASS_T8020
+#define CPU_COUNT 6
+#define CPU_CLUSTER_OFFSETS {0, 4}
+#define HAS_UNCORE_CTRS 1
+#define UNCORE_VERSION 2
+#define UNCORE_PER_CLUSTER 1
+#define UNCORE_NCTRS 16
+#define CORE_NCTRS 10
+#define PMAP_PV_LOAD_FACTOR 5
+#define PMAP_CS             1
+#define PMAP_CS_ENABLE      1
+#endif  /* ARM64_BOARD_CONFIG_T8020 */
 
+#ifdef ARM64_BOARD_CONFIG_T8006
+/*
+ * The T8006 consists of 2 Tempest cores (i.e. T8020 eCores) and for most
+ * of our purposes here may be considered a functional subset of T8020.
+ */
+#define APPLE_ARM64_ARCH_FAMILY  1
+#define APPLEVORTEX
+#define ARM_ARCH_TIMER
+#define KERNEL_INTEGRITY_CTRR
+#include <pexpert/arm64/T8020.h>
+#define __ARM_L2CACHE_SIZE_LOG__ 21
+#define ARM_BOARD_WFE_TIMEOUT_NS 1000
+#define ARM_BOARD_CLASS_T8006
+#define PEXPERT_NO_3X_IMAGES    1
+#define CORE_NCTRS 10
+#define PMAP_PV_LOAD_FACTOR 5
+#define PMAP_CS             1
+#define PMAP_CS_ENABLE      1
+#endif /* ARM64_BOARD_CONFIG_T8006 */
 
+#ifdef ARM64_BOARD_CONFIG_T8027
+#define APPLE_ARM64_ARCH_FAMILY  1
+#define APPLEVORTEX
+#define ARM_ARCH_TIMER
+#define KERNEL_INTEGRITY_CTRR
+#include <pexpert/arm64/T8020.h>
+#define __ARM_L2CACHE_SIZE_LOG__ 23
+#define ARM_BOARD_WFE_TIMEOUT_NS 1000
+#define ARM_BOARD_CLASS_T8027
+#define CPU_COUNT 8
+#define CPU_CLUSTER_OFFSETS {0, 4}
+#define HAS_UNCORE_CTRS 1
+#define UNCORE_VERSION 2
+#define UNCORE_PER_CLUSTER 1
+#define UNCORE_NCTRS 16
+#define CORE_NCTRS 10
+#define PMAP_PV_LOAD_FACTOR 5
+#define PMAP_CS             1
+#define PMAP_CS_ENABLE      1
+#endif  /* ARM64_BOARD_CONFIG_T8027 */
 
+#ifdef ARM64_BOARD_CONFIG_T8028
+#define APPLE_ARM64_ARCH_FAMILY  1
+#define APPLEVORTEX
+#define ARM_ARCH_TIMER
+#define KERNEL_INTEGRITY_CTRR
+#include <pexpert/arm64/T8020.h>
+#define __ARM_L2CACHE_SIZE_LOG__ 23
+#define ARM_BOARD_WFE_TIMEOUT_NS 1000
+#define ARM_BOARD_CLASS_T8028
+#define CPU_COUNT 8
+#define CPU_CLUSTER_OFFSETS {0, 4}
+#define HAS_UNCORE_CTRS 1
+#define UNCORE_VERSION 2
+#define UNCORE_PER_CLUSTER 1
+#define UNCORE_NCTRS 16
+#define CORE_NCTRS 10
+#define PMAP_PV_LOAD_FACTOR 5
+#define PMAP_CS             1
+#define PMAP_CS_ENABLE      1
+#endif  /* ARM64_BOARD_CONFIG_T8028 */
 
+#ifdef ARM64_BOARD_CONFIG_T8030
+/*
+ * The LLC size for Lightning is 8MB, but the LLC on Thunder is only 4MB.
+ * We use the larger cache size here.  The expectation is
+ * that this may cause flushes from Tempest to be less efficient
+ * (cycles will be wasted on unnecessary way/set operations), but it
+ * will be technically correct... the best kind of correct.
+ */
+#define APPLE_ARM64_ARCH_FAMILY  1
+#define APPLELIGHTNING
+#define ARM_ARCH_TIMER
+#define KERNEL_INTEGRITY_CTRR
+#include <pexpert/arm64/T8030.h>
+#define __ARM_L2CACHE_SIZE_LOG__ 23
+#define ARM_BOARD_WFE_TIMEOUT_NS 1000
+#define ARM_BOARD_CLASS_T8030
+#define CPU_COUNT 6
+#define CPU_CLUSTER_OFFSETS {0, 4}
+#define CPU_PIO_RO_CTL_OFFSETS {0x210055000, 0x210155000, 0x210255000, 0x210355000, 0x211055000, 0x211155000}
+#define CLUSTER_PIO_RO_CTL_OFFSETS {0x210e49000, 0x211e49000}
+#define HAS_UNCORE_CTRS 1
+#define UNCORE_VERSION 2
+#define UNCORE_PER_CLUSTER 1
+#define UNCORE_NCTRS 16
+#define CORE_NCTRS 10
+#define PMAP_PV_LOAD_FACTOR 7
+#define PMAP_CS             1
+#define PMAP_CS_ENABLE      1
+#endif  /* ARM64_BOARD_CONFIG_T8030 */
 
 
 

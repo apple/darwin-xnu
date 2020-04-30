@@ -664,7 +664,7 @@ kern_stack_snapshot_internal(int stackshot_config_version, void *stackshot_confi
 	stackshotbuf_size = get_stackshot_estsize(size_hint);
 
 	for (; stackshotbuf_size <= max_tracebuf_size; stackshotbuf_size <<= 1) {
-		if (kmem_alloc(kernel_map, (vm_offset_t *)&stackshotbuf, stackshotbuf_size, VM_KERN_MEMORY_DIAG) != KERN_SUCCESS) {
+		if (kmem_alloc_flags(kernel_map, (vm_offset_t *)&stackshotbuf, stackshotbuf_size, VM_KERN_MEMORY_DIAG, KMA_ZERO) != KERN_SUCCESS) {
 			error = KERN_RESOURCE_SHORTAGE;
 			goto error_exit;
 		}

@@ -706,6 +706,16 @@ machine_trace_thread64(thread_t thread,
 #endif
 				}
 
+#if XNU_MONITOR
+				vm_offset_t cpu_base = (vm_offset_t)pmap_stacks_start;
+				vm_offset_t cpu_top = (vm_offset_t)pmap_stacks_end;
+
+				if (((prevfp >= cpu_base) && (prevfp < cpu_top)) !=
+				    ((fp >= cpu_base) && (fp < cpu_top))) {
+					switched_stacks = TRUE;
+					break;
+				}
+#endif
 			}
 
 			if (!switched_stacks) {

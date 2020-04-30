@@ -164,6 +164,50 @@
 #define __PLATFORM_WKDM_ALIGNMENT_BOUNDARY__ (64)
 #define __ARM_CLUSTER_COUNT__                2
 
+#elif defined (APPLEVORTEX)
+#define __ARM_ARCH__                         8
+#define __ARM_VMSA__                         8
+#define __ARM_SMP__                          1
+#define __ARM_VFP__                          4
+#define __ARM_COHERENT_CACHE__               1
+#define __ARM_COHERENT_IO__                  1
+#define __ARM_IC_NOALIAS_ICACHE__            1
+#define __ARM_DEBUG__                        7
+#define __ARM_ENABLE_SWAP__                  1
+#define __ARM_V8_CRYPTO_EXTENSIONS__         1
+#define __ARM_16K_PG__                       1
+#define __ARM64_PMAP_SUBPAGE_L1__            1
+#define __ARM_GLOBAL_SLEEP_BIT__             1
+#define __ARM_PAN_AVAILABLE__                1
+#define __ARM_WKDM_ISA_AVAILABLE__           1
+#define __PLATFORM_WKDM_ALIGNMENT_MASK__     (0x3FULL)
+#define __PLATFORM_WKDM_ALIGNMENT_BOUNDARY__ (64)
+#define __ARM_CLUSTER_COUNT__                2
+
+#elif defined (APPLELIGHTNING)
+#define __ARM_ARCH__                         8
+#define __ARM_VMSA__                         8
+#define __ARM_SMP__                          1
+#define __ARM_AMP__                          1
+#define __ARM_VFP__                          4
+#define __ARM_COHERENT_CACHE__               1
+#define __ARM_COHERENT_IO__                  1
+#define __ARM_IC_NOALIAS_ICACHE__            1
+#define __ARM_DEBUG__                        7
+#define __ARM_ENABLE_SWAP__                  1
+#define __ARM_V8_CRYPTO_EXTENSIONS__         1
+#define __ARM_16K_PG__                       1
+#define __ARM64_PMAP_SUBPAGE_L1__            1
+#define __ARM_GLOBAL_SLEEP_BIT__             1
+#define __ARM_PAN_AVAILABLE__                1
+#define __ARM_WKDM_ISA_AVAILABLE__           1
+#define __PLATFORM_WKDM_ALIGNMENT_MASK__     (0x3FULL)
+#define __PLATFORM_WKDM_ALIGNMENT_BOUNDARY__ (64)
+#define __ARM_CLUSTER_COUNT__                2
+#define
+#define __APCFG_SUPPORTED__                  1
+#define __ARM_RANGE_TLBI__                   1
+
 #elif defined (BCM2837)
 #define __ARM_ARCH__              8
 #define __ARM_VMSA__              8
@@ -495,6 +539,72 @@
  *
  * TODO: Our L2 cahes have different line sizes.  I begin to suspect
  * this may be a problem.
+ */
+#define L2_CSIZE        __ARM_L2CACHE_SIZE_LOG__ /* cache size as 1<<L2_CSIZE */
+#define L2_CLINE        7                        /* cache line size as 1<<L2_CLINE (128) */
+#define L2_NWAY         4                        /* set associativity as 1<<L2_NWAY (16) */
+#define L2_I7SET        6                        /* TODO: cp15 c7 set incrementer 1<<L2_I7SET */
+#define L2_I7WAY        28                       /* TODO: cp15 c7 way incrementer 1<<L2_I7WAY */
+#define L2_I9WAY        28                       /* TODO: cp15 c9 way incremenber 1<<L2_I9WAY */
+
+#define L2_SWAY         (L2_CSIZE - L2_NWAY)     /* set size 1<<L2_SWAY */
+#define L2_NSET         (L2_SWAY - L2_CLINE)     /* lines per way 1<<L2_NSET */
+
+#elif defined (APPLEVORTEX)
+
+/* I-Cache, 128KB 8-way for Vortex, 48KB 6-way for Tempest. */
+#define MMU_I_CLINE 6                      /* cache line size as 1<<MMU_I_CLINE (64) */
+
+/* D-Cache, 128KB 8-way for Vortex, 32KB 4-way for Tempest. */
+#define MMU_CSIZE   17                     /* cache size as 1<<MMU_CSIZE (128K) */
+#define MMU_CLINE   6                      /* cache line size is 1<<MMU_CLINE (64) */
+#define MMU_NWAY    3                      /* set associativity 1<<MMU_NWAY (8) */
+#define MMU_I7SET   6                      /* cp15 c7 set incrementer 1<<MMU_I7SET */
+#define MMU_I7WAY   30                     /* cp15 c7 way incrementer 1<<MMU_I7WAY */
+#define MMU_I9WAY   30                     /* cp15 c9 way incrementer 1<<MMU_I9WAY */
+
+#define MMU_SWAY    (MMU_CSIZE - MMU_NWAY) /* set size 1<<MMU_SWAY */
+#define MMU_NSET    (MMU_SWAY - MMU_CLINE) /* lines per way 1<<MMU_NSET */
+
+/* L2-Cache */
+#define __ARM_L2CACHE__ 1
+
+/*
+ * LLC (Vortex L2):  8MB, 128-byte lines, 16-way.
+ * LLC (Tempest L2): 2MB, 128-byte lines, 16-way.
+ */
+#define L2_CSIZE        __ARM_L2CACHE_SIZE_LOG__ /* cache size as 1<<L2_CSIZE */
+#define L2_CLINE        7                        /* cache line size as 1<<L2_CLINE (128) */
+#define L2_NWAY         4                        /* set associativity as 1<<L2_NWAY (16) */
+#define L2_I7SET        6                        /* TODO: cp15 c7 set incrementer 1<<L2_I7SET */
+#define L2_I7WAY        28                       /* TODO: cp15 c7 way incrementer 1<<L2_I7WAY */
+#define L2_I9WAY        28                       /* TODO: cp15 c9 way incremenber 1<<L2_I9WAY */
+
+#define L2_SWAY         (L2_CSIZE - L2_NWAY)     /* set size 1<<L2_SWAY */
+#define L2_NSET         (L2_SWAY - L2_CLINE)     /* lines per way 1<<L2_NSET */
+
+#elif defined (APPLELIGHTNING)
+
+/* I-Cache, 192KB for Lightning, 96KB for Thunder, 6-way. */
+#define MMU_I_CLINE 6                      /* cache line size as 1<<MMU_I_CLINE (64) */
+
+/* D-Cache, 128KB for Lightning, 8-way. 48KB for Thunder, 6-way. */
+#define MMU_CSIZE   17                     /* cache size as 1<<MMU_CSIZE (128K) */
+#define MMU_CLINE   6                      /* cache line size is 1<<MMU_CLINE (64) */
+#define MMU_NWAY    3                      /* set associativity 1<<MMU_NWAY (8) */
+#define MMU_I7SET   6                      /* cp15 c7 set incrementer 1<<MMU_I7SET */
+#define MMU_I7WAY   30                     /* cp15 c7 way incrementer 1<<MMU_I7WAY */
+#define MMU_I9WAY   30                     /* cp15 c9 way incrementer 1<<MMU_I9WAY */
+
+#define MMU_SWAY    (MMU_CSIZE - MMU_NWAY) /* set size 1<<MMU_SWAY */
+#define MMU_NSET    (MMU_SWAY - MMU_CLINE) /* lines per way 1<<MMU_NSET */
+
+/* L2-Cache */
+#define __ARM_L2CACHE__ 1
+
+/*
+ * LLC (Lightning L2):  8MB, 128-byte lines, 16-way.
+ * LLC (Thunder L2): 4MB, 128-byte lines, 16-way.
  */
 #define L2_CSIZE        __ARM_L2CACHE_SIZE_LOG__ /* cache size as 1<<L2_CSIZE */
 #define L2_CLINE        7                        /* cache line size as 1<<L2_CLINE (128) */

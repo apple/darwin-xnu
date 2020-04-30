@@ -192,12 +192,79 @@
 
 #endif /* defined (HAS_KTRR) */
 
+#if defined(HAS_CTRR)
 
+#ifdef ASSEMBLER
+#define ARM64_REG_CTRR_A_LWR_EL1 S3_4_c15_c2_3
+#define ARM64_REG_CTRR_A_UPR_EL1 S3_4_c15_c2_4
+#define ARM64_REG_CTRR_CTL_EL1   S3_4_c15_c2_5
+#define ARM64_REG_CTRR_LOCK_EL1  S3_4_c15_c2_2
+
+#define ACC_CTRR_A_LWR_EL2       S3_4_c15_c11_0
+#define ACC_CTRR_A_UPR_EL2       S3_4_c15_c11_1
+#define ACC_CTRR_CTL_EL2         S3_4_c15_c11_4
+#define ACC_CTRR_LOCK_EL2        S3_4_c15_c11_5
+#else /* ASSEMBLER */
+#define ARM64_REG_CTRR_A_LWR_EL1 "S3_4_c15_c2_3"
+#define ARM64_REG_CTRR_A_UPR_EL1 "S3_4_c15_c2_4"
+#define ARM64_REG_CTRR_CTL_EL1   "S3_4_c15_c2_5"
+#define ARM64_REG_CTRR_LOCK_EL1  "S3_4_c15_c2_2"
+
+#define ACC_CTRR_A_LWR_EL2       "S3_4_c15_c11_0"
+#define ACC_CTRR_A_UPR_EL2       "S3_4_c15_c11_1"
+#define ACC_CTRR_CTL_EL2         "S3_4_c15_c11_4"
+#define ACC_CTRR_LOCK_EL2        "S3_4_c15_c11_5"
+#endif /* ASSEMBLER */
+
+#define CTRR_CTL_EL1_A_MMUOFF_WRPROTECT  (1 << 0)
+#define CTRR_CTL_EL1_A_MMUON_WRPROTECT   (1 << 1)
+#define CTRR_CTL_EL1_B_MMUOFF_WRPROTECT  (1 << 2)
+#define CTRR_CTL_EL1_B_MMUON_WRPROTECT   (1 << 3)
+#define CTRR_CTL_EL1_A_PXN               (1 << 4)
+#define CTRR_CTL_EL1_B_PXN               (1 << 5)
+#define CTRR_CTL_EL1_A_UXN               (1 << 6)
+#define CTRR_CTL_EL1_B_UXN               (1 << 7)
+
+#endif /* defined (HAS_CTRR) */
+
+#if defined(HAS_IPI)
+
+#define ARM64_REG_IPI_RR_TYPE_IMMEDIATE (0 << 28)
+#define ARM64_REG_IPI_RR_TYPE_RETRACT   (1 << 28)
+#define ARM64_REG_IPI_RR_TYPE_DEFERRED  (2 << 28)
+#define ARM64_REG_IPI_RR_TYPE_NOWAKE    (3 << 28)
+
+#if defined(HAS_CLUSTER)
+#define ARM64_REG_IPI_RR_LOCAL          "S3_5_c15_c0_0"
+#define ARM64_REG_IPI_RR_GLOBAL         "S3_5_c15_c0_1"
+#else /* defined(HAS_CLUSTER) */
+#define ARM64_REG_IPI_RR                "S3_5_c15_c0_1"
+#endif /* defined(HAS_CLUSTER) */
+
+#define ARM64_REG_IPI_SR                "S3_5_c15_c1_1"
+#define ARM64_REG_IPI_CR                "S3_5_c15_c3_1"
+
+#endif /* defined(HAS_IPI) */
 
 
 #endif /* APPLE_ARM64_ARCH_FAMILY */
 
+#if defined(HAS_NEX_PG)
+#define ARM64_REG_HID13             S3_0_c15_c14_0
+#define ARM64_REG_HID13_RstCyc_mask (0xfULL << 60)
+#define ARM64_REG_HID13_RstCyc_val  (0xcULL << 60)
 
+#define ARM64_REG_HID14             S3_0_c15_c15_0
+#define ARM64_REG_HID14_NexPwgEn    (1ULL << 32)
+#endif /* defined(HAS_NEX_PG) */
+
+#if defined(HAS_BP_RET)
+#define ARM64_REG_ACC_CFG             S3_5_c15_c4_0
+#define ARM64_REG_ACC_CFG_bdpSlpEn    (1ULL << 2)
+#define ARM64_REG_ACC_CFG_btpSlpEn    (1ULL << 3)
+#define ARM64_REG_ACC_CFG_bpSlp_mask  3
+#define ARM64_REG_ACC_CFG_bpSlp_shift 2
+#endif /* defined(HAS_BP_RET) */
 
 #if defined(HAS_APPLE_PAC)
 
@@ -246,6 +313,18 @@
 #endif /* ASSEMBLER */
 #endif /* HAS_APPLE_PAC */
 
+#if defined(HAS_VMSA_LOCK)
+
+#define ARM64_REG_VMSA_LOCK_EL1 S3_4_c15_c1_2
+
+#define VMSA_LOCK_VBAR_EL1      (1ULL << 0)
+#define VMSA_LOCK_SCTLR_EL1     (1ULL << 1)
+#define VMSA_LOCK_TCR_EL1       (1ULL << 2)
+#define VMSA_LOCK_TTBR0_EL1     (1ULL << 3)
+#define VMSA_LOCK_TTBR1_EL1     (1ULL << 4)
+#define VMSA_LOCK_SCTLR_M_BIT   (1ULL << 63)
+
+#endif /* HAS_VMSA_LOCK */
 
 
 

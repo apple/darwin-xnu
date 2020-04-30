@@ -56,7 +56,7 @@
 
 #include <IOKit/IOPlatformExpert.h>
 
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 #include <libkern/kernel_mach_header.h>
 #endif
 
@@ -66,6 +66,9 @@
 #include <kern/kpc.h>
 #endif
 
+#if HAS_CLUSTER
+static uint8_t cluster_initialized = 0;
+#endif
 
 
 static int max_cpus_initialized = 0;
@@ -90,6 +93,11 @@ extern vm_offset_t   segLOWESTTEXT;
 extern vm_offset_t   segLASTB;
 extern unsigned long segSizeLAST;
 
+#if defined(HAS_IPI)
+unsigned int gFastIPI = 1;
+#define kDeferredIPITimerDefault (64 * NSEC_PER_USEC) /* in nanoseconds */
+static uint64_t deferred_ipi_timer_ns = kDeferredIPITimerDefault;
+#endif /* defined(HAS_IPI) */
 
 void machine_conf(void);
 
@@ -113,40 +121,112 @@ void ml_lockdown_init(void);
 void ml_lockdown_run_handler(void);
 uint32_t get_arm_cpu_version(void);
 
+#if defined(HAS_IPI)
+static inline void
+ml_cpu_signal_type(unsigned int cpu_mpidr, uint32_t type)
+{
+#if HAS_CLUSTER
+	uint64_t local_mpidr;
+	/* NOTE: this logic expects that we are called in a non-preemptible
+	 * context, or at least one in which the calling thread is bound
+	 * to a single CPU.  Otherwise we may migrate between choosing which
+	 * IPI mechanism to use and issuing the IPI. */
+	MRS(local_mpidr, "MPIDR_EL1");
+	if ((local_mpidr & MPIDR_AFF1_MASK) == (cpu_mpidr & MPIDR_AFF1_MASK)) {
+		uint64_t x = type | (cpu_mpidr & MPIDR_AFF0_MASK);
+		MSR(ARM64_REG_IPI_RR_LOCAL, x);
+	} else {
+		#define IPI_RR_TARGET_CLUSTER_SHIFT 16
+		uint64_t x = type | ((cpu_mpidr & MPIDR_AFF1_MASK) << (IPI_RR_TARGET_CLUSTER_SHIFT - MPIDR_AFF1_SHIFT)) | (cpu_mpidr & MPIDR_AFF0_MASK);
+		MSR(ARM64_REG_IPI_RR_GLOBAL, x);
+	}
+#else
+	uint64_t x = type | (cpu_mpidr & MPIDR_AFF0_MASK);
+	MSR(ARM64_REG_IPI_RR, x);
+#endif
+}
+#endif
 
+#if !defined(HAS_IPI)
 __dead2
+#endif
 void
 ml_cpu_signal(unsigned int cpu_mpidr __unused)
 {
+#if defined(HAS_IPI)
+	ml_cpu_signal_type(cpu_mpidr, ARM64_REG_IPI_RR_TYPE_IMMEDIATE);
+#else
 	panic("Platform does not support ACC Fast IPI");
+#endif
 }
 
+#if !defined(HAS_IPI)
 __dead2
+#endif
 void
 ml_cpu_signal_deferred_adjust_timer(uint64_t nanosecs)
 {
+#if defined(HAS_IPI)
+	/* adjust IPI_CR timer countdown value for deferred IPI
+	 * accepts input in nanosecs, convert to absolutetime (REFCLK ticks),
+	 * clamp maximum REFCLK ticks to 0xFFFF (16 bit field)
+	 *
+	 * global register, should only require a single write to update all
+	 * CPU cores: from Skye ACC user spec section 5.7.3.3
+	 *
+	 * IPICR is a global register but there are two copies in ACC: one at pBLK and one at eBLK.
+	 * IPICR write SPR token also traverses both pCPM and eCPM rings and updates both copies.
+	 */
+	uint64_t abstime;
+
+	nanoseconds_to_absolutetime(nanosecs, &abstime);
+
+	abstime = MIN(abstime, 0xFFFF);
+
+	/* update deferred_ipi_timer_ns with the new clamped value */
+	absolutetime_to_nanoseconds(abstime, &deferred_ipi_timer_ns);
+
+	MSR(ARM64_REG_IPI_CR, abstime);
+#else
 	(void)nanosecs;
 	panic("Platform does not support ACC Fast IPI");
+#endif
 }
 
 uint64_t
 ml_cpu_signal_deferred_get_timer()
 {
+#if defined(HAS_IPI)
+	return deferred_ipi_timer_ns;
+#else
 	return 0;
+#endif
 }
 
+#if !defined(HAS_IPI)
 __dead2
+#endif
 void
 ml_cpu_signal_deferred(unsigned int cpu_mpidr __unused)
 {
+#if defined(HAS_IPI)
+	ml_cpu_signal_type(cpu_mpidr, ARM64_REG_IPI_RR_TYPE_DEFERRED);
+#else
 	panic("Platform does not support ACC Fast IPI deferral");
+#endif
 }
 
+#if !defined(HAS_IPI)
 __dead2
+#endif
 void
 ml_cpu_signal_retract(unsigned int cpu_mpidr __unused)
 {
+#if defined(HAS_IPI)
+	ml_cpu_signal_type(cpu_mpidr, ARM64_REG_IPI_RR_TYPE_RETRACT);
+#else
 	panic("Platform does not support ACC Fast IPI retraction");
+#endif
 }
 
 void
@@ -241,7 +321,11 @@ get_arm_cpu_version(void)
 boolean_t
 user_cont_hwclock_allowed(void)
 {
+#if HAS_CONTINUOUS_HWCLOCK
+	return TRUE;
+#else
 	return FALSE;
+#endif
 }
 
 
@@ -257,7 +341,7 @@ arm64_wfe_allowed(void)
 	return TRUE;
 }
 
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 
 uint64_t rorgn_begin __attribute__((section("__DATA, __const"))) = 0;
 uint64_t rorgn_end   __attribute__((section("__DATA, __const"))) = 0;
@@ -307,6 +391,11 @@ rorgn_stash_range(void)
 	rc = DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
 	assert(rc == kSuccess);
 	amcc_base = ml_io_map(soc_base + *reg_prop, *(reg_prop + 1));
+#elif defined(KERNEL_INTEGRITY_CTRR)
+	/* TODO: t8020 mcc entry not in device tree yet; we'll do it LIVE */
+#define TEMP_AMCC_BASE_PA 0x200000000ULL
+#define TEMP_AMCC_SZ      0x100000
+	amcc_base = ml_io_map(TEMP_AMCC_BASE_PA, TEMP_AMCC_SZ);
 #else
 #error "KERNEL_INTEGRITY config error"
 #endif
@@ -315,6 +404,27 @@ rorgn_stash_range(void)
 	assert(rRORGNENDADDR > rRORGNBASEADDR);
 	rorgn_begin = (rRORGNBASEADDR << AMCC_PGSHIFT) + dram_base;
 	rorgn_end   = (rRORGNENDADDR << AMCC_PGSHIFT) + dram_base;
+#elif defined(KERNEL_INTEGRITY_CTRR)
+	rorgn_begin = rCTRR_AMCC_PLANE_REG(0, CTRR_A_BASEADDR);
+	rorgn_end   = rCTRR_AMCC_PLANE_REG(0, CTRR_A_ENDADDR);
+	assert(rorgn_end > rorgn_begin);
+
+	for (int i = 0; i < CTRR_AMCC_MAX_PLANES; ++i) {
+		uint32_t begin = rCTRR_AMCC_PLANE_REG(i, CTRR_A_BASEADDR);
+		uint32_t end = rCTRR_AMCC_PLANE_REG(i, CTRR_A_ENDADDR);
+		if (!(begin == rorgn_begin && end == rorgn_end)) {
+#if DEVELOPMENT || DEBUG
+			panic("iboot programmed CTRR bounds are inconsistent");
+#else
+			panic("Inconsistent memory configuration");
+#endif
+		}
+	}
+
+	// convert from page number from DRAM base to PA
+	rorgn_begin = (rorgn_begin << AMCC_PGSHIFT) + dram_base;
+	rorgn_end   = (rorgn_end << AMCC_PGSHIFT) + dram_base;
+
 #else
 #error KERNEL_INTEGRITY config error
 #endif /* defined (KERNEL_INTEGRITY_KTRR) */
@@ -330,6 +440,11 @@ assert_unlocked()
 #if defined(KERNEL_INTEGRITY_KTRR)
 	rorgn_lock = rRORGNLOCK;
 	ktrr_lock = __builtin_arm_rsr64(ARM64_REG_KTRR_LOCK_EL1);
+#elif defined(KERNEL_INTEGRITY_CTRR)
+	for (int i = 0; i < CTRR_AMCC_MAX_PLANES; ++i) {
+		rorgn_lock |= rCTRR_AMCC_PLANE_REG(i, CTRR_A_LOCK);
+	}
+	ktrr_lock = __builtin_arm_rsr64(ARM64_REG_CTRR_LOCK_EL1);
 #else
 #error KERNEL_INTEGRITY config error
 #endif /* defined(KERNEL_INTEGRITY_KTRR) */
@@ -344,6 +459,13 @@ lock_amcc()
 #if defined(KERNEL_INTEGRITY_KTRR)
 	rRORGNLOCK = 1;
 	__builtin_arm_isb(ISB_SY);
+#elif defined(KERNEL_INTEGRITY_CTRR)
+	/* lockdown planes in reverse order as plane 0 should be locked last */
+	for (int i = 0; i < CTRR_AMCC_MAX_PLANES; ++i) {
+		rCTRR_AMCC_PLANE_REG(CTRR_AMCC_MAX_PLANES - i - 1, CTRR_A_ENABLE) = 1;
+		rCTRR_AMCC_PLANE_REG(CTRR_AMCC_MAX_PLANES - i - 1, CTRR_A_LOCK) = 1;
+		__builtin_arm_isb(ISB_SY);
+	}
 #else
 #error KERNEL_INTEGRITY config error
 #endif
@@ -363,6 +485,37 @@ lock_mmu(uint64_t begin, uint64_t end)
 	__builtin_arm_isb(ISB_SY);
 	flush_mmu_tlb();
 
+#elif defined (KERNEL_INTEGRITY_CTRR)
+	/* this will lock the entire bootstrap cluster. non bootstrap clusters
+	 * will be locked by respective cluster master in start.s */
+
+	__builtin_arm_wsr64(ARM64_REG_CTRR_A_LWR_EL1, begin);
+	__builtin_arm_wsr64(ARM64_REG_CTRR_A_UPR_EL1, end);
+
+#if !defined(APPLEVORTEX)
+	/* H12 changed sequence, must invalidate TLB immediately after setting CTRR bounds */
+	__builtin_arm_isb(ISB_SY); /* ensure all prior MSRs are complete */
+	flush_mmu_tlb();
+#endif /* !defined(APPLEVORTEX) */
+
+	__builtin_arm_wsr64(ARM64_REG_CTRR_CTL_EL1, CTRR_CTL_EL1_A_PXN | CTRR_CTL_EL1_A_MMUON_WRPROTECT);
+	__builtin_arm_wsr64(ARM64_REG_CTRR_LOCK_EL1, 1ULL);
+
+	uint64_t current_el = __builtin_arm_rsr64("CurrentEL");
+	if (current_el == PSR64_MODE_EL2) {
+		// CTRR v2 has explicit registers for cluster config. they can only be written in EL2
+
+		__builtin_arm_wsr64(ACC_CTRR_A_LWR_EL2, begin);
+		__builtin_arm_wsr64(ACC_CTRR_A_UPR_EL2, end);
+		__builtin_arm_wsr64(ACC_CTRR_CTL_EL2, CTRR_CTL_EL1_A_PXN | CTRR_CTL_EL1_A_MMUON_WRPROTECT);
+		__builtin_arm_wsr64(ACC_CTRR_LOCK_EL2, 1ULL);
+	}
+
+	__builtin_arm_isb(ISB_SY); /* ensure all prior MSRs are complete */
+#if defined(APPLEVORTEX)
+	flush_mmu_tlb();
+#endif /* defined(APPLEVORTEX) */
+
 #else /* defined(KERNEL_INTEGRITY_KTRR) */
 #error KERNEL_INTEGRITY config error
 #endif /* defined(KERNEL_INTEGRITY_KTRR) */
@@ -373,6 +526,17 @@ assert_amcc_cache_disabled()
 {
 #if defined(KERNEL_INTEGRITY_KTRR)
 	assert((rMCCGEN & 1) == 0); /* assert M$ disabled or LLC clean will be unreliable */
+#elif defined(KERNEL_INTEGRITY_CTRR) && (defined(ARM64_BOARD_CONFIG_T8006))
+	/*
+	 * T8006 differentiates between data and tag ways being powered up, so
+	 * make sure to check that both are zero on its single memory plane.
+	 */
+	assert((rCTRR_AMCC_PLANE_REG(0, CTRR_AMCC_PWRONWAYCNTSTATUS) &
+	    (AMCC_CURTAGWAYCNT_MASK | AMCC_CURDATWAYCNT_MASK)) == 0);
+#elif defined (KERNEL_INTEGRITY_CTRR)
+	for (int i = 0; i < CTRR_AMCC_MAX_PLANES; ++i) {
+		assert(rCTRR_AMCC_PLANE_REG(i, CTRR_AMCC_WAYONCNT) == 0);
+	}
 #else
 #error KERNEL_INTEGRITY config error
 #endif
@@ -423,6 +587,11 @@ rorgn_lockdown(void)
 	assert(rorgn_begin == ktrr_begin && rorgn_end == (ktrr_end + last_segsz));
 	/* assert that __LAST segment containing privileged insns is only a single page */
 	assert(last_segsz == PAGE_SIZE);
+#elif defined(KERNEL_INTEGRITY_CTRR)
+	ktrr_end = (ktrr_end + last_segsz - 1) & ~AMCC_PGMASK;
+	/* __LAST is part of MMU CTRR region. Can't use the KTRR style method of making
+	 * __pinst no execute because PXN applies with MMU off in CTRR. */
+	assert(rorgn_begin == ktrr_begin && rorgn_end == ktrr_end);
 #endif
 
 
@@ -445,17 +614,38 @@ rorgn_lockdown(void)
 out:
 #endif
 
+#if defined(KERNEL_INTEGRITY_CTRR)
+	{
+		/* wake any threads blocked on cluster master lockdown */
+		cpu_data_t *cdp;
+		uint64_t mpidr_el1_value;
+
+		cdp = getCpuDatap();
+		MRS(mpidr_el1_value, "MPIDR_EL1");
+		cdp->cpu_cluster_id = (mpidr_el1_value & MPIDR_AFF1_MASK) >> MPIDR_AFF1_SHIFT;
+		assert(cdp->cpu_cluster_id < __ARM_CLUSTER_COUNT__);
+		ctrr_cluster_locked[cdp->cpu_cluster_id] = 1;
+		thread_wakeup(&ctrr_cluster_locked[cdp->cpu_cluster_id]);
+	}
+#endif
 	/* now we can run lockdown handler */
 	ml_lockdown_run_handler();
 }
 
-#endif /* defined(KERNEL_INTEGRITY_KTRR)*/
+#endif /* defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) */
 
 void
 machine_startup(__unused boot_args * args)
 {
 	int boot_arg;
 
+#if defined(HAS_IPI) && (DEVELOPMENT || DEBUG)
+	if (!PE_parse_boot_argn("fastipi", &gFastIPI, sizeof(gFastIPI))) {
+		gFastIPI = 1;
+	}
+
+	PE_parse_boot_argn("fastipitimeout", &deferred_ipi_timer_ns, sizeof(deferred_ipi_timer_ns));
+#endif /* defined(HAS_IPI) && (DEVELOPMENT || DEBUG)*/
 
 #if CONFIG_NONFATAL_ASSERTS
 	PE_parse_boot_argn("assert", &mach_assert, sizeof(mach_assert));
@@ -484,7 +674,7 @@ machine_lockdown_preflight(void)
 {
 #if CONFIG_KERNEL_INTEGRITY
 
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 	rorgn_stash_range();
 #endif
 
@@ -508,8 +698,11 @@ machine_lockdown(void)
 #endif
 #endif /* KERNEL_INTEGRITY_WT */
 
+#if XNU_MONITOR
+	pmap_lockdown_ppl();
+#endif
 
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 	/* KTRR
 	 *
 	 * Lock physical KTRR region. KTRR region is read-only. Memory outside
@@ -517,7 +710,7 @@ machine_lockdown(void)
 	 */
 
 	rorgn_lockdown();
-#endif /* defined(KERNEL_INTEGRITY_KTRR)*/
+#endif /* defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) */
 
 
 #endif /* CONFIG_KERNEL_INTEGRITY */
@@ -819,6 +1012,16 @@ ml_install_interrupt_handler(
 void
 ml_init_interrupt(void)
 {
+#if defined(HAS_IPI)
+	/*
+	 * ml_init_interrupt will get called once for each CPU, but this is redundant
+	 * because there is only one global copy of the register for skye. do it only
+	 * on the bootstrap cpu
+	 */
+	if (getCpuDatap()->cluster_master) {
+		ml_cpu_signal_deferred_adjust_timer(deferred_ipi_timer_ns);
+	}
+#endif
 }
 
 /*
@@ -960,6 +1163,9 @@ ml_lockdown_init()
 
 	lck_mtx_init(&lockdown_handler_lck, lockdown_handler_grp, NULL);
 
+#if defined(KERNEL_INTEGRITY_CTRR)
+	init_ctrr_cpu_start_lock();
+#endif
 }
 
 kern_return_t
@@ -973,7 +1179,7 @@ ml_lockdown_handler_register(lockdown_handler_t f, void *this)
 	lockdown_handler = f;
 	lockdown_this = this;
 
-#if !(defined(KERNEL_INTEGRITY_KTRR))
+#if !(defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR))
 	lockdown_done = 1;
 	lockdown_handler(this);
 #else
@@ -1063,7 +1269,11 @@ ml_processor_register(ml_processor_info_t *in_processor_info,
 	this_cpu_datap->cpu_l3_id = in_processor_info->l3_cache_id;
 	this_cpu_datap->cpu_l3_size = in_processor_info->l3_cache_size;
 
+#if HAS_CLUSTER
+	this_cpu_datap->cluster_master = !OSTestAndSet(this_cpu_datap->cpu_cluster_id, &cluster_initialized);
+#else /* HAS_CLUSTER */
 	this_cpu_datap->cluster_master = is_boot_cpu;
+#endif /* HAS_CLUSTER */
 
 	pset = pset_find(in_processor_info->cluster_id, processor_pset(master_processor));
 	assert(pset != NULL);
@@ -1288,6 +1498,10 @@ ml_static_protect(
 			pt_entry_t      *pte_p;
 			pt_entry_t      ptmp;
 
+#if XNU_MONITOR
+			assert(!TEST_PAGE_RATIO_4);
+			assert(!pmap_is_monitor(ppn));
+#endif
 
 			tte2 = arm_kva_to_tte(vaddr_cur);
 
@@ -1668,6 +1882,13 @@ boolean_t
 ml_wants_panic_trap_to_debugger(void)
 {
 	boolean_t result = FALSE;
+#if XNU_MONITOR
+	/*
+	 * This looks racey, but if we are in the PPL, preemption will be
+	 * disabled.
+	 */
+	result = ((pmap_get_cpu_data()->ppl_state == PPL_STATE_DISPATCH) && pmap_ppl_locked_down);
+#endif
 	return result;
 }
 

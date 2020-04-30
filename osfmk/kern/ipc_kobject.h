@@ -174,6 +174,8 @@ __options_decl(ipc_kobject_alloc_options_t, uint32_t, {
 	IPC_KOBJECT_ALLOC_NO_GRANT  = 0x00000004,
 	/* Make all the send rights immovable */
 	IPC_KOBJECT_ALLOC_IMMOVABLE_SEND = 0x00000008,
+	/* Make the port in-transit from the get-go */
+	IPC_KOBJECT_ALLOC_IN_TRANSIT = 0x00000010,
 });
 
 /* Allocates a kobject port, never fails */

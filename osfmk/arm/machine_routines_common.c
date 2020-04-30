@@ -55,7 +55,12 @@ extern boolean_t interrupt_masked_debug;
 extern uint64_t interrupt_masked_timeout;
 #endif
 
+#if !HAS_CONTINUOUS_HWCLOCK
 extern uint64_t mach_absolutetime_asleep;
+#else
+extern uint64_t wake_abstime;
+static uint64_t wake_conttime = UINT64_MAX;
+#endif
 
 static void
 sched_perfcontrol_oncore_default(perfcontrol_state_t new_thread_state __unused, going_on_core_t on __unused)
@@ -686,26 +691,49 @@ ml_get_abstime_offset(void)
 uint64_t
 ml_get_conttime_offset(void)
 {
+#if HAS_CONTINUOUS_HWCLOCK
+	return 0;
+#else
 	return rtclock_base_abstime + mach_absolutetime_asleep;
+#endif
 }
 
 uint64_t
 ml_get_time_since_reset(void)
 {
+#if HAS_CONTINUOUS_HWCLOCK
+	if (wake_conttime == UINT64_MAX) {
+		return UINT64_MAX;
+	} else {
+		return mach_continuous_time() - wake_conttime;
+	}
+#else
 	/* The timebase resets across S2R, so just return the raw value. */
 	return ml_get_hwclock();
+#endif
 }
 
 void
 ml_set_reset_time(__unused uint64_t wake_time)
 {
+#if HAS_CONTINUOUS_HWCLOCK
+	wake_conttime = wake_time;
+#endif
 }
 
 uint64_t
 ml_get_conttime_wake_time(void)
 {
+#if HAS_CONTINUOUS_HWCLOCK
+	/*
+	 * For now, we will reconstitute the timebase value from
+	 * cpu_timebase_init and use it as the wake time.
+	 */
+	return wake_abstime - ml_get_abstime_offset();
+#else /* HAS_CONTINOUS_HWCLOCK */
 	/* The wake time is simply our continuous time offset. */
 	return ml_get_conttime_offset();
+#endif /* HAS_CONTINOUS_HWCLOCK */
 }
 
 /*

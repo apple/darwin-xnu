@@ -2072,7 +2072,8 @@ IOUserClient::_sendAsyncResult64(OSAsyncReference64 reference,
 		replyMsg.m.msg64.notifyHdr.size = sizeof(IOAsyncCompletionContent)
 		    + numArgs * sizeof(io_user_reference_t);
 		replyMsg.m.msg64.notifyHdr.type = kIOAsyncCompletionNotificationType;
-		bcopy(reference, replyMsg.m.msg64.notifyHdr.reference, sizeof(OSAsyncReference64));
+		/* Copy reference except for reference[0], which is left as 0 from the earlier bzero */
+		bcopy(&reference[1], &replyMsg.m.msg64.notifyHdr.reference[1], sizeof(OSAsyncReference64) - sizeof(reference[0]));
 
 		replyMsg.m.msg64.asyncContent.result = result;
 		if (numArgs) {
@@ -2089,7 +2090,8 @@ IOUserClient::_sendAsyncResult64(OSAsyncReference64 reference,
 		    + numArgs * sizeof(uint32_t);
 		replyMsg.m.msg32.notifyHdr.type = kIOAsyncCompletionNotificationType;
 
-		for (idx = 0; idx < kOSAsyncRefCount; idx++) {
+		/* Skip reference[0] which is left as 0 from the earlier bzero */
+		for (idx = 1; idx < kOSAsyncRefCount; idx++) {
 			replyMsg.m.msg32.notifyHdr.reference[idx] = REF32(reference[idx]);
 		}
 

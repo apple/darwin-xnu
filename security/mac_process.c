@@ -328,6 +328,26 @@ mac_proc_check_debug(proc_t curp, struct proc *proc)
 }
 
 int
+mac_proc_check_dump_core(struct proc *proc)
+{
+	int error;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce) {
+		return 0;
+	}
+#endif
+	if (!mac_proc_check_enforce(proc)) {
+		return 0;
+	}
+
+	MAC_CHECK(proc_check_dump_core, proc);
+
+	return error;
+}
+
+int
 mac_proc_check_fork(proc_t curp)
 {
 	kauth_cred_t cred;

@@ -2752,6 +2752,19 @@ typedef int mpo_priv_grant_t(
 	int priv
 	);
 /**
+ *  @brief Access control over process core dumps
+ *  @param proc Subject process
+ *
+ *  Determine whether a core dump may be written to disk for the subject
+ *  identified.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value for
+ *  errno should be returned.
+ */
+typedef int mpo_proc_check_dump_core_t(
+	struct proc *proc
+	);
+/**
  *  @brief Access control check for debugging process
  *  @param cred Subject credential
  *  @param proc Object process
@@ -6283,7 +6296,7 @@ typedef void mpo_reserved_hook_t(void);
  * Please note that this should be kept in sync with the check assumptions
  * policy in bsd/kern/policy_check.c (policy_ops struct).
  */
-#define MAC_POLICY_OPS_VERSION 58 /* inc when new reserved slots are taken */
+#define MAC_POLICY_OPS_VERSION 59 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t            *mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t             *mpo_audit_check_preselect;
@@ -6474,8 +6487,8 @@ struct mac_policy_ops {
 	mpo_proc_check_setlcid_t                *mpo_proc_check_setlcid;
 	mpo_proc_check_signal_t                 *mpo_proc_check_signal;
 	mpo_proc_check_wait_t                   *mpo_proc_check_wait;
+	mpo_proc_check_dump_core_t              *mpo_proc_check_dump_core;
 	mpo_reserved_hook_t                     *mpo_reserved5;
-	mpo_reserved_hook_t                     *mpo_reserved6;
 
 	mpo_socket_check_accept_t               *mpo_socket_check_accept;
 	mpo_socket_check_accepted_t             *mpo_socket_check_accepted;

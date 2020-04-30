@@ -44,7 +44,11 @@ __BEGIN_DECLS
 
 #include <stdint.h>
 
+#if HAS_UNCORE_CTRS
+#define MT_NDEVS 2
+#else /* HAS_UNCORE_CTRS */
 #define MT_NDEVS 1
+#endif /* !HAS_UNCORE_CTRS */
 
 #define MT_CORE_CYCLES 0
 #define MT_CORE_INSTRS 1
@@ -67,6 +71,12 @@ __BEGIN_DECLS
 #define PMCR0_PMAI (UINT64_C(1) << 11)
 #define PMCR0_PMI(REG) ((REG) & PMCR0_PMAI)
 
+#if HAS_UNCORE_CTRS
+
+#define UPMSR "s3_7_c15_c6_4"
+#define UPMSR_PMI(REG) ((REG) & 0x1)
+
+#endif /* HAS_UNCORE_CTRS */
 
 static inline bool
 mt_pmi_pending(uint64_t * restrict pmcr0_out,
@@ -82,7 +92,18 @@ mt_pmi_pending(uint64_t * restrict pmcr0_out,
 	}
 	*pmcr0_out = pmcr0;
 
+#if HAS_UNCORE_CTRS
+	extern bool mt_uncore_enabled;
+	if (mt_uncore_enabled) {
+		uint64_t upmsr = __builtin_arm_rsr64(UPMSR);
+		if (UPMSR_PMI(upmsr)) {
+			pmi = true;
+		}
+		*upmsr_out = upmsr;
+	}
+#else /* HAS_UNCORE_CTRS */
 #pragma unused(upmsr_out)
+#endif /* !HAS_UNCORE_CTRS */
 
 	return pmi;
 }

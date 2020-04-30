@@ -271,7 +271,9 @@ typedef struct cpu_data {
 	uint32_t                                cpu_l3_id;
 	uint32_t                                cpu_l3_size;
 
+#if !XNU_MONITOR
 	struct pmap_cpu_data                    cpu_pmap_cpu_data;
+#endif
 	dbgwrap_thread_state_t                  halt_state;
 	enum {
 		CPU_NOT_HALTED = 0,

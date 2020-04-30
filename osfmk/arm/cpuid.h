@@ -154,6 +154,14 @@ typedef union {
 /* H11G e-Core (ARMv8 architecture) */
 #define CPU_PART_TEMPEST_ARUBA      0x11
 
+#ifndef RC_HIDE_XNU_LIGHTNING
+/* H12 p-Core (ARMv8 architecture) */
+#define CPU_PART_LIGHTNING          0x12
+
+/* H12 e-Core (ARMv8 architecture) */
+#define CPU_PART_THUNDER            0x13
+
+#endif /* !RC_HIDE_XNU_LIGHTNING */
 
 /* Cache type identification */
 

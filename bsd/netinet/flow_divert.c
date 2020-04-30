@@ -2304,7 +2304,7 @@ flow_divert_handle_app_map_create(struct flow_divert_group *group, mbuf_t packet
 	struct flow_divert_trie new_trie;
 	int insert_error = 0;
 	size_t nodes_mem_size;
-	int prefix_count = 0;
+	int prefix_count = -1;
 	int signing_id_count = 0;
 	size_t trie_memory_size = 0;
 
@@ -2320,9 +2320,10 @@ flow_divert_handle_app_map_create(struct flow_divert_group *group, mbuf_t packet
 	memset(&new_trie, 0, sizeof(new_trie));
 
 	/* Get the number of shared prefixes in the new set of signing ID strings */
-	flow_divert_packet_get_tlv(packet, offset, FLOW_DIVERT_TLV_PREFIX_COUNT, sizeof(prefix_count), &prefix_count, NULL);
+	error = flow_divert_packet_get_tlv(packet, offset, FLOW_DIVERT_TLV_PREFIX_COUNT, sizeof(prefix_count), &prefix_count, NULL);
 
-	if (prefix_count < 0) {
+	if (prefix_count < 0 || error) {
+		FDLOG(LOG_ERR, &nil_pcb, "Invalid prefix count (%d) or an error occurred while reading the prefix count: %d", prefix_count, error);
 		lck_rw_done(&group->lck);
 		return;
 	}
@@ -2332,7 +2333,12 @@ flow_divert_handle_app_map_create(struct flow_divert_group *group, mbuf_t packet
 	    cursor >= 0;
 	    cursor = flow_divert_packet_find_tlv(packet, cursor, FLOW_DIVERT_TLV_SIGNING_ID, &error, 1)) {
 		uint32_t sid_size = 0;
-		flow_divert_packet_get_tlv(packet, cursor, FLOW_DIVERT_TLV_SIGNING_ID, 0, NULL, &sid_size);
+		error = flow_divert_packet_get_tlv(packet, cursor, FLOW_DIVERT_TLV_SIGNING_ID, 0, NULL, &sid_size);
+		if (error || sid_size == 0) {
+			FDLOG(LOG_ERR, &nil_pcb, "Failed to get the length of the signing identifier at offset %d: %d", cursor, error);
+			signing_id_count = 0;
+			break;
+		}
 		new_trie.bytes_count += sid_size;
 		signing_id_count++;
 	}
@@ -2382,6 +2388,7 @@ flow_divert_handle_app_map_create(struct flow_divert_group *group, mbuf_t packet
 
 	new_trie.bytes = (uint8_t *)(void *)((uint8_t *)new_trie.memory + nodes_mem_size + child_maps_mem_size);
 	new_trie.bytes_free_next = 0;
+	memset(new_trie.bytes, 0, bytes_mem_size);
 
 	/* The root is an empty node */
 	new_trie.root = trie_node_alloc(&new_trie);
@@ -2391,10 +2398,20 @@ flow_divert_handle_app_map_create(struct flow_divert_group *group, mbuf_t packet
 	    cursor >= 0;
 	    cursor = flow_divert_packet_find_tlv(packet, cursor, FLOW_DIVERT_TLV_SIGNING_ID, &error, 1)) {
 		uint32_t sid_size = 0;
-		flow_divert_packet_get_tlv(packet, cursor, FLOW_DIVERT_TLV_SIGNING_ID, 0, NULL, &sid_size);
+		error = flow_divert_packet_get_tlv(packet, cursor, FLOW_DIVERT_TLV_SIGNING_ID, 0, NULL, &sid_size);
+		if (error || sid_size == 0) {
+			FDLOG(LOG_ERR, &nil_pcb, "Failed to get the length of the signing identifier at offset %d while building: %d", cursor, error);
+			insert_error = EINVAL;
+			break;
+		}
 		if (new_trie.bytes_free_next + sid_size <= new_trie.bytes_count) {
 			uint16_t new_node_idx;
-			flow_divert_packet_get_tlv(packet, cursor, FLOW_DIVERT_TLV_SIGNING_ID, sid_size, &TRIE_BYTE(&new_trie, new_trie.bytes_free_next), NULL);
+			error = flow_divert_packet_get_tlv(packet, cursor, FLOW_DIVERT_TLV_SIGNING_ID, sid_size, &TRIE_BYTE(&new_trie, new_trie.bytes_free_next), NULL);
+			if (error) {
+				FDLOG(LOG_ERR, &nil_pcb, "Failed to read the signing identifier at offset %d: %d", cursor, error);
+				insert_error = EINVAL;
+				break;
+			}
 			new_node_idx = flow_divert_trie_insert(&new_trie, new_trie.bytes_free_next, sid_size);
 			if (new_node_idx == NULL_TRIE_IDX) {
 				insert_error = EINVAL;

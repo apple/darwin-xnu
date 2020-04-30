@@ -54,6 +54,10 @@ typedef arm_saved_state_t savearea_t;
 extern lck_attr_t       *dtrace_lck_attr;
 extern lck_grp_t        *dtrace_lck_grp;
 
+#if XNU_MONITOR
+extern void * pmap_stacks_start;
+extern void * pmap_stacks_end;
+#endif
 
 struct frame {
 	struct frame *backchain;
@@ -455,6 +459,14 @@ zero:
 	}
 }
 
+#if XNU_MONITOR
+static inline boolean_t
+dtrace_frame_in_ppl_stack(struct frame * fp)
+{
+	return ((void *)fp >= pmap_stacks_start) &&
+	       ((void *)fp < pmap_stacks_end);
+}
+#endif
 
 void
 dtrace_getpcstack(pc_t * pcstack, int pcstack_limit, int aframes,
@@ -464,6 +476,9 @@ dtrace_getpcstack(pc_t * pcstack, int pcstack_limit, int aframes,
 	struct frame   *nextfp, *minfp, *stacktop;
 	int             depth = 0;
 	int             on_intr;
+#if XNU_MONITOR
+	int             on_ppl_stack;
+#endif
 	int             last = 0;
 	uintptr_t       pc;
 	uintptr_t       caller = CPU->cpu_dtrace_caller;
@@ -471,6 +486,11 @@ dtrace_getpcstack(pc_t * pcstack, int pcstack_limit, int aframes,
 	if ((on_intr = CPU_ON_INTR(CPU)) != 0) {
 		stacktop = (struct frame *) dtrace_get_cpu_int_stack_top();
 	}
+#if XNU_MONITOR
+	else if ((on_ppl_stack = dtrace_frame_in_ppl_stack(fp))) {
+		stacktop = (struct frame *) pmap_stacks_end;
+	}
+#endif
 	else {
 		stacktop = (struct frame *) (dtrace_get_kernel_stack(current_thread()) + kernel_stack_size);
 	}
@@ -496,6 +516,14 @@ dtrace_getpcstack(pc_t * pcstack, int pcstack_limit, int aframes,
 				if (arm_kern_regs) {
 					nextfp = (struct frame *)(saved_state64(arm_kern_regs)->fp);
 
+#if XNU_MONITOR
+					on_ppl_stack = dtrace_frame_in_ppl_stack(nextfp);
+
+					if (on_ppl_stack) {
+						minfp = pmap_stacks_start;
+						stacktop = pmap_stacks_end;
+					} else
+#endif
 					{
 						vm_offset_t kstack_base = dtrace_get_kernel_stack(current_thread());
 
@@ -517,6 +545,30 @@ dtrace_getpcstack(pc_t * pcstack, int pcstack_limit, int aframes,
 					last = 1;
 				}
 			} else {
+#if XNU_MONITOR
+				if ((!on_ppl_stack) && dtrace_frame_in_ppl_stack(nextfp)) {
+					/*
+					 * We are switching from the kernel stack
+					 * to the PPL stack.
+					 */
+					on_ppl_stack = 1;
+					minfp = pmap_stacks_start;
+					stacktop = pmap_stacks_end;
+				} else if (on_ppl_stack) {
+					/*
+					 * We could be going from the PPL stack
+					 * to the kernel stack.
+					 */
+					vm_offset_t kstack_base = dtrace_get_kernel_stack(current_thread());
+
+					minfp = (struct frame *)kstack_base;
+					stacktop = (struct frame *)(kstack_base + kernel_stack_size);
+
+					if (nextfp <= minfp || nextfp >= stacktop) {
+						last = 1;
+					}
+				} else
+#endif
 				{
 					/*
 					 * This is the last frame we can process; indicate

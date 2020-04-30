@@ -15951,6 +15951,13 @@ RestartCopy:
 		if (!copy) {
 			if (src_entry->used_for_jit == TRUE) {
 				if (same_map) {
+#if __APRR_SUPPORTED__
+					/*
+					 * Disallow re-mapping of any JIT regions on APRR devices.
+					 */
+					result = KERN_PROTECTION_FAILURE;
+					break;
+#endif /* __APRR_SUPPORTED__*/
 				} else {
 #if CONFIG_EMBEDDED
 					/*

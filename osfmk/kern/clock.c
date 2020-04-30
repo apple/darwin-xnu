@@ -87,7 +87,9 @@
 #include <os/log.h>
 
 uint32_t        hz_tick_interval = 1;
+#if !HAS_CONTINUOUS_HWCLOCK
 static uint64_t has_monotonic_clock = 0;
+#endif
 
 decl_simple_lock_data(, clock_lock);
 lck_grp_attr_t * settime_lock_grp_attr;
@@ -234,6 +236,7 @@ bintime2nsclock(const struct bintime *_bt, clock_sec_t *secs, clock_usec_t *nano
 	*nanosecs = ((uint64_t)NSEC_PER_SEC * (uint32_t)(_bt->frac >> 32)) >> 32;
 }
 
+#if !defined(HAS_CONTINUOUS_HWCLOCK)
 static __inline void
 bintime2absolutetime(const struct bintime *_bt, uint64_t *abs)
 {
@@ -250,6 +253,7 @@ struct latched_time {
 extern int
 kernel_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
 
+#endif
 /*
  *	Time of day (calendar) variables.
  *
@@ -270,7 +274,9 @@ static struct clock_calend {
 	struct bintime          offset; /* cumulative offset expressed in (sec, 64 bits frac of a second) */
 	struct bintime          bintime; /* cumulative offset (it includes bootime) expressed in (sec, 64 bits frac of a second) */
 	struct bintime          boottime; /* boot time expressed in (sec, 64 bits frac of a second) */
+#if !HAS_CONTINUOUS_HWCLOCK
 	struct bintime          basesleep;
+#endif
 } clock_calend;
 
 static uint64_t ticks_per_sec; /* ticks in a second (expressed in abs time) */
@@ -957,6 +963,7 @@ print_all_clock_variables_internal(const char* func, struct clock_calend* clock_
 	    func, clock_calend_cp->boottime.sec, clock_calend_cp->boottime.frac,
 	    (unsigned long)bootime_secs, bootime_microsecs);
 
+#if !HAS_CONTINUOUS_HWCLOCK
 	clock_sec_t     basesleep_secs;
 	clock_usec_t    basesleep_microsecs;
 
@@ -964,6 +971,7 @@ print_all_clock_variables_internal(const char* func, struct clock_calend* clock_
 	os_log(OS_LOG_DEFAULT, "%s basesleep.sec %ld basesleep.frac %llu basesleep_secs %lu basesleep_microsecs %d\n",
 	    func, clock_calend_cp->basesleep.sec, clock_calend_cp->basesleep.frac,
 	    (unsigned long)basesleep_secs, basesleep_microsecs);
+#endif
 }
 
 
@@ -1023,6 +1031,7 @@ clock_initialize_calendar(void)
 	clock_usec_t            utc_offset_microsecs;
 	spl_t                   s;
 	struct bintime          bt;
+#if !HAS_CONTINUOUS_HWCLOCK
 	struct bintime          monotonic_bt;
 	struct latched_time     monotonic_time;
 	uint64_t                monotonic_usec_total;
@@ -1030,10 +1039,12 @@ clock_initialize_calendar(void)
 	clock_usec_t            microsys2, monotonic_usec;
 	size_t                  size;
 
+#endif
 	//Get the UTC time and corresponding sys time
 	PEGetUTCTimeOfDay(&secs, &microsecs);
 	clock_get_system_microtime(&sys, &microsys);
 
+#if !HAS_CONTINUOUS_HWCLOCK
 	/*
 	 * If the platform has a monotonic clock, use kern.monotonicclock_usecs
 	 * to estimate the sleep/wake time, otherwise use the UTC time to estimate
@@ -1049,6 +1060,7 @@ clock_initialize_calendar(void)
 		absolutetime_to_microtime(monotonic_time.mach_time, &sys2, &microsys2);
 		os_log(OS_LOG_DEFAULT, "%s system has monotonic clock\n", __func__);
 	}
+#endif
 
 	s = splclock();
 	clock_lock();
@@ -1099,6 +1111,7 @@ clock_initialize_calendar(void)
 	clock_calend.s_scale_ns = NSEC_PER_SEC;
 	clock_calend.s_adj_nsx = 0;
 
+#if !HAS_CONTINUOUS_HWCLOCK
 	if (has_monotonic_clock) {
 		monotonic_sec = monotonic_usec_total / (clock_sec_t)USEC_PER_SEC;
 		monotonic_usec = monotonic_usec_total % (clock_usec_t)USEC_PER_SEC;
@@ -1111,6 +1124,7 @@ clock_initialize_calendar(void)
 		// set the baseleep as the difference between monotonic clock - sys
 		clock_calend.basesleep = monotonic_bt;
 	}
+#endif
 	commpage_update_mach_continuous_time(mach_absolutetime_asleep);
 
 #if DEVELOPMENT || DEBUG
@@ -1132,6 +1146,73 @@ clock_initialize_calendar(void)
 #endif
 }
 
+#if HAS_CONTINUOUS_HWCLOCK
+
+static void
+scale_sleep_time(void)
+{
+	/* Apply the current NTP frequency adjustment to the time slept.
+	 * The frequency adjustment remains stable between calls to ntp_adjtime(),
+	 * and should thus provide a reasonable approximation of the total adjustment
+	 * required for the time slept. */
+	struct bintime sleep_time;
+	uint64_t tick_scale_x, s_scale_ns;
+	int64_t s_adj_nsx;
+	int64_t sleep_adj = ntp_get_freq();
+	if (sleep_adj) {
+		get_scale_factors_from_adj(sleep_adj, &tick_scale_x, &s_scale_ns, &s_adj_nsx);
+		sleep_time = scale_delta(mach_absolutetime_last_sleep, tick_scale_x, s_scale_ns, s_adj_nsx);
+	} else {
+		tick_scale_x = (uint64_t)1 << 63;
+		tick_scale_x /= ticks_per_sec;
+		tick_scale_x *= 2;
+		sleep_time.sec = mach_absolutetime_last_sleep / ticks_per_sec;
+		sleep_time.frac = (mach_absolutetime_last_sleep % ticks_per_sec) * tick_scale_x;
+	}
+	bintime_add(&clock_calend.offset, &sleep_time);
+	bintime_add(&clock_calend.bintime, &sleep_time);
+}
+
+void
+clock_wakeup_calendar(void)
+{
+	spl_t   s;
+
+	s = splclock();
+	clock_lock();
+
+	commpage_disable_timestamp();
+
+	uint64_t abstime = mach_absolute_time();
+	uint64_t total_sleep_time = ml_get_hwclock() - abstime;
+
+	mach_absolutetime_last_sleep = total_sleep_time - mach_absolutetime_asleep;
+	mach_absolutetime_asleep = total_sleep_time;
+
+	scale_sleep_time();
+
+	KERNEL_DEBUG_CONSTANT(
+		MACHDBG_CODE(DBG_MACH_CLOCK, MACH_EPOCH_CHANGE) | DBG_FUNC_NONE,
+		(uintptr_t) mach_absolutetime_last_sleep,
+		(uintptr_t) mach_absolutetime_asleep,
+		(uintptr_t) (mach_absolutetime_last_sleep >> 32),
+		(uintptr_t) (mach_absolutetime_asleep >> 32),
+		0);
+
+	commpage_update_mach_continuous_time(mach_absolutetime_asleep);
+	adjust_cont_time_thread_calls();
+
+	clock_unlock();
+	splx(s);
+
+	host_notify_calendar_change();
+
+#if CONFIG_DTRACE
+	clock_track_calend_nowait();
+#endif
+}
+
+#else /* HAS_CONTINUOUS_HWCLOCK */
 
 void
 clock_wakeup_calendar(void)
@@ -1348,6 +1429,7 @@ done:
 #endif
 }
 
+#endif /* !HAS_CONTINUOUS_HWCLOCK */
 
 /*
  *	clock_get_boottime_nanotime:
@@ -1586,6 +1668,9 @@ clock_deadline_for_periodic_event(
 uint64_t
 mach_continuous_time(void)
 {
+#if HAS_CONTINUOUS_HWCLOCK
+	return ml_get_hwclock();
+#else
 	while (1) {
 		uint64_t read1 = mach_absolutetime_asleep;
 		uint64_t absolute = mach_absolute_time();
@@ -1596,11 +1681,15 @@ mach_continuous_time(void)
 			return absolute + read1;
 		}
 	}
+#endif
 }
 
 uint64_t
 mach_continuous_approximate_time(void)
 {
+#if HAS_CONTINUOUS_HWCLOCK
+	return ml_get_hwclock();
+#else
 	while (1) {
 		uint64_t read1 = mach_absolutetime_asleep;
 		uint64_t absolute = mach_approximate_time();
@@ -1611,6 +1700,7 @@ mach_continuous_approximate_time(void)
 			return absolute + read1;
 		}
 	}
+#endif
 }
 
 /*

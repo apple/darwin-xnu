@@ -78,6 +78,7 @@
 #include <net/if_llatbl.h>
 #include <net/net_api_stats.h>
 #include <net/if_ports_used.h>
+#include <net/if_vlan_var.h>
 #include <netinet/in.h>
 #if INET
 #include <netinet/in_var.h>

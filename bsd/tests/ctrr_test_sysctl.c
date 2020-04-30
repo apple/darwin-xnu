@@ -28,3 +28,22 @@
 
 #include <sys/sysctl.h>
 
+#if defined(KERNEL_INTEGRITY_CTRR) && defined(CONFIG_XNUPOST)
+extern kern_return_t ctrr_test(void);
+
+static int
+sysctl_run_ctrr_test(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	unsigned int dummy;
+	int error, changed;
+	error = sysctl_io_number(req, 0, sizeof(dummy), &dummy, &changed);
+	if (error || !changed) {
+		return error;
+	}
+	return ctrr_test();
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, run_ctrr_test,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, sysctl_run_ctrr_test, "I", "");
+#endif /* defined(KERNEL_INTEGRITY_CTRR) && defined(CONFIG_XNUPOST) */

@@ -892,7 +892,7 @@ nfsm_chain_add_v2sattr_f(struct nfsm_chain *nmc, struct vnode_attr *vap, uint32_
  */
 int
 nfsm_chain_add_v3sattr_f(
-	struct nfsmount *nmp,
+	__unused struct nfsmount *nmp,
 	struct nfsm_chain *nmc,
 	struct vnode_attr *vap)
 {
@@ -1124,7 +1124,7 @@ get_auxiliary_groups(kauth_cred_t cred, gid_t groups[NGROUPS], int count)
 }
 
 int
-nfsm_rpchead2(struct nfsmount *nmp, int sotype, int prog, int vers, int proc, int auth_type,
+nfsm_rpchead2(__unused struct nfsmount *nmp, int sotype, int prog, int vers, int proc, int auth_type,
     kauth_cred_t cred, struct nfsreq *req, mbuf_t mrest, u_int64_t *xidp, mbuf_t *mreqp)
 {
 	mbuf_t mreq, mb;
@@ -1320,7 +1320,7 @@ add_cred:
  */
 int
 nfs_parsefattr(
-	struct nfsmount *nmp,
+	__unused struct nfsmount *nmp,
 	struct nfsm_chain *nmc,
 	int nfsvers,
 	struct nfs_vattr *nvap)

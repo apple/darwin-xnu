@@ -74,6 +74,12 @@
 #define OS_ATOMIC_USE_LLSC  0
 #endif
 
+#if defined(__ARM_ARCH_8_4__) && defined(__arm64__)
+/* on armv8.4 16-byte aligned load/store pair is atomic */
+#undef os_atomic_load_is_plain
+#define os_atomic_load_is_plain(p) \
+	        (sizeof(*(p)) <= 16 && _Alignof(typeof(*(p))) >= sizeof(*(p)))
+#endif
 
 /*
  * On armv7 & arm64, we do provide fine grained dependency injection, so

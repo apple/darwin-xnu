@@ -585,6 +585,11 @@ extern boolean_t preemption_enabled(void);
 #error Enable at least one scheduler algorithm in osfmk/conf/MASTER.XXX
 #endif
 
+#if __AMP__
+extern const struct sched_dispatch_table sched_amp_dispatch;
+#define SCHED(f) (sched_amp_dispatch.f)
+
+#else /* __AMP__ */
 
 #if CONFIG_SCHED_CLUTCH
 extern const struct sched_dispatch_table sched_clutch_dispatch;
@@ -594,6 +599,7 @@ extern const struct sched_dispatch_table sched_dualq_dispatch;
 #define SCHED(f) (sched_dualq_dispatch.f)
 #endif /* CONFIG_SCHED_CLUTCH */
 
+#endif /* __AMP__ */
 
 struct sched_dispatch_table {
 	const char *sched_name;
@@ -766,6 +772,9 @@ extern const struct sched_dispatch_table sched_traditional_with_pset_runqueue_di
 #if defined(CONFIG_SCHED_MULTIQ)
 extern const struct sched_dispatch_table sched_multiq_dispatch;
 extern const struct sched_dispatch_table sched_dualq_dispatch;
+#if __AMP__
+extern const struct sched_dispatch_table sched_amp_dispatch;
+#endif
 #endif
 
 #if defined(CONFIG_SCHED_PROTO)

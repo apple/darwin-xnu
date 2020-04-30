@@ -185,6 +185,12 @@ cpuid_get_cpufamily(void)
 		case CPU_PART_TEMPEST_ARUBA:
 			cpufamily = CPUFAMILY_ARM_VORTEX_TEMPEST;
 			break;
+#ifndef RC_HIDE_XNU_LIGHTNING
+		case CPU_PART_LIGHTNING:
+		case CPU_PART_THUNDER:
+			cpufamily = CPUFAMILY_ARM_LIGHTNING_THUNDER;
+			break;
+#endif /* !RC_HIDE_XNU_LIGHTNING */
 		default:
 			cpufamily = CPUFAMILY_UNKNOWN;
 			break;

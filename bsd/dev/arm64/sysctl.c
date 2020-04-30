@@ -46,6 +46,30 @@ SYSCTL_PROC(_machdep, OID_AUTO, wake_conttime,
     0, 0, sysctl_wake_conttime, "I",
     "Continuous Time at the last wakeup");
 
+#if defined(HAS_IPI)
+static int
+cpu_signal_deferred_timer(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
+{
+	int new_value = 0;
+	int changed   = 0;
+
+	int old_value = (int)ml_cpu_signal_deferred_get_timer();
+
+	int error = sysctl_io_number(req, old_value, sizeof(int), &new_value, &changed);
+
+	if (error == 0 && changed) {
+		ml_cpu_signal_deferred_adjust_timer((uint64_t)new_value);
+	}
+
+	return error;
+}
+
+SYSCTL_PROC(_machdep, OID_AUTO, deferred_ipi_timeout,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0,
+    cpu_signal_deferred_timer, "I", "Deferred IPI timeout (nanoseconds)");
+
+#endif /* defined(HAS_IPI) */
 
 /*
  * For source compatibility, here's some machdep.cpu mibs that

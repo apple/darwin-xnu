@@ -70,7 +70,18 @@ static_assert((KERNEL_PMAP_HEAP_RANGE_START & ~ARM_TT_ROOT_OFFMASK) > ARM_KERNEL
 static_assert((((~ARM_KERNEL_PROTECT_EXCEPTION_START) + 1) * 2ULL) <= (ARM_TT_ROOT_SIZE + ARM_TT_ROOT_INDEX_MASK));
 #endif /* __ARM_KERNEL_PROTECT__ */
 
+#if __APRR_SUPPORTED__ && XNU_MONITOR
+/*
+ * If APRR is supported, setting XN on L1/L2 table entries will shift the effective
+ * APRR index of L3 PTEs covering PPL-protected pages in the kernel dynamic region
+ * from PPL R/W to kernel R/W.  That will effectively remove PPL write protection
+ * from those pages.  Avoid setting XN at the table level for MONITOR-enabled builds
+ * that are backed by APRR.
+ */
+#define ARM_DYNAMIC_TABLE_XN ARM_TTE_TABLE_PXN
+#else
 #define ARM_DYNAMIC_TABLE_XN (ARM_TTE_TABLE_PXN | ARM_TTE_TABLE_XN)
+#endif
 
 #if KASAN
 extern vm_offset_t shadow_pbase;
@@ -194,6 +205,18 @@ SECURITY_READ_ONLY_LATE(vm_offset_t)          segLOWEST;
 SECURITY_READ_ONLY_LATE(static vm_offset_t)   segTEXTB;
 SECURITY_READ_ONLY_LATE(static unsigned long) segSizeTEXT;
 
+#if XNU_MONITOR
+SECURITY_READ_ONLY_LATE(vm_offset_t)          segPPLTEXTB;
+SECURITY_READ_ONLY_LATE(unsigned long)        segSizePPLTEXT;
+
+SECURITY_READ_ONLY_LATE(vm_offset_t)          segPPLTRAMPB;
+SECURITY_READ_ONLY_LATE(unsigned long)        segSizePPLTRAMP;
+
+SECURITY_READ_ONLY_LATE(vm_offset_t)          segPPLDATACONSTB;
+SECURITY_READ_ONLY_LATE(unsigned long)        segSizePPLDATACONST;
+SECURITY_READ_ONLY_LATE(void *)               pmap_stacks_start = NULL;
+SECURITY_READ_ONLY_LATE(void *)               pmap_stacks_end = NULL;
+#endif
 
 SECURITY_READ_ONLY_LATE(static vm_offset_t)   segDATACONSTB;
 SECURITY_READ_ONLY_LATE(static unsigned long) segSizeDATACONST;
@@ -204,6 +227,10 @@ SECURITY_READ_ONLY_LATE(static unsigned long) segSizeTEXTEXEC;
 SECURITY_READ_ONLY_LATE(static vm_offset_t)   segDATAB;
 SECURITY_READ_ONLY_LATE(static unsigned long) segSizeDATA;
 
+#if XNU_MONITOR
+SECURITY_READ_ONLY_LATE(vm_offset_t)          segPPLDATAB;
+SECURITY_READ_ONLY_LATE(unsigned long)        segSizePPLDATA;
+#endif
 
 SECURITY_READ_ONLY_LATE(vm_offset_t)          segBOOTDATAB;
 SECURITY_READ_ONLY_LATE(unsigned long)        segSizeBOOTDATA;
@@ -351,7 +378,7 @@ round_up_pte_hint_address(vm_offset_t address)
 vm_offset_t alloc_ptpage(boolean_t map_static) {
 	vm_offset_t vaddr;
 
-#if !(defined(KERNEL_INTEGRITY_KTRR))
+#if !(defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR))
 	map_static = FALSE;
 #endif
 
@@ -480,7 +507,7 @@ void dump_kva_space() {
 
 #endif /* DEBUG */
 
-#if __ARM_KERNEL_PROTECT__
+#if __ARM_KERNEL_PROTECT__ || XNU_MONITOR
 /*
  * arm_vm_map:
  *   root_ttp: The kernel virtual address for the root of the target page tables
@@ -555,7 +582,7 @@ arm_vm_map(tt_entry_t * root_ttp, vm_offset_t vaddr, pt_entry_t pte)
 	*ptep = pte;
 }
 
-#endif // __ARM_KERNEL_PROTECT
+#endif // __ARM_KERNEL_PROTECT || XNU_MONITOR
 
 #if __ARM_KERNEL_PROTECT__
 
@@ -712,7 +739,7 @@ arm_vm_expand_kernel_el0_mappings(void)
 }
 #endif /* __ARM_KERNEL_PROTECT__ */
 
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 extern void bootstrap_instructions;
 
 /*
@@ -777,7 +804,7 @@ static void arm_replace_identity_map(boot_args * args)
 	        ARM_PTE_AP(AP_RONA) |
 	        ARM_PTE_NX;
 }
-#endif /* defined(KERNEL_INTEGRITY_KTRR)*/
+#endif /* defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) */
 
 tt_entry_t *arm_kva_to_tte(vm_offset_t);
 
@@ -791,6 +818,16 @@ arm_kva_to_tte(vm_offset_t va)
 	return tte2;
 }
 
+#if XNU_MONITOR
+
+static inline pt_entry_t *
+arm_kva_to_pte(vm_offset_t va)
+{
+	tt_entry_t *tte2 = arm_kva_to_tte(va);
+	return L3_TABLE_VA(tte2) + L3_TABLE_INDEX(va);
+}
+
+#endif
 
 #define ARM64_GRANULE_ALLOW_BLOCK (1 << 0)
 #define ARM64_GRANULE_ALLOW_HINT (1 << 1)
@@ -1096,13 +1133,34 @@ arm_vm_prot_init(boot_args * args)
 	 * NO, stuff in this segment gets modified during startup (viz. mac_policy_init()/mac_policy_list)
 	 * Make RNX in prot_finalize
 	 */
+#if XNU_MONITOR
+	/* The ropagetable region will ultimately be owned by the PPL.  Set permissions
+	 * on it separately to avoid applying mismatched block settings between this function,
+	 * pmap_static_allocations_done(), and arm_vm_prot_finalize(). */
+	vm_offset_t segDATACONSTE = segDATACONSTB + segSizeDATACONST;
+
+	arm_vm_page_granular_RWNX(segDATACONSTB, (vm_offset_t)&ropagetable_begin - segDATACONSTB, ARM64_GRANULE_ALLOW_BLOCK);
+	arm_vm_page_granular_RWNX((vm_offset_t)&ropagetable_begin,
+	    (vm_offset_t)&ropagetable_end - (vm_offset_t)&ropagetable_begin, ARM64_GRANULE_ALLOW_BLOCK);
+	arm_vm_page_granular_RWNX((vm_offset_t)&ropagetable_end,
+	    segDATACONSTE - (vm_offset_t)&ropagetable_end, ARM64_GRANULE_ALLOW_BLOCK);
+#else
 	arm_vm_page_granular_RWNX(segDATACONSTB, segSizeDATACONST, ARM64_GRANULE_ALLOW_BLOCK);
+#endif
 
 	arm_vm_page_granular_ROX(segTEXTEXECB, segSizeTEXTEXEC, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
 
+#if XNU_MONITOR
+	arm_vm_page_granular_ROX(segPPLTEXTB, segSizePPLTEXT, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
+	arm_vm_page_granular_ROX(segPPLTRAMPB, segSizePPLTRAMP, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
+	arm_vm_page_granular_RNX(segPPLDATACONSTB, segSizePPLDATACONST, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
+#endif
 
 	/* DATA segment will remain RWNX */
 	arm_vm_page_granular_RWNX(segDATAB, segSizeDATA, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
+#if XNU_MONITOR
+	arm_vm_page_granular_RWNX(segPPLDATAB, segSizePPLDATA, ARM64_GRANULE_ALLOW_BLOCK | ARM64_GRANULE_ALLOW_HINT);
+#endif
 
 	arm_vm_page_granular_RWNX(segBOOTDATAB, segSizeBOOTDATA, 0);
 	arm_vm_page_granular_RNX((vm_offset_t)&intstack_low_guard, PAGE_MAX_SIZE, 0);
@@ -1179,6 +1237,67 @@ arm_vm_physmap_slide(ptov_table_entry *temp_ptov_table, vm_map_address_t physmap
 	++ptov_index;
 }
 
+#if XNU_MONITOR
+
+SECURITY_READ_ONLY_LATE(static boolean_t) keep_linkedit = FALSE;
+
+static void
+arm_vm_physmap_init(boot_args *args, vm_map_address_t physmap_base, vm_map_address_t dynamic_memory_begin __unused)
+{
+	ptov_table_entry temp_ptov_table[PTOV_TABLE_SIZE];
+	bzero(temp_ptov_table, sizeof(temp_ptov_table));
+
+	// This is memory that will either be handed back to the VM layer via ml_static_mfree(),
+	// or will be available for general-purpose use.   Physical aperture mappings for this memory
+	// must be at page granularity, so that PPL ownership or cache attribute changes can be reflected
+	// in the physical aperture mappings.
+
+
+	// Slid region between gPhysBase and beginning of protected text
+	arm_vm_physmap_slide(temp_ptov_table, physmap_base, gVirtBase, segLOWEST - gVirtBase, AP_RWNA, 0);
+
+	// kext bootstrap segment
+	arm_vm_physmap_slide(temp_ptov_table, physmap_base, segKLDB, segSizeKLD, AP_RONA, 0);
+
+	// Early-boot data
+	arm_vm_physmap_slide(temp_ptov_table, physmap_base, segBOOTDATAB, segSizeBOOTDATA, AP_RONA, 0);
+
+#if KASAN_DYNAMIC_BLACKLIST
+	/* KASAN's dynamic blacklist needs to query the LINKEDIT segment at runtime.  As such, the
+	 * kext bootstrap code will not jettison LINKEDIT on kasan kernels, so don't bother to relocate it. */
+	keep_linkedit = TRUE;
+#else
+	PE_parse_boot_argn("keepsyms", &keep_linkedit, sizeof(keep_linkedit));
+#endif
+	if (!keep_linkedit) {
+		// Kernel LINKEDIT
+		arm_vm_physmap_slide(temp_ptov_table, physmap_base, segLINKB, segSizeLINK, AP_RWNA, 0);
+
+		// Prelinked kernel LINKEDIT
+		arm_vm_physmap_slide(temp_ptov_table, physmap_base, segPLKLINKEDITB, segSizePLKLINKEDIT, AP_RWNA, 0);
+	}
+
+	// Prelinked kernel plists
+	arm_vm_physmap_slide(temp_ptov_table, physmap_base, segPRELINKINFOB, segSizePRELINKINFO, AP_RWNA, 0);
+
+	// Device tree, ramdisk, boot args
+	arm_vm_physmap_slide(temp_ptov_table, physmap_base, end_kern, (args->topOfKernelData - gPhysBase + gVirtBase) - end_kern, AP_RWNA, 0);
+	PE_slide_devicetree(temp_ptov_table[ptov_index - 1].va - end_kern);
+
+	// Remainder of physical memory
+	arm_vm_physmap_slide(temp_ptov_table, physmap_base, (args->topOfKernelData + BOOTSTRAP_TABLE_SIZE - gPhysBase + gVirtBase),
+			     real_avail_end - (args->topOfKernelData + BOOTSTRAP_TABLE_SIZE), AP_RWNA, 0);
+
+	assert((temp_ptov_table[ptov_index - 1].va + temp_ptov_table[ptov_index - 1].len) <= dynamic_memory_begin);
+
+	// Sort in descending order of segment length.  LUT traversal is linear, so largest (most likely used)
+	// segments should be placed earliest in the table to optimize lookup performance.
+	qsort(temp_ptov_table, PTOV_TABLE_SIZE, sizeof(temp_ptov_table[0]), cmp_ptov_entries);
+
+	memcpy(ptov_table, temp_ptov_table, sizeof(ptov_table));
+}
+
+#else
 
 static void
 arm_vm_physmap_init(boot_args *args, vm_map_address_t physmap_base, vm_map_address_t dynamic_memory_begin __unused)
@@ -1205,6 +1324,7 @@ arm_vm_physmap_init(boot_args *args, vm_map_address_t physmap_base, vm_map_addre
 	memcpy(ptov_table, temp_ptov_table, sizeof(ptov_table));
 }
 
+#endif // XNU_MONITOR
 
 void
 arm_vm_prot_finalize(boot_args * args __unused)
@@ -1248,8 +1368,35 @@ arm_vm_prot_finalize(boot_args * args __unused)
 	arm_vm_populate_kernel_el0_mappings();
 #endif /* __ARM_KERNEL_PROTECT__ */
 
+#if XNU_MONITOR
+	for (vm_offset_t va = segKLDB; va < (segKLDB + segSizeKLD); va += ARM_PGBYTES) {
+		pt_entry_t *pte = arm_kva_to_pte(va);
+		*pte = ARM_PTE_EMPTY;
+	}
+	/* Clear the original stack mappings; these pages should be mapped through ptov_table. */
+	for (vm_offset_t va = segBOOTDATAB; va < (segBOOTDATAB + segSizeBOOTDATA); va += ARM_PGBYTES) {
+		pt_entry_t *pte = arm_kva_to_pte(va);
+		*pte = ARM_PTE_EMPTY;
+	}
+	/* Clear the original PRELINKINFO mapping. This segment should be jettisoned during I/O Kit
+	 * initialization before we reach this point. */
+	for (vm_offset_t va = segPRELINKINFOB; va < (segPRELINKINFOB + segSizePRELINKINFO); va += ARM_PGBYTES) {
+		pt_entry_t *pte = arm_kva_to_pte(va);
+		*pte = ARM_PTE_EMPTY;
+	}
+	if (!keep_linkedit) {
+		for (vm_offset_t va = segLINKB; va < (segLINKB + segSizeLINK); va += ARM_PGBYTES) {
+			pt_entry_t *pte = arm_kva_to_pte(va);
+			*pte = ARM_PTE_EMPTY;
+		}
+		for (vm_offset_t va = segPLKLINKEDITB; va < (segPLKLINKEDITB + segSizePLKLINKEDIT); va += ARM_PGBYTES) {
+			pt_entry_t *pte = arm_kva_to_pte(va);
+			*pte = ARM_PTE_EMPTY;
+		}
+	}
+#endif /* XNU_MONITOR */
 
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 	/*
 	 * __LAST,__pinst should no longer be executable.
 	 */
@@ -1262,7 +1409,20 @@ arm_vm_prot_finalize(boot_args * args __unused)
 	 */
 #endif
 
+#if XNU_MONITOR
+	vm_offset_t segDATACONSTE = segDATACONSTB + segSizeDATACONST;
+
+	/*
+	 * For the moment, the RO pagetable allocation is part of the
+	 * constant data segment, but it is technically owned by the
+	 * PPL.  Hence, we should not reprotect it.
+	 */
+	arm_vm_page_granular_RNX(segDATACONSTB, (vm_offset_t)&ropagetable_begin - segDATACONSTB, ARM64_GRANULE_ALLOW_BLOCK);
+	arm_vm_page_granular_RNX((vm_offset_t)&ropagetable_end,
+	    segDATACONSTE - (vm_offset_t)&ropagetable_end, ARM64_GRANULE_ALLOW_BLOCK);
+#else
 	arm_vm_page_granular_RNX(segDATACONSTB, segSizeDATACONST, ARM64_GRANULE_ALLOW_BLOCK);
+#endif
 
 	__builtin_arm_dsb(DSB_ISH);
 	flush_mmu_tlb();
@@ -1363,12 +1523,22 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 
 	physmap_base += physmap_slide;
 
+#if XNU_MONITOR
+	physmap_base = ROUND_TWIG(physmap_base);
+	static_memory_end = physmap_base + mem_size;
+#else
 	static_memory_end = physmap_base + mem_size + (PTOV_TABLE_SIZE * ARM_TT_TWIG_SIZE); // worst possible case for block alignment
+#endif
 #if KASAN
 	/* add the KASAN stolen memory to the physmap */
 	dynamic_memory_begin = static_memory_end + (shadow_ptop - shadow_pbase);
 #else
 	dynamic_memory_begin = static_memory_end;
+#endif
+#if XNU_MONITOR
+	pmap_stacks_start = (void*)dynamic_memory_begin;
+	dynamic_memory_begin += PPL_STACK_REGION_SIZE;
+	pmap_stacks_end = (void*)dynamic_memory_begin;
 #endif
 	if (dynamic_memory_begin > VM_MAX_KERNEL_ADDRESS)
 		panic("Unsupported memory configuration %lx\n", mem_size);
@@ -1394,7 +1564,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	 */
 	avail_start = boot_ttep + BOOTSTRAP_TABLE_SIZE;
 
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 	arm_replace_identity_map(args);
 #endif
 
@@ -1460,7 +1630,15 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	segTEXTB         = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__TEXT", &segSizeTEXT);
 	segDATACONSTB    = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__DATA_CONST", &segSizeDATACONST);
 	segTEXTEXECB     = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__TEXT_EXEC", &segSizeTEXTEXEC);
+#if XNU_MONITOR
+	segPPLTEXTB      = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__PPLTEXT", &segSizePPLTEXT);
+	segPPLTRAMPB     = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__PPLTRAMP", &segSizePPLTRAMP);
+	segPPLDATACONSTB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__PPLDATA_CONST", &segSizePPLDATACONST);
+#endif
 	segDATAB         = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__DATA", &segSizeDATA);
+#if XNU_MONITOR
+	segPPLDATAB      = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__PPLDATA", &segSizePPLDATA);
+#endif
 
 	segBOOTDATAB    = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__BOOTDATA", &segSizeBOOTDATA);
 	segLINKB         = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__LINKEDIT", &segSizeLINK);
@@ -1566,6 +1744,9 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	set_mmu_ttb(invalid_ttep & TTBR_BADDR_MASK);
 
 	flush_mmu_tlb();
+#if defined(HAS_VMSA_LOCK)
+	vmsa_lock();
+#endif
 	kva_active = TRUE;
 	// global table pointers may need to be different due to physical aperture remapping
 	cpu_tte = (tt_entry_t*)(phystokv(cpu_ttep));
@@ -1582,6 +1763,28 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	vm_kernel_etext = segTEXTB + segSizeTEXT + segSizeDATACONST + segSizeTEXTEXEC;
 
 	dynamic_memory_begin = ROUND_TWIG(dynamic_memory_begin);
+#if defined(KERNEL_INTEGRITY_CTRR) && defined(CONFIG_XNUPOST)
+	// reserve a 32MB region without permission overrides to use later for a CTRR unit test
+	{
+		extern vm_offset_t ctrr_test_page;
+		tt_entry_t *new_tte;
+
+		ctrr_test_page = dynamic_memory_begin;
+		dynamic_memory_begin += ARM_TT_L2_SIZE;
+		cpu_l1_tte = cpu_tte + ((ctrr_test_page & ARM_TT_L1_INDEX_MASK) >> ARM_TT_L1_SHIFT);
+		assert((*cpu_l1_tte) & ARM_TTE_VALID);
+		cpu_l2_tte = ((tt_entry_t *) phystokv(((*cpu_l1_tte) & ARM_TTE_TABLE_MASK))) + ((ctrr_test_page & ARM_TT_L2_INDEX_MASK) >> ARM_TT_L2_SHIFT);
+		assert((*cpu_l2_tte) == ARM_TTE_EMPTY);
+		new_tte = (tt_entry_t *)alloc_ptpage(FALSE);
+		bzero(new_tte, ARM_PGBYTES);
+		*cpu_l2_tte = (kvtophys((vm_offset_t)new_tte) & ARM_TTE_TABLE_MASK) | ARM_TTE_TYPE_TABLE | ARM_TTE_VALID;
+	}
+#endif /* defined(KERNEL_INTEGRITY_CTRR) && defined(CONFIG_XNUPOST) */
+#if XNU_MONITOR
+	for (vm_offset_t cur = (vm_offset_t)pmap_stacks_start; cur < (vm_offset_t)pmap_stacks_end; cur += ARM_PGBYTES) {
+		arm_vm_map(cpu_tte, cur, ARM_PTE_EMPTY);
+	}
+#endif
 	pmap_bootstrap(dynamic_memory_begin);
 
 	disable_preemption();
@@ -1708,6 +1911,9 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	 */
 	avail_start = (avail_start + PAGE_MASK) & ~PAGE_MASK;
 
+#if XNU_MONITOR
+	pmap_static_allocations_done();
+#endif
 	first_avail = avail_start;
 	patch_low_glo_static_region(args->topOfKernelData, avail_start - args->topOfKernelData);
 	enable_preemption();

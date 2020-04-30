@@ -526,11 +526,10 @@ nfsmout:
  * Return an NFS volume name from the mntfrom name.
  */
 static void
-nfs_get_volname(struct mount *mp, char *volname, size_t len, vfs_context_t ctx)
+nfs_get_volname(struct mount *mp, char *volname, size_t len, __unused vfs_context_t ctx)
 {
 	const char *ptr, *cptr;
 	const char *mntfrom = mp->mnt_vfsstat.f_mntfromname;
-	struct nfsmount *nmp = VFSTONFS(mp);
 	size_t mflen;
 
 

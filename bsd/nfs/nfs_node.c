@@ -561,7 +561,6 @@ loop:
 	{
 		error = vnode_create(VNCREATE_FLAVOR, VCREATESIZE, &vfsp, &np->n_vnode);
 	}
-notsup:
 	if (error) {
 		FSDBG(266, 0, np, np->n_flag, 0xb1eb1e);
 		nfs_node_unlock(np);
@@ -913,7 +912,6 @@ nfs_vnop_reclaim(
 {
 	vnode_t vp = ap->a_vp;
 	nfsnode_t np = VTONFS(vp);
-	vfs_context_t ctx = ap->a_context;
 	struct nfs_open_file *nofp, *nextnofp;
 	struct nfs_file_lock *nflp, *nextnflp;
 	struct nfs_lock_owner *nlop, *nextnlop;

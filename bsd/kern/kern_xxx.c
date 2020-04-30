@@ -116,8 +116,11 @@ reboot(struct proc *p, struct reboot_args *uap, __unused int32_t *retval)
 	}
 
 	if (uap->opt & RB_PANIC && uap->msg != USER_ADDR_NULL) {
-		if (copyinstr(uap->msg, (void *)message, sizeof(message), (size_t *)&dummy)) {
+		int copy_error = copyinstr(uap->msg, (void *)message, sizeof(message), (size_t *)&dummy);
+		if (copy_error != 0 && copy_error != ENAMETOOLONG) {
 			strncpy(message, "user space RB_PANIC message copyin failed", sizeof(message) - 1);
+		} else {
+			message[sizeof(message) - 1] = '\0';
 		}
 	}
 

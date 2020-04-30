@@ -627,8 +627,20 @@ ipc_kobject_alloc_port(
 	ipc_kobject_type_t      type,
 	ipc_kobject_alloc_options_t     options)
 {
-	ipc_port_t port = ipc_port_alloc_kernel();
+	ipc_port_init_flags_t flags;
+	ipc_space_t space;
+	ipc_port_t port;
 
+	if (options & IPC_KOBJECT_ALLOC_IN_TRANSIT) {
+		/* kobject port intended to be copied out to user-space */
+		flags = IPC_PORT_INIT_MESSAGE_QUEUE;
+		space = IS_NULL;
+	} else {
+		/* true kernel-bound kobject port */
+		flags = IPC_PORT_INIT_NONE;
+		space = ipc_space_kernel;
+	}
+	port = ipc_port_alloc_special(space, flags);
 	if (port == IP_NULL) {
 		panic("ipc_kobject_alloc_port(): failed to allocate port");
 	}
@@ -638,15 +650,28 @@ ipc_kobject_alloc_port(
 	if (options & IPC_KOBJECT_ALLOC_MAKE_SEND) {
 		ipc_port_make_send_locked(port);
 	}
-	if (options & IPC_KOBJECT_ALLOC_NSREQUEST) {
-		ipc_port_make_sonce_locked(port);
-		port->ip_nsrequest = port;
-	}
-	if (options & IPC_KOBJECT_ALLOC_NO_GRANT) {
-		port->ip_no_grant = 1;
+
+	if (options & IPC_KOBJECT_ALLOC_IN_TRANSIT) {
+		/* reset the port like it has been copied in circularity checked */
+		if (options & IPC_KOBJECT_ALLOC_NSREQUEST) {
+			panic("ipc_kobject_alloc_port(): invalid option for user-space port");
+		}
+		port->ip_mscount = 0;
+		assert(port->ip_tempowner == 0);
+		assert(port->ip_receiver == IS_NULL);
+		port->ip_receiver = IS_NULL;
+		port->ip_receiver_name = MACH_PORT_NULL;
+	} else {
+		if (options & IPC_KOBJECT_ALLOC_NSREQUEST) {
+			ipc_port_make_sonce_locked(port);
+			port->ip_nsrequest = port;
+		}
 	}
 	if (options & IPC_KOBJECT_ALLOC_IMMOVABLE_SEND) {
 		port->ip_immovable_send = 1;
+	}
+	if (options & IPC_KOBJECT_ALLOC_NO_GRANT) {
+		port->ip_no_grant = 1;
 	}
 
 	return port;

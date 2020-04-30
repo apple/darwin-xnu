@@ -613,10 +613,10 @@ unsigned long           monitor_call(uintptr_t callnum, uintptr_t arg1,
     uintptr_t arg2, uintptr_t arg3);
 #endif /* MONITOR */
 
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 void rorgn_stash_range(void);
 void rorgn_lockdown(void);
-#endif /* defined(KERNEL_INTEGRITY_KTRR)*/
+#endif /* defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) */
 
 #if __ARM_KERNEL_PROTECT__
 extern void set_vbar_el1(uint64_t);

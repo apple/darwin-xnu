@@ -265,7 +265,7 @@ kasan_arch_init(void)
 	/* Map the physical aperture */
 	kasan_map_shadow(kernel_vtop, physmap_vtop - kernel_vtop, true);
 
-#if defined(KERNEL_INTEGRITY_KTRR)
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 	/* Pre-allocate all the L3 page table pages to avoid triggering KTRR */
 	kasan_map_shadow_internal(VM_MIN_KERNEL_ADDRESS, VM_MAX_KERNEL_ADDRESS - VM_MIN_KERNEL_ADDRESS + 1, false, false);
 #endif
