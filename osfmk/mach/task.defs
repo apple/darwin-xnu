@@ -512,5 +512,11 @@ routine task_set_exc_guard_behavior(
 		task	 : task_t;
 		behavior : task_exc_guard_behavior_t);
 		
+routine task_create_suid_cred(
+		task		: task_t;
+		path		: suid_cred_path_t;
+		uid		: suid_cred_uid_t;
+	out	delegation	: suid_cred_t);
+
 /* vim: set ft=c : */
 

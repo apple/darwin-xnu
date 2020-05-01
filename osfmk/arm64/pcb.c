@@ -271,6 +271,15 @@ machine_thread_init(void)
 
 }
 
+/*
+ * Routine:	machine_thread_template_init
+ *
+ */
+void
+machine_thread_template_init(thread_t __unused thr_template)
+{
+	/* Nothing to do on this platform. */
+}
 
 /*
  * Routine: get_useraddr

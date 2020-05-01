@@ -55,7 +55,7 @@ sysdiagnose_notify_user(uint32_t keycode)
 
 	KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SYSDIAGNOSE, SYSDIAGNOSE_NOTIFY_USER) | DBG_FUNC_START, 0, 0, 0, 0, 0);
 
-	kr = send_sysdiagnose_notification(user_port, keycode);
+	kr = send_sysdiagnose_notification_with_audit_token(user_port, keycode);
 	ipc_port_release_send(user_port);
 	return kr;
 }

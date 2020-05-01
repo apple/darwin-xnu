@@ -115,11 +115,18 @@ typedef struct _lck_mtx_ {
 
 /* Adaptive spin before blocking */
 extern uint64_t         MutexSpin;
+extern uint64_t         low_MutexSpin;
+extern int64_t         high_MutexSpin;
 
 typedef enum lck_mtx_spinwait_ret_type {
 	LCK_MTX_SPINWAIT_ACQUIRED = 0,
-	LCK_MTX_SPINWAIT_SPUN = 1,
-	LCK_MTX_SPINWAIT_NO_SPIN = 2,
+
+	LCK_MTX_SPINWAIT_SPUN_HIGH_THR = 1,
+	LCK_MTX_SPINWAIT_SPUN_OWNER_NOT_CORE = 2,
+	LCK_MTX_SPINWAIT_SPUN_NO_WINDOW_CONTENTION = 3,
+	LCK_MTX_SPINWAIT_SPUN_SLIDING_THR = 4,
+
+	LCK_MTX_SPINWAIT_NO_SPIN = 5,
 } lck_mtx_spinwait_ret_type_t;
 
 extern lck_mtx_spinwait_ret_type_t              lck_mtx_lock_spinwait_x86(lck_mtx_t *mutex);

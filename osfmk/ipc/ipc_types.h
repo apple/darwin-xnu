@@ -62,6 +62,14 @@ typedef struct ipc_pset *ipc_pset_t;
 typedef struct ipc_kmsg *ipc_kmsg_t;
 typedef uint8_t sync_qos_count_t;
 
+typedef uint64_t ipc_label_t;
+#define IPC_LABEL_NONE     ((ipc_label_t)0x0)
+#define IPC_LABEL_DEXT     ((ipc_label_t)0x1)
+#define IPC_LABEL_PLATFORM ((ipc_label_t)0x2)
+#define IPC_LABEL_SPECIAL  ((ipc_label_t)0x3)
+
+typedef struct ipc_kobject_label *ipc_kobject_label_t;
+
 #define IE_NULL ((ipc_entry_t) 0)
 
 #define ITS_NULL        ((ipc_table_size_t) 0)

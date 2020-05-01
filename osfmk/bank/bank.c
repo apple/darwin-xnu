@@ -424,11 +424,12 @@ bank_get_value(
 				panic("Bogus bank type: %d passed in get_value\n", bank_element->be_type);
 			}
 
-			/* Change the persona-id to holder task's persona-id if the task is not spawned in system persona */
+			/* Do not replace persona id if the task is not spawned in system persona */
 			if (unique_persona &&
 			    bank_merchant->bt_persona_id != persona_get_id(system_persona) &&
-			    bank_merchant->bt_persona_id != persona_get_id(proxy_system_persona)) {
-				persona_id = bank_merchant->bt_persona_id;
+			    bank_merchant->bt_persona_id != persona_get_id(proxy_system_persona) &&
+			    bank_merchant->bt_persona_id != persona_id) {
+				return KERN_INVALID_ARGUMENT;
 			}
 
 			if (bank_holder->bt_persona_id == persona_id) {

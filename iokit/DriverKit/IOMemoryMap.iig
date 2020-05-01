@@ -37,7 +37,7 @@
 
 #include <DriverKit/OSObject.iig>
 
-struct IOMemoryMapPrivateState {
+struct _IOMemoryMapPrivateState {
 	uint64_t length;
 	uint64_t offset;
 	uint64_t options;
@@ -91,7 +91,7 @@ class EXTENDS (IOMemoryMap) IOMemoryMapPrivate
 {
 	virtual kern_return_t
 	_CopyState(
-		IOMemoryMapPrivateState * state);
+		_IOMemoryMapPrivateState * state);
 };
 
 #endif /* ! _IOKIT_UIOMEMORYMAP_H */

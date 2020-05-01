@@ -483,7 +483,7 @@ devfs_getattr(struct vnop_getattr_args *ap)
 	VATTR_RETURN(vap, va_nlink, file_node->dn_links);
 	VATTR_RETURN(vap, va_uid, file_node->dn_uid);
 	VATTR_RETURN(vap, va_gid, file_node->dn_gid);
-	VATTR_RETURN(vap, va_fsid, (uintptr_t)file_node->dn_dvm);
+	VATTR_RETURN(vap, va_fsid, (uint32_t)VM_KERNEL_ADDRHASH(file_node->dn_dvm));
 	VATTR_RETURN(vap, va_fileid, (uintptr_t)file_node->dn_ino);
 	VATTR_RETURN(vap, va_data_size, file_node->dn_len);
 

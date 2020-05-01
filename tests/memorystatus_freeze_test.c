@@ -2,6 +2,7 @@
 #include <signal.h>
 #include <sys/sysctl.h>
 #include <sys/kern_memorystatus.h>
+#include <time.h>
 #include <mach-o/dyld.h>
 #include <mach/mach_vm.h>
 #include <mach/vm_page_size.h>  /* Needed for vm_region info */
@@ -36,7 +37,7 @@ T_GLOBAL_META(
 	X(MEMORYSTATUS_CONTROL_FAILED) \
 	X(IS_FREEZABLE_NOT_AS_EXPECTED) \
 	X(MEMSTAT_PRIORITY_CHANGE_FAILED) \
-    X(INVALID_ALLOCATE_PAGES_ARGUMENTS) \
+	X(INVALID_ALLOCATE_PAGES_ARGUMENTS) \
 	X(EXIT_CODE_MAX)
 
 #define EXIT_CODES_ENUM(VAR) VAR,
@@ -599,6 +600,7 @@ memorystatus_assertion_test_demote_frozen()
 	/* these values will remain fixed during testing */
 	int             active_limit_mb = 15;   /* arbitrary */
 	int             inactive_limit_mb = 7;  /* arbitrary */
+	int             demote_value = 1;
 	/* Launch the child process, and elevate its priority */
 	int requestedpriority;
 	dispatch_source_t ds_signal, ds_exit;
@@ -613,8 +615,8 @@ memorystatus_assertion_test_demote_frozen()
 		/* Freeze the process, trigger agressive demotion, and check that it hasn't been demoted. */
 		freeze_process(child_pid);
 		/* Agressive demotion */
-		sysctl_ret = sysctlbyname("kern.memorystatus_demote_frozen_processes", NULL, NULL, NULL, 0);
-		T_ASSERT_POSIX_SUCCESS(sysctl_ret, "sysctl kern.memorystatus_demote_frozen_processes failed");
+		sysctl_ret = sysctlbyname("kern.memorystatus_demote_frozen_processes", NULL, NULL, &demote_value, sizeof(demote_value));
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctl_ret, "sysctl kern.memorystatus_demote_frozen_processes succeeded");
 		/* Check */
 		(void)check_properties(child_pid, requestedpriority, inactive_limit_mb, 0x0, ASSERTION_STATE_IS_SET, "Priority was set");
 		T_LOG("Relinquishing our assertion.");
@@ -622,7 +624,7 @@ memorystatus_assertion_test_demote_frozen()
 		relinquish_assertion_priority(child_pid, 0x0);
 		(void)check_properties(child_pid, JETSAM_PRIORITY_AGING_BAND2, inactive_limit_mb, 0x0, ASSERTION_STATE_IS_RELINQUISHED, "Assertion was reqlinquished.");
 		/* Kill the child */
-		T_QUIET; T_ASSERT_POSIX_SUCCESS(kill(child_pid, SIGKILL), "Unable to kill child process");
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(kill(child_pid, SIGKILL), "Killed child process");
 		T_END;
 	});
 
@@ -649,4 +651,42 @@ memorystatus_assertion_test_demote_frozen()
 
 T_DECL(assertion_test_demote_frozen, "demoted frozen process goes to asserted priority.", T_META_ASROOT(true)) {
 	memorystatus_assertion_test_demote_frozen();
+}
+
+T_DECL(budget_replenishment, "budget replenishes properly") {
+	size_t length;
+	int ret;
+	static unsigned int kTestIntervalSecs = 60 * 60 * 32; // 32 Hours
+	unsigned int memorystatus_freeze_daily_mb_max, memorystatus_freeze_daily_pages_max;
+	static unsigned int kFixedPointFactor = 100;
+	static unsigned int kNumSecondsInDay = 60 * 60 * 24;
+	unsigned int new_budget, expected_new_budget_pages;
+	size_t new_budget_ln;
+	unsigned int page_size = (unsigned int) get_vmpage_size();
+
+	/*
+	 * Calculate a new budget as if the previous interval expired kTestIntervalSecs
+	 * ago and we used up its entire budget.
+	 */
+	length = sizeof(kTestIntervalSecs);
+	new_budget_ln = sizeof(new_budget);
+	ret = sysctlbyname("vm.memorystatus_freeze_calculate_new_budget", &new_budget, &new_budget_ln, &kTestIntervalSecs, length);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "vm.memorystatus_freeze_calculate_new_budget");
+
+	// Grab the daily budget.
+	length = sizeof(memorystatus_freeze_daily_mb_max);
+	ret = sysctlbyname("kern.memorystatus_freeze_daily_mb_max", &memorystatus_freeze_daily_mb_max, &length, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "kern.memorystatus_freeze_daily_mb_max");
+
+	memorystatus_freeze_daily_pages_max = memorystatus_freeze_daily_mb_max * 1024 * 1024 / page_size;
+
+	/*
+	 * We're kTestIntervalSecs past a new interval. Which means we are owed kNumSecondsInDay
+	 * seconds of budget.
+	 */
+	expected_new_budget_pages = memorystatus_freeze_daily_pages_max;
+	expected_new_budget_pages += ((kTestIntervalSecs * kFixedPointFactor) / (kNumSecondsInDay)
+	    * memorystatus_freeze_daily_pages_max) / kFixedPointFactor;
+
+	T_QUIET; T_ASSERT_EQ(new_budget, expected_new_budget_pages, "Calculate new budget behaves correctly.");
 }

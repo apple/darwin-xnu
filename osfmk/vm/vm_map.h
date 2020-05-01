@@ -516,7 +516,8 @@ struct _vm_map {
 	/* boolean_t */ map_disallow_new_exec:1,         /* Disallow new executable code */
 	/* boolean_t */ jit_entry_exists:1,
 	/* boolean_t */ has_corpse_footprint:1,
-	/* reserved */ pad:20;
+	/* boolean_t */ terminated:1,
+	/* reserved */ pad:19;
 	unsigned int            timestamp;      /* Version number */
 };
 
@@ -1347,6 +1348,9 @@ extern kern_return_t    vm_map_enter_mem_object_control(
 	vm_prot_t               cur_protection,
 	vm_prot_t               max_protection,
 	vm_inherit_t            inheritance);
+
+extern kern_return_t    vm_map_terminate(
+	vm_map_t                map);
 
 #endif /* !XNU_KERNEL_PRIVATE */
 

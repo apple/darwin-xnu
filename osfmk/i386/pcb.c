@@ -1961,7 +1961,17 @@ machine_thread_init(void)
 	fpu_module_init();
 }
 
+/*
+ * machine_thread_template_init: Initialize machine-specific portion of
+ * the thread template.
+ */
+void
+machine_thread_template_init(thread_t thr_template)
+{
+	assert(fpu_default != UNDEFINED);
 
+	THREAD_TO_PCB(thr_template)->xstate = fpu_default;
+}
 
 user_addr_t
 get_useraddr(void)

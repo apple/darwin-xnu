@@ -1222,7 +1222,6 @@ IOService::handleRegisterPowerDriver( IOPMRequest * request )
 		lowestPowerState   = fPowerStates[0].stateOrderToIndex;
 		fHighestPowerState = fPowerStates[numberOfStates - 1].stateOrderToIndex;
 
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 		{
 			uint32_t        aotFlags;
 			IOService *     service;
@@ -1254,7 +1253,6 @@ IOService::handleRegisterPowerDriver( IOPMRequest * request )
 				}
 			}
 		}
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 		// OR'in all the output power flags
 		fMergedOutputPowerFlags = 0;
@@ -1975,11 +1973,9 @@ IOService::handlePowerDomainDidChangeTo( IOPMRequest * request )
 		myChangeFlags = kIOPMParentInitiated | kIOPMDomainDidChange |
 		    (parentChangeFlags & kIOPMRootBroadcastFlags);
 
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 		if (kIOPMAOTPower & fPowerStates[maxPowerState].inputPowerFlags) {
 			IOLog("aotPS %s0x%qx[%ld]\n", getName(), getRegistryEntryID(), maxPowerState);
 		}
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 		result = startPowerChange(
 			/* flags        */ myChangeFlags,
@@ -2747,14 +2743,12 @@ IOService::computeDesiredState( unsigned long localClamp, bool computeOnly )
 		newPowerState = fHighestPowerState;
 	}
 
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 	if (getPMRootDomain()->isAOTMode()) {
 		if ((kIOPMPreventIdleSleep & fPowerStates[newPowerState].capabilityFlags)
 		    && !(kIOPMPreventIdleSleep & fPowerStates[fDesiredPowerState].capabilityFlags)) {
 			getPMRootDomain()->claimSystemWakeEvent(this, kIOPMWakeEventAOTExit, getName(), NULL);
 		}
 	}
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 	fDesiredPowerState = newPowerState;
 
@@ -5998,11 +5992,9 @@ IOService::pmTellAppWithResponse( OSObject * object, void * arg )
 				proc_suspended = get_task_pidsuspended((task_t) proc->task);
 				if (proc_suspended) {
 					logClientIDForNotification(object, context, "PMTellAppWithResponse - Suspended");
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 				} else if (getPMRootDomain()->isAOTMode() && get_task_suspended((task_t) proc->task)) {
 					proc_suspended = true;
 					context->skippedInDark++;
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 				}
 				proc_rele(proc);
 				if (proc_suspended) {
@@ -6213,11 +6205,7 @@ IOService::pmTellCapabilityAppWithResponse( OSObject * object, void * arg )
 	}
 
 	if (context->us == getPMRootDomain() &&
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 	    getPMRootDomain()->isAOTMode()
-#else /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
-	    false
-#endif /* (defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 	    ) {
 		OSNumber                *clientID = NULL;
 		boolean_t               proc_suspended = FALSE;
@@ -6605,11 +6593,9 @@ tellAppClientApplier( OSObject * object, void * arg )
 				proc_suspended = get_task_pidsuspended((task_t) proc->task);
 				if (proc_suspended) {
 					logClientIDForNotification(object, context, "tellAppClientApplier - Suspended");
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 				} else if (IOService::getPMRootDomain()->isAOTMode() && get_task_suspended((task_t) proc->task)) {
 					proc_suspended = true;
 					context->skippedInDark++;
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 				}
 				proc_rele(proc);
 				if (proc_suspended) {

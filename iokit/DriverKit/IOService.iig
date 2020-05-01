@@ -40,6 +40,7 @@
 class IOMemoryDescriptor;
 class IOBufferMemoryDescriptor;
 class IOUserClient;
+class OSAction;
 
 typedef char IOServiceName[128];
 typedef char IOPropertyName[128];
@@ -245,7 +246,83 @@ public:
 	Create(
 		IOService          * provider,
 		const IOPropertyName propertiesKey,
-		IOService         ** result);
+		IOService         ** result) LOCAL;
+
+    /*!
+     * @brief       Start an IOService termination.
+     * @discussion  An IOService object created with Create() may be removed by calling Terminate().
+     *              The termination is asynchronous and will later call Stop() on the service.
+     * @param       options No options are currently defined, pass zero.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	Terminate(
+		uint64_t			 options);
+
+   /*!
+    * @brief       Obtain supportable properties describing the provider chain.
+    * @discussion  Obtain supportable properties describing the provider chain. This will be a subset of registry
+    *              properties the OS considers supportable.
+    *              The array is ordered with a dictionary of properties for each entry in the provider chain from this
+    *              service towards the root.
+    * @param       propertyKeys If only certain property values are need, they may be passed in this array.
+    * @param       properties Returned, retained array of dictionaries of properties or NULL. The caller should release
+    *              this array.
+    * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+    */
+	virtual kern_return_t
+	CopyProviderProperties(
+		OSArray  * propertyKeys,
+		OSArray ** properties);
+
+
+	/*! @function IOCreatePropertyMatchingDictionary
+	 *   @abstract Construct a matching dictionary for property matching.
+	 */
+	static OSDictionary *
+	CreatePropertyMatchingDictionary(const char * key, OSObjectPtr value, OSDictionary * matching) LOCALONLY;
+
+	/*! @function IOCreatePropertyMatchingDictionary
+	 *   @abstract Construct a matching dictionary for property matching.
+	 */
+	static OSDictionary *
+	CreatePropertyMatchingDictionary(const char * key, const char * stringValue, OSDictionary * matching) LOCALONLY;
+
+	/*! @function IOCreateKernelClassMatchingDictionary
+	 *   @abstract Construct a matching dictionary for kernel class matching.
+	 */
+	static OSDictionary *
+	CreateKernelClassMatchingDictionary(OSString * className, OSDictionary * matching) LOCALONLY;
+
+	/*! @function IOCreateKernelClassMatchingDictionary
+	 *   @abstract Construct a matching dictionary for kernel class matching.
+	 */
+	static OSDictionary *
+	CreateKernelClassMatchingDictionary(const char * className, OSDictionary * matching) LOCALONLY;
+
+	/*! @function IOCreateUserClassMatchingDictionary
+	 *   @abstract Construct a matching dictionary for user class matching.
+	 */
+	static OSDictionary *
+	CreateUserClassMatchingDictionary(OSString * className, OSDictionary * matching) LOCALONLY;
+
+	/*! @function IOCreateUserClassMatchingDictionary
+	 *   @abstract Construct a matching dictionary for user class matching.
+	 */
+	static OSDictionary *
+	CreateUserClassMatchingDictionary(const char * className, OSDictionary * matching) LOCALONLY;
+
+	/*! @function IOCreateNameMatchingDictionary
+	 *   @abstract Construct a matching dictionary for IOService name matching.
+	 */
+	static OSDictionary *
+	CreateNameMatchingDictionary(OSString * serviceName, OSDictionary * matching) LOCALONLY;
+
+	/*! @function IOCreateNameMatchingDictionary
+	 *   @abstract Construct a matching dictionary for IOService name matching.
+	 */
+	static OSDictionary *
+	CreateNameMatchingDictionary(const char * serviceName, OSDictionary * matching) LOCALONLY;
 };
 
 #endif /* ! _IOKIT_UIOSERVICE_H */

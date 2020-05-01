@@ -69,6 +69,12 @@
 #define kIOProbeScoreKey                "IOProbeScore"
 #define kIOKitDebugKey                  "IOKitDebug"
 
+// Properties to be supported as API
+#define kIOSupportedPropertiesKey       "IOSupportedProperties"
+// Properties writable by dexts
+#define kIOUserServicePropertiesKey     "IOUserServiceProperties"
+
+
 // IOService matching property names
 #define kIOProviderClassKey             "IOProviderClass"
 #define kIONameMatchKey                 "IONameMatch"

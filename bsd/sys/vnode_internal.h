@@ -449,7 +449,6 @@ int vn_authorize_renamex(struct vnode *fdvp, struct vnode *fvp, struct component
 int vn_authorize_renamex_with_paths(struct vnode *fdvp, struct vnode *fvp, struct componentname *fcnp, const char *from_path,
     struct vnode *tdvp, struct vnode *tvp, struct componentname *tcnp, const char *to_path,
     vfs_context_t ctx, vfs_rename_flags_t flags, void *reserved);
-int     vn_authorize_rmdir(vnode_t dvp, vnode_t vp, struct componentname *cnp, vfs_context_t ctx, void *reserved);
 
 typedef int (*vn_create_authorizer_t)(vnode_t, struct componentname *, struct vnode_attr *, vfs_context_t, void*);
 int vn_authorize_mkdir(vnode_t, struct componentname *, struct vnode_attr *, vfs_context_t, void*);

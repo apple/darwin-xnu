@@ -540,6 +540,17 @@ extern void munge_user32_stat64(struct stat64 *sbp, struct user32_stat64 *usbp);
 #endif
 #endif
 
+/*
+ * Extended flags ("EF") returned by ATTR_CMNEXT_EXT_FLAGS from getattrlist/getattrlistbulk
+ */
+#define EF_MAY_SHARE_BLOCKS     0x00000001      /* file may share blocks with another file */
+#define EF_NO_XATTRS            0x00000002      /* file has no xattrs at all */
+#define EF_IS_SYNC_ROOT         0x00000004      /* file is a sync root for iCloud */
+#define EF_IS_PURGEABLE         0x00000008      /* file is purgeable */
+#define EF_IS_SPARSE            0x00000010      /* file has at least one sparse region */
+
+
+
 #ifndef KERNEL
 
 __BEGIN_DECLS

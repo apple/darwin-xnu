@@ -155,6 +155,8 @@ LEXT(Switch_context)
 	add		r3, r3, SS_R4
 	stmia		r3!, {r4-r14}					// Save general registers to pcb
 switch_threads:
+	ldr		r3, [r2, ACT_CPUDATAP]
+	str		r2, [r3, CPU_ACTIVE_THREAD]
 	ldr		r3, [r2, TH_KSTACKPTR]				// get kernel stack top
 	mcr		p15, 0, r2, c13, c0, 4				// Write TPIDRPRW
 	ldr		r6, [r2, TH_CTH_SELF]

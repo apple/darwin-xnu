@@ -139,6 +139,8 @@
 #include <machine/machine_routines.h>
 #include <machine/exec.h>
 
+#include <nfs/nfs_conf.h>
+
 #include <vm/vm_protos.h>
 #include <vm/vm_pageout.h>
 #include <vm/vm_compressor_algorithms.h>
@@ -232,7 +234,7 @@ fill_user32_proc(proc_t, struct user32_kinfo_proc *__restrict);
 
 extern int
 kdbg_control(int *name, u_int namelen, user_addr_t where, size_t * sizep);
-#if NFSCLIENT
+#if CONFIG_NFS_CLIENT
 extern int
 netboot_root(void);
 #endif
@@ -282,7 +284,7 @@ STATIC int sysctl_hostname(struct sysctl_oid *oidp, void *arg1, int arg2, struct
 STATIC int sysctl_procname(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
 STATIC int sysctl_boottime(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
 STATIC int sysctl_symfile(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
-#if NFSCLIENT
+#if CONFIG_NFS_CLIENT
 STATIC int sysctl_netboot(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
 #endif
 #ifdef CONFIG_IMGSRC_ACCESS
@@ -2347,7 +2349,7 @@ SYSCTL_PROC(_kern, KERN_SYMFILE, symfile,
     CTLTYPE_STRING | CTLFLAG_RD | CTLFLAG_LOCKED,
     0, 0, sysctl_symfile, "A", "");
 
-#if NFSCLIENT
+#if CONFIG_NFS_CLIENT
 STATIC int
 sysctl_netboot
 (__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
@@ -4440,6 +4442,41 @@ SYSCTL_PROC(_kern, OID_AUTO, grade_cputype,
 
 #if DEVELOPMENT || DEBUG
 
+extern void do_cseg_wedge_thread(void);
+extern void do_cseg_unwedge_thread(void);
+
+static int
+cseg_wedge_thread SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+
+	int error, val = 0;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error || val == 0) {
+		return error;
+	}
+
+	do_cseg_wedge_thread();
+	return 0;
+}
+SYSCTL_PROC(_kern, OID_AUTO, cseg_wedge_thread, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_MASKED, 0, 0, cseg_wedge_thread, "I", "wedge c_seg thread");
+
+static int
+cseg_unwedge_thread SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+
+	int error, val = 0;
+	error = sysctl_handle_int(oidp, &val, 0, req);
+	if (error || val == 0) {
+		return error;
+	}
+
+	do_cseg_unwedge_thread();
+	return 0;
+}
+SYSCTL_PROC(_kern, OID_AUTO, cseg_unwedge_thread, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_MASKED, 0, 0, cseg_unwedge_thread, "I", "unstuck c_seg thread");
+
 static atomic_int wedge_thread_should_wake = 0;
 
 static int
@@ -4792,8 +4829,42 @@ SYSCTL_PROC(_kern, OID_AUTO, test_mtx_uncontended, CTLTYPE_STRING | CTLFLAG_MASK
 
 extern uint64_t MutexSpin;
 
-SYSCTL_QUAD(_kern, OID_AUTO, mutex_spin_us, CTLFLAG_RW, &MutexSpin,
-    "Spin time for acquiring a kernel mutex");
+SYSCTL_QUAD(_kern, OID_AUTO, mutex_spin_abs, CTLFLAG_RW, &MutexSpin,
+    "Spin time in abs for acquiring a kernel mutex");
+
+extern uint64_t low_MutexSpin;
+extern int64_t high_MutexSpin;
+extern unsigned int real_ncpus;
+
+SYSCTL_QUAD(_kern, OID_AUTO, low_mutex_spin_abs, CTLFLAG_RW, &low_MutexSpin,
+    "Low spin threshold in abs for acquiring a kernel mutex");
+
+static int
+sysctl_high_mutex_spin_ns SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	int error;
+	int64_t val = 0;
+	int64_t res;
+
+	/* Check if the user is writing to high_MutexSpin, or just reading it */
+	if (req->newptr) {
+		error = SYSCTL_IN(req, &val, sizeof(val));
+		if (error || (val < 0 && val != -1)) {
+			return error;
+		}
+		high_MutexSpin = val;
+	}
+
+	if (high_MutexSpin >= 0) {
+		res = high_MutexSpin;
+	} else {
+		res = low_MutexSpin * real_ncpus;
+	}
+	return SYSCTL_OUT(req, &res, sizeof(res));
+}
+SYSCTL_PROC(_kern, OID_AUTO, high_mutex_spin_abs, CTLFLAG_RW | CTLTYPE_QUAD, 0, 0, sysctl_high_mutex_spin_ns, "I",
+    "High spin threshold in abs for acquiring a kernel mutex");
 
 #if defined (__x86_64__)
 

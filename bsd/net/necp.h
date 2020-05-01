@@ -169,9 +169,14 @@ struct necp_packet_header {
 #define NECP_POLICY_RESULT_USE_NETAGENT                 14      // netagent uuid_t
 #define NECP_POLICY_RESULT_NETAGENT_SCOPED              15      // netagent uuid_t
 #define NECP_POLICY_RESULT_SCOPED_DIRECT                16      // N/A, scopes to primary physical interface
-#define NECP_POLICY_RESULT_ALLOW_UNENTITLED                             17              // N/A
+#define NECP_POLICY_RESULT_ALLOW_UNENTITLED             17      // N/A
 
-#define NECP_POLICY_RESULT_MAX                                  NECP_POLICY_RESULT_ALLOW_UNENTITLED
+#define NECP_POLICY_RESULT_MAX                          NECP_POLICY_RESULT_ALLOW_UNENTITLED
+
+/*
+ * PASS Result Flags
+ */
+#define NECP_POLICY_PASS_NO_SKIP_IPSEC                  0x01
 
 /*
  * Route Rules
@@ -238,11 +243,15 @@ struct necp_policy_condition_agent_type {
 
 #define NECP_SESSION_PRIORITY_UNKNOWN                   0
 #define NECP_SESSION_PRIORITY_CONTROL                   1
-#define NECP_SESSION_PRIORITY_PRIVILEGED_TUNNEL 2
-#define NECP_SESSION_PRIORITY_HIGH                              3
-#define NECP_SESSION_PRIORITY_DEFAULT                   4
-#define NECP_SESSION_PRIORITY_LOW                               5
-
+#define NECP_SESSION_PRIORITY_PRIVILEGED_TUNNEL         2
+#define NECP_SESSION_PRIORITY_HIGH                      3
+#define NECP_SESSION_PRIORITY_HIGH_1                    4
+#define NECP_SESSION_PRIORITY_HIGH_2                    5
+#define NECP_SESSION_PRIORITY_HIGH_3                    6
+#define NECP_SESSION_PRIORITY_HIGH_4                    7
+#define NECP_SESSION_PRIORITY_HIGH_RESTRICTED           8
+#define NECP_SESSION_PRIORITY_DEFAULT                   9
+#define NECP_SESSION_PRIORITY_LOW                       10
 #define NECP_SESSION_NUM_PRIORITIES                             NECP_SESSION_PRIORITY_LOW
 
 typedef u_int32_t necp_policy_id;
@@ -685,6 +694,8 @@ struct necp_client_result_interface {
 	u_int32_t index;
 };
 
+#define NECP_USES_INTERFACE_OPTIONS_FOR_BROWSE 1
+
 struct necp_client_interface_option {
 	u_int32_t interface_index;
 	u_int32_t interface_generation;
@@ -846,7 +857,8 @@ extern int necp_application_find_policy_match_internal(proc_t proc, u_int8_t *pa
     struct necp_client_endpoint *returned_v4_gateway,
     struct necp_client_endpoint *returned_v6_gateway,
     struct rtentry **returned_route, bool ignore_address,
-    bool has_client);
+    bool has_client,
+    uuid_t *returned_override_euuid);
 /*
  * TLV utilities
  *
@@ -922,7 +934,9 @@ typedef u_int32_t necp_app_id;
 #define NECP_KERNEL_POLICY_RESULT_USE_NETAGENT                  NECP_POLICY_RESULT_USE_NETAGENT
 #define NECP_KERNEL_POLICY_RESULT_NETAGENT_SCOPED               NECP_POLICY_RESULT_NETAGENT_SCOPED
 #define NECP_KERNEL_POLICY_RESULT_SCOPED_DIRECT                 NECP_POLICY_RESULT_SCOPED_DIRECT
-#define NECP_KERNEL_POLICY_RESULT_ALLOW_UNENTITLED                                  NECP_POLICY_RESULT_ALLOW_UNENTITLED
+#define NECP_KERNEL_POLICY_RESULT_ALLOW_UNENTITLED              NECP_POLICY_RESULT_ALLOW_UNENTITLED
+
+#define NECP_KERNEL_POLICY_PASS_NO_SKIP_IPSEC                   NECP_POLICY_PASS_NO_SKIP_IPSEC
 
 typedef struct {
 	u_int32_t identifier;
@@ -937,6 +951,7 @@ typedef union {
 	u_int32_t                                       skip_policy_order;
 	u_int32_t                                       route_rule_id;
 	u_int32_t                                       netagent_id;
+	u_int32_t                                       pass_flags;
 	necp_kernel_policy_service      service;
 } necp_kernel_policy_result_parameter;
 

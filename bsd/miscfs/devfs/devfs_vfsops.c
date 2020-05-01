@@ -202,7 +202,7 @@ devfs_mount(struct mount *mp, __unused vnode_t devvp, __unused user_addr_t data,
 	 *  Fill out some fields
 	 */
 	__IGNORE_WCASTALIGN(mp->mnt_data = (qaddr_t)devfs_mp_p);
-	mp->mnt_vfsstat.f_fsid.val[0] = (int32_t)(uintptr_t)devfs_mp_p;
+	mp->mnt_vfsstat.f_fsid.val[0] = (int32_t)VM_KERNEL_ADDRHASH(devfs_mp_p);
 	mp->mnt_vfsstat.f_fsid.val[1] = vfs_typenum(mp);
 	mp->mnt_flag |= MNT_LOCAL;
 
@@ -308,7 +308,7 @@ devfs_statfs( struct mount *mp, struct vfsstatfs *sbp, __unused vfs_context_t ct
 	sbp->f_bavail = 0;
 	sbp->f_files  = devfs_stats.nodes;
 	sbp->f_ffree  = 0;
-	sbp->f_fsid.val[0] = (int32_t)(uintptr_t)devfs_mp_p;
+	sbp->f_fsid.val[0] = (int32_t)VM_KERNEL_ADDRHASH(devfs_mp_p);
 	sbp->f_fsid.val[1] = vfs_typenum(mp);
 
 	return 0;

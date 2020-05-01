@@ -155,6 +155,15 @@ mach_msg_rpc_from_kernel_proper(
 
 #define mach_msg_rpc_from_kernel mach_msg_rpc_from_kernel_proper
 
+#ifdef XNU_KERNEL_PRIVATE
+mach_msg_return_t kernel_mach_msg_rpc(
+	mach_msg_header_t               *msg,
+	mach_msg_size_t                     send_size,
+	mach_msg_size_t                     rcv_size,
+	boolean_t                           legacy,
+	boolean_t                           *message_moved);
+#endif /* XNU_KERNEL_PRIVATE */
+
 extern void
 mach_msg_destroy_from_kernel_proper(
 	mach_msg_header_t       *msg);
@@ -167,6 +176,13 @@ extern mach_msg_return_t mach_msg_send_from_kernel_with_options_legacy(
 	mach_msg_size_t         send_size,
 	mach_msg_option_t       option,
 	mach_msg_timeout_t      timeout_val);
+
+extern mach_msg_return_t kernel_mach_msg_send(
+	mach_msg_header_t       *msg,
+	mach_msg_size_t         send_size,
+	mach_msg_option_t       option,
+	mach_msg_timeout_t      timeout_val,
+	boolean_t               *message_moved);
 
 extern mach_msg_return_t mach_msg_send_from_kernel_with_options(
 	mach_msg_header_t       *msg,
@@ -187,9 +203,6 @@ __END_DECLS
 #ifdef  MACH_KERNEL_PRIVATE
 
 extern void mach_msg_receive_continue(void);
-
-/* Initialize kernel server dispatch table */
-extern void             mig_init(void);
 
 /*
  * Kernel implementation of the MIG object base class

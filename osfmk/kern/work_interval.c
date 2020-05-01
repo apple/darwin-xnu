@@ -129,7 +129,7 @@ work_interval_port_convert_locked(ipc_port_t port)
 		return NULL;
 	}
 
-	work_interval = (struct work_interval *)port->ip_kobject;
+	work_interval = (struct work_interval *) ip_get_kobject(port);
 
 	wi_retain(work_interval);
 
@@ -228,7 +228,7 @@ work_interval_port_notify(mach_msg_header_t *msg)
 		    port, port->ip_srights);
 	}
 
-	work_interval = (struct work_interval *)port->ip_kobject;
+	work_interval = (struct work_interval *) ip_get_kobject(port);
 
 	if (work_interval == NULL) {
 		panic("work_interval_port_notify(): missing kobject: %p", port);

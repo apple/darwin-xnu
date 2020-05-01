@@ -248,6 +248,10 @@ lck_mtx_lock_spin_always(
 	 * well as destroyed mutexes.
 	 */
 
+	if (state & (LCK_MTX_ILOCKED_MSK | LCK_MTX_SPIN_MSK)) {
+		return lck_mtx_lock_spin_slow(lock);
+	}
+
 	/* Note LCK_MTX_SPIN_MSK is set only if LCK_MTX_ILOCKED_MSK is set */
 	prev = state & ~(LCK_MTX_ILOCKED_MSK | LCK_MTX_MLOCKED_MSK);
 	state = prev | LCK_MTX_ILOCKED_MSK | LCK_MTX_SPIN_MSK;

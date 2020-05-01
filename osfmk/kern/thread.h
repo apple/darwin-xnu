@@ -675,7 +675,9 @@ struct thread {
 #define assert_thread_magic(thread) do { (void)(thread); } while (0)
 #endif
 
-extern void                     thread_bootstrap(void);
+extern thread_t                 thread_bootstrap(void);
+
+extern void                     thread_machine_init_template(void);
 
 extern void                     thread_init(void);
 
@@ -861,7 +863,9 @@ extern kern_return_t    machine_thread_dup(
 	thread_t                target,
 	boolean_t               is_corpse);
 
-extern void                             machine_thread_init(void);
+extern void             machine_thread_init(void);
+
+extern void             machine_thread_template_init(thread_t thr_template);
 
 extern kern_return_t    machine_thread_create(
 	thread_t                thread,

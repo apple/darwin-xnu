@@ -375,8 +375,10 @@ arm_init(
 	    + ((uintptr_t)&BootCpuData
 	    - (uintptr_t)(args->virtBase)));
 
-	thread_bootstrap();
-	thread = current_thread();
+	thread = thread_bootstrap();
+	thread->machine.CpuDatap = &BootCpuData;
+	machine_set_current_thread(thread);
+
 	/*
 	 * Preemption is enabled for this thread so that it can lock mutexes without
 	 * tripping the preemption check. In reality scheduling is not enabled until
@@ -384,7 +386,6 @@ arm_init(
 	 * preemption level is not really meaningful for the bootstrap thread.
 	 */
 	thread->machine.preemption_count = 0;
-	thread->machine.CpuDatap = &BootCpuData;
 #if     __arm__ && __ARM_USER_PROTECT__
 	{
 		unsigned int ttbr0_val, ttbr1_val, ttbcr_val;

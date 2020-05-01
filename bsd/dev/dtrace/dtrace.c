@@ -18660,7 +18660,7 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 		 * Range check the count. How much data can we pass around?
 		 * FIX ME!
 		 */
-		if (dtmodsyms_count == 0 || (dtmodsyms_count > 100 * 1024)) {
+		if (dtmodsyms_count == 0) {
 			cmn_err(CE_WARN, "dtmodsyms_count is not valid");
 			return (EINVAL);
 		}
@@ -18669,6 +18669,12 @@ dtrace_ioctl(dev_t dev, u_long cmd, user_addr_t arg, int md, cred_t *cr, int *rv
 		 * Allocate a correctly sized structure and copyin the data.
 		 */
 		module_symbols_size = DTRACE_MODULE_SYMBOLS_SIZE(dtmodsyms_count);
+		if (module_symbols_size > (size_t)dtrace_copy_maxsize()) {
+			size_t dtmodsyms_max = DTRACE_MODULE_SYMBOLS_COUNT(dtrace_copy_maxsize());
+			cmn_err(CE_WARN, "dtmodsyms_count %ld is too high, maximum is %ld", dtmodsyms_count, dtmodsyms_max);
+			return (ENOBUFS);
+		}
+
 		if ((module_symbols = kmem_alloc(module_symbols_size, KM_SLEEP)) == NULL) 
 			return (ENOMEM);
 			

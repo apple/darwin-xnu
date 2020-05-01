@@ -978,39 +978,47 @@ after_sack_rexmit:
 	 * know that foreign host supports TAO, suppress sending segment.
 	 */
 	if ((flags & TH_SYN) && SEQ_GT(tp->snd_nxt, tp->snd_una)) {
-		if (tp->t_state != TCPS_SYN_RECEIVED || tfo_enabled(tp))
-			flags &= ~TH_SYN;
-		off--;
-		len++;
-		if (len > 0 && tp->t_state == TCPS_SYN_SENT) {
-			while (inp->inp_sndinprog_cnt == 0 &&
-				tp->t_pktlist_head != NULL) {
-				packetlist = tp->t_pktlist_head;
-				packchain_listadd = tp->t_lastchain;
-				packchain_sent++;
-				TCP_PKTLIST_CLEAR(tp);
-
-				error = tcp_ip_output(so, tp, packetlist,
-				    packchain_listadd, tp_inp_options,
-				    (so_options & SO_DONTROUTE),
-				    (sack_rxmit || (sack_bytes_rxmt != 0)),
-				    isipv6);
+		if (tp->t_state == TCPS_SYN_RECEIVED && tfo_enabled(tp) && tp->snd_nxt == tp->snd_una + 1) {
+			/* We are sending the SYN again! */
+			off--;
+			len++;
+		} else {
+			if (tp->t_state != TCPS_SYN_RECEIVED || tfo_enabled(tp)) {
+				flags &= ~TH_SYN;
 			}
 
-			/*
-			 * tcp was closed while we were in ip,
-			 * resume close
-			 */
-			if (inp->inp_sndinprog_cnt == 0 &&
-				(tp->t_flags & TF_CLOSING)) {
-				tp->t_flags &= ~TF_CLOSING;
-				(void) tcp_close(tp);
-			} else {
-				tcp_check_timer_state(tp);
+			off--;
+			len++;
+			if (len > 0 && tp->t_state == TCPS_SYN_SENT) {
+				while (inp->inp_sndinprog_cnt == 0 &&
+					tp->t_pktlist_head != NULL) {
+					packetlist = tp->t_pktlist_head;
+					packchain_listadd = tp->t_lastchain;
+					packchain_sent++;
+					TCP_PKTLIST_CLEAR(tp);
+
+					error = tcp_ip_output(so, tp, packetlist,
+					    packchain_listadd, tp_inp_options,
+					    (so_options & SO_DONTROUTE),
+					    (sack_rxmit || (sack_bytes_rxmt != 0)),
+					    isipv6);
+				}
+
+				/*
+				 * tcp was closed while we were in ip,
+				 * resume close
+				 */
+				if (inp->inp_sndinprog_cnt == 0 &&
+					(tp->t_flags & TF_CLOSING)) {
+					tp->t_flags &= ~TF_CLOSING;
+					(void) tcp_close(tp);
+				} else {
+					tcp_check_timer_state(tp);
+				}
+				KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END,
+				    0,0,0,0,0);
+				return 0;
 			}
-			KERNEL_DEBUG(DBG_FNC_TCP_OUTPUT | DBG_FUNC_END,
-			    0,0,0,0,0);
-			return 0;
 		}
 	}
 

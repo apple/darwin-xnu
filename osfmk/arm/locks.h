@@ -111,6 +111,8 @@ typedef struct _lck_mtx_ {
 #define LCK_FRAMES_MAX  8
 
 extern uint64_t         MutexSpin;
+extern uint64_t         low_MutexSpin;
+extern int64_t          high_MutexSpin;
 
 typedef struct {
 	unsigned int            type;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -130,9 +130,9 @@
 #include <libkern/crc.h>
 
 #if     DEBUG || DEVELOPMENT
-#define DPRINTF(x...)   kprintf(x)
+#define DPRINTF(x ...)   kprintf(x)
 #else
-#define DPRINTF(x...)
+#define DPRINTF(x ...)
 #endif
 
 #ifndef ROUNDUP
@@ -411,7 +411,7 @@ efi_set_tables_64(EFI_SYSTEM_TABLE_64 * system_table)
 		}
 
 		gPEEFIRuntimeServices = runtime;
-	}while (FALSE);
+	} while (FALSE);
 }
 
 static void
@@ -489,7 +489,7 @@ efi_set_tables_32(EFI_SYSTEM_TABLE_32 * system_table)
 		DPRINTF("  ResetSystem              : 0x%x\n", runtime->ResetSystem);
 
 		gPEEFIRuntimeServices = runtime;
-	}while (FALSE);
+	} while (FALSE);
 }
 
 
@@ -501,7 +501,7 @@ efi_init(void)
 
 	kprintf("Initializing EFI runtime services\n");
 
-	do{
+	do {
 		vm_offset_t vm_size, vm_addr;
 		vm_map_offset_t phys_addr;
 		EfiMemoryRange *mptr;
@@ -554,7 +554,7 @@ efi_init(void)
 		} else {
 			efi_set_tables_32((EFI_SYSTEM_TABLE_32 *) ml_static_ptovirt(args->efiSystemTable));
 		}
-	}while (FALSE);
+	} while (FALSE);
 
 	return;
 }
@@ -578,7 +578,7 @@ hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t system_table_o
 
 	kprintf("Reinitializing EFI runtime services\n");
 
-	do{
+	do {
 		vm_offset_t vm_size, vm_addr;
 		vm_map_offset_t phys_addr;
 		EfiMemoryRange *mptr;
@@ -647,7 +647,7 @@ hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t system_table_o
 		} else {
 			efi_set_tables_32((EFI_SYSTEM_TABLE_32 *) ml_static_ptovirt(args->efiSystemTable));
 		}
-	}while (FALSE);
+	} while (FALSE);
 
 	kprintf("Done reinitializing EFI runtime services\n");
 
@@ -956,7 +956,7 @@ SavePanicInfo(
 		/* Special handling of launchd died panics */
 		print_launchd_info();
 	} else {
-		panic_i386_backtrace(stackptr, ((panic_double_fault_cpu == cn) ? 80: 48), debugger_msg, FALSE, NULL);
+		panic_i386_backtrace(stackptr, ((panic_double_fault_cpu == cn) ? 80 : 48), debugger_msg, FALSE, NULL);
 	}
 
 	if (panic_options & DEBUGGER_OPTION_COPROC_INITIATED_PANIC) {
@@ -1247,6 +1247,11 @@ panic_i386_backtrace(void *_frame, int nframes, const char *msg, boolean_t regdu
 	boolean_t keepsyms = FALSE;
 	int cn = cpu_number();
 	boolean_t old_doprnt_hide_pointers = doprnt_hide_pointers;
+
+#if DEVELOPMENT || DEBUG
+	/* Turn off I/O tracing now that we're panicking */
+	mmiotrace_enabled = 0;
+#endif
 
 	if (pbtcpu != cn) {
 		os_atomic_inc(&pbtcnt, relaxed);

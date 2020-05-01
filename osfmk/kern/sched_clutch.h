@@ -59,6 +59,17 @@
 #define SCHED_CLUTCH_THREAD_ELIGIBLE(thread)    ((thread->bound_processor) == PROCESSOR_NULL)
 
 /*
+ * Clutch Bucket Runqueue Structure.
+ */
+struct sched_clutch_bucket_runq {
+	int                     scbrq_highq;
+	bitmap_t                scbrq_bitmap[BITMAP_LEN(NRQS_MAX)];
+	int                     scbrq_count;
+	circle_queue_head_t     scbrq_queues[NRQS_MAX];
+};
+typedef struct sched_clutch_bucket_runq *sched_clutch_bucket_runq_t;
+
+/*
  *
  * Clutch hierarchy locking protocol
  *
@@ -84,7 +95,7 @@ struct sched_clutch_root_bucket {
 	/* (I) sched bucket represented by this root bucket */
 	uint8_t                         scrb_bucket;
 	/* (P) priority queue for all clutch buckets in this sched bucket */
-	struct priority_queue           scrb_clutch_buckets;
+	struct sched_clutch_bucket_runq scrb_clutch_buckets;
 	/* (P) priority queue entry to use for enqueueing root bucket into root prioq */
 	struct priority_queue_entry     scrb_pqlink;
 	/* (P) ageout deadline for this root bucket */
@@ -226,8 +237,8 @@ struct sched_clutch_bucket {
 	/* (A) CPU usage information for the clutch bucket */
 	sched_clutch_bucket_cpu_data_t  scb_cpu_data;
 
-	/* (P) linkage for clutch_bucket in root_bucket priority queue */
-	struct priority_queue_entry     scb_pqlink;
+	/* (P) linkage for clutch_bucket in root_bucket runqueue */
+	queue_chain_t                   scb_runqlink;
 	/* (I) clutch to which this clutch bucket belongs */
 	struct sched_clutch             *scb_clutch;
 	/* (A) pointer to the root of the hierarchy this bucket is in */

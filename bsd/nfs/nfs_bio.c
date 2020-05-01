@@ -64,6 +64,10 @@
  *	@(#)nfs_bio.c	8.9 (Berkeley) 3/30/95
  * FreeBSD-Id: nfs_bio.c,v 1.44 1997/09/10 19:52:25 phk Exp $
  */
+
+#include <nfs/nfs_conf.h>
+#if CONFIG_NFS_CLIENT
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/resourcevar.h>
@@ -4152,3 +4156,5 @@ nfs_buf_readdir(struct nfsbuf *bp, vfs_context_t ctx)
 	}
 	return error;
 }
+
+#endif /* CONFIG_NFS_CLIENT */

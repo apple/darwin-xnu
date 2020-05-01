@@ -76,6 +76,8 @@ subsystem
 #include <mach/mach_types.defs>
 #include <mach_debug/mach_debug_types.defs>
 
+type kobject_description_t = c_string[*:512];
+
 /*
  *	Returns the set of port and port set names
  *	to which the target task has access, along with
@@ -657,5 +659,18 @@ routine mach_port_swap_guard(
 #else
 		new_guard	: uint64_t);
 #endif
+
+/*
+ *	Return the type and address of the kernel object
+ *	that the given send/receive right represents.
+ *      This call is only valid on MACH_IPC_DEBUG kernels.
+ *      Otherwise, KERN_FAILURE is returned.
+ */
+routine	mach_port_kobject_description(
+		task		: ipc_space_inspect_t;
+		name		: mach_port_name_t;
+	out	object_type	: natural_t;
+	out	object_addr	: mach_vm_address_t;
+	out     description     : kobject_description_t);
 
 /* vim: set ft=c : */

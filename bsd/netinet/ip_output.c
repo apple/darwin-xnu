@@ -1261,6 +1261,9 @@ sendit:
 		necp_mark_packet_from_ip(m, necp_matched_policy_id);
 		switch (necp_result) {
 		case NECP_KERNEL_POLICY_RESULT_PASS:
+			if (necp_result_parameter.pass_flags & NECP_KERNEL_POLICY_PASS_NO_SKIP_IPSEC) {
+				break;
+			}
 			/* Check if the interface is allowed */
 			if (!necp_packet_is_allowed_over_interface(m, ifp)) {
 				error = EHOSTUNREACH;

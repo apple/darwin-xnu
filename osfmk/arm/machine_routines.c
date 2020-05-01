@@ -68,6 +68,9 @@ uint32_t LockTimeOut;
 uint32_t LockTimeOutUsec;
 uint64_t TLockTimeOut;
 uint64_t MutexSpin;
+uint64_t low_MutexSpin;
+int64_t  high_MutexSpin;
+
 boolean_t is_clock_configured = FALSE;
 
 #if CONFIG_NONFATAL_ASSERTS
@@ -218,6 +221,15 @@ ml_init_lock_timeout(void)
 		nanoseconds_to_absolutetime(10 * NSEC_PER_USEC, &abstime);
 	}
 	MutexSpin = abstime;
+	low_MutexSpin = MutexSpin;
+	/*
+	 * high_MutexSpin should be initialized as low_MutexSpin * real_ncpus, but
+	 * real_ncpus is not set at this time
+	 *
+	 * NOTE: active spinning is disabled in arm. It can be activated
+	 * by setting high_MutexSpin through the sysctl.
+	 */
+	high_MutexSpin = low_MutexSpin;
 }
 
 /*

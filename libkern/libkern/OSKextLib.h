@@ -336,6 +336,15 @@ __BEGIN_DECLS
 #define kOSBundleAllowUserLoadKey               "OSBundleAllowUserLoad"
 
 /*!
+ * @define   kOSBundleAllowUserTerminateKey
+ * @abstract A boolean value indicating whether the kextunload tool
+ *           is allowed to issue IOService terminate to classes defined in this kext.
+ * @discussion A boolean value indicating whether the kextunload tool
+ *           is allowed to issue IOService terminate to classes defined in this kext.
+ */
+#define kOSBundleAllowUserTerminateKey          "OSBundleAllowUserTerminate"
+
+/*!
  * @define   kOSKernelResourceKey
  * @abstract A boolean value indicating whether the kext represents a built-in
  *           component of the kernel.

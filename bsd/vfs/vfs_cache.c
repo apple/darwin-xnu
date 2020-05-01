@@ -450,7 +450,7 @@ build_path_with_parent(vnode_t first_vp, vnode_t parent_vp, char *buff, int bufl
 	/*
 	 * Grab the process fd so we can evaluate fd_rdir.
 	 */
-	if (vfs_context_proc(ctx)->p_fd) {
+	if (vfs_context_proc(ctx)->p_fd && !(flags & BUILDPATH_NO_PROCROOT)) {
 		proc_root_dir_vp = vfs_context_proc(ctx)->p_fd->fd_rdir;
 	} else {
 		proc_root_dir_vp = NULL;

@@ -271,6 +271,9 @@ int     mac_mount_check_snapshot_create(vfs_context_t ctx, struct mount *mp,
     const char *name);
 int     mac_mount_check_snapshot_delete(vfs_context_t ctx, struct mount *mp,
     const char *name);
+int     mac_mount_check_snapshot_mount(vfs_context_t ctx, struct vnode *rvp,
+    struct vnode *vp, struct componentname *cnp, const char *name,
+    const char *vfc_name);
 int     mac_mount_check_snapshot_revert(vfs_context_t ctx, struct mount *mp,
     const char *name);
 int     mac_mount_check_remount(vfs_context_t ctx, struct mount *mp);

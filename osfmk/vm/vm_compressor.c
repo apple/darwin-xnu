@@ -55,6 +55,12 @@
 
 extern boolean_t vm_darkwake_mode;
 
+#if DEVELOPMENT || DEBUG
+int do_cseg_wedge_thread(void);
+int do_cseg_unwedge_thread(void);
+static event_t debug_cseg_wait_event = NULL;
+#endif /* DEVELOPMENT || DEBUG */
+
 #if POPCOUNT_THE_COMPRESSED_DATA
 boolean_t popcount_c_segs = TRUE;
 
@@ -678,7 +684,29 @@ vm_compressor_init(void)
 		compressor_pool_size = ((kernel_map->max_offset - kernel_map->min_offset) - kernel_map->size) - VM_RESERVE_SIZE;
 	}
 	compressor_pool_multiplier = 1;
+
+#elif defined(__arm64__) && defined(XNU_TARGET_OS_WATCH)
+
+	/*
+	 * On M9 watches the compressor can become big and can lead to
+	 * churn in workingset resulting in audio drops. Setting a cap
+	 * on the compressor size favors reclaiming unused memory
+	 * sitting in idle band via jetsams
+	 */
+
+#define COMPRESSOR_CAP_PERCENTAGE        30ULL
+
+	if (compressor_pool_max_size > max_mem) {
+		compressor_pool_max_size = max_mem;
+	}
+
+	if (vm_compression_limit == 0) {
+		compressor_pool_size = (max_mem * COMPRESSOR_CAP_PERCENTAGE) / 100ULL;
+	}
+	compressor_pool_multiplier = 1;
+
 #else
+
 	if (compressor_pool_max_size > max_mem) {
 		compressor_pool_max_size = max_mem;
 	}
@@ -1074,11 +1102,48 @@ c_seg_do_minor_compaction_and_unlock(c_segment_t c_seg, boolean_t clear_busy, bo
 	return c_seg_freed;
 }
 
+void
+kdp_compressor_busy_find_owner(event64_t wait_event, thread_waitinfo_t *waitinfo)
+{
+	c_segment_t c_seg = (c_segment_t) wait_event;
+
+	waitinfo->owner = thread_tid(c_seg->c_busy_for_thread);
+	waitinfo->context = VM_KERNEL_UNSLIDE_OR_PERM(c_seg);
+}
+
+#if DEVELOPMENT || DEBUG
+int
+do_cseg_wedge_thread(void)
+{
+	struct c_segment c_seg;
+	c_seg.c_busy_for_thread = current_thread();
+
+	debug_cseg_wait_event = (event_t) &c_seg;
+
+	thread_set_pending_block_hint(current_thread(), kThreadWaitCompressor);
+	assert_wait((event_t) (&c_seg), THREAD_INTERRUPTIBLE);
+
+	thread_block(THREAD_CONTINUE_NULL);
+
+	return 0;
+}
+
+int
+do_cseg_unwedge_thread(void)
+{
+	thread_wakeup(debug_cseg_wait_event);
+	debug_cseg_wait_event = NULL;
+
+	return 0;
+}
+#endif /* DEVELOPMENT || DEBUG */
 
 void
 c_seg_wait_on_busy(c_segment_t c_seg)
 {
 	c_seg->c_wanted = 1;
+
+	thread_set_pending_block_hint(current_thread(), kThreadWaitCompressor);
 	assert_wait((event_t) (c_seg), THREAD_UNINT);
 
 	lck_mtx_unlock_always(&c_seg->c_lock);

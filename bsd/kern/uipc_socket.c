@@ -667,6 +667,9 @@ socreate_internal(int dom, struct socket **aso, int type, int proto,
 	struct protosw *prp;
 	struct socket *so;
 	int error = 0;
+#if defined(XNU_TARGET_OS_OSX)
+	pid_t rpid = -1;
+#endif
 
 #if TCPDEBUG
 	extern int tcpconsdebug;
@@ -757,7 +760,29 @@ socreate_internal(int dom, struct socket **aso, int type, int proto,
 		so->e_pid = proc_pid(ep);
 		proc_getexecutableuuid(ep, so->e_uuid, sizeof(so->e_uuid));
 		so->so_flags |= SOF_DELEGATED;
+#if defined(XNU_TARGET_OS_OSX)
+		if (ep->p_responsible_pid != so->e_pid) {
+			rpid = ep->p_responsible_pid;
+		}
+#endif
 	}
+
+#if defined(XNU_TARGET_OS_OSX)
+	if (rpid < 0 && p->p_responsible_pid != so->last_pid) {
+		rpid = p->p_responsible_pid;
+	}
+
+	so->so_rpid = -1;
+	uuid_clear(so->so_ruuid);
+	if (rpid >= 0) {
+		proc_t rp = proc_find(rpid);
+		if (rp != PROC_NULL) {
+			proc_getexecutableuuid(rp, so->so_ruuid, sizeof(so->so_ruuid));
+			so->so_rpid = rpid;
+			proc_rele(rp);
+		}
+	}
+#endif
 
 	so->so_cred = kauth_cred_proc_ref(p);
 	if (!suser(kauth_cred_get(), NULL)) {
@@ -6532,7 +6557,12 @@ filt_soread_common(struct knote *kn, struct kevent_qos_s *kev, struct socket *so
 		}
 	}
 
-	retval = (data >= lowwat);
+	/*
+	 * While the `data` field is the amount of data to read,
+	 * 0-sized packets need to wake up the kqueue, see 58140856,
+	 * so we need to take control bytes into account too.
+	 */
+	retval = (so->so_rcv.sb_cc >= lowwat);
 
 out:
 	if (retval && kev) {
@@ -7857,6 +7887,20 @@ so_set_effective_pid(struct socket *so, int epid, struct proc *p, boolean_t chec
 		so->e_upid = proc_uniqueid(ep);
 		so->e_pid = proc_pid(ep);
 		proc_getexecutableuuid(ep, so->e_uuid, sizeof(so->e_uuid));
+
+#if defined(XNU_TARGET_OS_OSX)
+		if (ep->p_responsible_pid != so->e_pid) {
+			proc_t rp = proc_find(ep->p_responsible_pid);
+			if (rp != PROC_NULL) {
+				proc_getexecutableuuid(rp, so->so_ruuid, sizeof(so->so_ruuid));
+				so->so_rpid = ep->p_responsible_pid;
+				proc_rele(rp);
+			} else {
+				uuid_clear(so->so_ruuid);
+				so->so_rpid = -1;
+			}
+		}
+#endif
 	}
 	if (so->so_proto != NULL && so->so_proto->pr_update_last_owner != NULL) {
 		(*so->so_proto->pr_update_last_owner)(so, NULL, ep);

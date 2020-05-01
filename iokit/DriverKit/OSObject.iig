@@ -50,42 +50,75 @@ class OSObject;
 typedef OSObject * OSObjectPtr;
 #endif
 
-#if __IIG && !__IIG_ATTRIBUTES_DEFINED__
+#if !__IIG_ATTRIBUTES_DEFINED__
 
 #define __IIG_ATTRIBUTES_DEFINED__	1
 
-#define KERNEL       __attribute__((annotate("kernel")))
-#define NATIVE       __attribute__((annotate("native")))
-#define LOCAL        __attribute__((annotate("local")))
-#define LOCALONLY    __attribute__((annotate("localonly")))
-#define REMOTE       __attribute__((annotate("remote")))
+#if __IIG || __DOCUMENTATION__
 
-#define LOCALHOST    __attribute__((annotate("localhost")))
+#define IIG_KERNEL				__attribute__((annotate("kernel")))
+#define IIG_NATIVE       		__attribute__((annotate("native")))
+#define IIG_LOCAL        		__attribute__((annotate("local")))
+#define IIG_LOCALONLY    		__attribute__((annotate("localonly")))
+#define IIG_REMOTE       		__attribute__((annotate("remote")))
+#define IIG_LOCALHOST    		__attribute__((annotate("localhost")))
+#define IIG_INVOKEREPLY  		__attribute__((annotate("invokereply")))
+#define IIG_REPLY        		__attribute__((annotate("reply")))
+#define IIG_PORTMAKESEND 		__attribute__((annotate("MACH_MSG_TYPE_MAKE_SEND")))
+#define IIG_PORTCOPYSEND 		__attribute__((annotate("MACH_MSG_TYPE_COPY_SEND")))
+#define IIG_TARGET       		__attribute__((annotate("target")))
+#define IIG_TYPE(p)      		__attribute__((annotate("type=" # p)))
+//#define IIG_ARRAY(maxcount)	__attribute__((annotate(# maxcount), annotate("array")))
+#define IIG_EXTENDS(cls) 		__attribute__((annotate("extends=" # cls)))
+//#define IIG_INTERFACE  		__attribute__((annotate("interface")))
+//#define IIG_IMPLEMENTS(i)		void __implements(i *);
+#define IIG_QUEUENAME(name)		__attribute__((annotate("queuename=" # name)))
+#define IIG_SERIALIZABLE		__attribute__((annotate("serializable")))
 
-#define INVOKEREPLY  __attribute__((annotate("invokereply")))
-#define REPLY        __attribute__((annotate("reply")))
+#if __IIG
+#define KERNEL					IIG_KERNEL
+#endif /* __IIG */
+#define NATIVE					IIG_NATIVE
+#define LOCAL					IIG_LOCAL
+#define LOCALONLY				IIG_LOCALONLY
+#define REMOTE					IIG_REMOTE
+#define LOCALHOST				IIG_LOCALHOST
+#define INVOKEREPLY				IIG_INVOKEREPLY
+#define REPLY					IIG_REPLY
+#define PORTMAKESEND			IIG_PORTMAKESEND
+#define PORTCOPYSEND			IIG_PORTCOPYSEND
+#define TARGET					IIG_TARGET
+#define TYPE(p)					IIG_TYPE(p)
+//#define ARRAY(maxcount)		IIG_ARRAY(maxcount)
+#define EXTENDS(cls)			IIG_EXTENDS(cls)
+//#define INTERFACE				IIG_INTERFACE
+//#define IMPLEMENTS(i)			IIG_IMPLEMENTS(i)
+#define QUEUENAME(name)			IIG_QUEUENAME(name)
 
-#define PORTMAKESEND __attribute__((annotate("MACH_MSG_TYPE_MAKE_SEND")))
-#define PORTCOPYSEND __attribute__((annotate("MACH_MSG_TYPE_COPY_SEND")))
+#else /* __IIG || __DOCUMENTATION__ */
 
-#define TARGET       __attribute__((annotate("target")))
-#define TYPE(p)      __attribute__((annotate("type=" # p)))
-
-//#define ARRAY(maxcount) __attribute__((annotate(# maxcount), annotate("array")))
-#define EXTENDS(cls) __attribute__((annotate("extends=" # cls)))
-
-//#define INTERFACE    __attribute__((annotate("interface")))
-//#define IMPLEMENTS(i)   void implements(i *);
-
-#define QUEUENAME(name) __attribute__((annotate("queuename=" # name)))
-
-#define IIG_SERIALIZABLE __attribute__((annotate("serializable")))
-
-#else
-
+#define IIG_KERNEL
+#define IIG_NATIVE
+#define IIG_LOCAL
+#define IIG_LOCALONLY
+#define IIG_REMOTE
+#define IIG_LOCALHOST
+#define IIG_INVOKEREPLY
+#define IIG_REPLY
+#define IIG_PORTMAKESEND
+#define IIG_PORTCOPYSEND
+#define IIG_TARGET
+#define IIG_TYPE(p)
+//#define IIG_ARRAY(maxcount)
+#define IIG_EXTENDS(cls)
+//#define IIG_INTERFACE
+//#define IIG_IMPLEMENTS(i)
+#define IIG_QUEUENAME(name)
 #define IIG_SERIALIZABLE
 
-#endif /* __IIG */
+#endif /* __IIG || __DOCUMENTATION__ */
+
+#endif /* __IIG_ATTRIBUTES_DEFINED__ */
 
 
 #if !__IIG

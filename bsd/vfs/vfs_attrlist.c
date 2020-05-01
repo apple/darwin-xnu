@@ -545,6 +545,8 @@ static struct getattrlist_attrtab getattrlist_common_extended_tab[] = {
 	{.attr = ATTR_CMNEXT_NOFIRMLINKPATH, .bits = 0, .size = sizeof(struct attrreference), .action = KAUTH_VNODE_READ_ATTRIBUTES},
 	{.attr = ATTR_CMNEXT_REALDEVID, .bits = VATTR_BIT(va_devid), .size = sizeof(uint32_t), .action = KAUTH_VNODE_READ_ATTRIBUTES},
 	{.attr = ATTR_CMNEXT_REALFSID, .bits = VATTR_BIT(va_fsid64), .size = sizeof(fsid_t), .action = KAUTH_VNODE_READ_ATTRIBUTES},
+	{.attr = ATTR_CMNEXT_CLONEID, .bits = VATTR_BIT(va_clone_id), .size = sizeof(uint64_t), .action = KAUTH_VNODE_READ_ATTRIBUTES},
+	{.attr = ATTR_CMNEXT_EXT_FLAGS, .bits = VATTR_BIT(va_extflags), .size = sizeof(uint64_t), .action = KAUTH_VNODE_READ_ATTRIBUTES},
 	{.attr = 0, .bits = 0, .size = 0, .action = 0}
 };
 
@@ -607,7 +609,8 @@ static struct getattrlist_attrtab getattrlistbulk_common_extended_tab[] = {
 
 #define VFS_DFLT_ATTR_CMN_EXT   (ATTR_CMNEXT_PRIVATESIZE | ATTR_CMNEXT_LINKID |  \
 	                         ATTR_CMNEXT_NOFIRMLINKPATH | ATTR_CMNEXT_REALDEVID |  \
-	                         ATTR_CMNEXT_REALFSID)
+	                         ATTR_CMNEXT_REALFSID | ATTR_CMNEXT_CLONEID | \
+	                         ATTR_CMNEXT_EXT_FLAGS)
 
 #define VFS_DFLT_ATTR_DIR       (ATTR_DIR_LINKCOUNT | ATTR_DIR_MOUNTSTATUS)
 
@@ -984,6 +987,7 @@ getvolattrlist(vfs_context_t ctx, vnode_t vp, struct attrlist *alp,
 				VFS_DEBUG(ctx, vp, "ATTRLIST - ERROR: could not allocate f_vol_name buffer");
 				goto out;
 			}
+			vs.f_vol_name[0] = '\0';
 		}
 
 		VFS_DEBUG(ctx, vp, "ATTRLIST -       calling to get %016llx with supported %016llx", vs.f_active, vs.f_supported);
@@ -2354,6 +2358,26 @@ attr_pack_common_extended(mount_t mp, struct vnode *vp, struct attrlist *alp,
 			fsid_t fsid = {{0}};
 
 			ATTR_PACK8((*abp), fsid);
+		}
+	}
+
+	if (alp->forkattr & ATTR_CMNEXT_CLONEID) {
+		if (VATTR_IS_SUPPORTED(vap, va_clone_id)) {
+			ATTR_PACK8((*abp), vap->va_clone_id);
+			abp->actual.forkattr |= ATTR_CMNEXT_CLONEID;
+		} else if (!return_valid || pack_invalid) {
+			uint64_t zero_val = 0;
+			ATTR_PACK8((*abp), zero_val);
+		}
+	}
+
+	if (alp->forkattr & ATTR_CMNEXT_EXT_FLAGS) {
+		if (VATTR_IS_SUPPORTED(vap, va_extflags)) {
+			ATTR_PACK8((*abp), vap->va_extflags);
+			abp->actual.forkattr |= ATTR_CMNEXT_EXT_FLAGS;
+		} else if (!return_valid || pack_invalid) {
+			uint64_t zero_val = 0;
+			ATTR_PACK8((*abp), zero_val);
 		}
 	}
 

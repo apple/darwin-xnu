@@ -486,9 +486,10 @@ telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct micro
 
 	uintptr_t frames[128];
 	bool user64_regs = false;
-	int backtrace_error = backtrace_user(frames,
-	    sizeof(frames) / sizeof(frames[0]), &btcount, &user64_regs, NULL);
-	if (backtrace_error) {
+	int bterror = 0;
+	btcount = backtrace_user(frames,
+	    sizeof(frames) / sizeof(frames[0]), &bterror, &user64_regs, NULL);
+	if (bterror != 0) {
 		return;
 	}
 	bool user64_va = task_has_64Bit_addr(task);

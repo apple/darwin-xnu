@@ -70,6 +70,9 @@
 #include <mach/mach_types.h>
 #include <mach/message.h>
 #include <mach/port.h>
+#ifdef MACH_KERNEL_PRIVATE
+#include <mach_debug/mach_debug_types.h>
+#endif
 
 #if PRIVATE
 #define IOKIT_SERVER_VERSION    20190926
@@ -123,8 +126,10 @@ typedef struct IOObject * io_object_t;
 typedef io_object_t io_connect_t;
 typedef io_object_t uext_object_t;
 
+extern void iokit_add_reference( io_object_t obj, natural_t type );
 extern void iokit_remove_reference( io_object_t obj );
 extern void iokit_remove_connect_reference( io_object_t obj );
+extern void iokit_port_object_description(io_object_t obj, kobject_description_t desc);
 
 extern io_object_t iokit_lookup_object_port( ipc_port_t port );
 extern io_connect_t iokit_lookup_connect_port( ipc_port_t port );

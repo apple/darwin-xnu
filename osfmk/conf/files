@@ -201,6 +201,7 @@ osfmk/kern/hibernate.c		optional hibernation
 osfmk/kern/remote_time.c        standard
 osfmk/kern/memset_s.c		standard
 osfmk/kern/copyout_shim.c	optional copyout_shim
+osfmk/kern/suid_cred.c		standard
 
 ./mach/clock_server.c			standard
 ./mach/clock_priv_server.c		standard

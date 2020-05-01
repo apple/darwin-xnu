@@ -95,7 +95,7 @@ static void system_override_begin(uint64_t flags);
 static void system_override_end(uint64_t flags);
 static void system_override_abort(uint64_t flags);
 static void system_override_callouts(uint64_t flags, boolean_t enable_override);
-static __attribute__((noinline)) void PROCESS_OVERRIDING_SYSTEM_DEFAULTS(uint64_t timeout);
+static __attribute__((noinline)) int PROCESS_OVERRIDING_SYSTEM_DEFAULTS(uint64_t timeout);
 
 void
 init_system_override()
@@ -140,7 +140,7 @@ system_override(__unused struct proc *p, struct system_override_args * uap, __un
 		system_override_abort(flags);
 	} else {
 		system_override_begin(flags);
-		PROCESS_OVERRIDING_SYSTEM_DEFAULTS(timeout);
+		error = PROCESS_OVERRIDING_SYSTEM_DEFAULTS(timeout);
 		system_override_end(flags);
 	}
 
@@ -307,11 +307,13 @@ system_override_abort(uint64_t flags)
 	}
 }
 
-static __attribute__((noinline)) void
+static __attribute__((noinline)) int
 PROCESS_OVERRIDING_SYSTEM_DEFAULTS(uint64_t timeout)
 {
 	struct timespec ts;
 	ts.tv_sec = timeout / NSEC_PER_SEC;
 	ts.tv_nsec = timeout - ((long)ts.tv_sec * NSEC_PER_SEC);
-	msleep((caddr_t)&sys_override_wait, &sys_override_lock, PRIBIO | PCATCH, "system_override", &ts);
+	int error = msleep((caddr_t)&sys_override_wait, &sys_override_lock, PRIBIO | PCATCH, "system_override", &ts);
+	/* msleep returns EWOULDBLOCK if timeout expires, treat that as success */
+	return (error == EWOULDBLOCK) ? 0 : error;
 }

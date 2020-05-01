@@ -335,23 +335,29 @@ kperf_ucallstack_sample(struct kp_ucallstack *cs, struct kperf_context *context)
 
 	bool user64 = false;
 	bool trunc = false;
-	int err = backtrace_thread_user(thread, cs->kpuc_frames,
-	    cs->kpuc_nframes - 1, &cs->kpuc_nframes, &user64, &trunc);
-	cs->kpuc_flags = CALLSTACK_KERNEL_WORDS;
-	if (user64) {
-		cs->kpuc_flags |= CALLSTACK_64BIT;
-	}
-	if (trunc) {
-		cs->kpuc_flags |= CALLSTACK_TRUNCATED;
-	}
+	int error = 0;
+	/*
+	 * Leave space for the fixup information.
+	 */
+	unsigned int maxnframes = cs->kpuc_nframes - 1;
+	unsigned int nframes = backtrace_thread_user(thread, cs->kpuc_frames,
+	    maxnframes, &error, &user64, &trunc);
+	cs->kpuc_nframes = MIN(maxnframes, nframes);
 
-	if (!err || err == EFAULT) {
+	/*
+	 * Ignore EFAULT to get as much of the stack as possible.  It will be
+	 * marked as truncated, below.
+	 */
+	if (error == 0 || error == EFAULT) {
 		callstack_fixup_user(cs, thread);
 		cs->kpuc_flags |= CALLSTACK_VALID;
 	} else {
 		cs->kpuc_nframes = 0;
-		BUF_INFO(PERF_CS_ERROR, ERR_GETSTACK, err);
+		BUF_INFO(PERF_CS_ERROR, ERR_GETSTACK, error);
 	}
+
+	cs->kpuc_flags |= CALLSTACK_KERNEL_WORDS | (user64 ? CALLSTACK_64BIT : 0) |
+	    (trunc ? CALLSTACK_TRUNCATED : 0);
 
 	BUF_INFO(PERF_CS_USAMPLE | DBG_FUNC_END, (uintptr_t)thread_tid(thread),
 	    cs->kpuc_flags, cs->kpuc_nframes);

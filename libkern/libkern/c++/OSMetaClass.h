@@ -136,6 +136,7 @@ class OSSerialize;
 #ifdef XNU_KERNEL_PRIVATE
 class OSOrderedSet;
 class OSCollection;
+class OSKext;
 #endif /* XNU_KERNEL_PRIVATE */
 struct IORPC;
 class OSInterface
@@ -1729,6 +1730,7 @@ public:
 	virtual OSObject * alloc() const = 0;
 
 #ifdef XNU_KERNEL_PRIVATE
+	OSKext * getKext() const;
 	void addInstance(const OSObject * instance, bool super = false) const;
 	void removeInstance(const OSObject * instance, bool super = false) const;
 	void applyToInstances(OSMetaClassInstanceApplierFunction applier,

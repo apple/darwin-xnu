@@ -352,6 +352,9 @@ kernel_bootstrap(void)
 	kernel_bootstrap_log("machine_init");
 	machine_init();
 
+	kernel_bootstrap_log("thread_machine_init_template");
+	thread_machine_init_template();
+
 	kernel_bootstrap_log("clock_init");
 	clock_init();
 

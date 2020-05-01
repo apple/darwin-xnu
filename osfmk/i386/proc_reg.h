@@ -173,22 +173,18 @@
 #define XCR0_YMM        (1ULL << 2)     /* YMM state available */
 #define XCR0_BNDREGS    (1ULL << 3)     /* MPX Bounds register state */
 #define XCR0_BNDCSR     (1ULL << 4)     /* MPX Bounds configuration/state  */
-#if !defined(RC_HIDE_XNU_J137)
 #define XCR0_OPMASK     (1ULL << 5)     /* Opmask register state */
 #define XCR0_ZMM_HI256  (1ULL << 6)     /* ZMM upper 256-bit state */
 #define XCR0_HI16_ZMM   (1ULL << 7)     /* ZMM16..ZMM31 512-bit state */
-#endif /* not RC_HIDE_XNU_J137 */
 #define XFEM_X87        XCR0_X87
 #define XFEM_SSE        XCR0_SSE
 #define XFEM_YMM        XCR0_YMM
 #define XFEM_BNDREGS    XCR0_BNDREGS
 #define XFEM_BNDCSR     XCR0_BNDCSR
-#if !defined(XNU_HODE_J137)
 #define XFEM_OPMASK     XCR0_OPMASK
 #define XFEM_ZMM_HI256  XCR0_ZMM_HI256
 #define XFEM_HI16_ZMM   XCR0_HI16_ZMM
 #define XFEM_ZMM        (XFEM_ZMM_HI256 | XFEM_HI16_ZMM | XFEM_OPMASK)
-#endif /* not XNU_HODE_J137 */
 #define XCR0 (0)
 
 #define PMAP_PCID_PRESERVE (1ULL << 63)

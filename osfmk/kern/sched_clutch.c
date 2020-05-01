@@ -67,12 +67,23 @@ static uint64_t sched_clutch_root_bucket_deadline_calculate(sched_clutch_root_bu
 static void sched_clutch_root_bucket_deadline_update(sched_clutch_root_bucket_t, sched_clutch_root_t, uint64_t);
 static int sched_clutch_root_bucket_pri_compare(sched_clutch_root_bucket_t, sched_clutch_root_bucket_t);
 
+/* Options for clutch bucket ordering in the runq */
+__options_decl(sched_clutch_bucket_options_t, uint32_t, {
+	SCHED_CLUTCH_BUCKET_OPTIONS_NONE        = 0x0,
+	/* Round robin clutch bucket on thread removal */
+	SCHED_CLUTCH_BUCKET_OPTIONS_SAMEPRI_RR  = 0x1,
+	/* Insert clutch bucket at head (for thread preemption) */
+	SCHED_CLUTCH_BUCKET_OPTIONS_HEADQ       = 0x2,
+	/* Insert clutch bucket at tail (default) */
+	SCHED_CLUTCH_BUCKET_OPTIONS_TAILQ       = 0x4,
+});
+
 /* Clutch bucket level hierarchy management */
-static void sched_clutch_bucket_hierarchy_insert(sched_clutch_root_t, sched_clutch_bucket_t, sched_bucket_t, uint64_t);
-static void sched_clutch_bucket_hierarchy_remove(sched_clutch_root_t, sched_clutch_bucket_t, sched_bucket_t, uint64_t);
-static boolean_t sched_clutch_bucket_runnable(sched_clutch_bucket_t, sched_clutch_root_t, uint64_t);
-static boolean_t sched_clutch_bucket_update(sched_clutch_bucket_t, sched_clutch_root_t, uint64_t);
-static void sched_clutch_bucket_empty(sched_clutch_bucket_t, sched_clutch_root_t, uint64_t);
+static void sched_clutch_bucket_hierarchy_insert(sched_clutch_root_t, sched_clutch_bucket_t, sched_bucket_t, uint64_t, sched_clutch_bucket_options_t);
+static void sched_clutch_bucket_hierarchy_remove(sched_clutch_root_t, sched_clutch_bucket_t, sched_bucket_t, uint64_t, sched_clutch_bucket_options_t);
+static boolean_t sched_clutch_bucket_runnable(sched_clutch_bucket_t, sched_clutch_root_t, uint64_t, sched_clutch_bucket_options_t);
+static boolean_t sched_clutch_bucket_update(sched_clutch_bucket_t, sched_clutch_root_t, uint64_t, sched_clutch_bucket_options_t);
+static void sched_clutch_bucket_empty(sched_clutch_bucket_t, sched_clutch_root_t, uint64_t, sched_clutch_bucket_options_t);
 
 static void sched_clutch_bucket_cpu_usage_update(sched_clutch_bucket_t, uint64_t);
 static void sched_clutch_bucket_cpu_blocked_update(sched_clutch_bucket_t, uint64_t);
@@ -87,7 +98,7 @@ static void sched_clutch_bucket_timeshare_update(sched_clutch_bucket_t);
 static boolean_t sched_thread_sched_pri_promoted(thread_t);
 /* Clutch membership management */
 static boolean_t sched_clutch_thread_insert(sched_clutch_root_t, thread_t, integer_t);
-static void sched_clutch_thread_remove(sched_clutch_root_t, thread_t, uint64_t);
+static void sched_clutch_thread_remove(sched_clutch_root_t, thread_t, uint64_t, sched_clutch_bucket_options_t);
 static thread_t sched_clutch_thread_highest(sched_clutch_root_t);
 
 /* Clutch properties updates */
@@ -318,6 +329,133 @@ sched_clutch_root_init(
 }
 
 /*
+ * Clutch Bucket Runqueues
+ *
+ * The clutch buckets are maintained in a runq at the root bucket level. The
+ * runq organization allows clutch buckets to be ordered based on various
+ * factors such as:
+ *
+ * - Clutch buckets are round robin'ed at the same priority level when a
+ *   thread is selected from a clutch bucket. This prevents a clutch bucket
+ *   from starving out other clutch buckets at the same priority.
+ *
+ * - Clutch buckets are inserted at the head when it becomes runnable due to
+ *   thread preemption. This allows threads that were preempted to maintain
+ *   their order in the queue.
+ *
+ */
+
+/*
+ * sched_clutch_bucket_runq_init()
+ *
+ * Initialize a clutch bucket runq.
+ */
+static void
+sched_clutch_bucket_runq_init(
+	sched_clutch_bucket_runq_t clutch_buckets_rq)
+{
+	clutch_buckets_rq->scbrq_highq = NOPRI;
+	for (uint8_t i = 0; i < BITMAP_LEN(NRQS); i++) {
+		clutch_buckets_rq->scbrq_bitmap[i] = 0;
+	}
+	clutch_buckets_rq->scbrq_count = 0;
+	for (int i = 0; i < NRQS; i++) {
+		circle_queue_init(&clutch_buckets_rq->scbrq_queues[i]);
+	}
+}
+
+/*
+ * sched_clutch_bucket_runq_empty()
+ *
+ * Returns if a clutch bucket runq is empty.
+ */
+static boolean_t
+sched_clutch_bucket_runq_empty(
+	sched_clutch_bucket_runq_t clutch_buckets_rq)
+{
+	return clutch_buckets_rq->scbrq_count == 0;
+}
+
+/*
+ * sched_clutch_bucket_runq_peek()
+ *
+ * Returns the highest priority clutch bucket in the runq.
+ */
+static sched_clutch_bucket_t
+sched_clutch_bucket_runq_peek(
+	sched_clutch_bucket_runq_t clutch_buckets_rq)
+{
+	if (clutch_buckets_rq->scbrq_count > 0) {
+		circle_queue_t queue = &clutch_buckets_rq->scbrq_queues[clutch_buckets_rq->scbrq_highq];
+		return cqe_queue_first(queue, struct sched_clutch_bucket, scb_runqlink);
+	} else {
+		return NULL;
+	}
+}
+
+/*
+ * sched_clutch_bucket_runq_enqueue()
+ *
+ * Enqueue a clutch bucket into the runq based on the options passed in.
+ */
+static void
+sched_clutch_bucket_runq_enqueue(
+	sched_clutch_bucket_runq_t clutch_buckets_rq,
+	sched_clutch_bucket_t clutch_bucket,
+	sched_clutch_bucket_options_t options)
+{
+	circle_queue_t queue = &clutch_buckets_rq->scbrq_queues[clutch_bucket->scb_priority];
+	if (circle_queue_empty(queue)) {
+		circle_enqueue_tail(queue, &clutch_bucket->scb_runqlink);
+		bitmap_set(clutch_buckets_rq->scbrq_bitmap, clutch_bucket->scb_priority);
+		if (clutch_bucket->scb_priority > clutch_buckets_rq->scbrq_highq) {
+			clutch_buckets_rq->scbrq_highq = clutch_bucket->scb_priority;
+		}
+	} else {
+		if (options & SCHED_CLUTCH_BUCKET_OPTIONS_HEADQ) {
+			circle_enqueue_head(queue, &clutch_bucket->scb_runqlink);
+		} else {
+			/*
+			 * Default behavior (handles SCHED_CLUTCH_BUCKET_OPTIONS_TAILQ &
+			 * SCHED_CLUTCH_BUCKET_OPTIONS_NONE)
+			 */
+			circle_enqueue_tail(queue, &clutch_bucket->scb_runqlink);
+		}
+	}
+	clutch_buckets_rq->scbrq_count++;
+}
+
+/*
+ * sched_clutch_bucket_runq_remove()
+ *
+ * Remove a clutch bucket from the runq.
+ */
+static void
+sched_clutch_bucket_runq_remove(
+	sched_clutch_bucket_runq_t clutch_buckets_rq,
+	sched_clutch_bucket_t clutch_bucket)
+{
+	circle_queue_t queue = &clutch_buckets_rq->scbrq_queues[clutch_bucket->scb_priority];
+	circle_dequeue(queue, &clutch_bucket->scb_runqlink);
+	assert(clutch_buckets_rq->scbrq_count > 0);
+	clutch_buckets_rq->scbrq_count--;
+	if (circle_queue_empty(queue)) {
+		bitmap_clear(clutch_buckets_rq->scbrq_bitmap, clutch_bucket->scb_priority);
+		clutch_buckets_rq->scbrq_highq = bitmap_first(clutch_buckets_rq->scbrq_bitmap, NRQS);
+	}
+}
+
+static void
+sched_clutch_bucket_runq_rotate(
+	sched_clutch_bucket_runq_t clutch_buckets_rq,
+	sched_clutch_bucket_t clutch_bucket)
+{
+	circle_queue_t queue = &clutch_buckets_rq->scbrq_queues[clutch_bucket->scb_priority];
+	assert(clutch_bucket == cqe_queue_first(queue, struct sched_clutch_bucket, scb_runqlink));
+	circle_queue_rotate_head_forward(queue);
+}
+
+/*
  * sched_clutch_root_bucket_init()
  *
  * Routine to initialize root buckets.
@@ -328,7 +466,7 @@ sched_clutch_root_bucket_init(
 	sched_bucket_t bucket)
 {
 	root_bucket->scrb_bucket = bucket;
-	priority_queue_init(&root_bucket->scrb_clutch_buckets, PRIORITY_QUEUE_BUILTIN_KEY | PRIORITY_QUEUE_MAX_HEAP);
+	sched_clutch_bucket_runq_init(&root_bucket->scrb_clutch_buckets);
 	priority_queue_entry_init(&root_bucket->scrb_pqlink);
 	root_bucket->scrb_deadline = SCHED_CLUTCH_INVALID_TIME_64;
 	root_bucket->scrb_warped_deadline = 0;
@@ -738,7 +876,6 @@ sched_clutch_bucket_init(
 
 	clutch_bucket->scb_interactivity_ts = 0;
 	clutch_bucket->scb_blocked_ts = SCHED_CLUTCH_BUCKET_BLOCKED_TS_INVALID;
-	priority_queue_entry_init(&clutch_bucket->scb_pqlink);
 	clutch_bucket->scb_clutch = clutch;
 	clutch_bucket->scb_root = NULL;
 	priority_queue_init(&clutch_bucket->scb_clutchpri_prioq, PRIORITY_QUEUE_BUILTIN_KEY | PRIORITY_QUEUE_MAX_HEAP);
@@ -818,7 +955,8 @@ sched_clutch_bucket_hierarchy_insert(
 	sched_clutch_root_t root_clutch,
 	sched_clutch_bucket_t clutch_bucket,
 	sched_bucket_t bucket,
-	uint64_t timestamp)
+	uint64_t timestamp,
+	sched_clutch_bucket_options_t options)
 {
 	sched_clutch_hierarchy_locked_assert(root_clutch);
 	if (bucket > TH_BUCKET_FIXPRI) {
@@ -835,12 +973,12 @@ sched_clutch_bucket_hierarchy_insert(
 	sched_clutch_root_bucket_t root_bucket = &root_clutch->scr_buckets[bucket];
 
 	/* If this is the first clutch bucket in the root bucket, insert the root bucket into the root priority queue */
-	if (priority_queue_empty(&root_bucket->scrb_clutch_buckets)) {
+	if (sched_clutch_bucket_runq_empty(&root_bucket->scrb_clutch_buckets)) {
 		sched_clutch_root_bucket_runnable(root_bucket, root_clutch, timestamp);
 	}
 
-	/* Insert the clutch bucket into the root bucket priority queue */
-	priority_queue_insert(&root_bucket->scrb_clutch_buckets, &clutch_bucket->scb_pqlink, clutch_bucket->scb_priority, PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE);
+	/* Insert the clutch bucket into the root bucket run queue with order based on options */
+	sched_clutch_bucket_runq_enqueue(&root_bucket->scrb_clutch_buckets, clutch_bucket, options);
 	os_atomic_store(&clutch_bucket->scb_root, root_clutch, relaxed);
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, MACHDBG_CODE(DBG_MACH_SCHED_CLUTCH, MACH_SCHED_CLUTCH_TG_BUCKET_STATE) | DBG_FUNC_NONE,
 	    thread_group_get_id(clutch_bucket->scb_clutch->sc_tg), clutch_bucket->scb_bucket, SCHED_CLUTCH_STATE_RUNNABLE, clutch_bucket->scb_priority, 0);
@@ -856,7 +994,8 @@ sched_clutch_bucket_hierarchy_remove(
 	sched_clutch_root_t root_clutch,
 	sched_clutch_bucket_t clutch_bucket,
 	sched_bucket_t bucket,
-	uint64_t timestamp)
+	uint64_t timestamp,
+	__unused sched_clutch_bucket_options_t options)
 {
 	sched_clutch_hierarchy_locked_assert(root_clutch);
 	if (bucket > TH_BUCKET_FIXPRI) {
@@ -873,14 +1012,14 @@ sched_clutch_bucket_hierarchy_remove(
 	sched_clutch_root_bucket_t root_bucket = &root_clutch->scr_buckets[bucket];
 
 	/* Remove the clutch bucket from the root bucket priority queue */
-	priority_queue_remove(&root_bucket->scrb_clutch_buckets, &clutch_bucket->scb_pqlink, PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE);
+	sched_clutch_bucket_runq_remove(&root_bucket->scrb_clutch_buckets, clutch_bucket);
 	os_atomic_store(&clutch_bucket->scb_root, NULL, relaxed);
 	clutch_bucket->scb_blocked_ts = timestamp;
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, MACHDBG_CODE(DBG_MACH_SCHED_CLUTCH, MACH_SCHED_CLUTCH_TG_BUCKET_STATE) | DBG_FUNC_NONE,
 	    thread_group_get_id(clutch_bucket->scb_clutch->sc_tg), clutch_bucket->scb_bucket, SCHED_CLUTCH_STATE_EMPTY, 0, 0);
 
 	/* If the root bucket priority queue is now empty, remove it from the root priority queue */
-	if (priority_queue_empty(&root_bucket->scrb_clutch_buckets)) {
+	if (sched_clutch_bucket_runq_empty(&root_bucket->scrb_clutch_buckets)) {
 		sched_clutch_root_bucket_empty(root_bucket, root_clutch, timestamp);
 	}
 }
@@ -1030,10 +1169,10 @@ static sched_clutch_bucket_t
 sched_clutch_root_bucket_highest_clutch_bucket(
 	sched_clutch_root_bucket_t root_bucket)
 {
-	if (priority_queue_empty(&root_bucket->scrb_clutch_buckets)) {
+	if (sched_clutch_bucket_runq_empty(&root_bucket->scrb_clutch_buckets)) {
 		return NULL;
 	}
-	return priority_queue_max(&root_bucket->scrb_clutch_buckets, struct sched_clutch_bucket, scb_pqlink);
+	return sched_clutch_bucket_runq_peek(&root_bucket->scrb_clutch_buckets);
 }
 
 /*
@@ -1047,12 +1186,13 @@ static boolean_t
 sched_clutch_bucket_runnable(
 	sched_clutch_bucket_t clutch_bucket,
 	sched_clutch_root_t root_clutch,
-	uint64_t timestamp)
+	uint64_t timestamp,
+	sched_clutch_bucket_options_t options)
 {
 	sched_clutch_hierarchy_locked_assert(root_clutch);
 	sched_clutch_bucket_cpu_blocked_update(clutch_bucket, timestamp);
 	clutch_bucket->scb_priority = sched_clutch_bucket_pri_calculate(clutch_bucket, timestamp);
-	sched_clutch_bucket_hierarchy_insert(root_clutch, clutch_bucket, clutch_bucket->scb_bucket, timestamp);
+	sched_clutch_bucket_hierarchy_insert(root_clutch, clutch_bucket, clutch_bucket->scb_bucket, timestamp, options);
 	/* Update the timesharing properties of this clutch_bucket; also done every sched_tick */
 	sched_clutch_bucket_timeshare_update(clutch_bucket);
 	int16_t root_old_pri = root_clutch->scr_priority;
@@ -1063,32 +1203,35 @@ sched_clutch_bucket_runnable(
 /*
  * sched_clutch_bucket_update()
  *
- * Update the clutch_bucket's position in the hierarchy based on whether
- * the newly runnable thread changes its priority. Also update the root
- * priority accordingly.
+ * Update the clutch_bucket's position in the hierarchy. This routine is
+ * called when a new thread is inserted or removed from a runnable clutch
+ * bucket. The options specify some properties about the clutch bucket
+ * insertion order into the clutch bucket runq.
  */
 static boolean_t
 sched_clutch_bucket_update(
 	sched_clutch_bucket_t clutch_bucket,
 	sched_clutch_root_t root_clutch,
-	uint64_t timestamp)
+	uint64_t timestamp,
+	sched_clutch_bucket_options_t options)
 {
 	sched_clutch_hierarchy_locked_assert(root_clutch);
 	uint64_t new_pri = sched_clutch_bucket_pri_calculate(clutch_bucket, timestamp);
+	sched_clutch_bucket_runq_t bucket_runq = &root_clutch->scr_buckets[clutch_bucket->scb_bucket].scrb_clutch_buckets;
 	if (new_pri == clutch_bucket->scb_priority) {
+		/*
+		 * If SCHED_CLUTCH_BUCKET_OPTIONS_SAMEPRI_RR is specified, move the clutch bucket
+		 * to the end of the runq. Typically used when a thread is selected for execution
+		 * from a clutch bucket.
+		 */
+		if (options & SCHED_CLUTCH_BUCKET_OPTIONS_SAMEPRI_RR) {
+			sched_clutch_bucket_runq_rotate(bucket_runq, clutch_bucket);
+		}
 		return false;
 	}
-	struct priority_queue *bucket_prioq = &root_clutch->scr_buckets[clutch_bucket->scb_bucket].scrb_clutch_buckets;
-
-	if (new_pri < clutch_bucket->scb_priority) {
-		clutch_bucket->scb_priority = new_pri;
-		priority_queue_entry_decrease(bucket_prioq, &clutch_bucket->scb_pqlink,
-		    clutch_bucket->scb_priority, PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE);
-	} else {
-		clutch_bucket->scb_priority = new_pri;
-		priority_queue_entry_increase(bucket_prioq, &clutch_bucket->scb_pqlink,
-		    clutch_bucket->scb_priority, PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE);
-	}
+	sched_clutch_bucket_runq_remove(bucket_runq, clutch_bucket);
+	clutch_bucket->scb_priority = new_pri;
+	sched_clutch_bucket_runq_enqueue(bucket_runq, clutch_bucket, options);
 
 	int16_t root_old_pri = root_clutch->scr_priority;
 	sched_clutch_root_pri_update(root_clutch);
@@ -1106,10 +1249,11 @@ static void
 sched_clutch_bucket_empty(
 	sched_clutch_bucket_t clutch_bucket,
 	sched_clutch_root_t root_clutch,
-	uint64_t timestamp)
+	uint64_t timestamp,
+	sched_clutch_bucket_options_t options)
 {
 	sched_clutch_hierarchy_locked_assert(root_clutch);
-	sched_clutch_bucket_hierarchy_remove(root_clutch, clutch_bucket, clutch_bucket->scb_bucket, timestamp);
+	sched_clutch_bucket_hierarchy_remove(root_clutch, clutch_bucket, clutch_bucket->scb_bucket, timestamp, options);
 	clutch_bucket->scb_priority = sched_clutch_bucket_pri_calculate(clutch_bucket, timestamp);
 	sched_clutch_root_pri_update(root_clutch);
 }
@@ -1407,17 +1551,16 @@ sched_clutch_thread_insert(
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, MACHDBG_CODE(DBG_MACH_SCHED_CLUTCH, MACH_SCHED_CLUTCH_THREAD_STATE) | DBG_FUNC_NONE,
 	    thread_group_get_id(clutch_bucket->scb_clutch->sc_tg), clutch_bucket->scb_bucket, thread_tid(thread), SCHED_CLUTCH_STATE_RUNNABLE, 0);
 
-	/* Enqueue the clutch into the hierarchy (if needed) and update properties */
+	/* Enqueue the clutch into the hierarchy (if needed) and update properties; pick the insertion order based on thread options */
+	sched_clutch_bucket_options_t scb_options = (options & SCHED_HEADQ) ? SCHED_CLUTCH_BUCKET_OPTIONS_HEADQ : SCHED_CLUTCH_BUCKET_OPTIONS_TAILQ;
 	if (clutch_bucket->scb_thr_count == 0) {
 		sched_clutch_thr_count_inc(&clutch_bucket->scb_thr_count);
 		sched_clutch_thr_count_inc(&root_clutch->scr_thr_count);
-		/* Insert the newly runnable clutch bucket into the hierarchy */
-		result = sched_clutch_bucket_runnable(clutch_bucket, root_clutch, current_timestamp);
+		result = sched_clutch_bucket_runnable(clutch_bucket, root_clutch, current_timestamp, scb_options);
 	} else {
 		sched_clutch_thr_count_inc(&clutch_bucket->scb_thr_count);
 		sched_clutch_thr_count_inc(&root_clutch->scr_thr_count);
-		/* Update the position of the clutch bucket in the hierarchy */
-		result = sched_clutch_bucket_update(clutch_bucket, root_clutch, current_timestamp);
+		result = sched_clutch_bucket_update(clutch_bucket, root_clutch, current_timestamp, scb_options);
 	}
 	return result;
 }
@@ -1433,7 +1576,8 @@ static void
 sched_clutch_thread_remove(
 	sched_clutch_root_t root_clutch,
 	thread_t thread,
-	uint64_t current_timestamp)
+	uint64_t current_timestamp,
+	sched_clutch_bucket_options_t options)
 {
 	sched_clutch_hierarchy_locked_assert(root_clutch);
 	sched_clutch_t clutch = sched_clutch_for_thread(thread);
@@ -1460,9 +1604,9 @@ sched_clutch_thread_remove(
 
 	/* Remove the clutch from hierarchy (if needed) and update properties */
 	if (clutch_bucket->scb_thr_count == 0) {
-		sched_clutch_bucket_empty(clutch_bucket, root_clutch, current_timestamp);
+		sched_clutch_bucket_empty(clutch_bucket, root_clutch, current_timestamp, options);
 	} else {
-		sched_clutch_bucket_update(clutch_bucket, root_clutch, current_timestamp);
+		sched_clutch_bucket_update(clutch_bucket, root_clutch, current_timestamp, options);
 	}
 }
 
@@ -1498,8 +1642,8 @@ sched_clutch_thread_highest(
 	thread_t thread = run_queue_peek(&clutch_bucket->scb_runq);
 	assert(thread != NULL);
 
-	/* Remove and return the thread from the hierarchy */
-	sched_clutch_thread_remove(root_clutch, thread, current_timestamp);
+	/* Remove and return the thread from the hierarchy; also round robin the clutch bucket if the priority remains unchanged */
+	sched_clutch_thread_remove(root_clutch, thread, current_timestamp, SCHED_CLUTCH_BUCKET_OPTIONS_SAMEPRI_RR);
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, MACHDBG_CODE(DBG_MACH_SCHED_CLUTCH, MACH_SCHED_CLUTCH_THREAD_SELECT) | DBG_FUNC_NONE,
 	    thread_tid(thread), thread_group_get_id(clutch_bucket->scb_clutch->sc_tg), clutch_bucket->scb_bucket, 0, 0);
 	return thread;
@@ -1978,7 +2122,7 @@ sched_clutch_processor_queue_remove(
 		 */
 		if (SCHED_CLUTCH_THREAD_ELIGIBLE(thread)) {
 			sched_clutch_root_t pset_clutch_root = sched_clutch_processor_root_clutch(processor);
-			sched_clutch_thread_remove(pset_clutch_root, thread, mach_absolute_time());
+			sched_clutch_thread_remove(pset_clutch_root, thread, mach_absolute_time(), SCHED_CLUTCH_BUCKET_OPTIONS_NONE);
 		} else {
 			rq = sched_clutch_thread_bound_runq(processor, thread);
 			run_queue_remove(rq, thread);
@@ -2722,7 +2866,7 @@ sched_clutch_bucket_threads_drain(sched_clutch_bucket_t clutch_bucket, sched_clu
 	uint64_t current_timestamp = mach_approximate_time();
 	while (thread_count > 0) {
 		thread = run_queue_peek(&clutch_bucket->scb_runq);
-		sched_clutch_thread_remove(root_clutch, thread, current_timestamp);
+		sched_clutch_thread_remove(root_clutch, thread, current_timestamp, SCHED_CLUTCH_BUCKET_OPTIONS_NONE);
 		enqueue_tail(clutch_threads, &thread->runq_links);
 		thread_count--;
 	}

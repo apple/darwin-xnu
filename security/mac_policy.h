@@ -1856,6 +1856,32 @@ typedef int mpo_mount_check_snapshot_delete_t(
 	const char *name
 	);
 /**
+ *  @brief Access control check for fs_snapshot_mount
+ *  @param cred Subject credential
+ *  @param rvp Vnode of either the root directory of the
+ *  filesystem to mount snapshot of, or the device from
+ *  which to mount the snapshot.
+ *  @param vp Vnode that is to be the mount point
+ *  @param cnp Component name for vp
+ *  @param name Name of snapshot to mount
+ *  @param vfc_name Filesystem type name
+ *
+ *  Determine whether the subject identified by the credential can
+ *  mount the named snapshot from the filesystem at the given
+ *  directory.
+ *
+ *  @return Return 0 if access is granted, otherwise an appropriate value
+ *  for errno should be returned.
+ */
+typedef int mpo_mount_check_snapshot_mount_t(
+	kauth_cred_t cred,
+	struct vnode *rvp,
+	struct vnode *vp,
+	struct componentname *cnp,
+	const char *name,
+	const char *vfc_name
+	);
+/**
  *  @brief Access control check for fs_snapshot_revert
  *  @param cred Subject credential
  *  @mp Filesystem mount point to revert to snapshot
@@ -6296,7 +6322,7 @@ typedef void mpo_reserved_hook_t(void);
  * Please note that this should be kept in sync with the check assumptions
  * policy in bsd/kern/policy_check.c (policy_ops struct).
  */
-#define MAC_POLICY_OPS_VERSION 59 /* inc when new reserved slots are taken */
+#define MAC_POLICY_OPS_VERSION 62 /* inc when new reserved slots are taken */
 struct mac_policy_ops {
 	mpo_audit_check_postselect_t            *mpo_audit_check_postselect;
 	mpo_audit_check_preselect_t             *mpo_audit_check_preselect;
@@ -6450,7 +6476,7 @@ struct mac_policy_ops {
 
 	mpo_vnode_check_trigger_resolve_t       *mpo_vnode_check_trigger_resolve;
 	mpo_mount_check_mount_late_t            *mpo_mount_check_mount_late;
-	mpo_reserved_hook_t                     *mpo_reserved1;
+	mpo_mount_check_snapshot_mount_t        *mpo_mount_check_snapshot_mount;
 	mpo_reserved_hook_t                     *mpo_reserved2;
 	mpo_skywalk_flow_check_connect_t        *mpo_skywalk_flow_check_connect;
 	mpo_skywalk_flow_check_listen_t         *mpo_skywalk_flow_check_listen;

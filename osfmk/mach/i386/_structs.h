@@ -222,7 +222,6 @@ _STRUCT_XMM_REG
 };
 #endif /* !__DARWIN_UNIX03 */
 
-#if !defined(RC_HIDE_XNU_J137)
 /* defn of 256 bit YMM regs */
 
 #if __DARWIN_UNIX03
@@ -268,7 +267,6 @@ _STRUCT_OPMASK_REG
 	char		opmask_reg[8];
 };
 #endif /* !__DARWIN_UNIX03 */
-#endif /* not RC_HIDE_XNU_J137 */
 
 /* 
  * Floating point state.
@@ -362,7 +360,6 @@ _STRUCT_X86_AVX_STATE32
 	_STRUCT_XMM_REG		__fpu_ymmh7;		/* YMMH 7  */
 };
 
-#if !defined(RC_HIDE_XNU_J137)
 #define	_STRUCT_X86_AVX512_STATE32	struct __darwin_i386_avx512_state
 _STRUCT_X86_AVX512_STATE32
 {
@@ -424,7 +421,6 @@ _STRUCT_X86_AVX512_STATE32
 	_STRUCT_YMM_REG		__fpu_zmmh6;		/* ZMMH 6  */
 	_STRUCT_YMM_REG		__fpu_zmmh7;		/* ZMMH 7  */
 };
-#endif /* not RC_HIDE_XNU_J137 */
 
 #else /* !__DARWIN_UNIX03 */
 #define	_STRUCT_X86_FLOAT_STATE32	struct i386_float_state
@@ -510,7 +506,6 @@ _STRUCT_X86_AVX_STATE32
 	_STRUCT_XMM_REG		fpu_ymmh7;		/* YMMH 7  */
 };
 
-#if !defined(RC_HIDE_XNU_J137)
 #define	_STRUCT_X86_AVX512_STATE32	struct i386_avx512_state
 _STRUCT_X86_AVX512_STATE32
 {
@@ -572,7 +567,6 @@ _STRUCT_X86_AVX512_STATE32
 	_STRUCT_YMM_REG		fpu_zmmh6;		/* ZMMH 6  */
 	_STRUCT_YMM_REG		fpu_zmmh7;		/* ZMMH 7  */
 };
-#endif /* not RC_HIDE_XNU_J137 */
 
 #endif /* !__DARWIN_UNIX03 */
 
@@ -835,7 +829,6 @@ _STRUCT_X86_AVX_STATE64
 	_STRUCT_XMM_REG		__fpu_ymmh15;		/* YMMH 15  */
 };
 
-#if !defined(RC_HIDE_XNU_J137)
 #define	_STRUCT_X86_AVX512_STATE64	struct __darwin_x86_avx512_state64
 _STRUCT_X86_AVX512_STATE64
 {
@@ -943,7 +936,6 @@ _STRUCT_X86_AVX512_STATE64
 	_STRUCT_ZMM_REG		__fpu_zmm30;		/* ZMM 30  */
 	_STRUCT_ZMM_REG		__fpu_zmm31;		/* ZMM 31  */
 };
-#endif /* not RC_HIDE_XNU_J137 */
 
 #else /* !__DARWIN_UNIX03 */
 #define	_STRUCT_X86_FLOAT_STATE64	struct x86_float_state64
@@ -1065,7 +1057,6 @@ _STRUCT_X86_AVX_STATE64
 	_STRUCT_XMM_REG		fpu_ymmh15;		/* YMMH 15  */
 };
 
-#if !defined(RC_HIDE_XNU_J137)
 #define	_STRUCT_X86_AVX512_STATE64	struct x86_avx512_state64
 _STRUCT_X86_AVX512_STATE64
 {
@@ -1173,7 +1164,6 @@ _STRUCT_X86_AVX512_STATE64
 	_STRUCT_ZMM_REG		fpu_zmm30;		/* ZMM 30  */
 	_STRUCT_ZMM_REG		fpu_zmm31;		/* ZMM 31  */
 };
-#endif /* not RC_HIDE_XNU_J137 */
 
 #endif /* !__DARWIN_UNIX03 */
 

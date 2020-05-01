@@ -332,19 +332,24 @@ oslog_streamopen(__unused dev_t dev, __unused int flags, __unused int mode, stru
 	if (!oslog_stream_msg_bufc) {
 		return ENOMEM;
 	}
+	/* Zeroing to avoid copying uninitialized struct padding to userspace. */
+	bzero(oslog_stream_msg_bufc, oslog_stream_buf_size);
 
 	/* entries to support kernel logging in stream mode */
-	entries = kalloc(oslog_stream_num_entries * sizeof(struct oslog_stream_buf_entry_s));
+	size_t entries_size = oslog_stream_num_entries * sizeof(struct oslog_stream_buf_entry_s);
+	entries = kalloc(entries_size);
 	if (!entries) {
 		kfree(oslog_stream_msg_bufc, oslog_stream_buf_size);
 		return ENOMEM;
 	}
+	/* Zeroing to avoid copying uninitialized struct padding to userspace. */
+	bzero(entries, entries_size);
 
 	stream_lock();
 	if (oslog_stream_open) {
 		stream_unlock();
 		kfree(oslog_stream_msg_bufc, oslog_stream_buf_size);
-		kfree(entries, oslog_stream_num_entries * sizeof(struct oslog_stream_buf_entry_s));
+		kfree(entries, entries_size);
 		return EBUSY;
 	}
 
@@ -359,9 +364,6 @@ oslog_streamopen(__unused dev_t dev, __unused int flags, __unused int mode, stru
 
 	for (int i = 0; i < oslog_stream_num_entries; i++) {
 		oslog_stream_buf_entries[i].type = oslog_stream_link_type_log;
-		oslog_stream_buf_entries[i].offset = 0;
-		oslog_stream_buf_entries[i].size = 0;
-		oslog_stream_buf_entries[i].timestamp = 0;
 		STAILQ_INSERT_TAIL(&oslog_stream_free_head, &oslog_stream_buf_entries[i], buf_entries);
 	}
 

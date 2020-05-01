@@ -1391,7 +1391,6 @@ OSMetaClass::getSuperClass() const
 }
 
 /*********************************************************************
-* xxx - I want to rename this :-/
 *********************************************************************/
 const OSSymbol *
 OSMetaClass::getKmodName() const
@@ -1401,6 +1400,14 @@ OSMetaClass::getKmodName() const
                 return myKext->getIdentifier();
 	}
         return OSSymbol::withCStringNoCopy("unknown");
+}
+
+/*********************************************************************
+*********************************************************************/
+OSKext *
+OSMetaClass::getKext() const
+{
+        return reserved ? reserved->kext : NULL;
 }
 
 /*********************************************************************

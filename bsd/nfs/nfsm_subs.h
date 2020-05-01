@@ -73,6 +73,8 @@
 
 #ifdef __APPLE_API_PRIVATE
 
+#include <nfs/nfs_conf.h>
+
 int nfsm_rpchead(struct nfsreq *, mbuf_t, u_int64_t *, mbuf_t *);
 int nfsm_rpchead2(struct nfsmount *, int, int, int, int, int, kauth_cred_t, struct nfsreq *, mbuf_t, u_int64_t *, mbuf_t *);
 
@@ -96,7 +98,7 @@ int nfsm_chain_get_fh_attr(struct nfsmount *, struct nfsm_chain *, nfsnode_t,
 int nfsm_chain_get_wcc_data_f(struct nfsm_chain *, nfsnode_t, struct timespec *, int *, u_int64_t *);
 int nfsm_chain_get_secinfo(struct nfsm_chain *, uint32_t *, int *);
 
-#if NFSSERVER
+#if CONFIG_NFS_SERVER
 void nfsm_adj(mbuf_t, int, int);
 int nfsm_mbuf_get_list(size_t, mbuf_t *, int *);
 
@@ -106,7 +108,7 @@ int nfsm_chain_add_wcc_data_f(struct nfsrv_descript *, struct nfsm_chain *, int,
 int nfsm_chain_get_path_namei(struct nfsm_chain *, uint32_t, struct nameidata *);
 int nfsm_chain_get_sattr(struct nfsrv_descript *, struct nfsm_chain *, struct vnode_attr *);
 int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
-#endif /* NFSSERVER */
+#endif /* CONFIG_NFS_SERVER */
 
 /* check name length */
 #define nfsm_name_len_check(E, ND, LEN) \

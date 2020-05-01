@@ -149,6 +149,7 @@ typedef struct cfil_crypto_data {
 #define CFM_OP_DATA_IN 4                /* data being received */
 #define CFM_OP_DISCONNECT_OUT 5         /* no more outgoing data */
 #define CFM_OP_DISCONNECT_IN 6          /* no more incoming data */
+#define CFM_OP_STATS 7                  /* periodic stats report(s) */
 
 /*
  * Operations associated with action from filter to kernel
@@ -263,6 +264,30 @@ struct cfil_msg_sock_closed {
 } __attribute__((aligned(8)));
 
 /*
+ * struct cfil_msg_stats_report
+ *
+ * Statistics report for flow(s).
+ *
+ * Action: No reply is expected.
+ *
+ * Valid Types: CFM_TYPE_EVENT
+ *
+ * Valid Op: CFM_OP_STATS
+ */
+struct cfil_msg_sock_stats {
+	cfil_sock_id_t          cfs_sock_id;
+	uint64_t                cfs_byte_inbound_count;
+	uint64_t                cfs_byte_outbound_count;
+	union sockaddr_in_4_6   cfs_laddr;
+} __attribute__((aligned(8)));
+
+struct cfil_msg_stats_report {
+	struct cfil_msg_hdr        cfr_msghdr;
+	uint32_t                   cfr_count;
+	struct cfil_msg_sock_stats cfr_stats[];
+} __attribute__((aligned(8)));
+
+/*
  * struct cfil_msg_action
  *
  * Valid Type: CFM_TYPE_ACTION
@@ -285,6 +310,7 @@ struct cfil_msg_action {
 	uint64_t                cfa_in_peek_offset;
 	uint64_t                cfa_out_pass_offset;
 	uint64_t                cfa_out_peek_offset;
+	uint32_t                cfa_stats_frequency; // Statistics frequency in milliseconds
 };
 
 /*
@@ -408,6 +434,10 @@ struct cfil_stats {
 	int32_t cfs_data_event_ok;
 	int32_t cfs_data_event_flow_control;
 	int32_t cfs_data_event_fail;
+
+	int32_t cfs_stats_event_ok;
+	int32_t cfs_stats_event_flow_control;
+	int32_t cfs_stats_event_fail;
 
 	int32_t cfs_disconnect_in_event_ok;
 	int32_t cfs_disconnect_out_event_ok;

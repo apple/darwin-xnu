@@ -45,8 +45,7 @@
  * IOBufferMemoryDescriptor describes a memory buffer allocated in the callers address space.
  *
  * @discussion
- * To allocate memory for I/O or sharing, use IOBufferMemoryDescriptor::Create()
- * Methods in this class are used for memory that was supplied as a parameter.
+ * To allocate memory for I/O or sharing, use IOBufferMemoryDescriptor::Create().
  * IOBufferMemoryDescriptor can be handed to any API that expects an IOMemoryDescriptor.
  */
 

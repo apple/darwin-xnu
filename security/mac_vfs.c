@@ -100,7 +100,7 @@
  * KDBG_EVENTID(DBG_FSYSTEM, DBG_VFS, dcode) global event id, see bsd/sys/kdebug.h.
  * Note that dcode is multiplied by 4 and ORed as part of the construction. See bsd/kern/trace_codes
  * for list of system-wide {global event id, name} pairs. Currently DBG_VFS event ids are in range
- * [0x3130000, 0x313016C].
+ * [0x3130000, 0x3130170].
  */
 
 //#define VFS_TRACE_POLICY_OPS
@@ -2334,6 +2334,29 @@ mac_mount_check_snapshot_delete(vfs_context_t ctx, struct mount *mp,
 	VFS_KERNEL_DEBUG_START1(80, mp);
 	MAC_CHECK(mount_check_snapshot_delete, cred, mp, name);
 	VFS_KERNEL_DEBUG_END1(80, mp);
+	return error;
+}
+
+int
+mac_mount_check_snapshot_mount(vfs_context_t ctx, struct vnode *rvp, struct vnode *vp, struct componentname *cnp,
+    const char *name, const char *vfc_name)
+{
+	kauth_cred_t cred;
+	int error;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_vnode_enforce) {
+		return 0;
+	}
+#endif
+	cred = vfs_context_ucred(ctx);
+	if (!mac_cred_check_enforce(cred)) {
+		return 0;
+	}
+	VFS_KERNEL_DEBUG_START1(92, vp);
+	MAC_CHECK(mount_check_snapshot_mount, cred, rvp, vp, cnp, name, vfc_name);
+	VFS_KERNEL_DEBUG_END1(92, vp);
 	return error;
 }
 

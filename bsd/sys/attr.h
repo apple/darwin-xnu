@@ -531,8 +531,10 @@ typedef struct vol_attributes_attr {
 #define ATTR_CMNEXT_NOFIRMLINKPATH     0x00000020
 #define ATTR_CMNEXT_REALDEVID   0x00000040
 #define ATTR_CMNEXT_REALFSID    0x00000080
+#define ATTR_CMNEXT_CLONEID     0x00000100
+#define ATTR_CMNEXT_EXT_FLAGS   0x00000200
 
-#define ATTR_CMNEXT_VALIDMASK   0x000000fc
+#define ATTR_CMNEXT_VALIDMASK   0x000003fc
 #define ATTR_CMNEXT_SETMASK             0x00000000
 
 /* Deprecated fork attributes */

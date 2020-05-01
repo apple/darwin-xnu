@@ -1261,13 +1261,15 @@ dirloop:
 			tdp = dp;
 			dp = tdp->v_mount->mnt_vnodecovered;
 
-			vnode_put(tdp);
-
 			if ((vnode_getwithref(dp))) {
+				vnode_put(tdp);
 				dp = NULLVP;
 				error = ENOENT;
 				goto bad;
 			}
+
+			vnode_put(tdp);
+
 			ndp->ni_dvp = dp;
 			dp_authorized = 0;
 		}

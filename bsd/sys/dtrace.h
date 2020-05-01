@@ -1460,6 +1460,7 @@ typedef struct dtrace_module_symbols {
 } dtrace_module_symbols_t;
 
 #define DTRACE_MODULE_SYMBOLS_SIZE(count) (sizeof(dtrace_module_symbols_t) + ((count - 1) * sizeof(dtrace_symbol_t)))
+#define DTRACE_MODULE_SYMBOLS_COUNT(size) ((size - sizeof(dtrace_module_symbols_t)) / sizeof(dtrace_symbol_t) + 1)
 
 typedef struct dtrace_module_uuids_list {
 	uint64_t	dtmul_count;

@@ -82,10 +82,12 @@
 #include <kern/simple_lock.h>
 #include <kern/mach_param.h>
 #include <kern/ipc_host.h>
+#include <kern/ipc_kobject.h>
 #include <kern/ipc_mig.h>
 #include <kern/host_notify.h>
 #include <kern/mk_timer.h>
 #include <kern/misc_protos.h>
+#include <kern/suid_cred.h>
 #include <kern/sync_lock.h>
 #include <kern/sync_sema.h>
 #include <kern/ux_handler.h>
@@ -212,7 +214,7 @@ ipc_bootstrap(void)
 #if     MACH_ASSERT
 	ipc_port_debug_init();
 #endif
-	mig_init();
+	ipc_kobject_init();
 	ipc_table_init();
 	ipc_voucher_init();
 
@@ -227,6 +229,8 @@ ipc_bootstrap(void)
 #if CONFIG_ARCADE
 	arcade_init();
 #endif
+
+	suid_cred_init();
 
 	if (PE_parse_boot_argn("prioritize_launch", &prioritize_launch_bootarg, sizeof(prioritize_launch_bootarg))) {
 		prioritize_launch = !!prioritize_launch_bootarg;

@@ -25,6 +25,10 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+
+#include <nfs/nfs_conf.h>
+#if CONFIG_NFS_SERVER
+
 #include <stdint.h>
 #include <sys/param.h>
 #include <sys/mount_internal.h>
@@ -398,3 +402,5 @@ direct:
 
 	return;
 }
+
+#endif /* CONFIG_NFS_SERVER */

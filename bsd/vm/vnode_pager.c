@@ -73,6 +73,7 @@
 
 #include <kern/assert.h>
 #include <sys/kdebug.h>
+#include <nfs/nfs_conf.h>
 #include <nfs/rpcv2.h>
 #include <nfs/nfsproto.h>
 #include <nfs/nfs.h>
@@ -430,12 +431,12 @@ vnode_pageout(struct vnode *vp,
 		 * of it's pages
 		 */
 		for (offset = upl_offset; isize; isize -= PAGE_SIZE, offset += PAGE_SIZE) {
-#if NFSCLIENT
+#if CONFIG_NFS_CLIENT
 			if (vp->v_tag == VT_NFS) {
 				/* check with nfs if page is OK to drop */
 				error = nfs_buf_page_inval(vp, (off_t)f_offset);
 			} else
-#endif
+#endif /* CONFIG_NFS_CLIENT */
 			{
 				blkno = ubc_offtoblk(vp, (off_t)f_offset);
 				error = buf_invalblkno(vp, blkno, 0);
@@ -487,12 +488,12 @@ vnode_pageout(struct vnode *vp,
 			 * Note we must not sleep here if the buffer is busy - that is
 			 * a lock inversion which causes deadlock.
 			 */
-#if NFSCLIENT
+#if CONFIG_NFS_CLIENT
 			if (vp->v_tag == VT_NFS) {
 				/* check with nfs if page is OK to drop */
 				error = nfs_buf_page_inval(vp, (off_t)f_offset);
 			} else
-#endif
+#endif /* CONFIG_NFS_CLIENT */
 			{
 				blkno = ubc_offtoblk(vp, (off_t)f_offset);
 				error = buf_invalblkno(vp, blkno, 0);

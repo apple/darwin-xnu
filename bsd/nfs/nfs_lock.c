@@ -55,6 +55,9 @@
  *      from BSDI nfs_lock.c,v 2.4 1998/12/14 23:49:56 jch Exp
  */
 
+#include <nfs/nfs_conf.h>
+#if CONFIG_NFS_CLIENT
+
 #include <sys/cdefs.h>
 #include <sys/param.h>
 #include <sys/systm.h>
@@ -1050,3 +1053,5 @@ nfslockdnotify(proc_t p, user_addr_t argp)
 
 	return error;
 }
+
+#endif /* CONFIG_NFS_CLIENT */

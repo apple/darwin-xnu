@@ -130,9 +130,7 @@ struct x86_avx512_thread_state {
 typedef union {
 	struct x86_fx_thread_state      fx;
 	struct x86_avx_thread_state     avx;
-#if !defined(RC_HIDE_XNU_J137)
 	struct x86_avx512_thread_state  avx512;
-#endif
 } x86_ext_thread_state_t;
 
 #define EVEX_PREFIX     0x62            /* AVX512's EVEX vector operation prefix */

@@ -6682,7 +6682,7 @@ vm_record_rtfault(thread_t cthread, uint64_t fstart, vm_map_offset_t fault_vaddr
 	uint64_t cupid = get_current_unique_pid();
 
 	uintptr_t bpc = 0;
-	uint32_t bfrs = 0;
+	int btr = 0;
 	bool u64 = false;
 
 	/* Capture a single-frame backtrace; this extracts just the program
@@ -6690,7 +6690,7 @@ vm_record_rtfault(thread_t cthread, uint64_t fstart, vm_map_offset_t fault_vaddr
 	 * further user stack traversals, thus avoiding copyin()s and further
 	 * faults.
 	 */
-	int btr = backtrace_thread_user(cthread, &bpc, 1U, &bfrs, &u64, NULL);
+	unsigned int bfrs = backtrace_thread_user(cthread, &bpc, 1U, &btr, &u64, NULL);
 
 	if ((btr == 0) && (bfrs > 0)) {
 		cfpc = bpc;

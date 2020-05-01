@@ -732,6 +732,11 @@ netagent_handle_register_inner(struct netagent_session *session, struct netagent
 {
 	lck_rw_lock_exclusive(&netagent_lock);
 
+	if (session->wrapper != NULL) {
+		lck_rw_done(&netagent_lock);
+		return EINVAL;
+	}
+
 	new_wrapper->control_unit = session->control_unit;
 	new_wrapper->event_handler = session->event_handler;
 	new_wrapper->event_context = session->event_context;
@@ -757,6 +762,7 @@ netagent_register(netagent_session_t _session, struct netagent *agent)
 {
 	int data_size = 0;
 	struct netagent_wrapper *new_wrapper = NULL;
+	uuid_t registered_uuid;
 
 	struct netagent_session *session = (struct netagent_session *)_session;
 	if (session == NULL) {
@@ -790,6 +796,8 @@ netagent_register(netagent_session_t _session, struct netagent *agent)
 	memset(new_wrapper, 0, sizeof(*new_wrapper) + data_size);
 	__nochk_memcpy(&new_wrapper->netagent, agent, sizeof(struct netagent) + data_size);
 
+	uuid_copy(registered_uuid, new_wrapper->netagent.netagent_uuid);
+
 	int error = netagent_handle_register_inner(session, new_wrapper);
 	if (error != 0) {
 		FREE(new_wrapper, M_NETAGENT);
@@ -797,7 +805,7 @@ netagent_register(netagent_session_t _session, struct netagent *agent)
 	}
 
 	NETAGENTLOG0(LOG_DEBUG, "Registered new agent");
-	netagent_post_event(new_wrapper->netagent.netagent_uuid, KEV_NETAGENT_REGISTERED, TRUE, false);
+	netagent_post_event(registered_uuid, KEV_NETAGENT_REGISTERED, TRUE, false);
 
 	return 0;
 }
@@ -810,6 +818,7 @@ netagent_handle_register_setopt(struct netagent_session *session, u_int8_t *payl
 	struct netagent_wrapper *new_wrapper = NULL;
 	u_int32_t response_error = 0;
 	struct netagent *register_netagent = (struct netagent *)(void *)payload;
+	uuid_t registered_uuid;
 
 	if (session == NULL) {
 		NETAGENTLOG0(LOG_ERR, "Failed to find session");
@@ -859,6 +868,8 @@ netagent_handle_register_setopt(struct netagent_session *session, u_int8_t *payl
 	memset(new_wrapper, 0, sizeof(*new_wrapper) + data_size);
 	__nochk_memcpy(&new_wrapper->netagent, register_netagent, sizeof(struct netagent) + data_size);
 
+	uuid_copy(registered_uuid, new_wrapper->netagent.netagent_uuid);
+
 	response_error = netagent_handle_register_inner(session, new_wrapper);
 	if (response_error != 0) {
 		FREE(new_wrapper, M_NETAGENT);
@@ -866,7 +877,7 @@ netagent_handle_register_setopt(struct netagent_session *session, u_int8_t *payl
 	}
 
 	NETAGENTLOG0(LOG_DEBUG, "Registered new agent");
-	netagent_post_event(new_wrapper->netagent.netagent_uuid, KEV_NETAGENT_REGISTERED, TRUE, false);
+	netagent_post_event(registered_uuid, KEV_NETAGENT_REGISTERED, TRUE, false);
 
 done:
 	return response_error;
@@ -880,8 +891,7 @@ netagent_handle_register_message(struct netagent_session *session, u_int32_t mes
 	int data_size = 0;
 	struct netagent_wrapper *new_wrapper = NULL;
 	u_int32_t response_error = NETAGENT_MESSAGE_ERROR_INTERNAL;
-	uuid_t netagent_uuid;
-	uuid_clear(netagent_uuid);
+	uuid_t registered_uuid;
 
 	if (session == NULL) {
 		NETAGENTLOG0(LOG_ERR, "Failed to find session");
@@ -928,11 +938,19 @@ netagent_handle_register_message(struct netagent_session *session, u_int32_t mes
 		goto fail;
 	}
 
-	(void)netagent_handle_register_inner(session, new_wrapper);
+	uuid_copy(registered_uuid, new_wrapper->netagent.netagent_uuid);
+
+	error = netagent_handle_register_inner(session, new_wrapper);
+	if (error) {
+		NETAGENTLOG(LOG_ERR, "Failed to register agent: %d", error);
+		FREE(new_wrapper, M_NETAGENT);
+		response_error = NETAGENT_MESSAGE_ERROR_INTERNAL;
+		goto fail;
+	}
 
 	NETAGENTLOG0(LOG_DEBUG, "Registered new agent");
 	netagent_send_success_response(session, NETAGENT_MESSAGE_TYPE_REGISTER, message_id);
-	netagent_post_event(new_wrapper->netagent.netagent_uuid, KEV_NETAGENT_REGISTERED, TRUE, false);
+	netagent_post_event(registered_uuid, KEV_NETAGENT_REGISTERED, TRUE, false);
 	return;
 fail:
 	netagent_send_error_response(session, NETAGENT_MESSAGE_TYPE_REGISTER, message_id, response_error);
@@ -1102,6 +1120,8 @@ netagent_update(netagent_session_t _session, struct netagent *agent)
 	u_int8_t agent_changed;
 	int data_size = 0;
 	struct netagent_wrapper *new_wrapper = NULL;
+	bool should_update_immediately;
+	uuid_t updated_uuid;
 
 	struct netagent_session *session = (struct netagent_session *)_session;
 	if (session == NULL) {
@@ -1134,10 +1154,12 @@ netagent_update(netagent_session_t _session, struct netagent *agent)
 	memset(new_wrapper, 0, sizeof(*new_wrapper) + data_size);
 	__nochk_memcpy(&new_wrapper->netagent, agent, sizeof(struct netagent) + data_size);
 
+	uuid_copy(updated_uuid, new_wrapper->netagent.netagent_uuid);
+	should_update_immediately = (NETAGENT_FLAG_UPDATE_IMMEDIATELY == (new_wrapper->netagent.netagent_flags & NETAGENT_FLAG_UPDATE_IMMEDIATELY));
+
 	int error = netagent_handle_update_inner(session, new_wrapper, data_size, &agent_changed, kNetagentErrorDomainPOSIX);
 	if (error == 0) {
-		bool should_update_immediately = (NETAGENT_FLAG_UPDATE_IMMEDIATELY == (session->wrapper->netagent.netagent_flags & NETAGENT_FLAG_UPDATE_IMMEDIATELY));
-		netagent_post_event(session->wrapper->netagent.netagent_uuid, KEV_NETAGENT_UPDATED, agent_changed, should_update_immediately);
+		netagent_post_event(updated_uuid, KEV_NETAGENT_UPDATED, agent_changed, should_update_immediately);
 		if (agent_changed == FALSE) {
 			// The session wrapper does not need the "new_wrapper" as nothing changed
 			FREE(new_wrapper, M_NETAGENT);
@@ -1158,6 +1180,8 @@ netagent_handle_update_setopt(struct netagent_session *session, u_int8_t *payloa
 	errno_t response_error = 0;
 	struct netagent *update_netagent = (struct netagent *)(void *)payload;
 	u_int8_t agent_changed;
+	bool should_update_immediately;
+	uuid_t updated_uuid;
 
 	if (session == NULL) {
 		NETAGENTLOG0(LOG_ERR, "Failed to find session");
@@ -1207,10 +1231,12 @@ netagent_handle_update_setopt(struct netagent_session *session, u_int8_t *payloa
 	memset(new_wrapper, 0, sizeof(*new_wrapper) + data_size);
 	__nochk_memcpy(&new_wrapper->netagent, update_netagent, sizeof(struct netagent) + data_size);
 
+	uuid_copy(updated_uuid, new_wrapper->netagent.netagent_uuid);
+	should_update_immediately = (NETAGENT_FLAG_UPDATE_IMMEDIATELY == (new_wrapper->netagent.netagent_flags & NETAGENT_FLAG_UPDATE_IMMEDIATELY));
+
 	response_error = netagent_handle_update_inner(session, new_wrapper, data_size, &agent_changed, kNetagentErrorDomainPOSIX);
 	if (response_error == 0) {
-		bool should_update_immediately = (NETAGENT_FLAG_UPDATE_IMMEDIATELY == (session->wrapper->netagent.netagent_flags & NETAGENT_FLAG_UPDATE_IMMEDIATELY));
-		netagent_post_event(session->wrapper->netagent.netagent_uuid, KEV_NETAGENT_UPDATED, agent_changed, should_update_immediately);
+		netagent_post_event(updated_uuid, KEV_NETAGENT_UPDATED, agent_changed, should_update_immediately);
 		if (agent_changed == FALSE) {
 			// The session wrapper does not need the "new_wrapper" as nothing changed
 			FREE(new_wrapper, M_NETAGENT);
@@ -1232,6 +1258,8 @@ netagent_handle_update_message(struct netagent_session *session, u_int32_t messa
 	struct netagent_wrapper *new_wrapper = NULL;
 	u_int32_t response_error = NETAGENT_MESSAGE_ERROR_INTERNAL;
 	u_int8_t agent_changed;
+	uuid_t updated_uuid;
+	bool should_update_immediately;
 
 	if (session == NULL) {
 		NETAGENTLOG0(LOG_ERR, "Failed to find session");
@@ -1277,6 +1305,9 @@ netagent_handle_update_message(struct netagent_session *session, u_int32_t messa
 		goto fail;
 	}
 
+	uuid_copy(updated_uuid, new_wrapper->netagent.netagent_uuid);
+	should_update_immediately = (NETAGENT_FLAG_UPDATE_IMMEDIATELY == (new_wrapper->netagent.netagent_flags & NETAGENT_FLAG_UPDATE_IMMEDIATELY));
+
 	response_error = netagent_handle_update_inner(session, new_wrapper, data_size, &agent_changed, kNetagentErrorDomainUserDefined);
 	if (response_error != 0) {
 		FREE(new_wrapper, M_NETAGENT);
@@ -1284,8 +1315,7 @@ netagent_handle_update_message(struct netagent_session *session, u_int32_t messa
 	}
 
 	netagent_send_success_response(session, NETAGENT_MESSAGE_TYPE_UPDATE, message_id);
-	bool should_update_immediately = (NETAGENT_FLAG_UPDATE_IMMEDIATELY == (session->wrapper->netagent.netagent_flags & NETAGENT_FLAG_UPDATE_IMMEDIATELY));
-	netagent_post_event(session->wrapper->netagent.netagent_uuid, KEV_NETAGENT_UPDATED, agent_changed, should_update_immediately);
+	netagent_post_event(updated_uuid, KEV_NETAGENT_UPDATED, agent_changed, should_update_immediately);
 
 	if (agent_changed == FALSE) {
 		// The session wrapper does not need the "new_wrapper" as nothing changed

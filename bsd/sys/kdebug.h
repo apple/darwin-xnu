@@ -646,6 +646,7 @@ __BEGIN_DECLS
 
 /* The Kernel Debug Sub Classes for DBG_MISC */
 #define DBG_MISC_COREBRIGHTNESS 0x01
+#define DBG_MISC_VIDEOENG       0x02
 #define DBG_EVENT               0x10
 #define DBG_MISC_INSTRUMENTS    0x11
 #define DBG_MISC_INSTRUMENTSBT  0x12

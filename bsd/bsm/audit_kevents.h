@@ -447,7 +447,6 @@
 #define AUE_PIDFORTASK          43049   /* Darwin-specific. */
 #define AUE_SYSCTL_NONADMIN     43050
 #define AUE_COPYFILE            43051   /* Darwin-specific. */
-#define AUE_DBGPORTFORPID       43052   /* Darwin-specific. */
 /*
  * Events added to OpenBSM for FreeBSD and Linux; may also be used by Darwin
  * in the future.
@@ -615,6 +614,7 @@
 #define AUE_SETATTRLISTAT       43212   /* Darwin. */
 #define AUE_FMOUNT              43213   /* Darwin. */
 #define AUE_FSGETPATH_EXTENDED  43214   /* Darwin. */
+#define AUE_DBGPORTFORPID       43215   /* Darwin-specific. */
 
 #define AUE_SESSION_START       44901   /* Darwin. */
 #define AUE_SESSION_UPDATE      44902   /* Darwin. */

@@ -89,5 +89,7 @@ struct mach_core_fileheader {
 	struct mach_core_details files[MACH_CORE_FILEHEADER_MAXFILES];
 };
 
+#define KOBJECT_DESCRIPTION_LENGTH      512
+typedef char kobject_description_t[KOBJECT_DESCRIPTION_LENGTH];
 
 #endif  /* _MACH_DEBUG_MACH_DEBUG_TYPES_H_ */

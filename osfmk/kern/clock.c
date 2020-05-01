@@ -1619,7 +1619,9 @@ clock_interval_to_deadline(
 
 	clock_interval_to_absolutetime_interval(interval, scale_factor, &abstime);
 
-	*result = mach_absolute_time() + abstime;
+	if (os_add_overflow(mach_absolute_time(), abstime, result)) {
+		*result = UINT64_MAX;
+	}
 }
 
 void
@@ -1627,7 +1629,9 @@ clock_absolutetime_interval_to_deadline(
 	uint64_t                        abstime,
 	uint64_t                        *result)
 {
-	*result = mach_absolute_time() + abstime;
+	if (os_add_overflow(mach_absolute_time(), abstime, result)) {
+		*result = UINT64_MAX;
+	}
 }
 
 void
@@ -1635,7 +1639,9 @@ clock_continuoustime_interval_to_deadline(
 	uint64_t                        conttime,
 	uint64_t                        *result)
 {
-	*result = mach_continuous_time() + conttime;
+	if (os_add_overflow(mach_continuous_time(), conttime, result)) {
+		*result = UINT64_MAX;
+	}
 }
 
 void
@@ -1653,14 +1659,23 @@ clock_deadline_for_periodic_event(
 {
 	assert(interval != 0);
 
-	*deadline += interval;
+	// *deadline += interval;
+	if (os_add_overflow(*deadline, interval, deadline)) {
+		*deadline = UINT64_MAX;
+	}
 
 	if (*deadline <= abstime) {
-		*deadline = abstime + interval;
-		abstime = mach_absolute_time();
+		// *deadline = abstime + interval;
+		if (os_add_overflow(abstime, interval, deadline)) {
+			*deadline = UINT64_MAX;
+		}
 
+		abstime = mach_absolute_time();
 		if (*deadline <= abstime) {
-			*deadline = abstime + interval;
+			// *deadline = abstime + interval;
+			if (os_add_overflow(abstime, interval, deadline)) {
+				*deadline = UINT64_MAX;
+			}
 		}
 	}
 }

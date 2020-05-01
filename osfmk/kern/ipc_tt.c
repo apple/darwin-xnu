@@ -136,7 +136,7 @@ ipc_task_init(
 	int i;
 
 
-	kr = ipc_space_create(&ipc_table_entries[0], &space);
+	kr = ipc_space_create(&ipc_table_entries[0], IPC_LABEL_NONE, &space);
 	if (kr != KERN_SUCCESS) {
 		panic("ipc_task_init");
 	}
@@ -1516,7 +1516,7 @@ convert_port_to_locked_task(ipc_port_t port)
 			ip_unlock(port);
 			return TASK_NULL;
 		}
-		task = (task_t) port->ip_kobject;
+		task = (task_t) ip_get_kobject(port);
 		assert(task != TASK_NULL);
 
 		if (task_conversion_eval(ct, task)) {
@@ -1562,7 +1562,7 @@ convert_port_to_locked_task_inspect(ipc_port_t port)
 			ip_unlock(port);
 			return TASK_INSPECT_NULL;
 		}
-		task = (task_inspect_t)port->ip_kobject;
+		task = (task_inspect_t) ip_get_kobject(port);
 		assert(task != TASK_INSPECT_NULL);
 		/*
 		 * Normal lock ordering puts task_lock() before ip_lock().
@@ -1592,7 +1592,7 @@ convert_port_to_task_locked(
 
 	if (ip_kotype(port) == IKOT_TASK) {
 		task_t ct = current_task();
-		task = (task_t)port->ip_kobject;
+		task = (task_t) ip_get_kobject(port);
 		assert(task != TASK_NULL);
 
 		if (task_conversion_eval(ct, task)) {
@@ -1674,7 +1674,7 @@ convert_port_to_task_name(
 		if (ip_active(port) &&
 		    (ip_kotype(port) == IKOT_TASK ||
 		    ip_kotype(port) == IKOT_TASK_NAME)) {
-			task = (task_name_t)port->ip_kobject;
+			task = (task_name_t) ip_get_kobject(port);
 			assert(task != TASK_NAME_NULL);
 
 			task_reference_internal(task);
@@ -1696,7 +1696,7 @@ convert_port_to_task_inspect_locked(
 	require_ip_active(port);
 
 	if (ip_kotype(port) == IKOT_TASK) {
-		task = (task_inspect_t)port->ip_kobject;
+		task = (task_inspect_t) ip_get_kobject(port);
 		assert(task != TASK_INSPECT_NULL);
 
 		task_reference_internal(task);
@@ -1751,7 +1751,7 @@ convert_port_to_task_suspension_token(
 
 		if (ip_active(port) &&
 		    ip_kotype(port) == IKOT_TASK_RESUME) {
-			task = (task_suspension_token_t)port->ip_kobject;
+			task = (task_suspension_token_t) ip_get_kobject(port);
 			assert(task != TASK_NULL);
 
 			task_reference_internal(task);
@@ -1885,7 +1885,7 @@ convert_port_to_thread_locked(
 	require_ip_active(port);
 
 	if (ip_kotype(port) == IKOT_THREAD) {
-		thread = (thread_t)port->ip_kobject;
+		thread = (thread_t) ip_get_kobject(port);
 		assert(thread != THREAD_NULL);
 
 		if (options & PORT_TO_THREAD_NOT_CURRENT_THREAD) {
@@ -1948,7 +1948,7 @@ convert_port_to_thread_inspect(
 
 		if (ip_active(port) &&
 		    ip_kotype(port) == IKOT_THREAD) {
-			thread = (thread_inspect_t)port->ip_kobject;
+			thread = (thread_inspect_t) ip_get_kobject(port);
 			assert(thread != THREAD_INSPECT_NULL);
 			thread_reference_internal((thread_t)thread);
 		}

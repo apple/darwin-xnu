@@ -2088,6 +2088,15 @@ mac_iokit_check_hid_control(kauth_cred_t cred __unused)
 	return 0;
 }
 
+int mac_mount_check_snapshot_mount(vfs_context_t ctx, struct vnode *rvp, struct vnode *vp, struct componentname *cnp,
+    const char *name, const char *vfc_name);
+int
+mac_mount_check_snapshot_mount(vfs_context_t ctx __unused, struct vnode *rvp __unused, struct vnode *vp __unused,
+    struct componentname *cnp __unused, const char *name __unused, const char *vfc_name __unused)
+{
+	return 0;
+}
+
 int mac_vnode_check_trigger_resolve(vfs_context_t ctx __unused, struct vnode *dvp __unused, struct componentname *cnp __unused);
 int
 mac_vnode_check_trigger_resolve(vfs_context_t ctx __unused, struct vnode *dvp __unused, struct componentname *cnp __unused)

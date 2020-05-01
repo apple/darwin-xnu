@@ -693,7 +693,6 @@ enum {
 
 #define kIOPMWakeEventSource                0x00000001
 
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 /*****************************************************************************
  *
  * AOT defs
@@ -768,8 +767,6 @@ struct IOPMAOTMetrics
 };
 
 #define kIOPMAOTPowerKey    "aot-power"
-
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 /*****************************************************************************
  *

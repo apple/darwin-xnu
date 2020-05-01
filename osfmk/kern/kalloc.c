@@ -859,6 +859,7 @@ void
 		/* if size was too large for a zone, then use kmem_free */
 
 		vm_map_t alloc_map = kernel_map;
+		size = round_page(size);
 
 		if ((((vm_offset_t) data) >= kalloc_map_min) && (((vm_offset_t) data) <= kalloc_map_max)) {
 			alloc_map = kalloc_map;

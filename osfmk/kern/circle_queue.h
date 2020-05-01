@@ -149,6 +149,24 @@ circle_dequeue_tail(circle_queue_t cq)
 	return elt;
 }
 
+static inline void
+circle_queue_rotate_head_forward(circle_queue_t cq)
+{
+	queue_entry_t first = circle_queue_first(cq);
+	if (first != NULL) {
+		cq->head = first->next;
+	}
+}
+
+static inline void
+circle_queue_rotate_head_backward(circle_queue_t cq)
+{
+	queue_entry_t last = circle_queue_last(cq);
+	if (last != NULL) {
+		cq->head = last;
+	}
+}
+
 /*
  *	Macro:		cqe_element
  *	Function:

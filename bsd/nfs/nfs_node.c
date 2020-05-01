@@ -65,6 +65,8 @@
  * FreeBSD-Id: nfs_node.c,v 1.22 1997/10/28 14:06:20 bde Exp $
  */
 
+#include <nfs/nfs_conf.h>
+#if CONFIG_NFS_CLIENT
 
 #include <sys/param.h>
 #include <sys/kernel.h>
@@ -1451,3 +1453,5 @@ out:
 
 	return i <= nfsnodehash;
 }
+
+#endif /* CONFIG_NFS_CLIENT */

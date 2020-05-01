@@ -62,6 +62,7 @@
 #include <vm/vm_pageout.h>
 #include <vm/vm_fault.h>
 #include <vm/vm_shared_region.h>
+#include <vm/vm_compressor.h>
 #include <libkern/OSKextLibPrivate.h>
 
 #if defined(__x86_64__)
@@ -2751,6 +2752,9 @@ stackshot_thread_wait_owner_info(thread_t thread, thread_waitinfo_t *waitinfo)
 		break;
 	case kThreadWaitSleepWithInheritor:
 		kdp_sleep_with_inheritor_find_owner(thread->waitq, thread->wait_event, waitinfo);
+		break;
+	case kThreadWaitCompressor:
+		kdp_compressor_busy_find_owner(thread->wait_event, waitinfo);
 		break;
 	default:
 		waitinfo->owner = 0;

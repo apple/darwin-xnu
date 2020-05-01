@@ -245,7 +245,9 @@ extern int proc_selfpid(void);
 /* this routine returns the pid of the parent of the current process */
 extern int proc_selfppid(void);
 /* this routine returns the csflags of the current process */
-extern int proc_selfcsflags(void);
+extern uint64_t proc_selfcsflags(void);
+/* this routine populates the given flags param with the csflags of the given process. Returns 0 on success, -1 on error. */
+extern int proc_csflags(proc_t p, uint64_t* flags);
 /* this routine returns sends a signal signum to the process identified by the pid */
 extern void proc_signal(int pid, int signum);
 /* this routine checks whether any signal identified by the mask are pending in the  process identified by the pid. The check is  on all threads of the process. */
@@ -303,6 +305,16 @@ kauth_cred_t proc_ucred(proc_t p);
 extern int proc_issetugid(proc_t p);
 
 extern int proc_tbe(proc_t);
+
+/*!
+ *  @function proc_gettty
+ *  @abstract Copies the associated tty vnode for a given process if it exists. The caller needs to decrement the iocount of the vnode.
+ *  @return 0 on success. ENOENT if the process has no associated TTY. EINVAL if arguments are NULL or vnode_getwithvid fails.
+ */
+extern int proc_gettty(proc_t p, vnode_t *vp);
+
+/* this routine populates the associated tty device for a given process if it exists, returns 0 on success or else returns EINVAL */
+extern int proc_gettty_dev(proc_t p, dev_t *dev);
 
 /*!
  *  @function proc_selfpgrpid

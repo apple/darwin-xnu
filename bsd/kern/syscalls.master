@@ -37,6 +37,7 @@
 #include <sys/types.h>
 #include <sys/sysent.h>
 #include <sys/sysproto.h>
+#include <nfs/nfs_conf.h>
 
 0	AUE_NULL	ALL	{ int nosys(void); }   { indirect syscall }
 1	AUE_EXIT	ALL	{ void exit(int rval) NO_SYSCALL_STUB; } 
@@ -229,7 +230,7 @@
 153	AUE_PREAD	ALL	{ user_ssize_t pread(int fd, user_addr_t buf, user_size_t nbyte, off_t offset); } 
 154	AUE_PWRITE	ALL	{ user_ssize_t pwrite(int fd, user_addr_t buf, user_size_t nbyte, off_t offset); } 
 
-#if NFSSERVER
+#if NFSSERVER	/* XXX */
 155	AUE_NFS_SVC	ALL	{ int nfssvc(int flag, caddr_t argp); } 
 #else
 155	AUE_NULL	ALL	{ int nosys(void); } 
@@ -241,7 +242,7 @@
 159	AUE_UNMOUNT	ALL	{ int unmount(user_addr_t path, int flags); } 
 160	AUE_NULL	ALL	{ int nosys(void); }   { old async_daemon }
 
-#if NFSSERVER
+#if NFSSERVER	/* XXX */
 161	AUE_NFS_GETFH	ALL	{ int getfh(char *fname, fhandle_t *fhp); } 
 #else
 161	AUE_NULL	ALL	{ int nosys(void); } 
@@ -345,12 +346,12 @@
 245	AUE_FFSCTL	ALL	{ int ffsctl(int fd, u_long cmd, caddr_t data, u_int options); } 
 246	AUE_NULL	ALL	{ int nosys(void); } 
 
-#if NFSCLIENT
+#if NFSCLIENT	/* XXX */
 247	AUE_NULL	ALL	{ int nfsclnt(int flag, caddr_t argp); } 
 #else
 247	AUE_NULL	ALL	{ int nosys(void); } 
 #endif
-#if NFSSERVER
+#if NFSSERVER	/* XXX */
 248	AUE_FHOPEN	ALL	{ int fhopen(const struct fhandle *u_fhp, int flags); } 
 #else
 248	AUE_NULL	ALL	{ int nosys(void); } 

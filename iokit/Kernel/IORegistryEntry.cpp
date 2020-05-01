@@ -664,6 +664,25 @@ runPropertyAction(Action inAction, OSObject *target,
 	return res;
 }
 
+static IOReturn
+IORegistryEntryActionToBlock(OSObject *target,
+    void *arg0, void *arg1,
+    void *arg2, void *arg3)
+{
+	IORegistryEntry::ActionBlock block = (typeof(block))arg0;
+	return block();
+}
+
+IOReturn
+IORegistryEntry::runPropertyActionBlock(ActionBlock block)
+{
+	IOReturn res;
+
+	res = runPropertyAction(&IORegistryEntryActionToBlock, this, block);
+
+	return res;
+}
+
 OSObject *
 IORegistryEntry::getProperty( const OSString * aKey) const
 {

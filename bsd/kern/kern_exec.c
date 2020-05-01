@@ -1863,6 +1863,7 @@ exec_handle_port_actions(struct image_params *imgp,
 	kern_return_t kr;
 	boolean_t task_has_watchport_boost = task_has_watchports(current_task());
 	boolean_t in_exec = (imgp->ip_flags & IMGPF_EXEC);
+	boolean_t suid_cred_specified = FALSE;
 
 	for (i = 0; i < pacts->pspa_count; i++) {
 		act = &pacts->pspa_actions[i];
@@ -1886,6 +1887,16 @@ exec_handle_port_actions(struct image_params *imgp,
 				goto done;
 			}
 			break;
+
+		case PSPA_SUID_CRED:
+			/* Only a single suid credential can be specified. */
+			if (suid_cred_specified) {
+				ret = EINVAL;
+				goto done;
+			}
+			suid_cred_specified = TRUE;
+			break;
+
 		default:
 			ret = EINVAL;
 			goto done;
@@ -1973,6 +1984,11 @@ exec_handle_port_actions(struct image_params *imgp,
 			/* hold on to this till end of spawn */
 			actions->registered_array[registered_i++] = port;
 			break;
+
+		case PSPA_SUID_CRED:
+			imgp->ip_sc_port = port;
+			break;
+
 		default:
 			ret = EINVAL;
 			break;
@@ -3748,6 +3764,10 @@ bad:
 			imgp->ip_cs_error = OS_REASON_NULL;
 		}
 #endif
+		if (imgp->ip_sc_port != NULL) {
+			ipc_port_release_send(imgp->ip_sc_port);
+			imgp->ip_sc_port = NULL;
+		}
 	}
 
 #if CONFIG_DTRACE
@@ -5381,7 +5401,8 @@ exec_handle_sugid(struct image_params *imgp)
 	    kauth_cred_getuid(cred) != imgp->ip_origvattr->va_uid) ||
 	    ((imgp->ip_origvattr->va_mode & VSGID) != 0 &&
 	    ((kauth_cred_ismember_gid(cred, imgp->ip_origvattr->va_gid, &leave_sugid_clear) || !leave_sugid_clear) ||
-	    (kauth_cred_getgid(cred) != imgp->ip_origvattr->va_gid)))) {
+	    (kauth_cred_getgid(cred) != imgp->ip_origvattr->va_gid))) ||
+	    (imgp->ip_sc_port != NULL)) {
 #if CONFIG_MACF
 /* label for MAC transition and neither VSUID nor VSGID */
 handle_mac_transition:
@@ -5408,6 +5429,33 @@ handle_mac_transition:
 		 * proc's ucred lock. This prevents others from accessing
 		 * a garbage credential.
 		 */
+
+		if (imgp->ip_sc_port != NULL) {
+			extern int suid_cred_verify(ipc_port_t, vnode_t, uint32_t *);
+			int ret = -1;
+			uid_t uid = UINT32_MAX;
+
+			/*
+			 * Check that the vnodes match. If a script is being
+			 * executed check the script's vnode rather than the
+			 * interpreter's.
+			 */
+			struct vnode *vp = imgp->ip_scriptvp != NULL ? imgp->ip_scriptvp : imgp->ip_vp;
+
+			ret = suid_cred_verify(imgp->ip_sc_port, vp, &uid);
+			if (ret == 0) {
+				apply_kauth_cred_update(p, ^kauth_cred_t (kauth_cred_t my_cred) {
+					return kauth_cred_setresuid(my_cred,
+					KAUTH_UID_NONE,
+					uid,
+					uid,
+					KAUTH_UID_NONE);
+				});
+			} else {
+				error = EPERM;
+			}
+		}
+
 		if (imgp->ip_origvattr->va_mode & VSUID) {
 			apply_kauth_cred_update(p, ^kauth_cred_t (kauth_cred_t my_cred) {
 				return kauth_cred_setresuid(my_cred,

@@ -324,15 +324,9 @@ static IOPMPowerState
 	    .outputPowerCharacter   = kIOPMSleep,
 	    .inputPowerRequirement  = SLEEP_POWER },
 	{   .version                = 1,
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 	    .capabilityFlags        = kIOPMAOTCapability,
 	    .outputPowerCharacter   = kIOPMAOTPower,
 	    .inputPowerRequirement  = ON_POWER },
-#else /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
-	    .capabilityFlags        = 0,
-	    .outputPowerCharacter   = 0,
-	    .inputPowerRequirement  = 0xFFFFFFFF },
-#endif /* (defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 	{   .version                = 1,
 	    .capabilityFlags        = kIOPMPowerOn,
 	    .outputPowerCharacter   = kIOPMPowerOn,
@@ -983,11 +977,7 @@ IOPMrootDomain::updateTasksSuspend(void)
 {
 	bool newSuspend;
 
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 	newSuspend = (tasksSuspended || _aotTasksSuspended);
-#else /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
-	newSuspend = tasksSuspended;
-#endif /* (defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 	if (newSuspend == tasksSuspendState) {
 		return;
 	}
@@ -1234,7 +1224,6 @@ static SYSCTL_INT(_debug, OID_AUTO, swd_panic, CTLFLAG_RW, &gSwdPanic, 0, "");
 static SYSCTL_INT(_debug, OID_AUTO, swd_panic_phase, CTLFLAG_RW, &swd_panic_phase, 0, "");
 #endif
 
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 //******************************************************************************
 // AOT
 
@@ -1329,8 +1318,6 @@ static SYSCTL_PROC(_kern, OID_AUTO, aotmode,
     NULL, 0, sysctl_aotmode, "I", "");
 
 //******************************************************************************
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
-
 
 static const OSSymbol * gIOPMSettingAutoWakeCalendarKey;
 static const OSSymbol * gIOPMSettingAutoWakeSecondsKey;
@@ -1546,13 +1533,11 @@ IOPMrootDomain::start( IOService * nub )
 		&IOPMrootDomain::dispatchPowerEvent));
 	gIOPMWorkLoop->addEventSource(pmPowerStateQueue);
 
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 	_aotMode = 0;
 	_aotTimerES = IOTimerEventSource::timerEventSource(this,
 	    OSMemberFunctionCast(IOTimerEventSource::Action,
 	    this, &IOPMrootDomain::aotEvaluate));
 	gIOPMWorkLoop->addEventSource(_aotTimerES);
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 	// create our power parent
 	patriarch = new IORootParent;
@@ -1634,11 +1619,9 @@ IOPMrootDomain::start( IOService * nub )
 	sysctl_register_oid(&sysctl__kern_consoleoptions);
 	sysctl_register_oid(&sysctl__kern_progressoptions);
 
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 	sysctl_register_oid(&sysctl__kern_aotmode);
 	sysctl_register_oid(&sysctl__kern_aotmodebits);
 	sysctl_register_oid(&sysctl__kern_aotmetrics);
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 #if HIBERNATION
 	IOHibernateSystemInit(this);
@@ -2647,10 +2630,8 @@ IOPMrootDomain::powerChangeDone( unsigned long previousPowerState )
 	unsigned long newState;
 	clock_sec_t        secs;
 	clock_usec_t       microsecs;
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 	clock_sec_t        adjWakeTime;
 	IOPMCalendarStruct nowCalendar;
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 	ASSERT_GATED();
 	newState = getPowerState();
@@ -2664,7 +2645,6 @@ IOPMrootDomain::powerChangeDone( unsigned long previousPowerState )
 	notifierThread = current_thread();
 	switch (getPowerState()) {
 	case SLEEP_STATE: {
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 		if (kPMCalendarTypeInvalid != _aotWakeTimeCalendar.selector) {
 			secs = 0;
 			microsecs = 0;
@@ -2700,7 +2680,6 @@ IOPMrootDomain::powerChangeDone( unsigned long previousPowerState )
 			}
 		}
 		_aotPendingFlags &= ~kIOPMWakeEventAOTPerCycleFlags;
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 		acceptSystemWakeEvents(true);
 
 		// re-enable this timer for next sleep
@@ -2710,13 +2689,9 @@ IOPMrootDomain::powerChangeDone( unsigned long previousPowerState )
 		logtime(secs);
 		gIOLastSleepTime.tv_sec  = secs;
 		gIOLastSleepTime.tv_usec = microsecs;
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 		if (!_aotLastWakeTime) {
 			gIOLastUserSleepTime = gIOLastSleepTime;
 		}
-#else
-		gIOLastUserSleepTime = gIOLastSleepTime;
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 		gIOLastWakeTime.tv_sec = 0;
 		gIOLastWakeTime.tv_usec = 0;
@@ -2793,7 +2768,6 @@ IOPMrootDomain::powerChangeDone( unsigned long previousPowerState )
 		gIOLastWakeTime.tv_sec  = secs;
 		gIOLastWakeTime.tv_usec = microsecs;
 
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 		// aot
 		if (_aotWakeTimeCalendar.selector != kPMCalendarTypeInvalid) {
 			_aotWakeTimeCalendar.selector = kPMCalendarTypeInvalid;
@@ -2818,7 +2792,6 @@ IOPMrootDomain::powerChangeDone( unsigned long previousPowerState )
 				setWakeTime(_aotTestTime);
 			}
 		}
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 #if HIBERNATION
 		LOG("System %sWake\n", gIOHibernateState ? "SafeSleep " : "");
@@ -3356,7 +3329,6 @@ IOPMrootDomain::askChangeDownDone(
 			*cancel = true;
 			DLOG("cancel dark->sleep\n");
 		}
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 		if (_aotMode && (kPMCalendarTypeInvalid != _aotWakeTimeCalendar.selector)) {
 			uint64_t now = mach_continuous_time();
 			if (((now + _aotWakePreWindow) >= _aotWakeTimeContinuous)
@@ -3365,7 +3337,6 @@ IOPMrootDomain::askChangeDownDone(
 				IOLog("AOT wake window cancel: %qd, %qd\n", now, _aotWakeTimeContinuous);
 			}
 		}
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 	}
 }
 
@@ -3856,7 +3827,6 @@ IOPMrootDomain::willNotifyPowerChildren( IOPMPowerStateIndex newPowerState )
 #endif /* !CONFIG_EMBEDDED */
 		}
 
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 		_aotReadyToFullWake = false;
 #if 0
 		if (_aotLingerTime) {
@@ -3892,7 +3862,6 @@ IOPMrootDomain::willNotifyPowerChildren( IOPMPowerStateIndex newPowerState )
 			clock_interval_to_absolutetime_interval(2000, kMillisecondScale, &_aotWakePreWindow);
 			clock_interval_to_absolutetime_interval(1100, kMillisecondScale, &_aotWakePostWindow);
 		}
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 #if HIBERNATION
 		IOHibernateSystemSleep();
@@ -5629,13 +5598,11 @@ IOPMrootDomain::overrideOurPowerChange(
 	uint32_t changeFlags = *inOutChangeFlags;
 	uint32_t currentPowerState = (uint32_t) getPowerState();
 
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 	if ((AOT_STATE == powerState) && (ON_STATE == currentPowerState)) {
 		// Assertion may have been taken in AOT leading to changePowerStateTo(AOT)
 		*inOutChangeFlags |= kIOPMNotDone;
 		return;
 	}
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 	if (changeFlags & kIOPMParentInitiated) {
 		// Root parent is permanently pegged at max power,
@@ -5901,7 +5868,6 @@ IOPMrootDomain::handleOurPowerChangeStart(
 		    _desiredCapability, _currentCapability, _pendingCapability);
 	}
 
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 	if ((AOT_STATE == powerState) && (SLEEP_STATE != currentPowerState)) {
 		panic("illegal AOT entry from %s", getPowerStateString(currentPowerState));
 	}
@@ -5909,7 +5875,6 @@ IOPMrootDomain::handleOurPowerChangeStart(
 		aotShouldExit(false, true);
 		aotExit(false);
 	}
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 }
 
 void
@@ -7118,8 +7083,6 @@ IOPMConvertCalendarToSeconds(const IOPMCalendarStruct * dt)
 	return secs;
 }
 
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
-
 unsigned long
 IOPMrootDomain::getRUN_STATE(void)
 {
@@ -7271,22 +7234,6 @@ IOPMrootDomain::aotEvaluate(IOTimerEventSource * timer)
 	}
 }
 
-#else /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
-
-unsigned long
-IOPMrootDomain::getRUN_STATE(void)
-{
-	return ON_STATE;
-}
-
-IOReturn
-IOPMrootDomain::setWakeTime(uint64_t wakeContinuousTime)
-{
-	return kIOReturnUnsupported;
-}
-
-#endif /* (defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
-
 //******************************************************************************
 // adjustPowerState
 //
@@ -7305,7 +7252,6 @@ IOPMrootDomain::adjustPowerState( bool sleepASAP )
 
 	ASSERT_GATED();
 
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 	if (_aotNow) {
 		bool exitNow;
 
@@ -7335,7 +7281,6 @@ IOPMrootDomain::adjustPowerState( bool sleepASAP )
 		}
 		return;
 	}
-#endif /* (defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 	if ((!idleSleepEnabled) || !checkSystemSleepEnabled()) {
 		changePowerStateToPriv(getRUN_STATE());
@@ -8253,7 +8198,6 @@ IOPMrootDomain::evaluatePolicy( int stimulus, uint32_t arg )
 unsigned int
 IOPMrootDomain::idleSleepPreventersCount()
 {
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 	if (_aotMode) {
 		unsigned int count __block;
 		count = 0;
@@ -8264,7 +8208,6 @@ IOPMrootDomain::idleSleepPreventersCount()
 		});
 		return count;
 	}
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 	return preventIdleSleepList->getCount();
 }
@@ -8438,14 +8381,10 @@ IOPMrootDomain::evaluateAssertions(IOPMDriverAssertionType newAssertions, IOPMDr
 	}
 
 	if (changedBits & kIOPMDriverAssertionCPUBit) {
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 		if (_aotNow) {
 			IOLog("CPU assertions %d\n", (0 != (kIOPMDriverAssertionCPUBit & newAssertions)));
 		}
 		evaluatePolicy(_aotNow ? kStimulusNoIdleSleepPreventers : kStimulusDarkWakeEvaluate);
-#else
-		evaluatePolicy(kStimulusDarkWakeEvaluate);
-#endif
 		if (!assertOnWakeSecs && gIOLastWakeAbsTime) {
 			AbsoluteTime    now;
 			clock_usec_t    microsecs;
@@ -9882,10 +9821,7 @@ IOPMrootDomain::acceptSystemWakeEvents( bool accept )
 			_systemWakeEventsArray = OSArray::withCapacity(4);
 		}
 		_acceptSystemWakeEvents = (_systemWakeEventsArray != NULL);
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
-		if (!(_aotNow && (kIOPMWakeEventAOTExitFlags & _aotPendingFlags)))
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
-		{
+		if (!(_aotNow && (kIOPMWakeEventAOTExitFlags & _aotPendingFlags))) {
 			gWakeReasonString[0] = '\0';
 			if (_systemWakeEventsArray) {
 				_systemWakeEventsArray->flushCollection();
@@ -9954,7 +9890,6 @@ IOPMrootDomain::claimSystemWakeEvent(
 		return;
 	}
 
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 	IOOptionBits        aotFlags = 0;
 	bool                needAOTEvaluate = FALSE;
 
@@ -9978,7 +9913,6 @@ IOPMrootDomain::claimSystemWakeEvent(
 		flags |= kIOPMWakeEventAOTPossibleExit;
 	}
 #endif /* DEVELOPMENT || DEBUG */
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 	deviceName   = device->copyName(gIOServicePlane);
 	deviceRegId  = OSNumber::withNumber(device->getRegistryEntryID(), 64);
@@ -10001,7 +9935,6 @@ IOPMrootDomain::claimSystemWakeEvent(
 
 	WAKEEVENT_LOCK();
 	addWakeReason = _acceptSystemWakeEvents;
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 	if (_aotMode) {
 		IOLog("claimSystemWakeEvent(%s, %s, 0x%x) 0x%x %d\n", reason, deviceName->getCStringNoCopy(), (int)flags, _aotPendingFlags, _aotReadyToFullWake);
 	}
@@ -10026,7 +9959,6 @@ IOPMrootDomain::claimSystemWakeEvent(
 		addWakeReason     = _aotNow && _systemWakeEventsArray && ((kIOPMWakeEventAOTExitFlags & aotFlags));
 		needAOTEvaluate   = _aotReadyToFullWake;
 	}
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 	if (!gWakeReasonSysctlRegistered) {
 		// Lazy registration until the platform driver stops registering
@@ -10045,11 +9977,9 @@ IOPMrootDomain::claimSystemWakeEvent(
 	}
 
 	WAKEEVENT_UNLOCK();
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 	if (needAOTEvaluate) {
 		aotEvaluate(NULL);
 	}
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 
 done:
 	if (deviceName) {

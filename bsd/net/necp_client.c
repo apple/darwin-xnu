@@ -382,6 +382,8 @@ struct necp_client {
 
 	void *agent_handle;
 
+	uuid_t override_euuid;
+
 
 	size_t parameters_length;
 	u_int8_t parameters[0];
@@ -1482,7 +1484,7 @@ necp_client_flow_is_viable(proc_t proc, struct necp_client *client,
 	    &result, &flow->necp_flow_flags, NULL,
 	    flow->interface_index,
 	    &flow->local_addr, &flow->remote_addr, NULL, NULL,
-	    NULL, ignore_address, true);
+	    NULL, ignore_address, true, NULL);
 
 	// Check for blocking agents
 	for (int i = 0; i < NECP_MAX_NETAGENTS; i++) {
@@ -1634,6 +1636,60 @@ necp_client_mark_all_nonsocket_flows_as_invalid(struct necp_client *client)
 	client->interface_option_count = 0;
 }
 
+static inline bool
+necp_netagent_is_required(const struct necp_client_parsed_parameters *parameters,
+    uuid_t *netagent_uuid)
+{
+	// Specific use agents only apply when required
+	bool required = false;
+	if (parameters != NULL) {
+		// Check required agent UUIDs
+		for (int i = 0; i < NECP_MAX_AGENT_PARAMETERS; i++) {
+			if (uuid_is_null(parameters->required_netagents[i])) {
+				break;
+			}
+			if (uuid_compare(parameters->required_netagents[i], *netagent_uuid) == 0) {
+				required = true;
+				break;
+			}
+		}
+
+		if (!required) {
+			// Check required agent types
+			bool fetched_type = false;
+			char netagent_domain[NETAGENT_DOMAINSIZE];
+			char netagent_type[NETAGENT_TYPESIZE];
+			memset(&netagent_domain, 0, NETAGENT_DOMAINSIZE);
+			memset(&netagent_type, 0, NETAGENT_TYPESIZE);
+
+			for (int i = 0; i < NECP_MAX_AGENT_PARAMETERS; i++) {
+				if (strlen(parameters->required_netagent_types[i].netagent_domain) == 0 ||
+				    strlen(parameters->required_netagent_types[i].netagent_type) == 0) {
+					break;
+				}
+
+				if (!fetched_type) {
+					if (netagent_get_agent_domain_and_type(*netagent_uuid, netagent_domain, netagent_type)) {
+						fetched_type = TRUE;
+					} else {
+						break;
+					}
+				}
+
+				if ((strlen(parameters->required_netagent_types[i].netagent_domain) == 0 ||
+				    strncmp(netagent_domain, parameters->required_netagent_types[i].netagent_domain, NETAGENT_DOMAINSIZE) == 0) &&
+				    (strlen(parameters->required_netagent_types[i].netagent_type) == 0 ||
+				    strncmp(netagent_type, parameters->required_netagent_types[i].netagent_type, NETAGENT_TYPESIZE) == 0)) {
+					required = true;
+					break;
+				}
+			}
+		}
+	}
+
+	return required;
+}
+
 static bool
 necp_netagent_applies_to_client(struct necp_client *client,
     const struct necp_client_parsed_parameters *parameters,
@@ -1701,53 +1757,7 @@ necp_netagent_applies_to_client(struct necp_client *client,
 
 	if (flags & NETAGENT_FLAG_SPECIFIC_USE_ONLY) {
 		// Specific use agents only apply when required
-		bool required = FALSE;
-		if (parameters != NULL) {
-			// Check required agent UUIDs
-			for (int i = 0; i < NECP_MAX_AGENT_PARAMETERS; i++) {
-				if (uuid_is_null(parameters->required_netagents[i])) {
-					break;
-				}
-				if (uuid_compare(parameters->required_netagents[i], *netagent_uuid) == 0) {
-					required = TRUE;
-					break;
-				}
-			}
-
-			if (!required) {
-				// Check required agent types
-				bool fetched_type = FALSE;
-				char netagent_domain[NETAGENT_DOMAINSIZE];
-				char netagent_type[NETAGENT_TYPESIZE];
-				memset(&netagent_domain, 0, NETAGENT_DOMAINSIZE);
-				memset(&netagent_type, 0, NETAGENT_TYPESIZE);
-
-				for (int i = 0; i < NECP_MAX_AGENT_PARAMETERS; i++) {
-					if (strlen(parameters->required_netagent_types[i].netagent_domain) == 0 ||
-					    strlen(parameters->required_netagent_types[i].netagent_type) == 0) {
-						break;
-					}
-
-					if (!fetched_type) {
-						if (netagent_get_agent_domain_and_type(*netagent_uuid, netagent_domain, netagent_type)) {
-							fetched_type = TRUE;
-						} else {
-							break;
-						}
-					}
-
-					if ((strlen(parameters->required_netagent_types[i].netagent_domain) == 0 ||
-					    strncmp(netagent_domain, parameters->required_netagent_types[i].netagent_domain, NETAGENT_DOMAINSIZE) == 0) &&
-					    (strlen(parameters->required_netagent_types[i].netagent_type) == 0 ||
-					    strncmp(netagent_type, parameters->required_netagent_types[i].netagent_type, NETAGENT_TYPESIZE) == 0)) {
-						required = TRUE;
-						break;
-					}
-				}
-			}
-		}
-
-		applies = required;
+		applies = necp_netagent_is_required(parameters, netagent_uuid);
 	} else {
 		applies = TRUE;
 	}
@@ -1769,6 +1779,32 @@ necp_client_add_agent_interface_options(struct necp_client *client,
 			// Relies on the side effect that nexus agents that apply will create flows
 			(void)necp_netagent_applies_to_client(client, parsed_parameters, &ifp->if_agentids[i], TRUE,
 			    ifp->if_index, ifnet_get_generation(ifp));
+		}
+	}
+}
+
+static void
+necp_client_add_browse_interface_options(struct necp_client *client,
+    const struct necp_client_parsed_parameters *parsed_parameters,
+    ifnet_t ifp)
+{
+	if (ifp != NULL && ifp->if_agentids != NULL) {
+		for (u_int32_t i = 0; i < ifp->if_agentcount; i++) {
+			if (uuid_is_null(ifp->if_agentids[i])) {
+				continue;
+			}
+
+			u_int32_t flags = netagent_get_flags(ifp->if_agentids[i]);
+			if ((flags & NETAGENT_FLAG_REGISTERED) &&
+			    (flags & NETAGENT_FLAG_ACTIVE) &&
+			    (flags & NETAGENT_FLAG_SUPPORTS_BROWSE) &&
+			    (!(flags & NETAGENT_FLAG_SPECIFIC_USE_ONLY) ||
+			    necp_netagent_is_required(parsed_parameters, &ifp->if_agentids[i]))) {
+				necp_client_add_interface_option_if_needed(client, ifp->if_index, ifnet_get_generation(ifp), &ifp->if_agentids[i]);
+
+				// Finding one is enough
+				break;
+			}
 		}
 	}
 }
@@ -2418,7 +2454,7 @@ necp_client_lookup_bb_radio_manager(struct necp_client *client,
 	}
 
 	error = necp_application_find_policy_match_internal(proc, client->parameters, (u_int32_t)client->parameters_length,
-	    &result, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, true, true);
+	    &result, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, true, true, NULL);
 
 	proc_rele(proc);
 	proc = PROC_NULL;
@@ -3069,7 +3105,8 @@ necp_calculate_client_result(proc_t proc,
     u_int32_t *flags,
     u_int32_t *reason,
     struct necp_client_endpoint *v4_gateway,
-    struct necp_client_endpoint *v6_gateway)
+    struct necp_client_endpoint *v6_gateway,
+    uuid_t *override_euuid)
 {
 	struct rtentry *route = NULL;
 
@@ -3087,7 +3124,8 @@ necp_calculate_client_result(proc_t proc,
 		    result, flags, reason, matching_if_index,
 		    NULL, NULL,
 		    v4_gateway, v6_gateway,
-		    &route, false, true);
+		    &route, false, true,
+		    override_euuid);
 		if (error != 0) {
 			if (route != NULL) {
 				rtfree(route);
@@ -3220,14 +3258,16 @@ necp_update_client_result(proc_t proc,
 	// Calculate the policy result
 	struct necp_client_endpoint v4_gateway = {};
 	struct necp_client_endpoint v6_gateway = {};
-	if (!necp_calculate_client_result(proc, client, parsed_parameters, &result, &flags, &reason, &v4_gateway, &v6_gateway)) {
+	uuid_t override_euuid;
+	uuid_clear(override_euuid);
+	if (!necp_calculate_client_result(proc, client, parsed_parameters, &result, &flags, &reason, &v4_gateway, &v6_gateway, &override_euuid)) {
 		FREE(parsed_parameters, M_NECP);
 		return FALSE;
 	}
 
 	if (necp_update_parsed_parameters(parsed_parameters, &result)) {
 		// Changed the parameters based on result, try again (only once)
-		if (!necp_calculate_client_result(proc, client, parsed_parameters, &result, &flags, &reason, &v4_gateway, &v6_gateway)) {
+		if (!necp_calculate_client_result(proc, client, parsed_parameters, &result, &flags, &reason, &v4_gateway, &v6_gateway, &override_euuid)) {
 			FREE(parsed_parameters, M_NECP);
 			return FALSE;
 		}
@@ -3242,8 +3282,10 @@ necp_update_client_result(proc_t proc,
 
 	// Save the last policy id on the client
 	client->policy_id = result.policy_id;
+	uuid_copy(client->override_euuid, override_euuid);
 
 	if ((parsed_parameters->flags & NECP_CLIENT_PARAMETER_FLAG_MULTIPATH) ||
+	    (parsed_parameters->flags & NECP_CLIENT_PARAMETER_FLAG_BROWSE) ||
 	    ((parsed_parameters->flags & NECP_CLIENT_PARAMETER_FLAG_LISTENER) &&
 	    result.routing_result != NECP_KERNEL_POLICY_RESULT_SOCKET_SCOPED)) {
 		client->allow_multiple_flows = TRUE;
@@ -3482,6 +3524,21 @@ necp_update_client_result(proc_t proc,
 				    necp_ifnet_matches_parameters(listen_interface, parsed_parameters, 0, NULL, true, false)) {
 					// Add nexus agents for listeners
 					necp_client_add_agent_interface_options(client, parsed_parameters, listen_interface);
+				}
+			}
+		}
+	} else if (parsed_parameters->flags & NECP_CLIENT_PARAMETER_FLAG_BROWSE) {
+		if (result.routing_result == NECP_KERNEL_POLICY_RESULT_SOCKET_SCOPED) {
+			if (direct_interface != NULL) {
+				// Add browse option if it has an agent
+				necp_client_add_browse_interface_options(client, parsed_parameters, direct_interface);
+			}
+		} else {
+			// Get browse interface options from global list
+			struct ifnet *browse_interface = NULL;
+			TAILQ_FOREACH(browse_interface, &ifnet_head, if_link) {
+				if (necp_ifnet_matches_parameters(browse_interface, parsed_parameters, 0, NULL, true, false)) {
+					necp_client_add_browse_interface_options(client, parsed_parameters, browse_interface);
 				}
 			}
 		}
@@ -5277,7 +5334,11 @@ necp_client_copy_parameters_locked(struct necp_client *client,
 	}
 	parameters->ethertype = parsed_parameters.ethertype;
 	parameters->traffic_class = parsed_parameters.traffic_class;
-	uuid_copy(parameters->euuid, parsed_parameters.effective_uuid);
+	if (uuid_is_null(client->override_euuid)) {
+		uuid_copy(parameters->euuid, parsed_parameters.effective_uuid);
+	} else {
+		uuid_copy(parameters->euuid, client->override_euuid);
+	}
 	parameters->is_listener = (parsed_parameters.flags & NECP_CLIENT_PARAMETER_FLAG_LISTENER) ? 1 : 0;
 	parameters->is_interpose = (parsed_parameters.flags & NECP_CLIENT_PARAMETER_FLAG_INTERPOSE) ? 1 : 0;
 	parameters->is_custom_ether = (parsed_parameters.flags & NECP_CLIENT_PARAMETER_FLAG_CUSTOM_ETHER) ? 1 : 0;
@@ -6188,7 +6249,7 @@ necp_match_policy(struct proc *p, struct necp_match_policy_args *uap, int32_t *r
 	}
 
 	error = necp_application_find_policy_match_internal(p, parameters, uap->parameters_size,
-	    &returned_result, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, false, false);
+	    &returned_result, NULL, NULL, 0, NULL, NULL, NULL, NULL, NULL, false, false, NULL);
 	if (error) {
 		goto done;
 	}

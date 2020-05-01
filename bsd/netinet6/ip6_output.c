@@ -580,6 +580,9 @@ loopit:
 
 		switch (necp_result) {
 		case NECP_KERNEL_POLICY_RESULT_PASS:
+			if (necp_result_parameter.pass_flags & NECP_KERNEL_POLICY_PASS_NO_SKIP_IPSEC) {
+				break;
+			}
 			goto skip_ipsec;
 		case NECP_KERNEL_POLICY_RESULT_DROP:
 			error = EHOSTUNREACH;

@@ -49,6 +49,10 @@ struct secasindex {
 	u_int ipsec_ifindex;
 };
 
+#define SECURITY_ASSOCIATION_ANY          0x0000
+#define SECURITY_ASSOCIATION_PFKEY        0x0001
+#define SECURITY_ASSOCIATION_CUSTOM_IPSEC 0x0010
+
 /* Security Association Data Base */
 struct secashead {
 	LIST_ENTRY(secashead) chain;
@@ -68,6 +72,8 @@ struct secashead {
 	/* The first of this list is newer SA */
 
 	struct route_in6 sa_route;              /* route cache */
+
+	uint16_t flags;
 };
 
 #define MAX_REPLAY_WINDOWS 4

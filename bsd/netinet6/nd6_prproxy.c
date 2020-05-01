@@ -279,7 +279,7 @@ nd6_ndprl_free(struct nd6_prproxy_prelist *ndprl)
  * Apply routing function on the affected upstream and downstream prefixes,
  * i.e. either set or clear RTF_PROXY on the cloning prefix route; all route
  * entries that were cloned off these prefixes will be blown away.  Caller
- * must have acquried proxy6_lock and must not be holding nd6_mutex.
+ * must have acquired proxy6_lock and must not be holding nd6_mutex.
  */
 static void
 nd6_prproxy_prelist_setroute(boolean_t enable,

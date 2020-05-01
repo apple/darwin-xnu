@@ -46,6 +46,12 @@ extern "C" {
 
 #else  /* PLATFORM_DriverKit */
 
+#ifdef DRIVERKIT_PRIVATE
+
+#include <mach/error.h>
+
+#else  /* DRIVERKIT_PRIVATE */
+
 typedef int             kern_return_t;
 
 #define KERN_SUCCESS                    0
@@ -72,6 +78,8 @@ typedef int             kern_return_t;
 #define system_emask            (err_system(err_max_system))
 #define sub_emask               (err_sub(0xfff))
 #define code_emask              (0x3fff)
+
+#endif  /* DRIVERKIT_PRIVATE */
 
 #endif /* PLATFORM_DriverKit */
 

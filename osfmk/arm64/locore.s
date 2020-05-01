@@ -725,7 +725,7 @@ check_ktrr_sctlr_trap:
 	add		sp, sp, ARM_CONTEXT_SIZE	// Clean up stack
 	b.ne	Lel1_sp1_synchronous_vector_continue
 	msr		ELR_EL1, lr					// Return to caller
-	eret
+	ERET_CONTEXT_SYNCHRONIZING
 #endif /* defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) */
 
 /* 64-bit first level exception handler dispatcher.
@@ -1170,8 +1170,8 @@ Lexception_return_restore_registers:
 	and		x1, x4, BA_BOOT_FLAGS_DISABLE_USER_JOP
 	cbnz	x1, Ldisable_jop // if global user JOP disabled, always turn off JOP regardless of thread flag (kernel running with JOP on)
 	mrs		x2, TPIDR_EL1
-	ldr		x2, [x2, TH_DISABLE_USER_JOP]
-	cbz		x2, Lskip_disable_jop // if thread has JOP enabled, leave it on (kernel running with JOP on)
+	ldr		w2, [x2, TH_DISABLE_USER_JOP]
+	cbz		w2, Lskip_disable_jop // if thread has JOP enabled, leave it on (kernel running with JOP on)
 Ldisable_jop:
 	MOV64	x1, SCTLR_JOP_KEYS_ENABLED
 	mrs		x4, SCTLR_EL1
@@ -1257,7 +1257,7 @@ Lskip_disable_jop:
 Lskip_ttbr1_switch:
 #endif /* __ARM_KERNEL_PROTECT__ */
 
-	eret
+	ERET_CONTEXT_SYNCHRONIZING
 
 user_take_ast:
 	PUSH_FRAME

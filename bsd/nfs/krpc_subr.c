@@ -65,6 +65,9 @@
  *
  */
 
+#include <nfs/nfs_conf.h>
+#if CONFIG_NFS_CLIENT
+
 #include <sys/param.h>
 #include <sys/conf.h>
 #include <sys/ioctl.h>
@@ -604,3 +607,5 @@ out1:
 	}
 	return error;
 }
+
+#endif /* CONFIG_NFS_CLIENT */

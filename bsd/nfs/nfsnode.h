@@ -574,6 +574,8 @@ struct nfsnode {
 	u_int8_t                n_access[NFS_ACCESS_CACHE_SIZE + 1];      /* ACCESS cache */
 	uid_t                   n_accessuid[NFS_ACCESS_CACHE_SIZE];     /* credentials having access */
 	time_t                  n_accessstamp[NFS_ACCESS_CACHE_SIZE];   /* access cache timestamp */
+	time_t                  n_rdirplusstamp_sof; /* Readdirplus sof timestamp */
+	time_t                  n_rdirplusstamp_eof; /* Readdirplus eof timestamp */
 	union {
 		struct {
 			struct timespec n3_mtime; /* Prev modify time. */

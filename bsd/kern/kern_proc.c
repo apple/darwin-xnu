@@ -836,10 +836,20 @@ proc_selfppid(void)
 	return current_proc()->p_ppid;
 }
 
-int
+uint64_t
 proc_selfcsflags(void)
 {
-	return current_proc()->p_csflags;
+	return (uint64_t)current_proc()->p_csflags;
+}
+
+int
+proc_csflags(proc_t p, uint64_t *flags)
+{
+	if (p && flags) {
+		*flags = (uint64_t)p->p_csflags;
+		return 0;
+	}
+	return EINVAL;
 }
 
 uint32_t
@@ -935,6 +945,12 @@ void
 proc_name(int pid, char * buf, int size)
 {
 	proc_t p;
+
+	if (size <= 0) {
+		return;
+	}
+
+	bzero(buf, size);
 
 	if ((p = proc_find(pid)) != PROC_NULL) {
 		strlcpy(buf, &p->p_comm[0], size);
@@ -1265,6 +1281,63 @@ proc_getexecutablevnode(proc_t p)
 	}
 
 	return NULLVP;
+}
+
+int
+proc_gettty(proc_t p, vnode_t *vp)
+{
+	if (!p || !vp) {
+		return EINVAL;
+	}
+
+	struct session *procsp = proc_session(p);
+	int err = EINVAL;
+
+	if (procsp != SESSION_NULL) {
+		session_lock(procsp);
+		vnode_t ttyvp = procsp->s_ttyvp;
+		int ttyvid = procsp->s_ttyvid;
+		session_unlock(procsp);
+
+		if (ttyvp) {
+			if (vnode_getwithvid(ttyvp, ttyvid) == 0) {
+				*vp = procsp->s_ttyvp;
+				err = 0;
+			}
+		} else {
+			err = ENOENT;
+		}
+
+		session_rele(procsp);
+	}
+
+	return err;
+}
+
+int
+proc_gettty_dev(proc_t p, dev_t *dev)
+{
+	struct session *procsp = proc_session(p);
+	boolean_t has_tty = FALSE;
+
+	if (procsp != SESSION_NULL) {
+		session_lock(procsp);
+
+		struct tty * tp = SESSION_TP(procsp);
+		if (tp != TTY_NULL) {
+			*dev = tp->t_dev;
+			has_tty = TRUE;
+		}
+
+		session_unlock(procsp);
+		session_rele(procsp);
+	}
+
+	if (has_tty) {
+		return 0;
+	} else {
+		return EINVAL;
+	}
 }
 
 int
@@ -2429,7 +2502,7 @@ csops_internal(pid_t pid, int ops, user_addr_t uaddr, user_size_t usersize, user
 		 */
 		if (forself == 1 && IOTaskHasEntitlement(pt->task, CLEAR_LV_ENTITLEMENT)) {
 			proc_lock(pt);
-			pt->p_csflags &= (~(CS_REQUIRE_LV & CS_FORCED_LV));
+			pt->p_csflags &= (~(CS_REQUIRE_LV | CS_FORCED_LV));
 			proc_unlock(pt);
 			error = 0;
 		} else {

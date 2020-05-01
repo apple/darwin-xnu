@@ -126,7 +126,7 @@ convert_port_to_arcade_register(
 		/* No need to lock port because of how refs managed */
 		if (ip_kotype(port) == IKOT_ARCADE_REG) {
 			assert(ip_active(port));
-			arcade_reg = (arcade_register_t)port->ip_kobject;
+			arcade_reg = (arcade_register_t)ip_get_kobject(port);
 			assert(arcade_reg == &arcade_register_global);
 			assert(arcade_reg->ar_port == port);
 		}

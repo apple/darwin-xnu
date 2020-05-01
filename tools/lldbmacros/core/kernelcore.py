@@ -110,6 +110,30 @@ def IterateLinkageChain(queue_head, element_type, field_name, field_ofst=0):
         yield obj
         link = link.next
 
+def IterateCircleQueue(queue_head, element_ptr_type, element_field_name):
+    """ iterate over a circle queue in kernel of type circle_queue_head_t. refer to osfmk/kern/circle_queue.h
+        params:
+            queue_head         - lldb.SBValue : Value object for queue_head.
+            element_type       - lldb.SBType : a pointer type of the element 'next' points to. Typically its structs like thread, task etc..
+            element_field_name - str : name of the field in target struct.
+        returns:
+            A generator does not return. It is used for iterating.
+            SBValue  : an object thats of type (element_type) queue_head->next. Always a pointer object
+    """
+    head = queue_head.head.GetSBValue()
+    queue_head_addr = 0x0
+    if head.TypeIsPointerType():
+        queue_head_addr = head.GetValueAsUnsigned()
+    else:
+        queue_head_addr = head.GetAddress().GetLoadAddress(osplugin_target_obj)
+    cur_elt = head
+    while True:
+        if not cur_elt.IsValid() or cur_elt.GetValueAsUnsigned() == 0:
+            break
+        yield containerof(value(cur_elt), element_ptr_type, element_field_name)
+        cur_elt = cur_elt.GetChildMemberWithName('next')
+        if cur_elt.GetValueAsUnsigned() == queue_head_addr:
+            break
 
 def IterateQueue(queue_head, element_ptr_type, element_field_name, backwards=False, unpack_ptr_fn=None):
     """ Iterate over an Element Chain queue in kernel of type queue_head_t. (osfmk/kern/queue.h method 2)

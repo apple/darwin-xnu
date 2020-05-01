@@ -1401,7 +1401,7 @@ memory_object_iopl_request(
 	if (ip_kotype(port) == IKOT_NAMED_ENTRY) {
 		vm_named_entry_t        named_entry;
 
-		named_entry = (vm_named_entry_t)port->ip_kobject;
+		named_entry = (vm_named_entry_t) ip_get_kobject(port);
 		/* a few checks to make sure user is obeying rules */
 		if (*upl_size == 0) {
 			if (offset >= named_entry->size) {
@@ -2340,7 +2340,7 @@ convert_port_to_upl(
 		ip_unlock(port);
 		return (upl_t)NULL;
 	}
-	upl = (upl_t) port->ip_kobject;
+	upl = (upl_t) ip_get_kobject(port);
 	ip_unlock(port);
 	upl_lock(upl);
 	upl->ref_count += 1;

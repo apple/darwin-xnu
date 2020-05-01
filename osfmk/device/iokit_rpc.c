@@ -86,7 +86,7 @@ iokit_lookup_io_object(ipc_port_t port, ipc_kobject_type_t type)
 
 	iokit_lock_port(port);
 	if (ip_active(port) && (ip_kotype(port) == type)) {
-		obj = (io_object_t) port->ip_kobject;
+		obj = (io_object_t) ip_get_kobject(port);
 		iokit_add_reference( obj, type );
 	} else {
 		obj = NULL;
@@ -137,7 +137,7 @@ iokit_lookup_object_in_space_with_port_name(mach_port_name_t name, ipc_kobject_t
 
 			iokit_lock_port(port);
 			if (ip_kotype(port) == type) {
-				obj = (io_object_t) port->ip_kobject;
+				obj = (io_object_t) ip_get_kobject(port);
 				iokit_add_reference(obj, type);
 			}
 			iokit_unlock_port(port);
@@ -252,7 +252,12 @@ iokit_alloc_object_port( io_object_t obj, ipc_kobject_type_t type )
 	if (type == IKOT_IOKIT_CONNECT) {
 		options |= IPC_KOBJECT_ALLOC_IMMOVABLE_SEND;
 	}
-	return ipc_kobject_alloc_port((ipc_kobject_t) obj, type, options);
+	if (type == IKOT_UEXT_OBJECT) {
+		ipc_label_t label = IPC_LABEL_DEXT;
+		return ipc_kobject_alloc_labeled_port((ipc_kobject_t) obj, type, label, options);
+	} else {
+		return ipc_kobject_alloc_port((ipc_kobject_t) obj, type, options);
+	}
 }
 
 EXTERN kern_return_t
@@ -345,7 +350,7 @@ iokit_no_senders( mach_no_senders_notification_t * notification )
 	if (IP_VALID(port)) {
 		iokit_lock_port(port);
 		if (ip_active(port)) {
-			obj = (io_object_t) port->ip_kobject;
+			obj = (io_object_t) ip_get_kobject(port);
 			type = ip_kotype( port );
 			if ((IKOT_IOKIT_OBJECT == type)
 			    || (IKOT_IOKIT_CONNECT == type)
@@ -398,6 +403,12 @@ iokit_notify( mach_msg_header_t * msg )
 		printf("iokit_notify: strange notification %d\n", msg->msgh_id);
 		return FALSE;
 	}
+}
+
+kern_return_t
+iokit_label_dext_task(task_t task)
+{
+	return ipc_space_add_label(task->itk_space, IPC_LABEL_DEXT);
 }
 
 /* need to create a pmap function to generalize */

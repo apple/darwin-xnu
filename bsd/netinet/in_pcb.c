@@ -3502,6 +3502,7 @@ inp_update_policy(struct inpcb *inp)
 	uint32_t pflags = 0;
 	int32_t ogencnt;
 	int err = 0;
+	uint8_t *lookup_uuid = NULL;
 
 	if (!net_io_policy_uuid ||
 	    so == NULL || inp->inp_state == INPCB_STATE_DEAD) {
@@ -3516,9 +3517,17 @@ inp_update_policy(struct inpcb *inp)
 		return 0;
 	}
 
+#if defined(XNU_TARGET_OS_OSX)
+	if (so->so_rpid > 0) {
+		lookup_uuid = so->so_ruuid;
+	}
+#endif
+	if (lookup_uuid == NULL) {
+		lookup_uuid = ((so->so_flags & SOF_DELEGATED) ? so->e_uuid : so->last_uuid);
+	}
+
 	ogencnt = so->so_policy_gencnt;
-	err = proc_uuid_policy_lookup(((so->so_flags & SOF_DELEGATED) ?
-	    so->e_uuid : so->last_uuid), &pflags, &so->so_policy_gencnt);
+	err = proc_uuid_policy_lookup(lookup_uuid, &pflags, &so->so_policy_gencnt);
 
 	/*
 	 * Discard cached generation count if the entry is gone (ENOENT),

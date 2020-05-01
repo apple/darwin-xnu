@@ -195,8 +195,8 @@ LEXT(reset_vector)
 	/* spin until bootstrap core has completed machine lockdown */
 	adrp	x17, EXT(lockdown_done)@page
 1:
-	ldr	x18, [x17, EXT(lockdown_done)@pageoff]
-	cbz	x18, 1b
+	ldr	w18, [x17, EXT(lockdown_done)@pageoff]
+	cbz	w18, 1b
 
 	// load stashed rorgn_begin
 	adrp	x17, EXT(rorgn_begin)@page
@@ -254,8 +254,8 @@ Lfound_cpu_data_entry:
 	/* spin until bootstrap core has completed machine lockdown */
 	adrp	x17, EXT(lockdown_done)@page
 1:
-	ldr	x18, [x17, EXT(lockdown_done)@pageoff]
-	cbz	x18, 1b
+	ldr	w18, [x17, EXT(lockdown_done)@pageoff]
+	cbz	w18, 1b
 
 	// load stashed rorgn_begin
 	adrp	x17, EXT(rorgn_begin)@page

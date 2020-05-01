@@ -109,6 +109,8 @@
 #include <sys/lockf.h>
 #include <miscfs/fifofs/fifo.h>
 
+#include <nfs/nfs_conf.h>
+
 #include <string.h>
 #include <machine/machine_routines.h>
 
@@ -2408,11 +2410,11 @@ vclean(vnode_t vp, int flags)
 	 * Clean out any buffers associated with the vnode.
 	 */
 	if (flags & DOCLOSE) {
-#if NFSCLIENT
+#if CONFIG_NFS_CLIENT
 		if (vp->v_tag == VT_NFS) {
 			nfs_vinvalbuf(vp, V_SAVE, ctx, 0);
 		} else
-#endif
+#endif /* CONFIG_NFS_CLIENT */
 		{
 			VNOP_FSYNC(vp, MNT_WAIT, ctx);
 
@@ -2902,6 +2904,9 @@ vn_getpath_ext(struct vnode *vp, struct vnode *dvp, char *pathbuf, int *len, int
 		}
 		if (flags & VN_GETPATH_VOLUME_RELATIVE) {
 			bpflags |= (BUILDPATH_VOLUME_RELATIVE | BUILDPATH_NO_FIRMLINK);
+		}
+		if (flags & VN_GETPATH_NO_PROCROOT) {
+			bpflags |= BUILDPATH_NO_PROCROOT;
 		}
 	}
 
@@ -3925,11 +3930,11 @@ sysctl_vfs_ctlbyfsid(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 			sfs.f_ffree = (user64_long_t)sp->f_ffree;
 			sfs.f_fsid = sp->f_fsid;
 			sfs.f_owner = sp->f_owner;
-#ifdef NFSCLIENT
+#ifdef CONFIG_NFS_CLIENT
 			if (mp->mnt_kern_flag & MNTK_TYPENAME_OVERRIDE) {
 				strlcpy(&sfs.f_fstypename[0], &mp->fstypename_override[0], MFSNAMELEN);
 			} else
-#endif
+#endif /* CONFIG_NFS_CLIENT */
 			{
 				strlcpy(sfs.f_fstypename, sp->f_fstypename, MFSNAMELEN);
 			}
@@ -3987,11 +3992,11 @@ sysctl_vfs_ctlbyfsid(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 			sfs.f_fsid = sp->f_fsid;
 			sfs.f_owner = sp->f_owner;
 
-#ifdef NFSCLIENT
+#ifdef CONFIG_NFS_CLIENT
 			if (mp->mnt_kern_flag & MNTK_TYPENAME_OVERRIDE) {
 				strlcpy(&sfs.f_fstypename[0], &mp->fstypename_override[0], MFSNAMELEN);
 			} else
-#endif
+#endif /* CONFIG_NFS_CLIENT */
 			{
 				strlcpy(sfs.f_fstypename, sp->f_fstypename, MFSNAMELEN);
 			}
@@ -6227,26 +6232,21 @@ vn_create(vnode_t dvp, vnode_t *vpp, struct nameidata *ndp, struct vnode_attr *v
 	vp = *vpp;
 	old_error = error;
 
-#if CONFIG_MACF
-	if (!(flags & VN_CREATE_NOLABEL)) {
-		error = vnode_label(vnode_mount(vp), dvp, vp, cnp, VNODE_LABEL_CREATE, ctx);
-		if (error) {
-			goto error;
-		}
-	}
-#endif
-
 	/*
 	 * If some of the requested attributes weren't handled by the VNOP,
 	 * use our fallback code.
 	 */
-	if (!VATTR_ALL_SUPPORTED(vap) && *vpp) {
+	if ((error == 0) && !VATTR_ALL_SUPPORTED(vap) && *vpp) {
 		KAUTH_DEBUG("     CREATE - doing fallback with ACL %p", vap->va_acl);
 		error = vnode_setattr_fallback(*vpp, vap, ctx);
 	}
+
 #if CONFIG_MACF
-error:
+	if ((error == 0) && !(flags & VN_CREATE_NOLABEL)) {
+		error = vnode_label(vnode_mount(vp), dvp, vp, cnp, VNODE_LABEL_CREATE, ctx);
+	}
 #endif
+
 	if ((error != 0) && (vp != (vnode_t)0)) {
 		/* If we've done a compound open, close */
 		if (batched && (old_error == 0) && (vap->va_type == VREG)) {

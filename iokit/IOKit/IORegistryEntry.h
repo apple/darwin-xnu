@@ -184,6 +184,11 @@ public:
 	    void *arg0 = NULL, void *arg1 = NULL,
 	    void *arg2 = NULL, void *arg3 = NULL);
 
+#ifdef __BLOCKS__
+	typedef IOReturn (^ActionBlock)(void);
+	IOReturn runPropertyActionBlock(ActionBlock block);
+#endif /* __BLOCKS__ */
+
 private:
 #if __LP64__
 	OSMetaClassDeclareReservedUnused(IORegistryEntry, 0);

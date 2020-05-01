@@ -170,9 +170,7 @@ struct c_segment {
 	unsigned int    cseg_swap_size;
 #endif /* CHECKSUM_THE_SWAP */
 
-#if MACH_ASSERT
 	thread_t        c_busy_for_thread;
-#endif /* MACH_ASSERT */
 
 	int             c_slot_var_array_len;
 	struct  c_slot  *c_slot_var_array;
@@ -237,7 +235,7 @@ extern  vm_offset_t     c_buffers;
 	assert((cseg)->c_busy);                         \
 	(cseg)->c_busy = 0;                             \
 	assert((cseg)->c_busy_for_thread != NULL);      \
-	assert((((cseg)->c_busy_for_thread = NULL), TRUE));     \
+	(cseg)->c_busy_for_thread = NULL;               \
 	if ((cseg)->c_wanted) {                         \
 	        (cseg)->c_wanted = 0;                   \
 	        thread_wakeup((event_t) (cseg));        \
@@ -249,7 +247,7 @@ extern  vm_offset_t     c_buffers;
 	assert((cseg)->c_busy == 0);                    \
 	(cseg)->c_busy = 1;                             \
 	assert((cseg)->c_busy_for_thread == NULL);      \
-	assert((((cseg)->c_busy_for_thread = current_thread()), TRUE)); \
+	(cseg)->c_busy_for_thread = current_thread();   \
 	MACRO_END
 
 
@@ -372,6 +370,8 @@ extern uint32_t vm_compressor_unthrottle_threshold_divisor_overridden;
 extern uint32_t vm_compressor_catchup_threshold_divisor_overridden;
 
 extern uint64_t vm_compressor_compute_elapsed_msecs(clock_sec_t, clock_nsec_t, clock_sec_t, clock_nsec_t);
+
+extern void kdp_compressor_busy_find_owner(event64_t wait_event, thread_waitinfo_t *waitinfo);
 
 #define PAGE_REPLACEMENT_DISALLOWED(enable)     (enable == TRUE ? lck_rw_lock_shared(&c_master_lock) : lck_rw_done(&c_master_lock))
 #define PAGE_REPLACEMENT_ALLOWED(enable)        (enable == TRUE ? lck_rw_lock_exclusive(&c_master_lock) : lck_rw_done(&c_master_lock))

@@ -1222,7 +1222,44 @@ field of the
 .Vt statfs
 structure returned by
 .Xr statfs 2 .
+.
+.It ATTR_CMNEXT_CLONEID
+A
+.Vt u_int64_t
+that uniquely identifies the data stream associated with the file
+system object.  Useful for finding which files are pure clones of each
+other (as they will have the same clone-id).
+.
+.It ATTR_CMNEXT_EXT_FLAGS
+A
+.Vt u_int64_t
+that contains additional flags with information about the file.  The
+flags are:
+.
+.Bl -tag -width EF_MAY_SHARE_BLOCKS
+.
+.It EF_MAY_SHARE_BLOCKS
+If this bit is set then the file may share blocks with another file
+(i.e. it is a clone of another file).
+.
+.It EF_NO_XATTRS
+If this bit is set then the file has no extended attributes.  Useful
+for avoiding a call to listxattr().
+.
+.It EF_IS_SYNC_ROOT
+If this bit is set the directory is a "sync root".  This bit will
+never be set for regular files.
+.
+.It EF_IS_PURGEABLE
+If this bit is set the item is a "purgeable" item that can be deleted
+by the file system when asked to free space.
+.
+.It EF_IS_SPARSE
+If this bit is set the item has sparse regions.
+.
 .El
+.El
+.Pp
 .
 .Sh VOLUME CAPABILITIES
 .

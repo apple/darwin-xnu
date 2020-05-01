@@ -46,8 +46,11 @@ extern "C" {
 
 #else  /* PLATFORM_DriverKit */
 
-#ifndef _MACH_ERROR_H_
-#define _MACH_ERROR_H_
+#ifdef DRIVERKIT_PRIVATE
+
+#include <mach/error.h>
+
+#else  /* DRIVERKIT_PRIVATE */
 
 typedef int             kern_return_t;
 
@@ -76,7 +79,7 @@ typedef int             kern_return_t;
 #define sub_emask               (err_sub(0xfff))
 #define code_emask              (0x3fff)
 
-#endif  /* _MACH_ERROR_H_ */
+#endif  /* DRIVERKIT_PRIVATE */
 
 #endif /* PLATFORM_DriverKit */
 
@@ -112,6 +115,9 @@ typedef kern_return_t           IOReturn;
 #define sub_iokit_smc                     err_sub(32)
 #endif
 #define sub_iokit_apfs                    err_sub(33)
+#define sub_iokit_acpiec                  err_sub(34)
+#define sub_iokit_timesync_avb            err_sub(35)
+
 #define sub_iokit_platform                err_sub(0x2A)
 #define sub_iokit_audio_video             err_sub(0x45)
 #define sub_iokit_cec                     err_sub(0x46)

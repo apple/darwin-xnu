@@ -78,6 +78,8 @@ uint64_t        TLBTimeOut;
 uint64_t        LockTimeOutTSC;
 uint32_t        LockTimeOutUsec;
 uint64_t        MutexSpin;
+uint64_t        low_MutexSpin;
+int64_t         high_MutexSpin;
 uint64_t        LastDebuggerEntryAllowance;
 uint64_t        delay_spin_threshold;
 
@@ -788,6 +790,12 @@ ml_init_lock_timeout(void)
 		nanoseconds_to_absolutetime(10 * NSEC_PER_USEC, &abstime);
 	}
 	MutexSpin = (unsigned int)abstime;
+	low_MutexSpin = MutexSpin;
+	/*
+	 * high_MutexSpin should be initialized as low_MutexSpin * real_ncpus, but
+	 * real_ncpus is not set at this time
+	 */
+	high_MutexSpin = -1;
 
 	nanoseconds_to_absolutetime(4ULL * NSEC_PER_SEC, &LastDebuggerEntryAllowance);
 	if (PE_parse_boot_argn("panic_restart_timeout", &prt, sizeof(prt))) {
@@ -823,6 +831,7 @@ MACRO_END
 		VIRTUAL_TIMEOUT_INFLATE64(LockTimeOutTSC);
 		VIRTUAL_TIMEOUT_INFLATE64(TLBTimeOut);
 		VIRTUAL_TIMEOUT_INFLATE64(MutexSpin);
+		VIRTUAL_TIMEOUT_INFLATE64(low_MutexSpin);
 		VIRTUAL_TIMEOUT_INFLATE64(reportphyreaddelayabs);
 	}
 

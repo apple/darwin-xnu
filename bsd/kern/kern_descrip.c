@@ -1972,7 +1972,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 
 			kernel_blob_size = CAST_DOWN(vm_size_t, fs.fs_blob_size);
 			kr = ubc_cs_blob_allocate(&kernel_blob_addr, &kernel_blob_size);
-			if (kr != KERN_SUCCESS) {
+			if (kr != KERN_SUCCESS || kernel_blob_size < fs.fs_blob_size) {
 				error = ENOMEM;
 				vnode_put(vp);
 				goto outdrop;
@@ -1981,7 +1981,7 @@ fcntl_nocancel(proc_t p, struct fcntl_nocancel_args *uap, int32_t *retval)
 			if (uap->cmd == F_ADDSIGS) {
 				error = copyin(fs.fs_blob_start,
 				    (void *) kernel_blob_addr,
-				    kernel_blob_size);
+				    fs.fs_blob_size);
 			} else { /* F_ADDFILESIGS || F_ADDFILESIGS_RETURN || F_ADDFILESIGS_FOR_DYLD_SIM */
 				int resid;
 

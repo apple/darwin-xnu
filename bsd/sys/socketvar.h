@@ -320,10 +320,16 @@ struct socket {
 
 	pid_t           e_pid;          /* pid of the effective owner */
 	u_int64_t       e_upid;         /* upid of the effective owner */
+#if defined(XNU_TARGET_OS_OSX)
+	pid_t           so_rpid;        /* pid of the responsible process */
+#endif
 
 	uuid_t          last_uuid;      /* uuid of most recent accessor */
 	uuid_t          e_uuid;         /* uuid of effective owner */
 	uuid_t          so_vuuid;       /* UUID of the Voucher originator */
+#if defined(XNU_TARGET_OS_OSX)
+	uuid_t          so_ruuid;       /* UUID of the responsible process */
+#endif
 
 	int32_t         so_policy_gencnt; /* UUID policy gencnt */
 

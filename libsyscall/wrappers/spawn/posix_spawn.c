@@ -944,6 +944,27 @@ posix_spawnattr_setspecialport_np(
 }
 
 /*
+ * posix_spawnattr_setsuidcredport_np
+ *
+ * Description:	Set an suid cred port to be used to execute with a different UID.
+ *
+ * Parameters:	attr			The spawn attributes object for the
+ *                                      new process
+ *              port		        The suid cred port
+ *
+ * Returns:	0			Success
+ */
+int
+posix_spawnattr_setsuidcredport_np(posix_spawnattr_t *attr, mach_port_t port)
+{
+	_ps_port_action_t action = {
+		.port_type = PSPA_SUID_CRED,
+		.new_port = port,
+	};
+	return posix_spawn_appendportaction_np(attr, &action);
+}
+
+/*
  * posix_spawnattr_setexceptionports_np
  *
  * Description:	Set a new port for a set of exception ports in the spawned task.

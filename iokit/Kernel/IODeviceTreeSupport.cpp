@@ -221,14 +221,12 @@ IODeviceTreeAlloc( void * dtTop )
 			if (!intMap && child->getProperty( gIODTInterruptParentKey)) {
 				intMap = true;
 			}
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 			if (!strcmp("sep", child->getName())
 			    || !strcmp("aop", child->getName())
 			    || !strcmp("disp0", child->getName())) {
 				uint32_t aotFlags = 1;
 				child->setProperty("aot-power", &aotFlags, sizeof(aotFlags));
 			}
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 		}
 		regIter->release();
 	}

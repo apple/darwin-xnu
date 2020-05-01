@@ -162,6 +162,9 @@ extern const OSSymbol *     gIODeviceMemoryKey;
 extern const OSSymbol *     gIOInterruptControllersKey;
 extern const OSSymbol *     gIOInterruptSpecifiersKey;
 
+extern const OSSymbol *     gIOSupportedPropertiesKey;
+extern const OSSymbol *     gIOUserServicePropertiesKey;
+
 extern const OSSymbol *     gIOBSDKey;
 extern const OSSymbol *     gIOBSDNameKey;
 extern const OSSymbol *     gIOBSDMajorKey;

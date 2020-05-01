@@ -124,6 +124,8 @@ struct image_params {
 	uint64_t ip_dyld_fsid;
 	uint64_t ip_dyld_fsobjid;
 	unsigned int    ip_simulator_binary;    /* simulator binary flags */
+
+	ipc_port_t      ip_sc_port;             /* SUID port. */
 };
 
 /*

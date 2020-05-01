@@ -829,7 +829,8 @@ i386_init(void)
 #endif /* MONOTONIC */
 
 	processor_bootstrap();
-	thread_bootstrap();
+	thread_t thread = thread_bootstrap();
+	machine_set_current_thread(thread);
 
 	pstate_trace();
 	kernel_debug_string_early("machine_startup");

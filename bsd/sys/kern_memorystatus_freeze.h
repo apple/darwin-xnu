@@ -44,14 +44,14 @@ typedef struct memorystatus_freeze_entry {
 #ifdef XNU_KERNEL_PRIVATE
 
 extern unsigned long freeze_threshold_percentage;
-extern unsigned int memorystatus_frozen_count;
+extern unsigned int memorystatus_frozen_count; /* # of processes that are currently frozen. */
 extern unsigned int memorystatus_frozen_processes_max;
 extern unsigned int memorystatus_frozen_shared_mb;
 extern unsigned int memorystatus_frozen_shared_mb_max;
 extern unsigned int memorystatus_freeze_shared_mb_per_process_max; /* Max. MB allowed per process to be freezer-eligible. */
 extern unsigned int memorystatus_freeze_private_shared_pages_ratio; /* Ratio of private:shared pages for a process to be freezer-eligible. */
 extern unsigned int memorystatus_suspended_count;
-extern unsigned int memorystatus_thaw_count;
+extern unsigned int memorystatus_thaw_count; /* # of processes that have been thawed in the current interval. */
 extern unsigned int memorystatus_refreeze_eligible_count; /* # of processes currently thawed i.e. have state on disk & in-memory */
 
 void memorystatus_freeze_init(void);

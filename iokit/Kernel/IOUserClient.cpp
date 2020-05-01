@@ -548,7 +548,31 @@ extern "C" {
 // functions called from osfmk/device/iokit_rpc.c
 
 void
-iokit_add_reference( io_object_t obj, ipc_kobject_type_t type )
+iokit_port_object_description(io_object_t obj, kobject_description_t desc)
+{
+	IORegistryEntry    * regEntry;
+	IOUserNotification * __unused noti;
+	_IOServiceNotifier * __unused serviceNoti;
+	OSSerialize        * __unused s;
+
+	if ((regEntry = OSDynamicCast(IORegistryEntry, obj))) {
+		snprintf(desc, KOBJECT_DESCRIPTION_LENGTH, "%s(0x%qx)", obj->getMetaClass()->getClassName(), regEntry->getRegistryEntryID());
+#if DEVELOPMENT || DEBUG
+	} else if ((noti = OSDynamicCast(IOUserNotification, obj))
+	    && ((serviceNoti = OSDynamicCast(_IOServiceNotifier, noti->holdNotify)))) {
+		s = OSSerialize::withCapacity(page_size);
+		if (s && serviceNoti->matching->serialize(s)) {
+			snprintf(desc, KOBJECT_DESCRIPTION_LENGTH, "%s(%s)", obj->getMetaClass()->getClassName(), s->text());
+		}
+		OSSafeReleaseNULL(s);
+#endif /* DEVELOPMENT || DEBUG */
+	} else {
+		snprintf(desc, KOBJECT_DESCRIPTION_LENGTH, "%s", obj->getMetaClass()->getClassName());
+	}
+}
+
+void
+iokit_add_reference( io_object_t obj, natural_t type )
 {
 	IOUserClient * uc;
 
@@ -5645,28 +5669,7 @@ is_io_catalog_terminate(
 	switch (flag) {
 #if !defined(SECURE_KERNEL)
 	case kIOCatalogServiceTerminate:
-		OSIterator *        iter;
-		IOService *         service;
-
-		iter = IORegistryIterator::iterateOver(gIOServicePlane,
-		    kIORegistryIterateRecursively);
-		if (!iter) {
-			return kIOReturnNoMemory;
-		}
-
-		do {
-			iter->reset();
-			while ((service = (IOService *)iter->getNextObject())) {
-				if (service->metaCast(name)) {
-					if (!service->terminate( kIOServiceRequired
-					    | kIOServiceSynchronous)) {
-						kr = kIOReturnUnsupported;
-						break;
-					}
-				}
-			}
-		} while (!service && !iter->isValid());
-		iter->release();
+		kr = gIOCatalogue->terminateDrivers(NULL, name);
 		break;
 
 	case kIOCatalogModuleUnload:

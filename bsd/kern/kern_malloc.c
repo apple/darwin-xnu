@@ -101,6 +101,7 @@
 
 #include <miscfs/specfs/specdev.h>
 
+#include <nfs/nfs_conf.h>
 #include <nfs/rpcv2.h>
 #include <nfs/nfsproto.h>
 #include <nfs/nfsnode.h>
@@ -145,7 +146,7 @@ const char *memname[] = {
 	"iov32",        /* 19 M_IOV32 */
 	"mount",        /* 20 M_MOUNT */
 	"fhandle",              /* 21 M_FHANDLE */
-#if (NFSCLIENT || NFSSERVER)
+#if CONFIG_NFS
 	"NFS req",              /* 22 M_NFSREQ */
 	"NFS mount",    /* 23 M_NFSMNT */
 	"NFS node",             /* 24 M_NFSNODE */
@@ -187,7 +188,7 @@ const char *memname[] = {
 	"NQNFS Lease",  /* 47 M_NQLEASE */
 	"NQNFS Host",   /* 48 M_NQMHOST */
 	"Export Host",  /* 49 M_NETADDR */
-#if (NFSCLIENT || NFSSERVER)
+#if CONFIG_NFS
 	"NFS srvsock",  /* 50 M_NFSSVC */
 	"NFS uid",              /* 51 M_NFSUID */
 	"NFS daemon",   /* 52 M_NFSD */
@@ -202,7 +203,7 @@ const char *memname[] = {
 	"mrt",                  /* 56 M_MRTABLE */
 	"",             /* 57 unused entry */
 	"",             /* 58 unused entry */
-#if (NFSCLIENT || NFSSERVER)
+#if CONFIG_NFS
 	"NFSV3 srvdesc",/* 59 M_NFSRVDESC */
 	"NFSV3 diroff", /* 60 M_NFSDIROFF */
 	"NFSV3 bigfh",  /* 61 M_NFSBIGFH */
@@ -343,7 +344,7 @@ struct kmzones {
 	{ SOS(user32_iovec), KMZ_LOOKUPZONE, FALSE },   /* 19 M_IOV32 */
 	{ SOS(mount), KMZ_CREATEZONE, FALSE },          /* 20 M_MOUNT */
 	{ 0, KMZ_MALLOC, FALSE },                       /* 21 M_FHANDLE */
-#if (NFSCLIENT || NFSSERVER)
+#if CONFIG_NFS
 	{ SOS(nfsreq), KMZ_CREATEZONE, FALSE },         /* 22 M_NFSREQ */
 	{ SOS(nfsmount), KMZ_CREATEZONE, FALSE },        /* 23 M_NFSMNT */
 	{ SOS(nfsnode), KMZ_CREATEZONE, FALSE },        /* 24 M_NFSNODE */
@@ -381,7 +382,7 @@ struct kmzones {
 	{ 0, KMZ_MALLOC, FALSE },                       /* 47 M_NQLEASE */
 	{ 0, KMZ_MALLOC, FALSE },                       /* 48 M_NQMHOST */
 	{ 0, KMZ_MALLOC, FALSE },                       /* 49 M_NETADDR */
-#if (NFSCLIENT || NFSSERVER)
+#if CONFIG_NFS
 	{ SOX(nfsrv_sock),
 	  KMZ_CREATEZONE_ACCT, FALSE },                 /* 50 M_NFSSVC */
 	{ 0, KMZ_MALLOC, FALSE },                       /* 51 M_NFSUID */
@@ -400,7 +401,7 @@ struct kmzones {
 	{ SOX(mrt), KMZ_CREATEZONE, TRUE },             /* 56 M_MRTABLE */
 	{ 0, KMZ_MALLOC, FALSE },                       /* 57 unused entry */
 	{ 0, KMZ_MALLOC, FALSE },                       /* 58 unused entry */
-#if (NFSCLIENT || NFSSERVER)
+#if CONFIG_NFS
 	{ SOS(nfsrv_descript),
 	  KMZ_CREATEZONE_ACCT, FALSE },                 /* 59 M_NFSRVDESC */
 	{ SOS(nfsdmap), KMZ_CREATEZONE, FALSE },        /* 60 M_NFSDIROFF */

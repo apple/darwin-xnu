@@ -65,6 +65,9 @@
  * FreeBSD-Id: nfs_serv.c,v 1.52 1997/10/28 15:59:05 bde Exp $
  */
 
+#include <nfs/nfs_conf.h>
+#if CONFIG_NFS_SERVER
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/proc.h>
@@ -106,8 +109,6 @@
 #include <security/mac.h>
 #include <security/mac_framework.h>
 #endif
-
-#if NFSSERVER
 
 /*
  * NFS server globals
@@ -4898,6 +4899,7 @@ nfsrv_statfs(
 
 	VFSATTR_INIT(&va);
 	VFSATTR_WANTED(&va, f_blocks);
+	VFSATTR_WANTED(&va, f_bfree);
 	VFSATTR_WANTED(&va, f_bavail);
 	VFSATTR_WANTED(&va, f_files);
 	VFSATTR_WANTED(&va, f_ffree);
@@ -5284,4 +5286,4 @@ nfsrv_authorize(
 	return error;
 }
 
-#endif /* NFSSERVER */
+#endif /* CONFIG_NFS_SERVER */

@@ -73,8 +73,8 @@ backtrace_sysctl SYSCTL_HANDLER_ARGS
 		return ENOBUFS;
 	}
 	memset(bt, 0, bt_size);
-	error = backtrace_user(bt, bt_len, &bt_filled, NULL, NULL);
-	if (error) {
+	bt_filled = backtrace_user(bt, bt_len, &error, NULL, NULL);
+	if (error != 0) {
 		goto out;
 	}
 	bt_filled = min(bt_filled, bt_len);

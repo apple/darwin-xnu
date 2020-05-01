@@ -64,6 +64,10 @@
  *	@(#)nfs_vfsops.c	8.12 (Berkeley) 5/20/95
  * FreeBSD-Id: nfs_vfsops.c,v 1.52 1997/11/12 05:42:21 julian Exp $
  */
+
+#include <nfs/nfs_conf.h>
+#if CONFIG_NFS_CLIENT
+
 /*
  * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
  * support for mandatory and extensible security protections.  This notice
@@ -3041,6 +3045,7 @@ mountnfs(
 		nmp->nm_iodlink.tqe_next = NFSNOLIST;
 		nmp->nm_deadtimeout = 0;
 		nmp->nm_curdeadtimeout = 0;
+		NFS_BITMAP_SET(nmp->nm_flags, NFS_MFLAG_RDIRPLUS); /* enable RDIRPLUS by default. It will be reverted later in case NFSv2 is used */
 		NFS_BITMAP_SET(nmp->nm_flags, NFS_MFLAG_NOACL);
 		nmp->nm_realm = NULL;
 		nmp->nm_principal = NULL;
@@ -6182,7 +6187,7 @@ nfs_vfs_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 	struct netfs_status *nsp = NULL;
 	int timeoutmask;
 	uint totlen, count, numThreads;
-#if NFSSERVER
+#if CONFIG_NFS_SERVER
 	uint pos;
 	struct nfs_exportfs *nxfs;
 	struct nfs_export *nx;
@@ -6195,7 +6200,7 @@ nfs_vfs_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 	struct nfs_user_stat_path_rec upath_rec;
 	uint bytes_avail, bytes_total, recs_copied;
 	uint numExports, numRecs;
-#endif /* NFSSERVER */
+#endif /* CONFIG_NFS_SERVER */
 
 	/*
 	 * All names at this level are terminal.
@@ -6303,7 +6308,7 @@ nfs_vfs_sysctl(int *name, u_int namelen, user_addr_t oldp, size_t *oldlenp,
 		*oldlenp = xb.xb_u.xb_buffer.xbb_len;
 		xb_cleanup(&xb);
 		break;
-#if NFSSERVER
+#if CONFIG_NFS_SERVER
 	case NFS_EXPORTSTATS:
 		/* setup export stat descriptor */
 		stat_desc.rec_vers = NFS_EXPORT_STAT_REC_VERSION;
@@ -6549,7 +6554,7 @@ ustat_skip:
 
 		error = copyout(&nfsrv_user_stat_node_count, oldp, sizeof(nfsrv_user_stat_node_count));
 		break;
-#endif /* NFSSERVER */
+#endif /* CONFIG_NFS_SERVER */
 	case VFS_CTL_NOLOCKS:
 		if (req->oldptr != USER_ADDR_NULL) {
 			lck_mtx_lock(&nmp->nm_lock);
@@ -6727,3 +6732,5 @@ ustat_skip:
 	}
 	return error;
 }
+
+#endif /* CONFIG_NFS_CLIENT */

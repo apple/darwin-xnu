@@ -122,7 +122,6 @@ struct snprintf_arg {
 extern const char       *debugger_panic_str;
 
 extern  void cnputc(char);              /* standard console putc */
-void    (*v_putc)(char) = cnputc;       /* routine to putc on virtual console */
 
 extern  struct tty cons;                /* standard console tty */
 extern struct   tty *constty;           /* pointer to console "window" tty */
@@ -385,7 +384,7 @@ putchar(int c, void *arg)
 		log_putc_locked(msgbufp, c);
 	}
 	if ((pca->flags & TOCONS) && constty == 0 && c != '\0') {
-		(*v_putc)(c);
+		cnputc(c);
 	}
 	if (pca->flags & TOSTR) {
 		**sp = c;

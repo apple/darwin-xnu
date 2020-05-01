@@ -2275,7 +2275,8 @@ dlil_input_thread_cont(void *v, wait_result_t wres)
 
 		lck_mtx_lock_spin(&inp->input_lck);
 		VERIFY(inp->input_waiting & DLIL_INPUT_RUNNING);
-		if (!(inp->input_waiting & ~DLIL_INPUT_RUNNING)) {
+		if (!(inp->input_waiting & ~(DLIL_INPUT_RUNNING |
+		    DLIL_INPUT_TERMINATE))) {
 			break;
 		}
 	}
@@ -2579,7 +2580,8 @@ skip:
 
 		lck_mtx_lock_spin(&inp->input_lck);
 		VERIFY(inp->input_waiting & DLIL_INPUT_RUNNING);
-		if (!(inp->input_waiting & ~DLIL_INPUT_RUNNING)) {
+		if (!(inp->input_waiting & ~(DLIL_INPUT_RUNNING |
+		    DLIL_INPUT_TERMINATE))) {
 			break;
 		}
 	}

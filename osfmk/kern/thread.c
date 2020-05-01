@@ -246,7 +246,7 @@ void __attribute__((noinline)) SENDING_NOTIFICATION__TASK_HAS_TOO_MANY_THREADS(t
 
 os_refgrp_decl(static, thread_refgrp, "thread", NULL);
 
-void
+thread_t
 thread_bootstrap(void)
 {
 	/*
@@ -418,7 +418,13 @@ thread_bootstrap(void)
 	/* fiddle with init thread to skip asserts in set_sched_pri */
 	init_thread.sched_pri = MAXPRI_KERNEL;
 
-	machine_set_current_thread(&init_thread);
+	return &init_thread;
+}
+
+void
+thread_machine_init_template(void)
+{
+	machine_thread_template_init(&thread_template);
 }
 
 extern boolean_t allow_qos_policy_set;

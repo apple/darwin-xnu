@@ -348,6 +348,7 @@ _pffindproto:_pffindproto_old
 _port_name_to_task
 _port_name_to_thread
 _post_sys_powersource
+_proc_csflags
 _proc_get_syscall_filter_mask_size
 _proc_getexecutableoffset
 _proc_getexecutablevnode
@@ -357,9 +358,12 @@ _proc_pidbackgrounded
 _proc_pidversion
 _proc_set_responsible_pid
 _proc_set_syscall_filter_mask
+_proc_selfcsflags
 _proc_task
 _proc_uniqueid
 _proc_puniqueid
+_proc_gettty
+_proc_gettty_dev
 _proc_exitstatus
 _priv_check_cred
 _pru_abort_notsupp

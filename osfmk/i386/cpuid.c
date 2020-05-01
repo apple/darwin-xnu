@@ -872,9 +872,7 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 			break;
 		case CPUID_MODEL_SKYLAKE:
 		case CPUID_MODEL_SKYLAKE_DT:
-#if !defined(RC_HIDE_XNU_J137)
 		case CPUID_MODEL_SKYLAKE_W:
-#endif
 			cpufamily = CPUFAMILY_INTEL_SKYLAKE;
 			break;
 		case CPUID_MODEL_KABYLAKE:

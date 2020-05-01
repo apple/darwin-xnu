@@ -143,7 +143,7 @@ sysctl_msec_to_ticks SYSCTL_HANDLER_ARGS
 		return error;
 	}
 
-	tt = s * TCP_RETRANSHZ / 1000;
+	tt = temp * TCP_RETRANSHZ / 1000;
 	if (tt < 1 || tt > INT_MAX) {
 		return EINVAL;
 	}

@@ -204,10 +204,25 @@ mach_msg_send_from_kernel_with_options(
 	mach_msg_option_t       option,
 	mach_msg_timeout_t      timeout_val)
 {
+	return kernel_mach_msg_send(msg, send_size, option, timeout_val, NULL);
+}
+
+mach_msg_return_t
+kernel_mach_msg_send(
+	mach_msg_header_t       *msg,
+	mach_msg_size_t         send_size,
+	mach_msg_option_t       option,
+	mach_msg_timeout_t      timeout_val,
+	boolean_t               *message_moved)
+{
 	ipc_kmsg_t kmsg;
 	mach_msg_return_t mr;
 
 	KDBG(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_KMSG_INFO) | DBG_FUNC_START);
+
+	if (message_moved) {
+		*message_moved = FALSE;
+	}
 
 	mr = ipc_kmsg_get_from_kernel(msg, send_size, &kmsg);
 	if (mr != MACH_MSG_SUCCESS) {
@@ -220,6 +235,10 @@ mach_msg_send_from_kernel_with_options(
 		ipc_kmsg_free(kmsg);
 		KDBG(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
 		return mr;
+	}
+
+	if (message_moved) {
+		*message_moved = TRUE;
 	}
 
 	/*
@@ -313,9 +332,6 @@ mach_msg_send_from_kernel_with_options_legacy(
  *		MACH_RCV_PORT_DIED	The reply port was deallocated.
  */
 
-mach_msg_return_t mach_msg_rpc_from_kernel_body(mach_msg_header_t *msg,
-    mach_msg_size_t send_size, mach_msg_size_t rcv_size, boolean_t legacy);
-
 #if IKM_SUPPORT_LEGACY
 
 #undef mach_msg_rpc_from_kernel
@@ -331,9 +347,8 @@ mach_msg_rpc_from_kernel(
 	mach_msg_size_t         send_size,
 	mach_msg_size_t         rcv_size)
 {
-	return mach_msg_rpc_from_kernel_body(msg, send_size, rcv_size, TRUE);
+	return kernel_mach_msg_rpc(msg, send_size, rcv_size, TRUE, NULL);
 }
-
 #endif /* IKM_SUPPORT_LEGACY */
 
 mach_msg_return_t
@@ -342,18 +357,19 @@ mach_msg_rpc_from_kernel_proper(
 	mach_msg_size_t         send_size,
 	mach_msg_size_t         rcv_size)
 {
-	return mach_msg_rpc_from_kernel_body(msg, send_size, rcv_size, FALSE);
+	return kernel_mach_msg_rpc(msg, send_size, rcv_size, FALSE, NULL);
 }
 
 mach_msg_return_t
-mach_msg_rpc_from_kernel_body(
+kernel_mach_msg_rpc(
 	mach_msg_header_t       *msg,
 	mach_msg_size_t         send_size,
 	mach_msg_size_t         rcv_size,
 #if !IKM_SUPPORT_LEGACY
 	__unused
 #endif
-	boolean_t           legacy)
+	boolean_t           legacy,
+	boolean_t           *message_moved)
 {
 	thread_t self = current_thread();
 	ipc_port_t reply;
@@ -364,6 +380,10 @@ mach_msg_rpc_from_kernel_body(
 	assert(msg->msgh_local_port == MACH_PORT_NULL);
 
 	KDBG(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_KMSG_INFO) | DBG_FUNC_START);
+
+	if (message_moved) {
+		*message_moved = FALSE;
+	}
 
 	mr = ipc_kmsg_get_from_kernel(msg, send_size, &kmsg);
 	if (mr != MACH_MSG_SUCCESS) {
@@ -399,6 +419,10 @@ mach_msg_rpc_from_kernel_body(
 		ipc_kmsg_free(kmsg);
 		KDBG(MACHDBG_CODE(DBG_MACH_IPC, MACH_IPC_KMSG_INFO) | DBG_FUNC_END, mr);
 		return mr;
+	}
+
+	if (message_moved) {
+		*message_moved = TRUE;
 	}
 
 	/*
@@ -1045,7 +1069,7 @@ convert_port_to_mig_object(
 	 * query it to get a reference to the desired interface.
 	 */
 	ppv = NULL;
-	mig_object = (mig_object_t)port->ip_kobject;
+	mig_object = (mig_object_t) ip_get_kobject(port);
 	mig_object->pVtbl->QueryInterface((IMIGObject *)mig_object, iid, &ppv);
 	ip_unlock(port);
 	return (mig_object_t)ppv;
@@ -1068,7 +1092,7 @@ mig_object_no_senders(
 	assert(IKOT_MIG == ip_kotype(port));
 
 	/* consume the reference donated by convert_mig_object_to_port */
-	mig_object_deallocate((mig_object_t)port->ip_kobject);
+	mig_object_deallocate((mig_object_t) ip_get_kobject(port));
 }
 
 /*

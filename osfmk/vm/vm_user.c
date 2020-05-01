@@ -2372,7 +2372,7 @@ mach_make_memory_entry_internal(
 
 	if (IP_VALID(parent_handle) &&
 	    ip_kotype(parent_handle) == IKOT_NAMED_ENTRY) {
-		parent_entry = (vm_named_entry_t) parent_handle->ip_kobject;
+		parent_entry = (vm_named_entry_t) ip_get_kobject(parent_handle);
 	} else {
 		parent_entry = NULL;
 	}
@@ -3646,7 +3646,7 @@ memory_entry_purgeable_control_internal(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	mem_entry = (vm_named_entry_t) entry_port->ip_kobject;
+	mem_entry = (vm_named_entry_t) ip_get_kobject(entry_port);
 
 	named_entry_lock(mem_entry);
 
@@ -3709,7 +3709,7 @@ memory_entry_access_tracking_internal(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	mem_entry = (vm_named_entry_t) entry_port->ip_kobject;
+	mem_entry = (vm_named_entry_t) ip_get_kobject(entry_port);
 
 	named_entry_lock(mem_entry);
 
@@ -3788,7 +3788,7 @@ mach_memory_entry_ownership(
 	    ip_kotype(entry_port) != IKOT_NAMED_ENTRY) {
 		return KERN_INVALID_ARGUMENT;
 	}
-	mem_entry = (vm_named_entry_t) entry_port->ip_kobject;
+	mem_entry = (vm_named_entry_t) ip_get_kobject(entry_port);
 
 	named_entry_lock(mem_entry);
 
@@ -3842,7 +3842,7 @@ mach_memory_entry_get_page_counts(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	mem_entry = (vm_named_entry_t) entry_port->ip_kobject;
+	mem_entry = (vm_named_entry_t) ip_get_kobject(entry_port);
 
 	named_entry_lock(mem_entry);
 
@@ -3907,7 +3907,7 @@ mach_destroy_memory_entry(
 #if MACH_ASSERT
 	assert(ip_kotype(port) == IKOT_NAMED_ENTRY);
 #endif /* MACH_ASSERT */
-	named_entry = (vm_named_entry_t)port->ip_kobject;
+	named_entry = (vm_named_entry_t) ip_get_kobject(port);
 
 	named_entry_lock(named_entry);
 	named_entry->ref_count -= 1;
@@ -3934,8 +3934,7 @@ mach_destroy_memory_entry(
 		lck_mtx_unlock(&vm_named_entry_list_lock_data);
 #endif /* VM_NAMED_ENTRY_LIST */
 
-		kfree(port->ip_kobject,
-		    sizeof(struct vm_named_entry));
+		kfree(named_entry, sizeof(struct vm_named_entry));
 	} else {
 		named_entry_unlock(named_entry);
 	}
@@ -3961,7 +3960,7 @@ mach_memory_entry_page_op(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	mem_entry = (vm_named_entry_t) entry_port->ip_kobject;
+	mem_entry = (vm_named_entry_t) ip_get_kobject(entry_port);
 
 	named_entry_lock(mem_entry);
 
@@ -4014,7 +4013,7 @@ mach_memory_entry_range_op(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	mem_entry = (vm_named_entry_t) entry_port->ip_kobject;
+	mem_entry = (vm_named_entry_t) ip_get_kobject(entry_port);
 
 	named_entry_lock(mem_entry);
 

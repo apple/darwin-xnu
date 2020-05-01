@@ -262,12 +262,10 @@
 #define CPUID_MODEL_SKYLAKE_ULT         0x4E
 #define CPUID_MODEL_SKYLAKE_ULX         0x4E
 #define CPUID_MODEL_SKYLAKE_DT          0x5E
-#if !defined(RC_HIDE_XNU_J137)
 #define CPUID_MODEL_SKYLAKE_W           0x55
 #define PLATID_XEON_SP_1                0x00
 #define PLATID_XEON_SP_2                0x07
 #define PLATID_MAYBE_XEON_SP            0x01
-#endif /* not RC_HIDE_XNU_J137 */
 #define CPUID_MODEL_KABYLAKE            0x8E
 #define CPUID_MODEL_KABYLAKE_ULT        0x8E
 #define CPUID_MODEL_KABYLAKE_ULX        0x8E

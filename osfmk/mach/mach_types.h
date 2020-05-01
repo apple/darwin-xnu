@@ -133,8 +133,8 @@ typedef struct ledger                   *ledger_t;
 typedef struct alarm                    *alarm_t;
 typedef struct clock                    *clock_serv_t;
 typedef struct clock                    *clock_ctrl_t;
-
 typedef struct arcade_register          *arcade_register_t;
+typedef struct suid_cred               *suid_cred_t;
 
 /*
  * OBSOLETE: lock_set interfaces are obsolete.
@@ -155,8 +155,8 @@ struct semaphore;
 struct ledger;
 struct alarm;
 struct clock;
-
 struct arcade_register;
+struct suid_cred;
 
 __END_DECLS
 
@@ -190,8 +190,9 @@ typedef mach_port_t             ledger_t;
 typedef mach_port_t             alarm_t;
 typedef mach_port_t             clock_serv_t;
 typedef mach_port_t             clock_ctrl_t;
-
 typedef mach_port_t             arcade_register_t;
+typedef mach_port_t             suid_cred_t;
+
 #endif  /* KERNEL */
 
 /*
@@ -260,6 +261,8 @@ typedef exception_handler_t     exception_port_t;
 typedef exception_handler_array_t exception_port_arrary_t;
 typedef char vfs_path_t[4096];
 typedef char nspace_path_t[1024]; /* 1024 == PATH_MAX */
+typedef char suid_cred_path_t[1024];
+typedef uint32_t suid_cred_uid_t;
 
 #ifdef KERNEL
 #define TASK_NULL               ((task_t) NULL)
@@ -284,6 +287,7 @@ typedef char nspace_path_t[1024]; /* 1024 == PATH_MAX */
 #define CLOCK_NULL              ((clock_t) NULL)
 #define UND_SERVER_NULL         ((UNDServerRef) NULL)
 #define ARCADE_REG_NULL         ((arcade_register_t) NULL)
+#define SUID_CRED_NULL         ((suid_cred_t) NULL)
 #else
 #define TASK_NULL               ((task_t) 0)
 #define TASK_NAME_NULL          ((task_name_t) 0)
@@ -307,6 +311,7 @@ typedef char nspace_path_t[1024]; /* 1024 == PATH_MAX */
 #define CLOCK_NULL              ((clock_t) 0)
 #define UND_SERVER_NULL         ((UNDServerRef) 0)
 #define ARCADE_REG_NULL         ((arcade_register_t) 0)
+#define SUID_CRED_NULL         ((suid_cred_t) 0)
 #endif
 
 /* DEPRECATED */

@@ -109,6 +109,7 @@
 
 #include <net/if.h>
 #include <net/ethernet.h>
+#include <netinet/in.h>
 
 /*
  * Commands used in the SIOCSDRVSPEC ioctl.  Note the lookup of the
@@ -149,8 +150,10 @@
 #define BRDGSPROTO              31      /* set protocol (ifbrparam) */
 #define BRDGSTXHC               32      /* set tx hold count (ifbrparam) */
 #define BRDGSIFAMAX             33      /* set max interface addrs (ifbreq) */
-#define BRDGGHOSTFILTER         34      /* set max interface addrs (ifbrhostfilter) */
-#define BRDGSHOSTFILTER         35      /* set max interface addrs (ifbrhostfilter) */
+#define BRDGGHOSTFILTER         34      /* get host filter (ifbrhostfilter) */
+#define BRDGSHOSTFILTER         35      /* set host filter (ifbrhostfilter) */
+#define BRDGGMACNATLIST         36      /* get MAC NAT list */
+
 
 /*
  * Generic bridge control request.
@@ -175,7 +178,7 @@ struct ifbreq {
 
 #pragma pack()
 
-/* BRDGGIFFLAGS, BRDGSIFFLAGS */
+/* BRDGGIFFLGS, BRDGSIFFLGS */
 #define IFBIF_LEARNING          0x0001  /* if can learn */
 #define IFBIF_DISCOVER          0x0002  /* if sends packets w/ unknown dest. */
 #define IFBIF_STP               0x0004  /* if participates in spanning tree */
@@ -188,10 +191,13 @@ struct ifbreq {
 #define IFBIF_BSTP_ADMEDGE      0x0200  /* member stp admin edge enabled */
 #define IFBIF_BSTP_ADMCOST      0x0400  /* member stp admin path cost */
 #define IFBIF_PRIVATE           0x0800  /* if is a private segment */
+#define IFBIF_MAC_NAT           0x8000  /* member requires MAC NAT */
 
 #define IFBIFBITS       "\020\001LEARNING\002DISCOVER\003STP\004SPAN" \
-	                "\005STICKY\014PRIVATE\006EDGE\007AUTOEDGE\010PTP" \
-	                "\011AUTOPTP"
+	"\005STICKY\006EDGE\007AUTOEDGE\010PTP"                       \
+	"\011AUTOPTP\014PRIVATE"                                      \
+	"\020MACNAT"
+
 #define IFBIFMASK       ~(IFBIF_BSTP_EDGE|IFBIF_BSTP_AUTOEDGE|IFBIF_BSTP_PTP| \
 	                IFBIF_BSTP_AUTOPTP|IFBIF_BSTP_ADMEDGE| \
 	                IFBIF_BSTP_ADMCOST)     /* not saved */
@@ -201,22 +207,13 @@ struct ifbreq {
 #define IFBF_FLUSHALL           0x01    /* flush all addresses */
 
 /* BRDGSFILT */
-#define IFBF_FILT_USEIPF        0x00000001 /* run pfil hooks on the bridge
+#define IFBF_FILT_USEIPF        0x00000001 /* run pf hooks on the bridge
 	                                    *  interface */
-#define IFBF_FILT_MEMBER        0x00000002 /* run pfil hooks on the member
+#define IFBF_FILT_MEMBER        0x00000002 /* run pf hooks on the member
 	                                    *  interfaces */
 #define IFBF_FILT_ONLYIP        0x00000004 /* only pass IP[46] packets when
-	                                    *  pfil is enabled */
+	                                    *  pf is enabled */
 #define IFBF_FILT_MASK          0x00000007 /* mask of valid values */
-
-
-/* APPLE MODIFICATION <jhw@apple.com>: Default is to pass non-IP packets. */
-#define IFBF_FILT_DEFAULT       ( IFBF_FILT_USEIPF | IFBF_FILT_MEMBER )
-#if 0
-#define IFBF_FILT_DEFAULT       (IFBF_FILT_USEIPF | \
-IFBF_FILT_MEMBER | \
-IFBF_FILT_ONLYIP)
-#endif
 
 /*
  * Interface list structure.
@@ -551,5 +548,58 @@ extern u_int8_t bstp_etheraddr[ETHER_ADDR_LEN];
 int     bridgeattach(int);
 
 #endif /* XNU_KERNEL_PRIVATE */
+
+
+/*
+ * MAC NAT entry list
+ */
+
+#pragma pack(4)
+
+union ifbrip {
+	struct in_addr  ifbrip_addr;
+	struct in6_addr ifbrip_addr6;
+};
+
+struct ifbrmne {
+	char            ifbmne_ifname[IFNAMSIZ]; /* member if name */
+	uint64_t        ifbmne_expire;           /* expiration time */
+	uint8_t         ifbmne_mac[ETHER_ADDR_LEN];/* MAC address */
+	uint8_t         ifbmne_reserved;
+	uint8_t         ifbmne_af;              /* AF_INET or AF_INET6 */
+	union ifbrip    ifbmne_ip;
+};
+#define ifbmne_ip_addr  ifbmne_ip.ifbrip_addr
+#define ifbmne_ip6_addr ifbmne_ip.ifbrip_addr6
+
+#ifndef XNU_KERNEL_PRIVATE
+
+struct ifbrmnelist {
+	uint32_t        ifbml_len;      /* buffer size (multiple of elsize) */
+	uint16_t        ifbml_elsize;   /* sizeof(ifbrmacnatent) */
+	uint16_t        ifbml_pad;
+	caddr_t         ifbml_buf;
+};
+
+#else /* XNU_KERNEL_PRIVATE */
+
+struct ifbrmnelist32 {
+	uint32_t        ifbml_len;      /* buffer size */
+	uint16_t        ifbml_elsize;   /* sizeof(ifbrmacnatent) */
+	uint16_t        ifbml_pad;
+	user32_addr_t   ifbml_buf;
+};
+
+struct ifbrmnelist64 {
+	uint32_t        ifbml_len;      /* buffer size */
+	uint16_t        ifbml_elsize;   /* sizeof(ifbrmacnatent) */
+	uint16_t        ifbml_pad;
+	user64_addr_t   ifbml_buf;
+};
+
+#endif /* XNU_KERNEL_PRIVATE */
+
+#pragma pack()
+
 #endif /* PRIVATE */
 #endif /* !_NET_IF_BRIDGEVAR_H_ */

@@ -402,7 +402,7 @@ convert_port_to_UNDReply(
 			ip_unlock(port);
 			return UND_REPLY_NULL;
 		}
-		reply = (UNDReplyRef) port->ip_kobject;
+		reply = (UNDReplyRef) ip_get_kobject(port);
 		assert(reply != UND_REPLY_NULL);
 		ip_unlock(port);
 		return reply;

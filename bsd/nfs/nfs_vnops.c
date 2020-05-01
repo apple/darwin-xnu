@@ -65,6 +65,8 @@
  * FreeBSD-Id: nfs_vnops.c,v 1.72 1997/11/07 09:20:48 phk Exp $
  */
 
+#include <nfs/nfs_conf.h>
+#if CONFIG_NFS_CLIENT
 
 /*
  * vnode op calls for Sun NFS version 2 and 3
@@ -461,6 +463,35 @@ int     nfs_sillyrename(nfsnode_t, nfsnode_t, struct componentname *, vfs_contex
 int     nfs_getattr_internal(nfsnode_t, struct nfs_vattr *, vfs_context_t, int);
 int     nfs_refresh_fh(nfsnode_t, vfs_context_t);
 
+
+/*
+ * Update nfsnode attributes to avoid extra getattr calls for each direntry.
+ * This function should be called only if RDIRPLUS flag is enabled.
+ */
+void
+nfs_rdirplus_update_node_attrs(nfsnode_t dnp, struct direntry *dp, fhandle_t *fhp, struct nfs_vattr *nvattrp, uint64_t *savedxidp)
+{
+	nfsnode_t np;
+	struct componentname cn;
+	int isdot = (dp->d_namlen == 1) && (dp->d_name[0] == '.');
+	int isdotdot = (dp->d_namlen == 2) && (dp->d_name[0] == '.') && (dp->d_name[1] == '.');
+
+	if (isdot || isdotdot) {
+		return;
+	}
+
+	np = NULL;
+	bzero(&cn, sizeof(cn));
+	cn.cn_nameptr = dp->d_name;
+	cn.cn_namelen = dp->d_namlen;
+	cn.cn_nameiop = LOOKUP;
+
+	nfs_nget(NFSTOMP(dnp), dnp, &cn, fhp->fh_data, fhp->fh_len, nvattrp, savedxidp, RPCAUTH_UNKNOWN, NG_NOCREATE, &np);
+	if (np) {
+		nfs_node_unlock(np);
+		vnode_put(NFSTOV(np));
+	}
+}
 
 /*
  * Find the slot in the access cache for this UID.
@@ -1864,6 +1895,8 @@ nfs3_vnop_getattr(
                                   *  } */*ap)
 {
 	int error;
+	nfsnode_t np;
+	uint64_t supported_attrs;
 	struct nfs_vattr nva;
 	struct vnode_attr *vap = ap->a_vap;
 	struct nfsmount *nmp;
@@ -1878,7 +1911,9 @@ nfs3_vnop_getattr(
 	/* Return the io size no matter what, since we don't go over the wire for this */
 	VATTR_RETURN(vap, va_iosize, nfs_iosize);
 
-	if ((vap->va_active & NFS3_SUPPORTED_VATTRS) == 0) {
+	supported_attrs = NFS3_SUPPORTED_VATTRS;
+
+	if ((vap->va_active & supported_attrs) == 0) {
 		return 0;
 	}
 
@@ -1887,6 +1922,18 @@ nfs3_vnop_getattr(
 		    (uint64_t)VM_KERNEL_ADDRPERM(ap->a_vp),
 		    ap->a_vp->v_name ? ap->a_vp->v_name : "empty");
 	}
+
+	/*
+	 * We should not go over the wire if only fileid was requested and has ever been populated.
+	 */
+	if ((vap->va_active & supported_attrs) == VNODE_ATTR_va_fileid) {
+		np = VTONFS(ap->a_vp);
+		if (np->n_attrstamp) {
+			VATTR_RETURN(vap, va_fileid, np->n_vattr.nva_fileid);
+			return 0;
+		}
+	}
+
 	error = nfs_getattr(VTONFS(ap->a_vp), &nva, ap->a_context, NGA_CACHED);
 	if (error) {
 		return error;
@@ -3617,6 +3664,9 @@ skipread:
 out:
 	nfs_node_lock_force(np);
 	np->n_wrbusy--;
+	if ((ioflag & IO_SYNC) && !np->n_wrbusy && !np->n_numoutput) {
+		np->n_flag &= ~NMODIFIED;
+	}
 	nfs_node_unlock(np);
 	nfs_data_unlock(np);
 	FSDBG_BOT(515, np, uio_offset(uio), uio_resid(uio), error);
@@ -5441,7 +5491,7 @@ nfs_vnop_readdir(
 	nfsnode_t dnp = VTONFS(dvp);
 	struct nfsmount *nmp;
 	uio_t uio = ap->a_uio;
-	int error, nfsvers, extended, numdirent, bigcookies, ptc, done;
+	int error, nfsvers, extended, numdirent, bigcookies, ptc, done, attrcachetimeout;
 	uint16_t i, iptc, rlen, nlen;
 	uint64_t cookie, nextcookie, lbn = 0;
 	struct nfsbuf *bp = NULL;
@@ -5449,6 +5499,7 @@ nfs_vnop_readdir(
 	struct direntry *dp, *dpptc;
 	struct dirent dent;
 	char *cp = NULL;
+	struct timeval now;
 	thread_t thd;
 
 	nmp = VTONMP(dvp);
@@ -5495,6 +5546,23 @@ nfs_vnop_readdir(
 		}
 		if (error) {
 			goto out;
+		}
+	}
+
+	if (dnp->n_rdirplusstamp_eof && dnp->n_rdirplusstamp_sof) {
+		attrcachetimeout = nfs_attrcachetimeout(dnp);
+		microuptime(&now);
+		if (attrcachetimeout && (now.tv_sec - dnp->n_rdirplusstamp_sof > attrcachetimeout - 1)) {
+			dnp->n_rdirplusstamp_eof = dnp->n_rdirplusstamp_sof = 0;
+			nfs_invaldir(dnp);
+			nfs_node_unlock(dnp);
+			error = nfs_vinvalbuf(dvp, 0, ctx, 1);
+			if (!error) {
+				error = nfs_node_lock(dnp);
+			}
+			if (error) {
+				goto out;
+			}
 		}
 	}
 
@@ -6021,6 +6089,8 @@ nfs_dir_buf_cache_lookup(nfsnode_t dnp, nfsnode_t *npp, struct componentname *cn
 	struct nfsbuflists blist;
 	daddr64_t lbn, nextlbn;
 	int dotunder = (cnp->cn_namelen > 2) && (cnp->cn_nameptr[0] == '.') && (cnp->cn_nameptr[1] == '_');
+	int isdot = (cnp->cn_namelen == 1) && (cnp->cn_nameptr[0] == '.');
+	int isdotdot = (cnp->cn_namelen == 2) && (cnp->cn_nameptr[0] == '.') && (cnp->cn_nameptr[1] == '.');
 
 	nmp = NFSTONMP(dnp);
 	if (nfs_mount_gone(nmp)) {
@@ -6028,6 +6098,10 @@ nfs_dir_buf_cache_lookup(nfsnode_t dnp, nfsnode_t *npp, struct componentname *cn
 	}
 	if (!purge) {
 		*npp = NULL;
+	}
+
+	if (isdot || isdotdot) {
+		return 0;
 	}
 
 	/* first check most recent buffer (and next one too) */
@@ -6266,6 +6340,10 @@ noplus:
 
 		if (rdirplus) {
 			microuptime(&now);
+			if (lastcookie == 0) {
+				dnp->n_rdirplusstamp_sof = now.tv_sec;
+				dnp->n_rdirplusstamp_eof = 0;
+			}
 		}
 
 		/* loop through the entries packing them into the buffer */
@@ -6391,6 +6469,7 @@ nextbuffer:
 				}
 				*(time_t*)(&dp->d_name[dp->d_namlen + 1 + fhlen]) = now.tv_sec;
 				dp->d_reclen = reclen;
+				nfs_rdirplus_update_node_attrs(dnp, dp, &fh, nvattrp, &savedxid);
 			}
 			padstart = dp->d_name + dp->d_namlen + 1 + xlen;
 			ndbhp->ndbh_count++;
@@ -6414,6 +6493,9 @@ nextbuffer:
 			ndbhp->ndbh_flags |= (NDB_FULL | NDB_EOF);
 			nfs_node_lock_force(dnp);
 			dnp->n_eofcookie = lastcookie;
+			if (rdirplus) {
+				dnp->n_rdirplusstamp_eof = now.tv_sec;
+			}
 			nfs_node_unlock(dnp);
 		} else {
 			more_entries = 1;
@@ -8574,3 +8656,4 @@ nfs_vnode_notify(nfsnode_t np, uint32_t events)
 	vnode_notify(NFSTOV(np), events, vap);
 }
 
+#endif /* CONFIG_NFS_CLIENT */

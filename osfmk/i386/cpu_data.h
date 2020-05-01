@@ -201,18 +201,24 @@ typedef struct cpu_data {
 	struct cpu_data         *cpu_this;              /* pointer to myself */
 	thread_t                cpu_active_thread;
 	thread_t                cpu_nthread;
-	volatile int            cpu_preemption_level;
 	int                     cpu_number;             /* Logical CPU */
 	void                    *cpu_int_state;         /* interrupt state */
 	vm_offset_t             cpu_active_stack;       /* kernel stack base */
 	vm_offset_t             cpu_kernel_stack;       /* kernel stack top */
 	vm_offset_t             cpu_int_stack_top;
-	int                     cpu_interrupt_level;
 	volatile int            cpu_signals;            /* IPI events */
 	volatile int            cpu_prior_signals;      /* Last set of events,
 	                                                 * debugging
 	                                                 */
 	ast_t                   cpu_pending_ast;
+	/*
+	 * Note if rearranging fields:
+	 * We want cpu_preemption_level on a different
+	 * cache line than cpu_active_thread
+	 * for optimizing mtx_spin phase.
+	 */
+	int                     cpu_interrupt_level;
+	volatile int            cpu_preemption_level;
 	volatile int            cpu_running;
 #if !MONOTONIC
 	boolean_t               cpu_fixed_pmcs_enabled;

@@ -945,6 +945,7 @@ ipc_object_copyout(
 			break;
 		}
 
+
 		name = CAST_MACH_PORT_TO_NAME(object);
 		kr = ipc_entry_get(space, &name, &entry);
 		if (kr != KERN_SUCCESS) {
@@ -965,6 +966,30 @@ ipc_object_copyout(
 			io_unlock(object);
 			ipc_entry_dealloc(space, name, entry);
 			is_write_unlock(space);
+			return KERN_INVALID_CAPABILITY;
+		}
+
+		/* Don't actually copyout rights we aren't allowed to */
+		if (!ip_label_check(space, ip_object_to_port(object), msgt_name)) {
+			io_unlock(object);
+			ipc_entry_dealloc(space, name, entry);
+			is_write_unlock(space);
+
+			switch (msgt_name) {
+			case MACH_MSG_TYPE_PORT_SEND_ONCE:
+				ipc_port_release_sonce(ip_object_to_port(object));
+				break;
+			case MACH_MSG_TYPE_PORT_SEND:
+				ipc_port_release_send(ip_object_to_port(object));
+				break;
+			default:
+				/*
+				 * We don't allow labeling of "kobjects" with receive
+				 * rights at user-space or port-sets. So, if we get this far,
+				 * something went VERY wrong.
+				 */
+				panic("ipc_object_copyout: bad port label check failure");
+			}
 			return KERN_INVALID_CAPABILITY;
 		}
 
@@ -1061,6 +1086,25 @@ ipc_object_copyout_name(
 			io_unlock(object);
 			ipc_entry_dealloc(space, name, entry);
 			is_write_unlock(space);
+			return KERN_INVALID_CAPABILITY;
+		}
+
+		/* Don't actually copyout rights we aren't allowed to */
+		if (!ip_label_check(space, ip_object_to_port(object), msgt_name)) {
+			io_unlock(object);
+			ipc_entry_dealloc(space, name, entry);
+			is_write_unlock(space);
+
+			switch (msgt_name) {
+			case MACH_MSG_TYPE_PORT_SEND_ONCE:
+				ipc_port_release_sonce(ip_object_to_port(object));
+				break;
+			case MACH_MSG_TYPE_PORT_SEND:
+				ipc_port_release_send(ip_object_to_port(object));
+				break;
+			default:
+				panic("ipc_object_copyout_name: bad port label check failure");
+			}
 			return KERN_INVALID_CAPABILITY;
 		}
 

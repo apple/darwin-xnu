@@ -37,6 +37,7 @@
 #include <sys/errno.h>
 #include <sys/monotonic.h>
 #include <x86_64/monotonic.h>
+#include <kern/kpc.h>
 
 /*
  * Sanity check the compiler.
@@ -164,7 +165,13 @@ static void
 enable_counters(void)
 {
 	wrmsr64(FIXED_CTR_CTRL, FIXED_CTR_CTRL_INIT | FIXED_CTR_CTRL_ENABLE);
-	wrmsr64(GLOBAL_CTRL, GLOBAL_CTRL_FIXED_EN);
+
+	uint64_t global_en = GLOBAL_CTRL_FIXED_EN;
+	if (kpc_get_running() & KPC_CLASS_CONFIGURABLE_MASK) {
+		global_en |= kpc_get_configurable_pmc_mask(KPC_CLASS_CONFIGURABLE_MASK);
+	}
+
+	wrmsr64(GLOBAL_CTRL, global_en);
 }
 
 static void

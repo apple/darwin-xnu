@@ -377,7 +377,12 @@ unsafe_convert_port_to_voucher(
 	ipc_port_t      port)
 {
 	if (IP_VALID(port)) {
-		uintptr_t voucher = (uintptr_t) port->ip_kobject;
+		/* vouchers never labeled (they get transformed before use) */
+		if (ip_is_kolabeled(port)) {
+			return (uintptr_t)IV_NULL;
+		}
+
+		uintptr_t voucher = (uintptr_t)port->ip_kobject;
 
 		/*
 		 * No need to lock because we have a reference on the
@@ -407,7 +412,7 @@ convert_port_to_voucher(
 {
 	if (IP_VALID(port)) {
 		zone_require(port, ipc_object_zones[IOT_PORT]);
-		ipc_voucher_t voucher = (ipc_voucher_t) port->ip_kobject;
+		ipc_voucher_t voucher = (ipc_voucher_t) ip_get_kobject(port);
 
 		/*
 		 * No need to lock because we have a reference on the
@@ -487,13 +492,14 @@ ipc_voucher_notify(mach_msg_header_t *msg)
 {
 	mach_no_senders_notification_t *notification = (void *)msg;
 	ipc_port_t port = notification->not_header.msgh_remote_port;
+	ipc_voucher_t voucher = (ipc_voucher_t)ip_get_kobject(port);
 
 	require_ip_active(port);
 	assert(IKOT_VOUCHER == ip_kotype(port));
 
 	/* consume the reference donated by convert_voucher_to_port */
-	zone_require((ipc_voucher_t)port->ip_kobject, ipc_voucher_zone);
-	ipc_voucher_release((ipc_voucher_t)port->ip_kobject);
+	zone_require(voucher, ipc_voucher_zone);
+	ipc_voucher_release(voucher);
 }
 
 /*
@@ -671,7 +677,7 @@ convert_port_to_voucher_attr_control(
 {
 	if (IP_VALID(port)) {
 		zone_require(port, ipc_object_zones[IOT_PORT]);
-		ipc_voucher_attr_control_t ivac = (ipc_voucher_attr_control_t) port->ip_kobject;
+		ipc_voucher_attr_control_t ivac = (ipc_voucher_attr_control_t) ip_get_kobject(port);
 
 		/*
 		 * No need to lock because we have a reference on the
@@ -702,12 +708,15 @@ ipc_voucher_attr_control_notify(mach_msg_header_t *msg)
 {
 	mach_no_senders_notification_t *notification = (void *)msg;
 	ipc_port_t port = notification->not_header.msgh_remote_port;
+	ipc_voucher_attr_control_t ivac;
 
 	require_ip_active(port);
 	assert(IKOT_VOUCHER_ATTR_CONTROL == ip_kotype(port));
 
 	/* release the reference donated by convert_voucher_attr_control_to_port */
-	ivac_release((ipc_voucher_attr_control_t)port->ip_kobject);
+	ivac = (ipc_voucher_attr_control_t)ip_get_kobject(port);
+	zone_require(ivac, ipc_voucher_attr_control_zone);
+	ivac_release(ivac);
 }
 
 /*
@@ -2638,7 +2647,7 @@ ipc_get_pthpriority_from_kmsg_voucher(
 		return KERN_FAILURE;
 	}
 
-	pthread_priority_voucher = (ipc_voucher_t)kmsg->ikm_voucher->ip_kobject;
+	pthread_priority_voucher = (ipc_voucher_t)ip_get_kobject(kmsg->ikm_voucher);
 	kr = mach_voucher_extract_attr_recipe(pthread_priority_voucher,
 	    MACH_VOUCHER_ATTR_KEY_PTHPRIORITY,
 	    content_data,
@@ -2683,7 +2692,7 @@ ipc_voucher_send_preprocessing(ipc_kmsg_t kmsg)
 	}
 
 	/* setup recipe for preprocessing of all the attributes. */
-	pre_processed_voucher = (ipc_voucher_t)kmsg->ikm_voucher->ip_kobject;
+	pre_processed_voucher = (ipc_voucher_t)ip_get_kobject(kmsg->ikm_voucher);
 
 	kr = ipc_voucher_prepare_processing_recipe(pre_processed_voucher,
 	    (mach_voucher_attr_raw_recipe_array_t)recipes,
@@ -2732,7 +2741,7 @@ ipc_voucher_receive_postprocessing(
 	}
 
 	/* setup recipe for auto redeem of all the attributes. */
-	sent_voucher = (ipc_voucher_t)kmsg->ikm_voucher->ip_kobject;
+	sent_voucher = (ipc_voucher_t)ip_get_kobject(kmsg->ikm_voucher);
 
 	kr = ipc_voucher_prepare_processing_recipe(sent_voucher,
 	    (mach_voucher_attr_raw_recipe_array_t)recipes,

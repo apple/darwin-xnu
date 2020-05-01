@@ -65,6 +65,9 @@
  * FreeBSD-Id: nfs_subs.c,v 1.47 1997/11/07 08:53:24 phk Exp $
  */
 
+#include <nfs/nfs_conf.h>
+#if CONFIG_NFS
+
 /*
  * These functions support the macros and help fiddle mbuf chains for
  * the nfs op functions. They do things like create the rpc header and
@@ -101,7 +104,7 @@
 #include <nfs/nfsproto.h>
 #include <nfs/nfs.h>
 #include <nfs/nfsnode.h>
-#if NFSCLIENT
+#if CONFIG_NFS_CLIENT
 #define _NFS_XDR_SUBS_FUNCS_ /* define this to get xdrbuf function definitions */
 #endif
 #include <nfs/xdr_subs.h>
@@ -217,7 +220,7 @@ vtonfsv2_mode(enum vtype vtype, mode_t m)
 	}
 }
 
-#if NFSSERVER
+#if CONFIG_NFS_SERVER
 
 /*
  * Mapping of old NFS Version 2 RPC numbers to generic numbers.
@@ -248,7 +251,7 @@ int nfsv3_procid[NFS_NPROCS] = {
 	NFSPROC_NOOP
 };
 
-#endif /* NFSSERVER */
+#endif /* CONFIG_NFS_SERVER */
 
 /*
  * and the reverse mapping from generic to Version 2 procedure numbers
@@ -293,7 +296,7 @@ nfs_mbuf_init(void)
 	nfs_mbuf_minclsize = ms.minclsize;
 }
 
-#if NFSSERVER
+#if CONFIG_NFS_SERVER
 
 /*
  * allocate a list of mbufs to hold the given amount of data
@@ -338,7 +341,7 @@ nfsm_mbuf_get_list(size_t size, mbuf_t *mp, int *mbcnt)
 	return error;
 }
 
-#endif /* NFSSERVER */
+#endif /* CONFIG_NFS_SERVER */
 
 /*
  * nfsm_chain_new_mbuf()
@@ -830,7 +833,7 @@ nfsm_chain_get_uio(struct nfsm_chain *nmc, uint32_t len, uio_t uio)
 	return error;
 }
 
-#if NFSCLIENT
+#if CONFIG_NFS_CLIENT
 
 int
 nfsm_chain_add_string_nfc(struct nfsm_chain *nmc, const uint8_t *s, uint32_t slen)
@@ -2232,7 +2235,7 @@ nfs_mountopts(struct nfsmount *nmp, char *buf, int buflen)
 	return c > buflen ? ENOMEM : 0;
 }
 
-#endif /* NFSCLIENT */
+#endif /* CONFIG_NFS_CLIENT */
 
 /*
  * Schedule a callout thread to run an NFS timer function
@@ -2248,7 +2251,7 @@ nfs_interval_timer_start(thread_call_t call, int interval)
 }
 
 
-#if NFSSERVER
+#if CONFIG_NFS_SERVER
 
 int nfsrv_cmp_secflavs(struct nfs_sec *, struct nfs_sec *);
 int nfsrv_hang_addrlist(struct nfs_export *, struct user_nfs_export_args *);
@@ -3027,6 +3030,8 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 	vnode_t mvp = NULL, xvp = NULL;
 	mount_t mp = NULL;
 	char path[MAXPATHLEN];
+	char fl_pathbuff[MAXPATHLEN];
+	int fl_pathbuff_len = MAXPATHLEN;
 	int expisroot;
 
 	if (unxa->nxa_flags == NXA_CHECK) {
@@ -3134,12 +3139,6 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 			goto unlock_out;
 		}
 		if ((unxa->nxa_flags & (NXA_ADD | NXA_OFFLINE)) == NXA_ADD) {
-			/* if adding, verify that the mount is still what we expect */
-			mp = vfs_getvfs_by_mntonname(nxfs->nxfs_path);
-			if (mp) {
-				mount_ref(mp, 0);
-				mount_iterdrop(mp);
-			}
 			/* find exported FS root vnode */
 			NDINIT(&mnd, LOOKUP, OP_LOOKUP, FOLLOW | LOCKLEAF | AUDITVNPATH1,
 			    UIO_SYSSPACE, CAST_USER_ADDR_T(nxfs->nxfs_path), ctx);
@@ -3152,6 +3151,20 @@ nfsrv_export(struct user_nfs_export_args *unxa, vfs_context_t ctx)
 			if (!vnode_isvroot(mvp)) {
 				error = EINVAL;
 				goto out;
+			}
+			/* if adding, verify that the mount is still what we expect */
+			mp = vfs_getvfs_by_mntonname(nxfs->nxfs_path);
+			if (!mp) {
+				/* check for firmlink-free path */
+				if (vn_getpath_no_firmlink(mvp, fl_pathbuff, &fl_pathbuff_len) == 0 &&
+				    fl_pathbuff_len > 0 &&
+				    !strncmp(nxfs->nxfs_path, fl_pathbuff, MAXPATHLEN)) {
+					mp = vfs_getvfs_by_mntonname(vnode_mount(mvp)->mnt_vfsstat.f_mntonname);
+				}
+			}
+			if (mp) {
+				mount_ref(mp, 0);
+				mount_iterdrop(mp);
 			}
 			/* sanity check: this should be same mount */
 			if (mp != vnode_mount(mvp)) {
@@ -4507,4 +4520,6 @@ nfsrv_errmap(struct nfsrv_descript *nd, int err)
 	return (int)*defaulterrp;
 }
 
-#endif /* NFSSERVER */
+#endif /* CONFIG_NFS_SERVER */
+
+#endif /* CONFIG_NFS */

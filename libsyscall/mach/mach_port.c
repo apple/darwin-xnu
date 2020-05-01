@@ -639,6 +639,21 @@ mach_port_kobject(
 }
 
 kern_return_t
+mach_port_kobject_description(
+	ipc_space_t task,
+	mach_port_name_t name,
+	natural_t *object_type,
+	mach_vm_address_t *object_addr,
+	kobject_description_t desc)
+{
+	kern_return_t rv;
+
+	rv = _kernelrpc_mach_port_kobject_description(task, name, object_type, object_addr, desc);
+
+	return rv;
+}
+
+kern_return_t
 mach_port_construct(
 	ipc_space_t             task,
 	mach_port_options_t     *options,

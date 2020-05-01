@@ -135,7 +135,7 @@ host_notify_port_destroy(
 
 	ip_lock(port);
 	if (ip_kotype(port) == IKOT_HOST_NOTIFY) {
-		entry = (host_notify_t)port->ip_kobject;
+		entry = (host_notify_t)ip_get_kobject(port);
 		assert(entry != NULL);
 		ipc_kobject_set_atomically(port, IKO_NULL, IKOT_NONE);
 		ip_unlock(port);
@@ -187,7 +187,7 @@ host_notify_all(
 
 			ip_lock(port);
 			assert(ip_kotype(port) == IKOT_HOST_NOTIFY);
-			assert(port->ip_kobject == (ipc_kobject_t)entry);
+			assert(ip_get_kobject(port) == (ipc_kobject_t)entry);
 			ipc_kobject_set_atomically(port, IKO_NULL, IKOT_NONE);
 			ip_unlock(port);
 

@@ -26,6 +26,9 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <nfs/nfs_conf.h>
+#if CONFIG_NFS_CLIENT
+
 /*
  * vnode op calls for NFS version 4
  */
@@ -961,6 +964,10 @@ nfs4_readdir_rpc(nfsnode_t dnp, struct nfsbuf *bp, vfs_context_t ctx)
 
 		if (rdirplus) {
 			microuptime(&now);
+			if (lastcookie == 0) {
+				dnp->n_rdirplusstamp_sof = now.tv_sec;
+				dnp->n_rdirplusstamp_eof = 0;
+			}
 		}
 
 		/* loop through the entries packing them into the buffer */
@@ -1096,6 +1103,7 @@ nextbuffer:
 				}
 				*(time_t*)(&dp->d_name[dp->d_namlen + 1 + fhlen]) = now.tv_sec;
 				dp->d_reclen = reclen;
+				nfs_rdirplus_update_node_attrs(dnp, dp, &fh, nvattrp, &savedxid);
 			}
 			padstart = dp->d_name + dp->d_namlen + 1 + xlen;
 			ndbhp->ndbh_count++;
@@ -1117,6 +1125,9 @@ nextbuffer:
 			ndbhp->ndbh_flags |= (NDB_FULL | NDB_EOF);
 			nfs_node_lock_force(dnp);
 			dnp->n_eofcookie = lastcookie;
+			if (rdirplus) {
+				dnp->n_rdirplusstamp_eof = now.tv_sec;
+			}
 			nfs_node_unlock(dnp);
 		} else {
 			more_entries = 1;
@@ -8952,3 +8963,5 @@ nfs4_vnop_removenamedstream(
 
 #endif
 #endif /* CONFIG_NFS4 */
+
+#endif /* CONFIG_NFS_CLIENT */

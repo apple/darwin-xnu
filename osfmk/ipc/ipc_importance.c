@@ -2578,7 +2578,7 @@ ipc_importance_send(
 		ipc_voucher_t voucher;
 
 		assert(ip_kotype(kmsg->ikm_voucher) == IKOT_VOUCHER);
-		voucher = (ipc_voucher_t)kmsg->ikm_voucher->ip_kobject;
+		voucher = (ipc_voucher_t)ip_get_kobject(kmsg->ikm_voucher);
 
 		/* check to see if the voucher has an importance attribute */
 		val_count = MACH_VOUCHER_ATTR_VALUE_MAX_NESTED;
@@ -3190,7 +3190,7 @@ ipc_importance_receive(
 
 		/* set up recipe to copy the old voucher */
 		if (IP_VALID(kmsg->ikm_voucher)) {
-			ipc_voucher_t sent_voucher = (ipc_voucher_t)kmsg->ikm_voucher->ip_kobject;
+			ipc_voucher_t sent_voucher = (ipc_voucher_t)ip_get_kobject(kmsg->ikm_voucher);
 
 			recipe->key = MACH_VOUCHER_ATTR_KEY_ALL;
 			recipe->command = MACH_VOUCHER_ATTR_COPY;

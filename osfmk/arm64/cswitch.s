@@ -146,6 +146,8 @@
  */
 .macro	set_thread_registers
 	msr		TPIDR_EL1, $0						// Write new thread pointer to TPIDR_EL1
+	ldr		$1, [$0, ACT_CPUDATAP]
+	str		$0, [$1, CPU_ACTIVE_THREAD]
 	ldr		$1, [$0, TH_CTH_SELF]				// Get cthread pointer
 	mrs		$2, TPIDRRO_EL0						// Extract cpu number from TPIDRRO_EL0
 	and		$2, $2, #(MACHDEP_CPUNUM_MASK)

@@ -162,7 +162,7 @@ def ShowCurremtAbsTime(cmd_args=None):
 
     print "Last dispatch time known: %d MATUs" % cur_abstime
 
-bucketStr = ["", "FIXPRI (>UI)", "TIMESHARE_FG", "TIMESHARE_IN", "TIMESHARE_DF", "TIMESHARE_UT", "TIMESHARE_BG"]
+bucketStr = ["FIXPRI (>UI)", "TIMESHARE_FG", "TIMESHARE_IN", "TIMESHARE_DF", "TIMESHARE_UT", "TIMESHARE_BG"]
 
 @header("     {:>18s} | {:>20s} | {:>20s} | {:>10s} | {:>10s}".format('Thread Group', 'Interactivity Score', 'Last Timeshare Tick', 'pri_shift', 'highq'))
 def GetSchedClutchBucketSummary(clutch_bucket):
@@ -176,13 +176,15 @@ def ShowSchedClutchForPset(pset):
     print "{:>10s} | {:>20s} | {:>30s} | 0x{:16x} | {:>10d} | {:>10d} | {:>30s} | {:>30s} | {:>15s} | ".format("Root", "*", "*", addressof(root_clutch), root_clutch.scr_priority, root_clutch.scr_thr_count, "*", "*", "*")
     print "-" * 300
 
-    for i in range(1, 7):
+    for i in range(0, 6):
         root_bucket = root_clutch.scr_buckets[i]
         print "{:>10s} | {:>20s} | {:>30s} | 0x{:16x} | {:>10s} | {:>10s} | {:>30s} | {:>30s} | {:>15d} | ".format("*", bucketStr[i], "*", addressof(root_bucket), "*", "*", "*", "*", root_bucket.scrb_deadline)
-        prioq = root_bucket.scrb_clutch_buckets
+        clutch_bucket_runq = root_bucket.scrb_clutch_buckets
         clutch_bucket_list = []
-        for clutch_bucket in IteratePriorityQueue(prioq, 'struct sched_clutch_bucket', 'scb_pqlink'):
-            clutch_bucket_list.append(clutch_bucket)
+        for pri in range(0,128):
+            clutch_bucket_circleq = clutch_bucket_runq.scbrq_queues[pri]
+            for clutch_bucket in IterateCircleQueue(clutch_bucket_circleq, 'struct sched_clutch_bucket', 'scb_runqlink'):
+                clutch_bucket_list.append(clutch_bucket)
         if len(clutch_bucket_list) > 0:
             clutch_bucket_list.sort(key=lambda x: x.scb_priority, reverse=True)
             for clutch_bucket in clutch_bucket_list:
@@ -236,10 +238,12 @@ def ShowSchedClutchRootBucket(cmd_args=[]):
     print "{:<30s} : {:d}".format("Deadline", root_bucket.scrb_deadline)
     print "{:<30s} : {:d}".format("Current Timestamp", GetRecentTimestamp())
     print "\n"
-    prioq = root_bucket.scrb_clutch_buckets
+    clutch_bucket_runq = root_bucket.scrb_clutch_buckets
     clutch_bucket_list = []
-    for clutch_bucket in IteratePriorityQueue(prioq, 'struct sched_clutch_bucket', 'scb_pqlink'):
-        clutch_bucket_list.append(clutch_bucket)
+    for pri in range(0,128):
+        clutch_bucket_circleq = clutch_bucket_runq.scbrq_queues[pri]
+        for clutch_bucket in IterateCircleQueue(clutch_bucket_circleq, 'struct sched_clutch_bucket', 'scb_runqlink'):
+            clutch_bucket_list.append(clutch_bucket)
     if len(clutch_bucket_list) > 0:
         print "=" * 240
         print "{:>30s} | {:>18s} | {:>20s} | {:>20s} | ".format("Name", "Clutch Bucket", "Priority", "Count") + GetSchedClutchBucketSummary.header

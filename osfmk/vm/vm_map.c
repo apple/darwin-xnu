@@ -1197,6 +1197,7 @@ vm_map_create_options(
 	result->map_disallow_data_exec = FALSE;
 	result->is_nested_map = FALSE;
 	result->map_disallow_new_exec = FALSE;
+	result->terminated = FALSE;
 	result->highest_entry_end = 0;
 	result->first_free = vm_map_to_entry(result);
 	result->hint = vm_map_to_entry(result);
@@ -4023,7 +4024,7 @@ vm_map_enter_mem_object_helper(
 	} else if (ip_kotype(port) == IKOT_NAMED_ENTRY) {
 		vm_named_entry_t        named_entry;
 
-		named_entry = (vm_named_entry_t) port->ip_kobject;
+		named_entry = (vm_named_entry_t) ip_get_kobject(port);
 
 		if (flags & (VM_FLAGS_RETURN_DATA_ADDR |
 		    VM_FLAGS_RETURN_4K_DATA_ADDR)) {
@@ -7612,7 +7613,7 @@ vm_map_delete(
 	const vm_map_offset_t   FIND_GAP = 1;   /* a not page aligned value */
 	const vm_map_offset_t   GAPS_OK = 2;    /* a different not page aligned value */
 
-	if (map != kernel_map && !(flags & VM_MAP_REMOVE_GAPS_OK)) {
+	if (map != kernel_map && !(flags & VM_MAP_REMOVE_GAPS_OK) && !map->terminated) {
 		gap_start = FIND_GAP;
 	} else {
 		gap_start = GAPS_OK;
@@ -8325,6 +8326,34 @@ vm_map_delete(
 	}
 
 	return KERN_SUCCESS;
+}
+
+
+/*
+ *	vm_map_terminate:
+ *
+ *	Clean out a task's map.
+ */
+kern_return_t
+vm_map_terminate(
+	vm_map_t        map)
+{
+	vm_map_lock(map);
+	map->terminated = TRUE;
+	vm_map_unlock(map);
+
+	return vm_map_remove(map,
+	           map->min_offset,
+	           map->max_offset,
+	           /*
+	            * Final cleanup:
+	            * + no unnesting
+	            * + remove immutable mappings
+	            * + allow gaps in range
+	            */
+	           (VM_MAP_REMOVE_NO_UNNESTING |
+	           VM_MAP_REMOVE_IMMUTABLE |
+	           VM_MAP_REMOVE_GAPS_OK));
 }
 
 /*
@@ -17809,7 +17838,7 @@ convert_port_entry_to_map(
 			if (ip_active(port) && (ip_kotype(port)
 			    == IKOT_NAMED_ENTRY)) {
 				named_entry =
-				    (vm_named_entry_t)port->ip_kobject;
+				    (vm_named_entry_t) ip_get_kobject(port);
 				if (!(lck_mtx_try_lock(&(named_entry)->Lock))) {
 					ip_unlock(port);
 
@@ -17867,7 +17896,7 @@ try_again:
 		ip_lock(port);
 		if (ip_active(port) &&
 		    (ip_kotype(port) == IKOT_NAMED_ENTRY)) {
-			named_entry = (vm_named_entry_t)port->ip_kobject;
+			named_entry = (vm_named_entry_t) ip_get_kobject(port);
 			if (!(lck_mtx_try_lock(&(named_entry)->Lock))) {
 				ip_unlock(port);
 				try_failed_count++;
@@ -18692,6 +18721,7 @@ again:
 		}
 	}
 
+	*shared_count = (unsigned int) ((dirty_shared_count * PAGE_SIZE_64) / (1024 * 1024ULL));
 	if (evaluation_phase) {
 		unsigned int shared_pages_threshold = (memorystatus_freeze_shared_mb_per_process_max * 1024 * 1024ULL) / PAGE_SIZE_64;
 
@@ -18724,7 +18754,6 @@ again:
 		goto again;
 	} else {
 		kr = KERN_SUCCESS;
-		*shared_count = (unsigned int) ((dirty_shared_count * PAGE_SIZE_64) / (1024 * 1024ULL));
 	}
 
 done:

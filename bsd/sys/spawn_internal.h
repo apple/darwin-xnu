@@ -77,6 +77,7 @@ typedef enum {
 	PSPA_AU_SESSION = 2,
 	PSPA_IMP_WATCHPORTS = 3,
 	PSPA_REGISTERED_PORTS = 4,
+	PSPA_SUID_CRED = 6,
 } pspa_t;
 
 /*

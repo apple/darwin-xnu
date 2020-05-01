@@ -328,7 +328,7 @@ vm_shared_region_vm_map(
 	assert(shared_region->sr_ref_count > 1);
 
 	sr_handle = shared_region->sr_mem_entry;
-	sr_mem_entry = (vm_named_entry_t) sr_handle->ip_kobject;
+	sr_mem_entry = (vm_named_entry_t) ip_get_kobject(sr_handle);
 	sr_map = sr_mem_entry->backing.map;
 	assert(sr_mem_entry->is_sub_map);
 
@@ -912,7 +912,7 @@ vm_shared_region_destroy(
 	assert(!shared_region->sr_persists);
 	assert(!shared_region->sr_slid);
 
-	mem_entry = (vm_named_entry_t) shared_region->sr_mem_entry->ip_kobject;
+	mem_entry = (vm_named_entry_t) ip_get_kobject(shared_region->sr_mem_entry);
 	assert(mem_entry->is_sub_map);
 	assert(!mem_entry->internal);
 	assert(!mem_entry->is_copy);
@@ -1066,7 +1066,7 @@ vm_shared_region_undo_mappings(
 
 		/* no need to lock because this data is never modified... */
 		sr_handle = shared_region->sr_mem_entry;
-		sr_mem_entry = (vm_named_entry_t) sr_handle->ip_kobject;
+		sr_mem_entry = (vm_named_entry_t) ip_get_kobject(sr_handle);
 		sr_map = sr_mem_entry->backing.map;
 		sr_base_address = shared_region->sr_base_address;
 	}
@@ -1208,7 +1208,7 @@ vm_shared_region_map_file(
 
 	/* no need to lock because this data is never modified... */
 	sr_handle = shared_region->sr_mem_entry;
-	sr_mem_entry = (vm_named_entry_t) sr_handle->ip_kobject;
+	sr_mem_entry = (vm_named_entry_t) ip_get_kobject(sr_handle);
 	sr_map = sr_mem_entry->backing.map;
 	sr_base_address = shared_region->sr_base_address;
 
@@ -1593,7 +1593,7 @@ vm_shared_region_trim_and_get(task_t task)
 	}
 
 	sr_handle = shared_region->sr_mem_entry;
-	sr_mem_entry = (vm_named_entry_t) sr_handle->ip_kobject;
+	sr_mem_entry = (vm_named_entry_t) ip_get_kobject(sr_handle);
 	sr_map = sr_mem_entry->backing.map;
 
 	/* Trim the pmap if possible. */
@@ -2749,14 +2749,14 @@ vm_commpage_text_init(void)
 	/* create the 32 bit comm text page */
 	unsigned int offset = (random() % _PFZ32_SLIDE_RANGE) << PAGE_SHIFT; /* restricting to 32bMAX-2PAGE */
 	_vm_commpage_init(&commpage_text32_handle, _COMM_PAGE_TEXT_AREA_LENGTH);
-	commpage_text32_entry = (vm_named_entry_t) commpage_text32_handle->ip_kobject;
+	commpage_text32_entry = (vm_named_entry_t) ip_get_kobject(commpage_text32_handle);
 	commpage_text32_map = commpage_text32_entry->backing.map;
 	commpage_text32_location = (user32_addr_t) (_COMM_PAGE32_TEXT_START + offset);
 	/* XXX if (cpu_is_64bit_capable()) ? */
 	/* create the 64-bit comm page */
 	offset = (random() % _PFZ64_SLIDE_RANGE) << PAGE_SHIFT; /* restricting sliding upto 2Mb range */
 	_vm_commpage_init(&commpage_text64_handle, _COMM_PAGE_TEXT_AREA_LENGTH);
-	commpage_text64_entry = (vm_named_entry_t) commpage_text64_handle->ip_kobject;
+	commpage_text64_entry = (vm_named_entry_t) ip_get_kobject(commpage_text64_handle);
 	commpage_text64_map = commpage_text64_entry->backing.map;
 	commpage_text64_location = (user64_addr_t) (_COMM_PAGE64_TEXT_START + offset);
 
@@ -2782,13 +2782,13 @@ vm_commpage_init(void)
 #if defined(__i386__) || defined(__x86_64__)
 	/* create the 32-bit comm page */
 	_vm_commpage_init(&commpage32_handle, _COMM_PAGE32_AREA_LENGTH);
-	commpage32_entry = (vm_named_entry_t) commpage32_handle->ip_kobject;
+	commpage32_entry = (vm_named_entry_t) ip_get_kobject(commpage32_handle);
 	commpage32_map = commpage32_entry->backing.map;
 
 	/* XXX if (cpu_is_64bit_capable()) ? */
 	/* create the 64-bit comm page */
 	_vm_commpage_init(&commpage64_handle, _COMM_PAGE64_AREA_LENGTH);
-	commpage64_entry = (vm_named_entry_t) commpage64_handle->ip_kobject;
+	commpage64_entry = (vm_named_entry_t) ip_get_kobject(commpage64_handle);
 	commpage64_map = commpage64_entry->backing.map;
 
 #endif /* __i386__ || __x86_64__ */

@@ -70,11 +70,6 @@
 #include <security/mac_framework.h>
 #endif /* CONFIG_MACF */
 
-#if CONFIG_CSR
-#include <sys/codesign.h>
-#include <sys/csr.h>
-#endif
-
 typedef struct {
 	int     flavor;                 /* the number for this flavor */
 	mach_msg_type_number_t  count;  /* count of ints in this flavor */
@@ -287,18 +282,6 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int coredump_flags)
 #if CONFIG_MACF
 	error = mac_proc_check_dump_core(core_proc);
 	if (error != 0) {
-		goto out2;
-	}
-#endif
-
-#if CONFIG_CSR
-	/* If the process is restricted, CSR isn't configured to allow
-	 * restricted processes to be debugged, and CSR isn't configured in
-	 * AppleInternal mode, then don't dump core. */
-	if (cs_restricted(core_proc) &&
-	    csr_check(CSR_ALLOW_TASK_FOR_PID) &&
-	    csr_check(CSR_ALLOW_APPLE_INTERNAL)) {
-		error = EPERM;
 		goto out2;
 	}
 #endif

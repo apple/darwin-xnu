@@ -175,6 +175,15 @@ type thread_act_consume_ref_t = mach_port_move_send_t
 #endif	/* KERNEL_SERVER */
 		;
 
+type suid_cred_path_t = c_string[*:1024];
+type suid_cred_uid_t = uint32_t;
+type suid_cred_t = mach_port_t
+#if	KERNEL_SERVER
+		outtran: mach_port_t convert_suid_cred_to_port(suid_cred_t)
+#endif	/* KERNEL_SERVER */
+		;
+
+
 		/* thread_state_t: This inline array can hold
 		 * a machine-dependent amount of data, defined in
 		 * mach/machine/???? (currently THREAD_STATE_MAX,
@@ -642,6 +651,7 @@ simport <kern/arcade.h>;    /* for arcade_register conversions */
 
 simport <kern/ipc_mig.h>;	/* pick up kernel-specific MIG things */
 
+simport <kern/suid_cred.h>;
 #endif /* KERNEL_SERVER */
 
 import <mach/mig.h>;

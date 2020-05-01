@@ -64,6 +64,9 @@ typedef const struct _libkernel_functions {
 	/* The following functions are included in version 3 of this structure */
 	void (*pthread_clear_qos_tsd)(mach_port_t);
 
+	/* The following functions are included in version 4 of this structure */
+	int (*pthread_current_stack_contains_np)(const void *, size_t);
+
 	/* Subsequent versions must only add pointers! */
 } *_libkernel_functions_t;
 

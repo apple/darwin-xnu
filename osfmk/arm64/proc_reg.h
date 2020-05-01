@@ -1641,7 +1641,7 @@ typedef enum {
 #define XPRR_KERN0_RW_PERM (6ULL)
 #define XPRR_USER_RW_PERM  (7ULL)
 #define XPRR_PPL_RX_PERM   (8ULL)
-#define XPRR_PPL_RO_PERM   (9ULL)
+#define XPRR_USER_XO_PERM  (9ULL)
 #define XPRR_KERN_RX_PERM  (10ULL)
 #define XPRR_KERN_RO_PERM  (11ULL)
 #define XPRR_KERN0_RX_PERM (12ULL)
@@ -1668,7 +1668,7 @@ typedef enum {
 #define APRR_USER_RW_INDEX  (7ULL)  /* AP_RWRW, PXN, XN */
 #define APRR_PPL_RX_INDEX   (8ULL)  /* AP_RONA, PX, X */
 #define APRR_KERN_RX_INDEX  (9ULL)  /* AP_RONA, PX, XN */
-#define APRR_PPL_RO_INDEX   (10ULL) /* AP_RONA, PXN, X */
+#define APRR_USER_XO_INDEX  (10ULL) /* AP_RONA, PXN, X */
 #define APRR_KERN_RO_INDEX  (11ULL) /* AP_RONA, PXN, XN */
 #define APRR_KERN0_RX_INDEX (12ULL) /* AP_RORO, PX, X */
 #define APRR_KERN0_RO_INDEX (13ULL) /* AP_RORO, PX, XN */
@@ -1693,7 +1693,7 @@ typedef enum {
 #define APRR_USER_RW_SHIFT  (28ULL) /* AP_RWRW, PXN, XN */
 #define APRR_PPL_RX_SHIFT   (32ULL) /* AP_RONA, PX, X */
 #define APRR_KERN_RX_SHIFT  (36ULL) /* AP_RONA, PX, XN */
-#define APRR_PPL_RO_SHIFT   (40ULL) /* AP_RONA, PXN, X */
+#define APRR_USER_XO_SHIFT  (40ULL) /* AP_RONA, PXN, X */
 #define APRR_KERN_RO_SHIFT  (44ULL) /* AP_RONA, PXN, XN */
 #define APRR_KERN0_RX_SHIFT (48ULL) /* AP_RORO, PX, X */
 #define APRR_KERN0_RO_SHIFT (52ULL) /* AP_RORO, PX, XN */
@@ -1731,20 +1731,25 @@ typedef enum {
 #define APRR_EL1_RESET \
 	APRR_EL1_UNRESTRICTED
 
+/*
+ * XO mappings bypass PAN protection (rdar://58360875)
+ * Revoke ALL kernel access permissions for XO mappings.
+ */
 #define APRR_EL1_BASE \
-	APRR_EL1_UNRESTRICTED
+	(APRR_EL1_UNRESTRICTED & \
+	APRR_REMOVE(APRR_ATTR_R << APRR_USER_XO_SHIFT))
 
 #if XNU_MONITOR
 #define APRR_EL1_DEFAULT \
 	(APRR_EL1_BASE & \
 	 (APRR_REMOVE((APRR_ATTR_WX << APRR_PPL_RW_SHIFT) | \
-	 (APRR_ATTR_WX << APRR_PPL_RO_SHIFT) | \
+	 (APRR_ATTR_WX << APRR_USER_XO_SHIFT) | \
 	 (APRR_ATTR_WX << APRR_PPL_RX_SHIFT))))
 
 #define APRR_EL1_PPL \
 	(APRR_EL1_BASE & \
 	 (APRR_REMOVE((APRR_ATTR_X << APRR_PPL_RW_SHIFT) | \
-	 (APRR_ATTR_WX << APRR_PPL_RO_SHIFT) | \
+	 (APRR_ATTR_WX << APRR_USER_XO_SHIFT) | \
 	 (APRR_ATTR_W << APRR_PPL_RX_SHIFT))))
 #else
 #define APRR_EL1_DEFAULT \
@@ -1761,7 +1766,7 @@ typedef enum {
 	(APRR_EL0_UNRESTRICTED & \
 	 (APRR_REMOVE((APRR_ATTR_RWX << APRR_PPL_RW_SHIFT) | \
 	 (APRR_ATTR_RWX << APRR_PPL_RX_SHIFT) | \
-	 (APRR_ATTR_RWX << APRR_PPL_RO_SHIFT))))
+	 (APRR_ATTR_RWX << APRR_USER_XO_SHIFT))))
 #else
 #define APRR_EL0_BASE \
 	APRR_EL0_UNRESTRICTED
@@ -1908,6 +1913,26 @@ b.pl $2                         // Unsigned "greater or equal"
 GET_MIDR_CPU_VERSION $0
 cmp  $0, $1
 b.mi $2                         // Unsigned "strictly less than"
+.endmacro
+
+/*
+ * Macro intended to be used as a replacement for ERET.
+ * It prevents speculation past ERET instructions by padding
+ * up to the decoder width.
+ */
+.macro ERET_CONTEXT_SYNCHRONIZING
+eret
+#if __ARM_SB_AVAILABLE__
+sb                              // Technically unnecessary on Apple micro-architectures, may restrict mis-speculation on other architectures
+#else /* __ARM_SB_AVAILABLE__ */
+isb                             // ISB technically unnecessary on Apple micro-architectures, may restrict mis-speculation on other architectures
+nop                             // Sequence of six NOPs to pad out and terminate instruction decode group */
+nop
+nop
+nop
+nop
+nop
+#endif /* !__ARM_SB_AVAILABLE__ */
 .endmacro
 
 #endif /* __ASSEMBLER__ */

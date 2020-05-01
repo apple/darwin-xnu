@@ -493,7 +493,7 @@ IOTrackingAddUser(IOTrackingQueue * queue, IOTrackingUser * mem, vm_size_t size)
 	if ((kernel_task != current_task()) && (self = proc_self())) {
 		bool user_64 = false;
 		mem->btPID  = proc_pid(self);
-		(void)backtrace_user(&mem->btUser[0], kIOTrackingCallSiteBTs - 1, &num,
+		num = backtrace_user(&mem->btUser[0], kIOTrackingCallSiteBTs - 1, NULL,
 		    &user_64, NULL);
 		mem->user32 = !user_64;
 		proc_rele(self);

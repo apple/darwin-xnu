@@ -77,7 +77,7 @@ install-immovable_send_client: immovable_send_client
 kdebug: INVALID_ARCHS = i386
 kdebug: OTHER_LDFLAGS = -framework ktrace -ldarwintest_utils -framework kperf
 
-EXCLUDED_SOURCES += drop_priv.c kperf_helpers.c xnu_quick_test_helpers.c memorystatus_assertion_helpers.c
+EXCLUDED_SOURCES += drop_priv.c kperf_helpers.c xnu_quick_test_helpers.c memorystatus_assertion_helpers.c bpflib.c in_cksum.c
 
 ifneq ($(PLATFORM),iPhoneOS)
 EXCLUDED_SOURCES += jumbo_va_spaces_28530648.c perf_compressor.c memorystatus_freeze_test.c
@@ -112,7 +112,8 @@ memorystatus_zone_test: OTHER_CFLAGS += -isystem $(SDKROOT)/System/Library/Frame
 memorystatus_zone_test: OTHER_LDFLAGS += -framework ktrace
 memorystatus_zone_test: OTHER_LDFLAGS += -ldarwintest_utils
 
-kpc: OTHER_LDFLAGS += -framework kperf
+kpc: OTHER_LDFLAGS += -framework kperf -framework ktrace
+kpc: INVALID_ARCHS = i386
 
 kperf: INVALID_ARCHS = i386
 kperf: OTHER_CFLAGS += kperf_helpers.c
@@ -278,6 +279,9 @@ socket_bind_35685803: CODE_SIGN_ENTITLEMENTS = network_entitlements.plist
 
 net_tuntests: CODE_SIGN_ENTITLEMENTS = network_entitlements.plist
 
+net_bridge: OTHER_CFLAGS += bpflib.c in_cksum.c
+net_bridge: OTHER_LDFLAGS += -ldarwintest_utils
+
 ifneq (osx,$(TARGET_NAME))
 EXCLUDED_SOURCES += no32exec_35914211.c no32exec_35914211_helper.c
 else  # target = osx
@@ -351,5 +355,19 @@ vm_phys_footprint: OTHER_LDFLAGS += -framework CoreFoundation -framework IOSurfa
 debug_control_port_for_pid: CODE_SIGN_ENTITLEMENTS = ./debug_control_port_for_pid_entitlement.plist
 
 prng: OTHER_LDFLAGS += -ldarwintest_utils
+
+OTHER_TEST_TARGETS += io_catalog_send_data
+
+io_catalog_send_data: INVALID_ARCHS = i386
+io_catalog_send_data: OTHER_CFLAGS += -DTEST_UNENTITLED -framework IOKit -framework CoreFoundation -framework Foundation
+io_catalog_send_data: iokit/io_catalog_send_data.m
+	$(CC) $(DT_CFLAGS) $(OTHER_CFLAGS) $(CFLAGS) $(DT_LDFLAGS) $(OTHER_LDFLAGS) $(LDFLAGS) $< -o $(SYMROOT)/$@
+
+task_create_suid_cred: CODE_SIGN_ENTITLEMENTS = ./task_create_suid_cred_entitlement.plist
+
+OTHER_TEST_TARGETS += task_create_suid_cred_unentitled
+task_create_suid_cred_unentitled: OTHER_CFLAGS += -DUNENTITLED
+task_create_suid_cred_unentitled: task_create_suid_cred.c
+	$(CC) $(DT_CFLAGS) $(OTHER_CFLAGS) $(CFLAGS) $(DT_LDFLAGS) $(OTHER_LDFLAGS) $(LDFLAGS) $< -o $(SYMROOT)/$@
 
 include $(DEVELOPER_DIR)/AppleInternal/Makefiles/darwintest/Makefile.targets

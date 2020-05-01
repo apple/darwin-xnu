@@ -133,12 +133,6 @@
 #endif
 #include <os/overflow.h>
 
-#ifndef CONFIG_EMBEDDED
-#include <IOKit/IOBSD.h> /* for IOTaskHasEntitlement */
-#include <sys/csr.h> /* for csr_check */
-#define MAP_32BIT_ENTITLEMENT "com.apple.security.mmap-map-32bit"
-#endif
-
 /*
  * XXX Internally, we use VM_PROT_* somewhat interchangeably, but the correct
  * XXX usage is PROT_* from an interface perspective.  Thus the values of
@@ -566,13 +560,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 
 #ifndef CONFIG_EMBEDDED
 	if (flags & MAP_32BIT) {
-		if (csr_check(CSR_ALLOW_UNTRUSTED_KEXTS) == 0 ||
-		    IOTaskHasEntitlement(current_task(), MAP_32BIT_ENTITLEMENT)) {
-			vmk_flags.vmkf_32bit_map_va = TRUE;
-		} else {
-			error = EPERM;
-			goto bad;
-		}
+		vmk_flags.vmkf_32bit_map_va = TRUE;
 	}
 #endif
 

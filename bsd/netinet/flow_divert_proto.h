@@ -63,13 +63,17 @@
 #define FLOW_DIVERT_TLV_TARGET_PORT             23
 #define FLOW_DIVERT_TLV_CDHASH                  24
 #define FLOW_DIVERT_TLV_SIGNING_ID              25
-#define FLOW_DIVERT_TLV_PID                     26
-#define FLOW_DIVERT_TLV_UUID                    27
+
+
 #define FLOW_DIVERT_TLV_PREFIX_COUNT            28
 #define FLOW_DIVERT_TLV_FLAGS                   29
 #define FLOW_DIVERT_TLV_FLOW_TYPE               30
 #define FLOW_DIVERT_TLV_APP_DATA                31
 #define FLOW_DIVERT_TLV_APP_AUDIT_TOKEN         32
+#define FLOW_DIVERT_TLV_APP_REAL_SIGNING_ID     33
+#define FLOW_DIVERT_TLV_APP_REAL_CDHASH         34
+#define FLOW_DIVERT_TLV_APP_REAL_AUDIT_TOKEN    35
+#define FLOW_DIVERT_TLV_CFIL_ID                 36
 
 #define FLOW_DIVERT_FLOW_TYPE_TCP               1
 #define FLOW_DIVERT_FLOW_TYPE_UDP               3

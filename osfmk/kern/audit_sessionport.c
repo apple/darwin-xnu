@@ -90,7 +90,7 @@ audit_session_porttoaia(ipc_port_t port)
 		ip_lock(port);
 		if (IKOT_AU_SESSIONPORT == ip_kotype(port)) {
 			require_ip_active(port);
-			aia_p = (struct auditinfo_addr *)port->ip_kobject;
+			aia_p = (struct auditinfo_addr *)ip_get_kobject(port);
 		}
 		ip_unlock(port);
 	}
@@ -119,7 +119,7 @@ audit_session_nosenders(mach_msg_header_t *msg)
 
 	require_ip_active(port);
 	assert(IKOT_AU_SESSIONPORT == ip_kotype(port));
-	port_aia_p = (struct auditinfo_addr *)port->ip_kobject;
+	port_aia_p = (struct auditinfo_addr *)ip_get_kobject(port);
 	assert(NULL != port_aia_p);
 
 	audit_session_aiaunref(port_aia_p);

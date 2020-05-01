@@ -275,9 +275,7 @@ child_init(void)
 #if !TARGET_OS_OSX
 	/* allow us to be frozen */
 	freeze_state = memorystatus_control(MEMORYSTATUS_CMD_GET_PROCESS_IS_FREEZABLE, pid, 0, NULL, 0);
-	if (freeze_state == -1) {
-		T_SKIP("This device doesn't have CONFIG_FREEZE enabled.");
-	} else if (freeze_state == 0) {
+	if (freeze_state == 0) {
 		T_LOG("CHILD was found to be UNFREEZABLE, enabling freezing.");
 		memorystatus_control(MEMORYSTATUS_CMD_SET_PROCESS_IS_FREEZABLE, pid, 1, NULL, 0);
 		freeze_state = memorystatus_control(MEMORYSTATUS_CMD_GET_PROCESS_IS_FREEZABLE, pid, 0, NULL, 0);
@@ -341,6 +339,14 @@ T_DECL(basic, "test that no-fault stackshot works correctly")
 	T_LOG("parent pid: %d\n", getpid());
 	T_QUIET; T_ASSERT_POSIX_ZERO(_NSGetExecutablePath(path, &path_size), "_NSGetExecutablePath");
 
+	/* check if we can run the child successfully */
+#if !TARGET_OS_OSX
+	int freeze_state = memorystatus_control(MEMORYSTATUS_CMD_GET_PROCESS_IS_FREEZABLE, getpid(), 0, NULL, 0);
+	if (freeze_state == -1) {
+		T_SKIP("This device doesn't have CONFIG_FREEZE enabled.");
+	}
+#endif
+
 	/* setup signal handling */
 	signal(SIGUSR1, SIG_IGN);
 	child_sig_src = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGUSR1, 0, dq);
@@ -354,7 +360,7 @@ T_DECL(basic, "test that no-fault stackshot works correctly")
 	T_ATEND(kill_children);
 
 	/* wait until the child has recursed enough */
-	dispatch_semaphore_wait(child_done_sema, DISPATCH_TIME_FOREVER);
+	dispatch_semaphore_wait(child_done_sema, dispatch_time(DISPATCH_TIME_NOW, 10 /*seconds*/ * 1000000000ULL));
 
 	T_LOG("child finished, parent executing");
 

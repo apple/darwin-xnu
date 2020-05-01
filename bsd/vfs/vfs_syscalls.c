@@ -133,6 +133,8 @@
 #include <mach/vfs_nspace.h>
 #include <os/log.h>
 
+#include <nfs/nfs_conf.h>
+
 #if ROUTEFS
 #include <miscfs/routefs/routefs.h>
 #endif /* ROUTEFS */
@@ -266,7 +268,7 @@ extern errno_t rmdir_remove_orphaned_appleDouble(vnode_t, vfs_context_t, int *);
  * Virtual File System System Calls
  */
 
-#if NFSCLIENT || DEVFS || ROUTEFS
+#if CONFIG_NFS_CLIENT || DEVFS || ROUTEFS
 /*
  * Private in-kernel mounting spi (NFS only, not exported)
  */
@@ -322,7 +324,7 @@ kernel_mount(char *fstype, vnode_t pvp, vnode_t vp, const char *path,
 
 	return error;
 }
-#endif /* NFSCLIENT || DEVFS */
+#endif /* CONFIG_NFS_CLIENT || DEVFS */
 
 /*
  * Mount a file system.
@@ -829,14 +831,14 @@ mount_common(char *fstypename, vnode_t pvp, vnode_t vp,
 	/* XXX 3762912 hack to support HFS filesystem 'owner' - filesystem may update later */
 	vfs_setowner(mp, KAUTH_UID_NONE, KAUTH_GID_NONE);
 
-#if NFSCLIENT || DEVFS || ROUTEFS
+#if CONFIG_NFS_CLIENT || DEVFS || ROUTEFS
 	if (kernelmount) {
 		mp->mnt_kern_flag |= MNTK_KERNEL_MOUNT;
 	}
 	if ((internal_flags & KERNEL_MOUNT_PERMIT_UNMOUNT) != 0) {
 		mp->mnt_kern_flag |= MNTK_PERMIT_UNMOUNT;
 	}
-#endif /* NFSCLIENT || DEVFS */
+#endif /* CONFIG_NFS_CLIENT || DEVFS */
 
 update:
 
@@ -4781,6 +4783,9 @@ linkat_internal(vfs_context_t ctx, int fd1, user_addr_t path, int fd2,
 
 	error = nameiat(&nd, fd1);
 	if (error) {
+		if (error == EPERM) {
+			printf("XXX 54841485: nameiat() src EPERM\n");
+		}
 		return error;
 	}
 	vp = nd.ni_vp;
@@ -4794,6 +4799,7 @@ linkat_internal(vfs_context_t ctx, int fd1, user_addr_t path, int fd2,
 	if (vp->v_type == VDIR) {
 		if (!ISSET(vp->v_mount->mnt_kern_flag, MNTK_DIR_HARDLINKS)) {
 			error = EPERM;   /* POSIX */
+			printf("XXX 54841485: VDIR EPERM\n");
 			goto out;
 		}
 
@@ -4821,6 +4827,9 @@ linkat_internal(vfs_context_t ctx, int fd1, user_addr_t path, int fd2,
 	nd.ni_dirp = link;
 	error = nameiat(&nd, fd2);
 	if (error != 0) {
+		if (error == EPERM) {
+			printf("XXX 54841485: nameiat() dst EPERM\n");
+		}
 		goto out;
 	}
 	dvp = nd.ni_dvp;
@@ -4828,12 +4837,18 @@ linkat_internal(vfs_context_t ctx, int fd1, user_addr_t path, int fd2,
 
 #if CONFIG_MACF
 	if ((error = mac_vnode_check_link(ctx, dvp, vp, &nd.ni_cnd)) != 0) {
+		if (error == EPERM) {
+			printf("XXX 54841485: mac_vnode_check_link() EPERM\n");
+		}
 		goto out2;
 	}
 #endif
 
 	/* or to anything that kauth doesn't want us to (eg. immutable items) */
 	if ((error = vnode_authorize(vp, NULL, KAUTH_VNODE_LINKTARGET, ctx)) != 0) {
+		if (error == EPERM) {
+			printf("XXX 54841485: vnode_authorize() LINKTARGET EPERM\n");
+		}
 		goto out2;
 	}
 
@@ -4850,12 +4865,18 @@ linkat_internal(vfs_context_t ctx, int fd1, user_addr_t path, int fd2,
 
 	/* authorize creation of the target note */
 	if ((error = vnode_authorize(dvp, NULL, KAUTH_VNODE_ADD_FILE, ctx)) != 0) {
+		if (error == EPERM) {
+			printf("XXX 54841485: vnode_authorize() ADD_FILE EPERM\n");
+		}
 		goto out2;
 	}
 
 	/* and finally make the link */
 	error = VNOP_LINK(vp, dvp, &nd.ni_cnd, ctx);
 	if (error) {
+		if (error == EPERM) {
+			printf("XXX 54841485: VNOP_LINK() EPERM\n");
+		}
 		goto out2;
 	}
 
@@ -5056,16 +5077,16 @@ symlinkat_internal(vfs_context_t ctx, user_addr_t path_data, int fd,
 		error = VNOP_SYMLINK(dvp, &vp, &nd.ni_cnd, &va, path, ctx);
 	}
 
+	/* do fallback attribute handling */
+	if (error == 0 && vp) {
+		error = vnode_setattr_fallback(vp, &va, ctx);
+	}
+
 #if CONFIG_MACF
 	if (error == 0 && vp) {
 		error = vnode_label(vnode_mount(vp), dvp, vp, &nd.ni_cnd, VNODE_LABEL_CREATE, ctx);
 	}
 #endif
-
-	/* do fallback attribute handling */
-	if (error == 0 && vp) {
-		error = vnode_setattr_fallback(vp, &va, ctx);
-	}
 
 	if (error == 0) {
 		int     update_flags = 0;
@@ -7784,10 +7805,6 @@ clonefile_internal(vnode_t fvp, boolean_t data_read_authorised, int dst_dirfd,
 		int fsevent;
 #endif /* CONFIG_FSE */
 
-#if CONFIG_MACF
-		(void)vnode_label(vnode_mount(tvp), tdvp, tvp, cnp,
-		    VNODE_LABEL_CREATE, ctx);
-#endif
 		/*
 		 * If some of the requested attributes weren't handled by the
 		 * VNOP, use our fallback code.
@@ -7795,6 +7812,11 @@ clonefile_internal(vnode_t fvp, boolean_t data_read_authorised, int dst_dirfd,
 		if (!VATTR_ALL_SUPPORTED(&va)) {
 			(void)vnode_setattr_fallback(tvp, &nva, ctx);
 		}
+
+#if CONFIG_MACF
+		(void)vnode_label(vnode_mount(tvp), tdvp, tvp, cnp,
+		    VNODE_LABEL_CREATE, ctx);
+#endif
 
 		// Make sure the name & parent pointers are hooked up
 		if (tvp->v_name == NULL) {
@@ -12720,7 +12742,9 @@ static int
 snapshot_mount(int dirfd, user_addr_t name, user_addr_t directory,
     __unused user_addr_t mnt_data, __unused uint32_t flags, vfs_context_t ctx)
 {
+	mount_t mp;
 	vnode_t rvp, snapdvp, snapvp, vp, pvp;
+	struct fs_snapshot_mount_args smnt_data;
 	int error;
 	struct nameidata *snapndp, *dirndp;
 	/* carving out a chunk for structs that are too big to be on stack. */
@@ -12756,20 +12780,28 @@ snapshot_mount(int dirfd, user_addr_t name, user_addr_t directory,
 
 	vp = dirndp->ni_vp;
 	pvp = dirndp->ni_dvp;
+	mp = vnode_mount(rvp);
 
 	if ((vp->v_flag & VROOT) && (vp->v_mount->mnt_flag & MNT_ROOTFS)) {
 		error = EINVAL;
-	} else {
-		mount_t mp = vnode_mount(rvp);
-		struct fs_snapshot_mount_args smnt_data;
-
-		smnt_data.sm_mp  = mp;
-		smnt_data.sm_cnp = &snapndp->ni_cnd;
-		error = mount_common(mp->mnt_vfsstat.f_fstypename, pvp, vp,
-		    &dirndp->ni_cnd, CAST_USER_ADDR_T(&smnt_data), flags & MNT_DONTBROWSE,
-		    KERNEL_MOUNT_SNAPSHOT, NULL, FALSE, ctx);
+		goto out2;
 	}
 
+#if CONFIG_MACF
+	error = mac_mount_check_snapshot_mount(ctx, rvp, vp, &dirndp->ni_cnd, snapndp->ni_cnd.cn_nameptr,
+	    mp->mnt_vfsstat.f_fstypename);
+	if (error) {
+		goto out2;
+	}
+#endif
+
+	smnt_data.sm_mp  = mp;
+	smnt_data.sm_cnp = &snapndp->ni_cnd;
+	error = mount_common(mp->mnt_vfsstat.f_fstypename, pvp, vp,
+	    &dirndp->ni_cnd, CAST_USER_ADDR_T(&smnt_data), flags & MNT_DONTBROWSE,
+	    KERNEL_MOUNT_SNAPSHOT, NULL, FALSE, ctx);
+
+out2:
 	vnode_put(vp);
 	vnode_put(pvp);
 	nameidone(dirndp);

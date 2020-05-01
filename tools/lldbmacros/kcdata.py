@@ -1288,6 +1288,7 @@ kThreadWaitPThreadCondVar       = 0x0e
 kThreadWaitParkedWorkQueue      = 0x0f
 kThreadWaitWorkloopSyncWait     = 0x10
 kThreadWaitOnProcess            = 0x11
+kThreadWaitCompressor           = 0x14
 
 
 UINT64_MAX = 0xffffffffffffffff
@@ -1397,6 +1398,8 @@ def formatWaitInfo(info):
             s += "waitpid, for process group %d" % abs(owner - 2**64)
         else:
             s += "waitpid, for pid %d" % owner
+    elif type == kThreadWaitCompressor:
+        s += "in compressor segment %x, busy for thread %d" % (context, owner)
 
     else:
         s += "unknown type %d (owner %d, context %x)" % (type, owner, context)

@@ -696,6 +696,7 @@ _vfs_sysctl
 _vfs_typenum
 _vfs_unbusy
 _vfs_unmountbyfsid
+_vn_authorize_rmdir
 _vn_authorize_unlink
 _vn_bwrite
 _vn_default_error

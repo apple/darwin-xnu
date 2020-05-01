@@ -79,6 +79,9 @@ uint32_t LockTimeOut;
 uint32_t LockTimeOutUsec;
 uint64_t TLockTimeOut;
 uint64_t MutexSpin;
+uint64_t low_MutexSpin;
+int64_t high_MutexSpin;
+
 boolean_t is_clock_configured = FALSE;
 
 uint32_t yield_delay_us = 0; /* Must be less than cpu_idle_latency to ensure ml_delay_should_spin is true */
@@ -115,7 +118,7 @@ lockdown_handler_t lockdown_handler;
 void *lockdown_this;
 lck_mtx_t lockdown_handler_lck;
 lck_grp_t *lockdown_handler_grp;
-int lockdown_done;
+uint32_t lockdown_done;
 
 void ml_lockdown_init(void);
 void ml_lockdown_run_handler(void);
@@ -841,6 +844,15 @@ ml_init_lock_timeout(void)
 		nanoseconds_to_absolutetime(10 * NSEC_PER_USEC, &abstime);
 	}
 	MutexSpin = abstime;
+	low_MutexSpin = MutexSpin;
+	/*
+	 * high_MutexSpin should be initialized as low_MutexSpin * real_ncpus, but
+	 * real_ncpus is not set at this time
+	 *
+	 * NOTE: active spinning is disabled in arm. It can be activated
+	 * by setting high_MutexSpin through the sysctl.
+	 */
+	high_MutexSpin = low_MutexSpin;
 }
 
 /*

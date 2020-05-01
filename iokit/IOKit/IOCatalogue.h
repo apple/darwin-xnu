@@ -174,6 +174,9 @@ public:
  *   @param unload Flag to cause the actual unloading of the module.
  */
 	IOReturn terminateDriversForModule( const char * moduleName, bool unload = true);
+#if XNU_KERNEL_PRIVATE
+	IOReturn terminateDrivers(OSDictionary * matching, io_name_t className);
+#endif /* XNU_KERNEL_PRIVATE */
 
 /*!
  *   @function startMatching
@@ -227,7 +230,6 @@ private:
 	IOReturn unloadModule( OSString * moduleName ) const;
 
 	IOReturn _removeDrivers(OSDictionary * matching);
-	IOReturn _terminateDrivers(OSDictionary * matching);
 };
 
 extern const OSSymbol * gIOClassKey;

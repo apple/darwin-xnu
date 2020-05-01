@@ -102,6 +102,7 @@ struct ctl_cb {
 	struct sockaddr_ctl     sac;
 	u_int32_t               usecount;
 	u_int32_t               kcb_usecount;
+	u_int32_t               require_clearing_count;
 #if DEVELOPMENT || DEBUG
 	enum ctl_status         status;
 #endif /* DEVELOPMENT || DEBUG */
@@ -370,24 +371,45 @@ ctl_sofreelastref(struct socket *so)
 }
 
 /*
- * Use this function to serialize calls into the kctl subsystem
+ * Use this function and ctl_kcb_require_clearing to serialize
+ * critical calls into the kctl subsystem
  */
 static void
 ctl_kcb_increment_use_count(struct ctl_cb *kcb, lck_mtx_t *mutex_held)
 {
 	LCK_MTX_ASSERT(mutex_held, LCK_MTX_ASSERT_OWNED);
-	while (kcb->kcb_usecount > 0) {
+	while (kcb->require_clearing_count > 0) {
+		msleep(&kcb->require_clearing_count, mutex_held, PSOCK | PCATCH, "kcb_require_clearing", NULL);
+	}
+	kcb->kcb_usecount++;
+}
+
+static void
+ctl_kcb_require_clearing(struct ctl_cb *kcb, lck_mtx_t *mutex_held)
+{
+	assert(kcb->kcb_usecount != 0);
+	kcb->require_clearing_count++;
+	kcb->kcb_usecount--;
+	while (kcb->kcb_usecount > 0) { // we need to wait until no one else is running
 		msleep(&kcb->kcb_usecount, mutex_held, PSOCK | PCATCH, "kcb_usecount", NULL);
 	}
 	kcb->kcb_usecount++;
 }
 
 static void
-clt_kcb_decrement_use_count(struct ctl_cb *kcb)
+ctl_kcb_done_clearing(struct ctl_cb *kcb)
+{
+	assert(kcb->require_clearing_count != 0);
+	kcb->require_clearing_count--;
+	wakeup((caddr_t)&kcb->require_clearing_count);
+}
+
+static void
+ctl_kcb_decrement_use_count(struct ctl_cb *kcb)
 {
 	assert(kcb->kcb_usecount != 0);
 	kcb->kcb_usecount--;
-	wakeup_one((caddr_t)&kcb->kcb_usecount);
+	wakeup((caddr_t)&kcb->kcb_usecount);
 }
 
 static int
@@ -401,6 +423,7 @@ ctl_detach(struct socket *so)
 
 	lck_mtx_t *mtx_held = socket_getlock(so, PR_F_WILLUNLOCK);
 	ctl_kcb_increment_use_count(kcb, mtx_held);
+	ctl_kcb_require_clearing(kcb, mtx_held);
 
 	if (kcb->kctl != NULL && kcb->kctl->bind != NULL &&
 	    kcb->userdata != NULL && !(so->so_state & SS_ISCONNECTED)) {
@@ -419,7 +442,8 @@ ctl_detach(struct socket *so)
 	kcb->status = KCTL_DISCONNECTED;
 #endif /* DEVELOPMENT || DEBUG */
 	so->so_flags |= SOF_PCBCLEARING;
-	clt_kcb_decrement_use_count(kcb);
+	ctl_kcb_done_clearing(kcb);
+	ctl_kcb_decrement_use_count(kcb);
 	return 0;
 }
 
@@ -573,6 +597,7 @@ ctl_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 
 	lck_mtx_t *mtx_held = socket_getlock(so, PR_F_WILLUNLOCK);
 	ctl_kcb_increment_use_count(kcb, mtx_held);
+	ctl_kcb_require_clearing(kcb, mtx_held);
 
 	error = ctl_setup_kctl(so, nam, p);
 	if (error) {
@@ -593,7 +618,8 @@ ctl_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	socket_lock(so, 0);
 
 out:
-	clt_kcb_decrement_use_count(kcb);
+	ctl_kcb_done_clearing(kcb);
+	ctl_kcb_decrement_use_count(kcb);
 	return error;
 }
 
@@ -609,6 +635,7 @@ ctl_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 
 	lck_mtx_t *mtx_held = socket_getlock(so, PR_F_WILLUNLOCK);
 	ctl_kcb_increment_use_count(kcb, mtx_held);
+	ctl_kcb_require_clearing(kcb, mtx_held);
 
 #if DEVELOPMENT || DEBUG
 	if (kcb->status != KCTL_DISCONNECTED && ctl_panic_debug) {
@@ -668,7 +695,8 @@ end:
 		lck_mtx_unlock(ctl_mtx);
 	}
 out:
-	clt_kcb_decrement_use_count(kcb);
+	ctl_kcb_done_clearing(kcb);
+	ctl_kcb_decrement_use_count(kcb);
 	return error;
 }
 
@@ -680,6 +708,7 @@ ctl_disconnect(struct socket *so)
 	if ((kcb = (struct ctl_cb *)so->so_pcb)) {
 		lck_mtx_t *mtx_held = socket_getlock(so, PR_F_WILLUNLOCK);
 		ctl_kcb_increment_use_count(kcb, mtx_held);
+		ctl_kcb_require_clearing(kcb, mtx_held);
 		struct kctl             *kctl = kcb->kctl;
 
 		if (kctl && kctl->disconnect) {
@@ -706,7 +735,8 @@ ctl_disconnect(struct socket *so)
 		kctlstat.kcs_gencnt++;
 		lck_mtx_unlock(ctl_mtx);
 		socket_lock(so, 0);
-		clt_kcb_decrement_use_count(kcb);
+		ctl_kcb_done_clearing(kcb);
+		ctl_kcb_decrement_use_count(kcb);
 	}
 	return 0;
 }
@@ -798,7 +828,7 @@ ctl_usr_rcvd(struct socket *so, int flags)
 	ctl_sbrcv_trim(so);
 
 out:
-	clt_kcb_decrement_use_count(kcb);
+	ctl_kcb_decrement_use_count(kcb);
 	return error;
 }
 
@@ -842,7 +872,7 @@ ctl_send(struct socket *so, int flags, struct mbuf *m,
 	if (error != 0) {
 		OSIncrementAtomic64((SInt64 *)&kctlstat.kcs_send_fail);
 	}
-	clt_kcb_decrement_use_count(kcb);
+	ctl_kcb_decrement_use_count(kcb);
 
 	return error;
 }
@@ -906,7 +936,7 @@ ctl_send_list(struct socket *so, int flags, struct mbuf *m,
 	if (error != 0) {
 		OSIncrementAtomic64((SInt64 *)&kctlstat.kcs_send_list_fail);
 	}
-	clt_kcb_decrement_use_count(kcb);
+	ctl_kcb_decrement_use_count(kcb);
 
 	return error;
 }
@@ -1415,7 +1445,7 @@ ctl_ctloutput(struct socket *so, struct sockopt *sopt)
 	}
 
 out:
-	clt_kcb_decrement_use_count(kcb);
+	ctl_kcb_decrement_use_count(kcb);
 	return error;
 }
 

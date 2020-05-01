@@ -586,7 +586,6 @@ SYSCTL_PROC(_hw_optional, OID_AUTO, hle, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN
 SYSCTL_PROC(_hw_optional, OID_AUTO, adx, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasADX, 0, sysctl_cpu_capability, "I", "");
 SYSCTL_PROC(_hw_optional, OID_AUTO, mpx, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasMPX, 0, sysctl_cpu_capability, "I", "");
 SYSCTL_PROC(_hw_optional, OID_AUTO, sgx, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasSGX, 0, sysctl_cpu_capability, "I", "");
-#if !defined(RC_HIDE_XNU_J137)
 SYSCTL_PROC(_hw_optional, OID_AUTO, avx512f, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasAVX512F, 0, sysctl_cpu_capability, "I", "");
 SYSCTL_PROC(_hw_optional, OID_AUTO, avx512cd, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasAVX512CD, 0, sysctl_cpu_capability, "I", "");
 SYSCTL_PROC(_hw_optional, OID_AUTO, avx512dq, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasAVX512DQ, 0, sysctl_cpu_capability, "I", "");
@@ -594,7 +593,6 @@ SYSCTL_PROC(_hw_optional, OID_AUTO, avx512bw, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG
 SYSCTL_PROC(_hw_optional, OID_AUTO, avx512vl, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasAVX512VL, 0, sysctl_cpu_capability, "I", "");
 SYSCTL_PROC(_hw_optional, OID_AUTO, avx512ifma, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasAVX512IFMA, 0, sysctl_cpu_capability, "I", "");
 SYSCTL_PROC(_hw_optional, OID_AUTO, avx512vbmi, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_KERN | CTLFLAG_LOCKED, (void *) kHasAVX512VBMI, 0, sysctl_cpu_capability, "I", "");
-#endif /* not RC_HIDE_XNU_J137 */
 #elif defined (__arm__) || defined (__arm64__)
 int watchpoint_flag = -1;
 int breakpoint_flag = -1;

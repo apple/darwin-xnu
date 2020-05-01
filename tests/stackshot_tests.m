@@ -2,6 +2,7 @@
 #include <darwintest_utils.h>
 #include <kern/debug.h>
 #include <kern/kern_cdata.h>
+#include <kern/block_hint.h>
 #include <kdd.h>
 #include <libproc.h>
 #include <mach-o/dyld.h>
@@ -32,6 +33,9 @@ static void initialize_thread(void);
 #define PARSE_STACKSHOT_SHAREDCACHE_LAYOUT   0x04
 #define PARSE_STACKSHOT_DISPATCH_QUEUE_LABEL 0x08
 #define PARSE_STACKSHOT_TURNSTILEINFO        0x10
+#define PARSE_STACKSHOT_WAITINFO_CSEG        0x40
+
+static uint64_t cseg_expected_threadid = 0;
 
 #define TEST_STACKSHOT_QUEUE_LABEL        "houston.we.had.a.problem"
 #define TEST_STACKSHOT_QUEUE_LABEL_LENGTH sizeof(TEST_STACKSHOT_QUEUE_LABEL)
@@ -891,6 +895,34 @@ T_DECL(proc_uuid_info, "tests that the main binary UUID for a proc is always pop
 	});
 }
 
+T_DECL(cseg_waitinfo, "test that threads stuck in the compressor report correct waitinfo")
+{
+	int val = 1;
+	struct scenario scenario = {
+		.name = "cseg_waitinfo",
+		.quiet = false,
+		.flags = (STACKSHOT_THREAD_WAITINFO | STACKSHOT_KCDATA_FORMAT),
+	};
+
+	dispatch_queue_t dq = dispatch_queue_create("com.apple.stackshot.cseg_waitinfo", NULL);
+	dispatch_semaphore_t child_ok = dispatch_semaphore_create(0);
+
+	dispatch_async(dq, ^{
+		pthread_threadid_np(NULL, &cseg_expected_threadid);
+		dispatch_semaphore_signal(child_ok);
+		T_ASSERT_POSIX_SUCCESS(sysctlbyname("kern.cseg_wedge_thread", NULL, NULL, &val, sizeof(val)), "wedge child thread");
+	});
+
+	dispatch_semaphore_wait(child_ok, DISPATCH_TIME_FOREVER);
+	sleep(1);
+
+	T_LOG("taking stackshot");
+	take_stackshot(&scenario, ^(void *ssbuf, size_t sslen) {
+		T_ASSERT_POSIX_SUCCESS(sysctlbyname("kern.cseg_unwedge_thread", NULL, NULL, &val, sizeof(val)), "unwedge child thread");
+		parse_stackshot(PARSE_STACKSHOT_WAITINFO_CSEG, ssbuf, sslen, -1);
+	});
+}
+
 #pragma mark performance tests
 
 #define SHOULD_REUSE_SIZE_HINT 0x01
@@ -1086,12 +1118,14 @@ parse_stackshot(uint64_t stackshot_parsing_flags, void *ssbuf, size_t sslen, int
 {
 	bool delta = (stackshot_parsing_flags & PARSE_STACKSHOT_DELTA);
 	bool expect_zombie_child = (stackshot_parsing_flags & PARSE_STACKSHOT_ZOMBIE);
+	bool expect_cseg_waitinfo = (stackshot_parsing_flags & PARSE_STACKSHOT_WAITINFO_CSEG);
 	bool expect_shared_cache_layout = false;
 	bool expect_shared_cache_uuid = !delta;
 	bool expect_dispatch_queue_label = (stackshot_parsing_flags & PARSE_STACKSHOT_DISPATCH_QUEUE_LABEL);
 	bool expect_turnstile_lock = (stackshot_parsing_flags & PARSE_STACKSHOT_TURNSTILEINFO);
 	bool found_zombie_child = false, found_shared_cache_layout = false, found_shared_cache_uuid = false;
 	bool found_dispatch_queue_label = false, found_turnstile_lock = false;
+	bool found_cseg_waitinfo = false;
 
 	if (expect_shared_cache_uuid) {
 		uuid_t shared_cache_uuid;
@@ -1174,6 +1208,17 @@ parse_stackshot(uint64_t stackshot_parsing_flags, void *ssbuf, size_t sslen, int
 
 					if ([dql isEqualToString:@TEST_STACKSHOT_QUEUE_LABEL]) {
 						found_dispatch_queue_label = true;
+						break;
+					}
+				}
+			}
+
+			if (expect_cseg_waitinfo) {
+				NSArray *winfos = container[@"task_snapshots"][@"thread_waitinfo"];
+
+				for (id i in winfos) {
+					if ([i[@"wait_type"] intValue] == kThreadWaitCompressor && [i[@"owner"] intValue] == cseg_expected_threadid) {
+						found_cseg_waitinfo = true;
 						break;
 					}
 				}
@@ -1274,6 +1319,10 @@ parse_stackshot(uint64_t stackshot_parsing_flags, void *ssbuf, size_t sslen, int
 
 	if (expect_turnstile_lock) {
 		T_QUIET; T_ASSERT_TRUE(found_turnstile_lock, "found expected deadlock");
+	}
+
+	if (expect_cseg_waitinfo) {
+		T_QUIET; T_ASSERT_TRUE(found_cseg_waitinfo, "found c_seg waitinfo");
 	}
 
 	T_ASSERT_FALSE(KCDATA_ITER_FOREACH_FAILED(iter), "successfully iterated kcdata");

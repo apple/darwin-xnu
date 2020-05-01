@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2017-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -31,6 +31,7 @@
 #include <arm64/monotonic.h>
 #include <kern/assert.h>
 #include <kern/debug.h> /* panic */
+#include <kern/kpc.h>
 #include <kern/monotonic.h>
 #include <machine/atomic.h>
 #include <machine/limits.h> /* CHAR_BIT */
@@ -84,8 +85,19 @@ bool mt_core_supported = true;
 #define PMC5 "s3_2_c15_c5_0"
 #define PMC6 "s3_2_c15_c6_0"
 #define PMC7 "s3_2_c15_c7_0"
+
+#define PMC_0_7(X, A) X(0, A); X(1, A); X(2, A); X(3, A); X(4, A); X(5, A); \
+    X(6, A); X(7, A)
+
+#if CORE_NCTRS > 8
 #define PMC8 "s3_2_c15_c9_0"
 #define PMC9 "s3_2_c15_c10_0"
+#define PMC_8_9(X, A) X(8, A); X(9, A)
+#else // CORE_NCTRS > 8
+#define PMC_8_9(X, A)
+#endif // CORE_NCTRS > 8
+
+#define PMC_ALL(X, A) PMC_0_7(X, A); PMC_8_9(X, A)
 
 #define CTR_MAX ((UINT64_C(1) << 47) - 1)
 
@@ -125,7 +137,7 @@ enum {
 	PMCR0_INTGEN_HALT = 3,
 	PMCR0_INTGEN_FIQ = 4,
 };
-#define PMCR0_INTGEN_SET(INT) ((uint64_t)(INT) << 8)
+#define PMCR0_INTGEN_SET(X) ((uint64_t)(X) << 8)
 
 #if CPMU_AIC_PMI
 #define PMCR0_INTGEN_INIT PMCR0_INTGEN_SET(PMCR0_INTGEN_AIC)
@@ -133,7 +145,9 @@ enum {
 #define PMCR0_INTGEN_INIT PMCR0_INTGEN_SET(PMCR0_INTGEN_FIQ)
 #endif /* !CPMU_AIC_PMI */
 
-#define PMCR0_PMI_EN(CTR) (UINT64_C(1) << (12 + CTR_POS(CTR)))
+#define PMCR0_PMI_SHIFT (12)
+#define PMCR0_CTR_GE8_PMI_SHIFT (44)
+#define PMCR0_PMI_EN(CTR) (UINT64_C(1) << (PMCR0_PMI_SHIFT + CTR_POS(CTR)))
 /* fixed counters are always counting */
 #define PMCR0_PMI_INIT (PMCR0_PMI_EN(CYCLES) | PMCR0_PMI_EN(INSTRS))
 /* disable counting on a PMI */
@@ -144,8 +158,9 @@ enum {
 #define PMCR0_L2CGLOBAL_EN (UINT64_C(1) << 23)
 /* user mode access to configuration registers */
 #define PMCR0_USEREN_EN (UINT64_C(1) << 30)
+#define PMCR0_CTR_GE8_EN_SHIFT (32)
 
-#define PMCR0_INIT (PMCR0_INTGEN_INIT | PMCR0_PMI_INIT | PMCR0_DISCNT_EN)
+#define PMCR0_INIT (PMCR0_INTGEN_INIT | PMCR0_PMI_INIT)
 
 /*
  * PMCR1 controls which execution modes count events.
@@ -194,6 +209,9 @@ core_init_execution_modes(void)
 
 #define PMSR_OVF(CTR) (1ULL << (CTR))
 
+#define PMESR0 "S3_1_c15_c5_0"
+#define PMESR1 "S3_1_c15_c6_0"
+
 static int
 core_init(__unused mt_device_t dev)
 {
@@ -211,10 +229,9 @@ uint64_t
 mt_core_snap(unsigned int ctr)
 {
 	switch (ctr) {
-	case 0:
-		return __builtin_arm_rsr64(PMC0);
-	case 1:
-		return __builtin_arm_rsr64(PMC1);
+#define PMC_RD(CTR, UNUSED) case (CTR): return __builtin_arm_rsr64(PMC ## CTR)
+		PMC_ALL(PMC_RD, 0);
+#undef PMC_RD
 	default:
 		panic("monotonic: invalid core counter read: %u", ctr);
 		__builtin_unreachable();
@@ -242,16 +259,29 @@ core_set_enabled(void)
 {
 	uint64_t pmcr0 = __builtin_arm_rsr64(PMCR0);
 	pmcr0 |= PMCR0_INIT | PMCR0_FIXED_EN;
-	pmcr0 &= ~PMCR0_PMAI;
+
+	if (kpc_get_running() & KPC_CLASS_CONFIGURABLE_MASK) {
+		uint64_t kpc_ctrs = kpc_get_configurable_pmc_mask(
+			KPC_CLASS_CONFIGURABLE_MASK) << MT_CORE_NFIXED;
+#if KPC_ARM64_CONFIGURABLE_COUNT > 6
+		uint64_t ctrs_ge8 = kpc_ctrs >> 8;
+		pmcr0 |= ctrs_ge8 << PMCR0_CTR_GE8_EN_SHIFT;
+		pmcr0 |= ctrs_ge8 << PMCR0_CTR_GE8_PMI_SHIFT;
+		kpc_ctrs &= (1ULL << 8) - 1;
+#endif /* KPC_ARM64_CONFIGURABLE_COUNT > 6 */
+		kpc_ctrs |= kpc_ctrs << PMCR0_PMI_SHIFT;
+		pmcr0 |= kpc_ctrs;
+	}
+
 	__builtin_arm_wsr64(PMCR0, pmcr0);
 #if MACH_ASSERT
 	/*
 	 * Only check for the values that were ORed in.
 	 */
 	uint64_t pmcr0_check = __builtin_arm_rsr64(PMCR0);
-	if (!(pmcr0_check & (PMCR0_INIT | PMCR0_FIXED_EN))) {
-		panic("monotonic: hardware ignored enable (read %llx)",
-		    pmcr0_check);
+	if ((pmcr0_check & (PMCR0_INIT | PMCR0_FIXED_EN)) != (PMCR0_INIT | PMCR0_FIXED_EN)) {
+		panic("monotonic: hardware ignored enable (read %llx, wrote %llx)",
+		    pmcr0_check, pmcr0);
 	}
 #endif /* MACH_ASSERT */
 }
@@ -1293,6 +1323,13 @@ mt_cpu_pmi(cpu_data_t *cpu, uint64_t pmcr0)
 	assert(cpu != NULL);
 	assert(ml_get_interrupts_enabled() == FALSE);
 
+	__builtin_arm_wsr64(PMCR0, PMCR0_INIT);
+	/*
+	 * Ensure the CPMU has flushed any increments at this point, so PMSR is up
+	 * to date.
+	 */
+	__builtin_arm_isb(ISB_SY);
+
 	cpu->cpu_monotonic.mtc_npmis += 1;
 	cpu->cpu_stat.pmi_cnt_wake += 1;
 
@@ -1308,9 +1345,13 @@ mt_cpu_pmi(cpu_data_t *cpu, uint64_t pmcr0)
 	uint64_t pmsr = __builtin_arm_rsr64(PMSR);
 
 #if MONOTONIC_DEBUG
-	kprintf("monotonic: cpu = %d, PMSR = 0x%llx, PMCR0 = 0x%llx",
+	printf("monotonic: cpu = %d, PMSR = 0x%llx, PMCR0 = 0x%llx\n",
 	    cpu_number(), pmsr, pmcr0);
 #endif /* MONOTONIC_DEBUG */
+
+#if MACH_ASSERT
+	uint64_t handled = 0;
+#endif /* MACH_ASSERT */
 
 	/*
 	 * monotonic handles any fixed counter PMIs.
@@ -1320,6 +1361,9 @@ mt_cpu_pmi(cpu_data_t *cpu, uint64_t pmcr0)
 			continue;
 		}
 
+#if MACH_ASSERT
+		handled |= 1ULL << i;
+#endif /* MACH_ASSERT */
 		uint64_t count = mt_cpu_update_count(cpu, i);
 		cpu->cpu_monotonic.mtc_counts[i] += count;
 		mt_core_set_snap(i, mt_core_reset_values[i]);
@@ -1334,6 +1378,9 @@ mt_cpu_pmi(cpu_data_t *cpu, uint64_t pmcr0)
 			KDBG_RELEASE(KDBG_EVENTID(DBG_MONOTONIC, DBG_MT_DEBUG, 1),
 			    mt_microstackshot_ctr, user_mode);
 			mt_microstackshot_pmi_handler(user_mode, mt_microstackshot_ctx);
+		} else if (mt_debug) {
+			KDBG_RELEASE(KDBG_EVENTID(DBG_MONOTONIC, DBG_MT_DEBUG, 2),
+			    i, count);
 		}
 	}
 
@@ -1342,14 +1389,31 @@ mt_cpu_pmi(cpu_data_t *cpu, uint64_t pmcr0)
 	 */
 	for (unsigned int i = MT_CORE_NFIXED; i < CORE_NCTRS; i++) {
 		if (pmsr & PMSR_OVF(i)) {
+#if MACH_ASSERT
+			handled |= 1ULL << i;
+#endif /* MACH_ASSERT */
 			extern void kpc_pmi_handler(unsigned int ctr);
 			kpc_pmi_handler(i);
 		}
 	}
 
 #if MACH_ASSERT
-	pmsr = __builtin_arm_rsr64(PMSR);
-	assert(pmsr == 0);
+	uint64_t pmsr_after_handling = __builtin_arm_rsr64(PMSR);
+	if (pmsr_after_handling != 0) {
+		unsigned int first_ctr_ovf = __builtin_ffsll(pmsr_after_handling) - 1;
+		uint64_t count = 0;
+		const char *extra = "";
+		if (first_ctr_ovf >= CORE_NCTRS) {
+			extra = " (invalid counter)";
+		} else {
+			count = mt_core_snap(first_ctr_ovf);
+		}
+
+		panic("monotonic: PMI status not cleared on exit from handler, "
+		    "PMSR = 0x%llx HANDLE -> -> 0x%llx, handled 0x%llx, "
+		    "PMCR0 = 0x%llx, PMC%d = 0x%llx%s", pmsr, pmsr_after_handling,
+		    handled, __builtin_arm_rsr64(PMCR0), first_ctr_ovf, count, extra);
+	}
 #endif /* MACH_ASSERT */
 
 	core_set_enabled();

@@ -62,21 +62,6 @@ void kpc_pmi_handler(unsigned int ctr);
 #define PMCR0_PMC_ENABLE_MASK(PMC)  (UINT64_C(0x1) << PMCR_PMC_SHIFT(PMC))
 #define PMCR0_PMC_DISABLE_MASK(PMC) (~PMCR0_PMC_ENABLE_MASK(PMC))
 
-/* how interrupts are generated on PMIs */
-#define PMCR0_INTGEN_SHIFT   (8)
-#define PMCR0_INTGEN_MASK    (UINT64_C(0x7) << PMCR0_INTGEN_SHIFT)
-#define PMCR0_INTGEN_OFF     (UINT64_C(0) << PMCR0_INTGEN_SHIFT)
-#define PMCR0_INTGEN_PMI     (UINT64_C(1) << PMCR0_INTGEN_SHIFT)
-#define PMCR0_INTGEN_AIC     (UINT64_C(2) << PMCR0_INTGEN_SHIFT)
-#define PMCR0_INTGEN_DBG_HLT (UINT64_C(3) << PMCR0_INTGEN_SHIFT)
-#define PMCR0_INTGEN_FIQ     (UINT64_C(4) << PMCR0_INTGEN_SHIFT)
-
-/* 10 unused */
-
-/* set by hardware if PMI was generated */
-#define PMCR0_PMAI_SHIFT (11)
-#define PMCR0_PMAI_MASK  (UINT64_C(1) << PMCR0_PMAI_SHIFT)
-
 /* overflow on a PMC generates an interrupt */
 #define PMCR0_PMI_OFFSET            (12)
 #define PMCR0_PMI_SHIFT(PMC)        (PMCR0_PMI_OFFSET + PMCR_PMC_SHIFT(PMC))
@@ -360,33 +345,22 @@ dump_regs(void)
 static boolean_t
 enable_counter(uint32_t counter)
 {
-	int cpuid = cpu_number();
-	uint64_t pmcr0 = 0, intgen_type;
-	boolean_t counter_running, pmi_enabled, intgen_correct, enabled;
+	uint64_t pmcr0 = 0;
+	boolean_t counter_running, pmi_enabled, enabled;
 
 	pmcr0 = SREG_READ(SREG_PMCR0) | 0x3 /* leave the fixed counters enabled for monotonic */;
 
 	counter_running = (pmcr0 & PMCR0_PMC_ENABLE_MASK(counter)) != 0;
 	pmi_enabled = (pmcr0 & PMCR0_PMI_ENABLE_MASK(counter)) != 0;
 
-	/* TODO this should use the PMI path rather than AIC for the interrupt
-	 *      as it is faster
-	 */
-	intgen_type = PMCR0_INTGEN_AIC;
-	intgen_correct = (pmcr0 & PMCR0_INTGEN_MASK) == intgen_type;
-
-	enabled = counter_running && pmi_enabled && intgen_correct;
+	enabled = counter_running && pmi_enabled;
 
 	if (!enabled) {
 		pmcr0 |= PMCR0_PMC_ENABLE_MASK(counter);
 		pmcr0 |= PMCR0_PMI_ENABLE_MASK(counter);
-		pmcr0 &= ~PMCR0_INTGEN_MASK;
-		pmcr0 |= intgen_type;
-
 		SREG_WRITE(SREG_PMCR0, pmcr0);
 	}
 
-	saved_PMCR[cpuid][0] = pmcr0;
 	return enabled;
 }
 
@@ -395,7 +369,6 @@ disable_counter(uint32_t counter)
 {
 	uint64_t pmcr0;
 	boolean_t enabled;
-	int cpuid = cpu_number();
 
 	if (counter < 2) {
 		return true;
@@ -409,7 +382,6 @@ disable_counter(uint32_t counter)
 		SREG_WRITE(SREG_PMCR0, pmcr0);
 	}
 
-	saved_PMCR[cpuid][0] = pmcr0;
 	return enabled;
 }
 
@@ -547,9 +519,6 @@ save_regs(void)
 
 	assert(ml_get_interrupts_enabled() == FALSE);
 
-	/* Save current PMCR0/1 values. PMCR2-4 are in the RAWPMU set. */
-	saved_PMCR[cpuid][0] = SREG_READ(SREG_PMCR0) | 0x3;
-
 	/* Save event selections. */
 	saved_PMESR[cpuid][0] = SREG_READ(SREG_PMESR0);
 	saved_PMESR[cpuid][1] = SREG_READ(SREG_PMESR1);
@@ -583,7 +552,6 @@ restore_regs(void)
 
 	/* Restore PMCR0/1 values (with PMCR0 last to enable). */
 	SREG_WRITE(SREG_PMCR1, saved_PMCR[cpuid][1] | 0x30303);
-	SREG_WRITE(SREG_PMCR0, saved_PMCR[cpuid][0] | 0x3);
 }
 
 static uint64_t

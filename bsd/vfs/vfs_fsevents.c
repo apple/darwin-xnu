@@ -263,7 +263,7 @@ unlock_fs_event_list(void)
 // forward prototype
 static void release_event_ref(kfs_event *kfse);
 
-static int
+static boolean_t
 watcher_cares_about_dev(fs_event_watcher *watcher, dev_t dev)
 {
 	unsigned int i;
@@ -271,20 +271,20 @@ watcher_cares_about_dev(fs_event_watcher *watcher, dev_t dev)
 	// if devices_not_to_watch is NULL then we care about all
 	// events from all devices
 	if (watcher->devices_not_to_watch == NULL) {
-		return 1;
+		return true;
 	}
 
 	for (i = 0; i < watcher->num_devices; i++) {
 		if (dev == watcher->devices_not_to_watch[i]) {
 			// found a match! that means we do not
 			// want events from this device.
-			return 0;
+			return false;
 		}
 	}
 
 	// if we're here it's not in the devices_not_to_watch[]
 	// list so that means we do care about it
-	return 1;
+	return true;
 }
 
 
@@ -1564,35 +1564,47 @@ restart_watch:
 			break;
 		}
 
-		if (watcher->event_list[kfse->type] == FSE_REPORT && watcher_cares_about_dev(watcher, kfse->dev)) {
-			if (!(watcher->flags & WATCHER_APPLE_SYSTEM_SERVICE) && kfse->type != FSE_DOCID_CREATED && kfse->type != FSE_DOCID_CHANGED && is_ignored_directory(kfse->str)) {
-				// If this is not an Apple System Service, skip specified directories
-				// radar://12034844
-				error = 0;
-				skipped = 1;
-			} else {
-				skipped = 0;
-				if (last_event_ptr == kfse) {
-					last_event_ptr = NULL;
-					last_event_type = -1;
-					last_coalesced_time = 0;
-				}
-				error = copy_out_kfse(watcher, kfse, uio);
-				if (error != 0) {
-					// if an event won't fit or encountered an error while
-					// we were copying it out, then backup to the last full
-					// event and just bail out.  if the error was ENOENT
-					// then we can continue regular processing, otherwise
-					// we should unlock things and return.
-					uio_setresid(uio, last_full_event_resid);
-					if (error != ENOENT) {
-						lck_rw_unlock_shared(&event_handling_lock);
-						error = 0;
-						goto get_out;
-					}
-				}
+		if (watcher->event_list[kfse->type] == FSE_REPORT) {
+			boolean_t watcher_cares;
 
-				last_full_event_resid = uio_resid(uio);
+			if (watcher->devices_not_to_watch == NULL) {
+				watcher_cares = true;
+			} else {
+				lock_watch_table();
+				watcher_cares = watcher_cares_about_dev(watcher, kfse->dev);
+				unlock_watch_table();
+			}
+
+			if (watcher_cares) {
+				if (!(watcher->flags & WATCHER_APPLE_SYSTEM_SERVICE) && kfse->type != FSE_DOCID_CREATED && kfse->type != FSE_DOCID_CHANGED && is_ignored_directory(kfse->str)) {
+					// If this is not an Apple System Service, skip specified directories
+					// radar://12034844
+					error = 0;
+					skipped = 1;
+				} else {
+					skipped = 0;
+					if (last_event_ptr == kfse) {
+						last_event_ptr = NULL;
+						last_event_type = -1;
+						last_coalesced_time = 0;
+					}
+					error = copy_out_kfse(watcher, kfse, uio);
+					if (error != 0) {
+						// if an event won't fit or encountered an error while
+						// we were copying it out, then backup to the last full
+						// event and just bail out.  if the error was ENOENT
+						// then we can continue regular processing, otherwise
+						// we should unlock things and return.
+						uio_setresid(uio, last_full_event_resid);
+						if (error != ENOENT) {
+							lck_rw_unlock_shared(&event_handling_lock);
+							error = 0;
+							goto get_out;
+						}
+					}
+
+					last_full_event_resid = uio_resid(uio);
+				}
 			}
 		}
 

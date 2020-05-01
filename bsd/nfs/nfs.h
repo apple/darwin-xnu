@@ -844,6 +844,7 @@ struct nfs_location_index;
 struct nfs_socket;
 struct nfs_socket_search;
 struct nfsrv_uc_arg;
+struct direntry;
 
 /*
  * The set of signals the interrupt an I/O in progress for NFSMNT_INT mounts.
@@ -1288,6 +1289,7 @@ void    nfs_vattr_set_bitmap(struct nfsmount *, uint32_t *, struct vnode_attr *)
 void    nfs3_pathconf_cache(struct nfsmount *, struct nfs_fsattr *);
 int     nfs3_mount_rpc(struct nfsmount *, struct sockaddr *, int, int, char *, vfs_context_t, int, fhandle_t *, struct nfs_sec *);
 void    nfs3_umount_rpc(struct nfsmount *, vfs_context_t, int);
+void    nfs_rdirplus_update_node_attrs(nfsnode_t, struct direntry *, fhandle_t *, struct nfs_vattr *, uint64_t *);
 int     nfs_node_access_slot(nfsnode_t, uid_t, int);
 void    nfs_vnode_notify(nfsnode_t, uint32_t);
 

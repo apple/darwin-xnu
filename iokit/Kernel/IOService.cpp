@@ -134,6 +134,8 @@ const OSSymbol *                gIOMatchedPersonalityKey;
 const OSSymbol *                gIORematchPersonalityKey;
 const OSSymbol *                gIORematchCountKey;
 const OSSymbol *                gIODEXTMatchCountKey;
+const OSSymbol *                gIOSupportedPropertiesKey;
+const OSSymbol *                gIOUserServicePropertiesKey;
 #if !CONFIG_EMBEDDED
 const OSSymbol *                gIOServiceLegacyMatchingRegistryIDKey;
 #endif
@@ -428,6 +430,9 @@ IOService::initialize( void )
 	        = OSSymbol::withCStringNoCopy("IOInterruptControllers");
 	gIOInterruptSpecifiersKey
 	        = OSSymbol::withCStringNoCopy("IOInterruptSpecifiers");
+
+	gIOSupportedPropertiesKey = OSSymbol::withCStringNoCopy(kIOSupportedPropertiesKey);
+	gIOUserServicePropertiesKey = OSSymbol::withCStringNoCopy(kIOUserServicePropertiesKey);
 
 	gIOMapperIDKey = OSSymbol::withCStringNoCopy(kIOMapperIDKey);
 

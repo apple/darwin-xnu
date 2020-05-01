@@ -65,7 +65,7 @@ The second level is the “thread group” level which decides which thread grou
 
 **Implementation**
 
-The thread group level implements a variation of the FreeBSD ULE scheduler to decide which clutch bucket should be selected next for execution. Each clutch bucket with runnable threads is represented as an entry in a priority queue which is ordered by clutch bucket priorities. The clutch bucket selection algorithm simply selects the clutch bucket with the highest priority in the priority queue. The priority calculation for the clutch buckets is based on the following factors:
+The thread group level implements a variation of the FreeBSD ULE scheduler to decide which clutch bucket should be selected next for execution. Each clutch bucket with runnable threads is represented as an entry in a runqueue which is ordered by clutch bucket priorities. The clutch bucket selection algorithm simply selects the clutch bucket with the highest priority in the clutch bucket runqueue. The priority calculation for the clutch buckets is based on the following factors:
 
 * **Highest runnable thread in the clutch bucket**: The clutch bucket maintains a priority queue which contains threads ordered by their promoted or base priority (whichever property made the thread eligible to be part of that clutch bucket). It uses the highest of these threads to calculate the base priority of the clutch bucket. The use of both base and sched priority allows the scheduler to honor priority differences specified from userspace via SPIs, priority boosts due to priority inheritance mechanisms like turnstiles and other priority affecting mechanisms outside the core scheduler.
 * **Interactivity score**: The scheduler calculates an interactivity score based on the ratio of voluntary blocking time and CPU usage time for the clutch bucket as a whole. This score allows the scheduler to prefer highly interactive thread groups over batch processing compute intensive thread groups.
@@ -76,6 +76,8 @@ The interactivity score based algorithm is well suited for this level due to the
 * It allows for a fair sharing of CPU among thread groups based on their recent behavior. Since the algorithm only looks at recent CPU usage history, it also adapts to changing behavior quickly.
 * Since the priority calculation is fairly cheap, the scheduler is able to maintain up-to-date information about all thread groups which leads to more optimal decisions.
 * Thread groups provide a convenient abstraction for groups of threads working together for a user workload. Basing scheduling decisions on this abstraction allows the system to make interesting choices such as preferring Apps over daemons which is typically better for system responsiveness.
+
+The clutch bucket runqueue data structure allows the clutch buckets to be inserted at the head of the queue when threads from that clutch bucket are pre-empted. The runqueues also rotate the clutch bucket to the end of the runqueue at the same priority level when a thread is selected for execution from the clutch bucket. This allows the system to round robin efficiently among clutch buckets at the same priority value especially on highly contended low CPU systems.
 
 ### Thread Level
 

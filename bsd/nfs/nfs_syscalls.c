@@ -64,6 +64,9 @@
  *	@(#)nfs_syscalls.c	8.5 (Berkeley) 3/30/95
  * FreeBSD-Id: nfs_syscalls.c,v 1.32 1997/11/07 08:53:25 phk Exp $
  */
+
+#include <nfs/nfs_conf.h>
+
 /*
  * NOTICE: This file was modified by SPARTA, Inc. in 2005 to introduce
  * support for mandatory and extensible security protections.  This notice
@@ -121,7 +124,7 @@
 
 kern_return_t   thread_terminate(thread_t); /* XXX */
 
-#if NFSSERVER
+#if CONFIG_NFS_SERVER
 
 extern const nfsrv_proc_t nfsrv_procs[NFS_NPROCS];
 
@@ -141,15 +144,17 @@ void    nfsrv_zapsock(struct nfsrv_sock *);
 void    nfsrv_slpderef(struct nfsrv_sock *);
 void    nfsrv_slpfree(struct nfsrv_sock *);
 
-#endif /* NFSSERVER */
+#endif /* CONFIG_NFS_SERVER */
 
+#if CONFIG_NFS
 /*
  * sysctl stuff
  */
 SYSCTL_DECL(_vfs_generic);
 SYSCTL_NODE(_vfs_generic, OID_AUTO, nfs, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "nfs hinge");
+#endif /* CONFIG_NFS */
 
-#if NFSCLIENT
+#if CONFIG_NFS_CLIENT
 SYSCTL_NODE(_vfs_generic_nfs, OID_AUTO, client, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "nfs client hinge");
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, initialdowndelay, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_tprintf_initial_delay, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, nextdowndelay, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_tprintf_delay, 0, "");
@@ -176,9 +181,9 @@ SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, root_steals_gss_context, CTLFLAG_R
 #if CONFIG_NFS4
 SYSCTL_STRING(_vfs_generic_nfs_client, OID_AUTO, default_nfs4domain, CTLFLAG_RW | CTLFLAG_LOCKED, nfs4_default_domain, sizeof(nfs4_default_domain), "");
 #endif
-#endif /* NFSCLIENT */
+#endif /* CONFIG_NFS_CLIENT */
 
-#if NFSSERVER
+#if CONFIG_NFS_SERVER
 SYSCTL_NODE(_vfs_generic_nfs, OID_AUTO, server, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "nfs server hinge");
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, wg_delay, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_wg_delay, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, wg_delay_v3, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_wg_delay_v3, 0, "");
@@ -202,12 +207,9 @@ SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, upcall_queue_limit, CTLFLAG_RW | C
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, upcall_queue_max_seen, CTLFLAG_RW | CTLFLAG_LOCKED, &nfsrv_uc_queue_max_seen, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_server, OID_AUTO, upcall_queue_count, CTLFLAG_RD | CTLFLAG_LOCKED, __DECONST(int *, &nfsrv_uc_queue_count), 0, "");
 #endif
-#endif /* NFSSERVER */
+#endif /* CONFIG_NFS_SERVER */
 
-
-#if NFSCLIENT
-
-#if CONFIG_NFS4
+#if CONFIG_NFS_CLIENT && CONFIG_NFS4
 static int
 mapname2id(struct nfs_testmapid *map)
 {
@@ -287,11 +289,21 @@ nfsclnt_testidmap(proc_t p, user_addr_t argp)
 
 	return error ? error : coerror;
 }
+#endif /* CONFIG_NFS_CLIENT && CONFIG_NFS4 */
+
+#if !CONFIG_NFS_CLIENT
+#define __no_nfs_client_unused      __unused
+#else
+#define __no_nfs_client_unused      /* nothing */
 #endif
 
 int
-nfsclnt(proc_t p, struct nfsclnt_args *uap, __unused int *retval)
+nfsclnt(
+	proc_t p __no_nfs_client_unused,
+	struct nfsclnt_args *uap __no_nfs_client_unused,
+	__unused int *retval)
 {
+#if CONFIG_NFS_CLIENT
 	struct lockd_ans la;
 	int error;
 
@@ -314,8 +326,12 @@ nfsclnt(proc_t p, struct nfsclnt_args *uap, __unused int *retval)
 		error = EINVAL;
 	}
 	return error;
+#else
+	return ENOSYS;
+#endif /* CONFIG_NFS_CLIENT */
 }
 
+#if CONFIG_NFS_CLIENT
 
 /*
  * Asynchronous I/O threads for client NFS.
@@ -512,16 +528,20 @@ worktodo:
 	return 0;
 }
 
-#endif /* NFSCLIENT */
+#endif /* CONFIG_NFS_CLIENT */
 
-
-#if NFSSERVER
+#if !CONFIG_NFS_SERVER
+#define __no_nfs_server_unused      __unused
+#else
+#define __no_nfs_server_unused      /* nothing */
+#endif
 
 /*
  * NFS server system calls
  * getfh() lives here too, but maybe should move to kern/vfs_syscalls.c
  */
 
+#if CONFIG_NFS_SERVER
 static struct nfs_exportfs *
 nfsrv_find_exportfs(const char *ptr)
 {
@@ -543,7 +563,10 @@ nfsrv_find_exportfs(const char *ptr)
  * Get file handle system call
  */
 int
-getfh(proc_t p, struct getfh_args *uap, __unused int *retval)
+getfh(
+	proc_t p __no_nfs_server_unused,
+	struct getfh_args *uap __no_nfs_server_unused,
+	__unused int *retval)
 {
 	vnode_t vp;
 	struct nfs_filehandle nfh;
@@ -665,7 +688,9 @@ out:
 	error = copyout((caddr_t)&nfh, uap->fhp, sizeof(fhandle_t));
 	return error;
 }
+#endif /* CONFIG_NFS_SERVER */
 
+#if CONFIG_NFS_SERVER
 extern const struct fileops vnops;
 
 /*
@@ -676,9 +701,9 @@ extern const struct fileops vnops;
  * security hole.
  */
 int
-fhopen( proc_t p,
-    struct fhopen_args *uap,
-    int32_t *retval)
+fhopen(proc_t p __no_nfs_server_unused,
+    struct fhopen_args *uap __no_nfs_server_unused,
+    int32_t *retval __no_nfs_server_unused)
 {
 	vnode_t vp;
 	struct nfs_filehandle nfh;
@@ -835,12 +860,16 @@ bad:
 	vnode_put(vp);
 	return error;
 }
+#endif /* CONFIG_NFS_SERVER */
 
+#if CONFIG_NFS_SERVER
 /*
  * NFS server pseudo system call
  */
 int
-nfssvc(proc_t p, struct nfssvc_args *uap, __unused int *retval)
+nfssvc(proc_t p __no_nfs_server_unused,
+    struct nfssvc_args *uap __no_nfs_server_unused,
+    __unused int *retval)
 {
 	mbuf_t nam;
 	struct user_nfsd_args user_nfsdarg;
@@ -916,6 +945,9 @@ nfssvc(proc_t p, struct nfssvc_args *uap, __unused int *retval)
 	}
 	return error;
 }
+#endif /* CONFIG_NFS_SERVER */
+
+#if CONFIG_NFS_SERVER
 
 /*
  * Adds a socket to the list for servicing by nfsds.
@@ -1831,4 +1863,4 @@ nfsrv_cleanup(void)
 	nfsrv_udp6sock = NULL;
 }
 
-#endif /* NFS_NOSERVER */
+#endif /* CONFIG_NFS_SERVER */

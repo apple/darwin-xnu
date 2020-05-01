@@ -101,6 +101,6 @@ typedef int32_t                 dhcp_lease_t;     /* relative time */
 #define DHCP_INFINITE_LEASE     ((dhcp_lease_t)-1)
 #define DHCP_INFINITE_TIME      ((dhcp_time_secs_t)-1)
 
-#define DHCP_FLAGS_BROADCAST    ((u_short)0x0001)
+#define DHCP_FLAGS_BROADCAST    ((u_int16_t)0x8000)
 
 #endif /* _NETINET_DHCP_H */

@@ -247,9 +247,7 @@ extern struct mount * dead_mountp;
 #define MNTK_SWAP_MOUNT         0x00000100      /* we are swapping to this mount */
 #define MNTK_DENY_READDIREXT 0x00000200 /* Deny Extended-style readdir's for this volume */
 #define MNTK_PERMIT_UNMOUNT     0x00000400      /* Allow (non-forced) unmounts by UIDs other than the one that mounted the volume */
-#ifdef NFSCLIENT
 #define MNTK_TYPENAME_OVERRIDE  0x00000800      /* override the fstypename for statfs() */
-#endif /* NFSCLIENT */
 #define MNTK_KERNEL_MOUNT       0x00001000      /* mount came from kernel side */
 #ifdef CONFIG_IMGSRC_ACCESS
 #define MNTK_HAS_MOVED          0x00002000

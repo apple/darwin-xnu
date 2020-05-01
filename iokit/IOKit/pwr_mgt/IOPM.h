@@ -103,10 +103,8 @@ enum {
 	kIOPMDeviceUsable               = 0x00008000,
 	kIOPMLowPower                   = 0x00010000,
 #if PRIVATE
-#if !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146))
 	kIOPMAOTPower                   = 0x00020000,
 	kIOPMAOTCapability              = kIOPMAOTPower,
-#endif /* !(defined(RC_HIDE_N144) || defined(RC_HIDE_N146)) */
 #endif /* PRIVATE */
 	kIOPMPreventIdleSleep           = 0x00000040,
 	kIOPMSleepCapability            = 0x00000004,
