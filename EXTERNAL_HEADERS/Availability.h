@@ -29,12 +29,12 @@
     were first available; and, if applicable, the OS version in which they 
     became deprecated.  
      
-    The desktop Mac OS X and iOS each have different version numbers.
+    The desktop macOS and iOS each have different version numbers.
     The __OSX_AVAILABLE_STARTING() macro allows you to specify both the desktop
     and iOS version numbers.  For instance:
         __OSX_AVAILABLE_STARTING(__MAC_10_2,__IPHONE_2_0)
     means the function/method was first available on Mac OS X 10.2 on the desktop
-    and first available in iOS 2.0 on the iPhone.
+    and first available in iOS 2.0 on iPhone.
     
     If a function is available on one platform, but not the other a _NA (not
     applicable) parameter is used.  For instance:
@@ -55,10 +55,10 @@
     
     For these macros to function properly, a program must specify the OS version range 
     it is targeting.  The min OS version is specified as an option to the compiler:
-    -mmacosx-version-min=10.x when building for Mac OS X, and -miphoneos-version-min=y.z
+    -mmacosx-version-min=10.x when building for macOS, and -miphoneos-version-min=y.z
     when building for the iPhone.  The upper bound for the OS version is rarely needed,
-    but it can be set on the command line via: -D__MAC_OS_X_VERSION_MAX_ALLOWED=10x0 for
-    Mac OS X and __IPHONE_OS_VERSION_MAX_ALLOWED = y0z00 for iOS.  
+    but it can be set on the command line via: -D__MAC_OS_X_VERSION_MAX_ALLOWED=10x0 for macOS
+    and __IPHONE_OS_VERSION_MAX_ALLOWED = y0z00 for iOS.
     
     Examples:
 
@@ -74,12 +74,12 @@
             @end
 
         
-        An enum available on the phone, but not available on Mac OS X:
+        An enum available on the phone, but not available on macOS:
         
             #if __IPHONE_OS_VERSION_MIN_REQUIRED
                 enum { myEnum = 1 };
             #endif
-           Note: this works when targeting the Mac OS X platform because 
+           Note: this works when targeting the macOS platform because
            __IPHONE_OS_VERSION_MIN_REQUIRED is undefined which evaluates to zero. 
         
 
@@ -104,7 +104,7 @@
     way.
     
         #ifdef __MAC_OS_X_VERSION_MIN_REQUIRED
-            // code only compiled when targeting Mac OS X and not iPhone
+            // code only compiled when targeting macOS and not iPhone
             // note use of 1050 instead of __MAC_10_5
             #if __MAC_OS_X_VERSION_MIN_REQUIRED < 1050
                 // code in here might run on pre-Leopard OS
