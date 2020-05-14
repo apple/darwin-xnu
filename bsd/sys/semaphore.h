@@ -34,7 +34,7 @@
  *
  * HISTORY
  * 29-Feb-00	A.Ramesh at Apple
- *	Created for Mac OS X
+ *	Created for macOS
  */
 
 #ifndef	_SYS_SEMAPHORE_H_

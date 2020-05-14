@@ -85,7 +85,7 @@ struct user32_dyld_all_image_infos {
 	user32_addr_t errorSymbol;
 	/* the following field is only in version 12 (Mac OS X 10.7, iOS 4.3) and later */
 	user32_addr_t sharedCacheSlide;
-	/* the following field is only in version 13 (Mac OS X 10.9, iOS 7.0) and later */
+	/* the following field is only in version 13 (OS X 10.9, iOS 7.0) and later */
 	uint8_t sharedCacheUUID[16];
 	/* the following field is only in version 15 (Mac OS X 10.12, iOS 10.0) and later */
 	user32_addr_t   sharedCacheBaseAddress;
@@ -123,7 +123,6 @@ struct user64_dyld_all_image_infos {
 	user64_addr_t errorSymbol;
 	/* the following field is only in version 12 (Mac OS X 10.7, iOS 4.3) and later */
 	user64_addr_t sharedCacheSlide;
-	/* the following field is only in version 13 (Mac OS X 10.9, iOS 7.0) and later */
 	uint8_t sharedCacheUUID[16];
 	/* the following field is only in version 15 (macOS 10.12, iOS 10.0) and later */
 	user64_addr_t   sharedCacheBaseAddress;

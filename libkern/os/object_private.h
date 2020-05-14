@@ -20,7 +20,7 @@
 
 /*
  * IMPORTANT: This header file describes INTERNAL interfaces to libdispatch
- * which are subject to change in future releases of Mac OS X. Any applications
+ * which are subject to change in future releases of macOS. Any applications
  * relying on these interfaces WILL break.
  */
 
