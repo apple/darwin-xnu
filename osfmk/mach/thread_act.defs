@@ -284,7 +284,7 @@ routine PREFIX(thread_policy)(
 
 /*
  * Set/get policy information for a thread.
- * (Approved Mac OS X microkernel interface)
+ * (Approved macOS microkernel interface)
  */
 
 routine PREFIX(thread_policy_set)(

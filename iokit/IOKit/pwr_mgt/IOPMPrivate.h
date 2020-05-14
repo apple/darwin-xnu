@@ -422,7 +422,7 @@ enum {
  * the hibernate image from disk.
  *
  * Note: If a system is asleep and then loses power, and it does not have a
- * hibernate image to restore from (e.g. hibernatemode = 0), then OS X will
+ * hibernate image to restore from (e.g. hibernatemode = 0), then macOS will
  * interpret this power loss as a failure in kIOPMTracePointSystemSleep.
  *
  * Phase begins: Before the OS directs the hardware to enter sleep state.

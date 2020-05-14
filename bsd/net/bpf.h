@@ -358,7 +358,7 @@ struct bpf_mtag {
 
 /*
  * 18 is used for DLT_PFSYNC in OpenBSD, NetBSD, DragonFly BSD and
- * Mac OS X; don't use it for anything else.  (FreeBSD uses 121,
+ * macOS; don't use it for anything else.  (FreeBSD uses 121,
  * which collides with DLT_HHDLC, even though it doesn't use 18
  * for anything and doesn't appear to have ever used it for anything.)
  *

@@ -61,7 +61,7 @@ extern "C" {
 #include <sys/ctf_api.h>
 #include <sys/cyclic.h>
 #include <sys/int_limits.h>
-#else /* is Apple Mac OS X */
+#else /* is Apple macOS */
 
 #if defined(__LP64__)
 #if !defined(_LP64)

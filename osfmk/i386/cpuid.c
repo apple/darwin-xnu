@@ -282,7 +282,7 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 
 	/*
 	 * Get cache info using leaf 4, the "deterministic cache parameters."
-	 * Most processors Mac OS X supports implement this flavor of CPUID.
+	 * Most processors macOS supports implement this flavor of CPUID.
 	 * Loop over each cache on the processor.
 	 */
 	cpuid_fn(0, cpuid_result);

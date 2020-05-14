@@ -1036,14 +1036,14 @@ New volume format implementations should not support this attribute.
 A
 .Vt u_int32_t
 containing the number of forks in the file.
-No built-in file systems on Mac OS X currently support forks other
+No built-in file systems on macOS currently support forks other
 than the data and resource fork.
 .
 .It ATTR_FILE_FORKLIST
 An
 .Vt attrreference
 structure containing a list of named forks of the file.
-No built-in file systems on Mac OS X currently support forks
+No built-in file systems on macOS currently support forks
 other than the data and resource fork.
 Because of this, the structure of this attribute's value is not yet defined.
 .
@@ -1136,7 +1136,7 @@ You must set this to 0.
 .Pp
 .
 Fork attributes are deprecated and all bits are reserved.
-They are not properly implemented by any current Mac OS X
+They are not properly implemented by any current macOS
 volume format implementation.
 We strongly recommend that client programs do not request fork attributes.
 If you are implementing a volume format, you should not support these attributes.

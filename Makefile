@@ -38,7 +38,7 @@ endif
 
 default: install
 
-# default to OS X
+# default to macOS
 SDKROOT ?= macosx.internal
 
 installhdrs install:

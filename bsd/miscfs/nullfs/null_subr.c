@@ -77,7 +77,7 @@
 
 #define NULL_HASH_SIZE (desiredvnodes / 10)
 
-/* osx doesn't really have the functionality freebsd uses here..gonna try this
+/* macOS doesn't really have the functionality FreeBSD uses here...gonna try this
  * hacked hash...*/
 #define NULL_NHASH(vp) (&null_node_hashtbl[((((uintptr_t)vp) >> vnsz2log) + (uintptr_t)vnode_mount(vp)) & null_hash_mask])
 
@@ -88,11 +88,9 @@ static lck_grp_t * null_hashlck_grp;
 static lck_grp_attr_t * null_hashlck_grp_attr;
 static u_long null_hash_mask;
 
-/* os x doesn't have hashes built into vnode. gonna try doing what freebsd does
- anyway
- Don't want to create a dependency on vnode_internal.h and the real struct
- vnode.
- 9 is an eyeball of the log 2 size of vnode */
+/* macOS doesn't have hashes built into vnode. Going to try doing what freebsd does
+ anyway. Don't want to create a dependency on vnode_internal.h and the real struct
+ vnode. 9 is an eyeball of the log 2 size of vnode */
 static int vnsz2log = 9;
 
 static int null_hashins(struct mount *, struct null_node *, struct vnode **);

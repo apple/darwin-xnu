@@ -331,7 +331,7 @@ T_DECL(task_absolutetime_info, "tests task absolute time info", T_META_ASROOT(tr
 
 #if !(defined(__arm__) || defined(__arm64__))
 	/*
-	 * On iOS, system threads are always zero. On OS X this value can be some large positive number.
+	 * On iOS, system threads are always zero. On macOS this value can be some large positive number.
 	 * There is no real way to estimate the exact amount.
 	 */
 	T_EXPECT_NE(absolute_time_info_data.threads_system, 0ULL,

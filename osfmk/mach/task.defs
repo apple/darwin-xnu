@@ -281,7 +281,7 @@ routine semaphore_destroy(
 
 /*
  * Set/get policy information for a task.
- * (Approved Mac OS X microkernel interface)
+ * (Approved macOS microkernel interface)
  */
 
 routine task_policy_set(

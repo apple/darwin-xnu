@@ -100,7 +100,7 @@
  *      compatibility macros are defined at the end with the old names.  A tops script 
  *      at the end of this file will convert all of the old macro names used in a directory
  *      to the new names.  Clients are recommended to migrate over to these new macros as
- *      they update their sources because a future release of Mac OS X will remove the
+ *      they update their sources because a future release of macOS will remove the
  *      old macro definitions ( without the double-underscore prefix ).  Clients who
  *      want to compile without the old macro definitions can define the macro
  *      __ASSERT_MACROS_DEFINE_VERSIONS_WITHOUT_UNDERSCORES to 0 before this file is
@@ -1225,11 +1225,11 @@
 #endif
 
 /*
- *	For time immemorial, Mac OS X has defined version of most of these macros without the __ prefix, which
+ *	For time immemorial, macOS has defined version of most of these macros without the __ prefix, which
  *	could collide with similarly named functions or macros in user code, including new functionality in
  *	Boost and the C++ standard library.
  *
- *	A future release of Mac OS X will no longer do this, and will require that clients move to the
+ *	A future release of macOS will no longer do this, and will require that clients move to the
  *  new macros as defined above.  However, in the interim both the new and old macros will work, unless
  *  clients define a macro __ASSERT_MACROS_DEFINE_VERSIONS_WITHOUT_UNDERSCORES before this file is included
  *  in their compilations.  Clients who do not want the older macros defined can accomplish this by adding

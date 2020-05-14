@@ -587,7 +587,7 @@ struct route_in6 {
 
 /*
  * APPLE: NOTE the value of those 2 options is kept unchanged from
- *   previous version of darwin/OS X for binary compatibility reasons
+ *   previous version of Darwin/macOS for binary compatibility reasons
  *   and differ from FreeBSD (values 57 and 61). See below.
  */
 #define	IPV6_RECVTCLASS		35 /* bool; recv traffic class values */
