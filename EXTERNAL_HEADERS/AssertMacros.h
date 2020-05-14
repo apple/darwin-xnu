@@ -34,14 +34,13 @@
 	
 				See "Living In an Exceptional World" by Sean Parent
 				(develop, The Apple Technical Journal, Issue 11, August/September 1992)
-				<http://developer.apple.com/dev/techsupport/develop/issue11toc.shtml> or
 				<http://www.mactech.com/articles/develop/issue_11/Parent_final.html>
 				for the methodology behind these error handling and assertion macros.
 	
 	Bugs?:      For bug reports, consult the following page on
-				the World Wide Web:
+				the web:
 
-	 http://developer.apple.com/bugreporter/ 
+	 https://feedbackassistant.apple.com
 */
 #ifndef __ASSERTMACROS__
 #define __ASSERTMACROS__
