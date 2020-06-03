@@ -5948,6 +5948,8 @@ vnode_lookupat(const char *path, int flags, vnode_t *vpp, vfs_context_t ctx,
 	if (start_dvp && (path[0] != '/')) {
 		nd.ni_dvp = start_dvp;
 		nd.ni_cnd.cn_flags |= USEDVP;
+		/* Don't take proc lock vnode_lookupat with a startdir specified */
+		nd.ni_flag |=  NAMEI_NOPROCLOCK;
 	}
 
 	if ((error = namei(&nd))) {

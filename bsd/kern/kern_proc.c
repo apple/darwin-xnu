@@ -1301,7 +1301,7 @@ proc_gettty(proc_t p, vnode_t *vp)
 
 		if (ttyvp) {
 			if (vnode_getwithvid(ttyvp, ttyvid) == 0) {
-				*vp = procsp->s_ttyvp;
+				*vp = ttyvp;
 				err = 0;
 			}
 		} else {

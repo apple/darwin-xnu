@@ -3520,14 +3520,15 @@ inp_update_policy(struct inpcb *inp)
 #if defined(XNU_TARGET_OS_OSX)
 	if (so->so_rpid > 0) {
 		lookup_uuid = so->so_ruuid;
+		ogencnt = so->so_policy_gencnt;
+		err = proc_uuid_policy_lookup(lookup_uuid, &pflags, &so->so_policy_gencnt);
 	}
 #endif
-	if (lookup_uuid == NULL) {
+	if (lookup_uuid == NULL || err == ENOENT) {
 		lookup_uuid = ((so->so_flags & SOF_DELEGATED) ? so->e_uuid : so->last_uuid);
+		ogencnt = so->so_policy_gencnt;
+		err = proc_uuid_policy_lookup(lookup_uuid, &pflags, &so->so_policy_gencnt);
 	}
-
-	ogencnt = so->so_policy_gencnt;
-	err = proc_uuid_policy_lookup(lookup_uuid, &pflags, &so->so_policy_gencnt);
 
 	/*
 	 * Discard cached generation count if the entry is gone (ENOENT),

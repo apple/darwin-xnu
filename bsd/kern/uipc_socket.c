@@ -1839,6 +1839,39 @@ soconnectxlocked(struct socket *so, struct sockaddr *src,
 	    (error = sodisconnectlocked(so)) != 0)) {
 		error = EISCONN;
 	} else {
+		if ((so->so_proto->pr_flags & PR_DATA_IDEMPOTENT) &&
+		    (flags & CONNECT_DATA_IDEMPOTENT)) {
+			so->so_flags1 |= SOF1_DATA_IDEMPOTENT;
+
+			if (flags & CONNECT_DATA_AUTHENTICATED) {
+				so->so_flags1 |= SOF1_DATA_AUTHENTICATED;
+			}
+		}
+
+		/*
+		 * Case 1: CONNECT_RESUME_ON_READ_WRITE set, no data.
+		 * Case 2: CONNECT_RESUME_ON_READ_WRITE set, with data (user error)
+		 * Case 3: CONNECT_RESUME_ON_READ_WRITE not set, with data
+		 * Case 3 allows user to combine write with connect even if they have
+		 * no use for TFO (such as regular TCP, and UDP).
+		 * Case 4: CONNECT_RESUME_ON_READ_WRITE not set, no data (regular case)
+		 */
+		if ((so->so_proto->pr_flags & PR_PRECONN_WRITE) &&
+		    ((flags & CONNECT_RESUME_ON_READ_WRITE) || auio)) {
+			so->so_flags1 |= SOF1_PRECONNECT_DATA;
+		}
+
+		/*
+		 * If a user sets data idempotent and does not pass an uio, or
+		 * sets CONNECT_RESUME_ON_READ_WRITE, this is an error, reset
+		 * SOF1_DATA_IDEMPOTENT.
+		 */
+		if (!(so->so_flags1 & SOF1_PRECONNECT_DATA) &&
+		    (so->so_flags1 & SOF1_DATA_IDEMPOTENT)) {
+			/* We should return EINVAL instead perhaps. */
+			so->so_flags1 &= ~SOF1_DATA_IDEMPOTENT;
+		}
+
 		/*
 		 * Run connect filter before calling protocol:
 		 *  - non-blocking connect returns before completion;
@@ -1856,6 +1889,9 @@ soconnectxlocked(struct socket *so, struct sockaddr *src,
 			    flags, arg, arglen, auio, bytes_written);
 			if (error != 0) {
 				so->so_state &= ~SS_ISCONNECTING;
+				if (error != EINPROGRESS) {
+					so->so_flags1 &= ~SOF1_PRECONNECT_DATA;
+				}
 			}
 		}
 	}

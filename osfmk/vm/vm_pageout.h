@@ -155,6 +155,9 @@ extern int      vm_debug_events;
 
 #define VM_PAGE_GRAB                    0x126
 #define VM_PAGE_RELEASE                 0x127
+#define VM_COMPRESSOR_COMPACT_AND_SWAP  0x128
+#define VM_COMPRESSOR_DO_DELAYED_COMPACTIONS 0x129
+
 
 #define VM_PRESSURE_EVENT               0x130
 #define VM_EXECVE                       0x131

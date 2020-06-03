@@ -62,6 +62,7 @@ struct mptses {
 	struct mptcb    *mpte_mptcb;            /* ptr to MPTCP PCB */
 	TAILQ_HEAD(, mptopt) mpte_sopts;        /* list of socket options */
 	TAILQ_HEAD(, mptsub) mpte_subflows;     /* list of subflows */
+#define MPTCP_MAX_NUM_SUBFLOWS 256
 	uint16_t        mpte_numflows;          /* # of subflows in list */
 	uint16_t        mpte_nummpcapflows;     /* # of MP_CAP subflows */
 	sae_associd_t   mpte_associd;           /* MPTCP association ID */

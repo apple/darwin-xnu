@@ -213,6 +213,11 @@ struct cfil_msg_sock_attached {
 };
 
 /*
+ * CFIL data flags
+ */
+#define CFD_DATA_FLAG_IP_HEADER         0x00000001          /* Data includes IP header */
+
+/*
  * struct cfil_msg_data_event
  *
  * Event for the content fiter to act on a span of data
@@ -235,6 +240,7 @@ struct cfil_msg_data_event {
 	uint64_t                cfd_end_offset;
 	cfil_crypto_signature   cfd_signature;
 	uint32_t                cfd_signature_length;
+	uint32_t                cfd_flags;
 	/* Actual content data immediatly follows */
 };
 
@@ -525,8 +531,10 @@ extern void cfil_sock_buf_update(struct sockbuf *sb);
 
 extern cfil_sock_id_t cfil_sock_id_from_socket(struct socket *so);
 
-extern struct m_tag *cfil_udp_get_socket_state(struct mbuf *m, uint32_t *state_change_cnt,
-    short *options, struct sockaddr **faddr);
+extern struct m_tag *cfil_dgram_get_socket_state(struct mbuf *m, uint32_t *state_change_cnt,
+    short *options, struct sockaddr **faddr, int *inp_flags);
+extern boolean_t cfil_dgram_peek_socket_state(struct mbuf *m, int *inp_flags);
+
 #endif /* BSD_KERNEL_PRIVATE */
 
 __END_DECLS

@@ -415,25 +415,32 @@ L_mmu_kvtop_wpreflight_invalid:
 /*
  * SET_RECOVERY_HANDLER
  *
- *	Sets up a page fault recovery handler
+ *	Sets up a page fault recovery handler.  This macro clobbers x16 and x17.
  *
- *	arg0 - persisted thread pointer
- *	arg1 - persisted recovery handler
- *	arg2 - scratch reg
- *	arg3 - recovery label
+ *	label - recovery label
+ *	tpidr - persisted thread pointer
+ *	old_handler - persisted recovery handler
+ *	label_in_adr_range - whether \label is within 1 MB of PC
  */
-.macro SET_RECOVERY_HANDLER
-	mrs		$0, TPIDR_EL1					// Load thread pointer
-	adrp	$2, $3@page						// Load the recovery handler address
-	add		$2, $2, $3@pageoff
+.macro SET_RECOVERY_HANDLER	label, tpidr=x16, old_handler=x10, label_in_adr_range=0
+	// Note: x16 and x17 are designated for use as temporaries in
+	// interruptible PAC routines.  DO NOT CHANGE THESE REGISTER ASSIGNMENTS.
+.if \label_in_adr_range==1						// Load the recovery handler address
+	adr		x17, \label
+.else
+	adrp	x17, \label@page
+	add		x17, x17, \label@pageoff
+.endif
 #if defined(HAS_APPLE_PAC)
-	add		$1, $0, TH_RECOVER
-	movk	$1, #PAC_DISCRIMINATOR_RECOVER, lsl 48
-	pacia	$2, $1							// Sign with IAKey + blended discriminator
+	mrs		x16, TPIDR_EL1
+	add		x16, x16, TH_RECOVER
+	movk	x16, #PAC_DISCRIMINATOR_RECOVER, lsl 48
+	pacia	x17, x16							// Sign with IAKey + blended discriminator
 #endif
 
-	ldr		$1, [$0, TH_RECOVER]			// Save previous recovery handler
-	str		$2, [$0, TH_RECOVER]			// Set new signed recovery handler
+	mrs		\tpidr, TPIDR_EL1					// Load thread pointer
+	ldr		\old_handler, [\tpidr, TH_RECOVER]	// Save previous recovery handler
+	str		x17, [\tpidr, TH_RECOVER]			// Set new signed recovery handler
 .endmacro
 
 /*
@@ -441,18 +448,18 @@ L_mmu_kvtop_wpreflight_invalid:
  *
  *	Clears page fault handler set by SET_RECOVERY_HANDLER
  *
- *	arg0 - thread pointer saved by SET_RECOVERY_HANDLER
- *	arg1 - old recovery handler saved by SET_RECOVERY_HANDLER
+ *	tpidr - thread pointer saved by SET_RECOVERY_HANDLER
+ *	old_handler - old recovery handler saved by SET_RECOVERY_HANDLER
  */
-.macro CLEAR_RECOVERY_HANDLER
-	str		$1, [$0, TH_RECOVER]		// Restore the previous recovery handler
+.macro CLEAR_RECOVERY_HANDLER	tpidr=x16, old_handler=x10
+	str		\old_handler, [\tpidr, TH_RECOVER]	// Restore the previous recovery handler
 .endmacro
 
 
 	.text
 	.align 2
 copyio_error:
-	CLEAR_RECOVERY_HANDLER x10, x11
+	CLEAR_RECOVERY_HANDLER
 	mov		x0, #EFAULT					// Return an EFAULT error
 	POP_FRAME
 	ARM64_STACK_EPILOG
@@ -466,7 +473,7 @@ copyio_error:
 LEXT(_bcopyin)
 	ARM64_STACK_PROLOG
 	PUSH_FRAME
-	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
+	SET_RECOVERY_HANDLER copyio_error
 	/* If len is less than 16 bytes, just do a bytewise copy */
 	cmp		x2, #16
 	b.lt	2f
@@ -486,7 +493,7 @@ LEXT(_bcopyin)
 	strb	w3, [x1], #1
 	b.hi	2b
 3:
-	CLEAR_RECOVERY_HANDLER x10, x11
+	CLEAR_RECOVERY_HANDLER
 	mov		x0, #0
 	POP_FRAME
 	ARM64_STACK_EPILOG
@@ -500,11 +507,11 @@ LEXT(_bcopyin)
 LEXT(_copyin_atomic32)
 	ARM64_STACK_PROLOG
 	PUSH_FRAME
-	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
+	SET_RECOVERY_HANDLER copyio_error
 	ldr		w8, [x0]
 	str		w8, [x1]
 	mov		x0, #0
-	CLEAR_RECOVERY_HANDLER x10, x11
+	CLEAR_RECOVERY_HANDLER
 	POP_FRAME
 	ARM64_STACK_EPILOG
 
@@ -517,7 +524,7 @@ LEXT(_copyin_atomic32)
 LEXT(_copyin_atomic32_wait_if_equals)
 	ARM64_STACK_PROLOG
 	PUSH_FRAME
-	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
+	SET_RECOVERY_HANDLER copyio_error
 	ldxr		w8, [x0]
 	cmp		w8, w1
 	mov		x0, ESTALE
@@ -526,7 +533,7 @@ LEXT(_copyin_atomic32_wait_if_equals)
 	wfe
 1:
 	clrex
-	CLEAR_RECOVERY_HANDLER x10, x11
+	CLEAR_RECOVERY_HANDLER
 	POP_FRAME
 	ARM64_STACK_EPILOG
 
@@ -539,11 +546,11 @@ LEXT(_copyin_atomic32_wait_if_equals)
 LEXT(_copyin_atomic64)
 	ARM64_STACK_PROLOG
 	PUSH_FRAME
-	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
+	SET_RECOVERY_HANDLER copyio_error
 	ldr		x8, [x0]
 	str		x8, [x1]
 	mov		x0, #0
-	CLEAR_RECOVERY_HANDLER x10, x11
+	CLEAR_RECOVERY_HANDLER
 	POP_FRAME
 	ARM64_STACK_EPILOG
 
@@ -557,10 +564,10 @@ LEXT(_copyin_atomic64)
 LEXT(_copyout_atomic32)
 	ARM64_STACK_PROLOG
 	PUSH_FRAME
-	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
+	SET_RECOVERY_HANDLER copyio_error
 	str		w0, [x1]
 	mov		x0, #0
-	CLEAR_RECOVERY_HANDLER x10, x11
+	CLEAR_RECOVERY_HANDLER
 	POP_FRAME
 	ARM64_STACK_EPILOG
 
@@ -573,10 +580,10 @@ LEXT(_copyout_atomic32)
 LEXT(_copyout_atomic64)
 	ARM64_STACK_PROLOG
 	PUSH_FRAME
-	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
+	SET_RECOVERY_HANDLER copyio_error
 	str		x0, [x1]
 	mov		x0, #0
-	CLEAR_RECOVERY_HANDLER x10, x11
+	CLEAR_RECOVERY_HANDLER
 	POP_FRAME
 	ARM64_STACK_EPILOG
 
@@ -590,7 +597,7 @@ LEXT(_copyout_atomic64)
 LEXT(_bcopyout)
 	ARM64_STACK_PROLOG
 	PUSH_FRAME
-	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
+	SET_RECOVERY_HANDLER copyio_error
 	/* If len is less than 16 bytes, just do a bytewise copy */
 	cmp		x2, #16
 	b.lt	2f
@@ -610,7 +617,7 @@ LEXT(_bcopyout)
 	strb	w3, [x1], #1
 	b.hi	2b
 3:
-	CLEAR_RECOVERY_HANDLER x10, x11
+	CLEAR_RECOVERY_HANDLER
 	mov		x0, #0
 	POP_FRAME
 	ARM64_STACK_EPILOG
@@ -628,17 +635,7 @@ LEXT(_bcopyout)
 LEXT(_bcopyinstr)
 	ARM64_STACK_PROLOG
 	PUSH_FRAME
-	adr		x4, Lcopyinstr_error		// Get address for recover
-	mrs		x10, TPIDR_EL1				// Get thread pointer
-	ldr		x11, [x10, TH_RECOVER]		// Save previous recover
-
-#if defined(HAS_APPLE_PAC)
-	add		x5, x10, TH_RECOVER		// Sign new pointer with IAKey + blended discriminator
-	movk	x5, #PAC_DISCRIMINATOR_RECOVER, lsl 48
-	pacia	x4, x5
-#endif
-	str		x4, [x10, TH_RECOVER]		// Store new recover
-
+	SET_RECOVERY_HANDLER Lcopyinstr_error, label_in_adr_range=1
 	mov		x4, #0						// x4 - total bytes copied
 Lcopyinstr_loop:
 	ldrb	w5, [x0], #1					// Load a byte from the user source
@@ -656,7 +653,7 @@ Lcopyinstr_done:
 Lcopyinstr_error:
 	mov		x0, #EFAULT					// Return EFAULT on error
 Lcopyinstr_exit:
-	str		x11, [x10, TH_RECOVER]		// Restore old recover
+	CLEAR_RECOVERY_HANDLER
 	POP_FRAME
 	ARM64_STACK_EPILOG
 
@@ -672,9 +669,9 @@ Lcopyinstr_exit:
  *	x3 : temp
  *	x5 : temp (kernel virtual base)
  *	x9 : temp
- *	x10 : thread pointer (set by SET_RECOVERY_HANDLER)
- *	x11 : old recovery function (set by SET_RECOVERY_HANDLER)
+ *	x10 : old recovery function (set by SET_RECOVERY_HANDLER)
  *	x12, x13 : backtrace data
+ *	x16 : thread pointer (set by SET_RECOVERY_HANDLER)
  *
  */
 	.text
@@ -683,7 +680,7 @@ Lcopyinstr_exit:
 LEXT(copyinframe)
 	ARM64_STACK_PROLOG
 	PUSH_FRAME
-	SET_RECOVERY_HANDLER x10, x11, x3, copyio_error
+	SET_RECOVERY_HANDLER copyio_error
 	cbnz	w2, Lcopyinframe64 		// Check frame size
 	adrp	x5, EXT(gVirtBase)@page // For 32-bit frame, make sure we're not trying to copy from kernel
 	add		x5, x5, EXT(gVirtBase)@pageoff
@@ -714,7 +711,7 @@ Lcopyinframe_valid:
 	mov 	w0, #0					// Success
 
 Lcopyinframe_done:
-	CLEAR_RECOVERY_HANDLER x10, x11
+	CLEAR_RECOVERY_HANDLER
 	POP_FRAME
 	ARM64_STACK_EPILOG
 
@@ -1124,6 +1121,24 @@ Lcheck_hash_panic:
 	CALL_EXTERN panic_with_thread_kernel_state
 Lcheck_hash_str:
 	.asciz "JOP Hash Mismatch Detected (PC, CPSR, or LR corruption)"
+
+/**
+ * void ml_auth_thread_state_invalid_cpsr(arm_saved_state_t *ss)
+ *
+ * Panics due to an invalid CPSR value in ss.
+ */
+	.text
+	.align 2
+	.globl EXT(ml_auth_thread_state_invalid_cpsr)
+LEXT(ml_auth_thread_state_invalid_cpsr)
+	ARM64_STACK_PROLOG
+	PUSH_FRAME
+	mov		x1, x0
+	adr		x0, Linvalid_cpsr_str
+	CALL_EXTERN panic_with_thread_kernel_state
+
+Linvalid_cpsr_str:
+	.asciz "Thread state corruption detected (PE mode == 0)"
 #endif /* HAS_APPLE_PAC */
 
 	.text

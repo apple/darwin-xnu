@@ -1653,6 +1653,7 @@ c_seg_alloc_nextslot(c_segment_t c_seg)
 }
 
 
+#define C_SEG_MAJOR_COMPACT_STATS_MAX   (30)
 
 struct {
 	uint64_t asked_permission;
@@ -1662,7 +1663,11 @@ struct {
 	uint64_t wasted_space_in_swapouts;
 	uint64_t count_of_swapouts;
 	uint64_t count_of_freed_segs;
-} c_seg_major_compact_stats;
+	uint64_t bailed_compactions;
+	uint64_t bytes_freed_rate_us;
+} c_seg_major_compact_stats[C_SEG_MAJOR_COMPACT_STATS_MAX];
+
+int c_seg_major_compact_stats_now = 0;
 
 
 #define C_MAJOR_COMPACTION_SIZE_APPROPRIATE     ((C_SEG_BUFSIZE * 90) / 100)
@@ -1673,7 +1678,7 @@ c_seg_major_compact_ok(
 	c_segment_t c_seg_dst,
 	c_segment_t c_seg_src)
 {
-	c_seg_major_compact_stats.asked_permission++;
+	c_seg_major_compact_stats[c_seg_major_compact_stats_now].asked_permission++;
 
 	if (c_seg_src->c_bytes_used >= C_MAJOR_COMPACTION_SIZE_APPROPRIATE &&
 	    c_seg_dst->c_bytes_used >= C_MAJOR_COMPACTION_SIZE_APPROPRIATE) {
@@ -1720,7 +1725,7 @@ c_seg_major_compact(
 	c_seg_dst->c_was_major_compacted++;
 	c_seg_src->c_was_major_donor++;
 #endif
-	c_seg_major_compact_stats.compactions++;
+	c_seg_major_compact_stats[c_seg_major_compact_stats_now].compactions++;
 
 	dst_slot = c_seg_dst->c_nextslot;
 
@@ -1766,8 +1771,8 @@ c_seg_major_compact(
 
 		c_rounded_size = (c_size + C_SEG_OFFSET_ALIGNMENT_MASK) & ~C_SEG_OFFSET_ALIGNMENT_MASK;
 
-		c_seg_major_compact_stats.moved_slots++;
-		c_seg_major_compact_stats.moved_bytes += c_size;
+		c_seg_major_compact_stats[c_seg_major_compact_stats_now].moved_slots++;
+		c_seg_major_compact_stats[c_seg_major_compact_stats_now].moved_bytes += c_size;
 
 		cslot_copy(c_dst, c_src);
 		c_dst->c_offset = c_seg_dst->c_nextoffset;
@@ -2319,6 +2324,8 @@ vm_compressor_do_delayed_compactions(boolean_t flush_all)
 	boolean_t       needs_to_swap = FALSE;
 
 
+	VM_DEBUG_CONSTANT_EVENT(vm_compressor_do_delayed_compactions, VM_COMPRESSOR_DO_DELAYED_COMPACTIONS, DBG_FUNC_START, c_minor_count, flush_all, 0, 0);
+
 #if !CONFIG_EMBEDDED
 	LCK_MTX_ASSERT(c_list_lock, LCK_MTX_ASSERT_OWNED);
 #endif /* !CONFIG_EMBEDDED */
@@ -2348,6 +2355,8 @@ vm_compressor_do_delayed_compactions(boolean_t flush_all)
 		}
 		lck_mtx_lock_spin_always(c_list_lock);
 	}
+
+	VM_DEBUG_CONSTANT_EVENT(vm_compressor_do_delayed_compactions, VM_COMPRESSOR_DO_DELAYED_COMPACTIONS, DBG_FUNC_END, c_minor_count, number_compacted, needs_to_swap, 0);
 }
 
 
@@ -2689,15 +2698,20 @@ do_fastwake_warmup(queue_head_t *c_queue, boolean_t consider_all_cseg)
 	}
 }
 
+int min_csegs_per_major_compaction = DELAYED_COMPACTIONS_PER_PASS;
 
 void
 vm_compressor_compact_and_swap(boolean_t flush_all)
 {
 	c_segment_t     c_seg, c_seg_next;
-	boolean_t       keep_compacting;
+	boolean_t       keep_compacting, switch_state;
 	clock_sec_t     now;
 	clock_nsec_t    nsec;
+	mach_timespec_t start_ts, end_ts;
+	unsigned int    number_considered, wanted_cseg_found, yield_after_considered_per_pass, number_yields;
+	uint64_t        bytes_to_free, bytes_freed, delta_usec;
 
+	VM_DEBUG_CONSTANT_EVENT(vm_compressor_compact_and_swap, VM_COMPRESSOR_COMPACT_AND_SWAP, DBG_FUNC_START, c_age_count, c_minor_count, c_major_count, vm_page_free_count);
 
 	if (fastwake_warmup == TRUE) {
 		uint64_t        starting_warmup_count;
@@ -2730,6 +2744,16 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 	 * in days
 	 */
 	clock_get_system_nanotime(&now, &nsec);
+
+	start_ts.tv_sec = (int) now;
+	start_ts.tv_nsec = nsec;
+	delta_usec = 0;
+	number_considered = 0;
+	wanted_cseg_found = 0;
+	number_yields = 0;
+	bytes_to_free = 0;
+	bytes_freed = 0;
+	yield_after_considered_per_pass = MAX(min_csegs_per_major_compaction, DELAYED_COMPACTIONS_PER_PASS);
 
 	while (!queue_empty(&c_age_list_head) && compaction_swapper_abort == 0) {
 		if (hibernate_flushing == TRUE) {
@@ -2764,6 +2788,8 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 
 			lck_mtx_unlock_always(c_list_lock);
 
+			VM_DEBUG_CONSTANT_EVENT(vm_compressor_compact_and_swap, VM_COMPRESSOR_COMPACT_AND_SWAP, DBG_FUNC_NONE, 1, c_swapout_count, 0, 0);
+
 			thread_block(THREAD_CONTINUE_NULL);
 
 			lck_mtx_lock_spin_always(c_list_lock);
@@ -2783,6 +2809,8 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 			 * to do minor compactions to make
 			 * more memory available
 			 */
+			VM_DEBUG_CONSTANT_EVENT(vm_compressor_compact_and_swap, VM_COMPRESSOR_COMPACT_AND_SWAP, DBG_FUNC_NONE, 2, c_swapout_count, 0, 0);
+
 			continue;
 		}
 
@@ -2804,11 +2832,14 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 
 			lck_mtx_lock_spin_always(c_list_lock);
 
+			VM_DEBUG_CONSTANT_EVENT(vm_compressor_compact_and_swap, VM_COMPRESSOR_COMPACT_AND_SWAP, DBG_FUNC_NONE, 3, needs_to_swap, 0, 0);
+
 			if (needs_to_swap == FALSE) {
 				break;
 			}
 		}
 		if (queue_empty(&c_age_list_head)) {
+			VM_DEBUG_CONSTANT_EVENT(vm_compressor_compact_and_swap, VM_COMPRESSOR_COMPACT_AND_SWAP, DBG_FUNC_NONE, 4, c_age_count, 0, 0);
 			break;
 		}
 		c_seg = (c_segment_t) queue_first(&c_age_list_head);
@@ -2816,12 +2847,15 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 		assert(c_seg->c_state == C_ON_AGE_Q);
 
 		if (flush_all == TRUE && c_seg->c_generation_id > c_generation_id_flush_barrier) {
+			VM_DEBUG_CONSTANT_EVENT(vm_compressor_compact_and_swap, VM_COMPRESSOR_COMPACT_AND_SWAP, DBG_FUNC_NONE, 5, 0, 0, 0);
 			break;
 		}
 
 		lck_mtx_lock_spin_always(&c_seg->c_lock);
 
 		if (c_seg->c_busy) {
+			VM_DEBUG_CONSTANT_EVENT(vm_compressor_compact_and_swap, VM_COMPRESSOR_COMPACT_AND_SWAP, DBG_FUNC_NONE, 6, (void*) VM_KERNEL_ADDRPERM(c_seg), 0, 0);
+
 			lck_mtx_unlock_always(c_list_lock);
 			c_seg_wait_on_busy(c_seg);
 			lck_mtx_lock_spin_always(c_list_lock);
@@ -2835,13 +2869,15 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 			 * found an empty c_segment and freed it
 			 * so go grab the next guy in the queue
 			 */
-			c_seg_major_compact_stats.count_of_freed_segs++;
+			VM_DEBUG_CONSTANT_EVENT(vm_compressor_compact_and_swap, VM_COMPRESSOR_COMPACT_AND_SWAP, DBG_FUNC_NONE, 7, 0, 0, 0);
+			c_seg_major_compact_stats[c_seg_major_compact_stats_now].count_of_freed_segs++;
 			continue;
 		}
 		/*
 		 * Major compaction
 		 */
 		keep_compacting = TRUE;
+		switch_state = TRUE;
 
 		while (keep_compacting == TRUE) {
 			assert(c_seg->c_busy);
@@ -2856,6 +2892,8 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 
 			assert(c_seg_next->c_state == C_ON_AGE_Q);
 
+			number_considered++;
+
 			if (c_seg_major_compact_ok(c_seg, c_seg_next) == FALSE) {
 				break;
 			}
@@ -2863,7 +2901,24 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 			lck_mtx_lock_spin_always(&c_seg_next->c_lock);
 
 			if (c_seg_next->c_busy) {
+				/*
+				 * We are going to block for our neighbor.
+				 * If our c_seg is wanted, we should unbusy
+				 * it because we don't know how long we might
+				 * have to block here.
+				 */
+				if (c_seg->c_wanted) {
+					lck_mtx_unlock_always(&c_seg_next->c_lock);
+					switch_state = FALSE;
+					c_seg_major_compact_stats[c_seg_major_compact_stats_now].bailed_compactions++;
+					wanted_cseg_found++;
+					break;
+				}
+
 				lck_mtx_unlock_always(c_list_lock);
+
+				VM_DEBUG_CONSTANT_EVENT(vm_compressor_compact_and_swap, VM_COMPRESSOR_COMPACT_AND_SWAP, DBG_FUNC_NONE, 8, (void*) VM_KERNEL_ADDRPERM(c_seg_next), 0, 0);
+
 				c_seg_wait_on_busy(c_seg_next);
 				lck_mtx_lock_spin_always(c_list_lock);
 
@@ -2872,12 +2927,14 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 			/* grab that segment */
 			C_SEG_BUSY(c_seg_next);
 
+			bytes_to_free = C_SEG_OFFSET_TO_BYTES(c_seg_next->c_populated_offset);
 			if (c_seg_do_minor_compaction_and_unlock(c_seg_next, FALSE, TRUE, TRUE)) {
 				/*
 				 * found an empty c_segment and freed it
 				 * so we can't continue to use c_seg_next
 				 */
-				c_seg_major_compact_stats.count_of_freed_segs++;
+				bytes_freed += bytes_to_free;
+				c_seg_major_compact_stats[c_seg_major_compact_stats_now].count_of_freed_segs++;
 				continue;
 			}
 
@@ -2887,6 +2944,8 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 			/* do the major compaction */
 
 			keep_compacting = c_seg_major_compact(c_seg, c_seg_next);
+
+			VM_DEBUG_CONSTANT_EVENT(vm_compressor_compact_and_swap, VM_COMPRESSOR_COMPACT_AND_SWAP, DBG_FUNC_NONE, 9, keep_compacting, 0, 0);
 
 			PAGE_REPLACEMENT_DISALLOWED(TRUE);
 
@@ -2901,54 +2960,78 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 			 * by passing TRUE, we ask for c_busy to be cleared
 			 * and c_wanted to be taken care of
 			 */
+			bytes_to_free = C_SEG_OFFSET_TO_BYTES(c_seg_next->c_populated_offset);
 			if (c_seg_minor_compaction_and_unlock(c_seg_next, TRUE)) {
-				c_seg_major_compact_stats.count_of_freed_segs++;
+				bytes_freed += bytes_to_free;
+				c_seg_major_compact_stats[c_seg_major_compact_stats_now].count_of_freed_segs++;
+			} else {
+				bytes_to_free -= C_SEG_OFFSET_TO_BYTES(c_seg_next->c_populated_offset);
+				bytes_freed += bytes_to_free;
 			}
 
 			PAGE_REPLACEMENT_DISALLOWED(FALSE);
 
 			/* relock the list */
 			lck_mtx_lock_spin_always(c_list_lock);
+
+			if (c_seg->c_wanted) {
+				/*
+				 * Our c_seg is in demand. Let's
+				 * unbusy it and wakeup the waiters
+				 * instead of continuing the compaction
+				 * because we could be in this loop
+				 * for a while.
+				 */
+				switch_state = FALSE;
+				wanted_cseg_found++;
+				c_seg_major_compact_stats[c_seg_major_compact_stats_now].bailed_compactions++;
+				break;
+			}
 		} /* major compaction */
+
+		VM_DEBUG_CONSTANT_EVENT(vm_compressor_compact_and_swap, VM_COMPRESSOR_COMPACT_AND_SWAP, DBG_FUNC_NONE, 10, number_considered, wanted_cseg_found, 0);
 
 		lck_mtx_lock_spin_always(&c_seg->c_lock);
 
 		assert(c_seg->c_busy);
 		assert(!c_seg->c_on_minorcompact_q);
 
-		if (VM_CONFIG_SWAP_IS_ACTIVE) {
-			/*
-			 * This mode of putting a generic c_seg on the swapout list is
-			 * only supported when we have general swapping enabled
-			 */
-			c_seg_switch_state(c_seg, C_ON_SWAPOUT_Q, FALSE);
-		} else {
-			if ((vm_swapout_ripe_segments == TRUE && c_overage_swapped_count < c_overage_swapped_limit)) {
-				assert(VM_CONFIG_SWAP_IS_PRESENT);
+		if (switch_state) {
+			if (VM_CONFIG_SWAP_IS_ACTIVE) {
 				/*
-				 * we are running compressor sweeps with swap-behind
-				 * make sure the c_seg has aged enough before swapping it
-				 * out...
+				 * This mode of putting a generic c_seg on the swapout list is
+				 * only supported when we have general swapping enabled
 				 */
-				if ((now - c_seg->c_creation_ts) >= vm_ripe_target_age) {
-					c_seg->c_overage_swap = TRUE;
-					c_overage_swapped_count++;
-					c_seg_switch_state(c_seg, C_ON_SWAPOUT_Q, FALSE);
+				c_seg_switch_state(c_seg, C_ON_SWAPOUT_Q, FALSE);
+			} else {
+				if ((vm_swapout_ripe_segments == TRUE && c_overage_swapped_count < c_overage_swapped_limit)) {
+					assert(VM_CONFIG_SWAP_IS_PRESENT);
+					/*
+					 * we are running compressor sweeps with swap-behind
+					 * make sure the c_seg has aged enough before swapping it
+					 * out...
+					 */
+					if ((now - c_seg->c_creation_ts) >= vm_ripe_target_age) {
+						c_seg->c_overage_swap = TRUE;
+						c_overage_swapped_count++;
+						c_seg_switch_state(c_seg, C_ON_SWAPOUT_Q, FALSE);
+					}
 				}
 			}
+			if (c_seg->c_state == C_ON_AGE_Q) {
+				/*
+				 * this c_seg didn't get moved to the swapout queue
+				 * so we need to move it out of the way...
+				 * we just did a major compaction on it so put it
+				 * on that queue
+				 */
+				c_seg_switch_state(c_seg, C_ON_MAJORCOMPACT_Q, FALSE);
+			} else {
+				c_seg_major_compact_stats[c_seg_major_compact_stats_now].wasted_space_in_swapouts += C_SEG_BUFSIZE - c_seg->c_bytes_used;
+				c_seg_major_compact_stats[c_seg_major_compact_stats_now].count_of_swapouts++;
+			}
 		}
-		if (c_seg->c_state == C_ON_AGE_Q) {
-			/*
-			 * this c_seg didn't get moved to the swapout queue
-			 * so we need to move it out of the way...
-			 * we just did a major compaction on it so put it
-			 * on that queue
-			 */
-			c_seg_switch_state(c_seg, C_ON_MAJORCOMPACT_Q, FALSE);
-		} else {
-			c_seg_major_compact_stats.wasted_space_in_swapouts += C_SEG_BUFSIZE - c_seg->c_bytes_used;
-			c_seg_major_compact_stats.count_of_swapouts++;
-		}
+
 		C_SEG_WAKEUP_DONE(c_seg);
 
 		lck_mtx_unlock_always(&c_seg->c_lock);
@@ -2960,7 +3043,55 @@ vm_compressor_compact_and_swap(boolean_t flush_all)
 
 			lck_mtx_lock_spin_always(c_list_lock);
 		}
+
+		if (number_considered >= yield_after_considered_per_pass) {
+			if (wanted_cseg_found) {
+				/*
+				 * We stopped major compactions on a c_seg
+				 * that is wanted. We don't know the priority
+				 * of the waiter unfortunately but we are at
+				 * a very high priority and so, just in case
+				 * the waiter is a critical system daemon or
+				 * UI thread, let's give up the CPU in case
+				 * the system is running a few CPU intensive
+				 * tasks.
+				 */
+				lck_mtx_unlock_always(c_list_lock);
+
+				mutex_pause(2); /* 100us yield */
+
+				number_yields++;
+
+				VM_DEBUG_CONSTANT_EVENT(vm_compressor_compact_and_swap, VM_COMPRESSOR_COMPACT_AND_SWAP, DBG_FUNC_NONE, 11, number_considered, number_yields, 0);
+
+				lck_mtx_lock_spin_always(c_list_lock);
+			}
+
+			number_considered = 0;
+			wanted_cseg_found = 0;
+		}
 	}
+	clock_get_system_nanotime(&now, &nsec);
+	end_ts.tv_sec = (int) now;
+	end_ts.tv_nsec = nsec;
+
+	SUB_MACH_TIMESPEC(&end_ts, &start_ts);
+
+	delta_usec = (end_ts.tv_sec * USEC_PER_SEC) + (end_ts.tv_nsec / NSEC_PER_USEC) - (number_yields * 100);
+
+	delta_usec = MAX(1, delta_usec); /* we could have 0 usec run if conditions weren't right */
+
+	c_seg_major_compact_stats[c_seg_major_compact_stats_now].bytes_freed_rate_us = (bytes_freed / delta_usec);
+
+	if ((c_seg_major_compact_stats_now + 1) == C_SEG_MAJOR_COMPACT_STATS_MAX) {
+		c_seg_major_compact_stats_now = 0;
+	} else {
+		c_seg_major_compact_stats_now++;
+	}
+
+	assert(c_seg_major_compact_stats_now < C_SEG_MAJOR_COMPACT_STATS_MAX);
+
+	VM_DEBUG_CONSTANT_EVENT(vm_compressor_compact_and_swap, VM_COMPRESSOR_COMPACT_AND_SWAP, DBG_FUNC_END, c_age_count, c_minor_count, c_major_count, vm_page_free_count);
 }
 
 

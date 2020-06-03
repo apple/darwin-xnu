@@ -138,12 +138,15 @@ extern struct vnode *vnode_pager_lookup_vnode(memory_object_t);
 uint64_t vm_hard_throttle_threshold;
 
 
-
-#define NEED_TO_HARD_THROTTLE_THIS_TASK()       (vm_wants_task_throttled(current_task()) ||     \
-	                                         ((vm_page_free_count < vm_page_throttle_limit || \
-	                                           HARD_THROTTLE_LIMIT_REACHED()) && \
-	                                          proc_get_effective_thread_policy(current_thread(), TASK_POLICY_IO) >= THROTTLE_LEVEL_THROTTLED))
-
+OS_ALWAYS_INLINE
+boolean_t
+NEED_TO_HARD_THROTTLE_THIS_TASK(void)
+{
+	return vm_wants_task_throttled(current_task()) ||
+	       ((vm_page_free_count < vm_page_throttle_limit ||
+	       HARD_THROTTLE_LIMIT_REACHED()) &&
+	       proc_get_effective_thread_policy(current_thread(), TASK_POLICY_IO) >= THROTTLE_LEVEL_THROTTLED);
+}
 
 #define HARD_THROTTLE_DELAY     10000   /* 10000 us == 10 ms */
 #define SOFT_THROTTLE_DELAY     200     /* 200 us == .2 ms */

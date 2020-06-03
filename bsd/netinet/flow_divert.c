@@ -1689,6 +1689,7 @@ flow_divert_send_app_data(struct flow_divert_pcb *fd_cb, mbuf_t data, struct soc
 						    "sbappendaddr failed. send buffer size = %u, send_window = %u, error = %d\n",
 						    fd_cb->so->so_snd.sb_cc, fd_cb->send_window, error);
 					}
+					error = 0;
 				} else {
 					if (!sbappendrecord(&fd_cb->so->so_snd, data)) {
 						FDLOG(LOG_ERR, fd_cb,
@@ -2104,6 +2105,9 @@ flow_divert_handle_data(struct flow_divert_pcb *fd_cb, mbuf_t packet, size_t off
 				FDLOG0(LOG_INFO, fd_cb, "No remote address provided");
 				error = 0;
 			} else {
+				if (remote_address.ss_len > sizeof(remote_address)) {
+					remote_address.ss_len = sizeof(remote_address);
+				}
 				/* validate the address */
 				if (flow_divert_is_sockaddr_valid((struct sockaddr *)&remote_address)) {
 					got_remote_sa = TRUE;
@@ -3247,6 +3251,9 @@ flow_divert_data_out(struct socket *so, int flags, mbuf_t data, struct sockaddr 
 	struct flow_divert_pcb  *fd_cb  = so->so_fd_pcb;
 	int                                             error   = 0;
 	struct inpcb *inp;
+#if CONTENT_FILTER
+	struct m_tag *cfil_tag = NULL;
+#endif
 
 	VERIFY((so->so_flags & SOF_FLOW_DIVERT) && so->so_fd_pcb != NULL);
 
@@ -3284,7 +3291,7 @@ flow_divert_data_out(struct socket *so, int flags, mbuf_t data, struct sockaddr 
 		 */
 		if (to == NULL && so->so_cfil_db) {
 			struct sockaddr *cfil_faddr = NULL;
-			struct m_tag *cfil_tag = cfil_udp_get_socket_state(data, NULL, NULL, &cfil_faddr);
+			cfil_tag = cfil_dgram_get_socket_state(data, NULL, NULL, &cfil_faddr, NULL);
 			if (cfil_tag) {
 				to = (struct sockaddr *)(void *)cfil_faddr;
 			}
@@ -3323,6 +3330,12 @@ done:
 	if (control) {
 		mbuf_free(control);
 	}
+#if CONTENT_FILTER
+	if (cfil_tag) {
+		m_tag_free(cfil_tag);
+	}
+#endif
+
 	return error;
 }
 
@@ -3444,7 +3457,12 @@ flow_divert_attach(struct socket *so, uint32_t flow_id, uint32_t ctl_unit)
 			sorwakeup(so);
 		}
 	}
-	flow_divert_set_protosw(so);
+	if (SOCK_TYPE(so) == SOCK_STREAM) {
+		flow_divert_set_protosw(so);
+	} else if (SOCK_TYPE(so) == SOCK_DGRAM) {
+		flow_divert_set_udp_protosw(so);
+	}
+
 	socket_unlock(so, 0);
 
 	fd_cb->so = so;

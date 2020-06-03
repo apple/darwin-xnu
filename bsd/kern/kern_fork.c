@@ -1339,6 +1339,7 @@ retry:
 	 *
 	 * XXX may fail to copy descriptors to child
 	 */
+	lck_rw_init(&child_proc->p_dirs_lock, proc_dirslock_grp, proc_lck_attr);
 	child_proc->p_fd = fdcopy(parent_proc, parent_uthread->uu_cdir);
 
 #if SYSV_SHM

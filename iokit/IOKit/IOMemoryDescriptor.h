@@ -67,6 +67,10 @@ enum IODirection
 	kIODirectionPrepareReserved1  = 0x00000010,
 #define IODIRECTIONPREPARENONCOHERENTDEFINED    1
 	kIODirectionPrepareNonCoherent = 0x00000020,
+#if KERNEL_PRIVATE
+#define IODIRECTIONPREPAREAVOIDTHROTTLING       1
+	kIODirectionPrepareAvoidThrottling = 0x00000100,
+#endif
 
 	// these flags are valid for the complete() method only
 #define IODIRECTIONCOMPLETEWITHERRORDEFINED             1

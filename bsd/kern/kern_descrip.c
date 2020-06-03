@@ -282,6 +282,30 @@ file_lock_init(void)
 }
 
 
+void
+proc_dirs_lock_shared(proc_t p)
+{
+	lck_rw_lock_shared(&p->p_dirs_lock);
+}
+
+void
+proc_dirs_unlock_shared(proc_t p)
+{
+	lck_rw_unlock_shared(&p->p_dirs_lock);
+}
+
+void
+proc_dirs_lock_exclusive(proc_t p)
+{
+	lck_rw_lock_exclusive(&p->p_dirs_lock);
+}
+
+void
+proc_dirs_unlock_exclusive(proc_t p)
+{
+	lck_rw_unlock_exclusive(&p->p_dirs_lock);
+}
+
 /*
  * proc_fdlock, proc_fdlock_spin
  *
@@ -5061,6 +5085,7 @@ fdcopy(proc_t p, vnode_t uth_cdir)
 	}
 	/* Coming from a chroot environment and unable to get a reference... */
 	if (newfdp->fd_rdir == NULL && fdp->fd_rdir) {
+		proc_fdunlock(p);
 		/*
 		 * We couldn't get a new reference on
 		 * the chroot directory being

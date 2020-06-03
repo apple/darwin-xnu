@@ -86,6 +86,7 @@
 #include <net/if.h>
 #include <net/net_api_stats.h>
 #include <net/route.h>
+#include <net/content_filter.h>
 
 #define _IP_VHL
 #include <netinet/in.h>
@@ -277,7 +278,14 @@ rip_input(struct mbuf *m, int iphlen)
 						continue;
 					}
 				}
-				if (last->inp_flags & INP_STRIPHDR) {
+				if (last->inp_flags & INP_STRIPHDR
+#if CONTENT_FILTER
+				    /*
+				     * If socket is subject to Content Filter, delay stripping until reinject
+				     */
+				    && (last->inp_socket->so_cfil_db == NULL)
+#endif
+				    ) {
 					n->m_len -= iphlen;
 					n->m_pkthdr.len -= iphlen;
 					n->m_data += iphlen;
@@ -330,7 +338,14 @@ rip_input(struct mbuf *m, int iphlen)
 					goto unlock;
 				}
 			}
-			if (last->inp_flags & INP_STRIPHDR) {
+			if (last->inp_flags & INP_STRIPHDR
+#if CONTENT_FILTER
+			    /*
+			     * If socket is subject to Content Filter, delay stripping until reinject
+			     */
+			    && (last->inp_socket->so_cfil_db == NULL)
+#endif
+			    ) {
 				m->m_len -= iphlen;
 				m->m_pkthdr.len -= iphlen;
 				m->m_data += iphlen;
@@ -370,10 +385,74 @@ rip_output(
 	struct ip *ip;
 	struct inpcb *inp = sotoinpcb(so);
 	int flags = (so->so_options & SO_DONTROUTE) | IP_ALLOWBROADCAST;
+	int inp_flags = inp ? inp->inp_flags : 0;
 	struct ip_out_args ipoa;
 	struct ip_moptions *imo;
 	int tos = IPTOS_UNSPEC;
 	int error = 0;
+#if CONTENT_FILTER
+	struct m_tag *cfil_tag = NULL;
+	bool cfil_faddr_use = false;
+	uint32_t cfil_so_state_change_cnt = 0;
+	short cfil_so_options = 0;
+	int cfil_inp_flags = 0;
+	struct sockaddr *cfil_faddr = NULL;
+	struct sockaddr_in *cfil_sin;
+#endif
+
+#if CONTENT_FILTER
+	/*
+	 * If socket is subject to Content Filter and no addr is passed in,
+	 * retrieve CFIL saved state from mbuf and use it if necessary.
+	 */
+	if (so->so_cfil_db && dst == INADDR_ANY) {
+		cfil_tag = cfil_dgram_get_socket_state(m, &cfil_so_state_change_cnt, &cfil_so_options, &cfil_faddr, &cfil_inp_flags);
+		if (cfil_tag) {
+			cfil_sin = SIN(cfil_faddr);
+			flags = (cfil_so_options & SO_DONTROUTE) | IP_ALLOWBROADCAST;
+			inp_flags = cfil_inp_flags;
+			if (inp && inp->inp_faddr.s_addr == INADDR_ANY) {
+				/*
+				 * Socket is unconnected, simply use the saved faddr as 'addr' to go through
+				 * the connect/disconnect logic.
+				 */
+				dst = cfil_sin->sin_addr.s_addr;
+			} else if ((so->so_state_change_cnt != cfil_so_state_change_cnt) &&
+			    (inp->inp_fport != cfil_sin->sin_port ||
+			    inp->inp_faddr.s_addr != cfil_sin->sin_addr.s_addr)) {
+				/*
+				 * Socket is connected but socket state and dest addr/port changed.
+				 * We need to use the saved faddr and socket options.
+				 */
+				cfil_faddr_use = true;
+			}
+			m_tag_free(cfil_tag);
+		}
+	}
+#endif
+
+	if (so->so_state & SS_ISCONNECTED) {
+		if (dst != INADDR_ANY) {
+			if (m != NULL) {
+				m_freem(m);
+			}
+			if (control != NULL) {
+				m_freem(control);
+			}
+			return EISCONN;
+		}
+		dst = cfil_faddr_use ? cfil_sin->sin_addr.s_addr : inp->inp_faddr.s_addr;
+	} else {
+		if (dst == INADDR_ANY) {
+			if (m != NULL) {
+				m_freem(m);
+			}
+			if (control != NULL) {
+				m_freem(control);
+			}
+			return ENOTCONN;
+		}
+	}
 
 	bzero(&ipoa, sizeof(ipoa));
 	ipoa.ipoa_boundif = IFSCOPE_NONE;
@@ -436,7 +515,7 @@ rip_output(
 	 * If the user handed us a complete IP packet, use it.
 	 * Otherwise, allocate an mbuf for a header and fill it in.
 	 */
-	if ((inp->inp_flags & INP_HDRINCL) == 0) {
+	if ((inp_flags & INP_HDRINCL) == 0) {
 		if (m->m_pkthdr.len + sizeof(struct ip) > IP_MAXPACKET) {
 			m_freem(m);
 			return EMSGSIZE;
@@ -493,8 +572,12 @@ rip_output(
 		/*
 		 * We need a route to perform NECP route rule checks
 		 */
-		if (net_qos_policy_restricted != 0 &&
-		    ROUTE_UNUSABLE(&inp->inp_route)) {
+		if ((net_qos_policy_restricted != 0 &&
+		    ROUTE_UNUSABLE(&inp->inp_route))
+#if CONTENT_FILTER
+		    || cfil_faddr_use
+#endif
+		    ) {
 			struct sockaddr_in to;
 			struct sockaddr_in from;
 			struct in_addr laddr = ip->ip_src;
@@ -600,6 +683,10 @@ rip_output(
 
 		if ((rt->rt_flags & (RTF_MULTICAST | RTF_BROADCAST)) ||
 		    inp->inp_socket == NULL ||
+#if CONTENT_FILTER
+		    /* Discard temporary route for cfil case */
+		    cfil_faddr_use ||
+#endif
 		    !(inp->inp_socket->so_state & SS_ISCONNECTED)) {
 			rt = NULL;      /* unusable */
 		}
@@ -1067,7 +1154,7 @@ rip_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 {
 #pragma unused(flags, p)
 	struct inpcb *inp = sotoinpcb(so);
-	u_int32_t dst;
+	u_int32_t dst = INADDR_ANY;
 	int error = 0;
 
 	if (inp == NULL
@@ -1083,17 +1170,7 @@ rip_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 		goto bad;
 	}
 
-	if (so->so_state & SS_ISCONNECTED) {
-		if (nam != NULL) {
-			error = EISCONN;
-			goto bad;
-		}
-		dst = inp->inp_faddr.s_addr;
-	} else {
-		if (nam == NULL) {
-			error = ENOTCONN;
-			goto bad;
-		}
+	if (nam != NULL) {
 		dst = ((struct sockaddr_in *)(void *)nam)->sin_addr.s_addr;
 	}
 	return rip_output(m, so, dst, control);

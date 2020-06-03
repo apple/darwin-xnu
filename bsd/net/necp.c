@@ -7276,10 +7276,10 @@ necp_socket_fillout_info_locked(struct inpcb *inp, struct sockaddr *override_loc
 				necp_get_parent_cred_result(NULL, info);
 			}
 		}
+	}
 
-		if (necp_kernel_socket_policies_condition_mask & NECP_KERNEL_CONDITION_PLATFORM_BINARY) {
-			info->is_platform_binary = csproc_get_platform_binary(current_proc()) ? true : false;
-		}
+	if (necp_kernel_socket_policies_condition_mask & NECP_KERNEL_CONDITION_PLATFORM_BINARY) {
+		info->is_platform_binary = csproc_get_platform_binary(current_proc()) ? true : false;
 	}
 
 	if (necp_kernel_socket_policies_condition_mask & NECP_KERNEL_CONDITION_ACCOUNT_ID && inp->inp_necp_attributes.inp_account != NULL) {

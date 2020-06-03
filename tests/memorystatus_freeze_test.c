@@ -671,22 +671,29 @@ T_DECL(budget_replenishment, "budget replenishes properly") {
 	length = sizeof(kTestIntervalSecs);
 	new_budget_ln = sizeof(new_budget);
 	ret = sysctlbyname("vm.memorystatus_freeze_calculate_new_budget", &new_budget, &new_budget_ln, &kTestIntervalSecs, length);
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "vm.memorystatus_freeze_calculate_new_budget");
+	T_ASSERT_POSIX_SUCCESS(ret, "vm.memorystatus_freeze_calculate_new_budget");
 
 	// Grab the daily budget.
 	length = sizeof(memorystatus_freeze_daily_mb_max);
 	ret = sysctlbyname("kern.memorystatus_freeze_daily_mb_max", &memorystatus_freeze_daily_mb_max, &length, NULL, 0);
-	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "kern.memorystatus_freeze_daily_mb_max");
+	T_ASSERT_POSIX_SUCCESS(ret, "kern.memorystatus_freeze_daily_mb_max");
 
-	memorystatus_freeze_daily_pages_max = memorystatus_freeze_daily_mb_max * 1024 * 1024 / page_size;
+	memorystatus_freeze_daily_pages_max = memorystatus_freeze_daily_mb_max * 1024UL * 1024UL / page_size;
+	T_LOG("memorystatus_freeze_daily_mb_max %u", memorystatus_freeze_daily_mb_max);
+	T_LOG("memorystatus_freeze_daily_pages_max %u", memorystatus_freeze_daily_pages_max);
+	T_LOG("page_size %u", page_size);
 
 	/*
 	 * We're kTestIntervalSecs past a new interval. Which means we are owed kNumSecondsInDay
 	 * seconds of budget.
 	 */
 	expected_new_budget_pages = memorystatus_freeze_daily_pages_max;
+	T_LOG("expected_new_budget_pages before %u", expected_new_budget_pages);
+	T_ASSERT_EQ(kTestIntervalSecs, 60 * 60 * 32, "kTestIntervalSecs did not change");
 	expected_new_budget_pages += ((kTestIntervalSecs * kFixedPointFactor) / (kNumSecondsInDay)
 	    * memorystatus_freeze_daily_pages_max) / kFixedPointFactor;
+	T_LOG("expected_new_budget_pages after %u", expected_new_budget_pages);
+	T_LOG("memorystatus_freeze_daily_pages_max after %u", memorystatus_freeze_daily_pages_max);
 
 	T_QUIET; T_ASSERT_EQ(new_budget, expected_new_budget_pages, "Calculate new budget behaves correctly.");
 }

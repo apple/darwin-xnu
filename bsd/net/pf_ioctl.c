@@ -1127,6 +1127,7 @@ pf_rule_copyin(struct pf_rule *src, struct pf_rule *dst, struct proc *p,
 	dst->tagname[sizeof(dst->tagname) - 1] = '\0';
 	dst->match_tagname[sizeof(dst->match_tagname) - 1] = '\0';
 	dst->overload_tblname[sizeof(dst->overload_tblname) - 1] = '\0';
+	dst->owner[sizeof(dst->owner) - 1] = '\0';
 
 	dst->cuid = kauth_cred_getuid(p->p_ucred);
 	dst->cpid = p->p_pid;
@@ -1158,7 +1159,8 @@ pf_rule_copyout(struct pf_rule *src, struct pf_rule *dst)
 	dst->kif = NULL;
 	dst->overload_tbl = NULL;
 
-	TAILQ_INIT(&dst->rpool.list);
+	dst->rpool.list.tqh_first = NULL;
+	dst->rpool.list.tqh_last = NULL;
 	dst->rpool.cur = NULL;
 
 	dst->entries.tqe_prev = NULL;

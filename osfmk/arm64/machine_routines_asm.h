@@ -26,6 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <arm64/proc_reg.h>
 #include <pexpert/arm64/board_config.h>
 #include "assym.s"
 
@@ -44,23 +45,29 @@
  *
  * On CPUs with PAC support, this macro will auth the above values with ml_check_signed_state().
  *
- * arg0 - scratch register 1
- * arg1 - scratch register 2
- * arg2 - scratch register 3
- * arg3 - scratch register 4
- * arg4 - scratch register 5
+ * tmp1 - scratch register 1
+ * tmp2 - scratch register 2
+ * tmp3 - scratch register 3
+ * tmp4 - scratch register 4
+ * tmp5 - scratch register 5
  */
 /* BEGIN IGNORE CODESTYLE */
-.macro  AUTH_THREAD_STATE_IN_X0
-	ldr		x1, [x0, SS64_PC]
+.macro  AUTH_THREAD_STATE_IN_X0	tmp1, tmp2, tmp3, tmp4, tmp5, el0_state_allowed=0
 	ldr		w2, [x0, SS64_CPSR]
+.if \el0_state_allowed==0
+#if __has_feature(ptrauth_calls)
+	// If testing for a canary CPSR value, ensure that we do not observe writes to other fields without it
+	dmb		ld
+#endif
+.endif
+	ldr		x1, [x0, SS64_PC]
 	ldp		x16, x17, [x0, SS64_X16]
 
 #if defined(HAS_APPLE_PAC)
 	// Save x3-x5 to preserve across call
-	mov		$2, x3
-	mov		$3, x4
-	mov		$4, x5
+	mov		\tmp3, x3
+	mov		\tmp4, x4
+	mov		\tmp5, x5
 
 	/*
 	* Arg0: The ARM context pointer (already in x0)
@@ -71,20 +78,27 @@
 	* Stash saved state PC and CPSR in other registers to avoid reloading potentially unauthed
 	* values from memory.  (ml_check_signed_state will clobber x1 and x2.)
 	*/
-	mov		$0, x1
-	mov		$1, x2
+	mov		\tmp1, x1
+	mov		\tmp2, x2
 	ldr		x3, [x0, SS64_LR]
 	mov		x4, x16
 	mov		x5, x17
 	bl		EXT(ml_check_signed_state)
-	mov		x1, $0
-	mov		x2, $1
+	mov		x1, \tmp1
+	mov		x2, \tmp2
+
+.if \el0_state_allowed==0
+	and		\tmp2, \tmp2, #PSR64_MODE_MASK
+	cbnz		\tmp2, 1f
+	bl		EXT(ml_auth_thread_state_invalid_cpsr)
+1:
+.endif
 
 	// LR was already loaded/authed earlier, if we reload it we might be loading a potentially unauthed value
 	mov		lr, x3
-	mov		x3, $2
-	mov		x4, $3
-	mov		x5, $4
+	mov		x3, \tmp3
+	mov		x4, \tmp4
+	mov		x5, \tmp5
 #else
 	ldr		lr, [x0, SS64_LR]
 #endif /* defined(HAS_APPLE_PAC) */

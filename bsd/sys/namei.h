@@ -131,6 +131,7 @@ struct nameidata {
 #define NAMEI_CONTLOOKUP        0x002    /* Continue processing a lookup which was partially processed in a compound VNOP */
 #define NAMEI_TRAILINGSLASH     0x004    /* There was at least one trailing slash after last component */
 #define NAMEI_UNFINISHED        0x008    /* We broke off a lookup to do a compound op */
+
 /*
  * XXX Hack: we need to encode the intended VNOP in order to
  * be able to include information about which operations a filesystem
@@ -142,6 +143,8 @@ struct nameidata {
 #define NAMEI_COMPOUNDRMDIR     0x080
 #define NAMEI_COMPOUNDRENAME    0x100
 #define NAMEI_COMPOUND_OP_MASK (NAMEI_COMPOUNDOPEN | NAMEI_COMPOUNDREMOVE | NAMEI_COMPOUNDMKDIR | NAMEI_COMPOUNDRMDIR | NAMEI_COMPOUNDRENAME)
+
+#define NAMEI_NOPROCLOCK        0x1000  /* do not take process lock (set by vnode_lookup) */
 
 #ifdef KERNEL
 /*

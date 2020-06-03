@@ -1148,7 +1148,7 @@ Lskip_el0_eret_mapping:
 Lexception_return_restore_registers:
 	mov 	x0, sp								// x0 = &pcb
 	// Loads authed $x0->ss_64.pc into x1 and $x0->ss_64.cpsr into w2
-	AUTH_THREAD_STATE_IN_X0	x20, x21, x22, x23, x24
+	AUTH_THREAD_STATE_IN_X0	x20, x21, x22, x23, x24, el0_state_allowed=1
 
 /* Restore special register state */
 	ldr		w3, [sp, NS64_FPSR]

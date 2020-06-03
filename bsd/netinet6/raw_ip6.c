@@ -105,6 +105,7 @@
 #include <net/net_api_stats.h>
 #include <net/route.h>
 #include <net/if_types.h>
+#include <net/content_filter.h>
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
@@ -363,8 +364,80 @@ rip6_output(
 	int netsvctype = _NET_SERVICE_TYPE_UNSPEC;
 	struct ip6_out_args ip6oa;
 	int flags = IPV6_OUTARGS;
+	struct sockaddr_in6 tmp;
+#if CONTENT_FILTER
+	struct m_tag *cfil_tag = NULL;
+	bool cfil_faddr_use = false;
+	uint32_t cfil_so_state_change_cnt = 0;
+	short cfil_so_options = 0;
+	struct sockaddr *cfil_faddr = NULL;
+	struct sockaddr_in6 *cfil_sin6 = NULL;
+#endif
 
 	in6p = sotoin6pcb(so);
+	if (in6p == NULL) {
+		error = EINVAL;
+		goto bad;
+	}
+
+#if CONTENT_FILTER
+	/*
+	 * If socket is subject to Content Filter and no addr is passed in,
+	 * retrieve CFIL saved state from mbuf and use it if necessary.
+	 */
+	if (so->so_cfil_db && !dstsock) {
+		cfil_tag = cfil_dgram_get_socket_state(m, &cfil_so_state_change_cnt, &cfil_so_options, &cfil_faddr, NULL);
+		if (cfil_tag) {
+			cfil_sin6 = SIN6(cfil_faddr);
+			if (IN6_IS_ADDR_UNSPECIFIED(&in6p->in6p_faddr)) {
+				/*
+				 * Socket is unconnected, simply use the saved faddr as 'addr' to go through
+				 * the connect/disconnect logic.
+				 */
+				dstsock = cfil_sin6;
+			} else if ((so->so_state_change_cnt != cfil_so_state_change_cnt) &&
+			    (in6p->in6p_fport != cfil_sin6->sin6_port ||
+			    !IN6_ARE_ADDR_EQUAL(&in6p->in6p_faddr, &cfil_sin6->sin6_addr))) {
+				/*
+				 * Socket is connected but socket state and dest addr/port changed.
+				 * We need to use the saved faddr and socket options.
+				 */
+				cfil_faddr_use = true;
+			}
+		}
+	}
+#endif
+
+	/* always copy sockaddr to avoid overwrites */
+	if (so->so_state & SS_ISCONNECTED) {
+		if (dstsock != NULL) {
+			error = EISCONN;
+			goto bad;
+		}
+		/* XXX */
+		bzero(&tmp, sizeof(tmp));
+		tmp.sin6_family = AF_INET6;
+		tmp.sin6_len = sizeof(struct sockaddr_in6);
+		bcopy(
+#if CONTENT_FILTER
+			cfil_faddr_use ? &cfil_sin6->sin6_addr :
+#endif
+			&in6p->in6p_faddr, &tmp.sin6_addr, sizeof(struct in6_addr));
+		dstsock = &tmp;
+	} else {
+		if (dstsock == NULL) {
+			error = ENOTCONN;
+			goto bad;
+		}
+		tmp = *dstsock;
+		dstsock = &tmp;
+	}
+
+#if ENABLE_DEFAULT_SCOPE
+	if (dstsock->sin6_scope_id == 0) { /* not change if specified  */
+		dstsock->sin6_scope_id = scope6_addr2default(&dstsock->sin6_addr);
+	}
+#endif
 
 	bzero(&ip6oa, sizeof(ip6oa));
 	ip6oa.ip6oa_boundif = IFSCOPE_NONE;
@@ -604,8 +677,12 @@ rip6_output(
 		/*
 		 * We need a route to perform NECP route rule checks
 		 */
-		if (net_qos_policy_restricted != 0 &&
-		    ROUTE_UNUSABLE(&in6p->in6p_route)) {
+		if ((net_qos_policy_restricted != 0 &&
+		    ROUTE_UNUSABLE(&in6p->in6p_route))
+#if CONTENT_FILTER
+		    || cfil_faddr_use
+#endif
+		    ) {
 			struct sockaddr_in6 to;
 			struct sockaddr_in6 from;
 
@@ -697,6 +774,10 @@ rip6_output(
 
 		if ((rt->rt_flags & RTF_MULTICAST) ||
 		    in6p->in6p_socket == NULL ||
+#if CONTENT_FILTER
+		    /* Discard temporary route for cfil case */
+		    cfil_faddr_use ||
+#endif
 		    !(in6p->in6p_socket->so_state & SS_ISCONNECTED)) {
 			rt = NULL;      /* unusable */
 		}
@@ -772,6 +853,12 @@ freectl:
 	if (oifp != NULL) {
 		ifnet_release(oifp);
 	}
+#if CONTENT_FILTER
+	if (cfil_tag) {
+		m_tag_free(cfil_tag);
+	}
+#endif
+
 	return error;
 }
 
@@ -1053,8 +1140,6 @@ rip6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 {
 #pragma unused(flags, p)
 	struct inpcb *inp = sotoinpcb(so);
-	struct sockaddr_in6 tmp;
-	struct sockaddr_in6 *dst = (struct sockaddr_in6 *)(void *)nam;
 	int error = 0;
 
 	if (inp == NULL
@@ -1070,33 +1155,7 @@ rip6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 		goto bad;
 	}
 
-	/* always copy sockaddr to avoid overwrites */
-	if (so->so_state & SS_ISCONNECTED) {
-		if (nam != NULL) {
-			error = EISCONN;
-			goto bad;
-		}
-		/* XXX */
-		bzero(&tmp, sizeof(tmp));
-		tmp.sin6_family = AF_INET6;
-		tmp.sin6_len = sizeof(struct sockaddr_in6);
-		bcopy(&inp->in6p_faddr, &tmp.sin6_addr,
-		    sizeof(struct in6_addr));
-		dst = &tmp;
-	} else {
-		if (nam == NULL) {
-			error = ENOTCONN;
-			goto bad;
-		}
-		tmp = *(struct sockaddr_in6 *)(void *)nam;
-		dst = &tmp;
-	}
-#if ENABLE_DEFAULT_SCOPE
-	if (dst->sin6_scope_id == 0) {  /* not change if specified  */
-		dst->sin6_scope_id = scope6_addr2default(&dst->sin6_addr);
-	}
-#endif
-	return rip6_output(m, so, dst, control, 1);
+	return rip6_output(m, so, SIN6(nam), control, 1);
 
 bad:
 	VERIFY(error != 0);

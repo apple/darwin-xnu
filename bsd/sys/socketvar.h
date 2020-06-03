@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -768,6 +768,7 @@ extern int sbappendaddr(struct sockbuf *sb, struct sockaddr *asa,
     struct mbuf *m0, struct mbuf *control, int *error_out);
 extern int sbappendchain(struct sockbuf *sb, struct mbuf *m, int space);
 extern int sbappendrecord(struct sockbuf *sb, struct mbuf *m0);
+extern int sbappendrecord_nodrop(struct sockbuf *sb, struct mbuf *m0);
 extern void sbflush(struct sockbuf *sb);
 extern int sbspace(struct sockbuf *sb);
 extern int soabort(struct socket *so);
@@ -829,6 +830,7 @@ extern void so_acquire_accept_list(struct socket *, struct socket *);
 extern void so_release_accept_list(struct socket *);
 
 extern int sbappend(struct sockbuf *sb, struct mbuf *m);
+extern int sbappend_nodrop(struct sockbuf *sb, struct mbuf *m);
 extern int sbappendstream(struct sockbuf *sb, struct mbuf *m);
 extern int sbappendcontrol(struct sockbuf *sb, struct mbuf *m0,
     struct mbuf *control, int *error_out);

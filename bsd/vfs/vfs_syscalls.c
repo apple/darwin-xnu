@@ -211,6 +211,9 @@ struct fd_vn_data * fg_vn_data_alloc(void);
  */
 #define MAX_AUTHORIZE_ENOENT_RETRIES 1024
 
+/* Max retry limit for rename due to vnode recycling. */
+#define MAX_RENAME_ERECYCLE_RETRIES 1024
+
 static int rmdirat_internal(vfs_context_t, int, user_addr_t, enum uio_seg,
     int unlink_flags);
 
@@ -2005,6 +2008,7 @@ checkdirs_callback(proc_t p, void * arg)
 		return PROC_RETURNED;
 	}
 
+	proc_dirs_lock_exclusive(p);
 	/*
 	 * Now do the work.  Note: we dropped the proc_fdlock, so we
 	 * have to do all of the checks again.
@@ -2024,6 +2028,7 @@ checkdirs_callback(proc_t p, void * arg)
 		}
 	}
 	proc_fdunlock(p);
+	proc_dirs_unlock_exclusive(p);
 
 	/*
 	 * Dispose of any references that are no longer needed.
@@ -3586,10 +3591,12 @@ common_fchdir(proc_t p, struct fchdir_args *uap, int per_thread)
 			return ENOENT;
 		}
 	} else {
+		proc_dirs_lock_exclusive(p);
 		proc_fdlock(p);
 		tvp = fdp->fd_cdir;
 		fdp->fd_cdir = vp;
 		proc_fdunlock(p);
+		proc_dirs_unlock_exclusive(p);
 	}
 
 	if (tvp) {
@@ -3659,10 +3666,12 @@ chdir_internal(proc_t p, vfs_context_t ctx, struct nameidata *ndp, int per_threa
 			return ENOENT;
 		}
 	} else {
+		proc_dirs_lock_exclusive(p);
 		proc_fdlock(p);
 		tvp = fdp->fd_cdir;
 		fdp->fd_cdir = ndp->ni_vp;
 		proc_fdunlock(p);
+		proc_dirs_unlock_exclusive(p);
 	}
 
 	if (tvp) {
@@ -3781,11 +3790,21 @@ chroot(proc_t p, struct chroot_args *uap, __unused int32_t *retval)
 	}
 	vnode_put(nd.ni_vp);
 
+	/*
+	 * This lock provides the guarantee that as long as you hold the lock
+	 * fdp->fd_rdir has a usecount on it. This is used to take an iocount
+	 * on a referenced vnode in namei when determining the rootvnode for
+	 * a process.
+	 */
+	/* needed for synchronization with lookup */
+	proc_dirs_lock_exclusive(p);
+	/* needed for setting the flag and other activities on the fd itself */
 	proc_fdlock(p);
 	tvp = fdp->fd_rdir;
 	fdp->fd_rdir = nd.ni_vp;
 	fdp->fd_flags |= FD_CHROOT;
 	proc_fdunlock(p);
+	proc_dirs_unlock_exclusive(p);
 
 	if (tvp != NULL) {
 		vnode_rele(tvp);
@@ -8478,7 +8497,13 @@ skipped_lookup:
 		 * but other filesystems susceptible to this race could return it, too.
 		 */
 		if (error == ERECYCLE) {
-			do_retry = 1;
+			if (retry_count < MAX_RENAME_ERECYCLE_RETRIES) {
+				do_retry = 1;
+				retry_count += 1;
+			} else {
+				printf("rename retry limit due to ERECYCLE reached\n");
+				error = ENOENT;
+			}
 		}
 
 		/*

@@ -140,6 +140,7 @@
 #include <net/if_var.h>
 #include <net/if_media.h>
 #include <net/net_api_stats.h>
+#include <net/pfvar.h>
 
 #include <netinet/in.h> /* for struct arpcom */
 #include <netinet/in_systm.h>
@@ -2475,7 +2476,8 @@ bridge_ioctl_add(struct bridge_softc *sc, void *arg)
 	switch (ifs->if_type) {
 	case IFT_ETHER:
 		if (strcmp(ifs->if_name, "en") == 0 &&
-		    ifs->if_subfamily == IFNET_SUBFAMILY_WIFI) {
+		    ifs->if_subfamily == IFNET_SUBFAMILY_WIFI &&
+		    (ifs->if_eflags & IFEF_IPV4_ROUTER) == 0) {
 			/* XXX is there a better way to identify Wi-Fi STA? */
 			mac_nat = TRUE;
 		}

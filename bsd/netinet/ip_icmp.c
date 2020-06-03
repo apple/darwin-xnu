@@ -80,6 +80,7 @@
 
 #include <net/if.h>
 #include <net/route.h>
+#include <net/content_filter.h>
 
 #define _IP_VHL
 #include <netinet/in.h>
@@ -1289,6 +1290,7 @@ icmp_dgram_send(struct socket *so, int flags, struct mbuf *m,
 	struct in_ifaddr *ia = NULL;
 	int icmplen;
 	int error = EINVAL;
+	int inp_flags = inp ? inp->inp_flags : 0;
 
 	if (inp == NULL
 #if NECP
@@ -1301,7 +1303,16 @@ icmp_dgram_send(struct socket *so, int flags, struct mbuf *m,
 		goto bad;
 	}
 
-	if ((inp->inp_flags & INP_HDRINCL) != 0) {
+#if CONTENT_FILTER
+	/*
+	 * If socket is subject to Content Filter, get inp_flags from saved state
+	 */
+	if (so->so_cfil_db && nam == NULL) {
+		cfil_dgram_peek_socket_state(m, &inp_flags);
+	}
+#endif
+
+	if ((inp_flags & INP_HDRINCL) != 0) {
 		/* Expect 32-bit aligned data ptr on strict-align platforms */
 		MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
 		/*

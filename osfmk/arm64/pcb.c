@@ -343,6 +343,7 @@ machine_stack_attach(thread_t thread,
 #if defined(HAS_APPLE_PAC)
 	/* Sign the initial kernel stack saved state */
 	const uint32_t default_cpsr = PSR64_KERNEL_DEFAULT & ~PSR64_MODE_EL_MASK;
+	boolean_t intr = ml_set_interrupts_enabled(FALSE);
 	asm volatile (
 		"mov	x0, %[ss]"				"\n"
 
@@ -376,6 +377,7 @@ machine_stack_attach(thread_t thread,
 		  [SS64_LR]		"i"(offsetof(struct arm_saved_state, ss_64.lr))
 		: "x0", "x1", "x2", "x3", "x4", "x5", "x6"
 	);
+	ml_set_interrupts_enabled(intr);
 #else
 	savestate->lr = (uintptr_t)thread_continue;
 	savestate->cpsr = (PSR64_KERNEL_DEFAULT & ~PSR64_MODE_EL_MASK) | current_el;

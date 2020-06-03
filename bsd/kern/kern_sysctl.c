@@ -1089,7 +1089,6 @@ fill_user32_externproc(proc_t p, struct user32_extern_proc *__restrict exp)
 	exp->p_pid = p->p_pid;
 	exp->p_oppid = p->p_oppid;
 	/* Mach related  */
-	exp->user_stack = p->user_stack;
 	exp->p_debugger = p->p_debugger;
 	exp->sigwait = p->sigwait;
 	/* scheduling */
@@ -1142,7 +1141,6 @@ fill_user64_externproc(proc_t p, struct user64_extern_proc *__restrict exp)
 	exp->p_pid = p->p_pid;
 	exp->p_oppid = p->p_oppid;
 	/* Mach related  */
-	exp->user_stack = p->user_stack;
 	exp->p_debugger = p->p_debugger;
 	exp->sigwait = p->sigwait;
 	/* scheduling */
@@ -3657,6 +3655,9 @@ SYSCTL_INT(_vm, OID_AUTO, compressor_is_active, CTLFLAG_RD | CTLFLAG_LOCKED, &vm
 SYSCTL_INT(_vm, OID_AUTO, compressor_swapout_target_age, CTLFLAG_RD | CTLFLAG_LOCKED, &swapout_target_age, 0, "");
 SYSCTL_INT(_vm, OID_AUTO, compressor_available, CTLFLAG_RD | CTLFLAG_LOCKED, &vm_compressor_available, 0, "");
 
+extern int min_csegs_per_major_compaction;
+SYSCTL_INT(_vm, OID_AUTO, compressor_min_csegs_per_major_compaction, CTLFLAG_RW | CTLFLAG_LOCKED, &min_csegs_per_major_compaction, 0, "");
+
 SYSCTL_INT(_vm, OID_AUTO, vm_ripe_target_age_in_secs, CTLFLAG_RW | CTLFLAG_LOCKED, &vm_ripe_target_age, 0, "");
 
 SYSCTL_INT(_vm, OID_AUTO, compressor_eval_period_in_msecs, CTLFLAG_RW | CTLFLAG_LOCKED, &compressor_eval_period_in_msecs, 0, "");
@@ -4959,15 +4960,15 @@ sysctl_get_owned_vmobjects SYSCTL_HANDLER_ARGS
 	int error;
 	mach_port_name_t task_port_name;
 	task_t task;
-	int buffer_size = (req->oldptr != USER_ADDR_NULL) ? req->oldlen : 0;
+	size_t buffer_size = (req->oldptr != USER_ADDR_NULL) ? req->oldlen : 0;
 	vmobject_list_output_t buffer;
 	size_t output_size;
 
 	if (buffer_size) {
-		const int min_size = sizeof(vm_object_query_data_t) + sizeof(int64_t);
+		const size_t min_size = sizeof(vm_object_query_data_t) + sizeof(int64_t);
 
-		if (buffer_size < min_size) {
-			buffer_size = min_size;
+		if (buffer_size < min_size || buffer_size > INT_MAX) {
+			return EINVAL;
 		}
 
 		buffer = kalloc(buffer_size);

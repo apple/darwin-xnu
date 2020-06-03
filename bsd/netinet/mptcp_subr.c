@@ -2394,6 +2394,11 @@ mptcp_subflow_add(struct mptses *mpte, struct sockaddr *src,
 		goto out_err;
 	}
 
+	if (mpte->mpte_numflows > MPTCP_MAX_NUM_SUBFLOWS) {
+		error = EOVERFLOW;
+		goto out_err;
+	}
+
 	mpts = mptcp_subflow_alloc();
 	if (mpts == NULL) {
 		os_log_error(mptcp_log_handle, "%s - %lx: malloc subflow failed\n",

@@ -7447,14 +7447,21 @@ void
 task_copy_vmobjects(task_t task, vm_object_query_t query, int len, int64_t* num)
 {
 	vm_object_t find_vmo;
-	int64_t size = 0;
+	unsigned int i = 0;
+	unsigned int vmobj_limit = len / sizeof(vm_object_query_data_t);
 
 	task_objq_lock(task);
 	if (query != NULL) {
 		queue_iterate(&task->task_objq, find_vmo, vm_object_t, task_objq)
 		{
-			int byte_size;
-			vm_object_query_t p = &query[size++];
+			vm_object_query_t p = &query[i];
+
+			/*
+			 * Clear the entire vm_object_query_t struct as we are using
+			 * only the first 6 bits in the uint64_t bitfield for this
+			 * anonymous struct member.
+			 */
+			bzero(p, sizeof(*p));
 
 			p->object_id = (vm_object_id_t) VM_KERNEL_ADDRPERM(find_vmo);
 			p->virtual_size = find_vmo->internal ? find_vmo->vo_size : 0;
@@ -7471,16 +7478,17 @@ task_copy_vmobjects(task_t task, vm_object_query_t query, int len, int64_t* num)
 				p->compressed_size = 0;
 			}
 
-			/* make sure to not overrun */
-			byte_size = (int) size * sizeof(vm_object_query_data_t);
-			if ((int)(byte_size + sizeof(vm_object_query_data_t)) > len) {
+			i++;
+
+			/* Make sure to not overrun */
+			if (i == vmobj_limit) {
 				break;
 			}
 		}
 	} else {
-		size = task->task_owned_objects;
+		i = task->task_owned_objects;
 	}
 	task_objq_unlock(task);
 
-	*num = size;
+	*num = i;
 }

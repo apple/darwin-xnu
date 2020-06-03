@@ -198,6 +198,12 @@ extern void vm_rtfault_record_init(void);
 
 #endif  /* MACH_KERNEL_PRIVATE */
 
+#if XNU_KERNEL_PRIVATE
+
+boolean_t NEED_TO_HARD_THROTTLE_THIS_TASK(void);
+
+#endif
+
 #endif  /* KERNEL_PRIVATE */
 
 #endif  /* _VM_VM_FAULT_H_ */

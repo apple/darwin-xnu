@@ -419,6 +419,7 @@ struct  proc {
 #if !CONFIG_EMBEDDED
 	uint64_t        p_user_data;                    /* general-purpose storage for userland-provided data */
 #endif /* !CONFIG_EMBEDDED */
+	lck_rw_t        p_dirs_lock;                    /* keeps fd_cdir and fd_rdir stable across a lookup */
 };
 
 #define PGRPID_DEAD 0xdeaddead
@@ -681,6 +682,7 @@ extern lck_grp_t * proc_knhashlock_grp;
 extern lck_grp_t * proc_mlock_grp;
 extern lck_grp_t * proc_ucred_mlock_grp;
 extern lck_grp_t * proc_slock_grp;
+extern lck_grp_t * proc_dirslock_grp;
 extern lck_grp_attr_t * proc_lck_grp_attr;
 extern lck_attr_t * proc_lck_attr;
 
@@ -702,6 +704,10 @@ extern void proc_fdlock(struct proc *);
 extern void proc_fdlock_spin(struct proc *);
 extern void proc_fdunlock(struct proc *);
 extern void proc_fdlock_assert(proc_t p, int assertflags);
+extern void proc_dirs_lock_shared(struct proc *);
+extern void proc_dirs_unlock_shared(struct proc *);
+extern void proc_dirs_lock_exclusive(struct proc *);
+extern void proc_dirs_unlock_exclusive(struct proc *);
 extern void proc_ucred_lock(struct proc *);
 extern void proc_ucred_unlock(struct proc *);
 __private_extern__ int proc_core_name(const char *name, uid_t uid, pid_t pid,

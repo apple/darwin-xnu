@@ -415,6 +415,7 @@ lck_grp_t * proc_kqhashlock_grp;
 lck_grp_t * proc_knhashlock_grp;
 lck_grp_t * proc_ucred_mlock_grp;
 lck_grp_t * proc_mlock_grp;
+lck_grp_t * proc_dirslock_grp;
 lck_grp_attr_t * proc_lck_grp_attr;
 lck_attr_t * proc_lck_attr;
 lck_mtx_t * proc_list_mlock;
@@ -533,6 +534,7 @@ bsd_init(void)
 	proc_fdmlock_grp = lck_grp_alloc_init("proc-fdmlock", proc_lck_grp_attr);
 	proc_kqhashlock_grp = lck_grp_alloc_init("proc-kqhashlock", proc_lck_grp_attr);
 	proc_knhashlock_grp = lck_grp_alloc_init("proc-knhashlock", proc_lck_grp_attr);
+	proc_dirslock_grp = lck_grp_alloc_init("proc-dirslock", proc_lck_grp_attr);
 #if CONFIG_XNUPOST
 	sysctl_debug_test_stackshot_owner_grp = lck_grp_alloc_init("test-stackshot-owner-grp", LCK_GRP_ATTR_NULL);
 	sysctl_debug_test_stackshot_owner_init_mtx = lck_mtx_alloc_init(
@@ -548,6 +550,7 @@ bsd_init(void)
 	lck_mtx_init(&kernproc->p_fdmlock, proc_fdmlock_grp, proc_lck_attr);
 	lck_mtx_init(&kernproc->p_ucred_mlock, proc_ucred_mlock_grp, proc_lck_attr);
 	lck_spin_init(&kernproc->p_slock, proc_slock_grp, proc_lck_attr);
+	lck_rw_init(&kernproc->p_dirs_lock, proc_dirslock_grp, proc_lck_attr);
 
 	assert(bsd_simul_execs != 0);
 	execargs_cache_lock = lck_mtx_alloc_init(proc_lck_grp, proc_lck_attr);

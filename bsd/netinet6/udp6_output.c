@@ -173,6 +173,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 #if CONTENT_FILTER
 	struct m_tag *cfil_tag = NULL;
 	bool cfil_faddr_use = false;
+	bool sndinprog_cnt_used = false;
 	uint32_t cfil_so_state_change_cnt = 0;
 	struct sockaddr *cfil_faddr = NULL;
 	struct sockaddr_in6 *cfil_sin6 = NULL;
@@ -216,7 +217,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 	 * retrieve CFIL saved state from mbuf and use it if necessary.
 	 */
 	if (so->so_cfil_db && !addr6) {
-		cfil_tag = cfil_udp_get_socket_state(m, &cfil_so_state_change_cnt, NULL, &cfil_faddr);
+		cfil_tag = cfil_dgram_get_socket_state(m, &cfil_so_state_change_cnt, NULL, &cfil_faddr, NULL);
 		if (cfil_tag) {
 			cfil_sin6 = (struct sockaddr_in6 *)(void *)cfil_faddr;
 			if ((so->so_state_change_cnt != cfil_so_state_change_cnt) &&
@@ -249,6 +250,9 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 	}
 	ip6oa.ip6oa_sotc = sotc;
 	ip6oa.ip6oa_netsvctype = netsvctype;
+
+	in6p->inp_sndinprog_cnt++;
+	sndinprog_cnt_used = true;
 
 	if (addr6) {
 		/*
@@ -529,8 +533,6 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 			IM6O_UNLOCK(im6o);
 		}
 
-		in6p->inp_sndinprog_cnt++;
-
 		socket_unlock(so, 0);
 		error = ip6_output(m, optp, &ro, flags, im6o, NULL, &ip6oa);
 		m = NULL;
@@ -566,14 +568,6 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 			 */
 			error = ENOBUFS;
 			inp_set_fc_state(in6p, adv->code);
-		}
-
-		VERIFY(in6p->inp_sndinprog_cnt > 0);
-		if (--in6p->inp_sndinprog_cnt == 0) {
-			in6p->inp_flags &= ~(INP_FC_FEEDBACK);
-			if (in6p->inp_sndingprog_waiters > 0) {
-				wakeup(&in6p->inp_sndinprog_cnt);
-			}
 		}
 
 		if (ro.ro_rt != NULL) {
@@ -661,6 +655,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 	goto releaseopt;
 
 release:
+
 	if (m != NULL) {
 		m_freem(m);
 	}
@@ -677,5 +672,16 @@ releaseopt:
 		m_tag_free(cfil_tag);
 	}
 #endif
+	if (sndinprog_cnt_used) {
+		VERIFY(in6p->inp_sndinprog_cnt > 0);
+		if (--in6p->inp_sndinprog_cnt == 0) {
+			in6p->inp_flags &= ~(INP_FC_FEEDBACK);
+			if (in6p->inp_sndingprog_waiters > 0) {
+				wakeup(&in6p->inp_sndinprog_cnt);
+			}
+		}
+		sndinprog_cnt_used = false;
+	}
+
 	return error;
 }

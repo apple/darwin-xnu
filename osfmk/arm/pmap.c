@@ -4671,7 +4671,7 @@ pmap_static_allocations_done(void)
 	 *
 	 * Note that this workaround does not pose a security risk, because the RO
 	 * page tables still remain read-only, due to KTRR/CTRR, and further protecting
-	 * them at the APRR level would be unnecessary.
+	 * them would be unnecessary.
 	 */
 	monitor_start_pa = kvtophys((vm_offset_t)&ropagetable_begin);
 	monitor_end_pa = monitor_start_pa + ((vm_offset_t)&ropagetable_end - (vm_offset_t)&ropagetable_begin);

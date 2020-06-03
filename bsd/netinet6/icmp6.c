@@ -3157,8 +3157,6 @@ icmp6_dgram_send(struct socket *so, int flags, struct mbuf *m,
 #pragma unused(flags, p)
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
-	struct sockaddr_in6 tmp;
-	struct sockaddr_in6 *dst = (struct sockaddr_in6 *)(void *)nam;
 	struct icmp6_hdr *icmp6;
 
 	if (inp == NULL
@@ -3172,28 +3170,6 @@ icmp6_dgram_send(struct socket *so, int flags, struct mbuf *m,
 
 	if (kauth_cred_issuser(so->so_cred)) {
 		return rip6_output(m, so, SIN6(nam), control, 0);
-	}
-
-	/* always copy sockaddr to avoid overwrites */
-	if (so->so_state & SS_ISCONNECTED) {
-		if (nam != NULL) {
-			error = EISCONN;
-			goto bad;
-		}
-		/* XXX */
-		bzero(&tmp, sizeof(tmp));
-		tmp.sin6_family = AF_INET6;
-		tmp.sin6_len = sizeof(struct sockaddr_in6);
-		bcopy(&inp->in6p_faddr, &tmp.sin6_addr,
-		    sizeof(struct in6_addr));
-		dst = &tmp;
-	} else {
-		if (nam == NULL) {
-			error = ENOTCONN;
-			goto bad;
-		}
-		tmp = *(struct sockaddr_in6 *)(void *)nam;
-		dst = &tmp;
 	}
 
 	/*
@@ -3224,13 +3200,7 @@ icmp6_dgram_send(struct socket *so, int flags, struct mbuf *m,
 		}
 	}
 
-#if ENABLE_DEFAULT_SCOPE
-	if (dst->sin6_scope_id == 0) {  /* not change if specified  */
-		dst->sin6_scope_id = scope6_addr2default(&dst->sin6_addr);
-	}
-#endif
-
-	return rip6_output(m, so, dst, control, 0);
+	return rip6_output(m, so, SIN6(nam), control, 0);
 bad:
 	VERIFY(error != 0);
 

@@ -1479,6 +1479,7 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 #if CONTENT_FILTER
 	struct m_tag *cfil_tag = NULL;
 	bool cfil_faddr_use = false;
+	bool sndinprog_cnt_used = false;
 	uint32_t cfil_so_state_change_cnt = 0;
 	short cfil_so_options = 0;
 	struct sockaddr *cfil_faddr = NULL;
@@ -1510,7 +1511,7 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	 * retrieve CFIL saved state from mbuf and use it if necessary.
 	 */
 	if (so->so_cfil_db && !addr) {
-		cfil_tag = cfil_udp_get_socket_state(m, &cfil_so_state_change_cnt, &cfil_so_options, &cfil_faddr);
+		cfil_tag = cfil_dgram_get_socket_state(m, &cfil_so_state_change_cnt, &cfil_so_options, &cfil_faddr, NULL);
 		if (cfil_tag) {
 			sin = (struct sockaddr_in *)(void *)cfil_faddr;
 			if (inp && inp->inp_faddr.s_addr == INADDR_ANY) {
@@ -1673,6 +1674,8 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 		fport = ((struct sockaddr_in *)(void *)cfil_faddr)->sin_port;
 	}
 #endif
+	inp->inp_sndinprog_cnt++;
+	sndinprog_cnt_used = true;
 
 	if (addr) {
 		sin = (struct sockaddr_in *)(void *)addr;
@@ -1936,8 +1939,6 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 		ipoa.ipoa_flags |= IPOAF_BOUND_SRCADDR;
 	}
 
-	inp->inp_sndinprog_cnt++;
-
 	socket_unlock(so, 0);
 	error = ip_output(m, inpopts, &ro, soopts, mopts, &ipoa);
 	m = NULL;
@@ -1969,14 +1970,6 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 		 */
 		error = ENOBUFS;
 		inp_set_fc_state(inp, adv->code);
-	}
-
-	VERIFY(inp->inp_sndinprog_cnt > 0);
-	if (--inp->inp_sndinprog_cnt == 0) {
-		inp->inp_flags &= ~(INP_FC_FEEDBACK);
-		if (inp->inp_sndingprog_waiters > 0) {
-			wakeup(&inp->inp_sndinprog_cnt);
-		}
 	}
 
 	/* Synchronize PCB cached route */
@@ -2057,6 +2050,16 @@ release:
 		m_tag_free(cfil_tag);
 	}
 #endif
+	if (sndinprog_cnt_used) {
+		VERIFY(inp->inp_sndinprog_cnt > 0);
+		if (--inp->inp_sndinprog_cnt == 0) {
+			inp->inp_flags &= ~(INP_FC_FEEDBACK);
+			if (inp->inp_sndingprog_waiters > 0) {
+				wakeup(&inp->inp_sndinprog_cnt);
+			}
+		}
+		sndinprog_cnt_used = false;
+	}
 
 	return error;
 }

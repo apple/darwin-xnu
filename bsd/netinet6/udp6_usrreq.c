@@ -1012,7 +1012,7 @@ udp6_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *addr,
 #if CONTENT_FILTER
 	//If socket is subject to UDP Content Filter and unconnected, get addr from tag.
 	if (so->so_cfil_db && !addr && IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_faddr)) {
-		cfil_tag = cfil_udp_get_socket_state(m, NULL, NULL, &cfil_faddr);
+		cfil_tag = cfil_dgram_get_socket_state(m, NULL, NULL, &cfil_faddr, NULL);
 		if (cfil_tag) {
 			addr = (struct sockaddr *)cfil_faddr;
 		}

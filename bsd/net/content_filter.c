@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2013-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -26,7 +26,7 @@
  *
  * The socket content filter subsystem provides a way for user space agents to
  * make filtering decisions based on the content of the data being sent and
- * received by TCP/IP sockets.
+ * received by INET/INET6 sockets.
  *
  * A content filter user space agents gets a copy of the data and the data is
  * also kept in kernel buffer until the user space agents makes a pass or drop
@@ -42,23 +42,24 @@
  * filter agent until an ultimate pass or drop decision is made by the
  * user space filter agent.
  *
- * It should be noted that messages about many TCP/IP sockets can be multiplexed
+ * It should be noted that messages about many INET/INET6 sockets can be multiplexed
  * over a single kernel control socket.
  *
  * Notes:
- * - The current implementation is limited to TCP sockets.
+ * - The current implementation supports all INET/INET6 sockets (i.e. TCP,
+ *   UDP, ICMP, etc).
  * - The current implementation supports up to two simultaneous content filters
- *   for the sake of simplicity of the implementation.
+ *   for iOS devices and eight simultaneous content filters for OSX.
  *
  *
  * NECP FILTER CONTROL UNIT
  *
  * A user space filter agent uses the Network Extension Control Policy (NECP)
- * database to specify which TCP/IP sockets need to be filtered. The NECP
+ * database to specify which INET/INET6 sockets need to be filtered. The NECP
  * criteria may be based on a variety of properties like user ID or proc UUID.
  *
  * The NECP "filter control unit" is used by the socket content filter subsystem
- * to deliver the relevant TCP/IP content information to the appropriate
+ * to deliver the relevant INET/INET6 content information to the appropriate
  * user space filter agent via its kernel control socket instance.
  * This works as follows:
  *
@@ -69,15 +70,15 @@
  *    content filter kernel control socket via the socket option
  *    CFIL_OPT_NECP_CONTROL_UNIT.
  *
- * 3) The NECP database is consulted to find out if a given TCP/IP socket
+ * 3) The NECP database is consulted to find out if a given INET/INET6 socket
  *    needs to be subjected to content filtering and returns the corresponding
  *    NECP filter control unit  -- the NECP filter control unit is actually
- *    stored in the TCP/IP socket structure so the NECP lookup is really simple.
+ *    stored in the INET/INET6 socket structure so the NECP lookup is really simple.
  *
  * 4) The NECP filter control unit is then used to find the corresponding
  *    kernel control socket instance.
  *
- * Note: NECP currently supports a single filter control unit per TCP/IP socket
+ * Note: NECP currently supports a single filter control unit per INET/INET6 socket
  *       but this restriction may be soon lifted.
  *
  *
@@ -87,23 +88,26 @@
  * communicate over the kernel control socket via an asynchronous
  * messaging protocol (this is not a request-response protocol).
  * The socket content filter subsystem sends event messages to the user
- * space filter agent about the TCP/IP sockets it is interested to filter.
+ * space filter agent about the INET/INET6 sockets it is interested to filter.
  * The user space filter agent sends action messages to either allow
  * data to pass or to disallow the data flow (and drop the connection).
  *
  * All messages over a content filter kernel control socket share the same
  * common header of type "struct cfil_msg_hdr". The message type tells if
  * it's a event message "CFM_TYPE_EVENT" or a action message "CFM_TYPE_ACTION".
- * The message header field "cfm_sock_id" identifies a given TCP/IP socket.
+ * The message header field "cfm_sock_id" identifies a given INET/INET6 flow.
+ * For TCP, flows are per-socket.  For UDP and other datagrame protocols, there
+ * could be multiple flows per socket.
+ *
  * Note the message header length field may be padded for alignment and can
  * be larger than the actual content of the message.
  * The field "cfm_op" describe the kind of event or action.
  *
  * Here are the kinds of content filter events:
- * - CFM_OP_SOCKET_ATTACHED: a new TCP/IP socket is being filtered
- * - CFM_OP_SOCKET_CLOSED: A TCP/IP socket is closed
- * - CFM_OP_DATA_OUT: A span of data is being sent on a TCP/IP socket
- * - CFM_OP_DATA_IN: A span of data is being or received on a TCP/IP socket
+ * - CFM_OP_SOCKET_ATTACHED: a new INET/INET6 socket is being filtered
+ * - CFM_OP_SOCKET_CLOSED: A INET/INET6 socket is closed
+ * - CFM_OP_DATA_OUT: A span of data is being sent on a INET/INET6 socket
+ * - CFM_OP_DATA_IN: A span of data is being or received on a INET/INET6 socket
  *
  *
  * EVENT MESSAGES
@@ -135,10 +139,10 @@
  *
  * The CFM_OP_DATA_UPDATE action messages let the user space filter
  * agent allow data to flow up to the specified pass offset -- there
- * is a pass offset for outgoing data and  a pass offset for incoming data.
- * When a new TCP/IP socket is attached to the content filter, each pass offset
- * is initially set to 0 so not data is allowed to pass by default.
- * When the pass offset is set to CFM_MAX_OFFSET via a CFM_OP_DATA_UPDATE
+ * is a pass offset for outgoing data and a pass offset for incoming data.
+ * When a new INET/INET6 socket is attached to the content filter and a flow is
+ * created, each pass offset is initially set to 0 so no data is allowed to pass by
+ * default.  When the pass offset is set to CFM_MAX_OFFSET via a CFM_OP_DATA_UPDATE
  * then the data flow becomes unrestricted.
  *
  * Note that pass offsets can only be incremented. A CFM_OP_DATA_UPDATE message
@@ -148,12 +152,11 @@
  * A user space filter agent also uses CFM_OP_DATA_UPDATE action messages
  * to tell the kernel how much data it wants to see by using the peek offsets.
  * Just like pass offsets, there is a peek offset for each direction.
- * When a new TCP/IP socket is attached to the content filter, each peek offset
- * is initially set to 0 so no CFM_OP_DATA_OUT and CFM_OP_DATA_IN event
- * messages are dispatched by default until a CFM_OP_DATA_UPDATE action message
- * with a greater than 0 peek offset is sent by the user space filter agent.
- * When the peek offset is set to CFM_MAX_OFFSET via a CFM_OP_DATA_UPDATE
- * then the flow of update data events becomes unrestricted.
+ * When a new INET/INET6 flow is created, each peek offset is initially set to 0
+ * so no CFM_OP_DATA_OUT and CFM_OP_DATA_IN event messages are dispatched by default
+ * until a CFM_OP_DATA_UPDATE action message with a greater than 0 peek offset is sent
+ * by the user space filter agent.  When the peek offset is set to CFM_MAX_OFFSET via
+ * a CFM_OP_DATA_UPDATE then the flow of update data events becomes unrestricted.
  *
  * Note that peek offsets cannot be smaller than the corresponding pass offset.
  * Also a peek offsets cannot be smaller than the corresponding end offset
@@ -161,11 +164,14 @@
  * to set a too small peek value is silently ignored.
  *
  *
- * PER SOCKET "struct cfil_info"
+ * PER FLOW "struct cfil_info"
  *
- * As soon as a TCP/IP socket gets attached to a content filter, a
+ * As soon as a INET/INET6 socket gets attached to a content filter, a
  * "struct cfil_info" is created to hold the content filtering state for this
- * socket.
+ * socket.  For UDP and other datagram protocols, as soon as traffic is seen for
+ * each new flow identified by its 4-tuple of source address/port and destination
+ * address/port, a "struct cfil_info" is created.  Each datagram socket may
+ * have multiple flows maintained in a hash table of "struct cfil_info" entries.
  *
  * The content filtering state is made of the following information
  * for each direction:
@@ -198,9 +204,9 @@
  *
  * CONTENT FILTER QUEUES
  *
- * Data that is being filtered is steered away from the TCP/IP socket buffer
+ * Data that is being filtered is steered away from the INET/INET6 socket buffer
  * and instead will sit in one of three content filter queues until the data
- * can be re-injected into the TCP/IP socket buffer.
+ * can be re-injected into the INET/INET6 socket buffer.
  *
  * A content filter queue is represented by "struct cfil_queue" that contains
  * a list of mbufs and the start and end offset of the data span of
@@ -213,7 +219,7 @@
  * c) The "cfi_inject_q" of "struct cfil_info"
  *
  * Note: The sequence (a),(b) may be repeated several times if there is more
- * than one content filter attached to the TCP/IP socket.
+ * than one content filter attached to the INET/INET6 socket.
  *
  * The "cfe_ctl_q" queue holds data than cannot be delivered to the
  * kernel conntrol socket for two reasons:
@@ -228,13 +234,13 @@
  *
  * The "cfi_inject_q" queue holds data that has been fully allowed to pass
  * by the user space filter agent and that needs to be re-injected into the
- * TCP/IP socket.
+ * INET/INET6 socket.
  *
  *
  * IMPACT ON FLOW CONTROL
  *
  * An essential aspect of the content filer subsystem is to minimize the
- * impact on flow control of the TCP/IP sockets being filtered.
+ * impact on flow control of the INET/INET6 sockets being filtered.
  *
  * The processing overhead of the content filtering may have an effect on
  * flow control by adding noticeable delays and cannot be eliminated --
@@ -244,7 +250,7 @@
  * The amount of data being filtered is kept in buffers while waiting for
  * a decision by the user space filter agent. This amount of data pending
  * needs to be subtracted from the amount of data available in the
- * corresponding TCP/IP socket buffer. This is done by modifying
+ * corresponding INET/INET6 socket buffer. This is done by modifying
  * sbspace() and tcp_sbspace() to account for amount of data pending
  * in the content filter.
  *
@@ -256,14 +262,14 @@
  * cfil read-write lock held as shared so it can be re-entered from multiple
  * threads.
  *
- * The per TCP/IP socket content filterstate -- "struct cfil_info" -- is
+ * The per INET/INET6 socket content filterstate -- "struct cfil_info" -- is
  * protected by the socket lock.
  *
- * A TCP/IP socket lock cannot be taken while the cfil read-write lock
+ * A INET/INET6 socket lock cannot be taken while the cfil read-write lock
  * is held. That's why we have some sequences where we drop the cfil read-write
- * lock before taking the TCP/IP lock.
+ * lock before taking the INET/INET6 lock.
  *
- * It is also important to lock the TCP/IP socket buffer while the content
+ * It is also important to lock the INET/INET6 socket buffer while the content
  * filter is modifying the amount of pending data. Otherwise the calculations
  * in sbspace() and tcp_sbspace()  could be wrong.
  *
@@ -277,10 +283,34 @@
  * To read the other fields of "struct content_filter" we have to take
  * "cfil_lck_rw" in shared mode.
  *
+ * DATAGRAM SPECIFICS:
+ *
+ * The socket content filter supports all INET/INET6 protocols.  However
+ * the treatments for TCP sockets and for datagram (UDP, ICMP, etc) sockets
+ * are slightly different.
+ *
+ * Each datagram socket may have multiple flows.  Each flow is identified
+ * by the flow's source address/port and destination address/port tuple
+ * and is represented as a "struct cfil_info" entry.  For each socket,
+ * a hash table is used to maintain the collection of flows under that socket.
+ *
+ * Each datagram flow is uniquely identified by it's "struct cfil_info" cfi_sock_id.
+ * The highest 32-bits of the cfi_sock_id contains the socket's so_gencnt.  This portion
+ * of the cfi_sock_id is used locate the socket during socket lookup.  The lowest 32-bits
+ * of the cfi_sock_id contains a hash of the flow's 4-tuple.  This portion of the cfi_sock_id
+ * is used as the hash value for the flow hash table lookup within the parent socket.
+ *
+ * Since datagram sockets may not be connected, flow states may not be maintained in the
+ * socket structures and thus have to be saved for each packet.  These saved states will be
+ * used for both outgoing and incoming reinjections.  For outgoing packets, destination
+ * address/port as well as the current socket states will be saved.  During reinjection,
+ * these saved states will be used instead.  For incoming packets, control and address
+ * mbufs will be chained to the data.  During reinjection, the whole chain will be queued
+ * onto the incoming socket buffer.
  *
  * LIMITATIONS
  *
- * - For TCP sockets only
+ * - Support all INET/INET6 sockets, such as TCP, UDP, ICMP, etc
  *
  * - Does not support TCP unordered messages
  */
@@ -288,13 +318,8 @@
 /*
  *	TO DO LIST
  *
- *	SOONER:
- *
  *	Deal with OOB
  *
- *	LATER:
- *
- *	If support datagram, enqueue control and address mbufs as well
  */
 
 #include <sys/types.h>
@@ -314,6 +339,8 @@
 #include <net/content_filter.h>
 #include <net/content_filter_crypto.h>
 
+#define _IP_VHL
+#include <netinet/ip.h>
 #include <netinet/in_pcb.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_var.h>
@@ -332,6 +359,7 @@
 #define MAX_CONTENT_FILTER 8
 #endif
 
+extern struct inpcbinfo ripcbinfo;
 struct cfil_entry;
 
 /*
@@ -477,6 +505,7 @@ struct cfil_info {
 	uint64_t                cfi_byte_outbound_count;
 
 	boolean_t               cfi_isSignatureLatest;                  /* Indicates if signature covers latest flow attributes */
+	u_int32_t               cfi_debug;
 	struct cfi_buf {
 		/*
 		 * cfi_pending_first and cfi_pending_last describe the total
@@ -535,7 +564,24 @@ TAILQ_HEAD(cfil_sock_head_stats, cfil_info) cfil_sock_head_stats;
 LIST_HEAD(cfilhashhead, cfil_hash_entry);
 #define CFILHASHSIZE 16
 #define CFIL_HASH(laddr, faddr, lport, fport) ((faddr) ^ ((laddr) >> 16) ^ (fport) ^ (lport))
+
+#define IS_INET(so) (so && so->so_proto && so->so_proto->pr_domain && (so->so_proto->pr_domain->dom_family == AF_INET || so->so_proto->pr_domain->dom_family == AF_INET6))
+#define IS_TCP(so) (so && so->so_proto && so->so_proto->pr_type == SOCK_STREAM && so->so_proto->pr_protocol == IPPROTO_TCP)
 #define IS_UDP(so) (so && so->so_proto && so->so_proto->pr_type == SOCK_DGRAM && so->so_proto->pr_protocol == IPPROTO_UDP)
+#define IS_ICMP(so) (so && so->so_proto && (so->so_proto->pr_type == SOCK_RAW || so->so_proto->pr_type == SOCK_DGRAM) && \
+	                                   (so->so_proto->pr_protocol == IPPROTO_ICMP || so->so_proto->pr_protocol == IPPROTO_ICMPV6))
+#define IS_RAW(so)  (so && so->so_proto && so->so_proto->pr_type == SOCK_RAW  && so->so_proto->pr_protocol == IPPROTO_RAW)
+
+#if !TARGET_OS_OSX && !defined(XNU_TARGET_OS_OSX)
+#define IS_IP_DGRAM(so) (IS_INET(so) && IS_UDP(so))
+#else
+#define IS_IP_DGRAM(so) (IS_INET(so) && !IS_TCP(so))
+#endif
+
+#define OPTIONAL_IP_HEADER(so) (!IS_TCP(so) && !IS_UDP(so))
+#define GET_SO_PROTO(so) ((so && so->so_proto) ? so->so_proto->pr_protocol : IPPROTO_MAX)
+#define IS_INP_V6(inp) (inp && (inp->inp_vflag & INP_IPV6))
+
 #define UNCONNECTED(inp) (inp && (((inp->inp_vflag & INP_IPV4) && (inp->inp_faddr.s_addr == INADDR_ANY)) || \
 	                                                          ((inp->inp_vflag & INP_IPV6) && IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_faddr))))
 #define IS_ENTRY_ATTACHED(cfil_info, kcunit) (cfil_info != NULL && (kcunit <= MAX_CONTENT_FILTER) && \
@@ -632,6 +678,7 @@ struct cfil_tag {
 	union sockaddr_in_4_6 cfil_faddr;
 	uint32_t cfil_so_state_change_cnt;
 	short cfil_so_options;
+	int cfil_inp_flags;
 };
 
 #define    CFIL_HASH_ENTRY_ZONE_NAME    "cfil_entry_hash"
@@ -745,11 +792,12 @@ static void cfil_rw_lock_exclusive_to_shared(lck_rw_t *);
 static unsigned int cfil_data_length(struct mbuf *, int *, int *);
 static errno_t cfil_db_init(struct socket *);
 static void cfil_db_free(struct socket *so);
-struct cfil_hash_entry *cfil_db_lookup_entry(struct cfil_db *, struct sockaddr *, struct sockaddr *);
+struct cfil_hash_entry *cfil_db_lookup_entry(struct cfil_db *, struct sockaddr *, struct sockaddr *, boolean_t);
 struct cfil_hash_entry *cfil_db_lookup_entry_with_sockid(struct cfil_db *, u_int64_t);
 struct cfil_hash_entry *cfil_db_add_entry(struct cfil_db *, struct sockaddr *, struct sockaddr *);
+void cfil_db_update_entry_local(struct cfil_db *, struct cfil_hash_entry *, struct sockaddr *);
 void cfil_db_delete_entry(struct cfil_db *, struct cfil_hash_entry *);
-struct cfil_hash_entry *cfil_sock_udp_get_flow(struct socket *, uint32_t, bool, struct sockaddr *, struct sockaddr *);
+struct cfil_hash_entry *cfil_sock_udp_get_flow(struct socket *, uint32_t, bool, struct sockaddr *, struct sockaddr *, int);
 struct cfil_info *cfil_db_get_cfil_info(struct cfil_db *, cfil_sock_id_t);
 static errno_t cfil_sock_udp_handle_data(bool, struct socket *, struct sockaddr *, struct sockaddr *,
     struct mbuf *, struct mbuf *, uint32_t);
@@ -772,7 +820,8 @@ void cfil_info_show(void);
 bool cfil_info_idle_timed_out(struct cfil_info *, int, u_int32_t);
 bool cfil_info_action_timed_out(struct cfil_info *, int);
 bool cfil_info_buffer_threshold_exceeded(struct cfil_info *);
-struct m_tag *cfil_udp_save_socket_state(struct cfil_info *, struct mbuf *);
+struct m_tag *cfil_dgram_save_socket_state(struct cfil_info *, struct mbuf *);
+boolean_t cfil_dgram_peek_socket_state(struct mbuf *m, int *inp_flags);
 static void cfil_udp_gc_thread_func(void *, wait_result_t);
 static void cfil_info_udp_expire(void *, wait_result_t);
 static bool fill_cfil_hash_entry_from_address(struct cfil_hash_entry *, bool, struct sockaddr *);
@@ -1600,6 +1649,21 @@ find_udp:
 	}
 	lck_rw_done(pcbinfo->ipi_lock);
 
+	pcbinfo = &ripcbinfo;
+	lck_rw_lock_shared(pcbinfo->ipi_lock);
+	LIST_FOREACH(inp, pcbinfo->ipi_listhead, inp_list) {
+		if (inp->inp_state != INPCB_STATE_DEAD &&
+		    inp->inp_socket != NULL &&
+		    inp->inp_socket->so_cfil_db != NULL &&
+		    (inp->inp_socket->so_gencnt & 0x0ffffffff) == gencnt) {
+			if (cfil_socket_safe_lock(inp)) {
+				so = inp->inp_socket;
+			}
+			break;
+		}
+	}
+	lck_rw_done(pcbinfo->ipi_lock);
+
 done:
 	if (so == NULL) {
 		OSIncrementAtomic(&cfil_stats.cfs_sock_id_not_found);
@@ -1872,6 +1936,11 @@ cfil_ctl_send(kern_ctl_ref kctlref, u_int32_t kcunit, void *unitinfo, mbuf_t m,
 		error = EINVAL;
 		goto unlock;
 	}
+
+	if (cfil_info->cfi_debug) {
+		cfil_info_log(LOG_ERR, cfil_info, "CFIL: RECEIVED MSG FROM FILTER");
+	}
+
 	entry = &cfil_info->cfi_entries[kcunit - 1];
 	if (entry->cfe_filter == NULL) {
 		CFIL_LOG(LOG_NOTICE, "so %llx no filter",
@@ -1897,6 +1966,16 @@ cfil_ctl_send(kern_ctl_ref kctlref, u_int32_t kcunit, void *unitinfo, mbuf_t m,
 
 	switch (msghdr->cfm_op) {
 	case CFM_OP_DATA_UPDATE:
+
+		if (cfil_info->cfi_debug) {
+			cfil_info_log(LOG_ERR, cfil_info, "CFIL: RECEIVED CFM_OP_DATA_UPDATE");
+			CFIL_LOG(LOG_ERR, "CFIL: VERDICT RECEIVED: <so %llx sockID %llu> <IN peek:%llu pass:%llu, OUT peek:%llu pass:%llu>",
+			    (uint64_t)VM_KERNEL_ADDRPERM(so),
+			    cfil_info->cfi_sock_id,
+			    action_msg->cfa_in_peek_offset, action_msg->cfa_in_pass_offset,
+			    action_msg->cfa_out_peek_offset, action_msg->cfa_out_pass_offset);
+		}
+
 #if VERDICT_DEBUG
 		CFIL_LOG(LOG_ERR, "CFIL: VERDICT RECEIVED: <so %llx sockID %llu> <IN peek:%llu pass:%llu, OUT peek:%llu pass:%llu>",
 		    (uint64_t)VM_KERNEL_ADDRPERM(so),
@@ -1941,6 +2020,15 @@ cfil_ctl_send(kern_ctl_ref kctlref, u_int32_t kcunit, void *unitinfo, mbuf_t m,
 		break;
 
 	case CFM_OP_DROP:
+		if (cfil_info->cfi_debug) {
+			cfil_info_log(LOG_ERR, cfil_info, "CFIL: RECEIVED CFM_OP_DROP");
+			CFIL_LOG(LOG_ERR, "CFIL: VERDICT DROP RECEIVED: <so %llx sockID %llu> <IN peek:%llu pass:%llu, OUT peek:%llu pass:%llu>",
+			    (uint64_t)VM_KERNEL_ADDRPERM(so),
+			    cfil_info->cfi_sock_id,
+			    action_msg->cfa_in_peek_offset, action_msg->cfa_in_pass_offset,
+			    action_msg->cfa_out_peek_offset, action_msg->cfa_out_pass_offset);
+		}
+
 #if VERDICT_DEBUG
 		CFIL_LOG(LOG_ERR, "CFIL: VERDICT DROP RECEIVED: <so %llx sockID %llu> <IN peek:%llu pass:%llu, OUT peek:%llu pass:%llu>",
 		    (uint64_t)VM_KERNEL_ADDRPERM(so),
@@ -2830,7 +2918,7 @@ done:
 errno_t
 cfil_sock_detach(struct socket *so)
 {
-	if (IS_UDP(so)) {
+	if (IS_IP_DGRAM(so)) {
 		cfil_db_free(so);
 		return 0;
 	}
@@ -3025,7 +3113,7 @@ cfil_dispatch_closed_event_sign(cfil_crypto_state_t crypto_state,
 		boolean_t outgoing = (cfil_info->cfi_dir == CFS_CONNECTION_DIR_OUT);
 		union sockaddr_in_4_6 *src = outgoing ? &data.local : &data.remote;
 		union sockaddr_in_4_6 *dst = outgoing ? &data.remote : &data.local;
-		cfil_fill_event_msg_addresses(hash_entry_ptr, inp, src, dst, inp->inp_vflag & INP_IPV4, outgoing);
+		cfil_fill_event_msg_addresses(hash_entry_ptr, inp, src, dst, !IS_INP_V6(inp), outgoing);
 	}
 
 	data.byte_count_in = cfil_info->cfi_byte_inbound_count;
@@ -3135,7 +3223,7 @@ cfil_dispatch_attach_event(struct socket *so, struct cfil_info *cfil_info,
 	if (hash_entry_ptr != NULL) {
 		cfil_fill_event_msg_addresses(hash_entry_ptr, inp,
 		    &msg_attached.cfs_src, &msg_attached.cfs_dst,
-		    inp->inp_vflag & INP_IPV4, conn_dir == CFS_CONNECTION_DIR_OUT);
+		    !IS_INP_V6(inp), conn_dir == CFS_CONNECTION_DIR_OUT);
 	}
 	msg_attached.cfs_conn_dir = conn_dir;
 
@@ -3155,6 +3243,10 @@ cfil_dispatch_attach_event(struct socket *so, struct cfil_info *cfil_info,
 			}
 			proc_rele(p);
 		}
+	}
+
+	if (cfil_info->cfi_debug) {
+		cfil_info_log(LOG_ERR, cfil_info, "CFIL: SENDING ATTACH UP");
 	}
 
 	cfil_dispatch_attach_event_sign(entry->cfe_filter->cf_crypto_state, cfil_info, &msg_attached);
@@ -3256,6 +3348,10 @@ cfil_dispatch_disconnect_event(struct socket *so, struct cfil_info *cfil_info, u
 	if (cfc->cf_flags & CFF_FLOW_CONTROLLED) {
 		error = ENOBUFS;
 		goto done;
+	}
+
+	if (cfil_info->cfi_debug) {
+		cfil_info_log(LOG_ERR, cfil_info, "CFIL: SENDING DISCONNECT UP");
 	}
 
 #if LIFECYCLE_DEBUG
@@ -3370,6 +3466,10 @@ cfil_dispatch_closed_event(struct socket *so, struct cfil_info *cfil_info, int k
 	msg_closed.cfc_byte_outbound_count = cfil_info->cfi_byte_outbound_count;
 
 	cfil_dispatch_closed_event_sign(entry->cfe_filter->cf_crypto_state, so, cfil_info, &msg_closed);
+
+	if (cfil_info->cfi_debug) {
+		cfil_info_log(LOG_ERR, cfil_info, "CFIL: SENDING CLOSED UP");
+	}
 
 #if LIFECYCLE_DEBUG
 	CFIL_LOG(LOG_ERR, "CFIL: LIFECYCLE: SENDING CLOSED UP: <sock id %llu> op ctr %d, start time %llu.%llu", msg_closed.cfc_msghdr.cfm_sock_id, cfil_info->cfi_op_list_ctr, cfil_info->cfi_first_event.tv_sec, cfil_info->cfi_first_event.tv_usec);
@@ -3507,6 +3607,7 @@ cfil_dispatch_data_event(struct socket *so, struct cfil_info *cfil_info, uint32_
 	struct cfe_buf *entrybuf;
 	struct content_filter *cfc;
 	struct timeval tv;
+	int inp_flags = 0;
 
 	cfil_rw_lock_shared(&cfil_lck_rw);
 
@@ -3575,6 +3676,24 @@ cfil_dispatch_data_event(struct socket *so, struct cfil_info *cfil_info, uint32_
 	data_req->cfd_start_offset = entrybuf->cfe_peeked;
 	data_req->cfd_end_offset = entrybuf->cfe_peeked + copylen;
 
+	data_req->cfd_flags = 0;
+	if (OPTIONAL_IP_HEADER(so)) {
+		/*
+		 * For non-UDP/TCP traffic, indicate to filters if optional
+		 * IP header is present:
+		 *      outgoing - indicate according to INP_HDRINCL flag
+		 *      incoming - For IPv4 only, stripping of IP header is
+		 *                 optional.  But for CFIL, we delay stripping
+		 *                 at rip_input.  So CFIL always expects IP
+		 *                 frames. IP header will be stripped according
+		 *                 to INP_STRIPHDR flag later at reinjection.
+		 */
+		if ((!outgoing && !IS_INP_V6(inp)) ||
+		    (outgoing && cfil_dgram_peek_socket_state(data, &inp_flags) && (inp_flags & INP_HDRINCL))) {
+			data_req->cfd_flags |= CFD_DATA_FLAG_IP_HEADER;
+		}
+	}
+
 	/*
 	 * Copy address/port into event msg.
 	 * For non connected sockets need to copy addresses from passed
@@ -3582,7 +3701,11 @@ cfil_dispatch_data_event(struct socket *so, struct cfil_info *cfil_info, uint32_
 	 */
 	cfil_fill_event_msg_addresses(cfil_info->cfi_hash_entry, inp,
 	    &data_req->cfc_src, &data_req->cfc_dst,
-	    inp->inp_vflag & INP_IPV4, outgoing);
+	    !IS_INP_V6(inp), outgoing);
+
+	if (cfil_info->cfi_debug) {
+		cfil_info_log(LOG_ERR, cfil_info, "CFIL: SENDING DATA UP");
+	}
 
 	if (cfil_info->cfi_isSignatureLatest == false) {
 		cfil_dispatch_data_event_sign(entry->cfe_filter->cf_crypto_state, so, cfil_info, data_req);
@@ -3607,6 +3730,12 @@ cfil_dispatch_data_event(struct socket *so, struct cfil_info *cfil_info, uint32_
 	CFIL_LOG(LOG_ERR, "CFIL: VERDICT ACTION: so %llx sockID %llu outgoing %d: mbuf %llx copyoffset %u copylen %u",
 	    (uint64_t)VM_KERNEL_ADDRPERM(so), cfil_info->cfi_sock_id, outgoing, (uint64_t)VM_KERNEL_ADDRPERM(data), copyoffset, copylen);
 #endif
+
+	if (cfil_info->cfi_debug) {
+		CFIL_LOG(LOG_ERR, "CFIL: VERDICT ACTION: so %llx sockID %llu outgoing %d: mbuf %llx copyoffset %u copylen %u (%s)",
+		    (uint64_t)VM_KERNEL_ADDRPERM(so), cfil_info->cfi_sock_id, outgoing, (uint64_t)VM_KERNEL_ADDRPERM(data), copyoffset, copylen,
+		    data_req->cfd_flags & CFD_DATA_FLAG_IP_HEADER ? "IP HDR" : "NO IP HDR");
+	}
 
 done:
 	if (error == ENOBUFS) {
@@ -3955,6 +4084,9 @@ cfil_service_inject_queue(struct socket *so, struct cfil_info *cfil_info, int ou
 	struct cfil_queue *inject_q;
 	int need_rwakeup = 0;
 	int count = 0;
+	struct inpcb *inp = NULL;
+	struct ip *ip = NULL;
+	unsigned int hlen;
 
 	if (cfil_info == NULL) {
 		return 0;
@@ -3984,10 +4116,13 @@ cfil_service_inject_queue(struct socket *so, struct cfil_info *cfil_info, int ou
 		datalen = cfil_data_length(data, &mbcnt, &mbnum);
 
 #if DATA_DEBUG
-		CFIL_LOG(LOG_DEBUG, "CFIL: SERVICE INJECT-Q: <%s>: <so %llx> data %llx datalen %u (mbcnt %u)",
-		    remote_addr_ptr ? "UNCONNECTED" : "CONNECTED",
+		CFIL_LOG(LOG_ERR, "CFIL: SERVICE INJECT-Q: <so %llx> data %llx datalen %u (mbcnt %u)",
 		    (uint64_t)VM_KERNEL_ADDRPERM(so), (uint64_t)VM_KERNEL_ADDRPERM(data), datalen, mbcnt);
 #endif
+		if (cfil_info->cfi_debug) {
+			CFIL_LOG(LOG_ERR, "CFIL: SERVICE INJECT-Q: <so %llx> data %llx datalen %u (mbcnt %u)",
+			    (uint64_t)VM_KERNEL_ADDRPERM(so), (uint64_t)VM_KERNEL_ADDRPERM(data), datalen, mbcnt);
+		}
 
 		/* Remove data from queue and adjust stats */
 		cfil_queue_remove(inject_q, data, datalen);
@@ -4011,12 +4146,26 @@ cfil_service_inject_queue(struct socket *so, struct cfil_info *cfil_info, int ou
 			data->m_flags |= M_SKIPCFIL;
 
 			/*
-			 * NOTE: We currently only support TCP and UDP.
-			 * For RAWIP, MPTCP and message TCP we'll
+			 * NOTE: We currently only support TCP, UDP, ICMP,
+			 * ICMPv6 and RAWIP.  For MPTCP and message TCP we'll
 			 * need to call the appropriate sbappendxxx()
 			 * of fix sock_inject_data_in()
 			 */
-			if (IS_UDP(so) == TRUE) {
+			if (IS_IP_DGRAM(so)) {
+				if (OPTIONAL_IP_HEADER(so)) {
+					inp = sotoinpcb(so);
+					if (inp && (inp->inp_flags & INP_STRIPHDR)) {
+						mbuf_t data_start = cfil_data_start(data);
+						if (data_start != NULL && (data_start->m_flags & M_PKTHDR)) {
+							ip = mtod(data_start, struct ip *);
+							hlen = IP_VHL_HL(ip->ip_vhl) << 2;
+							data_start->m_len -= hlen;
+							data_start->m_pkthdr.len -= hlen;
+							data_start->m_data += hlen;
+						}
+					}
+				}
+
 				if (sbappendchain(&so->so_rcv, data, 0)) {
 					need_rwakeup = 1;
 				}
@@ -4042,6 +4191,10 @@ cfil_service_inject_queue(struct socket *so, struct cfil_info *cfil_info, int ou
 	CFIL_LOG(LOG_ERR, "CFIL: SERVICE INJECT-Q: <so %llx> injected %d",
 	    (uint64_t)VM_KERNEL_ADDRPERM(so), count);
 #endif
+	if (cfil_info->cfi_debug) {
+		CFIL_LOG(LOG_ERR, "CFIL: SERVICE INJECT-Q: <so %llx> injected %d",
+		    (uint64_t)VM_KERNEL_ADDRPERM(so), count);
+	}
 
 	/* A single wakeup is for several packets is more efficient */
 	if (need_rwakeup) {
@@ -4662,7 +4815,7 @@ cfil_data_common(struct socket *so, struct cfil_info *cfil_info, int outgoing, s
 	cfi_buf->cfi_pending_mbcnt += mbcnt;
 	cfi_buf->cfi_pending_mbnum += mbnum;
 
-	if (IS_UDP(so)) {
+	if (IS_IP_DGRAM(so)) {
 		if (cfi_buf->cfi_pending_mbnum > cfil_udp_gc_mbuf_num_max ||
 		    cfi_buf->cfi_pending_mbcnt > cfil_udp_gc_mbuf_cnt_max) {
 			cfi_buf->cfi_tail_drop_cnt++;
@@ -4697,12 +4850,12 @@ cfil_data_common(struct socket *so, struct cfil_info *cfil_info, int outgoing, s
 			// Is cfil attached to this filter?
 			kcunit = CFI_ENTRY_KCUNIT(cfil_info, iter_entry);
 			if (IS_ENTRY_ATTACHED(cfil_info, kcunit)) {
-				if (IS_UDP(so) && chain == NULL) {
-					/* UDP only:
+				if (IS_IP_DGRAM(so) && chain == NULL) {
+					/* Datagrams only:
 					 * Chain addr (incoming only TDB), control (optional) and data into one chain.
 					 * This full chain will be reinjected into socket after recieving verdict.
 					 */
-					(void) cfil_udp_save_socket_state(cfil_info, data);
+					(void) cfil_dgram_save_socket_state(cfil_info, data);
 					chain = sbconcat_mbufs(NULL, outgoing ? NULL : to, data, control);
 					if (chain == NULL) {
 						return ENOBUFS;
@@ -4741,7 +4894,7 @@ cfil_sock_data_out(struct socket *so, struct sockaddr  *to,
 {
 	int error = 0;
 
-	if (IS_UDP(so)) {
+	if (IS_IP_DGRAM(so)) {
 		return cfil_sock_udp_handle_data(TRUE, so, NULL, to, data, control, flags);
 	}
 
@@ -4796,7 +4949,7 @@ cfil_sock_data_in(struct socket *so, struct sockaddr *from,
 {
 	int error = 0;
 
-	if (IS_UDP(so)) {
+	if (IS_IP_DGRAM(so)) {
 		return cfil_sock_udp_handle_data(FALSE, so, NULL, from, data, control, flags);
 	}
 
@@ -4846,7 +4999,7 @@ cfil_sock_shutdown(struct socket *so, int *how)
 {
 	int error = 0;
 
-	if (IS_UDP(so)) {
+	if (IS_IP_DGRAM(so)) {
 		return cfil_sock_udp_shutdown(so, how);
 	}
 
@@ -4932,7 +5085,7 @@ cfil_sock_is_closed(struct socket *so)
 	errno_t error = 0;
 	int kcunit;
 
-	if (IS_UDP(so)) {
+	if (IS_IP_DGRAM(so)) {
 		cfil_sock_udp_is_closed(so);
 		return;
 	}
@@ -4977,7 +5130,7 @@ cfil_sock_notify_shutdown(struct socket *so, int how)
 	errno_t error = 0;
 	int kcunit;
 
-	if (IS_UDP(so)) {
+	if (IS_IP_DGRAM(so)) {
 		cfil_sock_udp_notify_shutdown(so, how, 0, 0);
 		return;
 	}
@@ -5010,7 +5163,7 @@ cfil_filters_attached(struct socket *so)
 	uint32_t kcunit;
 	int attached = 0;
 
-	if (IS_UDP(so)) {
+	if (IS_IP_DGRAM(so)) {
 		return cfil_filters_udp_attached(so, FALSE);
 	}
 
@@ -5051,7 +5204,7 @@ cfil_sock_close_wait(struct socket *so)
 	struct timespec ts;
 	int error;
 
-	if (IS_UDP(so)) {
+	if (IS_IP_DGRAM(so)) {
 		cfil_sock_udp_close_wait(so);
 		return;
 	}
@@ -5118,7 +5271,7 @@ cfil_sock_data_pending(struct sockbuf *sb)
 	struct socket *so = sb->sb_so;
 	uint64_t pending = 0;
 
-	if (IS_UDP(so)) {
+	if (IS_IP_DGRAM(so)) {
 		return cfil_sock_udp_data_pending(sb, FALSE);
 	}
 
@@ -5160,7 +5313,7 @@ cfil_sock_data_space(struct sockbuf *sb)
 	struct socket *so = sb->sb_so;
 	uint64_t pending = 0;
 
-	if (IS_UDP(so)) {
+	if (IS_IP_DGRAM(so)) {
 		return cfil_sock_udp_data_pending(sb, TRUE);
 	}
 
@@ -5205,7 +5358,7 @@ cfil_sock_buf_update(struct sockbuf *sb)
 	int error;
 	struct socket *so = sb->sb_so;
 
-	if (IS_UDP(so)) {
+	if (IS_IP_DGRAM(so)) {
 		cfil_sock_udp_buf_update(sb);
 		return;
 	}
@@ -5485,8 +5638,9 @@ cfil_hash_entry_log(int level, struct socket *so, struct cfil_hash_entry *entry,
 		return;
 	}
 
-	CFIL_LOG(level, "<%s>: <UDP so %llx, entry %p, sockID %llu> lport %d fport %d laddr %s faddr %s",
+	CFIL_LOG(level, "<%s>: <%s(%d) so %llx, entry %p, sockID %llu> lport %d fport %d laddr %s faddr %s",
 	    msg,
+	    IS_UDP(so) ? "UDP" : "proto", GET_SO_PROTO(so),
 	    (uint64_t)VM_KERNEL_ADDRPERM(so), entry, sockId,
 	    ntohs(entry->cfentry_lport), ntohs(entry->cfentry_fport), local, remote);
 }
@@ -5686,17 +5840,7 @@ fill_cfil_hash_entry_from_inp(struct cfil_hash_entry *entry, bool isLocal, struc
 		return FALSE;
 	}
 
-	if (inp->inp_vflag & INP_IPV4) {
-		if (isLocal == TRUE) {
-			entry->cfentry_lport = inp->inp_lport;
-			entry->cfentry_laddr.addr46.ia46_addr4.s_addr = inp->inp_laddr.s_addr;
-		} else {
-			entry->cfentry_fport = inp->inp_fport;
-			entry->cfentry_faddr.addr46.ia46_addr4.s_addr = inp->inp_faddr.s_addr;
-		}
-		entry->cfentry_family = AF_INET;
-		return TRUE;
-	} else if (inp->inp_vflag & INP_IPV6) {
+	if (inp->inp_vflag & INP_IPV6) {
 		if (isLocal == TRUE) {
 			entry->cfentry_lport = inp->inp_lport;
 			entry->cfentry_laddr.addr6 = inp->in6p_laddr;
@@ -5705,6 +5849,16 @@ fill_cfil_hash_entry_from_inp(struct cfil_hash_entry *entry, bool isLocal, struc
 			entry->cfentry_faddr.addr6 = inp->in6p_faddr;
 		}
 		entry->cfentry_family = AF_INET6;
+		return TRUE;
+	} else if (inp->inp_vflag & INP_IPV4) {
+		if (isLocal == TRUE) {
+			entry->cfentry_lport = inp->inp_lport;
+			entry->cfentry_laddr.addr46.ia46_addr4.s_addr = inp->inp_laddr.s_addr;
+		} else {
+			entry->cfentry_fport = inp->inp_fport;
+			entry->cfentry_faddr.addr46.ia46_addr4.s_addr = inp->inp_faddr.s_addr;
+		}
+		entry->cfentry_family = AF_INET;
 		return TRUE;
 	}
 	return FALSE;
@@ -5775,12 +5929,13 @@ cfil_db_lookup_entry_with_sockid(struct cfil_db *db, u_int64_t sock_id)
 }
 
 struct cfil_hash_entry *
-cfil_db_lookup_entry(struct cfil_db *db, struct sockaddr *local, struct sockaddr *remote)
+cfil_db_lookup_entry(struct cfil_db *db, struct sockaddr *local, struct sockaddr *remote, boolean_t remoteOnly)
 {
-	struct cfil_hash_entry matchentry;
+	struct cfil_hash_entry matchentry = { };
 	struct cfil_hash_entry *nextentry = NULL;
 	struct inpcb *inp = sotoinpcb(db->cfdb_so);
 	u_int32_t hashkey_faddr = 0, hashkey_laddr = 0;
+	u_int16_t hashkey_fport = 0, hashkey_lport = 0;
 	int inp_hash_element = 0;
 	struct cfilhashhead *cfilhash = NULL;
 
@@ -5790,10 +5945,12 @@ cfil_db_lookup_entry(struct cfil_db *db, struct sockaddr *local, struct sockaddr
 		goto done;
 	}
 
-	if (local != NULL) {
-		fill_cfil_hash_entry_from_address(&matchentry, TRUE, local);
-	} else {
-		fill_cfil_hash_entry_from_inp(&matchentry, TRUE, inp);
+	if (remoteOnly == false) {
+		if (local != NULL) {
+			fill_cfil_hash_entry_from_address(&matchentry, TRUE, local);
+		} else {
+			fill_cfil_hash_entry_from_inp(&matchentry, TRUE, inp);
+		}
 	}
 	if (remote != NULL) {
 		fill_cfil_hash_entry_from_address(&matchentry, FALSE, remote);
@@ -5804,16 +5961,18 @@ cfil_db_lookup_entry(struct cfil_db *db, struct sockaddr *local, struct sockaddr
 #if INET6
 	if (inp->inp_vflag & INP_IPV6) {
 		hashkey_faddr = matchentry.cfentry_faddr.addr6.s6_addr32[3];
-		hashkey_laddr = matchentry.cfentry_laddr.addr6.s6_addr32[3];
+		hashkey_laddr = (remoteOnly == false) ? matchentry.cfentry_laddr.addr6.s6_addr32[3] : 0;
 	} else
 #endif /* INET6 */
 	{
 		hashkey_faddr = matchentry.cfentry_faddr.addr46.ia46_addr4.s_addr;
-		hashkey_laddr = matchentry.cfentry_laddr.addr46.ia46_addr4.s_addr;
+		hashkey_laddr = (remoteOnly == false) ? matchentry.cfentry_laddr.addr46.ia46_addr4.s_addr : 0;
 	}
 
-	inp_hash_element = CFIL_HASH(hashkey_laddr, hashkey_faddr,
-	    matchentry.cfentry_lport, matchentry.cfentry_fport);
+	hashkey_fport = matchentry.cfentry_fport;
+	hashkey_lport = (remoteOnly == false) ? matchentry.cfentry_lport : 0;
+
+	inp_hash_element = CFIL_HASH(hashkey_laddr, hashkey_faddr, hashkey_lport, hashkey_fport);
 	inp_hash_element &= db->cfdb_hashmask;
 
 	cfilhash = &db->cfdb_hashbase[inp_hash_element];
@@ -5821,9 +5980,9 @@ cfil_db_lookup_entry(struct cfil_db *db, struct sockaddr *local, struct sockaddr
 	LIST_FOREACH(nextentry, cfilhash, cfentry_link) {
 #if INET6
 		if ((inp->inp_vflag & INP_IPV6) &&
-		    nextentry->cfentry_lport == matchentry.cfentry_lport &&
+		    (remoteOnly || nextentry->cfentry_lport == matchentry.cfentry_lport) &&
 		    nextentry->cfentry_fport == matchentry.cfentry_fport &&
-		    IN6_ARE_ADDR_EQUAL(&nextentry->cfentry_laddr.addr6, &matchentry.cfentry_laddr.addr6) &&
+		    (remoteOnly || IN6_ARE_ADDR_EQUAL(&nextentry->cfentry_laddr.addr6, &matchentry.cfentry_laddr.addr6)) &&
 		    IN6_ARE_ADDR_EQUAL(&nextentry->cfentry_faddr.addr6, &matchentry.cfentry_faddr.addr6)) {
 #if DATA_DEBUG
 			cfil_hash_entry_log(LOG_DEBUG, db->cfdb_so, &matchentry, 0, "CFIL LOOKUP ENTRY: UDP V6 found entry");
@@ -5831,9 +5990,9 @@ cfil_db_lookup_entry(struct cfil_db *db, struct sockaddr *local, struct sockaddr
 			return nextentry;
 		} else
 #endif /* INET6 */
-		if (nextentry->cfentry_lport == matchentry.cfentry_lport &&
+		if ((remoteOnly || nextentry->cfentry_lport == matchentry.cfentry_lport) &&
 		    nextentry->cfentry_fport == matchentry.cfentry_fport &&
-		    nextentry->cfentry_laddr.addr46.ia46_addr4.s_addr == matchentry.cfentry_laddr.addr46.ia46_addr4.s_addr &&
+		    (remoteOnly || nextentry->cfentry_laddr.addr46.ia46_addr4.s_addr == matchentry.cfentry_laddr.addr46.ia46_addr4.s_addr) &&
 		    nextentry->cfentry_faddr.addr46.ia46_addr4.s_addr == matchentry.cfentry_faddr.addr46.ia46_addr4.s_addr) {
 #if DATA_DEBUG
 			cfil_hash_entry_log(LOG_DEBUG, db->cfdb_so, &matchentry, 0, "CFIL LOOKUP ENTRY: UDP V4 found entry");
@@ -5925,6 +6084,27 @@ done:
 	return entry;
 }
 
+void
+cfil_db_update_entry_local(struct cfil_db *db, struct cfil_hash_entry *entry, struct sockaddr *local)
+{
+	struct inpcb *inp = sotoinpcb(db->cfdb_so);
+
+	CFIL_LOG(LOG_INFO, "");
+
+	if (inp == NULL || entry == NULL) {
+		return;
+	}
+
+	if (local != NULL) {
+		fill_cfil_hash_entry_from_address(entry, TRUE, local);
+	} else {
+		fill_cfil_hash_entry_from_inp(entry, TRUE, inp);
+	}
+	cfil_hash_entry_log(LOG_DEBUG, db->cfdb_so, entry, 0, "CFIL: cfil_db_add_entry: local updated");
+
+	return;
+}
+
 struct cfil_info *
 cfil_db_get_cfil_info(struct cfil_db *db, cfil_sock_id_t id)
 {
@@ -5952,7 +6132,7 @@ cfil_db_get_cfil_info(struct cfil_db *db, cfil_sock_id_t id)
 }
 
 struct cfil_hash_entry *
-cfil_sock_udp_get_flow(struct socket *so, uint32_t filter_control_unit, bool outgoing, struct sockaddr *local, struct sockaddr *remote)
+cfil_sock_udp_get_flow(struct socket *so, uint32_t filter_control_unit, bool outgoing, struct sockaddr *local, struct sockaddr *remote, int debug)
 {
 	struct cfil_hash_entry *hash_entry = NULL;
 
@@ -5967,7 +6147,16 @@ cfil_sock_udp_get_flow(struct socket *so, uint32_t filter_control_unit, bool out
 	}
 
 	// See if flow already exists.
-	hash_entry = cfil_db_lookup_entry(so->so_cfil_db, local, remote);
+	hash_entry = cfil_db_lookup_entry(so->so_cfil_db, local, remote, false);
+	if (hash_entry == NULL) {
+		// No match with both local and remote, try match with remote only
+		hash_entry = cfil_db_lookup_entry(so->so_cfil_db, local, remote, true);
+		if (hash_entry != NULL) {
+			// Simply update the local address into the original flow, keeping
+			// its sockId and flow_hash unchanged.
+			cfil_db_update_entry_local(so->so_cfil_db, hash_entry, local);
+		}
+	}
 	if (hash_entry != NULL) {
 		return hash_entry;
 	}
@@ -5987,6 +6176,7 @@ cfil_sock_udp_get_flow(struct socket *so, uint32_t filter_control_unit, bool out
 		return NULL;
 	}
 	hash_entry->cfentry_cfil->cfi_dir = outgoing ? CFS_CONNECTION_DIR_OUT : CFS_CONNECTION_DIR_IN;
+	hash_entry->cfentry_cfil->cfi_debug = debug;
 
 #if LIFECYCLE_DEBUG
 	cfil_info_log(LOG_ERR, hash_entry->cfentry_cfil, "CFIL: LIFECYCLE: ADDED");
@@ -6010,6 +6200,10 @@ cfil_sock_udp_get_flow(struct socket *so, uint32_t filter_control_unit, bool out
 	/* Hold a reference on the socket for each flow */
 	so->so_usecount++;
 
+	if (debug) {
+		cfil_info_log(LOG_ERR, hash_entry->cfentry_cfil, "CFIL: LIFECYCLE: ADDED");
+	}
+
 	error = cfil_dispatch_attach_event(so, hash_entry->cfentry_cfil, 0,
 	    outgoing ? CFS_CONNECTION_DIR_OUT : CFS_CONNECTION_DIR_IN);
 	/* We can recover from flow control or out of memory errors */
@@ -6031,6 +6225,7 @@ cfil_sock_udp_handle_data(bool outgoing, struct socket *so,
 	uint32_t filter_control_unit;
 	struct cfil_hash_entry *hash_entry = NULL;
 	struct cfil_info *cfil_info = NULL;
+	int debug = 0;
 
 	socket_lock_assert_owned(so);
 
@@ -6061,7 +6256,7 @@ cfil_sock_udp_handle_data(bool outgoing, struct socket *so,
 		return error;
 	}
 
-	hash_entry = cfil_sock_udp_get_flow(so, filter_control_unit, outgoing, local, remote);
+	hash_entry = cfil_sock_udp_get_flow(so, filter_control_unit, outgoing, local, remote, debug);
 	if (hash_entry == NULL || hash_entry->cfentry_cfil == NULL) {
 		CFIL_LOG(LOG_ERR, "CFIL: Falied to create UDP flow");
 		return EPIPE;
@@ -6739,7 +6934,7 @@ cfil_info_udp_expire(void *v, wait_result_t w)
 			break;
 		}
 
-		if (IS_UDP(cfil_info->cfi_so)) {
+		if (IS_IP_DGRAM(cfil_info->cfi_so)) {
 			if (cfil_info_idle_timed_out(cfil_info, UDP_FLOW_GC_IDLE_TO, current_time) ||
 			    cfil_info_action_timed_out(cfil_info, UDP_FLOW_GC_ACTION_TO) ||
 			    cfil_info_buffer_threshold_exceeded(cfil_info)) {
@@ -6808,16 +7003,19 @@ go_sleep:
 }
 
 struct m_tag *
-cfil_udp_save_socket_state(struct cfil_info *cfil_info, struct mbuf *m)
+cfil_dgram_save_socket_state(struct cfil_info *cfil_info, struct mbuf *m)
 {
 	struct m_tag *tag = NULL;
 	struct cfil_tag *ctag = NULL;
 	struct cfil_hash_entry *hash_entry = NULL;
+	struct inpcb *inp = NULL;
 
 	if (cfil_info == NULL || cfil_info->cfi_so == NULL ||
 	    cfil_info->cfi_hash_entry == NULL || m == NULL || !(m->m_flags & M_PKTHDR)) {
 		return NULL;
 	}
+
+	inp = sotoinpcb(cfil_info->cfi_so);
 
 	/* Allocate a tag */
 	tag = m_tag_create(KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_CFIL_UDP,
@@ -6827,6 +7025,7 @@ cfil_udp_save_socket_state(struct cfil_info *cfil_info, struct mbuf *m)
 		ctag = (struct cfil_tag*)(tag + 1);
 		ctag->cfil_so_state_change_cnt = cfil_info->cfi_so->so_state_change_cnt;
 		ctag->cfil_so_options = cfil_info->cfi_so->so_options;
+		ctag->cfil_inp_flags = inp ? inp->inp_flags : 0;
 
 		hash_entry = cfil_info->cfi_hash_entry;
 		if (hash_entry->cfentry_family == AF_INET6) {
@@ -6845,8 +7044,8 @@ cfil_udp_save_socket_state(struct cfil_info *cfil_info, struct mbuf *m)
 }
 
 struct m_tag *
-cfil_udp_get_socket_state(struct mbuf *m, uint32_t *state_change_cnt, short *options,
-    struct sockaddr **faddr)
+cfil_dgram_get_socket_state(struct mbuf *m, uint32_t *state_change_cnt, short *options,
+    struct sockaddr **faddr, int *inp_flags)
 {
 	struct m_tag *tag = NULL;
 	struct cfil_tag *ctag = NULL;
@@ -6863,6 +7062,9 @@ cfil_udp_get_socket_state(struct mbuf *m, uint32_t *state_change_cnt, short *opt
 		if (faddr) {
 			*faddr = (struct sockaddr *) &ctag->cfil_faddr;
 		}
+		if (inp_flags) {
+			*inp_flags = ctag->cfil_inp_flags;
+		}
 
 		/*
 		 * Unlink tag and hand it over to caller.
@@ -6872,6 +7074,23 @@ cfil_udp_get_socket_state(struct mbuf *m, uint32_t *state_change_cnt, short *opt
 		return tag;
 	}
 	return NULL;
+}
+
+boolean_t
+cfil_dgram_peek_socket_state(struct mbuf *m, int *inp_flags)
+{
+	struct m_tag *tag = NULL;
+	struct cfil_tag *ctag = NULL;
+
+	tag = m_tag_locate(m, KERNEL_MODULE_TAG_ID, KERNEL_TAG_TYPE_CFIL_UDP, NULL);
+	if (tag) {
+		ctag = (struct cfil_tag *)(tag + 1);
+		if (inp_flags) {
+			*inp_flags = ctag->cfil_inp_flags;
+		}
+		return true;
+	}
+	return false;
 }
 
 static int
@@ -7057,7 +7276,7 @@ cfil_stats_collect_flow_stats_for_filter(int kcunit,
 						union sockaddr_in_4_6 *src = outgoing ? &cfil_info->cfi_so_attach_laddr : NULL;
 						union sockaddr_in_4_6 *dst = outgoing ? NULL : &cfil_info->cfi_so_attach_laddr;
 						cfil_fill_event_msg_addresses(cfil_info->cfi_hash_entry, inp,
-						    src, dst, inp->inp_vflag & INP_IPV4, outgoing);
+						    src, dst, !IS_INP_V6(inp), outgoing);
 					}
 				}
 

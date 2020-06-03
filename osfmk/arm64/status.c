@@ -105,17 +105,31 @@ thread_state64_to_saved_state(const arm_thread_state64_t * ts64,
     arm_saved_state_t *          saved_state)
 {
 	uint32_t i;
+#if __has_feature(ptrauth_calls)
+	boolean_t intr = ml_set_interrupts_enabled(FALSE);
+#endif /* __has_feature(ptrauth_calls) */
 
 	assert(is_saved_state64(saved_state));
 
+	set_saved_state_cpsr(saved_state, (ts64->cpsr & ~PSR64_MODE_MASK) | PSR64_MODE_RW_64);
+#if __has_feature(ptrauth_calls)
+	/*
+	 * Make writes to ts64->cpsr visible first, since it's useful as a
+	 * canary to detect thread-state corruption.
+	 */
+	__builtin_arm_dmb(DMB_ST);
+#endif
 	set_saved_state_fp(saved_state, ts64->fp);
 	set_saved_state_lr(saved_state, ts64->lr);
 	set_saved_state_sp(saved_state, ts64->sp);
 	set_saved_state_pc(saved_state, ts64->pc);
-	set_saved_state_cpsr(saved_state, (ts64->cpsr & ~PSR64_MODE_MASK) | PSR64_MODE_RW_64);
 	for (i = 0; i < 29; i++) {
 		set_saved_state_reg(saved_state, i, ts64->x[i]);
 	}
+
+#if __has_feature(ptrauth_calls)
+	ml_set_interrupts_enabled(intr);
+#endif /* __has_feature(ptrauth_calls) */
 }
 
 #endif /* __arm64__ */
@@ -1316,7 +1330,9 @@ machine_thread_state_initialize(thread_t thread)
 #if defined(HAS_APPLE_PAC)
 	/* Sign the initial user-space thread state */
 	if (thread->machine.upcb != NULL) {
+		boolean_t intr = ml_set_interrupts_enabled(FALSE);
 		ml_sign_thread_state(thread->machine.upcb, 0, 0, 0, 0, 0);
+		ml_set_interrupts_enabled(intr);
 	}
 #endif /* defined(HAS_APPLE_PAC) */
 

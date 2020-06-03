@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1036,7 +1036,7 @@ ctl_enqueuembuf(kern_ctl_ref kctlref, u_int32_t unit, struct mbuf *m,
 	}
 
 	so_recv_data_stat(so, m, 0);
-	if (sbappend(&so->so_rcv, m) != 0) {
+	if (sbappend_nodrop(&so->so_rcv, m) != 0) {
 		if ((flags & CTL_DATA_NOWAKEUP) == 0) {
 			sorwakeup(so);
 		}
@@ -1133,7 +1133,7 @@ ctl_enqueuembuf_list(void *kctlref, u_int32_t unit, struct mbuf *m_list,
 			 */
 			m->m_nextpkt = NULL;
 			so_recv_data_stat(so, m, 0);
-			if (sbappendrecord(&so->so_rcv, m) != 0) {
+			if (sbappendrecord_nodrop(&so->so_rcv, m) != 0) {
 				needwakeup = 1;
 			} else {
 				/*
@@ -1239,6 +1239,10 @@ ctl_enqueuedata(void *kctlref, u_int32_t unit, void *data, size_t len,
 		m->m_flags |= M_EOR;
 	}
 	so_recv_data_stat(so, m, 0);
+	/*
+	 * No need to call the "nodrop" variant of sbappend
+	 * because the mbuf is local to the scope of the function
+	 */
 	if (sbappend(&so->so_rcv, m) != 0) {
 		if ((flags & CTL_DATA_NOWAKEUP) == 0) {
 			sorwakeup(so);
