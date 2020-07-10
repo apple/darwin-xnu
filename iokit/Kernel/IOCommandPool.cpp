@@ -107,7 +107,7 @@ commandPool(IOService * inOwner, IOWorkLoop *inWorkLoop, UInt32 inSize)
 }
 
 bool IOCommandPool::
-init(IOService */* inOwner */, IOWorkLoop *inWorkLoop, UInt32 /* inSize */)
+init(IOService * /* inOwner */, IOWorkLoop *inWorkLoop, UInt32 /* inSize */)
 {
     return initWithWorkLoop(inWorkLoop);
 }
