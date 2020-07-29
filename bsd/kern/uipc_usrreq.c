@@ -468,6 +468,7 @@ uipc_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 			}
 			error = unp_connect(so, nam, p);
 			if (error) {
+				so->so_state &= ~SS_ISCONNECTING;
 				break;
 			}
 		} else {
@@ -529,6 +530,7 @@ uipc_send(struct socket *so, int flags, struct mbuf *m, struct sockaddr *nam,
 			if (nam) {
 				error = unp_connect(so, nam, p);
 				if (error) {
+					so->so_state &= ~SS_ISCONNECTING;
 					break;  /* XXX */
 				}
 			} else {
@@ -1180,6 +1182,9 @@ unp_connect(struct socket *so, struct sockaddr *nam, __unused proc_t p)
 	if (len >= SOCK_MAXADDRLEN) {
 		return EINVAL;
 	}
+
+	soisconnecting(so);
+
 	bcopy(soun->sun_path, buf, len);
 	buf[len] = 0;
 

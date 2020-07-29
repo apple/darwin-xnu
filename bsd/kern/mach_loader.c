@@ -353,6 +353,7 @@ load_machfile(
 	struct vnode            *vp = imgp->ip_vp;
 	off_t                   file_offset = imgp->ip_arch_offset;
 	off_t                   macho_size = imgp->ip_arch_size;
+	off_t                   total_size = 0;
 	off_t                   file_size = imgp->ip_vattr->va_data_size;
 	pmap_t                  pmap = 0;       /* protected by create_map */
 	vm_map_t                map;
@@ -368,7 +369,8 @@ load_machfile(
 	kern_return_t           kret;
 	unsigned int            pmap_flags = 0;
 
-	if (macho_size > file_size) {
+	if (os_add_overflow(file_offset, macho_size, &total_size) ||
+	    total_size > file_size) {
 		return LOAD_BADMACHO;
 	}
 
@@ -2579,6 +2581,10 @@ load_threadstack(
 	int             flavor;
 	uint32_t        stack_size;
 
+	if (total_size == 0) {
+		return LOAD_BADMACHO;
+	}
+
 	while (total_size > 0) {
 		flavor = *ts++;
 		size = *ts++;
@@ -2896,6 +2902,7 @@ load_code_signature(
 	    &blob)) {
 		if (addr) {
 			ubc_cs_blob_deallocate(addr, blob_size);
+			addr = 0;
 		}
 		ret = LOAD_FAILURE;
 		goto out;

@@ -174,6 +174,7 @@ extern const OSSymbol *     gIOBSDUnitKey;
 extern const OSSymbol *     gIODriverKitEntitlementKey;
 extern const OSSymbol *     gIOServiceDEXTEntitlementsKey;
 extern const OSSymbol *     gIODriverKitUserClientEntitlementsKey;
+extern const OSSymbol *     gIODriverKitUserClientEntitlementAllowAnyKey;
 extern const OSSymbol *     gIOMatchDeferKey;
 
 extern SInt32 IOServiceOrdering( const OSMetaClassBase * inObj1, const OSMetaClassBase * inObj2, void * ref );

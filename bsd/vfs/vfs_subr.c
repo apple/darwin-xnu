@@ -2890,7 +2890,7 @@ vn_getpath_fsenter(struct vnode *vp, char *pathbuf, int *len)
 int
 vn_getpath_fsenter_with_parent(struct vnode *dvp, struct vnode *vp, char *pathbuf, int *len)
 {
-	return build_path_with_parent(vp, dvp, pathbuf, *len, len, 0, vfs_context_current());
+	return build_path_with_parent(vp, dvp, pathbuf, *len, len, NULL, 0, vfs_context_current());
 }
 
 int
@@ -2910,13 +2910,47 @@ vn_getpath_ext(struct vnode *vp, struct vnode *dvp, char *pathbuf, int *len, int
 		}
 	}
 
-	return build_path_with_parent(vp, dvp, pathbuf, *len, len, bpflags, vfs_context_current());
+	return build_path_with_parent(vp, dvp, pathbuf, *len, len, NULL, bpflags, vfs_context_current());
 }
 
 int
 vn_getpath_no_firmlink(struct vnode *vp, char *pathbuf, int *len)
 {
 	return vn_getpath_ext(vp, NULLVP, pathbuf, len, VN_GETPATH_NO_FIRMLINK);
+}
+
+int
+vn_getpath_ext_with_mntlen(struct vnode *vp, struct vnode *dvp, char *pathbuf, size_t *len, size_t *mntlen, int flags)
+{
+	int bpflags = (flags & VN_GETPATH_FSENTER) ? 0 : BUILDPATH_NO_FS_ENTER;
+	int local_len;
+	int error;
+
+	if (*len > INT_MAX) {
+		return EINVAL;
+	}
+
+	local_len = *len;
+
+	if (flags && (flags != VN_GETPATH_FSENTER)) {
+		if (flags & VN_GETPATH_NO_FIRMLINK) {
+			bpflags |= BUILDPATH_NO_FIRMLINK;;
+		}
+		if (flags & VN_GETPATH_VOLUME_RELATIVE) {
+			bpflags |= (BUILDPATH_VOLUME_RELATIVE | BUILDPATH_NO_FIRMLINK);
+		}
+		if (flags & VN_GETPATH_NO_PROCROOT) {
+			bpflags |= BUILDPATH_NO_PROCROOT;
+		}
+	}
+
+	error = build_path_with_parent(vp, dvp, pathbuf, local_len, &local_len, mntlen, bpflags, vfs_context_current());
+
+	if (local_len >= 0 && local_len <= (int)*len) {
+		*len = (size_t)local_len;
+	}
+
+	return error;
 }
 
 int
@@ -3899,6 +3933,12 @@ sysctl_vfs_ctlbyfsid(__unused struct sysctl_oid *oidp, void *arg1, int arg2,
 		error = safedounmount(mp, flags, ctx);
 		break;
 	case VFS_CTL_STATFS:
+#if CONFIG_MACF
+		error = mac_mount_check_stat(ctx, mp);
+		if (error != 0) {
+			break;
+		}
+#endif
 		req->newidx = 0;
 		if (is_64_bit) {
 			req->newptr = vc.vc64.vc_ptr;

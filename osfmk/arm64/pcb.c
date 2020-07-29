@@ -340,9 +340,17 @@ machine_stack_attach(thread_t thread,
 	savestate = saved_state64(&context->ss);
 	savestate->fp = 0;
 	savestate->sp = thread->machine.kstackptr;
+
+	/*
+	 * The PC and CPSR of the kernel stack saved state are never used by context switch
+	 * code, and should never be used on exception return either. We're going to poison
+	 * these values to ensure they never get copied to the exception frame and used to
+	 * hijack control flow or privilege level on exception return.
+	 */
+
+	const uint32_t default_cpsr = PSR64_KERNEL_POISON;
 #if defined(HAS_APPLE_PAC)
 	/* Sign the initial kernel stack saved state */
-	const uint32_t default_cpsr = PSR64_KERNEL_DEFAULT & ~PSR64_MODE_EL_MASK;
 	boolean_t intr = ml_set_interrupts_enabled(FALSE);
 	asm volatile (
 		"mov	x0, %[ss]"				"\n"
@@ -352,8 +360,6 @@ machine_stack_attach(thread_t thread,
 
 		"mov	x2, %[default_cpsr_lo]"			"\n"
 		"movk	x2, %[default_cpsr_hi], lsl #16"	"\n"
-		"mrs	x3, CurrentEL"				"\n"
-		"orr	w2, w2, w3"				"\n"
 		"str	w2, [x0, %[SS64_CPSR]]"			"\n"
 
 		"adrp	x3, _thread_continue@page"		"\n"
@@ -380,7 +386,8 @@ machine_stack_attach(thread_t thread,
 	ml_set_interrupts_enabled(intr);
 #else
 	savestate->lr = (uintptr_t)thread_continue;
-	savestate->cpsr = (PSR64_KERNEL_DEFAULT & ~PSR64_MODE_EL_MASK) | current_el;
+	savestate->cpsr = default_cpsr;
+	savestate->pc = 0;
 #endif /* defined(HAS_APPLE_PAC) */
 	machine_stack_attach_kprintf("thread = %p pc = %llx, sp = %llx\n", thread, savestate->lr, savestate->sp);
 }

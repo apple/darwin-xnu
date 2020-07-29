@@ -8,6 +8,9 @@ __ZN22IOInterruptEventSource27getPimaryInterruptTimestampEv
 __ZN22IOInterruptEventSource31enablePrimaryInterruptTimestampEb
 
 __ZN14IOPMrootDomain11setWakeTimeEy
+
+__ZN12IODMACommand8DispatchE5IORPC
+
 _IOAlignmentToSize
 _IOBSDNameMatching
 _IOBSDRegistryEntryForDeviceTree

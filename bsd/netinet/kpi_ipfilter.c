@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -329,7 +329,7 @@ ipf_inject_input(
 			ip6 = mtod(m, struct ip6_hdr *);
 			pkt_dst6.sin6_addr = ip6->ip6_dst;
 			lck_rw_lock_shared(&in6_ifaddr_rwlock);
-			for (ia6 = in6_ifaddrs; ia6 != NULL; ia6 = ia6->ia_next) {
+			TAILQ_FOREACH(ia6, IN6ADDR_HASH(&pkt_dst6.sin6_addr), ia6_hash) {
 				if (IN6_ARE_ADDR_EQUAL(&ia6->ia_addr.sin6_addr, &pkt_dst6.sin6_addr)) {
 					m->m_pkthdr.rcvif = ia6->ia_ifp;
 					break;

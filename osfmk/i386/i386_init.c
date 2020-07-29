@@ -871,8 +871,8 @@ do_init_slave(boolean_t fast_restart)
 #if CONFIG_MTRR
 		mtrr_update_cpu();
 #endif
-		/* update CPU microcode */
-		ucode_update_wake();
+		/* update CPU microcode and apply CPU workarounds */
+		ucode_update_wake_and_apply_cpu_was();
 	} else {
 		init_param = FAST_SLAVE_INIT;
 	}

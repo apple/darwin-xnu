@@ -183,6 +183,7 @@
 #define CPUID_LEAF7_EXTFEATURE_AVX5124VNNIW     _Bit(2)         /* AVX512_4VNNIW */
 #define CPUID_LEAF7_EXTFEATURE_AVX5124FMAPS     _Bit(3)         /* AVX512_4FMAPS */
 #define CPUID_LEAF7_EXTFEATURE_FSREPMOV         _Bit(4)         /* Fast Short REP MOV */
+#define CPUID_LEAF7_EXTFEATURE_SRBDS_CTRL       _Bit(9)         /* SRBDS MSR Presence and Mitigation Control */
 #define CPUID_LEAF7_EXTFEATURE_MDCLEAR          _Bit(10)        /* Overloaded VERW / L1D_FLUSH */
 #define CPUID_LEAF7_EXTFEATURE_TSXFA            _Bit(13)        /* TSX RTM_FORCE_ABORT MSR */
 #define CPUID_LEAF7_EXTFEATURE_IBRS             _Bit(26)        /* IBRS / IBPB */

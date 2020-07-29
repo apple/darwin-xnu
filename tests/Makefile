@@ -277,6 +277,8 @@ task_vm_info_decompressions: INVALID_ARCHS = x86_64 i386
 socket_bind_35243417: CODE_SIGN_ENTITLEMENTS = network_entitlements.plist
 socket_bind_35685803: CODE_SIGN_ENTITLEMENTS = network_entitlements.plist
 
+sioc-if-addr-bounds: sioc-if-addr-bounds.c
+
 net_tuntests: CODE_SIGN_ENTITLEMENTS = network_entitlements.plist
 
 net_bridge: OTHER_CFLAGS += bpflib.c in_cksum.c

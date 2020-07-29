@@ -23,6 +23,7 @@ OPTIONS/mach_assert				optional mach_assert
 ./DriverKit/IODataQueueDispatchSource.iig.cpp		optional iokitcpp
 ./DriverKit/IOServiceNotificationDispatchSource.iig.cpp		optional iokitcpp
 ./DriverKit/IOUserServer.iig.cpp		optional iokitcpp
+./DriverKit/IODMACommand.iig.cpp		optional iokitcpp
 
 # libIOKit
 

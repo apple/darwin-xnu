@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -631,17 +631,17 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 #pragma unused(proto)
 	struct mbuf *m = *mp;
 	int off = *offp;
-	struct ip6_hdr *ip6;
-	struct ah *ah;
-	u_int32_t spi;
-	const struct ah_algorithm *algo;
-	size_t siz;
-	size_t siz1;
-	u_char *cksum;
+	struct ip6_hdr *ip6 = NULL;
+	struct ah *ah = NULL;
+	u_int32_t spi = 0;
+	const struct ah_algorithm *algo = NULL;
+	size_t siz = 0;
+	size_t siz1 = 0;
+	u_char *cksum = NULL;
 	struct secasvar *sav = NULL;
-	u_int16_t nxt;
+	u_int16_t nxt = IPPROTO_DONE;
 	size_t stripsiz = 0;
-	sa_family_t ifamily;
+	sa_family_t ifamily = AF_UNSPEC;
 
 	IP6_EXTHDR_CHECK(m, off, sizeof(struct ah), {return IPPROTO_DONE;});
 	ah = (struct ah *)(void *)(mtod(m, caddr_t) + off);
@@ -724,6 +724,8 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 		}
 		IP6_EXTHDR_CHECK(m, off, sizeof(struct ah) + sizoff + siz1,
 		    {return IPPROTO_DONE;});
+		ip6 = mtod(m, struct ip6_hdr *);
+		ah = (struct ah *)(void *)(mtod(m, caddr_t) + off);
 	}
 
 	/*
@@ -1026,6 +1028,7 @@ fail:
 	}
 	if (m) {
 		m_freem(m);
+		*mp = NULL;
 	}
 	return IPPROTO_DONE;
 }

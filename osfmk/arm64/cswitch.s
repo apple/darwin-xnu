@@ -52,6 +52,9 @@
 	stp		x25, x26, [$0, SS64_X25]
 	stp		x27, x28, [$0, SS64_X27]
 	stp		fp, lr, [$0, SS64_FP]
+	str		xzr, [$0, SS64_PC]
+	MOV32	w$1, PSR64_KERNEL_POISON
+	str		w$1, [$0, SS64_CPSR]
 #ifdef HAS_APPLE_PAC
 	stp		x0, x1, [sp, #-16]!
 	stp		x2, x3, [sp, #-16]!
@@ -64,8 +67,8 @@
 	 * Arg3: LR to sign
 	 */
 	mov		x0, $0
-	ldr		x1, [x0, SS64_PC]
-	ldr		w2, [x0, SS64_CPSR]
+	mov		x1, #0
+	mov		w2, w$1
 	mov		x3, lr
 	mov		x4, x16
 	mov		x5, x17
@@ -76,8 +79,8 @@
 	ldp		x0, x1, [sp], #16
 	ldp		fp, lr, [$0, SS64_FP]
 #endif /* defined(HAS_APPLE_PAC) */
-	mov		$1, sp
-	str		$1, [$0, SS64_SP]
+	mov		x$1, sp
+	str		x$1, [$0, SS64_SP]
 
 /* AAPCS-64 Page 14
  *
@@ -265,7 +268,7 @@ LEXT(Call_continuation)
 LEXT(Switch_context)
 	cbnz	x1, Lswitch_threads					// Skip saving old state if blocking on continuation
 	ldr		x3, [x0, TH_KSTACKPTR]				// Get the old kernel stack top
-	save_general_registers	x3, x4
+	save_general_registers	x3, 4
 Lswitch_threads:
 	set_thread_registers	x2, x3, x4
 	ldr		x3, [x2, TH_KSTACKPTR]
@@ -286,7 +289,7 @@ Lswitch_threads:
 LEXT(Shutdown_context)
 	mrs		x10, TPIDR_EL1							// Get thread pointer
 	ldr		x11, [x10, TH_KSTACKPTR]				// Get the top of the kernel stack
-	save_general_registers	x11, x12
+	save_general_registers	x11, 12
 	msr		DAIFSet, #(DAIFSC_FIQF | DAIFSC_IRQF)	// Disable interrupts
 	ldr		x11, [x10, ACT_CPUDATAP]				// Get current cpu
 	ldr		x12, [x11, CPU_ISTACKPTR]				// Switch to interrupt stack
@@ -304,7 +307,7 @@ LEXT(Shutdown_context)
 LEXT(Idle_context)
 	mrs		x0, TPIDR_EL1						// Get thread pointer
 	ldr		x1, [x0, TH_KSTACKPTR]				// Get the top of the kernel stack
-	save_general_registers	x1, x2
+	save_general_registers	x1, 2
 	ldr		x1, [x0, ACT_CPUDATAP]				// Get current cpu
 	ldr		x2, [x1, CPU_ISTACKPTR]				// Switch to interrupt stack
 	mov		sp, x2

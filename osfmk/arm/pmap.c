@@ -2543,7 +2543,7 @@ pmap_pages_reclaim(
 				    && ((*tte_p & ARM_TTE_TYPE_MASK) == ARM_TTE_TYPE_TABLE)) {
 					pte_p = (pt_entry_t *) ttetokv(*tte_p);
 					bpte = &pte_p[pte_index(pmap, pt_attr, va)];
-					epte = bpte + PAGE_SIZE / sizeof(pt_entry_t);
+					epte = bpte + pt_attr_leaf_size(pt_attr) / sizeof(pt_entry_t);
 					/*
 					 * Use PMAP_OPTIONS_REMOVE to clear any
 					 * "compressed" markers and update the
@@ -6164,6 +6164,13 @@ pmap_remove_range_options(
 
 	PMAP_ASSERT_LOCKED(pmap);
 
+	const pt_attr_t * const pt_attr = pmap_get_pt_attr(pmap);
+	uint64_t pmap_page_size = pt_attr_leaf_size(pt_attr);
+
+	if (__improbable((uintptr_t)epte > (((uintptr_t)bpte + pmap_page_size) & ~(pmap_page_size - 1)))) {
+		panic("%s: PTE range [%p, %p) in pmap %p crosses page table boundary", __func__, bpte, epte, pmap);
+	}
+
 	num_removed = 0;
 	num_unwired = 0;
 	num_pte_changed = 0;
@@ -7114,8 +7121,8 @@ pmap_protect_options_internal(
 	boolean_t        should_have_removed = FALSE;
 	bool             need_strong_sync = false;
 
-	if (__improbable(end < start)) {
-		panic("%s called with bogus range: %p, %p", __func__, (void*)start, (void*)end);
+	if (__improbable((end < start) || (end > ((start + pt_attr_twig_size(pt_attr)) & ~pt_attr_twig_offmask(pt_attr))))) {
+		panic("%s: invalid address range %p, %p", __func__, (void*)start, (void*)end);
 	}
 
 #if DEVELOPMENT || DEBUG

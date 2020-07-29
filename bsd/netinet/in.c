@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -695,7 +695,7 @@ inctl_ifaddr(struct ifnet *ifp, struct in_ifaddr *ia, u_long cmd,
 				hostIsNew = 0;
 			}
 		}
-		if (mask.sin_len) {
+		if (mask.sin_len != 0) {
 			IFA_UNLOCK(&ia->ia_ifa);
 			in_ifscrub(ifp, ia, 0);
 			IFA_LOCK(&ia->ia_ifa);
@@ -710,7 +710,10 @@ inctl_ifaddr(struct ifnet *ifp, struct in_ifaddr *ia, u_long cmd,
 			in_ifscrub(ifp, ia, 0);
 			IFA_LOCK(&ia->ia_ifa);
 			ia->ia_dstaddr = broadaddr;
+			ia->ia_dstaddr.sin_family = AF_INET;
 			ia->ia_dstaddr.sin_len = sizeof(struct sockaddr_in);
+			ia->ia_dstaddr.sin_port = 0;
+			bzero(&ia->ia_dstaddr.sin_zero, sizeof(ia->ia_dstaddr.sin_zero));
 			maskIsNew  = 1; /* We lie; but the effect's the same */
 		}
 		if (addr.sin_family == AF_INET && (hostIsNew || maskIsNew)) {
@@ -725,7 +728,11 @@ inctl_ifaddr(struct ifnet *ifp, struct in_ifaddr *ia, u_long cmd,
 		IFA_LOCK(&ia->ia_ifa);
 		if ((ifp->if_flags & IFF_BROADCAST) &&
 		    (broadaddr.sin_family == AF_INET)) {
-			ia->ia_broadaddr = broadaddr;
+			ia->ia_broadaddr.sin_family = AF_INET;
+			ia->ia_broadaddr.sin_len = sizeof(struct sockaddr_in);
+			ia->ia_broadaddr.sin_port = 0;
+			ia->ia_broadaddr.sin_addr = broadaddr.sin_addr;
+			bzero(&ia->ia_broadaddr.sin_zero, sizeof(ia->ia_broadaddr.sin_zero));
 		}
 
 		/*
@@ -940,10 +947,13 @@ inctl_ifdstaddr(struct ifnet *ifp, struct in_ifaddr *ia, u_long cmd,
 		VERIFY(ia != NULL);
 		IFA_LOCK(&ia->ia_ifa);
 		dstaddr = ia->ia_dstaddr;
+
 		bcopy(&ifr->ifr_dstaddr, &ia->ia_dstaddr, sizeof(dstaddr));
-		if (ia->ia_dstaddr.sin_family == AF_INET) {
-			ia->ia_dstaddr.sin_len = sizeof(struct sockaddr_in);
-		}
+		ia->ia_dstaddr.sin_family = AF_INET;
+		ia->ia_dstaddr.sin_len = sizeof(struct sockaddr_in);
+		ia->ia_dstaddr.sin_port = 0;
+		bzero(&ia->ia_dstaddr.sin_zero, sizeof(ia->ia_dstaddr.sin_zero));
+
 		IFA_UNLOCK(&ia->ia_ifa);
 		/*
 		 * NOTE: SIOCSIFDSTADDR is defined with struct ifreq
@@ -1060,6 +1070,11 @@ inctl_ifbrdaddr(struct ifnet *ifp, struct in_ifaddr *ia, u_long cmd,
 		IFA_LOCK(&ia->ia_ifa);
 		bcopy(&ifr->ifr_broadaddr, &ia->ia_broadaddr,
 		    sizeof(struct sockaddr_in));
+
+		ia->ia_broadaddr.sin_family = AF_INET;
+		ia->ia_broadaddr.sin_len = sizeof(struct sockaddr_in);
+		ia->ia_broadaddr.sin_port = 0;
+		bzero(&ia->ia_broadaddr.sin_zero, sizeof(ia->ia_broadaddr.sin_zero));
 
 		ev_msg.vendor_code      = KEV_VENDOR_APPLE;
 		ev_msg.kev_class        = KEV_NETWORK_CLASS;
@@ -1491,7 +1506,7 @@ in_control(struct socket *so, u_long cmd, caddr_t data, struct ifnet *ifp,
 			ifa->ifa_addr = (struct sockaddr *)&ia->ia_addr;
 			ifa->ifa_dstaddr = (struct sockaddr *)&ia->ia_dstaddr;
 			ifa->ifa_netmask = (struct sockaddr *)&ia->ia_sockmask;
-			ia->ia_sockmask.sin_len = 8;
+			ia->ia_sockmask.sin_len = offsetof(struct sockaddr_in, sin_zero);
 			if (ifp->if_flags & IFF_BROADCAST) {
 				ia->ia_broadaddr.sin_len = sizeof(ia->ia_addr);
 				ia->ia_broadaddr.sin_family = AF_INET;

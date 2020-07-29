@@ -37,6 +37,11 @@ struct IOInterruptDispatchSourcePayload {
 	uint64_t count;
 };
 
+enum {
+	kIOInterruptDispatchSourceTypeEdge  = 0x00000000,
+	kIOInterruptDispatchSourceTypeLevel = 0x00000001
+};
+
 /*!
  * @class IOInterruptDispatchSource
  *
@@ -66,6 +71,22 @@ public:
 	    uint32_t index,
 	    IODispatchQueue * queue,
 	    IOInterruptDispatchSource ** source) LOCAL;
+
+    /*!
+     * @brief       Returns the type of interrupt used for a device supplying hardware interrupts, by index from an IOService provider.
+     * @param       provider The IOService object representing the HW device producing the interrupt.
+     * @param       index Index for the interrupt.
+     * @param 		interruptType The interrupt type for the interrupt source will be stored here.
+     *              kIOInterruptTypeEdge will be returned for edge-trigggered sources.
+     *              kIOInterruptTypeLevel will be returned for level-trigggered sources.
+     *              Other flags may be returned depending on the provider, for example PCI flags for messaged interrupts.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+
+	static kern_return_t
+	GetInterruptType(IOService * provider,
+	    uint32_t index,
+	    uint64_t * interruptType);
 
 	virtual bool
 	init() override;

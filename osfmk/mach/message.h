@@ -654,6 +654,28 @@ typedef union{
 #define round_msg(x)    (((mach_msg_size_t)(x) + sizeof (natural_t) - 1) & \
 	                        ~(sizeof (natural_t) - 1))
 
+#ifdef XNU_KERNEL_PRIVATE
+
+#include <os/base.h>
+#include <os/overflow.h>
+#include <kern/debug.h>
+
+#define round_msg_overflow(in, out) __os_warn_unused(({ \
+	        bool __ovr = os_add_overflow(in, (__typeof__(*out))(sizeof(natural_t) - 1), out); \
+	        *out &= ~((__typeof__(*out))(sizeof(natural_t) - 1)); \
+	        __ovr; \
+	}))
+
+static inline mach_msg_size_t
+mach_round_msg(mach_msg_size_t x)
+{
+	if (round_msg_overflow(x, &x)) {
+		panic("round msg overflow");
+	}
+	return x;
+}
+#endif /* XNU_KERNEL_PRIVATE */
+
 /*
  *  There is no fixed upper bound to the size of Mach messages.
  */

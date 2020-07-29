@@ -203,6 +203,7 @@
 #else
 #define PSR64_KERNEL_DEFAULT    PSR64_KERNEL_STANDARD
 #endif
+#define PSR64_KERNEL_POISON     (PSR64_IL | PSR64_MODE_EL1)
 
 #define PSR64_IS_KERNEL(x)      ((x & PSR64_MODE_EL_MASK) > PSR64_MODE_EL0)
 #define PSR64_IS_USER(x)        ((x & PSR64_MODE_EL_MASK) == PSR64_MODE_EL0)
@@ -1495,6 +1496,19 @@ typedef enum {
 
 #define ISS_FP_IOF_SHIFT 0
 #define ISS_FP_IOF       (0x1 << ISS_FP_IOF_SHIFT)
+
+/*
+ * Breakpoint Exception ISS (EL1)
+ *  24     16          0
+ * +---------+---------+
+ * |000000000| Comment |
+ * +---------+---------+
+ *
+ * where:
+ *   Comment: Instruction Comment Field Value
+ */
+#define ISS_BRK_COMMENT_MASK    0xFFFF
+#define ISS_BRK_COMMENT(x)      (x & ISS_BRK_COMMENT_MASK)
 
 
 /*

@@ -149,6 +149,7 @@ struct necp_packet_header {
 #define NECP_POLICY_CONDITION_FLOW_LOCAL_ADDR_EMPTY     25      // N/A
 #define NECP_POLICY_CONDITION_FLOW_REMOTE_ADDR_EMPTY    26      // N/A
 #define NECP_POLICY_CONDITION_PLATFORM_BINARY           27      // N/A
+#define NECP_POLICY_CONDITION_SIGNING_IDENTIFIER        28      // String
 
 /*
  * Results
@@ -991,6 +992,7 @@ struct necp_kernel_socket_policy {
 	union necp_sockaddr_union       cond_remote_end;                                // Matches IP address range
 	u_int8_t                                        cond_remote_prefix;                             // Defines subnet
 	struct necp_policy_condition_agent_type cond_agent_type;
+	char                                            *cond_signing_identifier;   // String
 
 	necp_kernel_policy_result       result;
 	necp_kernel_policy_result_parameter     result_parameter;

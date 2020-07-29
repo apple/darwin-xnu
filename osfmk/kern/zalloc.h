@@ -166,8 +166,8 @@ struct zone {
 	uint32_t zleak_capture;         /* per-zone counter for capturing every N allocations */
 #endif /* CONFIG_ZLEAKS */
 	uint32_t zp_count;              /* counter for poisoning every N frees */
-	vm_size_t       prio_refill_watermark;
-	thread_t        zone_replenish_thread;
+	uint32_t prio_refill_count;     /* if async_prio_refill, refill to this count */
+	thread_t zone_replenish_thread;
 #if     CONFIG_GZALLOC
 	gzalloc_data_t  gz;
 #endif /* CONFIG_GZALLOC */
@@ -325,7 +325,7 @@ extern int              zfill(
 	zone_t          zone,
 	int                     nelem);
 
-extern void             zone_prio_refill_configure(zone_t, vm_size_t);
+extern void             zone_prio_refill_configure(zone_t);
 
 /* See above/top of file. Z_* definitions moved so they would be usable by kexts */
 

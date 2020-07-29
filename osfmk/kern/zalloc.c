@@ -120,8 +120,9 @@ lck_grp_attr_t  zone_locks_grp_attr;
  */
 
 #define from_zone_map(addr, size) \
-	((vm_offset_t)(addr)             >= zone_map_min_address && \
-	((vm_offset_t)(addr) + size - 1) <  zone_map_max_address )
+	((vm_offset_t)(addr)         >= zone_map_min_address && \
+	((vm_offset_t)(addr) + size) >= zone_map_min_address && \
+	((vm_offset_t)(addr) + size) <= zone_map_max_address )
 
 /*
  * Zone Corruption Debugging
@@ -646,16 +647,19 @@ get_zone_page(struct zone_page_metadata *page_meta)
 void
 zone_require(void *addr, zone_t expected_zone)
 {
-	struct zone *src_zone = NULL;
-	struct zone_page_metadata *page_meta = get_zone_page_metadata((struct zone_free_element *)addr, FALSE);
+	struct zone_page_metadata *page_meta;
 
-	src_zone = PAGE_METADATA_GET_ZONE(page_meta);
-	if (__improbable(src_zone == NULL)) {
-		panic("Address not in a zone for zone_require check (addr: %p)", addr);
+	if (!from_zone_map(addr, expected_zone->elem_size)) {
+		panic("Address not in a zone map for zone_require check (addr: %p)", addr);
 	}
 
-	if (__improbable(src_zone != expected_zone)) {
-		panic("Address not in expected zone for zone_require check (addr: %p, zone: %s)", addr, src_zone->zone_name);
+	page_meta = PAGE_METADATA_FOR_ELEMENT(addr);
+	if (PAGE_METADATA_GET_ZINDEX(page_meta) == MULTIPAGE_METADATA_MAGIC) {
+		page_meta = page_metadata_get_realmeta(page_meta);
+	}
+	if (PAGE_METADATA_GET_ZINDEX(page_meta) != expected_zone->index) {
+		panic("Address not in expected zone for zone_require check (addr: %p, zone: %s)",
+		    addr, expected_zone->zone_name);
 	}
 }
 
@@ -2401,7 +2405,7 @@ zinit(
 	z->gzalloc_exempt = FALSE;
 	z->alignment_required = FALSE;
 	z->zone_replenishing = FALSE;
-	z->prio_refill_watermark = 0;
+	z->prio_refill_count = 0;
 	z->zone_replenish_thread = NULL;
 	z->zp_count = 0;
 	z->kasan_quarantine = TRUE;
@@ -2565,7 +2569,52 @@ zinit(
 
 	return z;
 }
-unsigned        zone_replenish_loops, zone_replenish_wakeups, zone_replenish_wakeups_initiated, zone_replenish_throttle_count;
+
+/*
+ * Dealing with zone allocations from the mach VM code.
+ *
+ * The implementation of the mach VM itself uses the zone allocator
+ * for things like the vm_map_entry data structure. In order to prevent
+ * an infinite recursion problem when adding more pages to a zone, zalloc
+ * uses a replenish thread to refill the VM layer's zones before they have
+ * too few remaining free entries. The reserved remaining free entries
+ * guarantee that the VM routines can get entries from already mapped pages.
+ *
+ * In order for that to work, the amount of allocations in the nested
+ * case have to be bounded. There are currently 2 replenish zones, and
+ * if each needs 1 element of each zone to add a new page to itself, that
+ * gives us a minumum reserve of 2 elements.
+ *
+ * There is also a deadlock issue with the zone garbage collection thread,
+ * or any thread that is trying to free zone pages. While holding
+ * the kernel's map lock they may need to allocate new VM map entries, hence
+ * we need enough reserve to allow them to get past the point of holding the
+ * map lock. After freeing that page, the GC thread will wait in drop_free_elements()
+ * until the replenish threads can finish. Since there's only 1 GC thread at a time,
+ * that adds a minimum of 1 to the reserve size.
+ *
+ * Since the minumum amount you can add to a zone is 1 page, we'll use 16K (from ARM)
+ * as the refill size on all platforms.
+ *
+ * When a refill zone drops to half that available, i.e. REFILL_SIZE / 2,
+ * zalloc_internal() will wake the replenish thread. The replenish thread runs
+ * until at least REFILL_SIZE worth of free elements exist, before sleeping again.
+ * In the meantime threads may continue to use the reserve until there are only REFILL_SIZE / 4
+ * elements left. Below that point only the replenish threads themselves and the GC
+ * thread may continue to use from the reserve.
+ */
+static unsigned zone_replenish_loops;
+static unsigned zone_replenish_wakeups;
+static unsigned zone_replenish_wakeups_initiated;
+static unsigned zone_replenish_throttle_count;
+
+#define ZONE_REPLENISH_TARGET (16 * 1024)
+static unsigned int   zone_replenish_active = 0; /* count of zones currently replenishing */
+static unsigned int   zone_replenish_max_threads = 0;
+static lck_spin_t     zone_replenish_lock;
+static lck_attr_t     zone_replenish_lock_attr;
+static lck_grp_t      zone_replenish_lock_grp;
+static lck_grp_attr_t zone_replenish_lock_grp_attr;
 
 static void zone_replenish_thread(zone_t);
 
@@ -2576,15 +2625,14 @@ __dead2
 static void
 zone_replenish_thread(zone_t z)
 {
-	vm_size_t free_size;
-	current_thread()->options |= TH_OPT_VMPRIV;
+	current_thread()->options |= (TH_OPT_VMPRIV | TH_OPT_ZONE_PRIV);
 
 	for (;;) {
 		lock_zone(z);
 		assert(z->zone_valid);
-		z->zone_replenishing = TRUE;
-		assert(z->prio_refill_watermark != 0);
-		while ((free_size = (z->cur_size - (z->count * z->elem_size))) < (z->prio_refill_watermark * z->elem_size)) {
+		assert(z->zone_replenishing);
+		assert(z->prio_refill_count != 0);
+		while ((z->cur_size / z->elem_size) - z->count < z->prio_refill_count) {
 			assert(z->doing_alloc_without_vm_priv == FALSE);
 			assert(z->doing_alloc_with_vm_priv == FALSE);
 			assert(z->async_prio_refill == TRUE);
@@ -2634,13 +2682,23 @@ zone_replenish_thread(zone_t z)
 			zone_replenish_loops++;
 		}
 
-		z->zone_replenishing = FALSE;
-		/* Signal any potential throttled consumers, terminating
-		 * their timer-bounded waits.
-		 */
+		/* Wakeup any potentially throttled allocations. */
 		thread_wakeup(z);
 
 		assert_wait(&z->zone_replenish_thread, THREAD_UNINT);
+
+		/*
+		 * We finished refilling the zone, so decrement the active count
+		 * and wake up any waiting GC threads.
+		 */
+		lck_spin_lock(&zone_replenish_lock);
+		assert(zone_replenish_active > 0);
+		if (--zone_replenish_active == 0) {
+			thread_wakeup((event_t)&zone_replenish_active);
+		}
+		lck_spin_unlock(&zone_replenish_lock);
+
+		z->zone_replenishing = FALSE;
 		unlock_zone(z);
 		thread_block(THREAD_CONTINUE_NULL);
 		zone_replenish_wakeups++;
@@ -2648,11 +2706,16 @@ zone_replenish_thread(zone_t z)
 }
 
 void
-zone_prio_refill_configure(zone_t z, vm_size_t low_water_mark)
+zone_prio_refill_configure(zone_t z)
 {
-	z->prio_refill_watermark = low_water_mark;
+	z->prio_refill_count = ZONE_REPLENISH_TARGET / z->elem_size;
 
 	z->async_prio_refill = TRUE;
+	z->zone_replenishing = TRUE;
+	lck_spin_lock(&zone_replenish_lock);
+	++zone_replenish_max_threads;
+	++zone_replenish_active;
+	lck_spin_unlock(&zone_replenish_lock);
 	OSMemoryBarrier();
 	kern_return_t tres = kernel_thread_start_priority((thread_continue_t)zone_replenish_thread, z, MAXPRI_KERNEL, &z->zone_replenish_thread);
 
@@ -3005,6 +3068,11 @@ zone_bootstrap(void)
 	lck_attr_setdefault(&zone_metadata_lock_attr);
 	lck_mtx_init_ext(&zone_metadata_region_lck, &zone_metadata_region_lck_ext, &zone_locks_grp, &zone_metadata_lock_attr);
 
+	lck_grp_attr_setdefault(&zone_replenish_lock_grp_attr);
+	lck_grp_init(&zone_replenish_lock_grp, "zone_replenish_lock", &zone_replenish_lock_grp_attr);
+	lck_attr_setdefault(&zone_replenish_lock_attr);
+	lck_spin_init(&zone_replenish_lock, &zone_replenish_lock_grp, &zone_replenish_lock_attr);
+
 #if     CONFIG_ZCACHE
 	/* zcc_enable_for_zone_name=<zone>: enable per-cpu zone caching for <zone>. */
 	if (PE_parse_boot_arg_str("zcc_enable_for_zone_name", cache_zone_name, sizeof(cache_zone_name))) {
@@ -3247,18 +3315,6 @@ zalloc_poison_element(boolean_t check_poison, zone_t zone, vm_offset_t addr)
 }
 
 /*
- * When deleting page mappings from the kernel map, it might be necessary to split
- * apart an existing vm_map_entry. That means that a "free" operation, will need to
- * *allocate* new vm_map_entry structures before it can free a page.
- *
- * This reserve here is the number of elements which are held back from everyone except
- * the zone_gc thread. This is done so the zone_gc thread should never have to wait for
- * the zone replenish thread for vm_map_entry structs. If it did, it could wind up
- * in a deadlock.
- */
-#define VM_MAP_ENTRY_RESERVE_CNT 8
-
-/*
  *	zalloc returns an element from the specified zone.
  */
 static void *
@@ -3280,6 +3336,9 @@ zalloc_internal(
 	thread_t        thr = current_thread();
 	boolean_t       check_poison = FALSE;
 	boolean_t       set_doing_alloc_with_vm_priv = FALSE;
+	vm_size_t       curr_free;
+	vm_size_t       min_free;
+	vm_size_t       resv_free;
 
 #if CONFIG_ZLEAKS
 	uint32_t        zleak_tracedepth = 0;  /* log this allocation if nonzero */
@@ -3357,47 +3416,56 @@ zalloc_internal(
 	assert(zone->zone_valid);
 
 	/*
-	 * Check if we need another thread to replenish the zone.
+	 * Check if we need another thread to replenish the zone or
+	 * if we have to wait for a replenish thread to finish.
 	 * This is used for elements, like vm_map_entry, which are
 	 * needed themselves to implement zalloc().
 	 */
-	if (zone->async_prio_refill && zone->zone_replenish_thread) {
-		vm_size_t curr_free;
-		vm_size_t refill_level;
-		const vm_size_t reserved_min = VM_MAP_ENTRY_RESERVE_CNT * zone->elem_size;
-
+	if (addr == 0 && zone->async_prio_refill && zone->zone_replenish_thread) {
+		min_free = (zone->prio_refill_count * zone->elem_size) / 2;
+		resv_free = min_free / 2;
 		for (;;) {
-			curr_free = (zone->cur_size - (zone->count * zone->elem_size));
-			refill_level = zone->prio_refill_watermark * zone->elem_size;
+			curr_free = zone->cur_size - (zone->count * zone->elem_size);
 
 			/*
 			 * Nothing to do if there are plenty of elements.
 			 */
-			if (curr_free > refill_level) {
+			if (curr_free > min_free) {
 				break;
 			}
 
 			/*
-			 * Wakeup the replenish thread.
+			 * Wakeup the replenish thread if not running.
 			 */
-			zone_replenish_wakeups_initiated++;
-			thread_wakeup(&zone->zone_replenish_thread);
+			if (!zone->zone_replenishing) {
+				lck_spin_lock(&zone_replenish_lock);
+				assert(zone_replenish_active < zone_replenish_max_threads);
+				++zone_replenish_active;
+				lck_spin_unlock(&zone_replenish_lock);
+				zone->zone_replenishing = TRUE;
+				zone_replenish_wakeups_initiated++;
+				thread_wakeup(&zone->zone_replenish_thread);
+			}
 
 			/*
-			 * If we:
-			 * - still have head room, more than half the refill amount, or
-			 * - this is a VMPRIV thread and we're still above reserved, or
-			 * - this is the zone garbage collection thread which may use the reserve
-			 * then we don't have to wait for the replenish thread.
+			 * We'll let VM_PRIV threads to continue to allocate until the
+			 * reserve drops to 25%. After that only TH_OPT_ZONE_PRIV threads
+			 * may continue.
 			 *
-			 * The reserve for the garbage collection thread is to avoid a deadlock
-			 * on the zone_map_lock between the replenish thread and GC thread.
+			 * TH_OPT_ZONE_PRIV threads are the GC thread and a replenish thread itself.
+			 * Replenish threads *need* to use the reserve. GC threads need to
+			 * get through the current allocation, but then will wait at a higher
+			 * level after they've dropped any locks which would deadlock the
+			 * replenish thread.
 			 */
-			if (curr_free > refill_level / 2 ||
-			    ((thr->options & TH_OPT_VMPRIV) && curr_free > reserved_min) ||
-			    (thr->options & TH_OPT_ZONE_GC)) {
+			if ((curr_free > resv_free && (thr->options & TH_OPT_VMPRIV)) ||
+			    (thr->options & TH_OPT_ZONE_PRIV)) {
 				break;
 			}
+
+			/*
+			 * Wait for the replenish threads to add more elements for us to allocate from.
+			 */
 			zone_replenish_throttle_count++;
 			unlock_zone(zone);
 			assert_wait_timeout(zone, THREAD_UNINT, 1, NSEC_PER_MSEC);
@@ -3412,17 +3480,17 @@ zalloc_internal(
 		addr = try_alloc_from_zone(zone, tag, &check_poison);
 	}
 
-	/* If we're here because of zone_gc(), we didn't wait for zone_replenish_thread to finish.
-	 * So we need to ensure that we did successfully grab an element. And we only need to assert
-	 * this for zones that have a replenish thread configured (in this case, the Reserved VM map
-	 * entries zone). The value of reserved_min in the previous bit of code should have given us
-	 * headroom even though the GC thread didn't wait.
+	/*
+	 * If we didn't wait for zone_replenish_thread to finish, ensure that we did successfully grab
+	 * an element. Obviously we only need to assert this for zones that have a replenish thread configured.
+	 * The value of (refill_level / 2) in the previous bit of code should have given us
+	 * headroom even though this thread didn't wait.
 	 */
-	if ((thr->options & TH_OPT_ZONE_GC) && zone->async_prio_refill) {
+	if ((thr->options & TH_OPT_ZONE_PRIV) && zone->async_prio_refill) {
 		assert(addr != 0);
 	}
 
-	while ((addr == 0) && canblock) {
+	while (addr == 0 && canblock) {
 		/*
 		 * zone is empty, try to expand it
 		 *
@@ -4107,11 +4175,30 @@ drop_free_elements(zone_t z)
 	vm_address_t              free_page_address;
 	vm_size_t                 size_to_free;
 
+	current_thread()->options |= TH_OPT_ZONE_PRIV;
 	lock_zone(z);
 
 	elt_size = z->elem_size;
 
 	while (!queue_empty(&z->pages.all_free)) {
+		/*
+		 * If any replenishment threads are running, defer to them, so that we don't deplete reserved zones.
+		 * The timing of the check isn't super important, as there are enough reserves to allow freeing an
+		 * extra page_meta. Hence, we can check without grabbing the lock every time through the loop.
+		 * We do need the lock however to avoid missing a wakeup when we decide to block.
+		 */
+		if (zone_replenish_active > 0) {
+			lck_spin_lock(&zone_replenish_lock);
+			if (zone_replenish_active > 0) {
+				assert_wait(&zone_replenish_active, THREAD_UNINT);
+				lck_spin_unlock(&zone_replenish_lock);
+				unlock_zone(z);
+				thread_block(THREAD_CONTINUE_NULL);
+				lock_zone(z);
+				continue;
+			}
+			lck_spin_unlock(&zone_replenish_lock);
+		}
 		page_meta = (struct zone_page_metadata *)queue_first(&z->pages.all_free);
 		assert(from_zone_map((vm_address_t)page_meta, sizeof(*page_meta))); /* foreign elements should be in any_free_foreign */
 		/*
@@ -4120,7 +4207,7 @@ drop_free_elements(zone_t z)
 		 */
 		if (!z->zone_destruction &&
 		    z->async_prio_refill && z->zone_replenish_thread &&
-		    (vm_size_t)(page_meta->free_count - z->countfree) < z->prio_refill_watermark) {
+		    (vm_size_t)(page_meta->free_count - z->countfree) < z->prio_refill_count) {
 			break;
 		}
 
@@ -4151,9 +4238,7 @@ drop_free_elements(zone_t z)
 		}
 #endif /* VM_MAX_TAG_ZONES */
 		kmem_free(zone_map, free_page_address, size_to_free);
-		if (current_thread()->options & TH_OPT_ZONE_GC) {
-			thread_yield_to_preemption();
-		}
+		thread_yield_to_preemption();
 		lock_zone(z);
 	}
 	if (z->zone_destruction) {
@@ -4161,6 +4246,7 @@ drop_free_elements(zone_t z)
 		assert(z->count_all_free_pages == 0);
 	}
 	unlock_zone(z);
+	current_thread()->options &= ~TH_OPT_ZONE_PRIV;
 
 
 #if DEBUG || DEVELOPMENT
@@ -4198,8 +4284,6 @@ zone_gc(boolean_t consider_jetsams)
 
 	lck_mtx_lock(&zone_gc_lock);
 
-	current_thread()->options |= TH_OPT_ZONE_GC;
-
 	simple_lock(&all_zones_lock, &zone_locks_grp);
 	max_zones = num_zones;
 	simple_unlock(&all_zones_lock);
@@ -4228,8 +4312,6 @@ zone_gc(boolean_t consider_jetsams)
 
 		drop_free_elements(z);
 	}
-
-	current_thread()->options &= ~TH_OPT_ZONE_GC;
 
 	lck_mtx_unlock(&zone_gc_lock);
 }

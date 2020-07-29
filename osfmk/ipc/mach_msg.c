@@ -762,7 +762,7 @@ msg_receive_error(
 	 */
 	trailer = (mach_msg_max_trailer_t *)
 	    ((vm_offset_t)kmsg->ikm_header +
-	    round_msg(sizeof(mach_msg_header_t)));
+	    mach_round_msg(sizeof(mach_msg_header_t)));
 	kmsg->ikm_header->msgh_size = sizeof(mach_msg_header_t);
 	bcopy((char *)&trailer_template,
 	    (char *)trailer,

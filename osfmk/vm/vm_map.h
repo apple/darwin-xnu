@@ -1377,7 +1377,11 @@ extern kern_return_t    vm_map_copy_overwrite(
 	vm_map_t                dst_map,
 	vm_map_address_t        dst_addr,
 	vm_map_copy_t           copy,
+	vm_map_size_t           copy_size,
 	boolean_t               interruptible);
+
+#define VM_MAP_COPY_OVERWRITE_OPTIMIZATION_THRESHOLD_PAGES      (3)
+
 
 /* returns TRUE if size of vm_map_copy == size parameter FALSE otherwise */
 extern boolean_t        vm_map_copy_validate_size(

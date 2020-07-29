@@ -800,9 +800,13 @@ mach_vm_read_overwrite(
 	    (vm_map_size_t)size, FALSE, &copy);
 
 	if (KERN_SUCCESS == error) {
+		if (copy) {
+			assertf(copy->size == (vm_map_size_t) size, "Req size: 0x%llx, Copy size: 0x%llx\n", (uint64_t) size, (uint64_t) copy->size);
+		}
+
 		error = vm_map_copy_overwrite(current_thread()->map,
 		    (vm_map_address_t)data,
-		    copy, FALSE);
+		    copy, (vm_map_size_t) size, FALSE);
 		if (KERN_SUCCESS == error) {
 			*data_size = size;
 			return error;
@@ -843,9 +847,13 @@ vm_read_overwrite(
 	    (vm_map_size_t)size, FALSE, &copy);
 
 	if (KERN_SUCCESS == error) {
+		if (copy) {
+			assertf(copy->size == (vm_map_size_t) size, "Req size: 0x%llx, Copy size: 0x%llx\n", (uint64_t) size, (uint64_t) copy->size);
+		}
+
 		error = vm_map_copy_overwrite(current_thread()->map,
 		    (vm_map_address_t)data,
-		    copy, FALSE);
+		    copy, (vm_map_size_t) size, FALSE);
 		if (KERN_SUCCESS == error) {
 			*data_size = size;
 			return error;
@@ -866,14 +874,14 @@ mach_vm_write(
 	vm_map_t                        map,
 	mach_vm_address_t               address,
 	pointer_t                       data,
-	__unused mach_msg_type_number_t size)
+	mach_msg_type_number_t          size)
 {
 	if (map == VM_MAP_NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
 	return vm_map_copy_overwrite(map, (vm_map_address_t)address,
-	           (vm_map_copy_t) data, FALSE /* interruptible XXX */);
+	           (vm_map_copy_t) data, size, FALSE /* interruptible XXX */);
 }
 
 /*
@@ -891,14 +899,14 @@ vm_write(
 	vm_map_t                        map,
 	vm_address_t                    address,
 	pointer_t                       data,
-	__unused mach_msg_type_number_t size)
+	mach_msg_type_number_t          size)
 {
 	if (map == VM_MAP_NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
 	return vm_map_copy_overwrite(map, (vm_map_address_t)address,
-	           (vm_map_copy_t) data, FALSE /* interruptible XXX */);
+	           (vm_map_copy_t) data, size, FALSE /* interruptible XXX */);
 }
 
 /*
@@ -925,9 +933,13 @@ mach_vm_copy(
 	    (vm_map_size_t)size, FALSE, &copy);
 
 	if (KERN_SUCCESS == kr) {
+		if (copy) {
+			assertf(copy->size == (vm_map_size_t) size, "Req size: 0x%llx, Copy size: 0x%llx\n", (uint64_t) size, (uint64_t) copy->size);
+		}
+
 		kr = vm_map_copy_overwrite(map,
 		    (vm_map_address_t)dest_address,
-		    copy, FALSE /* interruptible XXX */);
+		    copy, (vm_map_size_t) size, FALSE /* interruptible XXX */);
 
 		if (KERN_SUCCESS != kr) {
 			vm_map_copy_discard(copy);
@@ -954,9 +966,13 @@ vm_copy(
 	    (vm_map_size_t)size, FALSE, &copy);
 
 	if (KERN_SUCCESS == kr) {
+		if (copy) {
+			assertf(copy->size == (vm_map_size_t) size, "Req size: 0x%llx, Copy size: 0x%llx\n", (uint64_t) size, (uint64_t) copy->size);
+		}
+
 		kr = vm_map_copy_overwrite(map,
 		    (vm_map_address_t)dest_address,
-		    copy, FALSE /* interruptible XXX */);
+		    copy, (vm_map_size_t) size, FALSE /* interruptible XXX */);
 
 		if (KERN_SUCCESS != kr) {
 			vm_map_copy_discard(copy);

@@ -832,7 +832,7 @@ ipc_kmsg_trace_send(ipc_kmsg_t kmsg,
 	 * Trailer contents
 	 */
 	trailer = (mach_msg_trailer_t *)((vm_offset_t)msg +
-	    round_msg((vm_offset_t)msg->msgh_size));
+	    (vm_offset_t)mach_round_msg(msg->msgh_size));
 	if (trailer->msgh_trailer_size <= sizeof(mach_msg_security_trailer_t)) {
 		extern const security_token_t KERNEL_SECURITY_TOKEN;
 		mach_msg_security_trailer_t *strailer;
@@ -4627,6 +4627,7 @@ ipc_kmsg_copyout_ool_descriptor(mach_msg_ool_descriptor_t *dsc, mach_msg_descrip
 	mach_msg_copy_options_t             copy_options;
 	vm_map_size_t                       size;
 	mach_msg_descriptor_type_t  dsc_type;
+	boolean_t                           misaligned = FALSE;
 
 	//SKIP_PORT_DESCRIPTORS(saddr, sdsc_count);
 
@@ -4644,7 +4645,59 @@ ipc_kmsg_copyout_ool_descriptor(mach_msg_ool_descriptor_t *dsc, mach_msg_descrip
 			panic("Inconsistent OOL/copyout size on %p: expected %d, got %lld @%p",
 			    dsc, dsc->size, (unsigned long long)copy->size, copy);
 		}
-		kr = vm_map_copyout_size(map, &rcv_addr, copy, size);
+
+		if ((copy->type == VM_MAP_COPY_ENTRY_LIST) &&
+		    (trunc_page(copy->offset) != copy->offset ||
+		    round_page(dsc->size) != dsc->size)) {
+			misaligned = TRUE;
+		}
+
+		if (misaligned) {
+			vm_map_address_t        rounded_addr;
+			vm_map_size_t   rounded_size;
+			vm_map_offset_t effective_page_mask, effective_page_size;
+
+			effective_page_mask = VM_MAP_PAGE_MASK(map);
+			effective_page_size = effective_page_mask + 1;
+
+			rounded_size = vm_map_round_page(copy->offset + size, effective_page_mask) - vm_map_trunc_page(copy->offset, effective_page_mask);
+
+			kr = vm_allocate_kernel(map, (vm_offset_t*)&rounded_addr, rounded_size, VM_FLAGS_ANYWHERE, 0);
+
+			if (kr == KERN_SUCCESS) {
+				/*
+				 * vm_map_copy_overwrite does a full copy
+				 * if size is too small to optimize.
+				 * So we tried skipping the offset adjustment
+				 * if we fail the 'size' test.
+				 *
+				 * if (size >= VM_MAP_COPY_OVERWRITE_OPTIMIZATION_THRESHOLD_PAGES * effective_page_size) {
+				 *
+				 * This resulted in leaked memory especially on the
+				 * older watches (16k user - 4k kernel) because we
+				 * would do a physical copy into the start of this
+				 * rounded range but could leak part of it
+				 * on deallocation if the 'size' being deallocated
+				 * does not cover the full range. So instead we do
+				 * the misalignment adjustment always so that on
+				 * deallocation we will remove the full range.
+				 */
+				if ((rounded_addr & effective_page_mask) !=
+				    (copy->offset & effective_page_mask)) {
+					/*
+					 * Need similar mis-alignment of source and destination...
+					 */
+					rounded_addr += (copy->offset & effective_page_mask);
+
+					assert((rounded_addr & effective_page_mask) == (copy->offset & effective_page_mask));
+				}
+				rcv_addr = rounded_addr;
+
+				kr = vm_map_copy_overwrite(map, rcv_addr, copy, size, FALSE);
+			}
+		} else {
+			kr = vm_map_copyout_size(map, &rcv_addr, copy, size);
+		}
 		if (kr != KERN_SUCCESS) {
 			if (kr == KERN_RESOURCE_SHORTAGE) {
 				*mr |= MACH_MSG_VM_KERNEL;
@@ -5532,7 +5585,7 @@ ipc_kmsg_add_trailer(ipc_kmsg_t kmsg, ipc_space_t space __unused,
 	mach_msg_max_trailer_t tmp_trailer; /* This accommodates U64, and we'll munge */
 	void *real_trailer_out = (void*)(mach_msg_max_trailer_t *)
 	    ((vm_offset_t)kmsg->ikm_header +
-	    round_msg(kmsg->ikm_header->msgh_size));
+	    mach_round_msg(kmsg->ikm_header->msgh_size));
 
 	/*
 	 * Populate scratch with initial values set up at message allocation time.
@@ -5545,7 +5598,7 @@ ipc_kmsg_add_trailer(ipc_kmsg_t kmsg, ipc_space_t space __unused,
 	(void)thread;
 	trailer = (mach_msg_max_trailer_t *)
 	    ((vm_offset_t)kmsg->ikm_header +
-	    round_msg(kmsg->ikm_header->msgh_size));
+	    mach_round_msg(kmsg->ikm_header->msgh_size));
 #endif /* __arm64__ */
 
 	if (!(option & MACH_RCV_TRAILER_MASK)) {

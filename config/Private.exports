@@ -507,6 +507,7 @@ _vm_map_trunc_page_mask
 _vm_map_wire_and_extract:_vm_map_wire_and_extract_external
 _vm_page_wire_count
 _vn_getpath_ext
+_vn_getpath_ext_with_mntlen
 _vn_getpath_fsenter
 _vn_getpath_fsenter_with_parent
 _vn_getpath_no_firmlink

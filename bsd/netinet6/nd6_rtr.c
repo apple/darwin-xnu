@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -270,11 +270,11 @@ nd6_rs_input(
 {
 	struct ifnet *ifp = m->m_pkthdr.rcvif;
 	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
-	struct nd_router_solicit *nd_rs;
+	struct nd_router_solicit *nd_rs = NULL;
 	struct in6_addr saddr6 = ip6->ip6_src;
 	char *lladdr = NULL;
 	int lladdrlen = 0;
-	union nd_opts ndopts;
+	union nd_opts ndopts = {};
 
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
 	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
@@ -315,6 +315,7 @@ nd6_rs_input(
 	}
 
 	IP6_EXTHDR_CHECK(m, off, icmp6len, return );
+	ip6 = mtod(m, struct ip6_hdr *);
 	nd_rs = (struct nd_router_solicit *)((caddr_t)ip6 + off);
 	icmp6len -= sizeof(*nd_rs);
 	nd6_option_init(nd_rs + 1, icmp6len, &ndopts);
@@ -425,6 +426,7 @@ nd6_ra_input(
 	}
 
 	IP6_EXTHDR_CHECK(m, off, icmp6len, return );
+	ip6 = mtod(m, struct ip6_hdr *);
 	nd_ra = (struct nd_router_advert *)((caddr_t)ip6 + off);
 
 	icmp6len -= sizeof(*nd_ra);

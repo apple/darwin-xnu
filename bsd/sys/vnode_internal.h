@@ -604,7 +604,7 @@ void vnode_trigger_rearm(vnode_t, vfs_context_t);
 void vfs_nested_trigger_unmounts(mount_t, int, vfs_context_t);
 #endif /* CONFIG_TRIGGERS */
 
-int     build_path_with_parent(vnode_t, vnode_t /* parent */, char *, int, int *, int, vfs_context_t);
+int     build_path_with_parent(vnode_t, vnode_t /* parent */, char *, int, int *, size_t *, int, vfs_context_t);
 
 void    nspace_resolver_init(void);
 void    nspace_resolver_exited(struct proc *);

@@ -3863,6 +3863,19 @@ proc_set_syscall_filter_mask(proc_t p, int which, unsigned char *maskptr, size_t
 	return KERN_SUCCESS;
 }
 
+bool
+proc_is_traced(proc_t p)
+{
+	bool ret = FALSE;
+	assert(p != PROC_NULL);
+	proc_lock(p);
+	if (p->p_lflag & P_LTRACED) {
+		ret = TRUE;
+	}
+	proc_unlock(p);
+	return ret;
+}
+
 #ifdef CONFIG_32BIT_TELEMETRY
 void
 proc_log_32bit_telemetry(proc_t p)

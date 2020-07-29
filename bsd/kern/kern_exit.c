@@ -192,6 +192,12 @@ kern_return_t task_violated_guard(mach_exception_code_t, mach_exception_subcode_
 void    delay(int);
 void gather_rusage_info(proc_t p, rusage_info_current *ru, int flavor);
 
+#if __has_feature(ptrauth_calls)
+int exit_with_pac_exception(proc_t p, exception_type_t exception, mach_exception_code_t code,
+    mach_exception_subcode_t subcode);
+#endif /* __has_feature(ptrauth_calls) */
+
+
 /*
  * NOTE: Source and target may *NOT* overlap!
  * XXX Should share code with bsd/dev/ppc/unix_signal.c
@@ -2907,3 +2913,26 @@ kdp_wait4_find_process(thread_t thread, __unused event64_t wait_event, thread_wa
 	// See man wait4 for other valid wait4 arguments.
 	waitinfo->owner = args->pid;
 }
+
+#if __has_feature(ptrauth_calls)
+int
+exit_with_pac_exception(proc_t p, exception_type_t exception, mach_exception_code_t code,
+    mach_exception_subcode_t subcode)
+{
+	thread_t self = current_thread();
+	struct uthread *ut = get_bsdthread_info(self);
+
+	os_reason_t exception_reason = os_reason_create(OS_REASON_PAC_EXCEPTION, (uint64_t)code);
+	if (exception_reason == OS_REASON_NULL) {
+		printf("exit_with_pac_exception: failed to allocate exit reason\n");
+	} else {
+		exception_reason->osr_flags |= OS_REASON_FLAG_GENERATE_CRASH_REPORT;
+		ut->uu_exception = exception;
+		ut->uu_code = code;
+		ut->uu_subcode = subcode;
+	}
+
+	return exit_with_reason(p, W_EXITCODE(0, SIGKILL), (int *)NULL, TRUE, FALSE,
+	           0, exception_reason);
+}
+#endif /* __has_feature(ptrauth_calls) */

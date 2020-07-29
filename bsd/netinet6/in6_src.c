@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -318,7 +318,7 @@ in6_selectsrc_core(struct sockaddr_in6 *dstsock, uint32_t hint_mask,
 	}
 
 	lck_rw_lock_shared(&in6_ifaddr_rwlock);
-	for (ia = in6_ifaddrs; ia; ia = ia->ia_next) {
+	TAILQ_FOREACH(ia, &in6_ifaddrhead, ia6_link) {
 		int new_scope = -1, new_matchlen = -1;
 		struct in6_addrpolicy *new_policy = NULL;
 		u_int32_t srczone = 0, osrczone, dstzone;

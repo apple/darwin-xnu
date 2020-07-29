@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1267,10 +1267,10 @@ again:
 	 */
 addrloop:
 	lck_rw_lock_exclusive(&in6_ifaddr_rwlock);
-	for (ia6 = in6_ifaddrs; ia6; ia6 = nia6) {
+
+	TAILQ_FOREACH_SAFE(ia6, &in6_ifaddrhead, ia6_link, nia6) {
 		int oldflags = ia6->ia6_flags;
 		ap->found++;
-		nia6 = ia6->ia_next;
 		IFA_LOCK(&ia6->ia_ifa);
 		/*
 		 * Extra reference for ourselves; it's no-op if
@@ -2991,39 +2991,40 @@ nd6_ioctl(u_long cmd, caddr_t data, struct ifnet *ifp)
 			NDPR_ADDREF_LOCKED(pr);
 			NDPR_UNLOCK(pr);
 			lck_rw_lock_exclusive(&in6_ifaddr_rwlock);
-			ia = in6_ifaddrs;
-			while (ia != NULL) {
-				IFA_LOCK(&ia->ia_ifa);
-				if ((ia->ia6_flags & IN6_IFF_AUTOCONF) == 0) {
-					IFA_UNLOCK(&ia->ia_ifa);
-					ia = ia->ia_next;
-					continue;
-				}
+			bool from_begining = true;
+			while (from_begining) {
+				from_begining = false;
+				TAILQ_FOREACH(ia, &in6_ifaddrhead, ia6_link) {
+					IFA_LOCK(&ia->ia_ifa);
+					if ((ia->ia6_flags & IN6_IFF_AUTOCONF) == 0) {
+						IFA_UNLOCK(&ia->ia_ifa);
+						continue;
+					}
 
-				if (ia->ia6_ndpr == pr) {
-					IFA_ADDREF_LOCKED(&ia->ia_ifa);
+					if (ia->ia6_ndpr == pr) {
+						IFA_ADDREF_LOCKED(&ia->ia_ifa);
+						IFA_UNLOCK(&ia->ia_ifa);
+						lck_rw_done(&in6_ifaddr_rwlock);
+						lck_mtx_unlock(nd6_mutex);
+						in6_purgeaddr(&ia->ia_ifa);
+						IFA_REMREF(&ia->ia_ifa);
+						lck_mtx_lock(nd6_mutex);
+						lck_rw_lock_exclusive(
+							&in6_ifaddr_rwlock);
+						/*
+						 * Purging the address caused
+						 * in6_ifaddr_rwlock to be
+						 * dropped and
+						 * reacquired; therefore search again
+						 * from the beginning of in6_ifaddrs.
+						 * The same applies for the prefix list.
+						 */
+						iterate_pfxlist_again = true;
+						from_begining = true;
+						break;
+					}
 					IFA_UNLOCK(&ia->ia_ifa);
-					lck_rw_done(&in6_ifaddr_rwlock);
-					lck_mtx_unlock(nd6_mutex);
-					in6_purgeaddr(&ia->ia_ifa);
-					IFA_REMREF(&ia->ia_ifa);
-					lck_mtx_lock(nd6_mutex);
-					lck_rw_lock_exclusive(
-						&in6_ifaddr_rwlock);
-					/*
-					 * Purging the address caused
-					 * in6_ifaddr_rwlock to be
-					 * dropped and
-					 * reacquired; therefore search again
-					 * from the beginning of in6_ifaddrs.
-					 * The same applies for the prefix list.
-					 */
-					ia = in6_ifaddrs;
-					iterate_pfxlist_again = true;
-					continue;
 				}
-				IFA_UNLOCK(&ia->ia_ifa);
-				ia = ia->ia_next;
 			}
 			lck_rw_done(&in6_ifaddr_rwlock);
 			NDPR_LOCK(pr);

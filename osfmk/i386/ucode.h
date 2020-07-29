@@ -54,4 +54,4 @@ struct intel_ucupdate {
 };
 
 extern int ucode_interface(uint64_t addr);
-extern void ucode_update_wake(void);
+extern void ucode_update_wake_and_apply_cpu_was(void);

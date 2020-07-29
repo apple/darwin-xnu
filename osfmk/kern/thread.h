@@ -214,7 +214,7 @@ struct thread {
 #define TH_OPT_SCHED_VM_GROUP   0x0200          /* Thread belongs to special scheduler VM group */
 #define TH_OPT_HONOR_QLIMIT     0x0400          /* Thread will honor qlimit while sending mach_msg, regardless of MACH_SEND_ALWAYS */
 #define TH_OPT_SEND_IMPORTANCE  0x0800          /* Thread will allow importance donation from kernel rpc */
-#define TH_OPT_ZONE_GC          0x1000          /* zone_gc() called on this thread */
+#define TH_OPT_ZONE_PRIV        0x1000          /* Thread may use the zone replenish reserve */
 
 	bool                            wake_active;    /* wake event on stop */
 	bool                            at_safe_point;  /* thread_abort_safely allowed */

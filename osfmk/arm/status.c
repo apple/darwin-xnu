@@ -773,6 +773,10 @@ thread_entrypoint(
 		{
 			struct arm_thread_state *state;
 
+			if (count != ARM_THREAD_STATE_COUNT) {
+				return KERN_INVALID_ARGUMENT;
+			}
+
 			state = (struct arm_thread_state *) tstate;
 
 			/*

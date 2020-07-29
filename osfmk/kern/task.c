@@ -177,12 +177,14 @@
 #include <security/mac_mach_internal.h>
 #endif
 
+#include <IOKit/IOBSD.h>
+
 #if KPERF
 extern int kpc_force_all_ctrs(task_t, int);
 #endif
 
-task_t                  kernel_task;
-zone_t                  task_zone;
+SECURITY_READ_ONLY_LATE(task_t) kernel_task;
+SECURITY_READ_ONLY_LATE(zone_t) task_zone;
 lck_attr_t      task_lck_attr;
 lck_grp_t       task_lck_grp;
 lck_grp_attr_t  task_lck_grp_attr;
@@ -750,6 +752,7 @@ task_reference_internal(task_t task)
 	void *       bt[TASK_REF_BTDEPTH];
 	int             numsaved = 0;
 
+	zone_require(task, task_zone);
 	os_ref_retain(&task->ref_count);
 
 	numsaved = OSBacktrace(bt, TASK_REF_BTDEPTH);
@@ -7492,3 +7495,35 @@ task_copy_vmobjects(task_t task, vm_object_query_t query, int len, int64_t* num)
 
 	*num = i;
 }
+
+#if __has_feature(ptrauth_calls)
+
+#define PAC_EXCEPTION_ENTITLEMENT "com.apple.private.pac.exception"
+
+void
+task_set_pac_exception_fatal_flag(
+	task_t task)
+{
+	assert(task != TASK_NULL);
+
+	if (!IOTaskHasEntitlement(task, PAC_EXCEPTION_ENTITLEMENT)) {
+		return;
+	}
+
+	task_lock(task);
+	task->t_flags |= TF_PAC_EXC_FATAL;
+	task_unlock(task);
+}
+
+bool
+task_is_pac_exception_fatal(
+	task_t task)
+{
+	uint32_t flags = 0;
+
+	assert(task != TASK_NULL);
+
+	flags = os_atomic_load(&task->t_flags, relaxed);
+	return (bool)(flags & TF_PAC_EXC_FATAL);
+}
+#endif /* __has_feature(ptrauth_calls) */

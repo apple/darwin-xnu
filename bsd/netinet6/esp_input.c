@@ -529,6 +529,7 @@ noreplaycheck:
 				IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 				goto bad;
 			}
+			ip = mtod(m, struct ip *);
 		}
 
 		// check the UDP encap header to detect changes in the source port, and then strip the header
@@ -1199,6 +1200,7 @@ noreplaycheck:
 				IPSEC_STAT_INCREMENT(ipsec6stat.in_inval);
 				goto bad;
 			}
+			ip6 = mtod(m, struct ip6_hdr *);
 		}
 
 		// check the UDP encap header to detect changes in the source port, and then strip the header

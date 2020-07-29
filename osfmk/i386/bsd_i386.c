@@ -92,7 +92,7 @@ thread_userstack(
 	__unused thread_t   thread,
 	int                 flavor,
 	thread_state_t      tstate,
-	__unused unsigned int        count,
+	unsigned int        count,
 	mach_vm_offset_t    *user_stack,
 	int                 *customstack,
 	__unused boolean_t  is64bit
@@ -106,6 +106,10 @@ thread_userstack(
 	case x86_THREAD_STATE32:
 	{
 		x86_thread_state32_t *state25;
+
+		if (__improbable(count != x86_THREAD_STATE32_COUNT)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state25 = (x86_thread_state32_t *) tstate;
 
@@ -124,10 +128,36 @@ thread_userstack(
 	}
 
 	case x86_THREAD_FULL_STATE64:
-	/* FALL THROUGH */
+	{
+		x86_thread_full_state64_t *state25;
+
+		if (__improbable(count != x86_THREAD_FULL_STATE64_COUNT)) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		state25 = (x86_thread_full_state64_t *) tstate;
+
+		if (state25->ss64.rsp) {
+			*user_stack = state25->ss64.rsp;
+			if (customstack) {
+				*customstack = 1;
+			}
+		} else {
+			*user_stack = VM_USRSTACK64;
+			if (customstack) {
+				*customstack = 0;
+			}
+		}
+		break;
+	}
+
 	case x86_THREAD_STATE64:
 	{
 		x86_thread_state64_t *state25;
+
+		if (__improbable(count != x86_THREAD_STATE64_COUNT)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state25 = (x86_thread_state64_t *) tstate;
 
@@ -176,7 +206,7 @@ thread_entrypoint(
 	__unused thread_t   thread,
 	int                 flavor,
 	thread_state_t      tstate,
-	__unused unsigned int        count,
+	unsigned int        count,
 	mach_vm_offset_t    *entry_point
 	)
 {
@@ -192,6 +222,10 @@ thread_entrypoint(
 	{
 		x86_thread_state32_t *state25;
 
+		if (count != x86_THREAD_STATE32_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
 		state25 = (i386_thread_state_t *) tstate;
 		*entry_point = state25->eip ? state25->eip : VM_MIN_ADDRESS;
 		break;
@@ -200,6 +234,10 @@ thread_entrypoint(
 	case x86_THREAD_STATE64:
 	{
 		x86_thread_state64_t *state25;
+
+		if (count != x86_THREAD_STATE64_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state25 = (x86_thread_state64_t *) tstate;
 		*entry_point = state25->rip ? state25->rip : VM_MIN_ADDRESS64;

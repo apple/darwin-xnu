@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -131,6 +131,7 @@
 #endif /* INET */
 #include <netinet/kpi_ipfilter_var.h>
 #include <netinet/ip6.h>
+#include <netinet/udp.h>
 #include <netinet6/in6_var.h>
 #include <netinet6/ip6_var.h>
 #include <netinet/in_pcb.h>
@@ -158,6 +159,8 @@ extern int ipsec_bypass;
 #include <net/pfvar.h>
 #endif /* PF */
 
+#include <os/log.h>
+
 struct ip6protosw *ip6_protox[IPPROTO_MAX];
 
 static lck_grp_attr_t   *in6_ifaddr_rwlock_grp_attr;
@@ -166,7 +169,14 @@ static lck_attr_t       *in6_ifaddr_rwlock_attr;
 decl_lck_rw_data(, in6_ifaddr_rwlock);
 
 /* Protected by in6_ifaddr_rwlock */
-struct in6_ifaddr *in6_ifaddrs = NULL;
+struct in6_ifaddrhead in6_ifaddrhead;
+struct in6_ifaddrhashhead * in6_ifaddrhashtbl;
+uint32_t in6_ifaddrhmask;
+
+#define IN6ADDR_NHASH    61
+u_int32_t in6addr_nhash = 0;                  /* hash table size */
+u_int32_t in6addr_hashp = 0;                  /* next largest prime */
+
 
 #define IN6_IFSTAT_REQUIRE_ALIGNED_64(f)        \
 	_CASSERT(!(offsetof(struct in6_ifstat, f) % sizeof (uint64_t)))
@@ -200,6 +210,8 @@ static int sysctl_ip6_input_getperf SYSCTL_HANDLER_ARGS;
 static void ip6_init_delayed(void);
 static int ip6_hopopts_input(u_int32_t *, u_int32_t *, struct mbuf **, int *);
 
+static void in6_ifaddrhashtbl_init(void);
+
 #if NSTF
 extern void stfattach(void);
 #endif /* NSTF */
@@ -232,6 +244,61 @@ SYSCTL_PROC(_net_inet6_ip6, OID_AUTO, input_perf_data,
     CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED,
     0, 0, sysctl_ip6_input_getperf, "S,net_perf",
     "IP6 input performance data (struct net_perf, net/net_perf.h)");
+
+/*
+ * ip6_checkinterface controls the receive side of the models for multihoming
+ * that are discussed in RFC 1122.
+ *
+ * sysctl_ip6_checkinterface values are:
+ *  IP6_CHECKINTERFACE_WEAK_ES:
+ *	This corresponds to the Weak End-System model where incoming packets from
+ *	any interface are accepted provided the destination address of the incoming packet
+ *	is assigned to some interface.
+ *
+ *  IP6_CHECKINTERFACE_HYBRID_ES:
+ *	The Hybrid End-System model use the Strong End-System for tunnel interfaces
+ *	(ipsec and utun) and the weak End-System model for other interfaces families.
+ *	This prevents a rogue middle box to probe for signs of TCP connections
+ *	that use the tunnel interface.
+ *
+ *  IP6_CHECKINTERFACE_STRONG_ES:
+ *	The Strong model model requires the packet arrived on an interface that
+ *	is assigned the destination address of the packet.
+ *
+ * Since the routing table and transmit implementation do not implement the Strong ES model,
+ * setting this to a value different from IP6_CHECKINTERFACE_WEAK_ES may lead to unexpected results.
+ *
+ * When forwarding is enabled, the system reverts to the Weak ES model as a router
+ * is expected by design to receive packets from several interfaces to the same address.
+ */
+#define IP6_CHECKINTERFACE_WEAK_ES       0
+#define IP6_CHECKINTERFACE_HYBRID_ES     1
+#define IP6_CHECKINTERFACE_STRONG_ES     2
+
+static int ip6_checkinterface = IP6_CHECKINTERFACE_HYBRID_ES;
+
+static int sysctl_ip6_checkinterface SYSCTL_HANDLER_ARGS;
+SYSCTL_PROC(_net_inet6_ip6, OID_AUTO, check_interface,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, sysctl_ip6_checkinterface, "I", "Verify packet arrives on correct interface");
+
+#if (DEBUG || DEVELOPMENT)
+#define IP6_CHECK_IFDEBUG 1
+#else
+#define IP6_CHECK_IFDEBUG 0
+#endif /* (DEBUG || DEVELOPMENT) */
+static int ip6_checkinterface_debug = IP6_CHECK_IFDEBUG;
+SYSCTL_INT(_net_inet6_ip6, OID_AUTO, checkinterface_debug, CTLFLAG_RW | CTLFLAG_LOCKED,
+    &ip6_checkinterface_debug, IP6_CHECK_IFDEBUG, "");
+
+typedef enum ip6_check_if_result {
+	IP6_CHECK_IF_NONE = 0,
+	IP6_CHECK_IF_OURS = 1,
+	IP6_CHECK_IF_DROP = 2,
+	IP6_CHECK_IF_FORWARD = 3
+} ip6_check_if_result_t;
+
+static ip6_check_if_result_t ip6_input_check_interface(struct mbuf *, struct ip6_hdr *, struct ifnet *, struct route_in6 *rin6, struct ifnet **);
 
 /*
  * On platforms which require strict alignment (currently for anything but
@@ -376,6 +443,9 @@ ip6_init(struct ip6protosw *pp, struct domain *dp)
 	lck_rw_init(&in6_ifaddr_rwlock, in6_ifaddr_rwlock_grp,
 	    in6_ifaddr_rwlock_attr);
 
+	TAILQ_INIT(&in6_ifaddrhead);
+	in6_ifaddrhashtbl_init();
+
 	IN6_IFSTAT_REQUIRE_ALIGNED_64(ifs6_in_receive);
 	IN6_IFSTAT_REQUIRE_ALIGNED_64(ifs6_in_hdrerr);
 	IN6_IFSTAT_REQUIRE_ALIGNED_64(ifs6_in_toobig);
@@ -436,6 +506,17 @@ ip6_init(struct ip6protosw *pp, struct domain *dp)
 	getmicrotime(&tv);
 	ip6_desync_factor =
 	    (RandomULong() ^ tv.tv_usec) % MAX_TEMP_DESYNC_FACTOR;
+
+	PE_parse_boot_argn("ip6_checkinterface", &i, sizeof(i));
+	switch (i) {
+	case IP6_CHECKINTERFACE_WEAK_ES:
+	case IP6_CHECKINTERFACE_HYBRID_ES:
+	case IP6_CHECKINTERFACE_STRONG_ES:
+		ip6_checkinterface = i;
+		break;
+	default:
+		break;
+	}
 
 	in6_ifaddr_init();
 	ip6_moptions_init();
@@ -547,6 +628,171 @@ ip6_input_adjust(struct mbuf *m, struct ip6_hdr *ip6, uint32_t plen,
 		}
 	}
 }
+static ip6_check_if_result_t
+ip6_input_check_interface(struct mbuf *m, struct ip6_hdr *ip6, struct ifnet *inifp, struct route_in6 *rin6, struct ifnet **deliverifp)
+{
+	struct in6_ifaddr *ia6 = NULL;
+	struct in6_addr tmp_dst = ip6->ip6_dst; /* copy to avoid unaligned access */
+	struct in6_ifaddr *best_ia6 = NULL;
+	ip6_check_if_result_t result = IP6_CHECK_IF_NONE;
+
+	*deliverifp = NULL;
+
+	/*
+	 * Check for exact addresses in the hash bucket.
+	 */
+	lck_rw_lock_shared(&in6_ifaddr_rwlock);
+	TAILQ_FOREACH(ia6, IN6ADDR_HASH(&tmp_dst), ia6_hash) {
+		/*
+		 * TODO: should we accept loopbacl
+		 */
+		if (IN6_ARE_ADDR_EQUAL(&ia6->ia_addr.sin6_addr, &tmp_dst)) {
+			if ((ia6->ia6_flags & (IN6_IFF_NOTREADY | IN6_IFF_CLAT46))) {
+				continue;
+			}
+			best_ia6 = ia6;
+			if (ia6->ia_ifp == inifp) {
+				/*
+				 * TODO: should we also accept locally originated packets
+				 * or from loopback ???
+				 */
+				break;
+			}
+			/*
+			 * Continue the loop in case there's a exact match with another
+			 * interface
+			 */
+		}
+	}
+	if (best_ia6 != NULL) {
+		if (best_ia6->ia_ifp != inifp && ip6_forwarding == 0 &&
+		    ((ip6_checkinterface == IP6_CHECKINTERFACE_HYBRID_ES &&
+		    (best_ia6->ia_ifp->if_family == IFNET_FAMILY_IPSEC ||
+		    best_ia6->ia_ifp->if_family == IFNET_FAMILY_UTUN)) ||
+		    ip6_checkinterface == IP6_CHECKINTERFACE_STRONG_ES)) {
+			/*
+			 * Drop when interface address check is strict and forwarding
+			 * is disabled
+			 */
+			result = IP6_CHECK_IF_DROP;
+		} else {
+			result = IP6_CHECK_IF_OURS;
+			*deliverifp = best_ia6->ia_ifp;
+			ip6_setdstifaddr_info(m, 0, best_ia6);
+		}
+	}
+	lck_rw_done(&in6_ifaddr_rwlock);
+
+	if (result == IP6_CHECK_IF_NONE) {
+		/*
+		 * Slow path: route lookup.
+		 */
+		struct sockaddr_in6 *dst6;
+
+		dst6 = SIN6(&rin6->ro_dst);
+		dst6->sin6_len = sizeof(struct sockaddr_in6);
+		dst6->sin6_family = AF_INET6;
+		dst6->sin6_addr = ip6->ip6_dst;
+
+		rtalloc_scoped_ign((struct route *)rin6,
+		    RTF_PRCLONING, IFSCOPE_NONE);
+		if (rin6->ro_rt != NULL) {
+			RT_LOCK_SPIN(rin6->ro_rt);
+		}
+
+#define rt6_key(r) (SIN6((r)->rt_nodes->rn_key))
+
+		/*
+		 * Accept the packet if the forwarding interface to the destination
+		 * according to the routing table is the loopback interface,
+		 * unless the associated route has a gateway.
+		 * Note that this approach causes to accept a packet if there is a
+		 * route to the loopback interface for the destination of the packet.
+		 * But we think it's even useful in some situations, e.g. when using
+		 * a special daemon which wants to intercept the packet.
+		 *
+		 * XXX: some OSes automatically make a cloned route for the destination
+		 * of an outgoing packet.  If the outgoing interface of the packet
+		 * is a loopback one, the kernel would consider the packet to be
+		 * accepted, even if we have no such address assinged on the interface.
+		 * We check the cloned flag of the route entry to reject such cases,
+		 * assuming that route entries for our own addresses are not made by
+		 * cloning (it should be true because in6_addloop explicitly installs
+		 * the host route).  However, we might have to do an explicit check
+		 * while it would be less efficient.  Or, should we rather install a
+		 * reject route for such a case?
+		 */
+		if (rin6->ro_rt != NULL &&
+		    (rin6->ro_rt->rt_flags & (RTF_HOST | RTF_GATEWAY)) == RTF_HOST &&
+#if RTF_WASCLONED
+		    !(rin6->ro_rt->rt_flags & RTF_WASCLONED) &&
+#endif
+		    rin6->ro_rt->rt_ifp->if_type == IFT_LOOP) {
+			ia6 = (struct in6_ifaddr *)rin6->ro_rt->rt_ifa;
+			/*
+			 * Packets to a tentative, duplicated, or somehow invalid
+			 * address must not be accepted.
+			 *
+			 * For performance, test without acquiring the address lock;
+			 * a lot of things in the address are set once and never
+			 * changed (e.g. ia_ifp.)
+			 */
+			if (!(ia6->ia6_flags & IN6_IFF_NOTREADY)) {
+				/* this address is ready */
+				result = IP6_CHECK_IF_OURS;
+				*deliverifp = ia6->ia_ifp;       /* correct? */
+				/*
+				 * record dst address information into mbuf.
+				 */
+				(void) ip6_setdstifaddr_info(m, 0, ia6);
+			}
+		}
+
+		if (rin6->ro_rt != NULL) {
+			RT_UNLOCK(rin6->ro_rt);
+		}
+	}
+
+	if (result == IP6_CHECK_IF_NONE) {
+		if (ip6_forwarding == 0) {
+			result = IP6_CHECK_IF_DROP;
+		} else {
+			result = IP6_CHECK_IF_FORWARD;
+			ip6_setdstifaddr_info(m, inifp->if_index, NULL);
+		}
+	}
+
+	if (result == IP6_CHECK_IF_OURS && *deliverifp != inifp) {
+		ASSERT(*deliverifp != NULL);
+		ip6stat.ip6s_rcv_if_weak_match++;
+
+		/*  Logging is too noisy when forwarding is enabled */
+		if (ip6_checkinterface_debug != IP6_CHECKINTERFACE_WEAK_ES && ip6_forwarding != 0) {
+			char src_str[MAX_IPv6_STR_LEN];
+			char dst_str[MAX_IPv6_STR_LEN];
+
+			inet_ntop(AF_INET6, &ip6->ip6_src, src_str, sizeof(src_str));
+			inet_ntop(AF_INET6, &ip6->ip6_dst, dst_str, sizeof(dst_str));
+			os_log_info(OS_LOG_DEFAULT,
+			    "%s: weak ES interface match to %s for packet from %s to %s proto %u received via %s",
+			    __func__, (*deliverifp)->if_xname, src_str, dst_str, ip6->ip6_nxt, inifp->if_xname);
+		}
+	} else if (result == IP6_CHECK_IF_DROP) {
+		ip6stat.ip6s_rcv_if_no_match++;
+		if (ip6_checkinterface_debug > 0) {
+			char src_str[MAX_IPv6_STR_LEN];
+			char dst_str[MAX_IPv6_STR_LEN];
+
+			inet_ntop(AF_INET6, &ip6->ip6_src, src_str, sizeof(src_str));
+			inet_ntop(AF_INET6, &ip6->ip6_dst, dst_str, sizeof(dst_str));
+			os_log_info(OS_LOG_DEFAULT,
+			    "%s: no interface match for packet from %s to %s proto %u received via %s",
+			    __func__, src_str, dst_str, ip6->ip6_nxt, inifp->if_xname);
+		}
+	}
+
+	return result;
+}
 
 void
 ip6_input(struct mbuf *m)
@@ -559,22 +805,11 @@ ip6_input(struct mbuf *m)
 	struct ifnet *inifp, *deliverifp = NULL;
 	ipfilter_t inject_ipfref = NULL;
 	int seen = 1;
-	struct in6_ifaddr *ia6 = NULL;
-	struct sockaddr_in6 *dst6;
 #if DUMMYNET
 	struct m_tag *tag;
+	struct ip_fw_args args = {};
 #endif /* DUMMYNET */
-	struct {
-		struct route_in6 rin6;
-#if DUMMYNET
-		struct ip_fw_args args;
-#endif /* DUMMYNET */
-	} ip6ibz;
-#define rin6    ip6ibz.rin6
-#define args    ip6ibz.args
-
-	/* zero out {rin6, args} */
-	bzero(&ip6ibz, sizeof(ip6ibz));
+	struct route_in6 rin6 = {};
 
 	/*
 	 * Check if the packet we received is valid after interface filter
@@ -885,126 +1120,36 @@ check_with_pf:
 			goto bad;
 		}
 		deliverifp = inifp;
-		VERIFY(ia6 == NULL);
+		/*
+		 * record dst address information into mbuf, if we don't have one yet.
+		 * note that we are unable to record it, if the address is not listed
+		 * as our interface address (e.g. multicast addresses, etc.)
+		 */
+		if (deliverifp != NULL) {
+			struct in6_ifaddr *ia6 = NULL;
+
+			ia6 = in6_ifawithifp(deliverifp, &ip6->ip6_dst);
+			if (ia6 != NULL) {
+				(void) ip6_setdstifaddr_info(m, 0, ia6);
+				IFA_REMREF(&ia6->ia_ifa);
+			} else {
+				(void) ip6_setdstifaddr_info(m, inifp->if_index, NULL);
+			}
+		}
 		goto hbhcheck;
-	}
-
-	/*
-	 * Unicast check
-	 *
-	 * Fast path: see if the target is ourselves.
-	 */
-	lck_rw_lock_shared(&in6_ifaddr_rwlock);
-	for (ia6 = in6_ifaddrs; ia6 != NULL; ia6 = ia6->ia_next) {
+	} else {
 		/*
-		 * No reference is held on the address, as we just need
-		 * to test for a few things while holding the RW lock.
+		 * Unicast check
 		 */
-		if (IN6_ARE_ADDR_EQUAL(&ia6->ia_addr.sin6_addr, &ip6->ip6_dst)) {
-			break;
-		}
-	}
-
-	if (ia6 != NULL) {
-		/*
-		 * For performance, test without acquiring the address lock;
-		 * a lot of things in the address are set once and never
-		 * changed (e.g. ia_ifp.)
-		 */
-		if (!(ia6->ia6_flags & (IN6_IFF_NOTREADY | IN6_IFF_CLAT46))) {
-			/* this address is ready */
+		ip6_check_if_result_t check_if_result = IP6_CHECK_IF_NONE;
+		check_if_result = ip6_input_check_interface(m, ip6, inifp, &rin6, &deliverifp);
+		ASSERT(check_if_result != IP6_CHECK_IF_NONE);
+		if (check_if_result == IP6_CHECK_IF_OURS) {
 			ours = 1;
-			deliverifp = ia6->ia_ifp;
-			/*
-			 * record dst address information into mbuf.
-			 */
-			(void) ip6_setdstifaddr_info(m, 0, ia6);
-			lck_rw_done(&in6_ifaddr_rwlock);
 			goto hbhcheck;
+		} else if (check_if_result == IP6_CHECK_IF_DROP) {
+			goto bad;
 		}
-		lck_rw_done(&in6_ifaddr_rwlock);
-		ia6 = NULL;
-		/* address is not ready, so discard the packet. */
-		nd6log(info, "%s: packet to an unready address %s->%s\n",
-		    __func__, ip6_sprintf(&ip6->ip6_src),
-		    ip6_sprintf(&ip6->ip6_dst));
-		goto bad;
-	}
-	lck_rw_done(&in6_ifaddr_rwlock);
-
-	/*
-	 * Slow path: route lookup.
-	 */
-	dst6 = SIN6(&rin6.ro_dst);
-	dst6->sin6_len = sizeof(struct sockaddr_in6);
-	dst6->sin6_family = AF_INET6;
-	dst6->sin6_addr = ip6->ip6_dst;
-
-	rtalloc_scoped_ign((struct route *)&rin6,
-	    RTF_PRCLONING, IFSCOPE_NONE);
-	if (rin6.ro_rt != NULL) {
-		RT_LOCK_SPIN(rin6.ro_rt);
-	}
-
-#define rt6_key(r) (SIN6((r)->rt_nodes->rn_key))
-
-	/*
-	 * Accept the packet if the forwarding interface to the destination
-	 * according to the routing table is the loopback interface,
-	 * unless the associated route has a gateway.
-	 * Note that this approach causes to accept a packet if there is a
-	 * route to the loopback interface for the destination of the packet.
-	 * But we think it's even useful in some situations, e.g. when using
-	 * a special daemon which wants to intercept the packet.
-	 *
-	 * XXX: some OSes automatically make a cloned route for the destination
-	 * of an outgoing packet.  If the outgoing interface of the packet
-	 * is a loopback one, the kernel would consider the packet to be
-	 * accepted, even if we have no such address assinged on the interface.
-	 * We check the cloned flag of the route entry to reject such cases,
-	 * assuming that route entries for our own addresses are not made by
-	 * cloning (it should be true because in6_addloop explicitly installs
-	 * the host route).  However, we might have to do an explicit check
-	 * while it would be less efficient.  Or, should we rather install a
-	 * reject route for such a case?
-	 */
-	if (rin6.ro_rt != NULL &&
-	    (rin6.ro_rt->rt_flags & (RTF_HOST | RTF_GATEWAY)) == RTF_HOST &&
-#if RTF_WASCLONED
-	    !(rin6.ro_rt->rt_flags & RTF_WASCLONED) &&
-#endif
-	    rin6.ro_rt->rt_ifp->if_type == IFT_LOOP) {
-		ia6 = (struct in6_ifaddr *)rin6.ro_rt->rt_ifa;
-		/*
-		 * Packets to a tentative, duplicated, or somehow invalid
-		 * address must not be accepted.
-		 *
-		 * For performance, test without acquiring the address lock;
-		 * a lot of things in the address are set once and never
-		 * changed (e.g. ia_ifp.)
-		 */
-		if (!(ia6->ia6_flags & IN6_IFF_NOTREADY)) {
-			/* this address is ready */
-			ours = 1;
-			deliverifp = ia6->ia_ifp;       /* correct? */
-			/*
-			 * record dst address information into mbuf.
-			 */
-			(void) ip6_setdstifaddr_info(m, 0, ia6);
-			RT_UNLOCK(rin6.ro_rt);
-			goto hbhcheck;
-		}
-		RT_UNLOCK(rin6.ro_rt);
-		ia6 = NULL;
-		/* address is not ready, so discard the packet. */
-		nd6log(error, "%s: packet to an unready address %s->%s\n",
-		    __func__, ip6_sprintf(&ip6->ip6_src),
-		    ip6_sprintf(&ip6->ip6_dst));
-		goto bad;
-	}
-
-	if (rin6.ro_rt != NULL) {
-		RT_UNLOCK(rin6.ro_rt);
 	}
 
 	/*
@@ -1027,19 +1172,6 @@ check_with_pf:
 	}
 
 hbhcheck:
-	/*
-	 * record dst address information into mbuf, if we don't have one yet.
-	 * note that we are unable to record it, if the address is not listed
-	 * as our interface address (e.g. multicast addresses, etc.)
-	 */
-	if (deliverifp != NULL && ia6 == NULL) {
-		ia6 = in6_ifawithifp(deliverifp, &ip6->ip6_dst);
-		if (ia6 != NULL) {
-			(void) ip6_setdstifaddr_info(m, 0, ia6);
-			IFA_REMREF(&ia6->ia_ifa);
-		}
-	}
-
 	/*
 	 * Process Hop-by-Hop options header if it's contained.
 	 * m may be modified in ip6_hopopts_input().
@@ -2120,6 +2252,44 @@ ip6_lasthdr(struct mbuf *m, int off, int proto, int *nxtp)
 	}
 }
 
+boolean_t
+ip6_pkt_has_ulp(struct mbuf *m)
+{
+	int off = 0, nxt = IPPROTO_NONE;
+
+	off = ip6_lasthdr(m, 0, IPPROTO_IPV6, &nxt);
+	if (off < 0 || m->m_pkthdr.len < off) {
+		return FALSE;
+	}
+
+	switch (nxt) {
+	case IPPROTO_TCP:
+		if (off + sizeof(struct tcphdr) > m->m_pkthdr.len) {
+			return FALSE;
+		}
+		break;
+	case IPPROTO_UDP:
+		if (off + sizeof(struct udphdr) > m->m_pkthdr.len) {
+			return FALSE;
+		}
+		break;
+	case IPPROTO_ICMPV6:
+		if (off + sizeof(uint32_t) > m->m_pkthdr.len) {
+			return FALSE;
+		}
+		break;
+	case IPPROTO_NONE:
+		return TRUE;
+	case IPPROTO_ESP:
+		return TRUE;
+	case IPPROTO_IPCOMP:
+		return TRUE;
+	default:
+		return FALSE;
+	}
+	return TRUE;
+}
+
 struct ip6aux *
 ip6_addaux(struct mbuf *m)
 {
@@ -2240,8 +2410,82 @@ sysctl_ip6_input_getperf SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg1, arg2)
 	if (req->oldptr == USER_ADDR_NULL) {
-		req->oldlen = (size_t)sizeof(struct ipstat);
+		req->oldlen = (size_t)sizeof(struct net_perf);
 	}
 
 	return SYSCTL_OUT(req, &net_perf, MIN(sizeof(net_perf), req->oldlen));
+}
+
+
+/*
+ * Initialize IPv6 source address hash table.
+ */
+static void
+in6_ifaddrhashtbl_init(void)
+{
+	int i, k, p;
+
+	if (in6_ifaddrhashtbl != NULL) {
+		return;
+	}
+
+	PE_parse_boot_argn("ina6ddr_nhash", &in6addr_nhash,
+	    sizeof(in6addr_nhash));
+	if (in6addr_nhash == 0) {
+		in6addr_nhash = IN6ADDR_NHASH;
+	}
+
+	MALLOC(in6_ifaddrhashtbl, struct in6_ifaddrhashhead *,
+	    in6addr_nhash * sizeof(*in6_ifaddrhashtbl),
+	    M_IFADDR, M_WAITOK | M_ZERO);
+	if (in6_ifaddrhashtbl == NULL) {
+		panic("in6_ifaddrhashtbl allocation failed");
+	}
+
+	/*
+	 * Generate the next largest prime greater than in6addr_nhash.
+	 */
+	k = (in6addr_nhash % 2 == 0) ? in6addr_nhash + 1 : in6addr_nhash + 2;
+	for (;;) {
+		p = 1;
+		for (i = 3; i * i <= k; i += 2) {
+			if (k % i == 0) {
+				p = 0;
+			}
+		}
+		if (p == 1) {
+			break;
+		}
+		k += 2;
+	}
+	in6addr_hashp = k;
+}
+
+static int
+sysctl_ip6_checkinterface SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int error, i;
+
+	i = ip6_checkinterface;
+	error = sysctl_handle_int(oidp, &i, 0, req);
+	if (error || req->newptr == USER_ADDR_NULL) {
+		return error;
+	}
+
+	switch (i) {
+	case IP6_CHECKINTERFACE_WEAK_ES:
+	case IP6_CHECKINTERFACE_HYBRID_ES:
+	case IP6_CHECKINTERFACE_STRONG_ES:
+		if (ip6_checkinterface != i) {
+			ip6_checkinterface = i;
+			os_log(OS_LOG_DEFAULT, "%s: ip6_checkinterface is now %d\n",
+			    __func__, ip6_checkinterface);
+		}
+		break;
+	default:
+		error = EINVAL;
+		break;
+	}
+	return error;
 }

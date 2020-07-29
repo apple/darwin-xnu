@@ -110,6 +110,9 @@
 // Property is an array of strings containing CFBundleIdentifiers of service being opened
 #define kIODriverKitUserClientEntitlementsKey "com.apple.developer.driverkit.userclient-access"
 
+// Entitlement of a dext that allows any task to open one of its IOUserClients
+#define kIODriverKitUserClientEntitlementAllowAnyKey "com.apple.developer.driverkit.allow-any-userclient-access"
+
 // Other DriverKit entitlements
 #define kIODriverKitUSBTransportEntitlementKey "com.apple.developer.driverkit.transport.usb"
 #define kIODriverKitHIDTransportEntitlementKey "com.apple.developer.driverkit.transport.hid"

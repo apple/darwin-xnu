@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1512,17 +1512,15 @@ out:
 int
 mld_input(struct mbuf *m, int off, int icmp6len)
 {
-	struct ifnet    *ifp;
-	struct ip6_hdr  *ip6;
-	struct mld_hdr  *mld;
-	int              mldlen;
+	struct ifnet    *ifp = NULL;
+	struct ip6_hdr  *ip6 = NULL;
+	struct mld_hdr  *mld = NULL;
+	int              mldlen = 0;
 
 	MLD_PRINTF(("%s: called w/mbuf (0x%llx,%d)\n", __func__,
 	    (uint64_t)VM_KERNEL_ADDRPERM(m), off));
 
 	ifp = m->m_pkthdr.rcvif;
-
-	ip6 = mtod(m, struct ip6_hdr *);
 
 	/* Pullup to appropriate size. */
 	mld = (struct mld_hdr *)(mtod(m, uint8_t *) + off);
@@ -1539,6 +1537,7 @@ mld_input(struct mbuf *m, int off, int icmp6len)
 		icmp6stat.icp6s_badlen++;
 		return IPPROTO_DONE;
 	}
+	ip6 = mtod(m, struct ip6_hdr *);
 
 	/*
 	 * Userland needs to see all of this traffic for implementing

@@ -1769,6 +1769,24 @@ int     vn_getpath_fsenter_with_parent(struct vnode *dvp, struct vnode *vp, char
  */
 int     vn_getpath_ext(struct vnode *vp, struct vnode *dvp, char *pathbuf, int *len, int flags);
 
+/*!
+ *  @function vn_getpath_ext_with_mntlen
+ *  @abstract Attempt to get a vnode's path without rentering filesystem (unless passed an option to allow)
+ *  @discussion Paths to vnodes are not always straightforward: a file with multiple hard-links will have multiple pathnames,
+ *  and it is sometimes impossible to determine a vnode's full path.  vn_getpath_fsenter() may enter the filesystem
+ *  to try to construct a path, so filesystems should be wary of calling it.
+ *  @param vp Vnode whose path to get
+ *  @param dvp parent vnode of vnode whose path to get, can be NULL if not available.
+ *  @param pathbuf Buffer in which to store path.
+ *  @param len Destination for length of resulting path string.  Result will include NULL-terminator in count--that is, "len"
+ *  will be strlen(pathbuf) + 1.
+ *  @param mntlen Destination for length of path that is the mount point for the returned path. Will always be less than or equal to len.
+ *  will be strlen(pathbuf) + 1.
+ *  @param flags flags for controlling behavior.
+ *  @return 0 for success or an error.
+ */
+int     vn_getpath_ext_with_mntlen(struct vnode *vp, struct vnode *dvp, char *pathbuf, size_t *len, size_t *mntlen, int flags);
+
 /* supported flags for vn_getpath_ext */
 #define VN_GETPATH_FSENTER              0x0001 /* Can re-enter filesystem */
 #define VN_GETPATH_NO_FIRMLINK          0x0002

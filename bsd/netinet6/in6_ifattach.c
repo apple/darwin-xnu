@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1032,7 +1032,7 @@ in6_ifattach_llcgareq(struct ifnet *ifp, struct in6_cgareq *llcgasr)
 void
 in6_ifdetach(struct ifnet *ifp)
 {
-	struct in6_ifaddr *ia, *oia;
+	struct in6_ifaddr *ia, *nia;
 	struct ifaddr *ifa;
 	struct rtentry *rt;
 	struct sockaddr_in6 sin6;
@@ -1050,24 +1050,27 @@ in6_ifdetach(struct ifnet *ifp)
 
 	/* nuke any of IPv6 addresses we have */
 	lck_rw_lock_exclusive(&in6_ifaddr_rwlock);
-	ia = in6_ifaddrs;
-	while (ia != NULL) {
-		if (ia->ia_ifa.ifa_ifp != ifp) {
-			ia = ia->ia_next;
-			continue;
+	boolean_t from_begining = TRUE;
+	while (from_begining) {
+		from_begining = FALSE;
+		TAILQ_FOREACH(ia, &in6_ifaddrhead, ia6_link) {
+			if (ia->ia_ifa.ifa_ifp != ifp) {
+				continue;
+			}
+			IFA_ADDREF(&ia->ia_ifa);        /* for us */
+			lck_rw_done(&in6_ifaddr_rwlock);
+			in6_purgeaddr(&ia->ia_ifa);
+			IFA_REMREF(&ia->ia_ifa);        /* for us */
+			lck_rw_lock_exclusive(&in6_ifaddr_rwlock);
+			/*
+			 * Purging the address caused in6_ifaddr_rwlock
+			 * to be dropped and reacquired;
+			 * therefore search again from the beginning
+			 * of in6_ifaddrs list.
+			 */
+			from_begining = TRUE;
+			break;
 		}
-		IFA_ADDREF(&ia->ia_ifa);        /* for us */
-		lck_rw_done(&in6_ifaddr_rwlock);
-		in6_purgeaddr(&ia->ia_ifa);
-		IFA_REMREF(&ia->ia_ifa);        /* for us */
-		lck_rw_lock_exclusive(&in6_ifaddr_rwlock);
-		/*
-		 * Purging the address caused in6_ifaddr_rwlock
-		 * to be dropped and reacquired;
-		 * therefore search again from the beginning
-		 * of in6_ifaddrs list.
-		 */
-		ia = in6_ifaddrs;
 	}
 	lck_rw_done(&in6_ifaddr_rwlock);
 
@@ -1135,27 +1138,17 @@ in6_ifdetach(struct ifnet *ifp)
 		}
 
 		/* also remove from the IPv6 address chain(itojun&jinmei) */
-		unlinked = 1;
-		oia = ia;
+		unlinked = 0;
 		lck_rw_lock_exclusive(&in6_ifaddr_rwlock);
-		if (oia == (ia = in6_ifaddrs)) {
-			in6_ifaddrs = ia->ia_next;
-		} else {
-			while (ia->ia_next && (ia->ia_next != oia)) {
-				ia = ia->ia_next;
-			}
-			if (ia->ia_next) {
-				ia->ia_next = oia->ia_next;
-			} else {
-				nd6log(error,
-				    "%s: didn't unlink in6ifaddr from "
-				    "list\n", if_name(ifp));
-				unlinked = 0;
+		TAILQ_FOREACH(nia, &in6_ifaddrhead, ia6_link) {
+			if (ia == nia) {
+				TAILQ_REMOVE(&in6_ifaddrhead, ia, ia6_link);
+				unlinked = 1;
+				break;
 			}
 		}
 		lck_rw_done(&in6_ifaddr_rwlock);
 
-		ifa = &oia->ia_ifa;
 		/*
 		 * release another refcnt for the link from in6_ifaddrs.
 		 * Do this only if it's not already unlinked in the event

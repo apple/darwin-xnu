@@ -3622,6 +3622,10 @@ bad:
 		proc_legacy_footprint_entitled(p, new_task, __FUNCTION__);
 		proc_ios13extended_footprint_entitled(p, new_task, __FUNCTION__);
 #endif /* __arm64__ */
+
+#if __has_feature(ptrauth_calls)
+		task_set_pac_exception_fatal_flag(new_task);
+#endif /* __has_feature(ptrauth_calls) */
 	}
 
 	/* Inherit task role from old task to new task for exec */
@@ -4310,6 +4314,10 @@ __mac_execve(proc_t p, struct __mac_execve_args *uap, int32_t *retval)
 		thread_t main_thread = imgp->ip_new_thread;
 
 		task_set_main_thread_qos(new_task, main_thread);
+
+#if __has_feature(ptrauth_calls)
+		task_set_pac_exception_fatal_flag(new_task);
+#endif /* __has_feature(ptrauth_calls) */
 
 #if CONFIG_ARCADE
 		/*

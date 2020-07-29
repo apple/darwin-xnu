@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -137,6 +137,8 @@
 #include <netkey/key.h>
 #endif /* IPSEC */
 
+#include <os/log.h>
+
 #define DBG_LAYER_BEG           NETDBG_CODE(DBG_NETIP, 0)
 #define DBG_LAYER_END           NETDBG_CODE(DBG_NETIP, 2)
 #define DBG_FNC_IP_INPUT        NETDBG_CODE(DBG_NETIP, (2 << 8))
@@ -246,21 +248,57 @@ SYSCTL_UINT(_net_inet_ip, OID_AUTO, adj_partial_sum,
     "Perform partial sum adjustment of trailing bytes at IP layer");
 
 /*
- * XXX - Setting ip_checkinterface mostly implements the receive side of
- * the Strong ES model described in RFC 1122, but since the routing table
- * and transmit implementation do not implement the Strong ES model,
- * setting this to 1 results in an odd hybrid.
+ * ip_checkinterface controls the receive side of the models for multihoming
+ * that are discussed in RFC 1122.
  *
- * XXX - ip_checkinterface currently must be disabled if you use ipnat
+ * ip_checkinterface values are:
+ *  IP_CHECKINTERFACE_WEAK_ES:
+ *	This corresponds to the Weak End-System model where incoming packets from
+ *	any interface are accepted provided the destination address of the incoming packet
+ *	is assigned to some interface.
+ *
+ *  IP_CHECKINTERFACE_HYBRID_ES:
+ *	The Hybrid End-System model use the Strong End-System for tunnel interfaces
+ *	(ipsec and utun) and the weak End-System model for other interfaces families.
+ *	This prevents a rogue middle box to probe for signs of TCP connections
+ *	that use the tunnel interface.
+ *
+ *  IP_CHECKINTERFACE_STRONG_ES:
+ *	The Strong model model requires the packet arrived on an interface that
+ *	is assigned the destination address of the packet.
+ *
+ * Since the routing table and transmit implementation do not implement the Strong ES model,
+ * setting this to a value different from IP_CHECKINTERFACE_WEAK_ES may lead to unexpected results.
+ *
+ * When forwarding is enabled, the system reverts to the Weak ES model as a router
+ * is expected by design to receive packets from several interfaces to the same address.
+ *
+ * XXX - ip_checkinterface currently must be set to IP_CHECKINTERFACE_WEAK_ES if you use ipnat
  * to translate the destination address to another local interface.
  *
- * XXX - ip_checkinterface must be disabled if you add IP aliases
+ * XXX - ip_checkinterface must be set to IP_CHECKINTERFACE_WEAK_ES if you add IP aliases
  * to the loopback interface instead of the interface where the
  * packets for those addresses are received.
  */
-static int ip_checkinterface = 0;
-SYSCTL_INT(_net_inet_ip, OID_AUTO, check_interface, CTLFLAG_RW | CTLFLAG_LOCKED,
-    &ip_checkinterface, 0, "Verify packet arrives on correct interface");
+#define IP_CHECKINTERFACE_WEAK_ES       0
+#define IP_CHECKINTERFACE_HYBRID_ES     1
+#define IP_CHECKINTERFACE_STRONG_ES     2
+
+static int ip_checkinterface = IP_CHECKINTERFACE_HYBRID_ES;
+
+static int sysctl_ip_checkinterface SYSCTL_HANDLER_ARGS;
+SYSCTL_PROC(_net_inet_ip, OID_AUTO, check_interface,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, sysctl_ip_checkinterface, "I", "Verify packet arrives on correct interface");
+
+#if (DEBUG || DEVELOPMENT)
+#define IP_CHECK_IF_DEBUG 1
+#else
+#define IP_CHECK_IF_DEBUG 0
+#endif /* (DEBUG || DEVELOPMENT) */
+static int ip_checkinterface_debug = IP_CHECK_IF_DEBUG;
+SYSCTL_INT(_net_inet_ip, OID_AUTO, checkinterface_debug, CTLFLAG_RW | CTLFLAG_LOCKED,
+    &ip_checkinterface_debug, IP_CHECK_IF_DEBUG, "");
 
 static int ip_chaining = 1;
 SYSCTL_INT(_net_inet_ip, OID_AUTO, rx_chaining, CTLFLAG_RW | CTLFLAG_LOCKED,
@@ -425,6 +463,16 @@ SYSCTL_INT(_net_inet_ip, OID_AUTO, random_id, CTLFLAG_RW | CTLFLAG_LOCKED,
 } while (0)
 #endif /* !__i386__ && !__x86_64__ */
 
+
+typedef enum ip_check_if_result {
+	IP_CHECK_IF_NONE = 0,
+	IP_CHECK_IF_OURS = 1,
+	IP_CHECK_IF_DROP = 2,
+	IP_CHECK_IF_FORWARD = 3
+} ip_check_if_result_t;
+
+static ip_check_if_result_t ip_input_check_interface(struct mbuf **, struct ip *, struct ifnet *);
+
 /*
  * GRE input handler function, settable via ip_gre_register_input() for PPTP.
  */
@@ -541,6 +589,17 @@ ip_init(struct protosw *pp, struct domain *dp)
 	ip_initid();
 
 	ipf_init();
+
+	PE_parse_boot_argn("ip_checkinterface", &i, sizeof(i));
+	switch (i) {
+	case IP_CHECKINTERFACE_WEAK_ES:
+	case IP_CHECKINTERFACE_HYBRID_ES:
+	case IP_CHECKINTERFACE_STRONG_ES:
+		ip_checkinterface = i;
+		break;
+	default:
+		break;
+	}
 
 #if IPSEC
 	sadb_stat_mutex_grp_attr = lck_grp_attr_alloc_init();
@@ -681,11 +740,6 @@ ip_proto_dispatch_in(struct mbuf *m, int hlen, u_int8_t proto,
 	/* Perform IP header alignment fixup (post-filters), if needed */
 	IP_HDR_ALIGNMENT_FIXUP(m, m->m_pkthdr.rcvif, return );
 
-	/*
-	 * If there isn't a specific lock for the protocol
-	 * we're about to call, use the generic lock for AF_INET.
-	 * otherwise let the protocol deal with its own locking
-	 */
 	ip = mtod(m, struct ip *);
 
 	if (changed_header) {
@@ -693,6 +747,11 @@ ip_proto_dispatch_in(struct mbuf *m, int hlen, u_int8_t proto,
 		ip->ip_off = ntohs(ip->ip_off);
 	}
 
+	/*
+	 * If there isn't a specific lock for the protocol
+	 * we're about to call, use the generic lock for AF_INET.
+	 * otherwise let the protocol deal with its own locking
+	 */
 	if ((pr_input = ip_protox[ip->ip_p]->pr_input) == NULL) {
 		m_freem(m);
 	} else if (!(ip_protox[ip->ip_p]->pr_flags & PR_PROTOLOCK)) {
@@ -837,7 +896,7 @@ ip_input_dispatch_chain(struct mbuf *m)
 
 	ip = mtod(tmp_mbuf, struct ip *);
 	hlen = IP_VHL_HL(ip->ip_vhl) << 2;
-	while (tmp_mbuf) {
+	while (tmp_mbuf != NULL) {
 		nxt_mbuf = mbuf_nextpkt(tmp_mbuf);
 		mbuf_setnextpkt(tmp_mbuf, NULL);
 
@@ -862,7 +921,7 @@ ip_input_setdst_chain(struct mbuf *m, uint32_t ifindex, struct in_ifaddr *ia)
 {
 	struct mbuf *tmp_mbuf = m;
 
-	while (tmp_mbuf) {
+	while (tmp_mbuf != NULL) {
 		ip_setdstifaddr_info(tmp_mbuf, ifindex, ia);
 		tmp_mbuf = mbuf_nextpkt(tmp_mbuf);
 	}
@@ -1411,14 +1470,175 @@ bad:
 #endif
 }
 
+/*
+ * Because the call to m_pullup() may freem the mbuf, the function frees the mbuf packet
+ * chain before it return IP_CHECK_IF_DROP
+ */
+static ip_check_if_result_t
+ip_input_check_interface(struct mbuf **mp, struct ip *ip, struct ifnet *inifp)
+{
+	struct mbuf *m = *mp;
+	struct in_ifaddr *ia = NULL;
+	struct in_ifaddr *best_ia = NULL;
+	struct ifnet *match_ifp = NULL;
+	ip_check_if_result_t result = IP_CHECK_IF_NONE;
+
+	/*
+	 * Host broadcast and all network broadcast addresses are always a match
+	 */
+	if (ip->ip_dst.s_addr == (u_int32_t)INADDR_BROADCAST ||
+	    ip->ip_dst.s_addr == INADDR_ANY) {
+		ip_input_setdst_chain(m, inifp->if_index, NULL);
+		return IP_CHECK_IF_OURS;
+	}
+
+	/*
+	 * Check for a match in the hash bucket.
+	 */
+	lck_rw_lock_shared(in_ifaddr_rwlock);
+	TAILQ_FOREACH(ia, INADDR_HASH(ip->ip_dst.s_addr), ia_hash) {
+		if (IA_SIN(ia)->sin_addr.s_addr == ip->ip_dst.s_addr) {
+			best_ia = ia;
+			match_ifp = best_ia->ia_ifp;
+
+			if (ia->ia_ifp == inifp || (inifp->if_flags & IFF_LOOPBACK) ||
+			    (m->m_pkthdr.pkt_flags & PKTF_LOOP)) {
+				/*
+				 * A locally originated packet or packet from the loopback
+				 * interface is always an exact interface address match
+				 */
+				match_ifp = inifp;
+				break;
+			}
+			/*
+			 * Continue the loop in case there's a exact match with another
+			 * interface
+			 */
+		}
+	}
+	if (best_ia != NULL) {
+		if (match_ifp != inifp && ipforwarding == 0 &&
+		    ((ip_checkinterface == IP_CHECKINTERFACE_HYBRID_ES &&
+		    (match_ifp->if_family == IFNET_FAMILY_IPSEC ||
+		    match_ifp->if_family == IFNET_FAMILY_UTUN)) ||
+		    ip_checkinterface == IP_CHECKINTERFACE_STRONG_ES)) {
+			/*
+			 * Drop when interface address check is strict and forwarding
+			 * is disabled
+			 */
+			result = IP_CHECK_IF_DROP;
+		} else {
+			result = IP_CHECK_IF_OURS;
+			ip_input_setdst_chain(m, 0, best_ia);
+		}
+	}
+	lck_rw_done(in_ifaddr_rwlock);
+
+	if (result == IP_CHECK_IF_NONE && (inifp->if_flags & IFF_BROADCAST)) {
+		/*
+		 * Check for broadcast addresses.
+		 *
+		 * Only accept broadcast packets that arrive via the matching
+		 * interface.  Reception of forwarded directed broadcasts would be
+		 * handled via ip_forward() and ether_frameout() with the loopback
+		 * into the stack for SIMPLEX interfaces handled by ether_frameout().
+		 */
+		struct ifaddr *ifa;
+
+		ifnet_lock_shared(inifp);
+		TAILQ_FOREACH(ifa, &inifp->if_addrhead, ifa_link) {
+			if (ifa->ifa_addr->sa_family != AF_INET) {
+				continue;
+			}
+			ia = ifatoia(ifa);
+			if (satosin(&ia->ia_broadaddr)->sin_addr.s_addr == ip->ip_dst.s_addr ||
+			    ia->ia_netbroadcast.s_addr == ip->ip_dst.s_addr) {
+				ip_input_setdst_chain(m, 0, ia);
+				result = IP_CHECK_IF_OURS;
+				match_ifp = inifp;
+				break;
+			}
+		}
+		ifnet_lock_done(inifp);
+	}
+
+	/* Allow DHCP/BootP responses through */
+	if (result == IP_CHECK_IF_NONE && (inifp->if_eflags & IFEF_AUTOCONFIGURING) &&
+	    ip->ip_p == IPPROTO_UDP && (IP_VHL_HL(ip->ip_vhl) << 2) == sizeof(struct ip)) {
+		struct udpiphdr *ui;
+
+		if (m->m_len < sizeof(struct udpiphdr)) {
+			if ((m = m_pullup(m, sizeof(struct udpiphdr))) == NULL) {
+				OSAddAtomic(1, &udpstat.udps_hdrops);
+				*mp = NULL;
+				return IP_CHECK_IF_DROP;
+			}
+			/*
+			 * m_pullup can return a different mbuf
+			 */
+			*mp = m;
+			ip = mtod(m, struct ip *);
+		}
+		ui = mtod(m, struct udpiphdr *);
+		if (ntohs(ui->ui_dport) == IPPORT_BOOTPC) {
+			ASSERT(m->m_nextpkt == NULL);
+			ip_setdstifaddr_info(m, inifp->if_index, NULL);
+			result = IP_CHECK_IF_OURS;
+			match_ifp = inifp;
+		}
+	}
+
+	if (result == IP_CHECK_IF_NONE) {
+		if (ipforwarding == 0) {
+			result = IP_CHECK_IF_DROP;
+		} else {
+			result = IP_CHECK_IF_FORWARD;
+			ip_input_setdst_chain(m, inifp->if_index, NULL);
+		}
+	}
+
+	if (result == IP_CHECK_IF_OURS && match_ifp != inifp) {
+		ipstat.ips_rcv_if_weak_match++;
+
+		/*  Logging is too noisy when forwarding is enabled */
+		if (ip_checkinterface_debug != 0 && ipforwarding == 0) {
+			char src_str[MAX_IPv4_STR_LEN];
+			char dst_str[MAX_IPv4_STR_LEN];
+
+			inet_ntop(AF_INET, &ip->ip_src, src_str, sizeof(src_str));
+			inet_ntop(AF_INET, &ip->ip_dst, dst_str, sizeof(dst_str));
+			os_log_info(OS_LOG_DEFAULT,
+			    "%s: weak ES interface match to %s for packet from %s to %s proto %u received via %s",
+			    __func__, best_ia->ia_ifp->if_xname, src_str, dst_str, ip->ip_p, inifp->if_xname);
+		}
+	} else if (result == IP_CHECK_IF_DROP) {
+		if (ip_checkinterface_debug > 0) {
+			char src_str[MAX_IPv4_STR_LEN];
+			char dst_str[MAX_IPv4_STR_LEN];
+
+			inet_ntop(AF_INET, &ip->ip_src, src_str, sizeof(src_str));
+			inet_ntop(AF_INET, &ip->ip_dst, dst_str, sizeof(dst_str));
+			os_log_info(OS_LOG_DEFAULT,
+			    "%s: no interface match for packet from %s to %s proto %u received via %s",
+			    __func__, src_str, dst_str, ip->ip_p, inifp->if_xname);
+		}
+		struct mbuf *tmp_mbuf = m;
+		while (tmp_mbuf != NULL) {
+			ipstat.ips_rcv_if_no_match++;
+			tmp_mbuf = tmp_mbuf->m_nextpkt;
+		}
+		m_freem_list(m);
+		*mp = NULL;
+	}
+
+	return result;
+}
+
 static void
 ip_input_second_pass(struct mbuf *m, struct ifnet *inifp, u_int32_t div_info,
     int npkts_in_chain, int bytes_in_chain, struct ip_fw_in_args *args, int ours)
 {
-	unsigned int            checkif;
 	struct mbuf             *tmp_mbuf = NULL;
-	struct in_ifaddr        *ia = NULL;
-	struct in_addr          pkt_dst;
 	unsigned int            hlen;
 
 #if !IPFIREWALL
@@ -1460,7 +1680,7 @@ ip_input_second_pass(struct mbuf *m, struct ifnet *inifp, u_int32_t div_info,
 	 */
 	tmp_mbuf = m;
 	if (TAILQ_EMPTY(&in_ifaddrhead)) {
-		while (tmp_mbuf) {
+		while (tmp_mbuf != NULL) {
 			if (!(tmp_mbuf->m_flags & (M_MCAST | M_BCAST))) {
 				ip_setdstifaddr_info(tmp_mbuf, inifp->if_index,
 				    NULL);
@@ -1469,16 +1689,6 @@ ip_input_second_pass(struct mbuf *m, struct ifnet *inifp, u_int32_t div_info,
 		}
 		goto ours;
 	}
-	/*
-	 * Cache the destination address of the packet; this may be
-	 * changed by use of 'ipfw fwd'.
-	 */
-#if IPFIREWALL
-	pkt_dst = args->fwai_next_hop == NULL ?
-	    ip->ip_dst : args->fwai_next_hop->sin_addr;
-#else /* !IPFIREWALL */
-	pkt_dst = ip->ip_dst;
-#endif /* !IPFIREWALL */
 
 	/*
 	 * Enable a consistency check between the destination address
@@ -1494,63 +1704,17 @@ ip_input_second_pass(struct mbuf *m, struct ifnet *inifp, u_int32_t div_info,
 	 * to the loopback interface instead of the interface where
 	 * the packets are received.
 	 */
-	checkif = ip_checkinterface && (ipforwarding == 0) &&
-	    !(inifp->if_flags & IFF_LOOPBACK) &&
-	    !(m->m_pkthdr.pkt_flags & PKTF_LOOP)
-#if IPFIREWALL
-	    && (args->fwai_next_hop == NULL);
-#else /* !IPFIREWALL */
-	;
-#endif /* !IPFIREWALL */
+	if (!IN_MULTICAST(ntohl(ip->ip_dst.s_addr))) {
+		ip_check_if_result_t ip_check_if_result = IP_CHECK_IF_NONE;
 
-	/*
-	 * Check for exact addresses in the hash bucket.
-	 */
-	lck_rw_lock_shared(in_ifaddr_rwlock);
-	TAILQ_FOREACH(ia, INADDR_HASH(pkt_dst.s_addr), ia_hash) {
-		/*
-		 * If the address matches, verify that the packet
-		 * arrived via the correct interface if checking is
-		 * enabled.
-		 */
-		if (IA_SIN(ia)->sin_addr.s_addr == pkt_dst.s_addr &&
-		    (!checkif || ia->ia_ifp == inifp)) {
-			ip_input_setdst_chain(m, 0, ia);
-			lck_rw_done(in_ifaddr_rwlock);
+		ip_check_if_result = ip_input_check_interface(&m, ip, inifp);
+		ASSERT(ip_check_if_result != IP_CHECK_IF_NONE);
+		if (ip_check_if_result == IP_CHECK_IF_OURS) {
 			goto ours;
+		} else if (ip_check_if_result == IP_CHECK_IF_DROP) {
+			return;
 		}
-	}
-	lck_rw_done(in_ifaddr_rwlock);
-
-	/*
-	 * Check for broadcast addresses.
-	 *
-	 * Only accept broadcast packets that arrive via the matching
-	 * interface.  Reception of forwarded directed broadcasts would be
-	 * handled via ip_forward() and ether_frameout() with the loopback
-	 * into the stack for SIMPLEX interfaces handled by ether_frameout().
-	 */
-	if (inifp->if_flags & IFF_BROADCAST) {
-		struct ifaddr *ifa;
-
-		ifnet_lock_shared(inifp);
-		TAILQ_FOREACH(ifa, &inifp->if_addrhead, ifa_link) {
-			if (ifa->ifa_addr->sa_family != AF_INET) {
-				continue;
-			}
-			ia = ifatoia(ifa);
-			if (satosin(&ia->ia_broadaddr)->sin_addr.s_addr ==
-			    pkt_dst.s_addr || ia->ia_netbroadcast.s_addr ==
-			    pkt_dst.s_addr) {
-				ip_input_setdst_chain(m, 0, ia);
-				ifnet_lock_done(inifp);
-				goto ours;
-			}
-		}
-		ifnet_lock_done(inifp);
-	}
-
-	if (IN_MULTICAST(ntohl(ip->ip_dst.s_addr))) {
+	} else {
 		struct in_multi *inm;
 		/*
 		 * See if we belong to the destination multicast group on the
@@ -1570,23 +1734,9 @@ ip_input_second_pass(struct mbuf *m, struct ifnet *inifp, u_int32_t div_info,
 		goto ours;
 	}
 
-	if (ip->ip_dst.s_addr == (u_int32_t)INADDR_BROADCAST ||
-	    ip->ip_dst.s_addr == INADDR_ANY) {
-		ip_input_setdst_chain(m, inifp->if_index, NULL);
-		goto ours;
-	}
-
-	if (ip->ip_p == IPPROTO_UDP) {
-		struct udpiphdr *ui;
-		ui = mtod(m, struct udpiphdr *);
-		if (ntohs(ui->ui_dport) == IPPORT_BOOTPC) {
-			goto ours;
-		}
-	}
-
 	tmp_mbuf = m;
 	struct mbuf *nxt_mbuf = NULL;
-	while (tmp_mbuf) {
+	while (tmp_mbuf != NULL) {
 		nxt_mbuf = mbuf_nextpkt(tmp_mbuf);
 		/*
 		 * Not for us; forward if possible and desirable.
@@ -1607,6 +1757,7 @@ ip_input_second_pass(struct mbuf *m, struct ifnet *inifp, u_int32_t div_info,
 	KERNEL_DEBUG(DBG_LAYER_END, 0, 0, 0, 0, 0);
 	return;
 ours:
+	ip = mtod(m, struct ip *); /* in case it changed */
 	/*
 	 * If offset or IP_MF are set, must reassemble.
 	 */
@@ -1872,15 +2023,9 @@ void
 ip_input(struct mbuf *m)
 {
 	struct ip *ip;
-	struct in_ifaddr *ia = NULL;
-	unsigned int hlen, checkif;
+	unsigned int hlen;
 	u_short sum = 0;
-	struct in_addr pkt_dst;
-#if IPFIREWALL
-	int i;
-	u_int32_t div_info = 0;         /* packet divert/tee info */
-#endif
-#if IPFIREWALL || DUMMYNET
+#if DUMMYNET
 	struct ip_fw_args args;
 	struct m_tag    *tag;
 #endif
@@ -1945,7 +2090,7 @@ ip_input(struct mbuf *m)
 		m_tag_delete(m, tag);
 	}
 
-#if     DIAGNOSTIC
+#if DIAGNOSTIC
 	if (m == NULL || !(m->m_flags & M_PKTHDR)) {
 		panic("ip_input no HDR");
 	}
@@ -2243,17 +2388,6 @@ pass:
 	}
 
 	/*
-	 * Cache the destination address of the packet; this may be
-	 * changed by use of 'ipfw fwd'.
-	 */
-#if IPFIREWALL
-	pkt_dst = args.fwa_next_hop == NULL ?
-	    ip->ip_dst : args.fwa_next_hop->sin_addr;
-#else /* !IPFIREWALL */
-	pkt_dst = ip->ip_dst;
-#endif /* !IPFIREWALL */
-
-	/*
 	 * Enable a consistency check between the destination address
 	 * and the arrival interface for a unicast packet (the RFC 1122
 	 * strong ES model) if IP forwarding is disabled and the packet
@@ -2267,63 +2401,17 @@ pass:
 	 * to the loopback interface instead of the interface where
 	 * the packets are received.
 	 */
-	checkif = ip_checkinterface && (ipforwarding == 0) &&
-	    !(inifp->if_flags & IFF_LOOPBACK) &&
-	    !(m->m_pkthdr.pkt_flags & PKTF_LOOP)
-#if IPFIREWALL
-	    && (args.fwa_next_hop == NULL);
-#else /* !IPFIREWALL */
-	;
-#endif /* !IPFIREWALL */
+	if (!IN_MULTICAST(ntohl(ip->ip_dst.s_addr))) {
+		ip_check_if_result_t check_if_result = IP_CHECK_IF_NONE;
 
-	/*
-	 * Check for exact addresses in the hash bucket.
-	 */
-	lck_rw_lock_shared(in_ifaddr_rwlock);
-	TAILQ_FOREACH(ia, INADDR_HASH(pkt_dst.s_addr), ia_hash) {
-		/*
-		 * If the address matches, verify that the packet
-		 * arrived via the correct interface if checking is
-		 * enabled.
-		 */
-		if (IA_SIN(ia)->sin_addr.s_addr == pkt_dst.s_addr &&
-		    (!checkif || ia->ia_ifp == inifp)) {
-			ip_setdstifaddr_info(m, 0, ia);
-			lck_rw_done(in_ifaddr_rwlock);
+		check_if_result = ip_input_check_interface(&m, ip, inifp);
+		ASSERT(check_if_result != IP_CHECK_IF_NONE);
+		if (check_if_result == IP_CHECK_IF_OURS) {
 			goto ours;
+		} else if (check_if_result == IP_CHECK_IF_DROP) {
+			return;
 		}
-	}
-	lck_rw_done(in_ifaddr_rwlock);
-
-	/*
-	 * Check for broadcast addresses.
-	 *
-	 * Only accept broadcast packets that arrive via the matching
-	 * interface.  Reception of forwarded directed broadcasts would be
-	 * handled via ip_forward() and ether_frameout() with the loopback
-	 * into the stack for SIMPLEX interfaces handled by ether_frameout().
-	 */
-	if (inifp->if_flags & IFF_BROADCAST) {
-		struct ifaddr *ifa;
-
-		ifnet_lock_shared(inifp);
-		TAILQ_FOREACH(ifa, &inifp->if_addrhead, ifa_link) {
-			if (ifa->ifa_addr->sa_family != AF_INET) {
-				continue;
-			}
-			ia = ifatoia(ifa);
-			if (satosin(&ia->ia_broadaddr)->sin_addr.s_addr ==
-			    pkt_dst.s_addr || ia->ia_netbroadcast.s_addr ==
-			    pkt_dst.s_addr) {
-				ip_setdstifaddr_info(m, 0, ia);
-				ifnet_lock_done(inifp);
-				goto ours;
-			}
-		}
-		ifnet_lock_done(inifp);
-	}
-
-	if (IN_MULTICAST(ntohl(ip->ip_dst.s_addr))) {
+	} else {
 		struct in_multi *inm;
 		/*
 		 * See if we belong to the destination multicast group on the
@@ -2340,29 +2428,6 @@ pass:
 		ip_setdstifaddr_info(m, inifp->if_index, NULL);
 		INM_REMREF(inm);
 		goto ours;
-	}
-	if (ip->ip_dst.s_addr == (u_int32_t)INADDR_BROADCAST ||
-	    ip->ip_dst.s_addr == INADDR_ANY) {
-		ip_setdstifaddr_info(m, inifp->if_index, NULL);
-		goto ours;
-	}
-
-	/* Allow DHCP/BootP responses through */
-	if ((inifp->if_eflags & IFEF_AUTOCONFIGURING) &&
-	    hlen == sizeof(struct ip) && ip->ip_p == IPPROTO_UDP) {
-		struct udpiphdr *ui;
-
-		if (m->m_len < sizeof(struct udpiphdr) &&
-		    (m = m_pullup(m, sizeof(struct udpiphdr))) == NULL) {
-			OSAddAtomic(1, &udpstat.udps_hdrops);
-			return;
-		}
-		ui = mtod(m, struct udpiphdr *);
-		if (ntohs(ui->ui_dport) == IPPORT_BOOTPC) {
-			ip_setdstifaddr_info(m, inifp->if_index, NULL);
-			goto ours;
-		}
-		ip = mtod(m, struct ip *); /* in case it changed */
 	}
 
 	/*
@@ -4671,3 +4736,32 @@ sysctl_ip_input_getperf SYSCTL_HANDLER_ARGS
 	return SYSCTL_OUT(req, &net_perf, MIN(sizeof(net_perf), req->oldlen));
 }
 #endif /* (DEBUG || DEVELOPMENT) */
+
+static int
+sysctl_ip_checkinterface SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int error, i;
+
+	i = ip_checkinterface;
+	error = sysctl_handle_int(oidp, &i, 0, req);
+	if (error != 0 || req->newptr == USER_ADDR_NULL) {
+		return error;
+	}
+
+	switch (i) {
+	case IP_CHECKINTERFACE_WEAK_ES:
+	case IP_CHECKINTERFACE_HYBRID_ES:
+	case IP_CHECKINTERFACE_STRONG_ES:
+		if (ip_checkinterface != i) {
+			ip_checkinterface = i;
+			os_log(OS_LOG_DEFAULT, "%s: ip_checkinterface is now %d\n",
+			    __func__, ip_checkinterface);
+		}
+		break;
+	default:
+		error = EINVAL;
+		break;
+	}
+	return error;
+}

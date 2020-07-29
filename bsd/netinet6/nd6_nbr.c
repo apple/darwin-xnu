@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -259,30 +259,30 @@ nd6_ns_input(
 {
 	struct ifnet *ifp = m->m_pkthdr.rcvif;
 	struct ip6_hdr *ip6 = mtod(m, struct ip6_hdr *);
-	struct nd_neighbor_solicit *nd_ns;
+	struct nd_neighbor_solicit *nd_ns = NULL;
 	struct in6_addr saddr6 = ip6->ip6_src;
 	struct in6_addr daddr6 = ip6->ip6_dst;
-	struct in6_addr taddr6;
-	struct in6_addr myaddr6;
+	struct in6_addr taddr6 = {};
+	struct in6_addr myaddr6 = {};
 	char *lladdr = NULL;
 	struct ifaddr *ifa = NULL;
 	int lladdrlen = 0;
 	int anycast = 0, proxy = 0, dadprogress = 0;
-	int tlladdr;
-	union nd_opts ndopts;
-	struct sockaddr_dl proxydl;
-	boolean_t advrouter;
-	boolean_t is_dad_probe;
+	int tlladdr = 0;
+	union nd_opts ndopts = {};
+	struct sockaddr_dl proxydl = {};
+	boolean_t advrouter = FALSE;
+	boolean_t is_dad_probe = FALSE;
 	int oflgclr = 0;
 
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
 	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
 
 	IP6_EXTHDR_CHECK(m, off, icmp6len, return );
+	ip6 = mtod(m, struct ip6_hdr *);
 	nd_ns = (struct nd_neighbor_solicit *)((caddr_t)ip6 + off);
 	m->m_pkthdr.pkt_flags |= PKTF_INET6_RESOLVE;
 
-	ip6 = mtod(m, struct ip6_hdr *); /* adjust pointer for safety */
 	taddr6 = nd_ns->nd_ns_target;
 	if (in6_setscope(&taddr6, ifp, NULL) != 0) {
 		goto bad;
@@ -923,6 +923,7 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 	}
 
 	IP6_EXTHDR_CHECK(m, off, icmp6len, return );
+	ip6 = mtod(m, struct ip6_hdr *);
 	nd_na = (struct nd_neighbor_advert *)((caddr_t)ip6 + off);
 	m->m_pkthdr.pkt_flags |= PKTF_INET6_RESOLVE;
 

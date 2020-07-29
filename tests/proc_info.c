@@ -263,8 +263,12 @@ static child_action_handler_t proc_info_call_pidinfo_handler = ^void (proc_confi
 					/*
 					 * Allocate a page of memory
 					 * Copy on write shared memory
+					 *
+					 * WARNING
+					 * Don't add calls to T_LOG here as they can end up generating unwanted
+					 * calls to mach_msg_send(). If curtask->messages_sent gets incremented
+					 * at this point it will interfere with testing pti_messages_sent.
 					 */
-					T_LOG("Child allocating a page of memory, and causing a copy-on-write");
 					retval  = 0;
 					tmp_map = mmap(0, PAGE_SIZE, PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
 					if (tmp_map == MAP_FAILED) {

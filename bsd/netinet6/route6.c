@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -77,22 +77,24 @@ int
 route6_input(struct mbuf **mp, int *offp, int proto)
 {
 #pragma unused(proto)
-	struct ip6_hdr *ip6;
+	struct ip6_hdr *ip6 = NULL;
 	struct mbuf *m = *mp;
-	struct ip6_rthdr *rh;
-	int off = *offp, rhlen;
+	struct ip6_rthdr *rh = NULL;
+	int off = *offp, rhlen = 0;
 #ifdef notyet
-	struct ip6aux *ip6a;
+	struct ip6aux *ip6a = NULL;
 
 	ip6a = ip6_findaux(m);
 	if (ip6a) {
 		/* XXX reject home-address option before rthdr */
 		if (ip6a->ip6a_flags & IP6A_SWAP) {
 			ip6stat.ip6s_badoptions++;
+			*mp = NULL;
 			m_freem(m);
 			return IPPROTO_DONE;
 		}
 	}
+	ip6a = NULL;
 #endif /* notyet */
 
 	IP6_EXTHDR_CHECK(m, off, sizeof(*rh), return IPPROTO_DONE);
@@ -116,6 +118,7 @@ route6_input(struct mbuf **mp, int *offp, int proto)
 		return IPPROTO_DONE;
 	}
 
+	*mp = m;
 	*offp += rhlen;
 	return rh->ip6r_nxt;
 }

@@ -117,7 +117,7 @@ str		$1, [$0, NS_COUNT]
 /*
  * SPILL_REGISTERS
  *
- * Spills the current set of registers (excluding x0, x1, sp, fp) to the specified
+ * Spills the current set of registers (excluding x0, x1, sp) to the specified
  * save area.
  *   x0 - Address of the save area
  */
@@ -136,7 +136,8 @@ stp		x20, x21, [x0, SS64_X20]
 stp		x22, x23, [x0, SS64_X22]
 stp		x24, x25, [x0, SS64_X24]
 stp		x26, x27, [x0, SS64_X26]
-str		x28, [x0, SS64_X28]
+stp		x28, fp, [x0, SS64_X28]
+str		lr, [x0, SS64_LR]
 
 /* Save arm_neon_saved_state64 */
 
@@ -157,7 +158,7 @@ stp		q26, q27, [x0, NS64_Q26]
 stp		q28, q29, [x0, NS64_Q28]
 stp		q30, q31, [x0, NS64_Q30]
 
-mrs		lr, ELR_EL1                                                     // Get exception link register
+mrs		x22, ELR_EL1                                                     // Get exception link register
 mrs		x23, SPSR_EL1                                                   // Load CPSR into var reg x23
 mrs		x24, FPSR
 mrs		x25, FPCR
@@ -177,9 +178,9 @@ mov		x20, lr
  * Arg4: The X16 value to sign
  * Arg5: The X17 value to sign
  */
-mov		x1, lr
+mov		x1, x22
 mov		w2, w23
-ldr		x3, [x0, SS64_LR]
+mov		x3, x20
 mov		x4, x16
 mov		x5, x17
 bl		_ml_sign_thread_state
@@ -188,7 +189,7 @@ mov		lr, x20
 mov		x1, x21
 #endif /* defined(HAS_APPLE_PAC) */
 
-str		lr, [x0, SS64_PC]                                               // Save ELR to PCB
+str		x22, [x0, SS64_PC]                                               // Save ELR to PCB
 str		w23, [x0, SS64_CPSR]                                    // Save CPSR to PCB
 str		w24, [x0, NS64_FPSR]
 str		w25, [x0, NS64_FPCR]

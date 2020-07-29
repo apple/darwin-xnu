@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -200,7 +200,7 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 	kauth_cred_t cred;
 #endif /* !CONFIG_EMBEDDED */
 
-	if (!in6_ifaddrs) { /* XXX broken! */
+	if (TAILQ_EMPTY(&in6_ifaddrhead)) { /* XXX broken! */
 		return EADDRNOTAVAIL;
 	}
 	if (!(so->so_options & (SO_REUSEADDR | SO_REUSEPORT))) {
@@ -489,7 +489,7 @@ in6_pcbladdr(struct inpcb *inp, struct sockaddr *nam,
 		return EINVAL;
 	}
 
-	if (in6_ifaddrs) {
+	if (!TAILQ_EMPTY(&in6_ifaddrhead)) {
 		/*
 		 * If the destination address is UNSPECIFIED addr,
 		 * use the loopback addr, e.g ::1.

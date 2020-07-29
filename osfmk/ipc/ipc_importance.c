@@ -2659,7 +2659,7 @@ portupdate:
 #if IMPORTANCE_TRACE
 	if (kdebug_enable) {
 		mach_msg_max_trailer_t *dbgtrailer = (mach_msg_max_trailer_t *)
-		    ((vm_offset_t)kmsg->ikm_header + round_msg(kmsg->ikm_header->msgh_size));
+		    ((vm_offset_t)kmsg->ikm_header + mach_round_msg(kmsg->ikm_header->msgh_size));
 		unsigned int sender_pid = dbgtrailer->msgh_audit.val[5];
 		mach_msg_id_t imp_msgh_id = kmsg->ikm_header->msgh_id;
 		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE, (IMPORTANCE_CODE(IMP_MSG, IMP_MSG_SEND)) | DBG_FUNC_START,
@@ -3174,7 +3174,7 @@ ipc_importance_receive(
 	task_t task_self = current_task();
 	unsigned int sender_pid = ((mach_msg_max_trailer_t *)
 	    ((vm_offset_t)kmsg->ikm_header +
-	    round_msg(kmsg->ikm_header->msgh_size)))->msgh_audit.val[5];
+	    mach_round_msg(kmsg->ikm_header->msgh_size)))->msgh_audit.val[5];
 #endif
 
 	/* convert to a voucher with an inherit importance attribute? */

@@ -1799,23 +1799,21 @@ keepsearching:
 			if (!NFS_BITMAP_ISSET(nmp->nm_mattrs, NFS_MATTR_SOCKET_TYPE)) {
 				nmp->nm_sotype = 0;
 			}
-			if (!NFS_BITMAP_ISSET(nmp->nm_mattrs, NFS_MATTR_NFS_VERSION)) {
 #if CONFIG_NFS4
-				if (nmp->nm_vers >= NFS_VER4) {
-					if (!NFS_BITMAP_ISSET(nmp->nm_mattrs, NFS_MATTR_NFS_PORT)) {
-						nmp->nm_nfsport = 0;
-					}
-					if (nmp->nm_cbid) {
-						nfs4_mount_callback_shutdown(nmp);
-					}
-					if (IS_VALID_CRED(nmp->nm_mcred)) {
-						kauth_cred_unref(&nmp->nm_mcred);
-					}
-					bzero(&nmp->nm_un, sizeof(nmp->nm_un));
+			if (nmp->nm_vers >= NFS_VER4) {
+				if (!NFS_BITMAP_ISSET(nmp->nm_mattrs, NFS_MATTR_NFS_PORT)) {
+					nmp->nm_nfsport = 0;
 				}
-#endif
-				nmp->nm_vers = 0;
+				if (nmp->nm_cbid) {
+					nfs4_mount_callback_shutdown(nmp);
+				}
+				if (IS_VALID_CRED(nmp->nm_mcred)) {
+					kauth_cred_unref(&nmp->nm_mcred);
+				}
+				bzero(&nmp->nm_un, sizeof(nmp->nm_un));
 			}
+#endif
+			nmp->nm_vers = 0;
 		}
 		lck_mtx_unlock(&nmp->nm_lock);
 		nmp->nm_nso = NULL;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -2334,7 +2334,7 @@ icmp6_reflect(struct mbuf *m, size_t off)
 	 * to search in the ifaddr list.
 	 */
 	lck_rw_lock_shared(&in6_ifaddr_rwlock);
-	for (ia = in6_ifaddrs; ia; ia = ia->ia_next) {
+	TAILQ_FOREACH(ia, IN6ADDR_HASH(&t), ia6_hash) {
 		IFA_LOCK(&ia->ia_ifa);
 		if (IN6_ARE_ADDR_EQUAL(&t, &ia->ia_addr.sin6_addr) &&
 		    (ia->ia6_flags & (IN6_IFF_ANYCAST | IN6_IFF_NOTREADY | IN6_IFF_CLAT46)) == 0) {
@@ -2469,12 +2469,12 @@ icmp6_redirect_input(struct mbuf *m, int off)
 	u_char *redirhdr = NULL;
 	int redirhdrlen = 0;
 	struct rtentry *rt = NULL;
-	int is_router;
-	int is_onlink;
-	struct in6_addr src6;
-	struct in6_addr redtgt6;
-	struct in6_addr reddst6;
-	union nd_opts ndopts;
+	int is_router = 0;
+	int is_onlink = 0;
+	struct in6_addr src6 = {};
+	struct in6_addr redtgt6 = {};
+	struct in6_addr reddst6 = {};
+	union nd_opts ndopts = {};
 
 	if (m == NULL) {
 		return;
@@ -2484,10 +2484,6 @@ icmp6_redirect_input(struct mbuf *m, int off)
 	if (ifp == NULL) {
 		goto freeit;
 	}
-
-	ip6 = mtod(m, struct ip6_hdr *);
-	icmp6len = ntohs(ip6->ip6_plen);
-	src6 = ip6->ip6_src;
 
 	/*
 	 * If we are an advertising router on this interface,
@@ -2500,9 +2496,12 @@ icmp6_redirect_input(struct mbuf *m, int off)
 		goto freeit;
 	}
 
+	ip6 = mtod(m, struct ip6_hdr *);
+	icmp6len = ntohs(ip6->ip6_plen);
+	src6 = ip6->ip6_src;
 #ifndef PULLDOWN_TEST
 	IP6_EXTHDR_CHECK(m, off, icmp6len, return );
-	nd_rd = (struct nd_redirect *)((caddr_t)ip6 + off);
+	nd_rd = (struct nd_redirect *)(mtod(m, caddr_t) + off);
 #else
 	IP6_EXTHDR_GET(nd_rd, struct nd_redirect *, m, off, icmp6len);
 	if (nd_rd == NULL) {
@@ -2510,6 +2509,8 @@ icmp6_redirect_input(struct mbuf *m, int off)
 		goto freeit;
 	}
 #endif
+	ip6 = mtod(m, struct ip6_hdr *);
+
 	redtgt6 = nd_rd->nd_rd_target;
 	reddst6 = nd_rd->nd_rd_dst;
 

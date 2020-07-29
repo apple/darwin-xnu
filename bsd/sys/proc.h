@@ -414,6 +414,7 @@ extern int proc_pidoriginatoruuid(uuid_t uuid_buf, uint32_t buffersize);
 
 extern uint64_t proc_was_throttled(proc_t);
 extern uint64_t proc_did_throttle(proc_t);
+extern bool proc_is_traced(proc_t p);
 
 extern void proc_coalitionids(proc_t, uint64_t[COALITION_NUM_TYPES]);
 

@@ -2580,7 +2580,12 @@ vm_fault_enter(vm_page_t m,
 	 * from the current map. We do that below right before we do the
 	 * PMAP_ENTER.
 	 */
-	cs_enforcement_enabled = cs_process_enforcement(NULL);
+	if (pmap == kernel_pmap) {
+		/* kernel fault: cs_process_enforcement() does not apply */
+		cs_enforcement_enabled = 0;
+	} else {
+		cs_enforcement_enabled = cs_process_enforcement(NULL);
+	}
 
 	if (cs_enforcement_enabled && map_is_switched &&
 	    map_is_switch_protected && page_immutable(m, prot) &&

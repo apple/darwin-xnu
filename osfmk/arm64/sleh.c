@@ -114,7 +114,7 @@ static void handle_msr_trap(arm_saved_state_t *state, uint32_t iss);
 extern kern_return_t arm_fast_fault(pmap_t, vm_map_address_t, vm_prot_t, bool, bool);
 
 static void handle_uncategorized(arm_saved_state_t *);
-static void handle_breakpoint(arm_saved_state_t *) __dead2;
+static void handle_breakpoint(arm_saved_state_t *, uint32_t) __dead2;
 
 typedef void (*abort_inspector_t)(uint32_t, fault_status_t *, vm_prot_t *);
 static void inspect_instruction_abort(uint32_t, fault_status_t *, vm_prot_t *);
@@ -547,20 +547,20 @@ sleh_synchronous(arm_context_t *context, uint32_t esr, vm_offset_t far)
 		__builtin_unreachable();
 
 	case ESR_EC_BKPT_AARCH32:
-		handle_breakpoint(state);
+		handle_breakpoint(state, esr);
 		__builtin_unreachable();
 
 	case ESR_EC_BRK_AARCH64:
 		if (PSR64_IS_KERNEL(get_saved_state_cpsr(state))) {
 			panic_with_thread_kernel_state("Break instruction exception from kernel. Panic (by design)", state);
 		} else {
-			handle_breakpoint(state);
+			handle_breakpoint(state, esr);
 		}
 		__builtin_unreachable();
 
 	case ESR_EC_BKPT_REG_MATCH_EL0:
 		if (FSC_DEBUG_FAULT == ISS_SSDE_FSC(esr)) {
-			handle_breakpoint(state);
+			handle_breakpoint(state, esr);
 		}
 		panic("Unsupported Class %u event code. state=%p class=%u esr=%u far=%p",
 		    class, state, class, esr, (void *)far);
@@ -750,12 +750,30 @@ handle_uncategorized(arm_saved_state_t *state)
 	__builtin_unreachable();
 }
 
+#if __has_feature(ptrauth_calls)
+static const uint16_t ptrauth_brk_comment_base = 0xc470;
+
+static inline bool
+brk_comment_is_ptrauth(uint16_t comment)
+{
+	return comment >= ptrauth_brk_comment_base &&
+	       comment <= ptrauth_brk_comment_base + ptrauth_key_asdb;
+}
+#endif /* __has_feature(ptrauth_calls) */
+
 static void
-handle_breakpoint(arm_saved_state_t *state)
+handle_breakpoint(arm_saved_state_t *state, uint32_t esr __unused)
 {
 	exception_type_t           exception = EXC_BREAKPOINT;
 	mach_exception_data_type_t codes[2]  = {EXC_ARM_BREAKPOINT};
 	mach_msg_type_number_t     numcodes  = 2;
+
+#if __has_feature(ptrauth_calls)
+	if (ESR_EC(esr) == ESR_EC_BRK_AARCH64 &&
+	    brk_comment_is_ptrauth(ISS_BRK_COMMENT(esr))) {
+		exception |= EXC_PTRAUTH_BIT;
+	}
+#endif /* __has_feature(ptrauth_calls) */
 
 	codes[1] = get_saved_state_pc(state);
 	exception_triage(exception, codes, numcodes);
@@ -807,6 +825,36 @@ inspect_data_abort(uint32_t iss, fault_status_t *fault_code, vm_prot_t *fault_ty
 	}
 }
 
+#if __has_feature(ptrauth_calls)
+static inline bool
+fault_addr_bit(vm_offset_t fault_addr, unsigned int bit)
+{
+	return (bool)((fault_addr >> bit) & 1);
+}
+
+/**
+ * Determines whether a fault address taken at EL0 contains a PAC error code
+ * corresponding to the specified kind of ptrauth key.
+ */
+static bool
+user_fault_addr_matches_pac_error_code(vm_offset_t fault_addr, bool data_key)
+{
+	bool instruction_tbi = !(get_tcr() & TCR_TBID0_TBI_DATA_ONLY);
+	bool tbi = data_key || __improbable(instruction_tbi);
+	unsigned int poison_shift;
+	if (tbi) {
+		poison_shift = 53;
+	} else {
+		poison_shift = 61;
+	}
+
+	/* PAC error codes are always in the form key_number:NOT(key_number) */
+	bool poison_bit_1 = fault_addr_bit(fault_addr, poison_shift);
+	bool poison_bit_2 = fault_addr_bit(fault_addr, poison_shift + 1);
+	return poison_bit_1 != poison_bit_2;
+}
+#endif /* __has_feature(ptrauth_calls) */
+
 static void
 handle_pc_align(arm_saved_state_t *ss)
 {
@@ -819,6 +867,12 @@ handle_pc_align(arm_saved_state_t *ss)
 	}
 
 	exc = EXC_BAD_ACCESS;
+#if __has_feature(ptrauth_calls)
+	if (user_fault_addr_matches_pac_error_code(get_saved_state_pc(ss), false)) {
+		exc |= EXC_PTRAUTH_BIT;
+	}
+#endif /* __has_feature(ptrauth_calls) */
+
 	codes[0] = EXC_ARM_DA_ALIGN;
 	codes[1] = get_saved_state_pc(ss);
 
@@ -838,6 +892,12 @@ handle_sp_align(arm_saved_state_t *ss)
 	}
 
 	exc = EXC_BAD_ACCESS;
+#if __has_feature(ptrauth_calls)
+	if (user_fault_addr_matches_pac_error_code(get_saved_state_sp(ss), true)) {
+		exc |= EXC_PTRAUTH_BIT;
+	}
+#endif /* __has_feature(ptrauth_calls) */
+
 	codes[0] = EXC_ARM_SP_ALIGN;
 	codes[1] = get_saved_state_sp(ss);
 
@@ -1132,6 +1192,12 @@ handle_user_abort(arm_saved_state_t *state, uint32_t esr, vm_offset_t fault_addr
 	}
 
 	codes[1] = fault_addr;
+#if __has_feature(ptrauth_calls)
+	bool is_data_abort = (ESR_EC(esr) == ESR_EC_DABORT_EL0);
+	if (user_fault_addr_matches_pac_error_code(fault_addr, is_data_abort)) {
+		exc |= EXC_PTRAUTH_BIT;
+	}
+#endif /* __has_feature(ptrauth_calls) */
 	exception_triage(exc, codes, numcodes);
 	__builtin_unreachable();
 }

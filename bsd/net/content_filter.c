@@ -2891,10 +2891,10 @@ cfil_sock_attach(struct socket *so, struct sockaddr *local, struct sockaddr *rem
 	 * Save passed addresses for attach event msg (in case resend
 	 * is needed.
 	 */
-	if (remote != NULL) {
+	if (remote != NULL && (remote->sa_len <= sizeof(union sockaddr_in_4_6))) {
 		memcpy(&so->so_cfil->cfi_so_attach_faddr, remote, remote->sa_len);
 	}
-	if (local != NULL) {
+	if (local != NULL && (local->sa_len <= sizeof(union sockaddr_in_4_6))) {
 		memcpy(&so->so_cfil->cfi_so_attach_laddr, local, local->sa_len);
 	}
 

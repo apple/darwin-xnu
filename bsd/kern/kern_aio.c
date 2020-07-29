@@ -106,11 +106,6 @@
 #define AIO_suspend_sleep                               111
 #define AIO_worker_thread                               120
 
-#if 0
-#undef KERNEL_DEBUG
-#define KERNEL_DEBUG KERNEL_DEBUG_CONSTANT
-#endif
-
 /*
  * aio requests queue up on the aio_async_workq or lio_sync_workq (for
  * lio_listio LIO_WAIT).  Requests then move to the per process aio_activeq
@@ -502,11 +497,11 @@ aio_workq_mutex(aio_workq_t wq)
 int
 aio_cancel(proc_t p, struct aio_cancel_args *uap, int *retval )
 {
-	struct user_aiocb               my_aiocb;
-	int                                                     result;
+	struct user_aiocb my_aiocb;
+	int               result;
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel)) | DBG_FUNC_START,
-	    (int)p, (int)uap->aiocbp, 0, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel) | DBG_FUNC_START,
+	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, 0, 0, 0);
 
 	/* quick check to see if there are any async IO requests queued up */
 	if (aio_get_all_queues_count() < 1) {
@@ -562,8 +557,8 @@ aio_cancel(proc_t p, struct aio_cancel_args *uap, int *retval )
 	result = EBADF;
 
 ExitRoutine:
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel)) | DBG_FUNC_END,
-	    (int)p, (int)uap->aiocbp, result, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel) | DBG_FUNC_END,
+	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, result, 0, 0);
 
 	return result;
 } /* aio_cancel */
@@ -577,15 +572,15 @@ ExitRoutine:
 __private_extern__ void
 _aio_close(proc_t p, int fd )
 {
-	int                     error;
+	int error;
 
 	/* quick check to see if there are any async IO requests queued up */
 	if (aio_get_all_queues_count() < 1) {
 		return;
 	}
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_close)) | DBG_FUNC_START,
-	    (int)p, fd, 0, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_close) | DBG_FUNC_START,
+	    VM_KERNEL_ADDRPERM(p), fd, 0, 0, 0);
 
 	/* cancel all async IO requests on our todo queues for this file descriptor */
 	aio_proc_lock(p);
@@ -601,8 +596,8 @@ _aio_close(proc_t p, int fd )
 		 * when we must wait for all active aio requests.
 		 */
 
-		KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_close_sleep)) | DBG_FUNC_NONE,
-		    (int)p, fd, 0, 0, 0 );
+		KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_close_sleep) | DBG_FUNC_NONE,
+		    VM_KERNEL_ADDRPERM(p), fd, 0, 0, 0);
 
 		while (aio_proc_active_requests_for_file(p, fd) > 0) {
 			msleep(&p->AIO_CLEANUP_SLEEP_CHAN, aio_proc_mutex(p), PRIBIO, "aio_close", 0 );
@@ -611,8 +606,8 @@ _aio_close(proc_t p, int fd )
 
 	aio_proc_unlock(p);
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_close)) | DBG_FUNC_END,
-	    (int)p, fd, 0, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_close) | DBG_FUNC_END,
+	    VM_KERNEL_ADDRPERM(p), fd, 0, 0, 0);
 
 	return;
 } /* _aio_close */
@@ -627,11 +622,11 @@ _aio_close(proc_t p, int fd )
 int
 aio_error(proc_t p, struct aio_error_args *uap, int *retval )
 {
-	aio_workq_entry                         *entryp;
-	int                                                     error;
+	aio_workq_entry *entryp;
+	int              error;
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_error)) | DBG_FUNC_START,
-	    (int)p, (int)uap->aiocbp, 0, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_error) | DBG_FUNC_START,
+	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, 0, 0, 0);
 
 	/* see if there are any aios to check */
 	if (aio_get_all_queues_count() < 1) {
@@ -649,8 +644,8 @@ aio_error(proc_t p, struct aio_error_args *uap, int *retval )
 			*retval = entryp->errorval;
 			error = 0;
 			aio_entry_unlock(entryp);
-			KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_error_val)) | DBG_FUNC_NONE,
-			    (int)p, (int)uap->aiocbp, *retval, 0, 0 );
+			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_error_val) | DBG_FUNC_NONE,
+			    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, *retval, 0, 0);
 			goto ExitRoutine;
 		}
 	}
@@ -661,8 +656,8 @@ aio_error(proc_t p, struct aio_error_args *uap, int *retval )
 			ASSERT_AIO_FROM_PROC(entryp, p);
 			*retval = EINPROGRESS;
 			error = 0;
-			KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_error_activeq)) | DBG_FUNC_NONE,
-			    (int)p, (int)uap->aiocbp, *retval, 0, 0 );
+			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_error_activeq) | DBG_FUNC_NONE,
+			    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, *retval, 0, 0);
 			goto ExitRoutine;
 		}
 	}
@@ -670,8 +665,8 @@ aio_error(proc_t p, struct aio_error_args *uap, int *retval )
 	error = EINVAL;
 
 ExitRoutine:
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_error)) | DBG_FUNC_END,
-	    (int)p, (int)uap->aiocbp, error, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_error) | DBG_FUNC_END,
+	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, error, 0, 0);
 	aio_proc_unlock(p);
 
 	return error;
@@ -688,11 +683,11 @@ ExitRoutine:
 int
 aio_fsync(proc_t p, struct aio_fsync_args *uap, int *retval )
 {
-	int                     error;
-	int                     fsync_kind;
+	int error;
+	int fsync_kind;
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_fsync)) | DBG_FUNC_START,
-	    (int)p, (int)uap->aiocbp, uap->op, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_fsync) | DBG_FUNC_START,
+	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, uap->op, 0, 0);
 
 	*retval = 0;
 	/* 0 := O_SYNC for binary backward compatibility with Panther */
@@ -712,8 +707,8 @@ aio_fsync(proc_t p, struct aio_fsync_args *uap, int *retval )
 	}
 
 ExitRoutine:
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_fsync)) | DBG_FUNC_END,
-	    (int)p, (int)uap->aiocbp, error, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_fsync) | DBG_FUNC_END,
+	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, error, 0, 0);
 
 	return error;
 } /* aio_fsync */
@@ -726,10 +721,10 @@ ExitRoutine:
 int
 aio_read(proc_t p, struct aio_read_args *uap, int *retval )
 {
-	int                     error;
+	int error;
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_read)) | DBG_FUNC_START,
-	    (int)p, (int)uap->aiocbp, 0, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_read) | DBG_FUNC_START,
+	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, 0, 0, 0);
 
 	*retval = 0;
 
@@ -738,8 +733,8 @@ aio_read(proc_t p, struct aio_read_args *uap, int *retval )
 		*retval = -1;
 	}
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_read)) | DBG_FUNC_END,
-	    (int)p, (int)uap->aiocbp, error, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_read) | DBG_FUNC_END,
+	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, error, 0, 0);
 
 	return error;
 } /* aio_read */
@@ -755,12 +750,12 @@ aio_read(proc_t p, struct aio_read_args *uap, int *retval )
 int
 aio_return(proc_t p, struct aio_return_args *uap, user_ssize_t *retval )
 {
-	aio_workq_entry                         *entryp;
-	int                                                     error;
-	boolean_t                                       proc_lock_held = FALSE;
+	aio_workq_entry *entryp;
+	int              error;
+	boolean_t        proc_lock_held = FALSE;
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_return)) | DBG_FUNC_START,
-	    (int)p, (int)uap->aiocbp, 0, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_return) | DBG_FUNC_START,
+	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, 0, 0, 0);
 
 	/* See if there are any entries to check */
 	if (aio_get_all_queues_count() < 1) {
@@ -798,8 +793,8 @@ aio_return(proc_t p, struct aio_return_args *uap, user_ssize_t *retval )
 			}
 
 
-			KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_return_val)) | DBG_FUNC_NONE,
-			    (int)p, (int)uap->aiocbp, *retval, 0, 0 );
+			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_return_val) | DBG_FUNC_NONE,
+			    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, *retval, 0, 0);
 			goto ExitRoutine;
 		}
 	}
@@ -809,8 +804,8 @@ aio_return(proc_t p, struct aio_return_args *uap, user_ssize_t *retval )
 		ASSERT_AIO_FROM_PROC(entryp, p);
 		if (entryp->uaiocbp == uap->aiocbp) {
 			error = EINPROGRESS;
-			KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_return_activeq)) | DBG_FUNC_NONE,
-			    (int)p, (int)uap->aiocbp, *retval, 0, 0 );
+			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_return_activeq) | DBG_FUNC_NONE,
+			    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, *retval, 0, 0);
 			goto ExitRoutine;
 		}
 	}
@@ -821,8 +816,8 @@ ExitRoutine:
 	if (proc_lock_held) {
 		aio_proc_unlock(p);
 	}
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_return)) | DBG_FUNC_END,
-	    (int)p, (int)uap->aiocbp, error, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_return) | DBG_FUNC_END,
+	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, error, 0, 0);
 
 	return error;
 } /* aio_return */
@@ -838,15 +833,13 @@ ExitRoutine:
 __private_extern__ void
 _aio_exec(proc_t p )
 {
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_exec)) | DBG_FUNC_START,
-	    (int)p, 0, 0, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_exec) | DBG_FUNC_START,
+	    VM_KERNEL_ADDRPERM(p), 0, 0, 0, 0);
 
 	_aio_exit( p );
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_exec)) | DBG_FUNC_END,
-	    (int)p, 0, 0, 0, 0 );
-
-	return;
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_exec) | DBG_FUNC_END,
+	    VM_KERNEL_ADDRPERM(p), 0, 0, 0, 0);
 } /* _aio_exec */
 
 
@@ -859,8 +852,8 @@ _aio_exec(proc_t p )
 __private_extern__ void
 _aio_exit(proc_t p )
 {
-	int                                             error;
-	aio_workq_entry                 *entryp;
+	int              error;
+	aio_workq_entry *entryp;
 
 
 	/* quick check to see if there are any async IO requests queued up */
@@ -868,8 +861,8 @@ _aio_exit(proc_t p )
 		return;
 	}
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_exit)) | DBG_FUNC_START,
-	    (int)p, 0, 0, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_exit) | DBG_FUNC_START,
+	    VM_KERNEL_ADDRPERM(p), 0, 0, 0, 0);
 
 	aio_proc_lock(p);
 
@@ -889,8 +882,8 @@ _aio_exit(proc_t p )
 		 * active aio requests.
 		 */
 
-		KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_exit_sleep)) | DBG_FUNC_NONE,
-		    (int)p, 0, 0, 0, 0 );
+		KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_exit_sleep) | DBG_FUNC_NONE,
+		    VM_KERNEL_ADDRPERM(p), 0, 0, 0, 0);
 
 		while (p->p_aio_active_count != 0) {
 			msleep(&p->AIO_CLEANUP_SLEEP_CHAN, aio_proc_mutex(p), PRIBIO, "aio_exit", 0 );
@@ -933,9 +926,8 @@ _aio_exit(proc_t p )
 
 	aio_proc_unlock(p);
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_exit)) | DBG_FUNC_END,
-	    (int)p, 0, 0, 0, 0 );
-	return;
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_exit) | DBG_FUNC_END,
+	    VM_KERNEL_ADDRPERM(p), 0, 0, 0, 0);
 } /* _aio_exit */
 
 
@@ -1001,8 +993,9 @@ do_aio_cancel_locked(proc_t p, int fd, user_addr_t aiocbp,
 
 			/* Now it's officially cancelled.  Do the completion */
 			result = AIO_CANCELED;
-			KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel_async_workq)) | DBG_FUNC_NONE,
-			    (int)entryp->procp, (int)entryp->uaiocbp, fd, 0, 0 );
+			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel_async_workq) | DBG_FUNC_NONE,
+			    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
+			    fd, 0, 0);
 			do_aio_completion(entryp);
 
 			/* This will free if the aio_return() has already happened ... */
@@ -1032,8 +1025,9 @@ do_aio_cancel_locked(proc_t p, int fd, user_addr_t aiocbp,
 			 */
 			result = AIO_NOTCANCELED;
 
-			KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel_activeq)) | DBG_FUNC_NONE,
-			    (int)entryp->procp, (int)entryp->uaiocbp, fd, 0, 0 );
+			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel_activeq) | DBG_FUNC_NONE,
+			    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
+			    fd, 0, 0);
 
 			/* Mark for waiting and such; will not take a ref if "cancelled" arg is FALSE */
 			aio_entry_update_for_cancel(entryp, FALSE, wait_for_completion, disable_notification);
@@ -1057,8 +1051,9 @@ do_aio_cancel_locked(proc_t p, int fd, user_addr_t aiocbp,
 			ASSERT_AIO_FROM_PROC(entryp, p);
 			if (should_cancel(entryp, aiocbp, fd)) {
 				result = AIO_ALLDONE;
-				KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel_doneq)) | DBG_FUNC_NONE,
-				    (int)entryp->procp, (int)entryp->uaiocbp, fd, 0, 0 );
+				KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel_doneq) | DBG_FUNC_NONE,
+				    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
+				    fd, 0, 0);
 
 				if (aiocbp != USER_ADDR_NULL) {
 					return result;
@@ -1092,15 +1087,15 @@ aio_suspend(proc_t p, struct aio_suspend_args *uap, int *retval )
 int
 aio_suspend_nocancel(proc_t p, struct aio_suspend_nocancel_args *uap, int *retval )
 {
-	int                                     error;
-	int                                     i, count;
-	uint64_t                        abstime;
-	struct user_timespec ts;
-	aio_workq_entry         *entryp;
-	user_addr_t                     *aiocbpp;
+	int                     error;
+	int                     i, count;
+	uint64_t                abstime;
+	struct user_timespec    ts;
+	aio_workq_entry        *entryp;
+	user_addr_t            *aiocbpp;
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_suspend)) | DBG_FUNC_START,
-	    (int)p, uap->nent, 0, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_suspend) | DBG_FUNC_START,
+	    VM_KERNEL_ADDRPERM(p), uap->nent, 0, 0, 0);
 
 	*retval = -1;
 	abstime = 0;
@@ -1178,8 +1173,8 @@ check_for_our_aiocbp:
 		}
 	} /* for ( ; i < uap->nent; ) */
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_suspend_sleep)) | DBG_FUNC_NONE,
-	    (int)p, uap->nent, 0, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_suspend_sleep) | DBG_FUNC_NONE,
+	    VM_KERNEL_ADDRPERM(p), uap->nent, 0, 0, 0);
 
 	/*
 	 * wait for an async IO to complete or a signal fires or timeout expires.
@@ -1212,8 +1207,8 @@ ExitThisRoutine:
 		FREE( aiocbpp, M_TEMP );
 	}
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_suspend)) | DBG_FUNC_END,
-	    (int)p, uap->nent, error, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_suspend) | DBG_FUNC_END,
+	    VM_KERNEL_ADDRPERM(p), uap->nent, error, 0, 0);
 
 	return error;
 } /* aio_suspend */
@@ -1225,22 +1220,17 @@ ExitThisRoutine:
  */
 
 int
-aio_write(proc_t p, struct aio_write_args *uap, int *retval )
+aio_write(proc_t p, struct aio_write_args *uap, int *retval __unused)
 {
-	int                     error;
+	int error;
 
-	*retval = 0;
-
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_write)) | DBG_FUNC_START,
-	    (int)p, (int)uap->aiocbp, 0, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_write) | DBG_FUNC_START,
+	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, 0, 0, 0);
 
 	error = aio_queue_async_request( p, uap->aiocbp, AIO_WRITE );
-	if (error != 0) {
-		*retval = -1;
-	}
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_write)) | DBG_FUNC_END,
-	    (int)p, (int)uap->aiocbp, error, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_write) | DBG_FUNC_END,
+	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, error, 0, 0);
 
 	return error;
 } /* aio_write */
@@ -1424,6 +1414,13 @@ aio_enqueue_work( proc_t procp, aio_workq_entry *entryp, int proc_locked)
 	    THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
 	aio_workq_unlock(queue);
 
+
+	KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_AIO, AIO_work_queued) | DBG_FUNC_START,
+	    VM_KERNEL_ADDRPERM(procp), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
+	    entryp->flags, entryp->aiocb.aio_fildes, 0 );
+	KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_AIO, AIO_work_queued) | DBG_FUNC_END,
+	    entryp->aiocb.aio_offset, 0, entryp->aiocb.aio_nbytes, 0, 0);
+
 	if (proc_locked == 0) {
 		aio_proc_unlock(procp);
 	}
@@ -1485,20 +1482,18 @@ aio_enqueue_work( proc_t procp, aio_workq_entry *entryp, int proc_locked)
 int
 lio_listio(proc_t p, struct lio_listio_args *uap, int *retval )
 {
-	int                             i;
-	int                             call_result;
-	int                             result;
-	int                             old_count;
-	aio_workq_entry                 **entryp_listp;
-	user_addr_t                     *aiocbpp;
-	struct user_sigevent            aiosigev;
+	int                      i;
+	int                      call_result;
+	int                      result;
+	int                      old_count;
+	aio_workq_entry        **entryp_listp;
+	user_addr_t             *aiocbpp;
+	struct user_sigevent     aiosigev;
 	aio_lio_context         *lio_context;
-	boolean_t                       free_context = FALSE;
-	uint32_t *paio_offset;
-	uint32_t *paio_nbytes;
+	boolean_t                free_context = FALSE;
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_listio)) | DBG_FUNC_START,
-	    (int)p, uap->nent, uap->mode, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_listio) | DBG_FUNC_START,
+	    VM_KERNEL_ADDRPERM(p), uap->nent, uap->mode, 0, 0);
 
 	entryp_listp = NULL;
 	lio_context = NULL;
@@ -1525,6 +1520,23 @@ lio_listio(proc_t p, struct lio_listio_args *uap, int *retval )
 		goto ExitRoutine;
 	}
 
+	/*
+	 * lio_context ownership rules go as follow:
+	 *
+	 * - when the mode is LIO_WAIT, and that the AIOs aren't cancelled,
+	 *   this function will perform the deallocation.
+	 *
+	 * - when the mode is LIO_WAIT but AIOs are cancelled, then io_waiter is
+	 *   forced to '0' (pretending the mode is LIO_NOWAIT) and the ownership is
+	 *   handed over to the async path.
+	 *
+	 * - when the mode is LIO_NOWAIT, then the aio thread is responsible for
+	 *   cleaning up the context.
+	 *
+	 * However, there is a last case, which is when none of the commands pass
+	 * preflight and no submission is done, in this case this function is
+	 * responsible for cleanup.
+	 */
 	MALLOC( lio_context, aio_lio_context*, sizeof(aio_lio_context), M_TEMP, M_WAITOK );
 	if (lio_context == NULL) {
 		call_result = EAGAIN;
@@ -1575,7 +1587,10 @@ lio_listio(proc_t p, struct lio_listio_args *uap, int *retval )
 		/* NULL elements are legal so check for 'em */
 		if (my_aiocbp == USER_ADDR_NULL) {
 			aio_proc_lock_spin(p);
-			lio_context->io_issued--;
+			if (--lio_context->io_issued == 0) {
+				/* no submission made, needs cleanup */
+				free_context = TRUE;
+			}
 			aio_proc_unlock(p);
 			continue;
 		}
@@ -1598,7 +1613,10 @@ lio_listio(proc_t p, struct lio_listio_args *uap, int *retval )
 		entryp = *(entryp_listp + i);
 		if (entryp == NULL) {
 			aio_proc_lock_spin(p);
-			lio_context->io_issued--;
+			if (--lio_context->io_issued == 0) {
+				/* no submission made, needs cleanup */
+				free_context = TRUE;
+			}
 			aio_proc_unlock(p);
 			continue;
 		}
@@ -1618,7 +1636,10 @@ lio_listio(proc_t p, struct lio_listio_args *uap, int *retval )
 		if (old_count >= aio_max_requests ||
 		    aio_get_process_count( entryp->procp ) >= aio_max_requests_per_process ||
 		    is_already_queued( entryp->procp, entryp->uaiocbp ) == TRUE) {
-			lio_context->io_issued--;
+			if (--lio_context->io_issued == 0) {
+				/* no submission made, needs cleanup */
+				free_context = TRUE;
+			}
 			aio_proc_unlock(p);
 
 			aio_decrement_total_count();
@@ -1634,46 +1655,37 @@ lio_listio(proc_t p, struct lio_listio_args *uap, int *retval )
 		lck_mtx_convert_spin(aio_proc_mutex(p));
 		aio_enqueue_work(p, entryp, 1);
 		aio_proc_unlock(p);
-
-		KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_AIO, AIO_work_queued)) | DBG_FUNC_START,
-		    (int)p, (int)entryp->uaiocbp, entryp->flags, entryp->aiocb.aio_fildes, 0 );
-		paio_offset = (uint32_t*) &entryp->aiocb.aio_offset;
-		paio_nbytes = (uint32_t*) &entryp->aiocb.aio_nbytes;
-		KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_AIO, AIO_work_queued)) | DBG_FUNC_END,
-		    paio_offset[0], (sizeof(entryp->aiocb.aio_offset) == sizeof(uint64_t) ? paio_offset[1] : 0),
-		    paio_nbytes[0], (sizeof(entryp->aiocb.aio_nbytes) == sizeof(uint64_t) ? paio_nbytes[1] : 0),
-		    0 );
 	}
 
-	aio_proc_lock_spin(p);
-	switch (uap->mode) {
-	case LIO_WAIT:
+	if (free_context) {
+		/* no submission was made, just exit */
+		goto ExitRoutine;
+	}
+
+	if (uap->mode == LIO_WAIT) {
+		aio_proc_lock_spin(p);
+
 		while (lio_context->io_completed < lio_context->io_issued) {
 			result = msleep(lio_context, aio_proc_mutex(p), PCATCH | PRIBIO | PSPIN, "lio_listio", 0);
 
 			/* If we were interrupted, fail out (even if all finished) */
 			if (result != 0) {
 				call_result = EINTR;
-				lio_context->io_waiter = 0;
 				break;
 			}
 		}
 
-		/* If all IOs have finished must free it */
 		if (lio_context->io_completed == lio_context->io_issued) {
+			/* If all IOs have finished must free it */
 			free_context = TRUE;
+		} else {
+			/* handoff to the async codepath for clean up */
+			assert(call_result == EINTR);
+			lio_context->io_waiter = 0;
 		}
 
-		break;
-
-	case LIO_NOWAIT:
-		/* If no IOs were issued must free it (rdar://problem/45717887) */
-		if (lio_context->io_issued == 0) {
-			free_context = TRUE;
-		}
-		break;
+		aio_proc_unlock(p);
 	}
-	aio_proc_unlock(p);
 
 	/* call_result == -1 means we had no trouble queueing up requests */
 	if (call_result == -1) {
@@ -1692,8 +1704,8 @@ ExitRoutine:
 		free_lio_context(lio_context);
 	}
 
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_listio)) | DBG_FUNC_END,
-	    (int)p, call_result, 0, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_listio) | DBG_FUNC_END,
+	    VM_KERNEL_ADDRPERM(p), call_result, 0, 0, 0);
 
 	return call_result;
 } /* lio_listio */
@@ -1708,11 +1720,11 @@ __attribute__((noreturn))
 static void
 aio_work_thread(void)
 {
-	aio_workq_entry                 *entryp;
-	int                     error;
-	vm_map_t                currentmap;
-	vm_map_t                oldmap = VM_MAP_NULL;
-	task_t                  oldaiotask = TASK_NULL;
+	aio_workq_entry *entryp;
+	int              error;
+	vm_map_t         currentmap;
+	vm_map_t         oldmap = VM_MAP_NULL;
+	task_t           oldaiotask = TASK_NULL;
 	struct uthread  *uthreadp = NULL;
 
 	for (;;) {
@@ -1722,8 +1734,9 @@ aio_work_thread(void)
 		 */
 		entryp = aio_get_some_work();
 
-		KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_worker_thread)) | DBG_FUNC_START,
-		    (int)entryp->procp, (int)entryp->uaiocbp, entryp->flags, 0, 0 );
+		KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_worker_thread) | DBG_FUNC_START,
+		    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
+		    entryp->flags, 0, 0);
 
 		/*
 		 * Assume the target's address space identity for the duration
@@ -1756,9 +1769,9 @@ aio_work_thread(void)
 			uthreadp->uu_aio_task = oldaiotask;
 		}
 
-		KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_worker_thread)) | DBG_FUNC_END,
-		    (int)entryp->procp, (int)entryp->uaiocbp, entryp->errorval,
-		    entryp->returnval, 0 );
+		KERNEL_DEBUG(SDDBG_CODE(DBG_BSD_AIO, AIO_worker_thread) | DBG_FUNC_END,
+		    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
+		    entryp->errorval, entryp->returnval, 0);
 
 
 		/* XXX COUNTS */
@@ -1803,8 +1816,8 @@ aio_work_thread(void)
 static aio_workq_entry *
 aio_get_some_work( void )
 {
-	aio_workq_entry                         *entryp = NULL;
-	aio_workq_t                             queue = NULL;
+	aio_workq_entry *entryp = NULL;
+	aio_workq_t      queue = NULL;
 
 	/* Just one queue for the moment.  In the future there will be many. */
 	queue = &aio_anchor.aio_async_workqs[0];
@@ -1850,8 +1863,9 @@ aio_get_some_work( void )
 			aio_proc_lock_spin(entryp->procp);
 			if (aio_delay_fsync_request( entryp )) {
 				/* It needs to be delayed.  Put it back on the end of the work queue */
-				KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_fsync_delay)) | DBG_FUNC_NONE,
-				    (int)entryp->procp, (int)entryp->uaiocbp, 0, 0, 0 );
+				KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_fsync_delay) | DBG_FUNC_NONE,
+				    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
+				    0, 0, 0);
 
 				aio_proc_unlock(entryp->procp);
 
@@ -1888,6 +1902,14 @@ nowork:
 static boolean_t
 aio_delay_fsync_request( aio_workq_entry *entryp )
 {
+	if (proc_in_teardown(entryp->procp)) {
+		/*
+		 * we can't delay FSYNCS when in teardown as it will confuse _aio_exit,
+		 * if it was dequeued, then we must now commit to it
+		 */
+		return FALSE;
+	}
+
 	if (entryp == TAILQ_FIRST(&entryp->procp->p_aio_activeq)) {
 		return FALSE;
 	}
@@ -1979,8 +2001,6 @@ aio_queue_async_request(proc_t procp, user_addr_t aiocbp, int kindOfIO )
 	aio_workq_entry *entryp;
 	int              result;
 	int              old_count;
-	uint32_t *paio_offset;
-	uint32_t *paio_nbytes;
 
 	old_count = aio_increment_total_count();
 	if (old_count >= aio_max_requests) {
@@ -2014,16 +2034,6 @@ aio_queue_async_request(proc_t procp, user_addr_t aiocbp, int kindOfIO )
 	aio_enqueue_work(procp, entryp, 1);
 
 	aio_proc_unlock(procp);
-
-	paio_offset = (uint32_t*) &entryp->aiocb.aio_offset;
-	paio_nbytes = (uint32_t*) &entryp->aiocb.aio_nbytes;
-	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_AIO, AIO_work_queued)) | DBG_FUNC_START,
-	    (int)procp, (int)aiocbp, entryp->flags, entryp->aiocb.aio_fildes, 0 );
-	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_AIO, AIO_work_queued)) | DBG_FUNC_END,
-	    paio_offset[0], (sizeof(entryp->aiocb.aio_offset) == sizeof(uint64_t) ? paio_offset[1] : 0),
-	    paio_nbytes[0], (sizeof(entryp->aiocb.aio_nbytes) == sizeof(uint64_t) ? paio_nbytes[1] : 0),
-	    0 );
-
 	return 0;
 
 error_exit:
@@ -2143,9 +2153,9 @@ aio_free_request(aio_workq_entry *entryp)
 static int
 aio_validate( aio_workq_entry *entryp )
 {
-	struct fileproc                                 *fp;
-	int                                                     flag;
-	int                                                     result;
+	struct fileproc *fp;
+	int              flag;
+	int              result;
 
 	result = 0;
 
@@ -2207,13 +2217,13 @@ aio_validate( aio_workq_entry *entryp )
 } /* aio_validate */
 
 static int
-aio_increment_total_count()
+aio_increment_total_count(void)
 {
 	return OSIncrementAtomic(&aio_anchor.aio_total_count);
 }
 
 static int
-aio_decrement_total_count()
+aio_decrement_total_count(void)
 {
 	int old = OSDecrementAtomic(&aio_anchor.aio_total_count);
 	if (old <= 0) {
@@ -2224,7 +2234,7 @@ aio_decrement_total_count()
 }
 
 static int
-aio_get_process_count(proc_t procp )
+aio_get_process_count(proc_t procp)
 {
 	return procp->p_aio_total_count;
 } /* aio_get_process_count */
@@ -2242,9 +2252,9 @@ aio_get_all_queues_count( void )
 static void
 do_aio_completion( aio_workq_entry *entryp )
 {
-	boolean_t               lastLioCompleted = FALSE;
+	boolean_t        lastLioCompleted = FALSE;
 	aio_lio_context *lio_context = NULL;
-	int waiter = 0;
+	int              waiter = 0;
 
 	lio_context = (aio_lio_context *)entryp->group_tag;
 
@@ -2284,9 +2294,9 @@ do_aio_completion( aio_workq_entry *entryp )
 		}
 
 		if (performSignal) {
-			KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_sig)) | DBG_FUNC_NONE,
-			    (int)entryp->procp, (int)entryp->uaiocbp,
-			    entryp->aiocb.aio_sigevent.sigev_signo, 0, 0 );
+			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_sig) | DBG_FUNC_NONE,
+			    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
+			    entryp->aiocb.aio_sigevent.sigev_signo, 0, 0);
 
 			psignal( entryp->procp, entryp->aiocb.aio_sigevent.sigev_signo );
 		}
@@ -2312,8 +2322,9 @@ do_aio_completion( aio_workq_entry *entryp )
 	if ((entryp->flags & AIO_EXIT_WAIT) != 0) {
 		int             active_requests;
 
-		KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_cleanup_wait)) | DBG_FUNC_NONE,
-		    (int)entryp->procp, (int)entryp->uaiocbp, 0, 0, 0 );
+		KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_cleanup_wait) | DBG_FUNC_NONE,
+		    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
+		    0, 0, 0);
 
 		aio_proc_lock_spin(entryp->procp);
 		active_requests = aio_active_requests_for_process( entryp->procp );
@@ -2325,8 +2336,9 @@ do_aio_completion( aio_workq_entry *entryp )
 			wakeup_one((caddr_t)&entryp->procp->AIO_CLEANUP_SLEEP_CHAN);
 			aio_proc_unlock(entryp->procp);
 
-			KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_cleanup_wake)) | DBG_FUNC_NONE,
-			    (int)entryp->procp, (int)entryp->uaiocbp, 0, 0, 0 );
+			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_cleanup_wake) | DBG_FUNC_NONE,
+			    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
+			    0, 0, 0);
 		} else {
 			aio_proc_unlock(entryp->procp);
 		}
@@ -2335,8 +2347,9 @@ do_aio_completion( aio_workq_entry *entryp )
 	if ((entryp->flags & AIO_CLOSE_WAIT) != 0) {
 		int             active_requests;
 
-		KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_cleanup_wait)) | DBG_FUNC_NONE,
-		    (int)entryp->procp, (int)entryp->uaiocbp, 0, 0, 0 );
+		KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_cleanup_wait) | DBG_FUNC_NONE,
+		    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
+		    0, 0, 0);
 
 		aio_proc_lock_spin(entryp->procp);
 		active_requests = aio_proc_active_requests_for_file( entryp->procp, entryp->aiocb.aio_fildes);
@@ -2345,8 +2358,9 @@ do_aio_completion( aio_workq_entry *entryp )
 			wakeup(&entryp->procp->AIO_CLEANUP_SLEEP_CHAN);
 			aio_proc_unlock(entryp->procp);
 
-			KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_cleanup_wake)) | DBG_FUNC_NONE,
-			    (int)entryp->procp, (int)entryp->uaiocbp, 0, 0, 0 );
+			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_cleanup_wake) | DBG_FUNC_NONE,
+			    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
+			    0, 0, 0);
 		} else {
 			aio_proc_unlock(entryp->procp);
 		}
@@ -2359,8 +2373,8 @@ do_aio_completion( aio_workq_entry *entryp )
 	 * can do our wakeup without holding the lock.
 	 */
 	wakeup((caddr_t) &entryp->procp->AIO_SUSPEND_SLEEP_CHAN );
-	KERNEL_DEBUG((BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_suspend_wake)) | DBG_FUNC_NONE,
-	    (int)entryp->procp, (int)entryp->uaiocbp, 0, 0, 0 );
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_suspend_wake) | DBG_FUNC_NONE,
+	    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp), 0, 0, 0);
 
 	/*
 	 * free the LIO context if the last lio completed and no thread is
@@ -2378,8 +2392,8 @@ do_aio_completion( aio_workq_entry *entryp )
 static int
 do_aio_read( aio_workq_entry *entryp )
 {
-	struct fileproc         *fp;
-	int                                     error;
+	struct fileproc        *fp;
+	int                     error;
 	struct vfs_context      context;
 
 	if ((error = fp_lookup(entryp->procp, entryp->aiocb.aio_fildes, &fp, 0))) {
@@ -2410,9 +2424,9 @@ do_aio_read( aio_workq_entry *entryp )
 static int
 do_aio_write( aio_workq_entry *entryp )
 {
-	struct fileproc                 *fp;
-	int                             error, flags;
-	struct vfs_context              context;
+	struct fileproc        *fp;
+	int                     error, flags;
+	struct vfs_context      context;
 
 	if ((error = fp_lookup(entryp->procp, entryp->aiocb.aio_fildes, &fp, 0))) {
 		return error;
@@ -2454,7 +2468,7 @@ do_aio_write( aio_workq_entry *entryp )
  * requests for the given process.
  */
 static int
-aio_active_requests_for_process(proc_t procp )
+aio_active_requests_for_process(proc_t procp)
 {
 	return procp->p_aio_active_count;
 } /* aio_active_requests_for_process */
@@ -2542,11 +2556,10 @@ do_aio_fsync( aio_workq_entry *entryp )
  * Called with proc aio lock held (can be held spin)
  */
 static boolean_t
-is_already_queued(proc_t procp,
-    user_addr_t aiocbp )
+is_already_queued(proc_t procp, user_addr_t aiocbp)
 {
-	aio_workq_entry                 *entryp;
-	boolean_t                               result;
+	aio_workq_entry *entryp;
+	boolean_t        result;
 
 	result = FALSE;
 
@@ -2588,7 +2601,7 @@ free_lio_context(aio_lio_context* context)
 __private_extern__ void
 aio_init( void )
 {
-	int                     i;
+	int i;
 
 	aio_lock_grp_attr = lck_grp_attr_alloc_init();
 	aio_proc_lock_grp = lck_grp_alloc_init("aio_proc", aio_lock_grp_attr);;
@@ -2622,7 +2635,7 @@ aio_init( void )
 __private_extern__ void
 _aio_create_worker_threads( int num )
 {
-	int                     i;
+	int i;
 
 	/* create some worker threads to handle the async IO requests */
 	for (i = 0; i < num; i++) {

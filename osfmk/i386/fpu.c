@@ -80,6 +80,9 @@ xstate_t        fpu_capability = UNDEFINED;     /* extended state capability */
 xstate_t        fpu_default = UNDEFINED;        /* default extended state */
 
 #define ALIGNED(addr, size)      (((uintptr_t)(addr)&((size)-1))==0)
+#define VERIFY_SAVEAREA_ALIGNED(p, a) \
+	assertf(!(((uintptr_t)(p)) & ((a) - 1)), \
+	    "FP save area component @ 0x%lx not 8-byte aligned", ((uintptr_t)(p)))
 
 /* Forward */
 
@@ -535,6 +538,19 @@ clear_fpu(void)
 	set_ts();
 }
 
+static boolean_t
+fpu_allzeroes(uint64_t * __attribute((aligned(8)))ptr, uint32_t size)
+{
+	VERIFY_SAVEAREA_ALIGNED(ptr, sizeof(uint64_t));
+	assertf((size & (sizeof(uint64_t) - 1)) == 0, "FP save area component not a multiple of 8 bytes");
+
+	for (uint32_t count = 0; count < (size / sizeof(uint64_t)); count++) {
+		if (ptr[count] != 0) {
+			return FALSE;
+		}
+	}
+	return TRUE;
+}
 
 static void
 fpu_load_registers(void *fstate)
@@ -730,13 +746,19 @@ fpu_free(thread_t thread, void *fps)
 }
 
 /*
- * Set the floating-point state for a thread based
- * on the FXSave formatted data. This is basically
- * the same as fpu_set_state except it uses the
- * expanded data structure.
- * If the thread is not the current thread, it is
- * not running (held).  Locking needed against
- * concurrent fpu_set_state or fpu_get_state.
+ * Set the floating-point state for a thread based on the FXSave formatted data.
+ * This is basically the same as fpu_set_state except it uses the expanded data
+ * structure.
+ * If the thread is not the current thread, it is not running (held).  Locking
+ * needed against concurrent fpu_set_state or fpu_get_state.
+ *
+ * While translating between XNU FP state structures and the CPU-native XSAVE area,
+ * if we detect state components that are all zeroes, we clear the corresponding
+ * xstate_bv bit in the XSAVE area, because that allows the corresponding state to
+ * be initialized to a "clean" state.  That's most important when clearing the YMM
+ * bit, since an initialized "upper clean" state results in a massive performance
+ * improvement due to elimination of false dependencies between the XMMs and the
+ * upper bits of the YMMs.
  */
 kern_return_t
 fpu_set_fxstate(
@@ -860,10 +882,20 @@ Retry:
 			iavx->_xh.xstate_bv = AVX_XMASK;
 			iavx->_xh.xcomp_bv  = 0;
 
+			/*
+			 * See the block comment at the top of the function for a description of why we're clearing
+			 * xstate_bv bits.
+			 */
 			if (f == x86_AVX_STATE32) {
 				__nochk_bcopy(&xs->fpu_ymmh0, iavx->x_YMM_Hi128, 8 * sizeof(_STRUCT_XMM_REG));
+				if (fpu_allzeroes((uint64_t *)(void *)iavx->x_YMM_Hi128, 8 * sizeof(_STRUCT_XMM_REG)) == TRUE) {
+					iavx->_xh.xstate_bv &= ~XFEM_YMM;
+				}
 			} else if (f == x86_AVX_STATE64) {
 				__nochk_bcopy(&xs->fpu_ymmh0, iavx->x_YMM_Hi128, 16 * sizeof(_STRUCT_XMM_REG));
+				if (fpu_allzeroes((uint64_t *)(void *)iavx->x_YMM_Hi128, 16 * sizeof(_STRUCT_XMM_REG)) == TRUE) {
+					iavx->_xh.xstate_bv &= ~XFEM_YMM;
+				}
 			} else {
 				iavx->_xh.xstate_bv = (XFEM_SSE | XFEM_X87);
 			}
@@ -884,25 +916,55 @@ Retry:
 			iavx->_xh.xstate_bv = AVX512_XMASK;
 			iavx->_xh.xcomp_bv  = 0;
 
+			/*
+			 * See the block comment at the top of the function for a description of why we're clearing
+			 * xstate_bv bits.
+			 */
 			switch (f) {
 			case x86_AVX512_STATE32:
 				__nochk_bcopy(&xs.s32->fpu_k0, iavx->x_Opmask, 8 * sizeof(_STRUCT_OPMASK_REG));
 				__nochk_bcopy(&xs.s32->fpu_zmmh0, iavx->x_ZMM_Hi256, 8 * sizeof(_STRUCT_YMM_REG));
+				if (fpu_allzeroes((uint64_t *)(void *)iavx->x_ZMM_Hi256, 8 * sizeof(_STRUCT_YMM_REG)) == TRUE) {
+					iavx->_xh.xstate_bv &= ~XFEM_ZMM;
+				}
 				__nochk_bcopy(&xs.s32->fpu_ymmh0, iavx->x_YMM_Hi128, 8 * sizeof(_STRUCT_XMM_REG));
+				if (fpu_allzeroes((uint64_t *)(void *)iavx->x_YMM_Hi128, 8 * sizeof(_STRUCT_XMM_REG)) == TRUE) {
+					iavx->_xh.xstate_bv &= ~XFEM_YMM;
+				}
+
 				DBG_AVX512_STATE(iavx);
 				break;
 			case x86_AVX_STATE32:
 				__nochk_bcopy(&xs.s32->fpu_ymmh0, iavx->x_YMM_Hi128, 8 * sizeof(_STRUCT_XMM_REG));
+				if (fpu_allzeroes((uint64_t *)(void *)iavx->x_YMM_Hi128, 8 * sizeof(_STRUCT_XMM_REG)) == TRUE) {
+					iavx->_xh.xstate_bv &= ~XFEM_YMM;
+				}
 				break;
 			case x86_AVX512_STATE64:
 				__nochk_bcopy(&xs.s64->fpu_k0, iavx->x_Opmask, 8 * sizeof(_STRUCT_OPMASK_REG));
 				__nochk_bcopy(&xs.s64->fpu_zmm16, iavx->x_Hi16_ZMM, 16 * sizeof(_STRUCT_ZMM_REG));
 				__nochk_bcopy(&xs.s64->fpu_zmmh0, iavx->x_ZMM_Hi256, 16 * sizeof(_STRUCT_YMM_REG));
+				/*
+				 * Note that it is valid to have XFEM_ZMM set but XFEM_YMM cleared.  In that case,
+				 * the upper bits of the YMMs would be cleared and would result in a clean-upper
+				 * state, allowing SSE instruction to avoid false dependencies.
+				 */
+				if (fpu_allzeroes((uint64_t *)(void *)iavx->x_Hi16_ZMM, 16 * sizeof(_STRUCT_ZMM_REG)) == TRUE &&
+				    fpu_allzeroes((uint64_t *)(void *)iavx->x_ZMM_Hi256, 16 * sizeof(_STRUCT_YMM_REG)) == TRUE) {
+					iavx->_xh.xstate_bv &= ~XFEM_ZMM;
+				}
+
 				__nochk_bcopy(&xs.s64->fpu_ymmh0, iavx->x_YMM_Hi128, 16 * sizeof(_STRUCT_XMM_REG));
+				if (fpu_allzeroes((uint64_t *)(void *)iavx->x_YMM_Hi128, 16 * sizeof(_STRUCT_XMM_REG)) == TRUE) {
+					iavx->_xh.xstate_bv &= ~XFEM_YMM;
+				}
 				DBG_AVX512_STATE(iavx);
 				break;
 			case x86_AVX_STATE64:
 				__nochk_bcopy(&xs.s64->fpu_ymmh0, iavx->x_YMM_Hi128, 16 * sizeof(_STRUCT_XMM_REG));
+				if (fpu_allzeroes((uint64_t *)(void *)iavx->x_YMM_Hi128, 16 * sizeof(_STRUCT_XMM_REG)) == TRUE) {
+					iavx->_xh.xstate_bv &= ~XFEM_YMM;
+				}
 				break;
 			}
 			break;

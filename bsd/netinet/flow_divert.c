@@ -1458,21 +1458,21 @@ flow_divert_send_close_if_needed(struct flow_divert_pcb *fd_cb)
 static errno_t
 flow_divert_send_data_packet(struct flow_divert_pcb *fd_cb, mbuf_t data, size_t data_len, struct sockaddr *toaddr, Boolean force)
 {
-	mbuf_t  packet;
-	mbuf_t  last;
+	mbuf_t  packet = NULL;
+	mbuf_t  last = NULL;
 	int             error   = 0;
 
 	error = flow_divert_packet_init(fd_cb, FLOW_DIVERT_PKT_DATA, &packet);
-	if (error) {
+	if (error || packet == NULL) {
 		FDLOG(LOG_ERR, fd_cb, "flow_divert_packet_init failed: %d", error);
-		return error;
+		goto done;
 	}
 
 	if (toaddr != NULL) {
 		error = flow_divert_append_target_endpoint_tlv(packet, toaddr);
 		if (error) {
 			FDLOG(LOG_ERR, fd_cb, "flow_divert_append_target_endpoint_tlv() failed: %d", error);
-			return error;
+			goto done;
 		}
 	}
 
@@ -1482,13 +1482,19 @@ flow_divert_send_data_packet(struct flow_divert_pcb *fd_cb, mbuf_t data, size_t 
 		mbuf_pkthdr_adjustlen(packet, data_len);
 	}
 	error = flow_divert_send_packet(fd_cb, packet, force);
-
-	if (error) {
-		mbuf_setnext(last, NULL);
-		mbuf_freem(packet);
-	} else {
+	if (error == 0 && data_len > 0) {
 		fd_cb->bytes_sent += data_len;
 		flow_divert_add_data_statistics(fd_cb, data_len, TRUE);
+	}
+
+done:
+	if (error) {
+		if (last != NULL) {
+			mbuf_setnext(last, NULL);
+		}
+		if (packet != NULL) {
+			mbuf_freem(packet);
+		}
 	}
 
 	return error;

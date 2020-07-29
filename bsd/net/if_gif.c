@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -618,6 +618,12 @@ gif_output(
 
 	/* XXX should we check if our outer source is legal? */
 
+	/*
+	 * Save the length as m may be free by the output functions
+	 * as they call m_pullup
+	 */
+	u_int32_t bytes_out = m->m_pkthdr.len;
+
 	/* dispatch to output logic based on outer AF */
 	switch (sc->gif_psrc->sa_family) {
 #if INET
@@ -641,7 +647,7 @@ end:
 		/* the mbuf was freed either by in_gif_output or in here */
 		ifnet_stat_increment_out(ifp, 0, 0, 1);
 	} else {
-		ifnet_stat_increment_out(ifp, 1, m->m_pkthdr.len, 0);
+		ifnet_stat_increment_out(ifp, 1, bytes_out, 0);
 	}
 	if (error == 0) {
 		error = EJUSTRETURN; /* if no error, packet got sent already */

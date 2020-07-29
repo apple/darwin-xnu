@@ -1582,7 +1582,7 @@ kern_return_t
 thread_entrypoint(__unused thread_t  thread,
     int                flavor,
     thread_state_t     tstate,
-    unsigned int       count __unused,
+    unsigned int       count,
     mach_vm_offset_t * entry_point
     )
 {
@@ -1590,6 +1590,10 @@ thread_entrypoint(__unused thread_t  thread,
 	case ARM_THREAD_STATE:
 	{
 		struct arm_thread_state *state;
+
+		if (count != ARM_THREAD_STATE_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (struct arm_thread_state *) tstate;
 
@@ -1607,6 +1611,10 @@ thread_entrypoint(__unused thread_t  thread,
 	case ARM_THREAD_STATE64:
 	{
 		struct arm_thread_state64 *state;
+
+		if (count != ARM_THREAD_STATE64_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		state = (struct arm_thread_state64*) tstate;
 

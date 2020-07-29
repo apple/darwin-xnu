@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -890,7 +890,7 @@ ifa_foraddr6_scoped(struct in6_addr *addr6, unsigned int scope)
 	struct in6_ifaddr *ia = NULL;
 
 	lck_rw_lock_shared(&in6_ifaddr_rwlock);
-	for (ia = in6_ifaddrs; ia; ia = ia->ia_next) {
+	TAILQ_FOREACH(ia, IN6ADDR_HASH(addr6), ia6_hash) {
 		IFA_LOCK(&ia->ia_ifa);
 		if (IN6_ARE_ADDR_EQUAL(&ia->ia_addr.sin6_addr, addr6) &&
 		    (scope == IFSCOPE_NONE || ia->ia_ifp->if_index == scope)) {

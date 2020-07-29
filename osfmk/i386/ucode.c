@@ -190,13 +190,14 @@ cpu_update(__unused void *arg)
  * by sleeping.
  */
 void
-ucode_update_wake()
+ucode_update_wake_and_apply_cpu_was()
 {
 	if (global_update) {
 		kprintf("ucode: Re-applying update after wake (CPU #%d)\n", cpu_number());
 		cpu_update(NULL);
-#if DEBUG
 	} else {
+		cpuid_do_was();
+#if DEBUG
 		kprintf("ucode: No update to apply (CPU #%d)\n", cpu_number());
 #endif
 	}

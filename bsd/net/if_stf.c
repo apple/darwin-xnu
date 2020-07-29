@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -571,6 +571,7 @@ stf_pre_output(
 			IFA_REMREF(&ia6->ia_ifa);
 			return ENOBUFS;
 		}
+		*m0 = m;
 	}
 	ip6 = mtod(m, struct ip6_hdr *);
 	tos = (ntohl(ip6->ip6_flow) >> 20) & 0xff;
@@ -604,6 +605,8 @@ stf_pre_output(
 		IFA_REMREF(&ia6->ia_ifa);
 		return ENOBUFS;
 	}
+
+	*m0 = m;
 	ip = mtod(m, struct ip *);
 
 	bzero(ip, sizeof(*ip));

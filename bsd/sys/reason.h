@@ -113,11 +113,12 @@ void os_reason_set_description_data(os_reason_t cur_reason, uint32_t type, void 
 #define OS_REASON_SANDBOX       25
 #define OS_REASON_SECURITY      26
 #define OS_REASON_ENDPOINTSECURITY      27
+#define OS_REASON_PAC_EXCEPTION 28
 
 /*
  * Update whenever new OS_REASON namespaces are added.
  */
-#define OS_REASON_MAX_VALID_NAMESPACE OS_REASON_ENDPOINTSECURITY
+#define OS_REASON_MAX_VALID_NAMESPACE OS_REASON_PAC_EXCEPTION
 
 #define OS_REASON_BUFFER_MAX_SIZE 5120
 

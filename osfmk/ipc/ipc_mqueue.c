@@ -1424,7 +1424,7 @@ ipc_mqueue_peek_locked(ipc_mqueue_t mq,
 	if (msg_trailerp != NULL) {
 		memcpy(msg_trailerp,
 		    (mach_msg_max_trailer_t *)((vm_offset_t)kmsg->ikm_header +
-		    round_msg(kmsg->ikm_header->msgh_size)),
+		    mach_round_msg(kmsg->ikm_header->msgh_size)),
 		    sizeof(mach_msg_max_trailer_t));
 	}
 	if (kmsgp != NULL) {

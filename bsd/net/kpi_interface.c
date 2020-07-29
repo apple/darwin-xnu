@@ -641,6 +641,7 @@ ifnet_set_eflags(ifnet_t interface, u_int32_t new_flags, u_int32_t mask)
 	 */
 	if ((((new_flags & mask) & IFEF_ADV_REPORT) != 0) &&
 	    ((interface->if_eflags & IFEF_SKYWALK_NATIVE) == 0)) {
+		ifnet_lock_done(interface);
 		return EINVAL;
 	}
 	oeflags = interface->if_eflags;

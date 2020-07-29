@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -277,18 +277,18 @@ int
 frag6_input(struct mbuf **mp, int *offp, int proto)
 {
 #pragma unused(proto)
-	struct mbuf *m = *mp, *t;
-	struct ip6_hdr *ip6;
-	struct ip6_frag *ip6f;
-	struct ip6q *q6;
-	struct ip6asfrag *af6, *ip6af, *af6dwn;
-	int offset = *offp, nxt, i, next;
+	struct mbuf *m = *mp, *t = NULL;
+	struct ip6_hdr *ip6 = NULL;
+	struct ip6_frag *ip6f = NULL;
+	struct ip6q *q6 = NULL;
+	struct ip6asfrag *af6 = NULL, *ip6af = NULL, *af6dwn = NULL;
+	int offset = *offp, nxt = 0, i = 0, next = 0;
 	int first_frag = 0;
-	int fragoff, frgpartlen;        /* must be larger than u_int16_t */
+	int fragoff = 0, frgpartlen = 0;        /* must be larger than u_int16_t */
 	struct ifnet *dstifp = NULL;
-	u_int8_t ecn, ecn0;
-	uint32_t csum, csum_flags;
-	struct fq6_head diq6;
+	u_int8_t ecn = 0, ecn0 = 0;
+	uint32_t csum = 0, csum_flags = 0;
+	struct fq6_head diq6 = {};
 	int locked = 0;
 
 	VERIFY(m->m_flags & M_PKTHDR);
@@ -298,8 +298,8 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
 	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(m);
 
-	ip6 = mtod(m, struct ip6_hdr *);
 	IP6_EXTHDR_CHECK(m, offset, sizeof(struct ip6_frag), goto done);
+	ip6 = mtod(m, struct ip6_hdr *);
 	ip6f = (struct ip6_frag *)((caddr_t)ip6 + offset);
 
 #ifdef IN6_IFSTAT_STRICT
@@ -375,6 +375,7 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 		m->m_pkthdr.pkt_flags |= PKTF_REASSEMBLED;
 		ip6stat.ip6s_atmfrag_rcvd++;
 		in6_ifstat_inc(dstifp, ifs6_atmfrag_rcvd);
+		*mp = m;
 		*offp = offset;
 		return ip6f->ip6f_nxt;
 	}
@@ -539,6 +540,20 @@ frag6_input(struct mbuf **mp, int *offp, int proto)
 	 * fragment already stored in the reassembly queue.
 	 */
 	if (fragoff == 0) {
+		/*
+		 * https://tools.ietf.org/html/rfc8200#page-20
+		 * If the first fragment does not include all headers through an
+		 * Upper-Layer header, then that fragment should be discarded and
+		 * an ICMP Parameter Problem, Code 3, message should be sent to
+		 * the source of the fragment, with the Pointer field set to zero.
+		 */
+		if (!ip6_pkt_has_ulp(m)) {
+			lck_mtx_unlock(&ip6qlock);
+			locked = 0;
+			icmp6_error(m, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_HEADER, 0);
+			m = NULL;
+			goto done;
+		}
 		for (af6 = q6->ip6q_down; af6 != (struct ip6asfrag *)q6;
 		    af6 = af6dwn) {
 			af6dwn = af6->ip6af_down;
@@ -862,6 +877,7 @@ insert:
 
 done:
 	VERIFY(m == NULL);
+	*mp = m;
 	if (!locked) {
 		if (frag6_nfragpackets == 0) {
 			frag6_icmp6_paramprob_error(&diq6);
@@ -884,6 +900,7 @@ dropfrag:
 	lck_mtx_unlock(&ip6qlock);
 	in6_ifstat_inc(dstifp, ifs6_reass_fail);
 	m_freem(m);
+	*mp = NULL;
 	frag6_icmp6_paramprob_error(&diq6);
 	VERIFY(MBUFQ_EMPTY(&diq6));
 	return IPPROTO_DONE;

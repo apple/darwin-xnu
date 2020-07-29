@@ -183,7 +183,6 @@
 
 	/* Save the context that was interrupted. */ 
 	ldp		x2, x3, [x3, SS64_X2]
-	stp		fp, lr, [x0, SS64_FP]
 	SPILL_REGISTERS KERNEL_MODE
 
 	/*
@@ -296,6 +295,59 @@
 #endif /* __ARM_KERNEL_PROTECT__ */
 .endmacro
 
+/*
+ * CHECK_KERNEL_STACK
+ *
+ * Verifies that the kernel stack is aligned and mapped within an expected
+ * stack address range. Note: happens before saving registers (in case we can't
+ * save to kernel stack).
+ *
+ * Expects:
+ *	{x0, x1, sp} - saved
+ *	x0 - SP_EL0
+ *	x1 - Exception syndrome
+ *	sp - Saved state
+ *
+ * Seems like we need an unused argument to the macro for the \@ syntax to work
+ *
+ */
+.macro CHECK_KERNEL_STACK unused
+	stp		x2, x3, [sp, SS64_X2]				// Save {x2-x3}
+	and		x1, x1, #ESR_EC_MASK				// Mask the exception class
+	mov		x2, #(ESR_EC_SP_ALIGN << ESR_EC_SHIFT)
+	cmp		x1, x2								// If we have a stack alignment exception
+	b.eq	Lcorrupt_stack_\@					// ...the stack is definitely corrupted
+	mov		x2, #(ESR_EC_DABORT_EL1 << ESR_EC_SHIFT)
+	cmp		x1, x2								// If we have a data abort, we need to
+	b.ne	Lvalid_stack_\@						// ...validate the stack pointer
+	mrs		x1, TPIDR_EL1						// Get thread pointer
+Ltest_kstack_\@:
+	ldr		x2, [x1, TH_KSTACKPTR]				// Get top of kernel stack
+	sub		x3, x2, KERNEL_STACK_SIZE			// Find bottom of kernel stack
+	cmp		x0, x2								// if (SP_EL0 >= kstack top)
+	b.ge	Ltest_istack_\@						//    jump to istack test
+	cmp		x0, x3								// if (SP_EL0 > kstack bottom)
+	b.gt	Lvalid_stack_\@						//    stack pointer valid
+Ltest_istack_\@:
+	ldr		x1, [x1, ACT_CPUDATAP]				// Load the cpu data ptr
+	ldr		x2, [x1, CPU_INTSTACK_TOP]			// Get top of istack
+	sub		x3, x2, INTSTACK_SIZE_NUM			// Find bottom of istack
+	cmp		x0, x2								// if (SP_EL0 >= istack top)
+	b.ge	Lcorrupt_stack_\@					//    corrupt stack pointer
+	cmp		x0, x3								// if (SP_EL0 > istack bottom)
+	b.gt	Lvalid_stack_\@						//    stack pointer valid
+Lcorrupt_stack_\@:
+	INIT_SAVED_STATE_FLAVORS sp, w0, w1
+	mov		x0, sp								// Copy exception frame pointer to x0
+	adrp	x1, fleh_invalid_stack@page			// Load address for fleh
+	add		x1, x1, fleh_invalid_stack@pageoff	// fleh_dispatch64 will save register state before we get there
+	ldp		x2, x3, [sp, SS64_X2]				// Restore {x2-x3}
+	b		fleh_dispatch64
+Lvalid_stack_\@:
+	ldp		x2, x3, [sp, SS64_X2]				// Restore {x2-x3}
+.endmacro
+
+
 #if __ARM_KERNEL_PROTECT__
 	.text
 	.align 3
@@ -407,7 +459,6 @@ Lel0_serror_vector_64:
 	stp		x0, x1, [sp, SS64_X0]				// Save x0, x1 to exception frame
 	add		x0, sp, ARM_CONTEXT_SIZE			// Calculate the original stack pointer
 	str		x0, [sp, SS64_SP]					// Save stack pointer to exception frame
-	stp		fp, lr, [sp, SS64_FP]				// Save fp and lr to exception frame
 	INIT_SAVED_STATE_FLAVORS sp, w0, w1
 	mov		x0, sp								// Copy saved state pointer to x0
 .endmacro
@@ -430,10 +481,8 @@ Lel1_sp0_synchronous_vector_kernel:
 	 */
 	tbz		x1, #(5 + ESR_EC_SHIFT), Lkernel_stack_valid
 	mrs		x0, SP_EL0							// Get SP_EL0
-	stp		fp, lr, [sp, SS64_FP]				// Save fp, lr to the stack
 	str		x0, [sp, SS64_SP]					// Save sp to the stack
-	bl		check_kernel_stack
-	ldp		fp, lr,	[sp, SS64_FP]				// Restore fp, lr
+	CHECK_KERNEL_STACK
 Lkernel_stack_valid:
 	ldp		x0, x1, [sp, SS64_X0]				// Restore x0, x1
 	add		sp, sp, ARM_CONTEXT_SIZE			// Restore SP1
@@ -487,7 +536,6 @@ Lel1_sp0_serror_vector_kernel:
 	add		x0, sp, ARM_CONTEXT_SIZE			// Calculate the original stack pointer
 	str		x0, [sp, SS64_SP]					// Save stack pointer to exception frame
 	INIT_SAVED_STATE_FLAVORS sp, w0, w1
-	stp		fp, lr, [sp, SS64_FP]				// Save fp and lr to exception frame
 	mov		x0, sp								// Copy saved state pointer to x0
 .endmacro
 
@@ -566,9 +614,6 @@ el1_sp1_serror_vector_long:
 	ldp		x0, x1, [sp], #16					// Restore x0 and x1 from the exception stack
 	msr		SPSel, #0							// Switch to SP0
 	stp		x0, x1, [sp, SS64_X0]				// Save x0, x1 to the user PCB
-	stp		fp, lr, [sp, SS64_FP]				// Save fp and lr to the user PCB
-	mov		fp, #0								// Clear the fp and lr for the
-	mov		lr, #0								// debugger stack frame
 	mov		x0, sp								// Copy the user PCB pointer to x0
 .endmacro
 
@@ -643,56 +688,6 @@ Lvalid_exception_stack:
 	mov		x18, #0
 	b		Lel1_sp1_synchronous_valid_stack
 
-/*
- * check_kernel_stack
- *
- * Verifies that the kernel stack is aligned and mapped within an expected
- * stack address range. Note: happens before saving registers (in case we can't 
- * save to kernel stack).
- *
- * Expects:
- *	{x0, x1, sp} - saved
- *	x0 - SP_EL0
- *	x1 - Exception syndrome
- *	sp - Saved state
- */
-	.text
-	.align 2
-check_kernel_stack:
-	stp		x2, x3, [sp, SS64_X2]				// Save {x2-x3}
-	and		x1, x1, #ESR_EC_MASK				// Mask the exception class
-	mov		x2, #(ESR_EC_SP_ALIGN << ESR_EC_SHIFT)
-	cmp		x1, x2								// If we have a stack alignment exception
-	b.eq	Lcorrupt_stack						// ...the stack is definitely corrupted
-	mov		x2, #(ESR_EC_DABORT_EL1 << ESR_EC_SHIFT)
-	cmp		x1, x2								// If we have a data abort, we need to
-	b.ne	Lvalid_stack						// ...validate the stack pointer
-	mrs		x1, TPIDR_EL1						// Get thread pointer
-Ltest_kstack:
-	ldr		x2, [x1, TH_KSTACKPTR]				// Get top of kernel stack
-	sub		x3, x2, KERNEL_STACK_SIZE			// Find bottom of kernel stack
-	cmp		x0, x2								// if (SP_EL0 >= kstack top)
-	b.ge	Ltest_istack						//    jump to istack test
-	cmp		x0, x3								// if (SP_EL0 > kstack bottom)
-	b.gt	Lvalid_stack						//    stack pointer valid
-Ltest_istack:
-	ldr		x1, [x1, ACT_CPUDATAP]				// Load the cpu data ptr
-	ldr		x2, [x1, CPU_INTSTACK_TOP]			// Get top of istack
-	sub		x3, x2, INTSTACK_SIZE_NUM			// Find bottom of istack
-	cmp		x0, x2								// if (SP_EL0 >= istack top)
-	b.ge	Lcorrupt_stack						//    corrupt stack pointer
-	cmp		x0, x3								// if (SP_EL0 > istack bottom)
-	b.gt	Lvalid_stack						//    stack pointer valid
-Lcorrupt_stack:
-	INIT_SAVED_STATE_FLAVORS sp, w0, w1
-	mov		x0, sp								// Copy exception frame pointer to x0
-	adrp	x1, fleh_invalid_stack@page			// Load address for fleh
-	add		x1, x1, fleh_invalid_stack@pageoff	// fleh_dispatch64 will save register state before we get there
-	ldp		x2, x3, [sp, SS64_X2]				// Restore {x2-x3}
-	b		fleh_dispatch64
-Lvalid_stack:
-	ldp		x2, x3, [sp, SS64_X2]				// Restore {x2-x3}
-	ret
 
 #if defined(KERNEL_INTEGRITY_KTRR)
 	.text
@@ -731,7 +726,7 @@ check_ktrr_sctlr_trap:
 /* 64-bit first level exception handler dispatcher.
  * Completes register context saving and branches to FLEH.
  * Expects:
- *  {x0, x1, fp, lr, sp} - saved
+ *  {x0, x1, sp} - saved
  *  x0 - arm_context_t
  *  x1 - address of FLEH
  *  fp - previous stack frame if EL1
@@ -777,7 +772,8 @@ fleh_dispatch64:
 #endif
 	mov		x27, #0
 	mov		x28, #0
-	/* fp/lr already cleared by EL0_64_VECTOR */
+	mov		fp, #0
+	mov		lr, #0
 1:
 
 	mov		x21, x0								// Copy arm_context_t pointer to x21

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -4143,7 +4143,7 @@ ip6_mloopback(struct ifnet *srcifp, struct ifnet *origifp, struct mbuf *m,
 		struct in6_ifaddr *ia;
 
 		lck_rw_lock_shared(&in6_ifaddr_rwlock);
-		for (ia = in6_ifaddrs; ia != NULL; ia = ia->ia_next) {
+		TAILQ_FOREACH(ia, IN6ADDR_HASH(&src), ia6_hash) {
 			IFA_LOCK_SPIN(&ia->ia_ifa);
 			/* compare against src addr with embedded scope */
 			if (IN6_ARE_ADDR_EQUAL(&ia->ia_addr.sin6_addr, &src)) {

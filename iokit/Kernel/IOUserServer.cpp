@@ -35,6 +35,7 @@
 #include <IOKit/IOCatalogue.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOBufferMemoryDescriptor.h>
+#include <IOKit/IOMapper.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOBSD.h>
 #include <IOKit/system.h>
@@ -502,6 +503,233 @@ IMPL(IOBufferMemoryDescriptor, SetLength)
 	return kIOReturnSuccess;
 }
 
+
+/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *  * * * * * * * * * * * * * * * * * * * */
+
+kern_return_t
+IMPL(IODMACommand, Create)
+{
+	IOReturn ret;
+	IODMACommand   * dma;
+	IODMACommand::SegmentOptions segmentOptions;
+	IOMapper             * mapper;
+
+	if (options & ~((uint64_t) kIODMACommandCreateNoOptions)) {
+		// no other options currently defined
+		return kIOReturnBadArgument;
+	}
+
+	if (os_convert_overflow(specification->maxAddressBits, &segmentOptions.fNumAddressBits)) {
+		return kIOReturnBadArgument;
+	}
+	segmentOptions.fMaxSegmentSize            = 0;
+	segmentOptions.fMaxTransferSize           = 0;
+	segmentOptions.fAlignment                 = 1;
+	segmentOptions.fAlignmentLength           = 1;
+	segmentOptions.fAlignmentInternalSegments = 1;
+	segmentOptions.fStructSize                = sizeof(segmentOptions);
+
+	mapper = IOMapper::copyMapperForDevice(device);
+
+	dma = IODMACommand::withSpecification(
+		kIODMACommandOutputHost64,
+		&segmentOptions,
+		kIODMAMapOptionMapped,
+		mapper,
+		NULL);
+
+	OSSafeReleaseNULL(mapper);
+	*command = dma;
+
+	if (!dma) {
+		return kIOReturnNoMemory;
+	}
+	ret = kIOReturnSuccess;
+
+	return ret;
+}
+
+kern_return_t
+IMPL(IODMACommand, PrepareForDMA)
+{
+	IOReturn ret;
+	uint64_t lflags, mdFlags;
+	UInt32   numSegments;
+	UInt64   genOffset;
+
+	if (options & ~((uint64_t) kIODMACommandPrepareForDMANoOptions)) {
+		// no other options currently defined
+		return kIOReturnBadArgument;
+	}
+
+	ret = setMemoryDescriptor(memory, false);
+	if (kIOReturnSuccess != ret) {
+		return ret;
+	}
+
+	ret = prepare(offset, length);
+	if (kIOReturnSuccess != ret) {
+		clearMemoryDescriptor(false);
+		return ret;
+	}
+
+	static_assert(sizeof(IODMACommand::Segment64) == sizeof(IOAddressSegment));
+
+	numSegments = *segmentsCount;
+	genOffset   = offset;
+	ret = genIOVMSegments(&genOffset, segments, &numSegments);
+
+	if (kIOReturnSuccess == ret) {
+		IOMemoryDescriptor * mem;
+		mem = __IODEQUALIFY(IOMemoryDescriptor *, fMemory);
+		mdFlags = mem->getFlags();
+		lflags  = 0;
+		if (kIODirectionOut & mdFlags) {
+			lflags |= kIOMemoryDirectionOut;
+		}
+		if (kIODirectionIn & mdFlags) {
+			lflags |= kIOMemoryDirectionIn;
+		}
+		*flags = lflags;
+		*segmentsCount = numSegments;
+	}
+
+	return ret;
+}
+
+kern_return_t
+IMPL(IODMACommand, CompleteDMA)
+{
+	IOReturn ret;
+
+	if (options & ~((uint64_t) kIODMACommandCompleteDMANoOptions)) {
+		// no other options currently defined
+		return kIOReturnBadArgument;
+	}
+
+	ret = clearMemoryDescriptor(true);
+
+	return ret;
+}
+
+kern_return_t
+IMPL(IODMACommand, GetPreparation)
+{
+	IOReturn ret;
+	IOMemoryDescriptor * md;
+
+	if (!fActive) {
+		return kIOReturnNotReady;
+	}
+
+	ret = getPreparedOffsetAndLength(offset, length);
+	if (kIOReturnSuccess != ret) {
+		return ret;
+	}
+
+	if (memory) {
+		md = __DECONST(IOMemoryDescriptor *, fMemory);
+		*memory = md;
+		if (!md) {
+			ret = kIOReturnNotReady;
+		} else {
+			md->retain();
+		}
+	}
+	return ret;
+}
+
+kern_return_t
+IMPL(IODMACommand, PerformOperation)
+{
+	IOReturn ret;
+	void * buffer;
+	UInt64 copiedDMA;
+	IOByteCount mdOffset, mdLength, copied;
+
+	if (options & ~((uint64_t)
+	    (kIODMACommandPerformOperationOptionRead
+	    | kIODMACommandPerformOperationOptionWrite
+	    | kIODMACommandPerformOperationOptionZero))) {
+		// no other options currently defined
+		return kIOReturnBadArgument;
+	}
+
+	if (!fActive) {
+		return kIOReturnNotReady;
+	}
+	if (os_convert_overflow(dataOffset, &mdOffset)) {
+		return kIOReturnBadArgument;
+	}
+	if (os_convert_overflow(length, &mdLength)) {
+		return kIOReturnBadArgument;
+	}
+	if (length > fMemory->getLength()) {
+		return kIOReturnBadArgument;
+	}
+	buffer = IONew(uint8_t, length);
+	if (NULL == buffer) {
+		return kIOReturnNoMemory;
+	}
+
+	switch (options) {
+	case kIODMACommandPerformOperationOptionZero:
+		bzero(buffer, length);
+		copiedDMA = writeBytes(dmaOffset, buffer, length);
+		if (copiedDMA != length) {
+			ret = kIOReturnUnderrun;
+			break;
+		}
+		ret = kIOReturnSuccess;
+		break;
+
+	case kIODMACommandPerformOperationOptionRead:
+	case kIODMACommandPerformOperationOptionWrite:
+
+		if (!data) {
+			ret = kIOReturnBadArgument;
+			break;
+		}
+		if (length > data->getLength()) {
+			ret = kIOReturnBadArgument;
+			break;
+		}
+		if (kIODMACommandPerformOperationOptionWrite == options) {
+			copied = data->readBytes(mdOffset, buffer, mdLength);
+			if (copied != mdLength) {
+				ret = kIOReturnUnderrun;
+				break;
+			}
+			copiedDMA = writeBytes(dmaOffset, buffer, length);
+			if (copiedDMA != length) {
+				ret = kIOReturnUnderrun;
+				break;
+			}
+		} else {       /* kIODMACommandPerformOperationOptionRead */
+			copiedDMA = readBytes(dmaOffset, buffer, length);
+			if (copiedDMA != length) {
+				ret = kIOReturnUnderrun;
+				break;
+			}
+			copied = data->writeBytes(mdOffset, buffer, mdLength);
+			if (copied != mdLength) {
+				ret = kIOReturnUnderrun;
+				break;
+			}
+		}
+		ret = kIOReturnSuccess;
+		break;
+	default:
+		ret = kIOReturnBadArgument;
+		break;
+	}
+
+	IODelete(buffer, uint8_t, length);
+
+	return ret;
+}
+
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * *  * * * * * * * * * * * * * * * * * * * */
 
 kern_return_t
@@ -664,6 +892,21 @@ IMPL(IOInterruptDispatchSource, Create)
 		inst->ivars->provider = provider;
 		*source = inst;
 	}
+	return ret;
+}
+
+kern_return_t
+IMPL(IOInterruptDispatchSource, GetInterruptType)
+{
+	IOReturn ret;
+	int      type;
+
+	*interruptType = 0;
+	ret = provider->getInterruptType(index, &type);
+	if (kIOReturnSuccess == ret) {
+		*interruptType = type;
+	}
+
 	return ret;
 }
 
@@ -2199,9 +2442,11 @@ IOUserServerUEXTTrap(OSObject * object, void * p1, void * p2, void * p3, void * 
 	} else {
 		objectArg1 = NULL;
 		if (refs > 1) {
-			objectArg1 = iokit_lookup_uext_ref_current_task(objectName1);
-			if (!objectArg1) {
-				return kIOReturnIPCError;
+			if (objectName1) {
+				objectArg1 = iokit_lookup_uext_ref_current_task(objectName1);
+				if (!objectArg1) {
+					return kIOReturnIPCError;
+				}
 			}
 			message->objects[1] = (OSObjectRef) objectArg1;
 		}
@@ -3123,18 +3368,24 @@ IOUserServer::serviceNewUserClient(IOService * service, task_t owningTask, void 
 	userUC->setTask(owningTask);
 
 	if (!(kIODKDisableEntitlementChecking & gIODKDebug)) {
-		entitlements = IOUserClient::copyClientEntitlements(owningTask);
-		bundleID = service->copyProperty(gIOModuleIdentifierKey);
-		ok = (entitlements
-		    && bundleID
-		    && (prop = entitlements->getObject(gIODriverKitUserClientEntitlementsKey)));
-		if (ok) {
-			bool found __block = false;
-			ok = prop->iterateObjects(^bool (OSObject * object) {
-				found = object->isEqualTo(bundleID);
-				return found;
-			});
-			ok = found;
+		bundleID = NULL;
+		entitlements = NULL;
+		if (fEntitlements && fEntitlements->getObject(gIODriverKitUserClientEntitlementAllowAnyKey)) {
+			ok = true;
+		} else {
+			entitlements = IOUserClient::copyClientEntitlements(owningTask);
+			bundleID = service->copyProperty(gIOModuleIdentifierKey);
+			ok = (entitlements
+			    && bundleID
+			    && (prop = entitlements->getObject(gIODriverKitUserClientEntitlementsKey)));
+			if (ok) {
+				bool found __block = false;
+				ok = prop->iterateObjects(^bool (OSObject * object) {
+					found = object->isEqualTo(bundleID);
+					return found;
+				});
+				ok = found;
+			}
 		}
 		if (ok) {
 			prop = userUC->copyProperty(gIOServiceDEXTEntitlementsKey);

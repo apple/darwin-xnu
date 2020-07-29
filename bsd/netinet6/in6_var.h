@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -161,7 +161,8 @@ struct in6_ifaddr {
 	struct sockaddr_in6 ia_dstaddr; /* space for destination addr */
 	struct sockaddr_in6 ia_prefixmask; /* prefix mask */
 	u_int32_t ia_plen;              /* prefix length */
-	struct in6_ifaddr *ia_next;     /* next in6 list of IP6 addresses */
+	TAILQ_ENTRY(in6_ifaddr) ia6_link;     /* next in6 list of IP6 addresses */
+	TAILQ_ENTRY(in6_ifaddr) ia6_hash; /* hash bucket entry */
 	int ia6_flags;
 
 	struct in6_addrlifetime_i ia6_lifetime;
@@ -180,6 +181,34 @@ struct in6_ifaddr {
 };
 
 #define ifatoia6(ifa)   ((struct in6_ifaddr *)(void *)(ifa))
+
+extern TAILQ_HEAD(in6_ifaddrhead, in6_ifaddr) in6_ifaddrhead;
+extern TAILQ_HEAD(in6_ifaddrhashhead, in6_ifaddr) * in6_ifaddrhashtbl;
+extern uint32_t in6addr_nhash;                  /* hash table size */
+extern uint32_t in6addr_hashp;                  /* next largest prime */
+
+static __inline uint32_t
+in6addr_hashval(const struct in6_addr *in6)
+{
+	/*
+	 * The hash index is the computed prime times the key modulo
+	 * the hash size, as documented in "Introduction to Algorithms"
+	 * (Cormen, Leiserson, Rivest).
+	 */
+	if (in6addr_nhash > 1) {
+		uint32_t x;
+
+		x = in6->s6_addr32[0] ^ in6->s6_addr32[1] ^ in6->s6_addr32[2] ^
+		    in6->s6_addr32[3];
+
+		return (x * in6addr_hashp) % in6addr_nhash;
+	} else {
+		return 0;
+	}
+}
+
+#define IN6ADDR_HASH(x)                 (&in6_ifaddrhashtbl[in6addr_hashval(x)])
+
 #endif /* BSD_KERNEL_PRIVATE */
 
 /* control structure to manage address selection policy */
@@ -775,8 +804,6 @@ void in6_post_msg(struct ifnet *, u_int32_t, struct in6_ifaddr *, uint8_t *mac);
 #endif /* KERNEL */
 
 #ifdef BSD_KERNEL_PRIVATE
-extern struct in6_ifaddr *in6_ifaddrs;
-
 extern struct icmp6stat icmp6stat;
 extern lck_rw_t in6_ifaddr_rwlock;
 extern lck_mtx_t proxy6_lock;

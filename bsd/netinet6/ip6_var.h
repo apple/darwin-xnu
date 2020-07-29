@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -365,6 +365,9 @@ struct  ip6stat {
 	u_quad_t ip6s_clat464_v6addr_conffail;
 	u_quad_t ip6s_clat464_plat64_pfx_setfail;
 	u_quad_t ip6s_clat464_plat64_pfx_getfail;
+
+	u_quad_t ip6s_rcv_if_weak_match;
+	u_quad_t ip6s_rcv_if_no_match;
 };
 
 enum ip6s_sources_rule_index {
@@ -525,6 +528,7 @@ extern int ip6_unknown_opt(u_int8_t *, struct mbuf *, int);
 extern char *ip6_get_prevhdr(struct mbuf *, int);
 extern int ip6_nexthdr(struct mbuf *, int, int, int *);
 extern int ip6_lasthdr(struct mbuf *, int, int, int *);
+extern boolean_t ip6_pkt_has_ulp(struct mbuf *m);
 
 extern void ip6_moptions_init(void);
 extern struct ip6_moptions *ip6_allocmoptions(int);
