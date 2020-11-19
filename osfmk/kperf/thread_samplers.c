@@ -91,12 +91,12 @@ kperf_thread_info_runmode_legacy(thread_t thread)
 		kperf_state |= KPERF_TI_IDLE;
 	}
 
-#if !CONFIG_EMBEDDED
+#if defined(XNU_TARGET_OS_OSX)
 	/* on desktop, if state is blank, leave not idle set */
 	if (kperf_state == 0) {
 		return TH_IDLE << 16;
 	}
-#endif /* !CONFIG_EMBEDDED */
+#endif /* defined(XNU_TARGET_OS_OSX) */
 
 	/* high two bytes are inverted mask, low two bytes are normal */
 	return ((~kperf_state & 0xffff) << 16) | (kperf_state & 0xffff);
@@ -247,7 +247,10 @@ kperf_thread_snapshot_sample(struct kperf_thread_snapshot *thsn,
 	}
 
 	thsn->kpthsn_suspend_count = thread->suspend_count;
-	thsn->kpthsn_io_tier = proc_get_effective_thread_policy(thread, TASK_POLICY_IO);
+	/*
+	 * Only have room for 8-bits in the trace event, so truncate here.
+	 */
+	thsn->kpthsn_io_tier = (uint8_t)proc_get_effective_thread_policy(thread, TASK_POLICY_IO);
 
 	BUF_VERB(PERF_TI_SNAPSAMPLE | DBG_FUNC_END);
 }

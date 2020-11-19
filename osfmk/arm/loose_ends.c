@@ -118,7 +118,7 @@ bzero_phys(addr64_t src, vm_size_t bytes)
 	ppnum_t         pn = (src >> PAGE_SHIFT);
 
 	wimg_bits = pmap_cache_attributes(pn);
-	if ((wimg_bits & VM_WIMG_MASK) == VM_WIMG_DEFAULT) {
+	if (__probable((wimg_bits & VM_WIMG_MASK) == VM_WIMG_DEFAULT)) {
 		/* Fast path - default attributes */
 		bzero((char *)phystokv((pmap_paddr_t) src), bytes);
 	} else {
@@ -515,6 +515,36 @@ memcmp(const void *s1, const void *s2, size_t n)
 		} while (--n != 0);
 	}
 	return 0;
+}
+
+unsigned long
+memcmp_zero_ptr_aligned(const void *s, size_t n)
+{
+	uintptr_t p = (uintptr_t)s;
+	uintptr_t end = (uintptr_t)s + n;
+	uint32_t a, b;
+
+	static_assert(sizeof(unsigned long) == sizeof(uint32_t));
+
+	a = *(const uint32_t *)p;
+	b = *(const uint32_t *)(end - sizeof(uint32_t));
+
+	/*
+	 * align p to the next 64bit boundary
+	 * align end to the previous 64bit boundary
+	 *
+	 * and do a nice ldrd loop.
+	 */
+	p = (p + sizeof(uint64_t) - 1) & -sizeof(uint64_t);
+	end &= -sizeof(uint64_t);
+
+	for (; p < end; p += sizeof(uint64_t)) {
+		uint64_t v = *(const uint64_t *)p;
+		a |= (uint32_t)v;
+		b |= (uint32_t)(v >> 32);
+	}
+
+	return a | b;
 }
 
 kern_return_t

@@ -1,0 +1,21 @@
+//
+//  test_intentionally_crashing_driver_56101852.iig
+//  test_intentionally_crashing_driver_56101852
+//
+//  Copyright © 2019 Apple Inc. All rights reserved.
+//
+
+#ifndef test_intentionally_crashing_driver_56101852_h
+#define test_intentionally_crashing_driver_56101852_h
+
+#include <Availability.h>
+#include <DriverKit/IOService.iig>
+
+class test_intentionally_crashing_driver_56101852: public IOService
+{
+public:
+    virtual kern_return_t
+    Start(IOService * provider) override;
+};
+
+#endif /* test_intentionally_crashing_driver_56101852_h */

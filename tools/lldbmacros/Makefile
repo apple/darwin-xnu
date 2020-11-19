@@ -39,7 +39,6 @@ LLDBMACROS_PYTHON_FILES = $(LLDBMACROS_USERDEBUG_FILES) \
 	plugins/__init__.py \
 	plugins/zprint_perf_log.py \
 	sysregdoc/AArch64-esr_el1.xml \
-	atm.py \
 	bank.py \
 	turnstile.py \
 	kevent.py \

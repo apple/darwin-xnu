@@ -28,7 +28,6 @@
 
 #include <kern/kern_types.h>
 #include <kern/locks.h>
-#include <kern/kalloc.h>
 #include <vm/vm_kern.h>
 #include <mach/kern_return.h>
 #include <kern/queue.h>
@@ -40,15 +39,15 @@
 
 #if CONFIG_EMBEDDED
 
-#define MIN_SWAP_FILE_SIZE              (64 * 1024 * 1024)
+#define MIN_SWAP_FILE_SIZE              (64 * 1024 * 1024ULL)
 
-#define MAX_SWAP_FILE_SIZE              (128 * 1024 * 1024)
+#define MAX_SWAP_FILE_SIZE              (128 * 1024 * 1024ULL)
 
 #else /* CONFIG_EMBEDDED */
 
-#define MIN_SWAP_FILE_SIZE              (256 * 1024 * 1024)
+#define MIN_SWAP_FILE_SIZE              (256 * 1024 * 1024ULL)
 
-#define MAX_SWAP_FILE_SIZE              (1 * 1024 * 1024 * 1024)
+#define MAX_SWAP_FILE_SIZE              (1 * 1024 * 1024 * 1024ULL)
 
 #endif /* CONFIG_EMBEDDED */
 
@@ -59,8 +58,12 @@
 #define SWAPFILE_RECLAIM_THRESHOLD_SEGS ((17 * (MAX_SWAP_FILE_SIZE / COMPRESSED_SWAP_CHUNK_SIZE)) / 10)
 #define SWAPFILE_RECLAIM_MINIMUM_SEGS   ((13 * (MAX_SWAP_FILE_SIZE / COMPRESSED_SWAP_CHUNK_SIZE)) / 10)
 
-
+#if defined(XNU_TARGET_OS_OSX)
+#define SWAP_FILE_NAME          "/System/Volumes/VM/swapfile"
+#else
 #define SWAP_FILE_NAME          "/private/var/vm/swapfile"
+#endif
+
 #define SWAPFILENAME_LEN        (int)(strlen(SWAP_FILE_NAME))
 
 
@@ -70,11 +73,6 @@
 extern int              vm_num_swap_files;
 
 struct swapfile;
-lck_grp_attr_t  vm_swap_data_lock_grp_attr;
-lck_grp_t       vm_swap_data_lock_grp;
-lck_attr_t      vm_swap_data_lock_attr;
-lck_mtx_ext_t   vm_swap_data_lock_ext;
-lck_mtx_t       vm_swap_data_lock;
 
 void vm_swap_init(void);
 boolean_t vm_swap_create_file(void);
@@ -97,7 +95,7 @@ void vm_swapout_iodone(void *, int);
 
 
 static void vm_swapout_finish(c_segment_t, uint64_t, uint32_t, kern_return_t);
-kern_return_t vm_swap_put_finish(struct swapfile *, uint64_t *, int);
+kern_return_t vm_swap_put_finish(struct swapfile *, uint64_t *, int, boolean_t);
 kern_return_t vm_swap_put(vm_offset_t, uint64_t*, uint32_t, c_segment_t, struct swapout_io_completion *);
 
 void vm_swap_flush(void);
@@ -106,6 +104,7 @@ void vm_swap_encrypt(c_segment_t);
 uint64_t vm_swap_get_total_space(void);
 uint64_t vm_swap_get_used_space(void);
 uint64_t vm_swap_get_free_space(void);
+uint64_t vm_swap_get_max_configured_space(void);
 
 struct vnode;
 extern void vm_swapfile_open(const char *path, struct vnode **vp);

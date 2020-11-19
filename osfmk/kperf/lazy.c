@@ -128,6 +128,9 @@ void
 kperf_lazy_cpu_sample(thread_t thread, unsigned int flags, bool interrupt)
 {
 	assert(ml_get_interrupts_enabled() == FALSE);
+	if (!thread) {
+		thread = current_thread();
+	}
 
 	/* take a sample if this CPU's last sample time is beyond the threshold */
 	processor_t processor = current_processor();

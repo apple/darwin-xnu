@@ -59,7 +59,7 @@ i386_smp_init(int nmi_vector, i386_intr_func_t nmi_handler, int ipi_vector, i386
 	}
 
 	lapic_init();
-	lapic_configure();
+	lapic_configure(false);
 	lapic_set_intr_func(nmi_vector, nmi_handler);
 	lapic_set_intr_func(ipi_vector, ipi_handler);
 

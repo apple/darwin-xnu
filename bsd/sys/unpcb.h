@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -204,7 +204,7 @@ struct  xunpcb {
 	u_quad_t                        xu_alignment_hack;
 };
 
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX || !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 
 struct xunpcb64_list_entry {
 	u_int64_t   le_next;
@@ -238,7 +238,7 @@ struct xunpcb64 {
 	struct xsocket64        xu_socket;
 };
 
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX || !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 
 #pragma pack()
 

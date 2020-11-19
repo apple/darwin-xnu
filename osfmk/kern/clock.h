@@ -225,6 +225,10 @@ extern void                             clock_interval_to_deadline(
 	uint32_t                scale_factor,
 	uint64_t                *result);
 
+extern void                             nanoseconds_to_deadline(
+	uint64_t                interval,
+	uint64_t                *result);
+
 extern void                             clock_interval_to_absolutetime_interval(
 	uint32_t                interval,
 	uint32_t                scale_factor,
@@ -269,6 +273,9 @@ extern uint64_t                 continuoustime_to_absolutetime(
 
 extern uint64_t mach_absolutetime_asleep;
 extern uint64_t mach_absolutetime_last_sleep;
+#if HIBERNATION && HAS_CONTINUOUS_HWCLOCK
+extern uint64_t hwclock_conttime_offset;
+#endif
 
 #ifdef  KERNEL_PRIVATE
 

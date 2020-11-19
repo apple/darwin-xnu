@@ -99,8 +99,13 @@
 #include <i386/pmCPU.h>
 #include <i386/tsc.h>
 #include <i386/locks.h> /* LcksOpts */
+#include <i386/acpi.h>
 #if DEBUG
 #include <machine/pal_routines.h>
+#endif
+extern void xcpm_bootstrap(void);
+#if DEVELOPMENT || DEBUG
+#include <i386/trap.h>
 #endif
 
 #if MONOTONIC
@@ -109,11 +114,16 @@
 
 #include <san/kasan.h>
 
-#if DEBUG
-#define DBG(x ...)       kprintf(x)
+#if DEBUG || DEVELOPMENT
+#define DBG(x, ...)          kprintf(x, ##__VA_ARGS__)
+#define dyldLogFunc(x, ...) kprintf(x, ##__VA_ARGS__)
 #else
 #define DBG(x ...)
 #endif
+
+#include <libkern/kernel_mach_header.h>
+#include <mach/dyld_kernel_fixups.h>
+
 
 int                     debug_task;
 
@@ -147,6 +157,19 @@ int                     kernPhysPML4EntryCount;
  */
 ppnum_t                 released_PT_ppn = 0;
 uint32_t                released_PT_cnt = 0;
+
+#if DEVELOPMENT || DEBUG
+int panic_on_cacheline_mismatch = -1;
+char panic_on_trap_procname[64];
+uint32_t panic_on_trap_mask;
+#endif
+bool last_branch_support_enabled;
+int insn_copyin_count;
+#if DEVELOPMENT || DEBUG
+#define DEFAULT_INSN_COPYIN_COUNT x86_INSTRUCTION_STATE_MAX_INSN_BYTES
+#else
+#define DEFAULT_INSN_COPYIN_COUNT 192
+#endif
 
 char *physfree;
 void idt64_remap(void);
@@ -546,15 +569,103 @@ __attribute__((aligned(PAGE_SIZE))) = {
 };
 
 static void
-vstart_idt_init(void)
+vstart_idt_init(boolean_t master)
 {
 	x86_64_desc_register_t  vstart_idt = {
 		sizeof(master_boot_idt64),
 		master_boot_idt64
 	};
 
-	fix_desc64(master_boot_idt64, 32);
+	if (master) {
+		fix_desc64(master_boot_idt64, 32);
+	}
 	lidt((void *)&vstart_idt);
+}
+
+extern void *collection_base_pointers[KCNumKinds];
+
+kern_return_t
+i386_slide_individual_kext(kernel_mach_header_t *mh, uintptr_t slide)
+{
+	int ret = kernel_collection_slide(mh, (const void **) (void *)collection_base_pointers);
+	if (ret != 0) {
+		printf("Sliding pageable kc was stopped\n");
+		return KERN_FAILURE;
+	}
+
+	kernel_collection_adjust_fileset_entry_addrs(mh, slide);
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+i386_slide_kext_collection_mh_addrs(kernel_mach_header_t *mh, uintptr_t slide, bool adjust_mach_headers)
+{
+	int ret = kernel_collection_slide(mh, (const void **) (void *)collection_base_pointers);
+	if (ret != KERN_SUCCESS) {
+		printf("Kernel Collection slide was stopped with value %d\n", ret);
+		return KERN_FAILURE;
+	}
+
+	kernel_collection_adjust_mh_addrs(mh, slide, adjust_mach_headers,
+	    NULL, NULL, NULL, NULL, NULL, NULL, NULL);
+
+	return KERN_SUCCESS;
+}
+
+static void
+i386_slide_and_rebase_image(uintptr_t kstart_addr)
+{
+	extern uintptr_t kc_highest_nonlinkedit_vmaddr;
+	kernel_mach_header_t *k_mh, *kc_mh = NULL;
+	kernel_segment_command_t *seg;
+	uintptr_t slide;
+
+	k_mh = &_mh_execute_header;
+	/*
+	 * If we're not booting, an MH_FILESET, we don't need to slide
+	 * anything because EFI has done that for us. When booting an
+	 * MH_FILESET, EFI will slide the kernel proper, but not the kexts.
+	 * Below, we infer the slide by comparing the slid address of the
+	 * kernel's mach-o header and the unslid vmaddr of the first segment
+	 * of the mach-o (which is assumed to always point to the mach-o
+	 * header).
+	 */
+	if (!kernel_mach_header_is_in_fileset(k_mh)) {
+		DBG("[MH] kcgen-style KC\n");
+		return;
+	}
+
+	/*
+	 * The kernel is part of a MH_FILESET kernel collection: determine slide
+	 * based on first segment's mach-o vmaddr.
+	 */
+	seg = (kernel_segment_command_t *)((uintptr_t)k_mh + sizeof(*k_mh));
+	assert(seg->cmd == LC_SEGMENT_KERNEL);
+	slide = (uintptr_t)k_mh - seg->vmaddr;
+	DBG("[MH] Sliding new-style KC: %llu\n", (unsigned long long)slide);
+
+	/*
+	 * The kernel collection mach-o header should be the start address
+	 * passed to us by EFI.
+	 */
+	kc_mh  = (kernel_mach_header_t *)(kstart_addr);
+	assert(kc_mh->filetype == MH_FILESET);
+
+	PE_set_kc_header(KCKindPrimary, kc_mh, slide);
+
+	/*
+	 * rebase/slide all the kexts in the collection
+	 * (EFI should have already rebased the kernel)
+	 */
+	kernel_collection_slide(kc_mh, (const void **) (void *)collection_base_pointers);
+
+
+	/*
+	 * Now adjust the vmaddr fields of all mach-o headers
+	 * and symbols in this MH_FILESET
+	 */
+	kernel_collection_adjust_mh_addrs(kc_mh, slide, false,
+	    NULL, NULL, NULL, NULL, NULL, NULL, &kc_highest_nonlinkedit_vmaddr);
 }
 
 /*
@@ -586,11 +697,12 @@ vstart(vm_offset_t boot_args_start)
 
 	postcode(VSTART_ENTRY);
 
+	/*
+	 * Set-up temporary trap handlers during page-table set-up.
+	 */
+
 	if (is_boot_cpu) {
-		/*
-		 * Set-up temporary trap handlers during page-table set-up.
-		 */
-		vstart_idt_init();
+		vstart_idt_init(TRUE);
 		postcode(VSTART_IDT_INIT);
 
 		/*
@@ -621,6 +733,18 @@ vstart(vm_offset_t boot_args_start)
 		    &kernelBootArgs->ksize,
 		    &kernelBootArgs->kaddr);
 		DBG("SMBIOS mem sz 0x%llx\n", kernelBootArgs->PhysicalMemorySize);
+		DBG("KC_hdrs_vaddr %p\n", (void *)kernelBootArgs->KC_hdrs_vaddr);
+
+		if (kernelBootArgs->Version >= 2 && kernelBootArgs->Revision >= 1 &&
+		    kernelBootArgs->KC_hdrs_vaddr != 0) {
+			/*
+			 * slide the header addresses in all mach-o segments and sections, and
+			 * perform any new-style chained-fixup sliding for kexts, as necessary.
+			 * Note that efiboot has already loaded the kernel and all LC_SEGMENT_64s
+			 * that correspond to the kexts present in the primary KC, into slid addresses.
+			 */
+			i386_slide_and_rebase_image((uintptr_t)ml_static_ptovirt(kernelBootArgs->KC_hdrs_vaddr));
+		}
 
 		/*
 		 * Setup boot args given the physical start address.
@@ -667,15 +791,28 @@ vstart(vm_offset_t boot_args_start)
 		                                 * via i386_init_slave()
 		                                 */
 	} else {
+		/* Slave CPUs should use the basic IDT until i386_init_slave() */
+		vstart_idt_init(FALSE);
+
 		/* Switch to kernel's page tables (from the Boot PTs) */
 		set_cr3_raw((uintptr_t)ID_MAP_VTOP(IdlePML4));
+
 		/* Find our logical cpu number */
-		cpu = lapic_to_cpu[(LAPIC_READ(ID) >> LAPIC_ID_SHIFT) & LAPIC_ID_MASK];
+		cpu = lapic_to_cpu[lapic_safe_apicid()];
 #if DEBUG
 		gsbase = rdmsr64(MSR_IA32_GS_BASE);
 #endif
 		cpu_desc_load(cpu_datap(cpu));
-		DBG("CPU: %d, GSBASE initial value: 0x%llx\n", cpu, gsbase);
+#if DEBUG
+		DBG("CPU: %d, GSBASE initial value: 0x%llx\n", cpu, (unsigned long long)gsbase);
+#endif
+
+		/*
+		 * Before we can discover our local APIC ID, we need to potentially
+		 * initialize X2APIC, if it's enabled and firmware started us with
+		 * the APIC in legacy mode.
+		 */
+		lapic_init_slave();
 	}
 
 	early_boot = 0;
@@ -707,7 +844,7 @@ i386_init(void)
 
 	pal_i386_init();
 	tsc_init();
-	rtclock_early_init();   /* mach_absolute_time() now functionsl */
+	rtclock_early_init();   /* mach_absolute_time() now functional */
 
 	kernel_debug_string_early("i386_init");
 	pstate_trace();
@@ -719,9 +856,8 @@ i386_init(void)
 
 	master_cpu = 0;
 
-	lck_mod_init();
-
-	printf_init();                  /* Init this in case we need debugger */
+	kernel_debug_string_early("kernel_startup_bootstrap");
+	kernel_startup_bootstrap();
 
 	/*
 	 * Initialize the timer callout world
@@ -732,17 +868,52 @@ i386_init(void)
 
 	postcode(CPU_INIT_D);
 
-	panic_init();                   /* Init this in case we need debugger */
-
 	/* setup debugging output if one has been chosen */
-	kernel_debug_string_early("PE_init_kprintf");
-	PE_init_kprintf(FALSE);
-
-	kernel_debug_string_early("kernel_early_bootstrap");
-	kernel_early_bootstrap();
+	kernel_startup_initialize_upto(STARTUP_SUB_KPRINTF);
+	kprintf("kprintf initialized\n");
 
 	if (!PE_parse_boot_argn("diag", &dgWork.dgFlags, sizeof(dgWork.dgFlags))) {
 		dgWork.dgFlags = 0;
+	}
+
+	if (PE_parse_boot_argn("insn_capcnt", &insn_copyin_count, sizeof(insn_copyin_count))) {
+		/*
+		 * Enforce max and min values (allowing 0 to disable copying completely)
+		 * for the instruction copyin count
+		 */
+		if (insn_copyin_count > x86_INSTRUCTION_STATE_MAX_INSN_BYTES ||
+		    (insn_copyin_count != 0 && insn_copyin_count < 64)) {
+			insn_copyin_count = DEFAULT_INSN_COPYIN_COUNT;
+		}
+	} else {
+		insn_copyin_count = DEFAULT_INSN_COPYIN_COUNT;
+	}
+
+#if DEVELOPMENT || DEBUG
+	if (!PE_parse_boot_argn("panic_clmismatch", &panic_on_cacheline_mismatch,
+	    sizeof(panic_on_cacheline_mismatch))) {
+		panic_on_cacheline_mismatch = 0;
+	}
+
+	if (!PE_parse_boot_argn("panic_on_trap_procname", &panic_on_trap_procname[0],
+	    sizeof(panic_on_trap_procname))) {
+		panic_on_trap_procname[0] = 0;
+	}
+
+	if (!PE_parse_boot_argn("panic_on_trap_mask", &panic_on_trap_mask,
+	    sizeof(panic_on_trap_mask))) {
+		if (panic_on_trap_procname[0] != 0) {
+			panic_on_trap_mask = DEFAULT_PANIC_ON_TRAP_MASK;
+		} else {
+			panic_on_trap_mask = 0;
+		}
+	}
+#endif
+	/* But allow that to be overridden via boot-arg: */
+	if (!PE_parse_boot_argn("lbr_support", &last_branch_support_enabled,
+	    sizeof(last_branch_support_enabled))) {
+		/* Disable LBR support by default due to its high context switch overhead */
+		last_branch_support_enabled = false;
 	}
 
 	serialmode = 0;
@@ -777,6 +948,8 @@ i386_init(void)
 	} else {
 		maxmemtouse = ((uint64_t)maxmem) * MB;
 	}
+
+	max_cpus_from_firmware = acpi_count_enabled_logical_processors();
 
 	if (PE_parse_boot_argn("cpus", &cpus, sizeof(cpus))) {
 		if ((0 < cpus) && (cpus < max_ncpus)) {
@@ -823,6 +996,7 @@ i386_init(void)
 
 	kernel_debug_string_early("power_management_init");
 	power_management_init();
+	xcpm_bootstrap();
 
 #if MONOTONIC
 	mt_cpu_up(cpu_datap(0));
@@ -862,7 +1036,15 @@ do_init_slave(boolean_t fast_restart)
 #endif
 
 		LAPIC_INIT();
-		lapic_configure();
+		/*
+		 * Note that the true argument here does not necessarily mean we're
+		 * here from a resume (this code path is also executed on boot).
+		 * The implementation of lapic_configure checks to see if the
+		 * state variable has been initialized, as it would be before
+		 * sleep.  If it has not been, it's construed as an indicator of
+		 * first boot.
+		 */
+		lapic_configure(true);
 		LAPIC_DUMP();
 		LAPIC_CPU_MAP_DUMP();
 
@@ -873,6 +1055,9 @@ do_init_slave(boolean_t fast_restart)
 #endif
 		/* update CPU microcode and apply CPU workarounds */
 		ucode_update_wake_and_apply_cpu_was();
+
+		/* Enable LBRs on non-boot CPUs */
+		i386_lbr_init(cpuid_info(), false);
 	} else {
 		init_param = FAST_SLAVE_INIT;
 	}
@@ -926,7 +1111,6 @@ i386_init_slave_fast(void)
 	do_init_slave(TRUE);
 }
 
-#include <libkern/kernel_mach_header.h>
 
 /* TODO: Evaluate global PTEs for the double-mapped translations */
 

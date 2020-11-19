@@ -48,6 +48,8 @@
 #include <sys/dtrace_glue.h>
 
 #include <san/kasan.h>
+#include <machine/trap.h>
+
 
 #define DTRACE_INVOP_NOP_SKIP 1
 #define DTRACE_INVOP_MOVL_ESP_EBP 10
@@ -126,9 +128,7 @@ fbt_invop(uintptr_t addr, uintptr_t *state, uintptr_t rval)
 }
 
 #define IS_USER_TRAP(regs) (regs && (((regs)->isf.cs & 3) != 0))
-#define T_INVALID_OPCODE 6
 #define FBT_EXCEPTION_CODE T_INVALID_OPCODE
-#define T_PREEMPT       255
 
 kern_return_t
 fbt_perfCallback(

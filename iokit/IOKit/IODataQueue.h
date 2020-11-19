@@ -33,7 +33,7 @@
 #warning "IODataQueue is deprecated due to security issues in its interfaces, please use IOSharedDataQueue instead"
 #endif
 
-
+#include <libkern/c++/OSPtr.h>
 #include <libkern/c++/OSObject.h>
 #include <libkern/OSTypes.h>
 #include <mach/port.h>
@@ -97,7 +97,7 @@ public:
  * @param size The size of the data queue memory region.
  * @result Returns the newly allocated IODataQueue instance.  Zero is returned on failure.
  */
-	static IODataQueue *withCapacity(UInt32 size);
+	static OSPtr<IODataQueue> withCapacity(UInt32 size);
 
 /*!
  * @function withEntries
@@ -105,9 +105,9 @@ public:
  * @discussion This method will create a new IODataQueue instance with enough capacity for numEntries of entrySize.  It does account for the IODataQueueEntry overhead for each entry.  Note that the numEntries and entrySize are simply used to determine the data region size.  They do not actually restrict the size of number of entries that can be added to the queue.<br>  This method allocates a new IODataQueue instance and then calls initWithEntries() with the given numEntries and entrySize parameters.  If the initWithEntries() fails, the new instance is released and zero is returned.
  * @param numEntries Number of entries to allocate space for.
  * @param entrySize Size of each entry.
- * @result Reeturns the newly allocated IODataQueue instance.  Zero is returned on failure.
+ * @result Returns the newly allocated IODataQueue instance.  Zero is returned on failure.
  */
-	static IODataQueue *withEntries(UInt32 numEntries, UInt32 entrySize);
+	static OSPtr<IODataQueue> withEntries(UInt32 numEntries, UInt32 entrySize);
 
 /*!
  * @function initWithCapacity
@@ -124,7 +124,7 @@ public:
  * @discussion This method will initialize an IODataQueue instance with enough capacity for numEntries of entrySize.  It does account for the IODataQueueEntry overhead for each entry.  Note that the numEntries and entrySize are simply used to determine the data region size.  They do not actually restrict the size of number of entries that can be added to the queue.<br>  This method allocates a new IODataQueue instance and then calls initWithEntries() with the given numEntries and entrySize parameters.
  * @param numEntries Number of entries to allocate space for.
  * @param entrySize Size of each entry.
- * @result Reeturns true on success and false on failure.
+ * @result Returns true on success and false on failure.
  */
 	virtual Boolean initWithEntries(UInt32 numEntries, UInt32 entrySize);
 
@@ -152,7 +152,7 @@ public:
  * @discussion The IOMemoryDescriptor instance returned by this method is intended to be mapped into a user process.  This is the memory region that the IODataQueueClient code operates on.
  * @result Returns a newly allocated IOMemoryDescriptor for the IODataQueueMemory region.  Returns zero on failure.
  */
-	virtual IOMemoryDescriptor *getMemoryDescriptor();
+	virtual OSPtr<IOMemoryDescriptor> getMemoryDescriptor();
 };
 
 #endif /* _IOKIT_IODATAQUEUE_H */

@@ -86,13 +86,9 @@
 #include <vm/vm_map.h>
 #include <vm/vm_protos.h>
 
-#define f_flag f_fglob->fg_flag
-#define f_type f_fglob->fg_ops->fo_type
-#define f_msgcount f_fglob->fg_msgcount
-#define f_cred f_fglob->fg_cred
-#define f_ops f_fglob->fg_ops
-#define f_offset f_fglob->fg_offset
-#define f_data f_fglob->fg_data
+#define f_flag fp_glob->fg_flag
+#define f_ops fp_glob->fg_ops
+#define f_data fp_glob->fg_data
 
 /*
  * Used to construct the list of memory objects
@@ -351,12 +347,12 @@ shm_open(proc_t p, struct shm_open_args *uap, int32_t *retval)
 	pshmnode_t      *new_pnode = NULL;
 	struct fileproc *fp = NULL;
 	int             fmode;
-	int             cmode = uap->mode;
+	mode_t          cmode = (mode_t)uap->mode;
 	bool            incache = false;
 	bool            have_label = false;
 
 	AUDIT_ARG(fflags, uap->oflag);
-	AUDIT_ARG(mode, uap->mode);
+	AUDIT_ARG(mode, cmode);
 
 	/*
 	 * Allocate data structures we need. We parse the userspace name into
@@ -565,7 +561,7 @@ pshm_truncate(
 
 	user_map = current_map();
 
-	if (fp->f_type != DTYPE_PSXSHM) {
+	if (FILEGLOB_DTYPE(fp->fp_glob) != DTYPE_PSXSHM) {
 		return EINVAL;
 	}
 
@@ -738,7 +734,7 @@ pshm_stat(pshmnode_t *pnode, void *ub, int isstat64)
 static int
 pshm_access(pshm_info_t *pinfo, int mode, kauth_cred_t cred, __unused proc_t p)
 {
-	int mode_req = ((mode & FREAD) ? S_IRUSR : 0) |
+	mode_t mode_req = ((mode & FREAD) ? S_IRUSR : 0) |
 	    ((mode & FWRITE) ? S_IWUSR : 0);
 
 	/* Otherwise, user id 0 always gets access. */
@@ -901,7 +897,7 @@ pshm_mmap(
 		if (file_pos >= map_pos + pshmobj->pshmo_size) {
 			continue;
 		}
-		map_size = pshmobj->pshmo_size - (file_pos - map_pos);
+		map_size = (vm_map_size_t)(pshmobj->pshmo_size - (file_pos - map_pos));
 		if (map_size > user_size) {
 			map_size = user_size;
 		}
@@ -948,7 +944,7 @@ out_deref:
 
 	switch (kret) {
 	case KERN_SUCCESS:
-		*retval = (user_start_addr + pageoff);
+		*retval = (user_addr_t)(user_start_addr + pageoff);
 		return 0;
 	case KERN_INVALID_ADDRESS:
 	case KERN_NO_SPACE:

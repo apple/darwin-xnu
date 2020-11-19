@@ -83,9 +83,7 @@
 #include <net/if.h>
 #include <net/pfvar.h>
 
-#if INET6
 #include <netinet/ip6.h>
-#endif /* INET6 */
 
 
 #ifdef KERNEL
@@ -94,23 +92,6 @@
 	        printf(format, ##x)
 #define rs_malloc(x)            _MALLOC(x, M_TEMP, M_WAITOK)
 #define rs_free(x)              _FREE(x, M_TEMP)
-#define strrchr                 _strrchr
-
-static char *
-_strrchr(const char *c, int ch)
-{
-	char *p = (char *)(size_t)c, *save;
-
-	for (save = NULL;; ++p) {
-		if (*p == ch) {
-			save = (char *)p;
-		}
-		if (*p == '\0') {
-			return save;
-		}
-	}
-	/* NOTREACHED */
-}
 
 #else
 /* Userland equivalents so we can lend code to pfctl et al. */

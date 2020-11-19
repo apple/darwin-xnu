@@ -3,34 +3,47 @@ export MakeInc_def=${SRCROOT}/makedefs/MakeInc.def
 export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
+# PRIVATE_DATAFILES go to /usr/local/include
+LIBKERN_USE_USR_LOCAL_INCLUDE := 1
+
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 KERNELFILES = \
+	atomic.h \
 	base.h \
-	object.h \
+	cpp_util.h \
 	log.h \
-	trace.h \
+	object.h \
 	overflow.h \
-	smart_ptr.h \
-	cpp_util.h
+	trace.h
 
 PRIVATE_KERNELFILES = \
+	atomic_private.h	\
+	atomic_private_arch.h	\
+	atomic_private_impl.h	\
+	base_private.h \
 	hash.h \
-	object_private.h \
 	ptrtools.h \
 	reason_private.h \
 	refcnt.h \
 	refcnt_internal.h
 
 DATAFILES = \
+	atomic.h \
+	base.h \
 	overflow.h
 
 DRIVERKIT_DATAFILES = \
+	atomic.h \
 	base.h \
 	overflow.h
 
 PRIVATE_DATAFILES = \
+	atomic_private.h	\
+	atomic_private_arch.h	\
+	atomic_private_impl.h	\
+	base_private.h \
 	reason_private.h
 
 INSTALL_MI_LIST = ${DATAFILES}

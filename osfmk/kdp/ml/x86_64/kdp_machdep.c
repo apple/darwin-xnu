@@ -44,7 +44,6 @@
 #include <i386/thread.h>
 #include <vm/vm_map.h>
 #include <i386/pmap.h>
-#include <kern/kalloc.h>
 
 #define KDP_TEST_HARNESS 0
 #if KDP_TEST_HARNESS
@@ -274,10 +273,18 @@ kdp_machine_hostinfo(
 
 void
 kdp_panic(
-	const char          *msg
+	const char          *fmt,
+	...
 	)
 {
-	kprintf("kdp panic: %s\n", msg);
+	char kdp_fmt[256];
+	va_list args;
+
+	va_start(args, fmt);
+	(void) snprintf(kdp_fmt, sizeof(kdp_fmt), "kdp panic: %s", fmt);
+	vprintf(kdp_fmt, args);
+	va_end(args);
+
 	__asm__ volatile ("hlt");
 }
 
@@ -463,11 +470,10 @@ machine_trace_thread(thread_t thread,
     char * tracebound,
     int nframes,
     boolean_t user_p,
-    boolean_t trace_fp,
     uint32_t * thread_trace_flags)
 {
 	uint32_t * tracebuf = (uint32_t *)tracepos;
-	uint32_t framesize  = (trace_fp ? 2 : 1) * sizeof(uint32_t);
+	uint32_t framesize  = sizeof(uint32_t);
 
 	uint32_t fence             = 0;
 	uint32_t stackptr          = 0;
@@ -495,9 +501,6 @@ machine_trace_thread(thread_t thread,
 
 	for (framecount = 0; framecount < nframes; framecount++) {
 		*tracebuf++ = prev_eip;
-		if (trace_fp) {
-			*tracebuf++ = stackptr;
-		}
 
 		/* Invalid frame, or hit fence */
 		if (!stackptr || (stackptr == fence)) {
@@ -562,12 +565,12 @@ machine_trace_thread64(thread_t thread,
     char * tracebound,
     int nframes,
     boolean_t user_p,
-    boolean_t trace_fp,
     uint32_t * thread_trace_flags,
-    uint64_t *sp)
+    uint64_t *sp,
+    vm_offset_t fp)
 {
 	uint64_t * tracebuf = (uint64_t *)tracepos;
-	unsigned framesize  = (trace_fp ? 2 : 1) * sizeof(addr64_t);
+	unsigned framesize  = sizeof(addr64_t);
 
 	uint32_t fence             = 0;
 	addr64_t stackptr          = 0;
@@ -583,13 +586,17 @@ machine_trace_thread64(thread_t thread,
 		x86_saved_state64_t     *iss64;
 		iss64 = USER_REGS64(thread);
 		prev_rip = iss64->isf.rip;
-		stackptr = iss64->rbp;
+		if (fp == 0) {
+			stackptr = iss64->rbp;
+		}
 		bt_vm_map = thread->task->map;
 		if (sp && user_p) {
 			*sp = iss64->isf.rsp;
 		}
 	} else {
-		stackptr = STACK_IKS(thread->kernel_stack)->k_rbp;
+		if (fp == 0) {
+			stackptr = STACK_IKS(thread->kernel_stack)->k_rbp;
+		}
 		prev_rip = STACK_IKS(thread->kernel_stack)->k_rip;
 		prev_rip = VM_KERNEL_UNSLIDE(prev_rip);
 		bt_vm_map = kernel_map;
@@ -597,9 +604,6 @@ machine_trace_thread64(thread_t thread,
 
 	for (framecount = 0; framecount < nframes; framecount++) {
 		*tracebuf++ = prev_rip;
-		if (trace_fp) {
-			*tracebuf++ = stackptr;
-		}
 
 		if (!stackptr || (stackptr == fence)) {
 			break;

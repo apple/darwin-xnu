@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -150,18 +150,18 @@ fxsave64(struct x86_fx_thread_state *a)
 
 #define IS_VALID_XSTATE(x)      ((x) == FP || (x) == AVX || (x) == AVX512)
 
-zone_t          ifps_zone[] = {
+SECURITY_READ_ONLY_LATE(zone_t) ifps_zone[] = {
 	[FP]     = NULL,
 	[AVX]    = NULL,
 	[AVX512] = NULL
 };
-static uint32_t fp_state_size[] = {
+static const uint32_t fp_state_size[] = {
 	[FP]     = sizeof(struct x86_fx_thread_state),
 	[AVX]    = sizeof(struct x86_avx_thread_state),
 	[AVX512] = sizeof(struct x86_avx512_thread_state)
 };
 
-static const char *xstate_name[] = {
+static const char *const xstate_name[] = {
 	[UNDEFINED] = "UNDEFINED",
 	[FP] = "FP",
 	[AVX] = "AVX",
@@ -507,22 +507,8 @@ init_fpu(void)
 static void *
 fp_state_alloc(xstate_t xs)
 {
-	struct x86_fx_thread_state *ifps;
-
 	assert(ifps_zone[xs] != NULL);
-	ifps = zalloc(ifps_zone[xs]);
-
-#if     DEBUG
-	if (!(ALIGNED(ifps, 64))) {
-		panic("fp_state_alloc: %p, %u, %p, %u",
-		    ifps, (unsigned) ifps_zone[xs]->elem_size,
-		    (void *) ifps_zone[xs]->free_elements,
-		    (unsigned) ifps_zone[xs]->alloc_size);
-	}
-#endif
-	bzero(ifps, fp_state_size[xs]);
-
-	return ifps;
+	return zalloc_flags(ifps_zone[xs], Z_WAITOK | Z_ZERO);
 }
 
 static inline void
@@ -647,31 +633,19 @@ fpu_module_init(void)
 		    fpu_default);
 	}
 
-	/* We explicitly choose an allocation size of 13 pages = 64 * 832
-	 * to eliminate waste for the 832 byte sized
-	 * AVX XSAVE register save area.
-	 */
-	ifps_zone[fpu_default] = zinit(fp_state_size[fpu_default],
-	    thread_max * fp_state_size[fpu_default],
-	    64 * fp_state_size[fpu_default],
-	    "x86 fpsave state");
-
 	/* To maintain the required alignment, disable
 	 * zone debugging for this zone as that appends
 	 * 16 bytes to each element.
 	 */
-	zone_change(ifps_zone[fpu_default], Z_ALIGNMENT_REQUIRED, TRUE);
+	ifps_zone[fpu_default] = zone_create("x86 fpsave state",
+	    fp_state_size[fpu_default], ZC_ALIGNMENT_REQUIRED | ZC_ZFREE_CLEARMEM);
 
 	/*
 	 * If AVX512 is supported, create a separate savearea zone.
-	 * with allocation size: 19 pages = 32 * 2668
 	 */
 	if (fpu_capability == AVX512) {
-		ifps_zone[AVX512] = zinit(fp_state_size[AVX512],
-		    thread_max * fp_state_size[AVX512],
-		    32 * fp_state_size[AVX512],
-		    "x86 avx512 save state");
-		zone_change(ifps_zone[AVX512], Z_ALIGNMENT_REQUIRED, TRUE);
+		ifps_zone[AVX512] = zone_create("x86 avx512 save state",
+		    fp_state_size[AVX512], ZC_ALIGNMENT_REQUIRED | ZC_ZFREE_CLEARMEM);
 	}
 
 	/* Determine MXCSR reserved bits and configure initial FPU state*/

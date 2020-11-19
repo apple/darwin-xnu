@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -90,9 +90,7 @@
 
 #if IPSEC
 #include <netinet6/ipsec.h>
-#if INET6
 #include <netinet6/ipsec6.h>
-#endif
 #include <netkey/key.h>
 extern int ipsec_bypass;
 #endif /* IPSEC */
@@ -100,7 +98,6 @@ extern int ipsec_bypass;
 #include <net/net_osdep.h>
 
 #if DUMMYNET
-#include <netinet/ip_fw.h>
 #include <netinet/ip_dummynet.h>
 #endif /* DUMMYNET */
 
@@ -393,7 +390,7 @@ ip6_forward(struct mbuf *m, struct route_in6 *ip6forward_rt,
 				break;
 			default:
 				printf("ip6_output (ipsec): error code %d\n", error);
-			/* fall through */
+				OS_FALLTHROUGH;
 			case ENOENT:
 				/* don't show these error codes to the user */
 				break;

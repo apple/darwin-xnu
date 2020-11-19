@@ -850,6 +850,14 @@ kcdata_get_typedescription(unsigned type_id, uint8_t * buffer, uint32_t buffer_s
 		break;
 	}
 
+	case STACKSHOT_KCTYPE_TASK_CPU_ARCHITECTURE: {
+		i = 0;
+		_SUBTYPE(KC_ST_INT32, struct stackshot_cpu_architecture, cputype);
+		_SUBTYPE(KC_ST_INT32, struct stackshot_cpu_architecture, cpusubtype);
+		setup_type_definition(retval, type_id, i, "task_cpu_architecture");
+		break;
+	}
+
 	default:
 		retval = NULL;
 		break;

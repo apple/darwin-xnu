@@ -26,6 +26,9 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
+#include <ptrauth.h>
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOKitDebug.h>
 #include <IOKit/IOLib.h>
@@ -34,6 +37,7 @@
 #include <IOKit/IOTimeStamp.h>
 #include <IOKit/IOWorkLoop.h>
 #include <IOKit/IOInterruptAccountingPrivate.h>
+#include <libkern/Block_private.h>
 
 #if IOKITSTATS
 
@@ -208,29 +212,28 @@ IOInterruptEventSource::unregisterInterruptHandler(IOService *inProvider,
 }
 
 
-IOInterruptEventSource *
+OSSharedPtr<IOInterruptEventSource>
 IOInterruptEventSource::interruptEventSource(OSObject *inOwner,
     Action inAction,
     IOService *inProvider,
     int inIntIndex)
 {
-	IOInterruptEventSource *me = new IOInterruptEventSource;
+	OSSharedPtr<IOInterruptEventSource> me = OSMakeShared<IOInterruptEventSource>();
 
 	if (me && !me->init(inOwner, inAction, inProvider, inIntIndex)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
 }
 
-IOInterruptEventSource *
+OSSharedPtr<IOInterruptEventSource>
 IOInterruptEventSource::interruptEventSource(OSObject *inOwner,
     IOService *inProvider,
     int inIntIndex,
     ActionBlock inAction)
 {
-	IOInterruptEventSource * ies;
+	OSSharedPtr<IOInterruptEventSource> ies;
 	ies = IOInterruptEventSource::interruptEventSource(inOwner, (Action) NULL, inProvider, inIntIndex);
 	if (ies) {
 		ies->setActionBlock((IOEventSource::ActionBlock) inAction);
@@ -331,16 +334,24 @@ IOInterruptEventSource::checkForWork()
 	uint64_t endCPUTime = 0;
 	unsigned int cacheProdCount = producerCount;
 	int numInts = cacheProdCount - consumerCount;
-	IOInterruptEventAction intAction = (IOInterruptEventAction) action;
+	IOEventSource::Action intAction = action;
 	ActionBlock intActionBlock = (ActionBlock) actionBlock;
+	void *address;
 	bool trace = (gIOKitTrace & kIOTraceIntEventSource) ? true : false;
+
+	if (kActionBlock & flags) {
+		address = ptrauth_nop_cast(void *, _Block_get_invoke_fn((struct Block_layout *)intActionBlock));
+	} else {
+		address = ptrauth_nop_cast(void *, intAction);
+	}
 
 	IOStatisticsCheckForWork();
 
 	if (numInts > 0) {
 		if (trace) {
 			IOTimeStampStartConstant(IODBG_INTES(IOINTES_ACTION),
-			    VM_KERNEL_ADDRHIDE(intAction), VM_KERNEL_ADDRHIDE(owner),
+			    VM_KERNEL_ADDRHIDE(address),
+			    VM_KERNEL_ADDRHIDE(owner),
 			    VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(workLoop));
 		}
 
@@ -358,7 +369,7 @@ IOInterruptEventSource::checkForWork()
 		if (kActionBlock & flags) {
 			(intActionBlock)(this, numInts);
 		} else {
-			(*intAction)(owner, this, numInts);
+			((IOInterruptEventAction)intAction)(owner, this, numInts);
 		}
 
 		if (reserved->statistics) {
@@ -379,7 +390,8 @@ IOInterruptEventSource::checkForWork()
 
 		if (trace) {
 			IOTimeStampEndConstant(IODBG_INTES(IOINTES_ACTION),
-			    VM_KERNEL_ADDRHIDE(intAction), VM_KERNEL_ADDRHIDE(owner),
+			    VM_KERNEL_ADDRHIDE(address),
+			    VM_KERNEL_ADDRHIDE(owner),
 			    VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(workLoop));
 		}
 
@@ -390,7 +402,8 @@ IOInterruptEventSource::checkForWork()
 	} else if (numInts < 0) {
 		if (trace) {
 			IOTimeStampStartConstant(IODBG_INTES(IOINTES_ACTION),
-			    VM_KERNEL_ADDRHIDE(intAction), VM_KERNEL_ADDRHIDE(owner),
+			    VM_KERNEL_ADDRHIDE(address),
+			    VM_KERNEL_ADDRHIDE(owner),
 			    VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(workLoop));
 		}
 
@@ -408,7 +421,7 @@ IOInterruptEventSource::checkForWork()
 		if (kActionBlock & flags) {
 			(intActionBlock)(this, numInts);
 		} else {
-			(*intAction)(owner, this, numInts);
+			((IOInterruptEventAction)intAction)(owner, this, numInts);
 		}
 
 		if (reserved->statistics) {
@@ -429,7 +442,8 @@ IOInterruptEventSource::checkForWork()
 
 		if (trace) {
 			IOTimeStampEndConstant(IODBG_INTES(IOINTES_ACTION),
-			    VM_KERNEL_ADDRHIDE(intAction), VM_KERNEL_ADDRHIDE(owner),
+			    VM_KERNEL_ADDRHIDE(address),
+			    VM_KERNEL_ADDRHIDE(owner),
 			    VM_KERNEL_ADDRHIDE(this), VM_KERNEL_ADDRHIDE(workLoop));
 		}
 
@@ -529,7 +543,7 @@ IOInterruptEventSource::enablePrimaryInterruptTimestamp(bool enable)
 }
 
 uint64_t
-IOInterruptEventSource::getPimaryInterruptTimestamp()
+IOInterruptEventSource::getPrimaryInterruptTimestamp()
 {
 	if (reserved->statistics && reserved->statistics->enablePrimaryTimestamp) {
 		return reserved->statistics->primaryTimestamp;

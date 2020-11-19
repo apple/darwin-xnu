@@ -33,11 +33,12 @@
 
 #include <libkern/c++/OSCollection.h>
 #include <libkern/c++/OSPtr.h>
+#include <os/base.h>
 
 class OSSerialize;
 class OSArray;
 
-typedef OSPtr<OSArray> OSArrayPtr;
+typedef OSArray* OSArrayPtr;
 
 /*!
  * @header
@@ -96,18 +97,21 @@ class OSArray : public OSCollection
 
 	OSDeclareDefaultStructors(OSArray);
 
+	typedef OSTaggedPtr<const OSMetaClassBase> ArrayPtrType;
+	typedef OSTaggedSharedPtr<const OSMetaClassBase, OSCollection> ArraySharedPtrType;
+
 #if APPLE_KEXT_ALIGN_CONTAINERS
 
 protected:
 	unsigned int             count;
 	unsigned int             capacity;
 	unsigned int             capacityIncrement;
-	OSCollectionTaggedPtr<const OSMetaClassBase> *array;
+	ArrayPtrType           * OS_PTRAUTH_SIGNED_PTR("OSArray.array") array;
 
 #else /* APPLE_KEXT_ALIGN_CONTAINERS */
 
 protected:
-	OSCollectionTaggedPtr<const OSMetaClassBase> *array;
+	ArrayPtrType           * OS_PTRAUTH_SIGNED_PTR("OSArray.array") array;
 	unsigned int             count;
 	unsigned int             capacity;
 	unsigned int             capacityIncrement;
@@ -144,7 +148,7 @@ public:
  * (<i>unlike</i> @link //apple_ref/doc/uid/20001502 CFMutableArray@/link,
  * for which the initial capacity is a hard limit).
  */
-	static OSArrayPtr withCapacity(unsigned int capacity);
+	static OSPtr<OSArray> withCapacity(unsigned int capacity);
 
 
 /*!
@@ -172,7 +176,7 @@ public:
  * (<i>unlike</i> @link //apple_ref/doc/uid/20001502 CFMutableArray@/link,
  * for which the initial capacity is a hard limit).
  */
-	static OSArrayPtr withObjects(
+	static OSPtr<OSArray> withObjects(
 		const OSObject * objects[],
 		unsigned int     count,
 		unsigned int     capacity = 0);
@@ -210,7 +214,7 @@ public:
  * for storage in the new OSArray,
  * not copied.
  */
-	static OSArrayPtr withArray(
+	static OSPtr<OSArray> withArray(
 		const OSArray * array,
 		unsigned int    capacity = 0);
 
@@ -460,6 +464,8 @@ public:
  */
 	virtual bool setObject(const OSMetaClassBase * anObject);
 
+	bool setObject(OSSharedPtr<const OSMetaClassBase> const& anObject);
+
 
 /*!
  * @function setObject
@@ -498,6 +504,10 @@ public:
 		unsigned int            index,
 		const OSMetaClassBase * anObject);
 
+	bool setObject(
+		unsigned int index,
+		OSSharedPtr<const OSMetaClassBase> const& anObject);
+
 
 /*!
  * @function merge
@@ -534,6 +544,10 @@ public:
 	virtual void replaceObject(
 		unsigned int            index,
 		const OSMetaClassBase * anObject);
+
+	void replaceObject(
+		unsigned int            index,
+		OSSharedPtr<const OSMetaClassBase> const& anObject);
 
 
 /*!
@@ -727,7 +741,7 @@ public:
  * Objects that are not derived from OSCollection are retained
  * rather than copied.
  */
-	OSCollectionPtr copyCollection(OSDictionary * cycleDict = NULL) APPLE_KEXT_OVERRIDE;
+	OSPtr<OSCollection> copyCollection(OSDictionary * cycleDict = NULL) APPLE_KEXT_OVERRIDE;
 
 	OSMetaClassDeclareReservedUnused(OSArray, 0);
 	OSMetaClassDeclareReservedUnused(OSArray, 1);

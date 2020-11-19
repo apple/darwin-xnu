@@ -189,7 +189,7 @@ test_stack_overflow(struct kasan_test *t)
 {
 	TEST_START(t);
 
-	int i;
+	uint8_t i;
 	volatile uint8_t a[STACK_ARRAY_SZ];
 
 	for (i = 0; i < STACK_ARRAY_SZ; i++) {

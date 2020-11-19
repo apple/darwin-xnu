@@ -32,6 +32,7 @@
 
 #include <libkern/c++/OSMetaClass.h>
 #include <libkern/c++/OSString.h>
+#include <libkern/c++/OSPtr.h>
 
 #include <sys/appleapiopts.h>
 #include <sys/types.h>
@@ -67,9 +68,13 @@ class OSString;
  * @discussion
  * <b>Not safe</b> to call in a primary interrupt handler.
  */
-extern "C++" OSObjectPtr OSUnserializeXML(
+extern "C++" OSPtr<OSObject> OSUnserializeXML(
 	const char  * buffer,
-	OSStringPtr * errorString = NULL);
+	OSString * * errorString = NULL);
+
+extern "C++" OSPtr<OSObject> OSUnserializeXML(
+	const char  * buffer,
+	OSSharedPtr<OSString>& errorString);
 
 /*!
  * @function OSUnserializeXML
@@ -93,16 +98,27 @@ extern "C++" OSObjectPtr OSUnserializeXML(
  * @discussion
  * <b>Not safe</b> to call in a primary interrupt handler.
  */
-extern "C++" OSObjectPtr OSUnserializeXML(
+extern "C++" OSPtr<OSObject> OSUnserializeXML(
 	const char  * buffer,
 	size_t        bufferSize,
-	OSStringPtr   *errorString = NULL);
+	OSString *   *errorString = NULL);
 
-extern "C++" OSObjectPtr
-OSUnserializeBinary(const char *buffer, size_t bufferSize, OSStringPtr *errorString);
+extern "C++" OSPtr<OSObject> OSUnserializeXML(
+	const char  * buffer,
+	size_t        bufferSize,
+	OSSharedPtr<OSString> &errorString);
+
+extern "C++" OSPtr<OSObject>
+OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString * *errorString);
+
+extern "C++" OSPtr<OSObject>
+OSUnserializeBinary(const char *buffer, size_t bufferSize, OSSharedPtr<OSString>& errorString);
 
 #ifdef __APPLE_API_OBSOLETE
-extern OSObjectPtr OSUnserialize(const char *buffer, OSStringPtr *errorString = NULL);
+extern OSPtr<OSObject> OSUnserialize(const char *buffer, OSString * *errorString = NULL);
+
+extern OSPtr<OSObject> OSUnserialize(const char *buffer, OSSharedPtr<OSString>&  errorString);
+
 #endif /* __APPLE_API_OBSOLETE */
 
 #endif /* _OS_OSUNSERIALIZE_H */

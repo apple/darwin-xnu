@@ -193,8 +193,8 @@ struct proc;
 struct  proc {
 	LIST_ENTRY(proc) p_list;                /* List of all processes. */
 
-	void *          task;                   /* corresponding task (static)*/
-	struct  proc *  p_pptr;                 /* Pointer to parent process.(LL) */
+	void *          XNU_PTRAUTH_SIGNED_PTR("proc.task") task;       /* corresponding task (static)*/
+	struct  proc *  XNU_PTRAUTH_SIGNED_PTR("proc.p_pptr") p_pptr;   /* Pointer to parent process.(LL) */
 	pid_t           p_ppid;                 /* process's parent pid number */
 	pid_t           p_original_ppid;        /* process's original parent pid number, doesn't change if reparented */
 	pid_t           p_pgrpid;               /* process group id of the process (LL)*/
@@ -220,7 +220,6 @@ struct  proc {
 	TAILQ_HEAD(, uthread) p_uthlist;        /* List of uthreads  (PL) */
 
 	LIST_ENTRY(proc) p_hash;                /* Hash chain. (LL)*/
-	TAILQ_HEAD(, eventqelt) p_evlist;       /* (PL) */
 
 #if CONFIG_PERSONAS
 	struct persona  *p_persona;
@@ -231,7 +230,7 @@ struct  proc {
 	lck_mtx_t       p_ucred_mlock;          /* mutex lock to protect p_ucred */
 
 	/* substructures: */
-	kauth_cred_t    p_ucred;                /* Process owner's identity. (PUCL) */
+	kauth_cred_t    XNU_PTRAUTH_SIGNED_PTR("proc.p_ucred") p_ucred; /* Process owner's identity. (PUCL) */
 	struct  filedesc *p_fd;                 /* Ptr to open files structure. (PFDL) */
 	struct  pstats *p_stats;                /* Accounting/statistics (PL). */
 	struct  plimit *p_limit;                /* Process limits.(PL) */
@@ -239,9 +238,6 @@ struct  proc {
 	struct  sigacts *p_sigacts;             /* Signal actions, state (PL) */
 	lck_spin_t      p_slock;                /* spin lock for itimer/profil protection */
 
-#define p_rlimit        p_limit->pl_rlimit
-
-	struct  plimit *p_olimit;               /* old process limits  - not inherited by child  (PL) */
 	int             p_siglist;              /* signals captured back from threads */
 	unsigned int    p_flag;                 /* P_* flags. (atomic bit ops) */
 	unsigned int    p_lflag;                /* local flags  (PL) */
@@ -301,7 +297,7 @@ struct  proc {
 	u_int   p_argslen;       /* Length of process arguments. */
 	int     p_argc;                 /* saved argc for sysctl_procargs() */
 	user_addr_t user_stack;         /* where user stack was allocated */
-	struct  vnode *p_textvp;        /* Vnode of executable. */
+	struct  vnode * XNU_PTRAUTH_SIGNED_PTR("proc.p_textvp") p_textvp;       /* Vnode of executable. */
 	off_t   p_textoff;              /* offset in executable vnode */
 
 	sigset_t p_sigmask;             /* DEPRECATED */
@@ -319,7 +315,7 @@ struct  proc {
 	uint8_t p_xhighbits;    /* Stores the top byte of exit status to avoid truncation*/
 	pid_t   p_contproc;     /* last PID to send us a SIGCONT (PL) */
 
-	struct  pgrp *p_pgrp;           /* Pointer to process group. (LL) */
+	struct  pgrp *  XNU_PTRAUTH_SIGNED_PTR("proc.p_pgrp") p_pgrp; /* Pointer to process group. (LL) */
 	uint32_t        p_csflags;      /* flags for codesign (PL) */
 	uint32_t        p_pcaction;     /* action  for process control on starvation */
 	uint8_t p_uuid[16];             /* from LC_UUID load command */
@@ -333,13 +329,13 @@ struct  proc {
 
 	uint8_t  *syscall_filter_mask;          /* syscall filter bitmask (length: nsysent bits) */
 	uint32_t        p_platform;
+	uint32_t        p_min_sdk;
 	uint32_t        p_sdk;
 
 /* End area that is copied on creation. */
 /* XXXXXXXXXXXXX End of BCOPY'ed on fork (AIOLOCK)XXXXXXXXXXXXXXXX */
 #define p_endcopy       p_aio_total_count
 	int             p_aio_total_count;              /* all allocated AIO requests for this proc */
-	int             p_aio_active_count;             /* all unfinished AIO requests for this proc */
 	TAILQ_HEAD(, aio_workq_entry ) p_aio_activeq;   /* active async IO requests */
 	TAILQ_HEAD(, aio_workq_entry ) p_aio_doneq;     /* completed async IO requests */
 
@@ -416,10 +412,23 @@ struct  proc {
 
 	struct os_reason     *p_exit_reason;
 
-#if !CONFIG_EMBEDDED
+#if CONFIG_PROC_UDATA_STORAGE
 	uint64_t        p_user_data;                    /* general-purpose storage for userland-provided data */
-#endif /* !CONFIG_EMBEDDED */
+#endif /* CONFIG_PROC_UDATA_STORAGE */
+
+	char * p_subsystem_root_path;
 	lck_rw_t        p_dirs_lock;                    /* keeps fd_cdir and fd_rdir stable across a lookup */
+	pid_t           p_sessionid;
+};
+
+/*
+ * Identify a process uniquely.
+ * proc_ident's fields match 1-1 with those in struct proc.
+ */
+struct proc_ident {
+	uint64_t        p_uniqueid;
+	pid_t           p_pid;
+	int             p_idversion;
 };
 
 #define PGRPID_DEAD 0xdeaddead
@@ -465,7 +474,7 @@ struct  proc {
 #define P_LKQWDRAIN     0x00004000
 #define P_LKQWDRAINWAIT 0x00008000
 #define P_LKQWDEAD      0x00010000
-#define P_LLIMCHANGE    0x00020000
+#define P_LLIMCHANGE    0x00020000      /* process is changing its plimit (rlim_cur, rlim_max) */
 #define P_LLIMWAIT      0x00040000
 #define P_LWAITED       0x00080000
 #define P_LINSIGNAL     0x00100000
@@ -512,7 +521,9 @@ struct  proc {
 #define P_VFS_IOPOLICY_ATIME_UPDATES                    0x0002
 #define P_VFS_IOPOLICY_MATERIALIZE_DATALESS_FILES       0x0004
 #define P_VFS_IOPOLICY_STATFS_NO_DATA_VOLUME            0x0008
-#define P_VFS_IOPOLICY_VALID_MASK                       (P_VFS_IOPOLICY_ATIME_UPDATES | P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY | P_VFS_IOPOLICY_MATERIALIZE_DATALESS_FILES | P_VFS_IOPOLICY_STATFS_NO_DATA_VOLUME)
+#define P_VFS_IOPOLICY_TRIGGER_RESOLVE_DISABLE          0x0010
+#define P_VFS_IOPOLICY_IGNORE_CONTENT_PROTECTION        0x0020
+#define P_VFS_IOPOLICY_VALID_MASK                       (P_VFS_IOPOLICY_ATIME_UPDATES | P_VFS_IOPOLICY_FORCE_HFS_CASE_SENSITIVITY | P_VFS_IOPOLICY_MATERIALIZE_DATALESS_FILES | P_VFS_IOPOLICY_STATFS_NO_DATA_VOLUME | P_VFS_IOPOLICY_TRIGGER_RESOLVE_DISABLE | P_VFS_IOPOLICY_IGNORE_CONTENT_PROTECTION)
 
 /* process creation arguments */
 #define PROC_CREATE_FORK        0       /* independent child (running) */
@@ -642,6 +653,29 @@ struct user64_extern_proc {
 };
 #endif  /* KERNEL */
 
+#ifdef BSD_KERNEL_PRIVATE
+
+#include <os/refcnt.h>    /* for struct os_refcnt pl_refcnt */
+
+/*
+ * Kernel shareable process resource limits:
+ * Because this structure is moderately large but changed infrequently, it is normally
+ * shared copy-on-write after a fork. The pl_refcnt variable records the number of
+ * "processes" (NOT threads) currently sharing the plimit. A plimit is freed when the
+ * last referencing process exits the system. The refcnt of the plimit is a race-free
+ * _Atomic variable. We allocate new plimits in proc_limitupdate and free them
+ * in proc_limitdrop/proc_limitupdate.
+ */
+struct plimit {
+	struct  rlimit   pl_rlimit[RLIM_NLIMITS];
+	os_refcnt_t      pl_refcnt;                /* number of processes using this plimit */
+};
+
+extern rlim_t proc_limitgetcur(proc_t p, int which, boolean_t to_lock_proc);
+extern void proc_limitsetcur_internal(proc_t p, int which, rlim_t value);
+extern struct proc proc0;
+#endif /* BSD_KERNEL_PRIVATE */
+
 /*
  * We use process IDs <= PID_MAX; PID_MAX + 1 must also fit in a pid_t,
  * as it is used to represent "no process group".
@@ -690,8 +724,8 @@ LIST_HEAD(proclist, proc);
 extern struct proclist allproc;         /* List of all processes. */
 extern struct proclist zombproc;        /* List of zombie processes. */
 
-extern struct proc *initproc;
-extern void     procinit(void);
+extern struct proc * XNU_PTRAUTH_SIGNED_PTR("initproc") initproc;
+extern void procinit(void);
 extern void proc_lock(struct proc *);
 extern void proc_unlock(struct proc *);
 extern void proc_spinlock(struct proc *);
@@ -717,8 +751,7 @@ __private_extern__ struct proc *pzfind(pid_t);  /* Find zombie by id. */
 __private_extern__ struct proc *proc_find_zombref(pid_t);       /* Find zombie by id. */
 __private_extern__ void proc_drop_zombref(struct proc * p);     /* Find zombie by id. */
 
-
-extern int      chgproccnt(uid_t uid, int diff);
+extern size_t   chgproccnt(uid_t uid, int diff);
 extern void     pinsertchild(struct proc *parent, struct proc *child);
 extern int      setsid_internal(struct proc *p);
 #ifndef __cplusplus
@@ -768,7 +801,6 @@ extern void session_unlock(struct session * sess);
 extern struct session * pgrp_session(struct pgrp * pgrp);
 extern void     session_rele(struct session *sess);
 extern int isbackground(proc_t p, struct tty  *tp);
-extern proc_t proc_parent(proc_t);
 extern proc_t proc_parentholdref(proc_t);
 extern int proc_parentdropref(proc_t, int);
 int     itimerfix(struct timeval *tv);
@@ -802,6 +834,7 @@ void psynch_wq_cleanup(__unused void *  param, __unused void * param1);
 extern lck_mtx_t * pthread_list_mlock;
 #endif /* PSYNCH */
 struct uthread * current_uthread(void);
+
 
 /* process iteration */
 
@@ -877,5 +910,11 @@ extern void proc_rebootscan(proc_iterate_fn_t callout, void *arg, proc_iterate_f
 pid_t dtrace_proc_selfpid(void);
 pid_t dtrace_proc_selfppid(void);
 uid_t dtrace_proc_selfruid(void);
+
+extern zone_t proc_zone;
+extern zone_t proc_stats_zone;
+extern zone_t proc_sigacts_zone;
+
+extern struct proc_ident proc_ident(proc_t p);
 
 #endif  /* !_SYS_PROC_INTERNAL_H_ */

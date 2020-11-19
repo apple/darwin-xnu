@@ -5,9 +5,45 @@
 CWARNFLAGS = $(CWARNFLAGS_STD) -Wshorten-64-to-32
 
 # Files that must go in the __HIB segment:
-HIB_FILES=
+UNCONFIGURED_HIB_FILES=					\
+           hibernate_restore.o          \
+           bcopy.o			\
+           bzero.o			\
+           cc_clear.o			\
+           ccdigest_init.o		\
+           ccdigest_update.o		\
+           ccdigest_final_64be.o	\
+           cchmac.o			\
+           cchmac_init.o		\
+           cchmac_update.o		\
+           cchmac_final.o		\
+           ccsha256_K.o			\
+           ccsha256_initial_state.o	\
+           sha256_compress_arm64.o	\
+           memset_s.o
+
+
+HIB_FILES=$(filter $(UNCONFIGURED_HIB_FILES),$(OBJS))
+
+define ADD_HIB_CFLAGS
+# Unconfigured __HIB files must be Mach-O for "setsegname"
+$(1)_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG)
+# KASAN must be disabled for unconfigured __HIB files
+# because the kasan runtime isn't available during hibernation resume
+$(1)_CFLAGS_ADD += -fno-sanitize=address -UKASAN
+# Stack protector and stack check must be disabled because the stack protector runtime isn't available
+$(1)_CFLAGS_ADD += -fno-stack-protector -fno-stack-check
+endef
+
+$(foreach FILE,$(UNCONFIGURED_HIB_FILES),$(eval $(call ADD_HIB_CFLAGS,$(FILE))))
+
+# hibernate_restore.o uses function pointers but the signing keys aren't set up yet,
+# so compile this file with no ptrauth
+hibernate_restore.o_CFLAGS_ADD += -fno-ptrauth-calls
 
 lz4.o_CFLAGS_ADD += -fbuiltin -O3
+vfp_state_test.o_CFLAGS_ADD += -mno-implicit-float
+
 
 ######################################################################
 #END	Machine dependent Makefile fragment for arm64

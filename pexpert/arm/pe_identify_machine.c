@@ -47,7 +47,7 @@ pe_identify_machine(boot_args * bootArgs)
 	OpaqueDTEntryIterator iter;
 	DTEntry         cpus, cpu;
 	uint32_t        mclk = 0, hclk = 0, pclk = 0, tclk = 0, use_dt = 0;
-	unsigned long  *value;
+	unsigned long const *value;
 	unsigned int    size;
 	int             err;
 
@@ -107,27 +107,27 @@ pe_identify_machine(boot_args * bootArgs)
 		gPEClockFrequencyInfo.bus_clock_rate_hz = 100000000;
 		gPEClockFrequencyInfo.cpu_clock_rate_hz = 400000000;
 
-		err = DTLookupEntry(NULL, "/cpus", &cpus);
+		err = SecureDTLookupEntry(NULL, "/cpus", &cpus);
 		assert(err == kSuccess);
 
-		err = DTInitEntryIterator(cpus, &iter);
+		err = SecureDTInitEntryIterator(cpus, &iter);
 		assert(err == kSuccess);
 
-		while (kSuccess == DTIterateEntries(&iter, &cpu)) {
-			if ((kSuccess != DTGetProperty(cpu, "state", (void **)&value, &size)) ||
-			    (strncmp((char*)value, "running", size) != 0)) {
+		while (kSuccess == SecureDTIterateEntries(&iter, &cpu)) {
+			if ((kSuccess != SecureDTGetProperty(cpu, "state", (void const **)&value, &size)) ||
+			    (strncmp((char const *)value, "running", size) != 0)) {
 				continue;
 			}
 
 			/* Find the time base frequency first. */
-			if (DTGetProperty(cpu, "timebase-frequency", (void **)&value, &size) == kSuccess) {
+			if (SecureDTGetProperty(cpu, "timebase-frequency", (void const **)&value, &size) == kSuccess) {
 				/*
 				 * timebase_frequency_hz is only 32 bits, and
 				 * the device tree should never provide 64
 				 * bits so this if should never be taken.
 				 */
 				if (size == 8) {
-					gPEClockFrequencyInfo.timebase_frequency_hz = *(unsigned long long *)value;
+					gPEClockFrequencyInfo.timebase_frequency_hz = *(unsigned long long const *)value;
 				} else {
 					gPEClockFrequencyInfo.timebase_frequency_hz = *value;
 				}
@@ -135,9 +135,9 @@ pe_identify_machine(boot_args * bootArgs)
 			gPEClockFrequencyInfo.dec_clock_rate_hz = gPEClockFrequencyInfo.timebase_frequency_hz;
 
 			/* Find the bus frequency next. */
-			if (DTGetProperty(cpu, "bus-frequency", (void **)&value, &size) == kSuccess) {
+			if (SecureDTGetProperty(cpu, "bus-frequency", (void const **)&value, &size) == kSuccess) {
 				if (size == 8) {
-					gPEClockFrequencyInfo.bus_frequency_hz = *(unsigned long long *)value;
+					gPEClockFrequencyInfo.bus_frequency_hz = *(unsigned long long const *)value;
 				} else {
 					gPEClockFrequencyInfo.bus_frequency_hz = *value;
 				}
@@ -152,9 +152,9 @@ pe_identify_machine(boot_args * bootArgs)
 			}
 
 			/* Find the memory frequency next. */
-			if (DTGetProperty(cpu, "memory-frequency", (void **)&value, &size) == kSuccess) {
+			if (SecureDTGetProperty(cpu, "memory-frequency", (void const **)&value, &size) == kSuccess) {
 				if (size == 8) {
-					gPEClockFrequencyInfo.mem_frequency_hz = *(unsigned long long *)value;
+					gPEClockFrequencyInfo.mem_frequency_hz = *(unsigned long long const *)value;
 				} else {
 					gPEClockFrequencyInfo.mem_frequency_hz = *value;
 				}
@@ -163,9 +163,9 @@ pe_identify_machine(boot_args * bootArgs)
 			gPEClockFrequencyInfo.mem_frequency_max_hz = gPEClockFrequencyInfo.mem_frequency_hz;
 
 			/* Find the peripheral frequency next. */
-			if (DTGetProperty(cpu, "peripheral-frequency", (void **)&value, &size) == kSuccess) {
+			if (SecureDTGetProperty(cpu, "peripheral-frequency", (void const **)&value, &size) == kSuccess) {
 				if (size == 8) {
-					gPEClockFrequencyInfo.prf_frequency_hz = *(unsigned long long *)value;
+					gPEClockFrequencyInfo.prf_frequency_hz = *(unsigned long long const *)value;
 				} else {
 					gPEClockFrequencyInfo.prf_frequency_hz = *value;
 				}
@@ -174,17 +174,17 @@ pe_identify_machine(boot_args * bootArgs)
 			gPEClockFrequencyInfo.prf_frequency_max_hz = gPEClockFrequencyInfo.prf_frequency_hz;
 
 			/* Find the fixed frequency next. */
-			if (DTGetProperty(cpu, "fixed-frequency", (void **)&value, &size) == kSuccess) {
+			if (SecureDTGetProperty(cpu, "fixed-frequency", (void const **)&value, &size) == kSuccess) {
 				if (size == 8) {
-					gPEClockFrequencyInfo.fix_frequency_hz = *(unsigned long long *)value;
+					gPEClockFrequencyInfo.fix_frequency_hz = *(unsigned long long const *)value;
 				} else {
 					gPEClockFrequencyInfo.fix_frequency_hz = *value;
 				}
 			}
 			/* Find the cpu frequency last. */
-			if (DTGetProperty(cpu, "clock-frequency", (void **)&value, &size) == kSuccess) {
+			if (SecureDTGetProperty(cpu, "clock-frequency", (void const **)&value, &size) == kSuccess) {
 				if (size == 8) {
-					gPEClockFrequencyInfo.cpu_frequency_hz = *(unsigned long long *)value;
+					gPEClockFrequencyInfo.cpu_frequency_hz = *(unsigned long long const *)value;
 				} else {
 					gPEClockFrequencyInfo.cpu_frequency_hz = *value;
 				}
@@ -235,17 +235,17 @@ vm_offset_t
 pe_arm_get_soc_base_phys(void)
 {
 	DTEntry         entryP;
-	uintptr_t       *ranges_prop;
+	uintptr_t const *ranges_prop;
 	uint32_t        prop_size;
-	char           *tmpStr;
+	char const      *tmpStr;
 
-	if (DTFindEntry("name", "arm-io", &entryP) == kSuccess) {
+	if (SecureDTFindEntry("name", "arm-io", &entryP) == kSuccess) {
 		if (gPESoCDeviceType == 0) {
-			DTGetProperty(entryP, "device_type", (void **)&tmpStr, &prop_size);
+			SecureDTGetProperty(entryP, "device_type", (void const **)&tmpStr, &prop_size);
 			strlcpy(gPESoCDeviceTypeBuffer, tmpStr, SOC_DEVICE_TYPE_BUFFER_SIZE);
 			gPESoCDeviceType = gPESoCDeviceTypeBuffer;
 
-			DTGetProperty(entryP, "ranges", (void **)&ranges_prop, &prop_size);
+			SecureDTGetProperty(entryP, "ranges", (void const **)&ranges_prop, &prop_size);
 			gPESoCBasePhys = *(ranges_prop + 1);
 		}
 		return gPESoCBasePhys;
@@ -253,42 +253,7 @@ pe_arm_get_soc_base_phys(void)
 	return 0;
 }
 
-uint32_t
-pe_arm_get_soc_revision(void)
-{
-	DTEntry         entryP;
-	uint32_t        *value;
-	uint32_t        size;
-
-	if ((DTFindEntry("name", "arm-io", &entryP) == kSuccess)
-	    && (DTGetProperty(entryP, "chip-revision", (void **)&value, &size) == kSuccess)) {
-		if (size == 8) {
-			return (uint32_t)*(unsigned long long *)value;
-		} else {
-			return *value;
-		}
-	}
-	return 0;
-}
-
-
 extern void     fleh_fiq_generic(void);
-
-
-#if defined(ARM_BOARD_CLASS_T7000)
-static struct tbd_ops    t7000_funcs = {NULL, NULL, NULL};
-#endif /* defined(ARM_BOARD_CLASS_T7000) */
-
-#if defined(ARM_BOARD_CLASS_S7002)
-extern void     fleh_fiq_s7002(void);
-extern uint32_t s7002_get_decrementer(void);
-extern void     s7002_set_decrementer(uint32_t);
-static struct tbd_ops    s7002_funcs = {&fleh_fiq_s7002, &s7002_get_decrementer, &s7002_set_decrementer};
-#endif /* defined(ARM_BOARD_CLASS_S7002) */
-
-#if defined(ARM_BOARD_CLASS_S8000)
-static struct tbd_ops    s8000_funcs = {NULL, NULL, NULL};
-#endif /* defined(ARM_BOARD_CLASS_T7000) */
 
 #if defined(ARM_BOARD_CLASS_T8002)
 extern void     fleh_fiq_t8002(void);
@@ -296,45 +261,6 @@ extern uint32_t t8002_get_decrementer(void);
 extern void     t8002_set_decrementer(uint32_t);
 static struct tbd_ops    t8002_funcs = {&fleh_fiq_t8002, &t8002_get_decrementer, &t8002_set_decrementer};
 #endif /* defined(ARM_BOARD_CLASS_T8002) */
-
-#if defined(ARM_BOARD_CLASS_T8010)
-static struct tbd_ops    t8010_funcs = {NULL, NULL, NULL};
-#endif /* defined(ARM_BOARD_CLASS_T8010) */
-
-#if defined(ARM_BOARD_CLASS_T8011)
-static struct tbd_ops    t8011_funcs = {NULL, NULL, NULL};
-#endif /* defined(ARM_BOARD_CLASS_T8011) */
-
-#if defined(ARM_BOARD_CLASS_T8015)
-static struct tbd_ops    t8015_funcs = {NULL, NULL, NULL};
-#endif /* defined(ARM_BOARD_CLASS_T8015) */
-
-#if defined(ARM_BOARD_CLASS_T8020)
-static struct tbd_ops    t8020_funcs = {NULL, NULL, NULL};
-#endif /* defined(ARM_BOARD_CLASS_T8020) */
-
-#if defined(ARM_BOARD_CLASS_T8006)
-static struct tbd_ops    t8006_funcs = {NULL, NULL, NULL};
-#endif /* defined(ARM_BOARD_CLASS_T8006) */
-
-#if defined(ARM_BOARD_CLASS_T8027)
-static struct tbd_ops    t8027_funcs = {NULL, NULL, NULL};
-#endif /* defined(ARM_BOARD_CLASS_T8027) */
-
-#if defined(ARM_BOARD_CLASS_T8028)
-static struct tbd_ops    t8028_funcs = {NULL, NULL, NULL};
-#endif /* defined(ARM_BOARD_CLASS_T8028) */
-
-#if defined(ARM_BOARD_CLASS_T8030)
-static struct tbd_ops    t8030_funcs = {NULL, NULL, NULL};
-#endif /* defined(ARM_BOARD_CLASS_T8030) */
-
-
-
-
-#if defined(ARM_BOARD_CLASS_BCM2837)
-static struct tbd_ops    bcm2837_funcs = {NULL, NULL, NULL};
-#endif /* defined(ARM_BOARD_CLASS_BCM2837) */
 
 vm_offset_t     gPicBase;
 vm_offset_t     gTimerBase;
@@ -404,7 +330,7 @@ static int running_debug_command_on_cpu_number = -1;
 static void
 pe_init_debug_command(DTEntry entryP, command_buffer_element_t **command_buffer, const char* entry_name)
 {
-	uintptr_t       *reg_prop;
+	uintptr_t const *reg_prop;
 	uint32_t        prop_size, reg_window_size = 0, command_starting_index;
 	uintptr_t       debug_reg_window = 0;
 
@@ -412,7 +338,7 @@ pe_init_debug_command(DTEntry entryP, command_buffer_element_t **command_buffer,
 		return;
 	}
 
-	if (DTGetProperty(entryP, entry_name, (void **)&reg_prop, &prop_size) != kSuccess) {
+	if (SecureDTGetProperty(entryP, entry_name, (void const **)&reg_prop, &prop_size) != kSuccess) {
 		panic("pe_init_debug_command: failed to read property %s\n", entry_name);
 	}
 
@@ -442,7 +368,7 @@ pe_init_debug_command(DTEntry entryP, command_buffer_element_t **command_buffer,
 				panic("pe_init_debug_command: Command Offset is %lx, exceeds allocated size of %x\n", REGISTER_OFFSET(*reg_prop), reg_window_size );
 			}
 			debug_command_buffer[next_command_buffer_entry].address = debug_reg_window + REGISTER_OFFSET(*reg_prop);
-			debug_command_buffer[next_command_buffer_entry].destination_cpu_selector = CPU_SELECTOR(*reg_prop);
+			debug_command_buffer[next_command_buffer_entry].destination_cpu_selector = (uint16_t)CPU_SELECTOR(*reg_prop);
 #if defined(__arm64__)
 			debug_command_buffer[next_command_buffer_entry].delay_us = DELAY_US(*reg_prop);
 			debug_command_buffer[next_command_buffer_entry].is_32bit = ((*reg_prop & REGISTER_32BIT_MASK) != 0);
@@ -563,7 +489,7 @@ void
 pe_arm_init_debug(void *args)
 {
 	DTEntry         entryP;
-	uintptr_t       *reg_prop;
+	uintptr_t const *reg_prop;
 	uint32_t        prop_size;
 
 	if (gSocPhys == 0) {
@@ -571,9 +497,9 @@ pe_arm_init_debug(void *args)
 		return;
 	}
 
-	if (DTFindEntry("device_type", "cpu-debug-interface", &entryP) == kSuccess) {
+	if (SecureDTFindEntry("device_type", "cpu-debug-interface", &entryP) == kSuccess) {
 		if (args != NULL) {
-			if (DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size) == kSuccess) {
+			if (SecureDTGetProperty(entryP, "reg", (void const **)&reg_prop, &prop_size) == kSuccess) {
 				ml_init_arm_debug_interface(args, ml_io_map(gSocPhys + *reg_prop, *(reg_prop + 1)));
 			}
 #if DEVELOPMENT || DEBUG
@@ -617,7 +543,7 @@ static uint32_t
 pe_arm_map_interrupt_controller(void)
 {
 	DTEntry         entryP;
-	uintptr_t       *reg_prop;
+	uintptr_t const *reg_prop;
 	uint32_t        prop_size;
 	vm_offset_t     soc_phys = 0;
 
@@ -629,9 +555,9 @@ pe_arm_map_interrupt_controller(void)
 		return 0;
 	}
 
-	if (DTFindEntry("interrupt-controller", "master", &entryP) == kSuccess) {
+	if (SecureDTFindEntry("interrupt-controller", "master", &entryP) == kSuccess) {
 		kprintf("pe_arm_map_interrupt_controller: found interrupt-controller\n");
-		DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
+		SecureDTGetProperty(entryP, "reg", (void const **)&reg_prop, &prop_size);
 		gPicBase = ml_io_map(soc_phys + *reg_prop, *(reg_prop + 1));
 		kprintf("pe_arm_map_interrupt_controller: gPicBase: 0x%lx\n", (unsigned long)gPicBase);
 	}
@@ -640,9 +566,9 @@ pe_arm_map_interrupt_controller(void)
 		return 0;
 	}
 
-	if (DTFindEntry("device_type", "timer", &entryP) == kSuccess) {
+	if (SecureDTFindEntry("device_type", "timer", &entryP) == kSuccess) {
 		kprintf("pe_arm_map_interrupt_controller: found timer\n");
-		DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
+		SecureDTGetProperty(entryP, "reg", (void const **)&reg_prop, &prop_size);
 		gTimerBase = ml_io_map(soc_phys + *reg_prop, *(reg_prop + 1));
 		kprintf("pe_arm_map_interrupt_controller: gTimerBase: 0x%lx\n", (unsigned long)gTimerBase);
 	}
@@ -678,6 +604,7 @@ pe_arm_init_timer(void *args)
 	vm_offset_t     eoi_addr = 0;
 	uint32_t        eoi_value = 0;
 	struct tbd_ops  generic_funcs = {&fleh_fiq_generic, NULL, NULL};
+	struct tbd_ops  empty_funcs __unused = {NULL, NULL, NULL};
 	tbd_ops_t       tbd_funcs = &generic_funcs;
 
 	/* The SoC headers expect to use pic_base, timer_base, etc... */
@@ -685,35 +612,6 @@ pe_arm_init_timer(void *args)
 	timer_base = gTimerBase;
 	soc_phys = gSocPhys;
 
-#if defined(ARM_BOARD_CLASS_T7000)
-	if (!strcmp(gPESoCDeviceType, "t7000-io") ||
-	    !strcmp(gPESoCDeviceType, "t7001-io")) {
-		tbd_funcs = &t7000_funcs;
-	} else
-#endif
-#if defined(ARM_BOARD_CLASS_S7002)
-	if (!strcmp(gPESoCDeviceType, "s7002-io")) {
-#ifdef ARM_BOARD_WFE_TIMEOUT_NS
-		// Enable the WFE Timer
-		rPMGR_EVENT_TMR_PERIOD = ((uint64_t)(ARM_BOARD_WFE_TIMEOUT_NS) *gPEClockFrequencyInfo.timebase_frequency_hz) / NSEC_PER_SEC;
-		rPMGR_EVENT_TMR = rPMGR_EVENT_TMR_PERIOD;
-		rPMGR_EVENT_TMR_CTL = PMGR_EVENT_TMR_CTL_EN;
-#endif /* ARM_BOARD_WFE_TIMEOUT_NS */
-
-		rPMGR_INTERVAL_TMR = 0x7FFFFFFF;
-		rPMGR_INTERVAL_TMR_CTL = PMGR_INTERVAL_TMR_CTL_EN | PMGR_INTERVAL_TMR_CTL_CLR_INT;
-
-		eoi_addr = timer_base;
-		eoi_value = PMGR_INTERVAL_TMR_CTL_EN | PMGR_INTERVAL_TMR_CTL_CLR_INT;
-		tbd_funcs = &s7002_funcs;
-	} else
-#endif
-#if defined(ARM_BOARD_CLASS_S8000)
-	if (!strcmp(gPESoCDeviceType, "s8000-io") ||
-	    !strcmp(gPESoCDeviceType, "s8001-io")) {
-		tbd_funcs = &s8000_funcs;
-	} else
-#endif
 #if defined(ARM_BOARD_CLASS_T8002)
 	if (!strcmp(gPESoCDeviceType, "t8002-io") ||
 	    !strcmp(gPESoCDeviceType, "t8004-io")) {
@@ -733,52 +631,11 @@ pe_arm_init_timer(void *args)
 		tbd_funcs = &t8002_funcs;
 	} else
 #endif
-#if defined(ARM_BOARD_CLASS_T8010)
-	if (!strcmp(gPESoCDeviceType, "t8010-io")) {
-		tbd_funcs = &t8010_funcs;
-	} else
-#endif
-#if defined(ARM_BOARD_CLASS_T8011)
-	if (!strcmp(gPESoCDeviceType, "t8011-io")) {
-		tbd_funcs = &t8011_funcs;
-	} else
-#endif
-#if defined(ARM_BOARD_CLASS_T8015)
-	if (!strcmp(gPESoCDeviceType, "t8015-io")) {
-		tbd_funcs = &t8015_funcs;
-	} else
-#endif
-#if defined(ARM_BOARD_CLASS_T8020)
-	if (!strcmp(gPESoCDeviceType, "t8020-io")) {
-		tbd_funcs = &t8020_funcs;
-	} else
-#endif
-#if defined(ARM_BOARD_CLASS_T8006)
-	if (!strcmp(gPESoCDeviceType, "t8006-io")) {
-		tbd_funcs = &t8006_funcs;
-	} else
-#endif
-#if defined(ARM_BOARD_CLASS_T8027)
-	if (!strcmp(gPESoCDeviceType, "t8027-io")) {
-		tbd_funcs = &t8027_funcs;
-	} else
-#endif
-#if defined(ARM_BOARD_CLASS_T8028)
-	if (!strcmp(gPESoCDeviceType, "t8028-io")) {
-		tbd_funcs = &t8028_funcs;
-	} else
-#endif
-#if defined(ARM_BOARD_CLASS_T8030)
-	if (!strcmp(gPESoCDeviceType, "t8030-io")) {
-		tbd_funcs = &t8030_funcs;
-	} else
-#endif
-#if defined(ARM_BOARD_CLASS_BCM2837)
-	if (!strcmp(gPESoCDeviceType, "bcm2837-io")) {
-		tbd_funcs = &bcm2837_funcs;
-	} else
-#endif
+#if defined(__arm64__)
+	tbd_funcs = &empty_funcs;
+#else
 	return 0;
+#endif
 
 	if (args != NULL) {
 		ml_init_timebase(args, tbd_funcs, eoi_addr, eoi_value);

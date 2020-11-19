@@ -135,9 +135,6 @@ struct bpf_d {
 	int             bd_seesent;     /* true if bpf should see sent packets */
 	int             bd_oflags;      /* device open flags */
 	thread_call_t   bd_thread_call; /* for BPF timeouts with select */
-#if CONFIG_MACF_NET
-	struct label *  bd_label;       /* MAC label for descriptor */
-#endif
 	int             bd_traffic_class; /* traffic service class */
 	int             bd_flags;       /* flags */
 

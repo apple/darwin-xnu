@@ -9,12 +9,6 @@
 #include <darwintest.h>
 #include <darwintest_utils.h>
 
-#if CONFIG_EMBEDDED
-#include <sys/types.h>
-#include <pwd.h>
-#include <uuid/uuid.h>
-#endif
-
 /*
  * This test expects the entitlement or root privileges for a process to
  * set the time using settimeofday syscall.

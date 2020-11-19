@@ -127,6 +127,12 @@ extern kern_return_t vm_compressor_relocate(void **current_chead, int *src_slot_
 extern void vm_compressor_finished_filling(void **current_chead);
 #endif /* CONFIG_FREEZE */
 
+#if DEVELOPMENT || DEBUG
+extern kern_return_t vm_compressor_pager_inject_error(memory_object_t pager,
+    memory_object_offset_t offset);
+extern void vm_compressor_inject_error(int *slot);
+#endif /* DEVELOPMENT || DEBUG */
+
 #endif  /* _VM_VM_COMPRESSOR_PAGER_H_ */
 
 #endif  /* XNU_KERNEL_PRIVATE */

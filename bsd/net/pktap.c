@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -242,15 +242,15 @@ pktap_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	pktap->pktp_filters[0].filter_param = PKTAP_FILTER_PARAM_IF_TYPE;
 	pktap->pktp_filters[0].filter_param_if_type = IFT_ETHER;
 
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 	pktap->pktp_filters[1].filter_op = PKTAP_FILTER_OP_PASS;
 	pktap->pktp_filters[1].filter_param = PKTAP_FILTER_PARAM_IF_TYPE;
 	pktap->pktp_filters[1].filter_param_if_type = IFT_CELLULAR;
-#else /* CONFIG_EMBEDDED */
+#else /* XNU_TARGET_OS_OSX */
 	pktap->pktp_filters[1].filter_op = PKTAP_FILTER_OP_PASS;
 	pktap->pktp_filters[1].filter_param = PKTAP_FILTER_PARAM_IF_TYPE;
 	pktap->pktp_filters[1].filter_param_if_type = IFT_IEEE1394;
-#endif /* CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 
 	pktap->pktp_filters[2].filter_op = PKTAP_FILTER_OP_PASS;
 	pktap->pktp_filters[2].filter_param = PKTAP_FILTER_PARAM_IF_TYPE;
@@ -447,7 +447,7 @@ pktap_getdrvspec(ifnet_t ifp, struct ifdrv64 *ifd)
 				    sizeof(x_filter->filter_param_if_name));
 			}
 		}
-		error = copyout(x_filters, ifd->ifd_data,
+		error = copyout(x_filters, CAST_USER_ADDR_T(ifd->ifd_data),
 		    PKTAP_MAX_FILTERS * sizeof(struct x_pktap_filter));
 		if (error) {
 			printf("%s: PKTP_CMD_FILTER_GET copyout - error %d\n", __func__, error);
@@ -464,7 +464,7 @@ pktap_getdrvspec(ifnet_t ifp, struct ifdrv64 *ifd)
 			error = EINVAL;
 			break;
 		}
-		error = copyout(&tap_count, ifd->ifd_data, sizeof(tap_count));
+		error = copyout(&tap_count, CAST_USER_ADDR_T(ifd->ifd_data), sizeof(tap_count));
 		if (error) {
 			printf("%s: PKTP_CMD_TAP_COUNT copyout - error %d\n", __func__, error);
 			goto done;
@@ -507,7 +507,7 @@ pktap_setdrvspec(ifnet_t ifp, struct ifdrv64 *ifd)
 			error = EINVAL;
 			break;
 		}
-		error = copyin(ifd->ifd_data, &user_filters, ifd->ifd_len);
+		error = copyin(CAST_USER_ADDR_T(ifd->ifd_data), &user_filters, (size_t)ifd->ifd_len);
 		if (error) {
 			printf("%s: copyin - error %d\n", __func__, error);
 			goto done;
@@ -1311,7 +1311,8 @@ pktap_input(struct ifnet *ifp, protocol_family_t proto, struct mbuf *m,
 	char *start;
 
 	/* Fast path */
-	if (pktap_total_tap_count == 0) {
+	if (pktap_total_tap_count == 0 ||
+	    (m->m_pkthdr.pkt_flags & PKTF_SKIP_PKTAP) != 0) {
 		return;
 	}
 
@@ -1320,7 +1321,7 @@ pktap_input(struct ifnet *ifp, protocol_family_t proto, struct mbuf *m,
 	/* Make sure the frame header is fully contained in the  mbuf */
 	if (frame_header != NULL && frame_header >= start && frame_header <= hdr) {
 		size_t o_len = m->m_len;
-		u_int32_t pre = hdr - frame_header;
+		u_int32_t pre = (u_int32_t)(hdr - frame_header);
 
 		if (mbuf_setdata(m, frame_header, o_len + pre) == 0) {
 			PKTAP_LOG(PKTP_LOG_INPUT, "ifp %s proto %u pre %u post %u\n",
@@ -1342,7 +1343,8 @@ pktap_output(struct ifnet *ifp, protocol_family_t proto, struct mbuf *m,
     u_int32_t pre, u_int32_t post)
 {
 	/* Fast path */
-	if (pktap_total_tap_count == 0) {
+	if (pktap_total_tap_count == 0 ||
+	    (m->m_pkthdr.pkt_flags & PKTF_SKIP_PKTAP) != 0) {
 		return;
 	}
 

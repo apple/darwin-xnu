@@ -35,7 +35,11 @@
 
 #include <libkern/OSByteOrder.h>
 #include <libkern/c++/OSArray.h>
+#include <libkern/c++/OSAllocation.h>
 #include <libkern/c++/OSBoolean.h>
+#include <libkern/c++/OSBoundedArray.h>
+#include <libkern/c++/OSBoundedArrayRef.h>
+#include <libkern/c++/OSBoundedPtr.h>
 #include <libkern/c++/OSCollection.h>
 #include <libkern/c++/OSCollectionIterator.h>
 #include <libkern/c++/OSContainers.h>
@@ -52,6 +56,7 @@
 #include <libkern/c++/OSOrderedSet.h>
 #include <libkern/c++/OSSerialize.h>
 #include <libkern/c++/OSSet.h>
+#include <libkern/c++/OSSharedPtr.h>
 #include <libkern/c++/OSString.h>
 #include <libkern/c++/OSSymbol.h>
 #include <libkern/c++/OSUnserialize.h>
@@ -74,7 +79,6 @@
 #include <libkern/OSDebug.h>
 #include <libkern/OSKextLib.h>
 #include <libkern/OSKextLibPrivate.h>
-#include <libkern/OSMalloc.h>
 #include <libkern/OSReturn.h>
 #include <libkern/OSSerializeBinary.h>
 #include <libkern/OSTypes.h>
@@ -185,8 +189,16 @@
 #include <IOKit/IOInterruptEventSource.h>
 #include <IOKit/IOCommandGate.h>
 #include <IOKit/IOPlatformExpert.h>
+#include <IOKit/IOSharedDataQueue.h>
+#include <IOKit/IODataQueueShared.h>
 #include <libkern/Block.h>
 #include <libkern/Block_private.h>
+#include <libkern/c++/OSAllocation.h>
+#include <libkern/c++/OSBoundedArray.h>
+#include <libkern/c++/OSBoundedArrayRef.h>
+#include <libkern/c++/OSBoundedPtr.h>
+#include <libkern/c++/OSSharedPtr.h>
+#include <os/cpp_util.h>
 
 static uint64_t gIOWorkLoopTestDeadline;
 
@@ -298,6 +310,139 @@ OSCollectionTest(int newValue)
 	return 0;
 }
 
+static int
+OSAllocationTests(int)
+{
+	OSAllocation<int> ints(100, OSAllocateMemory);
+	assert(ints);
+
+	{
+		int counter = 0;
+		for (int& i : ints) {
+			i = counter++;
+		}
+	}
+
+	{
+		int counter = 0;
+		for (int& i : ints) {
+			assert(i == counter);
+			++counter;
+		}
+	}
+
+	// Make sure we can have two-level OSAllocations
+	{
+		OSAllocation<OSAllocation<int> > testArray(10, OSAllocateMemory);
+		for (int i = 0; i < 10; i++) {
+			testArray[i] = OSAllocation<int>(10, OSAllocateMemory);
+			for (int j = 0; j < 10; ++j) {
+				testArray[i][j] = i + j;
+			}
+		}
+
+		for (int i = 0; i < 10; i++) {
+			for (int j = 0; j < 10; ++j) {
+				assert(testArray[i][j] == i + j);
+			}
+		}
+	}
+
+	return 0;
+}
+
+static int
+OSBoundedArrayTests(int)
+{
+	OSBoundedArray<int, 5> ints = {0, 1, 2, 3, 4};
+	assert(ints.size() == 5);
+
+	{
+		int counter = 0;
+		for (int& i : ints) {
+			i = counter++;
+		}
+	}
+
+	{
+		int counter = 0;
+		for (int& i : ints) {
+			assert(i == counter);
+			++counter;
+		}
+	}
+
+	return 0;
+}
+
+static int
+OSBoundedArrayRefTests(int)
+{
+	OSBoundedArray<int, 5> storage = {0, 1, 2, 3, 4};
+	OSBoundedArrayRef<int> ints(storage);
+	assert(ints);
+
+	{
+		int counter = 0;
+		for (int& i : ints) {
+			i = counter++;
+		}
+	}
+
+	{
+		int counter = 0;
+		for (int& i : ints) {
+			assert(i == counter);
+			++counter;
+		}
+	}
+
+	return 0;
+}
+
+static int
+OSBoundedPtrTests(int)
+{
+	int array[5] = {55, 66, 77, 88, 99};
+	OSBoundedPtr<int> begin(&array[0], &array[0], &array[5]);
+	OSBoundedPtr<int> end(&array[5], &array[0], &array[5]);
+
+	{
+		int counter = 0;
+		for (OSBoundedPtr<int> b = begin; b != end; ++b) {
+			*b = counter++;
+		}
+	}
+
+	{
+		int counter = 0;
+		for (OSBoundedPtr<int> b = begin; b != end; ++b) {
+			assert(*b == counter);
+			++counter;
+		}
+	}
+
+	return 0;
+}
+
+static int
+IOSharedDataQueue_44636964(__unused int newValue)
+{
+	IOSharedDataQueue* sd = IOSharedDataQueue::withCapacity(DATA_QUEUE_ENTRY_HEADER_SIZE + sizeof(UInt64));
+	UInt64 data = 0x11223344aa55aa55;
+	UInt32 data2 = 0x44332211;
+	UInt32 size = sizeof(UInt32);
+	/* enqueue moves tail to end */
+	sd->enqueue(&data, sizeof(UInt64));
+	/* dequeue moves head to end */
+	sd->dequeue(&data, &size);
+	/* Tail wraps around, head is still at end */
+	sd->enqueue(&data2, sizeof(UInt32));
+	/* something in the queue so peek() should return non-null */
+	assert(sd->peek() != NULL);
+	return KERN_SUCCESS;
+}
+
 #if 0
 #include <IOKit/IOUserClient.h>
 class TestUserClient : public IOUserClient
@@ -383,8 +528,125 @@ IOServiceTest(int newValue)
 	return 0;
 }
 
+static void
+OSStaticPtrCastTests()
+{
+	// const& overload
+	{
+		OSSharedPtr<OSDictionary> const dict = OSMakeShared<OSDictionary>();
+		OSSharedPtr<OSCollection> collection = OSStaticPtrCast<OSCollection>(dict);
+		assert(collection == dict);
+	}
+	{
+		OSSharedPtr<OSDictionary> const dict = nullptr;
+		OSSharedPtr<OSCollection> collection = OSStaticPtrCast<OSCollection>(dict);
+		assert(collection == nullptr);
+	}
+	// && overload
+	{
+		OSSharedPtr<OSDictionary> dict = OSMakeShared<OSDictionary>();
+		OSDictionary* oldDict = dict.get();
+		OSSharedPtr<OSCollection> collection = OSStaticPtrCast<OSCollection>(os::move(dict));
+		assert(collection.get() == oldDict);
+		assert(dict == nullptr);
+	}
+	{
+		OSSharedPtr<OSDictionary> dict = nullptr;
+		OSSharedPtr<OSCollection> collection = OSStaticPtrCast<OSCollection>(os::move(dict));
+		assert(collection == nullptr);
+		assert(dict == nullptr);
+	}
+}
+
+static void
+OSConstPtrCastTests()
+{
+	// const& overload
+	{
+		OSSharedPtr<OSDictionary const> const dict = OSMakeShared<OSDictionary>();
+		OSSharedPtr<OSDictionary> dict2 = OSConstPtrCast<OSDictionary>(dict);
+		assert(dict2 == dict);
+	}
+	{
+		OSSharedPtr<OSDictionary const> const dict = OSMakeShared<OSDictionary>();
+		OSSharedPtr<OSDictionary const> dict2 = OSConstPtrCast<OSDictionary const>(dict);
+		assert(dict2 == dict);
+	}
+	{
+		OSSharedPtr<OSDictionary const> const dict = nullptr;
+		OSSharedPtr<OSDictionary> dict2 = OSConstPtrCast<OSDictionary>(dict);
+		assert(dict2 == nullptr);
+	}
+	{
+		OSSharedPtr<OSDictionary const> const dict = nullptr;
+		OSSharedPtr<OSDictionary const> dict2 = OSConstPtrCast<OSDictionary const>(dict);
+		assert(dict2 == nullptr);
+	}
+
+	// && overload
+	{
+		OSSharedPtr<OSDictionary const> dict = OSMakeShared<OSDictionary>();
+		OSDictionary const* oldDict = dict.get();
+		OSSharedPtr<OSDictionary> dict2 = OSConstPtrCast<OSDictionary>(os::move(dict));
+		assert(dict == nullptr);
+		assert(dict2 == oldDict);
+	}
+	{
+		OSSharedPtr<OSDictionary const> dict = nullptr;
+		OSSharedPtr<OSDictionary> dict2 = OSConstPtrCast<OSDictionary>(os::move(dict));
+		assert(dict == nullptr);
+		assert(dict2 == nullptr);
+	}
+}
+
+static void
+OSDynamicPtrCastTests()
+{
+	OSSharedPtr<OSDictionary> const dict = OSMakeShared<OSDictionary>();
+	{
+		OSSharedPtr<OSCollection> collection = OSDynamicPtrCast<OSCollection>(dict);
+		assert(collection != nullptr);
+	}
+	{
+		OSSharedPtr<OSArray> array = OSDynamicPtrCast<OSArray>(dict);
+		assert(array == nullptr);
+		assert(dict != nullptr);
+	}
+	{
+		OSTaggedSharedPtr<OSCollection, OSCollection> taggedDict(dict.get(), OSRetain);
+		OSTaggedSharedPtr<OSCollection, OSCollection> collection = OSDynamicPtrCast<OSCollection>(taggedDict);
+		assert(collection != nullptr);
+	}
+	{
+		OSTaggedSharedPtr<OSCollection, OSCollection> taggedDict(dict.get(), OSRetain);
+		OSTaggedSharedPtr<OSArray, OSCollection> array = OSDynamicPtrCast<OSArray>(taggedDict);
+		assert(array == nullptr);
+		assert(dict != nullptr);
+	}
+	{
+		OSSharedPtr<OSCollection> collection = OSDynamicPtrCast<OSCollection>(dict);
+		assert(collection.get() == OSDynamicCast(OSDictionary, dict.get()));
+		OSSharedPtr<OSDictionary> newDict = OSDynamicPtrCast<OSDictionary>(os::move(collection));
+		assert(collection == nullptr);
+		assert(newDict != nullptr);
+		assert(newDict.get() == dict.get());
+	}
+}
+
+static int
+OSSharedPtrTests(int)
+{
+	OSDynamicPtrCastTests();
+	OSConstPtrCastTests();
+	OSStaticPtrCastTests();
+	return 0;
+}
+
 #endif  /* DEVELOPMENT || DEBUG */
 
+#ifndef __clang_analyzer__
+// All the scary things that this function is doing, such as the intentional
+// overrelease of an OSData, are hidden from the static analyzer.
 static int
 sysctl_iokittest(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused int arg2, struct sysctl_req *req)
 {
@@ -455,7 +717,19 @@ sysctl_iokittest(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused
 		assert(KERN_SUCCESS == error);
 		error = OSCollectionTest(newValue);
 		assert(KERN_SUCCESS == error);
+		error = OSAllocationTests(newValue);
+		assert(KERN_SUCCESS == error);
+		error = OSBoundedArrayTests(newValue);
+		assert(KERN_SUCCESS == error);
+		error = OSBoundedArrayRefTests(newValue);
+		assert(KERN_SUCCESS == error);
+		error = OSBoundedPtrTests(newValue);
+		assert(KERN_SUCCESS == error);
 		error = IOMemoryDescriptorTest(newValue);
+		assert(KERN_SUCCESS == error);
+		error = OSSharedPtrTests(newValue);
+		assert(KERN_SUCCESS == error);
+		error = IOSharedDataQueue_44636964(newValue);
 		assert(KERN_SUCCESS == error);
 	}
 #endif  /* DEVELOPMENT || DEBUG */
@@ -466,3 +740,4 @@ sysctl_iokittest(__unused struct sysctl_oid *oidp, __unused void *arg1, __unused
 SYSCTL_PROC(_kern, OID_AUTO, iokittest,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
     NULL, 0, sysctl_iokittest, "I", "");
+#endif // __clang_analyzer__

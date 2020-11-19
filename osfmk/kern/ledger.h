@@ -139,8 +139,6 @@ typedef struct ledger_template *ledger_template_t;
 
 typedef void (*ledger_callback_t)(int warning, const void * param0, const void *param1);
 
-extern void ledger_init(void);
-
 extern ledger_template_t ledger_template_create(const char *name);
 extern ledger_template_t ledger_template_copy(ledger_template_t template, const char *name);
 extern void ledger_template_dereference(ledger_template_t template);

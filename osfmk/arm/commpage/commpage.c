@@ -54,6 +54,7 @@
 #include <stdatomic.h>
 #include <kern/remote_time.h>
 #include <machine/machine_remote_time.h>
+#include <machine/machine_routines.h>
 
 #include <sys/kdebug.h>
 
@@ -61,32 +62,46 @@
 #include <atm/atm_internal.h>
 #endif
 
-static void commpage_init_cpu_capabilities( void );
 static int commpage_cpus( void );
+
+
+static void commpage_init_cpu_capabilities( void );
 
 SECURITY_READ_ONLY_LATE(vm_address_t)   commPagePtr = 0;
 SECURITY_READ_ONLY_LATE(vm_address_t)   sharedpage_rw_addr = 0;
-SECURITY_READ_ONLY_LATE(uint32_t)       _cpu_capabilities = 0;
+SECURITY_READ_ONLY_LATE(uint64_t)       _cpu_capabilities = 0;
+SECURITY_READ_ONLY_LATE(vm_address_t)   sharedpage_rw_text_addr = 0;
+
+extern user64_addr_t commpage_text64_location;
+extern user32_addr_t commpage_text32_location;
 
 /* For sysctl access from BSD side */
 extern int      gARMv81Atomics;
 extern int      gARMv8Crc32;
 extern int      gARMv82FHM;
+extern int      gARMv82SHA512;
+extern int      gARMv82SHA3;
 
 void
-commpage_populate(
-	void)
+commpage_populate(void)
 {
 	uint16_t        c2;
 	int cpufamily;
 
-	sharedpage_rw_addr = pmap_create_sharedpage();
-	commPagePtr = (vm_address_t)_COMM_PAGE_BASE_ADDRESS;
+	// Create the data and the text commpage
+	vm_map_address_t kernel_data_addr, kernel_text_addr, user_text_addr;
+	pmap_create_sharedpages(&kernel_data_addr, &kernel_text_addr, &user_text_addr);
+
+	sharedpage_rw_addr = kernel_data_addr;
+	sharedpage_rw_text_addr = kernel_text_addr;
+	commPagePtr = (vm_address_t) _COMM_PAGE_BASE_ADDRESS;
 
 #if __arm64__
+	commpage_text64_location = user_text_addr;
 	bcopy(_COMM_PAGE64_SIGNATURE_STRING, (void *)(_COMM_PAGE_SIGNATURE + _COMM_PAGE_RW_OFFSET),
 	    MIN(_COMM_PAGE_SIGNATURELEN, strlen(_COMM_PAGE64_SIGNATURE_STRING)));
 #else
+	commpage_text32_location = user_text_addr;
 	bcopy(_COMM_PAGE32_SIGNATURE_STRING, (void *)(_COMM_PAGE_SIGNATURE + _COMM_PAGE_RW_OFFSET),
 	    MIN(_COMM_PAGE_SIGNATURELEN, strlen(_COMM_PAGE32_SIGNATURE_STRING)));
 #endif
@@ -107,19 +122,17 @@ commpage_populate(
 	}
 
 	*((uint16_t*)(_COMM_PAGE_CACHE_LINESIZE + _COMM_PAGE_RW_OFFSET)) = c2;
-	*((uint32_t*)(_COMM_PAGE_SPIN_COUNT + _COMM_PAGE_RW_OFFSET)) = 1;
 
 	commpage_update_active_cpus();
 	cpufamily = cpuid_get_cpufamily();
 
-	/* machine_info valid after ml_get_max_cpus() */
 	*((uint8_t*)(_COMM_PAGE_PHYSICAL_CPUS + _COMM_PAGE_RW_OFFSET)) = (uint8_t) machine_info.physical_cpu_max;
 	*((uint8_t*)(_COMM_PAGE_LOGICAL_CPUS + _COMM_PAGE_RW_OFFSET)) = (uint8_t) machine_info.logical_cpu_max;
 	*((uint64_t*)(_COMM_PAGE_MEMORY_SIZE + _COMM_PAGE_RW_OFFSET)) = machine_info.max_mem;
 	*((uint32_t*)(_COMM_PAGE_CPUFAMILY + _COMM_PAGE_RW_OFFSET)) = (uint32_t)cpufamily;
 	*((uint32_t*)(_COMM_PAGE_DEV_FIRM + _COMM_PAGE_RW_OFFSET)) = (uint32_t)PE_i_can_has_debugger(NULL);
 	*((uint8_t*)(_COMM_PAGE_USER_TIMEBASE + _COMM_PAGE_RW_OFFSET)) = user_timebase_type();
-	*((uint8_t*)(_COMM_PAGE_CONT_HWCLOCK + _COMM_PAGE_RW_OFFSET)) = user_cont_hwclock_allowed();
+	*((uint8_t*)(_COMM_PAGE_CONT_HWCLOCK + _COMM_PAGE_RW_OFFSET)) = (uint8_t)user_cont_hwclock_allowed();
 	*((uint8_t*)(_COMM_PAGE_KERNEL_PAGE_SHIFT + _COMM_PAGE_RW_OFFSET)) = (uint8_t) page_shift;
 
 #if __arm64__
@@ -163,11 +176,70 @@ commpage_populate(
 	*((uint64_t*)(_COMM_PAGE_REMOTETIME_PARAMS + _COMM_PAGE_RW_OFFSET)) = BT_RESET_SENTINEL_TS;
 }
 
-struct mu {
-	uint64_t m;                             // magic number
-	int32_t a;                              // add indicator
-	int32_t s;                              // shift amount
-};
+#define COMMPAGE_TEXT_SEGMENT "__TEXT_EXEC"
+#define COMMPAGE_TEXT_SECTION "__commpage_text"
+
+/* Get a pointer to the start of the ARM PFZ code section. This macro tell the
+ * linker that the storage for the variable here is at the start of the section */
+extern char commpage_text_start[]
+__SECTION_START_SYM(COMMPAGE_TEXT_SEGMENT, COMMPAGE_TEXT_SECTION);
+
+/* Get a pointer to the end of the ARM PFZ code section. This macro tell the
+ * linker that the storage for the variable here is at the end of the section */
+extern char commpage_text_end[]
+__SECTION_END_SYM(COMMPAGE_TEXT_SEGMENT, COMMPAGE_TEXT_SECTION);
+
+/* This is defined in the commpage text section as a symbol at the start of the preemptible
+ * functions */
+extern char commpage_text_preemptible_functions;
+
+#if CONFIG_ARM_PFZ
+static size_t size_of_pfz = 0;
+#endif
+
+/* This is the opcode for brk #666 */
+#define BRK_666_OPCODE 0xD4205340
+
+void
+commpage_text_populate(void)
+{
+#if CONFIG_ARM_PFZ
+	size_t size_of_commpage_text = commpage_text_end - commpage_text_start;
+	if (size_of_commpage_text == 0) {
+		panic("ARM comm page text section %s,%s missing", COMMPAGE_TEXT_SEGMENT, COMMPAGE_TEXT_SECTION);
+	}
+	assert(size_of_commpage_text <= PAGE_SIZE);
+	assert(size_of_commpage_text > 0);
+
+	/* Get the size of the PFZ half of the comm page text section. */
+	size_of_pfz = &commpage_text_preemptible_functions - commpage_text_start;
+
+	// Copy the code segment of comm page text section into the PFZ
+	memcpy((void *) _COMM_PAGE64_TEXT_START_ADDRESS, (void *) commpage_text_start, size_of_commpage_text);
+
+	// Make sure to populate the rest of it with brk 666 so that undefined code
+	// doesn't get  run
+	memset((char *) _COMM_PAGE64_TEXT_START_ADDRESS + size_of_commpage_text, BRK_666_OPCODE,
+	    PAGE_SIZE - size_of_commpage_text);
+#endif
+}
+
+uint32_t
+commpage_is_in_pfz64(addr64_t addr64)
+{
+#if CONFIG_ARM_PFZ
+	if ((addr64 >= commpage_text64_location) &&
+	    (addr64 < (commpage_text64_location + size_of_pfz))) {
+		return 1;
+	} else {
+		return 0;
+	}
+#else
+#pragma unused (addr64)
+	return 0;
+#endif
+}
+
 
 void
 commpage_set_timestamp(
@@ -199,6 +271,7 @@ commpage_set_timestamp(
 	__asm__ volatile ("dmb ish");
 #endif
 	commpage_timeofday_datap->TimeStamp_tick = tbr;
+
 }
 
 /*
@@ -216,24 +289,6 @@ commpage_set_memory_pressure(
 }
 
 /*
- * Update _COMM_PAGE_SPIN_COUNT.  We might want to reduce when running on a battery, etc.
- */
-
-void
-commpage_set_spin_count(
-	unsigned int    count )
-{
-	if (count == 0) {   /* we test for 0 after decrement, not before */
-		count = 1;
-	}
-
-	if (commPagePtr == 0) {
-		return;
-	}
-	*((uint32_t *)(_COMM_PAGE_SPIN_COUNT + _COMM_PAGE_RW_OFFSET)) = count;
-}
-
-/*
  * Determine number of CPUs on this system.
  */
 static int
@@ -241,7 +296,7 @@ commpage_cpus( void )
 {
 	int cpus;
 
-	cpus = ml_get_max_cpus();       // NB: this call can block
+	cpus = machine_info.max_cpus;
 
 	if (cpus == 0) {
 		panic("commpage cpus==0");
@@ -253,7 +308,7 @@ commpage_cpus( void )
 	return cpus;
 }
 
-int
+uint64_t
 _get_cpu_capabilities(void)
 {
 	return _cpu_capabilities;
@@ -265,13 +320,19 @@ _get_commpage_priv_address(void)
 	return sharedpage_rw_addr;
 }
 
+vm_address_t
+_get_commpage_text_priv_address(void)
+{
+	return sharedpage_rw_text_addr;
+}
+
 /*
  * Initialize _cpu_capabilities vector
  */
 static void
 commpage_init_cpu_capabilities( void )
 {
-	uint32_t bits;
+	uint64_t bits;
 	int cpus;
 	ml_cpu_info_t cpu_info;
 
@@ -318,13 +379,7 @@ commpage_init_cpu_capabilities( void )
 	bits |= kHasFMA;
 #endif
 #if     __ARM_ENABLE_WFE_
-#ifdef __arm64__
-	if (arm64_wfe_allowed()) {
-		bits |= kHasEvent;
-	}
-#else
 	bits |= kHasEvent;
-#endif
 #endif
 #if __ARM_V8_CRYPTO_EXTENSIONS__
 	bits |= kHasARMv8Crypto;
@@ -343,6 +398,16 @@ commpage_init_cpu_capabilities( void )
 		bits |= kHasARMv82FHM;
 		gARMv82FHM = 1;
 	}
+
+	if ((isar0 & ID_AA64ISAR0_EL1_SHA2_MASK) > ID_AA64ISAR0_EL1_SHA2_EN) {
+		bits |= kHasARMv82SHA512;
+		gARMv82SHA512 = 1;
+	}
+	if ((isar0 & ID_AA64ISAR0_EL1_SHA3_MASK) >= ID_AA64ISAR0_EL1_SHA3_EN) {
+		bits |= kHasARMv82SHA3;
+		gARMv82SHA3 = 1;
+	}
+
 #endif
 
 
@@ -350,7 +415,8 @@ commpage_init_cpu_capabilities( void )
 
 	_cpu_capabilities = bits;
 
-	*((uint32_t *)(_COMM_PAGE_CPU_CAPABILITIES + _COMM_PAGE_RW_OFFSET)) = _cpu_capabilities;
+	*((uint32_t *)(_COMM_PAGE_CPU_CAPABILITIES + _COMM_PAGE_RW_OFFSET)) = (uint32_t)_cpu_capabilities;
+	*((uint64_t *)(_COMM_PAGE_CPU_CAPABILITIES64 + _COMM_PAGE_RW_OFFSET)) = _cpu_capabilities;
 }
 
 /*
@@ -362,7 +428,8 @@ commpage_update_active_cpus(void)
 	if (!commPagePtr) {
 		return;
 	}
-	*((uint8_t *)(_COMM_PAGE_ACTIVE_CPUS + _COMM_PAGE_RW_OFFSET)) = processor_avail_count;
+	*((uint8_t *)(_COMM_PAGE_ACTIVE_CPUS + _COMM_PAGE_RW_OFFSET)) = (uint8_t)processor_avail_count;
+
 }
 
 /*
@@ -461,6 +528,12 @@ commpage_update_mach_continuous_time(uint64_t sleeptime)
 		} while (!OSCompareAndSwap64(old, sleeptime, c_time_base));
 #endif /* __arm64__ */
 	}
+}
+
+void
+commpage_update_mach_continuous_time_hw_offset(uint64_t offset)
+{
+	*((uint64_t *)(_COMM_PAGE_CONT_HW_TIMEBASE + _COMM_PAGE_RW_OFFSET)) = offset;
 }
 
 /*
@@ -564,5 +637,6 @@ commpage_update_dof(boolean_t enabled)
 void
 commpage_update_dyld_flags(uint64_t value)
 {
-	*((uint64_t*)(_COMM_PAGE_DYLD_SYSTEM_FLAGS + _COMM_PAGE_RW_OFFSET)) = value;
+	*((uint64_t*)(_COMM_PAGE_DYLD_FLAGS + _COMM_PAGE_RW_OFFSET)) = value;
+
 }

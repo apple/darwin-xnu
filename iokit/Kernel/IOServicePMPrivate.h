@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2019-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -31,6 +31,8 @@
 
 #include <IOKit/IOCommand.h>
 #include <IOKit/IOEventSource.h>
+
+#define USE_SETTLE_TIMER    0
 
 //******************************************************************************
 // PM command types
@@ -79,27 +81,27 @@ typedef void
 	void *                  target,
 	IOService *             service,
 	IOPMActions *           actions,
+	const IOPMRequest *     request,
 	IOPMPowerStateIndex     powerState,
-	IOPMPowerChangeFlags *  changeFlags,
-	IOPMRequestTag          requestTag );
+	IOPMPowerChangeFlags *  changeFlagsPtr );
 
 typedef void
 (*IOPMActionPowerChangeDone)(
 	void *                  target,
 	IOService *             service,
 	IOPMActions *           actions,
+	const IOPMRequest *     request,
 	IOPMPowerStateIndex     powerState,
-	IOPMPowerChangeFlags    changeFlags,
-	IOPMRequestTag          requestTag );
+	IOPMPowerChangeFlags    changeFlags );
 
 typedef void
 (*IOPMActionPowerChangeOverride)(
 	void *                  target,
 	IOService *             service,
 	IOPMActions *           actions,
-	IOPMPowerStateIndex *   powerState,
-	IOPMPowerChangeFlags *  changeFlags,
-	IOPMRequestTag          requestTag );
+	const IOPMRequest *     request,
+	IOPMPowerStateIndex *   powerStatePtr,
+	IOPMPowerChangeFlags *  changeFlagsPtr );
 
 typedef void
 (*IOPMActionActivityTickle)(
@@ -114,26 +116,32 @@ typedef void
 	IOPMActions *           actions,
 	const OSSymbol *        powerClient,
 	IOPMPowerStateIndex     oldPowerState,
-	IOPMPowerStateIndex     newPowerState
-	);
+	IOPMPowerStateIndex     newPowerState );
 
 struct IOPMActions {
 	void *                          target;
-	uint32_t                        parameter;
 	IOPMActionPowerChangeStart      actionPowerChangeStart;
 	IOPMActionPowerChangeDone       actionPowerChangeDone;
 	IOPMActionPowerChangeOverride   actionPowerChangeOverride;
 	IOPMActionActivityTickle        actionActivityTickle;
 	IOPMActionUpdatePowerClient     actionUpdatePowerClient;
+	uint32_t                        darkWakePowerState;
+	uint16_t                        flags;
+	uint16_t                        state;
 };
 
-// IOPMActions parameter flags
+// IOPMActions flags
 enum {
-	kPMActionsFlagIsDisplayWrangler = 0x00000100,
-	kPMActionsFlagIsGraphicsDevice  = 0x00000200,
-	kPMActionsFlagIsAudioDevice     = 0x00000400,
-	kPMActionsFlagLimitPower        = 0x00000800,
-	kPMActionsPCIBitNumberMask      = 0x000000ff
+	kPMActionsPCIBitNumberMask           = 0x00ff,
+	kPMActionsFlagIsDisplayWrangler      = 0x0100,
+	kPMActionsFlagIsGraphicsDriver       = 0x0200,
+	kPMActionsFlagIsAudioDriver          = 0x0400,
+	kPMActionsFlagHasDarkWakePowerState  = 0x0800
+};
+
+// IOPMActions state
+enum {
+	kPMActionsStatePowerClamped          = 0x0001
 };
 
 //******************************************************************************
@@ -142,9 +150,11 @@ struct IOPMPSEntry {
 	IOPMPowerFlags      capabilityFlags;
 	IOPMPowerFlags      outputPowerFlags;
 	IOPMPowerFlags      inputPowerFlags;
-	uint32_t            staticPower;
+	unsigned long       staticPower;
+#if USE_SETTLE_TIMER
 	uint32_t            settleUpTime;
 	uint32_t            settleDownTime;
+#endif
 	IOPMPowerStateIndex stateOrder;
 	IOPMPowerStateIndex stateOrderToIndex;
 };
@@ -180,7 +190,9 @@ private:
 	uint32_t                MachineState;
 
 	thread_call_t           AckTimer;
+#if USE_SETTLE_TIMER
 	thread_call_t           SettleTimer;
+#endif
 	thread_call_t           IdleTimer;
 	thread_call_t           WatchdogTimer;
 	thread_call_t           SpinDumpTimer;
@@ -191,8 +203,10 @@ private:
 	uint64_t                WatchdogDeadline;
 
 // Settle time after changing power state.
+#if USE_SETTLE_TIMER
 	uint32_t                SettleTimeUS;
-	uint32_t                IdleTimerGeneration;
+#endif
+	IOPMPowerStateIndex     IdleTimerGeneration;
 
 // The flags describing current change note.
 	IOPMPowerChangeFlags    HeadNoteChangeFlags;
@@ -247,9 +261,9 @@ private:
 	IOLock *                ActivityLock;
 
 // Idle timer's period in seconds.
-	unsigned long           IdleTimerPeriod;
-	unsigned long           IdleTimerMinPowerState;
-	unsigned long           NextIdleTimerPeriod;
+	int                     IdleTimerPeriod;
+	int                     NextIdleTimerPeriod;
+	IOPMPowerStateIndex     IdleTimerMinPowerState;
 	AbsoluteTime            IdleTimerStartTime;
 
 // Power state desired by a subclassed device object.
@@ -293,7 +307,7 @@ private:
 	OSArray *               NotifyClientArray;
 
 // Used to uniquely identify power management notification to apps and clients.
-	UInt16                  SerialNumber;
+	uint16_t                SerialNumber;
 
 // Used to communicate desired function to tellClientsWithResponse().
 // This is used because it avoids changing the signatures of the affected virtual methods.
@@ -312,8 +326,8 @@ private:
 	uint32_t                DriverCallReason;
 	uint32_t                OutOfBandMessage;
 	uint32_t                TempClampCount;
-	uint32_t                OverrideMaxPowerState;
-	uint32_t                DeviceUsablePowerState;
+	IOPMPowerStateIndex     OverrideMaxPowerState;
+	IOPMPowerStateIndex     DeviceUsablePowerState;
 
 // Protected by ActivityLock - BEGIN
 	IOPMPowerStateIndex     ActivityTicklePowerState;
@@ -469,8 +483,8 @@ private:
 #define WATCHDOG_SLEEP_TIMEOUT      (180)   // 180 secs
 #define WATCHDOG_WAKE_TIMEOUT       (180)   // 180  secs
 #else
-#define WATCHDOG_SLEEP_TIMEOUT      (180)   // 180 secs
-#define WATCHDOG_WAKE_TIMEOUT       (180)   // 180 secs
+#define WATCHDOG_SLEEP_TIMEOUT      (35)   // 35 secs (kMaxTimeRequested + 5s)
+#define WATCHDOG_WAKE_TIMEOUT       (35)   // 35 secs (kMaxTimeRequested + 5s)
 #endif
 
 // Max wait time in microseconds for kernel priority and capability clients
@@ -570,11 +584,11 @@ enum {
 // PM Statistics & Diagnostics
 //******************************************************************************
 
-extern const OSSymbol *gIOPMStatsResponseTimedOut;
-extern const OSSymbol *gIOPMStatsResponseCancel;
-extern const OSSymbol *gIOPMStatsResponseSlow;
-extern const OSSymbol *gIOPMStatsResponsePrompt;
-extern const OSSymbol *gIOPMStatsDriverPSChangeSlow;
+extern OSPtr<const OSSymbol> gIOPMStatsResponseTimedOut;
+extern OSPtr<const OSSymbol> gIOPMStatsResponseCancel;
+extern OSPtr<const OSSymbol> gIOPMStatsResponseSlow;
+extern OSPtr<const OSSymbol> gIOPMStatsResponsePrompt;
+extern OSPtr<const OSSymbol> gIOPMStatsDriverPSChangeSlow;
 
 //******************************************************************************
 // IOPMRequest
@@ -585,12 +599,13 @@ class IOPMRequest : public IOCommand
 	OSDeclareDefaultStructors( IOPMRequest );
 
 protected:
-	IOService *          fTarget;       // request target
-	IOPMRequest *        fRequestNext;  // the next request in the chain
-	IOPMRequest *        fRequestRoot;  // the root request in the call tree
-	IOItemCount          fWorkWaitCount;// execution blocked if non-zero
-	IOItemCount          fFreeWaitCount;// completion blocked if non-zero
-	uint32_t             fRequestType;  // request type
+	IOService *          fTarget;           // request target
+	IOPMRequest *        fRequestNext;      // the next request in the chain
+	IOPMRequest *        fRequestRoot;      // the root request in the call tree
+	uint32_t             fWorkWaitCount;    // execution blocked if non-zero
+	uint32_t             fFreeWaitCount;    // completion blocked if non-zero
+	uint64_t             fTimestamp;        // MCTU
+	uint32_t             fRequestType;      // request type
 	bool                 fIsQuiesceBlocker;
 
 	IOPMCompletionAction fCompletionAction;
@@ -598,7 +613,7 @@ protected:
 	void *               fCompletionParam;
 
 public:
-	uint32_t             fRequestTag;
+	uint32_t             fTag;
 	void *               fArg0;
 	void *               fArg1;
 	void *               fArg2;
@@ -641,6 +656,12 @@ public:
 		return fRequestType;
 	}
 
+	inline uint32_t
+	getTag( void ) const
+	{
+		return fTag;
+	}
+
 	inline bool
 	isReplyType( void ) const
 	{
@@ -677,6 +698,18 @@ public:
 		fCompletionParam  = param;
 	}
 
+	inline void
+	setTimestamp( uint64_t time )
+	{
+		fTimestamp = time;
+	}
+
+	inline uint64_t
+	getTimestamp( void ) const
+	{
+		return fTimestamp;
+	}
+
 	static IOPMRequest * create( void );
 	bool   init( IOService * owner, IOOptionBits type );
 	void   reset( void );
@@ -709,7 +742,7 @@ protected:
 
 public:
 	static  IOPMRequestQueue * create( IOService * inOwner, Action inAction );
-	void    queuePMRequest( IOPMRequest * request );
+	void    queuePMRequest( LIBKERN_CONSUMED IOPMRequest * request );
 	void    queuePMRequestChain( IOPMRequest ** requests, IOItemCount count );
 };
 

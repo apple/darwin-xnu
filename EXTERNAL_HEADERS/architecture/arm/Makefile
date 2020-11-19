@@ -6,8 +6,7 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-EXPORT_FILES =		\
-	arm_neon.h	\
+EXPORT_FILES =
 
 INSTALL_MD_LIST =
 

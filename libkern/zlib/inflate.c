@@ -1,8 +1,8 @@
 /*
- * Copyright (c) 2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /* inflate.c -- zlib decompression
@@ -111,6 +111,7 @@
 #include "inftrees.h"
 #include "inflate.h"
 #include "inffast.h"
+#include <os/base.h>
 
 #ifdef MAKEFIXED
 #  ifndef BUILDFIXED
@@ -671,6 +672,7 @@ inflate(z_streamp strm, int flush)
             if (state->flags & 0x0200) CRC2(state->check, hold);
             INITBITS();
             state->mode = TIME;
+            OS_FALLTHROUGH;
         case TIME:
             NEEDBITS(32);
             if (state->head != Z_NULL)
@@ -678,6 +680,7 @@ inflate(z_streamp strm, int flush)
             if (state->flags & 0x0200) CRC4(state->check, hold);
             INITBITS();
             state->mode = OS;
+            OS_FALLTHROUGH;
         case OS:
             NEEDBITS(16);
             if (state->head != Z_NULL) {
@@ -687,6 +690,7 @@ inflate(z_streamp strm, int flush)
             if (state->flags & 0x0200) CRC2(state->check, hold);
             INITBITS();
             state->mode = EXLEN;
+            OS_FALLTHROUGH;
         case EXLEN:
             if (state->flags & 0x0400) {
                 NEEDBITS(16);
@@ -699,6 +703,7 @@ inflate(z_streamp strm, int flush)
             else if (state->head != Z_NULL)
                 state->head->extra = Z_NULL;
             state->mode = EXTRA;
+            OS_FALLTHROUGH;
         case EXTRA:
             if (state->flags & 0x0400) {
                 copy = state->length;
@@ -721,6 +726,7 @@ inflate(z_streamp strm, int flush)
             }
             state->length = 0;
             state->mode = NAME;
+            OS_FALLTHROUGH;
         case NAME:
             if (state->flags & 0x0800) {
                 if (have == 0) goto inf_leave;
@@ -730,7 +736,7 @@ inflate(z_streamp strm, int flush)
                     if (state->head != Z_NULL &&
                             state->head->name != Z_NULL &&
                             state->length < state->head->name_max)
-                        state->head->name[state->length++] = len;
+                        state->head->name[state->length++] = (Bytef)len;
                 } while (len && copy < have);
                 if (state->flags & 0x0200)
                     state->check = z_crc32(state->check, next, copy);
@@ -742,6 +748,7 @@ inflate(z_streamp strm, int flush)
                 state->head->name = Z_NULL;
             state->length = 0;
             state->mode = COMMENT;
+            OS_FALLTHROUGH;
         case COMMENT:
             if (state->flags & 0x1000) {
                 if (have == 0) goto inf_leave;
@@ -751,7 +758,7 @@ inflate(z_streamp strm, int flush)
                     if (state->head != Z_NULL &&
                             state->head->comment != Z_NULL &&
                             state->length < state->head->comm_max)
-                        state->head->comment[state->length++] = len;
+                        state->head->comment[state->length++] = (Bytef)len;
                 } while (len && copy < have);
                 if (state->flags & 0x0200)
                     state->check = z_crc32(state->check, next, copy);
@@ -762,6 +769,7 @@ inflate(z_streamp strm, int flush)
             else if (state->head != Z_NULL)
                 state->head->comment = Z_NULL;
             state->mode = HCRC;
+            OS_FALLTHROUGH;
         case HCRC:
             if (state->flags & 0x0200) {
                 NEEDBITS(16);
@@ -779,12 +787,15 @@ inflate(z_streamp strm, int flush)
             strm->adler = state->check = z_crc32(0L, Z_NULL, 0);
             state->mode = TYPE;
             break;
+#else
+            OS_FALLTHROUGH;
 #endif
         case DICTID:
             NEEDBITS(32);
             strm->adler = state->check = REVERSE(hold);
             INITBITS();
             state->mode = DICT;
+            OS_FALLTHROUGH;
         case DICT:
             if (state->havedict == 0) {
                 RESTORE();
@@ -792,8 +803,10 @@ inflate(z_streamp strm, int flush)
             }
             strm->adler = state->check = adler32(0L, Z_NULL, 0);
             state->mode = TYPE;
+            OS_FALLTHROUGH;
         case TYPE:
             if (flush == Z_BLOCK) goto inf_leave;
+            OS_FALLTHROUGH;
         case TYPEDO:
             if (state->last) {
                 BYTEBITS();
@@ -839,6 +852,7 @@ inflate(z_streamp strm, int flush)
                     state->length));
             INITBITS();
             state->mode = COPY;
+            OS_FALLTHROUGH;
         case COPY:
             copy = state->length;
             if (copy) {
@@ -874,6 +888,7 @@ inflate(z_streamp strm, int flush)
             Tracev((stderr, "inflate:       table sizes ok\n"));
             state->have = 0;
             state->mode = LENLENS;
+            OS_FALLTHROUGH;
         case LENLENS:
             while (state->have < state->ncode) {
                 NEEDBITS(3);
@@ -895,6 +910,7 @@ inflate(z_streamp strm, int flush)
             Tracev((stderr, "inflate:       code lengths ok\n"));
             state->have = 0;
             state->mode = CODELENS;
+            OS_FALLTHROUGH;
         case CODELENS:
             while (state->have < state->nlen + state->ndist) {
                 for (;;) {
@@ -969,6 +985,7 @@ inflate(z_streamp strm, int flush)
             }
             Tracev((stderr, "inflate:       codes ok\n"));
             state->mode = LEN;
+            OS_FALLTHROUGH;
         case LEN:
             if (have >= 6 && left >= 258) {
                 RESTORE();
@@ -1012,6 +1029,7 @@ inflate(z_streamp strm, int flush)
             }
             state->extra = (unsigned)(this.op) & 15;
             state->mode = LENEXT;
+            OS_FALLTHROUGH;
         case LENEXT:
             if (state->extra) {
                 NEEDBITS(state->extra);
@@ -1020,6 +1038,7 @@ inflate(z_streamp strm, int flush)
             }
             Tracevv((stderr, "inflate:         length %u\n", state->length));
             state->mode = DIST;
+            OS_FALLTHROUGH;
         case DIST:
             for (;;) {
                 this = state->distcode[BITS(state->distbits)];
@@ -1045,6 +1064,7 @@ inflate(z_streamp strm, int flush)
             state->offset = (unsigned)this.val;
             state->extra = (unsigned)(this.op) & 15;
             state->mode = DISTEXT;
+            OS_FALLTHROUGH;
         case DISTEXT:
             if (state->extra) {
                 NEEDBITS(state->extra);
@@ -1065,6 +1085,7 @@ inflate(z_streamp strm, int flush)
             }
             Tracevv((stderr, "inflate:         distance %u\n", state->offset));
             state->mode = MATCH;
+            OS_FALLTHROUGH;
         case MATCH:
             if (left == 0) goto inf_leave;
             copy = out - left;
@@ -1120,6 +1141,7 @@ inflate(z_streamp strm, int flush)
             }
 #ifdef GUNZIP
             state->mode = LENGTH;
+            OS_FALLTHROUGH;
         case LENGTH:
             if (state->wrap && state->flags) {
                 NEEDBITS(32);
@@ -1133,6 +1155,7 @@ inflate(z_streamp strm, int flush)
             }
 #endif
             state->mode = DONE;
+            OS_FALLTHROUGH;
         case DONE:
             ret = Z_STREAM_END;
             goto inf_leave;

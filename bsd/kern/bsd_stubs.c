@@ -118,8 +118,8 @@ current_proc(void)
 
 /* Device switch add delete routines */
 
-struct bdevsw nobdev = NO_BDEVICE;
-struct cdevsw nocdev = NO_CDEVICE;
+const struct bdevsw nobdev = NO_BDEVICE;
+const struct cdevsw nocdev = NO_CDEVICE;
 /*
  *	if index is -1, return a free slot if avaliable
  *	  else see whether the index is free
@@ -142,7 +142,7 @@ bdevsw_isfree(int index)
 		}
 		devsw = &bdevsw[index];
 		for (; index < nblkdev; index++, devsw++) {
-			if (memcmp((char *)devsw, (char *)&nobdev, sizeof(struct bdevsw)) == 0) {
+			if (memcmp((const char *)devsw, (const char *)&nobdev, sizeof(struct bdevsw)) == 0) {
 				break;
 			}
 		}
@@ -153,7 +153,7 @@ bdevsw_isfree(int index)
 	}
 
 	devsw = &bdevsw[index];
-	if ((memcmp((char *)devsw, (char *)&nobdev, sizeof(struct bdevsw)) != 0)) {
+	if ((memcmp((const char *)devsw, (const char *)&nobdev, sizeof(struct bdevsw)) != 0)) {
 		return -1;
 	}
 	return index;
@@ -169,7 +169,7 @@ bdevsw_isfree(int index)
  *	instead of starting at 0
  */
 int
-bdevsw_add(int index, struct bdevsw * bsw)
+bdevsw_add(int index, const struct bdevsw * bsw)
 {
 	lck_mtx_lock_spin(&devsw_lock_list_mtx);
 	index = bdevsw_isfree(index);
@@ -186,7 +186,7 @@ bdevsw_add(int index, struct bdevsw * bsw)
  *	else -1
  */
 int
-bdevsw_remove(int index, struct bdevsw * bsw)
+bdevsw_remove(int index, const struct bdevsw * bsw)
 {
 	struct bdevsw * devsw;
 
@@ -196,7 +196,7 @@ bdevsw_remove(int index, struct bdevsw * bsw)
 
 	devsw = &bdevsw[index];
 	lck_mtx_lock_spin(&devsw_lock_list_mtx);
-	if ((memcmp((char *)devsw, (char *)bsw, sizeof(struct bdevsw)) != 0)) {
+	if ((memcmp((const char *)devsw, (const char *)bsw, sizeof(struct bdevsw)) != 0)) {
 		index = -1;
 	} else {
 		bdevsw[index] = nobdev;
@@ -227,7 +227,7 @@ cdevsw_isfree(int index)
 		}
 		devsw = &cdevsw[index];
 		for (; index < nchrdev; index++, devsw++) {
-			if (memcmp((char *)devsw, (char *)&nocdev, sizeof(struct cdevsw)) == 0) {
+			if (memcmp((const char *)devsw, (const char *)&nocdev, sizeof(struct cdevsw)) == 0) {
 				break;
 			}
 		}
@@ -238,7 +238,7 @@ cdevsw_isfree(int index)
 	}
 
 	devsw = &cdevsw[index];
-	if ((memcmp((char *)devsw, (char *)&nocdev, sizeof(struct cdevsw)) != 0)) {
+	if ((memcmp((const char *)devsw, (const char *)&nocdev, sizeof(struct cdevsw)) != 0)) {
 		return -1;
 	}
 	return index;
@@ -259,7 +259,7 @@ cdevsw_isfree(int index)
  *		before them.  -24 is currently a safe starting point.
  */
 int
-cdevsw_add(int index, struct cdevsw * csw)
+cdevsw_add(int index, const struct cdevsw * csw)
 {
 	lck_mtx_lock_spin(&devsw_lock_list_mtx);
 	index = cdevsw_isfree(index);
@@ -276,7 +276,7 @@ cdevsw_add(int index, struct cdevsw * csw)
  *	else -1
  */
 int
-cdevsw_remove(int index, struct cdevsw * csw)
+cdevsw_remove(int index, const struct cdevsw * csw)
 {
 	struct cdevsw * devsw;
 
@@ -286,7 +286,7 @@ cdevsw_remove(int index, struct cdevsw * csw)
 
 	devsw = &cdevsw[index];
 	lck_mtx_lock_spin(&devsw_lock_list_mtx);
-	if ((memcmp((char *)devsw, (char *)csw, sizeof(struct cdevsw)) != 0)) {
+	if ((memcmp((const char *)devsw, (const char *)csw, sizeof(struct cdevsw)) != 0)) {
 		index = -1;
 	} else {
 		cdevsw[index] = nocdev;
@@ -303,7 +303,7 @@ cdev_set_bdev(int cdev, int bdev)
 }
 
 int
-cdevsw_add_with_bdev(int index, struct cdevsw * csw, int bdev)
+cdevsw_add_with_bdev(int index, const struct cdevsw * csw, int bdev)
 {
 	index = cdevsw_add(index, csw);
 	if (index < 0) {
@@ -317,7 +317,7 @@ cdevsw_add_with_bdev(int index, struct cdevsw * csw, int bdev)
 }
 
 int
-cdevsw_setkqueueok(int maj, struct cdevsw * csw, int extra_flags)
+cdevsw_setkqueueok(int maj, const struct cdevsw * csw, int extra_flags)
 {
 	struct cdevsw * devsw;
 	uint64_t flags = CDEVSW_SELECT_KQUEUE;
@@ -327,7 +327,7 @@ cdevsw_setkqueueok(int maj, struct cdevsw * csw, int extra_flags)
 	}
 
 	devsw = &cdevsw[maj];
-	if ((memcmp((char *)devsw, (char *)csw, sizeof(struct cdevsw)) != 0)) {
+	if ((memcmp((const char *)devsw, (const char *)csw, sizeof(struct cdevsw)) != 0)) {
 		return -1;
 	}
 
@@ -346,9 +346,10 @@ cdevsw_setkqueueok(int maj, struct cdevsw * csw, int extra_flags)
  * the NULL character in the hostname.
  */
 int
-bsd_hostname(char * buf, int bufsize, int * len)
+bsd_hostname(char *buf, size_t bufsize, size_t *len)
 {
-	int ret, hnlen;
+	int ret;
+	size_t hnlen;
 	/*
 	 * "hostname" is null-terminated
 	 */

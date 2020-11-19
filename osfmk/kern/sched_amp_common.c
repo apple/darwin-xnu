@@ -44,6 +44,7 @@
 #include <machine/atomic.h>
 #include <sys/kdebug.h>
 #include <kern/sched_amp_common.h>
+#include <stdatomic.h>
 
 #if __AMP__
 
@@ -85,18 +86,12 @@ sched_amp_init(void)
 	pcore_set->pset_cluster_type = PSET_AMP_P;
 	pcore_set->pset_cluster_id = 1;
 
-#if !CONFIG_SCHED_CLUTCH
-	/*
-	 * For non-clutch scheduler, allow system to be e-core only.
-	 * Clutch scheduler support for this feature needs to be implemented.
-	 */
 #if DEVELOPMENT || DEBUG
 	if (PE_parse_boot_argn("enable_skstsct", NULL, 0)) {
 		system_ecore_only = true;
 	}
 #endif /* DEVELOPMENT || DEBUG */
 
-#endif /* !CONFIG_SCHED_CLUTCH */
 	sched_timeshare_init();
 }
 
@@ -113,6 +108,17 @@ int sched_amp_spill_steal = 1;
 int sched_amp_spill_deferred_ipi = 1;
 int sched_amp_pcores_preempt_immediate_ipi = 1;
 
+/*
+ * sched_perfcontrol_inherit_recommendation_from_tg changes amp
+ * scheduling policy away from default and allows policy to be
+ * modified at run-time.
+ *
+ * once modified from default, the policy toggles between "follow
+ * thread group" and "restrict to e".
+ */
+
+_Atomic sched_perfctl_class_policy_t sched_perfctl_policy_util = SCHED_PERFCTL_POLICY_DEFAULT;
+_Atomic sched_perfctl_class_policy_t sched_perfctl_policy_bg = SCHED_PERFCTL_POLICY_DEFAULT;
 
 /*
  * sched_amp_spill_threshold()
@@ -242,12 +248,9 @@ should_spill_to_ecores(processor_set_t nset, thread_t thread)
 		return false;
 	}
 
-#if !CONFIG_SCHED_CLUTCH
-	/* Per-thread P-core scheduling support needs to be implemented for clutch scheduler */
 	if (thread->sched_flags & TH_SFLAG_PCORE_ONLY) {
 		return false;
 	}
-#endif /* !CONFIG_SCHED_CLUTCH */
 
 	if (thread->sched_pri >= BASEPRI_RTQUEUES) {
 		/* Never spill realtime threads */
@@ -259,7 +262,7 @@ should_spill_to_ecores(processor_set_t nset, thread_t thread)
 		return false;
 	}
 
-	if ((sched_get_pset_load_average(nset) >= sched_amp_spill_threshold(nset)) &&  /* There is already a load on P cores */
+	if ((sched_get_pset_load_average(nset, 0) >= sched_amp_spill_threshold(nset)) &&  /* There is already a load on P cores */
 	    pset_should_accept_spilled_thread(ecore_set, thread->sched_pri)) { /* There are lower priority E cores */
 		return true;
 	}
@@ -461,16 +464,29 @@ sched_amp_qos_max_parallelism(int qos, uint64_t options)
 	}
 
 	/*
-	 * The current AMP scheduler policy is not run
-	 * background and utility threads on the P-Cores.
+	 * The default AMP scheduler policy is to run utility and by
+	 * threads on E-Cores only.  Run-time policy adjustment unlocks
+	 * ability of utility and bg to threads to be scheduled based on
+	 * run-time conditions.
 	 */
 	switch (qos) {
 	case THREAD_QOS_UTILITY:
+		return (os_atomic_load(&sched_perfctl_policy_util, relaxed) == SCHED_PERFCTL_POLICY_DEFAULT) ? ecount : (ecount + pcount);
 	case THREAD_QOS_BACKGROUND:
 	case THREAD_QOS_MAINTENANCE:
-		return ecount;
+		return (os_atomic_load(&sched_perfctl_policy_bg, relaxed) == SCHED_PERFCTL_POLICY_DEFAULT) ? ecount : (ecount + pcount);
 	default:
 		return ecount + pcount;
+	}
+}
+
+pset_node_t
+sched_amp_choose_node(thread_t thread)
+{
+	if (recommended_pset_type(thread) == PSET_AMP_P) {
+		return pcore_set->node;
+	} else {
+		return ecore_set->node;
 	}
 }
 
@@ -512,17 +528,15 @@ sched_amp_rt_queue_shutdown(processor_t processor)
 
 	queue_init(&tqueue);
 
-	rt_lock_lock(pset);
-
 	while (rt_runq_count(pset) > 0) {
 		thread = qe_dequeue_head(&pset->rt_runq.queue, struct thread, runq_links);
 		thread->runq = PROCESSOR_NULL;
-		SCHED_STATS_RUNQ_CHANGE(&pset->rt_runq.runq_stats, pset->rt_runq.count);
+		SCHED_STATS_RUNQ_CHANGE(&pset->rt_runq.runq_stats,
+		    os_atomic_load(&pset->rt_runq.count, relaxed));
 		rt_runq_count_decr(pset);
 		enqueue_tail(&tqueue, &thread->runq_links);
 	}
-	rt_lock_unlock(pset);
-	sched_update_pset_load_average(pset);
+	sched_update_pset_load_average(pset, 0);
 	pset_unlock(pset);
 
 	qe_foreach_element_safe(thread, &tqueue, runq_links) {
@@ -552,7 +566,7 @@ sched_amp_rt_runq_scan(sched_update_scan_context_t scan_context)
 	spl_t s = splsched();
 	do {
 		while (pset != NULL) {
-			rt_lock_lock(pset);
+			pset_lock(pset);
 
 			qe_foreach_element_safe(thread, &pset->rt_runq.queue, runq_links) {
 				if (thread->last_made_runnable_time < scan_context->earliest_rt_make_runnable_time) {
@@ -560,7 +574,7 @@ sched_amp_rt_runq_scan(sched_update_scan_context_t scan_context)
 				}
 			}
 
-			rt_lock_unlock(pset);
+			pset_unlock(pset);
 
 			pset = pset->pset_list;
 		}

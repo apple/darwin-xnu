@@ -234,17 +234,17 @@ struct key_schedule {
 
 typedef struct crypto_ctx {
 	uint32_t etype;
-	uint32_t mpad;           /* Message padding */
 	uint32_t flags;
+	size_t mpad;             /* Message padding */
 	lck_mtx_t *lock;
 	lucid_context_t gss_ctx;  /* Back pointer to lucid context */
-	uint32_t keylen;
 	void *key;   /* Points to session key from lucid context */
 	const struct ccdigest_info *di;
 	const struct ccmode_cbc *enc_mode;
 	const struct ccmode_cbc *dec_mode;
 	struct key_schedule ks;
 	uint32_t digest_size;
+	uint32_t keylen;
 	void *ckey[2];  /* Derived checksum key. Same as key for DES3 */
 } *crypto_ctx_t;
 

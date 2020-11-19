@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -189,7 +189,7 @@ kasan_fakestack_alloc(int sz_class, size_t realsz)
 		return 0;
 	}
 
-	ret = (uptr)zget(zone);
+	ret = (uptr)zalloc_noblock(zone);
 
 	if (ret) {
 		size_t leftrz = 32 + FAKESTACK_HEADER_SZ;
@@ -272,7 +272,6 @@ kasan_init_fakestack(void)
 {
 	/* allocate the fakestack zones */
 	for (int i = 0; i < FAKESTACK_NUM_SZCLASS; i++) {
-		zone_t z;
 		unsigned long sz = (fakestack_min << i) + FAKESTACK_HEADER_SZ;
 		size_t maxsz = 256UL * 1024;
 
@@ -282,15 +281,12 @@ kasan_init_fakestack(void)
 		}
 
 		snprintf(fakestack_names[i], 16, "fakestack.%d", i);
-		z = zinit(sz, maxsz, sz, fakestack_names[i]);
-		assert(z);
-		zone_change(z, Z_NOCALLOUT, TRUE);
-		zone_change(z, Z_EXHAUST, TRUE);
-		zone_change(z, Z_EXPAND, FALSE);
-		zone_change(z, Z_COLLECT, FALSE);
-		zone_change(z, Z_KASAN_QUARANTINE, FALSE);
-		zfill(z, maxsz / sz);
-		fakestack_zones[i] = z;
+		fakestack_zones[i] = zone_create_ext(fakestack_names[i], sz,
+		    ZC_NOCALLOUT | ZC_NOGC | ZC_KASAN_NOREDZONE | ZC_KASAN_NOQUARANTINE,
+		    ZONE_ID_ANY, ^(zone_t z) {
+			zone_set_exhaustible(z, maxsz);
+		});
+		zfill(fakestack_zones[i], (int)maxsz / sz);
 	}
 
 	/* globally enable */

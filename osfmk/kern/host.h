@@ -78,7 +78,7 @@
 
 struct  host {
 	decl_lck_mtx_data(, lock);               /* lock to protect exceptions */
-	ipc_port_t special[HOST_MAX_SPECIAL_PORT + 1];
+	ipc_port_t XNU_PTRAUTH_SIGNED_PTR("host.special") special[HOST_MAX_SPECIAL_PORT + 1];
 	struct exception_action exc_actions[EXC_TYPES_COUNT];
 };
 
@@ -106,6 +106,10 @@ typedef struct {
 
 extern expired_task_statistics_t dead_task_statistics;
 
+extern kern_return_t host_set_special_port(host_priv_t host_priv, int id, ipc_port_t port);
+extern kern_return_t host_get_special_port(host_priv_t host_priv,
+    __unused int node, int id, ipc_port_t * portp);
+
 #endif  /* MACH_KERNEL_PRIVATE */
 
 /*
@@ -117,7 +121,6 @@ __BEGIN_DECLS
 extern host_t                   host_self(void);
 extern host_priv_t              host_priv_self(void);
 extern host_security_t  host_security_self(void);
-
 __END_DECLS
 
 #endif  /* _KERN_HOST_H_ */

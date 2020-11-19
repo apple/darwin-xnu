@@ -100,8 +100,8 @@ static u_short ip_id;                          /* ip packet ctr, for ids */
  * UDP protocol implementation.
  * Per RFC 768, August, 1980.
  */
-#define UDP_TTL 60 /* deflt time to live for UDP packets */
-static int udp_ttl = UDP_TTL;
+#define UDP_TTL 60 /* default time to live for UDP packets */
+static u_char udp_ttl = UDP_TTL;
 static unsigned char    exception_seq;
 
 struct kdp_ipovly {
@@ -280,7 +280,7 @@ static boolean_t save_ip_in_nvram = FALSE;
 static volatile boolean_t panicd_specified = FALSE;
 static boolean_t router_specified = FALSE;
 static boolean_t corename_specified = FALSE;
-static unsigned int panicd_port = CORE_REMOTE_PORT;
+static unsigned short panicd_port = CORE_REMOTE_PORT;
 
 static struct kdp_ether_addr etherbroadcastaddr = {.ether_addr_octet = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff}};
 
@@ -296,7 +296,7 @@ static boolean_t flag_dont_abort_panic_dump  = FALSE;
 static boolean_t flag_arp_resolved = FALSE;
 
 static unsigned int panic_timeout = 100000;
-static unsigned int last_panic_port = CORE_REMOTE_PORT;
+static unsigned short last_panic_port = CORE_REMOTE_PORT;
 
 #define KDP_THROTTLE_VALUE       (10ULL * NSEC_PER_SEC)
 
@@ -415,19 +415,11 @@ kdp_register_send_receive(
 	kdp_send_t      send,
 	kdp_receive_t   receive)
 {
-	unsigned int    debug = 0;
+	unsigned int debug = debug_boot_arg;
 
-	PE_parse_boot_argn("debug", &debug, sizeof(debug));
-
-#if defined(__arm__) || defined(__arm64__)
-	{
-		uint32_t debug_flags;
-
-		if (!PE_i_can_has_debugger(&debug_flags)) {
-			debug = 0;
-		}
+	if (!kernel_debugging_allowed()) {
+		return;
 	}
-#endif
 
 	if (!debug) {
 		return;
@@ -540,9 +532,10 @@ ip_sum(
 	}
 
 	sum = (high << 8) + low;
-	sum = (sum >> 16) + (sum & 65535);
+	sum = (sum >> 16) + (sum & USHRT_MAX);
+	sum = (sum > USHRT_MAX) ? sum - USHRT_MAX : sum;
 
-	return sum > 65535 ? sum - 65535 : sum;
+	return (unsigned short)sum;
 }
 
 static void
@@ -558,7 +551,12 @@ kdp_reply(
 	struct kdp_ether_header *eh = NULL;
 
 	if (!pkt.input) {
-		kdp_panic("kdp_reply");
+		kdp_panic("kdp_reply: no input packet");
+	}
+
+	/* Packet size cannot be larger than the static space allocated for it. */
+	if (pkt.len > KDP_MAXPACKET) {
+		kdp_panic("kdp_send: packet too large (%d > %u)", pkt.len, KDP_MAXPACKET);
 	}
 
 	pkt.off -= (unsigned int)sizeof(struct kdp_udpiphdr);
@@ -585,7 +583,7 @@ kdp_reply(
 #else
 	ip = (struct kdp_ip *)&pkt.data[pkt.off];
 #endif
-	ip->ip_len = htons(sizeof(struct kdp_udpiphdr) + pkt.len);
+	ip->ip_len = htons((ushort_t)(sizeof(struct kdp_udpiphdr) + pkt.len));
 	ip->ip_v = IPVERSION;
 	ip->ip_id = htons(ip_id++);
 	ip->ip_hl = sizeof(struct kdp_ip) >> 2;
@@ -609,7 +607,6 @@ kdp_reply(
 	pkt.len += (unsigned int)sizeof(struct kdp_ether_header);
 
 	// save reply for possible retransmission
-	assert(pkt.len <= KDP_MAXPACKET);
 	if (!sideband) {
 		bcopy((char *)&pkt, (char *)&saved_reply, sizeof(saved_reply));
 	}
@@ -632,7 +629,12 @@ kdp_send(
 	struct kdp_ether_header *eh;
 
 	if (pkt.input) {
-		kdp_panic("kdp_send");
+		kdp_panic("kdp_send: no input packet");
+	}
+
+	/* Packet size cannot be larger than the static space allocated for it. */
+	if (pkt.len > KDP_MAXPACKET) {
+		kdp_panic("kdp_send: packet too large (%d > %u)", pkt.len, KDP_MAXPACKET);
 	}
 
 	pkt.off -= (unsigned int)sizeof(struct kdp_udpiphdr);
@@ -658,7 +660,7 @@ kdp_send(
 #else
 	ip = (struct kdp_ip *)&pkt.data[pkt.off];
 #endif
-	ip->ip_len = htons(sizeof(struct kdp_udpiphdr) + pkt.len);
+	ip->ip_len = htons((ushort_t)(sizeof(struct kdp_udpiphdr) + pkt.len));
 	ip->ip_v = IPVERSION;
 	ip->ip_id = htons(ip_id++);
 	ip->ip_hl = sizeof(struct kdp_ip) >> 2;
@@ -1241,10 +1243,6 @@ kdp_connection_wait(void)
 	printf("\nWaiting for remote debugger connection.\n");
 	kprintf("\nWaiting for remote debugger connection.\n");
 
-#ifdef ARM
-	printf("\nPlease go to https://panic.apple.com to report this panic\n");
-#endif
-
 	if (reattach_wait == 0) {
 		if ((kdp_flag & KDP_GETC_ENA) && (0 != kdp_getc())) {
 			printf("Options.....    Type\n");
@@ -1476,7 +1474,11 @@ again:
 
 	kdp_sync_cache();
 
-	if (reattach_wait == 1) {
+#if defined(__x86_64__)
+	/* We only support returning from KDP on x86 */
+	if (reattach_wait == 1)
+#endif
+	{
 		goto again;
 	}
 
@@ -1506,7 +1508,7 @@ create_panic_header(unsigned int request, const char *corename,
 	struct kdp_ether_header *eh;
 	struct corehdr          *coreh;
 	const char              *mode = "octet";
-	char                    modelen  = strlen(mode) + 1;
+	size_t                  modelen = strlen(mode) + 1;
 
 	size_t                  fmask_size = sizeof(KDP_FEATURE_MASK_STRING) + sizeof(kdp_crashdump_feature_mask);
 
@@ -1536,7 +1538,7 @@ create_panic_header(unsigned int request, const char *corename,
 #else
 	ip = (struct kdp_ip *)&pkt.data[pkt.off];
 #endif
-	ip->ip_len = htons(sizeof(struct kdp_udpiphdr) + pkt.len);
+	ip->ip_len = htons((ushort_t)(sizeof(struct kdp_udpiphdr) + pkt.len));
 	ip->ip_v = IPVERSION;
 	ip->ip_id = htons(ip_id++);
 	ip->ip_hl = sizeof(struct kdp_ip) >> 2;
@@ -1555,35 +1557,36 @@ create_panic_header(unsigned int request, const char *corename,
 	coreh->th_opcode = htons((u_short)request);
 
 	if (request == KDP_WRQ) {
-		char *cp;
-		size_t length_remaining = (sizeof(pkt.data) - pkt.off), bytes_filled = 0;
+		char *cp = coreh->th_u.tu_rpl;
+		/* Calculate available string space (remaining space after accounting for mandatory components). */
+		size_t length_remaining = (sizeof(pkt.data) - pkt.off - offsetof(struct corehdr, th_u)
+		    - sizeof(kdp_crashdump_feature_mask) - sizeof(kdp_crashdump_pkt_size));
 
-		cp = coreh->th_u.tu_rpl;
-		bytes_filled = strlcpy(cp, corename, length_remaining);
-		cp += bytes_filled;
-		*cp++ = '\0';
-		/* account for the extra NULL character that has been added historically */
-		length_remaining -= (bytes_filled + 1);
+		/* account for the extra NULL characters that have been added historically */
+		int len = snprintf(cp, length_remaining, "%s%c%s%c%s", corename, '\0', mode, '\0', KDP_FEATURE_MASK_STRING);
+		if (len < 0) {
+			kdb_printf("Unable to create core header packet.\n");
+			return NULL;
+		} else if (len >= length_remaining) {
+			kdb_printf("dumpinfo does not fit into KDP packet.\n");
+			return NULL;
+		}
+		cp += len;
 
-		bytes_filled = strlcpy(cp, mode, length_remaining);
-		cp += bytes_filled;
-		*cp++ = '\0';
-		/* account for the extra NULL character that has been added historically */
-		length_remaining -= (bytes_filled + 1);
-
-		bytes_filled = strlcpy(cp, KDP_FEATURE_MASK_STRING, length_remaining);
-		cp += bytes_filled;
-		*cp++ = '\0';
-		/* account for the extra NULL character that has been added historically */
-		length_remaining -= (bytes_filled + 1);
-
+		/* Append feature flags. The value is already converted with htonl in startup code. */
 		bcopy(&kdp_crashdump_feature_mask, cp, sizeof(kdp_crashdump_feature_mask));
-		kdp_crashdump_pkt_size = KDP_LARGE_CRASHDUMP_PKT_SIZE;
 		cp += sizeof(kdp_crashdump_feature_mask);
-		length_remaining -= sizeof(kdp_crashdump_feature_mask);
 
-		PE_parse_boot_argn("kdp_crashdump_pkt_size", &kdp_crashdump_pkt_size, sizeof(kdp_crashdump_pkt_size));
-		*(uint32_t *)cp = htonl(kdp_crashdump_pkt_size);
+		/* Override default packet size from boot arguments (if present). */
+		kdp_crashdump_pkt_size = KDP_LARGE_CRASHDUMP_PKT_SIZE;
+		if (PE_parse_boot_argn("kdp_crashdump_pkt_size", &kdp_crashdump_pkt_size, sizeof(kdp_crashdump_pkt_size)) &&
+		    (kdp_crashdump_pkt_size > KDP_LARGE_CRASHDUMP_PKT_SIZE)) {
+			kdp_crashdump_pkt_size = KDP_LARGE_CRASHDUMP_PKT_SIZE;
+			kdb_printf("kdp_crashdump_pkt_size is too large. Reverting to %d\n", kdp_crashdump_pkt_size);
+		}
+
+		uint32_t pktsz = htonl(kdp_crashdump_pkt_size);
+		bcopy(&pktsz, cp, sizeof(uint32_t));
 	} else {
 		coreh->th_block = htonl((unsigned int) block);
 	}
@@ -1688,6 +1691,10 @@ TRANSMIT_RETRY:
 	}
 
 	th = create_panic_header(request, corename, (unsigned)length, panic_block);
+	if (th == NULL) {
+		printf("Unable to get panic header.\n");
+		return -4;
+	}
 
 	if (request == KDP_DATA) {
 		/* as all packets are kdp_crashdump_pkt_size in length, the last packet
@@ -1814,7 +1821,7 @@ isdigit(char c)
 static int
 kdp_get_xnu_version(char *versionbuf)
 {
-	char *versionpos;
+	const char *versionpos;
 	char vstr[20];
 	int retval = -1;
 	char *vptr;
@@ -1867,8 +1874,11 @@ kdp_set_dump_info(const uint32_t flags, const char *filename,
 		corename_specified = FALSE;
 	}
 
-	if (port) {
-		panicd_port = port;
+	/* Accept only valid UDP port numbers. */
+	if (port && port <= USHRT_MAX) {
+		panicd_port = (unsigned short)port;
+	} else {
+		kdb_printf("kdp_set_dump_info: Skipping invalid panicd port %d (using %d)\n", port, panicd_port);
 	}
 
 	/* on a disconnect, should we stay in KDP or not? */
@@ -2150,7 +2160,7 @@ kdp_serial_receive(void *rpkt, unsigned int *rpkt_len, unsigned int timeout)
 		if (readkar >= 0) {
 			unsigned char *packet;
 			//			printf("got char %02x\n", readkar);
-			if ((packet = kdp_unserialize_packet(readkar, rpkt_len))) {
+			if ((packet = kdp_unserialize_packet((unsigned char)readkar, rpkt_len))) {
 				memcpy(rpkt, packet, *rpkt_len);
 				return;
 			}
@@ -2208,6 +2218,7 @@ kdp_init(void)
 	strlcpy(kdp_kernelversion_string, version, sizeof(kdp_kernelversion_string));
 
 	/* Relies on platform layer calling panic_init() before kdp_init() */
+	assert(startup_phase >= STARTUP_SUB_TUNABLES);
 	if (kernel_uuid_string[0] != '\0') {
 		/*
 		 * Update kdp_kernelversion_string with our UUID
@@ -2248,25 +2259,25 @@ kdp_init(void)
 	boolean_t kdp_match_name_found = PE_parse_boot_argn("kdp_match_name", kdpname, sizeof(kdpname));
 	boolean_t kdp_not_serial = kdp_match_name_found ? (strncmp(kdpname, "serial", sizeof(kdpname))) : TRUE;
 
-#if CONFIG_EMBEDDED
+#if defined(__arm__) || defined(__arm64__)
 	//respect any custom debugger boot-args
 	if (kdp_match_name_found && kdp_not_serial) {
 		return;
 	}
-#else /* CONFIG_EMBEDDED */
+#else /* defined(__arm__) || defined(__arm64__) */
 	// serial must be explicitly requested
 	if (!kdp_match_name_found || kdp_not_serial) {
 		return;
 	}
-#endif /* CONFIG_EMBEDDED */
+#endif /* defined(__arm__) || defined(__arm64__) */
 
-#if CONFIG_EMBEDDED
+#if defined(__arm__) || defined(__arm64__)
 	if (kdp_not_serial && PE_consistent_debug_enabled() && debug_boot_arg) {
 		return;
 	} else {
 		printf("Serial requested, consistent debug disabled or debug boot arg not present, configuring debugging over serial\n");
 	}
-#endif /* CONFIG_EMBEDDED */
+#endif /* defined(__arm__) || defined(__arm64__) */
 
 	kprintf("Initializing serial KDP\n");
 
@@ -2385,16 +2396,15 @@ kdp_raise_exception(
 	)
 #endif
 {
-#if CONFIG_EMBEDDED
-	assert(PE_i_can_has_debugger(NULL));
+#if defined(__arm__) || defined(__arm64__)
+	assert(kernel_debugging_allowed());
 #endif
 
 #if CONFIG_KDP_INTERACTIVE_DEBUGGING
-
 	kdp_debugger_loop(exception, code, subcode, saved_state);
 #else /* CONFIG_KDP_INTERACTIVE_DEBUGGING */
-	assert(current_debugger != KDP_CUR_DB);
 
+	assert(current_debugger != KDP_CUR_DB);
 	panic_spin_forever();
 #endif /* CONFIG_KDP_INTERACTIVE_DEBUGGING */
 }

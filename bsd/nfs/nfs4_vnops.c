@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -273,11 +273,11 @@ nfsmout:
 }
 
 int
-nfs4_readlink_rpc(nfsnode_t np, char *buf, uint32_t *buflenp, vfs_context_t ctx)
+nfs4_readlink_rpc(nfsnode_t np, char *buf, size_t *buflenp, vfs_context_t ctx)
 {
 	struct nfsmount *nmp;
 	int error = 0, lockerror = ENOENT, status, numops;
-	uint32_t len = 0;
+	size_t len = 0;
 	u_int64_t xid;
 	struct nfsm_chain nmreq, nmrep;
 	struct nfsreq_secinfo_args si;
@@ -369,8 +369,8 @@ nfs4_read_rpc_async(
 	NFSREQ_SECINFO_SET(&si, np, NULL, 0, NULL, 0);
 	nfsm_chain_null(&nmreq);
 
-	// PUTFH, READ, GETATTR
-	numops = 3;
+	// PUTFH, READ
+	numops = 2;
 	nfsm_chain_build_alloc_init(error, &nmreq, 22 * NFSX_UNSIGNED);
 	nfsm_chain_add_compound_header(error, &nmreq, "read", nmp->nm_minor_vers, numops);
 	numops--;
@@ -382,9 +382,6 @@ nfs4_read_rpc_async(
 	nfsm_chain_add_stateid(error, &nmreq, &stateid);
 	nfsm_chain_add_64(error, &nmreq, offset);
 	nfsm_chain_add_32(error, &nmreq, len);
-	numops--;
-	nfsm_chain_add_32(error, &nmreq, NFS_OP_GETATTR);
-	nfsm_chain_add_bitmap_supported(error, &nmreq, nfs_getattr_bitmap, nmp, np);
 	nfsm_chain_build_done(error, &nmreq);
 	nfsm_assert(error, (numops == 0), EPROTO);
 	nfsmout_if(error);
@@ -435,8 +432,6 @@ nfs4_read_rpc_async_finish(
 		*lenp = MIN(retlen, *lenp);
 		error = nfsm_chain_get_uio(&nmrep, *lenp, uio);
 	}
-	nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
-	nfsm_chain_loadattr(error, &nmrep, np, nfsvers, &xid);
 	if (!lockerror) {
 		nfs_node_unlock(np);
 	}
@@ -508,7 +503,7 @@ nfs4_write_rpc_async(
 	}
 	numops--;
 	nfsm_chain_add_32(error, &nmreq, NFS_OP_GETATTR);
-	nfsm_chain_add_bitmap_supported(error, &nmreq, nfs_getattr_bitmap, nmp, np);
+	nfsm_chain_add_bitmap_supported(error, &nmreq, nfs4_getattr_write_bitmap, nmp, np);
 	nfsm_chain_build_done(error, &nmreq);
 	nfsm_assert(error, (numops == 0), EPROTO);
 	nfsmout_if(error);
@@ -580,7 +575,15 @@ nfs4_write_rpc_async_finish(
 	}
 	lck_mtx_unlock(&nmp->nm_lock);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
+
+	/*
+	 * NFSv4 WRITE RPCs contain partial GETATTR requests - only type, change, size, metadatatime and modifytime are requested.
+	 * In such cases,  we do not update the time stamp - but the requested attributes.
+	 */
+	np->n_vattr.nva_flags |= NFS_FFLAG_PARTIAL_WRITE;
 	nfsm_chain_loadattr(error, &nmrep, np, nfsvers, &xid);
+	np->n_vattr.nva_flags &= ~NFS_FFLAG_PARTIAL_WRITE;
+
 nfsmout:
 	if (!lockerror) {
 		nfs_node_unlock(np);
@@ -781,15 +784,16 @@ nfs4_readdir_rpc(nfsnode_t dnp, struct nfsbuf *bp, vfs_context_t ctx)
 	struct nfsmount *nmp;
 	int error = 0, lockerror, nfsvers, namedattr, rdirplus, bigcookies, numops;
 	int i, status, more_entries = 1, eof, bp_dropped = 0;
+	uint16_t namlen, reclen;
 	uint32_t nmreaddirsize, nmrsize;
-	uint32_t namlen, skiplen, fhlen, xlen, attrlen, reclen, space_free, space_needed;
-	uint64_t cookie, lastcookie, xid, savedxid;
+	uint32_t namlen32, skiplen, fhlen, xlen, attrlen;
+	uint64_t padlen, cookie, lastcookie, xid, savedxid, space_free, space_needed;
 	struct nfsm_chain nmreq, nmrep, nmrepsave;
-	fhandle_t fh;
-	struct nfs_vattr nvattr, *nvattrp;
+	fhandle_t *fh;
+	struct nfs_vattr *nvattr, *nvattrp;
 	struct nfs_dir_buf_header *ndbhp;
 	struct direntry *dp;
-	char *padstart, padlen;
+	char *padstart;
 	const char *tag;
 	uint32_t entry_attrs[NFS_ATTR_BITMAP_LEN];
 	struct timeval now;
@@ -833,6 +837,9 @@ nfs4_readdir_rpc(nfsnode_t dnp, struct nfsbuf *bp, vfs_context_t ctx)
 		return lockerror;
 	}
 
+	fh = zalloc(nfs_fhandle_zone);
+	MALLOC(nvattr, struct nfs_vattr *, sizeof(*nvattr), M_TEMP, M_WAITOK);
+
 	/* determine cookie to use, and move dp to the right offset */
 	ndbhp = (struct nfs_dir_buf_header*)bp->nb_data;
 	dp = NFS_DIR_BUF_FIRST_DIRENTRY(bp);
@@ -856,12 +863,12 @@ nfs4_readdir_rpc(nfsnode_t dnp, struct nfsbuf *bp, vfs_context_t ctx)
 	 */
 	if (((bp->nb_lblkno == 0) && (ndbhp->ndbh_count == 0)) &&
 	    !(dnp->n_vattr.nva_flags & NFS_FFLAG_IS_ATTR)) {
-		fh.fh_len = 0;
-		fhlen = rdirplus ? fh.fh_len + 1 : 0;
+		fh->fh_len = 0;
+		fhlen = rdirplus ? fh->fh_len + 1 : 0;
 		xlen = rdirplus ? (fhlen + sizeof(time_t)) : 0;
 		/* "." */
 		namlen = 1;
-		reclen = NFS_DIRENTRY_LEN(namlen + xlen);
+		reclen = NFS_DIRENTRY_LEN_16(namlen + xlen);
 		if (xlen) {
 			bzero(&dp->d_name[namlen + 1], xlen);
 		}
@@ -883,7 +890,7 @@ nfs4_readdir_rpc(nfsnode_t dnp, struct nfsbuf *bp, vfs_context_t ctx)
 
 		/* ".." */
 		namlen = 2;
-		reclen = NFS_DIRENTRY_LEN(namlen + xlen);
+		reclen = NFS_DIRENTRY_LEN_16(namlen + xlen);
 		if (xlen) {
 			bzero(&dp->d_name[namlen + 1], xlen);
 		}
@@ -974,7 +981,12 @@ nfs4_readdir_rpc(nfsnode_t dnp, struct nfsbuf *bp, vfs_context_t ctx)
 		while (more_entries) {
 			/* Entry: COOKIE, NAME, FATTR */
 			nfsm_chain_get_64(error, &nmrep, cookie);
-			nfsm_chain_get_32(error, &nmrep, namlen);
+			nfsm_chain_get_32(error, &nmrep, namlen32);
+			if (namlen32 > UINT16_MAX) {
+				error = EBADRPC;
+				goto nfsmout;
+			}
+			namlen = (uint16_t)namlen32;
 			nfsmout_if(error);
 			if (!bigcookies && (cookie >> 32) && (nmp == NFSTONMP(dnp))) {
 				/* we've got a big cookie, make sure flag is set */
@@ -998,7 +1010,7 @@ nfs4_readdir_rpc(nfsnode_t dnp, struct nfsbuf *bp, vfs_context_t ctx)
 			fhlen = rdirplus ? (1 + dnp->n_fhsize) : 0;
 			xlen = rdirplus ? (fhlen + sizeof(time_t)) : 0;
 			attrlen = rdirplus ? sizeof(struct nfs_vattr) : 0;
-			reclen = NFS_DIRENTRY_LEN(namlen + xlen);
+			reclen = NFS_DIRENTRY_LEN_16(namlen + xlen);
 			space_needed = reclen + attrlen;
 			space_free = nfs_dir_buf_freespace(bp, rdirplus);
 			if (space_needed > space_free) {
@@ -1041,8 +1053,8 @@ nextbuffer:
 				    nfsm_rndup(namlen + skiplen) - nfsm_rndup(namlen));
 			}
 			nfsmout_if(error);
-			nvattrp = rdirplus ? NFS_DIR_BUF_NVATTR(bp, ndbhp->ndbh_count) : &nvattr;
-			error = nfs4_parsefattr(&nmrep, NULL, nvattrp, &fh, NULL, NULL);
+			nvattrp = rdirplus ? NFS_DIR_BUF_NVATTR(bp, ndbhp->ndbh_count) : nvattr;
+			error = nfs4_parsefattr(&nmrep, NULL, nvattrp, fh, NULL, NULL);
 			if (!error && NFS_BITMAP_ISSET(nvattrp->nva_bitmap, NFS_FATTR_ACL)) {
 				/* we do NOT want ACLs returned to us here */
 				NFS_BITMAP_CLR(nvattrp->nva_bitmap, NFS_FATTR_ACL);
@@ -1055,7 +1067,7 @@ nextbuffer:
 				/* OK, we may not have gotten all of the attributes but we will use what we can. */
 				if ((error == NFSERR_MOVED) || (error == NFSERR_INVAL)) {
 					/* set this up to look like a referral trigger */
-					nfs4_default_attrs_for_referral_trigger(dnp, dp->d_name, namlen, nvattrp, &fh);
+					nfs4_default_attrs_for_referral_trigger(dnp, dp->d_name, namlen, nvattrp, fh);
 				}
 				error = 0;
 			}
@@ -1080,10 +1092,11 @@ nextbuffer:
 			if (rdirplus) {
 				/* fileid is already in d_fileno, so stash xid in attrs */
 				nvattrp->nva_fileid = savedxid;
+				nvattrp->nva_flags |= NFS_FFLAG_FILEID_CONTAINS_XID;
 				if (NFS_BITMAP_ISSET(nvattrp->nva_bitmap, NFS_FATTR_FILEHANDLE)) {
-					fhlen = fh.fh_len + 1;
+					fhlen = fh->fh_len + 1;
 					xlen = fhlen + sizeof(time_t);
-					reclen = NFS_DIRENTRY_LEN(namlen + xlen);
+					reclen = NFS_DIRENTRY_LEN_16(namlen + xlen);
 					space_needed = reclen + attrlen;
 					if (space_needed > space_free) {
 						/* didn't actually have the room... move on to next buffer */
@@ -1091,19 +1104,19 @@ nextbuffer:
 						goto nextbuffer;
 					}
 					/* pack the file handle into the record */
-					dp->d_name[dp->d_namlen + 1] = fh.fh_len;
-					bcopy(fh.fh_data, &dp->d_name[dp->d_namlen + 2], fh.fh_len);
+					dp->d_name[dp->d_namlen + 1] = (unsigned char)fh->fh_len; /* No truncation because fh_len's value is checked during nfs4_parsefattr() */
+					bcopy(fh->fh_data, &dp->d_name[dp->d_namlen + 2], fh->fh_len);
 				} else {
 					/* mark the file handle invalid */
-					fh.fh_len = 0;
-					fhlen = fh.fh_len + 1;
+					fh->fh_len = 0;
+					fhlen = fh->fh_len + 1;
 					xlen = fhlen + sizeof(time_t);
-					reclen = NFS_DIRENTRY_LEN(namlen + xlen);
+					reclen = NFS_DIRENTRY_LEN_16(namlen + xlen);
 					bzero(&dp->d_name[dp->d_namlen + 1], fhlen);
 				}
 				*(time_t*)(&dp->d_name[dp->d_namlen + 1 + fhlen]) = now.tv_sec;
 				dp->d_reclen = reclen;
-				nfs_rdirplus_update_node_attrs(dnp, dp, &fh, nvattrp, &savedxid);
+				nfs_rdirplus_update_node_attrs(dnp, dp, fh, nvattrp, &savedxid);
 			}
 			padstart = dp->d_name + dp->d_namlen + 1 + xlen;
 			ndbhp->ndbh_count++;
@@ -1153,6 +1166,8 @@ nfsmout:
 	}
 	nfsm_chain_cleanup(&nmreq);
 	nfsm_chain_cleanup(&nmrep);
+	NFS_ZFREE(nfs_fhandle_zone, fh);
+	FREE(nvattr, M_TEMP);
 	return bp_dropped ? NFSERR_DIRBUFDROPPED : error;
 }
 
@@ -1348,12 +1363,7 @@ nfs4_commit_rpc(
 		return 0;
 	}
 	nfsvers = nmp->nm_vers;
-
-	if (count > UINT32_MAX) {
-		count32 = 0;
-	} else {
-		count32 = count;
-	}
+	count32 = count > UINT32_MAX ? 0 : (uint32_t)count;
 
 	NFSREQ_SECINFO_SET(&si, np, NULL, 0, NULL, 0);
 	nfsm_chain_null(&nmreq);
@@ -1418,7 +1428,7 @@ nfs4_pathconf_rpc(
 	struct nfsm_chain nmreq, nmrep;
 	struct nfsmount *nmp = NFSTONMP(np);
 	uint32_t bitmap[NFS_ATTR_BITMAP_LEN];
-	struct nfs_vattr nvattr;
+	struct nfs_vattr *nvattr;
 	struct nfsreq_secinfo_args si;
 
 	if (nfs_mount_gone(nmp)) {
@@ -1430,7 +1440,8 @@ nfs4_pathconf_rpc(
 	}
 
 	NFSREQ_SECINFO_SET(&si, np, NULL, 0, NULL, 0);
-	NVATTR_INIT(&nvattr);
+	MALLOC(nvattr, struct nfs_vattr *, sizeof(*nvattr), M_TEMP, M_WAITOK);
+	NVATTR_INIT(nvattr);
 	nfsm_chain_null(&nmreq);
 	nfsm_chain_null(&nmrep);
 
@@ -1462,19 +1473,20 @@ nfs4_pathconf_rpc(
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_PUTFH);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
 	nfsmout_if(error);
-	error = nfs4_parsefattr(&nmrep, nfsap, &nvattr, NULL, NULL, NULL);
+	error = nfs4_parsefattr(&nmrep, nfsap, nvattr, NULL, NULL, NULL);
 	nfsmout_if(error);
 	if ((lockerror = nfs_node_lock(np))) {
 		error = lockerror;
 	}
 	if (!error) {
-		nfs_loadattrcache(np, &nvattr, &xid, 0);
+		nfs_loadattrcache(np, nvattr, &xid, 0);
 	}
 	if (!lockerror) {
 		nfs_node_unlock(np);
 	}
 nfsmout:
-	NVATTR_CLEANUP(&nvattr);
+	NVATTR_CLEANUP(nvattr);
+	FREE(nvattr, M_TEMP);
 	nfsm_chain_cleanup(&nmreq);
 	nfsm_chain_cleanup(&nmrep);
 	return error;
@@ -1491,7 +1503,7 @@ nfs4_vnop_getattr(
 {
 	struct vnode_attr *vap = ap->a_vap;
 	struct nfsmount *nmp;
-	struct nfs_vattr nva;
+	struct nfs_vattr *nva;
 	int error, acls, ngaflags;
 
 	nmp = VTONMP(ap->a_vp);
@@ -1504,105 +1516,108 @@ nfs4_vnop_getattr(
 	if (VATTR_IS_ACTIVE(vap, va_acl) && acls) {
 		ngaflags |= NGA_ACL;
 	}
-	error = nfs_getattr(VTONFS(ap->a_vp), &nva, ap->a_context, ngaflags);
+	MALLOC(nva, struct nfs_vattr *, sizeof(*nva), M_TEMP, M_WAITOK);
+	error = nfs_getattr(VTONFS(ap->a_vp), nva, ap->a_context, ngaflags);
 	if (error) {
-		return error;
+		goto out;
 	}
 
 	/* copy what we have in nva to *a_vap */
-	if (VATTR_IS_ACTIVE(vap, va_rdev) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_RAWDEV)) {
-		dev_t rdev = makedev(nva.nva_rawdev.specdata1, nva.nva_rawdev.specdata2);
+	if (VATTR_IS_ACTIVE(vap, va_rdev) && NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_RAWDEV)) {
+		dev_t rdev = makedev(nva->nva_rawdev.specdata1, nva->nva_rawdev.specdata2);
 		VATTR_RETURN(vap, va_rdev, rdev);
 	}
-	if (VATTR_IS_ACTIVE(vap, va_nlink) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_NUMLINKS)) {
-		VATTR_RETURN(vap, va_nlink, nva.nva_nlink);
+	if (VATTR_IS_ACTIVE(vap, va_nlink) && NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_NUMLINKS)) {
+		VATTR_RETURN(vap, va_nlink, nva->nva_nlink);
 	}
-	if (VATTR_IS_ACTIVE(vap, va_data_size) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_SIZE)) {
-		VATTR_RETURN(vap, va_data_size, nva.nva_size);
+	if (VATTR_IS_ACTIVE(vap, va_data_size) && NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_SIZE)) {
+		VATTR_RETURN(vap, va_data_size, nva->nva_size);
 	}
 	// VATTR_RETURN(vap, va_data_alloc, ???);
 	// VATTR_RETURN(vap, va_total_size, ???);
-	if (VATTR_IS_ACTIVE(vap, va_total_alloc) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_SPACE_USED)) {
-		VATTR_RETURN(vap, va_total_alloc, nva.nva_bytes);
+	if (VATTR_IS_ACTIVE(vap, va_total_alloc) && NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_SPACE_USED)) {
+		VATTR_RETURN(vap, va_total_alloc, nva->nva_bytes);
 	}
-	if (VATTR_IS_ACTIVE(vap, va_uid) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_OWNER)) {
-		VATTR_RETURN(vap, va_uid, nva.nva_uid);
+	if (VATTR_IS_ACTIVE(vap, va_uid) && NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_OWNER)) {
+		VATTR_RETURN(vap, va_uid, nva->nva_uid);
 	}
-	if (VATTR_IS_ACTIVE(vap, va_uuuid) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_OWNER)) {
-		VATTR_RETURN(vap, va_uuuid, nva.nva_uuuid);
+	if (VATTR_IS_ACTIVE(vap, va_uuuid) && NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_OWNER)) {
+		VATTR_RETURN(vap, va_uuuid, nva->nva_uuuid);
 	}
-	if (VATTR_IS_ACTIVE(vap, va_gid) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_OWNER_GROUP)) {
-		VATTR_RETURN(vap, va_gid, nva.nva_gid);
+	if (VATTR_IS_ACTIVE(vap, va_gid) && NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_OWNER_GROUP)) {
+		VATTR_RETURN(vap, va_gid, nva->nva_gid);
 	}
-	if (VATTR_IS_ACTIVE(vap, va_guuid) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_OWNER_GROUP)) {
-		VATTR_RETURN(vap, va_guuid, nva.nva_guuid);
+	if (VATTR_IS_ACTIVE(vap, va_guuid) && NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_OWNER_GROUP)) {
+		VATTR_RETURN(vap, va_guuid, nva->nva_guuid);
 	}
 	if (VATTR_IS_ACTIVE(vap, va_mode)) {
-		if (NMFLAG(nmp, ACLONLY) || !NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_MODE)) {
-			VATTR_RETURN(vap, va_mode, 0777);
+		if (NMFLAG(nmp, ACLONLY) || !NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_MODE)) {
+			VATTR_RETURN(vap, va_mode, ACCESSPERMS);
 		} else {
-			VATTR_RETURN(vap, va_mode, nva.nva_mode);
+			VATTR_RETURN(vap, va_mode, nva->nva_mode);
 		}
 	}
 	if (VATTR_IS_ACTIVE(vap, va_flags) &&
-	    (NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_ARCHIVE) ||
-	    NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_HIDDEN) ||
-	    (nva.nva_flags & NFS_FFLAG_TRIGGER))) {
+	    (NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_ARCHIVE) ||
+	    NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_HIDDEN) ||
+	    (nva->nva_flags & NFS_FFLAG_TRIGGER))) {
 		uint32_t flags = 0;
-		if (NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_ARCHIVE) &&
-		    (nva.nva_flags & NFS_FFLAG_ARCHIVED)) {
+		if (NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_ARCHIVE) &&
+		    (nva->nva_flags & NFS_FFLAG_ARCHIVED)) {
 			flags |= SF_ARCHIVED;
 		}
-		if (NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_HIDDEN) &&
-		    (nva.nva_flags & NFS_FFLAG_HIDDEN)) {
+		if (NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_HIDDEN) &&
+		    (nva->nva_flags & NFS_FFLAG_HIDDEN)) {
 			flags |= UF_HIDDEN;
 		}
 		VATTR_RETURN(vap, va_flags, flags);
 	}
-	if (VATTR_IS_ACTIVE(vap, va_create_time) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_TIME_CREATE)) {
-		vap->va_create_time.tv_sec = nva.nva_timesec[NFSTIME_CREATE];
-		vap->va_create_time.tv_nsec = nva.nva_timensec[NFSTIME_CREATE];
+	if (VATTR_IS_ACTIVE(vap, va_create_time) && NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_TIME_CREATE)) {
+		vap->va_create_time.tv_sec = nva->nva_timesec[NFSTIME_CREATE];
+		vap->va_create_time.tv_nsec = nva->nva_timensec[NFSTIME_CREATE];
 		VATTR_SET_SUPPORTED(vap, va_create_time);
 	}
-	if (VATTR_IS_ACTIVE(vap, va_access_time) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_TIME_ACCESS)) {
-		vap->va_access_time.tv_sec = nva.nva_timesec[NFSTIME_ACCESS];
-		vap->va_access_time.tv_nsec = nva.nva_timensec[NFSTIME_ACCESS];
+	if (VATTR_IS_ACTIVE(vap, va_access_time) && NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_TIME_ACCESS)) {
+		vap->va_access_time.tv_sec = nva->nva_timesec[NFSTIME_ACCESS];
+		vap->va_access_time.tv_nsec = nva->nva_timensec[NFSTIME_ACCESS];
 		VATTR_SET_SUPPORTED(vap, va_access_time);
 	}
-	if (VATTR_IS_ACTIVE(vap, va_modify_time) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_TIME_MODIFY)) {
-		vap->va_modify_time.tv_sec = nva.nva_timesec[NFSTIME_MODIFY];
-		vap->va_modify_time.tv_nsec = nva.nva_timensec[NFSTIME_MODIFY];
+	if (VATTR_IS_ACTIVE(vap, va_modify_time) && NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_TIME_MODIFY)) {
+		vap->va_modify_time.tv_sec = nva->nva_timesec[NFSTIME_MODIFY];
+		vap->va_modify_time.tv_nsec = nva->nva_timensec[NFSTIME_MODIFY];
 		VATTR_SET_SUPPORTED(vap, va_modify_time);
 	}
-	if (VATTR_IS_ACTIVE(vap, va_change_time) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_TIME_METADATA)) {
-		vap->va_change_time.tv_sec = nva.nva_timesec[NFSTIME_CHANGE];
-		vap->va_change_time.tv_nsec = nva.nva_timensec[NFSTIME_CHANGE];
+	if (VATTR_IS_ACTIVE(vap, va_change_time) && NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_TIME_METADATA)) {
+		vap->va_change_time.tv_sec = nva->nva_timesec[NFSTIME_CHANGE];
+		vap->va_change_time.tv_nsec = nva->nva_timensec[NFSTIME_CHANGE];
 		VATTR_SET_SUPPORTED(vap, va_change_time);
 	}
-	if (VATTR_IS_ACTIVE(vap, va_backup_time) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_TIME_BACKUP)) {
-		vap->va_backup_time.tv_sec = nva.nva_timesec[NFSTIME_BACKUP];
-		vap->va_backup_time.tv_nsec = nva.nva_timensec[NFSTIME_BACKUP];
+	if (VATTR_IS_ACTIVE(vap, va_backup_time) && NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_TIME_BACKUP)) {
+		vap->va_backup_time.tv_sec = nva->nva_timesec[NFSTIME_BACKUP];
+		vap->va_backup_time.tv_nsec = nva->nva_timensec[NFSTIME_BACKUP];
 		VATTR_SET_SUPPORTED(vap, va_backup_time);
 	}
-	if (VATTR_IS_ACTIVE(vap, va_fileid) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_FILEID)) {
-		VATTR_RETURN(vap, va_fileid, nva.nva_fileid);
+	if (VATTR_IS_ACTIVE(vap, va_fileid) && NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_FILEID)) {
+		VATTR_RETURN(vap, va_fileid, nva->nva_fileid);
 	}
-	if (VATTR_IS_ACTIVE(vap, va_type) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_TYPE)) {
-		VATTR_RETURN(vap, va_type, nva.nva_type);
+	if (VATTR_IS_ACTIVE(vap, va_type) && NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_TYPE)) {
+		VATTR_RETURN(vap, va_type, nva->nva_type);
 	}
-	if (VATTR_IS_ACTIVE(vap, va_filerev) && NFS_BITMAP_ISSET(nva.nva_bitmap, NFS_FATTR_CHANGE)) {
-		VATTR_RETURN(vap, va_filerev, nva.nva_change);
+	if (VATTR_IS_ACTIVE(vap, va_filerev) && NFS_BITMAP_ISSET(nva->nva_bitmap, NFS_FATTR_CHANGE)) {
+		VATTR_RETURN(vap, va_filerev, nva->nva_change);
 	}
 
 	if (VATTR_IS_ACTIVE(vap, va_acl) && acls) {
-		VATTR_RETURN(vap, va_acl, nva.nva_acl);
-		nva.nva_acl = NULL;
+		VATTR_RETURN(vap, va_acl, nva->nva_acl);
+		nva->nva_acl = NULL;
 	}
 
 	// other attrs we might support someday:
 	// VATTR_RETURN(vap, va_encoding, ??? /* potentially unnormalized UTF-8? */);
 
-	NVATTR_CLEANUP(&nva);
+	NVATTR_CLEANUP(nva);
+out:
+	FREE(nva, M_TEMP);
 	return error;
 }
 
@@ -1836,7 +1851,7 @@ nfs_mount_state_in_use_end(struct nfsmount *nmp, int error)
 	int restart = nfs_mount_state_error_should_restart(error);
 
 	if (nfs_mount_gone(nmp)) {
-		return restart;
+		return ENXIO;
 	}
 	lck_mtx_lock(&nmp->nm_lock);
 	if (restart && (error != NFSERR_OLD_STATEID) && (error != NFSERR_GRACE)) {
@@ -2393,8 +2408,8 @@ nfs_open_file_remove_open_find(
 	struct nfs_open_file *nofp,
 	uint32_t accessMode,
 	uint32_t denyMode,
-	uint32_t *newAccessMode,
-	uint32_t *newDenyMode,
+	uint8_t *newAccessMode,
+	uint8_t *newDenyMode,
 	int *delegated)
 {
 	/*
@@ -2482,7 +2497,7 @@ nfs_open_file_remove_open_find(
 void
 nfs_open_file_remove_open(struct nfs_open_file *nofp, uint32_t accessMode, uint32_t denyMode)
 {
-	uint32_t newAccessMode, newDenyMode;
+	uint8_t newAccessMode, newDenyMode;
 	int delegated = 0;
 
 	lck_mtx_lock(&nofp->nof_lock);
@@ -2803,7 +2818,7 @@ nfs4_open(
 	vnode_t dvp = NULL;
 	struct componentname cn;
 	const char *vname = NULL;
-	size_t namelen;
+	uint32_t namelen;
 	char smallname[128];
 	char *filename = NULL;
 	int error = 0, readtoo = 0;
@@ -2909,7 +2924,8 @@ nfs_vnop_mmap(
 	vfs_context_t ctx = ap->a_context;
 	vnode_t vp = ap->a_vp;
 	nfsnode_t np = VTONFS(vp);
-	int error = 0, accessMode, denyMode, delegated;
+	int error = 0, delegated = 0;
+	uint8_t accessMode, denyMode;
 	struct nfsmount *nmp;
 	struct nfs_open_owner *noop = NULL;
 	struct nfs_open_file *nofp = NULL;
@@ -2962,10 +2978,10 @@ restart:
 	}
 #if CONFIG_NFS4
 	if (!error && (nofp->nof_flags & NFS_OPEN_FILE_REOPEN)) {
-		nfs_mount_state_in_use_end(nmp, 0);
 		error = nfs4_reopen(nofp, NULL);
 		nofp = NULL;
 		if (!error) {
+			nfs_mount_state_in_use_end(nmp, 0);
 			goto restart;
 		}
 	}
@@ -3163,6 +3179,42 @@ out:
 	return error;
 }
 
+int
+nfs_vnop_mmap_check(
+	struct vnop_mmap_check_args /* {
+                                     *  struct vnodeop_desc *a_desc;
+                                     *  vnode_t a_vp;
+                                     *  int a_flags;
+                                     *  vfs_context_t a_context;
+                                     *  } */*ap)
+{
+	vfs_context_t ctx = ap->a_context;
+	vnode_t vp = ap->a_vp;
+	struct nfsmount *nmp = VTONMP(vp);
+	struct vnop_access_args naa;
+	int error = 0;
+
+	if (nfs_mount_gone(nmp)) {
+		return ENXIO;
+	}
+
+	if (vnode_isreg(vp)) {
+		/*
+		 * We only need to ensure that a page-in will be
+		 * possible with these credentials.  Everything
+		 * else has been checked at other layers.
+		 */
+		naa.a_desc = &vnop_access_desc;
+		naa.a_vp = vp;
+		naa.a_action = KAUTH_VNODE_READ_DATA;
+		naa.a_context = ctx;
+
+		/* compute actual success/failure based on accessibility */
+		error = nfs_vnop_access(&naa);
+	}
+
+	return error;
+}
 
 int
 nfs_vnop_mnomap(
@@ -3222,9 +3274,9 @@ loop:
 		lck_mtx_unlock(&np->n_openlock);
 #if CONFIG_NFS4
 		if (nofp->nof_flags & NFS_OPEN_FILE_REOPEN) {
-			nfs_mount_state_in_use_end(nmp, 0);
 			error = nfs4_reopen(nofp, NULL);
 			if (!error) {
+				nfs_mount_state_in_use_end(nmp, 0);
 				goto loop;
 			}
 		}
@@ -4161,8 +4213,10 @@ restart:
 			/* release any currently held shared lock before sleeping */
 			nfs_open_state_clear_busy(np);
 			busy = 0;
-			nfs_mount_state_in_use_end(nmp, 0);
-			inuse = 0;
+			if (inuse) {
+				nfs_mount_state_in_use_end(nmp, 0);
+				inuse = 0;
+			}
 			error2 = nfs_advlock_unlock(np, nofp, nlop, 0, UINT64_MAX, NFS_FILE_LOCK_STYLE_FLOCK, ctx);
 			flocknflp = NULL;
 			if (!error2) {
@@ -4197,8 +4251,10 @@ restart:
 			/* looks like we have a recover pending... restart */
 			nfs_open_state_clear_busy(np);
 			busy = 0;
-			nfs_mount_state_in_use_end(nmp, 0);
-			inuse = 0;
+			if (inuse) {
+				nfs_mount_state_in_use_end(nmp, 0);
+				inuse = 0;
+			}
 			goto restart;
 		}
 		if (!error && (np->n_flag & NREVOKE)) {
@@ -4370,8 +4426,10 @@ error_out:
 
 	lck_mtx_unlock(&np->n_openlock);
 	nfs_open_state_clear_busy(np);
-	nfs_mount_state_in_use_end(nmp, error);
 
+	if (inuse) {
+		nfs_mount_state_in_use_end(nmp, error);
+	}
 	if (nflp2) {
 		nfs_file_lock_destroy(nflp2);
 	}
@@ -4865,7 +4923,7 @@ nfs4_reopen(struct nfs_open_file *nofp, thread_t thd)
 	struct componentname cn;
 	const char *vname = NULL;
 	const char *name = NULL;
-	size_t namelen;
+	uint32_t namelen;
 	char smallname[128];
 	char *filename = NULL;
 	int error = 0, done = 0, slpflag = NMFLAG(nmp, INTR) ? PCATCH : 0;
@@ -5107,7 +5165,7 @@ nfs4_open_rpc_internal(
 {
 	struct nfsmount *nmp;
 	struct nfs_open_owner *noop = nofp->nof_owner;
-	struct nfs_vattr nvattr;
+	struct nfs_vattr *nvattr;
 	int error = 0, open_error = EIO, lockerror = ENOENT, busyerror = ENOENT, status;
 	int nfsvers, namedattrs, numops, exclusive = 0, gotuid, gotgid;
 	u_int64_t xid, savedxid = 0;
@@ -5118,9 +5176,9 @@ nfs4_open_rpc_internal(
 	uint32_t bitmap[NFS_ATTR_BITMAP_LEN], bmlen;
 	uint32_t rflags, delegation, recall;
 	struct nfs_stateid stateid, dstateid, *sid;
-	fhandle_t fh;
-	struct nfsreq rq, *req = &rq;
-	struct nfs_dulookup dul;
+	fhandle_t *fh;
+	struct nfsreq *req;
+	struct nfs_dulookup *dul;
 	char sbuf[64], *s;
 	uint32_t ace_type, ace_flags, ace_mask, len, slen;
 	struct kauth_ace ace;
@@ -5136,6 +5194,7 @@ nfs4_open_rpc_internal(
 	}
 	nfsvers = nmp->nm_vers;
 	namedattrs = (nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_NAMED_ATTR);
+	bzero(&dstateid, sizeof(dstateid));
 	if (dnp->n_vattr.nva_flags & NFS_FFLAG_TRIGGER_REFERRAL) {
 		return EINVAL;
 	}
@@ -5162,12 +5221,18 @@ nfs4_open_rpc_internal(
 	if ((error = nfs_open_owner_set_busy(noop, thd))) {
 		return error;
 	}
+
+	fh = zalloc(nfs_fhandle_zone);
+	req = zalloc(nfs_req_zone);
+	MALLOC(dul, struct nfs_dulookup *, sizeof(*dul), M_TEMP, M_WAITOK);
+	MALLOC(nvattr, struct nfs_vattr *, sizeof(*nvattr), M_TEMP, M_WAITOK);
+
 again:
 	rflags = delegation = recall = 0;
 	ace.ace_flags = 0;
 	s = sbuf;
 	slen = sizeof(sbuf);
-	NVATTR_INIT(&nvattr);
+	NVATTR_INIT(nvattr);
 	NFSREQ_SECINFO_SET(&si, dnp, NULL, 0, cnp->cn_nameptr, cnp->cn_namelen);
 
 	nfsm_chain_null(&nmreq);
@@ -5224,20 +5289,20 @@ again:
 	nfsmout_if(error);
 
 	if (create && !namedattrs) {
-		nfs_dulookup_init(&dul, dnp, cnp->cn_nameptr, cnp->cn_namelen, ctx);
+		nfs_dulookup_init(dul, dnp, cnp->cn_nameptr, cnp->cn_namelen, ctx);
 	}
 
 	error = nfs_request_async(dnp, NULL, &nmreq, NFSPROC4_COMPOUND, thd, cred, &si, R_NOINTR, NULL, &req);
 	if (!error) {
 		if (create && !namedattrs) {
-			nfs_dulookup_start(&dul, dnp, ctx);
+			nfs_dulookup_start(dul, dnp, ctx);
 		}
 		error = nfs_request_async_finish(req, &nmrep, &xid, &status);
 		savedxid = xid;
 	}
 
 	if (create && !namedattrs) {
-		nfs_dulookup_finish(&dul, dnp, ctx);
+		nfs_dulookup_finish(dul, dnp, ctx);
 	}
 
 	if ((lockerror = nfs_node_lock(dnp))) {
@@ -5315,14 +5380,14 @@ again:
 	}
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
 	nfsmout_if(error);
-	error = nfs4_parsefattr(&nmrep, NULL, &nvattr, &fh, NULL, NULL);
+	error = nfs4_parsefattr(&nmrep, NULL, nvattr, fh, NULL, NULL);
 	nfsmout_if(error);
-	if (!NFS_BITMAP_ISSET(nvattr.nva_bitmap, NFS_FATTR_FILEHANDLE)) {
+	if (!NFS_BITMAP_ISSET(nvattr->nva_bitmap, NFS_FATTR_FILEHANDLE)) {
 		printf("nfs: open/create didn't return filehandle? %s\n", cnp->cn_nameptr);
 		error = EBADRPC;
 		goto nfsmout;
 	}
-	if (!create && np && !NFS_CMPFH(np, fh.fh_data, fh.fh_len)) {
+	if (!create && np && !NFS_CMPFH(np, fh->fh_data, fh->fh_len)) {
 		// XXX for the open case, what if fh doesn't match the vnode we think we're opening?
 		// Solaris Named Attributes may do this due to a bug.... so don't warn for named attributes.
 		if (!(np->n_vattr.nva_flags & NFS_FFLAG_IS_ATTR)) {
@@ -5345,8 +5410,8 @@ again:
 	if (rflags & NFS_OPEN_RESULT_CONFIRM) {
 		nfs_node_unlock(dnp);
 		lockerror = ENOENT;
-		NVATTR_CLEANUP(&nvattr);
-		error = nfs4_open_confirm_rpc(nmp, dnp, fh.fh_data, fh.fh_len, noop, sid, thd, cred, &nvattr, &xid);
+		NVATTR_CLEANUP(nvattr);
+		error = nfs4_open_confirm_rpc(nmp, dnp, fh->fh_data, fh->fh_len, noop, sid, thd, cred, nvattr, &xid);
 		nfsmout_if(error);
 		savedxid = xid;
 		if ((lockerror = nfs_node_lock(dnp))) {
@@ -5371,15 +5436,15 @@ nfsmout:
 	if (!lockerror) {
 		nfs_node_unlock(dnp);
 	}
-	if (!error && !np && fh.fh_len) {
+	if (!error && !np && fh->fh_len) {
 		/* create the vnode with the filehandle and attributes */
 		xid = savedxid;
-		error = nfs_nget(NFSTOMP(dnp), dnp, cnp, fh.fh_data, fh.fh_len, &nvattr, &xid, rq.r_auth, NG_MAKEENTRY, &newnp);
+		error = nfs_nget(NFSTOMP(dnp), dnp, cnp, fh->fh_data, fh->fh_len, nvattr, &xid, req->r_auth, NG_MAKEENTRY, &newnp);
 		if (!error) {
 			newvp = NFSTOV(newnp);
 		}
 	}
-	NVATTR_CLEANUP(&nvattr);
+	NVATTR_CLEANUP(nvattr);
 	if (!busyerror) {
 		nfs_node_clear_busy(dnp);
 	}
@@ -5405,7 +5470,7 @@ nfsmout:
 		} else {
 			/* give the delegation back */
 			if (np) {
-				if (NFS_CMPFH(np, fh.fh_data, fh.fh_len)) {
+				if (NFS_CMPFH(np, fh->fh_data, fh->fh_len)) {
 					/* update delegation state and return it */
 					lck_mtx_lock(&np->n_openlock);
 					np->n_openflags &= ~N_DELEG_MASK;
@@ -5421,13 +5486,13 @@ nfsmout:
 					}
 					lck_mtx_unlock(&np->n_openlock);
 					/* don't need to send a separate delegreturn for fh */
-					fh.fh_len = 0;
+					fh->fh_len = 0;
 				}
 				/* return np's current delegation */
 				nfs4_delegation_return(np, 0, thd, cred);
 			}
-			if (fh.fh_len) { /* return fh's delegation if it wasn't for np */
-				nfs4_delegreturn_rpc(nmp, fh.fh_data, fh.fh_len, &dstateid, 0, thd, cred);
+			if (fh->fh_len) { /* return fh's delegation if it wasn't for np */
+				nfs4_delegreturn_rpc(nmp, fh->fh_data, fh->fh_len, &dstateid, 0, thd, cred);
 			}
 		}
 	}
@@ -5459,6 +5524,10 @@ nfsmout:
 		}
 	}
 	nfs_open_owner_clear_busy(noop);
+	NFS_ZFREE(nfs_fhandle_zone, fh);
+	NFS_ZFREE(nfs_req_zone, req);
+	FREE(dul, M_TEMP);
+	FREE(nvattr, M_TEMP);
 	return error;
 }
 
@@ -5475,7 +5544,7 @@ nfs4_claim_delegated_open_rpc(
 {
 	struct nfsmount *nmp;
 	struct nfs_open_owner *noop = nofp->nof_owner;
-	struct nfs_vattr nvattr;
+	struct nfs_vattr *nvattr;
 	int error = 0, lockerror = ENOENT, status;
 	int nfsvers, numops;
 	u_int64_t xid;
@@ -5483,7 +5552,7 @@ nfs4_claim_delegated_open_rpc(
 	struct nfsm_chain nmreq, nmrep;
 	uint32_t bitmap[NFS_ATTR_BITMAP_LEN], bmlen;
 	uint32_t rflags = 0, delegation, recall = 0;
-	fhandle_t fh;
+	fhandle_t *fh;
 	struct nfs_stateid dstateid;
 	char sbuf[64], *s = sbuf;
 	uint32_t ace_type, ace_flags, ace_mask, len, slen = sizeof(sbuf);
@@ -5491,7 +5560,7 @@ nfs4_claim_delegated_open_rpc(
 	vnode_t dvp = NULL;
 	const char *vname = NULL;
 	const char *name = NULL;
-	size_t namelen;
+	uint32_t namelen;
 	char smallname[128];
 	char *filename = NULL;
 	struct nfsreq_secinfo_args si;
@@ -5500,6 +5569,8 @@ nfs4_claim_delegated_open_rpc(
 	if (nfs_mount_gone(nmp)) {
 		return ENXIO;
 	}
+	fh = zalloc(nfs_fhandle_zone);
+	MALLOC(nvattr, struct nfs_vattr *, sizeof(*nvattr), M_TEMP, M_WAITOK);
 	nfsvers = nmp->nm_vers;
 
 	nfs_node_lock_force(np);
@@ -5556,7 +5627,7 @@ nfs4_claim_delegated_open_rpc(
 	if ((error = nfs_open_owner_set_busy(noop, NULL))) {
 		goto out;
 	}
-	NVATTR_INIT(&nvattr);
+	NVATTR_INIT(nvattr);
 	delegation = NFS_OPEN_DELEGATE_NONE;
 	dstateid = np->n_dstateid;
 	NFSREQ_SECINFO_SET(&si, VTONFS(dvp), NULL, 0, filename, namelen);
@@ -5692,27 +5763,29 @@ nfs4_claim_delegated_open_rpc(
 	}
 	nfsmout_if(error);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
-	error = nfs4_parsefattr(&nmrep, NULL, &nvattr, &fh, NULL, NULL);
+	error = nfs4_parsefattr(&nmrep, NULL, nvattr, fh, NULL, NULL);
 	nfsmout_if(error);
-	if (!NFS_BITMAP_ISSET(nvattr.nva_bitmap, NFS_FATTR_FILEHANDLE)) {
+	if (!NFS_BITMAP_ISSET(nvattr->nva_bitmap, NFS_FATTR_FILEHANDLE)) {
 		printf("nfs: open reclaim didn't return filehandle? %s\n", filename ? filename : "???");
 		error = EBADRPC;
 		goto nfsmout;
 	}
-	if (!NFS_CMPFH(np, fh.fh_data, fh.fh_len)) {
+	if (!NFS_CMPFH(np, fh->fh_data, fh->fh_len)) {
 		// XXX what if fh doesn't match the vnode we think we're re-opening?
 		// Solaris Named Attributes may do this due to a bug.... so don't warn for named attributes.
 		if (!(np->n_vattr.nva_flags & NFS_FFLAG_IS_ATTR)) {
 			printf("nfs4_claim_delegated_open_rpc: warning: file handle mismatch %s\n", filename ? filename : "???");
 		}
 	}
-	error = nfs_loadattrcache(np, &nvattr, &xid, 1);
+	error = nfs_loadattrcache(np, nvattr, &xid, 1);
 	nfsmout_if(error);
 	if (rflags & NFS_OPEN_RESULT_LOCKTYPE_POSIX) {
 		nofp->nof_flags |= NFS_OPEN_FILE_POSIXLOCK;
 	}
 nfsmout:
-	NVATTR_CLEANUP(&nvattr);
+	NVATTR_CLEANUP(nvattr);
+	FREE(nvattr, M_TEMP);
+	NFS_ZFREE(nfs_fhandle_zone, fh);
 	nfsm_chain_cleanup(&nmreq);
 	nfsm_chain_cleanup(&nmrep);
 	if (!lockerror) {
@@ -5755,7 +5828,7 @@ nfs4_open_reclaim_rpc(
 {
 	struct nfsmount *nmp;
 	struct nfs_open_owner *noop = nofp->nof_owner;
-	struct nfs_vattr nvattr;
+	struct nfs_vattr *nvattr;
 	int error = 0, lockerror = ENOENT, status;
 	int nfsvers, numops;
 	u_int64_t xid;
@@ -5763,7 +5836,7 @@ nfs4_open_reclaim_rpc(
 	struct nfsm_chain nmreq, nmrep;
 	uint32_t bitmap[NFS_ATTR_BITMAP_LEN], bmlen;
 	uint32_t rflags = 0, delegation, recall = 0;
-	fhandle_t fh;
+	fhandle_t *fh;
 	struct nfs_stateid dstateid;
 	char sbuf[64], *s = sbuf;
 	uint32_t ace_type, ace_flags, ace_mask, len, slen = sizeof(sbuf);
@@ -5780,7 +5853,9 @@ nfs4_open_reclaim_rpc(
 		return error;
 	}
 
-	NVATTR_INIT(&nvattr);
+	fh = zalloc(nfs_fhandle_zone);
+	MALLOC(nvattr, struct nfs_vattr *, sizeof(*nvattr), M_TEMP, M_WAITOK);
+	NVATTR_INIT(nvattr);
 	delegation = NFS_OPEN_DELEGATE_NONE;
 	dstateid = np->n_dstateid;
 	NFSREQ_SECINFO_SET(&si, np, NULL, 0, NULL, 0);
@@ -5920,14 +5995,14 @@ nfs4_open_reclaim_rpc(
 	}
 	nfsmout_if(error);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
-	error = nfs4_parsefattr(&nmrep, NULL, &nvattr, &fh, NULL, NULL);
+	error = nfs4_parsefattr(&nmrep, NULL, nvattr, fh, NULL, NULL);
 	nfsmout_if(error);
-	if (!NFS_BITMAP_ISSET(nvattr.nva_bitmap, NFS_FATTR_FILEHANDLE)) {
+	if (!NFS_BITMAP_ISSET(nvattr->nva_bitmap, NFS_FATTR_FILEHANDLE)) {
 		NP(np, "nfs: open reclaim didn't return filehandle?");
 		error = EBADRPC;
 		goto nfsmout;
 	}
-	if (!NFS_CMPFH(np, fh.fh_data, fh.fh_len)) {
+	if (!NFS_CMPFH(np, fh->fh_data, fh->fh_len)) {
 		// XXX what if fh doesn't match the vnode we think we're re-opening?
 		// That should be pretty hard in this case, given that we are doing
 		// the open reclaim using the file handle (and not a dir/name pair).
@@ -5936,7 +6011,7 @@ nfs4_open_reclaim_rpc(
 			NP(np, "nfs4_open_reclaim_rpc: warning: file handle mismatch");
 		}
 	}
-	error = nfs_loadattrcache(np, &nvattr, &xid, 1);
+	error = nfs_loadattrcache(np, nvattr, &xid, 1);
 	nfsmout_if(error);
 	if (rflags & NFS_OPEN_RESULT_LOCKTYPE_POSIX) {
 		nofp->nof_flags |= NFS_OPEN_FILE_POSIXLOCK;
@@ -5944,7 +6019,9 @@ nfs4_open_reclaim_rpc(
 nfsmout:
 	// if (!error)
 	//      NP(np, "nfs: open reclaim (%d, %d) succeeded", share_access, share_deny);
-	NVATTR_CLEANUP(&nvattr);
+	NVATTR_CLEANUP(nvattr);
+	FREE(nvattr, M_TEMP);
+	NFS_ZFREE(nfs_fhandle_zone, fh);
 	nfsm_chain_cleanup(&nmreq);
 	nfsm_chain_cleanup(&nmrep);
 	if (!lockerror) {
@@ -6468,7 +6545,7 @@ int
 nfs4_delegation_return(nfsnode_t np, int flags, thread_t thd, kauth_cred_t cred)
 {
 	struct nfsmount *nmp;
-	fhandle_t fh;
+	fhandle_t *fh;
 	nfs_stateid dstateid;
 	int error;
 
@@ -6476,6 +6553,8 @@ nfs4_delegation_return(nfsnode_t np, int flags, thread_t thd, kauth_cred_t cred)
 	if (nfs_mount_gone(nmp)) {
 		return ENXIO;
 	}
+
+	fh = zalloc(nfs_fhandle_zone);
 
 	/* first, make sure the node's marked for delegation return */
 	lck_mtx_lock(&np->n_openlock);
@@ -6495,10 +6574,10 @@ nfs4_delegation_return(nfsnode_t np, int flags, thread_t thd, kauth_cred_t cred)
 	/* return the delegation */
 	lck_mtx_lock(&np->n_openlock);
 	dstateid = np->n_dstateid;
-	fh.fh_len = np->n_fhsize;
-	bcopy(np->n_fhp, &fh.fh_data, fh.fh_len);
+	fh->fh_len = np->n_fhsize;
+	bcopy(np->n_fhp, fh->fh_data, fh->fh_len);
 	lck_mtx_unlock(&np->n_openlock);
-	error = nfs4_delegreturn_rpc(NFSTONMP(np), fh.fh_data, fh.fh_len, &dstateid, flags, thd, cred);
+	error = nfs4_delegreturn_rpc(NFSTONMP(np), fh->fh_data, fh->fh_len, &dstateid, flags, thd, cred);
 	/* assume delegation is gone for all errors except ETIMEDOUT, NFSERR_*MOVED */
 	if ((error != ETIMEDOUT) && (error != NFSERR_MOVED) && (error != NFSERR_LEASE_MOVED)) {
 		lck_mtx_lock(&np->n_openlock);
@@ -6538,7 +6617,7 @@ out:
 	}
 
 	nfs_open_state_clear_busy(np);
-
+	NFS_ZFREE(nfs_fhandle_zone, fh);
 	return error;
 }
 
@@ -6779,11 +6858,11 @@ restart:
 	}
 	if (!error && (newnofp->nof_flags & NFS_OPEN_FILE_REOPEN)) {
 		/* This shouldn't happen given that this is a new, nodeless nofp */
-		nfs_mount_state_in_use_end(nmp, 0);
 		error = nfs4_reopen(newnofp, vfs_context_thread(ctx));
 		nfs_open_file_destroy(newnofp);
 		newnofp = NULL;
 		if (!error) {
+			nfs_mount_state_in_use_end(nmp, 0);
 			goto restart;
 		}
 	}
@@ -6915,19 +6994,19 @@ nfs4_create_rpc(
 	nfsnode_t *npp)
 {
 	struct nfsmount *nmp;
-	struct nfs_vattr nvattr;
+	struct nfs_vattr *nvattr;
 	int error = 0, create_error = EIO, lockerror = ENOENT, busyerror = ENOENT, status;
 	int nfsvers, namedattrs, numops;
-	u_int64_t xid, savedxid = 0;
+	u_int64_t xid = 0, savedxid = 0;
 	nfsnode_t np = NULL;
 	vnode_t newvp = NULL;
 	struct nfsm_chain nmreq, nmrep;
 	uint32_t bitmap[NFS_ATTR_BITMAP_LEN], bmlen;
 	const char *tag;
 	nfs_specdata sd;
-	fhandle_t fh;
-	struct nfsreq rq, *req = &rq;
-	struct nfs_dulookup dul;
+	fhandle_t *fh;
+	struct nfsreq *req;
+	struct nfs_dulookup *dul;
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(dnp);
@@ -6966,15 +7045,19 @@ nfs4_create_rpc(
 		return EINVAL;
 	}
 
+	fh = zalloc(nfs_fhandle_zone);
+	req = zalloc(nfs_req_zone);
+	MALLOC(dul, struct nfs_dulookup *, sizeof(*dul), M_TEMP, M_WAITOK);
+	MALLOC(nvattr, struct nfs_vattr *, sizeof(*nvattr), M_TEMP, M_WAITOK);
 	nfs_avoid_needless_id_setting_on_create(dnp, vap, ctx);
 
 	error = busyerror = nfs_node_set_busy(dnp, vfs_context_thread(ctx));
 	if (!namedattrs) {
-		nfs_dulookup_init(&dul, dnp, cnp->cn_nameptr, cnp->cn_namelen, ctx);
+		nfs_dulookup_init(dul, dnp, cnp->cn_nameptr, cnp->cn_namelen, ctx);
 	}
 
 	NFSREQ_SECINFO_SET(&si, dnp, NULL, 0, NULL, 0);
-	NVATTR_INIT(&nvattr);
+	NVATTR_INIT(nvattr);
 	nfsm_chain_null(&nmreq);
 	nfsm_chain_null(&nmrep);
 
@@ -7016,7 +7099,7 @@ nfs4_create_rpc(
 	    vfs_context_thread(ctx), vfs_context_ucred(ctx), &si, 0, NULL, &req);
 	if (!error) {
 		if (!namedattrs) {
-			nfs_dulookup_start(&dul, dnp, ctx);
+			nfs_dulookup_start(dul, dnp, ctx);
 		}
 		error = nfs_request_async_finish(req, &nmrep, &xid, &status);
 	}
@@ -7040,9 +7123,9 @@ nfs4_create_rpc(
 	nfs_vattr_set_supported(bitmap, vap);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
 	nfsmout_if(error);
-	error = nfs4_parsefattr(&nmrep, NULL, &nvattr, &fh, NULL, NULL);
+	error = nfs4_parsefattr(&nmrep, NULL, nvattr, fh, NULL, NULL);
 	nfsmout_if(error);
-	if (!NFS_BITMAP_ISSET(nvattr.nva_bitmap, NFS_FATTR_FILEHANDLE)) {
+	if (!NFS_BITMAP_ISSET(nvattr->nva_bitmap, NFS_FATTR_FILEHANDLE)) {
 		printf("nfs: create/%s didn't return filehandle? %s\n", tag, cnp->cn_nameptr);
 		error = EBADRPC;
 		goto nfsmout;
@@ -7071,19 +7154,24 @@ nfsmout:
 		nfs_getattr(dnp, NULL, ctx, NGA_CACHED);
 	}
 
-	if (!error && fh.fh_len) {
+	if (!error && fh->fh_len) {
 		/* create the vnode with the filehandle and attributes */
 		xid = savedxid;
-		error = nfs_nget(NFSTOMP(dnp), dnp, cnp, fh.fh_data, fh.fh_len, &nvattr, &xid, rq.r_auth, NG_MAKEENTRY, &np);
+		error = nfs_nget(NFSTOMP(dnp), dnp, cnp, fh->fh_data, fh->fh_len, nvattr, &xid, req->r_auth, NG_MAKEENTRY, &np);
 		if (!error) {
 			newvp = NFSTOV(np);
 		}
 	}
-	NVATTR_CLEANUP(&nvattr);
 
 	if (!namedattrs) {
-		nfs_dulookup_finish(&dul, dnp, ctx);
+		nfs_dulookup_finish(dul, dnp, ctx);
 	}
+
+	NVATTR_CLEANUP(nvattr);
+	NFS_ZFREE(nfs_fhandle_zone, fh);
+	NFS_ZFREE(nfs_req_zone, req);
+	FREE(dul, M_TEMP);
+	FREE(nvattr, M_TEMP);
 
 	/*
 	 * Kludge: Map EEXIST => 0 assuming that you have a reply to a retry
@@ -7346,7 +7434,7 @@ nfs4_vnop_rmdir(
 	int error = 0, namedattrs;
 	nfsnode_t np = VTONFS(vp);
 	nfsnode_t dnp = VTONFS(dvp);
-	struct nfs_dulookup dul;
+	struct nfs_dulookup *dul;
 
 	if (vnode_vtype(vp) != VDIR) {
 		return EINVAL;
@@ -7362,9 +7450,10 @@ nfs4_vnop_rmdir(
 		return error;
 	}
 
+	MALLOC(dul, struct nfs_dulookup *, sizeof(*dul), M_TEMP, M_WAITOK);
 	if (!namedattrs) {
-		nfs_dulookup_init(&dul, dnp, cnp->cn_nameptr, cnp->cn_namelen, ctx);
-		nfs_dulookup_start(&dul, dnp, ctx);
+		nfs_dulookup_init(dul, dnp, cnp->cn_nameptr, cnp->cn_namelen, ctx);
+		nfs_dulookup_start(dul, dnp, ctx);
 	}
 
 	error = nfs4_remove_rpc(dnp, cnp->cn_nameptr, cnp->cn_namelen,
@@ -7374,7 +7463,7 @@ nfs4_vnop_rmdir(
 	/* nfs_getattr() will check changed and purge caches */
 	nfs_getattr(dnp, NULL, ctx, NGA_CACHED);
 	if (!namedattrs) {
-		nfs_dulookup_finish(&dul, dnp, ctx);
+		nfs_dulookup_finish(dul, dnp, ctx);
 	}
 	nfs_node_clear_busy2(dnp, np);
 
@@ -7398,6 +7487,7 @@ nfs4_vnop_rmdir(
 		}
 		lck_mtx_unlock(nfs_node_hash_mutex);
 	}
+	FREE(dul, M_TEMP);
 	return error;
 }
 
@@ -7434,10 +7524,10 @@ nfs4_named_attr_dir_get(nfsnode_t np, int fetch, vfs_context_t ctx)
 	struct nfsm_chain nmreq, nmrep;
 	u_int64_t xid;
 	uint32_t bitmap[NFS_ATTR_BITMAP_LEN];
-	fhandle_t fh;
-	struct nfs_vattr nvattr;
+	fhandle_t *fh;
+	struct nfs_vattr *nvattr;
 	struct componentname cn;
-	struct nfsreq rq, *req = &rq;
+	struct nfsreq *req;
 	struct nfsreq_secinfo_args si;
 
 	nmp = NFSTONMP(np);
@@ -7449,13 +7539,16 @@ nfs4_named_attr_dir_get(nfsnode_t np, int fetch, vfs_context_t ctx)
 	}
 
 	NFSREQ_SECINFO_SET(&si, np, NULL, 0, NULL, 0);
-	NVATTR_INIT(&nvattr);
+	fh = zalloc(nfs_fhandle_zone);
+	req = zalloc(nfs_req_zone);
+	MALLOC(nvattr, struct nfs_vattr *, sizeof(*nvattr), M_TEMP, M_WAITOK);
+	NVATTR_INIT(nvattr);
 	nfsm_chain_null(&nmreq);
 	nfsm_chain_null(&nmrep);
 
 	bzero(&cn, sizeof(cn));
 	cn.cn_nameptr = __CAST_AWAY_QUALIFIER(_PATH_FORKSPECIFIER, const, char *); /* "/..namedfork/" */
-	cn.cn_namelen = strlen(_PATH_FORKSPECIFIER);
+	cn.cn_namelen = NFS_STRLEN_INT(_PATH_FORKSPECIFIER);
 	cn.cn_nameiop = LOOKUP;
 
 	if (np->n_attrdirfh) {
@@ -7502,31 +7595,34 @@ nfs4_named_attr_dir_get(nfsnode_t np, int fetch, vfs_context_t ctx)
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_OPENATTR);
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
 	nfsmout_if(error);
-	error = nfs4_parsefattr(&nmrep, NULL, &nvattr, &fh, NULL, NULL);
+	error = nfs4_parsefattr(&nmrep, NULL, nvattr, fh, NULL, NULL);
 	nfsmout_if(error);
-	if (!NFS_BITMAP_ISSET(nvattr.nva_bitmap, NFS_FATTR_FILEHANDLE) || !fh.fh_len) {
+	if (!NFS_BITMAP_ISSET(nvattr->nva_bitmap, NFS_FATTR_FILEHANDLE) || !fh->fh_len) {
 		error = ENOENT;
 		goto nfsmout;
 	}
-	if (!np->n_attrdirfh || (*np->n_attrdirfh != fh.fh_len)) {
+	if (!np->n_attrdirfh || (*np->n_attrdirfh != fh->fh_len)) {
 		/* (re)allocate attrdir fh buffer */
 		if (np->n_attrdirfh) {
 			FREE(np->n_attrdirfh, M_TEMP);
 		}
-		MALLOC(np->n_attrdirfh, u_char*, fh.fh_len + 1, M_TEMP, M_WAITOK);
+		MALLOC(np->n_attrdirfh, u_char*, fh->fh_len + 1, M_TEMP, M_WAITOK);
 	}
 	if (!np->n_attrdirfh) {
 		error = ENOMEM;
 		goto nfsmout;
 	}
 	/* cache the attrdir fh in the node */
-	*np->n_attrdirfh = fh.fh_len;
-	bcopy(fh.fh_data, np->n_attrdirfh + 1, fh.fh_len);
+	*np->n_attrdirfh = (unsigned char)fh->fh_len; /* No truncation because fh_len's value is checked during nfs4_parsefattr() */
+	bcopy(fh->fh_data, np->n_attrdirfh + 1, fh->fh_len);
 	/* create node for attrdir */
 	// XXX can't set parent correctly (to np) yet
-	error = nfs_nget(NFSTOMP(np), NULL, &cn, fh.fh_data, fh.fh_len, &nvattr, &xid, rq.r_auth, 0, &adnp);
+	error = nfs_nget(NFSTOMP(np), NULL, &cn, fh->fh_data, fh->fh_len, nvattr, &xid, req->r_auth, 0, &adnp);
 nfsmout:
-	NVATTR_CLEANUP(&nvattr);
+	NVATTR_CLEANUP(nvattr);
+	NFS_ZFREE(nfs_fhandle_zone, fh);
+	NFS_ZFREE(nfs_req_zone, req);
+	FREE(nvattr, M_TEMP);
 	nfsm_chain_cleanup(&nmreq);
 	nfsm_chain_cleanup(&nmrep);
 
@@ -7587,16 +7683,16 @@ nfs4_named_attr_get(
 	int inuse = 0, adlockerror = ENOENT, busyerror = ENOENT, adbusyerror = ENOENT, nofpbusyerror = ENOENT;
 	int create, guarded, prefetch, truncate, noopbusy = 0;
 	int open, status, numops, hadattrdir, negnamecache;
-	struct nfs_vattr nvattr;
+	struct nfs_vattr *nvattr;
 	struct vnode_attr vattr;
 	nfsnode_t adnp = NULL, anp = NULL;
 	vnode_t avp = NULL;
-	u_int64_t xid, savedxid = 0;
+	u_int64_t xid = 0, savedxid = 0;
 	struct nfsm_chain nmreq, nmrep;
 	uint32_t bitmap[NFS_ATTR_BITMAP_LEN], bmlen;
-	uint32_t denyMode, rflags, delegation, recall, eof, rlen, retlen;
+	uint32_t denyMode = 0, rflags, delegation, recall, eof, rlen, retlen;
 	nfs_stateid stateid, dstateid;
-	fhandle_t fh;
+	fhandle_t *fh;
 	struct nfs_open_owner *noop = NULL;
 	struct nfs_open_file *newnofp = NULL, *nofp = NULL;
 	struct vnop_access_args naa;
@@ -7606,11 +7702,10 @@ nfs4_named_attr_get(
 	char sbuf[64], *s;
 	uint32_t ace_type, ace_flags, ace_mask, len, slen;
 	struct kauth_ace ace;
-	struct nfsreq rq, *req = &rq;
+	struct nfsreq *req;
 	struct nfsreq_secinfo_args si;
 
 	*anpp = NULL;
-	fh.fh_len = 0;
 	rflags = delegation = recall = eof = rlen = retlen = 0;
 	ace.ace_flags = 0;
 	s = sbuf;
@@ -7620,7 +7715,12 @@ nfs4_named_attr_get(
 	if (nfs_mount_gone(nmp)) {
 		return ENXIO;
 	}
-	NVATTR_INIT(&nvattr);
+	fh = zalloc(nfs_fhandle_zone);
+	req = zalloc(nfs_req_zone);
+	MALLOC(nvattr, struct nfs_vattr *, sizeof(*nvattr), M_TEMP, M_WAITOK);
+	NVATTR_INIT(nvattr);
+	fh->fh_len = 0;
+	bzero(&dstateid, sizeof(dstateid));
 	negnamecache = !NMFLAG(nmp, NONEGNAMECACHE);
 	thd = vfs_context_thread(ctx);
 	cred = vfs_context_ucred(ctx);
@@ -7630,13 +7730,14 @@ nfs4_named_attr_get(
 	prefetch = (flags & NFS_GET_NAMED_ATTR_PREFETCH);
 
 	if (!create) {
-		error = nfs_getattr(np, &nvattr, ctx, NGA_CACHED);
+		error = nfs_getattr(np, nvattr, ctx, NGA_CACHED);
 		if (error) {
-			return error;
+			goto out_free;
 		}
-		if (NFS_BITMAP_ISSET(nvattr.nva_bitmap, NFS_FATTR_NAMED_ATTR) &&
-		    !(nvattr.nva_flags & NFS_FFLAG_HAS_NAMED_ATTRS)) {
-			return ENOATTR;
+		if (NFS_BITMAP_ISSET(nvattr->nva_bitmap, NFS_FATTR_NAMED_ATTR) &&
+		    !(nvattr->nva_flags & NFS_FFLAG_HAS_NAMED_ATTRS)) {
+			error = ENOATTR;
+			goto out_free;
 		}
 	} else if (accessMode == NFS_OPEN_SHARE_ACCESS_NONE) {
 		/* shouldn't happen... but just be safe */
@@ -7656,12 +7757,13 @@ nfs4_named_attr_get(
 		}
 		noop = nfs_open_owner_find(nmp, vfs_context_ucred(ctx), 1);
 		if (!noop) {
-			return ENOMEM;
+			error = ENOMEM;
+			goto out_free;
 		}
 	}
 
 	if ((error = busyerror = nfs_node_set_busy(np, vfs_context_thread(ctx)))) {
-		return error;
+		goto out_free;
 	}
 
 	adnp = nfs4_named_attr_dir_get(np, 0, ctx);
@@ -7691,7 +7793,7 @@ nfs4_named_attr_get(
 		case 0:
 			/* cache miss */
 			/* try dir buf cache lookup */
-			error = nfs_dir_buf_cache_lookup(adnp, &anp, cnp, ctx, 0);
+			error = nfs_dir_buf_cache_lookup(adnp, &anp, cnp, ctx, 0, NULL);
 			if (!error && anp) {
 				/* dir buf cache hit */
 				*anpp = anp;
@@ -7700,7 +7802,7 @@ nfs4_named_attr_get(
 			if (error != -1) { /* cache miss */
 				break;
 			}
-		/* FALLTHROUGH */
+			OS_FALLTHROUGH;
 		case -1:
 			/* cache hit, not really an error */
 			OSAddAtomic64(1, &nfsstats.lookupcache_hits);
@@ -7719,7 +7821,7 @@ nfs4_named_attr_get(
 
 			/* compute actual success/failure based on accessibility */
 			error = nfs_vnop_access(&naa);
-		/* FALLTHROUGH */
+			OS_FALLTHROUGH;
 		default:
 			/* we either found it, or hit an error */
 			if (!error && guarded) {
@@ -7753,11 +7855,12 @@ restart:
 			error = EIO;
 		}
 		if (!error && (newnofp->nof_flags & NFS_OPEN_FILE_REOPEN)) {
-			nfs_mount_state_in_use_end(nmp, 0);
 			error = nfs4_reopen(newnofp, vfs_context_thread(ctx));
 			nfs_open_file_destroy(newnofp);
 			newnofp = NULL;
 			if (!error) {
+				nfs_mount_state_in_use_end(nmp, 0);
+				inuse = 0;
 				goto restart;
 			}
 		}
@@ -7929,28 +8032,28 @@ restart:
 		nfsm_chain_op_check(error, &nmrep, NFS_OP_OPENATTR);
 		nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
 		nfsmout_if(error);
-		error = nfs4_parsefattr(&nmrep, NULL, &nvattr, &fh, NULL, NULL);
+		error = nfs4_parsefattr(&nmrep, NULL, nvattr, fh, NULL, NULL);
 		nfsmout_if(error);
-		if (NFS_BITMAP_ISSET(nvattr.nva_bitmap, NFS_FATTR_FILEHANDLE) && fh.fh_len) {
-			if (!np->n_attrdirfh || (*np->n_attrdirfh != fh.fh_len)) {
+		if (NFS_BITMAP_ISSET(nvattr->nva_bitmap, NFS_FATTR_FILEHANDLE) && fh->fh_len) {
+			if (!np->n_attrdirfh || (*np->n_attrdirfh != fh->fh_len)) {
 				/* (re)allocate attrdir fh buffer */
 				if (np->n_attrdirfh) {
 					FREE(np->n_attrdirfh, M_TEMP);
 				}
-				MALLOC(np->n_attrdirfh, u_char*, fh.fh_len + 1, M_TEMP, M_WAITOK);
+				MALLOC(np->n_attrdirfh, u_char*, fh->fh_len + 1, M_TEMP, M_WAITOK);
 			}
 			if (np->n_attrdirfh) {
 				/* remember the attrdir fh in the node */
-				*np->n_attrdirfh = fh.fh_len;
-				bcopy(fh.fh_data, np->n_attrdirfh + 1, fh.fh_len);
+				*np->n_attrdirfh = (unsigned char)fh->fh_len;  /* No truncation because fh_len's value is checked during nfs4_parsefattr() */
+				bcopy(fh->fh_data, np->n_attrdirfh + 1, fh->fh_len);
 				/* create busied node for attrdir */
 				struct componentname cn;
 				bzero(&cn, sizeof(cn));
 				cn.cn_nameptr = __CAST_AWAY_QUALIFIER(_PATH_FORKSPECIFIER, const, char *); /* "/..namedfork/" */
-				cn.cn_namelen = strlen(_PATH_FORKSPECIFIER);
+				cn.cn_namelen = NFS_STRLEN_INT(_PATH_FORKSPECIFIER);
 				cn.cn_nameiop = LOOKUP;
 				// XXX can't set parent correctly (to np) yet
-				error = nfs_nget(NFSTOMP(np), NULL, &cn, fh.fh_data, fh.fh_len, &nvattr, &xid, rq.r_auth, 0, &adnp);
+				error = nfs_nget(NFSTOMP(np), NULL, &cn, fh->fh_data, fh->fh_len, nvattr, &xid, req->r_auth, 0, &adnp);
 				if (!error) {
 					adlockerror = 0;
 					/* set the node busy */
@@ -7961,8 +8064,8 @@ restart:
 				error = 0;
 			}
 		}
-		NVATTR_CLEANUP(&nvattr);
-		fh.fh_len = 0;
+		NVATTR_CLEANUP(nvattr);
+		fh->fh_len = 0;
 	}
 	if (open) {
 		nfsm_chain_op_check(error, &nmrep, NFS_OP_OPEN);
@@ -8031,9 +8134,9 @@ restart:
 	}
 	nfsm_chain_op_check(error, &nmrep, NFS_OP_GETATTR);
 	nfsmout_if(error);
-	error = nfs4_parsefattr(&nmrep, NULL, &nvattr, &fh, NULL, NULL);
+	error = nfs4_parsefattr(&nmrep, NULL, nvattr, fh, NULL, NULL);
 	nfsmout_if(error);
-	if (!NFS_BITMAP_ISSET(nvattr.nva_bitmap, NFS_FATTR_FILEHANDLE) || !fh.fh_len) {
+	if (!NFS_BITMAP_ISSET(nvattr->nva_bitmap, NFS_FATTR_FILEHANDLE) || !fh->fh_len) {
 		error = EIO;
 		goto nfsmout;
 	}
@@ -8059,8 +8162,8 @@ restart:
 				nfs_node_unlock(adnp);
 				adlockerror = ENOENT;
 			}
-			NVATTR_CLEANUP(&nvattr);
-			error = nfs4_open_confirm_rpc(nmp, adnp ? adnp : np, fh.fh_data, fh.fh_len, noop, &newnofp->nof_stateid, thd, cred, &nvattr, &xid);
+			NVATTR_CLEANUP(nvattr);
+			error = nfs4_open_confirm_rpc(nmp, adnp ? adnp : np, fh->fh_data, fh->fh_len, noop, &newnofp->nof_stateid, thd, cred, nvattr, &xid);
 			nfsmout_if(error);
 			savedxid = xid;
 			if ((adlockerror = nfs_node_lock(adnp))) {
@@ -8090,10 +8193,10 @@ nfsmout:
 		nfs_node_unlock(adnp);
 		adlockerror = ENOENT;
 	}
-	if (!error && !anp && fh.fh_len) {
+	if (!error && !anp && fh->fh_len) {
 		/* create the vnode with the filehandle and attributes */
 		xid = savedxid;
-		error = nfs_nget(NFSTOMP(np), adnp, cnp, fh.fh_data, fh.fh_len, &nvattr, &xid, rq.r_auth, NG_MAKEENTRY, &anp);
+		error = nfs_nget(NFSTOMP(np), adnp, cnp, fh->fh_data, fh->fh_len, nvattr, &xid, req->r_auth, NG_MAKEENTRY, &anp);
 		if (!error) {
 			*anpp = anp;
 			nfs_node_unlock(anp);
@@ -8137,7 +8240,7 @@ nfsmout:
 			}
 		}
 	}
-	NVATTR_CLEANUP(&nvattr);
+	NVATTR_CLEANUP(nvattr);
 	if (open && ((delegation == NFS_OPEN_DELEGATE_READ) || (delegation == NFS_OPEN_DELEGATE_WRITE))) {
 		if (!error && anp && !recall) {
 			/* stuff the delegation state in the node */
@@ -8157,7 +8260,7 @@ nfsmout:
 		} else {
 			/* give the delegation back */
 			if (anp) {
-				if (NFS_CMPFH(anp, fh.fh_data, fh.fh_len)) {
+				if (NFS_CMPFH(anp, fh->fh_data, fh->fh_len)) {
 					/* update delegation state and return it */
 					lck_mtx_lock(&anp->n_openlock);
 					anp->n_openflags &= ~N_DELEG_MASK;
@@ -8173,13 +8276,13 @@ nfsmout:
 					}
 					lck_mtx_unlock(&anp->n_openlock);
 					/* don't need to send a separate delegreturn for fh */
-					fh.fh_len = 0;
+					fh->fh_len = 0;
 				}
 				/* return anp's current delegation */
 				nfs4_delegation_return(anp, 0, thd, cred);
 			}
-			if (fh.fh_len) { /* return fh's delegation if it wasn't for anp */
-				nfs4_delegreturn_rpc(nmp, fh.fh_data, fh.fh_len, &dstateid, 0, thd, cred);
+			if (fh->fh_len) { /* return fh's delegation if it wasn't for anp */
+				nfs4_delegreturn_rpc(nmp, fh->fh_data, fh->fh_len, &dstateid, 0, thd, cred);
 			}
 		}
 	}
@@ -8213,6 +8316,7 @@ nfsmout:
 			}
 			goto restart;
 		}
+		inuse = 0;
 		if (noop) {
 			if (noopbusy) {
 				nfs_open_owner_clear_busy(noop);
@@ -8244,7 +8348,7 @@ nfsmout:
 			 */
 			struct nfsbuf *bp = NULL;
 			int lastpg;
-			uint32_t pagemask;
+			nfsbufpgs pagemask, pagemaskand;
 
 			retlen = MIN(retlen, rlen);
 
@@ -8266,14 +8370,15 @@ nfsmout:
 			}
 
 			/* calculate page mask for the range of data read */
-			lastpg = (trunc_page_32(retlen) - 1) / PAGE_SIZE;
-			pagemask = ((1 << (lastpg + 1)) - 1);
+			lastpg = (retlen - 1) / PAGE_SIZE;
+			nfs_buf_pgs_get_page_mask(&pagemask, lastpg + 1);
 
 			if (!error) {
 				error = nfs_buf_get(anp, 0, nmp->nm_biosize, thd, NBLK_READ | NBLK_NOWAIT, &bp);
 			}
 			/* don't save the data if dirty or potential I/O conflict */
-			if (!error && bp && !bp->nb_dirtyoff && !(bp->nb_dirty & pagemask) &&
+			nfs_buf_pgs_bit_and(&bp->nb_dirty, &pagemask, &pagemaskand);
+			if (!error && bp && !bp->nb_dirtyoff && !nfs_buf_pgs_is_set(&pagemaskand) &&
 			    timevalcmp(&anp->n_lastio, &now, <)) {
 				OSAddAtomic64(1, &nfsstats.read_bios);
 				CLR(bp->nb_flags, (NB_DONE | NB_ASYNC));
@@ -8323,12 +8428,19 @@ nfsmout:
 	if (adnp) {
 		vnode_put(NFSTOV(adnp));
 	}
+	if (inuse) {
+		nfs_mount_state_in_use_end(nmp, error);
+	}
 	if (error && *anpp) {
 		vnode_put(NFSTOV(*anpp));
 		*anpp = NULL;
 	}
 	nfsm_chain_cleanup(&nmreq);
 	nfsm_chain_cleanup(&nmrep);
+out_free:
+	NFS_ZFREE(nfs_fhandle_zone, fh);
+	NFS_ZFREE(nfs_req_zone, req);
+	FREE(nvattr, M_TEMP);
 	return error;
 }
 
@@ -8351,7 +8463,7 @@ nfs4_named_attr_remove(nfsnode_t np, nfsnode_t anp, const char *name, vfs_contex
 
 	bzero(&cn, sizeof(cn));
 	cn.cn_nameptr = __CAST_AWAY_QUALIFIER(name, const, char *);
-	cn.cn_namelen = strlen(name);
+	cn.cn_namelen = NFS_STRLEN_INT(name);
 	cn.cn_nameiop = DELETE;
 	cn.cn_flags = 0;
 
@@ -8412,7 +8524,7 @@ nfs4_vnop_getxattr(
 {
 	vfs_context_t ctx = ap->a_context;
 	struct nfsmount *nmp;
-	struct nfs_vattr nvattr;
+	struct nfs_vattr *nvattr;
 	struct componentname cn;
 	nfsnode_t anp;
 	int error = 0, isrsrcfork;
@@ -8425,18 +8537,21 @@ nfs4_vnop_getxattr(
 	if (!(nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_NAMED_ATTR)) {
 		return ENOTSUP;
 	}
-	error = nfs_getattr(VTONFS(ap->a_vp), &nvattr, ctx, NGA_CACHED);
+
+	MALLOC(nvattr, struct nfs_vattr *, sizeof(*nvattr), M_TEMP, M_WAITOK);
+	error = nfs_getattr(VTONFS(ap->a_vp), nvattr, ctx, NGA_CACHED);
 	if (error) {
-		return error;
+		goto out;
 	}
-	if (NFS_BITMAP_ISSET(nvattr.nva_bitmap, NFS_FATTR_NAMED_ATTR) &&
-	    !(nvattr.nva_flags & NFS_FFLAG_HAS_NAMED_ATTRS)) {
-		return ENOATTR;
+	if (NFS_BITMAP_ISSET(nvattr->nva_bitmap, NFS_FATTR_NAMED_ATTR) &&
+	    !(nvattr->nva_flags & NFS_FFLAG_HAS_NAMED_ATTRS)) {
+		error = ENOATTR;
+		goto out;
 	}
 
 	bzero(&cn, sizeof(cn));
 	cn.cn_nameptr = __CAST_AWAY_QUALIFIER(ap->a_name, const, char *);
-	cn.cn_namelen = strlen(ap->a_name);
+	cn.cn_namelen = NFS_STRLEN_INT(ap->a_name);
 	cn.cn_nameiop = LOOKUP;
 	cn.cn_flags = MAKEENTRY;
 
@@ -8458,6 +8573,8 @@ nfs4_vnop_getxattr(
 	if (anp) {
 		vnode_put(NFSTOV(anp));
 	}
+out:
+	FREE(nvattr, M_TEMP);
 	return error;
 }
 
@@ -8509,7 +8626,7 @@ nfs4_vnop_setxattr(
 
 	bzero(&cn, sizeof(cn));
 	cn.cn_nameptr = __CAST_AWAY_QUALIFIER(name, const, char *);
-	cn.cn_namelen = strlen(name);
+	cn.cn_namelen = NFS_STRLEN_INT(name);
 	cn.cn_nameiop = CREATE;
 	cn.cn_flags = MAKEENTRY;
 
@@ -8678,7 +8795,7 @@ nfs4_vnop_listxattr(
 	nfsnode_t adnp = NULL;
 	struct nfsmount *nmp;
 	int error, done, i;
-	struct nfs_vattr nvattr;
+	struct nfs_vattr *nvattr;
 	uint64_t cookie, nextcookie, lbn = 0;
 	struct nfsbuf *bp = NULL;
 	struct nfs_dir_buf_header *ndbhp;
@@ -8693,17 +8810,19 @@ nfs4_vnop_listxattr(
 		return ENOTSUP;
 	}
 
-	error = nfs_getattr(np, &nvattr, ctx, NGA_CACHED);
+	MALLOC(nvattr, struct nfs_vattr *, sizeof(*nvattr), M_TEMP, M_WAITOK);
+	error = nfs_getattr(np, nvattr, ctx, NGA_CACHED);
 	if (error) {
-		return error;
+		goto out_free;
 	}
-	if (NFS_BITMAP_ISSET(nvattr.nva_bitmap, NFS_FATTR_NAMED_ATTR) &&
-	    !(nvattr.nva_flags & NFS_FFLAG_HAS_NAMED_ATTRS)) {
-		return 0;
+	if (NFS_BITMAP_ISSET(nvattr->nva_bitmap, NFS_FATTR_NAMED_ATTR) &&
+	    !(nvattr->nva_flags & NFS_FFLAG_HAS_NAMED_ATTRS)) {
+		error = 0;
+		goto out_free;
 	}
 
 	if ((error = nfs_node_set_busy(np, vfs_context_thread(ctx)))) {
-		return error;
+		goto out_free;
 	}
 	adnp = nfs4_named_attr_dir_get(np, 1, ctx);
 	nfs_node_clear_busy(np);
@@ -8741,7 +8860,7 @@ nfs4_vnop_listxattr(
 		nfs_node_unlock(adnp);
 	}
 	/* nfs_getattr() will check changed and purge caches */
-	if ((error = nfs_getattr(adnp, &nvattr, ctx, NGA_UNCACHED))) {
+	if ((error = nfs_getattr(adnp, nvattr, ctx, NGA_UNCACHED))) {
 		goto out;
 	}
 
@@ -8827,6 +8946,8 @@ out:
 	if (adnp) {
 		vnode_put(NFSTOV(adnp));
 	}
+out_free:
+	FREE(nvattr, M_TEMP);
 	return error;
 }
 
@@ -8845,7 +8966,7 @@ nfs4_vnop_getnamedstream(
 {
 	vfs_context_t ctx = ap->a_context;
 	struct nfsmount *nmp;
-	struct nfs_vattr nvattr;
+	struct nfs_vattr *nvattr;
 	struct componentname cn;
 	nfsnode_t anp;
 	int error = 0;
@@ -8858,18 +8979,21 @@ nfs4_vnop_getnamedstream(
 	if (!(nmp->nm_fsattr.nfsa_flags & NFS_FSFLAG_NAMED_ATTR)) {
 		return ENOTSUP;
 	}
-	error = nfs_getattr(VTONFS(ap->a_vp), &nvattr, ctx, NGA_CACHED);
+
+	MALLOC(nvattr, struct nfs_vattr *, sizeof(*nvattr), M_TEMP, M_WAITOK);
+	error = nfs_getattr(VTONFS(ap->a_vp), nvattr, ctx, NGA_CACHED);
 	if (error) {
-		return error;
+		goto out;
 	}
-	if (NFS_BITMAP_ISSET(nvattr.nva_bitmap, NFS_FATTR_NAMED_ATTR) &&
-	    !(nvattr.nva_flags & NFS_FFLAG_HAS_NAMED_ATTRS)) {
-		return ENOATTR;
+	if (NFS_BITMAP_ISSET(nvattr->nva_bitmap, NFS_FATTR_NAMED_ATTR) &&
+	    !(nvattr->nva_flags & NFS_FFLAG_HAS_NAMED_ATTRS)) {
+		error = ENOATTR;
+		goto out;
 	}
 
 	bzero(&cn, sizeof(cn));
 	cn.cn_nameptr = __CAST_AWAY_QUALIFIER(ap->a_name, const, char *);
-	cn.cn_namelen = strlen(ap->a_name);
+	cn.cn_namelen = NFS_STRLEN_INT(ap->a_name);
 	cn.cn_nameiop = LOOKUP;
 	cn.cn_flags = MAKEENTRY;
 
@@ -8883,6 +9007,8 @@ nfs4_vnop_getnamedstream(
 	} else if (anp) {
 		vnode_put(NFSTOV(anp));
 	}
+out:
+	FREE(nvattr, M_TEMP);
 	return error;
 }
 
@@ -8914,7 +9040,7 @@ nfs4_vnop_makenamedstream(
 
 	bzero(&cn, sizeof(cn));
 	cn.cn_nameptr = __CAST_AWAY_QUALIFIER(ap->a_name, const, char *);
-	cn.cn_namelen = strlen(ap->a_name);
+	cn.cn_namelen = NFS_STRLEN_INT(ap->a_name);
 	cn.cn_nameiop = CREATE;
 	cn.cn_flags = MAKEENTRY;
 

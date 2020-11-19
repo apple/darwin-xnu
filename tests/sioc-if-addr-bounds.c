@@ -49,6 +49,8 @@
 
 #include <ifaddrs.h>
 
+#include <arpa/inet.h>
+
 #include "ioc_str.h"
 
 T_GLOBAL_META(T_META_NAMESPACE("xnu.net"));
@@ -182,6 +184,259 @@ HexDump(void *data, size_t len)
 	}
 }
 
+static size_t
+snprint_dottedhex(char *str, size_t strsize, const void *data, const size_t datasize)
+{
+	size_t is = 0, ip = 0;
+	const unsigned char *ptr = (const unsigned char *)data;
+
+	for (is = 0, ip = 0; is + 3 < strsize - 1 && ip < datasize; ip++) {
+		unsigned char msnbl = ptr[ip] >> 4;
+		unsigned char lsnbl = ptr[ip] & 0x0f;
+
+		if (ip > 0) {
+			str[is++] = '.';
+		}
+		str[is++] = (char)(msnbl + (msnbl < 10 ? '0' : 'a' - 10));
+		str[is++] = (char)(lsnbl + (lsnbl < 10 ? '0' : 'a' - 10));
+	}
+	str[is] = 0;
+	return is;
+}
+
+static void
+print_sockaddr_dl(const char *pre, const struct sockaddr *sa, const char *post)
+{
+	char nbuffer[256];
+	char abuffer[256];
+	char sbuffer[256];
+	struct sockaddr_dl sdl = {};
+
+	if (sa == NULL) {
+		return;
+	}
+	memcpy(&sdl, sa, MIN(sizeof(sdl), sa->sa_len));
+	strlcpy(nbuffer, sdl.sdl_data, sdl.sdl_nlen);
+	snprint_dottedhex(abuffer, sizeof(abuffer), sdl.sdl_data + sdl.sdl_nlen, sdl.sdl_alen);
+	snprint_dottedhex(sbuffer, sizeof(sbuffer), sdl.sdl_data + sdl.sdl_nlen + sdl.sdl_alen, sdl.sdl_slen);
+
+	T_LOG("%ssdl_len %u sdl_family %u sdl_index %u sdl_type %u sdl_nlen %u (%s) sdl_alen %u (%s) sdl_slen %u (%s)%s",
+	    pre != NULL ? pre : "",
+	    sdl.sdl_len, sdl.sdl_family, sdl.sdl_index, sdl.sdl_type,
+	    sdl.sdl_nlen, nbuffer, sdl.sdl_alen, abuffer, sdl.sdl_slen, sbuffer,
+	    post != NULL ? post : "");
+}
+
+static void
+print_sockaddr_in(const char *pre, const struct sockaddr *sa, const char *post)
+{
+	char abuffer[256];
+	char zbuffer[256];
+	struct sockaddr_in sin = {};
+
+	if (sa == NULL) {
+		return;
+	}
+
+	memcpy(&sin, sa, MIN(sizeof(sin), sa->sa_len));
+	inet_ntop(AF_INET, &sin.sin_addr, abuffer, sizeof(abuffer));
+	snprint_dottedhex(zbuffer, sizeof(zbuffer), sin.sin_zero, sizeof(sin.sin_zero));
+
+	T_LOG("%ssin_len %u sin_family %u sin_port %u sin_addr %s sin_zero %s%s",
+	    pre != NULL ? pre : "",
+	    sin.sin_len, sin.sin_family, htons(sin.sin_port), abuffer, zbuffer,
+	    post != NULL ? post : "");
+}
+
+static void
+print_sockaddr_in6(const char *pre, const struct sockaddr *sa, const char *post)
+{
+	char abuffer[256];
+	struct sockaddr_in6 sin6 = {};
+
+	if (sa == NULL) {
+		return;
+	}
+
+	memcpy(&sin6, sa, MIN(sizeof(sin6), sa->sa_len));
+	inet_ntop(AF_INET6, &sin6.sin6_addr, abuffer, sizeof(abuffer));
+
+	T_LOG("%ssin6_len %u sin6_family %u sin6_port %u sin6_flowinfo %u sin6_addr %s sin6_scope_id %u%s",
+	    pre != NULL ? pre : "",
+	    sin6.sin6_len, sin6.sin6_family, htons(sin6.sin6_port), sin6.sin6_flowinfo, abuffer, sin6.sin6_scope_id,
+	    post != NULL ? post : "");
+}
+
+static void
+print_sockaddr(const char *pre, const struct sockaddr *sa, const char *post)
+{
+	char buffer[256];
+
+	if (sa == NULL) {
+		return;
+	}
+
+	snprint_dottedhex(buffer, sizeof(buffer), sa->sa_data, sa->sa_len - 2);
+
+	T_LOG("%ssa_len %u sa_family %u sa_data %s%s",
+	    pre != NULL ? pre : "",
+	    sa->sa_len, sa->sa_family, buffer,
+	    post != NULL ? post : "");
+}
+
+
+#define ROUNDUP(a, size) (((a) & ((size) - 1)) ? (1 + ((a)|(size - 1))) : (a))
+
+#define NEXT_SA(p) (struct sockaddr *) \
+    ((caddr_t)p + (p->sa_len ? ROUNDUP(p->sa_len, sizeof(u_int32_t)) : \
+     sizeof(u_long)))
+
+static size_t
+get_rti_info(int addrs, struct sockaddr *sa, struct sockaddr **rti_info)
+{
+	int i;
+	size_t len = 0;
+
+	for (i = 0; i < RTAX_MAX; i++) {
+		if (addrs & (1 << i)) {
+			rti_info[i] = sa;
+			if (sa->sa_len < sizeof(struct sockaddr)) {
+				len += sizeof(struct sockaddr);
+			} else {
+				len += sa->sa_len;
+			}
+			sa = NEXT_SA(sa);
+		} else {
+			rti_info[i] = NULL;
+		}
+	}
+	return len;
+}
+
+static void
+print_address(const char *pre, const struct sockaddr *sa, const char *post, u_char asFamily)
+{
+	if (sa == NULL) {
+		T_LOG("%s(NULL)%s",
+		    pre != NULL ? pre : "",
+		    post != NULL ? post : "");
+		return;
+	}
+	if (sa->sa_len == 0) {
+		T_LOG("%ssa_len 0%s",
+		    pre != NULL ? pre : "",
+		    post != NULL ? post : "");
+		return;
+	}
+	if (sa->sa_len == 1) {
+		T_LOG("%ssa_len 1%s",
+		    pre != NULL ? pre : "",
+		    post != NULL ? post : "");
+		return;
+	}
+
+	// If not forced
+	if (asFamily == AF_UNSPEC) {
+		asFamily = sa->sa_family;
+	}
+	switch (asFamily) {
+	case AF_INET: {
+		print_sockaddr_in(pre, sa, post);
+		break;
+	}
+	case AF_INET6: {
+		print_sockaddr_in6(pre, sa, post);
+		break;
+	}
+	case AF_LINK: {
+		print_sockaddr_dl(pre, sa, post);
+		break;
+	}
+	default:
+		print_sockaddr(pre, sa, post);
+		break;
+	}
+}
+
+static void
+print_rti_info(struct sockaddr *rti_info[])
+{
+	struct sockaddr *sa;
+	u_char asFamily = 0;
+
+	if ((sa = rti_info[RTAX_IFA])) {
+		asFamily = sa->sa_family;
+		print_address(" RTAX_IFA         ", sa, "\n", 0);
+	}
+	if ((sa = rti_info[RTAX_DST])) {
+		asFamily = sa->sa_family;
+		print_address(" RTAX_DST         ", sa, "\n", 0);
+	}
+	if ((sa = rti_info[RTAX_BRD])) {
+		print_address(" RTAX_BRD         ", sa, "\n", asFamily);
+	}
+
+	if ((sa = rti_info[RTAX_NETMASK])) {
+		print_address(" RTAX_NETMASK     ", sa, "\n", asFamily);
+	}
+
+	if ((sa = rti_info[RTAX_GATEWAY])) {
+		print_address(" RTAX_GATEWAY     ", sa, "\n", 0);
+	}
+
+	if ((sa = rti_info[RTAX_GENMASK])) {
+		print_address(" RTAX_GENMASK     ", sa, "\n", asFamily);
+	}
+
+	if ((sa = rti_info[RTAX_AUTHOR])) {
+		print_address(" RTAX_AUTHOR      ", sa, "\n", asFamily);
+	}
+
+	if ((sa = rti_info[RTAX_IFP])) {
+		print_address(" RTAX_IFP         ", sa, "\n", 0);
+	}
+}
+
+static void
+print_rt_iflist2(const char *label)
+{
+	size_t len;
+	int mib[6] = { CTL_NET, PF_ROUTE, 0, 0, NET_RT_IFLIST2, 0 };
+	unsigned char *buf = NULL;
+	unsigned char *lim, *next;
+	struct if_msghdr *ifmsg;
+
+	T_LOG("interface address list for %s", label);
+
+	T_QUIET; T_EXPECT_POSIX_SUCCESS(sysctl(mib, 6, NULL, &len, NULL, 0), "sysctl NET_RT_IFLIST2");
+
+	T_QUIET; T_ASSERT_NOTNULL(buf = calloc(1, len), "rt_if_list_buf calloc(1, %zd)", len);
+
+	T_QUIET; T_EXPECT_POSIX_SUCCESS(sysctl(mib, 6, buf, &len, NULL, 0), "sysctl NET_RT_IFLIST2");
+
+	lim = buf + len;
+	for (next = buf; next < lim; next += ifmsg->ifm_msglen) {
+		ifmsg = (struct if_msghdr *)(void *)next;
+		char ifname[IF_NAMESIZE + 1];
+
+		if (ifmsg->ifm_type == RTM_IFINFO2) {
+			struct if_msghdr2 *ifm = (struct if_msghdr2 *)ifmsg;
+			struct sockaddr *sa = (struct sockaddr *)(ifm + 1);
+
+			(void)if_indextoname(ifm->ifm_index, ifname);
+			T_LOG("interface: %s", ifname);
+			print_address(" PRIMARY          ", sa, "", 0);
+		} else if (ifmsg->ifm_type == RTM_NEWADDR) {
+			struct sockaddr *rti_info[RTAX_MAX];
+			struct ifa_msghdr *ifam = (struct ifa_msghdr *)ifmsg;
+
+			(void) get_rti_info(ifam->ifam_addrs, (struct sockaddr *)(ifam + 1), rti_info);
+
+			print_rti_info(rti_info);
+		}
+	}
+	free(buf);
+}
 
 static int
 check_rt_if_list_for_pattern(const char *label, unsigned char pattern, size_t pattern_size)
@@ -220,6 +475,7 @@ check_rt_if_list_for_pattern(const char *label, unsigned char pattern, size_t pa
 			HexDump(rt_if_list_buf, len);
 		}
 	}
+
 	free(rt_if_list_buf);
 	free(pattern_buf);
 
@@ -373,6 +629,7 @@ test_sioc_ifr_bounds(struct ioc_ifreq *ioc_ifreq, int s, const char *ifname)
 
 	T_EXPECT_EQ(check_rt_if_list_for_pattern("test_sioc_ifr_bounds", pattern, PATTERN_SIZE), 0, "pattern should not be found");
 
+
 	fflush(stdout);
 	fflush(stderr);
 }
@@ -402,6 +659,7 @@ T_DECL(sioc_ifr_bounds, "test bound checks on struct ifreq addresses passed to i
 	for (ioc_ifreq = ioc_list; ioc_ifreq->error != -1; ioc_ifreq++) {
 		test_sioc_ifr_bounds(ioc_ifreq, s, ifname);
 	}
+	print_rt_iflist2(__func__);
 	(void)ifnet_destroy(s, ifname, true);
 
 	close(s);
@@ -615,6 +873,8 @@ T_DECL(sioc_ifra_addr_bounds, "test bound checks on socket address passed to int
 		T_EXPECT_EQ(check_rt_if_list_for_pattern("after ioctl SIOCAIFADDR", pattern, PATTERN_SIZE), 0, "pattern should not be found");
 	}
 
+	print_rt_iflist2(__func__);
+
 	(void)ifnet_destroy(s, ifname, true);
 
 	close(s);
@@ -655,6 +915,8 @@ T_DECL(sioc_ifr_dstaddr_leak, "test bound checks on socket address passed to int
 	memset(&ifr.ifr_dstaddr.sa_data, pattern, PATTERN_SIZE);
 
 	T_EXPECT_POSIX_SUCCESS(ioctl(s, SIOCSIFDSTADDR, &ifr), "ioctl(SIOCSIFDSTADDR)");
+
+	print_rt_iflist2(__func__);
 
 	close(s);
 

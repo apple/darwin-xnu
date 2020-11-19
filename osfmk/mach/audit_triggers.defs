@@ -43,7 +43,15 @@ subsystem
 #include <mach/std_types.defs>
 #include <mach/mach_types.defs>
 
+import <mach/audit_triggers_types.h>;
+
+type string_t = c_string [*:1024];
+
 simpleroutine	audit_triggers(
-		audit_port	: mach_port_t; 
+		audit_port	: mach_port_t;
 	in	flags		: int);
 
+simpleroutine	audit_analytics(
+			audit_port	: mach_port_t; 
+	in	caller_id		: string_t;
+	in	caller_name		: string_t);

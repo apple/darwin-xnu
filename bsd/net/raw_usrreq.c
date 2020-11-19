@@ -328,7 +328,8 @@ raw_usend(struct socket *so, int flags, struct mbuf *m,
 		goto release;
 	}
 
-	if (control && control->m_len) {
+	if (control != NULL) {
+		m_freem(control);
 		error = EOPNOTSUPP;
 		goto release;
 	}

@@ -373,10 +373,7 @@ typedef struct thread_qos_policy      *thread_qos_policy_t;
  * When they do, we will update THREAD_POLICY_INTERNAL_STRUCT_VERSION.
  */
 
-#define THREAD_POLICY_INTERNAL_STRUCT_VERSION 5
-
-// legacy names
-#define thrp_qos_ipc_override   thrp_qos_kevent_override
+#define THREAD_POLICY_INTERNAL_STRUCT_VERSION 6
 
 struct thread_requested_policy {
 	uint64_t        thrp_int_darwinbg       :1,     /* marked as darwinbg via setpriority */
@@ -395,11 +392,10 @@ struct thread_requested_policy {
 	    thrp_qos_promote        :3,                 /* thread qos class from promotion */
 	    thrp_qos_kevent_override:3,                 /* thread qos class from kevent override */
 	    thrp_terminated         :1,                 /* heading for termination */
-	    thrp_qos_sync_ipc_override:3,               /* now unused */
 	    thrp_qos_workq_override :3,                 /* thread qos class override (workq) */
 	    thrp_qos_wlsvc_override :3,                 /* workloop servicer qos class override */
 
-	    thrp_reserved           :23;
+	    thrp_reserved           :26;
 };
 
 struct thread_effective_policy {
@@ -416,8 +412,9 @@ struct thread_effective_policy {
 	    thep_qos                :3,                 /* thread qos class */
 	    thep_qos_relprio        :4,                 /* thread qos relative priority (store as inverse, -10 -> 0xA) */
 	    thep_qos_promote        :3,                 /* thread qos class used for promotion */
+	    thep_promote_above_task :1,                 /* thread is promoted above task-level clamp */
 
-	    thep_reserved           :40;
+	    thep_reserved           :39;
 };
 
 #endif /* PRIVATE */

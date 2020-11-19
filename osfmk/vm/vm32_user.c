@@ -79,7 +79,6 @@
 #include <mach/vm32_map_server.h>
 
 #include <kern/host.h>
-#include <kern/kalloc.h>
 #include <kern/task.h>
 #include <kern/misc_protos.h>
 #include <vm/vm_fault.h>

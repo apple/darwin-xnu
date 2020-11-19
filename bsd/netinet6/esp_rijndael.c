@@ -95,7 +95,7 @@ typedef struct {
 	ccgcm_ctx ctxt[0];
 } aes_gcm_ctx;
 
-int
+size_t
 esp_aes_schedlen(
 	__unused const struct esp_algorithm *algo)
 {
@@ -195,8 +195,10 @@ esp_cbc_decrypt_aes(
 		return EINVAL;
 	}
 
+	VERIFY(ivoff <= INT_MAX);
+
 	/* grab iv */
-	m_copydata(m, ivoff, ivlen, (caddr_t) iv);
+	m_copydata(m, (int)ivoff, ivlen, (caddr_t) iv);
 
 	s = m;
 	soff = sn = dn = 0;
@@ -206,7 +208,7 @@ esp_cbc_decrypt_aes(
 	/* skip header/IV offset */
 	while (soff < bodyoff) {
 		if (soff + s->m_len > bodyoff) {
-			sn = bodyoff - soff;
+			sn = (int)(bodyoff - soff);
 			break;
 		}
 
@@ -271,7 +273,7 @@ esp_cbc_decrypt_aes(
 				m_adj(d, IPSEC_GET_P2UNALIGNED_OFS(d->m_data));
 			}
 
-			d->m_len = M_TRAILINGSPACE(d);
+			d->m_len = (int)M_TRAILINGSPACE(d);
 			d->m_len -= d->m_len % AES_BLOCKLEN;
 			if (d->m_len > i) {
 				d->m_len = i;
@@ -394,8 +396,10 @@ esp_cbc_encrypt_aes(
 		bodyoff = off + sizeof(struct newesp) + ivlen;
 	}
 
+	VERIFY(ivoff <= INT_MAX);
+
 	/* put iv into the packet */
-	m_copyback(m, ivoff, ivlen, sav->iv);
+	m_copyback(m, (int)ivoff, ivlen, sav->iv);
 	ivp = (u_int8_t *) sav->iv;
 
 	if (m->m_pkthdr.len < bodyoff) {
@@ -420,7 +424,7 @@ esp_cbc_encrypt_aes(
 	/* skip headers/IV */
 	while (soff < bodyoff) {
 		if (soff + s->m_len > bodyoff) {
-			sn = bodyoff - soff;
+			sn = (int)(bodyoff - soff);
 			break;
 		}
 
@@ -485,7 +489,7 @@ esp_cbc_encrypt_aes(
 				m_adj(d, IPSEC_GET_P2UNALIGNED_OFS(d->m_data));
 			}
 
-			d->m_len = M_TRAILINGSPACE(d);
+			d->m_len = (int)M_TRAILINGSPACE(d);
 			d->m_len -= d->m_len % AES_BLOCKLEN;
 			if (d->m_len > i) {
 				d->m_len = i;
@@ -582,7 +586,7 @@ esp_cbc_encrypt_aes(
 	return 0;
 }
 
-int
+size_t
 esp_gcm_schedlen(
 	__unused const struct esp_algorithm *algo)
 {
@@ -626,7 +630,7 @@ esp_gcm_schedule( __unused const struct esp_algorithm *algo,
 
 int
 esp_gcm_encrypt_finalize(struct secasvar *sav,
-    unsigned char *tag, unsigned int tag_bytes)
+    unsigned char *tag, size_t tag_bytes)
 {
 	aes_gcm_ctx *ctx = (aes_gcm_ctx*)P2ROUNDUP(sav->sched, ESP_GCM_ALIGN);
 	return aes_encrypt_finalize_gcm(tag, tag_bytes, ctx->encrypt);
@@ -634,7 +638,7 @@ esp_gcm_encrypt_finalize(struct secasvar *sav,
 
 int
 esp_gcm_decrypt_finalize(struct secasvar *sav,
-    unsigned char *tag, unsigned int tag_bytes)
+    unsigned char *tag, size_t tag_bytes)
 {
 	aes_gcm_ctx *ctx = (aes_gcm_ctx*)P2ROUNDUP(sav->sched, ESP_GCM_ALIGN);
 	return aes_decrypt_finalize_gcm(tag, tag_bytes, ctx->decrypt);
@@ -692,6 +696,8 @@ esp_gcm_encrypt_aes(
 		return EINVAL;
 	}
 
+	VERIFY(ivoff <= INT_MAX);
+
 	/*
 	 * The IV is now generated within corecrypto and
 	 * is provided to ESP using aes_encrypt_inc_iv_gcm().
@@ -701,7 +707,7 @@ esp_gcm_encrypt_aes(
 	 * this value will get the latest IV.
 	 */
 	memcpy(sav->iv, (nonce + ESP_GCM_SALT_LEN), ivlen);
-	m_copyback(m, ivoff, ivlen, sav->iv);
+	m_copyback(m, (int)ivoff, ivlen, sav->iv);
 	bzero(nonce, ESP_GCM_SALT_LEN + ivlen);
 
 	if (m->m_pkthdr.len < bodyoff) {
@@ -711,10 +717,12 @@ esp_gcm_encrypt_aes(
 		return EINVAL;
 	}
 
+	VERIFY(off <= INT_MAX);
+
 	/* Set Additional Authentication Data */
 	if (!(sav->flags & SADB_X_EXT_OLD)) {
 		struct newesp esp;
-		m_copydata(m, off, sizeof(esp), (caddr_t) &esp);
+		m_copydata(m, (int)off, sizeof(esp), (caddr_t) &esp);
 		if (aes_encrypt_aad_gcm((unsigned char*)&esp, sizeof(esp), ctx->encrypt)) {
 			ipseclog((LOG_ERR, "%s: packet decryption AAD failure\n", __FUNCTION__));
 			m_freem(m);
@@ -730,7 +738,7 @@ esp_gcm_encrypt_aes(
 	/* skip headers/IV */
 	while (soff < bodyoff) {
 		if (soff + s->m_len > bodyoff) {
-			sn = bodyoff - soff;
+			sn = (int)(bodyoff - soff);
 			break;
 		}
 
@@ -786,7 +794,7 @@ esp_gcm_encrypt_aes(
 				m_adj(d, IPSEC_GET_P2UNALIGNED_OFS(d->m_data));
 			}
 
-			d->m_len = M_TRAILINGSPACE(d);
+			d->m_len = (int)M_TRAILINGSPACE(d);
 
 			if (d->m_len > i) {
 				d->m_len = i;
@@ -912,8 +920,10 @@ esp_gcm_decrypt_aes(
 		return EINVAL;
 	}
 
+	VERIFY(ivoff <= INT_MAX);
+
 	/* grab iv */
-	m_copydata(m, ivoff, ivlen, (caddr_t) iv);
+	m_copydata(m, (int)ivoff, ivlen, (caddr_t) iv);
 
 	/* Set IV */
 	memcpy(nonce, _KEYBUF(sav->key_enc) + _KEYLEN(sav->key_enc) - ESP_GCM_SALT_LEN, ESP_GCM_SALT_LEN);
@@ -928,10 +938,12 @@ esp_gcm_decrypt_aes(
 	}
 	bzero(nonce, sizeof(nonce));
 
+	VERIFY(off <= INT_MAX);
+
 	/* Set Additional Authentication Data */
 	if (!(sav->flags & SADB_X_EXT_OLD)) {
 		struct newesp esp;
-		m_copydata(m, off, sizeof(esp), (caddr_t) &esp);
+		m_copydata(m, (int)off, sizeof(esp), (caddr_t) &esp);
 		if (aes_decrypt_aad_gcm((unsigned char*)&esp, sizeof(esp), ctx->decrypt)) {
 			ipseclog((LOG_ERR, "%s: packet decryption AAD failure\n", __FUNCTION__));
 			return EINVAL;
@@ -946,7 +958,7 @@ esp_gcm_decrypt_aes(
 	/* skip header/IV offset */
 	while (soff < bodyoff) {
 		if (soff + s->m_len > bodyoff) {
-			sn = bodyoff - soff;
+			sn = (int)(bodyoff - soff);
 			break;
 		}
 
@@ -1002,7 +1014,7 @@ esp_gcm_decrypt_aes(
 				m_adj(d, IPSEC_GET_P2UNALIGNED_OFS(d->m_data));
 			}
 
-			d->m_len = M_TRAILINGSPACE(d);
+			d->m_len = (int)M_TRAILINGSPACE(d);
 
 			if (d->m_len > i) {
 				d->m_len = i;

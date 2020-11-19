@@ -550,4 +550,8 @@ typedef struct EFI_SYSTEM_TABLE_64 {
 	EFI_PTR64                     ConfigurationTable;
 } __attribute__((aligned(8))) EFI_SYSTEM_TABLE_64;
 
+#if defined(XNU_KERNEL_PRIVATE)
+extern uint64_t efi_get_rsdp_physaddr(void);
+#endif
+
 #endif /* _PEXPERT_I386_EFI_H */

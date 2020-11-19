@@ -30,6 +30,7 @@
 #define _IOINTERLEAVEDMEMORYDESCRIPTOR_H
 
 #include <IOKit/IOMemoryDescriptor.h>
+#include <libkern/c++/OSPtr.h>
 
 /*! @class IOInterleavedMemoryDescriptor : public IOMemoryDescriptor
  *   @abstract The IOInterleavedMemoryDescriptor object describes a memory area made up of portions of several other IOMemoryDescriptors.
@@ -59,7 +60,7 @@ public:
  *   @param direction An I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures.
  *   @result The created IOInterleavedMemoryDescriptor on success, to be released by the caller, or zero on failure. */
 
-	static IOInterleavedMemoryDescriptor * withCapacity( IOByteCount           capacity,
+	static OSPtr<IOInterleavedMemoryDescriptor>  withCapacity( IOByteCount           capacity,
 	    IODirection           direction);
 
 /*! @function initWithCapacity

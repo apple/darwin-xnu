@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2019-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -68,7 +68,7 @@ struct restricted_port_entry {
 #define RPE_FLAG_TEST          0x10    // entry for testing
 
 static struct restricted_port_entry restricted_port_list[] = {
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 	/*
 	 * Network relay proxy
 	 */
@@ -100,7 +100,16 @@ static struct restricted_port_entry restricted_port_list[] = {
 		.rpe_flags = RPE_FLAG_ENTITLEMENT | RPE_FLAG_TCP | RPE_FLAG_UDP,
 		.rpe_entitlement = "com.apple.private.network.restricted.port.ids_cloud_service_connector",
 	},
-#endif /* CONFIG_EMBEDDED */
+#endif /* !XNU_TARGET_OS_OSX */
+
+	/*
+	 * For RDC
+	 */
+	{
+		.rpe_port = 55555,
+		.rpe_flags = RPE_FLAG_ENTITLEMENT | RPE_FLAG_TCP,
+		.rpe_entitlement = "com.apple.private.network.restricted.port.lights_out_management",
+	},
 
 #if (DEBUG || DEVELOPMENT)
 	/*
@@ -298,7 +307,7 @@ sysctl_restricted_port_test_common(struct sysctl_oid *oidp,
 			if (!(rpe->rpe_flags & RPE_FLAG_TEST)) {
 				continue;
 			}
-			rpe->rpe_port = value;
+			rpe->rpe_port = (in_port_t)value;
 			if (test_superuser) {
 				rpe->rpe_flags |= RPE_FLAG_SUPERUSER;
 				rpe->rpe_flags &= ~RPE_FLAG_ENTITLEMENT;

@@ -28,7 +28,7 @@
 
 #include <arm/cpu_data_internal.h>
 #include <arm/cpu_internal.h>
-#include <kern/kalloc.h>
+#include <kern/cpu_number.h>
 #include <kern/kpc.h>
 #include <kern/thread.h>
 #include <kern/processor.h>
@@ -92,7 +92,7 @@ void kpc_pmi_handler(unsigned int ctr);
 
 /* force the CPMU clocks in case of a clocking bug */
 #define PMCR0_CLKEN_SHIFT        (31)
-#define PMCR0_CLKEN_ENABLE_MASK  (UINT64_C(1) << PMCR0_USEREN_SHIFT)
+#define PMCR0_CLKEN_ENABLE_MASK  (UINT64_C(1) << PMCR0_CLKEN_SHIFT)
 #define PMCR0_CLKEN_DISABLE_MASK (~PMCR0_CLKEN_ENABLE_MASK)
 
 /* 32 - 44 mirror the low bits for PMCs 8 and 9 */
@@ -775,7 +775,7 @@ kpc_get_all_cpus_counters(uint32_t classes, int *curcpu, uint64_t *buf)
 
 	/* grab counters and CPU number as close as possible */
 	if (curcpu) {
-		*curcpu = current_processor()->cpu_id;
+		*curcpu = cpu_number();
 	}
 
 	struct kpc_get_counters_remote hdl = {
@@ -980,7 +980,37 @@ kpc_pmi_handler(unsigned int ctr)
 	FIXED_SHADOW(ctr) += (kpc_fixed_max() - FIXED_RELOAD(ctr) + 1 /* Wrap */) + extra;
 
 	if (FIXED_ACTIONID(ctr)) {
-		kpc_sample_kperf(FIXED_ACTIONID(ctr));
+		uintptr_t pc = 0;
+		bool kernel = true;
+		struct arm_saved_state *state;
+		state = getCpuDatap()->cpu_int_state;
+		if (state) {
+			kernel = !PSR64_IS_USER(get_saved_state_cpsr(state));
+			pc = get_saved_state_pc(state);
+			if (kernel) {
+				pc = VM_KERNEL_UNSLIDE(pc);
+			}
+		}
+
+		uint64_t config = get_counter_config(ctr);
+		kperf_kpc_flags_t flags = kernel ? KPC_KERNEL_PC : 0;
+		bool custom_mode = false;
+		if ((config & CFGWORD_EL0A32EN_MASK) || (config & CFGWORD_EL0A64EN_MASK)) {
+			flags |= KPC_USER_COUNTING;
+			custom_mode = true;
+		}
+		if ((config & CFGWORD_EL1EN_MASK)) {
+			flags |= KPC_KERNEL_COUNTING;
+			custom_mode = true;
+		}
+		/*
+		 * For backwards-compatibility.
+		 */
+		if (!custom_mode) {
+			flags |= KPC_USER_COUNTING | KPC_KERNEL_COUNTING;
+		}
+		kpc_sample_kperf(FIXED_ACTIONID(ctr), ctr, config & 0xff, FIXED_SHADOW(ctr),
+		    pc, flags);
 	}
 }
 

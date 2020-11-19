@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -41,16 +41,17 @@ _name(void)                                                     \
 	__builtin_unreachable();                                \
 }
 
+STUB(kern_buflet_get_data_address);
 STUB(kern_buflet_get_data_offset);
 STUB(kern_buflet_get_data_length);
+STUB(kern_buflet_get_data_limit);
 STUB(kern_buflet_get_object_address);
-STUB(kern_buflet_get_object_offset);
+STUB(kern_buflet_get_object_limit);
 STUB(kern_buflet_get_object_segment);
+STUB(kern_buflet_set_data_address);
 STUB(kern_buflet_set_data_offset);
 STUB(kern_buflet_set_data_length);
-STUB(kern_buflet_get_data_limit);
-STUB(kern_buflet_attach_buffer);
-STUB(kern_buflet_attach_buffer_with_segment_info);
+STUB(kern_buflet_set_data_limit);
 STUB(kern_channel_advance_slot);
 STUB(kern_channel_available_slot_count);
 STUB(kern_channel_get_context);
@@ -90,10 +91,11 @@ STUB(kern_nexus_get_context);
 STUB(kern_nexus_get_pbufpool);
 STUB(kern_nexus_register_domain_provider);
 STUB(kern_packet_clear_flow_uuid);
+STUB(kern_packet_clone);
+STUB(kern_packet_clone_nosleep);
 STUB(kern_packet_get_euuid);
 STUB(kern_packet_finalize);
 STUB(kern_packet_get_buflet_count);
-STUB(kern_packet_set_buflet_count);
 STUB(kern_packet_get_data_length);
 STUB(kern_packet_get_flow_uuid);
 STUB(kern_packet_get_inet_checksum);
@@ -109,6 +111,7 @@ STUB(kern_packet_get_object_index);
 STUB(kern_packet_get_policy_id);
 STUB(kern_packet_get_service_class);
 STUB(kern_packet_get_service_class_index);
+STUB(kern_packet_is_high_priority);
 STUB(kern_packet_get_traffic_class);
 STUB(kern_packet_get_timestamp);
 STUB(kern_packet_get_transport_header_offset);
@@ -148,6 +151,11 @@ STUB(kern_packet_set_vlan_tag);
 STUB(kern_packet_get_vlan_tag);
 STUB(kern_packet_get_vlan_id);
 STUB(kern_packet_get_vlan_priority);
+STUB(kern_packet_add_buflet);
+STUB(kern_packet_append);
+STUB(kern_packet_get_next);
+STUB(kern_packet_set_chain_counts);
+STUB(kern_packet_get_chain_counts);
 STUB(kern_pbufpool_alloc);
 STUB(kern_pbufpool_alloc_batch);
 STUB(kern_pbufpool_alloc_batch_callback);
@@ -158,11 +166,18 @@ STUB(kern_pbufpool_create);
 STUB(kern_pbufpool_destroy);
 STUB(kern_pbufpool_free);
 STUB(kern_pbufpool_free_batch);
+STUB(kern_pbufpool_free_chain);
 STUB(kern_pbufpool_get_context);
 STUB(kern_pbufpool_get_memory_info);
 STUB(kern_pbufpool_alloc_buffer);
 STUB(kern_pbufpool_alloc_buffer_nosleep);
 STUB(kern_pbufpool_free_buffer);
+STUB(kern_pbufpool_alloc_buflet);
+STUB(kern_pbufpool_alloc_buflet_nosleep);
 STUB(kern_segment_get_index);
+#if NETWORKING
+STUB(bpf_tap_packet_in);
+STUB(bpf_tap_packet_out);
+#endif
 #undef STUB
 #endif /* !SKYWALK */

@@ -138,7 +138,7 @@ kern_return_t coalition_request_terminate_internal(coalition_t coal);
  * KERN_RESOURCE_SHORTAGE	Unable to allocate kernel resources for a
  *				new coalition.
  */
-kern_return_t coalition_create_internal(int type, int role, boolean_t privileged, coalition_t *out);
+kern_return_t coalition_create_internal(int type, int role, boolean_t privileged, coalition_t *out, uint64_t *cid);
 
 boolean_t coalition_term_requested(coalition_t coal);
 boolean_t coalition_is_terminated(coalition_t coal);

@@ -24,7 +24,7 @@ struct debug_ucred {
 	uid_t           cr_uid;                         /* effective user id */
 	uid_t           cr_ruid;                        /* real user id */
 	uid_t           cr_svuid;                       /* saved user id */
-	short           cr_ngroups;                     /* number of groups in advisory list */
+	u_short         cr_ngroups;                     /* number of groups in advisory list */
 	gid_t           cr_groups[NGROUPS];     /* advisory group list */
 	gid_t           cr_rgid;                        /* real group id */
 	gid_t           cr_svgid;                       /* saved group id */

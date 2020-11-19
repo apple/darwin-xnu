@@ -207,7 +207,7 @@ routine PREFIX(mach_vm_read) (
 #else
 routine PREFIX(vm_read) (
 #endif
-		target_task	: vm_map_t;
+		target_task	: vm_map_read_t;
 		address		: mach_vm_address_t;
 		size		: mach_vm_size_t;
 	out	data		: pointer_t);
@@ -221,9 +221,9 @@ routine mach_vm_read_list(
 #else
 routine vm_read_list(
 #endif
-		target_task 	: vm_map_t;
-	inout	data_list   	: mach_vm_read_entry_t;
-		count		: natural_t);
+		  target_task 	: vm_map_read_t;
+	inout data_list   	: mach_vm_read_entry_t;
+		  count		    : natural_t);
 
 /*
  *	Writes the contents of the specified range of the
@@ -274,7 +274,7 @@ routine mach_vm_read_overwrite(
 #else
 routine vm_read_overwrite(
 #endif
-		target_task	: vm_map_t;
+		target_task	: vm_map_read_t;
 		address		: mach_vm_address_t;
 		size		: mach_vm_size_t;
 		data		: mach_vm_address_t;
@@ -405,18 +405,17 @@ routine mach_vm_page_query(
 #else
 routine vm_map_page_query(
 #endif
-                target_map      :vm_map_t;
+                target_map      :vm_map_read_t;
                 offset          :mach_vm_offset_t;
         out     disposition     :integer_t;
         out     ref_count       :integer_t);
-
 
 #if !defined(_MACH_VM_PUBLISH_AS_LOCAL_)
 routine mach_vm_region_recurse(
 #else
 routine vm_region_recurse_64(
 #endif
-                target_task     : vm_map_t;
+                target_task     : vm_map_read_t;
 	inout	address		: mach_vm_address_t;
         out     size            : mach_vm_size_t;
 	inout	nesting_depth	: natural_t;
@@ -438,12 +437,12 @@ routine mach_vm_region(
 #else
 routine vm_region_64(
 #endif
-                target_task     : vm_map_t;
-	inout	address		: mach_vm_address_t;
-        out     size            : mach_vm_size_t;
-		flavor		: vm_region_flavor_t;
-	out	info		: vm_region_info_t, CountInOut;
-        out     object_name     : memory_object_name_t =
+        target_task     : vm_map_read_t;
+  inout	address			: mach_vm_address_t;
+    out size            : mach_vm_size_t;
+		flavor			: vm_region_flavor_t;
+	out	info			: vm_region_info_t, CountInOut;
+    out object_name     : memory_object_name_t =
                                         MACH_MSG_TYPE_MOVE_SEND
                                         ctype: mach_port_t);
 
@@ -491,7 +490,7 @@ routine PREFIX(vm_purgable_control) (
 
 #if !defined(_MACH_VM_PUBLISH_AS_LOCAL_)
 routine mach_vm_page_info(
-			target_task		: vm_map_t;
+			target_task		: vm_map_read_t;
 			address			: mach_vm_address_t;
 			flavor			: vm_page_info_flavor_t;
 	out		info			: vm_page_info_t, CountInOut);
@@ -501,7 +500,7 @@ skip;
 
 #if !defined(_MACH_VM_PUBLISH_AS_LOCAL_)
 routine mach_vm_page_range_query(
-                target_map		: vm_map_t;
+                target_map		: vm_map_read_t;
                 address			: mach_vm_offset_t;
                 size			: mach_vm_size_t;
                 dispositions		: mach_vm_address_t;

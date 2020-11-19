@@ -12,7 +12,8 @@ INSTINC_SUBDIRS = \
 	routefs \
 	specfs \
 	union \
-	nullfs
+	nullfs \
+	bindfs
 
 EXPINC_SUBDIRS = \
 	devfs \
@@ -20,7 +21,8 @@ EXPINC_SUBDIRS = \
 	routefs \
 	specfs \
 	union \
-	nullfs
+	nullfs \
+	bindfs
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

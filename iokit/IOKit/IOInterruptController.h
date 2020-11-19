@@ -102,10 +102,14 @@ public:
 	virtual void disableVectorHard(IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector);
 	virtual void enableVector(IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector);
 	virtual void causeVector(IOInterruptVectorNumber vectorNumber, IOInterruptVector *vector);
+	virtual void setCPUInterruptProperties(IOService *service);
 
-	OSMetaClassDeclareReservedUnused(IOInterruptController, 0);
-	OSMetaClassDeclareReservedUnused(IOInterruptController, 1);
-	OSMetaClassDeclareReservedUnused(IOInterruptController, 2);
+	virtual void sendIPI(unsigned int cpu_id, bool deferred);
+	virtual void cancelDeferredIPI(unsigned int cpu_id);
+
+	OSMetaClassDeclareReservedUsedX86(IOInterruptController, 0);
+	OSMetaClassDeclareReservedUsedX86(IOInterruptController, 1);
+	OSMetaClassDeclareReservedUsedX86(IOInterruptController, 2);
 	OSMetaClassDeclareReservedUnused(IOInterruptController, 3);
 	OSMetaClassDeclareReservedUnused(IOInterruptController, 4);
 	OSMetaClassDeclareReservedUnused(IOInterruptController, 5);

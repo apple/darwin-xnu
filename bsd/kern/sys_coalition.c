@@ -43,14 +43,12 @@ coalition_create_syscall(user_addr_t cidp, uint32_t flags)
 		return EINVAL;
 	}
 
-	kr = coalition_create_internal(type, role, privileged, &coal);
+	kr = coalition_create_internal(type, role, privileged, &coal, &cid);
 	if (kr != KERN_SUCCESS) {
 		/* for now, the only kr is KERN_RESOURCE_SHORTAGE */
 		error = ENOMEM;
 		goto out;
 	}
-
-	cid = coalition_id(coal);
 
 	coal_dbg("(addr, %u) -> %llu", flags, cid);
 	error = copyout(&cid, cidp, sizeof(cid));
@@ -238,7 +236,30 @@ coalition_info_resource_usage(coalition_t coal, user_addr_t buffer, user_size_t 
 	return copyout(&cru, buffer, MIN(bufsize, sizeof(cru)));
 }
 
+#if CONFIG_THREAD_GROUPS
+static int
+coalition_info_set_name_internal(coalition_t coal, user_addr_t buffer, user_size_t bufsize)
+{
+	int error;
+	char name[THREAD_GROUP_MAXNAME];
+
+	if (coalition_type(coal) != COALITION_TYPE_JETSAM) {
+		return EINVAL;
+	}
+	bzero(name, sizeof(name));
+	error = copyin(buffer, name, MIN(bufsize, sizeof(name) - 1));
+	if (error) {
+		return error;
+	}
+	struct thread_group *tg = coalition_get_thread_group(coal);
+	thread_group_set_name(tg, name);
+	thread_group_release(tg);
+	return error;
+}
+
+#else /* CONFIG_THREAD_GROUPS */
 #define coalition_info_set_name_internal(...) 0
+#endif /* CONFIG_THREAD_GROUPS */
 
 static int
 coalition_info_efficiency(coalition_t coal, user_addr_t buffer, user_size_t bufsize)
@@ -257,6 +278,11 @@ coalition_info_efficiency(coalition_t coal, user_addr_t buffer, user_size_t bufs
 	}
 	if (flags & COALITION_FLAGS_EFFICIENT) {
 		coalition_set_efficient(coal);
+#if CONFIG_THREAD_GROUPS
+		struct thread_group *tg = coalition_get_thread_group(coal);
+		thread_group_set_flags(tg, THREAD_GROUP_FLAGS_EFFICIENT);
+		thread_group_release(tg);
+#endif /* CONFIG_THREAD_GROUPS */
 	}
 	return error;
 }

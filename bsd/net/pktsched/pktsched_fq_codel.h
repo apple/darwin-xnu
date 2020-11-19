@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -35,6 +35,7 @@
 
 #ifdef BSD_KERNEL_PRIVATE
 #include <net/flowadv.h>
+#include <net/pktsched/pktsched.h>
 #endif /* BSD_KERNEL_PRIVATE */
 
 #ifdef __cplusplus
@@ -61,6 +62,8 @@ struct fcl_stat {
 	u_int32_t fcl_throttle_off;
 	u_int32_t fcl_throttle_drops;
 	u_int32_t fcl_dup_rexmts;
+	u_int32_t fcl_pkts_compressible;
+	u_int32_t fcl_pkts_compressed;
 };
 
 /*
@@ -78,6 +81,8 @@ struct fcl_stat {
 
 /* Max number of service classes currently supported */
 #define FQ_IF_MAX_CLASSES       10
+_Static_assert(FQ_IF_MAX_CLASSES < 127,
+    "maximum number of classes needs to fit in a single byte");
 
 #define FQ_IF_LARGE_FLOW_BYTE_LIMIT     15000
 
@@ -112,10 +117,10 @@ enum fq_if_state {
 typedef SLIST_HEAD(, flowq) flowq_list_t;
 typedef STAILQ_HEAD(, flowq) flowq_stailq_t;
 typedef struct fq_if_classq {
-	u_int32_t fcl_pri;      /* class priority, lower the better */
-	u_int32_t fcl_service_class;    /* service class */
-	u_int32_t fcl_quantum;          /* quantum in bytes */
-	u_int32_t fcl_drr_max;          /* max flows per class for DRR */
+	uint32_t fcl_pri;      /* class priority, lower the better */
+	uint32_t fcl_service_class;    /* service class */
+	uint16_t fcl_quantum;          /* quantum in bytes */
+	uint32_t fcl_drr_max;          /* max flows per class for DRR */
 	int64_t fcl_budget;             /* budget for this classq */
 	flowq_stailq_t fcl_new_flows;   /* List of new flows */
 	flowq_stailq_t fcl_old_flows;   /* List of old flows */
@@ -182,11 +187,26 @@ struct fq_codel_classstats {
 	u_int32_t       fcls_dup_rexmts;
 	u_int32_t       fcls_flowstats_cnt;
 	struct fq_codel_flowstats fcls_flowstats[FQ_IF_MAX_FLOWSTATS];
+	u_int32_t       fcls_pkts_compressible;
+	u_int32_t       fcls_pkts_compressed;
 };
 
 #ifdef BSD_KERNEL_PRIVATE
 
 extern void fq_codel_scheduler_init(void);
+extern int fq_if_enqueue_classq(struct ifclassq *ifq, classq_pkt_t *h,
+    classq_pkt_t *t, uint32_t cnt, uint32_t bytes, boolean_t *pdrop);
+extern void fq_if_dequeue_classq(struct ifclassq *ifq, classq_pkt_t *pkt);
+extern void fq_if_dequeue_sc_classq(struct ifclassq *ifq, mbuf_svc_class_t svc,
+    classq_pkt_t *pkt);
+extern int fq_if_dequeue_classq_multi(struct ifclassq *ifq, u_int32_t maxpktcnt,
+    u_int32_t maxbytecnt, classq_pkt_t *first_packet, classq_pkt_t *last_packet,
+    u_int32_t *retpktcnt, u_int32_t *retbytecnt);
+extern int fq_if_dequeue_sc_classq_multi(struct ifclassq *ifq,
+    mbuf_svc_class_t svc, u_int32_t maxpktcnt, u_int32_t maxbytecnt,
+    classq_pkt_t *first_packet, classq_pkt_t *last_packet, u_int32_t *retpktcnt,
+    u_int32_t *retbytecnt);
+extern int fq_if_request_classq(struct ifclassq *ifq, cqrq_t rq, void *arg);
 extern struct flowq *fq_if_hash_pkt(fq_if_t *, u_int32_t, mbuf_svc_class_t,
     u_int64_t, boolean_t, classq_pkt_type_t);
 extern boolean_t fq_if_at_drop_limit(fq_if_t *);
@@ -197,7 +217,7 @@ extern boolean_t fq_if_add_fcentry(fq_if_t *, pktsched_pkt_t *, uint32_t,
 extern void fq_if_flow_feedback(fq_if_t *, struct flowq *, fq_if_classq_t *);
 extern int fq_if_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags,
     classq_pkt_type_t ptype);
-extern int fq_if_teardown_ifclassq(struct ifclassq *ifq);
+extern void fq_if_teardown_ifclassq(struct ifclassq *ifq);
 extern int fq_if_getqstats_ifclassq(struct ifclassq *ifq, u_int32_t qid,
     struct if_ifclassq_stats *ifqs);
 extern void fq_if_destroy_flow(fq_if_t *, fq_if_classq_t *,

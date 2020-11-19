@@ -96,14 +96,8 @@ extern bool kpc_supported;
 /* bootstrap */
 extern void kpc_init(void);
 
-/* common initialization */
-extern void kpc_common_init(void);
-
 /* Architecture specific initialisation */
 extern void kpc_arch_init(void);
-
-/* Thread counting initialization */
-extern void kpc_thread_init(void);
 
 /* Get the bitmask of available classes */
 extern uint32_t kpc_get_classes(void);
@@ -306,26 +300,35 @@ struct kpc_get_counters_remote {
 	uint64_t *buf;
 };
 
-extern int kpc_get_all_cpus_counters(uint32_t classes, int *curcpu, uint64_t *buf);
-extern int kpc_get_curcpu_counters(uint32_t classes, int *curcpu, uint64_t *buf);
-extern int kpc_get_fixed_counters(uint64_t *counterv);
-extern int kpc_get_configurable_counters(uint64_t *counterv, uint64_t pmc_mask);
-extern boolean_t kpc_is_running_fixed(void);
-extern boolean_t kpc_is_running_configurable(uint64_t pmc_mask);
-extern uint32_t kpc_fixed_count(void);
-extern uint32_t kpc_configurable_count(void);
-extern uint32_t kpc_fixed_config_count(void);
-extern uint32_t kpc_configurable_config_count(uint64_t pmc_mask);
-extern uint32_t kpc_rawpmu_config_count(void);
-extern int kpc_get_fixed_config(kpc_config_t *configv);
-extern int kpc_get_configurable_config(kpc_config_t *configv, uint64_t pmc_mask);
-extern int kpc_get_rawpmu_config(kpc_config_t *configv);
-extern uint64_t kpc_fixed_max(void);
-extern uint64_t kpc_configurable_max(void);
-extern int kpc_set_config_arch(struct kpc_config_remote *mp_config);
-extern int kpc_set_period_arch(struct kpc_config_remote *mp_config);
-extern void kpc_sample_kperf(uint32_t actionid);
-extern int kpc_set_running_arch(struct kpc_running_remote *mp_config);
+int kpc_get_all_cpus_counters(uint32_t classes, int *curcpu, uint64_t *buf);
+int kpc_get_curcpu_counters(uint32_t classes, int *curcpu, uint64_t *buf);
+int kpc_get_fixed_counters(uint64_t *counterv);
+int kpc_get_configurable_counters(uint64_t *counterv, uint64_t pmc_mask);
+boolean_t kpc_is_running_fixed(void);
+boolean_t kpc_is_running_configurable(uint64_t pmc_mask);
+uint32_t kpc_fixed_count(void);
+uint32_t kpc_configurable_count(void);
+uint32_t kpc_fixed_config_count(void);
+uint32_t kpc_configurable_config_count(uint64_t pmc_mask);
+uint32_t kpc_rawpmu_config_count(void);
+int kpc_get_fixed_config(kpc_config_t *configv);
+int kpc_get_configurable_config(kpc_config_t *configv, uint64_t pmc_mask);
+int kpc_get_rawpmu_config(kpc_config_t *configv);
+uint64_t kpc_fixed_max(void);
+uint64_t kpc_configurable_max(void);
+int kpc_set_config_arch(struct kpc_config_remote *mp_config);
+int kpc_set_period_arch(struct kpc_config_remote *mp_config);
+
+__options_decl(kperf_kpc_flags_t, uint16_t, {
+	KPC_KERNEL_PC = 0x01,
+	KPC_KERNEL_COUNTING = 0x02,
+	KPC_USER_COUNTING = 0x04,
+});
+
+void kpc_sample_kperf(uint32_t actionid, uint32_t counter, uint64_t config,
+    uint64_t count, uintptr_t pc, kperf_kpc_flags_t flags);
+
+int kpc_set_running_arch(struct kpc_running_remote *mp_config);
 
 
 /*

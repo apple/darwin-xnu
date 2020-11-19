@@ -50,6 +50,7 @@
 #include <mach/host_priv.h>
 #include <mach/host_special_ports.h>
 #include <mach/audit_triggers_server.h>
+#include <mach/audit_triggers_types.h>
 
 #include <os/overflow.h>
 
@@ -66,7 +67,7 @@ struct mhdr {
 /*
  * The lock group for the audit subsystem.
  */
-static lck_grp_t *audit_lck_grp = NULL;
+static LCK_GRP_DECLARE(audit_lck_grp, "Audit");
 
 #define AUDIT_MHMAGIC   0x4D656C53
 
@@ -134,11 +135,10 @@ audit_sysctl_malloc_debug(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	if (req->oldlen < AU_MALLOC_DBINFO_SZ) {
 		return ENOMEM;
 	}
-	amdi_ptr = (au_malloc_debug_info_t *)kalloc(AU_MALLOC_DBINFO_SZ);
+	amdi_ptr = kheap_alloc(KHEAP_TEMP, AU_MALLOC_DBINFO_SZ, Z_WAITOK | Z_ZERO);
 	if (amdi_ptr == NULL) {
 		return ENOMEM;
 	}
-	bzero(amdi_ptr, AU_MALLOC_DBINFO_SZ);
 
 	/*
 	 * Build the record array.
@@ -168,7 +168,7 @@ audit_sysctl_malloc_debug(__unused struct sysctl_oid *oidp, __unused void *arg1,
 
 	req->oldlen = sz;
 	err = SYSCTL_OUT(req, amdi_ptr, sz);
-	kfree(amdi_ptr, AU_MALLOC_DBINFO_SZ);
+	kheap_free(KHEAP_TEMP, amdi_ptr, AU_MALLOC_DBINFO_SZ);
 
 	return err;
 }
@@ -196,23 +196,13 @@ _audit_malloc(size_t size, au_malloc_type_t * type, int flags)
 	if (size == 0) {
 		return NULL;
 	}
-	if (flags & M_NOWAIT) {
-		hdr = (void *)kalloc_noblock(memsize);
-	} else {
-		hdr = (void *)kalloc(memsize);
-		if (hdr == NULL) {
-			panic("_audit_malloc: kernel memory exhausted");
-		}
-	}
+	hdr = kheap_alloc(KHEAP_AUDIT, memsize, flags);
 	if (hdr == NULL) {
 		return NULL;
 	}
 	hdr->mh_size = memsize;
 	hdr->mh_type = type;
 	hdr->mh_magic = AUDIT_MHMAGIC;
-	if (flags & M_ZERO) {
-		memset(hdr->mh_data, 0, size);
-	}
 #if AUDIT_MALLOC_DEBUG
 	if (type != NULL && type->mt_type < NUM_MALLOC_TYPES) {
 		OSAddAtomic64(memsize, &type->mt_size);
@@ -253,7 +243,7 @@ _audit_free(void *addr, __unused au_malloc_type_t *type)
 		OSAddAtomic(-1, &type->mt_inuse);
 	}
 #endif /* AUDIT_MALLOC_DEBUG */
-	kfree(hdr, hdr->mh_size);
+	kheap_free(KHEAP_AUDIT, hdr, hdr->mh_size);
 }
 
 /*
@@ -339,7 +329,7 @@ _audit_mtx_init(struct mtx *mp, const char *lckname)
 _audit_mtx_init(struct mtx *mp, __unused const char *lckname)
 #endif
 {
-	mp->mtx_lock = lck_mtx_alloc_init(audit_lck_grp, LCK_ATTR_NULL);
+	mp->mtx_lock = lck_mtx_alloc_init(&audit_lck_grp, LCK_ATTR_NULL);
 	KASSERT(mp->mtx_lock != NULL,
 	    ("_audit_mtx_init: Could not allocate a mutex."));
 #if DIAGNOSTIC
@@ -351,7 +341,7 @@ void
 _audit_mtx_destroy(struct mtx *mp)
 {
 	if (mp->mtx_lock) {
-		lck_mtx_free(mp->mtx_lock, audit_lck_grp);
+		lck_mtx_free(mp->mtx_lock, &audit_lck_grp);
 		mp->mtx_lock = NULL;
 	}
 }
@@ -366,7 +356,7 @@ _audit_rw_init(struct rwlock *lp, const char *lckname)
 _audit_rw_init(struct rwlock *lp, __unused const char *lckname)
 #endif
 {
-	lp->rw_lock = lck_rw_alloc_init(audit_lck_grp, LCK_ATTR_NULL);
+	lp->rw_lock = lck_rw_alloc_init(&audit_lck_grp, LCK_ATTR_NULL);
 	KASSERT(lp->rw_lock != NULL,
 	    ("_audit_rw_init: Could not allocate a rw lock."));
 #if DIAGNOSTIC
@@ -378,7 +368,7 @@ void
 _audit_rw_destroy(struct rwlock *lp)
 {
 	if (lp->rw_lock) {
-		lck_rw_free(lp->rw_lock, audit_lck_grp);
+		lck_rw_free(lp->rw_lock, &audit_lck_grp);
 		lp->rw_lock = NULL;
 	}
 }
@@ -414,7 +404,7 @@ _audit_rlck_init(struct rlck *lp, const char *lckname)
 _audit_rlck_init(struct rlck *lp, __unused const char *lckname)
 #endif
 {
-	lp->rl_mtx = lck_mtx_alloc_init(audit_lck_grp, LCK_ATTR_NULL);
+	lp->rl_mtx = lck_mtx_alloc_init(&audit_lck_grp, LCK_ATTR_NULL);
 	KASSERT(lp->rl_mtx != NULL,
 	    ("_audit_rlck_init: Could not allocate a recursive lock."));
 #if DIAGNOSTIC
@@ -461,7 +451,7 @@ void
 _audit_rlck_destroy(struct rlck *lp)
 {
 	if (lp->rl_mtx) {
-		lck_mtx_free(lp->rl_mtx, audit_lck_grp);
+		lck_mtx_free(lp->rl_mtx, &audit_lck_grp);
 		lp->rl_mtx = NULL;
 	}
 }
@@ -494,7 +484,7 @@ _audit_slck_init(struct slck *lp, const char *lckname)
 _audit_slck_init(struct slck *lp, __unused const char *lckname)
 #endif
 {
-	lp->sl_mtx = lck_mtx_alloc_init(audit_lck_grp, LCK_ATTR_NULL);
+	lp->sl_mtx = lck_mtx_alloc_init(&audit_lck_grp, LCK_ATTR_NULL);
 	KASSERT(lp->sl_mtx != NULL,
 	    ("_audit_slck_init: Could not allocate a sleep lock."));
 #if DIAGNOSTIC
@@ -580,7 +570,7 @@ void
 _audit_slck_destroy(struct slck *lp)
 {
 	if (lp->sl_mtx) {
-		lck_mtx_free(lp->sl_mtx, audit_lck_grp);
+		lck_mtx_free(lp->sl_mtx, &audit_lck_grp);
 		lp->sl_mtx = NULL;
 	}
 }
@@ -641,18 +631,6 @@ _audit_ppsratecheck(struct timeval *lasttime, int *curpps, int maxpps)
 	return rv;
 }
 
-/*
- * Initialize lock group for audit related locks/mutexes.
- */
-void
-_audit_lck_grp_init(void)
-{
-	audit_lck_grp = lck_grp_alloc_init("Audit", LCK_GRP_ATTR_NULL);
-
-	KASSERT(audit_lck_grp != NULL,
-	    ("audit_get_lck_grp: Could not allocate the audit lock group."));
-}
-
 int
 audit_send_trigger(unsigned int trigger)
 {
@@ -669,4 +647,22 @@ audit_send_trigger(unsigned int trigger)
 		return error;
 	}
 }
+
+int
+audit_send_analytics(char* signing_id, char* process_name)
+{
+	mach_port_t audit_port;
+	int error;
+
+	error = host_get_audit_control_port(host_priv_self(), &audit_port);
+	if (error == KERN_SUCCESS && audit_port != MACH_PORT_NULL) {
+		(void)audit_analytics(audit_port, signing_id, process_name);
+		ipc_port_release_send(audit_port);
+		return 0;
+	} else {
+		printf("Cannot get audit control port for analytics \n");
+		return error;
+	}
+}
+
 #endif /* CONFIG_AUDIT */

@@ -118,3 +118,120 @@ T_DECL(work_interval, "work interval interface")
 	ret = work_interval_destroy(handle);
 	T_ASSERT_POSIX_SUCCESS(ret, "work_interval_destroy");
 }
+
+static mach_timebase_info_data_t timebase_info;
+
+static uint64_t
+nanos_to_abs(uint64_t nanos)
+{
+	mach_timebase_info(&timebase_info);
+	return nanos * timebase_info.denom / timebase_info.numer;
+}
+
+static void
+set_realtime(pthread_t thread)
+{
+	kern_return_t kr;
+	thread_time_constraint_policy_data_t pol;
+
+	mach_port_t target_thread = pthread_mach_thread_np(thread);
+	T_ASSERT_NOTNULL(target_thread, "pthread_mach_thread_np");
+
+	/* 1s 100ms 10ms */
+	pol.period      = (uint32_t)nanos_to_abs(1000000000);
+	pol.constraint  = (uint32_t)nanos_to_abs(100000000);
+	pol.computation = (uint32_t)nanos_to_abs(10000000);
+
+	pol.preemptible = 0; /* Ignored by OS */
+	kr = thread_policy_set(target_thread, THREAD_TIME_CONSTRAINT_POLICY, (thread_policy_t) &pol,
+	    THREAD_TIME_CONSTRAINT_POLICY_COUNT);
+	T_ASSERT_MACH_SUCCESS(kr, "thread_policy_set(THREAD_TIME_CONSTRAINT_POLICY)");
+}
+
+static void
+set_nonrealtime(pthread_t thread)
+{
+	kern_return_t kr;
+	thread_standard_policy_data_t pol = {0};
+
+	mach_port_t target_thread = pthread_mach_thread_np(thread);
+	T_ASSERT_NOTNULL(target_thread, "pthread_mach_thread_np");
+
+	kr = thread_policy_set(target_thread, THREAD_STANDARD_POLICY, (thread_policy_t) &pol,
+	    THREAD_STANDARD_POLICY_COUNT);
+	T_ASSERT_MACH_SUCCESS(kr, "thread_policy_set(THREAD_STANDARD_POLICY)");
+}
+
+T_DECL(work_interval_audio_realtime_only, "joining RT threads to audio work interval", T_META_ASROOT(YES))
+{
+	int ret = 0;
+	work_interval_t handle = NULL;
+	kern_return_t kr = KERN_SUCCESS;
+
+	uint32_t flags = WORK_INTERVAL_FLAG_GROUP | WORK_INTERVAL_FLAG_JOINABLE | WORK_INTERVAL_TYPE_COREAUDIO;
+
+	ret = work_interval_create(&handle, flags);
+	T_ASSERT_POSIX_SUCCESS(ret, "work_interval_create, joinable");
+
+	ret = work_interval_copy_port(handle, &port);
+	T_ASSERT_POSIX_SUCCESS(ret, "work_interval_copy_port, joinable");
+
+	ret = work_interval_join_port(port);
+	T_EXPECT_POSIX_FAILURE(ret, EINVAL, "work_interval_join_port for audio on non-RT thread");
+
+	set_realtime(pthread_self());
+
+	ret = work_interval_join_port(port);
+	T_ASSERT_POSIX_SUCCESS(ret, "work_interval_join_port for audio on RT thread");
+
+	ret = work_interval_leave();
+	T_ASSERT_POSIX_SUCCESS(ret, "work_interval_leave");
+
+	ret = work_interval_destroy(handle);
+	T_ASSERT_POSIX_SUCCESS(ret, "work_interval_destroy");
+
+	kr = mach_port_deallocate(mach_task_self(), port);
+	T_ASSERT_MACH_SUCCESS(kr, "mach_port_deallocate of port");
+
+	set_nonrealtime(pthread_self());
+}
+
+T_DECL(work_interval_get_flags, "querying a port for create flags")
+{
+	int ret = 0;
+	work_interval_t handle = NULL;
+	uint32_t flags = WORK_INTERVAL_FLAG_JOINABLE | WORK_INTERVAL_FLAG_GROUP | WORK_INTERVAL_TYPE_COREAUDIO;
+
+	ret = work_interval_create(&handle, flags);
+	T_ASSERT_POSIX_SUCCESS(ret, "work_interval_create(AUDIO)");
+
+	ret = work_interval_copy_port(handle, &port);
+	T_ASSERT_POSIX_SUCCESS(ret, "work_interval_copy_port");
+	T_ASSERT_TRUE(MACH_PORT_VALID(port), "port from copy port is a valid port");
+
+	uint32_t expected_flags = 0;
+
+	ret = work_interval_get_flags_from_port(port, &expected_flags);
+	T_ASSERT_EQ(ret, 0, "work_interval_get_flags_from_port");
+
+	T_ASSERT_EQ(expected_flags, flags, "Flags match with what work interval was created with");
+
+	mach_port_mod_refs(mach_task_self(), port, MACH_PORT_RIGHT_SEND, -1);
+	work_interval_destroy(handle);
+
+	// Negative test
+
+	mach_port_t fake_port = MACH_PORT_NULL;
+	ret = mach_port_allocate(mach_task_self(), MACH_PORT_RIGHT_RECEIVE, &fake_port);
+	T_ASSERT_EQ(ret, 0, "successfully allocated a port");
+	T_ASSERT_TRUE(MACH_PORT_VALID(fake_port), "allocated port is valid");
+
+	ret = mach_port_insert_right(mach_task_self(), fake_port, fake_port, MACH_MSG_TYPE_MAKE_SEND);
+	T_ASSERT_EQ(ret, 0, "successfully inserted a send right");
+
+	ret = work_interval_get_flags_from_port(fake_port, &expected_flags);
+	T_ASSERT_EQ(ret, -1, "query port failed as expected");
+
+	mach_port_mod_refs(mach_task_self(), fake_port, MACH_PORT_RIGHT_SEND, -1);
+	mach_port_mod_refs(mach_task_self(), fake_port, MACH_PORT_RIGHT_RECEIVE, -1);
+}

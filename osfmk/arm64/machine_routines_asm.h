@@ -52,16 +52,16 @@
  * tmp5 - scratch register 5
  */
 /* BEGIN IGNORE CODESTYLE */
-.macro  AUTH_THREAD_STATE_IN_X0	tmp1, tmp2, tmp3, tmp4, tmp5, el0_state_allowed=0
-	ldr		w2, [x0, SS64_CPSR]
+.macro AUTH_THREAD_STATE_IN_X0_COMMON tmp1, tmp2, tmp3, tmp4, tmp5, el0_state_allowed=0, PC_OFF=SS64_PC, CPSR_OFF=SS64_CPSR, X16_OFF=SS64_X16, LR_OFF=SS64_LR, check_func=ml_check_signed_state
+	ldr		w2, [x0, \CPSR_OFF]
 .if \el0_state_allowed==0
 #if __has_feature(ptrauth_calls)
 	// If testing for a canary CPSR value, ensure that we do not observe writes to other fields without it
 	dmb		ld
 #endif
 .endif
-	ldr		x1, [x0, SS64_PC]
-	ldp		x16, x17, [x0, SS64_X16]
+	ldr		x1, [x0, \PC_OFF]
+	ldp		x16, x17, [x0, \X16_OFF]
 
 #if defined(HAS_APPLE_PAC)
 	// Save x3-x5 to preserve across call
@@ -80,10 +80,10 @@
 	*/
 	mov		\tmp1, x1
 	mov		\tmp2, x2
-	ldr		x3, [x0, SS64_LR]
+	ldr		x3, [x0, \LR_OFF]
 	mov		x4, x16
 	mov		x5, x17
-	bl		EXT(ml_check_signed_state)
+	bl		EXT(\check_func)
 	mov		x1, \tmp1
 	mov		x2, \tmp2
 
@@ -100,8 +100,16 @@
 	mov		x4, \tmp4
 	mov		x5, \tmp5
 #else
-	ldr		lr, [x0, SS64_LR]
+	ldr		lr, [x0, \LR_OFF]
 #endif /* defined(HAS_APPLE_PAC) */
+.endmacro
+
+.macro  AUTH_THREAD_STATE_IN_X0 tmp1, tmp2, tmp3, tmp4, tmp5, el0_state_allowed=0
+	AUTH_THREAD_STATE_IN_X0_COMMON \tmp1, \tmp2, \tmp3, \tmp4, \tmp5, \el0_state_allowed
+.endmacro
+
+.macro  AUTH_KERNEL_THREAD_STATE_IN_X0 tmp1, tmp2, tmp3, tmp4, tmp5, el0_state_allowed=0
+	AUTH_THREAD_STATE_IN_X0_COMMON \tmp1, \tmp2, \tmp3, \tmp4, \tmp5, \el0_state_allowed, SS64_KERNEL_PC, SS64_KERNEL_CPSR, SS64_KERNEL_X16, SS64_KERNEL_LR, ml_check_kernel_signed_state
 .endmacro
 /* END IGNORE CODESTYLE */
 

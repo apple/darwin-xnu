@@ -49,23 +49,29 @@ __END_DECLS
 
 #if XNU_KERNEL_PRIVATE
 #include <libkern/OSAtomic.h>
+#include <libkern/c++/OSCPPDebug.h>
 
 #define kalloc_container(size)  \
-	({ kalloc_tag_bt(size, VM_KERN_MEMORY_LIBKERN); })
+	kalloc_tag_bt(size, VM_KERN_MEMORY_LIBKERN)
+
+#define kalloc_data_container(size, flags)  \
+	kheap_alloc_tag_bt(KHEAP_DATA_BUFFERS, size, flags, VM_KERN_MEMORY_LIBKERN)
+
+#define kfree_data_container(buffer, size) \
+	kheap_free(KHEAP_DATA_BUFFERS, buffer, size)
 
 #define kallocp_container(size) \
-	({ kallocp_tag_bt(size, VM_KERN_MEMORY_LIBKERN); })
+	kallocp_tag_bt(size, VM_KERN_MEMORY_LIBKERN)
 
 #if OSALLOCDEBUG
-extern "C" int debug_container_malloc_size;
-extern "C" int debug_ivars_size;
+
 #if IOTRACKING
-#define OSCONTAINER_ACCUMSIZE(s) do { OSAddAtomic((SInt32)(s), &debug_container_malloc_size); trackingAccumSize(s); } while(0)
+#define OSCONTAINER_ACCUMSIZE(s) do { OSAddAtomicLong((s), &debug_container_malloc_size); trackingAccumSize(s); } while(0)
 #else
-#define OSCONTAINER_ACCUMSIZE(s) do { OSAddAtomic((SInt32)(s), &debug_container_malloc_size); } while(0)
+#define OSCONTAINER_ACCUMSIZE(s) do { OSAddAtomicLong((s), &debug_container_malloc_size); } while(0)
 #endif
-#define OSMETA_ACCUMSIZE(s)      do { OSAddAtomic((SInt32)(s), &debug_container_malloc_size); } while(0)
-#define OSIVAR_ACCUMSIZE(s)      do { OSAddAtomic((SInt32)(s), &debug_ivars_size);            } while(0)
+#define OSMETA_ACCUMSIZE(s)      do { OSAddAtomicLong((s), &debug_container_malloc_size); } while(0)
+#define OSIVAR_ACCUMSIZE(s)      do { OSAddAtomicLong((s), &debug_ivars_size);            } while(0)
 
 #else /* OSALLOCDEBUG */
 

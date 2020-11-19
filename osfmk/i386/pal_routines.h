@@ -145,6 +145,7 @@ void pal_preemption_assert(void);
 /* Include a PAL-specific header, too, for xnu-internal overrides */
 #include <i386/pal_native.h>
 
+#define PAL_XCPM_PROPERTY_VALUE 3
 
 extern boolean_t virtualized;
 #define PAL_VIRTUALIZED_PROPERTY_VALUE 4
@@ -155,7 +156,7 @@ static inline void
 pal_get_resource_property(const char **property_name, int *property_value)
 {
 	*property_name = PAL_AICPM_PROPERTY_NAME;
-	*property_value = PAL_AICPM_PROPERTY_VALUE;
+	*property_value = PAL_XCPM_PROPERTY_VALUE;
 	if (virtualized) {
 		*property_value = PAL_VIRTUALIZED_PROPERTY_VALUE;
 	}

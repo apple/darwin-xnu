@@ -390,16 +390,16 @@ fifo_ioctl(struct vnop_ioctl_args *ap)
 		return 0;
 	}
 	bzero(&filetmp, sizeof(struct fileproc));
-	filetmp.f_fglob = &filefg;
+	filetmp.fp_glob = &filefg;
 	if (ap->a_fflag & FREAD) {
-		filetmp.f_fglob->fg_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_readsock;
+		filetmp.fp_glob->fg_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_readsock;
 		error = soo_ioctl(&filetmp, ap->a_command, ap->a_data, ap->a_context);
 		if (error) {
 			return error;
 		}
 	}
 	if (ap->a_fflag & FWRITE) {
-		filetmp.f_fglob->fg_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_writesock;
+		filetmp.fp_glob->fg_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_writesock;
 		error = soo_ioctl(&filetmp, ap->a_command, ap->a_data, ap->a_context);
 		if (error) {
 			return error;
@@ -416,16 +416,16 @@ fifo_select(struct vnop_select_args *ap)
 	int ready;
 
 	bzero(&filetmp, sizeof(struct fileproc));
-	filetmp.f_fglob = &filefg;
+	filetmp.fp_glob = &filefg;
 	if (ap->a_which & FREAD) {
-		filetmp.f_fglob->fg_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_readsock;
+		filetmp.fp_glob->fg_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_readsock;
 		ready = soo_select(&filetmp, ap->a_which, ap->a_wql, ap->a_context);
 		if (ready) {
 			return ready;
 		}
 	}
 	if (ap->a_which & FWRITE) {
-		filetmp.f_fglob->fg_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_writesock;
+		filetmp.fp_glob->fg_data = (caddr_t)ap->a_vp->v_fifoinfo->fi_writesock;
 		ready = soo_select(&filetmp, ap->a_which, ap->a_wql, ap->a_context);
 		if (ready) {
 			return ready;

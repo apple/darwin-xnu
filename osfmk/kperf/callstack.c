@@ -31,6 +31,7 @@
 #include <mach/mach_types.h>
 #include <kern/thread.h>
 #include <kern/backtrace.h>
+#include <kern/cambria_layout.h>
 #include <vm/vm_map.h>
 #include <kperf/buffer.h>
 #include <kperf/context.h>
@@ -85,6 +86,7 @@ callstack_fixup_user(struct kp_ucallstack *cs, thread_t thread)
 	if (get_saved_state_cpsr(state) & PSR_TF) {
 		cs->kpuc_frames[0] |= 1ULL;
 	}
+
 
 	fixup_val = get_saved_state_lr(state);
 
@@ -289,7 +291,7 @@ kperf_kcallstack_sample(struct kp_kcallstack *cs, struct kperf_context *context)
 		cs->kpkc_flags |= CALLSTACK_KERNEL_WORDS;
 		bool trunc = false;
 		cs->kpkc_nframes = backtrace_interrupted(
-		    cs->kpkc_word_frames, cs->kpkc_nframes - 1, &trunc);
+			cs->kpkc_word_frames, cs->kpkc_nframes - 1, &trunc);
 		if (cs->kpkc_nframes != 0) {
 			callstack_fixup_interrupted(cs);
 		}
@@ -341,7 +343,7 @@ kperf_ucallstack_sample(struct kp_ucallstack *cs, struct kperf_context *context)
 	 */
 	unsigned int maxnframes = cs->kpuc_nframes - 1;
 	unsigned int nframes = backtrace_thread_user(thread, cs->kpuc_frames,
-	    maxnframes, &error, &user64, &trunc);
+	    maxnframes, &error, &user64, &trunc, true);
 	cs->kpuc_nframes = MIN(maxnframes, nframes);
 
 	/*
@@ -451,7 +453,7 @@ kperf_ucallstack_pend(struct kperf_context * context, uint32_t depth,
 	}
 	kperf_ast_set_callstack_depth(context->cur_thread, depth);
 	return kperf_ast_pend(context->cur_thread, T_KPERF_AST_CALLSTACK,
-	    actionid);
+	           actionid);
 }
 
 static kern_return_t

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  */
 /*
  * Copyright (c) 1997 by Apple Computer, Inc., all rights reserved
@@ -236,7 +236,7 @@ isdisk(dev_t dev, int type)
 		if (maj == NODEV) {
 			break;
 		}
-	/* FALL THROUGH */
+		OS_FALLTHROUGH;
 	case VBLK:
 		if (bdevsw[maj].d_type == D_DISK) {
 			return 1;

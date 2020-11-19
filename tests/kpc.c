@@ -405,6 +405,14 @@ T_DECL(kpc_pmi_configurable,
 		    tp->timestamp, &cur_ns);
 		T_QUIET; T_ASSERT_POSIX_ZERO(cret, "convert timestamp");
 
+		uint64_t desc = tp->arg1;
+		uint64_t config = desc & UINT32_MAX;
+		T_QUIET; T_EXPECT_EQ(config & UINT8_MAX,
+				(uint64_t)CYCLES_EVENT & UINT8_MAX,
+				"PMI argument matches configuration");
+		__unused uint64_t counter = (desc >> 32) & UINT16_MAX;
+		__unused uint64_t flags = desc >> 48;
+
 		uint64_t count = tp->arg2;
 		if (first_ns == 0) {
 			first_ns = cur_ns;
@@ -413,14 +421,14 @@ T_DECL(kpc_pmi_configurable,
 
 		if (cpu->prev_count != 0) {
 			uint64_t delta = count - cpu->prev_count;
-			T_QUIET; T_EXPECT_GT(delta, PMI_PERIOD,
-			    "counter delta should be greater than PMI period");
 			uint64_t skid = delta - PMI_PERIOD;
 			if (skid > cpu->max_skid) {
 				cpu->max_skid = skid;
 			}
 		}
 		cpu->prev_count = count;
+
+		__unused uint64_t pc = tp->arg3;
 
 		double slice = (double)(cur_ns - first_ns) / PMI_TEST_DURATION_NS *
 		    NTIMESLICES;
@@ -559,9 +567,6 @@ T_DECL(kpc_pmi_configurable,
 	dispatch_main();
 }
 
-#if defined(__arm64__)
-// This policy only applies to arm64 devices.
-
 static int g_prev_disablewl = 0;
 
 static void
@@ -574,8 +579,10 @@ whitelist_atend(void)
 	}
 }
 
-T_DECL(whitelist, "ensure kpc's whitelist is filled out")
+T_DECL(kpc_whitelist, "ensure kpc's whitelist is filled out")
 {
+// This policy only applies to arm64 devices.
+#if defined(__arm64__)
 	// Start enforcing the whitelist.
 	int set = 0;
 	size_t getsz = sizeof(g_prev_disablewl);
@@ -614,6 +621,7 @@ T_DECL(whitelist, "ensure kpc's whitelist is filled out")
 	(void)kpc_set_config(KPC_CLASS_CONFIGURABLE_MASK, config);
 
 	free(config);
+#else /* defined(__arm64__) */
+	T_SKIP("kpc whitelist is only enforced on arm64")
+#endif /* !defined(__arm64__) */
 }
-
-#endif // defined(__arm64__)

@@ -21,31 +21,9 @@ CFLAGS+= -include meta_features.h -DDRIVER_PRIVATE		\
 SFLAGS+= -include meta_features.h
 #-DIOKITDEBUG=-1
 
-CWARNFLAGS   = $(CWARNFLAGS_STD) -Wno-unused-parameter
-CXXWARNFLAGS = $(CXXWARNFLAGS_STD) -Wno-unused-parameter -Wno-cast-qual -Wno-shadow
-
-# Objects that don't want -Wcast-align warning (8474835)
-IOHibernateRestoreKernel.o_CWARNFLAGS_ADD = -Wno-cast-align
-CXXOBJS_NO_CAST_ALIGN =				\
-		IODMACommand.cpo		\
-		IODataQueue.cpo			\
-		IOHibernateIO.cpo		\
-		IOMemoryDescriptor.cpo		\
-		IONVRAM.cpo			\
-		IOPMrootDomain.cpo		\
-		IOSharedDataQueue.cpo		\
-		IOUserClient.cpo
-
-$(foreach file,$(CXXOBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cxxflags,$(file),-Wno-cast-align)))
-
 CFLAGS_RELEASE += -DIOASSERT=0
 CFLAGS_DEVELOPMENT += -DIOASSERT=1
 CFLAGS_DEBUG += -DIOASSERT=1
-
-IOUserClient.cpo_CXXWARNFLAGS_ADD += -Wno-missing-prototypes
-IOKitDebug.cpo_CXXWARNFLAGS_ADD += -Wno-missing-prototypes
-IOKitBSDInit.cpo_CXXWARNFLAGS_ADD += -Wno-missing-prototypes -Wno-documentation
-IOPMrootDomain.cpo_CXXWARNFLAGS_ADD += -Wno-missing-prototypes
 
 #
 # Directories for generated files
@@ -77,6 +55,148 @@ COMP_SUBDIRS = \
 
 %MACHDEP
 
+#
+# Diagnostic opt-outs.  We need to make this list empty.
+#
+# DO NOT ADD MORE HERE.
+#
+# -Wno-cast-align
+IODataQueue.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
+IOHibernateIO.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
+IOHibernateRestoreKernel.o_CFLAGS_ADD += -Wno-cast-align
+IONVRAM.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
+IOSharedDataQueue.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
+IOUserClient.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
+# -Wno-cast-qual
+DINetBootHook.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOCatalogue.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IODMAController.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IODataQueue.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IODeviceTreeSupport.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOHibernateIO.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOInterruptController.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOKitBSDInit.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOKitDebug.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOLib.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOLocks.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOMapper.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IONVRAM.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOPMrootDomain.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOPlatformExpert.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOPolledInterface.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IORegistryEntry.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOService.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOServicePM.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOSharedDataQueue.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOSimpleReporter.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOSkywalkSupport.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOStateReporter.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOUserClient.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+IOUserServer.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+RootDomainUserClient.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+# -Wno-missing-prototypes
+IOKitBSDInit.cpo_CXXWARNFLAGS_ADD += -Wno-missing-prototypes
+IOKitDebug.cpo_CXXWARNFLAGS_ADD += -Wno-missing-prototypes
+IOPMrootDomain.cpo_CXXWARNFLAGS_ADD += -Wno-missing-prototypes
+IOUserClient.cpo_CXXWARNFLAGS_ADD += -Wno-missing-prototypes
+# -Wno-shadow
+IOHibernateIO.cpo_CXXWARNFLAGS_ADD += -Wno-shadow
+IOKitDebug.cpo_CXXWARNFLAGS_ADD += -Wno-shadow
+IOMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-shadow
+IOMultiMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-shadow
+IOPMrootDomain.cpo_CXXWARNFLAGS_ADD += -Wno-shadow
+IOPolledInterface.cpo_CXXWARNFLAGS_ADD += -Wno-shadow
+IOService.cpo_CXXWARNFLAGS_ADD += -Wno-shadow
+IOServicePM.cpo_CXXWARNFLAGS_ADD += -Wno-shadow
+IOSharedDataQueue.cpo_CXXWARNFLAGS_ADD += -Wno-shadow
+IOTimerEventSource.cpo_CXXWARNFLAGS_ADD += -Wno-shadow
+IOUserServer.cpo_CXXWARNFLAGS_ADD += -Wno-shadow
+TestIOMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-shadow
+Tests.cpo_CXXWARNFLAGS_ADD += -Wno-shadow
+# -Wno-shadow-field-in-constructor
+IOUserServer.cpo_CXXWARNFLAGS_ADD += -Wno-shadow-field-in-constructor
+# -Wno-sign-conversion
+DINetBootHook.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOBufferMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOCPU.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOCatalogue.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOCommandQueue.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IODMACommand.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IODMAEventSource.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IODeviceTreeSupport.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOFilterInterruptEventSource.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOHibernateIO.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOHibernateRestoreKernel.o_CFLAGS_ADD += -Wno-sign-conversion
+IOHistogramReporter.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOInterleavedMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOInterruptAccounting.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOInterruptController.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOInterruptEventSource.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOKitBSDInit.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOKitDebug.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOLib.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOMultiMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IONVRAM.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOPMPowerSource.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOPMrootDomain.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOPlatformActions.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOPlatformExpert.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOPolledInterface.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IORTC.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IORegistryEntry.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOService.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOServicePM.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOSkywalkSupport.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOStartIOKit.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOStatistics.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOStringFuncs.o_CFLAGS_ADD += -Wno-sign-conversion
+IOTimerEventSource.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOUserClient.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOUserServer.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+IOWorkLoop.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+RootDomainUserClient.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+TestIOMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+# -Wno-unused-parameter
+IOBufferMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOCatalogue.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOCommandGate.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IODMACommand.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IODeviceTreeSupport.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOFilterInterruptEventSource.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOHibernateIO.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOHibernateRestoreKernel.o_CFLAGS_ADD += -Wno-unused-parameter
+IOInterruptController.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOInterruptEventSource.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOKitBSDInit.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOKitDebug.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOLib.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOLocks.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOMultiMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IONVRAM.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOPMrootDomain.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOPerfControl.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOPlatformExpert.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOPolledInterface.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IORTC.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IORegistryEntry.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOReporter.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOService.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOServicePM.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOSkywalkSupport.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOStateReporter.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOUserClient.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOUserServer.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOWatchDogTimer.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IOWorkLoop.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+PassthruInterruptController.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+RootDomainUserClient.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+TestIOMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+Tests.cpo_CXXWARNFLAGS_ADD += -Wno-unused-parameter
+IODMACommand.iig.cpo_CXXWARNFLAGS_ADD += -Wno-duplicate-decl-specifier
+
 # Rebuild if per-file overrides change
 ${OBJS}: $(firstword $(MAKEFILE_LIST))
 
@@ -97,7 +217,7 @@ $(COMPONENT).filelist: $(OBJS)
                 $(SEG_HACK) -n __HIB -o $${hib_file}__ $${hib_file} || exit 1; \
                 mv $${hib_file}__ $${hib_file} || exit 1; \
 	done
-	$(call makelog,$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0))
+	@$(LOG_LDFILELIST) "$(COMPONENT)"
 	$(_v)for obj in ${OBJS}; do	\
 		 $(ECHO) $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist

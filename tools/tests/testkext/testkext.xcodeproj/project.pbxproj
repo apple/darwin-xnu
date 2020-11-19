@@ -285,7 +285,6 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				INFOPLIST_FILE = pgokext/Info.plist;
 				INSTALL_PATH = /;
-				MACOSX_DEPLOYMENT_TARGET = 10.13;
 				MODULE_NAME = com.apple.pgokext;
 				MODULE_START = pgokext_start;
 				MODULE_STOP = pgokext_stop;
@@ -333,7 +332,6 @@
 				GCC_WARN_UNUSED_FUNCTION = YES;
 				INFOPLIST_FILE = pgokext/Info.plist;
 				INSTALL_PATH = /;
-				MACOSX_DEPLOYMENT_TARGET = 10.13;
 				MODULE_NAME = com.apple.pgokext;
 				MODULE_START = pgokext_start;
 				MODULE_STOP = pgokext_stop;

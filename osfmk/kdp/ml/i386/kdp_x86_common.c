@@ -78,14 +78,8 @@ kdp_vtophys(
 	vm_offset_t va)
 {
 	pmap_paddr_t    pa;
-	ppnum_t pp;
 
-	pp = pmap_find_phys(pmap, va);
-	if (!pp) {
-		return 0;
-	}
-
-	pa = ((pmap_paddr_t)pp << PAGE_SHIFT) | (va & PAGE_MASK);
+	pa = pmap_find_pa(pmap, va);
 
 	return pa;
 }

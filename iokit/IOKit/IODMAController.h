@@ -32,6 +32,7 @@
 #include <IOKit/IODMACommand.h>
 #include <IOKit/IODMAEventSource.h>
 #include <IOKit/IOService.h>
+#include <libkern/c++/OSPtr.h>
 
 class IODMAEventSource;
 
@@ -43,7 +44,7 @@ class IODMAController : public IOService
 
 private:
 	IOService       *_provider;
-	const OSSymbol  *_dmaControllerName;
+	OSPtr<const OSSymbol> _dmaControllerName;
 
 protected:
 	virtual void registerDMAController(IOOptionBits options = 0);
@@ -62,7 +63,7 @@ protected:
 	virtual bool validDMAConfig(UInt32 dmaIndex, IOService *provider, UInt32 reqIndex) = 0;
 
 public:
-	static const OSSymbol *createControllerName(UInt32 phandle);
+	static OSPtr<const OSSymbol> createControllerName(UInt32 phandle);
 	static IODMAController *getController(IOService *provider, UInt32 dmaIndex);
 
 	virtual bool start(IOService *provider) APPLE_KEXT_OVERRIDE;

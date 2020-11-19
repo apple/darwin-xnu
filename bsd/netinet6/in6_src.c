@@ -105,6 +105,7 @@
 #include <sys/kauth.h>
 #include <sys/priv.h>
 #include <kern/locks.h>
+#include <sys/random.h>
 
 #include <net/if.h>
 #include <net/if_types.h>
@@ -154,6 +155,9 @@ SYSCTL_INT(_net_inet6_ip6, OID_AUTO, select_src_strong_end,
 struct in6_addrpolicy defaultaddrpolicy;
 
 int ip6_prefer_tempaddr = 1;
+
+int ip6_cga_conflict_retries = IPV6_CGA_CONFLICT_RETRIES_DEFAULT;
+
 #ifdef ENABLE_ADDRSEL
 extern lck_mtx_t *addrsel_mutex;
 #define ADDRSEL_LOCK()          lck_mtx_lock(addrsel_mutex)
@@ -162,6 +166,8 @@ extern lck_mtx_t *addrsel_mutex;
 #define ADDRSEL_LOCK()
 #define ADDRSEL_UNLOCK()
 #endif
+extern int      udp_use_randomport;
+extern int      tcp_use_randomport;
 
 static int selectroute(struct sockaddr_in6 *, struct sockaddr_in6 *,
     struct ip6_pktopts *, struct ip6_moptions *, struct in6_ifaddr **,
@@ -929,7 +935,7 @@ selectroute(struct sockaddr_in6 *srcsock, struct sockaddr_in6 *dstsock,
 		ifp = ifp0 =
 		    ((ifscope <= if_index) ? ifindex2ifnet[ifscope] : NULL);
 		ifnet_head_done();
-		if (norouteok || retrt == NULL || IN6_IS_ADDR_MULTICAST(dst)) {
+		if (norouteok || retrt == NULL || IN6_IS_ADDR_MC_LINKLOCAL(dst)) {
 			/*
 			 * We do not have to check or get the route for
 			 * multicast.  If the caller didn't ask/care for
@@ -951,9 +957,10 @@ selectroute(struct sockaddr_in6 *srcsock, struct sockaddr_in6 *dstsock,
 	 */
 	if (IN6_IS_ADDR_MULTICAST(dst) && mopts != NULL) {
 		IM6O_LOCK(mopts);
-		if ((ifp = ifp0 = mopts->im6o_multicast_ifp) != NULL) {
+		ifp = ifp0 = mopts->im6o_multicast_ifp;
+		if (ifp != NULL && IN6_IS_ADDR_MC_LINKLOCAL(dst)) {
 			IM6O_UNLOCK(mopts);
-			goto done; /* we do not need a route for multicast. */
+			goto done; /* we don't need a route for link-local multicast */
 		}
 		IM6O_UNLOCK(mopts);
 	}
@@ -1188,16 +1195,13 @@ getroute:
 	if (ro->ro_rt == NULL) {
 		struct sockaddr_in6 *sa6;
 
-		if (ro->ro_rt != NULL) {
-			RT_UNLOCK(ro->ro_rt);
-		}
 		/* No route yet, so try to acquire one */
 		bzero(&ro->ro_dst, sizeof(struct sockaddr_in6));
 		sa6 = (struct sockaddr_in6 *)&ro->ro_dst;
 		sa6->sin6_family = AF_INET6;
 		sa6->sin6_len = sizeof(struct sockaddr_in6);
 		sa6->sin6_addr = *dst;
-		if (IN6_IS_ADDR_MULTICAST(dst)) {
+		if (IN6_IS_ADDR_MC_LINKLOCAL(dst)) {
 			ro->ro_rt = rtalloc1_scoped(
 				&((struct route *)ro)->ro_dst, 0, 0, ifscope);
 		} else {
@@ -1504,29 +1508,29 @@ in6_selectroute(struct sockaddr_in6 *srcsock, struct sockaddr_in6 *dstsock,
 
 /*
  * Default hop limit selection. The precedence is as follows:
- * 1. Hoplimit value specified via ioctl.
+ * 1. Hoplimit value specified via socket option.
  * 2. (If the outgoing interface is detected) the current
  *     hop limit of the interface specified by router advertisement.
  * 3. The system default hoplimit.
  */
-int
+uint8_t
 in6_selecthlim(struct in6pcb *in6p, struct ifnet *ifp)
 {
 	if (in6p && in6p->in6p_hops >= 0) {
-		return in6p->in6p_hops;
+		return (uint8_t)in6p->in6p_hops;
 	} else if (NULL != ifp) {
-		u_int8_t chlim;
+		uint8_t chlim;
 		struct nd_ifinfo *ndi = ND_IFINFO(ifp);
 		if (ndi && ndi->initialized) {
 			/* access chlim without lock, for performance */
 			chlim = ndi->chlim;
 		} else {
-			chlim = ip6_defhlim;
+			chlim = (uint8_t)ip6_defhlim;
 		}
 		return chlim;
 	}
 
-	return ip6_defhlim;
+	return (uint8_t)ip6_defhlim;
 }
 
 /*
@@ -1538,10 +1542,10 @@ in6_pcbsetport(struct in6_addr *laddr, struct inpcb *inp, struct proc *p,
     int locked)
 {
 	struct socket *so = inp->inp_socket;
-	u_int16_t lport = 0, first, last, *lastport;
+	uint16_t lport = 0, first, last, *lastport, rand_port;
 	int count, error = 0, wild = 0;
 	boolean_t counting_down;
-	bool found;
+	bool found, randomport;
 	struct inpcbinfo *pcbinfo = inp->inp_pcbinfo;
 	kauth_cred_t cred;
 #pragma unused(laddr)
@@ -1573,9 +1577,13 @@ in6_pcbsetport(struct in6_addr *laddr, struct inpcb *inp, struct proc *p,
 		wild = INPLOOKUP_WILDCARD;
 	}
 
+	randomport = (so->so_flags & SOF_BINDRANDOMPORT) > 0 ||
+	    (so->so_type == SOCK_STREAM ? tcp_use_randomport :
+	    udp_use_randomport) > 0;
+
 	if (inp->inp_flags & INP_HIGHPORT) {
-		first = ipport_hifirstauto;     /* sysctl */
-		last  = ipport_hilastauto;
+		first = (uint16_t)ipport_hifirstauto;     /* sysctl */
+		last  = (uint16_t)ipport_hilastauto;
 		lastport = &pcbinfo->ipi_lasthi;
 	} else if (inp->inp_flags & INP_LOWPORT) {
 		cred = kauth_cred_proc_ref(p);
@@ -1587,13 +1595,17 @@ in6_pcbsetport(struct in6_addr *laddr, struct inpcb *inp, struct proc *p,
 			}
 			return error;
 		}
-		first = ipport_lowfirstauto;    /* 1023 */
-		last  = ipport_lowlastauto;     /* 600 */
+		first = (uint16_t)ipport_lowfirstauto;    /* 1023 */
+		last  = (uint16_t)ipport_lowlastauto;     /* 600 */
 		lastport = &pcbinfo->ipi_lastlow;
 	} else {
-		first = ipport_firstauto;       /* sysctl */
-		last  = ipport_lastauto;
+		first = (uint16_t)ipport_firstauto;       /* sysctl */
+		last  = (uint16_t)ipport_lastauto;
 		lastport = &pcbinfo->ipi_lastport;
+	}
+
+	if (first == last) {
+		randomport = false;
 	}
 	/*
 	 * Simple check to ensure all ports are not used up causing
@@ -1602,10 +1614,18 @@ in6_pcbsetport(struct in6_addr *laddr, struct inpcb *inp, struct proc *p,
 	found = false;
 	if (first > last) {
 		/* counting down */
+		if (randomport) {
+			read_frandom(&rand_port, sizeof(rand_port));
+			*lastport = first - (rand_port % (first - last));
+		}
 		count = first - last;
 		counting_down = TRUE;
 	} else {
 		/* counting up */
+		if (randomport) {
+			read_frandom(&rand_port, sizeof(rand_port));
+			*lastport = first + (rand_port % (first - last));
+		}
 		count = last - first;
 		counting_down = FALSE;
 	}
@@ -2146,7 +2166,7 @@ in6_embedscope(struct in6_addr *in6, const struct sockaddr_in6 *sin6,
 				ifp = ifindex2ifnet[pi->ipi6_ifindex];
 				ifnet_head_done();
 			}
-			in6->s6_addr16[1] = htons(pi->ipi6_ifindex);
+			in6->s6_addr16[1] = htons((uint16_t)pi->ipi6_ifindex);
 		} else if (in6p != NULL && IN6_IS_ADDR_MULTICAST(in6) &&
 		    in6p->in6p_moptions != NULL && im6o_multicast_ifp != NULL) {
 			ifp = im6o_multicast_ifp;

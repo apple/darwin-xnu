@@ -296,13 +296,13 @@ fasttrap_return_common(proc_t *p, arm_saved_state_t *regs, user_addr_t pc, user_
 		else {
 			retire_tp = 0;
 		}
-#ifndef CONFIG_EMBEDDED
+#if defined(XNU_TARGET_OS_OSX)
 		if (ISSET(current_proc()->p_lflag, P_LNOATTACH)) {
 			dtrace_probe(dtrace_probeid_error, 0 /* state */, id->fti_probe->ftp_id,
 			    1 /* ndx */, -1 /* offset */, DTRACEFLT_UPRIV);
 #else
 		if (FALSE) {
-#endif
+#endif /* defined(XNU_TARGET_OS_OSX) */
 		} else {
 			dtrace_probe(id->fti_probe->ftp_id,
 			    pc - id->fti_probe->ftp_faddr,
@@ -506,13 +506,13 @@ fasttrap_pid_probe(arm_saved_state_t *regs)
 		for (id = tp->ftt_ids; id != NULL; id = id->fti_next) {
 			fasttrap_probe_t *probe = id->fti_probe;
 
-#ifndef CONFIG_EMBEDDED
+#if defined(XNU_TARGET_OS_OSX)
 			if (ISSET(current_proc()->p_lflag, P_LNOATTACH)) {
 				dtrace_probe(dtrace_probeid_error, 0 /* state */, probe->ftp_id,
 				    1 /* ndx */, -1 /* offset */, DTRACEFLT_UPRIV);
 #else
 			if (FALSE) {
-#endif
+#endif /* defined(XNU_TARGET_OS_OSX) */
 			} else {
 				if (probe->ftp_prov->ftp_provider_type == DTFTP_PROVIDER_ONESHOT) {
 					if (os_atomic_xchg(&probe->ftp_triggered, 1, relaxed)) {

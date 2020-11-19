@@ -48,7 +48,6 @@
 #include <mach/mach_types.h>
 #include <mach/vm_param.h>
 #include <kern/task.h>
-#include <kern/kalloc.h>
 #include <kern/assert.h>
 #include <kern/policy_internal.h>
 
@@ -71,9 +70,9 @@
 #include <kern/ipc_misc.h>
 #include <vm/vm_protos.h>
 
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 #include <sys/kern_memorystatus.h>
-#endif /* CONFIG_EMBEDDED */
+#endif /* !defined(XNU_TARGET_OS_OSX) */
 
 #if CONFIG_MACF
 #include <security/mac.h>
@@ -84,13 +83,15 @@ static int handle_lowresource(int scope, int action, int policy, int policy_subt
 static int handle_cpuuse(int action, user_addr_t attrp, proc_t proc, uint64_t target_threadid);
 static int handle_apptype(int scope, int action, int policy, int policy_subtype, user_addr_t attrp, proc_t proc, uint64_t target_threadid);
 static int handle_boost(int scope, int action, int policy, int policy_subtype, user_addr_t attrp, proc_t proc, uint64_t target_threadid);
+static int handle_no_smt(int scope, int action, proc_t target_proc, uint64_t target_threadid);
+static int handle_tecs(int scope, int action, proc_t target_proc, uint64_t target_threadid);
 
 extern kern_return_t task_suspend(task_t);
 extern kern_return_t task_resume(task_t);
 
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 static int handle_applifecycle(int scope, int action, int policy, int policy_subtype, user_addr_t attrp, proc_t proc, uint64_t target_threadid);
-#endif /* CONFIG_EMBEDDED */
+#endif /* !defined(XNU_TARGET_OS_OSX) */
 
 /***************************** process_policy ********************/
 
@@ -115,11 +116,11 @@ process_policy(__unused struct proc *p, struct process_policy_args * uap, __unus
 	pid_t target_pid = uap->target_pid;
 	uint64_t target_threadid = uap->target_threadid;
 	proc_t target_proc = PROC_NULL;
-#if CONFIG_MACF || !CONFIG_EMBEDDED
+#if CONFIG_MACF || defined(XNU_TARGET_OS_OSX)
 	proc_t curp = current_proc();
 #endif
 	kauth_cred_t my_cred;
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 	kauth_cred_t target_cred;
 #endif
 
@@ -139,7 +140,7 @@ process_policy(__unused struct proc *p, struct process_policy_args * uap, __unus
 
 	my_cred = kauth_cred_get();
 
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 	target_cred = kauth_cred_proc_ref(target_proc);
 
 	if (!kauth_cred_issuser(my_cred) && kauth_cred_getruid(my_cred) &&
@@ -163,7 +164,7 @@ process_policy(__unused struct proc *p, struct process_policy_args * uap, __unus
 	switch (policy) {
 	case PROC_POLICY_BOOST:
 	case PROC_POLICY_RESOURCE_USAGE:
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 	case PROC_POLICY_APPTYPE:
 	case PROC_POLICY_APP_LIFECYCLE:
 #endif
@@ -207,16 +208,22 @@ process_policy(__unused struct proc *p, struct process_policy_args * uap, __unus
 
 		error = handle_cpuuse(action, attrp, target_proc, target_threadid);
 		break;
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 	case PROC_POLICY_APP_LIFECYCLE:
 		error = handle_applifecycle(scope, action, policy, policy_subtype, attrp, target_proc, target_threadid);
 		break;
-#endif /* CONFIG_EMBEDDED */
+#endif /* !defined(XNU_TARGET_OS_OSX) */
 	case PROC_POLICY_APPTYPE:
 		error = handle_apptype(scope, action, policy, policy_subtype, attrp, target_proc, target_threadid);
 		break;
 	case PROC_POLICY_BOOST:
 		error = handle_boost(scope, action, policy, policy_subtype, attrp, target_proc, target_threadid);
+		break;
+	case PROC_POLICY_NO_SMT:
+		error = handle_no_smt(scope, action, target_proc, target_threadid);
+		break;
+	case PROC_POLICY_TECS:
+		error = handle_tecs(scope, action, target_proc, target_threadid);
 		break;
 	default:
 		error = EINVAL;
@@ -225,7 +232,7 @@ process_policy(__unused struct proc *p, struct process_policy_args * uap, __unus
 
 out:
 	proc_rele(target_proc);
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 	kauth_cred_unref(&target_cred);
 #endif
 	return error;
@@ -258,7 +265,7 @@ static int
 handle_cpuuse(int action, user_addr_t attrp, proc_t proc, __unused uint64_t target_threadid)
 {
 	proc_policy_cpuusage_attr_t     cpuattr = { };
-#if CONFIG_MACF || !CONFIG_EMBEDDED
+#if CONFIG_MACF || defined(XNU_TARGET_OS_OSX)
 	proc_t                          curp = current_proc();
 #endif
 	Boolean                         privileged = FALSE;
@@ -267,7 +274,7 @@ handle_cpuuse(int action, user_addr_t attrp, proc_t proc, __unused uint64_t targ
 	int                             error = 0;
 	uint8_t                         percentage;
 
-#if !CONFIG_EMBEDDED
+#if defined(XNU_TARGET_OS_OSX)
 	/* On macOS, tasks can only set and clear their own CPU limits. */
 	if ((action == PROC_POLICY_ACTION_APPLY || action == PROC_POLICY_ACTION_RESTORE)
 	    && curp != proc) {
@@ -327,8 +334,8 @@ handle_cpuuse(int action, user_addr_t attrp, proc_t proc, __unused uint64_t targ
 			interval = -1ULL;
 		}
 
-		error = proc_set_task_ruse_cpu(proc->task, cpuattr.ppattr_cpu_attr,
-		    cpuattr.ppattr_cpu_percentage,
+		error = proc_set_task_ruse_cpu(proc->task, (uint16_t)cpuattr.ppattr_cpu_attr,
+		    (uint8_t)MIN(cpuattr.ppattr_cpu_percentage, UINT8_MAX),
 		    interval,
 		    cpuattr.ppattr_cpu_attr_deadline,
 		    privileged);
@@ -354,7 +361,7 @@ handle_cpuuse(int action, user_addr_t attrp, proc_t proc, __unused uint64_t targ
 	return error;
 }
 
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 static int
 handle_applifecycle(__unused int scope,
     int action,
@@ -362,7 +369,7 @@ handle_applifecycle(__unused int scope,
     int policy_subtype,
     user_addr_t attrp,
     proc_t proc,
-    uint64_t target_threadid)
+    __unused uint64_t target_threadid)
 {
 	int error = 0;
 	int state = 0;
@@ -380,7 +387,7 @@ handle_applifecycle(__unused int scope,
 	case PROC_POLICY_APPLIFE_DEVSTATUS:
 #if CONFIG_MACF
 		/* ToDo - this should be a generic check, since we could potentially hang other behaviours here. */
-		error = mac_proc_check_suspend_resume(current_proc(), MAC_PROC_CHECK_HIBERNATE);
+		error = mac_proc_check_suspend_resume(proc, MAC_PROC_CHECK_HIBERNATE);
 		if (error) {
 			error = EPERM;
 			goto out;
@@ -402,7 +409,7 @@ handle_applifecycle(__unused int scope,
 
 	case PROC_POLICY_APPLIFE_PIDBIND:
 #if CONFIG_MACF
-		error = mac_proc_check_suspend_resume(current_proc(), MAC_PROC_CHECK_PIDBIND);
+		error = mac_proc_check_suspend_resume(proc, MAC_PROC_CHECK_PIDBIND);
 		if (error) {
 			error = EPERM;
 			goto out;
@@ -412,10 +419,13 @@ handle_applifecycle(__unused int scope,
 		if (error != 0) {
 			goto out;
 		}
+#if CONFIG_TASKWATCH
 		if (action == PROC_POLICY_ACTION_APPLY) {
 			/* bind the thread in target_thread in current process to target_proc */
 			error = proc_lf_pidbind(current_task(), target_threadid, proc->task, state);
-		} else {
+		} else
+#endif /* CONFIG_TASKWATCH */
+		{
 			error = EINVAL;
 		}
 		break;
@@ -427,7 +437,7 @@ handle_applifecycle(__unused int scope,
 out:
 	return error;
 }
-#endif /* CONFIG_EMBEDDED */
+#endif /* !defined(XNU_TARGET_OS_OSX) */
 
 static int
 handle_apptype(         int scope,
@@ -486,41 +496,8 @@ handle_apptype(         int scope,
 		return error;
 
 	default:
-		/* continue to TAL handling */
-		break;
-	}
-
-	if (policy_subtype != PROC_POLICY_OSX_APPTYPE_TAL) {
 		return EINVAL;
 	}
-
-	/* need to be super user to do this */
-	if (kauth_cred_issuser(kauth_cred_get()) == 0) {
-		return EPERM;
-	}
-
-	if (proc_task_is_tal(target_proc->task) == FALSE) {
-		return EINVAL;
-	}
-
-	switch (action) {
-	case PROC_POLICY_ACTION_ENABLE:
-		/* PROCESS ENABLE APPTYPE TAL */
-		proc_set_task_policy(target_proc->task,
-		    TASK_POLICY_ATTRIBUTE, TASK_POLICY_TAL,
-		    TASK_POLICY_ENABLE);
-		break;
-	case PROC_POLICY_ACTION_DISABLE:
-		/* PROCESS DISABLE APPTYPE TAL */
-		proc_set_task_policy(target_proc->task,
-		    TASK_POLICY_ATTRIBUTE, TASK_POLICY_TAL,
-		    TASK_POLICY_DISABLE);
-		break;
-	default:
-		return EINVAL;
-	}
-
-	return 0;
 }
 
 static int
@@ -591,6 +568,57 @@ handle_boost(int scope,
 	return error;
 }
 
+static int
+handle_no_smt(int scope, int action, proc_t target_proc, uint64_t target_threadid)
+{
+	extern void task_set_no_smt(task_t);
+
+	if (action != PROC_POLICY_ACTION_APPLY) {
+		return EINVAL;
+	}
+
+	if (scope == PROC_POLICY_SCOPE_PROCESS) {
+		if (target_proc != current_proc()) {
+			return EINVAL;
+		}
+		task_set_no_smt(TASK_NULL);
+	} else if (scope == PROC_POLICY_SCOPE_THREAD) {
+		if (target_threadid != thread_tid(current_thread())) {
+			return EINVAL;
+		}
+		thread_set_no_smt(true);
+	} else {
+		return EINVAL;
+	}
+
+	return 0;
+}
+
+static int
+handle_tecs(int scope, int action, proc_t target_proc, uint64_t target_threadid)
+{
+	if (action != PROC_POLICY_ACTION_APPLY) {
+		return EINVAL;
+	}
+
+	if (scope == PROC_POLICY_SCOPE_PROCESS) {
+		if (target_proc != current_proc()) {
+			return EINVAL;
+		}
+		task_set_tecs(TASK_NULL);
+	} else if (scope == PROC_POLICY_SCOPE_THREAD) {
+		if (target_threadid != thread_tid(current_thread())) {
+			return EINVAL;
+		}
+		if (machine_csv(CPUVN_CI)) {
+			machine_tecs(current_thread());
+		}
+	} else {
+		return EINVAL;
+	}
+
+	return 0;
+}
 
 /*
  * KPI to determine if a pid is currently backgrounded.

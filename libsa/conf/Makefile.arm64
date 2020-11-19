@@ -2,6 +2,7 @@
 #BEGIN	Machine dependent Makefile fragment for arm
 ######################################################################
 
+
 # Bootstrap __KLD files must be Mach-O for "setsegname"
 $(foreach file,$(OBJS),$(eval $(file)_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG)))
 

@@ -56,6 +56,8 @@
 /* Solaris proc_t is the struct. Darwin's proc_t is a pointer to it. */
 #define proc_t struct proc /* Steer clear of the Darwin typedef for proc_t */
 
+KALLOC_HEAP_DEFINE(KHEAP_DTRACE, "dtrace", KHEAP_ID_DEFAULT);
+
 void
 dtrace_sprlock(proc_t *p)
 {
@@ -636,10 +638,9 @@ dt_kmem_alloc_site(size_t size, int kmflag, vm_allocation_site_t *site)
 
 /*
  * We ignore the M_NOWAIT bit in kmflag (all of kmflag, in fact).
- * Requests larger than 8K with M_NOWAIT fail in kalloc_canblock.
+ * Requests larger than 8K with M_NOWAIT fail in kalloc_ext.
  */
-	vm_size_t vsize = size;
-	return kalloc_canblock(&vsize, TRUE, site);
+	return kalloc_ext(KHEAP_DTRACE, size, Z_WAITOK, site).addr;
 }
 
 void *
@@ -649,35 +650,15 @@ dt_kmem_zalloc_site(size_t size, int kmflag, vm_allocation_site_t *site)
 
 /*
  * We ignore the M_NOWAIT bit in kmflag (all of kmflag, in fact).
- * Requests larger than 8K with M_NOWAIT fail in kalloc_canblock.
+ * Requests larger than 8K with M_NOWAIT fail in kalloc_ext.
  */
-	vm_size_t vsize = size;
-	void* buf = kalloc_canblock(&vsize, TRUE, site);
-
-	if (!buf) {
-		return NULL;
-	}
-
-	bzero(buf, size);
-
-	return buf;
+	return kalloc_ext(KHEAP_DTRACE, size, Z_WAITOK | Z_ZERO, site).addr;
 }
 
 void
 dt_kmem_free(void *buf, size_t size)
 {
-#pragma unused(size)
-	/*
-	 * DTrace relies on this, its doing a lot of NULL frees.
-	 * A null free causes the debug builds to panic.
-	 */
-	if (buf == NULL) {
-		return;
-	}
-
-	ASSERT(size > 0);
-
-	kfree(buf, size);
+	kheap_free(KHEAP_DTRACE, buf, size);
 }
 
 
@@ -819,12 +800,13 @@ vmem_create(const char *name, void *base, size_t size, size_t quantum, void *ign
 	ASSERT(NULL == ignore6);
 	ASSERT(NULL == source);
 	ASSERT(0 == qcache_max);
+	ASSERT(size <= INT32_MAX);
 	ASSERT(vmflag & VMC_IDENTIFIER);
 
 	size = MIN(128, size); /* Clamp to 128 initially, since the underlying data structure is pre-allocated */
 
-	p->blist = bl = blist_create( size );
-	blist_free(bl, 0, size);
+	p->blist = bl = blist_create((daddr_t)size);
+	blist_free(bl, 0, (daddr_t)size);
 	if (base) {
 		blist_alloc( bl, (daddr_t)(uintptr_t)base );   /* Chomp off initial ID(s) */
 	}
@@ -841,11 +823,11 @@ vmem_alloc(vmem_t *vmp, size_t size, int vmflag)
 
 	p = blist_alloc(bl, (daddr_t)size);
 
-	if ((daddr_t)-1 == p) {
+	if (p == SWAPBLK_NONE) {
 		blist_resize(&bl, (bl->bl_blocks) << 1, 1);
 		q->blist = bl;
 		p = blist_alloc(bl, (daddr_t)size);
-		if ((daddr_t)-1 == p) {
+		if (p == SWAPBLK_NONE) {
 			panic("vmem_alloc: failure after blist_resize!");
 		}
 	}
@@ -1333,39 +1315,6 @@ cmn_err( int level, const char *format, ... )
 	vuprintf(format, alist);
 	va_end(alist);
 	uprintf("\n");
-}
-
-/*
- * History:
- *  2002-01-24  gvdl	Initial implementation of strstr
- */
-
-__private_extern__ const char *
-strstr(const char *in, const char *str)
-{
-	char c;
-	size_t len;
-	if (!in || !str) {
-		return in;
-	}
-
-	c = *str++;
-	if (!c) {
-		return (const char *) in; // Trivial empty string case
-	}
-	len = strlen(str);
-	do {
-		char sc;
-
-		do {
-			sc = *in++;
-			if (!sc) {
-				return (char *) 0;
-			}
-		} while (sc != c);
-	} while (strncmp(in, str, len) != 0);
-
-	return (const char *) (in - 1);
 }
 
 const void*

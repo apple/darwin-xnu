@@ -464,11 +464,11 @@ typedef enum mpsc_daemon_queue_kind {
  * @brief
  * Internal type, not to be used by clients.
  */
-typedef enum mpsc_daemon_queue_state {
+__options_decl(mpsc_daemon_queue_state_t, uint32_t, {
 	MPSC_QUEUE_STATE_DRAINING = 0x0001,
 	MPSC_QUEUE_STATE_WAKEUP   = 0x0002,
 	MPSC_QUEUE_STATE_CANCELED = 0x0004,
-} mpsc_daemon_queue_state_t;
+});
 
 struct mpsc_daemon_queue {
 	mpsc_daemon_queue_kind_t    mpd_kind;

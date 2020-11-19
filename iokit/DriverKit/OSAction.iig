@@ -34,6 +34,7 @@
 typedef void (^OSActionCancelHandler)(void);
 typedef void (^OSActionAbortedHandler)(void);
 struct OSActionWaitToken;
+class OSString;
 
 /*!
  * @class OSAction
@@ -82,6 +83,15 @@ public:
 		uint64_t        msgid,
 		size_t          referenceSize,
 		OSAction     ** action) LOCAL;
+
+     static kern_return_t
+     CreateWithTypeName(
+          OSObject      * target,
+          uint64_t        targetmsgid,
+          uint64_t        msgid,
+          size_t          referenceSize,
+          OSString      * typeName,
+          OSAction     ** action) LOCAL;
 #endif
 
 	virtual void

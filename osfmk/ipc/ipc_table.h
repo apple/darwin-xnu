@@ -105,11 +105,8 @@ struct ipc_table_size {
 	ipc_table_elems_t its_size;     /* number of elements in table */
 };
 
-extern ipc_table_size_t ipc_table_entries;
-extern ipc_table_size_t ipc_table_requests;
-
-/* Initialize IPC capabilities table storage */
-extern void ipc_table_init(void);
+extern struct ipc_table_size ipc_table_entries[];
+extern struct ipc_table_size ipc_table_requests[];
 
 /*
  *	Note that ipc_table_alloc and ipc_table_free

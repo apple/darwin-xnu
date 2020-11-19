@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -71,13 +71,12 @@
 #include <bsd/security/audit/audit.h>
 #include <bsd/sys/malloc.h>
 #include <vm/vm_kern.h>
-#include <kern/kalloc.h>
 #include <kern/zalloc.h>
 
 #if CONFIG_AUDIT
 
-/* The zone allocator is initialized in mac_base.c. */
-zone_t mac_audit_data_zone;
+ZONE_DECLARE(mac_audit_data_zone, "mac_audit_data_zone",
+    MAC_AUDIT_DATA_LIMIT, ZC_NONE);
 
 int
 mac_system_check_audit(struct ucred *cred, void *record, int length)

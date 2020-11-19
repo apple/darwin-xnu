@@ -93,10 +93,19 @@ routine task_terminate(
 
 /*
  *	Returns the set of threads belonging to the target task.
+ *  [Polymorphic] This routine returns thread port with the same 
+ *  flavor as that of the task port passed in.
  */
-routine task_threads(
+routine
+#ifdef KERNEL_SERVER
+task_threads_from_user(
+		port		: mach_port_t;
+#else
+task_threads(
 		target_task	: task_inspect_t;
+#endif
 	out	act_list	: thread_act_array_t);
+
 
 /*
  *	Stash a handful of ports for the target task; child
@@ -160,10 +169,17 @@ routine	task_resume(
  *	Returns the current value of the selected special port
  *	associated with the target task.
  */
-routine task_get_special_port(
+routine
+#ifdef KERNEL_SERVER
+task_get_special_port_from_user(
+		port		: mach_port_t;
+#else
+task_get_special_port(
 		task		: task_inspect_t;
+#endif
 		which_port	: int;
 	out	special_port	: mach_port_t);
+
 
 /*
  *	Set one of the special ports associated with the
@@ -223,8 +239,14 @@ routine	task_set_exception_ports(
 /*
  * Lookup some of the old exception handlers for a task
  */
-routine	task_get_exception_ports(
-		task		: task_inspect_t;
+routine
+#if KERNEL_SERVER
+task_get_exception_ports_from_user(
+		port        : mach_port_t;
+#else
+task_get_exception_ports(
+		task		: task_t;
+#endif
 		exception_mask	: exception_mask_t;
 	  out	masks		: exception_mask_array_t;
 	  out	old_handlers	: exception_handler_array_t, SameCount;
@@ -285,12 +307,12 @@ routine semaphore_destroy(
  */
 
 routine task_policy_set(
-	task			: task_t;
+	task			: task_policy_set_t;
 	flavor			: task_policy_flavor_t;
 	policy_info		: task_policy_t);
 
 routine task_policy_get(
-	task			: task_t;
+	task			: task_policy_get_t;
 	flavor			: task_policy_flavor_t;
 out	policy_info		: task_policy_t, CountInOut;
 inout	get_default		: boolean_t);
@@ -362,7 +384,7 @@ routine task_set_ras_pc(
  * Return zone info as seen/used by this task.
  */
 routine task_zone_info(
-		target_task	: task_t;
+		target_task	: task_inspect_t;
 	out	names		: mach_zone_name_array_t,
 					Dealloc;
 	out	info		: task_zone_info_array_t,
@@ -392,7 +414,7 @@ routine task_assign_default(
  *	Get current assignment for task.
  */
 routine task_get_assignment(
-		task		: task_t;
+		task		: task_inspect_t;
 	out	assigned_set	: processor_set_name_t);
 
 /*
@@ -411,7 +433,7 @@ routine task_set_policy(
  * threads in the task as they are created.
  */
 routine task_get_state(
-		task		: task_t;
+		task		: task_read_t;
 		flavor		: thread_state_flavor_t;
 	out	old_state	: thread_state_t, CountInOut);
  
@@ -440,11 +462,11 @@ routine task_resume2(
 		suspend_token : task_suspension_token_t);
 
 routine task_purgable_info(
-		task 		: task_t;
+		task 		: task_inspect_t;
 	out	stats		: task_purgable_info_t);
 
 routine task_get_mach_voucher(
-		task		: task_t;
+		task		: task_read_t;
 		which		: mach_voucher_selector_t;
 	out	voucher		: ipc_voucher_t);
 
@@ -463,7 +485,7 @@ routine task_generate_corpse(
 
 routine task_map_corpse_info(
 		task		:task_t;
-		corspe_task	:task_t;
+		corspe_task	:task_read_t;
 	out	kcd_addr_begin	:vm_address_t;
 	out	kcd_size	:uint32_t);
 
@@ -476,7 +498,7 @@ routine task_unregister_dyld_image_infos(
         dyld_images     :dyld_kernel_image_info_array_t);
 
 routine task_get_dyld_image_infos(
-        task            :task_inspect_t;
+        task            :task_read_t;
     out dyld_images     :dyld_kernel_image_info_array_t);
 
 routine task_register_dyld_shared_cache_image_info(
@@ -495,7 +517,7 @@ routine task_register_dyld_get_process_state(
 
 routine task_map_corpse_info_64(
 		task		:task_t;
-		corspe_task	:task_t;
+		corspe_task	:task_read_t;
 	out	kcd_addr_begin	:mach_vm_address_t;
 	out	kcd_size	:mach_vm_size_t);
 

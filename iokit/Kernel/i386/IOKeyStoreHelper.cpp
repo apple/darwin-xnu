@@ -54,6 +54,25 @@ static IOMemoryDescriptor* apfsKeyData = NULL;
 IOMemoryDescriptor* IOGetAPFSKeyStoreData();
 void IOSetAPFSKeyStoreData(IOMemoryDescriptor* data);
 
+static volatile UInt32 arvRootHashFetched = 0;
+static volatile UInt32 bsARVRootHashFetched = 0;
+static IOMemoryDescriptor* arvRootHashData = NULL;
+static IOMemoryDescriptor* bsARVRootHashData = NULL;
+
+IOMemoryDescriptor* IOGetARVRootHashData(void);
+void IOSetARVRootHashData(IOMemoryDescriptor* arvData);
+
+IOMemoryDescriptor* IOGetBaseSystemARVRootHashData(void);
+bool IOBaseSystemARVRootHashAvailable(void);
+void IOSetBaseSystemARVRootHashData(IOMemoryDescriptor* arvData);
+
+
+static volatile UInt32 arvManifestFetched = 0;
+static IOMemoryDescriptor* arvManifestData = NULL;
+
+IOMemoryDescriptor* IOGetARVManifestData(void);
+void IOSetARVManifestData(IOMemoryDescriptor* arvData);
+
 __END_DECLS
 
 #if 1
@@ -152,6 +171,136 @@ IOGetAPFSKeyStoreData()
 	IOAddressRange ranges;
 	ranges.address = args->apfsDataStart;
 	ranges.length = args->apfsDataSize;
+
+	const IOOptionBits options = kIODirectionInOut | kIOMemoryTypePhysical64 | kIOMemoryMapperNone;
+
+	IOMemoryDescriptor* memoryDescriptor = IOMemoryDescriptor::withOptions(&ranges, 1, 0, NULL, options);
+	DEBG("%s: memory descriptor %p\n", __func__, memoryDescriptor);
+	return memoryDescriptor;
+}
+
+// ARV Root Hash fetcher
+
+// Store in-memory Root Hash
+void
+IOSetARVRootHashData(IOMemoryDescriptor* arvData)
+{
+	// Do not allow re-fetching of the boot_args root hash by passing NULL here.
+	if (arvData) {
+		arvRootHashData = arvData;
+		arvRootHashFetched = 0;
+	}
+}
+
+// Retrieve any root hash we may have (stored in boot_args or in-memory)
+IOMemoryDescriptor*
+IOGetARVRootHashData(void)
+{
+	// Check if someone got the root hash before us
+	if (!OSCompareAndSwap(0, 1, &arvRootHashFetched)) {
+		return NULL;
+	}
+
+	// Do we have in-memory root hash?
+	if (arvRootHashData) {
+		IOMemoryDescriptor* arvData = arvRootHashData;
+		arvRootHashData = NULL;
+		return arvData;
+	}
+
+	// Looks like there was no in-memory root hash and it's the first call - try boot_args
+	boot_args* args = (boot_args*)PE_state.bootArgs;
+
+	DEBG("%s: data at address %llu size %llu\n", __func__, args->arvRootHashStart, args->arvRootHashSize);
+	if (args->arvRootHashStart == 0) {
+		return NULL;
+	}
+
+	// We have the root hash in the boot_args, create IOMemoryDescriptor for the blob
+	IOAddressRange ranges;
+	ranges.address = args->arvRootHashStart;
+	ranges.length = args->arvRootHashSize;
+
+	const IOOptionBits options = kIODirectionInOut | kIOMemoryTypePhysical64 | kIOMemoryMapperNone;
+
+	IOMemoryDescriptor* memoryDescriptor = IOMemoryDescriptor::withOptions(&ranges, 1, 0, NULL, options);
+	DEBG("%s: memory descriptor %p\n", __func__, memoryDescriptor);
+	return memoryDescriptor;
+}
+
+// Base System Analogues
+
+IOMemoryDescriptor*
+IOGetBaseSystemARVRootHashData(void)
+{
+	//TBD!
+	return NULL;
+}
+
+bool
+IOBaseSystemARVRootHashAvailable(void)
+{
+	// Check if someone got the root hash before us
+	if (!OSCompareAndSwap(0, 1, &bsARVRootHashFetched)) {
+		return false;
+	}
+
+	// Do we have in-memory root hash?
+	if (bsARVRootHashData) {
+		return true;
+	}
+	return false;
+}
+
+
+void
+IOSetBaseSystemARVRootHashData(IOMemoryDescriptor* arvData)
+{
+	return;
+}
+
+
+// ARV Manifest fetcher
+
+// Store in-memory Manifest
+void
+IOSetARVManifestData(IOMemoryDescriptor* arvData)
+{
+	// Do not allow re-fetching of the boot_args manifest by passing NULL here.
+	if (arvData) {
+		arvManifestData = arvData;
+		arvManifestFetched = 0;
+	}
+}
+
+// Retrieve any manifest we may have (stored in boot_args or in-memory)
+IOMemoryDescriptor*
+IOGetARVManifestData(void)
+{
+	// Check if someone got the manifest before us
+	if (!OSCompareAndSwap(0, 1, &arvManifestFetched)) {
+		return NULL;
+	}
+
+	// Do we have in-memory manifest?
+	if (arvManifestData) {
+		IOMemoryDescriptor* arvData = arvManifestData;
+		arvManifestData = NULL;
+		return arvData;
+	}
+
+	// Looks like there was no in-memory manifest and it's the first call - try boot_args
+	boot_args* args = (boot_args*)PE_state.bootArgs;
+
+	DEBG("%s: data at address %llu size %llu\n", __func__, args->arvManifestStart, args->arvManifestSize);
+	if (args->arvManifestStart == 0) {
+		return NULL;
+	}
+
+	// We have the manifest in the boot_args, create IOMemoryDescriptor for the blob
+	IOAddressRange ranges;
+	ranges.address = args->arvManifestStart;
+	ranges.length = args->arvManifestSize;
 
 	const IOOptionBits options = kIODirectionInOut | kIOMemoryTypePhysical64 | kIOMemoryMapperNone;
 

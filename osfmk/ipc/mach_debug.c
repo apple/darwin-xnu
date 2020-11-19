@@ -158,8 +158,8 @@ mach_port_get_srights(
 
 #if !MACH_IPC_DEBUG
 kern_return_t
-mach_port_space_info(
-	__unused ipc_space_t                    space,
+mach_port_space_info_from_user(
+	__unused mach_port_t                    port,
 	__unused ipc_info_space_t               *infop,
 	__unused ipc_info_name_array_t  *tablep,
 	__unused mach_msg_type_number_t         *tableCntp,
@@ -168,7 +168,17 @@ mach_port_space_info(
 {
 	return KERN_FAILURE;
 }
+
 #else
+kern_return_t
+mach_port_space_info(
+	ipc_space_t                     space,
+	ipc_info_space_t                *infop,
+	ipc_info_name_array_t           *tablep,
+	mach_msg_type_number_t          *tableCntp,
+	__unused ipc_info_tree_name_array_t     *treep,
+	__unused mach_msg_type_number_t         *treeCntp);
+
 kern_return_t
 mach_port_space_info(
 	ipc_space_t                     space,
@@ -305,6 +315,29 @@ mach_port_space_info(
 	*treep = (ipc_info_tree_name_t *)0;
 	*treeCntp = 0;
 	return KERN_SUCCESS;
+}
+
+kern_return_t
+mach_port_space_info_from_user(
+	mach_port_t                     port,
+	ipc_info_space_t                *infop,
+	ipc_info_name_array_t           *tablep,
+	mach_msg_type_number_t          *tableCntp,
+	__unused ipc_info_tree_name_array_t     *treep,
+	__unused mach_msg_type_number_t         *treeCntp)
+{
+	kern_return_t kr;
+
+	ipc_space_t space = convert_port_to_space_check_type(port, NULL, TASK_FLAVOR_READ, FALSE);
+
+	if (space == IPC_SPACE_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	kr = mach_port_space_info(space, infop, tablep, tableCntp, treep, treeCntp);
+
+	ipc_space_release(space);
+	return kr;
 }
 #endif /* MACH_IPC_DEBUG */
 
@@ -453,16 +486,34 @@ mach_port_dnrequest_info(
 
 #if !MACH_IPC_DEBUG
 kern_return_t
-mach_port_kobject_description(
-	__unused ipc_space_t            space,
+mach_port_kobject_from_user(
+	__unused mach_port_t            port,
+	__unused mach_port_name_t       name,
+	__unused natural_t              *typep,
+	__unused mach_vm_address_t      *addrp)
+{
+	return KERN_FAILURE;
+}
+
+kern_return_t
+mach_port_kobject_description_from_user(
+	__unused mach_port_t            port,
 	__unused mach_port_name_t       name,
 	__unused natural_t              *typep,
 	__unused mach_vm_address_t      *addrp,
-	__unused kobject_description_t  desc)
+	__unused kobject_description_t  des)
 {
 	return KERN_FAILURE;
 }
 #else
+kern_return_t
+mach_port_kobject_description(
+	ipc_space_t                     space,
+	mach_port_name_t                name,
+	natural_t                       *typep,
+	mach_vm_address_t               *addrp,
+	kobject_description_t           desc);
+
 kern_return_t
 mach_port_kobject_description(
 	ipc_space_t                     space,
@@ -475,6 +526,7 @@ mach_port_kobject_description(
 	ipc_port_t port;
 	kern_return_t kr;
 	mach_vm_address_t kaddr;
+	io_object_t obj = NULL;
 
 	if (space == IS_NULL) {
 		return KERN_INVALID_TASK;
@@ -505,17 +557,10 @@ mach_port_kobject_description(
 	*typep = (unsigned int) ip_kotype(port);
 	kaddr = (mach_vm_address_t)ip_get_kobject(port);
 	*addrp = 0;
-#if (DEVELOPMENT || DEBUG)
-	if (kaddr && ip_is_kobject(port)) {
-		*addrp = VM_KERNEL_UNSLIDE_OR_PERM(kaddr);
-	}
-#endif
 
-	io_object_t obj = NULL;
-	natural_t   kotype = ip_kotype(port);
 	if (desc) {
 		*desc = '\0';
-		switch (kotype) {
+		switch (ip_kotype(port)) {
 		case IKOT_IOKIT_OBJECT:
 		case IKOT_IOKIT_CONNECT:
 		case IKOT_IOKIT_IDENT:
@@ -528,6 +573,9 @@ mach_port_kobject_description(
 			break;
 		}
 	}
+#if (DEVELOPMENT || DEBUG)
+	*addrp = VM_KERNEL_UNSLIDE_OR_PERM(kaddr);
+#endif
 
 	ip_unlock(port);
 
@@ -538,7 +586,13 @@ mach_port_kobject_description(
 
 	return KERN_SUCCESS;
 }
-#endif /* MACH_IPC_DEBUG */
+
+kern_return_t
+mach_port_kobject(
+	ipc_space_t                     space,
+	mach_port_name_t                name,
+	natural_t                       *typep,
+	mach_vm_address_t               *addrp);
 
 kern_return_t
 mach_port_kobject(
@@ -549,6 +603,40 @@ mach_port_kobject(
 {
 	return mach_port_kobject_description(space, name, typep, addrp, NULL);
 }
+
+kern_return_t
+mach_port_kobject_description_from_user(
+	mach_port_t                     port,
+	mach_port_name_t                name,
+	natural_t                       *typep,
+	mach_vm_address_t               *addrp,
+	kobject_description_t           desc)
+{
+	kern_return_t kr;
+
+	ipc_space_t space = convert_port_to_space_check_type(port, NULL, TASK_FLAVOR_READ, FALSE);
+
+	if (space == IPC_SPACE_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	kr = mach_port_kobject_description(space, name, typep, addrp, desc);
+
+	ipc_space_release(space);
+	return kr;
+}
+
+kern_return_t
+mach_port_kobject_from_user(
+	mach_port_t                     port,
+	mach_port_name_t                name,
+	natural_t                       *typep,
+	mach_vm_address_t               *addrp)
+{
+	return mach_port_kobject_description_from_user(port, name, typep, addrp, NULL);
+}
+
+#endif /* MACH_IPC_DEBUG */
 
 /*
  *	Routine:	mach_port_kernel_object [Legacy kernel call]
@@ -570,8 +658,8 @@ mach_port_kobject(
 
 #if !MACH_IPC_DEBUG
 kern_return_t
-mach_port_kernel_object(
-	__unused ipc_space_t            space,
+mach_port_kernel_object_from_user(
+	__unused mach_port_t            port,
 	__unused mach_port_name_t       name,
 	__unused unsigned int           *typep,
 	__unused unsigned int           *addrp)
@@ -584,6 +672,13 @@ mach_port_kernel_object(
 	ipc_space_t                     space,
 	mach_port_name_t                name,
 	unsigned int                    *typep,
+	unsigned int                    *addrp);
+
+kern_return_t
+mach_port_kernel_object(
+	ipc_space_t                     space,
+	mach_port_name_t                name,
+	unsigned int                    *typep,
 	unsigned int                    *addrp)
 {
 	mach_vm_address_t addr = 0;
@@ -591,6 +686,27 @@ mach_port_kernel_object(
 
 	kr = mach_port_kobject(space, name, typep, &addr);
 	*addrp = (unsigned int) addr;
+	return kr;
+}
+
+kern_return_t
+mach_port_kernel_object_from_user(
+	mach_port_t                     port,
+	mach_port_name_t                name,
+	unsigned int                    *typep,
+	unsigned int                    *addrp)
+{
+	kern_return_t kr;
+
+	ipc_space_t space = convert_port_to_space_check_type(port, NULL, TASK_FLAVOR_READ, FALSE);
+
+	if (space == IPC_SPACE_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	kr = mach_port_kernel_object(space, name, typep, addrp);
+
+	ipc_space_release(space);
 	return kr;
 }
 #endif /* MACH_IPC_DEBUG */

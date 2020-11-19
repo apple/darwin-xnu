@@ -208,7 +208,7 @@ os_ref_release_raw(os_ref_atomic_t *rc, struct os_refgrp *grp)
 }
 
 static inline os_ref_count_t
-os_ref_release_relaxed_raw(os_ref_atomic_t *rc, struct os_refgrp *grp)
+os_ref_release_raw_relaxed(os_ref_atomic_t *rc, struct os_refgrp *grp)
 {
 	return os_ref_release_relaxed_internal(rc, grp);
 }
@@ -250,7 +250,7 @@ os_ref_get_count_raw(os_ref_atomic_t *rc)
 #define os_ref_init_count_raw(rc, grp, count) (os_ref_init_count_raw)((rc), NULL, (count))
 #define os_ref_retain_raw(rc, grp) (os_ref_retain_raw)((rc), NULL)
 #define os_ref_release_raw(rc, grp) (os_ref_release_raw)((rc), NULL)
-#define os_ref_release_relaxed_raw(rc, grp) (os_ref_release_relaxed_raw)((rc), NULL)
+#define os_ref_release_raw_relaxed(rc, grp) (os_ref_release_relaxed_raw)((rc), NULL)
 #define os_ref_release_live_raw(rc, grp) (os_ref_release_live_raw)((rc), NULL)
 #define os_ref_retain_try_raw(rc, grp) (os_ref_retain_try_raw)((rc), NULL)
 #define os_ref_retain_locked_raw(rc, grp) (os_ref_retain_locked_raw)((rc), NULL)
@@ -258,42 +258,116 @@ os_ref_get_count_raw(os_ref_atomic_t *rc)
 #endif
 
 #if XNU_KERNEL_PRIVATE
-os_ref_count_t os_ref_release_mask_internal(os_ref_atomic_t *rc, struct os_refgrp *grp,
-    os_ref_count_t b, memory_order release_order, memory_order dealloc_order);
+#pragma GCC visibility push(hidden)
 
-static inline os_ref_count_t
-os_ref_release_mask(os_ref_atomic_t *rc, struct os_refgrp *grp, os_ref_count_t b)
+extern void
+os_ref_retain_mask_internal(os_ref_atomic_t *rc, uint32_t n, struct os_refgrp *grp);
+extern void
+os_ref_retain_acquire_mask_internal(os_ref_atomic_t *rc, uint32_t n, struct os_refgrp *grp);
+extern bool
+os_ref_retain_try_mask_internal(os_ref_atomic_t *, uint32_t n,
+    uint32_t reject_mask, struct os_refgrp *grp) OS_WARN_RESULT;
+extern bool
+os_ref_retain_try_acquire_mask_internal(os_ref_atomic_t *, uint32_t n,
+    uint32_t reject_mask, struct os_refgrp *grp) OS_WARN_RESULT;
+
+extern uint32_t
+os_ref_release_barrier_mask_internal(os_ref_atomic_t *rc, uint32_t n, struct os_refgrp *grp);
+extern uint32_t
+os_ref_release_relaxed_mask_internal(os_ref_atomic_t *rc, uint32_t n, struct os_refgrp *grp);
+
+static inline uint32_t
+os_ref_get_raw_mask(os_ref_atomic_t *rc)
 {
-	return os_ref_release_mask_internal(rc, grp, b, memory_order_release, memory_order_acquire);
+	return os_ref_get_count_internal(rc);
+}
+
+static inline uint32_t
+os_ref_get_bits_mask(os_ref_atomic_t *rc, uint32_t b)
+{
+	return os_ref_get_raw_mask(rc) & ((1u << b) - 1);
 }
 
 static inline os_ref_count_t
-os_ref_release_relaxed_mask(os_ref_atomic_t *rc, struct os_refgrp *grp, os_ref_count_t b)
+os_ref_get_count_mask(os_ref_atomic_t *rc, uint32_t b)
 {
-	return os_ref_release_mask_internal(rc, grp, b, memory_order_relaxed, memory_order_relaxed);
+	return os_ref_get_raw_mask(rc) >> b;
 }
 
 static inline void
-os_ref_release_live_mask(os_ref_atomic_t *rc, struct os_refgrp *grp, os_ref_count_t b)
+os_ref_retain_mask(os_ref_atomic_t *rc, uint32_t b, struct os_refgrp *grp)
 {
-	if (__improbable(os_ref_release_mask_internal(rc, grp, b,
-	    memory_order_release, memory_order_relaxed) == 0)) {
+	os_ref_retain_mask_internal(rc, 1u << b, grp);
+}
+
+static inline void
+os_ref_retain_acquire_mask(os_ref_atomic_t *rc, uint32_t b, struct os_refgrp *grp)
+{
+	os_ref_retain_acquire_mask_internal(rc, 1u << b, grp);
+}
+
+static inline bool
+os_ref_retain_try_mask(os_ref_atomic_t *rc, uint32_t b,
+    uint32_t reject_mask, struct os_refgrp *grp)
+{
+	return os_ref_retain_try_mask_internal(rc, 1u << b, reject_mask, grp);
+}
+
+static inline bool
+os_ref_retain_try_acquire_mask(os_ref_atomic_t *rc, uint32_t b,
+    uint32_t reject_mask, struct os_refgrp *grp)
+{
+	return os_ref_retain_try_acquire_mask_internal(rc, 1u << b, reject_mask, grp);
+}
+
+static inline uint32_t
+os_ref_release_raw_mask(os_ref_atomic_t *rc, uint32_t b, struct os_refgrp *grp)
+{
+	return os_ref_release_barrier_mask_internal(rc, 1u << b, grp);
+}
+
+static inline uint32_t
+os_ref_release_raw_relaxed_mask(os_ref_atomic_t *rc, uint32_t b, struct os_refgrp *grp)
+{
+	return os_ref_release_relaxed_mask_internal(rc, 1u << b, grp);
+}
+
+static inline os_ref_count_t
+os_ref_release_mask(os_ref_atomic_t *rc, uint32_t b, struct os_refgrp *grp)
+{
+	return os_ref_release_barrier_mask_internal(rc, 1u << b, grp) >> b;
+}
+
+static inline os_ref_count_t
+os_ref_release_relaxed_mask(os_ref_atomic_t *rc, uint32_t b, struct os_refgrp *grp)
+{
+	return os_ref_release_relaxed_mask_internal(rc, 1u << b, grp) >> b;
+}
+
+static inline void
+os_ref_release_live_mask(os_ref_atomic_t *rc, uint32_t b, struct os_refgrp *grp)
+{
+	uint32_t val = os_ref_release_barrier_mask_internal(rc, 1u << b, grp);
+	if (__improbable(val < 1u << b)) {
 		os_ref_panic_live(rc);
 	}
 }
 
 #if !OS_REFCNT_DEBUG
 /* remove the group argument for non-debug */
-#define os_ref_init_count_mask(rc, grp, init_c, init_b, b) (os_ref_init_count_mask)(rc, NULL, init_c, init_b, b)
-#define os_ref_retain_mask(rc, grp, b) (os_ref_retain_mask)((rc), NULL, (b))
-#define os_ref_release_mask(rc, grp, b) (os_ref_release_mask)((rc), NULL, (b))
-#define os_ref_release_relaxed_mask(rc, grp, b) (os_ref_relaxed_mask)((rc), NULL, (b))
-#define os_ref_release_live_mask(rc, grp, b) (os_ref_release_live_mask)((rc), NULL, (b))
-#define os_ref_retain_try_mask(rc, grp, b) (os_ref_retain_try_mask)((rc), NULL, (b))
-#define os_ref_release_locked_mask(rc, grp, b) (os_ref_release_locked_mask)((rc), NULL, (b))
-#define os_ref_retain_locked_mask(rc, grp, b) (os_ref_retain_locked_mask)((rc), NULL, (b))
+#define os_ref_init_count_mask(rc, b, grp, init_c, init_b) (os_ref_init_count_mask)(rc, b, NULL, init_c, init_b)
+#define os_ref_retain_mask(rc, b, grp) (os_ref_retain_mask)((rc), (b), NULL)
+#define os_ref_retain_acquire_mask(rc, b, grp) (os_ref_retain_acquire_mask)((rc), (b), NULL)
+#define os_ref_retain_try_mask(rc, b, grp) (os_ref_retain_try_mask)((rc), (b), NULL)
+#define os_ref_retain_try_acquire_mask(rc, b, grp) (os_ref_retain_try_acquire_mask)((rc), (b), NULL)
+#define os_ref_release_mask(rc, b, grp) (os_ref_release_mask)((rc), (b), NULL)
+#define os_ref_release_relaxed_mask(rc, b, grp) (os_ref_relaxed_mask)((rc), (b), NULL)
+#define os_ref_release_raw_mask(rc, b, grp) (os_ref_release_mask)((rc), (b), NULL)
+#define os_ref_release_relaxed_raw_mask(rc, b, grp) (os_ref_relaxed_mask)((rc), (b), NULL)
+#define os_ref_release_live_mask(rc, b, grp) (os_ref_release_live_mask)((rc), (b), NULL)
 #endif
 
+#pragma GCC visibility pop
 #endif
 
 __END_DECLS

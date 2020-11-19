@@ -36,13 +36,13 @@
 typedef struct shadow_map shadow_map_t;
 
 boolean_t
-shadow_map_read(shadow_map_t * map, uint32_t block_offset, uint32_t block_count,
-    uint32_t * incr_block_offset, uint32_t * incr_block_count);
+shadow_map_read(shadow_map_t * map, off_t block_offset, size_t block_count,
+    off_t * incr_block_offset, size_t * incr_block_count);
 boolean_t
-shadow_map_write(shadow_map_t * map, uint32_t block_offset, uint32_t block_count,
-    uint32_t * incr_block_offset, uint32_t * incr_block_count);
+shadow_map_write(shadow_map_t * map, off_t block_offset, size_t block_count,
+    off_t * incr_block_offset, size_t * incr_block_count);
 boolean_t
-shadow_map_is_written(shadow_map_t * map, uint32_t block_offset);
+shadow_map_is_written(shadow_map_t * map, off_t block_offset);
 
 uint32_t
 shadow_map_shadow_size(shadow_map_t * map);

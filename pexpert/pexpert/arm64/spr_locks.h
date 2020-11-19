@@ -28,6 +28,7 @@
 #ifndef _PEXPERT_ARM64_SPR_LOCKS_H
 #define _PEXPERT_ARM64_SPR_LOCKS_H
 
+#define MSR_RO_CTL_HID1                 (1ULL << 1)
 #define MSR_RO_CTL_HID4                 (1ULL << 4)
 #define MSR_RO_CTL_CYC_OVRD             (1ULL << 27)
 #define MSR_RO_CTL_ACC_OVRD             (1ULL << 47)

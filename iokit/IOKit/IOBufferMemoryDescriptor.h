@@ -28,6 +28,7 @@
 #ifndef _IOBUFFERMEMORYDESCRIPTOR_H
 #define _IOBUFFERMEMORYDESCRIPTOR_H
 
+#include <libkern/c++/OSPtr.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <DriverKit/IOBufferMemoryDescriptor.h>
 
@@ -106,8 +107,8 @@ public:
 	OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 0);
 	OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 1);
 #else /* !__LP64__ */
-	OSMetaClassDeclareReservedUsed(IOBufferMemoryDescriptor, 0);
-	OSMetaClassDeclareReservedUsed(IOBufferMemoryDescriptor, 1);
+	OSMetaClassDeclareReservedUsedX86(IOBufferMemoryDescriptor, 0);
+	OSMetaClassDeclareReservedUsedX86(IOBufferMemoryDescriptor, 1);
 #endif /* !__LP64__ */
 	OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 2);
 	OSMetaClassDeclareReservedUnused(IOBufferMemoryDescriptor, 3);
@@ -142,14 +143,14 @@ public:
 	    vm_offset_t  alignment) APPLE_KEXT_DEPRECATED;                         /* use withOptions() instead */
 #endif /* !__LP64__ */
 
-	static IOBufferMemoryDescriptor * withCopy(
+	static OSPtr<IOBufferMemoryDescriptor> withCopy(
 		task_t            inTask,
 		IOOptionBits      options,
 		vm_map_t          sourceMap,
 		mach_vm_address_t source,
 		mach_vm_size_t    size);
 
-	static IOBufferMemoryDescriptor * withOptions(  IOOptionBits options,
+	static OSPtr<IOBufferMemoryDescriptor> withOptions(  IOOptionBits options,
 	    vm_size_t    capacity,
 	    vm_offset_t  alignment = 1);
 
@@ -171,7 +172,7 @@ public:
  *   @param alignment The minimum required alignment of the buffer in bytes - 1 is the default for no required alignment. For example, pass 256 to get memory allocated at an address with bits 0-7 zero.
  *   @result Returns an instance of class IOBufferMemoryDescriptor to be released by the caller, which will free the memory desriptor and associated buffer. */
 
-	static IOBufferMemoryDescriptor * inTaskWithOptions(
+	static OSPtr<IOBufferMemoryDescriptor> inTaskWithOptions(
 		task_t       inTask,
 		IOOptionBits options,
 		vm_size_t    capacity,
@@ -197,7 +198,7 @@ public:
  *   @param userTag The user memory tag
  *   @result Returns an instance of class IOBufferMemoryDescriptor to be released by the caller, which will free the memory desriptor and associated buffer. */
 
-	static IOBufferMemoryDescriptor * inTaskWithOptions(
+	static OSPtr<IOBufferMemoryDescriptor> inTaskWithOptions(
 		task_t       inTask,
 		IOOptionBits options,
 		vm_size_t    capacity,
@@ -221,7 +222,7 @@ public:
  *   @param physicalMask The buffer will be allocated with pages such that physical addresses will only have bits set present in physicalMask. For example, pass 0x00000000FFFFFFFFULL for a buffer to be accessed by hardware that has 32 address bits.
  *   @result Returns an instance of class IOBufferMemoryDescriptor to be released by the caller, which will free the memory desriptor and associated buffer. */
 
-	static IOBufferMemoryDescriptor * inTaskWithPhysicalMask(
+	static OSPtr<IOBufferMemoryDescriptor> inTaskWithPhysicalMask(
 		task_t            inTask,
 		IOOptionBits      options,
 		mach_vm_size_t    capacity,
@@ -234,7 +235,7 @@ public:
  * hold capacity bytes.  The descriptor's length is initially set to the
  * capacity.
  */
-	static IOBufferMemoryDescriptor * withCapacity(
+	static OSPtr<IOBufferMemoryDescriptor> withCapacity(
 		vm_size_t    capacity,
 		IODirection  withDirection,
 		bool         withContiguousMemory = false);
@@ -251,7 +252,7 @@ public:
  * Returns a new IOBufferMemoryDescriptor preloaded with bytes (copied).
  * The descriptor's length and capacity are set to the input buffer's size.
  */
-	static IOBufferMemoryDescriptor * withBytes(
+	static OSPtr<IOBufferMemoryDescriptor> withBytes(
 		const void * bytes,
 		vm_size_t    withLength,
 		IODirection  withDirection,

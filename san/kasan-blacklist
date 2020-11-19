@@ -17,8 +17,17 @@ src:./osfmk/kern/debug.c
 # Exclude linker sets
 type:struct linker_set_entry
 type:linker_set_entry
+type:struct startup_entry
+type:startup_entry
 
-# Exclude KASAN itself
+# Exclude per-cpu data structures the assembly accesses
+type:vm_statistics64
+type:struct vm_statistics64
+type:vm_statistics64_data_t
+type:struct processor
+type:processor
+
+# Exclude KASan itself
 src:./san/kasan.c
 src:./san/kasan-fakestack.c
 src:./san/kasan-x86_64.c

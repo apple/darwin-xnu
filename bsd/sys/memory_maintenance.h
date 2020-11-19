@@ -39,7 +39,7 @@
 /*
  * The kern.darkboot sysctl can be controlled from kexts or userspace. If
  * processes want to change the sysctl value, they require the
- * 'com.apple.kern.darkboot' entitlement.
+ * 'com.apple.private.kernel.darkboot' entitlement.
  *
  * Operating the kern.darkboot sysctl is done via using the commands below:
  *

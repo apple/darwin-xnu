@@ -6,18 +6,8 @@ OBJROOT?=$(shell /bin/pwd)
 
 CC:=$(shell xcrun -sdk "$(SDKROOT)" -find cc)
 
-ifdef RC_ARCHS
-    ARCHS:=$(RC_ARCHS)
-  else
-    ifeq "$(Embedded)" "YES"
-      ARCHS:=armv7 armv7s arm64
-    else
-      ARCHS:=x86_64 i386
-  endif
-endif
-
-
-CFLAGS:=$(patsubst %, -arch %,$(ARCHS)) -g -Wall -Os -isysroot $(SDKROOT) -I$(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
+CFLAGS:=$(ARCH_FLAGS) -g -Wall -Os -isysroot $(SDKROOT) -I$(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
+CFLAGS += -Wl,-sectcreate,__INFO_FILTER,__disable,/dev/null
 
 all: $(DSTROOT)/jitter
 

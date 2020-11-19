@@ -212,7 +212,7 @@ pmod(u_int32_t gen, u_int32_t expo, u_int32_t mod)
 		u >>= 1;
 		t = (t * t) % mod;
 	}
-	return s;
+	return (u_int32_t)s;
 }
 
 /*

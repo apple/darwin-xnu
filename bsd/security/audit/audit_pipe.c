@@ -228,7 +228,7 @@ static read_write_fcn_t         audit_pipe_read;
 static ioctl_fcn_t              audit_pipe_ioctl;
 static select_fcn_t             audit_pipe_poll;
 
-static struct cdevsw audit_pipe_cdevsw = {
+static const struct cdevsw audit_pipe_cdevsw = {
 	.d_open      =          audit_pipe_open,
 	.d_close     =          audit_pipe_close,
 	.d_read      =          audit_pipe_read,

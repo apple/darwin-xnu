@@ -84,6 +84,8 @@
 #define T_PF_WRITE              0x2             /* write access */
 #define T_PF_USER               0x4             /* from user state */
 
+#if defined(MACH_KERNEL_PRIVATE)
+
 #if !defined(ASSEMBLER) && defined(MACH_KERNEL)
 
 #include <arm/thread.h>
@@ -267,9 +269,11 @@ extern kern_return_t arm_fast_fault(pmap_t, vm_map_address_t, vm_prot_t, bool, b
 typedef kern_return_t (*perfCallback)(
 	int                     trapno,
 	struct arm_saved_state  *ss,
-	uintptr_t *,
+	int,
 	int);
 
 #endif  /* !ASSEMBLER && MACH_KERNEL */
+
+#endif /* MACH_KERNEL_PRIVATE */
 
 #endif  /* _ARM_TRAP_H_ */

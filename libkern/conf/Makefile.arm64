@@ -1,19 +1,11 @@
 ######################################################################
 #BEGIN	Machine dependent Makefile fragment for arm
 ######################################################################
-
-# The following files cast opaque pointers to more specific
-# structures
-OBJS_NO_CAST_ALIGN = kxld_kext.o kxld_reloc.o kxld_sect.o kxld_seg.o \
-		   kxld_state.o kxld_sym.o kxld_symtab.o kxld_util.o \
-		   kxld_srcversion.o kxld_splitinfolc.o kxld_uuid.o kxld_vtable.o uuid.o
-
-$(foreach file,$(OBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-Wno-cast-align)))
-
-OSKext.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align -Wno-error=shadow
-OSMetaClass.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
-OSKextLib.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
-OSUnserialize.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
+#
+# XXX: CFLAGS
+#
+CWARNFLAGS   = $(CWARNFLAGS_STD) -Wshorten-64-to-32 -Wimplicit-int-conversion
+CXXWARNFLAGS = $(CXXWARNFLAGS_STD) -Wshorten-64-to-32 -Wimplicit-int-conversion
 
 ######################################################################
 #END	Machine dependent Makefile fragment for arm

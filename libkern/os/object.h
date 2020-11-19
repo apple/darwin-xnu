@@ -18,6 +18,8 @@
  * @APPLE_APACHE_LICENSE_HEADER_END@
  */
 
+#if KERNEL
+
 #ifndef __OS_OBJECT__
 #define __OS_OBJECT__
 
@@ -199,4 +201,11 @@ os_release(void *object);
 
 __END_DECLS
 
-#endif
+#endif /* OS_OBJECT file guard */
+
+#else /* KERNEL */
+
+/* This should use the libdispatch header */
+#include_next <os/object.h>
+
+#endif /* KERNEL */

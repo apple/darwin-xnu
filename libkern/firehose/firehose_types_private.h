@@ -104,6 +104,8 @@ OS_ENUM(firehose_tracepoint_namespace, uint8_t,
 OS_ENUM(firehose_tracepoint_code, uint32_t,
     firehose_tracepoint_code_load               = 0x01,
     firehose_tracepoint_code_unload             = 0x02,
+    firehose_tracepoint_code_load_filesystem    = 0x04,
+    firehose_tracepoint_code_load_memory        = 0x08,
     );
 
 /*!
@@ -236,6 +238,7 @@ OS_ENUM(_firehose_tracepoint_type_metadata, firehose_tracepoint_type_t,
     _firehose_tracepoint_type_metadata_dyld                 = 0x01,
     _firehose_tracepoint_type_metadata_subsystem            = 0x02,
     _firehose_tracepoint_type_metadata_kext                 = 0x03,
+    _firehose_tracepoint_type_metadata_coprocessor          = 0x04,
     );
 
 /*!

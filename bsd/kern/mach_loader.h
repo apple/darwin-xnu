@@ -77,7 +77,8 @@ typedef struct _load_result {
 #endif /* __arm64__ */
 	is_64bit_addr           : 1,
 	    is_64bit_data           : 1,
-	    custom_stack            : 1;
+	    custom_stack            : 1,
+	    is_cambria              : 1;
 	unsigned int            csflags;
 	unsigned char           uuid[16];
 	mach_vm_address_t       min_vm_addr;
@@ -87,7 +88,11 @@ typedef struct _load_result {
 	void                    *threadstate;
 	size_t                  threadstate_sz;
 	uint32_t                ip_platform;
+	uint32_t                lr_min_sdk;
 	uint32_t                lr_sdk;
+	user_addr_t             dynlinker_mach_header;
+	user_addr_t             dynlinker_max_vm_addr;
+	int                     dynlinker_fd;
 } load_result_t;
 
 struct image_params;

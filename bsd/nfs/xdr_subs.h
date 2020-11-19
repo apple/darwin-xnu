@@ -109,8 +109,8 @@ struct xdrbuf {
 	union {
 		struct {
 			char *                  xbb_base;       /* base address of buffer */
-			uint32_t                xbb_size;       /* size of buffer */
-			uint32_t                xbb_len;        /* length of data in buffer */
+			size_t                  xbb_size;       /* size of buffer */
+			size_t                  xbb_len;        /* length of data in buffer */
 		} xb_buffer;
 	} xb_u;
 	char *          xb_ptr;         /* pointer to current position */
@@ -134,10 +134,10 @@ void xb_free(void *);
 int xb_grow(struct xdrbuf *);
 void xb_set_cur_buf_len(struct xdrbuf *);
 char *xb_buffer_base(struct xdrbuf *);
-int xb_advance(struct xdrbuf *, uint32_t);
-int xb_offset(struct xdrbuf *);
-int xb_seek(struct xdrbuf *, uint32_t);
-int xb_add_bytes(struct xdrbuf *, const char *, uint32_t, int);
+int xb_advance(struct xdrbuf *, size_t);
+size_t xb_offset(struct xdrbuf *);
+int xb_seek(struct xdrbuf *, size_t);
+int xb_add_bytes(struct xdrbuf *, const char *, size_t, int);
 int xb_get_bytes(struct xdrbuf *, char *, uint32_t, int);
 
 #ifdef _NFS_XDR_SUBS_FUNCS_
@@ -221,9 +221,9 @@ xb_set_cur_buf_len(struct xdrbuf *xbp)
  * advance forward through existing data in xdrbuf
  */
 int
-xb_advance(struct xdrbuf *xbp, uint32_t len)
+xb_advance(struct xdrbuf *xbp, size_t len)
 {
-	uint32_t tlen;
+	size_t tlen;
 
 	while (len) {
 		if (xbp->xb_left <= 0) {
@@ -242,10 +242,10 @@ xb_advance(struct xdrbuf *xbp, uint32_t len)
 /*
  * Calculate the current offset in the XDR buffer.
  */
-int
+size_t
 xb_offset(struct xdrbuf *xbp)
 {
-	uint32_t offset = 0;
+	size_t offset = 0;
 
 	switch (xbp->xb_type) {
 	case XDRBUF_BUFFER:
@@ -262,7 +262,7 @@ xb_offset(struct xdrbuf *xbp)
  * Seek to the given offset in the existing data in the XDR buffer.
  */
 int
-xb_seek(struct xdrbuf *xbp, uint32_t offset)
+xb_seek(struct xdrbuf *xbp, size_t offset)
 {
 	switch (xbp->xb_type) {
 	case XDRBUF_BUFFER:
@@ -347,9 +347,9 @@ xb_grow(struct xdrbuf *xbp)
  * Add "count" bytes of opaque data pointed to by "buf" to the given XDR buffer.
  */
 int
-xb_add_bytes(struct xdrbuf *xbp, const char *buf, uint32_t count, int nopad)
+xb_add_bytes(struct xdrbuf *xbp, const char *buf, size_t count, int nopad)
 {
-	uint32_t len, tlen;
+	size_t len, tlen;
 	int error;
 
 	len = nopad ? count : xdr_rndup(count);
@@ -395,7 +395,7 @@ xb_add_bytes(struct xdrbuf *xbp, const char *buf, uint32_t count, int nopad)
 int
 xb_get_bytes(struct xdrbuf *xbp, char *buf, uint32_t count, int nopad)
 {
-	uint32_t len, tlen;
+	size_t len, tlen;
 
 	len = nopad ? count : xdr_rndup(count);
 
@@ -499,6 +499,7 @@ xb_get_bytes(struct xdrbuf *xbp, char *buf, uint32_t count, int nopad)
 #define xb_get_32(E, XB, LVAL) \
 	do { \
 	        uint32_t __tmp; \
+	        (LVAL) = (typeof((LVAL))) 0; \
 	        if (E) break; \
 	        (E) = xb_get_bytes((XB), (char*)&__tmp, XDRWORD, 0); \
 	        if (E) break; \
@@ -509,6 +510,7 @@ xb_get_bytes(struct xdrbuf *xbp, char *buf, uint32_t count, int nopad)
 #define xb_get_64(E, XB, LVAL) \
 	do { \
 	        uint64_t __tmp; \
+	        (LVAL) = 0; \
 	        if (E) break; \
 	        (E) = xb_get_bytes((XB), (char*)&__tmp, 2 * XDRWORD, 0); \
 	        if (E) break; \

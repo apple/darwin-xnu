@@ -32,9 +32,7 @@
 #include <sys/sysctl.h>
 
 #include <netinet/ip.h>
-#if INET6
 #include <netinet/ip6.h>
-#endif /* INET6 */
 
 #if !TCPDEBUG
 #define TCPSTATES
@@ -199,7 +197,7 @@ tcp_log_is_rate_limited(void)
 }
 
 static void
-tcp_log_inp_addresses(struct inpcb *inp, char *lbuf, size_t lbuflen, char *fbuf, size_t fbuflen)
+tcp_log_inp_addresses(struct inpcb *inp, char *lbuf, socklen_t lbuflen, char *fbuf, socklen_t fbuflen)
 {
 	/*
 	 * Ugly but %{private} does not work in the kernel version of os_log()
@@ -572,7 +570,7 @@ tcp_log_connection_summary(struct tcpcb *tp)
 	    "rtt: %u.%u ms " \
 	    "rttvar: %u.%u ms " \
 	    "pkt rxmit: %u " \
-	    "ooo pkts: %u dup bytes in: %u " \
+	    "ooo pkts: %u dup bytes in: %u ACKs delayed: %u delayed ACKs sent: %u " \
 	    "so_error: %d " \
 	    "svc/tc: %u"
 
@@ -586,7 +584,7 @@ tcp_log_connection_summary(struct tcpcb *tp)
 	    tp->t_srtt >> TCP_RTT_SHIFT, tp->t_srtt - ((tp->t_srtt >> TCP_RTT_SHIFT) << TCP_RTT_SHIFT), \
 	    tp->t_rttvar >> TCP_RTTVAR_SHIFT, tp->t_rttvar - ((tp->t_rttvar >> TCP_RTTVAR_SHIFT) << TCP_RTTVAR_SHIFT), \
 	    tp->t_stat.rxmitpkts, \
-	    tp->t_rcvoopack, tp->t_stat.rxduplicatebytes, \
+	    tp->t_rcvoopack, tp->t_stat.rxduplicatebytes, tp->t_stat.acks_delayed, tp->t_stat.delayed_acks_sent, \
 	    so->so_error, \
 	    (so->so_flags1 & SOF1_TC_NET_SERV_TYPE) ? so->so_netsvctype : so->so_traffic_class
 
@@ -603,7 +601,7 @@ tcp_log_connection_summary(struct tcpcb *tp)
 
 static bool
 tcp_log_pkt_addresses(void *hdr, struct tcphdr *th, bool outgoing,
-    char *lbuf, size_t lbuflen, char *fbuf, size_t fbuflen)
+    char *lbuf, socklen_t lbuflen, char *fbuf, socklen_t fbuflen)
 {
 	bool isipv6;
 	uint8_t thflags;
@@ -936,3 +934,4 @@ tcp_log_message(const char *func_name, int line_no, struct tcpcb *tp, const char
 #undef TCP_LOG_MESSAGE_FMT
 #undef TCP_LOG_MESSAGE_ARGS
 }
+

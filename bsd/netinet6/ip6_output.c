@@ -148,12 +148,7 @@ extern int ipsec_bypass;
 #include <net/necp.h>
 #endif /* NECP */
 
-#if CONFIG_MACF_NET
-#include <security/mac.h>
-#endif /* CONFIG_MACF_NET */
-
 #if DUMMYNET
-#include <netinet/ip_fw.h>
 #include <netinet/ip_dummynet.h>
 #endif /* DUMMYNET */
 
@@ -184,9 +179,10 @@ static void ip6_output_checksum(struct ifnet *, uint32_t, struct mbuf *,
     int, uint32_t, uint32_t);
 extern int udp_ctloutput(struct socket *, struct sockopt *);
 static int ip6_fragment_packet(struct mbuf **m,
-    struct ip6_pktopts *opt, struct ip6_exthdrs *exthdrsp, struct ifnet *ifp,
-    uint32_t mtu, uint32_t unfragpartlen,
-    struct route_in6 *ro_pmtu, int nxt0, uint32_t optlen);
+    struct ip6_pktopts *opt, struct ip6_out_args * ip6oa,
+    struct ip6_exthdrs *exthdrsp, struct ifnet *ifp,
+    uint32_t mtu, uint32_t unfragpartlen, struct route_in6 *ro_pmtu,
+    int nxt0, uint32_t optlen);
 
 SYSCTL_DECL(_net_inet6_ip6);
 
@@ -234,10 +230,7 @@ static unsigned int im6o_debug = 1;     /* debugging (enabled) */
 static unsigned int im6o_debug;         /* debugging (disabled) */
 #endif /* !DEBUG */
 
-static unsigned int im6o_size;          /* size of zone element */
 static struct zone *im6o_zone;          /* zone for ip6_moptions */
-
-#define IM6O_ZONE_MAX           64              /* maximum elements in zone */
 #define IM6O_ZONE_NAME          "ip6_moptions"  /* zone name */
 
 /*
@@ -604,6 +597,23 @@ loopit:
 			    necp_get_ifnet_from_result_parameter(
 				&necp_result_parameter);
 
+			/*
+			 * Update the QOS marking policy if
+			 * 1. upper layer asks it to do so
+			 * 2. net_qos_policy_restricted is not set
+			 * 3. qos_marking_gencount doesn't match necp_kernel_socket_policies_gencount (checked in necp_lookup_current_qos_marking)
+			 */
+			if (ip6oa != NULL && (ip6oa->ip6oa_flags & IP6OAF_REDO_QOSMARKING_POLICY) &&
+			    net_qos_policy_restricted != 0) {
+				bool qos_marking = (ip6oa->ip6oa_flags & IP6OAF_QOSMARKING_ALLOWED) != 0;
+				qos_marking = necp_lookup_current_qos_marking(&ip6oa->qos_marking_gencount, NULL, policy_ifp, necp_result_parameter.route_rule_id, qos_marking);
+				if (qos_marking) {
+					ip6oa->ip6oa_flags |= IP6OAF_QOSMARKING_ALLOWED;
+				} else {
+					ip6oa->ip6oa_flags &= ~IP6OAF_QOSMARKING_ALLOWED;
+				}
+			}
+
 			if (policy_ifp == ifp) {
 				goto skip_ipsec;
 			} else {
@@ -766,7 +776,7 @@ skip_ipsec:
 		}
 		ip6->ip6_plen = 0;
 	} else {
-		ip6->ip6_plen = htons(plen);
+		ip6->ip6_plen = htons((uint16_t)plen);
 	}
 	/*
 	 * Concatenate headers and fill in next header fields.
@@ -859,7 +869,7 @@ skip_ipsec:
 		    (ip6->ip6_dst.s6_addr16[1] == 0) && (ro != NULL)) {
 			fixscope = 1;
 			ip6->ip6_dst.s6_addr16[1] =
-			    htons(ro->ro_dst.sin6_scope_id);
+			    htons((uint16_t)ro->ro_dst.sin6_scope_id);
 		}
 
 		ipf_ref();
@@ -900,7 +910,7 @@ skip_ipsec:
 
 #if IPSEC
 	if (ip6obf.needipsec) {
-		int segleft_org;
+		uint8_t segleft_org;
 
 		/*
 		 * pointers after IPsec headers are not valid any more.
@@ -935,7 +945,7 @@ skip_ipsec:
 			default:
 				printf("ip6_output (ipsec): error code %d\n",
 				    error);
-			/* FALLTHRU */
+				OS_FALLTHROUGH;
 			case ENOENT:
 				/* don't show these error codes to the user */
 				error = 0;
@@ -1016,7 +1026,7 @@ skip_ipsec:
 			ip6->ip6_hlim = im6o->im6o_multicast_hlim;
 			IM6O_UNLOCK(im6o);
 		} else {
-			ip6->ip6_hlim = ip6_defmcasthlim;
+			ip6->ip6_hlim = (uint8_t)ip6_defmcasthlim;
 		}
 	}
 
@@ -1088,7 +1098,7 @@ skip_ipsec:
 			default:
 				printf("ip6_output (ipsec): error code %d\n",
 				    error);
-			/* FALLTHRU */
+				OS_FALLTHROUGH;
 			case ENOENT:
 				/* don't show these error codes to the user */
 				error = 0;
@@ -1510,7 +1520,7 @@ check_with_pf:
 	 * back as a chain of packets and original mbuf is freed. Otherwise, m
 	 * is unchanged.
 	 */
-	error = ip6_fragment_packet(&m, opt,
+	error = ip6_fragment_packet(&m, opt, ip6oa,
 	    &exthdrs, ifp, mtu, unfragpartlen, ro_pmtu, nxt0,
 	    optlen);
 
@@ -1679,15 +1689,16 @@ bad:
 
 static int
 ip6_fragment_packet(struct mbuf **mptr, struct ip6_pktopts *opt,
-    struct ip6_exthdrs *exthdrsp, struct ifnet *ifp, uint32_t mtu,
-    uint32_t unfragpartlen, struct route_in6 *ro_pmtu,
-    int nxt0, uint32_t optlen)
+    struct ip6_out_args *ip6oa, struct ip6_exthdrs *exthdrsp,
+    struct ifnet *ifp, uint32_t mtu, uint32_t unfragpartlen,
+    struct route_in6 *ro_pmtu, int nxt0, uint32_t optlen)
 {
 	VERIFY(NULL != mptr);
 	struct mbuf *m = *mptr;
 	int error = 0;
-	size_t tlen = m->m_pkthdr.len;
-	boolean_t dontfrag = (opt != NULL && (opt->ip6po_flags & IP6PO_DONTFRAG));
+	uint32_t tlen = m->m_pkthdr.len;
+	boolean_t dontfrag = (opt != NULL && (opt->ip6po_flags & IP6PO_DONTFRAG)) ||
+	    (ip6oa != NULL && (ip6oa->ip6oa_flags & IP6OAF_DONT_FRAG));
 
 	if (m->m_pkthdr.pkt_flags & PKTF_FORWARDED) {
 		dontfrag = TRUE;
@@ -1785,7 +1796,7 @@ ip6_do_fragmentation(struct mbuf **mptr, uint32_t optlen, struct ifnet *ifp,
 	struct mbuf *first_mbufp = NULL;
 	struct mbuf *last_mbufp = NULL;
 
-	size_t tlen = morig->m_pkthdr.len;
+	uint32_t tlen = morig->m_pkthdr.len;
 
 	/* try to fragment the packet. case 1-b */
 	if ((morig->m_pkthdr.csum_flags & CSUM_TSO_IPV6)) {
@@ -1801,7 +1812,7 @@ ip6_do_fragmentation(struct mbuf **mptr, uint32_t optlen, struct ifnet *ifp,
 		in6_ifstat_inc(ifp, ifs6_out_fragfail);
 		return EMSGSIZE;
 	} else {
-		size_t hlen, len, off;
+		uint32_t hlen, off, len;
 		struct mbuf **mnext = NULL;
 		struct ip6_frag *ip6f;
 		u_char nextproto;
@@ -1899,12 +1910,6 @@ ip6_do_fragmentation(struct mbuf **mptr, uint32_t optlen, struct ifnet *ifp,
 
 			M_COPY_CLASSIFIER(new_m, morig);
 			M_COPY_PFTAG(new_m, morig);
-
-#ifdef notyet
-#if CONFIG_MACF_NET
-			mac_create_fragment(morig, new_m);
-#endif /* CONFIG_MACF_NET */
-#endif /* notyet */
 
 			ip6f->ip6f_reserved = 0;
 			ip6f->ip6f_ident = id;
@@ -2044,7 +2049,7 @@ in6_finalize_cksum(struct mbuf *m, uint32_t hoff, int32_t optlen,
 				    ip6->ip6_plen, ip6->ip6_plen, plen, plen,
 				    (mlen - (hoff + hlen)));
 			}
-			plen = mlen - (hoff + hlen);
+			plen = (uint16_t)(mlen - (hoff + hlen));
 		}
 	}
 
@@ -2058,7 +2063,7 @@ in6_finalize_cksum(struct mbuf *m, uint32_t hoff, int32_t optlen,
 	} else {
 		/* caller supplied the original transport number; use it */
 		if (nxt0 >= 0) {
-			nxt = nxt0;
+			nxt = (uint8_t)nxt0;
 		}
 		olen = optlen;
 	}
@@ -2353,7 +2358,7 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 	struct inpcb *in6p = sotoinpcb(so);
 	int error = 0, optval = 0;
 	int level, op = -1, optname = 0;
-	int optlen = 0;
+	size_t optlen = 0;
 	struct proc *p;
 	lck_mtx_t *mutex_held = NULL;
 
@@ -2425,7 +2430,7 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 				if (!privileged) {
 					break;
 				}
-			/* FALLTHROUGH */
+				OS_FALLTHROUGH;
 			case IPV6_UNICAST_HOPS:
 			case IPV6_HOPLIMIT:
 			case IPV6_RECVPKTINFO:
@@ -2451,11 +2456,11 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 						error = EINVAL;
 					} else {
 						/* -1 = kernel default */
-						in6p->in6p_hops = optval;
+						in6p->in6p_hops = (short)optval;
 						if (in6p->inp_vflag &
 						    INP_IPV4) {
 							in6p->inp_ip_ttl =
-							    optval;
+							    (uint8_t)optval;
 						}
 					}
 					break;
@@ -3043,7 +3048,8 @@ ip6_ctloutput(struct socket *so, struct sockopt *sopt)
 int
 ip6_raw_ctloutput(struct socket *so, struct sockopt *sopt)
 {
-	int error = 0, optval, optlen;
+	int error = 0, optval;
+	size_t optlen;
 	const int icmp6off = offsetof(struct icmp6_hdr, icmp6_cksum);
 	struct inpcb *in6p = sotoinpcb(so);
 	int level, op, optname;
@@ -3450,16 +3456,10 @@ ip6_moptions_init(void)
 {
 	PE_parse_boot_argn("ifa_debug", &im6o_debug, sizeof(im6o_debug));
 
-	im6o_size = (im6o_debug == 0) ? sizeof(struct ip6_moptions) :
+	vm_size_t im6o_size = (im6o_debug == 0) ? sizeof(struct ip6_moptions) :
 	    sizeof(struct ip6_moptions_dbg);
 
-	im6o_zone = zinit(im6o_size, IM6O_ZONE_MAX * im6o_size, 0,
-	    IM6O_ZONE_NAME);
-	if (im6o_zone == NULL) {
-		panic("%s: failed allocating %s", __func__, IM6O_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(im6o_zone, Z_EXPAND, TRUE);
+	im6o_zone = zone_create(IM6O_ZONE_NAME, im6o_size, ZC_ZFREE_CLEARMEM);
 }
 
 void
@@ -3564,14 +3564,12 @@ im6o_trace(struct ip6_moptions *im6o, int refhold)
 }
 
 struct ip6_moptions *
-ip6_allocmoptions(int how)
+ip6_allocmoptions(zalloc_flags_t how)
 {
 	struct ip6_moptions *im6o;
 
-	im6o = (how == M_WAITOK) ?
-	    zalloc(im6o_zone) : zalloc_noblock(im6o_zone);
+	im6o = zalloc_flags(im6o_zone, how | Z_ZERO);
 	if (im6o != NULL) {
-		bzero(im6o, im6o_size);
 		lck_mtx_init(&im6o->im6o_lock, ifa_mtx_grp, ifa_mtx_attr);
 		im6o->im6o_debug |= IFD_ALLOC;
 		if (im6o_debug != 0) {

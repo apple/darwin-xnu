@@ -86,20 +86,14 @@
 #include <netinet/ip.h>
 #include <netinet/in_var.h>
 
-#if INET6
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #include <netinet/icmp6.h>
-#endif
 
 #include <netinet6/ipsec.h>
-#if INET6
 #include <netinet6/ipsec6.h>
-#endif
 #include <netinet6/ah.h>
-#if INET6
 #include <netinet6/ah6.h>
-#endif
 #include <netkey/key.h>
 #include <netkey/keydb.h>
 
@@ -237,6 +231,8 @@ ah4_output(struct mbuf *m, struct secasvar *sav)
 		ahlen = plen + sizeof(struct newah);
 	}
 
+	VERIFY(ahlen <= UINT16_MAX);
+
 	/*
 	 * grow the mbuf to accomodate AH.
 	 */
@@ -259,7 +255,7 @@ ah4_output(struct mbuf *m, struct secasvar *sav)
 			m_freem(m);
 			return ENOBUFS;
 		}
-		n->m_len = ahlen;
+		n->m_len = (int32_t)ahlen;
 		n->m_next = m->m_next;
 		m->m_next = n;
 		m->m_pkthdr.len += ahlen;
@@ -279,9 +275,10 @@ ah4_output(struct mbuf *m, struct secasvar *sav)
 	if (sav->flags & SADB_X_EXT_OLD) {
 		struct ah *ahdr;
 
+		VERIFY((plen >> 2) <= UINT8_MAX);
 		ahdr = (struct ah *)(void *)ahdrpos;
 		ahsumpos = (u_char *)(ahdr + 1);
-		ahdr->ah_len = plen >> 2;
+		ahdr->ah_len = (u_int8_t)(plen >> 2);
 		ahdr->ah_nxt = ip->ip_p;
 		ahdr->ah_reserve = htons(0);
 		ahdr->ah_spi = spi;
@@ -289,9 +286,10 @@ ah4_output(struct mbuf *m, struct secasvar *sav)
 	} else {
 		struct newah *ahdr;
 
+		VERIFY(((plen >> 2) + 1) <= UINT8_MAX);
 		ahdr = (struct newah *)(void *)ahdrpos;
 		ahsumpos = (u_char *)(ahdr + 1);
-		ahdr->ah_len = (plen >> 2) + 1; /* plus one for seq# */
+		ahdr->ah_len = (u_int8_t)((plen >> 2) + 1); /* plus one for seq# */
 		ahdr->ah_nxt = ip->ip_p;
 		ahdr->ah_reserve = htons(0);
 		ahdr->ah_spi = spi;
@@ -322,7 +320,7 @@ ah4_output(struct mbuf *m, struct secasvar *sav)
 	 */
 	ip->ip_p = IPPROTO_AH;
 	if (ahlen < (IP_MAXPACKET - ntohs(ip->ip_len))) {
-		ip->ip_len = htons(ntohs(ip->ip_len) + ahlen);
+		ip->ip_len = htons(ntohs(ip->ip_len) + (u_int16_t)ahlen);
 	} else {
 		ipseclog((LOG_ERR, "IPv4 AH output: size exceeds limit\n"));
 		IPSEC_STAT_INCREMENT(ipsecstat.out_inval);
@@ -372,11 +370,11 @@ ah4_output(struct mbuf *m, struct secasvar *sav)
 #endif
 
 /* Calculate AH length */
-int
+size_t
 ah_hdrlen(struct secasvar *sav)
 {
 	const struct ah_algorithm *algo;
-	int plen, ahlen;
+	size_t plen, ahlen;
 
 	algo = ah_algorithm_lookup(sav->alg_auth);
 	if (!algo) {
@@ -395,7 +393,6 @@ ah_hdrlen(struct secasvar *sav)
 	return ahlen;
 }
 
-#if INET6
 /*
  * Fill in the Authentication Header and calculate checksum.
  */
@@ -410,7 +407,7 @@ ah6_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md,
 	u_char *ahsumpos = NULL;
 	size_t plen;    /*AH payload size in bytes*/
 	int error = 0;
-	int ahlen;
+	size_t ahlen;
 	struct ip6_hdr *ip6;
 
 	if (m->m_len < sizeof(struct ip6_hdr)) {
@@ -423,6 +420,8 @@ ah6_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md,
 	if (ahlen == 0) {
 		return 0;
 	}
+
+	VERIFY(ahlen <= UINT16_MAX);
 
 	for (mprev = m; mprev && mprev->m_next != md; mprev = mprev->m_next) {
 		;
@@ -446,7 +445,7 @@ ah6_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md,
 			return ENOBUFS;
 		}
 	}
-	mah->m_len = ahlen;
+	mah->m_len = (int32_t)ahlen;
 	mah->m_next = md;
 	mprev->m_next = mah;
 	m->m_pkthdr.len += ahlen;
@@ -458,8 +457,9 @@ ah6_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md,
 		m_freem(m);
 		return EINVAL;
 	}
+
 	ip6 = mtod(m, struct ip6_hdr *);
-	ip6->ip6_plen = htons(m->m_pkthdr.len - sizeof(struct ip6_hdr));
+	ip6->ip6_plen = htons((u_int16_t)(m->m_pkthdr.len - sizeof(struct ip6_hdr)));
 
 	if ((sav->flags & SADB_X_EXT_OLD) == 0 && sav->replay[0] == NULL) {
 		ipseclog((LOG_DEBUG, "ah6_output: internal error: "
@@ -487,10 +487,11 @@ ah6_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md,
 		struct ah *ahdr = mtod(mah, struct ah *);
 
 		plen = mah->m_len - sizeof(struct ah);
+		VERIFY((plen >> 2) <= UINT8_MAX);
 		ahsumpos = (u_char *)(ahdr + 1);
 		ahdr->ah_nxt = *nexthdrp;
 		*nexthdrp = IPPROTO_AH;
-		ahdr->ah_len = plen >> 2;
+		ahdr->ah_len = (u_int8_t)(plen >> 2);
 		ahdr->ah_reserve = htons(0);
 		ahdr->ah_spi = spi;
 		bzero(ahdr + 1, plen);
@@ -498,10 +499,11 @@ ah6_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md,
 		struct newah *ahdr = mtod(mah, struct newah *);
 
 		plen = mah->m_len - sizeof(struct newah);
+		VERIFY(((plen >> 2) + 1) <= UINT8_MAX);
 		ahsumpos = (u_char *)(ahdr + 1);
 		ahdr->ah_nxt = *nexthdrp;
 		*nexthdrp = IPPROTO_AH;
-		ahdr->ah_len = (plen >> 2) + 1; /* plus one for seq# */
+		ahdr->ah_len = (u_int8_t)((plen >> 2) + 1); /* plus one for seq# */
 		ahdr->ah_reserve = htons(0);
 		ahdr->ah_spi = spi;
 		if (sav->replay[0]->count == ~0) {
@@ -542,9 +544,7 @@ ah6_output(struct mbuf *m, u_char *nexthdrp, struct mbuf *md,
 
 	return error;
 }
-#endif
 
-#if INET
 /*
  * Find the final destination if there is loose/strict source routing option.
  * Returns NULL if there's no source routing options.
@@ -637,4 +637,3 @@ ah4_finaldst(struct mbuf *m)
 	}
 	return NULL;
 }
-#endif

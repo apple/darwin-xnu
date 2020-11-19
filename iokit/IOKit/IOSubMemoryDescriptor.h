@@ -30,6 +30,7 @@
 #define _IOSUBMEMORYDESCRIPTOR_H
 
 #include <IOKit/IOMemoryDescriptor.h>
+#include <libkern/c++/OSPtr.h>
 
 /*! @class IOSubMemoryDescriptor : public IOMemoryDescriptor
  *   @abstract The IOSubMemoryDescriptor object describes a memory area made up of a portion of another IOMemoryDescriptor.
@@ -56,7 +57,7 @@ public:
  *       kIOMemoryDirectionMask (options:direction)	This nibble indicates the I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures.
  *   @result The created IOMemoryDescriptor on success, to be released by the caller, or zero on failure. */
 
-	static IOSubMemoryDescriptor *      withSubRange(IOMemoryDescriptor *of,
+	static OSPtr<IOSubMemoryDescriptor>       withSubRange(IOMemoryDescriptor *of,
 	    IOByteCount offset,
 	    IOByteCount length,
 	    IOOptionBits options);

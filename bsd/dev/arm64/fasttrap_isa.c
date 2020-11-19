@@ -45,7 +45,7 @@ extern dtrace_id_t dtrace_probeid_error;
 /* Solaris proc_t is the struct. Darwin's proc_t is a pointer to it. */
 #define proc_t struct proc /* Steer clear of the Darwin typedef for proc_t */
 
-extern int dtrace_decode_arm64(uint32_t instr);
+extern uint8_t dtrace_decode_arm64(uint32_t instr);
 
 #define IS_ARM64_NOP(x) ((x) == 0xD503201F)
 /* Marker for is-enabled probes */
@@ -236,13 +236,13 @@ fasttrap_return_common(proc_t *p, arm_saved_state_t *regs, user_addr_t pc, user_
 			retire_tp = 0;
 		}
 
-#ifndef CONFIG_EMBEDDED
+#if defined(XNU_TARGET_OS_OSX)
 		if (ISSET(current_proc()->p_lflag, P_LNOATTACH)) {
 			dtrace_probe(dtrace_probeid_error, 0 /* state */, id->fti_probe->ftp_id,
 			    1 /* ndx */, -1 /* offset */, DTRACEFLT_UPRIV);
 #else
 		if (FALSE) {
-#endif
+#endif /* defined(XNU_TARGET_OS_OSX) */
 		} else {
 			dtrace_probe(probe->ftp_id,
 			    pc - id->fti_probe->ftp_faddr,
@@ -933,11 +933,10 @@ fasttrap_pid_probe(arm_saved_state_t *state)
 	dtrace_icookie_t cookie;
 	uint_t is_enabled = 0;
 	int was_simulated, retire_tp = 1;
-	int is_64_bit = is_saved_state64(state);
 
 	uint64_t pc = get_saved_state_pc(state);
 
-	assert(is_64_bit);
+	assert(is_saved_state64(state));
 
 	uthread_t uthread = (uthread_t) get_bsdthread_info(current_thread());
 
@@ -1018,13 +1017,13 @@ fasttrap_pid_probe(arm_saved_state_t *state)
 		for (id = tp->ftt_ids; id != NULL; id = id->fti_next) {
 			fasttrap_probe_t *probe = id->fti_probe;
 
-#ifndef CONFIG_EMBEDDED
+#if defined(XNU_TARGET_OS_OSX)
 			if (ISSET(current_proc()->p_lflag, P_LNOATTACH)) {
 				dtrace_probe(dtrace_probeid_error, 0 /* state */, probe->ftp_id,
 				    1 /* ndx */, -1 /* offset */, DTRACEFLT_UPRIV);
 #else
 			if (FALSE) {
-#endif
+#endif /* defined(XNU_TARGET_OS_OSX) */
 			} else {
 				if (probe->ftp_prov->ftp_provider_type == DTFTP_PROVIDER_ONESHOT) {
 					if (os_atomic_xchg(&probe->ftp_triggered, 1, relaxed)) {

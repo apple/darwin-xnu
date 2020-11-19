@@ -56,6 +56,7 @@
 #include <stdatomic.h>
 
 #include <os/tsd.h>
+#include <TargetConditionals.h>
 
 typedef enum wake_type { WAKE_BROADCAST_ONESEM, WAKE_BROADCAST_PERTHREAD, WAKE_CHAIN, WAKE_HOP } wake_type_t;
 typedef enum my_policy_type { MY_POLICY_REALTIME, MY_POLICY_TIMESHARE, MY_POLICY_FIXEDPRI } my_policy_type_t;
@@ -66,6 +67,8 @@ typedef enum my_policy_type { MY_POLICY_REALTIME, MY_POLICY_TIMESHARE, MY_POLICY
 
 #define CONSTRAINT_NANOS        (20000000ll)    /* 20 ms */
 #define COMPUTATION_NANOS       (10000000ll)    /* 10 ms */
+#define LL_CONSTRAINT_NANOS     ( 2000000ll)    /*  2 ms */
+#define LL_COMPUTATION_NANOS    ( 1000000ll)    /*  1 ms */
 #define RT_CHURN_COMP_NANOS     ( 1000000ll)    /*  1 ms */
 #define TRACEWORTHY_NANOS       (10000000ll)    /* 10 ms */
 #define TRACEWORTHY_NANOS_TEST  ( 2000000ll)    /*  2 ms */
@@ -111,6 +114,9 @@ static uint32_t                 g_rt_churn_count = 0;
 static pthread_t*               g_churn_threads = NULL;
 static pthread_t*               g_rt_churn_threads = NULL;
 
+/* should we skip test if run on non-intel */
+static boolean_t                g_run_on_intel_only = FALSE;
+
 /* Threshold for dropping a 'bad run' tracepoint */
 static uint64_t                 g_traceworthy_latency_ns = TRACEWORTHY_NANOS;
 
@@ -125,6 +131,9 @@ static boolean_t                g_do_all_spin = FALSE;
 
 /* Every thread backgrounds temporarily before parking */
 static boolean_t                g_drop_priority = FALSE;
+
+/* Use low-latency (sub 4ms deadline) realtime threads */
+static boolean_t                g_rt_ll = FALSE;
 
 /* Test whether realtime threads are scheduled on the separate CPUs */
 static boolean_t                g_test_rt = FALSE;
@@ -464,8 +473,13 @@ thread_setup(uint32_t my_id)
 	case MY_POLICY_REALTIME:
 		/* Hard-coded realtime parameters (similar to what Digi uses) */
 		pol.period      = 100000;
-		pol.constraint  = (uint32_t) nanos_to_abs(CONSTRAINT_NANOS);
-		pol.computation = (uint32_t) nanos_to_abs(COMPUTATION_NANOS);
+		if (g_rt_ll) {
+			pol.constraint  = (uint32_t) nanos_to_abs(LL_CONSTRAINT_NANOS);
+			pol.computation = (uint32_t) nanos_to_abs(LL_COMPUTATION_NANOS);
+		} else {
+			pol.constraint  = (uint32_t) nanos_to_abs(CONSTRAINT_NANOS);
+			pol.computation = (uint32_t) nanos_to_abs(COMPUTATION_NANOS);
+		}
 		pol.preemptible = 0;         /* Ignored by OS */
 
 		kr = thread_policy_set(mach_thread_self(), THREAD_TIME_CONSTRAINT_POLICY,
@@ -789,6 +803,19 @@ main(int argc, char **argv)
 	srand((unsigned int)time(NULL));
 
 	mach_timebase_info(&g_mti);
+
+#if TARGET_OS_OSX
+	/* SKIP test if running on arm platform */
+	if (g_run_on_intel_only) {
+		int is_arm = 0;
+		size_t is_arm_size = sizeof(is_arm);
+		ret = sysctlbyname("hw.optional.arm64", &is_arm, &is_arm_size, NULL, 0);
+		if (ret == 0 && is_arm) {
+			printf("Unsupported platform. Skipping test.\n");
+			exit(0);
+		}
+	}
+#endif /* TARGET_OS_OSX */
 
 	size_t ncpu_size = sizeof(g_numcpus);
 	ret = sysctlbyname("hw.ncpu", &g_numcpus, &ncpu_size, NULL, 0);
@@ -1223,7 +1250,8 @@ usage()
 	    "<realtime | timeshare | fixed> <iterations>\n\t\t"
 	    "[--trace <traceworthy latency in ns>] "
 	    "[--verbose] [--spin-one] [--spin-all] [--spin-time <nanos>] [--affinity]\n\t\t"
-	    "[--no-sleep] [--drop-priority] [--churn-pri <pri>] [--churn-count <n>]",
+	    "[--no-sleep] [--drop-priority] [--churn-pri <pri>] [--churn-count <n>]\n\t\t"
+	    "[--rt-churn] [--rt-churn-count <n>] [--rt-ll] [--test-rt] [--test-rt-smt] [--test-rt-avoid0]",
 	    getprogname());
 }
 
@@ -1269,6 +1297,7 @@ parse_args(int argc, char *argv[])
 		{ "rt-churn-count",     required_argument,      NULL,                           OPT_RT_CHURN_COUNT },
 		{ "switched_apptype",   no_argument,            (int*)&g_seen_apptype,          TRUE },
 		{ "spin-one",           no_argument,            (int*)&g_do_one_long_spin,      TRUE },
+		{ "intel-only",         no_argument,            (int*)&g_run_on_intel_only,     TRUE },
 		{ "spin-all",           no_argument,            (int*)&g_do_all_spin,           TRUE },
 		{ "affinity",           no_argument,            (int*)&g_do_affinity,           TRUE },
 		{ "no-sleep",           no_argument,            (int*)&g_do_sleep,              FALSE },
@@ -1277,6 +1306,7 @@ parse_args(int argc, char *argv[])
 		{ "test-rt-smt",        no_argument,            (int*)&g_test_rt_smt,           TRUE },
 		{ "test-rt-avoid0",     no_argument,            (int*)&g_test_rt_avoid0,        TRUE },
 		{ "rt-churn",           no_argument,            (int*)&g_rt_churn,              TRUE },
+		{ "rt-ll",              no_argument,            (int*)&g_rt_ll,                 TRUE },
 		{ "histogram",          no_argument,            (int*)&g_histogram,             TRUE },
 		{ "verbose",            no_argument,            (int*)&g_verbose,               TRUE },
 		{ "help",               no_argument,            NULL,                           'h' },

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -152,19 +152,14 @@ typedef struct swapfile_pager {
  * The list is protected by the "swapfile_pager_lock" lock.
  */
 int swapfile_pager_count = 0;           /* number of pagers */
-queue_head_t swapfile_pager_queue;
-decl_lck_mtx_data(, swapfile_pager_lock);
+queue_head_t swapfile_pager_queue = QUEUE_HEAD_INITIALIZER(swapfile_pager_queue);
+LCK_GRP_DECLARE(swapfile_pager_lck_grp, "swapfile pager");
+LCK_MTX_DECLARE(swapfile_pager_lock, &swapfile_pager_lck_grp);
 
 /*
  * Statistics & counters.
  */
 int swapfile_pager_count_max = 0;
-
-
-lck_grp_t               swapfile_pager_lck_grp;
-lck_grp_attr_t          swapfile_pager_lck_grp_attr;
-lck_attr_t              swapfile_pager_lck_attr;
-
 
 /* internal prototypes */
 swapfile_pager_t swapfile_pager_create(struct vnode *vp);
@@ -191,16 +186,6 @@ int swapfile_pagerdebug = 0;
 #define PAGER_DEBUG(LEVEL, A)
 #endif
 
-
-void
-swapfile_pager_bootstrap(void)
-{
-	lck_grp_attr_setdefault(&swapfile_pager_lck_grp_attr);
-	lck_grp_init(&swapfile_pager_lck_grp, "swapfile pager", &swapfile_pager_lck_grp_attr);
-	lck_attr_setdefault(&swapfile_pager_lck_attr);
-	lck_mtx_init(&swapfile_pager_lock, &swapfile_pager_lck_grp, &swapfile_pager_lck_attr);
-	queue_init(&swapfile_pager_queue);
-}
 
 /*
  * swapfile_pager_init()
@@ -454,7 +439,10 @@ done:
 			upl_abort(upl, 0);
 		} else {
 			boolean_t empty;
-			upl_commit_range(upl, 0, upl->size,
+			assertf(page_aligned(upl->u_offset) && page_aligned(upl->u_size),
+			    "upl %p offset 0x%llx size 0x%x",
+			    upl, upl->u_offset, upl->u_size);
+			upl_commit_range(upl, 0, upl->u_size,
 			    UPL_COMMIT_CS_VALIDATED,
 			    upl_pl, pl_count, &empty);
 		}

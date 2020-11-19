@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 1999-2019 Apple Inc.
+ * Copyright (c) 1999-2020 Apple Inc.
  * Copyright (c) 2006-2007 Robert N. M. Watson
  * All rights reserved.
  *
@@ -74,7 +74,6 @@
 #include <mach/audit_triggers_server.h>
 
 #include <kern/host.h>
-#include <kern/kalloc.h>
 #include <kern/zalloc.h>
 #include <kern/sched_prim.h>
 
@@ -87,6 +86,7 @@
 MALLOC_DEFINE(M_AUDITDATA, "audit_data", "Audit data storage");
 MALLOC_DEFINE(M_AUDITPATH, "audit_path", "Audit path storage");
 MALLOC_DEFINE(M_AUDITTEXT, "audit_text", "Audit text storage");
+KALLOC_HEAP_DEFINE(KHEAP_AUDIT, "Audit", KHEAP_ID_DEFAULT);
 
 /*
  * Audit control settings that are set/read by system calls and are hence
@@ -180,7 +180,8 @@ struct cv               audit_watermark_cv;
  */
 static struct cv        audit_fail_cv;
 
-static zone_t           audit_record_zone;
+static ZONE_DECLARE(audit_record_zone, "audit_zone",
+    sizeof(struct kaudit_record), ZC_NONE);
 
 /*
  * Kernel audit information.  This will store the current audit address
@@ -329,7 +330,6 @@ audit_init(void)
 	audit_kinfo.ai_termid.at_type = AU_IPv4;
 	audit_kinfo.ai_termid.at_addr[0] = INADDR_ANY;
 
-	_audit_lck_grp_init();
 	mtx_init(&audit_mtx, "audit_mtx", NULL, MTX_DEF);
 	KINFO_LOCK_INIT();
 	cv_init(&audit_worker_cv, "audit_worker_cv");
@@ -337,11 +337,6 @@ audit_init(void)
 	cv_init(&audit_watermark_cv, "audit_watermark_cv");
 	cv_init(&audit_fail_cv, "audit_fail_cv");
 
-	audit_record_zone = zinit(sizeof(struct kaudit_record),
-	    AQ_HIWATER * sizeof(struct kaudit_record), 8192, "audit_zone");
-#if CONFIG_MACF
-	audit_mac_init();
-#endif
 	/* Init audit session subsystem. */
 	audit_session_init();
 
@@ -955,6 +950,9 @@ audit_proc_coredump(proc_t proc, char *path, int errcode)
 	 */
 	uthread = curthread();
 	ar = audit_new(AUE_CORE, proc, uthread);
+	if (ar == NULL) {
+		return;
+	}
 	if (path != NULL) {
 		pathp = &ar->k_ar.ar_arg_upath1;
 		*pathp = malloc(MAXPATHLEN, M_AUDITPATH, M_WAITOK);

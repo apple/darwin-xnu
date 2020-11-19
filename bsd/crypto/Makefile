@@ -6,8 +6,8 @@ export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 include $(MakeInc_cmd)
 include $(MakeInc_def)
 
-INSTINC_SUBDIRS = \
-	rc4 \
+EXPINC_SUBDIRS = \
+	entropy \
 
 PRIVATE_DATAFILES = \
 	sha1.h \

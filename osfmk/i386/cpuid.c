@@ -33,6 +33,7 @@
 
 #include <i386/cpu_threads.h>
 #include <i386/cpuid.h>
+#include <i386/machine_routines.h>
 
 int force_tecs_at_idle;
 int tecs_mode_supported;
@@ -212,6 +213,8 @@ static cpuid_cache_descriptor_t intel_cpuid_leaf2_descriptor_table[] = {
 #define INTEL_LEAF2_DESC_NUM (sizeof(intel_cpuid_leaf2_descriptor_table) / \
 	                        sizeof(cpuid_cache_descriptor_t))
 
+boolean_t cpuid_tsx_disabled = false;   /* true if XNU disabled TSX */
+boolean_t cpuid_tsx_supported = false;
 
 static void do_cwas(i386_cpu_info_t *cpuinfo, boolean_t on_slave);
 static void cpuid_do_precpuid_was(void);
@@ -258,13 +261,27 @@ do_cwas(i386_cpu_info_t *cpuinfo, boolean_t on_slave)
 	 * Workaround for reclaiming perf counter 3 due to TSX memory ordering erratum.
 	 * This workaround does not support being forcibly set (since an MSR must be
 	 * enumerated, lest we #GP when forced to access it.)
+	 *
+	 * Note that if disabling TSX is supported, disablement is prefered over forcing
+	 * TSX transactions to abort.
 	 */
-	if (cpuid_wa_required(CPU_INTEL_TSXFA) == CWA_ON) {
+	if (cpuid_wa_required(CPU_INTEL_TSXDA) == CWA_ON) {
+		/* This must be executed on all logical processors */
+		wrmsr64(MSR_IA32_TSX_CTRL, MSR_IA32_TSXCTRL_TSX_CPU_CLEAR | MSR_IA32_TSXCTRL_RTM_DISABLE);
+	} else if (cpuid_wa_required(CPU_INTEL_TSXFA) == CWA_ON) {
 		/* This must be executed on all logical processors */
 		wrmsr64(MSR_IA32_TSX_FORCE_ABORT,
 		    rdmsr64(MSR_IA32_TSX_FORCE_ABORT) | MSR_IA32_TSXFA_RTM_FORCE_ABORT);
 	}
 
+	if (((wa_reqd = cpuid_wa_required(CPU_INTEL_SRBDS)) & CWA_ON) != 0 &&
+	    ((wa_reqd & CWA_FORCE_ON) == CWA_ON ||
+	    (cpuinfo->cpuid_leaf7_extfeatures & CPUID_LEAF7_EXTFEATURE_SRBDS_CTRL) != 0)) {
+		/* This must be executed on all logical processors */
+		uint64_t mcuoptctrl = rdmsr64(MSR_IA32_MCU_OPT_CTRL);
+		mcuoptctrl |= MSR_IA32_MCUOPTCTRL_RNGDS_MITG_DIS;
+		wrmsr64(MSR_IA32_MCU_OPT_CTRL, mcuoptctrl);
+	}
 
 	if (on_slave) {
 		return;
@@ -279,7 +296,7 @@ do_cwas(i386_cpu_info_t *cpuinfo, boolean_t on_slave)
 			force_tecs_at_idle = 1;
 		}
 
-	/*FALLTHROUGH*/
+		OS_FALLTHROUGH;
 	case CWA_ON:
 		tecs_mode_supported = 1;
 		break;
@@ -326,7 +343,7 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 		if ((cpuid_result[j] >> 31) == 1) {     /* bit31 is validity */
 			continue;
 		}
-		((uint32_t *) info_p->cache_info)[j] = cpuid_result[j];
+		((uint32_t *)(void *)info_p->cache_info)[j] = cpuid_result[j];
 	}
 	/* first byte gives number of cpuid calls to get all descriptors */
 	for (i = 1; i < info_p->cache_info[0]; i++) {
@@ -338,7 +355,7 @@ cpuid_set_cache_info( i386_cpu_info_t * info_p )
 			if ((cpuid_result[j] >> 31) == 1) {
 				continue;
 			}
-			((uint32_t *) info_p->cache_info)[4 * i + j] =
+			((uint32_t *)(void *)info_p->cache_info)[4 * i + j] =
 			    cpuid_result[j];
 		}
 	}
@@ -811,6 +828,8 @@ cpuid_set_generic_info(i386_cpu_info_t *info_p)
 		info_p->cpuid_leaf7_features = quad(reg[ecx], reg[ebx]);
 		info_p->cpuid_leaf7_extfeatures = reg[edx];
 
+		cpuid_tsx_supported = (reg[ebx] & (CPUID_LEAF7_FEATURE_HLE | CPUID_LEAF7_FEATURE_RTM)) != 0;
+
 		DBG(" Feature Leaf7:\n");
 		DBG("  EBX           : 0x%x\n", reg[ebx]);
 		DBG("  ECX           : 0x%x\n", reg[ecx]);
@@ -882,6 +901,11 @@ cpuid_set_cpufamily(i386_cpu_info_t *info_p)
 		case CPUID_MODEL_KABYLAKE_DT:
 			cpufamily = CPUFAMILY_INTEL_KABYLAKE;
 			break;
+		case CPUID_MODEL_ICELAKE:
+		case CPUID_MODEL_ICELAKE_H:
+		case CPUID_MODEL_ICELAKE_DT:
+			cpufamily = CPUFAMILY_INTEL_ICELAKE;
+			break;
 		}
 		break;
 	}
@@ -938,6 +962,9 @@ cpuid_set_info(void)
 	 * (which determines whether SMT/Hyperthreading is active).
 	 */
 
+	/*
+	 * Not all VMMs emulate MSR_CORE_THREAD_COUNT (0x35).
+	 */
 	if (0 != (info_p->cpuid_features & CPUID_FEATURE_VMM) &&
 	    PE_parse_boot_argn("-nomsr35h", NULL, 0)) {
 		info_p->core_count = 1;
@@ -951,6 +978,11 @@ cpuid_set_info(void)
 			info_p->thread_count = info_p->cpuid_logical_per_package;
 			break;
 		case CPUFAMILY_INTEL_WESTMERE: {
+			/*
+			 * This should be the same as Nehalem but an A0 silicon bug returns
+			 * invalid data in the top 12 bits. Hence, we use only bits [19..16]
+			 * rather than [31..16] for core count - which actually can't exceed 8.
+			 */
 			uint64_t msr = rdmsr64(MSR_CORE_THREAD_COUNT);
 			if (0 == msr) {
 				/* Provide a non-zero default for some VMMs */
@@ -982,6 +1014,9 @@ cpuid_set_info(void)
 	DBG("    cpu_subtype: 0x%08x\n", info_p->cpuid_cpu_subtype);
 
 	info_p->cpuid_model_string = ""; /* deprecated */
+
+	/* Init CPU LBRs */
+	i386_lbr_init(info_p, true);
 
 	do_cwas(info_p, FALSE);
 }
@@ -1302,13 +1337,42 @@ cpuid_leaf7_extfeatures(void)
 	return cpuid_info()->cpuid_leaf7_extfeatures;
 }
 
+const char *
+cpuid_vmm_family_string(void)
+{
+	switch (cpuid_vmm_info()->cpuid_vmm_family) {
+	case CPUID_VMM_FAMILY_NONE:
+		return "None";
+
+	case CPUID_VMM_FAMILY_VMWARE:
+		return "VMWare";
+
+	case CPUID_VMM_FAMILY_PARALLELS:
+		return "Parallels";
+
+	case CPUID_VMM_FAMILY_HYVE:
+		return "xHyve";
+
+	case CPUID_VMM_FAMILY_HVF:
+		return "HVF";
+
+	case CPUID_VMM_FAMILY_KVM:
+		return "KVM";
+
+	case CPUID_VMM_FAMILY_UNKNOWN:
+	/*FALLTHROUGH*/
+	default:
+		return "Unknown VMM";
+	}
+}
+
 static i386_vmm_info_t  *_cpuid_vmm_infop = NULL;
 static i386_vmm_info_t  _cpuid_vmm_info;
 
 static void
 cpuid_init_vmm_info(i386_vmm_info_t *info_p)
 {
-	uint32_t        reg[4];
+	uint32_t        reg[4], maxbasic_regs[4];
 	uint32_t        max_vmm_leaf;
 
 	bzero(info_p, sizeof(*info_p));
@@ -1319,8 +1383,27 @@ cpuid_init_vmm_info(i386_vmm_info_t *info_p)
 
 	DBG("cpuid_init_vmm_info(%p)\n", info_p);
 
+	/*
+	 * Get the highest basic leaf value, then save the cpuid details for that leaf
+	 * for comparison with the [ostensible] VMM leaf.
+	 */
+	cpuid_fn(0, reg);
+	cpuid_fn(reg[eax], maxbasic_regs);
+
 	/* do cpuid 0x40000000 to get VMM vendor */
 	cpuid_fn(0x40000000, reg);
+
+	/*
+	 * If leaf 0x40000000 is non-existent, cpuid will return the values as
+	 * if the highest basic leaf was requested, so compare to those values
+	 * we just retrieved to see if no vmm is present.
+	 */
+	if (bcmp(reg, maxbasic_regs, sizeof(reg)) == 0) {
+		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_NONE;
+		DBG(" vmm_vendor          : NONE\n");
+		return;
+	}
+
 	max_vmm_leaf = reg[eax];
 	bcopy((char *)&reg[ebx], &info_p->cpuid_vmm_vendor[0], 4);
 	bcopy((char *)&reg[ecx], &info_p->cpuid_vmm_vendor[4], 4);
@@ -1330,9 +1413,18 @@ cpuid_init_vmm_info(i386_vmm_info_t *info_p)
 	if (0 == strcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_VMWARE)) {
 		/* VMware identification string: kb.vmware.com/kb/1009458 */
 		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_VMWARE;
-	} else if (0 == strcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_PARALLELS)) {
+	} else if (0 == bcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_PARALLELS, 12)) {
 		/* Parallels identification string */
 		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_PARALLELS;
+	} else if (0 == bcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_HYVE, 12)) {
+		/* bhyve/xhyve identification string */
+		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_HYVE;
+	} else if (0 == bcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_HVF, 12)) {
+		/* HVF identification string */
+		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_HVF;
+	} else if (0 == bcmp(info_p->cpuid_vmm_vendor, CPUID_VMM_ID_KVM, 12)) {
+		/* KVM identification string */
+		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_KVM;
 	} else {
 		info_p->cpuid_vmm_family = CPUID_VMM_FAMILY_UNKNOWN;
 	}
@@ -1380,6 +1472,7 @@ cpuid_wa_required(cpu_wa_e wa)
 	static uint64_t bootarg_cpu_wa_enables = 0;
 	static uint64_t bootarg_cpu_wa_disables = 0;
 	static int bootargs_overrides_processed = 0;
+	uint32_t        reg[4];
 
 	if (!bootargs_overrides_processed) {
 		if (!PE_parse_boot_argn("cwae", &bootarg_cpu_wa_enables, sizeof(bootarg_cpu_wa_enables))) {
@@ -1426,6 +1519,11 @@ cpuid_wa_required(cpu_wa_e wa)
 
 	case CPU_INTEL_TSXFA:
 		/*
+		 * Note that if TSX was disabled in cpuid_do_precpuid_was(), the cached cpuid
+		 * info will indicate that RTM is *not* supported and this workaround will not
+		 * be enabled.
+		 */
+		/*
 		 * Otherwise, if the CPU supports both TSX(HLE) and FORCE_ABORT, return that
 		 * the workaround should be enabled.
 		 */
@@ -1435,6 +1533,45 @@ cpuid_wa_required(cpu_wa_e wa)
 		}
 		break;
 
+	case CPU_INTEL_TSXDA:
+		/*
+		 * Since this workaround might be requested before cpuid_set_info() is complete,
+		 * we need to invoke cpuid directly when looking for the required bits.
+		 */
+		cpuid_fn(0x7, reg);
+		if (reg[edx] & CPUID_LEAF7_EXTFEATURE_ACAPMSR) {
+			uint64_t archcap_msr = rdmsr64(MSR_IA32_ARCH_CAPABILITIES);
+			/*
+			 * If this CPU supports TSX (HLE being the proxy for TSX detection) AND it does
+			 * not include a hardware fix for TAA and it supports the TSX_CTRL MSR, disable TSX entirely.
+			 * (Note this can be overridden (above) if the cwad boot-arg's value has bit 2 set.)
+			 */
+			if ((reg[ebx] & CPUID_LEAF7_FEATURE_HLE) != 0 &&
+			    (archcap_msr & (MSR_IA32_ARCH_CAPABILITIES_TAA_NO | MSR_IA32_ARCH_CAPABILITIES_TSX_CTRL))
+			    == MSR_IA32_ARCH_CAPABILITIES_TSX_CTRL) {
+				return CWA_ON;
+			}
+		}
+		break;
+
+	case CPU_INTEL_SRBDS:
+		/*
+		 * SRBDS mitigations are enabled by default.  CWA_ON returned here indicates
+		 * the caller should disable the mitigation.  Mitigations should be disabled
+		 * at least for CPUs that advertise MDS_NO *and* (either TAA_NO is set OR TSX
+		 * has been disabled).
+		 */
+		if ((info_p->cpuid_leaf7_extfeatures & CPUID_LEAF7_EXTFEATURE_SRBDS_CTRL) != 0) {
+			if ((info_p->cpuid_leaf7_extfeatures & CPUID_LEAF7_EXTFEATURE_ACAPMSR) != 0) {
+				uint64_t archcap_msr = rdmsr64(MSR_IA32_ARCH_CAPABILITIES);
+				if ((archcap_msr & MSR_IA32_ARCH_CAPABILITIES_MDS_NO) != 0 &&
+				    ((archcap_msr & MSR_IA32_ARCH_CAPABILITIES_TAA_NO) != 0 ||
+				    cpuid_tsx_disabled)) {
+					return CWA_ON;
+				}
+			}
+		}
+		break;
 
 	default:
 		break;
@@ -1452,4 +1589,10 @@ cpuid_do_precpuid_was(void)
 	 * that data as well.
 	 */
 
+	/* Note the TSX disablement, we do not support force-on since it depends on MSRs being present */
+	if (cpuid_wa_required(CPU_INTEL_TSXDA) == CWA_ON) {
+		/* This must be executed on all logical processors */
+		wrmsr64(MSR_IA32_TSX_CTRL, MSR_IA32_TSXCTRL_TSX_CPU_CLEAR | MSR_IA32_TSXCTRL_RTM_DISABLE);
+		cpuid_tsx_disabled = true;
+	}
 }

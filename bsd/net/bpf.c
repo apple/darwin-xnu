@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -132,10 +132,6 @@
 #include <kern/thread_call.h>
 #include <libkern/section_keywords.h>
 
-#if CONFIG_MACF_NET
-#include <security/mac_framework.h>
-#endif /* MAC_NET */
-
 #include <os/log.h>
 
 extern int tvtohz(struct timeval *);
@@ -173,11 +169,11 @@ SYSCTL_UINT(_debug, OID_AUTO, bpf_maxdevices, CTLFLAG_RW | CTLFLAG_LOCKED,
  * For OS X is off by default so process need to use the ioctl BPF_WANT_PKTAP
  * explicitly to be able to use DLT_PKTAP.
  */
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 static unsigned int bpf_wantpktap = 1;
-#else
+#else /* XNU_TARGET_OS_OSX */
 static unsigned int bpf_wantpktap = 0;
-#endif
+#endif /* XNU_TARGET_OS_OSX */
 SYSCTL_UINT(_debug, OID_AUTO, bpf_wantpktap, CTLFLAG_RW | CTLFLAG_LOCKED,
     &bpf_wantpktap, 0, "");
 
@@ -253,7 +249,7 @@ select_fcn_t        bpfselect;
 
 /* Darwin's cdevsw struct differs slightly from BSDs */
 #define CDEV_MAJOR 23
-static struct cdevsw bpf_cdevsw = {
+static const struct cdevsw bpf_cdevsw = {
 	.d_open       = bpfopen,
 	.d_close      = bpfclose,
 	.d_read       = bpfread,
@@ -851,10 +847,6 @@ bpfopen(dev_t dev, int flags, __unused int fmt,
 	d->bd_opened_by = p;
 	uuid_generate(d->bd_uuid);
 
-#if CONFIG_MACF_NET
-	mac_bpfdesc_label_init(d);
-	mac_bpfdesc_label_associate(kauth_cred_get(), d);
-#endif
 	bpf_dtab[minor(dev)] = d; /* Mark opened */
 	lck_mtx_unlock(bpf_mlock);
 
@@ -952,9 +944,6 @@ bpfclose(dev_t dev, __unused int flags, __unused int fmt,
 		bpf_detachd(d, 1);
 	}
 	selthreadclear(&d->bd_sel);
-#if CONFIG_MACF_NET
-	mac_bpfdesc_label_destroy(d);
-#endif
 	thread_call_free(d->bd_thread_call);
 
 	while (d->bd_hbuf_read != 0) {
@@ -1427,10 +1416,6 @@ bpfwrite(dev_t dev, struct uio *uio, __unused int ioflag)
 		m_freem(m);
 		return EMSGSIZE;
 	}
-
-#if CONFIG_MACF_NET
-	mac_mbuf_label_associate_bpfdesc(d, m);
-#endif
 
 	bpf_set_packet_service_class(m, d->bd_traffic_class);
 
@@ -2799,11 +2784,6 @@ bpf_tap_imp(
 			}
 		}
 		if (slen != 0) {
-#if CONFIG_MACF_NET
-			if (mac_bpfdesc_check_receive(d, bp->bif_ifp) != 0) {
-				continue;
-			}
-#endif
 			catchpacket(d, bpf_pkt, slen, outbound);
 		}
 		bpf_pkt = bpf_pkt_saved;
@@ -3716,20 +3696,6 @@ bpf_init(__unused void *unused)
 
 #ifndef __APPLE__
 SYSINIT(bpfdev, SI_SUB_DRIVERS, SI_ORDER_MIDDLE + CDEV_MAJOR, bpf_drvinit, NULL);
-#endif
-
-#if CONFIG_MACF_NET
-struct label *
-mac_bpfdesc_label_get(struct bpf_d *d)
-{
-	return d->bd_label;
-}
-
-void
-mac_bpfdesc_label_set(struct bpf_d *d, struct label *label)
-{
-	d->bd_label = label;
-}
 #endif
 
 static int

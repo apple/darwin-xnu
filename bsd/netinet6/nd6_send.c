@@ -100,8 +100,8 @@ sysctl_cga_parameters SYSCTL_HANDLER_ARGS
 	}
 
 	if (req->newlen > SYSCTL_CGA_PARAMETERS_BUFFER_SIZE) {
-		log(LOG_ERR, "%s: input buffer size error [len=%u]\n", __func__,
-		    req->newlen);
+		log(LOG_ERR, "%s: input buffer size error [len=%zu]\n",
+		    __func__, req->newlen);
 		return EINVAL;
 	}
 

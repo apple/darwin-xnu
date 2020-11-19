@@ -275,6 +275,26 @@ public:
 		OSArray  * propertyKeys,
 		OSArray ** properties);
 
+   /*!
+    * @brief       Reduce power saving modes in the system in order to provide decreased latency
+	*			   to hardware DMA requests.
+    * @discussion  When the system enters lower power states DMA access to memory may be affected.
+	*			   The best way by far to handle this is to change how you schedule your time-critical DMA operations in
+	*			   your driver such that an occasional delay will not affect the proper functioning of your device.
+	*			   However, if this is not possible, your driver can inform power management when a time-critical transfer
+	*			   begins and ends so that the system will not enter the lowest power states during that time. To do this,
+	*			   pass a value to requireMaxBusStall that informs power management of the maximum memory access latency in
+	*			   nanoseconds that can be tolerated by the driver. This value is hardware dependent and is related to the
+	*			   amount of buffering available in the hardware.
+	*			   Supported values are given by the kIOMaxBusStall* enum in IOTypes.h
+	*			   Pass the largest value possible that works for your device. This will minimize power
+	*			   consumption and maximize battery life by still allowing some level of CPU power management.
+    * @param       maxBusStall A value from the kIOMaxBusStall* enum in IOTypes.h
+    * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+    */
+	virtual kern_return_t
+	RequireMaxBusStall(
+		uint64_t maxBusStall);
 
 	/*! @function IOCreatePropertyMatchingDictionary
 	 *   @abstract Construct a matching dictionary for property matching.
@@ -323,6 +343,12 @@ public:
 	 */
 	static OSDictionary *
 	CreateNameMatchingDictionary(const char * serviceName, OSDictionary * matching) LOCALONLY;
+
+
+private:
+	virtual void
+	Stop_async(
+		IOService          * provider) LOCAL;
 };
 
 #endif /* ! _IOKIT_UIOSERVICE_H */

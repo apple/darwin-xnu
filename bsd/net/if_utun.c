@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -127,6 +127,7 @@ struct utun_pcb {
 };
 
 /* Kernel Control functions */
+static errno_t  utun_ctl_setup(u_int32_t *unit, void **unitinfo);
 static errno_t  utun_ctl_bind(kern_ctl_ref kctlref, struct sockaddr_ctl *sac,
     void **unitinfo);
 static errno_t  utun_ctl_connect(kern_ctl_ref kctlref, struct sockaddr_ctl *sac,
@@ -251,11 +252,8 @@ static lck_mtx_t utun_lock;
 
 TAILQ_HEAD(utun_list, utun_pcb) utun_head;
 
-#define UTUN_PCB_ZONE_MAX               32
-#define UTUN_PCB_ZONE_NAME              "net.if_utun"
-
-static unsigned int utun_pcb_size;              /* size of zone element */
-static struct zone *utun_pcb_zone;              /* zone for utun_pcb */
+static ZONE_DECLARE(utun_pcb_zone, "net.if_utun",
+    sizeof(struct utun_pcb), ZC_ZFREE_CLEARMEM);
 
 #if UTUN_NEXUS
 
@@ -413,7 +411,7 @@ utun_netif_sync_tx(kern_nexus_provider_t nxprov, kern_nexus_t nexus,
 		VERIFY(tx_buf != NULL);
 
 		/* tx_baddr is the absolute buffer address */
-		uint8_t *tx_baddr = kern_buflet_get_object_address(tx_buf);
+		uint8_t *tx_baddr = kern_buflet_get_data_address(tx_buf);
 		VERIFY(tx_baddr != 0);
 
 		bpf_tap_packet_out(pcb->utun_ifp, DLT_RAW, tx_ph, NULL, 0);
@@ -651,7 +649,7 @@ utun_netif_sync_rx(kern_nexus_provider_t nxprov, kern_nexus_t nexus,
 		// Fillout rx packet
 		kern_buflet_t rx_buf = kern_packet_get_next_buflet(rx_ph, NULL);
 		VERIFY(rx_buf != NULL);
-		void *rx_baddr = kern_buflet_get_object_address(rx_buf);
+		void *rx_baddr = kern_buflet_get_data_address(rx_buf);
 		VERIFY(rx_baddr != NULL);
 
 		// Copy-in data from mbuf to buflet
@@ -737,7 +735,7 @@ utun_netif_sync_rx(kern_nexus_provider_t nxprov, kern_nexus_t nexus,
 
 		kern_buflet_t tx_buf = kern_packet_get_next_buflet(tx_ph, NULL);
 		VERIFY(tx_buf != NULL);
-		uint8_t *tx_baddr = kern_buflet_get_object_address(tx_buf);
+		uint8_t *tx_baddr = kern_buflet_get_data_address(tx_buf);
 		VERIFY(tx_baddr != 0);
 		tx_baddr += kern_buflet_get_data_offset(tx_buf);
 
@@ -763,7 +761,7 @@ utun_netif_sync_rx(kern_nexus_provider_t nxprov, kern_nexus_t nexus,
 		// Fillout rx packet
 		kern_buflet_t rx_buf = kern_packet_get_next_buflet(rx_ph, NULL);
 		VERIFY(rx_buf != NULL);
-		void *rx_baddr = kern_buflet_get_object_address(rx_buf);
+		void *rx_baddr = kern_buflet_get_data_address(rx_buf);
 		VERIFY(rx_baddr != NULL);
 
 		// Copy-in data from tx to rx
@@ -906,6 +904,7 @@ utun_nexus_ifattach(struct utun_pcb *pcb,
 	net_init.nxneti_eparams = init_params;
 	net_init.nxneti_lladdr = NULL;
 	net_init.nxneti_prepare = utun_netif_prepare;
+	net_init.nxneti_rx_pbufpool = pcb->utun_netif_pp;
 	net_init.nxneti_tx_pbufpool = pcb->utun_netif_pp;
 	err = kern_nexus_controller_alloc_net_provider_instance(controller,
 	    pcb->utun_nx.if_provider,
@@ -1036,6 +1035,13 @@ utun_create_fs_provider_and_instance(struct utun_pcb *pcb,
 	VERIFY(err == 0);
 	uint64_t rx_ring_size = pcb->utun_rx_fsw_ring_size;
 	err = kern_nexus_attr_set(attr, NEXUS_ATTR_RX_SLOTS, rx_ring_size);
+	VERIFY(err == 0);
+	/*
+	 * Configure flowswitch to use super-packet (multi-buflet).
+	 * This allows flowswitch to perform intra-stack packet aggregation.
+	 */
+	err = kern_nexus_attr_set(attr, NEXUS_ATTR_MAX_FRAGS,
+	    sk_fsw_rx_agg_tcp ? NX_PBUF_FRAGS_MAX : 1);
 	VERIFY(err == 0);
 
 	snprintf((char *)provider_name, sizeof(provider_name),
@@ -1391,15 +1397,6 @@ utun_register_control(void)
 	struct kern_ctl_reg kern_ctl;
 	errno_t result = 0;
 
-	utun_pcb_size = sizeof(struct utun_pcb);
-	utun_pcb_zone = zinit(utun_pcb_size,
-	    UTUN_PCB_ZONE_MAX * utun_pcb_size,
-	    0, UTUN_PCB_ZONE_NAME);
-	if (utun_pcb_zone == NULL) {
-		os_log_error(OS_LOG_DEFAULT, "utun_register_control - zinit(utun_pcb) failed");
-		return ENOMEM;
-	}
-
 #if UTUN_NEXUS
 	utun_register_nexus();
 #endif // UTUN_NEXUS
@@ -1409,9 +1406,10 @@ utun_register_control(void)
 	bzero(&kern_ctl, sizeof(kern_ctl));
 	strlcpy(kern_ctl.ctl_name, UTUN_CONTROL_NAME, sizeof(kern_ctl.ctl_name));
 	kern_ctl.ctl_name[sizeof(kern_ctl.ctl_name) - 1] = 0;
-	kern_ctl.ctl_flags = CTL_FLAG_PRIVILEGED | CTL_FLAG_REG_EXTENDED; /* Require root */
+	kern_ctl.ctl_flags = CTL_FLAG_PRIVILEGED | CTL_FLAG_REG_SETUP | CTL_FLAG_REG_EXTENDED; /* Require root */
 	kern_ctl.ctl_sendsize = 512 * 1024;
 	kern_ctl.ctl_recvsize = 512 * 1024;
+	kern_ctl.ctl_setup = utun_ctl_setup;
 	kern_ctl.ctl_bind = utun_ctl_bind;
 	kern_ctl.ctl_connect = utun_ctl_connect;
 	kern_ctl.ctl_disconnect = utun_ctl_disconnect;
@@ -1456,21 +1454,110 @@ utun_register_control(void)
 
 /* Kernel control functions */
 
-static inline void
-utun_free_pcb(struct utun_pcb *pcb, bool in_list)
+static inline int
+utun_find_by_unit(u_int32_t unit)
 {
-#ifdef UTUN_NEXUS
+	struct utun_pcb *next_pcb = NULL;
+	int found = 0;
+
+	TAILQ_FOREACH(next_pcb, &utun_head, utun_chain) {
+		if (next_pcb->utun_unit == unit) {
+			found = 1;
+			break;
+		}
+	}
+
+	return found;
+}
+
+static inline void
+utun_free_pcb(struct utun_pcb *pcb, bool locked)
+{
+#if UTUN_NEXUS
 	mbuf_freem_list(pcb->utun_input_chain);
 	pcb->utun_input_chain_count = 0;
 	lck_mtx_destroy(&pcb->utun_input_chain_lock, utun_lck_grp);
 #endif // UTUN_NEXUS
 	lck_rw_destroy(&pcb->utun_pcb_lock, utun_lck_grp);
-	if (in_list) {
+	if (!locked) {
 		lck_mtx_lock(&utun_lock);
-		TAILQ_REMOVE(&utun_head, pcb, utun_chain);
+	}
+	TAILQ_REMOVE(&utun_head, pcb, utun_chain);
+	if (!locked) {
 		lck_mtx_unlock(&utun_lock);
 	}
 	zfree(utun_pcb_zone, pcb);
+}
+
+static errno_t
+utun_ctl_setup(u_int32_t *unit, void **unitinfo)
+{
+	if (unit == NULL || unitinfo == NULL) {
+		return EINVAL;
+	}
+
+	lck_mtx_lock(&utun_lock);
+
+	/* Find next available unit */
+	if (*unit == 0) {
+		*unit = 1;
+		while (*unit != ctl_maxunit) {
+			if (utun_find_by_unit(*unit)) {
+				(*unit)++;
+			} else {
+				break;
+			}
+		}
+		if (*unit == ctl_maxunit) {
+			lck_mtx_unlock(&utun_lock);
+			return EBUSY;
+		}
+	} else if (utun_find_by_unit(*unit)) {
+		lck_mtx_unlock(&utun_lock);
+		return EBUSY;
+	}
+
+	/* Find some open interface id */
+	u_int32_t chosen_unique_id = 1;
+	struct utun_pcb *next_pcb = TAILQ_LAST(&utun_head, utun_list);
+	if (next_pcb != NULL) {
+		/* List was not empty, add one to the last item */
+		chosen_unique_id = next_pcb->utun_unique_id + 1;
+		next_pcb = NULL;
+
+		/*
+		 * If this wrapped the id number, start looking at
+		 * the front of the list for an unused id.
+		 */
+		if (chosen_unique_id == 0) {
+			/* Find the next unused ID */
+			chosen_unique_id = 1;
+			TAILQ_FOREACH(next_pcb, &utun_head, utun_chain) {
+				if (next_pcb->utun_unique_id > chosen_unique_id) {
+					/* We found a gap */
+					break;
+				}
+
+				chosen_unique_id = next_pcb->utun_unique_id + 1;
+			}
+		}
+	}
+
+	struct utun_pcb *pcb = zalloc_flags(utun_pcb_zone, Z_WAITOK | Z_ZERO);
+
+	*unitinfo = pcb;
+	pcb->utun_unit = *unit;
+	pcb->utun_unique_id = chosen_unique_id;
+
+	if (next_pcb != NULL) {
+		TAILQ_INSERT_BEFORE(next_pcb, pcb, utun_chain);
+	} else {
+		TAILQ_INSERT_TAIL(&utun_head, pcb, utun_chain);
+	}
+
+	lck_mtx_unlock(&utun_lock);
+
+	return 0;
 }
 
 static errno_t
@@ -1478,10 +1565,16 @@ utun_ctl_bind(kern_ctl_ref kctlref,
     struct sockaddr_ctl *sac,
     void **unitinfo)
 {
-	struct utun_pcb *pcb = zalloc(utun_pcb_zone);
-	memset(pcb, 0, sizeof(*pcb));
+	if (*unitinfo == NULL) {
+		u_int32_t unit = 0;
+		(void)utun_ctl_setup(&unit, unitinfo);
+	}
 
-	*unitinfo = pcb;
+	struct utun_pcb *pcb = (struct utun_pcb *)*unitinfo;
+	if (pcb == NULL) {
+		return EINVAL;
+	}
+
 	pcb->utun_ctlref = kctlref;
 	pcb->utun_unit = sac->sc_unit;
 	pcb->utun_max_pending_packets = 1;
@@ -1516,47 +1609,17 @@ utun_ctl_connect(kern_ctl_ref kctlref,
 	}
 
 	struct utun_pcb *pcb = *unitinfo;
-
-	lck_mtx_lock(&utun_lock);
-
-	/* Find some open interface id */
-	u_int32_t chosen_unique_id = 1;
-	struct utun_pcb *next_pcb = TAILQ_LAST(&utun_head, utun_list);
-	if (next_pcb != NULL) {
-		/* List was not empty, add one to the last item */
-		chosen_unique_id = next_pcb->utun_unique_id + 1;
-		next_pcb = NULL;
-
-		/*
-		 * If this wrapped the id number, start looking at
-		 * the front of the list for an unused id.
-		 */
-		if (chosen_unique_id == 0) {
-			/* Find the next unused ID */
-			chosen_unique_id = 1;
-			TAILQ_FOREACH(next_pcb, &utun_head, utun_chain) {
-				if (next_pcb->utun_unique_id > chosen_unique_id) {
-					/* We found a gap */
-					break;
-				}
-
-				chosen_unique_id = next_pcb->utun_unique_id + 1;
-			}
-		}
+	if (pcb == NULL) {
+		return EINVAL;
 	}
 
-	pcb->utun_unique_id = chosen_unique_id;
-
-	if (next_pcb != NULL) {
-		TAILQ_INSERT_BEFORE(next_pcb, pcb, utun_chain);
-	} else {
-		TAILQ_INSERT_TAIL(&utun_head, pcb, utun_chain);
+	/* Handle case where utun_ctl_setup() was called, but ipsec_ctl_bind() was not */
+	if (pcb->utun_ctlref == NULL) {
+		(void)utun_ctl_bind(kctlref, sac, unitinfo);
 	}
-	lck_mtx_unlock(&utun_lock);
 
 	snprintf(pcb->utun_if_xname, sizeof(pcb->utun_if_xname), "utun%d", pcb->utun_unit - 1);
 	snprintf(pcb->utun_unique_name, sizeof(pcb->utun_unique_name), "utunid%d", pcb->utun_unique_id - 1);
-	os_log(OS_LOG_DEFAULT, "utun_ctl_connect: creating interface %s (id %s)\n", pcb->utun_if_xname, pcb->utun_unique_name);
 
 	/* Create the interface */
 	bzero(&utun_init, sizeof(utun_init));
@@ -1585,14 +1648,14 @@ utun_ctl_connect(kern_ctl_ref kctlref,
 	utun_init.del_proto = utun_del_proto;
 	utun_init.softc = pcb;
 	utun_init.ioctl = utun_ioctl;
-	utun_init.detach = utun_detached;
+	utun_init.free = utun_detached;
 
 #if UTUN_NEXUS
 	if (pcb->utun_use_netif) {
 		result = utun_nexus_ifattach(pcb, &utun_init, &pcb->utun_ifp);
 		if (result != 0) {
 			os_log_error(OS_LOG_DEFAULT, "utun_ctl_connect - utun_nexus_ifattach failed: %d\n", result);
-			utun_free_pcb(pcb, true);
+			utun_free_pcb(pcb, false);
 			*unitinfo = NULL;
 			return result;
 		}
@@ -1601,6 +1664,8 @@ utun_ctl_connect(kern_ctl_ref kctlref,
 			result = utun_flowswitch_attach(pcb);
 			if (result != 0) {
 				os_log_error(OS_LOG_DEFAULT, "utun_ctl_connect - utun_flowswitch_attach failed: %d\n", result);
+				// Do not call utun_free_pcb(). We will be attached already, and will be freed later
+				// in utun_detached().
 				*unitinfo = NULL;
 				return result;
 			}
@@ -1618,7 +1683,7 @@ utun_ctl_connect(kern_ctl_ref kctlref,
 		result = ifnet_allocate_extended(&utun_init, &pcb->utun_ifp);
 		if (result != 0) {
 			os_log_error(OS_LOG_DEFAULT, "utun_ctl_connect - ifnet_allocate failed: %d\n", result);
-			utun_free_pcb(pcb, true);
+			utun_free_pcb(pcb, false);
 			*unitinfo = NULL;
 			return result;
 		}
@@ -1643,7 +1708,7 @@ utun_ctl_connect(kern_ctl_ref kctlref,
 			os_log_error(OS_LOG_DEFAULT, "utun_ctl_connect - ifnet_attach failed: %d\n", result);
 			/* Release reference now since attach failed */
 			ifnet_release(pcb->utun_ifp);
-			utun_free_pcb(pcb, true);
+			utun_free_pcb(pcb, false);
 			*unitinfo = NULL;
 			return result;
 		}
@@ -1965,27 +2030,14 @@ utun_ctl_setopt(__unused kern_ctl_ref kctlref,
 	case UTUN_OPT_FLAGS:
 		if (len != sizeof(u_int32_t)) {
 			result = EMSGSIZE;
-		} else {
-			if (pcb->utun_ifp == NULL) {
-				// Only can set after connecting
-				result = EINVAL;
-				break;
-			}
-#if UTUN_NEXUS
-			if (pcb->utun_use_netif) {
-				pcb->utun_flags = *(u_int32_t *)data;
-			} else
-#endif // UTUN_NEXUS
-			{
-				u_int32_t old_flags = pcb->utun_flags;
-				pcb->utun_flags = *(u_int32_t *)data;
-				if (((old_flags ^ pcb->utun_flags) & UTUN_FLAGS_ENABLE_PROC_UUID)) {
-					// If UTUN_FLAGS_ENABLE_PROC_UUID flag changed, update bpf
-					bpfdetach(pcb->utun_ifp);
-					bpfattach(pcb->utun_ifp, DLT_NULL, UTUN_HEADER_SIZE(pcb));
-				}
-			}
+			break;
 		}
+		if (pcb->utun_ifp != NULL) {
+			// Only can set before connecting
+			result = EINVAL;
+			break;
+		}
+		pcb->utun_flags = *(u_int32_t *)data;
 		break;
 
 	case UTUN_OPT_EXT_IFDATA_STATS:
@@ -2727,7 +2779,10 @@ utun_detached(ifnet_t interface)
 {
 	struct utun_pcb *pcb = ifnet_softc(interface);
 	(void)ifnet_release(interface);
+	lck_mtx_lock(&utun_lock);
 	utun_free_pcb(pcb, true);
+	(void)ifnet_dispose(interface);
+	lck_mtx_unlock(&utun_lock);
 }
 
 /* Protocol Handlers */
@@ -3082,7 +3137,7 @@ utun_kpipe_sync_tx(kern_nexus_provider_t nxprov, kern_nexus_t nexus,
 
 			kern_buflet_t tx_buf = kern_packet_get_next_buflet(tx_ph, NULL);
 			VERIFY(tx_buf != NULL);
-			uint8_t *tx_baddr = kern_buflet_get_object_address(tx_buf);
+			uint8_t *tx_baddr = kern_buflet_get_data_address(tx_buf);
 			VERIFY(tx_baddr != 0);
 			tx_baddr += kern_buflet_get_data_offset(tx_buf);
 
@@ -3221,7 +3276,7 @@ utun_kpipe_sync_rx(kern_nexus_provider_t nxprov, kern_nexus_t nexus,
 
 			kern_buflet_t tx_buf = kern_packet_get_next_buflet(tx_ph, NULL);
 			VERIFY(tx_buf != NULL);
-			uint8_t *tx_baddr = kern_buflet_get_object_address(tx_buf);
+			uint8_t *tx_baddr = kern_buflet_get_data_address(tx_buf);
 			VERIFY(tx_baddr != NULL);
 			tx_baddr += kern_buflet_get_data_offset(tx_buf);
 
@@ -3249,7 +3304,7 @@ utun_kpipe_sync_rx(kern_nexus_provider_t nxprov, kern_nexus_t nexus,
 			/* fillout packet */
 			rx_buf = kern_packet_get_next_buflet(rx_ph, NULL);
 			VERIFY(rx_buf != NULL);
-			rx_baddr = kern_buflet_get_object_address(rx_buf);
+			rx_baddr = kern_buflet_get_data_address(rx_buf);
 			VERIFY(rx_baddr != NULL);
 
 			// Find family
@@ -3383,7 +3438,7 @@ utun_kpipe_sync_rx(kern_nexus_provider_t nxprov, kern_nexus_t nexus,
 			// Fillout rx packet
 			kern_buflet_t rx_buf = kern_packet_get_next_buflet(rx_ph, NULL);
 			VERIFY(rx_buf != NULL);
-			void *rx_baddr = kern_buflet_get_object_address(rx_buf);
+			void *rx_baddr = kern_buflet_get_data_address(rx_buf);
 			VERIFY(rx_baddr != NULL);
 
 			// Copy-in data from mbuf to buflet

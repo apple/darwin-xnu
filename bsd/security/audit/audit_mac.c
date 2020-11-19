@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 1999-2008 Apple Inc.
+ * Copyright (c) 1999-2020 Apple Inc.
  * All rights reserved.
  *
  * @APPLE_BSD_LICENSE_HEADER_START@
@@ -55,7 +55,6 @@
 #include <mach/audit_triggers_server.h>
 
 #include <kern/host.h>
-#include <kern/kalloc.h>
 #include <kern/zalloc.h>
 #include <kern/sched_prim.h>
 
@@ -69,18 +68,8 @@
 #define MAC_ARG_PREFIX "arg: "
 #define MAC_ARG_PREFIX_LEN 5
 
-zone_t          audit_mac_label_zone;
-extern zone_t   mac_audit_data_zone;
-
-void
-audit_mac_init(void)
-{
-	/* Assume 3 MAC labels for each audit record: two for vnodes,
-	 * one for creds.
-	 */
-	audit_mac_label_zone = zinit(MAC_AUDIT_LABEL_LEN,
-	    AQ_HIWATER * 3 * MAC_AUDIT_LABEL_LEN, 8192, "audit_mac_label_zone");
-}
+ZONE_DECLARE(audit_mac_label_zone, "audit_mac_label_zone",
+    MAC_AUDIT_LABEL_LEN, ZC_NONE);
 
 int
 audit_mac_new(proc_t p, struct kaudit_record *ar)
@@ -102,7 +91,7 @@ audit_mac_new(proc_t p, struct kaudit_record *ar)
 	 * grab space for the reconds.
 	 */
 	ar->k_ar.ar_mac_records = (struct mac_audit_record_list_t *)
-	    kalloc(sizeof(*ar->k_ar.ar_mac_records));
+	    kheap_alloc(KHEAP_AUDIT, sizeof(*ar->k_ar.ar_mac_records), Z_WAITOK);
 	if (ar->k_ar.ar_mac_records == NULL) {
 		zfree(audit_mac_label_zone, ar->k_ar.ar_cred_mac_labels);
 		return 1;
@@ -128,7 +117,7 @@ audit_mac_free(struct kaudit_record *ar)
 		zfree(audit_mac_label_zone, ar->k_ar.ar_cred_mac_labels);
 	}
 	if (ar->k_ar.ar_arg_mac_string != NULL) {
-		kfree(ar->k_ar.ar_arg_mac_string,
+		kheap_free(KHEAP_AUDIT, ar->k_ar.ar_arg_mac_string,
 		    MAC_MAX_LABEL_BUF_LEN + MAC_ARG_PREFIX_LEN);
 	}
 
@@ -139,10 +128,11 @@ audit_mac_free(struct kaudit_record *ar)
 	while (head != NULL) {
 		next = LIST_NEXT(head, records);
 		zfree(mac_audit_data_zone, head->data);
-		kfree(head, sizeof(*head));
+		kheap_free(KHEAP_AUDIT, head, sizeof(*head));
 		head = next;
 	}
-	kfree(ar->k_ar.ar_mac_records, sizeof(*ar->k_ar.ar_mac_records));
+	kheap_free(KHEAP_AUDIT, ar->k_ar.ar_mac_records,
+	    sizeof(*ar->k_ar.ar_mac_records));
 }
 
 int
@@ -155,8 +145,9 @@ audit_mac_syscall_enter(unsigned short code, proc_t p, struct uthread *uthread,
 	    (void *)uthread->uu_arg);
 	if (error == MAC_AUDIT_YES) {
 		uthread->uu_ar = audit_new(event, p, uthread);
-		uthread->uu_ar->k_ar.ar_forced_by_mac = 1;
-		au_to_text("Forced by a MAC policy");
+		if (uthread->uu_ar) {
+			uthread->uu_ar->k_ar.ar_forced_by_mac = 1;
+		}
 		return 1;
 	} else if (error == MAC_AUDIT_NO) {
 		return 0;
@@ -208,13 +199,13 @@ audit_mac_data(int type, int len, u_char *data)
 	struct mac_audit_record *record;
 
 	if (audit_enabled == 0) {
-		kfree(data, len);
+		zfree(mac_audit_data_zone, data);
 		return ENOTSUP;
 	}
 
 	cur = currecord();
 	if (cur == NULL) {
-		kfree(data, len);
+		zfree(mac_audit_data_zone, data);
 		return ENOTSUP;
 	}
 
@@ -223,9 +214,9 @@ audit_mac_data(int type, int len, u_char *data)
 	 * allocation fails - this is consistent with the rest of the
 	 * audit implementation.
 	 */
-	record = kalloc(sizeof(*record));
+	record = kheap_alloc(KHEAP_AUDIT, sizeof(*record), Z_WAITOK);
 	if (record == NULL) {
-		kfree(data, len);
+		zfree(mac_audit_data_zone, data);
 		return 0;
 	}
 
@@ -241,12 +232,12 @@ void
 audit_arg_mac_string(struct kaudit_record *ar, char *string)
 {
 	if (ar->k_ar.ar_arg_mac_string == NULL) {
-		ar->k_ar.ar_arg_mac_string =
-		    kalloc(MAC_MAX_LABEL_BUF_LEN + MAC_ARG_PREFIX_LEN);
+		ar->k_ar.ar_arg_mac_string = kheap_alloc(KHEAP_AUDIT,
+		    MAC_MAX_LABEL_BUF_LEN + MAC_ARG_PREFIX_LEN, Z_WAITOK);
 	}
 
 	/*
-	 * XXX This should be a rare event. If kalloc() returns NULL,
+	 * XXX This should be a rare event. If kheap_alloc() returns NULL,
 	 * the system is low on kernel virtual memory. To be
 	 * consistent with the rest of audit, just return
 	 * (may need to panic if required to for audit).
@@ -257,9 +248,9 @@ audit_arg_mac_string(struct kaudit_record *ar, char *string)
 		}
 	}
 
-	strncpy(ar->k_ar.ar_arg_mac_string, MAC_ARG_PREFIX,
+	strlcpy(ar->k_ar.ar_arg_mac_string, MAC_ARG_PREFIX,
 	    MAC_ARG_PREFIX_LEN);
-	strncpy(ar->k_ar.ar_arg_mac_string + MAC_ARG_PREFIX_LEN, string,
+	strlcpy(ar->k_ar.ar_arg_mac_string + MAC_ARG_PREFIX_LEN, string,
 	    MAC_MAX_LABEL_BUF_LEN);
 	ARG_SET_VALID(ar, ARG_MAC_STRING);
 }

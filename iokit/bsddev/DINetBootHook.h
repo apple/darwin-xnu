@@ -95,6 +95,7 @@ extern "C" {
  *       Comments:
  */
 int di_root_image(const char *path, char *devname, size_t devsz, dev_t *dev_p);
+int di_root_image_ext(const char *path, char *devname, size_t devsz, dev_t *dev_p, bool removable);
 void di_root_ramfile( IORegistryEntry * entry );
 int di_root_ramfile_buf(void *buf, size_t bufsz, char *devname, size_t devsz, dev_t *dev_p);
 

@@ -36,10 +36,17 @@
 class OSDictionary;
 class OSCollection;
 
-typedef OSPtr<OSCollection> OSCollectionPtr;
+typedef OSCollection* OSCollectionPtr;
+
+// We're not necessarily in C++11 mode, so we need to disable warnings
+// for C++11 extensions
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wc++11-extensions"
 
 template <typename T>
-using OSCollectionTaggedPtr = OSTaggedPtr<T, OSCollection>;
+using OSCollectionTaggedPtr = T *;
+
+#pragma clang diagnostic pop
 
 
 /*!
@@ -426,7 +433,6 @@ public:
 		unsigned   options,
 		unsigned   mask,
 		void     * context = NULL);
-	OSMetaClassDeclareReservedUsed(OSCollection, 0);
 
 /*!
  * @function copyCollection
@@ -452,8 +458,7 @@ public:
  * Subclasses of OSCollection must override this function
  * to properly support deep copies.
  */
-	virtual OSCollectionPtr copyCollection(OSDictionary * cycleDict = NULL);
-	OSMetaClassDeclareReservedUsed(OSCollection, 1);
+	virtual OSPtr<OSCollection> copyCollection(OSDictionary * cycleDict = NULL);
 
 /*!
  * @function iterateObjects
@@ -496,6 +501,8 @@ public:
 
 #endif /* __BLOCKS__ */
 
+	OSMetaClassDeclareReservedUsedX86(OSCollection, 0);
+	OSMetaClassDeclareReservedUsedX86(OSCollection, 1);
 	OSMetaClassDeclareReservedUnused(OSCollection, 2);
 	OSMetaClassDeclareReservedUnused(OSCollection, 3);
 	OSMetaClassDeclareReservedUnused(OSCollection, 4);

@@ -102,7 +102,7 @@ struct filedesc {
 	int     fd_nfiles;              /* number of open files allocated */
 	int     fd_lastfile;            /* high-water mark of fd_ofiles */
 	int     fd_freefile;            /* approx. next free file */
-	u_short fd_cmask;               /* mask for file creation */
+	mode_t  fd_cmask;               /* mask for file creation */
 	int     fd_flags;
 	int     fd_knlistsize;          /* size of knlist */
 	struct  klist *fd_knlist;       /* list of attached knotes */
@@ -128,29 +128,108 @@ struct filedesc {
 #define UF_FORKCLOSE    0x02            /* auto-close on fork */
 #define UF_RESERVED     0x04            /* open pending / in progress */
 #define UF_CLOSING      0x08            /* close in progress */
-
-#ifdef KERNEL
 #define UF_RESVWAIT     0x10            /* close in progress */
 #define UF_INHERIT      0x20            /* "inherit-on-exec" */
 
 #define UF_VALID_FLAGS  \
 	(UF_EXCLOSE | UF_FORKCLOSE | UF_RESERVED | UF_CLOSING |\
 	UF_RESVWAIT | UF_INHERIT)
-#endif /* KERNEL */
 
 /*
  * Storage required per open file descriptor.
  */
 #define OFILESIZE (sizeof(struct file *) + sizeof(char))
 
-#ifdef KERNEL
+/*!
+ * @struct fdt_iterator
+ *
+ * @brief
+ * Type used to iterate a file descriptor table.
+ */
+struct fdt_iterator {
+	int              fdti_fd;
+	struct fileproc *fdti_fp;
+};
+
+/*!
+ * @function fdt_next
+ *
+ * @brief
+ * Seek the iterator forward.
+ *
+ * @param p
+ * The process for which the file descriptor table is being iterated.
+ *
+ * @param fd
+ * The current file file descriptor to scan from (exclusive).
+ *
+ * @param only_settled
+ * When true, only fileprocs with @c UF_RESERVED set are returned.
+ * If false, fileprocs that are in flux (@c UF_RESERVED is set) are returned.
+ *
+ * @returns
+ * The next iterator position.
+ * If @c fdti_fp is NULL, the iteration is done.
+ */
+extern struct fdt_iterator
+fdt_next(proc_t p, int fd, bool only_settled);
+
+/*!
+ * @function fdt_next
+ *
+ * @brief
+ * Seek the iterator backwards.
+ *
+ * @param p
+ * The process for which the file descriptor table is being iterated.
+ *
+ * @param fd
+ * The current file file descriptor to scan from (exclusive).
+ *
+ * @param only_settled
+ * When true, only fileprocs with @c UF_RESERVED set are returned.
+ * If false, fileprocs that are in flux (@c UF_RESERVED is set) are returned.
+ *
+ * @returns
+ * The next iterator position.
+ * If @c fdti_fp is NULL, the iteration is done.
+ */
+extern struct fdt_iterator
+fdt_prev(proc_t p, int fd, bool only_settled);
+
+/*!
+ * @def fdt_foreach
+ *
+ * @brief
+ * Convenience macro around @c fdt_next() to enumerates fileprocs in a process
+ * file descriptor table.
+ *
+ * @param fp
+ * The iteration variable.
+ *
+ * @param p
+ * The process for which the file descriptor table is being iterated.
+ */
+#define fdt_foreach(fp, p) \
+	for (struct fdt_iterator __fdt_it = fdt_next(p, -1, true); \
+	    ((fp) = __fdt_it.fdti_fp); \
+	    __fdt_it = fdt_next(p, __fdt_it.fdti_fd, true))
+
+/*!
+ * @def fdt_foreach_fd
+ *
+ * @brief
+ * When in an @c fdt_foreach() loop, return the current file descriptor
+ * being inspected.
+ */
+#define fdt_foreach_fd()  __fdt_it.fdti_fd
+
 /*
  * Kernel global variables and routines.
  */
 extern int      dupfdopen(struct filedesc *fdp,
     int indx, int dfd, int mode, int error);
 extern int      fdalloc(proc_t p, int want, int *result);
-extern void     fdrelse(proc_t p, int fd);
 extern int      fdavail(proc_t p, int n);
 #define         fdfile(p, fd)                                   \
 	                (&(p)->p_fd->fd_ofiles[(fd)])
@@ -168,7 +247,6 @@ extern int      fdavail(proc_t p, int n);
 
 extern int      falloc(proc_t p, struct fileproc **resultfp, int *resultfd, vfs_context_t ctx);
 
-#ifdef __APPLE_API_PRIVATE
 typedef struct fileproc *(*fp_allocfn_t)(void *);
 extern int      falloc_withalloc(proc_t p, struct fileproc **resultfp,
     int *resultfd, vfs_context_t ctx,
@@ -177,9 +255,6 @@ extern int      falloc_withalloc(proc_t p, struct fileproc **resultfp,
 extern struct   filedesc *fdcopy(proc_t p, struct vnode *uth_cdir);
 extern void     fdfree(proc_t p);
 extern void     fdexec(proc_t p, short flags, int self_exec);
-#endif /* __APPLE_API_PRIVATE */
-
-#endif /* KERNEL */
 
 #endif /* BSD_KERNEL_PRIVATE */
 

@@ -106,7 +106,8 @@ def ShowARMUserStack(thread, user_lib_info = None):
 def ShowARM64UserStack(thread, user_lib_info = None):
     SAVED_STATE_FLAVOR_ARM=20
     SAVED_STATE_FLAVOR_ARM64=21
-    upcb = thread.machine.upcb
+    upcb_addr = kern.StripKernelPAC(thread.machine.upcb)
+    upcb = kern.GetValueFromAddress(upcb_addr, 'arm_saved_state_t *')
     flavor = upcb.ash.flavor
     frameformat = "{0:>2d} FP: 0x{1:x}  PC: 0x{2:x}"
     if flavor == SAVED_STATE_FLAVOR_ARM64:
@@ -296,8 +297,8 @@ Synthetic crash log generated from Kernel userstacks
     osversion += " ({:s})".format(kern.globals.osversion)
     if pval:
         pid = pval.p_pid
-        pname = pval.p_comm
-        path = pval.p_comm
+        pname = GetProcName(pval)
+        path = GetProcName(pval)
         ppid = pval.p_ppid
     else:
         pid = 0

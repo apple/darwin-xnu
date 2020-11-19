@@ -100,7 +100,7 @@
  * KDBG_EVENTID(DBG_FSYSTEM, DBG_VFS, dcode) global event id, see bsd/sys/kdebug.h.
  * Note that dcode is multiplied by 4 and ORed as part of the construction. See bsd/kern/trace_codes
  * for list of system-wide {global event id, name} pairs. Currently DBG_VFS event ids are in range
- * [0x3130000, 0x3130170].
+ * [0x3130000, 0x3130174].
  */
 
 //#define VFS_TRACE_POLICY_OPS
@@ -1319,7 +1319,7 @@ int
 mac_vnode_check_signature(struct vnode *vp, struct cs_blob *cs_blob,
     struct image_params *imgp,
     unsigned int *cs_flags, unsigned int *signer_type,
-    int flags)
+    int flags, unsigned int platform)
 {
 	int error;
 	char *fatal_failure_desc = NULL;
@@ -1339,7 +1339,7 @@ mac_vnode_check_signature(struct vnode *vp, struct cs_blob *cs_blob,
 
 	VFS_KERNEL_DEBUG_START1(43, vp);
 	MAC_CHECK(vnode_check_signature, vp, vp->v_label, cpu_type, cs_blob,
-	    cs_flags, signer_type, flags, &fatal_failure_desc, &fatal_failure_desc_len);
+	    cs_flags, signer_type, flags, platform, &fatal_failure_desc, &fatal_failure_desc_len);
 	VFS_KERNEL_DEBUG_END1(43, vp);
 
 	if (fatal_failure_desc_len) {
@@ -1348,15 +1348,11 @@ mac_vnode_check_signature(struct vnode *vp, struct cs_blob *cs_blob,
 
 		char const *path = NULL;
 
-		vn_path = (char *)kalloc(MAXPATHLEN);
-		if (vn_path != NULL) {
-			if (vn_getpath(vp, vn_path, (int*)&vn_pathlen) == 0) {
-				path = vn_path;
-			} else {
-				path = "(get vnode path failed)";
-			}
+		vn_path = zalloc(ZV_NAMEI);
+		if (vn_getpath(vp, vn_path, (int*)&vn_pathlen) == 0) {
+			path = vn_path;
 		} else {
-			path = "(path alloc failed)";
+			path = "(get vnode path failed)";
 		}
 
 		if (error == 0) {
@@ -1396,12 +1392,12 @@ mac_vnode_check_signature(struct vnode *vp, struct cs_blob *cs_blob,
 			int kcdata_error = 0;
 
 			if ((reason_error = os_reason_alloc_buffer_noblock(reason, kcdata_estimate_required_buffer_size
-			    (1, fatal_failure_desc_len))) == 0 &&
+			    (1, (uint32_t)fatal_failure_desc_len))) == 0 &&
 			    (kcdata_error = kcdata_get_memory_addr(&reason->osr_kcd_descriptor,
-			    EXIT_REASON_USER_DESC, fatal_failure_desc_len,
+			    EXIT_REASON_USER_DESC, (uint32_t)fatal_failure_desc_len,
 			    &data_addr)) == KERN_SUCCESS) {
 				kern_return_t mc_error = kcdata_memcpy(&reason->osr_kcd_descriptor, (mach_vm_address_t)data_addr,
-				    fatal_failure_desc, fatal_failure_desc_len);
+				    fatal_failure_desc, (uint32_t)fatal_failure_desc_len);
 
 				if (mc_error != KERN_SUCCESS) {
 					printf("mac_vnode_check_signature: %s: failed to copy reason string "
@@ -1418,12 +1414,34 @@ mac_vnode_check_signature(struct vnode *vp, struct cs_blob *cs_blob,
 
 out:
 	if (vn_path) {
-		kfree(vn_path, MAXPATHLEN);
+		zfree(ZV_NAMEI, vn_path);
 	}
 
 	if (fatal_failure_desc_len > 0 && fatal_failure_desc != NULL) {
-		kfree(fatal_failure_desc, fatal_failure_desc_len);
+		/* AMFI uses kalloc() which for kexts is redirected to KHEAP_KEXT */
+		kheap_free(KHEAP_KEXT, fatal_failure_desc, fatal_failure_desc_len);
 	}
+
+	return error;
+}
+
+int
+mac_vnode_check_supplemental_signature(struct vnode *vp,
+    struct cs_blob *cs_blob, struct vnode *linked_vp,
+    struct cs_blob *linked_cs_blob, unsigned int *signer_type)
+{
+	int error;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce || !mac_vnode_enforce) {
+		return 0;
+	}
+#endif
+	VFS_KERNEL_DEBUG_START1(93, vp);
+	MAC_CHECK(vnode_check_supplemental_signature, vp, vp->v_label, cs_blob, linked_vp, linked_cs_blob,
+	    signer_type);
+	VFS_KERNEL_DEBUG_END1(93, vp);
 
 	return error;
 }
@@ -1477,7 +1495,7 @@ mac_vnode_check_getextattr(vfs_context_t ctx, struct vnode *vp,
 }
 
 int
-mac_vnode_check_ioctl(vfs_context_t ctx, struct vnode *vp, u_int cmd)
+mac_vnode_check_ioctl(vfs_context_t ctx, struct vnode *vp, u_long cmd)
 {
 	kauth_cred_t cred;
 	int error;
@@ -2522,7 +2540,7 @@ mac_mount_check_label_update(vfs_context_t ctx, struct mount *mount)
 }
 
 int
-mac_mount_check_fsctl(vfs_context_t ctx, struct mount *mp, u_int cmd)
+mac_mount_check_fsctl(vfs_context_t ctx, struct mount *mp, u_long cmd)
 {
 	kauth_cred_t cred;
 	int error;
@@ -2667,14 +2685,14 @@ mac_vnode_label_associate_fdesc(struct mount *mp, struct fdescnode *fnp,
 		return error;
 	}
 
-	if (fp->f_fglob == NULL) {
+	if (fp->fp_glob == NULL) {
 		error = EBADF;
 		goto out;
 	}
 
-	switch (FILEGLOB_DTYPE(fp->f_fglob)) {
+	switch (FILEGLOB_DTYPE(fp->fp_glob)) {
 	case DTYPE_VNODE:
-		fvp = (struct vnode *)fp->f_fglob->fg_data;
+		fvp = (struct vnode *)fp->fp_glob->fg_data;
 		if ((error = vnode_getwithref(fvp))) {
 			goto out;
 		}
@@ -2688,7 +2706,7 @@ mac_vnode_label_associate_fdesc(struct mount *mp, struct fdescnode *fnp,
 		break;
 #if CONFIG_MACF_SOCKET_SUBSET
 	case DTYPE_SOCKET:
-		so = (struct socket *)fp->f_fglob->fg_data;
+		so = (struct socket *)fp->fp_glob->fg_data;
 		socket_lock(so, 1);
 		MAC_PERFORM(vnode_label_associate_socket,
 		    vfs_context_ucred(ctx), (socket_t)so, so->so_label,
@@ -2703,7 +2721,7 @@ mac_vnode_label_associate_fdesc(struct mount *mp, struct fdescnode *fnp,
 		psem_label_associate(fp, vp, ctx);
 		break;
 	case DTYPE_PIPE:
-		cpipe = (struct pipe *)fp->f_fglob->fg_data;
+		cpipe = (struct pipe *)fp->fp_glob->fg_data;
 		/* kern/sys_pipe.c:pipe_select() suggests this test. */
 		if (cpipe == (struct pipe *)-1) {
 			error = EINVAL;
@@ -2720,7 +2738,7 @@ mac_vnode_label_associate_fdesc(struct mount *mp, struct fdescnode *fnp,
 	case DTYPE_NETPOLICY:
 	default:
 		MAC_PERFORM(vnode_label_associate_file, vfs_context_ucred(ctx),
-		    mp, mp->mnt_mntlabel, fp->f_fglob, fp->f_fglob->fg_label,
+		    mp, mp->mnt_mntlabel, fp->fp_glob, fp->fp_glob->fg_label,
 		    vp, vp->v_label);
 		break;
 	}
@@ -2755,4 +2773,12 @@ mac_vnode_label_set(struct vnode *vp, int slot, intptr_t v)
 		l = vp->v_label;
 	}
 	mac_label_set(l, slot, v);
+}
+
+void
+mac_vnode_notify_reclaim(struct vnode *vp)
+{
+	VFS_KERNEL_DEBUG_START1(94, vp);
+	MAC_PERFORM(vnode_notify_reclaim, vp);
+	VFS_KERNEL_DEBUG_END1(94, vp);
 }

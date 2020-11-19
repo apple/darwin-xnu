@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -318,7 +318,7 @@ struct igmp_tparams {
 
 extern void igmp_init(struct protosw *, struct domain *);
 extern int igmp_change_state(struct in_multi *, struct igmp_tparams *);
-extern struct igmp_ifinfo *igmp_domifattach(struct ifnet *, int);
+extern struct igmp_ifinfo *igmp_domifattach(struct ifnet *, zalloc_flags_t);
 extern void igmp_domifreattach(struct igmp_ifinfo *);
 extern void igmp_domifdetach(struct ifnet *);
 extern void igmp_input(struct mbuf *, int);

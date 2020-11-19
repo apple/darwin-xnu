@@ -14,6 +14,7 @@ import subprocess
 import logging
 import contextlib
 import base64
+import zlib
 
 class Globals(object):
     pass
@@ -98,6 +99,11 @@ kcdata_type_def = {
     'STACKSHOT_KCTYPE_SYS_SHAREDCACHE_LAYOUT' : 0x927,
     'STACKSHOT_KCTYPE_THREAD_DISPATCH_QUEUE_LABEL' : 0x928,
     'STACKSHOT_KCTYPE_THREAD_TURNSTILEINFO' : 0x929,
+    'STACKSHOT_KCTYPE_TASK_CPU_ARCHITECTURE' : 0x92a,
+    'STACKSHOT_KCTYPE_LATENCY_INFO' : 0x92b,
+    'STACKSHOT_KCTYPE_LATENCY_INFO_TASK' : 0x92c,
+    'STACKSHOT_KCTYPE_LATENCY_INFO_THREAD' : 0x92d,
+    'STACKSHOT_KCTYPE_LOADINFO64_TEXT_EXEC' : 0x92e,
 
     'STACKSHOT_KCTYPE_TASK_DELTA_SNAPSHOT': 0x940,
     'STACKSHOT_KCTYPE_THREAD_DELTA_SNAPSHOT': 0x941,
@@ -146,6 +152,7 @@ kcdata_type_def = {
     'KCDATA_BUFFER_BEGIN_CRASHINFO':       0xDEADF157,
     'KCDATA_BUFFER_BEGIN_DELTA_STACKSHOT': 0xDE17A59A,
     'KCDATA_BUFFER_BEGIN_STACKSHOT':       0x59a25807,
+    'KCDATA_BUFFER_BEGIN_COMPRESSED':      0x434f4d50,
     'KCDATA_BUFFER_BEGIN_OS_REASON':       0x53A20900,
     'KCDATA_BUFFER_BEGIN_XNUPOST_CONFIG':  0x1E21C09F
 }
@@ -421,8 +428,9 @@ class KCObject(object):
 
         if self.i_type == GetTypeForName('KCDATA_TYPE_CONTAINER_BEGIN'):
             self.__class__ = KCContainerObject
-
-        if self.i_type in KNOWN_TOPLEVEL_CONTAINER_TYPES:
+        elif self.i_type == GetTypeForName('KCDATA_BUFFER_BEGIN_COMPRESSED'):
+            self.__class__ = KCCompressedBufferObject
+        elif self.i_type in KNOWN_TOPLEVEL_CONTAINER_TYPES:
             self.__class__ = KCBufferObject
 
         self.InitAfterParse()
@@ -660,6 +668,40 @@ class KCBufferObject(KCContainerObject):
 
     no_end_message = "could not find buffer end marker"
 
+class KCCompressedBufferObject(KCContainerObject):
+
+    def ReadItems(self, iterator):
+        self.header = dict()
+        with INDENT.indent():
+            for i in iterator:
+                o = KCObject.FromKCItem(i)
+                if self.IsEndMarker(o):
+                    self.compressed_type = o.i_type
+                    self.blob_start = o.offset + 16
+                    break
+                o.ParseData()
+                self.header[o.i_name] = o.obj
+
+    def IsEndMarker(self, o):
+        return o.i_type in KNOWN_TOPLEVEL_CONTAINER_TYPES
+
+    def GetCompressedBlob(self, data):
+        if self.header['kcd_c_type'] != 1:
+            raise NotImplementedError
+        blob = data[self.blob_start:self.blob_start+self.header['kcd_c_totalout']]
+        if len(blob) != self.header['kcd_c_totalout']:
+            raise ValueError
+        return blob
+
+    def Decompress(self, data):
+        start_marker = struct.pack('<IIII', self.compressed_type, 0, 0, 0)
+        end_marker = struct.pack('<IIII', GetTypeForName('KCDATA_TYPE_BUFFER_END'), 0, 0, 0)
+        decompressed = zlib.decompress(self.GetCompressedBlob(data))
+        if len(decompressed) != self.header['kcd_c_totalin']:
+            raise ValueError, "length of decompressed: %d vs expected %d" % (len(decompressed), self.header['kcd_c_totalin'])
+        alignbytes = b'\x00' * (-len(decompressed) % 16)
+        return start_marker + decompressed + alignbytes + end_marker
+
 
 class KCData_item:
     """ a basic kcdata_item type object.
@@ -707,7 +749,7 @@ def kcdata_item_iterator(data):
 def _get_data_element(elementValues):
     return json.dumps(elementValues[-1])
 
-KNOWN_TOPLEVEL_CONTAINER_TYPES = map(GetTypeForName, ('KCDATA_BUFFER_BEGIN_CRASHINFO', 'KCDATA_BUFFER_BEGIN_STACKSHOT', 'KCDATA_BUFFER_BEGIN_DELTA_STACKSHOT', 'KCDATA_BUFFER_BEGIN_OS_REASON','KCDATA_BUFFER_BEGIN_XNUPOST_CONFIG'))
+KNOWN_TOPLEVEL_CONTAINER_TYPES = map(GetTypeForName, ('KCDATA_BUFFER_BEGIN_COMPRESSED', 'KCDATA_BUFFER_BEGIN_CRASHINFO', 'KCDATA_BUFFER_BEGIN_STACKSHOT', 'KCDATA_BUFFER_BEGIN_DELTA_STACKSHOT', 'KCDATA_BUFFER_BEGIN_OS_REASON','KCDATA_BUFFER_BEGIN_XNUPOST_CONFIG'))
 
 KNOWN_TYPES_COLLECTION[GetTypeForName('KCDATA_TYPE_UINT32_DESC')] = KCTypeDescription(GetTypeForName('KCDATA_TYPE_UINT32_DESC'), (
     KCSubTypeElement('desc', KCSUBTYPE_TYPE.KC_ST_CHAR, KCSubTypeElement.GetSizeForArray(32, 1), 0, 1),
@@ -891,6 +933,13 @@ KNOWN_TYPES_COLLECTION[GetTypeForName('KCDATA_TYPE_LIBRARY_LOADINFO')] = KCTypeD
     legacy_size = 20
 )
 
+KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_LOADINFO64_TEXT_EXEC')] = KCTypeDescription(GetTypeForName('STACKSHOT_KCTYPE_LOADINFO64_TEXT_EXEC'), (
+    KCSubTypeElement('imageLoadAddress', KCSUBTYPE_TYPE.KC_ST_UINT64, 8, 0, 0),
+    KCSubTypeElement('imageUUID', KCSUBTYPE_TYPE.KC_ST_UINT8, KCSubTypeElement.GetSizeForArray(16, 1), 8, 1),
+),
+    'dyld_load_info_text_exec'
+)
+
 KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_SHAREDCACHE_LOADINFO')] = KCTypeDescription(GetTypeForName('STACKSHOT_KCTYPE_SHAREDCACHE_LOADINFO'), (
     KCSubTypeElement('imageLoadAddress', KCSUBTYPE_TYPE.KC_ST_UINT64, 8, 0, 0),
     KCSubTypeElement('imageUUID', KCSUBTYPE_TYPE.KC_ST_UINT8, KCSubTypeElement.GetSizeForArray(16, 1), 8, 1),
@@ -1042,6 +1091,52 @@ KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_INSTRS_CYCLES')] = KCTyp
                         KCSubTypeElement.FromBasicCtype('ics_cycles', KCSUBTYPE_TYPE.KC_ST_UINT64, 8)
             ),
             'instrs_cycles_snapshot')
+
+KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_TASK_CPU_ARCHITECTURE')] = KCTypeDescription(GetTypeForName('STACKSHOT_KCTYPE_TASK_CPU_ARCHITECTURE'),
+            (
+                        KCSubTypeElement.FromBasicCtype('cputype', KCSUBTYPE_TYPE.KC_ST_INT32, 0),
+                        KCSubTypeElement.FromBasicCtype('cpusubtype', KCSUBTYPE_TYPE.KC_ST_INT32, 4)
+            ),
+            'task_cpu_architecture')
+
+KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_LATENCY_INFO')] = KCTypeDescription(GetTypeForName('STACKSHOT_KCTYPE_LATENCY_INFO'),
+            (
+                        KCSubTypeElement.FromBasicCtype('latency_version', KCSUBTYPE_TYPE.KC_ST_UINT64, 0),
+                        KCSubTypeElement.FromBasicCtype('setup_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 8),
+                        KCSubTypeElement.FromBasicCtype('total_task_iteration_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 16),
+                        KCSubTypeElement.FromBasicCtype('total_terminated_task_iteration_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 24)
+            ),
+            'stackshot_latency_collection')
+
+KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_LATENCY_INFO_TASK')] = KCTypeDescription(GetTypeForName('STACKSHOT_KCTYPE_LATENCY_INFO_TASK'),
+            (
+                        KCSubTypeElement.FromBasicCtype('task_uniqueid', KCSUBTYPE_TYPE.KC_ST_UINT64, 0),
+                        KCSubTypeElement.FromBasicCtype('setup_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 8),
+                        KCSubTypeElement.FromBasicCtype('task_thread_count_loop_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 16),
+                        KCSubTypeElement.FromBasicCtype('task_thread_data_loop_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 24),
+                        KCSubTypeElement.FromBasicCtype('cur_tsnap_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 32),
+                        KCSubTypeElement.FromBasicCtype('pmap_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 40),
+                        KCSubTypeElement.FromBasicCtype('bsd_proc_ids_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 48),
+                        KCSubTypeElement.FromBasicCtype('misc_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 56),
+                        KCSubTypeElement.FromBasicCtype('misc2_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 64),
+                        KCSubTypeElement.FromBasicCtype('end_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 72)
+            ),
+            'stackshot_latency_task')
+
+KNOWN_TYPES_COLLECTION[GetTypeForName('STACKSHOT_KCTYPE_LATENCY_INFO_THREAD')] = KCTypeDescription(GetTypeForName('STACKSHOT_KCTYPE_LATENCY_INFO_THREAD'),
+            (
+                        KCSubTypeElement.FromBasicCtype('thread_id', KCSUBTYPE_TYPE.KC_ST_UINT64, 0),
+                        KCSubTypeElement.FromBasicCtype('cur_thsnap1_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 8),
+                        KCSubTypeElement.FromBasicCtype('dispatch_serial_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 16),
+                        KCSubTypeElement.FromBasicCtype('dispatch_label_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 24),
+                        KCSubTypeElement.FromBasicCtype('cur_thsnap2_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 32),
+                        KCSubTypeElement.FromBasicCtype('thread_name_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 40),
+                        KCSubTypeElement.FromBasicCtype('sur_times_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 48),
+                        KCSubTypeElement.FromBasicCtype('user_stack_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 56),
+                        KCSubTypeElement.FromBasicCtype('kernel_stack_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 64),
+                        KCSubTypeElement.FromBasicCtype('misc_latency', KCSUBTYPE_TYPE.KC_ST_UINT64, 72),
+            ),
+            'stackshot_latency_thread')
 
 def set_type(name, *args):
     typ = GetTypeForName(name)
@@ -1288,6 +1383,8 @@ kThreadWaitPThreadCondVar       = 0x0e
 kThreadWaitParkedWorkQueue      = 0x0f
 kThreadWaitWorkloopSyncWait     = 0x10
 kThreadWaitOnProcess            = 0x11
+kThreadWaitSleepWithInheritor   = 0x12
+kThreadWaitEventlink            = 0x13
 kThreadWaitCompressor           = 0x14
 
 
@@ -1300,10 +1397,12 @@ STACKSHOT_WAITOWNER_MTXSPIN     = (UINT64_MAX - 5)
 STACKSHOT_WAITOWNER_THREQUESTED = (UINT64_MAX - 6)
 STACKSHOT_WAITOWNER_SUSPENDED   = (UINT64_MAX - 7)
 
-STACKSHOT_TURNSTILE_STATUS_UNKNOWN      = 0x01
-STACKSHOT_TURNSTILE_STATUS_LOCKED_WAITQ = 0x02
-STACKSHOT_TURNSTILE_STATUS_WORKQUEUE    = 0x04
-STACKSHOT_TURNSTILE_STATUS_THREAD       = 0x08
+STACKSHOT_TURNSTILE_STATUS_UNKNOWN         = 0x01
+STACKSHOT_TURNSTILE_STATUS_LOCKED_WAITQ    = 0x02
+STACKSHOT_TURNSTILE_STATUS_WORKQUEUE       = 0x04
+STACKSHOT_TURNSTILE_STATUS_THREAD          = 0x08
+STACKSHOT_TURNSTILE_STATUS_BLOCKED_ON_TASK = 0x10
+STACKSHOT_TURNSTILE_STATUS_HELD_IPLOCK     = 0x20
 
 def formatWaitInfo(info):
     s = 'thread %d: ' % info['waiter'];
@@ -1398,6 +1497,16 @@ def formatWaitInfo(info):
             s += "waitpid, for process group %d" % abs(owner - 2**64)
         else:
             s += "waitpid, for pid %d" % owner
+    elif type == kThreadWaitSleepWithInheritor:
+        if owner == 0:
+            s += "turnstile, held waitq"
+        else:
+            s += "turnstile, pushing thread %d" % owner
+    elif type == kThreadWaitEventlink:
+        if owner == 0:
+            s += "eventlink, held waitq"
+        else:
+            s += "eventlink, signaled by thread %d" % owner
     elif type == kThreadWaitCompressor:
         s += "in compressor segment %x, busy for thread %d" % (context, owner)
 
@@ -1414,6 +1523,10 @@ def formatTurnstileInfo(ti):
     ctx = int(ti['turnstile_context'])
     hop = int(ti['number_of_hops'])
     prio = int(ti['turnstile_priority'])
+    if ts_flags & STACKSHOT_TURNSTILE_STATUS_HELD_IPLOCK:
+        return " [turnstile blocked on task, but ip_lock was held]"
+    if ts_flags & STACKSHOT_TURNSTILE_STATUS_BLOCKED_ON_TASK:
+        return " [turnstile blocked on task pid %d, hops: %d, priority: %d]" % (ctx, hop, prio)
     if ts_flags & STACKSHOT_TURNSTILE_STATUS_LOCKED_WAITQ:
         return " [turnstile was in process of being updated]"
     if ts_flags & STACKSHOT_TURNSTILE_STATUS_WORKQUEUE:
@@ -1447,9 +1560,9 @@ def SaveStackshotReport(j, outfile_name, incomplete):
         print "No KCDATA_BUFFER_BEGIN_STACKSHOT object found. Skipping writing report."
         return
 
-    timestamp = ss.get('usecs_since_epoch', int(time.time()))
+    timestamp = ss.get('usecs_since_epoch')
     try:
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S %z",time.gmtime(timestamp))
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S +0000",time.gmtime(timestamp / 1000000 if timestamp else None))
     except ValueError, e:
         print "couldn't convert timestamp:", str(e)
         timestamp = None
@@ -1503,6 +1616,11 @@ def SaveStackshotReport(j, outfile_name, incomplete):
         kl_infos = ssplist["0"].get("dyld_load_info", [])
         for dlinfo in kl_infos:
             kern_load_info.append([format_uuid(dlinfo['imageUUID']), dlinfo['imageLoadAddress'], "K"])
+
+        kl_infos_text_exec = ssplist["0"].get("dyld_load_info_text_exec", [])
+        for dlinfo in kl_infos_text_exec:
+            kern_load_info.append([format_uuid(dlinfo['imageUUID']), dlinfo['imageLoadAddress'], "T"])
+
     for pid,piddata in ssplist.iteritems():
         processByPid[str(pid)] = {}
         tsnap = processByPid[str(pid)]
@@ -1681,9 +1799,18 @@ def iterate_kcdatas(kcdata_file):
     with data_from_stream(kcdata_file) as data:
         iterator = kcdata_item_iterator(data)
         kcdata_buffer = KCObject.FromKCItem(iterator.next())
+
+        if isinstance(kcdata_buffer, KCCompressedBufferObject):
+            kcdata_buffer.ReadItems(iterator)
+            decompressed = kcdata_buffer.Decompress(data)
+            iterator = kcdata_item_iterator(decompressed)
+            kcdata_buffer = KCObject.FromKCItem(iterator.next())
+
         if not isinstance(kcdata_buffer, KCBufferObject):
+            # ktrace stackshot chunk
             iterator = kcdata_item_iterator(data[16:])
             kcdata_buffer = KCObject.FromKCItem(iterator.next())
+
         if not isinstance(kcdata_buffer, KCBufferObject):
             try:
                 decoded = base64.b64decode(data)
@@ -1702,8 +1829,10 @@ def iterate_kcdatas(kcdata_file):
             else:
                 iterator = kcdata_item_iterator(decompressed)
                 kcdata_buffer = KCObject.FromKCItem(iterator.next())
+
         if not isinstance(kcdata_buffer, KCBufferObject):
             raise Exception, "unknown file type"
+
 
         kcdata_buffer.ReadItems(iterator)
         yield kcdata_buffer
@@ -1734,7 +1863,6 @@ def prettify(data):
             elif key == 'thread_waitinfo':
                 value = map(formatWaitInfo, value)
             elif key == 'stack_contents':
-                print value
                 (address,) = struct.unpack("<Q", struct.pack("B"*8, *value))
                 value = '0x%X' % address
             else:

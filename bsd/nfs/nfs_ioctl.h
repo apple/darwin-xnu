@@ -43,7 +43,7 @@
  * fsctl (vnop_ioctl) to set the callers credentials associated with the vnode's mount
  */
 struct nfs_gss_principal {
-	uint32_t        princlen;       /* length of data */
+	size_t          princlen;       /* length of data */
 	uint32_t        nametype;       /* nametype of data */
 #ifdef KERNEL
 	user32_addr_t   principal;      /* principal data in userspace */
@@ -56,7 +56,7 @@ struct nfs_gss_principal {
 #ifdef KERNEL
 /* LP64 version of nfs_gss_principal */
 struct user_nfs_gss_principal {
-	uint32_t        princlen;       /* length of data */
+	size_t          princlen;       /* length of data */
 	uint32_t        nametype;       /* nametype of data */
 	user64_addr_t   principal;      /* principal data in userspace */
 	uint32_t        flags;          /* Returned flags */

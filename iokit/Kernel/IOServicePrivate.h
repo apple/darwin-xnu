@@ -150,7 +150,7 @@ class _IOConfigThread : public OSObject
 	OSDeclareDefaultStructors(_IOConfigThread);
 
 public:
-	static void configThread( int configThreadId );
+	static void configThread( const char * name );
 	static void main( void * arg, wait_result_t result );
 };
 
@@ -175,7 +175,7 @@ public:
 
 	static _IOServiceJob * startJob( IOService * nub, int type,
 	    IOOptionBits options = 0 );
-	static void pingConfig( class _IOServiceJob * job );
+	static void pingConfig( LIBKERN_CONSUMED class _IOServiceJob * job );
 };
 
 class IOResources : public IOService

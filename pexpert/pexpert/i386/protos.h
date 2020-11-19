@@ -86,6 +86,7 @@ int serial_getc(void);
  * from osfmk/kern/misc_protos.h
  */
 void cnputc(char);
+void cnputc_unbuffered(char);
 int cngetc(void);
 
 #endif /* _PEXPERT_I386_PROTOS_H */

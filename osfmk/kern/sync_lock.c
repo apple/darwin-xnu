@@ -41,7 +41,6 @@
 #include <mach/task_server.h>
 
 #include <kern/misc_protos.h>
-#include <kern/kalloc.h>
 #include <kern/sync_lock.h>
 #include <kern/sched_prim.h>
 #include <kern/ipc_kobject.h>

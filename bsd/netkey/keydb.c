@@ -197,7 +197,7 @@ struct secasvar *p;
  * secreplay management
  */
 struct secreplay *
-keydb_newsecreplay(size_t wsize)
+keydb_newsecreplay(u_int8_t wsize)
 {
 	struct secreplay *p;
 

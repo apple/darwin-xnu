@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -66,10 +66,10 @@
 
 static LIST_HEAD(personalist, persona) all_personas;
 static uint32_t g_total_personas;
-uint32_t g_max_personas = MAX_PERSONAS;
+const uint32_t g_max_personas = MAX_PERSONAS;
 struct persona *system_persona = NULL;
 struct persona *proxy_system_persona = NULL;
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 int unique_persona = 1;
 #else
 int unique_persona = 0;
@@ -77,17 +77,15 @@ int unique_persona = 0;
 
 static uid_t g_next_persona_id;
 
-lck_mtx_t all_personas_lock;
-lck_attr_t *persona_lck_attr;
-lck_grp_t *persona_lck_grp;
-lck_grp_attr_t *persona_lck_grp_attr;
+LCK_GRP_DECLARE(persona_lck_grp, "personas");
+LCK_MTX_DECLARE(all_personas_lock, &persona_lck_grp);
 
 os_refgrp_decl(static, persona_refgrp, "persona", NULL);
 
-static zone_t persona_zone;
+static ZONE_DECLARE(persona_zone, "personas", sizeof(struct persona), ZC_ZFREE_CLEARMEM);
 
 kauth_cred_t g_default_persona_cred;
-extern struct auditinfo_addr *audit_default_aia_p;
+extern struct auditinfo_addr * const audit_default_aia_p;
 
 #define lock_personas()    lck_mtx_lock(&all_personas_lock)
 #define unlock_personas()  lck_mtx_unlock(&all_personas_lock)
@@ -110,18 +108,6 @@ personas_bootstrap(void)
 	g_total_personas = 0;
 
 	g_next_persona_id = FIRST_PERSONA_ID;
-
-	persona_lck_grp_attr = lck_grp_attr_alloc_init();
-
-	persona_lck_grp = lck_grp_alloc_init("personas", persona_lck_grp_attr);
-	persona_lck_attr = lck_attr_alloc_init();
-
-	lck_mtx_init(&all_personas_lock, persona_lck_grp, persona_lck_attr);
-
-	persona_zone = zinit(sizeof(struct persona),
-	    MAX_PERSONAS * sizeof(struct persona),
-	    MAX_PERSONAS, "personas");
-	assert(persona_zone != NULL);
 
 	/*
 	 * setup the default credentials that a persona temporarily
@@ -149,7 +135,7 @@ personas_bootstrap(void)
 }
 
 struct persona *
-persona_alloc(uid_t id, const char *login, int type, char *path, int *error)
+persona_alloc(uid_t id, const char *login, persona_type_t type, char *path, int *error)
 {
 	struct persona *persona;
 	int err = 0;
@@ -191,7 +177,7 @@ persona_alloc(uid_t id, const char *login, int type, char *path, int *error)
 	persona_dbg("Starting persona allocation for: '%s'", persona->pna_login);
 
 	LIST_INIT(&persona->pna_members);
-	lck_mtx_init(&persona->pna_lock, persona_lck_grp, persona_lck_attr);
+	lck_mtx_init(&persona->pna_lock, &persona_lck_grp, LCK_ATTR_NULL);
 	os_ref_init(&persona->pna_refcount, &persona_refgrp);
 
 	/*
@@ -525,7 +511,7 @@ persona_put(struct persona *persona)
 		persona_mkinvalid(persona);
 	}
 	if (persona->pna_path != NULL) {
-		FREE_ZONE(persona->pna_path, MAXPATHLEN, M_NAMEI);
+		zfree(ZV_NAMEI, persona->pna_path);
 	}
 	persona_unlock(persona);
 	unlock_personas();
@@ -601,7 +587,7 @@ persona_lookup_and_invalidate(uid_t id)
 }
 
 int
-persona_find_by_type(int persona_type, struct persona **persona, size_t *plen)
+persona_find_by_type(persona_type_t persona_type, struct persona **persona, size_t *plen)
 {
 	return persona_find_all(NULL, PERSONA_ID_NONE, persona_type, persona, plen);
 }
@@ -614,7 +600,7 @@ persona_find(const char *login, uid_t uid,
 }
 
 int
-persona_find_all(const char *login, uid_t uid, int persona_type,
+persona_find_all(const char *login, uid_t uid, persona_type_t persona_type,
     struct persona **persona, size_t *plen)
 {
 	struct persona *tmp;
@@ -785,7 +771,7 @@ proc_reset_persona_internal(proc_t p, persona_reset_op_t op,
 	switch (op) {
 	case PROC_REMOVE_PERSONA:
 		old_persona = p->p_persona;
-	/* fall through */
+		OS_FALLTHROUGH;
 	case PROC_RESET_OLD_PERSONA:
 		break;
 	default:
@@ -796,6 +782,7 @@ proc_reset_persona_internal(proc_t p, persona_reset_op_t op,
 	/* unlock the new persona (locked on entry) */
 	persona_unlock(new_persona);
 	/* lock the old persona and the process */
+	assert(old_persona != NULL);
 	persona_lock(old_persona);
 	proc_lock(p);
 
@@ -831,7 +818,8 @@ proc_set_cred_internal(proc_t p, struct persona *persona,
 	struct persona *old_persona = NULL;
 	kauth_cred_t my_cred, my_new_cred;
 	uid_t old_uid, new_uid;
-	int count;
+	size_t count;
+	rlim_t nproc = proc_limitgetcur(p, RLIMIT_NPROC, TRUE);
 
 	/*
 	 * This operation must be done under the proc trans lock
@@ -878,12 +866,14 @@ proc_set_cred_internal(proc_t p, struct persona *persona,
 	 * the process or changing its credentials.
 	 */
 	if (new_uid != 0 &&
-	    (rlim_t)chgproccnt(new_uid, 0) > p->p_rlimit[RLIMIT_NPROC].rlim_cur) {
+	    (rlim_t)chgproccnt(new_uid, 0) > nproc) {
 		pna_err("PID:%d hit proc rlimit in new persona(%d): %s",
 		    p->p_pid, new_uid, persona_desc(persona, 1));
 		*rlim_error = EACCES;
-		(void)proc_reset_persona_internal(p, PROC_RESET_OLD_PERSONA,
-		    old_persona, persona);
+		if (old_persona) {
+			(void)proc_reset_persona_internal(p, PROC_RESET_OLD_PERSONA,
+			    old_persona, persona);
+		}
 		kauth_cred_unref(&my_new_cred);
 		return NULL;
 	}
@@ -943,7 +933,7 @@ set_proc_cred:
 
 	if (new_uid != old_uid) {
 		count = chgproccnt(old_uid, -1);
-		persona_dbg("Decrement %s:%d proc_count to: %d",
+		persona_dbg("Decrement %s:%d proc_count to: %lu",
 		    old_persona ? "Persona" : "UID", old_uid, count);
 
 		/*
@@ -952,7 +942,7 @@ set_proc_cred:
 		 * as in fork1()
 		 */
 		count = chgproccnt(new_uid, 1);
-		persona_dbg("Increment Persona:%d (UID:%d) proc_count to: %d",
+		persona_dbg("Increment Persona:%d (UID:%d) proc_count to: %lu",
 		    new_uid, kauth_cred_getuid(my_new_cred), count);
 	}
 
@@ -1288,7 +1278,7 @@ persona_get_gid(struct persona *persona)
 }
 
 int
-persona_set_groups(struct persona *persona, gid_t *groups, unsigned ngroups, uid_t gmuid)
+persona_set_groups(struct persona *persona, gid_t *groups, size_t ngroups, uid_t gmuid)
 {
 	int ret = 0;
 	kauth_cred_t my_cred, new_cred;
@@ -1312,7 +1302,7 @@ persona_set_groups(struct persona *persona, gid_t *groups, unsigned ngroups, uid
 
 	my_cred = persona->pna_cred;
 	kauth_cred_ref(my_cred);
-	new_cred = kauth_cred_setgroups(my_cred, groups, (int)ngroups, gmuid);
+	new_cred = kauth_cred_setgroups(my_cred, groups, ngroups, gmuid);
 	if (new_cred != my_cred) {
 		persona->pna_cred = new_cred;
 	}
@@ -1324,7 +1314,7 @@ out_unlock:
 }
 
 int
-persona_get_groups(struct persona *persona, unsigned *ngroups, gid_t *groups, unsigned groups_sz)
+persona_get_groups(struct persona *persona, size_t *ngroups, gid_t *groups, size_t groups_sz)
 {
 	int ret = EINVAL;
 	if (!persona || !persona->pna_cred || !groups || !ngroups || groups_sz > NGROUPS) {
@@ -1335,9 +1325,9 @@ persona_get_groups(struct persona *persona, unsigned *ngroups, gid_t *groups, un
 
 	persona_lock(persona);
 	if (persona_valid(persona)) {
-		int kauth_ngroups = (int)groups_sz;
+		size_t kauth_ngroups = groups_sz;
 		kauth_cred_getgroups(persona->pna_cred, groups, &kauth_ngroups);
-		*ngroups = (unsigned)kauth_ngroups;
+		*ngroups = (uint32_t)kauth_ngroups;
 		ret = 0;
 	}
 	persona_unlock(persona);

@@ -182,6 +182,7 @@ struct winsize {
 #define TIOCPTYUNLK     _IO('t', 82)            /* unlockpt(3) */
 #ifdef KERNEL
 #define TIOCREVOKE       _IO('t', 81)
+#define TIOCREVOKECLEAR  _IO('t', 80)
 #endif
 
 #define TTYDISC         0               /* termios tty line discipline */

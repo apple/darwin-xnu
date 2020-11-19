@@ -40,7 +40,7 @@ extern unsigned mptcp_setup_syn_opts(struct socket *, u_char*, unsigned);
 extern unsigned mptcp_setup_join_ack_opts(struct tcpcb *, u_char*, unsigned);
 extern unsigned int mptcp_setup_opts(struct tcpcb *tp, int32_t off, u_char *opt,
     unsigned int optlen, int flags, int len,
-    boolean_t *p_mptcp_acknow);
+    boolean_t *p_mptcp_acknow, boolean_t *do_not_compress);
 extern void mptcp_update_dss_rcv_state(struct mptcp_dsn_opt *, struct tcpcb *,
     uint16_t);
 extern void mptcp_update_rcv_state_meat(struct mptcb *, struct tcpcb *,

@@ -32,17 +32,16 @@
 #ifndef	_ATM_ATM_TYPES_DEFS_
 #define _ATM_ATM_TYPES_DEFS_
 
-
 #include <mach/std_types.defs>
 
-type aid_t 	= uint64_t;
-type atm_aid_t 	= uint64_t;
+type aid_t = uint64_t;
+type atm_aid_t = uint64_t;
 type mach_atm_subaid_t = uint64_t;
 
 type atm_memory_descriptor_array_t = array[*:512] of mach_port_t;
 type atm_memory_size_array_t = array[*:512] of uint64_t;
 
-import <atm/atm_types.h>; 
+import <atm/atm_types.h>;
 
 #endif	/* _ATM_ATM_TYPES_DEFS_ */
 /* vim: set ft=c : */

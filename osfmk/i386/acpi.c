@@ -55,6 +55,16 @@
 
 #include <i386/tsc.h>
 
+#define UINT64 uint64_t
+#define UINT32 uint32_t
+#define UINT16 uint16_t
+#define UINT8 uint8_t
+#define RSDP_VERSION_ACPI10     0
+#define RSDP_VERSION_ACPI20     2
+#include <acpi/Acpi.h>
+#include <acpi/Acpi_v1.h>
+#include <pexpert/i386/efi.h>
+
 #include <kern/cpu_data.h>
 #include <kern/machine.h>
 #include <kern/timer_queue.h>
@@ -81,6 +91,12 @@ extern kern_return_t IOCPURunPlatformActiveActions(void);
 extern kern_return_t IOCPURunPlatformHaltRestartActions(uint32_t message);
 
 extern void     fpinit(void);
+
+#if DEVELOPMENT || DEBUG
+#define DBG(x...) kprintf(x)
+#else
+#define DBG(x...)
+#endif
 
 vm_offset_t
 acpi_install_wake_handler(void)
@@ -159,10 +175,6 @@ acpi_hibernate(void *refcon)
 #endif /* CONFIG_SLEEP */
 
 extern void                     slave_pstart(void);
-extern void                     hibernate_rebuild_vm_structs(void);
-
-extern unsigned int wake_nkdbufs;
-extern unsigned int trace_wrap;
 
 void
 acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
@@ -196,7 +208,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	}
 
 	/* shutdown local APIC before passing control to firmware */
-	lapic_shutdown();
+	lapic_shutdown(true);
 
 #if HIBERNATION
 	data.func = func;
@@ -310,7 +322,7 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 
 	/* re-enable and re-init local apic (prior to starting timers) */
 	if (lapic_probe()) {
-		lapic_configure();
+		lapic_configure(true);
 	}
 
 #if KASAN
@@ -321,21 +333,13 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	kasan_unpoison_curstack(true);
 #endif
 
-#if HIBERNATION
-	hibernate_rebuild_vm_structs();
-#endif
-
 	elapsed += mach_absolute_time() - start;
 
 	rtc_decrementer_configure();
 	kdebug_enable = save_kdebug_enable;
 
 	if (kdebug_enable == 0) {
-		if (wake_nkdbufs) {
-			start = mach_absolute_time();
-			kdebug_trace_start(wake_nkdbufs, NULL, trace_wrap != 0, TRUE);
-			elapsed_trace_start += mach_absolute_time() - start;
-		}
+		elapsed_trace_start += kdebug_wake();
 	}
 	start = mach_absolute_time();
 
@@ -344,16 +348,6 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	clear_ts();
 
 	IOCPURunPlatformActiveActions();
-
-#if HIBERNATION
-	if (did_hibernate) {
-		KDBG(IOKDBG_CODE(DBG_HIBERNATE, 2) | DBG_FUNC_START);
-		hibernate_machine_init();
-		KDBG(IOKDBG_CODE(DBG_HIBERNATE, 2) | DBG_FUNC_END);
-
-		current_cpu_datap()->cpu_hibernate = 0;
-	}
-#endif /* HIBERNATION */
 
 	KDBG(IOKDBG_CODE(DBG_HIBERNATE, 0) | DBG_FUNC_END, start, elapsed,
 	    elapsed_trace_start, acpi_wake_abstime);
@@ -382,6 +376,27 @@ acpi_sleep_kernel(acpi_sleep_callback func, void *refcon)
 	 * after coming back from sleep or hibernate */
 	install_real_mode_bootstrap(slave_pstart);
 #endif /* CONFIG_SLEEP */
+}
+
+void
+ml_hibernate_active_pre(void)
+{
+#if HIBERNATION
+	hibernate_rebuild_vm_structs();
+#endif /* HIBERNATION */
+}
+
+void
+ml_hibernate_active_post(void)
+{
+#if HIBERNATION
+	if (current_cpu_datap()->cpu_hibernate) {
+		KDBG(IOKDBG_CODE(DBG_HIBERNATE, 2) | DBG_FUNC_START);
+		hibernate_machine_init();
+		KDBG(IOKDBG_CODE(DBG_HIBERNATE, 2) | DBG_FUNC_END);
+		current_cpu_datap()->cpu_hibernate = 0;
+	}
+#endif /* HIBERNATION */
 }
 
 /*
@@ -475,13 +490,13 @@ acpi_idle_kernel(acpi_sleep_callback func, void *refcon)
 		MACHDBG_CODE(DBG_MACH_SCHED, MACH_DEEP_IDLE) | DBG_FUNC_END,
 		acpi_wake_abstime, acpi_wake_abstime - acpi_idle_abstime, 0, 0, 0);
 
+#if MONOTONIC
+	mt_cpu_up(cpu_datap(0));
+#endif /* MONOTONIC */
+
 	/* Like S3 sleep, turn on tracing if trace_wake boot-arg is present */
 	if (kdebug_enable == 0) {
-		if (wake_nkdbufs) {
-			__kdebug_only uint64_t start = mach_absolute_time();
-			kdebug_trace_start(wake_nkdbufs, NULL, trace_wrap != 0, TRUE);
-			KDBG(IOKDBG_CODE(DBG_HIBERNATE, 15), start);
-		}
+		kdebug_wake();
 	}
 
 	IOCPURunPlatformActiveActions();
@@ -525,4 +540,202 @@ ml_recent_wake(void)
 	uint64_t ctime = mach_absolute_time();
 	assert(ctime > acpi_wake_postrebase_abstime);
 	return (ctime - acpi_wake_postrebase_abstime) < 5 * NSEC_PER_SEC;
+}
+
+static uint8_t
+cksum8(uint8_t *ptr, uint32_t size)
+{
+	uint8_t sum = 0;
+	uint32_t i;
+
+	for (i = 0; i < size; i++) {
+		sum += ptr[i];
+	}
+
+	return sum;
+}
+
+/*
+ * Parameterized search for a specified table given an sdtp (either RSDT or XSDT).
+ * Note that efiboot does not modify the addresses of tables in the RSDT or XSDT
+ * TableOffsetEntry array, so we do not need to "convert" from efiboot virtual to
+ * physical.
+ */
+#define SEARCH_FOR_ACPI_TABLE(sdtp, signature, entry_type) \
+{                                                                                               \
+	uint32_t i, pointer_count;                                                              \
+                                                                                                \
+	/* Walk the list of tables in the *SDT, looking for the signature passed in */          \
+	pointer_count = ((sdtp)->Length - sizeof(ACPI_TABLE_HEADER)) / sizeof(entry_type);      \
+                                                                                                \
+	for (i = 0; i < pointer_count; i++) {                                                   \
+	        ACPI_TABLE_HEADER *next_table =                                                 \
+	                (ACPI_TABLE_HEADER *)PHYSMAP_PTOV(                                      \
+	                        (uintptr_t)(sdtp)->TableOffsetEntry[i]);                        \
+	        if (strncmp(&next_table->Signature[0], (signature), 4) == 0) {                  \
+	/* \
+	 * Checksum the table first, then return it if the checksum \
+	 * is valid. \
+	 */                                                                                     \
+	                if (cksum8((uint8_t *)next_table, next_table->Length) == 0) {           \
+	                        return next_table;                                              \
+	                } else {                                                                \
+	                        DBG("Invalid checksum for table [%s]@0x%lx!\n", (signature),    \
+	                            (unsigned long)(sdtp)->TableOffsetEntry[i]);                \
+	                        return NULL;                                                    \
+	                }                                                                       \
+	        }                                                                               \
+	}                                                                                       \
+                                                                                                \
+	return NULL;                                                                            \
+}
+
+static ACPI_TABLE_HEADER *
+acpi_find_table_via_xsdt(XSDT_DESCRIPTOR *xsdtp, const char *signature)
+{
+	SEARCH_FOR_ACPI_TABLE(xsdtp, signature, UINT64);
+}
+
+static ACPI_TABLE_HEADER *
+acpi_find_table_via_rsdt(RSDT_DESCRIPTOR *rsdtp, const char *signature)
+{
+	SEARCH_FOR_ACPI_TABLE(rsdtp, signature, UINT32);
+}
+
+/*
+ * Returns a pointer to an ACPI table header corresponding to the table
+ * whose signature is passed in, or NULL if no such table could be found.
+ */
+static ACPI_TABLE_HEADER *
+acpi_find_table(uintptr_t rsdp_physaddr, const char *signature)
+{
+	static RSDP_DESCRIPTOR *rsdp = NULL;
+	static XSDT_DESCRIPTOR *xsdtp = NULL;
+	static RSDT_DESCRIPTOR *rsdtp = NULL;
+
+	if (signature == NULL) {
+		DBG("Invalid NULL signature passed to acpi_find_table\n");
+		return NULL;
+	}
+
+	/*
+	 * RSDT or XSDT is required; without it, we cannot locate other tables.
+	 */
+	if (__improbable(rsdp == NULL || (rsdtp == NULL && xsdtp == NULL))) {
+		rsdp = PHYSMAP_PTOV(rsdp_physaddr);
+
+		/* Verify RSDP signature */
+		if (__improbable(strncmp((void *)rsdp, "RSD PTR ", 8) != 0)) {
+			DBG("RSDP signature mismatch: Aborting acpi_find_table\n");
+			rsdp = NULL;
+			return NULL;
+		}
+
+		/* Verify RSDP checksum */
+		if (__improbable(cksum8((uint8_t *)rsdp, sizeof(RSDP_DESCRIPTOR)) != 0)) {
+			DBG("RSDP@0x%lx signature mismatch: Aborting acpi_find_table\n",
+			    (unsigned long)rsdp_physaddr);
+			rsdp = NULL;
+			return NULL;
+		}
+
+		/* Ensure the revision of the RSDP indicates the presence of an RSDT or XSDT */
+		if (__improbable(rsdp->Revision >= RSDP_VERSION_ACPI20 && rsdp->XsdtPhysicalAddress == 0ULL)) {
+			DBG("RSDP XSDT Physical Address is 0!: Aborting acpi_find_table\n");
+			rsdp = NULL;
+			return NULL;
+		} else if (__probable(rsdp->Revision >= RSDP_VERSION_ACPI20)) {
+			/* XSDT (with 64-bit pointers to tables) */
+			rsdtp = NULL;
+			xsdtp = PHYSMAP_PTOV(rsdp->XsdtPhysicalAddress);
+			if (cksum8((uint8_t *)xsdtp, xsdtp->Length) != 0) {
+				DBG("ERROR: XSDT@0x%lx checksum is non-zero; not using this XSDT\n",
+				    (unsigned long)rsdp->XsdtPhysicalAddress);
+				xsdtp = NULL;
+				return NULL;
+			}
+		} else if (__improbable(rsdp->Revision == RSDP_VERSION_ACPI10 && rsdp->RsdtPhysicalAddress == 0)) {
+			DBG("RSDP RSDT Physical Address is 0!: Aborting acpi_find_table\n");
+			rsdp = NULL;
+			return NULL;
+		} else if (__improbable(rsdp->Revision == RSDP_VERSION_ACPI10)) {
+			/* RSDT (with 32-bit pointers to tables) */
+			xsdtp = NULL;
+			rsdtp = PHYSMAP_PTOV((uintptr_t)rsdp->RsdtPhysicalAddress);
+			if (cksum8((uint8_t *)rsdtp, rsdtp->Length) != 0) {
+				DBG("ERROR: RSDT@0x%lx checksum is non-zero; not using this RSDT\n",
+				    (unsigned long)rsdp->RsdtPhysicalAddress);
+				rsdtp = NULL;
+				return NULL;
+			}
+		} else {
+			DBG("Unrecognized RSDP Revision (0x%x): Aborting acpi_find_table\n",
+			    rsdp->Revision);
+			rsdp = NULL;
+			return NULL;
+		}
+	}
+
+	assert(xsdtp != NULL || rsdtp != NULL);
+
+	if (__probable(xsdtp != NULL)) {
+		return acpi_find_table_via_xsdt(xsdtp, signature);
+	} else if (rsdtp != NULL) {
+		return acpi_find_table_via_rsdt(rsdtp, signature);
+	}
+
+	return NULL;
+}
+
+/*
+ * Returns the count of enabled logical processors present in the ACPI
+ * MADT, or 0 if the MADT could not be located.
+ */
+uint32_t
+acpi_count_enabled_logical_processors(void)
+{
+	MULTIPLE_APIC_TABLE *madtp;
+	void *end_ptr;
+	APIC_HEADER *next_apic_entryp;
+	uint32_t enabled_cpu_count = 0;
+	uint64_t rsdp_physaddr;
+
+	rsdp_physaddr = efi_get_rsdp_physaddr();
+	if (__improbable(rsdp_physaddr == 0)) {
+		DBG("acpi_count_enabled_logical_processors: Could not get RSDP physaddr from EFI.\n");
+		return 0;
+	}
+
+	madtp = (MULTIPLE_APIC_TABLE *)acpi_find_table(rsdp_physaddr, ACPI_SIG_MADT);
+
+	if (__improbable(madtp == NULL)) {
+		DBG("acpi_count_enabled_logical_processors: Could not find the MADT.\n");
+		return 0;
+	}
+
+	end_ptr = (void *)((uintptr_t)madtp + madtp->Length);
+	next_apic_entryp = (APIC_HEADER *)((uintptr_t)madtp + sizeof(MULTIPLE_APIC_TABLE));
+
+	while ((void *)next_apic_entryp < end_ptr) {
+		switch (next_apic_entryp->Type) {
+		case APIC_PROCESSOR:
+		{
+			MADT_PROCESSOR_APIC *madt_procp = (MADT_PROCESSOR_APIC *)next_apic_entryp;
+			if (madt_procp->ProcessorEnabled) {
+				enabled_cpu_count++;
+			}
+
+			break;
+		}
+
+		default:
+			DBG("Ignoring MADT entry type 0x%x length 0x%x\n", next_apic_entryp->Type,
+			    next_apic_entryp->Length);
+			break;
+		}
+
+		next_apic_entryp = (APIC_HEADER *)((uintptr_t)next_apic_entryp + next_apic_entryp->Length);
+	}
+
+	return enabled_cpu_count;
 }

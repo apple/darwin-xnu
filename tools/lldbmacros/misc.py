@@ -81,42 +81,81 @@ def showMCAstate(cmd_args=None):
         print lldb_run_command('p/x *(x86_saved_state_t *) ' + hex(reg))
         cpu = cpu + 1
 
-def dumpTimerList(anchor):
+def dumpTimerList(mpqueue):
     """
     Utility function to dump the timer entries in list (anchor).
+    anchor is a struct mpqueue_head.
     """
-    entry = Cast(anchor.head, 'queue_t')
-    if entry == addressof(anchor):
+
+    if mpqueue.count == 0:
         print '(empty)'
         return
 
-    thdr = ' {:<22s}{:<17s}{:<16s} {:<14s} {:<18s}'
-    print thdr.format('entry:','deadline','soft_deadline','to go','(*func)(param0,param1')
-    while entry != addressof(anchor):
-        timer_call = Cast(entry, 'timer_call_t')
-        call_entry = Cast(entry, 'struct call_entry *')
+    thdr = ' {:<24s}{:<17s}{:<16s} {:<14s} {:<18s} count: {:d} '
+    tval = ' {:#018x}: {:16d} {:16d} {:s}{:3d}.{:09d}  ({:#018x})({:#018x}, {:#018x}) ({:s}) {:s}'
+
+    print thdr.format('Entry', 'Deadline', 'soft_deadline', 'Secs To Go', '(*func)(param0, param1)', mpqueue.count)
+
+    for timer_call in ParanoidIterateLinkageChain(mpqueue.head, 'struct timer_call *', 'tc_qlink'):
         recent_timestamp = GetRecentTimestamp()
-        if (recent_timestamp < call_entry.deadline):
+        if (recent_timestamp < timer_call.tc_pqlink.deadline):
             delta_sign = ' '
-            timer_fire = call_entry.deadline - recent_timestamp
+            timer_fire = timer_call.tc_pqlink.deadline - recent_timestamp
         else:
             delta_sign = '-'
-            timer_fire = recent_timestamp - call_entry.deadline
+            timer_fire = recent_timestamp - timer_call.tc_pqlink.deadline
 
-        func_name = kern.Symbolicate(call_entry.func)
+        func_name = kern.Symbolicate(timer_call.tc_func)
 
-        tval = ' {:#018x}: {:16d} {:16d} {:s}{:3d}.{:09d}  ({:#018x})({:#018x},{:#018x}) ({:s})'
-        print tval.format(entry,
-            call_entry.deadline,
-            timer_call.soft_deadline,
+        extra_string = ""
+
+        strip_func = kern.StripKernelPAC(unsigned(timer_call.tc_func))
+
+        func_syms = kern.SymbolicateFromAddress(strip_func)
+        # returns an array of SBSymbol
+
+        if func_syms and func_syms[0] :
+            func_sym = func_syms[0]
+            func_name = func_sym.GetName()
+            try :
+
+                if "thread_call_delayed_timer" in func_name :
+                    group = Cast(timer_call.tc_param0, 'struct thread_call_group *')
+                    flavor = Cast(timer_call.tc_param1, 'thread_call_flavor_t')
+
+                    # There's got to be a better way to stringify the enum
+                    flavorname = str(flavor).partition(" = ")[2]
+
+                    extra_string += "{:s} {:s}".format(group.tcg_name, flavorname)
+
+                if "thread_timer_expire" in func_name :
+                    thread = Cast(timer_call.tc_param0, 'thread_t')
+
+                    tid = thread.thread_id
+                    name = GetThreadName(thread)
+                    pid = GetProcPIDForTask(thread.task)
+                    procname = GetProcNameForTask(thread.task)
+
+                    extra_string += "thread: 0x{:x} {:s} task:{:s}[{:d}]".format(
+                            tid, name, procname, pid)
+            except:
+                print "exception generating extra_string for call: {:#018x}".format(timer_call)
+                if dumpTimerList.enable_debug :
+                    raise
+
+        tval = ' {:#018x}: {:16d} {:16d} {:s}{:3d}.{:09d}  ({:#018x})({:#018x},{:#018x}) ({:s}) {:s}'
+        print tval.format(timer_call,
+            timer_call.tc_pqlink.deadline,
+            timer_call.tc_soft_deadline,
             delta_sign,
             timer_fire/1000000000,
             timer_fire%1000000000,
-            call_entry.func,
-            call_entry.param0,
-            call_entry.param1,
-            func_name)
-        entry = entry.next
+            timer_call.tc_func,
+            timer_call.tc_param0,
+            timer_call.tc_param1,
+            func_name, extra_string)
+
+dumpTimerList.enable_debug = False
 
 def GetCpuDataForCpuID(cpu_id):
     """
@@ -141,8 +180,8 @@ def longtermTimers(cmd_args=None):
 
     lt = kern.globals.timer_longterm
     ltt = lt.threshold
-    EndofAllTime = -1
-    if ltt.interval == EndofAllTime:
+    EndofAllTime = long(-1)
+    if long(ltt.interval) == EndofAllTime:
         print "Longterm timers disabled"
         return
 
@@ -158,17 +197,17 @@ def longtermTimers(cmd_args=None):
     print     ' enqueues/escalates  : {:d}'    .format(ratio)
     print     ' threshold.interval  : {:d}'    .format(ltt.interval)
     print     ' threshold.margin    : {:d}'    .format(ltt.margin)
-    print     ' scan_time           : {:d}'    .format(lt.scan_time)
-    if ltt.preempted == EndofAllTime:
+    print     ' scan_time           : {:#018x} ({:d})'.format(lt.scan_time, lt.scan_time)
+    if long(ltt.preempted) == EndofAllTime:
         print ' threshold.preempted : None'
     else:
-        print ' threshold.preempted : {:d}'    .format(ltt.preempted)
-    if ltt.deadline == EndofAllTime:
+        print ' threshold.preempted : {:#018x} ({:d})'.format(ltt.preempted, ltt.preempted)
+    if long(ltt.deadline) == EndofAllTime:
         print ' threshold.deadline  : None'
     else:
-        print ' threshold.deadline  : {:d}'    .format(ltt.deadline)
+        print ' threshold.deadline  : {:#018x} ({:d})'.format(ltt.deadline, ltt.deadline)
         print ' threshold.call      : {:#018x}'.format(ltt.call)
-        print ' actual deadline set : {:d}'    .format(ltt.deadline_set)
+        print ' actual deadline set : {:#018x} ({:d})'.format(ltt.deadline_set, ltt.deadline_set)
     print     ' threshold.scans     : {:d}'    .format(ltt.scans)
     print     ' threshold.preempts  : {:d}'    .format(ltt.preempts)
     print     ' threshold.latency   : {:d}'    .format(ltt.latency)
@@ -183,26 +222,32 @@ def processorTimers(cmd_args=None):
     Print details of processor timers, noting anything suspicious
     Also include long-term timer details
     """
-    hdr = '{:<32s}{:<18s} {:<18s} {:<18s}'
-    print hdr.format('Processor','Last dispatch','Next deadline','difference')
+    hdr = '{:15s}{:<18s} {:<18s} {:<18s} {:<18s}'
+    print hdr.format('Processor #', 'Processor pointer', 'Last dispatch', 'Next deadline', 'Difference')
+    print "=" * 82
     p = kern.globals.processor_list
+    EndOfAllTime = long(-1)
     while p:
         cpu = p.cpu_id
         cpu_data = GetCpuDataForCpuID(cpu)
         rt_timer = cpu_data.rtclock_timer
-        diff = p.last_dispatch - rt_timer.deadline
-        tmr = 'Processor {:d}: {:#018x} {:#018x} {:#018x} {:#018x} {:s}'
+        diff = long(rt_timer.deadline) - long(p.last_dispatch)
+        valid_deadline = long(rt_timer.deadline) != EndOfAllTime
+        tmr = 'Processor {:<3d}: {:#018x} {:#018x} {:18s} {:18s} {:s}'
         print tmr.format(cpu,
             p,
             p.last_dispatch,
-            rt_timer.deadline,
-            diff,
-            ['probably BAD', '(ok)'][int(diff < 0)])
-        if kern.arch == 'x86_64':
-            print 'Next deadline set at: {:#018x}. Timer call list:'.format(rt_timer.when_set)
-        dumpTimerList(rt_timer.queue)
+            "{:#018x}".format(rt_timer.deadline) if valid_deadline else "None",
+            "{:#018x}".format(diff) if valid_deadline else "N/A",
+            ['(PAST DEADLINE)', '(ok)'][int(diff > 0)] if valid_deadline else "")
+        if valid_deadline:
+            if kern.arch == 'x86_64':
+                print 'Next deadline set at: {:#018x}. Timer call list:'.format(rt_timer.when_set)
+            dumpTimerList(rt_timer.queue)
         p = p.processor_list
+    print "-" * 82
     longtermTimers()
+    ShowRunningTimers()
 
 
 @lldb_command('showtimerwakeupstats')
@@ -217,7 +262,7 @@ def showTimerWakeupStats(cmd_args=None):
         print dereference(task)
         print '{:d}({:s}), terminated thread timer wakeups: {:d} {:d} 2ms: {:d} 5ms: {:d} UT: {:d} ST: {:d}'.format(
             proc.p_pid,
-            proc.p_comm,
+            GetProcName(proc),
 # Commented-out references below to be addressed by rdar://13009660.
             0, #task.task_interrupt_wakeups,
             0, #task.task_platform_idle_wakeups,
@@ -246,6 +291,27 @@ def showTimerWakeupStats(cmd_args=None):
             tot_platform_wakes += 0 #thread.thread_platform_idle_wakeups
         print 'Task total wakeups: {:d} {:d}'.format(
             tot_wakes, tot_platform_wakes)
+
+@lldb_command('showrunningtimers')
+def ShowRunningTimers(cmd_args=None):
+    """
+    Print the state of all running timers.
+    
+    Usage: showrunningtimers
+    """
+    pset = addressof(kern.globals.pset0)
+    processor_array = kern.globals.processor_array
+
+    i = 0
+    while processor_array[i] != 0:
+        processor = processor_array[i]
+        print('{}: {}'.format(
+                i, 'on' if processor.running_timers_active else 'off'))
+        print('\tquantum: {}'.format(
+                unsigned(processor.running_timers[0].tc_pqlink.deadline)))
+        print('\tkperf: {}'.format(
+                unsigned(processor.running_timers[1].tc_pqlink.deadline)))
+        i += 1
 
 def DoReadMsr64(msr_address, lcpu):
     """ Read a 64-bit MSR from the specified CPU
@@ -389,45 +455,6 @@ def WriteMsr64(cmd_args=None):
     if not DoWriteMsr64(msr_address, lcpu, write_val):
         print "writemsr64 FAILED"
 
-def GetEVFlags(debug_arg):
-    """ Return the EV Flags for the given kernel debug arg value
-        params:
-            debug_arg - value from arg member of kernel debug buffer entry
-        returns: 
-            str - string representing the EV Flag for given input arg value
-    """
-    out_str = ""
-    if debug_arg & 1:
-        out_str += "EV_RE "
-    if debug_arg & 2:
-        out_str += "EV_WR "
-    if debug_arg & 4:
-        out_str += "EV_EX "
-    if debug_arg & 8:
-        out_str += "EV_RM "
-    if debug_arg & 0x00100:
-        out_str += "EV_RBYTES "
-    if debug_arg & 0x00200:
-        out_str += "EV_WBYTES "
-    if debug_arg & 0x00400:
-        out_str += "EV_RCLOSED "
-    if debug_arg & 0x00800:
-        out_str += "EV_RCONN "
-    if debug_arg & 0x01000:
-        out_str += "EV_WCLOSED "
-    if debug_arg & 0x02000:
-        out_str += "EV_WCONN "
-    if debug_arg & 0x04000:
-        out_str += "EV_OOB "
-    if debug_arg & 0x08000:
-        out_str += "EV_FIN "
-    if debug_arg & 0x10000:
-        out_str += "EV_RESET "
-    if debug_arg & 0x20000:
-        out_str += "EV_TIMEOUT "
-    
-    return out_str
-
 def GetKernelDebugBufferEntry(kdbg_entry):
     """ Extract the information from given kernel debug buffer entry and return the summary
         params:
@@ -545,89 +572,11 @@ def GetKernelDebugBufferEntry(kdbg_entry):
     out_str += " {:>#5x} {:>8d}   ".format(kdebug_subclass, kdebug_code)
 
     # space for debugid-specific processing
-    # EVPROC from bsd/kern/sys_generic.c
-    # MISCDBG_CODE(DBG_EVENT,DBG_WAIT)
-    if debugid == 0x14100048:
-        code_info_str += "waitevent "
-        if kdebug_arg1 == 1:
-            code_info_str += "before sleep"
-        elif kdebug_arg1 == 2:
-            code_info_str += "after  sleep"
-        else:
-            code_info_str += "????????????"
-        code_info_str += " chan={:#08x} ".format(kdebug_arg2)
-    elif debugid == 0x14100049:
-        # MISCDBG_CODE(DBG_EVENT,DBG_WAIT|DBG_FUNC_START)
-        code_info_str += "waitevent "
-    elif debugid == 0x1410004a:
-        # MISCDBG_CODE(DBG_EVENT,DBG_WAIT|DBG_FUNC_END)
-        code_info_str += "waitevent error={:d} ".format(kdebug_arg1)
-        code_info_str += "eqp={:#08x} ".format(kdebug_arg4)
-        code_info_str += GetEVFlags(kdebug_arg3)
-        code_info_str += "er_handle={:d} ".format(kdebug_arg2)
-    elif debugid == 0x14100059:
-        # MISCDBG_CODE(DBG_EVENT,DBG_DEQUEUE|DBG_FUNC_START)
-        code_info_str += "evprocdeque proc={:#08x} ".format(kdebug_arg1)
-        if kdebug_arg2 == 0:
-            code_info_str += "remove first "
-        else:
-            code_info_str += "remove {:#08x} ".format(kdebug_arg2)
-    elif debugid == 0x1410005a:
-        # MISCDBG_CODE(DBG_EVENT,DBG_DEQUEUE|DBG_FUNC_END)
-        code_info_str += "evprocdeque "
-        if kdebug_arg1 == 0:
-            code_info_str += "result=NULL "
-        else:
-            code_info_str += "result={:#08x} ".format(kdebug_arg1)
-    elif debugid == 0x14100041:
-        # MISCDBG_CODE(DBG_EVENT,DBG_POST|DBG_FUNC_START)
-        code_info_str += "postevent "
-        code_info_str += GetEVFlags(kdebug_arg1)
-    elif debugid == 0x14100040:
-        # MISCDBG_CODE(DBG_EVENT,DBG_POST)
-        code_info_str += "postevent "
-        code_info_str += "evq={:#08x} ".format(kdebug_arg1)
-        code_info_str += "er_eventbits="
-        code_info_str += GetEVFlags(kdebug_arg2)
-        code_info_str +="mask="
-        code_info_str += GetEVFlags(kdebug_arg3)
-    elif debugid == 0x14100042:
-        # MISCDBG_CODE(DBG_EVENT,DBG_POST|DBG_FUNC_END)
-        code_info_str += "postevent "
-    elif debugid == 0x14100055:
-        # MISCDBG_CODE(DBG_EVENT,DBG_ENQUEUE|DBG_FUNC_START)
-        code_info_str += "evprocenque eqp={:#08x} ".format(kdebug_arg1)
-        if kdebug_arg2 & 1:
-            code_info_str += "EV_QUEUED "
-        code_info_str += GetEVFlags(kdebug_arg3)
-    elif debugid == 0x14100050:
-        # MISCDBG_CODE(DBG_EVENT,DBG_EWAKEUP)
-        code_info_str += "evprocenque before wakeup eqp={:#08x} ".format(kdebug_arg4)
-    elif debugid == 0x14100056:
-        # MISCDBG_CODE(DBG_EVENT,DBG_ENQUEUE|DBG_FUNC_END)
-        code_info_str += "evprocenque "
-    elif debugid == 0x1410004d:
-        # MISCDBG_CODE(DBG_EVENT,DBG_MOD|DBG_FUNC_START)
-        code_info_str += "modwatch "
-    elif debugid == 0x1410004c:
-        # MISCDBG_CODE(DBG_EVENT,DBG_MOD)
-        code_info_str += "modwatch er_handle={:d} ".format(kdebug_arg1)
-        code_info_str += GetEVFlags(kdebug_arg2)
-        code_info_str += "evq={:#08x} ", kdebug_arg3
-    elif debugid == 0x1410004e:
-    # MISCDBG_CODE(DBG_EVENT,DBG_MOD|DBG_FUNC_END)
-        code_info_str += "modwatch er_handle={:d} ".format(kdebug_arg1)
-        code_info_str += "ee_eventmask="
-        code_info_str += GetEVFlags(kdebug_arg2)
-        code_info_str += "sp={:#08x} ".format(kdebug_arg3)
-        code_info_str += "flag="
-        code_info_str += GetEVFlags(kdebug_arg4)
-    else:
-        code_info_str += "arg1={:#010x} ".format(kdebug_arg1)
-        code_info_str += "arg2={:#010x} ".format(kdebug_arg2)
-        code_info_str += "arg3={:#010x} ".format(kdebug_arg3)
-        code_info_str += "arg4={:#010x} ".format(kdebug_arg4)
-    
+    code_info_str += "arg1={:#010x} ".format(kdebug_arg1)
+    code_info_str += "arg2={:#010x} ".format(kdebug_arg2)
+    code_info_str += "arg3={:#010x} ".format(kdebug_arg3)
+    code_info_str += "arg4={:#010x} ".format(kdebug_arg4)
+
     # finish up
     out_str += "{:<25s}\n".format(code_info_str)
     return out_str
@@ -1004,6 +953,19 @@ def DumpRawTraceFile(cmd_args=[], cmd_options={}):
     wfd.close()
 
     return
+
+
+def GetTimebaseInfo():
+    try:
+        tb = kern.GetValueFromAddress(
+                'RTClockData', '_rtclock_data_').rtc_timebase_const
+        numer = tb.numer
+        denom = tb.denom
+    except NameError:
+        # Intel -- use the 1-1 timebase.
+        numer = 1
+        denom = 1
+    return numer, denom
 
 
 def PrintIteratedElem(i, elem, elem_type, do_summary, summary, regex):

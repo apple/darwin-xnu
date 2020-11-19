@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 1999-2016 Apple Inc.
- * All rights reserved.
+ * Copyright (c) 1999-2020 Apple Inc.  All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
  * modification, are permitted provided that the following conditions
@@ -390,7 +389,7 @@ audit_sys_auditon(struct audit_record *ar, struct au_record *rec)
 			kau_write(rec, tok);
 			break;
 		}
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 	case A_SETPOLICY:
 		tok = au_to_arg32(3, "length", ar->ar_arg_len);
 		kau_write(rec, tok);
@@ -430,7 +429,7 @@ audit_sys_auditon(struct audit_record *ar, struct au_record *rec)
 			kau_write(rec, tok);
 			break;
 		}
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 	case A_SETQCTRL:
 		tok = au_to_arg32(3, "length", ar->ar_arg_len);
 		kau_write(rec, tok);
@@ -482,7 +481,7 @@ audit_sys_auditon(struct audit_record *ar, struct au_record *rec)
 			kau_write(rec, tok);
 			break;
 		}
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 	case A_SETCOND:
 		tok = au_to_arg32(3, "length", ar->ar_arg_len);
 		kau_write(rec, tok);
@@ -670,7 +669,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			tok = au_to_arg32(2, "sd", ar->ar_arg_value32);
 			kau_write(rec, tok);
 		}
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 	case AUE_ACCEPT:
 	case AUE_BIND:
 	case AUE_LISTEN:
@@ -792,15 +791,18 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			tok = au_to_arg32(1, "setaudit_addr:port",
 			    ar->ar_arg_termid_addr.at_port);
 			kau_write(rec, tok);
-			if (ar->ar_arg_termid_addr.at_type == AU_IPv6) {
+			switch (ar->ar_arg_termid_addr.at_type) {
+			case AU_IPv6:
 				tok = au_to_in_addr_ex((struct in6_addr *)
 				    &ar->ar_arg_termid_addr.at_addr[0]);
-			}
-			if (ar->ar_arg_termid_addr.at_type == AU_IPv4) {
+				kau_write(rec, tok);
+				break;
+			case AU_IPv4:
 				tok = au_to_in_addr((struct in_addr *)
 				    &ar->ar_arg_termid_addr.at_addr[0]);
+				kau_write(rec, tok);
+				break;
 			}
-			kau_write(rec, tok);
 		}
 		break;
 
@@ -812,7 +814,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			tok = au_to_arg32(1, "cmd", ar->ar_arg_cmd);
 			kau_write(rec, tok);
 		}
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 
 	case AUE_AUDITON_GETCAR:
 	case AUE_AUDITON_GETCLASS:
@@ -989,7 +991,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			tok = au_to_arg32(0, "child PID", ar->ar_arg_pid);
 			kau_write(rec, tok);
 		}
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 
 	case AUE_EXECVE:
 		if (ARG_IS_VALID(kar, ARG_ARGV)) {
@@ -1053,9 +1055,11 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 	case AUE_READ:
 	case AUE_READV:
 	case AUE_PREAD:
+	case AUE_PREADV:
 	case AUE_WRITE:
 	case AUE_WRITEV:
 	case AUE_PWRITE:
+	case AUE_PWRITEV:
 		FD_VNODE1_TOKENS;
 		break;
 
@@ -1267,7 +1271,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 #if CONFIG_MACF
 	case AUE_MAC_MOUNT:
 		PROCESS_MAC_TOKENS;
-		/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 #endif
 	case AUE_MOUNT:
 		/* XXX Need to handle NFS mounts */
@@ -1279,7 +1283,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			tok = au_to_text(ar->ar_arg_text);
 			kau_write(rec, tok);
 		}
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 
 	case AUE_UMOUNT:
 	case AUE_UNMOUNT:
@@ -1302,7 +1306,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 
 	case AUE_MSGCTL:
 		ar->ar_event = audit_msgctl_to_event(ar->ar_arg_svipc_cmd);
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 
 	case AUE_MSGRCV:
 	case AUE_MSGSND:
@@ -1534,7 +1538,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 
 	case AUE_SEMCTL:
 		ar->ar_event = audit_semctl_to_event(ar->ar_arg_svipc_cmd);
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 
 	case AUE_SEMOP:
 		if (ARG_IS_VALID(kar, ARG_SVIPC_ID)) {
@@ -1727,7 +1731,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			tok = au_to_arg32(3, "mode", ar->ar_arg_mode);
 			kau_write(rec, tok);
 		}
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 
 	case AUE_SHMUNLINK:
 		if (ARG_IS_VALID(kar, ARG_TEXT)) {
@@ -1762,7 +1766,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			tok = au_to_arg32(4, "value", ar->ar_arg_value32);
 			kau_write(rec, tok);
 		}
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 
 	case AUE_SEMUNLINK:
 		if (ARG_IS_VALID(kar, ARG_TEXT)) {
@@ -1825,7 +1829,7 @@ kaudit_to_bsm(struct kaudit_record *kar, struct au_record **pau)
 			    ar->ar_arg_opq_size);
 			kau_write(rec, tok);
 		}
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 
 	case AUE_UMASK:
 		if (ARG_IS_VALID(kar, ARG_MASK)) {

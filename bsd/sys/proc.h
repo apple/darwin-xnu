@@ -92,6 +92,7 @@
 struct session;
 struct pgrp;
 struct proc;
+struct proc_ident;
 
 /* Exported fields for kern sysctls */
 struct extern_proc {
@@ -233,6 +234,8 @@ __BEGIN_DECLS
 extern proc_t kernproc;
 
 extern int proc_is_classic(proc_t p);
+extern bool proc_is_exotic(proc_t p);
+extern bool proc_is_alien(proc_t p);
 proc_t current_proc_EXTERNAL(void);
 
 extern int      msleep(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, struct timespec * ts );
@@ -266,6 +269,8 @@ void proc_selfname(char * buf, int size);
 
 /* find a process with a given pid. This comes with a reference which needs to be dropped by proc_rele */
 extern proc_t proc_find(int pid);
+/* find a process with a given process identity */
+extern proc_t proc_find_ident(struct proc_ident const *i);
 /* returns a handle to current process which is referenced. The reference needs to be dropped with proc_rele */
 extern proc_t proc_self(void);
 /* releases the held reference on the process */
@@ -276,8 +281,12 @@ extern int proc_pid(proc_t);
 extern int proc_ppid(proc_t);
 /* returns the original pid of the parent of a given process */
 extern int proc_original_ppid(proc_t);
+/* returns the start time of the given process */
+extern int proc_starttime(proc_t, struct timeval *);
 /* returns the platform (macos, ios, watchos, tvos, ...) of the given process */
-extern uint32_t proc_platform(proc_t);
+extern uint32_t proc_platform(const proc_t);
+/* returns the minimum sdk version used by the current process */
+extern uint32_t proc_min_sdk(proc_t);
 /* returns the sdk version used by the current process */
 extern uint32_t proc_sdk(proc_t);
 /* returns 1 if the process is marked for no remote hangs */
@@ -293,6 +302,8 @@ extern boolean_t proc_send_synchronous_EXC_RESOURCE(proc_t p);
 extern int proc_is64bit(proc_t);
 /* this routine returns 1 if the process is running with a 64bit register state, else 0 */
 extern int proc_is64bit_data(proc_t);
+/* this routine returns 1 if the process is initproc */
+extern int proc_isinitproc(proc_t);
 /* is this process exiting? */
 extern int proc_exiting(proc_t);
 /* returns whether the process has started down proc_exit() */
@@ -335,7 +346,7 @@ pid_t proc_pgrpid(proc_t p);
  *  @function proc_sessionid
  *  @abstract Get the process session id for the passed-in process.
  *  @param p Process whose session id to grab.
- *  @return session id for "p", or -1 on failure
+ *  @return session id of current process.
  */
 pid_t proc_sessionid(proc_t p);
 
@@ -357,6 +368,8 @@ extern int      msleep1(void *chan, lck_mtx_t *mtx, int pri, const char *wmesg, 
 
 task_t proc_task(proc_t);
 extern int proc_pidversion(proc_t);
+extern proc_t proc_parent(proc_t);
+extern void proc_parent_audit_token(proc_t, audit_token_t *);
 extern uint32_t proc_persona_id(proc_t);
 extern uint32_t proc_getuid(proc_t);
 extern uint32_t proc_getgid(proc_t);
@@ -390,6 +403,12 @@ extern void proc_set_responsible_pid(proc_t target_proc, pid_t responsible_pid);
 
 /* return 1 if process is forcing case-sensitive HFS+ access, 0 for default */
 extern int proc_is_forcing_hfs_case_sensitivity(proc_t);
+
+/* return true if the process is translated, false for default */
+extern boolean_t proc_is_translated(proc_t);
+
+/* true if the process ignores errors from content protection APIs */
+extern bool proc_ignores_content_protection(proc_t proc);
 
 /*!
  *  @function    proc_exitstatus
@@ -431,9 +450,30 @@ extern off_t proc_getexecutableoffset(proc_t p);
 extern vnode_t proc_getexecutablevnode(proc_t); /* Returned with iocount, use vnode_put() to drop */
 extern int networking_memstatus_callout(proc_t p, uint32_t);
 
+/* System call filtering for BSD syscalls, mach traps and kobject routines. */
 #define SYSCALL_MASK_UNIX 0
+#define SYSCALL_MASK_MACH 1
+#define SYSCALL_MASK_KOBJ 2
+
+#define SYSCALL_FILTER_CALLBACK_VERSION 1
+typedef int (*syscall_filter_cbfunc_t)(proc_t p, int num);
+typedef int (*kobject_filter_cbfunc_t)(proc_t p, int msgid, int idx);
+struct syscall_filter_callbacks {
+	int version;
+	const syscall_filter_cbfunc_t unix_filter_cbfunc;
+	const syscall_filter_cbfunc_t mach_filter_cbfunc;
+	const kobject_filter_cbfunc_t kobj_filter_cbfunc;
+};
+typedef struct syscall_filter_callbacks * syscall_filter_cbs_t;
+
+extern int proc_set_syscall_filter_callbacks(syscall_filter_cbs_t callback);
+extern int proc_set_syscall_filter_index(int which, int num, int index);
 extern size_t proc_get_syscall_filter_mask_size(int which);
 extern int proc_set_syscall_filter_mask(proc_t p, int which, unsigned char *maskptr, size_t masklen);
+
+extern int proc_set_filter_message_flag(proc_t p, boolean_t flag);
+extern int proc_get_filter_message_flag(proc_t p, boolean_t *flag);
+
 #endif /* KERNEL_PRIVATE */
 
 __END_DECLS
@@ -458,6 +498,8 @@ __BEGIN_DECLS
 
 int pid_suspend(int pid);
 int pid_resume(int pid);
+int task_inspect_for_pid(unsigned int target_tport, int pid, unsigned int *t);
+int task_read_for_pid(unsigned int target_tport, int pid, unsigned int *t);
 
 #if defined(__arm__) || defined(__arm64__)
 int pid_hibernate(int pid);

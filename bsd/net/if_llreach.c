@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -131,18 +131,13 @@
 #include <kern/locks.h>
 #include <kern/zalloc.h>
 
-#if INET6
 #include <netinet6/in6_var.h>
 #include <netinet6/nd6.h>
-#endif /* INET6 */
 
-static unsigned int iflr_size;          /* size of if_llreach */
-static struct zone *iflr_zone;          /* zone for if_llreach */
+static ZONE_DECLARE(iflr_zone, "if_llreach", sizeof(struct if_llreach),
+    ZC_ZFREE_CLEARMEM);
 
-#define IFLR_ZONE_MAX           128             /* maximum elements in zone */
-#define IFLR_ZONE_NAME          "if_llreach"    /* zone name */
-
-static struct if_llreach *iflr_alloc(int);
+static struct if_llreach *iflr_alloc(zalloc_flags_t);
 static void iflr_free(struct if_llreach *);
 static __inline int iflr_cmp(const struct if_llreach *,
     const struct if_llreach *);
@@ -161,29 +156,7 @@ SYSCTL_NODE(_net_link_generic_system, OID_AUTO, llreach_info,
 /*
  * Link-layer reachability is based off node constants in RFC4861.
  */
-#if INET6
 #define LL_COMPUTE_RTIME(x)     ND_COMPUTE_RTIME(x)
-#else
-#define LL_MIN_RANDOM_FACTOR    512     /* 1024 * 0.5 */
-#define LL_MAX_RANDOM_FACTOR    1536    /* 1024 * 1.5 */
-#define LL_COMPUTE_RTIME(x)                                             \
-	(((LL_MIN_RANDOM_FACTOR * (x >> 10)) + (RandomULong() &         \
-	((LL_MAX_RANDOM_FACTOR - LL_MIN_RANDOM_FACTOR) * (x >> 10)))) / 1000)
-#endif /* !INET6 */
-
-void
-ifnet_llreach_init(void)
-{
-	iflr_size = sizeof(struct if_llreach);
-	iflr_zone = zinit(iflr_size,
-	    IFLR_ZONE_MAX * iflr_size, 0, IFLR_ZONE_NAME);
-	if (iflr_zone == NULL) {
-		panic("%s: failed allocating %s", __func__, IFLR_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(iflr_zone, Z_EXPAND, TRUE);
-	zone_change(iflr_zone, Z_CALLERACCT, FALSE);
-}
 
 void
 ifnet_llreach_ifattach(struct ifnet *ifp, boolean_t reuse)
@@ -291,7 +264,7 @@ ifnet_llreach_set_reachable(struct ifnet *ifp, u_int16_t llproto, void *addr,
 
 struct if_llreach *
 ifnet_llreach_alloc(struct ifnet *ifp, u_int16_t llproto, void *addr,
-    unsigned int alen, u_int64_t llreach_base)
+    unsigned int alen, u_int32_t llreach_base)
 {
 	struct if_llreach find, *lr;
 	struct timeval cnow;
@@ -332,11 +305,8 @@ found:
 		goto found;
 	}
 
-	lr = iflr_alloc(M_WAITOK);
-	if (lr == NULL) {
-		lck_rw_done(&ifp->if_llreach_lock);
-		return NULL;
-	}
+	lr = iflr_alloc(Z_WAITOK);
+
 	IFLR_LOCK(lr);
 	lr->lr_reqcnt++;
 	VERIFY(lr->lr_reqcnt == 1);
@@ -430,7 +400,7 @@ ifnet_llreach_up2upexp(struct if_llreach *lr, u_int64_t uptime)
 }
 
 int
-ifnet_llreach_get_defrouter(struct ifnet *ifp, int af,
+ifnet_llreach_get_defrouter(struct ifnet *ifp, sa_family_t af,
     struct ifnet_llreach_info *iflri)
 {
 	struct radix_node_head *rnh;
@@ -481,13 +451,11 @@ ifnet_llreach_get_defrouter(struct ifnet *ifp, int af,
 }
 
 static struct if_llreach *
-iflr_alloc(int how)
+iflr_alloc(zalloc_flags_t how)
 {
-	struct if_llreach *lr;
+	struct if_llreach *lr = zalloc_flags(iflr_zone, how | Z_ZERO);
 
-	lr = (how == M_WAITOK) ? zalloc(iflr_zone) : zalloc_noblock(iflr_zone);
-	if (lr != NULL) {
-		bzero(lr, iflr_size);
+	if (lr) {
 		lck_mtx_init(&lr->lr_lock, ifnet_lock_group, ifnet_lock_attr);
 		lr->lr_debug |= IFD_ALLOC;
 	}

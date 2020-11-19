@@ -73,7 +73,7 @@ struct OSObject_Instantiate_Rpl_Content {
 	kern_return_t __result;
 	uint32_t      __pad;
 	uint64_t      flags;
-	char          classname[64];
+	char          classname[128];
 	uint64_t      methods[0];
 };
 
@@ -101,6 +101,7 @@ typedef uint64_t IOTrapMessageBuffer[256];
 #include <IOKit/IOService.h>
 #include <IOKit/IOUserClient.h>
 #include <DriverKit/IOUserServer.h>
+#include <libkern/c++/OSPtr.h>
 #include <libkern/c++/OSKext.h>
 
 class IOUserServer;
@@ -109,6 +110,7 @@ class IODispatchQueue;
 class IODispatchSource;
 class IOInterruptDispatchSource;
 class IOTimerDispatchSource;
+class IOUserServerCheckInToken;
 struct IOPStrings;
 
 struct OSObjectUserVars {
@@ -116,6 +118,8 @@ struct OSObjectUserVars {
 	IODispatchQueue ** queueArray;
 	OSUserMetaClass  * userMeta;
 	OSArray          * openProviders;
+	IOService        * controllingDriver;
+	unsigned long      willPowerState;
 	bool               willTerminate;
 	bool               didTerminate;
 	bool               serverDied;
@@ -137,6 +141,7 @@ namespace IOServicePH
 void serverAdd(IOUserServer * server);
 void serverRemove(IOUserServer * server);
 void serverAck(IOUserServer * server);
+bool serverSlept(void);
 };
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -157,6 +162,7 @@ class IOUserServer : public IOUserClient
 	uint8_t               fRootNotifier;
 	uint8_t               fSystemPowerAck;
 	uint8_t               fSystemOff;
+	IOUserServerCheckInToken * fCheckInToken;
 
 public:
 
@@ -182,17 +188,21 @@ public:
 	static void            serviceDidStop(IOService * client, IOService * provider);
 	IOReturn               serviceOpen(IOService * provider, IOService * client);
 	IOReturn               serviceClose(IOService * provider, IOService * client);
+	IOReturn               serviceSetPowerState(IOService * controllingDriver, IOService * service, IOPMPowerFlags flags, IOPMPowerStateIndex powerState);
 	IOReturn               serviceNewUserClient(IOService * service, task_t owningTask, void * securityID,
 	    uint32_t type, OSDictionary * properties, IOUserClient ** handler);
+	IOReturn               serviceNewUserClient(IOService * service, task_t owningTask, void * securityID,
+	    uint32_t type, OSDictionary * properties, OSSharedPtr<IOUserClient>& handler);
 	IOReturn               exit(const char * reason);
 
-	bool                   serviceMatchesCDHash(IOService *service);
+	bool                   serviceMatchesCheckInToken(IOUserServerCheckInToken *token);
 	bool                   checkEntitlements(IOService * provider, IOService * dext);
 	bool                   checkEntitlements(OSDictionary * entitlements, OSObject * prop,
 	    IOService * provider, IOService * dext);
 
 	void                   setTaskLoadTag(OSKext *kext);
 	void                   setDriverKitUUID(OSKext *kext);
+	void                   setCheckInToken(IOUserServerCheckInToken *token);
 	void                   systemPower(bool powerOff);
 	IOReturn                                setPowerState(unsigned long state, IOService * service) APPLE_KEXT_OVERRIDE;
 	IOReturn                                powerStateWillChangeTo(IOPMPowerFlags flags, unsigned long state, IOService * service) APPLE_KEXT_OVERRIDE;
@@ -201,6 +211,7 @@ public:
 	IOPStrings *           copyInStringArray(const char * string, uint32_t userSize);
 	uint32_t               stringArrayIndex(IOPStrings * array, const char * look);
 	IOReturn               registerClass(OSClassDescription * desc, uint32_t size, OSUserMetaClass ** cls);
+	IOReturn               registerClass(OSClassDescription * desc, uint32_t size, OSSharedPtr<OSUserMetaClass>& cls);
 	IOReturn               setRootQueue(IODispatchQueue * queue);
 
 	OSObjectUserVars     * varsForObject(OSObject * obj);
@@ -223,6 +234,21 @@ public:
 	IOReturn               rpc(IORPC rpc);
 	IOReturn               server(ipc_kmsg_t requestkmsg, ipc_kmsg_t * preply);
 	kern_return_t          waitInterruptTrap(void * p1, void * p2, void * p3, void * p4, void * p5, void * p6);
+};
+
+typedef void (*IOUserServerCheckInNotificationHandler)(class IOUserServerCheckInToken*, void*);
+
+class IOUserServerCheckInToken : public OSObject
+{
+	OSDeclareDefaultStructors(IOUserServerCheckInToken);
+public:
+	static IOUserServerCheckInToken * create();
+	void setNoSendersNotification(IOUserServerCheckInNotificationHandler handler, void *handlerArgs);
+	void clearNotification();
+	static void notifyNoSenders(IOUserServerCheckInToken * token);
+private:
+	IOUserServerCheckInNotificationHandler handler;
+	void *handlerArgs;
 };
 
 extern "C" kern_return_t

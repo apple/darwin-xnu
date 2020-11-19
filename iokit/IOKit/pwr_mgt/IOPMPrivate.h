@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2002 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2002-2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  * 
@@ -109,6 +109,12 @@ enum {
 #define kIOPMMessageProModeStateChange \
                 iokit_family_msg(sub_iokit_powermanagement, 0x450)
 
+#define kIOPMMessageRequestUserActive \
+                iokit_family_msg(sub_iokit_powermanagement, 0x460)
+
+#define kIOPMMessageRequestSystemShutdown \
+                iokit_family_msg(sub_iokit_powermanagement, 0x470)
+
 /* @enum SystemSleepReasons
  * @abstract The potential causes for system sleep as logged in the system event record.
  */
@@ -122,7 +128,8 @@ enum {
     kIOPMSleepReasonThermalEmergency            = 107,
     kIOPMSleepReasonMaintenance                 = 108,
     kIOPMSleepReasonSleepServiceExit            = 109,
-    kIOPMSleepReasonDarkWakeThermalEmergency    = 110
+    kIOPMSleepReasonDarkWakeThermalEmergency    = 110,
+    kIOPMSleepReasonNotificationWakeExit        = 111
 };
 
 /*
@@ -137,6 +144,7 @@ enum {
 #define kIOPMThermalEmergencySleepKey               "Thermal Emergency Sleep"
 #define kIOPMSleepServiceExitKey                    "Sleep Service Back to Sleep"
 #define kIOPMDarkWakeThermalEmergencyKey            "Dark Wake Thermal Emergency"
+#define kIOPMNotificationWakeExitKey                "Notification Wake Back to Sleep"
 
 /*! kIOPMPSRestrictedModeKey
  *  An IOPMPowerSource property key
@@ -146,6 +154,9 @@ enum {
  *      not in a restricted mode power state.
 */
 #define kIOPMPSRestrictedModeKey                    "RestrictedMode"
+
+// Private keys for kIOPMPSAdapterDetailsKey dictionary
+#define kIOPMPSAdapterDetailsIsWirelessKey          "IsWireless"
 
 #pragma mark Stray Bitfields
 // Private power commands issued to root domain
@@ -245,6 +256,13 @@ enum {
 enum {
     kIOPMSilentRunningModeOn = 0x00000001
 };
+
+/* @constant kIOPMSettingLowLatencyAudioModeKey
+ * @abstract Notification about low latency activity in the system available to kexts.
+ * @discussion This type can be passed as arguments to registerPMSettingController()
+ * to receive callbacks.
+ */
+#define kIOPMSettingLowLatencyAudioModeKey          "LowLatencyAudioMode"
 
 /*****************************************************************************/
 /*****************************************************************************/
@@ -737,6 +755,7 @@ enum {
                                 | kIOPMWakeEventAOTConfirmedPossibleExit)
 
 enum {
+	kIOPMAOTModeMask          = 0x000000ff,
     kIOPMAOTModeEnable        = 0x00000001,
     kIOPMAOTModeCycle         = 0x00000002,
     kIOPMAOTModeAddEventFlags = 0x00000004,
@@ -767,6 +786,18 @@ struct IOPMAOTMetrics
 };
 
 #define kIOPMAOTPowerKey    "aot-power"
+
+/*****************************************************************************
+ *
+ * Dark Wake
+ *
+ *****************************************************************************/
+
+/* An OSNumber property set on a power managed driver that the root domain
+ * will use as the driver's max power state while system is in dark wake.
+ * This property should be set prior to the driver joining the PM tree.
+ */
+#define kIOPMDarkWakeMaxPowerStateKey       "IOPMDarkWakeMaxPowerState"
 
 /*****************************************************************************
  *

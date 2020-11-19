@@ -330,7 +330,7 @@ ktrace_disable(enum ktrace_state state_to_match)
 {
 	if (ktrace_state == state_to_match) {
 		kernel_debug_disable();
-		kperf_sampling_disable();
+		kperf_disable_sampling();
 	}
 }
 

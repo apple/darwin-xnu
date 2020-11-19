@@ -190,6 +190,52 @@
  * kcdata_add_type_definition(kcdata_p, KCTYPE_SAMPLE_DISK_IO_STATS, "sample_disk_io_stats",
  *          &disk_io_stats_def[0], sizeof(disk_io_stats_def)/sizeof(struct kcdata_subtype_descriptor));
  *
+ * Feature description: Compression
+ * --------------------
+ * In order to avoid keeping large amunt of memory reserved for a panic stackshot, kcdata has support
+ * for compressing the buffer in a streaming fashion. New data pushed to the kcdata buffer will be
+ * automatically compressed using an algorithm selected by the API user (currently, we only support
+ * pass-through and zlib, in the future we plan to add WKDM support, see: 57913859).
+ *
+ * To start using compression, call:
+ *   kcdata_init_compress(kcdata_p, hdr_tag, memcpy_f, comp_type);
+ * where:
+ *   `kcdata_p` is the kcdata buffer that will be used
+ *   `hdr_tag` is the usual header tag denoting what type of kcdata buffer this will be
+ *   `memcpy_f` a memcpy(3) function to use to copy into the buffer, optional.
+ *	 `compy_type` is the compression type, see KCDCT_ZLIB for an example.
+ *
+ * Once compression is initialized:
+ *  (1) all self-describing APIs will automatically compress
+ *  (2) you can now use the following APIs to compress data into the buffer:
+ *    (None of the following will compress unless kcdata_init_compress() has been called)
+ *
+ * - kcdata_push_data(kcdata_descriptor_t data, uint32_t type, uint32_t size, const void *input_data)
+ *   Pushes the buffer of kctype @type at[@input_data, @input_data + @size]
+ *   into the kcdata buffer @data, compressing if needed.
+ *
+ * - kcdata_push_array(kcdata_descriptor_t data, uint32_t type_of_element,
+ *            uint32_t size_of_element, uint32_t count, const void *input_data)
+ *   Pushes the array found at @input_data, with element type @type_of_element, where
+ *   each element is of size @size_of_element and there are @count elements into the kcdata buffer
+ *   at @data.
+ *
+ * - kcdata_compression_window_open/close(kcdata_descriptor_t data)
+ *   In case the data you are trying to push to the kcdata buffer @data is difficult to predict,
+ *   you can open a "compression window". Between an open and a close, no compression will be done.
+ *   Once you clsoe the window, the underlying compression algorithm will compress the data into the buffer
+ *   and automatically rewind the current end marker of the kcdata buffer.
+ *   There is an ASCII art in kern_cdata.c to aid the reader in understanding
+ *   this.
+ *
+ * - kcdata_finish_compression(kcdata_descriptor_t data)
+ *   Must be called at the end to flush any underlying buffers used by the compression algorithms.
+ *   This function will also add some statistics about the compression to the buffer which helps with
+ *   decompressing later.
+ *
+ * Once you are done with the kcdata buffer, call kcdata_deinit_compress to
+ * free any buffers that may have been allocated internal to the compression
+ * algorithm.
  */
 
 
@@ -401,6 +447,7 @@ struct kcdata_type_definition {
 #define KCDATA_TYPE_PID 0x36u                /* int32_t */
 #define KCDATA_TYPE_PROCNAME 0x37u           /* char * */
 #define KCDATA_TYPE_NESTED_KCDATA 0x38u      /* nested kcdata buffer */
+#define KCDATA_TYPE_LIBRARY_AOTINFO 0x39u    /* struct user64_dyld_aot_info */
 
 #define KCDATA_TYPE_BUFFER_END 0xF19158EDu
 
@@ -410,16 +457,18 @@ struct kcdata_type_definition {
  * numbers are byteswaps of each other
  */
 
-#define KCDATA_BUFFER_BEGIN_CRASHINFO 0xDEADF157u       /* owner: corpses/task_corpse.h */
-                                                        /* type-range: 0x800 - 0x8ff */
-#define KCDATA_BUFFER_BEGIN_STACKSHOT 0x59a25807u       /* owner: sys/stackshot.h */
-                                                        /* type-range: 0x900 - 0x93f */
-#define KCDATA_BUFFER_BEGIN_DELTA_STACKSHOT 0xDE17A59Au /* owner: sys/stackshot.h */
-                                                        /* type-range: 0x940 - 0x9ff */
-#define KCDATA_BUFFER_BEGIN_OS_REASON 0x53A20900u       /* owner: sys/reason.h */
-                                                        /* type-range: 0x1000-0x103f */
-#define KCDATA_BUFFER_BEGIN_XNUPOST_CONFIG 0x1e21c09fu  /* owner: osfmk/tests/kernel_tests.c */
-                                                        /* type-range: 0x1040-0x105f */
+#define KCDATA_BUFFER_BEGIN_CRASHINFO 0xDEADF157u            /* owner: corpses/task_corpse.h */
+                                                             /* type-range: 0x800 - 0x8ff */
+#define KCDATA_BUFFER_BEGIN_STACKSHOT 0x59a25807u            /* owner: sys/stackshot.h */
+                                                             /* type-range: 0x900 - 0x93f */
+#define KCDATA_BUFFER_BEGIN_COMPRESSED 0x434f4d50u           /* owner: sys/stackshot.h */
+                                                             /* type-range: 0x900 - 0x93f */
+#define KCDATA_BUFFER_BEGIN_DELTA_STACKSHOT 0xDE17A59Au      /* owner: sys/stackshot.h */
+                                                             /* type-range: 0x940 - 0x9ff */
+#define KCDATA_BUFFER_BEGIN_OS_REASON 0x53A20900u            /* owner: sys/reason.h */
+                                                             /* type-range: 0x1000-0x103f */
+#define KCDATA_BUFFER_BEGIN_XNUPOST_CONFIG 0x1e21c09fu       /* owner: osfmk/tests/kernel_tests.c */
+                                                             /* type-range: 0x1040-0x105f */
 
 /* next type range number available 0x1060 */
 /**************** definitions for XNUPOST *********************/
@@ -477,6 +526,12 @@ struct kcdata_type_definition {
 #define STACKSHOT_KCTYPE_SYS_SHAREDCACHE_LAYOUT      0x927u /* same as KCDATA_TYPE_LIBRARY_LOADINFO64 */
 #define STACKSHOT_KCTYPE_THREAD_DISPATCH_QUEUE_LABEL 0x928u /* dispatch queue label */
 #define STACKSHOT_KCTYPE_THREAD_TURNSTILEINFO        0x929u /* struct stackshot_thread_turnstileinfo */
+#define STACKSHOT_KCTYPE_TASK_CPU_ARCHITECTURE       0x92au /* struct stackshot_cpu_architecture */
+#define STACKSHOT_KCTYPE_LATENCY_INFO                0x92bu /* struct stackshot_latency_collection */
+#define STACKSHOT_KCTYPE_LATENCY_INFO_TASK           0x92cu /* struct stackshot_latency_task */
+#define STACKSHOT_KCTYPE_LATENCY_INFO_THREAD         0x92du /* struct stackshot_latency_thread */
+#define STACKSHOT_KCTYPE_LOADINFO64_TEXT_EXEC        0x92eu /* TEXT_EXEC load info -- same as KCDATA_TYPE_LIBRARY_LOADINFO64 */
+#define STACKSHOT_KCTYPE_AOTCACHE_LOADINFO           0x92fu /* struct dyld_aot_cache_uuid_info */
 
 #define STACKSHOT_KCTYPE_TASK_DELTA_SNAPSHOT 0x940u   /* task_delta_snapshot_v2 */
 #define STACKSHOT_KCTYPE_THREAD_DELTA_SNAPSHOT 0x941u /* thread_delta_snapshot_v* */
@@ -508,6 +563,13 @@ struct dyld_uuid_info_64_v2 {
 	uint64_t imageSlidBaseAddress; /* slid base address of image */
 };
 
+struct dyld_aot_cache_uuid_info {
+	uint64_t x86SlidBaseAddress; /* slid base address of x86 shared cache */
+	uuid_t x86UUID; /* UUID of x86 shared cache */
+	uint64_t aotSlidBaseAddress; /* slide base address of aot cache */
+	uuid_t aotUUID; /* UUID of aot shared cache */
+};
+
 struct user32_dyld_uuid_info {
 	uint32_t        imageLoadAddress;       /* base address image is mapped into */
 	uuid_t                  imageUUID;                      /* UUID of image */
@@ -516,6 +578,15 @@ struct user32_dyld_uuid_info {
 struct user64_dyld_uuid_info {
 	uint64_t        imageLoadAddress;       /* base address image is mapped into */
 	uuid_t                  imageUUID;                      /* UUID of image */
+};
+
+#define DYLD_AOT_IMAGE_KEY_SIZE 32
+
+struct user64_dyld_aot_info {
+	uint64_t x86LoadAddress;
+	uint64_t aotLoadAddress;
+	uint64_t aotImageSize;
+	uint8_t  aotImageKey[DYLD_AOT_IMAGE_KEY_SIZE];
 };
 
 enum task_snapshot_flags {
@@ -546,6 +617,7 @@ enum task_snapshot_flags {
 	/* 0x2000000 unused */
 	kTaskIsDirtyTracked                   = 0x4000000,
 	kTaskAllowIdleExit                    = 0x8000000,
+	kTaskIsTranslated                     = 0x10000000,
 };
 
 enum thread_snapshot_flags {
@@ -823,10 +895,12 @@ typedef struct stackshot_thread_turnstileinfo {
 	uint64_t turnstile_context; /* Associated data (either thread id, or workq addr) */
 	uint8_t turnstile_priority;
 	uint8_t number_of_hops;
-#define STACKSHOT_TURNSTILE_STATUS_UNKNOWN      (1 << 0) /* The final inheritor is unknown (bug?) */
-#define STACKSHOT_TURNSTILE_STATUS_LOCKED_WAITQ (1 << 1) /* A waitq was found to be locked */
-#define STACKSHOT_TURNSTILE_STATUS_WORKQUEUE    (1 << 2) /* The final inheritor is a workqueue */
-#define STACKSHOT_TURNSTILE_STATUS_THREAD       (1 << 3) /* The final inheritor is a thread */
+#define STACKSHOT_TURNSTILE_STATUS_UNKNOWN         0x01   /* The final inheritor is unknown (bug?) */
+#define STACKSHOT_TURNSTILE_STATUS_LOCKED_WAITQ    0x02   /* A waitq was found to be locked */
+#define STACKSHOT_TURNSTILE_STATUS_WORKQUEUE       0x04   /* The final inheritor is a workqueue */
+#define STACKSHOT_TURNSTILE_STATUS_THREAD          0x08   /* The final inheritor is a thread */
+#define STACKSHOT_TURNSTILE_STATUS_BLOCKED_ON_TASK 0x10   /* blocked on task, dind't find thread */
+#define STACKSHOT_TURNSTILE_STATUS_HELD_IPLOCK     0x20   /* the ip_lock was held */
 	uint64_t turnstile_flags;
 } __attribute__((packed)) thread_turnstileinfo_t;
 
@@ -838,11 +912,51 @@ typedef struct stackshot_thread_turnstileinfo {
 #define STACKSHOT_WAITOWNER_THREQUESTED    (UINT64_MAX - 6) /* workloop waiting for a new worker thread */
 #define STACKSHOT_WAITOWNER_SUSPENDED      (UINT64_MAX - 7) /* workloop is suspended */
 
+struct stackshot_cpu_architecture {
+	int32_t cputype;
+	int32_t cpusubtype;
+} __attribute__((packed));
 
 struct stack_snapshot_stacktop {
 	uint64_t sp;
 	uint8_t stack_contents[8];
 };
+
+/* only collected if STACKSHOT_COLLECTS_LATENCY_INFO is set to !0 */
+struct stackshot_latency_collection {
+	uint64_t latency_version;
+	uint64_t setup_latency;
+	uint64_t total_task_iteration_latency;
+	uint64_t total_terminated_task_iteration_latency;
+} __attribute__((packed));
+
+/* only collected if STACKSHOT_COLLECTS_LATENCY_INFO is set to !0 */
+struct stackshot_latency_task {
+	uint64_t task_uniqueid;
+	uint64_t setup_latency;
+	uint64_t task_thread_count_loop_latency;
+	uint64_t task_thread_data_loop_latency;
+	uint64_t cur_tsnap_latency;
+	uint64_t pmap_latency;
+	uint64_t bsd_proc_ids_latency;
+	uint64_t misc_latency;
+	uint64_t misc2_latency;
+	uint64_t end_latency;
+} __attribute__((packed));
+
+/* only collected if STACKSHOT_COLLECTS_LATENCY_INFO is set to !0 */
+struct stackshot_latency_thread {
+	uint64_t thread_id;
+	uint64_t cur_thsnap1_latency;
+	uint64_t dispatch_serial_latency;
+	uint64_t dispatch_label_latency;
+	uint64_t cur_thsnap2_latency;
+	uint64_t thread_name_latency;
+	uint64_t sur_times_latency;
+	uint64_t user_stack_latency;
+	uint64_t kernel_stack_latency;
+	uint64_t misc_latency;
+} __attribute__((packed));
 
 
 /**************** definitions for crashinfo *********************/
@@ -913,8 +1027,15 @@ struct crashinfo_proc_uniqidentifierinfo {
 #define TASK_CRASHINFO_LEDGER_WIRED_MEM                         0x82A /* uint64_t */
 #define TASK_CRASHINFO_PROC_PERSONA_ID                          0x82B /* uid_t */
 #define TASK_CRASHINFO_MEMORY_LIMIT_INCREASE                    0x82C /* uint32_t */
-
-
+#define TASK_CRASHINFO_LEDGER_TAGGED_FOOTPRINT                  0x82D /* uint64_t */
+#define TASK_CRASHINFO_LEDGER_TAGGED_FOOTPRINT_COMPRESSED       0x82E /* uint64_t */
+#define TASK_CRASHINFO_LEDGER_MEDIA_FOOTPRINT                   0x82F /* uint64_t */
+#define TASK_CRASHINFO_LEDGER_MEDIA_FOOTPRINT_COMPRESSED        0x830 /* uint64_t */
+#define TASK_CRASHINFO_LEDGER_GRAPHICS_FOOTPRINT                0x831 /* uint64_t */
+#define TASK_CRASHINFO_LEDGER_GRAPHICS_FOOTPRINT_COMPRESSED     0x832 /* uint64_t */
+#define TASK_CRASHINFO_LEDGER_NEURAL_FOOTPRINT                  0x833 /* uint64_t */
+#define TASK_CRASHINFO_LEDGER_NEURAL_FOOTPRINT_COMPRESSED       0x834 /* uint64_t */
+#define TASK_CRASHINFO_MEMORYSTATUS_EFFECTIVE_PRIORITY          0x835 /* int32_t */
 
 #define TASK_CRASHINFO_END                  KCDATA_TYPE_BUFFER_END
 

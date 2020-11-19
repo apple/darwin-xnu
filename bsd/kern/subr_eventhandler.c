@@ -92,7 +92,7 @@ lck_attr_t       *el_lock_attr;
 
 struct eventhandler_entry_generic {
 	struct eventhandler_entry       ee;
-	void                    (* func)(void);
+	void                           *func;
 };
 
 static struct eventhandler_list *_eventhandler_find_list(
@@ -203,8 +203,8 @@ eventhandler_register_internal(
 	    ("%s: handler for %s registered with dead priority", __func__, name));
 
 	/* sort it into the list */
-	evhlog((LOG_DEBUG, "%s: adding item %p (function %p to \"%s\"", __func__, VM_KERNEL_ADDRPERM(epn),
-	    VM_KERNEL_UNSLIDE(((struct eventhandler_entry_generic *)epn)->func), name));
+	evhlog((LOG_DEBUG, "%s: adding item %p (function %p to \"%s\"", __func__, (void *)VM_KERNEL_ADDRPERM(epn),
+	    (void *)VM_KERNEL_UNSLIDE(((struct eventhandler_entry_generic *)epn)->func), name));
 	EHL_LOCK(list);
 	TAILQ_FOREACH(ep, &list->el_entries, ee_link) {
 		if (ep->ee_priority != EHE_DEAD_PRIORITY &&
@@ -251,7 +251,7 @@ eventhandler_deregister(struct eventhandler_list *list, eventhandler_tag tag)
 	if (ep != NULL) {
 		/* remove just this entry */
 		if (list->el_runcount == 0) {
-			evhlog((LOG_DEBUG, "%s: removing item %p from \"%s\"", __func__, VM_KERNEL_ADDRPERM(ep),
+			evhlog((LOG_DEBUG, "%s: removing item %p from \"%s\"", __func__, (void *)VM_KERNEL_ADDRPERM(ep),
 			    list->el_name));
 			/*
 			 * We may have purged the list because of certain events.
@@ -265,7 +265,7 @@ eventhandler_deregister(struct eventhandler_list *list, eventhandler_tag tag)
 			mcache_free(eg_cache, ep);
 		} else {
 			evhlog((LOG_DEBUG, "%s: marking item %p from \"%s\" as dead", __func__,
-			    VM_KERNEL_ADDRPERM(ep), list->el_name));
+			    (void *)VM_KERNEL_ADDRPERM(ep), list->el_name));
 			ep->ee_priority = EHE_DEAD_PRIORITY;
 		}
 	} else {

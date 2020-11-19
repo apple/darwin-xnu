@@ -196,10 +196,10 @@ T_GLOBAL_META(T_META_NAMESPACE("xnu.scheduler"));
 /* Disable the test on MacOS for now */
 T_DECL(perf_csw, "context switch performance", T_META_TAG_PERF, T_META_CHECK_LEAKS(false), T_META_ASROOT(true))
 {
-#if !CONFIG_EMBEDDED
-	T_SKIP("Not supported on MacOS");
+#if !defined (__arm__) && !defined(__arm64__)
+	T_SKIP("Not supported on Intel platforms");
 	return;
-#endif /* CONFIG_EMBEDDED */
+#endif /* !defined (__arm__) && !defined(__arm64__) */
 	check_device_temperature();
 
 	T_ATEND(csw_perf_test_cleanup);

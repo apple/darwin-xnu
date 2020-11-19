@@ -158,4 +158,12 @@ routine processor_set_info(
         out     host            : host_t;
         out     info_out        : processor_set_info_t, CountInOut);
 
+/*
+ *	List all tasks(/inspect/read) in processor set based on flavor.
+ */
+routine processor_set_tasks_with_flavor(
+		processor_set	: processor_set_t;
+		flavor          : mach_task_flavor_t;
+	out	task_list	    : task_array_t);
+	
 /* vim: set ft=c : */

@@ -30,7 +30,6 @@
 #ifndef _SYS_EV_H_
 #define _SYS_EV_H_
 
-
 #include <sys/appleapiopts.h>
 
 #include <sys/queue.h>
@@ -77,43 +76,5 @@ int     waitevent(er_t, struct timeval *);
 __END_DECLS
 
 #endif
-
-
-#ifdef BSD_KERNEL_PRIVATE
-
-
-
-struct eventreq32 {
-	int      er_type;
-	int      er_handle;
-	uint32_t er_data;
-	int      er_rcnt;
-	int      er_wcnt;
-	int      er_ecnt;
-	int      er_eventbits;
-};
-
-struct eventreq64 {
-	int      er_type;
-	int      er_handle;
-	user_addr_t er_data;
-	int      er_rcnt;
-	int      er_wcnt;
-	int      er_ecnt;
-	int      er_eventbits;
-};
-
-struct eventqelt {
-	TAILQ_ENTRY(eventqelt)  ee_slist;
-	TAILQ_ENTRY(eventqelt)  ee_plist;
-	struct eventreq64  ee_req;
-	struct proc *    ee_proc;
-	u_int            ee_flags;
-#define EV_QUEUED       0x01
-	u_int            ee_eventmask;
-};
-
-int waitevent_close(struct proc *p, struct fileproc *);
-#endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* _SYS_EV_H_ */

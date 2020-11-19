@@ -28,8 +28,6 @@ PRIVATE_DATAFILES = \
 	ip_compat.h \
 	ip_dummynet.h \
 	ip_flowid.h \
-	ip_fw.h \
-	ip_fw2.h \
 	mptcp_var.h \
 	tcp.h \
 	tcp_cc.h \
@@ -39,10 +37,21 @@ PRIVATE_DATAFILES = \
 	udp.h \
 	in_stat.h
 
+DRIVERKIT_DATAFILES = \
+	in.h \
+	ip.h \
+	ip6.h \
+	tcp.h \
+	ip_compat.h \
+	in_systm.h \
+	udp.h
+
 PRIVATE_KERNELFILES = ${KERNELFILES} \
 	ip_ecn.h ip_encap.h tcp_log.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
+
+INSTALL_DRIVERKIT_MI_LIST = ${DRIVERKIT_DATAFILES}
 
 INSTALL_MI_DIR = netinet
 

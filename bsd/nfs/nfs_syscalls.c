@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -173,6 +173,7 @@ SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, idmap_ctrl, CTLFLAG_RW | CTLFLAG_L
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, callback_port, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_callback_port, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, is_mobile, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_is_mobile, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, squishy_flags, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_squishy_flags, 0, "");
+SYSCTL_UINT(_vfs_generic_nfs_client, OID_AUTO, tcp_sockbuf, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_tcp_sockbuf, 0, "");
 SYSCTL_UINT(_vfs_generic_nfs_client, OID_AUTO, debug_ctl, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_debug_ctl, 0, "");
 SYSCTL_INT(_vfs_generic_nfs_client, OID_AUTO, readlink_nocache, CTLFLAG_RW | CTLFLAG_LOCKED, &nfs_readlink_nocache, 0, "");
 #if CONFIG_NFS_GSS
@@ -570,7 +571,7 @@ getfh(
 {
 	vnode_t vp;
 	struct nfs_filehandle nfh;
-	int error, fhlen, fidlen;
+	int error, fhlen = 0, fidlen;
 	struct nameidata nd;
 	char path[MAXPATHLEN], real_mntonname[MAXPATHLEN], *ptr;
 	size_t pathlen;
@@ -646,7 +647,7 @@ getfh(
 		ptr++;
 	}
 	LIST_FOREACH(nx, &nxfs->nxfs_exports, nx_next) {
-		int len = strlen(nx->nx_path);
+		size_t len = strlen(nx->nx_path);
 		if (len == 0) { // we've hit the export entry for the root directory
 			break;
 		}
@@ -816,9 +817,9 @@ fhopen(proc_t p __no_nfs_server_unused,
 	}
 	fp = nfp;
 
-	fp->f_fglob->fg_flag = fmode & FMASK;
-	fp->f_fglob->fg_ops = &vnops;
-	fp->f_fglob->fg_data = (caddr_t)vp;
+	fp->fp_glob->fg_flag = fmode & FMASK;
+	fp->fp_glob->fg_ops = &vnops;
+	fp->fp_glob->fg_data = (caddr_t)vp;
 
 	// XXX do we really need to support this with fhopen()?
 	if (fmode & (O_EXLOCK | O_SHLOCK)) {
@@ -834,16 +835,16 @@ fhopen(proc_t p __no_nfs_server_unused,
 		if ((fmode & FNONBLOCK) == 0) {
 			type |= F_WAIT;
 		}
-		if ((error = VNOP_ADVLOCK(vp, (caddr_t)fp->f_fglob, F_SETLK, &lf, type, ctx, NULL))) {
+		if ((error = VNOP_ADVLOCK(vp, (caddr_t)fp->fp_glob, F_SETLK, &lf, type, ctx, NULL))) {
 			struct vfs_context context = *vfs_context_current();
 			/* Modify local copy (to not damage thread copy) */
-			context.vc_ucred = fp->f_fglob->fg_cred;
+			context.vc_ucred = fp->fp_glob->fg_cred;
 
-			vn_close(vp, fp->f_fglob->fg_flag, &context);
+			vn_close(vp, fp->fp_glob->fg_flag, &context);
 			fp_free(p, indx, fp);
-			return error;
+			goto bad;
 		}
-		fp->f_fglob->fg_flag |= FHASLOCK;
+		fp->fp_glob->fg_flag |= FWASLOCKED;
 	}
 
 	vnode_put(vp);
@@ -957,8 +958,9 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 {
 	struct nfsrv_sock *slp;
 	int error = 0, sodomain, sotype, soprotocol, on = 1;
-	int first;
+	int first, sobufsize;
 	struct timeval timeo;
+	u_quad_t sbmaxsize;
 
 	/* make sure mbuf constants are set up */
 	if (!nfs_mbuf_mhlen) {
@@ -990,14 +992,18 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 	if ((sodomain == AF_INET) && (soprotocol == IPPROTO_TCP)) {
 		sock_setsockopt(so, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
 	}
-	if (sotype == SOCK_DGRAM || sodomain == AF_LOCAL) { /* set socket buffer sizes for UDP */
-		int reserve = (sotype == SOCK_DGRAM) ? NFS_UDPSOCKBUF : (2 * 1024 * 1024);
-		error |= sock_setsockopt(so, SOL_SOCKET, SO_SNDBUF, &reserve, sizeof(reserve));
-		error |= sock_setsockopt(so, SOL_SOCKET, SO_RCVBUF, &reserve, sizeof(reserve));
-		if (error) {
-			log(LOG_INFO, "nfssvc_addsock: UDP socket buffer setting error(s) %d\n", error);
-			error = 0;
-		}
+
+	/* Calculate maximum supported socket buffers sizes */
+	sbmaxsize = (u_quad_t)sb_max * MCLBYTES / (MSIZE + MCLBYTES);
+
+	/* Set socket buffer sizes for UDP/TCP */
+	sobufsize = min(sbmaxsize, (sotype == SOCK_DGRAM) ? NFS_UDPSOCKBUF : NFSRV_TCPSOCKBUF);
+	error |= sock_setsockopt(so, SOL_SOCKET, SO_SNDBUF, &sobufsize, sizeof(sobufsize));
+	error |= sock_setsockopt(so, SOL_SOCKET, SO_RCVBUF, &sobufsize, sizeof(sobufsize));
+
+	if (error) {
+		log(LOG_INFO, "nfssvc_addsock: socket buffer setting error(s) %d\n", error);
+		error = 0;
 	}
 	sock_nointerrupt(so, 0);
 
@@ -1113,6 +1119,7 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 	slp->ns_so = so;
 	slp->ns_sotype = sotype;
 	slp->ns_nam = mynam;
+	slp->ns_sobufsize = sobufsize;
 
 	/* set up the socket up-call */
 	nfsrv_uc_addsock(slp, first);
@@ -1166,13 +1173,13 @@ nfssvc_addsock(socket_t so, mbuf_t mynam)
 int
 nfssvc_nfsd(void)
 {
-	mbuf_t m, mrep;
+	mbuf_t m, mrep = NULL;
 	struct nfsrv_sock *slp;
 	struct nfsd *nfsd;
 	struct nfsrv_descript *nd = NULL;
 	int error = 0, cacherep, writes_todo;
 	int siz, procrastinate, opcnt = 0;
-	u_quad_t cur_usec;
+	time_t cur_usec;
 	struct timeval now;
 	struct vfs_context context;
 	struct timespec to;
@@ -1305,8 +1312,7 @@ nfssvc_nfsd(void)
 				writes_todo = 0;
 				if (error && (slp->ns_wgtime || (slp->ns_flag & SLP_DOWRITES))) {
 					microuptime(&now);
-					cur_usec = (u_quad_t)now.tv_sec * 1000000 +
-					    (u_quad_t)now.tv_usec;
+					cur_usec = (now.tv_sec * 1000000) + now.tv_usec;
 					if (slp->ns_wgtime <= cur_usec) {
 						error = 0;
 						cacherep = RC_DOIT;
@@ -1330,8 +1336,7 @@ nfssvc_nfsd(void)
 				if (nd->nd_gss_context) {
 					nfs_gss_svc_ctx_deref(nd->nd_gss_context);
 				}
-				FREE_ZONE(nd, sizeof(*nd), M_NFSRVDESC);
-				nd = NULL;
+				NFS_ZFREE(nfsrv_descript_zone, nd);
 			}
 			nfsd->nfsd_slp = NULL;
 			nfsd->nfsd_flag &= ~NFSD_REQINPROG;
@@ -1417,7 +1422,7 @@ nfssvc_nfsd(void)
 				}
 				OSAddAtomic64(1, &nfsstats.srvrpccnt[nd->nd_procnum]);
 				nfsrv_updatecache(nd, TRUE, mrep);
-			/* FALLTHRU */
+				OS_FALLTHROUGH;
 
 			case RC_REPLY:
 				if (nd->nd_gss_mb != NULL) { // It's RPCSEC_GSS
@@ -1488,7 +1493,7 @@ nfssvc_nfsd(void)
 					if (nd->nd_gss_context) {
 						nfs_gss_svc_ctx_deref(nd->nd_gss_context);
 					}
-					FREE_ZONE(nd, sizeof(*nd), M_NFSRVDESC);
+					NFS_ZFREE(nfsrv_descript_zone, nd);
 					nfsrv_slpderef(slp);
 					lck_mtx_lock(nfsd_mutex);
 					goto done;
@@ -1512,8 +1517,7 @@ nfssvc_nfsd(void)
 				if (nd->nd_gss_context) {
 					nfs_gss_svc_ctx_deref(nd->nd_gss_context);
 				}
-				FREE_ZONE(nd, sizeof(*nd), M_NFSRVDESC);
-				nd = NULL;
+				NFS_ZFREE(nfsrv_descript_zone, nd);
 			}
 
 			/*
@@ -1523,8 +1527,7 @@ nfssvc_nfsd(void)
 			writes_todo = 0;
 			if (slp->ns_wgtime) {
 				microuptime(&now);
-				cur_usec = (u_quad_t)now.tv_sec * 1000000 +
-				    (u_quad_t)now.tv_usec;
+				cur_usec = (now.tv_sec * 1000000) + now.tv_usec;
 				if (slp->ns_wgtime <= cur_usec) {
 					cacherep = RC_DOIT;
 					writes_todo = 1;
@@ -1670,7 +1673,7 @@ nfsrv_slpfree(struct nfsrv_sock *slp)
 		if (nwp->nd_gss_context) {
 			nfs_gss_svc_ctx_deref(nwp->nd_gss_context);
 		}
-		FREE_ZONE(nwp, sizeof(*nwp), M_NFSRVDESC);
+		NFS_ZFREE(nfsrv_descript_zone, nwp);
 	}
 	LIST_INIT(&slp->ns_tq);
 

@@ -89,6 +89,8 @@ struct chunklist_pubkey {
 	const uint8_t key[CHUNKLIST_PUBKEY_LEN];
 };
 
-int authenticate_root_with_chunklist(const char *root_path);
+int authenticate_root_with_chunklist(const char *rootdmg_path, boolean_t *out_enforced);
 int authenticate_root_version_check(void);
+int authenticate_bootkc_uuid(void);
+int authenticate_libkern_uuid(void);
 #endif /* _CHUNKLIST_H */

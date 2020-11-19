@@ -26,10 +26,13 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <IOKit/IOSharedDataQueue.h>
 #include <IOKit/IODataQueueShared.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
+#include <libkern/c++/OSSharedPtr.h>
 
 #ifdef enqueue
 #undef enqueue
@@ -43,29 +46,28 @@
 
 OSDefineMetaClassAndStructors(IOSharedDataQueue, IODataQueue)
 
-IOSharedDataQueue *IOSharedDataQueue::withCapacity(UInt32 size)
+OSSharedPtr<IOSharedDataQueue>
+IOSharedDataQueue::withCapacity(UInt32 size)
 {
-	IOSharedDataQueue *dataQueue = new IOSharedDataQueue;
+	OSSharedPtr<IOSharedDataQueue> dataQueue = OSMakeShared<IOSharedDataQueue>();
 
 	if (dataQueue) {
 		if (!dataQueue->initWithCapacity(size)) {
-			dataQueue->release();
-			dataQueue = NULL;
+			return nullptr;
 		}
 	}
 
 	return dataQueue;
 }
 
-IOSharedDataQueue *
+OSSharedPtr<IOSharedDataQueue>
 IOSharedDataQueue::withEntries(UInt32 numEntries, UInt32 entrySize)
 {
-	IOSharedDataQueue *dataQueue = new IOSharedDataQueue;
+	OSSharedPtr<IOSharedDataQueue> dataQueue = OSMakeShared<IOSharedDataQueue>();
 
 	if (dataQueue) {
 		if (!dataQueue->initWithEntries(numEntries, entrySize)) {
-			dataQueue->release();
-			dataQueue = NULL;
+			return nullptr;
 		}
 	}
 
@@ -147,10 +149,10 @@ IOSharedDataQueue::free()
 	super::free();
 }
 
-IOMemoryDescriptor *
+OSSharedPtr<IOMemoryDescriptor>
 IOSharedDataQueue::getMemoryDescriptor()
 {
-	IOMemoryDescriptor *descriptor = NULL;
+	OSSharedPtr<IOMemoryDescriptor> descriptor;
 
 	if (dataQueue != NULL) {
 		descriptor = IOMemoryDescriptor::withAddress(dataQueue, getQueueSize() + DATA_QUEUE_MEMORY_HEADER_SIZE + DATA_QUEUE_MEMORY_APPENDIX_SIZE, kIODirectionOutIn);
@@ -182,7 +184,7 @@ IOSharedDataQueue::peek()
 		UInt32              headOffset   = dataQueue->head;
 		UInt32              queueSize    = getQueueSize();
 
-		if (headOffset >= queueSize) {
+		if (headOffset > queueSize) {
 			return NULL;
 		}
 

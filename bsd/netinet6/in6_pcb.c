@@ -130,13 +130,9 @@
 
 #if IPSEC
 #include <netinet6/ipsec.h>
-#if INET6
 #include <netinet6/ipsec6.h>
-#endif
 #include <netinet6/ah.h>
-#if INET6
 #include <netinet6/ah6.h>
-#endif
 #include <netkey/key.h>
 #endif /* IPSEC */
 
@@ -195,10 +191,10 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 	int wild = 0, reuseport = (so->so_options & SO_REUSEPORT);
 	struct ifnet *outif = NULL;
 	struct sockaddr_in6 sin6;
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 	int error;
 	kauth_cred_t cred;
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 
 	if (TAILQ_EMPTY(&in6_ifaddrhead)) { /* XXX broken! */
 		return EADDRNOTAVAIL;
@@ -304,7 +300,7 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 			struct inpcb *t;
 			uid_t u;
 
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 			if (ntohs(lport) < IPV6PORT_RESERVED &&
 			    !IN6_IS_ADDR_UNSPECIFIED(&sin6.sin6_addr) &&
 			    !(inp->inp_flags2 & INP2_EXTERNAL_PORT)) {
@@ -318,12 +314,12 @@ in6_pcbbind(struct inpcb *inp, struct sockaddr *nam, struct proc *p)
 					return EACCES;
 				}
 			}
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 			/*
 			 * Check wether the process is allowed to bind to a restricted port
 			 */
 			if (!current_task_can_use_restricted_in_port(lport,
-			    so->so_proto->pr_protocol, PORT_FLAGS_BSD)) {
+			    (uint8_t)SOCK_PROTO(so), PORT_FLAGS_BSD)) {
 				lck_rw_done(pcbinfo->ipi_lock);
 				socket_lock(so, 0);
 				return EADDRINUSE;
@@ -936,7 +932,7 @@ in6_pcbnotify(struct inpcbinfo *pcbinfo, struct sockaddr *dst, u_int fport_arg,
 	struct inpcbhead *head = pcbinfo->ipi_listhead;
 	struct inpcb *inp, *ninp;
 	struct sockaddr_in6 sa6_src, *sa6_dst;
-	u_short fport = fport_arg, lport = lport_arg;
+	uint16_t fport = (uint16_t)fport_arg, lport = (uint16_t)lport_arg;
 	u_int32_t flowinfo;
 	int errno;
 
@@ -991,9 +987,11 @@ in6_pcbnotify(struct inpcbinfo *pcbinfo, struct sockaddr *dst, u_int fport_arg,
 		 * sockets disconnected.
 		 * XXX: should we avoid to notify the value to TCP sockets?
 		 */
-		if (cmd == PRC_MSGSIZE) {
+		if (cmd == PRC_MSGSIZE && cmdarg != NULL) {
+			socket_lock(inp->inp_socket, 1);
 			ip6_notify_pmtu(inp, (struct sockaddr_in6 *)(void *)dst,
 			    (u_int32_t *)cmdarg);
+			socket_unlock(inp->inp_socket, 1);
 		}
 
 		/*
@@ -1042,7 +1040,7 @@ in6_pcblookup_local(struct inpcbinfo *pcbinfo, struct in6_addr *laddr,
 {
 	struct inpcb *inp;
 	int matchwild = 3, wildcard;
-	u_short lport = lport_arg;
+	uint16_t lport = (uint16_t)lport_arg;
 	struct inpcbporthead *porthash;
 	struct inpcb *match = NULL;
 	struct inpcbport *phd;
@@ -1182,7 +1180,7 @@ in6_pcblookup_hash_exists(struct inpcbinfo *pcbinfo, struct in6_addr *faddr,
 {
 	struct inpcbhead *head;
 	struct inpcb *inp;
-	u_short fport = fport_arg, lport = lport_arg;
+	uint16_t fport = (uint16_t)fport_arg, lport = (uint16_t)lport_arg;
 	int found;
 
 	*uid = UID_MAX;
@@ -1295,7 +1293,7 @@ in6_pcblookup_hash(struct inpcbinfo *pcbinfo, struct in6_addr *faddr,
 {
 	struct inpcbhead *head;
 	struct inpcb *inp;
-	u_short fport = fport_arg, lport = lport_arg;
+	uint16_t fport = (uint16_t)fport_arg, lport = (uint16_t)lport_arg;
 
 	lck_rw_lock_shared(pcbinfo->ipi_lock);
 

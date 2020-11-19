@@ -273,11 +273,11 @@ init_predicates(KXLDSym *sym, u_char n_type, u_short n_desc)
 			} else if (streq_safe(sym->name, VTABLE_PREFIX,
 			    const_strlen(VTABLE_PREFIX))) {
 				sym->is_class_vtable = 1;
-			} else if (kxld_strstr(sym->name, RESERVED_TOKEN)) {
+			} else if (strnstr(sym->name, RESERVED_TOKEN, strlen(sym->name))) {
 				sym->is_padslot = 1;
-			} else if (kxld_strstr(sym->name, METACLASS_TOKEN)) {
+			} else if (strnstr(sym->name, METACLASS_TOKEN, strlen(sym->name))) {
 				sym->is_metaclass = 1;
-			} else if (kxld_strstr(sym->name, SUPER_METACLASS_POINTER_TOKEN)) {
+			} else if (strnstr(sym->name, SUPER_METACLASS_POINTER_TOKEN, strlen(sym->name))) {
 				sym->is_super_metaclass_pointer = 1;
 			}
 		} else if (kxld_sym_name_is_pure_virtual(sym->name)) {
@@ -577,7 +577,7 @@ kxld_sym_name_is_padslot(const char *name)
 {
 	check(name);
 
-	return kxld_strstr(name, RESERVED_TOKEN) != 0;
+	return strnstr(name, RESERVED_TOKEN, strlen(name)) != 0;
 }
 
 /*******************************************************************************

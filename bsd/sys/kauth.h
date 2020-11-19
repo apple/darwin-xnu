@@ -38,7 +38,10 @@
 #include <sys/appleapiopts.h>
 #include <sys/cdefs.h>
 #include <mach/boolean.h>
+#include <machine/types.h>      /* u_int8_t, etc. */
 #include <sys/_types.h>         /* __offsetof() */
+#include <sys/_types/_uid_t.h>  /* uid_t */
+#include <sys/_types/_gid_t.h>     /* gid_t */
 #include <sys/syslimits.h>      /* NGROUPS_MAX */
 
 #ifdef __APPLE_API_EVOLVING
@@ -293,13 +296,13 @@ extern kauth_cred_t kauth_cred_setresuid(kauth_cred_t cred, uid_t ruid, uid_t eu
 extern kauth_cred_t kauth_cred_setresgid(kauth_cred_t cred, gid_t rgid, gid_t egid, gid_t svgid);
 extern kauth_cred_t kauth_cred_setuidgid(kauth_cred_t cred, uid_t uid, gid_t gid);
 extern kauth_cred_t kauth_cred_setsvuidgid(kauth_cred_t cred, uid_t uid, gid_t gid);
-extern kauth_cred_t kauth_cred_setgroups(kauth_cred_t cred, gid_t *groups, int groupcount, uid_t gmuid);
+extern kauth_cred_t kauth_cred_setgroups(kauth_cred_t cred, gid_t *groups, size_t groupcount, uid_t gmuid);
 struct uthread;
 extern void     kauth_cred_uthread_update(struct uthread *, proc_t);
 #ifdef CONFIG_MACF
 extern void kauth_proc_label_update_execve(struct proc *p, struct vfs_context *ctx, struct vnode *vp, off_t offset, struct vnode *scriptvp, struct label *scriptlabel, struct label *execlabel, unsigned int *csflags, void *psattr, int *disjoint, int *update_return);
 #endif
-extern int      kauth_cred_getgroups(kauth_cred_t _cred, gid_t *_groups, int *_groupcount);
+extern int      kauth_cred_getgroups(kauth_cred_t _cred, gid_t *_groups, size_t *_groupcount);
 extern int      kauth_cred_gid_subset(kauth_cred_t _cred1, kauth_cred_t _cred2, int *_resultp);
 struct auditinfo_addr;
 extern kauth_cred_t kauth_cred_setauditinfo(kauth_cred_t, au_session_t *);
@@ -788,6 +791,7 @@ extern void     kauth_cred_init(void);
 extern void     kauth_identity_init(void);
 extern void     kauth_groups_init(void);
 extern void     kauth_resolver_init(void);
+extern void     kauth_resolver_identity_reset(void);
 #endif
 __END_DECLS
 #endif /* XNU_KERNEL_PRIVATE */

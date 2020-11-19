@@ -109,7 +109,7 @@ machine_idle(void)
 	uint64_t                ctime, rtime, itime;
 #if CST_DEMOTION_DEBUG
 	processor_t             cproc = my_cpu->cpu_processor;
-	uint64_t                cwakeups = PROCESSOR_DATA(cproc, wakeups_issued_total);
+	uint64_t                cwakeups = my_cpu->cpu_wakeups_issued_total;
 #endif /* CST_DEMOTION_DEBUG */
 	uint64_t esdeadline, ehdeadline;
 	boolean_t do_process_pending_timers = FALSE;
@@ -223,7 +223,7 @@ machine_idle_exit:
 		TCOAL_DEBUG(0xBBBB0000 | DBG_FUNC_END, ctime, esdeadline, idle_pending_timers_processed, 0, 0);
 	}
 #if CST_DEMOTION_DEBUG
-	uint64_t nwakeups = PROCESSOR_DATA(cproc, wakeups_issued_total);
+	uint64_t nwakeups = my_cpu->cpu_wakeups_issued_total;
 
 	if ((nwakeups == cwakeups) && (topoParms.nLThreadsPerPackage == my_cpu->lcpu.package->num_idle)) {
 		KERNEL_DEBUG_CONSTANT(0xceaa0000, cwakeups, 0, 0, 0, 0);

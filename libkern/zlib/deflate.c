@@ -708,7 +708,7 @@ deflate(z_streamp strm, int flush)
     if (s->status == NAME_STATE) {
         if (s->gzhead->name != NULL) {
             uInt beg = s->pending;  /* start of bytes to update crc */
-            int val;
+            Bytef val;
 
             do {
                 if (s->pending == s->pending_buf_size) {
@@ -739,7 +739,7 @@ deflate(z_streamp strm, int flush)
     if (s->status == COMMENT_STATE) {
         if (s->gzhead->comment != NULL) {
             uInt beg = s->pending;  /* start of bytes to update crc */
-            int val;
+            Bytef val;
 
             do {
                 if (s->pending == s->pending_buf_size) {

@@ -44,7 +44,7 @@ int             netboot_root(void);
 boolean_t       netboot_iaddr(struct in_addr * iaddr_p);
 
 boolean_t       netboot_rootpath(struct in_addr * server_ip,
-    char * name, int name_len,
-    char * path, int path_len);
+    char * name, size_t name_len,
+    char * path, size_t path_len);
 
 #endif /* _SYS_NETBOOT_H */

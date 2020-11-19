@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -67,6 +67,8 @@
  * Version 2.0.
  */
 
+#include <ptrauth.h>
+
 #include <sys/param.h>
 #include <sys/systm.h>
 #include <sys/malloc.h>
@@ -99,10 +101,6 @@
 
 #include <machine/limits.h>
 #include <machine/machine_routines.h>
-
-#if CONFIG_MACF_NET
-#include <security/mac_framework.h>
-#endif /* MAC_NET */
 
 #include <sys/mcache.h>
 #include <net/ntstat.h>
@@ -346,7 +344,7 @@ static uint32_t mbuf_worker_run_cnt;
 static uint64_t mbuf_worker_last_runtime;
 static uint64_t mbuf_drain_last_runtime;
 static int mbuf_worker_ready;   /* worker thread is runnable */
-static int ncpu;                /* number of CPUs */
+static unsigned int ncpu;                /* number of CPUs */
 static ppnum_t *mcl_paddr;      /* Array of cluster physical addresses */
 static ppnum_t mcl_pages;       /* Size of array (# physical pages) */
 static ppnum_t mcl_paddr_base;  /* Handle returned by IOMapper::iovmAlloc() */
@@ -711,16 +709,16 @@ static char *mbuf_dump_buf;
  * mb_drain_maxint controls the amount of time to wait (in seconds) before
  * consecutive calls to mbuf_drain().
  */
-#if CONFIG_EMBEDDED || DEVELOPMENT || DEBUG
+#if !XNU_TARGET_OS_OSX || DEVELOPMENT || DEBUG
 static unsigned int mb_watchdog = 1;
-#else
+#else /* XNU_TARGET_OS_OSX && !DEVELOPMENT && !DEBUG */
 static unsigned int mb_watchdog = 0;
-#endif
-#if CONFIG_EMBEDDED
+#endif /* XNU_TARGET_OS_OSX && !DEVELOPMENT && !DEBUG */
+#if !XNU_TARGET_OS_OSX
 static unsigned int mb_drain_maxint = 60;
-#else
+#else /* XNU_TARGET_OS_OSX */
 static unsigned int mb_drain_maxint = 0;
-#endif /* CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 
 uintptr_t mb_obscure_extfree __attribute__((visibility("hidden")));
 uintptr_t mb_obscure_extref __attribute__((visibility("hidden")));
@@ -934,6 +932,7 @@ static void mbuf_drain_locked(boolean_t);
 	(m)->m_pkthdr.csum_flags = 0;                                   \
 	(m)->m_pkthdr.csum_data = 0;                                    \
 	(m)->m_pkthdr.vlan_tag = 0;                                     \
+	(m)->m_pkthdr.comp_gencnt = 0;                                  \
 	m_classifier_init(m, 0);                                        \
 	m_tag_init(m, 1);                                               \
 	m_scratch_init(m);                                              \
@@ -1438,31 +1437,20 @@ typedef struct ncl_tbl {
 	uint32_t nt_mbpool;     /* mbuf pool size */
 } ncl_tbl_t;
 
-/* Non-server */
-static ncl_tbl_t ncl_table[] = {
+static const ncl_tbl_t ncl_table[] = {
 	{ (1ULL << GBSHIFT) /*  1 GB */, (64 << MBSHIFT) /*  64 MB */ },
-	{ (1ULL << (GBSHIFT + 3)) /*  8 GB */, (96 << MBSHIFT) /*  96 MB */ },
-	{ (1ULL << (GBSHIFT + 4)) /* 16 GB */, (128 << MBSHIFT) /* 128 MB */ },
-	{ 0, 0 }
-};
-
-/* Server */
-static ncl_tbl_t ncl_table_srv[] = {
-	{ (1ULL << GBSHIFT) /*  1 GB */, (96 << MBSHIFT) /*  96 MB */ },
-	{ (1ULL << (GBSHIFT + 2)) /*  4 GB */, (128 << MBSHIFT) /* 128 MB */ },
-	{ (1ULL << (GBSHIFT + 3)) /*  8 GB */, (160 << MBSHIFT) /* 160 MB */ },
-	{ (1ULL << (GBSHIFT + 4)) /* 16 GB */, (192 << MBSHIFT) /* 192 MB */ },
-	{ (1ULL << (GBSHIFT + 5)) /* 32 GB */, (256 << MBSHIFT) /* 256 MB */ },
-	{ (1ULL << (GBSHIFT + 6)) /* 64 GB */, (384 << MBSHIFT) /* 384 MB */ },
+	{ (1ULL << (GBSHIFT + 2)) /*  4 GB */, (96 << MBSHIFT) /*  96 MB */ },
+	{ (1ULL << (GBSHIFT + 3)) /* 8 GB */, (128 << MBSHIFT) /* 128 MB */ },
+	{ (1ULL << (GBSHIFT + 4)) /* 16 GB */, (256 << MBSHIFT) /* 256 MB */ },
+	{ (1ULL << (GBSHIFT + 5)) /* 32 GB */, (512 << MBSHIFT) /* 512 MB */ },
 	{ 0, 0 }
 };
 #endif /* __LP64__ */
 
 __private_extern__ unsigned int
-mbuf_default_ncl(int server, uint64_t mem)
+mbuf_default_ncl(uint64_t mem)
 {
 #if !defined(__LP64__)
-#pragma unused(server)
 	unsigned int n;
 	/*
 	 * 32-bit kernel (default to 64MB of mbuf pool for >= 1GB RAM).
@@ -1472,16 +1460,15 @@ mbuf_default_ncl(int server, uint64_t mem)
 	}
 #else
 	unsigned int n, i;
-	ncl_tbl_t *tbl = (server ? ncl_table_srv : ncl_table);
 	/*
 	 * 64-bit kernel (mbuf pool size based on table).
 	 */
-	n = tbl[0].nt_mbpool;
-	for (i = 0; tbl[i].nt_mbpool != 0; i++) {
-		if (mem < tbl[i].nt_maxmem) {
+	n = ncl_table[0].nt_mbpool;
+	for (i = 0; ncl_table[i].nt_mbpool != 0; i++) {
+		if (mem < ncl_table[i].nt_maxmem) {
 			break;
 		}
-		n = tbl[i].nt_mbpool;
+		n = ncl_table[i].nt_mbpool;
 	}
 	n >>= MCLSHIFT;
 #endif /* !__LP64__ */
@@ -1568,6 +1555,9 @@ mbinit(void)
 	/* Module specific scratch space (32-bit alignment requirement) */
 	_CASSERT(!(offsetof(struct mbuf, m_pkthdr.pkt_mpriv) %
 	    sizeof(uint32_t)));
+
+	/* pktdata needs to start at 128-bit offset! */
+	_CASSERT((offsetof(struct mbuf, m_pktdat) % 16) == 0);
 
 	/* Initialize random red zone cookie value */
 	_CASSERT(sizeof(mb_redzone_cookie) ==
@@ -1658,7 +1648,7 @@ mbinit(void)
 	 * uninitialize this framework, since the original address
 	 * before alignment is not saved.
 	 */
-	ncpu = ml_get_max_cpus();
+	ncpu = ml_wait_max_cpus();
 	MALLOC(buf, void *, MBUF_MTYPES_SIZE(ncpu) + CPU_CACHE_LINE_SIZE,
 	    M_TEMP, M_WAITOK);
 	VERIFY(buf != NULL);
@@ -3638,12 +3628,6 @@ m_get_common(int wait, short type, int hdr)
 		MBUF_INIT(m, hdr, type);
 		mtype_stat_inc(type);
 		mtype_stat_dec(MT_FREE);
-#if CONFIG_MACF_NET
-		if (hdr && mac_init_mbuf(m, wait) != 0) {
-			m_free(m);
-			return NULL;
-		}
-#endif /* MAC_NET */
 	}
 	return m;
 }
@@ -3980,12 +3964,6 @@ m_getcl(int wait, int type, int flags)
 
 		mtype_stat_inc(type);
 		mtype_stat_dec(MT_FREE);
-#if CONFIG_MACF_NET
-		if (hdr && mac_init_mbuf(m, wait) != 0) {
-			m_freem(m);
-			return NULL;
-		}
-#endif /* MAC_NET */
 	}
 	return m;
 }
@@ -4308,12 +4286,6 @@ m_getpackets_internal(unsigned int *num_needed, int num_with_pkthdrs,
 
 		if (num_with_pkthdrs > 0) {
 			--num_with_pkthdrs;
-#if CONFIG_MACF_NET
-			if (mac_mbuf_label_init(m, wait) != 0) {
-				m_freem(m);
-				break;
-			}
-#endif /* MAC_NET */
 		}
 
 		*np = m;
@@ -4400,6 +4372,7 @@ m_allocpacket_internal(unsigned int *numlist, size_t packetlen,
 	    (wantsize == m_maxsize(MC_16KCL) && njcl > 0)) {
 		bufsize = wantsize;
 	} else {
+		*numlist = 0;
 		return NULL;
 	}
 
@@ -4423,6 +4396,7 @@ m_allocpacket_internal(unsigned int *numlist, size_t packetlen,
 	if (maxsegments != NULL) {
 		if (*maxsegments && nsegs > *maxsegments) {
 			*maxsegments = nsegs;
+			*numlist = 0;
 			return NULL;
 		}
 		*maxsegments = nsegs;
@@ -4471,12 +4445,6 @@ m_allocpacket_internal(unsigned int *numlist, size_t packetlen,
 			ASSERT(m != NULL);
 
 			MBUF_INIT(m, 1, MT_DATA);
-#if CONFIG_MACF_NET
-			if (mac_init_mbuf(m, wait) != 0) {
-				m_free(m);
-				break;
-			}
-#endif /* MAC_NET */
 			num++;
 			if (bufsize > MHLEN) {
 				/* A second mbuf for this segment chain */
@@ -4644,13 +4612,6 @@ m_allocpacket_internal(unsigned int *numlist, size_t packetlen,
 		} else {
 			MBUF_CL_INIT(m, cl, rfa, 1, flag);
 		}
-#if CONFIG_MACF_NET
-		if (pkthdr && mac_init_mbuf(m, wait) != 0) {
-			--num;
-			m_freem(m);
-			break;
-		}
-#endif /* MAC_NET */
 
 		*np = m;
 		if ((num % nsegs) == 0) {
@@ -4687,6 +4648,7 @@ fail:
 	}
 	if (wantall && top != NULL) {
 		m_freem_list(top);
+		*numlist = 0;
 		return NULL;
 	}
 	*numlist = num;
@@ -5238,14 +5200,6 @@ m_copym_with_hdrs(struct mbuf *m0, int off0, int len0, int wait,
 
 		type = (top == NULL) ? MT_HEADER : m->m_type;
 		MBUF_INIT(n, (top == NULL), type);
-#if CONFIG_MACF_NET
-		if (top == NULL && mac_mbuf_label_init(n, wait) != 0) {
-			mtype_stat_inc(MT_HEADER);
-			mtype_stat_dec(MT_FREE);
-			m_free(n);
-			goto nospace;
-		}
-#endif /* MAC_NET */
 
 		if (top == NULL) {
 			top = n;
@@ -8257,8 +8211,8 @@ m_set_ext(struct mbuf *m, struct ext_ref *rfa, m_ext_free_func_t ext_free,
 		if (ext_free != NULL) {
 			rfa->ext_token = ((uintptr_t)&rfa->ext_token) ^
 			    mb_obscure_extfree;
-			m->m_ext.ext_free = (m_ext_free_func_t)
-			    (((uintptr_t)ext_free) ^ rfa->ext_token);
+			uintptr_t ext_free_val = ptrauth_nop_cast(uintptr_t, ext_free) ^ rfa->ext_token;
+			m->m_ext.ext_free = ptrauth_nop_cast(m_ext_free_func_t, ext_free_val);
 			if (ext_arg != NULL) {
 				m->m_ext.ext_arg =
 				    (caddr_t)(((uintptr_t)ext_arg) ^ rfa->ext_token);
@@ -8277,9 +8231,8 @@ m_set_ext(struct mbuf *m, struct ext_ref *rfa, m_ext_free_func_t ext_free,
 		 * to obscure the ext_free and ext_arg pointers.
 		 */
 		if (ext_free != NULL) {
-			m->m_ext.ext_free =
-			    (m_ext_free_func_t)((uintptr_t)ext_free ^
-			    mb_obscure_extfree);
+			uintptr_t ext_free_val = ptrauth_nop_cast(uintptr_t, ext_free) ^ mb_obscure_extfree;
+			m->m_ext.ext_free = ptrauth_nop_cast(m_ext_free_func_t, ext_free_val);
 			if (ext_arg != NULL) {
 				m->m_ext.ext_arg =
 				    (caddr_t)((uintptr_t)ext_arg ^
@@ -8315,10 +8268,11 @@ m_get_ext_free(struct mbuf *m)
 
 	rfa = m_get_rfa(m);
 	if (rfa == NULL) {
-		return (m_ext_free_func_t)((uintptr_t)m->m_ext.ext_free ^ mb_obscure_extfree);
+		uintptr_t ext_free_val = ptrauth_nop_cast(uintptr_t, m->m_ext.ext_free) ^ mb_obscure_extfree;
+		return ptrauth_nop_cast(m_ext_free_func_t, ext_free_val);
 	} else {
-		return (m_ext_free_func_t)(((uintptr_t)m->m_ext.ext_free)
-		       ^ rfa->ext_token);
+		uintptr_t ext_free_val = ptrauth_nop_cast(uintptr_t, m->m_ext.ext_free) ^ rfa->ext_token;
+		return ptrauth_nop_cast(m_ext_free_func_t, ext_free_val);
 	}
 }
 

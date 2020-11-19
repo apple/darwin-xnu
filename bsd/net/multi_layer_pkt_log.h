@@ -399,7 +399,7 @@ os_log(LOGOBJECT, "15 {Receive Incomplete. curProtocol: %hhu, nextProtocol: %hhu
  *  @param TCP_FLAGS            uint8_t     Flags of the TCP header of the segment
  */
 #define MPKL_ESP_OUTPUT_TCP(LOGOBJECT, SPI, ESP_SEQ, LOCAL_PORT, REMOTE_PORT, TCP_SEQ, TCP_ACK, TCP_LEN, TCP_FLAGS)     \
-	os_log_with_type(LOGOBJECT, net_mpklog_type,                                                                    \
+	os_log_with_type(LOGOBJECT, (os_log_type_t)net_mpklog_type,                                                                    \
 	    "18 {curProtocol: 80, spi: 0x%X, espSeq: %u, PayloadProtocol: 100, "                                        \
 	    "localPort: %hu, remotePort: %hu, tcpSeq: %u, tcpAck: %u, tcpLen: %hu, tcpFlags: 0x%02x}",                  \
 	    SPI, ESP_SEQ,                                                                                               \
@@ -418,7 +418,7 @@ os_log(LOGOBJECT, "15 {Receive Incomplete. curProtocol: %hhu, nextProtocol: %hhu
  *  @param TCP_LEN              uint16_t    Length in the TCP header of the segment
  */
 #define MPKL_ESP_INPUT_TCP(LOGOBJECT, SPI, ESP_SEQ, LOCAL_PORT, REMOTE_PORT, TCP_SEQ, TCP_LEN)  \
-	os_log_with_type(LOGOBJECT, net_mpklog_type,                                            \
+	os_log_with_type(LOGOBJECT, (os_log_type_t)net_mpklog_type,                                            \
 	    "19 {curProtocol: 80 spi: 0x%X, espSeq: %u, PayloadProtocol: 100, "                 \
 	    "localPort: %hu, remotePort: %hu, tcpSeq: %u, tcpLen: %hu}",                        \
 	    SPI, ESP_SEQ,                                                                       \
@@ -457,7 +457,7 @@ os_log(LOGOBJECT, "33 {curProtocol: %hhu, nextProtocol: %hhu, curUUID: %{public}
 
 #ifdef KERNEL_PRIVATE
 extern int net_mpklog_enabled;
-extern int net_mpklog_type;
+extern uint8_t net_mpklog_type;
 #endif /* KERNEL_PRIVATE */
 
 #endif /* _NET_MULTI_LAYER_PKT_LOG_H_ */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2019-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -61,14 +61,15 @@ struct ucred;
 extern int kauth_cred_issuser(struct ucred *);
 extern struct ucred *kauth_cred_get(void);
 
-static struct zone *suid_cred_zone = NULL;
-
 /* Data associated with the suid cred port. Consumed during posix_spawn(). */
 struct suid_cred {
 	ipc_port_t port;
 	struct vnode *vnode;
 	uint32_t uid;
 };
+
+static ZONE_DECLARE(suid_cred_zone, "suid_cred",
+    sizeof(struct suid_cred), ZC_NONE);
 
 /* Allocs a new suid credential. The vnode reference will be owned by the newly
  * created suid_cred_t. */
@@ -142,7 +143,7 @@ convert_suid_cred_to_port(suid_cred_t sc)
 	}
 
 	if (!ipc_kobject_make_send_lazy_alloc_port(&sc->port,
-	    (ipc_kobject_t) sc, IKOT_SUID_CRED)) {
+	    (ipc_kobject_t) sc, IKOT_SUID_CRED, false, 0)) {
 		suid_cred_free(sc);
 		return IP_NULL;
 	}
@@ -188,13 +189,6 @@ suid_cred_verify(ipc_port_t port, struct vnode *vnode, uint32_t *uid)
 
 	ipc_port_destroy(port);
 	return ret;
-}
-
-void
-suid_cred_init(void)
-{
-	const size_t sc_size = sizeof(struct suid_cred);
-	suid_cred_zone = zinit(sc_size, 1024 * sc_size, 0, "suid_cred");
 }
 
 kern_return_t

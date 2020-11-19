@@ -83,246 +83,96 @@
 #define M_ZERO          0x0004          /* bzero the allocation */
 #define M_NULL          0x0008          /* return NULL if space is unavailable*/
 
-#ifdef BSD_KERNEL_PRIVATE
+#ifdef XNU_KERNEL_PRIVATE
 
-#define KMEMSTATS 0
+#include <mach/vm_types.h>
+#include <kern/kalloc.h>
+
+ZONE_VIEW_DECLARE(ZV_NAMEI);
 
 /*
  * Types of memory to be allocated (not all are used by us)
  */
-#define M_FREE          0       /* should be on free list */
-#define M_MBUF          1       /* mbuf */
 #define M_DEVBUF        2       /* device driver memory */
-#define M_SOCKET        3       /* socket structure */
 #define M_PCB           4       /* protocol control block */
 #define M_RTABLE        5       /* routing tables */
-#define M_HTABLE        6       /* IMP host tables */
-#define M_FTABLE        7       /* fragment reassembly header */
-#define M_ZOMBIE        8       /* zombie proc status */
 #define M_IFADDR        9       /* interface address */
-#define M_SOOPTS        10      /* socket options */
 #define M_SONAME        11      /* socket name */
-#define M_NAMEI         12      /* namei path name buffer */
-#define M_GPROF         13      /* kernel profiling buffer */
-#define M_IOCTLOPS      14      /* ioctl data buffer */
-#define M_MAPMEM        15      /* mapped memory descriptors */
-#define M_CRED          16      /* credentials */
 #define M_PGRP          17      /* process group header */
-#define M_SESSION       18      /* session header */
-#define M_IOV32         19      /* large iov's for 32 bit process */
-#define M_MOUNT         20      /* vfs mount struct */
 #define M_FHANDLE       21      /* network file handle */
-#define M_NFSREQ        22      /* NFS request header */
-#define M_NFSMNT        23      /* NFS mount structure */
 #define M_NFSNODE       24      /* NFS vnode private part */
 #define M_VNODE         25      /* Dynamically allocated vnodes */
 #define M_CACHE         26      /* Dynamically allocated cache entries */
 #define M_DQUOT         27      /* UFS quota entries */
 #define M_PROC_UUID_POLICY      28      /* proc UUID policy entries */
 #define M_SHM           29      /* SVID compatible shared memory segments */
-#define M_PLIMIT        30      /* plimit  structures */
-#define M_SIGACTS       31      /* sigacts structures */
-#define M_VMOBJ         32      /* VM object structure */
-#define M_VMOBJHASH     33      /* VM object hash structure */
-#define M_VMPMAP        34      /* VM pmap */
-#define M_VMPVENT       35      /* VM phys-virt mapping entry */
-#define M_VMPAGER       36      /* XXX: VM pager struct */
-#define M_VMPGDATA      37      /* XXX: VM pager private data */
-#define M_FILEPROC      38      /* Open file structure */
-#define M_FILEDESC      39      /* Open file descriptor table */
 #define M_LOCKF         40      /* Byte-range locking structures */
 #define M_PROC          41      /* Proc structures */
-#define M_PSTATS        42      /* pstats  proc sub-structures */
-#define M_SEGMENT       43      /* Segment for LFS */
-#define M_LFSNODE       44      /* LFS vnode private part */
-#define M_FFSNODE       45      /* FFS vnode private part */
-#define M_MFSNODE       46      /* MFS vnode private part */
-#define M_NQLEASE       47      /* XXX: Nqnfs lease */
-#define M_NQMHOST       48      /* XXX: Nqnfs host address table */
 #define M_NETADDR       49      /* Export host address structure */
 #define M_NFSSVC        50      /* NFS server structure */
-#define M_NFSUID        51      /* XXX: NFS uid mapping structure */
 #define M_NFSD          52      /* NFS server daemon structure */
 #define M_IPMOPTS       53      /* internet multicast options */
-#define M_IPMADDR       54      /* internet multicast address */
 #define M_IFMADDR       55      /* link-level multicast address */
-#define M_MRTABLE       56      /* multicast routing tables */
-#define M_ISOFSMNT      57      /* ISOFS mount structure */
-#define M_ISOFSNODE     58      /* ISOFS vnode private part */
-#define M_NFSRVDESC     59      /* NFS server socket descriptor */
-#define M_NFSDIROFF     60      /* NFS directory offset data */
+#define M_NFSBIO        58      /* NFS client I/O buffers */
 #define M_NFSBIGFH      61      /* NFS version 3 file handle */
-#define M_MSDOSFSMNT    62      /* MSDOS FS mount structure */
-#define M_MSDOSFSFAT    63      /* MSDOS FS fat table */
-#define M_MSDOSFSNODE   64      /* MSDOS FS vnode private part */
 #define M_TTYS          65      /* allocated tty structures */
-#define M_EXEC          66      /* argument lists & other mem used by exec */
-#define M_MISCFSMNT     67      /* miscfs mount structures */
-#define M_MISCFSNODE    68      /* miscfs vnode private part */
-#define M_ADOSFSMNT     69      /* adosfs mount structures */
-#define M_ADOSFSNODE    70      /* adosfs vnode private part */
-#define M_ANODE         71      /* adosfs anode structures and tables. */
-#define M_BUFHDR        72      /* File buffer cache headers */
 #define M_OFILETABL     73      /* Open file descriptor table */
-#define M_MCLUST        74      /* mbuf cluster buffers */
-/* unused	75 */
-/* unused	76 */
-/* unused	77 */
-/* unused	78 */
-/* unused	79 */
 #define M_TEMP          80      /* misc temporary data buffers */
 #define M_SECA          81      /* security associations, key management */
 #define M_DEVFS         82
-#define M_IPFW          83      /* IP Forwarding/NAT */
 #define M_UDFNODE       84      /* UDF inodes */
 #define M_UDFMNT        85      /* UDF mount structures */
-#define M_IP6NDP        86      /* IPv6 Neighbour Discovery*/
 #define M_IP6OPT        87      /* IPv6 options management */
-#define M_IP6MISC       88      /* IPv6 misc. memory */
-/* unused	89 */
-#define M_IGMP          90
-/* unused	91 */
-/* unused	92 */
-#define M_SPECINFO      93      /* special file node */
 #define M_KQUEUE        94      /* kqueue system */
-/* unused	95 */
-#define M_CLRDAHEAD     96      /* storage for cluster read-ahead state */
-#define M_CLWRBEHIND    97      /* storage for cluster write-behind state */
-#define M_IOV64         98      /* large iov's for 64 bit process */
-#define M_FILEGLOB      99      /* fileglobal */
 #define M_KAUTH         100     /* kauth subsystem */
 #define M_DUMMYNET      101     /* dummynet */
-/* M_UNSAFEFS 102 */
-#define M_MACPIPELABEL  103     /* MAC pipe labels */
 #define M_MACTEMP       104     /* MAC framework */
 #define M_SBUF          105     /* string buffers */
-#define M_EXTATTR       106     /* extended attribute */
 #define M_SELECT        107     /* per-thread select memory */
-/* M_TRAFFIC_MGT	108 */
-#if FS_COMPRESSION
-#define M_DECMPFS_CNODE 109     /* decmpfs cnode structures */
-#endif /* FS_COMPRESSION */
 #define M_INMFILTER     110     /* IPv4 multicast PCB-layer source filter */
-#define M_IPMSOURCE     111     /* IPv4 multicast IGMP-layer source filter */
 #define M_IN6MFILTER    112     /* IPv6 multicast PCB-layer source filter */
 #define M_IP6MOPTS      113     /* IPv6 multicast options */
-#define M_IP6MSOURCE    114     /* IPv6 multicast MLD-layer source filter */
-#define M_FLOW_DIVERT_PCB       115 /* flow divert control block */
-#define M_FLOW_DIVERT_GROUP     116 /* flow divert socket group */
 #define M_IP6CGA        117
-#define M_NECP          118 /* General NECP policy data */
-#define M_NECP_SESSION_POLICY 119 /* NECP session policies */
-#define M_NECP_SOCKET_POLICY 120 /* NECP socket-level policies */
-#define M_NECP_IP_POLICY 121 /* NECP IP-level policies */
+#define M_NECP          118     /* General NECP policy data */
 #define M_FD_VN_DATA    122     /* Per fd vnode data */
 #define M_FD_DIRBUF     123     /* Directory entries' buffer */
 #define M_NETAGENT      124     /* Network Agents */
 #define M_EVENTHANDLER  125     /* Eventhandler */
 #define M_LLTABLE       126     /* Link layer table */
 #define M_NWKWQ         127     /* Network work queue */
-#define M_CFIL      128 /* Content Filter */
+#define M_CFIL          128     /* Content Filter */
 
 #define M_LAST          129     /* Must be last type + 1 */
 
-#else /* BSD_KERNEL_PRIVATE */
-
-#define M_RTABLE        5       /* routing tables */
-#define M_IFADDR        9       /* interface address (IOFireWireIP)*/
-#define M_LOCKF         40      /* Byte-range locking structures (msdos) */
-#define M_TEMP          80      /* misc temporary data buffers */
-#define M_KAUTH         100     /* kauth subsystem (smb) */
-#define M_SONAME        11      /* socket name (smb) */
-#define M_PCB           4       /* protocol control block (smb) */
-#define M_UDFNODE       84      /* UDF inodes (udf)*/
-#define M_UDFMNT        85      /* UDF mount structures (udf)*/
-
-#endif /* BSD_KERNEL_PRIVATE */
-
-#ifdef BSD_KERNEL_PRIVATE
-
-#if KMEMSTATS
-struct kmemstats {
-	long    ks_inuse;       /* # of packets of this type currently
-	                         * in use */
-	long    ks_calls;       /* total packets of this type ever allocated */
-	long    ks_memuse;      /* total memory held in bytes */
-	u_short ks_limblocks;   /* number of times blocked for hitting limit */
-	u_short ks_mapblocks;   /* number of times blocked for kernel map */
-	long    ks_maxused;     /* maximum number ever used */
-	long    ks_limit;       /* most that are allowed to exist */
-	long    ks_size;        /* sizes of this thing that are allocated */
-	long    ks_spare;
-};
-
-extern struct kmemstats kmemstats[];
-#endif /* KMEMSTATS */
-
-#endif /* BSD_KERNEL_PRIVATE */
-
-/*
- * The malloc/free primatives used
- * by the BSD kernel code.
- */
-#ifdef XNU_KERNEL_PRIVATE
-
-#include <mach/vm_types.h>
-
-#define MALLOC(space, cast, size, type, flags)                   \
-	({ VM_ALLOC_SITE_STATIC(0, 0);                               \
+#define MALLOC(space, cast, size, type, flags)                      \
+	({ VM_ALLOC_SITE_STATIC(0, 0);                              \
 	(space) = (cast)__MALLOC(size, type, flags, &site); })
 
-#define REALLOC(space, cast, addr, size, type, flags)            \
-	({ VM_ALLOC_SITE_STATIC(0, 0);                               \
+#define REALLOC(space, cast, addr, size, type, flags)               \
+	({ VM_ALLOC_SITE_STATIC(0, 0);                              \
 	(space) = (cast)__REALLOC(addr, size, type, flags, &site); })
 
-#define _MALLOC(size, type, flags)                               \
-	({ VM_ALLOC_SITE_STATIC(0, 0);                               \
+#define _MALLOC(size, type, flags)                                  \
+	({ VM_ALLOC_SITE_STATIC(0, 0);                              \
 	__MALLOC(size, type, flags, &site); })
-#define _REALLOC(addr, size, type, flags)                        \
-	({ VM_ALLOC_SITE_STATIC(0, 0);                               \
+
+#define _REALLOC(addr, size, type, flags)                           \
+	({ VM_ALLOC_SITE_STATIC(0, 0);                              \
 	__REALLOC(addr, size, type, flags, &site); })
 
-#define _MALLOC_ZONE(size, type, flags)                          \
-	({ VM_ALLOC_SITE_STATIC(0, 0);                               \
-	__MALLOC_ZONE(size, type, flags, &site); })
+#define _FREE(addr, type)                                           \
+	(kheap_free_addr)(KHEAP_DEFAULT, addr)
 
-#define FREE(addr, type) \
-_Pragma("clang diagnostic push") \
-_Pragma("clang diagnostic ignored \"-Wshadow\"") \
-	do { \
-	        _Static_assert(sizeof (addr) == sizeof (void *) || sizeof (addr) == sizeof (mach_vm_address_t), "addr is not a pointer"); \
-	        void *__tmp_addr = (void *)addr; \
-	        int __tmp_type = type; \
-	        addr = (typeof(addr)) NULL; \
-	        _FREE(__tmp_addr, __tmp_type); \
-	} while (0) \
-_Pragma("clang diagnostic pop")
+#define FREE(addr, type)                                            \
+	kheap_free_addr(KHEAP_DEFAULT, addr)
 
-#define MALLOC_ZONE(space, cast, size, type, flags) \
-	(space) = (cast)_MALLOC_ZONE(size, type, flags)
-
-#define FREE_ZONE(addr, size, type) \
-_Pragma("clang diagnostic push") \
-_Pragma("clang diagnostic ignored \"-Wshadow\"") \
-	do { \
-	        _Static_assert(sizeof (addr) == sizeof (void *) || sizeof (addr) == sizeof (mach_vm_address_t), "addr is not a pointer"); \
-	        void *__tmp_addr = (void *)addr; \
-	        size_t __tmp_size = size; \
-	        int __tmp_type = type; \
-	        addr = (typeof(addr)) NULL; \
-	        _FREE_ZONE(__tmp_addr, __tmp_size, __tmp_type); \
-	} while (0) \
-_Pragma("clang diagnostic pop")
+#pragma GCC visibility push(hidden)
 
 extern void     *__MALLOC(
 	size_t                size,
 	int                   type,
 	int                   flags,
 	vm_allocation_site_t *site)  __attribute__((alloc_size(1)));
-
-extern void     _FREE(
-	void            *addr,
-	int             type);
 
 extern void     *__REALLOC(
 	void                 *addr,
@@ -331,27 +181,24 @@ extern void     *__REALLOC(
 	int                   flags,
 	vm_allocation_site_t *site)  __attribute__((alloc_size(2)));
 
-extern void     *__MALLOC_ZONE(
-	size_t          size,
-	int             type,
-	int             flags,
-	vm_allocation_site_t *site);
-
-extern void     _FREE_ZONE(
-	void            *elem,
-	size_t          size,
-	int             type);
-
+#pragma GCC visibility pop
 #else /* XNU_KERNEL_PRIVATE */
+
+#define M_PCB           4       /* protocol control block (smb) */
+#define M_RTABLE        5       /* routing tables */
+#define M_IFADDR        9       /* interface address (IOFireWireIP)*/
+#define M_SONAME        11      /* socket name (smb) */
+#define M_LOCKF         40      /* Byte-range locking structures (msdos) */
+#define M_TEMP          80      /* misc temporary data buffers */
+#define M_UDFNODE       84      /* UDF inodes (udf)*/
+#define M_UDFMNT        85      /* UDF mount structures (udf)*/
+#define M_KAUTH         100     /* kauth subsystem (smb) */
 
 #define MALLOC(space, cast, size, type, flags) \
 	(space) = (cast)_MALLOC(size, type, flags)
 
 #define FREE(addr, type) \
 	_FREE((void *)addr, type)
-
-#define REALLOC(space, cast, addr, size, type, flags) \
-	(space) = (cast)_REALLOC(addr, size, type, flags)
 
 #define MALLOC_ZONE(space, cast, size, type, flags) \
 	(space) = (cast)_MALLOC_ZONE(size, type, flags)
@@ -368,12 +215,6 @@ extern void     _FREE(
 	void            *addr,
 	int             type);
 
-extern void     *_REALLOC(
-	void            *addr,
-	size_t          size,
-	int             type,
-	int             flags);
-
 extern void     *_MALLOC_ZONE(
 	size_t          size,
 	int             type,
@@ -383,7 +224,6 @@ extern void     _FREE_ZONE(
 	void            *elem,
 	size_t          size,
 	int             type);
-
 
 #endif /* !XNU_KERNEL_PRIVATE */
 

@@ -30,6 +30,9 @@
 #define PE_CONSISTENT_DEBUG_H
 
 #include <stdint.h>
+#include <sys/cdefs.h>
+
+__BEGIN_DECLS
 
 #define DEBUG_RECORD_ID_LONG(a, b, c, d, e, f, g, h) \
 	( ((uint64_t)(	(((h) << 24) & 0xFF000000) | \
@@ -138,5 +141,7 @@ boolean_t PE_consistent_debug_lookup_entry(uint64_t record_id, uint64_t *phys_ad
  * Returns whether consistent debug is enabled on the current device.
  */
 int PE_consistent_debug_enabled(void);
+
+__END_DECLS
 
 #endif  // PE_CONSISTENT_DEBUG_H

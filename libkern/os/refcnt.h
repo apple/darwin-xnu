@@ -157,6 +157,8 @@ static os_ref_count_t os_ref_get_count(struct os_refcnt *rc);
 
 
 #if XNU_KERNEL_PRIVATE
+#pragma GCC visibility push(hidden)
+
 /*
  * Raw API that uses a plain atomic counter (os_ref_atomic_t) and a separate
  * refgroup. This can be used in situations where the refcount object must be
@@ -169,7 +171,7 @@ static void os_ref_init_count_raw(os_ref_atomic_t *, struct os_refgrp *, os_ref_
 os_error_if(count == 0, "Reference count must be non-zero initialized");
 static void os_ref_retain_raw(os_ref_atomic_t *, struct os_refgrp *);
 static os_ref_count_t os_ref_release_raw(os_ref_atomic_t *, struct os_refgrp *) OS_WARN_RESULT;
-static os_ref_count_t os_ref_release_relaxed_raw(os_ref_atomic_t *, struct os_refgrp *) OS_WARN_RESULT;
+static os_ref_count_t os_ref_release_raw_relaxed(os_ref_atomic_t *, struct os_refgrp *) OS_WARN_RESULT;
 static void os_ref_release_live_raw(os_ref_atomic_t *, struct os_refgrp *);
 static bool os_ref_retain_try_raw(os_ref_atomic_t *, struct os_refgrp *) OS_WARN_RESULT;
 static void os_ref_retain_locked_raw(os_ref_atomic_t *, struct os_refgrp *);
@@ -189,25 +191,52 @@ static os_ref_count_t os_ref_get_count_raw(os_ref_atomic_t *rc);
  * Due to guard bits, the maximum reference count is 2^(28 - 'b') - 1, and the
  * maximum 'b' is 26 bits. This API can also be used just to limit the max
  * refcount.
+ *
+ * The "*_raw_mask" APIs return the raw bit pattern of the refcount (with a type
+ * of uint32_t), that the caller is supposed to decode. Other APIs that return
+ * os_ref_count_t return a normalized refcount where the trailing bits have been
+ * removed.
+ *
+ * "locked" variants aren't provided as the point of these interfaces
+ * is to combine flags into a refcount and be able to manipulate both
+ * atomically with respect to each other.
  */
 
 /* Initialize the reference count and reserved bits */
-#define os_ref_init_mask(rc, grp, b) os_ref_init_count_mask((rc), (grp), 1, 0, (b))
-void os_ref_init_count_mask(os_ref_atomic_t *rc, struct os_refgrp *grp, os_ref_count_t init_count,
-    os_ref_count_t init_bits, os_ref_count_t b)
+#define os_ref_init_mask(rc, b, grp, bits) os_ref_init_count_mask((rc), (b), (grp), 1, bits)
+void os_ref_init_count_mask(os_ref_atomic_t *rc, uint32_t b, struct os_refgrp *grp,
+    os_ref_count_t init_count, uint32_t init_bits)
 os_error_if(init_count == 0, "Reference count must be non-zero initialized")
 os_error_if(b > 26, "Bitwise reference count limited to 26 bits")
 os_error_if(init_bits >= (1U << b), "Bits out of range");
 
-void os_ref_retain_mask(os_ref_atomic_t *rc, struct os_refgrp *grp, os_ref_count_t b);
-static os_ref_count_t os_ref_release_mask(os_ref_atomic_t *rc, struct os_refgrp *grp, os_ref_count_t b) OS_WARN_RESULT;
-static os_ref_count_t os_ref_release_relaxed_mask(os_ref_atomic_t *rc, struct os_refgrp *grp, os_ref_count_t b) OS_WARN_RESULT;
-static void os_ref_release_live_mask(os_ref_atomic_t *rc, struct os_refgrp *grp, os_ref_count_t b);
-bool os_ref_retain_try_mask(os_ref_atomic_t *, struct os_refgrp *grp, os_ref_count_t b) OS_WARN_RESULT;
-void os_ref_retain_locked_mask(os_ref_atomic_t *rc, struct os_refgrp *grp, os_ref_count_t b);
-os_ref_count_t os_ref_release_locked_mask(os_ref_atomic_t *rc, struct os_refgrp *grp, os_ref_count_t b) OS_WARN_RESULT;
-os_ref_count_t os_ref_get_count_mask(os_ref_atomic_t *rc, os_ref_count_t b);
+static uint32_t os_ref_get_raw_mask(os_ref_atomic_t *rc);
+static uint32_t os_ref_get_bits_mask(os_ref_atomic_t *rc, uint32_t b);
+static os_ref_count_t os_ref_get_count_mask(os_ref_atomic_t *rc, uint32_t b);
 
+static void
+os_ref_retain_mask(os_ref_atomic_t *rc, uint32_t b, struct os_refgrp *grp);
+static void
+os_ref_retain_acquire_mask(os_ref_atomic_t *rc, uint32_t b, struct os_refgrp *grp);
+static bool
+os_ref_retain_try_mask(os_ref_atomic_t *, uint32_t b, uint32_t reject_mask,
+    struct os_refgrp *grp) OS_WARN_RESULT;
+static bool
+os_ref_retain_try_acquire_mask(os_ref_atomic_t *, uint32_t b, uint32_t reject_mask,
+    struct os_refgrp *grp) OS_WARN_RESULT;
+
+static uint32_t
+os_ref_release_raw_mask(os_ref_atomic_t *rc, uint32_t b, struct os_refgrp *grp) OS_WARN_RESULT;
+static uint32_t
+os_ref_release_raw_relaxed_mask(os_ref_atomic_t *rc, uint32_t b, struct os_refgrp *grp) OS_WARN_RESULT;
+static os_ref_count_t
+os_ref_release_mask(os_ref_atomic_t *rc, uint32_t b, struct os_refgrp *grp) OS_WARN_RESULT;
+static os_ref_count_t
+os_ref_release_relaxed_mask(os_ref_atomic_t *rc, uint32_t b, struct os_refgrp *grp) OS_WARN_RESULT;
+static void
+os_ref_release_live_mask(os_ref_atomic_t *rc, uint32_t b, struct os_refgrp *grp);
+
+#pragma GCC visibility pop
 #endif /* XNU_KERNEL_PRIVATE */
 
 __END_DECLS

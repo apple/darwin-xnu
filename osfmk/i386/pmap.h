@@ -416,6 +416,7 @@ extern boolean_t pmap_ept_support_ad;
 #define PTE_VALID_MASK(is_ept)  ((is_ept) ? (INTEL_EPT_READ | INTEL_EPT_WRITE | INTEL_EPT_EX) : INTEL_PTE_VALID)
 #define PTE_READ(is_ept)        ((is_ept) ? INTEL_EPT_READ : INTEL_PTE_VALID)
 #define PTE_WRITE(is_ept)       ((is_ept) ? INTEL_EPT_WRITE : INTEL_PTE_WRITE)
+#define PTE_IS_EXECUTABLE(is_ept, pte)  ((is_ept) ? (((pte) & INTEL_EPT_EX) != 0) : (((pte) & INTEL_PTE_NX) == 0))
 #define PTE_PS                  INTEL_PTE_PS
 #define PTE_COMPRESSED          INTEL_PTE_COMPRESSED
 #define PTE_COMPRESSED_ALT      INTEL_PTE_COMPRESSED_ALT
@@ -547,6 +548,7 @@ struct pmap {
 
 	task_map_t      pm_task_map;
 	boolean_t       pagezero_accessible;
+	boolean_t       pm_vm_map_cs_enforced; /* is vm_map cs_enforced? */
 #define PMAP_PCID_MAX_CPUS      MAX_CPUS        /* Must be a multiple of 8 */
 	pcid_t          pmap_pcid_cpus[PMAP_PCID_MAX_CPUS];
 	volatile uint8_t pmap_pcid_coherency_vector[PMAP_PCID_MAX_CPUS];
@@ -583,35 +585,6 @@ is_ept_pmap(pmap_t p)
 }
 
 void hv_ept_pmap_create(void **ept_pmap, void **eptp);
-
-#if NCOPY_WINDOWS > 0
-#define PMAP_PDPT_FIRST_WINDOW 0
-#define PMAP_PDPT_NWINDOWS 4
-#define PMAP_PDE_FIRST_WINDOW (PMAP_PDPT_NWINDOWS)
-#define PMAP_PDE_NWINDOWS 4
-#define PMAP_PTE_FIRST_WINDOW (PMAP_PDE_FIRST_WINDOW + PMAP_PDE_NWINDOWS)
-#define PMAP_PTE_NWINDOWS 4
-
-#define PMAP_NWINDOWS_FIRSTFREE (PMAP_PTE_FIRST_WINDOW + PMAP_PTE_NWINDOWS)
-#define PMAP_WINDOW_SIZE 8
-#define PMAP_NWINDOWS (PMAP_NWINDOWS_FIRSTFREE + PMAP_WINDOW_SIZE)
-
-typedef struct {
-	pt_entry_t      *prv_CMAP;
-	caddr_t         prv_CADDR;
-} mapwindow_t;
-
-typedef struct cpu_pmap {
-	int                     pdpt_window_index;
-	int                     pde_window_index;
-	int                     pte_window_index;
-	mapwindow_t             mapwindow[PMAP_NWINDOWS];
-} cpu_pmap_t;
-
-
-extern mapwindow_t *pmap_get_mapwindow(pt_entry_t pentry);
-extern void         pmap_put_mapwindow(mapwindow_t *map);
-#endif
 
 typedef struct pmap_memory_regions {
 	ppnum_t base;            /* first page of this region */
@@ -723,16 +696,15 @@ extern int              pmap_list_resident_pages(
 	vm_offset_t     *listp,
 	int             space);
 extern void             x86_filter_TLB_coherency_interrupts(boolean_t);
+
+extern void
+pmap_mark_range(pmap_t npmap, uint64_t sv, uint64_t nxrosz, boolean_t NX,
+    boolean_t ro);
+
 /*
  * Get cache attributes (as pagetable bits) for the specified phys page
  */
 extern  unsigned        pmap_get_cache_attributes(ppnum_t, boolean_t is_ept);
-#if NCOPY_WINDOWS > 0
-extern struct cpu_pmap  *pmap_cpu_alloc(
-	boolean_t       is_boot_cpu);
-extern void             pmap_cpu_free(
-	struct cpu_pmap *cp);
-#endif
 
 extern kern_return_t    pmap_map_block(
 	pmap_t pmap,
@@ -745,17 +717,21 @@ extern kern_return_t    pmap_map_block(
 
 extern void invalidate_icache(vm_offset_t addr, unsigned cnt, int phys);
 extern void flush_dcache(vm_offset_t addr, unsigned count, int phys);
-extern ppnum_t          pmap_find_phys(pmap_t map, addr64_t va);
+extern pmap_paddr_t pmap_find_pa(pmap_t map, addr64_t va);
+extern ppnum_t pmap_find_phys(pmap_t map, addr64_t va);
+extern ppnum_t pmap_find_phys_nofault(pmap_t pmap, addr64_t va);
+
+extern kern_return_t pmap_get_prot(pmap_t pmap, addr64_t va, vm_prot_t *protp);
 
 extern void pmap_cpu_init(void);
 extern void pmap_disable_NX(pmap_t pmap);
 
-extern void pt_fake_zone_init(int);
-extern void pt_fake_zone_info(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_size_t *,
-    uint64_t *, int *, int *, int *);
 extern void pmap_pagetable_corruption_msg_log(int (*)(const char * fmt, ...)__printflike(1, 2));
 
 extern void x86_64_protect_data_const(void);
+
+extern uint64_t pmap_commpage_size_min(pmap_t pmap);
+
 /*
  *	Macros for speed.
  */
@@ -778,28 +754,15 @@ extern void x86_64_protect_data_const(void);
 #define PMAP_DEACTIVATE_MAP(map, thread)
 #endif
 
-#if NCOPY_WINDOWS > 0
 #define PMAP_SWITCH_USER(th, new_map, my_cpu) {                         \
 	spl_t		spl;                                            \
                                                                         \
 	spl = splhigh();                                                \
-	PMAP_DEACTIVATE_MAP(th->map, th);                               \
-	th->map = new_map;                                              \
-	PMAP_ACTIVATE_MAP(th->map, th);                                 \
-	splx(spl);                                                      \
-	inval_copy_windows(th);                                         \
-}
-#else
-#define PMAP_SWITCH_USER(th, new_map, my_cpu) {                         \
-	spl_t		spl;                                            \
-                                                                        \
-	spl = splhigh();                                                \
-	PMAP_DEACTIVATE_MAP(th->map, th, my_cpu);                               \
+	PMAP_DEACTIVATE_MAP(th->map, th, my_cpu);                       \
 	th->map = new_map;                                              \
 	PMAP_ACTIVATE_MAP(th->map, th, my_cpu);                         \
 	splx(spl);                                                      \
 }
-#endif
 
 /*
  * Marking the current cpu's cr3 inactive is achieved by setting its lsb.

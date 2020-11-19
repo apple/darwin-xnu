@@ -79,24 +79,16 @@
 
 #include <netinet/in.h>
 #include <netinet/in_var.h>
-#if INET6
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #include <netinet/icmp6.h>
-#endif
 
 #include <netinet6/ipsec.h>
-#if INET6
 #include <netinet6/ipsec6.h>
-#endif
 #include <netinet6/ah.h>
-#if INET6
 #include <netinet6/ah6.h>
-#endif
 #include <netinet6/esp.h>
-#if INET6
 #include <netinet6/esp6.h>
-#endif
 #include <netinet6/esp_rijndael.h>
 #include <netinet6/esp_chachapoly.h>
 #include <net/pfkeyv2.h>
@@ -125,7 +117,7 @@ static int esp_descbc_ivlen(const struct esp_algorithm *,
     struct secasvar *);
 static int esp_des_schedule(const struct esp_algorithm *,
     struct secasvar *);
-static int esp_des_schedlen(const struct esp_algorithm *);
+static size_t esp_des_schedlen(const struct esp_algorithm *);
 static int esp_des_blockdecrypt(const struct esp_algorithm *,
     struct secasvar *, u_int8_t *, u_int8_t *);
 static int esp_des_blockencrypt(const struct esp_algorithm *,
@@ -133,7 +125,7 @@ static int esp_des_blockencrypt(const struct esp_algorithm *,
 static int esp_cbc_mature(struct secasvar *);
 static int esp_3des_schedule(const struct esp_algorithm *,
     struct secasvar *);
-static int esp_3des_schedlen(const struct esp_algorithm *);
+static size_t esp_3des_schedlen(const struct esp_algorithm *);
 static int esp_3des_blockdecrypt(const struct esp_algorithm *,
     struct secasvar *, u_int8_t *, u_int8_t *);
 static int esp_3des_blockencrypt(const struct esp_algorithm *,
@@ -468,7 +460,7 @@ esp_descbc_ivlen(
 	return 8;
 }
 
-static int
+static size_t
 esp_des_schedlen(
 	__unused const struct esp_algorithm *algo)
 {
@@ -637,7 +629,7 @@ esp_gcm_mature(struct secasvar *sav)
 	return 0;
 }
 
-static int
+static size_t
 esp_3des_schedlen(
 	__unused const struct esp_algorithm *algo)
 {
@@ -756,8 +748,9 @@ esp_cbc_decrypt(struct mbuf *m, size_t off, struct secasvar *sav,
 		}
 	}
 
+	VERIFY(ivoff <= INT_MAX);
 	/* grab iv */
-	m_copydata(m, ivoff, ivlen, (caddr_t) iv);
+	m_copydata(m, (int)ivoff, ivlen, (caddr_t) iv);
 
 	/* extend iv */
 	if (ivlen == blocklen) {
@@ -798,7 +791,7 @@ esp_cbc_decrypt(struct mbuf *m, size_t off, struct secasvar *sav,
 	/* skip bodyoff */
 	while (soff < bodyoff) {
 		if (soff + s->m_len > bodyoff) {
-			sn = bodyoff - soff;
+			sn = (int)(bodyoff - soff);
 			break;
 		}
 
@@ -864,7 +857,7 @@ esp_cbc_decrypt(struct mbuf *m, size_t off, struct secasvar *sav,
 			}
 
 			d->m_len = 0;
-			d->m_len = (M_TRAILINGSPACE(d) / blocklen) * blocklen;
+			d->m_len = (int)((M_TRAILINGSPACE(d) / blocklen) * blocklen);
 			if (d->m_len > i) {
 				d->m_len = i;
 			}
@@ -993,13 +986,15 @@ esp_cbc_encrypt(
 		}
 	}
 
+	VERIFY(ivoff <= INT_MAX);
+
 	/* put iv into the packet.  if we are in derived mode, use seqno. */
 	if (derived) {
-		m_copydata(m, ivoff, ivlen, (caddr_t) iv);
+		m_copydata(m, (int)ivoff, ivlen, (caddr_t) iv);
 	} else {
 		bcopy(sav->iv, iv, ivlen);
 		/* maybe it is better to overwrite dest, not source */
-		m_copyback(m, ivoff, ivlen, (caddr_t) iv);
+		m_copyback(m, (int)ivoff, ivlen, (caddr_t) iv);
 	}
 
 	/* extend iv */
@@ -1041,7 +1036,7 @@ esp_cbc_encrypt(
 	/* skip bodyoff */
 	while (soff < bodyoff) {
 		if (soff + s->m_len > bodyoff) {
-			sn = bodyoff - soff;
+			sn = (int)(bodyoff - soff);
 			break;
 		}
 
@@ -1107,7 +1102,7 @@ esp_cbc_encrypt(
 			}
 
 			d->m_len = 0;
-			d->m_len = (M_TRAILINGSPACE(d) / blocklen) * blocklen;
+			d->m_len = (int)((M_TRAILINGSPACE(d) / blocklen) * blocklen);
 			if (d->m_len > i) {
 				d->m_len = i;
 			}

@@ -190,11 +190,11 @@ struct pktap_buffer_v2_hdr_extra {
 	(pktap_v2_hdr_dst)->pth_ifname_offset = 0; \
 	(pktap_v2_hdr_dst)->pth_comm_offset = 0; \
 	(pktap_v2_hdr_dst)->pth_e_comm_offset = 0; \
-	(pktap_v2_hdr_dst)->pth_dlt = (pktap_header_src)->pth_dlt; \
-	(pktap_v2_hdr_dst)->pth_frame_pre_length = (pktap_header_src)->pth_frame_pre_length; \
-	(pktap_v2_hdr_dst)->pth_frame_post_length = (pktap_header_src)->pth_frame_post_length; \
+	(pktap_v2_hdr_dst)->pth_dlt = (uint16_t)(pktap_header_src)->pth_dlt; \
+	(pktap_v2_hdr_dst)->pth_frame_pre_length = (uint16_t)(pktap_header_src)->pth_frame_pre_length; \
+	(pktap_v2_hdr_dst)->pth_frame_post_length = (uint16_t)(pktap_header_src)->pth_frame_post_length; \
 	(pktap_v2_hdr_dst)->pth_iftype = (pktap_header_src)->pth_iftype; \
-	(pktap_v2_hdr_dst)->pth_ipproto = (pktap_header_src)->pth_ipproto; \
+	(pktap_v2_hdr_dst)->pth_ipproto = (uint16_t)(pktap_header_src)->pth_ipproto; \
 	(pktap_v2_hdr_dst)->pth_protocol_family = (pktap_header_src)->pth_protocol_family; \
 	(pktap_v2_hdr_dst)->pth_svc = (pktap_header_src)->pth_svc; \
 	(pktap_v2_hdr_dst)->pth_flowid = (pktap_header_src)->pth_flowid; \

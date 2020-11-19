@@ -89,7 +89,7 @@ kernel_trap(_kernelrpc_mach_vm_deallocate_trap,-12,5) /* 3 args, +2 for mach_vm_
 kernel_trap(_kernelrpc_mach_vm_protect_trap,-14,7) /* 5 args, +2 for mach_vm_address_t and mach_vm_size_t */
 kernel_trap(_kernelrpc_mach_vm_map_trap,-15,9)
 kernel_trap(_kernelrpc_mach_port_allocate_trap,-16,3)
-kernel_trap(_kernelrpc_mach_port_destroy_trap,-17,2)
+/* mach_port_destroy */
 kernel_trap(_kernelrpc_mach_port_deallocate_trap,-18,2)
 kernel_trap(_kernelrpc_mach_port_mod_refs_trap,-19,4)
 kernel_trap(_kernelrpc_mach_port_move_member_trap,-20,3)

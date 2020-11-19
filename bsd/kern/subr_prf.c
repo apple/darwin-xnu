@@ -102,8 +102,11 @@
 #include <os/log_private.h>
 
 /* for vaddlog(): the following are implemented in osfmk/kern/printf.c  */
-extern void bsd_log_lock(void);
+extern bool bsd_log_lock(bool);
 extern void bsd_log_unlock(void);
+
+uint32_t vaddlog_msgcount = 0;
+uint32_t vaddlog_msgcount_dropped = 0;
 
 /* Keep this around only because it's exported */
 void _printf(int, struct tty *, const char *, ...);
@@ -145,6 +148,7 @@ snprintf_func(int ch, void *arg);
 struct putchar_args {
 	int flags;
 	struct tty *tty;
+	bool last_char_was_cr;
 };
 static void putchar(int c, void *arg);
 
@@ -235,14 +239,6 @@ tprintf(tpr_t tpr, const char *fmt, ...)
 		tty_unlock(tp);
 	}
 
-	pca.flags = TOLOG;
-	pca.tty   = TTY_NULL;
-	va_start(ap, fmt);
-	__doprnt(fmt, ap, putchar, &pca, 10, TRUE);
-	va_end(ap);
-
-	logwakeup(msgbufp);
-
 	va_start(ap, fmt);
 	os_log_with_args(OS_LOG_DEFAULT, OS_LOG_TYPE_DEFAULT, fmt, ap, __builtin_return_address(0));
 	va_end(ap);
@@ -276,7 +272,7 @@ ttyprintf(struct tty *tp, const char *fmt, ...)
 void
 logtime(time_t secs)
 {
-	printf("Time %ld Message ", secs);
+	printf("Time 0x%lx Message ", secs);
 }
 
 static void
@@ -285,7 +281,7 @@ putchar_asl(int c, void *arg)
 	struct putchar_args *pca = arg;
 
 	if ((pca->flags & TOLOGLOCKED) && c != '\0' && c != '\r' && c != 0177) {
-		log_putc_locked(aslbufp, c);
+		log_putc_locked(aslbufp, (char)c);
 	}
 	putchar(c, arg);
 }
@@ -296,16 +292,21 @@ putchar_asl(int c, void *arg)
 int
 vaddlog(const char *fmt, va_list ap)
 {
+	if (!bsd_log_lock(oslog_is_safe())) {
+		os_atomic_inc(&vaddlog_msgcount_dropped, relaxed);
+		return 1;
+	}
+
 	struct putchar_args pca = {
 		.flags = TOLOGLOCKED,
 		.tty = NULL,
 	};
 
-	bsd_log_lock();
 	__doprnt(fmt, ap, putchar_asl, &pca, 10, TRUE);
 	bsd_log_unlock();
 	logwakeup(NULL);
 
+	os_atomic_inc(&vaddlog_msgcount, relaxed);
 	return 0;
 }
 
@@ -378,36 +379,51 @@ putchar(int c, void *arg)
 		constty = 0;
 	}
 	if ((pca->flags & TOLOG) && c != '\0' && c != '\r' && c != 0177) {
-		log_putc(c);
+		log_putc((char)c);
 	}
 	if ((pca->flags & TOLOGLOCKED) && c != '\0' && c != '\r' && c != 0177) {
-		log_putc_locked(msgbufp, c);
+		log_putc_locked(msgbufp, (char)c);
 	}
 	if ((pca->flags & TOCONS) && constty == 0 && c != '\0') {
-		cnputc(c);
+		cnputc((char)c);
 	}
 	if (pca->flags & TOSTR) {
-		**sp = c;
+		**sp = (char)c;
 		(*sp)++;
 	}
+
+	pca->last_char_was_cr = ('\n' == c);
 }
 
-int
+bool
+printf_log_locked(bool addcr, const char *fmt, ...)
+{
+	bool retval;
+	va_list args;
+
+	va_start(args, fmt);
+	retval = vprintf_log_locked(fmt, args, addcr);
+	va_end(args);
+
+	return retval;
+}
+
+bool
 vprintf_log_locked(const char *fmt, va_list ap, bool addcr)
 {
 	struct putchar_args pca;
 
 	pca.flags = TOLOGLOCKED;
 	pca.tty   = NULL;
+	pca.last_char_was_cr = false;
 	__doprnt(fmt, ap, putchar, &pca, 10, TRUE);
 	if (addcr) {
 		putchar('\n', &pca);
 	}
-	return 0;
+	return pca.last_char_was_cr;
 }
 
-#if !CONFIG_EMBEDDED
-
+#if CONFIG_VSPRINTF
 /*
  * Scaled down version of vsprintf(3).
  *
@@ -429,7 +445,7 @@ vsprintf(char *buf, const char *cfmt, va_list ap)
 	}
 	return 0;
 }
-#endif  /* !CONFIG_EMBEDDED */
+#endif  /* CONFIG_VSPRINTF */
 
 /*
  * Scaled down version of snprintf(3).
@@ -472,7 +488,7 @@ vscnprintf(char *buf, size_t size, const char *fmt, va_list args)
 
 	i = vsnprintf(buf, size, fmt, args);
 
-	return (i >= ssize) ? (ssize - 1) : i;
+	return (i >= ssize) ? (int)(ssize - 1) : i;
 }
 
 int
@@ -494,7 +510,7 @@ snprintf_func(int ch, void *arg)
 	struct snprintf_arg *const info = arg;
 
 	if (info->remain >= 2) {
-		*info->str++ = ch;
+		*info->str++ = (char)ch;
 		info->remain--;
 	}
 }

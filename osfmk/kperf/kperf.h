@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2018 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2011-2019 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -51,27 +51,39 @@ void kperf_set_thread_ast(thread_t thread, uint32_t flags);
 boolean_t kperf_thread_get_dirty(thread_t thread);
 void kperf_thread_set_dirty(thread_t thread, boolean_t dirty);
 
-/* possible states of kperf sampling */
-#define KPERF_SAMPLING_OFF      (0)
-#define KPERF_SAMPLING_ON       (1)
-#define KPERF_SAMPLING_SHUTDOWN (2)
+/*
+ * Initialize the rest of kperf lazily, upon first use.  May be called multiple times.
+ * The ktrace_lock must be held.
+ */
+void kperf_setup(void);
 
 /*
- * Initialize kperf.  Must be called before use and can be called multiple times.
+ * Configure kperf during boot and check the boot args.
  */
-extern int kperf_init(void);
+extern void kperf_init_early(void);
 
-/* get and set sampling status */
-extern unsigned kperf_sampling_status(void);
-extern int kperf_sampling_enable(void);
-extern int kperf_sampling_disable(void);
+bool kperf_is_sampling(void);
+int kperf_enable_sampling(void);
+int kperf_disable_sampling(void);
+int kperf_port_to_pid(mach_port_name_t portname);
 
 /* get a per-CPU sample buffer */
 struct kperf_sample *kperf_intr_sample_buffer(void);
 
+enum kperf_sampling {
+	KPERF_SAMPLING_OFF,
+	KPERF_SAMPLING_SHUTDOWN,
+	KPERF_SAMPLING_ON,
+};
+
+extern enum kperf_sampling kperf_status;
+
+#pragma mark - external callbacks
+
 /*
- * Callbacks into kperf from other systems.
+ * Set up kperf during system startup.
  */
+void kperf_init(void);
 
 /*
  * kperf AST handler
@@ -81,10 +93,14 @@ struct kperf_sample *kperf_intr_sample_buffer(void);
  */
 extern __attribute__((noinline)) void kperf_thread_ast_handler(thread_t thread);
 
-/* update whether the callback is set */
+/*
+ * Update whether the on-CPU callback should be called.
+ */
 void kperf_on_cpu_update(void);
 
-/* for scheduler switching threads on */
+/*
+ * Should only be called by the scheduler when `thread` is switching on-CPU.
+ */
 static inline void
 kperf_on_cpu(thread_t thread, thread_continue_t continuation,
     uintptr_t *starting_fp)
@@ -98,7 +114,9 @@ kperf_on_cpu(thread_t thread, thread_continue_t continuation,
 	}
 }
 
-/* for scheduler switching threads off */
+/*
+ * Should only be called by the scheduler when `thread` is switching off-CPU.
+ */
 static inline void
 kperf_off_cpu(thread_t thread)
 {
@@ -110,7 +128,9 @@ kperf_off_cpu(thread_t thread)
 	}
 }
 
-/* for scheduler making threads runnable */
+/*
+ * Should only be called by the scheduler when `thread` is made runnable.
+ */
 static inline void
 kperf_make_runnable(thread_t thread, int interrupt)
 {
@@ -122,7 +142,18 @@ kperf_make_runnable(thread_t thread, int interrupt)
 	}
 }
 
-/* for interrupt handler epilogue */
+static inline void
+kperf_running_setup(processor_t processor, uint64_t now)
+{
+	if (kperf_status == KPERF_SAMPLING_ON) {
+		extern void kptimer_running_setup(processor_t, uint64_t now);
+		kptimer_running_setup(processor, now);
+	}
+}
+
+/*
+ * Should only be called by platform code at the end of each interrupt.
+ */
 static inline void
 kperf_interrupt(void)
 {
@@ -131,11 +162,14 @@ kperf_interrupt(void)
 	    bool interrupt);
 
 	if (__improbable(kperf_lazy_cpu_action != 0)) {
-		kperf_lazy_cpu_sample(current_thread(), 0, true);
+		kperf_lazy_cpu_sample(NULL, 0, true);
 	}
 }
 
-/* for kdebug on every traced event */
+/*
+ * Should only be called by kdebug when an event with `debugid` is emitted
+ * from the frame starting at `starting_fp`.
+ */
 static inline void
 kperf_kdebug_callback(uint32_t debugid, uintptr_t *starting_fp)
 {
@@ -148,6 +182,12 @@ kperf_kdebug_callback(uint32_t debugid, uintptr_t *starting_fp)
 }
 
 /*
+ * Should only be called by platform code to indicate kperf's per-CPU timer
+ * has expired on the current CPU `cpuid` at time `now`.
+ */
+void kperf_timer_expire(void *param0, void *param1);
+
+/*
  * Used by ktrace to reset kperf.  ktrace_lock must be held.
  */
 extern void kperf_reset(void);
@@ -156,12 +196,5 @@ extern void kperf_reset(void);
  * Configure kperf from the kernel (e.g. during boot).
  */
 void kperf_kernel_configure(const char *config);
-
-/* given a task port, find out its pid */
-int kperf_port_to_pid(mach_port_name_t portname);
-
-#if DEVELOPMENT || DEBUG
-extern _Atomic long long kperf_pending_ipis;
-#endif /* DEVELOPMENT || DEBUG */
 
 #endif /* !defined(KPERF_H) */

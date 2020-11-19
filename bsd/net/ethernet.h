@@ -32,8 +32,14 @@
 
 #ifndef _NET_ETHERNET_H_
 #define _NET_ETHERNET_H_
+#ifndef DRIVERKIT
 #include <sys/appleapiopts.h>
 #include <sys/types.h>          /* u_ types */
+#else
+#include <sys/_types.h>
+#include <sys/_types/_u_char.h>
+#include <sys/_types/_u_short.h>
+#endif /* DRIVERKIT */
 
 /*
  * The number of bytes in an ethernet (MAC) address.
@@ -121,6 +127,7 @@ typedef struct  ether_addr {
 #define ETHERMTU        (ETHER_MAX_LEN-ETHER_HDR_LEN-ETHER_CRC_LEN)
 #define ETHERMIN        (ETHER_MIN_LEN-ETHER_HDR_LEN-ETHER_CRC_LEN)
 
+#ifndef DRIVERKIT
 #ifdef KERNEL_PRIVATE
 /*
  * The following are used by ethernet interfaces.
@@ -179,5 +186,6 @@ struct  ether_addr *ether_aton(const char *);
 int     ether_ntohost(char *, const struct ether_addr *);
 __END_DECLS
 #endif /* !KERNEL */
+#endif /* DRIVERKIT */
 
 #endif /* !_NET_ETHERNET_H_ */

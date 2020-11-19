@@ -62,7 +62,9 @@
 #include <kern/sched_prim.h>
 #include <kern/timer.h>
 
-#if CONFIG_EMBEDDED
+#include <machine/config.h>
+
+#if CONFIG_SKIP_PRECISE_USER_KERNEL_TIME && !HAS_FAST_CNTVCT
 int precise_user_kernel_time = 0;
 #else
 int precise_user_kernel_time = 1;
@@ -139,10 +141,10 @@ processor_timer_switch_thread(uint64_t tstamp, timer_t new_timer)
 	timer_t timer;
 
 	/* Update current timer. */
-	timer = PROCESSOR_DATA(processor, thread_timer);
+	timer = processor->thread_timer;
 	timer_advance(timer, tstamp - timer->tstamp);
 
 	/* Start new timer. */
-	PROCESSOR_DATA(processor, thread_timer) = new_timer;
+	processor->thread_timer = new_timer;
 	new_timer->tstamp = tstamp;
 }

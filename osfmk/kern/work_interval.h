@@ -53,7 +53,7 @@ struct kern_work_interval_args {
 
 struct kern_work_interval_create_args {
 	uint64_t        wica_id;          /* out param */
-	uint32_t        wica_port;        /* out param */
+	mach_port_name_t wica_port;        /* out param */
 	uint32_t        wica_create_flags;
 };
 
@@ -63,6 +63,9 @@ struct kern_work_interval_create_args {
  */
 extern kern_return_t
 kern_work_interval_create(thread_t thread, struct kern_work_interval_create_args *create_params);
+
+extern kern_return_t
+kern_work_interval_get_flags_from_port(mach_port_name_t port_name, uint32_t*flags);
 
 extern kern_return_t
 kern_work_interval_destroy(thread_t thread, uint64_t work_interval_id);
@@ -75,10 +78,17 @@ kern_work_interval_notify(thread_t thread, struct kern_work_interval_args* kwi_a
 #ifdef MACH_KERNEL_PRIVATE
 
 extern void work_interval_port_notify(mach_msg_header_t *msg);
+void work_interval_subsystem_init(void);
+bool work_interval_port_type_render_server(mach_port_name_t port_name);
 
+#if CONFIG_SCHED_AUTO_JOIN
+bool work_interval_should_propagate(thread_t cthread, thread_t thread);
+void work_interval_auto_join_propagate(thread_t from, thread_t to);
+void work_interval_auto_join_unwind(thread_t thread);
+void work_interval_auto_join_demote(thread_t thread);
+#endif /* CONFIG_SCHED_AUTO_JOIN */
 
-extern void work_interval_thread_terminate(thread_t thread);
-
+extern kern_return_t work_interval_thread_terminate(thread_t thread);
 #endif /* MACH_KERNEL_PRIVATE */
 
 __END_DECLS

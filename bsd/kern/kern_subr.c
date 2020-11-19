@@ -165,7 +165,7 @@ uiomove64(const addr64_t c_cp, int n, struct uio *uio)
 				KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYOUT)) | DBG_FUNC_START,
 				    (int)cp, (uintptr_t)uio->uio_iovs.uiovp->iov_base, acnt, 0, 0);
 
-				error = copyout( CAST_DOWN(caddr_t, cp), uio->uio_iovs.uiovp->iov_base, acnt );
+				error = copyout( CAST_DOWN(caddr_t, cp), uio->uio_iovs.uiovp->iov_base, (size_t)acnt );
 
 				KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYOUT)) | DBG_FUNC_END,
 				    (int)cp, (uintptr_t)uio->uio_iovs.uiovp->iov_base, acnt, 0, 0);
@@ -173,7 +173,7 @@ uiomove64(const addr64_t c_cp, int n, struct uio *uio)
 				KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYIN)) | DBG_FUNC_START,
 				    (uintptr_t)uio->uio_iovs.uiovp->iov_base, (int)cp, acnt, 0, 0);
 
-				error = copyin(uio->uio_iovs.uiovp->iov_base, CAST_DOWN(caddr_t, cp), acnt);
+				error = copyin(uio->uio_iovs.uiovp->iov_base, CAST_DOWN(caddr_t, cp), (size_t)acnt);
 
 				KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYIN)) | DBG_FUNC_END,
 				    (uintptr_t)uio->uio_iovs.uiovp->iov_base, (int)cp, acnt, 0, 0);
@@ -187,21 +187,23 @@ uiomove64(const addr64_t c_cp, int n, struct uio *uio)
 		case UIO_SYSSPACE:
 			if (uio->uio_rw == UIO_READ) {
 				error = copywithin(CAST_DOWN(caddr_t, cp), CAST_DOWN(caddr_t, uio->uio_iovs.kiovp->iov_base),
-				    acnt);
+				    (size_t)acnt);
 			} else {
 				error = copywithin(CAST_DOWN(caddr_t, uio->uio_iovs.kiovp->iov_base), CAST_DOWN(caddr_t, cp),
-				    acnt);
+				    (size_t)acnt);
 			}
 			break;
 
 		case UIO_PHYS_USERSPACE64:
 		case UIO_PHYS_USERSPACE32:
 		case UIO_PHYS_USERSPACE:
+			acnt = MIN(acnt, UINT_MAX);
+
 			if (uio->uio_rw == UIO_READ) {
 				KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYOUT)) | DBG_FUNC_START,
 				    (int)cp, (uintptr_t)uio->uio_iovs.uiovp->iov_base, acnt, 1, 0);
 
-				error = copypv((addr64_t)cp, uio->uio_iovs.uiovp->iov_base, acnt, cppvPsrc | cppvNoRefSrc);
+				error = copypv((addr64_t)cp, uio->uio_iovs.uiovp->iov_base, (unsigned int)acnt, cppvPsrc | cppvNoRefSrc);
 				if (error) {    /* Copy physical to virtual */
 					error = EFAULT;
 				}
@@ -212,7 +214,7 @@ uiomove64(const addr64_t c_cp, int n, struct uio *uio)
 				KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYIN)) | DBG_FUNC_START,
 				    (uintptr_t)uio->uio_iovs.uiovp->iov_base, (int)cp, acnt, 1, 0);
 
-				error = copypv(uio->uio_iovs.uiovp->iov_base, (addr64_t)cp, acnt, cppvPsnk | cppvNoRefSrc | cppvNoModSnk);
+				error = copypv(uio->uio_iovs.uiovp->iov_base, (addr64_t)cp, (unsigned int)acnt, cppvPsnk | cppvNoRefSrc | cppvNoModSnk);
 				if (error) {    /* Copy virtual to physical */
 					error = EFAULT;
 				}
@@ -226,11 +228,13 @@ uiomove64(const addr64_t c_cp, int n, struct uio *uio)
 			break;
 
 		case UIO_PHYS_SYSSPACE:
+			acnt = MIN(acnt, UINT_MAX);
+
 			if (uio->uio_rw == UIO_READ) {
 				KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYOUT)) | DBG_FUNC_START,
 				    (int)cp, (uintptr_t)uio->uio_iovs.kiovp->iov_base, acnt, 2, 0);
 
-				error = copypv((addr64_t)cp, uio->uio_iovs.kiovp->iov_base, acnt, cppvKmap | cppvPsrc | cppvNoRefSrc);
+				error = copypv((addr64_t)cp, uio->uio_iovs.kiovp->iov_base, (unsigned int)acnt, cppvKmap | cppvPsrc | cppvNoRefSrc);
 				if (error) {    /* Copy physical to virtual */
 					error = EFAULT;
 				}
@@ -241,7 +245,7 @@ uiomove64(const addr64_t c_cp, int n, struct uio *uio)
 				KERNEL_DEBUG((FSDBG_CODE(DBG_FSRW, DBG_UIO_COPYIN)) | DBG_FUNC_START,
 				    (uintptr_t)uio->uio_iovs.kiovp->iov_base, (int)cp, acnt, 2, 0);
 
-				error = copypv(uio->uio_iovs.kiovp->iov_base, (addr64_t)cp, acnt, cppvKmap | cppvPsnk | cppvNoRefSrc | cppvNoModSnk);
+				error = copypv(uio->uio_iovs.kiovp->iov_base, (addr64_t)cp, (unsigned int)acnt, cppvKmap | cppvPsnk | cppvNoRefSrc | cppvNoModSnk);
 				if (error) {    /* Copy virtual to physical */
 					error = EFAULT;
 				}
@@ -257,7 +261,7 @@ uiomove64(const addr64_t c_cp, int n, struct uio *uio)
 		default:
 			break;
 		}
-		uio_update(uio, acnt);
+		uio_update(uio, (user_size_t)acnt);
 		cp += acnt;
 		n -= acnt;
 	}
@@ -295,7 +299,7 @@ ureadc(int c, struct uio *uio)
 
 	case UIO_SYSSPACE32:
 	case UIO_SYSSPACE:
-		*(CAST_DOWN(caddr_t, uio->uio_iovs.kiovp->iov_base)) = c;
+		*(CAST_DOWN(caddr_t, uio->uio_iovs.kiovp->iov_base)) = (char)c;
 		break;
 
 	default:
@@ -305,32 +309,36 @@ ureadc(int c, struct uio *uio)
 	return 0;
 }
 
+LIST_HEAD(generic_hash_head, generic);
+
 /*
  * General routine to allocate a hash table.
  */
 void *
-hashinit(int elements, int type, u_long *hashmask)
+hashinit(int elements, int type __unused, u_long *hashmask)
 {
-	long hashsize;
-	LIST_HEAD(generic, generic) * hashtbl;
-	int i;
+	struct generic_hash_head *hashtbl;
+	vm_size_t hashsize;
 
 	if (elements <= 0) {
 		panic("hashinit: bad cnt");
 	}
-	for (hashsize = 1; hashsize <= elements; hashsize <<= 1) {
-		continue;
-	}
-	hashsize >>= 1;
-	MALLOC(hashtbl, struct generic *,
-	    hashsize * sizeof(*hashtbl), type, M_WAITOK | M_ZERO);
+
+	hashsize = 1UL << (fls(elements) - 1);
+	hashtbl = kheap_alloc(KHEAP_DEFAULT, hashsize * sizeof(*hashtbl),
+	    Z_WAITOK | Z_ZERO);
 	if (hashtbl != NULL) {
-		for (i = 0; i < hashsize; i++) {
-			LIST_INIT(&hashtbl[i]);
-		}
 		*hashmask = hashsize - 1;
 	}
 	return hashtbl;
+}
+
+void
+hashdestroy(void *hash, int type __unused, u_long hashmask)
+{
+	struct generic_hash_head *hashtbl = hash;
+	assert(powerof2(hashmask + 1));
+	kheap_free(KHEAP_DEFAULT, hashtbl, (hashmask + 1) * sizeof(*hashtbl));
 }
 
 /*
@@ -629,32 +637,29 @@ uio_createwithbuffer( int a_iovcount,                   /* number of iovecs */
 	uio_t                           my_uio = (uio_t) a_buf_p;
 	size_t                          my_size;
 
+	assert(a_iovcount >= 0 && a_iovcount <= UIO_MAXIOV);
+	if (a_iovcount < 0 || a_iovcount > UIO_MAXIOV) {
+		return NULL;
+	}
+
 	my_size = UIO_SIZEOF(a_iovcount);
+	assert(a_buffer_size >= my_size);
 	if (a_buffer_size < my_size) {
-#if DEBUG
-		panic("%s :%d - a_buffer_size is too small\n", __FILE__, __LINE__);
-#endif /* DEBUG */
 		return NULL;
 	}
 	my_size = a_buffer_size;
 
-#if DEBUG
-	if (my_uio == 0) {
-		panic("%s :%d - could not allocate uio_t\n", __FILE__, __LINE__);
+	assert(my_size <= INT_MAX);
+	if (my_size > INT_MAX) {
+		return NULL;
 	}
-	if (!IS_VALID_UIO_SEGFLG(a_spacetype)) {
-		panic("%s :%d - invalid address space type\n", __FILE__, __LINE__);
-	}
-	if (!(a_iodirection == UIO_READ || a_iodirection == UIO_WRITE)) {
-		panic("%s :%d - invalid IO direction flag\n", __FILE__, __LINE__);
-	}
-	if (a_iovcount > UIO_MAXIOV) {
-		panic("%s :%d - invalid a_iovcount\n", __FILE__, __LINE__);
-	}
-#endif /* DEBUG */
+
+	assert(my_uio != NULL);
+	assert(IS_VALID_UIO_SEGFLG(a_spacetype));
+	assert(a_iodirection == UIO_READ || a_iodirection == UIO_WRITE);
 
 	bzero(my_uio, my_size);
-	my_uio->uio_size = my_size;
+	my_uio->uio_size = (int)my_size;
 
 	/*
 	 * we use uio_segflg to indicate if the uio_t is the new format or
@@ -774,7 +779,7 @@ uio_reset( uio_t a_uio,
 	my_old_flags = a_uio->uio_flags;
 	my_max_iovs = a_uio->uio_max_iovs;
 	bzero(a_uio, my_size);
-	a_uio->uio_size = my_size;
+	a_uio->uio_size = (int)my_size;
 
 	/*
 	 * we use uio_segflg to indicate if the uio_t is the new format or
@@ -919,10 +924,10 @@ uio_getiov( uio_t a_uio,
 		}
 	} else {
 		if (a_baseaddr_p != NULL) {
-			*a_baseaddr_p = a_uio->uio_iovs.kiovp[a_index].iov_base;
+			*a_baseaddr_p = (user_addr_t)a_uio->uio_iovs.kiovp[a_index].iov_base;
 		}
 		if (a_length_p != NULL) {
-			*a_length_p = a_uio->uio_iovs.kiovp[a_index].iov_len;
+			*a_length_p = (user_size_t)a_uio->uio_iovs.kiovp[a_index].iov_len;
 		}
 	}
 
@@ -960,7 +965,7 @@ uio_calculateresid( uio_t a_uio )
 				}
 			}
 		}
-		a_uio->uio_resid_64 = resid;
+		a_uio->uio_resid_64 = (user_size_t)resid;
 
 		/* position to first non zero length iovec (4235922) */
 		while (a_uio->uio_iovcnt > 0 && a_uio->uio_iovs.uiovp->iov_len == 0) {
@@ -982,7 +987,7 @@ uio_calculateresid( uio_t a_uio )
 				}
 			}
 		}
-		a_uio->uio_resid_64 = resid;
+		a_uio->uio_resid_64 = (user_size_t)resid;
 
 		/* position to first non zero length iovec (4235922) */
 		while (a_uio->uio_iovcnt > 0 && a_uio->uio_iovs.kiovp->iov_len == 0) {
@@ -1195,8 +1200,8 @@ copyin_user_iovec_array(user_addr_t uaddr, int spacetype, int count, struct user
 	for (i = count - 1; i >= 0; i--) {
 		if (spacetype == UIO_USERSPACE64) {
 			struct user64_iovec iovec = ((struct user64_iovec *)dst)[i];
-			dst[i].iov_base = iovec.iov_base;
-			dst[i].iov_len = iovec.iov_len;
+			dst[i].iov_base = (user_addr_t)iovec.iov_base;
+			dst[i].iov_len = (user_size_t)iovec.iov_len;
 		} else {
 			struct user32_iovec iovec = ((struct user32_iovec *)dst)[i];
 			dst[i].iov_base = iovec.iov_base;

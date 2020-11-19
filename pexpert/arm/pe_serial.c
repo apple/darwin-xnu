@@ -28,6 +28,9 @@
 #include <pexpert/arm64/board_config.h>
 #include <arm64/proc_reg.h>
 #endif
+#if HIBERNATION
+#include <machine/pal_hibernate.h>
+#endif /* HIBERNATION */
 
 struct pe_serial_functions {
 	void            (*uart_init) (void);
@@ -383,17 +386,17 @@ static void
 shmcon_init(void)
 {
 	DTEntry                         entry;
-	uintptr_t                       *reg_prop;
+	uintptr_t const                 *reg_prop;
 	volatile struct shm_buffer_info *end;
 	size_t                          i, header_size;
 	unsigned int                    size;
 	vm_offset_t                     pa_panic_base, panic_size, va_buffer_base, va_buffer_end;
 
-	if (kSuccess != DTLookupEntry(0, "pram", &entry)) {
+	if (kSuccess != SecureDTLookupEntry(0, "pram", &entry)) {
 		return;
 	}
 
-	if (kSuccess != DTGetProperty(entry, "reg", (void **)&reg_prop, &size)) {
+	if (kSuccess != SecureDTGetProperty(entry, "reg", (void const **)&reg_prop, &size)) {
 		return;
 	}
 
@@ -511,111 +514,13 @@ pe_shmcon_set_child(uint64_t paddr, uint32_t entry)
 
 /*****************************************************************************/
 
-#ifdef DOCKFIFO_UART
-
-
-// Allow a 30ms stall of wall clock time before DockFIFO starts dropping characters
-#define DOCKFIFO_WR_MAX_STALL_US        (30*1000)
-
-static uint64_t prev_dockfifo_drained_time; // Last time we've seen the DockFIFO drained by an external agent
-static uint64_t prev_dockfifo_spaces;       // Previous w_stat level of the DockFIFO.
-static uint32_t dockfifo_capacity;
-static uint64_t dockfifo_stall_grace;
-
-static vm_offset_t dockfifo_uart_base = 0;
-
-//=======================
-// Local funtions
-//=======================
-
-static int
-dockfifo_drain_on_stall()
-{
-	// Called when DockFIFO runs out of spaces.
-	// Check if the DockFIFO reader has stalled. If so, empty the DockFIFO ourselves.
-	// Return number of bytes drained.
-
-	if (mach_absolute_time() - prev_dockfifo_drained_time >= dockfifo_stall_grace) {
-		// It's been more than DOCKFIFO_WR_MAX_STALL_US and nobody read from the FIFO
-		// Drop a character.
-		(void)rDOCKFIFO_R_DATA(DOCKFIFO_UART_READ, 1);
-		os_atomic_inc(&prev_dockfifo_spaces, relaxed);
-		return 1;
-	}
-	return 0;
-}
-
-
-static int
-dockfifo_uart_tr0(void)
-{
-	uint32_t spaces = rDOCKFIFO_W_STAT(DOCKFIFO_UART_WRITE) & 0xffff;
-	if (spaces >= dockfifo_capacity || spaces > prev_dockfifo_spaces) {
-		// More spaces showed up. That can only mean someone read the FIFO.
-		// Note that if the DockFIFO is empty we cannot tell if someone is listening,
-		// we can only give them the benefit of the doubt.
-
-		prev_dockfifo_drained_time = mach_absolute_time();
-	}
-	prev_dockfifo_spaces = spaces;
-
-	return spaces || dockfifo_drain_on_stall();
-}
-
-static void
-dockfifo_uart_td0(int c)
-{
-	rDOCKFIFO_W_DATA(DOCKFIFO_UART_WRITE, 1) = (unsigned)(c & 0xff);
-	os_atomic_dec(&prev_dockfifo_spaces, relaxed); // After writing a byte we have one fewer space than previously expected.
-}
-
-static int
-dockfifo_uart_rr0(void)
-{
-	return rDOCKFIFO_R_DATA(DOCKFIFO_UART_READ, 0) & 0x7f;
-}
-
-static int
-dockfifo_uart_rd0(void)
-{
-	return (int)((rDOCKFIFO_R_DATA(DOCKFIFO_UART_READ, 1) >> 8) & 0xff);
-}
-
-static void
-dockfifo_uart_init(void)
-{
-	nanoseconds_to_absolutetime(DOCKFIFO_WR_MAX_STALL_US * 1000, &dockfifo_stall_grace);
-
-	// Disable autodraining of the FIFO. We now purely manage it in software.
-	rDOCKFIFO_DRAIN(DOCKFIFO_UART_WRITE) = 0;
-
-	// Empty the DockFIFO by draining it until OCCUPANCY is 0, then measure its capacity
-	while (rDOCKFIFO_R_DATA(DOCKFIFO_UART_WRITE, 3) & 0x7F) {
-		;
-	}
-	dockfifo_capacity = rDOCKFIFO_W_STAT(DOCKFIFO_UART_WRITE) & 0xffff;
-}
-
-SECURITY_READ_ONLY_LATE(static struct pe_serial_functions) dockfifo_uart_serial_functions =
-{
-	.uart_init = dockfifo_uart_init,
-	.uart_set_baud_rate = NULL,
-	.tr0 = dockfifo_uart_tr0,
-	.td0 = dockfifo_uart_td0,
-	.rr0 = dockfifo_uart_rr0,
-	.rd0 = dockfifo_uart_rd0
-};
-
-#endif /* DOCKFIFO_UART */
-
-/*****************************************************************************/
-
 #ifdef DOCKCHANNEL_UART
 #define DOCKCHANNEL_WR_MAX_STALL_US     (30*1000)
 
 static vm_offset_t      dock_agent_base;
 static uint32_t         max_dockchannel_drain_period;
 static bool             use_sw_drain;
+static uint32_t         dock_wstat_mask;
 static uint64_t         prev_dockchannel_drained_time;  // Last time we've seen the DockChannel drained by an external agent
 static uint64_t         prev_dockchannel_spaces;        // Previous w_stat level of the DockChannel.
 static uint64_t         dockchannel_stall_grace;
@@ -635,7 +540,7 @@ dockchannel_drain_on_stall()
 	if ((mach_absolute_time() - prev_dockchannel_drained_time) >= dockchannel_stall_grace) {
 		// It's been more than DOCKCHANEL_WR_MAX_STALL_US and nobody read from the FIFO
 		// Drop a character.
-		(void)rDOCKCHANNELS_DEV_RDATA1(DOCKCHANNEL_UART_CHANNEL);
+		(void)rDOCKCHANNELS_DOCK_RDATA1(DOCKCHANNEL_UART_CHANNEL);
 		os_atomic_inc(&prev_dockchannel_spaces, relaxed);
 		return 1;
 	}
@@ -646,7 +551,7 @@ static int
 dockchannel_uart_tr0(void)
 {
 	if (use_sw_drain) {
-		uint32_t spaces = rDOCKCHANNELS_DEV_WSTAT(DOCKCHANNEL_UART_CHANNEL) & 0x1ff;
+		uint32_t spaces = rDOCKCHANNELS_DEV_WSTAT(DOCKCHANNEL_UART_CHANNEL) & dock_wstat_mask;
 		if (spaces > prev_dockchannel_spaces) {
 			// More spaces showed up. That can only mean someone read the FIFO.
 			// Note that if the DockFIFO is empty we cannot tell if someone is listening,
@@ -658,7 +563,7 @@ dockchannel_uart_tr0(void)
 		return spaces || dockchannel_drain_on_stall();
 	} else {
 		// Returns spaces in dockchannel fifo
-		return rDOCKCHANNELS_DEV_WSTAT(DOCKCHANNEL_UART_CHANNEL) & 0x1ff;
+		return rDOCKCHANNELS_DEV_WSTAT(DOCKCHANNEL_UART_CHANNEL) & dock_wstat_mask;
 	}
 }
 
@@ -765,7 +670,7 @@ pi3_uart_init(void)
 	BCM2837_PUT32(BCM2837_AUX_MU_IIR_REG_V, 0xC6);
 	BCM2837_PUT32(BCM2837_AUX_MU_BAUD_REG_V, 270);
 
-	i = BCM2837_FSEL_REG(14);
+	i = (uint32_t)BCM2837_FSEL_REG(14);
 	// Configure GPIOs 14 & 15 for alternate function 5
 	i &= ~(BCM2837_FSEL_MASK(14));
 	i |= (BCM2837_FSEL_ALT5 << BCM2837_FSEL_OFFS(14));
@@ -826,9 +731,9 @@ serial_init(void)
 	DTEntry         entryP = NULL;
 	uint32_t        prop_size;
 	vm_offset_t     soc_base;
-	uintptr_t       *reg_prop;
-	uint32_t        *prop_value __unused = NULL;
-	char            *serial_compat __unused = 0;
+	uintptr_t const *reg_prop;
+	uint32_t const  *prop_value __unused = NULL;
+	char const      *serial_compat __unused = 0;
 	uint32_t        dccmode;
 
 	struct pe_serial_functions *fns = gPESF;
@@ -860,12 +765,12 @@ serial_init(void)
 	}
 
 #ifdef PI3_UART
-	if (DTFindEntry("name", "gpio", &entryP) == kSuccess) {
-		DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
+	if (SecureDTFindEntry("name", "gpio", &entryP) == kSuccess) {
+		SecureDTGetProperty(entryP, "reg", (void const **)&reg_prop, &prop_size);
 		pi3_gpio_base_vaddr = ml_io_map(soc_base + *reg_prop, *(reg_prop + 1));
 	}
-	if (DTFindEntry("name", "aux", &entryP) == kSuccess) {
-		DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
+	if (SecureDTFindEntry("name", "aux", &entryP) == kSuccess) {
+		SecureDTGetProperty(entryP, "reg", (void const **)&reg_prop, &prop_size);
 		pi3_aux_base_vaddr = ml_io_map(soc_base + *reg_prop, *(reg_prop + 1));
 	}
 	if ((pi3_gpio_base_vaddr != 0) && (pi3_aux_base_vaddr != 0)) {
@@ -873,22 +778,10 @@ serial_init(void)
 	}
 #endif /* PI3_UART */
 
-#ifdef DOCKFIFO_UART
-	uint32_t no_dockfifo_uart = 0;
-	PE_parse_boot_argn("no-dockfifo-uart", &no_dockfifo_uart, sizeof(no_dockfifo_uart));
-	if (no_dockfifo_uart == 0) {
-		if (DTFindEntry("name", "dockfifo-uart", &entryP) == kSuccess) {
-			DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
-			dockfifo_uart_base = ml_io_map(soc_base + *reg_prop, *(reg_prop + 1));
-			register_serial_functions(&dockfifo_uart_serial_functions);
-		}
-	}
-#endif /* DOCKFIFO_UART */
-
 #ifdef DOCKCHANNEL_UART
 	uint32_t no_dockchannel_uart = 0;
-	if (DTFindEntry("name", "dockchannel-uart", &entryP) == kSuccess) {
-		DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
+	if (SecureDTFindEntry("name", "dockchannel-uart", &entryP) == kSuccess) {
+		SecureDTGetProperty(entryP, "reg", (void const **)&reg_prop, &prop_size);
 		// Should be two reg entries
 		if (prop_size / sizeof(uintptr_t) != 4) {
 			panic("Malformed dockchannel-uart property");
@@ -899,10 +792,14 @@ serial_init(void)
 		// Keep the old name for boot-arg
 		if (no_dockchannel_uart == 0) {
 			register_serial_functions(&dockchannel_uart_serial_functions);
-			DTGetProperty(entryP, "max-aop-clk", (void **)&prop_value, &prop_size);
+			SecureDTGetProperty(entryP, "max-aop-clk", (void const **)&prop_value, &prop_size);
 			max_dockchannel_drain_period = (uint32_t)((prop_value)?  (*prop_value * 0.03) : DOCKCHANNEL_DRAIN_PERIOD);
-			DTGetProperty(entryP, "enable-sw-drain", (void **)&prop_value, &prop_size);
+			prop_value = NULL;
+			SecureDTGetProperty(entryP, "enable-sw-drain", (void const **)&prop_value, &prop_size);
 			use_sw_drain = (prop_value)?  *prop_value : 0;
+			prop_value = NULL;
+			SecureDTGetProperty(entryP, "dock-wstat-mask", (void const **)&prop_value, &prop_size);
+			dock_wstat_mask = (prop_value)?  *prop_value : 0x1ff;
 		} else {
 			dockchannel_uart_clear_intr();
 		}
@@ -917,52 +814,55 @@ serial_init(void)
 	 * If we don't find it there, look for "uart0" and "uart1".
 	 */
 
-	if (DTFindEntry("boot-console", NULL, &entryP) == kSuccess) {
-		DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
+	if (SecureDTFindEntry("boot-console", NULL, &entryP) == kSuccess) {
+		SecureDTGetProperty(entryP, "reg", (void const **)&reg_prop, &prop_size);
 		uart_base = ml_io_map(soc_base + *reg_prop, *(reg_prop + 1));
 		if (serial_compat == 0) {
-			DTGetProperty(entryP, "compatible", (void **)&serial_compat, &prop_size);
+			SecureDTGetProperty(entryP, "compatible", (void const **)&serial_compat, &prop_size);
 		}
-	} else if (DTFindEntry("name", "uart0", &entryP) == kSuccess) {
-		DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
+	} else if (SecureDTFindEntry("name", "uart0", &entryP) == kSuccess) {
+		SecureDTGetProperty(entryP, "reg", (void const **)&reg_prop, &prop_size);
 		uart_base = ml_io_map(soc_base + *reg_prop, *(reg_prop + 1));
 		if (serial_compat == 0) {
-			DTGetProperty(entryP, "compatible", (void **)&serial_compat, &prop_size);
+			SecureDTGetProperty(entryP, "compatible", (void const **)&serial_compat, &prop_size);
 		}
-	} else if (DTFindEntry("name", "uart1", &entryP) == kSuccess) {
-		DTGetProperty(entryP, "reg", (void **)&reg_prop, &prop_size);
+	} else if (SecureDTFindEntry("name", "uart1", &entryP) == kSuccess) {
+		SecureDTGetProperty(entryP, "reg", (void const **)&reg_prop, &prop_size);
 		uart_base = ml_io_map(soc_base + *reg_prop, *(reg_prop + 1));
 		if (serial_compat == 0) {
-			DTGetProperty(entryP, "compatible", (void **)&serial_compat, &prop_size);
+			SecureDTGetProperty(entryP, "compatible", (void const **)&serial_compat, &prop_size);
 		}
 	}
 #ifdef  S3CUART
 	if (NULL != entryP) {
-		DTGetProperty(entryP, "pclk", (void **)&prop_value, &prop_size);
+		SecureDTGetProperty(entryP, "pclk", (void const **)&prop_value, &prop_size);
 		if (prop_value) {
 			dt_pclk = *prop_value;
 		}
 
 		prop_value = NULL;
-		DTGetProperty(entryP, "sampling", (void **)&prop_value, &prop_size);
+		SecureDTGetProperty(entryP, "sampling", (void const **)&prop_value, &prop_size);
 		if (prop_value) {
 			dt_sampling = *prop_value;
 		}
 
 		prop_value = NULL;
-		DTGetProperty(entryP, "ubrdiv", (void **)&prop_value, &prop_size);
+		SecureDTGetProperty(entryP, "ubrdiv", (void const **)&prop_value, &prop_size);
 		if (prop_value) {
 			dt_ubrdiv = *prop_value;
 		}
 	}
-	if (!strcmp(serial_compat, "uart,16550")) {
-		register_serial_functions(&ln2410_serial_functions);
-	} else if (!strcmp(serial_compat, "uart-16550")) {
-		register_serial_functions(&ln2410_serial_functions);
-	} else if (!strcmp(serial_compat, "uart,s5i3000")) {
-		register_serial_functions(&ln2410_serial_functions);
-	} else if (!strcmp(serial_compat, "uart-1,samsung")) {
-		register_serial_functions(&ln2410_serial_functions);
+
+	if (serial_compat) {
+		if (!strcmp(serial_compat, "uart,16550")) {
+			register_serial_functions(&ln2410_serial_functions);
+		} else if (!strcmp(serial_compat, "uart-16550")) {
+			register_serial_functions(&ln2410_serial_functions);
+		} else if (!strcmp(serial_compat, "uart,s5i3000")) {
+			register_serial_functions(&ln2410_serial_functions);
+		} else if (!strcmp(serial_compat, "uart-1,samsung")) {
+			register_serial_functions(&ln2410_serial_functions);
+		}
 	}
 #endif /* S3CUART */
 
@@ -976,6 +876,17 @@ serial_init(void)
 		fns = fns->next;
 	}
 
+#if HIBERNATION
+	/* hibernation needs to know the UART register addresses since it can't directly use this serial driver */
+	if (dockchannel_uart_base) {
+		gHibernateGlobals.dockChannelRegBase = ml_vtophys(dockchannel_uart_base);
+		gHibernateGlobals.dockChannelWstatMask = dock_wstat_mask;
+	}
+	if (uart_base) {
+		gHibernateGlobals.hibUartRegBase = ml_vtophys(uart_base);
+	}
+#endif /* HIBERNATION */
+
 	uart_initted = 1;
 
 	return 1;
@@ -987,6 +898,9 @@ uart_putc(char c)
 	struct pe_serial_functions *fns = gPESF;
 	while (fns != NULL) {
 		while (!fns->tr0()) {
+#if __arm64__                           /* on arm64, we have a WFE timeout, so no need to hot-poll here */
+			__builtin_arm_wfe()
+#endif
 			;               /* Wait until THR is empty. */
 		}
 		fns->td0(c);

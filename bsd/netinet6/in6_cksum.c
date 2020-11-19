@@ -177,7 +177,7 @@ in6_pseudo(const struct in6_addr *src, const struct in6_addr *dst, uint32_t x)
 	/* fold in carry bits */
 	ADDCARRY(sum);
 
-	return sum;
+	return (uint16_t)sum;
 }
 
 /*

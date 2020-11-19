@@ -28,7 +28,6 @@ PRIVATE_DATAFILES = ${DATAFILES}
 PRIVATE_KERNELFILES = \
 	_label.h \
 	mac.h \
-	mac_alloc.h \
 	mac_data.h \
 	mac_framework.h \
 	mac_internal.h \

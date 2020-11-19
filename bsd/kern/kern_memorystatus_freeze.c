@@ -38,8 +38,6 @@
 #include <kern/policy_internal.h>
 #include <kern/thread_group.h>
 
-#include <IOKit/IOBSD.h>
-
 #include <libkern/libkern.h>
 #include <mach/coalition.h>
 #include <mach/mach_time.h>
@@ -65,6 +63,8 @@
 #include <mach/machine/sdt.h>
 #include <libkern/section_keywords.h>
 #include <stdatomic.h>
+
+#include <IOKit/IOBSD.h>
 
 #if CONFIG_FREEZE
 #include <vm/vm_map.h>
@@ -125,7 +125,8 @@ unsigned int memorystatus_frozen_shared_mb = 0;
 unsigned int memorystatus_frozen_shared_mb_max = 0;
 unsigned int memorystatus_freeze_shared_mb_per_process_max = 0; /* Max. MB allowed per process to be freezer-eligible. */
 unsigned int memorystatus_freeze_private_shared_pages_ratio = 2; /* Ratio of private:shared pages for a process to be freezer-eligible. */
-unsigned int memorystatus_thaw_count = 0;
+unsigned int memorystatus_thaw_count = 0; /* # of thaws in the current freezer interval */
+uint64_t memorystatus_thaw_count_since_boot = 0; /* The number of thaws since boot */
 unsigned int memorystatus_refreeze_eligible_count = 0; /* # of processes currently thawed i.e. have state on disk & in-memory */
 
 /* Freezer counters collected for telemtry */
@@ -173,6 +174,14 @@ static struct memorystatus_freezer_stats_t {
 	 * on our NAND budget if we did swap out these pages.
 	 */
 	uint64_t mfs_shared_pages_skipped;
+
+	/*
+	 * A running sum of the total number of bytes sent to NAND during
+	 * refreeze operations since boot.
+	 */
+	uint64_t mfs_bytes_refrozen;
+	/* The number of refreeze operations since boot */
+	uint64_t mfs_refreeze_count;
 } memorystatus_freezer_stats = {0};
 
 #endif /* XNU_KERNEL_PRIVATE */
@@ -181,6 +190,7 @@ static inline boolean_t memorystatus_can_freeze_processes(void);
 static boolean_t memorystatus_can_freeze(boolean_t *memorystatus_freeze_swap_low);
 static boolean_t memorystatus_is_process_eligible_for_freeze(proc_t p);
 static void memorystatus_freeze_thread(void *param __unused, wait_result_t wr __unused);
+static void memorystatus_freeze_start_normal_throttle_interval(uint32_t new_budget, mach_timespec_t start_ts);
 
 void memorystatus_disable_freeze(void);
 
@@ -205,6 +215,10 @@ extern int i_coal_jetsam_get_taskrole(coalition_t coal, task_t task);
 
 static void memorystatus_freeze_update_throttle(uint64_t *budget_pages_allowed);
 static void memorystatus_demote_frozen_processes(boolean_t force_one);
+/*
+ * Converts the freezer_error_code into a string and updates freezer error counts.
+ */
+static void memorystatus_freezer_stringify_error(const int freezer_error_code, char* buffer, size_t len);
 
 static uint64_t memorystatus_freezer_thread_next_run_ts = 0;
 
@@ -212,8 +226,40 @@ static uint64_t memorystatus_freezer_thread_next_run_ts = 0;
 
 SYSCTL_UINT(_kern, OID_AUTO, memorystatus_freeze_count, CTLFLAG_RD | CTLFLAG_LOCKED, &memorystatus_frozen_count, 0, "");
 SYSCTL_UINT(_kern, OID_AUTO, memorystatus_thaw_count, CTLFLAG_RD | CTLFLAG_LOCKED, &memorystatus_thaw_count, 0, "");
+SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_thaw_count_since_boot, CTLFLAG_RD | CTLFLAG_LOCKED, &memorystatus_thaw_count_since_boot, "");
 SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_freeze_pageouts, CTLFLAG_RD | CTLFLAG_LOCKED, &memorystatus_freeze_pageouts, "");
+#if DEVELOPMENT || DEBUG
+static int sysctl_memorystatus_freeze_budget_pages_remaining SYSCTL_HANDLER_ARGS
+{
+	#pragma unused(arg1, arg2, oidp)
+	int error, changed;
+	uint64_t new_budget = memorystatus_freeze_budget_pages_remaining;
+	mach_timespec_t now_ts;
+	clock_sec_t sec;
+	clock_nsec_t nsec;
+
+	lck_mtx_lock(&freezer_mutex);
+
+	error = sysctl_io_number(req, memorystatus_freeze_budget_pages_remaining, sizeof(uint64_t), &new_budget, &changed);
+	if (changed) {
+		/* Start a new interval with this budget. */
+		clock_get_system_nanotime(&sec, &nsec);
+		now_ts.tv_sec = (unsigned int)(MIN(sec, UINT32_MAX));
+		now_ts.tv_nsec = nsec;
+		memorystatus_freeze_start_normal_throttle_interval((uint32_t) MIN(new_budget, UINT32_MAX), now_ts);
+		/* Don't carry over any excess pageouts since we're forcing a new budget */
+		normal_throttle_window->pageouts = 0;
+		memorystatus_freeze_budget_pages_remaining = normal_throttle_window->max_pageouts;
+	}
+
+	lck_mtx_unlock(&freezer_mutex);
+	return error;
+}
+
+SYSCTL_PROC(_kern, OID_AUTO, memorystatus_freeze_budget_pages_remaining, CTLTYPE_QUAD | CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0, &sysctl_memorystatus_freeze_budget_pages_remaining, "Q", "");
+#else /* DEVELOPMENT || DEBUG */
 SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_freeze_budget_pages_remaining, CTLFLAG_RD | CTLFLAG_LOCKED, &memorystatus_freeze_budget_pages_remaining, "");
+#endif /* DEVELOPMENT || DEBUG */
 SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_freezer_error_excess_shared_memory_count, CTLFLAG_RD | CTLFLAG_LOCKED, &memorystatus_freezer_stats.mfs_error_excess_shared_memory_count, "");
 SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_freezer_error_low_private_shared_ratio_count, CTLFLAG_RD | CTLFLAG_LOCKED, &memorystatus_freezer_stats.mfs_error_low_private_shared_ratio_count, "");
 SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_freezer_error_no_compressor_space_count, CTLFLAG_RD | CTLFLAG_LOCKED, &memorystatus_freezer_stats.mfs_error_no_compressor_space_count, "");
@@ -226,6 +272,9 @@ SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_freezer_below_threshold_count, CTLFLAG
 SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_freezer_skipped_full_count, CTLFLAG_RD | CTLFLAG_LOCKED, &memorystatus_freezer_stats.mfs_skipped_full_count, "");
 SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_freezer_skipped_shared_mb_high_count, CTLFLAG_RD | CTLFLAG_LOCKED, &memorystatus_freezer_stats.mfs_skipped_shared_mb_high_count, "");
 SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_freezer_shared_pages_skipped, CTLFLAG_RD | CTLFLAG_LOCKED, &memorystatus_freezer_stats.mfs_shared_pages_skipped, "");
+SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_freezer_bytes_refrozen, CTLFLAG_RD | CTLFLAG_LOCKED, &memorystatus_freezer_stats.mfs_bytes_refrozen, "");
+SYSCTL_QUAD(_kern, OID_AUTO, memorystatus_freezer_refreeze_count, CTLFLAG_RD | CTLFLAG_LOCKED, &memorystatus_freezer_stats.mfs_refreeze_count, "");
+
 
 /*
  * Calculates the hit rate for the freezer.
@@ -255,12 +304,14 @@ static int sysctl_memorystatus_freezer_thaw_percentage SYSCTL_HANDLER_ARGS
 	}
 	proc_list_unlock();
 	if (frozen_count > 0) {
-		thaw_percentage = 100 * thaw_count / frozen_count;
+		assert(thaw_count <= frozen_count);
+		thaw_percentage = (int)(100 * thaw_count / frozen_count);
 	}
 	return sysctl_handle_int(oidp, &thaw_percentage, 0, req);
 }
 SYSCTL_PROC(_kern, OID_AUTO, memorystatus_freezer_thaw_percentage, CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0, &sysctl_memorystatus_freezer_thaw_percentage, "I", "");
 
+#define FREEZER_ERROR_STRING_LENGTH 128
 
 #if DEVELOPMENT || DEBUG
 
@@ -307,6 +358,7 @@ boolean_t memorystatus_freeze_to_memory = FALSE;
 SYSCTL_UINT(_kern, OID_AUTO, memorystatus_freeze_to_memory, CTLFLAG_RW | CTLFLAG_LOCKED, &memorystatus_freeze_to_memory, 0, "");
 
 #define VM_PAGES_FOR_ALL_PROCS    (2)
+
 /*
  * Manual trigger of freeze and thaw for dev / debug kernels only.
  */
@@ -397,25 +449,8 @@ again:
 		}
 
 		if (error) {
-			char reason[128];
-			if (freezer_error_code == FREEZER_ERROR_EXCESS_SHARED_MEMORY) {
-				memorystatus_freezer_stats.mfs_error_excess_shared_memory_count++;
-				strlcpy(reason, "too much shared memory", 128);
-			}
-
-			if (freezer_error_code == FREEZER_ERROR_LOW_PRIVATE_SHARED_RATIO) {
-				memorystatus_freezer_stats.mfs_error_low_private_shared_ratio_count++;
-				strlcpy(reason, "low private-shared pages ratio", 128);
-			}
-
-			if (freezer_error_code == FREEZER_ERROR_NO_COMPRESSOR_SPACE) {
-				memorystatus_freezer_stats.mfs_error_no_compressor_space_count++;
-				strlcpy(reason, "no compressor space", 128);
-			}
-
-			if (freezer_error_code == FREEZER_ERROR_NO_SWAP_SPACE) {
-				strlcpy(reason, "no swap space", 128);
-			}
+			char reason[FREEZER_ERROR_STRING_LENGTH];
+			memorystatus_freezer_stringify_error(freezer_error_code, reason, sizeof(reason));
 
 			printf("sysctl_freeze: task_freeze failed: %s\n", reason);
 
@@ -430,6 +465,12 @@ again:
 			if ((p->p_memstat_state & P_MEMSTAT_FROZEN) == 0) {
 				p->p_memstat_state |= P_MEMSTAT_FROZEN;
 				memorystatus_frozen_count++;
+			} else {
+				// This was a re-freeze
+				if (VM_CONFIG_FREEZER_SWAP_IS_ACTIVE) {
+					memorystatus_freezer_stats.mfs_bytes_refrozen += dirty * PAGE_SIZE;
+					memorystatus_freezer_stats.mfs_refreeze_count++;
+				}
 			}
 			p->p_memstat_frozen_count++;
 
@@ -616,10 +657,10 @@ memorystatus_freezer_get_status(user_addr_t buffer, size_t buffer_size, int32_t 
 	uint32_t            proc_count = 0, freeze_eligible_proc_considered = 0, band = 0, xpc_index = 0, leader_index = 0;
 	global_freezable_status_t    *list_head;
 	proc_freezable_status_t     *list_entry, *list_entry_start;
-	size_t                list_size = 0;
+	size_t                list_size = 0, entry_count = 0;
 	proc_t                p, leader_proc;
 	memstat_bucket_t        *bucket;
-	uint32_t            state = 0, pages = 0, entry_count = 0;
+	uint32_t            state = 0, pages = 0;
 	boolean_t            try_freeze = TRUE, xpc_skip_size_probability_check = FALSE;
 	int                error = 0, probability_of_use = 0;
 	pid_t              leader_pid = 0;
@@ -635,12 +676,10 @@ memorystatus_freezer_get_status(user_addr_t buffer, size_t buffer_size, int32_t 
 		return EINVAL;
 	}
 
-	list_head = (global_freezable_status_t*)kalloc(list_size);
+	list_head = kheap_alloc(KHEAP_TEMP, list_size, Z_WAITOK | Z_ZERO);
 	if (list_head == NULL) {
 		return ENOMEM;
 	}
-
-	memset(list_head, 0, list_size);
 
 	list_size = sizeof(global_freezable_status_t);
 
@@ -854,19 +893,71 @@ continue_eval:
 		}
 	}
 
-	buffer_size = list_size;
+	buffer_size = MIN(list_size, INT32_MAX);
 
 	error = copyout(list_head, buffer, buffer_size);
 	if (error == 0) {
-		*retval = buffer_size;
+		*retval = (int32_t) buffer_size;
 	} else {
 		*retval = 0;
 	}
 
 	list_size = sizeof(global_freezable_status_t) + (sizeof(proc_freezable_status_t) * MAX_FREEZABLE_PROCESSES);
-	kfree(list_head, list_size);
+	kheap_free(KHEAP_TEMP, list_head, list_size);
 
 	MEMORYSTATUS_DEBUG(1, "memorystatus_freezer_get_status: returning %d (%lu - size)\n", error, (unsigned long)*list_size);
+
+	return error;
+}
+
+#endif /* DEVELOPMENT || DEBUG */
+
+/*
+ * Get a list of all processes in the freezer band which are currently frozen.
+ * Used by powerlog to collect analytics on frozen process.
+ */
+static int
+memorystatus_freezer_get_procs(user_addr_t buffer, size_t buffer_size, int32_t *retval)
+{
+	global_frozen_procs_t *frozen_procs = NULL;
+	uint32_t band = memorystatus_freeze_jetsam_band;
+	proc_t p;
+	uint32_t state;
+	int error;
+	if (VM_CONFIG_FREEZER_SWAP_IS_ACTIVE == FALSE) {
+		return ENOTSUP;
+	}
+	if (buffer_size < sizeof(global_frozen_procs_t)) {
+		return EINVAL;
+	}
+	frozen_procs = kheap_alloc(KHEAP_TEMP, sizeof(global_frozen_procs_t),
+	    Z_WAITOK | Z_ZERO);
+	if (frozen_procs == NULL) {
+		return ENOMEM;
+	}
+
+	proc_list_lock();
+	p = memorystatus_get_first_proc_locked(&band, FALSE);
+	while (p && frozen_procs->gfp_num_frozen < FREEZER_CONTROL_GET_PROCS_MAX_COUNT) {
+		state = p->p_memstat_state;
+		if (state & P_MEMSTAT_FROZEN) {
+			frozen_procs->gfp_procs[frozen_procs->gfp_num_frozen].fp_pid = p->p_pid;
+			strlcpy(frozen_procs->gfp_procs[frozen_procs->gfp_num_frozen].fp_name,
+			    p->p_name, sizeof(proc_name_t));
+			frozen_procs->gfp_num_frozen++;
+		}
+		p = memorystatus_get_next_proc_locked(&band, p, FALSE);
+	}
+	proc_list_unlock();
+
+	buffer_size = MIN(buffer_size, sizeof(global_frozen_procs_t));
+	error = copyout(frozen_procs, buffer, buffer_size);
+	if (error == 0) {
+		*retval = (int32_t) buffer_size;
+	} else {
+		*retval = 0;
+	}
+	kheap_free(KHEAP_TEMP, frozen_procs, sizeof(global_frozen_procs_t));
 
 	return error;
 }
@@ -876,14 +967,17 @@ memorystatus_freezer_control(int32_t flags, user_addr_t buffer, size_t buffer_si
 {
 	int err = ENOTSUP;
 
+#if DEVELOPMENT || DEBUG
 	if (flags == FREEZER_CONTROL_GET_STATUS) {
 		err = memorystatus_freezer_get_status(buffer, buffer_size, retval);
+	}
+#endif /* DEVELOPMENT || DEBUG */
+	if (flags == FREEZER_CONTROL_GET_PROCS) {
+		err = memorystatus_freezer_get_procs(buffer, buffer_size, retval);
 	}
 
 	return err;
 }
-
-#endif /* DEVELOPMENT || DEBUG */
 
 extern void        vm_swap_consider_defragmenting(int);
 extern boolean_t memorystatus_kill_elevated_process(uint32_t, os_reason_t, unsigned int, int, uint32_t *, uint64_t *);
@@ -1117,8 +1211,10 @@ memorystatus_is_process_eligible_for_freeze(proc_t p)
 	LCK_MTX_ASSERT(proc_list_mlock, LCK_MTX_ASSERT_OWNED);
 
 	boolean_t should_freeze = FALSE;
-	uint32_t state = 0, entry_count = 0, pages = 0, i = 0;
+	uint32_t state = 0, pages = 0;
 	int probability_of_use = 0;
+	size_t entry_count = 0, i = 0;
+	bool first_consideration = true;
 
 	state = p->p_memstat_state;
 
@@ -1195,13 +1291,23 @@ memorystatus_is_process_eligible_for_freeze(proc_t p)
 	 * This proc is a suspended application.
 	 * We're interested in tracking what percentage of these
 	 * actually get frozen.
+	 * To avoid skewing the metrics towards processes which
+	 * are considered more frequently, we only track failures once
+	 * per process.
 	 */
-	memorystatus_freezer_stats.mfs_process_considered_count++;
+	first_consideration = !(state & P_MEMSTAT_FREEZE_CONSIDERED);
+
+	if (first_consideration) {
+		memorystatus_freezer_stats.mfs_process_considered_count++;
+		p->p_memstat_state |= P_MEMSTAT_FREEZE_CONSIDERED;
+	}
 
 	/* Only freeze applications meeting our minimum resident page criteria */
 	memorystatus_get_task_page_counts(p->task, &pages, NULL, NULL);
 	if (pages < memorystatus_freeze_pages_min) {
-		memorystatus_freezer_stats.mfs_error_below_min_pages_count++;
+		if (first_consideration) {
+			memorystatus_freezer_stats.mfs_error_below_min_pages_count++;
+		}
 		goto out;
 	}
 
@@ -1211,7 +1317,9 @@ memorystatus_is_process_eligible_for_freeze(proc_t p)
 	 * memorystatus_freeze_top_process holds the proc_list_lock while it traverses the bands.
 	 */
 	if ((p->p_listflag & P_LIST_EXITED) != 0) {
-		memorystatus_freezer_stats.mfs_error_other_count++;
+		if (first_consideration) {
+			memorystatus_freezer_stats.mfs_error_other_count++;
+		}
 		goto out;
 	}
 
@@ -1228,13 +1336,23 @@ memorystatus_is_process_eligible_for_freeze(proc_t p)
 		}
 
 		if (probability_of_use == 0) {
-			memorystatus_freezer_stats.mfs_error_low_probability_of_use_count++;
+			if (first_consideration) {
+				memorystatus_freezer_stats.mfs_error_low_probability_of_use_count++;
+			}
 			goto out;
 		}
 	}
 
 	should_freeze = TRUE;
 out:
+	if (should_freeze && !first_consideration && !(state & P_MEMSTAT_FROZEN)) {
+		/*
+		 * We're freezing this for the first time and we previously considered it ineligible.
+		 * Bump the considered count so that we track this as 1 failure
+		 * and 1 success.
+		 */
+		memorystatus_freezer_stats.mfs_process_considered_count++;
+	}
 	return should_freeze;
 }
 
@@ -1288,7 +1406,8 @@ memorystatus_freeze_process_sync(proc_t p)
 
 	if (p != NULL) {
 		uint32_t purgeable, wired, clean, dirty, shared;
-		uint32_t max_pages, i;
+		uint32_t i;
+		uint64_t max_pages;
 
 		aPid = p->p_pid;
 
@@ -1314,7 +1433,8 @@ memorystatus_freeze_process_sync(proc_t p)
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_MEMSTAT, BSD_MEMSTAT_FREEZE) | DBG_FUNC_START,
 		    memorystatus_available_pages, 0, 0, 0, 0);
 
-		ret = task_freeze(p->task, &purgeable, &wired, &clean, &dirty, max_pages, &shared, &freezer_error_code, FALSE /* eval only */);
+		max_pages = MIN(max_pages, UINT32_MAX);
+		ret = task_freeze(p->task, &purgeable, &wired, &clean, &dirty, (uint32_t) max_pages, &shared, &freezer_error_code, FALSE /* eval only */);
 		if (ret == KERN_SUCCESS || freezer_error_code == FREEZER_ERROR_LOW_PRIVATE_SHARED_RATIO) {
 			memorystatus_freezer_stats.mfs_shared_pages_skipped += shared;
 		}
@@ -1341,6 +1461,12 @@ memorystatus_freeze_process_sync(proc_t p)
 			if ((p->p_memstat_state & P_MEMSTAT_FROZEN) == 0) {
 				p->p_memstat_state |= P_MEMSTAT_FROZEN;
 				memorystatus_frozen_count++;
+			} else {
+				// This was a re-freeze
+				if (VM_CONFIG_FREEZER_SWAP_IS_ACTIVE) {
+					memorystatus_freezer_stats.mfs_bytes_refrozen += dirty * PAGE_SIZE;
+					memorystatus_freezer_stats.mfs_refreeze_count++;
+				}
 			}
 
 			p->p_memstat_frozen_count++;
@@ -1385,26 +1511,8 @@ memorystatus_freeze_process_sync(proc_t p)
 				 */
 			}
 		} else {
-			char reason[128];
-			if (freezer_error_code == FREEZER_ERROR_EXCESS_SHARED_MEMORY) {
-				memorystatus_freezer_stats.mfs_error_excess_shared_memory_count++;
-				strlcpy(reason, "too much shared memory", 128);
-			}
-
-			if (freezer_error_code == FREEZER_ERROR_LOW_PRIVATE_SHARED_RATIO) {
-				memorystatus_freezer_stats.mfs_error_low_private_shared_ratio_count++;
-				strlcpy(reason, "low private-shared pages ratio", 128);
-			}
-
-			if (freezer_error_code == FREEZER_ERROR_NO_COMPRESSOR_SPACE) {
-				memorystatus_freezer_stats.mfs_error_no_compressor_space_count++;
-				strlcpy(reason, "no compressor space", 128);
-			}
-
-			if (freezer_error_code == FREEZER_ERROR_NO_SWAP_SPACE) {
-				memorystatus_freezer_stats.mfs_error_no_swap_space_count++;
-				strlcpy(reason, "no swap space", 128);
-			}
+			char reason[FREEZER_ERROR_STRING_LENGTH];
+			memorystatus_freezer_stringify_error(freezer_error_code, reason, sizeof(reason));
 
 			os_log_with_startup_serial(OS_LOG_DEFAULT, "memorystatus: freezing (specific) pid %d [%s]...skipped (%s)",
 			    aPid, ((p && *p->p_name) ? p->p_name : "unknown"), reason);
@@ -1460,7 +1568,7 @@ freeze_process:
 	while (next_p) {
 		kern_return_t kr;
 		uint32_t purgeable, wired, clean, dirty, shared;
-		uint32_t max_pages = 0;
+		uint64_t max_pages = 0;
 		int    freezer_error_code = 0;
 
 		p = next_p;
@@ -1569,7 +1677,8 @@ freeze_process:
 		KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_MEMSTAT, BSD_MEMSTAT_FREEZE) | DBG_FUNC_START,
 		    memorystatus_available_pages, 0, 0, 0, 0);
 
-		kr = task_freeze(p->task, &purgeable, &wired, &clean, &dirty, max_pages, &shared, &freezer_error_code, FALSE /* eval only */);
+		max_pages = MIN(max_pages, UINT32_MAX);
+		kr = task_freeze(p->task, &purgeable, &wired, &clean, &dirty, (uint32_t) max_pages, &shared, &freezer_error_code, FALSE /* eval only */);
 		if (kr == KERN_SUCCESS || freezer_error_code == FREEZER_ERROR_LOW_PRIVATE_SHARED_RATIO) {
 			memorystatus_freezer_stats.mfs_shared_pages_skipped += shared;
 		}
@@ -1595,6 +1704,12 @@ freeze_process:
 			if ((p->p_memstat_state & P_MEMSTAT_FROZEN) == 0) {
 				p->p_memstat_state |= P_MEMSTAT_FROZEN;
 				memorystatus_frozen_count++;
+			} else {
+				// This was a re-freeze
+				if (VM_CONFIG_FREEZER_SWAP_IS_ACTIVE) {
+					memorystatus_freezer_stats.mfs_bytes_refrozen += dirty * PAGE_SIZE;
+					memorystatus_freezer_stats.mfs_refreeze_count++;
+				}
 			}
 
 			p->p_memstat_frozen_count++;
@@ -1730,29 +1845,11 @@ freeze_process:
 				p->p_memstat_state |= P_MEMSTAT_FREEZE_IGNORE;
 			}
 
-			char reason[128];
-			if (freezer_error_code == FREEZER_ERROR_EXCESS_SHARED_MEMORY) {
-				memorystatus_freezer_stats.mfs_error_excess_shared_memory_count++;
-				strlcpy(reason, "too much shared memory", 128);
-			}
+			char reason[FREEZER_ERROR_STRING_LENGTH];
+			memorystatus_freezer_stringify_error(freezer_error_code, reason, sizeof(reason));
 
-			if (freezer_error_code == FREEZER_ERROR_LOW_PRIVATE_SHARED_RATIO) {
-				memorystatus_freezer_stats.mfs_error_low_private_shared_ratio_count++;
-				strlcpy(reason, "low private-shared pages ratio", 128);
-			}
-
-			if (freezer_error_code == FREEZER_ERROR_NO_COMPRESSOR_SPACE) {
-				memorystatus_freezer_stats.mfs_error_no_compressor_space_count++;
-				strlcpy(reason, "no compressor space", 128);
-			}
-
-			if (freezer_error_code == FREEZER_ERROR_NO_SWAP_SPACE) {
-				memorystatus_freezer_stats.mfs_error_no_swap_space_count++;
-				strlcpy(reason, "no swap space", 128);
-			}
-
-			os_log_with_startup_serial(OS_LOG_DEFAULT, "memorystatus: freezing (%s) pid %d [%s]...skipped (%s)\n",
-			    (coal == NULL ? "general" : "coalition-driven"), aPid, ((p && *p->p_name) ? p->p_name : "unknown"), reason);
+			os_log_with_startup_serial(OS_LOG_DEFAULT, "memorystatus: %sfreezing (%s) pid %d [%s]...skipped (%s)\n",
+			    refreeze_processes? "re" : "", (coal == NULL ? "general" : "coalition-driven"), aPid, ((p && *p->p_name) ? p->p_name : "unknown"), reason);
 
 			proc_rele_locked(p);
 
@@ -1995,17 +2092,17 @@ memorystatus_freeze_calculate_new_budget(
 	unsigned int interval_duration_min,
 	uint32_t rollover)
 {
-	uint64_t freeze_daily_budget = 0;
-	unsigned int daily_budget_pageouts = 0;
-	unsigned int freeze_daily_pageouts_max = 0;
+	uint64_t freeze_daily_budget = 0, freeze_daily_budget_mb = 0, daily_budget_pageouts = 0, budget_missed = 0, freeze_daily_pageouts_max = 0, new_budget = 0;
 	const static unsigned int kNumSecondsInDay = 60 * 60 * 24;
 	/* Precision factor for days_missed. 2 decimal points. */
 	const static unsigned int kFixedPointFactor = 100;
-	unsigned int days_missed, budget_missed;
+	unsigned int days_missed;
 
 	/* Get the daily budget from the storage layer */
 	if (vm_swap_max_budget(&freeze_daily_budget)) {
-		memorystatus_freeze_daily_mb_max = (freeze_daily_budget / (1024 * 1024));
+		freeze_daily_budget_mb = freeze_daily_budget / (1024 * 1024);
+		assert(freeze_daily_budget_mb <= UINT32_MAX);
+		memorystatus_freeze_daily_mb_max = (unsigned int) freeze_daily_budget_mb;
 		os_log_with_startup_serial(OS_LOG_DEFAULT, "memorystatus: memorystatus_freeze_daily_mb_max set to %dMB\n", memorystatus_freeze_daily_mb_max);
 	}
 	/* Calculate the daily pageout budget */
@@ -2020,7 +2117,54 @@ memorystatus_freeze_calculate_new_budget(
 	 */
 	days_missed = time_since_last_interval_expired_sec * kFixedPointFactor / kNumSecondsInDay;
 	budget_missed = days_missed * freeze_daily_pageouts_max / kFixedPointFactor;
-	return rollover + daily_budget_pageouts + budget_missed;
+	new_budget = rollover + daily_budget_pageouts + budget_missed;
+	return (uint32_t) MIN(new_budget, UINT32_MAX);
+}
+
+static void
+memorystatus_freezer_stringify_error(
+	const int freezer_error_code,
+	char* buffer,
+	size_t len)
+{
+	if (freezer_error_code == FREEZER_ERROR_EXCESS_SHARED_MEMORY) {
+		memorystatus_freezer_stats.mfs_error_excess_shared_memory_count++;
+		strlcpy(buffer, "too much shared memory", len);
+	} else if (freezer_error_code == FREEZER_ERROR_LOW_PRIVATE_SHARED_RATIO) {
+		memorystatus_freezer_stats.mfs_error_low_private_shared_ratio_count++;
+		strlcpy(buffer, "low private-shared pages ratio", len);
+	} else if (freezer_error_code == FREEZER_ERROR_NO_COMPRESSOR_SPACE) {
+		memorystatus_freezer_stats.mfs_error_no_compressor_space_count++;
+		strlcpy(buffer, "no compressor space", len);
+	} else if (freezer_error_code == FREEZER_ERROR_NO_SWAP_SPACE) {
+		memorystatus_freezer_stats.mfs_error_no_swap_space_count++;
+		strlcpy(buffer, "no swap space", len);
+	} else {
+		strlcpy(buffer, "unknown error", len);
+	}
+}
+
+/*
+ * Start a new normal throttle interval with the given budget.
+ * Caller must hold the freezer mutex
+ */
+static void
+memorystatus_freeze_start_normal_throttle_interval(uint32_t new_budget, mach_timespec_t start_ts)
+{
+	LCK_MTX_ASSERT(&freezer_mutex, LCK_MTX_ASSERT_OWNED);
+
+	normal_throttle_window->max_pageouts = new_budget;
+	normal_throttle_window->ts.tv_sec = normal_throttle_window->mins * 60;
+	normal_throttle_window->ts.tv_nsec = 0;
+	ADD_MACH_TIMESPEC(&normal_throttle_window->ts, &start_ts);
+	/* Since we update the throttle stats pre-freeze, adjust for overshoot here */
+	if (normal_throttle_window->pageouts > normal_throttle_window->max_pageouts) {
+		normal_throttle_window->pageouts -= normal_throttle_window->max_pageouts;
+	} else {
+		normal_throttle_window->pageouts = 0;
+	}
+	/* Ensure the normal window is now active. */
+	memorystatus_freeze_degradation = FALSE;
 }
 
 #if DEVELOPMENT || DEBUG
@@ -2075,6 +2219,7 @@ memorystatus_freeze_update_throttle(uint64_t *budget_pages_allowed)
 	LCK_MTX_ASSERT(proc_list_mlock, LCK_MTX_ASSERT_NOTOWNED);
 
 	unsigned int freeze_daily_pageouts_max = 0;
+	uint32_t budget_rollover = 0;
 
 #if DEVELOPMENT || DEBUG
 	if (!memorystatus_freeze_throttle_enabled) {
@@ -2087,7 +2232,7 @@ memorystatus_freeze_update_throttle(uint64_t *budget_pages_allowed)
 #endif
 
 	clock_get_system_nanotime(&sec, &nsec);
-	now_ts.tv_sec = sec;
+	now_ts.tv_sec = (unsigned int)(MIN(sec, UINT32_MAX));
 	now_ts.tv_nsec = nsec;
 
 	struct throttle_interval_t *interval = NULL;
@@ -2096,7 +2241,6 @@ memorystatus_freeze_update_throttle(uint64_t *budget_pages_allowed)
 		interval = degraded_throttle_window;
 
 		if (CMP_MACH_TIMESPEC(&now_ts, &interval->ts) >= 0) {
-			memorystatus_freeze_degradation = FALSE;
 			interval->pageouts = 0;
 			interval->max_pageouts = 0;
 		} else {
@@ -2110,19 +2254,14 @@ memorystatus_freeze_update_throttle(uint64_t *budget_pages_allowed)
 		/* How long has it been since the previous interval expired? */
 		mach_timespec_t expiration_period_ts = now_ts;
 		SUB_MACH_TIMESPEC(&expiration_period_ts, &interval->ts);
+		/* Get unused budget. Clamp to 0. We'll adjust for overused budget in the next interval. */
+		budget_rollover = interval->pageouts > interval->max_pageouts ?
+		    0 : interval->max_pageouts - interval->pageouts;
 
-		interval->max_pageouts = memorystatus_freeze_calculate_new_budget(
-			expiration_period_ts.tv_sec, interval->burst_multiple,
-			interval->mins, interval->max_pageouts - interval->pageouts);
-		interval->ts.tv_sec = interval->mins * 60;
-		interval->ts.tv_nsec = 0;
-		ADD_MACH_TIMESPEC(&interval->ts, &now_ts);
-		/* Since we update the throttle stats pre-freeze, adjust for overshoot here */
-		if (interval->pageouts > interval->max_pageouts) {
-			interval->pageouts -= interval->max_pageouts;
-		} else {
-			interval->pageouts = 0;
-		}
+		memorystatus_freeze_start_normal_throttle_interval(memorystatus_freeze_calculate_new_budget(
+			    expiration_period_ts.tv_sec, interval->burst_multiple,
+			    interval->mins, budget_rollover),
+		    now_ts);
 		*budget_pages_allowed = interval->max_pageouts;
 		memorystatus_freezer_stats.mfs_shared_pages_skipped = 0;
 
@@ -2135,20 +2274,6 @@ memorystatus_freeze_update_throttle(uint64_t *budget_pages_allowed)
 		 * - the daily budget, and
 		 * - the current budget left is below our normal budget expectations.
 		 */
-
-#if DEVELOPMENT || DEBUG
-		/*
-		 * This can only happen in the INTERNAL configs because we allow modifying the daily budget for testing.
-		 */
-
-		if (freeze_daily_pageouts_max > interval->max_pageouts) {
-			/*
-			 * We just bumped the daily budget. Re-evaluate our normal window params.
-			 */
-			interval->max_pageouts = (interval->burst_multiple * (((uint64_t)interval->mins * freeze_daily_pageouts_max) / NORMAL_WINDOW_MINS));
-			memorystatus_freeze_degradation = FALSE; //we'll re-evaluate this below...
-		}
-#endif /* DEVELOPMENT || DEBUG */
 
 		if (memorystatus_freeze_degradation == FALSE) {
 			if (interval->pageouts >= interval->max_pageouts) {

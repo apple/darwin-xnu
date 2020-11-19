@@ -42,8 +42,6 @@
 #include <sys/conf.h>
 #include <sys/vnode_internal.h>
 #include <sys/file_internal.h>
-#include <sys/clist.h>
-#include <sys/callout.h>
 #include <sys/mbuf.h>
 #include <sys/msgbuf.h>
 #include <sys/ioctl.h>
@@ -74,8 +72,10 @@
 
 uint32_t system_inshutdown = 0;
 
+#if XNU_TARGET_OS_OSX
 /* XXX should be in a header file somewhere, but isn't */
 extern void (*unmountroot_pre_hook)(void);
+#endif
 
 unsigned int proc_shutdown_exitcount = 0;
 
@@ -226,9 +226,11 @@ reboot_kernel(int howto, char *message)
 		halt_log_enter("audit_shutdown", 0, mach_absolute_time() - startTime);
 #endif
 
+#if XNU_TARGET_OS_OSX
 		if (unmountroot_pre_hook != NULL) {
 			unmountroot_pre_hook();
 		}
+#endif
 
 		startTime = mach_absolute_time();
 		sync((proc_t)NULL, (void *)NULL, (int *)NULL);
@@ -392,7 +394,7 @@ sd_callback1(proc_t p, void * args)
 	int countproc = sd->countproc;
 
 	proc_lock(p);
-	p->p_shutdownstate = setsdstate;
+	p->p_shutdownstate = (char)setsdstate;
 	if (p->p_stat != SZOMB) {
 		proc_unlock(p);
 		if (countproc != 0) {
@@ -440,7 +442,7 @@ sd_callback2(proc_t p, void * args)
 	int countproc = sd->countproc;
 
 	proc_lock(p);
-	p->p_shutdownstate = setsdstate;
+	p->p_shutdownstate = (char)setsdstate;
 	if (p->p_stat != SZOMB) {
 		proc_unlock(p);
 		if (countproc != 0) {
@@ -469,7 +471,7 @@ sd_callback3(proc_t p, void * args)
 	int setsdstate = sd->setsdstate;
 
 	proc_lock(p);
-	p->p_shutdownstate = setsdstate;
+	p->p_shutdownstate = (char)setsdstate;
 	if (p->p_stat != SZOMB) {
 		/*
 		 * NOTE: following code ignores sig_lock and plays

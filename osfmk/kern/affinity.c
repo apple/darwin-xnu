@@ -84,13 +84,13 @@ static affinity_set_t affinity_set_remove(affinity_set_t aset, thread_t thread);
  * has a single pset, and last-processor affinity is
  * more important than pset affinity.
  */
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 boolean_t       affinity_sets_enabled = FALSE;
 int             affinity_sets_mapping = 0;
-#else /* !CONFIG_EMBEDDED */
+#else /* !defined(XNU_TARGET_OS_OSX) */
 boolean_t       affinity_sets_enabled = TRUE;
 int             affinity_sets_mapping = 1;
-#endif /* !CONFIG_EMBEDDED */
+#endif /* !defined(XNU_TARGET_OS_OSX) */
 
 boolean_t
 thread_affinity_is_supported(void)
@@ -533,14 +533,14 @@ affinity_set_find(affinity_space_t space, uint32_t tag)
 static void
 affinity_set_place(affinity_space_t aspc, affinity_set_t new_aset)
 {
-	unsigned int    num_cpu_asets = ml_get_max_affinity_sets();
-	unsigned int    set_occupancy[num_cpu_asets];
-	unsigned int    i;
-	unsigned int    i_least_occupied;
+	unsigned short    set_occupancy[MAX_CPUS] = { 0 };
+	unsigned    num_cpu_asets = ml_get_max_affinity_sets();
+	unsigned    i_least_occupied;
 	affinity_set_t  aset;
 
-	for (i = 0; i < num_cpu_asets; i++) {
-		set_occupancy[i] = 0;
+	if (__improbable(num_cpu_asets > MAX_CPUS)) {
+		// If this triggers then the array needs to be made bigger.
+		panic("num_cpu_asets = %d > %d too big in %s\n", num_cpu_asets, MAX_CPUS, __FUNCTION__);
 	}
 
 	/*
@@ -568,7 +568,7 @@ affinity_set_place(affinity_space_t aspc, affinity_set_t new_aset)
 	} else {
 		i_least_occupied = (unsigned int)(((uintptr_t)aspc % 127) % num_cpu_asets);
 	}
-	for (i = 0; i < num_cpu_asets; i++) {
+	for (unsigned i = 0; i < num_cpu_asets; i++) {
 		unsigned int    j = (i_least_occupied + i) % num_cpu_asets;
 		if (set_occupancy[j] == 0) {
 			i_least_occupied = j;

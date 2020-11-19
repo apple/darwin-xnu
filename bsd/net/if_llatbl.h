@@ -171,18 +171,18 @@ extern lck_attr_t     *lle_lock_attr;
 	LLE_FREE_LOCKED(lle);                                   \
 } while (0)
 
-typedef struct llentry *(llt_lookup_t)(struct lltable *, u_int flags,
+typedef struct llentry *(llt_lookup_t)(struct lltable *, uint16_t flags,
     const struct sockaddr *l3addr);
-typedef struct llentry *(llt_alloc_t)(struct lltable *, u_int flags,
+typedef struct llentry *(llt_alloc_t)(struct lltable *, uint16_t flags,
     const struct sockaddr *l3addr);
 typedef void (llt_delete_t)(struct lltable *, struct llentry *);
 typedef void (llt_prefix_free_t)(struct lltable *,
-    const struct sockaddr *addr, const struct sockaddr *mask, u_int flags);
+    const struct sockaddr *addr, const struct sockaddr *mask, uint16_t flags);
 typedef int (llt_dump_entry_t)(struct lltable *, struct llentry *,
     struct sysctl_req *);
 typedef uint32_t (llt_hash_t)(const struct llentry *, uint32_t);
 typedef int (llt_match_prefix_t)(const struct sockaddr *,
-    const struct sockaddr *, u_int, struct llentry *);
+    const struct sockaddr *, uint16_t, struct llentry *);
 typedef void (llt_free_entry_t)(struct lltable *, struct llentry *);
 typedef void (llt_fill_sa_entry_t)(const struct llentry *, struct sockaddr *);
 typedef void (llt_free_tbl_t)(struct lltable *);
@@ -246,7 +246,7 @@ struct lltable *lltable_allocate_htbl(uint32_t hsize);
 void lltable_free(struct lltable *);
 void lltable_link(struct lltable *llt);
 void lltable_prefix_free(int, struct sockaddr *,
-    struct sockaddr *, u_int);
+    struct sockaddr *, uint16_t);
 #if 0
 void            lltable_drain(int);
 #endif
@@ -266,7 +266,7 @@ int lltable_try_set_entry_addr(struct ifnet *ifp, struct llentry *lle,
 int lltable_calc_llheader(struct ifnet *ifp, int family, char *lladdr,
     char *buf, size_t *bufsize, int *lladdr_off);
 void lltable_update_ifaddr(struct lltable *llt);
-struct llentry *lltable_alloc_entry(struct lltable *llt, u_int flags,
+struct llentry *lltable_alloc_entry(struct lltable *llt, uint16_t flags,
     const struct sockaddr *l4addr);
 void lltable_free_entry(struct lltable *llt, struct llentry *lle);
 int lltable_delete_addr(struct lltable *llt, u_int flags,
@@ -283,7 +283,7 @@ int lltable_foreach_lle(struct lltable *llt, llt_foreach_cb_t *f,
  * Generic link layer address lookup function.
  */
 static __inline struct llentry *
-lla_lookup(struct lltable *llt, u_int flags, const struct sockaddr *l3addr)
+lla_lookup(struct lltable *llt, uint16_t flags, const struct sockaddr *l3addr)
 {
 	return llt->llt_lookup(llt, flags, l3addr);
 }

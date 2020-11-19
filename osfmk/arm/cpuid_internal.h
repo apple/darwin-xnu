@@ -29,6 +29,9 @@
 #ifndef _ARM_CPUID_INTERNAL_H_
 #define _ARM_CPUID_INTERNAL_H_
 
+#include <arm/cpuid.h>
+#include <machine/machine_cpuid.h>
+
 void machine_do_debugid(void);
 arm_debug_info_t *machine_arm_debug_info(void);
 

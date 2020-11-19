@@ -33,7 +33,7 @@ __BEGIN_DECLS
 #include <vm/vm_kern.h>
 __END_DECLS
 
-#define LIBKERN_SMART_POINTERS
+#define IOKIT_ENABLE_SHARED_PTR
 
 #include <libkern/c++/OSData.h>
 #include <libkern/c++/OSSerialize.h>
@@ -43,8 +43,8 @@ __END_DECLS
 
 #define super OSObject
 
-OSDefineMetaClassAndStructors(OSData, OSObject)
-OSMetaClassDefineReservedUsed(OSData, 0);    // setDeallocFunction
+OSDefineMetaClassAndStructorsWithZone(OSData, OSObject, ZC_ZFREE_CLEARMEM)
+OSMetaClassDefineReservedUsedX86(OSData, 0);    // setDeallocFunction
 OSMetaClassDefineReservedUnused(OSData, 1);
 OSMetaClassDefineReservedUnused(OSData, 2);
 OSMetaClassDefineReservedUnused(OSData, 3);
@@ -58,12 +58,14 @@ OSMetaClassDefineReservedUnused(OSData, 7);
 bool
 OSData::initWithCapacity(unsigned int inCapacity)
 {
+	void *_data = NULL;
+
 	if (data) {
 		OSCONTAINER_ACCUMSIZE(-((size_t)capacity));
 		if (!inCapacity || (capacity < inCapacity)) {
 			// clean out old data's storage if it isn't big enough
 			if (capacity < page_size) {
-				kfree(data, capacity);
+				kfree_data_container(data, capacity);
 			} else {
 				kmem_free(kernel_map, (vm_offset_t)data, capacity);
 			}
@@ -78,13 +80,14 @@ OSData::initWithCapacity(unsigned int inCapacity)
 
 	if (inCapacity && !data) {
 		if (inCapacity < page_size) {
-			data = (void *) kalloc_container(inCapacity);
+			data = (void *)kalloc_data_container(inCapacity, Z_WAITOK);
 		} else {
 			kern_return_t kr;
 			if (round_page_overflow(inCapacity, &inCapacity)) {
 				kr = KERN_RESOURCE_SHORTAGE;
 			} else {
-				kr = kmem_alloc(kernel_map, (vm_offset_t *)&data, inCapacity, IOMemoryTag(kernel_map));
+				kr = kmem_alloc(kernel_map, (vm_offset_t *)&_data, inCapacity, IOMemoryTag(kernel_map));
+				data = _data;
 			}
 			if (KERN_SUCCESS != kr) {
 				data = NULL;
@@ -155,10 +158,10 @@ OSData::initWithData(const OSData *inData,
 	}
 }
 
-OSDataPtr
+OSSharedPtr<OSData>
 OSData::withCapacity(unsigned int inCapacity)
 {
-	OSDataPtr me = OSDataPtr::alloc();
+	OSSharedPtr<OSData> me = OSMakeShared<OSData>();
 
 	if (me && !me->initWithCapacity(inCapacity)) {
 		return nullptr;
@@ -167,10 +170,10 @@ OSData::withCapacity(unsigned int inCapacity)
 	return me;
 }
 
-OSDataPtr
+OSSharedPtr<OSData>
 OSData::withBytes(const void *bytes, unsigned int inLength)
 {
-	OSDataPtr me = OSDataPtr::alloc();
+	OSSharedPtr<OSData> me = OSMakeShared<OSData>();
 
 	if (me && !me->initWithBytes(bytes, inLength)) {
 		return nullptr;
@@ -178,10 +181,10 @@ OSData::withBytes(const void *bytes, unsigned int inLength)
 	return me;
 }
 
-OSDataPtr
+OSSharedPtr<OSData>
 OSData::withBytesNoCopy(void *bytes, unsigned int inLength)
 {
-	OSDataPtr me = OSDataPtr::alloc();
+	OSSharedPtr<OSData> me = OSMakeShared<OSData>();
 
 	if (me && !me->initWithBytesNoCopy(bytes, inLength)) {
 		return nullptr;
@@ -190,10 +193,10 @@ OSData::withBytesNoCopy(void *bytes, unsigned int inLength)
 	return me;
 }
 
-OSDataPtr
+OSSharedPtr<OSData>
 OSData::withData(const OSData *inData)
 {
-	OSDataPtr me = OSDataPtr::alloc();
+	OSSharedPtr<OSData> me = OSMakeShared<OSData>();
 
 	if (me && !me->initWithData(inData)) {
 		return nullptr;
@@ -202,11 +205,11 @@ OSData::withData(const OSData *inData)
 	return me;
 }
 
-OSDataPtr
+OSSharedPtr<OSData>
 OSData::withData(const OSData *inData,
     unsigned int start, unsigned int inLength)
 {
-	OSDataPtr me = OSDataPtr::alloc();
+	OSSharedPtr<OSData> me = OSMakeShared<OSData>();
 
 	if (me && !me->initWithData(inData, start, inLength)) {
 		return nullptr;
@@ -220,7 +223,7 @@ OSData::free()
 {
 	if ((capacity != EXTERNAL) && data && capacity) {
 		if (capacity < page_size) {
-			kfree(data, capacity);
+			kfree_data_container(data, capacity);
 		} else {
 			kmem_free(kernel_map, (vm_offset_t)data, capacity);
 		}
@@ -306,7 +309,7 @@ OSData::ensureCapacity(unsigned int newCapacity)
 			newData = NULL;
 		}
 	} else {
-		newData = (unsigned char *) kalloc_container(finalCapacity);
+		newData = (unsigned char *)kalloc_data_container(finalCapacity, Z_WAITOK);
 	}
 
 	if (newData) {
@@ -316,7 +319,7 @@ OSData::ensureCapacity(unsigned int newCapacity)
 		}
 		if (data) {
 			if (capacity < page_size) {
-				kfree(data, capacity);
+				kfree_data_container(data, capacity);
 			} else {
 				kmem_free(kernel_map, (vm_offset_t)data, capacity);
 			}

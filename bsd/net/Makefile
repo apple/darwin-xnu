@@ -77,12 +77,18 @@ PRIVATE_DATAFILES = \
 	frame802154.h \
 	nat464_utils.h
 
+DRIVERKIT_DATAFILES = \
+	if_media.h \
+	ethernet.h
+
 PRIVATE_KERNELFILES = $(filter-out radix.h,${KERNELFILES}) \
 	bpfdesc.h ppp_comp.h \
 	zlib.h bpf_compat.h net_osdep.h \
 	flowadv.h net_perf.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
+
+INSTALL_DRIVERKIT_MI_LIST = ${DRIVERKIT_DATAFILES}
 
 INSTALL_MI_DIR = net
 

@@ -89,19 +89,15 @@
 #define NFS_V2MAXDATA   8192
 #define NFS_MAXDGRAMDATA 16384
 #define NFS_PREFDGRAMDATA 8192
-
-#ifdef XNU_TARGET_OS_IOS
-#define NFS_MAXDATA     (32 * PAGE_SIZE) /* Same as NFS_MAXBSIZE from nfsnode.h */
-#else /*  TARGET_OS_IOS */
-#define NFS_MAXDATA     (64*1024)
-#endif /*  TARGET_OS_IOS */
-
-#define NFSRV_MAXDATA   (64*1024) // XXX not ready for >64K
+#define NFS_MAXDATA     (8 * 64 * PAGE_SIZE) /* Same as NFS_MAXBSIZE from nfsnode.h */
 #define NFS_MAXPATHLEN  1024
 #define NFS_MAXNAMLEN   255
-#define NFS_MAXPACKET   (16*1024*1024)
-#define NFS_UDPSOCKBUF  (224*1024)
+#define NFS_MAXPACKET   (16 * 1024 * 1024)
+#define NFS_UDPSOCKBUF  (224 * 1024)
 #define NFS_FABLKSIZE   512     /* Size in bytes of a block wrt fa_blocks */
+
+#define NFSRV_MAXDATA     NFS_MAXDATA
+#define NFSRV_TCPSOCKBUF  (2 * NFSRV_MAXDATA)
 
 #define NFS4_CALLBACK_PROG              0x4E465343 /* "NFSC" */
 #define NFS4_CALLBACK_PROG_VERSION      1
@@ -357,6 +353,21 @@ typedef enum { NFNON=0, NFREG=1, NFDIR=2, NFBLK=3, NFCHR=4, NFLNK=5,
 #define NFS_BITMAP_SET(B, I)    (((uint32_t *)(B))[(I)/32] |= 1U<<((I)%32))
 #define NFS_BITMAP_CLR(B, I)    (((uint32_t *)(B))[(I)/32] &= ~(1U<<((I)%32)))
 #define NFS_BITMAP_ISSET(B, I)  (((uint32_t *)(B))[(I)/32] & (1U<<((I)%32)))
+#define NFS_BITMAP_COPY_ATTR(FROM, TO, WHICH, ATTR) \
+	do { \
+	        if (NFS_BITMAP_ISSET(((FROM)->nva_bitmap), (NFS_FATTR_##WHICH))) { \
+	                (TO)->nva_##ATTR = (FROM)->nva_##ATTR; \
+	                NFS_BITMAP_SET(((TO)->nva_bitmap), (NFS_FATTR_##WHICH)); \
+	        } \
+	} while (0)
+#define NFS_BITMAP_COPY_TIME(FROM, TO, WHICH, ATTR) \
+	do { \
+	        if (NFS_BITMAP_ISSET(((FROM)->nva_bitmap), (NFS_FATTR_TIME_##WHICH))) { \
+	                (TO)->nva_timesec[NFSTIME_##ATTR] = (FROM)->nva_timesec[NFSTIME_##ATTR]; \
+	                (TO)->nva_timensec[NFSTIME_##ATTR] = (FROM)->nva_timensec[NFSTIME_##ATTR]; \
+	                NFS_BITMAP_SET(((TO)->nva_bitmap), (NFS_FATTR_TIME_##WHICH)); \
+	        } \
+	} while (0)
 #define NFS_BITMAP_ZERO(B, L) \
 	do { \
 	        int __i; \
@@ -367,6 +378,7 @@ typedef enum { NFNON=0, NFREG=1, NFDIR=2, NFBLK=3, NFCHR=4, NFLNK=5,
 extern uint32_t nfs_fs_attr_bitmap[NFS_ATTR_BITMAP_LEN];
 extern uint32_t nfs_object_attr_bitmap[NFS_ATTR_BITMAP_LEN];
 extern uint32_t nfs_getattr_bitmap[NFS_ATTR_BITMAP_LEN];
+extern uint32_t nfs4_getattr_write_bitmap[NFS_ATTR_BITMAP_LEN];
 
 #define NFS_CLEAR_ATTRIBUTES(A) NFS_BITMAP_ZERO((A), NFS_ATTR_BITMAP_LEN)
 #define NFS_COPY_ATTRIBUTES(SRC, DST) \
@@ -619,6 +631,21 @@ extern uint32_t nfs_getattr_bitmap[NFS_ATTR_BITMAP_LEN];
 	NFS_BITMAP_SET((A), NFS_FATTR_TIME_MODIFY); \
 	/* NFS_BITMAP_SET((A), NFS_FATTR_TIME_MODIFY_SET); */ \
 	NFS_BITMAP_SET((A), NFS_FATTR_MOUNTED_ON_FILEID); \
+	} while (0)
+
+/*
+ * NFSv4 WRITE RPCs contain partial GETATTR requests - only type, change, size, metadatatime and modifytime are requested.
+ * In such cases,  we do not update the time stamp - but the requested attributes.
+ */
+#define NFS4_DEFAULT_WRITE_ATTRIBUTES(A) \
+	do { \
+	/* required: */ \
+	NFS_BITMAP_SET((A), NFS_FATTR_TYPE); \
+	NFS_BITMAP_SET((A), NFS_FATTR_CHANGE); \
+	NFS_BITMAP_SET((A), NFS_FATTR_SIZE); \
+	/* optional: */ \
+	NFS_BITMAP_SET((A), NFS_FATTR_TIME_METADATA); \
+	NFS_BITMAP_SET((A), NFS_FATTR_TIME_MODIFY); \
 	} while (0)
 
 /* attributes requested when we want to do a "statfs" */

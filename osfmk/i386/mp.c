@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -48,7 +48,7 @@
 #include <kern/pms.h>
 #include <kern/misc_protos.h>
 #include <kern/timer_call.h>
-#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <kern/queue.h>
 #include <prng/random.h>
 
@@ -124,14 +124,14 @@ boolean_t               mp_interrupt_watchdog_enabled = TRUE;
 uint32_t                mp_interrupt_watchdog_events = 0;
 #endif
 
-decl_simple_lock_data(, debugger_callback_lock);
+SIMPLE_LOCK_DECLARE(debugger_callback_lock, 0);
 struct debugger_callback *debugger_callback = NULL;
 
-decl_lck_mtx_data(static, mp_cpu_boot_lock);
-lck_mtx_ext_t   mp_cpu_boot_lock_ext;
+static LCK_GRP_DECLARE(smp_lck_grp, "i386_smp");
+static LCK_MTX_EARLY_DECLARE(mp_cpu_boot_lock, &smp_lck_grp);
 
 /* Variables needed for MP rendezvous. */
-decl_simple_lock_data(, mp_rv_lock);
+SIMPLE_LOCK_DECLARE(mp_rv_lock, 0);
 static void     (*mp_rv_setup_func)(void *arg);
 static void     (*mp_rv_action_func)(void *arg);
 static void     (*mp_rv_teardown_func)(void *arg);
@@ -163,8 +163,7 @@ static void        (*mp_bc_action_func)(void *arg);
 static void        *mp_bc_func_arg;
 static int      mp_bc_ncpus;
 static volatile long   mp_bc_count;
-decl_lck_mtx_data(static, mp_bc_lock);
-lck_mtx_ext_t   mp_bc_lock_ext;
+static LCK_MTX_EARLY_DECLARE(mp_bc_lock, &smp_lck_grp);
 static  volatile int    debugger_cpu = -1;
 volatile long    NMIPI_acks = 0;
 volatile long    NMI_count = 0;
@@ -186,9 +185,6 @@ void i386_start_cpu(int lapic_id, int cpu_num);
 void i386_send_NMI(int cpu);
 void NMIPI_enable(boolean_t);
 
-static lck_grp_t        smp_lck_grp;
-static lck_grp_attr_t   smp_lck_grp_attr;
-
 #define NUM_CPU_WARM_CALLS      20
 struct timer_call       cpu_warm_call_arr[NUM_CPU_WARM_CALLS];
 queue_head_t            cpu_warm_call_list;
@@ -201,7 +197,7 @@ typedef struct cpu_warm_data {
 } *cpu_warm_data_t;
 
 static void             cpu_prewarm_init(void);
-static void             cpu_warm_timer_call_func(call_entry_param_t p0, call_entry_param_t p1);
+static void             cpu_warm_timer_call_func(timer_call_param_t p0, timer_call_param_t p1);
 static void             _cpu_warm_setup(void *arg);
 static timer_call_t     grab_warm_timer_call(void);
 static void             free_warm_timer_call(timer_call_t call);
@@ -209,12 +205,6 @@ static void             free_warm_timer_call(timer_call_t call);
 void
 smp_init(void)
 {
-	simple_lock_init(&mp_rv_lock, 0);
-	simple_lock_init(&debugger_callback_lock, 0);
-	lck_grp_attr_setdefault(&smp_lck_grp_attr);
-	lck_grp_init(&smp_lck_grp, "i386_smp", &smp_lck_grp_attr);
-	lck_mtx_init_ext(&mp_cpu_boot_lock, &mp_cpu_boot_lock_ext, &smp_lck_grp, LCK_ATTR_NULL);
-	lck_mtx_init_ext(&mp_bc_lock, &mp_bc_lock_ext, &smp_lck_grp, LCK_ATTR_NULL);
 	console_init();
 
 	if (!i386_smp_init(LAPIC_NMI_INTERRUPT, NMIInterruptHandler,
@@ -410,11 +400,18 @@ start_cpu(void *arg)
 		tsc_delta = tsc_target - tsc_starter;
 		kprintf("TSC sync for cpu %d: 0x%016llx delta 0x%llx (%lld)\n",
 		    psip->target_cpu, tsc_target, tsc_delta, tsc_delta);
+#if DEBUG || DEVELOPMENT
+		/*
+		 * Stash the delta for inspection later, since we can no
+		 * longer print/log it with interrupts disabled.
+		 */
+		cpu_datap(psip->target_cpu)->tsc_sync_delta = tsc_delta;
+#endif
 		if (ABS(tsc_delta) > (int64_t) TSC_sync_margin) {
 #if DEBUG
 			panic(
 #else
-			printf(
+			kprintf(
 #endif
 				"Unsynchronized  TSC for cpu %d: "
 				"0x%016llx, delta 0x%llx\n",
@@ -503,7 +500,7 @@ cpu_signal_handler(x86_saved_state_t *regs)
 	int             my_cpu;
 	volatile int    *my_word;
 
-	SCHED_STATS_IPI(current_processor());
+	SCHED_STATS_INC(ipi_count);
 
 	my_cpu = cpu_number();
 	my_word = &cpu_data_ptr[my_cpu]->cpu_signals;
@@ -1175,7 +1172,7 @@ mp_cpus_call_cpu_init(int cpu)
 	simple_lock_init(&cqp->lock, 0);
 	queue_init(&cqp->queue);
 	for (i = 0; i < MP_CPUS_CALL_BUFS_PER_CPU; i++) {
-		callp = (mp_call_t *) kalloc(sizeof(mp_call_t));
+		callp = zalloc_permanent_type(mp_call_t);
 		mp_call_free(callp);
 	}
 
@@ -1502,8 +1499,7 @@ mp_cpus_kick(cpumask_t cpus)
 	mp_safe_spin_lock(&x86_topo_lock);
 
 	for (cpu = 0; cpu < (cpu_t) real_ncpus; cpu++) {
-		if ((cpu == (cpu_t) cpu_number())
-		    || ((cpu_to_cpumask(cpu) & cpus) == 0)
+		if (((cpu_to_cpumask(cpu) & cpus) == 0)
 		    || !cpu_is_running(cpu)) {
 			continue;
 		}
@@ -1945,6 +1941,12 @@ cpu_number(void)
 	return get_cpu_number();
 }
 
+vm_offset_t
+current_percpu_base(void)
+{
+	return get_current_percpu_base();
+}
+
 static void
 cpu_prewarm_init()
 {
@@ -1991,8 +1993,8 @@ free_warm_timer_call(timer_call_t call)
  */
 static void
 cpu_warm_timer_call_func(
-	call_entry_param_t p0,
-	__unused call_entry_param_t p1)
+	timer_call_param_t p0,
+	__unused timer_call_param_t p1)
 {
 	free_warm_timer_call((timer_call_t)p0);
 	return;

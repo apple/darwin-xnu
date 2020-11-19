@@ -296,6 +296,25 @@ _STRUCT_ARM_THREAD_STATE64
 	ptrauth_key_process_independent_data,                       \
 	ptrauth_string_discriminator("fp")) : __p); })
 
+/* Strip ptr auth bits from pc, lr, sp and fp field of arm_thread_state64_t */
+#define __darwin_arm_thread_state64_ptrauth_strip(ts) \
+	__extension__ ({ _STRUCT_ARM_THREAD_STATE64 *__tsp = &(ts);               \
+	__tsp->__opaque_pc = ((__tsp->__opaque_flags &                            \
+	__DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH) ? __tsp->__opaque_pc :      \
+	ptrauth_strip(__tsp->__opaque_pc, ptrauth_key_process_independent_code)); \
+	__tsp->__opaque_lr = ((__tsp->__opaque_flags &                            \
+	(__DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH |                           \
+	__DARWIN_ARM_THREAD_STATE64_FLAGS_IB_SIGNED_LR)) ? __tsp->__opaque_lr :   \
+	ptrauth_strip(__tsp->__opaque_lr, ptrauth_key_process_independent_code)); \
+	__tsp->__opaque_sp = ((__tsp->__opaque_flags &                            \
+	__DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH) ? __tsp->__opaque_sp :      \
+	ptrauth_strip(__tsp->__opaque_sp, ptrauth_key_process_independent_data)); \
+	__tsp->__opaque_fp = ((__tsp->__opaque_flags &                            \
+	__DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH) ? __tsp->__opaque_fp :      \
+	ptrauth_strip(__tsp->__opaque_fp, ptrauth_key_process_independent_data)); \
+	__tsp->__opaque_flags |=                                                  \
+	__DARWIN_ARM_THREAD_STATE64_FLAGS_NO_PTRAUTH; })
+
 #else /* __has_feature(ptrauth_calls) && defined(__LP64__) */
 
 #if __DARWIN_OPAQUE_ARM_THREAD_STATE64
@@ -334,6 +353,9 @@ _STRUCT_ARM_THREAD_STATE64
 /* Set fp field of arm_thread_state64_t to a data pointer value */
 #define __darwin_arm_thread_state64_set_fp(ts, ptr) \
 	((ts).__opaque_fp = (void*)(uintptr_t)(ptr))
+/* Strip ptr auth bits from pc, lr, sp and fp field of arm_thread_state64_t */
+#define __darwin_arm_thread_state64_ptrauth_strip(ts) \
+	(void)(ts)
 
 #else /* __DARWIN_OPAQUE_ARM_THREAD_STATE64 */
 #if __DARWIN_UNIX03
@@ -368,6 +390,9 @@ _STRUCT_ARM_THREAD_STATE64
 /* Set fp field of arm_thread_state64_t to a data pointer value */
 #define __darwin_arm_thread_state64_set_fp(ts, ptr) \
 	((ts).__fp = (uintptr_t)(ptr))
+/* Strip ptr auth bits from pc, lr, sp and fp field of arm_thread_state64_t */
+#define __darwin_arm_thread_state64_ptrauth_strip(ts) \
+	(void)(ts)
 
 #else /* __DARWIN_UNIX03 */
 
@@ -401,6 +426,9 @@ _STRUCT_ARM_THREAD_STATE64
 /* Set fp field of arm_thread_state64_t to a data pointer value */
 #define __darwin_arm_thread_state64_set_fp(ts, ptr) \
 	((ts).fp = (uintptr_t)(ptr))
+/* Strip ptr auth bits from pc, lr, sp and fp field of arm_thread_state64_t */
+#define __darwin_arm_thread_state64_ptrauth_strip(ts) \
+	(void)(ts)
 
 #endif /* __DARWIN_UNIX03 */
 #endif /* __DARWIN_OPAQUE_ARM_THREAD_STATE64 */
@@ -537,7 +565,7 @@ _STRUCT_ARM_DEBUG_STATE
 /* ARM's arm_debug_state is ARM64's arm_legacy_debug_state */
 
 #if __DARWIN_UNIX03
-#define _STRUCT_ARM_LEGACY_DEBUG_STATE struct arm_legacy_debug_state
+#define _STRUCT_ARM_LEGACY_DEBUG_STATE struct __arm_legacy_debug_state
 _STRUCT_ARM_LEGACY_DEBUG_STATE
 {
 	__uint32_t __bvr[16];

@@ -127,13 +127,6 @@ struct user64_mac {
 #endif /* KERNEL */
 
 /*
- * Device types for mac_iokit_check_device()
- */
-#define MAC_DEVICE_USB          "USB"
-#define MAC_DEVICE_FIREWIRE     "FireWire"
-#define MAC_DEVICE_TYPE_KEY     "DeviceType"
-
-/*
  * Flags for mac_proc_check_suspend_resume()
  */
 #define MAC_PROC_CHECK_SUSPEND                  0

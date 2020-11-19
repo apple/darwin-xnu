@@ -186,7 +186,7 @@ settimeofday(__unused struct proc *p, struct settimeofday_args  *uap, __unused i
 			return error;
 		}
 #endif
-#ifndef CONFIG_EMBEDDED
+#if defined(XNU_TARGET_OS_OSX)
 		if ((error = suser(kauth_cred_get(), &p->p_acflag))) {
 			return error;
 		}
@@ -198,7 +198,7 @@ settimeofday(__unused struct proc *p, struct settimeofday_args  *uap, __unused i
 		if (IS_64BIT_PROCESS(p)) {
 			struct user64_timeval user_atv;
 			error = copyin(uap->tv, &user_atv, sizeof(user_atv));
-			atv.tv_sec = user_atv.tv_sec;
+			atv.tv_sec = (__darwin_time_t)user_atv.tv_sec;
 			atv.tv_usec = user_atv.tv_usec;
 		} else {
 			struct user32_timeval user_atv;
@@ -369,9 +369,9 @@ getitimer(struct proc *p, struct getitimer_args *uap, __unused int32_t *retval)
 	} else {
 		struct user32_itimerval user_itv;
 		bzero(&user_itv, sizeof(user_itv));
-		user_itv.it_interval.tv_sec = aitv.it_interval.tv_sec;
+		user_itv.it_interval.tv_sec = (user32_time_t)aitv.it_interval.tv_sec;
 		user_itv.it_interval.tv_usec = aitv.it_interval.tv_usec;
-		user_itv.it_value.tv_sec = aitv.it_value.tv_sec;
+		user_itv.it_value.tv_sec = (user32_time_t)aitv.it_value.tv_sec;
 		user_itv.it_value.tv_usec = aitv.it_value.tv_usec;
 		return copyout((caddr_t)&user_itv, uap->itv, sizeof(user_itv));
 	}
@@ -403,9 +403,9 @@ setitimer(struct proc *p, struct setitimer_args *uap, int32_t *retval)
 			if ((error = copyin(itvp, (caddr_t)&user_itv, sizeof(user_itv)))) {
 				return error;
 			}
-			aitv.it_interval.tv_sec = user_itv.it_interval.tv_sec;
+			aitv.it_interval.tv_sec = (__darwin_time_t)user_itv.it_interval.tv_sec;
 			aitv.it_interval.tv_usec = user_itv.it_interval.tv_usec;
-			aitv.it_value.tv_sec = user_itv.it_value.tv_sec;
+			aitv.it_value.tv_sec = (__darwin_time_t)user_itv.it_value.tv_sec;
 			aitv.it_value.tv_usec = user_itv.it_value.tv_usec;
 		} else {
 			struct user32_itimerval user_itv;
@@ -824,7 +824,7 @@ tvtoabstime(
 	uint64_t        result, usresult;
 
 	clock_interval_to_absolutetime_interval(
-		tvp->tv_sec, NSEC_PER_SEC, &result);
+		(uint32_t)tvp->tv_sec, NSEC_PER_SEC, &result);
 	clock_interval_to_absolutetime_interval(
 		tvp->tv_usec, NSEC_PER_USEC, &usresult);
 
@@ -835,8 +835,8 @@ uint64_t
 tstoabstime(struct timespec *ts)
 {
 	uint64_t abstime_s, abstime_ns;
-	clock_interval_to_absolutetime_interval(ts->tv_sec, NSEC_PER_SEC, &abstime_s);
-	clock_interval_to_absolutetime_interval(ts->tv_nsec, 1, &abstime_ns);
+	clock_interval_to_absolutetime_interval((uint32_t)ts->tv_sec, NSEC_PER_SEC, &abstime_s);
+	clock_interval_to_absolutetime_interval((uint32_t)ts->tv_nsec, 1, &abstime_ns);
 	return abstime_s + abstime_ns;
 }
 

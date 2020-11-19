@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -107,7 +107,7 @@ im6f_graft(struct in6_mfilter *, const uint8_t,
 static int      im6f_prune(struct in6_mfilter *, const struct sockaddr_in6 *);
 static void     im6f_rollback(struct in6_mfilter *);
 static void     im6f_reap(struct in6_mfilter *);
-static int      im6o_grow(struct ip6_moptions *, size_t);
+static int      im6o_grow(struct ip6_moptions *);
 static size_t   im6o_match_group(const struct ip6_moptions *,
     const struct ifnet *, const struct sockaddr_in6 *);
 static struct in6_msource *
@@ -192,29 +192,17 @@ static unsigned int in6m_debug = 1;             /* debugging (enabled) */
 #else
 static unsigned int in6m_debug;                 /* debugging (disabled) */
 #endif /* !DEBUG */
-static unsigned int in6m_size;                  /* size of zone element */
 static struct zone *in6m_zone;                  /* zone for in6_multi */
-
-#define IN6M_ZONE_MAX           64              /* maximum elements in zone */
 #define IN6M_ZONE_NAME          "in6_multi"     /* zone name */
 
-static unsigned int imm_size;                   /* size of zone element */
-static struct zone *imm_zone;                   /* zone for in6_multi_mship */
+static ZONE_DECLARE(imm_zone, "in6_multi_mship",
+    sizeof(struct in6_multi_mship), ZC_ZFREE_CLEARMEM);
 
-#define IMM_ZONE_MAX            64              /* maximum elements in zone */
-#define IMM_ZONE_NAME           "in6_multi_mship" /* zone name */
+static ZONE_DECLARE(ip6ms_zone, "ip6_msource",
+    sizeof(struct ip6_msource), ZC_ZFREE_CLEARMEM);
 
-#define IP6MS_ZONE_MAX          64              /* maximum elements in zone */
-#define IP6MS_ZONE_NAME         "ip6_msource"   /* zone name */
-
-static unsigned int ip6ms_size;                 /* size of zone element */
-static struct zone *ip6ms_zone;                 /* zone for ip6_msource */
-
-#define IN6MS_ZONE_MAX          64              /* maximum elements in zone */
-#define IN6MS_ZONE_NAME         "in6_msource"   /* zone name */
-
-static unsigned int in6ms_size;                 /* size of zone element */
-static struct zone *in6ms_zone;                 /* zone for in6_msource */
+static ZONE_DECLARE(in6ms_zone, "in6_msource",
+    sizeof(struct in6_msource), ZC_ZFREE_CLEARMEM);
 
 /* Lock group and attribute for in6_multihead_lock lock */
 static lck_attr_t       *in6_multihead_lock_attr;
@@ -224,16 +212,16 @@ static lck_grp_attr_t   *in6_multihead_lock_grp_attr;
 static decl_lck_rw_data(, in6_multihead_lock);
 struct in6_multihead in6_multihead;
 
-static struct in6_multi *in6_multi_alloc(int);
+static struct in6_multi *in6_multi_alloc(zalloc_flags_t);
 static void in6_multi_free(struct in6_multi *);
 static void in6_multi_attach(struct in6_multi *);
-static struct in6_multi_mship *in6_multi_mship_alloc(int);
+static struct in6_multi_mship *in6_multi_mship_alloc(zalloc_flags_t);
 static void in6_multi_mship_free(struct in6_multi_mship *);
 static void in6m_trace(struct in6_multi *, int);
 
-static struct ip6_msource *ip6ms_alloc(int);
+static struct ip6_msource *ip6ms_alloc(zalloc_flags_t);
 static void ip6ms_free(struct ip6_msource *);
-static struct in6_msource *in6ms_alloc(int);
+static struct in6_msource *in6ms_alloc(zalloc_flags_t);
 static void in6ms_free(struct in6_msource *);
 
 /*
@@ -265,7 +253,7 @@ in6m_is_ifp_detached(const struct in6_multi *inm)
  * with an empty source filter list.
  */
 static __inline__ void
-im6f_init(struct in6_mfilter *imf, const int st0, const int st1)
+im6f_init(struct in6_mfilter *imf, const uint8_t st0, const  uint8_t st1)
 {
 	memset(imf, 0, sizeof(struct in6_mfilter));
 	RB_INIT(&imf->im6f_sources);
@@ -277,7 +265,7 @@ im6f_init(struct in6_mfilter *imf, const int st0, const int st1)
  * Resize the ip6_moptions vector to the next power-of-two minus 1.
  */
 static int
-im6o_grow(struct ip6_moptions *imo, size_t newmax)
+im6o_grow(struct ip6_moptions *imo)
 {
 	struct in6_multi        **nmships;
 	struct in6_multi        **omships;
@@ -285,6 +273,7 @@ im6o_grow(struct ip6_moptions *imo, size_t newmax)
 	struct in6_mfilter       *omfilters;
 	size_t                    idx;
 	size_t                    oldmax;
+	size_t                    newmax;
 
 	IM6O_LOCK_ASSERT_HELD(imo);
 
@@ -293,9 +282,7 @@ im6o_grow(struct ip6_moptions *imo, size_t newmax)
 	omships = imo->im6o_membership;
 	omfilters = imo->im6o_mfilters;
 	oldmax = imo->im6o_max_memberships;
-	if (newmax == 0) {
-		newmax = ((oldmax + 1) * 2) - 1;
-	}
+	newmax = ((oldmax + 1) * 2) - 1;
 
 	if (newmax > IPV6_MAX_MEMBERSHIPS) {
 		return ETOOMANYREFS;
@@ -322,7 +309,7 @@ im6o_grow(struct ip6_moptions *imo, size_t newmax)
 		im6f_init(&nmfilters[idx], MCAST_UNDEFINED, MCAST_EXCLUDE);
 	}
 
-	imo->im6o_max_memberships = newmax;
+	imo->im6o_max_memberships = (u_short)newmax;
 
 	return 0;
 }
@@ -559,12 +546,8 @@ in6_mc_get(struct ifnet *ifp, const struct in6_addr *group,
 	 * The initial source filter state is INCLUDE, {} as per the RFC.
 	 * Pending state-changes per group are subject to a bounds check.
 	 */
-	inm = in6_multi_alloc(M_WAITOK);
-	if (inm == NULL) {
-		in6_multihead_lock_done();
-		IFMA_REMREF(ifma);
-		return ENOMEM;
-	}
+	inm = in6_multi_alloc(Z_WAITOK);
+
 	IN6M_LOCK(inm);
 	inm->in6m_addr = *group;
 	inm->in6m_ifp = ifp;
@@ -656,10 +639,7 @@ in6m_record_source(struct in6_multi *inm, const struct in6_addr *addr)
 		if (inm->in6m_nsrc == in6_mcast_maxgrpsrc) {
 			return -ENOSPC;
 		}
-		nims = ip6ms_alloc(M_WAITOK);
-		if (nims == NULL) {
-			return -ENOMEM;
-		}
+		nims = ip6ms_alloc(Z_WAITOK);
 		nims->im6s_addr = find.im6s_addr;
 		RB_INSERT(ip6_msource_tree, &inm->in6m_srcs, nims);
 		++inm->in6m_nsrc;
@@ -707,10 +687,7 @@ im6f_get_source(struct in6_mfilter *imf, const struct sockaddr_in6 *psin,
 		if (imf->im6f_nsrc == in6_mcast_maxsocksrc) {
 			return ENOSPC;
 		}
-		lims = in6ms_alloc(M_WAITOK);
-		if (lims == NULL) {
-			return ENOMEM;
-		}
+		lims = in6ms_alloc(Z_WAITOK);
 		lims->im6s_addr = find.im6s_addr;
 		lims->im6sl_st[0] = MCAST_UNDEFINED;
 		RB_INSERT(ip6_msource_tree, &imf->im6f_sources,
@@ -739,10 +716,7 @@ im6f_graft(struct in6_mfilter *imf, const uint8_t st1,
 {
 	struct in6_msource      *lims;
 
-	lims = in6ms_alloc(M_WAITOK);
-	if (lims == NULL) {
-		return NULL;
-	}
+	lims = in6ms_alloc(Z_WAITOK);
 	lims->im6s_addr = psin->sin6_addr;
 	lims->im6sl_st[0] = MCAST_UNDEFINED;
 	lims->im6sl_st[1] = st1;
@@ -919,10 +893,7 @@ in6m_get_source(struct in6_multi *inm, const struct in6_addr *addr,
 		if (inm->in6m_nsrc == in6_mcast_maxgrpsrc) {
 			return ENOSPC;
 		}
-		nims = ip6ms_alloc(M_WAITOK);
-		if (nims == NULL) {
-			return ENOMEM;
-		}
+		nims = ip6ms_alloc(Z_WAITOK);
 		nims->im6s_addr = *addr;
 		RB_INSERT(ip6_msource_tree, &inm->in6m_srcs, nims);
 		++inm->in6m_nsrc;
@@ -1220,11 +1191,7 @@ in6_joingroup(struct ifnet *ifp, struct in6_addr *mcaddr,
 
 	*errorp = 0;
 
-	imm = in6_multi_mship_alloc(M_WAITOK);
-	if (imm == NULL) {
-		*errorp = ENOBUFS;
-		return NULL;
-	}
+	imm = in6_multi_mship_alloc(Z_WAITOK);
 
 	error = in6_mc_join(ifp, mcaddr, NULL, &imm->i6mm_maddr, delay);
 	if (error) {
@@ -1433,7 +1400,7 @@ in6p_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 	struct in6_msource              *ims;
 	struct in6_multi                *inm;
 	size_t                           idx;
-	uint16_t                         fmode;
+	uint8_t                         fmode;
 	int                              error, doblock;
 	struct mld_tparams               mtp;
 
@@ -1618,7 +1585,7 @@ in6p_findmoptions(struct inpcb *inp)
 		return imo;
 	}
 
-	imo = ip6_allocmoptions(M_WAITOK);
+	imo = ip6_allocmoptions(Z_WAITOK);
 	if (imo == NULL) {
 		return NULL;
 	}
@@ -1639,8 +1606,8 @@ in6p_findmoptions(struct inpcb *inp)
 	}
 
 	imo->im6o_multicast_ifp = NULL;
-	imo->im6o_multicast_hlim = ip6_defmcasthlim;
-	imo->im6o_multicast_loop = in6_mcast_loop;
+	imo->im6o_multicast_hlim = (u_char)ip6_defmcasthlim;
+	imo->im6o_multicast_loop = (u_char)in6_mcast_loop;
 	imo->im6o_num_memberships = 0;
 	imo->im6o_max_memberships = IPV6_MIN_MEMBERSHIPS;
 	imo->im6o_membership = immp;
@@ -1730,7 +1697,7 @@ in6p_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	}
 
 	if (msfr.msfr_nsrcs > in6_mcast_maxsocksrc) {
-		msfr.msfr_nsrcs = in6_mcast_maxsocksrc;
+		msfr.msfr_nsrcs = (uint32_t)in6_mcast_maxsocksrc;
 	}
 
 	(void)in6_setscope(&gsa->sin6_addr, ifp, NULL);
@@ -1765,7 +1732,7 @@ in6p_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	tss = NULL;
 
 	if (IS_64BIT_PROCESS(current_proc())) {
-		tmp_ptr = msfr64.msfr_srcs;
+		tmp_ptr = (user_addr_t)msfr64.msfr_srcs;
 	} else {
 		tmp_ptr = CAST_USER_ADDR_T(msfr32.msfr_srcs);
 	}
@@ -1814,7 +1781,7 @@ in6p_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		}
 	}
 
-	msfr.msfr_nsrcs = ncsrcs;
+	msfr.msfr_nsrcs = (uint32_t)ncsrcs;
 	if (IS_64BIT_PROCESS(current_proc())) {
 		msfr64.msfr_ifindex = msfr.msfr_ifindex;
 		msfr64.msfr_fmode   = msfr.msfr_fmode;
@@ -2252,7 +2219,7 @@ in6p_join_group(struct inpcb *inp, struct sockopt *sopt)
 
 	if (is_new) {
 		if (imo->im6o_num_memberships == imo->im6o_max_memberships) {
-			error = im6o_grow(imo, 0);
+			error = im6o_grow(imo);
 			if (error) {
 				goto out_imo_locked;
 			}
@@ -2840,7 +2807,7 @@ in6p_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	 * Begin state merge transaction at socket layer.
 	 */
 
-	imf->im6f_st[1] = msfr.msfr_fmode;
+	imf->im6f_st[1] = (uint8_t)msfr.msfr_fmode;
 
 	/*
 	 * Apply any new source filters, if present.
@@ -2855,7 +2822,7 @@ in6p_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		unsigned int             i;
 
 		if (IS_64BIT_PROCESS(current_proc())) {
-			tmp_ptr = msfr64.msfr_srcs;
+			tmp_ptr = (user_addr_t)msfr64.msfr_srcs;
 		} else {
 			tmp_ptr = CAST_USER_ADDR_T(msfr32.msfr_srcs);
 		}
@@ -2882,7 +2849,7 @@ in6p_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		 * will set it to INCLUDE.
 		 */
 		im6f_leave(imf);
-		imf->im6f_st[1] = msfr.msfr_fmode;
+		imf->im6f_st[1] = (uint8_t)msfr.msfr_fmode;
 
 		/*
 		 * Update socket layer filters at t1, lazy-allocating
@@ -3024,7 +2991,7 @@ ip6_setmoptions(struct inpcb *inp, struct sockopt *sopt)
 			break;
 		}
 		IM6O_LOCK(im6o);
-		im6o->im6o_multicast_hlim = hlim;
+		im6o->im6o_multicast_hlim = (u_char)hlim;
 		IM6O_UNLOCK(im6o);
 		IM6O_REMREF(im6o);      /* from in6p_findmoptions() */
 		break;
@@ -3055,7 +3022,7 @@ ip6_setmoptions(struct inpcb *inp, struct sockopt *sopt)
 			break;
 		}
 		IM6O_LOCK(im6o);
-		im6o->im6o_multicast_loop = loop;
+		im6o->im6o_multicast_loop = (u_char)loop;
 		IM6O_UNLOCK(im6o);
 		IM6O_REMREF(im6o);      /* from in6p_findmoptions() */
 		break;
@@ -3213,52 +3180,18 @@ in6_multi_init(void)
 	    in6_multihead_lock_attr);
 	TAILQ_INIT(&in6m_trash_head);
 
-	in6m_size = (in6m_debug == 0) ? sizeof(struct in6_multi) :
+	vm_size_t in6m_size = (in6m_debug == 0) ? sizeof(struct in6_multi) :
 	    sizeof(struct in6_multi_dbg);
-	in6m_zone = zinit(in6m_size, IN6M_ZONE_MAX * in6m_size,
-	    0, IN6M_ZONE_NAME);
-	if (in6m_zone == NULL) {
-		panic("%s: failed allocating %s", __func__, IN6M_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(in6m_zone, Z_EXPAND, TRUE);
-
-	imm_size = sizeof(struct in6_multi_mship);
-	imm_zone = zinit(imm_size, IMM_ZONE_MAX * imm_size, 0, IMM_ZONE_NAME);
-	if (imm_zone == NULL) {
-		panic("%s: failed allocating %s", __func__, IMM_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(imm_zone, Z_EXPAND, TRUE);
-
-	ip6ms_size = sizeof(struct ip6_msource);
-	ip6ms_zone = zinit(ip6ms_size, IP6MS_ZONE_MAX * ip6ms_size,
-	    0, IP6MS_ZONE_NAME);
-	if (ip6ms_zone == NULL) {
-		panic("%s: failed allocating %s", __func__, IP6MS_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(ip6ms_zone, Z_EXPAND, TRUE);
-
-	in6ms_size = sizeof(struct in6_msource);
-	in6ms_zone = zinit(in6ms_size, IN6MS_ZONE_MAX * in6ms_size,
-	    0, IN6MS_ZONE_NAME);
-	if (in6ms_zone == NULL) {
-		panic("%s: failed allocating %s", __func__, IN6MS_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(in6ms_zone, Z_EXPAND, TRUE);
+	in6m_zone = zone_create(IN6M_ZONE_NAME, in6m_size, ZC_ZFREE_CLEARMEM);
 }
 
 static struct in6_multi *
-in6_multi_alloc(int how)
+in6_multi_alloc(zalloc_flags_t how)
 {
 	struct in6_multi *in6m;
 
-	in6m = (how == M_WAITOK) ? zalloc(in6m_zone) :
-	    zalloc_noblock(in6m_zone);
+	in6m = zalloc_flags(in6m_zone, how | Z_ZERO);
 	if (in6m != NULL) {
-		bzero(in6m, in6m_size);
 		lck_mtx_init(&in6m->in6m_lock, in6_multihead_lock_grp,
 		    in6_multihead_lock_attr);
 		in6m->in6m_debug |= IFD_ALLOC;
@@ -3507,16 +3440,9 @@ in6m_trace(struct in6_multi *in6m, int refhold)
 }
 
 static struct in6_multi_mship *
-in6_multi_mship_alloc(int how)
+in6_multi_mship_alloc(zalloc_flags_t how)
 {
-	struct in6_multi_mship *imm;
-
-	imm = (how == M_WAITOK) ? zalloc(imm_zone) : zalloc_noblock(imm_zone);
-	if (imm != NULL) {
-		bzero(imm, imm_size);
-	}
-
-	return imm;
+	return zalloc_flags(imm_zone, how | Z_ZERO);
 }
 
 static void
@@ -3557,17 +3483,9 @@ in6_multihead_lock_done(void)
 }
 
 static struct ip6_msource *
-ip6ms_alloc(int how)
+ip6ms_alloc(zalloc_flags_t how)
 {
-	struct ip6_msource *i6ms;
-
-	i6ms = (how == M_WAITOK) ? zalloc(ip6ms_zone) :
-	    zalloc_noblock(ip6ms_zone);
-	if (i6ms != NULL) {
-		bzero(i6ms, ip6ms_size);
-	}
-
-	return i6ms;
+	return zalloc_flags(ip6ms_zone, how | Z_ZERO);
 }
 
 static void
@@ -3577,17 +3495,9 @@ ip6ms_free(struct ip6_msource *i6ms)
 }
 
 static struct in6_msource *
-in6ms_alloc(int how)
+in6ms_alloc(zalloc_flags_t how)
 {
-	struct in6_msource *in6ms;
-
-	in6ms = (how == M_WAITOK) ? zalloc(in6ms_zone) :
-	    zalloc_noblock(in6ms_zone);
-	if (in6ms != NULL) {
-		bzero(in6ms, in6ms_size);
-	}
-
-	return in6ms;
+	return zalloc_flags(in6ms_zone, how | Z_ZERO);
 }
 
 static void

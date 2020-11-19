@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2019-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -1679,7 +1679,7 @@ vm_object_owner_compressed_update(
 	case VM_PURGABLE_DENY:
 		/* not purgeable: must be ledger-tagged */
 		assert(object->vo_ledger_tag != VM_LEDGER_TAG_NONE);
-	/* fallthru */
+		OS_FALLTHROUGH;
 	case VM_PURGABLE_NONVOLATILE:
 		if (delta > 0) {
 			ledger_credit(owner->ledger,

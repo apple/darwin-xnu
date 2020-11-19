@@ -4,6 +4,7 @@
 
 # Exclude KASan runtime
 src:./san/kasan-arm64.c
+src:./osfmk/arm/machine_routines_common.c
 
 # These use a local variable to work out which stack we're on, but can end up with
 # a fakestack allocation.

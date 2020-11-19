@@ -167,7 +167,7 @@ static decl_lck_mtx_data(, mld_mtx);
 SLIST_HEAD(mld_in6m_relhead, in6_multi);
 
 static void     mli_initvar(struct mld_ifinfo *, struct ifnet *, int);
-static struct mld_ifinfo *mli_alloc(int);
+static struct mld_ifinfo *mli_alloc(zalloc_flags_t);
 static void     mli_free(struct mld_ifinfo *);
 static void     mli_delete(const struct ifnet *, struct mld_in6m_relhead *);
 static void     mld_dispatch_packet(struct mbuf *);
@@ -189,7 +189,7 @@ static int      mld_v1_input_report(struct ifnet *, struct mbuf *,
     const struct ip6_hdr *, /*const*/ struct mld_hdr *);
 static void     mld_v1_process_group_timer(struct in6_multi *, const int);
 static void     mld_v1_process_querier_timers(struct mld_ifinfo *);
-static int      mld_v1_transmit_report(struct in6_multi *, const int);
+static int      mld_v1_transmit_report(struct in6_multi *, const uint8_t);
 static uint32_t mld_v1_update_group(struct in6_multi *, const int);
 static void     mld_v2_cancel_link_timers(struct mld_ifinfo *);
 static uint32_t mld_v2_dispatch_general_query(struct mld_ifinfo *);
@@ -254,11 +254,8 @@ static unsigned int mld_mli_list_genid;
 	VERIFY(SLIST_EMPTY(_head));                                     \
 }
 
-#define MLI_ZONE_MAX            64              /* maximum elements in zone */
-#define MLI_ZONE_NAME           "mld_ifinfo"    /* zone name */
-
-static unsigned int mli_size;                   /* size of zone element */
-static struct zone *mli_zone;                   /* zone for mld_ifinfo */
+static ZONE_DECLARE(mli_zone, "mld_ifinfo",
+    sizeof(struct mld_ifinfo), ZC_ZFREE_CLEARMEM);
 
 SYSCTL_DECL(_net_inet6);        /* Note: Not in any common header. */
 
@@ -352,7 +349,7 @@ sysctl_mld_gsr SYSCTL_HANDLER_ARGS
 
 	MLD_LOCK();
 
-	i = mld_gsrdelay.tv_sec;
+	i = (int)mld_gsrdelay.tv_sec;
 
 	error = sysctl_handle_int(oidp, &i, 0, req);
 	if (error || !req->newptr) {
@@ -565,7 +562,7 @@ mld_is_addr_reported(const struct in6_addr *addr)
 		return 0;
 	}
 
-	if (IPV6_ADDR_MC_SCOPE(addr) == IPV6_ADDR_SCOPE_LINKLOCAL) {
+	if (IPV6_ADDR_MC_SCOPE(addr) == IPV6_ADDR_SCOPE_LINKLOCAL && !IN6_IS_ADDR_UNICAST_BASED_MULTICAST(addr)) {
 		struct in6_addr tmp = *addr;
 		in6_clearscope(&tmp);
 		if (IN6_ARE_ADDR_EQUAL(&tmp, &in6addr_linklocal_allnodes)) {
@@ -580,7 +577,7 @@ mld_is_addr_reported(const struct in6_addr *addr)
  * Attach MLD when PF_INET6 is attached to an interface.
  */
 struct mld_ifinfo *
-mld_domifattach(struct ifnet *ifp, int how)
+mld_domifattach(struct ifnet *ifp, zalloc_flags_t how)
 {
 	struct mld_ifinfo *mli;
 
@@ -753,13 +750,10 @@ mli_initvar(struct mld_ifinfo *mli, struct ifnet *ifp, int reattach)
 }
 
 static struct mld_ifinfo *
-mli_alloc(int how)
+mli_alloc(zalloc_flags_t how)
 {
-	struct mld_ifinfo *mli;
-
-	mli = (how == M_WAITOK) ? zalloc(mli_zone) : zalloc_noblock(mli_zone);
+	struct mld_ifinfo *mli = zalloc_flags(mli_zone, how | Z_ZERO);
 	if (mli != NULL) {
-		bzero(mli, mli_size);
 		lck_mtx_init(&mli->mli_lock, mld_mtx_grp, mld_mtx_attr);
 		mli->mli_debug |= IFD_ALLOC;
 	}
@@ -1009,7 +1003,7 @@ mld_v1_update_group(struct in6_multi *inm, const int timer)
 			    "skipping.\n", __func__));
 			break;
 		}
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 	case MLD_SG_QUERY_PENDING_MEMBER:
 	case MLD_G_QUERY_PENDING_MEMBER:
 	case MLD_IDLE_MEMBER:
@@ -1045,9 +1039,8 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 	struct mld_ifinfo       *mli;
 	struct mldv2_query      *mld;
 	struct in6_multi        *inm;
-	uint32_t                 maxdelay, nsrc, qqi;
+	uint32_t                 maxdelay, nsrc, qqi, timer;
 	int                      err = 0, is_general_query;
-	uint16_t                 timer;
 	uint8_t                  qrv;
 	struct mld_tparams       mtp = { .qpt = 0, .it = 0, .cst = 0, .sct = 0 };
 
@@ -1079,9 +1072,9 @@ mld_v2_input_query(struct ifnet *ifp, const struct ip6_hdr *ip6,
 	mld = (struct mldv2_query *)(mtod(m, uint8_t *) + off);
 
 	maxdelay = ntohs(mld->mld_maxdelay);    /* in 1/10ths of a second */
-	if (maxdelay >= 32768) {
-		maxdelay = (MLD_MRC_MANT(maxdelay) | 0x1000) <<
-		    (MLD_MRC_EXP(maxdelay) + 3);
+	if (maxdelay > SHRT_MAX) {
+		maxdelay = (MLD_MRC_MANT((uint16_t)maxdelay) | 0x1000) <<
+		    (MLD_MRC_EXP((uint16_t)maxdelay) + 3);
 	}
 	timer = maxdelay / MLD_TIMER_SCALE;
 	if (timer == 0) {
@@ -1479,6 +1472,7 @@ mld_v1_input_report(struct ifnet *ifp, struct mbuf *m,
 			    "ifp 0x%llx(%s)\n", __func__,
 			    ip6_sprintf(&mld->mld_addr),
 			    (uint64_t)VM_KERNEL_ADDRPERM(ifp), if_name(ifp)));
+			OS_FALLTHROUGH;
 		case MLD_LAZY_MEMBER:
 			inm->in6m_state = MLD_LAZY_MEMBER;
 			break;
@@ -2023,7 +2017,7 @@ mld_v2_process_group_timers(struct mld_ifinfo *mli,
 			inm->in6m_state = MLD_REPORTING_MEMBER;
 			in6m_clear_recorded(inm);
 		}
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 	case MLD_REPORTING_MEMBER:
 	case MLD_LEAVING_MEMBER:
 		if (state_change_retransmit_timer_expired) {
@@ -2034,7 +2028,7 @@ mld_v2_process_group_timers(struct mld_ifinfo *mli,
 			 * reset the timer.
 			 */
 			if (--inm->in6m_scrv > 0) {
-				inm->in6m_sctimer = uri_sec;
+				inm->in6m_sctimer = (uint16_t)uri_sec;
 				state_change_timers_running6 = 1;
 				/* caller will schedule timer */
 			}
@@ -2184,11 +2178,11 @@ mld_v2_cancel_link_timers(struct mld_ifinfo *mli)
 			SLIST_INSERT_HEAD(&mli->mli_relinmhead, inm,
 			    in6m_nrele);
 			MLI_UNLOCK(mli);
-		/* FALLTHROUGH */
+			OS_FALLTHROUGH;
 		case MLD_G_QUERY_PENDING_MEMBER:
 		case MLD_SG_QUERY_PENDING_MEMBER:
 			in6m_clear_recorded(inm);
-		/* FALLTHROUGH */
+			OS_FALLTHROUGH;
 		case MLD_REPORTING_MEMBER:
 			inm->in6m_state = MLD_REPORTING_MEMBER;
 			break;
@@ -2235,7 +2229,7 @@ mld_v1_process_querier_timers(struct mld_ifinfo *mli)
  * Transmit an MLDv1 report immediately.
  */
 static int
-mld_v1_transmit_report(struct in6_multi *in6m, const int type)
+mld_v1_transmit_report(struct in6_multi *in6m, const uint8_t type)
 {
 	struct ifnet            *ifp;
 	struct in6_ifaddr       *ia;
@@ -2456,7 +2450,7 @@ mld_initial_join(struct in6_multi *inm, struct mld_ifinfo *mli,
 	if ((ifp->if_flags & IFF_LOOPBACK) ||
 	    (mli->mli_flags & MLIF_SILENT) ||
 	    (IFNET_IS_CELLULAR(ifp) &&
-	    IN6_IS_ADDR_MC_LINKLOCAL(&inm->in6m_addr)) ||
+	    (IN6_IS_ADDR_MC_LINKLOCAL(&inm->in6m_addr) || IN6_IS_ADDR_MC_UNICAST_BASED_LINKLOCAL(&inm->in6m_addr))) ||
 	    !mld_is_addr_reported(&inm->in6m_addr)) {
 		MLD_PRINTF(("%s: not kicking state machine for silent group\n",
 		    __func__));
@@ -2543,13 +2537,13 @@ mld_initial_join(struct in6_multi *inm, struct mld_ifinfo *mli,
 			 * use this delay if sooner than the existing one.
 			 */
 			VERIFY(mli->mli_rv > 1);
-			inm->in6m_scrv = mli->mli_rv;
+			inm->in6m_scrv = (uint16_t)mli->mli_rv;
 			if (delay) {
 				if (inm->in6m_sctimer > 1) {
 					inm->in6m_sctimer =
-					    min(inm->in6m_sctimer, delay);
+					    MIN(inm->in6m_sctimer, (uint16_t)delay);
 				} else {
-					inm->in6m_sctimer = delay;
+					inm->in6m_sctimer = (uint16_t)delay;
 				}
 			} else {
 				inm->in6m_sctimer = 1;
@@ -2635,7 +2629,7 @@ mld_handle_state_change(struct in6_multi *inm, struct mld_ifinfo *mli,
 	 * If record(s) were enqueued, start the state-change
 	 * report timer for this group.
 	 */
-	inm->in6m_scrv = mli->mli_rv;
+	inm->in6m_scrv = (uint16_t)mli->mli_rv;
 	inm->in6m_sctimer = 1;
 	mtp->sct = 1;
 	MLI_UNLOCK(mli);
@@ -2704,7 +2698,7 @@ mld_final_leave(struct in6_multi *inm, struct mld_ifinfo *mli,
 			 */
 			IF_DRAIN(&inm->in6m_scq);
 			inm->in6m_timer = 0;
-			inm->in6m_scrv = mli->mli_rv;
+			inm->in6m_scrv = (uint16_t)mli->mli_rv;
 			MLD_PRINTF(("%s: Leaving %s/%s with %d "
 			    "pending retransmissions.\n", __func__,
 			    ip6_sprintf(&inm->in6m_addr),
@@ -2804,7 +2798,7 @@ mld_v2_enqueue_group_record(struct ifqueue *ifq, struct in6_multi *inm,
 	int                      minrec0len, m0srcs, msrcs, nbytes, off;
 	int                      record_has_sources;
 	int                      now;
-	int                      type;
+	uint8_t                  type;
 	uint8_t                  mode;
 
 	IN6M_LOCK_ASSERT_HELD(inm);
@@ -2822,7 +2816,7 @@ mld_v2_enqueue_group_record(struct ifqueue *ifq, struct in6_multi *inm,
 	record_has_sources = 1;
 	pmr = NULL;
 	type = MLD_DO_NOTHING;
-	mode = inm->in6m_st[1].iss_fmode;
+	mode = (uint8_t)inm->in6m_st[1].iss_fmode;
 
 	/*
 	 * If we did not transition out of ASM mode during t0->t1,
@@ -3050,7 +3044,7 @@ mld_v2_enqueue_group_record(struct ifqueue *ifq, struct in6_multi *inm,
 		}
 		MLD_PRINTF(("%s: msrcs is %d this packet\n", __func__,
 		    msrcs));
-		pmr->mr_numsrc = htons(msrcs);
+		pmr->mr_numsrc = htons((uint16_t)msrcs);
 		nbytes += (msrcs * sizeof(struct in6_addr));
 	}
 
@@ -3145,7 +3139,7 @@ mld_v2_enqueue_group_record(struct ifqueue *ifq, struct in6_multi *inm,
 				break;
 			}
 		}
-		pmr->mr_numsrc = htons(msrcs);
+		pmr->mr_numsrc = htons((uint16_t)msrcs);
 		nbytes += (msrcs * sizeof(struct in6_addr));
 
 		MLD_PRINTF(("%s: enqueueing next packet\n", __func__));
@@ -3211,7 +3205,7 @@ mld_v2_enqueue_filter_change(struct ifqueue *ifq, struct in6_multi *inm)
 	}
 
 	ifp = inm->in6m_ifp;                    /* interface */
-	mode = inm->in6m_st[1].iss_fmode;       /* filter mode at t1 */
+	mode = (uint8_t)inm->in6m_st[1].iss_fmode;       /* filter mode at t1 */
 	crt = REC_NONE; /* current group record type */
 	drt = REC_NONE; /* mask of completed group record types */
 	nrt = REC_NONE; /* record type for current node */
@@ -3376,7 +3370,7 @@ mld_v2_enqueue_filter_change(struct ifqueue *ifq, struct in6_multi *inm)
 			} else if (crt == REC_BLOCK) {
 				pmr->mr_type = MLD_BLOCK_OLD_SOURCES;
 			}
-			pmr->mr_numsrc = htons(rsrcs);
+			pmr->mr_numsrc = htons((uint16_t)rsrcs);
 			/*
 			 * Count the new group record, and enqueue this
 			 * packet if it wasn't already queued.
@@ -3619,7 +3613,7 @@ mld_dispatch_packet(struct mbuf *m)
 		return;
 	}
 
-	im6o = ip6_allocmoptions(M_WAITOK);
+	im6o = ip6_allocmoptions(Z_WAITOK);
 	if (im6o == NULL) {
 		m_freem(m);
 		return;
@@ -3816,14 +3810,4 @@ mld_init(void)
 	mld_po.ip6po_prefer_tempaddr = IP6PO_TEMPADDR_NOTPREFER;
 	mld_po.ip6po_flags = IP6PO_DONTFRAG;
 	LIST_INIT(&mli_head);
-
-	mli_size = sizeof(struct mld_ifinfo);
-	mli_zone = zinit(mli_size, MLI_ZONE_MAX * mli_size,
-	    0, MLI_ZONE_NAME);
-	if (mli_zone == NULL) {
-		panic("%s: failed allocating %s", __func__, MLI_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(mli_zone, Z_EXPAND, TRUE);
-	zone_change(mli_zone, Z_CALLERACCT, FALSE);
 }

@@ -1,0 +1,54 @@
+// Module map for sys/_types.h and sys/_types/.
+//
+// See also: stdint.modulemap
+// See also: sys_types.modulemap
+
+// Module for sys/_types/ and sys/_types.h.
+module Darwin_C_stdint._sys_types {
+        export *
+
+        module _types {
+                export *
+                header "sys/_types.h"
+        }
+        module _int16_t {
+                export *
+                header "sys/_types/_int16_t.h"
+        }
+        module _int32_t {
+                export *
+                header "sys/_types/_int32_t.h"
+        }
+        module _int64_t {
+                export *
+                header "sys/_types/_int64_t.h"
+        }
+        module _int8_t {
+                export *
+                header "sys/_types/_int8_t.h"
+        }
+        module _intptr_t {
+                export *
+                header "sys/_types/_intptr_t.h"
+        }
+        module _u_int16_t {
+                export *
+                header "sys/_types/_u_int16_t.h"
+        }
+        module _u_int32_t {
+                export *
+                header "sys/_types/_u_int32_t.h"
+        }
+        module _u_int64_t {
+                export *
+                header "sys/_types/_u_int64_t.h"
+        }
+        module _u_int8_t {
+                export *
+                header "sys/_types/_u_int8_t.h"
+        }
+        module _uintptr_t {
+                export *
+                header "sys/_types/_uintptr_t.h"
+        }
+}

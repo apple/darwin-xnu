@@ -8,6 +8,7 @@ OPTIONS/config_dtrace           optional config_dtrace
 pexpert/gen/device_tree.c			standard
 pexpert/gen/bootargs.c				standard
 pexpert/gen/pe_gen.c				standard
+pexpert/gen/kcformat.c				standard
 
 #
 

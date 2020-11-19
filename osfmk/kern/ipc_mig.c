@@ -485,30 +485,14 @@ kernel_mach_msg_rpc(
 		}
 	}
 
-	/*
-	 * Check to see how much of the message/trailer can be received.
-	 * We chose the maximum trailer that will fit, since we don't
-	 * have options telling us which trailer elements the caller needed.
-	 */
-	if (rcv_size >= kmsg->ikm_header->msgh_size) {
-		mach_msg_format_0_trailer_t *trailer =  (mach_msg_format_0_trailer_t *)
-		    ((vm_offset_t)kmsg->ikm_header + kmsg->ikm_header->msgh_size);
+	mach_msg_format_0_trailer_t *trailer =  (mach_msg_format_0_trailer_t *)
+	    ((vm_offset_t)kmsg->ikm_header + kmsg->ikm_header->msgh_size);
 
-		if (rcv_size >= kmsg->ikm_header->msgh_size + MAX_TRAILER_SIZE) {
-			/* Enough room for a maximum trailer */
-			trailer->msgh_trailer_size = MAX_TRAILER_SIZE;
-		} else if (rcv_size < kmsg->ikm_header->msgh_size +
-		    trailer->msgh_trailer_size) {
-			/* no room for even the basic (default) trailer */
-			trailer->msgh_trailer_size = 0;
-		}
-		assert(trailer->msgh_trailer_type == MACH_MSG_TRAILER_FORMAT_0);
-		rcv_size = kmsg->ikm_header->msgh_size + trailer->msgh_trailer_size;
-		mr = MACH_MSG_SUCCESS;
-	} else {
-		mr = MACH_RCV_TOO_LARGE;
+	/* must be able to receive message proper */
+	if (rcv_size < kmsg->ikm_header->msgh_size) {
+		ipc_kmsg_destroy(kmsg);
+		return MACH_RCV_TOO_LARGE;
 	}
-
 
 	/*
 	 *	We want to preserve rights and memory in reply!
@@ -524,6 +508,27 @@ kernel_mach_msg_rpc(
 #else
 	ipc_kmsg_copyout_to_kernel(kmsg, ipc_space_reply);
 #endif
+
+	/* Determine what trailer bits we can receive (as no option specified) */
+	if (rcv_size < kmsg->ikm_header->msgh_size + MACH_MSG_TRAILER_MINIMUM_SIZE) {
+		rcv_size = kmsg->ikm_header->msgh_size;
+	} else {
+		if (rcv_size >= kmsg->ikm_header->msgh_size + MAX_TRAILER_SIZE) {
+			/*
+			 * Enough room for a maximum trailer.
+			 * JMM - we really should set the expected receiver-set fields:
+			 *       (seqno, context, filterid, etc...) but nothing currently
+			 *       expects them anyway.
+			 */
+			trailer->msgh_trailer_size = MAX_TRAILER_SIZE;
+		} else {
+			assert(trailer->msgh_trailer_size == MACH_MSG_TRAILER_MINIMUM_SIZE);
+		}
+		rcv_size = kmsg->ikm_header->msgh_size + trailer->msgh_trailer_size;
+	}
+	assert(trailer->msgh_trailer_type == MACH_MSG_TRAILER_FORMAT_0);
+	mr = MACH_MSG_SUCCESS;
+
 	ipc_kmsg_put_to_kernel(msg, kmsg, rcv_size);
 	return mr;
 }
@@ -645,7 +650,7 @@ mach_msg_overwrite(
 	mach_msg_size_t         rcv_size,
 	mach_port_name_t                rcv_name,
 	__unused mach_msg_timeout_t     msg_timeout,
-	mach_msg_priority_t     override,
+	mach_msg_priority_t     priority,
 	__unused mach_msg_header_t      *rcv_msg,
 	__unused mach_msg_size_t rcv_msg_size)
 {
@@ -696,12 +701,13 @@ mach_msg_overwrite(
 		 * the cases where no implicit data is requested.
 		 */
 		max_trailer = (mach_msg_max_trailer_t *) ((vm_offset_t)kmsg->ikm_header + send_size);
+		bzero(max_trailer, sizeof(*max_trailer));
 		max_trailer->msgh_sender = current_thread()->task->sec_token;
 		max_trailer->msgh_audit = current_thread()->task->audit_token;
 		max_trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
 		max_trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
 
-		mr = ipc_kmsg_copyin(kmsg, space, map, override, &option);
+		mr = ipc_kmsg_copyin(kmsg, space, map, priority, &option);
 
 		if (mr != MACH_MSG_SUCCESS) {
 			ipc_kmsg_free(kmsg);
@@ -718,6 +724,7 @@ mach_msg_overwrite(
 
 	if (option & MACH_RCV_MSG) {
 		thread_t self = current_thread();
+		mach_vm_address_t context;
 
 		do {
 			ipc_object_t object;
@@ -749,8 +756,7 @@ mach_msg_overwrite(
 			return mr;
 		}
 
-		trailer_size = ipc_kmsg_add_trailer(kmsg, space, option, current_thread(), seqno, TRUE,
-		    kmsg->ikm_header->msgh_remote_port->ip_context);
+		trailer_size = ipc_kmsg_trailer_size(option, self);
 
 		if (rcv_size < (kmsg->ikm_header->msgh_size + trailer_size)) {
 			ipc_kmsg_copyout_dest(kmsg, space);
@@ -759,9 +765,14 @@ mach_msg_overwrite(
 			return MACH_RCV_TOO_LARGE;
 		}
 
+		/* Save destination port context for the trailer before copyout */
+		context = kmsg->ikm_header->msgh_remote_port->ip_context;
+
 		mr = ipc_kmsg_copyout(kmsg, space, map, MACH_MSG_BODY_NULL, option);
+
 		if (mr != MACH_MSG_SUCCESS) {
 			if ((mr & ~MACH_MSG_MASK) == MACH_RCV_BODY_ERROR) {
+				ipc_kmsg_add_trailer(kmsg, space, option, self, seqno, TRUE, context);
 				ipc_kmsg_put_to_kernel(msg, kmsg,
 				    kmsg->ikm_header->msgh_size + trailer_size);
 			} else {
@@ -772,7 +783,7 @@ mach_msg_overwrite(
 
 			return mr;
 		}
-
+		ipc_kmsg_add_trailer(kmsg, space, option, self, seqno, TRUE, context);
 		(void) memcpy((void *) msg, (const void *) kmsg->ikm_header,
 		    kmsg->ikm_header->msgh_size + trailer_size);
 		ipc_kmsg_free(kmsg);
@@ -1025,7 +1036,7 @@ convert_mig_object_to_port(
 	 * if this is the first send right
 	 */
 	if (!ipc_kobject_make_send_lazy_alloc_port(&mig_object->port,
-	    (ipc_kobject_t) mig_object, IKOT_MIG)) {
+	    (ipc_kobject_t) mig_object, IKOT_MIG, false, 0)) {
 		mig_object_deallocate(mig_object);
 	}
 

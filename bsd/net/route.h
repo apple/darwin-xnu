@@ -84,7 +84,7 @@ struct rt_metrics {
 	u_int32_t       rmx_rttvar;     /* estimated rtt variance */
 	u_int32_t       rmx_pksent;     /* packets sent using this route */
 	u_int32_t       rmx_state;      /* route state */
-	u_int32_t       rmx_filler[3];  /* will be used for T/TCP later */
+	u_int32_t       rmx_filler[3];  /* will be used for TCP's peer-MSS cache */
 };
 
 /*
@@ -573,9 +573,7 @@ extern unsigned int rt_verbose;
 extern struct radix_node_head *rt_tables[AF_MAX + 1];
 extern lck_mtx_t *rnh_lock;
 extern uint32_t route_genid_inet;       /* INET route generation count */
-#if INET6
 extern uint32_t route_genid_inet6;      /* INET6 route generation count */
-#endif /* INET6 */
 extern int rttrash;
 extern unsigned int rte_debug;
 
@@ -587,9 +585,9 @@ extern void routegenid_update(void);
 extern void routegenid_inet_update(void);
 extern void routegenid_inet6_update(void);
 extern void rt_ifmsg(struct ifnet *);
-extern void rt_missmsg(int, struct rt_addrinfo *, int, int);
-extern void rt_newaddrmsg(int, struct ifaddr *, int, struct rtentry *);
-extern void rt_newmaddrmsg(int, struct ifmultiaddr *);
+extern void rt_missmsg(u_char, struct rt_addrinfo *, int, int);
+extern void rt_newaddrmsg(u_char, struct ifaddr *, int, struct rtentry *);
+extern void rt_newmaddrmsg(u_char, struct ifmultiaddr *);
 extern int rt_setgate(struct rtentry *, struct sockaddr *, struct sockaddr *);
 extern void set_primary_ifscope(int, unsigned int);
 extern unsigned int get_primary_ifscope(int);

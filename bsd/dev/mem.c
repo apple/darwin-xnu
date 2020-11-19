@@ -154,7 +154,7 @@ mmioctl(dev_t dev, u_long cmd, __unused caddr_t data,
 int
 mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 {
-	unsigned int c;
+	user_size_t c;
 	int error = 0;
 
 	while (uio_resid(uio) > 0) {
@@ -230,7 +230,7 @@ mmrw(dev_t dev, struct uio *uio, enum uio_rw rw)
 				break;
 			}
 
-			c = min(uio_curriovlen(uio), PAGE_SIZE);
+			c = MIN(uio_curriovlen(uio), PAGE_SIZE);
 			error = uiomove(devzerobuf, (int)c, uio);
 			if (error) {
 				break;

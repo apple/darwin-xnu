@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -67,7 +67,7 @@
 
 #include <kern/lock_stat.h>
 #include <kern/locks.h>
-#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <kern/misc_protos.h>
 #include <kern/thread.h>
 #include <kern/processor.h>
@@ -112,12 +112,6 @@
 
 #define ANY_LOCK_DEBUG  (USLOCK_DEBUG || LOCK_DEBUG || MUTEX_DEBUG)
 
-unsigned int LcksOpts = 0;
-
-#if DEVELOPMENT || DEBUG
-unsigned int LckDisablePreemptCheck = 0;
-#endif
-
 /* Forwards */
 
 #if     USLOCK_DEBUG
@@ -154,6 +148,18 @@ typedef void    *pc_t;
 #define OBTAIN_PC(pc)
 #endif  /* lint */
 #endif  /* USLOCK_DEBUG */
+
+ZONE_VIEW_DEFINE(ZV_LCK_SPIN, "lck_spin",
+    KHEAP_ID_DEFAULT, sizeof(lck_spin_t));
+
+ZONE_VIEW_DEFINE(ZV_LCK_MTX, "lck_mtx",
+    KHEAP_ID_DEFAULT, sizeof(lck_mtx_t));
+
+ZONE_VIEW_DEFINE(ZV_LCK_MTX_EXT, "lck_mtx_ext",
+    KHEAP_ID_DEFAULT, sizeof(lck_mtx_ext_t));
+
+ZONE_VIEW_DEFINE(ZV_LCK_RW, "lck_rw",
+    KHEAP_ID_DEFAULT, sizeof(lck_rw_t));
 
 /*
  * atomic exchange API is a low level abstraction of the operations
@@ -262,12 +268,10 @@ lck_spin_alloc_init(
 	lck_grp_t       *grp,
 	lck_attr_t      *attr)
 {
-	lck_spin_t      *lck;
+	lck_spin_t *lck;
 
-	if ((lck = (lck_spin_t *)kalloc(sizeof(lck_spin_t))) != 0) {
-		lck_spin_init(lck, grp, attr);
-	}
-
+	lck = zalloc(ZV_LCK_SPIN);
+	lck_spin_init(lck, grp, attr);
 	return lck;
 }
 
@@ -280,7 +284,7 @@ lck_spin_free(
 	lck_grp_t       *grp)
 {
 	lck_spin_destroy(lck, grp);
-	kfree(lck, sizeof(lck_spin_t));
+	zfree(ZV_LCK_SPIN, lck);
 }
 
 /*
@@ -612,7 +616,10 @@ void
 (usimple_lock_try_lock_loop)(usimple_lock_t l
     LCK_GRP_ARG(lck_grp_t *grp))
 {
-	usimple_lock_try_lock_mp_signal_safe_loop_deadline(l, ULLONG_MAX, grp);
+	/* When the lock is not contended, grab the lock and go. */
+	if (!simple_lock_try(l, grp)) {
+		usimple_lock_try_lock_mp_signal_safe_loop_deadline(l, ULLONG_MAX, grp);
+	}
 }
 
 unsigned
@@ -622,8 +629,15 @@ int
     LCK_GRP_ARG(lck_grp_t *grp))
 {
 	uint64_t deadline;
-	uint64_t base_at = mach_absolute_time();
+	uint64_t base_at;
 	uint64_t duration_at;
+
+	/* Fast track for uncontended locks */
+	if (simple_lock_try(l, grp)) {
+		return 1;
+	}
+
+	base_at = mach_absolute_time();
 
 	nanoseconds_to_absolutetime(duration, &duration_at);
 	deadline = base_at + duration_at;
@@ -742,7 +756,7 @@ usld_lock_post(
 	usimple_lock_t  l,
 	pc_t            pc)
 {
-	int     mycpu;
+	unsigned int mycpu;
 	char    caller[] = "successful usimple_lock";
 
 
@@ -759,11 +773,13 @@ usld_lock_post(
 		    caller, l);
 	}
 
-	mycpu = cpu_number();
+	mycpu = (unsigned int)cpu_number();
+	assert(mycpu <= UCHAR_MAX);
+
 	l->debug.lock_thread = (void *)current_thread();
 	l->debug.state |= USLOCK_TAKEN;
 	l->debug.lock_pc = pc;
-	l->debug.lock_cpu = mycpu;
+	l->debug.lock_cpu = (unsigned char)mycpu;
 }
 
 
@@ -780,7 +796,7 @@ usld_unlock(
 	usimple_lock_t  l,
 	pc_t            pc)
 {
-	int     mycpu;
+	unsigned int mycpu;
 	char    caller[] = "usimple_unlock";
 
 
@@ -789,6 +805,7 @@ usld_unlock(
 	}
 
 	mycpu = cpu_number();
+	assert(mycpu <= UCHAR_MAX);
 
 	if (!(l->debug.state & USLOCK_TAKEN)) {
 		panic("%s:  lock 0x%p hasn't been taken",
@@ -809,7 +826,7 @@ usld_unlock(
 	l->debug.lock_thread = INVALID_PC;
 	l->debug.state &= ~USLOCK_TAKEN;
 	l->debug.unlock_pc = pc;
-	l->debug.unlock_cpu = mycpu;
+	l->debug.unlock_cpu = (unsigned char)mycpu;
 }
 
 
@@ -845,7 +862,7 @@ usld_lock_try_post(
 	usimple_lock_t  l,
 	pc_t            pc)
 {
-	int     mycpu;
+	unsigned int mycpu;
 	char    caller[] = "successful usimple_lock_try";
 
 	if (!usld_lock_common_checks(l, caller)) {
@@ -862,10 +879,12 @@ usld_lock_try_post(
 	}
 
 	mycpu = cpu_number();
+	assert(mycpu <= UCHAR_MAX);
+
 	l->debug.lock_thread = (void *) current_thread();
 	l->debug.state |= USLOCK_TAKEN;
 	l->debug.lock_pc = pc;
-	l->debug.lock_cpu = mycpu;
+	l->debug.lock_cpu = (unsigned char)mycpu;
 }
 #endif  /* USLOCK_DEBUG */
 
@@ -877,13 +896,10 @@ lck_rw_alloc_init(
 	lck_grp_t       *grp,
 	lck_attr_t      *attr)
 {
-	lck_rw_t        *lck;
+	lck_rw_t *lck;
 
-	if ((lck = (lck_rw_t *)kalloc(sizeof(lck_rw_t))) != 0) {
-		bzero(lck, sizeof(lck_rw_t));
-		lck_rw_init(lck, grp, attr);
-	}
-
+	lck = zalloc_flags(ZV_LCK_RW, Z_WAITOK | Z_ZERO);
+	lck_rw_init(lck, grp, attr);
 	return lck;
 }
 
@@ -896,7 +912,7 @@ lck_rw_free(
 	lck_grp_t       *grp)
 {
 	lck_rw_destroy(lck, grp);
-	kfree(lck, sizeof(lck_rw_t));
+	zfree(ZV_LCK_RW, lck);
 }
 
 /*
@@ -1623,6 +1639,29 @@ lck_rw_lock_shared_gen(
 #endif
 }
 
+#define LCK_RW_LOCK_EXCLUSIVE_TAS(lck) (atomic_test_and_set32(&(lck)->data, \
+	    (LCK_RW_SHARED_MASK | LCK_RW_WANT_EXCL | LCK_RW_WANT_UPGRADE | LCK_RW_INTERLOCK), \
+	    LCK_RW_WANT_EXCL, memory_order_acquire_smp, FALSE))
+
+/*
+ *	Routine:	lck_rw_lock_exclusive_check_contended
+ */
+
+bool
+lck_rw_lock_exclusive_check_contended(lck_rw_t *lock)
+{
+	bool contended = false;
+	current_thread()->rwlock_count++;
+	if (LCK_RW_LOCK_EXCLUSIVE_TAS(lock)) {
+#if     CONFIG_DTRACE
+		LOCKSTAT_RECORD(LS_LCK_RW_LOCK_EXCL_ACQUIRE, lock, DTRACE_RW_EXCL);
+#endif  /* CONFIG_DTRACE */
+	} else {
+		contended = true;
+		lck_rw_lock_exclusive_gen(lock);
+	}
+	return contended;
+}
 
 /*
  *	Routine:	lck_rw_lock_exclusive
@@ -1632,9 +1671,7 @@ void
 lck_rw_lock_exclusive(lck_rw_t *lock)
 {
 	current_thread()->rwlock_count++;
-	if (atomic_test_and_set32(&lock->data,
-	    (LCK_RW_SHARED_MASK | LCK_RW_WANT_EXCL | LCK_RW_WANT_UPGRADE | LCK_RW_INTERLOCK),
-	    LCK_RW_WANT_EXCL, memory_order_acquire_smp, FALSE)) {
+	if (LCK_RW_LOCK_EXCLUSIVE_TAS(lock)) {
 #if     CONFIG_DTRACE
 		LOCKSTAT_RECORD(LS_LCK_RW_LOCK_EXCL_ACQUIRE, lock, DTRACE_RW_EXCL);
 #endif  /* CONFIG_DTRACE */
@@ -2138,10 +2175,6 @@ kdp_lck_rw_lock_is_acquired_exclusive(lck_rw_t *lck)
  *       on acquire.
  */
 
-#ifdef  MUTEX_ZONE
-extern zone_t lck_mtx_zone;
-#endif
-
 /*
  *      Routine:        lck_mtx_alloc_init
  */
@@ -2150,16 +2183,10 @@ lck_mtx_alloc_init(
 	lck_grp_t       *grp,
 	lck_attr_t      *attr)
 {
-	lck_mtx_t       *lck;
-#ifdef  MUTEX_ZONE
-	if ((lck = (lck_mtx_t *)zalloc(lck_mtx_zone)) != 0) {
-		lck_mtx_init(lck, grp, attr);
-	}
-#else
-	if ((lck = (lck_mtx_t *)kalloc(sizeof(lck_mtx_t))) != 0) {
-		lck_mtx_init(lck, grp, attr);
-	}
-#endif
+	lck_mtx_t *lck;
+
+	lck = zalloc(ZV_LCK_MTX);
+	lck_mtx_init(lck, grp, attr);
 	return lck;
 }
 
@@ -2172,11 +2199,7 @@ lck_mtx_free(
 	lck_grp_t       *grp)
 {
 	lck_mtx_destroy(lck, grp);
-#ifdef  MUTEX_ZONE
-	zfree(lck_mtx_zone, lck);
-#else
-	kfree(lck, sizeof(lck_mtx_t));
-#endif
+	zfree(ZV_LCK_MTX, lck);
 }
 
 /*
@@ -2224,11 +2247,10 @@ lck_mtx_init(
 	}
 
 	if ((lck_attr->lck_attr_val) & LCK_ATTR_DEBUG) {
-		if ((lck_ext = (lck_mtx_ext_t *)kalloc(sizeof(lck_mtx_ext_t))) != 0) {
-			lck_mtx_ext_init(lck_ext, grp, lck_attr);
-			lck->lck_mtx_tag = LCK_MTX_TAG_INDIRECT;
-			lck->lck_mtx_ptr = lck_ext;
-		}
+		lck_ext = zalloc(ZV_LCK_MTX_EXT);
+		lck_mtx_ext_init(lck_ext, grp, lck_attr);
+		lck->lck_mtx_tag = LCK_MTX_TAG_INDIRECT;
+		lck->lck_mtx_ptr = lck_ext;
 	} else {
 		lck->lck_mtx_owner = 0;
 		lck->lck_mtx_state = 0;
@@ -2312,7 +2334,7 @@ lck_mtx_destroy(
 	lck_mtx_lock_mark_destroyed(lck, indirect);
 
 	if (indirect) {
-		kfree(lck->lck_mtx_ptr, sizeof(lck_mtx_ext_t));
+		zfree(ZV_LCK_MTX_EXT, lck->lck_mtx_ptr);
 	}
 	lck_grp_lckcnt_decr(grp, LCK_TYPE_MTX);
 	lck_grp_deallocate(grp);
@@ -2684,7 +2706,8 @@ try_again:
 			lck_grp_mtx_update_direct_wait((struct _lck_mtx_ext_*)lock);
 		}
 
-	/* just fall through case LCK_MTX_SPINWAIT_SPUN */
+		/* just fall through case LCK_MTX_SPINWAIT_SPUN */
+		OS_FALLTHROUGH;
 	case LCK_MTX_SPINWAIT_SPUN_HIGH_THR:
 	case LCK_MTX_SPINWAIT_SPUN_OWNER_NOT_CORE:
 	case LCK_MTX_SPINWAIT_SPUN_NO_WINDOW_CONTENTION:

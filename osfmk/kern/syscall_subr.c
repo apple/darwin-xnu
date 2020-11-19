@@ -334,21 +334,25 @@ thread_yield_with_continuation(
 	__builtin_unreachable();
 }
 
-
 /* This function is called after an assert_wait(), therefore it must not
  * cause another wait until after the thread_run() or thread_block()
  *
+ * Following are the calling convention for thread ref deallocation.
  *
- * When called with a NULL continuation, the thread ref is consumed
- * (thread_handoff_deallocate calling convention) else it is up to the
- * continuation to do the cleanup (thread_handoff_parameter calling convention)
- * and it instead doesn't return.
+ * 1) If no continuation is provided, then thread ref is consumed.
+ * (thread_handoff_deallocate convention).
+ *
+ * 2) If continuation is provided with option THREAD_HANDOFF_SETRUN_NEEDED
+ * then thread ref is always consumed.
+ *
+ * 3) If continuation is provided with option THREAD_HANDOFF_NONE then thread
+ * ref is not consumed and it is upto the continuation to deallocate
+ * the thread reference.
  */
 static wait_result_t
 thread_handoff_internal(thread_t thread, thread_continue_t continuation,
-    void *parameter)
+    void *parameter, thread_handoff_option_t option)
 {
-	thread_t deallocate_thread = THREAD_NULL;
 	thread_t self = current_thread();
 
 	/*
@@ -357,18 +361,19 @@ thread_handoff_internal(thread_t thread, thread_continue_t continuation,
 	if (thread != THREAD_NULL) {
 		spl_t s = splsched();
 
-		thread_t pulled_thread = thread_run_queue_remove_for_handoff(thread);
+		thread_t pulled_thread = thread_prepare_for_handoff(thread, option);
 
 		KERNEL_DEBUG_CONSTANT(MACHDBG_CODE(DBG_MACH_SCHED, MACH_SCHED_THREAD_SWITCH) | DBG_FUNC_NONE,
 		    thread_tid(thread), thread->state,
 		    pulled_thread ? TRUE : FALSE, 0, 0);
 
-		if (pulled_thread != THREAD_NULL) {
-			if (continuation == NULL) {
-				/* We can't be dropping the last ref here */
-				thread_deallocate_safe(thread);
-			}
+		/* Deallocate thread ref if needed */
+		if (continuation == NULL || (option & THREAD_HANDOFF_SETRUN_NEEDED)) {
+			/* Use the safe version of thread deallocate */
+			thread_deallocate_safe(thread);
+		}
 
+		if (pulled_thread != THREAD_NULL) {
 			int result = thread_run(self, continuation, parameter, pulled_thread);
 
 			splx(s);
@@ -376,32 +381,25 @@ thread_handoff_internal(thread_t thread, thread_continue_t continuation,
 		}
 
 		splx(s);
-
-		deallocate_thread = thread;
-		thread = THREAD_NULL;
 	}
 
 	int result = thread_block_parameter(continuation, parameter);
-	if (deallocate_thread != THREAD_NULL) {
-		thread_deallocate(deallocate_thread);
-	}
-
 	return result;
 }
 
 void
 thread_handoff_parameter(thread_t thread, thread_continue_t continuation,
-    void *parameter)
+    void *parameter, thread_handoff_option_t option)
 {
-	thread_handoff_internal(thread, continuation, parameter);
+	thread_handoff_internal(thread, continuation, parameter, option);
 	panic("NULL continuation passed to %s", __func__);
 	__builtin_unreachable();
 }
 
 wait_result_t
-thread_handoff_deallocate(thread_t thread)
+thread_handoff_deallocate(thread_t thread, thread_handoff_option_t option)
 {
-	return thread_handoff_internal(thread, NULL, NULL);
+	return thread_handoff_internal(thread, NULL, NULL, option);
 }
 
 /*

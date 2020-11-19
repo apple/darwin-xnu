@@ -49,6 +49,7 @@ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
 
 	struct work_interval_create_params create_params;
 	struct kern_work_interval_create_args create_args;
+	mach_port_name_t port_name;
 
 	switch (operation) {
 	case WORK_INTERVAL_OPERATION_CREATE:
@@ -100,6 +101,29 @@ work_interval_ctl(__unused proc_t p, struct work_interval_ctl_args *uap,
 
 		if ((error = copyout(&create_params, uap->arg, sizeof(create_params)))) {
 			kern_work_interval_destroy(current_thread(), create_args.wica_id);
+			return error;
+		}
+		break;
+	case WORK_INTERVAL_OPERATION_GET_FLAGS:
+		if (uap->arg == USER_ADDR_NULL || uap->len < sizeof(create_params)) {
+			return EINVAL;
+		}
+
+		port_name = (mach_port_name_t) uap->work_interval_id;
+		if (!MACH_PORT_VALID(port_name)) {
+			return EINVAL;
+		}
+
+		create_params = (struct work_interval_create_params) {
+			.wicp_port = port_name
+		};
+
+		kret = kern_work_interval_get_flags_from_port(port_name, &create_params.wicp_create_flags);
+		if (kret != KERN_SUCCESS) {
+			return EINVAL;
+		}
+
+		if ((error = copyout(&create_params, uap->arg, sizeof(create_params)))) {
 			return error;
 		}
 		break;

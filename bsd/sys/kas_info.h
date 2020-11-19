@@ -42,7 +42,8 @@ __BEGIN_DECLS
 
 /* The slide of the main kernel compared to its static link address */
 #define KAS_INFO_KERNEL_TEXT_SLIDE_SELECTOR     (0)     /* returns uint64_t	*/
-#define KAS_INFO_MAX_SELECTOR           (1)
+#define KAS_INFO_KERNEL_SEGMENT_VMADDR_SELECTOR    (1)
+#define KAS_INFO_MAX_SELECTOR           (2)
 
 #ifndef KERNEL
 

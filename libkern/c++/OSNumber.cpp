@@ -27,18 +27,22 @@
  */
 /* IOOffset.m created by rsulack on Wed 17-Sep-1997 */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <sys/cdefs.h>
 
 #include <libkern/c++/OSNumber.h>
 #include <libkern/c++/OSString.h>
 #include <libkern/c++/OSSerialize.h>
+#include <libkern/c++/OSSharedPtr.h>
 #include <libkern/c++/OSLib.h>
 
 #define sizeMask (~0ULL >> (64 - size))
 
 #define super OSObject
 
-OSDefineMetaClassAndStructors(OSNumber, OSObject)
+OSDefineMetaClassAndStructorsWithZone(OSNumber, OSObject,
+    (zone_create_flags_t) (ZC_CACHING | ZC_ZFREE_CLEARMEM))
 
 OSMetaClassDefineReservedUnused(OSNumber, 0);
 OSMetaClassDefineReservedUnused(OSNumber, 1);
@@ -77,28 +81,26 @@ OSNumber::free()
 	super::free();
 }
 
-OSNumber *
+OSSharedPtr<OSNumber>
 OSNumber::withNumber(unsigned long long value,
     unsigned int newNumberOfBits)
 {
-	OSNumber *me = new OSNumber;
+	OSSharedPtr<OSNumber> me = OSMakeShared<OSNumber>();
 
 	if (me && !me->init(value, newNumberOfBits)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
 }
 
-OSNumber *
+OSSharedPtr<OSNumber>
 OSNumber::withNumber(const char *value, unsigned int newNumberOfBits)
 {
-	OSNumber *me = new OSNumber;
+	OSSharedPtr<OSNumber> me = OSMakeShared<OSNumber>();
 
 	if (me && !me->init(value, newNumberOfBits)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;

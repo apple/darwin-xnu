@@ -148,6 +148,7 @@
 #define RPCMNT_NAMELEN  255
 #define RPCMNT_PATHLEN  1024
 #define RPCPROG_NFS     100003
+#define RPCPROG_STAT    100024
 
 #define RPCPROG_RQUOTA  100011
 #define RPCRQUOTA_VER           1

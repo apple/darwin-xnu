@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -151,7 +151,6 @@ typedef struct sfb {
 	struct sfbstats sfb_stats __attribute__((aligned(8)));
 } sfb_t;
 
-extern void sfb_init(void);
 extern struct sfb *sfb_alloc(struct ifnet *, u_int32_t, u_int32_t, u_int32_t);
 extern void sfb_destroy(struct sfb *);
 extern int sfb_addq(struct sfb *, class_queue_t *, pktsched_pkt_t *,

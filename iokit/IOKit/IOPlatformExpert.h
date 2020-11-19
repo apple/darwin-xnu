@@ -41,8 +41,11 @@
 #include <IOKit/IOService.h>
 #include <IOKit/IOInterrupts.h>
 #include <IOKit/IOInterruptController.h>
+#include <libkern/c++/OSPtr.h>
 
 extern "C" {
+#else
+#include <kern/clock.h>
 #endif
 
 #include <libkern/OSTypes.h>
@@ -54,8 +57,16 @@ typedef enum {
 } coprocessor_type_t;
 
 
+/*
+ * PEGetMachineName() and PEGetModelName() are inconsistent across
+ * architectures, and considered deprecated.
+ * PEGetTargetName() and PEGetProductName() instead.
+ */
 extern boolean_t PEGetMachineName( char * name, int maxLength );
 extern boolean_t PEGetModelName( char * name, int maxLength );
+
+extern boolean_t PEGetTargetName( char * name, int maxLength );
+extern boolean_t PEGetProductName( char * name, int maxLength );
 extern int PEGetPlatformEpoch( void );
 
 enum {
@@ -68,14 +79,19 @@ enum {
 	kPEPagingOff,
 	kPEPanicBegin,
 	kPEPanicEnd,
-	kPEPanicDiskShutdown,
-	kPEPanicRestartCPUNoPanicEndCallouts,
 	kPEPanicRestartCPUNoCallouts
 };
+
+/* Bitmask of details related to panic callouts */
+#define kPanicDetailsForcePowerOff 0x1
+
 extern int (*PE_halt_restart)(unsigned int type);
 extern int PEHaltRestart(unsigned int type);
 
 #ifdef XNU_KERNEL_PRIVATE
+
+extern int PEHaltRestartInternal(unsigned int type, uint32_t details);
+
 enum {
 	kIOSystemShutdownNotificationStageProcessExit = 0,
 	kIOSystemShutdownNotificationStageRootUnmount = 1,
@@ -87,6 +103,7 @@ extern uint32_t gEnforceQuiesceSafety;
 
 #ifdef KERNEL_PRIVATE
 extern boolean_t IOPMRootDomainGetWillShutdown(void);
+extern void PEInitiatePanic(void);
 #endif /* KERNEL_PRIVATE */
 
 // Save the Panic Info.  Returns the number of bytes saved.
@@ -235,12 +252,18 @@ public:
 
 	virtual bool compareNubName( const IOService * nub, OSString * name,
 	    OSString ** matched = NULL ) const;
+	bool compareNubName( const IOService * nub, OSString * name,
+	    OSSharedPtr<OSString>& matched ) const;
 	virtual IOReturn getNubResources( IOService * nub );
 
 	virtual long getBootROMType(void);
 	virtual long getChipSetType(void);
 	virtual long getMachineType(void);
 
+	/*
+	 * getModelName() and getMachineName() are deprecated for direct
+	 * use. Use getTargetName() and getProductName() instead.
+	 */
 	virtual bool getModelName( char * name, int maxLength );
 	virtual bool getMachineName( char * name, int maxLength );
 
@@ -286,14 +309,20 @@ public:
 
 	virtual void getUTCTimeOfDay( clock_sec_t * secs, clock_nsec_t * nsecs );
 	virtual void setUTCTimeOfDay( clock_sec_t secs, clock_nsec_t nsecs );
+	void publishPlatformUUIDAndSerial( void );
+	void publishNVRAM( void );
 
-	OSMetaClassDeclareReservedUsed(IOPlatformExpert, 0);
-	OSMetaClassDeclareReservedUsed(IOPlatformExpert, 1);
-	OSMetaClassDeclareReservedUsed(IOPlatformExpert, 2);
-	OSMetaClassDeclareReservedUsed(IOPlatformExpert, 3);
-	OSMetaClassDeclareReservedUsed(IOPlatformExpert, 4);
-	OSMetaClassDeclareReservedUnused(IOPlatformExpert, 5);
-	OSMetaClassDeclareReservedUnused(IOPlatformExpert, 6);
+	virtual bool getTargetName( char * name, int maxLength );
+	virtual bool getProductName( char * name, int maxLength );
+
+	OSMetaClassDeclareReservedUsedX86(IOPlatformExpert, 0);
+	OSMetaClassDeclareReservedUsedX86(IOPlatformExpert, 1);
+	OSMetaClassDeclareReservedUsedX86(IOPlatformExpert, 2);
+	OSMetaClassDeclareReservedUsedX86(IOPlatformExpert, 3);
+	OSMetaClassDeclareReservedUsedX86(IOPlatformExpert, 4);
+	OSMetaClassDeclareReservedUsedX86(IOPlatformExpert, 5);
+	OSMetaClassDeclareReservedUsedX86(IOPlatformExpert, 6);
+
 	OSMetaClassDeclareReservedUnused(IOPlatformExpert, 7);
 	OSMetaClassDeclareReservedUnused(IOPlatformExpert, 8);
 	OSMetaClassDeclareReservedUnused(IOPlatformExpert, 9);
@@ -331,8 +360,15 @@ public:
 
 	virtual IOReturn getNubResources( IOService * nub ) APPLE_KEXT_OVERRIDE;
 
+	/*
+	 * getModelName() and getMachineName() are deprecated. Use
+	 * getTargetName() and getProductName() instead.
+	 */
 	virtual bool getModelName( char * name, int maxLength ) APPLE_KEXT_OVERRIDE;
 	virtual bool getMachineName( char * name, int maxLength ) APPLE_KEXT_OVERRIDE;
+
+	virtual bool getTargetName( char * name, int maxLength ) APPLE_KEXT_OVERRIDE;
+	virtual bool getProductName( char * name, int maxLength ) APPLE_KEXT_OVERRIDE;
 
 	virtual void registerNVRAMController( IONVRAMController * nvram ) APPLE_KEXT_OVERRIDE;
 
@@ -347,6 +383,10 @@ public:
 	virtual IOReturn readNVRAMProperty(
 		IORegistryEntry * entry,
 		const OSSymbol ** name, OSData ** value );
+
+	IOReturn readNVRAMProperty(
+		IORegistryEntry * entry,
+		OSSharedPtr<const OSSymbol>& name, OSSharedPtr<OSData>& value );
 
 	virtual IOReturn writeNVRAMProperty(
 		IORegistryEntry * entry,
@@ -393,8 +433,7 @@ private:
 	ExpansionData *ioped_reserved __unused;
 
 public:
-	virtual bool initWithArgs( void * p1, void * p2,
-	    void * p3, void *p4 );
+	virtual bool init(void *dtRoot);
 	virtual bool compareName( OSString * name, OSString ** matched = NULL ) const APPLE_KEXT_OVERRIDE;
 
 	virtual IOWorkLoop *getWorkLoop() const APPLE_KEXT_OVERRIDE;
@@ -406,6 +445,10 @@ public:
 	    UInt32 type, OSDictionary * properties,
 	    IOUserClient ** handler) APPLE_KEXT_OVERRIDE;
 
+	bool startIOServiceMatching(void);
+	void createNVRAM(void);
+	void generatePlatformUUID(void);
+	void configureDefaults(void);
 
 	OSMetaClassDeclareReservedUnused(IOPlatformExpertDevice, 0);
 	OSMetaClassDeclareReservedUnused(IOPlatformExpertDevice, 1);

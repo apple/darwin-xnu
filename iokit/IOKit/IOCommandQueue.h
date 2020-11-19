@@ -40,6 +40,7 @@
 #define _IOKIT_IOCOMMANDQUEUE_H
 
 #include <IOKit/IOEventSource.h>
+#include <libkern/c++/OSPtr.h>
 
 class IOCommandQueue;
 
@@ -64,7 +65,7 @@ protected:
 	virtual bool checkForWork() APPLE_KEXT_OVERRIDE;
 
 public:
-	static IOCommandQueue *commandQueue(OSObject *inOwner,
+	static OSPtr<IOCommandQueue> commandQueue(OSObject *inOwner,
 	    IOCommandQueueAction inAction = NULL,
 	    int inSize = kIOCQDefaultSize)
 	APPLE_KEXT_DEPRECATED;

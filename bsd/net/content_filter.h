@@ -530,9 +530,10 @@ extern int cfil_sock_data_space(struct sockbuf *sb);
 extern void cfil_sock_buf_update(struct sockbuf *sb);
 
 extern cfil_sock_id_t cfil_sock_id_from_socket(struct socket *so);
+extern cfil_sock_id_t cfil_sock_id_from_datagram_socket(struct socket *so, struct sockaddr *local, struct sockaddr *remote);
 
 extern struct m_tag *cfil_dgram_get_socket_state(struct mbuf *m, uint32_t *state_change_cnt,
-    short *options, struct sockaddr **faddr, int *inp_flags);
+    uint32_t *options, struct sockaddr **faddr, int *inp_flags);
 extern boolean_t cfil_dgram_peek_socket_state(struct mbuf *m, int *inp_flags);
 
 #endif /* BSD_KERNEL_PRIVATE */

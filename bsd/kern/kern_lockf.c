@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2019-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -99,12 +99,11 @@ static int      lockf_debug = 0;        /* was 2, could be 3 ;-) */
 SYSCTL_INT(_debug, OID_AUTO, lockf_debug, CTLFLAG_RW | CTLFLAG_LOCKED, &lockf_debug, 0, "");
 
 /*
- * If there is no mask bit selector, or there is one, and the selector is
- * set, then output the debugging diagnostic.
+ * If the selector is set, then output the debugging diagnostic.
  */
 #define LOCKF_DEBUG(mask, ...)                                  \
 	do {                                                    \
-	        if (!(mask) || ((mask) & lockf_debug)) {        \
+	        if ((mask) & lockf_debug) {        \
 	                printf("%s>", __FUNCTION__);            \
 	                printf(__VA_ARGS__);                    \
 	        }                                               \
@@ -298,7 +297,7 @@ lf_advlock(struct vnop_advlock_args *ap)
 	lock->lf_head = head;
 	lock->lf_next = (struct lockf *)0;
 	TAILQ_INIT(&lock->lf_blkhd);
-	lock->lf_flags = ap->a_flags;
+	lock->lf_flags = (short)ap->a_flags;
 #if IMPORTANCE_INHERITANCE
 	lock->lf_boosted = LF_NOT_BOOSTED;
 #endif

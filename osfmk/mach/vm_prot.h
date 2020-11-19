@@ -157,4 +157,12 @@ typedef int             vm_prot_t;
 #define VM_PROT_STRIP_READ              ((vm_prot_t) 0x80)
 #define VM_PROT_EXECUTE_ONLY    (VM_PROT_EXECUTE|VM_PROT_STRIP_READ)
 
+#ifdef PRIVATE
+/*
+ * When using VM_PROT_COPY, fail instead of copying an executable mapping,
+ * since that could cause code-signing violations.
+ */
+#define VM_PROT_COPY_FAIL_IF_EXECUTABLE ((vm_prot_t)0x100)
+#endif /* PRIVATE */
+
 #endif  /* _MACH_VM_PROT_H_ */

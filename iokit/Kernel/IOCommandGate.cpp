@@ -25,7 +25,11 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <libkern/OSDebug.h>
+#include <libkern/c++/OSSharedPtr.h>
 
 #include <IOKit/IOCommandGate.h>
 #include <IOKit/IOWorkLoop.h>
@@ -35,11 +39,11 @@
 
 #define super IOEventSource
 
-OSDefineMetaClassAndStructors(IOCommandGate, IOEventSource)
+OSDefineMetaClassAndStructorsWithZone(IOCommandGate, IOEventSource, ZC_NONE)
 #if __LP64__
 OSMetaClassDefineReservedUnused(IOCommandGate, 0);
 #else
-OSMetaClassDefineReservedUsed(IOCommandGate, 0);
+OSMetaClassDefineReservedUsedX86(IOCommandGate, 0);
 #endif
 OSMetaClassDefineReservedUnused(IOCommandGate, 1);
 OSMetaClassDefineReservedUnused(IOCommandGate, 2);
@@ -79,14 +83,13 @@ IOCommandGate::init(OSObject *inOwner, Action inAction)
 	return res;
 }
 
-IOCommandGate *
+OSSharedPtr<IOCommandGate>
 IOCommandGate::commandGate(OSObject *inOwner, Action inAction)
 {
-	IOCommandGate *me = new IOCommandGate;
+	OSSharedPtr<IOCommandGate> me = OSMakeShared<IOCommandGate>();
 
 	if (me && !me->init(inOwner, inAction)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;

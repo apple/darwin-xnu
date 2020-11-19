@@ -75,11 +75,6 @@ __private_extern__
 kern_return_t           memory_manager_default_check(void);
 
 __private_extern__
-void                    memory_manager_default_init(void);
-
-__private_extern__
-void                    memory_object_control_bootstrap(void);
-__private_extern__
 memory_object_control_t memory_object_control_allocate(
 	vm_object_t             object);
 

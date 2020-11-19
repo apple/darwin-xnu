@@ -28,6 +28,7 @@
 
 #include <IOKit/IODeviceTreeSupport.h>
 #include <libkern/c++/OSContainers.h>
+#include <libkern/c++/OSSharedPtr.h>
 #include <IOKit/IODeviceMemory.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOCatalogue.h>
@@ -66,6 +67,7 @@ const OSSymbol *        gIODTUnitKey;
 const OSSymbol *        gIODTCompatibleKey;
 const OSSymbol *        gIODTTypeKey;
 const OSSymbol *        gIODTModelKey;
+const OSSymbol *        gIODTBridgeModelKey;
 const OSSymbol *        gIODTTargetTypeKey;
 
 const OSSymbol *        gIODTSizeCellKey;
@@ -90,6 +92,11 @@ static void AddPHandle( IORegistryEntry * regEntry );
 static void FreePhysicalMemory( vm_offset_t * range );
 static bool IODTMapInterruptsSharing( IORegistryEntry * regEntry, OSDictionary * allInts );
 
+// FIXME: Implementation of this function is hidden from the static analyzer.
+// The analyzer doesn't know that the registry holds retains, and gets confused
+// about releases after calls to 'attachToParent'.
+// Feel free to remove the #ifndef and address the warning!
+#ifndef __clang_analyzer__
 IORegistryEntry *
 IODeviceTreeAlloc( void * dtTop )
 {
@@ -105,6 +112,7 @@ IODeviceTreeAlloc( void * dtTop )
 	vm_offset_t *               dtMap;
 	unsigned int                propSize;
 	bool                        intMap;
+	bool                        foundDTNode;
 	bool                        freeDT;
 
 	gIODTPlane = IORegistryEntry::makePlane( kIODeviceTreePlane );
@@ -114,6 +122,7 @@ IODeviceTreeAlloc( void * dtTop )
 	gIODTCompatibleKey  = OSSymbol::withCStringNoCopy( "compatible" );
 	gIODTTypeKey                = OSSymbol::withCStringNoCopy( "device_type" );
 	gIODTModelKey               = OSSymbol::withCStringNoCopy( "model" );
+	gIODTBridgeModelKey         = OSSymbol::withCStringNoCopy( "bridge-model" );
 	gIODTTargetTypeKey          = OSSymbol::withCStringNoCopy( "target-type" );
 	gIODTSizeCellKey    = OSSymbol::withCStringNoCopy( "#size-cells" );
 	gIODTAddressCellKey = OSSymbol::withCStringNoCopy( "#address-cells" );
@@ -154,28 +163,30 @@ IODeviceTreeAlloc( void * dtTop )
 	    && gIODTInterruptCellKey
 	    );
 
-	freeDT = (kSuccess == DTLookupEntry( NULL, "/chosen/memory-map", &mapEntry ))
-	    && (kSuccess == DTGetProperty( mapEntry,
-	    "DeviceTree", (void **) &dtMap, &propSize ))
+	foundDTNode = (kSuccess == SecureDTLookupEntry( NULL, "/chosen/memory-map", &mapEntry ))
+	    && (kSuccess == SecureDTGetProperty( mapEntry,
+	    "DeviceTree", (void const **) &dtMap, &propSize ))
 	    && ((2 * sizeof(uint32_t)) == propSize);
+
+	freeDT = foundDTNode && !SecureDTIsLockedDown();
 
 	parent = MakeReferenceTable((DTEntry)dtTop, freeDT );
 
 	stack = OSArray::withObjects((const OSObject **) &parent, 1, 10 );
-	DTInitEntryIterator((DTEntry)dtTop, &iter );
+	SecureDTInitEntryIterator((DTEntry)dtTop, &iter );
 
 	do {
 		parent = (IORegistryEntry *)stack->getObject( stack->getCount() - 1);
 		//parent->release();
 		stack->removeObject( stack->getCount() - 1);
 
-		while (kSuccess == DTIterateEntries( &iter, &dtChild)) {
+		while (kSuccess == SecureDTIterateEntries( &iter, &dtChild)) {
 			child = MakeReferenceTable( dtChild, freeDT );
 			child->attachToParent( parent, gIODTPlane);
 
 			AddPHandle( child );
 
-			if (kSuccess == DTEnterEntry( &iter, dtChild)) {
+			if (kSuccess == SecureDTEnterEntry( &iter, dtChild)) {
 				stack->setObject( parent);
 				parent = child;
 			}
@@ -183,10 +194,10 @@ IODeviceTreeAlloc( void * dtTop )
 			child->release();
 		}
 	} while (stack->getCount()
-	    && (kSuccess == DTExitEntry( &iter, &dtChild)));
+	    && (kSuccess == SecureDTExitEntry( &iter, &dtChild)));
 
 	stack->release();
-	assert(kSuccess != DTExitEntry(&iter, &dtChild));
+	assert(kSuccess != SecureDTExitEntry(&iter, &dtChild));
 
 	// parent is now root of the created tree
 
@@ -202,7 +213,7 @@ IODeviceTreeAlloc( void * dtTop )
 
 	if (freeDT) {
 		// free original device tree
-		DTInit(NULL);
+		SecureDTInit(NULL, 0);
 		IODTFreeLoaderInfo( "DeviceTree",
 		    (void *)dtMap[0], (int) round_page(dtMap[1]));
 	}
@@ -263,6 +274,7 @@ IODeviceTreeAlloc( void * dtTop )
 
 	return parent;
 }
+#endif
 
 int
 IODTGetLoaderInfo( const char *key, void **infoAddr, int *infoSize )
@@ -370,9 +382,9 @@ MakeReferenceTable( DTEntry dtEntry, bool copy )
 	OSData                              *data;
 	const OSSymbol              *sym;
 	OpaqueDTPropertyIterator    dtIter;
-	void                                *prop;
+	void const                  *prop;
 	unsigned int                propSize;
-	char                                *name;
+	char const                                      *name;
 	char                                location[32];
 	bool                                noLocation = true;
 	bool                                kernelOnly;
@@ -385,12 +397,12 @@ MakeReferenceTable( DTEntry dtEntry, bool copy )
 	}
 
 	if (regEntry &&
-	    (kSuccess == DTInitPropertyIterator( dtEntry, &dtIter))) {
-		kernelOnly = (kSuccess == DTGetProperty(dtEntry, "kernel-only", &prop, &propSize));
+	    (kSuccess == SecureDTInitPropertyIterator( dtEntry, &dtIter))) {
+		kernelOnly = (kSuccess == SecureDTGetProperty(dtEntry, "kernel-only", &prop, &propSize));
 		propTable = regEntry->getPropertyTable();
 
-		while (kSuccess == DTIterateProperties( &dtIter, &name)) {
-			if (kSuccess != DTGetProperty( dtEntry, name, &prop, &propSize )) {
+		while (kSuccess == SecureDTIterateProperties( &dtIter, &name)) {
+			if (kSuccess != SecureDTGetProperty( dtEntry, name, &prop, &propSize )) {
 				continue;
 			}
 
@@ -399,7 +411,10 @@ MakeReferenceTable( DTEntry dtEntry, bool copy )
 				data = OSData::withBytes(prop, propSize);
 			} else {
 				nameKey = OSSymbol::withCStringNoCopy(name);
-				data = OSData::withBytesNoCopy(prop, propSize);
+				/* There is no OSDataConst or other way to indicate
+				 * that the OSData is actually immutable. But CTRR
+				 * will catch any write attempts. */
+				data = OSData::withBytesNoCopy((void**)(uintptr_t)prop, propSize);
 			}
 			assert( nameKey && data );
 
@@ -885,7 +900,7 @@ CompareKey( OSString * key,
 
 		do {
 			// for each name in the property
-			nlen = strnlen(names, lastName - names);
+			nlen = (unsigned int) strnlen(names, lastName - names);
 			if (wild) {
 				matched = ((nlen >= (keyLen - 1)) && (0 == strncmp(ckey, names, keyLen - 1)));
 			} else {
@@ -924,6 +939,16 @@ IODTCompareNubName( const IORegistryEntry * regEntry,
 	    || CompareKey( name, regEntry, gIODTModelKey, matchingName);
 
 	return matched;
+}
+
+bool
+IODTCompareNubName( const IORegistryEntry * regEntry,
+    OSString * name, OSSharedPtr<OSString>& matchingName )
+{
+	OSString* matchingNameRaw = NULL;
+	bool result = IODTCompareNubName(regEntry, name, &matchingNameRaw);
+	matchingName.reset(matchingNameRaw, OSNoRetain);
+	return result;
 }
 
 bool
@@ -1354,7 +1379,7 @@ IODTFindSlotName( IORegistryEntry * regEntry, UInt32 deviceNumber )
 	OSData                              *ret = NULL;
 	UInt32                              *bits;
 	UInt32                              i;
-	size_t              nlen;
+	UInt32              nlen;
 	char                                *names;
 	char                                *lastName;
 	UInt32                              mask;
@@ -1389,7 +1414,7 @@ IODTFindSlotName( IORegistryEntry * regEntry, UInt32 deviceNumber )
 
 		for (i = 0; (i <= deviceNumber) && (names < lastName); i++) {
 			if (mask & (1 << i)) {
-				nlen = 1 + strnlen(names, lastName - names);
+				nlen = 1 + ((unsigned int) strnlen(names, lastName - names));
 				if (i == deviceNumber) {
 					data = OSData::withBytesNoCopy(names, nlen);
 					if (data) {

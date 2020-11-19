@@ -83,10 +83,11 @@ mac_task_check_expose_task(struct task *task)
 	if (p == NULL) {
 		return ESRCH;
 	}
+	struct proc_ident pident = proc_ident(p);
 
 	struct ucred *cred = kauth_cred_get();
-	MAC_CHECK(proc_check_expose_task, cred, p);
 	proc_rele(p);
+	MAC_CHECK(proc_check_expose_task, cred, &pident);
 	return error;
 }
 

@@ -116,7 +116,7 @@ mac_file_check_fcntl(struct ucred *cred, struct fileglob *fg, int cmd,
 }
 
 int
-mac_file_check_ioctl(struct ucred *cred, struct fileglob *fg, u_int cmd)
+mac_file_check_ioctl(struct ucred *cred, struct fileglob *fg, u_long cmd)
 {
 	int error;
 
@@ -162,7 +162,7 @@ mac_file_check_change_offset(struct ucred *cred, struct fileglob *fg)
 
 int
 mac_file_check_get(struct ucred *cred, struct fileglob *fg, char *elements,
-    int len)
+    size_t len)
 {
 	int error;
 
@@ -172,7 +172,7 @@ mac_file_check_get(struct ucred *cred, struct fileglob *fg, char *elements,
 
 int
 mac_file_check_set(struct ucred *cred, struct fileglob *fg, char *buf,
-    int buflen)
+    size_t buflen)
 {
 	int error;
 
@@ -236,6 +236,12 @@ mac_file_check_mmap_downgrade(struct ucred *cred, struct fileglob *fg,
 	    &result);
 
 	*prot = result;
+}
+
+void
+mac_file_notify_close(struct ucred *cred, struct fileglob *fg)
+{
+	MAC_PERFORM(file_notify_close, cred, fg, fg->fg_label, ((fg->fg_flag & FWASWRITTEN) ? 1 : 0));
 }
 
 

@@ -112,19 +112,9 @@
 #ifndef _IPC_IPC_INIT_H_
 #define _IPC_IPC_INIT_H_
 
-extern int ipc_space_max;
-extern int ipc_port_max;
-extern int ipc_pset_max;
-
 /*
  * Exported interfaces
  */
-
-/* IPC initialization needed before creation of kernel task */
-extern void ipc_bootstrap(void);
-
-/* Remaining IPC initialization (not thread based) */
-extern void ipc_init(void);
 
 /* IPC initialization dependent on thread call support */
 extern void ipc_thread_call_init(void);

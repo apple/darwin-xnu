@@ -49,10 +49,14 @@ extern "C" {
 
 #ifndef NULL
 #if defined (__cplusplus)
-#if __cplusplus >= 201103L
+#ifdef XNU_KERNEL_PRIVATE
+#define NULL nullptr
+#else
+#if __cplusplus >= 201103L && (defined(__arm__) || defined(__arm64__))
 #define NULL nullptr
 #else
 #define NULL    0
+#endif
 #endif
 #else
 #define NULL ((void *)0)
@@ -91,8 +95,10 @@ typedef vm_address_t            IOVirtualAddress;
 
 #if !defined(__arm__) && !defined(__i386__) && !(defined(__x86_64__) && !defined(KERNEL)) && !(defined(__arm64__) && !defined(__LP64__))
 typedef IOByteCount64           IOByteCount;
+#define PRIIOByteCount                  PRIu64
 #else
 typedef IOByteCount32           IOByteCount;
+#define PRIIOByteCount                  PRIu32
 #endif
 
 typedef IOVirtualAddress    IOLogicalAddress;
@@ -291,5 +297,15 @@ typedef IOPhysicalLength64       IOPhysicalLength;
 typedef uint64_t       IOVirtualAddress;
 
 #endif /* PLATFORM_DriverKit */
+
+enum {
+	kIOMaxBusStall40usec = 40000,
+	kIOMaxBusStall30usec = 30000,
+	kIOMaxBusStall25usec = 25000,
+	kIOMaxBusStall20usec = 20000,
+	kIOMaxBusStall10usec = 10000,
+	kIOMaxBusStall5usec  = 5000,
+	kIOMaxBusStallNone   = 0,
+};
 
 #endif /* ! __IOKIT_IOTYPES_H */

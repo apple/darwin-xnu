@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -166,12 +166,16 @@
 #include <mach/mach_voucher_server.h>
 #include <kern/policy_internal.h>
 
-static struct zone                      *thread_zone;
-static lck_grp_attr_t           thread_lck_grp_attr;
-lck_attr_t                                      thread_lck_attr;
-lck_grp_t                                       thread_lck_grp;
+#if CONFIG_MACF
+#include <security/mac_mach_internal.h>
+#endif
 
-struct zone                                     *thread_qos_override_zone;
+LCK_GRP_DECLARE(thread_lck_grp, "thread");
+
+ZONE_DECLARE(thread_zone, "threads", sizeof(struct thread), ZC_ZFREE_CLEARMEM);
+
+ZONE_DECLARE(thread_qos_override_zone, "thread qos override",
+    sizeof(struct thread_qos_override), ZC_NOENCRYPT);
 
 static struct mpsc_daemon_queue thread_stack_queue;
 static struct mpsc_daemon_queue thread_terminate_queue;
@@ -188,7 +192,25 @@ struct thread_exception_elt {
 	thread_t                exception_thread;
 };
 
-static struct thread    thread_template, init_thread;
+static SECURITY_READ_ONLY_LATE(struct thread) thread_template = {
+#if MACH_ASSERT
+	.thread_magic               = THREAD_MAGIC,
+#endif /* MACH_ASSERT */
+	.wait_result                = THREAD_WAITING,
+	.options                    = THREAD_ABORTSAFE,
+	.state                      = TH_WAIT | TH_UNINT,
+	.th_sched_bucket            = TH_BUCKET_RUN,
+	.base_pri                   = BASEPRI_DEFAULT,
+	.realtime.deadline          = UINT64_MAX,
+	.last_made_runnable_time    = THREAD_NOT_RUNNABLE,
+	.last_basepri_change_time   = THREAD_NOT_RUNNABLE,
+#if defined(CONFIG_SCHED_TIMESHARE_CORE)
+	.pri_shift                  = INT8_MAX,
+#endif
+	/* timers are initialized in thread_bootstrap */
+};
+
+static struct thread init_thread;
 static void thread_deallocate_enqueue(thread_t thread);
 static void thread_deallocate_complete(thread_t thread);
 
@@ -233,7 +255,9 @@ extern int exc_resource_threads_enabled;
  */
 #define CPUMON_USTACKSHOTS_TRIGGER_DEFAULT_PCT 70
 
-int cpumon_ustackshots_trigger_pct; /* Percentage. Level at which we start gathering telemetry. */
+/* Percentage. Level at which we start gathering telemetry. */
+static TUNABLE(uint8_t, cpumon_ustackshots_trigger_pct,
+    "cpumon_ustackshots_trigger_pct", CPUMON_USTACKSHOTS_TRIGGER_DEFAULT_PCT);
 void __attribute__((noinline)) SENDING_NOTIFICATION__THIS_THREAD_IS_CONSUMING_TOO_MUCH_CPU(void);
 #if DEVELOPMENT || DEBUG
 void __attribute__((noinline)) SENDING_NOTIFICATION__TASK_HAS_TOO_MANY_THREADS(task_t, int);
@@ -246,177 +270,42 @@ void __attribute__((noinline)) SENDING_NOTIFICATION__TASK_HAS_TOO_MANY_THREADS(t
 
 os_refgrp_decl(static, thread_refgrp, "thread", NULL);
 
+static inline void
+init_thread_from_template(thread_t thread)
+{
+	/*
+	 * In general, struct thread isn't trivially-copyable, since it may
+	 * contain pointers to thread-specific state.  This may be enforced at
+	 * compile time on architectures that store authed + diversified
+	 * pointers in machine_thread.
+	 *
+	 * In this specific case, where we're initializing a new thread from a
+	 * thread_template, we know all diversified pointers are NULL; these are
+	 * safe to bitwise copy.
+	 */
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wnontrivial-memaccess"
+	memcpy(thread, &thread_template, sizeof(*thread));
+#pragma clang diagnostic pop
+}
+
 thread_t
 thread_bootstrap(void)
 {
 	/*
 	 *	Fill in a template thread for fast initialization.
 	 */
-
-#if MACH_ASSERT
-	thread_template.thread_magic = THREAD_MAGIC;
-#endif /* MACH_ASSERT */
-
-	thread_template.runq = PROCESSOR_NULL;
-
-	thread_template.reason = AST_NONE;
-	thread_template.at_safe_point = FALSE;
-	thread_template.wait_event = NO_EVENT64;
-	thread_template.waitq = NULL;
-	thread_template.wait_result = THREAD_WAITING;
-	thread_template.options = THREAD_ABORTSAFE;
-	thread_template.state = TH_WAIT | TH_UNINT;
-	thread_template.wake_active = FALSE;
-	thread_template.continuation = THREAD_CONTINUE_NULL;
-	thread_template.parameter = NULL;
-
-	thread_template.importance = 0;
-	thread_template.sched_mode = TH_MODE_NONE;
-	thread_template.sched_flags = 0;
-	thread_template.saved_mode = TH_MODE_NONE;
-	thread_template.safe_release = 0;
-	thread_template.th_sched_bucket = TH_BUCKET_RUN;
-
-	thread_template.sfi_class = SFI_CLASS_UNSPECIFIED;
-	thread_template.sfi_wait_class = SFI_CLASS_UNSPECIFIED;
-
-	thread_template.active = 0;
-	thread_template.started = 0;
-	thread_template.static_param = 0;
-	thread_template.policy_reset = 0;
-
-	thread_template.base_pri = BASEPRI_DEFAULT;
-	thread_template.sched_pri = 0;
-	thread_template.max_priority = 0;
-	thread_template.task_priority = 0;
-	thread_template.rwlock_count = 0;
-	thread_template.waiting_for_mutex = NULL;
-
-
-	thread_template.realtime.deadline = UINT64_MAX;
-
-	thread_template.quantum_remaining = 0;
-	thread_template.last_run_time = 0;
-	thread_template.last_made_runnable_time = THREAD_NOT_RUNNABLE;
-	thread_template.last_basepri_change_time = THREAD_NOT_RUNNABLE;
-	thread_template.same_pri_latency = 0;
-
-	thread_template.computation_metered = 0;
-	thread_template.computation_epoch = 0;
-
-#if defined(CONFIG_SCHED_TIMESHARE_CORE)
-	thread_template.sched_stamp = 0;
-	thread_template.pri_shift = INT8_MAX;
-	thread_template.sched_usage = 0;
-	thread_template.cpu_usage = thread_template.cpu_delta = 0;
-#endif
-	thread_template.c_switch = thread_template.p_switch = thread_template.ps_switch = 0;
-
-#if MONOTONIC
-	memset(&thread_template.t_monotonic, 0,
-	    sizeof(thread_template.t_monotonic));
-#endif /* MONOTONIC */
-
-	thread_template.bound_processor = PROCESSOR_NULL;
-	thread_template.last_processor = PROCESSOR_NULL;
-
-	thread_template.sched_call = NULL;
-
 	timer_init(&thread_template.user_timer);
 	timer_init(&thread_template.system_timer);
 	timer_init(&thread_template.ptime);
 	timer_init(&thread_template.runnable_timer);
-	thread_template.user_timer_save = 0;
-	thread_template.system_timer_save = 0;
-	thread_template.vtimer_user_save = 0;
-	thread_template.vtimer_prof_save = 0;
-	thread_template.vtimer_rlim_save = 0;
-	thread_template.vtimer_qos_save  = 0;
 
-#if CONFIG_SCHED_SFI
-	thread_template.wait_sfi_begin_time = 0;
-#endif
-
-	thread_template.wait_timer_is_set = FALSE;
-	thread_template.wait_timer_active = 0;
-
-	thread_template.depress_timer_active = 0;
-
-	thread_template.recover = (vm_offset_t)NULL;
-
-	thread_template.map = VM_MAP_NULL;
-#if DEVELOPMENT || DEBUG
-	thread_template.pmap_footprint_suspended = FALSE;
-#endif /* DEVELOPMENT || DEBUG */
-
-#if CONFIG_DTRACE
-	thread_template.t_dtrace_predcache = 0;
-	thread_template.t_dtrace_vtime = 0;
-	thread_template.t_dtrace_tracing = 0;
-#endif /* CONFIG_DTRACE */
-
-#if KPERF
-	thread_template.kperf_ast = 0;
-	thread_template.kperf_pet_gen = 0;
-	thread_template.kperf_c_switch = 0;
-	thread_template.kperf_pet_cnt = 0;
-#endif
-
-#if KPC
-	thread_template.kpc_buf = NULL;
-#endif
-
-#if HYPERVISOR
-	thread_template.hv_thread_target = NULL;
-#endif /* HYPERVISOR */
-
-#if (DEVELOPMENT || DEBUG)
-	thread_template.t_page_creation_throttled_hard = 0;
-	thread_template.t_page_creation_throttled_soft = 0;
-#endif /* DEVELOPMENT || DEBUG */
-	thread_template.t_page_creation_throttled = 0;
-	thread_template.t_page_creation_count = 0;
-	thread_template.t_page_creation_time = 0;
-
-	thread_template.affinity_set = NULL;
-
-	thread_template.syscalls_unix = 0;
-	thread_template.syscalls_mach = 0;
-
-	thread_template.t_ledger = LEDGER_NULL;
-	thread_template.t_threadledger = LEDGER_NULL;
-	thread_template.t_bankledger = LEDGER_NULL;
-	thread_template.t_deduct_bank_ledger_time = 0;
-
-	thread_template.requested_policy = (struct thread_requested_policy) {};
-	thread_template.effective_policy = (struct thread_effective_policy) {};
-
-	bzero(&thread_template.overrides, sizeof(thread_template.overrides));
-	thread_template.kevent_overrides = 0;
-
-	thread_template.iotier_override = THROTTLE_LEVEL_NONE;
-	thread_template.thread_io_stats = NULL;
-#if CONFIG_EMBEDDED
-	thread_template.taskwatch = NULL;
-#endif /* CONFIG_EMBEDDED */
-	thread_template.thread_callout_interrupt_wakeups = thread_template.thread_callout_platform_idle_wakeups = 0;
-
-	thread_template.thread_timer_wakeups_bin_1 = thread_template.thread_timer_wakeups_bin_2 = 0;
-	thread_template.callout_woken_from_icontext = thread_template.callout_woken_from_platform_idle = 0;
-	thread_template.guard_exc_fatal = 0;
-
-	thread_template.thread_tag = 0;
-
-	thread_template.ith_voucher_name = MACH_PORT_NULL;
-	thread_template.ith_voucher = IPC_VOUCHER_NULL;
-
-	thread_template.th_work_interval = NULL;
-
-	thread_template.decompressions = 0;
-	init_thread = thread_template;
-
+	init_thread_from_template(&init_thread);
 	/* fiddle with init thread to skip asserts in set_sched_pri */
 	init_thread.sched_pri = MAXPRI_KERNEL;
+#if DEBUG || DEVELOPMENT
+	queue_init(&init_thread.t_temp_alloc_list);
+#endif /* DEBUG || DEVELOPMENT */
 
 	return &init_thread;
 }
@@ -427,31 +316,9 @@ thread_machine_init_template(void)
 	machine_thread_template_init(&thread_template);
 }
 
-extern boolean_t allow_qos_policy_set;
-
 void
 thread_init(void)
 {
-	thread_zone = zinit(
-		sizeof(struct thread),
-		thread_max * sizeof(struct thread),
-		THREAD_CHUNK * sizeof(struct thread),
-		"threads");
-
-	thread_qos_override_zone = zinit(
-		sizeof(struct thread_qos_override),
-		4 * thread_max * sizeof(struct thread_qos_override),
-		PAGE_SIZE,
-		"thread qos override");
-	zone_change(thread_qos_override_zone, Z_EXPAND, TRUE);
-	zone_change(thread_qos_override_zone, Z_COLLECT, TRUE);
-	zone_change(thread_qos_override_zone, Z_CALLERACCT, FALSE);
-	zone_change(thread_qos_override_zone, Z_NOENCRYPT, TRUE);
-
-	lck_grp_attr_setdefault(&thread_lck_grp_attr);
-	lck_grp_init(&thread_lck_grp, "thread", &thread_lck_grp_attr);
-	lck_attr_setdefault(&thread_lck_attr);
-
 	stack_init();
 
 	thread_policy_init();
@@ -461,13 +328,6 @@ thread_init(void)
 	 *	per-thread structures necessary.
 	 */
 	machine_thread_init();
-
-	if (!PE_parse_boot_argn("cpumon_ustackshots_trigger_pct", &cpumon_ustackshots_trigger_pct,
-	    sizeof(cpumon_ustackshots_trigger_pct))) {
-		cpumon_ustackshots_trigger_pct = CPUMON_USTACKSHOTS_TRIGGER_DEFAULT_PCT;
-	}
-
-	PE_parse_boot_argn("-qos-policy-allow", &allow_qos_policy_set, sizeof(allow_qos_policy_set));
 
 	init_thread_ledgers();
 }
@@ -515,6 +375,10 @@ thread_terminate_self(void)
 	task_t                  task;
 	int threadcnt;
 
+	if (thread->t_temp_alloc_count) {
+		kheap_temp_leak_panic(thread);
+	}
+
 	pal_thread_terminate_self(thread);
 
 	DTRACE_PROC(lwp__exit);
@@ -535,9 +399,9 @@ thread_terminate_self(void)
 	thread_unlock(thread);
 	splx(s);
 
-#if CONFIG_EMBEDDED
+#if CONFIG_TASKWATCH
 	thead_remove_taskwatch(thread);
-#endif /* CONFIG_EMBEDDED */
+#endif /* CONFIG_TASKWATCH */
 
 	work_interval_thread_terminate(thread);
 
@@ -546,6 +410,8 @@ thread_terminate_self(void)
 	thread_policy_reset(thread);
 
 	thread_mtx_unlock(thread);
+
+	assert(thread->th_work_interval == NULL);
 
 	bank_swap_thread_bank_ledger(thread, NULL);
 
@@ -564,6 +430,24 @@ thread_terminate_self(void)
 		long dbg_arg2 = 0;
 
 		kdbg_trace_data(thread->task->bsd_info, &dbg_arg1, &dbg_arg2);
+#if MONOTONIC
+		if (kdebug_debugid_enabled(DBG_MT_INSTRS_CYCLES_THR_EXIT)) {
+			uint64_t counts[MT_CORE_NFIXED];
+			uint64_t thread_user_time;
+			uint64_t thread_system_time;
+			thread_user_time = timer_grab(&thread->user_timer);
+			thread_system_time = timer_grab(&thread->system_timer);
+			mt_fixed_thread_counts(thread, counts);
+			KDBG_RELEASE(DBG_MT_INSTRS_CYCLES_THR_EXIT,
+#ifdef MT_CORE_INSTRS
+			    counts[MT_CORE_INSTRS],
+#else /* defined(MT_CORE_INSTRS) */
+			    0,
+#endif/* !defined(MT_CORE_INSTRS) */
+			    counts[MT_CORE_CYCLES],
+			    thread_system_time, thread_user_time);
+		}
+#endif/* MONOTONIC */
 		KDBG_RELEASE(TRACE_DATA_THREAD_TERMINATE_PID, dbg_arg1, dbg_arg2);
 	}
 
@@ -586,6 +470,25 @@ thread_terminate_self(void)
 			/* since we're the last thread in this process, trace out the command name too */
 			long args[4] = {};
 			kdbg_trace_string(thread->task->bsd_info, &args[0], &args[1], &args[2], &args[3]);
+#if MONOTONIC
+			if (kdebug_debugid_enabled(DBG_MT_INSTRS_CYCLES_PROC_EXIT)) {
+				uint64_t counts[MT_CORE_NFIXED];
+				uint64_t task_user_time;
+				uint64_t task_system_time;
+				mt_fixed_task_counts(task, counts);
+				/* since the thread time is not yet added to the task */
+				task_user_time = task->total_user_time + timer_grab(&thread->user_timer);
+				task_system_time = task->total_system_time + timer_grab(&thread->system_timer);
+				KDBG_RELEASE((DBG_MT_INSTRS_CYCLES_PROC_EXIT),
+#ifdef MT_CORE_INSTRS
+				    counts[MT_CORE_INSTRS],
+#else /* defined(MT_CORE_INSTRS) */
+				    0,
+#endif/* !defined(MT_CORE_INSTRS) */
+				    counts[MT_CORE_CYCLES],
+				    task_system_time, task_user_time);
+			}
+#endif/* MONOTONIC */
 			KDBG_RELEASE(TRACE_STRING_PROC_EXIT, args[0], args[1], args[2], args[3]);
 		}
 
@@ -690,9 +593,13 @@ thread_terminate_self(void)
 	assert((thread->sched_flags & TH_SFLAG_RW_PROMOTED) == 0);
 	assert((thread->sched_flags & TH_SFLAG_EXEC_PROMOTED) == 0);
 	assert((thread->sched_flags & TH_SFLAG_PROMOTED) == 0);
+	assert((thread->sched_flags & TH_SFLAG_THREAD_GROUP_AUTO_JOIN) == 0);
+	assert(thread->th_work_interval_flags == TH_WORK_INTERVAL_FLAGS_NONE);
 	assert(thread->kern_promotion_schedpri == 0);
 	assert(thread->waiting_for_mutex == NULL);
 	assert(thread->rwlock_count == 0);
+	assert(thread->handoff_thread == THREAD_NULL);
+	assert(thread->th_work_interval == NULL);
 
 	thread_unlock(thread);
 	/* splsched */
@@ -783,7 +690,8 @@ thread_deallocate_complete(
 	}
 
 	if (thread->thread_io_stats) {
-		kfree(thread->thread_io_stats, sizeof(struct io_stat_info));
+		kheap_free(KHEAP_DATA_BUFFERS, thread->thread_io_stats,
+		    sizeof(struct io_stat_info));
 	}
 
 	if (thread->kernel_stack != 0) {
@@ -814,6 +722,19 @@ thread_inspect_deallocate(
 {
 	return thread_deallocate((thread_t)thread_inspect);
 }
+
+/*
+ *	thread_read_deallocate:
+ *
+ *	Drop a reference on thread read port.
+ */
+void
+thread_read_deallocate(
+	thread_read_t                thread_read)
+{
+	return thread_deallocate((thread_t)thread_read);
+}
+
 
 /*
  *	thread_exception_queue_invoke:
@@ -1165,10 +1086,13 @@ thread_create_internal(
 	}
 
 	if (new_thread != first_thread) {
-		*new_thread = thread_template;
+		init_thread_from_template(new_thread);
 	}
 
 	os_ref_init_count(&new_thread->ref_count, &thread_refgrp, 2);
+#if DEBUG || DEVELOPMENT
+	queue_init(&new_thread->t_temp_alloc_list);
+#endif /* DEBUG || DEVELOPMENT */
 
 #ifdef MACH_BSD
 	new_thread->uthread = uthread_alloc(parent_task, new_thread, (options & TH_OPTION_NOCRED) != 0);
@@ -1206,25 +1130,28 @@ thread_create_internal(
 	thread_lock_init(new_thread);
 	wake_lock_init(new_thread);
 
-	lck_mtx_init(&new_thread->mutex, &thread_lck_grp, &thread_lck_attr);
+	lck_mtx_init(&new_thread->mutex, &thread_lck_grp, LCK_ATTR_NULL);
 
 	ipc_thread_init(new_thread);
 
 	new_thread->continuation = continuation;
 	new_thread->parameter = parameter;
 	new_thread->inheritor_flags = TURNSTILE_UPDATE_FLAGS_NONE;
-	priority_queue_init(&new_thread->sched_inheritor_queue,
-	    PRIORITY_QUEUE_BUILTIN_MAX_HEAP);
-	priority_queue_init(&new_thread->base_inheritor_queue,
-	    PRIORITY_QUEUE_BUILTIN_MAX_HEAP);
+	priority_queue_init(&new_thread->sched_inheritor_queue);
+	priority_queue_init(&new_thread->base_inheritor_queue);
 #if CONFIG_SCHED_CLUTCH
-	priority_queue_entry_init(&new_thread->sched_clutchpri_link);
+	priority_queue_entry_init(&new_thread->th_clutch_runq_link);
+	priority_queue_entry_init(&new_thread->th_clutch_pri_link);
 #endif /* CONFIG_SCHED_CLUTCH */
 
+#if CONFIG_SCHED_EDGE
+	new_thread->th_bound_cluster_enqueued = false;
+#endif /* CONFIG_SCHED_EDGE */
+
 	/* Allocate I/O Statistics structure */
-	new_thread->thread_io_stats = (io_stat_info_t)kalloc(sizeof(struct io_stat_info));
+	new_thread->thread_io_stats = kheap_alloc(KHEAP_DATA_BUFFERS,
+	    sizeof(struct io_stat_info), Z_WAITOK | Z_ZERO);
 	assert(new_thread->thread_io_stats != NULL);
-	bzero(new_thread->thread_io_stats, sizeof(struct io_stat_info));
 
 #if KASAN
 	kasan_init_thread(&new_thread->kasan_data);
@@ -1238,6 +1165,8 @@ thread_create_internal(
 	/* Clear out the I/O Scheduling info for AppleFSCompression */
 	new_thread->decmp_upl = NULL;
 #endif /* CONFIG_IOSCHED */
+
+	new_thread->thread_region_page_shift = 0;
 
 #if DEVELOPMENT || DEBUG
 	task_lock(parent_task);
@@ -1282,7 +1211,8 @@ thread_create_internal(
 #endif  /* MACH_BSD */
 		ipc_thread_disable(new_thread);
 		ipc_thread_terminate(new_thread);
-		kfree(new_thread->thread_io_stats, sizeof(struct io_stat_info));
+		kheap_free(KHEAP_DATA_BUFFERS, new_thread->thread_io_stats,
+		    sizeof(struct io_stat_info));
 		lck_mtx_destroy(&new_thread->mutex, &thread_lck_grp);
 		machine_thread_destroy(new_thread);
 		zfree(thread_zone, new_thread);
@@ -1340,17 +1270,20 @@ thread_create_internal(
 	new_thread->max_priority = parent_task->max_priority;
 	new_thread->task_priority = parent_task->priority;
 
+#if CONFIG_THREAD_GROUPS
+	thread_group_init_thread(new_thread, parent_task);
+#endif /* CONFIG_THREAD_GROUPS */
 
 	int new_priority = (priority < 0) ? parent_task->priority: priority;
 	new_priority = (priority < 0)? parent_task->priority: priority;
 	if (new_priority > new_thread->max_priority) {
 		new_priority = new_thread->max_priority;
 	}
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 	if (new_priority < MAXPRI_THROTTLE) {
 		new_priority = MAXPRI_THROTTLE;
 	}
-#endif /* CONFIG_EMBEDDED */
+#endif /* !defined(XNU_TARGET_OS_OSX) */
 
 	new_thread->importance = new_priority - new_thread->task_priority;
 
@@ -1365,11 +1298,9 @@ thread_create_internal(
 #endif /* CONFIG_SCHED_CLUTCH */
 #endif /* defined(CONFIG_SCHED_TIMESHARE_CORE) */
 
-#if CONFIG_EMBEDDED
 	if (parent_task->max_priority <= MAXPRI_THROTTLE) {
 		sched_thread_mode_demote(new_thread, TH_SFLAG_THROTTLED);
 	}
-#endif /* CONFIG_EMBEDDED */
 
 	thread_policy_create(new_thread);
 
@@ -1392,6 +1323,8 @@ thread_create_internal(
 	}
 	new_thread->corpse_dup = FALSE;
 	new_thread->turnstile = turnstile_alloc();
+
+
 	*out_thread = new_thread;
 
 	if (kdebug_enable) {
@@ -1442,6 +1375,13 @@ thread_create_internal2(
 	if (task == TASK_NULL || task == kernel_task) {
 		return KERN_INVALID_ARGUMENT;
 	}
+
+#if CONFIG_MACF
+	if (from_user && current_task() != task &&
+	    mac_proc_check_remote_thread_create(task, -1, NULL, 0) != 0) {
+		return KERN_DENIED;
+	}
+#endif
 
 	result = thread_create_internal(task, -1, continuation, NULL, TH_OPTION_NONE, &thread);
 	if (result != KERN_SUCCESS) {
@@ -1573,6 +1513,13 @@ thread_create_running_internal2(
 		return KERN_INVALID_ARGUMENT;
 	}
 
+#if CONFIG_MACF
+	if (from_user && current_task() != task &&
+	    mac_proc_check_remote_thread_create(task, flavor, new_state, new_state_count) != 0) {
+		return KERN_DENIED;
+	}
+#endif
+
 	result = thread_create_internal(task, -1,
 	    (thread_continue_t)thread_bootstrap_return, NULL,
 	    TH_OPTION_NONE, &thread);
@@ -1691,7 +1638,7 @@ kernel_thread_create(
 
 	stack_alloc(thread);
 	assert(thread->kernel_stack != 0);
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 	if (priority > BASEPRI_KERNEL)
 #endif
 	thread->reserved_stack = thread->kernel_stack;
@@ -1849,7 +1796,7 @@ thread_info_internal(
 			return KERN_INVALID_ARGUMENT;
 		}
 
-		identifier_info = (thread_identifier_info_t) thread_info_out;
+		identifier_info = __IGNORE_WCASTALIGN((thread_identifier_info_t)thread_info_out);
 
 		s = splsched();
 		thread_lock(thread);
@@ -1947,7 +1894,7 @@ thread_info_internal(
 		return KERN_SUCCESS;
 	} else if (flavor == THREAD_EXTENDED_INFO) {
 		thread_basic_info_data_t        basic_info;
-		thread_extended_info_t          extended_info = (thread_extended_info_t) thread_info_out;
+		thread_extended_info_t          extended_info = __IGNORE_WCASTALIGN((thread_extended_info_t)thread_info_out);
 
 		if (*thread_info_count < THREAD_EXTENDED_INFO_COUNT) {
 			return KERN_INVALID_ARGUMENT;
@@ -1991,7 +1938,7 @@ thread_info_internal(
 			return KERN_INVALID_ARGUMENT;
 		}
 
-		dbg_info = (thread_debug_info_internal_t) thread_info_out;
+		dbg_info = __IGNORE_WCASTALIGN((thread_debug_info_internal_t)thread_info_out);
 		dbg_info->page_creation_count = thread->t_page_creation_count;
 
 		*thread_info_count = THREAD_DEBUG_INFO_INTERNAL_COUNT;
@@ -2057,7 +2004,7 @@ thread_get_runtime_self(void)
 	/* Not interrupt safe, as the scheduler may otherwise update timer values underneath us */
 	interrupt_state = ml_set_interrupts_enabled(FALSE);
 	processor = current_processor();
-	timer_update(PROCESSOR_DATA(processor, thread_timer), mach_absolute_time());
+	timer_update(processor->thread_timer, mach_absolute_time());
 	runtime = (timer_grab(&thread->user_timer) + timer_grab(&thread->system_timer));
 	ml_set_interrupts_enabled(interrupt_state);
 
@@ -2607,7 +2554,7 @@ thread_get_cpulimit(int *action, uint8_t *percentage, uint64_t *interval_ns)
 	 * This calculation is the converse to the one in thread_set_cpulimit().
 	 */
 	absolutetime_to_nanoseconds(abstime, &limittime);
-	*percentage = (limittime * 100ULL) / *interval_ns;
+	*percentage = (uint8_t)((limittime * 100ULL) / *interval_ns);
 	assert(*percentage <= 100);
 
 	if (thread->options & TH_OPT_PROC_CPULIMIT) {
@@ -2891,6 +2838,9 @@ thread_set_voucher_name(mach_port_name_t voucher_name)
 	thread_mtx_unlock(thread);
 
 	bank_swap_thread_bank_ledger(thread, bankledger);
+#if CONFIG_THREAD_GROUPS
+	thread_group_set_bank(thread, banktg);
+#endif /* CONFIG_THREAD_GROUPS */
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 	    MACHDBG_CODE(DBG_MACH_IPC, MACH_THREAD_SET_VOUCHER) | DBG_FUNC_NONE,
@@ -2980,6 +2930,9 @@ thread_set_mach_voucher(
 	thread_mtx_unlock(thread);
 
 	bank_swap_thread_bank_ledger(thread, bankledger);
+#if CONFIG_THREAD_GROUPS
+	thread_group_set_bank(thread, banktg);
+#endif /* CONFIG_THREAD_GROUPS */
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 	    MACHDBG_CODE(DBG_MACH_IPC, MACH_THREAD_SET_VOUCHER) | DBG_FUNC_NONE,
@@ -3040,6 +2993,31 @@ thread_get_current_voucher_origin_pid(
 	return kr;
 }
 
+#if CONFIG_THREAD_GROUPS
+/*
+ * Returns the current thread's voucher-carried thread group
+ *
+ * Reference is borrowed from this being the current voucher, so it does NOT
+ * return a reference to the group.
+ */
+struct thread_group *
+thread_get_current_voucher_thread_group(thread_t thread)
+{
+	assert(thread == current_thread());
+
+	if (thread->ith_voucher == NULL) {
+		return NULL;
+	}
+
+	ledger_t bankledger = NULL;
+	struct thread_group *banktg = NULL;
+
+	bank_get_bank_ledger_thread_group_and_persona(thread->ith_voucher, &bankledger, &banktg, NULL);
+
+	return banktg;
+}
+
+#endif /* CONFIG_THREAD_GROUPS */
 
 boolean_t
 thread_has_thread_name(thread_t th)
@@ -3060,6 +3038,19 @@ thread_set_thread_name(thread_t th, const char* name)
 {
 	if ((th) && (th->uthread) && name) {
 		bsd_setthreadname(th->uthread, name);
+	}
+}
+
+void
+thread_get_thread_name(thread_t th, char* name)
+{
+	if (!name) {
+		return;
+	}
+	if ((th) && (th->uthread)) {
+		bsd_getthreadname(th->uthread, name);
+	} else {
+		name[0] = '\0';
 	}
 }
 
@@ -3141,6 +3132,99 @@ integer_t
 thread_kern_get_kernel_maxpri(void)
 {
 	return MAXPRI_KERNEL;
+}
+/*
+ *	thread_port_with_flavor_notify
+ *
+ *	Called whenever the Mach port system detects no-senders on
+ *	the thread inspect or read port. These ports are allocated lazily and
+ *	should be deallocated here when there are no senders remaining.
+ */
+void
+thread_port_with_flavor_notify(mach_msg_header_t *msg)
+{
+	mach_no_senders_notification_t *notification = (void *)msg;
+	ipc_port_t port = notification->not_header.msgh_remote_port;
+	thread_t thread;
+	mach_thread_flavor_t flavor;
+	ipc_kobject_type_t kotype;
+
+	ip_lock(port);
+	if (port->ip_srights > 0) {
+		ip_unlock(port);
+		return;
+	}
+	thread = (thread_t)port->ip_kobject;
+	kotype = ip_kotype(port);
+	if (thread != THREAD_NULL) {
+		assert((IKOT_THREAD_READ == kotype) || (IKOT_THREAD_INSPECT == kotype));
+		thread_reference_internal(thread);
+	}
+	ip_unlock(port);
+
+	if (thread == THREAD_NULL) {
+		/* The thread is exiting or disabled; it will eventually deallocate the port */
+		return;
+	}
+
+	thread_mtx_lock(thread);
+	ip_lock(port);
+	require_ip_active(port);
+	/*
+	 * Check for a stale no-senders notification. A call to any function
+	 * that vends out send rights to this port could resurrect it between
+	 * this notification being generated and actually being handled here.
+	 */
+	if (port->ip_srights > 0) {
+		ip_unlock(port);
+		thread_mtx_unlock(thread);
+		thread_deallocate(thread);
+		return;
+	}
+	if (kotype == IKOT_THREAD_READ) {
+		flavor = THREAD_FLAVOR_READ;
+	} else {
+		flavor = THREAD_FLAVOR_INSPECT;
+	}
+	assert(thread->ith_self[flavor] == port);
+	thread->ith_self[flavor] = IP_NULL;
+	port->ip_kobject = IKOT_NONE;
+	ip_unlock(port);
+	thread_mtx_unlock(thread);
+	thread_deallocate(thread);
+
+	ipc_port_dealloc_kernel(port);
+}
+
+/*
+ * The 'thread_region_page_shift' is used by footprint
+ * to specify the page size that it will use to
+ * accomplish its accounting work on the task being
+ * inspected. Since footprint uses a thread for each
+ * task that it works on, we need to keep the page_shift
+ * on a per-thread basis.
+ */
+
+int
+thread_self_region_page_shift(void)
+{
+	/*
+	 * Return the page shift that this thread
+	 * would like to use for its accounting work.
+	 */
+	return current_thread()->thread_region_page_shift;
+}
+
+void
+thread_self_region_page_shift_set(
+	int pgshift)
+{
+	/*
+	 * Set the page shift that this thread
+	 * would like to use for its accounting work
+	 * when dealing with a task.
+	 */
+	current_thread()->thread_region_page_shift = pgshift;
 }
 
 #if CONFIG_DTRACE
@@ -3228,7 +3312,7 @@ dtrace_calc_thread_recent_vtime(thread_t thread)
 		uint64_t                                abstime = mach_absolute_time();
 		timer_t                                 timer;
 
-		timer = PROCESSOR_DATA(processor, thread_timer);
+		timer = processor->thread_timer;
 
 		return timer_grab(&(thread->system_timer)) + timer_grab(&(thread->user_timer)) +
 		       (abstime - timer->tstamp);          /* XXX need interrupts off to prevent missed time? */

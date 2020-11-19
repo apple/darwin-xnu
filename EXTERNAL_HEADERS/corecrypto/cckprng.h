@@ -1,11 +1,12 @@
-/*
- *  cckprng.h
- *  corecrypto
+/* Copyright (c) (2018,2019) Apple Inc. All rights reserved.
  *
- *  Created on 12/7/2017
- *
- *  Copyright (c) 2017 Apple Inc. All rights reserved.
- *
+ * corecrypto is licensed under Apple Inc.’s Internal Use License Agreement (which
+ * is contained in the License.txt file distributed with corecrypto) and only to 
+ * people who accept that license. IMPORTANT:  Any license rights granted to you by 
+ * Apple Inc. (if any) are limited to internal use within your organization only on 
+ * devices and computers you own or control, for the sole purpose of verifying the 
+ * security characteristics and correct functioning of the Apple Software.  You may 
+ * not, directly or indirectly, redistribute the Apple Software or any portions thereof.
  */
 
 #ifndef _CORECRYPTO_CCKPRNG_H_
@@ -14,25 +15,6 @@
 #include <stdbool.h>
 
 #include <corecrypto/cc.h>
-
-#define CCKPRNG_YARROW 0
-
-#if CCKPRNG_YARROW
-
-typedef struct PRNG *PrngRef;
-
-struct cckprng_ctx {
-    PrngRef prng;
-    uint64_t bytes_since_entropy;
-    uint64_t bytes_generated;
-};
-
-#define CCKPRNG_ENTROPY_INTERVAL (1 << 14)
-#define CCKPRNG_RESEED_NTICKS 50
-
-typedef struct cckprng_ctx *cckprng_ctx_t;
-
-#else
 
 // This is a Fortuna-inspired PRNG. While it differs from Fortuna in
 // many minor details, the biggest difference is its support for
@@ -138,7 +120,7 @@ struct cckprng_diag {
 
     // Diagnostics corresponding to individual output generators
     unsigned ngens;
-    struct cckprng_gen_diag *gens;
+    CC_ALIGNED(8) struct cckprng_gen_diag *gens;
 
     // Diagnostics corresponding to internal entropy pools
     struct cckprng_pool_diag pools[CCKPRNG_NPOOLS];
@@ -153,6 +135,16 @@ typedef lck_mtx_t *cckprng_lock_mutex;
 
 struct cckprng_lock_ctx {
     cckprng_lock_group group;
+    cckprng_lock_mutex mutex;
+};
+
+#elif CC_ANDROID || CC_LINUX
+
+#include <pthread.h>
+
+typedef pthread_mutex_t cckprng_lock_mutex;
+
+struct cckprng_lock_ctx {
     cckprng_lock_mutex mutex;
 };
 
@@ -224,17 +216,16 @@ struct cckprng_sched_ctx {
     // A counter governing the set of entropy pools to drain
     uint64_t reseed_sched;
 
-    // A timestamp from the last reseed
-    uint64_t reseed_last;
-
     // An index used to add entropy to pools in a round-robin style
     unsigned pool_idx;
 };
 
 struct cckprng_ctx {
-
     // The master secret of the PRNG
-    uint8_t seed[CCKPRNG_SEED_NBYTES];
+    struct cckprng_key_ctx key;
+
+    // A counter used in CTR mode (with the master secret)
+    uint8_t ctr[16];
 
     // State used to schedule entropy consumption and reseeds
     struct cckprng_sched_ctx sched;
@@ -244,6 +235,9 @@ struct cckprng_ctx {
 
     // The maximum number of generators that may be allocated
     unsigned max_ngens;
+
+    // The actual number of generators that have been initialized
+    unsigned ngens;
 
     // An array of output generators (allocated dynamically) of length max_ngens
     struct cckprng_gen_ctx *gens;
@@ -275,8 +269,6 @@ struct cckprng_funcs {
     void (*refresh)(struct cckprng_ctx *ctx);
     void (*generate)(struct cckprng_ctx *ctx, unsigned gen_idx, size_t nbytes, void *out);
 };
-
-#endif
 
 /*
   @function cckprng_init

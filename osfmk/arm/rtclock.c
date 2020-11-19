@@ -49,6 +49,7 @@
 
 #include <machine/commpage.h>
 #include <machine/machine_routines.h>
+#include <machine/config.h>
 #include <arm/exception.h>
 #include <arm/cpu_data_internal.h>
 #if __arm64__
@@ -89,8 +90,10 @@ rtclock_early_init(void)
 #if DEVELOPMENT || DEBUG
 	uint32_t tmp_mv = 1;
 
+#if defined(APPLE_ARM64_ARCH_FAMILY)
 	/* Enable MAT validation on A0 hardware by default. */
-	absolute_time_validation = (get_arm_cpu_version() == 0x00);
+	absolute_time_validation = ml_get_topology_info()->chip_revision == CPU_VERSION_A0;
+#endif
 
 	if (kern_feature_override(KF_MATV_OVRD)) {
 		absolute_time_validation = 0;
@@ -284,8 +287,7 @@ rtclock_intr(__unused unsigned int is_user_context)
 	cdp = getCpuDatap();
 
 	cdp->cpu_stat.timer_cnt++;
-	cdp->cpu_stat.timer_cnt_wake++;
-	SCHED_STATS_TIMER_POP(current_processor());
+	SCHED_STATS_INC(timer_pop_count);
 
 	assert(!ml_get_interrupts_enabled());
 
@@ -487,12 +489,7 @@ machine_delay_until(uint64_t interval,
 
 	do {
 #if     __ARM_ENABLE_WFE_
-#if __arm64__
-		if (arm64_wfe_allowed())
-#endif /* __arm64__ */
-		{
-			__builtin_arm_wfe();
-		}
+		__builtin_arm_wfe();
 #endif /* __ARM_ENABLE_WFE_ */
 
 		now = mach_absolute_time();

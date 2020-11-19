@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -44,6 +44,7 @@
 #include <kasan_internal.h>
 #include <memintrinsics.h>
 
+#include <pexpert/device_tree.h>
 #include <pexpert/arm64/boot.h>
 #include <arm64/tlb.h>
 
@@ -60,7 +61,12 @@ vm_offset_t physmap_vtop;
 
 vm_offset_t shadow_pbase;
 vm_offset_t shadow_ptop;
+#if HIBERNATION
+// if we're building a kernel with hibernation support, hibernate_write_image depends on this symbol
+vm_offset_t shadow_pnext;
+#else
 static vm_offset_t shadow_pnext;
+#endif
 
 static vm_offset_t zero_page_phys;
 static vm_offset_t bootstrap_pgtable_phys;
@@ -70,14 +76,20 @@ extern vm_offset_t excepstack, excepstack_top;
 
 void kasan_bootstrap(boot_args *, vm_offset_t pgtable);
 
-#define KASAN_SHIFT_ARM64 0xe000000000000000ULL /* Defined in makedefs/MakeInc.def */
+#define KASAN_OFFSET_ARM64 0xe000000000000000ULL /* Defined in makedefs/MakeInc.def */
+
+#if defined(ARM_LARGE_MEMORY)
+#define KASAN_SHADOW_MIN  (VM_MAX_KERNEL_ADDRESS+1)
+#define KASAN_SHADOW_MAX  0xffffffffffffffffULL
+#else
 #define KASAN_SHADOW_MIN  0xfffffffc00000000ULL
 #define KASAN_SHADOW_MAX  0xffffffff80000000ULL
+#endif
 
-_Static_assert(KASAN_SHIFT == KASAN_SHIFT_ARM64, "KASan inconsistent shadow shift");
+_Static_assert(KASAN_OFFSET == KASAN_OFFSET_ARM64, "KASan inconsistent shadow offset");
 _Static_assert(VM_MAX_KERNEL_ADDRESS < KASAN_SHADOW_MIN, "KASan shadow overlaps with kernel VM");
-_Static_assert((VM_MIN_KERNEL_ADDRESS >> 3) + KASAN_SHIFT_ARM64 >= KASAN_SHADOW_MIN, "KASan shadow does not cover kernel VM");
-_Static_assert((VM_MAX_KERNEL_ADDRESS >> 3) + KASAN_SHIFT_ARM64 < KASAN_SHADOW_MAX, "KASan shadow does not cover kernel VM");
+_Static_assert((VM_MIN_KERNEL_ADDRESS >> KASAN_SCALE) + KASAN_OFFSET_ARM64 >= KASAN_SHADOW_MIN, "KASan shadow does not cover kernel VM");
+_Static_assert((VM_MAX_KERNEL_ADDRESS >> KASAN_SCALE) + KASAN_OFFSET_ARM64 < KASAN_SHADOW_MAX, "KASan shadow does not cover kernel VM");
 
 static uintptr_t
 alloc_page(void)
@@ -263,7 +275,7 @@ void
 kasan_arch_init(void)
 {
 	/* Map the physical aperture */
-	kasan_map_shadow(kernel_vtop, physmap_vtop - kernel_vtop, true);
+	kasan_map_shadow(physmap_vbase, physmap_vtop - physmap_vbase, true);
 
 #if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
 	/* Pre-allocate all the L3 page table pages to avoid triggering KTRR */
@@ -296,7 +308,7 @@ kasan_bootstrap(boot_args *args, vm_offset_t pgtable)
 	shadow_pbase = vm_map_round_page(pbase + args->memSize, ARM_PGMASK);
 	shadow_ptop = shadow_pbase + tosteal;
 	shadow_pnext = shadow_pbase;
-	shadow_pages_total = (long)((shadow_ptop - shadow_pbase) / ARM_PGBYTES);
+	shadow_pages_total = (uint32_t)((shadow_ptop - shadow_pbase) / ARM_PGBYTES);
 
 	/* Set aside a page of zeros we can use for dummy shadow mappings */
 	zero_page_phys = alloc_page();
@@ -316,6 +328,10 @@ kasan_bootstrap(boot_args *args, vm_offset_t pgtable)
 
 	kasan_map_shadow_early(intstack_virt, intstack_size, false);
 	kasan_map_shadow_early(excepstack_virt, excepstack_size, false);
+
+	if ((vm_offset_t)args->deviceTreeP - p2v < (vm_offset_t)&_mh_execute_header) {
+		kasan_map_shadow_early((vm_offset_t)args->deviceTreeP, args->deviceTreeLength, false);
+	}
 }
 
 bool

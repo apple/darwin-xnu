@@ -37,8 +37,6 @@
 #include <kern/locks.h>
 #include <kern/simple_lock.h>
 #include <kern/debug.h>
-#include <kern/kalloc.h>
-#include <kern/zalloc.h>
 #include <mach/mach_vm.h>
 #include <mach/mach_types.h>
 #include <mach/vm_param.h>
@@ -56,7 +54,7 @@
 #include <kasan_internal.h>
 #include <memintrinsics.h>
 
-const uintptr_t __asan_shadow_memory_dynamic_address = KASAN_SHIFT;
+const uintptr_t __asan_shadow_memory_dynamic_address = KASAN_OFFSET;
 
 static unsigned kexts_loaded;
 unsigned shadow_pages_total;
@@ -146,7 +144,7 @@ kasan_poison_active(uint8_t flags)
 		return kasan_check_enabled(TYPE_POISON_HEAP);
 	default:
 		return true;
-	};
+	}
 }
 
 /*
@@ -156,24 +154,22 @@ void NOINLINE
 kasan_poison(vm_offset_t base, vm_size_t size, vm_size_t leftrz, vm_size_t rightrz, uint8_t flags)
 {
 	uint8_t *shadow = SHADOW_FOR_ADDRESS(base);
-	uint8_t partial = size & 0x07;
+	uint8_t partial = (uint8_t)kasan_granule_partial(size);
 	vm_size_t total = leftrz + size + rightrz;
 	vm_size_t i = 0;
 
-	/* base must be 8-byte aligned */
-	/* any left redzone must be a multiple of 8 */
-	/* total region must cover 8-byte multiple */
-	assert((base & 0x07) == 0);
-	assert((leftrz & 0x07) == 0);
-	assert((total & 0x07) == 0);
+	/* ensure base, leftrz and total allocation size are granule-aligned */
+	assert(kasan_granule_partial(base) == 0);
+	assert(kasan_granule_partial(leftrz) == 0);
+	assert(kasan_granule_partial(total) == 0);
 
 	if (!kasan_enabled || !kasan_poison_active(flags)) {
 		return;
 	}
 
-	leftrz /= 8;
-	size /= 8;
-	total /= 8;
+	leftrz >>= KASAN_SCALE;
+	size >>= KASAN_SCALE;
+	total >>= KASAN_SCALE;
 
 	uint8_t l_flags = flags;
 	uint8_t r_flags = flags;
@@ -207,10 +203,8 @@ kasan_poison(vm_offset_t base, vm_size_t size, vm_size_t leftrz, vm_size_t right
 void
 kasan_poison_range(vm_offset_t base, vm_size_t size, uint8_t flags)
 {
-	/* base must be 8-byte aligned */
-	/* total region must cover 8-byte multiple */
-	assert((base & 0x07) == 0);
-	assert((size & 0x07) == 0);
+	assert(kasan_granule_partial(base) == 0);
+	assert(kasan_granule_partial(size) == 0);
 	kasan_poison(base, 0, 0, size, flags);
 }
 
@@ -221,16 +215,14 @@ kasan_unpoison(void *base, vm_size_t size)
 }
 
 void NOINLINE
-kasan_unpoison_stack(vm_offset_t base, vm_size_t size)
+kasan_unpoison_stack(uintptr_t base, size_t size)
 {
-	assert(base);
-	assert(size);
+	assert(base > 0);
+	assert(size > 0);
 
-	/* align base and size to 8 bytes */
-	vm_offset_t align = base & 0x7;
-	base -= align;
-	size += align;
-	size = (size + 7) & ~0x7;
+	size_t partial = kasan_granule_partial(base);
+	base = kasan_granule_trunc(base);
+	size = kasan_granule_round(size + partial);
 
 	kasan_unpoison((void *)base, size);
 }
@@ -247,12 +239,9 @@ kasan_rz_clobber(vm_offset_t base, vm_size_t size, vm_size_t leftrz, vm_size_t r
 	const uint8_t c0ffee[] = { 0xc0, 0xff, 0xee, 0xc0 };
 	uint8_t *buf = (uint8_t *)base;
 
-	/* base must be 8-byte aligned */
-	/* any left redzone must be a multiple of 8 */
-	/* total region must cover 8-byte multiple */
-	assert((base & 0x07) == 0);
-	assert((leftrz & 0x07) == 0);
-	assert(((size + leftrz + rightrz) & 0x07) == 0);
+	assert(kasan_granule_partial(base) == 0);
+	assert(kasan_granule_partial(leftrz) == 0);
+	assert(kasan_granule_partial(size + leftrz + rightrz) == 0);
 
 	for (i = 0; i < leftrz; i++) {
 		buf[i] = deadbeef[i % 4];
@@ -305,19 +294,20 @@ kasan_check_range(const void *x, size_t sz, access_t access)
  * Return true if [base, base+sz) is unpoisoned or has given shadow value.
  */
 bool
-kasan_check_shadow(vm_address_t base, vm_size_t sz, uint8_t shadow)
+kasan_check_shadow(vm_address_t addr, vm_size_t sz, uint8_t shadow)
 {
-	sz -= 8 - (base % 8);
-	base += 8 - (base % 8);
+	/* round 'base' up to skip any partial, which won't match 'shadow' */
+	uintptr_t base = kasan_granule_round(addr);
+	sz -= base - addr;
 
-	vm_address_t end = base + sz;
+	uintptr_t end = base + sz;
 
 	while (base < end) {
 		uint8_t *sh = SHADOW_FOR_ADDRESS(base);
 		if (*sh && *sh != shadow) {
 			return false;
 		}
-		base += 8;
+		base += KASAN_GRANULE;
 	}
 	return true;
 }
@@ -325,7 +315,7 @@ kasan_check_shadow(vm_address_t base, vm_size_t sz, uint8_t shadow)
 static void
 kasan_report_leak(vm_address_t base, vm_size_t sz, vm_offset_t offset, vm_size_t leak_sz)
 {
-	if (leak_fatal_threshold > leak_threshold && leak_sz >= leak_fatal_threshold){
+	if (leak_fatal_threshold > leak_threshold && leak_sz >= leak_fatal_threshold) {
 		kasan_violation(base + offset, leak_sz, TYPE_LEAK, REASON_UNINITIALIZED);
 	}
 
@@ -344,11 +334,23 @@ kasan_report_leak(vm_address_t base, vm_size_t sz, vm_offset_t offset, vm_size_t
 	}
 
 	DTRACE_KASAN5(leak_detected,
-				  vm_address_t, base,
-				  vm_size_t, sz,
-				  vm_offset_t, offset,
-				  vm_size_t, leak_sz,
-				  char *, string_rep);
+	    vm_address_t, base,
+	    vm_size_t, sz,
+	    vm_offset_t, offset,
+	    vm_size_t, leak_sz,
+	    char *, string_rep);
+}
+
+/*
+ * Initialize buffer by writing unique pattern that can be looked for
+ * in copyout path to detect uninitialized memory leaks.
+ */
+void
+kasan_leak_init(vm_address_t addr, vm_size_t sz)
+{
+	if (enabled_checks & TYPE_LEAK) {
+		__nosan_memset((void *)addr, KASAN_UNINITIALIZED_HEAP, sz);
+	}
 }
 
 /*
@@ -432,7 +434,7 @@ static const char *shadow_strings[] = {
 static size_t
 kasan_shadow_crashlog(uptr p, char *buf, size_t len)
 {
-	int i,j;
+	int i, j;
 	size_t n = 0;
 	int before = CRASH_CONTEXT_BEFORE;
 	int after = CRASH_CONTEXT_AFTER;
@@ -445,8 +447,8 @@ kasan_shadow_crashlog(uptr p, char *buf, size_t len)
 	shadow &= ~((uptr)0xf);
 	shadow -= 16 * before;
 
-	n += scnprintf(buf+n, len-n,
-			" Shadow             0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f\n");
+	n += scnprintf(buf + n, len - n,
+	    " Shadow             0  1  2  3  4  5  6  7  8  9  a  b  c  d  e  f\n");
 
 	for (i = 0; i < 1 + before + after; i++, shadow += 16) {
 		if ((vm_map_round_page(shadow, HW_PAGE_MASK) != shadow_page) && !kasan_is_shadow_mapped(shadow)) {
@@ -454,7 +456,7 @@ kasan_shadow_crashlog(uptr p, char *buf, size_t len)
 			continue;
 		}
 
-		n += scnprintf(buf+n, len-n, " %16lx:", shadow);
+		n += scnprintf(buf + n, len - n, " %16lx:", shadow);
 
 		char *left = " ";
 		char *right;
@@ -470,13 +472,13 @@ kasan_shadow_crashlog(uptr p, char *buf, size_t len)
 				right = "";
 			}
 
-			n += scnprintf(buf+n, len-n, "%s%02x%s", left, (unsigned)*x, right);
+			n += scnprintf(buf + n, len - n, "%s%02x%s", left, (unsigned)*x, right);
 			left = "";
 		}
-		n += scnprintf(buf+n, len-n, "\n");
+		n += scnprintf(buf + n, len - n, "\n");
 	}
 
-	n += scnprintf(buf+n, len-n, "\n");
+	n += scnprintf(buf + n, len - n, "\n");
 	return n;
 }
 
@@ -496,14 +498,14 @@ kasan_report_internal(uptr p, uptr width, access_t access, violation_t reason, b
 	buf[0] = '\0';
 
 	if (reason == REASON_MOD_OOB || reason == REASON_BAD_METADATA) {
-		n += scnprintf(buf+n, len-n, "KASan: free of corrupted/invalid object %#lx\n", p);
+		n += scnprintf(buf + n, len - n, "KASan: free of corrupted/invalid object %#lx\n", p);
 	} else if (reason == REASON_MOD_AFTER_FREE) {
-		n += scnprintf(buf+n, len-n, "KASan: UaF of quarantined object %#lx\n", p);
+		n += scnprintf(buf + n, len - n, "KASan: UaF of quarantined object %#lx\n", p);
 	} else {
-		n += scnprintf(buf+n, len-n, "KASan: invalid %lu-byte %s %#lx [%s]\n",
-				width, access_str(access), p, shadow_str);
+		n += scnprintf(buf + n, len - n, "KASan: invalid %lu-byte %s %#lx [%s]\n",
+		    width, access_str(access), p, shadow_str);
 	}
-	n += kasan_shadow_crashlog(p, buf+n, len-n);
+	n += kasan_shadow_crashlog(p, buf + n, len - n);
 
 	if (dopanic) {
 		panic("%s", buf);
@@ -540,11 +542,11 @@ kasan_log_report(uptr p, uptr width, access_t access, violation_t reason)
 	    NULL); /* ignore current frame */
 
 	buf[0] = '\0';
-	l += scnprintf(buf+l, len-l, "Backtrace: ");
+	l += scnprintf(buf + l, len - l, "Backtrace: ");
 	for (uint32_t i = 0; i < nframes; i++) {
-		l += scnprintf(buf+l, len-l, "%lx,", VM_KERNEL_UNSLIDE(bt[i]));
+		l += scnprintf(buf + l, len - l, "%lx,", VM_KERNEL_UNSLIDE(bt[i]));
 	}
-	l += scnprintf(buf+l, len-l, "\n");
+	l += scnprintf(buf + l, len - l, "\n");
 
 	printf("%s", buf);
 }
@@ -561,8 +563,16 @@ REPORT_DECLARE(4)
 REPORT_DECLARE(8)
 REPORT_DECLARE(16)
 
-void OS_NORETURN __asan_report_load_n(uptr p, unsigned long sz)  { kasan_crash_report(p, sz, TYPE_LOAD,  0); }
-void OS_NORETURN __asan_report_store_n(uptr p, unsigned long sz) { kasan_crash_report(p, sz, TYPE_STORE, 0); }
+void OS_NORETURN
+__asan_report_load_n(uptr p, unsigned long sz)
+{
+	kasan_crash_report(p, sz, TYPE_LOAD, 0);
+}
+void OS_NORETURN
+__asan_report_store_n(uptr p, unsigned long sz)
+{
+	kasan_crash_report(p, sz, TYPE_STORE, 0);
+}
 
 /* unpoison the current stack */
 void NOINLINE
@@ -605,18 +615,18 @@ kasan_range_poisoned(vm_offset_t base, vm_size_t size, vm_offset_t *first_invali
 		return false;
 	}
 
-	size += base & 0x07;
-	base &= ~(vm_offset_t)0x07;
+	size += kasan_granule_partial(base);
+	base = kasan_granule_trunc(base);
 
 	shadow = SHADOW_FOR_ADDRESS(base);
-	vm_size_t limit = (size + 7) / 8;
+	size_t limit = (size + KASAN_GRANULE - 1) / KASAN_GRANULE;
 
 	/* XXX: to make debugging easier, catch unmapped shadow here */
 
-	for (i = 0; i < limit; i++, size -= 8) {
+	for (i = 0; i < limit; i++, size -= KASAN_GRANULE) {
 		assert(size > 0);
 		uint8_t s = shadow[i];
-		if (s == 0 || (size < 8 && s >= size && s <= 7)) {
+		if (s == 0 || (size < KASAN_GRANULE && s >= size && s < KASAN_GRANULE)) {
 			/* valid */
 		} else {
 			goto fail;
@@ -625,10 +635,10 @@ kasan_range_poisoned(vm_offset_t base, vm_size_t size, vm_offset_t *first_invali
 
 	return false;
 
- fail:
+fail:
 	if (first_invalid) {
 		/* XXX: calculate the exact first byte that failed */
-		*first_invalid = base + i*8;
+		*first_invalid = base + i * 8;
 	}
 	return true;
 }
@@ -753,9 +763,9 @@ kasan_debug_touch_mappings(vm_offset_t base, vm_size_t sz)
 		vm_offset_t addr = base + i;
 		uint8_t *x = SHADOW_FOR_ADDRESS(addr);
 		tmp1 = *x;
-		asm volatile("" ::: "memory");
+		asm volatile ("" ::: "memory");
 		tmp2 = *x;
-		asm volatile("" ::: "memory");
+		asm volatile ("" ::: "memory");
 		assert(tmp1 == tmp2);
 	}
 #else
@@ -928,11 +938,17 @@ kasan_alloc_resize(vm_size_t size)
 		panic("allocation size overflow (%lu)", size);
 	}
 
+	if (size >= 128) {
+		/* Add a little extra right redzone to larger objects. Gives us extra
+		 * overflow protection, and more space for the backtrace. */
+		size += 16;
+	}
+
 	/* add left and right redzones */
 	size += KASAN_GUARD_PAD;
 
-	/* ensure the final allocation is an 8-byte multiple */
-	size += 8 - (size % 8);
+	/* ensure the final allocation is a multiple of the granule */
+	size = kasan_granule_round(size);
 
 	return size;
 }
@@ -949,8 +965,8 @@ kasan_alloc_bt(uint32_t *ptr, vm_size_t sz, vm_size_t skip)
 	vm_size_t frames = sz;
 
 	if (frames > 0) {
-		frames = min(frames + skip, BACKTRACE_MAXFRAMES);
-		frames = backtrace(bt, frames, NULL);
+		frames = min((uint32_t)(frames + skip), BACKTRACE_MAXFRAMES);
+		frames = backtrace(bt, (uint32_t)frames, NULL);
 
 		while (frames > sz && skip > 0) {
 			bt++;
@@ -1008,7 +1024,7 @@ kasan_alloc_retrieve_bt(vm_address_t addr, uintptr_t frames[static BACKTRACE_MAX
 		struct kasan_alloc_header *header = header_for_user_addr(alloc_base);
 		if (magic_for_addr(alloc_base, LIVE_XOR) == header->magic) {
 			struct kasan_alloc_footer *footer = footer_for_user_addr(alloc_base, &fsize);
-			if ((fsize/sizeof(footer->backtrace[0])) >= header->frames) {
+			if ((fsize / sizeof(footer->backtrace[0])) >= header->frames) {
 				num_frames = header->frames;
 				for (size_t i = 0; i < num_frames; i++) {
 					frames[i] = footer->backtrace[i] + vm_kernel_slid_base;
@@ -1034,8 +1050,8 @@ kasan_alloc(vm_offset_t addr, vm_size_t size, vm_size_t req, vm_size_t leftrz)
 		return 0;
 	}
 	assert(size > 0);
-	assert((addr % 8) == 0);
-	assert((size % 8) == 0);
+	assert(kasan_granule_partial(addr) == 0);
+	assert(kasan_granule_partial(size) == 0);
 
 	vm_size_t rightrz = size - req - leftrz;
 
@@ -1044,21 +1060,17 @@ kasan_alloc(vm_offset_t addr, vm_size_t size, vm_size_t req, vm_size_t leftrz)
 
 	addr += leftrz;
 
-	if (enabled_checks & TYPE_LEAK) {
-		__nosan_memset((void *)addr, KASAN_UNINITIALIZED_HEAP, req);
-	}
-
 	/* stash the allocation sizes in the left redzone */
 	struct kasan_alloc_header *h = header_for_user_addr(addr);
 	h->magic = magic_for_addr(addr, LIVE_XOR);
-	h->left_rz = leftrz;
-	h->alloc_size = size;
-	h->user_size = req;
+	h->left_rz = (uint32_t)leftrz;
+	h->alloc_size = (uint32_t)size;
+	h->user_size = (uint32_t)req;
 
 	/* ... and a backtrace in the right redzone */
 	vm_size_t fsize;
 	struct kasan_alloc_footer *f = footer_for_user_addr(addr, &fsize);
-	h->frames = kasan_alloc_bt(f->backtrace, fsize, 2);
+	h->frames = (uint32_t)kasan_alloc_bt(f->backtrace, fsize, 2);
 
 	/* checksum the whole object, minus the user part */
 	h->crc = kasan_alloc_crc(addr);
@@ -1077,6 +1089,7 @@ kasan_dealloc(vm_offset_t addr, vm_size_t *size)
 	assert(size && addr);
 	struct kasan_alloc_header *h = header_for_user_addr(addr);
 	*size = h->alloc_size;
+	h->magic = 0; /* clear the magic so the debugger doesn't find a bogus object */
 	return addr - h->left_rz;
 }
 
@@ -1102,8 +1115,8 @@ kasan_check_free(vm_offset_t addr, vm_size_t size, unsigned heap_type)
 
 	/* map heap type to an internal access type */
 	access_t type = heap_type == KASAN_HEAP_KALLOC    ? TYPE_KFREE  :
-	                heap_type == KASAN_HEAP_ZALLOC    ? TYPE_ZFREE  :
-	                heap_type == KASAN_HEAP_FAKESTACK ? TYPE_FSFREE : 0;
+	    heap_type == KASAN_HEAP_ZALLOC    ? TYPE_ZFREE  :
+	    heap_type == KASAN_HEAP_FAKESTACK ? TYPE_FSFREE : 0;
 
 	/* check the magic and crc match */
 	if (h->magic != magic_for_addr(addr, LIVE_XOR)) {
@@ -1122,7 +1135,7 @@ kasan_check_free(vm_offset_t addr, vm_size_t size, unsigned heap_type)
 
 	/* Check that the redzones are valid */
 	if (!kasan_check_shadow(addr - h->left_rz, h->left_rz, ASAN_HEAP_LEFT_RZ) ||
-		!kasan_check_shadow(addr + h->user_size, rightrz_sz, ASAN_HEAP_RIGHT_RZ)) {
+	    !kasan_check_shadow(addr + h->user_size, rightrz_sz, ASAN_HEAP_RIGHT_RZ)) {
 		kasan_violation(addr, size, type, REASON_BAD_METADATA);
 	}
 
@@ -1163,8 +1176,8 @@ struct quarantine {
 };
 
 struct quarantine quarantines[] = {
-	{ STAILQ_HEAD_INITIALIZER((quarantines[KASAN_HEAP_ZALLOC].freelist)),    0, QUARANTINE_ENTRIES, 0, QUARANTINE_MAXSIZE },
-	{ STAILQ_HEAD_INITIALIZER((quarantines[KASAN_HEAP_KALLOC].freelist)),    0, QUARANTINE_ENTRIES, 0, QUARANTINE_MAXSIZE },
+	{ STAILQ_HEAD_INITIALIZER((quarantines[KASAN_HEAP_ZALLOC].freelist)), 0, QUARANTINE_ENTRIES, 0, QUARANTINE_MAXSIZE },
+	{ STAILQ_HEAD_INITIALIZER((quarantines[KASAN_HEAP_KALLOC].freelist)), 0, QUARANTINE_ENTRIES, 0, QUARANTINE_MAXSIZE },
 	{ STAILQ_HEAD_INITIALIZER((quarantines[KASAN_HEAP_FAKESTACK].freelist)), 0, QUARANTINE_ENTRIES, 0, QUARANTINE_MAXSIZE }
 };
 
@@ -1179,8 +1192,8 @@ fle_crc(struct freelist_entry *fle)
  */
 void NOINLINE
 kasan_free_internal(void **addrp, vm_size_t *sizep, int type,
-                    zone_t *zone, vm_size_t user_size, int locked,
-                    bool doquarantine)
+    zone_t *zone, vm_size_t user_size, int locked,
+    bool doquarantine)
 {
 	vm_size_t size = *sizep;
 	vm_offset_t addr = *(vm_offset_t *)addrp;
@@ -1257,7 +1270,7 @@ kasan_free_internal(void **addrp, vm_size_t *sizep, int type,
 
 		if (type != KASAN_HEAP_KALLOC) {
 			assert((vm_offset_t)zone >= VM_MIN_KERNEL_AND_KEXT_ADDRESS &&
-			       (vm_offset_t)zone <= VM_MAX_KERNEL_ADDRESS);
+			    (vm_offset_t)zone <= VM_MAX_KERNEL_ADDRESS);
 			*zone = tofree->zone;
 		}
 
@@ -1274,18 +1287,17 @@ kasan_free_internal(void **addrp, vm_size_t *sizep, int type,
 
 		/* clobber the quarantine header */
 		__nosan_bzero((void *)addr, sizeof(struct freelist_entry));
-
 	} else {
 		/* quarantine is not full - don't really free anything */
 		addr = 0;
 	}
 
- free_current_locked:
+free_current_locked:
 	if (!locked) {
 		kasan_unlock(flg);
 	}
 
- free_current:
+free_current:
 	*addrp = (void *)addr;
 	if (addr) {
 		kasan_unpoison((void *)addr, size);
@@ -1295,7 +1307,7 @@ kasan_free_internal(void **addrp, vm_size_t *sizep, int type,
 
 void NOINLINE
 kasan_free(void **addrp, vm_size_t *sizep, int type, zone_t *zone,
-           vm_size_t user_size, bool quarantine)
+    vm_size_t user_size, bool quarantine)
 {
 	kasan_free_internal(addrp, sizep, type, zone, user_size, 0, quarantine);
 
@@ -1347,19 +1359,19 @@ kasan_unpoison_cxx_array_cookie(void *ptr)
 
 #define ACCESS_CHECK_DECLARE(type, sz, access) \
 	void __asan_##type##sz(uptr addr) { \
-		kasan_check_range((const void *)addr, sz, access); \
+	        kasan_check_range((const void *)addr, sz, access); \
 	} \
 	void OS_NORETURN UNSUPPORTED_API(__asan_exp_##type##sz, uptr a, int32_t b);
 
-ACCESS_CHECK_DECLARE(load,  1,  TYPE_LOAD);
-ACCESS_CHECK_DECLARE(load,  2,  TYPE_LOAD);
-ACCESS_CHECK_DECLARE(load,  4,  TYPE_LOAD);
-ACCESS_CHECK_DECLARE(load,  8,  TYPE_LOAD);
-ACCESS_CHECK_DECLARE(load,  16, TYPE_LOAD);
-ACCESS_CHECK_DECLARE(store, 1,  TYPE_STORE);
-ACCESS_CHECK_DECLARE(store, 2,  TYPE_STORE);
-ACCESS_CHECK_DECLARE(store, 4,  TYPE_STORE);
-ACCESS_CHECK_DECLARE(store, 8,  TYPE_STORE);
+ACCESS_CHECK_DECLARE(load, 1, TYPE_LOAD);
+ACCESS_CHECK_DECLARE(load, 2, TYPE_LOAD);
+ACCESS_CHECK_DECLARE(load, 4, TYPE_LOAD);
+ACCESS_CHECK_DECLARE(load, 8, TYPE_LOAD);
+ACCESS_CHECK_DECLARE(load, 16, TYPE_LOAD);
+ACCESS_CHECK_DECLARE(store, 1, TYPE_STORE);
+ACCESS_CHECK_DECLARE(store, 2, TYPE_STORE);
+ACCESS_CHECK_DECLARE(store, 4, TYPE_STORE);
+ACCESS_CHECK_DECLARE(store, 8, TYPE_STORE);
 ACCESS_CHECK_DECLARE(store, 16, TYPE_STORE);
 
 void
@@ -1382,7 +1394,7 @@ kasan_set_shadow(uptr addr, size_t sz, uint8_t val)
 
 #define SET_SHADOW_DECLARE(val) \
 	void __asan_set_shadow_##val(uptr addr, size_t sz) { \
-		kasan_set_shadow(addr, sz, 0x##val); \
+	        kasan_set_shadow(addr, sz, 0x##val); \
 	}
 
 SET_SHADOW_DECLARE(00)
@@ -1515,19 +1527,19 @@ SYSCTL_UINT(_kern_kasan, OID_AUTO, leak_fatal_threshold, CTLFLAG_RW, &leak_fatal
 SYSCTL_UINT(_kern_kasan, OID_AUTO, memused, CTLFLAG_RD, &shadow_pages_used, 0, "");
 SYSCTL_UINT(_kern_kasan, OID_AUTO, memtotal, CTLFLAG_RD, &shadow_pages_total, 0, "");
 SYSCTL_UINT(_kern_kasan, OID_AUTO, kexts, CTLFLAG_RD, &kexts_loaded, 0, "");
-SYSCTL_COMPAT_UINT(_kern_kasan, OID_AUTO, debug,     CTLFLAG_RD, NULL, KASAN_DEBUG, "");
-SYSCTL_COMPAT_UINT(_kern_kasan, OID_AUTO, zalloc,    CTLFLAG_RD, NULL, KASAN_ZALLOC, "");
-SYSCTL_COMPAT_UINT(_kern_kasan, OID_AUTO, kalloc,    CTLFLAG_RD, NULL, KASAN_KALLOC, "");
+SYSCTL_COMPAT_UINT(_kern_kasan, OID_AUTO, debug, CTLFLAG_RD, NULL, KASAN_DEBUG, "");
+SYSCTL_COMPAT_UINT(_kern_kasan, OID_AUTO, zalloc, CTLFLAG_RD, NULL, KASAN_ZALLOC, "");
+SYSCTL_COMPAT_UINT(_kern_kasan, OID_AUTO, kalloc, CTLFLAG_RD, NULL, KASAN_KALLOC, "");
 SYSCTL_COMPAT_UINT(_kern_kasan, OID_AUTO, dynamicbl, CTLFLAG_RD, NULL, KASAN_DYNAMIC_BLACKLIST, "");
 
 SYSCTL_PROC(_kern_kasan, OID_AUTO, fakestack,
-		CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
-		0, 0, sysctl_fakestack_enable, "I", "");
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, sysctl_fakestack_enable, "I", "");
 
 SYSCTL_PROC(_kern_kasan, OID_AUTO, test,
-		CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
-		0, 0, sysctl_kasan_test, "I", "");
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, sysctl_kasan_test, "I", "");
 
 SYSCTL_PROC(_kern_kasan, OID_AUTO, fail,
-		CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
-		0, 1, sysctl_kasan_test, "I", "");
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 1, sysctl_kasan_test, "I", "");

@@ -57,12 +57,11 @@
 #endif
 
 
-#define f_flag f_fglob->fg_flag
-#define f_type f_fglob->fg_ops->fo_type
+#define f_flag fp_glob->fg_flag
 extern int dofilewrite(vfs_context_t ctx, struct fileproc *fp,
     user_addr_t bufp, user_size_t nbyte, off_t offset,
     int flags, user_ssize_t *retval );
-extern int wr_uio(struct proc *p, struct fileproc *fp, uio_t uio, user_ssize_t *retval);
+extern int do_uiowrite(struct proc *p, struct fileproc *fp, uio_t uio, int flags, user_ssize_t *retval);
 
 /*
  * Experimental guarded file descriptor support.
@@ -77,7 +76,7 @@ kern_return_t task_violated_guard(mach_exception_code_t, mach_exception_subcode_
  * guarded_fileproc structs which implement guarded fds.  The latter
  * struct (below) embeds the former.
  *
- * The two types should be distinguished by the "type" portion of f_flags.
+ * The two types should be distinguished by the "type" portion of fp_flags.
  * There's also a magic number to help catch misuse and bugs.
  *
  * This is a bit unpleasant, but results from the desire to allow
@@ -104,10 +103,6 @@ struct gfp_crarg {
 	u_int gca_attrs;
 };
 
-#ifdef OS_REFCNT_DEBUG
-extern struct os_refgrp f_iocount_refgrp;
-#endif
-
 static struct fileproc *
 guarded_fileproc_alloc_init(void *crarg)
 {
@@ -121,8 +116,8 @@ guarded_fileproc_alloc_init(void *crarg)
 	bzero(gfp, sizeof(*gfp));
 
 	struct fileproc *fp = &gfp->gf_fileproc;
-	os_ref_init(&fp->f_iocount, &f_iocount_refgrp);
-	fp->f_flags = FTYPE_GUARDED;
+	os_ref_init(&fp->fp_iocount, &f_refgrp);
+	fp->fp_flags = FTYPE_GUARDED;
 
 	gfp->gf_magic = GUARDED_FILEPROC_MAGIC;
 	gfp->gf_guard = aarg->gca_guard;
@@ -138,7 +133,7 @@ guarded_fileproc_free(struct fileproc *fp)
 
 	if (FILEPROC_TYPE(fp) != FTYPE_GUARDED ||
 	    GUARDED_FILEPROC_MAGIC != gfp->gf_magic) {
-		panic("%s: corrupt fp %p flags %x", __func__, fp, fp->f_flags);
+		panic("%s: corrupt fp %p flags %x", __func__, fp, fp->fp_flags);
 	}
 
 	kfree(gfp, sizeof(*gfp));
@@ -192,7 +187,7 @@ fp_isguarded(struct fileproc *fp, u_int attrs)
 
 		if (GUARDED_FILEPROC_MAGIC != gfp->gf_magic) {
 			panic("%s: corrupt gfp %p flags %x",
-			    __func__, gfp, fp->f_flags);
+			    __func__, gfp, fp->fp_flags);
 		}
 		return (attrs & gfp->gf_attrs) == attrs;
 	}
@@ -205,7 +200,7 @@ int
 fp_guard_exception(proc_t p, int fd, struct fileproc *fp, u_int flavor)
 {
 	if (FILEPROC_TYPE(fp) != FTYPE_GUARDED) {
-		panic("%s corrupt fp %p flags %x", __func__, fp, fp->f_flags);
+		panic("%s corrupt fp %p flags %x", __func__, fp, fp->fp_flags);
 	}
 
 	struct guarded_fileproc *gfp = FP_TO_GFP(fp);
@@ -447,9 +442,8 @@ guarded_close_np(proc_t p, struct guarded_close_np_args *uap,
 		proc_fdunlock(p);
 		return error;
 	}
-	error = close_internal_locked(p, fd, GFP_TO_FP(gfp), 0);
-	proc_fdunlock(p);
-	return error;
+	fp_drop(p, fd, GFP_TO_FP(gfp), 1);
+	return fp_close_and_unlock(p, fd, GFP_TO_FP(gfp), 0);
 }
 
 /*
@@ -589,7 +583,7 @@ restart:
 
 			if (GUARDED_FILEPROC_MAGIC != gfp->gf_magic) {
 				panic("%s: corrupt gfp %p flags %x",
-				    __func__, gfp, fp->f_flags);
+				    __func__, gfp, fp->fp_flags);
 			}
 
 			if (oldg == gfp->gf_guard &&
@@ -619,7 +613,7 @@ restart:
 			/*
 			 * Add a guard to a previously unguarded descriptor
 			 */
-			switch (FILEGLOB_DTYPE(fp->f_fglob)) {
+			switch (FILEGLOB_DTYPE(fp->fp_glob)) {
 			case DTYPE_VNODE:
 			case DTYPE_PIPE:
 			case DTYPE_SOCKET:
@@ -653,7 +647,7 @@ restart:
 				FDFLAGS_SET(p, fd, UF_EXCLOSE);
 				(void) fp_drop(p, fd, nfp, 1);
 				break;
-			case EKEEPLOOKING: /* f_iocount indicates a collision */
+			case EKEEPLOOKING: /* fp_iocount indicates a collision */
 				(void) fp_drop(p, fd, fp, 1);
 				fileproc_free(nfp);
 				goto restart;
@@ -682,7 +676,7 @@ restart:
 
 			if (GUARDED_FILEPROC_MAGIC != gfp->gf_magic) {
 				panic("%s: corrupt gfp %p flags %x",
-				    __func__, gfp, fp->f_flags);
+				    __func__, gfp, fp->fp_flags);
 			}
 
 			if (oldg != gfp->gf_guard ||
@@ -706,7 +700,7 @@ restart:
 				    (nfdflags & FD_CLOEXEC) ? UF_EXCLOSE : 0);
 				(void) fp_drop(p, fd, nfp, 1);
 				break;
-			case EKEEPLOOKING: /* f_iocount indicates collision */
+			case EKEEPLOOKING: /* fp_iocount indicates collision */
 				(void) fp_drop(p, fd, fp, 1);
 				fileproc_free(nfp);
 				goto restart;
@@ -745,7 +739,6 @@ guarded_write_np(struct proc *p, struct guarded_write_np_args *uap, user_ssize_t
 	guardid_t uguard;
 	struct fileproc *fp;
 	struct guarded_fileproc *gfp;
-	bool wrote_some = false;
 
 	AUDIT_ARG(fd, fd);
 
@@ -763,17 +756,14 @@ guarded_write_np(struct proc *p, struct guarded_write_np_args *uap, user_ssize_t
 		error = EBADF;
 	} else {
 		struct vfs_context context = *(vfs_context_current());
-		context.vc_ucred = fp->f_fglob->fg_cred;
+		context.vc_ucred = fp->fp_glob->fg_cred;
 
 		error = dofilewrite(&context, fp, uap->cbuf, uap->nbyte,
 		    (off_t)-1, 0, retval);
-		wrote_some = *retval > 0;
 	}
-	if (wrote_some) {
-		fp_drop_written(p, fd, fp);
-	} else {
-		fp_drop(p, fd, fp, 0);
-	}
+
+	fp_drop(p, fd, fp, 0);
+
 	return error;
 }
 
@@ -792,7 +782,6 @@ guarded_pwrite_np(struct proc *p, struct guarded_pwrite_np_args *uap, user_ssize
 	vnode_t vp  = (vnode_t)0;
 	guardid_t uguard;
 	struct guarded_fileproc *gfp;
-	bool wrote_some = false;
 
 	AUDIT_ARG(fd, fd);
 
@@ -810,13 +799,13 @@ guarded_pwrite_np(struct proc *p, struct guarded_pwrite_np_args *uap, user_ssize
 		error = EBADF;
 	} else {
 		struct vfs_context context = *vfs_context_current();
-		context.vc_ucred = fp->f_fglob->fg_cred;
+		context.vc_ucred = fp->fp_glob->fg_cred;
 
-		if (fp->f_type != DTYPE_VNODE) {
+		if (FILEGLOB_DTYPE(fp->fp_glob) != DTYPE_VNODE) {
 			error = ESPIPE;
 			goto errout;
 		}
-		vp = (vnode_t)fp->f_fglob->fg_data;
+		vp = (vnode_t)fp->fp_glob->fg_data;
 		if (vnode_isfifo(vp)) {
 			error = ESPIPE;
 			goto errout;
@@ -832,14 +821,9 @@ guarded_pwrite_np(struct proc *p, struct guarded_pwrite_np_args *uap, user_ssize
 
 		error = dofilewrite(&context, fp, uap->buf, uap->nbyte,
 		    uap->offset, FOF_OFFSET, retval);
-		wrote_some = *retval > 0;
 	}
 errout:
-	if (wrote_some) {
-		fp_drop_written(p, fd, fp);
-	} else {
-		fp_drop(p, fd, fp, 0);
-	}
+	fp_drop(p, fd, fp, 0);
 
 	KERNEL_DEBUG_CONSTANT((BSDDBG_CODE(DBG_BSD_SC_EXTENDED_INFO, SYS_guarded_pwrite_np) | DBG_FUNC_NONE),
 	    uap->fd, uap->nbyte, (unsigned int)((uap->offset >> 32)), (unsigned int)(uap->offset), 0);
@@ -863,7 +847,6 @@ guarded_writev_np(struct proc *p, struct guarded_writev_np_args *uap, user_ssize
 	struct user_iovec *iovp;
 	guardid_t uguard;
 	struct guarded_fileproc *gfp;
-	bool wrote_some = false;
 
 	AUDIT_ARG(fd, uap->fd);
 
@@ -912,15 +895,10 @@ guarded_writev_np(struct proc *p, struct guarded_writev_np_args *uap, user_ssize
 	if ((fp->f_flag & FWRITE) == 0) {
 		error = EBADF;
 	} else {
-		error = wr_uio(p, fp, auio, retval);
-		wrote_some = *retval > 0;
+		error = do_uiowrite(p, fp, auio, 0, retval);
 	}
 
-	if (wrote_some) {
-		fp_drop_written(p, uap->fd, fp);
-	} else {
-		fp_drop(p, uap->fd, fp, 0);
-	}
+	fp_drop(p, uap->fd, fp, 0);
 ExitThisRoutine:
 	if (auio != NULL) {
 		uio_free(auio);
@@ -1100,7 +1078,7 @@ vnguard_sysc_getguardattr(proc_t p, struct vnguard_getattr *vga)
 		return error;
 	}
 	do {
-		struct fileglob *fg = fp->f_fglob;
+		struct fileglob *fg = fp->fp_glob;
 		if (FILEGLOB_DTYPE(fg) != DTYPE_VNODE) {
 			error = EBADF;
 			break;
@@ -1162,7 +1140,7 @@ vnguard_sysc_setguard(proc_t p, const struct vnguard_set *vns)
 			error = EBADF;
 			break;
 		}
-		struct fileglob *fg = fp->f_fglob;
+		struct fileglob *fg = fp->fp_glob;
 		if (FILEGLOB_DTYPE(fg) != DTYPE_VNODE) {
 			error = EBADF;
 			break;

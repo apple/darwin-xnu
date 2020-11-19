@@ -4,19 +4,10 @@ OBJROOT?=$(shell /bin/pwd)
 
 CC:=$(shell xcrun -sdk "$(SDKROOT)" -find cc)
 
-ifdef RC_ARCHS
-    ARCHS:=$(RC_ARCHS)
-  else
-    ifeq "$(Embedded)" "YES"
-      ARCHS:=armv7 armv7s arm64
-    else
-      ARCHS:=x86_64 i386
-  endif
-endif
-
 DSTROOT?=$(shell /bin/pwd)
 
-CFLAGS:=$(patsubst %, -arch %,$(ARCHS)) -g -Wall -Os -isysroot $(SDKROOT) -framework CoreFoundation
+CFLAGS:=$(ARCH_FLAGS) -g -Wall -Os -isysroot $(SDKROOT) -framework CoreFoundation
+CFLAGS += -Wl,-sectcreate,__INFO_FILTER,__disable,/dev/null
 
 all: $(DSTROOT)/mktimer_test
 

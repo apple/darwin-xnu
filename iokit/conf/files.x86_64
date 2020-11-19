@@ -3,9 +3,6 @@
 
 iokit/Kernel/IOSyncer.cpp				optional iokitcpp
 
-# Shared lock
-
-iokit/Kernel/x86_64/IOSharedLock.s                            standard
 iokit/Kernel/x86_64/IOAsmSupport.s                            standard
 
 # Power Domains

@@ -198,7 +198,7 @@ extern boolean_t io_lock_try(
  * and zfree modifies that to point to the next free zone element.
  */
 #define IO_MAX_REFERENCES                                               \
-	(unsigned)(~0 ^ (1U << (sizeof(int)*BYTE_SIZE - 1)))
+	(unsigned)(~0U ^ (1U << (sizeof(int)*BYTE_SIZE - 1)))
 
 static inline void
 io_reference(ipc_object_t io)
@@ -333,7 +333,7 @@ extern kern_return_t ipc_object_copyin(
 	ipc_object_t            *objectp,
 	mach_port_context_t     context,
 	mach_msg_guard_flags_t  *guard_flags,
-	uint32_t                kmsg_flags);
+	uint16_t                kmsg_flags);
 
 /* Copyin a naked capability from the kernel */
 extern void ipc_object_copyin_from_kernel(

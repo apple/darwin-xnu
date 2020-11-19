@@ -84,11 +84,12 @@ int     ubc_range_op(vnode_t, off_t, off_t, int, int *);
 int     ubc_setcred(struct vnode *, struct proc *) __deprecated;
 /* code signing */
 struct cs_blob;
-struct cs_blob *ubc_cs_blob_get(vnode_t, cpu_type_t, off_t);
+struct cs_blob *ubc_cs_blob_get(vnode_t, cpu_type_t, cpu_subtype_t, off_t);
+struct cs_blob *ubc_cs_blob_get_supplement(vnode_t, off_t);
 
 /* apis to handle generation count for cs blob */
 void cs_blob_reset_cache(void);
-int ubc_cs_blob_revalidate(vnode_t, struct cs_blob *, struct image_params *, int);
+int ubc_cs_blob_revalidate(vnode_t, struct cs_blob *, struct image_params *, int, uint32_t);
 int ubc_cs_generation_check(vnode_t);
 
 int cs_entitlements_blob_get(proc_t, void **, size_t *);

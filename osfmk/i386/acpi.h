@@ -48,6 +48,7 @@ extern vm_offset_t acpi_install_wake_handler(void);
 extern void        acpi_sleep_kernel(acpi_sleep_callback func, void * refcon);
 extern void        acpi_idle_kernel(acpi_sleep_callback func, void * refcon);
 void install_real_mode_bootstrap(void *prot_entry);
+extern uint32_t    acpi_count_enabled_logical_processors(void);
 #endif  /* ASSEMBLER */
 
 #endif /* !_I386_ACPI_H_ */

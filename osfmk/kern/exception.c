@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -86,6 +86,8 @@
 #include <kern/host.h>
 #include <kern/misc_protos.h>
 #include <kern/ux_handler.h>
+
+#include <vm/vm_map.h>
 
 #include <security/mac_mach_internal.h>
 #include <string.h>
@@ -457,6 +459,7 @@ exception_triage_thread(
 	lck_mtx_t               *mutex;
 	kern_return_t   kr = KERN_FAILURE;
 
+
 	assert(exception != EXC_RPC_ALERT);
 
 	/*
@@ -528,6 +531,7 @@ out:
  *	Returns:
  *		KERN_SUCCESS if exception is handled by any of the handlers.
  */
+int debug4k_panic_on_exception = 0;
 kern_return_t
 exception_triage(
 	exception_type_t        exception,
@@ -535,6 +539,12 @@ exception_triage(
 	mach_msg_type_number_t  codeCnt)
 {
 	thread_t thread = current_thread();
+	if (VM_MAP_PAGE_SIZE(thread->task->map) < PAGE_SIZE) {
+		DEBUG4K_EXC("thread %p task %p map %p exception %d codes 0x%llx 0x%llx \n", thread, thread->task, thread->task->map, exception, code[0], code[1]);
+		if (debug4k_panic_on_exception) {
+			panic("DEBUG4K %s:%d thread %p task %p map %p exception %d codes 0x%llx 0x%llx \n", __FUNCTION__, __LINE__, thread, thread->task, thread->task->map, exception, code[0], code[1]);
+		}
+	}
 #if __has_feature(ptrauth_calls)
 	/*
 	 * If it is a ptrauth violation, then check if the task has the TF_PAC_EXC_FATAL

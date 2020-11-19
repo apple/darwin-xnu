@@ -46,8 +46,6 @@ void    host_notify_port_destroy(
 void    host_notify_calendar_change(void);
 void    host_notify_calendar_set(void);
 
-void    host_notify_init(void);
-
 #endif /* MACH_KERNEL_PRIVATE */
 
 #endif /* _KERN_HOST_NOTIFY_H_ */

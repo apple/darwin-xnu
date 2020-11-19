@@ -104,8 +104,8 @@ ipcperm(kauth_cred_t cred, struct ipc_perm *perm, int mode_req)
 	int     want_mod_controlinfo = (mode_req & IPC_M);
 	int     is_member;
 	mode_t  mode_owner = (perm->mode & S_IRWXU);
-	mode_t  mode_group = (perm->mode & S_IRWXG) << 3;
-	mode_t  mode_world = (perm->mode & S_IRWXO) << 6;
+	mode_t  mode_group = (mode_t)((perm->mode & S_IRWXG) << 3);
+	mode_t  mode_world = (mode_t)((perm->mode & S_IRWXO) << 6);
 
 	/* Grant all rights to super user */
 	if (!suser(cred, (u_short *)NULL)) {

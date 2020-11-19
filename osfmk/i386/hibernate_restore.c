@@ -25,11 +25,16 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+/*!
+ * i386/x86_64-specific functions required to support hibernation resume.
+ */
+
 #include <i386/pmap.h>
 #include <i386/proc_reg.h>
 #include <IOKit/IOHibernatePrivate.h>
+#include <vm/WKdm_new.h>
 
-#include <i386/pal_hibernate.h>
+#include <machine/pal_hibernate.h>
 
 extern pd_entry_t BootPTD[2048];
 
@@ -71,13 +76,15 @@ pal_hib_map(uintptr_t virt, uint64_t phys)
 	case BITMAP_AREA:
 	case IMAGE_AREA:
 	case IMAGE2_AREA:
+	case SCRATCH_AREA:
+	case WKDM_AREA:
 		break;
 
 	default:
 		asm("cli;hlt;");
 		break;
 	}
-	if (phys < IMAGE2_AREA) {
+	if (phys < WKDM_AREA) {
 		// first 4Gb is all mapped,
 		// and do not expect source areas to cross 4Gb
 		return phys;
@@ -97,12 +104,28 @@ pal_hib_map(uintptr_t virt, uint64_t phys)
 }
 
 void
-hibernateRestorePALState(uint32_t *arg)
+pal_hib_restore_pal_state(uint32_t *arg)
 {
 	(void)arg;
 }
 
 void
-pal_hib_patchup(void)
+pal_hib_resume_init(__unused pal_hib_ctx_t *ctx, __unused hibernate_page_list_t *map, __unused uint32_t *nextFree)
 {
+}
+
+void
+pal_hib_restored_page(__unused pal_hib_ctx_t *ctx, __unused pal_hib_restore_stage_t stage, __unused ppnum_t ppnum)
+{
+}
+
+void
+pal_hib_patchup(__unused pal_hib_ctx_t *ctx)
+{
+}
+
+void
+pal_hib_decompress_page(void *src, void *dst, void *scratch, unsigned int compressedSize)
+{
+	WKdm_decompress_new((WK_word*)src, (WK_word*)dst, (WK_word*)scratch, compressedSize);
 }

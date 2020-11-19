@@ -131,6 +131,7 @@ extern kern_return_t get_signalact(task_t, thread_t *, int);
 extern unsigned int get_useraddr(void);
 extern boolean_t task_did_exec(task_t task);
 extern boolean_t task_is_exec_copy(task_t task);
+extern void vm_shared_region_reslide_stale(void);
 
 /*
  * ---
@@ -233,8 +234,8 @@ static void
 sigaltstack_user64_to_kern(struct user64_sigaltstack *in, struct kern_sigaltstack *out)
 {
 	out->ss_flags   = in->ss_flags;
-	out->ss_size    = in->ss_size;
-	out->ss_sp              = in->ss_sp;
+	out->ss_size    = (user_size_t)in->ss_size;
+	out->ss_sp      = (user_addr_t)in->ss_sp;
 }
 
 static void
@@ -271,8 +272,8 @@ __sigaction_user32_to_kern(struct __user32_sigaction *in, struct __kern_sigactio
 static void
 __sigaction_user64_to_kern(struct __user64_sigaction *in, struct __kern_sigaction *out)
 {
-	out->__sigaction_u.__sa_handler = in->__sigaction_u.__sa_handler;
-	out->sa_tramp = in->sa_tramp;
+	out->__sigaction_u.__sa_handler = (user_addr_t)in->__sigaction_u.__sa_handler;
+	out->sa_tramp = (user_addr_t)in->sa_tramp;
 	out->sa_mask = in->sa_mask;
 	out->sa_flags = in->sa_flags;
 
@@ -808,7 +809,7 @@ execsigs(proc_t p, thread_t thread)
 	 * and are now ignored by default).
 	 */
 	while (p->p_sigcatch) {
-		nc = ffs((long)p->p_sigcatch);
+		nc = ffs((unsigned int)p->p_sigcatch);
 		mask = sigmask(nc);
 		p->p_sigcatch &= ~mask;
 		if (sigprop[nc] & SA_IGNORE) {
@@ -1103,8 +1104,8 @@ __old_semwait_signal_nocancel(proc_t p, struct __old_semwait_signal_nocancel_arg
 		if (IS_64BIT_PROCESS(p)) {
 			struct user64_timespec ts64;
 			error = copyin(uap->ts, &ts64, sizeof(ts64));
-			ts.tv_sec = ts64.tv_sec;
-			ts.tv_nsec = ts64.tv_nsec;
+			ts.tv_sec = (user_time_t)ts64.tv_sec;
+			ts.tv_nsec = (user_long_t)ts64.tv_nsec;
 		} else {
 			struct user32_timespec ts32;
 			error = copyin(uap->ts, &ts32, sizeof(ts32));
@@ -1123,8 +1124,8 @@ __old_semwait_signal_nocancel(proc_t p, struct __old_semwait_signal_nocancel_arg
 		}
 
 		if (uap->relative) {
-			then.tv_sec = ts.tv_sec;
-			then.tv_nsec = ts.tv_nsec;
+			then.tv_sec = (unsigned int)ts.tv_sec;
+			then.tv_nsec = (clock_res_t)ts.tv_nsec;
 		} else {
 			nanotime(&now);
 
@@ -1135,8 +1136,8 @@ __old_semwait_signal_nocancel(proc_t p, struct __old_semwait_signal_nocancel_arg
 				then.tv_sec = 0;
 				then.tv_nsec = 0;
 			} else {
-				then.tv_sec = ts.tv_sec - now.tv_sec;
-				then.tv_nsec = ts.tv_nsec - now.tv_nsec;
+				then.tv_sec = (unsigned int)(ts.tv_sec - now.tv_sec);
+				then.tv_nsec = (clock_res_t)(ts.tv_nsec - now.tv_nsec);
 				if (then.tv_nsec < 0) {
 					then.tv_nsec += NSEC_PER_SEC;
 					then.tv_sec--;
@@ -1197,7 +1198,7 @@ __semwait_signal_nocancel(__unused proc_t p, struct __semwait_signal_nocancel_ar
 	boolean_t truncated_timeout = FALSE;
 
 	if (uap->timeout) {
-		ts.tv_sec = uap->tv_sec;
+		ts.tv_sec = (user_time_t)uap->tv_sec;
 		ts.tv_nsec = uap->tv_nsec;
 
 		if ((ts.tv_sec & 0xFFFFFFFF00000000ULL) != 0) {
@@ -1207,8 +1208,8 @@ __semwait_signal_nocancel(__unused proc_t p, struct __semwait_signal_nocancel_ar
 		}
 
 		if (uap->relative) {
-			then.tv_sec = ts.tv_sec;
-			then.tv_nsec = ts.tv_nsec;
+			then.tv_sec = (unsigned int)ts.tv_sec;
+			then.tv_nsec = (clock_res_t)ts.tv_nsec;
 		} else {
 			nanotime(&now);
 
@@ -1219,8 +1220,8 @@ __semwait_signal_nocancel(__unused proc_t p, struct __semwait_signal_nocancel_ar
 				then.tv_sec = 0;
 				then.tv_nsec = 0;
 			} else {
-				then.tv_sec = ts.tv_sec - now.tv_sec;
-				then.tv_nsec = ts.tv_nsec - now.tv_nsec;
+				then.tv_sec = (unsigned int)(ts.tv_sec - now.tv_sec);
+				then.tv_nsec = (clock_res_t)(ts.tv_nsec - now.tv_nsec);
 				if (then.tv_nsec < 0) {
 					then.tv_nsec += NSEC_PER_SEC;
 					then.tv_sec--;
@@ -1629,7 +1630,8 @@ build_userspace_exit_reason(uint32_t reason_namespace, uint64_t reason_code, use
 	}
 
 	if (reason_string != USER_ADDR_NULL) {
-		reason_user_desc = (char *) kalloc(EXIT_REASON_USER_DESC_MAX_LEN);
+		reason_user_desc = kheap_alloc(KHEAP_TEMP,
+		    EXIT_REASON_USER_DESC_MAX_LEN, Z_WAITOK);
 
 		if (reason_user_desc != NULL) {
 			error = copyinstr(reason_string, (void *) reason_user_desc,
@@ -1644,7 +1646,8 @@ build_userspace_exit_reason(uint32_t reason_namespace, uint64_t reason_code, use
 				user_data_to_copy += reason_user_desc_len;
 			} else {
 				exit_reason->osr_flags |= OS_REASON_FLAG_FAILED_DATA_COPYIN;
-				kfree(reason_user_desc, EXIT_REASON_USER_DESC_MAX_LEN);
+				kheap_free(KHEAP_TEMP, reason_user_desc,
+				    EXIT_REASON_USER_DESC_MAX_LEN);
 				reason_user_desc = NULL;
 				reason_user_desc_len = 0;
 			}
@@ -1666,10 +1669,10 @@ build_userspace_exit_reason(uint32_t reason_namespace, uint64_t reason_code, use
 		if (reason_user_desc != NULL && reason_user_desc_len != 0) {
 			if (KERN_SUCCESS == kcdata_get_memory_addr(&exit_reason->osr_kcd_descriptor,
 			    EXIT_REASON_USER_DESC,
-			    reason_user_desc_len,
+			    (uint32_t)reason_user_desc_len,
 			    &data_addr)) {
 				kcdata_memcpy(&exit_reason->osr_kcd_descriptor, (mach_vm_address_t) data_addr,
-				    reason_user_desc, reason_user_desc_len);
+				    reason_user_desc, (uint32_t)reason_user_desc_len);
 			} else {
 				printf("build_userspace_exit_reason: failed to allocate space for reason string\n");
 				goto out_failed_copyin;
@@ -1695,7 +1698,7 @@ build_userspace_exit_reason(uint32_t reason_namespace, uint64_t reason_code, use
 	}
 
 	if (reason_user_desc != NULL) {
-		kfree(reason_user_desc, EXIT_REASON_USER_DESC_MAX_LEN);
+		kheap_free(KHEAP_TEMP, reason_user_desc, EXIT_REASON_USER_DESC_MAX_LEN);
 		reason_user_desc = NULL;
 		reason_user_desc_len = 0;
 	}
@@ -1705,7 +1708,7 @@ build_userspace_exit_reason(uint32_t reason_namespace, uint64_t reason_code, use
 out_failed_copyin:
 
 	if (reason_user_desc != NULL) {
-		kfree(reason_user_desc, EXIT_REASON_USER_DESC_MAX_LEN);
+		kheap_free(KHEAP_TEMP, reason_user_desc, EXIT_REASON_USER_DESC_MAX_LEN);
 		reason_user_desc = NULL;
 		reason_user_desc_len = 0;
 	}
@@ -2001,6 +2004,46 @@ threadsignal(thread_t sig_actthread, int signum, mach_exception_code_t code, boo
 	signal_setast(sig_actthread);
 }
 
+/* Called with proc locked */
+static void
+set_thread_extra_flags(struct uthread *uth, os_reason_t reason)
+{
+	extern int vm_shared_region_reslide_restrict;
+	assert(uth != NULL);
+	/*
+	 * Check whether the userland fault address falls within the shared
+	 * region and notify userland if so. This allows launchd to apply
+	 * special policies around this fault type.
+	 */
+	if (reason->osr_namespace == OS_REASON_SIGNAL &&
+	    reason->osr_code == SIGSEGV) {
+		mach_vm_address_t fault_address = uth->uu_subcode;
+
+#if defined(__arm64__)
+		/* taken from osfmk/arm/misc_protos.h */
+		#define TBI_MASK           0xff00000000000000
+		#define tbi_clear(addr)    ((addr) & ~(TBI_MASK))
+		fault_address = tbi_clear(fault_address);
+#endif /* __arm64__ */
+
+		if (fault_address >= SHARED_REGION_BASE &&
+		    fault_address <= SHARED_REGION_BASE + SHARED_REGION_SIZE) {
+			/*
+			 * Always report whether the fault happened within the shared cache
+			 * region, but only stale the slide if the resliding is extended
+			 * to all processes or if the process faulting is a platform one.
+			 */
+			reason->osr_flags |= OS_REASON_FLAG_SHAREDREGION_FAULT;
+
+#if __has_feature(ptrauth_calls)
+			if (!vm_shared_region_reslide_restrict || csproc_get_platform_binary(current_proc())) {
+				vm_shared_region_reslide_stale();
+			}
+#endif /* __has_feature(ptrauth_calls) */
+		}
+	}
+}
+
 void
 set_thread_exit_reason(void *th, void *reason, boolean_t proc_locked)
 {
@@ -2020,6 +2063,8 @@ set_thread_exit_reason(void *th, void *reason, boolean_t proc_locked)
 
 		proc_lock(targ_proc);
 	}
+
+	set_thread_extra_flags(targ_uth, exit_reason);
 
 	if (targ_uth->uu_exit_reason == OS_REASON_NULL) {
 		targ_uth->uu_exit_reason = exit_reason;
@@ -2137,13 +2182,13 @@ build_signal_reason(int signum, const char *procname)
 			truncated_procname[proc_name_length - 1] = '\0';
 
 			kcdata_memcpy(&signal_reason->osr_kcd_descriptor, data_addr, truncated_procname,
-			    strlen((char *) &truncated_procname));
+			    (uint32_t)strlen((char *) &truncated_procname));
 		} else if (*sender_proc->p_name) {
 			kcdata_memcpy(&signal_reason->osr_kcd_descriptor, data_addr, &sender_proc->p_name,
 			    sizeof(sender_proc->p_name));
 		} else {
 			kcdata_memcpy(&signal_reason->osr_kcd_descriptor, data_addr, &default_sender_procname,
-			    strlen(default_sender_procname) + 1);
+			    (uint32_t)strlen(default_sender_procname) + 1);
 		}
 	} else {
 		printf("build_signal_reason: exceeded space in signal reason buf, unable to log procname\n");
@@ -2707,7 +2752,7 @@ psignal_with_reason(proc_t p, int signum, struct os_reason *signal_reason)
 }
 
 void
-psignal_sigkill_with_reason(proc_t p, struct os_reason *signal_reason)
+psignal_sigkill_with_reason(struct proc *p, struct os_reason *signal_reason)
 {
 	psignal_internal(p, NULL, NULL, 0, SIGKILL, signal_reason);
 }
@@ -2808,7 +2853,7 @@ issignal_locked(proc_t p)
 			goto out;
 		}
 
-		signum = ffs((long)sigbits);
+		signum = ffs((unsigned int)sigbits);
 		mask = sigmask(signum);
 		prop = sigprop[signum];
 
@@ -3065,7 +3110,7 @@ CURSIG(proc_t p)
 			return retnum;
 		}
 
-		signum = ffs((long)sigbits);
+		signum = ffs((unsigned int)sigbits);
 		mask = sigmask(signum);
 		prop = sigprop[signum];
 		sigbits &= ~mask;               /* take the signal out */
@@ -3505,7 +3550,7 @@ bsd_ast(thread_t thread)
 	}
 
 	if (ut->t_dtrace_resumepid) {
-		proc_t resumeproc = proc_find(ut->t_dtrace_resumepid);
+		proc_t resumeproc = proc_find((int)ut->t_dtrace_resumepid);
 		ut->t_dtrace_resumepid = 0;
 		if (resumeproc != PROC_NULL) {
 			proc_lock(resumeproc);

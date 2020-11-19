@@ -36,7 +36,6 @@
 #include <kern/processor.h>
 #include <kern/timer_call.h>
 #include <kern/timer_queue.h>
-#include <kern/call_entry.h>
 #include <kern/thread.h>
 #include <kern/policy_internal.h>
 
@@ -66,31 +65,16 @@
 #define TIMER_KDEBUG_TRACE(x...)
 #endif
 
-
-lck_grp_t               timer_call_lck_grp;
-lck_attr_t              timer_call_lck_attr;
-lck_grp_attr_t          timer_call_lck_grp_attr;
-
-lck_grp_t               timer_longterm_lck_grp;
-lck_attr_t              timer_longterm_lck_attr;
-lck_grp_attr_t          timer_longterm_lck_grp_attr;
+LCK_GRP_DECLARE(timer_call_lck_grp, "timer_call");
+LCK_GRP_DECLARE(timer_longterm_lck_grp, "timer_longterm");
 
 /* Timer queue lock must be acquired with interrupts disabled (under splclock()) */
-#if __SMP__
 #define timer_queue_lock_spin(queue)                                    \
 	lck_mtx_lock_spin_always(&queue->lock_data)
 
 #define timer_queue_unlock(queue)               \
 	lck_mtx_unlock_always(&queue->lock_data)
-#else
-#define timer_queue_lock_spin(queue)    (void)1
-#define timer_queue_unlock(queue)               (void)1
-#endif
 
-#define QUEUE(x)        ((queue_t)(x))
-#define MPQUEUE(x)      ((mpqueue_head_t *)(x))
-#define TIMER_CALL(x)   ((timer_call_t)(x))
-#define TCE(x)          (&(x->call_entry))
 /*
  * The longterm timer object is a global structure holding all timers
  * beyond the short-term, local timer queue threshold. The boot processor
@@ -250,10 +234,6 @@ timer_call_init_abstime(void)
 void
 timer_call_init(void)
 {
-	lck_attr_setdefault(&timer_call_lck_attr);
-	lck_grp_attr_setdefault(&timer_call_lck_grp_attr);
-	lck_grp_init(&timer_call_lck_grp, "timer_call", &timer_call_lck_grp_attr);
-
 	timer_longterm_init();
 	timer_call_init_abstime();
 }
@@ -263,7 +243,7 @@ void
 timer_call_queue_init(mpqueue_head_t *queue)
 {
 	DBG("timer_call_queue_init(%p)\n", queue);
-	mpqueue_init(queue, &timer_call_lck_grp, &timer_call_lck_attr);
+	mpqueue_init(queue, &timer_call_lck_grp, LCK_ATTR_NULL);
 }
 
 
@@ -274,123 +254,158 @@ timer_call_setup(
 	timer_call_param_t              param0)
 {
 	DBG("timer_call_setup(%p,%p,%p)\n", call, func, param0);
-	call_entry_setup(TCE(call), func, param0);
-	simple_lock_init(&(call)->lock, 0);
-	call->async_dequeue = FALSE;
+
+	*call = (struct timer_call) {
+		.tc_func = func,
+		.tc_param0 = param0,
+		.tc_async_dequeue = false,
+	};
+
+	simple_lock_init(&(call)->tc_lock, 0);
 }
-#if TIMER_ASSERT
+
+static mpqueue_head_t*
+mpqueue_for_timer_call(timer_call_t entry)
+{
+	queue_t queue_entry_is_on = entry->tc_queue;
+	/* 'cast' the queue back to the orignal mpqueue */
+	return __container_of(queue_entry_is_on, struct mpqueue_head, head);
+}
+
+
 static __inline__ mpqueue_head_t *
 timer_call_entry_dequeue(
 	timer_call_t            entry)
 {
-	mpqueue_head_t  *old_queue = MPQUEUE(TCE(entry)->queue);
+	mpqueue_head_t  *old_mpqueue = mpqueue_for_timer_call(entry);
 
-	if (!hw_lock_held((hw_lock_t)&entry->lock)) {
+	/* The entry was always on a queue */
+	assert(old_mpqueue != NULL);
+
+#if TIMER_ASSERT
+	if (!hw_lock_held((hw_lock_t)&entry->tc_lock)) {
 		panic("_call_entry_dequeue() "
 		    "entry %p is not locked\n", entry);
 	}
+
 	/*
 	 * XXX The queue lock is actually a mutex in spin mode
 	 *     but there's no way to test for it being held
 	 *     so we pretend it's a spinlock!
 	 */
-	if (!hw_lock_held((hw_lock_t)&old_queue->lock_data)) {
+	if (!hw_lock_held((hw_lock_t)&old_mpqueue->lock_data)) {
 		panic("_call_entry_dequeue() "
-		    "queue %p is not locked\n", old_queue);
+		    "queue %p is not locked\n", old_mpqueue);
+	}
+#endif /* TIMER_ASSERT */
+
+	if (old_mpqueue != timer_longterm_queue) {
+		priority_queue_remove(&old_mpqueue->mpq_pqhead,
+		    &entry->tc_pqlink);
 	}
 
-	call_entry_dequeue(TCE(entry));
-	old_queue->count--;
+	remqueue(&entry->tc_qlink);
 
-	return old_queue;
-}
+	entry->tc_queue = NULL;
 
-static __inline__ mpqueue_head_t *
-timer_call_entry_enqueue_deadline(
-	timer_call_t            entry,
-	mpqueue_head_t          *queue,
-	uint64_t                deadline)
-{
-	mpqueue_head_t  *old_queue = MPQUEUE(TCE(entry)->queue);
+	old_mpqueue->count--;
 
-	if (!hw_lock_held((hw_lock_t)&entry->lock)) {
-		panic("_call_entry_enqueue_deadline() "
-		    "entry %p is not locked\n", entry);
-	}
-	/* XXX More lock pretense:  */
-	if (!hw_lock_held((hw_lock_t)&queue->lock_data)) {
-		panic("_call_entry_enqueue_deadline() "
-		    "queue %p is not locked\n", queue);
-	}
-	if (old_queue != NULL && old_queue != queue) {
-		panic("_call_entry_enqueue_deadline() "
-		    "old_queue %p != queue", old_queue);
-	}
-
-	call_entry_enqueue_deadline(TCE(entry), QUEUE(queue), deadline);
-
-/* For efficiency, track the earliest soft deadline on the queue, so that
- * fuzzy decisions can be made without lock acquisitions.
- */
-	timer_call_t thead = (timer_call_t)queue_first(&queue->head);
-
-	queue->earliest_soft_deadline = thead->flags & TIMER_CALL_RATELIMITED ? TCE(thead)->deadline : thead->soft_deadline;
-
-	if (old_queue) {
-		old_queue->count--;
-	}
-	queue->count++;
-
-	return old_queue;
-}
-
-#else
-
-static __inline__ mpqueue_head_t *
-timer_call_entry_dequeue(
-	timer_call_t            entry)
-{
-	mpqueue_head_t  *old_queue = MPQUEUE(TCE(entry)->queue);
-
-	call_entry_dequeue(TCE(entry));
-	old_queue->count--;
-
-	return old_queue;
+	return old_mpqueue;
 }
 
 static __inline__ mpqueue_head_t *
 timer_call_entry_enqueue_deadline(
 	timer_call_t                    entry,
-	mpqueue_head_t                  *queue,
+	mpqueue_head_t                  *new_mpqueue,
 	uint64_t                        deadline)
 {
-	mpqueue_head_t  *old_queue = MPQUEUE(TCE(entry)->queue);
+	mpqueue_head_t  *old_mpqueue = mpqueue_for_timer_call(entry);
 
-	call_entry_enqueue_deadline(TCE(entry), QUEUE(queue), deadline);
+#if TIMER_ASSERT
+	if (!hw_lock_held((hw_lock_t)&entry->tc_lock)) {
+		panic("_call_entry_enqueue_deadline() "
+		    "entry %p is not locked\n", entry);
+	}
+
+	/* XXX More lock pretense:  */
+	if (!hw_lock_held((hw_lock_t)&new_mpqueue->lock_data)) {
+		panic("_call_entry_enqueue_deadline() "
+		    "queue %p is not locked\n", new_mpqueue);
+	}
+
+	if (old_mpqueue != NULL && old_mpqueue != new_mpqueue) {
+		panic("_call_entry_enqueue_deadline() "
+		    "old_mpqueue %p != new_mpqueue", old_mpqueue);
+	}
+#endif /* TIMER_ASSERT */
+
+	/* no longterm queue involved */
+	assert(new_mpqueue != timer_longterm_queue);
+	assert(old_mpqueue != timer_longterm_queue);
+
+	if (old_mpqueue == new_mpqueue) {
+		/* optimize the same-queue case to avoid a full re-insert */
+		uint64_t old_deadline = entry->tc_pqlink.deadline;
+		entry->tc_pqlink.deadline = deadline;
+
+		if (old_deadline < deadline) {
+			priority_queue_entry_increased(&new_mpqueue->mpq_pqhead,
+			    &entry->tc_pqlink);
+		} else {
+			priority_queue_entry_decreased(&new_mpqueue->mpq_pqhead,
+			    &entry->tc_pqlink);
+		}
+	} else {
+		if (old_mpqueue != NULL) {
+			priority_queue_remove(&old_mpqueue->mpq_pqhead,
+			    &entry->tc_pqlink);
+
+			re_queue_tail(&new_mpqueue->head, &entry->tc_qlink);
+		} else {
+			enqueue_tail(&new_mpqueue->head, &entry->tc_qlink);
+		}
+
+		entry->tc_queue = &new_mpqueue->head;
+		entry->tc_pqlink.deadline = deadline;
+
+		priority_queue_insert(&new_mpqueue->mpq_pqhead, &entry->tc_pqlink);
+	}
+
 
 	/* For efficiency, track the earliest soft deadline on the queue,
 	 * so that fuzzy decisions can be made without lock acquisitions.
 	 */
 
-	timer_call_t thead = (timer_call_t)queue_first(&queue->head);
-	queue->earliest_soft_deadline = thead->flags & TIMER_CALL_RATELIMITED ? TCE(thead)->deadline : thead->soft_deadline;
+	timer_call_t thead = priority_queue_min(&new_mpqueue->mpq_pqhead, struct timer_call, tc_pqlink);
 
-	if (old_queue) {
-		old_queue->count--;
+	new_mpqueue->earliest_soft_deadline = thead->tc_flags & TIMER_CALL_RATELIMITED ? thead->tc_pqlink.deadline : thead->tc_soft_deadline;
+
+	if (old_mpqueue) {
+		old_mpqueue->count--;
 	}
-	queue->count++;
+	new_mpqueue->count++;
 
-	return old_queue;
+	return old_mpqueue;
 }
-
-#endif
 
 static __inline__ void
 timer_call_entry_enqueue_tail(
 	timer_call_t                    entry,
 	mpqueue_head_t                  *queue)
 {
-	call_entry_enqueue_tail(TCE(entry), QUEUE(queue));
+	/* entry is always dequeued before this call */
+	assert(entry->tc_queue == NULL);
+
+	/*
+	 * this is only used for timer_longterm_queue, which is unordered
+	 * and thus needs no priority queueing
+	 */
+	assert(queue == timer_longterm_queue);
+
+	enqueue_tail(&queue->head, &entry->tc_qlink);
+
+	entry->tc_queue = &queue->head;
+
 	queue->count++;
 	return;
 }
@@ -403,11 +418,17 @@ static __inline__ void
 timer_call_entry_dequeue_async(
 	timer_call_t            entry)
 {
-	mpqueue_head_t  *old_queue = MPQUEUE(TCE(entry)->queue);
-	if (old_queue) {
-		old_queue->count--;
-		(void) remque(qe(entry));
-		entry->async_dequeue = TRUE;
+	mpqueue_head_t  *old_mpqueue = mpqueue_for_timer_call(entry);
+	if (old_mpqueue) {
+		old_mpqueue->count--;
+
+		if (old_mpqueue != timer_longterm_queue) {
+			priority_queue_remove(&old_mpqueue->mpq_pqhead,
+			    &entry->tc_pqlink);
+		}
+
+		remqueue(&entry->tc_qlink);
+		entry->tc_async_dequeue = true;
 	}
 	return;
 }
@@ -429,30 +450,27 @@ timer_call_enqueue_deadline_unlocked(
 	timer_call_param_t              param1,
 	uint32_t                        callout_flags)
 {
-	call_entry_t    entry = TCE(call);
-	mpqueue_head_t  *old_queue;
-
 	DBG("timer_call_enqueue_deadline_unlocked(%p,%p,)\n", call, queue);
 
-	simple_lock(&call->lock, LCK_GRP_NULL);
+	simple_lock(&call->tc_lock, LCK_GRP_NULL);
 
-	old_queue = MPQUEUE(entry->queue);
+	mpqueue_head_t  *old_queue = mpqueue_for_timer_call(call);
 
 	if (old_queue != NULL) {
 		timer_queue_lock_spin(old_queue);
-		if (call->async_dequeue) {
+		if (call->tc_async_dequeue) {
 			/* collision (1c): timer already dequeued, clear flag */
 #if TIMER_ASSERT
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
 			    DECR_TIMER_ASYNC_DEQ | DBG_FUNC_NONE,
 			    VM_KERNEL_UNSLIDE_OR_PERM(call),
-			    call->async_dequeue,
-			    VM_KERNEL_UNSLIDE_OR_PERM(TCE(call)->queue),
+			    call->tc_async_dequeue,
+			    VM_KERNEL_UNSLIDE_OR_PERM(call->tc_queue),
 			    0x1c, 0);
 			timer_call_enqueue_deadline_unlocked_async1++;
 #endif
-			call->async_dequeue = FALSE;
-			entry->queue = NULL;
+			call->tc_async_dequeue = false;
+			call->tc_queue = NULL;
 		} else if (old_queue != queue) {
 			timer_call_entry_dequeue(call);
 #if TIMER_ASSERT
@@ -470,14 +488,14 @@ timer_call_enqueue_deadline_unlocked(
 		timer_queue_lock_spin(queue);
 	}
 
-	call->soft_deadline = soft_deadline;
-	call->flags = callout_flags;
-	TCE(call)->param1 = param1;
-	call->ttd = ttd;
+	call->tc_soft_deadline = soft_deadline;
+	call->tc_flags = callout_flags;
+	call->tc_param1 = param1;
+	call->tc_ttd = ttd;
 
 	timer_call_entry_enqueue_deadline(call, queue, deadline);
 	timer_queue_unlock(queue);
-	simple_unlock(&call->lock);
+	simple_unlock(&call->tc_lock);
 
 	return old_queue;
 }
@@ -490,36 +508,35 @@ mpqueue_head_t *
 timer_call_dequeue_unlocked(
 	timer_call_t            call)
 {
-	call_entry_t    entry = TCE(call);
-	mpqueue_head_t  *old_queue;
-
 	DBG("timer_call_dequeue_unlocked(%p)\n", call);
 
-	simple_lock(&call->lock, LCK_GRP_NULL);
-	old_queue = MPQUEUE(entry->queue);
+	simple_lock(&call->tc_lock, LCK_GRP_NULL);
+
+	mpqueue_head_t  *old_queue = mpqueue_for_timer_call(call);
+
 #if TIMER_ASSERT
 	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
 	    DECR_TIMER_ASYNC_DEQ | DBG_FUNC_NONE,
 	    VM_KERNEL_UNSLIDE_OR_PERM(call),
-	    call->async_dequeue,
-	    VM_KERNEL_UNSLIDE_OR_PERM(TCE(call)->queue),
+	    call->tc_async_dequeue,
+	    VM_KERNEL_UNSLIDE_OR_PERM(call->tc_queue),
 	    0, 0);
 #endif
 	if (old_queue != NULL) {
 		timer_queue_lock_spin(old_queue);
-		if (call->async_dequeue) {
+		if (call->tc_async_dequeue) {
 			/* collision (1c): timer already dequeued, clear flag */
 #if TIMER_ASSERT
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
 			    DECR_TIMER_ASYNC_DEQ | DBG_FUNC_NONE,
 			    VM_KERNEL_UNSLIDE_OR_PERM(call),
-			    call->async_dequeue,
-			    VM_KERNEL_UNSLIDE_OR_PERM(TCE(call)->queue),
+			    call->tc_async_dequeue,
+			    VM_KERNEL_UNSLIDE_OR_PERM(call->tc_queue),
 			    0x1c, 0);
 			timer_call_dequeue_unlocked_async1++;
 #endif
-			call->async_dequeue = FALSE;
-			entry->queue = NULL;
+			call->tc_async_dequeue = false;
+			call->tc_queue = NULL;
 		} else {
 			timer_call_entry_dequeue(call);
 		}
@@ -528,12 +545,12 @@ timer_call_dequeue_unlocked(
 		}
 		timer_queue_unlock(old_queue);
 	}
-	simple_unlock(&call->lock);
+	simple_unlock(&call->tc_lock);
 	return old_queue;
 }
 
-static uint64_t
-past_deadline_timer_handle(uint64_t deadline, uint64_t ctime)
+uint64_t
+timer_call_past_deadline_timer_handle(uint64_t deadline, uint64_t ctime)
 {
 	uint64_t delta = (ctime - deadline);
 
@@ -583,12 +600,6 @@ past_deadline_timer_handle(uint64_t deadline, uint64_t ctime)
  */
 
 /*
- * Inlines timer_call_entry_dequeue() and timer_call_entry_enqueue_deadline()
- * cast between pointer types (mpqueue_head_t *) and (queue_t) so that
- * we can use the call_entry_dequeue() and call_entry_enqueue_deadline()
- * methods to operate on timer_call structs as if they are call_entry structs.
- * These structures are identical except for their queue head pointer fields.
- *
  * In the debug case, we assert that the timer call locking protocol
  * is being obeyed.
  */
@@ -609,7 +620,7 @@ timer_call_enter_internal(
 	uint32_t                urgency;
 	uint64_t                sdeadline, ttd;
 
-	assert(call->call_entry.func != NULL);
+	assert(call->tc_func != NULL);
 	s = splclock();
 
 	sdeadline = deadline;
@@ -636,7 +647,7 @@ timer_call_enter_internal(
 	}
 
 	if (__improbable(deadline < ctime)) {
-		deadline = past_deadline_timer_handle(deadline, ctime);
+		deadline = timer_call_past_deadline_timer_handle(deadline, ctime);
 		sdeadline = deadline;
 	}
 
@@ -648,8 +659,8 @@ timer_call_enter_internal(
 
 	ttd =  sdeadline - ctime;
 #if CONFIG_DTRACE
-	DTRACE_TMR7(callout__create, timer_call_func_t, TCE(call)->func,
-	    timer_call_param_t, TCE(call)->param0, uint32_t, flags,
+	DTRACE_TMR7(callout__create, timer_call_func_t, call->tc_func,
+	    timer_call_param_t, call->tc_param0, uint32_t, flags,
 	    (deadline - sdeadline),
 	    (ttd >> 32), (unsigned) (ttd & 0xFFFFFFFF), call);
 #endif
@@ -668,7 +679,7 @@ timer_call_enter_internal(
 	}
 
 #if TIMER_TRACE
-	TCE(call)->entry_time = ctime;
+	call->tc_entry_time = ctime;
 #endif
 
 	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
@@ -717,81 +728,6 @@ timer_call_enter_with_leeway(
 }
 
 boolean_t
-timer_call_quantum_timer_enter(
-	timer_call_t            call,
-	timer_call_param_t      param1,
-	uint64_t                deadline,
-	uint64_t                ctime)
-{
-	assert(call->call_entry.func != NULL);
-	assert(ml_get_interrupts_enabled() == FALSE);
-
-	uint32_t flags = TIMER_CALL_SYS_CRITICAL | TIMER_CALL_LOCAL;
-
-	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, DECR_TIMER_ENTER | DBG_FUNC_START,
-	    VM_KERNEL_UNSLIDE_OR_PERM(call),
-	    VM_KERNEL_ADDRHIDE(param1), deadline,
-	    flags, 0);
-
-	if (__improbable(deadline < ctime)) {
-		deadline = past_deadline_timer_handle(deadline, ctime);
-	}
-
-	uint64_t ttd = deadline - ctime;
-#if CONFIG_DTRACE
-	DTRACE_TMR7(callout__create, timer_call_func_t, TCE(call)->func,
-	    timer_call_param_t, TCE(call)->param0, uint32_t, flags, 0,
-	    (ttd >> 32), (unsigned) (ttd & 0xFFFFFFFF), call);
-#endif
-
-	quantum_timer_set_deadline(deadline);
-	TCE(call)->deadline = deadline;
-	TCE(call)->param1 = param1;
-	call->ttd = ttd;
-	call->flags = flags;
-
-#if TIMER_TRACE
-	TCE(call)->entry_time = ctime;
-#endif
-
-	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, DECR_TIMER_ENTER | DBG_FUNC_END,
-	    VM_KERNEL_UNSLIDE_OR_PERM(call),
-	    1, deadline, 0, 0);
-
-	return true;
-}
-
-
-boolean_t
-timer_call_quantum_timer_cancel(
-	timer_call_t            call)
-{
-	assert(ml_get_interrupts_enabled() == FALSE);
-
-	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
-	    DECR_TIMER_CANCEL | DBG_FUNC_START,
-	    VM_KERNEL_UNSLIDE_OR_PERM(call), TCE(call)->deadline,
-	    0, call->flags, 0);
-
-	TCE(call)->deadline = 0;
-	quantum_timer_set_deadline(0);
-
-	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
-	    DECR_TIMER_CANCEL | DBG_FUNC_END,
-	    VM_KERNEL_UNSLIDE_OR_PERM(call), 0,
-	    TCE(call)->deadline - mach_absolute_time(),
-	    TCE(call)->deadline - TCE(call)->entry_time, 0);
-
-#if CONFIG_DTRACE
-	DTRACE_TMR6(callout__cancel, timer_call_func_t, TCE(call)->func,
-	    timer_call_param_t, TCE(call)->param0, uint32_t, call->flags, 0,
-	    (call->ttd >> 32), (unsigned) (call->ttd & 0xFFFFFFFF));
-#endif
-
-	return true;
-}
-
-boolean_t
 timer_call_cancel(
 	timer_call_t            call)
 {
@@ -803,35 +739,38 @@ timer_call_cancel(
 	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
 	    DECR_TIMER_CANCEL | DBG_FUNC_START,
 	    VM_KERNEL_UNSLIDE_OR_PERM(call),
-	    TCE(call)->deadline, call->soft_deadline, call->flags, 0);
+	    call->tc_pqlink.deadline, call->tc_soft_deadline, call->tc_flags, 0);
 
 	old_queue = timer_call_dequeue_unlocked(call);
 
 	if (old_queue != NULL) {
 		timer_queue_lock_spin(old_queue);
-		if (!queue_empty(&old_queue->head)) {
-			timer_queue_cancel(old_queue, TCE(call)->deadline, CE(queue_first(&old_queue->head))->deadline);
-			timer_call_t thead = (timer_call_t)queue_first(&old_queue->head);
-			old_queue->earliest_soft_deadline = thead->flags & TIMER_CALL_RATELIMITED ? TCE(thead)->deadline : thead->soft_deadline;
+
+		timer_call_t new_head = priority_queue_min(&old_queue->mpq_pqhead, struct timer_call, tc_pqlink);
+
+		if (new_head) {
+			timer_queue_cancel(old_queue, call->tc_pqlink.deadline, new_head->tc_pqlink.deadline);
+			old_queue->earliest_soft_deadline = new_head->tc_flags & TIMER_CALL_RATELIMITED ? new_head->tc_pqlink.deadline : new_head->tc_soft_deadline;
 		} else {
-			timer_queue_cancel(old_queue, TCE(call)->deadline, UINT64_MAX);
+			timer_queue_cancel(old_queue, call->tc_pqlink.deadline, UINT64_MAX);
 			old_queue->earliest_soft_deadline = UINT64_MAX;
 		}
+
 		timer_queue_unlock(old_queue);
 	}
 	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
 	    DECR_TIMER_CANCEL | DBG_FUNC_END,
 	    VM_KERNEL_UNSLIDE_OR_PERM(call),
 	    VM_KERNEL_UNSLIDE_OR_PERM(old_queue),
-	    TCE(call)->deadline - mach_absolute_time(),
-	    TCE(call)->deadline - TCE(call)->entry_time, 0);
+	    call->tc_pqlink.deadline - mach_absolute_time(),
+	    call->tc_pqlink.deadline - call->tc_entry_time, 0);
 	splx(s);
 
 #if CONFIG_DTRACE
-	DTRACE_TMR6(callout__cancel, timer_call_func_t, TCE(call)->func,
-	    timer_call_param_t, TCE(call)->param0, uint32_t, call->flags, 0,
-	    (call->ttd >> 32), (unsigned) (call->ttd & 0xFFFFFFFF));
-#endif
+	DTRACE_TMR6(callout__cancel, timer_call_func_t, call->tc_func,
+	    timer_call_param_t, call->tc_param0, uint32_t, call->tc_flags, 0,
+	    (call->tc_ttd >> 32), (unsigned) (call->tc_ttd & 0xFFFFFFFF));
+#endif /* CONFIG_DTRACE */
 
 	return old_queue != NULL;
 }
@@ -852,11 +791,16 @@ timer_queue_shutdown(
 
 	s = splclock();
 
-	/* Note comma operator in while expression re-locking each iteration */
-	while ((void)timer_queue_lock_spin(queue), !queue_empty(&queue->head)) {
-		call = TIMER_CALL(queue_first(&queue->head));
+	while (TRUE) {
+		timer_queue_lock_spin(queue);
 
-		if (!simple_lock_try(&call->lock, LCK_GRP_NULL)) {
+		call = qe_queue_first(&queue->head, struct timer_call, tc_qlink);
+
+		if (call == NULL) {
+			break;
+		}
+
+		if (!simple_lock_try(&call->tc_lock, LCK_GRP_NULL)) {
 			/*
 			 * case (2b) lock order inversion, dequeue and skip
 			 * Don't change the call_entry queue back-pointer
@@ -868,15 +812,15 @@ timer_queue_shutdown(
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
 			    DECR_TIMER_ASYNC_DEQ | DBG_FUNC_NONE,
 			    VM_KERNEL_UNSLIDE_OR_PERM(call),
-			    call->async_dequeue,
-			    VM_KERNEL_UNSLIDE_OR_PERM(TCE(call)->queue),
+			    call->tc_async_dequeue,
+			    VM_KERNEL_UNSLIDE_OR_PERM(call->tc_queue),
 			    0x2b, 0);
 #endif
 			timer_queue_unlock(queue);
 			continue;
 		}
 
-		boolean_t call_local = ((call->flags & TIMER_CALL_LOCAL) != 0);
+		boolean_t call_local = ((call->tc_flags & TIMER_CALL_LOCAL) != 0);
 
 		/* remove entry from old queue */
 		timer_call_entry_dequeue(call);
@@ -884,68 +828,23 @@ timer_queue_shutdown(
 
 		if (call_local == FALSE) {
 			/* and queue it on new, discarding LOCAL timers */
-			new_queue = timer_queue_assign(TCE(call)->deadline);
+			new_queue = timer_queue_assign(call->tc_pqlink.deadline);
 			timer_queue_lock_spin(new_queue);
 			timer_call_entry_enqueue_deadline(
-				call, new_queue, TCE(call)->deadline);
+				call, new_queue, call->tc_pqlink.deadline);
 			timer_queue_unlock(new_queue);
 		} else {
 			timer_queue_shutdown_discarded++;
 		}
 
 		assert(call_local == FALSE);
-		simple_unlock(&call->lock);
+		simple_unlock(&call->tc_lock);
 	}
 
 	timer_queue_unlock(queue);
 	splx(s);
 }
 
-
-void
-quantum_timer_expire(
-	uint64_t                deadline)
-{
-	processor_t processor = current_processor();
-	timer_call_t call = TIMER_CALL(&(processor->quantum_timer));
-
-	if (__improbable(TCE(call)->deadline > deadline)) {
-		panic("CPU quantum timer deadlin out of sync with timer call deadline");
-	}
-
-	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
-	    DECR_TIMER_EXPIRE | DBG_FUNC_NONE,
-	    VM_KERNEL_UNSLIDE_OR_PERM(call),
-	    TCE(call)->deadline,
-	    TCE(call)->deadline,
-	    TCE(call)->entry_time, 0);
-
-	timer_call_func_t func = TCE(call)->func;
-	timer_call_param_t param0 = TCE(call)->param0;
-	timer_call_param_t param1 = TCE(call)->param1;
-
-	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
-	    DECR_TIMER_CALLOUT | DBG_FUNC_START,
-	    VM_KERNEL_UNSLIDE_OR_PERM(call), VM_KERNEL_UNSLIDE(func),
-	    VM_KERNEL_ADDRHIDE(param0),
-	    VM_KERNEL_ADDRHIDE(param1),
-	    0);
-
-#if CONFIG_DTRACE
-	DTRACE_TMR7(callout__start, timer_call_func_t, func,
-	    timer_call_param_t, param0, unsigned, call->flags,
-	    0, (call->ttd >> 32),
-	    (unsigned) (call->ttd & 0xFFFFFFFF), call);
-#endif
-	(*func)(param0, param1);
-
-	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
-	    DECR_TIMER_CALLOUT | DBG_FUNC_END,
-	    VM_KERNEL_UNSLIDE_OR_PERM(call), VM_KERNEL_UNSLIDE(func),
-	    VM_KERNEL_ADDRHIDE(param0),
-	    VM_KERNEL_ADDRHIDE(param1),
-	    0);
-}
 
 static uint32_t timer_queue_expire_lock_skips;
 uint64_t
@@ -957,6 +856,14 @@ timer_queue_expire_with_options(
 	timer_call_t    call = NULL;
 	uint32_t tc_iterations = 0;
 	DBG("timer_queue_expire(%p,)\n", queue);
+
+	/* 'rescan' means look at every timer in the list, instead of
+	 * early-exiting when the head of the list expires in the future.
+	 * when 'rescan' is true, iterate by linked list instead of priority queue.
+	 *
+	 * TODO: if we keep a deadline ordered and soft-deadline ordered
+	 * priority queue, then it's no longer necessary to do that
+	 */
 
 	uint64_t cur_deadline = deadline;
 	timer_queue_lock_spin(queue);
@@ -970,29 +877,33 @@ timer_queue_expire_with_options(
 		}
 
 		if (call == NULL) {
-			call = TIMER_CALL(queue_first(&queue->head));
+			if (rescan == FALSE) {
+				call = priority_queue_min(&queue->mpq_pqhead, struct timer_call, tc_pqlink);
+			} else {
+				call = qe_queue_first(&queue->head, struct timer_call, tc_qlink);
+			}
 		}
 
-		if (call->soft_deadline <= cur_deadline) {
+		if (call->tc_soft_deadline <= cur_deadline) {
 			timer_call_func_t               func;
 			timer_call_param_t              param0, param1;
 
-			TCOAL_DEBUG(0xDDDD0000, queue->earliest_soft_deadline, call->soft_deadline, 0, 0, 0);
+			TCOAL_DEBUG(0xDDDD0000, queue->earliest_soft_deadline, call->tc_soft_deadline, 0, 0, 0);
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
 			    DECR_TIMER_EXPIRE | DBG_FUNC_NONE,
 			    VM_KERNEL_UNSLIDE_OR_PERM(call),
-			    call->soft_deadline,
-			    TCE(call)->deadline,
-			    TCE(call)->entry_time, 0);
+			    call->tc_soft_deadline,
+			    call->tc_pqlink.deadline,
+			    call->tc_entry_time, 0);
 
-			if ((call->flags & TIMER_CALL_RATELIMITED) &&
-			    (TCE(call)->deadline > cur_deadline)) {
+			if ((call->tc_flags & TIMER_CALL_RATELIMITED) &&
+			    (call->tc_pqlink.deadline > cur_deadline)) {
 				if (rescan == FALSE) {
 					break;
 				}
 			}
 
-			if (!simple_lock_try(&call->lock, LCK_GRP_NULL)) {
+			if (!simple_lock_try(&call->tc_lock, LCK_GRP_NULL)) {
 				/* case (2b) lock inversion, dequeue and skip */
 				timer_queue_expire_lock_skips++;
 				timer_call_entry_dequeue_async(call);
@@ -1002,11 +913,11 @@ timer_queue_expire_with_options(
 
 			timer_call_entry_dequeue(call);
 
-			func = TCE(call)->func;
-			param0 = TCE(call)->param0;
-			param1 = TCE(call)->param1;
+			func = call->tc_func;
+			param0 = call->tc_param0;
+			param1 = call->tc_param1;
 
-			simple_unlock(&call->lock);
+			simple_unlock(&call->tc_lock);
 			timer_queue_unlock(queue);
 
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
@@ -1018,15 +929,15 @@ timer_queue_expire_with_options(
 
 #if CONFIG_DTRACE
 			DTRACE_TMR7(callout__start, timer_call_func_t, func,
-			    timer_call_param_t, param0, unsigned, call->flags,
-			    0, (call->ttd >> 32),
-			    (unsigned) (call->ttd & 0xFFFFFFFF), call);
+			    timer_call_param_t, param0, unsigned, call->tc_flags,
+			    0, (call->tc_ttd >> 32),
+			    (unsigned) (call->tc_ttd & 0xFFFFFFFF), call);
 #endif
 			/* Maintain time-to-deadline in per-processor data
 			 * structure for thread wakeup deadline statistics.
 			 */
-			uint64_t *ttdp = &(PROCESSOR_DATA(current_processor(), timer_call_ttd));
-			*ttdp = call->ttd;
+			uint64_t *ttdp = &current_processor()->timer_call_ttd;
+			*ttdp = call->tc_ttd;
 			(*func)(param0, param1);
 			*ttdp = 0;
 #if CONFIG_DTRACE
@@ -1046,8 +957,8 @@ timer_queue_expire_with_options(
 			if (__probable(rescan == FALSE)) {
 				break;
 			} else {
-				int64_t skew = TCE(call)->deadline - call->soft_deadline;
-				assert(TCE(call)->deadline >= call->soft_deadline);
+				int64_t skew = call->tc_pqlink.deadline - call->tc_soft_deadline;
+				assert(call->tc_pqlink.deadline >= call->tc_soft_deadline);
 
 				/* DRK: On a latency quality-of-service level change,
 				 * re-sort potentially rate-limited timers. The platform
@@ -1060,16 +971,18 @@ timer_queue_expire_with_options(
 				 */
 
 				if (timer_resort_threshold(skew)) {
-					if (__probable(simple_lock_try(&call->lock, LCK_GRP_NULL))) {
+					if (__probable(simple_lock_try(&call->tc_lock, LCK_GRP_NULL))) {
+						/* TODO: don't need to dequeue before enqueue */
 						timer_call_entry_dequeue(call);
-						timer_call_entry_enqueue_deadline(call, queue, call->soft_deadline);
-						simple_unlock(&call->lock);
+						timer_call_entry_enqueue_deadline(call, queue, call->tc_soft_deadline);
+						simple_unlock(&call->tc_lock);
 						call = NULL;
 					}
 				}
 				if (call) {
-					call = TIMER_CALL(queue_next(qe(call)));
-					if (queue_end(&queue->head, qe(call))) {
+					call = qe_queue_next(&queue->head, call, struct timer_call, tc_qlink);
+
+					if (call == NULL) {
 						break;
 					}
 				}
@@ -1077,10 +990,11 @@ timer_queue_expire_with_options(
 		}
 	}
 
-	if (!queue_empty(&queue->head)) {
-		call = TIMER_CALL(queue_first(&queue->head));
-		cur_deadline = TCE(call)->deadline;
-		queue->earliest_soft_deadline = (call->flags & TIMER_CALL_RATELIMITED) ? TCE(call)->deadline: call->soft_deadline;
+	call = priority_queue_min(&queue->mpq_pqhead, struct timer_call, tc_pqlink);
+
+	if (call) {
+		cur_deadline = call->tc_pqlink.deadline;
+		queue->earliest_soft_deadline = (call->tc_flags & TIMER_CALL_RATELIMITED) ? call->tc_pqlink.deadline: call->tc_soft_deadline;
 	} else {
 		queue->earliest_soft_deadline = cur_deadline = UINT64_MAX;
 	}
@@ -1141,45 +1055,45 @@ timer_queue_migrate(mpqueue_head_t *queue_from, mpqueue_head_t *queue_to)
 
 	timer_queue_lock_spin(queue_to);
 
-	head_to = TIMER_CALL(queue_first(&queue_to->head));
-	if (queue_empty(&queue_to->head)) {
+	head_to = priority_queue_min(&queue_to->mpq_pqhead, struct timer_call, tc_pqlink);
+
+	if (head_to == NULL) {
 		timers_migrated = -1;
 		goto abort1;
 	}
 
 	timer_queue_lock_spin(queue_from);
 
-	if (queue_empty(&queue_from->head)) {
+	call = priority_queue_min(&queue_from->mpq_pqhead, struct timer_call, tc_pqlink);
+
+	if (call == NULL) {
 		timers_migrated = -2;
 		goto abort2;
 	}
 
-	call = TIMER_CALL(queue_first(&queue_from->head));
-	if (TCE(call)->deadline < TCE(head_to)->deadline) {
+	if (call->tc_pqlink.deadline < head_to->tc_pqlink.deadline) {
 		timers_migrated = 0;
 		goto abort2;
 	}
 
 	/* perform scan for non-migratable timers */
-	do {
-		if (call->flags & TIMER_CALL_LOCAL) {
+	qe_foreach_element(call, &queue_from->head, tc_qlink) {
+		if (call->tc_flags & TIMER_CALL_LOCAL) {
 			timers_migrated = -3;
 			goto abort2;
 		}
-		call = TIMER_CALL(queue_next(qe(call)));
-	} while (!queue_end(&queue_from->head, qe(call)));
+	}
 
 	/* migration loop itself -- both queues are locked */
-	while (!queue_empty(&queue_from->head)) {
-		call = TIMER_CALL(queue_first(&queue_from->head));
-		if (!simple_lock_try(&call->lock, LCK_GRP_NULL)) {
+	qe_foreach_element_safe(call, &queue_from->head, tc_qlink) {
+		if (!simple_lock_try(&call->tc_lock, LCK_GRP_NULL)) {
 			/* case (2b) lock order inversion, dequeue only */
 #ifdef TIMER_ASSERT
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
 			    DECR_TIMER_ASYNC_DEQ | DBG_FUNC_NONE,
 			    VM_KERNEL_UNSLIDE_OR_PERM(call),
-			    VM_KERNEL_UNSLIDE_OR_PERM(TCE(call)->queue),
-			    VM_KERNEL_UNSLIDE_OR_PERM(call->lock.interlock.lock_data),
+			    VM_KERNEL_UNSLIDE_OR_PERM(call->tc_queue),
+			    0,
 			    0x2b, 0);
 #endif
 			timer_queue_migrate_lock_skips++;
@@ -1188,9 +1102,9 @@ timer_queue_migrate(mpqueue_head_t *queue_from, mpqueue_head_t *queue_to)
 		}
 		timer_call_entry_dequeue(call);
 		timer_call_entry_enqueue_deadline(
-			call, queue_to, TCE(call)->deadline);
+			call, queue_to, call->tc_pqlink.deadline);
 		timers_migrated++;
-		simple_unlock(&call->lock);
+		simple_unlock(&call->tc_lock);
 	}
 	queue_from->earliest_soft_deadline = UINT64_MAX;
 abort2:
@@ -1228,18 +1142,14 @@ timer_queue_trace(
 	    DECR_TIMER_QUEUE | DBG_FUNC_START,
 	    queue->count, mach_absolute_time(), 0, 0, 0);
 
-	if (!queue_empty(&queue->head)) {
-		call = TIMER_CALL(queue_first(&queue->head));
-		do {
-			TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
-			    DECR_TIMER_QUEUE | DBG_FUNC_NONE,
-			    call->soft_deadline,
-			    TCE(call)->deadline,
-			    TCE(call)->entry_time,
-			    VM_KERNEL_UNSLIDE(TCE(call)->func),
-			    0);
-			call = TIMER_CALL(queue_next(qe(call)));
-		} while (!queue_end(&queue->head, qe(call)));
+	qe_foreach_element(call, &queue->head, tc_qlink) {
+		TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
+		    DECR_TIMER_QUEUE | DBG_FUNC_NONE,
+		    call->tc_soft_deadline,
+		    call->tc_pqlink.deadline,
+		    call->tc_entry_time,
+		    VM_KERNEL_UNSLIDE(call->tc_func),
+		    0);
 	}
 
 	TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
@@ -1303,13 +1213,13 @@ timer_longterm_enqueue_unlocked(timer_call_t    call,
 	 * whether an update is necessary.
 	 */
 	assert(!ml_get_interrupts_enabled());
-	simple_lock(&call->lock, LCK_GRP_NULL);
+	simple_lock(&call->tc_lock, LCK_GRP_NULL);
 	timer_queue_lock_spin(timer_longterm_queue);
-	TCE(call)->deadline = deadline;
-	TCE(call)->param1 = param1;
-	call->ttd = ttd;
-	call->soft_deadline = soft_deadline;
-	call->flags = callout_flags;
+	call->tc_pqlink.deadline = deadline;
+	call->tc_param1 = param1;
+	call->tc_ttd = ttd;
+	call->tc_soft_deadline = soft_deadline;
+	call->tc_flags = callout_flags;
 	timer_call_entry_enqueue_tail(call, timer_longterm_queue);
 
 	tlp->enqueues++;
@@ -1325,7 +1235,7 @@ timer_longterm_enqueue_unlocked(timer_call_t    call,
 		update_required = TRUE;
 	}
 	timer_queue_unlock(timer_longterm_queue);
-	simple_unlock(&call->lock);
+	simple_unlock(&call->tc_lock);
 
 	if (update_required) {
 		/*
@@ -1360,7 +1270,6 @@ void
 timer_longterm_scan(timer_longterm_t    *tlp,
     uint64_t            time_start)
 {
-	queue_entry_t   qe;
 	timer_call_t    call;
 	uint64_t        threshold;
 	uint64_t        deadline;
@@ -1384,19 +1293,16 @@ timer_longterm_scan(timer_longterm_t    *tlp,
 	timer_master_queue = timer_queue_cpu(master_cpu);
 	timer_queue_lock_spin(timer_master_queue);
 
-	qe = queue_first(&timer_longterm_queue->head);
-	while (!queue_end(&timer_longterm_queue->head, qe)) {
-		call = TIMER_CALL(qe);
-		deadline = call->soft_deadline;
-		qe = queue_next(qe);
-		if (!simple_lock_try(&call->lock, LCK_GRP_NULL)) {
+	qe_foreach_element_safe(call, &timer_longterm_queue->head, tc_qlink) {
+		deadline = call->tc_soft_deadline;
+		if (!simple_lock_try(&call->tc_lock, LCK_GRP_NULL)) {
 			/* case (2c) lock order inversion, dequeue only */
 #ifdef TIMER_ASSERT
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
 			    DECR_TIMER_ASYNC_DEQ | DBG_FUNC_NONE,
 			    VM_KERNEL_UNSLIDE_OR_PERM(call),
-			    VM_KERNEL_UNSLIDE_OR_PERM(TCE(call)->queue),
-			    VM_KERNEL_UNSLIDE_OR_PERM(call->lock.interlock.lock_data),
+			    VM_KERNEL_UNSLIDE_OR_PERM(call->tc_queue),
+			    0,
 			    0x2c, 0);
 #endif
 			timer_call_entry_dequeue_async(call);
@@ -1421,14 +1327,14 @@ timer_longterm_scan(timer_longterm_t    *tlp,
 			TIMER_KDEBUG_TRACE(KDEBUG_TRACE,
 			    DECR_TIMER_ESCALATE | DBG_FUNC_NONE,
 			    VM_KERNEL_UNSLIDE_OR_PERM(call),
-			    TCE(call)->deadline,
-			    TCE(call)->entry_time,
-			    VM_KERNEL_UNSLIDE(TCE(call)->func),
+			    call->tc_pqlink.deadline,
+			    call->tc_entry_time,
+			    VM_KERNEL_UNSLIDE(call->tc_func),
 			    0);
 			tlp->escalates++;
 			timer_call_entry_dequeue(call);
 			timer_call_entry_enqueue_deadline(
-				call, timer_master_queue, TCE(call)->deadline);
+				call, timer_master_queue, call->tc_pqlink.deadline);
 			/*
 			 * A side-effect of the following call is to update
 			 * the actual hardware deadline if required.
@@ -1440,7 +1346,7 @@ timer_longterm_scan(timer_longterm_t    *tlp,
 				tlp->threshold.call = call;
 			}
 		}
-		simple_unlock(&call->lock);
+		simple_unlock(&call->tc_lock);
 
 		/* Abort scan if we're taking too long. */
 		if (mach_absolute_time() > time_limit) {
@@ -1590,12 +1496,7 @@ timer_longterm_init(void)
 	tlp->threshold.preempted = TIMER_LONGTERM_NONE;
 	tlp->threshold.deadline = TIMER_LONGTERM_NONE;
 
-	lck_attr_setdefault(&timer_longterm_lck_attr);
-	lck_grp_attr_setdefault(&timer_longterm_lck_grp_attr);
-	lck_grp_init(&timer_longterm_lck_grp,
-	    "timer_longterm", &timer_longterm_lck_grp_attr);
-	mpqueue_init(&tlp->queue,
-	    &timer_longterm_lck_grp, &timer_longterm_lck_attr);
+	mpqueue_init(&tlp->queue, &timer_longterm_lck_grp, LCK_ATTR_NULL);
 
 	timer_call_setup(&tlp->threshold.timer,
 	    timer_longterm_callout, (timer_call_param_t) tlp);
@@ -1654,7 +1555,6 @@ static void
 timer_master_scan(timer_longterm_t      *tlp,
     uint64_t              now)
 {
-	queue_entry_t   qe;
 	timer_call_t    call;
 	uint64_t        threshold;
 	uint64_t        deadline;
@@ -1669,15 +1569,12 @@ timer_master_scan(timer_longterm_t      *tlp,
 	timer_master_queue = timer_queue_cpu(master_cpu);
 	timer_queue_lock_spin(timer_master_queue);
 
-	qe = queue_first(&timer_master_queue->head);
-	while (!queue_end(&timer_master_queue->head, qe)) {
-		call = TIMER_CALL(qe);
-		deadline = TCE(call)->deadline;
-		qe = queue_next(qe);
-		if ((call->flags & TIMER_CALL_LOCAL) != 0) {
+	qe_foreach_element_safe(call, &timer_master_queue->head, tc_qlink) {
+		deadline = call->tc_pqlink.deadline;
+		if ((call->tc_flags & TIMER_CALL_LOCAL) != 0) {
 			continue;
 		}
-		if (!simple_lock_try(&call->lock, LCK_GRP_NULL)) {
+		if (!simple_lock_try(&call->tc_lock, LCK_GRP_NULL)) {
 			/* case (2c) lock order inversion, dequeue only */
 			timer_call_entry_dequeue_async(call);
 			continue;
@@ -1691,7 +1588,7 @@ timer_master_scan(timer_longterm_t      *tlp,
 				tlp->threshold.call = call;
 			}
 		}
-		simple_unlock(&call->lock);
+		simple_unlock(&call->tc_lock);
 	}
 	timer_queue_unlock(timer_master_queue);
 }
@@ -1924,4 +1821,229 @@ timer_set_user_idle_level(int ilevel)
 	}
 
 	return KERN_SUCCESS;
+}
+
+#pragma mark - running timers
+
+#define RUNNING_TIMER_FAKE_FLAGS (TIMER_CALL_SYS_CRITICAL | \
+    TIMER_CALL_LOCAL)
+
+/*
+ * timer_call_trace_* functions mimic the tracing behavior from the normal
+ * timer_call subsystem, so tools continue to function.
+ */
+
+static void
+timer_call_trace_enter_before(struct timer_call *call, uint64_t deadline,
+    uint32_t flags, uint64_t now)
+{
+#pragma unused(call, deadline, flags, now)
+	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, DECR_TIMER_ENTER | DBG_FUNC_START,
+	    VM_KERNEL_UNSLIDE_OR_PERM(call), VM_KERNEL_ADDRHIDE(call->tc_param1),
+	    deadline, flags, 0);
+#if CONFIG_DTRACE
+	uint64_t ttd = deadline - now;
+	DTRACE_TMR7(callout__create, timer_call_func_t, call->tc_func,
+	    timer_call_param_t, call->tc_param0, uint32_t, flags, 0,
+	    (ttd >> 32), (unsigned int)(ttd & 0xFFFFFFFF), NULL);
+#endif /* CONFIG_DTRACE */
+	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, DECR_TIMER_ENTER | DBG_FUNC_END,
+	    VM_KERNEL_UNSLIDE_OR_PERM(call), 0, deadline, 0, 0);
+}
+
+static void
+timer_call_trace_enter_after(struct timer_call *call, uint64_t deadline)
+{
+#pragma unused(call, deadline)
+	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, DECR_TIMER_ENTER | DBG_FUNC_END,
+	    VM_KERNEL_UNSLIDE_OR_PERM(call), 0, deadline, 0, 0);
+}
+
+static void
+timer_call_trace_cancel(struct timer_call *call)
+{
+#pragma unused(call)
+	__unused uint64_t deadline = call->tc_pqlink.deadline;
+	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, DECR_TIMER_CANCEL | DBG_FUNC_START,
+	    VM_KERNEL_UNSLIDE_OR_PERM(call), deadline, 0,
+	    call->tc_flags, 0);
+	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, DECR_TIMER_CANCEL | DBG_FUNC_END,
+	    VM_KERNEL_UNSLIDE_OR_PERM(call), 0, deadline - mach_absolute_time(),
+	    deadline - call->tc_entry_time, 0);
+#if CONFIG_DTRACE
+#if TIMER_TRACE
+	uint64_t ttd = deadline - call->tc_entry_time;
+#else
+	uint64_t ttd = UINT64_MAX;
+#endif /* TIMER_TRACE */
+	DTRACE_TMR6(callout__cancel, timer_call_func_t, call->tc_func,
+	    timer_call_param_t, call->tc_param0, uint32_t, call->tc_flags, 0,
+	    (ttd >> 32), (unsigned int)(ttd & 0xFFFFFFFF));
+#endif /* CONFIG_DTRACE */
+}
+
+static void
+timer_call_trace_expire_entry(struct timer_call *call)
+{
+#pragma unused(call)
+	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, DECR_TIMER_CALLOUT | DBG_FUNC_START,
+	    VM_KERNEL_UNSLIDE_OR_PERM(call), VM_KERNEL_UNSLIDE(call->tc_func),
+	    VM_KERNEL_ADDRHIDE(call->tc_param0),
+	    VM_KERNEL_ADDRHIDE(call->tc_param1),
+	    0);
+#if CONFIG_DTRACE
+#if TIMER_TRACE
+	uint64_t ttd = call->tc_pqlink.deadline - call->tc_entry_time;
+#else /* TIMER_TRACE */
+	uint64_t ttd = UINT64_MAX;
+#endif /* TIMER_TRACE */
+	DTRACE_TMR7(callout__start, timer_call_func_t, call->tc_func,
+	    timer_call_param_t, call->tc_param0, unsigned, call->tc_flags,
+	    0, (ttd >> 32), (unsigned int)(ttd & 0xFFFFFFFF), NULL);
+#endif /* CONFIG_DTRACE */
+}
+
+static void
+timer_call_trace_expire_return(struct timer_call *call)
+{
+#pragma unused(call)
+#if CONFIG_DTRACE
+	DTRACE_TMR4(callout__end, timer_call_func_t, call->tc_func,
+	    call->tc_param0, call->tc_param1, NULL);
+#endif /* CONFIG_DTRACE */
+	TIMER_KDEBUG_TRACE(KDEBUG_TRACE, DECR_TIMER_CALLOUT | DBG_FUNC_END,
+	    VM_KERNEL_UNSLIDE_OR_PERM(call),
+	    VM_KERNEL_UNSLIDE(call->tc_func),
+	    VM_KERNEL_ADDRHIDE(call->tc_param0),
+	    VM_KERNEL_ADDRHIDE(call->tc_param1),
+	    0);
+}
+
+/*
+ * Set a new deadline for a running timer on this processor.
+ */
+void
+running_timer_setup(processor_t processor, enum running_timer timer,
+    void *param, uint64_t deadline, uint64_t now)
+{
+	assert(timer < RUNNING_TIMER_MAX);
+	assert(ml_get_interrupts_enabled() == FALSE);
+
+	struct timer_call *call = &processor->running_timers[timer];
+
+	timer_call_trace_enter_before(call, deadline, RUNNING_TIMER_FAKE_FLAGS,
+	    now);
+
+	if (__improbable(deadline < now)) {
+		deadline = timer_call_past_deadline_timer_handle(deadline, now);
+	}
+
+	call->tc_pqlink.deadline = deadline;
+#if TIMER_TRACE
+	call->tc_entry_time = now;
+#endif /* TIMER_TRACE */
+	call->tc_param1 = param;
+
+	timer_call_trace_enter_after(call, deadline);
+}
+
+void
+running_timers_sync(void)
+{
+	timer_resync_deadlines();
+}
+
+void
+running_timer_enter(processor_t processor, unsigned int timer,
+    void *param, uint64_t deadline, uint64_t now)
+{
+	running_timer_setup(processor, timer, param, deadline, now);
+	running_timers_sync();
+}
+
+/*
+ * Call the callback for any running timers that fired for this processor.
+ * Returns true if any timers were past their deadline.
+ */
+bool
+running_timers_expire(processor_t processor, uint64_t now)
+{
+	bool expired = false;
+
+	if (!processor->running_timers_active) {
+		return expired;
+	}
+
+	for (int i = 0; i < RUNNING_TIMER_MAX; i++) {
+		struct timer_call *call = &processor->running_timers[i];
+
+		uint64_t deadline = call->tc_pqlink.deadline;
+		if (deadline > now) {
+			continue;
+		}
+
+		expired = true;
+		timer_call_trace_expire_entry(call);
+		call->tc_func(call->tc_param0, call->tc_param1);
+		timer_call_trace_expire_return(call);
+	}
+
+	return expired;
+}
+
+void
+running_timer_clear(processor_t processor, enum running_timer timer)
+{
+	struct timer_call *call = &processor->running_timers[timer];
+	uint64_t deadline = call->tc_pqlink.deadline;
+	if (deadline == EndOfAllTime) {
+		return;
+	}
+
+	call->tc_pqlink.deadline = EndOfAllTime;
+#if TIMER_TRACE
+	call->tc_entry_time = 0;
+#endif /* TIMER_TRACE */
+	timer_call_trace_cancel(call);
+}
+
+void
+running_timer_cancel(processor_t processor, unsigned int timer)
+{
+	running_timer_clear(processor, timer);
+	running_timers_sync();
+}
+
+uint64_t
+running_timers_deadline(processor_t processor)
+{
+	if (!processor->running_timers_active) {
+		return EndOfAllTime;
+	}
+
+	uint64_t deadline = EndOfAllTime;
+	for (int i = 0; i < RUNNING_TIMER_MAX; i++) {
+		uint64_t candidate =
+		    processor->running_timers[i].tc_pqlink.deadline;
+		if (candidate != 0 && candidate < deadline) {
+			deadline = candidate;
+		}
+	}
+
+	return deadline;
+}
+
+void
+running_timers_activate(processor_t processor)
+{
+	processor->running_timers_active = true;
+	running_timers_sync();
+}
+
+void
+running_timers_deactivate(processor_t processor)
+{
+	assert(processor->running_timers_active == true);
+	processor->running_timers_active = false;
+	running_timers_sync();
 }

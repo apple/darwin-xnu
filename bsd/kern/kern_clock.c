@@ -242,7 +242,7 @@ hzto(struct timeval *tv)
 		ticks = 0x7fffffff;
 	}
 
-	return ticks;
+	return (int)ticks;
 }
 
 /*
@@ -346,6 +346,6 @@ get_procrustime(time_value_t *tv)
 	st = p->p_stats->p_ru.ru_stime;
 	//proc_unlock(p);
 
-	tv->seconds = st.tv_sec;
+	tv->seconds = (integer_t)st.tv_sec;
 	tv->microseconds = st.tv_usec;
 }

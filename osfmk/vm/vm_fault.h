@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -181,6 +181,8 @@ extern kern_return_t vm_fault_enter(
 	vm_page_t m,
 	pmap_t pmap,
 	vm_map_offset_t vaddr,
+	vm_map_size_t fault_page_size,
+	vm_map_offset_t fault_phys_offset,
 	vm_prot_t prot,
 	vm_prot_t fault_type,
 	boolean_t wired,
@@ -193,8 +195,6 @@ extern kern_return_t vm_fault_enter(
 extern vm_offset_t kdp_lightweight_fault(
 	vm_map_t map,
 	vm_offset_t cur_target_addr);
-
-extern void vm_rtfault_record_init(void);
 
 #endif  /* MACH_KERNEL_PRIVATE */
 

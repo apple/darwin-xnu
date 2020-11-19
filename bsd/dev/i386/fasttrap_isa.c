@@ -313,22 +313,22 @@ fasttrap_tracepoint_init(proc_t *p, fasttrap_tracepoint_t *tp, user_addr_t pc,
 		switch (instr[start]) {
 		case FASTTRAP_PREFIX_SS:
 			seg++;
-			/*FALLTHRU*/
+			OS_FALLTHROUGH;
 		case FASTTRAP_PREFIX_GS:
 			seg++;
-			/*FALLTHRU*/
+			OS_FALLTHROUGH;
 		case FASTTRAP_PREFIX_FS:
 			seg++;
-			/*FALLTHRU*/
+			OS_FALLTHROUGH;
 		case FASTTRAP_PREFIX_ES:
 			seg++;
-			/*FALLTHRU*/
+			OS_FALLTHROUGH;
 		case FASTTRAP_PREFIX_DS:
 			seg++;
-			/*FALLTHRU*/
+			OS_FALLTHROUGH;
 		case FASTTRAP_PREFIX_CS:
 			seg++;
-			/*FALLTHRU*/
+			OS_FALLTHROUGH;
 		case FASTTRAP_PREFIX_OPERAND:
 		case FASTTRAP_PREFIX_ADDRESS:
 		case FASTTRAP_PREFIX_LOCK:

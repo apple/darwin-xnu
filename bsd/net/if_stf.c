@@ -146,10 +146,6 @@
 
 #include <net/bpf.h>
 
-#if CONFIG_MACF_NET
-#include <security/mac_framework.h>
-#endif
-
 #define GET_V4(x) ((const struct in_addr *)(const void *)(&(x)->s6_addr16[1]))
 
 static lck_grp_t *stf_mtx_grp;
@@ -370,10 +366,6 @@ stfattach(void)
 #if 0
 	/* turn off ingress filter */
 	ifnet_set_flags(sc->sc_if, IFF_LINK2, IFF_LINK2);
-#endif
-
-#if CONFIG_MACF_NET
-	mac_ifnet_label_init(&sc->sc_if);
 #endif
 
 	error = ifnet_attach(sc->sc_if, NULL);
@@ -791,10 +783,6 @@ in_stf_input(
 	}
 
 	ifp = sc->sc_if;
-
-#if MAC_LABEL
-	mac_mbuf_label_associate_ifnet(ifp, m);
-#endif
 
 	/*
 	 * perform sanity check against outer src/dst.

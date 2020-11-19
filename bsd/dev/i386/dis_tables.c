@@ -3913,7 +3913,7 @@ mm_shift:
 	/* accumulator to memory operand */
 	case AO:
 		vbit = 1;
-		/*FALLTHROUGH*/
+		OS_FALLTHROUGH;
 
 	/* memory operand to accumulator */
 	case OA:
@@ -3929,7 +3929,7 @@ mm_shift:
 	/* segment register to memory or register operand */
 	case SM:
 		vbit = 1;
-		/*FALLTHROUGH*/
+		OS_FALLTHROUGH;
 
 	/* memory or register operand to segment register */
 	case MS:
@@ -3999,12 +3999,12 @@ just_mem:
 			break;
 		}
 
-		/*FALLTHROUGH*/
+		OS_FALLTHROUGH;
 
 	/* prefetch instruction - memory operand, but no memory acess */
 	case PREF:
 		NOMEM;
-		/*FALLTHROUGH*/
+		OS_FALLTHROUGH;
 
 	/* single memory or register operand */
 	case M:
@@ -4048,7 +4048,7 @@ just_mem:
 			NOMEM;
 			break;
 		}
-		/*FALLTHROUGH*/
+		OS_FALLTHROUGH;
 	case SVM:
 		if (mode == 3) {
 #if DIS_TEXT
@@ -4086,7 +4086,7 @@ just_mem:
 			NOMEM;
 			break;
 		}
-		/*FALLTHROUGH*/
+		OS_FALLTHROUGH;
 	case MONITOR_MWAIT:
 		if (mode == 3) {
 			if (r_m == 0) {
@@ -4119,7 +4119,7 @@ just_mem:
 				goto error;
 			}
 		}
-		/*FALLTHROUGH*/
+		OS_FALLTHROUGH;
 	case XGETBV_XSETBV:
 		if (mode == 3) {
 			if (r_m == 0) {
@@ -4139,7 +4139,7 @@ just_mem:
 			}
 
 		}
-		/*FALLTHROUGH*/
+		OS_FALLTHROUGH;
 	case MO:
 		/* Similar to M, but only memory (no direct registers) */
 		wbit = LONG_OPND;
@@ -4156,21 +4156,21 @@ just_mem:
 
 		case 2:
 			vbit = 1;
-			/*FALLTHROUGH*/
+			OS_FALLTHROUGH;
 		case 0:
 			wbit = CONTROL_OPND;
 			break;
 
 		case 3:
 			vbit = 1;
-			/*FALLTHROUGH*/
+			OS_FALLTHROUGH;
 		case 1:
 			wbit = DEBUG_OPND;
 			break;
 
 		case 6:
 			vbit = 1;
-			/*FALLTHROUGH*/
+			OS_FALLTHROUGH;
 		case 4:
 			wbit = TEST_OPND;
 			break;
@@ -4751,7 +4751,7 @@ xmmprm:
 		if (dp->it_invalid32 && cpu_mode != SIZE64)
 			goto error;
 		NOMEM;
-		/*FALLTHROUGH*/
+		OS_FALLTHROUGH;
 	case IMPLMEM:
 		break;
 
@@ -4793,7 +4793,7 @@ xmmprm:
 	/* float reg to float reg, with ret bit present */
 	case FF:
 		vbit = opcode2 >> 2 & 0x1;	/* vbit = 1: st -> st(i) */
-		/*FALLTHROUGH*/
+		OS_FALLTHROUGH;
 	case FFC:				/* case for vbit always = 0 */
 #ifdef DIS_TEXT
 		x->d86_numopnds = 2;
@@ -5289,6 +5289,7 @@ L_VEX_RM:
 	case PREFIX:
 	case UNKNOWN:
 		NOMEM;
+		OS_FALLTHROUGH;
 	default:
 		goto error;
 	} /* end switch */

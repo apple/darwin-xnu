@@ -141,7 +141,7 @@ in6_cga_is_prepare_valid(const struct in6_cga_prepare *prepare,
  *      from bullet 4 of the algorithm.
  *
  * @param prepare Pointer to object containing modifier,
- *      security level & externsion to be used.
+ *      security level & extension to be used.
  * @param pubkey Public key used for IID generation
  * @param collisions Collission count on DAD failure
  *      XXX We are not really re-generating IID on DAD
@@ -153,7 +153,8 @@ in6_cga_is_prepare_valid(const struct in6_cga_prepare *prepare,
  */
 static void
 in6_cga_generate_iid(const struct in6_cga_prepare *prepare,
-    const struct iovec *pubkey, u_int8_t collisions, struct in6_addr *in6)
+    const struct iovec *pubkey, u_int8_t collisions,
+    struct in6_addr *in6, struct ifnet *ifp)
 {
 	SHA1_CTX ctx;
 	u_int8_t sha1[SHA1_RESULTLEN];
@@ -168,11 +169,14 @@ in6_cga_generate_iid(const struct in6_cga_prepare *prepare,
 	SHA1Update(&ctx, in6->s6_addr, 8);
 	SHA1Update(&ctx, &collisions, 1);
 	SHA1Update(&ctx, pubkey->iov_base, pubkey->iov_len);
+	if (ifp->network_id_len) {
+		SHA1Update(&ctx, &ifp->network_id, ifp->network_id_len);
+	}
 	/* FUTURE: extension fields */
 	SHA1Final(sha1, &ctx);
 
 	in6->s6_addr8[8] =
-	    (prepare->cga_security_level << 5) | (sha1[0] & 0x1c);
+	    (u_int8_t)((prepare->cga_security_level << 5) | (sha1[0] & 0x1c));
 	in6->s6_addr8[9] = sha1[1];
 	in6->s6_addr8[10] = sha1[2];
 	in6->s6_addr8[11] = sha1[3];
@@ -338,7 +342,7 @@ in6_cga_parameters_prepare(void *output, size_t max,
 
 int
 in6_cga_generate(struct in6_cga_prepare *prepare, u_int8_t collisions,
-    struct in6_addr *in6)
+    struct in6_addr *in6, struct ifnet *ifp)
 {
 	int error;
 	const struct iovec *pubkey;
@@ -356,7 +360,7 @@ in6_cga_generate(struct in6_cga_prepare *prepare, u_int8_t collisions,
 	pubkey = &in6_cga.cga_pubkey;
 
 	if (pubkey->iov_base != NULL) {
-		in6_cga_generate_iid(prepare, pubkey, collisions, in6);
+		in6_cga_generate_iid(prepare, pubkey, collisions, in6, ifp);
 		error = 0;
 	} else {
 		error = EADDRNOTAVAIL;

@@ -372,6 +372,12 @@ munge_wlll(const void *regs, void *args)
 }
 
 int
+munge_wlllww(const void *regs, void *args)
+{
+	return munge_wllll(regs, args);
+}
+
+int
 munge_wllll(const void *regs, void *args)
 {
 	DECLARE_AND_CAST(regs, args, ss, uu_args);
@@ -438,6 +444,26 @@ munge_wwwlww(const void *regs, void *args)
 }
 
 int
+munge_wwwlwww(const void *regs, void *args)
+{
+	if (REGS_TO_STYLE(regs) == kDirect) {
+		memcpy(args, regs, 9 * sizeof(uint32_t));
+	} else {
+		DECLARE_AND_CAST(regs, args, ss, uu_args);
+
+		uu_args[0] = ss->r[1]; // w
+		uu_args[1] = ss->r[2]; // w
+		uu_args[2] = ss->r[3]; // w
+		uu_args[4] = ss->r[4]; // l
+		uu_args[5] = ss->r[5]; //
+		uu_args[6] = ss->r[6]; // w
+		uu_args[7] = ss->r[7]; // w
+		uu_args[8] = ss->r[8]; // w
+	}
+	return 0;
+}
+
+int
 munge_wwwl(const void *regs, void *args)
 {
 	if (REGS_TO_STYLE(regs) == kDirect) {
@@ -486,6 +512,22 @@ munge_wwwwlw(const void *regs, void *args)
 		}
 		return copyin(ss->sp + ARG_SP_BYTE_OFFSET, // w
 		           uu_args + 6, sizeof(uint32_t));
+	}
+}
+
+int
+munge_wwwwllww(const void *regs, void *args)
+{
+	if (REGS_TO_STYLE(regs) == kDirect) {
+		return marshal_no_pad(regs, args, 10);
+	} else {
+		DECLARE_AND_CAST(regs, args, ss, uu_args);
+		int error = munge_wwwwl(regs, args); // wwwwl
+		if (error) {
+			return error;
+		}
+		return copyin(ss->sp + ARG_SP_BYTE_OFFSET, // lww
+		           uu_args + 6, 4 * sizeof(uint32_t));
 	}
 }
 

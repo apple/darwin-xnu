@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -135,7 +135,7 @@ make_ifmibdata(struct ifnet *ifp, int *name, struct sysctl_req *req)
 #undef COPY
 			ifmd.ifmd_snd_len = IFCQ_LEN(&ifp->if_snd);
 			ifmd.ifmd_snd_maxlen = IFCQ_MAXLEN(&ifp->if_snd);
-			ifmd.ifmd_snd_drops = ifp->if_snd.ifcq_dropcnt.packets;
+			ifmd.ifmd_snd_drops = (unsigned int)ifp->if_snd.ifcq_dropcnt.packets;
 		}
 		error = SYSCTL_OUT(req, &ifmd, sizeof ifmd);
 		if (error || !req->newptr) {

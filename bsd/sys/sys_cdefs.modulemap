@@ -1,0 +1,10 @@
+// Module map for sys/cdefs.h.
+//
+// See also: stdint.modulemap
+
+module Darwin_C_stdint._sys_cdefs {
+        export *
+        header "sys/cdefs.h"
+        textual header "sys/_symbol_aliasing.h"
+        textual header "sys/_posix_availability.h"
+}

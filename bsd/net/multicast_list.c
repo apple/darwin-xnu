@@ -96,7 +96,7 @@ multicast_list_program(struct multicast_list * mc_list,
     struct ifnet * source_ifp,
     struct ifnet * target_ifp)
 {
-	int                         alen;
+	u_char                      alen;
 	int                         error = 0;
 	int                         i;
 	struct multicast_entry *    mc = NULL;

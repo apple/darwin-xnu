@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -44,6 +44,7 @@
 #include <sys/kdebug.h>
 
 #include <kern/copyout_shim.h>
+#include <kern/zalloc_internal.h>
 
 #undef copyin
 #undef copyout
@@ -84,9 +85,6 @@ extern int _copyin_atomic32(const char *src, uint32_t *dst);
 extern int _copyin_atomic64(const char *src, uint64_t *dst);
 extern int _copyout_atomic32(const uint32_t *u32, char *src);
 extern int _copyout_atomic64(const uint64_t *u64, char *src);
-
-/* On by default, optionally disabled by boot-arg */
-extern boolean_t copyio_zalloc_check;
 
 /*
  * Types of copies:
@@ -201,9 +199,15 @@ copyio(int copy_type, user_addr_t user_addr, char *kernel_addr,
 		if (__improbable((vm_offset_t)kernel_addr < VM_MIN_KERNEL_AND_KEXT_ADDRESS)) {
 			panic("Invalid copy parameter, copy type: %d, kernel address: %p", copy_type, kernel_addr);
 		}
-		if (__probable(copyio_zalloc_check)) {
-			kernel_buf_size = zone_element_size(kernel_addr, NULL);
-			if (__improbable(kernel_buf_size && kernel_buf_size < nbytes)) {
+		if (__probable(!zalloc_disable_copyio_check)) {
+			zone_t src_zone = NULL;
+			kernel_buf_size = zone_element_size(kernel_addr, &src_zone);
+			/*
+			 * Size of elements in the permanent zone is not saved as a part of the
+			 * zone's info
+			 */
+			if (__improbable(src_zone && !src_zone->permanent &&
+			    kernel_buf_size < nbytes)) {
 				panic("copyio: kernel buffer %p has size %lu < nbytes %lu", kernel_addr, kernel_buf_size, nbytes);
 			}
 		}

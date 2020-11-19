@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -64,7 +64,6 @@
 #include <mach/vm_param.h>
 
 #include <kern/counters.h>
-#include <kern/kalloc.h>
 #include <kern/mach_param.h>
 #include <kern/processor.h>
 #include <kern/cpu_data.h>
@@ -114,11 +113,326 @@ ASSERT_IS_16BYTE_MULTIPLE_SIZEOF(x86_saved_state_t);
 extern zone_t           iss_zone;               /* zone for saved_state area */
 extern zone_t           ids_zone;               /* zone for debug_state area */
 extern int              tecs_mode_supported;
+extern boolean_t        cpuid_tsx_supported;
+
+bool lbr_need_tsx_workaround = false;
 
 int force_thread_policy_tecs;
 
+struct lbr_group {
+	uint32_t        msr_from;
+	uint32_t        msr_to;
+	uint32_t        msr_info;
+};
+
+struct cpu_lbrs {
+	uint32_t                lbr_count;
+	struct lbr_group        msr_lbrs[X86_MAX_LBRS];
+};
+
+const struct cpu_lbrs *cpu_lbr_setp = NULL;
+int cpu_lbr_type;
+
+const struct cpu_lbrs nhm_cpu_lbrs = {
+	16 /* LBR count */,
+	{
+		{ 0x680 /* FROM_0 */, 0x6c0 /* TO_0 */, 0 /* INFO_0 */ },
+		{ 0x681 /* FROM_1 */, 0x6c1 /* TO_1 */, 0 /* INFO_1 */ },
+		{ 0x682 /* FROM_2 */, 0x6c2 /* TO_2 */, 0 /* INFO_2 */ },
+		{ 0x683 /* FROM_3 */, 0x6c3 /* TO_3 */, 0 /* INFO_3 */ },
+		{ 0x684 /* FROM_4 */, 0x6c4 /* TO_4 */, 0 /* INFO_4 */ },
+		{ 0x685 /* FROM_5 */, 0x6c5 /* TO_5 */, 0 /* INFO_5 */ },
+		{ 0x686 /* FROM_6 */, 0x6c6 /* TO_6 */, 0 /* INFO_6 */ },
+		{ 0x687 /* FROM_7 */, 0x6c7 /* TO_7 */, 0 /* INFO_7 */ },
+		{ 0x688 /* FROM_8 */, 0x6c8 /* TO_8 */, 0 /* INFO_8 */ },
+		{ 0x689 /* FROM_9 */, 0x6c9 /* TO_9 */, 0 /* INFO_9 */ },
+		{ 0x68A /* FROM_10 */, 0x6ca /* TO_10 */, 0 /* INFO_10 */ },
+		{ 0x68B /* FROM_11 */, 0x6cb /* TO_11 */, 0 /* INFO_11 */ },
+		{ 0x68C /* FROM_12 */, 0x6cc /* TO_12 */, 0 /* INFO_12 */ },
+		{ 0x68D /* FROM_13 */, 0x6cd /* TO_13 */, 0 /* INFO_13 */ },
+		{ 0x68E /* FROM_14 */, 0x6ce /* TO_14 */, 0 /* INFO_14 */ },
+		{ 0x68F /* FROM_15 */, 0x6cf /* TO_15 */, 0 /* INFO_15 */ }
+	}
+},
+    skl_cpu_lbrs = {
+	32 /* LBR count */,
+	{
+		{ 0x680 /* FROM_0 */, 0x6c0 /* TO_0 */, 0xdc0 /* INFO_0 */ },
+		{ 0x681 /* FROM_1 */, 0x6c1 /* TO_1 */, 0xdc1 /* INFO_1 */ },
+		{ 0x682 /* FROM_2 */, 0x6c2 /* TO_2 */, 0xdc2 /* INFO_2 */ },
+		{ 0x683 /* FROM_3 */, 0x6c3 /* TO_3 */, 0xdc3 /* INFO_3 */ },
+		{ 0x684 /* FROM_4 */, 0x6c4 /* TO_4 */, 0xdc4 /* INFO_4 */ },
+		{ 0x685 /* FROM_5 */, 0x6c5 /* TO_5 */, 0xdc5 /* INFO_5 */ },
+		{ 0x686 /* FROM_6 */, 0x6c6 /* TO_6 */, 0xdc6 /* INFO_6 */ },
+		{ 0x687 /* FROM_7 */, 0x6c7 /* TO_7 */, 0xdc7 /* INFO_7 */ },
+		{ 0x688 /* FROM_8 */, 0x6c8 /* TO_8 */, 0xdc8 /* INFO_8 */ },
+		{ 0x689 /* FROM_9 */, 0x6c9 /* TO_9 */, 0xdc9 /* INFO_9 */ },
+		{ 0x68A /* FROM_10 */, 0x6ca /* TO_10 */, 0xdca /* INFO_10 */ },
+		{ 0x68B /* FROM_11 */, 0x6cb /* TO_11 */, 0xdcb /* INFO_11 */ },
+		{ 0x68C /* FROM_12 */, 0x6cc /* TO_12 */, 0xdcc /* INFO_12 */ },
+		{ 0x68D /* FROM_13 */, 0x6cd /* TO_13 */, 0xdcd /* INFO_13 */ },
+		{ 0x68E /* FROM_14 */, 0x6ce /* TO_14 */, 0xdce /* INFO_14 */ },
+		{ 0x68F /* FROM_15 */, 0x6cf /* TO_15 */, 0xdcf /* INFO_15 */ },
+		{ 0x690 /* FROM_16 */, 0x6d0 /* TO_16 */, 0xdd0 /* INFO_16 */ },
+		{ 0x691 /* FROM_17 */, 0x6d1 /* TO_17 */, 0xdd1 /* INFO_17 */ },
+		{ 0x692 /* FROM_18 */, 0x6d2 /* TO_18 */, 0xdd2 /* INFO_18 */ },
+		{ 0x693 /* FROM_19 */, 0x6d3 /* TO_19 */, 0xdd3 /* INFO_19 */ },
+		{ 0x694 /* FROM_20 */, 0x6d4 /* TO_20 */, 0xdd4 /* INFO_20 */ },
+		{ 0x695 /* FROM_21 */, 0x6d5 /* TO_21 */, 0xdd5 /* INFO_21 */ },
+		{ 0x696 /* FROM_22 */, 0x6d6 /* TO_22 */, 0xdd6 /* INFO_22 */ },
+		{ 0x697 /* FROM_23 */, 0x6d7 /* TO_23 */, 0xdd7 /* INFO_23 */ },
+		{ 0x698 /* FROM_24 */, 0x6d8 /* TO_24 */, 0xdd8 /* INFO_24 */ },
+		{ 0x699 /* FROM_25 */, 0x6d9 /* TO_25 */, 0xdd9 /* INFO_25 */ },
+		{ 0x69a /* FROM_26 */, 0x6da /* TO_26 */, 0xdda /* INFO_26 */ },
+		{ 0x69b /* FROM_27 */, 0x6db /* TO_27 */, 0xddb /* INFO_27 */ },
+		{ 0x69c /* FROM_28 */, 0x6dc /* TO_28 */, 0xddc /* INFO_28 */ },
+		{ 0x69d /* FROM_29 */, 0x6dd /* TO_29 */, 0xddd /* INFO_29 */ },
+		{ 0x69e /* FROM_30 */, 0x6de /* TO_30 */, 0xdde /* INFO_30 */ },
+		{ 0x69f /* FROM_31 */, 0x6df /* TO_31 */, 0xddf /* INFO_31 */ }
+	}
+};
+
 void
-act_machine_switch_pcb(__unused thread_t old, thread_t new)
+i386_lbr_disable(void)
+{
+	/* Enable LBRs */
+	wrmsr64(MSR_IA32_DEBUGCTLMSR, rdmsr64(MSR_IA32_DEBUGCTLMSR) & ~DEBUGCTL_LBR_ENA);
+}
+
+/*
+ * Disable ASAN for i386_lbr_enable and i386_lbr_init, otherwise we get a KASAN panic
+ * because the shadow map is not been initialized when these functions are called in
+ * early boot.
+ */
+void __attribute__((no_sanitize("address")))
+i386_lbr_enable(void)
+{
+	if (last_branch_support_enabled) {
+		/* Enable LBRs */
+		wrmsr64(MSR_IA32_DEBUGCTLMSR, rdmsr64(MSR_IA32_DEBUGCTLMSR) | DEBUGCTL_LBR_ENA);
+	}
+}
+
+void __attribute__((no_sanitize("address")))
+i386_lbr_init(i386_cpu_info_t *info_p, bool is_master)
+{
+	if (!last_branch_support_enabled) {
+		i386_lbr_disable();
+		return;
+	}
+
+	if (is_master) {
+		/* All NHM+ CPUs support PERF_CAPABILITIES, so no need to check cpuid for its presence */
+		cpu_lbr_type = PERFCAP_LBR_TYPE(rdmsr64(MSR_IA32_PERF_CAPABILITIES));
+
+		switch (info_p->cpuid_cpufamily) {
+		case CPUFAMILY_INTEL_NEHALEM:
+		case CPUFAMILY_INTEL_WESTMERE:
+			/* NHM family shares an LBR_SELECT MSR for both logical CPUs per core */
+			cpu_lbr_setp = &nhm_cpu_lbrs;
+			break;
+
+		case CPUFAMILY_INTEL_SANDYBRIDGE:
+		case CPUFAMILY_INTEL_IVYBRIDGE:
+			/* SNB+ has dedicated LBR_SELECT MSRs for each logical CPU per core */
+			cpu_lbr_setp = &nhm_cpu_lbrs;
+			break;
+
+		case CPUFAMILY_INTEL_HASWELL:
+		case CPUFAMILY_INTEL_BROADWELL:
+			lbr_need_tsx_workaround = cpuid_tsx_supported ? false : true;
+			cpu_lbr_setp = &nhm_cpu_lbrs;
+			break;
+
+		case CPUFAMILY_INTEL_SKYLAKE:
+		case CPUFAMILY_INTEL_KABYLAKE:
+		case CPUFAMILY_INTEL_ICELAKE:
+			cpu_lbr_setp = &skl_cpu_lbrs;
+			break;
+
+		default:
+			panic("Unknown CPU family");
+		}
+	}
+
+	/* Configure LBR_SELECT for CPL > 0 records only */
+	wrmsr64(MSR_IA32_LBR_SELECT, LBR_SELECT_CPL_EQ_0);
+
+	/* Enable LBRs */
+	wrmsr64(MSR_IA32_DEBUGCTLMSR, rdmsr64(MSR_IA32_DEBUGCTLMSR) | DEBUGCTL_LBR_ENA);
+}
+
+int
+i386_lbr_native_state_to_mach_thread_state(pcb_t pcb, last_branch_state_t *machlbrp)
+{
+	int last_entry;
+	int i, j, lbr_tos;
+	uint64_t from_rip, to_rip;
+#define LBR_SENTINEL_KERNEL_MODE (0x66726d6b65726e6cULL /* "frmkernl" */ )
+
+	machlbrp->lbr_count = cpu_lbr_setp->lbr_count;
+	lbr_tos = pcb->lbrs.lbr_tos & (X86_MAX_LBRS - 1);
+	last_entry = (lbr_tos == (cpu_lbr_setp->lbr_count - 1)) ? 0 : (lbr_tos + 1);
+
+	switch (cpu_lbr_type) {
+	case PERFCAP_LBR_TYPE_MISPRED:                  /* NHM */
+
+		machlbrp->lbr_supported_tsx = 0;
+		machlbrp->lbr_supported_cycle_count = 0;
+		for (j = 0, i = lbr_tos;; (i = (i == 0) ? (cpu_lbr_setp->lbr_count - 1) : (i - 1)), j++) {
+			to_rip = pcb->lbrs.lbrs[i].to_rip;
+			machlbrp->lbrs[j].to_ip = (to_rip > VM_MAX_USER_PAGE_ADDRESS) ? LBR_SENTINEL_KERNEL_MODE : to_rip;
+			from_rip = LBR_TYPE_MISPRED_FROMRIP(pcb->lbrs.lbrs[i].from_rip);
+			machlbrp->lbrs[j].from_ip = (from_rip > VM_MAX_USER_PAGE_ADDRESS) ? LBR_SENTINEL_KERNEL_MODE : from_rip;
+			machlbrp->lbrs[j].mispredict = LBR_TYPE_MISPRED_MISPREDICT(pcb->lbrs.lbrs[i].from_rip);
+			machlbrp->lbrs[j].tsx_abort = machlbrp->lbrs[j].in_tsx = 0;     /* Not Supported */
+			if (i == last_entry) {
+				break;
+			}
+		}
+		break;
+
+	case PERFCAP_LBR_TYPE_TSXINFO:                  /* HSW/BDW */
+
+		machlbrp->lbr_supported_tsx = cpuid_tsx_supported ? 1 : 0;
+		machlbrp->lbr_supported_cycle_count = 0;
+		for (j = 0, i = lbr_tos;; (i = (i == 0) ? (cpu_lbr_setp->lbr_count - 1) : (i - 1)), j++) {
+			to_rip = pcb->lbrs.lbrs[i].to_rip;
+			machlbrp->lbrs[j].to_ip = (to_rip > VM_MAX_USER_PAGE_ADDRESS) ? LBR_SENTINEL_KERNEL_MODE : to_rip;
+
+			from_rip = LBR_TYPE_TSXINFO_FROMRIP(pcb->lbrs.lbrs[i].from_rip);
+			machlbrp->lbrs[j].from_ip = (from_rip > VM_MAX_USER_PAGE_ADDRESS) ? LBR_SENTINEL_KERNEL_MODE : from_rip;
+			machlbrp->lbrs[j].mispredict = LBR_TYPE_TSXINFO_MISPREDICT(pcb->lbrs.lbrs[i].from_rip);
+			if (cpuid_tsx_supported) {
+				machlbrp->lbrs[j].tsx_abort = LBR_TYPE_TSXINFO_TSX_ABORT(pcb->lbrs.lbrs[i].from_rip);
+				machlbrp->lbrs[j].in_tsx = LBR_TYPE_TSXINFO_IN_TSX(pcb->lbrs.lbrs[i].from_rip);
+			} else {
+				machlbrp->lbrs[j].tsx_abort = 0;
+				machlbrp->lbrs[j].in_tsx = 0;
+			}
+			if (i == last_entry) {
+				break;
+			}
+		}
+		break;
+
+	case PERFCAP_LBR_TYPE_EIP_WITH_LBRINFO:         /* SKL+ */
+
+		machlbrp->lbr_supported_tsx = cpuid_tsx_supported ? 1 : 0;
+		machlbrp->lbr_supported_cycle_count = 1;
+		for (j = 0, i = lbr_tos;; (i = (i == 0) ? (cpu_lbr_setp->lbr_count - 1) : (i - 1)), j++) {
+			from_rip = pcb->lbrs.lbrs[i].from_rip;
+			machlbrp->lbrs[j].from_ip = (from_rip > VM_MAX_USER_PAGE_ADDRESS) ? LBR_SENTINEL_KERNEL_MODE : from_rip;
+			to_rip = pcb->lbrs.lbrs[i].to_rip;
+			machlbrp->lbrs[j].to_ip = (to_rip > VM_MAX_USER_PAGE_ADDRESS) ? LBR_SENTINEL_KERNEL_MODE : to_rip;
+			machlbrp->lbrs[j].mispredict = LBR_TYPE_EIP_WITH_LBRINFO_MISPREDICT(pcb->lbrs.lbrs[i].info);
+			machlbrp->lbrs[j].tsx_abort = LBR_TYPE_EIP_WITH_LBRINFO_TSX_ABORT(pcb->lbrs.lbrs[i].info);
+			machlbrp->lbrs[j].in_tsx = LBR_TYPE_EIP_WITH_LBRINFO_IN_TSX(pcb->lbrs.lbrs[i].info);
+			machlbrp->lbrs[j].cycle_count = LBR_TYPE_EIP_WITH_LBRINFO_CYC_COUNT(pcb->lbrs.lbrs[i].info);
+			if (i == last_entry) {
+				break;
+			}
+		}
+		break;
+
+	default:
+#if DEBUG || DEVELOPMENT
+		panic("Unknown LBR format: %d!", cpu_lbr_type);
+		/*NOTREACHED*/
+#else
+		return -1;
+#endif
+	}
+
+	return 0;
+}
+
+void
+i386_lbr_synch(thread_t thr)
+{
+	pcb_t old_pcb = THREAD_TO_PCB(thr);
+	int i;
+
+	/* First, save current LBRs to the old thread's PCB */
+	if (cpu_lbr_setp->msr_lbrs[0].msr_info != 0) {
+		for (i = 0; i < cpu_lbr_setp->lbr_count; i++) {
+			old_pcb->lbrs.lbrs[i].from_rip = rdmsr64(cpu_lbr_setp->msr_lbrs[i].msr_from);
+			old_pcb->lbrs.lbrs[i].to_rip = rdmsr64(cpu_lbr_setp->msr_lbrs[i].msr_to);
+			old_pcb->lbrs.lbrs[i].info = rdmsr64(cpu_lbr_setp->msr_lbrs[i].msr_info);
+		}
+	} else {
+		for (i = 0; i < cpu_lbr_setp->lbr_count; i++) {
+			old_pcb->lbrs.lbrs[i].from_rip = rdmsr64(cpu_lbr_setp->msr_lbrs[i].msr_from);
+			old_pcb->lbrs.lbrs[i].to_rip = rdmsr64(cpu_lbr_setp->msr_lbrs[i].msr_to);
+		}
+	}
+
+	/* Finally, save the TOS */
+	old_pcb->lbrs.lbr_tos = rdmsr64(MSR_IA32_LASTBRANCH_TOS);
+}
+
+void
+i386_switch_lbrs(thread_t old, thread_t new)
+{
+	pcb_t   new_pcb;
+	int     i;
+	bool    save_old = (old != NULL && old->task != kernel_task);
+	bool    restore_new = (new->task != kernel_task);
+
+	if (!save_old && !restore_new) {
+		return;
+	}
+
+	assert(cpu_lbr_setp != NULL);
+
+	new_pcb = THREAD_TO_PCB(new);
+
+	i386_lbr_disable();
+
+	if (save_old) {
+		i386_lbr_synch(old);
+	}
+
+	if (restore_new) {
+		/* Now restore the new threads's LBRs */
+		if (cpu_lbr_setp->msr_lbrs[0].msr_info != 0) {
+			for (i = 0; i < cpu_lbr_setp->lbr_count; i++) {
+				wrmsr64(cpu_lbr_setp->msr_lbrs[i].msr_from, new_pcb->lbrs.lbrs[i].from_rip);
+				wrmsr64(cpu_lbr_setp->msr_lbrs[i].msr_to, new_pcb->lbrs.lbrs[i].to_rip);
+				wrmsr64(cpu_lbr_setp->msr_lbrs[i].msr_info, new_pcb->lbrs.lbrs[i].info);
+			}
+		} else {
+			if (lbr_need_tsx_workaround) {
+				for (i = 0; i < cpu_lbr_setp->lbr_count; i++) {
+					/*
+					 * If TSX has been disabled, the hardware expects those two bits to be sign
+					 * extensions of bit 47 (even though it didn't return them that way via the rdmsr!)
+					 */
+#define BIT_47 (1ULL << 47)
+					wrmsr64(cpu_lbr_setp->msr_lbrs[i].msr_from,
+					    new_pcb->lbrs.lbrs[i].from_rip |
+					    ((new_pcb->lbrs.lbrs[i].from_rip & BIT_47) ? 0x6000000000000000ULL : 0));
+					wrmsr64(cpu_lbr_setp->msr_lbrs[i].msr_to,
+					    new_pcb->lbrs.lbrs[i].to_rip |
+					    ((new_pcb->lbrs.lbrs[i].to_rip & BIT_47) ? 0x6000000000000000ULL : 0));
+				}
+			} else {
+				for (i = 0; i < cpu_lbr_setp->lbr_count; i++) {
+					wrmsr64(cpu_lbr_setp->msr_lbrs[i].msr_from, new_pcb->lbrs.lbrs[i].from_rip);
+					wrmsr64(cpu_lbr_setp->msr_lbrs[i].msr_to, new_pcb->lbrs.lbrs[i].to_rip);
+				}
+			}
+		}
+
+		/* Lastly, restore the new threads's TOS */
+		wrmsr64(MSR_IA32_LASTBRANCH_TOS, new_pcb->lbrs.lbr_tos);
+	}
+
+	i386_lbr_enable();
+}
+
+void
+act_machine_switch_pcb(thread_t old, thread_t new)
 {
 	pcb_t                   pcb = THREAD_TO_PCB(new);
 	cpu_data_t              *cdp = current_cpu_datap();
@@ -231,6 +545,10 @@ act_machine_switch_pcb(__unused thread_t old, thread_t new)
 
 	cdp->cpu_curthread_do_segchk = new->machine.mthr_do_segchk;
 
+	if (last_branch_support_enabled) {
+		i386_switch_lbrs(old, new);
+	}
+
 	/*
 	 * Set the thread`s LDT or LDT entry.
 	 */
@@ -247,12 +565,6 @@ act_machine_switch_pcb(__unused thread_t old, thread_t new)
 		user_ldt_set(new);
 		cdp->cpu_curtask_has_ldt = 1;
 	}
-
-	/*
-	 * Bump the scheduler generation count in the commpage.
-	 * This can be read by user code to detect its preemption.
-	 */
-	commpage_sched_gen_inc();
 }
 
 kern_return_t
@@ -354,14 +666,7 @@ machine_thread_create(
 {
 	pcb_t                   pcb = THREAD_TO_PCB(thread);
 
-#if NCOPY_WINDOWS > 0
-	inval_copy_windows(thread);
-
-	thread->machine.physwindow_pte = 0;
-	thread->machine.physwindow_busy = 0;
-#endif
-
-	if (__improbable(force_thread_policy_tecs)) {
+	if ((task->t_flags & TF_TECS) || __improbable(force_thread_policy_tecs)) {
 		thread->machine.mthr_do_segchk = 1;
 	} else {
 		thread->machine.mthr_do_segchk = 0;
@@ -387,6 +692,8 @@ machine_thread_create(
 	    sizeof(pcb->iss->ss_64));
 
 	bzero((char *)pcb->iss, sizeof(x86_saved_state_t));
+
+	bzero(&pcb->lbrs, sizeof(x86_lbrs_t));
 
 	if (task_has_64Bit_addr(task)) {
 		pcb->iss->flavor = x86_SAVED_STATE64;
@@ -421,6 +728,12 @@ machine_thread_create(
 	}
 
 
+	pcb->insn_state_copyin_failure_errorcode = 0;
+	if (pcb->insn_state != 0) {     /* Reinit for new thread */
+		bzero(pcb->insn_state, sizeof(x86_instruction_state_t));
+		pcb->insn_state->insn_stream_valid_bytes = -1;
+	}
+
 	return KERN_SUCCESS;
 }
 
@@ -451,6 +764,12 @@ machine_thread_destroy(
 		zfree(ids_zone, pcb->ids);
 		pcb->ids = NULL;
 	}
+
+	if (pcb->insn_state != 0) {
+		kfree(pcb->insn_state, sizeof(x86_instruction_state_t));
+		pcb->insn_state = 0;
+	}
+	pcb->insn_state_copyin_failure_errorcode = 0;
 }
 
 kern_return_t

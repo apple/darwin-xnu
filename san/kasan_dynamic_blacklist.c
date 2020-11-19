@@ -201,7 +201,7 @@ kasan_dybl_load_kext(uintptr_t addr, const char *kextname)
 			kernel_segment_command_t *seg = (void *)cmd;
 			bool is_exec = seg->initprot & VM_PROT_EXECUTE;
 
-#if CONFIG_EMBEDDED
+#if defined(__arm__) || defined(__arm64__)
 			if (is_exec && strcmp("__TEXT_EXEC", seg->segname) != 0) {
 				is_exec = false;
 			}
@@ -241,8 +241,7 @@ kasan_dybl_unload_kext(uintptr_t addr)
 		if (cmd->cmd == LC_SEGMENT_KERNEL) {
 			kernel_segment_command_t *seg = (void *)cmd;
 			bool is_exec = seg->initprot & VM_PROT_EXECUTE;
-
-#if CONFIG_EMBEDDED
+#if defined(__arm__) || defined(__arm64__)
 			if (is_exec && strcmp("__TEXT_EXEC", seg->segname) != 0) {
 				is_exec = false;
 			}
@@ -475,7 +474,7 @@ add_blacklist_entry(const char *kext, const char *func, access_t type)
 	if (kext) {
 		size_t sz = __nosan_strlen(kext) + 1;
 		if (sz > 1) {
-			char *s = kalloc(sz);
+			char *s = zalloc_permanent(sz, ZALIGN_NONE);
 			__nosan_strlcpy(s, kext, sz);
 			ble->kext_name = s;
 		}
@@ -484,7 +483,7 @@ add_blacklist_entry(const char *kext, const char *func, access_t type)
 	if (func) {
 		size_t sz = __nosan_strlen(func) + 1;
 		if (sz > 1) {
-			char *s = kalloc(sz);
+			char *s = zalloc_permanent(sz, ZALIGN_NONE);
 			__nosan_strlcpy(s, func, sz);
 			ble->func_name = s;
 		}

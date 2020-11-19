@@ -32,6 +32,7 @@
 #ifdef KERNEL_BUILD
 
 #include <libkern/libkern.h>
+#include <kern/cpu_number.h>
 #include <kern/locks.h>
 #include <kern/debug.h>
 #include <kern/thread_call.h>
@@ -142,8 +143,6 @@ extern cpu_core_t *cpu_core;
 
 extern unsigned int dtrace_max_cpus;            /* max number of enabled cpus */
 #define NCPU        dtrace_max_cpus
-
-extern int cpu_number(void); /* From #include <kern/cpu_number.h>. Called from probe context, must blacklist. */
 
 #define CPU             (&(cpu_list[cpu_number()]))     /* Pointer to current CPU */
 #define CPU_ON_INTR(cpup) ml_at_interrupt_context() /* always invoked on current cpu */
@@ -464,7 +463,6 @@ extern int vuprintf(const char *, va_list);
 
 extern hrtime_t dtrace_abs_to_nano(uint64_t);
 
-__private_extern__ const char * strstr(const char *, const char *);
 const void* bsearch(const void*, const void*, size_t, size_t, int (*compar)(const void *, const void *));
 
 int dtrace_copy_maxsize(void);

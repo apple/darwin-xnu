@@ -114,7 +114,7 @@ lacp_actor_partner_state_set_active_lacp(lacp_actor_partner_state state)
 static __inline__ lacp_actor_partner_state
 lacp_actor_partner_state_set_passive_lacp(lacp_actor_partner_state state)
 {
-	return state &= ~LACP_ACTOR_PARTNER_STATE_LACP_ACTIVITY;
+	return state & ~LACP_ACTOR_PARTNER_STATE_LACP_ACTIVITY;
 }
 
 static __inline__ int
@@ -132,7 +132,7 @@ lacp_actor_partner_state_set_short_timeout(lacp_actor_partner_state state)
 static __inline__ lacp_actor_partner_state
 lacp_actor_partner_state_set_long_timeout(lacp_actor_partner_state state)
 {
-	return state &= ~LACP_ACTOR_PARTNER_STATE_LACP_TIMEOUT;
+	return state & ~LACP_ACTOR_PARTNER_STATE_LACP_TIMEOUT;
 }
 
 static __inline__ int
@@ -150,7 +150,7 @@ lacp_actor_partner_state_set_aggregatable(lacp_actor_partner_state state)
 static __inline__ lacp_actor_partner_state
 lacp_actor_partner_state_set_individual(lacp_actor_partner_state state)
 {
-	return state &= ~LACP_ACTOR_PARTNER_STATE_AGGREGATION;
+	return state & ~LACP_ACTOR_PARTNER_STATE_AGGREGATION;
 }
 
 static __inline__ lacp_actor_partner_state
@@ -168,7 +168,7 @@ lacp_actor_partner_state_set_in_sync(lacp_actor_partner_state state)
 static __inline__ lacp_actor_partner_state
 lacp_actor_partner_state_set_out_of_sync(lacp_actor_partner_state state)
 {
-	return state &= ~LACP_ACTOR_PARTNER_STATE_SYNCHRONIZATION;
+	return state & ~LACP_ACTOR_PARTNER_STATE_SYNCHRONIZATION;
 }
 
 static __inline__ int
@@ -186,7 +186,7 @@ lacp_actor_partner_state_set_collecting(lacp_actor_partner_state state)
 static __inline__ lacp_actor_partner_state
 lacp_actor_partner_state_set_not_collecting(lacp_actor_partner_state state)
 {
-	return state &= ~LACP_ACTOR_PARTNER_STATE_COLLECTING;
+	return state & ~LACP_ACTOR_PARTNER_STATE_COLLECTING;
 }
 
 static __inline__ lacp_actor_partner_state
@@ -204,7 +204,7 @@ lacp_actor_partner_state_set_distributing(lacp_actor_partner_state state)
 static __inline__ lacp_actor_partner_state
 lacp_actor_partner_state_set_not_distributing(lacp_actor_partner_state state)
 {
-	return state &= ~LACP_ACTOR_PARTNER_STATE_DISTRIBUTING;
+	return state & ~LACP_ACTOR_PARTNER_STATE_DISTRIBUTING;
 }
 
 static __inline__ lacp_actor_partner_state
@@ -222,7 +222,7 @@ lacp_actor_partner_state_set_defaulted(lacp_actor_partner_state state)
 static __inline__ lacp_actor_partner_state
 lacp_actor_partner_state_set_not_defaulted(lacp_actor_partner_state state)
 {
-	return state &= ~LACP_ACTOR_PARTNER_STATE_DEFAULTED;
+	return state & ~LACP_ACTOR_PARTNER_STATE_DEFAULTED;
 }
 
 static __inline__ lacp_actor_partner_state
@@ -240,7 +240,7 @@ lacp_actor_partner_state_set_expired(lacp_actor_partner_state state)
 static __inline__ lacp_actor_partner_state
 lacp_actor_partner_state_set_not_expired(lacp_actor_partner_state state)
 {
-	return state &= ~LACP_ACTOR_PARTNER_STATE_EXPIRED;
+	return state & ~LACP_ACTOR_PARTNER_STATE_EXPIRED;
 }
 
 static __inline__ lacp_actor_partner_state

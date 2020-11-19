@@ -30,7 +30,6 @@
 #include <mach/kern_return.h>
 #include <mach/thread_status.h>
 #include <kern/thread.h>
-#include <kern/kalloc.h>
 #include <arm/vmparam.h>
 #include <arm/cpu_data_internal.h>
 

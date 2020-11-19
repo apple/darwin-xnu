@@ -1,23 +1,14 @@
 include ../Makefile.common
 
-ifdef RC_ARCHS
-    ARCHS:=$(RC_ARCHS)
-  else
-    ifeq "$(Embedded)" "YES"
-      ARCHS:=armv7 armv7s arm64
-    else
-      ARCHS:=x86_64 i386
-  endif
-endif
-
 CC = $(shell xcrun -sdk "$(SDKROOT)" -find cc)
 STRIP = $(shell xcrun -sdk "$(SDKROOT)" -find strip)
 CODESIGN = $(shell xcrun -sdk "$(SDKROOT)" -find codesign)
 export CODESIGN_ALLOCATE := $(shell xcrun -sdk "$(SDKROOT)" -find codesign_allocate)
 DSYMUTIL = $(shell xcrun -sdk "$(SDKROOT)" -find dsymutil)
-CFLAGS = -O0 -g -isysroot $(SDKROOT) $(patsubst %, -arch %,$(ARCHS))
+CFLAGS = -O0 -g -isysroot $(SDKROOT) $(ARCH_FLAGS)
+CFLAGS += -Wl,-sectcreate,__INFO_FILTER,__disable,/dev/null
 LDFLAGS = -dead_strip \
-	-isysroot $(SDKROOT) $(patsubst %, -arch %,$(ARCHS))
+	-isysroot $(SDKROOT) $(ARCH_FLAGS)
 
 OBJROOT?=$(shell /bin/pwd)/BUILD/obj
 SYMROOT?=$(shell /bin/pwd)/BUILD/sym

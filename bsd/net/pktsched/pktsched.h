@@ -59,17 +59,25 @@ extern "C" {
 
 typedef struct _pktsched_pkt_ {
 	classq_pkt_t            __pkt;
+	classq_pkt_t            __tail;
 	uint32_t                __plen;
+	uint32_t                __pcnt;
 #define pktsched_ptype  __pkt.cp_ptype
 #define pktsched_plen   __plen
+#define pktsched_pcnt   __pcnt
 #define pktsched_pkt    __pkt
 #define pktsched_pkt_mbuf       __pkt.cp_mbuf
 #define pktsched_pkt_kpkt       __pkt.cp_kpkt
+#define pktsched_tail   __tail
+#define pktsched_tail_mbuf      __tail.cp_mbuf
+#define pktsched_tail_kpkt      __tail.cp_kpkt
 } pktsched_pkt_t;
 
 #define _PKTSCHED_PKT_INIT(_p)  do {                                    \
 	(_p)->pktsched_pkt = CLASSQ_PKT_INITIALIZER((_p)->pktsched_pkt);\
+	(_p)->pktsched_tail = CLASSQ_PKT_INITIALIZER((_p)->pktsched_tail);\
 	(_p)->pktsched_plen = 0;                                        \
+	(_p)->pktsched_pcnt = 0;                                        \
 } while (0)
 
 /* macro for timeout/untimeout */
@@ -103,7 +111,7 @@ typedef u_int32_t pktsched_bitmap_t;
 static inline boolean_t
 pktsched_bit_tst(u_int32_t ix, pktsched_bitmap_t *pData)
 {
-	return *pData & (1 << ix);
+	return (boolean_t)(*pData & (1 << ix));
 }
 
 static inline void
@@ -121,13 +129,13 @@ pktsched_bit_clr(u_int32_t ix, pktsched_bitmap_t *pData)
 static inline pktsched_bitmap_t
 pktsched_ffs(pktsched_bitmap_t pData)
 {
-	return ffs(pData);
+	return (pktsched_bitmap_t)ffs(pData);
 }
 
 static inline pktsched_bitmap_t
 pktsched_fls(pktsched_bitmap_t pData)
 {
-	return (sizeof(pktsched_bitmap_t) << 3) - clz(pData);
+	return (pktsched_bitmap_t)((sizeof(pktsched_bitmap_t) << 3) - (unsigned long)clz(pData));
 }
 
 static inline pktsched_bitmap_t
@@ -153,9 +161,9 @@ pktsched_get_pkt_len(pktsched_pkt_t *pkt)
  * machine dependent clock
  * a 64bit high resolution time counter.
  */
-extern u_int32_t machclk_freq;
-extern u_int64_t machclk_per_sec;
-extern u_int32_t pktsched_verbose;
+extern uint32_t machclk_freq;
+extern uint64_t machclk_per_sec;
+extern uint32_t pktsched_verbose;
 
 SYSCTL_DECL(_net_pktsched);
 
@@ -164,7 +172,7 @@ struct if_ifclassq_stats;
 extern void pktsched_init(void);
 extern int pktsched_setup(struct ifclassq *, u_int32_t, u_int32_t,
     classq_pkt_type_t);
-extern int pktsched_teardown(struct ifclassq *);
+extern void pktsched_teardown(struct ifclassq *);
 extern int pktsched_getqstats(struct ifclassq *, u_int32_t,
     struct if_ifclassq_stats *);
 extern u_int64_t pktsched_abs_to_nsecs(u_int64_t);
@@ -176,6 +184,8 @@ extern void pktsched_get_pkt_vars(pktsched_pkt_t *, volatile uint32_t **,
     uint64_t **, uint32_t *, uint8_t *, uint8_t *, uint32_t *);
 extern uint32_t *pktsched_get_pkt_sfb_vars(pktsched_pkt_t *, uint32_t **);
 extern void pktsched_pkt_encap(pktsched_pkt_t *, classq_pkt_t *);
+extern void pktsched_pkt_encap_chain(pktsched_pkt_t *, classq_pkt_t *,
+    classq_pkt_t *, uint32_t, uint32_t);
 extern mbuf_svc_class_t pktsched_get_pkt_svc(pktsched_pkt_t *);
 extern struct flowadv_fcentry *pktsched_alloc_fcentry(pktsched_pkt_t *,
     struct ifnet *, int);

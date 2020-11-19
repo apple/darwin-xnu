@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -37,7 +37,6 @@
 #include <mach/host_priv.h>
 #include <mach/host_special_ports.h>
 #include <kern/host.h>
-#include <kern/kalloc.h>
 #include <kern/ledger.h>
 #include <kern/coalition.h>
 #include <kern/thread_group.h>
@@ -46,7 +45,11 @@
 #include <mach/mach_voucher_attr_control.h>
 #include <kern/policy_internal.h>
 
-static zone_t bank_task_zone, bank_account_zone;
+static ZONE_DECLARE(bank_task_zone, "bank_task",
+    sizeof(struct bank_task), ZC_NONE);
+static ZONE_DECLARE(bank_account_zone, "bank_account",
+    sizeof(struct bank_account), ZC_NONE);
+
 #define MAX_BANK_TASK     (CONFIG_TASK_MAX)
 #define MAX_BANK_ACCOUNT  (CONFIG_TASK_MAX + CONFIG_THREAD_MAX)
 
@@ -63,11 +66,6 @@ struct persona;
 extern struct persona *system_persona, *proxy_system_persona;
 uint32_t persona_get_id(struct persona *persona);
 extern int unique_persona;
-
-#if DEVELOPMENT || DEBUG
-queue_head_t bank_tasks_list;
-queue_head_t bank_accounts_list;
-#endif
 
 static ledger_template_t bank_ledger_template = NULL;
 struct _bank_ledger_indices bank_ledgers = { .cpu_time = -1, .energy = -1 };
@@ -89,14 +87,14 @@ static struct thread_group *bank_get_bank_task_thread_group(bank_task_t bank_tas
 static struct thread_group *bank_get_bank_account_thread_group(bank_account_t bank_account __unused);
 static boolean_t bank_verify_persona_id(uint32_t persona_id);
 
-static lck_spin_t g_bank_task_lock_data;    /* lock to protect task->bank_context transition */
+/* lock to protect task->bank_context transition */
+static LCK_GRP_DECLARE(bank_lock_grp, "bank_lock");
+static LCK_ATTR_DECLARE(bank_lock_attr, 0, 0);
+static LCK_SPIN_DECLARE_ATTR(g_bank_task_lock_data, &bank_lock_grp, &bank_lock_attr);
 
-static uint32_t disable_persona_propogate_check = 0;
+static TUNABLE(bool, disable_persona_propagate_check,
+    "disable_persona_propagate_check", false);
 
-#define global_bank_task_lock_init() \
-	lck_spin_init(&g_bank_task_lock_data, &bank_lock_grp, &bank_lock_attr)
-#define global_bank_task_lock_destroy() \
-	lck_spin_destroy(&g_bank_task_lock_data, &bank_lock_grp)
 #define global_bank_task_lock() \
 	lck_spin_lock_grp(&g_bank_task_lock_data, &bank_lock_grp)
 #define global_bank_task_lock_try() \
@@ -105,7 +103,8 @@ static uint32_t disable_persona_propogate_check = 0;
 	lck_spin_unlock(&g_bank_task_lock_data)
 
 extern uint64_t proc_uniqueid(void *p);
-extern int32_t proc_pid(void *p);
+struct proc;
+extern int32_t proc_pid(struct proc *p);
 extern int32_t proc_pidversion(void *p);
 extern uint32_t proc_persona_id(void *p);
 extern uint32_t proc_getuid(void *p);
@@ -175,20 +174,12 @@ const struct ipc_voucher_attr_manager bank_manager = {
 
 
 #if DEVELOPMENT || DEBUG
-decl_lck_mtx_data(, bank_tasks_list_lock);
-decl_lck_mtx_data(, bank_accounts_list_lock);
-
-lck_grp_t               bank_dev_lock_grp;
-lck_attr_t              bank_dev_lock_attr;
-lck_grp_attr_t          bank_dev_lock_grp_attr;
+LCK_GRP_DECLARE(bank_dev_lock_grp, "bank_dev_lock");
+LCK_MTX_DECLARE(bank_tasks_list_lock, &bank_dev_lock_grp);
+LCK_MTX_DECLARE(bank_accounts_list_lock, &bank_dev_lock_grp);
+queue_head_t bank_tasks_list = QUEUE_HEAD_INITIALIZER(bank_tasks_list);
+queue_head_t bank_accounts_list = QUEUE_HEAD_INITIALIZER(bank_accounts_list);
 #endif
-
-/*
- * Lock group attributes for bank sub system.
- */
-lck_grp_t               bank_lock_grp;
-lck_attr_t              bank_lock_attr;
-lck_grp_attr_t          bank_lock_grp_attr;
 
 /*
  * Routine: bank_init
@@ -199,37 +190,8 @@ void
 bank_init()
 {
 	kern_return_t kr = KERN_SUCCESS;
-	/* setup zones for bank_task and bank_account objects */
-	bank_task_zone       = zinit(sizeof(struct bank_task),
-	    MAX_BANK_TASK * sizeof(struct bank_task),
-	    sizeof(struct bank_task),
-	    "bank_task");
-
-	bank_account_zone    = zinit(sizeof(struct bank_account),
-	    MAX_BANK_ACCOUNT * sizeof(struct bank_account),
-	    sizeof(struct bank_account),
-	    "bank_account");
 
 	init_bank_ledgers();
-
-	/* Initialize bank lock group and lock attributes. */
-	lck_grp_attr_setdefault(&bank_lock_grp_attr);
-	lck_grp_init(&bank_lock_grp, "bank_lock", &bank_lock_grp_attr);
-	lck_attr_setdefault(&bank_lock_attr);
-	global_bank_task_lock_init();
-
-#if DEVELOPMENT || DEBUG
-	/* Initialize global bank development lock group and lock attributes. */
-	lck_grp_attr_setdefault(&bank_dev_lock_grp_attr);
-	lck_grp_init(&bank_dev_lock_grp, "bank_dev_lock", &bank_dev_lock_grp_attr);
-	lck_attr_setdefault(&bank_dev_lock_attr);
-
-	lck_mtx_init(&bank_tasks_list_lock, &bank_dev_lock_grp, &bank_dev_lock_attr);
-	lck_mtx_init(&bank_accounts_list_lock, &bank_dev_lock_grp, &bank_dev_lock_attr);
-
-	queue_init(&bank_tasks_list);
-	queue_init(&bank_accounts_list);
-#endif
 
 	/* Register the bank manager with the Vouchers sub system. */
 	kr = ipc_register_well_known_mach_voucher_attr_manager(
@@ -242,16 +204,7 @@ bank_init()
 	}
 
 
-#if DEVELOPMENT || DEBUG
-	uint32_t disable_persona_propogate_check_bootarg = 0;
-	if (PE_parse_boot_argn("disable_persona_propogate_check", &disable_persona_propogate_check_bootarg,
-	    sizeof(disable_persona_propogate_check_bootarg))) {
-		disable_persona_propogate_check = (disable_persona_propogate_check_bootarg != 0) ? 1 : 0;
-	}
-#endif
-
 	kprintf("BANK subsystem is initialized\n");
-	return;
 }
 
 
@@ -950,6 +903,9 @@ bank_task_alloc_init(task_t task)
 	new_bank_task->bt_persona_id = proc_persona_id(task->bsd_info);
 	new_bank_task->bt_uid = proc_getuid(task->bsd_info);
 	new_bank_task->bt_gid = proc_getgid(task->bsd_info);
+#if CONFIG_THREAD_GROUPS
+	new_bank_task->bt_thread_group = thread_group_retain(task_coalition_get_thread_group(task));
+#endif
 	proc_getexecutableuuid(task->bsd_info, new_bank_task->bt_macho_uuid, sizeof(new_bank_task->bt_macho_uuid));
 
 #if DEVELOPMENT || DEBUG
@@ -977,8 +933,8 @@ bank_task_is_propagate_entitled(task_t t)
 		return FALSE;
 	}
 
-	/* If it's a platform binary, allow propogation by default */
-	if (disable_persona_propogate_check || (t->t_flags & TF_PLATFORM)) {
+	/* If it's a platform binary, allow propagation by default */
+	if (disable_persona_propagate_check || (t->t_flags & TF_PLATFORM)) {
 		return TRUE;
 	}
 
@@ -1040,6 +996,9 @@ bank_account_alloc_init(
 	new_bank_account->ba_holder = bank_holder;
 	new_bank_account->ba_secureoriginator = bank_secureoriginator;
 	new_bank_account->ba_proximateprocess = bank_proximateprocess;
+#if CONFIG_THREAD_GROUPS
+	new_bank_account->ba_thread_group = thread_group;
+#endif
 	new_bank_account->ba_so_persona_id = persona_id;
 
 	/* Iterate through accounts need to pay list to find the existing entry */
@@ -1084,6 +1043,10 @@ bank_account_alloc_init(
 	bank_task_reference(bank_merchant);
 	bank_task_reference(bank_secureoriginator);
 	bank_task_reference(bank_proximateprocess);
+#if CONFIG_THREAD_GROUPS
+	assert(new_bank_account->ba_thread_group != NULL);
+	thread_group_retain(new_bank_account->ba_thread_group);
+#endif
 
 #if DEVELOPMENT || DEBUG
 	new_bank_account->ba_task = NULL;
@@ -1169,6 +1132,9 @@ bank_task_dealloc(
 	lck_mtx_destroy(&bank_task->bt_acc_to_pay_lock, &bank_lock_grp);
 	lck_mtx_destroy(&bank_task->bt_acc_to_charge_lock, &bank_lock_grp);
 
+#if CONFIG_THREAD_GROUPS
+	thread_group_release(bank_task->bt_thread_group);
+#endif
 
 #if DEVELOPMENT || DEBUG
 	lck_mtx_lock(&bank_tasks_list_lock);
@@ -1246,6 +1212,10 @@ bank_account_dealloc_with_sync(
 	bank_task_dealloc(bank_merchant, 1);
 	bank_task_dealloc(bank_secureoriginator, 1);
 	bank_task_dealloc(bank_proximateprocess, 1);
+#if CONFIG_THREAD_GROUPS
+	assert(bank_account->ba_thread_group != NULL);
+	thread_group_release(bank_account->ba_thread_group);
+#endif
 
 #if DEVELOPMENT || DEBUG
 	lck_mtx_lock(&bank_accounts_list_lock);
@@ -1706,6 +1676,11 @@ bank_get_bank_task_thread_group(bank_task_t bank_task __unused)
 {
 	struct thread_group *banktg = NULL;
 
+#if CONFIG_THREAD_GROUPS
+	if (bank_task != BANK_TASK_NULL) {
+		banktg = bank_task->bt_thread_group;
+	}
+#endif /* CONFIG_THREAD_GROUPS */
 
 	return banktg;
 }
@@ -1719,6 +1694,11 @@ bank_get_bank_account_thread_group(bank_account_t bank_account __unused)
 {
 	struct thread_group *banktg = NULL;
 
+#if CONFIG_THREAD_GROUPS
+	if (bank_account != BANK_ACCOUNT_NULL) {
+		banktg = bank_account->ba_thread_group;
+	}
+#endif /* CONFIG_THREAD_GROUPS */
 
 	return banktg;
 }

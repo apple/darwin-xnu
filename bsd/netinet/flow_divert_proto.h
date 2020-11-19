@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2017, 2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -63,7 +63,7 @@
 #define FLOW_DIVERT_TLV_TARGET_PORT             23
 #define FLOW_DIVERT_TLV_CDHASH                  24
 #define FLOW_DIVERT_TLV_SIGNING_ID              25
-
+#define FLOW_DIVERT_TLV_AGGREGATE_UNIT          26
 
 #define FLOW_DIVERT_TLV_PREFIX_COUNT            28
 #define FLOW_DIVERT_TLV_FLAGS                   29
@@ -83,10 +83,12 @@
 #define FLOW_DIVERT_TOKEN_GETOPT_MAX_SIZE       128
 
 #define FLOW_DIVERT_TOKEN_FLAG_VALIDATED        0x0000001
-#define FLOW_DIVERT_TOKEN_FLAG_TFO                      0x0000002
+#define FLOW_DIVERT_TOKEN_FLAG_TFO              0x0000002
 #define FLOW_DIVERT_TOKEN_FLAG_MPTCP            0x0000004
 
 #define FLOW_DIVERT_GROUP_FLAG_NO_APP_MAP       0x0000001
+
+#define FLOW_DIVERT_IS_TRANSPARENT              0x80000000
 
 struct flow_divert_packet_header {
 	uint8_t             packet_type;

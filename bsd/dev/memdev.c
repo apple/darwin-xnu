@@ -130,7 +130,7 @@ extern ppnum_t  pmap_find_phys(pmap_t pmap, addr64_t va);
  *	D_CANFREE	We support B_FREEBUF
  */
 
-static struct bdevsw mdevbdevsw = {
+static const struct bdevsw mdevbdevsw = {
 	.d_open     = mdevopen,
 	.d_close    = mdevclose,
 	.d_strategy = mdevstrategy,
@@ -140,7 +140,7 @@ static struct bdevsw mdevbdevsw = {
 	.d_type     = D_DISK,
 };
 
-static struct cdevsw mdevcdevsw = {
+static const struct cdevsw mdevcdevsw = {
 	.d_open       = mdevopen,
 	.d_close      = mdevclose,
 	.d_read       = mdevrw,
@@ -239,7 +239,7 @@ mdevrw(dev_t dev, struct uio *uio, __unused int ioflag)
 			uio->uio_segflg = UIO_PHYS_USERSPACE;
 		}
 	}
-	status = uiomove64(mdata, uio_resid(uio), uio);         /* Move the data */
+	status = uiomove64(mdata, (int)uio_resid(uio), uio);    /* Move the data */
 	uio->uio_segflg = saveflag;                                                     /* Restore the flag */
 
 	return status;
@@ -280,7 +280,7 @@ mdevstrategy(struct buf *bp)
 	}
 
 	if ((blkoff + buf_count(bp)) > (mdev[devid].mdSize << 12)) {            /* Will this read go past end? */
-		buf_setcount(bp, ((mdev[devid].mdSize << 12) - blkoff));        /* Yes, trim to max */
+		buf_setcount(bp, (uint32_t)((mdev[devid].mdSize << 12) - blkoff));  /* Yes, trim to max */
 	}
 	/*
 	 * make sure the buffer's data area is
@@ -308,7 +308,7 @@ mdevstrategy(struct buf *bp)
 				}
 				paddr = (addr64_t)(((addr64_t)pp << 12) | (addr64_t)(vaddr & 4095));    /* Get actual address */
 				bcopy_phys(fvaddr, paddr, csize);               /* Copy this on in */
-				mapping_set_mod(paddr >> 12);                   /* Make sure we know that it is modified */
+				mapping_set_mod((ppnum_t)(paddr >> 12));        /* Make sure we know that it is modified */
 
 				left = left - csize;                                    /* Calculate what is left */
 				vaddr = vaddr + csize;                                  /* Move to next sink address */
@@ -441,7 +441,7 @@ mdevioctl(dev_t dev, u_long cmd, caddr_t data, __unused int flag,
 		}
 		memdev_info->mi_mdev = TRUE;
 		memdev_info->mi_phys = (mdev[devid].mdFlags & mdPhys) ? TRUE : FALSE;
-		memdev_info->mi_base = mdev[devid].mdBase;
+		memdev_info->mi_base = (uint32_t)mdev[devid].mdBase;
 		memdev_info->mi_size = mdev[devid].mdSize;
 		break;
 

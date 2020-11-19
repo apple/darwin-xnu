@@ -6,12 +6,15 @@ __BEGIN_DECLS
 
 #ifdef  MACH_KERNEL_PRIVATE
 
+#include <kern/priority_queue.h>
+
 /*----------------------------------------------------------------*/
 /*
  *	Define macros for queues with locks.
  */
 struct mpqueue_head {
 	struct queue_entry      head;           /* header for queue */
+	struct priority_queue_deadline_min mpq_pqhead;
 	uint64_t                earliest_soft_deadline;
 	uint64_t                count;
 	lck_mtx_t               lock_data;
@@ -21,9 +24,6 @@ struct mpqueue_head {
 };
 
 typedef struct mpqueue_head     mpqueue_head_t;
-
-#define round_mpq(size)         (size)
-
 
 #if defined(__i386__) || defined(__x86_64__)
 
@@ -36,6 +36,7 @@ MACRO_BEGIN                                             \
 	                 lck_attr);                     \
 	(q)->earliest_soft_deadline = UINT64_MAX;       \
 	(q)->count = 0;                                 \
+	priority_queue_init(&(q)->mpq_pqhead);          \
 MACRO_END
 
 #else
@@ -46,6 +47,7 @@ MACRO_BEGIN                                             \
 	lck_mtx_init(&(q)->lock_data,                   \
 	              lck_grp,                          \
 	              lck_attr);                        \
+	priority_queue_init(&(q)->mpq_pqhead);          \
 MACRO_END
 #endif
 

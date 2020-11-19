@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -76,6 +76,7 @@
 #include <net/route.h>
 #endif
 #ifdef BSD_KERN_PRIVATE
+#include <net/pktsched/pktsched.h>
 #include <sys/eventhandler.h>
 #endif
 
@@ -297,8 +298,8 @@ struct if_description {
 };
 
 struct if_bandwidths {
-	u_int64_t       eff_bw;         /* effective bandwidth */
-	u_int64_t       max_bw;         /* maximum theoretical bandwidth */
+	uint64_t       eff_bw;         /* effective bandwidth */
+	uint64_t       max_bw;         /* maximum theoretical bandwidth */
 };
 
 struct if_latencies {
@@ -920,6 +921,7 @@ extern boolean_t intcoproc_unrestricted;
 
 #ifdef PRIVATE
 #define IFXNAMSIZ       (IFNAMSIZ + 8)  /* external name (name + unit) */
+#define IFNET_NETWORK_ID_LEN 32
 #endif
 
 #ifdef BSD_KERNEL_PRIVATE
@@ -940,6 +942,8 @@ typedef errno_t (*dlil_input_func)(ifnet_t ifp, mbuf_t m_head,
     mbuf_t m_tail, const struct ifnet_stat_increment_param *s,
     boolean_t poll, struct thread *tp);
 typedef errno_t (*dlil_output_func)(ifnet_t interface, mbuf_t data);
+
+typedef u_int8_t        ipv6_router_mode_t;
 
 #define if_name(ifp)    ifp->if_xname
 /*
@@ -988,7 +992,7 @@ struct ifnet {
 	int             if_capenable;           /* enabled features & capabilities */
 
 	void            *if_linkmib;    /* link-type-specific MIB data */
-	size_t          if_linkmiblen;  /* length of above data */
+	uint32_t         if_linkmiblen;  /* length of above data */
 
 	struct if_data_internal if_data __attribute__((aligned(8)));
 
@@ -1021,7 +1025,8 @@ struct ifnet {
 	decl_lck_mtx_data(, if_start_lock);
 	u_int32_t               if_start_flags; /* see IFSF flags below */
 	u_int32_t               if_start_req;
-	u_int16_t               if_start_active; /* output is active */
+	u_int8_t                if_start_embryonic;
+	u_int8_t                if_start_active; /* output is active */
 	u_int16_t               if_start_delayed;
 	u_int16_t               if_start_delay_qlen;
 	u_int16_t               if_start_delay_idle;
@@ -1061,6 +1066,7 @@ struct ifnet {
 		u_int32_t       poll_flags;
 #define IF_POLLF_READY          0x1     /* poll thread is ready */
 #define IF_POLLF_RUNNING        0x2     /* poll thread is running/active */
+#define IF_POLLF_EMBRYONIC      0x8000  /* poll thread is being setup */
 		struct timespec poll_cycle;  /* poll interval */
 		struct thread   *poll_thread;
 
@@ -1122,9 +1128,6 @@ struct ifnet {
 			u_char  *ptr;
 		} u;
 	} if_broadcast;
-#if CONFIG_MACF_NET
-	struct label            *if_label;      /* interface MAC label */
-#endif
 
 #if PF
 	struct pfi_kif          *if_pf_kif;
@@ -1152,9 +1155,7 @@ struct ifnet {
 #if INET
 	struct igmp_ifinfo      *if_igi;        /* for IGMPv3 */
 #endif /* INET */
-#if INET6
 	struct mld_ifinfo       *if_mli;        /* for MLDv2 */
-#endif /* INET6 */
 
 	struct tcpstat_local    *if_tcp_stat;   /* TCP specific stats */
 	struct udpstat_local    *if_udp_stat;   /* UDP specific stats */
@@ -1196,10 +1197,8 @@ struct ifnet {
 	decl_lck_rw_data(, if_inetdata_lock);
 	void                    *if_inetdata;
 #endif /* INET */
-#if INET6
 	decl_lck_rw_data(, if_inet6data_lock);
 	void                    *if_inet6data;
-#endif
 	decl_lck_rw_data(, if_link_status_lock);
 	struct if_link_status   *if_link_status;
 	struct if_interface_state       if_interface_state;
@@ -1212,6 +1211,11 @@ struct ifnet {
 	uint32_t        if_tcp_kao_cnt;
 
 	struct netem    *if_output_netem;
+
+	ipv6_router_mode_t if_ipv6_router_mode; /* see <netinet6/in6_var.h> */
+
+	uint8_t         network_id[IFNET_NETWORK_ID_LEN];
+	uint8_t         network_id_len;
 };
 
 /* Interface event handling declarations */
@@ -1694,11 +1698,9 @@ __private_extern__ void if_inetdata_lock_exclusive(struct ifnet *ifp);
 __private_extern__ void if_inetdata_lock_done(struct ifnet *ifp);
 #endif
 
-#if INET6
 __private_extern__ void if_inet6data_lock_shared(struct ifnet *ifp);
 __private_extern__ void if_inet6data_lock_exclusive(struct ifnet *ifp);
 __private_extern__ void if_inet6data_lock_done(struct ifnet *ifp);
-#endif
 
 __private_extern__ void ifnet_head_lock_shared(void);
 __private_extern__ void ifnet_head_lock_exclusive(void);
@@ -1793,11 +1795,9 @@ if_afdata_rlock(struct ifnet *ifp, int af)
 		lck_rw_lock_shared(&ifp->if_inetdata_lock);
 		break;
 #endif
-#if INET6
 	case AF_INET6:
 		lck_rw_lock_shared(&ifp->if_inet6data_lock);
 		break;
-#endif
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
@@ -1814,11 +1814,9 @@ if_afdata_runlock(struct ifnet *ifp, int af)
 		lck_rw_done(&ifp->if_inetdata_lock);
 		break;
 #endif
-#if INET6
 	case AF_INET6:
 		lck_rw_done(&ifp->if_inet6data_lock);
 		break;
-#endif
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
@@ -1835,11 +1833,9 @@ if_afdata_wlock(struct ifnet *ifp, int af)
 		lck_rw_lock_exclusive(&ifp->if_inetdata_lock);
 		break;
 #endif
-#if INET6
 	case AF_INET6:
 		lck_rw_lock_exclusive(&ifp->if_inet6data_lock);
 		break;
-#endif
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
@@ -1856,11 +1852,9 @@ if_afdata_unlock(struct ifnet *ifp, int af)
 		lck_rw_done(&ifp->if_inetdata_lock);
 		break;
 #endif
-#if INET6
 	case AF_INET6:
 		lck_rw_done(&ifp->if_inet6data_lock);
 		break;
-#endif
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
@@ -1880,11 +1874,9 @@ if_afdata_wlock_assert(struct ifnet *ifp, int af)
 		LCK_RW_ASSERT(&ifp->if_inetdata_lock, LCK_RW_ASSERT_EXCLUSIVE);
 		break;
 #endif
-#if INET6
 	case AF_INET6:
 		LCK_RW_ASSERT(&ifp->if_inet6data_lock, LCK_RW_ASSERT_EXCLUSIVE);
 		break;
-#endif
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
@@ -1904,11 +1896,9 @@ if_afdata_unlock_assert(struct ifnet *ifp, int af)
 		LCK_RW_ASSERT(&ifp->if_inetdata_lock, LCK_RW_ASSERT_NOTHELD);
 		break;
 #endif
-#if INET6
 	case AF_INET6:
 		LCK_RW_ASSERT(&ifp->if_inet6data_lock, LCK_RW_ASSERT_NOTHELD);
 		break;
-#endif
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
@@ -1928,11 +1918,9 @@ if_afdata_lock_assert(struct ifnet *ifp, int af)
 		LCK_RW_ASSERT(&ifp->if_inetdata_lock, LCK_RW_ASSERT_HELD);
 		break;
 #endif
-#if INET6
 	case AF_INET6:
 		LCK_RW_ASSERT(&ifp->if_inet6data_lock, LCK_RW_ASSERT_HELD);
 		break;
-#endif
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
@@ -1940,12 +1928,10 @@ if_afdata_lock_assert(struct ifnet *ifp, int af)
 	return;
 }
 
-#if INET6
 struct in6_addr;
 __private_extern__ struct in6_ifaddr *ifa_foraddr6(struct in6_addr *);
 __private_extern__ struct in6_ifaddr *ifa_foraddr6_scoped(struct in6_addr *,
     unsigned int);
-#endif /* INET6 */
 
 __private_extern__ void if_data_internal_to_if_data(struct ifnet *ifp,
     const struct if_data_internal *if_data_int, struct if_data *if_data);
@@ -1964,10 +1950,8 @@ __private_extern__ void if_copy_netif_stats(struct ifnet *ifp,
 
 __private_extern__ struct rtentry *ifnet_cached_rtlookup_inet(struct ifnet *,
     struct in_addr);
-#if INET6
 __private_extern__ struct rtentry *ifnet_cached_rtlookup_inet6(struct ifnet *,
     struct in6_addr *);
-#endif /* INET6 */
 
 __private_extern__ u_int32_t if_get_protolist(struct ifnet * ifp,
     u_int32_t *protolist, u_int32_t count);
@@ -2003,13 +1987,11 @@ __private_extern__ int ifnet_set_netsignature(struct ifnet *, uint8_t,
 __private_extern__ int ifnet_get_netsignature(struct ifnet *, uint8_t,
     uint8_t *, uint16_t *, uint8_t *);
 
-#if INET6
 struct ipv6_prefix;
 __private_extern__ int ifnet_set_nat64prefix(struct ifnet *,
     struct ipv6_prefix *);
 __private_extern__ int ifnet_get_nat64prefix(struct ifnet *,
     struct ipv6_prefix *);
-#endif
 
 /* Required exclusive ifnet_head lock */
 __private_extern__ void ifnet_remove_from_ordered_list(struct ifnet *);
@@ -2031,15 +2013,17 @@ __private_extern__ void intf_event_enqueue_nwk_wq_entry(struct ifnet *ifp,
 __private_extern__ void ifnet_update_stats_per_flow(struct ifnet_stats_per_flow *,
     struct ifnet *);
 __private_extern__ int if_get_tcp_kao_max(struct ifnet *);
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 __private_extern__ errno_t ifnet_framer_stub(struct ifnet *, struct mbuf **,
     const struct sockaddr *, const char *, const char *, u_int32_t *,
     u_int32_t *);
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 __private_extern__ void ifnet_enqueue_multi_setup(struct ifnet *, uint16_t,
     uint16_t);
 __private_extern__ errno_t ifnet_enqueue_mbuf(struct ifnet *, struct mbuf *,
     boolean_t, boolean_t *);
+__private_extern__ errno_t ifnet_enqueue_mbuf_chain(struct ifnet *,
+    struct mbuf *, struct mbuf *, uint32_t, uint32_t, boolean_t, boolean_t *);
 __private_extern__ int ifnet_enqueue_netem(void *handle, pktsched_pkt_t *pkts,
     uint32_t n_pkts);
 
@@ -2047,6 +2031,10 @@ extern int if_low_power_verbose;
 extern int if_low_power_restricted;
 extern void if_low_power_evhdlr_init(void);
 extern int if_set_low_power(struct ifnet *, bool);
+extern u_int32_t if_set_eflags(ifnet_t, u_int32_t);
+extern void if_clear_eflags(ifnet_t, u_int32_t);
+extern u_int32_t if_set_xflags(ifnet_t, u_int32_t);
+extern void if_clear_xflags(ifnet_t, u_int32_t);
 
 #endif /* BSD_KERNEL_PRIVATE */
 #ifdef XNU_KERNEL_PRIVATE

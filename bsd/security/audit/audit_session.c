@@ -99,7 +99,7 @@ static au_sentry_t audit_default_se = {
 	.se_procnt = 1,
 };
 
-struct auditinfo_addr *audit_default_aia_p = &audit_default_se.se_auinfo;
+struct auditinfo_addr * const audit_default_aia_p = &audit_default_se.se_auinfo;
 
 /* Copied from <ipc/ipc_object.h> */
 #define IPC_KMSG_FLAGS_ALLOW_IMMOVABLE_SEND 0x1
@@ -337,7 +337,7 @@ static read_write_fcn_t         audit_sdev_read;
 static ioctl_fcn_t              audit_sdev_ioctl;
 static select_fcn_t             audit_sdev_poll;
 
-static struct cdevsw audit_sdev_cdevsw = {
+static const struct cdevsw audit_sdev_cdevsw = {
 	.d_open      =          audit_sdev_open,
 	.d_close     =          audit_sdev_close,
 	.d_read      =          audit_sdev_read,
@@ -526,13 +526,12 @@ audit_sysctl_session_debug(__unused struct sysctl_oid *oidp,
 	 * We hold the lock over the alloc since we don't want the table to
 	 * grow on us.   Therefore, use the non-blocking version of kalloc().
 	 */
-	sed_tab = (au_sentry_debug_t *)kalloc_noblock(entry_cnt *
-	    sizeof(au_sentry_debug_t));
+	sed_tab = (au_sentry_debug_t *)kheap_alloc(KHEAP_TEMP,
+	    entry_cnt * sizeof(au_sentry_debug_t), Z_NOWAIT | Z_ZERO);
 	if (sed_tab == NULL) {
 		AUDIT_SENTRY_RUNLOCK();
 		return ENOMEM;
 	}
-	bzero(sed_tab, entry_cnt * sizeof(au_sentry_debug_t));
 
 	/*
 	 * Walk the audit session hash table and build the record array.
@@ -566,7 +565,7 @@ audit_sysctl_session_debug(__unused struct sysctl_oid *oidp,
 
 	req->oldlen = sz;
 	err = SYSCTL_OUT(req, sed_tab, sz);
-	kfree(sed_tab, entry_cnt * sizeof(au_sentry_debug_t));
+	kheap_free(KHEAP_TEMP, sed_tab, entry_cnt * sizeof(au_sentry_debug_t));
 
 	return err;
 }

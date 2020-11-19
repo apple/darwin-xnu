@@ -74,12 +74,12 @@ int
 PE_consistent_debug_inherit(void)
 {
 	DTEntry         entryP;
-	uintptr_t       *prop_data;
+	uintptr_t const *prop_data;
 	uintptr_t       root_pointer = 0;
 	uint32_t        size;
 
-	if ((DTLookupEntry(NULL, "/chosen", &entryP) == kSuccess)) {
-		if (DTGetProperty(entryP, "consistent-debug-root", (void **)&prop_data, &size) == kSuccess) {
+	if ((SecureDTLookupEntry(NULL, "/chosen", &entryP) == kSuccess)) {
+		if (SecureDTGetProperty(entryP, "consistent-debug-root", (void const **)&prop_data, &size) == kSuccess) {
 			root_pointer = prop_data[0];
 		}
 	}

@@ -983,7 +983,7 @@ kauth_copyinfilesec(user_addr_t xsecurity, kauth_filesec_t *xsecdestpp)
 {
 	int error;
 	kauth_filesec_t fsec;
-	u_int32_t count;
+	size_t count;
 	size_t copysize;
 
 	error = 0;
@@ -1006,14 +1006,14 @@ kauth_copyinfilesec(user_addr_t xsecurity, kauth_filesec_t *xsecdestpp)
 	 */
 	{
 		user_addr_t known_bound = (xsecurity & PAGE_MASK) + KAUTH_FILESEC_SIZE(0);
-		user_addr_t uaddr = mach_vm_round_page(known_bound);
+		user_addr_t uaddr = (user_addr_t)mach_vm_round_page(known_bound);
 		count = (uaddr - known_bound) / sizeof(struct kauth_ace);
 	}
 	if (count > 32) {
 		count = 32;
 	}
 restart:
-	if ((fsec = kauth_filesec_alloc(count)) == NULL) {
+	if ((fsec = kauth_filesec_alloc((int)count)) == NULL) {
 		error = ENOMEM;
 		goto out;
 	}

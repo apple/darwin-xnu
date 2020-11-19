@@ -323,9 +323,9 @@ struct turnstile {
 		struct turnstile_list ts_free_turnstiles;    /* turnstile free list (IL) */
 		SLIST_ENTRY(turnstile) ts_free_elm;          /* turnstile free list element (IL) */
 	};
-	struct priority_queue         ts_inheritor_queue;    /* Queue of turnstile with us as an inheritor (WL) */
+	struct priority_queue_sched_max ts_inheritor_queue;    /* Queue of turnstile with us as an inheritor (WL) */
 	union {
-		struct priority_queue_entry ts_inheritor_links;    /* Inheritor queue links */
+		struct priority_queue_entry_sched ts_inheritor_links;    /* Inheritor queue links */
 		struct mpsc_queue_chain   ts_deallocate_link;    /* thread deallocate link */
 	};
 	SLIST_ENTRY(turnstile)        ts_htable_link;        /* linkage for turnstile in global hash table */

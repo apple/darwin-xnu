@@ -436,7 +436,8 @@ nfs3_lockd_request(
 	int interruptable, slpflag;
 	struct nfsmount *nmp;
 	struct timeval now;
-	int timeo, starttime, endtime, lastmsg, wentdown = 0;
+	int timeo, wentdown = 0;
+	long starttime, endtime, lastmsg;
 	struct timespec ts;
 	struct sockaddr *saddr;
 

@@ -265,10 +265,11 @@ kxld_validate_copyright_string(const char *str)
 	const char *copyright = NULL;
 	const char *rights = NULL;
 	char *date_str = NULL;
-	u_long len = 0;
+	size_t len = 0;
 
-	copyright = kxld_strstr(str, kCopyrightToken);
-	rights = kxld_strstr(str, kRightsToken);
+	len = strlen(str);
+	copyright = strnstr(str, kCopyrightToken, len);
+	rights = strnstr(str, kRightsToken, len);
 
 	if (!copyright || !rights || copyright > rights) {
 		goto finish;

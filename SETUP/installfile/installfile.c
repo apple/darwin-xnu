@@ -84,7 +84,7 @@ main(int argc, char * argv[])
 	src = argv[0];
 	dst = argv[1];
 
-	srcfd = open(src, O_RDONLY | O_SYMLINK, 0);
+	srcfd = open(src, O_RDONLY, 0);
 	if (srcfd < 0) {
 		err(EX_NOINPUT, "open(%s)", src);
 	}

@@ -64,7 +64,6 @@
 #include <kern/kern_types.h>
 #include <kern/misc_protos.h>
 #include <kern/task.h>
-#include <kern/kalloc.h>
 
 #include <vm/vm_map.h>
 #include <vm/vm_kern.h>

@@ -1518,7 +1518,7 @@ IPCS_msg_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	union {
 		struct user32_IPCS_command u32;
 		struct user_IPCS_command u64;
-	} ipcs;
+	} ipcs = { };
 	struct user32_msqid_ds msqid_ds32 = {}; /* post conversion, 32 bit version */
 	struct user64_msqid_ds msqid_ds64 = {}; /* post conversion, 64 bit version */
 	void *msqid_dsp;

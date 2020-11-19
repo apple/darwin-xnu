@@ -32,6 +32,7 @@
 #include <kern/thread.h>
 #include <machine/atomic.h>
 #include <kern/locks.h>
+#include <kern/lock_stat.h>
 #include <machine/machine_cpu.h>
 
 #if defined(__x86_64__)
@@ -63,7 +64,7 @@ extern uint64_t TLockTimeOut;
  */
 
 void
-lck_ticket_init(lck_ticket_t *tlock)
+lck_ticket_init(lck_ticket_t *tlock, lck_grp_t *grp)
 {
 	memset(tlock, 0, sizeof(*tlock));
 	/* Current ticket size limit--tickets can be trivially expanded
@@ -78,6 +79,11 @@ lck_ticket_init(lck_ticket_t *tlock)
 	__assert_only uintptr_t tn = (uintptr_t) &tlocki->nticket;
 
 	assert(((tcn & 3) == 0) && (tcn == tc) && (tn == (tc + 1)));
+
+	if (grp) {
+		lck_grp_reference(grp);
+		lck_grp_lckcnt_incr(grp, LCK_TYPE_TICKET);
+	}
 }
 
 static void
@@ -116,10 +122,19 @@ load_exclusive_acquire8(uint8_t *target)
  * Returns when the current ticket is observed equal to "mt"
  */
 static void __attribute__((noinline))
-tlock_contended(uint8_t *tp, uint8_t mt, lck_ticket_t *tlock, thread_t cthread)
+tlock_contended(uint8_t *tp, uint8_t mt, lck_ticket_t *tlock, thread_t cthread LCK_GRP_ARG(lck_grp_t *grp))
 {
 	uint8_t cticket;
 	uint64_t etime = 0, ctime = 0, stime = 0;
+
+#if CONFIG_DTRACE || LOCK_STATS
+	uint64_t begin = 0;
+	boolean_t stat_enabled = lck_grp_ticket_spin_enabled(tlock LCK_GRP_ARG(grp));
+
+	if (__improbable(stat_enabled)) {
+		begin = mach_absolute_time();
+	}
+#endif /* CONFIG_DTRACE || LOCK_STATS */
 
 	assertf(tlock->lck_owner != (uintptr_t) cthread, "Recursive ticket lock, owner: %p, current thread: %p", (void *) tlock->lck_owner, (void *) cthread);
 
@@ -136,6 +151,12 @@ tlock_contended(uint8_t *tp, uint8_t mt, lck_ticket_t *tlock, thread_t cthread)
 				 */
 				os_atomic_clear_exclusive();
 				tlock_mark_owned(tlock, cthread);
+#if CONFIG_DTRACE || LOCK_STATS
+				lck_grp_ticket_update_miss(tlock LCK_GRP_ARG(grp));
+				if (__improbable(stat_enabled)) {
+					lck_grp_ticket_update_spin(tlock LCK_GRP_ARG(grp), mach_absolute_time() - begin);
+				}
+#endif /* CONFIG_DTRACE || LOCK_STATS */
 				return;
 			}
 #else /* !WFE */
@@ -144,6 +165,12 @@ tlock_contended(uint8_t *tp, uint8_t mt, lck_ticket_t *tlock, thread_t cthread)
 #endif /* x64 */
 			if ((cticket = __c11_atomic_load((_Atomic uint8_t *) tp, __ATOMIC_SEQ_CST)) == mt) {
 				tlock_mark_owned(tlock, cthread);
+#if CONFIG_DTRACE || LOCK_STATS
+				if (__improbable(stat_enabled)) {
+					lck_grp_ticket_update_spin(tlock LCK_GRP_ARG(grp), mach_absolute_time() - begin);
+				}
+				lck_grp_ticket_update_miss(tlock LCK_GRP_ARG(grp));
+#endif /* CONFIG_DTRACE || LOCK_STATS */
 				return;
 			}
 #endif /* !WFE */
@@ -166,7 +193,7 @@ tlock_contended(uint8_t *tp, uint8_t mt, lck_ticket_t *tlock, thread_t cthread)
 }
 
 void
-lck_ticket_lock(lck_ticket_t *tlock)
+(lck_ticket_lock)(lck_ticket_t * tlock LCK_GRP_ARG(lck_grp_t *grp))
 {
 	lck_ticket_internal *tlocki = &tlock->tu;
 	thread_t cthread = current_thread();
@@ -181,10 +208,12 @@ lck_ticket_lock(lck_ticket_t *tlock)
 
 	/* Contention? branch to out of line contended block */
 	if (__improbable(tlocka.cticket != tlocka.nticket)) {
-		return tlock_contended(&tlocki->cticket, tlocka.nticket, tlock, cthread);
+		return tlock_contended(&tlocki->cticket, tlocka.nticket, tlock, cthread LCK_GRP_ARG(grp));
 	}
 
 	tlock_mark_owned(tlock, cthread);
+
+	lck_grp_ticket_update_held(tlock LCK_GRP_ARG(grp));
 }
 
 void
@@ -212,6 +241,9 @@ lck_ticket_unlock(lck_ticket_t *tlock)
 	set_event();
 #endif  // __arm__
 #endif /* !x86_64 */
+#if CONFIG_DTRACE
+	LOCKSTAT_RECORD(LS_LCK_TICKET_LOCK_RELEASE, tlock);
+#endif /* CONFIG_DTRACE */
 	enable_preemption();
 }
 

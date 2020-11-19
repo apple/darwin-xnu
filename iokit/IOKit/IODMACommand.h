@@ -215,7 +215,7 @@ public:
  *   @param refCon Reference Constant
  *   @result Returns a new IODMACommand if successfully created and initialized, 0 otherwise.
  */
-	static IODMACommand *
+	static OSPtr<IODMACommand>
 	withSpecification(SegmentFunction  outSegFunc,
 	    UInt8            numAddressBits,
 	    UInt64           maxSegmentSize,
@@ -255,7 +255,7 @@ public:
 	    IOMapper       *mapper = NULL,
 	    void           *refCon = NULL) __attribute__((always_inline));
 
-	static IODMACommand *
+	static OSPtr<IODMACommand>
 	withSpecification(SegmentFunction        outSegFunc,
 	    const SegmentOptions * segmentOptions,
 	    uint32_t               mappingOptions,
@@ -269,7 +269,7 @@ public:
  *   @param refCon Reference Constant
  *   @result Returns a new IODMACommand if successfully created and initialized, 0 otherwise.
  */
-	static IODMACommand * withRefCon(void * refCon);
+	static OSPtr<IODMACommand> withRefCon(void * refCon);
 
 /*!
  *   @function cloneCommand
@@ -277,7 +277,7 @@ public:
  *   @discussion Factory function to create and initialise an IODMACommand in one operation.  The current command's specification will be duplicated in the new object, but however none of its state will be duplicated.  This means that it is safe to clone a command even if it is currently active and running, however you must be certain that the command to be duplicated does have a valid reference for the duration.
  *   @result Returns a new IODMACommand if successfully created and initialised, 0 otherwise.
  */
-	virtual IODMACommand *cloneCommand(void *refCon = NULL);
+	virtual OSPtr<IODMACommand> cloneCommand(void *refCon = NULL);
 
 /*! @function initWithSpecification
  *   @abstract Primary initializer for the IODMACommand class.
@@ -320,7 +320,7 @@ public:
 /*! @function getMemoryDescriptor
  *   @abstract Get the current memory descriptor
  */
-	virtual const IOMemoryDescriptor *getMemoryDescriptor() const;
+	virtual const IOMemoryDescriptor * getMemoryDescriptor() const;
 
 /*! @function getIOMemoryDescriptor
  *   @abstract Get the memory descriptor to be used for DMA
@@ -455,7 +455,7 @@ private:
 		Segment64     segment,
 		void         *segments,
 		UInt32        segmentIndex);
-	IOReturn walkAll(UInt8 op);
+	IOReturn walkAll(uint32_t op);
 
 public:
 
@@ -536,16 +536,16 @@ public:
 	    bool                   synchronize = true);
 
 	virtual
-	IOBufferMemoryDescriptor * createCopyBuffer(IODirection direction, UInt64 length);
+	OSPtr<IOBufferMemoryDescriptor> createCopyBuffer(IODirection direction, UInt64 length);
 
 private:
-	OSMetaClassDeclareReservedUsed(IODMACommand, 0);
-	OSMetaClassDeclareReservedUsed(IODMACommand, 1);
-	OSMetaClassDeclareReservedUsed(IODMACommand, 2);
-	OSMetaClassDeclareReservedUsed(IODMACommand, 3);
-	OSMetaClassDeclareReservedUsed(IODMACommand, 4);
-	OSMetaClassDeclareReservedUsed(IODMACommand, 5);
-	OSMetaClassDeclareReservedUsed(IODMACommand, 6);
+	OSMetaClassDeclareReservedUsedX86(IODMACommand, 0);
+	OSMetaClassDeclareReservedUsedX86(IODMACommand, 1);
+	OSMetaClassDeclareReservedUsedX86(IODMACommand, 2);
+	OSMetaClassDeclareReservedUsedX86(IODMACommand, 3);
+	OSMetaClassDeclareReservedUsedX86(IODMACommand, 4);
+	OSMetaClassDeclareReservedUsedX86(IODMACommand, 5);
+	OSMetaClassDeclareReservedUsedX86(IODMACommand, 6);
 	OSMetaClassDeclareReservedUnused(IODMACommand, 7);
 	OSMetaClassDeclareReservedUnused(IODMACommand, 8);
 	OSMetaClassDeclareReservedUnused(IODMACommand, 9);
@@ -574,11 +574,11 @@ protected:
 
 /*! @var fMapper
  *   Client defined mapper. */
-	IOMapper *fMapper;
+	OSPtr<IOMapper> fMapper;
 
 /*! @var fMemory
  *   memory descriptor for current I/O. */
-	const IOMemoryDescriptor *fMemory;
+	OSPtr<IOMemoryDescriptor> fMemory;
 
 /*! @var fOutSeg The action method called when an event has been delivered */
 	SegmentFunction fOutSeg;
@@ -605,7 +605,7 @@ protected:
 
 /*! @var reserved
  *   Reserved for future use.  (Internal use only)  */
-	struct IODMACommandInternal * reserved;
+	struct IODMACommandInternal  *reserved;
 };
 
 IOReturn

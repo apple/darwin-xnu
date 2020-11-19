@@ -93,7 +93,6 @@ ref_pset_port_locked(
  */
 
 extern lck_grp_t                host_notify_lock_grp;
-extern lck_attr_t               host_notify_lock_attr;
 
 void
 ipc_host_init(void)
@@ -101,7 +100,7 @@ ipc_host_init(void)
 	ipc_port_t      port;
 	int i;
 
-	lck_mtx_init(&realhost.lock, &host_notify_lock_grp, &host_notify_lock_attr);
+	lck_mtx_init(&realhost.lock, &host_notify_lock_grp, LCK_ATTR_NULL);
 
 	/*
 	 *	Allocate and set up the two host ports.

@@ -33,6 +33,7 @@
 #include <arm/io_map_entries.h>
 #include <arm/cpu_data.h>
 #include <arm/cpu_data_internal.h>
+#include <arm/machine_routines.h>
 #include <arm/misc_protos.h>
 #include <arm/rtclock.h>
 #include <arm/caches_internal.h>
@@ -46,6 +47,7 @@
 #include <machine/atomic.h>
 #include <vm/pmap.h>
 #include <vm/vm_page.h>
+#include <vm/vm_map.h>
 #include <sys/kdebug.h>
 #include <kern/coalition.h>
 #include <pexpert/device_tree.h>
@@ -58,44 +60,34 @@
 #include <kern/kpc.h>
 #endif
 
-static int max_cpus_initialized = 0;
-#define MAX_CPUS_SET    0x1
-#define MAX_CPUS_WAIT   0x2
-
-static unsigned int avail_cpus = 0;
+/* arm32 only supports a highly simplified topology, fixed at 1 cluster */
+static ml_topology_cpu_t topology_cpu_array[MAX_CPUS];
+static ml_topology_cluster_t topology_cluster = {
+	.cluster_id = 0,
+	.cluster_type = CLUSTER_TYPE_SMP,
+	.first_cpu_id = 0,
+};
+static ml_topology_info_t topology_info = {
+	.version = CPU_TOPOLOGY_VERSION,
+	.num_clusters = 1,
+	.max_cluster_id = 0,
+	.cpus = topology_cpu_array,
+	.clusters = &topology_cluster,
+	.boot_cpu = &topology_cpu_array[0],
+	.boot_cluster = &topology_cluster,
+};
 
 uint32_t LockTimeOut;
 uint32_t LockTimeOutUsec;
 uint64_t TLockTimeOut;
 uint64_t MutexSpin;
+extern uint32_t lockdown_done;
 uint64_t low_MutexSpin;
 int64_t  high_MutexSpin;
-
-boolean_t is_clock_configured = FALSE;
-
-#if CONFIG_NONFATAL_ASSERTS
-extern int mach_assert;
-#endif
-extern volatile uint32_t debug_enabled;
-
-void machine_conf(void);
 
 void
 machine_startup(__unused boot_args * args)
 {
-	int boot_arg;
-
-#if CONFIG_NONFATAL_ASSERTS
-	PE_parse_boot_argn("assert", &mach_assert, sizeof(mach_assert));
-#endif
-
-	if (PE_parse_boot_argn("preempt", &boot_arg, sizeof(boot_arg))) {
-		default_preemption_rate = boot_arg;
-	}
-	if (PE_parse_boot_argn("bg_preempt", &boot_arg, sizeof(boot_arg))) {
-		default_bg_preemption_rate = boot_arg;
-	}
-
 	machine_conf();
 
 	/*
@@ -111,23 +103,6 @@ machine_boot_info(
 	__unused vm_size_t size)
 {
 	return PE_boot_args();
-}
-
-void
-machine_conf(void)
-{
-	machine_info.memory_size = mem_size;
-}
-
-void
-machine_init(void)
-{
-	debug_log_init();
-	clock_config();
-	is_clock_configured = TRUE;
-	if (debug_enabled) {
-		pmap_map_globals();
-	}
 }
 
 void
@@ -148,47 +123,6 @@ machine_processor_shutdown(
 	processor_t processor)
 {
 	return Shutdown_context(doshutdown, processor);
-}
-
-/*
- *	Routine:        ml_init_max_cpus
- *	Function:
- */
-void
-ml_init_max_cpus(unsigned int max_cpus)
-{
-	boolean_t       current_state;
-
-	current_state = ml_set_interrupts_enabled(FALSE);
-	if (max_cpus_initialized != MAX_CPUS_SET) {
-		machine_info.max_cpus = max_cpus;
-		machine_info.physical_cpu_max = max_cpus;
-		machine_info.logical_cpu_max = max_cpus;
-		if (max_cpus_initialized == MAX_CPUS_WAIT) {
-			thread_wakeup((event_t) &max_cpus_initialized);
-		}
-		max_cpus_initialized = MAX_CPUS_SET;
-	}
-	(void) ml_set_interrupts_enabled(current_state);
-}
-
-/*
- *	Routine:        ml_get_max_cpus
- *	Function:
- */
-unsigned int
-ml_get_max_cpus(void)
-{
-	boolean_t       current_state;
-
-	current_state = ml_set_interrupts_enabled(FALSE);
-	if (max_cpus_initialized != MAX_CPUS_SET) {
-		max_cpus_initialized = MAX_CPUS_WAIT;
-		assert_wait((event_t) &max_cpus_initialized, THREAD_UNINT);
-		(void) thread_block(THREAD_CONTINUE_NULL);
-	}
-	(void) ml_set_interrupts_enabled(current_state);
-	return machine_info.max_cpus;
 }
 
 /*
@@ -332,12 +266,6 @@ ml_get_max_offset(
 	return pmap_max_offset(is64, pmap_max_offset_option);
 }
 
-boolean_t
-ml_wants_panic_trap_to_debugger(void)
-{
-	return FALSE;
-}
-
 void
 ml_panic_trap_to_debugger(__unused const char *panic_format_str,
     __unused va_list *panic_args,
@@ -424,10 +352,7 @@ ml_install_interrupt_handler(
 	cpu_data_ptr->interrupt_handler = handler;
 	cpu_data_ptr->interrupt_refCon = refCon;
 
-	cpu_data_ptr->interrupts_enabled = TRUE;
 	(void) ml_set_interrupts_enabled(current_state);
-
-	initialize_screen(NULL, kPEAcquireScreen);
 }
 
 /*
@@ -463,12 +388,6 @@ ml_init_timebase(
 }
 
 void
-fiq_context_bootstrap(boolean_t enable_fiq)
-{
-	fiq_context_init(enable_fiq);
-}
-
-void
 ml_parse_cpu_topology(void)
 {
 	DTEntry entry, child;
@@ -476,46 +395,73 @@ ml_parse_cpu_topology(void)
 	uint32_t cpu_boot_arg;
 	int err;
 
-	err = DTLookupEntry(NULL, "/cpus", &entry);
+	err = SecureDTLookupEntry(NULL, "/cpus", &entry);
 	assert(err == kSuccess);
 
-	err = DTInitEntryIterator(entry, &iter);
+	err = SecureDTInitEntryIterator(entry, &iter);
 	assert(err == kSuccess);
 
-	while (kSuccess == DTIterateEntries(&iter, &child)) {
+	cpu_boot_arg = MAX_CPUS;
+	PE_parse_boot_argn("cpus", &cpu_boot_arg, sizeof(cpu_boot_arg));
+
+	ml_topology_cluster_t *cluster = &topology_info.clusters[0];
+	unsigned int cpu_id = 0;
+	while (kSuccess == SecureDTIterateEntries(&iter, &child)) {
 #if MACH_ASSERT
 		unsigned int propSize;
-		void *prop = NULL;
-		if (avail_cpus == 0) {
-			if (kSuccess != DTGetProperty(child, "state", &prop, &propSize)) {
-				panic("unable to retrieve state for cpu %u", avail_cpus);
+		void const *prop = NULL;
+		if (cpu_id == 0) {
+			if (kSuccess != SecureDTGetProperty(child, "state", &prop, &propSize)) {
+				panic("unable to retrieve state for cpu %u", cpu_id);
 			}
 
-			if (strncmp((char*)prop, "running", propSize) != 0) {
+			if (strncmp((char const *)prop, "running", propSize) != 0) {
 				panic("cpu 0 has not been marked as running!");
 			}
 		}
-		assert(kSuccess == DTGetProperty(child, "reg", &prop, &propSize));
-		assert(avail_cpus == *((uint32_t*)prop));
+		assert(kSuccess == SecureDTGetProperty(child, "reg", &prop, &propSize));
+		assert(cpu_id == *((uint32_t const *)prop));
 #endif
-		++avail_cpus;
+		if (cpu_id >= cpu_boot_arg) {
+			break;
+		}
+
+		ml_topology_cpu_t *cpu = &topology_info.cpus[cpu_id];
+
+		cpu->cpu_id = cpu_id;
+		cpu->phys_id = cpu_id;
+		cpu->cluster_type = cluster->cluster_type;
+
+		cluster->num_cpus++;
+		cluster->cpu_mask |= 1ULL << cpu_id;
+
+		topology_info.num_cpus++;
+		topology_info.max_cpu_id = cpu_id;
+
+		cpu_id++;
 	}
 
-	cpu_boot_arg = avail_cpus;
-	if (PE_parse_boot_argn("cpus", &cpu_boot_arg, sizeof(cpu_boot_arg)) &&
-	    (avail_cpus > cpu_boot_arg)) {
-		avail_cpus = cpu_boot_arg;
-	}
-
-	if (avail_cpus == 0) {
+	if (cpu_id == 0) {
 		panic("No cpus found!");
 	}
+}
+
+const ml_topology_info_t *
+ml_get_topology_info(void)
+{
+	return &topology_info;
 }
 
 unsigned int
 ml_get_cpu_count(void)
 {
-	return avail_cpus;
+	return topology_info.num_cpus;
+}
+
+unsigned int
+ml_get_cluster_count(void)
+{
+	return topology_info.num_clusters;
 }
 
 int
@@ -533,13 +479,35 @@ ml_get_boot_cluster(void)
 int
 ml_get_cpu_number(uint32_t phys_id)
 {
+	if (phys_id > (uint32_t)ml_get_max_cpu_number()) {
+		return -1;
+	}
+
 	return (int)phys_id;
+}
+
+int
+ml_get_cluster_number(__unused uint32_t phys_id)
+{
+	return 0;
 }
 
 int
 ml_get_max_cpu_number(void)
 {
-	return avail_cpus - 1;
+	return topology_info.num_cpus - 1;
+}
+
+int
+ml_get_max_cluster_number(void)
+{
+	return topology_info.max_cluster_id;
+}
+
+unsigned int
+ml_get_first_cpu_id(unsigned int cluster_id)
+{
+	return topology_info.clusters[cluster_id].first_cpu_id;
 }
 
 kern_return_t
@@ -550,7 +518,8 @@ ml_processor_register(ml_processor_info_t *in_processor_info,
 	cpu_data_t *this_cpu_datap;
 	boolean_t  is_boot_cpu;
 
-	if (in_processor_info->phys_id >= MAX_CPUS) {
+	const unsigned int max_cpu_id = ml_get_max_cpu_number();
+	if (in_processor_info->phys_id > max_cpu_id) {
 		/*
 		 * The physical CPU ID indicates that we have more CPUs than
 		 * this xnu build support.  This probably means we have an
@@ -560,11 +529,11 @@ ml_processor_register(ml_processor_info_t *in_processor_info,
 		 * is simply a convenient way to catch bugs in the pexpert
 		 * headers.
 		 */
-		panic("phys_id %u is too large for MAX_CPUS (%u)", in_processor_info->phys_id, MAX_CPUS);
+		panic("phys_id %u is too large for max_cpu_id (%u)", in_processor_info->phys_id, max_cpu_id);
 	}
 
 	/* Fail the registration if the number of CPUs has been limited by boot-arg. */
-	if ((in_processor_info->phys_id >= avail_cpus) ||
+	if ((in_processor_info->phys_id >= topology_info.num_cpus) ||
 	    (in_processor_info->log_id > (uint32_t)ml_get_max_cpu_number())) {
 		return KERN_FAILURE;
 	}
@@ -591,22 +560,23 @@ ml_processor_register(ml_processor_info_t *in_processor_info,
 		}
 	}
 
-	this_cpu_datap->cpu_idle_notify = (void *) in_processor_info->processor_idle;
-	this_cpu_datap->cpu_cache_dispatch = in_processor_info->platform_cache_dispatch;
+	this_cpu_datap->cpu_idle_notify = in_processor_info->processor_idle;
+	this_cpu_datap->cpu_cache_dispatch = (cache_dispatch_t) in_processor_info->platform_cache_dispatch;
 	nanoseconds_to_absolutetime((uint64_t) in_processor_info->powergate_latency, &this_cpu_datap->cpu_idle_latency);
 	this_cpu_datap->cpu_reset_assist = kvtophys(in_processor_info->powergate_stub_addr);
 
-	this_cpu_datap->idle_timer_notify = (void *) in_processor_info->idle_timer;
+	this_cpu_datap->idle_timer_notify = in_processor_info->idle_timer;
 	this_cpu_datap->idle_timer_refcon = in_processor_info->idle_timer_refcon;
 
-	this_cpu_datap->platform_error_handler = (void *) in_processor_info->platform_error_handler;
+	this_cpu_datap->platform_error_handler = in_processor_info->platform_error_handler;
 	this_cpu_datap->cpu_regmap_paddr = in_processor_info->regmap_paddr;
 	this_cpu_datap->cpu_phys_id = in_processor_info->phys_id;
 	this_cpu_datap->cpu_l2_access_penalty = in_processor_info->l2_access_penalty;
 
+	processor_t processor = PERCPU_GET_RELATIVE(processor, cpu_data, this_cpu_datap);
 	if (!is_boot_cpu) {
-		processor_init((struct processor *)this_cpu_datap->cpu_processor,
-		    this_cpu_datap->cpu_number, processor_pset(master_processor));
+		processor_init(processor, this_cpu_datap->cpu_number,
+		    processor_pset(master_processor));
 
 		if (this_cpu_datap->cpu_l2_access_penalty) {
 			/*
@@ -615,12 +585,11 @@ ml_processor_register(ml_processor_info_t *in_processor_info,
 			 * scheduler, so that threads use the cores with better L2
 			 * preferentially.
 			 */
-			processor_set_primary(this_cpu_datap->cpu_processor,
-			    master_processor);
+			processor_set_primary(processor, master_processor);
 		}
 	}
 
-	*processor_out = this_cpu_datap->cpu_processor;
+	*processor_out = processor;
 	*ipi_handler_out = cpu_signal_handler;
 	*pmi_handler_out = NULL;
 	if (in_processor_info->idle_tickle != (idle_tickle_t *) NULL) {
@@ -728,6 +697,13 @@ ml_io_map_wcomb(
 	return io_map(phys_addr, size, VM_WIMG_WCOMB);
 }
 
+void
+ml_io_unmap(vm_offset_t addr, vm_size_t sz)
+{
+	pmap_remove(kernel_pmap, addr, addr + sz);
+	kmem_free(kernel_map, addr, sz);
+}
+
 /* boot memory allocation */
 vm_offset_t
 ml_static_malloc(
@@ -784,6 +760,18 @@ ml_static_slide(
 	return VM_KERNEL_SLIDE(vaddr);
 }
 
+kern_return_t
+ml_static_verify_page_protections(
+	uint64_t base, uint64_t size, vm_prot_t prot)
+{
+	/* XXX Implement Me */
+	(void)base;
+	(void)size;
+	(void)prot;
+	return KERN_FAILURE;
+}
+
+
 vm_offset_t
 ml_static_unslide(
 	vm_offset_t vaddr)
@@ -811,6 +799,9 @@ ml_static_protect(
 
 	if ((new_prot & VM_PROT_WRITE) && (new_prot & VM_PROT_EXECUTE)) {
 		panic("ml_static_protect(): WX request on %p", (void *) vaddr);
+	}
+	if (lockdown_done && (new_prot & VM_PROT_EXECUTE)) {
+		panic("ml_static_protect(): attempt to inject executable mapping on %p", (void *) vaddr);
 	}
 
 	/* Set up the protection bits, and block bits so we can validate block mappings. */
@@ -876,6 +867,7 @@ ml_static_mfree(
 	vm_offset_t     vaddr_cur;
 	ppnum_t         ppn;
 	uint32_t freed_pages = 0;
+	uint32_t freed_kernelcache_pages = 0;
 
 	/* It is acceptable (if bad) to fail to free. */
 	if (vaddr < VM_MIN_KERNEL_ADDRESS) {
@@ -898,20 +890,17 @@ ml_static_mfree(
 			if (ml_static_protect(vaddr_cur, PAGE_SIZE, VM_PROT_WRITE | VM_PROT_READ) != KERN_SUCCESS) {
 				panic("Failed ml_static_mfree on %p", (void *) vaddr_cur);
 			}
-#if 0
-			/*
-			 * Must NOT tear down the "V==P" mapping for vaddr_cur as the zone alias scheme
-			 * relies on the persistence of these mappings for all time.
-			 */
-			// pmap_remove(kernel_pmap, (addr64_t) vaddr_cur, (addr64_t) (vaddr_cur + PAGE_SIZE));
-#endif
 			vm_page_create(ppn, (ppn + 1));
 			freed_pages++;
+			if (vaddr_cur >= segLOWEST && vaddr_cur < end_kern) {
+				freed_kernelcache_pages++;
+			}
 		}
 	}
 	vm_page_lockspin_queues();
 	vm_page_wire_count -= freed_pages;
 	vm_page_wire_count_initial -= freed_pages;
+	vm_page_kernelcache_count -= freed_kernelcache_pages;
 	vm_page_unlock_queues();
 #if     DEBUG
 	kprintf("ml_static_mfree: Released 0x%x pages at VA %p, size:0x%llx, last ppn: 0x%x\n", freed_pages, (void *)vaddr, (uint64_t)size, ppn);
@@ -1118,13 +1107,11 @@ ml_energy_stat(__unused thread_t t)
 void
 ml_gpu_stat_update(__unused uint64_t gpu_ns_delta)
 {
-#if CONFIG_EMBEDDED
 	/*
 	 * For now: update the resource coalition stats of the
 	 * current thread's coalition
 	 */
 	task_coalition_update_gpu_stats(current_task(), gpu_ns_delta);
-#endif
 }
 
 uint64_t
@@ -1142,7 +1129,7 @@ timer_state_event(boolean_t switch_to_kernel)
 		return;
 	}
 
-	processor_data_t *pd = &getCpuDatap()->cpu_processor->processor_data;
+	processor_t pd = current_processor();
 	uint64_t now = ml_get_timebase();
 
 	timer_stop(pd->current_state, now);
@@ -1240,3 +1227,35 @@ arm_user_protect_end(thread_t thread, uintptr_t ttbr0, boolean_t disable_interru
 	}
 }
 #endif // __ARM_USER_PROTECT__
+
+void
+machine_lockdown(void)
+{
+	arm_vm_prot_finalize(PE_state.bootArgs);
+	lockdown_done = 1;
+}
+
+void
+ml_lockdown_init(void)
+{
+}
+
+void
+ml_hibernate_active_pre(void)
+{
+}
+
+void
+ml_hibernate_active_post(void)
+{
+}
+
+size_t
+ml_get_vm_reserved_regions(bool vm_is64bit, struct vm_reserved_region **regions)
+{
+#pragma unused(vm_is64bit)
+	assert(regions != NULL);
+
+	*regions = NULL;
+	return 0;
+}

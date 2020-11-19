@@ -88,11 +88,13 @@ typedef struct _IOUCProcessToken {
 #define kIOPlatformPanicActionKey                    "IOPlatformPanicAction"         /* value is OSNumber (priority) */
 
 #define kIOPlatformFunctionHandlerSet                "IOPlatformFunctionHandlerSet"
-#if defined(__i386__) || defined(__x86_64__)
-#define kIOPlatformFunctionHandlerMaxBusDelay        "IOPlatformFunctionHandlerMaxBusDelay"
-#define kIOPlatformFunctionHandlerMaxInterruptDelay  "IOPlatformFunctionHandlerMaxInterruptDelay"
 
+#define kIOPlatformFunctionHandlerMaxBusDelay        "IOPlatformFunctionHandlerMaxBusDelay"
 #define kIOPlatformMaxBusDelay        "IOPlatformMaxBusDelay"
+
+#if defined(__i386__) || defined(__x86_64__)
+
+#define kIOPlatformFunctionHandlerMaxInterruptDelay  "IOPlatformFunctionHandlerMaxInterruptDelay"
 #define kIOPlatformMaxInterruptDelay  "IOPlatformMaxInterruptDelay"
 
 #endif /* defined(__i386__) || defined(__x86_64__) */

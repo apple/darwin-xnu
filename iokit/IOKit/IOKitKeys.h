@@ -120,9 +120,20 @@
 #define kIODriverKitHIDFamilyEventServiceEntitlementKey "com.apple.developer.driverkit.family.hid.eventservice"
 #define kIODriverKitTransportBuiltinEntitlementKey "com.apple.developer.driverkit.builtin"
 
+// Entitlement required to read nvram root-only properties as non-root user
+#define kIONVRAMReadAccessKey           "com.apple.private.iokit.nvram-read-access"
+// Entitlement required to write nvram properties as non-root user
+#define kIONVRAMWriteAccessKey           "com.apple.private.iokit.nvram-write-access"
+// Entitlement required to set properties on the IOResources object as non-root user
+#define kIOResourcesSetPropertyKey       "com.apple.private.iokit.ioresources.setproperty"
+// Entitlement required to read/write to the system nvram region
+#define kIONVRAMSystemAllowKey           "com.apple.private.iokit.system-nvram-allow"
 
 // When possible, defer matching of this driver until kextd has started.
 #define kIOMatchDeferKey                                "IOMatchDefer"
+
+// Published after processor_start() has been called on all CPUs at boot time.
+#define kIOAllCPUInitializedKey                         "IOAllCPUInitialized"
 
 // IOService default user client class, for loadable user clients
 #define kIOUserClientClassKey           "IOUserClientClass"
@@ -130,12 +141,18 @@
 // key to find IOMappers
 #define kIOMapperIDKey                          "IOMapperID"
 
+#ifdef XNU_KERNEL_PRIVATE
+// Apple Kext Exclude List
+#define kIOExcludeListBundleID                  "com.apple.driver.KextExcludeList"
+#endif
+
 #define kIOUserClientCrossEndianKey             "IOUserClientCrossEndian"
 #define kIOUserClientCrossEndianCompatibleKey   "IOUserClientCrossEndianCompatible"
 #define kIOUserClientSharedInstanceKey          "IOUserClientSharedInstance"
 #if KERNEL_PRIVATE
 #define kIOUserClientMessageAppSuspendedKey     "IOUserClientMessageAppSuspended"
 #endif
+#define kIOUserClientDefaultLockingKey                  "IOUserClientDefaultLocking"
 // diagnostic string describing the creating task
 #define kIOUserClientCreatorKey         "IOUserClientCreator"
 // the expected cdhash value of the userspace driver executable
@@ -162,6 +179,11 @@
 
 // IOService interest notification types
 #define kIOCFPlugInTypesKey             "IOCFPlugInTypes"
+
+#define kIOCompatibilityMatchKey            "IOCompatibilityMatch"
+#define kIOCompatibilityPropertiesKey   "IOCompatibilityProperties"
+#define kIOPathKey                                      "IOPath"
+
 
 // properties found in services that implement command pooling
 #define kIOCommandPoolSizeKey           "IOCommandPoolSize"             // (OSNumber)

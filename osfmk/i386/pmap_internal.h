@@ -270,7 +270,7 @@ typedef struct pv_hashed_entry {
 
 #define PV_HASHED_ENTRY_NULL ((pv_hashed_entry_t)0)
 
-#define PVE_VA(pve) ((pve)->va_and_flags & ~PAGE_MASK)
+#define PVE_VA(pve) ((pve)->va_and_flags & (vm_map_offset_t)~PAGE_MASK)
 #define PVE_FLAGS(pve) ((pve)->va_and_flags & PAGE_MASK)
 #define PVE_IS_ALTACCT 0x001
 #define PVE_IS_ALTACCT_PAGE(pve) \
@@ -354,7 +354,7 @@ PV_HASHED_FREE_LIST(pv_hashed_entry_t pvh_eh, pv_hashed_entry_t pvh_et, int pv_c
 	simple_lock(&pv_hashed_free_list_lock, LCK_GRP_NULL);
 	pvh_et->qlink.next = (queue_entry_t)pv_hashed_free_list;
 	pv_hashed_free_list = pvh_eh;
-	pv_hashed_free_count += pv_cnt;
+	pv_hashed_free_count += (uint32_t)pv_cnt;
 	simple_unlock(&pv_hashed_free_list_lock);
 }
 
@@ -387,7 +387,7 @@ PV_HASHED_KERN_FREE_LIST(pv_hashed_entry_t pvh_eh, pv_hashed_entry_t pvh_et, int
 	simple_lock(&pv_hashed_kern_free_list_lock, LCK_GRP_NULL);
 	pvh_et->qlink.next = (queue_entry_t)pv_hashed_kern_free_list;
 	pv_hashed_kern_free_list = pvh_eh;
-	pv_hashed_kern_free_count += pv_cnt;
+	pv_hashed_kern_free_count += (uint32_t)pv_cnt;
 	simple_unlock(&pv_hashed_kern_free_list_lock);
 }
 
@@ -426,11 +426,11 @@ pmap_pv_throttle(__unused pmap_t p)
 
 #define IS_MANAGED_PAGE(x)                              \
 	((unsigned int)(x) <= last_managed_page &&      \
-	 (pmap_phys_attributes[x] & PHYS_MANAGED))
+	 ((unsigned long long)pmap_phys_attributes[x] & PHYS_MANAGED))
 #define IS_INTERNAL_PAGE(x)                     \
-	(IS_MANAGED_PAGE(x) && (pmap_phys_attributes[x] & PHYS_INTERNAL))
+	(IS_MANAGED_PAGE(x) && ((unsigned long long)pmap_phys_attributes[x] & PHYS_INTERNAL))
 #define IS_REUSABLE_PAGE(x)                     \
-	(IS_MANAGED_PAGE(x) && (pmap_phys_attributes[x] & PHYS_REUSABLE))
+	(IS_MANAGED_PAGE(x) && ((unsigned long long)pmap_phys_attributes[x] & PHYS_REUSABLE))
 #define IS_ALTACCT_PAGE(x, pve)                          \
 	(IS_MANAGED_PAGE((x)) &&                        \
 	 (PVE_IS_ALTACCT_PAGE((pve))))
@@ -562,7 +562,7 @@ pmap_pvh_unlink(pv_hashed_entry_t pvh)
 {
 	pv_hashed_entry_t       curh;
 	pv_hashed_entry_t       *pprevh;
-	int                     pvhash_idx;
+	uint32_t                pvhash_idx;
 
 	CHK_NPVHASH();
 	pvhash_idx = pvhashidx(pvh->pmap, PVE_VA(pvh));
@@ -595,7 +595,7 @@ pv_hash_add(pv_hashed_entry_t   pvh_e,
     pv_rooted_entry_t   pv_h)
 {
 	pv_hashed_entry_t       *hashp;
-	int                     pvhash_idx;
+	uint32_t                pvhash_idx;
 
 	CHK_NPVHASH();
 	pvhash_idx = pvhashidx(pvh_e->pmap, PVE_VA(pvh_e));
@@ -615,7 +615,7 @@ pv_hash_add(pv_hashed_entry_t   pvh_e,
 static inline void
 pv_hash_remove(pv_hashed_entry_t pvh_e)
 {
-	int                     pvhash_idx;
+	uint32_t                pvhash_idx;
 
 	CHK_NPVHASH();
 	pvhash_idx = pvhashidx(pvh_e->pmap, PVE_VA(pvh_e));
@@ -885,7 +885,7 @@ pmap_pv_remove(pmap_t           pmap,
 	pv_hashed_entry_t       pvh_e;
 	pv_rooted_entry_t       pv_h;
 	pv_hashed_entry_t       *pprevh;
-	int                     pvhash_idx;
+	uint32_t                pvhash_idx;
 	uint32_t                pv_cnt;
 	ppnum_t                 ppn;
 
@@ -1013,7 +1013,7 @@ pmap_pv_is_altacct(
 {
 	pv_hashed_entry_t       pvh_e;
 	pv_rooted_entry_t       pv_h;
-	int                     pvhash_idx;
+	uint32_t                pvhash_idx;
 	boolean_t               is_altacct;
 
 	pvh_e = PV_HASHED_ENTRY_NULL;
@@ -1052,29 +1052,28 @@ pmap_pv_is_altacct(
 	return is_altacct;
 }
 
-extern int      pt_fake_zone_index;
 static inline void
 PMAP_ZINFO_PALLOC(pmap_t pmap, vm_size_t bytes)
 {
-	pmap_ledger_credit(pmap, task_ledgers.tkm_private, bytes);
+	pmap_ledger_credit(pmap, task_ledgers.tkm_private, (ledger_amount_t)bytes);
 }
 
 static inline void
 PMAP_ZINFO_PFREE(pmap_t pmap, vm_size_t bytes)
 {
-	pmap_ledger_debit(pmap, task_ledgers.tkm_private, bytes);
+	pmap_ledger_debit(pmap, task_ledgers.tkm_private, (ledger_amount_t)bytes);
 }
 
 static inline void
 PMAP_ZINFO_SALLOC(pmap_t pmap, vm_size_t bytes)
 {
-	pmap_ledger_credit(pmap, task_ledgers.tkm_shared, bytes);
+	pmap_ledger_credit(pmap, task_ledgers.tkm_shared, (ledger_amount_t)bytes);
 }
 
 static inline void
 PMAP_ZINFO_SFREE(pmap_t pmap, vm_size_t bytes)
 {
-	pmap_ledger_debit(pmap, task_ledgers.tkm_shared, bytes);
+	pmap_ledger_debit(pmap, task_ledgers.tkm_shared, (ledger_amount_t)bytes);
 }
 
 extern boolean_t        pmap_initialized;/* Has pmap_init completed? */

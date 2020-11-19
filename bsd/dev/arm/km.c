@@ -67,7 +67,7 @@ kminit(void)
  * cdevsw interface to km driver.
  */
 int
-kmopen(dev_t dev, int flag, __unused int devtype, proc_t pp)
+kmopen(dev_t dev, __unused int flag, __unused int devtype, proc_t pp)
 {
 	int             unit;
 	struct tty     *tp;
@@ -115,10 +115,6 @@ kmopen(dev_t dev, int flag, __unused int devtype, proc_t pp)
 
 		tty_unlock(tp);         /* XXX race window */
 
-		if (flag & O_POPUP) {
-			PE_initialize_console(0, kPETextScreen);
-		}
-
 		bzero(&video, sizeof(video));
 		PE_current_console(&video);
 
@@ -128,8 +124,13 @@ kmopen(dev_t dev, int flag, __unused int devtype, proc_t pp)
 			wp->ws_col = 80;
 			wp->ws_row = 24;
 		} else if (video.v_width != 0 && video.v_height != 0) {
-			wp->ws_col = video.v_width / wp->ws_xpixel;
-			wp->ws_row = video.v_height / wp->ws_ypixel;
+			unsigned long ws_col = video.v_width / wp->ws_xpixel;
+			unsigned long ws_row = video.v_height / wp->ws_ypixel;
+
+			assert((ws_col <= USHRT_MAX) && (ws_row <= USHRT_MAX));
+
+			wp->ws_col = (unsigned short)ws_col;
+			wp->ws_row = (unsigned short)ws_row;
 		} else {
 			wp->ws_col = 100;
 			wp->ws_row = 36;

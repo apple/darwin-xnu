@@ -68,7 +68,7 @@
 #include <sys/fcntl.h>
 #include <sys/unistd.h>
 
-#ifdef KERNEL
+#ifdef XNU_KERNEL_PRIVATE
 #include <sys/errno.h>
 #include <sys/queue.h>
 #include <sys/cdefs.h>
@@ -78,14 +78,20 @@
 #include <sys/guarded.h>
 #include <os/refcnt.h>
 
+__BEGIN_DECLS
+
+#pragma GCC visibility push(hidden)
+
 struct proc;
 struct uio;
 struct knote;
 struct kevent_qos_s;
-
-#ifdef __APPLE_API_UNSTABLE
-
 struct file;
+#ifndef _KAUTH_CRED_T
+#define _KAUTH_CRED_T
+typedef struct ucred *kauth_cred_t;
+typedef struct posix_cred *posix_cred_t;
+#endif  /* !_KAUTH_CRED_T */
 
 __options_decl(fileproc_vflags_t, unsigned int, {
 	FPV_NONE        = 0,
@@ -97,24 +103,17 @@ __options_decl(fileproc_vflags_t, unsigned int, {
  * One entry for each open kernel vnode and socket.
  */
 struct fileproc {
-	unsigned int f_flags;
-	_Atomic fileproc_vflags_t f_vflags;
-	os_refcnt_t f_iocount;
-	struct fileglob * f_fglob;
-	void *f_wset;
+	unsigned int fp_flags;
+	_Atomic fileproc_vflags_t fp_vflags;
+	os_refcnt_t fp_iocount;
+	struct fileglob * fp_glob;
+	void *fp_wset;
 };
 
 #define FILEPROC_NULL (struct fileproc *)0
 
-#define FP_INCREATE     0x0001
-#define FP_INCLOSE      0x0002
 #define FP_INSELECT     0x0004
-#define FP_UNUSED       0x0008  /* unused (was FP_INCHRREAD) */
-#define FP_WRITTEN      0x0010
-#define FP_CLOSING      0x0020
-#define FP_WAITCLOSE    0x0040
 #define FP_AIOISSUED    0x0080
-#define FP_WAITEVENT    0x0100
 #define FP_SELCONFLICT  0x0200  /* select conflict on an individual fp */
 
 /* squeeze a "type" value into the upper flag bits */
@@ -122,7 +121,7 @@ struct fileproc {
 #define _FP_TYPESHIFT   24
 #define FP_TYPEMASK     (0x7 << _FP_TYPESHIFT)  /* 8 "types" of fileproc */
 
-#define FILEPROC_TYPE(fp)       ((fp)->f_flags & FP_TYPEMASK)
+#define FILEPROC_TYPE(fp)       ((fp)->fp_flags & FP_TYPEMASK)
 
 #define FP_ISGUARDED(fp, attribs)  \
 	        ((FILEPROC_TYPE(fp) == FTYPE_GUARDED) ? fp_isguarded(fp, attribs) : 0)
@@ -131,18 +130,6 @@ typedef enum {
 	FTYPE_SIMPLE    = 0,
 	FTYPE_GUARDED   = (1 << _FP_TYPESHIFT)
 } fileproc_type_t;
-
-#define FP_VALID_FLAGS  (FP_INCREATE | FP_INCLOSE | FP_INSELECT |\
-	        FP_WRITTEN | FP_CLOSING | FP_WAITCLOSE |\
-	        FP_AIOISSUED | FP_WAITEVENT | FP_SELCONFLICT | _FP_TYPEMASK)
-
-#ifndef _KAUTH_CRED_T
-#define _KAUTH_CRED_T
-struct ucred;
-typedef struct ucred *kauth_cred_t;
-struct posix_cred;
-typedef struct posix_cred *posix_cred_t;
-#endif  /* !_KAUTH_CRED_T */
 
 /* file types */
 typedef enum {
@@ -158,7 +145,7 @@ typedef enum {
 } file_type_t;
 
 /* defines for fg_lflags */
-#define FG_TERM         0x01    /* the fileglob is terminating .. */
+// was  FG_TERM         0x01
 #define FG_INSMSGQ      0x02    /* insert to msgqueue pending .. */
 #define FG_WINSMSGQ     0x04    /* wait for the fielglob is in msgque */
 #define FG_RMMSGQ       0x08    /* the fileglob is being removed from msgqueue */
@@ -188,34 +175,190 @@ struct fileops {
 };
 
 struct fileglob {
-	LIST_ENTRY(fileglob) f_msglist;/* list of active files */
-	int32_t fg_flag;        /* see fcntl.h */
-	int32_t fg_count;       /* reference count */
-	int32_t fg_msgcount;    /* references from message queue */
-	int32_t fg_lflags;      /* file global flags */
-	kauth_cred_t fg_cred;   /* credentials associated with descriptor */
+	LIST_ENTRY(fileglob) f_msglist;     /* list of files in unix messages */
+	uint32_t             fg_flag;       /* (atomic) see fcntl.h */
+	os_ref_atomic_t      fg_count;      /* reference count */
+	uint32_t             fg_msgcount;   /* references from message queue */
+	int32_t              fg_lflags;     /* file global flags */
+	kauth_cred_t         fg_cred;       /* credentials associated with descriptor */
 	const struct fileops *fg_ops;
-	off_t   fg_offset;
-	void   *fg_data;        /* vnode or socket or SHM or semaphore */
-	void   *fg_vn_data;     /* Per fd vnode data, used for directories */
-	lck_mtx_t fg_lock;
+	off_t                fg_offset;
+	void                *fg_data;       /* vnode or socket or SHM or semaphore */
+	void                *fg_vn_data;    /* Per fd vnode data, used for directories */
+	lck_mtx_t            fg_lock;
 #if CONFIG_MACF
-	struct label *fg_label; /* JMM - use the one in the cred? */
+	struct label        *fg_label;      /* JMM - use the one in the cred? */
 #endif
 };
 
-#ifdef __APPLE_API_PRIVATE
-LIST_HEAD(fmsglist, fileglob);
-extern struct fmsglist fmsghead;        /* head of list of open files */
 extern int maxfiles;                    /* kernel limit on number of open files */
 extern int nfiles;                      /* actual number of open files */
 extern int maxfilesperproc;
+os_refgrp_decl_extern(f_refgrp);        /* os_refgrp_t for file refcounts */
 
 #define FILEGLOB_DTYPE(fg)              ((const file_type_t)((fg)->fg_ops->fo_type))
-#endif /* __APPLE_API_PRIVATE */
 
+#pragma mark files (struct fileglob)
 
-__BEGIN_DECLS
+/*!
+ * @function fg_ref
+ *
+ * @brief
+ * Acquire a file reference on the specified file.
+ *
+ * @param fg
+ * The specified file
+ */
+void
+fg_ref(struct fileglob *fg);
+
+/*!
+ * @function fg_drop
+ *
+ * @brief
+ * Drops a file reference on the specified file.
+ *
+ * @discussion
+ * No locks should be held when calling this function.
+ *
+ * @param p
+ * The process making the request,
+ * or PROC_NULL if the file belongs to a message/fileport.
+ *
+ * @param fg
+ * The file being closed.
+ *
+ * @returns
+ * 0          Success
+ * ???        Any error that @c fileops::fo_close can return
+ */
+int
+fg_drop(proc_t p, struct fileglob *fg);
+
+/*!
+ * @function fg_sendable
+ *
+ * @brief
+ * Returns whether a particular file can be sent over IPC.
+ */
+bool
+fg_sendable(struct fileglob *fg);
+
+#pragma mark file descriptor entries (struct fileproc)
+
+/*!
+ * @function fp_get_ftype
+ *
+ * @brief
+ * Get the fileproc pointer for the given fd from the per process, with the
+ * specified file type, and with an I/O reference.
+ *
+ * @param p
+ * The process in which fd lives.
+ *
+ * @param fd
+ * The file descriptor index to lookup.
+ *
+ * @param ftype
+ * The required file type.
+ *
+ * @param err
+ * The error to return if the file exists but isn't of the specified type.
+ *
+ * @param fpp
+ * The returned fileproc when the call returns 0.
+ *
+ * @returns
+ * 0            Success (@c fpp is set)
+ * EBADF        Bad file descriptor
+ * @c err       There is an entry, but it isn't of the specified type.
+ */
+extern int
+fp_get_ftype(proc_t p, int fd, file_type_t ftype, int err, struct fileproc **fpp);
+
+/*!
+ * @function fp_get_noref_locked
+ *
+ * @brief
+ * Get the fileproc pointer for the given fd from the per process
+ * open file table without taking an explicit reference on it.
+ *
+ * @description
+ * This function assumes that the @c proc_fdlock is held, as the caller
+ * doesn't hold an I/O reference for the returned fileproc.
+ *
+ * Because there is no reference explicitly taken, the returned
+ * fileproc pointer is only valid so long as the @c proc_fdlock
+ * remains held by the caller.
+ *
+ * @param p
+ * The process in which fd lives.
+ *
+ * @param fd
+ * The file descriptor index to lookup.
+ *
+ * @returns
+ * - the fileproc on success
+ * - FILEPROC_NULL on error
+ */
+extern struct fileproc *
+fp_get_noref_locked(proc_t p, int fd);
+
+/*!
+ * @function fp_get_noref_locked_with_iocount
+ *
+ * @brief
+ * Similar to fp_get_noref_locked(), but allows returning files that are
+ * closing.
+ *
+ * @discussion
+ * Some parts of the kernel take I/O references on fileprocs but only remember
+ * the file descriptor for which they did that.
+ *
+ * These interfaces later need to drop that reference, but if the file is
+ * already closing, then fp_get_noref_locked() will refuse to resolve
+ * the file descriptor.
+ *
+ * This interface allows the lookup (but will assert that the fileproc has
+ * enouhg I/O references).
+ *
+ * @warning
+ * New code should NOT use this function, it is required for interfaces
+ * that acquire iocounts without remembering the fileproc pointer,
+ * which is bad practice.
+ */
+extern struct fileproc *
+fp_get_noref_locked_with_iocount(proc_t p, int fd);
+
+/*!
+ * @function fp_close_and_unlock
+ *
+ * @brief
+ * Close the given file descriptor entry.
+ *
+ * @description
+ * This function assumes that the @c proc_fdlock is held,
+ * and that the caller holds no additional I/O reference
+ * on the specified file descriptor entry.
+ *
+ * The @c proc_fdlock is unlocked upon return.
+ *
+ * @param p
+ * The process in which fd lives.
+ *
+ * @param fd
+ * The file descriptor index being closed.
+ *
+ * @param fp
+ * The fileproc entry associated with @c fd.
+ *
+ * @returns
+ * 0            Success
+ * EBADF        Bad file descriptor
+ * ???          Any error that @c fileops::fo_close can return.
+ */
+extern int
+fp_close_and_unlock(proc_t p, int fd, struct fileproc *fp, int flags);
 
 /* wrappers for fp->f_ops->fo_... */
 int fo_read(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx);
@@ -236,32 +379,12 @@ int fo_no_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx);
 int fo_no_drain(struct fileproc *fp, vfs_context_t ctx);
 int fo_no_kqfilter(struct fileproc *, struct knote *, struct kevent_qos_s *kev);
 
-void fileproc_drain(proc_t, struct fileproc *);
 int fp_tryswap(proc_t, int fd, struct fileproc *nfp);
 int fp_drop(struct proc *p, int fd, struct fileproc *fp, int locked);
-int fp_drop_written(proc_t p, int fd, struct fileproc *fp);
-int fp_drop_event(proc_t p, int fd, struct fileproc *fp);
 void fp_free(struct proc * p, int fd, struct fileproc * fp);
-struct kqueue;
-int fp_getfkq(struct proc *p, int fd, struct fileproc **resultfp, struct kqueue  **resultkq);
-struct psemnode;
-int fp_getfpsem(struct proc *p, int fd, struct fileproc **resultfp, struct psemnode  **resultpsem);
-struct pshmnode;
-int fp_getfpshm(struct proc *p, int fd, struct fileproc **resultfp, struct pshmnode  **resultpshm);
-struct pipe;
-int fp_getfpipe(struct proc *p, int fd, struct fileproc **resultfp, struct pipe  **resultpipe);
-struct atalk;
-int fp_getfatalk(struct proc *p, int fd, struct fileproc **resultfp, struct atalk  **resultatalk);
-struct vnode;
-int fp_getfvpandvid(struct proc *p, int fd, struct fileproc **resultfp, struct vnode  **resultvp, uint32_t * vidp);
-struct socket;
-int fp_getfsock(struct proc *p, int fd, struct fileproc **resultfp, struct socket  **results);
 int fp_lookup(struct proc *p, int fd, struct fileproc **resultfp, int locked);
 int fp_isguarded(struct fileproc *fp, u_int attribs);
 int fp_guard_exception(proc_t p, int fd, struct fileproc *fp, u_int attribs);
-int closef_locked(struct fileproc *fp, struct fileglob *fg, struct proc *p);
-int close_internal_locked(proc_t p, int fd, struct fileproc *fp, int flags);
-int fileport_makefd_internal(proc_t p, ipc_port_t port, int uf_flags, int *fd);
 struct nameidata;
 struct vnode_attr;
 int open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
@@ -269,18 +392,7 @@ int open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
     int32_t *retval);
 int chdir_internal(proc_t p, vfs_context_t ctx, struct nameidata *ndp, int per_thread);
 int kqueue_internal(struct proc *p, fp_allocfn_t, void *cra, int32_t *retval);
-void fg_insertuipc(struct fileglob * fg);
-boolean_t fg_insertuipc_mark(struct fileglob * fg);
-void fg_removeuipc(struct fileglob * fg);
-boolean_t fg_removeuipc_mark(struct fileglob * fg);
-void unp_gc_wait(void);
-void procfdtbl_reservefd(struct proc * p, int fd);
-void procfdtbl_markclosefd(struct proc * p, int fd);
 void procfdtbl_releasefd(struct proc * p, int fd, struct fileproc * fp);
-void procfdtbl_waitfd(struct proc * p, int fd);
-void procfdtbl_clearfd(struct proc * p, int fd);
-boolean_t file_issendable(struct proc * p, struct fileproc *fp);
-extern int fdgetf_noref(proc_t, int, struct fileproc **);
 extern struct fileproc *fileproc_alloc_init(void *crargs);
 extern void fileproc_free(struct fileproc *fp);
 extern void guarded_fileproc_free(struct fileproc *fp);
@@ -290,10 +402,17 @@ extern int falloc_guarded(struct proc *p, struct fileproc **fp, int *fd,
     vfs_context_t ctx, const guardid_t *guard, u_int attrs);
 extern void fileproc_modify_vflags(struct fileproc *fp, fileproc_vflags_t vflags, boolean_t clearflags);
 fileproc_vflags_t fileproc_get_vflags(struct fileproc *fp);
+
+#pragma mark internal version of syscalls
+
+int fileport_makefd(proc_t p, ipc_port_t port, int uf_flags, int *fd);
+int dup2(proc_t p, int from, int to, int *fd);
+int close_nocancel(proc_t p, int fd);
+
+#pragma GCC visibility pop
+
 __END_DECLS
 
-#endif /* __APPLE_API_UNSTABLE */
-
-#endif /* KERNEL */
+#endif /* XNU_KERNEL_PRIVATE */
 
 #endif /* !_SYS_FILE_INTERNAL_H_ */

@@ -110,7 +110,17 @@ LEXT(vfptrash_data)
 /* reserve space for read only page tables */
         .align 14
 LEXT(ropagetable_begin)
+#if XNU_TARGET_OS_OSX
+		// A big auxKC might need more page tables, especially because
+	    // it's not block mapped.
+	    // Note that we don't distuinguish between KASAN or not: With
+	    // a KASAN kernel, the effective auxKC limit is smaller.
+		.space 18*16*1024,0
+#elif KASAN
+        .space 16*16*1024,0
+#else
         .space 14*16*1024,0
+#endif
 #else
 LEXT(ropagetable_begin)
 #endif /* defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) */

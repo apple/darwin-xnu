@@ -283,7 +283,7 @@ static boolean_t
 vmx_globally_available(void)
 {
 	unsigned int i;
-	unsigned int ncpus = ml_get_max_cpus();
+	unsigned int ncpus = ml_wait_max_cpus();
 	boolean_t available = TRUE;
 
 	for (i = 0; i < ncpus; i++) {

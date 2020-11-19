@@ -81,9 +81,7 @@
 #include <netinet/ip_encap.h>
 #include <netinet/ip_ecn.h>
 
-#if INET6
 #include <netinet/ip6.h>
-#endif
 
 #include <net/if_gif.h>
 
@@ -145,7 +143,6 @@ in_gif_output(
 		break;
 	}
 #endif /* INET */
-#if INET6
 	case AF_INET6:
 	{
 		struct ip6_hdr *ip6;
@@ -160,7 +157,6 @@ in_gif_output(
 		tos = (ntohl(ip6->ip6_flow) >> 20) & 0xff;
 		break;
 	}
-#endif /* INET6 */
 	default:
 #if DEBUG
 		printf("in_gif_output: warning: unknown family %d passed\n",
@@ -293,7 +289,6 @@ in_gif_input(struct mbuf *m, int off)
 		break;
 	}
 #endif
-#if INET6
 	case IPPROTO_IPV6:
 	{
 		struct ip6_hdr *ip6;
@@ -316,7 +311,6 @@ in_gif_input(struct mbuf *m, int off)
 		ip6->ip6_flow |= htonl((u_int32_t)itos << 20);
 		break;
 	}
-#endif /* INET6 */
 	default:
 		OSAddAtomic(1, &ipstat.ips_nogif);
 		m_freem(m);

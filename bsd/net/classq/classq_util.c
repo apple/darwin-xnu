@@ -74,9 +74,7 @@
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
-#if INET6
 #include <netinet/ip6.h>
-#endif
 #include <netinet/tcp.h>
 #include <netinet/udp.h>
 
@@ -121,9 +119,7 @@ read_dsfield(struct mbuf *m, struct pf_mtag *t)
 			return (u_int8_t)0;   /* version mismatch! */
 		}
 		ds_field = ip->ip_tos;
-	}
-#if INET6
-	else if (t->pftag_flags & PF_TAG_HDR_INET6) {
+	} else if (t->pftag_flags & PF_TAG_HDR_INET6) {
 		struct ip6_hdr *ip6 = (struct ip6_hdr *)(void *)t->pftag_hdr;
 		u_int32_t flowlabel;
 
@@ -137,7 +133,6 @@ read_dsfield(struct mbuf *m, struct pf_mtag *t)
 		}
 		ds_field = (flowlabel >> 20) & 0xff;
 	}
-#endif
 	return ds_field;
 }
 
@@ -192,9 +187,7 @@ write_dsfield(struct mbuf *m, struct pf_mtag *t, u_int8_t dsfield)
 		sum += (sum >> 16);  /* add carry */
 
 		ip->ip_sum = htons(~sum & 0xffff);
-	}
-#if INET6
-	else if (t->pftag_flags & PF_TAG_HDR_INET6) {
+	} else if (t->pftag_flags & PF_TAG_HDR_INET6) {
 		struct ip6_hdr *ip6 = (struct ip6_hdr *)t->pftag_hdr;
 		u_int32_t flowlabel;
 
@@ -209,7 +202,6 @@ write_dsfield(struct mbuf *m, struct pf_mtag *t, u_int8_t dsfield)
 		flowlabel = (flowlabel & 0xf03fffff) | (dsfield << 20);
 		ip6->ip6_flow = htonl(flowlabel);
 	}
-#endif
 }
 
 /*
@@ -290,7 +282,6 @@ mark_ecn(struct mbuf *m, struct pf_mtag *t, int flags)
 			return 1;
 		}
 		break;
-#if INET6
 	case AF_INET6:
 		if (flags & CLASSQF_ECN6) {     /* REDF_ECN6 == BLUEF_ECN6 */
 			struct ip6_hdr *ip6 = hdr;
@@ -320,7 +311,6 @@ mark_ecn(struct mbuf *m, struct pf_mtag *t, int flags)
 			return 1;
 		}
 		break;
-#endif  /* INET6 */
 	}
 
 	/* not marked */

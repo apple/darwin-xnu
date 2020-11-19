@@ -1851,7 +1851,7 @@ print_uptrs(int argc, char * const * argv)
 	}
 }
 
-T_DECL(proc_list_uptrs, "the kernel should return any up-pointers it knows about", T_META_ALL_VALID_ARCHS(YES))
+T_DECL(proc_list_uptrs, "the kernel should return any up-pointers it knows about")
 {
 	if (argc > 0) {
 		print_uptrs(argc, argv);

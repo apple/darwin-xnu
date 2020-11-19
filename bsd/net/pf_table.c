@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -169,7 +169,7 @@ static void pfr_enqueue_addrs(struct pfr_ktable *, struct pfr_kentryworkq *,
 static void pfr_mark_addrs(struct pfr_ktable *);
 static struct pfr_kentry *pfr_lookup_addr(struct pfr_ktable *,
     struct pfr_addr *, int);
-static struct pfr_kentry *pfr_create_kentry(struct pfr_addr *, int);
+static struct pfr_kentry *pfr_create_kentry(struct pfr_addr *, boolean_t);
 static void pfr_destroy_kentries(struct pfr_kentryworkq *);
 static void pfr_destroy_kentry(struct pfr_kentry *);
 static void pfr_insert_kentries(struct pfr_ktable *,
@@ -799,13 +799,11 @@ pfr_validate_addr(struct pfr_addr *ad)
 		}
 		break;
 #endif /* INET */
-#if INET6
 	case AF_INET6:
 		if (ad->pfra_net > 128) {
 			return -1;
 		}
 		break;
-#endif /* INET6 */
 	default:
 		return -1;
 	}
@@ -908,7 +906,7 @@ pfr_lookup_addr(struct pfr_ktable *kt, struct pfr_addr *ad, int exact)
 }
 
 static struct pfr_kentry *
-pfr_create_kentry(struct pfr_addr *ad, int intr)
+pfr_create_kentry(struct pfr_addr *ad, boolean_t intr)
 {
 	struct pfr_kentry       *ke;
 
@@ -930,7 +928,7 @@ pfr_create_kentry(struct pfr_addr *ad, int intr)
 	ke->pfrke_af = ad->pfra_af;
 	ke->pfrke_net = ad->pfra_net;
 	ke->pfrke_not = ad->pfra_not;
-	ke->pfrke_intrpool = intr;
+	ke->pfrke_intrpool = (u_int8_t)intr;
 	return ke;
 }
 
@@ -985,7 +983,7 @@ pfr_insert_kentry(struct pfr_ktable *kt, struct pfr_addr *ad, u_int64_t tzero)
 	if (p != NULL) {
 		return 0;
 	}
-	p = pfr_create_kentry(ad, 1);
+	p = pfr_create_kentry(ad, TRUE);
 	if (p == NULL) {
 		return EINVAL;
 	}
@@ -1179,7 +1177,7 @@ pfr_walktree(struct radix_node *rn, void *arg)
 		if (ke->pfrke_mark) {
 			break;
 		}
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 	case PFRW_ENQUEUE:
 		SLIST_INSERT_HEAD(w->pfrw_workq, ke, pfrke_workq);
 		w->pfrw_cnt++;
@@ -1322,6 +1320,7 @@ pfr_add_tables(user_addr_t tbl, int size, int *nadd, int flags)
 			}
 			SLIST_FOREACH(q, &addq, pfrkt_workq) {
 				if (!pfr_ktable_compare(p, q)) {
+					pfr_destroy_ktable(p, 0);
 					goto _skip;
 				}
 			}
@@ -1724,7 +1723,7 @@ _skip:
 		if (pfr_lookup_addr(shadow, &ad, 1) != NULL) {
 			continue;
 		}
-		p = pfr_create_kentry(&ad, 0);
+		p = pfr_create_kentry(&ad, FALSE);
 		if (p == NULL) {
 			senderr(ENOMEM);
 		}
@@ -1923,7 +1922,7 @@ pfr_table_copyin_cleanup(struct pfr_table *tbl)
 static int
 pfr_validate_table(struct pfr_table *tbl, int allowedflags, int no_reserved)
 {
-	int i;
+	size_t i;
 
 	if (!tbl->pfrt_name[0]) {
 		return -1;
@@ -1956,7 +1955,7 @@ static int
 pfr_fix_anchor(char *anchor)
 {
 	size_t siz = MAXPATHLEN;
-	int i;
+	size_t i;
 
 	if (anchor[0] == '/') {
 		char *path;
@@ -1973,7 +1972,7 @@ pfr_fix_anchor(char *anchor)
 	if (anchor[siz - 1]) {
 		return -1;
 	}
-	for (i = strlen(anchor); i < (int)siz; i++) {
+	for (i = strlen(anchor); i < siz; i++) {
 		if (anchor[i]) {
 			return -1;
 		}
@@ -2055,6 +2054,7 @@ pfr_setflags_ktable(struct pfr_ktable *kt, int newf)
 	LCK_MTX_ASSERT(pf_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (!(newf & PFR_TFLAG_REFERENCED) &&
+	    !(newf & PFR_TFLAG_REFDANCHOR) &&
 	    !(newf & PFR_TFLAG_PERSIST)) {
 		newf &= ~PFR_TFLAG_ACTIVE;
 	}
@@ -2237,7 +2237,6 @@ pfr_match_addr(struct pfr_ktable *kt, struct pf_addr *a, sa_family_t af)
 		}
 		break;
 #endif /* INET */
-#if INET6
 	case AF_INET6:
 		bcopy(a, &pfr_sin6.sin6_addr, sizeof(pfr_sin6.sin6_addr));
 		ke = (struct pfr_kentry *)rn_match(&pfr_sin6, kt->pfrkt_ip6);
@@ -2245,7 +2244,6 @@ pfr_match_addr(struct pfr_ktable *kt, struct pf_addr *a, sa_family_t af)
 			ke = NULL;
 		}
 		break;
-#endif /* INET6 */
 	}
 	match = (ke && !ke->pfrke_not);
 	if (match) {
@@ -2281,7 +2279,6 @@ pfr_update_stats(struct pfr_ktable *kt, struct pf_addr *a, sa_family_t af,
 		}
 		break;
 #endif /* INET */
-#if INET6
 	case AF_INET6:
 		bcopy(a, &pfr_sin6.sin6_addr, sizeof(pfr_sin6.sin6_addr));
 		ke = (struct pfr_kentry *)rn_match(&pfr_sin6, kt->pfrkt_ip6);
@@ -2289,7 +2286,6 @@ pfr_update_stats(struct pfr_ktable *kt, struct pf_addr *a, sa_family_t af,
 			ke = NULL;
 		}
 		break;
-#endif /* INET6 */
 	default:
 		;
 	}
@@ -2480,12 +2476,10 @@ pfr_kentry_byidx(struct pfr_ktable *kt, int idx, int af)
 		    pfr_walktree, &w);
 		return w.pfrw_kentry;
 #endif /* INET */
-#if INET6
 	case AF_INET6:
 		(void) kt->pfrkt_ip6->rnh_walktree(kt->pfrkt_ip6,
 		    pfr_walktree, &w);
 		return w.pfrw_kentry;
-#endif /* INET6 */
 	default:
 		return NULL;
 	}

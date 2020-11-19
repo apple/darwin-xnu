@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -84,6 +84,14 @@ static unsigned lapic_error_count_threshold = 5;
 static boolean_t lapic_dont_panic = FALSE;
 int lapic_max_interrupt_cpunum = 0;
 
+typedef enum {
+	APIC_MODE_UNKNOWN = 0,
+	APIC_MODE_XAPIC = 1,
+	APIC_MODE_X2APIC = 2
+} apic_mode_t;
+
+static apic_mode_t apic_mode_before_sleep = APIC_MODE_UNKNOWN;
+
 #ifdef MP_DEBUG
 void
 lapic_cpu_map_dump(void)
@@ -108,13 +116,12 @@ lapic_cpu_map_dump(void)
 #endif /* MP_DEBUG */
 
 static void
-legacy_init(void)
+map_local_apic(void)
 {
+	vm_map_offset_t lapic_vbase64;
 	int             result;
 	kern_return_t   kr;
 	vm_map_entry_t  entry;
-	vm_map_offset_t lapic_vbase64;
-	/* Establish a map to the local apic */
 
 	if (lapic_vbase == 0) {
 		lapic_vbase64 = (vm_offset_t)vm_map_min(kernel_map);
@@ -150,7 +157,23 @@ legacy_init(void)
 
 		assert(kr == KERN_SUCCESS);
 	}
+}
 
+static void
+legacy_init(void)
+{
+	uint32_t        lo, hi;
+
+	rdmsr(MSR_IA32_APIC_BASE, lo, hi);
+	if ((lo & MSR_IA32_APIC_BASE_EXTENDED) != 0) {
+		/*
+		 * If we're already in x2APIC mode, we MUST disable the local APIC
+		 * before transitioning back to legacy APIC mode.
+		 */
+		lo &= ~(MSR_IA32_APIC_BASE_ENABLE | MSR_IA32_APIC_BASE_EXTENDED);
+		wrmsr64(MSR_IA32_APIC_BASE, ((uint64_t)hi) << 32 | lo);
+		wrmsr64(MSR_IA32_APIC_BASE, ((uint64_t)hi) << 32 | lo | MSR_IA32_APIC_BASE_ENABLE);
+	}
 	/*
 	 * Set flat delivery model, logical processor id
 	 * This should already be the default set.
@@ -193,7 +216,7 @@ static lapic_ops_table_t legacy_ops = {
 	legacy_write_icr
 };
 
-static  boolean_t is_x2apic = FALSE;
+boolean_t is_x2apic = FALSE;
 
 static void
 x2apic_init(void)
@@ -245,6 +268,99 @@ static lapic_ops_table_t x2apic_ops = {
 	x2apic_write_icr
 };
 
+/*
+ * Used by APs to determine their APIC IDs; assumes master CPU has initialized
+ * the local APIC interfaces.
+ */
+uint32_t
+lapic_safe_apicid(void)
+{
+	uint32_t        lo;
+	uint32_t        hi;
+	boolean_t       is_lapic_enabled, is_local_x2apic;
+
+	rdmsr(MSR_IA32_APIC_BASE, lo, hi);
+	is_lapic_enabled  = (lo & MSR_IA32_APIC_BASE_ENABLE) != 0;
+	is_local_x2apic   = (lo & MSR_IA32_APIC_BASE_EXTENDED) != 0;
+
+	if (is_lapic_enabled && is_local_x2apic) {
+		return x2apic_read(ID);
+	} else if (is_lapic_enabled) {
+		return (*LAPIC_MMIO(ID) >> LAPIC_ID_SHIFT) & LAPIC_ID_MASK;
+	} else {
+		panic("Unknown Local APIC state!");
+		/*NORETURN*/
+	}
+}
+
+static void
+lapic_reinit(bool for_wake)
+{
+	uint32_t        lo;
+	uint32_t        hi;
+	boolean_t       is_boot_processor;
+	boolean_t       is_lapic_enabled;
+	boolean_t       is_local_x2apic;
+
+	rdmsr(MSR_IA32_APIC_BASE, lo, hi);
+	is_boot_processor = (lo & MSR_IA32_APIC_BASE_BSP) != 0;
+	is_lapic_enabled  = (lo & MSR_IA32_APIC_BASE_ENABLE) != 0;
+	is_local_x2apic   = (lo & MSR_IA32_APIC_BASE_EXTENDED) != 0;
+
+	/*
+	 * If we're configured for x2apic mode and we're being asked to transition
+	 * to legacy APIC mode, OR if we're in legacy APIC mode and we're being
+	 * asked to transition to x2apic mode, call LAPIC_INIT().
+	 */
+	if ((!is_local_x2apic && is_x2apic) || (is_local_x2apic && !is_x2apic)) {
+		LAPIC_INIT();
+		/* Now re-read after LAPIC_INIT() */
+		rdmsr(MSR_IA32_APIC_BASE, lo, hi);
+		is_lapic_enabled  = (lo & MSR_IA32_APIC_BASE_ENABLE) != 0;
+		is_local_x2apic   = (lo & MSR_IA32_APIC_BASE_EXTENDED) != 0;
+	}
+
+	if ((!is_lapic_enabled && !is_local_x2apic)) {
+		panic("Unexpected local APIC state\n");
+	}
+
+	/*
+	 * If we did not select the same APIC mode as we had before sleep, flag
+	 * that as an error (and panic on debug/development kernels).  Note that
+	 * we might get here with for_wake == true for the first boot case.  In
+	 * that case, apic_mode_before_sleep will be UNKNOWN (since we haven't
+	 * slept yet), so we do not need to do any APIC checks.
+	 */
+	if (for_wake &&
+	    ((apic_mode_before_sleep == APIC_MODE_XAPIC && !is_lapic_enabled) ||
+	    (apic_mode_before_sleep == APIC_MODE_X2APIC && !is_local_x2apic))) {
+		kprintf("Inconsistent APIC state after wake (was %d before sleep, "
+		    "now is %d)", apic_mode_before_sleep,
+		    is_lapic_enabled ? APIC_MODE_XAPIC : APIC_MODE_X2APIC);
+#if DEBUG || DEVELOPMENT
+		kprintf("HALTING.\n");
+		/*
+		 * Unfortunately, we cannot safely panic here because the
+		 * executing CPU might not be fully initialized.  The best
+		 * we can do is just print a message to the console and
+		 * halt.
+		 */
+		asm volatile ("cli; hlt;" ::: "memory");
+#endif
+	}
+}
+
+void
+lapic_init_slave(void)
+{
+	lapic_reinit(false);
+#if DEBUG || DEVELOPMENT
+	if (rdmsr64(MSR_IA32_APIC_BASE) & MSR_IA32_APIC_BASE_BSP) {
+		panic("Calling lapic_init_slave() on the boot processor\n");
+	}
+#endif
+}
+
 void
 lapic_init(void)
 {
@@ -258,7 +374,7 @@ lapic_init(void)
 	is_boot_processor = (lo & MSR_IA32_APIC_BASE_BSP) != 0;
 	is_lapic_enabled  = (lo & MSR_IA32_APIC_BASE_ENABLE) != 0;
 	is_x2apic         = (lo & MSR_IA32_APIC_BASE_EXTENDED) != 0;
-	lapic_pbase = (lo &  MSR_IA32_APIC_BASE_BASE);
+	lapic_pbase = (lo & MSR_IA32_APIC_BASE_BASE);
 	kprintf("MSR_IA32_APIC_BASE 0x%llx %s %s mode %s\n", lapic_pbase,
 	    is_lapic_enabled ? "enabled" : "disabled",
 	    is_x2apic ? "extended" : "legacy",
@@ -272,12 +388,29 @@ lapic_init(void)
 	 * Unless overriden by boot-arg.
 	 */
 	if (!is_x2apic && (cpuid_features() & CPUID_FEATURE_x2APIC)) {
-		PE_parse_boot_argn("-x2apic", &is_x2apic, sizeof(is_x2apic));
+		/*
+		 * If no x2apic boot-arg was set and if we're running under a VMM,
+		 * autoenable x2APIC mode.
+		 */
+		if (PE_parse_boot_argn("x2apic", &is_x2apic, sizeof(is_x2apic)) == FALSE &&
+		    cpuid_vmm_info()->cpuid_vmm_family != CPUID_VMM_FAMILY_NONE) {
+			is_x2apic = TRUE;
+		}
 		kprintf("x2APIC supported %s be enabled\n",
 		    is_x2apic ? "and will" : "but will not");
 	}
 
 	lapic_ops = is_x2apic ? &x2apic_ops : &legacy_ops;
+
+	if (lapic_pbase != 0) {
+		/*
+		 * APs might need to consult the local APIC via the MMIO interface
+		 * to get their APIC IDs.
+		 */
+		map_local_apic();
+	} else if (!is_x2apic) {
+		panic("Local APIC physical address was not set.");
+	}
 
 	LAPIC_INIT();
 
@@ -289,7 +422,7 @@ lapic_init(void)
 
 	/* Set up the lapic_id <-> cpu_number map and add this boot processor */
 	lapic_cpu_map_init();
-	lapic_cpu_map((LAPIC_READ(ID) >> LAPIC_ID_SHIFT) & LAPIC_ID_MASK, 0);
+	lapic_cpu_map(lapic_safe_apicid(), 0);
 	current_cpu_datap()->cpu_phys_number = cpu_to_lapic[0];
 	kprintf("Boot cpu local APIC id 0x%x\n", cpu_to_lapic[0]);
 }
@@ -348,7 +481,7 @@ lapic_dump(void)
 	(LAPIC_READ(lvt)&LAPIC_LVT_IP_PLRITY_LOW)? "Low " : "High"
 
 	kprintf("LAPIC %d at %p version 0x%x\n",
-	    (LAPIC_READ(ID) >> LAPIC_ID_SHIFT) & LAPIC_ID_MASK,
+	    lapic_safe_apicid(),
 	    (void *) lapic_vbase,
 	    LAPIC_READ(VERSION) & LAPIC_VERSION_MASK);
 	kprintf("Priorities: Task 0x%x  Arbitration 0x%x  Processor 0x%x\n",
@@ -473,11 +606,15 @@ lapic_probe(void)
 }
 
 void
-lapic_shutdown(void)
+lapic_shutdown(bool for_sleep)
 {
 	uint32_t lo;
 	uint32_t hi;
 	uint32_t value;
+
+	if (for_sleep == true) {
+		apic_mode_before_sleep = (is_x2apic ? APIC_MODE_X2APIC : APIC_MODE_XAPIC);
+	}
 
 	/* Shutdown if local APIC was enabled by OS */
 	if (lapic_os_enabled == FALSE) {
@@ -521,7 +658,7 @@ cpu_can_exit(int cpu)
 }
 
 void
-lapic_configure(void)
+lapic_configure(bool for_wake)
 {
 	int     value;
 
@@ -537,6 +674,12 @@ lapic_configure(void)
 			lapic_max_interrupt_cpunum = ((cpuid_features() & CPUID_FEATURE_HTT) ? 1 : 0);
 		}
 	}
+
+	/*
+	 * Reinitialize the APIC (handles the case where we're configured to use the X2APIC
+	 * but firmware configured the Legacy APIC):
+	 */
+	lapic_reinit(for_wake);
 
 	/* Accept all */
 	LAPIC_WRITE(TPR, 0);
@@ -895,9 +1038,12 @@ lapic_send_ipi(int cpu, int vector)
 
 	state = ml_set_interrupts_enabled(FALSE);
 
-	/* Wait for pending outgoing send to complete */
-	while (LAPIC_READ_ICR() & LAPIC_ICR_DS_PENDING) {
-		cpu_pause();
+	/* X2APIC's ICR doesn't have a pending bit. */
+	if (!is_x2apic) {
+		/* Wait for pending outgoing send to complete */
+		while (LAPIC_READ_ICR() & LAPIC_ICR_DS_PENDING) {
+			cpu_pause();
+		}
 	}
 
 	LAPIC_WRITE_ICR(cpu_to_lapic[cpu], vector | LAPIC_ICR_DM_FIXED);

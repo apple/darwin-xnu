@@ -24,14 +24,14 @@ class Interface(object):
             ra,wa,ea = select.select([self.socket], [], [], 30)
             if not ra:
                 num_retries -= 1
-                logging.error("select returned empty list")
+                logging.warning("timeout: select returned empty list. retrying..")
                 continue
             self.connection, addr = self.socket.accept()
             logging.info("Connected to client from %s" % str(addr))
             return True
         logging.error("Failed to connect. Exiting after multiple attempts.")
         return False
-    
+
     def read(self):
         if self.isblocking:
             #BUG TODO make this unblocking soon

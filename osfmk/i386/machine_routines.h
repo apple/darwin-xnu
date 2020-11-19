@@ -98,12 +98,22 @@ void ml_static_mfree(
 	vm_offset_t,
 	vm_size_t);
 
+kern_return_t
+ml_static_protect(
+	vm_offset_t start,
+	vm_size_t size,
+	vm_prot_t new_prot);
+
 /* boot memory allocation */
 vm_offset_t ml_static_malloc(
 	vm_size_t size);
 
 vm_offset_t ml_static_slide(
 	vm_offset_t vaddr);
+
+kern_return_t
+ml_static_verify_page_protections(
+	uint64_t base, uint64_t size, vm_prot_t prot);
 
 vm_offset_t ml_static_unslide(
 	vm_offset_t vaddr);
@@ -122,9 +132,9 @@ boolean_t ml_validate_nofault(
 uint64_t ml_cpu_cache_size(unsigned int level);
 uint64_t ml_cpu_cache_sharing(unsigned int level);
 
-/* Initialize the maximum number of CPUs */
-void ml_init_max_cpus(
-	unsigned long max_cpus);
+/* Set the maximum number of CPUs */
+void ml_set_max_cpus(
+	unsigned int max_cpus);
 
 extern void     ml_cpu_up(void);
 extern void     ml_cpu_down(void);
@@ -160,9 +170,6 @@ void plctrace_disable(void);
 
 /* Warm up a CPU to receive an interrupt */
 kern_return_t ml_interrupt_prewarm(uint64_t deadline);
-
-/* Check if the machine layer wants to intercept a panic call */
-boolean_t ml_wants_panic_trap_to_debugger(void);
 
 /* Machine layer routine for intercepting panics */
 void ml_panic_trap_to_debugger(const char *panic_format_str,
@@ -302,6 +309,10 @@ struct ml_cpu_info {
 
 typedef struct ml_cpu_info ml_cpu_info_t;
 
+typedef enum {
+	CLUSTER_TYPE_SMP,
+} cluster_type_t;
+
 /* Get processor info */
 void ml_cpu_get_info(ml_cpu_info_t *ml_cpu_info);
 
@@ -315,8 +326,8 @@ void ml_thread_policy(
 #define MACHINE_NETWORK_WORKLOOP                0x00000001
 #define MACHINE_NETWORK_NETISR                  0x00000002
 
-/* Return the maximum number of CPUs set by ml_init_max_cpus() */
-int ml_get_max_cpus(
+/* Return the maximum number of CPUs set by ml_set_max_cpus(), blocking if necessary */
+unsigned int ml_wait_max_cpus(
 	void);
 
 /*
@@ -368,6 +379,7 @@ __private_extern__ void ml_phys_write_data(uint64_t paddr,
     unsigned long long data, int size);
 __private_extern__ uintptr_t
 pmap_verify_noncacheable(uintptr_t vaddr);
+void machine_lockdown(void);
 #endif /* MACH_KERNEL_PRIVATE */
 #ifdef  XNU_KERNEL_PRIVATE
 
@@ -388,6 +400,19 @@ void ml_gpu_stat_update(uint64_t);
 uint64_t ml_gpu_stat(thread_t);
 boolean_t ml_recent_wake(void);
 
+#ifdef MACH_KERNEL_PRIVATE
+struct i386_cpu_info;
+struct machine_thread;
+/* LBR support */
+void i386_lbr_init(struct i386_cpu_info *info_p, bool is_master);
+void i386_switch_lbrs(thread_t old, thread_t new);
+int i386_lbr_native_state_to_mach_thread_state(struct machine_thread *pcb, last_branch_state_t *machlbrp);
+void i386_lbr_synch(thread_t thr);
+void i386_lbr_enable(void);
+void i386_lbr_disable(void);
+extern bool last_branch_support_enabled;
+#endif
+
 #define ALL_CORES_RECOMMENDED   (~(uint64_t)0)
 
 extern void sched_usercontrol_update_recommended_cores(uint64_t recommended_cores);
@@ -401,6 +426,9 @@ extern uint32_t phyreadpanic;
 extern uint32_t phywritepanic;
 extern uint64_t tracephyreaddelayabs;
 extern uint64_t tracephywritedelayabs;
+
+void ml_hibernate_active_pre(void);
+void ml_hibernate_active_post(void);
 
 #endif /* XNU_KERNEL_PRIVATE */
 #endif /* _I386_MACHINE_ROUTINES_H_ */

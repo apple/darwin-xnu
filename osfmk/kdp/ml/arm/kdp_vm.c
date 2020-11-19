@@ -61,7 +61,6 @@ kdp_vtophys(
 	vm_offset_t va)
 {
 	pmap_paddr_t    pa;
-	ppnum_t         pp;
 
 	/* Ensure that the provided va resides within the provided pmap range. */
 	if (!pmap || ((pmap != kernel_pmap) && ((va < pmap->min) || (va >= pmap->max)))) {
@@ -74,14 +73,9 @@ kdp_vtophys(
 		return 0;   /* Just return if no translation */
 	}
 
-	pp = pmap_find_phys(pmap, va);  /* Get the page number */
-	if (!pp) {
-		return 0;       /* Just return if no translation */
-	}
-	pa = ((pmap_paddr_t) pp << PAGE_SHIFT) | (va & PAGE_MASK);      /* Insert page offset */
+	pa = pmap_find_pa(pmap, va);  /* Get the physical address */
 	return pa;
 }
-
 
 /*
  * kdp_machine_vm_read
@@ -334,24 +328,37 @@ kern_collectth_state(thread_t thread __unused, void *buffer, uint64_t size, void
 		return;
 	}
 
-	if ((cpudatap == NULL) || (cpudatap->cpu_processor == NULL) || (cpudatap->cpu_processor->active_thread == NULL)) {
+	processor_t processor = PERCPU_GET_RELATIVE(processor, cpu_data, cpudatap);
+	if ((cpudatap == NULL) || (processor->active_thread == NULL)) {
 		bzero(state, hdr->count * sizeof(uint32_t));
 		return;
 	}
 
-	vm_offset_t kstackptr = (vm_offset_t) cpudatap->cpu_processor->active_thread->machine.kstackptr;
-	arm_saved_state_t *saved_state = (arm_saved_state_t *) kstackptr;
-
 #if defined(__arm64__)
+	void *kpcb = processor->active_thread->machine.kpcb;
+	if (kpcb != NULL) {
+		arm_saved_state_t *saved_state = (arm_saved_state_t *)kpcb;
 
-	state->fp   = saved_state->ss_64.fp;
-	state->lr   = saved_state->ss_64.lr;
-	state->sp   = saved_state->ss_64.sp;
-	state->pc   = saved_state->ss_64.pc;
-	state->cpsr = saved_state->ss_64.cpsr;
-	bcopy(&saved_state->ss_64.x[0], &state->x[0], sizeof(state->x));
+		state->fp   = saved_state->ss_64.fp;
+		state->lr   = saved_state->ss_64.lr;
+		state->sp   = saved_state->ss_64.sp;
+		state->pc   = saved_state->ss_64.pc;
+		state->cpsr = saved_state->ss_64.cpsr;
+		bcopy(&saved_state->ss_64.x[0], &state->x[0], sizeof(state->x));
+	} else {
+		vm_offset_t kstackptr = (vm_offset_t) processor->active_thread->machine.kstackptr;
+		arm_kernel_saved_state_t *saved_state = (arm_kernel_saved_state_t *) kstackptr;
+
+		state->fp   = saved_state->fp;
+		state->lr   = saved_state->lr;
+		state->sp   = saved_state->sp;
+		state->pc   = saved_state->pc;
+		state->cpsr = saved_state->cpsr;
+	}
 
 #else /* __arm64__ */
+	vm_offset_t kstackptr = (vm_offset_t) processor->active_thread->machine.kstackptr;
+	arm_saved_state_t *saved_state = (arm_saved_state_t *) kstackptr;
 
 	state->lr   = saved_state->lr;
 	state->sp   = saved_state->sp;
@@ -360,4 +367,26 @@ kern_collectth_state(thread_t thread __unused, void *buffer, uint64_t size, void
 	bcopy(&saved_state->r[0], &state->r[0], sizeof(state->r));
 
 #endif /* !__arm64__ */
+}
+
+/*
+ * kdp_core_start_addr
+ *
+ * return the address where the kernel core file starts
+ *
+ * The kernel start address is VM_MIN_KERNEL_AND_KEXT_ADDRESS
+ * unless the physical aperture has been relocated below
+ * VM_MIN_KERNEL_AND_KEXT_ADDRESS as in the case of
+ * ARM_LARGE_MEMORY systems
+ *
+ */
+vm_map_offset_t
+kdp_core_start_addr()
+{
+#if defined(__arm64__)
+	extern const vm_map_address_t physmap_base;
+	return MIN(physmap_base, VM_MIN_KERNEL_AND_KEXT_ADDRESS);
+#else /* !defined(__arm64__) */
+	return VM_MIN_KERNEL_AND_KEXT_ADDRESS;
+#endif /* !defined(__arm64__) */
 }

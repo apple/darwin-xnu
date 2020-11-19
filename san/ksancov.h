@@ -115,6 +115,19 @@ struct ksancov_edgemap {
 };
 
 #if XNU_KERNEL_PRIVATE
+/*
+ * On arm64 the VIM_MIN_KERNEL_ADDRESS is too far from %pc to fit into 32-bit value. As a result
+ * ksancov reports invalid %pcs. To make at least kernel %pc values corect a different base has
+ * to be used for arm.
+ */
+#if defined(__x86_64__) || defined(__i386__)
+#define KSANCOV_PC_OFFSET VM_MIN_KERNEL_ADDRESS
+#elif defined(__arm__) || defined(__arm64__)
+#define KSANCOV_PC_OFFSET VM_KERNEL_LINK_ADDRESS
+#else
+#error "Unsupported platform"
+#endif
+
 int ksancov_init_dev(void);
 void **__sanitizer_get_thread_data(thread_t);
 

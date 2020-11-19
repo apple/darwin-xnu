@@ -25,8 +25,14 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+/**
+ * i386/x86_64 specific definitions for hibernation platform abstraction layer.
+ */
+
 #ifndef _I386_PAL_HIBERNATE_H
 #define _I386_PAL_HIBERNATE_H
+
+__BEGIN_DECLS
 
 #define HIB_MAP_SIZE    (2*I386_LPGBYTES)
 #define DEST_COPY_AREA  (4*GB - HIB_MAP_SIZE) /*4GB - 2*2m */
@@ -35,13 +41,26 @@
 #define BITMAP_AREA     (COPY_PAGE_AREA - HIB_MAP_SIZE)
 #define IMAGE_AREA      (BITMAP_AREA    - HIB_MAP_SIZE)
 #define IMAGE2_AREA     (IMAGE_AREA     - HIB_MAP_SIZE)
+#define SCRATCH_AREA    (IMAGE2_AREA    - HIB_MAP_SIZE)
+#define WKDM_AREA       (SCRATCH_AREA   - HIB_MAP_SIZE)
 
 #define HIB_BASE segHIBB
 #define HIB_ENTRYPOINT acpi_wake_prot_entry
 
-uintptr_t pal_hib_map(uintptr_t v, uint64_t p);
-void hibernateRestorePALState(uint32_t *src);
-void pal_hib_patchup(void);
-#define PAL_HIBERNATE_MAGIC_1 0xfeedfacedeadbeef
-#define PAL_HIBERNATE_MAGIC_2 0x41b312133714
+/*!
+ * @typedef     pal_hib_map_type_t
+ * @discussion  Parameter to pal_hib_map used to signify which memory region to map.
+ */
+typedef uintptr_t pal_hib_map_type_t;
+
+/*!
+ * @struct      pal_hib_ctx
+ * @discussion  x86_64-specific PAL context; see pal_hib_ctx_t for details.
+ */
+struct pal_hib_ctx {
+	char reserved;
+};
+
+__END_DECLS
+
 #endif /* _I386_PAL_HIBERNATE_H */

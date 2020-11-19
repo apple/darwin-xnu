@@ -108,8 +108,8 @@ raw_attach(struct socket *so, int proto)
 		return error;
 	}
 	rp->rcb_socket = so;
-	rp->rcb_proto.sp_family = SOCK_DOM(so);
-	rp->rcb_proto.sp_protocol = proto;
+	rp->rcb_proto.sp_family = (uint16_t)SOCK_DOM(so);
+	rp->rcb_proto.sp_protocol = (uint16_t)proto;
 	lck_mtx_lock(raw_mtx);
 	LIST_INSERT_HEAD(&rawcb_list, rp, list);
 	lck_mtx_unlock(raw_mtx);

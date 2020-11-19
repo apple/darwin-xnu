@@ -36,6 +36,7 @@
 #define _IOKIT_IODEVICEMEMORY_H
 
 #include <IOKit/IOMemoryDescriptor.h>
+#include <libkern/c++/OSPtr.h>
 
 /*! @class IODeviceMemory
  *   @abstract An IOMemoryDescriptor used for device physical memory ranges.
@@ -66,7 +67,7 @@ public:
  *   @param count The number of elements in the list.
  *   @result Returns a created OSArray of IODeviceMemory objects, to be released by the caller, or zero on failure. */
 
-	static OSArray *            arrayFromList(
+	static OSPtr<OSArray>             arrayFromList(
 		InitElement             list[],
 		IOItemCount             count );
 
@@ -77,7 +78,7 @@ public:
  *   @param length The length of memory.
  *   @result Returns the created IODeviceMemory on success, to be released by the caller, or zero on failure. */
 
-	static IODeviceMemory *     withRange(
+	static OSPtr<IODeviceMemory>      withRange(
 		IOPhysicalAddress       start,
 		IOPhysicalLength        length );
 
@@ -89,7 +90,7 @@ public:
  *   @param length The length of the subrange.
  *   @result Returns the created IODeviceMemory on success, to be released by the caller, or zero on failure. */
 
-	static IODeviceMemory *     withSubRange(
+	static OSPtr<IODeviceMemory>      withSubRange(
 		IODeviceMemory *        of,
 		IOPhysicalAddress       offset,
 		IOPhysicalLength        length );

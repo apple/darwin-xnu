@@ -297,7 +297,7 @@ __BEGIN_DECLS
 #ifdef KERNEL_PRIVATE
 void devsw_init(void);
 extern struct cdevsw cdevsw[];
-extern int cdevsw_setkqueueok(int, struct cdevsw*, int);
+extern int cdevsw_setkqueueok(int, const struct cdevsw*, int);
 #endif /* KERNEL_PRIVATE */
 
 #ifdef BSD_KERNEL_PRIVATE
@@ -306,12 +306,12 @@ extern void devsw_unlock(dev_t, int);
 #endif /* BSD_KERNEL_PRIVATE */
 
 int  bdevsw_isfree(int);
-int  bdevsw_add(int, struct bdevsw *);
-int  bdevsw_remove(int, struct bdevsw *);
+int  bdevsw_add(int, const struct bdevsw *);
+int  bdevsw_remove(int, const struct bdevsw *);
 int  cdevsw_isfree(int);
-int  cdevsw_add(int, struct cdevsw *);
-int  cdevsw_add_with_bdev(int index, struct cdevsw * csw, int bdev);
-int  cdevsw_remove(int, struct cdevsw *);
+int  cdevsw_add(int, const struct cdevsw *);
+int  cdevsw_add_with_bdev(int index, const struct cdevsw * csw, int bdev);
+int  cdevsw_remove(int, const struct cdevsw *);
 int  isdisk(dev_t, int);
 __END_DECLS
 #endif /* KERNEL */

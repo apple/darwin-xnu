@@ -46,6 +46,10 @@
 #define CALLSTACK_CONTINUATION (1U << 5)
 /* the frames field is filled with uintptr_t, not uint64_t */
 #define CALLSTACK_KERNEL_WORDS (1U << 6)
+/* the frames come from a translated task */
+#define CALLSTACK_TRANSLATED   (1U << 7)
+/* the last frame could be the real PC */
+#define CALLSTACK_FIXUP_PC     (1U << 8)
 
 struct kp_ucallstack {
 	uint32_t kpuc_flags;

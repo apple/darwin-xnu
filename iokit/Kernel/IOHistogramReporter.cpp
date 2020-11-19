@@ -26,6 +26,8 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #define __STDC_LIMIT_MACROS     // what are the C++ equivalents?
 #include <stdint.h>
 
@@ -38,7 +40,7 @@
 OSDefineMetaClassAndStructors(IOHistogramReporter, IOReporter);
 
 /* static */
-IOHistogramReporter*
+OSSharedPtr<IOHistogramReporter>
 IOHistogramReporter::with(IOService *reportingService,
     IOReportCategories categories,
     uint64_t channelID,
@@ -47,9 +49,8 @@ IOHistogramReporter::with(IOService *reportingService,
     int nSegments,
     IOHistogramSegmentConfig *config)
 {
-	IOHistogramReporter *reporter = new IOHistogramReporter;
-
-	const OSSymbol *tmpChannelName = NULL;
+	OSSharedPtr<IOHistogramReporter> reporter = OSMakeShared<IOHistogramReporter>();
+	OSSharedPtr<const OSSymbol> tmpChannelName;
 
 	if (reporter) {
 		if (channelName) {
@@ -57,15 +58,13 @@ IOHistogramReporter::with(IOService *reportingService,
 		}
 
 		if (reporter->initWith(reportingService, categories,
-		    channelID, tmpChannelName,
+		    channelID, tmpChannelName.get(),
 		    unit, nSegments, config)) {
 			return reporter;
 		}
 	}
-	OSSafeReleaseNULL(reporter);
-	OSSafeReleaseNULL(tmpChannelName);
 
-	return NULL;
+	return nullptr;
 }
 
 
@@ -192,7 +191,7 @@ IOHistogramReporter::initWith(IOService *reportingService,
 
 		// Setup IOReporter's channel type
 		_elements[cnt2].channel_type = _channelType;
-		_elements[cnt2].channel_type.element_idx = cnt2;
+		_elements[cnt2].channel_type.element_idx = ((int16_t) cnt2);
 
 		//IOREPORTER_DEBUG_ELEMENT(cnt2);
 	}
@@ -273,16 +272,16 @@ IOHistogramReporter::free(void)
 }
 
 
-IOReportLegendEntry*
+OSSharedPtr<IOReportLegendEntry>
 IOHistogramReporter::handleCreateLegend(void)
 {
-	IOReportLegendEntry     *rval = NULL, *legendEntry = NULL;
-	OSData                  *tmpConfigData = NULL;
-	OSDictionary            *tmpDict;   // no refcount
+	OSSharedPtr<IOReportLegendEntry>        legendEntry;
+	OSSharedPtr<OSData>                     tmpConfigData;
+	OSDictionary                            *tmpDict;   // no refcount
 
 	legendEntry = super::handleCreateLegend();
 	if (!legendEntry) {
-		goto finish;
+		return nullptr;
 	}
 
 	PREFL_MEMOP_PANIC(_segmentCount, IOHistogramSegmentConfig);
@@ -290,29 +289,18 @@ IOHistogramReporter::handleCreateLegend(void)
 	    (unsigned)_segmentCount *
 	    sizeof(IOHistogramSegmentConfig));
 	if (!tmpConfigData) {
-		goto finish;
+		return nullptr;
 	}
 
 	tmpDict = OSDynamicCast(OSDictionary,
 	    legendEntry->getObject(kIOReportLegendInfoKey));
 	if (!tmpDict) {
-		goto finish;
+		return nullptr;
 	}
 
-	tmpDict->setObject(kIOReportLegendConfigKey, tmpConfigData);
+	tmpDict->setObject(kIOReportLegendConfigKey, tmpConfigData.get());
 
-	// success
-	rval = legendEntry;
-
-finish:
-	if (tmpConfigData) {
-		tmpConfigData->release();
-	}
-	if (!rval && legendEntry) {
-		legendEntry->release();
-	}
-
-	return rval;
+	return legendEntry;
 }
 
 IOReturn

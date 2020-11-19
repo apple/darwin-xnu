@@ -493,6 +493,26 @@ os_log_debug_enabled(os_log_t log);
     __asm__(""); /* avoid tailcall */                                                       \
 })
 
+/*!
+ * @function os_log_coprocessor
+ *
+ * @abstract
+ * IOP logging function, intended for use by RTBuddy for
+ * coprocessor os log functionality only.
+ */
+bool
+os_log_coprocessor(void *buff, uint64_t buff_len, os_log_type_t type,
+    const char *uuid, uint64_t timestamp, uint32_t offset, bool stream_log);
+
+/*!
+ * @function os_log_coprocessor_register
+ *
+ * @abstract
+ * IOP metadata registration, intended for use by RTBuddy for
+ * coprocessor os log functionality only.
+ */
+void
+os_log_coprocessor_register(const char *uuid, const char *file_path, bool copy);
 
 /*!
  * @function os_log_sensitive_debug

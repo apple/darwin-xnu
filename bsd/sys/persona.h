@@ -31,7 +31,11 @@
 #ifdef PRIVATE
 #include <sys/param.h>
 
+#ifdef KERNEL
+__enum_decl(persona_type_t, int, {
+#else /* !KERNEL */
 enum {
+#endif /* KERNEL */
 	PERSONA_INVALID      = 0,
 	PERSONA_GUEST        = 1,
 	PERSONA_MANAGED      = 2,
@@ -43,7 +47,11 @@ enum {
 	PERSONA_ENTERPRISE   = 8,
 
 	PERSONA_TYPE_MAX     = PERSONA_ENTERPRISE,
+#ifdef KERNEL
+});
+#else /* !KERNEL */
 };
+#endif /* KERNEL */
 
 #define PERSONA_ID_NONE ((uid_t)-1)
 
@@ -268,7 +276,7 @@ struct persona {
 	int32_t      pna_valid;
 
 	uid_t        pna_id;
-	int          pna_type;
+	persona_type_t pna_type;
 	char         pna_login[MAXLOGNAME + 1];
 	char         *pna_path;
 
@@ -422,7 +430,7 @@ void persona_put(struct persona *persona);
  *           0: Success
  *        != 0: failure (BSD errno value ESRCH or EINVAL)
  */
-int persona_find_by_type(int persona_type, struct persona **persona,
+int persona_find_by_type(persona_type_t persona_type, struct persona **persona,
     size_t *plen);
 
 #ifdef XNU_KERNEL_PRIVATE
@@ -433,12 +441,12 @@ int persona_find_by_type(int persona_type, struct persona **persona,
 /*
  * In-kernel persona API
  */
-extern uint32_t g_max_personas;
+extern const uint32_t g_max_personas;
 
 void personas_bootstrap(void);
 
 struct persona *persona_alloc(uid_t id, const char *login,
-    int type, char *path, int *error);
+    persona_type_t type, char *path, int *error);
 
 int persona_init_begin(struct persona *persona);
 void persona_init_end(struct persona *persona, int error);
@@ -481,8 +489,8 @@ uid_t persona_get_uid(struct persona *persona);
 int persona_set_gid(struct persona *persona, gid_t gid);
 gid_t persona_get_gid(struct persona *persona);
 
-int persona_set_groups(struct persona *persona, gid_t *groups, unsigned ngroups, uid_t gmuid);
-int persona_get_groups(struct persona *persona, unsigned *ngroups, gid_t *groups, unsigned groups_sz);
+int persona_set_groups(struct persona *persona, gid_t *groups, size_t ngroups, uid_t gmuid);
+int persona_get_groups(struct persona *persona, size_t *ngroups, gid_t *groups, size_t groups_sz);
 
 uid_t persona_get_gmuid(struct persona *persona);
 
@@ -491,7 +499,7 @@ int persona_get_login(struct persona *persona, char login[MAXLOGNAME + 1]);
 /* returns a reference that must be released with persona_put() */
 struct persona *persona_proc_get(pid_t pid);
 
-int persona_find_all(const char *login, uid_t uid, int persona_type,
+int persona_find_all(const char *login, uid_t uid, persona_type_t persona_type,
     struct persona **persona, size_t *plen);
 
 #else /* !CONFIG_PERSONAS */

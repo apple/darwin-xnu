@@ -63,14 +63,16 @@ extern kern_return_t task_mark_corpse(task_t task);
 extern kern_return_t task_deliver_crash_notification(task_t, thread_t, exception_type_t, mach_exception_subcode_t);
 
 /* In the corpseinfo kcd_user_flags */
-#define CORPSE_CRASHINFO_HAS_REF    0x1
-#define CORPSE_CRASHINFO_USER_FAULT 0x2
+__options_closed_decl(corpse_flags_t, uint16_t, {
+	CORPSE_CRASHINFO_HAS_REF    = 0x1,
+	CORPSE_CRASHINFO_USER_FAULT = 0x2
+});
 
 extern kcdata_descriptor_t task_get_corpseinfo(task_t task);
 
 extern kcdata_descriptor_t  task_crashinfo_alloc_init(
 	mach_vm_address_t crash_data_p,
-	unsigned size, uint32_t kc_u_flags, unsigned kc_flags);
+	unsigned size, corpse_flags_t kc_u_flags, unsigned kc_flags);
 extern kern_return_t task_crashinfo_destroy(kcdata_descriptor_t data);
 
 extern void corpses_init(void);

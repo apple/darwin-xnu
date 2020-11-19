@@ -7,6 +7,7 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 EXPORT_ONLY_FILES =	\
+			entropy.h \
 			random.h
 
 EXPORT_MI_DIR = prng

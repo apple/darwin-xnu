@@ -11,6 +11,7 @@ DATAFILES = \
 	posix_spawn_file_actions_addclose.3  \
 	posix_spawn_file_actions_init.3  \
 	posix_spawnattr_init.3  \
+	posix_spawnattr_setarchpref_np.3  \
 	posix_spawnattr_setbinpref_np.3  \
 	posix_spawnattr_setflags.3  \
 	posix_spawnattr_setpgroup.3  \
@@ -52,6 +53,7 @@ INSTALL_MAN_LINKS = \
 	posix_spawn_file_actions_addclose.3 posix_spawn_file_actions_addfchdir_np.3 \
 	posix_spawn_file_actions_init.3 posix_spawn_file_actions_destroy.3 \
 	posix_spawnattr_init.3 posix_spawnattr_destroy.3 \
+	posix_spawnattr_setarchpref_np.3 posix_spawnattr_getarchpref_np.3 \
 	posix_spawnattr_setbinpref_np.3 posix_spawnattr_getbinpref_np.3 \
 	posix_spawnattr_setflags.3 posix_spawnattr_getflags.3 \
 	posix_spawnattr_setpgroup.3 posix_spawnattr_getpgroup.3 \

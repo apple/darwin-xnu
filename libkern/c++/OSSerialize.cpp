@@ -27,6 +27,8 @@
  */
 /* OSSerialize.cpp created by rsulack on Wen 25-Nov-1998 */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
@@ -36,6 +38,7 @@ __END_DECLS
 #include <libkern/c++/OSContainers.h>
 #include <libkern/c++/OSLib.h>
 #include <libkern/c++/OSDictionary.h>
+#include <libkern/c++/OSSharedPtr.h>
 #include <libkern/OSSerializeBinary.h>
 #include <libkern/Block.h>
 #include <IOKit/IOLib.h>
@@ -204,8 +207,7 @@ OSSerialize::initWithCapacity(unsigned int inCapacity)
 		inCapacity = 1;
 	}
 	if (round_page_overflow(inCapacity, &capacity)) {
-		tags->release();
-		tags = NULL;
+		tags.reset();
 		return false;
 	}
 
@@ -216,8 +218,6 @@ OSSerialize::initWithCapacity(unsigned int inCapacity)
 
 	kern_return_t rc = kmem_alloc(kernel_map, (vm_offset_t *)&data, capacity, IOMemoryTag(kernel_map));
 	if (rc) {
-		tags->release();
-		tags = NULL;
 		return false;
 	}
 	bzero((void *)data, capacity);
@@ -228,14 +228,13 @@ OSSerialize::initWithCapacity(unsigned int inCapacity)
 	return true;
 }
 
-OSSerialize *
+OSSharedPtr<OSSerialize>
 OSSerialize::withCapacity(unsigned int inCapacity)
 {
-	OSSerialize *me = new OSSerialize;
+	OSSharedPtr<OSSerialize> me = OSMakeShared<OSSerialize>();
 
 	if (me && !me->initWithCapacity(inCapacity)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
@@ -303,9 +302,6 @@ OSSerialize::ensureCapacity(unsigned int newCapacity)
 void
 OSSerialize::free()
 {
-	OSSafeReleaseNULL(tags);
-	OSSafeReleaseNULL(indexData);
-
 	if (data) {
 		kmem_free(kernel_map, (vm_offset_t)data, capacity);
 		OSCONTAINER_ACCUMSIZE( -((size_t)capacity));
@@ -316,15 +312,14 @@ OSSerialize::free()
 
 OSDefineMetaClassAndStructors(OSSerializer, OSObject)
 
-OSSerializer * OSSerializer::forTarget( void * target,
+OSSharedPtr<OSSerializer>
+OSSerializer::forTarget( void * target,
     OSSerializerCallback callback, void * ref )
 {
-	OSSerializer * thing;
+	OSSharedPtr<OSSerializer> thing = OSMakeShared<OSSerializer>();
 
-	thing = new OSSerializer;
 	if (thing && !thing->init()) {
-		thing->release();
-		thing = NULL;
+		thing.reset();
 	}
 
 	if (thing) {
@@ -342,11 +337,11 @@ OSSerializer::callbackToBlock(void * target __unused, void * ref,
 	return ((OSSerializerBlock)ref)(serializer);
 }
 
-OSSerializer *
+OSSharedPtr<OSSerializer>
 OSSerializer::withBlock(
 	OSSerializerBlock callback)
 {
-	OSSerializer * serializer;
+	OSSharedPtr<OSSerializer> serializer;
 	OSSerializerBlock block;
 
 	block = Block_copy(callback);

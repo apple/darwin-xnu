@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -143,23 +143,16 @@ struct machine_thread {
 #define         OnProc          0x1
 #define         CopyIOActive    0x2 /* Checked to ensure DTrace actions do not re-enter copyio(). */
 	uint64_t                thread_gpu_ns;
-#if NCOPY_WINDOWS > 0
-	struct {
-		user_addr_t     user_base;
-	} copy_window[NCOPY_WINDOWS];
-	int                     nxt_window;
-	int                     copyio_state;
-#define         WINDOWS_DIRTY   0
-#define         WINDOWS_CLEAN   1
-#define         WINDOWS_CLOSED  2
-#define         WINDOWS_OPENED  3
-	uint64_t                physwindow_pte;
-	int                     physwindow_busy;
-#endif
-
 	uint32_t                last_xcpm_ttd;
 	uint8_t                 last_xcpm_index;
 	int                     mthr_do_segchk;
+	int                     insn_state_copyin_failure_errorcode;    /* If insn_state is 0, this may hold the reason */
+	x86_instruction_state_t *insn_state;
+#if DEVELOPMENT || DEBUG
+	/* first byte specifies the offset of the instruction at the time of capture */
+	uint8_t                 insn_cacheline[65];     /* XXX: Hard-coded cacheline size */
+#endif
+	x86_lbrs_t              lbrs;
 };
 typedef struct machine_thread *pcb_t;
 

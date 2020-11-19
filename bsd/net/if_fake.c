@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -121,14 +121,47 @@ static int if_fake_multibuflet = 0;
 SYSCTL_INT(_net_link_fake, OID_AUTO, multibuflet, CTLFLAG_RW | CTLFLAG_LOCKED,
     &if_fake_multibuflet, 0, "Fake interface using multi-buflet packets");
 
-static int if_fake_copypkt_mode = 0;
-SYSCTL_INT(_net_link_fake, OID_AUTO, copypkt_mode, CTLFLAG_RW | CTLFLAG_LOCKED,
-    &if_fake_copypkt_mode, 0, "Fake interface copying packet to peer");
+typedef enum {
+	IFF_PP_MODE_GLOBAL = 0,         /* share a global pool */
+	IFF_PP_MODE_PRIVATE = 1,        /* creates its own rx/tx pool */
+	IFF_PP_MODE_PRIVATE_SPLIT = 2,  /* creates its own split rx & tx pool */
+} iff_pktpool_mode_t;
+static iff_pktpool_mode_t if_fake_pktpool_mode = 0;
+SYSCTL_INT(_net_link_fake, OID_AUTO, pktpool_mode, CTLFLAG_RW | CTLFLAG_LOCKED,
+    &if_fake_pktpool_mode, 0,
+    "Fake interface packet pool mode (0 global, 1 private, 2 private split");
 
-/* sysctl net.link.fake.tx_headroom */
+#define FETH_LINK_LAYER_AGGRETATION_FACTOR_MAX 32
+static int if_fake_link_layer_aggregation_factor =
+    FETH_LINK_LAYER_AGGRETATION_FACTOR_MAX;
+static int
+feth_link_layer_aggregation_factor_sysctl SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	unsigned int new_value;
+	int changed;
+	int error;
+
+	error = sysctl_io_number(req, if_fake_link_layer_aggregation_factor,
+	    sizeof(if_fake_link_layer_aggregation_factor), &new_value,
+	    &changed);
+	if (error == 0 && changed != 0) {
+		if (new_value <= 0 ||
+		    new_value > FETH_LINK_LAYER_AGGRETATION_FACTOR_MAX) {
+			return EINVAL;
+		}
+		if_fake_link_layer_aggregation_factor = new_value;
+	}
+	return error;
+}
+
+SYSCTL_PROC(_net_link_fake, OID_AUTO, link_layer_aggregation_factor,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    0, 0, feth_link_layer_aggregation_factor_sysctl, "IU",
+    "Fake interface link layer aggregation factor");
+
 #define FETH_TX_HEADROOM_MAX      32
-static unsigned int if_fake_tx_headroom = 0;
-
+static unsigned int if_fake_tx_headroom = FETH_TX_HEADROOM_MAX;
 static int
 feth_tx_headroom_sysctl SYSCTL_HANDLER_ARGS
 {
@@ -153,6 +186,35 @@ SYSCTL_PROC(_net_link_fake, OID_AUTO, tx_headroom,
     CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
     0, 0, feth_tx_headroom_sysctl, "IU", "Fake ethernet Tx headroom");
 
+static int if_fake_fcs = 0;
+SYSCTL_INT(_net_link_fake, OID_AUTO, fcs, CTLFLAG_RW | CTLFLAG_LOCKED,
+    &if_fake_fcs, 0, "Fake interface using frame check sequence");
+
+#define FETH_TRAILER_LENGTH_MAX 28
+char feth_trailer[FETH_TRAILER_LENGTH_MAX + 1] = "trailertrailertrailertrailer";
+static unsigned int if_fake_trailer_length = 0;
+static int
+feth_trailer_length_sysctl SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg1, arg2)
+	unsigned int new_value;
+	int changed;
+	int error;
+
+	error = sysctl_io_number(req, if_fake_trailer_length,
+	    sizeof(if_fake_trailer_length), &new_value, &changed);
+	if (error == 0 && changed != 0) {
+		if (new_value > FETH_TRAILER_LENGTH_MAX) {
+			return EINVAL;
+		}
+		if_fake_trailer_length = new_value;
+	}
+	return 0;
+}
+
+SYSCTL_PROC(_net_link_fake, OID_AUTO, trailer_length,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, 0, 0,
+    feth_trailer_length_sysctl, "IU", "Fake interface frame trailer length");
 
 /* sysctl net.link.fake.max_mtu */
 #define FETH_MAX_MTU_DEFAULT    2048
@@ -234,13 +296,6 @@ feth_user_access_sysctl SYSCTL_HANDLER_ARGS
 		if (new_value != 0) {
 			if (new_value != 1) {
 				return EINVAL;
-			}
-			/*
-			 * copypkt mode requires a kernel only buffer pool so
-			 * it is incompatible with user access mode.
-			 */
-			if (if_fake_copypkt_mode != 0) {
-				return ENOTSUP;
 			}
 		}
 		if_fake_user_access = new_value;
@@ -324,13 +379,14 @@ SYSCTL_PROC(_net_link_fake, OID_AUTO, tx_drops,
 #define IFF_MAX_TX_RINGS        IFF_NUM_TX_RINGS_WMM_MODE
 #define IFF_MAX_RX_RINGS        IFF_NUM_RX_RINGS_WMM_MODE
 
+#define IFF_MAX_BATCH_SIZE 32
+
 typedef uint16_t        iff_flags_t;
 #define IFF_FLAGS_HWCSUM                0x0001
 #define IFF_FLAGS_BSD_MODE              0x0002
 #define IFF_FLAGS_DETACHING             0x0004
 #define IFF_FLAGS_WMM_MODE              0x0008
 #define IFF_FLAGS_MULTIBUFLETS          0x0010
-#define IFF_FLAGS_COPYPKT_MODE          0x0020
 
 
 struct if_fake {
@@ -346,6 +402,8 @@ struct if_fake {
 	struct mbuf *           iff_pending_tx_packet;
 	boolean_t               iff_start_busy;
 	unsigned int            iff_max_mtu;
+	uint32_t                iff_fcs;
+	uint32_t                iff_trailer_length;
 };
 
 typedef struct if_fake * if_fake_ref;
@@ -473,6 +531,13 @@ feth_lock_init(void)
 
 #if 0
 static inline void
+feth_assert_lock_held(void)
+{
+	LCK_MTX_ASSERT(feth_lck_mtx, LCK_MTX_ASSERT_OWNED);
+	return;
+}
+
+static inline void
 feth_assert_lock_not_held(void)
 {
 	LCK_MTX_ASSERT(feth_lck_mtx, LCK_MTX_ASSERT_NOTOWNED);
@@ -529,7 +594,7 @@ feth_max_mtu(ifnet_t ifp)
 static void
 feth_free(if_fake_ref fakeif)
 {
-	assert(fakeif->iff_retain_count == 0);
+	VERIFY(fakeif->iff_retain_count == 0);
 	if (feth_in_bsd_mode(fakeif)) {
 		if (fakeif->iff_pending_tx_packet) {
 			m_freem(fakeif->iff_pending_tx_packet);
@@ -548,7 +613,7 @@ feth_release(if_fake_ref fakeif)
 	old_retain_count = OSDecrementAtomic(&fakeif->iff_retain_count);
 	switch (old_retain_count) {
 	case 0:
-		assert(old_retain_count != 0);
+		VERIFY(old_retain_count != 0);
 		break;
 	case 1:
 		feth_free(fakeif);
@@ -586,23 +651,24 @@ feth_ifnet_set_attrs(if_fake_ref fakeif, ifnet_t ifp)
 static void
 interface_link_event(ifnet_t ifp, u_int32_t event_code)
 {
-	struct {
-		struct kern_event_msg   header;
-		u_int32_t               unit;
-		char                    if_name[IFNAMSIZ];
-	} event;
+	struct event {
+		u_int32_t ifnet_family;
+		u_int32_t unit;
+		char if_name[IFNAMSIZ];
+	};
+	_Alignas(struct kern_event_msg) char message[sizeof(struct kern_event_msg) + sizeof(struct event)] = { 0 };
+	struct kern_event_msg *header = (struct kern_event_msg*)message;
+	struct event *data = (struct event *)(header + 1);
 
-	bzero(&event, sizeof(event));
-	event.header.total_size    = sizeof(event);
-	event.header.vendor_code   = KEV_VENDOR_APPLE;
-	event.header.kev_class     = KEV_NETWORK_CLASS;
-	event.header.kev_subclass  = KEV_DL_SUBCLASS;
-	event.header.event_code    = event_code;
-	event.header.event_data[0] = ifnet_family(ifp);
-	event.unit                 = (u_int32_t) ifnet_unit(ifp);
-	strlcpy(event.if_name, ifnet_name(ifp), IFNAMSIZ);
-	ifnet_event(ifp, &event.header);
-	return;
+	header->total_size   = sizeof(message);
+	header->vendor_code  = KEV_VENDOR_APPLE;
+	header->kev_class    = KEV_NETWORK_CLASS;
+	header->kev_subclass = KEV_DL_SUBCLASS;
+	header->event_code   = event_code;
+	data->ifnet_family   = ifnet_family(ifp);
+	data->unit           = (u_int32_t)ifnet_unit(ifp);
+	strlcpy(data->if_name, ifnet_name(ifp), IFNAMSIZ);
+	ifnet_event(ifp, header);
 }
 
 static if_fake_ref
@@ -637,6 +703,8 @@ feth_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 		fakeif->iff_flags |= IFF_FLAGS_HWCSUM;
 	}
 	fakeif->iff_max_mtu = get_max_mtu(if_fake_bsd_mode, if_fake_max_mtu);
+	fakeif->iff_fcs = if_fake_fcs;
+	fakeif->iff_trailer_length = if_fake_trailer_length;
 
 	/* use the interface name as the unique id for ifp recycle */
 	if ((unsigned int)
@@ -790,9 +858,53 @@ failed:
 	return NULL;
 }
 
+static int
+feth_add_mbuf_trailer(struct mbuf *m, void *trailer, size_t trailer_len)
+{
+	int ret;
+	ASSERT(trailer_len <= FETH_TRAILER_LENGTH_MAX);
+
+	ret = m_append(m, trailer_len, (caddr_t)trailer);
+	if (ret == 1) {
+		FETH_DPRINTF("%s %zuB trailer added\n", __func__, trailer_len);
+		return 0;
+	}
+	printf("%s m_append failed\n", __func__);
+	return ENOTSUP;
+}
+
+static int
+feth_add_mbuf_fcs(struct mbuf *m)
+{
+	uint32_t pkt_len, offset = 0;
+	uint32_t crc = 0;
+	int err = 0;
+
+	ASSERT(sizeof(crc) == ETHER_CRC_LEN);
+
+	pkt_len = m->m_pkthdr.len;
+	struct mbuf *iter = m;
+	while (iter != NULL && offset < pkt_len) {
+		uint32_t frag_len = iter->m_len;
+		ASSERT(frag_len <= (pkt_len - offset));
+		crc = crc32(crc, mtod(iter, void *), frag_len);
+		offset += frag_len;
+		iter = m->m_next;
+	}
+
+	err = feth_add_mbuf_trailer(m, &crc, ETHER_CRC_LEN);
+	if (err != 0) {
+		return err;
+	}
+
+	m->m_flags |= M_HASFCS;
+
+	return 0;
+}
+
 static void
 feth_output_common(ifnet_t ifp, struct mbuf * m, ifnet_t peer,
-    iff_flags_t flags)
+    iff_flags_t flags, bool fcs, void *trailer, size_t trailer_len)
 {
 	void *          frame_header;
 
@@ -806,6 +918,13 @@ feth_output_common(ifnet_t ifp, struct mbuf * m, ifnet_t peer,
 
 	(void)ifnet_stat_increment_out(ifp, 1, m->m_pkthdr.len, 0);
 	bpf_tap_out(ifp, DLT_EN10MB, m, NULL, 0);
+
+	if (trailer != 0) {
+		feth_add_mbuf_trailer(m, trailer, trailer_len);
+	}
+	if (fcs) {
+		feth_add_mbuf_fcs(m);
+	}
 
 	(void)mbuf_pkthdr_setrcvif(m, peer);
 	mbuf_pkthdr_setheader(m, frame_header);
@@ -823,7 +942,9 @@ feth_start(ifnet_t ifp)
 	struct mbuf *   copy_m = NULL;
 	if_fake_ref     fakeif;
 	iff_flags_t     flags = 0;
-	ifnet_t peer = NULL;
+	bool            fcs;
+	size_t          trailer_len;
+	ifnet_t         peer = NULL;
 	struct mbuf *   m;
 	struct mbuf *   save_m;
 
@@ -842,6 +963,8 @@ feth_start(ifnet_t ifp)
 
 	peer = fakeif->iff_peer;
 	flags = fakeif->iff_flags;
+	fcs = fakeif->iff_fcs;
+	trailer_len = fakeif->iff_trailer_length;
 
 	/* check for pending TX */
 	m = fakeif->iff_pending_tx_packet;
@@ -862,8 +985,9 @@ feth_start(ifnet_t ifp)
 	save_m = NULL;
 	for (;;) {
 		if (copy_m != NULL) {
-			assert(peer != NULL);
-			feth_output_common(ifp, copy_m, peer, flags);
+			VERIFY(peer != NULL);
+			feth_output_common(ifp, copy_m, peer, flags, fcs,
+			    feth_trailer, trailer_len);
 			copy_m = NULL;
 		}
 		if (ifnet_dequeue(ifp, &m) != 0) {
@@ -904,7 +1028,9 @@ feth_output(ifnet_t ifp, struct mbuf * m)
 	struct mbuf *           copy_m;
 	if_fake_ref             fakeif;
 	iff_flags_t             flags;
-	ifnet_t         peer = NULL;
+	bool                    fcs;
+	size_t                  trailer_len;
+	ifnet_t                 peer = NULL;
 
 	if (m == NULL) {
 		return 0;
@@ -922,6 +1048,8 @@ feth_output(ifnet_t ifp, struct mbuf * m)
 	if (fakeif != NULL) {
 		peer = fakeif->iff_peer;
 		flags = fakeif->iff_flags;
+		fcs = fakeif->iff_fcs;
+		trailer_len = fakeif->iff_trailer_length;
 	}
 	feth_unlock();
 	if (peer == NULL) {
@@ -929,7 +1057,8 @@ feth_output(ifnet_t ifp, struct mbuf * m)
 		ifnet_stat_increment_out(ifp, 0, 0, 1);
 		return 0;
 	}
-	feth_output_common(ifp, copy_m, peer, flags);
+	feth_output_common(ifp, copy_m, peer, flags, fcs, feth_trailer,
+	    trailer_len);
 	return 0;
 }
 
@@ -1228,7 +1357,7 @@ feth_ioctl(ifnet_t ifp, u_long cmd, void * data)
 			break;
 		}
 		drv_set_command = TRUE;
-	/* FALL THROUGH */
+		OS_FALLTHROUGH;
 	case SIOCGDRVSPEC32:
 	case SIOCGDRVSPEC64:
 		drv.ifdrvu_p = data;

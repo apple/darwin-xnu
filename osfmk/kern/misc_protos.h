@@ -144,14 +144,10 @@ extern int copyoutmsg(
 	user_addr_t     user_addr,
 	mach_msg_size_t nbytes);
 
-/* Invalidate copy window(s) cache */
-extern void inval_copy_windows(thread_t);
-extern void copy_window_fault(thread_t, vm_map_t, int);
-
 extern int sscanf(const char *input, const char *fmt, ...) __scanflike(2, 3);
 
 /* sprintf() is being deprecated. Please use snprintf() instead. */
-extern integer_t sprintf(char *buf, const char *fmt, ...) __deprecated;
+extern integer_t sprintf(char *buf, const char *fmt, ...) __printflike(2, 3) __deprecated;
 
 extern int printf(const char *format, ...) __printflike(1, 2);
 extern int vprintf(const char *format, va_list ap);
@@ -176,12 +172,10 @@ extern int kdb_log(const char *format, ...) __printflike(1, 2);
 
 extern int kdb_printf_unbuffered(const char *format, ...) __printflike(1, 2);
 
-extern void printf_init(void);
-
 extern int snprintf(char *, size_t, const char *, ...) __printflike(3, 4);
 extern int scnprintf(char *, size_t, const char *, ...) __printflike(3, 4);
 
-extern void log(int level, char *fmt, ...);
+extern void log(int level, char *fmt, ...) __printflike(2, 3);
 
 void
 _doprnt(
@@ -265,7 +259,9 @@ extern kern_return_t    kernel_get_special_port(
 user_addr_t get_useraddr(void);
 
 /* symbol lookup */
+#ifndef __cplusplus
 struct kmod_info_t;
+#endif
 
 extern uint64_t early_random(void);
 

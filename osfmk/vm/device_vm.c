@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -99,15 +99,14 @@ typedef struct device_pager {
 	boolean_t       is_mapped;
 } *device_pager_t;
 
-lck_grp_t       device_pager_lck_grp;
-lck_grp_attr_t  device_pager_lck_grp_attr;
-lck_attr_t      device_pager_lck_attr;
+LCK_GRP_DECLARE(device_pager_lck_grp, "device_pager");
 
-#define device_pager_lock_init(pager)                           \
-	lck_mtx_init(&(pager)->lock,                            \
-	             &device_pager_lck_grp,                     \
-	             &device_pager_lck_attr)
-#define device_pager_lock_destroy(pager)                        \
+ZONE_DECLARE(device_pager_zone, "device node pager structures",
+    sizeof(struct device_pager), ZC_NONE);
+
+#define device_pager_lock_init(pager) \
+	lck_mtx_init(&(pager)->lock, &device_pager_lck_grp, LCK_ATTR_NULL)
+#define device_pager_lock_destroy(pager) \
 	lck_mtx_destroy(&(pager)->lock, &device_pager_lck_grp)
 #define device_pager_lock(pager) lck_mtx_lock(&(pager)->lock)
 #define device_pager_unlock(pager) lck_mtx_unlock(&(pager)->lock)
@@ -119,37 +118,10 @@ device_pager_lookup(            /* forward */
 device_pager_t
 device_object_create(void);     /* forward */
 
-zone_t  device_pager_zone;
-
-
 #define DEVICE_PAGER_NULL       ((device_pager_t) 0)
-
 
 #define MAX_DNODE               10000
 
-
-
-
-
-/*
- *
- */
-void
-device_pager_bootstrap(void)
-{
-	vm_size_t      size;
-
-	size = (vm_size_t) sizeof(struct device_pager);
-	device_pager_zone = zinit(size, (vm_size_t) MAX_DNODE * size,
-	    PAGE_SIZE, "device node pager structures");
-	zone_change(device_pager_zone, Z_CALLERACCT, FALSE);
-
-	lck_grp_attr_setdefault(&device_pager_lck_grp_attr);
-	lck_grp_init(&device_pager_lck_grp, "device_pager", &device_pager_lck_grp_attr);
-	lck_attr_setdefault(&device_pager_lck_attr);
-
-	return;
-}
 
 /*
  *

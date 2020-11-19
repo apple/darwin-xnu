@@ -136,6 +136,12 @@ struct  itimerval {
 	(ts)->tv_sec = (tv)->tv_sec;                                    \
 	(ts)->tv_nsec = (tv)->tv_usec * 1000;                           \
 }
+#ifdef KERNEL
+#define TIMEVAL64_TO_TIMESPEC(tv, ts){                                                                  \
+	(ts)->tv_sec = (time_t)((tv)->tv_sec);                                          \
+	(ts)->tv_nsec = (tv)->tv_usec * 1000;                                           \
+}
+#endif
 #define TIMESPEC_TO_TIMEVAL(tv, ts) {                                   \
 	(tv)->tv_sec = (ts)->tv_sec;                                    \
 	(tv)->tv_usec = (ts)->tv_nsec / 1000;                           \

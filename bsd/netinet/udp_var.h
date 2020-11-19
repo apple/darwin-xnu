@@ -136,10 +136,8 @@ struct  udpstat {
 	{ "pcblist", CTLTYPE_STRUCT },                                  \
 }
 
-#ifdef INET6
 #define udp6stat        udpstat
 #define udp6s_opackets  udps_opackets
-#endif /* INET6 */
 
 SYSCTL_DECL(_net_inet_udp);
 

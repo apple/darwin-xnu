@@ -10,7 +10,7 @@
 
 #include <darwintest.h>
 
-#if !TARGET_OS_IPHONE
+#if !defined(__arm__)
 
 T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
 
@@ -66,12 +66,12 @@ T_DECL(workq_sigprof, "test that workqueue threads can receive sigprof")
 	dispatch_main();
 }
 
-#else //!TARGET_OS_IPHONE
+#else //!defined(__arm__)
 
 T_DECL(workq_sigprof, "test that workqueue threads can receive sigprof")
 {
 	T_EXPECTFAIL;
-	T_FAIL("<rdar://problem/25864196> setitimer/sigprof doesn't seem to be delivered on embeded platforms");
+	T_FAIL("<rdar://problem/25864196> setitimer/sigprof not supported on 32bit arm platforms");
 }
 
-#endif //!TARGET_OS_IPHONE
+#endif //!defined(__arm__)

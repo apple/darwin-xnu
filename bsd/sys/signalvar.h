@@ -92,7 +92,6 @@ struct  sigacts {
 	user_addr_t ps_sigreturn_token; /* random token used to validate sigreturn arguments */
 	_Atomic uint32_t ps_sigreturn_validation; /* sigreturn argument validation state */
 	int     ps_flags;               /* signal flags, below */
-	struct kern_sigaltstack ps_sigstk;      /* sp, length & flags */
 	int     ps_sig;                 /* for core dump/debugger XXX */
 	int     ps_code;                /* for core dump/debugger XXX */
 	int     ps_addr;                /* for core dump/debugger XXX */
@@ -253,9 +252,8 @@ int sig_try_locked(struct proc *p);
 #if defined(KERNEL_PRIVATE)
 /* Forward-declare these for consumers of the SDK that don't know about BSD types */
 struct proc;
-typedef struct proc * proc_t;
 struct os_reason;
-void    psignal_sigkill_with_reason(proc_t p, struct os_reason *signal_reason);
+void    psignal_sigkill_with_reason(struct proc *p, struct os_reason *signal_reason);
 #endif /* defined(KERNEL_PRIVATE) */
 
 #ifdef XNU_KERNEL_PRIVATE

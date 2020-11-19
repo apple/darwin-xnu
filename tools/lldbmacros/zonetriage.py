@@ -82,7 +82,7 @@ def ZoneTriageMemoryLeak(cmd_args=None):
     print "(lldb) zstack_showzonesbeinglogged\n%s\n" % lldb_run_command("zstack_showzonesbeinglogged")
     for zval in kern.zones:
         if zval.zlog_btlog:
-            print '%s:' % zval.zone_name
+            print '%s:' % zval.z_name
             print "(lldb) zstack_findtop -N 5 0x%lx" % zval.zlog_btlog
             print lldb_run_command("zstack_findtop -N 5 0x%lx" % zval.zlog_btlog)
             print "(lldb) zstack_findleak 0x%lx" % zval.zlog_btlog
@@ -118,7 +118,7 @@ def FindZoneBTLog(zone):
     global kern
     for zval in kern.zones:
         if zval.zlog_btlog:
-            if zone == "%s" % zval.zone_name:
+            if zone == "%s" % zval.z_name:
                 return "0x%lx" % zval.zlog_btlog
     return None
 # EndMacro: zonetriage, zonetriage_freedelement, zonetriage_memoryleak

@@ -138,7 +138,8 @@ unsigned int backtrace_user(uintptr_t *bt, unsigned int btlen, int *error,
  * @see backtrace_user
  */
 unsigned int backtrace_thread_user(void *thread, uintptr_t *bt,
-    unsigned int btlen, int *error, bool *user64, bool *was_truncated);
+    unsigned int btlen, int *error, bool *user64, bool *was_truncated,
+    bool faults_permitted);
 
 __END_DECLS
 

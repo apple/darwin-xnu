@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -137,6 +137,7 @@
 #include <kern/misc_protos.h>
 #include <libsa/stdlib.h>
 #include <sys/malloc.h>
+#include <libkern/section_keywords.h>
 
 /* String routines, from CMU */
 #ifdef  strcpy
@@ -306,6 +307,7 @@ strrchr(const char *s, int c)
 	return __CAST_AWAY_QUALIFIER(found, const, char *);
 }
 
+#if CONFIG_VSPRINTF
 /*
  * Abstract:
  *      strcpy copies the contents of the string "from" including
@@ -314,7 +316,6 @@ strrchr(const char *s, int c)
  * Deprecation Warning:
  *	strcpy() is being deprecated. Please use strlcpy() instead.
  */
-#if !CONFIG_EMBEDDED
 char *
 strcpy(
 	char *to,
@@ -386,52 +387,6 @@ atoi(const char *cp)
 }
 
 /*
- * convert an ASCII string (decimal radix) to an integer
- * inputs:
- *	p	string pointer.
- *	t	char **, return a pointer to the cahr which terminates the
- *		numeric string.
- * returns:
- *	integer value of the numeric string.
- * side effect:
- *	pointer to terminating char.
- */
-
-int
-atoi_term(
-	char    *p,     /* IN */
-	char    **t)    /* OUT */
-{
-	int n;
-	int f;
-
-	n = 0;
-	f = 0;
-	for (;; p++) {
-		switch (*p) {
-		case ' ':
-		case '\t':
-			continue;
-		case '-':
-			f++;
-		case '+':
-			p++;
-		}
-		break;
-	}
-	while (*p >= '0' && *p <= '9') {
-		n = n * 10 + *p++ - '0';
-	}
-
-	/* return pointer to terminating character */
-	if (t) {
-		*t = p;
-	}
-
-	return f? -n: n;
-}
-
-/*
  * Does the same thing as strlen, except only looks up
  * to max chars inside the buffer.
  * Taken from archive/kern-stuff/sbf_machine.c in
@@ -495,11 +450,11 @@ itoa(
 	return str;
 }
 
+#if CONFIG_VSPRINTF
 /*
  * Deprecation Warning:
  *	strcat() is being deprecated. Please use strlcat() instead.
  */
-#if !CONFIG_EMBEDDED
 char *
 strcat(
 	char *dest,
@@ -652,8 +607,8 @@ strprefix(const char *s1, const char *s2)
 	return 1;
 }
 
-char *
-strnstr(char *s, const char *find, size_t slen)
+const char *
+strnstr(const char *s, const char *find, size_t slen)
 {
 	char c, sc;
 	size_t len;
@@ -685,6 +640,7 @@ char * __strncat_chk(char *restrict dst, const char *restrict src, size_t len, s
 char * __strcpy_chk(char *restrict dst, const char *restrict src, size_t chk_size);
 char * __strcat_chk(char *restrict dst, const char *restrict src, size_t chk_size);
 
+MARK_AS_HIBERNATE_TEXT
 void *
 __memcpy_chk(void *dst, void const *src, size_t s, size_t chk_size)
 {
@@ -703,6 +659,7 @@ __memmove_chk(void *dst, void const *src, size_t s, size_t chk_size)
 	return memmove(dst, src, s);
 }
 
+MARK_AS_HIBERNATE_TEXT
 void *
 __memset_chk(void *dst, int c, size_t s, size_t chk_size)
 {

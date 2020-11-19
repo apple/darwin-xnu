@@ -125,9 +125,22 @@ static void
 _mpsc_queue_thread_continue(void *param, wait_result_t wr __unused)
 {
 	mpsc_daemon_queue_t dq = param;
+	mpsc_daemon_queue_kind_t kind = dq->mpd_kind;
+	thread_t self = dq->mpd_thread;
+
+	__builtin_assume(self != THREAD_NULL);
+
+	if (kind == MPSC_QUEUE_KIND_THREAD_CRITICAL) {
+		self->options |= TH_OPT_SYSTEM_CRITICAL;
+	}
 
 	assert(dq->mpd_thread == current_thread());
-	_mpsc_daemon_queue_drain(dq, dq->mpd_thread);
+	_mpsc_daemon_queue_drain(dq, self);
+
+	if (kind == MPSC_QUEUE_KIND_THREAD_CRITICAL) {
+		self->options &= ~TH_OPT_SYSTEM_CRITICAL;
+	}
+
 	thread_block_parameter(_mpsc_queue_thread_continue, dq);
 }
 
@@ -234,13 +247,8 @@ static void
 _mpsc_daemon_queue_drain(mpsc_daemon_queue_t dq, thread_t self)
 {
 	mpsc_daemon_invoke_fn_t invoke = dq->mpd_invoke;
-	mpsc_daemon_queue_kind_t kind = dq->mpd_kind;
 	mpsc_queue_chain_t head, cur, tail;
 	mpsc_daemon_queue_state_t st;
-
-	if (kind == MPSC_QUEUE_KIND_THREAD_CRITICAL) {
-		self->options |= TH_OPT_SYSTEM_CRITICAL;
-	}
 
 again:
 	/*
@@ -307,10 +315,6 @@ again:
 	}
 
 	/* dereferencing `dq` past this point is unsafe */
-
-	if (kind == MPSC_QUEUE_KIND_THREAD_CRITICAL) {
-		self->options &= ~TH_OPT_SYSTEM_CRITICAL;
-	}
 
 	if (__improbable(st & MPSC_QUEUE_STATE_CANCELED)) {
 		thread_wakeup(&dq->mpd_state);

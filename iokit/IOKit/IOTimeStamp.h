@@ -35,6 +35,11 @@ IOTimeStampStartConstant(unsigned int csc,
     uintptr_t a = 0, uintptr_t b = 0,
     uintptr_t c = 0, uintptr_t d = 0)
 {
+	(void)csc;
+	(void)a;
+	(void)b;
+	(void)c;
+	(void)d;
 	KERNEL_DEBUG_CONSTANT(((uint32_t)csc) | DBG_FUNC_START, a, b, c, d, 0);
 }
 
@@ -43,6 +48,11 @@ IOTimeStampEndConstant(uintptr_t csc,
     uintptr_t a = 0, uintptr_t b = 0,
     uintptr_t c = 0, uintptr_t d = 0)
 {
+	(void)csc;
+	(void)a;
+	(void)b;
+	(void)c;
+	(void)d;
 	KERNEL_DEBUG_CONSTANT(((uint32_t)csc) | DBG_FUNC_END, a, b, c, d, 0);
 }
 
@@ -51,8 +61,94 @@ IOTimeStampConstant(uintptr_t csc,
     uintptr_t a = 0, uintptr_t b = 0,
     uintptr_t c = 0, uintptr_t d = 0)
 {
+	(void)csc;
+	(void)a;
+	(void)b;
+	(void)c;
+	(void)d;
 	KERNEL_DEBUG_CONSTANT(((uint32_t)csc) | DBG_FUNC_NONE, a, b, c, d, 0);
 }
+
+static inline void
+IOTimeStampConstantFiltered(uintptr_t csc,
+    uintptr_t a = 0, uintptr_t b = 0,
+    uintptr_t c = 0, uintptr_t d = 0)
+{
+	(void)csc;
+	(void)a;
+	(void)b;
+	(void)c;
+	(void)d;
+	KERNEL_DEBUG_CONSTANT_FILTERED(((uint32_t)csc) | DBG_FUNC_NONE, a, b, c, d, 0);
+}
+
+/*
+ * Objects of this class will trace a filtered interval for their lifetime.
+ * The constructor takes in the start tracepoint's arguments.
+ * By default, the end tracepoint emits no additional arguments,
+ * but you can set them with setEndCodes.
+ * Alternatively, you can set them individually with setA...setD
+ */
+class IOTimeStampIntervalConstantFiltered
+{
+public:
+	IOTimeStampIntervalConstantFiltered(unsigned int csc,
+	    uintptr_t arg1 = 0, uintptr_t arg2 = 0,
+	    uintptr_t arg3 = 0, uintptr_t arg4 = 0)
+		: _csc(csc), _endArg1(0), _endArg2(0), _endArg3(0), _endArg4(0)
+	{
+		(void)csc;
+		(void)arg1;
+		(void)arg2;
+		(void)arg3;
+		(void)arg4;
+		KDBG_FILTERED(((uint32_t)csc) | DBG_FUNC_START, arg1, arg2, arg3, arg4);
+	}
+	// Setters for the end debug codes
+	void
+	setEndCodes(uintptr_t arg1 = 0, uintptr_t arg2 = 0,
+	    uintptr_t arg3 = 0, uintptr_t arg4 = 0)
+	{
+		_endArg1 = arg1;
+		_endArg2 = arg2;
+		_endArg3 = arg3;
+		_endArg4 = arg4;
+	}
+	void
+	setEndArg1(uintptr_t arg)
+	{
+		_endArg1  = arg;
+	}
+	void
+	setEndArg2(uintptr_t arg)
+	{
+		_endArg2  = arg;
+	}
+	void
+	setEndArg3(uintptr_t arg)
+	{
+		_endArg3  = arg;
+	}
+	void
+	setEndArg4(uintptr_t arg)
+	{
+		_endArg4  = arg;
+	}
+	~IOTimeStampIntervalConstantFiltered()
+	{
+		KDBG_FILTERED(((uint32_t)_csc) | DBG_FUNC_END, _endArg1, _endArg2, _endArg3, _endArg4);
+	}
+private:
+#if (KDEBUG_LEVEL < KDEBUG_LEVEL_STANDARD)
+	__unused
+#endif /* KDEBUG_LEVEL < KDEBUG_LEVEL_STANDARD */
+	unsigned int _csc;
+	// End debug codes
+#if (KDEBUG_LEVEL < KDEBUG_LEVEL_STANDARD)
+	__unused
+#endif /* KDEBUG_LEVEL < KDEBUG_LEVEL_STANDARD */
+	uintptr_t _endArg1, _endArg2, _endArg3, _endArg4;
+};
 
 #if KDEBUG
 
@@ -61,6 +157,11 @@ IOTimeStampStart(uintptr_t csc,
     uintptr_t a = 0, uintptr_t b = 0,
     uintptr_t c = 0, uintptr_t d = 0)
 {
+	(void)csc;
+	(void)a;
+	(void)b;
+	(void)c;
+	(void)d;
 	KERNEL_DEBUG(((uint32_t)csc) | DBG_FUNC_START, a, b, c, d, 0);
 }
 
@@ -69,6 +170,11 @@ IOTimeStampEnd(uintptr_t csc,
     uintptr_t a = 0, uintptr_t b = 0,
     uintptr_t c = 0, uintptr_t d = 0)
 {
+	(void)csc;
+	(void)a;
+	(void)b;
+	(void)c;
+	(void)d;
 	KERNEL_DEBUG(((uint32_t)csc) | DBG_FUNC_END, a, b, c, d, 0);
 }
 
@@ -77,6 +183,11 @@ IOTimeStamp(uintptr_t csc,
     uintptr_t a = 0, uintptr_t b = 0,
     uintptr_t c = 0, uintptr_t d = 0)
 {
+	(void)csc;
+	(void)a;
+	(void)b;
+	(void)c;
+	(void)d;
 	KERNEL_DEBUG(((uint32_t)csc) | DBG_FUNC_NONE, a, b, c, d, 0);
 }
 
@@ -117,6 +228,7 @@ IOTimeStamp(uintptr_t csc,
 #define IODBG_POWER(code)                       (KDBG_CODE(DBG_IOKIT, DBG_IOPOWER, code))
 #define IODBG_IOSERVICE(code)           (KDBG_CODE(DBG_IOKIT, DBG_IOSERVICE, code))
 #define IODBG_IOREGISTRY(code)          (KDBG_CODE(DBG_IOKIT, DBG_IOREGISTRY, code))
+#define IODBG_IOMDPA(code)                      (KDBG_CODE(DBG_IOKIT, DBG_IOMDPA, code))
 
 /* IOKit specific codes - within each subclass */
 
@@ -168,6 +280,19 @@ IOTimeStamp(uintptr_t csc,
 /* DBG_IOKIT/DBG_IOMCURS codes */
 
 /* DBG_IOKIT/DBG_IOMDESC codes */
+#define IOMDESC_WIRE 1       /* 0x05060004 */
+#define IOMDESC_PREPARE 2    /* 0x05060008 */
+#define IOMDESC_MAP 3        /* 0x0506000C */
+#define IOMDESC_UNMAP 4      /* 0x05060010 */
+#define IOMDESC_DMA_MAP 5    /* 0x05060014 */
+#define IOMDESC_DMA_UNMAP 6  /* 0x05060018 */
+#define IOMDESC_COMPLETE 7   /* 0x0506001C */
+
+/* DBG_IOKIT/DBG_IOMDPA */
+#define IOMDPA_MAPPED           1       /* 0x05410004 */
+#define IOMDPA_UNMAPPED         2       /* 0x05410008 */
+#define IOMDPA_SEGMENTS_PAGE    3       /* 0x0541000C */
+#define IOMDPA_SEGMENTS_LONG    4       /* 0x05410010 */
 
 /* DBG_IOKIT/DBG_IOPOWER codes */
 // See IOKit/pwr_mgt/IOPMlog.h for the power management codes

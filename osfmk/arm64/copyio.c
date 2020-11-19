@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -29,6 +29,7 @@
 #include <arm/cpu_data_internal.h>
 #include <arm/misc_protos.h>
 #include <kern/thread.h>
+#include <kern/zalloc_internal.h>
 #include <sys/errno.h>
 #include <vm/pmap.h>
 #include <vm/vm_map.h>
@@ -50,8 +51,8 @@ extern int copyoutstr_prevalidate(const void *kaddr, user_addr_t uaddr, size_t l
 
 extern pmap_t kernel_pmap;
 
-/* On by default, optionally disabled by boot-arg */
-extern boolean_t copyio_zalloc_check;
+extern const vm_map_address_t physmap_base;
+extern const vm_map_address_t physmap_end;
 
 /*!
  * @typedef copyio_flags_t
@@ -148,9 +149,15 @@ copy_validate(const user_addr_t user_addr, uintptr_t kernel_addr,
 	}
 
 	if ((flags & COPYIO_VALIDATE_USER_ONLY) == 0) {
-		if (__improbable((kernel_addr < VM_MIN_KERNEL_ADDRESS) ||
-		    os_add_overflow(kernel_addr, nbytes, &kernel_addr_last) ||
-		    (kernel_addr_last > VM_MAX_KERNEL_ADDRESS))) {
+		if (__improbable(os_add_overflow(kernel_addr, nbytes, &kernel_addr_last))) {
+			panic("%s(%p, %p, %lu) - kaddr not in kernel", __func__,
+			    (void *)user_addr, (void *)kernel_addr, nbytes);
+		}
+
+		bool in_kva = (kernel_addr >= VM_MIN_KERNEL_ADDRESS) && (kernel_addr_last <= VM_MAX_KERNEL_ADDRESS);
+		bool in_physmap = (kernel_addr >= physmap_base) && (kernel_addr_last <= physmap_end);
+
+		if (__improbable(!(in_kva || in_physmap))) {
 			panic("%s(%p, %p, %lu) - kaddr not in kernel", __func__,
 			    (void *)user_addr, (void *)kernel_addr, nbytes);
 		}
@@ -168,9 +175,15 @@ copy_validate(const user_addr_t user_addr, uintptr_t kernel_addr,
 	}
 
 	if ((flags & COPYIO_VALIDATE_USER_ONLY) == 0) {
-		if (__probable(copyio_zalloc_check)) {
-			vm_size_t kernel_buf_size = zone_element_size((void *)kernel_addr, NULL);
-			if (__improbable(kernel_buf_size && kernel_buf_size < nbytes)) {
+		if (__probable(!zalloc_disable_copyio_check)) {
+			zone_t src_zone = NULL;
+			vm_size_t kernel_buf_size = zone_element_size((void *)kernel_addr, &src_zone);
+			/*
+			 * Size of elements in the permanent zone is not saved as a part of the
+			 * zone's info
+			 */
+			if (__improbable(src_zone && !src_zone->permanent &&
+			    kernel_buf_size < nbytes)) {
 				panic("copyio_preflight: kernel buffer 0x%lx has size %lu < nbytes %lu",
 				    kernel_addr, kernel_buf_size, nbytes);
 			}

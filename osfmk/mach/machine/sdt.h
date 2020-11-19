@@ -283,6 +283,10 @@
 	    type3, arg3, type4, arg4, type5, arg5, type6, arg6, type7, arg7) \
 	DTRACE_PROBE7(__vminfo_, name, arg1, arg2, arg3, arg4, arg5, arg6, arg7)
 
+#define DTRACE_VM8(name, type1, arg1, type2, arg2,                      \
+	    type3, arg3, type4, arg4, type5, arg5, type6, arg6, type7, arg7, type8, arg8) \
+	DTRACE_PROBE8(__vminfo_, name, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8)
+
 #define DTRACE_IP(name)                                                 \
 	DTRACE_PROBE(__ip_, name)
 
@@ -442,6 +446,32 @@
 #endif /* KASAN */
 
 #if PRIVATE
+#endif /* PRIVATE */
+
+#ifdef PRIVATE
+#define DTRACE_HV(name)                                            \
+	DTRACE_PROBE(__hv_, name)
+
+#define DTRACE_HV1(name, type1, arg1)                              \
+	DTRACE_PROBE1(__hv_, name, arg1)
+
+#define DTRACE_HV2(name, type1, arg1, type2, arg2)                 \
+	DTRACE_PROBE2(__hv_, name, arg1, arg2)
+
+#define DTRACE_HV3(name, type1, arg1, type2, arg2, type3, arg3)    \
+	DTRACE_PROBE3(__hv_, name, arg1, arg2, arg3)
+
+#define DTRACE_HV4(name, type1, arg1, type2, arg2, type3, arg3,    \
+	    type4, arg4)                                                \
+	DTRACE_PROBE4(__hv_, name, arg1, arg2, arg3, arg4)
+
+#define DTRACE_HV5(name, type1, arg1, type2, arg2, type3, arg3,    \
+	    type4, arg4, type5, arg5)                                   \
+	DTRACE_PROBE5(__hv_, name, arg1, arg2, arg3, arg4, arg5)
+
+#define DTRACE_HV6(name, type1, arg1, type2, arg2, type3, arg3,    \
+	    type4, arg4, type5, arg5, type6, arg6)                      \
+	DTRACE_PROBE6(__hv_, name, arg1, arg2, arg3, arg4, arg5, arg6)
 #endif /* PRIVATE */
 
 #endif /* KERNEL */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -879,7 +879,7 @@ vlan_parent_remove_all_vlans(struct ifnet * p)
 	}
 
 	/* the vlan parent has no more VLAN's */
-	ifnet_set_eflags(p, 0, IFEF_VLAN); /* clear IFEF_VLAN */
+	if_clear_eflags(p, IFEF_VLAN); /* clear IFEF_VLAN */
 
 	LIST_REMOVE(vlp, vlp_parent_list);
 	need_vlp_release++; /* one for being in the list */
@@ -992,6 +992,7 @@ vlan_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *params)
 	ifnet_set_addrlen(ifp, ETHER_ADDR_LEN); /* XXX ethernet specific */
 	ifnet_set_baudrate(ifp, 0);
 	ifnet_set_hdrlen(ifp, ETHER_VLAN_ENCAP_LEN);
+	ifnet_set_mtu(ifp, ETHERMTU);
 
 	error = ifnet_attach(ifp, NULL);
 	if (error) {
@@ -1262,6 +1263,7 @@ vlan_input(ifnet_t p, __unused protocol_family_t protocol,
 static int
 vlan_config(struct ifnet * ifp, struct ifnet * p, int tag)
 {
+	u_int32_t           eflags;
 	int                 error;
 	int                 first_vlan = FALSE;
 	ifvlan_ref          ifv = NULL;
@@ -1343,18 +1345,19 @@ vlan_config(struct ifnet * ifp, struct ifnet * p, int tag)
 	ifvlan_retain(ifv); /* parent references ifv */
 	ifv_added = TRUE;
 
-	/* check whether bond interface is using parent interface */
-	ifnet_lock_exclusive(p);
+	/* don't allow VLAN on interface that's part of a bond */
 	if ((ifnet_eflags(p) & IFEF_BOND) != 0) {
-		ifnet_lock_done(p);
-		/* don't allow VLAN over interface that's already part of a bond */
 		error = EBUSY;
 		goto signal_done;
 	}
-	/* prevent BOND interface from using it */
-	/* Can't use ifnet_set_eflags because that would take the lock */
-	p->if_eflags |= IFEF_VLAN;
-	ifnet_lock_done(p);
+	/* mark it as in use by VLAN */
+	eflags = if_set_eflags(p, IFEF_VLAN);
+	if ((eflags & IFEF_BOND) != 0) {
+		/* bond got in ahead of us */
+		if_clear_eflags(p, IFEF_VLAN);
+		error = EBUSY;
+		goto signal_done;
+	}
 	vlan_unlock();
 
 	if (first_vlan) {
@@ -1436,7 +1439,7 @@ signal_done:
 		vlan_parent_remove_vlan(vlp, ifv);
 		if (!vlan_parent_flags_detaching(vlp) && vlan_parent_no_vlans(vlp)) {
 			/* the vlan parent has no more VLAN's */
-			ifnet_set_eflags(p, 0, IFEF_VLAN);
+			if_clear_eflags(p, IFEF_VLAN);
 			LIST_REMOVE(vlp, vlp_parent_list);
 			/* release outside of the lock below */
 			need_vlp_release++;
@@ -1547,7 +1550,7 @@ vlan_unconfig(ifvlan_ref ifv, int need_to_wait)
 	vlan_lock();
 
 	/* return to the state we were in before SIFVLAN */
-	ifnet_set_mtu(ifp, 0);
+	ifnet_set_mtu(ifp, ETHERMTU);
 	ifnet_set_flags(ifp, 0,
 	    IFF_BROADCAST | IFF_MULTICAST | IFF_SIMPLEX | IFF_RUNNING);
 	ifnet_set_offload(ifp, 0);
@@ -1563,7 +1566,7 @@ vlan_unconfig(ifvlan_ref ifv, int need_to_wait)
 	/* from this point on, no more referencing ifv */
 	if (last_vlan && !vlan_parent_flags_detaching(vlp)) {
 		/* the vlan parent has no more VLAN's */
-		ifnet_set_eflags(p, 0, IFEF_VLAN);
+		if_clear_eflags(p, IFEF_VLAN);
 		LIST_REMOVE(vlp, vlp_parent_list);
 
 		/* one for being in the list */
@@ -1877,7 +1880,8 @@ vlan_ioctl(ifnet_t ifp, u_long cmd, void * data)
 				error = (ifv == NULL ? EOPNOTSUPP : EBUSY);
 				break;
 			}
-			need_link_event = vlan_remove(ifv, TRUE);
+			need_link_event = (ifv->ifv_vlp != NULL);
+			vlan_unconfig(ifv, TRUE);
 			vlan_unlock();
 			if (need_link_event) {
 				interface_link_event(ifp, KEV_DL_LINK_OFF);
@@ -1978,23 +1982,24 @@ vlan_detached(ifnet_t p, __unused protocol_family_t protocol)
 static void
 interface_link_event(struct ifnet * ifp, u_int32_t event_code)
 {
-	struct {
-		struct kern_event_msg   header;
-		u_int32_t                       unit;
-		char                    if_name[IFNAMSIZ];
-	} event;
+	struct event {
+		u_int32_t ifnet_family;
+		u_int32_t unit;
+		char if_name[IFNAMSIZ];
+	};
+	_Alignas(struct kern_event_msg) char message[sizeof(struct kern_event_msg) + sizeof(struct event)] = { 0 };
+	struct kern_event_msg *header = (struct kern_event_msg*)message;
+	struct event *data = (struct event *)(header + 1);
 
-	bzero(&event, sizeof(event));
-	event.header.total_size    = sizeof(event);
-	event.header.vendor_code   = KEV_VENDOR_APPLE;
-	event.header.kev_class     = KEV_NETWORK_CLASS;
-	event.header.kev_subclass  = KEV_DL_SUBCLASS;
-	event.header.event_code    = event_code;
-	event.header.event_data[0] = ifnet_family(ifp);
-	event.unit                 = (u_int32_t) ifnet_unit(ifp);
-	strlcpy(event.if_name, ifnet_name(ifp), IFNAMSIZ);
-	ifnet_event(ifp, &event.header);
-	return;
+	header->total_size   = sizeof(message);
+	header->vendor_code  = KEV_VENDOR_APPLE;
+	header->kev_class    = KEV_NETWORK_CLASS;
+	header->kev_subclass = KEV_DL_SUBCLASS;
+	header->event_code   = event_code;
+	data->ifnet_family   = ifnet_family(ifp);
+	data->unit           = (u_int32_t)ifnet_unit(ifp);
+	strlcpy(data->if_name, ifnet_name(ifp), IFNAMSIZ);
+	ifnet_event(ifp, header);
 }
 
 static void
@@ -2095,7 +2100,6 @@ vlan_detach_inet(struct ifnet *ifp, protocol_family_t protocol_family)
 	ether_detach_inet(ifp, protocol_family);
 }
 
-#if INET6
 static errno_t
 vlan_attach_inet6(struct ifnet *ifp, protocol_family_t protocol_family)
 {
@@ -2107,7 +2111,6 @@ vlan_detach_inet6(struct ifnet *ifp, protocol_family_t protocol_family)
 {
 	ether_detach_inet6(ifp, protocol_family);
 }
-#endif /* INET6 */
 
 __private_extern__ int
 vlan_family_init(void)
@@ -2121,7 +2124,6 @@ vlan_family_init(void)
 		    error);
 		goto done;
 	}
-#if INET6
 	error = proto_register_plumber(PF_INET6, IFNET_FAMILY_VLAN,
 	    vlan_attach_inet6, vlan_detach_inet6);
 	if (error != 0) {
@@ -2129,7 +2131,6 @@ vlan_family_init(void)
 		    error);
 		goto done;
 	}
-#endif
 	error = vlan_clone_attach();
 	if (error != 0) {
 		printf("proto_register_plumber failed vlan_clone_attach error=%d\n",

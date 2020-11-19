@@ -207,7 +207,8 @@ static void fasttrap_proc_release(fasttrap_proc_t *);
  * 20k elements allocated, the space saved is substantial.
  */
 
-struct zone *fasttrap_tracepoint_t_zone;
+ZONE_DECLARE(fasttrap_tracepoint_t_zone, "dtrace.fasttrap_tracepoint_t",
+    sizeof(fasttrap_tracepoint_t), ZC_NONE);
 
 /*
  * APPLE NOTE: fasttrap_probe_t's are variable in size. Some quick profiling has shown
@@ -561,6 +562,57 @@ fasttrap_pid_cleanup(uint32_t work)
 	lck_mtx_unlock(&fasttrap_cleanup_mtx);
 }
 
+static int
+fasttrap_setdebug(proc_t *p)
+{
+	LCK_MTX_ASSERT(&p->p_mlock, LCK_MTX_ASSERT_OWNED);
+
+	/*
+	 * CS_KILL and CS_HARD will cause code-signing to kill the process
+	 * when the process text is modified, so register the intent
+	 * to allow invalid access beforehand.
+	 */
+	if ((p->p_csflags & (CS_KILL|CS_HARD))) {
+		proc_unlock(p);
+		for (int i = 0; i < DTRACE_NCLIENTS; i++) {
+			dtrace_state_t *state = dtrace_state_get(i);
+			if (state == NULL)
+				continue;
+			if (state->dts_cred.dcr_cred == NULL)
+				continue;
+			/*
+			 * The get_task call flags whether the process should
+			 * be flagged to have the cs_allow_invalid call
+			 * succeed. We want the best credential that any dtrace
+			 * client has, so try all of them.
+			 */
+
+			/*
+			 * mac_proc_check_get_task() can trigger upcalls. It's
+			 * not safe to hold proc references accross upcalls, so
+			 * just drop the reference.  Given the context, it
+			 * should not be possible for the process to actually
+			 * disappear.
+			 */
+			struct proc_ident pident = proc_ident(p);
+			sprunlock(p);
+			p = PROC_NULL;
+
+			mac_proc_check_get_task(state->dts_cred.dcr_cred, &pident);
+
+			p = sprlock(pident.p_pid);
+			if (p == PROC_NULL) {
+				return (ESRCH);
+			}
+		}
+		int rc = cs_allow_invalid(p);
+		proc_lock(p);
+		if (rc == 0) {
+			return (EACCES);
+		}
+	}
+	return (0);
+}
 
 /*
  * This is called from cfork() via dtrace_fasttrap_fork(). The child
@@ -597,6 +649,13 @@ fasttrap_fork(proc_t *p, proc_t *cp)
 		printf("fasttrap_fork: sprlock(%d) returned a different proc\n", cp->p_pid);
 		return;
 	}
+
+	proc_lock(cp);
+	if (fasttrap_setdebug(cp) == ESRCH) {
+		printf("fasttrap_fork: failed to re-acquire proc\n");
+		return;
+	}
+	proc_unlock(cp);
 
 	/*
 	 * Iterate over every tracepoint looking for ones that belong to the
@@ -1146,24 +1205,23 @@ fasttrap_pid_enable(void *arg, dtrace_id_t id, void *parg)
 	}
 
 	proc_lock(p);
+	int p_pid = proc_pid(p);
 
-	if ((p->p_csflags & (CS_KILL|CS_HARD))) {
+	rc = fasttrap_setdebug(p);
+	switch (rc) {
+	case EACCES:
 		proc_unlock(p);
-		for (i = 0; i < DTRACE_NCLIENTS; i++) {
-			dtrace_state_t *state = dtrace_state_get(i);
-			if (state == NULL)
-				continue;
-			if (state->dts_cred.dcr_cred == NULL)
-				continue;
-			mac_proc_check_get_task(state->dts_cred.dcr_cred, p);
-		}
-		rc = cs_allow_invalid(p);
-		if (rc == 0) {
-			sprunlock(p);
-			cmn_err(CE_WARN, "process doesn't allow invalid code pages, failing to install fasttrap probe\n");
-			return (0);
-		}
-		proc_lock(p);
+		sprunlock(p);
+		cmn_err(CE_WARN, "Failed to install fasttrap probe for pid %d: "
+		    "Process does not allow invalid code pages\n", p_pid);
+		return (0);
+	case ESRCH:
+		cmn_err(CE_WARN, "Failed to install fasttrap probe for pid %d: "
+		    "Failed to re-acquire process\n", p_pid);
+		return (0);
+	default:
+		assert(rc == 0);
+		break;
 	}
 
 	/*
@@ -2616,12 +2674,13 @@ static int
 _fasttrap_ioctl(dev_t dev, u_long cmd, caddr_t data, int fflag, struct proc *p)
 {
 	int err, rv = 0;
-    user_addr_t uaddrp;
+	user_addr_t uaddrp;
 
-    if (proc_is64bit(p))
-        uaddrp = *(user_addr_t *)data;
-    else
-        uaddrp = (user_addr_t) *(uint32_t *)data;
+	if (proc_is64bit(p)) {
+		uaddrp = *(user_addr_t *)data;
+	} else {
+		uaddrp = (user_addr_t) *(uint32_t *)data;
+	}
 
 	err = fasttrap_ioctl(dev, cmd, uaddrp, fflag, CRED(), &rv);
 
@@ -2640,27 +2699,20 @@ static int fasttrap_inited = 0;
 
 #define FASTTRAP_MAJOR  -24 /* let the kernel pick the device number */
 
-/*
- * A struct describing which functions will get invoked for certain
- * actions.
- */
-
-static struct cdevsw fasttrap_cdevsw =
+static const struct cdevsw fasttrap_cdevsw =
 {
-	_fasttrap_open,         /* open */
-	eno_opcl,               /* close */
-	eno_rdwrt,              /* read */
-	eno_rdwrt,              /* write */
-	_fasttrap_ioctl,        /* ioctl */
-	(stop_fcn_t *)nulldev,  /* stop */
-	(reset_fcn_t *)nulldev, /* reset */
-	NULL,                   /* tty's */
-	eno_select,             /* select */
-	eno_mmap,               /* mmap */
-	eno_strat,              /* strategy */
-	eno_getc,               /* getc */
-	eno_putc,               /* putc */
-	0                       /* type */
+	.d_open = _fasttrap_open,
+	.d_close = eno_opcl,
+	.d_read = eno_rdwrt,
+	.d_write = eno_rdwrt,
+	.d_ioctl = _fasttrap_ioctl,
+	.d_stop = (stop_fcn_t *)nulldev,
+	.d_reset = (reset_fcn_t *)nulldev,
+	.d_select = eno_select,
+	.d_mmap = eno_mmap,
+	.d_strategy = eno_strat,
+	.d_reserved_1 = eno_getc,
+	.d_reserved_2 = eno_putc,
 };
 
 void fasttrap_init(void);
@@ -2689,24 +2741,14 @@ fasttrap_init( void )
 		}
 
 		/*
-		 * Allocate the fasttrap_tracepoint_t zone
-		 */
-		fasttrap_tracepoint_t_zone = zinit(sizeof(fasttrap_tracepoint_t),
-						   1024 * sizeof(fasttrap_tracepoint_t),
-						   sizeof(fasttrap_tracepoint_t),
-						   "dtrace.fasttrap_tracepoint_t");
-
-		/*
 		 * fasttrap_probe_t's are variable in size. We use an array of zones to
 		 * cover the most common sizes.
 		 */
 		int i;
 		for (i=1; i<FASTTRAP_PROBE_T_ZONE_MAX_TRACEPOINTS; i++) {
-			size_t zone_element_size = offsetof(fasttrap_probe_t, ftp_tps[i]);
-			fasttrap_probe_t_zones[i] = zinit(zone_element_size,
-							  1024 * zone_element_size,
-							  zone_element_size,
-							  fasttrap_probe_t_zone_names[i]);
+			fasttrap_probe_t_zones[i] =
+			    zone_create(fasttrap_probe_t_zone_names[i],
+				    offsetof(fasttrap_probe_t, ftp_tps[i]), ZC_NONE);
 		}
 
 

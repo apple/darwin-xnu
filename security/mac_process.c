@@ -305,10 +305,11 @@ mac_cred_check_visible(kauth_cred_t u1, kauth_cred_t u2)
 }
 
 int
-mac_proc_check_debug(proc_t curp, struct proc *proc)
+mac_proc_check_debug(proc_ident_t tracing_ident, kauth_cred_t tracing_cred, proc_ident_t traced_ident)
 {
-	kauth_cred_t cred;
 	int error;
+	bool enforce;
+	proc_t tracingp;
 
 #if SECURITY_MAC_CHECK_ENFORCE
 	/* 21167099 - only check if we allow write */
@@ -316,13 +317,20 @@ mac_proc_check_debug(proc_t curp, struct proc *proc)
 		return 0;
 	}
 #endif
-	if (!mac_proc_check_enforce(curp)) {
+	/*
+	 * Once all mac hooks adopt proc_ident_t, finding proc_t and releasing
+	 * it below should go to mac_proc_check_enforce().
+	 */
+	if ((tracingp = proc_find_ident(tracing_ident)) == PROC_NULL) {
+		return ESRCH;
+	}
+	enforce = mac_proc_check_enforce(tracingp);
+	proc_rele(tracingp);
+
+	if (!enforce) {
 		return 0;
 	}
-
-	cred = kauth_cred_proc_ref(curp);
-	MAC_CHECK(proc_check_debug, cred, proc);
-	kauth_cred_unref(&cred);
+	MAC_CHECK(proc_check_debug, tracing_cred, traced_ident);
 
 	return error;
 }
@@ -343,6 +351,37 @@ mac_proc_check_dump_core(struct proc *proc)
 	}
 
 	MAC_CHECK(proc_check_dump_core, proc);
+
+	return error;
+}
+
+int
+mac_proc_check_remote_thread_create(struct task *task, int flavor, thread_state_t new_state, mach_msg_type_number_t new_state_count)
+{
+	proc_t curp = current_proc();
+	proc_t proc;
+	kauth_cred_t cred;
+	int error;
+
+#if SECURITY_MAC_CHECK_ENFORCE
+	/* 21167099 - only check if we allow write */
+	if (!mac_proc_enforce) {
+		return 0;
+	}
+#endif
+	if (!mac_proc_check_enforce(curp)) {
+		return 0;
+	}
+
+	proc = proc_find(task_pid(task));
+	if (proc == PROC_NULL) {
+		return ESRCH;
+	}
+
+	cred = kauth_cred_proc_ref(curp);
+	MAC_CHECK(proc_check_remote_thread_create, cred, proc, flavor, new_state, new_state_count);
+	kauth_cred_unref(&cred);
+	proc_rele(proc);
 
 	return error;
 }
@@ -371,31 +410,31 @@ mac_proc_check_fork(proc_t curp)
 }
 
 int
-mac_proc_check_get_task_name(struct ucred *cred, struct proc *p)
+mac_proc_check_get_task_name(struct ucred *cred, proc_ident_t pident)
 {
 	int error;
 
-	MAC_CHECK(proc_check_get_task_name, cred, p);
+	MAC_CHECK(proc_check_get_task_name, cred, pident);
 
 	return error;
 }
 
 int
-mac_proc_check_get_task(struct ucred *cred, struct proc *p)
+mac_proc_check_get_task(struct ucred *cred, proc_ident_t pident)
 {
 	int error;
 
-	MAC_CHECK(proc_check_get_task, cred, p);
+	MAC_CHECK(proc_check_get_task, cred, pident);
 
 	return error;
 }
 
 int
-mac_proc_check_expose_task(struct ucred *cred, struct proc *p)
+mac_proc_check_expose_task(struct ucred *cred, proc_ident_t pident)
 {
 	int error;
 
-	MAC_CHECK(proc_check_expose_task, cred, p);
+	MAC_CHECK(proc_check_expose_task, cred, pident);
 
 	return error;
 }
@@ -478,6 +517,12 @@ mac_proc_check_run_cs_invalid(proc_t proc)
 	MAC_CHECK(proc_check_run_cs_invalid, proc);
 
 	return error;
+}
+
+void
+mac_proc_notify_cs_invalidated(proc_t proc)
+{
+	MAC_PERFORM(proc_notify_cs_invalidated, proc);
 }
 
 int
@@ -576,7 +621,7 @@ mac_proc_notify_exit(struct proc *proc)
 }
 
 int
-mac_proc_check_suspend_resume(proc_t curp, int sr)
+mac_proc_check_suspend_resume(proc_t proc, int sr)
 {
 	kauth_cred_t cred;
 	int error;
@@ -587,12 +632,12 @@ mac_proc_check_suspend_resume(proc_t curp, int sr)
 		return 0;
 	}
 #endif
-	if (!mac_proc_check_enforce(curp)) {
+	if (!mac_proc_check_enforce(current_proc())) {
 		return 0;
 	}
 
-	cred = kauth_cred_proc_ref(curp);
-	MAC_CHECK(proc_check_suspend_resume, cred, curp, sr);
+	cred = kauth_cred_proc_ref(current_proc());
+	MAC_CHECK(proc_check_suspend_resume, cred, proc, sr);
 	kauth_cred_unref(&cred);
 
 	return error;

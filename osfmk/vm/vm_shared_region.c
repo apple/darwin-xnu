@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -32,23 +32,25 @@
  * --------------
  *
  * A shared region is a submap that contains the most common system shared
- * libraries for a given environment.
- * An environment is defined by (cpu-type, 64-bitness, root directory).
+ * libraries for a given environment which is defined by:
+ * - cpu-type
+ * - 64-bitness
+ * - root directory
+ * - Team ID - when we have pointer authentication.
  *
  * The point of a shared region is to reduce the setup overhead when exec'ing
- * a new process.
- * A shared region uses a shared VM submap that gets mapped automatically
- * at exec() time (see vm_map_exec()).  The first process of a given
+ * a new process. A shared region uses a shared VM submap that gets mapped
+ * automatically at exec() time, see vm_map_exec().  The first process of a given
  * environment sets up the shared region and all further processes in that
  * environment can re-use that shared region without having to re-create
  * the same mappings in their VM map.  All they need is contained in the shared
  * region.
- * It can also shared a pmap (mostly for read-only parts but also for the
+ *
+ * The region can also share a pmap (mostly for read-only parts but also for the
  * initial version of some writable parts), which gets "nested" into the
  * process's pmap.  This reduces the number of soft faults:  once one process
  * brings in a page in the shared region, all the other processes can access
  * it without having to enter it in their own pmap.
- *
  *
  * When a process is being exec'ed, vm_map_exec() calls vm_shared_region_enter()
  * to map the appropriate shared region in the process's address space.
@@ -56,15 +58,15 @@
  * If we can't find one, we create a new (empty) one and add it to the list.
  * Otherwise, we just take an extra reference on the shared region we found.
  *
- * The "dyld" runtime (mapped into the process's address space at exec() time)
- * will then use the shared_region_check_np() and shared_region_map_np()
- * system call to validate and/or populate the shared region with the
+ * The "dyld" runtime, mapped into the process's address space at exec() time,
+ * will then use the shared_region_check_np() and shared_region_map_and_slide_np()
+ * system calls to validate and/or populate the shared region with the
  * appropriate dyld_shared_cache file.
  *
  * The shared region is inherited on fork() and the child simply takes an
  * extra reference on its parent's shared region.
  *
- * When the task terminates, we release a reference on its shared region.
+ * When the task terminates, we release the reference on its shared region.
  * When the last reference is released, we destroy the shared region.
  *
  * After a chroot(), the calling process keeps using its original shared region,
@@ -72,6 +74,7 @@
  * will use a different shared region, because they need to use the shared
  * cache that's relative to the new root directory.
  */
+
 /*
  * COMM PAGE
  *
@@ -84,11 +87,10 @@
  * The comm pages are created and populated at boot time.
  *
  * The appropriate comm page is mapped into a process's address space
- * at exec() time, in vm_map_exec().
- * It is then inherited on fork().
+ * at exec() time, in vm_map_exec(). It is then inherited on fork().
  *
  * The comm page is shared between the kernel and all applications of
- * a given platform.  Only the kernel can modify it.
+ * a given platform. Only the kernel can modify it.
  *
  * Applications just branch to fixed addresses in the comm page and find
  * the right version of the code for the platform.  There is also some
@@ -111,9 +113,11 @@
 
 #include <machine/commpage.h>
 #include <machine/cpu_capabilities.h>
+#include <sys/random.h>
 
 #if defined (__arm__) || defined(__arm64__)
 #include <arm/cpu_data_internal.h>
+#include <arm/misc_protos.h>
 #endif
 
 /*
@@ -122,9 +126,9 @@
  */
 #define PROCESS_SHARED_CACHE_LAYOUT 0x00
 
-#if defined(HAS_APPLE_PAC)
+#if __has_feature(ptrauth_calls)
 #include <ptrauth.h>
-#endif /* HAS_APPLE_PAC */
+#endif /* __has_feature(ptrauth_calls) */
 
 /* "dyld" uses this to figure out what the kernel supports */
 int shared_region_version = 3;
@@ -135,8 +139,9 @@ int shared_region_trace_level = SHARED_REGION_TRACE_ERROR_LVL;
 /* should local (non-chroot) shared regions persist when no task uses them ? */
 int shared_region_persistence = 0;      /* no by default */
 
-/* delay before reclaiming an unused shared region */
-int shared_region_destroy_delay = 120; /* in seconds */
+
+/* delay in seconds before reclaiming an unused shared region */
+TUNABLE_WRITEABLE(int, shared_region_destroy_delay, "vm_shared_region_destroy_delay", 120);
 
 struct vm_shared_region *init_task_shared_region = NULL;
 
@@ -150,8 +155,8 @@ boolean_t shared_region_completed_slide = FALSE;
 #endif
 
 /* this lock protects all the shared region data structures */
-lck_grp_t *vm_shared_region_lck_grp;
-lck_mtx_t vm_shared_region_lock;
+static LCK_GRP_DECLARE(vm_shared_region_lck_grp, "vm shared region");
+static LCK_MTX_DECLARE(vm_shared_region_lock, &vm_shared_region_lck_grp);
 
 #define vm_shared_region_lock() lck_mtx_lock(&vm_shared_region_lock)
 #define vm_shared_region_unlock() lck_mtx_unlock(&vm_shared_region_lock)
@@ -162,26 +167,40 @@ lck_mtx_t vm_shared_region_lock;
 	              (interruptible))
 
 /* the list of currently available shared regions (one per environment) */
-queue_head_t    vm_shared_region_queue;
+queue_head_t    vm_shared_region_queue = QUEUE_HEAD_INITIALIZER(vm_shared_region_queue);
+int             vm_shared_region_count = 0;
+int             vm_shared_region_peak = 0;
+
+/*
+ * the number of times an event has forced the recalculation of the reslide
+ * shared region slide.
+ */
+#if __has_feature(ptrauth_calls)
+int                             vm_shared_region_reslide_count = 0;
+#endif /* __has_feature(ptrauth_calls) */
 
 static void vm_shared_region_reference_locked(vm_shared_region_t shared_region);
 static vm_shared_region_t vm_shared_region_create(
 	void                    *root_dir,
 	cpu_type_t              cputype,
 	cpu_subtype_t           cpu_subtype,
-	boolean_t               is_64bit);
+	boolean_t               is_64bit,
+	boolean_t               reslide);
 static void vm_shared_region_destroy(vm_shared_region_t shared_region);
 
+static kern_return_t vm_shared_region_slide_sanity_check(vm_shared_region_slide_info_entry_t entry, mach_vm_size_t size);
 static void vm_shared_region_timeout(thread_call_param_t param0,
     thread_call_param_t param1);
-kern_return_t vm_shared_region_slide_mapping(
+static kern_return_t vm_shared_region_slide_mapping(
 	vm_shared_region_t sr,
-	mach_vm_size_t slide_info_size,
-	mach_vm_offset_t start,
-	mach_vm_size_t size,
-	mach_vm_offset_t slid_mapping,
-	uint32_t slide,
-	memory_object_control_t); /* forward */
+	user_addr_t        slide_info_addr,
+	mach_vm_size_t     slide_info_size,
+	mach_vm_offset_t   start,
+	mach_vm_size_t     size,
+	mach_vm_offset_t   slid_mapping,
+	uint32_t           slide,
+	memory_object_control_t,
+	vm_prot_t          prot); /* forward */
 
 static int __commpage_setup = 0;
 #if !CONFIG_EMBEDDED
@@ -189,27 +208,7 @@ static int __system_power_source = 1;   /* init to extrnal power source */
 static void post_sys_powersource_internal(int i, int internal);
 #endif
 
-
-/*
- * Initialize the module...
- */
-void
-vm_shared_region_init(void)
-{
-	SHARED_REGION_TRACE_DEBUG(
-		("shared_region: -> init\n"));
-
-	vm_shared_region_lck_grp = lck_grp_alloc_init("vm shared region",
-	    LCK_GRP_ATTR_NULL);
-	lck_mtx_init(&vm_shared_region_lock,
-	    vm_shared_region_lck_grp,
-	    LCK_ATTR_NULL);
-
-	queue_init(&vm_shared_region_queue);
-
-	SHARED_REGION_TRACE_DEBUG(
-		("shared_region: <- init\n"));
-}
+extern u_int32_t random(void);
 
 /*
  * Retrieve a task's shared region and grab an extra reference to
@@ -338,40 +337,6 @@ vm_shared_region_vm_map(
 		(void *)VM_KERNEL_ADDRPERM(sr_map)));
 	return sr_map;
 }
-uint32_t
-vm_shared_region_get_slide(
-	vm_shared_region_t      shared_region)
-{
-	SHARED_REGION_TRACE_DEBUG(
-		("shared_region: -> vm_shared_region_get_slide(%p)\n",
-		(void *)VM_KERNEL_ADDRPERM(shared_region)));
-	assert(shared_region->sr_ref_count > 1);
-	SHARED_REGION_TRACE_DEBUG(
-		("shared_region: vm_shared_region_get_slide(%p) <- %u\n",
-		(void *)VM_KERNEL_ADDRPERM(shared_region),
-		shared_region->sr_slide_info.slide));
-
-	/* 0 if we haven't slid */
-	assert(shared_region->sr_slide_info.slide_object != NULL ||
-	    shared_region->sr_slide_info.slide == 0);
-
-	return shared_region->sr_slide_info.slide;
-}
-
-vm_shared_region_slide_info_t
-vm_shared_region_get_slide_info(
-	vm_shared_region_t      shared_region)
-{
-	SHARED_REGION_TRACE_DEBUG(
-		("shared_region: -> vm_shared_region_get_slide_info(%p)\n",
-		(void *)VM_KERNEL_ADDRPERM(shared_region)));
-	assert(shared_region->sr_ref_count > 1);
-	SHARED_REGION_TRACE_DEBUG(
-		("shared_region: vm_shared_region_get_slide_info(%p) <- %p\n",
-		(void *)VM_KERNEL_ADDRPERM(shared_region),
-		(void *)VM_KERNEL_ADDRPERM(&shared_region->sr_slide_info)));
-	return &shared_region->sr_slide_info;
-}
 
 /*
  * Set the shared region the process should use.
@@ -429,16 +394,16 @@ vm_shared_region_lookup(
 	void            *root_dir,
 	cpu_type_t      cputype,
 	cpu_subtype_t   cpu_subtype,
-	boolean_t       is_64bit)
+	boolean_t       is_64bit,
+	boolean_t       reslide)
 {
 	vm_shared_region_t      shared_region;
 	vm_shared_region_t      new_shared_region;
 
 	SHARED_REGION_TRACE_DEBUG(
-		("shared_region: -> lookup(root=%p,cpu=<%d,%d>,64bit=%d)\n",
-
+		("shared_region: -> lookup(root=%p,cpu=<%d,%d>,64bit=%d,reslide=%d)\n",
 		(void *)VM_KERNEL_ADDRPERM(root_dir),
-		cputype, cpu_subtype, is_64bit));
+		cputype, cpu_subtype, is_64bit, reslide));
 
 	shared_region = NULL;
 	new_shared_region = NULL;
@@ -451,9 +416,15 @@ vm_shared_region_lookup(
 		    sr_q) {
 			assert(shared_region->sr_ref_count > 0);
 			if (shared_region->sr_cpu_type == cputype &&
+#if !__has_feature(ptrauth_calls)                                 /* arm64e/arm64 use same region */
 			    shared_region->sr_cpu_subtype == cpu_subtype &&
+#endif /* !__has_feature(ptrauth_calls) */
 			    shared_region->sr_root_dir == root_dir &&
-			    shared_region->sr_64bit == is_64bit) {
+			    shared_region->sr_64bit == is_64bit &&
+#if __has_feature(ptrauth_calls)
+			    shared_region->sr_reslide == reslide &&
+#endif /* __has_feature(ptrauth_calls) */
+			    !shared_region->sr_stale) {
 				/* found a match ! */
 				vm_shared_region_reference_locked(shared_region);
 				goto done;
@@ -465,7 +436,8 @@ vm_shared_region_lookup(
 			new_shared_region = vm_shared_region_create(root_dir,
 			    cputype,
 			    cpu_subtype,
-			    is_64bit);
+			    is_64bit,
+			    reslide);
 			/* do the lookup again, in case we lost a race */
 			vm_shared_region_lock();
 			continue;
@@ -477,6 +449,10 @@ vm_shared_region_lookup(
 		    shared_region,
 		    vm_shared_region_t,
 		    sr_q);
+		vm_shared_region_count++;
+		if (vm_shared_region_count > vm_shared_region_peak) {
+			vm_shared_region_peak = vm_shared_region_count;
+		}
 		break;
 	}
 
@@ -486,7 +462,7 @@ done:
 	if (new_shared_region) {
 		/*
 		 * We lost a race with someone else to create a new shared
-		 * region for that environment.  Get rid of our unused one.
+		 * region for that environment. Get rid of our unused one.
 		 */
 		assert(new_shared_region->sr_ref_count == 1);
 		new_shared_region->sr_ref_count--;
@@ -495,9 +471,9 @@ done:
 	}
 
 	SHARED_REGION_TRACE_DEBUG(
-		("shared_region: lookup(root=%p,cpu=<%d,%d>,64bit=%d) <- %p\n",
+		("shared_region: lookup(root=%p,cpu=<%d,%d>,64bit=%d,reslide=%d) <- %p\n",
 		(void *)VM_KERNEL_ADDRPERM(root_dir),
-		cputype, cpu_subtype, is_64bit,
+		cputype, cpu_subtype, is_64bit, reslide,
 		(void *)VM_KERNEL_ADDRPERM(shared_region)));
 
 	assert(shared_region->sr_ref_count > 0);
@@ -519,6 +495,7 @@ vm_shared_region_reference_locked(
 		(void *)VM_KERNEL_ADDRPERM(shared_region)));
 	assert(shared_region->sr_ref_count > 0);
 	shared_region->sr_ref_count++;
+	assert(shared_region->sr_ref_count != 0);
 
 	if (shared_region->sr_timer_call != NULL) {
 		boolean_t cancelled;
@@ -537,6 +514,26 @@ vm_shared_region_reference_locked(
 
 	SHARED_REGION_TRACE_DEBUG(
 		("shared_region: reference_locked(%p) <- %d\n",
+		(void *)VM_KERNEL_ADDRPERM(shared_region),
+		shared_region->sr_ref_count));
+}
+
+/*
+ * Take a reference on a shared region.
+ */
+void
+vm_shared_region_reference(vm_shared_region_t shared_region)
+{
+	SHARED_REGION_TRACE_DEBUG(
+		("shared_region: -> reference(%p)\n",
+		(void *)VM_KERNEL_ADDRPERM(shared_region)));
+
+	vm_shared_region_lock();
+	vm_shared_region_reference_locked(shared_region);
+	vm_shared_region_unlock();
+
+	SHARED_REGION_TRACE_DEBUG(
+		("shared_region: reference(%p) <- %d\n",
 		(void *)VM_KERNEL_ADDRPERM(shared_region),
 		shared_region->sr_ref_count));
 }
@@ -591,9 +588,13 @@ vm_shared_region_deallocate(
 	if (shared_region->sr_ref_count == 0) {
 		uint64_t deadline;
 
-		assert(!shared_region->sr_slid);
-
-		if (shared_region->sr_timer_call == NULL) {
+		/*
+		 * Even though a shared region is unused, delay a while before
+		 * tearing it down, in case a new app launch can use it.
+		 */
+		if (shared_region->sr_timer_call == NULL &&
+		    shared_region_destroy_delay != 0 &&
+		    !shared_region->sr_stale) {
 			/* hold one reference for the timer */
 			assert(!shared_region->sr_mapping_in_progress);
 			shared_region->sr_ref_count++;
@@ -605,7 +606,7 @@ vm_shared_region_deallocate(
 
 			/* schedule the timer */
 			clock_interval_to_deadline(shared_region_destroy_delay,
-			    1000 * 1000 * 1000,
+			    NSEC_PER_SEC,
 			    &deadline);
 			thread_call_enter_delayed(shared_region->sr_timer_call,
 			    deadline);
@@ -619,11 +620,6 @@ vm_shared_region_deallocate(
 			/* timer expired: let go of this shared region */
 
 			/*
-			 * We can't properly handle teardown of a slid object today.
-			 */
-			assert(!shared_region->sr_slid);
-
-			/*
 			 * Remove it from the queue first, so no one can find
 			 * it...
 			 */
@@ -631,6 +627,7 @@ vm_shared_region_deallocate(
 			    shared_region,
 			    vm_shared_region_t,
 			    sr_q);
+			vm_shared_region_count--;
 			vm_shared_region_unlock();
 
 			/* ... and destroy it */
@@ -658,6 +655,7 @@ vm_shared_region_timeout(
 	vm_shared_region_deallocate(shared_region);
 }
 
+
 /*
  * Create a new (empty) shared region for a new environment.
  */
@@ -666,21 +664,24 @@ vm_shared_region_create(
 	void                    *root_dir,
 	cpu_type_t              cputype,
 	cpu_subtype_t           cpu_subtype,
-	boolean_t               is_64bit)
+	boolean_t               is_64bit,
+#if !__has_feature(ptrauth_calls)
+	__unused
+#endif /* __has_feature(ptrauth_calls) */
+	boolean_t               reslide)
 {
 	kern_return_t           kr;
 	vm_named_entry_t        mem_entry;
 	ipc_port_t              mem_entry_port;
 	vm_shared_region_t      shared_region;
-	vm_shared_region_slide_info_t si;
 	vm_map_t                sub_map;
 	mach_vm_offset_t        base_address, pmap_nesting_start;
 	mach_vm_size_t          size, pmap_nesting_size;
 
 	SHARED_REGION_TRACE_INFO(
-		("shared_region: -> create(root=%p,cpu=<%d,%d>,64bit=%d)\n",
+		("shared_region: -> create(root=%p,cpu=<%d,%d>,64bit=%d,reslide=%d)\n",
 		(void *)VM_KERNEL_ADDRPERM(root_dir),
-		cputype, cpu_subtype, is_64bit));
+		cputype, cpu_subtype, is_64bit, reslide));
 
 	base_address = 0;
 	size = 0;
@@ -762,8 +763,7 @@ vm_shared_region_create(
 	}
 
 	/* create a memory entry structure and a Mach port handle */
-	kr = mach_memory_entry_allocate(&mem_entry,
-	    &mem_entry_port);
+	kr = mach_memory_entry_allocate(&mem_entry, &mem_entry_port);
 	if (kr != KERN_SUCCESS) {
 		kfree(shared_region, sizeof(*shared_region));
 		shared_region = NULL;
@@ -776,11 +776,14 @@ vm_shared_region_create(
 #if     defined(__arm__) || defined(__arm64__)
 	{
 		struct pmap *pmap_nested;
+		int pmap_flags = 0;
+		pmap_flags |= is_64bit ? PMAP_CREATE_64BIT : 0;
 
-		pmap_nested = pmap_create_options(NULL, 0, is_64bit ? PMAP_CREATE_64BIT : 0);
+
+		pmap_nested = pmap_create_options(NULL, 0, pmap_flags);
 		if (pmap_nested != PMAP_NULL) {
 			pmap_set_nested(pmap_nested);
-			sub_map = vm_map_create(pmap_nested, 0, size, TRUE);
+			sub_map = vm_map_create(pmap_nested, 0, (vm_map_offset_t)size, TRUE);
 #if defined(__arm64__)
 			if (is_64bit ||
 			    page_shift_user32 == SIXTEENK_PAGE_SHIFT) {
@@ -788,6 +791,7 @@ vm_shared_region_create(
 				vm_map_set_page_shift(sub_map,
 				    SIXTEENK_PAGE_SHIFT);
 			}
+
 #elif (__ARM_ARCH_7K__ >= 2)
 			/* enforce 16KB alignment for watch targets with new ABI */
 			vm_map_set_page_shift(sub_map, SIXTEENK_PAGE_SHIFT);
@@ -798,19 +802,20 @@ vm_shared_region_create(
 	}
 #else
 	/* create a VM sub map and its pmap */
-	sub_map = vm_map_create(pmap_create_options(NULL, 0, is_64bit),
-	    0, size,
-	    TRUE);
+	sub_map = vm_map_create(pmap_create_options(NULL, 0, is_64bit), 0, size, TRUE);
 #endif
 	if (sub_map == VM_MAP_NULL) {
 		ipc_port_release_send(mem_entry_port);
 		kfree(shared_region, sizeof(*shared_region));
 		shared_region = NULL;
-		SHARED_REGION_TRACE_ERROR(
-			("shared_region: create: "
-			"couldn't allocate map\n"));
+		SHARED_REGION_TRACE_ERROR(("shared_region: create: couldn't allocate map\n"));
 		goto done;
 	}
+
+	/* shared regions should always enforce code-signing */
+	vm_map_cs_enforcement_set(sub_map, true);
+	assert(vm_map_cs_enforcement(sub_map));
+	assert(pmap_get_vm_map_cs_enforced(vm_map_pmap(sub_map)));
 
 	assert(!sub_map->disable_vmentry_reuse);
 	sub_map->is_nested_map = TRUE;
@@ -831,45 +836,44 @@ vm_shared_region_create(
 	shared_region->sr_pmap_nesting_size = pmap_nesting_size;
 	shared_region->sr_cpu_type = cputype;
 	shared_region->sr_cpu_subtype = cpu_subtype;
-	shared_region->sr_64bit = is_64bit;
+	shared_region->sr_64bit = (uint8_t)is_64bit;
 	shared_region->sr_root_dir = root_dir;
 
 	queue_init(&shared_region->sr_q);
 	shared_region->sr_mapping_in_progress = FALSE;
 	shared_region->sr_slide_in_progress = FALSE;
 	shared_region->sr_persists = FALSE;
-	shared_region->sr_slid = FALSE;
+	shared_region->sr_stale = FALSE;
 	shared_region->sr_timer_call = NULL;
 	shared_region->sr_first_mapping = (mach_vm_offset_t) -1;
 
 	/* grab a reference for the caller */
 	shared_region->sr_ref_count = 1;
 
-	/* And set up slide info */
-	si = &shared_region->sr_slide_info;
-	si->start = 0;
-	si->end = 0;
-	si->slide = 0;
-#if defined(HAS_APPLE_PAC)
-	si->si_ptrauth = FALSE; /* no pointer authentication by default */
-#endif /* HAS_APPLE_PAC */
-	si->slide_object = NULL;
-	si->slide_info_size = 0;
-	si->slide_info_entry = NULL;
+	shared_region->sr_slide = 0; /* not slid yet */
 
 	/* Initialize UUID and other metadata */
 	memset(&shared_region->sr_uuid, '\0', sizeof(shared_region->sr_uuid));
 	shared_region->sr_uuid_copied = FALSE;
 	shared_region->sr_images_count = 0;
 	shared_region->sr_images = NULL;
+#if __has_feature(ptrauth_calls)
+	shared_region->sr_reslide = reslide;
+	shared_region->sr_num_auth_section = 0;
+	for (uint_t i = 0; i < NUM_SR_AUTH_SECTIONS; ++i) {
+		shared_region->sr_auth_section[i] = NULL;
+	}
+	shared_region->sr_num_auth_section = 0;
+#endif /* __has_feature(ptrauth_calls) */
+
 done:
 	if (shared_region) {
 		SHARED_REGION_TRACE_INFO(
-			("shared_region: create(root=%p,cpu=<%d,%d>,64bit=%d,"
+			("shared_region: create(root=%p,cpu=<%d,%d>,64bit=%d,reslide=%d"
 			"base=0x%llx,size=0x%llx) <- "
 			"%p mem=(%p,%p) map=%p pmap=%p\n",
 			(void *)VM_KERNEL_ADDRPERM(root_dir),
-			cputype, cpu_subtype, is_64bit,
+			cputype, cpu_subtype, is_64bit, reslide,
 			(long long)base_address,
 			(long long)size,
 			(void *)VM_KERNEL_ADDRPERM(shared_region),
@@ -910,7 +914,6 @@ vm_shared_region_destroy(
 
 	assert(shared_region->sr_ref_count == 0);
 	assert(!shared_region->sr_persists);
-	assert(!shared_region->sr_slid);
 
 	mem_entry = (vm_named_entry_t) ip_get_kobject(shared_region->sr_mem_entry);
 	assert(mem_entry->is_sub_map);
@@ -928,9 +931,8 @@ vm_shared_region_destroy(
 	 */
 	if (map->pmap) {
 		pmap_remove(map->pmap,
-		    shared_region->sr_base_address,
-		    (shared_region->sr_base_address +
-		    shared_region->sr_size));
+		    (vm_map_offset_t)shared_region->sr_base_address,
+		    (vm_map_offset_t)(shared_region->sr_base_address + shared_region->sr_size));
 	}
 
 	/*
@@ -948,19 +950,21 @@ vm_shared_region_destroy(
 		thread_call_free(shared_region->sr_timer_call);
 	}
 
-#if 0
+#if __has_feature(ptrauth_calls)
 	/*
-	 * If slid, free those resources.  We'll want this eventually,
-	 * but can't handle it properly today.
+	 * Free the cached copies of slide_info for the AUTH regions.
 	 */
-	si = &shared_region->sr_slide_info;
-	if (si->slide_info_entry) {
-		kmem_free(kernel_map,
-		    (vm_offset_t) si->slide_info_entry,
-		    (vm_size_t) si->slide_info_size);
-		vm_object_deallocate(si->slide_object);
+	for (uint_t i = 0; i < shared_region->sr_num_auth_section; ++i) {
+		vm_shared_region_slide_info_t si = shared_region->sr_auth_section[i];
+		if (si != NULL) {
+			vm_object_deallocate(si->si_slide_object);
+			kheap_free(KHEAP_DATA_BUFFERS, si->si_slide_info_entry, si->si_slide_info_size);
+			kfree(si, sizeof *si);
+			shared_region->sr_auth_section[i] = NULL;
+		}
 	}
-#endif
+	shared_region->sr_num_auth_section = 0;
+#endif /* __has_feature(ptrauth_calls) */
 
 	/* release the shared region structure... */
 	kfree(shared_region, sizeof(*shared_region));
@@ -1015,6 +1019,7 @@ vm_shared_region_start_address(
 		*start_address = sr_base_address + sr_first_mapping;
 	}
 
+
 	vm_shared_region_unlock();
 
 	SHARED_REGION_TRACE_DEBUG(
@@ -1025,23 +1030,221 @@ vm_shared_region_start_address(
 	return kr;
 }
 
+/*
+ * Look up a pre-existing mapping in shared region, for replacement.
+ * Takes an extra object reference if found.
+ */
+static kern_return_t
+find_mapping_to_slide(vm_map_t map, vm_map_address_t addr, vm_map_entry_t entry)
+{
+	vm_map_entry_t found;
+
+	/* find the shared region's map entry to slide */
+	vm_map_lock_read(map);
+	if (!vm_map_lookup_entry(map, addr, &found)) {
+		/* no mapping there */
+		vm_map_unlock(map);
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	*entry = *found;
+	/* extra ref to keep object alive while map is unlocked */
+	vm_object_reference(VME_OBJECT(found));
+	vm_map_unlock_read(map);
+	return KERN_SUCCESS;
+}
+
+#if __has_feature(ptrauth_calls)
+
+/*
+ * Determine if this task is actually using pointer signing.
+ */
+static boolean_t
+task_sign_pointers(task_t task)
+{
+	if (task->map &&
+	    task->map->pmap &&
+	    !task->map->pmap->disable_jop) {
+		return TRUE;
+	}
+	return FALSE;
+}
+
+/*
+ * If the shared region contains mappings that are authenticated, then
+ * remap them into the task private map.
+ *
+ * Failures are possible in this routine when jetsam kills a process
+ * just as dyld is trying to set it up. The vm_map and task shared region
+ * info get torn down w/o waiting for this thread to finish up.
+ */
+__attribute__((noinline))
+kern_return_t
+vm_shared_region_auth_remap(vm_shared_region_t sr)
+{
+	memory_object_t               sr_pager = MEMORY_OBJECT_NULL;
+	task_t                        task = current_task();
+	vm_shared_region_slide_info_t si;
+	uint_t                        i;
+	vm_object_t                   object;
+	vm_map_t                      sr_map;
+	struct vm_map_entry           tmp_entry_store = {0};
+	vm_map_entry_t                tmp_entry = NULL;
+	int                           vm_flags;
+	vm_map_kernel_flags_t         vmk_flags;
+	vm_map_offset_t               map_addr;
+	kern_return_t                 kr = KERN_SUCCESS;
+	boolean_t                     use_ptr_auth = task_sign_pointers(task);
+
+	/*
+	 * Don't do this more than once and avoid any race conditions in finishing it.
+	 */
+	vm_shared_region_lock();
+	while (sr->sr_mapping_in_progress) {
+		/* wait for our turn... */
+		vm_shared_region_sleep(&sr->sr_mapping_in_progress, THREAD_UNINT);
+	}
+	assert(!sr->sr_mapping_in_progress);
+	assert(sr->sr_ref_count > 1);
+
+	/* Just return if already done. */
+	if (task->shared_region_auth_remapped) {
+		vm_shared_region_unlock();
+		return KERN_SUCCESS;
+	}
+
+	/* let others know to wait while we're working in this shared region */
+	sr->sr_mapping_in_progress = TRUE;
+	vm_shared_region_unlock();
+
+	/*
+	 * Remap any sections with pointer authentications into the private map.
+	 */
+	for (i = 0; i < sr->sr_num_auth_section; ++i) {
+		si = sr->sr_auth_section[i];
+		assert(si != NULL);
+		assert(si->si_ptrauth);
+
+		/*
+		 * We have mapping that needs to be private.
+		 * Look for an existing slid mapping's pager with matching
+		 * object, offset, slide info and shared_region_id to reuse.
+		 */
+		object = si->si_slide_object;
+		sr_pager = shared_region_pager_match(object, si->si_start, si,
+		    use_ptr_auth ? task->jop_pid : 0);
+		if (sr_pager == MEMORY_OBJECT_NULL) {
+			kr = KERN_FAILURE;
+			goto done;
+		}
+
+		/*
+		 * verify matching jop_pid for this task and this pager
+		 */
+		if (use_ptr_auth) {
+			shared_region_pager_match_task_key(sr_pager, task);
+		}
+
+		sr_map = vm_shared_region_vm_map(sr);
+		tmp_entry = NULL;
+
+		kr = find_mapping_to_slide(sr_map, si->si_slid_address - sr->sr_base_address, &tmp_entry_store);
+		if (kr != KERN_SUCCESS) {
+			goto done;
+		}
+		tmp_entry = &tmp_entry_store;
+
+		/*
+		 * Check that the object exactly covers the region to slide.
+		 */
+		if (VME_OFFSET(tmp_entry) != si->si_start ||
+		    tmp_entry->vme_end - tmp_entry->vme_start != si->si_end - si->si_start) {
+			kr = KERN_FAILURE;
+			goto done;
+		}
+
+		/*
+		 * map the pager over the portion of the mapping that needs sliding
+		 */
+		vm_flags = VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE;
+		vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
+		vmk_flags.vmkf_overwrite_immutable = TRUE;
+		map_addr = si->si_slid_address;
+		kr = vm_map_enter_mem_object(task->map,
+		    &map_addr,
+		    si->si_end - si->si_start,
+		    (mach_vm_offset_t) 0,
+		    vm_flags,
+		    vmk_flags,
+		    VM_KERN_MEMORY_NONE,
+		    (ipc_port_t)(uintptr_t) sr_pager,
+		    0,
+		    TRUE,
+		    tmp_entry->protection,
+		    tmp_entry->max_protection,
+		    tmp_entry->inheritance);
+		memory_object_deallocate(sr_pager);
+		sr_pager = MEMORY_OBJECT_NULL;
+		if (kr != KERN_SUCCESS) {
+			goto done;
+		}
+		assertf(map_addr == si->si_slid_address,
+		    "map_addr=0x%llx si_slid_address=0x%llx tmp_entry=%p\n",
+		    (uint64_t)map_addr,
+		    (uint64_t)si->si_slid_address,
+		    tmp_entry);
+
+		/* Drop the ref count grabbed by find_mapping_to_slide */
+		vm_object_deallocate(VME_OBJECT(tmp_entry));
+		tmp_entry = NULL;
+	}
+
+done:
+	if (tmp_entry) {
+		/* Drop the ref count grabbed by find_mapping_to_slide */
+		vm_object_deallocate(VME_OBJECT(tmp_entry));
+		tmp_entry = NULL;
+	}
+
+	/*
+	 * Drop any extra reference to the pager in case we're quitting due to an error above.
+	 */
+	if (sr_pager != MEMORY_OBJECT_NULL) {
+		memory_object_deallocate(sr_pager);
+	}
+
+	/*
+	 * Mark the region as having it's auth sections remapped.
+	 */
+	vm_shared_region_lock();
+	task->shared_region_auth_remapped = TRUE;
+	sr->sr_mapping_in_progress = FALSE;
+	thread_wakeup((event_t)&sr->sr_mapping_in_progress);
+	vm_shared_region_unlock();
+	return kr;
+}
+#endif /* __has_feature(ptrauth_calls) */
+
 void
 vm_shared_region_undo_mappings(
-	vm_map_t sr_map,
-	mach_vm_offset_t sr_base_address,
-	struct shared_file_mapping_np *mappings,
-	unsigned int mappings_count)
+	vm_map_t                 sr_map,
+	mach_vm_offset_t         sr_base_address,
+	struct _sr_file_mappings *srf_mappings,
+	struct _sr_file_mappings *srf_mappings_current,
+	unsigned int             srf_current_mappings_count)
 {
-	unsigned int            j = 0;
-	vm_shared_region_t      shared_region = NULL;
-	boolean_t               reset_shared_region_state = FALSE;
+	unsigned int             j = 0;
+	vm_shared_region_t       shared_region = NULL;
+	boolean_t                reset_shared_region_state = FALSE;
+	struct _sr_file_mappings *srfmp;
+	unsigned int             mappings_count;
+	struct shared_file_mapping_slide_np *mappings;
 
 	shared_region = vm_shared_region_get(current_task());
 	if (shared_region == NULL) {
 		printf("Failed to undo mappings because of NULL shared region.\n");
 		return;
 	}
-
 
 	if (sr_map == NULL) {
 		ipc_port_t              sr_handle;
@@ -1073,35 +1276,45 @@ vm_shared_region_undo_mappings(
 	/*
 	 * Undo the mappings we've established so far.
 	 */
-	for (j = 0; j < mappings_count; j++) {
-		kern_return_t kr2;
-
-		if (mappings[j].sfm_size == 0) {
-			/*
-			 * We didn't establish this
-			 * mapping, so nothing to undo.
-			 */
-			continue;
+	for (srfmp = &srf_mappings[0];
+	    srfmp <= srf_mappings_current;
+	    srfmp++) {
+		mappings = srfmp->mappings;
+		mappings_count = srfmp->mappings_count;
+		if (srfmp == srf_mappings_current) {
+			mappings_count = srf_current_mappings_count;
 		}
-		SHARED_REGION_TRACE_INFO(
-			("shared_region: mapping[%d]: "
-			"address:0x%016llx "
-			"size:0x%016llx "
-			"offset:0x%016llx "
-			"maxprot:0x%x prot:0x%x: "
-			"undoing...\n",
-			j,
-			(long long)mappings[j].sfm_address,
-			(long long)mappings[j].sfm_size,
-			(long long)mappings[j].sfm_file_offset,
-			mappings[j].sfm_max_prot,
-			mappings[j].sfm_init_prot));
-		kr2 = mach_vm_deallocate(
-			sr_map,
-			(mappings[j].sfm_address -
-			sr_base_address),
-			mappings[j].sfm_size);
-		assert(kr2 == KERN_SUCCESS);
+
+		for (j = 0; j < mappings_count; j++) {
+			kern_return_t kr2;
+
+			if (mappings[j].sms_size == 0) {
+				/*
+				 * We didn't establish this
+				 * mapping, so nothing to undo.
+				 */
+				continue;
+			}
+			SHARED_REGION_TRACE_INFO(
+				("shared_region: mapping[%d]: "
+				"address:0x%016llx "
+				"size:0x%016llx "
+				"offset:0x%016llx "
+				"maxprot:0x%x prot:0x%x: "
+				"undoing...\n",
+				j,
+				(long long)mappings[j].sms_address,
+				(long long)mappings[j].sms_size,
+				(long long)mappings[j].sms_file_offset,
+				mappings[j].sms_max_prot,
+				mappings[j].sms_init_prot));
+			kr2 = mach_vm_deallocate(
+				sr_map,
+				(mappings[j].sms_address -
+				sr_base_address),
+				mappings[j].sms_size);
+			assert(kr2 == KERN_SUCCESS);
+		}
 	}
 
 	if (reset_shared_region_state) {
@@ -1119,60 +1332,52 @@ vm_shared_region_undo_mappings(
 }
 
 /*
- * Establish some mappings of a file in the shared region.
- * This is used by "dyld" via the shared_region_map_np() system call
- * to populate the shared region with the appropriate shared cache.
- *
- * One could also call it several times to incrementally load several
- * libraries, as long as they do not overlap.
- * It will return KERN_SUCCESS if the mappings were successfully established
- * or if they were already established identically by another process.
+ * For now we only expect to see at most 2 regions to relocate/authenticate
+ * per file. One that's VM_PROT_SLIDE and one VM_PROT_SLIDE | VM_PROT_NOAUTH.
  */
-kern_return_t
-vm_shared_region_map_file(
+#define VMSR_NUM_SLIDES 2
+
+/*
+ * First part of vm_shared_region_map_file(). Split out to
+ * avoid kernel stack overflow.
+ */
+__attribute__((noinline))
+static kern_return_t
+vm_shared_region_map_file_setup(
 	vm_shared_region_t              shared_region,
-	unsigned int                    mappings_count,
-	struct shared_file_mapping_np   *mappings,
-	memory_object_control_t         file_control,
-	memory_object_size_t            file_size,
 	void                            *root_dir,
-	uint32_t                        slide,
-	user_addr_t                     slide_start,
-	user_addr_t                     slide_size)
+	int                             sr_file_mappings_count,
+	struct _sr_file_mappings        *sr_file_mappings,
+	unsigned int                    *mappings_to_slide_cnt,
+	struct shared_file_mapping_slide_np **mappings_to_slide,
+	mach_vm_offset_t                *slid_mappings,
+	memory_object_control_t         *slid_file_controls,
+	mach_vm_offset_t                *first_mapping,
+	mach_vm_offset_t                *file_first_mappings,
+	mach_vm_offset_t                *sfm_min_address,
+	mach_vm_offset_t                *sfm_max_address,
+	vm_map_t                        *sr_map_ptr,
+	vm_map_offset_t                 *lowest_unnestable_addr_ptr)
 {
-	kern_return_t           kr;
+	kern_return_t           kr = KERN_SUCCESS;
+	memory_object_control_t file_control;
 	vm_object_t             file_object;
 	ipc_port_t              sr_handle;
 	vm_named_entry_t        sr_mem_entry;
 	vm_map_t                sr_map;
 	mach_vm_offset_t        sr_base_address;
-	unsigned int            i;
+	unsigned int            i = 0;
 	mach_port_t             map_port;
 	vm_map_offset_t         target_address;
 	vm_object_t             object;
 	vm_object_size_t        obj_size;
-	struct shared_file_mapping_np   *mapping_to_slide = NULL;
-	mach_vm_offset_t        first_mapping = (mach_vm_offset_t) -1;
-	mach_vm_offset_t        slid_mapping = (mach_vm_offset_t) -1;
 	vm_map_offset_t         lowest_unnestable_addr = 0;
 	vm_map_kernel_flags_t   vmk_flags;
-	mach_vm_offset_t        sfm_min_address = ~0;
-	mach_vm_offset_t        sfm_max_address = 0;
 	mach_vm_offset_t        sfm_end;
-	struct _dyld_cache_header sr_cache_header;
-
-#if __arm64__
-	if ((shared_region->sr_64bit ||
-	    page_shift_user32 == SIXTEENK_PAGE_SHIFT) &&
-	    ((slide & SIXTEENK_PAGE_MASK) != 0)) {
-		printf("FOURK_COMPAT: %s: rejecting mis-aligned slide 0x%x\n",
-		    __FUNCTION__, slide);
-		kr = KERN_INVALID_ARGUMENT;
-		goto done;
-	}
-#endif /* __arm64__ */
-
-	kr = KERN_SUCCESS;
+	uint32_t                mappings_count;
+	struct shared_file_mapping_slide_np *mappings;
+	struct _sr_file_mappings *srfmp;
+	unsigned int            current_file_index = 0;
 
 	vm_shared_region_lock();
 	assert(shared_region->sr_ref_count > 1);
@@ -1185,8 +1390,11 @@ vm_shared_region_map_file(
 		 * doesn't quite belong into it.
 		 */
 		vm_shared_region_unlock();
-		kr = KERN_PROTECTION_FAILURE;
-		goto done;
+
+		SHARED_REGION_TRACE_DEBUG(
+			("shared_region: map(%p) <- 0x%x \n",
+			(void *)VM_KERNEL_ADDRPERM(shared_region), kr));
+		return KERN_PROTECTION_FAILURE;
 	}
 
 	/*
@@ -1213,205 +1421,255 @@ vm_shared_region_map_file(
 	sr_base_address = shared_region->sr_base_address;
 
 	SHARED_REGION_TRACE_DEBUG(
-		("shared_region: -> map(%p,%d,%p,%p,0x%llx)\n",
-		(void *)VM_KERNEL_ADDRPERM(shared_region), mappings_count,
-		(void *)VM_KERNEL_ADDRPERM(mappings),
-		(void *)VM_KERNEL_ADDRPERM(file_control), file_size));
+		("shared_region: -> map(%p)\n",
+		(void *)VM_KERNEL_ADDRPERM(shared_region)));
 
-	/* get the VM object associated with the file to be mapped */
-	file_object = memory_object_control_to_vm_object(file_control);
+	mappings_count = 0;
+	mappings = NULL;
+	srfmp = NULL;
 
-	assert(file_object);
+	/* process all the files to be mapped */
+	for (srfmp = &sr_file_mappings[0];
+	    srfmp < &sr_file_mappings[sr_file_mappings_count];
+	    srfmp++) {
+		mappings_count = srfmp->mappings_count;
+		mappings = srfmp->mappings;
+		file_control = srfmp->file_control;
 
-	/* establish the mappings */
-	for (i = 0; i < mappings_count; i++) {
-		SHARED_REGION_TRACE_INFO(
-			("shared_region: mapping[%d]: "
-			"address:0x%016llx size:0x%016llx offset:0x%016llx "
-			"maxprot:0x%x prot:0x%x\n",
-			i,
-			(long long)mappings[i].sfm_address,
-			(long long)mappings[i].sfm_size,
-			(long long)mappings[i].sfm_file_offset,
-			mappings[i].sfm_max_prot,
-			mappings[i].sfm_init_prot));
-
-		if (mappings[i].sfm_address < sfm_min_address) {
-			sfm_min_address = mappings[i].sfm_address;
+		if (mappings_count == 0) {
+			/* no mappings here... */
+			continue;
 		}
 
-		if (os_add_overflow(mappings[i].sfm_address,
-		    mappings[i].sfm_size,
-		    &sfm_end) ||
-		    (vm_map_round_page(sfm_end, VM_MAP_PAGE_MASK(sr_map)) <
-		    mappings[i].sfm_address)) {
-			/* overflow */
+		/*
+		 * The code below can only correctly "slide" (perform relocations) for one
+		 * value of the slide amount. So if a file has a non-zero slide, it has to
+		 * match any previous value. A zero slide value is ok for things that are
+		 * just directly mapped.
+		 */
+		if (shared_region->sr_slide == 0 && srfmp->slide != 0) {
+			shared_region->sr_slide = srfmp->slide;
+		} else if (shared_region->sr_slide != 0 &&
+		    srfmp->slide != 0 &&
+		    shared_region->sr_slide != srfmp->slide) {
+			SHARED_REGION_TRACE_ERROR(
+				("shared_region: more than 1 non-zero slide value amount "
+				"slide 1:0x%x slide 2:0x%x\n ",
+				shared_region->sr_slide, srfmp->slide));
 			kr = KERN_INVALID_ARGUMENT;
 			break;
 		}
-		if (sfm_end > sfm_max_address) {
-			sfm_max_address = sfm_end;
-		}
 
-		if (mappings[i].sfm_init_prot & VM_PROT_ZF) {
-			/* zero-filled memory */
-			map_port = MACH_PORT_NULL;
-		} else {
-			/* file-backed memory */
-			__IGNORE_WCASTALIGN(map_port = (ipc_port_t) file_object->pager);
+#if __arm64__
+		if ((shared_region->sr_64bit ||
+		    page_shift_user32 == SIXTEENK_PAGE_SHIFT) &&
+		    ((srfmp->slide & SIXTEENK_PAGE_MASK) != 0)) {
+			printf("FOURK_COMPAT: %s: rejecting mis-aligned slide 0x%x\n",
+			    __FUNCTION__, srfmp->slide);
+			kr = KERN_INVALID_ARGUMENT;
+			break;
 		}
+#endif /* __arm64__ */
 
-		if (mappings[i].sfm_init_prot & VM_PROT_SLIDE) {
-			/*
-			 * This is the mapping that needs to be slid.
-			 */
-			if (mapping_to_slide != NULL) {
-				SHARED_REGION_TRACE_INFO(
-					("shared_region: mapping[%d]: "
-					"address:0x%016llx size:0x%016llx "
-					"offset:0x%016llx "
-					"maxprot:0x%x prot:0x%x "
-					"will not be slid as only one such mapping is allowed...\n",
-					i,
-					(long long)mappings[i].sfm_address,
-					(long long)mappings[i].sfm_size,
-					(long long)mappings[i].sfm_file_offset,
-					mappings[i].sfm_max_prot,
-					mappings[i].sfm_init_prot));
-			} else {
-				mapping_to_slide = &mappings[i];
+		/* get the VM object associated with the file to be mapped */
+		file_object = memory_object_control_to_vm_object(file_control);
+		assert(file_object);
+
+		/* establish the mappings for that file */
+		for (i = 0; i < mappings_count; i++) {
+			SHARED_REGION_TRACE_INFO(
+				("shared_region: mapping[%d]: "
+				"address:0x%016llx size:0x%016llx offset:0x%016llx "
+				"maxprot:0x%x prot:0x%x\n",
+				i,
+				(long long)mappings[i].sms_address,
+				(long long)mappings[i].sms_size,
+				(long long)mappings[i].sms_file_offset,
+				mappings[i].sms_max_prot,
+				mappings[i].sms_init_prot));
+
+			if (mappings[i].sms_address < *sfm_min_address) {
+				*sfm_min_address = mappings[i].sms_address;
 			}
-		}
 
-		/* mapping's address is relative to the shared region base */
-		target_address =
-		    mappings[i].sfm_address - sr_base_address;
+			if (os_add_overflow(mappings[i].sms_address,
+			    mappings[i].sms_size,
+			    &sfm_end) ||
+			    (vm_map_round_page(sfm_end, VM_MAP_PAGE_MASK(sr_map)) <
+			    mappings[i].sms_address)) {
+				/* overflow */
+				kr = KERN_INVALID_ARGUMENT;
+				break;
+			}
+			if (sfm_end > *sfm_max_address) {
+				*sfm_max_address = sfm_end;
+			}
 
-		vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
-		vmk_flags.vmkf_already = TRUE;
-		/* no copy-on-read for mapped binaries */
-		vmk_flags.vmkf_no_copy_on_read = 1;
-
-		/* establish that mapping, OK if it's "already" there */
-		if (map_port == MACH_PORT_NULL) {
-			/*
-			 * We want to map some anonymous memory in a
-			 * shared region.
-			 * We have to create the VM object now, so that it
-			 * can be mapped "copy-on-write".
-			 */
-			obj_size = vm_map_round_page(mappings[i].sfm_size,
-			    VM_MAP_PAGE_MASK(sr_map));
-			object = vm_object_allocate(obj_size);
-			if (object == VM_OBJECT_NULL) {
-				kr = KERN_RESOURCE_SHORTAGE;
+			if (mappings[i].sms_init_prot & VM_PROT_ZF) {
+				/* zero-filled memory */
+				map_port = MACH_PORT_NULL;
 			} else {
-				kr = vm_map_enter(
+				/* file-backed memory */
+				__IGNORE_WCASTALIGN(map_port = (ipc_port_t) file_object->pager);
+			}
+
+			/*
+			 * Remember which mappings need sliding.
+			 */
+			if (mappings[i].sms_max_prot & VM_PROT_SLIDE) {
+				if (*mappings_to_slide_cnt == VMSR_NUM_SLIDES) {
+					SHARED_REGION_TRACE_INFO(
+						("shared_region: mapping[%d]: "
+						"address:0x%016llx size:0x%016llx "
+						"offset:0x%016llx "
+						"maxprot:0x%x prot:0x%x "
+						"too many mappings to slide...\n",
+						i,
+						(long long)mappings[i].sms_address,
+						(long long)mappings[i].sms_size,
+						(long long)mappings[i].sms_file_offset,
+						mappings[i].sms_max_prot,
+						mappings[i].sms_init_prot));
+				} else {
+					mappings_to_slide[*mappings_to_slide_cnt] = &mappings[i];
+					*mappings_to_slide_cnt += 1;
+				}
+			}
+
+			/* mapping's address is relative to the shared region base */
+			target_address = (vm_map_offset_t)(mappings[i].sms_address - sr_base_address);
+
+			vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
+			vmk_flags.vmkf_already = TRUE;
+			/* no copy-on-read for mapped binaries */
+			vmk_flags.vmkf_no_copy_on_read = 1;
+
+
+			/* establish that mapping, OK if it's "already" there */
+			if (map_port == MACH_PORT_NULL) {
+				/*
+				 * We want to map some anonymous memory in a shared region.
+				 * We have to create the VM object now, so that it can be mapped "copy-on-write".
+				 */
+				obj_size = vm_map_round_page(mappings[i].sms_size, VM_MAP_PAGE_MASK(sr_map));
+				object = vm_object_allocate(obj_size);
+				if (object == VM_OBJECT_NULL) {
+					kr = KERN_RESOURCE_SHORTAGE;
+				} else {
+					kr = vm_map_enter(
+						sr_map,
+						&target_address,
+						vm_map_round_page(mappings[i].sms_size,
+						VM_MAP_PAGE_MASK(sr_map)),
+						0,
+						VM_FLAGS_FIXED,
+						vmk_flags,
+						VM_KERN_MEMORY_NONE,
+						object,
+						0,
+						TRUE,
+						mappings[i].sms_init_prot & VM_PROT_ALL,
+						mappings[i].sms_max_prot & VM_PROT_ALL,
+						VM_INHERIT_DEFAULT);
+				}
+			} else {
+				object = VM_OBJECT_NULL; /* no anonymous memory here */
+				kr = vm_map_enter_mem_object(
 					sr_map,
 					&target_address,
-					vm_map_round_page(mappings[i].sfm_size,
+					vm_map_round_page(mappings[i].sms_size,
 					VM_MAP_PAGE_MASK(sr_map)),
 					0,
 					VM_FLAGS_FIXED,
 					vmk_flags,
 					VM_KERN_MEMORY_NONE,
-					object,
-					0,
+					map_port,
+					mappings[i].sms_file_offset,
 					TRUE,
-					mappings[i].sfm_init_prot & VM_PROT_ALL,
-					mappings[i].sfm_max_prot & VM_PROT_ALL,
+					mappings[i].sms_init_prot & VM_PROT_ALL,
+					mappings[i].sms_max_prot & VM_PROT_ALL,
 					VM_INHERIT_DEFAULT);
 			}
-		} else {
-			object = VM_OBJECT_NULL; /* no anonymous memory here */
-			kr = vm_map_enter_mem_object(
-				sr_map,
-				&target_address,
-				vm_map_round_page(mappings[i].sfm_size,
-				VM_MAP_PAGE_MASK(sr_map)),
-				0,
-				VM_FLAGS_FIXED,
-				vmk_flags,
-				VM_KERN_MEMORY_NONE,
-				map_port,
-				mappings[i].sfm_file_offset,
-				TRUE,
-				mappings[i].sfm_init_prot & VM_PROT_ALL,
-				mappings[i].sfm_max_prot & VM_PROT_ALL,
-				VM_INHERIT_DEFAULT);
-		}
 
-		if (kr == KERN_SUCCESS) {
-			/*
-			 * Record the first (chronologically) successful
-			 * mapping in this shared region.
-			 * We're protected by "sr_mapping_in_progress" here,
-			 * so no need to lock "shared_region".
-			 */
-			if (first_mapping == (mach_vm_offset_t) -1) {
-				first_mapping = target_address;
-			}
+			if (kr == KERN_SUCCESS) {
+				/*
+				 * Record the first (chronologically) successful
+				 * mapping in this shared region.
+				 * We're protected by "sr_mapping_in_progress" here,
+				 * so no need to lock "shared_region".
+				 */
+				assert(current_file_index < VMSR_NUM_SLIDES);
+				if (file_first_mappings[current_file_index] == (mach_vm_offset_t) -1) {
+					file_first_mappings[current_file_index] = target_address;
+				}
 
-#if defined(HAS_APPLE_PAC)
-			/*
-			 * Set "sr_slid_mapping"
-			 * it is used to get the userland address for address authentication.
-			 */
-#endif
-			if ((slid_mapping == (mach_vm_offset_t) -1) &&
-			    (mapping_to_slide == &mappings[i])) {
-				slid_mapping = target_address;
-			}
+				if (*mappings_to_slide_cnt > 0 &&
+				    mappings_to_slide[*mappings_to_slide_cnt - 1] == &mappings[i]) {
+					slid_mappings[*mappings_to_slide_cnt - 1] = target_address;
+					slid_file_controls[*mappings_to_slide_cnt - 1] = file_control;
+				}
 
-			/*
-			 * Record the lowest writable address in this
-			 * sub map, to log any unexpected unnesting below
-			 * that address (see log_unnest_badness()).
-			 */
-			if ((mappings[i].sfm_init_prot & VM_PROT_WRITE) &&
-			    sr_map->is_nested_map &&
-			    (lowest_unnestable_addr == 0 ||
-			    (target_address < lowest_unnestable_addr))) {
-				lowest_unnestable_addr = target_address;
-			}
-		} else {
-			if (map_port == MACH_PORT_NULL) {
 				/*
-				 * Get rid of the VM object we just created
-				 * but failed to map.
+				 * Record the lowest writable address in this
+				 * sub map, to log any unexpected unnesting below
+				 * that address (see log_unnest_badness()).
 				 */
-				vm_object_deallocate(object);
-				object = VM_OBJECT_NULL;
-			}
-			if (kr == KERN_MEMORY_PRESENT) {
-				/*
-				 * This exact mapping was already there:
-				 * that's fine.
-				 */
-				SHARED_REGION_TRACE_INFO(
-					("shared_region: mapping[%d]: "
-					"address:0x%016llx size:0x%016llx "
-					"offset:0x%016llx "
-					"maxprot:0x%x prot:0x%x "
-					"already mapped...\n",
-					i,
-					(long long)mappings[i].sfm_address,
-					(long long)mappings[i].sfm_size,
-					(long long)mappings[i].sfm_file_offset,
-					mappings[i].sfm_max_prot,
-					mappings[i].sfm_init_prot));
-				/*
-				 * We didn't establish this mapping ourselves;
-				 * let's reset its size, so that we do not
-				 * attempt to undo it if an error occurs later.
-				 */
-				mappings[i].sfm_size = 0;
-				kr = KERN_SUCCESS;
+				if ((mappings[i].sms_init_prot & VM_PROT_WRITE) &&
+				    sr_map->is_nested_map &&
+				    (lowest_unnestable_addr == 0 ||
+				    (target_address < lowest_unnestable_addr))) {
+					lowest_unnestable_addr = target_address;
+				}
 			} else {
-				break;
+				if (map_port == MACH_PORT_NULL) {
+					/*
+					 * Get rid of the VM object we just created
+					 * but failed to map.
+					 */
+					vm_object_deallocate(object);
+					object = VM_OBJECT_NULL;
+				}
+				if (kr == KERN_MEMORY_PRESENT) {
+					/*
+					 * This exact mapping was already there:
+					 * that's fine.
+					 */
+					SHARED_REGION_TRACE_INFO(
+						("shared_region: mapping[%d]: "
+						"address:0x%016llx size:0x%016llx "
+						"offset:0x%016llx "
+						"maxprot:0x%x prot:0x%x "
+						"already mapped...\n",
+						i,
+						(long long)mappings[i].sms_address,
+						(long long)mappings[i].sms_size,
+						(long long)mappings[i].sms_file_offset,
+						mappings[i].sms_max_prot,
+						mappings[i].sms_init_prot));
+					/*
+					 * We didn't establish this mapping ourselves;
+					 * let's reset its size, so that we do not
+					 * attempt to undo it if an error occurs later.
+					 */
+					mappings[i].sms_size = 0;
+					kr = KERN_SUCCESS;
+				} else {
+					break;
+				}
 			}
 		}
+
+		if (kr != KERN_SUCCESS) {
+			break;
+		}
+
+		++current_file_index;
 	}
+
+	if (file_first_mappings[0] != (mach_vm_offset_t)-1) {
+		*first_mapping = file_first_mappings[0];
+	}
+
 
 	if (kr != KERN_SUCCESS) {
 		/* the last mapping we tried (mappings[i]) failed ! */
@@ -1422,52 +1680,116 @@ vm_shared_region_map_file(
 			"offset:0x%016llx "
 			"maxprot:0x%x prot:0x%x failed 0x%x\n",
 			i,
-			(long long)mappings[i].sfm_address,
-			(long long)mappings[i].sfm_size,
-			(long long)mappings[i].sfm_file_offset,
-			mappings[i].sfm_max_prot,
-			mappings[i].sfm_init_prot,
+			(long long)mappings[i].sms_address,
+			(long long)mappings[i].sms_size,
+			(long long)mappings[i].sms_file_offset,
+			mappings[i].sms_max_prot,
+			mappings[i].sms_init_prot,
 			kr));
+
+		/*
+		 * Respect the design of vm_shared_region_undo_mappings
+		 * as we are holding the sr_mapping_in_progress == true here.
+		 * So don't allow sr_map == NULL otherwise vm_shared_region_undo_mappings
+		 * will be blocked at waiting sr_mapping_in_progress to be false.
+		 */
+		assert(sr_map != NULL);
 		/* undo all the previous mappings */
-		vm_shared_region_undo_mappings(sr_map, sr_base_address, mappings, i);
+		vm_shared_region_undo_mappings(sr_map, sr_base_address, sr_file_mappings, srfmp, i);
+		return kr;
 	}
 
-	if (kr == KERN_SUCCESS &&
-	    slide_size != 0 &&
-	    mapping_to_slide != NULL) {
-		kr = vm_shared_region_slide(slide,
-		    mapping_to_slide->sfm_file_offset,
-		    mapping_to_slide->sfm_size,
-		    slide_start,
-		    slide_size,
-		    slid_mapping,
-		    file_control);
+	*lowest_unnestable_addr_ptr = lowest_unnestable_addr;
+	*sr_map_ptr = sr_map;
+	return KERN_SUCCESS;
+}
+
+/* forwared declaration */
+__attribute__((noinline))
+static void
+vm_shared_region_map_file_final(
+	vm_shared_region_t shared_region,
+	vm_map_t           sr_map,
+	mach_vm_offset_t   sfm_min_address,
+	mach_vm_offset_t   sfm_max_address,
+	mach_vm_offset_t   *file_first_mappings);
+
+/*
+ * Establish some mappings of a file in the shared region.
+ * This is used by "dyld" via the shared_region_map_np() system call
+ * to populate the shared region with the appropriate shared cache.
+ *
+ * One could also call it several times to incrementally load several
+ * libraries, as long as they do not overlap.
+ * It will return KERN_SUCCESS if the mappings were successfully established
+ * or if they were already established identically by another process.
+ */
+__attribute__((noinline))
+kern_return_t
+vm_shared_region_map_file(
+	vm_shared_region_t       shared_region,
+	void                     *root_dir,
+	int                      sr_file_mappings_count,
+	struct _sr_file_mappings *sr_file_mappings)
+{
+	kern_return_t           kr = KERN_SUCCESS;
+	unsigned int            i;
+	unsigned int            mappings_to_slide_cnt = 0;
+	struct shared_file_mapping_slide_np *mappings_to_slide[VMSR_NUM_SLIDES] = {};
+	mach_vm_offset_t        slid_mappings[VMSR_NUM_SLIDES];
+	memory_object_control_t slid_file_controls[VMSR_NUM_SLIDES];
+	mach_vm_offset_t        first_mapping = (mach_vm_offset_t)-1;
+	mach_vm_offset_t        sfm_min_address = (mach_vm_offset_t)-1;
+	mach_vm_offset_t        sfm_max_address = 0;
+	vm_map_t                sr_map = NULL;
+	vm_map_offset_t         lowest_unnestable_addr = 0;
+	mach_vm_offset_t        file_first_mappings[VMSR_NUM_SLIDES] = {(mach_vm_offset_t) -1, (mach_vm_offset_t) -1};
+
+	kr = vm_shared_region_map_file_setup(shared_region, root_dir, sr_file_mappings_count, sr_file_mappings,
+	    &mappings_to_slide_cnt, &mappings_to_slide[0], slid_mappings, slid_file_controls,
+	    &first_mapping, &file_first_mappings[0],
+	    &sfm_min_address, &sfm_max_address, &sr_map, &lowest_unnestable_addr);
+	if (kr != KERN_SUCCESS) {
+		vm_shared_region_lock();
+		goto done;
+	}
+
+	/*
+	 * The call above installed direct mappings to the shared cache file.
+	 * Now we go back and overwrite the mappings that need relocation
+	 * with a special shared region pager.
+	 */
+	for (i = 0; i < mappings_to_slide_cnt; ++i) {
+		kr = vm_shared_region_slide(shared_region->sr_slide,
+		    mappings_to_slide[i]->sms_file_offset,
+		    mappings_to_slide[i]->sms_size,
+		    mappings_to_slide[i]->sms_slide_start,
+		    mappings_to_slide[i]->sms_slide_size,
+		    slid_mappings[i],
+		    slid_file_controls[i],
+		    mappings_to_slide[i]->sms_max_prot);
 		if (kr != KERN_SUCCESS) {
 			SHARED_REGION_TRACE_ERROR(
 				("shared_region: region_slide("
 				"slide:0x%x start:0x%016llx "
 				"size:0x%016llx) failed 0x%x\n",
-				slide,
-				(long long)slide_start,
-				(long long)slide_size,
+				shared_region->sr_slide,
+				(long long)mappings_to_slide[i]->sms_slide_start,
+				(long long)mappings_to_slide[i]->sms_slide_size,
 				kr));
-			vm_shared_region_undo_mappings(sr_map,
-			    sr_base_address,
-			    mappings,
-			    mappings_count);
+			vm_shared_region_lock();
+			goto done;
 		}
 	}
 
-	if (kr == KERN_SUCCESS) {
-		/* adjust the map's "lowest_unnestable_start" */
-		lowest_unnestable_addr &= ~(pmap_nesting_size_min - 1);
-		if (lowest_unnestable_addr !=
-		    sr_map->lowest_unnestable_start) {
-			vm_map_lock(sr_map);
-			sr_map->lowest_unnestable_start =
-			    lowest_unnestable_addr;
-			vm_map_unlock(sr_map);
-		}
+	assert(kr == KERN_SUCCESS);
+
+	/* adjust the map's "lowest_unnestable_start" */
+	lowest_unnestable_addr &= ~(pmap_shared_region_size_min(sr_map->pmap) - 1);
+	if (lowest_unnestable_addr != sr_map->lowest_unnestable_start) {
+		vm_map_lock(sr_map);
+		sr_map->lowest_unnestable_start = lowest_unnestable_addr;
+		vm_map_unlock(sr_map);
 	}
 
 	vm_shared_region_lock();
@@ -1475,10 +1797,56 @@ vm_shared_region_map_file(
 	assert(shared_region->sr_mapping_in_progress);
 
 	/* set "sr_first_mapping"; dyld uses it to validate the shared cache */
-	if (kr == KERN_SUCCESS &&
-	    shared_region->sr_first_mapping == (mach_vm_offset_t) -1) {
+	if (shared_region->sr_first_mapping == (mach_vm_offset_t) -1) {
 		shared_region->sr_first_mapping = first_mapping;
 	}
+
+	vm_shared_region_map_file_final(shared_region, sr_map, sfm_min_address, sfm_max_address,
+	    &file_first_mappings[0]);
+
+done:
+	/*
+	 * We're done working on that shared region.
+	 * Wake up any waiting threads.
+	 */
+	shared_region->sr_mapping_in_progress = FALSE;
+	thread_wakeup((event_t) &shared_region->sr_mapping_in_progress);
+	vm_shared_region_unlock();
+
+#if __has_feature(ptrauth_calls)
+	if (kr == KERN_SUCCESS) {
+		/*
+		 * Since authenticated mappings were just added to the shared region,
+		 * go back and remap them into private mappings for this task.
+		 */
+		kr = vm_shared_region_auth_remap(shared_region);
+	}
+#endif /* __has_feature(ptrauth_calls) */
+
+	SHARED_REGION_TRACE_DEBUG(
+		("shared_region: map(%p) <- 0x%x \n",
+		(void *)VM_KERNEL_ADDRPERM(shared_region), kr));
+	return kr;
+}
+
+/*
+ * Final part of vm_shared_region_map_file().
+ * Kept in separate function to avoid blowing out the stack.
+ */
+__attribute__((noinline))
+static void
+vm_shared_region_map_file_final(
+	vm_shared_region_t        shared_region,
+	vm_map_t                  sr_map,
+	mach_vm_offset_t          sfm_min_address,
+	mach_vm_offset_t          sfm_max_address,
+	__unused mach_vm_offset_t *file_first_mappings)
+{
+	struct _dyld_cache_header sr_cache_header;
+	int                       error;
+	size_t                    image_array_length;
+	struct _dyld_cache_image_text_info *sr_image_layout;
+
 
 	/*
 	 * copy in the shared region UUID to the shared region structure.
@@ -1486,8 +1854,8 @@ vm_shared_region_map_file(
 	 * and then copying the UUID from there because we'll need to look
 	 * at other content from the shared cache header.
 	 */
-	if (kr == KERN_SUCCESS && !shared_region->sr_uuid_copied) {
-		int error = copyin((shared_region->sr_base_address + shared_region->sr_first_mapping),
+	if (!shared_region->sr_uuid_copied) {
+		error = copyin((user_addr_t)(shared_region->sr_base_address + shared_region->sr_first_mapping),
 		    (char *)&sr_cache_header,
 		    sizeof(sr_cache_header));
 		if (error == 0) {
@@ -1515,12 +1883,12 @@ vm_shared_region_map_file(
 		/* Copy in the shared cache layout if we're running with a locally built shared cache */
 		if (sr_cache_header.locallyBuiltCache) {
 			KDBG((MACHDBG_CODE(DBG_MACH_SHAREDREGION, PROCESS_SHARED_CACHE_LAYOUT)) | DBG_FUNC_START);
-			size_t image_array_length = (sr_cache_header.imagesTextCount * sizeof(struct _dyld_cache_image_text_info));
-			struct _dyld_cache_image_text_info *sr_image_layout = kalloc(image_array_length);
-			int error = copyin((shared_region->sr_base_address + shared_region->sr_first_mapping +
+			image_array_length = (size_t)(sr_cache_header.imagesTextCount * sizeof(struct _dyld_cache_image_text_info));
+			sr_image_layout = kheap_alloc(KHEAP_DATA_BUFFERS, image_array_length, Z_WAITOK);
+			error = copyin((user_addr_t)(shared_region->sr_base_address + shared_region->sr_first_mapping +
 			    sr_cache_header.imagesTextOffset), (char *)sr_image_layout, image_array_length);
 			if (error == 0) {
-				shared_region->sr_images = kalloc(sr_cache_header.imagesTextCount * sizeof(struct dyld_uuid_info_64));
+				shared_region->sr_images = kalloc((vm_size_t)(sr_cache_header.imagesTextCount * sizeof(struct dyld_uuid_info_64)));
 				for (size_t index = 0; index < sr_cache_header.imagesTextCount; index++) {
 					memcpy((char *)&shared_region->sr_images[index].imageUUID, (char *)&sr_image_layout[index].uuid,
 					    sizeof(shared_region->sr_images[index].imageUUID));
@@ -1541,33 +1909,20 @@ vm_shared_region_map_file(
 #endif /* DEVELOPMENT || DEBUG */
 			}
 			KDBG((MACHDBG_CODE(DBG_MACH_SHAREDREGION, PROCESS_SHARED_CACHE_LAYOUT)) | DBG_FUNC_END, shared_region->sr_images_count);
-			kfree(sr_image_layout, image_array_length);
+			kheap_free(KHEAP_DATA_BUFFERS, sr_image_layout, image_array_length);
 			sr_image_layout = NULL;
 		}
 		init_task_shared_region = shared_region;
 	}
 
-	if (kr == KERN_SUCCESS) {
-		/*
-		 * If we succeeded, we know the bounds of the shared region.
-		 * Trim our pmaps to only cover this range (if applicable to
-		 * this platform).
-		 */
-		pmap_trim(current_map()->pmap, sr_map->pmap, sfm_min_address, sfm_min_address, sfm_max_address - sfm_min_address);
+	/*
+	 * If we succeeded, we know the bounds of the shared region.
+	 * Trim our pmaps to only cover this range (if applicable to
+	 * this platform).
+	 */
+	if (VM_MAP_PAGE_SHIFT(current_map()) == VM_MAP_PAGE_SHIFT(sr_map)) {
+		pmap_trim(current_map()->pmap, sr_map->pmap, sfm_min_address, sfm_max_address - sfm_min_address);
 	}
-
-	/* we're done working on that shared region */
-	shared_region->sr_mapping_in_progress = FALSE;
-	thread_wakeup((event_t) &shared_region->sr_mapping_in_progress);
-	vm_shared_region_unlock();
-
-done:
-	SHARED_REGION_TRACE_DEBUG(
-		("shared_region: map(%p,%d,%p,%p,0x%llx) <- 0x%x \n",
-		(void *)VM_KERNEL_ADDRPERM(shared_region), mappings_count,
-		(void *)VM_KERNEL_ADDRPERM(mappings),
-		(void *)VM_KERNEL_ADDRPERM(file_control), file_size, kr));
-	return kr;
 }
 
 /*
@@ -1597,7 +1952,9 @@ vm_shared_region_trim_and_get(task_t task)
 	sr_map = sr_mem_entry->backing.map;
 
 	/* Trim the pmap if possible. */
-	pmap_trim(task->map->pmap, sr_map->pmap, 0, 0, 0);
+	if (VM_MAP_PAGE_SHIFT(task->map) == VM_MAP_PAGE_SHIFT(sr_map)) {
+		pmap_trim(task->map->pmap, sr_map->pmap, 0, 0);
+	}
 
 	return shared_region;
 }
@@ -1615,7 +1972,8 @@ vm_shared_region_enter(
 	boolean_t               is_64bit,
 	void                    *fsroot,
 	cpu_type_t              cpu,
-	cpu_subtype_t           cpu_subtype)
+	cpu_subtype_t           cpu_subtype,
+	boolean_t               reslide)
 {
 	kern_return_t           kr;
 	vm_shared_region_t      shared_region;
@@ -1635,41 +1993,42 @@ vm_shared_region_enter(
 		cpu, cpu_subtype, is_64bit));
 
 	/* lookup (create if needed) the shared region for this environment */
-	shared_region = vm_shared_region_lookup(fsroot, cpu, cpu_subtype, is_64bit);
+	shared_region = vm_shared_region_lookup(fsroot, cpu, cpu_subtype, is_64bit, reslide);
 	if (shared_region == NULL) {
 		/* this should not happen ! */
 		SHARED_REGION_TRACE_ERROR(
 			("shared_region: -> "
-			"enter(map=%p,task=%p,root=%p,cpu=<%d,%d>,64bit=%d): "
+			"enter(map=%p,task=%p,root=%p,cpu=<%d,%d>,64bit=%d,reslide=%d): "
 			"lookup failed !\n",
 			(void *)VM_KERNEL_ADDRPERM(map),
 			(void *)VM_KERNEL_ADDRPERM(task),
 			(void *)VM_KERNEL_ADDRPERM(fsroot),
-			cpu, cpu_subtype, is_64bit));
+			cpu, cpu_subtype, is_64bit, reslide));
 		//panic("shared_region_enter: lookup failed\n");
 		return KERN_FAILURE;
 	}
 
 	kr = KERN_SUCCESS;
 	/* no need to lock since this data is never modified */
-	sr_address = shared_region->sr_base_address;
-	sr_size = shared_region->sr_size;
+	sr_address = (vm_map_offset_t)shared_region->sr_base_address;
+	sr_size = (vm_map_size_t)shared_region->sr_size;
 	sr_handle = shared_region->sr_mem_entry;
-	sr_pmap_nesting_start = shared_region->sr_pmap_nesting_start;
-	sr_pmap_nesting_size = shared_region->sr_pmap_nesting_size;
+	sr_pmap_nesting_start = (vm_map_offset_t)shared_region->sr_pmap_nesting_start;
+	sr_pmap_nesting_size = (vm_map_size_t)shared_region->sr_pmap_nesting_size;
 
 	cur_prot = VM_PROT_READ;
-#if __x86_64__
-	/*
-	 * XXX BINARY COMPATIBILITY
-	 * java6 apparently needs to modify some code in the
-	 * dyld shared cache and needs to be allowed to add
-	 * write access...
-	 */
-	max_prot = VM_PROT_ALL;
-#else /* __x86_64__ */
-	max_prot = VM_PROT_READ;
-#endif /* __x86_64__ */
+	if (VM_MAP_POLICY_WRITABLE_SHARED_REGION(map)) {
+		/*
+		 * XXX BINARY COMPATIBILITY
+		 * java6 apparently needs to modify some code in the
+		 * dyld shared cache and needs to be allowed to add
+		 * write access...
+		 */
+		max_prot = VM_PROT_ALL;
+	} else {
+		max_prot = VM_PROT_READ;
+	}
+
 	/*
 	 * Start mapping the shared region's VM sub map into the task's VM map.
 	 */
@@ -1732,8 +2091,8 @@ vm_shared_region_enter(
 
 		target_address = sr_address + sr_offset;
 		mapping_size = sr_pmap_nesting_size;
-		if (mapping_size > pmap_nesting_size_max) {
-			mapping_size = (vm_map_offset_t) pmap_nesting_size_max;
+		if (mapping_size > pmap_nesting_size_max(map->pmap)) {
+			mapping_size = (vm_map_offset_t) pmap_nesting_size_max(map->pmap);
 		}
 		vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
 		vmk_flags.vmkf_nested_pmap = TRUE;
@@ -1834,7 +2193,8 @@ done:
 		(void *)VM_KERNEL_ADDRPERM(map),
 		(void *)VM_KERNEL_ADDRPERM(task),
 		(void *)VM_KERNEL_ADDRPERM(fsroot),
-		cpu, cpu_subtype, is_64bit, kr));
+		cpu, cpu_subtype, is_64bit,
+		kr));
 	return kr;
 }
 
@@ -1852,11 +2212,8 @@ vm_shared_region_sliding_valid(uint32_t slide)
 		return kr;
 	}
 
-	if ((sr->sr_slid == TRUE) && slide) {
-		if (slide != vm_shared_region_get_slide_info(sr)->slide) {
-			printf("Only one shared region can be slid\n");
-			kr = KERN_FAILURE;
-		} else {
+	if (sr->sr_slide != 0 && slide != 0) {
+		if (slide == sr->sr_slide) {
 			/*
 			 * Request for sliding when we've
 			 * already done it with exactly the
@@ -1866,61 +2223,86 @@ vm_shared_region_sliding_valid(uint32_t slide)
 			 * so we return this value.
 			 */
 			kr = KERN_INVALID_ARGUMENT;
+		} else {
+			printf("Mismatched shared region slide\n");
+			kr = KERN_FAILURE;
 		}
 	}
 	vm_shared_region_deallocate(sr);
 	return kr;
 }
 
+/*
+ * Actually create (really overwrite) the mapping to part of the shared cache which
+ * undergoes relocation.  This routine reads in the relocation info from dyld and
+ * verifies it. It then creates a (or finds a matching) shared region pager which
+ * handles the actual modification of the page contents and installs the mapping
+ * using that pager.
+ */
 kern_return_t
 vm_shared_region_slide_mapping(
 	vm_shared_region_t      sr,
+	user_addr_t             slide_info_addr,
 	mach_vm_size_t          slide_info_size,
 	mach_vm_offset_t        start,
 	mach_vm_size_t          size,
 	mach_vm_offset_t        slid_mapping,
 	uint32_t                slide,
-	memory_object_control_t sr_file_control)
+	memory_object_control_t sr_file_control,
+	vm_prot_t               prot)
 {
 	kern_return_t           kr;
-	vm_object_t             object;
-	vm_shared_region_slide_info_t si;
-	vm_offset_t             slide_info_entry;
-	vm_map_entry_t          slid_entry, tmp_entry;
+	vm_object_t             object = VM_OBJECT_NULL;
+	vm_shared_region_slide_info_t si = NULL;
+	vm_map_entry_t          tmp_entry = VM_MAP_ENTRY_NULL;
 	struct vm_map_entry     tmp_entry_store;
-	memory_object_t         sr_pager;
+	memory_object_t         sr_pager = MEMORY_OBJECT_NULL;
 	vm_map_t                sr_map;
 	int                     vm_flags;
 	vm_map_kernel_flags_t   vmk_flags;
 	vm_map_offset_t         map_addr;
-
-	tmp_entry = VM_MAP_ENTRY_NULL;
-	sr_pager = MEMORY_OBJECT_NULL;
-	object = VM_OBJECT_NULL;
-	slide_info_entry = 0;
+	void                    *slide_info_entry = NULL;
+	int                     error;
 
 	assert(sr->sr_slide_in_progress);
-	assert(!sr->sr_slid);
-
-	si = vm_shared_region_get_slide_info(sr);
-	assert(si->slide_object == VM_OBJECT_NULL);
-	assert(si->slide_info_entry == NULL);
 
 	if (sr_file_control == MEMORY_OBJECT_CONTROL_NULL) {
 		return KERN_INVALID_ARGUMENT;
+	}
+
+	/*
+	 * Copy in and verify the relocation information.
+	 */
+	if (slide_info_size < MIN_SLIDE_INFO_SIZE) {
+		printf("Slide_info_size too small: %lx\n", (uintptr_t)slide_info_size);
+		return KERN_FAILURE;
 	}
 	if (slide_info_size > SANE_SLIDE_INFO_SIZE) {
 		printf("Slide_info_size too large: %lx\n", (uintptr_t)slide_info_size);
 		return KERN_FAILURE;
 	}
 
-	kr = kmem_alloc(kernel_map,
-	    (vm_offset_t *) &slide_info_entry,
-	    (vm_size_t) slide_info_size, VM_KERN_MEMORY_OSFMK);
-	if (kr != KERN_SUCCESS) {
-		return kr;
+	slide_info_entry = kheap_alloc(KHEAP_DATA_BUFFERS, (vm_size_t)slide_info_size, Z_WAITOK);
+	if (slide_info_entry == NULL) {
+		return KERN_RESOURCE_SHORTAGE;
+	}
+	error = copyin(slide_info_addr, slide_info_entry, (size_t)slide_info_size);
+	if (error) {
+		printf("copyin of slide_info failed\n");
+		kr = KERN_INVALID_ADDRESS;
+		goto done;
 	}
 
+	if ((kr = vm_shared_region_slide_sanity_check(slide_info_entry, slide_info_size)) != KERN_SUCCESS) {
+		printf("Sanity Check failed for slide_info\n");
+		goto done;
+	}
+
+	/*
+	 * Allocate and fill in a vm_shared_region_slide_info.
+	 * This will either be used by a new pager, or used to find
+	 * a pre-existing matching pager.
+	 */
 	object = memory_object_control_to_vm_object(sr_file_control);
 	if (object == VM_OBJECT_NULL || object->internal) {
 		object = VM_OBJECT_NULL;
@@ -1928,57 +2310,76 @@ vm_shared_region_slide_mapping(
 		goto done;
 	}
 
+	si = kalloc(sizeof(*si));
+	if (si == NULL) {
+		kr = KERN_RESOURCE_SHORTAGE;
+		goto done;
+	}
 	vm_object_lock(object);
+
 	vm_object_reference_locked(object);     /* for si->slide_object */
 	object->object_is_shared_cache = TRUE;
 	vm_object_unlock(object);
 
-	si->slide_info_entry = (vm_shared_region_slide_info_entry_t)slide_info_entry;
-	si->slide_info_size = slide_info_size;
+	si->si_slide_info_entry = slide_info_entry;
+	si->si_slide_info_size = slide_info_size;
 
 	assert(slid_mapping != (mach_vm_offset_t) -1);
-	si->slid_address = slid_mapping + sr->sr_base_address;
-	si->slide_object = object;
-	si->start = start;
-	si->end = si->start + size;
-	si->slide = slide;
-#if defined(HAS_APPLE_PAC)
+	si->si_slid_address = slid_mapping + sr->sr_base_address;
+	si->si_slide_object = object;
+	si->si_start = start;
+	si->si_end = si->si_start + size;
+	si->si_slide = slide;
+#if __has_feature(ptrauth_calls)
+	/*
+	 * If there is authenticated pointer data in this slid mapping,
+	 * then just add the information needed to create new pagers for
+	 * different shared_region_id's later.
+	 */
 	if (sr->sr_cpu_type == CPU_TYPE_ARM64 &&
-	    sr->sr_cpu_subtype == CPU_SUBTYPE_ARM64E) {
-		/* arm64e has pointer authentication */
+	    sr->sr_cpu_subtype == CPU_SUBTYPE_ARM64E &&
+	    !(prot & VM_PROT_NOAUTH)) {
+		if (sr->sr_num_auth_section == NUM_SR_AUTH_SECTIONS) {
+			printf("Too many auth/private sections for shared region!!\n");
+			kr = KERN_INVALID_ARGUMENT;
+			goto done;
+		}
 		si->si_ptrauth = TRUE;
-	}
-#endif /* HAS_APPLE_PAC */
-
-	/* find the shared region's map entry to slide */
-	sr_map = vm_shared_region_vm_map(sr);
-	vm_map_lock_read(sr_map);
-	if (!vm_map_lookup_entry(sr_map,
-	    slid_mapping,
-	    &slid_entry)) {
-		/* no mapping there */
-		vm_map_unlock(sr_map);
-		kr = KERN_INVALID_ARGUMENT;
+		sr->sr_auth_section[sr->sr_num_auth_section++] = si;
+		/*
+		 * Remember the shared region, since that's where we'll
+		 * stash this info for all auth pagers to share. Each pager
+		 * will need to take a reference to it.
+		 */
+		si->si_shared_region = sr;
+		kr = KERN_SUCCESS;
 		goto done;
 	}
+	si->si_shared_region = NULL;
+	si->si_ptrauth = FALSE;
+#else /* __has_feature(ptrauth_calls) */
+	(void)prot;     /* silence unused warning */
+#endif /* __has_feature(ptrauth_calls) */
+
 	/*
-	 * We might want to clip the entry to cover only the portion that
-	 * needs sliding (offsets si->start to si->end in the shared cache
-	 * file at the bottom of the shadow chain).
-	 * In practice, it seems to cover the entire DATA segment...
+	 * find the pre-existing shared region's map entry to slide
 	 */
-	tmp_entry_store = *slid_entry;
+	sr_map = vm_shared_region_vm_map(sr);
+	kr = find_mapping_to_slide(sr_map, (vm_map_address_t)slid_mapping, &tmp_entry_store);
+	if (kr != KERN_SUCCESS) {
+		goto done;
+	}
 	tmp_entry = &tmp_entry_store;
-	slid_entry = VM_MAP_ENTRY_NULL;
-	/* extra ref to keep object alive while map is unlocked */
-	vm_object_reference(VME_OBJECT(tmp_entry));
-	vm_map_unlock_read(sr_map);
+
+	/*
+	 * The object must exactly cover the region to slide.
+	 */
+	assert(VME_OFFSET(tmp_entry) == start);
+	assert(tmp_entry->vme_end - tmp_entry->vme_start == size);
 
 	/* create a "shared_region" sliding pager */
-	sr_pager = shared_region_pager_setup(VME_OBJECT(tmp_entry),
-	    VME_OFFSET(tmp_entry),
-	    si);
-	if (sr_pager == NULL) {
+	sr_pager = shared_region_pager_setup(VME_OBJECT(tmp_entry), VME_OFFSET(tmp_entry), si, 0);
+	if (sr_pager == MEMORY_OBJECT_NULL) {
 		kr = KERN_RESOURCE_SHORTAGE;
 		goto done;
 	}
@@ -1990,8 +2391,7 @@ vm_shared_region_slide_mapping(
 	map_addr = tmp_entry->vme_start;
 	kr = vm_map_enter_mem_object(sr_map,
 	    &map_addr,
-	    (tmp_entry->vme_end -
-	    tmp_entry->vme_start),
+	    (tmp_entry->vme_end - tmp_entry->vme_start),
 	    (mach_vm_offset_t) 0,
 	    vm_flags,
 	    vmk_flags,
@@ -2013,17 +2413,15 @@ vm_shared_region_slide_mapping(
 	kr = KERN_SUCCESS;
 
 done:
-	if (sr_pager) {
+	if (sr_pager != NULL) {
 		/*
-		 * Release the sr_pager reference obtained by
-		 * shared_region_pager_setup().
-		 * The mapping (if it succeeded) is now holding a reference on
-		 * the memory object.
+		 * Release the sr_pager reference obtained by shared_region_pager_setup().
+		 * The mapping, if it succeeded, is now holding a reference on the memory object.
 		 */
 		memory_object_deallocate(sr_pager);
 		sr_pager = MEMORY_OBJECT_NULL;
 	}
-	if (tmp_entry) {
+	if (tmp_entry != NULL) {
 		/* release extra ref on tmp_entry's VM object */
 		vm_object_deallocate(VME_OBJECT(tmp_entry));
 		tmp_entry = VM_MAP_ENTRY_NULL;
@@ -2031,46 +2429,31 @@ done:
 
 	if (kr != KERN_SUCCESS) {
 		/* cleanup */
-		if (slide_info_entry) {
-			kmem_free(kernel_map, slide_info_entry, slide_info_size);
-			slide_info_entry = 0;
+		if (si != NULL) {
+			if (si->si_slide_object) {
+				vm_object_deallocate(si->si_slide_object);
+				si->si_slide_object = VM_OBJECT_NULL;
+			}
+			kfree(si, sizeof(*si));
+			si = NULL;
 		}
-		if (si->slide_object) {
-			vm_object_deallocate(si->slide_object);
-			si->slide_object = VM_OBJECT_NULL;
+		if (slide_info_entry != NULL) {
+			kheap_free(KHEAP_DATA_BUFFERS, slide_info_entry, (vm_size_t)slide_info_size);
+			slide_info_entry = NULL;
 		}
 	}
 	return kr;
 }
 
-void*
-vm_shared_region_get_slide_info_entry(vm_shared_region_t sr)
-{
-	return (void*)sr->sr_slide_info.slide_info_entry;
-}
-
 static kern_return_t
-vm_shared_region_slide_sanity_check_v1(vm_shared_region_slide_info_entry_v1_t s_info)
+vm_shared_region_slide_sanity_check_v2(
+	vm_shared_region_slide_info_entry_v2_t s_info,
+	mach_vm_size_t slide_info_size)
 {
-	uint32_t pageIndex = 0;
-	uint16_t entryIndex = 0;
-	uint16_t *toc = NULL;
-
-	toc = (uint16_t*)((uintptr_t)s_info + s_info->toc_offset);
-	for (; pageIndex < s_info->toc_count; pageIndex++) {
-		entryIndex =  (uint16_t)(toc[pageIndex]);
-
-		if (entryIndex >= s_info->entry_count) {
-			printf("No sliding bitmap entry for pageIndex: %d at entryIndex: %d amongst %d entries\n", pageIndex, entryIndex, s_info->entry_count);
-			return KERN_FAILURE;
-		}
+	if (slide_info_size < sizeof(struct vm_shared_region_slide_info_entry_v2)) {
+		printf("%s bad slide_info_size: %lx\n", __func__, (uintptr_t)slide_info_size);
+		return KERN_FAILURE;
 	}
-	return KERN_SUCCESS;
-}
-
-static kern_return_t
-vm_shared_region_slide_sanity_check_v2(vm_shared_region_slide_info_entry_v2_t s_info, mach_vm_size_t slide_info_size)
-{
 	if (s_info->page_size != PAGE_SIZE_FOR_SR_SLIDE) {
 		return KERN_FAILURE;
 	}
@@ -2103,8 +2486,14 @@ vm_shared_region_slide_sanity_check_v2(vm_shared_region_slide_info_entry_v2_t s_
 }
 
 static kern_return_t
-vm_shared_region_slide_sanity_check_v3(vm_shared_region_slide_info_entry_v3_t s_info, mach_vm_size_t slide_info_size)
+vm_shared_region_slide_sanity_check_v3(
+	vm_shared_region_slide_info_entry_v3_t s_info,
+	mach_vm_size_t slide_info_size)
 {
+	if (slide_info_size < sizeof(struct vm_shared_region_slide_info_entry_v3)) {
+		printf("%s bad slide_info_size: %lx\n", __func__, (uintptr_t)slide_info_size);
+		return KERN_FAILURE;
+	}
 	if (s_info->page_size != PAGE_SIZE_FOR_SR_SLIDE) {
 		printf("vm_shared_region_slide_sanity_check_v3: s_info->page_size != PAGE_SIZE_FOR_SR_SL 0x%llx != 0x%llx\n", (uint64_t)s_info->page_size, (uint64_t)PAGE_SIZE_FOR_SR_SLIDE);
 		return KERN_FAILURE;
@@ -2128,8 +2517,14 @@ vm_shared_region_slide_sanity_check_v3(vm_shared_region_slide_info_entry_v3_t s_
 }
 
 static kern_return_t
-vm_shared_region_slide_sanity_check_v4(vm_shared_region_slide_info_entry_v4_t s_info, mach_vm_size_t slide_info_size)
+vm_shared_region_slide_sanity_check_v4(
+	vm_shared_region_slide_info_entry_v4_t s_info,
+	mach_vm_size_t slide_info_size)
 {
+	if (slide_info_size < sizeof(struct vm_shared_region_slide_info_entry_v4)) {
+		printf("%s bad slide_info_size: %lx\n", __func__, (uintptr_t)slide_info_size);
+		return KERN_FAILURE;
+	}
 	if (s_info->page_size != PAGE_SIZE_FOR_SR_SLIDE) {
 		return KERN_FAILURE;
 	}
@@ -2162,111 +2557,27 @@ vm_shared_region_slide_sanity_check_v4(vm_shared_region_slide_info_entry_v4_t s_
 }
 
 
-kern_return_t
-vm_shared_region_slide_sanity_check(vm_shared_region_t sr)
+static kern_return_t
+vm_shared_region_slide_sanity_check(
+	vm_shared_region_slide_info_entry_t s_info,
+	mach_vm_size_t s_info_size)
 {
-	vm_shared_region_slide_info_t si;
-	vm_shared_region_slide_info_entry_t s_info;
 	kern_return_t kr;
 
-	si = vm_shared_region_get_slide_info(sr);
-	s_info = si->slide_info_entry;
-
-	kr = mach_vm_protect(kernel_map,
-	    (mach_vm_offset_t)(vm_offset_t)s_info,
-	    (mach_vm_size_t) si->slide_info_size,
-	    TRUE, VM_PROT_READ);
-	if (kr != KERN_SUCCESS) {
-		panic("vm_shared_region_slide_sanity_check: vm_protect() error 0x%x\n", kr);
+	switch (s_info->version) {
+	case 2:
+		kr = vm_shared_region_slide_sanity_check_v2(&s_info->v2, s_info_size);
+		break;
+	case 3:
+		kr = vm_shared_region_slide_sanity_check_v3(&s_info->v3, s_info_size);
+		break;
+	case 4:
+		kr = vm_shared_region_slide_sanity_check_v4(&s_info->v4, s_info_size);
+		break;
+	default:
+		kr = KERN_FAILURE;
 	}
-
-	if (s_info->version == 1) {
-		kr = vm_shared_region_slide_sanity_check_v1(&s_info->v1);
-	} else if (s_info->version == 2) {
-		kr = vm_shared_region_slide_sanity_check_v2(&s_info->v2, si->slide_info_size);
-	} else if (s_info->version == 3) {
-		kr = vm_shared_region_slide_sanity_check_v3(&s_info->v3, si->slide_info_size);
-	} else if (s_info->version == 4) {
-		kr = vm_shared_region_slide_sanity_check_v4(&s_info->v4, si->slide_info_size);
-	} else {
-		goto fail;
-	}
-	if (kr != KERN_SUCCESS) {
-		goto fail;
-	}
-
-	return KERN_SUCCESS;
-fail:
-	if (si->slide_info_entry != NULL) {
-		kmem_free(kernel_map,
-		    (vm_offset_t) si->slide_info_entry,
-		    (vm_size_t) si->slide_info_size);
-
-		vm_object_deallocate(si->slide_object);
-		si->slide_object        = NULL;
-		si->start = 0;
-		si->end = 0;
-		si->slide = 0;
-		si->slide_info_entry = NULL;
-		si->slide_info_size = 0;
-	}
-	return KERN_FAILURE;
-}
-
-static kern_return_t
-vm_shared_region_slide_page_v1(vm_shared_region_slide_info_t si, vm_offset_t vaddr, uint32_t pageIndex)
-{
-	uint16_t *toc = NULL;
-	slide_info_entry_toc_t bitmap = NULL;
-	uint32_t i = 0, j = 0;
-	uint8_t b = 0;
-	uint32_t slide = si->slide;
-	int is_64 = task_has_64Bit_addr(current_task());
-
-	vm_shared_region_slide_info_entry_v1_t s_info = &si->slide_info_entry->v1;
-	toc = (uint16_t*)((uintptr_t)s_info + s_info->toc_offset);
-
-	if (pageIndex >= s_info->toc_count) {
-		printf("No slide entry for this page in toc. PageIndex: %d Toc Count: %d\n", pageIndex, s_info->toc_count);
-	} else {
-		uint16_t entryIndex =  (uint16_t)(toc[pageIndex]);
-		slide_info_entry_toc_t slide_info_entries = (slide_info_entry_toc_t)((uintptr_t)s_info + s_info->entry_offset);
-
-		if (entryIndex >= s_info->entry_count) {
-			printf("No sliding bitmap entry for entryIndex: %d amongst %d entries\n", entryIndex, s_info->entry_count);
-		} else {
-			bitmap = &slide_info_entries[entryIndex];
-
-			for (i = 0; i < NUM_SLIDING_BITMAPS_PER_PAGE; ++i) {
-				b = bitmap->entry[i];
-				if (b != 0) {
-					for (j = 0; j < 8; ++j) {
-						if (b & (1 << j)) {
-							uint32_t *ptr_to_slide;
-							uint32_t old_value;
-
-							ptr_to_slide = (uint32_t*)((uintptr_t)(vaddr) + (sizeof(uint32_t) * (i * 8 + j)));
-							old_value = *ptr_to_slide;
-							*ptr_to_slide += slide;
-							if (is_64 && *ptr_to_slide < old_value) {
-								/*
-								 * We just slid the low 32 bits of a 64-bit pointer
-								 * and it looks like there should have been a carry-over
-								 * to the upper 32 bits.
-								 * The sliding failed...
-								 */
-								printf("vm_shared_region_slide() carry over: i=%d j=%d b=0x%x slide=0x%x old=0x%x new=0x%x\n",
-								    i, j, b, slide, old_value, *ptr_to_slide);
-								return KERN_FAILURE;
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	return KERN_SUCCESS;
+	return kr;
 }
 
 static kern_return_t
@@ -2391,8 +2702,8 @@ rebase_chain(
 static kern_return_t
 vm_shared_region_slide_page_v2(vm_shared_region_slide_info_t si, vm_offset_t vaddr, uint32_t pageIndex)
 {
-	vm_shared_region_slide_info_entry_v2_t s_info = &si->slide_info_entry->v2;
-	const uint32_t slide_amount = si->slide;
+	vm_shared_region_slide_info_entry_v2_t s_info = &si->si_slide_info_entry->v2;
+	const uint32_t slide_amount = si->si_slide;
 
 	/* The high bits of the delta_mask field are nonzero precisely when the shared
 	 * cache is 64-bit. */
@@ -2429,7 +2740,7 @@ vm_shared_region_slide_page_v2(vm_shared_region_slide_info_t si, vm_offset_t vad
 				return KERN_FAILURE;
 			}
 			info = page_extras[chain_index];
-			page_start_offset = (info & DYLD_CACHE_SLIDE_PAGE_VALUE) << DYLD_CACHE_SLIDE_PAGE_OFFSET_SHIFT;
+			page_start_offset = (uint16_t)((info & DYLD_CACHE_SLIDE_PAGE_VALUE) << DYLD_CACHE_SLIDE_PAGE_OFFSET_SHIFT);
 
 			kr = rebase_chain(is_64, pageIndex, page_content, page_start_offset, slide_amount, s_info);
 			if (kr != KERN_SUCCESS) {
@@ -2439,7 +2750,7 @@ vm_shared_region_slide_page_v2(vm_shared_region_slide_info_t si, vm_offset_t vad
 			chain_index++;
 		} while (!(info & DYLD_CACHE_SLIDE_PAGE_ATTR_END));
 	} else {
-		const uint32_t page_start_offset = page_entry << DYLD_CACHE_SLIDE_PAGE_OFFSET_SHIFT;
+		const uint16_t page_start_offset = (uint16_t)(page_entry << DYLD_CACHE_SLIDE_PAGE_OFFSET_SHIFT);
 		kern_return_t kr;
 
 		kr = rebase_chain(is_64, pageIndex, page_content, page_start_offset, slide_amount, s_info);
@@ -2453,10 +2764,18 @@ vm_shared_region_slide_page_v2(vm_shared_region_slide_info_t si, vm_offset_t vad
 
 
 static kern_return_t
-vm_shared_region_slide_page_v3(vm_shared_region_slide_info_t si, vm_offset_t vaddr, __unused mach_vm_offset_t uservaddr, uint32_t pageIndex)
+vm_shared_region_slide_page_v3(
+	vm_shared_region_slide_info_t si,
+	vm_offset_t vaddr,
+	__unused mach_vm_offset_t uservaddr,
+	uint32_t pageIndex,
+#if !__has_feature(ptrauth_calls)
+	__unused
+#endif /* !__has_feature(ptrauth_calls) */
+	uint64_t jop_key)
 {
-	vm_shared_region_slide_info_entry_v3_t s_info = &si->slide_info_entry->v3;
-	const uint32_t slide_amount = si->slide;
+	vm_shared_region_slide_info_entry_v3_t s_info = &si->si_slide_info_entry->v3;
+	const uint32_t slide_amount = si->si_slide;
 
 	uint8_t *page_content = (uint8_t *)vaddr;
 	uint16_t page_entry;
@@ -2503,11 +2822,11 @@ vm_shared_region_slide_page_v3(vm_shared_region_slide_info_t si, vm_offset_t vad
 			return KERN_FAILURE;
 		}
 
-#if defined(HAS_APPLE_PAC)
+#if __has_feature(ptrauth_calls)
 		uint16_t diversity_data = (uint16_t)(value >> 32);
 		bool hasAddressDiversity = (value & (1ULL << 48)) != 0;
 		ptrauth_key key = (ptrauth_key)((value >> 49) & 0x3);
-#endif /* HAS_APPLE_PAC */
+#endif /* __has_feature(ptrauth_calls) */
 		bool isAuthenticated = (value & (1ULL << 63)) != 0;
 
 		if (isAuthenticated) {
@@ -2517,7 +2836,7 @@ vm_shared_region_slide_page_v3(vm_shared_region_slide_info_t si, vm_offset_t vad
 			const uint64_t value_add = s_info->value_add;
 			value += value_add;
 
-#if defined(HAS_APPLE_PAC)
+#if __has_feature(ptrauth_calls)
 			uint64_t discriminator = diversity_data;
 			if (hasAddressDiversity) {
 				// First calculate a new discriminator using the address of where we are trying to store the value
@@ -2525,15 +2844,14 @@ vm_shared_region_slide_page_v3(vm_shared_region_slide_info_t si, vm_offset_t vad
 				discriminator = __builtin_ptrauth_blend_discriminator((void*)(((uintptr_t)uservaddr) + pageOffset), discriminator);
 			}
 
-			if (si->si_ptrauth &&
-			    !(BootArgs->bootFlags & kBootFlagsDisableUserJOP)) {
+			if (jop_key != 0 && si->si_ptrauth && !arm_user_jop_disabled()) {
 				/*
 				 * these pointers are used in user mode. disable the kernel key diversification
 				 * so we can sign them for use in user mode.
 				 */
-				value = (uintptr_t)pmap_sign_user_ptr((void *)value, key, discriminator);
+				value = (uintptr_t)pmap_sign_user_ptr((void *)value, key, discriminator, jop_key);
 			}
-#endif /* HAS_APPLE_PAC */
+#endif /* __has_feature(ptrauth_calls) */
 		} else {
 			// The new value for a rebase is the low 51-bits of the threaded value plus the slide.
 			// Regular pointer which needs to fit in 51-bits of value.
@@ -2601,8 +2919,8 @@ rebase_chainv4(
 static kern_return_t
 vm_shared_region_slide_page_v4(vm_shared_region_slide_info_t si, vm_offset_t vaddr, uint32_t pageIndex)
 {
-	vm_shared_region_slide_info_entry_v4_t s_info = &si->slide_info_entry->v4;
-	const uint32_t slide_amount = si->slide;
+	vm_shared_region_slide_info_entry_v4_t s_info = &si->si_slide_info_entry->v4;
+	const uint32_t slide_amount = si->si_slide;
 
 	const uint16_t *page_starts = (uint16_t *)((uintptr_t)s_info + s_info->page_starts_offset);
 	const uint16_t *page_extras = (uint16_t *)((uintptr_t)s_info + s_info->page_extras_offset);
@@ -2635,7 +2953,7 @@ vm_shared_region_slide_page_v4(vm_shared_region_slide_info_t si, vm_offset_t vad
 				return KERN_FAILURE;
 			}
 			info = page_extras[chain_index];
-			page_start_offset = (info & DYLD_CACHE_SLIDE4_PAGE_INDEX) << DYLD_CACHE_SLIDE_PAGE_OFFSET_SHIFT;
+			page_start_offset = (uint16_t)((info & DYLD_CACHE_SLIDE4_PAGE_INDEX) << DYLD_CACHE_SLIDE_PAGE_OFFSET_SHIFT);
 
 			kr = rebase_chainv4(page_content, page_start_offset, slide_amount, s_info);
 			if (kr != KERN_SUCCESS) {
@@ -2645,7 +2963,7 @@ vm_shared_region_slide_page_v4(vm_shared_region_slide_info_t si, vm_offset_t vad
 			chain_index++;
 		} while (!(info & DYLD_CACHE_SLIDE4_PAGE_EXTRA_END));
 	} else {
-		const uint32_t page_start_offset = page_entry << DYLD_CACHE_SLIDE_PAGE_OFFSET_SHIFT;
+		const uint16_t page_start_offset = (uint16_t)(page_entry << DYLD_CACHE_SLIDE_PAGE_OFFSET_SHIFT);
 		kern_return_t kr;
 
 		kr = rebase_chainv4(page_content, page_start_offset, slide_amount, s_info);
@@ -2660,17 +2978,21 @@ vm_shared_region_slide_page_v4(vm_shared_region_slide_info_t si, vm_offset_t vad
 
 
 kern_return_t
-vm_shared_region_slide_page(vm_shared_region_slide_info_t si, vm_offset_t vaddr, mach_vm_offset_t uservaddr, uint32_t pageIndex)
+vm_shared_region_slide_page(
+	vm_shared_region_slide_info_t si,
+	vm_offset_t vaddr,
+	mach_vm_offset_t uservaddr,
+	uint32_t pageIndex,
+	uint64_t jop_key)
 {
-	if (si->slide_info_entry->version == 1) {
-		return vm_shared_region_slide_page_v1(si, vaddr, pageIndex);
-	} else if (si->slide_info_entry->version == 2) {
+	switch (si->si_slide_info_entry->version) {
+	case 2:
 		return vm_shared_region_slide_page_v2(si, vaddr, pageIndex);
-	} else if (si->slide_info_entry->version == 3) {
-		return vm_shared_region_slide_page_v3(si, vaddr, uservaddr, pageIndex);
-	} else if (si->slide_info_entry->version == 4) {
+	case 3:
+		return vm_shared_region_slide_page_v3(si, vaddr, uservaddr, pageIndex, jop_key);
+	case 4:
 		return vm_shared_region_slide_page_v4(si, vaddr, pageIndex);
-	} else {
+	default:
 		return KERN_FAILURE;
 	}
 }
@@ -2693,8 +3015,8 @@ vm_named_entry_t commpage_text64_entry = NULL;
 vm_map_t commpage_text32_map = VM_MAP_NULL;
 vm_map_t commpage_text64_map = VM_MAP_NULL;
 
-user32_addr_t commpage_text32_location = (user32_addr_t) _COMM_PAGE32_TEXT_START;
-user64_addr_t commpage_text64_location = (user64_addr_t) _COMM_PAGE64_TEXT_START;
+user32_addr_t commpage_text32_location = 0;
+user64_addr_t commpage_text64_location = 0;
 
 #if defined(__i386__) || defined(__x86_64__)
 /*
@@ -2739,7 +3061,6 @@ _vm_commpage_init(
 /*
  * Initialize the comm text pages at boot time
  */
-extern u_int32_t random(void);
 void
 vm_commpage_text_init(void)
 {
@@ -2759,12 +3080,10 @@ vm_commpage_text_init(void)
 	commpage_text64_entry = (vm_named_entry_t) ip_get_kobject(commpage_text64_handle);
 	commpage_text64_map = commpage_text64_entry->backing.map;
 	commpage_text64_location = (user64_addr_t) (_COMM_PAGE64_TEXT_START + offset);
+#endif
 
 	commpage_text_populate();
-#elif defined(__arm64__) || defined(__arm__)
-#else
-#error Unknown architecture.
-#endif /* __i386__ || __x86_64__ */
+
 	/* populate the routines in here */
 	SHARED_REGION_TRACE_DEBUG(
 		("commpage text: init() <-\n"));
@@ -2868,8 +3187,8 @@ vm_commpage_enter(
 	}
 
 	vm_tag_t tag = VM_KERN_MEMORY_NONE;
-	if ((commpage_address & (pmap_nesting_size_min - 1)) == 0 &&
-	    (commpage_size & (pmap_nesting_size_min - 1)) == 0) {
+	if ((commpage_address & (pmap_commpage_size_min(map->pmap) - 1)) == 0 &&
+	    (commpage_size & (pmap_commpage_size_min(map->pmap) - 1)) == 0) {
 		/* the commpage is properly aligned or sized for pmap-nesting */
 		tag = VM_MEMORY_SHARED_PMAP;
 		vmk_flags.vmkf_nested_pmap = TRUE;
@@ -2964,17 +3283,18 @@ vm_commpage_enter(
 }
 
 int
-vm_shared_region_slide(uint32_t slide,
-    mach_vm_offset_t        entry_start_address,
-    mach_vm_size_t          entry_size,
-    mach_vm_offset_t        slide_start,
-    mach_vm_size_t          slide_size,
-    mach_vm_offset_t        slid_mapping,
-    memory_object_control_t sr_file_control)
+vm_shared_region_slide(
+	uint32_t slide,
+	mach_vm_offset_t        entry_start_address,
+	mach_vm_size_t          entry_size,
+	mach_vm_offset_t        slide_start,
+	mach_vm_size_t          slide_size,
+	mach_vm_offset_t        slid_mapping,
+	memory_object_control_t sr_file_control,
+	vm_prot_t               prot)
 {
-	void *slide_info_entry = NULL;
-	int                     error;
 	vm_shared_region_t      sr;
+	kern_return_t           error;
 
 	SHARED_REGION_TRACE_DEBUG(
 		("vm_shared_region_slide: -> slide %#x, entry_start %#llx, entry_size %#llx, slide_start %#llx, slide_size %#llx\n",
@@ -2996,84 +3316,34 @@ vm_shared_region_slide(uint32_t slide,
 	while (sr->sr_slide_in_progress) {
 		vm_shared_region_sleep(&sr->sr_slide_in_progress, THREAD_UNINT);
 	}
-	if (sr->sr_slid
-#ifndef CONFIG_EMBEDDED
-	    || shared_region_completed_slide
-#endif
-	    ) {
-		vm_shared_region_unlock();
-
-		vm_shared_region_deallocate(sr);
-		printf("%s: shared region already slid?\n", __FUNCTION__);
-		SHARED_REGION_TRACE_DEBUG(
-			("vm_shared_region_slide: <- %d (already slid)\n",
-			KERN_FAILURE));
-		return KERN_FAILURE;
-	}
 
 	sr->sr_slide_in_progress = TRUE;
 	vm_shared_region_unlock();
 
 	error = vm_shared_region_slide_mapping(sr,
+	    (user_addr_t)slide_start,
 	    slide_size,
 	    entry_start_address,
 	    entry_size,
 	    slid_mapping,
 	    slide,
-	    sr_file_control);
+	    sr_file_control,
+	    prot);
 	if (error) {
 		printf("slide_info initialization failed with kr=%d\n", error);
-		goto done;
 	}
 
-	slide_info_entry = vm_shared_region_get_slide_info_entry(sr);
-	if (slide_info_entry == NULL) {
-		error = KERN_FAILURE;
-	} else {
-		error = copyin((user_addr_t)slide_start,
-		    slide_info_entry,
-		    (vm_size_t)slide_size);
-		if (error) {
-			error = KERN_INVALID_ADDRESS;
-		}
-	}
-	if (error) {
-		goto done;
-	}
-
-	if (vm_shared_region_slide_sanity_check(sr) != KERN_SUCCESS) {
-		error = KERN_INVALID_ARGUMENT;
-		printf("Sanity Check failed for slide_info\n");
-	} else {
-#if DEBUG
-		printf("Succesfully init slide_info with start_address: %p region_size: %ld slide_header_size: %ld\n",
-		    (void*)(uintptr_t)entry_start_address,
-		    (unsigned long)entry_size,
-		    (unsigned long)slide_size);
-#endif
-	}
-done:
 	vm_shared_region_lock();
 
 	assert(sr->sr_slide_in_progress);
-	assert(sr->sr_slid == FALSE);
 	sr->sr_slide_in_progress = FALSE;
 	thread_wakeup(&sr->sr_slide_in_progress);
 
-	if (error == KERN_SUCCESS) {
-		sr->sr_slid = TRUE;
-
-		/*
-		 * We don't know how to tear down a slid shared region today, because
-		 * we would have to invalidate all the pages that have been slid
-		 * atomically with respect to anyone mapping the shared region afresh.
-		 * Therefore, take a dangling reference to prevent teardown.
-		 */
-		sr->sr_ref_count++;
 #ifndef CONFIG_EMBEDDED
+	if (error == KERN_SUCCESS) {
 		shared_region_completed_slide = TRUE;
-#endif
 	}
+#endif
 	vm_shared_region_unlock();
 
 	vm_shared_region_deallocate(sr);
@@ -3083,6 +3353,111 @@ done:
 		error));
 
 	return error;
+}
+
+/*
+ * Used during Authenticated Root Volume macOS boot.
+ * Launchd re-execs itself and wants the new launchd to use
+ * the shared cache from the new root volume. This call
+ * makes all the existing shared caches stale to allow
+ * that to happen.
+ */
+void
+vm_shared_region_pivot(void)
+{
+	vm_shared_region_t      shared_region = NULL;
+
+	vm_shared_region_lock();
+
+	queue_iterate(&vm_shared_region_queue, shared_region, vm_shared_region_t, sr_q) {
+		assert(shared_region->sr_ref_count > 0);
+		shared_region->sr_stale = TRUE;
+		if (shared_region->sr_timer_call) {
+			/*
+			 * We have a shared region ready to be destroyed
+			 * and just waiting for a delayed timer to fire.
+			 * Marking it stale cements its ineligibility to
+			 * be used ever again. So let's shorten the timer
+			 * aggressively down to 10 milliseconds and get rid of it.
+			 * This is a single quantum and we don't need to go
+			 * shorter than this duration. We want it to be short
+			 * enough, however, because we could have an unmount
+			 * of the volume hosting this shared region just behind
+			 * us.
+			 */
+			uint64_t deadline;
+			assert(shared_region->sr_ref_count == 1);
+
+			/*
+			 * Free the old timer call. Returns with a reference held.
+			 * If the old timer has fired and is waiting for the vm_shared_region_lock
+			 * lock, we will just return with an additional ref_count i.e. 2.
+			 * The old timer will then fire and just drop the ref count down to 1
+			 * with no other modifications.
+			 */
+			vm_shared_region_reference_locked(shared_region);
+
+			/* set up the timer. Keep the reference from above for this timer.*/
+			shared_region->sr_timer_call = thread_call_allocate(
+				(thread_call_func_t) vm_shared_region_timeout,
+				(thread_call_param_t) shared_region);
+
+			/* schedule the timer */
+			clock_interval_to_deadline(10, /* 10 milliseconds */
+			    NSEC_PER_MSEC,
+			    &deadline);
+			thread_call_enter_delayed(shared_region->sr_timer_call,
+			    deadline);
+
+			SHARED_REGION_TRACE_DEBUG(
+				("shared_region: pivot(%p): armed timer\n",
+				(void *)VM_KERNEL_ADDRPERM(shared_region)));
+		}
+	}
+
+	vm_shared_region_unlock();
+}
+
+/*
+ * Routine to mark any non-standard slide shared cache region as stale.
+ * This causes the next "reslide" spawn to create a new shared region.
+ */
+void
+vm_shared_region_reslide_stale(void)
+{
+#if __has_feature(ptrauth_calls)
+	vm_shared_region_t      shared_region = NULL;
+
+	vm_shared_region_lock();
+
+	queue_iterate(&vm_shared_region_queue, shared_region, vm_shared_region_t, sr_q) {
+		assert(shared_region->sr_ref_count > 0);
+		if (!shared_region->sr_stale && shared_region->sr_reslide) {
+			shared_region->sr_stale = TRUE;
+			vm_shared_region_reslide_count++;
+		}
+	}
+
+	vm_shared_region_unlock();
+#endif /* __has_feature(ptrauth_calls) */
+}
+
+/*
+ * report if the task is using a reslide shared cache region.
+ */
+bool
+vm_shared_region_is_reslide(__unused struct task *task)
+{
+	bool is_reslide = FALSE;
+#if !XNU_TARGET_OS_OSX && __has_feature(ptrauth_calls)
+	vm_shared_region_t sr = vm_shared_region_get(task);
+
+	if (sr != NULL) {
+		is_reslide = sr->sr_reslide;
+		vm_shared_region_deallocate(sr);
+	}
+#endif /* !XNU_TARGET_OS_OSX && __has_feature(ptrauth_calls) */
+	return is_reslide;
 }
 
 /*
@@ -3109,14 +3484,6 @@ post_sys_powersource_internal(int i, int internal)
 {
 	if (internal == 0) {
 		__system_power_source = i;
-	}
-
-	if (__commpage_setup != 0) {
-		if (__system_power_source != 0) {
-			commpage_set_spin_count(0);
-		} else {
-			commpage_set_spin_count(MP_SPIN_TRIES);
-		}
 	}
 }
 #endif

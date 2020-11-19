@@ -36,8 +36,8 @@
 
 class OSSymbol;
 
-typedef OSPtr<OSSymbol> OSSymbolPtr;
-typedef OSPtr<const OSSymbol> OSSymbolConstPtr;
+typedef OSSymbol* OSSymbolPtr;
+typedef OSSymbol const* OSSymbolConstPtr;
 
 /*!
  * @header
@@ -251,7 +251,7 @@ public:
  * new OSSymbol with a retain count of 1,
  * or increments the retain count of the existing instance.
  */
-	static OSSymbolConstPtr withString(const OSString * aString);
+	static OSPtr<const OSSymbol> withString(const OSString * aString);
 
 
 /*!
@@ -278,7 +278,7 @@ public:
  * new OSSymbol with a retain count of 1,
  * or increments the retain count of the existing instance.
  */
-	static OSSymbolConstPtr withCString(const char * cString);
+	static OSPtr<const OSSymbol> withCString(const char * cString);
 
 
 /*!
@@ -308,7 +308,7 @@ public:
  * new OSSymbol with a retain count of 1,
  * or increments the retain count of the existing instance.
  */
-	static OSSymbolConstPtr withCStringNoCopy(const char * cString);
+	static OSPtr<const OSSymbol> withCStringNoCopy(const char * cString);
 
 /*!
  * @function existingSymbolForString
@@ -327,7 +327,7 @@ public:
  * The returned OSSymbol object is returned with an incremented refcount
  * that needs to be released.
  */
-	static OSSymbolConstPtr existingSymbolForString(const OSString *aString);
+	static OSPtr<const OSSymbol> existingSymbolForString(const OSString *aString);
 
 /*!
  * @function existingSymbolForCString
@@ -346,7 +346,7 @@ public:
  * The returned OSSymbol object is returned with an incremented refcount
  * that needs to be released.
  */
-	static OSSymbolConstPtr existingSymbolForCString(const char *aCString);
+	static OSPtr<const OSSymbol> existingSymbolForCString(const char *aCString);
 
 /*!
  * @function isEqualTo

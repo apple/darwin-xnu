@@ -19,6 +19,7 @@ osfmk/arm64/WKdmCompress_4k.s	standard
 osfmk/arm64/WKdmData.s		standard
 osfmk/arm64/lz4_decode_arm64.s  standard
 osfmk/arm64/lz4_encode_arm64.s  standard
+osfmk/arm64/amcc_rorgn.c standard
 osfmk/arm64/bcopy.s standard
 osfmk/arm64/bzero.s standard
 osfmk/arm/caches.c		standard
@@ -49,6 +50,7 @@ osfmk/arm64/machine_routines_asm.s	standard
 osfmk/arm64/machine_task.c		standard
 osfmk/arm/pal_routines.c		standard
 osfmk/arm64/mcount.s		optional profile
+osfmk/arm64/memcmp_zero.s	standard
 osfmk/arm64/strnlen.s   standard
 osfmk/arm64/strncmp.s   standard
 osfmk/arm/strncpy.c     standard
@@ -61,9 +63,14 @@ osfmk/arm64/status.c		standard
 osfmk/arm/status_shared.c	standard
 
 osfmk/arm/commpage/commpage.c	standard
+osfmk/arm/commpage/commpage_asm.s	optional config_arm_pfz
 
 osfmk/kdp/ml/arm/kdp_machdep.c	optional	mach_kdp
 osfmk/kdp/ml/arm/kdp_vm.c	optional	mach_kdp
+
+osfmk/arm64/hibernate_arm64.c        optional hibernation
+osfmk/arm64/hibernate_restore.c      optional hibernation
+osfmk/arm64/hibernate_asm.s          optional hibernation
 
 # DUMMIES TO FORCE GENERATION OF .h FILES
 osfmk/OPTIONS/ln		optional ln
@@ -73,7 +80,6 @@ osfmk/OPTIONS/ec		optional ec
 osfmk/OPTIONS/hi_res_clock	optional hi_res_clock
 
 # Kernel performance monitoring
-osfmk/kperf/arm/kperf_mp.c      optional kperf
 osfmk/arm64/kpc.c		optional kpc
 
 osfmk/arm64/monotonic_arm64.c optional monotonic
@@ -87,3 +93,4 @@ osfmk/arm64/alternate_debugger_asm.s		optional alternate_debugger
 osfmk/arm64/pgtrace.c           standard
 osfmk/arm64/pgtrace_decoder.c   optional config_pgtrace_nonkext
 osfmk/arm64/machine_remote_time.c optional config_mach_bridge_recv_time
+osfmk/arm64/corecrypto/sha256_compress_arm64.s	standard

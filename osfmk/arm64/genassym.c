@@ -85,6 +85,10 @@
 #include <pexpert/arm64/boot.h>
 #include <arm64/proc_reg.h>
 #include <prng/random.h>
+#if HIBERNATION
+#include <IOKit/IOHibernatePrivate.h>
+#include <machine/pal_hibernate.h>
+#endif /* HIBERNATION */
 
 /*
  * genassym.c is used to produce an
@@ -114,8 +118,10 @@ main(int     argc,
 
 	DECLARE("TH_RECOVER", offsetof(struct thread, recover));
 	DECLARE("TH_KSTACKPTR", offsetof(struct thread, machine.kstackptr));
+	DECLARE("TH_THREAD_ID", offsetof(struct thread, thread_id));
 #if defined(HAS_APPLE_PAC)
 	DECLARE("TH_ROP_PID", offsetof(struct thread, machine.rop_pid));
+	DECLARE("TH_JOP_PID", offsetof(struct thread, machine.jop_pid));
 	DECLARE("TH_DISABLE_USER_JOP", offsetof(struct thread, machine.disable_user_jop));
 #endif /* defined(HAS_APPLE_PAC) */
 
@@ -127,10 +133,14 @@ main(int     argc,
 	DECLARE("ACT_DEBUGDATA", offsetof(struct thread, machine.DebugData));
 	DECLARE("TH_IOTIER_OVERRIDE", offsetof(struct thread, iotier_override));
 	DECLARE("TH_RWLOCK_CNT", offsetof(struct thread, rwlock_count));
+	DECLARE("TH_TMP_ALLOC_CNT", offsetof(struct thread, t_temp_alloc_count));
+	DECLARE("TH_TASK", offsetof(struct thread, task));
 
 #if defined(HAS_APPLE_PAC)
 	DECLARE("TASK_ROP_PID", offsetof(struct task, rop_pid));
+	DECLARE("TASK_JOP_PID", offsetof(struct task, jop_pid));
 #endif /* defined(HAS_APPLE_PAC) */
+
 
 	DECLARE("ARM_CONTEXT_SIZE", sizeof(arm_context_t));
 
@@ -146,6 +156,7 @@ main(int     argc,
 	DECLARE("SS64_X10", offsetof(arm_context_t, ss.ss_64.x[10]));
 	DECLARE("SS64_X12", offsetof(arm_context_t, ss.ss_64.x[12]));
 	DECLARE("SS64_X14", offsetof(arm_context_t, ss.ss_64.x[14]));
+	DECLARE("SS64_X15", offsetof(arm_context_t, ss.ss_64.x[15]));
 	DECLARE("SS64_X16", offsetof(arm_context_t, ss.ss_64.x[16]));
 	DECLARE("SS64_X18", offsetof(arm_context_t, ss.ss_64.x[18]));
 	DECLARE("SS64_X19", offsetof(arm_context_t, ss.ss_64.x[19]));
@@ -202,6 +213,41 @@ main(int     argc,
 	DECLARE("NS64_FPSR", offsetof(arm_context_t, ns.ns_64.fpsr));
 	DECLARE("NS64_FPCR", offsetof(arm_context_t, ns.ns_64.fpcr));
 
+	DECLARE("ARM_KERNEL_CONTEXT_SIZE", sizeof(arm_kernel_context_t));
+
+	DECLARE("SS64_KERNEL_X16", offsetof(arm_kernel_context_t, ss.x[0]));
+	DECLARE("SS64_KERNEL_X17", offsetof(arm_kernel_context_t, ss.x[1]));
+	DECLARE("SS64_KERNEL_X19", offsetof(arm_kernel_context_t, ss.x[2]));
+	DECLARE("SS64_KERNEL_X20", offsetof(arm_kernel_context_t, ss.x[3]));
+	DECLARE("SS64_KERNEL_X21", offsetof(arm_kernel_context_t, ss.x[4]));
+	DECLARE("SS64_KERNEL_X22", offsetof(arm_kernel_context_t, ss.x[5]));
+	DECLARE("SS64_KERNEL_X23", offsetof(arm_kernel_context_t, ss.x[6]));
+	DECLARE("SS64_KERNEL_X24", offsetof(arm_kernel_context_t, ss.x[7]));
+	DECLARE("SS64_KERNEL_X25", offsetof(arm_kernel_context_t, ss.x[8]));
+	DECLARE("SS64_KERNEL_X26", offsetof(arm_kernel_context_t, ss.x[9]));
+	DECLARE("SS64_KERNEL_X27", offsetof(arm_kernel_context_t, ss.x[10]));
+	DECLARE("SS64_KERNEL_X28", offsetof(arm_kernel_context_t, ss.x[11]));
+	DECLARE("SS64_KERNEL_FP", offsetof(arm_kernel_context_t, ss.fp));
+	DECLARE("SS64_KERNEL_LR", offsetof(arm_kernel_context_t, ss.lr));
+	DECLARE("SS64_KERNEL_SP", offsetof(arm_kernel_context_t, ss.sp));
+	DECLARE("SS64_KERNEL_PC", offsetof(arm_kernel_context_t, ss.pc));
+	DECLARE("SS64_KERNEL_CPSR", offsetof(arm_kernel_context_t, ss.cpsr));
+#if defined(HAS_APPLE_PAC)
+	DECLARE("SS64_KERNEL_JOPHASH", offsetof(arm_kernel_context_t, ss.jophash));
+#endif /* defined(HAS_APPLE_PAC) */
+
+	DECLARE("NS64_KERNEL_D8", offsetof(arm_kernel_context_t, ns.d[0]));
+	DECLARE("NS64_KERNEL_D9", offsetof(arm_kernel_context_t, ns.d[1]));
+	DECLARE("NS64_KERNEL_D10", offsetof(arm_kernel_context_t, ns.d[2]));
+	DECLARE("NS64_KERNEL_D11", offsetof(arm_kernel_context_t, ns.d[3]));
+	DECLARE("NS64_KERNEL_D12", offsetof(arm_kernel_context_t, ns.d[4]));
+	DECLARE("NS64_KERNEL_D13", offsetof(arm_kernel_context_t, ns.d[5]));
+	DECLARE("NS64_KERNEL_D14", offsetof(arm_kernel_context_t, ns.d[6]));
+	DECLARE("NS64_KERNEL_D15", offsetof(arm_kernel_context_t, ns.d[7]));
+
+	DECLARE("NS64_KERNEL_FPCR", offsetof(arm_kernel_context_t, ns.fpcr));
+
+
 
 	DECLARE("PGBYTES", ARM_PGBYTES);
 	DECLARE("PGSHIFT", ARM_PGSHIFT);
@@ -209,8 +255,6 @@ main(int     argc,
 	DECLARE("VM_MIN_KERNEL_ADDRESS", VM_MIN_KERNEL_ADDRESS);
 	DECLARE("KERNEL_STACK_SIZE", KERNEL_STACK_SIZE);
 	DECLARE("TBI_MASK", TBI_MASK);
-
-	DECLARE("MAX_CPUS", MAX_CPUS);
 
 	DECLARE("cdeSize", sizeof(struct cpu_data_entry));
 
@@ -231,7 +275,6 @@ main(int     argc,
 	DECLARE("CPU_STAT_IRQ_WAKE", offsetof(cpu_data_t, cpu_stat.irq_ex_cnt_wake));
 	DECLARE("CPU_RESET_HANDLER", offsetof(cpu_data_t, cpu_reset_handler));
 	DECLARE("CPU_PHYS_ID", offsetof(cpu_data_t, cpu_phys_id));
-	DECLARE("CLUSTER_MASTER", offsetof(cpu_data_t, cluster_master));
 
 	DECLARE("RTCLOCKDataSize", sizeof(rtclock_data_t));
 
@@ -247,6 +290,7 @@ main(int     argc,
 	DECLARE("INTSTACK_SIZE", INTSTACK_SIZE);
 	DECLARE("EXCEPSTACK_SIZE", EXCEPSTACK_SIZE);
 
+	DECLARE("PAGE_MAX_SHIFT", PAGE_MAX_SHIFT);
 	DECLARE("PAGE_MAX_SIZE", PAGE_MAX_SIZE);
 
 	DECLARE("BA_VIRT_BASE", offsetof(struct boot_args, virtBase));
@@ -269,7 +313,23 @@ main(int     argc,
 
 #if defined(HAS_APPLE_PAC)
 	DECLARE("CPU_ROP_KEY", offsetof(cpu_data_t, rop_key));
+	DECLARE("CPU_JOP_KEY", offsetof(cpu_data_t, jop_key));
+#if __has_feature(ptrauth_function_pointer_type_discrimination)
+	DECLARE("THREAD_CONTINUE_T_DISC", __builtin_ptrauth_type_discriminator(thread_continue_t));
+#else
+	DECLARE("THREAD_CONTINUE_T_DISC", 0);
+#endif /* __has_feature(ptrauth_function_pointer_type_discrimination) */
 #endif /* defined(HAS_APPLE_PAC) */
+
+
+
+#if HIBERNATION
+	DECLARE("HIBHDR_STACKOFFSET", offsetof(IOHibernateImageHeader, restore1StackOffset));
+	DECLARE("HIBTRAMP_TTBR0", offsetof(pal_hib_tramp_result_t, ttbr0));
+	DECLARE("HIBTRAMP_TTBR1", offsetof(pal_hib_tramp_result_t, ttbr1));
+	DECLARE("HIBTRAMP_MEMSLIDE", offsetof(pal_hib_tramp_result_t, memSlide));
+	DECLARE("HIBTRAMP_KERNELSLIDE", offsetof(pal_hib_tramp_result_t, kernelSlide));
+#endif /* HIBERNATION */
 
 	return 0;
 }

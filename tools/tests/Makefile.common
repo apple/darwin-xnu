@@ -56,3 +56,28 @@ _v =
 else
 _v = @
 endif
+
+# These are convenience functions for filtering based on substrings, as the
+# normal filter functions only accept one wildcard.
+FILTER_OUT_SUBSTRING=$(strip $(foreach string,$(2),$(if $(findstring $(1),$(string)),,$(string))))
+FILTER_SUBSTRING=$(strip $(foreach string,$(2),$(if $(findstring $(1),$(string)),$(string),)))
+
+#arch configs if not provided
+ifdef RC_ARCHS
+ARCH_CONFIGS:=$(RC_ARCHS)
+endif
+
+ifeq ($(ARCH_CONFIGS),)
+PLATFORM_LOWERCASE:=$(shell echo "$(PLATFORM)" | tr A-Z a-z)
+ARCH_CONFIGS:=$(shell /usr/bin/plutil -extract SupportedTargets.$(PLATFORM_LOWERCASE).Archs json -o - $(SDKROOT)/SDKSettings.plist | tr '",[]' ' ')
+PLATFORM_LOWERCASE:=
+endif
+
+ARCH_CONFIGS_32:=$(call FILTER_OUT_SUBSTRING,64,$(ARCH_CONFIGS))
+ARCH_CONFIGS_64:=$(call FILTER_SUBSTRING,64,$(ARCH_CONFIGS))
+ARCH_CONFIGS_x86:=$(call FILTER_SUBSTRING,x86_64,$(ARCH_CONFIGS))
+
+ARCH_FLAGS:=$(foreach argarch,$(ARCH_CONFIGS), -arch $(argarch) )
+ARCH_FLAGS_32:=$(foreach argarch,$(ARCH_CONFIGS_32), -arch $(argarch) )
+ARCH_FLAGS_64:=$(foreach argarch,$(ARCH_CONFIGS_64), -arch $(argarch) )
+ARCH_FLAGS_x86:=$(foreach argarch,$(ARCH_CONFIGS_x86), -arch $(argarch) )

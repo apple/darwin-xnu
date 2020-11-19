@@ -115,7 +115,8 @@ nfs4_init_clientid(struct nfsmount *nmp)
 {
 	struct nfs_client_id *ncip, *ncip2;
 	struct sockaddr *saddr;
-	int error, len, len2, cmp;
+	int error, cmp;
+	long len, len2;
 	struct vfsstatfs *vsfs;
 
 	static uint8_t en0addr[6];
@@ -160,10 +161,10 @@ nfs4_init_clientid(struct nfsmount *nmp)
 
 	*(uint32_t*)ncip->nci_id = 0;
 	len = sizeof(uint32_t);
-	len2 = min(sizeof(en0addr), ncip->nci_idlen - len);
+	len2 = lmin(sizeof(en0addr), ncip->nci_idlen - len);
 	bcopy(en0addr, &ncip->nci_id[len], len2);
 	len += sizeof(en0addr);
-	len2 = min(saddr->sa_len, ncip->nci_idlen - len);
+	len2 = lmin(saddr->sa_len, ncip->nci_idlen - len);
 	bcopy(saddr, &ncip->nci_id[len], len2);
 	len += len2;
 	if (len < ncip->nci_idlen) {
@@ -241,7 +242,7 @@ nfs4_setclientid(struct nfsmount *nmp)
 	char raddr[MAX_IPv6_STR_LEN];
 	char uaddr[MAX_IPv6_STR_LEN + 16];
 	int ualen = 0;
-	in_port_t port;
+	in_port_t port = 0;
 
 	thd = current_thread();
 	cred = IS_VALID_CRED(nmp->nm_mcred) ? nmp->nm_mcred : vfs_context_ucred(vfs_context_kernel());
@@ -274,6 +275,9 @@ nfs4_setclientid(struct nfsmount *nmp)
 		} else if (ss.ss_family == AF_INET6) {
 			sinaddr = &((struct sockaddr_in6*)&ss)->sin6_addr;
 			port = nfs4_cb_port6;
+		} else {
+			error = EINVAL;
+			nfsmout_if(error);
 		}
 		if (sinaddr && port && (inet_ntop(ss.ss_family, sinaddr, raddr, sizeof(raddr)) == raddr)) {
 			/* assemble r_addr = universal address (nmp->nm_nso->nso_so source IP addr + port) */
@@ -482,12 +486,13 @@ out:
 int
 nfs4_secinfo_rpc(struct nfsmount *nmp, struct nfsreq_secinfo_args *siap, kauth_cred_t cred, uint32_t *sec, int *seccountp)
 {
-	int error = 0, status, nfsvers, numops, namelen, fhsize;
+	int error = 0, status, nfsvers, numops, fhsize;
 	vnode_t dvp = NULLVP;
 	nfsnode_t np, dnp;
 	u_char *fhp;
 	const char *vname = NULL, *name;
 	uint64_t xid;
+	size_t namelen;
 	struct nfsm_chain nmreq, nmrep;
 
 	*seccountp = 0;
@@ -700,7 +705,7 @@ nfs4_get_fs_locations(
 {
 	int error = 0, numops, status;
 	uint32_t bitmap[NFS_ATTR_BITMAP_LEN];
-	struct nfsreq rq, *req = &rq;
+	struct nfsreq *req;
 	struct nfsreq_secinfo_args si;
 	struct nfsm_chain nmreq, nmrep;
 	uint64_t xid;
@@ -713,6 +718,7 @@ nfs4_get_fs_locations(
 		return EINVAL;
 	}
 
+	req = zalloc(nfs_req_zone);
 	nfsm_chain_null(&nmreq);
 	nfsm_chain_null(&nmrep);
 
@@ -747,6 +753,7 @@ nfs4_get_fs_locations(
 	nfsmout_if(error);
 	error = nfs4_parsefattr(&nmrep, NULL, NULL, NULL, NULL, nfslsp);
 nfsmout:
+	NFS_ZFREE(nfs_req_zone, req);
 	nfsm_chain_cleanup(&nmrep);
 	nfsm_chain_cleanup(&nmreq);
 	return error;
@@ -1255,7 +1262,7 @@ nfs4_map_domain(char *id, char **atp)
 	otw_domain_len = strnlen(otw_nfs4domain, MAXPATHLEN);
 	otw_id_2_at_len = at - id + 1;
 
-	MALLOC_ZONE(dsnode, char*, MAXPATHLEN, M_NAMEI, M_WAITOK);
+	dsnode = zalloc(ZV_NAMEI);
 	/* first try to map nfs4 domain to dsnode for scoped lookups */
 	error = kauth_cred_nfs4domain2dsnode(otw_nfs4domain, dsnode);
 	if (!error) {
@@ -1281,7 +1288,7 @@ nfs4_map_domain(char *id, char **atp)
 			*at = '\0';
 		}
 	}
-	FREE_ZONE(dsnode, MAXPATHLEN, M_NAMEI);
+	NFS_ZFREE(ZV_NAMEI, dsnode);
 
 	if (nfs_idmap_ctrl & NFS_IDMAP_CTRL_LOG_SUCCESSFUL_MAPPINGS) {
 		printf("nfs4_id2guid: after domain mapping id is %s\n", id);
@@ -1496,7 +1503,7 @@ nfs4_addv4domain(char *id, size_t *idlen)
 		size_t domain_len;
 		char *mapped_domain;
 
-		MALLOC_ZONE(nfs4domain, char*, MAXPATHLEN, M_NAMEI, M_WAITOK);
+		nfs4domain = zalloc(ZV_NAMEI);
 		error = kauth_cred_dsnode2nfs4domain(dsnode, nfs4domain);
 		if (!error) {
 			domain_len = strnlen(nfs4domain, MAXPATHLEN);
@@ -1517,7 +1524,7 @@ nfs4_addv4domain(char *id, size_t *idlen)
 				error = ENOSPC;
 			}
 		}
-		FREE_ZONE(nfs4domain, MAXPATHLEN, M_NAMEI);
+		NFS_ZFREE(ZV_NAMEI, nfs4domain);
 	} else if (at == NULL) {
 		/*
 		 * If we didn't find an 'at' then cp points to the end of id passed in.
@@ -1622,7 +1629,7 @@ nfs4_guid2id(guid_t *guidp, char *id, size_t *idlen, int isgroup)
 		 */
 
 		if (*idlen < MAXPATHLEN) {
-			MALLOC_ZONE(id1buf, char*, MAXPATHLEN, M_NAMEI, M_WAITOK);
+			id1buf = zalloc(ZV_NAMEI);
 			id1 = id1buf;
 			id1len = MAXPATHLEN;
 		} else {
@@ -1680,7 +1687,7 @@ nfs4_guid2id(guid_t *guidp, char *id, size_t *idlen, int isgroup)
 	nfs4_mapguid_log(error, "End of routine", guidp, isgroup, id1);
 
 	if (id1buf) {
-		FREE_ZONE(id1buf, MAXPATHLEN, M_NAMEI);
+		NFS_ZFREE(ZV_NAMEI, id1buf);
 	}
 
 	return error;
@@ -1772,7 +1779,7 @@ nfs4_parsefattr(
 	size_t slen;
 	char sbuf[64], *s;
 	struct nfs_fsattr nfsa_dummy;
-	struct nfs_vattr nva_dummy;
+	struct nfs_vattr *nva_dummy = NULL;
 	struct dqblk dqb_dummy;
 	kauth_acl_t acl = NULL;
 	uint32_t ace_type, ace_flags, ace_mask;
@@ -1784,7 +1791,8 @@ nfs4_parsefattr(
 		nfsap = &nfsa_dummy;
 	}
 	if (!nvap) {
-		nvap = &nva_dummy;
+		MALLOC(nva_dummy, struct nfs_vattr *, sizeof(*nva_dummy), M_TEMP, M_WAITOK);
+		nvap = nva_dummy;
 	}
 	if (!dqbp) {
 		dqbp = &dqb_dummy;
@@ -1954,7 +1962,7 @@ nfs4_parsefattr(
 			nfsm_assert(error, (attrbytes >= 0), EBADRPC);
 		}
 		nfsmout_if(error);
-		if ((nvap != &nva_dummy) && !error2) {
+		if ((nvap != nva_dummy) && !error2) {
 			nvap->nva_acl = acl;
 			acl = NULL;
 		}
@@ -2265,7 +2273,12 @@ nfs4_parsefattr(
 		attrbytes -= NFSX_UNSIGNED + nfsm_rndup(val);
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_MODE)) {
-		nfsm_chain_get_32(error, nmc, nvap->nva_mode);
+		nfsm_chain_get_32(error, nmc, val);
+		if (val > ALLPERMS) {
+			error = EBADRPC;
+		} else {
+			nvap->nva_mode = (mode_t)val;
+		}
 		attrbytes -= NFSX_UNSIGNED;
 	}
 	if (NFS_BITMAP_ISSET(bitmap, NFS_FATTR_NO_TRUNC)) {
@@ -2465,6 +2478,7 @@ nfsmout:
 		kauth_acl_free(nvap->nva_acl);
 		nvap->nva_acl = NULL;
 	}
+	FREE(nva_dummy, M_TEMP);
 	return error;
 }
 

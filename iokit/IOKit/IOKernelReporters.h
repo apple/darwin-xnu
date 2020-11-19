@@ -39,6 +39,7 @@
 
 #include <machine/limits.h>
 
+#include <libkern/c++/OSPtr.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOLocks.h>
@@ -46,6 +47,8 @@
 
 #include <IOKit/IOReportTypes.h>
 #include <IOKit/IOKernelReportStructs.h>
+
+#include <libkern/c++/OSPtr.h>
 
 typedef OSDictionary IOReportLegendEntry;
 
@@ -201,7 +204,7 @@ public:
  *
  *   Locking: same-instance concurrency SAFE, MAY BLOCK
  */
-	IOReportLegendEntry* createLegend(void);
+	OSPtr<IOReportLegendEntry> createLegend(void);
 
 /*! @function   IOReporter::configureReport
  *   @abstract   track IOService::configureReport(), provide sizing info
@@ -278,6 +281,16 @@ public:
  *   Locking: same-instance concurrency UNSAFE
  */
 	virtual void free(void) APPLE_KEXT_OVERRIDE;
+
+/*! @function	IOReporter::init
+ *   @abstract	Initialize global state
+ *
+ *   @discussion
+ *	::initialize() [called during IOStartIOKit] initializes all global
+ *	state for IOReporter objects.
+ *
+ */
+	static void initialize(void);
 
 
 /*********************************/
@@ -552,7 +565,7 @@ protected:
  *       function, and then drops the lock.  Subclasses should not call
  *       this function directly.
  */
-	virtual IOReportLegendEntry* handleCreateLegend(void);
+	virtual OSPtr<IOReportLegendEntry> handleCreateLegend(void);
 
 /*! @function   IOReporter::updateChannelValues
  *   @abstract   update channel values for IOReporter::updateReport()
@@ -712,7 +725,7 @@ private:
  *
  *   Locking: Caller must ensure that the reporter (data) lock is held.
  */
-	OSArray* copyChannelIDs(void);
+	OSPtr<OSArray> copyChannelIDs(void);
 
 /*! @function   IOReporter::legendWith
  *   @abstract   Internal method to help create legend entries
@@ -733,7 +746,7 @@ private:
  *
  *   Locking: SAFE to call concurrently (no static globals), MAY BLOCK
  */
-	static IOReportLegendEntry* legendWith(OSArray *channelIDs,
+	static OSPtr<IOReportLegendEntry> legendWith(OSArray *channelIDs,
 	    OSArray *channelNames,
 	    IOReportChannelType channelType,
 	    IOReportUnit unit);
@@ -749,7 +762,7 @@ protected:
 	uint16_t            _channelDimension;// Max channel size
 	int                 _nElements;
 	int                 _nChannels;     // Total Channels in this reporter
-	OSArray            *_channelNames;
+	OSPtr<OSArray>      _channelNames;
 
 // MUST be protected because check is a macro!
 	bool                _reporterIsLocked;
@@ -802,7 +815,7 @@ public:
  *
  *   Locking: SAFE to call concurrently (no static globals), MAY BLOCK.
  */
-	static IOSimpleReporter* with(IOService *reportingService,
+	static OSPtr<IOSimpleReporter> with(IOService *reportingService,
 	    IOReportCategories categories,
 	    IOReportUnit unit);
 
@@ -897,7 +910,7 @@ public:
  *
  *   Locking: SAFE to call concurrently (no static globals), MAY BLOCK
  */
-	static IOStateReporter* with(IOService *reportingService,
+	static OSPtr<IOStateReporter> with(IOService *reportingService,
 	    IOReportCategories categories,
 	    int nstates,
 	    IOReportUnit unit = kIOReportUnitHWTicks);
@@ -1475,7 +1488,7 @@ public:
  *
  *
  */
-	static IOHistogramReporter* with(IOService *reportingService,
+	static OSPtr<IOHistogramReporter> with(IOService *reportingService,
 	    IOReportCategories categories,
 	    uint64_t channelID,
 	    const char *channelName,
@@ -1573,7 +1586,7 @@ protected:
  *
  *   Locking: same-instance concurrency SAFE, MAY BLOCK
  */
-	IOReportLegendEntry* handleCreateLegend(void) APPLE_KEXT_OVERRIDE;
+	OSPtr<IOReportLegendEntry> handleCreateLegend(void) APPLE_KEXT_OVERRIDE;
 
 
 private:
@@ -1629,7 +1642,7 @@ public:
  *       IOReportLegend::addReporterLegend() will handle the above, removing
  *       the need for any direct use of the IOReportLegend class.
  */
-	static IOReportLegend* with(OSArray *legend);
+	static OSPtr<IOReportLegend> with(OSArray *legend);
 
 /*! @function   IOReportLegend::addLegendEntry
  *   @abstract   Add a new legend entry
@@ -1746,7 +1759,7 @@ protected:
 
 private:
 
-	OSArray     *_reportLegend;
+	OSPtr<OSArray>     _reportLegend;
 
 	IOReturn initWith(OSArray *legend);
 

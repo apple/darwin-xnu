@@ -1,5 +1,6 @@
 from xnu import *
 from workqueue import GetWorkqueueThreadRequestSummary
+from memory import vm_unpack_pointer
 
 def IterateProcKqueues(proc):
     """ Iterate through all kqueues in the given process
@@ -37,8 +38,8 @@ def IterateProcKqfiles(proc):
 
     while count <= proc_lastfile:
         if unsigned(proc_ofiles[count]) != 0:
-            proc_fd_flags = proc_ofiles[count].f_flags
-            proc_fd_fglob = proc_ofiles[count].f_fglob
+            proc_fd_flags = proc_ofiles[count].fp_flags
+            proc_fd_fglob = proc_ofiles[count].fp_glob
             proc_fd_ftype = unsigned(proc_fd_fglob.fg_ops.fo_type)
             if proc_fd_ftype == xnudefines.DTYPE_KQUEUE:
                 yield kern.GetValueFromAddress(int(proc_fd_fglob.fg_data), 'struct kqfile *')
@@ -101,7 +102,9 @@ def GetKnoteKqueue(kn):
             kn - the knote object
         returns: kq - the kqueue corresponding to the knote
     """
-    return kern.GetValueFromAddress(int(kn.kn_kq_packed), 'struct kqueue *')
+
+    return vm_unpack_pointer(kn.kn_kq_packed, kern.globals.kn_kq_packing_params, 'struct kqueue *')
+
 
 @lldb_type_summary(['knote *'])
 @header('{:<20s} {:<20s} {:<10s} {:<20s} {:<20s} {:<30s} {:<10} {:<10} {:<10} {:<20s}'.format('knote', 'ident', 'kev_flags', 'kqueue', 'udata', 'filtops', 'qos_req', 'qos_use', 'qos_ovr', 'status'))

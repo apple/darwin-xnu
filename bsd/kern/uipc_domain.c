@@ -684,15 +684,14 @@ net_drain_domains(void)
 	lck_mtx_unlock(&domain_timeout_mtx);
 }
 
-#if INET6
 extern struct domain inet6domain_s;
-#endif
 #if IPSEC
 extern struct domain keydomain_s;
 #endif
 
 extern struct domain routedomain_s, ndrvdomain_s, inetdomain_s;
 extern struct domain systemdomain_s, localdomain_s;
+extern struct domain vsockdomain_s;
 
 #if MULTIPATH
 extern struct domain mpdomain_s;
@@ -764,9 +763,7 @@ domaininit(void)
 	 * dom_rtattach() called on rt_tables[].
 	 */
 	attach_domain(&inetdomain_s);
-#if INET6
 	attach_domain(&inet6domain_s);
-#endif /* INET6 */
 #if MULTIPATH
 	attach_domain(&mpdomain_s);
 #endif /* MULTIPATH */
@@ -776,6 +773,7 @@ domaininit(void)
 	attach_domain(&keydomain_s);
 #endif /* IPSEC */
 	attach_domain(&ndrvdomain_s);
+	attach_domain(&vsockdomain_s);
 	attach_domain(&routedomain_s);  /* must be last domain */
 
 	/*
@@ -1031,7 +1029,7 @@ net_uptime2timeval(struct timeval *tv)
 	}
 
 	tv->tv_usec = 0;
-	tv->tv_sec = net_uptime();
+	tv->tv_sec = (time_t)net_uptime();
 }
 
 /*

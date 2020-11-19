@@ -66,7 +66,7 @@ url_decode(char *str)
 				c += hex2int(*str++);
 			}
 			if (*str) {
-				c = (c << 4) + hex2int(*str++);
+				c = (char)((c << 4) + hex2int(*str++));
 			}
 
 			if (isprint(c)) {

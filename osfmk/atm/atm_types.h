@@ -32,6 +32,8 @@
 #include <stdint.h>
 #include <mach/mach_types.h>
 
+/* Everything here is Deprecated. will be removed soon */
+
 #define MACH_VOUCHER_ATTR_ATM_NULL              ((mach_voucher_attr_recipe_command_t)501)
 #define MACH_VOUCHER_ATTR_ATM_CREATE            ((mach_voucher_attr_recipe_command_t)510)
 #define MACH_VOUCHER_ATTR_ATM_REGISTER          ((mach_voucher_attr_recipe_command_t)511)
@@ -47,8 +49,6 @@ typedef uint32_t atm_action_t;
 
 typedef uint64_t atm_guard_t;
 typedef uint64_t aid_t;
-
-/* Deprecated. will be removed soon */
 typedef uint64_t subaid_t;
 typedef uint64_t mailbox_offset_t;
 #define SUB_AID_MAX (UINT64_MAX)
@@ -58,12 +58,11 @@ typedef uint32_t atm_subaid32_t;
 typedef uint64_t mach_atm_subaid_t;             /* Used for mach based apis. */
 typedef uint64_t atm_mailbox_offset_t;
 
-
 typedef mach_port_t atm_memory_descriptor_t;
 typedef atm_memory_descriptor_t *atm_memory_descriptor_array_t;
 typedef uint64_t *atm_memory_size_array_t;
 
-#define ATM_SUBAID32_MAX        (UINT32_MAX)
+#define ATM_SUBAID32_MAX                (UINT32_MAX)
 #define ATM_TRACE_DISABLE               (0x0100) /* OS_TRACE_MODE_DISABLE - Do not initialize the new logging*/
 #define ATM_TRACE_OFF                   (0x0400) /* OS_TRACE_MODE_OFF - Don't drop log messages to new log buffers */
 #define ATM_ENABLE_LEGACY_LOGGING       (0x20000000) /* OS_TRACE_SYSTEMMODE_LEGACY_LOGGING - Enable legacy logging  */

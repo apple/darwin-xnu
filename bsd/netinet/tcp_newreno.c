@@ -71,9 +71,7 @@
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
 
-#if INET6
 #include <netinet/ip6.h>
-#endif
 #include <netinet/ip_var.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_fsm.h>
@@ -180,47 +178,32 @@ tcp_newreno_ack_rcvd(struct tcpcb *tp, struct tcphdr *th)
 	 * greater than or equal to the congestion window.
 	 */
 
-	u_int cw = tp->snd_cwnd;
-	u_int incr = tp->t_maxseg;
-	int acked = 0;
+	uint32_t cw = tp->snd_cwnd;
+	uint32_t incr = tp->t_maxseg;
+	uint32_t acked = 0;
 
 	acked = BYTES_ACKED(th, tp);
-	if (tcp_do_rfc3465) {
-		if (cw >= tp->snd_ssthresh) {
-			tp->t_bytes_acked += acked;
-			if (tp->t_bytes_acked >= cw) {
-				/* Time to increase the window. */
-				tp->t_bytes_acked -= cw;
-			} else {
-				/* No need to increase yet. */
-				incr = 0;
-			}
+	if (cw >= tp->snd_ssthresh) {
+		tp->t_bytes_acked += acked;
+		if (tp->t_bytes_acked >= cw) {
+			/* Time to increase the window. */
+			tp->t_bytes_acked -= cw;
 		} else {
-			/*
-			 * If the user explicitly enables RFC3465
-			 * use 2*SMSS for the "L" param.  Otherwise
-			 * use the more conservative 1*SMSS.
-			 *
-			 * (See RFC 3465 2.3 Choosing the Limit)
-			 */
-			uint32_t abc_lim;
-			abc_lim = (tcp_do_rfc3465_lim2 &&
-			    tp->snd_nxt == tp->snd_max) ? incr * 2
-			    : incr;
-
-			incr = lmin(acked, abc_lim);
+			/* No need to increase yet. */
+			incr = 0;
 		}
 	} else {
 		/*
-		 * If the window gives us less than ssthresh packets
-		 * in flight, open exponentially (segsz per packet).
-		 * Otherwise open linearly: segsz per window
-		 * (segsz^2 / cwnd per packet).
+		 * If the user explicitly enables RFC3465
+		 * use 2*SMSS for the "L" param.  Otherwise
+		 * use the more conservative 1*SMSS.
+		 *
+		 * (See RFC 3465 2.3 Choosing the Limit)
 		 */
+		uint32_t abc_lim;
+		abc_lim = (tp->snd_nxt == tp->snd_max) ? incr * 2 : incr;
 
-		if (cw >= tp->snd_ssthresh) {
-			incr = max((incr * incr / cw), 1);
-		}
+		incr = ulmin(acked, abc_lim);
 	}
 	tp->snd_cwnd = min(cw + incr, TCP_MAXWIN << tp->snd_scale);
 }
@@ -244,7 +227,11 @@ tcp_newreno_post_fr(struct tcpcb *tp, struct tcphdr *th)
 {
 	int32_t ss;
 
-	ss = tp->snd_max - th->th_ack;
+	if (th) {
+		ss = tp->snd_max - th->th_ack;
+	} else {
+		ss = tp->snd_max - tp->snd_una;
+	}
 
 	/*
 	 * Complete ack.  Inflate the congestion window to
@@ -351,7 +338,7 @@ tcp_newreno_switch_cc(struct tcpcb *tp, uint16_t old_index)
 	} else {
 		cwnd = cwnd / 2 / tp->t_maxseg;
 	}
-	tp->snd_cwnd = max(TCP_CC_CWND_INIT_BYTES, cwnd * tp->t_maxseg);
+	tp->snd_cwnd = max(tcp_initial_cwnd(tp), cwnd * tp->t_maxseg);
 
 	/* Start counting bytes for RFC 3465 again */
 	tp->t_bytes_acked = 0;

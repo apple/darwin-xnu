@@ -174,6 +174,15 @@
 #define __cold
 #endif
 
+/* __exported denotes symbols that should be exported even when symbols
+ * are hidden by default.
+ * __exported_push/_exported_pop are pragmas used to delimit a range of
+ *  symbols that should be exported even when symbols are hidden by default.
+ */
+#define __exported                      __attribute__((__visibility__("default")))
+#define __exported_push         _Pragma("GCC visibility push(default)")
+#define __exported_pop          _Pragma("GCC visibility pop")
+
 /* __deprecated causes the compiler to produce a warning when encountering
  * code using the deprecated functionality.
  * __deprecated_msg() does the same, and compilers that support it will print
@@ -206,9 +215,42 @@
 #endif /* !defined(KERNEL) || defined(KERNEL_PRIVATE) */
 
 /* __unavailable causes the compiler to error out when encountering
- * code using the tagged function of variable.
+ * code using the tagged function
  */
-#define __unavailable   __attribute__((__unavailable__))
+#if __has_attribute(unavailable)
+#define __unavailable __attribute__((__unavailable__))
+#else
+#define __unavailable
+#endif
+
+#if defined(KERNEL) && !defined(KERNEL_PRIVATE)
+#define __kpi_unavailable __unavailable
+#else /* !defined(KERNEL) || defined(KERNEL_PRIVATE) */
+#define __kpi_unavailable
+#endif /* !defined(KERNEL) || defined(KERNEL_PRIVATE) */
+
+#if defined(KERNEL)
+#if defined(XNU_KERNEL_PRIVATE)
+/* This macro is meant to be used for kpi deprecated to x86 3rd parties
+ * but should be marked as unavailable for arm macOS devices.
+ * XNU:                         nothing (API is still available)
+ * 1st party kexts:             __deprecated
+ * 3rd party kexts macOS x86:   __deprecated
+ * 3rd party kexts macOS arm:   __unavailable
+ */
+#define __kpi_deprecated_arm64_macos_unavailable
+#elif defined(KERNEL_PRIVATE)
+#define __kpi_deprecated_arm64_macos_unavailable __deprecated
+#else /* !defined(XNU_KERNEL_PRIVATE) */
+#if TARGET_OS_OSX && defined(__arm64__)
+#define __kpi_deprecated_arm64_macos_unavailable __unavailable
+#else /* !TARGET_OS_OSX || !defined(__arm64__) */
+#define __kpi_deprecated_arm64_macos_unavailable __deprecated
+#endif /* !TARGET_OS_OSX || !defined(__arm64__) */
+#endif /* !defined(XNU_KERNEL_PRIVATE) */
+#else /* !defined(KERNEL) */
+#define __kpi_deprecated_arm64_macos_unavailable
+#endif /* !defined(KERNEL) */
 
 /* Delete pseudo-keywords wherever they are not available or needed. */
 #ifndef __dead
@@ -559,9 +601,19 @@
 #endif /* PLATFORM_DriverKit */
 #ifdef PLATFORM_MacOSX
 /* Platform: MacOSX */
+#if defined(__i386__)
 #define __DARWIN_ONLY_64_BIT_INO_T      0
-/* #undef __DARWIN_ONLY_UNIX_CONFORMANCE (automatically set for 64-bit) */
+#define __DARWIN_ONLY_UNIX_CONFORMANCE  0
 #define __DARWIN_ONLY_VERS_1050         0
+#elif defined(__x86_64__)
+#define __DARWIN_ONLY_64_BIT_INO_T      0
+#define __DARWIN_ONLY_UNIX_CONFORMANCE  1
+#define __DARWIN_ONLY_VERS_1050         0
+#else
+#define __DARWIN_ONLY_64_BIT_INO_T      1
+#define __DARWIN_ONLY_UNIX_CONFORMANCE  1
+#define __DARWIN_ONLY_VERS_1050         1
+#endif
 #endif /* PLATFORM_MacOSX */
 #endif /* KERNEL */
 
@@ -583,14 +635,6 @@
  * pre-10.5, and it is the default compilation environment, revert the
  * compilation environment to pre-__DARWIN_UNIX03.
  */
-#if !defined(__DARWIN_ONLY_UNIX_CONFORMANCE)
-#  if defined(__LP64__)
-#    define __DARWIN_ONLY_UNIX_CONFORMANCE 1
-#  else /* !__LP64__ */
-#    define __DARWIN_ONLY_UNIX_CONFORMANCE 0
-#  endif /* __LP64__ */
-#endif /* !__DARWIN_ONLY_UNIX_CONFORMANCE */
-
 #if !defined(__DARWIN_UNIX03)
 #  if defined(KERNEL)
 #    define __DARWIN_UNIX03     0
@@ -952,12 +996,12 @@
 
 #if defined(__cplusplus)
 #define __container_of(ptr, type, field) __extension__({ \
-	        const typeof(((type *)nullptr)->field) *__ptr = (ptr); \
+	        const __typeof__(((type *)nullptr)->field) *__ptr = (ptr); \
 	        (type *)((uintptr_t)__ptr - offsetof(type, field)); \
 	})
 #else
 #define __container_of(ptr, type, field) __extension__({ \
-	        const typeof(((type *)NULL)->field) *__ptr = (ptr); \
+	        const __typeof__(((type *)NULL)->field) *__ptr = (ptr); \
 	        (type *)((uintptr_t)__ptr - offsetof(type, field)); \
 	})
 #endif

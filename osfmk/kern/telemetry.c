@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -60,7 +60,8 @@
 
 #define TELEMETRY_DEBUG 0
 
-extern int      proc_pid(void *);
+struct proc;
+extern int      proc_pid(struct proc *);
 extern char     *proc_name_address(void *p);
 extern uint64_t proc_uniqueid(void *p);
 extern uint64_t proc_was_throttled(void *p);
@@ -116,9 +117,9 @@ struct micro_snapshot_buffer telemetry_buffer = {
 int                                     telemetry_bytes_since_last_mark = -1; // How much data since buf was last marked?
 int                                     telemetry_buffer_notify_at = 0;
 
-lck_grp_t telemetry_lck_grp;
-lck_mtx_t telemetry_mtx;
-lck_mtx_t telemetry_pmi_mtx;
+LCK_GRP_DECLARE(telemetry_lck_grp, "telemetry group");
+LCK_MTX_DECLARE(telemetry_mtx, &telemetry_lck_grp);
+LCK_MTX_DECLARE(telemetry_pmi_mtx, &telemetry_lck_grp);
 
 #define TELEMETRY_LOCK() do { lck_mtx_lock(&telemetry_mtx); } while (0)
 #define TELEMETRY_TRY_SPIN_LOCK() lck_mtx_try_lock_spin(&telemetry_mtx)
@@ -133,11 +134,8 @@ telemetry_init(void)
 	kern_return_t ret;
 	uint32_t          telemetry_notification_leeway;
 
-	lck_grp_init(&telemetry_lck_grp, "telemetry group", LCK_GRP_ATTR_NULL);
-	lck_mtx_init(&telemetry_mtx, &telemetry_lck_grp, LCK_ATTR_NULL);
-	lck_mtx_init(&telemetry_pmi_mtx, &telemetry_lck_grp, LCK_ATTR_NULL);
-
-	if (!PE_parse_boot_argn("telemetry_buffer_size", &telemetry_buffer.size, sizeof(telemetry_buffer.size))) {
+	if (!PE_parse_boot_argn("telemetry_buffer_size",
+	    &telemetry_buffer.size, sizeof(telemetry_buffer.size))) {
 		telemetry_buffer.size = TELEMETRY_DEFAULT_BUFFER_SIZE;
 	}
 
@@ -152,7 +150,8 @@ telemetry_init(void)
 	}
 	bzero((void *) telemetry_buffer.buffer, telemetry_buffer.size);
 
-	if (!PE_parse_boot_argn("telemetry_notification_leeway", &telemetry_notification_leeway, sizeof(telemetry_notification_leeway))) {
+	if (!PE_parse_boot_argn("telemetry_notification_leeway",
+	    &telemetry_notification_leeway, sizeof(telemetry_notification_leeway))) {
 		/*
 		 * By default, notify the user to collect the buffer when there is this much space left in the buffer.
 		 */
@@ -165,19 +164,21 @@ telemetry_init(void)
 	}
 	telemetry_buffer_notify_at = telemetry_buffer.size - telemetry_notification_leeway;
 
-	if (!PE_parse_boot_argn("telemetry_sample_rate", &telemetry_sample_rate, sizeof(telemetry_sample_rate))) {
+	if (!PE_parse_boot_argn("telemetry_sample_rate",
+	    &telemetry_sample_rate, sizeof(telemetry_sample_rate))) {
 		telemetry_sample_rate = TELEMETRY_DEFAULT_SAMPLE_RATE;
 	}
 
 	/*
 	 * To enable telemetry for all tasks, include "telemetry_sample_all_tasks=1" in boot-args.
 	 */
-	if (!PE_parse_boot_argn("telemetry_sample_all_tasks", &telemetry_sample_all_tasks, sizeof(telemetry_sample_all_tasks))) {
-#if CONFIG_EMBEDDED && !(DEVELOPMENT || DEBUG)
+	if (!PE_parse_boot_argn("telemetry_sample_all_tasks",
+	    &telemetry_sample_all_tasks, sizeof(telemetry_sample_all_tasks))) {
+#if !defined(XNU_TARGET_OS_OSX) && !(DEVELOPMENT || DEBUG)
 		telemetry_sample_all_tasks = FALSE;
 #else
 		telemetry_sample_all_tasks = TRUE;
-#endif /* CONFIG_EMBEDDED && !(DEVELOPMENT || DEBUG) */
+#endif /* !defined(XNU_TARGET_OS_OSX) && !(DEVELOPMENT || DEBUG) */
 	}
 
 	kprintf("Telemetry: Sampling %stasks once per %u second%s\n",
@@ -513,7 +514,7 @@ telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct micro
 		    (copyin(shared_cache_base_address + sc_header_uuid_offset, (char *)&shared_cache_header.uuid,
 		    sizeof(shared_cache_header.uuid)) == 0)) {
 			shared_cache_uuid_valid = 1;
-			shared_cache_slide = vm_shared_region_get_slide(sr);
+			shared_cache_slide = sr->sr_slide;
 		}
 		// vm_shared_region_get() gave us a reference on the shared region.
 		vm_shared_region_deallocate(sr);
@@ -565,7 +566,9 @@ telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct micro
 	char     *uuid_info_array = NULL;
 
 	if (uuid_info_count > 0) {
-		if ((uuid_info_array = (char *)kalloc(uuid_info_array_size)) == NULL) {
+		uuid_info_array = kheap_alloc(KHEAP_TEMP,
+		    uuid_info_array_size, Z_WAITOK);
+		if (uuid_info_array == NULL) {
 			return;
 		}
 
@@ -574,7 +577,7 @@ telemetry_take_sample(thread_t thread, uint8_t microsnapshot_flags, struct micro
 		 * It may be nonresident, in which case just fix up nloadinfos to 0 in the task snapshot.
 		 */
 		if (copyin(uuid_info_addr, uuid_info_array, uuid_info_array_size) != 0) {
-			kfree(uuid_info_array, uuid_info_array_size);
+			kheap_free(KHEAP_TEMP, uuid_info_array, uuid_info_array_size);
 			uuid_info_array = NULL;
 			uuid_info_array_size = 0;
 		}
@@ -701,6 +704,7 @@ copytobuffer:
 	if (tmp & PROC_FLAG_SUPPRESSED) {
 		tsnap->ss_flags |= kTaskIsSuppressed;
 	}
+
 
 	tsnap->latency_qos = task_grab_latency_qos(task);
 
@@ -870,7 +874,7 @@ cancel_sample:
 	}
 
 	if (uuid_info_array != NULL) {
-		kfree(uuid_info_array, uuid_info_array_size);
+		kheap_free(KHEAP_TEMP, uuid_info_array, uuid_info_array_size);
 	}
 }
 
@@ -1036,18 +1040,18 @@ out:
 
 #define BOOTPROFILE_MAX_BUFFER_SIZE (64*1024*1024) /* see also COPYSIZELIMIT_PANIC */
 
-vm_offset_t                     bootprofile_buffer = 0;
-uint32_t                        bootprofile_buffer_size = 0;
-uint32_t                        bootprofile_buffer_current_position = 0;
-uint32_t                        bootprofile_interval_ms = 0;
-uint32_t                        bootprofile_stackshot_flags = 0;
-uint64_t                        bootprofile_interval_abs = 0;
-uint64_t                        bootprofile_next_deadline = 0;
-uint32_t                        bootprofile_all_procs = 0;
-char                            bootprofile_proc_name[17];
+vm_offset_t         bootprofile_buffer = 0;
+uint32_t            bootprofile_buffer_size = 0;
+uint32_t            bootprofile_buffer_current_position = 0;
+uint32_t            bootprofile_interval_ms = 0;
+uint64_t            bootprofile_stackshot_flags = 0;
+uint64_t            bootprofile_interval_abs = 0;
+uint64_t            bootprofile_next_deadline = 0;
+uint32_t            bootprofile_all_procs = 0;
+char                bootprofile_proc_name[17];
 uint64_t            bootprofile_delta_since_timestamp = 0;
-lck_grp_t               bootprofile_lck_grp;
-lck_mtx_t               bootprofile_mtx;
+LCK_GRP_DECLARE(bootprofile_lck_grp, "bootprofile_group");
+LCK_MTX_DECLARE(bootprofile_mtx, &bootprofile_lck_grp);
 
 
 enum {
@@ -1073,10 +1077,8 @@ bootprofile_init(void)
 	kern_return_t ret;
 	char type[32];
 
-	lck_grp_init(&bootprofile_lck_grp, "bootprofile group", LCK_GRP_ATTR_NULL);
-	lck_mtx_init(&bootprofile_mtx, &bootprofile_lck_grp, LCK_ATTR_NULL);
-
-	if (!PE_parse_boot_argn("bootprofile_buffer_size", &bootprofile_buffer_size, sizeof(bootprofile_buffer_size))) {
+	if (!PE_parse_boot_argn("bootprofile_buffer_size",
+	    &bootprofile_buffer_size, sizeof(bootprofile_buffer_size))) {
 		bootprofile_buffer_size = 0;
 	}
 
@@ -1084,15 +1086,18 @@ bootprofile_init(void)
 		bootprofile_buffer_size = BOOTPROFILE_MAX_BUFFER_SIZE;
 	}
 
-	if (!PE_parse_boot_argn("bootprofile_interval_ms", &bootprofile_interval_ms, sizeof(bootprofile_interval_ms))) {
+	if (!PE_parse_boot_argn("bootprofile_interval_ms",
+	    &bootprofile_interval_ms, sizeof(bootprofile_interval_ms))) {
 		bootprofile_interval_ms = 0;
 	}
 
-	if (!PE_parse_boot_argn("bootprofile_stackshot_flags", &bootprofile_stackshot_flags, sizeof(bootprofile_stackshot_flags))) {
+	if (!PE_parse_boot_argn("bootprofile_stackshot_flags",
+	    &bootprofile_stackshot_flags, sizeof(bootprofile_stackshot_flags))) {
 		bootprofile_stackshot_flags = 0;
 	}
 
-	if (!PE_parse_boot_argn("bootprofile_proc_name", &bootprofile_proc_name, sizeof(bootprofile_proc_name))) {
+	if (!PE_parse_boot_argn("bootprofile_proc_name",
+	    &bootprofile_proc_name, sizeof(bootprofile_proc_name))) {
 		bootprofile_all_procs = 1;
 		bootprofile_proc_name[0] = '\0';
 	}
@@ -1123,7 +1128,8 @@ bootprofile_init(void)
 	}
 	bzero((void *) bootprofile_buffer, bootprofile_buffer_size);
 
-	kprintf("Boot profile: Sampling %s once per %u ms at %s\n", bootprofile_all_procs ? "all procs" : bootprofile_proc_name, bootprofile_interval_ms,
+	kprintf("Boot profile: Sampling %s once per %u ms at %s\n",
+	    bootprofile_all_procs ? "all procs" : bootprofile_proc_name, bootprofile_interval_ms,
 	    bootprofile_type == kBootProfileStartTimerAtBoot ? "boot" : (bootprofile_type == kBootProfileStartTimerAtWake ? "wake" : "unknown"));
 
 	timer_call_setup(&bootprofile_timer_call_entry,
@@ -1191,9 +1197,9 @@ bootprofile_timer_call(
 
 	/* initiate a stackshot with whatever portion of the buffer is left */
 	if (bootprofile_buffer_current_position < bootprofile_buffer_size) {
-		uint32_t flags = STACKSHOT_KCDATA_FORMAT | STACKSHOT_TRYLOCK | STACKSHOT_SAVE_LOADINFO
+		uint64_t flags = STACKSHOT_KCDATA_FORMAT | STACKSHOT_TRYLOCK | STACKSHOT_SAVE_LOADINFO
 		    | STACKSHOT_GET_GLOBAL_MEM_STATS;
-#if !CONFIG_EMBEDDED
+#if defined(XNU_TARGET_OS_OSX)
 		flags |= STACKSHOT_SAVE_KEXT_LOADINFO;
 #endif
 
@@ -1213,7 +1219,7 @@ bootprofile_timer_call(
 		kern_return_t r = stack_snapshot_from_kernel(
 			pid_to_profile, (void *)(bootprofile_buffer + bootprofile_buffer_current_position),
 			bootprofile_buffer_size - bootprofile_buffer_current_position,
-			flags, bootprofile_delta_since_timestamp, &retbytes);
+			flags, bootprofile_delta_since_timestamp, 0, &retbytes);
 
 		/*
 		 * We call with STACKSHOT_TRYLOCK because the stackshot lock is coarser

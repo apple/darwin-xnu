@@ -44,6 +44,7 @@ INSTINC_SUBDIRS_ARM64 = \
 
 EXPINC_SUBDIRS = \
 	bsm \
+	crypto/entropy \
 	dev \
 	libkern \
 	machine \
@@ -80,6 +81,18 @@ INSTTEXTFILES_SUBDIRS =	\
 	dev \
 	man \
 	sys
+
+INSTTEXTFILES_SUBDIRS_X86_64 = \
+	dev
+
+INSTTEXTFILES_SUBDIRS_X86_64H = \
+	dev
+
+INSTTEXTFILES_SUBDIRS_ARM = \
+	dev
+
+INSTTEXTFILES_SUBDIRS_ARM64 = \
+	dev
 
 include $(MakeInc_rule)
 include $(MakeInc_dir)

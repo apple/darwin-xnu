@@ -40,7 +40,7 @@ void            pmap_remove_range(
 	pt_entry_t      *spte,
 	pt_entry_t      *epte);
 
-void            pmap_remove_range_options(
+static void            pmap_remove_range_options(
 	pmap_t          pmap,
 	vm_map_offset_t va,
 	pt_entry_t      *spte,
@@ -61,9 +61,23 @@ uint32_t pmap_update_clear_pte_count;
  * on a NBPDE boundary.
  */
 
-/* These symbols may be referenced directly by VM */
-uint64_t pmap_nesting_size_min = NBPDE;
-uint64_t pmap_nesting_size_max = 0 - (uint64_t)NBPDE;
+uint64_t
+pmap_shared_region_size_min(__unused pmap_t pmap)
+{
+	return NBPDE;
+}
+
+uint64_t
+pmap_commpage_size_min(__unused pmap_t pmap)
+{
+	return NBPDE;
+}
+
+uint64_t
+pmap_nesting_size_max(__unused pmap_t pmap)
+{
+	return 0llu - (uint64_t)NBPDE;
+}
 
 /*
  *	kern_return_t pmap_nest(grand, subord, va_start, size)
@@ -71,7 +85,6 @@ uint64_t pmap_nesting_size_max = 0 - (uint64_t)NBPDE;
  *	grand  = the pmap that we will nest subord into
  *	subord = the pmap that goes into the grand
  *	va_start  = start of range in pmap to be inserted
- *	nstart  = start of range in pmap nested pmap
  *	size   = Size of nest area (up to 16TB)
  *
  *	Inserts a pmap into another.  This is used to implement shared segments.
@@ -90,9 +103,9 @@ uint64_t pmap_nesting_size_max = 0 - (uint64_t)NBPDE;
  */
 
 kern_return_t
-pmap_nest(pmap_t grand, pmap_t subord, addr64_t va_start, addr64_t nstart, uint64_t size)
+pmap_nest(pmap_t grand, pmap_t subord, addr64_t va_start, uint64_t size)
 {
-	vm_map_offset_t vaddr, nvaddr;
+	vm_map_offset_t vaddr;
 	pd_entry_t      *pde, *npde;
 	unsigned int    i;
 	uint64_t        num_pde;
@@ -100,9 +113,8 @@ pmap_nest(pmap_t grand, pmap_t subord, addr64_t va_start, addr64_t nstart, uint6
 	assert(!is_ept_pmap(grand));
 	assert(!is_ept_pmap(subord));
 
-	if ((size & (pmap_nesting_size_min - 1)) ||
-	    (va_start & (pmap_nesting_size_min - 1)) ||
-	    (nstart & (pmap_nesting_size_min - 1)) ||
+	if ((size & (pmap_shared_region_size_min(grand) - 1)) ||
+	    (va_start & (pmap_shared_region_size_min(grand) - 1)) ||
 	    ((size >> 28) > 65536)) {   /* Max size we can nest is 16TB */
 		return KERN_INVALID_VALUE;
 	}
@@ -111,15 +123,11 @@ pmap_nest(pmap_t grand, pmap_t subord, addr64_t va_start, addr64_t nstart, uint6
 		panic("pmap_nest: size is invalid - %016llX\n", size);
 	}
 
-	if (va_start != nstart) {
-		panic("pmap_nest: va_start(0x%llx) != nstart(0x%llx)\n", va_start, nstart);
-	}
-
 	PMAP_TRACE(PMAP_CODE(PMAP__NEST) | DBG_FUNC_START,
 	    VM_KERNEL_ADDRHIDE(grand), VM_KERNEL_ADDRHIDE(subord),
 	    VM_KERNEL_ADDRHIDE(va_start));
 
-	nvaddr = (vm_map_offset_t)nstart;
+	vaddr = (vm_map_offset_t)va_start;
 	num_pde = size >> PDESHIFT;
 
 	PMAP_LOCK_EXCLUSIVE(subord);
@@ -127,28 +135,28 @@ pmap_nest(pmap_t grand, pmap_t subord, addr64_t va_start, addr64_t nstart, uint6
 	subord->pm_shared = TRUE;
 
 	for (i = 0; i < num_pde;) {
-		if (((nvaddr & PDPTMASK) == 0) && (num_pde - i) >= NPDEPG) {
-			npde = pmap64_pdpt(subord, nvaddr);
+		if (((vaddr & PDPTMASK) == 0) && (num_pde - i) >= NPDEPG) {
+			npde = pmap64_pdpt(subord, vaddr);
 
 			while (0 == npde || ((*npde & INTEL_PTE_VALID) == 0)) {
 				PMAP_UNLOCK_EXCLUSIVE(subord);
-				pmap_expand_pdpt(subord, nvaddr, PMAP_EXPAND_OPTIONS_NONE);
+				pmap_expand_pdpt(subord, vaddr, PMAP_EXPAND_OPTIONS_NONE);
 				PMAP_LOCK_EXCLUSIVE(subord);
-				npde = pmap64_pdpt(subord, nvaddr);
+				npde = pmap64_pdpt(subord, vaddr);
 			}
 			*npde |= INTEL_PDPTE_NESTED;
-			nvaddr += NBPDPT;
+			vaddr += NBPDPT;
 			i += (uint32_t)NPDEPG;
 		} else {
-			npde = pmap_pde(subord, nvaddr);
+			npde = pmap_pde(subord, vaddr);
 
 			while (0 == npde || ((*npde & INTEL_PTE_VALID) == 0)) {
 				PMAP_UNLOCK_EXCLUSIVE(subord);
-				pmap_expand(subord, nvaddr, PMAP_EXPAND_OPTIONS_NONE);
+				pmap_expand(subord, vaddr, PMAP_EXPAND_OPTIONS_NONE);
 				PMAP_LOCK_EXCLUSIVE(subord);
-				npde = pmap_pde(subord, nvaddr);
+				npde = pmap_pde(subord, vaddr);
 			}
-			nvaddr += NBPDE;
+			vaddr += NBPDE;
 			i++;
 		}
 	}
@@ -232,8 +240,8 @@ pmap_unnest(pmap_t grand, addr64_t vaddr, uint64_t size)
 	PMAP_TRACE(PMAP_CODE(PMAP__UNNEST) | DBG_FUNC_START,
 	    VM_KERNEL_ADDRHIDE(grand), VM_KERNEL_ADDRHIDE(vaddr));
 
-	if ((size & (pmap_nesting_size_min - 1)) ||
-	    (vaddr & (pmap_nesting_size_min - 1))) {
+	if ((size & (pmap_shared_region_size_min(grand) - 1)) ||
+	    (vaddr & (pmap_shared_region_size_min(grand) - 1))) {
 		panic("pmap_unnest(%p,0x%llx,0x%llx): unaligned...\n",
 		    grand, vaddr, size);
 	}
@@ -316,22 +324,15 @@ pmap_adjust_unnest_parameters(pmap_t p, vm_map_offset_t *s, vm_map_offset_t *e)
 	return rval;
 }
 
-/*
- * pmap_find_phys returns the (4K) physical page number containing a
- * given virtual address in a given pmap.
- * Note that pmap_pte may return a pde if this virtual address is
- * mapped by a large page and this is taken into account in order
- * to return the correct page number in this case.
- */
-ppnum_t
-pmap_find_phys(pmap_t pmap, addr64_t va)
+pmap_paddr_t
+pmap_find_pa(pmap_t pmap, addr64_t va)
 {
 	pt_entry_t      *ptp;
 	pd_entry_t      *pdep;
-	ppnum_t         ppn = 0;
 	pd_entry_t      pde;
 	pt_entry_t      pte;
 	boolean_t       is_ept, locked = FALSE;
+	pmap_paddr_t    pa = 0;
 
 	is_ept = is_ept_pmap(pmap);
 
@@ -350,12 +351,11 @@ pmap_find_phys(pmap_t pmap, addr64_t va)
 
 	if ((pdep != PD_ENTRY_NULL) && ((pde = *pdep) & PTE_VALID_MASK(is_ept))) {
 		if (pde & PTE_PS) {
-			ppn = (ppnum_t) i386_btop(pte_to_pa(pde));
-			ppn += (ppnum_t) ptenum(va);
+			pa = pte_to_pa(pde) + (va & I386_LPGMASK);
 		} else {
 			ptp = pmap_pte(pmap, va);
 			if ((PT_ENTRY_NULL != ptp) && (((pte = *ptp) & PTE_VALID_MASK(is_ept)) != 0)) {
-				ppn = (ppnum_t) i386_btop(pte_to_pa(pte));
+				pa = pte_to_pa(pte) + (va & PAGE_MASK);
 			}
 		}
 	}
@@ -366,7 +366,110 @@ pfp_exit:
 		mp_enable_preemption();
 	}
 
+	return pa;
+}
+
+/*
+ * pmap_find_phys returns the (4K) physical page number containing a
+ * given virtual address in a given pmap.
+ * Note that pmap_pte may return a pde if this virtual address is
+ * mapped by a large page and this is taken into account in order
+ * to return the correct page number in this case.
+ */
+ppnum_t
+pmap_find_phys(pmap_t pmap, addr64_t va)
+{
+	ppnum_t         ppn = 0;
+	pmap_paddr_t    pa = 0;
+
+	pa = pmap_find_pa(pmap, va);
+	ppn = (ppnum_t) i386_btop(pa);
+
 	return ppn;
+}
+
+ppnum_t
+pmap_find_phys_nofault(pmap_t pmap, addr64_t va)
+{
+	if ((pmap == kernel_pmap) ||
+	    ((current_thread()->map) && (pmap == vm_map_pmap(current_thread()->map)))) {
+		return pmap_find_phys(pmap, va);
+	}
+	return 0;
+}
+
+/*
+ *  pmap_get_prot returns the equivalent Vm page protections
+ *  set on a given address, 'va'. This function is used in the
+ *  ml_static_verify_page_protections() routine which is used
+ *  by the kext loading code to validate that the TEXT segment
+ *  of a kext is mapped executable.
+ */
+kern_return_t
+pmap_get_prot(pmap_t pmap, addr64_t va, vm_prot_t *protp)
+{
+	pt_entry_t      *ptp;
+	pd_entry_t      *pdep;
+	pd_entry_t      pde;
+	pt_entry_t      pte;
+	boolean_t       is_ept, locked = FALSE;
+	kern_return_t   retval = KERN_FAILURE;
+	vm_prot_t       prot = 0;
+
+	is_ept = is_ept_pmap(pmap);
+
+	if ((pmap != kernel_pmap) && not_in_kdp) {
+		PMAP_LOCK_EXCLUSIVE(pmap);
+		locked = TRUE;
+	} else {
+		mp_disable_preemption();
+	}
+
+	if (os_ref_get_count(&pmap->ref_count) == 0) {
+		goto pfp_exit;
+	}
+
+	pdep = pmap_pde(pmap, va);
+
+	if ((pdep != PD_ENTRY_NULL) && ((pde = *pdep) & PTE_VALID_MASK(is_ept))) {
+		if (pde & PTE_PS) {
+			prot = VM_PROT_READ;
+
+			if (pde & PTE_WRITE(is_ept)) {
+				prot |= VM_PROT_WRITE;
+			}
+			if (PTE_IS_EXECUTABLE(is_ept, pde)) {
+				prot |= VM_PROT_EXECUTE;
+			}
+			retval = KERN_SUCCESS;
+		} else {
+			ptp = pmap_pte(pmap, va);
+			if ((PT_ENTRY_NULL != ptp) && (((pte = *ptp) & PTE_VALID_MASK(is_ept)) != 0)) {
+				prot = VM_PROT_READ;
+
+				if (pte & PTE_WRITE(is_ept)) {
+					prot |= VM_PROT_WRITE;
+				}
+				if (PTE_IS_EXECUTABLE(is_ept, pte)) {
+					prot |= VM_PROT_EXECUTE;
+				}
+				retval = KERN_SUCCESS;
+			}
+		}
+	}
+
+pfp_exit:
+	if (locked) {
+		PMAP_UNLOCK_EXCLUSIVE(pmap);
+	} else {
+		mp_enable_preemption();
+	}
+
+	if (protp) {
+		*protp = prot;
+	}
+
+	return retval;
 }
 
 /*
@@ -503,6 +606,21 @@ void
 PTE_LOCK_UNLOCK(pt_entry_t *lpte)
 {
 	__c11_atomic_fetch_and((_Atomic pt_entry_t *)lpte, ~PTE_LOCK(0), memory_order_release_smp);
+}
+
+kern_return_t
+pmap_enter_options_addr(
+	pmap_t pmap,
+	vm_map_address_t v,
+	pmap_paddr_t pa,
+	vm_prot_t prot,
+	vm_prot_t fault_type,
+	unsigned int flags,
+	boolean_t wired,
+	unsigned int options,
+	__unused void   *arg)
+{
+	return pmap_enter_options(pmap, v, intel_btop(pa), prot, fault_type, flags, wired, options, arg);
 }
 
 kern_return_t
@@ -1216,7 +1334,7 @@ pmap_remove_range(
 	    PMAP_OPTIONS_REMOVE);
 }
 
-void
+static void
 pmap_remove_range_options(
 	pmap_t                  pmap,
 	vm_map_offset_t         start_vaddr,
@@ -1252,6 +1370,7 @@ pmap_remove_range_options(
 	ledgers_compressed = 0;
 	ledgers_alt_internal = 0;
 	ledgers_alt_compressed = 0;
+
 	/* invalidate the PTEs first to "freeze" them */
 	for (cpte = spte, vaddr = start_vaddr;
 	    cpte < epte;
@@ -1406,6 +1525,14 @@ check_pte_for_compressed_marker:
 			}
 			pvh_cnt++;
 		}
+		/* We can encounter at most 'num_found' PTEs for this level
+		 * Fewer may be encountered if some were replaced by
+		 * compressed markers. No new valid PTEs can be created
+		 * since the pmap lock is held exclusively.
+		 */
+		if (num_removed == num_found) {
+			break;
+		}
 	} /* for loop */
 
 	if (pvh_eh != PV_HASHED_ENTRY_NULL) {
@@ -1420,11 +1547,13 @@ update_counts:
 		panic("pmap_remove_range: resident_count");
 	}
 #endif
-	pmap_ledger_debit(pmap, task_ledgers.phys_mem, machine_ptob(num_removed));
-	PMAP_STATS_ASSERTF((pmap->stats.resident_count >= num_removed,
-	    "pmap=%p num_removed=%d stats.resident_count=%d",
-	    pmap, num_removed, pmap->stats.resident_count));
-	OSAddAtomic(-num_removed, &pmap->stats.resident_count);
+	if (num_removed) {
+		pmap_ledger_debit(pmap, task_ledgers.phys_mem, machine_ptob(num_removed));
+		PMAP_STATS_ASSERTF((pmap->stats.resident_count >= num_removed,
+		    "pmap=%p num_removed=%d stats.resident_count=%d",
+		    pmap, num_removed, pmap->stats.resident_count));
+		OSAddAtomic(-num_removed, &pmap->stats.resident_count);
+	}
 
 	if (pmap != kernel_pmap) {
 		PMAP_STATS_ASSERTF((pmap->stats.external >= stats_external,
@@ -1454,6 +1583,7 @@ update_counts:
 			OSAddAtomic64(-stats_compressed, &pmap->stats.compressed);
 		}
 		/* update ledgers */
+
 		if (ledgers_internal) {
 			pmap_ledger_debit(pmap,
 			    task_ledgers.internal,
@@ -1474,12 +1604,11 @@ update_counts:
 			    task_ledgers.alternate_accounting_compressed,
 			    machine_ptob(ledgers_alt_compressed));
 		}
-		pmap_ledger_debit(pmap,
-		    task_ledgers.phys_footprint,
-		    machine_ptob((ledgers_internal -
-		    ledgers_alt_internal) +
-		    (ledgers_compressed -
-		    ledgers_alt_compressed)));
+
+		uint64_t net_debit = (ledgers_internal - ledgers_alt_internal) + (ledgers_compressed - ledgers_alt_compressed);
+		if (net_debit) {
+			pmap_ledger_debit(pmap, task_ledgers.phys_footprint, machine_ptob(net_debit));
+		}
 	}
 
 #if TESTING
@@ -1490,9 +1619,11 @@ update_counts:
 	PMAP_STATS_ASSERTF((pmap->stats.wired_count >= num_unwired,
 	    "pmap=%p num_unwired=%d stats.wired_count=%d",
 	    pmap, num_unwired, pmap->stats.wired_count));
-	OSAddAtomic(-num_unwired, &pmap->stats.wired_count);
-	pmap_ledger_debit(pmap, task_ledgers.wired_mem, machine_ptob(num_unwired));
 
+	if (num_unwired != 0) {
+		OSAddAtomic(-num_unwired, &pmap->stats.wired_count);
+		pmap_ledger_debit(pmap, task_ledgers.wired_mem, machine_ptob(num_unwired));
+	}
 	return;
 }
 
@@ -1512,7 +1643,7 @@ pmap_remove(
 {
 	pmap_remove_options(map, s64, e64, PMAP_OPTIONS_REMOVE);
 }
-#define PLCHECK_THRESHOLD (8)
+#define PLCHECK_THRESHOLD (2)
 
 void
 pmap_remove_options(
@@ -1586,13 +1717,13 @@ pmap_remove_options(
 
 		if ((s64 < e64) && (traverse_count++ > PLCHECK_THRESHOLD)) {
 			if (deadline == 0) {
-				deadline = rdtsc64() + max_preemption_latency_tsc;
+				deadline = rdtsc64_nofence() + max_preemption_latency_tsc;
 			} else {
-				if (rdtsc64() > deadline) {
+				if (rdtsc64_nofence() > deadline) {
 					PMAP_UNLOCK_EXCLUSIVE(map);
 					__builtin_ia32_pause();
 					PMAP_LOCK_EXCLUSIVE(map);
-					deadline = rdtsc64() + max_preemption_latency_tsc;
+					deadline = rdtsc64_nofence() + max_preemption_latency_tsc;
 				}
 			}
 		}
@@ -2553,6 +2684,26 @@ done:
 }
 
 void
+pmap_set_vm_map_cs_enforced(
+	pmap_t pmap,
+	bool new_value)
+{
+	PMAP_LOCK_EXCLUSIVE(pmap);
+	pmap->pm_vm_map_cs_enforced = new_value;
+	PMAP_UNLOCK_EXCLUSIVE(pmap);
+}
+extern int cs_process_enforcement_enable;
+bool
+pmap_get_vm_map_cs_enforced(
+	pmap_t pmap)
+{
+	if (cs_process_enforcement_enable) {
+		return true;
+	}
+	return pmap->pm_vm_map_cs_enforced;
+}
+
+void
 pmap_set_jit_entitled(__unused pmap_t pmap)
 {
 	/* The x86 pmap layer does not care if a map has a JIT entry. */
@@ -2560,13 +2711,20 @@ pmap_set_jit_entitled(__unused pmap_t pmap)
 }
 
 bool
-pmap_has_prot_policy(__unused vm_prot_t prot)
+pmap_get_jit_entitled(__unused pmap_t pmap)
+{
+	/* The x86 pmap layer does not care if a map is using JIT. */
+	return false;
+}
+
+bool
+pmap_has_prot_policy(__unused pmap_t pmap, __unused bool translated_allow_execute, __unused vm_prot_t prot)
 {
 	/*
 	 * The x86 pmap layer does not apply any policy to any protection
 	 * types.
 	 */
-	return FALSE;
+	return false;
 }
 
 uint64_t
@@ -2576,7 +2734,7 @@ pmap_release_pages_fast(void)
 }
 
 void
-pmap_trim(__unused pmap_t grand, __unused pmap_t subord, __unused addr64_t vstart, __unused addr64_t nstart, __unused uint64_t size)
+pmap_trim(__unused pmap_t grand, __unused pmap_t subord, __unused addr64_t vstart, __unused uint64_t size)
 {
 	return;
 }
@@ -2607,10 +2765,11 @@ pmap_ledger_free(ledger_t ledger)
 	    __func__, ledger);
 }
 
-size_t
-pmap_dump_page_tables(pmap_t pmap __unused, void *bufp __unused, void *buf_end __unused)
+kern_return_t
+pmap_dump_page_tables(pmap_t pmap __unused, void *bufp __unused, void *buf_end __unused,
+    unsigned int level_mask __unused, size_t *bytes_copied __unused)
 {
-	return (size_t)-1;
+	return KERN_NOT_SUPPORTED;
 }
 
 void *
@@ -2623,4 +2782,19 @@ pmap_map_compressor_page(ppnum_t pn)
 void
 pmap_unmap_compressor_page(ppnum_t pn __unused, void *kva __unused)
 {
+}
+
+bool
+pmap_clear_refmod_range_options(
+	pmap_t pmap __unused,
+	vm_map_address_t start __unused,
+	vm_map_address_t end __unused,
+	unsigned int mask __unused,
+	unsigned int options __unused)
+{
+	/*
+	 * x86 doesn't have ranged tlbi instructions, and we already have
+	 * the pmap_flush_context. This operation isn't implemented.
+	 */
+	return false;
 }

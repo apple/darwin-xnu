@@ -58,7 +58,9 @@ IODataQueueDispatchSource::init()
 }
 
 kern_return_t
-IMPL(IODataQueueDispatchSource, CheckForWork)
+IODataQueueDispatchSource::CheckForWork_Impl(
+	const IORPC rpc,
+	bool synchronous)
 {
 	IOReturn ret = kIOReturnNotReady;
 
@@ -68,12 +70,18 @@ IMPL(IODataQueueDispatchSource, CheckForWork)
 #if KERNEL
 
 kern_return_t
-IMPL(IODataQueueDispatchSource, Create)
+IODataQueueDispatchSource::Create_Impl(
+	uint64_t queueByteCount,
+	IODispatchQueue * queue,
+	IODataQueueDispatchSource ** source)
 {
 	IODataQueueDispatchSource * inst;
 	IOBufferMemoryDescriptor  * bmd;
 
 	if (3 & queueByteCount) {
+		return kIOReturnBadArgument;
+	}
+	if (queueByteCount > UINT_MAX) {
 		return kIOReturnBadArgument;
 	}
 	inst = OSTypeAlloc(IODataQueueDispatchSource);
@@ -93,7 +101,7 @@ IMPL(IODataQueueDispatchSource, Create)
 		return kIOReturnNoMemory;
 	}
 	inst->ivars->memory         = bmd;
-	inst->ivars->queueByteCount = queueByteCount;
+	inst->ivars->queueByteCount = ((uint32_t) queueByteCount);
 	inst->ivars->options        = 0;
 	inst->ivars->dataQueue      = (typeof(inst->ivars->dataQueue))bmd->getBytesNoCopy();
 
@@ -103,7 +111,8 @@ IMPL(IODataQueueDispatchSource, Create)
 }
 
 kern_return_t
-IMPL(IODataQueueDispatchSource, CopyMemory)
+IODataQueueDispatchSource::CopyMemory_Impl(
+	IOMemoryDescriptor ** memory)
 {
 	kern_return_t ret;
 	IOMemoryDescriptor * result;
@@ -121,7 +130,8 @@ IMPL(IODataQueueDispatchSource, CopyMemory)
 }
 
 kern_return_t
-IMPL(IODataQueueDispatchSource, CopyDataAvailableHandler)
+IODataQueueDispatchSource::CopyDataAvailableHandler_Impl(
+	OSAction ** action)
 {
 	kern_return_t ret;
 	OSAction    * result;
@@ -139,7 +149,8 @@ IMPL(IODataQueueDispatchSource, CopyDataAvailableHandler)
 }
 
 kern_return_t
-IMPL(IODataQueueDispatchSource, CopyDataServicedHandler)
+IODataQueueDispatchSource::CopyDataServicedHandler_Impl(
+	OSAction ** action)
 {
 	kern_return_t ret;
 	OSAction    * result;
@@ -156,7 +167,8 @@ IMPL(IODataQueueDispatchSource, CopyDataServicedHandler)
 }
 
 kern_return_t
-IMPL(IODataQueueDispatchSource, SetDataAvailableHandler)
+IODataQueueDispatchSource::SetDataAvailableHandler_Impl(
+	OSAction * action)
 {
 	IOReturn ret;
 	OSAction * oldAction;
@@ -178,7 +190,8 @@ IMPL(IODataQueueDispatchSource, SetDataAvailableHandler)
 }
 
 kern_return_t
-IMPL(IODataQueueDispatchSource, SetDataServicedHandler)
+IODataQueueDispatchSource::SetDataServicedHandler_Impl(
+	OSAction * action)
 {
 	IOReturn ret;
 	OSAction * oldAction;
@@ -232,7 +245,9 @@ IODataQueueDispatchSource::SendDataServiced(void)
 }
 
 kern_return_t
-IMPL(IODataQueueDispatchSource, SetEnableWithCompletion)
+IODataQueueDispatchSource::SetEnableWithCompletion_Impl(
+	bool enable,
+	IODispatchSourceCancelHandler handler)
 {
 	IOReturn ret;
 
@@ -255,7 +270,8 @@ IODataQueueDispatchSource::free()
 }
 
 kern_return_t
-IMPL(IODataQueueDispatchSource, Cancel)
+IODataQueueDispatchSource::Cancel_Impl(
+	IODispatchSourceCancelHandler handler)
 {
 	return kIOReturnSuccess;
 }

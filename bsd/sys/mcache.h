@@ -400,8 +400,6 @@ __private_extern__ void mcache_buffer_log(mcache_audit_t *, void *, mcache_t *,
     struct timeval *);
 __private_extern__ void mcache_set_pattern(u_int64_t, void *, size_t);
 __private_extern__ void *mcache_verify_pattern(u_int64_t, void *, size_t);
-__private_extern__ void *mcache_verify_set_pattern(u_int64_t, u_int64_t,
-    void *, size_t);
 __private_extern__ void mcache_audit_free_verify(mcache_audit_t *,
     void *, size_t, size_t);
 __private_extern__ void mcache_audit_free_verify_set(mcache_audit_t *,

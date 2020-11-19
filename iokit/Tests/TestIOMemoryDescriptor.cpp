@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2014-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -80,7 +80,7 @@ IOMultMemoryDescriptorTest(int newValue)
 
 	data = (typeof(data))IOMallocAligned(ptoa(8), page_size);
 	for (i = 0; i < ptoa(8); i++) {
-		data[i] = atop(i) | 0xD0;
+		data[i] = ((uint8_t) atop(i)) | 0xD0;
 	}
 
 	ranges[0].address = (IOVirtualAddress)(data + ptoa(4));
@@ -88,12 +88,48 @@ IOMultMemoryDescriptorTest(int newValue)
 	ranges[1].address = (IOVirtualAddress)(data + ptoa(0));
 	ranges[1].length  = ptoa(4);
 
-	mds[0] = IOMemoryDescriptor::withAddressRanges(&ranges[0], 2, kIODirectionOutIn, kernel_task);
+	mds[0] = IOMemoryDescriptor::withAddressRange((mach_vm_address_t) data, 2, kIODirectionOutIn, kernel_task);
+	assert(mds[0]);
+	{
+		uint64_t dmaLen, dmaOffset;
+		dmaLen = mds[0]->getDMAMapLength(&dmaOffset);
+		assert(0 == dmaOffset);
+		assert(ptoa(1) == dmaLen);
+	}
+	mds[0]->release();
+	mds[0] = IOMemoryDescriptor::withAddressRange((mach_vm_address_t) (data + page_size - 2), 4, kIODirectionOutIn, kernel_task);
+	assert(mds[0]);
+	{
+		uint64_t dmaLen, dmaOffset;
+		dmaLen = mds[0]->getDMAMapLength(&dmaOffset);
+		assert((page_size - 2) == dmaOffset);
+		assert(ptoa(2) == dmaLen);
+	}
+	mds[0]->release();
 
+	mds[0] = IOMemoryDescriptor::withAddressRanges(&ranges[0], 2, kIODirectionOutIn, kernel_task);
+	{
+		uint64_t dmaLen, dmaOffset;
+		dmaLen = mds[0]->getDMAMapLength(&dmaOffset);
+		assert(0 == dmaOffset);
+		assert(ptoa(8) == dmaLen);
+	}
 	mds[1] = IOSubMemoryDescriptor::withSubRange(mds[0], ptoa(3), ptoa(2), kIODirectionOutIn);
+	{
+		uint64_t dmaLen, dmaOffset;
+		dmaLen = mds[1]->getDMAMapLength(&dmaOffset);
+		assert(0 == dmaOffset);
+		assert(ptoa(2) == dmaLen);
+	}
 	mds[2] = IOSubMemoryDescriptor::withSubRange(mds[0], ptoa(7), ptoa(1), kIODirectionOutIn);
 
 	mmd = IOMultiMemoryDescriptor::withDescriptors(&mds[0], sizeof(mds) / sizeof(mds[0]), kIODirectionOutIn, false);
+	{
+		uint64_t dmaLen, dmaOffset;
+		dmaLen = mmd->getDMAMapLength(&dmaOffset);
+		assert(0 == dmaOffset);
+		assert(ptoa(11) == dmaLen);
+	}
 	mds[2]->release();
 	mds[1]->release();
 	mds[0]->release();
@@ -142,6 +178,12 @@ IODMACommandForceDoubleBufferTest(int newValue)
 		bmd = IOBufferMemoryDescriptor::inTaskWithOptions(kernel_task,
 		    dir | kIOMemoryPageable, ptoa(8));
 		assert(bmd);
+		{
+			uint64_t dmaLen, dmaOffset;
+			dmaLen = bmd->getDMAMapLength(&dmaOffset);
+			assert(0 == dmaOffset);
+			assert(ptoa(8) == dmaLen);
+		}
 
 		((uint32_t*) bmd->getBytesNoCopy())[0] = 0x53535300 | dir;
 
@@ -393,6 +435,17 @@ IOMemoryPrefaultTest(uint32_t options)
 	return kIOReturnSuccess;
 }
 
+static IOReturn
+IOBMDOverflowTest(uint32_t options)
+{
+	IOBufferMemoryDescriptor * bmd;
+
+	bmd = IOBufferMemoryDescriptor::inTaskWithPhysicalMask(kernel_task, kIOMemoryKernelUserShared | kIODirectionOut,
+	    0xffffffffffffffff, 0xfffffffffffff000);
+	assert(NULL == bmd);
+
+	return kIOReturnSuccess;
+}
 
 // <rdar://problem/26375234>
 static IOReturn
@@ -793,6 +846,11 @@ IOMemoryDescriptorTest(int newValue)
 		return result;
 	}
 
+	result = IOBMDOverflowTest(newValue);
+	if (result) {
+		return result;
+	}
+
 	result = ZeroLengthTest(newValue);
 	if (result) {
 		return result;
@@ -902,7 +960,7 @@ IOMemoryDescriptorTest(int newValue)
 							break;
 						}
 						for (idx = 0; idx < size; idx += sizeof(uint32_t)) {
-							offidx = (idx + mapoffset + srcoffset);
+							offidx = (typeof(offidx))(idx + mapoffset + srcoffset);
 							if ((srcsize <= ptoa(5)) && (srcsize > ptoa(2)) && !(page_mask & srcoffset)) {
 								if (offidx < ptoa(2)) {
 									offidx ^= ptoa(1);

@@ -30,6 +30,7 @@
 #define _IOMULTIMEMORYDESCRIPTOR_H
 
 #include <IOKit/IOMemoryDescriptor.h>
+#include <libkern/c++/OSPtr.h>
 
 /*! @class IOMultiMemoryDescriptor : public IOMemoryDescriptor
  *   @abstract The IOMultiMemoryDescriptor object describes a memory area made up of several other IOMemoryDescriptors.
@@ -58,7 +59,7 @@ public:
  *   @param asReference If false, the IOMultiMemoryDescriptor object will make a copy of the descriptors array, otherwise, the array will be used in situ, avoiding an extra allocation.
  *   @result The created IOMultiMemoryDescriptor on success, to be released by the caller, or zero on failure. */
 
-	static IOMultiMemoryDescriptor * withDescriptors(
+	static OSPtr<IOMultiMemoryDescriptor>  withDescriptors(
 		IOMemoryDescriptor ** descriptors,
 		UInt32                withCount,
 		IODirection           withDirection,

@@ -40,6 +40,7 @@
 #include <kern/policy_internal.h>
 
 #include <prng/random.h>
+#include <prng/entropy.h>
 #include <i386/machine_cpu.h>
 #include <i386/lapic.h>
 #include <i386/bit_routines.h>
@@ -54,6 +55,7 @@
 #include <i386/pmap_internal.h>
 #include <i386/misc_protos.h>
 #include <kern/timer_queue.h>
+#include <vm/vm_map.h>
 #if KPC
 #include <kern/kpc.h>
 #endif
@@ -70,8 +72,6 @@
 #endif /* MONOTONIC */
 
 extern void     wakeup(void *);
-
-static int max_cpus_initialized = 0;
 
 uint64_t        LockTimeOut;
 uint64_t        TLBTimeOut;
@@ -92,7 +92,9 @@ uint32_t ml_timer_eager_evaluations;
 uint64_t ml_timer_eager_evaluation_max;
 static boolean_t ml_timer_evaluation_in_progress = FALSE;
 
-
+LCK_GRP_DECLARE(max_cpus_grp, "max_cpus");
+LCK_MTX_DECLARE(max_cpus_lock, &max_cpus_grp);
+static int max_cpus_initialized = 0;
 #define MAX_CPUS_SET    0x1
 #define MAX_CPUS_WAIT   0x2
 
@@ -140,6 +142,42 @@ ml_static_slide(
 	vm_offset_t vaddr)
 {
 	return VM_KERNEL_SLIDE(vaddr);
+}
+
+/*
+ * base must be page-aligned, and size must be a multiple of PAGE_SIZE
+ */
+kern_return_t
+ml_static_verify_page_protections(
+	uint64_t base, uint64_t size, vm_prot_t prot)
+{
+	vm_prot_t pageprot;
+	uint64_t offset;
+
+	DBG("ml_static_verify_page_protections: vaddr 0x%llx sz 0x%llx prot 0x%x\n", base, size, prot);
+
+	/*
+	 * base must be within the static bounds, defined to be:
+	 * (vm_kernel_stext, kc_highest_nonlinkedit_vmaddr)
+	 */
+#if DEVELOPMENT || DEBUG || KASAN
+	assert(kc_highest_nonlinkedit_vmaddr > 0 && base > vm_kernel_stext && base < kc_highest_nonlinkedit_vmaddr);
+#else   /* On release kernels, assume this is a protection mismatch failure. */
+	if (kc_highest_nonlinkedit_vmaddr == 0 || base < vm_kernel_stext || base >= kc_highest_nonlinkedit_vmaddr) {
+		return KERN_FAILURE;
+	}
+#endif
+
+	for (offset = 0; offset < size; offset += PAGE_SIZE) {
+		if (pmap_get_prot(kernel_pmap, base + offset, &pageprot) == KERN_FAILURE) {
+			return KERN_FAILURE;
+		}
+		if ((pageprot & prot) != prot) {
+			return KERN_FAILURE;
+		}
+	}
+
+	return KERN_SUCCESS;
 }
 
 vm_offset_t
@@ -214,6 +252,18 @@ ml_static_mfree(
 #endif
 }
 
+/* Change page protections for addresses previously loaded by efiboot */
+kern_return_t
+ml_static_protect(vm_offset_t vmaddr, vm_size_t size, vm_prot_t prot)
+{
+	boolean_t NX = !!!(prot & VM_PROT_EXECUTE), ro = !!!(prot & VM_PROT_WRITE);
+
+	assert(prot & VM_PROT_READ);
+
+	pmap_mark_range(kernel_pmap, vmaddr, size, NX, ro);
+
+	return KERN_SUCCESS;
+}
 
 /* virtual to physical on wired pages */
 vm_offset_t
@@ -434,8 +484,6 @@ ml_install_interrupt_handler(
 	    (IOInterruptHandler) handler, refCon);
 
 	(void) ml_set_interrupts_enabled(current_state);
-
-	initialize_screen(NULL, kPEAcquireScreen);
 }
 
 
@@ -502,34 +550,18 @@ register_cpu(
 		if (this_cpu_datap->lcpu.core == NULL) {
 			goto failed;
 		}
-
-#if NCOPY_WINDOWS > 0
-		this_cpu_datap->cpu_pmap = pmap_cpu_alloc(boot_cpu);
-		if (this_cpu_datap->cpu_pmap == NULL) {
-			goto failed;
-		}
-#endif
-
-		this_cpu_datap->cpu_processor = cpu_processor_alloc(boot_cpu);
-		if (this_cpu_datap->cpu_processor == NULL) {
-			goto failed;
-		}
-		/*
-		 * processor_init() deferred to topology start
-		 * because "slot numbers" a.k.a. logical processor numbers
-		 * are not yet finalized.
-		 */
 	}
 
+	/*
+	 * processor_init() deferred to topology start
+	 * because "slot numbers" a.k.a. logical processor numbers
+	 * are not yet finalized.
+	 */
 	*processor_out = this_cpu_datap->cpu_processor;
 
 	return KERN_SUCCESS;
 
 failed:
-	cpu_processor_free(this_cpu_datap->cpu_processor);
-#if NCOPY_WINDOWS > 0
-	pmap_cpu_free(this_cpu_datap->cpu_pmap);
-#endif
 	console_cpu_free(this_cpu_datap->cpu_console_buf);
 #if KPC
 	kpc_unregister_cpu(this_cpu_datap);
@@ -657,12 +689,22 @@ ml_cpu_get_info(ml_cpu_info_t *cpu_infop)
 	}
 }
 
-void
-ml_init_max_cpus(unsigned long max_cpus)
+int
+ml_early_cpu_max_number(void)
 {
-	boolean_t current_state;
+	int n = max_ncpus;
 
-	current_state = ml_set_interrupts_enabled(FALSE);
+	assert(startup_phase >= STARTUP_SUB_TUNABLES);
+	if (max_cpus_from_firmware) {
+		n = MIN(n, max_cpus_from_firmware);
+	}
+	return n - 1;
+}
+
+void
+ml_set_max_cpus(unsigned int max_cpus)
+{
+	lck_mtx_lock(&max_cpus_lock);
 	if (max_cpus_initialized != MAX_CPUS_SET) {
 		if (max_cpus > 0 && max_cpus <= MAX_CPUS) {
 			/*
@@ -674,32 +716,23 @@ ml_init_max_cpus(unsigned long max_cpus)
 			machine_info.max_cpus = (integer_t)MIN(max_cpus, max_ncpus);
 		}
 		if (max_cpus_initialized == MAX_CPUS_WAIT) {
-			wakeup((event_t)&max_cpus_initialized);
+			thread_wakeup((event_t) &max_cpus_initialized);
 		}
 		max_cpus_initialized = MAX_CPUS_SET;
 	}
-	(void) ml_set_interrupts_enabled(current_state);
+	lck_mtx_unlock(&max_cpus_lock);
 }
 
-int
-ml_get_max_cpus(void)
+unsigned int
+ml_wait_max_cpus(void)
 {
-	boolean_t current_state;
-
-	current_state = ml_set_interrupts_enabled(FALSE);
-	if (max_cpus_initialized != MAX_CPUS_SET) {
+	lck_mtx_lock(&max_cpus_lock);
+	while (max_cpus_initialized != MAX_CPUS_SET) {
 		max_cpus_initialized = MAX_CPUS_WAIT;
-		assert_wait((event_t)&max_cpus_initialized, THREAD_UNINT);
-		(void)thread_block(THREAD_CONTINUE_NULL);
+		lck_mtx_sleep(&max_cpus_lock, LCK_SLEEP_DEFAULT, &max_cpus_initialized, THREAD_UNINT);
 	}
-	(void) ml_set_interrupts_enabled(current_state);
+	lck_mtx_unlock(&max_cpus_lock);
 	return machine_info.max_cpus;
-}
-
-boolean_t
-ml_wants_panic_trap_to_debugger(void)
-{
-	return FALSE;
 }
 
 void
@@ -711,6 +744,76 @@ ml_panic_trap_to_debugger(__unused const char *panic_format_str,
     __unused unsigned long panic_caller)
 {
 	return;
+}
+
+static uint64_t
+virtual_timeout_inflate64(unsigned int vti, uint64_t timeout, uint64_t max_timeout)
+{
+	if (vti >= 64) {
+		return max_timeout;
+	}
+
+	if ((timeout << vti) >> vti != timeout) {
+		return max_timeout;
+	}
+
+	if ((timeout << vti) > max_timeout) {
+		return max_timeout;
+	}
+
+	return timeout << vti;
+}
+
+static uint32_t
+virtual_timeout_inflate32(unsigned int vti, uint32_t timeout, uint32_t max_timeout)
+{
+	if (vti >= 32) {
+		return max_timeout;
+	}
+
+	if ((timeout << vti) >> vti != timeout) {
+		return max_timeout;
+	}
+
+	return timeout << vti;
+}
+
+/*
+ * Some timeouts are later adjusted or used in calculations setting
+ * other values. In order to avoid overflow, cap the max timeout as
+ * 2^47ns (~39 hours).
+ */
+static const uint64_t max_timeout_ns = 1ULL << 47;
+
+/*
+ * Inflate a timeout in absolutetime.
+ */
+static uint64_t
+virtual_timeout_inflate_abs(unsigned int vti, uint64_t timeout)
+{
+	uint64_t max_timeout;
+	nanoseconds_to_absolutetime(max_timeout_ns, &max_timeout);
+	return virtual_timeout_inflate64(vti, timeout, max_timeout);
+}
+
+/*
+ * Inflate a value in TSC ticks.
+ */
+static uint64_t
+virtual_timeout_inflate_tsc(unsigned int vti, uint64_t timeout)
+{
+	const uint64_t max_timeout = tmrCvt(max_timeout_ns, tscFCvtn2t);
+	return virtual_timeout_inflate64(vti, timeout, max_timeout);
+}
+
+/*
+ * Inflate a timeout in microseconds.
+ */
+static uint32_t
+virtual_timeout_inflate_us(unsigned int vti, uint64_t timeout)
+{
+	const uint32_t max_timeout = ~0;
+	return virtual_timeout_inflate32(vti, timeout, max_timeout);
 }
 
 /*
@@ -804,35 +907,39 @@ ml_init_lock_timeout(void)
 
 	virtualized = ((cpuid_features() & CPUID_FEATURE_VMM) != 0);
 	if (virtualized) {
-		int     vti;
+		unsigned int vti;
 
 		if (!PE_parse_boot_argn("vti", &vti, sizeof(vti))) {
 			vti = 6;
 		}
 		printf("Timeouts adjusted for virtualization (<<%d)\n", vti);
 		kprintf("Timeouts adjusted for virtualization (<<%d):\n", vti);
-#define VIRTUAL_TIMEOUT_INFLATE64(_timeout)                     \
-MACRO_BEGIN                                                     \
-	kprintf("%24s: 0x%016llx ", #_timeout, _timeout);       \
-	_timeout <<= vti;                                       \
-	kprintf("-> 0x%016llx\n",  _timeout);                   \
+#define VIRTUAL_TIMEOUT_INFLATE_ABS(_timeout)              \
+MACRO_BEGIN                                                \
+	kprintf("%24s: 0x%016llx ", #_timeout, _timeout);      \
+	_timeout = virtual_timeout_inflate_abs(vti, _timeout); \
+	kprintf("-> 0x%016llx\n",  _timeout);                  \
 MACRO_END
-#define VIRTUAL_TIMEOUT_INFLATE32(_timeout)                     \
-MACRO_BEGIN                                                     \
-	kprintf("%24s:         0x%08x ", #_timeout, _timeout);  \
-	if ((_timeout <<vti) >> vti == _timeout)                \
-	        _timeout <<= vti;                               \
-	else                                                    \
-	        _timeout = ~0; /* cap rather than overflow */   \
-	kprintf("-> 0x%08x\n",  _timeout);                      \
+
+#define VIRTUAL_TIMEOUT_INFLATE_TSC(_timeout)              \
+MACRO_BEGIN                                                \
+	kprintf("%24s: 0x%016llx ", #_timeout, _timeout);      \
+	_timeout = virtual_timeout_inflate_tsc(vti, _timeout); \
+	kprintf("-> 0x%016llx\n",  _timeout);                  \
 MACRO_END
-		VIRTUAL_TIMEOUT_INFLATE32(LockTimeOutUsec);
-		VIRTUAL_TIMEOUT_INFLATE64(LockTimeOut);
-		VIRTUAL_TIMEOUT_INFLATE64(LockTimeOutTSC);
-		VIRTUAL_TIMEOUT_INFLATE64(TLBTimeOut);
-		VIRTUAL_TIMEOUT_INFLATE64(MutexSpin);
-		VIRTUAL_TIMEOUT_INFLATE64(low_MutexSpin);
-		VIRTUAL_TIMEOUT_INFLATE64(reportphyreaddelayabs);
+#define VIRTUAL_TIMEOUT_INFLATE_US(_timeout)               \
+MACRO_BEGIN                                                \
+	kprintf("%24s:         0x%08x ", #_timeout, _timeout); \
+	_timeout = virtual_timeout_inflate_us(vti, _timeout);  \
+	kprintf("-> 0x%08x\n",  _timeout);                     \
+MACRO_END
+		VIRTUAL_TIMEOUT_INFLATE_US(LockTimeOutUsec);
+		VIRTUAL_TIMEOUT_INFLATE_ABS(LockTimeOut);
+		VIRTUAL_TIMEOUT_INFLATE_TSC(LockTimeOutTSC);
+		VIRTUAL_TIMEOUT_INFLATE_ABS(TLBTimeOut);
+		VIRTUAL_TIMEOUT_INFLATE_ABS(MutexSpin);
+		VIRTUAL_TIMEOUT_INFLATE_ABS(low_MutexSpin);
+		VIRTUAL_TIMEOUT_INFLATE_ABS(reportphyreaddelayabs);
 	}
 
 	interrupt_latency_tracker_setup();
@@ -856,7 +963,7 @@ ml_delay_should_spin(uint64_t interval)
 	return (interval < delay_spin_threshold) ? TRUE : FALSE;
 }
 
-uint32_t yield_delay_us = 0;
+TUNABLE(uint32_t, yield_delay_us, "yield_delay_us", 0);
 
 void
 ml_delay_on_yield(void)
@@ -1071,11 +1178,11 @@ ml_entropy_collect(void)
 	assert(cpu_number() == master_cpu);
 
 	/* update buffer pointer cyclically */
-	ep = EntropyData.buffer + (EntropyData.sample_count & ENTROPY_BUFFER_INDEX_MASK);
+	ep = EntropyData.buffer + (EntropyData.sample_count & EntropyData.buffer_index_mask);
 	EntropyData.sample_count += 1;
 
 	rdtsc_nofence(tsc_lo, tsc_hi);
-	*ep = ror32(*ep, 9) ^ tsc_lo;
+	*ep = (ror32(*ep, 9) & EntropyData.ror_mask) ^ tsc_lo;
 }
 
 uint64_t
@@ -1121,19 +1228,64 @@ static boolean_t ml_quiescing;
 void
 ml_set_is_quiescing(boolean_t quiescing)
 {
-	assert(FALSE == ml_get_interrupts_enabled());
 	ml_quiescing = quiescing;
 }
 
 boolean_t
 ml_is_quiescing(void)
 {
-	assert(FALSE == ml_get_interrupts_enabled());
 	return ml_quiescing;
 }
 
 uint64_t
 ml_get_booter_memory_size(void)
 {
+	return 0;
+}
+
+void
+machine_lockdown(void)
+{
+	x86_64_protect_data_const();
+}
+
+bool
+ml_cpu_can_exit(__unused int cpu_id)
+{
+	return true;
+}
+
+void
+ml_cpu_init_state(void)
+{
+}
+
+void
+ml_cpu_begin_state_transition(__unused int cpu_id)
+{
+}
+
+void
+ml_cpu_end_state_transition(__unused int cpu_id)
+{
+}
+
+void
+ml_cpu_begin_loop(void)
+{
+}
+
+void
+ml_cpu_end_loop(void)
+{
+}
+
+size_t
+ml_get_vm_reserved_regions(bool vm_is64bit, struct vm_reserved_region **regions)
+{
+#pragma unused(vm_is64bit)
+	assert(regions != NULL);
+
+	*regions = NULL;
 	return 0;
 }

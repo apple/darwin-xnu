@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -81,7 +81,7 @@
 #include <sys/vnode_internal.h>
 #include <sys/mount_internal.h>
 #include <sys/trace.h>
-#include <sys/malloc.h>
+#include <kern/kalloc.h>
 #include <sys/resourcevar.h>
 #include <miscfs/specfs/specdev.h>
 #include <sys/ubc.h>
@@ -135,11 +135,10 @@ int  bdwrite_internal(buf_t, int);
 extern void disk_conditioner_delay(buf_t, int, int, uint64_t);
 
 /* zone allocated buffer headers */
-static void     bufzoneinit(void);
 static void     bcleanbuf_thread_init(void);
 static void     bcleanbuf_thread(void);
 
-static zone_t   buf_hdr_zone;
+static ZONE_DECLARE(buf_hdr_zone, "buf headers", sizeof(struct buf), ZC_NONE);
 static int      buf_hdr_count;
 
 
@@ -175,7 +174,7 @@ static lck_mtx_t        *iobuffer_mtxp;
 static lck_mtx_t        *buf_mtxp;
 static lck_mtx_t        *buf_gc_callout;
 
-static int buf_busycount;
+static uint32_t buf_busycount;
 
 #define FS_BUFFER_CACHE_GC_CALLOUTS_MAX_SIZE 16
 typedef struct {
@@ -190,7 +189,7 @@ buf_timestamp(void)
 {
 	struct  timeval         t;
 	microuptime(&t);
-	return t.tv_sec;
+	return (int)t.tv_sec;
 }
 
 /*
@@ -444,31 +443,24 @@ bufattr_setcpx(__unused bufattr_t bap, __unused struct cpx *cpx)
 #endif /* !CONFIG_PROTECT */
 
 bufattr_t
-bufattr_alloc()
+bufattr_alloc(void)
 {
-	bufattr_t bap;
-	MALLOC(bap, bufattr_t, sizeof(struct bufattr), M_TEMP, M_WAITOK);
-	if (bap == NULL) {
-		return NULL;
-	}
-
-	bzero(bap, sizeof(struct bufattr));
-	return bap;
+	return kheap_alloc(KHEAP_DEFAULT, sizeof(struct bufattr),
+	           Z_WAITOK | Z_ZERO);
 }
 
 void
 bufattr_free(bufattr_t bap)
 {
-	if (bap) {
-		FREE(bap, M_TEMP);
-	}
+	kheap_free(KHEAP_DEFAULT, bap, sizeof(struct bufattr));
 }
 
 bufattr_t
 bufattr_dup(bufattr_t bap)
 {
 	bufattr_t new_bufattr;
-	MALLOC(new_bufattr, bufattr_t, sizeof(struct bufattr), M_TEMP, M_WAITOK);
+	new_bufattr = kheap_alloc(KHEAP_DEFAULT, sizeof(struct bufattr),
+	    Z_WAITOK);
 	if (new_bufattr == NULL) {
 		return NULL;
 	}
@@ -527,17 +519,11 @@ bufattr_markmeta(bufattr_t bap)
 }
 
 int
-#if !CONFIG_EMBEDDED
 bufattr_delayidlesleep(bufattr_t bap)
-#else /* !CONFIG_EMBEDDED */
-bufattr_delayidlesleep(__unused bufattr_t bap)
-#endif /* !CONFIG_EMBEDDED */
 {
-#if !CONFIG_EMBEDDED
 	if ((bap->ba_flags & BA_DELAYIDLESLEEP)) {
 		return 1;
 	}
-#endif /* !CONFIG_EMBEDDED */
 	return 0;
 }
 
@@ -800,6 +786,7 @@ buf_t
 buf_clone(buf_t bp, int io_offset, int io_size, void (*iodone)(buf_t, void *), void *arg)
 {
 	buf_t   io_bp;
+	int add1, add2;
 
 	if (io_offset < 0 || io_size < 0) {
 		return NULL;
@@ -814,7 +801,10 @@ buf_clone(buf_t bp, int io_offset, int io_size, void (*iodone)(buf_t, void *), v
 			return NULL;
 		}
 
-		if (((bp->b_uploffset + io_offset + io_size) & PAGE_MASK) && ((io_offset + io_size) < bp->b_bcount)) {
+		if (os_add_overflow(io_offset, io_size, &add1) || os_add_overflow(add1, bp->b_uploffset, &add2)) {
+			return NULL;
+		}
+		if ((add2 & PAGE_MASK) && ((uint32_t)add1 < (uint32_t)bp->b_bcount)) {
 			return NULL;
 		}
 	}
@@ -1272,9 +1262,9 @@ buf_strategy_fragmented(vnode_t devvp, buf_t bp, off_t f_offset, size_t contig_b
 			 */
 			bzero((caddr_t)io_bp->b_datap, (int)io_contig_bytes);
 		} else {
-			io_bp->b_bcount  = io_contig_bytes;
-			io_bp->b_bufsize = io_contig_bytes;
-			io_bp->b_resid   = io_contig_bytes;
+			io_bp->b_bcount  = (uint32_t)io_contig_bytes;
+			io_bp->b_bufsize = (uint32_t)io_contig_bytes;
+			io_bp->b_resid   = (uint32_t)io_contig_bytes;
 			io_bp->b_blkno   = io_blkno;
 
 			buf_reset(io_bp, io_direction);
@@ -1402,7 +1392,7 @@ buf_strategy(vnode_t devvp, void *ap)
 				/* Set block number to force biodone later */
 				bp->b_blkno = -1;
 				buf_clear(bp);
-			} else if ((long)contig_bytes < bp->b_bcount) {
+			} else if (contig_bytes < (size_t)bp->b_bcount) {
 				return buf_strategy_fragmented(devvp, bp, f_offset, contig_bytes);
 			}
 		}
@@ -2160,9 +2150,6 @@ bufinit(void)
 	printf("using %d buffer headers and %d cluster IO buffer headers\n",
 	    nbuf_headers, niobuf_headers);
 
-	/* Set up zones used by the buffer cache */
-	bufzoneinit();
-
 	/* start the bcleanbuf() thread */
 	bcleanbuf_thread_init();
 
@@ -2179,62 +2166,7 @@ bufinit(void)
 #define MINMETA 512
 #define MAXMETA 16384
 
-struct meta_zone_entry {
-	zone_t mz_zone;
-	vm_size_t mz_size;
-	vm_size_t mz_max;
-	const char *mz_name;
-};
-
-struct meta_zone_entry meta_zones[] = {
-	{.mz_zone = NULL, .mz_size = (MINMETA * 1), .mz_max = 128 * (MINMETA * 1), .mz_name = "buf.512" },
-	{.mz_zone = NULL, .mz_size = (MINMETA * 2), .mz_max = 64 * (MINMETA * 2), .mz_name = "buf.1024" },
-	{.mz_zone = NULL, .mz_size = (MINMETA * 4), .mz_max = 16 * (MINMETA * 4), .mz_name = "buf.2048" },
-	{.mz_zone = NULL, .mz_size = (MINMETA * 8), .mz_max = 512 * (MINMETA * 8), .mz_name = "buf.4096" },
-	{.mz_zone = NULL, .mz_size = (MINMETA * 16), .mz_max = 512 * (MINMETA * 16), .mz_name = "buf.8192" },
-	{.mz_zone = NULL, .mz_size = (MINMETA * 32), .mz_max = 512 * (MINMETA * 32), .mz_name = "buf.16384" },
-	{.mz_zone = NULL, .mz_size = 0, .mz_max = 0, .mz_name = "" } /* End */
-};
-
-/*
- * Initialize the meta data zones
- */
-static void
-bufzoneinit(void)
-{
-	int i;
-
-	for (i = 0; meta_zones[i].mz_size != 0; i++) {
-		meta_zones[i].mz_zone =
-		    zinit(meta_zones[i].mz_size,
-		    meta_zones[i].mz_max,
-		    PAGE_SIZE,
-		    meta_zones[i].mz_name);
-		zone_change(meta_zones[i].mz_zone, Z_CALLERACCT, FALSE);
-	}
-	buf_hdr_zone = zinit(sizeof(struct buf), 32, PAGE_SIZE, "buf headers");
-	zone_change(buf_hdr_zone, Z_CALLERACCT, FALSE);
-}
-
-static __inline__ zone_t
-getbufzone(size_t size)
-{
-	int i;
-
-	if ((size % 512) || (size < MINMETA) || (size > MAXMETA)) {
-		panic("getbufzone: incorect size = %lu", size);
-	}
-
-	for (i = 0; meta_zones[i].mz_size != 0; i++) {
-		if (meta_zones[i].mz_size >= size) {
-			break;
-		}
-	}
-
-	return meta_zones[i].mz_zone;
-}
-
-
+KALLOC_HEAP_DEFINE(KHEAP_VFS_BIO, "vfs_bio", KHEAP_ID_DATA_BUFFERS);
 
 static struct buf *
 bio_doread(vnode_t vp, daddr64_t blkno, int size, kauth_cred_t cred, int async, int queuetype)
@@ -2575,17 +2507,23 @@ static void
 buf_free_meta_store(buf_t bp)
 {
 	if (bp->b_bufsize) {
-		if (ISSET(bp->b_flags, B_ZALLOC)) {
-			zone_t z;
-
-			z = getbufzone(bp->b_bufsize);
-			zfree(z, bp->b_datap);
-		} else {
-			kmem_free(kernel_map, bp->b_datap, bp->b_bufsize);
-		}
+		uintptr_t datap = bp->b_datap;
+		int bufsize = bp->b_bufsize;
 
 		bp->b_datap = (uintptr_t)NULL;
 		bp->b_bufsize = 0;
+
+		/*
+		 * Ensure the assignment of b_datap has global visibility
+		 * before we free the region.
+		 */
+		OSMemoryBarrier();
+
+		if (ISSET(bp->b_flags, B_ZALLOC)) {
+			kheap_free(KHEAP_VFS_BIO, datap, bufsize);
+		} else {
+			kmem_free(kernel_map, datap, bufsize);
+		}
 	}
 }
 
@@ -2708,7 +2646,7 @@ void
 buf_brelse(buf_t bp)
 {
 	struct bqueues *bufq;
-	long    whichq;
+	int    whichq;
 	upl_t   upl;
 	int need_wakeup = 0;
 	int need_bp_wakeup = 0;
@@ -3164,7 +3102,7 @@ start:
 				 * in cases where the data on disk beyond (blkno + b_bcount)
 				 * is invalid, we may end up doing extra I/O.
 				 */
-				if (operation == BLK_META && bp->b_bcount < size) {
+				if (operation == BLK_META && bp->b_bcount < (uint32_t)size) {
 					/*
 					 * Since we are going to read in the whole size first
 					 * we first have to ensure that any pending delayed write
@@ -3183,7 +3121,7 @@ start:
 					clear_bdone = TRUE;
 				}
 
-				if (bp->b_bufsize != size) {
+				if (bp->b_bufsize != (uint32_t)size) {
 					allocbuf(bp, size);
 				}
 			}
@@ -3197,6 +3135,7 @@ start:
 				 * cache pages we're gathering.
 				 */
 				upl_flags |= UPL_WILL_MODIFY;
+				OS_FALLTHROUGH;
 			case BLK_READ:
 				upl_flags |= UPL_PRECIOUS;
 				if (UBCINFOEXISTS(bp->b_vp) && bp->b_bufsize) {
@@ -3328,6 +3267,7 @@ start:
 			 * we're gathering.
 			 */
 			upl_flags |= UPL_WILL_MODIFY;
+			OS_FALLTHROUGH;
 		case BLK_READ:
 		{     off_t   f_offset;
 		      size_t  contig_bytes;
@@ -3413,7 +3353,7 @@ start:
 			       * disk, than we can't cache the physical mapping
 			       * in the buffer header
 			       */
-			      if ((long)contig_bytes < bp->b_bcount) {
+			      if ((uint32_t)contig_bytes < bp->b_bcount) {
 				      bp->b_blkno = bp->b_lblkno;
 			      }
 		      } else {
@@ -3502,7 +3442,7 @@ recycle_buf_from_pool(int nsize)
 	lck_mtx_lock_spin(buf_mtxp);
 
 	TAILQ_FOREACH(bp, &bufqueues[BQ_META], b_freelist) {
-		if (ISSET(bp->b_flags, B_DELWRI) || bp->b_bufsize != nsize) {
+		if (ISSET(bp->b_flags, B_DELWRI) || bp->b_bufsize != (uint32_t)nsize) {
 			continue;
 		}
 		ptr = (void *)bp->b_datap;
@@ -3524,11 +3464,9 @@ int recycle_buf_failed = 0;
 static void *
 grab_memory_for_meta_buf(int nsize)
 {
-	zone_t z;
 	void *ptr;
 	boolean_t was_vmpriv;
 
-	z = getbufzone(nsize);
 
 	/*
 	 * make sure we're NOT priviliged so that
@@ -3539,7 +3477,7 @@ grab_memory_for_meta_buf(int nsize)
 	 */
 	was_vmpriv = set_vm_privilege(FALSE);
 
-	ptr = zalloc_nopagewait(z);
+	ptr = kheap_alloc(KHEAP_VFS_BIO, nsize, Z_NOPAGEWAIT);
 
 	if (was_vmpriv == TRUE) {
 		set_vm_privilege(TRUE);
@@ -3557,7 +3495,7 @@ grab_memory_for_meta_buf(int nsize)
 				set_vm_privilege(TRUE);
 			}
 
-			ptr = zalloc(z);
+			ptr = kheap_alloc(KHEAP_VFS_BIO, nsize, Z_WAITOK);
 
 			if (was_vmpriv == FALSE) {
 				set_vm_privilege(FALSE);
@@ -3597,15 +3535,12 @@ allocbuf(buf_t bp, int size)
 		int    nsize = roundup(size, MINMETA);
 
 		if (bp->b_datap) {
-			vm_offset_t elem = (vm_offset_t)bp->b_datap;
+			void *elem = (void *)bp->b_datap;
 
 			if (ISSET(bp->b_flags, B_ZALLOC)) {
-				if (bp->b_bufsize < nsize) {
-					zone_t zprev;
-
+				if (bp->b_bufsize < (uint32_t)nsize) {
 					/* reallocate to a bigger size */
 
-					zprev = getbufzone(bp->b_bufsize);
 					if (nsize <= MAXMETA) {
 						desired_size = nsize;
 
@@ -3616,8 +3551,8 @@ allocbuf(buf_t bp, int size)
 						kmem_alloc_kobject(kernel_map, (vm_offset_t *)&bp->b_datap, desired_size, VM_KERN_MEMORY_FILE);
 						CLR(bp->b_flags, B_ZALLOC);
 					}
-					bcopy((void *)elem, (caddr_t)bp->b_datap, bp->b_bufsize);
-					zfree(zprev, elem);
+					bcopy(elem, (caddr_t)bp->b_datap, bp->b_bufsize);
+					kheap_free(KHEAP_VFS_BIO, elem, bp->b_bufsize);
 				} else {
 					desired_size = bp->b_bufsize;
 				}
@@ -3626,8 +3561,8 @@ allocbuf(buf_t bp, int size)
 					/* reallocate to a bigger size */
 					bp->b_datap = (uintptr_t)NULL;
 					kmem_alloc_kobject(kernel_map, (vm_offset_t *)&bp->b_datap, desired_size, VM_KERN_MEMORY_FILE);
-					bcopy((const void *)elem, (caddr_t)bp->b_datap, bp->b_bufsize);
-					kmem_free(kernel_map, elem, bp->b_bufsize);
+					bcopy(elem, (caddr_t)bp->b_datap, bp->b_bufsize);
+					kmem_free(kernel_map, (vm_offset_t)elem, bp->b_bufsize);
 				} else {
 					desired_size = bp->b_bufsize;
 				}
@@ -3649,7 +3584,7 @@ allocbuf(buf_t bp, int size)
 			panic("allocbuf: NULL b_datap");
 		}
 	}
-	bp->b_bufsize = desired_size;
+	bp->b_bufsize = (uint32_t)desired_size;
 	bp->b_bcount = size;
 
 	return 0;
@@ -4375,7 +4310,7 @@ count_lock_queue(void)
  * Return a count of 'busy' buffers. Used at the time of shutdown.
  * note: This is also called from the mach side in debug context in kdp.c
  */
-int
+uint32_t
 count_busy_buffers(void)
 {
 	return buf_busycount + bufstats.bufs_iobufinuse;
@@ -4459,7 +4394,7 @@ alloc_io_buf(vnode_t vp, int priv)
 		}
 	}
 
-	while (((niobuf_headers - NRESERVEDIOBUFS < bufstats.bufs_iobufinuse) && !priv) ||
+	while ((((uint32_t)(niobuf_headers - NRESERVEDIOBUFS) < bufstats.bufs_iobufinuse) && !priv) ||
 	    (bp = iobufqueue.tqh_first) == NULL) {
 		bufstats.bufs_iobufsleeps++;
 
@@ -4725,7 +4660,7 @@ brecover_data(buf_t bp)
 		panic("Failed to create UPL");
 	}
 
-	for (upl_offset = 0; upl_offset < bp->b_bufsize; upl_offset += PAGE_SIZE) {
+	for (upl_offset = 0; (uint32_t)upl_offset < bp->b_bufsize; upl_offset += PAGE_SIZE) {
 		if (!upl_valid_page(pl, upl_offset / PAGE_SIZE) || !upl_dirty_page(pl, upl_offset / PAGE_SIZE)) {
 			ubc_upl_abort(upl, 0);
 			goto dump_buffer;

@@ -1,0 +1,27 @@
+# Any level
+BUILD/
+build/
+.DS_Store
+
+# vim swap files
+*~
+*.swp
+
+# JSON compilation definitions
+compile_commands.json
+
+# From the various build systems
+*.xcworkspace
+xcuserdata
+*.pyc
+
+# /
+/.remotebuild_credential
+/cscope.*
+/TAGS
+/tags
+
+# /tools/tests/zero-to-n
+/tools/tests/zero-to-n/zn*
+
+# XXX do not add *.orig, *.rej, use `git clean` instead

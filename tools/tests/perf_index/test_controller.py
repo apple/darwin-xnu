@@ -1,5 +1,5 @@
 #!/usr/bin/python
-
+from __future__ import absolute_import, print_function
 import socket
 import time
 import select
@@ -27,7 +27,7 @@ def main(num_clients, test_type, num_threads, job_size, args):
     msg = "\0".join(["%s\0%d\0%d" % (test_type, num_threads, job_size)] + args) + "\0\0"
     client_socket.send(msg)
     client_sockets.append(client_socket)
-  
+
   control_socket.close()
 
   waitformsgs(client_sockets, "Ready")
@@ -47,7 +47,7 @@ def main(num_clients, test_type, num_threads, job_size, args):
   return end_time - start_time
 
 def usage():
-  sys.stderr.write("usage: start_tests.py num_clients type threads size\n")  
+  sys.stderr.write("usage: start_tests.py num_clients type threads size\n")
   exit(1)
 
 if __name__ == "__main__":
@@ -62,4 +62,4 @@ if __name__ == "__main__":
   except ValueError:
     usage()
 
-  print main(num_clients, test_type, num_threads, job_size, args)
+  print(main(num_clients, test_type, num_threads, job_size, args))

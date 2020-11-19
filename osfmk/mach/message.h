@@ -80,6 +80,9 @@
 #include <sys/cdefs.h>
 #include <sys/appleapiopts.h>
 #include <Availability.h>
+#if !KERNEL && PRIVATE
+#include <TargetConditionals.h>
+#endif
 
 /*
  *  The timeout mechanism uses mach_msg_timeout_t values,
@@ -227,6 +230,93 @@ typedef integer_t mach_msg_id_t;
 typedef unsigned int mach_msg_priority_t;
 
 #define MACH_MSG_PRIORITY_UNSPECIFIED (mach_msg_priority_t) 0
+
+#if PRIVATE
+typedef uint8_t mach_msg_qos_t; // same as thread_qos_t
+#define MACH_MSG_QOS_UNSPECIFIED        0
+#define MACH_MSG_QOS_MAINTENANCE        1
+#define MACH_MSG_QOS_BACKGROUND         2
+#define MACH_MSG_QOS_UTILITY            3
+#define MACH_MSG_QOS_DEFAULT            4
+#define MACH_MSG_QOS_USER_INITIATED     5
+#define MACH_MSG_QOS_USER_INTERACTIVE   6
+#define MACH_MSG_QOS_LAST               6
+
+extern int mach_msg_priority_is_pthread_priority(mach_msg_priority_t pri);
+extern mach_msg_priority_t mach_msg_priority_encode(
+	mach_msg_qos_t override_qos,
+	mach_msg_qos_t qos,
+	int relpri);
+extern mach_msg_qos_t mach_msg_priority_overide_qos(mach_msg_priority_t pri);
+extern mach_msg_qos_t mach_msg_priority_qos(mach_msg_priority_t pri);
+extern int mach_msg_priority_relpri(mach_msg_priority_t pri);
+
+#if KERNEL || !TARGET_OS_SIMULATOR
+static inline int
+mach_msg_priority_is_pthread_priority_inline(mach_msg_priority_t pri)
+{
+	return (pri & 0xff) == 0xff;
+}
+
+#define MACH_MSG_PRIORITY_RELPRI_SHIFT    8
+#define MACH_MSG_PRIORITY_RELPRI_MASK     (0xff << MACH_MSG_PRIORITY_RELPRI_SHIFT)
+#define MACH_MSG_PRIORITY_QOS_SHIFT       16
+#define MACH_MSG_PRIORITY_QOS_MASK        (0xf << MACH_MSG_PRIORITY_QOS_SHIFT)
+#define MACH_MSG_PRIORITY_OVERRIDE_SHIFT  20
+#define MACH_MSG_PRIORITY_OVERRIDE_MASK   (0xf << MACH_MSG_PRIORITY_OVERRIDE_SHIFT)
+
+static inline mach_msg_priority_t
+mach_msg_priority_encode_inline(mach_msg_qos_t override_qos, mach_msg_qos_t qos, int relpri)
+{
+	mach_msg_priority_t pri = 0;
+	if (qos > 0 && qos <= MACH_MSG_QOS_LAST) {
+		pri |= (uint32_t)(qos << MACH_MSG_PRIORITY_QOS_SHIFT);
+		pri |= (uint32_t)((uint8_t)(relpri - 1) << MACH_MSG_PRIORITY_RELPRI_SHIFT);
+	}
+	if (override_qos > 0 && override_qos <= MACH_MSG_QOS_LAST) {
+		pri |= (uint32_t)(override_qos << MACH_MSG_PRIORITY_OVERRIDE_SHIFT);
+	}
+	return pri;
+}
+
+static inline mach_msg_qos_t
+mach_msg_priority_overide_qos_inline(mach_msg_priority_t pri)
+{
+	pri &= MACH_MSG_PRIORITY_OVERRIDE_MASK;
+	pri >>= MACH_MSG_PRIORITY_OVERRIDE_SHIFT;
+	return (mach_msg_qos_t)(pri <= MACH_MSG_QOS_LAST ? pri : 0);
+}
+
+static inline mach_msg_qos_t
+mach_msg_priority_qos_inline(mach_msg_priority_t pri)
+{
+	pri &= MACH_MSG_PRIORITY_QOS_MASK;
+	pri >>= MACH_MSG_PRIORITY_QOS_SHIFT;
+	return (mach_msg_qos_t)(pri <= MACH_MSG_QOS_LAST ? pri : 0);
+}
+
+static inline int
+mach_msg_priority_relpri_inline(mach_msg_priority_t pri)
+{
+	if (mach_msg_priority_qos_inline(pri)) {
+		return (int8_t)(pri >> MACH_MSG_PRIORITY_RELPRI_SHIFT) + 1;
+	}
+	return 0;
+}
+
+#define mach_msg_priority_is_pthread_priority(...) \
+	mach_msg_priority_is_pthread_priority_inline(__VA_ARGS__)
+#define mach_msg_priority_encode(...) \
+	mach_msg_priority_encode_inline(__VA_ARGS__)
+#define mach_msg_priority_overide_qos(...) \
+	mach_msg_priority_overide_qos_inline(__VA_ARGS__)
+#define mach_msg_priority_qos(...) \
+	mach_msg_priority_qos_inline(__VA_ARGS__)
+#define mach_msg_priority_relpri(...) \
+	mach_msg_priority_relpri_inline(__VA_ARGS__)
+#endif
+
+#endif // PRIVATE
 
 typedef unsigned int mach_msg_type_name_t;
 
@@ -552,6 +642,9 @@ typedef struct{
 	mach_port_name_t sender;
 } msg_labels_t;
 
+typedef int mach_msg_filter_id;
+#define MACH_MSG_FILTER_POLICY_ALLOW (mach_msg_filter_id)0
+
 /*
  *  Trailer type to pass MAC policy label info as a mach message trailer.
  *
@@ -564,7 +657,7 @@ typedef struct{
 	security_token_t              msgh_sender;
 	audit_token_t                 msgh_audit;
 	mach_port_context_t           msgh_context;
-	int                           msgh_ad;
+	mach_msg_filter_id            msgh_ad;
 	msg_labels_t                  msgh_labels;
 } mach_msg_mac_trailer_t;
 
@@ -576,7 +669,7 @@ typedef struct{
 	security_token_t              msgh_sender;
 	audit_token_t                 msgh_audit;
 	mach_port_context32_t         msgh_context;
-	int                           msgh_ad;
+	mach_msg_filter_id            msgh_ad;
 	msg_labels_t                  msgh_labels;
 } mach_msg_mac_trailer32_t;
 
@@ -587,7 +680,7 @@ typedef struct{
 	security_token_t              msgh_sender;
 	audit_token_t                 msgh_audit;
 	mach_port_context64_t         msgh_context;
-	int                           msgh_ad;
+	mach_msg_filter_id            msgh_ad;
 	msg_labels_t                  msgh_labels;
 } mach_msg_mac_trailer64_t;
 
@@ -985,6 +1078,8 @@ typedef kern_return_t mach_msg_return_t;
 /* compatibility: no longer a returned error */
 #define MACH_SEND_NO_GRANT_DEST         0x10000016
 /* The destination port doesn't accept ports in body */
+#define MACH_SEND_MSG_FILTERED          0x10000017
+/* Message send was rejected by message filter */
 
 #define MACH_RCV_IN_PROGRESS            0x10004001
 /* Thread is waiting for receive.  (Internal use only.) */

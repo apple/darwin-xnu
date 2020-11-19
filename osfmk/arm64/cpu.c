@@ -35,6 +35,7 @@
 #include <kern/kalloc.h>
 #include <kern/machine.h>
 #include <kern/cpu_number.h>
+#include <kern/percpu.h>
 #include <kern/thread.h>
 #include <kern/timer_queue.h>
 #include <arm/cpu_data.h>
@@ -67,6 +68,14 @@
 #include <kern/monotonic.h>
 #endif /* MONOTONIC */
 
+#if HIBERNATION
+#include <IOKit/IOPlatformExpert.h>
+#include <IOKit/IOHibernatePrivate.h>
+#endif /* HIBERNATION */
+
+
+#include <libkern/section_keywords.h>
+
 extern boolean_t        idle_enable;
 extern uint64_t         wake_abstime;
 
@@ -82,7 +91,7 @@ extern uintptr_t start_cpu;
 extern void exc_vectors_table;
 #endif /* __ARM_KERNEL_PROTECT__ */
 
-extern void __attribute__((noreturn)) arm64_prepare_for_sleep(void);
+extern void __attribute__((noreturn)) arm64_prepare_for_sleep(boolean_t deep_sleep);
 extern void arm64_force_wfi_clock_gate(void);
 #if defined(APPLETYPHOON)
 // <rdar://problem/15827409>
@@ -118,8 +127,14 @@ static int wfi_flags = 0;
 static uint64_t wfi_delay = 0;
 
 #endif /* DEVELOPMENT || DEBUG */
-
-static bool idle_wfe_to_deadline = false;
+#if DEVELOPMENT || DEBUG
+static bool idle_proximate_timer_wfe = true;
+static bool idle_proximate_io_wfe = true;
+#define CPUPM_IDLE_WFE 0x5310300
+#else
+static const bool idle_proximate_timer_wfe = true;
+static const bool idle_proximate_io_wfe = true;
+#endif
 
 #if __ARM_GLOBAL_SLEEP_BIT__
 volatile boolean_t arm64_stall_sleep = TRUE;
@@ -184,7 +199,8 @@ arm64_ipi_test()
 		return;
 	}
 
-	for (unsigned int i = 0; i < MAX_CPUS; ++i) {
+	const unsigned int max_cpu_id = ml_get_max_cpu_number();
+	for (unsigned int i = 0; i <= max_cpu_id; ++i) {
 		ipi_test_data = &arm64_ipi_test_data[i];
 		immediate_ipi_test_data = &arm64_ipi_test_data[i + MAX_CPUS];
 		*ipi_test_data = ~i;
@@ -223,25 +239,19 @@ arm64_ipi_test()
 static void
 configure_coresight_registers(cpu_data_t *cdp)
 {
-	uint64_t        addr;
 	int             i;
 
 	assert(cdp);
+	vm_offset_t     coresight_regs = ml_get_topology_info()->cpus[cdp->cpu_number].coresight_regs;
 
 	/*
 	 * ARMv8 coresight registers are optional. If the device tree did not
-	 * provide cpu_regmap_paddr, assume that coresight registers are not
-	 * supported.
+	 * provide either cpu_regmap_paddr (from the legacy "reg-private" EDT property)
+	 * or coresight_regs (from the new "coresight-reg" property), assume that
+	 * coresight registers are not supported.
 	 */
-	if (cdp->cpu_regmap_paddr) {
+	if (cdp->cpu_regmap_paddr || coresight_regs) {
 		for (i = 0; i < CORESIGHT_REGIONS; ++i) {
-			/* Skip CTI; these registers are debug-only (they are
-			 * not present on production hardware), and there is
-			 * at least one known Cyclone errata involving CTI
-			 * (rdar://12802966).  We have no known clients that
-			 * need the kernel to unlock CTI, so it is safer
-			 * to avoid doing the access.
-			 */
 			if (i == CORESIGHT_CTI) {
 				continue;
 			}
@@ -251,8 +261,12 @@ configure_coresight_registers(cpu_data_t *cdp)
 			}
 
 			if (!cdp->coresight_base[i]) {
-				addr = cdp->cpu_regmap_paddr + CORESIGHT_OFFSET(i);
-				cdp->coresight_base[i] = (vm_offset_t)ml_io_map(addr, CORESIGHT_SIZE);
+				if (coresight_regs) {
+					cdp->coresight_base[i] = coresight_regs + CORESIGHT_OFFSET(i);
+				} else {
+					uint64_t addr = cdp->cpu_regmap_paddr + CORESIGHT_OFFSET(i);
+					cdp->coresight_base[i] = (vm_offset_t)ml_io_map(addr, CORESIGHT_SIZE);
+				}
 
 				/*
 				 * At this point, failing to io map the
@@ -303,14 +317,21 @@ cpu_sleep(void)
 
 	CleanPoC_Dcache();
 
-	/* This calls:
-	 *
-	 * IOCPURunPlatformQuiesceActions when sleeping the boot cpu
-	 * ml_arm_sleep() on all CPUs
-	 *
-	 * It does not return.
-	 */
+#if USE_APPLEARMSMP
+	if (ml_is_quiescing()) {
+		PE_cpu_machine_quiesce(cpu_data_ptr->cpu_id);
+	} else {
+		bool deep_sleep = PE_cpu_down(cpu_data_ptr->cpu_id);
+		cpu_data_ptr->cpu_sleep_token = ARM_CPU_ON_SLEEP_PATH;
+		// hang CPU on spurious wakeup
+		cpu_data_ptr->cpu_reset_handler = (uintptr_t)0;
+		__builtin_arm_dsb(DSB_ISH);
+		CleanPoU_Dcache();
+		arm64_prepare_for_sleep(deep_sleep);
+	}
+#else
 	PE_cpu_machine_quiesce(cpu_data_ptr->cpu_id);
+#endif
 	/*NOTREACHED*/
 }
 
@@ -320,12 +341,52 @@ cpu_sleep(void)
  *			is implemented, this returns 0 if there are no
  *			interrupts pending, so it can be used as a boolean test.
  */
-static int
+int
 cpu_interrupt_is_pending(void)
 {
 	uint64_t isr_value;
 	isr_value = __builtin_arm_rsr64("ISR_EL1");
 	return (int)isr_value;
+}
+
+static bool
+cpu_proximate_timer(void)
+{
+	return !SetIdlePop();
+}
+
+static bool
+wfe_to_deadline_or_interrupt(uint32_t cid, uint64_t wfe_deadline, __unused cpu_data_t *cdp)
+{
+	bool ipending = false;
+	while ((ipending = (cpu_interrupt_is_pending() != 0)) == false) {
+		/* Assumes event stream enablement
+		 * TODO: evaluate temporarily stretching the per-CPU event
+		 * interval to a larger value for possible efficiency
+		 * improvements.
+		 */
+		__builtin_arm_wfe();
+#if DEVELOPMENT || DEBUG
+		cdp->wfe_count++;
+#endif
+		if (wfe_deadline != ~0ULL) {
+#if DEVELOPMENT || DEBUG
+			cdp->wfe_deadline_checks++;
+#endif
+			/* Check if the WFE recommendation has expired.
+			 * We do not recompute the deadline here.
+			 */
+			if ((ml_cluster_wfe_timeout(cid) == 0) ||
+			    mach_absolute_time() >= wfe_deadline) {
+#if DEVELOPMENT || DEBUG
+				cdp->wfe_terminations++;
+#endif
+				break;
+			}
+		}
+	}
+	/* TODO: worth refreshing pending interrupt status? */
+	return ipending;
 }
 
 /*
@@ -337,38 +398,71 @@ cpu_idle(void)
 {
 	cpu_data_t     *cpu_data_ptr = getCpuDatap();
 	uint64_t        new_idle_timeout_ticks = 0x0ULL, lastPop;
+	bool idle_disallowed = false;
 
-	if ((!idle_enable) || (cpu_data_ptr->cpu_signal & SIGPdisabled)) {
+	if (__improbable((!idle_enable))) {
+		idle_disallowed = true;
+	} else if (__improbable(cpu_data_ptr->cpu_signal & SIGPdisabled)) {
+		idle_disallowed = true;
+	}
+
+	if (__improbable(idle_disallowed)) {
 		Idle_load_context();
 	}
 
-	if (!SetIdlePop()) {
-		/* If a deadline is pending, wait for it to elapse. */
-		if (idle_wfe_to_deadline) {
-			if (arm64_wfe_allowed()) {
-				while (!cpu_interrupt_is_pending()) {
-					__builtin_arm_wfe();
-				}
-			}
+	bool ipending = false;
+	uint32_t cid = ~0U;
+
+	if (__probable(idle_proximate_io_wfe == true)) {
+		uint64_t wfe_deadline = 0;
+		/* Check for an active perf. controller generated
+		 * WFE recommendation for this cluster.
+		 */
+		cid = cpu_data_ptr->cpu_cluster_id;
+		uint64_t wfe_ttd = 0;
+		if ((wfe_ttd = ml_cluster_wfe_timeout(cid)) != 0) {
+			wfe_deadline = mach_absolute_time() + wfe_ttd;
 		}
 
+		if (wfe_deadline != 0) {
+			/* Poll issuing event-bounded WFEs until an interrupt
+			 * arrives or the WFE recommendation expires
+			 */
+			ipending = wfe_to_deadline_or_interrupt(cid, wfe_deadline, cpu_data_ptr);
+#if DEVELOPMENT || DEBUG
+			KDBG(CPUPM_IDLE_WFE, ipending, cpu_data_ptr->wfe_count, wfe_deadline, 0);
+#endif
+			if (ipending == true) {
+				/* Back to machine_idle() */
+				Idle_load_context();
+			}
+		}
+	}
+
+	if (__improbable(cpu_proximate_timer())) {
+		if (idle_proximate_timer_wfe == true) {
+			/* Poll issuing WFEs until the expected
+			 * timer FIQ arrives.
+			 */
+			ipending = wfe_to_deadline_or_interrupt(cid, ~0ULL, cpu_data_ptr);
+			assert(ipending == true);
+		}
 		Idle_load_context();
 	}
 
 	lastPop = cpu_data_ptr->rtcPop;
 
-	pmap_switch_user_ttb(kernel_pmap);
 	cpu_data_ptr->cpu_active_thread = current_thread();
 	if (cpu_data_ptr->cpu_user_debug) {
 		arm_debug_set(NULL);
 	}
 	cpu_data_ptr->cpu_user_debug = NULL;
 
-	if (cpu_data_ptr->cpu_idle_notify) {
-		((processor_idle_t) cpu_data_ptr->cpu_idle_notify)(cpu_data_ptr->cpu_id, TRUE, &new_idle_timeout_ticks);
+	if (wfi && (cpu_data_ptr->cpu_idle_notify != NULL)) {
+		cpu_data_ptr->cpu_idle_notify(cpu_data_ptr->cpu_id, TRUE, &new_idle_timeout_ticks);
 	}
 
-	if (cpu_data_ptr->idle_timer_notify != 0) {
+	if (cpu_data_ptr->idle_timer_notify != NULL) {
 		if (new_idle_timeout_ticks == 0x0ULL) {
 			/* turn off the idle timer */
 			cpu_data_ptr->idle_timer_deadline = 0x0ULL;
@@ -390,7 +484,9 @@ cpu_idle(void)
 #endif /* MONOTONIC */
 
 	if (wfi) {
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
 		platform_cache_idle_enter();
+#endif
 
 #if DEVELOPMENT || DEBUG
 		// When simulating wfi overhead,
@@ -439,8 +535,9 @@ cpu_idle(void)
 			clock_delay_until(deadline);
 		}
 #endif /* DEVELOPMENT || DEBUG */
-
+#if !defined(APPLE_ARM64_ARCH_FAMILY)
 		platform_cache_idle_exit();
+#endif
 	}
 
 	ClearIdlePop(TRUE);
@@ -473,13 +570,11 @@ cpu_idle_exit(boolean_t from_reset)
 	mt_cpu_run(cpu_data_ptr);
 #endif /* MONOTONIC */
 
-	pmap_switch_user_ttb(cpu_data_ptr->cpu_active_thread->map->pmap);
-
-	if (cpu_data_ptr->cpu_idle_notify) {
-		((processor_idle_t) cpu_data_ptr->cpu_idle_notify)(cpu_data_ptr->cpu_id, FALSE, &new_idle_timeout_ticks);
+	if (wfi && (cpu_data_ptr->cpu_idle_notify != NULL)) {
+		cpu_data_ptr->cpu_idle_notify(cpu_data_ptr->cpu_id, FALSE, &new_idle_timeout_ticks);
 	}
 
-	if (cpu_data_ptr->idle_timer_notify != 0) {
+	if (cpu_data_ptr->idle_timer_notify != NULL) {
 		if (new_idle_timeout_ticks == 0x0ULL) {
 			/* turn off the idle timer */
 			cpu_data_ptr->idle_timer_deadline = 0x0ULL;
@@ -539,7 +634,6 @@ cpu_init(void)
 	}
 	cdp->cpu_stat.irq_ex_cnt_wake = 0;
 	cdp->cpu_stat.ipi_cnt_wake = 0;
-	cdp->cpu_stat.timer_cnt_wake = 0;
 #if MONOTONIC
 	cdp->cpu_stat.pmi_cnt_wake = 0;
 #endif /* MONOTONIC */
@@ -592,15 +686,15 @@ cpu_data_free(cpu_data_t *cpu_data_ptr)
 		return;
 	}
 
-	cpu_processor_free( cpu_data_ptr->cpu_processor);
-	if (CpuDataEntries[cpu_data_ptr->cpu_number].cpu_data_vaddr == cpu_data_ptr) {
-		CpuDataEntries[cpu_data_ptr->cpu_number].cpu_data_vaddr = NULL;
-		CpuDataEntries[cpu_data_ptr->cpu_number].cpu_data_paddr = 0;
+	int cpu_number = cpu_data_ptr->cpu_number;
+
+	if (CpuDataEntries[cpu_number].cpu_data_vaddr == cpu_data_ptr) {
+		CpuDataEntries[cpu_number].cpu_data_vaddr = NULL;
+		CpuDataEntries[cpu_number].cpu_data_paddr = 0;
 		__builtin_arm_dmb(DMB_ISH); // Ensure prior stores to cpu array are visible
 	}
 	(kfree)((void *)(cpu_data_ptr->intstack_top - INTSTACK_SIZE), INTSTACK_SIZE);
 	(kfree)((void *)(cpu_data_ptr->excepstack_top - EXCEPSTACK_SIZE), EXCEPSTACK_SIZE);
-	kmem_free(kernel_map, (vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t));
 }
 
 void
@@ -609,17 +703,16 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 	uint32_t i;
 
 	cpu_data_ptr->cpu_flags = 0;
-	cpu_data_ptr->interrupts_enabled = 0;
 	cpu_data_ptr->cpu_int_state = 0;
 	cpu_data_ptr->cpu_pending_ast = AST_NONE;
-	cpu_data_ptr->cpu_cache_dispatch = (void *) 0;
+	cpu_data_ptr->cpu_cache_dispatch = NULL;
 	cpu_data_ptr->rtcPop = EndOfAllTime;
 	cpu_data_ptr->rtclock_datap = &RTClockData;
 	cpu_data_ptr->cpu_user_debug = NULL;
 
 
 	cpu_data_ptr->cpu_base_timebase = 0;
-	cpu_data_ptr->cpu_idle_notify = (void *) 0;
+	cpu_data_ptr->cpu_idle_notify = NULL;
 	cpu_data_ptr->cpu_idle_latency = 0x0ULL;
 	cpu_data_ptr->cpu_idle_pop = 0x0ULL;
 	cpu_data_ptr->cpu_reset_type = 0x0UL;
@@ -658,10 +751,11 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 
 	pmap_cpu_data_ptr->cpu_nested_pmap = (struct pmap *) NULL;
 	pmap_cpu_data_ptr->cpu_number = PMAP_INVALID_CPU_NUM;
+	pmap_cpu_data_ptr->pv_free.list = NULL;
+	pmap_cpu_data_ptr->pv_free.count = 0;
+	pmap_cpu_data_ptr->pv_free_tail = NULL;
 
-	for (i = 0; i < (sizeof(pmap_cpu_data_ptr->cpu_asid_high_bits) / sizeof(*pmap_cpu_data_ptr->cpu_asid_high_bits)); i++) {
-		pmap_cpu_data_ptr->cpu_asid_high_bits[i] = 0;
-	}
+	bzero(&(pmap_cpu_data_ptr->cpu_sw_asids[0]), sizeof(pmap_cpu_data_ptr->cpu_sw_asids));
 #endif
 	cpu_data_ptr->halt_status = CPU_NOT_HALTED;
 #if __ARM_KERNEL_PROTECT__
@@ -670,7 +764,9 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 
 #if defined(HAS_APPLE_PAC)
 	cpu_data_ptr->rop_key = 0;
+	cpu_data_ptr->jop_key = ml_default_jop_pid();
 #endif
+
 }
 
 kern_return_t
@@ -691,18 +787,21 @@ cpu_data_register(cpu_data_t *cpu_data_ptr)
 }
 
 #if defined(KERNEL_INTEGRITY_CTRR)
+/* Hibernation needs to reset this state, so data and text are in the hib segment;
+ * this allows them be accessed and executed early.
+ */
+LCK_GRP_DECLARE(ctrr_cpu_start_lock_grp, "ctrr_cpu_start_lock");
+LCK_SPIN_DECLARE(ctrr_cpu_start_lck, &ctrr_cpu_start_lock_grp);
+enum ctrr_cluster_states ctrr_cluster_locked[MAX_CPU_CLUSTERS] MARK_AS_HIBERNATE_DATA;
 
-lck_spin_t ctrr_cpu_start_lck;
-bool ctrr_cluster_locked[__ARM_CLUSTER_COUNT__];
-
+MARK_AS_HIBERNATE_TEXT
 void
-init_ctrr_cpu_start_lock(void)
+init_ctrr_cluster_states(void)
 {
-	lck_grp_t *ctrr_cpu_start_lock_grp = lck_grp_alloc_init("ctrr_cpu_start_lock", 0);
-	assert(ctrr_cpu_start_lock_grp);
-	lck_spin_init(&ctrr_cpu_start_lck, ctrr_cpu_start_lock_grp, NULL);
+	for (int i = 0; i < MAX_CPU_CLUSTERS; i++) {
+		ctrr_cluster_locked[i] = CTRR_UNLOCKED;
+	}
 }
-
 #endif
 
 kern_return_t
@@ -717,6 +816,7 @@ cpu_start(int cpu)
 		configure_coresight_registers(cpu_data_ptr);
 	} else {
 		thread_t first_thread;
+		processor_t processor;
 
 		cpu_data_ptr->cpu_reset_handler = (vm_offset_t) start_cpu_paddr;
 
@@ -724,32 +824,40 @@ cpu_start(int cpu)
 		cpu_data_ptr->cpu_pmap_cpu_data.cpu_nested_pmap = NULL;
 #endif
 
-		if (cpu_data_ptr->cpu_processor->startup_thread != THREAD_NULL) {
-			first_thread = cpu_data_ptr->cpu_processor->startup_thread;
+		processor = PERCPU_GET_RELATIVE(processor, cpu_data, cpu_data_ptr);
+		if (processor->startup_thread != THREAD_NULL) {
+			first_thread = processor->startup_thread;
 		} else {
-			first_thread = cpu_data_ptr->cpu_processor->idle_thread;
+			first_thread = processor->idle_thread;
 		}
 		cpu_data_ptr->cpu_active_thread = first_thread;
 		first_thread->machine.CpuDatap = cpu_data_ptr;
+		first_thread->machine.pcpu_data_base =
+		    (vm_address_t)cpu_data_ptr - __PERCPU_ADDR(cpu_data);
 
 		configure_coresight_registers(cpu_data_ptr);
 
 		flush_dcache((vm_offset_t)&CpuDataEntries[cpu], sizeof(cpu_data_entry_t), FALSE);
 		flush_dcache((vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t), FALSE);
 #if defined(KERNEL_INTEGRITY_CTRR)
-		/* first time CPU starts, if not cluster master, and if cluster is not already locked,
-		 * block until cluster becomes locked. */
-		if (cpu_data_ptr->cpu_processor->active_thread == THREAD_NULL
-		    && !cpu_data_ptr->cluster_master) {
-			lck_spin_lock(&ctrr_cpu_start_lck);
-			if (ctrr_cluster_locked[cpu_data_ptr->cpu_cluster_id] == 0) {
-				assert_wait(&ctrr_cluster_locked[cpu_data_ptr->cpu_cluster_id], THREAD_UNINT);
-				lck_spin_unlock(&ctrr_cpu_start_lck);
-				thread_block(THREAD_CONTINUE_NULL);
-				assert(ctrr_cluster_locked[cpu_data_ptr->cpu_cluster_id] == 1);
-			} else {
-				lck_spin_unlock(&ctrr_cpu_start_lck);
-			}
+
+		/* First CPU being started within a cluster goes ahead to lock CTRR for cluster;
+		 * other CPUs block until cluster is locked. */
+		lck_spin_lock(&ctrr_cpu_start_lck);
+		switch (ctrr_cluster_locked[cpu_data_ptr->cpu_cluster_id]) {
+		case CTRR_UNLOCKED:
+			ctrr_cluster_locked[cpu_data_ptr->cpu_cluster_id] = CTRR_LOCKING;
+			lck_spin_unlock(&ctrr_cpu_start_lck);
+			break;
+		case CTRR_LOCKING:
+			assert_wait(&ctrr_cluster_locked[cpu_data_ptr->cpu_cluster_id], THREAD_UNINT);
+			lck_spin_unlock(&ctrr_cpu_start_lck);
+			thread_block(THREAD_CONTINUE_NULL);
+			assert(ctrr_cluster_locked[cpu_data_ptr->cpu_cluster_id] != CTRR_LOCKING);
+			break;
+		default:         // CTRR_LOCKED
+			lck_spin_unlock(&ctrr_cpu_start_lck);
+			break;
 		}
 #endif
 		(void) PE_cpu_start(cpu_data_ptr->cpu_id, (vm_offset_t)NULL, (vm_offset_t)NULL);
@@ -868,11 +976,23 @@ ml_arm_sleep(void)
 			*(volatile uint32_t *)(cpu_data_ptr->coresight_base[CORESIGHT_ED] + ARM_DEBUG_OFFSET_DBGPRCR) = 0;
 		}
 
+#if HIBERNATION
+		uint32_t mode = hibernate_write_image();
+		if (mode == kIOHibernatePostWriteHalt) {
+			HIBLOG("powering off after writing hibernation image\n");
+			int halt_result = -1;
+			if (PE_halt_restart) {
+				halt_result = (*PE_halt_restart)(kPEHaltCPU);
+			}
+			panic("can't shutdown: PE_halt_restart returned %d", halt_result);
+		}
+#endif /* HIBERNATION */
+
 #if MONOTONIC
 		mt_sleep();
 #endif /* MONOTONIC */
 		/* ARM64-specific preparation */
-		arm64_prepare_for_sleep();
+		arm64_prepare_for_sleep(true);
 	} else {
 #if __ARM_GLOBAL_SLEEP_BIT__
 		/*
@@ -902,7 +1022,7 @@ ml_arm_sleep(void)
 		}
 
 		/* ARM64-specific preparation */
-		arm64_prepare_for_sleep();
+		arm64_prepare_for_sleep(true);
 	}
 }
 
@@ -913,10 +1033,11 @@ cpu_machine_idle_init(boolean_t from_boot)
 	cpu_data_t              *cpu_data_ptr   = getCpuDatap();
 
 	if (from_boot) {
-		unsigned long   jtag = 0;
 		int             wfi_tmp = 1;
 		uint32_t        production = 1;
 		DTEntry         entry;
+
+		unsigned long   jtag = 0;
 
 		if (PE_parse_boot_argn("jtag", &jtag, sizeof(jtag))) {
 			if (jtag != 0) {
@@ -928,6 +1049,13 @@ cpu_machine_idle_init(boolean_t from_boot)
 			idle_enable = TRUE;
 		}
 
+#if DEVELOPMENT || DEBUG
+		uint32_t wfe_mode = 0;
+		if (PE_parse_boot_argn("wfe_mode", &wfe_mode, sizeof(wfe_mode))) {
+			idle_proximate_timer_wfe = ((wfe_mode & 1) == 1);
+			idle_proximate_io_wfe = ((wfe_mode & 2) == 2);
+		}
+#endif
 		PE_parse_boot_argn("wfi", &wfi_tmp, sizeof(wfi_tmp));
 
 		// bits 7..0 give the wfi type
@@ -955,8 +1083,6 @@ cpu_machine_idle_init(boolean_t from_boot)
 			break;
 		}
 
-		PE_parse_boot_argn("idle_wfe_to_deadline", &idle_wfe_to_deadline, sizeof(idle_wfe_to_deadline));
-
 		ResetHandlerData.assist_reset_handler = 0;
 		ResetHandlerData.cpu_data_entries = ml_static_vtop((vm_offset_t)CpuDataEntries);
 
@@ -967,11 +1093,11 @@ cpu_machine_idle_init(boolean_t from_boot)
 #endif /* MONITOR */
 
 		// Determine if we are on production or debug chip
-		if (kSuccess == DTLookupEntry(NULL, "/chosen", &entry)) {
+		if (kSuccess == SecureDTLookupEntry(NULL, "/chosen", &entry)) {
 			unsigned int    size;
-			void            *prop;
+			void const      *prop;
 
-			if (kSuccess == DTGetProperty(entry, "effective-production-status-ap", &prop, &size)) {
+			if (kSuccess == SecureDTGetProperty(entry, "effective-production-status-ap", &prop, &size)) {
 				if (size == 4) {
 					bcopy(prop, &production, size);
 				}
@@ -1027,20 +1153,20 @@ sleep_token_buffer_init(void)
 	cpu_data_t      *cpu_data_ptr = getCpuDatap();
 	DTEntry         entry;
 	size_t          size;
-	void            **prop;
+	void const * const *prop;
 
 	if ((cpu_data_ptr == &BootCpuData) && (sleepTokenBuffer == (vm_offset_t) NULL)) {
 		/* Find the stpage node in the device tree */
-		if (kSuccess != DTLookupEntry(0, "stram", &entry)) {
+		if (kSuccess != SecureDTLookupEntry(0, "stram", &entry)) {
 			return;
 		}
 
-		if (kSuccess != DTGetProperty(entry, "reg", (void **)&prop, (unsigned int *)&size)) {
+		if (kSuccess != SecureDTGetProperty(entry, "reg", (const void **)&prop, (unsigned int *)&size)) {
 			return;
 		}
 
 		/* Map the page into the kernel space */
-		sleepTokenBuffer = ml_io_map(((vm_offset_t *)prop)[0], ((vm_size_t *)prop)[1]);
+		sleepTokenBuffer = ml_io_map(((vm_offset_t const *)prop)[0], ((vm_size_t const *)prop)[1]);
 	}
 }
 #endif

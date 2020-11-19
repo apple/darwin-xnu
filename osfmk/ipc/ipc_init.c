@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -106,177 +106,82 @@
 #include <ipc/ipc_table.h>
 #include <ipc/ipc_voucher.h>
 #include <ipc/ipc_importance.h>
+#include <ipc/ipc_eventlink.h>
 
 #include <mach/machine/ndr_def.h>   /* NDR_record */
 
-vm_map_t ipc_kernel_map;
-vm_size_t ipc_kernel_map_size = 1024 * 1024;
+#define IPC_KERNEL_MAP_SIZE      (1024 * 1024)
+SECURITY_READ_ONLY_LATE(vm_map_t) ipc_kernel_map;
 
 /* values to limit physical copy out-of-line memory descriptors */
-vm_map_t ipc_kernel_copy_map;
+SECURITY_READ_ONLY_LATE(vm_map_t) ipc_kernel_copy_map;
 #define IPC_KERNEL_COPY_MAP_SIZE (8 * 1024 * 1024)
-vm_size_t ipc_kernel_copy_map_size = IPC_KERNEL_COPY_MAP_SIZE;
-vm_size_t ipc_kmsg_max_vm_space = ((IPC_KERNEL_COPY_MAP_SIZE * 7) / 8);
+const vm_size_t ipc_kmsg_max_vm_space = ((IPC_KERNEL_COPY_MAP_SIZE * 7) / 8);
 
 /*
  * values to limit inline message body handling
  * avoid copyin/out limits - even after accounting for maximum descriptor expansion.
  */
 #define IPC_KMSG_MAX_SPACE (64 * 1024 * 1024) /* keep in sync with COPYSIZELIMIT_PANIC */
-vm_size_t ipc_kmsg_max_body_space = ((IPC_KMSG_MAX_SPACE * 3) / 4 - MAX_TRAILER_SIZE);
+const vm_size_t ipc_kmsg_max_body_space = ((IPC_KMSG_MAX_SPACE * 3) / 4 - MAX_TRAILER_SIZE);
 
-int ipc_space_max;
-int ipc_port_max;
-int ipc_pset_max;
-int prioritize_launch = 1;
-int enforce_strict_reply = 0;
-
-
-lck_grp_t               ipc_lck_grp;
-lck_attr_t              ipc_lck_attr;
-
-static lck_grp_attr_t   ipc_lck_grp_attr;
+LCK_GRP_DECLARE(ipc_lck_grp, "ipc");
+LCK_ATTR_DECLARE(ipc_lck_attr, 0, 0);
 
 /*
- *	Routine:	ipc_bootstrap
- *	Purpose:
- *		Initialization needed before the kernel task
- *		can be created.
+ * XXX tunable, belongs in mach.message.h
  */
+#define MSG_OOL_SIZE_SMALL_MAX (2*PAGE_SIZE)
+SECURITY_READ_ONLY_LATE(vm_size_t) msg_ool_size_small;
 
-void
-ipc_bootstrap(void)
+/*
+ *	Routine:	ipc_init
+ *	Purpose:
+ *		Final initialization
+ */
+__startup_func
+static void
+ipc_init(void)
 {
 	kern_return_t kr;
-	int prioritize_launch_bootarg;
-	int strict_reply_bootarg;
-
-	lck_grp_attr_setdefault(&ipc_lck_grp_attr);
-	lck_grp_init(&ipc_lck_grp, "ipc", &ipc_lck_grp_attr);
-	lck_attr_setdefault(&ipc_lck_attr);
-
-	ipc_port_multiple_lock_init();
-
-	ipc_port_timestamp_data = 0;
-
-	/* all IPC zones should be exhaustible */
-
-	ipc_space_zone = zinit(sizeof(struct ipc_space),
-	    ipc_space_max * sizeof(struct ipc_space),
-	    sizeof(struct ipc_space),
-	    "ipc spaces");
-	zone_change(ipc_space_zone, Z_NOENCRYPT, TRUE);
-
-	/*
-	 * populate all port(set) zones
-	 */
-	ipc_object_zones[IOT_PORT] =
-	    zinit(sizeof(struct ipc_port),
-	    ipc_port_max * sizeof(struct ipc_port),
-	    sizeof(struct ipc_port),
-	    "ipc ports");
-	/* cant charge callers for port allocations (references passed) */
-	zone_change(ipc_object_zones[IOT_PORT], Z_CALLERACCT, FALSE);
-	zone_change(ipc_object_zones[IOT_PORT], Z_NOENCRYPT, TRUE);
-	zone_change(ipc_object_zones[IOT_PORT], Z_CLEARMEMORY, TRUE);
-
-	ipc_object_zones[IOT_PORT_SET] =
-	    zinit(sizeof(struct ipc_pset),
-	    ipc_pset_max * sizeof(struct ipc_pset),
-	    sizeof(struct ipc_pset),
-	    "ipc port sets");
-	zone_change(ipc_object_zones[IOT_PORT_SET], Z_NOENCRYPT, TRUE);
-	zone_change(ipc_object_zones[IOT_PORT_SET], Z_CLEARMEMORY, TRUE);
-
-	/*
-	 * Create the basic ipc_kmsg_t zone (the one we also cache)
-	 * elements at the processor-level to avoid the locking.
-	 */
-	ipc_kmsg_zone = zinit(IKM_SAVED_KMSG_SIZE,
-	    ipc_port_max * MACH_PORT_QLIMIT_DEFAULT *
-	    IKM_SAVED_KMSG_SIZE,
-	    IKM_SAVED_KMSG_SIZE,
-	    "ipc kmsgs");
-	zone_change(ipc_kmsg_zone, Z_CALLERACCT, FALSE);
-	zone_change(ipc_kmsg_zone, Z_CACHING_ENABLED, TRUE);
+	vm_offset_t min;
 
 	/* create special spaces */
 
 	kr = ipc_space_create_special(&ipc_space_kernel);
 	assert(kr == KERN_SUCCESS);
 
-
 	kr = ipc_space_create_special(&ipc_space_reply);
 	assert(kr == KERN_SUCCESS);
 
 	/* initialize modules with hidden data structures */
 
-#if     MACH_ASSERT
-	ipc_port_debug_init();
-#endif
-	ipc_kobject_init();
-	ipc_table_init();
-	ipc_voucher_init();
-
 #if IMPORTANCE_INHERITANCE
 	ipc_importance_init();
 #endif
-
-	semaphore_init();
-	mk_timer_init();
-	host_notify_init();
-
 #if CONFIG_ARCADE
 	arcade_init();
 #endif
 
-	suid_cred_init();
-
-	if (PE_parse_boot_argn("prioritize_launch", &prioritize_launch_bootarg, sizeof(prioritize_launch_bootarg))) {
-		prioritize_launch = !!prioritize_launch_bootarg;
-	}
-	if (PE_parse_boot_argn("ipc_strict_reply", &strict_reply_bootarg, sizeof(strict_reply_bootarg))) {
-		enforce_strict_reply = !!strict_reply_bootarg;
-	}
-}
-
-/*
- * XXX tunable, belongs in mach.message.h
- */
-#define MSG_OOL_SIZE_SMALL_MAX (2*PAGE_SIZE)
-vm_size_t msg_ool_size_small;
-
-/*
- *	Routine:	ipc_init
- *	Purpose:
- *		Final initialization of the IPC system.
- */
-
-void
-ipc_init(void)
-{
-	kern_return_t retval;
-	vm_offset_t min;
-
-	retval = kmem_suballoc(kernel_map, &min, ipc_kernel_map_size,
+	kr = kmem_suballoc(kernel_map, &min, IPC_KERNEL_MAP_SIZE,
 	    TRUE,
 	    (VM_FLAGS_ANYWHERE),
 	    VM_MAP_KERNEL_FLAGS_NONE,
 	    VM_KERN_MEMORY_IPC,
 	    &ipc_kernel_map);
 
-	if (retval != KERN_SUCCESS) {
+	if (kr != KERN_SUCCESS) {
 		panic("ipc_init: kmem_suballoc of ipc_kernel_map failed");
 	}
 
-	retval = kmem_suballoc(kernel_map, &min, ipc_kernel_copy_map_size,
+	kr = kmem_suballoc(kernel_map, &min, IPC_KERNEL_COPY_MAP_SIZE,
 	    TRUE,
 	    (VM_FLAGS_ANYWHERE),
 	    VM_MAP_KERNEL_FLAGS_NONE,
 	    VM_KERN_MEMORY_IPC,
 	    &ipc_kernel_copy_map);
 
-	if (retval != KERN_SUCCESS) {
+	if (kr != KERN_SUCCESS) {
 		panic("ipc_init: kmem_suballoc of ipc_kernel_copy_map failed");
 	}
 
@@ -294,12 +199,11 @@ ipc_init(void)
 	} else {
 		msg_ool_size_small = MSG_OOL_SIZE_SMALL_MAX;
 	}
-	/* account for overhead to avoid spilling over a page */
-	msg_ool_size_small -= cpy_kdata_hdr_sz;
 
 	ipc_host_init();
 	ux_handler_init();
 }
+STARTUP(MACH_IPC, STARTUP_RANK_LAST, ipc_init);
 
 
 /*

@@ -26,7 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 #include <vm/vm_kern.h>
-#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <kern/lock_group.h>
 #include <kern/timer_queue.h>
 #include <mach/machine.h>
@@ -91,7 +91,8 @@ x86_cache_alloc(void)
 	int                 i;
 
 	if (x86_caches == NULL) {
-		cache = kalloc(sizeof(x86_cpu_cache_t) + (MAX_CPUS * sizeof(x86_lcpu_t *)));
+		cache = zalloc_permanent(sizeof(x86_cpu_cache_t) +
+		    (MAX_CPUS * sizeof(x86_lcpu_t *)), ZALIGN(x86_cpu_cache_t));
 		if (cache == NULL) {
 			return NULL;
 		}
@@ -101,7 +102,6 @@ x86_cache_alloc(void)
 		cache->next = NULL;
 	}
 
-	bzero(cache, sizeof(x86_cpu_cache_t));
 	cache->next = NULL;
 	cache->maxcpus = MAX_CPUS;
 	for (i = 0; i < cache->maxcpus; i += 1) {
@@ -378,13 +378,11 @@ x86_core_alloc(int cpu)
 		simple_unlock(&x86_topo_lock);
 	} else {
 		simple_unlock(&x86_topo_lock);
-		core = kalloc(sizeof(x86_core_t));
+		core = zalloc_permanent_type(x86_core_t);
 		if (core == NULL) {
-			panic("x86_core_alloc() kalloc of x86_core_t failed!\n");
+			panic("x86_core_alloc() alloc of x86_core_t failed!\n");
 		}
 	}
-
-	bzero((void *) core, sizeof(x86_core_t));
 
 	core->pcore_num = cpup->cpu_phys_number / topoParms.nPThreadsPerCore;
 	core->lcore_num = core->pcore_num % topoParms.nPCoresPerPackage;
@@ -526,13 +524,11 @@ x86_die_alloc(int cpu)
 		simple_unlock(&x86_topo_lock);
 	} else {
 		simple_unlock(&x86_topo_lock);
-		die = kalloc(sizeof(x86_die_t));
+		die = zalloc_permanent_type(x86_die_t);
 		if (die == NULL) {
-			panic("x86_die_alloc() kalloc of x86_die_t failed!\n");
+			panic("x86_die_alloc() alloc of x86_die_t failed!\n");
 		}
 	}
-
-	bzero((void *) die, sizeof(x86_die_t));
 
 	die->pdie_num = cpup->cpu_phys_number / topoParms.nPThreadsPerDie;
 
@@ -569,13 +565,11 @@ x86_package_alloc(int cpu)
 		simple_unlock(&x86_topo_lock);
 	} else {
 		simple_unlock(&x86_topo_lock);
-		pkg = kalloc(sizeof(x86_pkg_t));
+		pkg = zalloc_permanent_type(x86_pkg_t);
 		if (pkg == NULL) {
-			panic("x86_package_alloc() kalloc of x86_pkg_t failed!\n");
+			panic("x86_package_alloc() alloc of x86_pkg_t failed!\n");
 		}
 	}
-
-	bzero((void *) pkg, sizeof(x86_pkg_t));
 
 	pkg->ppkg_num = cpup->cpu_phys_number / topoParms.nPThreadsPerPackage;
 

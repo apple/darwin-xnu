@@ -46,8 +46,9 @@ iokit/Kernel/IOPMinformee.cpp				optional iokitcpp
 iokit/Kernel/IOPMinformeeList.cpp			optional iokitcpp
 iokit/Kernel/IOPMPowerStateQueue.cpp			optional iokitcpp
 iokit/Kernel/IOCatalogue.cpp				optional iokitcpp
-iokit/Kernel/IOPMPowerSource.cpp                        optional iokitcpp
-iokit/Kernel/IOPMPowerSourceList.cpp                    optional iokitcpp
+iokit/Kernel/IOPMPowerSource.cpp			optional iokitcpp
+iokit/Kernel/IOPMPowerSourceList.cpp			optional iokitcpp
+iokit/Kernel/IOPMGR.cpp					optional iokitcpp
 iokit/Kernel/IOPolledInterface.cpp			optional iokitcpp
 
 iokit/Kernel/IOWorkLoop.cpp				optional iokitcpp
@@ -74,13 +75,16 @@ iokit/Kernel/IORangeAllocator.cpp			optional iokitcpp
 iokit/Kernel/IOSubMemoryDescriptor.cpp			optional iokitcpp
 
 iokit/Kernel/IOPlatformExpert.cpp			optional iokitcpp
+iokit/Kernel/IOPlatformIO.cpp				optional iokitcpp
 
 iokit/Kernel/IOCPU.cpp					optional iokitcpp
+iokit/Kernel/IOPlatformActions.cpp			optional iokitcpp
 
 iokit/Kernel/IONVRAM.cpp				optional iokitcpp
 
 iokit/Kernel/IODMAController.cpp			optional iokitcpp
 iokit/Kernel/IOInterruptController.cpp			optional iokitcpp
+iokit/Kernel/PassthruInterruptController.cpp		optional iokitcpp
 
 iokit/Kernel/IOUserClient.cpp				optional iokitcpp
 

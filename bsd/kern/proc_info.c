@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2005-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -108,7 +108,7 @@ uint64_t get_dispatchqueue_offset_from_proc(void *);
 uint64_t get_dispatchqueue_serialno_offset_from_proc(void *);
 uint64_t get_dispatchqueue_label_offset_from_proc(void *p);
 uint64_t get_return_to_kernel_offset_from_proc(void *p);
-int proc_info_internal(int callnum, int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
+int proc_info_internal(int callnum, int pid, uint32_t flags, uint64_t ext_id, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
 
 /*
  * TODO: Replace the noinline attribute below.  Currently, it serves
@@ -138,70 +138,69 @@ int proc_info_internal(int callnum, int pid, int flavor, uint64_t arg, user_addr
  */
 
 /* protos for proc_info calls */
-int __attribute__ ((noinline)) proc_listpids(uint32_t type, uint32_t tyoneinfo, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
-int __attribute__ ((noinline)) proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
-int __attribute__ ((noinline)) proc_pidfdinfo(int pid, int flavor, int fd, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
-int __attribute__ ((noinline)) proc_kernmsgbuf(user_addr_t buffer, uint32_t buffersize, int32_t * retval);
-int __attribute__ ((noinline)) proc_setcontrol(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
-int __attribute__ ((noinline)) proc_pidfileportinfo(int pid, int flavor, mach_port_name_t name, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
-int __attribute__ ((noinline)) proc_dirtycontrol(int pid, int flavor, uint64_t arg, int32_t * retval);
-int __attribute__ ((noinline)) proc_terminate(int pid, int32_t * retval);
-int __attribute__ ((noinline)) proc_pid_rusage(int pid, int flavor, user_addr_t buffer, int32_t * retval);
-int __attribute__ ((noinline)) proc_pidoriginatorinfo(int pid, int flavor, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
-int __attribute__ ((noinline)) proc_listcoalitions(int flavor, int coaltype, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
-int __attribute__ ((noinline)) proc_can_use_foreground_hw(int pid, user_addr_t reason, uint32_t resonsize, int32_t *retval);
+static int __attribute__ ((noinline)) proc_listpids(uint32_t type, uint32_t tyoneinfo, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
+static int __attribute__ ((noinline)) proc_pidinfo(int pid, uint32_t flags, uint64_t ext_id, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
+static int __attribute__ ((noinline)) proc_pidfdinfo(int pid, int flavor, int fd, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
+static int __attribute__ ((noinline)) proc_kernmsgbuf(user_addr_t buffer, uint32_t buffersize, int32_t * retval);
+static int __attribute__ ((noinline)) proc_setcontrol(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
+static int __attribute__ ((noinline)) proc_pidfileportinfo(int pid, int flavor, mach_port_name_t name, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+static int __attribute__ ((noinline)) proc_dirtycontrol(int pid, int flavor, uint64_t arg, int32_t * retval);
+static int __attribute__ ((noinline)) proc_terminate(int pid, int32_t * retval);
+static int __attribute__ ((noinline)) proc_pid_rusage(int pid, int flavor, user_addr_t buffer, int32_t * retval);
+static int __attribute__ ((noinline)) proc_pidoriginatorinfo(int pid, int flavor, user_addr_t buffer, uint32_t buffersize, int32_t * retval);
+static int __attribute__ ((noinline)) proc_listcoalitions(int flavor, int coaltype, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+static int __attribute__ ((noinline)) proc_can_use_foreground_hw(int pid, user_addr_t reason, uint32_t resonsize, int32_t *retval);
 
 /* protos for procpidinfo calls */
-int __attribute__ ((noinline)) proc_pidfdlist(proc_t p, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
-int __attribute__ ((noinline)) proc_pidbsdinfo(proc_t p, struct proc_bsdinfo *pbsd, int zombie);
-int __attribute__ ((noinline)) proc_pidshortbsdinfo(proc_t p, struct proc_bsdshortinfo *pbsd_shortp, int zombie);
-int __attribute__ ((noinline)) proc_pidtaskinfo(proc_t p, struct proc_taskinfo *ptinfo);
-int __attribute__ ((noinline)) proc_pidthreadinfo(proc_t p, uint64_t arg, bool thuniqueid, struct proc_threadinfo *pthinfo);
-int __attribute__ ((noinline)) proc_pidthreadpathinfo(proc_t p, uint64_t arg, struct proc_threadwithpathinfo *pinfo);
-int __attribute__ ((noinline)) proc_pidlistthreads(proc_t p, bool thuniqueid, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
-int __attribute__ ((noinline)) proc_pidregioninfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
-int __attribute__ ((noinline)) proc_pidregionpathinfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
-int __attribute__ ((noinline)) proc_pidregionpathinfo2(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
-int __attribute__ ((noinline)) proc_pidregionpathinfo3(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
-int __attribute__ ((noinline)) proc_pidvnodepathinfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
-int __attribute__ ((noinline)) proc_pidpathinfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
-int __attribute__ ((noinline)) proc_pidworkqueueinfo(proc_t p, struct proc_workqueueinfo *pwqinfo);
-int __attribute__ ((noinline)) proc_pidfileportlist(proc_t p, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
-void __attribute__ ((noinline)) proc_piduniqidentifierinfo(proc_t p, struct proc_uniqidentifierinfo *p_uniqidinfo);
-void __attribute__ ((noinline)) proc_archinfo(proc_t p, struct proc_archinfo *pai);
-void __attribute__ ((noinline)) proc_pidcoalitioninfo(proc_t p, struct proc_pidcoalitioninfo *pci);
-int __attribute__ ((noinline)) proc_pidnoteexit(proc_t p, uint64_t arg, uint32_t *data);
-int __attribute__ ((noinline)) proc_pidexitreasoninfo(proc_t p, struct proc_exitreasoninfo *peri, struct proc_exitreasonbasicinfo *pberi);
-int __attribute__ ((noinline)) proc_pidoriginatorpid_uuid(uuid_t uuid, uint32_t buffersize, pid_t *pid);
-int __attribute__ ((noinline)) proc_pidlistuptrs(proc_t p, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
-int __attribute__ ((noinline)) proc_piddynkqueueinfo(pid_t pid, int flavor, kqueue_id_t id, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
-int __attribute__ ((noinline)) proc_pidregionpath(proc_t p, uint64_t arg, user_addr_t buffer, __unused uint32_t buffersize, int32_t *retval);
-int __attribute__ ((noinline)) proc_pidipctableinfo(proc_t p, struct proc_ipctableinfo *table_info);
+static int __attribute__ ((noinline)) proc_pidfdlist(proc_t p, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+static int __attribute__ ((noinline)) proc_pidbsdinfo(proc_t p, struct proc_bsdinfo *pbsd, int zombie);
+static int __attribute__ ((noinline)) proc_pidshortbsdinfo(proc_t p, struct proc_bsdshortinfo *pbsd_shortp, int zombie);
+static int __attribute__ ((noinline)) proc_pidtaskinfo(proc_t p, struct proc_taskinfo *ptinfo);
+static int __attribute__ ((noinline)) proc_pidthreadinfo(proc_t p, uint64_t arg, bool thuniqueid, struct proc_threadinfo *pthinfo);
+static int __attribute__ ((noinline)) proc_pidthreadpathinfo(proc_t p, uint64_t arg, struct proc_threadwithpathinfo *pinfo);
+static int __attribute__ ((noinline)) proc_pidlistthreads(proc_t p, bool thuniqueid, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+static int __attribute__ ((noinline)) proc_pidregioninfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+static int __attribute__ ((noinline)) proc_pidregionpathinfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+static int __attribute__ ((noinline)) proc_pidregionpathinfo2(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+static int __attribute__ ((noinline)) proc_pidregionpathinfo3(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+static int __attribute__ ((noinline)) proc_pidvnodepathinfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+static int __attribute__ ((noinline)) proc_pidpathinfo(proc_t p, uint64_t arg, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+static int __attribute__ ((noinline)) proc_pidworkqueueinfo(proc_t p, struct proc_workqueueinfo *pwqinfo);
+static int __attribute__ ((noinline)) proc_pidfileportlist(proc_t p, user_addr_t buffer, size_t buffersize, int32_t *retval);
+extern void __attribute__ ((noinline)) proc_piduniqidentifierinfo(proc_t p, struct proc_uniqidentifierinfo *p_uniqidinfo);
+static void __attribute__ ((noinline)) proc_archinfo(proc_t p, struct proc_archinfo *pai);
+static void __attribute__ ((noinline)) proc_pidcoalitioninfo(proc_t p, struct proc_pidcoalitioninfo *pci);
+static int __attribute__ ((noinline)) proc_pidnoteexit(proc_t p, uint64_t arg, uint32_t *data);
+static int __attribute__ ((noinline)) proc_pidexitreasoninfo(proc_t p, struct proc_exitreasoninfo *peri, struct proc_exitreasonbasicinfo *pberi);
+static int __attribute__ ((noinline)) proc_pidoriginatorpid_uuid(uuid_t uuid, uint32_t buffersize, pid_t *pid);
+static int __attribute__ ((noinline)) proc_pidlistuptrs(proc_t p, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+static int __attribute__ ((noinline)) proc_piddynkqueueinfo(pid_t pid, int flavor, kqueue_id_t id, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
+static int __attribute__ ((noinline)) proc_pidregionpath(proc_t p, uint64_t arg, user_addr_t buffer, __unused uint32_t buffersize, int32_t *retval);
+static int __attribute__ ((noinline)) proc_pidipctableinfo(proc_t p, struct proc_ipctableinfo *table_info);
 
-#if !CONFIG_EMBEDDED
+#if CONFIG_PROC_UDATA_STORAGE
 int __attribute__ ((noinline)) proc_udata_info(pid_t pid, int flavor, user_addr_t buffer, uint32_t buffersize, int32_t *retval);
 #endif
 
 /* protos for proc_pidfdinfo calls */
-int __attribute__ ((noinline)) pid_vnodeinfo(vnode_t vp, uint32_t vid, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
-int __attribute__ ((noinline)) pid_vnodeinfopath(vnode_t vp, uint32_t vid, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
-int __attribute__ ((noinline)) pid_socketinfo(socket_t so, struct fileproc *fp, proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
-int __attribute__ ((noinline)) pid_pseminfo(struct psemnode * psem, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
-int __attribute__ ((noinline)) pid_pshminfo(struct pshmnode * pshm, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
-int __attribute__ ((noinline)) pid_pipeinfo(struct pipe * p, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
-int __attribute__ ((noinline)) pid_kqueueinfo(struct kqueue * kq, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
-int __attribute__ ((noinline)) pid_atalkinfo(struct atalk  * at, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
+static int __attribute__ ((noinline)) pid_vnodeinfo(vnode_t vp, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
+static int __attribute__ ((noinline)) pid_vnodeinfopath(vnode_t vp, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
+static int __attribute__ ((noinline)) pid_socketinfo(socket_t so, struct fileproc *fp, proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
+static int __attribute__ ((noinline)) pid_pseminfo(struct psemnode * psem, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
+static int __attribute__ ((noinline)) pid_pshminfo(struct pshmnode * pshm, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
+static int __attribute__ ((noinline)) pid_pipeinfo(struct pipe * p, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
+static int __attribute__ ((noinline)) pid_kqueueinfo(struct kqueue * kq, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, uint32_t buffersize, int32_t * retval);
 
 
 /* protos for misc */
 
-int fill_vnodeinfo(vnode_t vp, struct vnode_info *vinfo, boolean_t check_fsgetpath);
-void  fill_fileinfo(struct fileproc * fp, proc_t proc, int fd, struct proc_fileinfo * finfo);
-int proc_security_policy(proc_t targetp, int callnum, int flavor, boolean_t check_same_user);
+static int fill_vnodeinfo(vnode_t vp, struct vnode_info *vinfo, boolean_t check_fsgetpath);
+static void fill_fileinfo(struct fileproc *fp, proc_t proc, int fd, struct proc_fileinfo * finfo);
+static int proc_security_policy(proc_t targetp, int callnum, int flavor, boolean_t check_same_user);
 static void munge_vinfo_stat(struct stat64 *sbp, struct vinfo_stat *vsbp);
 static int proc_piduuidinfo(pid_t pid, uuid_t uuid_buf, uint32_t buffersize);
-int proc_pidpathinfo_internal(proc_t p, __unused uint64_t arg, char *buf, uint32_t buffersize, __unused int32_t *retval);
 
+extern int proc_pidpathinfo_internal(proc_t p, __unused uint64_t arg, char *buf, uint32_t buffersize, __unused int32_t *retval);
 extern int cansignal(struct proc *, kauth_cred_t, struct proc *, int);
 extern int proc_get_rusage(proc_t proc, int flavor, user_addr_t buffer, int is_zombie);
 
@@ -257,19 +256,30 @@ get_return_to_kernel_offset_from_proc(void *p)
 int
 proc_info(__unused struct proc *p, struct proc_info_args * uap, int32_t *retval)
 {
-	return proc_info_internal(uap->callnum, uap->pid, uap->flavor, uap->arg, uap->buffer, uap->buffersize, retval);
+	return proc_info_internal(uap->callnum, uap->pid, 0, 0, uap->flavor, uap->arg, uap->buffer, uap->buffersize, retval);
 }
 
+int
+proc_info_extended_id(__unused struct proc *p, struct proc_info_extended_id_args *uap, int32_t *retval)
+{
+	uint32_t flags = uap->flags;
+
+	if ((flags & (PIF_COMPARE_IDVERSION | PIF_COMPARE_UNIQUEID)) == (PIF_COMPARE_IDVERSION | PIF_COMPARE_UNIQUEID)) {
+		return EINVAL;
+	}
+
+	return proc_info_internal(uap->callnum, uap->pid, flags, uap->ext_id, uap->flavor, uap->arg, uap->buffer, uap->buffersize, retval);
+}
 
 int
-proc_info_internal(int callnum, int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  buffersize, int32_t * retval)
+proc_info_internal(int callnum, int pid, uint32_t flags, uint64_t ext_id, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  buffersize, int32_t * retval)
 {
 	switch (callnum) {
 	case PROC_INFO_CALL_LISTPIDS:
 		/* pid contains type and flavor contains typeinfo */
 		return proc_listpids(pid, flavor, buffer, buffersize, retval);
 	case PROC_INFO_CALL_PIDINFO:
-		return proc_pidinfo(pid, flavor, arg, buffer, buffersize, retval);
+		return proc_pidinfo(pid, flags, ext_id, flavor, arg, buffer, buffersize, retval);
 	case PROC_INFO_CALL_PIDFDINFO:
 		return proc_pidfdinfo(pid, flavor, (int)arg, buffer, buffersize, retval);
 	case PROC_INFO_CALL_KERNMSGBUF:
@@ -293,10 +303,10 @@ proc_info_internal(int callnum, int pid, int flavor, uint64_t arg, user_addr_t b
 		return proc_can_use_foreground_hw(pid, buffer, buffersize, retval);
 	case PROC_INFO_CALL_PIDDYNKQUEUEINFO:
 		return proc_piddynkqueueinfo(pid, flavor, (kqueue_id_t)arg, buffer, buffersize, retval);
-#if !CONFIG_EMBEDDED
+#if CONFIG_PROC_UDATA_STORAGE
 	case PROC_INFO_CALL_UDATA_INFO:
 		return proc_udata_info(pid, flavor, buffer, buffersize, retval);
-#endif /* !CONFIG_EMBEDDED */
+#endif /* CONFIG_PROC_UDATA_STORAGE */
 	default:
 		return EINVAL;
 	}
@@ -310,8 +320,8 @@ proc_listpids(uint32_t type, uint32_t typeinfo, user_addr_t buffer, uint32_t  bu
 {
 	uint32_t numprocs = 0;
 	uint32_t wantpids;
-	char * kbuf;
-	int * ptr;
+	int *kbuf;
+	int *ptr;
 	uint32_t n;
 	int skip;
 	struct proc * p;
@@ -341,16 +351,16 @@ proc_listpids(uint32_t type, uint32_t typeinfo, user_addr_t buffer, uint32_t  bu
 		numprocs = wantpids;
 	}
 
-	kbuf = (char *)kalloc((vm_size_t)(numprocs * sizeof(int)));
+	kbuf = kheap_alloc(KHEAP_TEMP, numprocs * sizeof(int),
+	    Z_WAITOK | Z_ZERO);
 	if (kbuf == NULL) {
 		return ENOMEM;
 	}
-	bzero(kbuf, numprocs * sizeof(int));
 
 	proc_list_lock();
 
 	n = 0;
-	ptr = (int *)kbuf;
+	ptr = kbuf;
 	current_list = &allproc;
 proc_loop:
 	LIST_FOREACH(p, current_list, p_list) {
@@ -436,12 +446,12 @@ proc_loop:
 
 	proc_list_unlock();
 
-	ptr = (int *)kbuf;
+	ptr = kbuf;
 	error = copyout((caddr_t)ptr, buffer, n * sizeof(int));
 	if (error == 0) {
 		*retval = (n * sizeof(int));
 	}
-	kfree(kbuf, (vm_size_t)(numprocs * sizeof(int)));
+	kheap_free(KHEAP_TEMP, kbuf, numprocs * sizeof(int));
 
 	return error;
 }
@@ -449,16 +459,36 @@ proc_loop:
 
 /********************************** proc_pidfdlist routines ********************************/
 
+static size_t
+proc_fdlist_internal(proc_t p, struct proc_fdinfo *pfd, size_t numfds)
+{
+	struct fileproc *fp;
+	size_t count = 0;
+
+	proc_fdlock(p);
+
+	fdt_foreach(fp, p) {
+		if (count >= numfds) {
+			break;
+		}
+		file_type_t fdtype = FILEGLOB_DTYPE(fp->fp_glob);
+		pfd[count].proc_fd = fdt_foreach_fd();
+		pfd[count].proc_fdtype = (fdtype != DTYPE_ATALK) ?
+		    fdtype : PROX_FDTYPE_ATALK;
+		count++;
+	}
+
+	proc_fdunlock(p);
+	return count;
+}
+
 int
 proc_pidfdlist(proc_t p, user_addr_t buffer, uint32_t  buffersize, int32_t *retval)
 {
 	uint32_t numfds = 0;
 	uint32_t needfds;
 	char * kbuf;
-	struct proc_fdinfo * pfd;
-	struct fileproc * fp;
-	int n;
-	int count = 0;
+	uint32_t count = 0;
 	int error = 0;
 
 	if (p->p_fd->fd_nfiles > 0) {
@@ -478,35 +508,46 @@ proc_pidfdlist(proc_t p, user_addr_t buffer, uint32_t  buffersize, int32_t *retv
 		numfds = needfds;
 	}
 
-	kbuf = (char *)kalloc((vm_size_t)(numfds * sizeof(struct proc_fdinfo)));
+	kbuf = kheap_alloc(KHEAP_TEMP, numfds * sizeof(struct proc_fdinfo),
+	    Z_WAITOK | Z_ZERO);
 	if (kbuf == NULL) {
 		return ENOMEM;
 	}
-	bzero(kbuf, numfds * sizeof(struct proc_fdinfo));
 
-	proc_fdlock(p);
-
-	pfd = (struct proc_fdinfo *)kbuf;
-
-	for (n = 0; ((n < (int)numfds) && (n < p->p_fd->fd_nfiles)); n++) {
-		if (((fp = p->p_fd->fd_ofiles[n]) != 0)
-		    && ((p->p_fd->fd_ofileflags[n] & UF_RESERVED) == 0)) {
-			file_type_t fdtype = FILEGLOB_DTYPE(fp->f_fglob);
-			pfd->proc_fd = n;
-			pfd->proc_fdtype = (fdtype != DTYPE_ATALK) ?
-			    fdtype : PROX_FDTYPE_ATALK;
-			count++;
-			pfd++;
-		}
-	}
-	proc_fdunlock(p);
+	/* cannot overflow due to count <= numfds */
+	count = (uint32_t)proc_fdlist_internal(p, (struct proc_fdinfo *)kbuf, (size_t)numfds);
 
 	error = copyout(kbuf, buffer, count * sizeof(struct proc_fdinfo));
-	kfree(kbuf, (vm_size_t)(numfds * sizeof(struct proc_fdinfo)));
+	kheap_free(KHEAP_TEMP, kbuf, numfds * sizeof(struct proc_fdinfo));
 	if (error == 0) {
-		*retval = (count * sizeof(struct proc_fdinfo));
+		*retval = count * sizeof(struct proc_fdinfo);
 	}
 	return error;
+}
+
+/*
+ * KPI variant of proc_pidfdlist.
+ *
+ * Caller is responsible for adding margin to *count when calling this in
+ * circumstances where file descriptors can appear/disappear between the
+ * two calls to this function.
+ */
+int
+proc_fdlist(proc_t p, struct proc_fdinfo *buf, size_t *count)
+{
+	if (p == NULL || count == NULL) {
+		return EINVAL;
+	}
+
+	if (buf == NULL) {
+		proc_fdlock(p);
+		*count = (size_t)max(min(p->p_fd->fd_lastfile + 1, p->p_fd->fd_nfiles), 0);
+		proc_fdunlock(p);
+		return 0;
+	}
+
+	*count = proc_fdlist_internal(p, buf, *count);
+	return 0;
 }
 
 /*
@@ -516,7 +557,7 @@ static int
 proc_fileport_count(__unused mach_port_name_t name,
     __unused struct fileglob *fg, void *arg)
 {
-	uint32_t *counter = arg;
+	size_t *counter = arg;
 
 	*counter += 1;
 	return 0;
@@ -547,17 +588,17 @@ proc_fileport_fdtype(mach_port_name_t name, struct fileglob *fg, void *arg)
 
 int
 proc_pidfileportlist(proc_t p,
-    user_addr_t buffer, uint32_t buffersize, int32_t *retval)
+    user_addr_t buffer, size_t buffersize, int32_t *retval)
 {
 	void *kbuf;
-	vm_size_t kbufsize;
+	size_t kbufsize;
 	struct proc_fileportinfo *pfi;
-	uint32_t needfileports, numfileports;
+	size_t needfileports, numfileports;
 	struct fileport_fdtype_args ffa;
 	int error;
 
 	needfileports = buffersize / sizeof(*pfi);
-	if ((user_addr_t)0 == buffer || needfileports > (uint32_t)maxfiles) {
+	if ((user_addr_t)0 == buffer || needfileports > (size_t)maxfilesperproc) {
 		/*
 		 * Either (i) the user is asking for a fileport count,
 		 * or (ii) the number of fileports they're asking for is
@@ -583,7 +624,7 @@ proc_pidfileportlist(proc_t p,
 		}
 		if ((user_addr_t)0 == buffer) {
 			numfileports += 20;     /* accelerate convergence */
-			*retval = numfileports * sizeof(*pfi);
+			*retval = (int32_t)MIN(numfileports * sizeof(*pfi), INT32_MAX);
 			return 0;
 		}
 		if (needfileports > numfileports) {
@@ -593,12 +634,11 @@ proc_pidfileportlist(proc_t p,
 
 	assert(buffersize >= PROC_PIDLISTFILEPORTS_SIZE);
 
-	kbufsize = (vm_size_t)needfileports * sizeof(*pfi);
-	pfi = kbuf = kalloc(kbufsize);
+	kbufsize = needfileports * sizeof(*pfi);
+	pfi = kbuf = kheap_alloc(KHEAP_TEMP, kbufsize, Z_WAITOK | Z_ZERO);
 	if (kbuf == NULL) {
 		return ENOMEM;
 	}
-	bzero(kbuf, kbufsize);
 
 	ffa.ffa_pfi = pfi;
 	ffa.ffa_pfi_end = pfi + needfileports;
@@ -607,7 +647,7 @@ proc_pidfileportlist(proc_t p,
 	case KERN_SUCCESS:
 		error = 0;
 		pfi = ffa.ffa_pfi;
-		if ((numfileports = pfi - (typeof(pfi))kbuf) == 0) {
+		if ((numfileports = (size_t)(pfi - (typeof(pfi))kbuf)) == 0) {
 			break;
 		}
 		if (numfileports > needfileports) {
@@ -625,9 +665,9 @@ proc_pidfileportlist(proc_t p,
 		error = EINVAL;
 		break;
 	}
-	kfree(kbuf, kbufsize);
+	kheap_free(KHEAP_TEMP, kbuf, kbufsize);
 	if (error == 0) {
-		*retval = numfileports * sizeof(*pfi);
+		*retval = (int32_t)MIN(numfileports * sizeof(*pfi), INT32_MAX);
 	}
 	return error;
 }
@@ -703,11 +743,11 @@ proc_pidbsdinfo(proc_t p, struct proc_bsdinfo * pbsd, int zombie)
 		}
 	}
 
-#if !CONFIG_EMBEDDED
+#if CONFIG_DELAY_IDLE_SLEEP
 	if ((p->p_flag & P_DELAYIDLESLEEP) == P_DELAYIDLESLEEP) {
 		pbsd->pbi_flags |= PROC_FLAG_DELAYIDLESLEEP;
 	}
-#endif /* !CONFIG_EMBEDDED */
+#endif /* CONFIG_DELAY_IDLE_SLEEP */
 
 	switch (PROC_CONTROL_STATE(p)) {
 	case P_PCTHROTTLE:
@@ -800,11 +840,11 @@ proc_pidshortbsdinfo(proc_t p, struct proc_bsdshortinfo * pbsd_shortp, int zombi
 	if ((p->p_flag & P_EXEC) == P_EXEC) {
 		pbsd_shortp->pbsi_flags |= PROC_FLAG_EXEC;
 	}
-#if !CONFIG_EMBEDDED
+#if CONFIG_DELAY_IDLE_SLEEP
 	if ((p->p_flag & P_DELAYIDLESLEEP) == P_DELAYIDLESLEEP) {
 		pbsd_shortp->pbsi_flags |= PROC_FLAG_DELAYIDLESLEEP;
 	}
-#endif /* !CONFIG_EMBEDDED */
+#endif /* CONFIG_DELAY_IDLE_SLEEP */
 
 	switch (PROC_CONTROL_STATE(p)) {
 	case P_PCTHROTTLE:
@@ -894,6 +934,8 @@ bsd_getthreadname(void *uth, char *buffer)
 	struct uthread *ut = (struct uthread *)uth;
 	if (ut->pth_name) {
 		bcopy(ut->pth_name, buffer, MAXTHREADNAMESIZE);
+	} else {
+		*buffer = '\0';
 	}
 }
 
@@ -1015,16 +1057,16 @@ proc_pidlistthreads(proc_t p, bool thuniqueid, user_addr_t buffer, uint32_t  buf
 		numthreads = count;
 	}
 
-	kbuf = (void *)kalloc(numthreads * sizeof(uint64_t));
+	kbuf = kheap_alloc(KHEAP_TEMP,
+	    numthreads * sizeof(uint64_t), Z_WAITOK | Z_ZERO);
 	if (kbuf == NULL) {
 		return ENOMEM;
 	}
-	bzero(kbuf, numthreads * sizeof(uint64_t));
 
 	ret = fill_taskthreadlist(p->task, kbuf, numthreads, thuniqueid);
 
 	error = copyout(kbuf, buffer, ret);
-	kfree(kbuf, numthreads * sizeof(uint64_t));
+	kheap_free(KHEAP_TEMP, kbuf, numthreads * sizeof(uint64_t));
 	if (error == 0) {
 		*retval = ret;
 	}
@@ -1129,13 +1171,11 @@ proc_pidregionpathinfo2(proc_t p, uint64_t arg, user_addr_t buffer, __unused uin
 int
 proc_pidregionpath(proc_t p, uint64_t arg, user_addr_t buffer, __unused uint32_t buffersize, int32_t *retval)
 {
-	struct proc_regionpath path;
+	struct proc_regionpath path = {};
 	int ret, error = 0;
 	uintptr_t vnodeaddr = 0;
 	uint32_t vnodeid = 0;
 	vnode_t vp;
-
-	bzero(&path, sizeof(struct proc_regionpath));
 
 	ret = find_region_details(p->task, (vm_map_offset_t) arg,
 	    (uintptr_t *)&vnodeaddr, (uint32_t *)&vnodeid,
@@ -1312,18 +1352,16 @@ proc_pidpathinfo(proc_t p, __unused uint64_t arg, user_addr_t buffer, uint32_t b
 		return ESRCH;
 	}
 
-	buf = (char *)kalloc(buffersize);
+	buf = kheap_alloc(KHEAP_TEMP, buffersize, Z_WAITOK | Z_ZERO);
 	if (buf == NULL) {
 		return ENOMEM;
 	}
-
-	bzero(buf, buffersize);
 
 	error = proc_pidpathinfo_internal(p, arg, buf, buffersize, retval);
 	if (error == 0) {
 		error = copyout(buf, buffer, len);
 	}
-	kfree(buf, buffersize);
+	kheap_free(KHEAP_TEMP, buf, buffersize);
 	return error;
 }
 
@@ -1379,6 +1417,7 @@ proc_piduniqidentifierinfo(proc_t p, struct proc_uniqidentifierinfo *p_uniqidinf
 	p_uniqidinfo->p_uniqueid = proc_uniqueid(p);
 	proc_getexecutableuuid(p, (unsigned char *)&p_uniqidinfo->p_uuid, sizeof(p_uniqidinfo->p_uuid));
 	p_uniqidinfo->p_puniqueid = proc_puniqueid(p);
+	p_uniqidinfo->p_idversion = proc_pidversion(p);
 	p_uniqidinfo->p_reserve2 = 0;
 	p_uniqidinfo->p_reserve3 = 0;
 	p_uniqidinfo->p_reserve4 = 0;
@@ -1603,12 +1642,11 @@ proc_listcoalitions(int flavor, int type, user_addr_t buffer,
 	}
 
 	k_buffersize = ncoals * elem_size;
-	coalinfo = kalloc((vm_size_t)k_buffersize);
+	coalinfo = kheap_alloc(KHEAP_TEMP, k_buffersize, Z_WAITOK | Z_ZERO);
 	if (!coalinfo) {
 		error = ENOMEM;
 		goto out;
 	}
-	bzero(coalinfo, k_buffersize);
 
 	switch (flavor) {
 	case LISTCOALITIONS_ALL_COALS:
@@ -1649,7 +1687,7 @@ proc_listcoalitions(int flavor, int type, user_addr_t buffer,
 
 out:
 	if (coalinfo) {
-		kfree(coalinfo, k_buffersize);
+		kheap_free(KHEAP_TEMP, coalinfo, k_buffersize);
 	}
 
 	return error;
@@ -1841,7 +1879,7 @@ out:
 
 
 int
-proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  buffersize, int32_t * retval)
+proc_pidinfo(int pid, uint32_t flags, uint64_t ext_id, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  buffersize, int32_t * retval)
 {
 	struct proc * p = PROC_NULL;
 	int error = ENOTSUP;
@@ -1852,7 +1890,7 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 	int zombie = 0;
 	bool thuniqueid = false;
 	int uniqidversion = 0;
-	boolean_t check_same_user;
+	bool check_same_user;
 
 	switch (flavor) {
 	case PROC_PIDLISTFDS:
@@ -2009,6 +2047,15 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		gotref = 1;
 	}
 
+	if ((flags & PIF_COMPARE_IDVERSION) && (ext_id != p->p_idversion)) {
+		error = ESRCH;
+		goto out;
+	}
+	if ((flags & PIF_COMPARE_UNIQUEID) && (ext_id != p->p_uniqueid)) {
+		error = ESRCH;
+		goto out;
+	}
+
 	/* Certain operations don't require privileges */
 	switch (flavor) {
 	case PROC_PIDT_SHORTBSDINFO:
@@ -2047,6 +2094,7 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 
 	case PROC_PIDT_SHORTBSDINFO:
 		shortversion = 1;
+		OS_FALLTHROUGH;
 	case PROC_PIDT_BSDINFOWITHUNIQID:
 	case PROC_PIDTBSDINFO: {
 		struct proc_bsdinfo pbsd;
@@ -2118,6 +2166,7 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 
 	case PROC_PIDTHREADID64INFO:
 		thuniqueid = true;
+		OS_FALLTHROUGH;
 	case PROC_PIDTHREADINFO:{
 		struct proc_threadinfo pthinfo;
 
@@ -2133,6 +2182,7 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 
 	case PROC_PIDLISTTHREADIDS:
 		thuniqueid = true;
+		OS_FALLTHROUGH;
 	case PROC_PIDLISTTHREADS:{
 		error =  proc_pidlistthreads(p, thuniqueid, buffer, buffersize, retval);
 	}
@@ -2287,22 +2337,23 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 		}
 
 		size_t kbufsz = MIN(buffersize, vmrtfaultinfo_bufsz());
-		void *vmrtfbuf = kalloc(kbufsz);
+		void *vmrtfbuf = kheap_alloc(KHEAP_TEMP, kbufsz, Z_WAITOK | Z_ZERO);
 
 		if (vmrtfbuf == NULL) {
 			error = ENOMEM;
 			break;
 		}
 
-		bzero(vmrtfbuf, kbufsz);
-
 		uint64_t effpid = get_current_unique_pid();
 		/* The VM may choose to provide more comprehensive records
 		 * for root-privileged users on internal configurations.
 		 */
 		boolean_t isroot = (suser(kauth_cred_get(), (u_short *)0) == 0);
-		int vmf_residue = vmrtf_extract(effpid, isroot, kbufsz, vmrtfbuf, retval);
-		int vmfsz = *retval * sizeof(vm_rtfault_record_t);
+		size_t num_extracted = 0;
+		int vmf_residue = vmrtf_extract(effpid, isroot, kbufsz, vmrtfbuf, &num_extracted);
+		size_t vmfsz = num_extracted * sizeof(vm_rtfault_record_t);
+
+		*retval = (int32_t)MIN(num_extracted, INT32_MAX);
 
 		error = 0;
 		if (vmfsz) {
@@ -2314,7 +2365,7 @@ proc_pidinfo(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t  bu
 				error = ENOMEM;
 			}
 		}
-		kfree(vmrtfbuf, kbufsz);
+		kheap_free(KHEAP_TEMP, vmrtfbuf, kbufsz);
 	}
 	break;
 	case PROC_PIDPLATFORMINFO: {
@@ -2358,9 +2409,10 @@ out:
 
 
 int
-pid_vnodeinfo(vnode_t vp, uint32_t vid, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, __unused uint32_t buffersize, int32_t * retval)
+pid_vnodeinfo(vnode_t vp, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, __unused uint32_t buffersize, int32_t * retval)
 {
 	struct vnode_fdinfo vfi;
+	uint32_t vid = vnode_vid(vp);
 	int error = 0;
 
 	if ((error = vnode_getwithvid(vp, vid)) != 0) {
@@ -2380,9 +2432,10 @@ pid_vnodeinfo(vnode_t vp, uint32_t vid, struct fileproc * fp, proc_t proc, int f
 }
 
 int
-pid_vnodeinfopath(vnode_t vp, uint32_t vid, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, __unused uint32_t buffersize, int32_t * retval)
+pid_vnodeinfopath(vnode_t vp, struct fileproc * fp, proc_t proc, int fd, user_addr_t  buffer, __unused uint32_t buffersize, int32_t * retval)
 {
 	struct vnode_fdinfowithpath vfip;
+	uint32_t vid = vnode_vid(vp);
 	int count, error = 0;
 
 	if ((error = vnode_getwithvid(vp, vid)) != 0) {
@@ -2409,11 +2462,11 @@ pid_vnodeinfopath(vnode_t vp, uint32_t vid, struct fileproc * fp, proc_t proc, i
 void
 fill_fileinfo(struct fileproc * fp, proc_t proc, int fd, struct proc_fileinfo * fproc)
 {
-	fproc->fi_openflags = fp->f_fglob->fg_flag;
+	fproc->fi_openflags = fp->fp_glob->fg_flag;
 	fproc->fi_status = 0;
-	fproc->fi_offset = fp->f_fglob->fg_offset;
-	fproc->fi_type = FILEGLOB_DTYPE(fp->f_fglob);
-	if (fp->f_fglob->fg_count > 1) {
+	fproc->fi_offset = fp->fp_glob->fg_offset;
+	fproc->fi_type = FILEGLOB_DTYPE(fp->fp_glob);
+	if (os_ref_get_count_raw(&fp->fp_glob->fg_count) > 1) {
 		fproc->fi_status |= PROC_FP_SHARED;
 	}
 	if (proc != PROC_NULL) {
@@ -2577,12 +2630,6 @@ pid_kqueueinfo(struct kqueue * kq, struct fileproc *fp, proc_t proc, int fd, use
 	return error;
 }
 
-int
-pid_atalkinfo(__unused struct atalk * at, __unused struct fileproc *fp, __unused proc_t proc, __unused int fd, __unused user_addr_t  buffer, __unused uint32_t buffersize, __unused int32_t * retval)
-{
-	return ENOTSUP;
-}
-
 
 /************************** proc_pidfdinfo routine ***************************/
 int
@@ -2590,7 +2637,7 @@ proc_pidfdinfo(int pid, int flavor, int fd, user_addr_t buffer, uint32_t buffers
 {
 	proc_t p;
 	int error = ENOTSUP;
-	struct fileproc * fp = NULL;
+	struct fileproc *fp = NULL;
 	uint32_t size;
 
 	switch (flavor) {
@@ -2645,71 +2692,50 @@ proc_pidfdinfo(int pid, int flavor, int fd, user_addr_t buffer, uint32_t buffers
 
 	switch (flavor) {
 	case PROC_PIDFDVNODEINFO: {
-		vnode_t vp;
-		uint32_t vid = 0;
-
-		if ((error = fp_getfvpandvid(p, fd, &fp, &vp, &vid)) != 0) {
+		if ((error = fp_get_ftype(p, fd, DTYPE_VNODE, EBADF, &fp)) != 0) {
 			goto out1;
 		}
-		/* no need to be under the fdlock */
-		error =  pid_vnodeinfo(vp, vid, fp, p, fd, buffer, buffersize, retval);
+		error = pid_vnodeinfo(fp->fp_glob->fg_data, fp, p, fd, buffer, buffersize, retval);
 	}
 	break;
 
 	case PROC_PIDFDVNODEPATHINFO: {
-		vnode_t vp;
-		uint32_t vid = 0;
-
-		if ((error = fp_getfvpandvid(p, fd, &fp, &vp, &vid)) != 0) {
+		if ((error = fp_get_ftype(p, fd, DTYPE_VNODE, EBADF, &fp)) != 0) {
 			goto out1;
 		}
-
-		/* no need to be under the fdlock */
-		error =  pid_vnodeinfopath(vp, vid, fp, p, fd, buffer, buffersize, retval);
+		error = pid_vnodeinfopath(fp->fp_glob->fg_data, fp, p, fd, buffer, buffersize, retval);
 	}
 	break;
 
 	case PROC_PIDFDSOCKETINFO: {
-		socket_t so;
-
-		if ((error = fp_getfsock(p, fd, &fp, &so)) != 0) {
+		if ((error = fp_get_ftype(p, fd, DTYPE_SOCKET, ENOTSOCK, &fp)) != 0) {
 			goto out1;
 		}
-		/* no need to be under the fdlock */
-		error =  pid_socketinfo(so, fp, p, fd, buffer, buffersize, retval);
+		error = pid_socketinfo(fp->fp_glob->fg_data, fp, p, fd, buffer, buffersize, retval);
 	}
 	break;
 
 	case PROC_PIDFDPSEMINFO: {
-		struct psemnode * psem;
-
-		if ((error = fp_getfpsem(p, fd, &fp, &psem)) != 0) {
+		if ((error = fp_get_ftype(p, fd, DTYPE_PSXSHM, EBADF, &fp)) != 0) {
 			goto out1;
 		}
-		/* no need to be under the fdlock */
-		error =  pid_pseminfo(psem, fp, p, fd, buffer, buffersize, retval);
+		error = pid_pseminfo(fp->fp_glob->fg_data, fp, p, fd, buffer, buffersize, retval);
 	}
 	break;
 
 	case PROC_PIDFDPSHMINFO: {
-		struct pshmnode * pshm;
-
-		if ((error = fp_getfpshm(p, fd, &fp, &pshm)) != 0) {
+		if ((error = fp_get_ftype(p, fd, DTYPE_PSXSHM, EBADF, &fp)) != 0) {
 			goto out1;
 		}
-		/* no need to be under the fdlock */
-		error =  pid_pshminfo(pshm, fp, p, fd, buffer, buffersize, retval);
+		error = pid_pshminfo(fp->fp_glob->fg_data, fp, p, fd, buffer, buffersize, retval);
 	}
 	break;
 
 	case PROC_PIDFDPIPEINFO: {
-		struct pipe * cpipe;
-
-		if ((error = fp_getfpipe(p, fd, &fp, &cpipe)) != 0) {
+		if ((error = fp_get_ftype(p, fd, DTYPE_PIPE, EBADF, &fp)) != 0) {
 			goto out1;
 		}
-		/* no need to be under the fdlock */
-		error =  pid_pipeinfo(cpipe, fp, p, fd, buffer, buffersize, retval);
+		error = pid_pipeinfo(fp->fp_glob->fg_data, fp, p, fd, buffer, buffersize, retval);
 	}
 	break;
 
@@ -2722,11 +2748,12 @@ proc_pidfdinfo(int pid, int flavor, int fd, user_addr_t buffer, uint32_t buffers
 				error = 0;
 				break;
 			}
-		} else if ((error = fp_getfkq(p, fd, &fp, &kqu.kq)) != 0) {
+		} else if ((error = fp_get_ftype(p, fd, DTYPE_KQUEUE, EBADF, &fp)) != 0) {
 			goto out1;
+		} else {
+			kqu.kq = fp->fp_glob->fg_data;
 		}
 
-		/* no need to be under the fdlock */
 		error = pid_kqueueinfo(kqu.kq, fp, p, fd, buffer, buffersize, retval);
 	}
 	break;
@@ -2740,8 +2767,10 @@ proc_pidfdinfo(int pid, int flavor, int fd, user_addr_t buffer, uint32_t buffers
 				error = 0;
 				break;
 			}
-		} else if ((error = fp_getfkq(p, fd, &fp, &kqu.kq)) != 0) {
+		} else if ((error = fp_get_ftype(p, fd, DTYPE_KQUEUE, EBADF, &fp)) != 0) {
 			goto out1;
+		} else {
+			kqu.kq = fp->fp_glob->fg_data;
 		}
 		error = pid_kqueue_extinfo(p, kqu.kq, buffer, buffersize, retval);
 	}
@@ -2772,21 +2801,12 @@ proc_pidlistuptrs(proc_t p, user_addr_t buffer, uint32_t buffersize, int32_t *re
 	void *kbuf = NULL;
 	int32_t nuptrs = 0;
 
-	if (buffer != USER_ADDR_NULL) {
-		count = buffersize / sizeof(uint64_t);
-		if (count > MAX_UPTRS) {
-			count = MAX_UPTRS;
-		}
-		if (count > 0) {
-			buffersize = count * sizeof(uint64_t);
-			kbuf = kalloc(buffersize);
-			bzero(kbuf, buffersize);
-			assert(kbuf != NULL);
-		} else {
-			buffersize = 0;
-		}
-	} else {
+	if (buffer == USER_ADDR_NULL || buffersize < sizeof(uint64_t)) {
 		buffersize = 0;
+	} else {
+		count = MIN(buffersize / sizeof(uint64_t), MAX_UPTRS);
+		buffersize = count * sizeof(uint64_t);
+		kbuf = kheap_alloc(KHEAP_TEMP, buffersize, Z_WAITOK);
 	}
 
 	nuptrs = kevent_proc_copy_uptrs(p, kbuf, buffersize);
@@ -2807,7 +2827,7 @@ out:
 	*retval = nuptrs;
 
 	if (kbuf) {
-		kfree(kbuf, buffersize);
+		kheap_free(KHEAP_TEMP, kbuf, buffersize);
 		kbuf = NULL;
 	}
 
@@ -2834,7 +2854,7 @@ proc_fileport_info(__unused mach_port_name_t name,
 	int error;
 
 	bzero(fp, sizeof(*fp));
-	fp->f_fglob = fg;
+	fp->fp_glob = fg;
 
 	switch (fia->fia_flavor) {
 	case PROC_PIDFILEPORTVNODEPATHINFO: {
@@ -2845,7 +2865,7 @@ proc_fileport_info(__unused mach_port_name_t name,
 			break;
 		}
 		vp = (struct vnode *)fg->fg_data;
-		error = pid_vnodeinfopath(vp, vnode_vid(vp), fp, PROC_NULL, 0,
+		error = pid_vnodeinfopath(vp, fp, PROC_NULL, 0,
 		    fia->fia_buffer, fia->fia_buffersize, fia->fia_retval);
 	}       break;
 
@@ -2994,6 +3014,14 @@ proc_security_policy(proc_t targetp, __unused int callnum, __unused int flavor, 
 int
 proc_kernmsgbuf(user_addr_t buffer, uint32_t buffersize, int32_t * retval)
 {
+#if CONFIG_MACF
+	int error = 0;
+
+	if ((error = mac_system_check_info(kauth_cred_get(), "kern.msgbuf"))) {
+		return error;
+	}
+#endif
+
 	if (suser(kauth_cred_get(), (u_short *)0) == 0) {
 		return log_dmesg(buffer, buffersize, retval);
 	} else {
@@ -3072,6 +3100,7 @@ proc_setcontrol(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t 
 	break;
 
 	case PROC_SELFSET_DELAYIDLESLEEP: {
+#if CONFIG_DELAY_IDLE_SLEEP
 		/* mark or clear the process property to delay idle sleep disk IO */
 		if (pcontrol != 0) {
 			OSBitOrAtomic(P_DELAYIDLESLEEP, &pself->p_flag);
@@ -3080,6 +3109,11 @@ proc_setcontrol(int pid, int flavor, uint64_t arg, user_addr_t buffer, uint32_t 
 		}
 	}
 	break;
+#else
+		error = ENOTSUP;
+		goto out;
+	}
+#endif
 
 	default:
 		error = ENOTSUP;
@@ -3328,8 +3362,10 @@ void
 proc_archinfo(proc_t p, struct proc_archinfo *pai)
 {
 	proc_lock(p);
-	pai->p_cputype = p->p_cputype;
-	pai->p_cpusubtype = p->p_cpusubtype;
+	{
+		pai->p_cputype = p->p_cputype;
+		pai->p_cpusubtype = p->p_cpusubtype;
+	}
 	proc_unlock(p);
 }
 
@@ -3377,7 +3413,7 @@ proc_pidexitreasoninfo(proc_t p, struct proc_exitreasoninfo *peri, struct proc_e
 	}
 
 	if (p->p_exit_reason->osr_kcd_buf != NULL) {
-		reason_data_size = kcdata_memory_get_used_bytes(&p->p_exit_reason->osr_kcd_descriptor);
+		reason_data_size = (uint32_t)kcdata_memory_get_used_bytes(&p->p_exit_reason->osr_kcd_descriptor);
 	}
 
 	if (peri != NULL) {
@@ -3392,7 +3428,7 @@ proc_pidexitreasoninfo(proc_t p, struct proc_exitreasoninfo *peri, struct proc_e
 
 		peri->eri_reason_buf_size = reason_data_size;
 		if (reason_data_size != 0) {
-			error = copyout(p->p_exit_reason->osr_kcd_buf, peri->eri_kcd_buf, reason_data_size);
+			error = copyout(p->p_exit_reason->osr_kcd_buf, (user_addr_t)peri->eri_kcd_buf, reason_data_size);
 		}
 	} else {
 		pberi->beri_namespace =  p->p_exit_reason->osr_namespace;
@@ -3528,7 +3564,7 @@ out:
 	return err;
 }
 
-#if !CONFIG_EMBEDDED
+#if CONFIG_PROC_UDATA_STORAGE
 int
 proc_udata_info(int pid, int flavor, user_addr_t buffer, uint32_t bufsize, int32_t *retval)
 {
@@ -3574,4 +3610,4 @@ out:
 
 	return err;
 }
-#endif /* !CONFIG_EMBEDDED */
+#endif /* CONFIG_PROC_UDATA_STORAGE */

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -2056,6 +2056,7 @@ bond_device_mtu(struct ifnet * ifp, ifbond_ref ifb)
 static int
 bond_add_interface(struct ifnet * ifp, struct ifnet * port_ifp)
 {
+	u_int32_t                   eflags;
 	uint32_t                    control_flags = 0;
 	int                         devmtu;
 	int                         error = 0;
@@ -2111,18 +2112,20 @@ bond_add_interface(struct ifnet * ifp, struct ifnet * port_ifp)
 		error = EBUSY;
 		goto signal_done;
 	}
-	ifnet_lock_exclusive(port_ifp);
 	if ((ifnet_eflags(port_ifp) & (IFEF_VLAN | IFEF_BOND)) != 0) {
 		/* interface already has VLAN's, or is part of bond */
-		ifnet_lock_done(port_ifp);
 		error = EBUSY;
 		goto signal_done;
 	}
 
 	/* mark the interface busy */
-	/* can't use ifnet_set_eflags because that takes the lock */
-	port_ifp->if_eflags |= IFEF_BOND;
-	ifnet_lock_done(port_ifp);
+	eflags = if_set_eflags(port_ifp, IFEF_BOND);
+	if ((eflags & IFEF_VLAN) != 0) {
+		/* vlan got in ahead of us */
+		if_clear_eflags(port_ifp, IFEF_BOND);
+		error = EBUSY;
+		goto signal_done;
+	}
 
 	if (TAILQ_EMPTY(&ifb->ifb_port_list)) {
 		ifnet_set_offload(ifp, ifnet_offload(port_ifp));
@@ -2356,7 +2359,7 @@ failed:
 		TAILQ_REMOVE(&ifb->ifb_port_list, p, po_port_list);
 		ifb->ifb_port_count--;
 	}
-	ifnet_set_eflags(ifp, 0, IFEF_BOND);
+	if_clear_eflags(ifp, IFEF_BOND);
 	if (TAILQ_EMPTY(&ifb->ifb_port_list)) {
 		ifb->ifb_altmtu = 0;
 		ifnet_set_mtu(ifp, ETHERMTU);
@@ -2532,7 +2535,7 @@ bond_remove_interface(ifbond_ref ifb, struct ifnet * port_ifp)
 
 	bond_lock();
 	bondport_free(p);
-	ifnet_set_eflags(port_ifp, 0, IFEF_BOND);
+	if_clear_eflags(port_ifp, IFEF_BOND);
 	/* release this bondport's reference to the ifbond */
 	ifbond_release(ifb);
 
@@ -3193,23 +3196,24 @@ bond_iff_detached(__unused void *cookie, ifnet_t port_ifp)
 static void
 interface_link_event(struct ifnet * ifp, u_int32_t event_code)
 {
-	struct {
-		struct kern_event_msg   header;
-		u_int32_t                       unit;
-		char                    if_name[IFNAMSIZ];
-	} event;
+	struct event {
+		u_int32_t ifnet_family;
+		u_int32_t unit;
+		char if_name[IFNAMSIZ];
+	};
+	_Alignas(struct kern_event_msg) char message[sizeof(struct kern_event_msg) + sizeof(struct event)] = { 0 };
+	struct kern_event_msg *header = (struct kern_event_msg*)message;
+	struct event *data = (struct event *)(header + 1);
 
-	bzero(&event, sizeof(event));
-	event.header.total_size    = sizeof(event);
-	event.header.vendor_code   = KEV_VENDOR_APPLE;
-	event.header.kev_class     = KEV_NETWORK_CLASS;
-	event.header.kev_subclass  = KEV_DL_SUBCLASS;
-	event.header.event_code    = event_code;
-	event.header.event_data[0] = ifnet_family(ifp);
-	event.unit                 = (u_int32_t) ifnet_unit(ifp);
-	strlcpy(event.if_name, ifnet_name(ifp), IFNAMSIZ);
-	ifnet_event(ifp, &event.header);
-	return;
+	header->total_size   = sizeof(message);
+	header->vendor_code  = KEV_VENDOR_APPLE;
+	header->kev_class    = KEV_NETWORK_CLASS;
+	header->kev_subclass = KEV_DL_SUBCLASS;
+	header->event_code   = event_code;
+	data->ifnet_family   = ifnet_family(ifp);
+	data->unit           = (u_int32_t)ifnet_unit(ifp);
+	strlcpy(data->if_name, ifnet_name(ifp), IFNAMSIZ);
+	ifnet_event(ifp, header);
 }
 
 static errno_t
@@ -3320,7 +3324,6 @@ bond_family_init(void)
 		    error);
 		goto done;
 	}
-#if INET6
 	error = proto_register_plumber(PF_INET6, APPLE_IF_FAM_BOND,
 	    ether_attach_inet6,
 	    ether_detach_inet6);
@@ -3329,7 +3332,6 @@ bond_family_init(void)
 		    error);
 		goto done;
 	}
-#endif
 	error = bond_clone_attach();
 	if (error != 0) {
 		printf("bond: proto_register_plumber failed bond_clone_attach error=%d\n",
@@ -4267,7 +4269,7 @@ bondport_receive_machine_port_disabled(bondport_ref p, LAEvent event,
 		p->po_receive_state = ReceiveState_PORT_DISABLED;
 		ps = &p->po_partner_state;
 		ps->ps_state = lacp_actor_partner_state_set_out_of_sync(ps->ps_state);
-	/* FALL THROUGH */
+		OS_FALLTHROUGH;
 	case LAEventMediaChange:
 		if (media_active(&p->po_media_info)) {
 			if (media_ok(&p->po_media_info)) {
@@ -4461,7 +4463,7 @@ bondport_periodic_transmit_machine(bondport_ref p, LAEvent event,
 			timestamp_printf("[%s] periodic_transmit Start\n",
 			    bondport_get_name(p));
 		}
-	/* FALL THROUGH */
+		OS_FALLTHROUGH;
 	case LAEventMediaChange:
 		devtimer_cancel(p->po_periodic_timer);
 		p->po_periodic_interval = 0;
@@ -4469,6 +4471,7 @@ bondport_periodic_transmit_machine(bondport_ref p, LAEvent event,
 		    || media_ok(&p->po_media_info) == 0) {
 			break;
 		}
+		OS_FALLTHROUGH;
 	case LAEventPacket:
 		/* Neither Partner nor Actor are LACP Active, no periodic tx */
 		ps = &p->po_partner_state;
@@ -4743,7 +4746,7 @@ bondport_mux_machine_waiting(bondport_ref p, LAEvent event,
 			    bondport_get_name(p));
 		}
 		p->po_mux_state = MuxState_WAITING;
-	/* FALL THROUGH */
+		OS_FALLTHROUGH;
 	default:
 	case LAEventSelectedChange:
 		if (p->po_selected == SelectedState_UNSELECTED) {
@@ -4837,7 +4840,7 @@ bondport_mux_machine_attached(bondport_ref p, LAEvent event,
 		bondport_disable_distributing(p);
 		p->po_actor_state = s;
 		bondport_flags_set_ntt(p);
-	/* FALL THROUGH */
+		OS_FALLTHROUGH;
 	default:
 		switch (p->po_selected) {
 		case SelectedState_SELECTED:
@@ -4877,7 +4880,7 @@ bondport_mux_machine_collecting_distributing(bondport_ref p,
 		s = lacp_actor_partner_state_set_distributing(s);
 		p->po_actor_state = s;
 		bondport_flags_set_ntt(p);
-	/* FALL THROUGH */
+		OS_FALLTHROUGH;
 	default:
 		s = p->po_partner_state.ps_state;
 		if (lacp_actor_partner_state_in_sync(s) == 0) {

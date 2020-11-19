@@ -33,7 +33,5 @@
 #define VM_INIT_H
 
 extern void vm_mem_bootstrap(void);
-extern void vm_mem_init(void);
-extern void vm_map_steal_memory(void);
 
 #endif /* VM_INIT_H */

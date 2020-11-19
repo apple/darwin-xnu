@@ -27,7 +27,7 @@
 .\"
 .\"     @(#)posix_spawnattr_setbinpref_np.3
 .
-.Dd August 22, 2007
+.Dd May 8, 2020
 .Dt POSIX_SPAWNATTR_SETBINPREF_NP 3
 .Os "Mac OS X"
 .Sh NAME
@@ -85,7 +85,10 @@ is subsequently invoked on a Universal binary with the
 the elements which were set will be used, in the order they were set,
 to select the first element in the list which matches any
 .Em cpu_type_t
-of those available in the Universal binary.  If there is no match, then
+of those available in the Universal binary, using the best slice matching
+that
+.Em cpu_type_t .
+If there is no match, then
 the attempt to create the child process will fail with the error
 EBADARCH.
 If the
@@ -95,15 +98,22 @@ is the last element in the list, then rather than returning
 EBADARCH
 on no match, the system will instead fall back to the standard Universal
 binary grading preference order.
+If called multiple times on the same
+.Em attr ,
+the previous preferences will be overwritten.
 .Pp
 The
 .Fn posix_spawnattr_getbinpref_np
 function gets the universal binary preferences for the spawn attribute
 value referenced by
 .Fa attr
+(set by a prior call to
+.Fn posix_spawnattr_setbinpref_np
+or
+.Fn posix_spawnattr_setarchpref_np )
 into the memory containing the
 .Em cpu_type_t
-referenced by 
+referenced by
 .Fa pref
 with a prereserved size of
 .Fa count
@@ -141,6 +151,7 @@ is invalid.
 .Xr posix_spawnp 2 ,
 .Xr posix_spawnattr_init 3 ,
 .Xr posix_spawnattr_destroy 3 ,
+.Xr posix_spawnattr_setarchpref_np 3
 .Xr posix_spawnattr_setflags 3
 .Sh STANDARDS
 Nonstandard

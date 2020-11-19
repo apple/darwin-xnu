@@ -57,16 +57,16 @@ typedef struct flowq {
 #define FQF_NEW_FLOW    0x04    /* Currently on new flows queue */
 #define FQF_OLD_FLOW    0x08    /* Currently on old flows queue */
 #define FQF_FLOWCTL_ON  0x10    /* Currently flow controlled */
-	u_int8_t        fq_flags;       /* flags */
-	u_int8_t        fq_sc_index; /* service_class index */
+	uint8_t        fq_flags;       /* flags */
+	uint8_t        fq_sc_index; /* service_class index */
 	int16_t         fq_deficit;     /* Deficit for scheduling */
-	u_int32_t       fq_bytes;       /* Number of bytes in the queue */
-	u_int64_t       fq_min_qdelay; /* min queue delay for Codel */
-	u_int64_t       fq_updatetime; /* next update interval */
-	u_int64_t       fq_getqtime;    /* last dequeue time */
+	uint32_t       fq_bytes;       /* Number of bytes in the queue */
+	uint64_t       fq_min_qdelay; /* min queue delay for Codel */
+	uint64_t       fq_updatetime; /* next update interval */
+	uint64_t       fq_getqtime;    /* last dequeue time */
 	SLIST_ENTRY(flowq) fq_hashlink; /* for flow queue hash table */
 	STAILQ_ENTRY(flowq) fq_actlink; /* for new/old flow queues */
-	u_int32_t       fq_flowhash;    /* Flow hash */
+	uint32_t       fq_flowhash;    /* Flow hash */
 	classq_pkt_type_t       fq_ptype; /* Packet type */
 } fq_t;
 
@@ -74,7 +74,8 @@ typedef struct flowq {
 
 #define fq_empty(_q)    MBUFQ_EMPTY(&(_q)->fq_mbufq)
 
-#define fq_enqueue(_q, _p)      MBUFQ_ENQUEUE(&(_q)->fq_mbufq, _p.cp_mbuf)
+#define fq_enqueue(_q, _h, _t, _c) \
+    MBUFQ_ENQUEUE_MULTI(&(_q)->fq_mbufq, (_h).cp_mbuf, (_t).cp_mbuf)
 
 #define fq_dequeue(_q, _p) do {                                         \
 	MBUFQ_DEQUEUE(&(_q)->fq_mbufq, (_p)->cp_mbuf);                  \

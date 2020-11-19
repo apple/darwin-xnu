@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2019-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -35,7 +35,7 @@
 #include <kern/sched_prim.h>
 #include <kern/misc_protos.h>
 #include <kern/thread_call.h>
-#include <kern/zalloc.h>
+#include <kern/zalloc_internal.h>
 #include <kern/kalloc.h>
 #include <tests/ktest.h>
 #include <sys/errno.h>
@@ -44,7 +44,7 @@
 #include <machine/lowglobals.h>
 #include <vm/vm_page.h>
 #include <vm/vm_object.h>
-#include <kern/priority_queue.h>
+#include <vm/vm_protos.h>
 #include <string.h>
 
 #if !(DEVELOPMENT || DEBUG)
@@ -63,12 +63,15 @@ void xnupost_reset_panic_widgets(void);
 kern_return_t zalloc_test(void);
 kern_return_t RandomULong_test(void);
 kern_return_t kcdata_api_test(void);
-kern_return_t priority_queue_test(void);
 kern_return_t ts_kernel_primitive_test(void);
 kern_return_t ts_kernel_sleep_inheritor_test(void);
 kern_return_t ts_kernel_gate_test(void);
 kern_return_t ts_kernel_turnstile_chain_test(void);
 kern_return_t ts_kernel_timingsafe_bcmp_test(void);
+
+#if __ARM_VFP__
+extern kern_return_t vfp_state_test(void);
+#endif
 
 extern kern_return_t kprintf_hhx_test(void);
 
@@ -126,13 +129,16 @@ struct xnupost_test kernel_post_tests[] = {XNUPOST_TEST_CONFIG_BASIC(zalloc_test
 	                                   XNUPOST_TEST_CONFIG_BASIC(bitmap_post_test),
 	                                   //XNUPOST_TEST_CONFIG_TEST_PANIC(kcdata_api_assert_tests)
 	                                   XNUPOST_TEST_CONFIG_BASIC(test_thread_call),
-	                                   XNUPOST_TEST_CONFIG_BASIC(priority_queue_test),
 	                                   XNUPOST_TEST_CONFIG_BASIC(ts_kernel_primitive_test),
 	                                   XNUPOST_TEST_CONFIG_BASIC(ts_kernel_sleep_inheritor_test),
 	                                   XNUPOST_TEST_CONFIG_BASIC(ts_kernel_gate_test),
 	                                   XNUPOST_TEST_CONFIG_BASIC(ts_kernel_turnstile_chain_test),
 	                                   XNUPOST_TEST_CONFIG_BASIC(ts_kernel_timingsafe_bcmp_test),
-	                                   XNUPOST_TEST_CONFIG_BASIC(kprintf_hhx_test), };
+	                                   XNUPOST_TEST_CONFIG_BASIC(kprintf_hhx_test),
+#if __ARM_VFP__
+	                                   XNUPOST_TEST_CONFIG_BASIC(vfp_state_test),
+#endif
+	                                   XNUPOST_TEST_CONFIG_BASIC(vm_tests), };
 
 uint32_t kernel_post_tests_count = sizeof(kernel_post_tests) / sizeof(xnupost_test_data_t);
 
@@ -205,7 +211,8 @@ xnupost_list_tests(xnupost_test_t test_list, uint32_t test_count)
 	for (uint32_t i = 0; i < test_count; i++) {
 		testp = &test_list[i];
 		if (testp->xt_test_num == 0) {
-			testp->xt_test_num = ++total_post_tests_count;
+			assert(total_post_tests_count < UINT16_MAX);
+			testp->xt_test_num = (uint16_t)++total_post_tests_count;
 		}
 		/* make sure the boot-arg based test run list is honored */
 		if (kernel_post_args & POSTARGS_CUSTOM_TEST_RUNLIST) {
@@ -388,16 +395,17 @@ xnupost_reset_tests(xnupost_test_t test_list, uint32_t test_count)
 
 
 kern_return_t
-zalloc_test()
+zalloc_test(void)
 {
 	zone_t test_zone;
 	void * test_ptr;
 
 	T_SETUPBEGIN;
-	test_zone = zinit(sizeof(uint64_t), 100 * sizeof(uint64_t), sizeof(uint64_t), "test_uint64_zone");
+	test_zone = zone_create("test_uint64_zone", sizeof(uint64_t),
+	    ZC_DESTRUCTIBLE);
 	T_ASSERT_NOTNULL(test_zone, NULL);
 
-	T_ASSERT_EQ_INT(zone_free_count(test_zone), 0, NULL);
+	T_ASSERT_EQ_INT(test_zone->countfree, 0, NULL);
 	T_SETUPEND;
 
 	T_ASSERT_NOTNULL(test_ptr = zalloc(test_zone), NULL);
@@ -425,129 +433,6 @@ compare_numbers_ascending(const void * a, const void * b)
 	} else {
 		return 0;
 	}
-}
-
-/*
- * Function used for comparison by qsort()
- */
-static int
-compare_numbers_descending(const void * a, const void * b)
-{
-	const uint32_t x = *(const uint32_t *)a;
-	const uint32_t y = *(const uint32_t *)b;
-	if (x > y) {
-		return -1;
-	} else if (x < y) {
-		return 1;
-	} else {
-		return 0;
-	}
-}
-
-/* Node structure for the priority queue tests */
-struct priority_queue_test_node {
-	struct priority_queue_entry     link;
-	priority_queue_key_t            node_key;
-};
-
-static void
-priority_queue_test_queue(struct priority_queue *pq, int type,
-    priority_queue_compare_fn_t cmp_fn)
-{
-	/* Configuration for the test */
-#define PRIORITY_QUEUE_NODES    7
-	static uint32_t priority_list[] = { 20, 3, 7, 6, 50, 2, 8};
-	uint32_t increase_pri = 100;
-	uint32_t decrease_pri = 90;
-	struct priority_queue_test_node *result;
-	uint32_t key = 0;
-	boolean_t update_result = false;
-
-	struct priority_queue_test_node *node = NULL;
-	/* Add all priorities to the first priority queue */
-	for (int i = 0; i < PRIORITY_QUEUE_NODES; i++) {
-		node = kalloc(sizeof(struct priority_queue_test_node));
-		T_ASSERT_NOTNULL(node, NULL);
-
-		priority_queue_entry_init(&(node->link));
-		node->node_key = priority_list[i];
-		key = (type == PRIORITY_QUEUE_GENERIC_KEY) ? PRIORITY_QUEUE_KEY_NONE : priority_list[i];
-		priority_queue_insert(pq, &(node->link), key, cmp_fn);
-	}
-
-	T_ASSERT_NOTNULL(node, NULL);
-	key = (type == PRIORITY_QUEUE_GENERIC_KEY) ? node->node_key : priority_queue_entry_key(pq, &(node->link));
-	T_ASSERT((key == node->node_key), "verify node stored key correctly");
-
-	/* Test the priority increase operation by updating the last node added (8) */
-	T_ASSERT_NOTNULL(node, NULL);
-	node->node_key = increase_pri;
-	key = (type == PRIORITY_QUEUE_GENERIC_KEY) ? PRIORITY_QUEUE_KEY_NONE : node->node_key;
-	update_result = priority_queue_entry_increase(pq, &node->link, key, cmp_fn);
-	T_ASSERT((update_result == true), "increase key updated root");
-	result = priority_queue_max(pq, struct priority_queue_test_node, link);
-	T_ASSERT((result->node_key == increase_pri), "verify priority_queue_entry_increase() operation");
-
-
-	/* Test the priority decrease operation by updating the last node added */
-	T_ASSERT((result == node), NULL);
-	node->node_key = decrease_pri;
-	key = (type == PRIORITY_QUEUE_GENERIC_KEY) ? PRIORITY_QUEUE_KEY_NONE : node->node_key;
-	update_result = priority_queue_entry_decrease(pq, &node->link, key, cmp_fn);
-	T_ASSERT((update_result == true), "decrease key updated root");
-	result = priority_queue_max(pq, struct priority_queue_test_node, link);
-	T_ASSERT((result->node_key == decrease_pri), "verify priority_queue_entry_decrease() operation");
-
-	/* Update our local priority list as well */
-	priority_list[PRIORITY_QUEUE_NODES - 1] = decrease_pri;
-
-	/* Sort the local list in descending order */
-	qsort(priority_list, PRIORITY_QUEUE_NODES, sizeof(priority_list[0]), compare_numbers_descending);
-
-	/* Test the maximum operation by comparing max node with local list */
-	result = priority_queue_max(pq, struct priority_queue_test_node, link);
-	T_ASSERT((result->node_key == priority_list[0]), "(heap (%u) == qsort (%u)) priority queue max node lookup",
-	    (uint32_t)result->node_key, priority_list[0]);
-
-	/* Remove all remaining elements and verify they match local list */
-	for (int i = 0; i < PRIORITY_QUEUE_NODES; i++) {
-		result = priority_queue_remove_max(pq, struct priority_queue_test_node, link, cmp_fn);
-		T_ASSERT((result->node_key == priority_list[i]), "(heap (%u) == qsort (%u)) priority queue max node removal",
-		    (uint32_t)result->node_key, priority_list[i]);
-	}
-
-	priority_queue_destroy(pq, struct priority_queue_test_node, link, ^(void *n) {
-		kfree(n, sizeof(struct priority_queue_test_node));
-	});
-}
-
-kern_return_t
-priority_queue_test(void)
-{
-	/*
-	 * Initialize two priority queues
-	 * - One which uses the key comparator
-	 * - Other which uses the node comparator
-	 */
-	static struct priority_queue pq;
-	static struct priority_queue pq_nodes;
-
-	T_SETUPBEGIN;
-
-	priority_queue_init(&pq, PRIORITY_QUEUE_BUILTIN_KEY | PRIORITY_QUEUE_MAX_HEAP);
-	priority_queue_init(&pq_nodes, PRIORITY_QUEUE_GENERIC_KEY | PRIORITY_QUEUE_MAX_HEAP);
-
-	T_SETUPEND;
-
-	priority_queue_test_queue(&pq, PRIORITY_QUEUE_BUILTIN_KEY,
-	    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE);
-
-	priority_queue_test_queue(&pq_nodes, PRIORITY_QUEUE_GENERIC_KEY,
-	    priority_heap_make_comparator(a, b, struct priority_queue_test_node, link, {
-		return (a->node_key > b->node_key) ? 1 : ((a->node_key == b->node_key) ? 0 : -1);
-	}));
-
-	return KERN_SUCCESS;
 }
 
 /*
@@ -751,7 +636,7 @@ kcdata_api_test()
 	char data[30] = "sample_disk_io_stats";
 	retval = kcdata_memory_static_init(&test_kc_data, (mach_vm_address_t)&data, KCDATA_BUFFER_BEGIN_CRASHINFO, sizeof(data),
 	    KCFLAG_USE_MEMCOPY);
-	T_ASSERT(retval == KERN_RESOURCE_SHORTAGE, "init with 30 bytes failed as expected with KERN_RESOURCE_SHORTAGE");
+	T_ASSERT(retval == KERN_INSUFFICIENT_BUFFER_SIZE, "init with 30 bytes failed as expected with KERN_INSUFFICIENT_BUFFER_SIZE");
 
 	/* test with COPYOUT for 0x0 address. Should return KERN_NO_ACCESS */
 	retval = kcdata_memory_static_init(&test_kc_data, (mach_vm_address_t)0, KCDATA_BUFFER_BEGIN_CRASHINFO, PAGE_SIZE,
@@ -809,7 +694,7 @@ kcdata_api_test()
 	user_addr  = 0xdeadbeef;
 	bytes_used = kcdata_memory_get_used_bytes(&test_kc_data);
 	retval = kcdata_get_memory_addr(&test_kc_data, KCDATA_TYPE_MACH_ABSOLUTE_TIME, PAGE_SIZE * 4, &user_addr);
-	T_ASSERT(retval == KERN_RESOURCE_SHORTAGE, "Allocating entry with size > buffer -> KERN_RESOURCE_SHORTAGE");
+	T_ASSERT(retval == KERN_INSUFFICIENT_BUFFER_SIZE, "Allocating entry with size > buffer -> KERN_INSUFFICIENT_BUFFER_SIZE");
 	T_ASSERT(user_addr == 0xdeadbeef, "user_addr remained unaffected with failed kcdata_get_memory_addr");
 	T_ASSERT(bytes_used == kcdata_memory_get_used_bytes(&test_kc_data), "The data structure should be unaffected");
 
@@ -830,7 +715,7 @@ kcdata_api_test()
 	T_ASSERT(retval == KERN_SUCCESS, "Array of 20 integers should be possible");
 	T_ASSERT(user_addr != 0xdeadbeef, "user_addr is updated as expected");
 	T_ASSERT((kcdata_memory_get_used_bytes(&test_kc_data) - bytes_used) >= 20 * sizeof(uint64_t), "memory allocation is in range");
-	kcdata_iter_t iter = kcdata_iter(item_p, PAGE_SIZE - kcdata_memory_get_used_bytes(&test_kc_data));
+	kcdata_iter_t iter = kcdata_iter(item_p, (unsigned long)(PAGE_SIZE - kcdata_memory_get_used_bytes(&test_kc_data)));
 	T_ASSERT(kcdata_iter_array_elem_count(iter) == 20, "array count is 20");
 
 	/* FIXME add tests here for ranges of sizes and counts */
@@ -942,19 +827,19 @@ pmap_coredump_test(void)
 	T_ASSERT_GE_ULONG(lowGlo.lgStaticAddr, gPhysBase, NULL);
 	T_ASSERT_LE_ULONG(lowGlo.lgStaticAddr + lowGlo.lgStaticSize, first_avail, NULL);
 	T_ASSERT_EQ_ULONG(lowGlo.lgLayoutMajorVersion, 3, NULL);
-	T_ASSERT_EQ_ULONG(lowGlo.lgLayoutMinorVersion, 0, NULL);
+	T_ASSERT_EQ_ULONG(lowGlo.lgLayoutMinorVersion, 2, NULL);
 	T_ASSERT_EQ_ULONG(lowGlo.lgLayoutMagic, LOWGLO_LAYOUT_MAGIC, NULL);
 
 	// check the constant values in lowGlo
-	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemQ, ((uint64_t) &(pmap_object_store.memq)), NULL);
+	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemQ, ((typeof(lowGlo.lgPmapMemQ)) & (pmap_object_store.memq)), NULL);
 	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemPageOffset, offsetof(struct vm_page_with_ppnum, vmp_phys_page), NULL);
 	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemChainOffset, offsetof(struct vm_page, vmp_listq), NULL);
 	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemPagesize, sizeof(struct vm_page), NULL);
 
 #if defined(__arm64__)
-	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemFromArrayMask, VM_PACKED_FROM_VM_PAGES_ARRAY, NULL);
-	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemPackedShift, VM_PACKED_POINTER_SHIFT, NULL);
-	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemPackedBaseAddr, VM_MIN_KERNEL_AND_KEXT_ADDRESS, NULL);
+	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemFromArrayMask, VM_PAGE_PACKED_FROM_ARRAY, NULL);
+	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemPackedShift, VM_PAGE_PACKED_PTR_SHIFT, NULL);
+	T_ASSERT_EQ_ULONG(lowGlo.lgPmapMemPackedBaseAddr, VM_PAGE_PACKED_PTR_BASE, NULL);
 #endif
 
 	vm_object_lock_shared(&pmap_object_store);

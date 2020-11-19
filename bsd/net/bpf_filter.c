@@ -83,7 +83,7 @@
 extern unsigned int bpf_maxbufsize;
 
 static inline u_int32_t
-get_word_from_buffers(u_char * cp, u_char * np, int num_from_cp)
+get_word_from_buffers(u_char * cp, u_char * np, size_t num_from_cp)
 {
 	u_int32_t       val;
 
@@ -174,7 +174,7 @@ bad:
 	return 0;
 }
 
-static u_int16_t
+static uint16_t
 m_xhalf(struct mbuf *m, void * hdr, size_t hdrlen, bpf_u_int32 k, int *err)
 {
 	size_t len;
@@ -192,7 +192,7 @@ m_xhalf(struct mbuf *m, void * hdr, size_t hdrlen, bpf_u_int32 k, int *err)
 		goto bad;
 	}
 	*err = 0;
-	return (cp[0] << 8) | mtod(m, u_char *)[0];
+	return (uint16_t)((cp[0] << 8) | mtod(m, u_char *)[0]);
 bad:
 	*err = 1;
 	return 0;

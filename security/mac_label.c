@@ -37,35 +37,19 @@
 #include <sys/systm.h>
 #include <security/mac_internal.h>
 
-static zone_t zone_label;
-
-void
-mac_labelzone_init(void)
-{
-	zone_label = zinit(sizeof(struct label),
-	    8192 * sizeof(struct label),
-	    sizeof(struct label), "MAC Labels");
-	zone_change(zone_label, Z_EXPAND, TRUE);
-	zone_change(zone_label, Z_EXHAUST, FALSE);
-	zone_change(zone_label, Z_CALLERACCT, FALSE);
-}
+static ZONE_DECLARE(zone_label, "MAC Labels", sizeof(struct label), ZC_ZFREE_CLEARMEM);
 
 struct label *
 mac_labelzone_alloc(int flags)
 {
+	int zflags = Z_ZERO | (flags & MAC_NOWAIT);
 	struct label *l;
 
-	if (flags & MAC_NOWAIT) {
-		l = (struct label *) zalloc_noblock(zone_label);
-	} else {
-		l = (struct label *) zalloc(zone_label);
+	static_assert(MAC_NOWAIT == Z_NOWAIT);
+	l = zalloc_flags(zone_label, zflags);
+	if (l) {
+		l->l_flags = MAC_FLAG_INITIALIZED;
 	}
-	if (l == NULL) {
-		return NULL;
-	}
-
-	bzero(l, sizeof(struct label));
-	l->l_flags = MAC_FLAG_INITIALIZED;
 	return l;
 }
 

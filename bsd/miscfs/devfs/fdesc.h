@@ -89,7 +89,7 @@ struct fdescnode {
 	LIST_ENTRY(fdescnode)   fd_hash;        /* Hash list */
 	struct vnode            *fd_vnode;      /* Back ptr to vnode */
 	fdntype                 fd_type;        /* Type of this node */
-	long                    fd_fd;          /* Fd to be dup'ed */
+	int                     fd_fd;          /* Fd to be dup'ed */
 	const char              *fd_link;       /* Link to fd/n */
 	int                     fd_ix;          /* filesystem index */
 };

@@ -2,12 +2,17 @@
 #BEGIN  Machine dependent Makefile fragment for arm
 ######################################################################
 
-# Files that currently violate cast alignment checks at build time
-fbt_arm.o_CFLAGS_ADD += -Wno-cast-qual
-
 # Inline assembly doesn't interact well with LTO
 fbt_arm.o_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG)
 
+#
+# Diagnostic opt-outs.  We need to make this list empty.
+#
+# DO NOT ADD MORE HERE.
+#
+# -Wno-shorten-64-to-32
+kern_mman.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+vm_compressor_backing_file.o_CFLAGS_ADD += -Wno-shorten-64-to-32
 ######################################################################
 #END    Machine dependent Makefile fragment for arm
 ######################################################################

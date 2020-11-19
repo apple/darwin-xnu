@@ -84,9 +84,14 @@
 #if CONFIG_MACF
 #include <security/mac_framework.h>
 #endif
+#if CONFIG_ATM
+#include <atm/atm_internal.h>
+#endif
 
-int pshm_cache_purge_all(proc_t p);
-int psem_cache_purge_all(proc_t p);
+extern int psem_cache_purge_all(proc_t p);
+extern int pshm_cache_purge_all(proc_t p);
+extern void reset_osvariant_status(void);
+extern void reset_osreleasetype(void);
 
 int
 reboot(struct proc *p, struct reboot_args *uap, __unused int32_t *retval)
@@ -148,6 +153,9 @@ skip_cred_check:
 	return error;
 }
 
+extern void OSKextResetAfterUserspaceReboot(void);
+extern void zone_gc(boolean_t);
+
 int
 usrctl(struct proc *p, __unused struct usrctl_args *uap, __unused int32_t *retval)
 {
@@ -155,12 +163,28 @@ usrctl(struct proc *p, __unused struct usrctl_args *uap, __unused int32_t *retva
 		return EPERM;
 	}
 
-	int error = 0;
-	error = pshm_cache_purge_all(p);
-	if (error) {
-		return error;
-	}
+	reset_osvariant_status();
+	reset_osreleasetype();
 
-	error = psem_cache_purge_all(p);
-	return error;
+#if CONFIG_ATM
+	atm_reset();
+#endif
+
+#if CONFIG_EXT_RESOLVER
+	/*
+	 * We're doing a user space reboot.  We are guaranteed that the
+	 * external identity resolver is gone, so ensure that everything
+	 * comes back up as with fresh-boot just in case it didn't go
+	 * down cleanly.
+	 */
+	kauth_resolver_identity_reset();
+#endif /* CONFIG_EXT_RESOLVER */
+
+	OSKextResetAfterUserspaceReboot();
+	int shm_error = pshm_cache_purge_all(p);
+	int sem_error = psem_cache_purge_all(p);
+
+	zone_gc(FALSE);
+
+	return shm_error != 0 ? shm_error : sem_error;
 }

@@ -39,6 +39,7 @@
 #include <kern/thread.h>
 #include <kern/thread_group.h>
 #include <kern/policy_internal.h>
+#include <kern/startup.h>
 #include <machine/config.h>
 #include <machine/atomic.h>
 #include <pexpert/pexpert.h>
@@ -50,17 +51,24 @@
 
 #include <mach/machine.h>
 
-#if INTERRUPT_MASKED_DEBUG
-extern boolean_t interrupt_masked_debug;
-extern uint64_t interrupt_masked_timeout;
-#endif
-
 #if !HAS_CONTINUOUS_HWCLOCK
 extern uint64_t mach_absolutetime_asleep;
 #else
 extern uint64_t wake_abstime;
 static uint64_t wake_conttime = UINT64_MAX;
 #endif
+
+extern volatile uint32_t debug_enabled;
+
+static int max_cpus_initialized = 0;
+#define MAX_CPUS_SET    0x1
+#define MAX_CPUS_WAIT   0x2
+
+LCK_GRP_DECLARE(max_cpus_grp, "max_cpus");
+LCK_MTX_DECLARE(max_cpus_lock, &max_cpus_grp);
+uint32_t lockdown_done = 0;
+boolean_t is_clock_configured = FALSE;
+
 
 static void
 sched_perfcontrol_oncore_default(perfcontrol_state_t new_thread_state __unused, going_on_core_t on __unused)
@@ -121,6 +129,20 @@ sched_perfcontrol_state_update_default(
 {
 }
 
+static void
+sched_perfcontrol_thread_group_blocked_default(
+	__unused thread_group_data_t blocked_tg, __unused thread_group_data_t blocking_tg,
+	__unused uint32_t flags, __unused perfcontrol_state_t blocked_thr_state)
+{
+}
+
+static void
+sched_perfcontrol_thread_group_unblocked_default(
+	__unused thread_group_data_t unblocked_tg, __unused thread_group_data_t unblocking_tg,
+	__unused uint32_t flags, __unused perfcontrol_state_t unblocked_thr_state)
+{
+}
+
 sched_perfcontrol_offcore_t                     sched_perfcontrol_offcore = sched_perfcontrol_offcore_default;
 sched_perfcontrol_context_switch_t              sched_perfcontrol_switch = sched_perfcontrol_switch_default;
 sched_perfcontrol_oncore_t                      sched_perfcontrol_oncore = sched_perfcontrol_oncore_default;
@@ -133,6 +155,8 @@ sched_perfcontrol_work_interval_ctl_t           sched_perfcontrol_work_interval_
 sched_perfcontrol_deadline_passed_t             sched_perfcontrol_deadline_passed = sched_perfcontrol_deadline_passed_default;
 sched_perfcontrol_csw_t                         sched_perfcontrol_csw = sched_perfcontrol_csw_default;
 sched_perfcontrol_state_update_t                sched_perfcontrol_state_update = sched_perfcontrol_state_update_default;
+sched_perfcontrol_thread_group_blocked_t        sched_perfcontrol_thread_group_blocked = sched_perfcontrol_thread_group_blocked_default;
+sched_perfcontrol_thread_group_unblocked_t      sched_perfcontrol_thread_group_unblocked = sched_perfcontrol_thread_group_unblocked_default;
 
 void
 sched_perfcontrol_register_callbacks(sched_perfcontrol_callbacks_t callbacks, unsigned long size_of_state)
@@ -144,6 +168,44 @@ sched_perfcontrol_register_callbacks(sched_perfcontrol_callbacks_t callbacks, un
 	}
 
 	if (callbacks) {
+#if CONFIG_THREAD_GROUPS
+		if (callbacks->version >= SCHED_PERFCONTROL_CALLBACKS_VERSION_3) {
+			if (callbacks->thread_group_init != NULL) {
+				sched_perfcontrol_thread_group_init = callbacks->thread_group_init;
+			} else {
+				sched_perfcontrol_thread_group_init = sched_perfcontrol_thread_group_default;
+			}
+			if (callbacks->thread_group_deinit != NULL) {
+				sched_perfcontrol_thread_group_deinit = callbacks->thread_group_deinit;
+			} else {
+				sched_perfcontrol_thread_group_deinit = sched_perfcontrol_thread_group_default;
+			}
+			// tell CLPC about existing thread groups
+			thread_group_resync(TRUE);
+		}
+
+		if (callbacks->version >= SCHED_PERFCONTROL_CALLBACKS_VERSION_6) {
+			if (callbacks->thread_group_flags_update != NULL) {
+				sched_perfcontrol_thread_group_flags_update = callbacks->thread_group_flags_update;
+			} else {
+				sched_perfcontrol_thread_group_flags_update = sched_perfcontrol_thread_group_default;
+			}
+		}
+
+		if (callbacks->version >= SCHED_PERFCONTROL_CALLBACKS_VERSION_8) {
+			if (callbacks->thread_group_blocked != NULL) {
+				sched_perfcontrol_thread_group_blocked = callbacks->thread_group_blocked;
+			} else {
+				sched_perfcontrol_thread_group_blocked = sched_perfcontrol_thread_group_blocked_default;
+			}
+
+			if (callbacks->thread_group_unblocked != NULL) {
+				sched_perfcontrol_thread_group_unblocked = callbacks->thread_group_unblocked;
+			} else {
+				sched_perfcontrol_thread_group_unblocked = sched_perfcontrol_thread_group_unblocked_default;
+			}
+		}
+#endif
 
 		if (callbacks->version >= SCHED_PERFCONTROL_CALLBACKS_VERSION_7) {
 			if (callbacks->work_interval_ctl != NULL) {
@@ -206,6 +268,9 @@ sched_perfcontrol_register_callbacks(sched_perfcontrol_callbacks_t callbacks, un
 		}
 	} else {
 		/* reset to defaults */
+#if CONFIG_THREAD_GROUPS
+		thread_group_resync(FALSE);
+#endif
 		sched_perfcontrol_offcore = sched_perfcontrol_offcore_default;
 		sched_perfcontrol_switch = sched_perfcontrol_switch_default;
 		sched_perfcontrol_oncore = sched_perfcontrol_oncore_default;
@@ -217,6 +282,8 @@ sched_perfcontrol_register_callbacks(sched_perfcontrol_callbacks_t callbacks, un
 		sched_perfcontrol_work_interval_ctl = sched_perfcontrol_work_interval_ctl_default;
 		sched_perfcontrol_csw = sched_perfcontrol_csw_default;
 		sched_perfcontrol_state_update = sched_perfcontrol_state_update_default;
+		sched_perfcontrol_thread_group_blocked = sched_perfcontrol_thread_group_blocked_default;
+		sched_perfcontrol_thread_group_unblocked = sched_perfcontrol_thread_group_unblocked_default;
 	}
 }
 
@@ -230,6 +297,11 @@ machine_switch_populate_perfcontrol_thread_data(struct perfcontrol_thread_data *
 	data->perfctl_class = thread_get_perfcontrol_class(thread);
 	data->energy_estimate_nj = 0;
 	data->thread_id = thread->thread_id;
+#if CONFIG_THREAD_GROUPS
+	struct thread_group *tg = thread_group_get(thread);
+	data->thread_group_id = thread_group_get_id(tg);
+	data->thread_group_data = thread_group_get_machine_data(tg);
+#endif
 	data->scheduling_latency_at_same_basepri = same_pri_latency;
 	data->perfctl_state = FIND_PERFCONTROL_STATE(thread);
 }
@@ -289,6 +361,7 @@ perfcontrol_callout_stat_avg(perfcontrol_callout_type_t type,
 	       os_atomic_load_wide(&perfcontrol_callout_count[type], relaxed);
 }
 
+
 void
 machine_switch_perfcontrol_context(perfcontrol_event event,
     uint64_t timestamp,
@@ -297,6 +370,7 @@ machine_switch_perfcontrol_context(perfcontrol_event event,
     thread_t old,
     thread_t new)
 {
+
 	if (sched_perfcontrol_switch != sched_perfcontrol_switch_default) {
 		perfcontrol_state_t old_perfcontrol_state = FIND_PERFCONTROL_STATE(old);
 		perfcontrol_state_t new_perfcontrol_state = FIND_PERFCONTROL_STATE(new);
@@ -337,6 +411,7 @@ machine_switch_perfcontrol_state_update(perfcontrol_event event,
     uint32_t flags,
     thread_t thread)
 {
+
 	if (sched_perfcontrol_state_update == sched_perfcontrol_state_update_default) {
 		return;
 	}
@@ -376,10 +451,15 @@ machine_thread_going_on_core(thread_t   new_thread,
 
 	on_core.thread_id = new_thread->thread_id;
 	on_core.energy_estimate_nj = 0;
-	on_core.qos_class = proc_get_effective_thread_policy(new_thread, TASK_POLICY_QOS);
-	on_core.urgency = urgency;
+	on_core.qos_class = (uint16_t)proc_get_effective_thread_policy(new_thread, TASK_POLICY_QOS);
+	on_core.urgency = (uint16_t)urgency;
 	on_core.is_32_bit = thread_is_64bit_data(new_thread) ? FALSE : TRUE;
 	on_core.is_kernel_thread = new_thread->task == kernel_task;
+#if CONFIG_THREAD_GROUPS
+	struct thread_group *tg = thread_group_get(new_thread);
+	on_core.thread_group_id = thread_group_get_id(tg);
+	on_core.thread_group_data = thread_group_get_machine_data(tg);
+#endif
 	on_core.scheduling_latency = sched_latency;
 	on_core.start_time = timestamp;
 	on_core.scheduling_latency_at_same_basepri = same_pri_latency;
@@ -413,6 +493,11 @@ machine_thread_going_off_core(thread_t old_thread, boolean_t thread_terminating,
 	off_core.thread_id = old_thread->thread_id;
 	off_core.energy_estimate_nj = 0;
 	off_core.end_time = last_dispatch;
+#if CONFIG_THREAD_GROUPS
+	struct thread_group *tg = thread_group_get(old_thread);
+	off_core.thread_group_id = thread_group_get_id(tg);
+	off_core.thread_group_data = thread_group_get_machine_data(tg);
+#endif
 
 #if MONOTONIC
 	uint64_t counters[MT_CORE_NFIXED];
@@ -430,6 +515,132 @@ machine_thread_going_off_core(thread_t old_thread, boolean_t thread_terminating,
 #endif
 }
 
+#if CONFIG_THREAD_GROUPS
+void
+machine_thread_group_init(struct thread_group *tg)
+{
+	if (sched_perfcontrol_thread_group_init == sched_perfcontrol_thread_group_default) {
+		return;
+	}
+	struct thread_group_data data;
+	data.thread_group_id = thread_group_get_id(tg);
+	data.thread_group_data = thread_group_get_machine_data(tg);
+	data.thread_group_size = thread_group_machine_data_size();
+	sched_perfcontrol_thread_group_init(&data);
+}
+
+void
+machine_thread_group_deinit(struct thread_group *tg)
+{
+	if (sched_perfcontrol_thread_group_deinit == sched_perfcontrol_thread_group_default) {
+		return;
+	}
+	struct thread_group_data data;
+	data.thread_group_id = thread_group_get_id(tg);
+	data.thread_group_data = thread_group_get_machine_data(tg);
+	data.thread_group_size = thread_group_machine_data_size();
+	sched_perfcontrol_thread_group_deinit(&data);
+}
+
+void
+machine_thread_group_flags_update(struct thread_group *tg, uint32_t flags)
+{
+	if (sched_perfcontrol_thread_group_flags_update == sched_perfcontrol_thread_group_default) {
+		return;
+	}
+	struct thread_group_data data;
+	data.thread_group_id = thread_group_get_id(tg);
+	data.thread_group_data = thread_group_get_machine_data(tg);
+	data.thread_group_size = thread_group_machine_data_size();
+	data.thread_group_flags = flags;
+	sched_perfcontrol_thread_group_flags_update(&data);
+}
+
+void
+machine_thread_group_blocked(struct thread_group *blocked_tg,
+    struct thread_group *blocking_tg,
+    uint32_t flags,
+    thread_t blocked_thread)
+{
+	if (sched_perfcontrol_thread_group_blocked == sched_perfcontrol_thread_group_blocked_default) {
+		return;
+	}
+
+	spl_t s = splsched();
+
+	perfcontrol_state_t state = FIND_PERFCONTROL_STATE(blocked_thread);
+	struct thread_group_data blocked_data;
+	assert(blocked_tg != NULL);
+
+	blocked_data.thread_group_id = thread_group_get_id(blocked_tg);
+	blocked_data.thread_group_data = thread_group_get_machine_data(blocked_tg);
+	blocked_data.thread_group_size = thread_group_machine_data_size();
+
+	if (blocking_tg == NULL) {
+		/*
+		 * For special cases such as the render server, the blocking TG is a
+		 * well known TG. Only in that case, the blocking_tg should be NULL.
+		 */
+		assert(flags & PERFCONTROL_CALLOUT_BLOCKING_TG_RENDER_SERVER);
+		sched_perfcontrol_thread_group_blocked(&blocked_data, NULL, flags, state);
+	} else {
+		struct thread_group_data blocking_data;
+		blocking_data.thread_group_id = thread_group_get_id(blocking_tg);
+		blocking_data.thread_group_data = thread_group_get_machine_data(blocking_tg);
+		blocking_data.thread_group_size = thread_group_machine_data_size();
+		sched_perfcontrol_thread_group_blocked(&blocked_data, &blocking_data, flags, state);
+	}
+	KDBG(MACHDBG_CODE(DBG_MACH_THREAD_GROUP, MACH_THREAD_GROUP_BLOCK) | DBG_FUNC_START,
+	    thread_tid(blocked_thread), thread_group_get_id(blocked_tg),
+	    blocking_tg ? thread_group_get_id(blocking_tg) : THREAD_GROUP_INVALID,
+	    flags);
+
+	splx(s);
+}
+
+void
+machine_thread_group_unblocked(struct thread_group *unblocked_tg,
+    struct thread_group *unblocking_tg,
+    uint32_t flags,
+    thread_t unblocked_thread)
+{
+	if (sched_perfcontrol_thread_group_unblocked == sched_perfcontrol_thread_group_unblocked_default) {
+		return;
+	}
+
+	spl_t s = splsched();
+
+	perfcontrol_state_t state = FIND_PERFCONTROL_STATE(unblocked_thread);
+	struct thread_group_data unblocked_data;
+	assert(unblocked_tg != NULL);
+
+	unblocked_data.thread_group_id = thread_group_get_id(unblocked_tg);
+	unblocked_data.thread_group_data = thread_group_get_machine_data(unblocked_tg);
+	unblocked_data.thread_group_size = thread_group_machine_data_size();
+
+	if (unblocking_tg == NULL) {
+		/*
+		 * For special cases such as the render server, the unblocking TG is a
+		 * well known TG. Only in that case, the unblocking_tg should be NULL.
+		 */
+		assert(flags & PERFCONTROL_CALLOUT_BLOCKING_TG_RENDER_SERVER);
+		sched_perfcontrol_thread_group_unblocked(&unblocked_data, NULL, flags, state);
+	} else {
+		struct thread_group_data unblocking_data;
+		unblocking_data.thread_group_id = thread_group_get_id(unblocking_tg);
+		unblocking_data.thread_group_data = thread_group_get_machine_data(unblocking_tg);
+		unblocking_data.thread_group_size = thread_group_machine_data_size();
+		sched_perfcontrol_thread_group_unblocked(&unblocked_data, &unblocking_data, flags, state);
+	}
+	KDBG(MACHDBG_CODE(DBG_MACH_THREAD_GROUP, MACH_THREAD_GROUP_BLOCK) | DBG_FUNC_END,
+	    thread_tid(unblocked_thread), thread_group_get_id(unblocked_tg),
+	    unblocking_tg ? thread_group_get_id(unblocking_tg) : THREAD_GROUP_INVALID,
+	    flags);
+
+	splx(s);
+}
+
+#endif /* CONFIG_THREAD_GROUPS */
 
 void
 machine_max_runnable_latency(uint64_t bg_max_latency,
@@ -461,7 +672,7 @@ machine_work_interval_notify(thread_t thread,
 	perfcontrol_state_t state = FIND_PERFCONTROL_STATE(thread);
 	struct perfcontrol_work_interval work_interval = {
 		.thread_id      = thread->thread_id,
-		.qos_class      = proc_get_effective_thread_policy(thread, TASK_POLICY_QOS),
+		.qos_class      = (uint16_t)proc_get_effective_thread_policy(thread, TASK_POLICY_QOS),
 		.urgency        = kwi_args->urgency,
 		.flags          = kwi_args->notify_flags,
 		.work_interval_id = kwi_args->work_interval_id,
@@ -471,6 +682,12 @@ machine_work_interval_notify(thread_t thread,
 		.next_start     = kwi_args->next_start,
 		.create_flags   = kwi_args->create_flags,
 	};
+#if CONFIG_THREAD_GROUPS
+	struct thread_group *tg;
+	tg = thread_group_get(thread);
+	work_interval.thread_group_id = thread_group_get_id(tg);
+	work_interval.thread_group_data = thread_group_get_machine_data(tg);
+#endif
 	sched_perfcontrol_work_interval_notify(state, &work_interval);
 }
 
@@ -496,7 +713,9 @@ machine_perfcontrol_deadline_passed(uint64_t deadline)
 void
 ml_spin_debug_reset(thread_t thread)
 {
-	thread->machine.intmask_timestamp = ml_get_timebase();
+	if (thread->machine.intmask_timestamp) {
+		thread->machine.intmask_timestamp = ml_get_timebase();
+	}
 }
 
 /*
@@ -521,17 +740,17 @@ ml_spin_debug_clear_self()
 	ml_spin_debug_clear(current_thread());
 }
 
-void
-ml_check_interrupts_disabled_duration(thread_t thread)
+static inline void
+__ml_check_interrupts_disabled_duration(thread_t thread, uint64_t timeout, bool is_int_handler)
 {
 	uint64_t start;
 	uint64_t now;
 
-	start = thread->machine.intmask_timestamp;
+	start = is_int_handler ? thread->machine.inthandler_timestamp : thread->machine.intmask_timestamp;
 	if (start != 0) {
 		now = ml_get_timebase();
 
-		if ((now - start) > interrupt_masked_timeout * debug_cpu_performance_degradation_factor) {
+		if ((now - start) > timeout * debug_cpu_performance_degradation_factor) {
 			mach_timebase_info_data_t timebase;
 			clock_timebase_info(&timebase);
 
@@ -540,12 +759,53 @@ ml_check_interrupts_disabled_duration(thread_t thread)
 			 * Disable the actual panic for KASAN due to the overhead of KASAN itself, leave the rest of the
 			 * mechanism enabled so that KASAN can catch any bugs in the mechanism itself.
 			 */
-			panic("Interrupts held disabled for %llu nanoseconds", (((now - start) * timebase.numer) / timebase.denom));
+			if (is_int_handler) {
+				panic("Processing of an interrupt (type = %u, handler address = %p, vector = %p) took %llu nanoseconds (timeout = %llu ns)",
+				    thread->machine.int_type, (void *)thread->machine.int_handler_addr, (void *)thread->machine.int_vector,
+				    (((now - start) * timebase.numer) / timebase.denom),
+				    ((timeout * debug_cpu_performance_degradation_factor) * timebase.numer) / timebase.denom);
+			} else {
+				panic("Interrupts held disabled for %llu nanoseconds (timeout = %llu ns)",
+				    (((now - start) * timebase.numer) / timebase.denom),
+				    ((timeout * debug_cpu_performance_degradation_factor) * timebase.numer) / timebase.denom);
+			}
 #endif
 		}
 	}
 
 	return;
+}
+
+void
+ml_check_interrupts_disabled_duration(thread_t thread)
+{
+	__ml_check_interrupts_disabled_duration(thread, interrupt_masked_timeout, false);
+}
+
+void
+ml_check_stackshot_interrupt_disabled_duration(thread_t thread)
+{
+	/* Use MAX() to let the user bump the timeout further if needed */
+	__ml_check_interrupts_disabled_duration(thread, MAX(stackshot_interrupt_masked_timeout, interrupt_masked_timeout), false);
+}
+
+void
+ml_check_interrupt_handler_duration(thread_t thread)
+{
+	__ml_check_interrupts_disabled_duration(thread, interrupt_masked_timeout, true);
+}
+
+void
+ml_irq_debug_start(uintptr_t handler, uintptr_t vector)
+{
+	INTERRUPT_MASKED_DEBUG_START(handler, DBG_INTR_TYPE_OTHER);
+	current_thread()->machine.int_vector = (uintptr_t)VM_KERNEL_STRIP_PTR(vector);
+}
+
+void
+ml_irq_debug_end()
+{
+	INTERRUPT_MASKED_DEBUG_END();
 }
 #endif // INTERRUPT_MASKED_DEBUG
 
@@ -569,7 +829,11 @@ ml_set_interrupts_enabled(boolean_t enable)
 		if (interrupt_masked_debug) {
 			// Interrupts are currently masked, we will enable them (after finishing this check)
 			thread = current_thread();
-			ml_check_interrupts_disabled_duration(thread);
+			if (stackshot_active()) {
+				ml_check_stackshot_interrupt_disabled_duration(thread);
+			} else {
+				ml_check_interrupts_disabled_duration(thread);
+			}
 			thread->machine.intmask_timestamp = 0;
 		}
 #endif  // INTERRUPT_MASKED_DEBUG
@@ -588,13 +852,13 @@ ml_set_interrupts_enabled(boolean_t enable)
 #if __arm__
 		__asm__ volatile ("cpsie if" ::: "memory"); // Enable IRQ FIQ
 #else
-		__builtin_arm_wsr("DAIFClr", (DAIFSC_IRQF | DAIFSC_FIQF));
+		__builtin_arm_wsr("DAIFClr", DAIFSC_STANDARD_DISABLE);
 #endif
 	} else if (!enable && ((state & INTERRUPT_MASK) == 0)) {
 #if __arm__
 		__asm__ volatile ("cpsid if" ::: "memory"); // Mask IRQ FIQ
 #else
-		__builtin_arm_wsr("DAIFSet", (DAIFSC_IRQF | DAIFSC_FIQF));
+		__builtin_arm_wsr("DAIFSet", DAIFSC_STANDARD_DISABLE);
 #endif
 #if INTERRUPT_MASKED_DEBUG
 		if (interrupt_masked_debug) {
@@ -649,19 +913,19 @@ ml_stack_remaining(void)
 	}
 }
 
-static boolean_t ml_quiescing;
+static boolean_t ml_quiescing = FALSE;
 
 void
 ml_set_is_quiescing(boolean_t quiescing)
 {
-	assert(FALSE == ml_get_interrupts_enabled());
 	ml_quiescing = quiescing;
+	os_atomic_thread_fence(release);
 }
 
 boolean_t
 ml_is_quiescing(void)
 {
-	assert(FALSE == ml_get_interrupts_enabled());
+	os_atomic_thread_fence(acquire);
 	return ml_quiescing;
 }
 
@@ -677,8 +941,10 @@ ml_get_booter_memory_size(void)
 			roundsize >>= 1;
 		}
 		size  = (size + roundsize - 1) & ~(roundsize - 1);
-		size -= BootArgs->memSize;
 	}
+
+	size -= BootArgs->memSize;
+
 	return size;
 }
 
@@ -691,7 +957,9 @@ ml_get_abstime_offset(void)
 uint64_t
 ml_get_conttime_offset(void)
 {
-#if HAS_CONTINUOUS_HWCLOCK
+#if HIBERNATION && HAS_CONTINUOUS_HWCLOCK
+	return hwclock_conttime_offset;
+#elif HAS_CONTINUOUS_HWCLOCK
 	return 0;
 #else
 	return rtclock_base_abstime + mach_absolutetime_asleep;
@@ -746,8 +1014,9 @@ bool
 ml_snoop_thread_is_on_core(thread_t thread)
 {
 	unsigned int cur_cpu_num = 0;
+	const unsigned int max_cpu_id = ml_get_max_cpu_number();
 
-	for (cur_cpu_num = 0; cur_cpu_num < MAX_CPUS; cur_cpu_num++) {
+	for (cur_cpu_num = 0; cur_cpu_num <= max_cpu_id; cur_cpu_num++) {
 		if (CpuDataEntries[cur_cpu_num].cpu_data_vaddr) {
 			if (CpuDataEntries[cur_cpu_num].cpu_data_vaddr->cpu_active_thread == thread) {
 				return true;
@@ -756,4 +1025,64 @@ ml_snoop_thread_is_on_core(thread_t thread)
 	}
 
 	return false;
+}
+
+int
+ml_early_cpu_max_number(void)
+{
+	assert(startup_phase >= STARTUP_SUB_TUNABLES);
+	return ml_get_max_cpu_number();
+}
+
+void
+ml_set_max_cpus(unsigned int max_cpus __unused)
+{
+	lck_mtx_lock(&max_cpus_lock);
+	if (max_cpus_initialized != MAX_CPUS_SET) {
+		if (max_cpus_initialized == MAX_CPUS_WAIT) {
+			thread_wakeup((event_t) &max_cpus_initialized);
+		}
+		max_cpus_initialized = MAX_CPUS_SET;
+	}
+	lck_mtx_unlock(&max_cpus_lock);
+}
+
+unsigned int
+ml_wait_max_cpus(void)
+{
+	assert(lockdown_done);
+	lck_mtx_lock(&max_cpus_lock);
+	while (max_cpus_initialized != MAX_CPUS_SET) {
+		max_cpus_initialized = MAX_CPUS_WAIT;
+		lck_mtx_sleep(&max_cpus_lock, LCK_SLEEP_DEFAULT, &max_cpus_initialized, THREAD_UNINT);
+	}
+	lck_mtx_unlock(&max_cpus_lock);
+	return machine_info.max_cpus;
+}
+void
+machine_conf(void)
+{
+	/*
+	 * This is known to be inaccurate. mem_size should always be capped at 2 GB
+	 */
+	machine_info.memory_size = (uint32_t)mem_size;
+
+	// rdar://problem/58285685: Userland expects _COMM_PAGE_LOGICAL_CPUS to report
+	// (max_cpu_id+1) rather than a literal *count* of logical CPUs.
+	unsigned int num_cpus = ml_get_topology_info()->max_cpu_id + 1;
+	machine_info.max_cpus = num_cpus;
+	machine_info.physical_cpu_max = num_cpus;
+	machine_info.logical_cpu_max = num_cpus;
+}
+
+void
+machine_init(void)
+{
+	debug_log_init();
+	clock_config();
+	is_clock_configured = TRUE;
+	if (debug_enabled) {
+		pmap_map_globals();
+	}
+	ml_lockdown_init();
 }

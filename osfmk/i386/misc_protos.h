@@ -47,11 +47,6 @@ extern void             i386_vm_init(
 	boolean_t,
 	struct boot_args *);
 
-#if NCOPY_WINDOWS > 0
-extern void             cpu_userwindow_init(int);
-extern void             cpu_physwindow_init(int);
-#endif
-
 extern void             machine_startup(void);
 
 extern void             get_root_device(void);
@@ -59,7 +54,6 @@ extern void             picinit(void);
 extern void             interrupt_processor(
 	int             cpu);
 extern void             mp_probe_cpus(void);
-extern void             panic_io_port_read(void);
 
 extern void             remote_kdb(void);
 extern void             clear_kdb_intr(void);
@@ -103,10 +97,6 @@ extern void cache_flush_page_phys(ppnum_t pa);
 /* Flushing for incoherent I/O */
 extern void dcache_incoherent_io_flush64(addr64_t pa, unsigned int count);
 extern void dcache_incoherent_io_store64(addr64_t pa, unsigned int count);
-
-
-extern processor_t      cpu_processor_alloc(boolean_t is_boot_cpu);
-extern void             cpu_processor_free(processor_t proc);
 
 extern void             sysclk_gettime_interrupts_disabled(
 	mach_timespec_t *cur_time);
@@ -159,5 +149,9 @@ void cpu_pmc_control(void *);
 extern void pstate_trace(void);
 
 extern void mp_interrupt_watchdog(void);
+
+extern kern_return_t i386_slide_individual_kext(kernel_mach_header_t *mh, uintptr_t slide);
+
+extern kern_return_t i386_slide_kext_collection_mh_addrs(kernel_mach_header_t *mh, uintptr_t slide, bool adjust_mach_headers);
 
 #endif /* _I386_MISC_PROTOS_H_ */

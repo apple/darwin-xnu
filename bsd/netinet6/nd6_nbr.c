@@ -95,9 +95,7 @@
 
 #if IPSEC
 #include <netinet6/ipsec.h>
-#if INET6
 #include <netinet6/ipsec6.h>
-#endif
 #endif
 
 struct dadq;
@@ -112,14 +110,9 @@ static void dad_addref(struct dadq *, int);
 static void dad_remref(struct dadq *);
 static struct dadq *nd6_dad_attach(struct dadq *, struct ifaddr *);
 static void nd6_dad_detach(struct dadq *, struct ifaddr *);
+static void nd6_dad_duplicated(struct ifaddr *);
 
 static int dad_maxtry = 15;     /* max # of *tries* to transmit DAD packet */
-
-static unsigned int dad_size;                   /* size of zone element */
-static struct zone *dad_zone;                   /* zone for dadq */
-
-#define DAD_ZONE_MAX    64                      /* maximum elements in zone */
-#define DAD_ZONE_NAME   "nd6_dad"               /* zone name */
 
 #define DAD_LOCK_ASSERT_HELD(_dp)                                       \
 	LCK_MTX_ASSERT(&(_dp)->dad_lock, LCK_MTX_ASSERT_OWNED)
@@ -162,7 +155,7 @@ SYSCTL_INT(_net_inet6_icmp6, OID_AUTO, nd6_llreach_base,
     CTLFLAG_RW | CTLFLAG_LOCKED, &nd6_llreach_base, 0,
     "default ND6 link-layer reachability max lifetime (in seconds)");
 
-int dad_enhanced = 1;
+int dad_enhanced = ND6_DAD_ENHANCED_DEFAULT;
 SYSCTL_DECL(_net_inet6_ip6);
 SYSCTL_INT(_net_inet6_ip6, OID_AUTO, dad_enhanced, CTLFLAG_RW | CTLFLAG_LOCKED,
     &dad_enhanced, 0,
@@ -498,7 +491,7 @@ nd6_ns_input(
 	}
 
 	/* Are we an advertising router on this interface? */
-	advrouter = (ifp->if_eflags & IFEF_IPV6_ROUTER);
+	advrouter = (ifp->if_ipv6_router_mode != IPV6_ROUTER_MODE_DISABLED);
 
 	/*
 	 * If the source address is unspecified address, entries must not
@@ -584,6 +577,7 @@ nd6_ns_output(
 	struct route_in6 ro;
 	struct ip6_out_args ip6oa;
 	u_int32_t rtflags = 0;
+	boolean_t is_optimistic = FALSE;
 
 	if ((ifp->if_eflags & IFEF_IPV6_ND6ALT) || IN6_IS_ADDR_MULTICAST(taddr6)) {
 		return;
@@ -626,7 +620,7 @@ nd6_ns_output(
 	if (daddr6 == NULL || IN6_IS_ADDR_MULTICAST(daddr6)) {
 		m->m_flags |= M_MCAST;
 
-		im6o = ip6_allocmoptions(M_DONTWAIT);
+		im6o = ip6_allocmoptions(Z_NOWAIT);
 		if (im6o == NULL) {
 			m_freem(m);
 			return;
@@ -743,12 +737,19 @@ nd6_ns_output(
 			 * Resolution.
 			 */
 			ia = in6ifa_ifpwithaddr(ifp, src);
-			if (!ia || (ia->ia6_flags & IN6_IFF_OPTIMISTIC)) {
+			if (ia == NULL) {
 				nd6log(debug,
 				    "nd6_ns_output: no preferred source "
 				    "available: dst=%s\n",
 				    ip6_sprintf(&dst_sa.sin6_addr));
 				goto bad;
+			}
+			if (ia->ia6_flags & IN6_IFF_OPTIMISTIC) {
+				is_optimistic = TRUE;
+				nd6log(debug,
+				    "nd6_ns_output: preferred source "
+				    "available is optimistic: dst=%s\n",
+				    ip6_sprintf(&dst_sa.sin6_addr));
 			}
 		}
 	} else {
@@ -777,13 +778,20 @@ nd6_ns_output(
 	 *				spec		implementation
 	 *				---		---
 	 * DAD packet			MUST NOT	do not add the option
+	 * Source is optimistic         MUST NOT        do not add the option
 	 * there's no link layer address:
 	 *				impossible	do not add the option
 	 * there's link layer address:
 	 *	Multicast NS		MUST add one	add the option
 	 *	Unicast NS		SHOULD add one	add the option
+	 *
+	 * XXX We deviate from RFC 4429 and still use optimistic DAD as source
+	 * for address resolution. However to ensure that we do not interfere
+	 * with neighbor cache entries of other neighbors, we MUST ensure
+	 * that SLLAO is not sent. Also note, sending multicast NS without SLLAO
+	 * is also a deviation from RFC 4861.
 	 */
-	if (nonce == NULL && (mac = nd6_ifptomac(ifp))) {
+	if (nonce == NULL && (mac = nd6_ifptomac(ifp)) && !is_optimistic) {
 		int optlen = sizeof(struct nd_opt_hdr) + ifp->if_addrlen;
 		struct nd_opt_hdr *nd_opt = (struct nd_opt_hdr *)(nd_ns + 1);
 		/* 8 byte alignments... */
@@ -794,7 +802,7 @@ nd6_ns_output(
 		icmp6len += optlen;
 		bzero((caddr_t)nd_opt, optlen);
 		nd_opt->nd_opt_type = ND_OPT_SOURCE_LINKADDR;
-		nd_opt->nd_opt_len = optlen >> 3;
+		nd_opt->nd_opt_len = (uint8_t)(optlen >> 3);
 		bcopy(mac, (caddr_t)(nd_opt + 1), ifp->if_addrlen);
 	}
 	/*
@@ -814,7 +822,7 @@ nd6_ns_output(
 		icmp6len += optlen;
 		bzero((caddr_t)nd_opt, optlen);
 		nd_opt->nd_opt_type = ND_OPT_NONCE;
-		nd_opt->nd_opt_len = optlen >> 3;
+		nd_opt->nd_opt_len = (uint8_t)(optlen >> 3);
 		bcopy(nonce, (caddr_t)(nd_opt + 1), ND_OPT_NONCE_LEN);
 	}
 	ip6->ip6_plen = htons((u_short)icmp6len);
@@ -849,6 +857,7 @@ nd6_ns_output(
 	}
 
 	ip6oa.ip6oa_flags |= IP6OAF_SKIP_PF;
+	ip6oa.ip6oa_flags |= IP6OAF_DONT_FRAG;
 	ip6_output(m, NULL, NULL, flags, im6o, &outif, &ip6oa);
 	if (outif) {
 		icmp6_ifstat_inc(outif, ifs6_out_msg);
@@ -1082,7 +1091,7 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 		route_event_enqueue_nwk_wq_entry(rt, NULL,
 		    ROUTE_LLENTRY_RESOLVED, NULL, TRUE);
 
-		if ((ln->ln_router = is_router) != 0) {
+		if ((ln->ln_router = (short)is_router) != 0) {
 			struct radix_node_head  *rnh = NULL;
 			struct route_event rt_ev;
 			route_event_init(&rt_ev, rt, NULL, ROUTE_LLENTRY_RESOLVED);
@@ -1254,10 +1263,14 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 
 			RT_UNLOCK(rt);
 			lck_mtx_lock(nd6_mutex);
-			dr = defrouter_lookup(in6, rt_ifp);
+			/*
+			 * XXX Handle router lists for route information option
+			 * as well.
+			 */
+			dr = defrouter_lookup(NULL, in6, rt_ifp);
 			if (dr) {
-				TAILQ_REMOVE(&nd_defrouter, dr, dr_entry);
-				defrtrlist_del(dr);
+				TAILQ_REMOVE(&nd_defrouter_list, dr, dr_entry);
+				defrtrlist_del(dr, NULL);
 				NDDR_REMREF(dr);        /* remove list reference */
 				NDDR_REMREF(dr);
 				lck_mtx_unlock(nd6_mutex);
@@ -1274,7 +1287,7 @@ nd6_na_input(struct mbuf *m, int off, int icmp6len)
 			}
 			RT_LOCK(rt);
 		}
-		ln->ln_router = is_router;
+		ln->ln_router = (short)is_router;
 	}
 
 	if (send_nc_alive_kev && (ifp->if_addrlen == IF_LLREACH_MAXLEN)) {
@@ -1417,7 +1430,7 @@ nd6_na_output(
 	if (IN6_IS_ADDR_MULTICAST(&daddr6)) {
 		m->m_flags |= M_MCAST;
 
-		im6o = ip6_allocmoptions(M_DONTWAIT);
+		im6o = ip6_allocmoptions(Z_NOWAIT);
 		if (im6o == NULL) {
 			m_freem(m);
 			return;
@@ -1526,7 +1539,7 @@ nd6_na_output(
 		icmp6len += optlen;
 		bzero((caddr_t)nd_opt, optlen);
 		nd_opt->nd_opt_type = ND_OPT_TARGET_LINKADDR;
-		nd_opt->nd_opt_len = optlen >> 3;
+		nd_opt->nd_opt_len = (uint8_t)(optlen >> 3);
 		bcopy(mac, (caddr_t)(nd_opt + 1), ifp->if_addrlen);
 	} else {
 		flags &= ~ND_NA_FLAG_OVERRIDE;
@@ -1548,6 +1561,7 @@ nd6_na_output(
 	}
 
 	ip6oa.ip6oa_flags |= IP6OAF_SKIP_PF;
+	ip6oa.ip6oa_flags |= IP6OAF_DONT_FRAG;
 	ip6_output(m, NULL, NULL, IPV6_OUTARGS, im6o, &outif, &ip6oa);
 	if (outif) {
 		icmp6_ifstat_inc(outif, ifs6_out_msg);
@@ -1618,6 +1632,7 @@ struct dadq {
 	uint32_t dad_nonce[ND_OPT_NONCE_LEN32];
 };
 
+static ZONE_DECLARE(dad_zone, "nd6_dad", sizeof(struct dadq), ZC_ZFREE_CLEARMEM);
 static struct dadq_head dadq;
 
 void
@@ -1626,15 +1641,6 @@ nd6_nbr_init(void)
 	int i;
 
 	TAILQ_INIT(&dadq);
-
-	dad_size = sizeof(struct dadq);
-	dad_zone = zinit(dad_size, DAD_ZONE_MAX * dad_size, 0, DAD_ZONE_NAME);
-	if (dad_zone == NULL) {
-		panic("%s: failed allocating %s", __func__, DAD_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(dad_zone, Z_EXPAND, TRUE);
-	zone_change(dad_zone, Z_CALLERACCT, FALSE);
 
 	bzero(&hostrtmask, sizeof hostrtmask);
 	hostrtmask.sin6_family = AF_INET6;
@@ -1743,14 +1749,7 @@ nd6_dad_start(
 		return;
 	}
 
-	dp = zalloc(dad_zone);
-	if (dp == NULL) {
-		nd6log0(error, "nd6_dad_start: memory allocation failed for %s(%s)\n",
-		    ip6_sprintf(&ia->ia_addr.sin6_addr),
-		    ifa->ifa_ifp ? if_name(ifa->ifa_ifp) : "???");
-		return;
-	}
-	bzero(dp, dad_size);
+	dp = zalloc_flags(dad_zone, Z_WAITOK | Z_ZERO);
 	lck_mtx_init(&dp->dad_lock, ifa_mtx_grp, ifa_mtx_attr);
 
 	/* Callee adds one reference for us */
@@ -2049,7 +2048,7 @@ done:
 	}
 }
 
-void
+static void
 nd6_dad_duplicated(struct ifaddr *ifa)
 {
 	struct in6_ifaddr *ia = (struct in6_ifaddr *)ifa;
@@ -2164,7 +2163,9 @@ nd6_dad_duplicated(struct ifaddr *ifa)
 		nd6_if_disable(ifp, TRUE);
 	}
 
-	log(LOG_ERR, "%s: manual intervention required!\n", if_name(ifp));
+	log(LOG_ERR,
+	    "%s: manual intervention may be required.\n",
+	    if_name(ifp));
 
 	/* Send an event to the configuration agent so that the
 	 * duplicate address will be notified to the user and will
@@ -2246,7 +2247,8 @@ nd6_dad_ns_input(struct ifaddr *ifa, char *lladdr,
 	++dp->dad_ns_icount;
 	if (lladdr && lladdrlen >= ETHER_ADDR_LEN) {
 		memcpy(dp->dad_lladdr, lladdr, ETHER_ADDR_LEN);
-		dp->dad_lladdrlen = lladdrlen;
+		/* fine to truncate as it is compared against sdl_alen */
+		dp->dad_lladdrlen = (uint8_t)lladdrlen;
 	}
 	DAD_UNLOCK(dp);
 	DAD_REMREF(dp);
@@ -2336,7 +2338,7 @@ nd6_dad_na_input(struct mbuf *m, struct ifnet *ifp, struct in6_addr *taddr,
 	DAD_LOCK_SPIN(dp);
 	if (lladdr != NULL && lladdrlen >= ETHER_ADDR_LEN) {
 		memcpy(dp->dad_lladdr, lladdr, ETHER_ADDR_LEN);
-		dp->dad_lladdrlen = lladdrlen;
+		dp->dad_lladdrlen = (uint8_t)lladdrlen;
 	}
 	dp->dad_na_icount++;
 	DAD_UNLOCK(dp);
@@ -2440,8 +2442,9 @@ nd6_alt_node_addr_decompose(struct ifnet *ifp, struct sockaddr *sa,
 		struct in6_addr *in6 = &sin6a->sin6_addr;
 
 		VERIFY(sa->sa_len == sizeof *sin6);
+		VERIFY(strlen(ifp->if_name) <= IFNAMSIZ);
 
-		sdl->sdl_nlen = strlen(ifp->if_name);
+		sdl->sdl_nlen = (u_char)strlen(ifp->if_name);
 		bcopy(ifp->if_name, sdl->sdl_data, sdl->sdl_nlen);
 		if (in6->s6_addr[11] == 0xff && in6->s6_addr[12] == 0xfe) {
 			sdl->sdl_alen = ETHER_ADDR_LEN;

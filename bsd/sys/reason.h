@@ -114,11 +114,12 @@ void os_reason_set_description_data(os_reason_t cur_reason, uint32_t type, void 
 #define OS_REASON_SECURITY      26
 #define OS_REASON_ENDPOINTSECURITY      27
 #define OS_REASON_PAC_EXCEPTION 28
+#define OS_REASON_BLUETOOTH_CHIP 29
 
 /*
  * Update whenever new OS_REASON namespaces are added.
  */
-#define OS_REASON_MAX_VALID_NAMESPACE OS_REASON_PAC_EXCEPTION
+#define OS_REASON_MAX_VALID_NAMESPACE OS_REASON_BLUETOOTH_CHIP
 
 #define OS_REASON_BUFFER_MAX_SIZE 5120
 
@@ -132,6 +133,7 @@ void os_reason_set_description_data(os_reason_t cur_reason, uint32_t type, void 
 #define OS_REASON_FLAG_ONE_TIME_FAILURE         0x80  /* Whatever caused this reason to be created was a one time issue */
 #define OS_REASON_FLAG_NO_CRASHED_TID           0x100 /* Don't include the TID that processed the exit in the crash report */
 #define OS_REASON_FLAG_ABORT                    0x200 /* Reason created from abort_* rather than terminate_* */
+#define OS_REASON_FLAG_SHAREDREGION_FAULT       0x400 /* Fault happened within the shared cache region */
 
 /*
  * Set of flags that are allowed to be passed from userspace
@@ -244,7 +246,9 @@ int terminate_with_payload(int pid, uint32_t reason_namespace, uint64_t reason_c
 #define EXEC_EXIT_REASON_DECRYPT            11
 #define EXEC_EXIT_REASON_UPX                12
 #define EXEC_EXIT_REASON_NO32EXEC           13
-
+#define EXEC_EXIT_REASON_WRONG_PLATFORM     14
+#define EXEC_EXIT_REASON_MAIN_FD_ALLOC      15
+#define EXEC_EXIT_REASON_COPYOUT_ROSETTA    16
 /*
  * guard reasons
  */

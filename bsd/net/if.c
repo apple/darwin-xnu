@@ -109,7 +109,7 @@
 #include <sys/domain.h>
 #include <libkern/OSAtomic.h>
 
-#if INET || INET6
+#if INET
 #include <netinet/in.h>
 #include <netinet/in_var.h>
 #include <netinet/in_tclass.h>
@@ -121,17 +121,11 @@
 #include <netinet/tcp_var.h>
 #include <netinet/udp.h>
 #include <netinet/udp_var.h>
-#if INET6
 #include <netinet6/in6_var.h>
 #include <netinet6/in6_ifattach.h>
 #include <netinet6/ip6_var.h>
 #include <netinet6/nd6.h>
-#endif /* INET6 */
-#endif /* INET || INET6 */
-
-#if CONFIG_MACF_NET
-#include <security/mac_framework.h>
-#endif
+#endif /* INET */
 
 
 #include <os/log.h>
@@ -230,14 +224,12 @@ static decl_lck_mtx_data(, ifma_trash_lock);
 #define IFMA_ZONE_MAX           64              /* maximum elements in zone */
 #define IFMA_ZONE_NAME          "ifmultiaddr"   /* zone name */
 
-#if INET6
 /*
  * XXX: declare here to avoid to include many inet6 related files..
  * should be more generalized?
  */
 extern void     nd6_setmtu(struct ifnet *);
 extern lck_mtx_t *nd6_mutex;
-#endif
 
 SYSCTL_NODE(_net, PF_LINK, link, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "Link layers");
 SYSCTL_NODE(_net_link, 0, generic, CTLFLAG_RW | CTLFLAG_LOCKED, 0,
@@ -257,6 +249,44 @@ SYSCTL_INT(_net_link_generic_system, OID_AUTO, default_tcp_kao_max,
 static const uint32_t default_tcp_kao_max = 0;
 #endif /* (DEBUG || DEVELOPMENT) */
 
+u_int32_t companion_link_sock_buffer_limit = 0;
+
+static int
+sysctl_set_companion_link_sock_buf_limit SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2)
+	int error, tmp = companion_link_sock_buffer_limit;
+	error = sysctl_handle_int(oidp, &tmp, 0, req);
+	if (tmp < 0) {
+		return EINVAL;
+	}
+	if ((error = priv_check_cred(kauth_cred_get(),
+	    PRIV_NET_INTERFACE_CONTROL, 0)) != 0) {
+		return error;
+	}
+
+	u_int32_t new_limit = tmp;
+	if (new_limit == companion_link_sock_buffer_limit) {
+		return 0;
+	}
+
+	bool recover = new_limit == 0 ? true : false;
+	if (recover) {
+		error = inp_recover_companion_link(&tcbinfo);
+	} else {
+		error = inp_limit_companion_link(&tcbinfo, new_limit);
+	}
+	if (!error) {
+		companion_link_sock_buffer_limit = new_limit;
+	}
+	return error;
+}
+
+SYSCTL_PROC(_net_link_generic_system, OID_AUTO, companion_sndbuf_limit,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_ANYBODY,
+    &companion_link_sock_buffer_limit, 0, sysctl_set_companion_link_sock_buf_limit,
+    "I", "set sock send buffer limit of connections using companion links");
+
 boolean_t intcoproc_unrestricted;
 
 /* Eventhandler context for interface events */
@@ -275,15 +305,7 @@ ifa_init(void)
 	ifma_size = (ifma_debug == 0) ? sizeof(struct ifmultiaddr) :
 	    sizeof(struct ifmultiaddr_dbg);
 
-	ifma_zone = zinit(ifma_size, IFMA_ZONE_MAX * ifma_size, 0,
-	    IFMA_ZONE_NAME);
-	if (ifma_zone == NULL) {
-		panic("%s: failed allocating %s", __func__, IFMA_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(ifma_zone, Z_EXPAND, TRUE);
-	zone_change(ifma_zone, Z_CALLERACCT, FALSE);
-
+	ifma_zone = zone_create(IFMA_ZONE_NAME, ifma_size, ZC_NONE);
 	lck_mtx_init(&ifma_trash_lock, ifa_mtx_grp, ifa_mtx_attr);
 	TAILQ_INIT(&ifma_trash_head);
 
@@ -722,14 +744,8 @@ if_clone_attach(struct if_clone *ifc)
 	lck_mtx_init(&ifc->ifc_mutex, ifnet_lock_group, ifnet_lock_attr);
 
 	if (ifc->ifc_softc_size != 0) {
-		ifc->ifc_zone = zinit(ifc->ifc_softc_size,
-		    ifc->ifc_zone_max_elem * ifc->ifc_softc_size, 0, ifc->ifc_name);
-		if (ifc->ifc_zone == NULL) {
-			FREE(ifc->ifc_units, M_CLONE);
-			return ENOBUFS;
-		}
-		zone_change(ifc->ifc_zone, Z_EXPAND, TRUE);
-		zone_change(ifc->ifc_zone, Z_CALLERACCT, FALSE);
+		ifc->ifc_zone = zone_create(ifc->ifc_name, ifc->ifc_softc_size,
+		    ZC_DESTRUCTIBLE);
 	}
 
 	LIST_INSERT_HEAD(&if_cloners, ifc, ifc_list);
@@ -874,7 +890,6 @@ ifa_foraddr_scoped(unsigned int addr, unsigned int scope)
 	return ia;
 }
 
-#if INET6
 /*
  * Similar to ifa_foraddr, except that this for IPv6.
  */
@@ -904,7 +919,6 @@ ifa_foraddr6_scoped(struct in6_addr *addr6, unsigned int scope)
 
 	return ia;
 }
-#endif /* INET6 */
 
 /*
  * Return the first (primary) address of a given family on an interface.
@@ -1135,11 +1149,7 @@ ifa_ifwithnet_common(const struct sockaddr *addr, unsigned int ifscope)
 	u_int af = addr->sa_family;
 	const char *addr_data = addr->sa_data, *cplim;
 
-#if INET6
 	if (af != AF_INET && af != AF_INET6) {
-#else
-	if (af != AF_INET) {
-#endif /* !INET6 */
 		ifscope = IFSCOPE_NONE;
 	}
 
@@ -1418,6 +1428,7 @@ link_rtrequest(int cmd, struct rtentry *rt, struct sockaddr *sa)
 __private_extern__ void
 if_updown( struct ifnet *ifp, int up)
 {
+	u_int32_t eflags;
 	int i;
 	struct ifaddr **ifa;
 	struct timespec tv;
@@ -1439,7 +1450,8 @@ if_updown( struct ifnet *ifp, int up)
 	}
 
 	/* Indicate that the up/down state is changing */
-	ifp->if_eflags |= IFEF_UPDOWNCHANGE;
+	eflags = if_set_eflags(ifp, IFEF_UPDOWNCHANGE);
+	ASSERT((eflags & IFEF_UPDOWNCHANGE) == 0);
 
 	/* Mark interface up or down */
 	if (up) {
@@ -1471,7 +1483,7 @@ if_updown( struct ifnet *ifp, int up)
 
 	/* Aquire the lock to clear the changing flag */
 	ifnet_lock_exclusive(ifp);
-	ifp->if_eflags &= ~IFEF_UPDOWNCHANGE;
+	if_clear_eflags(ifp, IFEF_UPDOWNCHANGE);
 	wakeup(&ifp->if_eflags);
 }
 
@@ -1514,7 +1526,7 @@ if_qflush(struct ifnet *ifp, int ifq_locked)
 	}
 
 	if (IFCQ_IS_ENABLED(ifq)) {
-		IFCQ_PURGE(ifq);
+		fq_if_request_classq(ifq, CLASSQRQ_PURGE, NULL);
 	}
 
 	VERIFY(IFCQ_IS_EMPTY(ifq));
@@ -1530,7 +1542,6 @@ if_qflush_sc(struct ifnet *ifp, mbuf_svc_class_t sc, u_int32_t flow,
 {
 	struct ifclassq *ifq = &ifp->if_snd;
 	u_int32_t cnt = 0, len = 0;
-	u_int32_t a_cnt = 0, a_len = 0;
 
 	VERIFY(sc == MBUF_SC_UNSPEC || MBUF_VALID_SC(sc));
 	VERIFY(flow != 0);
@@ -1540,7 +1551,11 @@ if_qflush_sc(struct ifnet *ifp, mbuf_svc_class_t sc, u_int32_t flow,
 	}
 
 	if (IFCQ_IS_ENABLED(ifq)) {
-		IFCQ_PURGE_SC(ifq, sc, flow, cnt, len);
+		cqrq_purge_sc_t req = { sc, flow, 0, 0 };
+
+		fq_if_request_classq(ifq, CLASSQRQ_PURGE_SC, &req);
+		cnt = req.packets;
+		len = req.bytes;
 	}
 
 	if (!ifq_locked) {
@@ -1548,10 +1563,10 @@ if_qflush_sc(struct ifnet *ifp, mbuf_svc_class_t sc, u_int32_t flow,
 	}
 
 	if (packets != NULL) {
-		*packets = cnt + a_cnt;
+		*packets = cnt;
 	}
 	if (bytes != NULL) {
-		*bytes = len + a_len;
+		*bytes = len;
 	}
 }
 
@@ -2411,6 +2426,33 @@ ifioctl_iforder(u_long cmd, caddr_t data)
 }
 
 static __attribute__((noinline)) int
+ifioctl_networkid(struct ifnet *ifp, caddr_t data)
+{
+	struct if_netidreq *ifnetidr = (struct if_netidreq *)(void *)data;
+	int error = 0;
+	int len = ifnetidr->ifnetid_len;
+
+	VERIFY(ifp != NULL);
+
+	if (len > sizeof(ifnetidr->ifnetid)) {
+		error = EINVAL;
+		goto end;
+	}
+
+	if (len == 0) {
+		bzero(&ifp->network_id, sizeof(ifp->network_id));
+	} else if (len > sizeof(ifp->network_id)) {
+		error = EINVAL;
+		goto end;
+	}
+
+	ifp->network_id_len = len;
+	bcopy(data, ifp->network_id, len);
+end:
+	return error;
+}
+
+static __attribute__((noinline)) int
 ifioctl_netsignature(struct ifnet *ifp, u_long cmd, caddr_t data)
 {
 	struct if_nsreq *ifnsr = (struct if_nsreq *)(void *)data;
@@ -2449,7 +2491,6 @@ ifioctl_netsignature(struct ifnet *ifp, u_long cmd, caddr_t data)
 	return error;
 }
 
-#if INET6
 static __attribute__((noinline)) int
 ifioctl_nat64prefix(struct ifnet *ifp, u_long cmd, caddr_t data)
 {
@@ -2510,7 +2551,6 @@ ifioctl_clat46addr(struct ifnet *ifp, u_long cmd, caddr_t data)
 
 	return error;
 }
-#endif
 
 
 static int
@@ -2625,7 +2665,6 @@ ifioctl_restrict_intcoproc(unsigned long cmd, const char *ifname,
 	case SIOCGIFFLAGS:
 	case SIOCGIFEFLAGS:
 	case SIOCGIFCAP:
-	case SIOCGIFMAC:
 	case SIOCGIFMETRIC:
 	case SIOCGIFMTU:
 	case SIOCGIFPHYS:
@@ -2861,17 +2900,13 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 			error = EOPNOTSUPP;
 			goto done;
 		}
-	/* FALLTHRU */
+		OS_FALLTHROUGH;
 	case SIOCIFCREATE:                      /* struct ifreq */
 	case SIOCIFCREATE2:                     /* struct ifreq */
 	case SIOCIFDESTROY:                     /* struct ifreq */
 	case SIOCGIFFLAGS:                      /* struct ifreq */
 	case SIOCGIFEFLAGS:                     /* struct ifreq */
 	case SIOCGIFCAP:                        /* struct ifreq */
-#if CONFIG_MACF_NET
-	case SIOCGIFMAC:                        /* struct ifreq */
-	case SIOCSIFMAC:                        /* struct ifreq */
-#endif /* CONFIG_MACF_NET */
 	case SIOCGIFMETRIC:                     /* struct ifreq */
 	case SIOCGIFMTU:                        /* struct ifreq */
 	case SIOCGIFPHYS:                       /* struct ifreq */
@@ -2967,7 +3002,6 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		ifp = ifunit_ref(ifname);
 		break;
 
-#if INET6
 	case SIOCSIFPHYADDR_IN6_32:             /* struct in6_aliasreq_32 */
 		bcopy(((struct in6_aliasreq_32 *)(void *)data)->ifra_name,
 		    ifname, IFNAMSIZ);
@@ -2979,7 +3013,6 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		    ifname, IFNAMSIZ);
 		ifp = ifunit_ref(ifname);
 		break;
-#endif /* INET6 */
 
 	case SIOCGIFSTATUS:                     /* struct ifstat */
 		ifs = _MALLOC(sizeof(*ifs), M_DEVBUF, M_WAITOK);
@@ -3051,6 +3084,11 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		ifp = ifunit_ref(ifname);
 		break;
 
+	case SIOCSIFNETWORKID:                  /* struct if_netidreq */
+		bcopy(((struct if_netidreq *)(void *)data)->ifnetid_name,
+		    ifname, IFNAMSIZ);
+		ifp = ifunit_ref(ifname);
+		break;
 	case SIOCGIFPROTOLIST32:                /* struct if_protolistreq32 */
 	case SIOCGIFPROTOLIST64:                /* struct if_protolistreq64 */
 		bcopy(((struct if_protolistreq *)(void *)data)->ifpl_name,
@@ -3080,10 +3118,8 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	}
 	switch (cmd) {
 	case SIOCSIFPHYADDR:                    /* struct {if,in_}aliasreq */
-#if INET6
 	case SIOCSIFPHYADDR_IN6_32:             /* struct in6_aliasreq_32 */
 	case SIOCSIFPHYADDR_IN6_64:             /* struct in6_aliasreq_64 */
-#endif /* INET6 */
 		error = proc_suser(p);
 		if (error != 0) {
 			break;
@@ -3144,7 +3180,9 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 		error = ifioctl_netsignature(ifp, cmd, data);
 		break;
 
-#if INET6
+	case SIOCSIFNETWORKID:                  /* struct if_netidreq */
+		error = ifioctl_networkid(ifp, data);
+		break;
 	case SIOCSIFNAT64PREFIX:                /* struct if_nat64req */
 	case SIOCGIFNAT64PREFIX:                /* struct if_nat64req */
 		error = ifioctl_nat64prefix(ifp, cmd, data);
@@ -3153,7 +3191,6 @@ ifioctl(struct socket *so, u_long cmd, caddr_t data, struct proc *p)
 	case SIOCGIFCLAT46ADDR:                 /* struct if_clat46req */
 		error = ifioctl_clat46addr(ifp, cmd, data);
 		break;
-#endif
 
 	case SIOCGIFPROTOLIST32:                /* struct if_protolistreq32 */
 	case SIOCGIFPROTOLIST64:                /* struct if_protolistreq64 */
@@ -3283,16 +3320,6 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		ifr->ifr_curcap = ifp->if_capenable;
 		ifnet_lock_done(ifp);
 		break;
-
-#if CONFIG_MACF_NET
-	case SIOCGIFMAC:
-		error = mac_ifnet_label_get(kauth_cred_get(), ifr, ifp);
-		break;
-
-	case SIOCSIFMAC:
-		error = mac_ifnet_label_set(kauth_cred_get(), ifr, ifp);
-		break;
-#endif /* CONFIG_MACF_NET */
 
 	case SIOCGIFMETRIC:
 		ifnet_lock_shared(ifp);
@@ -3448,9 +3475,7 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		 */
 		if (ifp->if_mtu != oldmtu) {
 			if_rtmtu_update(ifp);
-#if INET6
 			nd6_setmtu(ifp);
-#endif /* INET6 */
 			/* Inform all transmit queues about the new MTU */
 			IFCQ_LOCK(ifq);
 			ifnet_update_sndq(ifq, CLASSQ_EV_LINK_MTU);
@@ -3477,6 +3502,9 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		    ifr->ifr_addr.sa_family != AF_LINK) {
 			error = EINVAL;
 			break;
+		}
+		if (ifr->ifr_addr.sa_len > sizeof(struct sockaddr)) {
+			ifr->ifr_addr.sa_len = sizeof(struct sockaddr);
 		}
 
 		/*
@@ -3662,14 +3690,13 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		    PRIV_NET_INTERFACE_CONTROL, 0)) != 0) {
 			return error;
 		}
-		ifnet_lock_exclusive(ifp);
 		if (ifr->ifr_expensive) {
-			ifp->if_eflags |= IFEF_EXPENSIVE;
+			if_set_eflags(ifp, IFEF_EXPENSIVE);
 		} else {
-			ifp->if_eflags &= ~IFEF_EXPENSIVE;
+			if_clear_eflags(ifp, IFEF_EXPENSIVE);
 		}
 		ifnet_increment_generation(ifp);
-		ifnet_lock_done(ifp);
+
 		/*
 		 * Update the expensive bit in the delegated interface
 		 * structure.
@@ -3690,13 +3717,11 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 	}
 
 	case SIOCGIFCONSTRAINED:
-		ifnet_lock_shared(ifp);
-		if (ifp->if_xflags & IFXF_CONSTRAINED) {
+		if ((ifp->if_xflags & IFXF_CONSTRAINED) != 0) {
 			ifr->ifr_constrained = 1;
 		} else {
 			ifr->ifr_constrained = 0;
 		}
-		ifnet_lock_done(ifp);
 		break;
 
 	case SIOCSIFCONSTRAINED:
@@ -3707,14 +3732,12 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		    PRIV_NET_INTERFACE_CONTROL, 0)) != 0) {
 			return error;
 		}
-		ifnet_lock_exclusive(ifp);
 		if (ifr->ifr_constrained) {
-			ifp->if_xflags |= IFXF_CONSTRAINED;
+			if_set_xflags(ifp, IFXF_CONSTRAINED);
 		} else {
-			ifp->if_xflags &= ~IFXF_CONSTRAINED;
+			if_clear_xflags(ifp, IFXF_CONSTRAINED);
 		}
 		ifnet_increment_generation(ifp);
-		ifnet_lock_done(ifp);
 		/*
 		 * Update the constrained bit in the delegated interface
 		 * structure.
@@ -3724,7 +3747,7 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 			ifnet_lock_exclusive(difp);
 			if (difp->if_delegated.ifp == ifp) {
 				difp->if_delegated.constrained =
-				    ifp->if_xflags & IFXF_CONSTRAINED ? 1 : 0;
+				    ((ifp->if_xflags & IFXF_CONSTRAINED) != 0) ? 1 : 0;
 				ifnet_increment_generation(difp);
 			}
 			ifnet_lock_done(difp);
@@ -3749,13 +3772,11 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		    PRIV_NET_INTERFACE_CONTROL, 0)) != 0) {
 			return error;
 		}
-		ifnet_lock_exclusive(ifp);
 		if (ifr->ifr_2kcl) {
-			ifp->if_eflags |= IFEF_2KCL;
+			if_set_eflags(ifp, IFEF_2KCL);
 		} else {
-			ifp->if_eflags &= ~IFEF_2KCL;
+			if_clear_eflags(ifp, IFEF_2KCL);
 		}
-		ifnet_lock_done(ifp);
 		break;
 	case SIOCGSTARTDELAY:
 		ifnet_lock_shared(ifp);
@@ -3835,8 +3856,8 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 
 	case SIOCGIFINTERFACESTATE:
 		if_get_state(ifp, &ifr->ifr_interface_state);
-
 		break;
+
 	case SIOCSIFINTERFACESTATE:
 		if ((error = priv_check_cred(kauth_cred_get(),
 		    PRIV_NET_INTERFACE_CONTROL, 0)) != 0) {
@@ -3882,13 +3903,13 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 			return error;
 		}
 		if (ifr->ifr_ecn_mode == IFRTYPE_ECN_DEFAULT) {
-			ifp->if_eflags &= ~(IFEF_ECN_ENABLE | IFEF_ECN_DISABLE);
+			if_clear_eflags(ifp, IFEF_ECN_ENABLE | IFEF_ECN_DISABLE);
 		} else if (ifr->ifr_ecn_mode == IFRTYPE_ECN_ENABLE) {
-			ifp->if_eflags |= IFEF_ECN_ENABLE;
-			ifp->if_eflags &= ~IFEF_ECN_DISABLE;
+			if_set_eflags(ifp, IFEF_ECN_ENABLE);
+			if_clear_eflags(ifp, IFEF_ECN_DISABLE);
 		} else if (ifr->ifr_ecn_mode == IFRTYPE_ECN_DISABLE) {
-			ifp->if_eflags |= IFEF_ECN_DISABLE;
-			ifp->if_eflags &= ~IFEF_ECN_ENABLE;
+			if_set_eflags(ifp, IFEF_ECN_DISABLE);
+			if_clear_eflags(ifp, IFEF_ECN_ENABLE);
 		} else {
 			error = EINVAL;
 		}
@@ -3901,20 +3922,17 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 			break;
 		}
 
-		ifnet_lock_exclusive(ifp);
 		if ((cmd == SIOCSIFTIMESTAMPENABLE &&
 		    (ifp->if_xflags & IFXF_TIMESTAMP_ENABLED) != 0) ||
 		    (cmd == SIOCSIFTIMESTAMPDISABLE &&
 		    (ifp->if_xflags & IFXF_TIMESTAMP_ENABLED) == 0)) {
-			ifnet_lock_done(ifp);
 			break;
 		}
 		if (cmd == SIOCSIFTIMESTAMPENABLE) {
-			ifp->if_xflags |= IFXF_TIMESTAMP_ENABLED;
+			if_set_xflags(ifp, IFXF_TIMESTAMP_ENABLED);
 		} else {
-			ifp->if_xflags &= ~IFXF_TIMESTAMP_ENABLED;
+			if_clear_xflags(ifp, IFXF_TIMESTAMP_ENABLED);
 		}
-		ifnet_lock_done(ifp);
 		/*
 		 * Pass the setting to the interface if it supports either
 		 * software or hardware time stamping
@@ -3951,15 +3969,15 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 			return error;
 		}
 		if (ifr->ifr_qosmarking_enabled != 0) {
-			ifp->if_eflags |= IFEF_QOSMARKING_ENABLED;
+			if_set_eflags(ifp, IFEF_QOSMARKING_ENABLED);
 		} else {
-			ifp->if_eflags &= ~IFEF_QOSMARKING_ENABLED;
+			if_clear_eflags(ifp, IFEF_QOSMARKING_ENABLED);
 		}
 		break;
 
 	case SIOCGQOSMARKINGENABLED:
 		ifr->ifr_qosmarking_enabled =
-		    (ifp->if_eflags & IFEF_QOSMARKING_ENABLED) ? 1 : 0;
+		    ((ifp->if_eflags & IFEF_QOSMARKING_ENABLED) != 0) ? 1 : 0;
 		break;
 
 	case SIOCSIFDISABLEOUTPUT:
@@ -3990,27 +4008,25 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 			return error;
 		}
 
-		ifnet_lock_exclusive(ifp);
 		if (ifr->ifr_low_internet & IFRTYPE_LOW_INTERNET_ENABLE_UL) {
-			ifp->if_xflags |= IFXF_LOW_INTERNET_UL;
+			if_set_xflags(ifp, IFXF_LOW_INTERNET_UL);
 		} else {
-			ifp->if_xflags &= ~(IFXF_LOW_INTERNET_UL);
+			if_clear_xflags(ifp, IFXF_LOW_INTERNET_UL);
 		}
 		if (ifr->ifr_low_internet & IFRTYPE_LOW_INTERNET_ENABLE_DL) {
-			ifp->if_xflags |= IFXF_LOW_INTERNET_DL;
+			if_set_xflags(ifp, IFXF_LOW_INTERNET_DL);
 		} else {
-			ifp->if_xflags &= ~(IFXF_LOW_INTERNET_DL);
+			if_clear_xflags(ifp, IFXF_LOW_INTERNET_DL);
 		}
-		ifnet_lock_done(ifp);
 		break;
 	case SIOCGIFLOWINTERNET:
 		ifnet_lock_shared(ifp);
 		ifr->ifr_low_internet = 0;
-		if (ifp->if_xflags & IFXF_LOW_INTERNET_UL) {
+		if ((ifp->if_xflags & IFXF_LOW_INTERNET_UL) != 0) {
 			ifr->ifr_low_internet |=
 			    IFRTYPE_LOW_INTERNET_ENABLE_UL;
 		}
-		if (ifp->if_xflags & IFXF_LOW_INTERNET_DL) {
+		if ((ifp->if_xflags & IFXF_LOW_INTERNET_DL) != 0) {
 			ifr->ifr_low_internet |=
 			    IFRTYPE_LOW_INTERNET_ENABLE_DL;
 		}
@@ -4018,34 +4034,32 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		break;
 	case SIOCGIFLOWPOWER:
 		ifr->ifr_low_power_mode =
-		    !!(ifp->if_xflags & IFXF_LOW_POWER);
+		    ((ifp->if_xflags & IFXF_LOW_POWER) != 0);
 		break;
 	case SIOCSIFLOWPOWER:
 #if (DEVELOPMENT || DEBUG)
-		error = if_set_low_power(ifp, !!(ifr->ifr_low_power_mode));
+		error = if_set_low_power(ifp, (ifr->ifr_low_power_mode != 0));
 #else /* DEVELOPMENT || DEBUG */
 		error = EOPNOTSUPP;
 #endif /* DEVELOPMENT || DEBUG */
 		break;
 
 	case SIOCGIFMPKLOG:
-		ifr->ifr_mpk_log = !!(ifp->if_xflags & IFXF_MPK_LOG);
+		ifr->ifr_mpk_log = ((ifp->if_xflags & IFXF_MPK_LOG) != 0);
 		break;
 	case SIOCSIFMPKLOG:
 		if (ifr->ifr_mpk_log) {
-			ifp->if_xflags |= IFXF_MPK_LOG;
+			if_set_xflags(ifp, IFXF_MPK_LOG);
 		} else {
-			ifp->if_xflags &= ~IFXF_MPK_LOG;
+			if_clear_xflags(ifp, IFXF_MPK_LOG);
 		}
 		break;
 	case SIOCGIFNOACKPRIO:
-		ifnet_lock_shared(ifp);
-		if (ifp->if_eflags & IFEF_NOACKPRI) {
+		if ((ifp->if_eflags & IFEF_NOACKPRI) != 0) {
 			ifr->ifr_noack_prio = 1;
 		} else {
 			ifr->ifr_noack_prio = 0;
 		}
-		ifnet_lock_done(ifp);
 		break;
 
 	case SIOCSIFNOACKPRIO:
@@ -4053,13 +4067,11 @@ ifioctl_ifreq(struct socket *so, u_long cmd, struct ifreq *ifr, struct proc *p)
 		    PRIV_NET_INTERFACE_CONTROL, 0)) != 0) {
 			return error;
 		}
-		ifnet_lock_exclusive(ifp);
 		if (ifr->ifr_noack_prio) {
-			ifp->if_eflags |= IFEF_NOACKPRI;
+			if_set_eflags(ifp, IFEF_NOACKPRI);
 		} else {
-			ifp->if_eflags &= ~IFEF_NOACKPRI;
+			if_clear_eflags(ifp, IFEF_NOACKPRI);
 		}
-		ifnet_lock_done(ifp);
 		break;
 
 	default:
@@ -5477,7 +5489,6 @@ ifioctl_cassert(void)
 	case SIOCGPPPSTATS:
 	case SIOCGPPPCSTATS:
 
-#if INET6
 	/* bsd/netinet6/in6_var.h */
 	case SIOCSIFADDR_IN6:
 	case SIOCGIFADDR_IN6:
@@ -5531,11 +5542,11 @@ ifioctl_cassert(void)
 	case SIOCAUTOCONF_START:
 	case SIOCAUTOCONF_STOP:
 	case SIOCSETROUTERMODE_IN6:
+	case SIOCGETROUTERMODE_IN6:
 	case SIOCLL_CGASTART_32:
 	case SIOCLL_CGASTART_64:
 	case SIOCGIFCGAPREP_IN6:
 	case SIOCSIFCGAPREP_IN6:
-#endif /* INET6 */
 
 	/* bsd/sys/sockio.h */
 	case SIOCSIFADDR:
@@ -5616,10 +5627,6 @@ ifioctl_cassert(void)
 
 	case SIOCGIFASYNCMAP:
 	case SIOCSIFASYNCMAP:
-#if CONFIG_MACF_NET
-	case SIOCGIFMAC:
-	case SIOCSIFMAC:
-#endif /* CONFIG_MACF_NET */
 	case SIOCSIFKPI:
 	case SIOCGIFKPI:
 
@@ -5629,6 +5636,7 @@ ifioctl_cassert(void)
 	case SIOCGIFLINKQUALITYMETRIC:
 	case SIOCSIFOPPORTUNISTIC:
 	case SIOCGIFOPPORTUNISTIC:
+	case SIOCGETROUTERMODE:
 	case SIOCSETROUTERMODE:
 	case SIOCGIFEFLAGS:
 	case SIOCSIFDESC:
@@ -5675,6 +5683,7 @@ ifioctl_cassert(void)
 	case SIOCSIFNETSIGNATURE:
 	case SIOCGIFNETSIGNATURE:
 
+	case SIOCSIFNETWORKID:
 	case SIOCGECNMODE:
 	case SIOCSECNMODE:
 
@@ -5699,12 +5708,10 @@ ifioctl_cassert(void)
 	case SIOCSIFLOWINTERNET:
 	case SIOCGIFLOWINTERNET:
 
-#if INET6
 	case SIOCGIFNAT64PREFIX:
 	case SIOCSIFNAT64PREFIX:
 
 	case SIOCGIFCLAT46ADDR:
-#endif /* INET6 */
 
 	case SIOCGIFPROTOLIST32:
 	case SIOCGIFPROTOLIST64:

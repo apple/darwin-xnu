@@ -107,7 +107,7 @@
 
 #define tcp_sendseqinit(tp) \
 	(tp)->snd_una = (tp)->snd_nxt = (tp)->snd_max = (tp)->snd_up = \
-	(tp)->snd_recover = (tp)->iss
+	(tp)->snd_recover = (tp)->send_highest_sack = (tp)->iss
 
 #define TCP_PAWS_IDLE   (24 * 24 * 60 * 60 * TCP_RETRANSHZ)
 /* timestamp wrap-around time */

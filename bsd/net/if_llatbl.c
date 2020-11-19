@@ -228,7 +228,7 @@ struct prefix_match_data {
 	const struct sockaddr *addr;
 	const struct sockaddr *mask;
 	struct llentries dchain;
-	u_int flags;
+	uint16_t flags;
 };
 
 static int
@@ -248,7 +248,7 @@ htable_prefix_free_cb(struct lltable *llt, struct llentry *lle, void *farg)
 
 static void
 htable_prefix_free(struct lltable *llt, const struct sockaddr *addr,
-    const struct sockaddr *mask, u_int flags)
+    const struct sockaddr *mask, uint16_t flags)
 {
 	struct llentry *lle, *next;
 	struct prefix_match_data pmd;
@@ -639,7 +639,7 @@ lltable_delete_addr(struct lltable *llt, u_int flags,
 
 void
 lltable_prefix_free(int af, struct sockaddr *addr, struct sockaddr *mask,
-    u_int flags)
+    uint16_t flags)
 {
 	struct lltable *llt;
 
@@ -711,7 +711,7 @@ lltable_foreach_lle(struct lltable *llt, llt_foreach_cb_t *f, void *farg)
 }
 
 struct llentry *
-lltable_alloc_entry(struct lltable *llt, u_int flags,
+lltable_alloc_entry(struct lltable *llt, uint16_t flags,
     const struct sockaddr *l3addr)
 {
 	return llt->llt_alloc_entry(llt, flags, l3addr);
@@ -770,7 +770,7 @@ lla_rt_output(struct rt_msghdr *rtm, struct rt_addrinfo *info)
 	struct ifnet *ifp;
 	struct lltable *llt;
 	struct llentry *lle, *lle_tmp;
-	u_int laflags = 0;
+	uint16_t laflags = 0;
 	int error;
 
 	KASSERT(dl != NULL && dl->sdl_family == AF_LINK,

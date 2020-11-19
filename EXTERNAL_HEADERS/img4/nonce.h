@@ -46,7 +46,7 @@
 #define __IMG4_NONCE_H
 
 #ifndef __IMG4_INDIRECT
-#error "Please #include <img4/img4.h> instead of this file directly"
+#error "Please #include <img4/firmware.h> instead of this file directly"
 #endif // __IMG4_INDIRECT
 
 #if IMG4_TAPI
@@ -61,18 +61,19 @@ IMG4_API_AVAILABLE_20181106
 typedef struct _img4_nonce_domain img4_nonce_domain_t;
 
 /*!
- * @const IMG4_NONCE_VERSION
+ * @const IMG4_NONCE_STRUCT_VERSION
  * The version of the {@link img4_nonce_t} structure supported by the
  * implementation.
  */
-#define IMG4_NONCE_VERSION ((img4_struct_version_t)0)
+#define IMG4_NONCE_STRUCT_VERSION ((img4_struct_version_t)0)
+#define IMG4_NONCE_VERSION IMG4_NONCE_STRUCT_VERSION
 
 /*!
  * @const IMG4_NONCE_MAX_LENGTH
  * The maximum length of a nonce. Currently, this is the length of a SHA2-384
  * hash.
  */
-#define IMG4_NONCE_MAX_LENGTH (48)
+#define IMG4_NONCE_MAX_LENGTH (48u)
 
 /*!
  * @typedef img4_nonce_t
@@ -101,14 +102,27 @@ typedef struct _img4_nonce {
  * {@link i4n_version} field is properly initialized.
  */
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
-#define IMG4_NONCE_INIT (img4_nonce_t){.i4n_version = IMG4_NONCE_VERSION}
+#define IMG4_NONCE_INIT (img4_nonce_t){.i4n_version = IMG4_NONCE_STRUCT_VERSION}
 #elif defined(__cplusplus) && __cplusplus >= 201103L
-#define IMG4_NONCE_INIT (img4_nonce_t{IMG4_NONCE_VERSION})
+#define IMG4_NONCE_INIT (img4_nonce_t{IMG4_NONCE_STRUCT_VERSION})
 #elif defined(__cplusplus)
 #define IMG4_NONCE_INIT \
-		(img4_nonce_t((img4_nonce_t){IMG4_NONCE_VERSION}))
+		(img4_nonce_t((img4_nonce_t){IMG4_NONCE_STRUCT_VERSION}))
 #else
-#define IMG4_NONCE_INIT {IMG4_NONCE_VERSION}
+#define IMG4_NONCE_INIT {IMG4_NONCE_STRUCT_VERSION}
+#endif
+
+/*!
+ * @const IMG4_NONCE_ZERO
+ * A convenience initializer for {@link img4_nonce_t} which initializes a 48-
+ * byte nonce of all zeroes.
+ */
+#if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 199901L
+#define IMG4_NONCE_ZERO (img4_nonce_t){ \
+	.i4n_version = IMG4_NONCE_STRUCT_VERSION, \
+	.i4n_nonce = {0}, \
+	.i4n_length = IMG4_NONCE_MAX_LENGTH, \
+}
 #endif
 
 /*!
@@ -162,7 +176,7 @@ OS_EXPORT
 const struct _img4_nonce_domain _img4_nonce_domain_cryptex;
 #define IMG4_NONCE_DOMAIN_CRYPTEX (&_img4_nonce_domain_cryptex)
 #else
-#define IMG4_NONCE_DOMAIN_CRYPTEX (img4if->i4if_v1.nonce_domain_cryptex)
+#define IMG4_NONCE_DOMAIN_CRYPTEX (img4if->i4if_v3.nonce_domain_cryptex)
 #endif
 
 /*!
@@ -193,7 +207,7 @@ errno_t
 img4_nonce_domain_copy_nonce(const img4_nonce_domain_t *nd, img4_nonce_t *n);
 #else
 #define img4_nonce_domain_copy_nonce(...) \
-		(i4if->i4if_v1.nonce_domain_copy_nonce(__VA_ARGS__))
+		(img4if->i4if_v1.nonce_domain_copy_nonce(__VA_ARGS__))
 #endif
 
 /*!
@@ -219,7 +233,7 @@ errno_t
 img4_nonce_domain_roll_nonce(const img4_nonce_domain_t *nd);
 #else
 #define img4_nonce_domain_roll_nonce(...) \
-		(i4if->i4if_v1.nonce_domain_roll_nonce(__VA_ARGS__))
+		(img4if->i4if_v1.nonce_domain_roll_nonce(__VA_ARGS__))
 #endif
 
 #endif // __IMG4_NONCE_H

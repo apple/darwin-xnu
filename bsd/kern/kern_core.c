@@ -104,10 +104,10 @@ int mynum_flavors = 2;
 
 typedef struct {
 	vm_offset_t header;
-	int  hoffset;
+	size_t hoffset;
 	mythread_state_flavor_t *flavors;
-	int tstate_size;
-	int flavor_count;
+	size_t tstate_size;
+	size_t flavor_count;
 } tir_t;
 
 extern int freespace_mb(vnode_t vp);
@@ -173,7 +173,7 @@ static void
 collectth_state(thread_t th_act, void *tirp)
 {
 	vm_offset_t     header;
-	int  hoffset, i;
+	size_t  hoffset, i;
 	mythread_state_flavor_t *flavors;
 	struct thread_command   *tc;
 	tir_t *t = (tir_t *)tirp;
@@ -187,8 +187,8 @@ collectth_state(thread_t th_act, void *tirp)
 
 	tc = (struct thread_command *) (header + hoffset);
 	tc->cmd = LC_THREAD;
-	tc->cmdsize = sizeof(struct thread_command)
-	    + t->tstate_size;
+	tc->cmdsize = (uint32_t)(sizeof(struct thread_command)
+	    + t->tstate_size);
 	hoffset += sizeof(struct thread_command);
 	/*
 	 * Follow with a struct thread_state_flavor and
@@ -238,9 +238,9 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int coredump_flags)
 	kauth_cred_t cred = vfs_context_ucred(ctx);
 	int error = 0;
 	struct vnode_attr va;
-	int             thread_count, segment_count;
-	int             command_size, header_size, tstate_size;
-	int             hoffset;
+	size_t          thread_count, segment_count;
+	size_t          command_size, header_size, tstate_size;
+	size_t          hoffset;
 	off_t           foffset;
 	mach_vm_offset_t vmoffset;
 	vm_offset_t     header;
@@ -254,7 +254,7 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int coredump_flags)
 	char            *name = NULL;
 	mythread_state_flavor_t flavors[MAX_TSTATE_FLAVORS];
 	vm_size_t       mapsize;
-	int             i;
+	size_t          i;
 	uint32_t nesting_depth = 0;
 	kern_return_t   kret;
 	struct vm_region_submap_info_64 vbr;
@@ -295,7 +295,7 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int coredump_flags)
 	mapsize = get_vmmap_size(map);
 
 	if (((coredump_flags & COREDUMP_IGNORE_ULIMIT) == 0) &&
-	    (mapsize >= core_proc->p_rlimit[RLIMIT_CORE].rlim_cur)) {
+	    (mapsize >= proc_limitgetcur(core_proc, RLIMIT_CORE, FALSE))) {
 		error = EFAULT;
 		goto out2;
 	}
@@ -358,11 +358,34 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int coredump_flags)
 		tstate_size += sizeof(mythread_state_flavor_t) +
 		    (flavors[i].count * sizeof(int));
 	}
-	command_size = segment_count * segment_command_sz +
-	    thread_count * sizeof(struct thread_command) +
-	    tstate_size * thread_count;
 
-	header_size = command_size + mach_header_sz;
+	{
+		size_t lhs;
+		size_t rhs;
+
+		/* lhs = segment_count * segment_command_sz */
+		if (os_mul_overflow(segment_count, segment_command_sz, &lhs)) {
+			error = ENOMEM;
+			goto out;
+		}
+
+		/* rhs = (tstate_size + sizeof(struct thread_command)) * thread_count */
+		if (os_add_and_mul_overflow(tstate_size, sizeof(struct thread_command), thread_count, &rhs)) {
+			error = ENOMEM;
+			goto out;
+		}
+
+		/* command_size = lhs + rhs */
+		if (os_add_overflow(lhs, rhs, &command_size)) {
+			error = ENOMEM;
+			goto out;
+		}
+	}
+
+	if (os_add_overflow(command_size, mach_header_sz, &header_size)) {
+		error = ENOMEM;
+		goto out;
+	}
 
 	if (kmem_alloc(kernel_map, &header, (vm_size_t)header_size, VM_KERN_MEMORY_DIAG) != KERN_SUCCESS) {
 		error = ENOMEM;
@@ -378,8 +401,8 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int coredump_flags)
 		mh64->cputype = process_cpu_type(core_proc);
 		mh64->cpusubtype = process_cpu_subtype(core_proc);
 		mh64->filetype = MH_CORE;
-		mh64->ncmds = segment_count + thread_count;
-		mh64->sizeofcmds = command_size;
+		mh64->ncmds = (uint32_t)(segment_count + thread_count);
+		mh64->sizeofcmds = (uint32_t)command_size;
 		mh64->reserved = 0;             /* 8 byte alignment */
 	} else {
 		mh = (struct mach_header *)header;
@@ -387,8 +410,8 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int coredump_flags)
 		mh->cputype = process_cpu_type(core_proc);
 		mh->cpusubtype = process_cpu_subtype(core_proc);
 		mh->filetype = MH_CORE;
-		mh->ncmds = segment_count + thread_count;
-		mh->sizeofcmds = command_size;
+		mh->ncmds = (uint32_t)(segment_count + thread_count);
+		mh->sizeofcmds = (uint32_t)command_size;
 	}
 
 	hoffset = mach_header_sz;       /* offset into header */
@@ -463,8 +486,8 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int coredump_flags)
 			sc->cmdsize = sizeof(struct segment_command);
 			/* segment name is zeroed by kmem_alloc */
 			sc->segname[0] = 0;
-			sc->vmaddr = CAST_DOWN_EXPLICIT(vm_offset_t, vmoffset);
-			sc->vmsize = CAST_DOWN_EXPLICIT(vm_size_t, vmsize);
+			sc->vmaddr = CAST_DOWN_EXPLICIT(uint32_t, vmoffset);
+			sc->vmsize = CAST_DOWN_EXPLICIT(uint32_t, vmsize);
 			sc->fileoff = CAST_DOWN_EXPLICIT(uint32_t, foffset); /* will never truncate */
 			sc->filesize = CAST_DOWN_EXPLICIT(uint32_t, vmsize); /* will never truncate */
 			sc->maxprot = maxprot;
@@ -525,7 +548,7 @@ coredump(proc_t core_proc, uint32_t reserve_mb, int coredump_flags)
 	 *	Write out the Mach header at the beginning of the
 	 *	file.  OK to use a 32 bit write for this.
 	 */
-	error = vn_rdwr(UIO_WRITE, vp, (caddr_t)header, header_size, (off_t)0,
+	error = vn_rdwr(UIO_WRITE, vp, (caddr_t)header, (int)MIN(header_size, INT_MAX), (off_t)0,
 	    UIO_SYSSPACE, IO_NOCACHE | IO_NODELOCKED | IO_UNIT, cred, (int *) 0, core_proc);
 	kmem_free(kernel_map, header, header_size);
 

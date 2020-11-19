@@ -131,6 +131,7 @@ RB_HEAD( rb_head, vm_map_store );
 void vm_map_store_init( struct vm_map_header*  );
 boolean_t vm_map_store_lookup_entry( struct _vm_map*, vm_map_offset_t, struct vm_map_entry**);
 void    vm_map_store_update( struct _vm_map*, struct vm_map_entry*, int);
+void    vm_map_store_find_last_free( struct _vm_map*, struct vm_map_entry**);
 void    _vm_map_store_entry_link( struct vm_map_header *, struct vm_map_entry*, struct vm_map_entry*);
 void    vm_map_store_entry_link( struct _vm_map*, struct vm_map_entry*, struct vm_map_entry*, vm_map_kernel_flags_t);
 void    _vm_map_store_entry_unlink( struct vm_map_header *, struct vm_map_entry*);

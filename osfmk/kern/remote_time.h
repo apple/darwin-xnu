@@ -69,6 +69,14 @@ mach_bridge_compute_timestamp(uint64_t local_ts_ns, struct bt_params *params)
 }
 
 uint64_t mach_bridge_remote_time(uint64_t);
+
+#if XNU_KERNEL_PRIVATE
+#include <kern/locks.h>
+extern lck_spin_t bt_maintenance_lock;
+extern lck_spin_t bt_spin_lock;
+extern lck_spin_t bt_ts_conversion_lock;
+#endif
+
 __END_DECLS
 
 #endif /* REMOTE_TIME_H */

@@ -2,17 +2,8 @@ include ../Makefile.common
 
 CC:=$(shell xcrun -sdk "$(SDKROOT)" -find cc)
 
-ifdef RC_ARCHS
-    ARCHS:=$(RC_ARCHS)
-  else
-    ifeq "$(Embedded)" "YES"
-      ARCHS:=armv7 armv7s arm64 armv7k
-    else
-      ARCHS:=x86_64 i386
-  endif
-endif
-
-CFLAGS := -Os -g $(patsubst %, -arch %, $(ARCHS)) -isysroot $(SDKROOT) -isystem $(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
+CFLAGS := -Os -g $(ARCH_FLAGS) -isysroot $(SDKROOT) -isystem $(SDKROOT)/System/Library/Frameworks/System.framework/PrivateHeaders
+CFLAGS += -Wl,-sectcreate,__INFO_FILTER,__disable,/dev/null
 
 DSTROOT?=$(shell /bin/pwd)
 SYMROOT?=$(shell /bin/pwd)

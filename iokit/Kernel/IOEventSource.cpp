@@ -32,6 +32,9 @@
  *   1998-7-13	Godfrey van der Linden(gvdl)
  *       Created.
  *  ]*/
+
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <IOKit/IOLib.h>
 
 #include <IOKit/IOEventSource.h>
@@ -230,6 +233,7 @@ IOEventSource::setAction(Action inAction)
 		Block_release(actionBlock);
 	}
 	action = inAction;
+	flags &= ~kActionBlock;
 }
 
 void

@@ -28,7 +28,7 @@
 .\"	@(#)mmap.2	8.4 (Berkeley) 5/11/95
 .\" $FreeBSD: src/lib/libc/sys/mmap.2,v 1.56 2007/01/09 00:28:15 imp Exp $
 .\"
-.Dd April 21, 2006
+.Dd February 14, 2020
 .Dt MMAP 2
 .Os
 .Sh NAME
@@ -65,22 +65,26 @@ argument is used by the system to determine the starting address of the mapping,
 and its interpretation is dependent on the setting of the MAP_FIXED flag.
 If MAP_FIXED is specified in
 .Fa flags ,
-the system will try to place the mapping at the specified address, 
+the system will try to place the mapping at the specified address,
 possibly removing a
 mapping that already exists at that location.
 If MAP_FIXED is not specified,
 then the system will attempt to use the range of addresses starting at
 .Fa addr
 if they do not overlap any existing mappings,
-including memory allocated by malloc(3) and other such allocators.
+including memory allocated by
+.Xr malloc 3
+and other such allocators.
 Otherwise,
 the system will choose an alternate address for the mapping (using an implementation
 dependent algorithm)
 that does not overlap any existing
 mappings.
 In other words,
-without MAP_FIXED the system will attempt to find an empty location in the address space if the specified address 
-range has already been mapped by something else.
+without
+.Dv MAP_FIXED
+the system will attempt to find an empty location in the address space if the
+specified address range has already been mapped by something else.
 If
 .Fa addr
 is zero and MAP_FIXED is not specified,
@@ -113,7 +117,23 @@ Pages may be executed.
 .Pp
 Note that, due to hardware limitations, on some platforms PROT_WRITE may
 imply PROT_READ, and PROT_READ may imply PROT_EXEC.  Portable programs
-should not rely on these flags being separately enforcable.
+should not rely on these flags being separately enforceable.
+.Pp
+When the hardened runtime is enabled
+.Po
+See the links in the
+.Sx SEE ALSO
+section
+.Pc ,
+the protections cannot be both
+.Dv PROT_WRITE
+and
+.Dv PROT_EXEC
+without also having the flag
+.Dv MAP_JIT
+and the process possessing the
+.Dv com.apple.security.cs.allow-jit
+entitlement
 .Pp
 The
 .Fa flags
@@ -136,11 +156,12 @@ The
 argument is ignored.
 Mac OS X specific: the file descriptor used for creating
 .Dv MAP_ANON
-regions can be used to pass some Mach VM flags, and can 
-be specified as \-1 if no such flags are associated with 
-the region.  Mach VM flags are defined in 
-<mach/vm_statistics.h> and the ones that currently apply 
-to 
+regions can be used to pass some Mach VM flags, and can
+be specified as \-1 if no such flags are associated with
+the region.  Mach VM flags are defined in
+.In mach/vm_statistics.h
+and the ones that currently apply
+to
 .Nm mmap
 are:
 .Pp
@@ -148,10 +169,12 @@ VM_FLAGS_PURGABLE	to create Mach purgable (i.e. volatile) memory.
 .Pp
 VM_MAKE_TAG(tag)	to associate an 8-bit tag with the region.
 .br
-<mach/vm_statistics.h> defines some preset tags (with a VM_MEMORY_ prefix).
+.In mach/vm_statistics.h
+defines some preset tags (with a VM_MEMORY_ prefix).
 Users are encouraged to use tags between 240 and 255.
-Tags are used by tools such as vmmap(1) to help identify specific memory regions.
-.Pp
+Tags are used by tools such as
+.Xr vmmap 1
+to help identify specific memory regions.
 .It Dv MAP_FILE
 Mapped from a regular file.  (This is
 the default mapping type, and need not be specified.)
@@ -188,9 +211,39 @@ Modifications are shared.
 Pages in this mapping are not retained in the kernel's memory cache.
 If the system runs low on memory, pages in MAP_NOCACHE mappings will be among
 the first to be reclaimed.
-This flag is intended for mappings that have little locality and 
+This flag is intended for mappings that have little locality and
 provides a hint to the kernel that pages in this mapping are unlikely to be needed
 again in the near future.
+.It Dv MAP_JIT
+Allow mapping pages both
+.Dv PROT_WRITE
+and
+.Dv PROT_EXEC
+when the hardened is runtime enabled. Without this flag an attempt to create a
+mapping with both
+.Dv PROT_WRITE
+and
+.Dv PROT_EXEC
+set will fail with
+.Dv MAP_FAILED
+on macOS. A writable, but not executable mapping
+is returned on iOS, watchOS and tvOS.
+.Pp
+Usage of this flag requires the caller to have the
+.Dv com.apple.security.cs.allow-jit
+entitlement on macOS.
+.It Dv MAP_32BIT
+Directs
+.Fn mmap
+to place the mapping into the first 4 Gigabytes of the process's address space.  If
+there is no free virtual address space in this range,
+.Fn mmap
+will return
+.Dv MAP_FAILED.
+.Pp
+Note that in order for this flag to yield addresses below 4GiB, the program's
+PAGEZERO must be reduced in size, since the default PAGEZERO size for 64-bit
+programs is at least 4GiB.
 .El
 .Pp
 Conforming applications must specify either MAP_PRIVATE or MAP_SHARED.
@@ -257,12 +310,16 @@ resides out of the valid address space for a user process.
 .Fa flags
 does not include either MAP_PRIVATE or MAP_SHARED.
 .It Bq Er EINVAL
+.Fa flags
+includes bits that are not part of any valid flags value.
+.It Bq Er EINVAL
 The
 .Fa len
 argument
-was negative or zero. Historically, the system call would not return an error if the argument was zero. 
-See other potential additional restrictions in the 
-COMPATIBILITY section below. 
+was negative or zero. Historically, the system call would not return an error
+if the argument was zero.
+See other potential additional restrictions in the
+COMPATIBILITY section below.
 .It Bq Er EINVAL
 The
 .Fa offset
@@ -284,12 +341,30 @@ limit for the process.
 .Dv MAP_ANON
 was specified and insufficient memory was available.
 .It Bq Er ENXIO
-Addresses in the specified range are invalid for 
+Addresses in the specified range are invalid for
 .Fa fd .
 .It Bq Er EOVERFLOW
 Addresses in the specified range exceed the maximum offset
-set for 
+set for
 .Fa fd .
+.El
+.Sh ENTITLEMENTS
+The following entitlements only have an effect when the hardened runtime is
+enabled.
+.Bl -tag -width Er
+.It Dv com.apple.security.cs.allow-jit
+A Boolean value that indicates whether the app may create writable and
+executable memory using the
+.Dv MAP_JIT
+.Fa flag .
+.It Dv com.apple.security.cs.allow-unsigned-executable-memory
+A Boolean value that indicates whether the app may create writable and
+executable memory without the restrictions imposed by using the
+.Dv MAP_JIT
+.Fa flag .
+.It Dv com.apple.security.cs.disable-executable-page-protection
+A Boolean value that indicates whether to disable all code signing
+protections while launching an application, and during its execution.
 .El
 .Sh LEGACY SYNOPSIS
 .Fd #include <sys/types.h>
@@ -320,6 +395,18 @@ parameter must be a multiple of pagesize,
 as returned by
 .Fn sysconf .
 .El
+.Pp
+On macOS 10.14 Mojave the hardened runtime restricts pages from having both
+the
+.Dv PROT_WRITE
+and
+.Dv PROT_EXEC
+protections without the caller also setting the
+.Dv MAP_JIT
+.Fa flag
+and possessing the
+.Dv com.apple.security.cs.allow-jit
+entitlement.
 .Sh SEE ALSO
 .Xr madvise 2 ,
 .Xr mincore 2 ,
@@ -331,3 +418,5 @@ as returned by
 .Xr munmap 2 ,
 .Xr shmat 2 ,
 .Xr getpagesize 3
+.Ss Apple Developer Documentation
+https://developer.apple.com/documentation/security/hardened_runtime_entitlements

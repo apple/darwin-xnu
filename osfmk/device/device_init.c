@@ -82,11 +82,6 @@
 ipc_port_t      master_device_port;
 void           *master_device_kobject;
 
-lck_grp_attr_t * dev_lck_grp_attr;
-lck_grp_t * dev_lck_grp;
-lck_attr_t * dev_lck_attr;
-lck_mtx_t iokit_obj_to_port_binding_lock;
-
 void
 device_service_create(void)
 {
@@ -96,16 +91,6 @@ device_service_create(void)
 
 	kernel_set_special_port(host_priv_self(), HOST_IO_MASTER_PORT,
 	    ipc_port_make_send(master_device_port));
-
-	/* allocate device lock group attribute and group */
-	dev_lck_grp_attr = lck_grp_attr_alloc_init();
-	dev_lck_grp = lck_grp_alloc_init("device", dev_lck_grp_attr);
-
-	/* Allocate device lock attribute */
-	dev_lck_attr = lck_attr_alloc_init();
-
-	/* Initialize the IOKit object to port binding lock */
-	lck_mtx_init(&iokit_obj_to_port_binding_lock, dev_lck_grp, dev_lck_attr);
 
 #if 0
 	ds_init();

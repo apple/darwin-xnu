@@ -214,6 +214,7 @@ typedef struct io_stat_info *io_stat_info_t;
 #if KERNEL_PRIVATE
 __BEGIN_DECLS
 void thread_group_join_io_storage(void);
+void thread_group_join_perf_controller(void);
 __END_DECLS
 #endif
 

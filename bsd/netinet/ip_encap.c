@@ -103,12 +103,9 @@
 #include <netinet/ip_var.h>
 #include <netinet/ip_encap.h>
 
-#if INET6
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #include <netinet6/ip6protosw.h>
-#endif
-
 
 #include <net/net_osdep.h>
 
@@ -288,7 +285,6 @@ encap4_input(struct mbuf *m, int off)
 }
 #endif
 
-#if INET6
 int
 encap6_input(struct mbuf **mp, int *offp, int proto)
 {
@@ -362,7 +358,6 @@ encap6_input(struct mbuf **mp, int *offp, int proto)
 	/* last resort: inject to raw socket */
 	return rip6_input(mp, offp, proto);
 }
-#endif
 
 static void
 encap_add_locked(struct encaptab *ep)

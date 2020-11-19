@@ -16,7 +16,7 @@
 .\"
 .\"     @(#)getattrlist.2
 .
-.Dd February 25, 2014
+.Dd February 11, 2020
 .Dt GETATTRLIST 2
 .Os Darwin
 .Sh NAME
@@ -166,8 +166,13 @@ See below for a description of these attributes.
 If you request volume attributes,
 .Fa path
 must reference the root of a volume.
+You must set ATTR_VOL_INFO in the volattr field if you request any 
+other volume attributes.
 In addition, you can't request volume attributes if you also request
-file or directory attributes.
+file, directory, fork or extended common attributes.
+In addition, you can't request volume attributes if you also request the common 
+attributes ATTR_CMN_EXTENDED_SECURITY, ATTR_CMN_UUID, ATTR_CMN_GRPUUID, 
+ATTR_CMN_FILEID, or ATTR_CMN_PARENTID.  
 .
 .It dirattr
 A bit set that specifies the directory attributes that you require.
@@ -732,12 +737,11 @@ The following volume attributes are defined.
 .Bl -tag -width ATTR_VOL_ALLOCATIONCLUMP
 .
 .It ATTR_VOL_INFO
-For reasons that are not at all obvious, you must set
+For historical reasons you must set
 .Dv ATTR_VOL_INFO
 in the
 .Fa volattr
 field if you request any other volume attributes.
-This does not result in any attribute data being added to the attribute buffer.
 .
 .It ATTR_VOL_FSTYPE
 A
@@ -1257,7 +1261,20 @@ by the file system when asked to free space.
 .It EF_IS_SPARSE
 If this bit is set the item has sparse regions.
 .
+.It EF_IS_SYNTHETIC
+If this bit is set the item is a synthetic directory/symlink.
+.
 .El
+.
+.It ATTR_CMNEXT_RECURSIVE_GENCOUNT
+A
+.Vt u_int64_t
+that represents the recursive generation count of a directory that has
+been marked as maintain-dir-stats in an apfs file system.  This
+gencount is updated any time any child is modified (as part of the
+contract that a maintain-dir-stats directory manages).  If the
+directory is not marked maintain-dir-stats, a zero is returned.
+.
 .El
 .Pp
 .
@@ -1509,6 +1526,9 @@ in a single "partition" which share space.
 If this bit is set, the volume format supports having multiple logical filesystems
 which may be mounted and unmounted together and may present common filesystem
 identifier information.
+.It VOL_CAP_FMT_SEALED
+If this bit is set, the volume is cryptographically sealed and any modifications
+may render the volume unusable.
 .
 .
 .El

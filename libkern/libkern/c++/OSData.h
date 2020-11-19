@@ -33,12 +33,13 @@
 
 #include <libkern/c++/OSObject.h>
 #include <libkern/c++/OSPtr.h>
+#include <os/base.h>
 
 class OSData;
 class OSString;
 
-typedef OSPtr<OSData> OSDataPtr;
-typedef OSPtr<const OSData> OSDataConstPtr;
+typedef OSData* OSDataPtr;
+typedef OSData const* OSDataConstPtr;
 
 /*!
  * @header
@@ -88,12 +89,12 @@ protected:
 	unsigned int   length;
 	unsigned int   capacity;
 	unsigned int   capacityIncrement;
-	void         * data;
+	void         * OS_PTRAUTH_SIGNED_PTR("OSData.data") data;
 
 #else /* APPLE_KEXT_ALIGN_CONTAINERS */
 
 protected:
-	void         * data;
+	void         * OS_PTRAUTH_SIGNED_PTR("OSData.data") data;
 	unsigned int   length;
 	unsigned int   capacity;
 	unsigned int   capacityIncrement;
@@ -140,7 +141,7 @@ public:
  * (<i>unlike</i> @link //apple_ref/doc/uid/20001498 CFMutableData@/link,
  * for which a nonzero initial capacity is a hard limit).
  */
-	static OSDataPtr withCapacity(unsigned int capacity);
+	static OSPtr<OSData> withCapacity(unsigned int capacity);
 
 
 /*!
@@ -163,7 +164,7 @@ public:
  * (<i>unlike</i> @link //apple_ref/doc/uid/20001498 CFMutableData@/link,
  * for which a nonzero initial capacity is a hard limit).
  */
-	static OSDataPtr withBytes(
+	static OSPtr<OSData> withBytes(
 		const void   * bytes,
 		unsigned int   numBytes);
 
@@ -196,7 +197,7 @@ public:
  * but you can get the byte pointer and
  * modify bytes within the shared buffer.
  */
-	static OSDataPtr withBytesNoCopy(
+	static OSPtr<OSData> withBytesNoCopy(
 		void         * bytes,
 		unsigned int   numBytes);
 
@@ -220,7 +221,7 @@ public:
  * (<i>unlike</i> @link //apple_ref/doc/uid/20001498 CFMutableData@/link,
  * for which a nonzero initial capacity is a hard limit).
  */
-	static OSDataPtr withData(const OSData * inData);
+	static OSPtr<OSData> withData(const OSData * inData);
 
 
 /*!
@@ -245,7 +246,7 @@ public:
  * (<i>unlike</i> @link //apple_ref/doc/uid/20001498 CFMutableData@/link,
  * for which a nonzero initial capacity is a hard limit).
  */
-	static OSDataPtr withData(
+	static OSPtr<OSData> withData(
 		const OSData * inData,
 		unsigned int   start,
 		unsigned int   numBytes);
@@ -754,10 +755,10 @@ public:
 private:
 #endif
 	virtual void setDeallocFunction(DeallocFunction func);
-	OSMetaClassDeclareReservedUsed(OSData, 0);
 	bool isSerializable(void);
 
 private:
+	OSMetaClassDeclareReservedUsedX86(OSData, 0);
 	OSMetaClassDeclareReservedUnused(OSData, 1);
 	OSMetaClassDeclareReservedUnused(OSData, 2);
 	OSMetaClassDeclareReservedUnused(OSData, 3);

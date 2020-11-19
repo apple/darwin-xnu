@@ -76,7 +76,7 @@
 #include <kern/lock_group.h>
 #include <machine/simple_lock.h>
 
-#ifdef  MACH_KERNEL_PRIVATE
+#ifdef MACH_KERNEL_PRIVATE
 #include <machine/atomic.h>
 #include <mach_ldebug.h>
 
@@ -142,8 +142,32 @@ extern void                     hw_lock_unlock_nopreempt(
 extern unsigned int             hw_lock_held(
 	hw_lock_t);
 
-extern boolean_t hw_atomic_test_and_set32(uint32_t *target, uint32_t test_mask, uint32_t set_mask, enum memory_order ord, boolean_t wait);
-#endif  /* MACH_KERNEL_PRIVATE */
+extern boolean_t                hw_atomic_test_and_set32(
+	uint32_t *target,
+	uint32_t test_mask,
+	uint32_t set_mask,
+	enum memory_order ord,
+	boolean_t wait);
+
+#endif /* MACH_KERNEL_PRIVATE */
+#if XNU_KERNEL_PRIVATE
+
+struct usimple_lock_startup_spec {
+	usimple_lock_t  lck;
+	unsigned short  lck_init_arg;
+};
+
+extern void                     usimple_lock_startup_init(
+	struct usimple_lock_startup_spec *spec);
+
+#define SIMPLE_LOCK_DECLARE(var, arg) \
+	decl_simple_lock_data(, var); \
+	static __startup_data struct usimple_lock_startup_spec \
+	__startup_usimple_lock_spec_ ## var = { &var, arg }; \
+	STARTUP_ARG(LOCKS_EARLY, STARTUP_RANK_FOURTH, usimple_lock_startup_init, \
+	    &__startup_usimple_lock_spec_ ## var)
+
+#endif /* XNU_KERNEL_PRIVATE */
 
 __BEGIN_DECLS
 

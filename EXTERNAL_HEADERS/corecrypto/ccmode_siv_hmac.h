@@ -1,7 +1,13 @@
-//
-//  ccmode_siv_hmac.h
-//  corecrypto
-//
+/* Copyright (c) (2019) Apple Inc. All rights reserved.
+ *
+ * corecrypto is licensed under Apple Inc.’s Internal Use License Agreement (which
+ * is contained in the License.txt file distributed with corecrypto) and only to 
+ * people who accept that license. IMPORTANT:  Any license rights granted to you by 
+ * Apple Inc. (if any) are limited to internal use within your organization only on 
+ * devices and computers you own or control, for the sole purpose of verifying the 
+ * security characteristics and correct functioning of the Apple Software.  You may 
+ * not, directly or indirectly, redistribute the Apple Software or any portions thereof.
+ */
 //  Created by Apple on 12/10/18.
 //
 
@@ -83,9 +89,9 @@ size_t ccsiv_hmac_ciphertext_size(ccsiv_hmac_ctx *ctx, size_t plaintext_size);
  @abstract   Return size of plaintext given a ciphertext length and mode.
 
  @param      ctx               Current siv_hmac context that has been previously initialized
- @param      ciphertext_size    Size of the ciphertext
+ @param      ciphertext_size    Size of the ciphertext (which includes the tag)
 
- @discussion returns the length of the aead ciphertext which is both the encrypted plaintext and tag length together.
+ @discussion returns the length of the plaintext which results from the decryption of a ciphertext of the corresponding size (here ciphertext size includes the tag).
  */
 size_t ccsiv_hmac_plaintext_size(ccsiv_hmac_ctx *ctx, size_t ciphertext_size);
 
@@ -155,7 +161,9 @@ int ccsiv_hmac_set_nonce(const struct ccmode_siv_hmac *mode, ccsiv_hmac_ctx *ctx
  @discussion This function is only called once. If one wishes to compute another (en)/(de)cryption, one resets the state with
  ccsiv_hmac_reset, and then begins the process again. There is no way to stream large plaintext/ciphertext inputs into the
  function.
- 
+ @param     out           Case1)  Tag+ Ciphertext (buffer should be already allocated and of length tag + plaintext length)
+                    Case 2) Plaintext (buffer should be already allocated and of length ciphertext - tag length
+
  In the case of a decryption, if there is a failure in verifying the computed tag against the provided tag (embedded int he ciphertext), then a decryption/verification
  failure is returned, and any internally computed plaintexts and tags are zeroed out.
  Lastly the contexts internal state is reset, so that a new decryption/encryption can be commenced.
@@ -185,8 +193,8 @@ int ccsiv_hmac_reset(const struct ccmode_siv_hmac *mode, ccsiv_hmac_ctx *ctx);
  @param      adata_nbytes       Length of the associated data.
  @param      adata              Associated data to be authenticated.
  @param      in_nbytes          Length of either the plaintext (for encryption) or ciphertext (for decryption)
- @param      in                 plaintext or ciphertext. Note that the ciphertext includes a tag of length tag_length prepended to
- it.
+ @param      in                 plaintext or ciphertext. Note that the ciphertext includes a tag of length tag_length prepended to it.
+ @param      out                Buffer to hold ciphertext/plaintext. (Note Ciphertext is of size plaintext length + tag_length and plaintext is of length ciphertext - tag_length.)
  */
 
 // One shot AEAD with only one input for adata, and a nonce.

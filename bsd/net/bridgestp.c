@@ -71,7 +71,6 @@
 #include <sys/socket.h>
 #include <sys/sockio.h>
 #include <sys/kernel.h>
-//#include <sys/callout.h>
 //#include <sys/module.h>
 #include <sys/proc.h>
 #include <sys/lock.h>

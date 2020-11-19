@@ -47,8 +47,7 @@
  * to read/write it.
  */
 
-// cpx_flags
-typedef uint32_t cpx_flags_t;
+// cpx_flags defined in cprotect.h
 enum {
 	CPX_SEP_WRAPPEDKEY                      = 0x01,
 	CPX_IV_AES_CTX_INITIALIZED      = 0x02,
@@ -63,27 +62,41 @@ enum {
 	CPX_WRITE_PROTECTABLE           = 0x40
 };
 
+/*
+ * variable-length CPX structure. See fixed-length variant in cprotect.h
+ */
 struct cpx {
 #if DEBUG
 	uint32_t                cpx_magic1;
 #endif
-	aes_encrypt_ctx cpx_iv_aes_ctx;         // Context used for generating the IV
+	aes_encrypt_ctx         *cpx_iv_aes_ctx_ptr;// Pointer to context used for generating the IV
 	cpx_flags_t             cpx_flags;
 	uint16_t                cpx_max_key_len;
 	uint16_t                cpx_key_len;
+	//fixed length up to here.  cpx_cached_key is variable-length
 	uint8_t                 cpx_cached_key[];
 };
+
+/* Allows us to switch between CPX types */
+typedef union cpxunion {
+	struct cpx cpx_var;
+	fcpx_t cpx_fixed;
+} cpxunion_t;
+
+ZONE_DECLARE(cpx_zone, "cpx",
+    sizeof(struct fcpx), ZC_ZFREE_CLEARMEM);
+ZONE_DECLARE(aes_ctz_zone, "AES ctx",
+    sizeof(aes_encrypt_ctx), ZC_ZFREE_CLEARMEM | ZC_NOENCRYPT);
+
+// Note: see struct fcpx defined in sys/cprotect.h
 
 // -- cpx_t accessors --
 
 size_t
-cpx_size(size_t key_size)
+cpx_size(size_t key_len)
 {
-	size_t size = sizeof(struct cpx) + key_size;
-
-#if DEBUG
-	size += 4; // Extra for magic
-#endif
+	// This should pick up the 'magic' word in DEBUG for free.
+	size_t size = sizeof(struct cpx) + key_len;
 
 	return size;
 }
@@ -95,7 +108,7 @@ cpx_sizex(const struct cpx *cpx)
 }
 
 cpx_t
-cpx_alloc(size_t key_len)
+cpx_alloc(size_t key_len, bool needs_ctx)
 {
 	cpx_t cpx = NULL;
 
@@ -105,6 +118,10 @@ cpx_alloc(size_t key_len)
 	 * This way, we can write-protect as needed.
 	 */
 	size_t cpsize = cpx_size(key_len);
+
+	// silence warning for needs_ctx
+	(void) needs_ctx;
+
 	if (cpsize < PAGE_SIZE) {
 		/*
 		 * Don't use MALLOC to allocate the page-sized structure.  Instead,
@@ -127,15 +144,56 @@ cpx_alloc(size_t key_len)
 		panic("cpx_size too large ! (%lu)", cpsize);
 	}
 #else
-	/* If key page write protection disabled, just switch to kernel MALLOC */
-	MALLOC(cpx, cpx_t, cpx_size(key_len), M_TEMP, M_WAITOK);
+	/* If key page write protection disabled, just switch to zalloc */
+
+	// error out if you try to request a key that's too big
+	if (key_len > VFS_CP_MAX_CACHEBUFLEN) {
+		return NULL;
+	}
+
+	// the actual key array is fixed-length, but the amount of usable content can vary, via 'key_len'
+	cpx = zalloc_flags(cpx_zone, Z_WAITOK | Z_ZERO);
+
+	// if our encryption type needs it, alloc the context
+	if (needs_ctx) {
+		cpx_alloc_ctx(cpx);
+	}
+
 #endif
 	cpx_init(cpx, key_len);
 
 	return cpx;
 }
 
-/* this is really a void function */
+int
+cpx_alloc_ctx(cpx_t cpx)
+{
+#if CONFIG_KEYPAGE_WP
+	(void) cpx;
+#else
+	if (cpx->cpx_iv_aes_ctx_ptr) {
+		// already allocated?
+		return 0;
+	}
+
+	cpx->cpx_iv_aes_ctx_ptr = zalloc_flags(aes_ctz_zone, Z_WAITOK | Z_ZERO);
+#endif // CONFIG_KEYPAGE_WP
+
+	return 0;
+}
+
+void
+cpx_free_ctx(cpx_t cpx)
+{
+#if CONFIG_KEYPAGE_WP
+	(void) cpx;
+# else
+	if (cpx->cpx_iv_aes_ctx_ptr) {
+		zfree(aes_ctz_zone, cpx->cpx_iv_aes_ctx_ptr);
+	}
+#endif // CONFIG_KEYPAGE_WP
+}
+
 void
 cpx_writeprotect(cpx_t cpx)
 {
@@ -179,8 +237,9 @@ cpx_free(cpx_t cpx)
 		return;
 	}
 #else
-	bzero(cpx->cpx_cached_key, cpx->cpx_max_key_len);
-	FREE(cpx, M_TEMP);
+	// free the context if it wasn't already freed
+	cpx_free_ctx(cpx);
+	zfree(cpx_zone, cpx);
 	return;
 #endif
 }
@@ -194,7 +253,8 @@ cpx_init(cpx_t cpx, size_t key_len)
 #endif
 	cpx->cpx_flags = 0;
 	cpx->cpx_key_len = 0;
-	cpx->cpx_max_key_len = key_len;
+	assert(key_len <= UINT16_MAX);
+	cpx->cpx_max_key_len = (uint16_t)key_len;
 }
 
 bool
@@ -307,16 +367,18 @@ cpx_key(const struct cpx *cpx)
 void
 cpx_set_aes_iv_key(struct cpx *cpx, void *iv_key)
 {
-	aes_encrypt_key128(iv_key, &cpx->cpx_iv_aes_ctx);
-	SET(cpx->cpx_flags, CPX_IV_AES_CTX_INITIALIZED | CPX_USE_OFFSET_FOR_IV);
-	CLR(cpx->cpx_flags, CPX_IV_AES_CTX_VFS);
+	if (cpx->cpx_iv_aes_ctx_ptr) {
+		aes_encrypt_key128(iv_key, cpx->cpx_iv_aes_ctx_ptr);
+		SET(cpx->cpx_flags, CPX_IV_AES_CTX_INITIALIZED | CPX_USE_OFFSET_FOR_IV);
+		CLR(cpx->cpx_flags, CPX_IV_AES_CTX_VFS);
+	}
 }
 
 aes_encrypt_ctx *
 cpx_iv_aes_ctx(struct cpx *cpx)
 {
 	if (ISSET(cpx->cpx_flags, CPX_IV_AES_CTX_INITIALIZED)) {
-		return &cpx->cpx_iv_aes_ctx;
+		return cpx->cpx_iv_aes_ctx_ptr;
 	}
 
 	SHA1_CTX sha1ctxt;
@@ -335,14 +397,16 @@ cpx_iv_aes_ctx(struct cpx *cpx)
 	cpx_set_aes_iv_key(cpx, digest);
 	SET(cpx->cpx_flags, CPX_IV_AES_CTX_VFS);
 
-	return &cpx->cpx_iv_aes_ctx;
+	return cpx->cpx_iv_aes_ctx_ptr;
 }
 
 void
 cpx_flush(cpx_t cpx)
 {
 	bzero(cpx->cpx_cached_key, cpx->cpx_max_key_len);
-	bzero(&cpx->cpx_iv_aes_ctx, sizeof(cpx->cpx_iv_aes_ctx));
+	if (cpx->cpx_iv_aes_ctx_ptr) {
+		bzero(cpx->cpx_iv_aes_ctx_ptr, sizeof(aes_encrypt_ctx));
+	}
 	cpx->cpx_flags = 0;
 	cpx->cpx_key_len = 0;
 }
@@ -361,7 +425,7 @@ cpx_copy(const struct cpx *src, cpx_t dst)
 	memcpy(cpx_key(dst), cpx_key(src), key_len);
 	dst->cpx_flags = src->cpx_flags;
 	if (ISSET(dst->cpx_flags, CPX_IV_AES_CTX_INITIALIZED)) {
-		dst->cpx_iv_aes_ctx = src->cpx_iv_aes_ctx;
+		*(dst->cpx_iv_aes_ctx_ptr) = *(src->cpx_iv_aes_ctx_ptr); // deep copy
 	}
 }
 

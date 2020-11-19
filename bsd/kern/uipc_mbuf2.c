@@ -108,14 +108,8 @@
 #include <sys/mcache.h>
 #include <netinet/in.h>
 #include <netinet/ip_var.h>
-#if INET6
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
-#endif /* INET6 */
-
-#if CONFIG_MACF_NET
-#include <security/mac_framework.h>
-#endif
 
 /*
  * ensure that [off, off + len) is contiguous on the mbuf chain "m".
@@ -399,7 +393,7 @@ m_tag_create(u_int32_t id, u_int16_t type, int len, int wait, struct mbuf *buf)
 
 	t->m_tag_cookie = M_TAG_VALID_PATTERN;
 	t->m_tag_type = type;
-	t->m_tag_len = len;
+	t->m_tag_len = (uint16_t)len;
 	t->m_tag_id = id;
 	if (len > 0) {
 		bzero(t + 1, len);
@@ -448,7 +442,7 @@ m_tag_alloc(u_int32_t id, u_int16_t type, int len, int wait)
 	VERIFY(IS_P2ALIGNED(t, sizeof(u_int64_t)));
 	t->m_tag_cookie = M_TAG_VALID_PATTERN;
 	t->m_tag_type = type;
-	t->m_tag_len = len;
+	t->m_tag_len = (uint16_t)len;
 	t->m_tag_id = id;
 	if (len > 0) {
 		bzero(t + 1, len);
@@ -461,13 +455,6 @@ m_tag_alloc(u_int32_t id, u_int16_t type, int len, int wait)
 void
 m_tag_free(struct m_tag *t)
 {
-#if CONFIG_MACF_NET
-	if (t != NULL &&
-	    t->m_tag_id == KERNEL_MODULE_TAG_ID &&
-	    t->m_tag_type == KERNEL_TAG_TYPE_MACLABEL) {
-		mac_mbuf_tag_destroy(t);
-	}
-#endif
 	if (t == NULL) {
 		return;
 	}
@@ -587,22 +574,6 @@ m_tag_copy(struct m_tag *t, int how)
 	if (p == NULL) {
 		return NULL;
 	}
-#if CONFIG_MACF_NET
-	/*
-	 * XXXMAC: we should probably pass off the initialization, and
-	 * copying here?  can we hid that KERNEL_TAG_TYPE_MACLABEL is
-	 * special from the mbuf code?
-	 */
-	if (t != NULL &&
-	    t->m_tag_id == KERNEL_MODULE_TAG_ID &&
-	    t->m_tag_type == KERNEL_TAG_TYPE_MACLABEL) {
-		if (mac_mbuf_tag_init(p, how) != 0) {
-			m_tag_free(p);
-			return NULL;
-		}
-		mac_mbuf_tag_copy(t, p);
-	} else
-#endif
 	bcopy(t + 1, p + 1, t->m_tag_len); /* Copy the data */
 	return p;
 }
@@ -903,5 +874,5 @@ m_sum16(struct mbuf *m, uint32_t off, uint32_t len)
 		/* NOTREACHED */
 	}
 
-	return os_cpu_in_cksum_mbuf(m, len, off, 0);
+	return (uint16_t)os_cpu_in_cksum_mbuf(m, len, off, 0);
 }

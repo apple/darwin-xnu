@@ -74,6 +74,12 @@ finish:
 
 /*********************************************************************
 *********************************************************************/
+
+// FIXME: Implementation of this function is hidden from the static analyzer.
+// The analyzer is worried about the lack of release and suggests
+// refactoring the code into the typical non-owning container pattern.
+// Feel free to remove the #ifndef and address the warning!
+#ifndef __clang_analyzer__
 OSReturn
 OSKextRetainKextWithLoadTag(uint32_t loadTag)
 {
@@ -108,9 +114,16 @@ OSKextRetainKextWithLoadTag(uint32_t loadTag)
 finish:
 	return result;
 }
+#endif // __clang_analyzer__
 
 /*********************************************************************
 *********************************************************************/
+
+// FIXME: Implementation of this function is hidden from the static analyzer.
+// The analyzer is worried about the double release and suggests
+// refactoring the code into the typical non-owning container pattern.
+// Feel free to remove the #ifndef and address the warning!
+#ifndef __clang_analyzer__
 OSReturn
 OSKextReleaseKextWithLoadTag(uint32_t loadTag)
 {
@@ -146,6 +159,7 @@ OSKextReleaseKextWithLoadTag(uint32_t loadTag)
 finish:
 	return result;
 }
+#endif // __clang_analyzer__
 
 /*********************************************************************
 * Not to be called by the kext being unloaded!
@@ -270,7 +284,7 @@ kext_request(
 	}
 
 	if (isMkext) {
-#ifdef SECURE_KERNEL
+#if defined(SECURE_KERNEL) || !CONFIG_KXLD
 		// xxx - something tells me if we have a secure kernel we don't even
 		// xxx - want to log a message here. :-)
 		*op_result = KERN_NOT_SUPPORTED;
@@ -363,21 +377,32 @@ finish:
 * Gets the vm_map for the current kext
 *********************************************************************/
 extern vm_offset_t segPRELINKTEXTB;
+extern vm_offset_t segLINKB;
 extern unsigned long segSizePRELINKTEXT;
-extern int kth_started;
 extern vm_map_t g_kext_map;
 
 vm_map_t
 kext_get_vm_map(kmod_info_t *info)
 {
 	vm_map_t kext_map = NULL;
+	kc_format_t kcformat;
 
-	/* Set the vm map */
-	if ((info->address >= segPRELINKTEXTB) &&
-	    (info->address < (segPRELINKTEXTB + segSizePRELINKTEXT))) {
-		kext_map = kernel_map;
+	if (PE_get_primary_kc_format(&kcformat) && kcformat == KCFormatFileset) {
+		/* Check if the kext is from the boot KC */
+		assert(segLINKB >= (segPRELINKTEXTB + segSizePRELINKTEXT));
+		if ((info->address >= segPRELINKTEXTB) &&
+		    (info->address < segLINKB)) {
+			kext_map = kernel_map;
+		} else {
+			kext_map = g_kext_map;
+		}
 	} else {
-		kext_map = g_kext_map;
+		if ((info->address >= segPRELINKTEXTB) &&
+		    (info->address < (segPRELINKTEXTB + segSizePRELINKTEXT))) {
+			kext_map = kernel_map;
+		} else {
+			kext_map = g_kext_map;
+		}
 	}
 
 	return kext_map;

@@ -10,6 +10,20 @@ from core.lazytarget import *
 import time
 import xnudefines
 import memory
+import json
+
+def GetProcName(proc):
+    """ returns a string name of the process. Longer variant is preffered if provided.
+        params:
+            proc: value object representing a proc in the kernel.
+        returns:
+            str: a string name of the process linked to the task.
+    """
+    name = str(proc.p_name)
+    if name != '':
+        return name
+    else:
+        return str(proc.p_comm)
 
 def GetProcNameForTask(task):
     """ returns a string name of the process. if proc is not valid "unknown" is returned
@@ -21,7 +35,8 @@ def GetProcNameForTask(task):
     if not task or not unsigned(task.bsd_info):
         return "unknown"
     p = Cast(task.bsd_info, 'proc *')
-    return str(p.p_comm)
+
+    return GetProcName(p)
 
 def GetProcPIDForTask(task):
     """ returns a int pid of the process. if the proc is not valid, val[5] from audit_token is returned.
@@ -33,7 +48,7 @@ def GetProcPIDForTask(task):
     if task and unsigned(task.bsd_info):
         p = Cast(task.bsd_info, 'proc *')
         return unsigned(p.p_pid)
-    
+
     if task :
         return unsigned(task.audit_token.val[5])
 
@@ -47,9 +62,9 @@ def GetProcInfo(proc):
             str : A string describing various information for process.
     """
     out_string = ""
-    out_string += ("Process {p: <#020x}\n\tname {p.p_comm: <20s}\n\tpid:{p.p_pid: <6d} " + 
+    out_string += ("Process {p: <#020x}\n\tname {0: <32s}\n\tpid:{p.p_pid: <6d} " +
                    "task:{p.task: <#020x} p_stat:{p.p_stat: <6d} parent pid: {p.p_ppid: <6d}\n"
-                   ).format(p=proc)
+                   ).format(GetProcName(proc), p=proc)
     #print the Creds
     ucred = proc.p_ucred
     if ucred:
@@ -86,7 +101,7 @@ def GetProcNameForPid(pid):
     """
     for p in kern.procs:
         if int(p.p_pid) == int(pid):
-            return str(p.p_comm)
+            return GetProcName(p)
     return "Unknown"
 
 def GetProcForPid(search_pid):
@@ -606,7 +621,7 @@ def ShowTaskCoalitions(cmd_args=None, cmd_options={}):
 # EndMacro: showtaskcoalitions
 
 @lldb_type_summary(['proc', 'proc *'])
-@header("{0: >6s}   {1: <18s} {2: >11s} {3: ^10s} {4: <20s}".format("pid", "process", "io_policy", "wq_state", "command"))
+@header("{0: >6s}   {1: <18s} {2: >11s} {3: ^10s} {4: <32s}".format("pid", "process", "io_policy", "wq_state", "command"))
 def GetProcSummary(proc):
     """ Summarize the process data. 
         params:
@@ -615,7 +630,7 @@ def GetProcSummary(proc):
           str - string summary of the process.
     """
     out_string = ""
-    format_string= "{0: >6d}   {1: <#018x} {2: >11s} {3: >2d} {4: >2d} {5: >2d}   {6: <20s}"
+    format_string= "{0: >6d}   {1: <#018x} {2: >11s} {3: >2d} {4: >2d} {5: >2d}   {6: <32s}"
     pval = proc.GetSBValue()
     #code.interact(local=locals())
     if str(pval.GetType()) != str(gettype('proc *')) :
@@ -665,7 +680,7 @@ def GetProcSummary(proc):
         wq_num_threads = -1
         wq_idle_threads = -1
         wq_req_threads = -1
-    process_name = str(proc.p_comm)
+    process_name = GetProcName(proc)
     if process_name == 'xpcproxy':
         for thread in IterateQueue(task.threads, 'thread *', 'task_threads'):
             thread_name = GetThreadName(thread)
@@ -798,8 +813,8 @@ def ShowProcFiles(cmd_args=None):
     while count <= proc_lastfile:
         if unsigned(proc_ofiles[count]) != 0:
             out_str = ''
-            proc_fd_flags = proc_ofiles[count].f_flags
-            proc_fd_fglob = proc_ofiles[count].f_fglob
+            proc_fd_flags = proc_ofiles[count].fp_flags
+            proc_fd_fglob = proc_ofiles[count].fp_glob
             out_str += "{0: <5d} ".format(count)
             out_str += "{0: <#18x} ".format(unsigned(proc_fd_fglob))
             out_str += "0x{0:0>8x} ".format(unsigned(proc_fd_flags))
@@ -966,7 +981,7 @@ def DumpCallQueue(cmd_args=None):
 def ShowAllTaskIOStats(cmd_args=None):
     """ Commad to print I/O stats for all tasks
     """
-    print "{0: <20s} {1: <20s} {2: <20s} {3: <20s} {4: <20s} {5: <20s} {6: <20s} {7: <20s} {8: <20s} {9: <20s}".format("task", "Immediate Writes", "Deferred Writes", "Invalidated Writes", "Metadata Writes", "Immediate Writes to External", "Deferred Writes to External", "Invalidated Writes to External", "Metadata Writes to External", "name")
+    print "{0: <20s} {1: <20s} {2: <20s} {3: <20s} {4: <20s} {5: <20s} {6: <20s} {7: <20s} {8: <20s} {9: <32}".format("task", "Immediate Writes", "Deferred Writes", "Invalidated Writes", "Metadata Writes", "Immediate Writes to External", "Deferred Writes to External", "Invalidated Writes to External", "Metadata Writes to External", "name")
     for t in kern.tasks:
         pval = Cast(t.bsd_info, 'proc *')
         print "{0: <#18x} {1: >20d} {2: >20d} {3: >20d} {4: >20d}  {5: <20s} {6: <20s} {7: <20s} {8: <20s} {9: <20s}".format(t,
@@ -978,7 +993,7 @@ def ShowAllTaskIOStats(cmd_args=None):
             t.task_writes_counters_external.task_deferred_writes,
             t.task_writes_counters_external.task_invalidated_writes,
             t.task_writes_counters_external.task_metadata_writes,
-            str(pval.p_comm)) 
+            GetProcName(pval))
 
 
 @lldb_command('showalltasks','C', fancy=True)
@@ -1018,7 +1033,7 @@ def TaskForPmap(cmd_args=None):
     print GetTaskSummary.header + " " + GetProcSummary.header
     for tasklist in [kern.tasks, kern.terminated_tasks]:
         for t in tasklist:
-            if t.map.pmap == pmap:
+            if kern.GetValueFromAddress(unsigned(t.map.pmap), 'pmap_t') == pmap:
                 pval = Cast(t.bsd_info, 'proc *')
                 out_str = GetTaskSummary(t) + " " + GetProcSummary(pval)
                 print out_str
@@ -1070,7 +1085,7 @@ def FindTasksByName(searchstr, ignore_case=True):
     retval = []
     for t in kern.tasks: 
         pval = Cast(t.bsd_info, "proc *")
-        process_name = "{:s}".format(pval.p_comm)
+        process_name = "{:s}".format(GetProcName(pval))
         if search_regex.search(process_name):
             retval.append(t)
     return retval
@@ -1418,8 +1433,8 @@ def ShowProcTree(cmd_args=None):
     out_string = hdr_format.format("PID", "PROCESS", "POINTER")
     out_string += hdr_format.format('='*3, '='*7, '='*7)
     proc = GetProcForPid(search_pid)
-    out_string += "{0: <6d} {1: <14s} [ {2: #019x} ]\n".format(proc.p_ppid, proc.p_pptr.p_comm, unsigned(proc.p_pptr))
-    out_string += "|--{0: <6d} {1: <16s} [ {2: #019x} ]\n".format(proc.p_pid, proc.p_comm, unsigned(proc))
+    out_string += "{0: <6d} {1: <32s} [ {2: #019x} ]\n".format(proc.p_ppid, GetProcName(proc.p_pptr), unsigned(proc.p_pptr))
+    out_string += "|--{0: <6d} {1: <32s} [ {2: #019x} ]\n".format(proc.p_pid, GetProcName(proc), unsigned(proc))
     print out_string
     ShowProcTreeRecurse(proc, "|  ")
     
@@ -1436,7 +1451,7 @@ def ShowProcTreeRecurse(proc, prefix=""):
         head_ptr = proc.p_children.lh_first
         
         for p in IterateListEntry(proc.p_children, 'struct proc *', 'p_sibling'):
-            print prefix + "|--{0: <6d} {1: <16s} [ {2: #019x} ]\n".format(p.p_pid, p.p_comm, unsigned(p))
+            print prefix + "|--{0: <6d} {1: <32s} [ {2: #019x} ]\n".format(p.p_pid, GetProcName(p), unsigned(p))
             ShowProcTreeRecurse(p, prefix + "|  ")
 
 @lldb_command('showthreadfortid')
@@ -1507,115 +1522,203 @@ def GetProcessorSummary(processor):
             preemption_disable_str)
     return out_str   
 
-def GetLedgerEntrySummary(ledger_template, ledger, i, show_footprint_interval_max=False):
+def GetLedgerEntry(ledger_template, ledger, i):
     """ Internal function to get internals of a ledger entry (*not* a ledger itself)
         params: ledger_template - value representing struct ledger_template_t for the task or thread
                 ledger - value representing struct ledger_entry *
-        return: str - formatted output information of ledger entries
+        return: entry - entry dictionary
     """
     ledger_limit_infinity = (uint64_t(0x1).value << 63) - 1
     lf_refill_scheduled = 0x0400
     lf_tracking_max = 0x4000
 
-    out_str = ''
     now = unsigned(kern.globals.sched_tick) / 20
     lim_pct = 0
 
-    out_str += "{: >32s} {:<2d}:".format(ledger_template.lt_entries[i].et_key, i)
-    out_str += "{: >15d} ".format(unsigned(ledger.le_credit) - unsigned(ledger.le_debit))
+    entry = {}
+
+    entry["key"] = str(ledger_template.lt_entries[i].et_key)
+    entry["credit"] = unsigned(ledger.le_credit)
+    entry["debit"] = unsigned(ledger.le_debit)
+    entry["balance"] = entry["credit"] - entry["debit"]
     if (ledger.le_flags & lf_tracking_max):
-        if (show_footprint_interval_max):
-            out_str += "{:12d} ".format(ledger._le._le_max.le_interval_max)
-        out_str += "{:14d} ".format(ledger._le._le_max.le_lifetime_max)
-    else:
-        if (show_footprint_interval_max):
-            out_str += "           - "
-        out_str += "             - "
-    out_str += "{:12d} {:12d} ".format(unsigned(ledger.le_credit), unsigned(ledger.le_debit))
+        entry["interval_max"] = unsigned(ledger._le._le_max.le_interval_max)
+        entry["lifetime_max"] = unsigned(ledger._le._le_max.le_lifetime_max)
+
     if (unsigned(ledger.le_limit) != ledger_limit_infinity):
-        out_str += "{:12d} ".format(unsigned(ledger.le_limit))
+        entry["limit"] = unsigned(ledger.le_limit)
+
+    if (ledger.le_flags & lf_refill_scheduled):
+        entry["refill_period"] = unsigned (ledger._le.le_refill.le_refill_period)
+
+    if (unsigned(ledger.le_warn_percent) < 65535):
+        entry["warn_percent"] = unsigned (ledger.le_warn_percent * 100 / 65536)
+    entry["flags"] = int(ledger.le_flags)
+
+    return entry
+
+def FormatLedgerEntrySummary(entry, i, show_footprint_interval_max=False):
+    """ internal function to format a ledger entry into a string
+        params: entry - A python dictionary containing the ledger entry
+        return: str - formatted output information of ledger entries
+    """
+    out_str = ''
+    out_str += "{: >32s} {:<2d}:".format(entry["key"], i)
+    out_str += "{: >15d} ".format(entry["balance"])
+
+    if (show_footprint_interval_max):
+        if entry.has_key("interval_max"):
+            out_str += "{:12d} ".format(entry["interval_max"])
+        else:
+            out_str += "           - "
+
+    if entry.has_key("lifetime_max"):
+        out_str += "{:14d} ".format(entry["lifetime_max"])
+    else:
+        out_str += "             - "
+
+    out_str += "{:12d} {:12d} ".format(entry["credit"], entry["debit"])
+    if entry.has_key("limit"):
+        out_str += "{:12d} ".format(unsigned(entry["limit"]))
     else:
         out_str += "           - "
 
-    if (ledger.le_flags & lf_refill_scheduled):
-        out_str += "{:15d} ".format(ledger._le.le_refill.le_refill_period)
+    if entry.has_key("refill_period"):
+        out_str += "{:15d} ".format(entry["refill_period"])
+        out_str += "{:9d} ".format((entry["limit"] * 100) / entry["refill_period"])
     else:
         out_str += "              - "
+        out_str += "        - "
 
-    if (ledger.le_flags & lf_refill_scheduled):
-        out_str += "{:9d} ".format((unsigned(ledger.le_limit) * 100) / ledger._le.le_refill.le_refill_period)
+    if entry.has_key("warn_percent"):
+        out_str += "{:9d} ".format(entry["warn_percent"])
     else:
         out_str += "        - "
 
-    if (unsigned(ledger.le_warn_percent) < 65535):
-        out_str += "{:9d} ".format(unsigned(ledger.le_warn_percent * 100. / 65536))
-    else:
-        out_str += "        - "
-
-    if ((unsigned(ledger.le_credit) - unsigned(ledger.le_debit)) > unsigned(ledger.le_limit)):
-        out_str += "    X "
+    if entry.has_key("limit"):
+        if entry["balance"] > entry["limit"]:
+            out_str += "    X "
+        else:
+            out_str += "      "
     else:
         out_str += "      "
 
-    out_str += "{:#8x}\n".format(ledger.le_flags)
+    out_str += "{:#8x}\n".format(entry["flags"])
     return out_str
 
-def GetThreadLedgerSummary(thread_val):
-    """ Internal function to get a summary of ledger entries for the given thread
-        params: thread - value representing struct thread *
-        return: str - formatted output information for ledger entries of the input thread
+def GetLedgerEntrySummary(ledger_template, ledger, i, show_footprint_interval_max=False):
+    """ internal function to get internals of a ledger entry (*not* a ledger itself)
+        params: ledger_template - value representing struct ledger_template_t for the task or thread
+                ledger - value representing struct ledger_entry *
+        return: str - formatted output information of ledger entries
     """
-    out_str = "   [{:#08x}]\n".format(thread_val)
+    entry = GetLedgerEntry(ledger_template, ledger, i)
+    return FormatLedgerEntrySummary(entry, i)
+
+
+def GetThreadLedgers(thread_val):
+    """ Internal function to get a summary of ledger entries for the given thread
+        params: thread_val - value representing struct thread *
+        return: thread - python dictionary containing threads's ledger entries. This can 
+        be printed directly with FormatThreadLedgerSummmary or outputted as json.
+    """
+    thread = {}
+    thread["address"] = unsigned(thread_val)
     ledgerp = thread_val.t_threadledger
+    thread["entries"] = []
     if ledgerp:
         i = 0
         while i != ledgerp.l_template.lt_cnt:
-            out_str += GetLedgerEntrySummary(kern.globals.thread_ledger_template,
-                ledgerp.l_entries[i], i)
+            thread["entries"].append(GetLedgerEntry(kern.globals.thread_ledger_template,
+                ledgerp.l_entries[i], i))
             i = i + 1
+    return thread
+
+def FormatThreadLedgerSummary(thread):
+    """ Internal function to print a thread's ledger entries
+        params: thread - python dictionary containing thread's ledger entries
+        return: str - formatted output information for ledger entries of the input thread
+    """
+    out_str = "   [{:#08x}]\n".format(thread["address"])
+    entries = thread["entries"]
+    for i, entry in enumerate(entries):
+        out_str += FormatLedgerEntrySummary(entry, i)
     return out_str
 
-def GetTaskLedgers(task_val, show_footprint_interval_max=False):
+def GetTaskLedgers(task_val):
+    """ Internal function to get summary of ledger entries from the task and its threads
+        params: task_val - value representing struct task *
+        return: task - python dictionary containing tasks's ledger entries. This can 
+        be printed directly with FormatTaskLedgerSummary or outputted as json.
+    """
+    task_ledgerp = task_val.ledger
+    i = 0
+    tasks = []
+    task = {}
+    task["address"] = unsigned(task_val)
+
+    pval = Cast(task_val.bsd_info, 'proc *')
+    if pval:
+        task["name"] = GetProcName(pval)
+        task["pid"] = int(pval.p_pid)
+
+    task["entries"] = []
+    while i != task_ledgerp.l_template.lt_cnt:
+        task["entries"].append(GetLedgerEntry(kern.globals.task_ledger_template, task_ledgerp.l_entries[i], i))
+        i = i + 1
+
+    # Now walk threads
+    task["threads"] = []
+    for thval in IterateQueue(task_val.threads, 'thread *', 'task_threads'):
+        task["threads"].append(GetThreadLedgers(thval))
+
+    return task
+
+@header("{0: <15s} {1: >16s} {2: <2s} {3: >15s} {4: >14s} {5: >12s} {6: >12s} {7: >12s}   {8: <15s} {9: <8s} {10: <9s} {11: <6s} {12: >6s}".format(
+            "task [thread]", "entry", "#", "balance", "lifetime_max", "credit",
+            "debit", "limit", "refill period", "lim pct", "warn pct", "over?", "flags"))
+def FormatTaskLedgerSummary(task, show_footprint_interval_max=False):
     """ Internal function to get summary of ledger entries from the task and its threads
         params: task_val - value representing struct task *
         return: str - formatted output information for ledger entries of the input task
     """
     out_str = ''
-    task_ledgerp = task_val.ledger
-    i = 0
-    out_str += "{: #08x} ".format(task_val)
-    pval = Cast(task_val.bsd_info, 'proc *')
-    if pval:
-        out_str += "{: <5s}:\n".format(pval.p_comm)
+    out_str += "{: #08x} ".format(task["address"])
+    if task.has_key("name"):
+        out_str += "{: <5s}:\n".format(task["name"])
     else:
-        out_str += "Invalid process:\n"
-    while i != task_ledgerp.l_template.lt_cnt:
-        out_str += GetLedgerEntrySummary(kern.globals.task_ledger_template, task_ledgerp.l_entries[i], i, show_footprint_interval_max)
-        i = i + 1
+        out_str += "Invalid process\n"
 
-    # Now walk threads
-    for thval in IterateQueue(task_val.threads, 'thread *', 'task_threads'):
-        out_str += GetThreadLedgerSummary(thval)
+    for i, entry in enumerate(task["entries"]):
+        out_str += FormatLedgerEntrySummary(entry, i, show_footprint_interval_max)
 
+    for thread in task["threads"]:
+        out_str += FormatThreadLedgerSummary(thread)
     return out_str
+
 
 # Macro: showtaskledgers
 
-@lldb_command('showtaskledgers', 'F:I') 
+@lldb_command('showtaskledgers', 'JF:I') 
 def ShowTaskLedgers(cmd_args=None, cmd_options={}):
     """  Routine to print a summary  of ledger entries for the task and all of its threads
-         or   : showtaskledgers [ -I ] [ -F ] <task>
+         or   : showtaskledgers [ -I ] [-J] [ -F ] <task>
          options:
             -I: show footprint interval max (DEV/DEBUG only)
             -F: specify task via name instead of address
+            -J: output json
         -
     """
+    print_json = False
     if "-F" in cmd_options:
         task_list = FindTasksByName(cmd_options["-F"])
         for tval in task_list:
-            print GetTaskLedgers.header
-            print GetTaskLedgers(tval)
+            print FormatTaskLedgerSummary.header
+            ledgers = GetTaskLedgers(tval)
+            print FormatTaskLedgerSummary(ledgers)
         return
+    if "-J" in cmd_options:
+        print_json = True
     
     if not cmd_args:
         raise ArgumentError("No arguments passed.")
@@ -1625,28 +1728,40 @@ def ShowTaskLedgers(cmd_args=None, cmd_options={}):
     tval = kern.GetValueFromAddress(cmd_args[0], 'task *')
     if not tval:
         raise ArgumentError("unknown arguments: %r" %cmd_args)
-    if (show_footprint_interval_max):
-        print "{0: <15s} {1: >16s} {2: <2s} {3: >15s} {4: >12s} {5: >14s} {6: >12s} {7: >12s} {8: >12s}   {9: <15s} {10: <8s} {11: <9s} {12: <6s} {13: >6s}".format(
-        "task [thread]", "entry", "#", "balance", "intrvl_max", "lifetime_max", "credit",
-        "debit", "limit", "refill period", "lim pct", "warn pct", "over?", "flags")
+    ledgers = GetTaskLedgers(tval)
+    if print_json:
+        print json.dumps(ledgers)
     else:
-        print "{0: <15s} {1: >16s} {2: <2s} {3: >15s} {4: >14s} {5: >12s} {6: >12s} {7: >12s}   {8: <15s} {9: <8s} {10: <9s} {11: <6s} {12: >6s}".format(
-        "task [thread]", "entry", "#", "balance", "lifetime_max", "credit",
-        "debit", "limit", "refill period", "lim pct", "warn pct", "over?", "flags")
-    print GetTaskLedgers(tval, show_footprint_interval_max)
+        if (show_footprint_interval_max):
+            print "{0: <15s} {1: >16s} {2: <2s} {3: >15s} {4: >12s} {5: >14s} {6: >12s} {7: >12s} {8: >12s}   {9: <15s} {10: <8s} {11: <9s} {12: <6s} {13: >6s}".format(
+            "task [thread]", "entry", "#", "balance", "intrvl_max", "lifetime_max", "credit",
+            "debit", "limit", "refill period", "lim pct", "warn pct", "over?", "flags")
+        else:
+            print FormatTaskLedgerSummary.header
+        print FormatTaskLedgerSummary(ledgers, show_footprint_interval_max)
 
 # EndMacro: showtaskledgers
 
 # Macro: showalltaskledgers
 
-@lldb_command('showalltaskledgers') 
+@lldb_command('showalltaskledgers', "J") 
 def ShowAllTaskLedgers(cmd_args=None, cmd_options={}):
     """  Routine to print a summary  of ledger entries for all tasks and respective threads
-         Usage: showalltaskledgers
+         Usage: showalltaskledgers [-J]
+            -J      : Output json
     """
+    print_json = False
+    if "-J" in cmd_options:
+        print_json = True
+    tasks = []
     for t in kern.tasks:
         task_val = unsigned(t)
-        ShowTaskLedgers([task_val], cmd_options=cmd_options)
+        if not print_json:
+            ShowTaskLedgers([task_val], cmd_options=cmd_options)
+        else:
+            tasks.append(GetTaskLedgers(t))
+    if print_json:
+        print json.dumps(tasks)
     
 # EndMacro: showalltaskledgers
 
@@ -1832,7 +1947,7 @@ def ShowAllPte(cmd_args=None):
         procp = Cast(taskp.bsd_info, 'proc *')
         out_str = "task = {:#x} pte = {:#x}\t".format(taskp, taskp.map.pmap.ttep)
         if procp != 0:
-            out_str += "{:s}\n".format(procp.p_comm)
+            out_str += "{:s}\n".format(GetProcName(procp))
         else:
             out_str += "\n"
         print out_str
@@ -1920,7 +2035,7 @@ def ShowProcFilesSummary(cmd_args=None):
                 if unsigned(proc_ofiles[count]) != 0:
                     proc_file_count += 1
                 count += 1
-        print "{0: <#020x} {1: <20s} {2: >10d}".format(proc, proc.p_comm, proc_file_count)
+        print "{0: <#020x} {1: <32s} {2: >10d}".format(proc, GetProcName(proc), proc_file_count)
 
 #EndMacro: showprocfilessummary
 
@@ -2080,7 +2195,7 @@ def Showstackafterthread(cmd_args = None):
 
             if(thval==threadval):
                pval = Cast(t.bsd_info, 'proc *')
-               process_name = "{:s}".format(pval.p_comm)
+               process_name = "{:s}".format(GetProcName(pval))
                print "\n\n"
                print " *** Continuing to dump the thread stacks from the process *** :" + " " + process_name
                print "\n\n"

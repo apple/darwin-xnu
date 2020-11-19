@@ -44,17 +44,9 @@ struct ecc_event                ecc_data[ECC_EVENT_BUFFER_COUNT];
 static uint32_t                 ecc_data_next_read;
 static uint32_t                 ecc_data_next_write;
 static boolean_t                ecc_data_empty = TRUE; // next read == next write : empty or full?
-static lck_grp_t                *ecc_data_lock_group;
-static lck_spin_t               ecc_data_lock;
+static LCK_GRP_DECLARE(ecc_data_lock_group, "ecc-data");
+static LCK_SPIN_DECLARE(ecc_data_lock, &ecc_data_lock_group);
 static uint32_t                 ecc_correction_count;
-
-void
-ecc_log_init()
-{
-	ecc_data_lock_group = lck_grp_alloc_init("ecc-data", NULL);
-	lck_spin_init(&ecc_data_lock, ecc_data_lock_group, NULL);
-	OSMemoryBarrier();
-}
 
 uint32_t
 ecc_log_get_correction_count()

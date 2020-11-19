@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -166,8 +166,9 @@ typedef struct apple_protect_pager {
  */
 int apple_protect_pager_count = 0;              /* number of pagers */
 int apple_protect_pager_count_mapped = 0;       /* number of unmapped pagers */
-queue_head_t apple_protect_pager_queue;
-decl_lck_mtx_data(, apple_protect_pager_lock);
+queue_head_t apple_protect_pager_queue = QUEUE_HEAD_INITIALIZER(apple_protect_pager_queue);
+LCK_GRP_DECLARE(apple_protect_pager_lck_grp, "apple_protect");
+LCK_MTX_DECLARE(apple_protect_pager_lock, &apple_protect_pager_lck_grp);
 
 /*
  * Maximum number of unmapped pagers we're willing to keep around.
@@ -182,10 +183,6 @@ int apple_protect_pager_count_unmapped_max = 0;
 int apple_protect_pager_num_trim_max = 0;
 int apple_protect_pager_num_trim_total = 0;
 
-
-lck_grp_t               apple_protect_pager_lck_grp;
-lck_grp_attr_t  apple_protect_pager_lck_grp_attr;
-lck_attr_t              apple_protect_pager_lck_attr;
 
 
 /* internal prototypes */
@@ -219,17 +216,6 @@ int apple_protect_pagerdebug = 0;
 #else
 #define PAGER_DEBUG(LEVEL, A)
 #endif
-
-
-void
-apple_protect_pager_bootstrap(void)
-{
-	lck_grp_attr_setdefault(&apple_protect_pager_lck_grp_attr);
-	lck_grp_init(&apple_protect_pager_lck_grp, "apple_protect", &apple_protect_pager_lck_grp_attr);
-	lck_attr_setdefault(&apple_protect_pager_lck_attr);
-	lck_mtx_init(&apple_protect_pager_lock, &apple_protect_pager_lck_grp, &apple_protect_pager_lck_attr);
-	queue_init(&apple_protect_pager_queue);
-}
 
 /*
  * apple_protect_pager_init()
@@ -470,7 +456,7 @@ retry_src_fault:
 			if (vm_page_wait(interruptible)) {
 				goto retry_src_fault;
 			}
-		/* fall thru */
+			OS_FALLTHROUGH;
 		case VM_FAULT_INTERRUPTED:
 			retval = MACH_SEND_INTERRUPTED;
 			goto done;
@@ -478,7 +464,7 @@ retry_src_fault:
 			/* success but no VM page: fail */
 			vm_object_paging_end(src_top_object);
 			vm_object_unlock(src_top_object);
-		/*FALLTHROUGH*/
+			OS_FALLTHROUGH;
 		case VM_FAULT_MEMORY_ERROR:
 			/* the page is not there ! */
 			if (error_code) {
@@ -525,7 +511,7 @@ retry_src_fault:
 		 */
 		if (src_page_object->code_signed) {
 			vm_page_validate_cs_mapped(
-				src_page,
+				src_page, PAGE_SIZE, 0,
 				(const void *) src_vaddr);
 		}
 		/*
@@ -717,7 +703,10 @@ done:
 			}
 		} else {
 			boolean_t empty;
-			upl_commit_range(upl, 0, upl->size,
+			assertf(page_aligned(upl->u_offset) && page_aligned(upl->u_size),
+			    "upl %p offset 0x%llx size 0x%x",
+			    upl, upl->u_offset, upl->u_size);
+			upl_commit_range(upl, 0, upl->u_size,
 			    UPL_COMMIT_CS_VALIDATED | UPL_COMMIT_WRITTEN_BY_KERNEL,
 			    upl_pl, pl_count, &empty);
 		}

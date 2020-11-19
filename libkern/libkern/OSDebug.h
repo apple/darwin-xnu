@@ -62,7 +62,7 @@ __END_DECLS
 
 #define TRACE_MACHLEAKS(a, b, c, d)        \
 do {                                    \
-    if (log_leaks)                      \
+    if (__builtin_expect(!!log_leaks, 0))                      \
 	trace_backtrace(a,b,c,d);       \
 } while(0)
 

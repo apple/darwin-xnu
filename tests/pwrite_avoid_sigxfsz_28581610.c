@@ -64,10 +64,9 @@ T_DECL(pwrite, "Tests avoiding SIGXFSZ with pwrite and odd offsets",
 	T_SETUPEND;
 
 	/* we want to get the EFBIG errno but without a SIGXFSZ signal */
-	T_EXPECTFAIL;
 	if (!sigsetjmp(xfsz_jmpbuf, 1)) {
 		signal(SIGXFSZ, xfsz_signal);
-		ret = pwrite(fd, buffer, sizeof buffer, LONG_MAX);
+		ret = pwrite(fd, buffer, sizeof buffer, QUAD_MAX);
 		T_ASSERT_TRUE(((ret == -1) && (errno == EFBIG)),
 		    "large offset %d", 13);
 	} else {
@@ -78,11 +77,6 @@ T_DECL(pwrite, "Tests avoiding SIGXFSZ with pwrite and odd offsets",
 
 	/* Negative offsets are invalid, no SIGXFSZ signals required */
 	for (x = 0; offs[x] != 0; x++) {
-		/* only -1 gives the correct result */
-		if (-1 != offs[x]) {
-			T_EXPECTFAIL;
-		}
-
 		if (!sigsetjmp(xfsz_jmpbuf, 1)) {
 			signal(SIGXFSZ, xfsz_signal);
 			ret = pwrite(fd, buffer, sizeof buffer, offs[x]);

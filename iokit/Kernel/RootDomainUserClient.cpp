@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2012 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1998-2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -328,7 +328,8 @@ RootDomainUserClient::externalMethod(
 		break;
 
 	case kPMSetClamshellSleepState:
-		fOwner->setDisableClamShellSleep(arguments->scalarInput[0] ? true : false);
+		fOwner->setClamShellSleepDisable(arguments->scalarInput[0] ? true : false,
+		    IOPMrootDomain::kClamshellSleepDisablePowerd);
 		ret = kIOReturnSuccess;
 		break;
 

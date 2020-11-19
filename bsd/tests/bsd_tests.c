@@ -49,6 +49,9 @@
 #ifdef __arm64__
 extern kern_return_t arm64_lock_test(void);
 #endif
+#if defined(__arm__) || defined(__arm64__)
+extern kern_return_t pmap_test(void);
+#endif /* defined(__arm__) || defined(__arm64__) */
 kern_return_t kalloc_test(void);
 kern_return_t ipi_test(void);
 #if defined(KERNEL_INTEGRITY_CTRR)
@@ -66,6 +69,9 @@ struct xnupost_test bsd_post_tests[] = {
 #ifdef __arm64__
 	XNUPOST_TEST_CONFIG_BASIC(arm64_lock_test),
 #endif
+#if defined(__arm__) || defined(__arm64__)
+	XNUPOST_TEST_CONFIG_BASIC(pmap_test),
+#endif /* defined(__arm__) || defined(__arm64__) */
 #if defined(KERNEL_INTEGRITY_CTRR)
 	XNUPOST_TEST_CONFIG_BASIC(ctrr_test),
 #endif
@@ -172,46 +178,46 @@ xnupost_copyout_test(xnupost_test_t t, mach_vm_address_t outaddr)
 {
 	/* code to copyout test config */
 	int kret         = 0;
-	uint32_t namelen = 0;
+	size_t namelen = 0;
 
-	kret = copyout(&t->xt_config, outaddr, sizeof(uint16_t));
+	kret = copyout(&t->xt_config, (user_addr_t)outaddr, sizeof(uint16_t));
 	if (kret) {
 		return kret;
 	}
 	outaddr += sizeof(uint16_t);
 
-	kret = copyout(&t->xt_test_num, outaddr, sizeof(uint16_t));
+	kret = copyout(&t->xt_test_num, (user_addr_t)outaddr, sizeof(uint16_t));
 	if (kret) {
 		return kret;
 	}
 	outaddr += sizeof(uint16_t);
 
-	kret = copyout(&t->xt_retval, outaddr, sizeof(uint32_t));
+	kret = copyout(&t->xt_retval, (user_addr_t)outaddr, sizeof(uint32_t));
 	if (kret) {
 		return kret;
 	}
 	outaddr += sizeof(uint32_t);
 
-	kret = copyout(&t->xt_expected_retval, outaddr, sizeof(uint32_t));
+	kret = copyout(&t->xt_expected_retval, (user_addr_t)outaddr, sizeof(uint32_t));
 	if (kret) {
 		return kret;
 	}
 	outaddr += sizeof(uint32_t);
 
-	kret = copyout(&t->xt_begin_time, outaddr, sizeof(uint64_t));
+	kret = copyout(&t->xt_begin_time, (user_addr_t)outaddr, sizeof(uint64_t));
 	if (kret) {
 		return kret;
 	}
 	outaddr += sizeof(uint64_t);
 
-	kret = copyout(&t->xt_end_time, outaddr, sizeof(uint64_t));
+	kret = copyout(&t->xt_end_time, (user_addr_t)outaddr, sizeof(uint64_t));
 	if (kret) {
 		return kret;
 	}
 	outaddr += sizeof(uint64_t);
 
 	namelen = strnlen(t->xt_name, XNUPOST_TNAME_MAXLEN);
-	kret = copyout(t->xt_name, outaddr, namelen);
+	kret = copyout(t->xt_name, (user_addr_t)outaddr, namelen);
 	if (kret) {
 		return kret;
 	}
@@ -234,7 +240,7 @@ xnupost_get_estimated_testdata_size(void)
 }
 
 int
-xnupost_export_testdata(void * outp, uint32_t size, uint32_t * lenp)
+xnupost_export_testdata(void * outp, size_t size_in, uint32_t * lenp)
 {
 	struct kcdata_descriptor kcd;
 	mach_vm_address_t user_addr        = 0;
@@ -244,6 +250,11 @@ xnupost_export_testdata(void * outp, uint32_t size, uint32_t * lenp)
 	char kctype_name[32]               = "xnupost_test_config";
 	mach_timebase_info_data_t timebase = {0, 0};
 	uint32_t length_to_copy            = 0;
+	unsigned int size                  = (unsigned int)size_in;
+
+	if (size_in > UINT_MAX) {
+		return ENOSPC;
+	}
 
 #define RET_IF_OP_FAIL                                                                                       \
 	do {                                                                                                     \
@@ -259,20 +270,20 @@ xnupost_export_testdata(void * outp, uint32_t size, uint32_t * lenp)
 	clock_timebase_info(&timebase);
 	kret = kcdata_get_memory_addr(&kcd, KCDATA_TYPE_TIMEBASE, sizeof(timebase), &user_addr);
 	RET_IF_OP_FAIL;
-	kret = copyout(&timebase, user_addr, sizeof(timebase));
+	kret = copyout(&timebase, (user_addr_t)user_addr, sizeof(timebase));
 	RET_IF_OP_FAIL;
 
 	/* save boot-args and osversion string */
 	length_to_copy = MIN((uint32_t)(strlen(version) + 1), OSVERSIZE);
 	kret           = kcdata_get_memory_addr(&kcd, STACKSHOT_KCTYPE_OSVERSION, length_to_copy, &user_addr);
 	RET_IF_OP_FAIL;
-	kret = copyout(&version[0], user_addr, length_to_copy);
+	kret = copyout(&version[0], (user_addr_t)user_addr, length_to_copy);
 	RET_IF_OP_FAIL;
 
 	length_to_copy = MIN((uint32_t)(strlen(PE_boot_args()) + 1), BOOT_LINE_LENGTH);
 	kret           = kcdata_get_memory_addr(&kcd, STACKSHOT_KCTYPE_BOOTARGS, length_to_copy, &user_addr);
 	RET_IF_OP_FAIL;
-	kret = copyout(PE_boot_args(), user_addr, length_to_copy);
+	kret = copyout(PE_boot_args(), (user_addr_t)user_addr, length_to_copy);
 	RET_IF_OP_FAIL;
 
 	/* add type definition to buffer */

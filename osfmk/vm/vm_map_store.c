@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -59,6 +59,7 @@ vm_map_store_init( struct vm_map_header *hdr )
 #endif
 }
 
+__attribute__((noinline))
 boolean_t
 vm_map_store_lookup_entry(
 	vm_map_t                map,
@@ -97,6 +98,21 @@ vm_map_store_update( vm_map_t map, vm_map_entry_t entry, int update_type )
 }
 
 /*
+ *  vm_map_store_find_last_free:
+ *
+ *  Finds and returns in O_ENTRY the entry *after* the last hole (if one exists) in MAP.
+ *  Returns NULL if map is full and no hole can be found.
+ */
+void
+vm_map_store_find_last_free(
+	vm_map_t map,
+	vm_map_entry_t *o_entry)        /* OUT */
+{
+	/* TODO: Provide a RB implementation for this routine. */
+	vm_map_store_find_last_free_ll(map, o_entry);
+}
+
+/*
  *	vm_map_entry_{un,}link:
  *
  *	Insert/remove entries from maps (or map copies).
@@ -124,6 +140,10 @@ _vm_map_store_entry_link( struct vm_map_header * mapHdr, vm_map_entry_t after_wh
 	}
 #endif
 #if MAP_ENTRY_INSERTION_DEBUG
+	if (entry->vme_start_original == 0 && entry->vme_end_original == 0) {
+		entry->vme_start_original = entry->vme_start;
+		entry->vme_end_original = entry->vme_end;
+	}
 	backtrace(&entry->vme_insertion_bt[0],
 	    (sizeof(entry->vme_insertion_bt) / sizeof(uintptr_t)), NULL);
 #endif
@@ -140,6 +160,13 @@ vm_map_store_entry_link(
 	vm_map_entry_t VMEL_entry;
 	VMEL_map = (map);
 	VMEL_entry = (entry);
+
+	if (entry->is_sub_map) {
+		assertf(VM_MAP_PAGE_SHIFT(VME_SUBMAP(entry)) >= VM_MAP_PAGE_SHIFT(map),
+		    "map %p (%d) entry %p submap %p (%d)\n",
+		    map, VM_MAP_PAGE_SHIFT(map), entry,
+		    VME_SUBMAP(entry), VM_MAP_PAGE_SHIFT(VME_SUBMAP(entry)));
+	}
 
 	_vm_map_store_entry_link(&VMEL_map->hdr, after_where, VMEL_entry);
 	if (VMEL_map->disable_vmentry_reuse == TRUE) {

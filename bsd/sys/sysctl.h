@@ -85,6 +85,7 @@
 #else
 #ifndef XNU_KERNEL_PRIVATE
 #include <libkern/sysctl.h>
+#include <os/base.h>
 #endif
 
 #endif
@@ -227,6 +228,9 @@ SLIST_HEAD(sysctl_oid_list, sysctl_oid);
  *		changing the KPI used for non-static (un)registration in
  *		KEXTs.
  *
+ *		Non CTLFLAG_OID2 based sysctls are deprecated and unavailable
+ *		to non Intel platforms.
+ *
  *		This depends on the fact that people declare SYSCTLs,
  *		rather than declaring sysctl_oid structures.  All new code
  *		should avoid declaring struct sysctl_oid's directly without
@@ -243,7 +247,7 @@ SLIST_HEAD(sysctl_oid_list, sysctl_oid);
  *		get for your sysctl.
  */
 struct sysctl_oid {
-	struct sysctl_oid_list *oid_parent;
+	struct sysctl_oid_list * OS_PTRAUTH_SIGNED_PTR("sysctl_oid.oid_parent") oid_parent;
 	SLIST_ENTRY(sysctl_oid) oid_link;
 	int             oid_number;
 	int             oid_kind;
@@ -283,6 +287,9 @@ void sysctl_register_oid(struct sysctl_oid *oidp);
 void sysctl_unregister_oid(struct sysctl_oid *oidp);
 
 void sysctl_load_devicetree_entries(void);
+#define nvram_osenvironment "osenvironment"
+void sysctl_set_osenvironment(unsigned int size, const void* value);
+void sysctl_unblock_osenvironment(void);
 
 /* Deprecated */
 void sysctl_register_fixed(void) __deprecated;
@@ -787,22 +794,22 @@ struct kinfo_proc {
  */
 
 struct user32_pcred {
-	char    pc_lock[72];            /* opaque content */
-	user32_addr_t   pc_ucred;       /* Current credentials. */
-	uid_t   p_ruid;                 /* Real user id. */
-	uid_t   p_svuid;                /* Saved effective user id. */
-	gid_t   p_rgid;                 /* Real group id. */
-	gid_t   p_svgid;                /* Saved effective group id. */
-	int     p_refcnt;               /* Number of references. */
+	char          pc_lock[72];    /* opaque content */
+	user32_addr_t pc_ucred;       /* Current credentials. */
+	uid_t         p_ruid;         /* Real user id. */
+	uid_t         p_svuid;        /* Saved effective user id. */
+	gid_t         p_rgid;         /* Real group id. */
+	gid_t         p_svgid;        /* Saved effective group id. */
+	int           p_refcnt;       /* Number of references. */
 };
 struct user64_pcred {
-	char    pc_lock[72];            /* opaque content */
-	user64_addr_t   pc_ucred;       /* Current credentials. */
-	uid_t   p_ruid;                 /* Real user id. */
-	uid_t   p_svuid;                /* Saved effective user id. */
-	gid_t   p_rgid;                 /* Real group id. */
-	gid_t   p_svgid;                /* Saved effective group id. */
-	int     p_refcnt;               /* Number of references. */
+	char          pc_lock[72];      /* opaque content */
+	user64_addr_t pc_ucred;         /* Current credentials. */
+	uid_t         p_ruid;           /* Real user id. */
+	uid_t         p_svuid;          /* Saved effective user id. */
+	gid_t         p_rgid;           /* Real group id. */
+	gid_t         p_svgid;          /* Saved effective group id. */
+	int           p_refcnt;         /* Number of references. */
 };
 
 /* LP64 version of kinfo_proc.  all pointers
@@ -819,7 +826,7 @@ struct user32_kinfo_proc {
 		struct  user32_vmspace e_vm; /* address space */
 		pid_t   e_ppid;                 /* parent process id */
 		pid_t   e_pgid;                 /* process group id */
-		short   e_jobc;                 /* job control counter */
+		int     e_jobc;                 /* job control counter */
 		dev_t   e_tdev;                 /* controlling tty dev */
 		pid_t   e_tpgid;                /* tty process group id */
 		user32_addr_t   e_tsess;        /* tty session pointer */
@@ -843,7 +850,7 @@ struct user64_kinfo_proc {
 		struct   user_vmspace e_vm; /* address space */
 		pid_t   e_ppid;                 /* parent process id */
 		pid_t   e_pgid;                 /* process group id */
-		short   e_jobc;                 /* job control counter */
+		int     e_jobc;                 /* job control counter */
 		dev_t   e_tdev;                 /* controlling tty dev */
 		pid_t   e_tpgid;                /* tty process group id */
 		user64_addr_t   e_tsess __attribute((aligned(8)));      /* tty session pointer */
@@ -933,8 +940,8 @@ struct user64_loadavg {
 /*
  * CTL_HW identifiers
  */
-#define HW_MACHINE       1              /* string: machine class */
-#define HW_MODEL         2              /* string: specific machine model */
+#define HW_MACHINE       1              /* string: machine class (deprecated: use HW_PRODUCT) */
+#define HW_MODEL         2              /* string: specific machine model (deprecated: use HW_TARGET) */
 #define HW_NCPU          3              /* int: number of cpus */
 #define HW_BYTEORDER     4              /* int: machine byte order */
 #define HW_PHYSMEM       5              /* int: total memory */
@@ -958,12 +965,14 @@ struct user64_loadavg {
 #define HW_TB_FREQ      23              /* int: Bus Frequency */
 #define HW_MEMSIZE      24              /* uint64_t: physical ram size */
 #define HW_AVAILCPU     25              /* int: number of available CPUs */
-#define HW_MAXID        26              /* number of valid hw ids */
+#define HW_TARGET       26              /* string: model identifier */
+#define HW_PRODUCT      27              /* string: product identifier */
+#define HW_MAXID        28              /* number of valid hw ids */
 
 #define CTL_HW_NAMES { \
 	{ 0, 0 }, \
-	{ "machine", CTLTYPE_STRING }, \
-	{ "model", CTLTYPE_STRING }, \
+	{ "machine", CTLTYPE_STRING },          /* Deprecated: use hw.product */ \
+	{ "model", CTLTYPE_STRING },            /* Deprecated: use hw.target */ \
 	{ "ncpu", CTLTYPE_INT }, \
 	{ "byteorder", CTLTYPE_INT }, \
 	{ "physmem", CTLTYPE_INT }, \
@@ -986,7 +995,9 @@ struct user64_loadavg {
 	{ "l3cachesize", CTLTYPE_INT }, \
 	{ "tbfrequency", CTLTYPE_INT }, \
 	{ "memsize", CTLTYPE_QUAD }, \
-	{ "availcpu", CTLTYPE_INT } \
+	{ "availcpu", CTLTYPE_INT }, \
+	{ "target", CTLTYPE_STRING }, \
+	{ "product", CTLTYPE_STRING }, \
 }
 
 /*
@@ -1135,7 +1146,7 @@ struct user64_loadavg {
 #define CTL_DEBUG_MAXID         20
 
 
-#if (CTL_MAXID != 9) || (KERN_MAXID != 72) || (VM_MAXID != 6) || (HW_MAXID != 26) || (USER_MAXID != 21) || (CTL_DEBUG_MAXID != 20)
+#if (CTL_MAXID != 9) || (KERN_MAXID != 72) || (VM_MAXID != 6) || (HW_MAXID != 28) || (USER_MAXID != 21) || (CTL_DEBUG_MAXID != 20)
 #error Use the SYSCTL_*() macros and OID_AUTO instead!
 #endif
 

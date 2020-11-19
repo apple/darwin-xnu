@@ -93,7 +93,13 @@
 
 #ifndef _NETINET_IP6_H_
 #define _NETINET_IP6_H_
+#ifndef DRIVERKIT
 #include <sys/appleapiopts.h>
+#else
+#include <sys/_types.h>
+#include <netinet/in.h>
+#include <machine/endian.h>
+#endif /* DRIVERKIT */
 
 /*
  * Definition for internet protocol version 6.

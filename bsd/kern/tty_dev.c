@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 1997-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -82,6 +82,7 @@
 #include <sys/sysctl.h>
 #include <miscfs/devfs/devfs.h>
 #include <miscfs/devfs/devfsdefs.h>     /* DEVFS_LOCK()/DEVFS_UNLOCK() */
+#include <dev/kmreg_com.h>
 
 #if CONFIG_MACF
 #include <security/mac_framework.h>
@@ -671,10 +672,25 @@ ptcread(dev_t dev, struct uio *uio, int flag)
 					goto out;
 				}
 				if (pti->pt_send & TIOCPKT_IOCTL) {
-					cc = MIN((int)uio_resid(uio),
-					    (int)sizeof(tp->t_termios));
-					uiomove((caddr_t)&tp->t_termios, cc,
-					    uio);
+#ifdef __LP64__
+					if (uio->uio_segflg == UIO_USERSPACE32) {
+						static struct termios32 tio32;
+						cc = MIN((int)uio_resid(uio), (int)sizeof(tio32));
+						termios64to32((struct user_termios *)&tp->t_termios,
+						    (struct termios32 *)&tio32);
+						uiomove((caddr_t)&tio32, cc, uio);
+#else
+					if (uio->uio_segflg == UIO_USERSPACE64) {
+						static struct user_termios tio64;
+						cc = MIN((int)uio_resid(uio), (int)sizeof(tio64));
+						termios32to64((struct termios32 *)&tp->t_termios,
+						    (struct user_termios *)&tio64);
+						uiomove((caddr_t)&tio64, cc, uio);
+#endif
+					} else {
+						cc = MIN((int)uio_resid(uio), (int)sizeof(tp->t_termios));
+						uiomove((caddr_t)&tp->t_termios, cc, uio);
+					}
 				}
 				pti->pt_send = 0;
 				goto out;
@@ -841,7 +857,7 @@ ptcselect(dev_t dev, int rw, void *wql, proc_t p)
 			retval = (driver->fix_7828447) ? tp->t_outq.c_cc : 1;
 			break;
 		}
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 
 	case 0: /* exceptional */
 		if ((tp->t_state & TS_ISOPEN) &&
@@ -1035,6 +1051,10 @@ ptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 
 	if (pti == NULL || pti->pt_tty == NULL) {
 		return ENXIO;
+	}
+
+	if (cmd == KMIOCDISABLCONS) {
+		return 0;
 	}
 
 	tp = pti->pt_tty;
@@ -1258,6 +1278,7 @@ ptyioctl(dev_t dev, u_long cmd, caddr_t data, int flag, struct proc *p)
 		case TIOCLSET:
 			pti->pt_send |= TIOCPKT_IOCTL;
 			ptcwakeup(tp, FREAD);
+			break;
 		default:
 			break;
 		}

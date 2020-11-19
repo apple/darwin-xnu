@@ -1073,6 +1073,15 @@ T_DECL(ldt64_with_bsd_sighandling,
 	pthread_t cmthread;
 	thread_arg_t cmarg;
 
+	int translated = 0;
+	size_t translated_size = sizeof(int);
+
+	sysctlbyname("sysctl.proc_translated", &translated, &translated_size, NULL, 0);
+
+	if (translated) {
+		T_SKIP("Skipping this test because it is translated");
+	}
+
 	setup_signal_handling();
 
 #ifndef STANDALONE
@@ -1107,6 +1116,15 @@ T_DECL(ldt64_with_mach_exception_handling,
 {
 	pthread_t cmthread;
 	thread_arg_t cmarg;
+
+	int translated = 0;
+	size_t translated_size = sizeof(int);
+
+	sysctlbyname("sysctl.proc_translated", &translated, &translated_size, NULL, 0);
+
+	if (translated) {
+		T_SKIP("Skipping this test because it is translated");
+	}
 
 #ifndef STANDALONE
 	T_SETUPBEGIN;

@@ -52,7 +52,7 @@ typedef struct _vmobject_list_output_ vmobject_list_output_data_t;
 typedef struct _vmobject_list_output_ *vmobject_list_output_t;
 
 struct _vmobject_list_output_ {
-	int64_t entries; /* int64_t for alignment reasons, instead of int32_t */
+	uint64_t entries;
 	vm_object_query_data_t data[0];
 };
 #endif /* _KERN_SYSCTL_H_ */

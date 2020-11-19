@@ -248,9 +248,14 @@ routine mach_port_set_mscount(
  *	Only valid for port sets.  Returns a list of
  *	the members.
  */
-
-routine mach_port_get_set_status(
-		task		: ipc_space_inspect_t;
+routine
+#ifdef KERNEL_SERVER
+mach_port_get_set_status_from_user(
+		port        : mach_port_t;
+#else
+mach_port_get_set_status(
+		task		: ipc_space_read_t;
+#endif
 		name		: mach_port_name_t;
 	out	members		: mach_port_name_array_t);
 
@@ -354,9 +359,14 @@ routine mach_port_set_seqno(
 /*
  *      Returns information about a port.
  */
-
-routine mach_port_get_attributes(
-		task		: ipc_space_inspect_t;
+routine
+#ifdef KERNEL_SERVER
+mach_port_get_attributes_from_user(
+		port        : mach_port_t;
+#else
+mach_port_get_attributes(
+		task		: ipc_space_read_t;
+#endif
 		name		: mach_port_name_t;
 		flavor		: mach_port_flavor_t;
 	out	port_info_out	: mach_port_info_t, CountInOut);
@@ -426,8 +436,14 @@ routine	mach_port_get_srights(
  *      This call is only valid on MACH_IPC_DEBUG kernels.
  *      Otherwise, KERN_FAILURE is returned.
  */
-routine mach_port_space_info(
-		task		: ipc_space_inspect_t;
+routine
+#ifdef KERNEL_SERVER
+mach_port_space_info_from_user(
+		port        : mach_port_t;
+#else
+mach_port_space_info(
+		space		: ipc_space_read_t;
+#endif
 	out	space_info	: ipc_info_space_t;
 	out	table_info	: ipc_info_name_array_t;
 	out	tree_info	: ipc_info_tree_name_array_t);
@@ -453,8 +469,14 @@ routine mach_port_dnrequest_info(
  *	This interface is DEPRECATED in favor of the new
  *	mach_port_kernel_object64() call (see below).
  */
-routine	mach_port_kernel_object(
-		task		: ipc_space_inspect_t;
+routine
+#ifdef KERNEL_SERVER
+mach_port_kernel_object_from_user(
+		port		: mach_port_t;
+#else
+mach_port_kernel_object(
+		task		: ipc_space_read_t;
+#endif
 		name		: mach_port_name_t;
 	out	object_type	: unsigned;
 	out	object_addr	: unsigned);
@@ -503,9 +525,14 @@ routine mach_port_extract_member(
  * Only valid for receive rights.
  * Gets the context pointer for the port.
  */
-
-routine mach_port_get_context(
-		task		: ipc_space_inspect_t;
+routine
+#ifdef KERNEL_SERVER
+mach_port_get_context_from_user(
+		port		: mach_port_t;
+#else
+mach_port_get_context(
+		task		: ipc_space_read_t;
+#endif
 		name		: mach_port_name_t;
 #ifdef LIBSYSCALL_INTERFACE
 	out context		: mach_port_context_t
@@ -535,8 +562,14 @@ routine mach_port_set_context(
  *      This call is only valid on MACH_IPC_DEBUG kernels.
  *      Otherwise, KERN_FAILURE is returned.
  */
-routine	mach_port_kobject(
-		task		: ipc_space_inspect_t;
+routine
+#ifdef KERNEL_SERVER
+mach_port_kobject_from_user(
+		port		: mach_port_t;
+#else
+mach_port_kobject(
+		task		: ipc_space_read_t;
+#endif
 		name		: mach_port_name_t;
 	out	object_type	: natural_t;
 	out	object_addr	: mach_vm_address_t);
@@ -666,8 +699,14 @@ routine mach_port_swap_guard(
  *      This call is only valid on MACH_IPC_DEBUG kernels.
  *      Otherwise, KERN_FAILURE is returned.
  */
-routine	mach_port_kobject_description(
-		task		: ipc_space_inspect_t;
+routine	
+#ifdef KERNEL_SERVER
+mach_port_kobject_description_from_user(
+		port        : mach_port_t;
+#else
+mach_port_kobject_description(
+		task		: ipc_space_read_t;
+#endif
 		name		: mach_port_name_t;
 	out	object_type	: natural_t;
 	out	object_addr	: mach_vm_address_t;

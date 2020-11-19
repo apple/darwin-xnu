@@ -38,6 +38,7 @@
 #ifndef _IOKIT_IOINTERRUPTEVENTSOURCE_H
 #define _IOKIT_IOINTERRUPTEVENTSOURCE_H
 
+#include <libkern/c++/OSPtr.h>
 #include <IOKit/IOEventSource.h>
 
 class IOService;
@@ -135,7 +136,7 @@ public:
  *   @param provider IOService that represents the interrupt source.  Defaults to 0.  When no provider is defined the event source assumes that the client will in some manner call the interruptOccured method explicitly.  This will start the ball rolling for safe delivery of asynchronous event's into the driver.
  *   @param intIndex The index of the interrupt within the provider's interrupt sources.  Defaults to 0, i.e. the first interrupt in the provider.
  *   @result A new interrupt event source if successfully created and initialised, 0 otherwise.  */
-	static IOInterruptEventSource *
+	static OSPtr<IOInterruptEventSource>
 	interruptEventSource(OSObject *owner,
 	    Action action,
 	    IOService *provider = NULL,
@@ -150,7 +151,7 @@ public:
  *   @param intIndex The index of the interrupt within the provider's interrupt sources.
  *   @param action Block for the callout routine of this event source..
  *   @result A new interrupt event source if successfully created and initialised, 0 otherwise.  */
-	static IOInterruptEventSource *
+	static OSPtr<IOInterruptEventSource>
 	interruptEventSource(OSObject *owner,
 	    IOService *provider,
 	    int intIndex,
@@ -238,12 +239,12 @@ public:
 
 	void enablePrimaryInterruptTimestamp(bool enable);
 
-/*! @function getPimaryInterruptTimestamp
+/*! @function getPrimaryInterruptTimestamp
  *   @abstract Returns mach_absolute_time timestamp of primary interrupt.
  *   @discussion Returns mach_absolute_time timestamp of primary interrupt.
  *   @result Value of the timestamp. Zero if never interrupted, or -1ULL if timestamp collection has not been enabled. */
 
-	uint64_t getPimaryInterruptTimestamp();
+	uint64_t getPrimaryInterruptTimestamp();
 
 private:
 	IOReturn registerInterruptHandler(IOService *inProvider, int inIntIndex);

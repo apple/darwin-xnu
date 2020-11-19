@@ -2,6 +2,7 @@
 #include <signal.h>
 #include <sys/sysctl.h>
 #include <sys/kern_memorystatus.h>
+#include <sys/kern_memorystatus_freeze.h>
 #include <time.h>
 #include <mach-o/dyld.h>
 #include <mach/mach_vm.h>
@@ -64,7 +65,7 @@ get_vmpage_size()
 static pid_t child_pid = -1;
 static int freeze_count = 0;
 
-void move_to_idle_band(void);
+void move_to_idle_band(pid_t);
 void run_freezer_test(int);
 void freeze_helper_process(void);
 /* Gets and optionally sets the freeze pages max threshold */
@@ -245,7 +246,7 @@ get_rprvt(pid_t pid)
 }
 
 void
-move_to_idle_band(void)
+move_to_idle_band(pid_t pid)
 {
 	memorystatus_priority_properties_t props;
 	/*
@@ -259,7 +260,7 @@ move_to_idle_band(void)
 	 * This requires us to run as root (in the absence of entitlement).
 	 * Hence the T_META_ASROOT(true) in the T_HELPER_DECL.
 	 */
-	if (memorystatus_control(MEMORYSTATUS_CMD_SET_PRIORITY_PROPERTIES, getpid(), 0, &props, sizeof(props))) {
+	if (memorystatus_control(MEMORYSTATUS_CMD_SET_PRIORITY_PROPERTIES, pid, 0, &props, sizeof(props))) {
 		exit(MEMSTAT_PRIORITY_CHANGE_FAILED);
 	}
 }
@@ -312,24 +313,31 @@ freeze_helper_process(void)
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(kill(child_pid, SIGUSR1), "failed to send SIGUSR1 to child process");
 }
 
-void
-run_freezer_test(int num_pages)
+static void
+skip_if_freezer_is_disabled()
 {
-	int ret, freeze_enabled;
-	char sz_str[50];
-	char **launch_tool_args;
-	char testpath[PATH_MAX];
-	uint32_t testpath_buf_size;
-	dispatch_source_t ds_freeze, ds_proc;
-	size_t length;
+	int freeze_enabled;
+	size_t length = sizeof(freeze_enabled);
 
-	length = sizeof(freeze_enabled);
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(sysctlbyname("vm.freeze_enabled", &freeze_enabled, &length, NULL, 0),
 	    "failed to query vm.freeze_enabled");
 	if (!freeze_enabled) {
 		/* If freezer is disabled, skip the test. This can happen due to disk space shortage. */
 		T_SKIP("Freeze has been disabled. Skipping test.");
 	}
+}
+
+void
+run_freezer_test(int num_pages)
+{
+	int ret;
+	char sz_str[50];
+	char **launch_tool_args;
+	char testpath[PATH_MAX];
+	uint32_t testpath_buf_size;
+	dispatch_source_t ds_freeze, ds_proc;
+
+	skip_if_freezer_is_disabled();
 
 	signal(SIGUSR1, SIG_IGN);
 	ds_freeze = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGUSR1, 0, dispatch_get_main_queue());
@@ -467,7 +475,7 @@ allocate_pages(int num_pages)
 		}
 	});
 	dispatch_activate(ds_signal);
-	move_to_idle_band();
+	move_to_idle_band(getpid());
 
 	dispatch_main();
 }
@@ -590,9 +598,6 @@ freeze_process(pid_t pid)
 static void
 memorystatus_assertion_test_demote_frozen()
 {
-#if !CONFIG_EMBEDDED
-	T_SKIP("Freezing processes is only supported on embedded");
-#endif
 	/*
 	 * Test that if we assert a priority on a process, freeze it, and then demote all frozen processes, it does not get demoted below the asserted priority.
 	 * Then remove thee assertion, and ensure it gets demoted properly.
@@ -696,4 +701,305 @@ T_DECL(budget_replenishment, "budget replenishes properly") {
 	T_LOG("memorystatus_freeze_daily_pages_max after %u", memorystatus_freeze_daily_pages_max);
 
 	T_QUIET; T_ASSERT_EQ(new_budget, expected_new_budget_pages, "Calculate new budget behaves correctly.");
+}
+
+
+static bool
+is_proc_in_frozen_list(pid_t pid, char* name, size_t name_len)
+{
+	int bytes_written;
+	bool found = false;
+	global_frozen_procs_t *frozen_procs = malloc(sizeof(global_frozen_procs_t));
+	T_QUIET; T_ASSERT_NOTNULL(frozen_procs, "malloc");
+
+	bytes_written = memorystatus_control(MEMORYSTATUS_CMD_FREEZER_CONTROL, 0, FREEZER_CONTROL_GET_PROCS, frozen_procs, sizeof(global_frozen_procs_t));
+	T_QUIET; T_ASSERT_LE((size_t) bytes_written, sizeof(global_frozen_procs_t), "Didn't overflow buffer");
+	T_QUIET; T_ASSERT_GT(bytes_written, 0, "Wrote someting");
+
+	for (size_t i = 0; i < frozen_procs->gfp_num_frozen; i++) {
+		if (frozen_procs->gfp_procs[i].fp_pid == pid) {
+			found = true;
+			strlcpy(name, frozen_procs->gfp_procs[i].fp_name, name_len);
+		}
+	}
+	return found;
+}
+
+static void
+drop_jetsam_snapshot_ownership(void)
+{
+	int ret;
+	ret = memorystatus_control(MEMORYSTATUS_CMD_SET_JETSAM_SNAPSHOT_OWNERSHIP, 0, MEMORYSTATUS_FLAGS_SNAPSHOT_DROP_OWNERSHIP, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, 0, "Drop ownership of jetsam snapshot");
+}
+
+static void
+take_jetsam_snapshot_ownership(void)
+{
+	int ret;
+	ret = memorystatus_control(MEMORYSTATUS_CMD_SET_JETSAM_SNAPSHOT_OWNERSHIP, 0, MEMORYSTATUS_FLAGS_SNAPSHOT_TAKE_OWNERSHIP, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "Take ownership of jetsam snapshot");
+	T_ATEND(drop_jetsam_snapshot_ownership);
+}
+
+/*
+ * Retrieve a jetsam snapshot.
+ *
+ * return:
+ *      pointer to snapshot.
+ *
+ *	Caller is responsible for freeing snapshot.
+ */
+static
+memorystatus_jetsam_snapshot_t *
+get_jetsam_snapshot(uint32_t flags, bool empty_allowed)
+{
+	memorystatus_jetsam_snapshot_t * snapshot = NULL;
+	int ret;
+	uint32_t size;
+
+	ret = memorystatus_control(MEMORYSTATUS_CMD_GET_JETSAM_SNAPSHOT, 0, flags, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, 0, "Get jetsam snapshot size");
+	size = (uint32_t) ret;
+	if (size == 0 && empty_allowed) {
+		return snapshot;
+	}
+
+	snapshot = (memorystatus_jetsam_snapshot_t*)malloc(size);
+	T_QUIET; T_ASSERT_NOTNULL(snapshot, "Allocate snapshot of size %d", size);
+
+	ret = memorystatus_control(MEMORYSTATUS_CMD_GET_JETSAM_SNAPSHOT, 0, flags, snapshot, size);
+	T_QUIET; T_ASSERT_GT(size, 0, "Get jetsam snapshot");
+
+	if (((size - sizeof(memorystatus_jetsam_snapshot_t)) / sizeof(memorystatus_jetsam_snapshot_entry_t)) != snapshot->entry_count) {
+		T_FAIL("Malformed snapshot: %d! Expected %ld + %zd x %ld = %ld\n", size,
+		    sizeof(memorystatus_jetsam_snapshot_t), snapshot->entry_count, sizeof(memorystatus_jetsam_snapshot_entry_t),
+		    sizeof(memorystatus_jetsam_snapshot_t) + (snapshot->entry_count * sizeof(memorystatus_jetsam_snapshot_entry_t)));
+		if (snapshot) {
+			free(snapshot);
+		}
+	}
+
+	return snapshot;
+}
+
+/*
+ * Look for the given pid in the snapshot.
+ *
+ * return:
+ *     pointer to pid's entry or NULL if pid is not found.
+ *
+ * Caller has ownership of snapshot before and after call.
+ */
+static
+memorystatus_jetsam_snapshot_entry_t *
+get_jetsam_snapshot_entry(memorystatus_jetsam_snapshot_t *snapshot, pid_t pid)
+{
+	T_QUIET; T_ASSERT_NOTNULL(snapshot, "Got snapshot");
+	for (size_t i = 0; i < snapshot->entry_count; i++) {
+		memorystatus_jetsam_snapshot_entry_t *curr = &(snapshot->entries[i]);
+		if (curr->pid == pid) {
+			return curr;
+		}
+	}
+
+	return NULL;
+}
+
+/*
+ * Launches the child & runs the given block after the child signals.
+ * If exit_with_child is true, the test will exit when the child exits.
+ */
+static void
+test_after_frozen_background_launches(bool exit_with_child, dispatch_block_t test_block)
+{
+	dispatch_source_t ds_signal, ds_exit;
+
+	/* Run the test block after the child launches & signals it's ready. */
+	signal(SIGUSR1, SIG_IGN);
+	ds_signal = dispatch_source_create(DISPATCH_SOURCE_TYPE_SIGNAL, SIGUSR1, 0, dispatch_get_main_queue());
+	T_QUIET; T_ASSERT_NOTNULL(ds_signal, "dispatch_source_create");
+	dispatch_source_set_event_handler(ds_signal, test_block);
+	/* Launch the child process. */
+	child_pid = launch_frozen_background_process();
+	/* Listen for exit. */
+	if (exit_with_child) {
+		ds_exit = dispatch_source_create(DISPATCH_SOURCE_TYPE_PROC, (uintptr_t)child_pid, DISPATCH_PROC_EXIT, dispatch_get_main_queue());
+		dispatch_source_set_event_handler(ds_exit, ^{
+			int status = 0, code = 0;
+			pid_t rc = waitpid(child_pid, &status, 0);
+			T_QUIET; T_ASSERT_EQ(rc, child_pid, "waitpid");
+			code = WEXITSTATUS(status);
+			T_QUIET; T_ASSERT_EQ(code, 0, "Child exited cleanly");
+			T_END;
+		});
+
+		dispatch_activate(ds_exit);
+	}
+	dispatch_activate(ds_signal);
+	dispatch_main();
+}
+
+T_DECL(get_frozen_procs, "List processes in the freezer") {
+	skip_if_freezer_is_disabled();
+
+	test_after_frozen_background_launches(true, ^{
+		proc_name_t name;
+		/* Place the child in the idle band so that it gets elevated like a typical app. */
+		move_to_idle_band(child_pid);
+		/* Freeze the process, and check that it's in the list of frozen processes. */
+		freeze_process(child_pid);
+		/* Check */
+		T_QUIET; T_ASSERT_TRUE(is_proc_in_frozen_list(child_pid, name, sizeof(name)), "Found proc in frozen list");
+		T_QUIET; T_EXPECT_EQ_STR(name, "memorystatus_freeze_test", "Proc has correct name");
+		/* Kill the child */
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(kill(child_pid, SIGKILL), "Killed child process");
+		T_END;
+	});
+}
+
+T_DECL(frozen_to_swap_accounting, "jetsam snapshot has frozen_to_swap accounting") {
+	static const size_t kSnapshotSleepDelay = 5;
+	static const size_t kFreezeToDiskMaxDelay = 60;
+
+	skip_if_freezer_is_disabled();
+
+	test_after_frozen_background_launches(true, ^{
+		memorystatus_jetsam_snapshot_t *snapshot = NULL;
+		memorystatus_jetsam_snapshot_entry_t *child_entry = NULL;
+		/* Place the child in the idle band so that it gets elevated like a typical app. */
+		move_to_idle_band(child_pid);
+		freeze_process(child_pid);
+		/*
+		 * Wait until the child's pages get paged out to disk.
+		 * If we don't see any pages get sent to disk before kFreezeToDiskMaxDelay seconds,
+		 * something is either wrong with the compactor or the accounting.
+		 */
+		for (size_t i = 0; i < kFreezeToDiskMaxDelay / kSnapshotSleepDelay; i++) {
+			snapshot = get_jetsam_snapshot(MEMORYSTATUS_FLAGS_SNAPSHOT_ON_DEMAND, false);
+			child_entry = get_jetsam_snapshot_entry(snapshot, child_pid);
+			T_QUIET; T_ASSERT_NOTNULL(child_entry, "Found child in snapshot");
+			if (child_entry->jse_frozen_to_swap_pages > 0) {
+				break;
+			}
+			free(snapshot);
+			sleep(kSnapshotSleepDelay);
+		}
+		T_QUIET; T_ASSERT_GT(child_entry->jse_frozen_to_swap_pages, 0ULL, "child has some pages in swap");
+		free(snapshot);
+		/* Kill the child */
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(kill(child_pid, SIGKILL), "Killed child process");
+		T_END;
+	});
+}
+
+T_DECL(freezer_snapshot, "App kills are recorded in the freezer snapshot") {
+	/* Take ownership of the snapshot to ensure we don't race with another process trying to consume them. */
+	take_jetsam_snapshot_ownership();
+
+	test_after_frozen_background_launches(false, ^{
+		int ret;
+		memorystatus_jetsam_snapshot_t *snapshot = NULL;
+		memorystatus_jetsam_snapshot_entry_t *child_entry = NULL;
+
+		ret = memorystatus_control(MEMORYSTATUS_CMD_TEST_JETSAM, child_pid, 0, 0, 0);
+		T_ASSERT_POSIX_SUCCESS(ret, "jetsam'd the child");
+
+		snapshot = get_jetsam_snapshot(MEMORYSTATUS_FLAGS_SNAPSHOT_FREEZER, false);
+		T_ASSERT_NOTNULL(snapshot, "Got freezer snapshot");
+		child_entry = get_jetsam_snapshot_entry(snapshot, child_pid);
+		T_QUIET; T_ASSERT_NOTNULL(child_entry, "Child is in freezer snapshot");
+		T_QUIET; T_ASSERT_EQ(child_entry->killed, (unsigned long long) JETSAM_REASON_GENERIC, "Child entry was killed");
+
+		free(snapshot);
+		T_END;
+	});
+}
+
+T_DECL(freezer_snapshot_consume, "Freezer snapshot is consumed on read") {
+	/* Take ownership of the snapshot to ensure we don't race with another process trying to consume them. */
+	take_jetsam_snapshot_ownership();
+
+	test_after_frozen_background_launches(false, ^{
+		int ret;
+		memorystatus_jetsam_snapshot_t *snapshot = NULL;
+		memorystatus_jetsam_snapshot_entry_t *child_entry = NULL;
+
+		ret = memorystatus_control(MEMORYSTATUS_CMD_TEST_JETSAM, child_pid, 0, 0, 0);
+		T_ASSERT_POSIX_SUCCESS(ret, "jetsam'd the child");
+
+		snapshot = get_jetsam_snapshot(MEMORYSTATUS_FLAGS_SNAPSHOT_FREEZER, false);
+		T_ASSERT_NOTNULL(snapshot, "Got first freezer snapshot");
+		child_entry = get_jetsam_snapshot_entry(snapshot, child_pid);
+		T_QUIET; T_ASSERT_NOTNULL(child_entry, "Child is in first freezer snapshot");
+
+		snapshot = get_jetsam_snapshot(MEMORYSTATUS_FLAGS_SNAPSHOT_FREEZER, true);
+		if (snapshot != NULL) {
+			child_entry = get_jetsam_snapshot_entry(snapshot, child_pid);
+			T_QUIET; T_ASSERT_NULL(child_entry, "Child is not in second freezer snapshot");
+		}
+
+		free(snapshot);
+		T_END;
+	});
+}
+
+T_DECL(freezer_snapshot_frozen_state, "Frozen state is recorded in freezer snapshot") {
+	skip_if_freezer_is_disabled();
+	/* Take ownership of the snapshot to ensure we don't race with another process trying to consume them. */
+	take_jetsam_snapshot_ownership();
+
+	test_after_frozen_background_launches(false, ^{
+		int ret;
+		memorystatus_jetsam_snapshot_t *snapshot = NULL;
+		memorystatus_jetsam_snapshot_entry_t *child_entry = NULL;
+
+		move_to_idle_band(child_pid);
+		freeze_process(child_pid);
+
+		ret = memorystatus_control(MEMORYSTATUS_CMD_TEST_JETSAM, child_pid, 0, 0, 0);
+		T_ASSERT_POSIX_SUCCESS(ret, "jetsam'd the child");
+
+		snapshot = get_jetsam_snapshot(MEMORYSTATUS_FLAGS_SNAPSHOT_FREEZER, false);
+		T_ASSERT_NOTNULL(snapshot, "Got freezer snapshot");
+		child_entry = get_jetsam_snapshot_entry(snapshot, child_pid);
+		T_QUIET; T_ASSERT_NOTNULL(child_entry, "Child is in freezer snapshot");
+		T_QUIET; T_ASSERT_TRUE(child_entry->state & kMemorystatusFrozen, "Child entry's frozen bit is set");
+
+		free(snapshot);
+		T_END;
+	});
+}
+
+T_DECL(freezer_snapshot_thaw_state, "Thaw count is recorded in freezer snapshot") {
+	skip_if_freezer_is_disabled();
+	/* Take ownership of the snapshot to ensure we don't race with another process trying to consume them. */
+	take_jetsam_snapshot_ownership();
+
+	test_after_frozen_background_launches(false, ^{
+		int ret;
+		memorystatus_jetsam_snapshot_t *snapshot = NULL;
+		memorystatus_jetsam_snapshot_entry_t *child_entry = NULL;
+
+		move_to_idle_band(child_pid);
+		ret = pid_suspend(child_pid);
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "child suspended");
+		freeze_process(child_pid);
+		ret = pid_resume(child_pid);
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "child resumed after freeze");
+
+		ret = memorystatus_control(MEMORYSTATUS_CMD_TEST_JETSAM, child_pid, 0, 0, 0);
+		T_ASSERT_POSIX_SUCCESS(ret, "jetsam'd the child");
+
+		snapshot = get_jetsam_snapshot(MEMORYSTATUS_FLAGS_SNAPSHOT_FREEZER, false);
+		T_ASSERT_NOTNULL(snapshot, "Got freezer snapshot");
+		child_entry = get_jetsam_snapshot_entry(snapshot, child_pid);
+		T_QUIET; T_ASSERT_NOTNULL(child_entry, "Child is in freezer snapshot");
+		T_QUIET; T_ASSERT_TRUE(child_entry->state & kMemorystatusFrozen, "Child entry's frozen bit is still set after thaw");
+		T_QUIET; T_ASSERT_TRUE(child_entry->state & kMemorystatusWasThawed, "Child entry was thawed");
+		T_QUIET; T_ASSERT_EQ(child_entry->jse_thaw_count, 1ULL, "Child entry's thaw count was incremented");
+
+		free(snapshot);
+		T_END;
+	});
 }

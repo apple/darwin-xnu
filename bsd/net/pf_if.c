@@ -81,9 +81,7 @@
 #include <netinet/ip.h>
 #include <netinet/ip_var.h>
 
-#if INET6
 #include <netinet/ip6.h>
-#endif /* INET6 */
 
 #include <net/pfvar.h>
 
@@ -100,12 +98,12 @@ __private_extern__ void pfi_kifaddr_update(void *);
 
 static void pfi_kif_update(struct pfi_kif *);
 static void pfi_dynaddr_update(struct pfi_dynaddr *dyn);
-static void pfi_table_update(struct pfr_ktable *, struct pfi_kif *, int, int);
-static void pfi_instance_add(struct ifnet *, int, int);
-static void pfi_address_add(struct sockaddr *, int, int);
+static void pfi_table_update(struct pfr_ktable *, struct pfi_kif *, uint8_t, int);
+static void pfi_instance_add(struct ifnet *, uint8_t, int);
+static void pfi_address_add(struct sockaddr *, uint8_t, uint8_t);
 static int pfi_if_compare(struct pfi_kif *, struct pfi_kif *);
 static int pfi_skip_if(const char *, struct pfi_kif *);
-static int pfi_unmask(void *);
+static uint8_t pfi_unmask(void *);
 
 RB_PROTOTYPE_SC(static, pfi_ifhead, pfi_kif, pfik_tree, pfi_if_compare);
 RB_GENERATE(pfi_ifhead, pfi_kif, pfik_tree, pfi_if_compare);
@@ -146,12 +144,12 @@ struct pfi_kif *
 pfi_kif_get(const char *kif_name)
 {
 	struct pfi_kif          *kif;
-	struct pfi_kif_cmp       s;
+	struct pfi_kif       s;
 
-	bzero(&s, sizeof(s));
+	bzero(&s.pfik_name, sizeof(s.pfik_name));
 	strlcpy(s.pfik_name, kif_name, sizeof(s.pfik_name));
-	if ((kif = RB_FIND(pfi_ifhead, &pfi_ifs,
-	    (struct pfi_kif *)(void *)&s)) != NULL) {
+	kif = RB_FIND(pfi_ifhead, &pfi_ifs, &s);
+	if (kif != NULL) {
 		return kif;
 	}
 
@@ -294,7 +292,6 @@ pfi_match_addr(struct pfi_dynaddr *dyn, struct pf_addr *a, sa_family_t af)
 			return pfr_match_addr(dyn->pfid_kt, a, AF_INET);
 		}
 #endif /* INET */
-#if INET6
 	case AF_INET6:
 		switch (dyn->pfid_acnt6) {
 		case 0:
@@ -305,7 +302,6 @@ pfi_match_addr(struct pfi_dynaddr *dyn, struct pf_addr *a, sa_family_t af)
 		default:
 			return pfr_match_addr(dyn->pfid_kt, a, AF_INET6);
 		}
-#endif /* INET6 */
 	default:
 		return 0;
 	}
@@ -428,7 +424,7 @@ pfi_dynaddr_update(struct pfi_dynaddr *dyn)
 }
 
 void
-pfi_table_update(struct pfr_ktable *kt, struct pfi_kif *kif, int net, int flags)
+pfi_table_update(struct pfr_ktable *kt, struct pfi_kif *kif, uint8_t net, int flags)
 {
 	int                      e, size2 = 0;
 
@@ -446,11 +442,11 @@ pfi_table_update(struct pfr_ktable *kt, struct pfi_kif *kif, int net, int flags)
 }
 
 void
-pfi_instance_add(struct ifnet *ifp, int net, int flags)
+pfi_instance_add(struct ifnet *ifp, uint8_t net, int flags)
 {
 	struct ifaddr   *ia;
 	int              got4 = 0, got6 = 0;
-	int              net2, af;
+	uint8_t          net2, af;
 
 	if (ifp == NULL) {
 		return;
@@ -535,7 +531,7 @@ pfi_instance_add(struct ifnet *ifp, int net, int flags)
 }
 
 void
-pfi_address_add(struct sockaddr *sa, int af, int net)
+pfi_address_add(struct sockaddr *sa, uint8_t af, uint8_t net)
 {
 	struct pfr_addr *p;
 	int              i;
@@ -627,20 +623,21 @@ pfi_kifaddr_update(void *v)
 int
 pfi_if_compare(struct pfi_kif *p, struct pfi_kif *q)
 {
-	return strncmp(p->pfik_name, q->pfik_name, IFNAMSIZ);
+	return strncmp(p->pfik_name, q->pfik_name, IFNAMSIZ - 1);
 }
 
 void
 pfi_update_status(const char *name, struct pf_status *pfs)
 {
 	struct pfi_kif          *p;
-	struct pfi_kif_cmp       key;
+	struct pfi_kif       key;
 	int                      i, j, k;
 
 	LCK_MTX_ASSERT(pf_lock, LCK_MTX_ASSERT_OWNED);
 
+	bzero(&key.pfik_name, sizeof(key.pfik_name));
 	strlcpy(key.pfik_name, name, sizeof(key.pfik_name));
-	p = RB_FIND(pfi_ifhead, &pfi_ifs, (struct pfi_kif *)(void *)&key);
+	p = RB_FIND(pfi_ifhead, &pfi_ifs, &key);
 	if (p == NULL) {
 		return;
 	}
@@ -715,7 +712,7 @@ pfi_get_ifaces(const char *name, user_addr_t buf, int *size)
 int
 pfi_skip_if(const char *filter, struct pfi_kif *p)
 {
-	int     n;
+	size_t     n;
 
 	if (filter == NULL || !*filter) {
 		return 0;
@@ -769,7 +766,7 @@ pfi_clear_flags(const char *name, int flags)
 }
 
 /* from pf_print_state.c */
-int
+uint8_t
 pfi_unmask(void *addr)
 {
 	struct pf_addr *m = addr;
@@ -786,5 +783,6 @@ pfi_unmask(void *addr)
 			b++;
 		}
 	}
-	return b;
+	VERIFY(b >= 0 && b <= UINT8_MAX);
+	return (uint8_t)b;
 }

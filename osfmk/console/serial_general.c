@@ -156,7 +156,7 @@ console_printbuf_putc(int ch, void * arg)
 	struct console_printbuf_state * info = (struct console_printbuf_state *)arg;
 	info->total += 1;
 	if (info->pos < (SERIAL_CONS_BUF_SIZE - 1)) {
-		info->str[info->pos] = ch;
+		info->str[info->pos] = (char)ch;
 		info->pos += 1;
 	} else {
 		/*
@@ -168,7 +168,7 @@ console_printbuf_putc(int ch, void * arg)
 			info->str[info->pos] = '\0';
 			console_write(info->str, info->pos);
 			info->pos            = 0;
-			info->str[info->pos] = ch;
+			info->str[info->pos] = (char)ch;
 			info->pos += 1;
 		}
 	}

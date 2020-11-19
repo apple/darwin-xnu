@@ -94,27 +94,18 @@ const static uint32_t debugid_masks[] = {
 /* UNSAFE */
 #define DECODE_TYPE(TYPES, I) ((((uint8_t *)(TYPES))[(I) / 2] >> ((I) % 2) * 4) & 0xf)
 
-int
-kperf_kdebug_init(void)
+void
+kperf_kdebug_setup(void)
 {
 	kperf_kdebug_filter = kalloc_tag(sizeof(*kperf_kdebug_filter),
 	    VM_KERN_MEMORY_DIAG);
-	if (kperf_kdebug_filter == NULL) {
-		return ENOMEM;
-	}
 	bzero(kperf_kdebug_filter, sizeof(*kperf_kdebug_filter));
-
-	return 0;
 }
 
 void
 kperf_kdebug_reset(void)
 {
-	int err;
-
-	if ((err = kperf_init())) {
-		return;
-	}
+	kperf_setup();
 
 	kperf_kdebug_action = 0;
 	bzero(kperf_kdebug_filter, sizeof(*kperf_kdebug_filter));
@@ -153,9 +144,7 @@ kperf_kdebug_set_filter(user_addr_t user_filter, uint32_t user_size)
 	uint32_t n_debugids_provided = 0;
 	int err = 0;
 
-	if ((err = kperf_init())) {
-		return err;
-	}
+	kperf_setup();
 
 	n_debugids_provided = (uint32_t)KPERF_KDEBUG_N_DEBUGIDS(user_size);
 
@@ -184,11 +173,7 @@ out:
 uint32_t
 kperf_kdebug_get_filter(struct kperf_kdebug_filter **filter)
 {
-	int err;
-
-	if ((err = kperf_init())) {
-		return 0;
-	}
+	kperf_setup();
 
 	assert(filter != NULL);
 
@@ -199,11 +184,7 @@ kperf_kdebug_get_filter(struct kperf_kdebug_filter **filter)
 int
 kperf_kdebug_set_n_debugids(uint32_t n_debugids_in)
 {
-	int err;
-
-	if ((err = kperf_init())) {
-		return EINVAL;
-	}
+	kperf_setup();
 
 	if (n_debugids_in > KPERF_KDEBUG_DEBUGIDS_MAX) {
 		return EINVAL;
@@ -236,11 +217,7 @@ kperf_kdebug_get_action(void)
 static void
 kperf_kdebug_update(void)
 {
-	int err;
-
-	if ((err = kperf_init())) {
-		return;
-	}
+	kperf_setup();
 
 	if (kperf_kdebug_action != 0 &&
 	    kperf_kdebug_filter->n_debugids != 0) {

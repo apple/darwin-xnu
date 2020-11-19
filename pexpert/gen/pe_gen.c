@@ -34,13 +34,9 @@
 #include <pexpert/device_tree.h>
 #include <kern/debug.h>
 
-#if CONFIG_EMBEDDED
 #include <libkern/section_keywords.h>
-#endif
 
-static int DEBUGFlag;
-
-#if CONFIG_EMBEDDED
+#if defined(__arm__) || defined(__arm64__)
 SECURITY_READ_ONLY_LATE(static uint32_t) gPEKernelConfigurationBitmask;
 #else
 static uint32_t gPEKernelConfigurationBitmask;
@@ -54,10 +50,6 @@ void
 pe_init_debug(void)
 {
 	boolean_t boot_arg_value;
-
-	if (!PE_parse_boot_argn("debug", &DEBUGFlag, sizeof(DEBUGFlag))) {
-		DEBUGFlag = 0;
-	}
 
 	gPEKernelConfigurationBitmask = 0;
 
@@ -97,10 +89,10 @@ pe_init_debug(void)
 		debug_cpu_performance_degradation_factor = factor;
 	} else {
 		DTEntry         root;
-		if (DTLookupEntry(NULL, "/", &root) == kSuccess) {
-			void *prop = NULL;
+		if (SecureDTLookupEntry(NULL, "/", &root) == kSuccess) {
+			void const *prop = NULL;
 			uint32_t size = 0;
-			if (DTGetProperty(root, "target-is-fpga", &prop, &size) == kSuccess) {
+			if (SecureDTGetProperty(root, "target-is-fpga", &prop, &size) == kSuccess) {
 				debug_cpu_performance_degradation_factor = 10;
 			}
 		}
@@ -110,7 +102,7 @@ pe_init_debug(void)
 void
 PE_enter_debugger(const char *cause)
 {
-	if (DEBUGFlag & DB_NMI) {
+	if (debug_boot_arg & DB_NMI) {
 		Debugger(cause);
 	}
 }
@@ -125,7 +117,13 @@ PE_i_can_has_kernel_configuration(void)
 extern void vcattach(void);
 
 /* Globals */
-void (*PE_putc)(char c);
+typedef void (*PE_putc_t)(char);
+
+#if XNU_TARGET_OS_OSX
+PE_putc_t PE_putc;
+#else
+SECURITY_READ_ONLY_LATE(PE_putc_t) PE_putc;
+#endif
 
 void
 PE_init_printf(boolean_t vm_initialized)
@@ -144,9 +142,11 @@ PE_get_random_seed(unsigned char *dst_random_seed, uint32_t request_size)
 	uint32_t        size = 0;
 	void            *dt_random_seed;
 
-	if ((DTLookupEntry(NULL, "/chosen", &entryP) == kSuccess)
-	    && (DTGetProperty(entryP, "random-seed",
-	    (void **)&dt_random_seed, &size) == kSuccess)) {
+	if ((SecureDTLookupEntry(NULL, "/chosen", &entryP) == kSuccess)
+	    && (SecureDTGetProperty(entryP, "random-seed",
+	    /* casting away the const is permissible here, since
+	     * this function runs before lockdown. */
+	    (const void **)(uintptr_t)&dt_random_seed, &size) == kSuccess)) {
 		unsigned char *src_random_seed;
 		unsigned int i;
 		unsigned int null_count = 0;

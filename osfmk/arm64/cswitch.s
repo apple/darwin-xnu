@@ -28,6 +28,7 @@
 #include <machine/asm.h>
 #include <arm64/machine_machdep.h>
 #include <arm64/machine_routines_asm.h>
+#include <arm64/pac_asm.h>
 #include <arm64/proc_reg.h>
 #include "assym.s"
 
@@ -45,16 +46,16 @@
  * A subroutine invocation must preserve the contents of the registers r19-r29
  * and SP. We also save IP0 and IP1, as machine_idle uses IP0 for saving the LR.
  */
-	stp		x16, x17, [$0, SS64_X16]
-	stp		x19, x20, [$0, SS64_X19]
-	stp		x21, x22, [$0, SS64_X21]
-	stp		x23, x24, [$0, SS64_X23]
-	stp		x25, x26, [$0, SS64_X25]
-	stp		x27, x28, [$0, SS64_X27]
-	stp		fp, lr, [$0, SS64_FP]
-	str		xzr, [$0, SS64_PC]
+	stp		x16, x17, [$0, SS64_KERNEL_X16]
+	stp		x19, x20, [$0, SS64_KERNEL_X19]
+	stp		x21, x22, [$0, SS64_KERNEL_X21]
+	stp		x23, x24, [$0, SS64_KERNEL_X23]
+	stp		x25, x26, [$0, SS64_KERNEL_X25]
+	stp		x27, x28, [$0, SS64_KERNEL_X27]
+	stp		fp, lr, [$0, SS64_KERNEL_FP]
+	str		xzr, [$0, SS64_KERNEL_PC]
 	MOV32	w$1, PSR64_KERNEL_POISON
-	str		w$1, [$0, SS64_CPSR]
+	str		w$1, [$0, SS64_KERNEL_CPSR]	
 #ifdef HAS_APPLE_PAC
 	stp		x0, x1, [sp, #-16]!
 	stp		x2, x3, [sp, #-16]!
@@ -72,15 +73,15 @@
 	mov		x3, lr
 	mov		x4, x16
 	mov		x5, x17
-	bl		EXT(ml_sign_thread_state)
+	bl		EXT(ml_sign_kernel_thread_state)
 
 	ldp		x4, x5, [sp], #16
 	ldp		x2, x3, [sp], #16
 	ldp		x0, x1, [sp], #16
-	ldp		fp, lr, [$0, SS64_FP]
+	ldp		fp, lr, [$0, SS64_KERNEL_FP]
 #endif /* defined(HAS_APPLE_PAC) */
 	mov		x$1, sp
-	str		x$1, [$0, SS64_SP]
+	str		x$1, [$0, SS64_KERNEL_SP]
 
 /* AAPCS-64 Page 14
  *
@@ -88,14 +89,17 @@
  * calls; the remaining registers (v0-v7, v16-v31) do not need to be preserved
  * (or should be preserved by the caller).
  */
-	str		d8,	[$0, NS64_D8]
-	str		d9,	[$0, NS64_D9]
-	str		d10,[$0, NS64_D10]
-	str		d11,[$0, NS64_D11]
-	str		d12,[$0, NS64_D12]
-	str		d13,[$0, NS64_D13]
-	str		d14,[$0, NS64_D14]
-	str		d15,[$0, NS64_D15]
+	str		d8,	[$0, NS64_KERNEL_D8]
+	str		d9,	[$0, NS64_KERNEL_D9]
+	str		d10,[$0, NS64_KERNEL_D10]
+	str		d11,[$0, NS64_KERNEL_D11]
+	str		d12,[$0, NS64_KERNEL_D12]
+	str		d13,[$0, NS64_KERNEL_D13]
+	str		d14,[$0, NS64_KERNEL_D14]
+	str		d15,[$0, NS64_KERNEL_D15]
+
+	mrs		x$1, FPCR
+	str		w$1, [$0, NS64_KERNEL_FPCR]
 .endmacro
 
 /*
@@ -111,31 +115,36 @@
 	mov		x22, x2
 
 	mov		x0, $0
-	AUTH_THREAD_STATE_IN_X0	x23, x24, x25, x26, x27
+	AUTH_KERNEL_THREAD_STATE_IN_X0	x23, x24, x25, x26, x27
 
 	mov		x0, x20
 	mov		x1, x21
 	mov		x2, x22
 
-	// Skip x16, x17 - already loaded + authed by AUTH_THREAD_STATE_IN_X0
-	ldp		x19, x20, [$0, SS64_X19]
-	ldp		x21, x22, [$0, SS64_X21]
-	ldp		x23, x24, [$0, SS64_X23]
-	ldp		x25, x26, [$0, SS64_X25]
-	ldp		x27, x28, [$0, SS64_X27]
-	ldr		fp, [$0, SS64_FP]
-	// Skip lr - already loaded + authed by AUTH_THREAD_STATE_IN_X0
-	ldr		$1, [$0, SS64_SP]
-	mov		sp, $1
+	ldr		w$1, [$0, NS64_KERNEL_FPCR]
+	mrs		x19, FPCR
+	CMSR FPCR, x19, x$1, 1
+1:
 
-	ldr		d8,	[$0, NS64_D8]
-	ldr		d9,	[$0, NS64_D9]
-	ldr		d10,[$0, NS64_D10]
-	ldr		d11,[$0, NS64_D11]
-	ldr		d12,[$0, NS64_D12]
-	ldr		d13,[$0, NS64_D13]
-	ldr		d14,[$0, NS64_D14]
-	ldr		d15,[$0, NS64_D15]
+	// Skip x16, x17 - already loaded + authed by AUTH_THREAD_STATE_IN_X0
+	ldp		x19, x20, [$0, SS64_KERNEL_X19]
+	ldp		x21, x22, [$0, SS64_KERNEL_X21]
+	ldp		x23, x24, [$0, SS64_KERNEL_X23]
+	ldp		x25, x26, [$0, SS64_KERNEL_X25]
+	ldp		x27, x28, [$0, SS64_KERNEL_X27]
+	ldr		fp, [$0, SS64_KERNEL_FP]
+	// Skip lr - already loaded + authed by AUTH_THREAD_STATE_IN_X0
+	ldr		x$1, [$0, SS64_KERNEL_SP]
+	mov		sp, x$1
+
+	ldr		d8,	[$0, NS64_KERNEL_D8]
+	ldr		d9,	[$0, NS64_KERNEL_D9]
+	ldr		d10,[$0, NS64_KERNEL_D10]
+	ldr		d11,[$0, NS64_KERNEL_D11]
+	ldr		d12,[$0, NS64_KERNEL_D12]
+	ldr		d13,[$0, NS64_KERNEL_D13]
+	ldr		d14,[$0, NS64_KERNEL_D14]
+	ldr		d15,[$0, NS64_KERNEL_D15]
 .endmacro
 
 
@@ -157,40 +166,69 @@
 	orr		$2, $1, $2							// Save new cthread/cpu to TPIDRRO_EL0
 	msr		TPIDRRO_EL0, $2
 	msr		TPIDR_EL0, xzr
-	/* ARM64_TODO Reserve x18 until we decide what to do with it */
-	mov		x18, $1								// ... and trash reserved x18
+#if DEBUG || DEVELOPMENT
+	ldr		$1, [$0, TH_THREAD_ID]				// Save the bottom 32-bits of the thread ID into
+	msr		CONTEXTIDR_EL1, $1					// CONTEXTIDR_EL1 (top 32-bits are RES0).
+#endif /* DEBUG || DEVELOPMENT */
 .endmacro
 
-#if defined(HAS_APPLE_PAC)
 /*
- * set_process_dependent_keys
+ * set_process_dependent_keys_and_sync_context
  *
- * Updates process dependent keys during context switch if necessary
+ * Updates process dependent keys and issues explicit context sync during context switch if necessary
  *  Per CPU Data rop_key is initialized in arm_init() for bootstrap processor
  *  and in cpu_data_init for slave processors
  *
- *  arg0 - New thread pointer/Current CPU key
- *  arg1 - Scratch register: New Thread Key
- *  arg2 - Scratch register: Current CPU Data pointer
+ *  thread - New thread pointer
+ *  new_key - Scratch register: New Thread Key
+ *  tmp_key - Scratch register: Current CPU Key
+ *  cpudatap - Scratch register: Current CPU Data pointer
+ *  wsync - Half-width scratch register: CPU sync required flag
+ *
+ *  to save on ISBs, for ARMv8.5 we use the CPU_SYNC_ON_CSWITCH field, cached in wsync, for pre-ARMv8.5,
+ *  we just use wsync to keep track of needing an ISB
  */
-.macro set_process_dependent_keys
-	ldr		$1, [$0, TH_ROP_PID]
-	ldr		$2, [$0, ACT_CPUDATAP]
-	ldr		$0, [$2, CPU_ROP_KEY]
-	cmp		$0, $1
+.macro set_process_dependent_keys_and_sync_context	thread, new_key, tmp_key, cpudatap, wsync
+
+
+#if defined(__ARM_ARCH_8_5__) || defined(HAS_APPLE_PAC)
+	ldr		\cpudatap, [\thread, ACT_CPUDATAP]
+#endif /* defined(__ARM_ARCH_8_5__) || defined(HAS_APPLE_PAC) */
+
+	mov		\wsync, #0
+
+
+#if defined(HAS_APPLE_PAC)
+	ldr		\new_key, [\thread, TH_ROP_PID]
+	ldr		\tmp_key, [\cpudatap, CPU_ROP_KEY]
+	cmp		\new_key, \tmp_key
 	b.eq	1f
-	str		$1, [$2, CPU_ROP_KEY]
-	msr		APIBKeyLo_EL1, $1
-	add		$1, $1, #1
-	msr		APIBKeyHi_EL1, $1
-	add		$1, $1, #1
-	msr		APDBKeyLo_EL1, $1
-	add		$1, $1, #1
-	msr		APDBKeyHi_EL1, $1
+	str		\new_key, [\cpudatap, CPU_ROP_KEY]
+	msr		APIBKeyLo_EL1, \new_key
+	add		\new_key, \new_key, #1
+	msr		APIBKeyHi_EL1, \new_key
+	add		\new_key, \new_key, #1
+	msr		APDBKeyLo_EL1, \new_key
+	add		\new_key, \new_key, #1
+	msr		APDBKeyHi_EL1, \new_key
+	mov		\wsync, #1
+1:
+
+#if HAS_PAC_FAST_A_KEY_SWITCHING
+	IF_PAC_SLOW_A_KEY_SWITCHING	Lskip_jop_keys_\@, \new_key
+	ldr		\new_key, [\thread, TH_JOP_PID]
+	REPROGRAM_JOP_KEYS	Lskip_jop_keys_\@, \new_key, \cpudatap, \tmp_key
+	mov		\wsync, #1
+Lskip_jop_keys_\@:
+#endif /* HAS_PAC_FAST_A_KEY_SWITCHING */
+
+#endif /* defined(HAS_APPLE_PAC) */
+
+	cbz		\wsync, 1f
 	isb 	sy
+
 1:
 .endmacro
-#endif /* defined(HAS_APPLE_PAC) */
 
 /*
  * void     machine_load_context(thread_t        thread)
@@ -205,10 +243,8 @@
 LEXT(machine_load_context)
 	set_thread_registers 	x0, x1, x2
 	ldr		x1, [x0, TH_KSTACKPTR]				// Get top of kernel stack
-	load_general_registers 	x1, x2
-#ifdef HAS_APPLE_PAC
-	set_process_dependent_keys	x0, x1, x2
-#endif
+	load_general_registers 	x1, 2
+	set_process_dependent_keys_and_sync_context	x0, x1, x2, x3, w4
 	mov		x0, #0								// Clear argument to thread_continue
 	ret
 
@@ -232,23 +268,22 @@ LEXT(Call_continuation)
 	mov		sp, x5								// Set stack pointer
 	mov		fp, #0								// Clear the frame pointer
 
-#if defined(HAS_APPLE_PAC)
-	set_process_dependent_keys	x4, x5, x6
-#endif
+	set_process_dependent_keys_and_sync_context	x4, x5, x6, x7, w20
 
-    mov x20, x0  //continuation
-    mov x21, x1  //continuation parameter
-    mov x22, x2  //wait result
+	mov x20, x0  //continuation
+	mov x21, x1  //continuation parameter
+	mov x22, x2  //wait result
 
-    cbz x3, 1f
-    mov x0, #1
-    bl EXT(ml_set_interrupts_enabled)
+	cbz x3, 1f
+	mov x0, #1
+	bl EXT(ml_set_interrupts_enabled)
 1:
 
 	mov		x0, x21								// Set the first parameter
 	mov		x1, x22								// Set the wait result arg
 #ifdef HAS_APPLE_PAC
-	blraaz	x20									// Branch to the continuation
+	mov		x21, THREAD_CONTINUE_T_DISC
+	blraa	x20, x21							// Branch to the continuation
 #else
 	blr		x20									// Branch to the continuation
 #endif
@@ -272,10 +307,8 @@ LEXT(Switch_context)
 Lswitch_threads:
 	set_thread_registers	x2, x3, x4
 	ldr		x3, [x2, TH_KSTACKPTR]
-	load_general_registers	x3, x4
-#if defined(HAS_APPLE_PAC)
-	set_process_dependent_keys	x2, x3, x4
-#endif
+	load_general_registers	x3, 4
+	set_process_dependent_keys_and_sync_context	x2, x3, x4, x5, w6
 	ret
 
 /*
@@ -324,10 +357,8 @@ LEXT(Idle_context)
 LEXT(Idle_load_context)
 	mrs		x0, TPIDR_EL1						// Get thread pointer
 	ldr		x1, [x0, TH_KSTACKPTR]				// Get the top of the kernel stack
-	load_general_registers	x1, x2
-#ifdef HAS_APPLE_PAC
-	set_process_dependent_keys	x0, x1, x2
-#endif
+	load_general_registers	x1, 2
+	set_process_dependent_keys_and_sync_context	x0, x1, x2, x3, w4
 	ret
 
 	.align	2
@@ -337,3 +368,4 @@ LEXT(machine_set_current_thread)
 	ret
 
 
+/* vim: set ts=4: */

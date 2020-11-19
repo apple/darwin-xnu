@@ -19,13 +19,6 @@ include $(MakeInc_def)
 CFLAGS+= -include meta_features.h -DBSD_KERNEL_PRIVATE
 SFLAGS+= -include meta_features.h
 
-# Objects that don't want -Wcast-align warning (8474835)
-OBJS_NO_CAST_ALIGN =		\
-		mac_alloc.o	\
-		mac_base.o
-
-$(foreach file,$(OBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-Wno-cast-align)))
-
 #
 # INCFLAGS to include security prototypes
 #
@@ -60,6 +53,23 @@ COMP_SUBDIRS =
 
 %MACHDEP
 
+#
+# Diagnostic opt-outs.  We need to make this list empty.
+#
+# DO NOT ADD MORE HERE.
+#
+# -Wno-cast-align
+mac_base.o_CFLAGS_ADD += -Wno-cast-align
+# -Wno-shorten-64-to-32
+mac_audit.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+mac_base.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+mac_process.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+# -Wno-sign-conversion
+mac_base.o_CFLAGS_ADD += -Wno-sign-conversion
+mac_mach.o_CFLAGS_ADD += -Wno-sign-conversion
+mac_vfs.o_CFLAGS_ADD += -Wno-sign-conversion
+mac_vfs_subr.o_CFLAGS_ADD += -Wno-sign-conversion
+
 # Rebuild if per-file overrides change
 ${OBJS}: $(firstword $(MAKEFILE_LIST))
 
@@ -75,7 +85,7 @@ $(SOBJS): .SFLAGS
 	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
 
 $(COMPONENT).filelist: $(OBJS)
-	$(call makelog,$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0))
+	@$(LOG_LDFILELIST) "$(COMPONENT)"
 	$(_v)for obj in ${OBJS}; do	\
 		 $(ECHO) $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist

@@ -170,14 +170,15 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 	struct socket *so = in6p->in6p_socket;
 	struct route_in6 ro;
 	int flowadv = 0;
+	bool sndinprog_cnt_used = false;
 #if CONTENT_FILTER
 	struct m_tag *cfil_tag = NULL;
 	bool cfil_faddr_use = false;
-	bool sndinprog_cnt_used = false;
 	uint32_t cfil_so_state_change_cnt = 0;
 	struct sockaddr *cfil_faddr = NULL;
 	struct sockaddr_in6 *cfil_sin6 = NULL;
 #endif
+	bool check_qos_marking_again = (so->so_flags1 & SOF1_QOSMARKING_POLICY_OVERRIDE) ? FALSE : TRUE;
 
 	bzero(&ip6oa, sizeof(ip6oa));
 	ip6oa.ip6oa_boundif = IFSCOPE_NONE;
@@ -439,6 +440,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 			necp_kernel_policy_id policy_id;
 			necp_kernel_policy_id skip_policy_id;
 			u_int32_t route_rule_id;
+			u_int32_t pass_flags;
 
 			/*
 			 * We need a route to perform NECP route rule checks
@@ -472,22 +474,25 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 				in6p->inp_policyresult.results.qos_marking_gencount = 0;
 			}
 
-			if (!necp_socket_is_allowed_to_send_recv_v6(in6p, in6p->in6p_lport, fport, laddr, faddr, NULL, &policy_id, &route_rule_id, &skip_policy_id)) {
+			if (!necp_socket_is_allowed_to_send_recv_v6(in6p, in6p->in6p_lport, fport, laddr, faddr, NULL, 0, &policy_id, &route_rule_id, &skip_policy_id, &pass_flags)) {
 				error = EHOSTUNREACH;
 				goto release;
 			}
 
-			necp_mark_packet_from_socket(m, in6p, policy_id, route_rule_id, skip_policy_id);
+			necp_mark_packet_from_socket(m, in6p, policy_id, route_rule_id, skip_policy_id, pass_flags);
 
 			if (net_qos_policy_restricted != 0) {
-				necp_socket_update_qos_marking(in6p, in6p->in6p_route.ro_rt,
-				    NULL, route_rule_id);
+				necp_socket_update_qos_marking(in6p, in6p->in6p_route.ro_rt, route_rule_id);
 			}
 		}
 #endif /* NECP */
 		if ((so->so_flags1 & SOF1_QOSMARKING_ALLOWED)) {
 			ip6oa.ip6oa_flags |= IP6OAF_QOSMARKING_ALLOWED;
 		}
+		if (check_qos_marking_again) {
+			ip6oa.ip6oa_flags |= IP6OAF_REDO_QOSMARKING_POLICY;
+		}
+		ip6oa.qos_marking_gencount = in6p->inp_policyresult.results.qos_marking_gencount;
 
 #if IPSEC
 		if (in6p->in6p_sp != NULL && ipsec_setsocket(m, so) != 0) {
@@ -542,6 +547,15 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 			IM6O_REMREF(im6o);
 		}
 
+		if (check_qos_marking_again) {
+			in6p->inp_policyresult.results.qos_marking_gencount = ip6oa.qos_marking_gencount;
+			if (ip6oa.ip6oa_flags & IP6OAF_QOSMARKING_ALLOWED) {
+				in6p->inp_socket->so_flags1 |= SOF1_QOSMARKING_ALLOWED;
+			} else {
+				in6p->inp_socket->so_flags1 &= ~SOF1_QOSMARKING_ALLOWED;
+			}
+		}
+
 		if (error == 0 && nstat_collect) {
 			boolean_t cell, wifi, wired;
 
@@ -573,7 +587,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 		if (ro.ro_rt != NULL) {
 			struct ifnet *outif = ro.ro_rt->rt_ifp;
 
-			so->so_pktheadroom = P2ROUNDUP(
+			so->so_pktheadroom = (uint16_t)P2ROUNDUP(
 				sizeof(struct udphdr) +
 				hlen +
 				ifnet_hdrlen(outif) +
@@ -626,7 +640,7 @@ udp6_output(struct in6pcb *in6p, struct mbuf *m, struct sockaddr *addr6,
 				if (outif != NULL && outif != in6p->in6p_last_outifp) {
 					in6p->in6p_last_outifp = outif;
 
-					so->so_pktheadroom = P2ROUNDUP(
+					so->so_pktheadroom = (uint16_t)P2ROUNDUP(
 						sizeof(struct udphdr) +
 						hlen +
 						ifnet_hdrlen(outif) +

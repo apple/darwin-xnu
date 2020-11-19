@@ -49,6 +49,7 @@ extern uint32_t serialmode;
 #define SERIALMODE_OUTPUT    0x1
 #define SERIALMODE_INPUT     0x2
 #define SERIALMODE_SYNCDRAIN 0x4
+#define SERIALMODE_BASE_TTY  0x8 /* Load Base/Recovery/FVUnlock TTY */
 
 extern uint32_t cons_ops_index;
 extern const uint32_t nconsops;

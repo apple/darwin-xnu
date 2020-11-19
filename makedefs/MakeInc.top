@@ -58,9 +58,9 @@ endif
 
 DEFAULT_PRODUCT_CONFIGS :=
 
-ifeq ($(RC_ProjectName),xnu_debug)
+ifneq ($(filter $(RC_ProjectName),xnu_debug),)
 override DEFAULT_KERNEL_CONFIG := DEBUG
-else ifeq ($(RC_ProjectName),xnu_kasan)
+else ifneq ($(filter $(RC_ProjectName),xnu_kasan),)
 override KERNEL_CONFIGS := KASAN
 else ifneq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
 override DEFAULT_KERNEL_CONFIG := DEVELOPMENT
@@ -87,8 +87,17 @@ endif
 override DEFAULT_I386_MACHINE_CONFIG := NONE
 override DEFAULT_X86_64_MACHINE_CONFIG := NONE
 override DEFAULT_X86_64H_MACHINE_CONFIG := NONE
+
+ifneq ($(findstring _Sim,$(RC_ProjectName)),)
+override DEFAULT_ARM_MACHINE_CONFIG	:= NONE
+override DEFAULT_ARM64_MACHINE_CONFIG	:= NONE
+else ifneq ($(findstring _host,$(RC_ProjectName)),)
+override DEFAULT_ARM_MACHINE_CONFIG	:= NONE
+override DEFAULT_ARM64_MACHINE_CONFIG	:= NONE
+else
 override DEFAULT_ARM_MACHINE_CONFIG	:= T8002
 override DEFAULT_ARM64_MACHINE_CONFIG	:= T7000
+endif
 
 # This is typically never specified (TARGET_CONFIGS is used)
 ifndef MACHINE_CONFIGS
@@ -115,7 +124,7 @@ endif
 # default kernel configuration = DEFAULT_KERNEL_CONFIG
 # default architecture configuration = system architecture where you are running make.
 
-ifneq ($(filter $(SUPPORTED_EMBEDDED_PLATFORMS),$(PLATFORM)),)
+ifneq ($(filter $(SUPPORTED_PLATFORMS),$(PLATFORM)),)
 
 # Defaults for "make all_embedded"
 ifeq ($(KERNEL_CONFIGS),DEFAULT)
@@ -126,11 +135,14 @@ endif
 
 ifeq ($(ARCH_CONFIGS),DEFAULT)
 ARCH_CONFIGS_EMBEDDED := ARM ARM64
+ARCH_CONFIGS_DESKTOP := X86_64
 else
-ARCH_CONFIGS_EMBEDDED := $(strip $(shell echo $(ARCH_CONFIGS) | $(TR) a-z A-Z))
+ARCH_CONFIGS_EMBEDDED := $(strip $(shell echo $(filter-out X86_64, $(ARCH_CONFIGS)) | $(TR) a-z A-Z))
+ARCH_CONFIGS_DESKTOP := $(strip $(shell echo $(filter X86_64, $(ARCH_CONFIGS)) | $(TR) a-z A-Z))
 endif
 
 # Find supported products from the device map
+ifneq ($(EMBEDDED_DEVICE_MAP),)
 DEVICEMAP_PRODUCTS_ARMV7  := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH)		\
 				-query 'SELECT DISTINCT TargetType			\
 					FROM Files					\
@@ -162,10 +174,21 @@ DEVICEMAP_PRODUCTS_ARM64 := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH)		\
 					  INNER JOIN Targets USING (Target)		\
 					WHERE (KernelMachOArchitecture LIKE "arm64"	\
 					   AND fileType in ("KernelCache", "RestoreKernelCache"))')
+DEVICEMAP_PRODUCTS_OSX_ARM64 := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH)		\
+					-query 'SELECT DISTINCT TargetType			\
+					      	FROM Files					\
+					  	  INNER JOIN Manifests USING (manifestID)	\
+					  	  INNER JOIN Targets USING (Target)		\
+					    	WHERE (KernelMachOArchitecture LIKE "arm64"	\
+					   	  AND fileType in ("KernelCache", "RestoreKernelCache") \
+						  AND SDKPlatform == "macosx")')
 
 
 # Generate a list of mappings of the form "n75:arm;t8002" based on the device map
 DEVICEMAP_PRODUCT_SOC_MAPPINGS := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH) -query SELECT DISTINCT TargetType, KernelMachOArchitecture, KernelPlatform FROM Targets | awk -F\| '{ if ($$2 ~ /armv[0-9][a-z]?/) { print $$1 ":arm;" $$3 } else if ($$2 ~ /arm64[a-z]?/) { print $$1 ":arm64;" $$3 ";" $$4} else { print $$1 ":" $$2 ";" $$3 ";" $$4} }' )
+
+# use embedded_device_map
+endif
 
 # Map a product like "n75" to "arm;t8002"
 # $(1) is a product name in lower case
@@ -175,10 +198,15 @@ function_lookup_product = $(call function_substitute_word_with_replacement,	\
 				 unknown_arch_for_$(1);unknown_platform_for_$(1) \
 			   )
 
+ifneq ($(PLATFORM),MacOSX)
+ifneq ($(EMBEDDED_DEVICE_MAP),)
 # Generate a list of mappings for products that use a different platform for their kernel configuration than their true platform
 # of the form "n71m:arm64;s8000;s8003". The 4th element is the true SoC platform, which will get an on-disk copy, while the
 # kernel's recursive build system will build the 3rd element as the KernelPlatform
 DEVICEMAP_PRODUCT_SOC_ALIASES := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH) -query SELECT DISTINCT TargetType, KernelMachOArchitecture, KernelPlatform, Platform FROM Targets WHERE KernelPlatform "!=" Platform | awk -F\| '{ if ($$2 ~ /armv[0-9][a-z]?/) { print $$1 ":arm;" $$3 ";" $$4} else if ($$2 ~ /arm64[a-z]?/) { print $$1 ":arm64;" $$3 ";" $$4} else { print $$1 ":" $$2 ";" $$3 ";" $$4} }' )
+
+endif
+endif
 
 function_lookup_product_alias = $(call function_substitute_word_with_replacement,	\
 					$(1),						\
@@ -216,8 +244,9 @@ TARGET_CONFIGS := $(foreach my_devicemap_config,$(foreach my_arch_config,$(ARCH_
 TARGET_CONFIGS_ALIASES := $(foreach my_devicemap_config,$(foreach my_arch_config,$(ARCH_CONFIGS_EMBEDDED),$(foreach my_product_config,$(DEVICEMAP_PRODUCTS_$(my_arch_config)),$(call function_lookup_product_alias,$(my_product_config)))),$(foreach my_kernel_config,$(KERNEL_CONFIGS_EMBEDDED),$(my_kernel_config) $(subst ;, ,$(my_devicemap_config))))
 else ifneq ($(filter %_desktop,$(MAKECMDGOALS)),)
 # generate TARGET_CONFIGS for all kernel configs for B&I
-TARGET_CONFIGS := $(foreach my_kern_config, $(KERNEL_CONFIGS_DESKTOP), $(foreach my_arch_config, $(ARCH_CONFIGS), $(foreach my_machine_config, $(MACHINE_CONFIGS), $(my_kern_config) $(my_arch_config) $(my_machine_config))))
-TARGET_CONFIGS_ALIASES :=
+TARGET_CONFIGS := $(foreach my_kern_config, $(KERNEL_CONFIGS_DESKTOP), $(foreach my_arch_config, $(ARCH_CONFIGS_DESKTOP), $(foreach my_machine_config, $(MACHINE_CONFIGS), $(my_kern_config) $(my_arch_config) $(my_machine_config))))
+TARGET_CONFIGS += $(foreach my_devicemap_config,$(foreach my_arch_config,$(ARCH_CONFIGS_EMBEDDED),$(foreach my_product_config,$(DEVICEMAP_PRODUCTS_OSX_$(my_arch_config)),$(call function_lookup_product,$(my_product_config)))),$(foreach my_kernel_config,$(KERNEL_CONFIGS_EMBEDDED),$(my_kernel_config) $(subst ;, ,$(my_devicemap_config))))
+TARGET_CONFIGS_ALIASES := $(foreach my_devicemap_config,$(foreach my_arch_config,$(ARCH_CONFIGS_EMBEDDED),$(foreach my_product_config,$(DEVICEMAP_PRODUCTS_OSX_$(my_arch_config)),$(call function_lookup_product_alias,$(my_product_config)))),$(foreach my_kernel_config,$(KERNEL_CONFIGS_EMBEDDED),$(my_kernel_config) $(subst ;, ,$(my_devicemap_config))))
 else
 # generate TARGET_CONFIGS using KERNEL_CONFIGS and ARCH_CONFIGS and MACHINE_CONFIGS (which defaults to "DEFAULT")
 TARGET_CONFIGS := $(foreach my_kern_config, $(KERNEL_CONFIGS), $(foreach my_arch_config, $(ARCH_CONFIGS), $(foreach my_machine_config, $(MACHINE_CONFIGS), $(my_kern_config) $(my_arch_config) $(my_machine_config))))
@@ -419,10 +448,10 @@ exporthdrs_md: build_exporthdrs_md_bootstrap
 
 .PHONY: installhdrs installhdrs_mi installhdrs_md
 
-ifeq ($(RC_ProjectName),xnu_debug)
+ifneq ($(filter $(RC_ProjectName),xnu_debug),)
 installhdrs:
 	@:
-else ifeq ($(RC_ProjectName),xnu_kasan)
+else ifneq ($(filter $(RC_ProjectName),xnu_kasan),)
 installhdrs:
 	@:
 else
@@ -460,19 +489,33 @@ $(eval $(generated_top_level_build_installhdrs_md))
 
 installhdrs_md: build_installhdrs_md_bootstrap
 
+.PHONY: install_textfiles install_textfiles_mi install_textfiles_md
+
+install_textfiles: install_textfiles_mi install_textfiles_md
+
 #
-#  Install text files (man pages, dtrace scripts, etc.)
+#  Install machine independent text files (man pages, dtrace scripts, etc.)
 #
 
-generated_top_level_textfiles_install = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,textfiles_install,,setup,,1,$(FIRST_BUILD_CONFIG))
+generated_top_level_textfiles_install_mi = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,textfiles_install_mi,,setup,,1,$(FIRST_BUILD_CONFIG))
 ifeq ($(VERBOSE_GENERATED_MAKE_FRAGMENTS),YES)
-$(warning Generate makefile fragment: $(generated_top_level_textfiles_install))
+$(warning Generate makefile fragment: $(generated_top_level_textfiles_install_mi))
 endif
-$(eval $(generated_top_level_textfiles_install))
+$(eval $(generated_top_level_textfiles_install_mi))
 
-.PHONY: install_textfiles
+install_textfiles_mi: textfiles_install_mi_bootstrap
 
-install_textfiles: textfiles_install_bootstrap
+#
+#  Install machine dependent text files (man pages, dtrace scripts, etc.)
+#
+
+generated_top_level_textfiles_install_md = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,textfiles_install_md,,setup,,$(KERNEL_BUILDS_IN_PARALLEL),$(PRIMARY_BUILD_CONFIGS))
+ifeq ($(VERBOSE_GENERATED_MAKE_FRAGMENTS),YES)
+$(warning Generate makefile fragment: $(generated_top_level_textfiles_install_md))
+endif
+$(eval $(generated_top_level_textfiles_install_md))
+
+install_textfiles_md: textfiles_install_md_bootstrap
 
 #
 # Build all architectures for all Configuration/Architecture options
@@ -550,16 +593,16 @@ final_touch_config_timestamps: config_install_bootstrap
 
 .PHONY: install
 
-ifeq ($(RC_ProjectName),xnu_debug)
+ifneq ($(filter $(RC_ProjectName),xnu_debug),)
 install: install_kernels
-else ifeq ($(RC_ProjectName),xnu_kasan)
+else ifneq ($(filter $(RC_ProjectName),xnu_kasan),)
 install: install_config install_kernels
-else ifeq ($(RC_ProjectName),xnu_headers_Sim)
+else ifneq ($(filter $(RC_ProjectName),xnu_headers_Sim),)
 install: installhdrs
-else ifeq ($(RC_ProjectName),xnu_headers_host)
+else ifneq ($(filter $(RC_ProjectName),xnu_headers_host),)
 install: installhdrs
 export INSTALLHDRS_SKIP_HOST=YES
-else ifeq ($(RC_ProjectName),xnu_headers_driverkit)
+else ifneq ($(filter $(RC_ProjectName),xnu_headers_driverkit),)
 install: installhdrs_desktop
 else
 
@@ -581,6 +624,7 @@ install_kernels: build_install_primary_bootstrap build_install_non_primary_boots
 # Tell the next build the latest timestamp of any potential file in DSTROOT/SYMROOT
 final_touch_kernel_timestamps: build_install_primary_bootstrap build_install_non_primary_bootstrap
 	$(_v)$(TOUCH) $(OBJROOT)/.mach_kernel.timestamp
+	@echo "done building xnu"
 
 # Copy kernels that are aliases of another configuration
 generated_top_level_install_alias = $(call TOP_LEVEL_EACH_BUILD_CONFIG_BOOTSTRAP_template,install_alias,,install_kernels,,$(KERNEL_BUILDS_IN_PARALLEL),$(ALIAS_CONFIGS))

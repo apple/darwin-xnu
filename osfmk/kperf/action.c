@@ -50,7 +50,7 @@
 #include <kperf/kdebug_trigger.h>
 #include <kperf/kperf.h>
 #include <kperf/kperf_kpc.h>
-#include <kperf/kperf_timer.h>
+#include <kperf/kptimer.h>
 #include <kperf/pet.h>
 #include <kperf/sample.h>
 #include <kperf/thread_samplers.h>
@@ -230,7 +230,8 @@ kperf_sample_internal(struct kperf_sample *sbuf,
 	}
 
 	if (!task_only) {
-		context->cur_thread->kperf_pet_gen = kperf_pet_gen;
+		context->cur_thread->kperf_pet_gen =
+		    os_atomic_load(&kppet_gencount, relaxed);
 	}
 	bool is_kernel = (context->cur_pid == 0);
 
@@ -688,10 +689,7 @@ kperf_action_set_count(unsigned count)
 	 * more things, too.
 	 */
 	if (actionc == 0) {
-		int r;
-		if ((r = kperf_init())) {
-			return r;
-		}
+		kperf_setup();
 	}
 
 	/* create a new array */

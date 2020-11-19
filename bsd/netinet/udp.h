@@ -62,8 +62,15 @@
 
 #ifndef _NETINET_UDP_H_
 #define _NETINET_UDP_H_
+
+#ifndef DRIVERKIT
 #include <sys/appleapiopts.h>
 #include <sys/types.h>          /* u_short */
+#else
+#include <sys/_types.h>
+#include <sys/_types/_u_char.h>
+#include <sys/_types/_u_short.h>
+#endif /* DRIVERKIT */
 
 /*
  * Udp protocol header.

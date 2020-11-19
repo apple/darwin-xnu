@@ -52,9 +52,8 @@ uint32_t kpc_actionid[KPC_MAX_COUNTERS];
 	                 COUNTERBUF_SIZE_PER_CPU)
 
 /* locks */
-static lck_grp_attr_t *kpc_config_lckgrp_attr = NULL;
-static lck_grp_t      *kpc_config_lckgrp = NULL;
-static lck_mtx_t       kpc_config_lock;
+static LCK_GRP_DECLARE(kpc_config_lckgrp, "kpc");
+static LCK_MTX_DECLARE(kpc_config_lock, &kpc_config_lckgrp);
 
 /* state specifying if all counters have been requested by kperf */
 static boolean_t force_all_ctrs = FALSE;
@@ -70,12 +69,19 @@ static bool kpc_calling_pm = false;
 boolean_t kpc_context_switch_active = FALSE;
 bool kpc_supported = true;
 
-void
-kpc_common_init(void)
+static uint64_t *
+kpc_percpu_alloc(void)
 {
-	kpc_config_lckgrp_attr = lck_grp_attr_alloc_init();
-	kpc_config_lckgrp = lck_grp_alloc_init("kpc", kpc_config_lckgrp_attr);
-	lck_mtx_init(&kpc_config_lock, kpc_config_lckgrp, LCK_ATTR_NULL);
+	return kheap_alloc_tag(KHEAP_DATA_BUFFERS, COUNTERBUF_SIZE_PER_CPU,
+	           Z_WAITOK | Z_ZERO, VM_KERN_MEMORY_DIAG);
+}
+
+static void
+kpc_percpu_free(uint64_t *buf)
+{
+	if (buf) {
+		kheap_free(KHEAP_DATA_BUFFERS, buf, COUNTERBUF_SIZE_PER_CPU);
+	}
 }
 
 boolean_t
@@ -98,23 +104,18 @@ kpc_register_cpu(struct cpu_data *cpu_data)
 	 * allocate the memory here.
 	 */
 
-	if ((cpu_data->cpu_kpc_buf[0] = kalloc(COUNTERBUF_SIZE_PER_CPU)) == NULL) {
+	if ((cpu_data->cpu_kpc_buf[0] = kpc_percpu_alloc()) == NULL) {
 		goto error;
 	}
-	if ((cpu_data->cpu_kpc_buf[1] = kalloc(COUNTERBUF_SIZE_PER_CPU)) == NULL) {
+	if ((cpu_data->cpu_kpc_buf[1] = kpc_percpu_alloc()) == NULL) {
 		goto error;
 	}
-	if ((cpu_data->cpu_kpc_shadow = kalloc(COUNTERBUF_SIZE_PER_CPU)) == NULL) {
+	if ((cpu_data->cpu_kpc_shadow = kpc_percpu_alloc()) == NULL) {
 		goto error;
 	}
-	if ((cpu_data->cpu_kpc_reload = kalloc(COUNTERBUF_SIZE_PER_CPU)) == NULL) {
+	if ((cpu_data->cpu_kpc_reload = kpc_percpu_alloc()) == NULL) {
 		goto error;
 	}
-
-	memset(cpu_data->cpu_kpc_buf[0], 0, COUNTERBUF_SIZE_PER_CPU);
-	memset(cpu_data->cpu_kpc_buf[1], 0, COUNTERBUF_SIZE_PER_CPU);
-	memset(cpu_data->cpu_kpc_shadow, 0, COUNTERBUF_SIZE_PER_CPU);
-	memset(cpu_data->cpu_kpc_reload, 0, COUNTERBUF_SIZE_PER_CPU);
 
 	/* success */
 	return TRUE;
@@ -129,19 +130,19 @@ kpc_unregister_cpu(struct cpu_data *cpu_data)
 {
 	assert(cpu_data);
 	if (cpu_data->cpu_kpc_buf[0] != NULL) {
-		kfree(cpu_data->cpu_kpc_buf[0], COUNTERBUF_SIZE_PER_CPU);
+		kpc_percpu_free(cpu_data->cpu_kpc_buf[0]);
 		cpu_data->cpu_kpc_buf[0] = NULL;
 	}
 	if (cpu_data->cpu_kpc_buf[1] != NULL) {
-		kfree(cpu_data->cpu_kpc_buf[1], COUNTERBUF_SIZE_PER_CPU);
+		kpc_percpu_free(cpu_data->cpu_kpc_buf[1]);
 		cpu_data->cpu_kpc_buf[1] = NULL;
 	}
 	if (cpu_data->cpu_kpc_shadow != NULL) {
-		kfree(cpu_data->cpu_kpc_shadow, COUNTERBUF_SIZE_PER_CPU);
+		kpc_percpu_free(cpu_data->cpu_kpc_shadow);
 		cpu_data->cpu_kpc_shadow = NULL;
 	}
 	if (cpu_data->cpu_kpc_reload != NULL) {
-		kfree(cpu_data->cpu_kpc_reload, COUNTERBUF_SIZE_PER_CPU);
+		kpc_percpu_free(cpu_data->cpu_kpc_reload);
 		cpu_data->cpu_kpc_reload = NULL;
 	}
 }
@@ -311,7 +312,7 @@ kpc_get_curcpu_counters(uint32_t classes, int *curcpu, uint64_t *buf)
 
 	/* grab counters and CPU number as close as possible */
 	if (curcpu) {
-		*curcpu = current_processor()->cpu_id;
+		*curcpu = cpu_number();
 	}
 
 	if (classes & KPC_CLASS_FIXED_MASK) {
@@ -359,7 +360,7 @@ int
 kpc_get_shadow_counters(boolean_t all_cpus, uint32_t classes,
     int *curcpu, uint64_t *buf)
 {
-	int curcpu_id = current_processor()->cpu_id;
+	int curcpu_id = cpu_number();
 	uint32_t cfg_count = kpc_configurable_count(), offset = 0;
 	uint64_t pmc_mask = 0ULL;
 	boolean_t enabled;
@@ -368,7 +369,7 @@ kpc_get_shadow_counters(boolean_t all_cpus, uint32_t classes,
 
 	enabled = ml_set_interrupts_enabled(FALSE);
 
-	curcpu_id = current_processor()->cpu_id;
+	curcpu_id = cpu_number();
 	if (curcpu) {
 		*curcpu = curcpu_id;
 	}
@@ -534,30 +535,27 @@ kpc_get_counterbuf_size(void)
 uint64_t *
 kpc_counterbuf_alloc(void)
 {
-	uint64_t *buf = NULL;
-
-	buf = kalloc_tag(COUNTERBUF_SIZE, VM_KERN_MEMORY_DIAG);
-	if (buf) {
-		bzero(buf, COUNTERBUF_SIZE);
-	}
-
-	return buf;
+	return kheap_alloc_tag(KHEAP_DATA_BUFFERS, COUNTERBUF_SIZE,
+	           Z_WAITOK | Z_ZERO, VM_KERN_MEMORY_DIAG);
 }
 
 void
 kpc_counterbuf_free(uint64_t *buf)
 {
 	if (buf) {
-		kfree(buf, COUNTERBUF_SIZE);
+		kheap_free(KHEAP_DATA_BUFFERS, buf, COUNTERBUF_SIZE);
 	}
 }
 
 void
-kpc_sample_kperf(uint32_t actionid)
+kpc_sample_kperf(uint32_t actionid, uint32_t counter, uint64_t config,
+    uint64_t count, uintptr_t pc, kperf_kpc_flags_t flags)
 {
 	struct kperf_sample sbuf;
 
-	BUF_DATA(PERF_KPC_HNDLR | DBG_FUNC_START);
+	uint64_t desc = config | (uint64_t)counter << 32 | (uint64_t)flags << 48;
+
+	BUF_DATA(PERF_KPC_HNDLR | DBG_FUNC_START, desc, count, pc);
 
 	thread_t thread = current_thread();
 	task_t task = get_threadtask(thread);
@@ -836,7 +834,7 @@ kpc_release_pm_counters(void)
 uint8_t
 kpc_popcount(uint64_t value)
 {
-	return __builtin_popcountll(value);
+	return (uint8_t)__builtin_popcountll(value);
 }
 
 uint64_t

@@ -66,21 +66,13 @@ int dtrace_arm_condition_true(int condition, int cpsr);
 inline void
 dtrace_membar_producer(void)
 {
-#if __ARM_SMP__
 	__asm__ volatile ("dmb ish" : : : "memory");
-#else
-	__asm__ volatile ("nop" : : : "memory");
-#endif
 }
 
 inline void
 dtrace_membar_consumer(void)
 {
-#if __ARM_SMP__
 	__asm__ volatile ("dmb ish" : : : "memory");
-#else
-	__asm__ volatile ("nop" : : : "memory");
-#endif
 }
 
 /*
@@ -98,7 +90,6 @@ dtrace_getipl(void)
 	return ml_at_interrupt_context() ? 1 : 0;
 }
 
-#if __ARM_SMP__
 /*
  * MP coordination
  */
@@ -125,7 +116,6 @@ xcRemote(void *foo)
 		thread_wakeup((event_t) &dt_xc_sync);
 	}
 }
-#endif
 
 /*
  * dtrace_xcall() is not called from probe context.
@@ -133,7 +123,6 @@ xcRemote(void *foo)
 void
 dtrace_xcall(processorid_t cpu, dtrace_xcall_t f, void *arg)
 {
-#if __ARM_SMP__
 	/* Only one dtrace_xcall in flight allowed */
 	lck_mtx_lock(&dt_xc_lock);
 
@@ -147,14 +136,6 @@ dtrace_xcall(processorid_t cpu, dtrace_xcall_t f, void *arg)
 
 	lck_mtx_unlock(&dt_xc_lock);
 	return;
-#else
-#pragma unused(cpu)
-	/* On uniprocessor systems, the cpu should always be either ourselves or all */
-	ASSERT(cpu == CPU->cpu_id || cpu == DTRACE_CPUALL);
-
-	(*f)(arg);
-	return;
-#endif
 }
 
 /*
@@ -163,9 +144,7 @@ dtrace_xcall(processorid_t cpu, dtrace_xcall_t f, void *arg)
 void
 dtrace_isa_init(void)
 {
-#if __ARM_SMP__
 	lck_mtx_init(&dt_xc_lock, dtrace_lck_grp, dtrace_lck_attr);
-#endif
 	return;
 }
 
@@ -189,12 +168,21 @@ dtrace_getreg(struct regs * savearea, uint_t reg)
 	return (uint64_t) ((unsigned int *) (&(regs->r)))[reg];
 }
 
+uint64_t
+dtrace_getvmreg(uint_t ndx)
+{
+#pragma unused(ndx)
+	DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+	return 0;
+}
+
 #define RETURN_OFFSET 4
 
 static int
 dtrace_getustack_common(uint64_t * pcstack, int pcstack_limit, user_addr_t pc,
     user_addr_t sp)
 {
+	volatile uint16_t *flags = (volatile uint16_t *) &cpu_core[CPU->cpu_id].cpuc_dtrace_flags;
 	int ret = 0;
 
 	ASSERT(pcstack == NULL || pcstack_limit > 0);
@@ -215,6 +203,12 @@ dtrace_getustack_common(uint64_t * pcstack, int pcstack_limit, user_addr_t pc,
 
 		pc = dtrace_fuword32((sp + RETURN_OFFSET));
 		sp = dtrace_fuword32(sp);
+
+		/* Truncate ustack if the iterator causes fault. */
+		if (*flags & CPU_DTRACE_FAULT) {
+			*flags &= ~CPU_DTRACE_FAULT;
+			break;
+		}
 	}
 
 	return ret;
@@ -425,18 +419,11 @@ dtrace_getufpstack(uint64_t * pcstack, uint64_t * fpstack, int pcstack_limit)
 			sp = dtrace_fuword32(sp);
 		}
 
-#if 0
-		/* XXX ARMTODO*/
-		/*
-		 * This is totally bogus:  if we faulted, we're going to clear
-		 * the fault and break.  This is to deal with the apparently
-		 * broken Java stacks on x86.
-		 */
+		/* Truncate ustack if the iterator causes fault. */
 		if (*flags & CPU_DTRACE_FAULT) {
 			*flags &= ~CPU_DTRACE_FAULT;
 			break;
 		}
-#endif
 	}
 
 zero:

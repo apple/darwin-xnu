@@ -90,8 +90,10 @@ typedef struct {
 
 extern compressor_tuneables_t vmctune;
 
-int metacompressor(const uint8_t *in, uint8_t *cdst, int32_t outbufsz, uint16_t *codec, void *cscratch, boolean_t *);
-void metadecompressor(const uint8_t *source, uint8_t *dest, uint32_t csize, uint16_t ccodec, void *compressor_dscratch);
+int metacompressor(const uint8_t *in, uint8_t *cdst, int32_t outbufsz,
+    uint16_t *codec, void *cscratch, boolean_t *, uint32_t *pop_count_p);
+bool metadecompressor(const uint8_t *source, uint8_t *dest, uint32_t csize,
+    uint16_t ccodec, void *compressor_dscratch, uint32_t *pop_count_p);
 
 typedef enum {
 	CCWK = 0, // must be 0 or 1

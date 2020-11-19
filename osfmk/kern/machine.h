@@ -164,5 +164,12 @@ extern void machine_switch_perfcontrol_state_update(perfcontrol_event event,
     uint32_t flags,
     thread_t thread);
 
+#if CONFIG_THREAD_GROUPS
+extern void machine_thread_group_init(struct thread_group *tg);
+extern void machine_thread_group_deinit(struct thread_group *tg);
+extern void machine_thread_group_flags_update(struct thread_group *tg, uint32_t flags);
+extern void machine_thread_group_blocked(struct thread_group *tg_blocked, struct thread_group *tg_blocking, uint32_t flags, thread_t blocked_thread);
+extern void machine_thread_group_unblocked(struct thread_group *tg_unblocked, struct thread_group *tg_unblocking, uint32_t flags, thread_t unblocked_thread);
+#endif
 
 #endif  /* _KERN_MACHINE_H_ */

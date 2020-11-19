@@ -43,7 +43,7 @@ SYSCTL_PROC(_net_mpklog, OID_AUTO, enabled, CTLTYPE_INT | CTLFLAG_LOCKED | CTLFL
     0, 0, &sysctl_net_mpklog_enabled, "I", "Multi-layer packet logging enabled");
 
 static int sysctl_net_mpklog_type SYSCTL_HANDLER_ARGS;
-int net_mpklog_type =  OS_LOG_TYPE_DEFAULT;
+uint8_t net_mpklog_type =  OS_LOG_TYPE_DEFAULT;
 SYSCTL_PROC(_net_mpklog, OID_AUTO, type, CTLTYPE_INT | CTLFLAG_LOCKED | CTLFLAG_RW,
     0, 0, &sysctl_net_mpklog_type, "I", "Multi-layer packet logging type");
 
@@ -84,10 +84,9 @@ sysctl_net_mpklog_type SYSCTL_HANDLER_ARGS
 	    value != OS_LOG_TYPE_INFO) {
 		return EINVAL;
 	}
+	net_mpklog_type = (uint8_t)value;
 
-	net_mpklog_type = value;
-
-	os_log(OS_LOG_DEFAULT, "%s:%d set net_mpklog_type to %d (%s)",
+	os_log(OS_LOG_DEFAULT, "%s:%d set net_mpklog_type to %u (%s)",
 	    proc_best_name(current_proc()), proc_selfpid(), net_mpklog_type,
 	    net_mpklog_type == OS_LOG_TYPE_DEFAULT ? "default" : "info");
 

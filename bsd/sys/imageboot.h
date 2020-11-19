@@ -28,6 +28,9 @@
 #ifndef _IMAGEBOOT_H_
 #define _IMAGEBOOT_H_
 
+struct kalloc_heap;
+struct vnode;
+
 typedef enum imageboot_type {
 	IMAGEBOOT_NONE,
 	IMAGEBOOT_DMG,
@@ -35,9 +38,16 @@ typedef enum imageboot_type {
 } imageboot_type_t;
 
 imageboot_type_t        imageboot_needed(void);
+bool    imageboot_desired(void);
 void    imageboot_setup(imageboot_type_t type);
 int     imageboot_format_is_valid(const char *root_path);
 int     imageboot_mount_image(const char *root_path, int height, imageboot_type_t type);
+int     imageboot_pivot_image(const char *image_path, imageboot_type_t type, const char *mount_path, const char *outgoing_root_path, const bool rooted_dmg);
+int     imageboot_read_file(struct kalloc_heap *kheap, const char *path, void **bufp, size_t *bufszp);
+int     imageboot_read_file_from_offset(struct kalloc_heap *kheap, const char *path, off_t offset, void **bufp, size_t *bufszp);
+
+struct vnode *
+imgboot_get_image_file(const char *path, off_t *fsize, int *errp);
 
 #define IMAGEBOOT_CONTAINER_ARG         "container-dmg"
 #define IMAGEBOOT_ROOT_ARG              "root-dmg"

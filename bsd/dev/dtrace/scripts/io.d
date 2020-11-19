@@ -2,13 +2,13 @@
  * Copyright (c) 2007 Apple, Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
- * 
+ *
  * The contents of this file constitute Original Code as defined in and
  * are subject to the Apple Public Source License Version 1.1 (the
  * "License").  You may not use this file except in compliance with the
  * License.  Please obtain a copy of the License at
  * http://www.apple.com/publicsource and read it before using this file.
- * 
+ *
  * This Original Code and all software distributed under the License are
  * distributed on an "AS IS" basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -16,7 +16,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE OR NON-INFRINGEMENT.  Please see the
  * License for the specific language governing rights and limitations
  * under the License.
- * 
+ *
  * @APPLE_LICENSE_HEADER_END@
  */
 
@@ -76,7 +76,7 @@ translator bufinfo_t < struct buf *B > {
 	b_iodone = (caddr_t)B->b_iodone;
 	b_error = B->b_error;
 	b_edev = B->b_dev;
-}; 
+};
 
 typedef struct devinfo {
 	int dev_major;			/* major number */
@@ -113,16 +113,16 @@ typedef struct fileinfo {
 translator fileinfo_t < struct buf *B > {
 	fi_name = B->b_vp->v_name == NULL ? "<unknown (NULL v_name)>" : B->b_vp->v_name;
 
-	fi_dirname = B->b_vp->v_parent == NULL ? "<unknown (NULL v_parent)>" : 
+	fi_dirname = B->b_vp->v_parent == NULL ? "<unknown (NULL v_parent)>" :
 			(B->b_vp->v_parent->v_name == NULL ? "<unknown (NULL v_name)>" : B->b_vp->v_parent->v_name);
 
-	fi_pathname = strjoin("??/", 
+	fi_pathname = strjoin("??/",
 			strjoin(B->b_vp->v_parent == NULL ? "<unknown (NULL v_parent)>" :
 				(B->b_vp->v_parent->v_name == NULL ? "<unknown (NULL v_name)>" : B->b_vp->v_parent->v_name),
 				strjoin("/",
 					B->b_vp->v_name == NULL ? "<unknown (NULL v_name)>" : B->b_vp->v_name)));
 
-	fi_offset = B->b_upl == NULL ? -1 : ((upl_t)B->b_upl)->offset;
+	fi_offset = B->b_upl == NULL ? -1 : ((upl_t)B->b_upl)->u_offset;
 
 	fi_fs = B->b_vp->v_mount->mnt_vtable->vfc_name;
 
@@ -137,17 +137,17 @@ translator fileinfo_t < struct buf *B > {
  * flags behave as a bit-field *except* for O_RDONLY, O_WRONLY, and O_RDWR.
  * To test the open mode, you write code similar to that used with the fcntl(2)
  * F_GET[X]FL command, such as: if ((fi_oflags & O_ACCMODE) == O_WRONLY).
- */     
+ */
 inline int O_ACCMODE = 0x0003;
-#pragma D binding "1.1" O_ACCMODE 
-        
+#pragma D binding "1.1" O_ACCMODE
+
 inline int O_RDONLY = 0x0000;
 #pragma D binding "1.1" O_RDONLY
 inline int O_WRONLY = 0x0001;
 #pragma D binding "1.1" O_WRONLY
 inline int O_RDWR = 0x0002;
 #pragma D binding "1.1" O_RDWR
-        
+
 inline int O_NONBLOCK = 0x0004;
 #pragma D binding "1.1" O_NONBLOCK
 inline int O_APPEND = 0x0008;
@@ -176,12 +176,14 @@ inline int O_DIRECTORY = 0x100000;
 #pragma D binding "1.1" O_DIRECTORY
 inline int O_SYMLINK = 0x200000;
 #pragma D binding "1.1" O_SYMLINK
+inline int O_NOFOLLOW_ANY = 0x20000000;
+#pragma D binding "1.1" O_NOFOLLOW_ANY
 
 /* From bsd/sys/file_internal.h */
 inline int DTYPE_VNODE = 1;
 #pragma D binding "1.1" DTYPE_VNODE
 inline int DTYPE_SOCKET = 2;
-#pragma D binding "1.1" DTYPE_SOCKET 
+#pragma D binding "1.1" DTYPE_SOCKET
 inline int DTYPE_PSXSHM = 3;
 #pragma D binding "1.1" DTYPE_PSXSHM
 inline int DTYPE_PSXSEM = 4;
@@ -207,18 +209,18 @@ translator fileinfo_t < struct fileglob *F > {
 
 	fi_dirname = (F == NULL) ? "<none>" :
 		F->fg_ops->fo_type != DTYPE_VNODE ? "<unknown (not a vnode)>" :
-			((struct vnode *)F->fg_data)->v_parent == NULL ? "<unknown (NULL v_parent)>" : 
-			(((struct vnode *)F->fg_data)->v_parent->v_name == NULL ? "<unknown (NULL v_name)>" : 
+			((struct vnode *)F->fg_data)->v_parent == NULL ? "<unknown (NULL v_parent)>" :
+			(((struct vnode *)F->fg_data)->v_parent->v_name == NULL ? "<unknown (NULL v_name)>" :
 			 ((struct vnode *)F->fg_data)->v_parent->v_name);
 
 	fi_pathname = (F == NULL) ? "<none>" :
 		F->fg_ops->fo_type != DTYPE_VNODE ? "<unknown (not a vnode)>" :
-			strjoin("??/", 
+			strjoin("??/",
 			strjoin(((struct vnode *)F->fg_data)->v_parent == NULL ? "<unknown (NULL v_parent)>" :
-				(((struct vnode *)F->fg_data)->v_parent->v_name == NULL ? "<unknown (NULL v_name)>" : 
+				(((struct vnode *)F->fg_data)->v_parent->v_name == NULL ? "<unknown (NULL v_name)>" :
 				 ((struct vnode *)F->fg_data)->v_parent->v_name),
 				strjoin("/",
-					((struct vnode *)F->fg_data)->v_name == NULL ? "<unknown (NULL v_name)>" : 
+					((struct vnode *)F->fg_data)->v_name == NULL ? "<unknown (NULL v_name)>" :
 					((struct vnode *)F->fg_data)->v_name)));
 
 	fi_offset = (F == NULL) ? 0 :
@@ -230,16 +232,16 @@ translator fileinfo_t < struct fileglob *F > {
 
 	fi_mount = (F == NULL) ? "<none>" :
 		F->fg_ops->fo_type != DTYPE_VNODE ? "<unknown (not a vnode)>" :
-			((struct vnode *)F->fg_data)->v_mount->mnt_vnodecovered == NULL ? "/" : 
+			((struct vnode *)F->fg_data)->v_mount->mnt_vnodecovered == NULL ? "/" :
 			((struct vnode *)F->fg_data)->v_mount->mnt_vnodecovered->v_name;
 
-	fi_oflags = (F == NULL) ? 0 : 
+	fi_oflags = (F == NULL) ? 0 :
 			F->fg_flag - 1; /* Subtract one to map FREAD/FWRITE bitfield to O_RD/WR open() flags. */
 };
 
 inline fileinfo_t fds[int fd] = xlate <fileinfo_t> (
-    (fd >= 0 && fd <= curproc->p_fd->fd_lastfile) ?
-    	(struct fileglob *)(curproc->p_fd->fd_ofiles[fd]->f_fglob) : 
+	(fd >= 0 && fd <= curproc->p_fd->fd_lastfile) ?
+		(struct fileglob *)(curproc->p_fd->fd_ofiles[fd]->fp_glob) :
 		(struct fileglob *)NULL);
 
 #pragma D attributes Stable/Stable/Common fds
@@ -249,10 +251,10 @@ inline fileinfo_t fds[int fd] = xlate <fileinfo_t> (
 translator fileinfo_t < struct vnode *V > {
 	fi_name = V->v_name == NULL ? "<unknown (NULL v_name)>" : V->v_name;
 
-	fi_dirname = V->v_parent == NULL ? "<unknown (NULL v_parent)>" : 
+	fi_dirname = V->v_parent == NULL ? "<unknown (NULL v_parent)>" :
 			(V->v_parent->v_name == NULL ? "<unknown (NULL v_name)>" : V->v_parent->v_name);
 
-	fi_pathname = strjoin("??/", 
+	fi_pathname = strjoin("??/",
 			strjoin(V->v_parent == NULL ? "<unknown (NULL v_parent)>" :
 				(V->v_parent->v_name == NULL ? "<unknown (NULL v_name)>" : V->v_parent->v_name),
 				strjoin("/",

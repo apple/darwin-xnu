@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2006-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2006-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -99,7 +99,7 @@
 #define MCACHE_UNLOCK(l)        lck_mtx_unlock(l)
 #define MCACHE_LOCK_TRY(l)      lck_mtx_try_lock(l)
 
-static int ncpu;
+static unsigned int ncpu;
 static unsigned int cache_line_size;
 static lck_mtx_t *mcache_llock;
 static struct thread *mcache_llock_owner;
@@ -186,7 +186,7 @@ mcache_init(void)
 
 	VERIFY(mca_trn_max >= 2);
 
-	ncpu = ml_get_max_cpus();
+	ncpu = ml_wait_max_cpus();
 	(void) mcache_cache_line_size();        /* prime it */
 
 	mcache_llock_grp_attr = lck_grp_attr_alloc_init();
@@ -203,14 +203,7 @@ mcache_init(void)
 		__builtin_unreachable();
 	}
 
-	mcache_zone = zinit(MCACHE_ALLOC_SIZE, 256 * MCACHE_ALLOC_SIZE,
-	    PAGE_SIZE, "mcache");
-	if (mcache_zone == NULL) {
-		panic("mcache_init: failed to allocate mcache zone\n");
-		/* NOTREACHED */
-		__builtin_unreachable();
-	}
-	zone_change(mcache_zone, Z_CALLERACCT, FALSE);
+	mcache_zone = zone_create("mcache", MCACHE_ALLOC_SIZE, ZC_DESTRUCTIBLE);
 
 	LIST_INIT(&mcache_head);
 
@@ -253,7 +246,7 @@ mcache_cache_line_size(void)
 	if (cache_line_size == 0) {
 		ml_cpu_info_t cpu_info;
 		ml_cpu_get_info(&cpu_info);
-		cache_line_size = cpu_info.cache_line_size;
+		cache_line_size = (unsigned int)cpu_info.cache_line_size;
 	}
 	return cache_line_size;
 }
@@ -300,7 +293,7 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 	mcache_t *cp = NULL;
 	size_t chunksize;
 	void *buf, **pbuf;
-	int c;
+	unsigned int c;
 	char lck_name[64];
 
 	/* If auditing is on and print buffer is NULL, allocate it now */
@@ -382,11 +375,7 @@ mcache_create_common(const char *name, size_t bufsize, size_t align,
 		VERIFY(align != 0 && (align % MCACHE_ALIGN) == 0);
 		chunksize += sizeof(uint64_t) + align;
 		chunksize = P2ROUNDUP(chunksize, align);
-		if ((cp->mc_slab_zone = zinit(chunksize, 64 * 1024 * ncpu,
-		    PAGE_SIZE, cp->mc_name)) == NULL) {
-			goto fail;
-		}
-		zone_change(cp->mc_slab_zone, Z_EXPAND, TRUE);
+		cp->mc_slab_zone = zone_create(cp->mc_name, chunksize, ZC_DESTRUCTIBLE);
 	}
 	cp->mc_chunksize = chunksize;
 
@@ -1146,7 +1135,7 @@ static void
 mcache_cache_bkt_enable(mcache_t *cp)
 {
 	mcache_cpu_t *ccp;
-	int cpu;
+	unsigned int cpu;
 
 	if (cp->mc_flags & MCF_NOCPUCACHE) {
 		return;
@@ -1168,7 +1157,8 @@ mcache_bkt_purge(mcache_t *cp)
 {
 	mcache_cpu_t *ccp;
 	mcache_bkt_t *bp, *pbp;
-	int cpu, objs, pobjs;
+	int objs, pobjs;
+	unsigned int cpu;
 
 	for (cpu = 0; cpu < ncpu; cpu++) {
 		ccp = &cp->mc_cpu[cpu];
@@ -1508,7 +1498,7 @@ mcache_buffer_log(mcache_audit_t *mca, void *addr, mcache_t *cp,
 	transaction->mca_thread = current_thread();
 
 	bzero(stack, sizeof(stack));
-	transaction->mca_depth = OSBacktrace(stack, MCACHE_STACK_DEPTH + 1) - 1;
+	transaction->mca_depth = (uint16_t)OSBacktrace(stack, MCACHE_STACK_DEPTH + 1) - 1;
 	bcopy(&stack[1], transaction->mca_stack,
 	    sizeof(transaction->mca_stack));
 
@@ -1526,7 +1516,13 @@ mcache_buffer_log(mcache_audit_t *mca, void *addr, mcache_t *cp,
 	    (mca->mca_next_trn + 1) % mca_trn_max;
 }
 
-__private_extern__ void
+/*
+ * N.B.: mcache_set_pattern(), mcache_verify_pattern() and
+ * mcache_verify_set_pattern() are marked as noinline to prevent the
+ * compiler from aliasing pointers when they are inlined inside the callers
+ * (e.g. mcache_audit_free_verify_set()) which would be undefined behavior.
+ */
+__private_extern__ OS_NOINLINE void
 mcache_set_pattern(u_int64_t pattern, void *buf_arg, size_t size)
 {
 	u_int64_t *buf_end = (u_int64_t *)((void *)((char *)buf_arg + size));
@@ -1540,7 +1536,7 @@ mcache_set_pattern(u_int64_t pattern, void *buf_arg, size_t size)
 	}
 }
 
-__private_extern__ void *
+__private_extern__ OS_NOINLINE void *
 mcache_verify_pattern(u_int64_t pattern, void *buf_arg, size_t size)
 {
 	u_int64_t *buf_end = (u_int64_t *)((void *)((char *)buf_arg + size));
@@ -1557,7 +1553,7 @@ mcache_verify_pattern(u_int64_t pattern, void *buf_arg, size_t size)
 	return NULL;
 }
 
-__private_extern__ void *
+OS_NOINLINE static void *
 mcache_verify_set_pattern(u_int64_t old, u_int64_t new, void *buf_arg,
     size_t size)
 {

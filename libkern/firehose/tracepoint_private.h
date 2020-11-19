@@ -27,6 +27,7 @@
 #if KERNEL
 #include <atm/atm_internal.h>
 #endif
+#include <os/atomic_private.h>
 #include "firehose_types_private.h"
 
 OS_ASSUME_NONNULL_BEGIN
@@ -45,7 +46,7 @@ typedef union {
 		uint32_t _code;
 	} ftid;
 	firehose_tracepoint_id_t ftid_value;
-	_Atomic(firehose_tracepoint_id_t) ftid_atomic_value;
+	os_atomic(firehose_tracepoint_id_t) ftid_atomic_value;
 } firehose_tracepoint_id_u;
 
 #define FIREHOSE_STAMP_SLOP (1ULL << 36) // ~1minute
@@ -76,7 +77,7 @@ typedef struct firehose_tracepoint_s {
 			uint64_t ft_length : 16;
 		};
 		uint64_t ft_stamp_and_length;
-		_Atomic(uint64_t) ft_atomic_stamp_and_length;
+		os_atomic(uint64_t) ft_atomic_stamp_and_length;
 	};
 	uint8_t ft_data[];
 } *firehose_tracepoint_t;

@@ -31,8 +31,8 @@
 #ifndef _OS_OSNUMBER_H
 #define _OS_OSNUMBER_H
 
-#include <libkern/c++/OSObject.h>
 #include <libkern/c++/OSPtr.h>
+#include <libkern/c++/OSObject.h>
 
 /*!
  * @header
@@ -43,7 +43,7 @@
 
 class OSNumber;
 
-typedef OSPtr<OSNumber> OSNumberPtr;
+typedef OSNumber* OSNumberPtr;
 
 /*!
  * @class OSNumber
@@ -122,7 +122,7 @@ public:
  * and <code>@link addValue addValue@/link</code>,
  * but you can't change the bit size.
  */
-	static OSNumberPtr withNumber(
+	static OSPtr<OSNumber> withNumber(
 		unsigned long long value,
 		unsigned int       numberOfBits);
 
@@ -157,7 +157,7 @@ public:
  * and <code>@link addValue addValue@/link</code>,
  * but you can't change the bit size.
  */
-	static OSNumberPtr withNumber(
+	static OSPtr<OSNumber> withNumber(
 		const char   * valueString,
 		unsigned int   numberOfBits);
 

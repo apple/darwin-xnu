@@ -91,9 +91,9 @@
 #endif
 
 /* There is another definition of ALIGN for .c sources */
-#ifdef ASSEMBLER
+#ifdef __ASSEMBLER__
 #define ALIGN 4,0x90
-#endif /* ASSEMBLER */
+#endif /* __ASSEMBLER__ */
 
 #ifndef FALIGN
 #define FALIGN ALIGN
@@ -265,7 +265,7 @@
 #define Lgmemload(lab,reg)	movl Lgotoff(lab),reg
 #define Lgmemstore(reg,lab,tmp)	movl reg,Lgotoff(lab)
 
-#ifndef ASSEMBLER
+#ifndef __ASSEMBLER__
 /* These defines are here for .c files that wish to reference global symbols
  * within __asm__ statements. 
  */
@@ -274,7 +274,7 @@
 #else
 #define CC_SYM_PREFIX ""
 #endif /* __NO_UNDERSCORES__ */
-#endif /* ASSEMBLER */
+#endif /* __ASSEMBLER__ */
 
 /*
  * The following macros make calls into C code.

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2018-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -103,13 +103,11 @@ if_low_power_evhdlr_callback(__unused struct eventhandler_entry_arg arg,
 		    if_name(ifp), event_code);
 	}
 
-	ifnet_lock_exclusive(ifp);
 	if (event_code == IF_LOW_POWER_EVENT_OFF) {
-		ifp->if_xflags &= ~IFXF_LOW_POWER;
+		if_clear_xflags(ifp, IFXF_LOW_POWER);
 	} else {
-		ifp->if_xflags |= IFXF_LOW_POWER;
+		if_set_xflags(ifp, IFXF_LOW_POWER);
 	}
-	ifnet_lock_done(ifp);
 
 	if (event_code == IF_LOW_POWER_EVENT_ON) {
 		atomic_add_32(&ifp->if_low_power_gencnt, 1);
@@ -188,10 +186,10 @@ if_set_low_power(ifnet_t ifp, bool on)
 	os_log(OS_LOG_DEFAULT,
 	    "%s: ifp %s low_power mode %d", __func__, if_name(ifp), on);
 
-	ifnet_lock_exclusive(ifp);
-	ifp->if_xflags = on ? (ifp->if_xflags | IFXF_LOW_POWER) :
-	    (ifp->if_xflags & ~IFXF_LOW_POWER);
-	ifnet_lock_done(ifp);
-
+	if (on) {
+		if_set_xflags(ifp, IFXF_LOW_POWER);
+	} else {
+		if_clear_xflags(ifp, IFXF_LOW_POWER);
+	}
 	return error;
 }

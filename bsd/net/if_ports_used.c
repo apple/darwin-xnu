@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2017-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -149,10 +149,8 @@ struct net_port_entry {
 	struct net_port_info            npe_npi;
 };
 
-static struct zone *net_port_entry_zone = NULL;
-
-#define NET_PORT_ENTRY_ZONE_MAX 128
-#define NET_PORT_ENTRY_ZONE_NAME "net_port_entry"
+static ZONE_DECLARE(net_port_entry_zone, "net_port_entry",
+    sizeof(struct net_port_entry), ZC_NONE);
 
 static SLIST_HEAD(net_port_entry_list, net_port_entry) net_port_entry_list =
     SLIST_HEAD_INITIALIZER(&net_port_entry_list);
@@ -183,16 +181,6 @@ if_ports_used_init(void)
 		    lck_attributes);
 
 		net_port_entry_count = 0;
-		net_port_entry_zone = zinit(sizeof(struct net_port_entry),
-		    NET_PORT_ENTRY_ZONE_MAX * sizeof(struct net_port_entry),
-		    0, NET_PORT_ENTRY_ZONE_NAME);
-		if (net_port_entry_zone == NULL) {
-			panic("%s: zinit(%s) failed", __func__,
-			    NET_PORT_ENTRY_ZONE_NAME);
-		}
-		zone_change(net_port_entry_zone, Z_EXPAND, TRUE);
-		zone_change(net_port_entry_zone, Z_CALLERACCT, FALSE);
-
 		if_ports_used_inited = 1;
 
 		lck_attr_free(lck_attributes);
@@ -361,7 +349,7 @@ net_port_info_add_entry(const struct net_port_info *npi)
 
 	if (__improbable(is_wakeuuid_set() == false)) {
 		if (if_ports_used_verbose > 0) {
-			log(LOG_ERR, "%s: wakeuuid not set %u not adding "
+			log(LOG_ERR, "%s: wakeuuid not set not adding "
 			    "port: %u flags: 0x%xif: %u pid: %u epid %u\n",
 			    __func__,
 			    ntohs(npi->npi_local_port),
@@ -509,7 +497,7 @@ sysctl_wakeuuid_not_set_last_time SYSCTL_HANDLER_ARGS
 	} else {
 		struct user32_timeval tv = {};
 
-		tv.tv_sec = wakeuuid_not_set_last_time.tv_sec;
+		tv.tv_sec = (user32_time_t)wakeuuid_not_set_last_time.tv_sec;
 		tv.tv_usec = wakeuuid_not_set_last_time.tv_usec;
 		return SYSCTL_OUT(req, &tv, sizeof(tv));
 	}
@@ -656,11 +644,16 @@ if_ports_used_add_inpcb(const uint32_t ifindex, const struct inpcb *inp)
 
 	bzero(&npi, sizeof(struct net_port_info));
 
-	npi.npi_if_index = ifindex;
+	/* This is unlikely to happen but better be safe than sorry */
+	if (ifindex > UINT16_MAX) {
+		os_log(OS_LOG_DEFAULT, "%s: ifindex %u too big\n", __func__, ifindex);
+		return;
+	}
+	npi.npi_if_index = (uint16_t)ifindex;
 
 	npi.npi_flags |= NPIF_SOCKET;
 
-	npi.npi_timestamp.tv_sec = wakeuiid_last_check.tv_sec;
+	npi.npi_timestamp.tv_sec = (int32_t)wakeuiid_last_check.tv_sec;
 	npi.npi_timestamp.tv_usec = wakeuiid_last_check.tv_usec;
 
 	if (SOCK_PROTO(so) == IPPROTO_TCP) {
@@ -700,6 +693,14 @@ if_ports_used_add_inpcb(const uint32_t ifindex, const struct inpcb *inp)
 		    &inp->in6p_laddr, sizeof(struct in6_addr));
 		memcpy(&npi.npi_foreign_addr_in6,
 		    &inp->in6p_faddr, sizeof(struct in6_addr));
+
+		/* Clear the embedded scope ID */
+		if (IN6_IS_ADDR_LINKLOCAL(&npi.npi_local_addr_in6)) {
+			npi.npi_local_addr_in6.s6_addr16[1] = 0;
+		}
+		if (IN6_IS_ADDR_LINKLOCAL(&npi.npi_foreign_addr_in6)) {
+			npi.npi_foreign_addr_in6.s6_addr16[1] = 0;
+		}
 	}
 
 	npi.npi_owner_pid = so->last_pid;

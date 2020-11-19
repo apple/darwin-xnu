@@ -27,14 +27,20 @@
  */
 /* IOSet.m created by rsulack on Thu 11-Jun-1998 */
 
-#include <libkern/c++/OSDictionary.h>
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <libkern/c++/OSArray.h>
+#include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSSerialize.h>
 #include <libkern/c++/OSSet.h>
+#include <libkern/c++/OSSharedPtr.h>
+#include <os/cpp_util.h>
+#include <kern/zalloc.h>
 
 #define super OSCollection
 
-OSDefineMetaClassAndStructors(OSSet, OSCollection)
+OSDefineMetaClassAndStructorsWithZone(OSSet, OSCollection,
+    ZC_ZFREE_CLEARMEM)
 OSMetaClassDefineReservedUnused(OSSet, 0);
 OSMetaClassDefineReservedUnused(OSSet, 1);
 OSMetaClassDefineReservedUnused(OSSet, 2);
@@ -109,60 +115,56 @@ bool
 OSSet::initWithSet(const OSSet *inSet,
     unsigned int inCapacity)
 {
-	return initWithArray(inSet->members, inCapacity);
+	return initWithArray(inSet->members.get(), inCapacity);
 }
 
-OSSet *
+OSSharedPtr<OSSet>
 OSSet::withCapacity(unsigned int capacity)
 {
-	OSSet *me = new OSSet;
+	OSSharedPtr<OSSet> me = OSMakeShared<OSSet>();
 
 	if (me && !me->initWithCapacity(capacity)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
 }
 
-OSSet *
+OSSharedPtr<OSSet>
 OSSet::withObjects(const OSObject *objects[],
     unsigned int count,
     unsigned int capacity)
 {
-	OSSet *me = new OSSet;
+	OSSharedPtr<OSSet> me = OSMakeShared<OSSet>();
 
 	if (me && !me->initWithObjects(objects, count, capacity)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
 }
 
-OSSet *
+OSSharedPtr<OSSet>
 OSSet::withArray(const OSArray *array,
     unsigned int capacity)
 {
-	OSSet *me = new OSSet;
+	OSSharedPtr<OSSet> me = OSMakeShared<OSSet>();
 
 	if (me && !me->initWithArray(array, capacity)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
 }
 
-OSSet *
+OSSharedPtr<OSSet>
 OSSet::withSet(const OSSet *set,
     unsigned int capacity)
 {
-	OSSet *me = new OSSet;
+	OSSharedPtr<OSSet> me = OSMakeShared<OSSet>();;
 
 	if (me && !me->initWithSet(set, capacity)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
@@ -173,7 +175,6 @@ OSSet::free()
 {
 	if (members) {
 		(void) members->super::setOptions(0, kImmutable);
-		members->release();
 	}
 
 	super::free();
@@ -228,6 +229,12 @@ OSSet::setObject(const OSMetaClassBase *anObject)
 }
 
 bool
+OSSet::setObject(OSSharedPtr<const OSMetaClassBase> const& anObject)
+{
+	return setObject(anObject.get());
+}
+
+bool
 OSSet::merge(const OSArray * array)
 {
 	const OSMetaClassBase * anObject = NULL;
@@ -251,7 +258,7 @@ OSSet::merge(const OSArray * array)
 bool
 OSSet::merge(const OSSet * set)
 {
-	return merge(set->members);
+	return merge(set->members.get());
 }
 
 void
@@ -266,6 +273,12 @@ OSSet::removeObject(const OSMetaClassBase *anObject)
 			return;
 		}
 	}
+}
+
+void
+OSSet::removeObject(OSSharedPtr<const OSMetaClassBase> const& anObject)
+{
+	removeObject(anObject.get());
 }
 
 
@@ -406,18 +419,19 @@ OSSet::setOptions(unsigned options, unsigned mask, void *)
 	return old;
 }
 
-OSCollection *
+OSSharedPtr<OSCollection>
 OSSet::copyCollection(OSDictionary *cycleDict)
 {
-	bool allocDict = !cycleDict;
-	OSCollection *ret = NULL;
-	OSSet *newSet = NULL;
+	OSSharedPtr<OSDictionary> ourCycleDict;
+	OSSharedPtr<OSCollection> ret;
+	OSSharedPtr<OSSet> newSet;
 
-	if (allocDict) {
-		cycleDict = OSDictionary::withCapacity(16);
-		if (!cycleDict) {
-			return NULL;
+	if (!cycleDict) {
+		ourCycleDict = OSDictionary::withCapacity(16);
+		if (!ourCycleDict) {
+			return nullptr;
 		}
+		cycleDict = ourCycleDict.get();
 	}
 
 	do {
@@ -431,41 +445,28 @@ OSSet::copyCollection(OSDictionary *cycleDict)
 			continue; // Couldn't create new set abort
 		}
 		// Insert object into cycle Dictionary
-		cycleDict->setObject((const OSSymbol *) this, newSet);
+		cycleDict->setObject((const OSSymbol *) this, newSet.get());
 
-		OSArray *newMembers = newSet->members;
+		OSArray *newMembers = newSet->members.get();
 		newMembers->capacityIncrement = members->capacityIncrement;
 
 		// Now copy over the contents into the new duplicate
 		for (unsigned int i = 0; i < members->count; i++) {
-			OSObject *obj = EXT_CAST(members->array[i]);
+			OSObject *obj = EXT_CAST(members->array[i].get());
 			OSCollection *coll = OSDynamicCast(OSCollection, obj);
 			if (coll) {
-				OSCollection *newColl = coll->copyCollection(cycleDict);
+				OSSharedPtr<OSCollection> newColl = coll->copyCollection(cycleDict);
 				if (newColl) {
-					obj = newColl; // Rely on cycleDict ref for a bit
-					newColl->release();
+					obj = newColl.get(); // Rely on cycleDict ref for a bit
 				} else {
-					goto abortCopy;
+					return ret;
 				}
 			}
-			;
 			newMembers->setObject(obj);
 		}
-		;
 
-		ret = newSet;
-		newSet = NULL;
+		ret = os::move(newSet);
 	} while (false);
-
-abortCopy:
-	if (newSet) {
-		newSet->release();
-	}
-
-	if (allocDict) {
-		cycleDict->release();
-	}
 
 	return ret;
 }

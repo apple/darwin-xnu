@@ -26,7 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-/*  sysctl interface for paramters from user-land */
+/*  sysctl interface for parameters from user-land */
 
 #include <kern/debug.h>
 #include <libkern/libkern.h>
@@ -42,7 +42,7 @@
 #include <kperf/kdebug_trigger.h>
 #include <kperf/kperf.h>
 #include <kperf/kperfbsd.h>
-#include <kperf/kperf_timer.h>
+#include <kperf/kptimer.h>
 #include <kperf/pet.h>
 #include <kperf/lazy.h>
 
@@ -162,7 +162,7 @@ kperf_sysctl_get_set_uint64(struct sysctl_req *req,
 		value = get();
 	}
 
-	int error = sysctl_io_number(req, value, sizeof(value), &value, NULL);
+	int error = sysctl_io_number(req, (long long)value, sizeof(value), &value, NULL);
 
 	if (error || !req->newptr) {
 		return error;
@@ -215,33 +215,29 @@ kperf_sysctl_get_set_unsigned_uint32(struct sysctl_req *req,
 static int
 sysctl_timer_period(struct sysctl_req *req)
 {
-	int error;
 	uint64_t inputs[2] = {};
-
-	assert(req != NULL);
 
 	if (req->newptr == USER_ADDR_NULL) {
 		return EFAULT;
 	}
 
+	int error = 0;
 	if ((error = copyin(req->newptr, inputs, sizeof(inputs)))) {
 		return error;
 	}
-
 	unsigned int timer = (unsigned int)inputs[0];
 	uint64_t new_period = inputs[1];
 
 	if (req->oldptr != USER_ADDR_NULL) {
 		uint64_t period_out = 0;
-		if ((error = kperf_timer_get_period(timer, &period_out))) {
+		if ((error = kptimer_get_period(timer, &period_out))) {
 			return error;
 		}
 
 		inputs[1] = period_out;
-
 		return copyout(inputs, req->oldptr, sizeof(inputs));
 	} else {
-		return kperf_timer_set_period(timer, new_period);
+		return kptimer_set_period(timer, new_period);
 	}
 }
 
@@ -270,7 +266,7 @@ sysctl_action_filter(struct sysctl_req *req, bool is_task_t)
 			return error;
 		}
 
-		inputs[1] = filter_out;
+		inputs[1] = (uint64_t)filter_out;
 		return copyout(inputs, req->oldptr, sizeof(inputs));
 	} else {
 		int pid = is_task_t ? kperf_port_to_pid((mach_port_name_t)new_filter)
@@ -352,20 +348,26 @@ sysctl_kdebug_filter(struct sysctl_req *req)
 	}
 }
 
+static uint32_t
+kperf_sampling_get(void)
+{
+	return kperf_is_sampling();
+}
+
 static int
 kperf_sampling_set(uint32_t sample_start)
 {
 	if (sample_start) {
-		return kperf_sampling_enable();
+		return kperf_enable_sampling();
 	} else {
-		return kperf_sampling_disable();
+		return kperf_disable_sampling();
 	}
 }
 
 static int
 sysctl_sampling(struct sysctl_req *req)
 {
-	return kperf_sysctl_get_set_uint32(req, kperf_sampling_status,
+	return kperf_sysctl_get_set_uint32(req, kperf_sampling_get,
 	           kperf_sampling_set);
 }
 
@@ -379,22 +381,22 @@ sysctl_action_count(struct sysctl_req *req)
 static int
 sysctl_timer_count(struct sysctl_req *req)
 {
-	return kperf_sysctl_get_set_uint32(req, kperf_timer_get_count,
-	           kperf_timer_set_count);
+	return kperf_sysctl_get_set_uint32(req, kptimer_get_count,
+	           kptimer_set_count);
 }
 
 static int
 sysctl_timer_action(struct sysctl_req *req)
 {
-	return kperf_sysctl_get_set_unsigned_uint32(req, kperf_timer_get_action,
-	           kperf_timer_set_action);
+	return kperf_sysctl_get_set_unsigned_uint32(req, kptimer_get_action,
+	           kptimer_set_action);
 }
 
 static int
 sysctl_timer_pet(struct sysctl_req *req)
 {
-	return kperf_sysctl_get_set_uint32(req, kperf_timer_get_petid,
-	           kperf_timer_set_petid);
+	return kperf_sysctl_get_set_uint32(req, kptimer_get_pet_timerid,
+	           kptimer_set_pet_timerid);
 }
 
 static int
@@ -425,15 +427,15 @@ sysctl_kperf_reset(struct sysctl_req *req)
 static int
 sysctl_pet_idle_rate(struct sysctl_req *req)
 {
-	return kperf_sysctl_get_set_int(req, kperf_get_pet_idle_rate,
-	           kperf_set_pet_idle_rate);
+	return kperf_sysctl_get_set_int(req, kppet_get_idle_rate,
+	           kppet_set_idle_rate);
 }
 
 static int
 sysctl_lightweight_pet(struct sysctl_req *req)
 {
-	return kperf_sysctl_get_set_int(req, kperf_get_lightweight_pet,
-	           kperf_set_lightweight_pet);
+	return kperf_sysctl_get_set_int(req, kppet_get_lightweight_pet,
+	           kppet_set_lightweight_pet);
 }
 
 static int
@@ -804,31 +806,13 @@ static int
 kperf_sysctl_limits SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg2)
-	enum kperf_limit_request type = (enum kperf_limit_request)arg1;
-	uint64_t limit = 0;
-
-	switch (type) {
-	case REQ_LIM_PERIOD_NS:
-		limit = KP_MIN_PERIOD_NS;
-		break;
-
-	case REQ_LIM_BG_PERIOD_NS:
-		limit = KP_MIN_PERIOD_BG_NS;
-		break;
-
-	case REQ_LIM_PET_PERIOD_NS:
-		limit = KP_MIN_PERIOD_PET_NS;
-		break;
-
-	case REQ_LIM_BG_PET_PERIOD_NS:
-		limit = KP_MIN_PERIOD_PET_BG_NS;
-		break;
-
-	default:
+	enum kptimer_period_limit limit = (enum kptimer_period_limit)arg1;
+	if (limit >= KTPL_MAX) {
 		return ENOENT;
 	}
-
-	return sysctl_io_number(req, limit, sizeof(limit), &limit, NULL);
+	uint64_t period = kptimer_minperiods_ns[limit];
+	return sysctl_io_number(req, (long long)period, sizeof(period), &period,
+	           NULL);
 }
 
 SYSCTL_PROC(_kperf_limits, OID_AUTO, timer_min_period_ns,

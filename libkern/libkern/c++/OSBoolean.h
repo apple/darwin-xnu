@@ -36,7 +36,7 @@
 class OSString;
 class OSBoolean;
 
-typedef OSPtr<OSBoolean> OSBooleanPtr;
+typedef OSBoolean* OSBooleanPtr;
 
 /*!
  * @header
@@ -106,7 +106,7 @@ public:
  * <code>@link kOSBooleanFalse kOSBooleanFalse@/link</code>,
  * so that you can always use pointer comparison with OSBoolean objects.
  */
-	static OSBooleanPtr withBoolean(bool value);
+	static OSPtr<OSBoolean> withBoolean(bool value);
 
 /*!
  * @function free

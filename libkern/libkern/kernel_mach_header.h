@@ -81,6 +81,15 @@ typedef struct nlist            kernel_nlist_t;
 
 extern kernel_mach_header_t _mh_execute_header;
 
+/*
+ * If the 'MH_DYLIB_IN_CACHE' bit is set in a kernel or kext mach-o header flag,
+ * then that mach-o has been linked by the new KernelCollectionBuilder into
+ * an MH_FILESET kernel collection. This bit is typically reserved for dylibs
+ * that are part of the dyld-shared-cache, but when applied to constituents of
+ * a kernel collection, it has this special meaning.
+ */
+#define kernel_mach_header_is_in_fileset(_mh) ((_mh)->flags & MH_DYLIB_IN_CACHE)
+
 vm_offset_t getlastaddr(void);
 
 kernel_segment_command_t *firstseg(void);

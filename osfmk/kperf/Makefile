@@ -11,7 +11,7 @@ EXPORT_ONLY_FILES = \
 			context.h        \
 			kperf.h          \
 			kperfbsd.h       \
-			kperf_timer.h    \
+			kptimer.h        \
 			kdebug_trigger.h \
 			lazy.h           \
 			pet.h

@@ -64,7 +64,9 @@
 
 #ifndef _NET_IF_MEDIA_H_
 #define _NET_IF_MEDIA_H_
+#ifndef DRIVERKIT
 #include <sys/appleapiopts.h>
+#endif /* DRIVERKIT */
 
 /*
  * Prototypes and definitions for BSD/OS-compatible network interface

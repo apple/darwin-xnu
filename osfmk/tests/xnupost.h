@@ -125,7 +125,7 @@ kern_return_t xnupost_run_tests(xnupost_test_t test_list, uint32_t test_count);
 kern_return_t xnupost_list_tests(xnupost_test_t test_list, uint32_t test_count);
 kern_return_t xnupost_reset_tests(xnupost_test_t test_list, uint32_t test_count);
 
-int xnupost_export_testdata(void * outp, uint32_t size, uint32_t * lenp);
+int xnupost_export_testdata(void * outp, size_t size, uint32_t * lenp);
 uint32_t xnupost_get_estimated_testdata_size(void);
 
 kern_return_t kernel_do_post(void);

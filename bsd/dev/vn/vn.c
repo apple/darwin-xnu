@@ -141,7 +141,7 @@ static int      vndevice_cdev_major;
  *	D_CANFREE	We support B_FREEBUF
  */
 
-static struct bdevsw vn_bdevsw = {
+static const struct bdevsw vn_bdevsw = {
 	.d_open     = vnopen,
 	.d_close    = vnclose,
 	.d_strategy = vnstrategy,
@@ -151,7 +151,7 @@ static struct bdevsw vn_bdevsw = {
 	.d_type     = D_DISK,
 };
 
-static struct cdevsw vn_cdevsw = {
+static const struct cdevsw vn_cdevsw = {
 	.d_open       = vnopen,
 	.d_close      = vnclose,
 	.d_read       = vnread,
@@ -302,9 +302,9 @@ vnread_shadow(struct vn_softc * vn, struct uio *uio, int ioflag,
 	orig_offset = offset = uio_offset(uio);
 
 	while (resid > 0) {
-		u_int32_t               remainder;
-		u_int32_t               this_block_number;
-		u_int32_t               this_block_count;
+		u_int32_t       remainder;
+		off_t           this_block_number;
+		size_t          this_block_count;
 		off_t           this_offset;
 		user_ssize_t    this_resid;
 		struct vnode *  vp;
@@ -321,7 +321,7 @@ vnread_shadow(struct vn_softc * vn, struct uio *uio, int ioflag,
 		}
 
 		/* read the blocks (or parts thereof) */
-		this_offset = (off_t)this_block_number * blocksize + remainder;
+		this_offset = this_block_number * blocksize + remainder;
 		uio_setoffset(uio, this_offset);
 		this_resid = this_block_count * blocksize - remainder;
 		if (this_resid > resid) {
@@ -349,7 +349,7 @@ vnread_shadow(struct vn_softc * vn, struct uio *uio, int ioflag,
 
 static int
 vncopy_block_to_shadow(struct vn_softc * vn, vfs_context_t ctx,
-    u_int32_t file_block, u_int32_t shadow_block)
+    off_t file_block, off_t shadow_block)
 {
 	int     error;
 	char *  tmpbuf;
@@ -360,14 +360,14 @@ vncopy_block_to_shadow(struct vn_softc * vn, vfs_context_t ctx,
 	}
 	/* read one block from file at file_block offset */
 	error = file_io(vn->sc_vp, ctx, UIO_READ,
-	    tmpbuf, (off_t)file_block * vn->sc_secsize,
+	    tmpbuf, file_block * vn->sc_secsize,
 	    vn->sc_secsize, NULL);
 	if (error) {
 		goto done;
 	}
 	/* write one block to shadow file at shadow_block offset */
 	error = file_io(vn->sc_shadow_vp, ctx, UIO_WRITE,
-	    tmpbuf, (off_t)shadow_block * vn->sc_secsize,
+	    tmpbuf, shadow_block * vn->sc_secsize,
 	    vn->sc_secsize, NULL);
 done:
 	FREE(tmpbuf, M_TEMP);
@@ -393,11 +393,11 @@ vnwrite_shadow(struct vn_softc * vn, struct uio *uio, int ioflag,
 
 	while (resid > 0) {
 		int             flags = 0;
-		u_int32_t               offset_block_number;
-		u_int32_t               remainder;
-		u_int32_t               resid_block_count;
-		u_int32_t               shadow_block_count;
-		u_int32_t               shadow_block_number;
+		off_t           offset_block_number;
+		u_int32_t       remainder;
+		size_t          resid_block_count;
+		size_t          shadow_block_count;
+		off_t           shadow_block_number;
 		user_ssize_t    this_resid;
 
 		/* figure out which blocks to write */
@@ -433,15 +433,14 @@ vnwrite_shadow(struct vn_softc * vn, struct uio *uio, int ioflag,
 #endif
 		}
 		/* write the blocks (or parts thereof) */
-		uio_setoffset(uio, (off_t)
-		    shadow_block_number * blocksize + remainder);
-		this_resid = (off_t)shadow_block_count * blocksize - remainder;
+		uio_setoffset(uio, shadow_block_number * blocksize + remainder);
+		this_resid = shadow_block_count * blocksize - remainder;
 		if (this_resid >= resid) {
 			this_resid = resid;
 			if ((flags & FLAGS_LAST_BLOCK_PARTIAL) != 0) {
 				/* copy the last block to the shadow */
-				u_int32_t       d;
-				u_int32_t       s;
+				off_t       d;
+				off_t       s;
 
 				s = offset_block_number
 				    + resid_block_count - 1;
@@ -450,7 +449,7 @@ vnwrite_shadow(struct vn_softc * vn, struct uio *uio, int ioflag,
 				error = vncopy_block_to_shadow(vn, ctx, s, d);
 				if (error) {
 					printf("vnwrite_shadow: failed to copy"
-					    " block %u to shadow block %u\n",
+					    " block %lld to shadow block %lld\n",
 					    s, d);
 					break;
 				}
@@ -464,7 +463,7 @@ vnwrite_shadow(struct vn_softc * vn, struct uio *uio, int ioflag,
 			    shadow_block_number);
 			if (error) {
 				printf("vnwrite_shadow: failed to"
-				    " copy block %u to shadow block %u\n",
+				    " copy block %lld to shadow block %lld\n",
 				    offset_block_number,
 				    shadow_block_number);
 				break;
@@ -645,17 +644,17 @@ shadow_read(struct vn_softc * vn, struct buf * bp, char * base,
 {
 	u_int32_t               blocksize = vn->sc_secsize;
 	int             error = 0;
-	u_int32_t               offset;
+	off_t           offset;
 	boolean_t       read_shadow;
-	u_int32_t               resid;
+	size_t          resid;
 	u_int32_t               start = 0;
 
 	offset = buf_blkno(bp);
 	resid =  buf_resid(bp) / blocksize;
 	while (resid > 0) {
 		user_ssize_t    temp_resid;
-		u_int32_t               this_offset;
-		u_int32_t               this_resid;
+		off_t           this_offset;
+		size_t          this_resid;
 		struct vnode *  vp;
 
 		read_shadow = shadow_map_read(vn->sc_shadow_map,
@@ -667,7 +666,7 @@ shadow_read(struct vn_softc * vn, struct buf * bp, char * base,
 			vp = vn->sc_vp;
 		}
 		error = file_io(vp, ctx, UIO_READ, base + start,
-		    (off_t)this_offset * blocksize,
+		    this_offset * blocksize,
 		    (user_ssize_t)this_resid * blocksize,
 		    &temp_resid);
 		if (error) {
@@ -682,7 +681,7 @@ shadow_read(struct vn_softc * vn, struct buf * bp, char * base,
 		offset += this_resid;
 		start += this_resid * blocksize;
 	}
-	buf_setresid(bp, resid * blocksize);
+	buf_setresid(bp, (uint32_t)(resid * blocksize));
 	return error;
 }
 
@@ -692,17 +691,17 @@ shadow_write(struct vn_softc * vn, struct buf * bp, char * base,
 {
 	u_int32_t               blocksize = vn->sc_secsize;
 	int             error = 0;
-	u_int32_t               offset;
+	off_t           offset;
 	boolean_t       shadow_grew;
-	u_int32_t               resid;
+	size_t          resid;
 	u_int32_t               start = 0;
 
 	offset = buf_blkno(bp);
 	resid =  buf_resid(bp) / blocksize;
 	while (resid > 0) {
 		user_ssize_t    temp_resid;
-		u_int32_t               this_offset;
-		u_int32_t               this_resid;
+		off_t           this_offset;
+		size_t          this_resid;
 
 		shadow_grew = shadow_map_write(vn->sc_shadow_map,
 		    offset, resid,
@@ -718,7 +717,7 @@ shadow_write(struct vn_softc * vn, struct buf * bp, char * base,
 		}
 		error = file_io(vn->sc_shadow_vp, ctx, UIO_WRITE,
 		    base + start,
-		    (off_t)this_offset * blocksize,
+		    this_offset * blocksize,
 		    (user_ssize_t)this_resid * blocksize,
 		    &temp_resid);
 		if (error) {
@@ -733,7 +732,7 @@ shadow_write(struct vn_softc * vn, struct buf * bp, char * base,
 		offset += this_resid;
 		start += this_resid * blocksize;
 	}
-	buf_setresid(bp, resid * blocksize);
+	buf_setresid(bp, (uint32_t)(resid * blocksize));
 	return error;
 }
 
@@ -757,7 +756,7 @@ vn_readwrite_io(struct vn_softc * vn, struct buf * bp, vfs_context_t ctx)
 		    iov_base,
 		    (off_t)buf_blkno(bp) * vn->sc_secsize,
 		    buf_resid(bp), &temp_resid);
-		buf_setresid(bp, temp_resid);
+		buf_setresid(bp, (uint32_t)temp_resid);
 	} else {
 		if (buf_flags(bp) & B_READ) {
 			error = shadow_read(vn, bp, iov_base, ctx);
@@ -816,7 +815,7 @@ vnstrategy(struct buf *bp)
 	 * If the request crosses EOF, truncate the request.
 	 */
 	if ((blk_num + sz) > 0 && ((u_int64_t)(blk_num + sz)) > vn->sc_size) {
-		buf_setcount(bp, (vn->sc_size - blk_num) * vn->sc_secsize);
+		buf_setcount(bp, (uint32_t)((vn->sc_size - blk_num) * vn->sc_secsize));
 		buf_setresid(bp, buf_count(bp));
 	}
 	vp = vn->sc_vp;

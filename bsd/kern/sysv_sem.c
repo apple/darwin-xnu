@@ -1629,9 +1629,9 @@ IPCS_sem_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	union {
 		struct user32_IPCS_command u32;
 		struct user_IPCS_command u64;
-	} ipcs;
-	struct user32_semid_ds semid_ds32;      /* post conversion, 32 bit version */
-	struct user64_semid_ds semid_ds64;      /* post conversion, 64 bit version */
+	} ipcs = { };
+	struct user32_semid_ds semid_ds32 = { }; /* post conversion, 32 bit version */
+	struct user64_semid_ds semid_ds64 = { }; /* post conversion, 64 bit version */
 	void *semid_dsp;
 	size_t ipcs_sz;
 	size_t semid_ds_sz;

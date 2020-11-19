@@ -32,6 +32,7 @@
 #define DISABLE_DATAQUEUE_WARNING /* IODataQueue is deprecated, please use IOSharedDataQueue instead */
 
 #include <IOKit/IODataQueue.h>
+#include <libkern/c++/OSPtr.h>
 
 #undef DISABLE_DATAQUEUE_WARNING
 
@@ -87,7 +88,7 @@ public:
  * @param size The size of the data queue memory region.
  * @result Returns the newly allocated IOSharedDataQueue instance.  Zero is returned on failure.
  */
-	static IOSharedDataQueue *withCapacity(UInt32 size);
+	static OSPtr<IOSharedDataQueue> withCapacity(UInt32 size);
 
 /*!
  * @function withEntries
@@ -97,7 +98,7 @@ public:
  * @param entrySize Size of each entry.
  * @result Reeturns the newly allocated IOSharedDataQueue instance.  Zero is returned on failure.
  */
-	static IOSharedDataQueue *withEntries(UInt32 numEntries, UInt32 entrySize);
+	static OSPtr<IOSharedDataQueue> withEntries(UInt32 numEntries, UInt32 entrySize);
 
 /*!
  * @function initWithCapacity
@@ -114,7 +115,7 @@ public:
  * @discussion The IOMemoryDescriptor instance returned by this method is intended to be mapped into a user process.  This is the memory region that the IODataQueueClient code operates on.
  * @result Returns a newly allocated IOMemoryDescriptor for the IODataQueueMemory region.  Returns zero on failure.
  */
-	virtual IOMemoryDescriptor *getMemoryDescriptor() APPLE_KEXT_OVERRIDE;
+	virtual OSPtr<IOMemoryDescriptor> getMemoryDescriptor() APPLE_KEXT_OVERRIDE;
 
 /*!
  * @function peek

@@ -2,9 +2,10 @@
 #define KTRACE_HELPERS_H
 
 #include <darwintest.h>
+#include <ktrace/ktrace.h>
 #include <libproc.h>
 #include <sys/sysctl.h>
-#include <System/sys/kdebug.h>
+#include <sys/kdebug.h>
 
 static inline void
 reset_ktrace(void)
@@ -54,6 +55,21 @@ out:
 	reset_ktrace();
 	T_ATEND(reset_ktrace);
 	T_SETUPEND;
+}
+
+static inline uint64_t
+ns_from_abs(ktrace_session_t s, uint64_t abstime)
+{
+	uint64_t ns = 0;
+	int error = ktrace_convert_timestamp_to_nanoseconds(s, abstime, &ns);
+	T_QUIET; T_ASSERT_POSIX_ZERO(error, "convert abstime to nanoseconds");
+	return ns;
+}
+
+static inline uint64_t
+relns_from_abs(ktrace_session_t s, uint64_t abstime)
+{
+	return ns_from_abs(s, abstime - ktrace_get_earliest_timestamp(s));
 }
 
 #endif /* !defined(KTRACE_HELPERS_H) */

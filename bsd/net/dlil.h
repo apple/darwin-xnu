@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -152,30 +152,39 @@ struct iff_filter;
 #define DLIL_THREADNAME_LEN     32
 
 /*
- * DLIL input thread info
+ * DLIL threading info
  */
 struct dlil_threading_info {
-	decl_lck_mtx_data(, input_lck);
-	lck_grp_t       *lck_grp;       /* lock group (for lock stats) */
-	u_int32_t       input_waiting;  /* DLIL condition of thread */
-	u_int32_t       wtot;           /* # of wakeup requests */
-	char            input_name[DLIL_THREADNAME_LEN]; /* name storage */
-	struct ifnet    *ifp;           /* pointer to interface */
-	class_queue_t   rcvq_pkts;      /* queue of pkts */
-	struct ifnet_stat_increment_param stats; /* incremental statistics */
+	decl_lck_mtx_data(, dlth_lock);
+	class_queue_t   dlth_pkts;      /* queue of pkts */
+	struct ifnet    *dlth_ifp;      /* pointer to interface */
+	struct ifnet_stat_increment_param dlth_stats; /* incremental stats */
+	uint32_t       dlth_flags;      /* thread flags (see below) */
+	uint32_t       dlth_wtot;       /* # of wakeup requests */
+
+	/* strategy (sync or async) */
+	errno_t (*dlth_strategy)(struct dlil_threading_info *,
+	    struct ifnet *, struct mbuf *, struct mbuf *,
+	    const struct ifnet_stat_increment_param *, boolean_t,
+	    struct thread *);
+
 	/*
 	 * Thread affinity (workloop and DLIL threads).
 	 */
-	boolean_t       net_affinity;   /* affinity set is available */
-	struct thread   *input_thr;     /* input thread */
-	struct thread   *wloop_thr;     /* workloop thread */
-	struct thread   *poll_thr;      /* poll thread */
-	u_int32_t       tag;            /* affinity tag */
+	boolean_t       dlth_affinity;          /* affinity set is available */
+	uint32_t        dlth_affinity_tag;      /* affinity tag */
+	struct thread   *dlth_thread;           /* DLIL worker thread */
+	struct thread   *dlth_driver_thread;    /* driver/workloop thread */
+	struct thread   *dlth_poller_thread;    /* poll thread */
+
+	lck_grp_t       *dlth_lock_grp; /* lock group (for lock stats) */
+	char            dlth_name[DLIL_THREADNAME_LEN]; /* name storage */
+
 #if IFNET_INPUT_SANITY_CHK
 	/*
 	 * For debugging.
 	 */
-	u_int64_t       input_mbuf_cnt; /* total # of packets processed */
+	uint64_t        dlth_pkts_cnt;          /* total # of packets */
 #endif
 };
 
@@ -188,15 +197,18 @@ struct dlil_main_threading_info {
 };
 
 /*
+ * Valid values for dlth_flags.
+ *
  * The following are shared with kpi_protocol.c so that it may wakeup
  * the input thread to run through packets queued for protocol input.
  */
-#define DLIL_INPUT_RUNNING      0x80000000
-#define DLIL_INPUT_WAITING      0x40000000
-#define DLIL_PROTO_REGISTER     0x20000000
-#define DLIL_PROTO_WAITING      0x10000000
-#define DLIL_INPUT_TERMINATE    0x08000000
+#define DLIL_INPUT_RUNNING              0x80000000
+#define DLIL_INPUT_WAITING              0x40000000
+#define DLIL_PROTO_REGISTER             0x20000000
+#define DLIL_PROTO_WAITING              0x10000000
+#define DLIL_INPUT_TERMINATE            0x08000000
 #define DLIL_INPUT_TERMINATE_COMPLETE   0x04000000
+#define DLIL_INPUT_EMBRYONIC            0x00000001
 
 /*
  * Flags for dlil_attach_filter()
@@ -303,6 +315,8 @@ extern errno_t dlil_send_arp(ifnet_t, u_int16_t, const struct sockaddr_dl *,
 extern int dlil_attach_filter(ifnet_t, const struct iff_filter *,
     interface_filter_t *, u_int32_t);
 extern void dlil_detach_filter(interface_filter_t);
+extern boolean_t dlil_has_ip_filter(void);
+extern boolean_t dlil_has_if_filter(struct ifnet *);
 
 extern void dlil_proto_unplumb_all(ifnet_t);
 
@@ -381,19 +395,19 @@ ifp_inc_traffic_class_in(struct ifnet *ifp, struct mbuf *m)
 	switch (m_get_traffic_class(m)) {
 	case MBUF_TC_BE:
 		ifp->if_tc.ifi_ibepackets++;
-		ifp->if_tc.ifi_ibebytes += m->m_pkthdr.len;
+		ifp->if_tc.ifi_ibebytes += (u_int64_t)m->m_pkthdr.len;
 		break;
 	case MBUF_TC_BK:
 		ifp->if_tc.ifi_ibkpackets++;
-		ifp->if_tc.ifi_ibkbytes += m->m_pkthdr.len;
+		ifp->if_tc.ifi_ibkbytes += (u_int64_t)m->m_pkthdr.len;
 		break;
 	case MBUF_TC_VI:
 		ifp->if_tc.ifi_ivipackets++;
-		ifp->if_tc.ifi_ivibytes += m->m_pkthdr.len;
+		ifp->if_tc.ifi_ivibytes += (u_int64_t)m->m_pkthdr.len;
 		break;
 	case MBUF_TC_VO:
 		ifp->if_tc.ifi_ivopackets++;
-		ifp->if_tc.ifi_ivobytes += m->m_pkthdr.len;
+		ifp->if_tc.ifi_ivobytes += (u_int64_t)m->m_pkthdr.len;
 		break;
 	default:
 		break;
@@ -401,7 +415,7 @@ ifp_inc_traffic_class_in(struct ifnet *ifp, struct mbuf *m)
 
 	if (mbuf_is_traffic_class_privileged(m)) {
 		ifp->if_tc.ifi_ipvpackets++;
-		ifp->if_tc.ifi_ipvbytes += m->m_pkthdr.len;
+		ifp->if_tc.ifi_ipvbytes += (u_int64_t)m->m_pkthdr.len;
 	}
 }
 
@@ -421,19 +435,19 @@ ifp_inc_traffic_class_out(struct ifnet *ifp, struct mbuf *m)
 	switch (m_get_traffic_class(m)) {
 	case MBUF_TC_BE:
 		ifp->if_tc.ifi_obepackets++;
-		ifp->if_tc.ifi_obebytes += m->m_pkthdr.len;
+		ifp->if_tc.ifi_obebytes += (u_int64_t)m->m_pkthdr.len;
 		break;
 	case MBUF_TC_BK:
 		ifp->if_tc.ifi_obkpackets++;
-		ifp->if_tc.ifi_obkbytes += m->m_pkthdr.len;
+		ifp->if_tc.ifi_obkbytes += (u_int64_t)m->m_pkthdr.len;
 		break;
 	case MBUF_TC_VI:
 		ifp->if_tc.ifi_ovipackets++;
-		ifp->if_tc.ifi_ovibytes += m->m_pkthdr.len;
+		ifp->if_tc.ifi_ovibytes += (u_int64_t)m->m_pkthdr.len;
 		break;
 	case MBUF_TC_VO:
 		ifp->if_tc.ifi_ovopackets++;
-		ifp->if_tc.ifi_ovobytes += m->m_pkthdr.len;
+		ifp->if_tc.ifi_ovobytes += (u_int64_t)m->m_pkthdr.len;
 		break;
 	default:
 		break;
@@ -441,7 +455,7 @@ ifp_inc_traffic_class_out(struct ifnet *ifp, struct mbuf *m)
 
 	if (mbuf_is_traffic_class_privileged(m)) {
 		ifp->if_tc.ifi_opvpackets++;
-		ifp->if_tc.ifi_opvbytes += m->m_pkthdr.len;
+		ifp->if_tc.ifi_opvbytes += (u_int64_t)m->m_pkthdr.len;
 	}
 }
 #endif /* BSD_KERNEL_PRIVATE */

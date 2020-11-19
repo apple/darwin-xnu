@@ -92,7 +92,7 @@ struct nfs_gss_clnt_ctx {
 	int32_t                 gss_clnt_refcnt;        // Reference count
 	kauth_cred_t            gss_clnt_cred;          // Owner of this context
 	uint8_t                 *gss_clnt_principal;    // Principal to use for this credential
-	uint32_t                gss_clnt_prinlen;       // Length of principal
+	size_t                  gss_clnt_prinlen;       // Length of principal
 	gssd_nametype           gss_clnt_prinnt;        // Name type of principal
 	char                    *gss_clnt_display;      // display name of principal
 	uint32_t                gss_clnt_proc;          // Current GSS proc for cred
@@ -107,7 +107,7 @@ struct nfs_gss_clnt_ctx {
 	uint32_t                gss_clnt_verflen;       // RPC verifier length from server
 	uint8_t                 *gss_clnt_verf;         // RPC verifier from server
 	uint8_t                 *gss_clnt_svcname;      // Service name e.g. "nfs/big.apple.com"
-	uint32_t                gss_clnt_svcnamlen;     // Service name length
+	size_t                  gss_clnt_svcnamlen;     // Service name length
 	gssd_nametype           gss_clnt_svcnt;         // Service name type
 	gssd_cred               gss_clnt_cred_handle;   // Opaque cred handle from gssd
 	gssd_ctx                gss_clnt_context;       // Opaque context handle from gssd
@@ -129,6 +129,7 @@ struct nfs_gss_clnt_ctx {
 #define GSS_NEEDSEQ             0x00000008      // Need a sequence number
 #define GSS_NEEDCTX             0x00000010      // Need the context
 #define GSS_CTX_DESTROY         0x00000020      // Context is being destroyed, don't cache
+#define GSS_CTX_USECOUNT        0x00000040      // Mount vnode's user count has been updated
 
 /*
  * The server's RPCSEC_GSS context information
@@ -194,7 +195,7 @@ void    nfs_gss_clnt_ctx_ref(struct nfsreq *, struct nfs_gss_clnt_ctx *);
 void    nfs_gss_clnt_ctx_unref(struct nfsreq *);
 void    nfs_gss_clnt_ctx_unmount(struct nfsmount *);
 int     nfs_gss_clnt_ctx_remove(struct nfsmount *, kauth_cred_t);
-int     nfs_gss_clnt_ctx_set_principal(struct nfsmount *, vfs_context_t, uint8_t *, uint32_t, uint32_t);
+int     nfs_gss_clnt_ctx_set_principal(struct nfsmount *, vfs_context_t, uint8_t *, size_t, uint32_t);
 int     nfs_gss_clnt_ctx_get_principal(struct nfsmount *, vfs_context_t, struct user_nfs_gss_principal *);
 int     nfs_gss_svc_cred_get(struct nfsrv_descript *, struct nfsm_chain *);
 int     nfs_gss_svc_verf_put(struct nfsrv_descript *, struct nfsm_chain *);

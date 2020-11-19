@@ -79,6 +79,7 @@
 #include <mach/machine.h>
 #include <mach/time_value.h>
 #include <sys/kdebug.h>
+#include <sys/time.h>
 #include <kern/spl.h>
 #include <kern/assert.h>
 #include <kern/lock_group.h>
@@ -90,6 +91,7 @@
 #include <i386/postcode.h>
 #include <i386/mp_desc.h>
 #include <i386/misc_protos.h>
+#include <i386/panic_notify.h>
 #include <i386/thread.h>
 #include <i386/trap.h>
 #include <i386/machine_routines.h>
@@ -156,12 +158,11 @@ typedef enum paniclog_flush_type {
 void paniclog_flush_internal(paniclog_flush_type_t variant);
 
 extern const char       version[];
-extern char     osversion[];
-extern int              max_unsafe_quanta;
+extern char             osversion[];
 extern int              max_poll_quanta;
 extern unsigned int     panic_is_inited;
 
-extern int      proc_pid(void *p);
+extern int      proc_pid(struct proc *);
 
 /* Definitions for frame pointers */
 #define FP_ALIGNMENT_MASK      ((uint32_t)(0x3))
@@ -185,7 +186,6 @@ typedef struct _cframe_t {
 #endif
 } cframe_t;
 
-static unsigned panic_io_port;
 static unsigned commit_paniclog_to_nvram;
 boolean_t coprocessor_paniclog_flush = FALSE;
 
@@ -193,16 +193,21 @@ struct kcdata_descriptor kc_panic_data;
 static boolean_t begun_panic_stackshot = FALSE;
 extern kern_return_t    do_stackshot(void *);
 
-extern void             kdp_snapshot_preflight(int pid, void *tracebuf,
-    uint32_t tracebuf_size, uint32_t flags,
+extern void                    kdp_snapshot_preflight(int pid, void * tracebuf,
+    uint32_t tracebuf_size, uint64_t flags,
     kcdata_descriptor_t data_p,
-    boolean_t enable_faulting);
+    uint64_t since_timestamp, uint32_t pagetable_mask);
 extern int              kdp_stack_snapshot_bytes_traced(void);
+extern int              kdp_stack_snapshot_bytes_uncompressed(void);
 
+extern void             stackshot_memcpy(void *dst, const void *src, size_t len);
 vm_offset_t panic_stackshot_buf = 0;
 size_t panic_stackshot_buf_len = 0;
 
 size_t panic_stackshot_len = 0;
+
+boolean_t is_clock_configured = FALSE;
+
 /*
  * Backtrace a single frame.
  */
@@ -311,25 +316,11 @@ machine_startup(void)
 
 	hw_lock_init(&pbtlock);         /* initialize print backtrace lock */
 
-	if (PE_parse_boot_argn("preempt", &boot_arg, sizeof(boot_arg))) {
-		default_preemption_rate = boot_arg;
-	}
-	if (PE_parse_boot_argn("unsafe", &boot_arg, sizeof(boot_arg))) {
-		max_unsafe_quanta = boot_arg;
-	}
-	if (PE_parse_boot_argn("poll", &boot_arg, sizeof(boot_arg))) {
-		max_poll_quanta = boot_arg;
-	}
 	if (PE_parse_boot_argn("yield", &boot_arg, sizeof(boot_arg))) {
 		sched_poll_yield_shift = boot_arg;
 	}
-/* The I/O port to issue a read from, in the event of a panic. Useful for
- * triggering logic analyzers.
- */
-	if (PE_parse_boot_argn("panic_io_port", &boot_arg, sizeof(boot_arg))) {
-		/*I/O ports range from 0 through 0xFFFF */
-		panic_io_port = boot_arg & 0xffff;
-	}
+
+	panic_notify_init();
 
 	machine_conf();
 
@@ -414,85 +405,6 @@ efi_set_tables_64(EFI_SYSTEM_TABLE_64 * system_table)
 	} while (FALSE);
 }
 
-static void
-efi_set_tables_32(EFI_SYSTEM_TABLE_32 * system_table)
-{
-	EFI_RUNTIME_SERVICES_32 *runtime;
-	uint32_t hdr_cksum;
-	uint32_t cksum;
-
-	DPRINTF("Processing 32-bit EFI tables at %p\n", system_table);
-	do {
-		DPRINTF("Header:\n");
-		DPRINTF("  Signature:   0x%016llx\n", system_table->Hdr.Signature);
-		DPRINTF("  Revision:    0x%08x\n", system_table->Hdr.Revision);
-		DPRINTF("  HeaderSize:  0x%08x\n", system_table->Hdr.HeaderSize);
-		DPRINTF("  CRC32:       0x%08x\n", system_table->Hdr.CRC32);
-		DPRINTF("RuntimeServices: 0x%08x\n", system_table->RuntimeServices);
-		if (system_table->Hdr.Signature != EFI_SYSTEM_TABLE_SIGNATURE) {
-			kprintf("Bad EFI system table signature\n");
-			break;
-		}
-		// Verify signature of the system table
-		hdr_cksum = system_table->Hdr.CRC32;
-		system_table->Hdr.CRC32 = 0;
-		DPRINTF("System table at %p HeaderSize 0x%x\n", system_table, system_table->Hdr.HeaderSize);
-		cksum = crc32(0L, system_table, system_table->Hdr.HeaderSize);
-
-		DPRINTF("System table calculated CRC32 = 0x%x, header = 0x%x\n", cksum, hdr_cksum);
-		system_table->Hdr.CRC32 = hdr_cksum;
-		if (cksum != hdr_cksum) {
-			kprintf("Bad EFI system table checksum\n");
-			break;
-		}
-
-		gPEEFISystemTable     = system_table;
-
-		if (system_table->RuntimeServices == 0) {
-			kprintf("No runtime table present\n");
-			break;
-		}
-		DPRINTF("RuntimeServices table at 0x%x\n", system_table->RuntimeServices);
-		// 32-bit virtual address is OK for 32-bit EFI and 32-bit kernel.
-		// For a 64-bit kernel, booter provides a virtual address mod 4G
-		runtime = (EFI_RUNTIME_SERVICES_32 *)
-		    (system_table->RuntimeServices | VM_MIN_KERNEL_ADDRESS);
-		DPRINTF("Runtime table addressed at %p\n", runtime);
-		if (runtime->Hdr.Signature != EFI_RUNTIME_SERVICES_SIGNATURE) {
-			kprintf("Bad EFI runtime table signature\n");
-			break;
-		}
-
-		// Verify signature of runtime services table
-		hdr_cksum = runtime->Hdr.CRC32;
-		runtime->Hdr.CRC32 = 0;
-		cksum = crc32(0L, runtime, runtime->Hdr.HeaderSize);
-
-		DPRINTF("Runtime table calculated CRC32 = 0x%x, header = 0x%x\n", cksum, hdr_cksum);
-		runtime->Hdr.CRC32 = hdr_cksum;
-		if (cksum != hdr_cksum) {
-			kprintf("Bad EFI runtime table checksum\n");
-			break;
-		}
-
-		DPRINTF("Runtime functions\n");
-		DPRINTF("  GetTime                  : 0x%x\n", runtime->GetTime);
-		DPRINTF("  SetTime                  : 0x%x\n", runtime->SetTime);
-		DPRINTF("  GetWakeupTime            : 0x%x\n", runtime->GetWakeupTime);
-		DPRINTF("  SetWakeupTime            : 0x%x\n", runtime->SetWakeupTime);
-		DPRINTF("  SetVirtualAddressMap     : 0x%x\n", runtime->SetVirtualAddressMap);
-		DPRINTF("  ConvertPointer           : 0x%x\n", runtime->ConvertPointer);
-		DPRINTF("  GetVariable              : 0x%x\n", runtime->GetVariable);
-		DPRINTF("  GetNextVariableName      : 0x%x\n", runtime->GetNextVariableName);
-		DPRINTF("  SetVariable              : 0x%x\n", runtime->SetVariable);
-		DPRINTF("  GetNextHighMonotonicCount: 0x%x\n", runtime->GetNextHighMonotonicCount);
-		DPRINTF("  ResetSystem              : 0x%x\n", runtime->ResetSystem);
-
-		gPEEFIRuntimeServices = runtime;
-	} while (FALSE);
-}
-
-
 /* Map in EFI runtime areas. */
 static void
 efi_init(void)
@@ -552,7 +464,7 @@ efi_init(void)
 		if (args->efiMode == kBootArgsEfiMode64) {
 			efi_set_tables_64((EFI_SYSTEM_TABLE_64 *) ml_static_ptovirt(args->efiSystemTable));
 		} else {
-			efi_set_tables_32((EFI_SYSTEM_TABLE_32 *) ml_static_ptovirt(args->efiSystemTable));
+			panic("Unsupported 32-bit EFI system table!");
 		}
 	} while (FALSE);
 
@@ -645,7 +557,7 @@ hibernate_newruntime_map(void * map, vm_size_t map_size, uint32_t system_table_o
 		if (args->efiMode == kBootArgsEfiMode64) {
 			efi_set_tables_64((EFI_SYSTEM_TABLE_64 *) ml_static_ptovirt(args->efiSystemTable));
 		} else {
-			efi_set_tables_32((EFI_SYSTEM_TABLE_32 *) ml_static_ptovirt(args->efiSystemTable));
+			panic("Unsupported 32-bit EFI system table!");
 		}
 	} while (FALSE);
 
@@ -689,6 +601,7 @@ machine_init(void)
 	 * Configure clock devices.
 	 */
 	clock_config();
+	is_clock_configured = TRUE;
 
 #if CONFIG_MTRR
 	/*
@@ -738,19 +651,6 @@ halt_all_cpus(boolean_t reboot)
 	}
 }
 
-
-/* Issue an I/O port read if one has been requested - this is an event logic
- * analyzers can use as a trigger point.
- */
-
-void
-panic_io_port_read(void)
-{
-	if (panic_io_port) {
-		(void)inb(panic_io_port);
-	}
-}
-
 /* For use with the MP rendezvous mechanism
  */
 
@@ -766,7 +666,7 @@ void
 RecordPanicStackshot()
 {
 	int err = 0;
-	size_t bytes_traced = 0, bytes_used = 0, bytes_remaining = 0;
+	size_t bytes_traced = 0, bytes_uncompressed = 0, bytes_used = 0, bytes_remaining = 0;
 	char *stackshot_begin_loc = NULL;
 
 	/* Don't re-enter this code if we panic here */
@@ -810,7 +710,7 @@ RecordPanicStackshot()
 
 
 	err = kcdata_memory_static_init(&kc_panic_data, (mach_vm_address_t)stackshot_begin_loc,
-	    KCDATA_BUFFER_BEGIN_STACKSHOT, (unsigned int) bytes_remaining, KCFLAG_USE_MEMCOPY);
+	    KCDATA_BUFFER_BEGIN_COMPRESSED, (unsigned int) bytes_remaining, KCFLAG_USE_MEMCOPY);
 	if (err != KERN_SUCCESS) {
 		panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_ERROR;
 		panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
@@ -818,9 +718,16 @@ RecordPanicStackshot()
 		return;
 	}
 
-	uint32_t stackshot_flags = (STACKSHOT_SAVE_KEXT_LOADINFO | STACKSHOT_SAVE_LOADINFO | STACKSHOT_KCDATA_FORMAT |
-	    STACKSHOT_ENABLE_BT_FAULTING | STACKSHOT_ENABLE_UUID_FAULTING | STACKSHOT_FROM_PANIC |
-	    STACKSHOT_NO_IO_STATS | STACKSHOT_THREAD_WAITINFO);
+	uint64_t stackshot_flags = (STACKSHOT_SAVE_KEXT_LOADINFO | STACKSHOT_SAVE_LOADINFO | STACKSHOT_KCDATA_FORMAT |
+	    STACKSHOT_ENABLE_BT_FAULTING | STACKSHOT_ENABLE_UUID_FAULTING | STACKSHOT_FROM_PANIC | STACKSHOT_DO_COMPRESS |
+	    STACKSHOT_NO_IO_STATS | STACKSHOT_THREAD_WAITINFO | STACKSHOT_DISABLE_LATENCY_INFO | STACKSHOT_GET_DQ);
+
+	err = kcdata_init_compress(&kc_panic_data, KCDATA_BUFFER_BEGIN_STACKSHOT, stackshot_memcpy, KCDCT_ZLIB);
+	if (err != KERN_SUCCESS) {
+		panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_FAILED_COMPRESS;
+		stackshot_flags &= ~STACKSHOT_DO_COMPRESS;
+	}
+
 #if DEVELOPMENT
 	/*
 	 * Include the shared cache layout in panic stackshots on DEVELOPMENT kernels so that we can symbolicate
@@ -829,10 +736,11 @@ RecordPanicStackshot()
 	stackshot_flags |= STACKSHOT_COLLECT_SHAREDCACHE_LAYOUT;
 #endif
 
-	kdp_snapshot_preflight(-1, (void *) stackshot_begin_loc, (uint32_t) bytes_remaining, stackshot_flags, &kc_panic_data, 0);
+	kdp_snapshot_preflight(-1, (void *) stackshot_begin_loc, (uint32_t) bytes_remaining, stackshot_flags, &kc_panic_data, 0, 0);
 	err = do_stackshot(NULL);
-	bytes_traced = (int) kdp_stack_snapshot_bytes_traced();
-	bytes_used = (int) kcdata_memory_get_used_bytes(&kc_panic_data);
+	bytes_traced = (size_t) kdp_stack_snapshot_bytes_traced();
+	bytes_uncompressed = (size_t) kdp_stack_snapshot_bytes_uncompressed();
+	bytes_used = (size_t) kcdata_memory_get_used_bytes(&kc_panic_data);
 
 	if ((err != KERN_SUCCESS) && (bytes_used > 0)) {
 		/*
@@ -855,8 +763,8 @@ RecordPanicStackshot()
 			return;
 		}
 
-		stackshot_flags = (STACKSHOT_SAVE_KEXT_LOADINFO | STACKSHOT_KCDATA_FORMAT | STACKSHOT_FROM_PANIC |
-		    STACKSHOT_NO_IO_STATS | STACKSHOT_THREAD_WAITINFO | STACKSHOT_ACTIVE_KERNEL_THREADS_ONLY);
+		stackshot_flags = (STACKSHOT_SAVE_KEXT_LOADINFO | STACKSHOT_KCDATA_FORMAT | STACKSHOT_FROM_PANIC | STACKSHOT_DISABLE_LATENCY_INFO |
+		    STACKSHOT_NO_IO_STATS | STACKSHOT_THREAD_WAITINFO | STACKSHOT_ACTIVE_KERNEL_THREADS_ONLY | STACKSHOT_GET_DQ);
 #if DEVELOPMENT
 		/*
 		 * Include the shared cache layout in panic stackshots on DEVELOPMENT kernels so that we can symbolicate
@@ -865,10 +773,11 @@ RecordPanicStackshot()
 		stackshot_flags |= STACKSHOT_COLLECT_SHAREDCACHE_LAYOUT;
 #endif
 
-		kdp_snapshot_preflight(-1, (void *) stackshot_begin_loc, (uint32_t) bytes_remaining, stackshot_flags, &kc_panic_data, 0);
+		kdp_snapshot_preflight(-1, (void *) stackshot_begin_loc, (uint32_t) bytes_remaining, stackshot_flags, &kc_panic_data, 0, 0);
 		err = do_stackshot(NULL);
-		bytes_traced = (int) kdp_stack_snapshot_bytes_traced();
-		bytes_used = (int) kcdata_memory_get_used_bytes(&kc_panic_data);
+		bytes_traced = (size_t) kdp_stack_snapshot_bytes_traced();
+		bytes_uncompressed = (size_t) kdp_stack_snapshot_bytes_uncompressed();
+		bytes_used = (size_t) kcdata_memory_get_used_bytes(&kc_panic_data);
 	}
 
 	if (err == KERN_SUCCESS) {
@@ -876,11 +785,22 @@ RecordPanicStackshot()
 			debug_buf_ptr += bytes_traced;
 		}
 		panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_SUCCEEDED;
-		panic_info->mph_stackshot_offset = PE_get_offset_into_panic_region(stackshot_begin_loc);
-		panic_info->mph_stackshot_len = (uint32_t) bytes_traced;
+
+		/* On other systems this is not in the debug buffer itself, it's in a separate buffer allocated at boot. */
+		if (extended_debug_log_enabled) {
+			panic_info->mph_stackshot_offset = PE_get_offset_into_panic_region(stackshot_begin_loc);
+			panic_info->mph_stackshot_len = (uint32_t) bytes_traced;
+		} else {
+			panic_info->mph_stackshot_offset = panic_info->mph_stackshot_len = 0;
+		}
 
 		panic_info->mph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
-		kdb_printf("\n** In Memory Panic Stackshot Succeeded ** Bytes Traced %zu **\n", bytes_traced);
+		if (stackshot_flags & STACKSHOT_DO_COMPRESS) {
+			panic_info->mph_panic_flags |= MACOS_PANIC_HEADER_FLAG_STACKSHOT_DATA_COMPRESSED;
+			kdb_printf("\n** In Memory Panic Stackshot Succeeded ** Bytes Traced %zu (Uncompressed %zu) **\n", bytes_traced, bytes_uncompressed);
+		} else {
+			kdb_printf("\n** In Memory Panic Stackshot Succeeded ** Bytes Traced %zu **\n", bytes_traced);
+		}
 
 		/* Used by the code that writes the buffer to disk */
 		panic_stackshot_buf = (vm_offset_t) stackshot_begin_loc;
@@ -924,7 +844,7 @@ SavePanicInfo(
 	 * Issue an I/O port read if one has been requested - this is an event logic
 	 * analyzers can use as a trigger point.
 	 */
-	panic_io_port_read();
+	panic_notify();
 
 	/* Obtain frame pointer for stack to trace */
 	if (panic_options & DEBUGGER_INTERNAL_OPTION_THREAD_BACKTRACE) {
@@ -1191,6 +1111,112 @@ panic_print_macho_symbol_name(kernel_mach_header_t *mh, vm_address_t search, con
 		return 1;
 	}
 	return 0;
+}
+
+static void
+panic_display_uptime(void)
+{
+	uint64_t        uptime;
+	absolutetime_to_nanoseconds(mach_absolute_time(), &uptime);
+
+	paniclog_append_noflush("\nSystem uptime in nanoseconds: %llu\n", uptime);
+}
+
+extern uint32_t         gIOHibernateCount;
+
+static void
+panic_display_hib_count(void)
+{
+	paniclog_append_noflush("Hibernation exit count: %u\n", gIOHibernateCount);
+}
+
+extern AbsoluteTime      gIOLastSleepAbsTime;
+extern AbsoluteTime      gIOLastWakeAbsTime;
+extern uint64_t          gAcpiLastSleepTscBase;
+extern uint64_t          gAcpiLastSleepNanoBase;
+extern uint64_t          gAcpiLastWakeTscBase;
+extern uint64_t          gAcpiLastWakeNanoBase;
+extern boolean_t         is_clock_configured;
+
+static void
+panic_display_times(void)
+{
+	if (!is_clock_configured) {
+		paniclog_append_noflush("Warning: clock is not configured. Can't get time\n");
+		return;
+	}
+
+	paniclog_append_noflush("Last Sleep:           absolute           base_tsc          base_nano\n");
+	paniclog_append_noflush("  Uptime  : 0x%016llx\n", mach_absolute_time());
+	paniclog_append_noflush("  Sleep   : 0x%016llx 0x%016llx 0x%016llx\n", gIOLastSleepAbsTime, gAcpiLastSleepTscBase, gAcpiLastSleepNanoBase);
+	paniclog_append_noflush("  Wake    : 0x%016llx 0x%016llx 0x%016llx\n", gIOLastWakeAbsTime, gAcpiLastWakeTscBase, gAcpiLastWakeNanoBase);
+}
+
+static void
+panic_display_disk_errors(void)
+{
+	if (panic_disk_error_description[0]) {
+		panic_disk_error_description[panic_disk_error_description_size - 1] = '\0';
+		paniclog_append_noflush("Root disk errors: \"%s\"\n", panic_disk_error_description);
+	}
+}
+
+static void
+panic_display_shutdown_status(void)
+{
+#if defined(__i386__) || defined(__x86_64__)
+	paniclog_append_noflush("System shutdown begun: %s\n", IOPMRootDomainGetWillShutdown() ? "YES" : "NO");
+	if (gIOPolledCoreFileMode == kIOPolledCoreFileModeNotInitialized) {
+		paniclog_append_noflush("Panic diags file unavailable, panic occurred prior to initialization\n");
+	} else if (gIOPolledCoreFileMode != kIOPolledCoreFileModeDisabled) {
+		/*
+		 * If we haven't marked the corefile as explicitly disabled, and we've made it past initialization, then we know the current
+		 * system was configured to use disk based diagnostics at some point.
+		 */
+		paniclog_append_noflush("Panic diags file available: %s (0x%x)\n", (gIOPolledCoreFileMode != kIOPolledCoreFileModeClosed) ? "YES" : "NO", kdp_polled_corefile_error());
+	}
+#endif
+}
+
+extern const char version[];
+extern char osversion[];
+
+static volatile uint32_t config_displayed = 0;
+
+static void
+panic_display_system_configuration(boolean_t launchd_exit)
+{
+	if (!launchd_exit) {
+		panic_display_process_name();
+	}
+	if (OSCompareAndSwap(0, 1, &config_displayed)) {
+		char buf[256];
+		if (!launchd_exit && strlcpy(buf, PE_boot_args(), sizeof(buf))) {
+			paniclog_append_noflush("Boot args: %s\n", buf);
+		}
+		paniclog_append_noflush("\nMac OS version:\n%s\n",
+		    (osversion[0] != 0) ? osversion : "Not yet set");
+		paniclog_append_noflush("\nKernel version:\n%s\n", version);
+		panic_display_kernel_uuid();
+		if (!launchd_exit) {
+			panic_display_kernel_aslr();
+			panic_display_hibb();
+			panic_display_pal_info();
+		}
+		panic_display_model_name();
+		panic_display_disk_errors();
+		panic_display_shutdown_status();
+		if (!launchd_exit) {
+			panic_display_hib_count();
+			panic_display_uptime();
+			panic_display_times();
+			panic_display_zprint();
+#if CONFIG_ZLEAKS
+			panic_display_ztrace();
+#endif /* CONFIG_ZLEAKS */
+			kext_dump_panic_lists(&paniclog_append_noflush);
+		}
+	}
 }
 
 extern kmod_info_t * kmod; /* the list of modules */
@@ -1582,4 +1608,118 @@ print_launchd_info(void)
 	while (*ppbtcnt && (rdtsc64() < bt_tsc_timeout)) {
 		;
 	}
+}
+
+/*
+ * Compares 2 EFI GUIDs. Returns true if they match.
+ */
+static bool
+efi_compare_guids(EFI_GUID *guid1, EFI_GUID *guid2)
+{
+	return (bcmp(guid1, guid2, sizeof(EFI_GUID)) == 0) ? true : false;
+}
+
+/*
+ * Converts from an efiboot-originated virtual address to a physical
+ * address.
+ */
+static inline uint64_t
+efi_efiboot_virtual_to_physical(uint64_t addr)
+{
+	if (addr >= VM_MIN_KERNEL_ADDRESS) {
+		return addr & (0x40000000ULL - 1);
+	} else {
+		return addr;
+	}
+}
+
+/*
+ * Convers from a efiboot-originated virtual address to an accessible
+ * pointer to that physical address by translating it to a physmap-relative
+ * address.
+ */
+static void *
+efi_efiboot_virtual_to_physmap_virtual(uint64_t addr)
+{
+	return PHYSMAP_PTOV(efi_efiboot_virtual_to_physical(addr));
+}
+
+/*
+ * Returns the physical address of the firmware table identified
+ * by the passed-in GUID, or 0 if the table could not be located.
+ */
+static uint64_t
+efi_get_cfgtbl_by_guid(EFI_GUID *guidp)
+{
+	EFI_CONFIGURATION_TABLE_64 *cfg_table_entp, *cfgTable;
+	boot_args *args = (boot_args *)PE_state.bootArgs;
+	EFI_SYSTEM_TABLE_64 *estp;
+	uint32_t i, hdr_cksum, cksum;
+
+	estp = (EFI_SYSTEM_TABLE_64 *)efi_efiboot_virtual_to_physmap_virtual(args->efiSystemTable);
+
+	assert(estp != 0);
+
+	// Verify signature of the system table
+	hdr_cksum = estp->Hdr.CRC32;
+	estp->Hdr.CRC32 = 0;
+	cksum = crc32(0L, estp, estp->Hdr.HeaderSize);
+	estp->Hdr.CRC32 = hdr_cksum;
+
+	if (cksum != hdr_cksum) {
+		DPRINTF("efi_get_cfgtbl_by_guid: EST CRC32 = 0x%x, header = 0x%x\n", cksum, hdr_cksum);
+		DPRINTF("Bad EFI system table checksum\n");
+		return 0;
+	}
+
+	/*
+	 * efiboot can (and will) change the address of ConfigurationTable (and each table's VendorTable address)
+	 * to a kernel-virtual address.  Reverse that to get the physical address, which we then use to get a
+	 * physmap-based virtual address.
+	 */
+	cfgTable = (EFI_CONFIGURATION_TABLE_64 *)efi_efiboot_virtual_to_physmap_virtual(estp->ConfigurationTable);
+
+	for (i = 0; i < estp->NumberOfTableEntries; i++) {
+		cfg_table_entp = (EFI_CONFIGURATION_TABLE_64 *)&cfgTable[i];
+
+		DPRINTF("EST: Comparing GUIDs for entry %d\n", i);
+		if (cfg_table_entp == 0) {
+			continue;
+		}
+
+		if (efi_compare_guids(&cfg_table_entp->VendorGuid, guidp) == true) {
+			DPRINTF("GUID match: returning %p\n", (void *)(uintptr_t)cfg_table_entp->VendorTable);
+			return efi_efiboot_virtual_to_physical(cfg_table_entp->VendorTable);
+		}
+	}
+
+	/* Not found */
+	return 0;
+}
+
+/*
+ * Returns the physical address of the RSDP (either v1 or >=v2) or 0
+ * if the RSDP could not be located.
+ */
+uint64_t
+efi_get_rsdp_physaddr(void)
+{
+	uint64_t rsdp_addr;
+#define ACPI_RSDP_GUID \
+    { 0xeb9d2d30, 0x2d88, 0x11d3, {0x9a, 0x16, 0x0, 0x90, 0x27, 0x3f, 0xc1, 0x4d} }
+#define ACPI_20_RSDP_GUID \
+    { 0x8868e871, 0xe4f1, 0x11d3, {0xbc, 0x22, 0x0, 0x80, 0xc7, 0x3c, 0x88, 0x81} }
+
+	static EFI_GUID EFI_RSDP_GUID_ACPI20 = ACPI_20_RSDP_GUID;
+	static EFI_GUID EFI_RSDP_GUID_ACPI10 = ACPI_RSDP_GUID;
+
+	if ((rsdp_addr = efi_get_cfgtbl_by_guid(&EFI_RSDP_GUID_ACPI20)) == 0) {
+		DPRINTF("RSDP ACPI 2.0 lookup failed.  Trying RSDP ACPI 1.0...\n");
+		rsdp_addr = efi_get_cfgtbl_by_guid(&EFI_RSDP_GUID_ACPI10);
+		if (rsdp_addr == 0) {
+			DPRINTF("RSDP ACPI 1.0 lookup failed also.\n");
+		}
+	}
+
+	return rsdp_addr;
 }

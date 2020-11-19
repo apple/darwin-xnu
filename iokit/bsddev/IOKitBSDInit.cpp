@@ -31,6 +31,7 @@
 #include <IOKit/IOCatalogue.h>
 #include <IOKit/IODeviceTreeSupport.h>
 #include <IOKit/IOKitKeys.h>
+#include <IOKit/IONVRAM.h>
 #include <IOKit/IOPlatformExpert.h>
 #include <IOKit/IOUserClient.h>
 
@@ -61,9 +62,13 @@ extern void di_root_ramfile(IORegistryEntry * entry);
 
 #if defined(XNU_TARGET_OS_BRIDGE)
 #define kIOCoreDumpPath         "/private/var/internal/kernelcore"
+#elif defined(XNU_TARGET_OS_OSX)
+#define kIOCoreDumpPath         "/System/Volumes/VM/kernelcore"
 #else
 #define kIOCoreDumpPath         "/private/var/vm/kernelcore"
 #endif
+
+#define SYSTEM_NVRAM_PREFIX     "40A0DDD2-77F8-4392-B4A3-1E7304206516:"
 
 #if CONFIG_KDP_INTERACTIVE_DEBUGGING
 /*
@@ -340,7 +345,7 @@ IOOFPathMatching( const char * path, char * buf, int maxLen )
 	int                 len;
 
 	do {
-		len = strlen( kIODeviceTreePlane ":" );
+		len = ((int) strlen( kIODeviceTreePlane ":" ));
 		maxLen -= len;
 		if (maxLen <= 0) {
 			continue;
@@ -349,7 +354,7 @@ IOOFPathMatching( const char * path, char * buf, int maxLen )
 		strlcpy( buf, kIODeviceTreePlane ":", len + 1 );
 		comp = buf + len;
 
-		len = strlen( path );
+		len = ((int) strnlen( path, INT_MAX ));
 		maxLen -= len;
 		if (maxLen <= 0) {
 			continue;
@@ -380,6 +385,168 @@ IOOFPathMatching( const char * path, char * buf, int maxLen )
 
 static int didRam = 0;
 enum { kMaxPathBuf = 512, kMaxBootVar = 128 };
+
+const char*
+IOGetBootUUID(void)
+{
+	IORegistryEntry *entry;
+
+	if ((entry = IORegistryEntry::fromPath("/chosen", gIODTPlane))) {
+		OSData *uuid_data = (OSData *)entry->getProperty("boot-uuid");
+		if (uuid_data) {
+			return (const char*)uuid_data->getBytesNoCopy();
+		}
+	}
+
+	return NULL;
+}
+
+const char *
+IOGetApfsPrebootUUID(void)
+{
+	IORegistryEntry *entry;
+
+	if ((entry = IORegistryEntry::fromPath("/chosen", gIODTPlane))) {
+		OSData *uuid_data = (OSData *)entry->getProperty("apfs-preboot-uuid");
+		if (uuid_data) {
+			return (const char*)uuid_data->getBytesNoCopy();
+		}
+	}
+
+	return NULL;
+}
+
+const char *
+IOGetAssociatedApfsVolgroupUUID(void)
+{
+	IORegistryEntry *entry;
+
+	if ((entry = IORegistryEntry::fromPath("/chosen", gIODTPlane))) {
+		OSData *uuid_data = (OSData *)entry->getProperty("associated-volume-group");
+		if (uuid_data) {
+			return (const char*)uuid_data->getBytesNoCopy();
+		}
+	}
+
+	return NULL;
+}
+
+const char *
+IOGetBootObjectsPath(void)
+{
+	IORegistryEntry *entry;
+
+	if ((entry = IORegistryEntry::fromPath("/chosen", gIODTPlane))) {
+		OSData *path_prefix_data = (OSData *)entry->getProperty("boot-objects-path");
+		if (path_prefix_data) {
+			return (const char *)path_prefix_data->getBytesNoCopy();
+		}
+	}
+
+	return NULL;
+}
+
+/*
+ * Set NVRAM to boot into the right flavor of Recovery,
+ * optionally passing a UUID of a volume that failed to boot.
+ * If `reboot` is true, reboot immediately.
+ *
+ * Returns true if `mode` was understood, false otherwise.
+ * (Does not return if `reboot` is true.)
+ */
+boolean_t
+IOSetRecoveryBoot(bsd_bootfail_mode_t mode, uuid_t volume_uuid, boolean_t reboot)
+{
+	IODTNVRAM *nvram = NULL;
+	const OSSymbol *boot_command_sym = NULL;
+	OSString *boot_command_recover = NULL;
+
+	if (mode == BSD_BOOTFAIL_SEAL_BROKEN) {
+		const char *boot_mode = "ssv-seal-broken";
+		uuid_string_t volume_uuid_str;
+
+		// Set `recovery-broken-seal-uuid = <volume_uuid>`.
+		if (volume_uuid) {
+			uuid_unparse_upper(volume_uuid, volume_uuid_str);
+
+			if (!PEWriteNVRAMProperty(SYSTEM_NVRAM_PREFIX "recovery-broken-seal-uuid",
+			    volume_uuid_str, sizeof(uuid_string_t))) {
+				IOLog("Failed to write recovery-broken-seal-uuid to NVRAM.\n");
+			}
+		}
+
+		// Set `recovery-boot-mode = ssv-seal-broken`.
+		if (!PEWriteNVRAMProperty(SYSTEM_NVRAM_PREFIX "recovery-boot-mode", boot_mode,
+		    (const unsigned int) strlen(boot_mode))) {
+			IOLog("Failed to write recovery-boot-mode to NVRAM.\n");
+		}
+	} else if (mode == BSD_BOOTFAIL_MEDIA_MISSING) {
+		const char *boot_picker_reason = "missing-boot-media";
+
+		// Set `boot-picker-bringup-reason = missing-boot-media`.
+		if (!PEWriteNVRAMProperty(SYSTEM_NVRAM_PREFIX "boot-picker-bringup-reason",
+		    boot_picker_reason, (const unsigned int) strlen(boot_picker_reason))) {
+			IOLog("Failed to write boot-picker-bringup-reason to NVRAM.\n");
+		}
+
+		// Set `boot-command = recover`.
+
+		// Construct an OSSymbol and an OSString to be the (key, value) pair
+		// we write to NVRAM. Unfortunately, since our value must be an OSString
+		// instead of an OSData, we cannot use PEWriteNVRAMProperty() here.
+		boot_command_sym = OSSymbol::withCStringNoCopy(SYSTEM_NVRAM_PREFIX "boot-command");
+		boot_command_recover = OSString::withCStringNoCopy("recover");
+		if (boot_command_sym == NULL || boot_command_recover == NULL) {
+			IOLog("Failed to create boot-command strings.\n");
+			goto do_reboot;
+		}
+
+		// Wait for NVRAM to be readable...
+		nvram = OSDynamicCast(IODTNVRAM, IOService::waitForService(
+			    IOService::serviceMatching("IODTNVRAM")));
+		if (nvram == NULL) {
+			IOLog("Failed to acquire IODTNVRAM object.\n");
+			goto do_reboot;
+		}
+
+		// Wait for NVRAM to be writable...
+		if (!IOServiceWaitForMatchingResource("IONVRAM", UINT64_MAX)) {
+			IOLog("Failed to wait for IONVRAM service.\n");
+			// attempt the work anyway...
+		}
+
+		// Write the new boot-command to NVRAM, and sync if successful.
+		if (!nvram->setProperty(boot_command_sym, boot_command_recover)) {
+			IOLog("Failed to save new boot-command to NVRAM.\n");
+		} else {
+			nvram->sync();
+		}
+	} else {
+		IOLog("Unknown mode: %d\n", mode);
+		return false;
+	}
+
+	// Clean up and reboot!
+do_reboot:
+	if (nvram != NULL) {
+		nvram->release();
+	}
+
+	if (boot_command_recover != NULL) {
+		boot_command_recover->release();
+	}
+
+	if (boot_command_sym != NULL) {
+		boot_command_sym->release();
+	}
+
+	if (reboot) {
+		IOLog("\nAbout to reboot into Recovery!\n");
+		(void)PEHaltRestart(kPERestartCPU);
+	}
+
+	return true;
+}
 
 kern_return_t
 IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
@@ -482,7 +649,13 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 			if (data) {                                                                                      /* We found one */
 				uintptr_t *ramdParms;
 				ramdParms = (uintptr_t *)data->getBytesNoCopy();        /* Point to the ram disk base and size */
-				(void)mdevadd(-1, ml_static_ptovirt(ramdParms[0]) >> 12, ramdParms[1] >> 12, 0);        /* Initialize it and pass back the device number */
+#if __LP64__
+#define MAX_PHYS_RAM    (((uint64_t)UINT_MAX) << 12)
+				if (ramdParms[1] > MAX_PHYS_RAM) {
+					panic("ramdisk params");
+				}
+#endif /* __LP64__ */
+				(void)mdevadd(-1, ml_static_ptovirt(ramdParms[0]) >> 12, (unsigned int) (ramdParms[1] >> 12), 0);        /* Initialize it and pass back the device number */
 			}
 			regEntry->release();                                                            /* Toss the entry */
 		}
@@ -510,7 +683,7 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 			if (*root >= 0) {                                                                        /* Did we find one? */
 				rootName[0] = 'm';                                                              /* Build root name */
 				rootName[1] = 'd';                                                              /* Build root name */
-				rootName[2] = dchar;                                                    /* Build root name */
+				rootName[2] = (char) dchar;                                                     /* Build root name */
 				rootName[3] = 0;                                                                /* Build root name */
 				IOLog("BSD root: %s, major %d, minor %d\n", rootName, major(*root), minor(*root));
 				*oflags = 0;                                                                    /* Show that this is not network */
@@ -603,8 +776,10 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 		matching->retain();
 		service = IOService::waitForService( matching, &t );
 		if ((!service) || (mountAttempts == 10)) {
+#if !XNU_TARGET_OS_OSX || !defined(__arm64__)
 			PE_display_icon( 0, "noroot");
 			IOLog( "Still waiting for root device\n" );
+#endif
 
 			if (!debugInfoPrintedOnce) {
 				debugInfoPrintedOnce = true;
@@ -620,6 +795,11 @@ IOFindBSDRoot( char * rootName, unsigned int rootNameSize,
 					IOPrintMemory();
 				}
 			}
+
+#if XNU_TARGET_OS_OSX && defined(__arm64__)
+			// The disk isn't found - have the user pick from recoveryOS+.
+			(void)IOSetRecoveryBoot(BSD_BOOTFAIL_MEDIA_MISSING, NULL, true);
+#endif
 		}
 	} while (!service);
 	matching->release();
@@ -715,7 +895,7 @@ IORamDiskBSDRoot(void)
 void
 IOSecureBSDRoot(const char * rootName)
 {
-#if CONFIG_EMBEDDED
+#if CONFIG_SECURE_BSD_ROOT
 	IOReturn         result;
 	IOPlatformExpert *pe;
 	OSDictionary     *matching;
@@ -736,7 +916,7 @@ IOSecureBSDRoot(const char * rootName)
 		mdevremoveall();
 	}
 
-#endif  // CONFIG_EMBEDDED
+#endif  // CONFIG_SECURE_BSD_ROOT
 }
 
 void *
@@ -813,7 +993,7 @@ IOPolledCoreFileMode_t gIOPolledCoreFileMode = kIOPolledCoreFileModeNotInitializ
 #define kIOCoreDumpSize         150ULL*1024ULL*1024ULL
 #define kIOCoreDumpFreeSize     150ULL*1024ULL*1024ULL
 
-#elif CONFIG_EMBEDDED /* defined(XNU_TARGET_OS_BRIDGE) */
+#elif !defined(XNU_TARGET_OS_OSX) /* defined(XNU_TARGET_OS_BRIDGE) */
 // On embedded devices with >3GB DRAM we allocate a 500MB corefile
 // otherwise allocate a 350MB corefile. Leave 350 MB free
 
@@ -859,7 +1039,7 @@ IOCoreFileGetSize(uint64_t *ideal_size, uint64_t *fallback_size, uint64_t *free_
 #pragma unused(mode)
 	*ideal_size = *fallback_size = kIOCoreDumpSize;
 	*free_space_to_leave = kIOCoreDumpFreeSize;
-#elif CONFIG_EMBEDDED /* defined(XNU_TARGET_OS_BRIDGE) */
+#elif !defined(XNU_TARGET_OS_OSX) /* defined(XNU_TARGET_OS_BRIDGE) */
 #pragma unused(mode)
 	*ideal_size = *fallback_size = kIOCoreDumpMinSize;
 
@@ -1045,4 +1225,40 @@ IOTaskHasEntitlement(task_t task, const char * entitlement)
 	}
 	obj->release();
 	return obj != kOSBooleanFalse;
+}
+
+extern "C" boolean_t
+IOVnodeHasEntitlement(vnode_t vnode, int64_t off, const char *entitlement)
+{
+	OSObject * obj;
+	off_t offset = (off_t)off;
+
+	obj = IOUserClient::copyClientEntitlementVnode(vnode, offset, entitlement);
+	if (!obj) {
+		return false;
+	}
+	obj->release();
+	return obj != kOSBooleanFalse;
+}
+
+extern "C" char *
+IOVnodeGetEntitlement(vnode_t vnode, int64_t off, const char *entitlement)
+{
+	OSObject *obj = NULL;
+	OSString *str = NULL;
+	size_t len;
+	char *value = NULL;
+	off_t offset = (off_t)off;
+
+	obj = IOUserClient::copyClientEntitlementVnode(vnode, offset, entitlement);
+	if (obj != NULL) {
+		str = OSDynamicCast(OSString, obj);
+		if (str != NULL) {
+			len = str->getLength() + 1;
+			value = (char *)kheap_alloc(KHEAP_DATA_BUFFERS, len, Z_WAITOK);
+			strlcpy(value, str->getCStringNoCopy(), len);
+		}
+		obj->release();
+	}
+	return value;
 }

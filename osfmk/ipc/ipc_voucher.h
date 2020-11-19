@@ -45,8 +45,6 @@
 extern lck_grp_t        ipc_lck_grp;
 extern lck_attr_t       ipc_lck_attr;
 
-extern void ipc_voucher_init(void);
-
 /* some shorthand for longer types */
 typedef mach_voucher_attr_value_handle_t        iv_value_handle_t;
 typedef mach_voucher_attr_value_reference_t     iv_value_refs_t;

@@ -28,17 +28,21 @@
 /* IOString.m created by rsulack on Wed 17-Sep-1997 */
 /* IOString.cpp converted to C++ on Tue 1998-9-22 */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <string.h>
 
 #include <libkern/c++/OSString.h>
 #include <libkern/c++/OSSerialize.h>
+#include <libkern/c++/OSSharedPtr.h>
 #include <libkern/c++/OSLib.h>
 #include <libkern/c++/OSData.h>
 #include <string.h>
 
 #define super OSObject
 
-OSDefineMetaClassAndStructors(OSString, OSObject)
+OSDefineMetaClassAndStructorsWithZone(OSString, OSObject,
+    (zone_create_flags_t) (ZC_CACHING | ZC_ZFREE_CLEARMEM))
 OSMetaClassDefineReservedUnused(OSString, 0);
 OSMetaClassDefineReservedUnused(OSString, 1);
 OSMetaClassDefineReservedUnused(OSString, 2);
@@ -72,13 +76,13 @@ OSString::initWithCString(const char *cString)
 		return false;
 	}
 
-	newLength = strnlen(cString, kMaxStringLength);
+	newLength = (unsigned int) strnlen(cString, kMaxStringLength);
 	if (newLength >= kMaxStringLength) {
 		return false;
 	}
 
 	newLength++;
-	newString = (char *) kalloc_container(newLength);
+	newString = (char *)kalloc_data_container(newLength, Z_WAITOK);
 	if (!newString) {
 		return false;
 	}
@@ -86,7 +90,7 @@ OSString::initWithCString(const char *cString)
 	bcopy(cString, newString, newLength);
 
 	if (!(flags & kOSStringNoCopy) && string) {
-		kfree(string, (vm_size_t)length);
+		kfree_data_container(string, length);
 		OSCONTAINER_ACCUMSIZE(-((size_t)length));
 	}
 	string = newString;
@@ -116,8 +120,8 @@ OSString::initWithStringOfLength(const char *cString, size_t inlength)
 		return false;
 	}
 
-	newLength = inlength + 1;
-	newString = (char *) kalloc_container(newLength);
+	newLength = (unsigned int) (inlength + 1);
+	newString = (char *)kalloc_data_container(newLength, Z_WAITOK);
 	if (!newString) {
 		return false;
 	}
@@ -126,7 +130,7 @@ OSString::initWithStringOfLength(const char *cString, size_t inlength)
 	newString[inlength] = 0;
 
 	if (!(flags & kOSStringNoCopy) && string) {
-		kfree(string, (vm_size_t)length);
+		kfree_data_container(string, length);
 		OSCONTAINER_ACCUMSIZE(-((size_t)length));
 	}
 
@@ -146,7 +150,7 @@ OSString::initWithCStringNoCopy(const char *cString)
 		return false;
 	}
 
-	length = strnlen(cString, kMaxStringLength);
+	length = (unsigned int) strnlen(cString, kMaxStringLength);
 	if (length >= kMaxStringLength) {
 		return false;
 	}
@@ -158,53 +162,49 @@ OSString::initWithCStringNoCopy(const char *cString)
 	return true;
 }
 
-OSString *
+OSSharedPtr<OSString>
 OSString::withString(const OSString *aString)
 {
-	OSString *me = new OSString;
+	OSSharedPtr<OSString> me = OSMakeShared<OSString>();
 
 	if (me && !me->initWithString(aString)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
 }
 
-OSString *
+OSSharedPtr<OSString>
 OSString::withCString(const char *cString)
 {
-	OSString *me = new OSString;
+	OSSharedPtr<OSString> me = OSMakeShared<OSString>();
 
 	if (me && !me->initWithCString(cString)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
 }
 
-OSString *
+OSSharedPtr<OSString>
 OSString::withCStringNoCopy(const char *cString)
 {
-	OSString *me = new OSString;
+	OSSharedPtr<OSString> me = OSMakeShared<OSString>();
 
 	if (me && !me->initWithCStringNoCopy(cString)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
 }
 
-OSString *
+OSSharedPtr<OSString>
 OSString::withStringOfLength(const char *cString, size_t length)
 {
-	OSString *me = new OSString;
+	OSSharedPtr<OSString> me = OSMakeShared<OSString>();
 
 	if (me && !me->initWithStringOfLength(cString, length)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
@@ -245,7 +245,7 @@ void
 OSString::free()
 {
 	if (!(flags & kOSStringNoCopy) && string) {
-		kfree(string, (vm_size_t)length);
+		kfree_data_container(string, length);
 		OSCONTAINER_ACCUMSIZE(-((size_t)length));
 	}
 

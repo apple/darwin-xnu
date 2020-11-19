@@ -29,6 +29,7 @@
 #include <stddef.h>
 #include <kern/btlog.h>
 #include <kern/assert.h>
+#include <kern/startup.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_map.h>
 #include <vm/pmap.h>
@@ -130,9 +131,6 @@ struct btlog {
 	                                                    * will choose what kind of data structure to use for the elem_linkage_un union above.
 	                                                    */
 };
-
-extern boolean_t vm_kernel_ready;
-extern boolean_t kmem_alloc_ready;
 
 #define lookup_btrecord(btlog, index) \
 	((btlog_record_t *)(btlog->btrecords + index * btlog->btrecord_size))
@@ -239,7 +237,8 @@ btlog_create(size_t numrecords,
 	size_t btrecord_size = 0;
 	uintptr_t free_elem = 0, next_free_elem = 0;
 
-	if (vm_kernel_ready && !kmem_alloc_ready) {
+	if (startup_phase >= STARTUP_SUB_VM_KERNEL &&
+	    startup_phase < STARTUP_SUB_KMEM_ALLOC) {
 		return NULL;
 	}
 
@@ -280,7 +279,7 @@ btlog_create(size_t numrecords,
 	numrecords = MIN(BTLOG_MAX_RECORDS,
 	    (buffersize_needed - sizeof(btlog_t)) / btrecord_size);
 
-	if (kmem_alloc_ready) {
+	if (__probable(startup_phase >= STARTUP_SUB_KMEM_ALLOC)) {
 		ret = kmem_alloc(kernel_map, &buffer, buffersize_needed, VM_KERN_MEMORY_DIAG);
 		if (ret != KERN_SUCCESS) {
 			return NULL;

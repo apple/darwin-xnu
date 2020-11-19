@@ -36,17 +36,6 @@
 #include <machine/cpu_capabilities.h>
 #endif /* __ASSEMBLER__ */
 
-/* When trying to acquire a spinlock or mutex, we will spin in
- * user mode for awhile, before entering the kernel to relinquish.
- * MP_SPIN_TRIES is the initial value of _COMM_PAGE_SPIN_COUNT.
- * The idea is that _COMM_PAGE_SPIN_COUNT will be adjusted up or
- * down as the machine is plugged in/out, etc.
- * At present spinlocks do not use _COMM_PAGE_SPIN_COUNT.
- * They use MP_SPIN_TRIES directly.
- */
-#define MP_SPIN_TRIES   1000
-
-
 /* The following macro is used to generate the 64-bit commpage address for a given
  * routine, based on its 32-bit address.  This is used in the kernel to compile
  * the 64-bit commpage.  Since the kernel can be a 32-bit object, cpu_capabilities.h

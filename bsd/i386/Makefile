@@ -13,7 +13,7 @@ DATAFILES = \
 	_mcontext.h
 
 DRIVERKIT_DATAFILES = \
-	limits.h types.h _types.h
+	limits.h types.h _types.h endian.h
 
 PRIVATE_DATAFILES = \
 	disklabel.h

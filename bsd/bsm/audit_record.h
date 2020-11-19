@@ -176,6 +176,15 @@
 
 #define AUT_TRAILER_MAGIC       0xb105
 
+#if !defined(_KERNEL) && !defined(KERNEL)
+#include <Availability.h>
+#define __AUDIT_API_DEPRECATED __API_DEPRECATED("audit is deprecated", macos(10.4, 10.16))
+#define __AUDIT_API_14_DEPRECATED __API_DEPRECATED("audit is deprecated", macos(10.14, 10.16))
+#else
+#define __AUDIT_API_DEPRECATED
+#define __AUDIT_API_14_DEPRECATED
+#endif
+
 /* BSM library calls */
 
 __BEGIN_DECLS
@@ -193,118 +202,193 @@ struct sockaddr_un;
 struct vnode_au_info;
 #endif
 
-int      au_open(void);
-int      au_write(int d, token_t *m);
-int      au_close(int d, int keep, short event);
-int      au_close_buffer(int d, short event, u_char *buffer, size_t *buflen);
-int      au_close_token(token_t *tok, u_char *buffer, size_t *buflen);
+int      au_open(void)
+__AUDIT_API_DEPRECATED;
+int      au_write(int d, token_t *m)
+__AUDIT_API_DEPRECATED;
+int      au_close(int d, int keep, short event)
+__AUDIT_API_DEPRECATED;
+int      au_close_buffer(int d, short event, u_char *buffer, size_t *buflen)
+__AUDIT_API_DEPRECATED;
+int      au_close_token(token_t *tok, u_char *buffer, size_t *buflen)
+__AUDIT_API_DEPRECATED;
 
-token_t *au_to_file(const char *file, struct timeval tm);
+token_t *au_to_file(const char *file, struct timeval tm)
+__AUDIT_API_DEPRECATED;
 
 token_t *au_to_header32_tm(int rec_size, au_event_t e_type, au_emod_t e_mod,
-    struct timeval tm);
+    struct timeval tm)
+__AUDIT_API_DEPRECATED;
 token_t *au_to_header32_ex_tm(int rec_size, au_event_t e_type, au_emod_t e_mod,
-    struct timeval tm, struct auditinfo_addr *aia);
+    struct timeval tm, struct auditinfo_addr *aia)
+__AUDIT_API_DEPRECATED;
 token_t *au_to_header64_tm(int rec_size, au_event_t e_type, au_emod_t e_mod,
-    struct timeval tm);
+    struct timeval tm)
+__AUDIT_API_DEPRECATED;
 #if !defined(KERNEL) && !defined(_KERNEL)
-token_t *au_to_header(int rec_size, au_event_t e_type, au_emod_t e_mod);
-token_t *au_to_header_ex(int rec_size, au_event_t e_type, au_emod_t e_mod);
-token_t *au_to_header32(int rec_size, au_event_t e_type, au_emod_t e_mod);
-token_t *au_to_header64(int rec_size, au_event_t e_type, au_emod_t e_mod);
-token_t *au_to_header32_ex(int rec_size, au_event_t e_type, au_emod_t e_mod);
+token_t *au_to_header(int rec_size, au_event_t e_type, au_emod_t e_mod)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_header_ex(int rec_size, au_event_t e_type, au_emod_t e_mod)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_header32(int rec_size, au_event_t e_type, au_emod_t e_mod)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_header64(int rec_size, au_event_t e_type, au_emod_t e_mod)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_header32_ex(int rec_size, au_event_t e_type, au_emod_t e_mod)
+__AUDIT_API_DEPRECATED;
 #endif
 
-token_t *au_to_me(void);
-token_t *au_to_arg(char n, const char *text, uint32_t v);
-token_t *au_to_arg32(char n, const char *text, uint32_t v);
-token_t *au_to_arg64(char n, const char *text, uint64_t v);
+token_t *au_to_me(void)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_arg(char n, const char *text, uint32_t v)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_arg32(char n, const char *text, uint32_t v)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_arg64(char n, const char *text, uint64_t v)
+__AUDIT_API_DEPRECATED;
 
 #if defined(_KERNEL) || defined(KERNEL)
-token_t *au_to_attr(struct vnode_au_info *vni);
-token_t *au_to_attr32(struct vnode_au_info *vni);
-token_t *au_to_attr64(struct vnode_au_info *vni);
+token_t *au_to_attr(struct vnode_au_info *vni)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_attr32(struct vnode_au_info *vni)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_attr64(struct vnode_au_info *vni)
+__AUDIT_API_DEPRECATED;
 #endif
 
 token_t *au_to_data(char unit_print, char unit_type, char unit_count,
-    const char *p);
-token_t *au_to_exit(int retval, int err);
-token_t *au_to_groups(int *groups);
-token_t *au_to_newgroups(uint16_t n, gid_t *groups);
-token_t *au_to_in_addr(struct in_addr *internet_addr);
-token_t *au_to_in_addr_ex(struct in6_addr *internet_addr);
-token_t *au_to_ip(struct ip *ip);
-token_t *au_to_ipc(char type, int id);
-token_t *au_to_ipc_perm(struct ipc_perm *perm);
-token_t *au_to_iport(uint16_t iport);
-token_t *au_to_opaque(const char *data, uint16_t bytes);
-token_t *au_to_path(const char *path);
+    const char *p)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_exit(int retval, int err)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_groups(int *groups)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_newgroups(uint16_t n, gid_t *groups)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_in_addr(struct in_addr *internet_addr)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_in_addr_ex(struct in6_addr *internet_addr)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_ip(struct ip *ip)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_ipc(char type, int id)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_ipc_perm(struct ipc_perm *perm)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_iport(uint16_t iport)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_opaque(const char *data, uint16_t bytes)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_path(const char *path)
+__AUDIT_API_DEPRECATED;
 token_t *au_to_process(au_id_t auid, uid_t euid, gid_t egid, uid_t ruid,
-    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_t *tid);
+    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_t *tid)
+__AUDIT_API_DEPRECATED;
 token_t *au_to_process32(au_id_t auid, uid_t euid, gid_t egid, uid_t ruid,
-    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_t *tid);
+    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_t *tid)
+__AUDIT_API_DEPRECATED;
 token_t *au_to_process64(au_id_t auid, uid_t euid, gid_t egid, uid_t ruid,
-    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_t *tid);
+    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_t *tid)
+__AUDIT_API_DEPRECATED;
 token_t *au_to_process_ex(au_id_t auid, uid_t euid, gid_t egid, uid_t ruid,
-    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_addr_t *tid);
+    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_addr_t *tid)
+__AUDIT_API_DEPRECATED;
 token_t *au_to_process32_ex(au_id_t auid, uid_t euid, gid_t egid,
     uid_t ruid, gid_t rgid, pid_t pid, au_asid_t sid,
-    au_tid_addr_t *tid);
+    au_tid_addr_t *tid)
+__AUDIT_API_DEPRECATED;
 token_t *au_to_process64_ex(au_id_t auid, uid_t euid, gid_t egid, uid_t ruid,
-    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_addr_t *tid);
-token_t *au_to_return(char status, uint32_t ret);
-token_t *au_to_return32(char status, uint32_t ret);
-token_t *au_to_return64(char status, uint64_t ret);
-token_t *au_to_seq(long audit_count);
+    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_addr_t *tid)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_return(char status, uint32_t ret)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_return32(char status, uint32_t ret)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_return64(char status, uint64_t ret)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_seq(long audit_count)
+__AUDIT_API_DEPRECATED;
 token_t *au_to_socket_ex(u_short so_domain, u_short so_type,
-    struct sockaddr *sa_local, struct sockaddr *sa_remote);
-token_t *au_to_sock_inet(struct sockaddr_in *so);
-token_t *au_to_sock_inet32(struct sockaddr_in *so);
-token_t *au_to_sock_inet128(struct sockaddr_in6 *so);
-token_t *au_to_sock_unix(struct sockaddr_un *so);
+    struct sockaddr *sa_local, struct sockaddr *sa_remote)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_sock_inet(struct sockaddr_in *so)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_sock_inet32(struct sockaddr_in *so)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_sock_inet128(struct sockaddr_in6 *so)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_sock_unix(struct sockaddr_un *so)
+__AUDIT_API_DEPRECATED;
 token_t *au_to_subject(au_id_t auid, uid_t euid, gid_t egid, uid_t ruid,
-    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_t *tid);
+    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_t *tid)
+__AUDIT_API_DEPRECATED;
 token_t *au_to_subject32(au_id_t auid, uid_t euid, gid_t egid, uid_t ruid,
-    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_t *tid);
+    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_t *tid)
+__AUDIT_API_DEPRECATED;
 token_t *au_to_subject64(au_id_t auid, uid_t euid, gid_t egid, uid_t ruid,
-    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_t *tid);
+    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_t *tid)
+__AUDIT_API_DEPRECATED;
 token_t *au_to_subject_ex(au_id_t auid, uid_t euid, gid_t egid, uid_t ruid,
-    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_addr_t *tid);
+    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_addr_t *tid)
+__AUDIT_API_DEPRECATED;
 token_t *au_to_subject32_ex(au_id_t auid, uid_t euid, gid_t egid, uid_t ruid,
-    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_addr_t *tid);
+    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_addr_t *tid)
+__AUDIT_API_DEPRECATED;
 token_t *au_to_subject64_ex(au_id_t auid, uid_t euid, gid_t egid, uid_t ruid,
-    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_addr_t *tid);
+    gid_t rgid, pid_t pid, au_asid_t sid, au_tid_addr_t *tid)
+__AUDIT_API_DEPRECATED;
 #if defined(_KERNEL) || defined(KERNEL)
-token_t *au_to_exec_args(char *args, int argc);
-token_t *au_to_exec_env(char *envs, int envc);
-token_t *au_to_certificate_hash(char *hash, int hashc);
-token_t *au_to_krb5_principal(char *principal, int princ);
+token_t *au_to_exec_args(char *args, int argc)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_exec_env(char *envs, int envc)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_certificate_hash(char *hash, int hashc)
+__AUDIT_API_14_DEPRECATED;
+token_t *au_to_krb5_principal(char *principal, int princ)
+__AUDIT_API_14_DEPRECATED;
 #else
-token_t *au_to_exec_args(char **argv);
-token_t *au_to_exec_env(char **envp);
-token_t *au_to_certificate_hash(char **hash);
-token_t *au_to_krb5_principal(char **principal);
+token_t *au_to_exec_args(char **argv)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_exec_env(char **envp)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_certificate_hash(char **hash)
+__AUDIT_API_14_DEPRECATED;
+token_t *au_to_krb5_principal(char **principal)
+__AUDIT_API_14_DEPRECATED;
 #endif
-token_t *au_to_text(const char *text);
-token_t *au_to_kevent(struct kevent *kev);
-token_t *au_to_trailer(int rec_size);
-token_t *au_to_zonename(const char *zonename);
+token_t *au_to_text(const char *text)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_kevent(struct kevent *kev)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_trailer(int rec_size)
+__AUDIT_API_DEPRECATED;
+token_t *au_to_zonename(const char *zonename)
+__AUDIT_API_DEPRECATED;
 token_t *au_to_identity(uint32_t signer_type, const char* signing_id,
     u_char signing_id_trunc, const char* team_id, u_char team_id_trunc,
-    uint8_t* cdhash, uint16_t cdhash_len);
+    uint8_t* cdhash, uint16_t cdhash_len)
+__AUDIT_API_14_DEPRECATED;
 
 /*
  * BSM library routines for converting between local and BSM constant spaces.
  */
-int      au_bsm_to_domain(u_short bsm_domain, int *local_domainp);
-int      au_bsm_to_errno(u_char bsm_error, int *errorp);
-int      au_bsm_to_fcntl_cmd(u_short bsm_fcntl_cmd, int *local_fcntl_cmdp);
+int      au_bsm_to_domain(u_short bsm_domain, int *local_domainp)
+__AUDIT_API_DEPRECATED;
+int      au_bsm_to_errno(u_char bsm_error, int *errorp)
+__AUDIT_API_DEPRECATED;
+int      au_bsm_to_fcntl_cmd(u_short bsm_fcntl_cmd, int *local_fcntl_cmdp)
+__AUDIT_API_DEPRECATED;
 int      au_bsm_to_socket_type(u_short bsm_socket_type,
-    int *local_socket_typep);
-u_short  au_domain_to_bsm(int local_domain);
-u_char   au_errno_to_bsm(int local_errno);
-u_short  au_fcntl_cmd_to_bsm(int local_fcntl_command);
-u_short  au_socket_type_to_bsm(int local_socket_type);
+    int *local_socket_typep)
+__AUDIT_API_DEPRECATED;
+u_short  au_domain_to_bsm(int local_domain)
+__AUDIT_API_DEPRECATED;
+u_char   au_errno_to_bsm(int local_errno)
+__AUDIT_API_DEPRECATED;
+u_short  au_fcntl_cmd_to_bsm(int local_fcntl_command)
+__AUDIT_API_DEPRECATED;
+u_short  au_socket_type_to_bsm(int local_socket_type)
+__AUDIT_API_DEPRECATED;
 
 __END_DECLS
 

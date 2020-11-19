@@ -99,11 +99,57 @@ static OSObject	*parsedObject;
 
 #define YYSTYPE object_t *
 
-#include <libkern/OSRuntime.h>
+__BEGIN_DECLS
+#include <kern/kalloc.h>
+__END_DECLS
 
-#define malloc(s) kern_os_malloc(s)
-#define realloc(a, s) kern_os_realloc(a, s)
-#define free(a) kern_os_free(a)
+#define malloc(size) malloc_impl(size)
+static inline void *
+malloc_impl(size_t size)
+{
+	if (size == 0) {
+		return NULL;
+	}
+	return kheap_alloc_tag_bt(KHEAP_DEFAULT, size,
+	           (zalloc_flags_t) (Z_WAITOK | Z_ZERO),
+	           VM_KERN_MEMORY_LIBKERN);
+}
+
+#define free(addr) free_impl(addr)
+static inline void
+free_impl(void *addr)
+{
+	kheap_free_addr(KHEAP_DEFAULT, addr);
+}
+static inline void
+safe_free(void *addr, size_t size)
+{
+  if(addr) {
+    assert(size != 0);
+    kheap_free(KHEAP_DEFAULT, addr, size);
+  }
+}
+
+#define realloc(addr, osize, nsize) realloc_impl(addr, osize, nsize)
+static inline void *
+realloc_impl(void *addr, size_t osize, size_t nsize)
+{
+	if (!addr) {
+		return malloc(nsize);
+	}
+	if (nsize == osize) {
+		return addr;
+	}
+	void *nmem = malloc(nsize);
+	if (!nmem) {
+		safe_free(addr, osize);
+		return NULL;
+	}
+	(void)memcpy(nmem, addr, (nsize > osize) ? osize : nsize);
+	safe_free(addr, osize);
+
+	return nmem;
+}
 
 %}
 %token NUMBER
@@ -381,7 +427,8 @@ yylex()
 	if (c == '<') {
 		unsigned char *d, *start, *lastStart;
 
-		start = lastStart = d = (unsigned char *)malloc(OSDATA_ALLOC_SIZE);
+		size_t buflen = OSDATA_ALLOC_SIZE;
+		start = lastStart = d = (unsigned char *)malloc(buflen);
 		c = nextChar();	// skip over '<'
 		while (c != 0 && c != '>') {
 
@@ -413,13 +460,14 @@ yylex()
 			d++;
 			if ((d - lastStart) >= OSDATA_ALLOC_SIZE) {
 				int oldsize = d - start;
-				start = (unsigned char *)realloc(start, oldsize + OSDATA_ALLOC_SIZE);
+				assert(buflen == oldsize);
+				start = (unsigned char *)realloc(start, oldsize, buflen);
 				d = lastStart = start + oldsize;
 			}
 			c = nextChar();
 		}
 		if (c != '>' ) {
-			free(start);
+			safe_free(start, buflen);
 			return SYNTAX_ERROR;
 		}
 
@@ -461,7 +509,7 @@ freeObject(object_t *o)
 #if DEBUG
 	debugUnserializeAllocCount--;
 #endif
-	free(o);
+	safe_free(o, sizeof(object_t));
 }
 
 static OSDictionary *tags;
@@ -562,7 +610,7 @@ buildOSString(object_t *o)
 {
 	OSString *s = OSString::withCString((char *)o);
 
-	free(o);
+	safe_free(o, strlen((char *)o) + 1);
 
 	return s;
 };
@@ -577,7 +625,7 @@ buildOSData(object_t *o)
 	} else {
 		d = OSData::withCapacity(0);
 	}
-	free(o->object);
+	safe_free(o->object, o->size);
 	freeObject(o);
 	return d;
 };

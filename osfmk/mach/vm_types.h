@@ -91,7 +91,7 @@ __END_DECLS
 #endif  /* MACH_KERNEL_PRIVATE */
 
 typedef struct pmap             *pmap_t;
-typedef struct _vm_map          *vm_map_t;
+typedef struct _vm_map          *vm_map_t, *vm_map_read_t, *vm_map_inspect_t;
 typedef struct vm_object        *vm_object_t;
 typedef struct vm_object_fault_info     *vm_object_fault_info_t;
 
@@ -100,14 +100,18 @@ typedef struct vm_object_fault_info     *vm_object_fault_info_t;
 
 #else   /* KERNEL_PRIVATE */
 
-typedef mach_port_t             vm_map_t;
+typedef mach_port_t             vm_map_t, vm_map_read_t, vm_map_inspect_t;
 
 #endif  /* KERNEL_PRIVATE */
 
 #ifdef KERNEL
 #define VM_MAP_NULL             ((vm_map_t) NULL)
+#define VM_MAP_INSPECT_NULL     ((vm_map_inspect_t) NULL)
+#define VM_MAP_READ_NULL        ((vm_map_read_t) NULL)
 #else
 #define VM_MAP_NULL             ((vm_map_t) 0)
+#define VM_MAP_INSPECT_NULL     ((vm_map_inspect_t) 0)
+#define VM_MAP_READ_NULL        ((vm_map_read_t) 0)
 #endif
 
 /*
@@ -131,7 +135,11 @@ typedef uint16_t vm_tag_t;
 #define VM_TAG_KMOD             0x0200
 
 #if DEBUG || DEVELOPMENT
-#define VM_MAX_TAG_ZONES        28
+#if __LP64__
+#define VM_MAX_TAG_ZONES        84
+#else
+#define VM_MAX_TAG_ZONES        31
+#endif
 #else
 #define VM_MAX_TAG_ZONES        0
 #endif
@@ -178,7 +186,7 @@ typedef struct vm_allocation_site vm_allocation_site_t;
 	static vm_allocation_site_t site __attribute__((section("__DATA, __data"))) \
 	 = { .refcount = 2, .tag = (itag), .flags = (iflags) };
 
-extern int vmrtf_extract(uint64_t, boolean_t, int, void *, int *);
+extern int vmrtf_extract(uint64_t, boolean_t, unsigned long, void *, unsigned long *);
 extern unsigned int vmrtfaultinfo_bufsz(void);
 
 #endif /* XNU_KERNEL_PRIVATE */

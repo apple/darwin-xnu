@@ -26,6 +26,8 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <IOKit/IOFilterInterruptEventSource.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOKitDebug.h>
@@ -78,7 +80,7 @@ IOFilterInterruptEventSource::init(OSObject *inOwner,
 	return false;
 }
 
-IOInterruptEventSource *
+OSSharedPtr<IOInterruptEventSource>
 IOFilterInterruptEventSource::interruptEventSource(OSObject *inOwner,
     Action inAction,
     IOService *inProvider,
@@ -109,7 +111,7 @@ IOFilterInterruptEventSource::init(OSObject *inOwner,
 	return true;
 }
 
-IOFilterInterruptEventSource *
+OSSharedPtr<IOFilterInterruptEventSource>
 IOFilterInterruptEventSource
 ::filterInterruptEventSource(OSObject *inOwner,
     Action inAction,
@@ -117,19 +119,18 @@ IOFilterInterruptEventSource
     IOService *inProvider,
     int inIntIndex)
 {
-	IOFilterInterruptEventSource *me = new IOFilterInterruptEventSource;
+	OSSharedPtr<IOFilterInterruptEventSource> me = OSMakeShared<IOFilterInterruptEventSource>();
 
 	if (me
 	    && !me->init(inOwner, inAction, inFilterAction, inProvider, inIntIndex)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
 }
 
 
-IOFilterInterruptEventSource *
+OSSharedPtr<IOFilterInterruptEventSource>
 IOFilterInterruptEventSource
 ::filterInterruptEventSource(OSObject *inOwner,
     IOService *inProvider,
@@ -137,19 +138,17 @@ IOFilterInterruptEventSource
     ActionBlock inAction,
     FilterBlock inFilterAction)
 {
-	IOFilterInterruptEventSource *me = new IOFilterInterruptEventSource;
+	OSSharedPtr<IOFilterInterruptEventSource> me = OSMakeShared<IOFilterInterruptEventSource>();
 
 	FilterBlock filter = Block_copy(inFilterAction);
 	if (!filter) {
-		OSSafeReleaseNULL(me);
-		return NULL;
+		return nullptr;
 	}
 
 	if (me
 	    && !me->init(inOwner, (Action) NULL, (Filter) filter, inProvider, inIntIndex)) {
-		me->release();
 		Block_release(filter);
-		return NULL;
+		return nullptr;
 	}
 	me->flags |= kFilterBlock;
 	me->setActionBlock((IOEventSource::ActionBlock) inAction);

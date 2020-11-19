@@ -25,6 +25,9 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMapper.h>
 #include <IOKit/IODMACommand.h>
@@ -98,7 +101,7 @@ static IOMapperLock sMapperLock;
 bool
 IOMapper::start(IOService *provider)
 {
-	OSObject * obj;
+	OSSharedPtr<OSObject> obj;
 	if (!super::start(provider)) {
 		return false;
 	}
@@ -107,7 +110,9 @@ IOMapper::start(IOService *provider)
 		return false;
 	}
 
-	fPageSize = getPageSize();
+	uint64_t pageSize = getPageSize();
+	assert(pageSize <= UINT_MAX);
+	fPageSize = (uint32_t) pageSize;
 
 	if (fIsSystem) {
 		sMapperLock.lock();
@@ -117,12 +122,12 @@ IOMapper::start(IOService *provider)
 	}
 
 	if (provider) {
-		obj = provider->getProperty("iommu-id");
+		obj = provider->copyProperty("iommu-id");
 		if (!obj) {
-			obj = provider->getProperty("AAPL,phandle");
+			obj = provider->copyProperty("AAPL,phandle");
 		}
 		if (obj) {
-			setProperty(gIOMapperIDKey, obj);
+			setProperty(gIOMapperIDKey, obj.get());
 		}
 	}
 	return true;
@@ -158,54 +163,48 @@ IOMapper::waitForSystemMapper()
 	sMapperLock.unlock();
 }
 
-IOMapper *
+OSSharedPtr<IOMapper>
 IOMapper::copyMapperForDevice(IOService * device)
 {
 	return copyMapperForDeviceWithIndex(device, 0);
 }
 
-IOMapper *
+OSSharedPtr<IOMapper>
 IOMapper::copyMapperForDeviceWithIndex(IOService * device, unsigned int index)
 {
-	OSData *data;
-	OSObject * obj;
-	IOMapper * mapper = NULL;
-	OSDictionary * matching;
+	OSSharedPtr<OSData> data;
+	OSSharedPtr<OSObject> obj;
+	OSSharedPtr<IOMapper> mapper;
+	OSSharedPtr<OSDictionary> matching;
 
 	obj = device->copyProperty("iommu-parent");
 	if (!obj) {
 		return NULL;
 	}
 
-	if ((mapper = OSDynamicCast(IOMapper, obj))) {
+	if ((mapper = OSDynamicPtrCast<IOMapper>(obj))) {
 		goto found;
 	}
 
-	if ((data = OSDynamicCast(OSData, obj))) {
+	if ((data = OSDynamicPtrCast<OSData>(obj))) {
 		if (index >= data->getLength() / sizeof(UInt32)) {
-			goto done;
+			goto found;
 		}
 
 		data = OSData::withBytesNoCopy((UInt32 *)data->getBytesNoCopy() + index, sizeof(UInt32));
 		if (!data) {
-			goto done;
+			goto found;
 		}
 
-		matching = IOService::propertyMatching(gIOMapperIDKey, data);
-		data->release();
+		matching = IOService::propertyMatching(gIOMapperIDKey, data.get());
 	} else {
-		matching = IOService::propertyMatching(gIOMapperIDKey, obj);
+		matching = IOService::propertyMatching(gIOMapperIDKey, obj.get());
 	}
 
 	if (matching) {
-		mapper = OSDynamicCast(IOMapper, IOService::waitForMatchingService(matching));
-		matching->release();
+		mapper = OSDynamicPtrCast<IOMapper>(IOService::waitForMatchingService(matching.get()));
 	}
 
-done:
-	if (obj) {
-		obj->release();
-	}
 found:
 	if (mapper) {
 		if (!mapper->fAllocName) {
@@ -247,7 +246,12 @@ IOMapperIOVMAlloc(unsigned pages)
 	}
 
 	if (kIOReturnSuccess == ret) {
-		return atop_64(dmaAddress);
+		uint64_t dmaAddressPage64;
+		dmaAddressPage64 = atop_64(dmaAddress);
+		if (dmaAddressPage64 > UINT_MAX) {
+			return 0;
+		}
+		return (ppnum_t) atop_64(dmaAddress);
 	}
 	return 0;
 }

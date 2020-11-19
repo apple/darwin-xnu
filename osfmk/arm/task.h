@@ -56,15 +56,29 @@
  */
 
 /*
- * Machine dependant task fields
+ * Machine dependent task fields
  */
 
-#if defined(HAS_APPLE_PAC)
-#define MACHINE_TASK \
-	void*                   task_debug; \
-	uint64_t rop_pid; \
-	boolean_t disable_user_jop;
-#else
-#define MACHINE_TASK \
-	void*                   task_debug;
+#ifdef MACH_KERNEL_PRIVATE
+/* Provide access to target-specific defintions which may be used by
+ * consuming code, e.g. HYPERVISOR. */
+#include <arm/proc_reg.h>
 #endif
+
+
+#if defined(HAS_APPLE_PAC)
+#define TASK_ADDITIONS_PAC \
+	uint64_t rop_pid; \
+	uint64_t jop_pid; \
+	uint8_t disable_user_jop;
+#else
+#define TASK_ADDITIONS_PAC
+#endif
+
+
+
+
+#define MACHINE_TASK \
+	void* task_debug; \
+	TASK_ADDITIONS_PAC \
+

@@ -95,8 +95,10 @@
 #include <sys/appleapiopts.h>
 
 #ifdef BSD_KERNEL_PRIVATE
+#include <kern/zalloc.h>
 #include <net/ethernet.h>
 
+struct ip6asfrag;
 /*
  * IP6 reassembly queue structure.  Each fragment
  * being reassembled is attached to one of these structures.
@@ -112,25 +114,12 @@ struct  ip6q {
 	struct ip6q     *ip6q_next;
 	struct ip6q     *ip6q_prev;
 	int             ip6q_unfrglen;  /* len of unfragmentable part */
-#ifdef notyet
-	u_char  *ip6q_nxtp;
-#endif
 	int             ip6q_nfrag;     /* # of fragments */
 	uint32_t        ip6q_csum_flags; /* checksum flags */
 	uint32_t        ip6q_csum;      /* partial checksum value */
+	uint32_t        ip6q_flags;
+#define IP6QF_DIRTY    0x00000001
 };
-
-struct  ip6asfrag {
-	struct ip6asfrag *ip6af_down;
-	struct ip6asfrag *ip6af_up;
-	struct mbuf     *ip6af_m;
-	int             ip6af_offset;   /* offset in ip6af_m to next header */
-	int             ip6af_frglen;   /* fragmentable part length */
-	int             ip6af_off;      /* fragment offset */
-	u_int16_t       ip6af_mff;      /* more fragment bit in frag off */
-};
-
-#define IP6_REASS_MBUF(ip6af) (*(struct mbuf **)&((ip6af)->ip6af_m))
 
 struct  ip6_moptions {
 	decl_lck_mtx_data(, im6o_lock);
@@ -366,6 +355,8 @@ struct  ip6stat {
 	u_quad_t ip6s_clat464_plat64_pfx_setfail;
 	u_quad_t ip6s_clat464_plat64_pfx_getfail;
 
+	u_quad_t ip6s_overlap_frag_drop;
+
 	u_quad_t ip6s_rcv_if_weak_match;
 	u_quad_t ip6s_rcv_if_no_match;
 };
@@ -453,10 +444,13 @@ struct ip6_out_args {
 #define IP6OAF_NO_LOW_POWER     0x00000200      /* skip low power */
 #define IP6OAF_NO_CONSTRAINED   0x00000400      /* skip IFXF_CONSTRAINED */
 #define IP6OAF_SKIP_PF          0x00000800      /* skip PF */
+#define IP6OAF_DONT_FRAG        0x00001000      /* Don't fragment */
+#define IP6OAF_REDO_QOSMARKING_POLICY   0x00002000      /* Re-evaluate QOS marking policy */
 	u_int32_t       ip6oa_retflags; /* IP6OARF return flags (see below) */
 #define IP6OARF_IFDENIED        0x00000001      /* denied access to interface */
 	int             ip6oa_sotc;             /* traffic class for Fastlane DSCP mapping */
 	int             ip6oa_netsvctype;
+	int32_t         qos_marking_gencount;
 };
 
 extern struct ip6stat ip6stat;  /* statistics */
@@ -501,6 +495,11 @@ extern int ip6_prefer_tempaddr;
 /* whether to use the default scope zone when unspecified */
 extern int ip6_use_defzone;
 
+/* how many times to try allocating cga address after conflict */
+extern int ip6_cga_conflict_retries;
+#define IPV6_CGA_CONFLICT_RETRIES_DEFAULT 3
+#define IPV6_CGA_CONFLICT_RETRIES_MAX     10
+
 extern struct pr_usrreqs rip6_usrreqs;
 extern struct pr_usrreqs icmp6_dgram_usrreqs;
 
@@ -524,14 +523,14 @@ extern void ip6_setdstifaddr_info(struct mbuf *, uint32_t, struct in6_ifaddr *);
 extern int ip6_getsrcifaddr_info(struct mbuf *, uint32_t *, uint32_t *);
 extern int ip6_getdstifaddr_info(struct mbuf *, uint32_t *, uint32_t *);
 extern void ip6_freepcbopts(struct ip6_pktopts *);
-extern int ip6_unknown_opt(u_int8_t *, struct mbuf *, int);
+extern int ip6_unknown_opt(u_int8_t *, struct mbuf *, size_t);
 extern char *ip6_get_prevhdr(struct mbuf *, int);
 extern int ip6_nexthdr(struct mbuf *, int, int, int *);
 extern int ip6_lasthdr(struct mbuf *, int, int, int *);
 extern boolean_t ip6_pkt_has_ulp(struct mbuf *m);
 
 extern void ip6_moptions_init(void);
-extern struct ip6_moptions *ip6_allocmoptions(int);
+extern struct ip6_moptions *ip6_allocmoptions(zalloc_flags_t);
 extern void im6o_addref(struct ip6_moptions *, int);
 extern void im6o_remref(struct ip6_moptions *);
 

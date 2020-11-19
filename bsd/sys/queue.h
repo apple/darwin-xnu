@@ -499,7 +499,8 @@ __MISMATCH_TAGS_POP
 	      LIST_FIRST((head)) != NULL &&                             \
 	      LIST_FIRST((head))->field.le_prev !=                      \
 	      &LIST_FIRST((head))))                                     \
-	             panic("Bad list head %p first->prev != head", (head));     \
+	             panic("Bad list head %p first->prev != head @%u",  \
+	                 (head), __LINE__);                             \
 } while (0)
 
 #define LIST_CHECK_NEXT(elm, field) do {                                \
@@ -507,12 +508,14 @@ __MISMATCH_TAGS_POP
 	      LIST_NEXT((elm), field) != NULL &&                        \
 	      LIST_NEXT((elm), field)->field.le_prev !=                 \
 	      &((elm)->field.le_next)))                                 \
-	             panic("Bad link elm %p next->prev != elm", (elm)); \
+	             panic("Bad link elm %p next->prev != elm @%u",     \
+	                 (elm), __LINE__);                              \
 } while (0)
 
 #define LIST_CHECK_PREV(elm, field) do {                                \
 	if (__improbable(*(elm)->field.le_prev != (elm)))               \
-	        panic("Bad link elm %p prev->next != elm", (elm));      \
+	        panic("Bad link elm %p prev->next != elm @%u",          \
+	            (elm), __LINE__);                                   \
 } while (0)
 #else
 #define LIST_CHECK_HEAD(head, field)
@@ -628,7 +631,8 @@ __MISMATCH_TAGS_POP
 	      TAILQ_FIRST((head)) != NULL &&                            \
 	      TAILQ_FIRST((head))->field.tqe_prev !=                    \
 	      &TAILQ_FIRST((head))))                                    \
-	             panic("Bad tailq head %p first->prev != head", (head));    \
+	             panic("Bad tailq head %p first->prev != head @%u", \
+	                 (head), __LINE__);                             \
 } while (0)
 
 #define TAILQ_CHECK_NEXT(elm, field) do {                               \
@@ -636,12 +640,14 @@ __MISMATCH_TAGS_POP
 	      TAILQ_NEXT((elm), field) != NULL &&                       \
 	      TAILQ_NEXT((elm), field)->field.tqe_prev !=               \
 	      &((elm)->field.tqe_next)))                                \
-	             panic("Bad tailq elm %p next->prev != elm", (elm));        \
+	             panic("Bad tailq elm %p next->prev != elm @%u",    \
+	                 (elm), __LINE__);                              \
 } while(0)
 
 #define TAILQ_CHECK_PREV(elm, field) do {                               \
        if (__improbable(*(elm)->field.tqe_prev != (elm)))               \
-	      panic("Bad tailq elm %p prev->next != elm", (elm));       \
+	      panic("Bad tailq elm %p prev->next != elm @%u",           \
+	          (elm), __LINE__);                                     \
 } while(0)
 #else
 #define TAILQ_CHECK_HEAD(head, field)
@@ -837,19 +843,22 @@ __MISMATCH_TAGS_POP
        if (__improbable(                                                \
 	      CIRCLEQ_FIRST((head)) != ((void*)(head)) &&               \
 	      CIRCLEQ_FIRST((head))->field.cqe_prev != ((void*)(head))))\
-	             panic("Bad circleq head %p first->prev != head", (head));  \
+	             panic("Bad circleq head %p first->prev != head @%u", \
+	                 (head), __LINE__);                             \
 } while(0)
 #define CIRCLEQ_CHECK_NEXT(head, elm, field) do {                       \
        if (__improbable(                                                \
 	      CIRCLEQ_NEXT((elm), field) != ((void*)(head)) &&          \
 	      CIRCLEQ_NEXT((elm), field)->field.cqe_prev != (elm)))     \
-	             panic("Bad circleq elm %p next->prev != elm", (elm));      \
+	             panic("Bad circleq elm %p next->prev != elm @%u",  \
+	                 (elm), __LINE__);                              \
 } while(0)
 #define CIRCLEQ_CHECK_PREV(head, elm, field) do {                       \
        if (__improbable(                                                \
 	      CIRCLEQ_PREV((elm), field) != ((void*)(head)) &&          \
 	      CIRCLEQ_PREV((elm), field)->field.cqe_next != (elm)))     \
-	             panic("Bad circleq elm %p prev->next != elm", (elm));      \
+	             panic("Bad circleq elm %p prev->next != elm @%u",  \
+	                 (elm), __LINE__);                              \
 } while(0)
 #else
 #define CIRCLEQ_CHECK_HEAD(head, field)

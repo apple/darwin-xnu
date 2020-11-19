@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -75,6 +75,7 @@
 #include <mach/vm_prot.h>
 
 #include <kern/trustcache.h>
+
 
 #ifdef  KERNEL_PRIVATE
 
@@ -193,6 +194,7 @@ extern pmap_t(pmap_kernel)(void);               /* Return the kernel's pmap */
 extern void             pmap_reference(pmap_t pmap);    /* Gain a reference. */
 extern void             pmap_destroy(pmap_t pmap); /* Release a reference. */
 extern void             pmap_switch(pmap_t);
+extern void             pmap_require(pmap_t pmap);
 
 #if MACH_ASSERT
 extern void pmap_set_process(pmap_t pmap,
@@ -213,6 +215,16 @@ extern kern_return_t    pmap_enter_options(
 	pmap_t pmap,
 	vm_map_offset_t v,
 	ppnum_t pn,
+	vm_prot_t prot,
+	vm_prot_t fault_type,
+	unsigned int flags,
+	boolean_t wired,
+	unsigned int options,
+	void *arg);
+extern kern_return_t    pmap_enter_options_addr(
+	pmap_t pmap,
+	vm_map_offset_t v,
+	pmap_paddr_t pa,
 	vm_prot_t prot,
 	vm_prot_t fault_type,
 	unsigned int flags,
@@ -447,8 +459,9 @@ extern kern_return_t(pmap_attribute)(           /* Get/Set special memory
 #endif  /* !PMAP_ENTER */
 
 #ifndef PMAP_ENTER_OPTIONS
-#define PMAP_ENTER_OPTIONS(pmap, virtual_address, page, protection,     \
-	    fault_type, flags, wired, options, result)   \
+#define PMAP_ENTER_OPTIONS(pmap, virtual_address, fault_phys_offset,   \
+	    page, protection,                                           \
+	    fault_type, flags, wired, options, result)                  \
 	MACRO_BEGIN                                                     \
 	pmap_t		__pmap = (pmap);                                \
 	vm_page_t	__page = (page);                                \
@@ -463,9 +476,12 @@ extern kern_return_t(pmap_attribute)(           /* Get/Set special memory
 	if (__page->vmp_reusable || __obj->all_reusable) {              \
 	        __extra_options |= PMAP_OPTIONS_REUSABLE;               \
 	}                                                               \
-	result = pmap_enter_options(__pmap,                             \
+	result = pmap_enter_options_addr(__pmap,                        \
 	                            (virtual_address),                  \
-	                            VM_PAGE_GET_PHYS_PAGE(__page),      \
+	                            (((pmap_paddr_t)                    \
+	                              VM_PAGE_GET_PHYS_PAGE(__page)     \
+	                              << PAGE_SHIFT)                    \
+	                             + fault_phys_offset),             \
 	                            (protection),                       \
 	                            (fault_type),                       \
 	                            (flags),                            \
@@ -583,6 +599,22 @@ extern void                     pmap_clear_refmod(ppnum_t pn, unsigned int mask)
 #define VM_MEM_REFERENCED       0x02    /* Referenced bit */
 extern void                     pmap_clear_refmod_options(ppnum_t pn, unsigned int mask, unsigned int options, void *);
 
+/*
+ * Clears the reference and/or modified bits on a range of virtually
+ * contiguous pages.
+ * It returns true if the operation succeeded. If it returns false,
+ * nothing has been modified.
+ * This operation is only supported on some platforms, so callers MUST
+ * handle the case where it returns false.
+ */
+extern bool
+pmap_clear_refmod_range_options(
+	pmap_t pmap,
+	vm_map_address_t start,
+	vm_map_address_t end,
+	unsigned int mask,
+	unsigned int options);
+
 
 extern void pmap_flush_context_init(pmap_flush_context *);
 extern void pmap_flush(pmap_flush_context *);
@@ -610,13 +642,13 @@ extern void(pmap_pageable)(
 	vm_map_offset_t end,
 	boolean_t       pageable);
 
+extern uint64_t pmap_shared_region_size_min(pmap_t map);
 
-extern uint64_t pmap_nesting_size_min;
-extern uint64_t pmap_nesting_size_max;
+/* TODO: <rdar://problem/65247502> Completely remove pmap_nesting_size_max() */
+extern uint64_t pmap_nesting_size_max(pmap_t map);
 
 extern kern_return_t pmap_nest(pmap_t,
     pmap_t,
-    addr64_t,
     addr64_t,
     uint64_t);
 extern kern_return_t pmap_unnest(pmap_t,
@@ -652,11 +684,32 @@ extern pmap_t   kernel_pmap;                    /* The kernel's map */
 /* N.B. These use the same numerical space as the PMAP_EXPAND_OPTIONS
  * definitions in i386/pmap_internal.h
  */
-#define PMAP_CREATE_64BIT       0x1
+#define PMAP_CREATE_64BIT          0x1
+
 #if __x86_64__
-#define PMAP_CREATE_EPT         0x2
+
+#define PMAP_CREATE_EPT            0x2
 #define PMAP_CREATE_KNOWN_FLAGS (PMAP_CREATE_64BIT | PMAP_CREATE_EPT)
+
+#else
+
+#define PMAP_CREATE_STAGE2         0
+#define PMAP_CREATE_DISABLE_JOP    0
+#if __ARM_MIXED_PAGE_SIZE__
+#define PMAP_CREATE_FORCE_4K_PAGES 0x8
+#else
+#define PMAP_CREATE_FORCE_4K_PAGES 0
+#endif /* __ARM_MIXED_PAGE_SIZE__ */
+#if __arm64__
+#define PMAP_CREATE_X86_64         0
+#else
+#define PMAP_CREATE_X86_64         0
 #endif
+
+/* Define PMAP_CREATE_KNOWN_FLAGS in terms of optional flags */
+#define PMAP_CREATE_KNOWN_FLAGS (PMAP_CREATE_64BIT | PMAP_CREATE_STAGE2 | PMAP_CREATE_DISABLE_JOP | PMAP_CREATE_FORCE_4K_PAGES | PMAP_CREATE_X86_64)
+
+#endif /* __x86_64__ */
 
 #define PMAP_OPTIONS_NOWAIT     0x1             /* don't block, return
 	                                         * KERN_RESOURCE_SHORTAGE
@@ -679,7 +732,11 @@ extern pmap_t   kernel_pmap;                    /* The kernel's map */
 #define PMAP_OPTIONS_PROTECT_IMMEDIATE 0x1000   /* allow protections to be
 	                                         * be upgraded */
 #define PMAP_OPTIONS_CLEAR_WRITE 0x2000
-
+#define PMAP_OPTIONS_TRANSLATED_ALLOW_EXECUTE 0x4000 /* Honor execute for translated processes */
+#if defined(__arm__) || defined(__arm64__)
+#define PMAP_OPTIONS_FF_LOCKED  0x8000
+#define PMAP_OPTIONS_FF_WIRED   0x10000
+#endif
 
 #if     !defined(__LP64__)
 extern vm_offset_t      pmap_extract(pmap_t pmap,
@@ -715,29 +772,35 @@ mach_vm_size_t pmap_query_resident(pmap_t pmap,
     vm_map_offset_t e,
     mach_vm_size_t *compressed_bytes_p);
 
+extern void pmap_set_vm_map_cs_enforced(pmap_t pmap, bool new_value);
+extern bool pmap_get_vm_map_cs_enforced(pmap_t pmap);
+
 /* Inform the pmap layer that there is a JIT entry in this map. */
 extern void pmap_set_jit_entitled(pmap_t pmap);
+
+/* Ask the pmap layer if there is a JIT entry in this map. */
+extern bool pmap_get_jit_entitled(pmap_t pmap);
 
 /*
  * Tell the pmap layer what range within the nested region the VM intends to
  * use.
  */
-extern void pmap_trim(pmap_t grand, pmap_t subord, addr64_t vstart, addr64_t nstart, uint64_t size);
+extern void pmap_trim(pmap_t grand, pmap_t subord, addr64_t vstart, uint64_t size);
 
 /*
- * Dump page table contents into the specified buffer.  Returns the number of
- * bytes copied, 0 if insufficient space, (size_t)-1 if unsupported.
+ * Dump page table contents into the specified buffer.  Returns KERN_INSUFFICIENT_BUFFER_SIZE
+ * if insufficient space, KERN_NOT_SUPPORTED if unsupported in the current configuration.
  * This is expected to only be called from kernel debugger context,
  * so synchronization is not required.
  */
 
-extern size_t pmap_dump_page_tables(pmap_t pmap, void *bufp, void *buf_end);
+extern kern_return_t pmap_dump_page_tables(pmap_t pmap, void *bufp, void *buf_end, unsigned int level_mask, size_t *bytes_copied);
 
 /*
  * Indicates if any special policy is applied to this protection by the pmap
  * layer.
  */
-bool pmap_has_prot_policy(vm_prot_t prot);
+bool pmap_has_prot_policy(pmap_t pmap, bool translated_allow_execute, vm_prot_t prot);
 
 /*
  * Causes the pmap to return any available pages that it can return cheaply to
@@ -777,6 +840,16 @@ struct pmap_legacy_trust_cache;
 extern kern_return_t pmap_load_legacy_trust_cache(struct pmap_legacy_trust_cache *trust_cache,
     const vm_size_t trust_cache_len);
 
+typedef enum {
+	PMAP_TC_TYPE_PERSONALIZED,
+	PMAP_TC_TYPE_PDI,
+	PMAP_TC_TYPE_CRYPTEX,
+	PMAP_TC_TYPE_ENGINEERING,
+	PMAP_TC_TYPE_GLOBAL_FF00,
+	PMAP_TC_TYPE_GLOBAL_FF01,
+} pmap_tc_type_t;
+
+#define PMAP_IMAGE4_TRUST_CACHE_HAS_TYPE 1
 struct pmap_image4_trust_cache {
 	// Filled by pmap layer.
 	struct pmap_image4_trust_cache const *next;             // linked list linkage
@@ -785,6 +858,9 @@ struct pmap_image4_trust_cache {
 	// Filled by caller.
 	// data is either an image4,
 	// or just the trust cache payload itself if the image4 manifest is external.
+	pmap_tc_type_t type;
+	size_t bnch_len;
+	uint8_t const bnch[48];
 	size_t data_len;
 	uint8_t const data[];
 };
@@ -799,7 +875,17 @@ typedef enum {
 	PMAP_TC_TOO_BIG = -6,
 	PMAP_TC_RESOURCE_SHORTAGE = -7,
 	PMAP_TC_MANIFEST_TOO_BIG = -8,
+	PMAP_TC_MANIFEST_VIOLATION = -9,
+	PMAP_TC_PAYLOAD_VIOLATION = -10,
+	PMAP_TC_EXPIRED = -11,
+	PMAP_TC_CRYPTO_WRONG = -12,
+	PMAP_TC_OBJECT_WRONG = -13,
+	PMAP_TC_UNKNOWN_CALLER = -14,
+	PMAP_TC_UNKNOWN_FAILURE = -15,
 } pmap_tc_ret_t;
+
+#define PMAP_HAS_LOCKDOWN_IMAGE4_SLAB 1
+extern void pmap_lockdown_image4_slab(vm_offset_t slab, vm_size_t slab_len, uint64_t flags);
 
 extern pmap_tc_ret_t pmap_load_image4_trust_cache(
 	struct pmap_image4_trust_cache *trust_cache, vm_size_t trust_cache_len,
@@ -820,6 +906,12 @@ extern void pmap_free_reserved_ppl_page(void *kva);
 extern void pmap_ledger_alloc_init(size_t);
 extern ledger_t pmap_ledger_alloc(void);
 extern void pmap_ledger_free(ledger_t);
+
+#if __arm64__
+extern bool pmap_is_exotic(pmap_t pmap);
+#else /* __arm64__ */
+#define pmap_is_exotic(pmap) false
+#endif /* __arm64__ */
 
 #endif  /* KERNEL_PRIVATE */
 

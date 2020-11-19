@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -66,8 +66,12 @@
 #ifndef _MACH_VM_STATISTICS_H_
 #define _MACH_VM_STATISTICS_H_
 
-#include <mach/machine/vm_types.h>
+#ifdef __cplusplus
+extern "C" {
+#endif
 
+#include <mach/machine/vm_types.h>
+#include <mach/machine/kern_return.h>
 
 /*
  * vm_statistics
@@ -166,6 +170,8 @@ struct vm_statistics64 {
 
 typedef struct vm_statistics64  *vm_statistics64_t;
 typedef struct vm_statistics64  vm_statistics64_data_t;
+
+kern_return_t vm_stats(void *info, unsigned int *count);
 
 /*
  * VM_STATISTICS_TRUNCATE_TO_32_BIT
@@ -383,12 +389,12 @@ typedef struct {
 	    vmkf_cs_enforcement:1,
 	    vmkf_nested_pmap:1,
 	    vmkf_no_copy_on_read:1,
-#if !defined(CONFIG_EMBEDDED)
 	    vmkf_32bit_map_va:1,
-	    __vmkf_unused:13;
-#else
-	    __vmkf_unused:14;
-#endif
+	    vmkf_copy_single_object:1,
+	    vmkf_copy_pageable:1,
+	    vmkf_copy_same_map:1,
+	    vmkf_translated_allow_execute:1,
+	    __vmkf_unused:9;
 } vm_map_kernel_flags_t;
 #define VM_MAP_KERNEL_FLAGS_NONE (vm_map_kernel_flags_t) {              \
 	.vmkf_atomic_entry = 0, /* keep entry atomic (no coalescing) */ \
@@ -409,6 +415,11 @@ typedef struct {
 	.vmkf_cs_enforcement = 0,  /* new value for CS_ENFORCEMENT */   \
 	.vmkf_nested_pmap = 0, /* use a nested pmap */                  \
 	.vmkf_no_copy_on_read = 0, /* do not use copy_on_read */        \
+	.vmkf_32bit_map_va = 0, /* allocate in low 32-bits range */     \
+	.vmkf_copy_single_object = 0, /* vm_map_copy only 1 VM object */ \
+	.vmkf_copy_pageable = 0, /* vm_map_copy with pageable entries */ \
+	.vmkf_copy_same_map = 0, /* vm_map_copy to remap in original map */ \
+	.vmkf_translated_allow_execute = 0, /* allow execute in translated processes */ \
 	.__vmkf_unused = 0                                              \
 }
 
@@ -456,6 +467,7 @@ typedef struct {
 
 #define VM_MEMORY_MALLOC_NANO 11
 #define VM_MEMORY_MALLOC_MEDIUM 12
+#define VM_MEMORY_MALLOC_PGUARD 13
 
 #define VM_MEMORY_MACH_MSG 20
 #define VM_MEMORY_IOKIT 21
@@ -616,6 +628,22 @@ typedef struct {
 /* memory allocated by CoreMedia for global image registration of frames */
 #define VM_MEMORY_CM_REGWARP 101
 
+/* memory allocated by EmbeddedAcousticRecognition for speech decoder */
+#define VM_MEMORY_EAR_DECODER 102
+
+/* CoreUI cached image data */
+#define VM_MEMORY_COREUI_CACHED_IMAGE_DATA 103
+
+/* Reserve 230-239 for Rosetta */
+#define VM_MEMORY_ROSETTA 230
+#define VM_MEMORY_ROSETTA_THREAD_CONTEXT 231
+#define VM_MEMORY_ROSETTA_INDIRECT_BRANCH_MAP 232
+#define VM_MEMORY_ROSETTA_RETURN_STACK 233
+#define VM_MEMORY_ROSETTA_EXECUTABLE_HEAP 234
+#define VM_MEMORY_ROSETTA_USER_LDT 235
+#define VM_MEMORY_ROSETTA_ARENA 236
+#define VM_MEMORY_ROSETTA_10 239
+
 /* Reserve 240-255 for application */
 #define VM_MEMORY_APPLICATION_SPECIFIC_1 240
 #define VM_MEMORY_APPLICATION_SPECIFIC_16 255
@@ -659,8 +687,9 @@ typedef struct {
 #define VM_KERN_MEMORY_REASON           25
 #define VM_KERN_MEMORY_SKYWALK          26
 #define VM_KERN_MEMORY_LTABLE           27
+#define VM_KERN_MEMORY_HV               28
 
-#define VM_KERN_MEMORY_FIRST_DYNAMIC    28
+#define VM_KERN_MEMORY_FIRST_DYNAMIC    29
 /* out of tags: */
 #define VM_KERN_MEMORY_ANY              255
 #define VM_KERN_MEMORY_COUNT            256
@@ -677,6 +706,7 @@ typedef struct {
 #define VM_KERN_SITE_HIDE               0x00000200      /* no zprint */
 #define VM_KERN_SITE_NAMED              0x00000400
 #define VM_KERN_SITE_ZONE               0x00000800
+#define VM_KERN_SITE_ZONE_VIEW          0x00001000
 
 #define VM_KERN_COUNT_MANAGED           0
 #define VM_KERN_COUNT_RESERVED          1
@@ -692,8 +722,15 @@ typedef struct {
 
 #define VM_KERN_COUNT_BOOT_STOLEN       10
 
-#define VM_KERN_COUNTER_COUNT           11
+/* The number of bytes from the kernel cache that are wired in memory */
+#define VM_KERN_COUNT_WIRED_STATIC_KERNELCACHE 11
+
+#define VM_KERN_COUNTER_COUNT           12
 
 #endif /* KERNEL_PRIVATE */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif  /* _MACH_VM_STATISTICS_H_ */

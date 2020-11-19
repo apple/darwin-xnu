@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -177,6 +177,7 @@ typedef struct object {
 	int             size;
 	void            *data;                  // for data
 	char            *string;                // for string & symbol
+	int             string_alloc_length;
 	long long       number;                 // for number
 	int             idref;
 } object_t;
@@ -219,11 +220,57 @@ static object_t         *buildData(parser_state_t *state, object_t *o);
 static object_t         *buildNumber(parser_state_t *state, object_t *o);
 static object_t         *buildBoolean(parser_state_t *state, object_t *o);
 
-#include <libkern/OSRuntime.h>
+__BEGIN_DECLS
+#include <kern/kalloc.h>
+__END_DECLS
 
-#define malloc(s) kern_os_malloc(s)
-#define realloc(a, s) kern_os_realloc(a, s)
-#define free(a) kern_os_free((void *)a)
+#define malloc(size) malloc_impl(size)
+static inline void *
+malloc_impl(size_t size)
+{
+	if (size == 0) {
+		return NULL;
+	}
+	return kheap_alloc_tag_bt(KHEAP_DEFAULT, size,
+	           (zalloc_flags_t) (Z_WAITOK | Z_ZERO),
+	           VM_KERN_MEMORY_LIBKERN);
+}
+
+#define free(addr) free_impl(addr)
+static inline void
+free_impl(void *addr)
+{
+	kheap_free_addr(KHEAP_DEFAULT, addr);
+}
+static inline void
+safe_free(void *addr, size_t size)
+{
+	if (addr) {
+		assert(size != 0);
+		kheap_free(KHEAP_DEFAULT, addr, size);
+	}
+}
+
+#define realloc(addr, osize, nsize) realloc_impl(addr, osize, nsize)
+static inline void *
+realloc_impl(void *addr, size_t osize, size_t nsize)
+{
+	if (!addr) {
+		return malloc(nsize);
+	}
+	if (nsize == osize) {
+		return addr;
+	}
+	void *nmem = malloc(nsize);
+	if (!nmem) {
+		safe_free(addr, osize);
+		return NULL;
+	}
+	(void)memcpy(nmem, addr, (nsize > osize) ? osize : nsize);
+	safe_free(addr, osize);
+
+	return nmem;
+}
 
 
 
@@ -258,7 +305,7 @@ typedef int YYSTYPE;
 
 
 /* Line 216 of yacc.c.  */
-#line 212 "OSUnserializeXML.tab.c"
+#line 258 "OSUnserializeXML.tab.c"
 
 #ifdef short
 # undef short
@@ -549,10 +596,10 @@ static const yytype_int8 yyrhs[] =
 /* YYRLINE[YYN] -- source line where rule number YYN was defined.  */
 static const yytype_uint16 yyrline[] =
 {
-	0, 146, 146, 149, 154, 159, 171, 183, 195, 207,
-	219, 231, 243, 267, 270, 273, 276, 277, 292, 301,
-	313, 316, 319, 322, 325, 328, 331, 334, 341, 344,
-	347, 350, 353
+	0, 192, 192, 195, 200, 205, 217, 229, 241, 253,
+	265, 277, 289, 313, 316, 319, 322, 323, 338, 347,
+	359, 362, 365, 368, 371, 374, 377, 380, 387, 390,
+	393, 396, 399
 };
 #endif
 
@@ -1495,14 +1542,14 @@ yyreduce:
 	YY_REDUCE_PRINT(yyn);
 	switch (yyn) {
 	case 2:
-#line 146 "OSUnserializeXML.y"
+#line 192 "OSUnserializeXML.y"
 		{ yyerror("unexpected end of buffer");
 		  YYERROR;
 		  ;}
 		break;
 
 	case 3:
-#line 149 "OSUnserializeXML.y"
+#line 195 "OSUnserializeXML.y"
 		{ STATE->parsedObject = (yyvsp[(1) - (1)])->object;
 		  (yyvsp[(1) - (1)])->object = 0;
 		  freeObject(STATE, (yyvsp[(1) - (1)]));
@@ -1511,14 +1558,14 @@ yyreduce:
 		break;
 
 	case 4:
-#line 154 "OSUnserializeXML.y"
+#line 200 "OSUnserializeXML.y"
 		{ yyerror("syntax error");
 		  YYERROR;
 		  ;}
 		break;
 
 	case 5:
-#line 159 "OSUnserializeXML.y"
+#line 205 "OSUnserializeXML.y"
 		{ (yyval) = buildDictionary(STATE, (yyvsp[(1) - (1)]));
 
 		  if (!yyval->object) {
@@ -1534,7 +1581,7 @@ yyreduce:
 		break;
 
 	case 6:
-#line 171 "OSUnserializeXML.y"
+#line 217 "OSUnserializeXML.y"
 		{ (yyval) = buildArray(STATE, (yyvsp[(1) - (1)]));
 
 		  if (!yyval->object) {
@@ -1550,7 +1597,7 @@ yyreduce:
 		break;
 
 	case 7:
-#line 183 "OSUnserializeXML.y"
+#line 229 "OSUnserializeXML.y"
 		{ (yyval) = buildSet(STATE, (yyvsp[(1) - (1)]));
 
 		  if (!yyval->object) {
@@ -1566,7 +1613,7 @@ yyreduce:
 		break;
 
 	case 8:
-#line 195 "OSUnserializeXML.y"
+#line 241 "OSUnserializeXML.y"
 		{ (yyval) = buildString(STATE, (yyvsp[(1) - (1)]));
 
 		  if (!yyval->object) {
@@ -1582,7 +1629,7 @@ yyreduce:
 		break;
 
 	case 9:
-#line 207 "OSUnserializeXML.y"
+#line 253 "OSUnserializeXML.y"
 		{ (yyval) = buildData(STATE, (yyvsp[(1) - (1)]));
 
 		  if (!yyval->object) {
@@ -1598,7 +1645,7 @@ yyreduce:
 		break;
 
 	case 10:
-#line 219 "OSUnserializeXML.y"
+#line 265 "OSUnserializeXML.y"
 		{ (yyval) = buildNumber(STATE, (yyvsp[(1) - (1)]));
 
 		  if (!yyval->object) {
@@ -1614,7 +1661,7 @@ yyreduce:
 		break;
 
 	case 11:
-#line 231 "OSUnserializeXML.y"
+#line 277 "OSUnserializeXML.y"
 		{ (yyval) = buildBoolean(STATE, (yyvsp[(1) - (1)]));
 
 		  if (!yyval->object) {
@@ -1630,7 +1677,7 @@ yyreduce:
 		break;
 
 	case 12:
-#line 243 "OSUnserializeXML.y"
+#line 289 "OSUnserializeXML.y"
 		{ (yyval) = retrieveObject(STATE, (yyvsp[(1) - (1)])->idref);
 		  if ((yyval)) {
 			  STATE->retrievedObjectCount++;
@@ -1654,21 +1701,21 @@ yyreduce:
 		break;
 
 	case 13:
-#line 267 "OSUnserializeXML.y"
+#line 313 "OSUnserializeXML.y"
 		{ (yyval) = (yyvsp[(1) - (2)]);
 		  (yyval)->elements = NULL;
 		  ;}
 		break;
 
 	case 14:
-#line 270 "OSUnserializeXML.y"
+#line 316 "OSUnserializeXML.y"
 		{ (yyval) = (yyvsp[(1) - (3)]);
 		  (yyval)->elements = (yyvsp[(2) - (3)]);
 		  ;}
 		break;
 
 	case 17:
-#line 277 "OSUnserializeXML.y"
+#line 323 "OSUnserializeXML.y"
 		{ (yyval) = (yyvsp[(2) - (2)]);
 		  (yyval)->next = (yyvsp[(1) - (2)]);
 
@@ -1685,7 +1732,7 @@ yyreduce:
 		break;
 
 	case 18:
-#line 292 "OSUnserializeXML.y"
+#line 338 "OSUnserializeXML.y"
 		{ (yyval) = (yyvsp[(1) - (2)]);
 		  (yyval)->key = (OSSymbol *)(yyval)->object;
 		  (yyval)->object = (yyvsp[(2) - (2)])->object;
@@ -1696,7 +1743,7 @@ yyreduce:
 		break;
 
 	case 19:
-#line 301 "OSUnserializeXML.y"
+#line 347 "OSUnserializeXML.y"
 		{ (yyval) = buildSymbol(STATE, (yyvsp[(1) - (1)]));
 
 //				  STATE->parsedObjectCount++;
@@ -1708,42 +1755,42 @@ yyreduce:
 		break;
 
 	case 20:
-#line 313 "OSUnserializeXML.y"
+#line 359 "OSUnserializeXML.y"
 		{ (yyval) = (yyvsp[(1) - (2)]);
 		  (yyval)->elements = NULL;
 		  ;}
 		break;
 
 	case 21:
-#line 316 "OSUnserializeXML.y"
+#line 362 "OSUnserializeXML.y"
 		{ (yyval) = (yyvsp[(1) - (3)]);
 		  (yyval)->elements = (yyvsp[(2) - (3)]);
 		  ;}
 		break;
 
 	case 23:
-#line 322 "OSUnserializeXML.y"
+#line 368 "OSUnserializeXML.y"
 		{ (yyval) = (yyvsp[(1) - (2)]);
 		  (yyval)->elements = NULL;
 		  ;}
 		break;
 
 	case 24:
-#line 325 "OSUnserializeXML.y"
+#line 371 "OSUnserializeXML.y"
 		{ (yyval) = (yyvsp[(1) - (3)]);
 		  (yyval)->elements = (yyvsp[(2) - (3)]);
 		  ;}
 		break;
 
 	case 26:
-#line 331 "OSUnserializeXML.y"
+#line 377 "OSUnserializeXML.y"
 		{ (yyval) = (yyvsp[(1) - (1)]);
 		  (yyval)->next = NULL;
 		  ;}
 		break;
 
 	case 27:
-#line 334 "OSUnserializeXML.y"
+#line 380 "OSUnserializeXML.y"
 		{ (yyval) = (yyvsp[(2) - (2)]);
 		  (yyval)->next = (yyvsp[(1) - (2)]);
 		  ;}
@@ -1751,7 +1798,7 @@ yyreduce:
 
 
 /* Line 1267 of yacc.c.  */
-#line 1701 "OSUnserializeXML.tab.c"
+#line 1747 "OSUnserializeXML.tab.c"
 	default: break;
 	}
 	YY_SYMBOL_PRINT("-> $$ =", yyr1[yyn], &yyval, &yyloc);
@@ -1963,7 +2010,7 @@ yyreturn:
 }
 
 
-#line 356 "OSUnserializeXML.y"
+#line 402 "OSUnserializeXML.y"
 
 
 int
@@ -2160,7 +2207,7 @@ getTag(parser_state_t *state,
 }
 
 static char *
-getString(parser_state_t *state)
+getString(parser_state_t *state, int *alloc_lengthp)
 {
 	int c = currentChar();
 	int start, length, i, j;
@@ -2190,6 +2237,9 @@ getString(parser_state_t *state)
 	if (tempString == NULL) {
 		printf("OSUnserializeXML: can't alloc temp memory\n");
 		goto error;
+	}
+	if (alloc_lengthp) {
+		*alloc_lengthp = length + 1;
 	}
 
 	// copy out string in tempString
@@ -2252,7 +2302,10 @@ getString(parser_state_t *state)
 
 error:
 	if (tempString) {
-		free(tempString);
+		safe_free(tempString, length + 1);
+		if (alloc_lengthp) {
+			*alloc_lengthp = 0;
+		}
 	}
 	return 0;
 }
@@ -2326,8 +2379,9 @@ getCFEncodedData(parser_state_t *state, unsigned int *size)
 {
 	int numeq = 0, cntr = 0;
 	unsigned int acc = 0;
-	int tmpbufpos = 0, tmpbuflen = 0;
-	unsigned char *tmpbuf = (unsigned char *)malloc(DATA_ALLOC_SIZE);
+	int tmpbufpos = 0;
+	size_t tmpbuflen = DATA_ALLOC_SIZE;
+	unsigned char *tmpbuf = (unsigned char *)malloc(tmpbuflen);
 
 	int c = currentChar();
 	*size = 0;
@@ -2335,7 +2389,7 @@ getCFEncodedData(parser_state_t *state, unsigned int *size)
 	while (c != '<') {
 		c &= 0x7f;
 		if (c == 0) {
-			free(tmpbuf);
+			safe_free(tmpbuf, tmpbuflen);
 			return 0;
 		}
 		if (c == '=') {
@@ -2355,8 +2409,9 @@ getCFEncodedData(parser_state_t *state, unsigned int *size)
 		acc += __CFPLDataDecodeTable[c];
 		if (0 == (cntr & 0x3)) {
 			if (tmpbuflen <= tmpbufpos + 2) {
+				size_t oldsize = tmpbuflen;
 				tmpbuflen += DATA_ALLOC_SIZE;
-				tmpbuf = (unsigned char *)realloc(tmpbuf, tmpbuflen);
+				tmpbuf = (unsigned char *)realloc(tmpbuf, oldsize, tmpbuflen);
 			}
 			tmpbuf[tmpbufpos++] = (acc >> 16) & 0xff;
 			if (numeq < 2) {
@@ -2370,7 +2425,7 @@ getCFEncodedData(parser_state_t *state, unsigned int *size)
 	}
 	*size = tmpbufpos;
 	if (*size == 0) {
-		free(tmpbuf);
+		safe_free(tmpbuf, tmpbuflen);
 		return 0;
 	}
 	return tmpbuf;
@@ -2382,7 +2437,8 @@ getHexData(parser_state_t *state, unsigned int *size)
 	int c;
 	unsigned char *d, *start, *lastStart;
 
-	start = lastStart = d = (unsigned char *)malloc(DATA_ALLOC_SIZE);
+	size_t buflen = DATA_ALLOC_SIZE;
+	start = lastStart = d = (unsigned char *)malloc(buflen);
 	c = currentChar();
 
 	while (c != '<') {
@@ -2419,7 +2475,9 @@ getHexData(parser_state_t *state, unsigned int *size)
 		d++;
 		if ((d - lastStart) >= DATA_ALLOC_SIZE) {
 			int oldsize = d - start;
-			start = (unsigned char *)realloc(start, oldsize + DATA_ALLOC_SIZE);
+			assert(oldsize == buflen);
+			buflen += DATA_ALLOC_SIZE;
+			start = (unsigned char *)realloc(start, oldsize, buflen);
 			d = lastStart = start + oldsize;
 		}
 		c = nextChar();
@@ -2431,7 +2489,7 @@ getHexData(parser_state_t *state, unsigned int *size)
 error:
 
 	*size = 0;
-	free(start);
+	safe_free(start, buflen);
 	return 0;
 }
 
@@ -2445,7 +2503,7 @@ yylex(YYSTYPE *lvalp, parser_state_t *state)
 	char attributes[TAG_MAX_ATTRIBUTES][TAG_MAX_LENGTH];
 	char values[TAG_MAX_ATTRIBUTES][TAG_MAX_LENGTH];
 	object_t *object;
-
+	int alloc_length;
 top:
 	c = currentChar();
 
@@ -2579,10 +2637,11 @@ top:
 			if (tagType == TAG_EMPTY) {
 				return SYNTAX_ERROR;
 			}
-			object->string = getString(STATE);
+			object->string = getString(STATE, &alloc_length);
 			if (!object->string) {
 				return SYNTAX_ERROR;
 			}
+			object->string_alloc_length = alloc_length;
 			if ((getTag(STATE, tag, &attributeCount, attributes, values) != TAG_END)
 			    || strcmp(tag, "key")) {
 				return SYNTAX_ERROR;
@@ -2600,13 +2659,15 @@ top:
 		if (!strcmp(tag, "string")) {
 			if (tagType == TAG_EMPTY) {
 				object->string = (char *)malloc(1);
+				object->string_alloc_length = 1;
 				object->string[0] = 0;
 				return STRING;
 			}
-			object->string = getString(STATE);
+			object->string = getString(STATE, &alloc_length);
 			if (!object->string) {
 				return SYNTAX_ERROR;
 			}
+			object->string_alloc_length = alloc_length;
 			if ((getTag(STATE, tag, &attributeCount, attributes, values) != TAG_END)
 			    || strcmp(tag, "string")) {
 				return SYNTAX_ERROR;
@@ -2659,7 +2720,6 @@ newObject(parser_state_t *state)
 	} else {
 		o = (object_t *)malloc(sizeof(object_t));
 //		object_count++;
-		bzero(o, sizeof(object_t));
 		o->free = state->objects;
 		state->objects = o;
 	}
@@ -2699,7 +2759,7 @@ cleanupObjects(parser_state_t *state)
 
 		t = o;
 		o = o->free;
-		free(t);
+		safe_free(t, sizeof(object_t));
 //		object_count--;
 	}
 //	printf("object_count = %d\n", object_count);
@@ -2871,7 +2931,7 @@ buildSymbol(parser_state_t *state, object_t *o)
 		rememberObject(state, o->idref, symbol);
 	}
 
-	free(o->string);
+	safe_free(o->string, o->string_alloc_length);
 	o->string = 0;
 	o->object = symbol;
 
@@ -2956,7 +3016,7 @@ OSUnserializeXML(const char *buffer, OSString **errorString)
 
 	cleanupObjects(state);
 	state->tags->release();
-	free(state);
+	safe_free(state, sizeof(parser_state_t));
 
 	return object;
 }

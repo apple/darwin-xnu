@@ -49,6 +49,7 @@ typedef enum thread_snapshot_wait_flags {
 	kThreadWaitWorkloopSyncWait     = 0x10,
 	kThreadWaitOnProcess            = 0x11,
 	kThreadWaitSleepWithInheritor   = 0x12,
+	kThreadWaitEventlink            = 0x13,
 	kThreadWaitCompressor           = 0x14,
 } __attribute__((packed)) block_hint_t;
 
@@ -57,8 +58,8 @@ _Static_assert(sizeof(block_hint_t) <= sizeof(short),
 
 #ifdef XNU_KERNEL_PRIVATE
 
+struct turnstile;
 struct waitq;
-struct stackshot_thread_waitinfo;
 typedef struct stackshot_thread_waitinfo thread_waitinfo_t;
 
 /* Used for stackshot_thread_waitinfo_unsafe */
@@ -74,6 +75,7 @@ extern void kdp_workloop_sync_wait_find_owner(thread_t thread, event64_t event, 
 extern void kdp_wait4_find_process(thread_t thread, event64_t event, thread_waitinfo_t *waitinfo);
 extern void kdp_sleep_with_inheritor_find_owner(struct waitq * waitq, __unused event64_t event, thread_waitinfo_t * waitinfo);
 extern void kdp_turnstile_fill_tsinfo(struct turnstile *ts, thread_turnstileinfo_t *tsinfo);
+void kdp_eventlink_find_owner(struct waitq *waitq, event64_t event, thread_waitinfo_t *waitinfo);
 
 #endif /* XNU_KERNEL_PRIVATE */
 

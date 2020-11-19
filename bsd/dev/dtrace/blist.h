@@ -90,6 +90,10 @@ typedef struct blist {
 
 #define BLIST_MAX_ALLOC         BLIST_BMAP_RADIX
 
+#if defined(__APPLE__)
+#define SWAPBLK_NONE ((daddr_t)-1)
+#endif /* __APPLE__ */
+
 extern blist_t blist_create(daddr_t blocks);
 extern void blist_destroy(blist_t blist);
 extern daddr_t blist_alloc(blist_t blist, daddr_t count);

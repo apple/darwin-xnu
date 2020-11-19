@@ -84,7 +84,7 @@ extern kern_return_t task_importance(task_t task, integer_t importance);
 #define TASK_POLICY_DARWIN_BG_IOPOL     IMP_TASK_POLICY_DARWIN_BG_IOPOL
 
 /* task-only attributes */
-#define TASK_POLICY_TAL                 IMP_TASK_POLICY_TAL
+/* unused                               was: IMP_TASK_POLICY_TAL */
 #define TASK_POLICY_BOOST               IMP_TASK_POLICY_BOOST
 #define TASK_POLICY_ROLE                IMP_TASK_POLICY_ROLE
 /* unused                               0x2B */
@@ -128,12 +128,12 @@ extern void proc_set_thread_policy_with_tid(task_t task, uint64_t tid, int categ
 extern boolean_t thread_has_qos_policy(thread_t thread);
 extern kern_return_t thread_remove_qos_policy(thread_t thread);
 
-extern int  proc_darwin_role_to_task_role(int darwin_role, int* task_role);
-extern int  proc_task_role_to_darwin_role(int task_role);
+extern int  proc_darwin_role_to_task_role(int darwin_role, task_role_t* task_role);
+extern int  proc_task_role_to_darwin_role(task_role_t task_role);
 
 /* Functions used by kern_exec.c */
 extern void task_set_main_thread_qos(task_t task, thread_t main_thread);
-extern void proc_set_task_spawnpolicy(task_t task, thread_t thread, int apptype, int qos_clamp, int role,
+extern void proc_set_task_spawnpolicy(task_t task, thread_t thread, int apptype, int qos_clamp, task_role_t role,
     ipc_port_t * portwatch_ports, uint32_t portwatch_count);
 extern void proc_inherit_task_role(task_t new_task, task_t old_task);
 
@@ -183,17 +183,17 @@ extern void thread_set_workq_pri(thread_t thread, thread_qos_t qos, integer_t pr
 extern uint8_t thread_workq_pri_for_qos(thread_qos_t qos) __pure2;
 extern thread_qos_t thread_workq_qos_for_pri(int priority);
 
-extern int
+extern thread_qos_t
 task_get_default_manager_qos(task_t task);
 
 extern void proc_thread_qos_deallocate(thread_t thread);
 
 extern int task_clear_cpuusage(task_t task, int cpumon_entitled);
 
-#if CONFIG_EMBEDDED
+#if CONFIG_TASKWATCH
 /* Taskwatch related external BSD interface */
 extern int proc_lf_pidbind(task_t curtask, uint64_t tid, task_t target_task, int bind);
-#endif /* CONFIG_EMBEDDED */
+#endif /* CONFIG_TASKWATCH */
 
 /* Importance inheritance functions not under IMPORTANCE_INHERITANCE */
 extern void task_importance_mark_donor(task_t task, boolean_t donating);
@@ -225,7 +225,7 @@ extern boolean_t proc_task_is_tal(task_t task);
 
 extern int proc_get_task_ruse_cpu(task_t task, uint32_t *policyp, uint8_t *percentagep,
     uint64_t *intervalp, uint64_t *deadlinep);
-extern int proc_set_task_ruse_cpu(task_t task, uint32_t policy, uint8_t percentage,
+extern int proc_set_task_ruse_cpu(task_t task, uint16_t policy, uint8_t percentage,
     uint64_t interval, uint64_t deadline, int cpumon_entitled);
 extern int task_suspend_cpumon(task_t task);
 extern int task_resume_cpumon(task_t task);
@@ -300,8 +300,8 @@ extern void thread_policy_update_locked(thread_t thread, task_pend_token_t pend_
 extern void thread_policy_update_complete_unlocked(thread_t task, task_pend_token_t pend_token);
 
 typedef struct {
-	int             qos_pri[THREAD_QOS_LAST];
-	int             qos_iotier[THREAD_QOS_LAST];
+	int16_t         qos_pri[THREAD_QOS_LAST];
+	int16_t         qos_iotier[THREAD_QOS_LAST];
 	uint32_t        qos_through_qos[THREAD_QOS_LAST];
 	uint32_t        qos_latency_qos[THREAD_QOS_LAST];
 } qos_policy_params_t;
@@ -328,14 +328,13 @@ extern void thread_policy_create(thread_t thread);
 extern boolean_t task_is_daemon(task_t task);
 extern boolean_t task_is_app(task_t task);
 
-#if CONFIG_EMBEDDED
+#if CONFIG_TASKWATCH
 /* Taskwatch related external interface */
 extern void thead_remove_taskwatch(thread_t thread);
 extern void task_removewatchers(task_t task);
-extern void task_watch_init(void);
 
 typedef struct task_watcher task_watch_t;
-#endif /* CONFIG_EMBEDDED */
+#endif /* CONFIG_TASKWATCH */
 
 #if IMPORTANCE_INHERITANCE
 extern boolean_t task_is_marked_importance_donor(task_t task);
@@ -354,7 +353,7 @@ extern boolean_t task_is_marked_importance_denap_receiver(task_t task);
 extern void proc_init_cpumon_params(void);
 extern void thread_policy_init(void);
 
-int task_compute_main_thread_qos(task_t task);
+thread_qos_t task_compute_main_thread_qos(task_t task);
 
 /* thread policy internals */
 extern void thread_policy_reset(thread_t thread);

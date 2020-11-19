@@ -26,7 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <mach/mach_time.h>
 #include <i386/cpu_data.h>
 #include <i386/cpuid.h>
@@ -183,12 +183,11 @@ mca_cpu_alloc(cpu_data_t        *cdp)
 	 */
 	mca_state_size = sizeof(mca_state_t) +
 	    sizeof(mca_mci_bank_t) * mca_error_bank_count;
-	cdp->cpu_mca_state = kalloc(mca_state_size);
+	cdp->cpu_mca_state = zalloc_permanent(mca_state_size, ZALIGN_PTR);
 	if (cdp->cpu_mca_state == NULL) {
 		printf("mca_cpu_alloc() failed for cpu %d\n", cdp->cpu_number);
 		return;
 	}
-	bzero((void *) cdp->cpu_mca_state, mca_state_size);
 
 	/*
 	 * If the boot processor is yet have its allocation made,

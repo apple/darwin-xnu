@@ -47,6 +47,7 @@ __END_DECLS
 #include <IOKit/IOService.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IODMACommand.h>
+#include <libkern/c++/OSPtr.h>
 
 class OSData;
 
@@ -99,8 +100,8 @@ public:
 		}
 	}
 
-	static IOMapper * copyMapperForDevice(IOService * device);
-	static IOMapper * copyMapperForDeviceWithIndex(IOService * device, unsigned int index);
+	static OSPtr<IOMapper>  copyMapperForDevice(IOService * device);
+	static OSPtr<IOMapper>  copyMapperForDeviceWithIndex(IOService * device, unsigned int index);
 
 // { subclasses
 

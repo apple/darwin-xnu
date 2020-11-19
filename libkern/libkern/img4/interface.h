@@ -38,13 +38,13 @@
 #include <sys/cdefs.h>
 
 /*
- * We rely on img4.h's logic for either including sys/types.h or declaring
- * errno_t ourselves. So when building the kernel, include img4.h from our
+ * We rely on firmware.h's logic for either including sys/types.h or declaring
+ * errno_t ourselves. So when building the kernel, include firmware.h from our
  * external headers. Avoid this inclusion if we're building AppleImage4, which
  * will have included its own internal version of the header.
  */
 #if MACH_KERNEL_PRIVATE || !_DARWIN_BUILDING_PROJECT_APPLEIMAGE4
-#include <img4/img4.h>
+#include <img4/firmware.h>
 #endif
 
 /*!
@@ -54,227 +54,215 @@
  * it can be tested at build-time and not require rev-locked submissions of xnu
  * and AppleImage4.
  */
-#define IMG4_INTERFACE_VERSION (4u)
+#define IMG4_INTERFACE_VERSION (10u)
 
 /*!
- * @typedef img4_init_t
- * A type describing a pointer to the {@link img4_init} function.
+ * @typegroup
+ * Type definitions for all exported functions and constants in the AppleImage4
+ * kext.
  */
-typedef errno_t (*const img4_init_t)(
-	img4_t *i4,
-	img4_flags_t flags,
-	const uint8_t *bytes,
-	size_t len,
-	img4_destructor_t destructor
-	);
+typedef const void *img4_retired_t;
 
-/*!
- * @typedef img4_get_trusted_payload_t
- * A type describing a pointer to the {@link img4_get_trusted_payload} function.
- */
-typedef errno_t (*const img4_get_trusted_payload_t)(
-	img4_t *i4,
-	img4_tag_t tag,
-	const img4_environment_t *env,
-	const uint8_t **bytes,
-	size_t *len
-	);
-
-/*!
- * @typedef img4_get_trusted_external_payload_t
- * A type describing a pointer to the {@link img4_get_trusted_external_payload}
- * function.
- */
-typedef errno_t (*const img4_get_trusted_external_payload_t)(
-	img4_t *img4,
-	img4_payload_t *payload,
-	const img4_environment_t *env,
-	const uint8_t **bytes,
-	size_t *len
-	);
-
-/*!
- * @typedef img4_set_nonce_t
- * A type describing a pointer to the {@link img4_set_nonce} function.
- */
-typedef void (*const img4_set_nonce_t)(img4_t *i4,
-    const void *bytes,
-    size_t len
-    );
-
-/*!
- * @typedef img4_destroy_t
- * A type describing the {@link img4_destroy} function.
- */
-typedef void (*const img4_destroy_t)(
-	img4_t *i4
-	);
-
-/*!
- * @typedef img4_payload_init_t
- * A type describing the {@link img4_payload_init} function.
- */
-typedef errno_t (*const img4_payload_init_t)(
-	img4_payload_t *i4p,
-	img4_tag_t tag,
-	img4_payload_flags_t flags,
-	const uint8_t *bytes,
-	size_t len,
-	img4_destructor_t destructor
-	);
-
-/*!
- * @typedef img4_payload_destroy_t
- * A type describing the {@link img4_payload_destroy} function.
- */
-typedef void (*const img4_payload_destroy_t)(
-	img4_payload_t *i4
-	);
-
-/*!
- * @typedef img4_payload_destroy_t
- * A type describing the {@link img4_set_nonce_domain} function.
- */
-typedef void (*const img4_set_nonce_domain_t)(
-	img4_t *i4,
-	const img4_nonce_domain_t *nd
-	);
-
-/*!
- * @typedef img4_nonce_domain_copy_nonce_t
- * A type describing the {@link img4_nonce_domain_copy_nonce} function.
- */
 typedef errno_t (*const img4_nonce_domain_copy_nonce_t)(
 	const img4_nonce_domain_t *nd,
 	img4_nonce_t *n
 	);
 
-/*!
- * @typedef img4_nonce_domain_roll_nonce_t
- * A type describing the {@link img4_nonce_domain_roll_nonce} function.
- */
 typedef errno_t (*const img4_nonce_domain_roll_nonce_t)(
 	const img4_nonce_domain_t *nd
 	);
 
-/*!
- * @typedef img4_payload_init_with_vnode_4xnu_t
- * A type describing the {@link img4_payload_init_with_vnode_4xnu} function.
- */
-typedef errno_t (*const img4_payload_init_with_vnode_4xnu_t)(
-	img4_payload_t *i4p,
-	img4_tag_t tag,
+typedef img4_chip_t *(*img4_chip_init_from_buff_t)(
+	void *buff,
+	size_t len
+	);
+
+typedef const img4_chip_t *(*img4_chip_select_personalized_ap_t)(
+	void
+	);
+
+typedef const img4_chip_t *(*img4_chip_select_effective_ap_t)(
+	void
+	);
+
+typedef errno_t (*img4_chip_instantiate_t)(
+	const img4_chip_t *chip,
+	img4_chip_instance_t *chip_instance
+	);
+
+typedef const img4_chip_t *(*img4_chip_custom_t)(
+	const img4_chip_instance_t *chip_instance,
+	img4_chip_t *chip
+	);
+
+typedef img4_firmware_t (*img4_firmware_new_t)(
+	const img4_runtime_t *rt,
+	const img4_firmware_execution_context_t *exec,
+	img4_4cc_t _4cc,
+	img4_buff_t *buff,
+	img4_firmware_flags_t flags
+	);
+
+typedef img4_firmware_t (*img4_firmware_new_from_vnode_4xnu_t)(
+	const img4_runtime_t *rt,
+	const img4_firmware_execution_context_t *exec,
+	img4_4cc_t _4cc,
 	vnode_t vn,
-	img4_payload_flags_t flags
+	img4_firmware_flags_t flags
 	);
 
-/*!
- * @typedef img4_environment_init_identity_t
- * A type describing the {@link img4_environment_init_identity} function.
- */
-typedef errno_t (*const img4_environment_init_identity_t)(
-	img4_environment_t *i4e,
-	size_t len,
-	const img4_identity_t *i4id
+typedef img4_firmware_t (*img4_firmware_init_from_buff_t)(
+	void *buff,
+	size_t len
 	);
 
-/*!
- * @typedef img4_interface_t
- * A structure describing the interface to the AppleImage4 kext.
- *
- * @field i4if_version
- * The version of the structure supported by the implementation.
- *
- * @field i4if_init
- * A pointer to the {@link img4_init} function.
- *
- * @field i4if_get_trusted_payload
- * A pointer to the {@link img4_get_trusted_payload} function.
- *
- * @field i4if_get_trusted_external_payload
- * A pointer to the {@link img4_get_trusted_external_payload} function.
- *
- * @field i4if_destroy
- * A pointer to the {@link img4_destroy} function.
- *
- * @field i4if_payload_init
- * A pointer to the {@link img4_payload_init} function.
- *
- * @field i4if_destroy
- * A pointer to the {@link img4_payload_destroy} function.
- *
- * @field i4if_environment_platform
- * The {@link IMG4_ENVIRONMENT_PLATFORM} global.
- *
- * @field i4if_environment_reserved
- * Reserved for use by the implementation.
- *
- * @field i4if_environment_trust_cache
- * The {@link IMG4_ENVIRONMENT_TRUST_CACHE} global.
- *
- * @field i4if_v1
- * All fields added in version 1 of the structure.
- *
- * @field i4if_v1.set_nonce_domain
- * A pointer to the @{link img4_set_nonce_domain} function.
- *
- * @field i4if_v1.nonce_domain_copy_nonce
- * A pointer to the {@link img4_nonce_domain_copy_nonce} function.
- *
- * @field i4if_v1.nonce_domain_roll_nonce
- * A pointer to the {@link img4_nonce_domain_roll_nonce} function.
- *
- * @field i4if_v1.nonce_domain_trust_cache
- * The {@link IMG4_NONCE_DOMAIN_TRUST_CACHE} global.
- *
- * @field i4if_v2
- * All fields added in version 2 of the structure.
- *
- * @field i4if_v2.payload_init_with_vnode_4xnu
- * A pointer to the {@link img4_payload_init_with_vnode_4xnu} function.
- *
- * @field i4if_v3
- * All fields added in version 3 of the structure.
- *
- * @field i4if_v3.nonce_domain_pdi
- * The {@link IMG4_NONCE_DOMAIN_PDI} global.
- *
- * @field i4if_v3.nonce_domain_cryptex
- * The {@link IMG4_NONCE_DOMAIN_CRYPTEX} global.
- *
- * @field i4if_v4.environment_init_identity
- * A pointer to the {@link img4_environment_init_identity} function.
- */
+typedef void (*img4_firmware_init_t)(
+	img4_firmware_t fw,
+	const img4_runtime_t *rt,
+	const img4_firmware_execution_context_t *exec,
+	img4_4cc_t _4cc,
+	img4_buff_t *buff,
+	img4_firmware_flags_t flags
+	);
+
+typedef void (*img4_firmware_attach_manifest_t)(
+	img4_firmware_t fw,
+	img4_buff_t *buff
+	);
+
+typedef void (*img4_firmware_execute_t)(
+	img4_firmware_t fw,
+	const img4_chip_t *chip,
+	const img4_nonce_t *nonce
+	);
+
+typedef void (*img4_firmware_destroy_t)(
+	img4_firmware_t *fw
+	);
+
+typedef const img4_buff_t *(*img4_image_get_bytes_t)(
+	img4_image_t image
+	);
+
+typedef const bool *(*img4_image_get_property_bool_t)(
+	img4_image_t image,
+	img4_4cc_t _4cc,
+	bool *storage
+	);
+
+typedef const uint32_t *(*img4_image_get_property_uint32_t)(
+	img4_image_t image,
+	img4_4cc_t _4cc,
+	uint32_t *storage
+	);
+
+typedef const uint64_t *(*img4_image_get_property_uint64_t)(
+	img4_image_t image,
+	img4_4cc_t _4cc,
+	uint64_t *storage
+	);
+
+typedef const img4_buff_t *(*img4_image_get_property_data_t)(
+	img4_image_t image,
+	img4_4cc_t _4cc,
+	img4_buff_t *storage
+	);
+
+typedef void (*img4_buff_dealloc_t)(
+	img4_buff_t *buff
+	);
+
+typedef errno_t (*img4_firmware_evaluate_t)(
+	img4_firmware_t fw,
+	const img4_chip_t *chip,
+	const img4_nonce_t *nonce
+	);
+
+typedef const img4_chip_t *(*img4_firmware_select_chip_t)(
+	const img4_firmware_t fw,
+	const img4_chip_select_array_t acceptable_chips,
+	size_t acceptable_chips_cnt
+	);
 
 typedef struct _img4_interface {
 	const uint32_t i4if_version;
-	img4_init_t i4if_init;
-	img4_set_nonce_t i4if_set_nonce;
-	img4_get_trusted_payload_t i4if_get_trusted_payload;
-	img4_get_trusted_external_payload_t i4if_get_trusted_external_payload;
-	img4_destroy_t i4if_destroy;
-	img4_payload_init_t i4if_payload_init;
-	img4_payload_destroy_t i4if_payload_destroy;
-	const img4_environment_t *i4if_environment_platform;
-	const img4_environment_t *i4if_environment_reserved;
-	const img4_environment_t *i4if_environment_trust_cache;
+	img4_retired_t i4if_init;
+	img4_retired_t i4if_set_nonce;
+	img4_retired_t i4if_get_trusted_payload;
+	img4_retired_t i4if_get_trusted_external_payload;
+	img4_retired_t i4if_destroy;
+	img4_retired_t i4if_payload_init;
+	img4_retired_t i4if_payload_destroy;
+	img4_retired_t i4if_environment_platform;
+	img4_retired_t i4if_environment_reserved;
+	img4_retired_t i4if_environment_trust_cache;
 	struct {
-		img4_set_nonce_domain_t set_nonce_domain;
+		img4_retired_t set_nonce_domain;
 		img4_nonce_domain_copy_nonce_t nonce_domain_copy_nonce;
 		img4_nonce_domain_roll_nonce_t nonce_domain_roll_nonce;
 		const img4_nonce_domain_t *nonce_domain_trust_cache;
 	} i4if_v1;
 	struct {
-		img4_payload_init_with_vnode_4xnu_t payload_init_with_vnode_4xnu;
+		img4_retired_t payload_init_with_vnode_4xnu;
 	} i4if_v2;
 	struct {
 		const img4_nonce_domain_t *nonce_domain_pdi;
 		const img4_nonce_domain_t *nonce_domain_cryptex;
 	} i4if_v3;
 	struct {
-		const img4_environment_init_identity_t environment_init_identity;
+		img4_retired_t environment_init_identity;
 	} i4if_v4;
-	void *__reserved[14];
+	struct {
+		img4_retired_t environment_t2;
+		img4_retired_t environment_init_from_identity;
+		img4_retired_t identity_init_from_environment;
+	} i4if_v5;
+	struct {
+		img4_retired_t environment_x86;
+	} i4if_v6;
+	struct {
+		const img4_chip_t *chip_ap_sha1;
+		const img4_chip_t *chip_ap_sha2_384;
+		const img4_chip_t *chip_ap_hybrid;
+		const img4_chip_t *chip_ap_reduced;
+		const img4_chip_t *chip_ap_software_ff00;
+		const img4_chip_t *chip_ap_software_ff01;
+		const img4_chip_t *chip_x86;
+		const img4_chip_t *chip_x86_software_8012;
+		img4_chip_init_from_buff_t chip_init_from_buff;
+		img4_chip_select_personalized_ap_t chip_select_personalized_ap;
+		img4_chip_select_effective_ap_t chip_select_effective_ap;
+		img4_chip_instantiate_t chip_instantiate;
+		img4_chip_custom_t chip_custom;
+		img4_firmware_new_t firmware_new;
+		img4_firmware_new_from_vnode_4xnu_t firmware_new_from_vnode_4xnu;
+		img4_firmware_init_from_buff_t firmware_init_from_buff;
+		img4_firmware_init_t firmware_init;
+		img4_firmware_attach_manifest_t firmware_attach_manifest;
+		img4_firmware_execute_t firmware_execute;
+		img4_firmware_destroy_t firmware_destroy;
+		img4_image_get_bytes_t image_get_bytes;
+		img4_image_get_property_bool_t image_get_property_bool;
+		img4_image_get_property_uint32_t image_get_property_uint32;
+		img4_image_get_property_uint64_t image_get_property_uint64;
+		img4_image_get_property_data_t image_get_property_data;
+		const img4_object_spec_t *firmware_spec;
+		const img4_object_spec_t *chip_spec;
+		const img4_runtime_t *runtime_default;
+		const img4_runtime_t *runtime_pmap_cs;
+		img4_buff_dealloc_t buff_dealloc;
+	} i4if_v7;
+	struct {
+		const img4_chip_t *chip_ap_permissive;
+		const img4_chip_t *chip_ap_hybrid_medium;
+		const img4_chip_t *chip_ap_hybrid_relaxed;
+	} i4if_v8;
+	struct {
+		img4_firmware_evaluate_t firmware_evaluate;
+	} i4if_v9;
+	struct {
+		img4_firmware_select_chip_t firmware_select_chip;
+	} i4if_v10;
 } img4_interface_t;
 
 __BEGIN_DECLS

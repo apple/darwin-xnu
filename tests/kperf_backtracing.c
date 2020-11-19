@@ -1,6 +1,4 @@
-#ifdef T_NAMESPACE
-#undef T_NAMESPACE
-#endif
+/* Copyright (c) 2018-2019 Apple Inc.  All rights reserved. */
 
 #include <CoreSymbolication/CoreSymbolication.h>
 #include <darwintest.h>
@@ -28,7 +26,7 @@ T_GLOBAL_META(
 
 static void
 expect_frame(const char **bt, unsigned int bt_len, CSSymbolRef symbol,
-    unsigned long addr, unsigned int bt_idx, unsigned int max_frames)
+    uint64_t addr, unsigned int bt_idx, unsigned int max_frames)
 {
 	const char *name;
 	unsigned int frame_idx = max_frames - bt_idx - 1;
@@ -39,14 +37,11 @@ expect_frame(const char **bt, unsigned int bt_len, CSSymbolRef symbol,
 		return;
 	}
 
-	if (CSIsNull(symbol)) {
-		T_FAIL("invalid symbol for address %#lx at frame %d", addr,
-		    frame_idx);
-		return;
-	}
+	T_LOG("checking frame %d: %llx", bt_idx, addr);
+	T_ASSERT_FALSE(CSIsNull(symbol), "invalid symbol for return address");
 
 	if (frame_idx >= bt_len) {
-		T_FAIL("unexpected frame '%s' (%#lx) at index %u",
+		T_FAIL("unexpected frame '%s' (%#" PRIx64 ") at index %u",
 		    CSSymbolGetName(symbol), addr, frame_idx);
 		return;
 	}
@@ -80,6 +75,8 @@ expect_backtrace(ktrace_session_t s, uint64_t tid, unsigned int *stacks_seen,
 	__block unsigned int hdr_frames = 0;
 	__block unsigned int allow_larger = allow_larger_by;
 
+	T_SETUPBEGIN;
+
 	if (kern) {
 		static CSSymbolicatorRef kern_symb;
 		static dispatch_once_t kern_symb_once;
@@ -112,7 +109,8 @@ expect_backtrace(ktrace_session_t s, uint64_t tid, unsigned int *stacks_seen,
 		        return;
 		}
 
-		T_LOG("found stack from thread %#" PRIx64, tp->threadid);
+		T_LOG("found %s stack from thread %#" PRIx64, kern ? "kernel" : "user",
+		    tp->threadid);
 		stacks++;
 		if (!(tp->arg1 & 1)) {
 		        T_FAIL("invalid %s stack on thread %#" PRIx64,
@@ -151,7 +149,7 @@ expect_backtrace(ktrace_session_t s, uint64_t tid, unsigned int *stacks_seen,
 		}
 
 		for (; i < 4 && frames < hdr_frames; i++, frames++) {
-		        unsigned long addr = (&tp->arg1)[i];
+		        uint64_t addr = (&tp->arg1)[i];
 		        CSSymbolRef symbol = CSSymbolicatorGetSymbolWithAddressAtTime(
 				symb, addr, kCSNow);
 
@@ -166,6 +164,8 @@ expect_backtrace(ktrace_session_t s, uint64_t tid, unsigned int *stacks_seen,
 			}
 		}
 	});
+
+	T_SETUPEND;
 }
 
 #define TRIGGERING_DEBUGID (0xfeff0f00)
@@ -361,7 +361,7 @@ start_backtrace_thread(void)
 #define TEST_TIMEOUT_NS (5 * NSEC_PER_SEC)
 #endif /* !TARGET_OS_WATCH */
 
-T_DECL(kdebug_trigger,
+T_DECL(kperf_stacks_kdebug_trig,
     "test that backtraces from kdebug trigger are correct",
     T_META_ASROOT(true))
 {
@@ -425,7 +425,7 @@ T_DECL(kdebug_trigger,
 	dispatch_main();
 }
 
-T_DECL(user_timer,
+T_DECL(kperf_ustack_timer,
     "test that user backtraces on a timer are correct",
     T_META_ASROOT(true))
 {
@@ -443,7 +443,7 @@ T_DECL(user_timer,
 
 	ktrace_filter_pid(s, getpid());
 
-	configure_kperf_stacks_timer(getpid(), 10);
+	configure_kperf_stacks_timer(getpid(), 10, false);
 
 	tid = create_backtrace_thread(backtrace_thread, wait_for_spinning);
 	/* potentially calling dispatch function and system call */
@@ -496,7 +496,7 @@ spin_thread(void *arg)
 	return NULL;
 }
 
-T_DECL(truncated_user_stacks, "ensure stacks are marked as truncated")
+T_DECL(kperf_ustack_trunc, "ensure stacks are marked as truncated")
 {
 	start_controlling_ktrace();
 
@@ -508,7 +508,7 @@ T_DECL(truncated_user_stacks, "ensure stacks are marked as truncated")
 	T_QUIET;
 	T_ASSERT_POSIX_ZERO(ktrace_filter_pid(s, getpid()), NULL);
 
-	configure_kperf_stacks_timer(getpid(), 10);
+	configure_kperf_stacks_timer(getpid(), 10, false);
 
 	__block bool saw_stack = false;
 	ktrace_set_completion_handler(s, ^{
@@ -547,7 +547,7 @@ T_DECL(truncated_user_stacks, "ensure stacks are marked as truncated")
 	dispatch_main();
 }
 
-T_DECL(max_user_stacks, "ensure stacks up to 256 frames can be captured")
+T_DECL(kperf_ustack_maxlen, "ensure stacks up to 256 frames can be captured")
 {
 	start_controlling_ktrace();
 
@@ -559,7 +559,7 @@ T_DECL(max_user_stacks, "ensure stacks up to 256 frames can be captured")
 	T_QUIET;
 	T_ASSERT_POSIX_ZERO(ktrace_filter_pid(s, getpid()), NULL);
 
-	configure_kperf_stacks_timer(getpid(), 10);
+	configure_kperf_stacks_timer(getpid(), 10, false);
 
 	__block bool saw_stack = false;
 	__block bool saw_stack_data = false;

@@ -153,6 +153,7 @@ O_NOFOLLOW	do not follow symlinks
 O_SYMLINK	allow open of symlinks
 O_EVTONLY	descriptor requested for event notifications only
 O_CLOEXEC	mark as close-on-exec
+O_NOFOLLOW_ANY	do not follow symlinks in the entire path.
 .Ed
 .Pp
 Opening a file with
@@ -234,6 +235,14 @@ flag.  The state of the file descriptor flags can be inspected
 using the F_GETFD fcntl.  See
 .Xr fcntl 2 .
 .Pp
+If
+.Dv O_NOFOLLOW_ANY
+is used in the mask and any component of the path passed to
+.Fn open
+is a symbolic link then the
+.Fn open
+will fail.
+.Pp
 If successful,
 .Fn open
 returns a non-negative integer, termed a file descriptor.
@@ -253,6 +262,8 @@ and
 .Pp
 The system imposes a limit on the number of file descriptors
 that can be held open simultaneously by one process.
+.Pp
+A file's metadata can be updated even if the file was opened in read-only mode.
 .Xr Getdtablesize 2
 returns the current system limit.
 .Sh RETURN VALUES
@@ -353,6 +364,11 @@ The system file table is full.
 .It Bq Er ELOOP
 .Dv O_NOFOLLOW
 was specified and the target is a symbolic link.
+.\" ===========
+.\" ===========
+.It Bq Er ELOOP
+.Dv O_NOFOLLOW_ANY
+was specified and and a component of the path is a symbolic link.
 .\" ===========
 .It Bq Er ENOENT
 .Dv O_CREAT

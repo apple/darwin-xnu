@@ -109,6 +109,7 @@ const struct sched_dispatch_table sched_dualq_dispatch = {
 	.steal_thread_enabled                           = sched_steal_thread_enabled,
 	.steal_thread                                   = sched_dualq_steal_thread,
 	.compute_timeshare_priority                     = sched_compute_timeshare_priority,
+	.choose_node                                    = sched_choose_node,
 	.choose_processor                               = choose_processor,
 	.processor_enqueue                              = sched_dualq_processor_enqueue,
 	.processor_queue_shutdown                       = sched_dualq_processor_queue_shutdown,
@@ -133,19 +134,19 @@ const struct sched_dispatch_table sched_dualq_dispatch = {
 	.thread_avoid_processor                         = sched_dualq_thread_avoid_processor,
 	.processor_balance                              = sched_SMT_balance,
 
-	.rt_runq                                        = sched_rtglobal_runq,
-	.rt_init                                        = sched_rtglobal_init,
-	.rt_queue_shutdown                              = sched_rtglobal_queue_shutdown,
-	.rt_runq_scan                                   = sched_rtglobal_runq_scan,
-	.rt_runq_count_sum                              = sched_rtglobal_runq_count_sum,
+	.rt_runq                                        = sched_rtlocal_runq,
+	.rt_init                                        = sched_rtlocal_init,
+	.rt_queue_shutdown                              = sched_rtlocal_queue_shutdown,
+	.rt_runq_scan                                   = sched_rtlocal_runq_scan,
+	.rt_runq_count_sum                              = sched_rtlocal_runq_count_sum,
 
 	.qos_max_parallelism                            = sched_qos_max_parallelism,
 	.check_spill                                    = sched_check_spill,
 	.ipi_policy                                     = sched_ipi_policy,
 	.thread_should_yield                            = sched_thread_should_yield,
-	.run_count_incr                                 = sched_run_incr,
-	.run_count_decr                                 = sched_run_decr,
-	.update_thread_bucket                           = sched_update_thread_bucket,
+	.run_count_incr                                 = sched_smt_run_incr,
+	.run_count_decr                                 = sched_smt_run_decr,
+	.update_thread_bucket                           = sched_smt_update_thread_bucket,
 	.pset_made_schedulable                          = sched_pset_made_schedulable,
 };
 
@@ -453,12 +454,15 @@ sched_dualq_steal_thread(processor_set_t pset)
 	processor_set_t nset = next_pset(cset);
 	thread_t        thread;
 
+	/* Secondary processors on SMT systems never steal */
+	assert(current_processor()->processor_primary == current_processor());
+
 	while (nset != pset) {
 		pset_unlock(cset);
 		cset = nset;
 		pset_lock(cset);
 
-		if (cset->pset_runq.count > 0) {
+		if (pset_has_stealable_threads(cset)) {
 			/* Need task_restrict logic here */
 			thread = run_queue_dequeue(&cset->pset_runq, SCHED_HEADQ);
 			pset_unlock(cset);

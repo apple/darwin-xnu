@@ -44,9 +44,11 @@ typedef struct mcontext32 mcontext32_t;
 typedef struct mcontext64 mcontext64_t;
 
 /* Signal handler flavors supported */
-/* These defns should match the Libc implmn */
+/* These defns should match the libplatform implmn */
 #define UC_TRAD                 1
 #define UC_FLAVOR               30
+#define UC_SET_ALT_STACK        0x40000000
+#define UC_RESET_ALT_STACK      0x80000000
 
 /* The following are valid mcontext sizes */
 #define UC_FLAVOR_SIZE32 ((ARM_THREAD_STATE_COUNT + ARM_EXCEPTION_STATE_COUNT + ARM_VFP_STATE_COUNT) * sizeof(int))
@@ -55,6 +57,8 @@ typedef struct mcontext64 mcontext64_t;
 #if __arm64__
 #define C_64_REDZONE_LEN        128
 #endif
+
+#define TRUNC_TO_16_BYTES(addr) (addr & ~0xf)
 
 static int
 sendsig_get_state32(thread_t th_act, arm_thread_state_t *ts, mcontext32_t *mcp)
@@ -243,7 +247,7 @@ sendsig_do_dtrace(uthread_t ut, user_siginfo_t *sinfo, int sig, user_addr_t catc
 
 	/* XXX truncates faulting address to uintptr_t  */
 	DTRACE_PROC3(signal__handle, int, sig, siginfo_t *, &(ut->t_dtrace_siginfo),
-	    void (*)(void), CAST_DOWN(sig_t, catcher));
+	    void (*)(void), CAST_DOWN(uintptr_t, catcher));
 }
 #endif
 
@@ -309,21 +313,29 @@ sendsig(
 	}
 
 	trampact = ps->ps_trampact[sig];
-	oonstack = ps->ps_sigstk.ss_flags & SA_ONSTACK;
+	oonstack = ut->uu_sigstk.ss_flags & SA_ONSTACK;
 
 	/*
 	 * Get sundry thread state.
 	 */
 	if (proc_is64bit_data(p)) {
 #ifdef __arm64__
-		if (sendsig_get_state64(th_act, &ts.ts64.ss, &user_frame.uf64.mctx) != 0) {
+		int ret = 0;
+		if ((ret = sendsig_get_state64(th_act, &ts.ts64.ss, &user_frame.uf64.mctx)) != 0) {
+#if DEVELOPMENT || DEBUG
+			printf("process [%s][%d] sendsig_get_state64 failed with ret %d, expected 0", p->p_comm, p->p_pid, ret);
+#endif
 			goto bad2;
 		}
 #else
 		panic("Shouldn't have 64-bit thread states on a 32-bit kernel.");
 #endif
 	} else {
-		if (sendsig_get_state32(th_act, &ts.ts32.ss, &user_frame.uf32.mctx) != 0) {
+		int ret = 0;
+		if ((ret = sendsig_get_state32(th_act, &ts.ts32.ss, &user_frame.uf32.mctx)) != 0) {
+#if DEVELOPMENT || DEBUG
+			printf("process [%s][%d] sendsig_get_state32 failed with ret %d, expected 0", p->p_comm, p->p_pid, ret);
+#endif
 			goto bad2;
 		}
 	}
@@ -331,12 +343,13 @@ sendsig(
 	/*
 	 * Figure out where our new stack lives.
 	 */
-	if ((ps->ps_flags & SAS_ALTSTACK) && !oonstack &&
+	if ((ut->uu_flag & UT_ALTSTACK) && !oonstack &&
 	    (ps->ps_sigonstack & sigmask(sig))) {
-		sp = ps->ps_sigstk.ss_sp;
-		sp += ps->ps_sigstk.ss_size;
-		stack_size = ps->ps_sigstk.ss_size;
-		ps->ps_sigstk.ss_flags |= SA_ONSTACK;
+		sp = ut->uu_sigstk.ss_sp;
+		stack_size = ut->uu_sigstk.ss_size;
+
+		sp += stack_size;
+		ut->uu_sigstk.ss_flags |= SA_ONSTACK;
 	} else {
 		/*
 		 * Get stack pointer, and allocate enough space
@@ -345,17 +358,27 @@ sendsig(
 		if (proc_is64bit_data(p)) {
 #if defined(__arm64__)
 			sp = CAST_USER_ADDR_T(ts.ts64.ss.sp);
-			sp = (sp - sizeof(user_frame.uf64) - C_64_REDZONE_LEN) & ~0xf; /* Make sure to align to 16 bytes and respect red zone */
 #else
 			panic("Shouldn't have 64-bit thread states on a 32-bit kernel.");
 #endif
 		} else {
 			sp = CAST_USER_ADDR_T(ts.ts32.ss.sp);
-			sp -= sizeof(user_frame.uf32);
-#if defined(__arm__) && (__BIGGEST_ALIGNMENT__ > 4)
-			sp &= ~0xf; /* Make sure to align to 16 bytes for armv7k */
-#endif
 		}
+	}
+
+	/* Make sure to move stack pointer down for room for metadata */
+	if (proc_is64bit_data(p)) {
+#if defined(__arm64__)
+		sp = (sp - sizeof(user_frame.uf64) - C_64_REDZONE_LEN);
+		sp = TRUNC_TO_16_BYTES(sp);
+#else
+		panic("Shouldn't have 64-bit thread states on a 32-bit kernel.");
+#endif
+	} else {
+		sp -= sizeof(user_frame.uf32);
+#if defined(__arm__) && (__BIGGEST_ALIGNMENT__ > 4)
+		sp = TRUNC_TO_16_BYTES(sp); /* Only for armv7k */
+#endif
 	}
 
 	proc_unlock(p);
@@ -550,13 +573,20 @@ sendsig(
 		assert(kr == KERN_SUCCESS);
 		token = (user64_addr_t)token_uctx ^ (user64_addr_t)ps->ps_sigreturn_token;
 
-		if (copyout(&user_frame.uf64, sp, sizeof(user_frame.uf64)) != 0) {
+		int ret = 0;
+		if ((ret = copyout(&user_frame.uf64, sp, sizeof(user_frame.uf64))) != 0) {
+#if DEVELOPMENT || DEBUG
+			printf("process [%s][%d] copyout of user_frame to  (sp, size) = (0x%llx, %zu) failed with ret %d, expected 0\n", p->p_comm, p->p_pid, sp, sizeof(user_frame.uf64), ret);
+#endif
 			goto bad;
 		}
 
-		if (sendsig_set_thread_state64(&ts.ts64.ss,
+		if ((kr = sendsig_set_thread_state64(&ts.ts64.ss,
 		    catcher, infostyle, sig, (user64_addr_t)&((struct user_sigframe64*)sp)->sinfo,
-		    (user64_addr_t)p_uctx, token, trampact, sp, th_act) != KERN_SUCCESS) {
+		    (user64_addr_t)p_uctx, token, trampact, sp, th_act)) != KERN_SUCCESS) {
+#if DEVELOPMENT || DEBUG
+			printf("process [%s][%d] sendsig_set_thread_state64 failed with kr %d, expected 0", p->p_comm, p->p_pid, kr);
+#endif
 			goto bad;
 		}
 
@@ -758,6 +788,17 @@ sigreturn(
 
 	/* see osfmk/kern/restartable.c */
 	act_set_ast_reset_pcs(th_act);
+	/*
+	 * If we are being asked to change the altstack flag on the thread, we
+	 * just set/reset it and return (the uap->uctx is not used).
+	 */
+	if ((unsigned int)uap->infostyle == UC_SET_ALT_STACK) {
+		ut->uu_sigstk.ss_flags |= SA_ONSTACK;
+		return 0;
+	} else if ((unsigned int)uap->infostyle == UC_RESET_ALT_STACK) {
+		ut->uu_sigstk.ss_flags &= ~SA_ONSTACK;
+		return 0;
+	}
 
 	if (proc_is64bit_data(p)) {
 #if defined(__arm64__)
@@ -782,9 +823,9 @@ sigreturn(
 	}
 
 	if ((onstack & 01)) {
-		p->p_sigacts->ps_sigstk.ss_flags |= SA_ONSTACK;
+		ut->uu_sigstk.ss_flags |= SA_ONSTACK;
 	} else {
-		p->p_sigacts->ps_sigstk.ss_flags &= ~SA_ONSTACK;
+		ut->uu_sigstk.ss_flags &= ~SA_ONSTACK;
 	}
 
 	ut->uu_sigmask = sigmask & ~sigcantmask;

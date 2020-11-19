@@ -14,7 +14,7 @@ as this document builds on it, and explains the liberties XNU takes with said
 model.
 
 All the interfaces discussed in this document are available through
-the `<machine/atomic.h>` header.
+the `<os/atomic_private.h>` header.
 
 Note: Linux has thorough documentation around memory barriers
 (Documentation/memory-barriers.txt), some of which is Linux specific,
@@ -49,8 +49,7 @@ matching *seq_cst* atomic operations on your behalf.
 
 The sequentially consistent world is extremely safe from a lot of compiler
 and hardware reorderings and optimizations, which is great, but comes with
-a huge cost in terms of memory barriers. It is also completely wasted when
-building for a non SMP configuration.
+a huge cost in terms of memory barriers.
 
 
 It seems very tempting to use `atomic_*_explicit()` functions with explicit
@@ -109,18 +108,16 @@ How `os_atomic_*` tries to address `<stdatomic.h>` pitfalls
    or a compiler barrier ordering `compiler_acquire`, `compiler_release`,
    `compiler_acq_rel`.
 
-4. `os_atomic_*` elides barriers for non SMP configurations
-   by default, however, it emits the proper compiler barriers
-   that correspond to the requested memory ordering (using
-   `atomic_signal_fence()`), even on UP configuration, so that
-   the compiler cannot possibly reorder code on UP systems.
+4. `os_atomic_*` emits the proper compiler barriers that
+   correspond to the requested memory ordering (using
+   `atomic_signal_fence()`).
 
 
 Best practices for the use of atomics in XNU
 --------------------------------------------
 
 For most generic code, the `os_atomic_*` functions from
-`<machine/atomic.h>` are the perferred interfaces.
+`<os/atomic_private.h>` are the perferred interfaces.
 
 `__sync_*`, `__c11_*` and `__atomic_*` compiler builtins should not be used.
 
@@ -128,9 +125,6 @@ For most generic code, the `os_atomic_*` functions from
 
 - compiler coalescing / reordering is desired (refcounting
   implementations may desire this for example).
-
-- defaulting to relaxed atomics for non SMP platforms doesn't make sense
-  (such as device access which may require memory fences even on UP systems).
 
 
 Qualifying atomic variables with `_Atomic` or even
@@ -334,7 +328,7 @@ most compilers, clang included, implement it as an equivalent
 for `memory_order_acquire`. However, its concept is useful
 for certain algorithms.
 
-As an attempt to provide a replacement for this, `<machine/atomic.h>`
+As an attempt to provide a replacement for this, `<os/atomic_private.h>`
 implements an entirely new *dependency* memory ordering.
 
 The purpose of this ordering is to provide a relaxed load followed by an

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2017-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -40,14 +40,17 @@
 #include <machine/commpage.h>
 #include <machine/atomic.h>
 
+LCK_GRP_DECLARE(bt_lck_grp, "bridge timestamp");
+LCK_SPIN_DECLARE(bt_spin_lock, &bt_lck_grp);
+LCK_SPIN_DECLARE(bt_ts_conversion_lock, &bt_lck_grp);
+LCK_SPIN_DECLARE(bt_maintenance_lock, &bt_lck_grp);
+
 #if CONFIG_MACH_BRIDGE_SEND_TIME
 
 uint32_t bt_enable_flag = 0;
-lck_spin_t *bt_maintenance_lock = NULL;
 _Atomic uint32_t bt_init_flag = 0;
 
 void mach_bridge_timer_maintenance(void);
-void mach_bridge_timer_init(void);
 uint32_t mach_bridge_timer_enable(uint32_t new_value, int change);
 
 /*
@@ -64,28 +67,14 @@ mach_bridge_timer_maintenance(void)
 		return;
 	}
 
-	lck_spin_lock(bt_maintenance_lock);
+	lck_spin_lock(&bt_maintenance_lock);
 	if (!bt_enable_flag) {
 		goto done;
 	}
 	mach_bridge_send_timestamp(0);
 
 done:
-	lck_spin_unlock(bt_maintenance_lock);
-}
-
-/*
- * This function should be called only once from the callback
- * registration function
- */
-void
-mach_bridge_timer_init(void)
-{
-	assert(!os_atomic_load(&bt_init_flag, relaxed));
-	/* Initialize the lock */
-	static lck_grp_t *bt_lck_grp = NULL;
-	bt_lck_grp = lck_grp_alloc_init("bridgetimestamp", LCK_GRP_ATTR_NULL);
-	bt_maintenance_lock = lck_spin_alloc_init(bt_lck_grp, NULL);
+	lck_spin_unlock(&bt_maintenance_lock);
 }
 
 /*
@@ -98,12 +87,12 @@ mach_bridge_timer_enable(uint32_t new_value, int change)
 {
 	uint32_t current_value = 0;
 	assert(os_atomic_load(&bt_init_flag, relaxed));
-	lck_spin_lock(bt_maintenance_lock);
+	lck_spin_lock(&bt_maintenance_lock);
 	if (change) {
 		bt_enable_flag = new_value;
 	}
 	current_value = bt_enable_flag;
-	lck_spin_unlock(bt_maintenance_lock);
+	lck_spin_unlock(&bt_maintenance_lock);
 	return current_value;
 }
 
@@ -118,7 +107,6 @@ mach_bridge_timer_enable(uint32_t new_value, int change)
  */
 void mach_bridge_add_timestamp(uint64_t remote_timestamp, uint64_t local_timestamp);
 void bt_calibration_thread_start(void);
-lck_spin_t *ts_conversion_lock = NULL;
 void bt_params_add(struct bt_params *params);
 
 /* function called by sysctl */
@@ -128,14 +116,13 @@ struct bt_params bt_params_get_latest(void);
  * Platform specific bridge time receiving interface.
  * These variables should be exported by the platform specific time receiving code.
  */
-extern lck_spin_t *bt_spin_lock;
 extern _Atomic uint32_t bt_init_flag;
 
 static uint64_t received_local_timestamp = 0;
 static uint64_t received_remote_timestamp = 0;
 /*
  * Buffer the previous timestamp pairs and rate
- * It is protected by the ts_conversion_lock
+ * It is protected by the bt_ts_conversion_lock
  */
 #define BT_PARAMS_COUNT 10
 static struct bt_params bt_params_hist[BT_PARAMS_COUNT] = {};
@@ -144,7 +131,7 @@ static int bt_params_idx = -1;
 void
 bt_params_add(struct bt_params *params)
 {
-	lck_spin_assert(ts_conversion_lock, LCK_ASSERT_OWNED);
+	lck_spin_assert(&bt_ts_conversion_lock, LCK_ASSERT_OWNED);
 
 	bt_params_idx = (bt_params_idx + 1) % BT_PARAMS_COUNT;
 	bt_params_hist[bt_params_idx] = *params;
@@ -154,7 +141,7 @@ bt_params_add(struct bt_params *params)
 static inline struct bt_params*
 bt_params_find(uint64_t local_ts)
 {
-	lck_spin_assert(ts_conversion_lock, LCK_ASSERT_OWNED);
+	lck_spin_assert(&bt_ts_conversion_lock, LCK_ASSERT_OWNED);
 
 	int idx = bt_params_idx;
 	if (idx < 0) {
@@ -176,7 +163,7 @@ bt_params_find(uint64_t local_ts)
 static inline struct bt_params
 bt_params_get_latest_locked(void)
 {
-	lck_spin_assert(ts_conversion_lock, LCK_ASSERT_OWNED);
+	lck_spin_assert(&bt_ts_conversion_lock, LCK_ASSERT_OWNED);
 
 	struct bt_params latest_params = {};
 	if (bt_params_idx >= 0) {
@@ -193,9 +180,9 @@ bt_params_get_latest(void)
 
 	/* Check if ts_converison_lock has been initialized */
 	if (os_atomic_load(&bt_init_flag, acquire)) {
-		lck_spin_lock(ts_conversion_lock);
+		lck_spin_lock(&bt_ts_conversion_lock);
 		latest_params = bt_params_get_latest_locked();
-		lck_spin_unlock(ts_conversion_lock);
+		lck_spin_unlock(&bt_ts_conversion_lock);
 	}
 	return latest_params;
 }
@@ -206,7 +193,7 @@ bt_params_get_latest(void)
 void
 mach_bridge_add_timestamp(uint64_t remote_timestamp, uint64_t local_timestamp)
 {
-	lck_spin_assert(bt_spin_lock, LCK_ASSERT_OWNED);
+	lck_spin_assert(&bt_spin_lock, LCK_ASSERT_OWNED);
 
 	/* sleep/wake might return the same mach_absolute_time as the previous timestamp pair */
 	if ((received_local_timestamp == local_timestamp) ||
@@ -225,7 +212,7 @@ mach_bridge_compute_rate(uint64_t new_local_ts, uint64_t new_remote_ts,
 {
 	int64_t rdiff = (int64_t)new_remote_ts - (int64_t)old_remote_ts;
 	int64_t ldiff = (int64_t)new_local_ts - (int64_t)old_local_ts;
-	double calc_rate = ((double)rdiff) / ldiff;
+	double calc_rate = ((double)rdiff) / (double)ldiff;
 	return calc_rate;
 }
 
@@ -260,7 +247,7 @@ bt_calibration_thread(void)
 	static uint64_t ts_pair_mismatch = 0;
 	static uint32_t ts_pair_mismatch_reset_count = 0;
 	spl_t s = splsched();
-	lck_spin_lock(bt_spin_lock);
+	lck_spin_lock(&bt_spin_lock);
 	if (!received_remote_timestamp) {
 		if (PE_parse_boot_argn("rt_ini_count", &max_initial_sample_count,
 		    sizeof(uint32_t)) == TRUE) {
@@ -329,12 +316,12 @@ recalculate:
 		prev_local_ts = prev_received_local_ts;
 		prev_remote_ts = prev_received_remote_ts;
 	}
-	lck_spin_unlock(bt_spin_lock);
+	lck_spin_unlock(&bt_spin_lock);
 	splx(s);
 
 	struct bt_params bt_params = {};
 
-	lck_spin_lock(ts_conversion_lock);
+	lck_spin_lock(&bt_ts_conversion_lock);
 	if (reset) {
 		if (skip_reset_count > 0) {
 			KDBG(MACHDBG_CODE(DBG_MACH_CLOCK, MACH_BRIDGE_SKIP_TS), curr_local_ts, curr_remote_ts,
@@ -361,7 +348,7 @@ recalculate:
 		if (bt_params_idx >= 0) {
 			bt_params_snapshot = bt_params_hist[bt_params_idx];
 		}
-		lck_spin_unlock(ts_conversion_lock);
+		lck_spin_unlock(&bt_ts_conversion_lock);
 		if (bt_params_snapshot.rate == 0.0) {
 			/*
 			 * The rate should never be 0 because we always expect a reset/wake
@@ -376,7 +363,7 @@ recalculate:
 			ts_pair_mismatch_reset_count = 0;
 			KDBG(MACHDBG_CODE(DBG_MACH_CLOCK, MACH_BRIDGE_RESET_TS), curr_local_ts, curr_remote_ts, 3);
 			s = splsched();
-			lck_spin_lock(bt_spin_lock);
+			lck_spin_lock(&bt_spin_lock);
 			goto block;
 		}
 
@@ -406,7 +393,7 @@ recalculate:
 				ts_pair_mismatch_reset_count++;
 				KDBG(MACHDBG_CODE(DBG_MACH_CLOCK, MACH_BRIDGE_RESET_TS), curr_local_ts, curr_remote_ts, 4);
 				s = splsched();
-				lck_spin_lock(bt_spin_lock);
+				lck_spin_lock(&bt_spin_lock);
 				goto block;
 			}
 		}
@@ -417,7 +404,7 @@ recalculate:
 			KDBG(MACHDBG_CODE(DBG_MACH_CLOCK, MACH_BRIDGE_OBSV_RATE), *(uint64_t *)((void *)&observed_rate));
 			ts_pair_mismatch = ts_pair_mismatch > 0 ? (ts_pair_mismatch - 1) : 0;
 			s = splsched();
-			lck_spin_lock(bt_spin_lock);
+			lck_spin_lock(&bt_spin_lock);
 			goto block;
 		}
 		if (initial_sample_count <= MIN_INITIAL_SAMPLE_COUNT) {
@@ -438,7 +425,7 @@ recalculate:
 		 * This ensures that we always use the same parameters to compute remote
 		 * timestamp for a given local timestamp.
 		 */
-		lck_spin_lock(ts_conversion_lock);
+		lck_spin_lock(&bt_ts_conversion_lock);
 		absolutetime_to_nanoseconds(mach_absolute_time(), &bt_params.base_local_ts);
 		bt_params.base_remote_ts = mach_bridge_compute_timestamp(bt_params.base_local_ts, &bt_params_snapshot);
 		bt_params.rate = new_rate;
@@ -449,10 +436,10 @@ recalculate:
 	    bt_params.base_remote_ts, *(uint64_t *)((void *)&bt_params.rate));
 
 skip_reset:
-	lck_spin_unlock(ts_conversion_lock);
+	lck_spin_unlock(&bt_ts_conversion_lock);
 
 	s = splsched();
-	lck_spin_lock(bt_spin_lock);
+	lck_spin_lock(&bt_spin_lock);
 	/* Check if a new timestamp pair was received */
 	if (received_local_timestamp != curr_local_abs) {
 		recalculate_count++;
@@ -460,7 +447,7 @@ skip_reset:
 	}
 block:
 	assert_wait((event_t)bt_params_hist, THREAD_UNINT);
-	lck_spin_unlock(bt_spin_lock);
+	lck_spin_unlock(&bt_spin_lock);
 	splx(s);
 	thread_block((thread_continue_t)bt_calibration_thread);
 }
@@ -521,7 +508,7 @@ mach_bridge_remote_time(uint64_t local_timestamp)
 
 	uint64_t remote_timestamp = 0;
 
-	lck_spin_lock(ts_conversion_lock);
+	lck_spin_lock(&bt_ts_conversion_lock);
 	uint64_t now = mach_absolute_time();
 	if (!local_timestamp) {
 		local_timestamp = now;
@@ -537,7 +524,7 @@ mach_bridge_remote_time(uint64_t local_timestamp)
 	struct bt_params params = bt_params_get_latest_locked();
 	remote_timestamp = mach_bridge_compute_timestamp(local_timestamp, &params);
 #endif /* defined(XNU_TARGET_OS_BRIDGE) */
-	lck_spin_unlock(ts_conversion_lock);
+	lck_spin_unlock(&bt_ts_conversion_lock);
 	KDBG(MACHDBG_CODE(DBG_MACH_CLOCK, MACH_BRIDGE_REMOTE_TIME), local_timestamp, remote_timestamp, now);
 
 	return remote_timestamp;

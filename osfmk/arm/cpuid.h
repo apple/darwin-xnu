@@ -109,12 +109,6 @@ typedef union {
 /* H4 (ARMv7 architecture) */
 #define CPU_PART_CORTEXA9           0xC09
 
-/* H5 (SWIFT architecture) */
-#define CPU_PART_SWIFT              0x0
-
-/* H6 (ARMv8 architecture) */
-#define CPU_PART_CYCLONE            0x1
-
 /* H7 (ARMv8 architecture) */
 #define CPU_PART_TYPHOON            0x2
 
@@ -154,14 +148,15 @@ typedef union {
 /* H11G e-Core (ARMv8 architecture) */
 #define CPU_PART_TEMPEST_ARUBA      0x11
 
-#ifndef RC_HIDE_XNU_LIGHTNING
 /* H12 p-Core (ARMv8 architecture) */
 #define CPU_PART_LIGHTNING          0x12
 
 /* H12 e-Core (ARMv8 architecture) */
 #define CPU_PART_THUNDER            0x13
 
-#endif /* !RC_HIDE_XNU_LIGHTNING */
+
+
+
 
 /* Cache type identification */
 
@@ -236,6 +231,7 @@ extern "C" {
 extern void do_cpuid(void);
 extern arm_cpu_info_t *cpuid_info(void);
 extern int cpuid_get_cpufamily(void);
+extern int cpuid_get_cpusubfamily(void);
 
 extern void do_debugid(void);
 extern arm_debug_info_t *arm_debug_info(void);

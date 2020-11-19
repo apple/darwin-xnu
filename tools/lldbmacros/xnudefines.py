@@ -173,10 +173,10 @@ proc_flag_explain_strings = ["!0x00000004 - process is 32 bit",  #only exception
                              ]
 #File: xnu/osfmk/kern/ipc_kobject.h
 # string representations for Kobject types
-kobject_types = ['', 'THREAD', 'TASK', 'HOST', 'HOST_PRIV', 'PROCESSOR', 'PSET', 'PSET_NAME', 'TIMER', 'PAGER_REQ', 'DEVICE', 'XMM_OBJECT', 'XMM_PAGER', 'XMM_KERNEL', 'XMM_REPLY',
+kobject_types = ['', 'THREAD_CONTROL', 'TASK_CONTROL', 'HOST', 'HOST_PRIV', 'PROCESSOR', 'PSET', 'PSET_NAME', 'TIMER', 'PAGER_REQ', 'DEVICE', 'XMM_OBJECT', 'XMM_PAGER', 'XMM_KERNEL', 'XMM_REPLY',
                      'NOTDEF 15', 'NOTDEF 16', 'HOST_SEC', 'LEDGER', 'MASTER_DEV', 'TASK_NAME', 'SUBSYTEM', 'IO_DONE_QUE', 'SEMAPHORE', 'LOCK_SET', 'CLOCK', 'CLOCK_CTRL' , 'IOKIT_SPARE',
                       'NAMED_MEM', 'IOKIT_CON', 'IOKIT_OBJ', 'UPL', 'MEM_OBJ_CONTROL', 'AU_SESSIONPORT', 'FILEPORT', 'LABELH', 'TASK_RESUME', 'VOUCHER', 'VOUCHER_ATTR_CONTROL', 'WORK_INTERVAL',
-                      'UX_HANDLER']
+                      'UX_HANDLER', 'UEXT_OBJECT', 'ARCADE_REG', 'TASK_INSPECT', 'TASK_READ', 'THREAD_INSPECT', 'THREAD_READ']
 
 def populate_kobject_types(xnu_dir_path):
     """ Function to read data from header file xnu/osfmk/kern/ipc_kobject.h
@@ -210,11 +210,23 @@ MACOS_PANIC_MAGIC = 0x44454544
 MACOS_PANIC_STACKSHOT_SUCCEEDED_FLAG = 0x04
 
 AURR_PANIC_MAGIC = 0x41555252
-AURR_PANIC_STRING_LEN = 112
 AURR_PANIC_VERSION = 1
 
 CRASHLOG_PANIC_STRING_LEN = 32
 AURR_CRASHLOG_PANIC_VERSION = 2
+
+# File:EXTERNAL_HEADER/mach-o/loader.h
+# (struct proc *)->p_platform
+P_PLATFORM_MACOS = 1
+P_PLATFORM_IOS = 2
+P_PLATFORM_TVOS = 3
+P_PLATFORM_WATCHOS = 4
+P_PLATFORM_BRIDGEOS = 5
+P_PLATFORM_MACCATALYST = 6
+P_PLATFORM_IOSSIMULATOR = 7
+P_PLATFORM_TVOSSIMULATOR = 8
+P_PLATFORM_WATCHOSSIMULATOR = 9
+P_PLATFORM_DRIVERKIT = 10
 
 if __name__ == "__main__":
     populate_kobject_types("../../")

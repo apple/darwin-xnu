@@ -37,42 +37,42 @@
 #if CONFIG_DTRACE
 extern int32_t dtrace_systrace_syscall(struct proc *, void *, int *);
 extern void dtrace_systrace_syscall_return(unsigned short, int, int *);
-#endif	/* CONFIG_DTRACE */
+#endif  /* CONFIG_DTRACE */
 
 extern void
 unix_syscall(struct arm_saved_state * regs, thread_t thread_act,
-	     struct uthread * uthread, struct proc * proc);
+    struct uthread * uthread, struct proc * proc);
 
-static int	arm_get_syscall_args(uthread_t, struct arm_saved_state *, struct sysent *);
-static int 	arm_get_u32_syscall_args(uthread_t, arm_saved_state32_t *, struct sysent *);
-static void 	arm_prepare_u32_syscall_return(struct sysent *, arm_saved_state_t *, uthread_t, int);
-static void	arm_prepare_syscall_return(struct sysent *, struct arm_saved_state *, uthread_t, int);
-static int 	arm_get_syscall_number(struct arm_saved_state *);
-static void 	arm_trace_unix_syscall(int, struct arm_saved_state *);
-static void	arm_clear_syscall_error(struct arm_saved_state *);
-#define	save_r0		r[0]
-#define	save_r1		r[1]
-#define	save_r2		r[2]
-#define	save_r3		r[3]
-#define	save_r4		r[4]
-#define	save_r5		r[5]
-#define	save_r6		r[6]
-#define	save_r7		r[7]
-#define	save_r8		r[8]
-#define	save_r9		r[9]
-#define	save_r10	r[10]
-#define	save_r11	r[11]
-#define	save_r12	r[12]
-#define	save_r13	r[13]
+static int      arm_get_syscall_args(uthread_t, struct arm_saved_state *, const struct sysent *);
+static int      arm_get_u32_syscall_args(uthread_t, arm_saved_state32_t *, const struct sysent *);
+static void     arm_prepare_u32_syscall_return(const struct sysent *, arm_saved_state_t *, uthread_t, int);
+static void     arm_prepare_syscall_return(const struct sysent *, struct arm_saved_state *, uthread_t, int);
+static unsigned short arm_get_syscall_number(struct arm_saved_state *);
+static void     arm_trace_unix_syscall(int, struct arm_saved_state *);
+static void     arm_clear_syscall_error(struct arm_saved_state *);
+#define save_r0         r[0]
+#define save_r1         r[1]
+#define save_r2         r[2]
+#define save_r3         r[3]
+#define save_r4         r[4]
+#define save_r5         r[5]
+#define save_r6         r[6]
+#define save_r7         r[7]
+#define save_r8         r[8]
+#define save_r9         r[9]
+#define save_r10        r[10]
+#define save_r11        r[11]
+#define save_r12        r[12]
+#define save_r13        r[13]
 
 #if COUNT_SYSCALLS
-__XNU_PRIVATE_EXTERN	int             do_count_syscalls = 1;
-__XNU_PRIVATE_EXTERN	int             syscalls_log[SYS_MAXSYSCALL];
+__XNU_PRIVATE_EXTERN    int             do_count_syscalls = 1;
+__XNU_PRIVATE_EXTERN    int             syscalls_log[SYS_MAXSYSCALL];
 #endif
 
 #define code_is_kdebug_trace(code) (((code) == SYS_kdebug_trace) ||   \
-                                    ((code) == SYS_kdebug_trace64) || \
-                                    ((code) == SYS_kdebug_trace_string))
+	                            ((code) == SYS_kdebug_trace64) || \
+	                            ((code) == SYS_kdebug_trace_string))
 
 /*
  * Function:	unix_syscall
@@ -86,15 +86,15 @@ __attribute__((noreturn))
 #endif
 void
 unix_syscall(
-	     struct arm_saved_state * state,
-	     __unused thread_t thread_act,
-	     struct uthread * uthread,
-	     struct proc * proc)
+	struct arm_saved_state * state,
+	__unused thread_t thread_act,
+	struct uthread * uthread,
+	struct proc * proc)
 {
-	struct sysent  *callp;
+	const struct sysent  *callp;
 	int             error;
 	unsigned short  code, syscode;
-	pid_t			pid;
+	pid_t                   pid;
 
 #if defined(__arm__)
 	assert(is_saved_state32(state));
@@ -104,16 +104,17 @@ unix_syscall(
 
 	code = arm_get_syscall_number(state);
 
-#define unix_syscall_kprintf(x...)	/* kprintf("unix_syscall: " x) */
+#define unix_syscall_kprintf(x...)      /* kprintf("unix_syscall: " x) */
 
 	if (kdebug_enable && !code_is_kdebug_trace(code)) {
 		arm_trace_unix_syscall(code, state);
 	}
 
-	if ((uthread->uu_flag & UT_VFORK))
+	if ((uthread->uu_flag & UT_VFORK)) {
 		proc = current_proc();
+	}
 
-    syscode = (code < nsysent) ? code : SYS_invalid;
+	syscode = (code < nsysent) ? code : SYS_invalid;
 	callp   = &sysent[syscode];
 
 	/*
@@ -159,27 +160,28 @@ unix_syscall(
 	uthread->uu_vpindex = 0;
 #endif
 	unix_syscall_kprintf("code %d (pid %d - %s, tid %lld)\n", code,
-			pid, proc->p_comm, thread_tid(current_thread()));
+	    pid, proc->p_comm, thread_tid(current_thread()));
 
 #if CONFIG_MACF
 	if (__improbable(proc->syscall_filter_mask != NULL && !bitstr_test(proc->syscall_filter_mask, syscode))) {
 		error = mac_proc_check_syscall_unix(proc, syscode);
-		if (error)
+		if (error) {
 			goto skip_syscall;
+		}
 	}
 #endif /* CONFIG_MACF */
 
 	AUDIT_SYSCALL_ENTER(code, proc, uthread);
-	error = (*(callp->sy_call)) (proc, &uthread->uu_arg[0], &(uthread->uu_rval[0]));
+	error = (*(callp->sy_call))(proc, &uthread->uu_arg[0], &(uthread->uu_rval[0]));
 	AUDIT_SYSCALL_EXIT(code, proc, uthread, error);
 
 #if CONFIG_MACF
 skip_syscall:
 #endif /* CONFIG_MACF */
 
-	unix_syscall_kprintf("code %d, error %d, results %x, %x (pid %d - %s, tid %lld)\n", code, error, 
-			uthread->uu_rval[0], uthread->uu_rval[1], 
-			pid, get_bsdtask_info(current_task()) ? proc->p_comm : "unknown" , thread_tid(current_thread()));
+	unix_syscall_kprintf("code %d, error %d, results %x, %x (pid %d - %s, tid %lld)\n", code, error,
+	    uthread->uu_rval[0], uthread->uu_rval[1],
+	    pid, get_bsdtask_info(current_task()) ? proc->p_comm : "unknown", thread_tid(current_thread()));
 
 #ifdef JOE_DEBUG
 	if (uthread->uu_iocount) {
@@ -212,7 +214,7 @@ skip_syscall:
 	}
 	if (kdebug_enable && !code_is_kdebug_trace(code)) {
 		KDBG_RELEASE(BSDDBG_CODE(DBG_BSD_EXCP_SC, code) | DBG_FUNC_END,
-			error, uthread->uu_rval[0], uthread->uu_rval[1], pid);
+		    error, uthread->uu_rval[0], uthread->uu_rval[1], pid);
 	}
 
 #if PROC_REF_DEBUG
@@ -234,10 +236,10 @@ unix_syscall_return(int error)
 	struct proc    *proc;
 	struct arm_saved_state *regs;
 	unsigned short  code;
-	struct sysent  *callp;
+	const struct sysent  *callp;
 
-#define unix_syscall_return_kprintf(x...)	/* kprintf("unix_syscall_retur
-						 * n: " x) */
+#define unix_syscall_return_kprintf(x...)       /* kprintf("unix_syscall_retur
+	                                         * n: " x) */
 
 	thread_act = current_thread();
 	proc = current_proc();
@@ -248,8 +250,9 @@ unix_syscall_return(int error)
 	callp = (code >= nsysent) ? &sysent[SYS_invalid] : &sysent[code];
 
 #if CONFIG_DTRACE
-	if (callp->sy_call == dtrace_systrace_syscall)
+	if (callp->sy_call == dtrace_systrace_syscall) {
 		dtrace_systrace_syscall_return( code, error, uthread->uu_rval );
+	}
 #endif /* CONFIG_DTRACE */
 #if DEBUG || DEVELOPMENT
 	kern_allocation_name_t
@@ -287,7 +290,7 @@ unix_syscall_return(int error)
 }
 
 static void
-arm_prepare_u32_syscall_return(struct sysent *callp, arm_saved_state_t *regs, uthread_t uthread, int error)
+arm_prepare_u32_syscall_return(const struct sysent *callp, arm_saved_state_t *regs, uthread_t uthread, int error)
 {
 	assert(is_saved_state32(regs));
 
@@ -302,7 +305,7 @@ arm_prepare_u32_syscall_return(struct sysent *callp, arm_saved_state_t *regs, ut
 			/* set the carry bit to execute cerror routine */
 			ss32->cpsr |= PSR_CF;
 			unix_syscall_return_kprintf("error: setting carry to trigger cerror call\n");
-		} else {	/* (not error) */
+		} else {        /* (not error) */
 			switch (callp->sy_return_type) {
 			case _SYSCALL_RET_INT_T:
 			case _SYSCALL_RET_UINT_T:
@@ -325,11 +328,10 @@ arm_prepare_u32_syscall_return(struct sysent *callp, arm_saved_state_t *regs, ut
 		}
 	}
 	/* else  (error == EJUSTRETURN) { nothing } */
-
 }
 
 static void
-arm_trace_u32_unix_syscall(int code, arm_saved_state32_t *regs) 
+arm_trace_u32_unix_syscall(int code, arm_saved_state32_t *regs)
 {
 	bool indirect = (regs->save_r12 == 0);
 	if (indirect) {
@@ -342,40 +344,42 @@ arm_trace_u32_unix_syscall(int code, arm_saved_state32_t *regs)
 }
 
 static void
-arm_clear_u32_syscall_error(arm_saved_state32_t *regs) 
+arm_clear_u32_syscall_error(arm_saved_state32_t *regs)
 {
 	regs->cpsr &= ~PSR_CF;
-}	
+}
 
 #if defined(__arm__)
 
 static int
-arm_get_syscall_args(uthread_t uthread, struct arm_saved_state *state, struct sysent *callp)
+arm_get_syscall_args(uthread_t uthread, struct arm_saved_state *state, const struct sysent *callp)
 {
 	assert(is_saved_state32(state));
 	return arm_get_u32_syscall_args(uthread, saved_state32(state), callp);
 }
 
 #if __arm__ && (__BIGGEST_ALIGNMENT__ > 4)
-/* 
+/*
  * For armv7k, the alignment constraints of the ABI mean we don't know how the userspace
- * arguments are arranged without knowing the the prototype of the syscall. So we use mungers 
+ * arguments are arranged without knowing the the prototype of the syscall. So we use mungers
  * to marshal the userspace data into the uu_arg. This also means we need the same convention
  * as mach syscalls. That means we use r8 to pass arguments in the BSD case as well.
  */
 static int
-arm_get_u32_syscall_args(uthread_t uthread, arm_saved_state32_t *regs, struct sysent *callp)
+arm_get_u32_syscall_args(uthread_t uthread, arm_saved_state32_t *regs, const struct sysent *callp)
 {
 	sy_munge_t *munger;
 
 	/* This check is probably not very useful since these both come from build-time */
-	if (callp->sy_arg_bytes > sizeof(uthread->uu_arg))
+	if (callp->sy_arg_bytes > sizeof(uthread->uu_arg)) {
 		return -1;
+	}
 
 	/* get the munger and use it to marshal in the data from userspace */
 	munger = callp->sy_arg_munge32;
-	if (munger == NULL || (callp->sy_arg_bytes == 0))
+	if (munger == NULL || (callp->sy_arg_bytes == 0)) {
 		return 0;
+	}
 
 	return munger(regs, uthread->uu_arg);
 }
@@ -387,14 +391,14 @@ arm_get_u32_syscall_args(uthread_t uthread, arm_saved_state32_t *regs, struct sy
  * arguments from a 32-bit userland out to 64-bit.
  */
 static int
-arm_get_u32_syscall_args(uthread_t uthread, arm_saved_state32_t *regs, struct sysent *callp)
+arm_get_u32_syscall_args(uthread_t uthread, arm_saved_state32_t *regs, const struct sysent *callp)
 {
 	int regparams;
 	int flavor = (regs->save_r12 == 0 ? 1 : 0);
-	
+
 	regparams = (7 - flavor); /* Indirect value consumes a register */
 
-	assert((unsigned) callp->sy_arg_bytes <= sizeof (uthread->uu_arg));
+	assert((unsigned) callp->sy_arg_bytes <= sizeof(uthread->uu_arg));
 
 	if (callp->sy_arg_bytes <= (sizeof(uint32_t) * regparams)) {
 		/*
@@ -407,9 +411,9 @@ arm_get_u32_syscall_args(uthread_t uthread, arm_saved_state32_t *regs, struct sy
 		 * the remainder from the stack (offset by the 7 regs therein).
 		 */
 		unix_syscall_kprintf("%s: spillover...\n", __FUNCTION__);
-		memcpy(&uthread->uu_arg[0] , &regs->r[flavor], regparams * sizeof(int));
-		if (copyin((user_addr_t)regs->sp + 7 * sizeof(int), (int *)&uthread->uu_arg[0] + regparams, 
-					(callp->sy_arg_bytes - (sizeof(uint32_t) * regparams))) != 0) {
+		memcpy(&uthread->uu_arg[0], &regs->r[flavor], regparams * sizeof(int));
+		if (copyin((user_addr_t)regs->sp + 7 * sizeof(int), (int *)&uthread->uu_arg[0] + regparams,
+		    (callp->sy_arg_bytes - (sizeof(uint32_t) * regparams))) != 0) {
 			return -1;
 		}
 	} else {
@@ -420,18 +424,18 @@ arm_get_u32_syscall_args(uthread_t uthread, arm_saved_state32_t *regs, struct sy
 }
 #endif
 
-static int
+static unsigned short
 arm_get_syscall_number(struct arm_saved_state *regs)
 {
 	if (regs->save_r12 != 0) {
-		return regs->save_r12;
+		return (unsigned short)regs->save_r12;
 	} else {
-		return regs->save_r0;
+		return (unsigned short)regs->save_r0;
 	}
 }
 
 static void
-arm_prepare_syscall_return(struct sysent *callp, struct arm_saved_state *state, uthread_t uthread, int error) 
+arm_prepare_syscall_return(const struct sysent *callp, struct arm_saved_state *state, uthread_t uthread, int error)
 {
 	assert(is_saved_state32(state));
 	arm_prepare_u32_syscall_return(callp, state, uthread, error);
@@ -445,18 +449,18 @@ arm_trace_unix_syscall(int code, struct arm_saved_state *state)
 }
 
 static void
-arm_clear_syscall_error(struct arm_saved_state * state) 
+arm_clear_syscall_error(struct arm_saved_state * state)
 {
 	assert(is_saved_state32(state));
 	arm_clear_u32_syscall_error(saved_state32(state));
 }
 
 #elif defined(__arm64__)
-static void arm_prepare_u64_syscall_return(struct sysent *, arm_saved_state_t *, uthread_t, int);
-static int arm_get_u64_syscall_args(uthread_t, arm_saved_state64_t *, struct sysent *);
+static void arm_prepare_u64_syscall_return(const struct sysent *, arm_saved_state_t *, uthread_t, int);
+static int arm_get_u64_syscall_args(uthread_t, arm_saved_state64_t *, const struct sysent *);
 
 static int
-arm_get_syscall_args(uthread_t uthread, struct arm_saved_state *state, struct sysent *callp)
+arm_get_syscall_args(uthread_t uthread, struct arm_saved_state *state, const struct sysent *callp)
 {
 	if (is_saved_state32(state)) {
 		return arm_get_u32_syscall_args(uthread, saved_state32(state), callp);
@@ -466,23 +470,23 @@ arm_get_syscall_args(uthread_t uthread, struct arm_saved_state *state, struct sy
 }
 
 /*
- * 64-bit: all arguments in registers.  We're willing to use x9, a temporary 
- * register per the ABI, to pass an argument to the kernel for one case, 
+ * 64-bit: all arguments in registers.  We're willing to use x9, a temporary
+ * register per the ABI, to pass an argument to the kernel for one case,
  * an indirect syscall with 8 arguments.  No munging required, as all arguments
  * are in 64-bit wide registers already.
  */
 static int
-arm_get_u64_syscall_args(uthread_t uthread, arm_saved_state64_t *regs, struct sysent *callp)
+arm_get_u64_syscall_args(uthread_t uthread, arm_saved_state64_t *regs, const struct sysent *callp)
 {
 	int indirect_offset;
-	
+
 #if CONFIG_REQUIRES_U32_MUNGING
 	sy_munge_t *mungerp;
 #endif
 
 	indirect_offset = (regs->x[ARM64_SYSCALL_CODE_REG_NUM] == 0) ? 1 : 0;
 
-	/* 
+	/*
 	 * Everything should fit in registers for now.
 	 */
 	if (callp->sy_narg > (int)(sizeof(uthread->uu_arg) / sizeof(uthread->uu_arg[0]))) {
@@ -517,13 +521,13 @@ arm_get_u64_syscall_args(uthread_t uthread, arm_saved_state64_t *regs, struct sy
 	return 0;
 }
 /*
- * When the kernel is running AArch64, munge arguments from 32-bit 
+ * When the kernel is running AArch64, munge arguments from 32-bit
  * userland out to 64-bit.
  *
  * flavor == 1 indicates an indirect syscall.
  */
 static int
-arm_get_u32_syscall_args(uthread_t uthread, arm_saved_state32_t *regs, struct sysent *callp)
+arm_get_u32_syscall_args(uthread_t uthread, arm_saved_state32_t *regs, const struct sysent *callp)
 {
 	int regparams;
 #if CONFIG_REQUIRES_U32_MUNGING
@@ -535,7 +539,7 @@ arm_get_u32_syscall_args(uthread_t uthread, arm_saved_state32_t *regs, struct sy
 
 	regparams = (7 - flavor); /* Indirect value consumes a register */
 
-	assert((unsigned) callp->sy_arg_bytes <= sizeof (uthread->uu_arg));
+	assert((unsigned) callp->sy_arg_bytes <= sizeof(uthread->uu_arg));
 
 	if (callp->sy_arg_bytes <= (sizeof(uint32_t) * regparams)) {
 		/*
@@ -548,9 +552,9 @@ arm_get_u32_syscall_args(uthread_t uthread, arm_saved_state32_t *regs, struct sy
 		 * the remainder from the stack (offset by the 7 regs therein).
 		 */
 		unix_syscall_kprintf("%s: spillover...\n", __FUNCTION__);
-		memcpy(&uthread->uu_arg[0] , &regs->r[flavor], regparams * sizeof(int));
-		if (copyin((user_addr_t)regs->sp + 7 * sizeof(int), (int *)&uthread->uu_arg[0] + regparams, 
-					(callp->sy_arg_bytes - (sizeof(uint32_t) * regparams))) != 0) {
+		memcpy(&uthread->uu_arg[0], &regs->r[flavor], regparams * sizeof(int));
+		if (copyin((user_addr_t)regs->sp + 7 * sizeof(int), (int *)&uthread->uu_arg[0] + regparams,
+		    (callp->sy_arg_bytes - (sizeof(uint32_t) * regparams))) != 0) {
 			return -1;
 		}
 	} else {
@@ -566,30 +570,28 @@ arm_get_u32_syscall_args(uthread_t uthread, arm_saved_state32_t *regs, struct sy
 #endif
 
 	return 0;
-
 }
 
-static int
+static unsigned short
 arm_get_syscall_number(struct arm_saved_state *state)
 {
 	if (is_saved_state32(state)) {
 		if (saved_state32(state)->save_r12 != 0) {
-			return saved_state32(state)->save_r12;
- 		} else {
-			return saved_state32(state)->save_r0;
+			return (unsigned short)saved_state32(state)->save_r12;
+		} else {
+			return (unsigned short)saved_state32(state)->save_r0;
 		}
 	} else {
 		if (saved_state64(state)->x[ARM64_SYSCALL_CODE_REG_NUM] != 0) {
-			return saved_state64(state)->x[ARM64_SYSCALL_CODE_REG_NUM];
- 		} else {
-			return saved_state64(state)->x[0];
+			return (unsigned short)saved_state64(state)->x[ARM64_SYSCALL_CODE_REG_NUM];
+		} else {
+			return (unsigned short)saved_state64(state)->x[0];
 		}
 	}
-
 }
 
 static void
-arm_prepare_syscall_return(struct sysent *callp, struct arm_saved_state *state, uthread_t uthread, int error) 
+arm_prepare_syscall_return(const struct sysent *callp, struct arm_saved_state *state, uthread_t uthread, int error)
 {
 	if (is_saved_state32(state)) {
 		arm_prepare_u32_syscall_return(callp, state, uthread, error);
@@ -599,7 +601,7 @@ arm_prepare_syscall_return(struct sysent *callp, struct arm_saved_state *state, 
 }
 
 static void
-arm_prepare_u64_syscall_return(struct sysent *callp, arm_saved_state_t *regs, uthread_t uthread, int error)
+arm_prepare_u64_syscall_return(const struct sysent *callp, arm_saved_state_t *regs, uthread_t uthread, int error)
 {
 	assert(is_saved_state64(regs));
 
@@ -611,14 +613,14 @@ arm_prepare_u64_syscall_return(struct sysent *callp, arm_saved_state_t *regs, ut
 		if (error) {
 			ss64->x[0] = error;
 			ss64->x[1] = 0;
-			/* 
+			/*
 			 * Set the carry bit to execute cerror routine.
-			 * ARM64_TODO: should we have a separate definition?  
+			 * ARM64_TODO: should we have a separate definition?
 			 * The bits are the same.
 			 */
 			ss64->cpsr |= PSR_CF;
 			unix_syscall_return_kprintf("error: setting carry to trigger cerror call\n");
-		} else {	/* (not error) */
+		} else {        /* (not error) */
 			switch (callp->sy_return_type) {
 			case _SYSCALL_RET_INT_T:
 				ss64->x[0] = uthread->uu_rval[0];
@@ -645,11 +647,9 @@ arm_prepare_u64_syscall_return(struct sysent *callp, arm_saved_state_t *regs, ut
 		}
 	}
 	/* else  (error == EJUSTRETURN) { nothing } */
-
-
 }
 static void
-arm_trace_u64_unix_syscall(int code, arm_saved_state64_t *regs) 
+arm_trace_u64_unix_syscall(int code, arm_saved_state64_t *regs)
 {
 	bool indirect = (regs->x[ARM64_SYSCALL_CODE_REG_NUM] == 0);
 	if (indirect) {
@@ -674,15 +674,15 @@ arm_trace_unix_syscall(int code, struct arm_saved_state *state)
 static void
 arm_clear_u64_syscall_error(arm_saved_state64_t *regs)
 {
-	/* 
-	 * ARM64_TODO: should we have a separate definition?  
-	 * The bits are the same. 
+	/*
+	 * ARM64_TODO: should we have a separate definition?
+	 * The bits are the same.
 	 */
 	regs->cpsr &= ~PSR_CF;
 }
 
 static void
-arm_clear_syscall_error(struct arm_saved_state * state) 
+arm_clear_syscall_error(struct arm_saved_state * state)
 {
 	if (is_saved_state32(state)) {
 		arm_clear_u32_syscall_error(saved_state32(state));
@@ -691,6 +691,6 @@ arm_clear_syscall_error(struct arm_saved_state * state)
 	}
 }
 
-#else 
+#else
 #error Unknown architecture.
 #endif

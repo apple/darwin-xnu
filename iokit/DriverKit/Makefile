@@ -4,7 +4,7 @@ export MakeInc_rule=${SRCROOT}/makedefs/MakeInc.rule
 export MakeInc_dir=${SRCROOT}/makedefs/MakeInc.dir
 
 IIG_INCFLAGS = -I$(SRCROOT)/iokit -I$(SRCROOT)/osfmk -I$(SRCROOT)/bsd -I$(OBJROOT)/bsd $(INCFLAGS_EXTERN)
-OTHER_IIG_CFLAGS = $(IIG_INCFLAGS) -isysroot $(SDKROOT) -x c++ -std=gnu++1z -D__IIG=1 -DDRIVERKIT_PRIVATE=1 $(DEPLOYMENT_TARGET_DEFINES) $($(addsuffix $(CURRENT_ARCH_CONFIG),ARCH_FLAGS_))
+OTHER_IIG_CFLAGS = $(IIG_INCFLAGS) -isysroot $(SDKROOT) -x c++ -std=gnu++1z -D__IIG=1 -DDRIVERKIT_PRIVATE=1 $(DEPLOYMENT_TARGET_DEFINES)
 
 INCDIR = $(FRAMEDIR)/$(DKIT_INCDIR)
 DRIVERKITINCDIR = $(DRIVERKITFRAMEDIR)/$(DRIVERKIT_DKIT_INCDIR)
@@ -40,7 +40,8 @@ COMP_FILES = ${GENERATED_HEADERS} $(GENERATED_IMPL)
 
 $(GENERATED_HEADERS) : \
 	%.h : %.iig
-	$(IIG) --def $< --header $@ --impl $(patsubst %.h,%.iig.cpp,$@) --framework-name DriverKit ${OTHER_IIG_FLAGS} -- ${OTHER_IIG_CFLAGS}
+	@$(LOG_IIG) "$@"
+	$(_v)$(IIG) --def $< --header $@ --impl $(patsubst %.h,%.iig.cpp,$@) --framework-name DriverKit ${OTHER_IIG_FLAGS} -- ${OTHER_IIG_CFLAGS} $(_vstdout)
 
 $(GENERATED_IMPL) : $(GENERATED_HEADERS)
 

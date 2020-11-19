@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  */
 /*
  *	Copyright (C) 1990,  NeXT, Inc.
@@ -13,6 +13,7 @@
 #include        <sys/types.h>
 #include        <mach/machine.h>
 #include        <kern/cpu_number.h>
+#include        <libkern/libkern.h>
 #include        <machine/exec.h>
 #include        <pexpert/arm64/board_config.h>
 
@@ -35,7 +36,8 @@ cpu_subtype32()
 		return 0;
 	}
 }
-#endif /* __arm64__*/
+
+#endif /* __arm64__ */
 
 /**********************************************************************
 * Routine:	grade_binary()
@@ -46,7 +48,7 @@ cpu_subtype32()
 *		not acceptable.
 **********************************************************************/
 int
-grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype, bool allow_simulator_binary __unused)
+grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype, cpu_subtype_t execfeatures __unused, bool allow_simulator_binary __unused)
 {
 #if __arm64__
 	cpu_subtype_t hostsubtype =
@@ -69,6 +71,7 @@ grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype, bool allow_simulato
 			break;
 
 		} /* switch (hostsubtype) */
+		break;
 
 #else /* __arm64__ */
 
@@ -165,23 +168,4 @@ v7:
 	}
 
 	return 0;
-}
-
-boolean_t
-pie_required(cpu_type_t exectype, cpu_subtype_t execsubtype)
-{
-	switch (exectype) {
-#if __arm64__
-	case CPU_TYPE_ARM64:
-		return TRUE;
-#endif /* __arm64__ */
-
-	case CPU_TYPE_ARM:
-		switch (execsubtype) {
-		case CPU_SUBTYPE_ARM_V7K:
-			return TRUE;
-		}
-		break;
-	}
-	return FALSE;
 }

@@ -92,6 +92,7 @@ __END_DECLS
 
 extern  unsigned int    real_ncpus;             /* real number of cpus */
 extern  unsigned int    max_ncpus;              /* max number of cpus */
+extern  unsigned int    max_cpus_from_firmware; /* actual max cpus, from firmware (ACPI) */
 decl_simple_lock_data(extern, kdb_lock); /* kdb lock		*/
 
 __BEGIN_DECLS

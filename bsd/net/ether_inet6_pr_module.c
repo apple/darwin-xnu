@@ -85,11 +85,9 @@
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
 
-#if INET6
 #include <netinet6/nd6.h>
 #include <netinet6/in6_ifattach.h>
 #include <netinet6/ip6_var.h>
-#endif
 
 /* #include "vlan.h" */
 #if NVLAN > 0

@@ -28,7 +28,7 @@
 
 #include <sys/types.h>
 #include <kern/locks.h>
-#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <sys/errno.h>
 #include <sys/sysctl.h>
 #include <sys/malloc.h>
@@ -41,6 +41,7 @@
 
 #include "net/net_str_id.h"
 
+#define NET_ID_STR_MAX_LEN 2048
 #define NET_ID_STR_ENTRY_SIZE(__str) \
 	(__builtin_offsetof(struct net_str_id_entry, nsi_string[0]) + \
 	strlen(__str) + 1)
@@ -96,13 +97,16 @@ net_str_id_first_last(u_int32_t *first, u_int32_t *last, u_int32_t kind)
 }
 
 __private_extern__ errno_t
-net_str_id_find_internal(const char     *string, u_int32_t *out_id,
-    u_int32_t     kind, int create)
+net_str_id_find_internal(const char *string, u_int32_t *out_id,
+    u_int32_t kind, int create)
 {
 	struct net_str_id_entry                 *entry = NULL;
 
 
 	if (string == NULL || out_id == NULL || kind >= NSI_MAX_KIND) {
+		return EINVAL;
+	}
+	if (strlen(string) > NET_ID_STR_MAX_LEN) {
 		return EINVAL;
 	}
 
@@ -122,7 +126,8 @@ net_str_id_find_internal(const char     *string, u_int32_t *out_id,
 			return ENOENT;
 		}
 
-		entry = kalloc(NET_ID_STR_ENTRY_SIZE(string));
+		entry = zalloc_permanent(NET_ID_STR_ENTRY_SIZE(string),
+		    ZALIGN_PTR);
 		if (entry == NULL) {
 			lck_mtx_unlock(net_str_id_lock);
 			return ENOMEM;
@@ -174,7 +179,11 @@ sysctl_if_family_ids SYSCTL_HANDLER_ARGS /* XXX bad syntax! */
 			continue;
 		}
 
-		str_size = strlen(entry->nsi_string) + 1;
+		str_size = strlen(entry->nsi_string);
+		if (str_size > NET_ID_STR_MAX_LEN) {
+			str_size = NET_ID_STR_MAX_LEN;
+		}
+		str_size += 1; // make room for end-of-string
 		iffmid_size = ROUNDUP32(offsetof(struct net_str_id_entry, nsi_string) + str_size);
 
 		if (iffmid_size > max_size) {
@@ -191,7 +200,7 @@ sysctl_if_family_ids SYSCTL_HANDLER_ARGS /* XXX bad syntax! */
 		}
 
 		bzero(iffmid, iffmid_size);
-		iffmid->iffmid_len = iffmid_size;
+		iffmid->iffmid_len = (uint32_t)iffmid_size;
 		iffmid->iffmid_id = entry->nsi_id;
 		strlcpy(iffmid->iffmid_str, entry->nsi_string, str_size);
 		error = SYSCTL_OUT(req, iffmid, iffmid_size);

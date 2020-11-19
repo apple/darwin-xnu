@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -77,6 +77,7 @@
 #include <vm/cpm.h>
 #include <kern/ledger.h>
 #include <kern/bits.h>
+#include <kern/startup.h>
 
 #include <string.h>
 
@@ -93,8 +94,6 @@
 
 SECURITY_READ_ONLY_LATE(vm_map_t) kernel_map;
 vm_map_t         kernel_pageable_map;
-
-extern boolean_t vm_kernel_ready;
 
 /*
  * Forward declarations for internal functions.
@@ -278,7 +277,7 @@ kernel_memory_allocate(
 	task_t                                  task = current_task();
 #endif /* DEVELOPMENT || DEBUG */
 
-	if (!vm_kernel_ready) {
+	if (startup_phase < STARTUP_SUB_KMEM) {
 		panic("kernel_memory_allocate: VM is not ready");
 	}
 
@@ -429,6 +428,10 @@ kernel_memory_allocate(
 		vmk_flags.vmkf_atomic_entry = TRUE;
 	}
 
+	if (flags & KMA_KHEAP) {
+		vm_alloc_flags |= VM_MAP_FIND_LAST_FREE;
+	}
+
 	kr = vm_map_find_space(map, &map_addr,
 	    fill_size, map_mask,
 	    vm_alloc_flags, vmk_flags, tag, &entry);
@@ -514,7 +517,9 @@ kernel_memory_allocate(
 			mem->vmp_pmapped = TRUE;
 			mem->vmp_wpmapped = TRUE;
 
-			PMAP_ENTER_OPTIONS(kernel_pmap, map_addr + pg_offset, mem,
+			PMAP_ENTER_OPTIONS(kernel_pmap, map_addr + pg_offset,
+			    0, /* fault_phys_offset */
+			    mem,
 			    kma_prot, VM_PROT_NONE, ((flags & KMA_KSTACK) ? VM_MEM_STACK : 0), TRUE,
 			    PMAP_OPTIONS_NOWAIT, pe_result);
 
@@ -773,7 +778,9 @@ kernel_memory_populate(
 		mem->vmp_pmapped = TRUE;
 		mem->vmp_wpmapped = TRUE;
 
-		PMAP_ENTER_OPTIONS(kernel_pmap, addr + pg_offset, mem,
+		PMAP_ENTER_OPTIONS(kernel_pmap, addr + pg_offset,
+		    0, /* fault_phys_offset */
+		    mem,
 		    VM_PROT_READ | VM_PROT_WRITE, VM_PROT_NONE,
 		    ((flags & KMA_KSTACK) ? VM_MEM_STACK : 0), TRUE,
 		    PMAP_OPTIONS_NOWAIT, pe_result);
@@ -796,9 +803,12 @@ kernel_memory_populate(
 			pmap_set_noencrypt(VM_PAGE_GET_PHYS_PAGE(mem));
 		}
 	}
+	vm_object_unlock(object);
+
 	vm_page_lockspin_queues();
 	vm_page_wire_count += page_count;
 	vm_page_unlock_queues();
+	vm_tag_update_size(tag, ptoa_64(page_count));
 
 #if DEBUG || DEVELOPMENT
 	VM_DEBUG_CONSTANT_EVENT(vm_kern_request, VM_KERN_REQUEST, DBG_FUNC_END, page_grab_count, 0, 0, 0);
@@ -806,12 +816,6 @@ kernel_memory_populate(
 		ledger_credit(task->ledger, task_ledgers.pages_grabbed_kern, page_grab_count);
 	}
 #endif
-
-	if (kernel_object == object) {
-		vm_tag_update_size(tag, size);
-	}
-
-	vm_object_unlock(object);
 
 #if KASAN
 	if (map == compressor_map) {
@@ -840,15 +844,17 @@ out:
 
 void
 kernel_memory_depopulate(
-	vm_map_t        map,
-	vm_offset_t     addr,
-	vm_size_t       size,
-	int             flags)
+	vm_map_t           map,
+	vm_offset_t        addr,
+	vm_size_t          size,
+	int                flags,
+	vm_tag_t           tag)
 {
-	vm_object_t             object;
-	vm_object_offset_t      offset, pg_offset;
-	vm_page_t               mem;
-	vm_page_t               local_freeq = NULL;
+	vm_object_t        object;
+	vm_object_offset_t offset, pg_offset;
+	vm_page_t          mem;
+	vm_page_t          local_freeq = NULL;
+	unsigned int       pages_unwired;
 
 	assert((flags & (KMA_COMPRESSOR | KMA_KOBJECT)) != (KMA_COMPRESSOR | KMA_KOBJECT));
 
@@ -877,7 +883,7 @@ kernel_memory_depopulate(
 	}
 	pmap_protect(kernel_map->pmap, offset, offset + size, VM_PROT_NONE);
 
-	for (pg_offset = 0;
+	for (pg_offset = 0, pages_unwired = 0;
 	    pg_offset < size;
 	    pg_offset += PAGE_SIZE_64) {
 		mem = vm_page_lookup(object, offset + pg_offset);
@@ -886,6 +892,7 @@ kernel_memory_depopulate(
 
 		if (mem->vmp_q_state != VM_PAGE_USED_BY_COMPRESSOR) {
 			pmap_disconnect(VM_PAGE_GET_PHYS_PAGE(mem));
+			pages_unwired++;
 		}
 
 		mem->vmp_busy = TRUE;
@@ -896,7 +903,7 @@ kernel_memory_depopulate(
 
 		assert(mem->vmp_pageq.next == 0 && mem->vmp_pageq.prev == 0);
 		assert((mem->vmp_q_state == VM_PAGE_USED_BY_COMPRESSOR) ||
-		    (mem->vmp_q_state == VM_PAGE_NOT_ON_Q));
+		    (mem->vmp_q_state == VM_PAGE_IS_WIRED));
 
 		mem->vmp_q_state = VM_PAGE_NOT_ON_Q;
 		mem->vmp_snext = local_freeq;
@@ -904,8 +911,15 @@ kernel_memory_depopulate(
 	}
 	vm_object_unlock(object);
 
+
 	if (local_freeq) {
 		vm_page_free_list(local_freeq, TRUE);
+		if (pages_unwired != 0) {
+			vm_page_lockspin_queues();
+			vm_page_wire_count -= pages_unwired;
+			vm_page_unlock_queues();
+			vm_tag_update_size(tag, -ptoa_64(pages_unwired));
+		}
 	}
 }
 
@@ -945,7 +959,9 @@ kmem_alloc_flags(
 	int             flags)
 {
 	kern_return_t kr = kernel_memory_allocate(map, addrp, size, 0, flags, tag);
-	TRACE_MACHLEAKS(KMEM_ALLOC_CODE, KMEM_ALLOC_CODE_2, size, *addrp);
+	if (kr == KERN_SUCCESS) {
+		TRACE_MACHLEAKS(KMEM_ALLOC_CODE, KMEM_ALLOC_CODE_2, size, *addrp);
+	}
 	return kr;
 }
 
@@ -1378,7 +1394,12 @@ kmem_set_user_wire_limits(void)
 	size_t wire_limit_percents_length = sizeof(wire_limit_percents) /
 	    sizeof(vm_map_size_t);
 	vm_map_size_t limit;
-	available_mem_log = bit_floor(max_mem);
+	uint64_t config_memsize = max_mem;
+#if defined(XNU_TARGET_OS_OSX)
+	config_memsize = max_mem_actual;
+#endif /* defined(XNU_TARGET_OS_OSX) */
+
+	available_mem_log = bit_floor(config_memsize);
 
 	if (available_mem_log < VM_USER_WIREABLE_MIN_CONFIG) {
 		available_mem_log = 0;
@@ -1390,15 +1411,17 @@ kmem_set_user_wire_limits(void)
 	}
 	max_wire_percent = wire_limit_percents[available_mem_log];
 
-	limit = max_mem * max_wire_percent / 100;
+	limit = config_memsize * max_wire_percent / 100;
 	/* Cap the number of non lockable bytes at VM_NOT_USER_WIREABLE_MAX */
-	if (max_mem - limit > VM_NOT_USER_WIREABLE_MAX) {
-		limit = max_mem - VM_NOT_USER_WIREABLE_MAX;
+	if (config_memsize - limit > VM_NOT_USER_WIREABLE_MAX) {
+		limit = config_memsize - VM_NOT_USER_WIREABLE_MAX;
 	}
 
 	vm_global_user_wire_limit = limit;
 	/* the default per task limit is the same as the global limit */
 	vm_per_task_user_wire_limit = limit;
+	vm_add_wire_count_over_global_limit = 0;
+	vm_add_wire_count_over_user_limit = 0;
 }
 
 
@@ -1408,6 +1431,7 @@ kmem_set_user_wire_limits(void)
  *	Initialize the kernel's virtual memory map, taking
  *	into account all memory allocated up to this time.
  */
+__startup_func
 void
 kmem_init(
 	vm_offset_t     start,
@@ -1541,9 +1565,7 @@ copyinmap(
  *	Routine:	copyoutmap
  *	Purpose:
  *		Like copyout, except that toaddr is an address
- *		in the specified VM map.  This implementation
- *		is incomplete; it handles the current user map
- *		and the kernel map/submaps.
+ *		in the specified VM map.
  */
 kern_return_t
 copyoutmap(
@@ -1552,21 +1574,26 @@ copyoutmap(
 	vm_map_address_t        toaddr,
 	vm_size_t               length)
 {
+	kern_return_t   kr = KERN_SUCCESS;
+	vm_map_t        oldmap;
+
 	if (vm_map_pmap(map) == pmap_kernel()) {
 		/* assume a correct copy */
 		memcpy(CAST_DOWN(void *, toaddr), fromdata, length);
-		return KERN_SUCCESS;
+	} else if (current_map() == map) {
+		if (copyout(fromdata, toaddr, length) != 0) {
+			kr = KERN_INVALID_ADDRESS;
+		}
+	} else {
+		vm_map_reference(map);
+		oldmap = vm_map_switch(map);
+		if (copyout(fromdata, toaddr, length) != 0) {
+			kr = KERN_INVALID_ADDRESS;
+		}
+		vm_map_switch(oldmap);
+		vm_map_deallocate(map);
 	}
-
-	if (current_map() != map) {
-		return KERN_NOT_SUPPORTED;
-	}
-
-	if (copyout(fromdata, toaddr, length) != 0) {
-		return KERN_INVALID_ADDRESS;
-	}
-
-	return KERN_SUCCESS;
+	return kr;
 }
 
 /*
@@ -1660,4 +1687,47 @@ vm_kernel_unslide_or_perm_external(
 	vm_offset_t *up_addr)
 {
 	vm_kernel_addrperm_external(addr, up_addr);
+}
+
+void
+vm_packing_pointer_invalid(vm_offset_t ptr, vm_packing_params_t params)
+{
+	if (ptr & ((1ul << params.vmpp_shift) - 1)) {
+		panic("pointer %p can't be packed: low %d bits aren't 0",
+		    (void *)ptr, params.vmpp_shift);
+	} else if (ptr <= params.vmpp_base) {
+		panic("pointer %p can't be packed: below base %p",
+		    (void *)ptr, (void *)params.vmpp_base);
+	} else {
+		panic("pointer %p can't be packed: maximum encodable pointer is %p",
+		    (void *)ptr, (void *)vm_packing_max_packable(params));
+	}
+}
+
+void
+vm_packing_verify_range(
+	const char *subsystem,
+	vm_offset_t min_address,
+	vm_offset_t max_address,
+	vm_packing_params_t params)
+{
+	if (min_address > max_address) {
+		panic("%s: %s range invalid min:%p > max:%p",
+		    __func__, subsystem, (void *)min_address, (void *)max_address);
+	}
+
+	if (!params.vmpp_base_relative) {
+		return;
+	}
+
+	if (min_address <= params.vmpp_base) {
+		panic("%s: %s range invalid min:%p <= base:%p",
+		    __func__, subsystem, (void *)min_address, (void *)params.vmpp_base);
+	}
+
+	if (max_address > vm_packing_max_packable(params)) {
+		panic("%s: %s range invalid max:%p >= max packable:%p",
+		    __func__, subsystem, (void *)max_address,
+		    (void *)vm_packing_max_packable(params));
+	}
 }

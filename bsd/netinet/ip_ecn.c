@@ -68,14 +68,10 @@
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
-#if INET6
 #include <netinet/ip6.h>
-#endif
 
 #include <netinet/ip_ecn.h>
-#if INET6
 #include <netinet6/ip6_ecn.h>
-#endif
 
 /*
  * modify outer ECN (TOS) field on ingress operation (tunnel encapsulation).
@@ -127,7 +123,6 @@ ip_ecn_egress(int mode, const u_int8_t *outer, u_int8_t *inner)
 	return 1;
 }
 
-#if INET6
 void
 ip6_ecn_ingress(int mode, u_int32_t *outer, const u_int32_t *inner)
 {
@@ -236,5 +231,3 @@ ip64_ecn_egress(int mode, const u_int8_t *outer, u_int32_t *inner)
 	*inner |= htonl((u_int32_t)inner8 << 20);
 	return 1;
 }
-
-#endif

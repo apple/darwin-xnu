@@ -39,6 +39,7 @@
 #define MAC_VNODE_CHECK_DYLD_SIM 0x1   /* tells the MAC framework that dyld-sim is being loaded */
 
 #define CLEAR_LV_ENTITLEMENT "com.apple.private.security.clear-library-validation"
+#define OVERRIDE_PLUGIN_HOST_ENTITLEMENT "com.apple.private.security.override-plugin-host-detection"
 
 /* csops  operations */
 #define CS_OPS_STATUS           0       /* return status */
@@ -90,10 +91,12 @@ int     cs_valid(struct proc *);
 int     cs_process_enforcement(struct proc *);
 int cs_process_global_enforcement(void);
 int cs_system_enforcement(void);
+int cs_vm_supports_4k_translations(void);
 int     cs_require_lv(struct proc *);
 int csproc_forced_lv(struct proc* p);
 int     cs_system_require_lv(void);
 uint32_t cs_entitlement_flags(struct proc *p);
+int     cs_entitlements_blob_get_vnode(struct vnode *, off_t, void **, size_t *);
 int     cs_entitlements_blob_get(struct proc *, void **, size_t *);
 #ifdef KERNEL_PRIVATE
 int     cs_entitlements_dictionary_copy(struct proc *, void **);
@@ -138,15 +141,22 @@ void            csblob_entitlements_dictionary_set(struct cs_blob *csblob, void 
  */
 
 const   char * csproc_get_teamid(struct proc *);
+const   char * csproc_get_identity(struct proc *);
 const   char * csvnode_get_teamid(struct vnode *, off_t);
 int     csproc_get_platform_binary(struct proc *);
 int csproc_get_prod_signed(struct proc *);
 const   char * csfg_get_teamid(struct fileglob *);
+const   char * csfg_get_supplement_teamid(struct fileglob *);
 int     csfg_get_path(struct fileglob *, char *, int *);
 int     csfg_get_platform_binary(struct fileglob *);
+int     csfg_get_supplement_platform_binary(struct fileglob *);
 uint8_t * csfg_get_cdhash(struct fileglob *, uint64_t, size_t *);
+uint8_t * csfg_get_supplement_cdhash(struct fileglob *, uint64_t, size_t *);
+const uint8_t * csfg_get_supplement_linkage_cdhash(struct fileglob *, uint64_t, size_t *);
 int csfg_get_prod_signed(struct fileglob *);
+int csfg_get_supplement_prod_signed(struct fileglob *fg);
 unsigned int csfg_get_signer_type(struct fileglob *);
+unsigned int csfg_get_supplement_signer_type(struct fileglob *);
 const char *csfg_get_identity(struct fileglob *fg, off_t offset);
 unsigned int csproc_get_signer_type(struct proc *);
 
@@ -166,9 +176,9 @@ void cs_blob_free(struct cs_blob *blob);
 
 #ifdef XNU_KERNEL_PRIVATE
 
-void    cs_init(void);
 int     cs_allow_invalid(struct proc *);
 int     cs_invalid_page(addr64_t vaddr, boolean_t *cs_killed);
+void    cs_process_invalidated(struct proc *);
 int     csproc_get_platform_path(struct proc *);
 
 #if !SECURE_KERNEL

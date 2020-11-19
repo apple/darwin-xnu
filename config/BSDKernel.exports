@@ -4,10 +4,10 @@ _VNOP_IOCTL
 _VNOP_READ
 _VNOP_STRATEGY
 _VNOP_WRITE
-__FREE
-__FREE_ZONE
+__FREE:__FREE_external
+__FREE_ZONE:__FREE_ZONE_external
 __MALLOC:__MALLOC_external
-__MALLOC_ZONE:__MALLOC_ZONE_external
+__MALLOC_ZONE:__MALLOC_external
 _advisory_read
 _advisory_read_ext
 _bcd2bin_data
@@ -17,6 +17,8 @@ _bdevsw_remove
 _bpf_attach
 _bpf_tap_in
 _bpf_tap_out
+_bpf_tap_packet_in
+_bpf_tap_packet_out
 _bpfattach
 _bsd_timeout
 _bsd_untimeout
@@ -202,6 +204,7 @@ _futimes
 _fuword
 _groupmember
 _hashinit
+_hashdestroy
 _ifaddr_address
 _ifaddr_address_family
 _ifaddr_dstaddress
@@ -477,6 +480,7 @@ _physio
 _proc_chrooted
 _proc_exiting
 _proc_find
+_proc_find_ident
 _proc_forcequota
 _proc_is64bit
 _proc_is64bit_data
@@ -644,7 +648,6 @@ _vfs_clearauthcache_ttl
 _vfs_clearauthopaque
 _vfs_clearauthopaqueaccess
 _vfs_clearextendedsecurity
-_vfs_clearnoswap
 _vfs_clearflags
 _vfs_context_create
 _vfs_context_is64bit
@@ -684,7 +687,6 @@ _vfs_setauthcache_ttl
 _vfs_setauthopaque
 _vfs_setauthopaqueaccess
 _vfs_setextendedsecurity
-_vfs_setnoswap
 _vfs_setflags
 _vfs_setfsprivate
 _vfs_setioattr
@@ -822,6 +824,10 @@ _vnop_strategy_desc
 _vnop_symlink_desc
 _vnop_whiteout_desc
 _vnop_write_desc
+_vsock_add_transport
+_vsock_put_message
+_vsock_remove_transport
+_vsock_reset_transport
 _vttoif_tab
 _wakeup
 _wakeup_one

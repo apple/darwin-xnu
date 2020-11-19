@@ -225,7 +225,7 @@ loop:
 			}
 
 			*vpp = fd->fd_vnode;
-			(*vpp)->v_type = vtype;
+			(*vpp)->v_type = (uint16_t)vtype;
 
 			return error;
 		}
@@ -394,16 +394,16 @@ fdesc_attr(int fd, struct vnode_attr *vap, vfs_context_t a_context)
 	if ((error = fp_lookup(p, fd, &fp, 0))) {
 		return error;
 	}
-	switch (FILEGLOB_DTYPE(fp->f_fglob)) {
+	switch (FILEGLOB_DTYPE(fp->fp_glob)) {
 	case DTYPE_VNODE:
-		if ((error = vnode_getwithref((struct vnode *) fp->f_fglob->fg_data)) != 0) {
+		if ((error = vnode_getwithref((struct vnode *) fp->fp_glob->fg_data)) != 0) {
 			break;
 		}
-		if ((error = vnode_authorize((struct vnode *)fp->f_fglob->fg_data,
+		if ((error = vnode_authorize((struct vnode *)fp->fp_glob->fg_data,
 		    NULL,
 		    KAUTH_VNODE_READ_ATTRIBUTES | KAUTH_VNODE_READ_SECURITY,
 		    a_context)) == 0) {
-			error = vnode_getattr((struct vnode *)fp->f_fglob->fg_data, vap, a_context);
+			error = vnode_getattr((struct vnode *)fp->fp_glob->fg_data, vap, a_context);
 		}
 		if (error == 0 && vap->va_type == VDIR) {
 			/*
@@ -414,20 +414,20 @@ fdesc_attr(int fd, struct vnode_attr *vap, vfs_context_t a_context)
 			 */
 			vap->va_mode &= ~((VEXEC) | (VEXEC >> 3) | (VEXEC >> 6));
 		}
-		(void)vnode_put((struct vnode *) fp->f_fglob->fg_data);
+		(void)vnode_put((struct vnode *) fp->fp_glob->fg_data);
 		break;
 
 	case DTYPE_SOCKET:
 	case DTYPE_PIPE:
 #if SOCKETS
-		if (FILEGLOB_DTYPE(fp->f_fglob) == DTYPE_SOCKET) {
-			error = soo_stat((struct socket *)fp->f_fglob->fg_data, (void *)&stb, 0);
+		if (FILEGLOB_DTYPE(fp->fp_glob) == DTYPE_SOCKET) {
+			error = soo_stat((struct socket *)fp->fp_glob->fg_data, (void *)&stb, 0);
 		} else
 #endif /* SOCKETS */
-		error = pipe_stat((struct pipe *)fp->f_fglob->fg_data, (void *)&stb, 0);
+		error = pipe_stat((struct pipe *)fp->fp_glob->fg_data, (void *)&stb, 0);
 
 		if (error == 0) {
-			if (FILEGLOB_DTYPE(fp->f_fglob) == DTYPE_SOCKET) {
+			if (FILEGLOB_DTYPE(fp->fp_glob) == DTYPE_SOCKET) {
 				VATTR_RETURN(vap, va_type, VSOCK);
 			} else {
 				VATTR_RETURN(vap, va_type, VFIFO);
@@ -483,7 +483,7 @@ fdesc_getattr(struct vnop_getattr_args *ap)
 	 * a snapshot.
 	 */
 	if (error == 0) {
-		vp->v_type = vap->va_type;
+		vp->v_type = (uint16_t)vap->va_type;
 
 		/* We need an inactive to reset type to VNON */
 		vnode_setneedinactive(vp);
@@ -519,14 +519,14 @@ fdesc_setattr(struct vnop_setattr_args *ap)
 	/*
 	 * Can setattr the underlying vnode, but not sockets!
 	 */
-	switch (FILEGLOB_DTYPE(fp->f_fglob)) {
+	switch (FILEGLOB_DTYPE(fp->fp_glob)) {
 	case DTYPE_VNODE:
 	{
-		if ((error = vnode_getwithref((struct vnode *) fp->f_fglob->fg_data)) != 0) {
+		if ((error = vnode_getwithref((struct vnode *) fp->fp_glob->fg_data)) != 0) {
 			break;
 		}
-		error = vnode_setattr((struct vnode *) fp->f_fglob->fg_data, ap->a_vap, ap->a_context);
-		(void)vnode_put((struct vnode *) fp->f_fglob->fg_data);
+		error = vnode_setattr((struct vnode *) fp->fp_glob->fg_data, ap->a_vap, ap->a_context);
+		(void)vnode_put((struct vnode *) fp->fp_glob->fg_data);
 		break;
 	}
 
@@ -567,7 +567,8 @@ devfs_devfd_readdir(struct vnop_readdir_args *ap)
 {
 	struct uio *uio = ap->a_uio;
 	struct proc *p = current_proc();
-	int i, error;
+	off_t i;
+	int error;
 
 	/*
 	 * We don't allow exporting fdesc mounts, and currently local
@@ -587,7 +588,7 @@ devfs_devfd_readdir(struct vnop_readdir_args *ap)
 	i = uio->uio_offset / UIO_MX;
 	error = 0;
 	while (uio_resid(uio) >= UIO_MX) {
-		if (i >= p->p_fd->fd_nfiles) {
+		if (i >= p->p_fd->fd_nfiles || i < 0) {
 			break;
 		}
 
@@ -597,11 +598,11 @@ devfs_devfd_readdir(struct vnop_readdir_args *ap)
 
 			bzero((caddr_t) dp, UIO_MX);
 
-			dp->d_namlen = scnprintf(dp->d_name, sizeof(dp->d_name),
-			    "%d", i);
+			dp->d_namlen = (__uint8_t)scnprintf(dp->d_name, sizeof(dp->d_name),
+			    "%lld", i);
 			dp->d_reclen = UIO_MX;
 			dp->d_type = DT_UNKNOWN;
-			dp->d_fileno = i + FD_STDIN;
+			dp->d_fileno = (ino_t)i + FD_STDIN;
 			/*
 			 * And ship to userland
 			 */

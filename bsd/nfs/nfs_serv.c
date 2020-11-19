@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc.  All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -928,11 +928,11 @@ nfsrv_read(
 	mbuf_t *mrepp)
 {
 	int error, attrerr, mreadcnt;
-	uint32_t reqlen, maxlen, count, len, tlen, left;
+	uint32_t reqlen, maxlen, count, len, tlen;
 	mbuf_t mread, m;
 	vnode_t vp;
 	struct nfs_filehandle nfh;
-	struct nfs_export *nx;
+	struct nfs_export *nx = NULL;
 	struct nfs_export_options *nxo;
 	uio_t auio = NULL;
 	char *uio_bufp = NULL;
@@ -1012,12 +1012,12 @@ nfsrv_read(
 	if ((u_quad_t)off >= vap->va_data_size) {
 		count = 0;
 	} else if (((u_quad_t)off + reqlen) > vap->va_data_size) {
-		count = nfsm_rndup(vap->va_data_size - off);
+		count = (int)nfsm_rndup(vap->va_data_size - off);
 	} else {
 		count = reqlen;
 	}
 
-	len = left = count;
+	len = count;
 	if (count > 0) {
 		/* get mbuf list to hold read data */
 		error = nfsm_mbuf_get_list(count, &mread, &mreadcnt);
@@ -1142,7 +1142,8 @@ nfsrv_fmod_timer(__unused void *param0, __unused void *param1)
 	struct nfsrv_fmod_hashhead *headp, firehead;
 	struct nfsrv_fmod *fp, *nfp, *pfp;
 	uint64_t timenow, next_deadline;
-	int interval = 0, i, fmod_fire;
+	time_t interval = 0;
+	int i, fmod_fire;
 
 	LIST_INIT(&firehead);
 	lck_mtx_lock(nfsrv_fmod_mutex);
@@ -1222,7 +1223,7 @@ again:
 	 * entry is ready to send its fsevent.
 	 */
 	if (nfsrv_fmod_pending > 0) {
-		interval = (next_deadline - timenow) / (1000 * 1000);
+		interval = ((time_t)(next_deadline - timenow)) / (1000 * 1000);
 		if (interval < nfsrv_fmod_min_interval) {
 			interval = nfsrv_fmod_min_interval;
 		}
@@ -1328,7 +1329,7 @@ nfsrv_write(
 	mbuf_t m;
 	vnode_t vp;
 	struct nfs_filehandle nfh;
-	struct nfs_export *nx;
+	struct nfs_export *nx = NULL;
 	struct nfs_export_options *nxo;
 	uio_t auio = NULL;
 	char *uio_bufp = NULL;
@@ -1439,7 +1440,7 @@ nfsrv_write(
 		}
 		nfsmerr_if(error);
 		for (m = nmreq->nmc_mcur; m; m = mbuf_next(m)) {
-			if ((mlen = mbuf_len(m)) > 0) {
+			if ((mlen = (int)mbuf_len(m)) > 0) {
 				uio_addiov(auio, CAST_USER_ADDR_T((caddr_t)mbuf_data(m)), mlen);
 			}
 		}
@@ -1555,13 +1556,14 @@ nfsrv_writegather(
 	struct nfsrv_wg_delayhash *wpp;
 	uid_t saved_uid;
 	struct vnode_attr preattr, postattr;
-	int error, mlen, i, ioflags, tlen;
+	int error, mlen, i, ioflags;
+	size_t tlen;
 	int preattrerr, postattrerr;
 	vnode_t vp;
 	mbuf_t m;
 	uio_t auio = NULL;
 	char *uio_bufp = NULL;
-	u_quad_t cur_usec;
+	time_t cur_usec;
 	struct timeval now;
 	struct nfsm_chain *nmreq, nmrep;
 
@@ -1579,7 +1581,7 @@ nfsrv_writegather(
 		nd->nd_mrep = NULL;
 		nd->nd_stable = NFS_WRITE_FILESYNC;
 		microuptime(&now);
-		cur_usec = (u_quad_t)now.tv_sec * 1000000 + (u_quad_t)now.tv_usec;
+		cur_usec = now.tv_sec * 1000000 + now.tv_usec;
 		nd->nd_time = cur_usec +
 		    ((nd->nd_vers == NFS_VER3) ? nfsrv_wg_delay_v3 : nfsrv_wg_delay);
 
@@ -1680,7 +1682,7 @@ nfsmerr:
 	 */
 loop1:
 	microuptime(&now);
-	cur_usec = (u_quad_t)now.tv_sec * 1000000 + (u_quad_t)now.tv_usec;
+	cur_usec = now.tv_sec * 1000000 + now.tv_usec;
 	for (nd = slp->ns_tq.lh_first; nd; nd = owp) {
 		owp = nd->nd_tq.le_next;
 		if (nd->nd_time > cur_usec) {
@@ -1883,7 +1885,8 @@ loop1:
 int
 nfsrv_wg_coalesce(struct nfsrv_descript *owp, struct nfsrv_descript *nd)
 {
-	int overlap, error;
+	int error;
+	off_t overlap;
 	mbuf_t mp, mpnext;
 	struct nfsrv_descript *p;
 
@@ -1895,7 +1898,7 @@ nfsrv_wg_coalesce(struct nfsrv_descript *owp, struct nfsrv_descript *nd)
 			return EIO;
 		}
 		if (overlap > 0) {
-			mbuf_adj(nd->nd_nmreq.nmc_mhead, overlap);
+			mbuf_adj(nd->nd_nmreq.nmc_mhead, (int)overlap);
 		}
 		mp = owp->nd_nmreq.nmc_mhead;
 		while ((mpnext = mbuf_next(mp))) {
@@ -1938,13 +1941,13 @@ void
 nfsrv_wg_timer(__unused void *param0, __unused void *param1)
 {
 	struct timeval now;
-	uint64_t cur_usec, next_usec;
-	int interval;
+	time_t cur_usec, next_usec;
+	time_t interval;
 	struct nfsrv_sock *slp;
 	int writes_pending = 0;
 
 	microuptime(&now);
-	cur_usec = (uint64_t)now.tv_sec * 1000000 + (uint64_t)now.tv_usec;
+	cur_usec = now.tv_sec * 1000000 + now.tv_usec;
 	next_usec = cur_usec + (NFSRV_WGATHERDELAY * 1000);
 
 	lck_mtx_lock(nfsd_mutex);
@@ -2017,13 +2020,14 @@ nfsrv_create(
 	struct vnode_attr dpreattr, dpostattr, postattr;
 	struct vnode_attr va, *vap = &va;
 	struct nameidata ni;
-	int error, rdev, dpreattrerr, dpostattrerr, postattrerr;
+	int error, dpreattrerr, dpostattrerr, postattrerr;
 	int how, exclusive_flag;
 	uint32_t len = 0, cnflags;
+	uint64_t rdev;
 	vnode_t vp, dvp, dirp;
 	struct nfs_filehandle nfh;
 	struct nfs_export *nx = NULL;
-	struct nfs_export_options *nxo;
+	struct nfs_export_options *nxo = NULL;
 	u_quad_t tempsize;
 	u_char cverf[NFSX_V3CREATEVERF];
 	uid_t saved_uid;
@@ -2091,6 +2095,7 @@ nfsrv_create(
 				error = EEXIST;
 				break;
 			}
+			OS_FALLTHROUGH;
 		case NFS_CREATE_UNCHECKED:
 			error = nfsm_chain_get_sattr(nd, nmreq, vap);
 			break;
@@ -2213,7 +2218,7 @@ nfsrv_create(
 			}
 		} else if (vap->va_type == VCHR || vap->va_type == VBLK ||
 		    vap->va_type == VFIFO) {
-			if (vap->va_type == VCHR && rdev == (int)0xffffffff) {
+			if (vap->va_type == VCHR && rdev == 0xffffffff) {
 				VATTR_SET(vap, va_type, VFIFO);
 			}
 			if (vap->va_type != VFIFO) {
@@ -2389,7 +2394,7 @@ nfsrv_mknod(
 	vnode_t vp, dvp, dirp;
 	struct nfs_filehandle nfh;
 	struct nfs_export *nx = NULL;
-	struct nfs_export_options *nxo;
+	struct nfs_export_options *nxo = NULL;
 	uid_t saved_uid;
 	kauth_acl_t xacl = NULL;
 	struct nfsm_chain *nmreq, nmrep;
@@ -2641,7 +2646,7 @@ nfsrv_remove(
 	struct vnode_attr dpreattr, dpostattr;
 	struct nfs_filehandle nfh;
 	struct nfs_export *nx = NULL;
-	struct nfs_export_options *nxo;
+	struct nfs_export_options *nxo = NULL;
 	struct nfsm_chain *nmreq, nmrep;
 
 	error = 0;
@@ -2708,7 +2713,7 @@ nfsrv_remove(
 		if (!error) {
 #if CONFIG_FSE
 			char     *path = NULL;
-			int       plen;
+			int       plen = 0;
 			fse_info  finfo;
 
 			if (nfsrv_fsevents_enabled && need_fsevent(FSE_DELETE, dvp)) {
@@ -3143,10 +3148,8 @@ auth_exit:
 			mount_ref(locked_mp, 0);
 
 			/* make a copy of to path to pass to nfsrv_namei() again */
-			MALLOC_ZONE(topath, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
-			if (topath) {
-				bcopy(toni.ni_cnd.cn_pnbuf, topath, tolen + 1);
-			}
+			topath = zalloc(ZV_NAMEI);
+			bcopy(toni.ni_cnd.cn_pnbuf, topath, tolen + 1);
 
 			/*
 			 * nameidone has to happen before we vnode_put(tdvp)
@@ -3160,10 +3163,8 @@ auth_exit:
 			vnode_put(tdvp);
 
 			/* make a copy of from path to pass to nfsrv_namei() again */
-			MALLOC_ZONE(frompath, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
-			if (frompath) {
-				bcopy(fromni.ni_cnd.cn_pnbuf, frompath, fromlen + 1);
-			}
+			frompath = zalloc(ZV_NAMEI);
+			bcopy(fromni.ni_cnd.cn_pnbuf, frompath, fromlen + 1);
 
 			/*
 			 * nameidone has to happen before we vnode_put(fdvp)
@@ -3407,10 +3408,10 @@ nfsmout:
 		vnode_put(tdirp);
 	}
 	if (frompath) {
-		FREE_ZONE(frompath, MAXPATHLEN, M_NAMEI);
+		NFS_ZFREE(ZV_NAMEI, frompath);
 	}
 	if (topath) {
-		FREE_ZONE(topath, MAXPATHLEN, M_NAMEI);
+		NFS_ZFREE(ZV_NAMEI, topath);
 	}
 	if (saved_cred) {
 		kauth_cred_unref(&saved_cred);
@@ -3614,7 +3615,7 @@ nfsrv_symlink(
 	vnode_t vp, dvp, dirp;
 	struct nfs_filehandle nfh;
 	struct nfs_export *nx = NULL;
-	struct nfs_export_options *nxo;
+	struct nfs_export_options *nxo = NULL;
 	uio_t auio = NULL;
 	char uio_buf[UIO_SIZEOF(1)];
 	struct nfsm_chain *nmreq, nmrep;
@@ -3853,7 +3854,7 @@ nfsrv_mkdir(
 	vnode_t vp, dvp, dirp;
 	struct nfs_filehandle nfh;
 	struct nfs_export *nx = NULL;
-	struct nfs_export_options *nxo;
+	struct nfs_export_options *nxo = NULL;
 	uid_t saved_uid;
 	kauth_acl_t xacl = NULL;
 	struct nfsm_chain *nmreq, nmrep;
@@ -4086,7 +4087,7 @@ nfsrv_rmdir(
 	struct vnode_attr dpreattr, dpostattr;
 	struct nfs_filehandle nfh;
 	struct nfs_export *nx = NULL;
-	struct nfs_export_options *nxo;
+	struct nfs_export_options *nxo = NULL;
 	struct nameidata ni;
 	struct nfsm_chain *nmreq, nmrep;
 
@@ -4164,7 +4165,7 @@ nfsrv_rmdir(
 	if (!error) {
 #if CONFIG_FSE
 		char     *path = NULL;
-		int       plen;
+		int       plen = 0;
 		fse_info  finfo;
 
 		if (nfsrv_fsevents_enabled && need_fsevent(FSE_DELETE, dvp)) {
@@ -4277,7 +4278,7 @@ nfsrv_readdir(
 	char uio_buf[UIO_SIZEOF(1)];
 	int len, nlen, rem, xfer, error, attrerr;
 	int siz, count, fullsiz, eofflag, nentries;
-	u_quad_t off, toff, verf;
+	u_quad_t off, toff, verf = 0;
 	int vnopflag;
 	struct nfsm_chain *nmreq, nmrep;
 
@@ -4787,7 +4788,7 @@ nfsrv_commit(
 {
 	vnode_t vp;
 	struct nfs_filehandle nfh;
-	struct nfs_export *nx;
+	struct nfs_export *nx = NULL;
 	struct nfs_export_options *nxo;
 	int error, preattrerr, postattrerr, count;
 	struct vnode_attr preattr, postattr;
@@ -5014,7 +5015,7 @@ nfsmerr:
 		maxsize = NFS_MAXDGRAMDATA;
 		prefsize = NFS_PREFDGRAMDATA;
 	} else {
-		maxsize = prefsize = NFSRV_MAXDATA;
+		maxsize = prefsize = slp->ns_sobufsize ? slp->ns_sobufsize / 2 : NFSRV_MAXDATA;
 	}
 
 	nfsm_chain_add_32(error, &nmrep, maxsize);
@@ -5051,8 +5052,8 @@ nfsrv_pathconf(
 	vfs_context_t ctx,
 	mbuf_t *mrepp)
 {
-	int error, attrerr, linkmax, namemax;
-	int chownres, notrunc, case_sensitive, case_preserving;
+	int error, attrerr, linkmax = 0, namemax = 0;
+	int chownres = 0, notrunc = 0, case_sensitive = 0, case_preserving = 0;
 	vnode_t vp;
 	struct vnode_attr attr;
 	struct nfs_filehandle nfh;

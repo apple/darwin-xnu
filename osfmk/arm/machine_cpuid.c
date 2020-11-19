@@ -84,10 +84,10 @@ void
 machine_write_csselr(csselr_cache_level level, csselr_cache_type type)
 {
 #if __arm__
-	uint32_t csselr = (level | type);
+	uint32_t csselr = (uint32_t)level | (uint32_t)type;
 	__builtin_arm_mcr(15, 2, csselr, 0, 0, 0);
 #else
-	uint64_t csselr = (level | type);
+	uint64_t csselr = (uint64_t)level | (uint64_t)type;
 	__asm__ volatile ("msr	CSSELR_EL1, %0"  : : "r" (csselr));
 #endif
 	__builtin_arm_isb(ISB_SY);

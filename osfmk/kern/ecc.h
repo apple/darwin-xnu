@@ -46,7 +46,6 @@ extern kern_return_t    ecc_log_record_event(const struct ecc_event *ev);
 #endif
 
 #ifdef XNU_KERNEL_PRIVATE
-extern void             ecc_log_init(void);
 extern kern_return_t    ecc_log_get_next_event(struct ecc_event *ev);
 extern uint32_t         ecc_log_get_correction_count(void);
 #endif

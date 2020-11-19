@@ -38,7 +38,6 @@
 #include <kern/ledger.h>
 
 extern void sfi_init(void);
-extern void sfi_early_init(void);
 extern sfi_class_id_t sfi_get_ledger_alias_for_class(sfi_class_id_t class_id);
 extern int sfi_ledger_entry_add(ledger_template_t template, sfi_class_id_t class_id);
 

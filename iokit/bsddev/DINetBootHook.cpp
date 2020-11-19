@@ -87,16 +87,20 @@
 #endif
 
 #include <sys/types.h>
+#include <mach/clock_types.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOLib.h>
 #include "DINetBootHook.h"
 
 #define kIOHDIXControllerClassName      "IOHDIXController"
 #define kDIRootImageKey                         "di-root-image"
+#define kDIRootImageRemovableKey                "di-root-removable"
 #define kDIRootImageResultKey           "di-root-image-result"
 #define kDIRootImageDevNameKey          "di-root-image-devname"
 #define kDIRootImageDevTKey                     "di-root-image-devt"
 #define kDIRootRamFileKey           "di-root-ram-file"
+
+#define kDIMatchQuiesceTimeout          30ull
 
 static IOService *
 di_load_controller( void )
@@ -139,16 +143,24 @@ di_load_controller( void )
 }
 
 extern "C" {
-/*
- *       Name:		di_root_image
- *       Function:	mount the disk image returning the dev node
- *       Parameters:	path	->		path/url to disk image
- *                               devname	<-		dev node used to set the rootdevice global variable
- *                               dev_p	<-		device number generated from major/minor numbers
- *       Comments:
+/* FIXME: removable should be replaced with a struct (so it could be easily
+ * extensible in the future). However, since there is no common header file
+ * between imageboot and NetBoot, we opt for a simple bool for now.
+ * Refactor this into a common header file.
  */
+static int
+di_add_properties(IOService *controller, bool removable)
+{
+	if (!controller->setProperty(kDIRootImageRemovableKey, removable ? kOSBooleanTrue : kOSBooleanFalse)) {
+		IOLog("IOHDIXController::setProperty(%s, %d) failed.\n", kDIRootImageRemovableKey, !!removable);
+		return kIOReturnBadArgument;
+	}
+
+	return kIOReturnSuccess;
+}
+
 int
-di_root_image(const char *path, char *devname, size_t devsz, dev_t *dev_p)
+di_root_image_ext(const char *path, char *devname, size_t devsz, dev_t *dev_p, bool removable)
 {
 	IOReturn                        res                             = 0;
 	IOService               *       controller                      = NULL;
@@ -188,6 +200,17 @@ di_root_image(const char *path, char *devname, size_t devsz, dev_t *dev_p)
 		goto CannotCreatePathOSString;
 	}
 
+	/*
+	 * This is a bit racy, as two concurrent attached could have
+	 * different properties. However, since we query the result and dev
+	 * below locklessly, the existing code is already racy, so we
+	 * keep the status quo.
+	 */
+	res = di_add_properties(controller, removable);
+	if (res) {
+		goto error_add_properties;
+	}
+
 	// do it
 	if (!controller->setProperty(kDIRootImageKey, pathString)) {
 		IOLog("IOHDIXController::setProperty(%s, %s) failed.\n", kDIRootImageKey, pathString->getCStringNoCopy());
@@ -223,10 +246,25 @@ di_root_image(const char *path, char *devname, size_t devsz, dev_t *dev_p)
 		goto di_root_image_FAILED;
 	}
 
+	/*
+	 * NOTE: The attached disk image may trigger IOKit matching. At the very least, an IOMedia
+	 * must claim it.  More complex scenarios might include a GPT containing a partition mapping
+	 * to an APFS container, both of which need to probe and claim their respective media devices.
+	 *
+	 * After the attach is complete, we should quiesce the disk image controller before returning
+	 * from this function successfully.  If we failed to quiesce, then we should treat it as a hard
+	 * failure, to make it more obvious to triage.
+	 */
+	res = controller->waitQuiet((NSEC_PER_SEC * kDIMatchQuiesceTimeout));
+	if (res) {
+		IOLog("failed to quiesce attached disk image (%s)! \n", devname);
+		goto di_root_image_FAILED;
+	}
 
 di_root_image_FAILED:
 CannotCreatePathOSString:
 NoIOHDIXController:
+error_add_properties:
 
 	// clean up memory allocations
 	if (pathString) {
@@ -237,6 +275,21 @@ NoIOHDIXController:
 	}
 
 	return res;
+}
+
+/*
+ *       Name:		di_root_image
+ *       Function:	mount the disk image returning the dev node
+ *       Parameters:	path	->		path/url to disk image
+ *                               devname	<-		dev node used to set the rootdevice global variable
+ *                               dev_p	<-		device number generated from major/minor numbers
+ *       Comments:
+ *       This is an exported function. Changing this will break API.
+ */
+int
+di_root_image(const char *path, char *devname, size_t devsz, dev_t *dev_p)
+{
+	return di_root_image_ext(path, devname, devsz, dev_p, false);
 }
 
 int

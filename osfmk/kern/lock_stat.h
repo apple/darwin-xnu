@@ -54,64 +54,70 @@
 /*
  * DTrace lockstat probe definitions
  *
- * Spinlocks
  */
-#define LS_LCK_SPIN_LOCK_ACQUIRE        0
-#define LS_LCK_SPIN_LOCK_SPIN           1
-#define LS_LCK_SPIN_UNLOCK_RELEASE      2
 
-/*
- * Mutexes can also have interlock-spin events, which are
- * unique to our lock implementation.
- */
-#define LS_LCK_MTX_LOCK_ACQUIRE                 3
-#define LS_LCK_MTX_LOCK_BLOCK                   5
-#define LS_LCK_MTX_LOCK_SPIN                    6
-#define LS_LCK_MTX_LOCK_ILK_SPIN                7
-#define LS_LCK_MTX_TRY_LOCK_ACQUIRE             8
-#define LS_LCK_MTX_TRY_SPIN_LOCK_ACQUIRE        9
-#define LS_LCK_MTX_UNLOCK_RELEASE               10
+enum lockstat_probe_id {
+	/* Spinlocks */
+	LS_LCK_SPIN_LOCK_ACQUIRE,
+	LS_LCK_SPIN_LOCK_SPIN,
+	LS_LCK_SPIN_UNLOCK_RELEASE,
 
-#define LS_LCK_MTX_LOCK_SPIN_ACQUIRE            39
-/*
- * Provide a parallel set for indirect mutexes
- */
-#define LS_LCK_MTX_EXT_LOCK_ACQUIRE                     17
-#define LS_LCK_MTX_EXT_LOCK_BLOCK                       18
-#define LS_LCK_MTX_EXT_LOCK_SPIN                        19
-#define LS_LCK_MTX_EXT_LOCK_ILK_SPIN            20
-#define LS_LCK_MTX_TRY_EXT_LOCK_ACQUIRE         21
-#define LS_LCK_MTX_EXT_UNLOCK_RELEASE           22
+	/*
+	 * Mutexes can also have interlock-spin events, which are
+	 * unique to our lock implementation.
+	 */
+	LS_LCK_MTX_LOCK_ACQUIRE,
+	LS_LCK_MTX_LOCK_BLOCK,
+	LS_LCK_MTX_LOCK_SPIN,
+	LS_LCK_MTX_LOCK_ILK_SPIN,
+	LS_LCK_MTX_TRY_LOCK_ACQUIRE,
+	LS_LCK_MTX_TRY_SPIN_LOCK_ACQUIRE,
+	LS_LCK_MTX_UNLOCK_RELEASE,
+	LS_LCK_MTX_LOCK_SPIN_ACQUIRE,
 
-/*
- * Reader-writer locks support a blocking upgrade primitive, as
- * well as the possibility of spinning on the interlock.
- */
-#define LS_LCK_RW_LOCK_SHARED_ACQUIRE           23
-#define LS_LCK_RW_LOCK_SHARED_BLOCK             24
-#define LS_LCK_RW_LOCK_SHARED_SPIN              25
+	/*
+	 * Provide a parallel set for indirect mutexes
+	 */
+	LS_LCK_MTX_EXT_LOCK_ACQUIRE,
+	LS_LCK_MTX_EXT_LOCK_BLOCK,
+	LS_LCK_MTX_EXT_LOCK_SPIN,
+	LS_LCK_MTX_EXT_LOCK_ILK_SPIN,
+	LS_LCK_MTX_EXT_UNLOCK_RELEASE,
 
-#define LS_LCK_RW_LOCK_EXCL_ACQUIRE             26
-#define LS_LCK_RW_LOCK_EXCL_BLOCK               27
-#define LS_LCK_RW_LOCK_EXCL_SPIN                28
+	/*
+	 * Reader-writer locks support a blocking upgrade primitive, as
+	 * well as the possibility of spinning on the interlock.
+	 */
+	LS_LCK_RW_LOCK_SHARED_ACQUIRE,
+	LS_LCK_RW_LOCK_SHARED_BLOCK,
+	LS_LCK_RW_LOCK_SHARED_SPIN,
 
-#define LS_LCK_RW_DONE_RELEASE                  29
+	LS_LCK_RW_LOCK_EXCL_ACQUIRE,
+	LS_LCK_RW_LOCK_EXCL_BLOCK,
+	LS_LCK_RW_LOCK_EXCL_SPIN,
 
-#define LS_LCK_RW_TRY_LOCK_SHARED_ACQUIRE       30
-#define LS_LCK_RW_TRY_LOCK_SHARED_SPIN          31
+	LS_LCK_RW_DONE_RELEASE,
 
-#define LS_LCK_RW_TRY_LOCK_EXCL_ACQUIRE         32
-#define LS_LCK_RW_TRY_LOCK_EXCL_ILK_SPIN        33
+	LS_LCK_RW_TRY_LOCK_SHARED_ACQUIRE,
+	LS_LCK_RW_TRY_LOCK_SHARED_SPIN,
 
-#define LS_LCK_RW_LOCK_SHARED_TO_EXCL_UPGRADE   34
-#define LS_LCK_RW_LOCK_SHARED_TO_EXCL_SPIN      35
-#define LS_LCK_RW_LOCK_SHARED_TO_EXCL_BLOCK     36
+	LS_LCK_RW_TRY_LOCK_EXCL_ACQUIRE,
+	LS_LCK_RW_TRY_LOCK_EXCL_ILK_SPIN,
 
-#define LS_LCK_RW_LOCK_EXCL_TO_SHARED_DOWNGRADE 37
-#define LS_LCK_RW_LOCK_EXCL_TO_SHARED_ILK_SPIN  38
+	LS_LCK_RW_LOCK_SHARED_TO_EXCL_UPGRADE,
+	LS_LCK_RW_LOCK_SHARED_TO_EXCL_SPIN,
+	LS_LCK_RW_LOCK_SHARED_TO_EXCL_BLOCK,
 
-#define LS_NPROBES                      40
-#define LS_LCK_INVALID                  LS_NPROBES
+	LS_LCK_RW_LOCK_EXCL_TO_SHARED_DOWNGRADE,
+	LS_LCK_RW_LOCK_EXCL_TO_SHARED_ILK_SPIN,
+
+	/* Ticket lock */
+	LS_LCK_TICKET_LOCK_ACQUIRE,
+	LS_LCK_TICKET_LOCK_RELEASE,
+	LS_LCK_TICKET_LOCK_SPIN,
+
+	LS_NPROBES
+};
 
 #if CONFIG_DTRACE
 extern uint32_t lockstat_probemap[LS_NPROBES];
@@ -158,23 +164,27 @@ lck_grp_stat_disable(lck_grp_stat_t *stat)
 }
 
 #if MACH_KERNEL_PRIVATE
-#if LOCK_STATS
-
 static inline void
 lck_grp_inc_stats(lck_grp_t *grp, lck_grp_stat_t *stat)
 {
+#pragma unused(grp)
 	if (__improbable(stat->lgs_enablings)) {
+#if ATOMIC_STAT_UPDATES
 		uint64_t val = os_atomic_inc_orig(&stat->lgs_count, relaxed);
-#if CONFIG_DTRACE
+#else
+		uint64_t val = stat->lgs_count++;
+#endif /* ATOMIC_STAT_UPDATES */
+#if CONFIG_DTRACE && LOCK_STATS
 		if (__improbable(stat->lgs_limit && (val % (stat->lgs_limit)) == 0)) {
 			lockprof_invoke(grp, stat, val);
 		}
 #else
 #pragma unused(val)
-#endif /* CONFIG_DTRACE */
+#endif /* CONFIG_DTRACE && LOCK_STATS */
 	}
 }
 
+#if LOCK_STATS
 static inline void
 lck_grp_inc_time_stats(lck_grp_t *grp, lck_grp_stat_t *stat, uint64_t time)
 {
@@ -259,16 +269,67 @@ lck_grp_spin_spin_enabled(void *lock LCK_GRP_ARG(lck_grp_t *grp))
 	return enabled;
 }
 
-static void inline
-lck_grp_mtx_inc_stats(
-	uint64_t* stat)
+static inline void
+lck_grp_ticket_update_held(void *lock LCK_GRP_ARG(lck_grp_t *grp))
 {
-#if ATOMIC_STAT_UPDATES
-	os_atomic_inc(stat, relaxed);
-#else
-	*stat = (*stat)++;
-#endif /* ATOMIC_STAT_UPDATES */
+#pragma unused(lock)
+#if CONFIG_DTRACE
+	LOCKSTAT_RECORD(LS_LCK_TICKET_LOCK_ACQUIRE, lock, (uintptr_t)LCK_GRP_PROBEARG(grp));
+#endif
+#if LOCK_STATS
+	if (!grp) {
+		return;
+	}
+	lck_grp_stat_t *stat = &grp->lck_grp_stats.lgss_ticket_held;
+	lck_grp_inc_stats(grp, stat);
+#endif /* LOCK_STATS */
 }
+
+static inline void
+lck_grp_ticket_update_miss(void *lock LCK_GRP_ARG(lck_grp_t *grp))
+{
+#pragma unused(lock)
+#if LOCK_STATS
+	if (!grp) {
+		return;
+	}
+	lck_grp_stat_t *stat = &grp->lck_grp_stats.lgss_ticket_miss;
+	lck_grp_inc_stats(grp, stat);
+#endif /* LOCK_STATS */
+}
+
+static inline boolean_t
+lck_grp_ticket_spin_enabled(void *lock LCK_GRP_ARG(lck_grp_t *grp))
+{
+#pragma unused(lock)
+	boolean_t enabled = FALSE;
+#if CONFIG_DTRACE
+	enabled |= lockstat_probemap[LS_LCK_TICKET_LOCK_SPIN] != 0;
+#endif /* CONFIG_DTRACE */
+#if LOCK_STATS
+	enabled |= (grp && grp->lck_grp_stats.lgss_ticket_spin.lgs_enablings);
+#endif /* LOCK_STATS */
+	return enabled;
+}
+
+static inline void
+lck_grp_ticket_update_spin(void *lock LCK_GRP_ARG(lck_grp_t *grp), uint64_t time)
+{
+#pragma unused(lock, time)
+#if CONFIG_DTRACE
+	if (time > dtrace_spin_threshold) {
+		LOCKSTAT_RECORD(LS_LCK_TICKET_LOCK_SPIN, lock, time LCK_GRP_ARG((uintptr_t)grp));
+	}
+#endif /* CONFIG_DTRACE */
+#if LOCK_STATS
+	if (!grp) {
+		return;
+	}
+	lck_grp_stat_t *stat = &grp->lck_grp_stats.lgss_ticket_spin;
+	lck_grp_inc_time_stats(grp, stat, time);
+#endif /* LOCK_STATS */
+}
+
 
 static void inline
 lck_grp_mtx_update_miss(
@@ -279,8 +340,9 @@ lck_grp_mtx_update_miss(
 #if LOG_FIRST_MISS_ALONE
 	if ((*first_miss & 1) == 0) {
 #endif /* LOG_FIRST_MISS_ALONE */
-	uint64_t* stat = &lock->lck_mtx_grp->lck_grp_stats.lgss_mtx_miss.lgs_count;
-	lck_grp_mtx_inc_stats(stat);
+	lck_grp_t *grp = lock->lck_mtx_grp;
+	lck_grp_stat_t *stat = &grp->lck_grp_stats.lgss_mtx_miss;
+	lck_grp_inc_stats(grp, stat);
 
 #if LOG_FIRST_MISS_ALONE
 	*first_miss |= 1;
@@ -292,8 +354,9 @@ static void inline
 lck_grp_mtx_update_direct_wait(
 	struct _lck_mtx_ext_ *lock)
 {
-	uint64_t* stat = &lock->lck_mtx_grp->lck_grp_stats.lgss_mtx_direct_wait.lgs_count;
-	lck_grp_mtx_inc_stats(stat);
+	lck_grp_t *grp = lock->lck_mtx_grp;
+	lck_grp_stat_t *stat = &grp->lck_grp_stats.lgss_mtx_direct_wait;
+	lck_grp_inc_stats(grp, stat);
 }
 
 static void inline
@@ -305,9 +368,9 @@ lck_grp_mtx_update_wait(
 #if LOG_FIRST_MISS_ALONE
 	if ((*first_miss & 2) == 0) {
 #endif /* LOG_FIRST_MISS_ALONE */
-	uint64_t* stat = &lock->lck_mtx_grp->lck_grp_stats.lgss_mtx_wait.lgs_count;
-	lck_grp_mtx_inc_stats(stat);
-
+	lck_grp_t *grp = lock->lck_mtx_grp;
+	lck_grp_stat_t *stat = &grp->lck_grp_stats.lgss_mtx_wait;
+	lck_grp_inc_stats(grp, stat);
 #if LOG_FIRST_MISS_ALONE
 	*first_miss |= 2;
 }
@@ -318,8 +381,10 @@ static void inline
 lck_grp_mtx_update_held(
 	struct _lck_mtx_ext_ *lock)
 {
-	uint64_t* stat = &lock->lck_mtx_grp->lck_grp_stats.lgss_mtx_held.lgs_count;
-	lck_grp_mtx_inc_stats(stat);
+	lck_grp_t *grp = lock->lck_mtx_grp;
+	lck_grp_stat_t *stat = &grp->lck_grp_stats.lgss_mtx_held;
+	lck_grp_inc_stats(grp, stat);
 }
+
 #endif /* MACH_KERNEL_PRIVATE */
 #endif /* _KERN_LOCKSTAT_H */

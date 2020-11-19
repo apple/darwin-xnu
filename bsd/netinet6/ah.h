@@ -66,8 +66,8 @@ struct ah_algorithm_state {
 struct ah_algorithm {
 	int (*sumsiz)(struct secasvar *);
 	int (*mature)(struct secasvar *);
-	int keymin;     /* in bits */
-	int keymax;     /* in bits */
+	u_int16_t keymin;     /* in bits */
+	u_int16_t keymax;     /* in bits */
 	const char *name;
 	int (*init)(struct ah_algorithm_state *, struct secasvar *);
 	void (*update)(struct ah_algorithm_state *, caddr_t, size_t);
@@ -79,7 +79,7 @@ struct ah_algorithm {
 extern const struct ah_algorithm *ah_algorithm_lookup(int);
 
 /* cksum routines */
-extern int ah_hdrlen(struct secasvar *);
+extern size_t ah_hdrlen(struct secasvar *);
 
 extern size_t ah_hdrsiz(struct ipsecrequest *);
 extern void ah4_input(struct mbuf *, int);

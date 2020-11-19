@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -25,6 +25,10 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+/*!
+ * i386/x86_64-specific functions required to support hibernation entry, and also to
+ * support hibernation exit after wired pages have already been restored.
+ */
 
 #include <kern/machine.h>
 #include <kern/misc_protos.h>
@@ -41,6 +45,7 @@
 #include <pexpert/i386/efi.h>
 
 #include <IOKit/IOHibernatePrivate.h>
+#include <machine/pal_hibernate.h>
 #include <vm/vm_page.h>
 #include <i386/i386_lowmem.h>
 #include <san/kasan.h>
@@ -113,6 +118,7 @@ hibernate_page_list_allocate(boolean_t log)
 		case kEfiACPIMemoryNVS:
 		case kEfiPalCode:
 			non_os_pagecount += num;
+			OS_FALLTHROUGH;
 
 		// OS used dram
 		case kEfiLoaderCode:
@@ -291,4 +297,9 @@ hibernate_vm_locks_are_safe(void)
 {
 	assert(FALSE == ml_get_interrupts_enabled());
 	return hibernate_vm_locks_safe;
+}
+
+void
+pal_hib_write_hook(void)
+{
 }

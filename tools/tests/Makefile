@@ -21,6 +21,8 @@ DSTSUBPATH = $(DSTROOT)
 BATS_CONFIG_PATH = $(DSTROOT)
 endif
 
+DSTSUBPATH_KEXTS = $(DSTROOT)/System/AppleInternal/Library/AuxiliaryExtensions
+
 COMMON_TARGETS = unit_tests \
 		MPMMTest		\
 		packetdrill		\
@@ -31,7 +33,8 @@ COMMON_TARGETS = unit_tests \
 		perf_index		\
 		personas		\
 		unixconf	 	\
-		testkext/pgokext.kext
+
+KEXT_TARGETS = pgokext.kext
 
 IPHONE_TARGETS =
 
@@ -40,9 +43,9 @@ MAC_TARGETS =
 BATS_TARGET = $(BATS_CONFIG_PATH)/BATS
 
 ifeq "$(Embedded)" "YES"
-TARGETS =	$(addprefix $(DSTSUBPATH)/, $(COMMON_TARGETS) $(IPHONE_TARGETS))
+TARGETS =	$(addprefix $(DSTSUBPATH)/, $(COMMON_TARGETS) $(IPHONE_TARGETS)) $(addprefix $(DSTSUBPATH_KEXTS)/, $(KEXT_TARGETS))
 else
-TARGETS =	$(addprefix $(DSTSUBPATH)/, $(COMMON_TARGETS) $(MAC_TARGETS))
+TARGETS =	$(addprefix $(DSTSUBPATH)/, $(COMMON_TARGETS) $(MAC_TARGETS)) $(addprefix $(DSTSUBPATH_KEXTS)/, $(KEXT_TARGETS))
 endif
 
 all:	$(BATS_TARGET) $(TARGETS)
@@ -54,8 +57,8 @@ always:
 # NOTE: RC_ARCHES nonsense is here because code signing will fail on kexts if we include a i386 slice
 # <rdar://problem/29878263> CoreOSLobo: xnu_tests-4026 fails to codesign
 
-$(DSTSUBPATH)/testkext/pgokext.kext: always
-	xcodebuild -configuration Debug -project $(SRCROOT)/testkext/testkext.xcodeproj -target pgokext DSTROOT=$(DSTSUBPATH)/testkext SYMROOT=$(SYMROOT)/testkext SRCROOT=$(SRCROOT)/testkext OBJROOT=$(OBJROOT)/testkext SDKROOT=$(SDKROOT) RC_ARCHS="$(subst i386,,$(RC_ARCHS))" install
+$(DSTSUBPATH_KEXTS)/pgokext.kext: always
+	xcodebuild -configuration Debug -project $(SRCROOT)/testkext/testkext.xcodeproj -target pgokext DSTROOT=$(DSTSUBPATH_KEXTS) SYMROOT=$(SYMROOT)/testkext SRCROOT=$(SRCROOT)/testkext OBJROOT=$(OBJROOT)/testkext SDKROOT=$(SDKROOT) RC_ARCHS="$(subst i386,,$(RC_ARCHS))" install
 
 $(DSTSUBPATH)/%: always
 	$(_v)echo Building $@

@@ -394,6 +394,9 @@ typedef struct nstat_tcp_descriptor {
 	u_int64_t       start_timestamp __attribute__((aligned(sizeof(u_int64_t))));
 	u_int64_t       timestamp __attribute__((aligned(sizeof(u_int64_t))));
 
+	u_int64_t       rx_transfer_size __attribute__((aligned(sizeof(u_int64_t))));
+	u_int64_t       tx_transfer_size __attribute__((aligned(sizeof(u_int64_t))));
+
 	activity_bitmap_t activity_bitmap;
 
 	u_int32_t       ifindex;
@@ -428,6 +431,7 @@ typedef struct nstat_tcp_descriptor {
 	uuid_t          uuid;
 	uuid_t          euuid;
 	uuid_t          vuuid;
+	uuid_t          fuuid;
 	union {
 		struct tcp_conn_status connstatus;
 		// On armv7k, tcp_conn_status is 1 byte instead of 4
@@ -471,6 +475,7 @@ typedef struct nstat_udp_descriptor {
 	uuid_t          uuid;
 	uuid_t          euuid;
 	uuid_t          vuuid;
+	uuid_t          fuuid;
 	uint16_t        ifnet_properties;
 
 	u_int8_t        reserved[6];
@@ -697,7 +702,7 @@ enum{
 	, NSTAT_MSG_TYPE_REM_SRC             = 1003
 	, NSTAT_MSG_TYPE_QUERY_SRC           = 1004
 	, NSTAT_MSG_TYPE_GET_SRC_DESC        = 1005
-	, NSTAT_MSG_TYPE_SET_FILTER          = 1006
+	, NSTAT_MSG_TYPE_SET_FILTER          = 1006 // Obsolete
 	, NSTAT_MSG_TYPE_GET_UPDATE          = 1007
 	, NSTAT_MSG_TYPE_SUBSCRIBE_SYSINFO   = 1008
 
@@ -734,14 +739,16 @@ enum{
 	, NSTAT_FILTER_ACCEPT_IS_CONSTRAINED  = 0x00000400
 	, NSTAT_FILTER_ACCEPT_IS_LOCAL        = 0x00000800
 	, NSTAT_FILTER_ACCEPT_IS_NON_LOCAL    = 0x00001000
-	, NSTAT_FILTER_IFNET_FLAGS            = 0x00001FFF
-
-	, NSTAT_FILTER_TCP_INTERFACE_ATTACH   = 0x00004000
-	, NSTAT_FILTER_TCP_NO_EARLY_CLOSE     = 0x00008000
-	, NSTAT_FILTER_TCP_FLAGS              = 0x0000C000
+	, NSTAT_FILTER_ACCEPT_ROUTE_VAL_ERR   = 0x00002000
+	, NSTAT_FILTER_ACCEPT_FLOWSWITCH_ERR  = 0x00004000
+	, NSTAT_FILTER_IFNET_FLAGS            = 0x0000FFFF
 
 	, NSTAT_FILTER_UDP_INTERFACE_ATTACH   = 0x00010000
-	, NSTAT_FILTER_UDP_FLAGS              = 0x000F0000
+	, NSTAT_FILTER_UDP_FLAGS              = 0x00010000
+
+	, NSTAT_FILTER_TCP_INTERFACE_ATTACH   = 0x00040000
+	, NSTAT_FILTER_TCP_NO_EARLY_CLOSE     = 0x00080000
+	, NSTAT_FILTER_TCP_FLAGS              = 0x000C0000
 
 	, NSTAT_FILTER_SUPPRESS_SRC_ADDED     = 0x00100000
 	, NSTAT_FILTER_REQUIRE_SRC_ADDED      = 0x00200000
@@ -766,6 +773,8 @@ typedef struct nstat_msg_hdr {
 	u_int16_t       length;
 	u_int16_t       flags;
 } nstat_msg_hdr;
+
+#define MAX_NSTAT_MSG_HDR_LENGTH    65532
 
 typedef struct nstat_msg_error {
 	nstat_msg_hdr   hdr;

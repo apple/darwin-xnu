@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1998-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 1998-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -32,6 +32,7 @@
 
 #include <IOKit/IOTypes.h>
 #include <IOKit/IOLocks.h>
+#include <libkern/c++/OSPtr.h>
 #include <libkern/c++/OSContainers.h>
 #include <DriverKit/IOMemoryDescriptor.h>
 #include <DriverKit/IOMemoryMap.h>
@@ -41,6 +42,7 @@
 
 #include <mach/memory_object_types.h>
 
+class IOMemoryDescriptor;
 class IOMemoryMap;
 class IOMapper;
 class IOService;
@@ -237,7 +239,6 @@ struct IOMDDMAMapArgs {
 	uint64_t              fLength;
 	uint64_t              fAlloc;
 	uint64_t              fAllocLength;
-	uint8_t               fMapContig;
 };
 
 struct IOMDDMAWalkSegmentArgs {
@@ -247,10 +248,6 @@ struct IOMDDMAWalkSegmentArgs {
 	UInt64 fMappedBase;             // Input base of mapping
 };
 typedef UInt8 IOMDDMAWalkSegmentState[128];
-// fMapped:
-enum{
-	kIOMDDMAWalkMappedLocal = 2
-};
 
 #endif /* KERNEL_PRIVATE */
 
@@ -259,6 +256,10 @@ enum{
 	kIOPreparationIDUnsupported = 1,
 	kIOPreparationIDAlwaysPrepared = 2,
 };
+
+#ifdef KERNEL_PRIVATE
+#define kIODescriptorIDInvalid (0)
+#endif
 
 #ifdef XNU_KERNEL_PRIVATE
 struct IOMemoryReference;
@@ -283,7 +284,7 @@ protected:
 	struct IOMemoryDescriptorReserved * reserved;
 
 protected:
-	OSSet *             _mappings;
+	OSPtr<OSSet>        _mappings;
 	IOOptionBits        _flags;
 
 
@@ -412,11 +413,19 @@ public:
 	void     setVMTags(uint32_t kernelTag, uint32_t userTag);
 	uint32_t getVMTag(vm_map_t map);
 
+#ifdef KERNEL_PRIVATE
+	uint64_t getDescriptorID( void );
+	void     setDescriptorID( void );
+
+	IOReturn ktraceEmitPhysicalSegments( void );
+#endif
+
 #ifdef XNU_KERNEL_PRIVATE
 	IOMemoryDescriptorReserved * getKernelReserved( void );
 	void                         cleanKernelReserved(IOMemoryDescriptorReserved * reserved);
 	IOReturn dmaMap(
 		IOMapper                    * mapper,
+		IOMemoryDescriptor          * memory,
 		IODMACommand                * command,
 		const IODMAMapSpecification * mapSpec,
 		uint64_t                      offset,
@@ -436,7 +445,7 @@ public:
 #endif
 
 private:
-	OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 0);
+	OSMetaClassDeclareReservedUsedX86(IOMemoryDescriptor, 0);
 #ifdef __LP64__
 	OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 1);
 	OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 2);
@@ -446,13 +455,13 @@ private:
 	OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 6);
 	OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 7);
 #else /* !__LP64__ */
-	OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 1);
-	OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 2);
-	OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 3);
-	OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 4);
-	OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 5);
-	OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 6);
-	OSMetaClassDeclareReservedUsed(IOMemoryDescriptor, 7);
+	OSMetaClassDeclareReservedUsedX86(IOMemoryDescriptor, 1);
+	OSMetaClassDeclareReservedUsedX86(IOMemoryDescriptor, 2);
+	OSMetaClassDeclareReservedUsedX86(IOMemoryDescriptor, 3);
+	OSMetaClassDeclareReservedUsedX86(IOMemoryDescriptor, 4);
+	OSMetaClassDeclareReservedUsedX86(IOMemoryDescriptor, 5);
+	OSMetaClassDeclareReservedUsedX86(IOMemoryDescriptor, 6);
+	OSMetaClassDeclareReservedUsedX86(IOMemoryDescriptor, 7);
 #endif /* !__LP64__ */
 	OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 8);
 	OSMetaClassDeclareReservedUnused(IOMemoryDescriptor, 9);
@@ -477,12 +486,12 @@ public:
  *   @param withDirection An I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures.
  *   @result The created IOMemoryDescriptor on success, to be released by the caller, or zero on failure. */
 
-	static IOMemoryDescriptor * withAddress(void *       address,
+	static OSPtr<IOMemoryDescriptor>  withAddress(void *       address,
 	    IOByteCount  withLength,
 	    IODirection  withDirection);
 
 #ifndef __LP64__
-	static IOMemoryDescriptor * withAddress(IOVirtualAddress address,
+	static OSPtr<IOMemoryDescriptor>  withAddress(IOVirtualAddress address,
 	    IOByteCount  withLength,
 	    IODirection  withDirection,
 	    task_t       withTask) APPLE_KEXT_DEPRECATED;                                 /* use withAddressRange() and prepare() instead */
@@ -496,13 +505,13 @@ public:
  *   @param withDirection An I/O direction to be associated with the descriptor, which may affect the operation of the prepare and complete methods on some architectures.
  *   @result The created IOMemoryDescriptor on success, to be released by the caller, or zero on failure. */
 
-	static IOMemoryDescriptor * withPhysicalAddress(
+	static OSPtr<IOMemoryDescriptor>  withPhysicalAddress(
 		IOPhysicalAddress       address,
 		IOByteCount             withLength,
 		IODirection             withDirection );
 
 #ifndef __LP64__
-	static IOMemoryDescriptor * withRanges(IOVirtualRange * ranges,
+	static OSPtr<IOMemoryDescriptor>  withRanges(IOVirtualRange * ranges,
 	    UInt32           withCount,
 	    IODirection      withDirection,
 	    task_t           withTask,
@@ -519,7 +528,7 @@ public:
  *   @param task The task the virtual ranges are mapped into. Note that unlike IOMemoryDescriptor::withAddress(), kernel_task memory must be explicitly prepared when passed to this api. The task argument may be NULL to specify memory by physical address.
  *   @result The created IOMemoryDescriptor on success, to be released by the caller, or zero on failure. */
 
-	static IOMemoryDescriptor * withAddressRange(
+	static OSPtr<IOMemoryDescriptor>  withAddressRange(
 		mach_vm_address_t address,
 		mach_vm_size_t    length,
 		IOOptionBits      options,
@@ -536,7 +545,7 @@ public:
  *   @param task The task each of the virtual ranges are mapped into. Note that unlike IOMemoryDescriptor::withAddress(), kernel_task memory must be explicitly prepared when passed to this api. The task argument may be NULL to specify memory by physical address.
  *   @result The created IOMemoryDescriptor on success, to be released by the caller, or zero on failure. */
 
-	static IOMemoryDescriptor * withAddressRanges(
+	static OSPtr<IOMemoryDescriptor>  withAddressRanges(
 		IOAddressRange * ranges,
 		UInt32           rangeCount,
 		IOOptionBits     options,
@@ -565,7 +574,7 @@ public:
  *
  *   @result The created IOMemoryDescriptor on success, to be released by the caller, or zero on failure. */
 
-	static IOMemoryDescriptor *withOptions(void *       buffers,
+	static OSPtr<IOMemoryDescriptor> withOptions(void *       buffers,
 	    UInt32       count,
 	    UInt32       offset,
 	    task_t       task,
@@ -573,7 +582,7 @@ public:
 	    IOMapper *   mapper = kIOMapperSystem);
 
 #ifndef __LP64__
-	static IOMemoryDescriptor * withPhysicalRanges(
+	static OSPtr<IOMemoryDescriptor>  withPhysicalRanges(
 		IOPhysicalRange *   ranges,
 		UInt32              withCount,
 		IODirection         withDirection,
@@ -581,7 +590,7 @@ public:
 #endif /* !__LP64__ */
 
 #ifndef __LP64__
-	static IOMemoryDescriptor * withSubRange(IOMemoryDescriptor *of,
+	static OSPtr<IOMemoryDescriptor>  withSubRange(IOMemoryDescriptor *of,
 	    IOByteCount offset,
 	    IOByteCount length,
 	    IODirection withDirection) APPLE_KEXT_DEPRECATED;                                  /* use IOSubMemoryDescriptor::withSubRange() and kIOMemoryThreadSafe instead */
@@ -592,7 +601,7 @@ public:
  *   @discussion If the original memory descriptor's address and length is still backed by the same real memory, i.e. the user hasn't deallocated and the reallocated memory at the same address then the original memory descriptor is returned with a additional reference.  Otherwise we build a totally new memory descriptor with the same characteristics as the previous one but with a new view of the vm.  Note not legal to call this function with anything except an IOGeneralMemoryDescriptor that was created with the kIOMemoryPersistent option.
  *   @param originalMD The memory descriptor to be duplicated.
  *   @result Either the original memory descriptor with an additional retain or a new memory descriptor, 0 for a bad original memory descriptor or some other resource shortage. */
-	static IOMemoryDescriptor *
+	static OSPtr<IOMemoryDescriptor>
 	withPersistentMemoryDescriptor(IOMemoryDescriptor *originalMD);
 
 #ifndef __LP64__
@@ -633,6 +642,9 @@ public:
  *   @result The byte count. */
 
 	virtual IOByteCount getLength() const;
+
+#define IOMEMORYDESCRIPTOR_SUPPORTS_GETDMAMAPLENGTH
+	uint64_t getDMAMapLength(uint64_t * offset = NULL);
 
 /*! @function setTag
  *   @abstract Set the tag for the memory descriptor.
@@ -731,7 +743,7 @@ public:
  *   @param length Is the length of the mapping requested for a subset of the IOMemoryDescriptor. Zero is the default to map all the memory.
  *   @result A reference to an IOMemoryMap object representing the mapping, which can supply the virtual address of the mapping and other information. The mapping may be shared with multiple callers - multiple maps are avoided if a compatible one exists. The IOMemoryMap object returned should be released only when the caller has finished accessing the mapping, as freeing the object destroys the mapping. The IOMemoryMap instance also retains the IOMemoryDescriptor it maps while it exists. */
 
-	IOMemoryMap *       createMappingInTask(
+	OSPtr<IOMemoryMap>        createMappingInTask(
 		task_t                  intoTask,
 		mach_vm_address_t       atAddress,
 		IOOptionBits            options,
@@ -739,7 +751,7 @@ public:
 		mach_vm_size_t          length = 0 );
 
 #ifndef __LP64__
-	virtual IOMemoryMap *       map(
+	virtual OSPtr<IOMemoryMap>       map(
 		task_t          intoTask,
 		IOVirtualAddress        atAddress,
 		IOOptionBits            options,
@@ -753,7 +765,7 @@ public:
  *   @param options Mapping options as in the full version of the createMappingInTask method, with kIOMapAnywhere assumed.
  *   @result See the full version of the createMappingInTask method. */
 
-	virtual IOMemoryMap *       map(
+	virtual OSPtr<IOMemoryMap>       map(
 		IOOptionBits            options = 0 );
 
 /*! @function setMapping
@@ -764,7 +776,7 @@ public:
  *   @param options Caching and read-only attributes of the mapping.
  *   @result A IOMemoryMap object created to represent the mapping. */
 
-	virtual IOMemoryMap *       setMapping(
+	virtual OSPtr<IOMemoryMap>       setMapping(
 		task_t          task,
 		IOVirtualAddress        mapAddress,
 		IOOptionBits            options = 0 );
@@ -789,7 +801,7 @@ public:
 		mach_vm_size_t          length,
 		IOOptionBits            options );
 
-	virtual IOMemoryMap *       makeMapping(
+	virtual IOMemoryMap *      makeMapping(
 		IOMemoryDescriptor *    owner,
 		task_t                  intoTask,
 		IOVirtualAddress        atAddress,
@@ -828,8 +840,8 @@ class IOMemoryMap : public OSObject
 	OSDeclareDefaultStructorsWithDispatch(IOMemoryMap);
 #ifdef XNU_KERNEL_PRIVATE
 public:
-	IOMemoryDescriptor * fMemory;
-	IOMemoryMap *        fSuperMap;
+	OSPtr<IOMemoryDescriptor>  fMemory;
+	OSPtr<IOMemoryMap>         fSuperMap;
 	mach_vm_size_t       fOffset;
 	mach_vm_address_t    fAddress;
 	mach_vm_size_t       fLength;
@@ -962,7 +974,7 @@ public:
 
 #ifdef XNU_KERNEL_PRIVATE
 // for IOMemoryDescriptor use
-	IOMemoryMap * copyCompatible( IOMemoryMap * newMapping );
+	IOMemoryMap *  copyCompatible( IOMemoryMap * newMapping );
 
 	bool init(
 		task_t                  intoTask,
@@ -1056,6 +1068,7 @@ public:
 	IOReturn wireVirtual(IODirection forDirection);
 	IOReturn dmaMap(
 		IOMapper                    * mapper,
+		IOMemoryDescriptor          * memory,
 		IODMACommand                * command,
 		const IODMAMapSpecification * mapSpec,
 		uint64_t                      offset,
@@ -1080,6 +1093,13 @@ public:
 	    IOOptionBits        options,
 	    mach_vm_address_t * inaddr);
 
+	IOReturn memoryReferenceMapNew(IOMemoryReference * ref,
+	    vm_map_t            map,
+	    mach_vm_size_t      inoffset,
+	    mach_vm_size_t      size,
+	    IOOptionBits        options,
+	    mach_vm_address_t * inaddr);
+
 	static IOReturn memoryReferenceSetPurgeable(
 		IOMemoryReference * ref,
 		IOOptionBits newState,
@@ -1093,6 +1113,11 @@ public:
 		IOMemoryReference * ref,
 		IOByteCount       * residentPageCount,
 		IOByteCount       * dirtyPageCount);
+
+	static uint64_t memoryReferenceGetDMAMapLength(
+		IOMemoryReference * ref,
+		uint64_t * offset);
+
 #endif
 
 private:
@@ -1104,7 +1129,7 @@ private:
 #endif /* !__LP64__ */
 
 // Internal
-	OSData *        _memoryEntries;
+	OSPtr<OSData>   _memoryEntries;
 	unsigned int    _pages;
 	ppnum_t         _highestPage;
 	uint32_t        __iomd_reservedA;
@@ -1199,7 +1224,7 @@ public:
 	virtual bool serialize(OSSerialize *s) const APPLE_KEXT_OVERRIDE;
 
 // Factory method for cloning a persistent IOMD, see IOMemoryDescriptor
-	static IOMemoryDescriptor *
+	static OSPtr<IOMemoryDescriptor>
 	withPersistentMemoryDescriptor(IOGeneralMemoryDescriptor *originalMD);
 };
 
@@ -1223,6 +1248,6 @@ IOMemoryMap::getSize()
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-extern boolean_t iokit_iomd_setownership_enabled;
+extern bool iokit_iomd_setownership_enabled;
 
 #endif /* !_IOMEMORYDESCRIPTOR_H */

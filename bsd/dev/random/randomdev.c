@@ -56,26 +56,20 @@
 
 d_ioctl_t       random_ioctl;
 
-/*
- * A struct describing which functions will get invoked for certain
- * actions.
- */
-static struct cdevsw random_cdevsw =
+static const struct cdevsw random_cdevsw =
 {
-	random_open,            /* open */
-	random_close,           /* close */
-	random_read,            /* read */
-	random_write,           /* write */
-	random_ioctl,           /* ioctl */
-	(stop_fcn_t *)nulldev, /* stop */
-	(reset_fcn_t *)nulldev, /* reset */
-	NULL,                           /* tty's */
-	eno_select,                     /* select */
-	eno_mmap,                       /* mmap */
-	eno_strat,                      /* strategy */
-	eno_getc,                       /* getc */
-	eno_putc,                       /* putc */
-	0                                       /* type */
+	.d_open = random_open,
+	.d_close = random_close,
+	.d_read = random_read,
+	.d_write = random_write,
+	.d_ioctl = random_ioctl,
+	.d_stop = (stop_fcn_t *)nulldev,
+	.d_reset = (reset_fcn_t *)nulldev,
+	.d_select = eno_select,
+	.d_mmap = eno_mmap,
+	.d_strategy = eno_strat,
+	.d_reserved_1 = eno_getc,
+	.d_reserved_2 = eno_putc,
 };
 
 
@@ -173,15 +167,14 @@ random_write(dev_t dev, struct uio *uio, __unused int ioflag)
 
 	/* Security server is sending us entropy */
 
-	while (uio_resid(uio) > 0 && retCode == 0) {
+	while ((size_t)uio_resid(uio) > 0 && retCode == 0) {
 		/* get the user's data */
-		int bytesToInput = MIN(uio_resid(uio),
-		    (user_ssize_t) sizeof(rdBuffer));
-		retCode = uiomove(rdBuffer, bytesToInput, uio);
+		size_t bytesToInput = MIN((size_t)uio_resid(uio), sizeof(rdBuffer));
+		retCode = uiomove(rdBuffer, (int)bytesToInput, uio);
 		if (retCode != 0) {
 			break;
 		}
-		retCode = write_random(rdBuffer, bytesToInput);
+		retCode = write_random(rdBuffer, (u_int)bytesToInput);
 		if (retCode != 0) {
 			break;
 		}
@@ -199,18 +192,17 @@ random_read(__unused dev_t dev, struct uio *uio, __unused int ioflag)
 	int retCode = 0;
 	char buffer[512];
 
-	user_ssize_t bytes_remaining = uio_resid(uio);
+	size_t bytes_remaining = (size_t)uio_resid(uio);
 	while (bytes_remaining > 0 && retCode == 0) {
-		int bytesToRead = MIN(bytes_remaining,
-		    (user_ssize_t) sizeof(buffer));
-		read_random(buffer, bytesToRead);
+		size_t bytesToRead = MIN(bytes_remaining, sizeof(buffer));
+		read_random(buffer, (u_int)bytesToRead);
 
-		retCode = uiomove(buffer, bytesToRead, uio);
+		retCode = uiomove(buffer, (int)bytesToRead, uio);
 		if (retCode != 0) {
 			break;
 		}
 
-		bytes_remaining = uio_resid(uio);
+		bytes_remaining = (size_t)uio_resid(uio);
 	}
 
 	return retCode;
@@ -232,10 +224,10 @@ int
 getentropy(__unused struct proc * p, struct getentropy_args *gap, __unused int * ret)
 {
 	user_addr_t user_addr;
-	uint32_t user_size;
+	user_size_t user_size;
 	char buffer[256];
 
-	user_addr = (vm_map_offset_t)gap->buffer;
+	user_addr = (user_addr_t)gap->buffer;
 	user_size = gap->size;
 	/* Can't request more than 256 random bytes
 	 * at once. Complying with openbsd getentropy()
@@ -243,6 +235,6 @@ getentropy(__unused struct proc * p, struct getentropy_args *gap, __unused int *
 	if (user_size > sizeof(buffer)) {
 		return EINVAL;
 	}
-	read_random(buffer, user_size);
+	read_random(buffer, (u_int)user_size);
 	return copyout(buffer, user_addr, user_size);
 }

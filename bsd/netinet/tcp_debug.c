@@ -83,9 +83,7 @@
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
-#if INET6
 #include <netinet/ip6.h>
-#endif
 #include <netinet/ip_var.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_fsm.h>
@@ -114,21 +112,13 @@ void *ipgen;
 struct tcphdr *th;
 int req;
 {
-#if INET6
 	int isipv6;
-#endif /* INET6 */
 	tcp_seq seq, ack;
 	int len, flags;
 	struct tcp_debug *td = &tcp_debug[tcp_debx++];
 
-#if INET6
 	isipv6 = (ipgen != NULL && ((struct ip *)ipgen)->ip_v == 6) ? 1 : 0;
-#endif /* INET6 */
-	td->td_family =
-#if INET6
-	    (isipv6 != 0) ? AF_INET6 :
-#endif
-	    AF_INET;
+	td->td_family = (isipv6 != 0) ? AF_INET6 : AF_INET;
 	if (tcp_debx == TCP_NDEBUG) {
 		tcp_debx = 0;
 	}
@@ -148,14 +138,12 @@ int req;
 			    sizeof(td->td_ti.ti_i));
 			bzero((caddr_t)td->td_ip6buf, sizeof(td->td_ip6buf));
 			break;
-#if INET6
 		case AF_INET6:
 			bcopy((caddr_t)ipgen, (caddr_t)td->td_ip6buf,
 			    sizeof(td->td_ip6buf));
 			bzero((caddr_t)&td->td_ti.ti_i,
 			    sizeof(td->td_ti.ti_i));
 			break;
-#endif
 		default:
 			bzero((caddr_t)td->td_ip6buf, sizeof(td->td_ip6buf));
 			bzero((caddr_t)&td->td_ti.ti_i,
@@ -172,13 +160,11 @@ int req;
 			td->td_ti.ti_t = *th;
 			bzero((caddr_t)&td->td_ti6.th, sizeof(td->td_ti6.th));
 			break;
-#if INET6
 		case AF_INET6:
 			td->td_ti6.th = *th;
 			bzero((caddr_t)&td->td_ti.ti_t,
 			    sizeof(td->td_ti.ti_t));
 			break;
-#endif
 		default:
 			bzero((caddr_t)&td->td_ti.ti_t,
 			    sizeof(td->td_ti.ti_t));
@@ -209,11 +195,7 @@ int req;
 		}
 		seq = th->th_seq;
 		ack = th->th_ack;
-		len =
-#if INET6
-		    isipv6 ? ((struct ip6_hdr *)ipgen)->ip6_plen :
-#endif
-		    ((struct ip *)ipgen)->ip_len;
+		len = isipv6 ? ((struct ip6_hdr *)ipgen)->ip6_plen : ((struct ip *)ipgen)->ip_len;
 		if (act == TA_OUTPUT) {
 			seq = ntohl(seq);
 			ack = ntohl(ack);

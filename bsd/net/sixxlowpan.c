@@ -838,6 +838,9 @@ sixxlowpan_uncompress(struct frame802154 *ieee02154hdr, u_int8_t *payload)
 		 * hdroffset negative means that we have to remove
 		 * hdrlen of extra stuff
 		 */
+		if (ieee02154hdr->payload_len < hdrlen) {
+			return EINVAL;
+		}
 		memmove(&payload[0],
 		    &payload[hdrlen],
 		    ieee02154hdr->payload_len - hdrlen);
@@ -850,6 +853,9 @@ sixxlowpan_uncompress(struct frame802154 *ieee02154hdr, u_int8_t *payload)
 		 * hdrlen is the size of the decompressed header
 		 * that takes the place of compressed header of size hdroffset
 		 */
+		if (ieee02154hdr->payload_len < hdroffset) {
+			return EINVAL;
+		}
 		memmove(payload + hdrlen,
 		    payload + hdroffset,
 		    ieee02154hdr->payload_len - hdroffset);

@@ -140,6 +140,7 @@ enum {
 	kIODKDisableDextTag    = 0x00002000ULL,
 	kIODKDisableCDHashChecking  = 0x00004000ULL,
 	kIODKDisableEntitlementChecking = 0x00008000ULL,
+	kIODKDisableCheckInTokenVerification = 0x00010000ULL,
 };
 
 #if XNU_KERNEL_PRIVATE
@@ -254,6 +255,7 @@ IOTrackingQueue * IOTrackingQueueAlloc(const char * name, uintptr_t btEntry,
     size_t allocSize, size_t minCaptureSize,
     uint32_t type, uint32_t numSiteQs);
 void              IOTrackingQueueFree(IOTrackingQueue * head);
+void              IOTrackingQueueCollectUser(IOTrackingQueue * queue);
 void              IOTrackingAdd(IOTrackingQueue * head, IOTracking * mem, size_t size, bool address, vm_tag_t tag);
 void              IOTrackingRemove(IOTrackingQueue * head, IOTracking * mem, size_t size);
 void              IOTrackingAddUser(IOTrackingQueue * queue, IOTrackingUser * mem, vm_size_t size);

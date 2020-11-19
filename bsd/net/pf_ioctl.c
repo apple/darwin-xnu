@@ -120,10 +120,8 @@ struct ip_fw_args;
 #include <net/if_pflog.h>
 #endif /* PFLOG */
 
-#if INET6
 #include <netinet/ip6.h>
 #include <netinet/in_pcb.h>
-#endif /* INET6 */
 
 #include <dev/random/randomdev.h>
 
@@ -189,7 +187,7 @@ static void pf_deleterule_anchor_step_out(struct pf_ruleset **,
 
 #define PF_CDEV_MAJOR   (-1)
 
-static struct cdevsw pf_cdevsw = {
+static const struct cdevsw pf_cdevsw = {
 	.d_open       = pfopen,
 	.d_close      = pfclose,
 	.d_read       = eno_rdwrt,
@@ -229,7 +227,7 @@ int16_t pf_nat64_configured = 0;
 
 static u_int64_t pf_enabled_ref_count;
 static u_int32_t nr_tokens = 0;
-static u_int64_t pffwrules;
+static u_int32_t pffwrules;
 static u_int32_t pfdevcnt;
 
 SLIST_HEAD(list_head, pfioc_kernel_token);
@@ -237,7 +235,19 @@ static struct list_head token_list_head;
 
 struct pf_rule           pf_default_rule;
 
-#define TAGID_MAX        50000
+typedef struct {
+	char tag_name[PF_TAG_NAME_SIZE];
+	uint16_t tag_id;
+} pf_reserved_tag_table_t;
+
+#define NUM_RESERVED_TAGS    2
+static pf_reserved_tag_table_t pf_reserved_tag_table[NUM_RESERVED_TAGS] = {
+	{ PF_TAG_NAME_SYSTEM_SERVICE, PF_TAG_ID_SYSTEM_SERVICE},
+	{ PF_TAG_NAME_STACK_DROP, PF_TAG_ID_STACK_DROP},
+};
+#define RESERVED_TAG_ID_MIN    PF_TAG_ID_SYSTEM_SERVICE
+
+#define DYNAMIC_TAG_ID_MAX    50000
 static TAILQ_HEAD(pf_tags, pf_tagname)  pf_tags =
     TAILQ_HEAD_INITIALIZER(pf_tags);
 
@@ -255,10 +265,8 @@ static void              pf_rtlabel_copyout(struct pf_addr_wrap *);
 static int pf_inet_hook(struct ifnet *, struct mbuf **, int,
     struct ip_fw_args *);
 #endif /* INET */
-#if INET6
 static int pf_inet6_hook(struct ifnet *, struct mbuf **, int,
     struct ip_fw_args *);
-#endif /* INET6 */
 
 #define DPFPRINTF(n, x) if (pf_status.debug >= (n)) printf x
 
@@ -777,12 +785,26 @@ static u_int16_t
 tagname2tag(struct pf_tags *head, char *tagname)
 {
 	struct pf_tagname       *tag, *p = NULL;
-	u_int16_t                new_tagid = 1;
+	uint16_t                 new_tagid = 1;
+	bool                     reserved_tag = false;
 
 	TAILQ_FOREACH(tag, head, entries)
 	if (strcmp(tagname, tag->name) == 0) {
 		tag->ref++;
 		return tag->tag;
+	}
+
+	/*
+	 * check if it is a reserved tag.
+	 */
+	_CASSERT(RESERVED_TAG_ID_MIN > DYNAMIC_TAG_ID_MAX);
+	for (int i = 0; i < NUM_RESERVED_TAGS; i++) {
+		if (strncmp(tagname, pf_reserved_tag_table[i].tag_name,
+		    PF_TAG_NAME_SIZE) == 0) {
+			new_tagid = pf_reserved_tag_table[i].tag_id;
+			reserved_tag = true;
+			goto skip_dynamic_tag_alloc;
+		}
 	}
 
 	/*
@@ -793,16 +815,24 @@ tagname2tag(struct pf_tags *head, char *tagname)
 
 	/* new entry */
 	if (!TAILQ_EMPTY(head)) {
+		/* skip reserved tags */
 		for (p = TAILQ_FIRST(head); p != NULL &&
-		    p->tag == new_tagid; p = TAILQ_NEXT(p, entries)) {
+		    p->tag >= RESERVED_TAG_ID_MIN;
+		    p = TAILQ_NEXT(p, entries)) {
+			;
+		}
+
+		for (; p != NULL && p->tag == new_tagid;
+		    p = TAILQ_NEXT(p, entries)) {
 			new_tagid = p->tag + 1;
 		}
 	}
 
-	if (new_tagid > TAGID_MAX) {
+	if (new_tagid > DYNAMIC_TAG_ID_MAX) {
 		return 0;
 	}
 
+skip_dynamic_tag_alloc:
 	/* allocate and fill new struct pf_tagname */
 	tag = _MALLOC(sizeof(*tag), M_TEMP, M_WAITOK | M_ZERO);
 	if (tag == NULL) {
@@ -812,7 +842,9 @@ tagname2tag(struct pf_tags *head, char *tagname)
 	tag->tag = new_tagid;
 	tag->ref++;
 
-	if (p != NULL) { /* insert new entry before p */
+	if (reserved_tag) { /* insert reserved tag at the head */
+		TAILQ_INSERT_HEAD(head, tag, entries);
+	} else if (p != NULL) { /* insert new entry before p */
 		TAILQ_INSERT_BEFORE(p, tag, entries);
 	} else { /* either list empty or no free slot in between */
 		TAILQ_INSERT_TAIL(head, tag, entries);
@@ -953,7 +985,7 @@ pf_rollback_rules(u_int32_t ticket, int rs_num, char *anchor)
 	MD5Update(ctx, (u_int8_t *)&(st)->elm, sizeof ((st)->elm))
 
 #define PF_MD5_UPD_STR(st, elm)                                         \
-	MD5Update(ctx, (u_int8_t *)(st)->elm, strlen((st)->elm))
+	MD5Update(ctx, (u_int8_t *)(st)->elm, (unsigned int)strlen((st)->elm))
 
 #define PF_MD5_UPD_HTONL(st, elm, stor) do {                            \
 	(stor) = htonl((st)->elm);                                      \
@@ -1928,6 +1960,7 @@ pfioctl_ioc_table(u_long cmd, struct pfioc_table_32 *io32,
 		goto struct32;
 	}
 
+#ifdef __LP64__
 	/*
 	 * 64-bit structure processing
 	 */
@@ -2102,6 +2135,9 @@ pfioctl_ioc_table(u_long cmd, struct pfioc_table_32 *io32,
 		/* NOTREACHED */
 	}
 	goto done;
+#else
+#pragma unused(io64)
+#endif /* __LP64__ */
 
 struct32:
 	/*
@@ -2277,8 +2313,9 @@ struct32:
 		VERIFY(0);
 		/* NOTREACHED */
 	}
-
+#ifdef __LP64__
 done:
+#endif
 	return error;
 }
 
@@ -2317,7 +2354,11 @@ pfioctl_ioc_tokens(u_long cmd, struct pfioc_tokens_32 *tok32,
 			break;
 		}
 
+#ifdef __LP64__
 		token_buf = (p64 ? tok64->pgt_buf : tok32->pgt_buf);
+#else
+		token_buf = tok32->pgt_buf;
+#endif
 		tokens = _MALLOC(size, M_TEMP, M_WAITOK | M_ZERO);
 		if (tokens == NULL) {
 			error = ENOMEM;
@@ -2792,13 +2833,6 @@ pfioctl_ioc_rule(u_long cmd, int minordev, struct pfioc_rule *pr, struct proc *p
 			break;
 		}
 #endif /* INET */
-#if !INET6
-		if (rule->af == AF_INET6) {
-			pool_put(&pf_rule_pl, rule);
-			error = EAFNOSUPPORT;
-			break;
-		}
-#endif /* INET6 */
 		tail = TAILQ_LAST(ruleset->rules[rs_num].inactive.ptr,
 		    pf_rulequeue);
 		if (tail) {
@@ -3004,13 +3038,6 @@ pfioctl_ioc_rule(u_long cmd, int minordev, struct pfioc_rule *pr, struct proc *p
 				break;
 			}
 #endif /* INET */
-#if !INET6
-			if (newrule->af == AF_INET6) {
-				pool_put(&pf_rule_pl, newrule);
-				error = EAFNOSUPPORT;
-				break;
-			}
-#endif /* INET6 */
 			if (newrule->ifname[0]) {
 				newrule->kif = pfi_kif_get(newrule->ifname);
 				if (newrule->kif == NULL) {
@@ -3218,14 +3245,6 @@ pfioctl_ioc_rule(u_long cmd, int minordev, struct pfioc_rule *pr, struct proc *p
 			break;
 		}
 #endif /* INET */
-#if !INET6
-		if (rule->af == AF_INET6) {
-			pool_put(&pf_rule_pl, rule);
-			error = EAFNOSUPPORT;
-			break;
-		}
-
-#endif /* INET6 */
 		r = TAILQ_FIRST(ruleset->rules[rs_num].active.ptr);
 		while ((r != NULL) && (rule->priority >= (unsigned)r->priority)) {
 			r = TAILQ_NEXT(r, entries);
@@ -3374,7 +3393,7 @@ pfioctl_ioc_state_kill(u_long cmd, struct pfioc_state_kill *psk, struct proc *p)
 				killed++;
 			}
 		}
-		psk->psk_af = killed;
+		psk->psk_af = (sa_family_t)killed;
 #if NPFSYNC
 		pfsync_clear_states(pf_status.hostid, psk->psk_ifname);
 #endif
@@ -3439,7 +3458,7 @@ pfioctl_ioc_state_kill(u_long cmd, struct pfioc_state_kill *psk, struct proc *p)
 				killed++;
 			}
 		}
-		psk->psk_af = killed;
+		psk->psk_af = (sa_family_t)killed;
 		break;
 	}
 
@@ -3556,7 +3575,11 @@ pfioctl_ioc_states(u_long cmd, struct pfioc_states_32 *ps32,
 			error = ENOMEM;
 			break;
 		}
+#ifdef __LP64__
 		buf = (p64 ? ps64->ps_buf : ps32->ps_buf);
+#else
+		buf = ps32->ps_buf;
+#endif
 
 		state = TAILQ_FIRST(&state_list);
 		while (state) {
@@ -3797,12 +3820,6 @@ pfioctl_ioc_pooladdr(u_long cmd, struct pfioc_pooladdr *pp, struct proc *p)
 			break;
 		}
 #endif /* INET */
-#if !INET6
-		if (pp->af == AF_INET6) {
-			error = EAFNOSUPPORT;
-			break;
-		}
-#endif /* INET6 */
 		if (pp->addr.addr.type != PF_ADDR_ADDRMASK &&
 		    pp->addr.addr.type != PF_ADDR_DYNIFTL &&
 		    pp->addr.addr.type != PF_ADDR_TABLE) {
@@ -3919,13 +3936,6 @@ pfioctl_ioc_pooladdr(u_long cmd, struct pfioc_pooladdr *pp, struct proc *p)
 				break;
 			}
 #endif /* INET */
-#if !INET6
-			if (pca->af == AF_INET6) {
-				pool_put(&pf_pooladdr_pl, newpa);
-				error = EAFNOSUPPORT;
-				break;
-			}
-#endif /* INET6 */
 			if (newpa->ifname[0]) {
 				newpa->kif = pfi_kif_get(newpa->ifname);
 				if (newpa->kif == NULL) {
@@ -4076,13 +4086,21 @@ static int
 pfioctl_ioc_trans(u_long cmd, struct pfioc_trans_32 *io32,
     struct pfioc_trans_64 *io64, struct proc *p)
 {
-	int p64 = proc_is64bit(p);
 	int error = 0, esize, size;
 	user_addr_t buf;
+
+#ifdef __LP64__
+	int p64 = proc_is64bit(p);
 
 	esize = (p64 ? io64->esize : io32->esize);
 	size = (p64 ? io64->size : io32->size);
 	buf = (p64 ? io64->array : io32->array);
+#else
+#pragma unused(io64, p)
+	esize = io32->esize;
+	size = io32->size;
+	buf = io32->array;
+#endif
 
 	switch (cmd) {
 	case DIOCXBEGIN: {
@@ -4323,7 +4341,11 @@ pfioctl_ioc_src_nodes(u_long cmd, struct pfioc_src_nodes_32 *psn32,
 			error = ENOMEM;
 			break;
 		}
+#ifdef __LP64__
 		buf = (p64 ? psn64->psn_buf : psn32->psn_buf);
+#else
+		buf = psn32->psn_buf;
+#endif
 
 		RB_FOREACH(n, pf_src_tree, &tree_src_tracking) {
 			uint64_t secs = pf_time_second(), diff;
@@ -4429,7 +4451,7 @@ pfioctl_ioc_src_node_kill(u_long cmd, struct pfioc_src_node_kill *psnk,
 			pf_purge_expired_src_nodes();
 		}
 
-		psnk->psnk_af = killed;
+		psnk->psnk_af = (sa_family_t)killed;
 		break;
 	}
 
@@ -4453,8 +4475,13 @@ pfioctl_ioc_iface(u_long cmd, struct pfioc_iface_32 *io32,
 		user_addr_t buf;
 		int esize;
 
+#ifdef __LP64__
 		buf = (p64 ? io64->pfiio_buffer : io32->pfiio_buffer);
 		esize = (p64 ? io64->pfiio_esize : io32->pfiio_esize);
+#else
+		buf = io32->pfiio_buffer;
+		esize = io32->pfiio_esize;
+#endif
 
 		/* esize must be that of the user space version of pfi_kif */
 		if (esize != sizeof(struct pfi_uif)) {
@@ -4560,11 +4587,9 @@ pf_af_hook(struct ifnet *ifp, struct mbuf **mppn, struct mbuf **mp,
 		break;
 	}
 #endif /* INET */
-#if INET6
 	case AF_INET6:
 		error = pf_inet6_hook(pf_ifp, mp, input, fwa);
 		break;
-#endif /* INET6 */
 	default:
 		break;
 	}
@@ -4655,7 +4680,6 @@ pf_inet_hook(struct ifnet *ifp, struct mbuf **mp, int input,
 }
 #endif /* INET */
 
-#if INET6
 int
 pf_inet6_hook(struct ifnet *ifp, struct mbuf **mp, int input,
     struct ip_fw_args *fwa)
@@ -4695,7 +4719,6 @@ pf_inet6_hook(struct ifnet *ifp, struct mbuf **mp, int input,
 	}
 	return error;
 }
-#endif /* INET6 */
 
 int
 pf_ifaddr_hook(struct ifnet *ifp)

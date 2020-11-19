@@ -74,7 +74,6 @@
 #include <kern/macro_help.h>
 #include <kern/timer_call.h>
 #include <kern/ast.h>
-#include <kern/kalloc.h>
 #include <kern/bits.h>
 
 #define NRQS_MAX        (128)                           /* maximum number of priority levels */
@@ -250,9 +249,6 @@ rq_bitmap_clear(bitmap_t *map, u_int n)
 struct rt_queue {
 	_Atomic int             count;                          /* # of threads total */
 	queue_head_t            queue;                          /* all runnable RT threads */
-#if __SMP__
-	decl_simple_lock_data(, rt_lock);
-#endif
 	struct runq_stats       runq_stats;
 };
 typedef struct rt_queue *rt_queue_t;
@@ -346,7 +342,6 @@ extern uint32_t default_timeshare_constraint;
 extern uint32_t max_rt_quantum, min_rt_quantum;
 
 extern int default_preemption_rate;
-extern int default_bg_preemption_rate;
 
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
 
@@ -389,6 +384,7 @@ extern void             compute_pmap_gc_throttle(
 #if defined(CONFIG_SCHED_TIMESHARE_CORE)
 
 #define MAX_LOAD (NRQS - 1)
+#define SCHED_PRI_SHIFT_MAX ((8 * sizeof(uint32_t)) - 1)
 extern uint32_t         sched_pri_shifts[TH_BUCKET_MAX];
 extern uint32_t         sched_fixed_shift;
 extern int8_t           sched_load_shifts[NRQS];
@@ -414,6 +410,10 @@ extern uint32_t sched_run_incr(thread_t thread);
 extern uint32_t sched_run_decr(thread_t thread);
 extern void sched_update_thread_bucket(thread_t thread);
 
+extern uint32_t sched_smt_run_incr(thread_t thread);
+extern uint32_t sched_smt_run_decr(thread_t thread);
+extern void sched_smt_update_thread_bucket(thread_t thread);
+
 #define SCHED_DECAY_TICKS       32
 struct shift_data {
 	int     shift1;
@@ -424,11 +424,13 @@ struct shift_data {
  *	thread_timer_delta macro takes care of both thread timers.
  */
 #define thread_timer_delta(thread, delta)                                       \
-MACRO_BEGIN                                                                                                     \
-	(delta) = (typeof(delta))timer_delta(&(thread)->system_timer,                   \
-	                                                &(thread)->system_timer_save);  \
-	(delta) += (typeof(delta))timer_delta(&(thread)->user_timer,                    \
-	                                                &(thread)->user_timer_save);    \
+MACRO_BEGIN                                                                     \
+	(delta) = (typeof(delta))timer_delta(&(thread)->system_timer,           \
+	    &(thread)->system_timer_save);                                      \
+	(delta) += (typeof(delta))timer_delta(&(thread)->user_timer,            \
+	    &(thread)->user_timer_save);                                        \
 MACRO_END
+
+extern bool system_is_SMT;
 
 #endif  /* _KERN_SCHED_H_ */

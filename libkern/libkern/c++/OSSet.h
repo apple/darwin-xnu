@@ -37,8 +37,8 @@
 class OSArray;
 class OSSet;
 
-typedef OSPtr<OSSet> OSSetPtr;
-typedef OSPtr<OSArray> OSArrayPtr;
+typedef OSSet* OSSetPtr;
+typedef OSArray* OSArrayPtr;
 
 /*!
  * @header
@@ -96,12 +96,12 @@ class OSSet : public OSCollection
 #if APPLE_KEXT_ALIGN_CONTAINERS
 
 private:
-	OSArrayPtr members;
+	OSPtr<OSArray> members;
 
 #else /* APPLE_KEXT_ALIGN_CONTAINERS */
 
 private:
-	OSArrayPtr members;
+	OSPtr<OSArray> members;
 
 protected:
 	struct ExpansionData { };
@@ -140,7 +140,7 @@ public:
  * (<i>unlike</i> @link //apple_ref/doc/uid/20001503 CFMutableSet@/link,
  * for which the initial capacity is a hard limit).
  */
-	static OSSetPtr withCapacity(unsigned int capacity);
+	static OSPtr<OSSet> withCapacity(unsigned int capacity);
 
 
 /*!
@@ -174,7 +174,7 @@ public:
  * The objects in <code>objects</code> are retained for storage in the new set,
  * not copied.
  */
-	static OSSetPtr withObjects(
+	static OSPtr<OSSet> withObjects(
 		const OSObject * objects[],
 		unsigned int     count,
 		unsigned int     capacity = 0);
@@ -212,7 +212,7 @@ public:
  * The objects in <code>array</code> are retained for storage in the new set,
  * not copied.
  */
-	static OSSetPtr withArray(
+	static OSPtr<OSSet> withArray(
 		const OSArray * array,
 		unsigned int    capacity = 0);
 
@@ -248,7 +248,7 @@ public:
  * The objects in <code>set</code> are retained for storage in the new set,
  * not copied.
  */
-	static OSSetPtr withSet(const OSSet * set,
+	static OSPtr<OSSet> withSet(const OSSet * set,
 	    unsigned int capacity = 0);
 
 
@@ -543,6 +543,8 @@ public:
  */
 	virtual bool setObject(const OSMetaClassBase * anObject);
 
+	bool setObject(OSSharedPtr<const OSMetaClassBase> const& anObject);
+
 
 /*!
  * @function merge
@@ -613,6 +615,8 @@ public:
  * The object removed from the set is released.
  */
 	virtual void removeObject(const OSMetaClassBase * anObject);
+
+	void removeObject(OSSharedPtr<const OSMetaClassBase> const& anObject);
 
 
 /*!
@@ -779,7 +783,7 @@ public:
  * Objects that are not derived from OSCollection are retained
  * rather than copied.
  */
-	OSCollectionPtr copyCollection(OSDictionary *cycleDict = NULL) APPLE_KEXT_OVERRIDE;
+	OSPtr<OSCollection>  copyCollection(OSDictionary *cycleDict = NULL) APPLE_KEXT_OVERRIDE;
 
 	OSMetaClassDeclareReservedUnused(OSSet, 0);
 	OSMetaClassDeclareReservedUnused(OSSet, 1);

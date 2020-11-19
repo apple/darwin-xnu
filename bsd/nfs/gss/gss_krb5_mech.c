@@ -93,13 +93,13 @@ static int krb5_n_fold(const void *instr, size_t len, void *foldstr, size_t size
 size_t gss_mbuf_len(mbuf_t, size_t);
 errno_t gss_prepend_mbuf(mbuf_t *, uint8_t *, size_t);
 errno_t gss_append_mbuf(mbuf_t, uint8_t *, size_t);
-errno_t gss_strip_mbuf(mbuf_t, ssize_t);
-int mbuf_walk(mbuf_t, size_t, size_t, size_t, int (*)(void *, uint8_t *, uint32_t), void *);
+errno_t gss_strip_mbuf(mbuf_t, int);
+int mbuf_walk(mbuf_t, size_t, size_t, size_t, int (*)(void *, uint8_t *, size_t), void *);
 
 void do_crypt_init(crypt_walker_ctx_t, int, crypto_ctx_t, cccbc_ctx *);
-int do_crypt(void *, uint8_t *, uint32_t);
+int do_crypt(void *, uint8_t *, size_t);
 void do_hmac_init(hmac_walker_ctx_t, crypto_ctx_t, void *);
-int do_hmac(void *, uint8_t *, uint32_t);
+int do_hmac(void *, uint8_t *, size_t);
 
 void krb5_make_usage(uint32_t, uint8_t, uint8_t[KRB5_USAGE_LEN]);
 void krb5_key_derivation(crypto_ctx_t, const void *, size_t, void **, size_t);
@@ -107,9 +107,9 @@ void cc_key_schedule_create(crypto_ctx_t);
 void gss_crypto_ctx_free(crypto_ctx_t);
 int gss_crypto_ctx_init(struct crypto_ctx *, lucid_context_t);
 
-errno_t krb5_crypt_mbuf(crypto_ctx_t, mbuf_t *, uint32_t, int, cccbc_ctx *);
+errno_t krb5_crypt_mbuf(crypto_ctx_t, mbuf_t *, size_t, int, cccbc_ctx *);
 int krb5_mic(crypto_ctx_t, gss_buffer_t, gss_buffer_t, gss_buffer_t, uint8_t *, int *, int, int);
-int krb5_mic_mbuf(crypto_ctx_t, gss_buffer_t, mbuf_t, uint32_t, uint32_t, gss_buffer_t, uint8_t *, int *, int, int);
+int krb5_mic_mbuf(crypto_ctx_t, gss_buffer_t, mbuf_t, size_t, size_t, gss_buffer_t, uint8_t *, int *, int, int);
 
 uint32_t gss_krb5_cfx_get_mic(uint32_t *, gss_ctx_id_t, gss_qop_t, gss_buffer_t, gss_buffer_t);
 uint32_t gss_krb5_cfx_verify_mic(uint32_t *, gss_ctx_id_t, gss_buffer_t, gss_buffer_t, gss_qop_t *);
@@ -405,7 +405,7 @@ gss_append_mbuf(mbuf_t chain, uint8_t *bytes, size_t size)
 }
 
 errno_t
-gss_strip_mbuf(mbuf_t chain, ssize_t size)
+gss_strip_mbuf(mbuf_t chain, int size)
 {
 	if (chain == NULL) {
 		return EINVAL;
@@ -428,7 +428,7 @@ gss_strip_mbuf(mbuf_t chain, ssize_t size)
  * padding should be done before calling this routine.
  */
 int
-mbuf_walk(mbuf_t mbp, size_t offset, size_t len, size_t blocksize, int (*crypto_fn)(void *, uint8_t *data, uint32_t length), void *ctx)
+mbuf_walk(mbuf_t mbp, size_t offset, size_t len, size_t blocksize, int (*crypto_fn)(void *, uint8_t *data, size_t length), void *ctx)
 {
 	mbuf_t mb;
 	size_t mlen, residue;
@@ -525,18 +525,19 @@ mbuf_walk(mbuf_t mbp, size_t offset, size_t len, size_t blocksize, int (*crypto_
 void
 do_crypt_init(crypt_walker_ctx_t wctx, int encrypt, crypto_ctx_t cctx, cccbc_ctx *ks)
 {
+	memset(wctx, 0, sizeof(*wctx));
+	wctx->length = 0;
 	wctx->ccmode = encrypt ? cctx->enc_mode : cctx->dec_mode;
-
 	wctx->crypt_ctx = ks;
 	MALLOC(wctx->iv, cccbc_iv *, wctx->ccmode->block_size, M_TEMP, M_WAITOK | M_ZERO);
 	cccbc_set_iv(wctx->ccmode, wctx->iv, NULL);
 }
 
 int
-do_crypt(void *walker, uint8_t *data, uint32_t len)
+do_crypt(void *walker, uint8_t *data, size_t len)
 {
 	struct crypt_walker_ctx *wctx = (crypt_walker_ctx_t)walker;
-	uint32_t nblocks;
+	size_t nblocks;
 
 	nblocks = len / wctx->ccmode->block_size;
 	assert(len % wctx->ccmode->block_size == 0);
@@ -557,7 +558,7 @@ do_hmac_init(hmac_walker_ctx_t wctx, crypto_ctx_t cctx, void *key)
 }
 
 int
-do_hmac(void *walker, uint8_t *data, uint32_t len)
+do_hmac(void *walker, uint8_t *data, size_t len)
 {
 	hmac_walker_ctx_t wctx = (hmac_walker_ctx_t)walker;
 
@@ -614,7 +615,7 @@ krb5_mic(crypto_ctx_t ctx, gss_buffer_t header, gss_buffer_t bp, gss_buffer_t tr
 
 int
 krb5_mic_mbuf(crypto_ctx_t ctx, gss_buffer_t header,
-    mbuf_t mbp, uint32_t offset, uint32_t len, gss_buffer_t trailer, uint8_t *mic, int *verify, int ikey, int reverse)
+    mbuf_t mbp, size_t offset, size_t len, gss_buffer_t trailer, uint8_t *mic, int *verify, int ikey, int reverse)
 {
 	struct hmac_walker_ctx wctx;
 	uint8_t digest[ctx->di->output_size];
@@ -668,13 +669,13 @@ krb5_mic_mbuf(crypto_ctx_t ctx, gss_buffer_t header,
 
 errno_t
 /* __attribute__((optnone)) */
-krb5_crypt_mbuf(crypto_ctx_t ctx, mbuf_t *mbp, uint32_t len, int encrypt, cccbc_ctx *ks)
+krb5_crypt_mbuf(crypto_ctx_t ctx, mbuf_t *mbp, size_t len, int encrypt, cccbc_ctx *ks)
 {
 	struct crypt_walker_ctx wctx;
 	const struct ccmode_cbc *ccmode = encrypt ? ctx->enc_mode : ctx->dec_mode;
 	size_t plen = len;
 	size_t cts_len = 0;
-	mbuf_t mb, lmb;
+	mbuf_t mb, lmb = NULL;
 	int error;
 
 	if (!(ctx->flags & CRYPTO_KS_ALLOCED)) {
@@ -700,7 +701,7 @@ krb5_crypt_mbuf(crypto_ctx_t ctx, mbuf_t *mbp, uint32_t len, int encrypt, cccbc_
 			plen = ccmode->block_size;
 		} else {
 			/* determine where the last two blocks are */
-			uint32_t r = len % ccmode->block_size;
+			size_t r = len % ccmode->block_size;
 
 			cts_len  = r ? r + ccmode->block_size : 2 * ccmode->block_size;
 			plen = len - cts_len;
@@ -796,7 +797,7 @@ rr13(unsigned char *buf, size_t len)
 				s2 = 8 - s1;
 			}
 			b2 = (b1 + 1) % bytes;
-			buf[i] = (tmp[b1] << s1) | (tmp[b2] >> s2);
+			buf[i] = 0xff & ((tmp[b1] << s1) | (tmp[b2] >> s2));
 		}
 	}
 	return 0;
@@ -829,7 +830,7 @@ krb5_n_fold(const void *instr, size_t len, void *foldstr, size_t size)
 	/* if len < size we need at most N * len bytes, ie < 2 * size;
 	 *  if len > size we need at most 2 * len */
 	int ret = 0;
-	size_t maxlen = 2 * max(size, len);
+	size_t maxlen = 2 * lmax(size, len);
 	size_t l = 0;
 	unsigned char tmp[maxlen];
 	unsigned char buf[len];
@@ -949,6 +950,7 @@ cc_key_schedule_create(crypto_ctx_t ctx)
 			cccbc_init(ctx->dec_mode, ctx->ks.dec, ctx->keylen, ctx->key);
 		}
 	}
+		OS_FALLTHROUGH;
 	case 1: {
 		if (ctx->ks.enc == NULL) {
 			krb5_make_usage(lctx->initiate ?
@@ -1355,7 +1357,8 @@ krb5_cfx_crypt_mbuf(crypto_ctx_t ctx, mbuf_t *mbp, size_t *len, int encrypt, int
 	errno_t error;
 
 	if (encrypt) {
-		read_random(confounder, ccmode->block_size);
+		assert(ccmode->block_size <= UINT_MAX);
+		read_random(confounder, (u_int)ccmode->block_size);
 		error = gss_prepend_mbuf(mbp, confounder, ccmode->block_size);
 		if (error) {
 			return error;
@@ -1436,7 +1439,8 @@ krb5_cfx_crypt_mbuf(crypto_ctx_t ctx, mbuf_t *mbp, size_t *len, int encrypt, int
 			return EBADRPC;
 		}
 		/* strip off the confounder */
-		error = gss_strip_mbuf(*mbp, ccmode->block_size);
+		assert(ccmode->block_size <= INT_MAX);
+		error = gss_strip_mbuf(*mbp, (int)ccmode->block_size);
 		if (error) {
 			return error;
 		}
@@ -1480,12 +1484,13 @@ gss_krb5_cfx_wrap_mbuf(uint32_t *minor,         /* minor_status */
 	lctx->send_seq++;
 	if (conf_flag) {
 		uint8_t pad[cctx->mpad];
-		uint16_t plen = 0;
+		size_t plen = 0;
 
 		token.Flags |= CFXSealed;
 		memset(pad, 0, cctx->mpad);
 		if (cctx->mpad > 1) {
-			plen = htons(cctx->mpad - ((len + sizeof(gss_cfx_wrap_token_desc)) % cctx->mpad));
+			size_t val = cctx->mpad - ((len + sizeof(gss_cfx_wrap_token_desc)) % cctx->mpad);
+			plen = sizeof(val) > sizeof(uint32_t) ? htonll(val) : htonl(val);
 			token.EC[0] = ((plen >> 8) & 0xff);
 			token.EC[1] = (plen & 0xff);
 		}
@@ -1514,7 +1519,7 @@ gss_krb5_cfx_wrap_mbuf(uint32_t *minor,         /* minor_status */
 		if (error == 0) {
 			error = gss_append_mbuf(*mbp, digest, cctx->digest_size);
 			if (error == 0) {
-				uint16_t plen = htons(cctx->digest_size);
+				uint32_t plen = htonl(cctx->digest_size);
 				memcpy(token.EC, &plen, 2);
 				error = gss_prepend_mbuf(mbp, (uint8_t *)&token, sizeof(gss_cfx_wrap_token_desc));
 			}
@@ -1552,7 +1557,7 @@ gss_krb5_cfx_unwrap_mbuf(uint32_t * minor,      /* minor_status */
 	lucid_context_t lctx = &ctx->gss_lucid_ctx;
 	crypto_ctx_t cctx = &ctx->gss_cryptor;
 	int error, conf;
-	uint16_t ec = 0, rrc = 0;
+	uint32_t ec = 0, rrc = 0;
 	uint64_t seq;
 	int reverse = (*qop == GSS_C_QOP_REVERSE);
 	int initiate = lctx->initiate ? (reverse ? 0 : 1) : (reverse ? 1 : 0);
@@ -1748,7 +1753,7 @@ gss_krb5_der_length_get(uint8_t **pp)
  * Determine size of ASN.1 DER length
  */
 static int
-gss_krb5_der_length_size(int len)
+gss_krb5_der_length_size(size_t len)
 {
 	return
 	        len < (1 <<  7) ? 1 :
@@ -1761,7 +1766,7 @@ gss_krb5_der_length_size(int len)
  * Encode an ASN.1 DER length field
  */
 static void
-gss_krb5_der_length_put(uint8_t **pp, int len)
+gss_krb5_der_length_put(uint8_t **pp, size_t len)
 {
 	int sz = gss_krb5_der_length_size(len);
 	uint8_t *p = *pp;
@@ -2084,7 +2089,8 @@ gss_krb5_3des_wrap_mbuf(uint32_t *minor,
 	header.value = &tokbody;
 
 	/* Prepend confounder */
-	read_random(confounder, ccmode->block_size);
+	assert(ccmode->block_size <= UINT_MAX);
+	read_random(confounder, (u_int)ccmode->block_size);
 	*minor = gss_prepend_mbuf(mbp, confounder, ccmode->block_size);
 	if (*minor) {
 		return GSS_S_FAILURE;
@@ -2133,7 +2139,7 @@ gss_krb5_3des_unwrap_mbuf(uint32_t *minor,
 {
 	crypto_ctx_t cctx = &ctx->gss_cryptor;
 	const struct ccmode_cbc *ccmode = cctx->dec_mode;
-	size_t length = 0, offset;
+	size_t length = 0, offset = 0;
 	gss_buffer_desc hash;
 	uint8_t hashval[cctx->digest_size];
 	gss_buffer_desc itoken;
@@ -2222,7 +2228,8 @@ gss_krb5_3des_unwrap_mbuf(uint32_t *minor,
 
 	/* Strip the confounder and trailing pad bytes */
 	gss_strip_mbuf(smb, -padlen);
-	gss_strip_mbuf(smb, ccmode->block_size);
+	assert(ccmode->block_size <= INT_MAX);
+	gss_strip_mbuf(smb, (int)ccmode->block_size);
 
 	if (*mbp != smb) {
 		mbuf_freem(*mbp);
@@ -2461,7 +2468,7 @@ gss_krb5_wrap_mbuf(uint32_t *minor,     /* minor_status */
     size_t len,                         /* length */
     int *conf_state /* conf state */)
 {
-	uint32_t major, minor_stat = 0;
+	uint32_t major = GSS_S_FAILURE, minor_stat = 0;
 	mbuf_t smb, tmb;
 	int conf_val = 0;
 
@@ -2516,7 +2523,7 @@ gss_krb5_unwrap_mbuf(uint32_t * minor,          /* minor_status */
     int *conf_flag,                             /* conf_state */
     gss_qop_t *qop /* qop state */)
 {
-	uint32_t major, minor_stat = 0;
+	uint32_t major = GSS_S_FAILURE, minor_stat = 0;
 	gss_qop_t qop_val = GSS_C_QOP_DEFAULT;
 	int conf_val = 0;
 	mbuf_t smb, tmb;
@@ -2567,7 +2574,7 @@ gss_krb5_unwrap_mbuf(uint32_t * minor,          /* minor_status */
 #include <nfs/xdr_subs.h>
 
 static int
-xdr_lucid_context(void *data, size_t length, lucid_context_t lctx)
+xdr_lucid_context(void *data, uint32_t length, lucid_context_t lctx)
 {
 	struct xdrbuf xb;
 	int error = 0;

@@ -43,11 +43,11 @@
  * There are arrays of these maintained at the activation, task, and host.
  */
 struct exception_action {
-	struct ipc_port         *port;          /* exception port */
+	struct ipc_port         * XNU_PTRAUTH_SIGNED_PTR("exception_action.port") port; /* exception port */
 	thread_state_flavor_t   flavor;         /* state flavor to send */
 	exception_behavior_t    behavior;       /* exception type to raise */
 	boolean_t               privileged;     /* survives ipc_task_reset */
-	struct label            *label;         /* MAC label associated with action */
+	struct label            * XNU_PTRAUTH_SIGNED_PTR("exception_action.label") label; /* MAC label associated with action */
 };
 
 /* Initialize global state needed for exceptions. */

@@ -18,7 +18,8 @@ newthread(void *arg)
 
 #define TEST_TIMEOUT (15 * NSEC_PER_SEC)
 
-T_DECL(thread_group_set, "Checks that new threads get a THREAD_GROUP_SET tracepoint with a non-zero tid") {
+T_DECL(thread_group_set, "Checks that new threads get a THREAD_GROUP_SET tracepoint with a non-zero tid",
+    T_META_ASROOT(true)) {
 	pthread_t thread;
 	__block int seen_new_thread = 0, __block seen_thread_group_set = 0;
 

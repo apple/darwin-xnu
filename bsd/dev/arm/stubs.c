@@ -45,7 +45,7 @@ copyoutstr(const void *from, user_addr_t to, size_t maxlen, size_t * lencopied)
 		error = ENAMETOOLONG;
 	}
 
-	len = min(maxlen, slen);
+	len = MIN(maxlen, slen);
 	if (copyout(from, to, len)) {
 		error = EFAULT;
 	}

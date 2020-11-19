@@ -1193,6 +1193,23 @@ struct vnodeop_desc vnop_bwrite_desc = {
 	NULL
 };
 
+int vnop_verify_vp_offsets[] = {
+	VOPARG_OFFSETOF(struct vnop_verify_args, a_vp),
+	VDESC_NO_OFFSET
+};
+struct vnodeop_desc vnop_verify_desc = {
+	.vdesc_offset = 0,
+	.vdesc_name = "vnop_verify",
+	.vdesc_flags = 0,
+	.vdesc_vp_offsets = vnop_verify_vp_offsets,
+	.vdesc_vpp_offset = VDESC_NO_OFFSET,
+	.vdesc_cred_offset = VDESC_NO_OFFSET,
+	.vdesc_proc_offset = VDESC_NO_OFFSET,
+	.vdesc_componentname_offset = VDESC_NO_OFFSET,
+	.vdesc_context_offset = VOPARG_OFFSETOF(struct vnop_verify_args, a_context),
+	.vdesc_transports = NULL
+};
+
 /* End of special cases. */
 
 struct vnodeop_desc *vfs_op_descs[] = {
@@ -1268,5 +1285,6 @@ struct vnodeop_desc *vfs_op_descs[] = {
 	&vnop_getnamedstream_desc,
 	&vnop_makenamedstream_desc,
 	&vnop_removenamedstream_desc,
+	&vnop_verify_desc,
 	NULL
 };

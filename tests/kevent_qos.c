@@ -403,7 +403,7 @@ populate_kevent(struct kevent_qos_s *kev, unsigned long long port)
 	kev->filter = EVFILT_MACHPORT;
 	kev->flags = EV_ADD | EV_ENABLE | EV_UDATA_SPECIFIC | EV_DISPATCH | EV_VANISHED;
 	kev->fflags = (MACH_RCV_MSG | MACH_RCV_VOUCHER | MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY |
-	    MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_CTX) |
+	    MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AV) |
 	    MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0));
 	kev->data = 1;
 }
@@ -1652,7 +1652,7 @@ expect_kevent_id_recv(mach_port_t port, qos_class_t qos[], const char *qos_name[
 					     .filter = EVFILT_MACHPORT,
 					     .flags = EV_ADD | EV_UDATA_SPECIFIC | EV_DISPATCH | EV_VANISHED,
 					     .fflags = (MACH_RCV_MSG | MACH_RCV_VOUCHER | MACH_RCV_LARGE | MACH_RCV_LARGE_IDENTITY |
-	    MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_CTX) |
+	    MACH_RCV_TRAILER_ELEMENTS(MACH_RCV_TRAILER_AV) |
 	    MACH_RCV_TRAILER_TYPE(MACH_MSG_TRAILER_FORMAT_0)),
 					     .data = 1,
 					     .qos = (int32_t)_pthread_qos_class_encode(qos[ENV_QOS_QUEUE_OVERRIDE], 0, 0)

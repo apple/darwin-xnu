@@ -4,11 +4,14 @@
 #include <darwintest.h>
 #include <dispatch/dispatch.h>
 #include <ktrace/ktrace.h>
+#include <kperf/kperf.h>
 #include <kern/debug.h>
 #include <notify.h>
 #include <sys/kdebug.h>
 #include <sys/sysctl.h>
 #include <TargetConditionals.h>
+
+#include "ktrace_helpers.h"
 
 enum telemetry_pmi {
 	TELEMETRY_PMI_NONE,
@@ -132,6 +135,7 @@ thread_spin(__unused void *arg)
 T_DECL(microstackshot_pmi, "attempt to configure microstackshots on PMI")
 {
 	skip_if_pmi_unsupported();
+	start_controlling_ktrace();
 
 	T_SETUPBEGIN;
 	ktrace_session_t s = ktrace_session_create();

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -58,9 +58,8 @@
 
 /*** FLIPC Internal Implementation (private to flipc.c) ***/
 
-
-zone_t flipc_port_zone;
-
+ZONE_DECLARE(flipc_port_zone, "flipc ports",
+    sizeof(struct flipc_port), ZC_NOENCRYPT);
 
 /*  Get the mnl_name associated with local ipc_port <lport>.
  *  Returns MNL_NAME_NULL if <lport> is invalid or not a flipc port.
@@ -351,27 +350,6 @@ flipc_cmd_ack(flipc_ack_msg_t   fmsg,
 
 
 /*** FLIPC Node Managment Functions (called by mach node layer) ***/
-
-
-/*  The mach node layer calls flipc_init() once before it calls any other
- *  flipc entry points.  Returns KERN_SUCCESS on success; otherwise flipc
- *  is not initialized and cannot be used.
- */
-kern_return_t
-flipc_init(void)
-{
-	/* Create zone for flipc ports.
-	 * TODO: Pick a better max value than ipc_port_max>>4
-	 */
-	flipc_port_zone = zinit(sizeof(struct flipc_port),
-	    (ipc_port_max >> 4) * sizeof(struct flipc_port),
-	    sizeof(struct flipc_port),
-	    "flipc ports");
-
-	zone_change(flipc_port_zone, Z_CALLERACCT, FALSE);
-	zone_change(flipc_port_zone, Z_NOENCRYPT, TRUE);
-	return KERN_SUCCESS;
-}
 
 
 /*  flipc_node_prepare() is called by mach node layer when a remote node is

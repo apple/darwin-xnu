@@ -36,10 +36,8 @@
 #include <arm/machine_routines.h>
 #include <kern/remote_time.h>
 
-lck_spin_t *bt_spin_lock = NULL;
 _Atomic uint32_t bt_init_flag = 0;
 
-extern lck_spin_t *ts_conversion_lock;
 extern void mach_bridge_add_timestamp(uint64_t remote_timestamp, uint64_t local_timestamp);
 extern void bt_calibration_thread_start(void);
 extern void bt_params_add(struct bt_params *params);
@@ -52,13 +50,6 @@ mach_bridge_init_timestamp(void)
 	if (os_atomic_load(&bt_init_flag, relaxed)) {
 		return;
 	}
-
-	/* Initialize the locks */
-	static lck_grp_t *bt_lck_grp = NULL;
-
-	bt_lck_grp = lck_grp_alloc_init("bridgetimestamp", LCK_GRP_ATTR_NULL);
-	bt_spin_lock = lck_spin_alloc_init(bt_lck_grp, NULL);
-	ts_conversion_lock = lck_spin_alloc_init(bt_lck_grp, NULL);
 
 	os_atomic_store(&bt_init_flag, 1, release);
 
@@ -82,9 +73,9 @@ mach_bridge_recv_timestamps(uint64_t remoteTimestamp, uint64_t localTimestamp)
 
 	KDBG(MACHDBG_CODE(DBG_MACH_CLOCK, MACH_BRIDGE_RCV_TS), localTimestamp, remoteTimestamp);
 
-	lck_spin_lock(bt_spin_lock);
+	lck_spin_lock(&bt_spin_lock);
 	mach_bridge_add_timestamp(remoteTimestamp, localTimestamp);
-	lck_spin_unlock(bt_spin_lock);
+	lck_spin_unlock(&bt_spin_lock);
 
 	return;
 }
@@ -106,9 +97,9 @@ mach_bridge_set_params(uint64_t local_timestamp, uint64_t remote_timestamp, doub
 	params.base_local_ts = local_timestamp;
 	params.base_remote_ts = remote_timestamp;
 	params.rate = rate;
-	lck_spin_lock(ts_conversion_lock);
+	lck_spin_lock(&bt_ts_conversion_lock);
 	bt_params_add(&params);
-	lck_spin_unlock(ts_conversion_lock);
+	lck_spin_unlock(&bt_ts_conversion_lock);
 	KDBG(MACHDBG_CODE(DBG_MACH_CLOCK, MACH_BRIDGE_TS_PARAMS), params.base_local_ts,
 	    params.base_remote_ts, *(uint64_t *)((void *)&params.rate));
 }

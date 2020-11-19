@@ -60,7 +60,9 @@
 #define FSOPT_NOFIRMLINKPATH     0x00000080
 #endif /* FSOPT_NOFIRMLINKPATH */
 #define FSOPT_FOLLOW_FIRMLINK    0x00000100
+#endif /* PRIVATE */
 #define FSOPT_RETURN_REALDEV     0x00000200
+#ifdef PRIVATE
 #ifndef FSOPT_ISREALFSID  /*a copy is in fsgetpath.h */
 #define FSOPT_ISREALFSID         FSOPT_RETURN_REALDEV
 #endif
@@ -253,6 +255,10 @@ typedef struct vol_capabilities_attr {
  * that implies multiple volumes must be mounted in order to boot and root the
  * operating system. Typically, this means a read-only system volume and a
  * writable data volume.
+ *
+ * VOL_CAP_FMT_SEALED: When set, this volume is cryptographically sealed.
+ * Any modifications to volume data or metadata will be detected and may
+ * render the volume unusable.
  */
 #define VOL_CAP_FMT_PERSISTENTOBJECTIDS         0x00000001
 #define VOL_CAP_FMT_SYMBOLICLINKS               0x00000002
@@ -279,6 +285,7 @@ typedef struct vol_capabilities_attr {
 #define VOL_CAP_FMT_NO_PERMISSIONS              0x00400000
 #define VOL_CAP_FMT_SHARED_SPACE                0x00800000
 #define VOL_CAP_FMT_VOL_GROUPS                  0x01000000
+#define VOL_CAP_FMT_SEALED                      0x02000000
 
 /*
  * VOL_CAP_INT_SEARCHFS: When set, the volume implements the
@@ -533,8 +540,9 @@ typedef struct vol_attributes_attr {
 #define ATTR_CMNEXT_REALFSID    0x00000080
 #define ATTR_CMNEXT_CLONEID     0x00000100
 #define ATTR_CMNEXT_EXT_FLAGS   0x00000200
+#define ATTR_CMNEXT_RECURSIVE_GENCOUNT 0x00000400
 
-#define ATTR_CMNEXT_VALIDMASK   0x000003fc
+#define ATTR_CMNEXT_VALIDMASK   0x000007fc
 #define ATTR_CMNEXT_SETMASK             0x00000000
 
 /* Deprecated fork attributes */

@@ -53,7 +53,7 @@
 #ifdef  __arm__
 #define PAGE_SHIFT_CONST        12
 #elif defined(__arm64__)
-extern unsigned         PAGE_SHIFT_CONST;
+extern int PAGE_SHIFT_CONST;
 #else
 #error Unsupported arch
 #endif
@@ -99,14 +99,15 @@ extern unsigned         PAGE_SHIFT_CONST;
 #define PAGE_MIN_SIZE           (1 << PAGE_MIN_SHIFT)
 #define PAGE_MIN_MASK           (PAGE_MIN_SIZE-1)
 
+#define VM_MAX_PAGE_ADDRESS     MACH_VM_MAX_ADDRESS
+
 #ifndef __ASSEMBLER__
 
 #ifdef  MACH_KERNEL_PRIVATE
 
 #define VM32_SUPPORT            1
 #define VM32_MIN_ADDRESS        ((vm32_offset_t) 0)
-#define VM32_MAX_ADDRESS        ((vm32_offset_t) (VM_MAX_PAGE_ADDRESS & 0xFFFFFFFF))
-#define VM_MAX_PAGE_ADDRESS     VM_MAX_ADDRESS  /* ARM64_TODO: ?? */
+#define VM32_MAX_ADDRESS        ((vm32_offset_t) (VM_MAX_ADDRESS & 0xFFFFFFFF))
 
 /*
  * kalloc() parameters:
@@ -136,6 +137,18 @@ extern unsigned         PAGE_SHIFT_CONST;
 #error Unsupported arch
 #endif
 
+#if defined (__arm__)
+/* existing zone map size limit moved from osfmk/vm/vm_init.c */
+#define ZONE_MAP_MAX (1024 * 1024 * 1536) /* 1.5GB for 32bit systems */
+#elif defined(__arm64__)
+/*
+ * Limits the physical pages in the zone map
+ */
+#define ZONE_MAP_MAX (31ULL << 30) /* 31GB for 64bit systems */
+#else
+#error Unsupported arch
+#endif
+
 #endif
 
 #if defined (__arm__)
@@ -154,12 +167,17 @@ extern unsigned         PAGE_SHIFT_CONST;
 
 /* system-wide values */
 #define MACH_VM_MIN_ADDRESS_RAW 0x0ULL
+#if defined(PLATFORM_MacOSX) || defined(PLATFORM_DriverKit)
+#define MACH_VM_MAX_ADDRESS_RAW 0x00007FFFFE000000ULL
+#else
 #define MACH_VM_MAX_ADDRESS_RAW 0x0000000FC0000000ULL
+#endif
+
 #define MACH_VM_MIN_ADDRESS     ((mach_vm_offset_t) MACH_VM_MIN_ADDRESS_RAW)
 #define MACH_VM_MAX_ADDRESS     ((mach_vm_offset_t) MACH_VM_MAX_ADDRESS_RAW)
 
 
-#else
+#else /* defined(__arm64__) */
 #error architecture not supported
 #endif
 
@@ -169,7 +187,7 @@ extern unsigned         PAGE_SHIFT_CONST;
 #ifdef  KERNEL
 
 #if defined (__arm__)
-#define VM_KERNEL_POINTER_SIGNIFICANT_BITS  32
+#define VM_KERNEL_POINTER_SIGNIFICANT_BITS  31
 #define VM_MIN_KERNEL_ADDRESS   ((vm_address_t) 0x80000000)
 #define VM_MAX_KERNEL_ADDRESS   ((vm_address_t) 0xFFFEFFFF)
 #define VM_HIGH_KERNEL_WINDOW   ((vm_address_t) 0xFFFE0000)
@@ -178,15 +196,61 @@ extern unsigned         PAGE_SHIFT_CONST;
  * The minimum and maximum kernel address; some configurations may
  * constrain the address space further.
  */
+#define TiB(x) ((0ULL + (x)) << 40)
+#define GiB(x) ((0ULL + (x)) << 30)
+
+#if XNU_KERNEL_PRIVATE
+#if defined(ARM_LARGE_MEMORY)
+/*
+ * +-----------------------+--------+--------+------------------------+
+ * | 0xffff_fe90_0000_0000 |-1472GB |  576GB | KASAN_SHADOW_MIN       |
+ * |                       |        |        | VM_MAX_KERNEL_ADDRESS  |
+ * +-----------------------+--------+--------+------------------------+
+ * | 0xffff_fe10_0000_0000 |-1984GB |   64GB | PMAP_HEAP_RANGE_START  |
+ * +-----------------------+--------+--------+------------------------+
+ * | 0xffff_fe00_0700_4000 |        |        | VM_KERNEL_LINK_ADDRESS |
+ * +-----------------------+--------+--------+------------------------+
+ * | 0xffff_fe00_0000_0000 |   -2TB |    0GB | VM_MIN_KERNEL_ADDRESS  |
+ * |                       |        |        | LOW_GLOBALS            |
+ * +-----------------------+--------+--------+------------------------+
+ */
+#define VM_KERNEL_POINTER_SIGNIFICANT_BITS  41
+
+// Kernel VA space starts at -2TB
+#define VM_MIN_KERNEL_ADDRESS   ((vm_address_t) (0ULL - TiB(2)))
+
+// 1.25TB for static_memory_region, 512GB for kernel heap, 256GB for KASAN
+#define VM_MAX_KERNEL_ADDRESS   ((vm_address_t) (VM_MIN_KERNEL_ADDRESS + GiB(64) + GiB(512) - 1))
+#else // ARM_LARGE_MEMORY
+/*
+ * +-----------------------+--------+--------+------------------------+
+ * | 0xffff_fffc_0000_0000 |  -16GB |  112GB | KASAN_SHADOW_MIN       |
+ * |                       |        |        | VM_MAX_KERNEL_ADDRESS  |
+ * +-----------------------+--------+--------+------------------------+
+ * | 0xffff_fff0_0700_4000 |        |        | VM_KERNEL_LINK_ADDRESS |
+ * +-----------------------+--------+--------+------------------------+
+ * | 0xffff_fff0_0000_0000 |  -64GB |   64GB | LOW_GLOBALS            |
+ * |                       |        |        | PMAP_HEAP_RANGE_START  | <= H8
+ * +-----------------------+--------+--------+------------------------+
+ * | 0xffff_ffe0_0000_0000 | -128GB |    0GB | VM_MIN_KERNEL_ADDRESS  |
+ * |                       |        |        | PMAP_HEAP_RANGE_START  | >= H9
+ * +-----------------------+--------+--------+------------------------+
+ */
 #define VM_KERNEL_POINTER_SIGNIFICANT_BITS  37
 #define VM_MIN_KERNEL_ADDRESS   ((vm_address_t) 0xffffffe000000000ULL)
 #define VM_MAX_KERNEL_ADDRESS   ((vm_address_t) 0xfffffffbffffffffULL)
+#endif // ARM_LARGE_MEMORY
+
+#else // !XNU_KERNEL_PRIVATE
+// Inform kexts about largest possible kernel address space
+#define VM_MIN_KERNEL_ADDRESS   ((vm_address_t) (0ULL - TiB(2)))
+#define VM_MAX_KERNEL_ADDRESS   ((vm_address_t) 0xfffffffbffffffffULL)
+#endif // XNU_KERNEL_PRIVATE
 #else
 #error architecture not supported
 #endif
 
-#define VM_MIN_KERNEL_AND_KEXT_ADDRESS  \
-	                        VM_MIN_KERNEL_ADDRESS
+#define VM_MIN_KERNEL_AND_KEXT_ADDRESS  VM_MIN_KERNEL_ADDRESS
 
 #if __has_feature(ptrauth_calls)
 #include <ptrauth.h>
@@ -208,6 +272,15 @@ extern unsigned long            gVirtBase, gPhysBase, gPhysSize;
 #define isphysmem(a)            (((vm_address_t)(a) - gPhysBase) < gPhysSize)
 #define physmap_enclosed(a)     isphysmem(a)
 
+/*
+ * gPhysBase/Size only represent kernel-managed memory. These globals represent
+ * the actual DRAM base address and size as reported by iBoot through the device
+ * tree.
+ */
+#include <stdint.h>
+extern uint64_t                 gDramBase, gDramSize;
+#define is_dram_addr(addr)      (((uint64_t)(addr) - gDramBase) < gDramSize)
+
 #if KASAN
 /* Increase the stack sizes to account for the redzones that get added to every
  * stack object. */
@@ -219,7 +292,15 @@ extern unsigned long            gVirtBase, gPhysBase, gPhysSize;
  */
 # define KERNEL_STACK_SIZE      (2*4*4096)
 #else
-# define KERNEL_STACK_SIZE      (4*4096)
+/*
+ * KERNEL_STACK_MULTIPLIER can be defined externally to get a larger
+ * kernel stack size. For example, adding "-DKERNEL_STACK_MULTIPLIER=2"
+ * helps avoid kernel stack overflows when compiling with "-O0".
+ */
+#ifndef KERNEL_STACK_MULTIPLIER
+#define KERNEL_STACK_MULTIPLIER (1)
+#endif /* KERNEL_STACK_MULTIPLIER */
+# define KERNEL_STACK_SIZE      (4*4096*KERNEL_STACK_MULTIPLIER)
 #endif
 
 #define INTSTACK_SIZE           (4*4096)
@@ -243,7 +324,7 @@ extern unsigned long            gVirtBase, gPhysBase, gPhysSize;
 #if defined (__arm__)
 #define VM_KERNEL_LINK_ADDRESS  ((vm_address_t) 0x80000000)
 #elif defined (__arm64__)
-#define VM_KERNEL_LINK_ADDRESS  ((vm_address_t) 0xFFFFFFF007004000)
+/* VM_KERNEL_LINK_ADDRESS defined in makedefs/MakeInc.def for arm64 platforms */
 #else
 #error architecture not supported
 #endif

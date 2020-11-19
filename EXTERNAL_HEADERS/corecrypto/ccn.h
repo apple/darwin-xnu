@@ -1,11 +1,12 @@
-/*
- *  ccn.h
- *  corecrypto
+/* Copyright (c) (2010,2011,2012,2013,2014,2015,2016,2017,2018,2019,2020) Apple Inc. All rights reserved.
  *
- *  Created on 11/16/2010
- *
- *  Copyright (c) 2010,2011,2012,2013,2014,2015 Apple Inc. All rights reserved.
- *
+ * corecrypto is licensed under Apple Inc.’s Internal Use License Agreement (which
+ * is contained in the License.txt file distributed with corecrypto) and only to 
+ * people who accept that license. IMPORTANT:  Any license rights granted to you by 
+ * Apple Inc. (if any) are limited to internal use within your organization only on 
+ * devices and computers you own or control, for the sole purpose of verifying the 
+ * security characteristics and correct functioning of the Apple Software.  You may 
+ * not, directly or indirectly, redistribute the Apple Software or any portions thereof.
  */
 
 #ifndef _CORECRYPTO_CCN_H_
@@ -66,6 +67,7 @@ typedef uint16_t cc_dunit;         // 16 bit double width unit
 #define CCN_UNIT_MASK  ((cc_unit)~0)
 #define CCN_UNIT_LOWER_HALF_MASK  ((CCN_UNIT_MASK) >> (CCN_UNIT_BITS/2))
 #define CCN_UNIT_UPPER_HALF_MASK  (~CCN_UNIT_LOWER_HALF_MASK)
+#define CCN_UNIT_HALF_BITS (CCN_UNIT_BITS / 2)
 
 typedef struct {
     cc_unit *start;      // First cc_unit of the workspace
@@ -98,11 +100,11 @@ typedef struct {
 #define ccn_sizeof_size(_size_)  ccn_sizeof_n(ccn_nof_size(_size_))
 
 /* Returns the value of bit _k_ of _ccn_, both are only evaluated once.  */
-#define ccn_bit(_ccn_, _k_) ({__typeof__ (_k_) __k = (_k_); \
+#define ccn_bit(_ccn_, _k_) ({size_t __k = (size_t)(_k_); \
     1 & ((_ccn_)[ __k >> CCN_LOG2_BITS_PER_UNIT] >> (__k & (CCN_UNIT_BITS - 1)));})
 
 /* Set the value of bit _k_ of _ccn_ to the value _v_  */
-#define ccn_set_bit(_ccn_, _k_, _v_) ({__typeof__ (_k_) __k = (_k_);        \
+#define ccn_set_bit(_ccn_, _k_, _v_) ({size_t __k = (size_t)(_k_);          \
     if (_v_)                                                                \
         (_ccn_)[ __k >> CCN_LOG2_BITS_PER_UNIT] |= CC_UNIT_C(1) << (__k & (CCN_UNIT_BITS - 1));     \
     else                                                                    \
@@ -252,18 +254,10 @@ typedef struct {
     CCN192_C(c7,c6,c5,c4,c3,c2,c1,c0,b7,b6,b5,b4,b3,b2,b1,b0,a7,a6,a5,a4,a3,a2,a1,a0),\
     CCN64_C(d7,d6,d5,d4,d3,d2,d1,d0)
 
-#define CCN264_C(e0,d7,d6,d5,d4,d3,d2,d1,d0,c7,c6,c5,c4,c3,c2,c1,c0,b7,b6,b5,b4,b3,b2,b1,b0,a7,a6,a5,a4,a3,a2,a1,a0) \
-    CCN256_C(d7,d6,d5,d4,d3,d2,d1,d0,c7,c6,c5,c4,c3,c2,c1,c0,b7,b6,b5,b4,b3,b2,b1,b0,a7,a6,a5,a4,a3,a2,a1,a0),\
-    CCN8_C(e0)
-
 #define CCN384_C(f7,f6,f5,f4,f3,f2,f1,f0,e7,e6,e5,e4,e3,e2,e1,e0,d7,d6,d5,d4,d3,d2,d1,d0,c7,c6,c5,c4,c3,c2,c1,c0,b7,b6,b5,b4,b3,b2,b1,b0,a7,a6,a5,a4,a3,a2,a1,a0) \
     CCN256_C(d7,d6,d5,d4,d3,d2,d1,d0,c7,c6,c5,c4,c3,c2,c1,c0,b7,b6,b5,b4,b3,b2,b1,b0,a7,a6,a5,a4,a3,a2,a1,a0),\
     CCN64_C(e7,e6,e5,e4,e3,e2,e1,e0),\
     CCN64_C(f7,f6,f5,f4,f3,f2,f1,f0)
-
-#define CCN392_C(g0,f7,f6,f5,f4,f3,f2,f1,f0,e7,e6,e5,e4,e3,e2,e1,e0,d7,d6,d5,d4,d3,d2,d1,d0,c7,c6,c5,c4,c3,c2,c1,c0,b7,b6,b5,b4,b3,b2,b1,b0,a7,a6,a5,a4,a3,a2,a1,a0) \
-    CCN384_C(f7,f6,f5,f4,f3,f2,f1,f0,e7,e6,e5,e4,e3,e2,e1,e0,d7,d6,d5,d4,d3,d2,d1,d0,c7,c6,c5,c4,c3,c2,c1,c0,b7,b6,b5,b4,b3,b2,b1,b0,a7,a6,a5,a4,a3,a2,a1,a0),\
-    CCN8_C(g0)
 
 #define CCN528_C(i1,i0,h7,h6,h5,h4,h3,h2,h1,h0,g7,g6,g5,g4,g3,g2,g1,g0,f7,f6,f5,f4,f3,f2,f1,f0,e7,e6,e5,e4,e3,e2,e1,e0,d7,d6,d5,d4,d3,d2,d1,d0,c7,c6,c5,c4,c3,c2,c1,c0,b7,b6,b5,b4,b3,b2,b1,b0,a7,a6,a5,a4,a3,a2,a1,a0) \
     CCN256_C(d7,d6,d5,d4,d3,d2,d1,d0,c7,c6,c5,c4,c3,c2,c1,c0,b7,b6,b5,b4,b3,b2,b1,b0,a7,a6,a5,a4,a3,a2,a1,a0),\
@@ -314,18 +308,21 @@ size_t ccn_bitlen(cc_size n, const cc_unit *s);
 CC_PURE CC_NONNULL((2, 3))
 int ccn_cmp(cc_size n, const cc_unit *s, const cc_unit *t) __asm__("_ccn_cmp");
 
-/* s < t -> return - 1 | s == t -> return 0 | s > t -> return 1
- { N bit, M bit -> int } N = ns * sizeof(cc_unit) * 8  M = nt * sizeof(cc_unit) * 8 */
-CC_INLINE CC_NONNULL((2, 4))
-int ccn_cmpn(cc_size ns, const cc_unit *s,
-             cc_size nt, const cc_unit *t) {
-    if (ns > nt) {
-        return 1;
-    } else if (ns < nt) {
-        return -1;
-    }
-    return ccn_cmp(ns, s, t);
-}
+/*! @function ccn_cmpn
+ @abstract Compares the values of two big ints of different lengths.
+
+ @discussion The execution time does not depend on the values of either s or t.
+             The function does not hide ns, nt, or whether ns > nt.
+
+ @param ns  Length of s
+ @param s   First integer
+ @param nt  Length of t
+ @param t   Second integer
+
+ @return 1 if s > t, -1 if s < t, 0 otherwise.
+ */
+CC_NONNULL_ALL
+int ccn_cmpn(cc_size ns, const cc_unit *s, cc_size nt, const cc_unit *t);
 
 /* s - t -> r return 1 iff t > s
  { N bit, N bit -> N bit } N = n * sizeof(cc_unit) * 8 */
@@ -389,16 +386,16 @@ cc_unit ccn_addmul1(cc_size n, cc_unit *r, const cc_unit *s, const cc_unit v);
 /*!
  @function   ccn_read_uint
  @abstract   Copy big endian integer and represent it in cc_units
-
+ 
  @param n           Input allocated size of the cc_unit output array r
  @param r           Ouput cc_unit array for unsigned integer
  @param data_nbytes Input byte size of data
  @param data        Input unsigned integer represented in big endian
-
+ 
  @result r is initialized with the big unsigned number
-
+ 
  @return 0 if no error, !=0 if the big number cannot be represented in the allocated cc_unit array.
-
+ 
  @discussion The execution pattern of this function depends on both n and data_nbytes but not on data values except the handling
  of the error case.
  */
@@ -414,12 +411,12 @@ int ccn_read_uint(cc_size n, cc_unit *r, size_t data_nbytes, const uint8_t *data
 /*!
  @function   ccn_write_uint_size
  @abstract   Compute the minimum size required to store an big integer
-
+ 
  @param n           Input size of the cc_unit array representing the input
  @param s           Input cc_unit array
-
+ 
  @result Return value is the exact byte size of the big integer
-
+ 
  @discussion
  The execution flow is independent on the value of the big integer.
  However, the use of the returned value may leak the position of the most significant byte
@@ -429,7 +426,7 @@ CC_PURE CC_NONNULL((2)) size_t ccn_write_uint_size(cc_size n, const cc_unit *s);
 /*!
  @function   ccn_write_uint
  @abstract   Serialize the big integer into a big endian byte buffer
-
+ 
  @param n           Input size of the cc_unit array representing the input
  @param s           Input cc_unit array
  @param out_size    Size of the output buffer
@@ -449,17 +446,17 @@ void ccn_write_uint(cc_size n, const cc_unit *s, size_t out_size, void *out);
 /*!
  @function   ccn_write_uint_padded_ct
  @abstract   Serialize the big integer into a big endian byte buffer
-
+ 
  @param n           Input size of the cc_unit array representing the input
  @param s           Input cc_unit array
  @param out_size    Size of the output buffer
  @param out         Output byte array of size at least  out_size
-
+ 
  @return number of leading zero bytes in case of success, a negative error value in case of failure
-
+ 
  @result  This function writes exactly out_size byte, padding with zeroes when necessary.
  This function DOES NOT support truncation and returns an error if out_size < ccn_write_uint_size
-
+ 
  @discussion The execution flow of function is independent on the value of the big integer
  However, the processing of the return value by the caller may expose the position of
  the most significant byte
@@ -472,17 +469,17 @@ int ccn_write_uint_padded_ct(cc_size n, const cc_unit *s, size_t out_size, uint8
  @abstract   Serialize the big integer into a big endian byte buffer
  Not recommended, for most cases ccn_write_uint_padded_ct is more appropriate
  Sensitive big integers are exposed since the processing expose the position of the MS byte
-
+ 
  @param n           Input size of the cc_unit array representing the input
  @param s           Input cc_unit array
  @param out_size    Size of the output buffer
  @param out         Output byte array of size at least  out_size
-
+ 
  @return number of leading zero bytes
-
+ 
  @result  This function writes exactly out_size byte, padding with zeroes when necessary.
  This function DOES support truncation when out_size<ccn_write_uint_size()
-
+ 
  @discussion The execution flow of this function DEPENDS on the position of the most significant byte in
  case truncation is required.
  */
@@ -524,7 +521,7 @@ void ccn_write_int(cc_size n, const cc_unit *s, size_t out_size, void *out);
 /* s -> r
  { n bit -> n bit } */
 CC_NONNULL((2, 3))
-void ccn_set(cc_size n, cc_unit *r, const cc_unit *s) __asm__("_ccn_set");
+void ccn_set(cc_size n, cc_unit *r, const cc_unit *s);
 
 CC_INLINE CC_NONNULL((2))
 void ccn_zero(cc_size n, cc_unit *r) {
@@ -541,18 +538,16 @@ void ccn_zero_multi(cc_size n, cc_unit *r, ...);
 
 CC_INLINE CC_NONNULL((2))
 void ccn_seti(cc_size n, cc_unit *r, cc_unit v) {
-    /* assert(n > 0); */
+    assert(n > 0);
     r[0] = v;
     ccn_zero(n - 1, r + 1);
 }
 
 CC_INLINE CC_NONNULL((2, 4))
 void ccn_setn(cc_size n, cc_unit *r, const cc_size s_size, const cc_unit *s) {
-    /* FIXME: assert not available in kernel.
     assert(n > 0);
     assert(s_size > 0);
     assert(s_size <= n);
-    */
     ccn_set(s_size, r, s);
     ccn_zero(n - s_size, r + s_size);
 }

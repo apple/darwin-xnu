@@ -57,7 +57,7 @@ typedef struct wait_queue               *wait_queue_t;
 #define         WAIT_QUEUE_NULL         ((wait_queue_t) 0)
 #define                 SIZEOF_WAITQUEUE        sizeof(struct wait_queue)
 
-typedef vm_offset_t                     ipc_kobject_t;
+typedef void *                          ipc_kobject_t;
 #define         IKO_NULL                        ((ipc_kobject_t) 0)
 
 #endif  /* KERNEL_PRIVATE */
@@ -276,16 +276,27 @@ typedef enum perfcontrol_event {
 } perfcontrol_event;
 
 /*
- * Flags for the sched_perfcontrol_csw_t & sched_perfcontrol_state_update_t
+ * Flags for the sched_perfcontrol_csw_t, sched_perfcontrol_state_update_t
+ * & sched_perfcontrol_thread_group_blocked_t/sched_perfcontrol_thread_group_unblocked_t
  * callouts.
  * Currently defined flags are:
- * PERFCONTROL_CALLOUT_WAKE_UNSAFE - Flag to indicate its unsafe to
- *      do a wakeup as part of this callout. If this is set, it
- *      indicates that the scheduler holds a spinlock which might be needed
- *      in the wakeup path. In that case CLPC should do a thread_call
- *      instead of a direct wakeup to run their workloop thread.
+ *
+ * PERFCONTROL_CALLOUT_WAKE_UNSAFE: Flag to indicate its unsafe to
+ * do a wakeup as part of this callout. If this is set, it
+ * indicates that the scheduler holds a spinlock which might be needed
+ * in the wakeup path. In that case CLPC should do a thread_call
+ * instead of a direct wakeup to run their workloop thread.
+ *
+ * PERFCONTROL_CALLOUT_BLOCKING_TG_RENDER_SERVER: Flag to indicate
+ * that the render server thread group is blocking/unblocking progress
+ * of another thread group. The render server thread group is well
+ * known to CLPC, so XNU simply passes this flag instead of taking
+ * a reference on it. It is illegal to pass both the TG identity and
+ * this flag in the callout; this flag should only be set with the
+ * blocking/unblocking TG being NULL.
  */
-#define PERFCONTROL_CALLOUT_WAKE_UNSAFE            0x1
+#define PERFCONTROL_CALLOUT_WAKE_UNSAFE                 (0x1)
+#define PERFCONTROL_CALLOUT_BLOCKING_TG_RENDER_SERVER   (0x2)
 
 /*
  * Enum to define the perfcontrol class for thread.
@@ -310,7 +321,36 @@ typedef enum perfcontrol_class {
 	PERFCONTROL_CLASS_UI             = 7,
 	/* Above UI Thread */
 	PERFCONTROL_CLASS_ABOVEUI        = 8,
+	/* Maximum class */
+	PERFCONTROL_CLASS_MAX            = 9,
 } perfcontrol_class_t;
+
+/*
+ * struct sched_clutch_edge
+ *
+ * Represents an edge from one cluster to another in the Edge Scheduler.
+ * An edge has the following properties:
+ * - Edge Weight: A value which indicates the likelihood of migrating threads
+ *   across that edge. The actual unit of the edge weight is in (usecs) of
+ *   scheduling delay.
+ * - Migration Allowed: Bit indicating if migrations are allowed across this
+ *   edge from src to dst.
+ * - Steal Allowed: Bit indicating whether the dst cluster is allowed to steal
+ *   across that edge when a processor in that cluster goes idle.
+ *
+ * These values can be modified by CLPC for better load balancing, thermal
+ * mitigations etc.
+ */
+typedef union sched_clutch_edge {
+	struct {
+		uint32_t
+		/* boolean_t */ sce_migration_allowed : 1,
+		/* boolean_t */ sce_steal_allowed     : 1,
+		    _reserved             : 30;
+		uint32_t        sce_migration_weight;
+	};
+	uint64_t sce_edge_packed;
+} sched_clutch_edge;
 
 #endif  /* KERNEL_PRIVATE */
 

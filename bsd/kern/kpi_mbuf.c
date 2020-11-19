@@ -34,7 +34,6 @@
 #include <sys/socket.h>
 #include <kern/debug.h>
 #include <libkern/OSAtomic.h>
-#include <kern/kalloc.h>
 #include <string.h>
 #include <net/dlil.h>
 #include <netinet/in.h>
@@ -814,14 +813,12 @@ mbuf_outbound_finalize(struct mbuf *m, u_int32_t pf, size_t o)
 		break;
 
 	case PF_INET6:
-#if INET6
 		/*
 		 * Checksum offload should not have been enabled when
 		 * extension headers exist; indicate that the callee
 		 * should skip such case by setting optlen to -1.
 		 */
 		(void) in6_finalize_cksum(m, o, -1, -1, m->m_pkthdr.csum_flags);
-#endif /* INET6 */
 		break;
 
 	default:
@@ -983,7 +980,6 @@ mbuf_inet_cksum(mbuf_t mbuf, int protocol, u_int32_t offset, u_int32_t length,
 	return 0;
 }
 
-#if INET6
 errno_t
 mbuf_inet6_cksum(mbuf_t mbuf, int protocol, u_int32_t offset, u_int32_t length,
     u_int16_t *csum)
@@ -996,45 +992,6 @@ mbuf_inet6_cksum(mbuf_t mbuf, int protocol, u_int32_t offset, u_int32_t length,
 	*csum = inet6_cksum(mbuf, protocol, offset, length);
 	return 0;
 }
-#else /* INET6 */
-errno_t
-mbuf_inet6_cksum(__unused mbuf_t mbuf, __unused int protocol,
-    __unused u_int32_t offset, __unused u_int32_t length,
-    __unused u_int16_t *csum)
-{
-	panic("mbuf_inet6_cksum() doesn't exist on this platform\n");
-	return 0;
-}
-
-u_int16_t
-inet6_cksum(__unused struct mbuf *m, __unused unsigned int nxt,
-    __unused unsigned int off, __unused unsigned int len)
-{
-	panic("inet6_cksum() doesn't exist on this platform\n");
-	return 0;
-}
-
-void nd6_lookup_ipv6(void);
-void
-nd6_lookup_ipv6(void)
-{
-	panic("nd6_lookup_ipv6() doesn't exist on this platform\n");
-}
-
-int
-in6addr_local(__unused struct in6_addr *a)
-{
-	panic("in6addr_local() doesn't exist on this platform\n");
-	return 0;
-}
-
-void nd6_storelladdr(void);
-void
-nd6_storelladdr(void)
-{
-	panic("nd6_storelladdr() doesn't exist on this platform\n");
-}
-#endif /* INET6 */
 
 /*
  * Mbuf tag KPIs

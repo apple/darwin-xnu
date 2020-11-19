@@ -232,4 +232,5 @@ extern void iflt_detach(interface_filter_t filter_ref)
 __NKE_API_DEPRECATED;
 
 __END_DECLS
+#undef __NKE_API_DEPRECATED
 #endif /* __KPI_INTERFACEFILTER__ */

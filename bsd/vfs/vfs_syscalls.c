@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1995-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 1995-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -83,7 +83,7 @@
 #include <sys/proc_internal.h>
 #include <sys/kauth.h>
 #include <sys/uio_internal.h>
-#include <sys/malloc.h>
+#include <kern/kalloc.h>
 #include <sys/mman.h>
 #include <sys/dirent.h>
 #include <sys/attr.h>
@@ -123,6 +123,7 @@
 #include <vm/vm_protos.h>
 
 #include <libkern/OSAtomic.h>
+#include <os/atomic_private.h>
 #include <pexpert/pexpert.h>
 #include <IOKit/IOBSD.h>
 
@@ -146,14 +147,14 @@
 
 #if CONFIG_FSE
 #define GET_PATH(x) \
-	(x) = get_pathbuff();
+	((x) = get_pathbuff())
 #define RELEASE_PATH(x) \
-	release_pathbuff(x);
+	release_pathbuff(x)
 #else
 #define GET_PATH(x)     \
-	MALLOC_ZONE((x), char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
+	((x) = zalloc(ZV_NAMEI))
 #define RELEASE_PATH(x) \
-	FREE_ZONE((x), MAXPATHLEN, M_NAMEI);
+	zfree(ZV_NAMEI, x)
 #endif /* CONFIG_FSE */
 
 #ifndef HFS_GET_BOOT_INFO
@@ -167,6 +168,12 @@
 #ifndef APFSIOC_REVERT_TO_SNAPSHOT
 #define APFSIOC_REVERT_TO_SNAPSHOT  _IOW('J', 1, u_int64_t)
 #endif
+
+/*
+ * If you need accounting for KM_FD_VN_DATA consider using
+ * ZONE_VIEW_DEFINE to define a zone view.
+ */
+#define KM_FD_VN_DATA KHEAP_DEFAULT
 
 extern void disk_conditioner_unmount(mount_t mp);
 
@@ -235,12 +242,10 @@ int mount_locker_protoboot(const char *fsname, const char *mntpoint,
 
 //snapshot functions
 #if CONFIG_MNT_ROOTSNAP
-static int snapshot_root(int dirfd, user_addr_t name, uint32_t flags, vfs_context_t ctx);
+static int __attribute__ ((noinline)) snapshot_root(int dirfd, user_addr_t name, uint32_t flags, vfs_context_t ctx);
 #else
-static int snapshot_root(int dirfd, user_addr_t name, uint32_t flags, vfs_context_t ctx) __attribute__((unused));
+static int __attribute__ ((noinline)) snapshot_root(int dirfd, user_addr_t name, uint32_t flags, vfs_context_t ctx) __attribute__((unused));
 #endif
-
-int (*union_dircheckp)(struct vnode **, struct fileproc *, vfs_context_t);
 
 __private_extern__
 int sync_internal(void);
@@ -252,6 +257,8 @@ extern lck_grp_t *fd_vn_lck_grp;
 extern lck_grp_attr_t *fd_vn_lck_grp_attr;
 extern lck_attr_t *fd_vn_lck_attr;
 
+extern lck_rw_t * rootvnode_rw_lock;
+
 /*
  * incremented each time a mount or unmount operation occurs
  * used to invalidate the cached value of the rootvp in the
@@ -261,6 +268,9 @@ uint32_t mount_generation = 0;
 
 /* counts number of mount and unmount operations */
 unsigned int vfs_nummntops = 0;
+
+/* system-wide, per-boot unique mount ID */
+static _Atomic uint64_t mount_unique_id = 1;
 
 extern const struct fileops vnops;
 #if CONFIG_APPLEDOUBLE
@@ -300,7 +310,7 @@ kernel_mount(char *fstype, vnode_t pvp, vnode_t vp, const char *path,
 	if (vp == NULLVP) {
 		error = namei(&nd);
 		if (error) {
-			if (kern_flags & (KERNEL_MOUNT_SNAPSHOT | KERNEL_MOUNT_VMVOL | KERNEL_MOUNT_DATAVOL)) {
+			if (kern_flags & (KERNEL_MOUNT_SNAPSHOT | KERNEL_MOUNT_VOLBYROLE_MASK)) {
 				printf("failed to locate mount-on path: %s ", path);
 			}
 			return error;
@@ -312,7 +322,7 @@ kernel_mount(char *fstype, vnode_t pvp, vnode_t vp, const char *path,
 		char *pnbuf = CAST_DOWN(char *, path);
 
 		nd.ni_cnd.cn_pnbuf = pnbuf;
-		nd.ni_cnd.cn_pnlen = strlen(pnbuf) + 1;
+		nd.ni_cnd.cn_pnlen = (int)(strlen(pnbuf) + 1);
 		did_namei = FALSE;
 	}
 
@@ -394,11 +404,11 @@ fmount(__unused proc_t p, struct fmount_args *uap, __unused int32_t *retval)
 	}
 
 	memset(&cn, 0, sizeof(struct componentname));
-	MALLOC(cn.cn_pnbuf, char *, MAXPATHLEN, M_TEMP, M_WAITOK);
+	cn.cn_pnbuf = zalloc_flags(ZV_NAMEI, Z_WAITOK);
 	cn.cn_pnlen = MAXPATHLEN;
 
 	if ((error = vn_getpath(vp, cn.cn_pnbuf, &cn.cn_pnlen)) != 0) {
-		FREE(cn.cn_pnbuf, M_TEMP);
+		zfree(ZV_NAMEI, cn.cn_pnbuf);
 		vnode_put(pvp);
 		vnode_put(vp);
 		file_drop(uap->fd);
@@ -407,7 +417,7 @@ fmount(__unused proc_t p, struct fmount_args *uap, __unused int32_t *retval)
 
 	error = mount_common(fstypename, pvp, vp, &cn, uap->data, flags, 0, labelstr, FALSE, ctx);
 
-	FREE(cn.cn_pnbuf, M_TEMP);
+	zfree(ZV_NAMEI, cn.cn_pnbuf);
 	vnode_put(pvp);
 	vnode_put(vp);
 	file_drop(uap->fd);
@@ -454,6 +464,7 @@ __mac_mount(struct proc *p, register struct __mac_mount_args *uap, __unused int3
 	struct nameidata nd;
 	size_t dummy = 0;
 	char *labelstr = NULL;
+	size_t labelsz = 0;
 	int flags = uap->flags;
 	int error;
 #if CONFIG_IMGSRC_ACCESS || CONFIG_MACF
@@ -502,8 +513,8 @@ __mac_mount(struct proc *p, register struct __mac_mount_args *uap, __unused int3
 		if (is_64bit) {
 			struct user64_mac mac64;
 			error = copyin(uap->mac_p, &mac64, sizeof(mac64));
-			mac.m_buflen = mac64.m_buflen;
-			mac.m_string = mac64.m_string;
+			mac.m_buflen = (user_size_t)mac64.m_buflen;
+			mac.m_string = (user_addr_t)mac64.m_string;
 		} else {
 			struct user32_mac mac32;
 			error = copyin(uap->mac_p, &mac32, sizeof(mac32));
@@ -518,7 +529,8 @@ __mac_mount(struct proc *p, register struct __mac_mount_args *uap, __unused int3
 			error = EINVAL;
 			goto out;
 		}
-		MALLOC(labelstr, char *, mac.m_buflen, M_MACTEMP, M_WAITOK);
+		labelsz = mac.m_buflen;
+		labelstr = kheap_alloc(KHEAP_TEMP, labelsz, Z_WAITOK);
 		error = copyinstr(mac.m_string, labelstr, mac.m_buflen, &ulen);
 		if (error) {
 			goto out;
@@ -579,9 +591,7 @@ __mac_mount(struct proc *p, register struct __mac_mount_args *uap, __unused int3
 out:
 
 #if CONFIG_MACF
-	if (labelstr) {
-		FREE(labelstr, M_MACTEMP);
-	}
+	kheap_free(KHEAP_DEFAULT, labelstr, labelsz);
 #endif /* CONFIG_MACF */
 
 	if (vp) {
@@ -628,6 +638,7 @@ mount_common(char *fstypename, vnode_t pvp, vnode_t vp,
 	struct vfstable *vfsp = (struct vfstable *)0;
 	struct proc *p = vfs_context_proc(ctx);
 	int error, flag = 0;
+	bool flag_set = false;
 	user_addr_t devpath = USER_ADDR_NULL;
 	int ronly = 0;
 	int mntalloc = 0;
@@ -635,10 +646,11 @@ mount_common(char *fstypename, vnode_t pvp, vnode_t vp,
 	boolean_t is_rwlock_locked = FALSE;
 	boolean_t did_rele = FALSE;
 	boolean_t have_usecount = FALSE;
+	boolean_t did_set_lmount = FALSE;
 
-#if CONFIG_ROSV_STARTUP || CONFIG_MOUNT_VM
+#if CONFIG_ROSV_STARTUP || CONFIG_MOUNT_VM || CONFIG_BASESYSTEMROOT
 	/* Check for mutually-exclusive flag bits */
-	uint32_t checkflags = (internal_flags & (KERNEL_MOUNT_DATAVOL | KERNEL_MOUNT_VMVOL));
+	uint32_t checkflags = (internal_flags & (KERNEL_MOUNT_VOLBYROLE_MASK | KERNEL_MOUNT_BASESYSTEMROOT));
 	int bitcount = 0;
 	while (checkflags != 0) {
 		checkflags &= (checkflags - 1);
@@ -662,13 +674,15 @@ mount_common(char *fstypename, vnode_t pvp, vnode_t vp,
 		}
 		mp = vp->v_mount;
 
-		/* unmount in progress return error */
+		/* if unmount or mount in progress, return error */
 		mount_lock_spin(mp);
-		if (mp->mnt_lflag & MNT_LUNMOUNT) {
+		if (mp->mnt_lflag & (MNT_LUNMOUNT | MNT_LMOUNT)) {
 			mount_unlock(mp);
 			error = EBUSY;
 			goto out1;
 		}
+		mp->mnt_lflag |= MNT_LMOUNT;
+		did_set_lmount = TRUE;
 		mount_unlock(mp);
 		lck_rw_lock_exclusive(&mp->mnt_rwlock);
 		is_rwlock_locked = TRUE;
@@ -702,14 +716,12 @@ mount_common(char *fstypename, vnode_t pvp, vnode_t vp,
 			flags |= MNT_REMOVABLE;
 		}
 
-#ifdef CONFIG_IMGSRC_ACCESS
 		/* Can't downgrade the backer of the root FS */
 		if ((mp->mnt_kern_flag & MNTK_BACKS_ROOT) &&
 		    (!vfs_isrdonly(mp)) && (flags & MNT_RDONLY)) {
 			error = ENOTSUP;
 			goto out1;
 		}
-#endif /* CONFIG_IMGSRC_ACCESS */
 
 		/*
 		 * Only root, or the user that did the original mount is
@@ -736,6 +748,7 @@ mount_common(char *fstypename, vnode_t pvp, vnode_t vp,
 			}
 		}
 		flag = mp->mnt_flag;
+		flag_set = true;
 
 
 
@@ -774,10 +787,11 @@ mount_common(char *fstypename, vnode_t pvp, vnode_t vp,
 
 	/*
 	 * VFC_VFSLOCALARGS is not currently supported for kernel mounts,
-	 * except in ROSV configs.
+	 * except in ROSV configs and for the initial BaseSystem root.
 	 */
 	if (kernelmount && (vfsp->vfc_vfsflags & VFC_VFSLOCALARGS) &&
-	    ((internal_flags & (KERNEL_MOUNT_DATAVOL | KERNEL_MOUNT_VMVOL)) == 0)) {
+	    ((internal_flags & KERNEL_MOUNT_VOLBYROLE_MASK) == 0) &&
+	    ((internal_flags & KERNEL_MOUNT_BASESYSTEMROOT) == 0)) {
 		error = EINVAL;  /* unsupported request */
 		goto out1;
 	}
@@ -790,9 +804,7 @@ mount_common(char *fstypename, vnode_t pvp, vnode_t vp,
 	/*
 	 * Allocate and initialize the filesystem (mount_t)
 	 */
-	MALLOC_ZONE(mp, struct mount *, (u_int32_t)sizeof(struct mount),
-	    M_MOUNT, M_WAITOK);
-	bzero((char *)mp, (u_int32_t)sizeof(struct mount));
+	mp = zalloc_flags(mount_zone, Z_WAITOK | Z_ZERO);
 	mntalloc = 1;
 
 	/* Initialize the default IO constraints */
@@ -807,6 +819,9 @@ mount_common(char *fstypename, vnode_t pvp, vnode_t vp,
 	mp->mnt_ioflags = 0;
 	mp->mnt_realrootvp = NULLVP;
 	mp->mnt_authcache_ttl = CACHED_LOOKUP_RIGHT_TTL;
+
+	mp->mnt_lflag |= MNT_LMOUNT;
+	did_set_lmount = TRUE;
 
 	TAILQ_INIT(&mp->mnt_vnodelist);
 	TAILQ_INIT(&mp->mnt_workerqueue);
@@ -830,6 +845,7 @@ mount_common(char *fstypename, vnode_t pvp, vnode_t vp,
 	mp->mnt_vfsstat.f_owner = kauth_cred_getuid(vfs_context_ucred(ctx));
 	mp->mnt_throttle_mask = LOWPRI_MAX_NUM_DEV - 1;
 	mp->mnt_devbsdunit = 0;
+	mp->mnt_mount_id = os_atomic_inc_orig(&mount_unique_id, relaxed);
 
 	/* XXX 3762912 hack to support HFS filesystem 'owner' - filesystem may update later */
 	vfs_setowner(mp, KAUTH_UID_NONE, KAUTH_GID_NONE);
@@ -892,31 +908,71 @@ update:
 	}
 #endif
 	/*
-	 * Process device path for local file systems if requested
+	 * Process device path for local file systems if requested.
+	 *
+	 * Snapshot and mount-by-role mounts do not use this path; they are
+	 * passing other opaque data in the device path field.
+	 *
+	 * Basesystemroot mounts pass a device path to be resolved here,
+	 * but it's just a char * already inside the kernel, which
+	 * kernel_mount() shoved into a user_addr_t to call us. So for such
+	 * mounts we must skip copyin (both of the address and of the string
+	 * (in NDINIT).
 	 */
 	if (vfsp->vfc_vfsflags & VFC_VFSLOCALARGS &&
-	    !(internal_flags & (KERNEL_MOUNT_SNAPSHOT | KERNEL_MOUNT_DATAVOL | KERNEL_MOUNT_VMVOL))) {
-		//snapshot, vm, datavolume mounts are special
-		if (vfs_context_is64bit(ctx)) {
-			if ((error = copyin(fsmountargs, (caddr_t)&devpath, sizeof(devpath)))) {
-				goto out1;
+	    !(internal_flags & (KERNEL_MOUNT_SNAPSHOT | KERNEL_MOUNT_VOLBYROLE_MASK))) {
+		boolean_t do_copyin_devpath = true;
+#if CONFIG_BASESYSTEMROOT
+		if (internal_flags & KERNEL_MOUNT_BASESYSTEMROOT) {
+			// KERNEL_MOUNT_BASESYSTEMROOT implies subtle behavior worh nothing:
+			// We have been passed fsmountargs, which is typed as a user_addr_t,
+			// but is actually a char ** pointing to a (kernelspace) string.
+			// We manually unpack it with a series of casts and dereferences
+			// that reverses what was done just above us on the stack in
+			// imageboot_pivot_image().
+			// After retrieving the path to the dev node (which we will NDINIT
+			// in a moment), we pass NULL fsmountargs on to the filesystem.
+			_Static_assert(sizeof(char **) == sizeof(fsmountargs), "fsmountargs should fit a (kernel) address");
+			char **devnamepp = (char **)fsmountargs;
+			char *devnamep = *devnamepp;
+			devpath = CAST_USER_ADDR_T(devnamep);
+			do_copyin_devpath = false;
+			fsmountargs = USER_ADDR_NULL;
+
+			//Now that we have a mp, denote that this mount is for the basesystem.
+			mp->mnt_supl_kern_flag |= MNTK_SUPL_BASESYSTEM;
+		}
+#endif // CONFIG_BASESYSTEMROOT
+
+		if (do_copyin_devpath) {
+			if (vfs_context_is64bit(ctx)) {
+				if ((error = copyin(fsmountargs, (caddr_t)&devpath, sizeof(devpath)))) {
+					goto out1;
+				}
+				fsmountargs += sizeof(devpath);
+			} else {
+				user32_addr_t tmp;
+				if ((error = copyin(fsmountargs, (caddr_t)&tmp, sizeof(tmp)))) {
+					goto out1;
+				}
+				/* munge into LP64 addr */
+				devpath = CAST_USER_ADDR_T(tmp);
+				fsmountargs += sizeof(tmp);
 			}
-			fsmountargs += sizeof(devpath);
-		} else {
-			user32_addr_t tmp;
-			if ((error = copyin(fsmountargs, (caddr_t)&tmp, sizeof(tmp)))) {
-				goto out1;
-			}
-			/* munge into LP64 addr */
-			devpath = CAST_USER_ADDR_T(tmp);
-			fsmountargs += sizeof(tmp);
 		}
 
 		/* Lookup device and authorize access to it */
 		if ((devpath)) {
 			struct nameidata nd;
 
-			NDINIT(&nd, LOOKUP, OP_MOUNT, FOLLOW, UIO_USERSPACE, devpath, ctx);
+			enum uio_seg seg = UIO_USERSPACE;
+#if CONFIG_BASESYSTEMROOT
+			if (internal_flags & KERNEL_MOUNT_BASESYSTEMROOT) {
+				seg = UIO_SYSSPACE;
+			}
+#endif // CONFIG_BASESYSTEMROOT
+
+			NDINIT(&nd, LOOKUP, OP_MOUNT, FOLLOW, seg, devpath, ctx);
 			if ((error = namei(&nd))) {
 				goto out1;
 			}
@@ -1109,6 +1165,49 @@ update:
 #else
 		error = EINVAL;
 #endif
+	} else if ((internal_flags & KERNEL_MOUNT_PREBOOTVOL) || (internal_flags & KERNEL_MOUNT_RECOVERYVOL)) {
+#if CONFIG_MOUNT_PREBOOTRECOVERY
+		struct mount *origin_mp = (struct mount*)fsmountargs;
+		uint32_t mount_role = 0;
+		if (internal_flags & KERNEL_MOUNT_PREBOOTVOL) {
+			mount_role = VFS_PREBOOT_ROLE;
+		} else if (internal_flags & KERNEL_MOUNT_RECOVERYVOL) {
+			mount_role = VFS_RECOVERY_ROLE;
+		}
+
+		if (mount_role != 0) {
+			fs_role_mount_args_t frma = {origin_mp, mount_role};
+			error = VFS_IOCTL(mp, VFSIOC_MOUNT_BYROLE, (caddr_t)&frma, 0, ctx);
+			if (error) {
+				printf("MOUNT-BY-ROLE (%d) failed! (%d)", mount_role, error);
+			} else {
+				// NOT YET - need to qualify how this interacts with shutdown, ERP/ERB, etc
+				/* Mark volume associated with system volume */
+				//mp->mnt_kern_flag |= MNTK_SYSTEM;
+				/* Attempt to acquire the mnt_devvp and set it up */
+				struct vnode *mp_devvp = NULL;
+				if (mp->mnt_vfsstat.f_mntfromname[0] != 0) {
+					errno_t lerr = vnode_lookup(mp->mnt_vfsstat.f_mntfromname,
+					    0, &mp_devvp, vfs_context_kernel());
+					if (!lerr) {
+						mp->mnt_devvp = mp_devvp;
+						//vnode_lookup took an iocount, need to drop it.
+						vnode_put(mp_devvp);
+
+						// now set `device_vnode` to the devvp that was acquired.
+						// note that though the iocount above was dropped, the mount acquires
+						// an implicit reference against the device.
+						device_vnode = mp_devvp;
+					}
+				}
+			}
+		} else {
+			printf("MOUNT-BY-ROLE (%d) failed - ROLE UNRECOGNIZED! (%d)", mount_role, error);
+			error = EINVAL;
+		}
+#else
+		error = EINVAL;
+#endif
 	} else {
 		error = VFS_MOUNT(mp, device_vnode, fsmountargs, ctx);
 	}
@@ -1140,14 +1239,14 @@ update:
 #if CONFIG_MACF
 		error = mac_mount_check_mount_late(ctx, mp);
 		if (error != 0) {
-			goto out3;
+			goto out4;
 		}
 
 		if (vfs_flags(mp) & MNT_MULTILABEL) {
 			error = VFS_ROOT(mp, &rvp, ctx);
 			if (error) {
 				printf("%s() VFS_ROOT returned %d\n", __func__, error);
-				goto out3;
+				goto out4;
 			}
 			error = vnode_label(mp, NULL, rvp, NULL, 0, ctx);
 			/*
@@ -1156,7 +1255,7 @@ update:
 			vnode_put(rvp);
 
 			if (error) {
-				goto out3;
+				goto out4;
 			}
 		}
 #endif  /* MAC */
@@ -1294,7 +1393,8 @@ update:
 #if CONFIG_MACF
 		mac_mount_label_destroy(mp);
 #endif
-		FREE_ZONE(mp, sizeof(struct mount), M_MOUNT);
+		zfree(mount_zone, mp);
+		did_set_lmount = false;
 	}
 exit:
 	/*
@@ -1302,6 +1402,12 @@ exit:
 	 */
 	if (devpath && devvp) {
 		vnode_put(devvp);
+	}
+
+	if (did_set_lmount) {
+		mount_lock_spin(mp);
+		mp->mnt_lflag &= ~MNT_LMOUNT;
+		mount_unlock(mp);
 	}
 
 	return error;
@@ -1347,7 +1453,16 @@ out2:
 out1:
 	/* Release mnt_rwlock only when it was taken */
 	if (is_rwlock_locked == TRUE) {
+		if (flag_set) {
+			mp->mnt_flag = flag;  /* restore mnt_flag value */
+		}
 		lck_rw_done(&mp->mnt_rwlock);
+	}
+
+	if (did_set_lmount) {
+		mount_lock_spin(mp);
+		mp->mnt_lflag &= ~MNT_LMOUNT;
+		mount_unlock(mp);
 	}
 
 	if (mntalloc) {
@@ -1358,7 +1473,7 @@ out1:
 #if CONFIG_MACF
 			mac_mount_label_destroy(mp);
 #endif
-			FREE_ZONE(mp, sizeof(struct mount), M_MOUNT);
+			zfree(mount_zone, mp);
 		}
 	}
 	if (vfsp_ref) {
@@ -1588,7 +1703,7 @@ mount_begin_update(mount_t mp, vfs_context_t ctx, int flags)
 
 	/* unmount in progress return error */
 	mount_lock_spin(mp);
-	if (mp->mnt_lflag & MNT_LUNMOUNT) {
+	if (mp->mnt_lflag & (MNT_LUNMOUNT | MNT_LMOUNT)) {
 		mount_unlock(mp);
 		return EBUSY;
 	}
@@ -1695,7 +1810,7 @@ relocate_imageboot_source(vnode_t pvp, vnode_t vp,
 
 			height = mia64.mi_height;
 			flags = mia64.mi_flags;
-			devpath = mia64.mi_devpath;
+			devpath = (user_addr_t)mia64.mi_devpath;
 		} else {
 			struct user32_mnt_imgsrc_args mia32;
 			error = copyin(fsmountargs, &mia32, sizeof(mia32));
@@ -1743,7 +1858,7 @@ relocate_imageboot_source(vnode_t pvp, vnode_t vp,
 
 	IMGSRC_DEBUG("got old root vnode\n");
 
-	MALLOC(old_mntonname, char*, MAXPATHLEN, M_TEMP, M_WAITOK);
+	old_mntonname = zalloc_flags(ZV_NAMEI, Z_WAITOK);
 
 	/* Can only move once */
 	mp = vnode_mount(rvp);
@@ -1840,7 +1955,7 @@ relocate_imageboot_source(vnode_t pvp, vnode_t vp,
 
 	mount_end_update(mp);
 	vnode_put(rvp);
-	FREE(old_mntonname, M_TEMP);
+	zfree(ZV_NAMEI, old_mntonname);
 
 	vfs_notify_mount(pvp);
 
@@ -1870,7 +1985,7 @@ out1:
 
 out0:
 	vnode_put(rvp);
-	FREE(old_mntonname, M_TEMP);
+	zfree(ZV_NAMEI, old_mntonname);
 	return error;
 }
 
@@ -2083,8 +2198,10 @@ checkdirs(vnode_t olddp, vfs_context_t ctx)
 
 	if (rootvnode == olddp) {
 		vnode_ref(newdp);
+		lck_rw_lock_exclusive(rootvnode_rw_lock);
 		tvp = rootvnode;
 		rootvnode = newdp;
+		lck_rw_unlock_exclusive(rootvnode_rw_lock);
 		vnode_rele(tvp);
 	}
 
@@ -2153,6 +2270,8 @@ vfs_unmountbyfsid(fsid_t *fsid, int flags, vfs_context_t ctx)
 	return safedounmount(mp, flags, ctx);
 }
 
+#define ROLE_ACCOUNT_UNMOUNT_ENTITLEMENT        \
+	"com.apple.private.vfs.role-account-unmount"
 
 /*
  * The mount struct comes with a mount ref which will be consumed.
@@ -2175,10 +2294,15 @@ safedounmount(struct mount *mp, int flags, vfs_context_t ctx)
 	}
 
 	/*
-	 * Skip authorization if the mount is tagged as permissive and
-	 * this is not a forced-unmount attempt.
+	 * Skip authorization in two cases:
+	 * - If the process running the unmount has ROLE_ACCOUNT_UNMOUNT_ENTITLEMENT.
+	 *   This entitlement allows non-root processes unmount volumes mounted by
+	 *   other processes.
+	 * - If the mount is tagged as permissive and this is not a forced-unmount
+	 *   attempt.
 	 */
-	if (!(((mp->mnt_kern_flag & MNTK_PERMIT_UNMOUNT) != 0) && ((flags & MNT_FORCE) == 0))) {
+	if (!IOTaskHasEntitlement(current_task(), ROLE_ACCOUNT_UNMOUNT_ENTITLEMENT) &&
+	    (!(((mp->mnt_kern_flag & MNTK_PERMIT_UNMOUNT) != 0) && ((flags & MNT_FORCE) == 0)))) {
 		/*
 		 * Only root, or the user that did the original mount is
 		 * permitted to unmount this filesystem.
@@ -2189,19 +2313,22 @@ safedounmount(struct mount *mp, int flags, vfs_context_t ctx)
 		}
 	}
 	/*
-	 * Don't allow unmounting the root file system (or the associated VM or DATA mounts) .
+	 * Don't allow unmounting the root file system, or other volumes
+	 * associated with it (for example, the associated VM or DATA mounts) .
 	 */
 	if ((mp->mnt_flag & MNT_ROOTFS) || (mp->mnt_kern_flag & MNTK_SYSTEM)) {
 		error = EBUSY; /* the root (or associated volumes) is always busy */
 		goto out;
 	}
 
-#ifdef CONFIG_IMGSRC_ACCESS
+	/*
+	 * If the mount is providing the root filesystem's disk image
+	 * (i.e. imageboot), don't allow unmounting
+	 */
 	if (mp->mnt_kern_flag & MNTK_BACKS_ROOT) {
 		error = EBUSY;
 		goto out;
 	}
-#endif /* CONFIG_IMGSRC_ACCESS */
 
 	return dounmount(mp, flags, 1, ctx);
 
@@ -2240,7 +2367,7 @@ dounmount(struct mount *mp, int flags, int withref, vfs_context_t ctx)
 	 * If already an unmount in progress just return EBUSY.
 	 * Even a forced unmount cannot override.
 	 */
-	if (mp->mnt_lflag & MNT_LUNMOUNT) {
+	if (mp->mnt_lflag & (MNT_LUNMOUNT | MNT_LMOUNT)) {
 		if (withref != 0) {
 			mount_drop(mp, 1);
 		}
@@ -2490,7 +2617,7 @@ out:
 #if CONFIG_MACF
 			mac_mount_label_destroy(mp);
 #endif
-			FREE_ZONE(mp, sizeof(struct mount), M_MOUNT);
+			zfree(mount_zone, mp);
 		} else {
 			panic("dounmount: no coveredvp");
 		}
@@ -2516,7 +2643,7 @@ dounmount_submounts(struct mount *mp, int flags, vfs_context_t ctx)
 	TAILQ_FOREACH(smp, &mountlist, mnt_list)
 	count++;
 	fsids_sz = count * sizeof(fsid_t);
-	MALLOC(fsids, fsid_t *, fsids_sz, M_TEMP, M_NOWAIT);
+	fsids = kheap_alloc(KHEAP_TEMP, fsids_sz, Z_NOWAIT);
 	if (fsids == NULL) {
 		mount_list_unlock();
 		goto out;
@@ -2556,9 +2683,7 @@ dounmount_submounts(struct mount *mp, int flags, vfs_context_t ctx)
 		}
 	}
 out:
-	if (fsids) {
-		FREE(fsids, M_TEMP);
-	}
+	kheap_free(KHEAP_TEMP, fsids, fsids_sz);
 }
 
 void
@@ -2581,7 +2706,7 @@ mount_dropcrossref(mount_t mp, vnode_t dp, int need_put)
 #if CONFIG_MACF
 		mac_mount_label_destroy(mp);
 #endif
-		FREE_ZONE(mp, sizeof(struct mount), M_MOUNT);
+		zfree(mount_zone, mp);
 		return;
 	}
 	if (need_put) {
@@ -2696,10 +2821,17 @@ int sync_timeout_seconds = 5;
 #define SYNC_THREAD_RUN       0x0001
 #define SYNC_THREAD_RUNNING   0x0002
 
+#if CONFIG_PHYS_WRITE_ACCT
+thread_t pm_sync_thread;
+#endif /* CONFIG_PHYS_WRITE_ACCT */
+
 static void
 sync_thread(__unused void *arg, __unused wait_result_t wr)
 {
 	sync_type_t sync_type;
+#if CONFIG_PHYS_WRITE_ACCT
+	pm_sync_thread = current_thread();
+#endif /* CONFIG_PHYS_WRITE_ACCT */
 
 	lck_mtx_lock(sync_mtx_lck);
 	while (sync_thread_state & SYNC_THREAD_RUN) {
@@ -2721,6 +2853,9 @@ sync_thread(__unused void *arg, __unused wait_result_t wr)
 	 */
 	wakeup(&sync_thread_state);
 	sync_thread_state &= ~SYNC_THREAD_RUNNING;
+#if CONFIG_PHYS_WRITE_ACCT
+	pm_sync_thread = NULL;
+#endif /* CONFIG_PHYS_WRITE_ACCT */
 	lck_mtx_unlock(sync_mtx_lck);
 
 	if (print_vmpage_stat) {
@@ -2818,7 +2953,7 @@ quotactl(proc_t p, struct quotactl_args *uap, __unused int32_t *retval)
 	case Q_QUOTAON:
 		/* uap->arg specifies a file from which to take the quotas */
 		fnamelen = MAXPATHLEN;
-		datap = kalloc(MAXPATHLEN);
+		datap = zalloc(ZV_NAMEI);
 		error = copyinstr(uap->arg, datap, MAXPATHLEN, &fnamelen);
 		break;
 	case Q_GETQUOTA:
@@ -2855,7 +2990,7 @@ quotactl(proc_t p, struct quotactl_args *uap, __unused int32_t *retval)
 	switch (quota_cmd) {
 	case Q_QUOTAON:
 		if (datap != NULL) {
-			kfree(datap, MAXPATHLEN);
+			zfree(ZV_NAMEI, datap);
 		}
 		break;
 	case Q_GETQUOTA:
@@ -3014,7 +3149,7 @@ vfs_get_statfs64(struct mount *mp, struct statfs64 *sfs)
 	sfs->f_type = mp->mnt_vtable->vfc_typenum;
 	sfs->f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
 	sfs->f_fssubtype = vsfs->f_fssubtype;
-	sfs->f_flags_ext = ((mp->mnt_kern_flag & MNTK_SYSTEM) && !(mp->mnt_kern_flag & MNTK_SWAP_MOUNT) && !(mp->mnt_flag & MNT_ROOTFS)) ? MNT_EXT_ROOT_DATA_VOL : 0;
+	sfs->f_flags_ext = (mp->mnt_kern_flag & MNTK_SYSTEMDATA) ? MNT_EXT_ROOT_DATA_VOL : 0;
 	if (mp->mnt_kern_flag & MNTK_TYPENAME_OVERRIDE) {
 		strlcpy(&sfs->f_fstypename[0], &mp->fstypename_override[0], MFSTYPENAMELEN);
 	} else {
@@ -3032,43 +3167,55 @@ statfs64(__unused struct proc *p, struct statfs64_args *uap, __unused int32_t *r
 {
 	struct mount *mp;
 	int error;
-	struct nameidata nd;
-	struct statfs64 sfs;
+	struct nameidata *ndp;
+	struct statfs64 *sfsp;
 	vfs_context_t ctxp = vfs_context_current();
 	vnode_t vp;
+	union {
+		struct nameidata nd;
+		struct statfs64 sfs;
+	} *__nameidata_statfs64;
 
-	NDINIT(&nd, LOOKUP, OP_STATFS, FOLLOW | AUDITVNPATH1,
+	__nameidata_statfs64 = kheap_alloc(KHEAP_TEMP, sizeof(*__nameidata_statfs64),
+	    Z_WAITOK);
+	ndp = &__nameidata_statfs64->nd;
+
+	NDINIT(ndp, LOOKUP, OP_STATFS, FOLLOW | AUDITVNPATH1,
 	    UIO_USERSPACE, uap->path, ctxp);
-	error = namei(&nd);
+	error = namei(ndp);
 	if (error != 0) {
-		return error;
+		goto out;
 	}
-	vp = nd.ni_vp;
+	vp = ndp->ni_vp;
 	mp = vp->v_mount;
-	nameidone(&nd);
+	nameidone(ndp);
 
 #if CONFIG_MACF
 	error = mac_mount_check_stat(ctxp, mp);
 	if (error != 0) {
 		vnode_put(vp);
-		return error;
+		goto out;
 	}
 #endif
 
 	error = vfs_update_vfsstat(mp, ctxp, VFS_USER_EVENT);
 	if (error != 0) {
 		vnode_put(vp);
-		return error;
+		goto out;
 	}
 
-	vfs_get_statfs64(mp, &sfs);
-	if ((mp->mnt_kern_flag & MNTK_SYSTEM) && !(mp->mnt_kern_flag & MNTK_SWAP_MOUNT) && !(mp->mnt_flag & MNT_ROOTFS) &&
+	sfsp = &__nameidata_statfs64->sfs;
+	vfs_get_statfs64(mp, sfsp);
+	if ((mp->mnt_kern_flag & MNTK_SYSTEMDATA) &&
 	    (p->p_vfs_iopolicy & P_VFS_IOPOLICY_STATFS_NO_DATA_VOLUME)) {
 		/* This process does not want to see a seperate data volume mountpoint */
-		strlcpy(&sfs.f_mntonname[0], "/", sizeof("/"));
+		strlcpy(&sfsp->f_mntonname[0], "/", sizeof("/"));
 	}
-	error = copyout(&sfs, uap->buf, sizeof(sfs));
+	error = copyout(sfsp, uap->buf, sizeof(*sfsp));
 	vnode_put(vp);
+
+out:
+	kheap_free(KHEAP_TEMP, __nameidata_statfs64, sizeof(*__nameidata_statfs64));
 
 	return error;
 }
@@ -3116,7 +3263,7 @@ fstatfs64(__unused struct proc *p, struct fstatfs64_args *uap, __unused int32_t 
 	}
 
 	vfs_get_statfs64(mp, &sfs);
-	if ((mp->mnt_kern_flag & MNTK_SYSTEM) && !(mp->mnt_kern_flag & MNTK_SWAP_MOUNT) && !(mp->mnt_flag & MNT_ROOTFS) &&
+	if ((mp->mnt_kern_flag & MNTK_SYSTEMDATA) &&
 	    (p->p_vfs_iopolicy & P_VFS_IOPOLICY_STATFS_NO_DATA_VOLUME)) {
 		/* This process does not want to see a seperate data volume mountpoint */
 		strlcpy(&sfs.f_mntonname[0], "/", sizeof("/"));
@@ -3266,21 +3413,21 @@ __mac_getfsstat(__unused proc_t p, struct __mac_getfsstat_args *uap, int *retval
 		}
 
 		/* Copy in the array */
-		MALLOC(mp0, u_int32_t *, macsize, M_MACTEMP, M_WAITOK);
+		mp0 = kheap_alloc(KHEAP_TEMP, macsize, Z_WAITOK);
 		if (mp0 == NULL) {
 			return ENOMEM;
 		}
 
 		error = copyin(uap->mac, mp0, macsize);
 		if (error) {
-			FREE(mp0, M_MACTEMP);
+			kheap_free(KHEAP_TEMP, mp0, macsize);
 			return error;
 		}
 
 		/* Normalize to an array of user_addr_t */
-		MALLOC(mp, user_addr_t *, count * sizeof(user_addr_t), M_MACTEMP, M_WAITOK);
+		mp = kheap_alloc(KHEAP_TEMP, count * sizeof(user_addr_t), Z_WAITOK);
 		if (mp == NULL) {
-			FREE(mp0, M_MACTEMP);
+			kheap_free(KHEAP_TEMP, mp0, macsize);
 			return ENOMEM;
 		}
 
@@ -3291,7 +3438,7 @@ __mac_getfsstat(__unused proc_t p, struct __mac_getfsstat_args *uap, int *retval
 				mp[i] = (user_addr_t)mp0[i];
 			}
 		}
-		FREE(mp0, M_MACTEMP);
+		kheap_free(KHEAP_TEMP, mp0, macsize);
 	}
 #endif
 
@@ -3301,13 +3448,13 @@ __mac_getfsstat(__unused proc_t p, struct __mac_getfsstat_args *uap, int *retval
 	fst.flags = uap->flags;
 	fst.count = 0;
 	fst.error = 0;
-	fst.maxcount = maxcount;
+	fst.maxcount = (int)maxcount;
 
 
 	vfs_iterate(VFS_ITERATE_NOSKIP_UNMOUNT, getfsstat_callback, &fst);
 
 	if (mp) {
-		FREE(mp, M_MACTEMP);
+		kheap_free(KHEAP_TEMP, mp, count * sizeof(user_addr_t));
 	}
 
 	if (fst.error) {
@@ -3508,7 +3655,7 @@ common_fchdir(proc_t p, struct fchdir_args *uap, int per_thread)
 	vnode_t tdp;
 	vnode_t tvp;
 	struct mount *mp;
-	int error;
+	int error, should_put = 1;
 	vfs_context_t ctx = vfs_context_current();
 
 	AUDIT_ARG(fd, uap->fd);
@@ -3578,6 +3725,7 @@ common_fchdir(proc_t p, struct fchdir_args *uap, int per_thread)
 		goto out;
 	}
 	vnode_put(vp);
+	should_put = 0;
 
 	if (per_thread) {
 		thread_t th = vfs_context_thread(ctx);
@@ -3588,7 +3736,8 @@ common_fchdir(proc_t p, struct fchdir_args *uap, int per_thread)
 			OSBitOrAtomic(P_THCWD, &p->p_flag);
 		} else {
 			vnode_rele(vp);
-			return ENOENT;
+			error = ENOENT;
+			goto out;
 		}
 	} else {
 		proc_dirs_lock_exclusive(p);
@@ -3602,11 +3751,11 @@ common_fchdir(proc_t p, struct fchdir_args *uap, int per_thread)
 	if (tvp) {
 		vnode_rele(tvp);
 	}
-	file_drop(uap->fd);
 
-	return 0;
 out:
-	vnode_put(vp);
+	if (should_put) {
+		vnode_put(vp);
+	}
 	file_drop(uap->fd);
 
 	return error;
@@ -3813,6 +3962,110 @@ chroot(proc_t p, struct chroot_args *uap, __unused int32_t *retval)
 	return 0;
 }
 
+#define PATHSTATICBUFLEN 256
+#define PIVOT_ROOT_ENTITLEMENT              \
+       "com.apple.private.vfs.pivot-root"
+
+#if defined(XNU_TARGET_OS_OSX)
+int
+pivot_root(proc_t p, struct pivot_root_args *uap, __unused int *retval)
+{
+	int error;
+	char new_rootfs_path_before[PATHSTATICBUFLEN] = {0};
+	char old_rootfs_path_after[PATHSTATICBUFLEN] = {0};
+	char *new_rootfs_path_before_buf = NULL;
+	char *old_rootfs_path_after_buf = NULL;
+	char *incoming = NULL;
+	char *outgoing = NULL;
+	vnode_t incoming_rootvp = NULLVP;
+	size_t bytes_copied;
+
+	/*
+	 * XXX : Additional restrictions needed
+	 * - perhaps callable only once.
+	 */
+	if ((error = suser(kauth_cred_get(), &p->p_acflag))) {
+		return error;
+	}
+
+	/*
+	 * pivot_root can be executed by launchd only.
+	 * Enforce entitlement.
+	 */
+	if ((p->p_pid != 1) || !IOTaskHasEntitlement(current_task(), PIVOT_ROOT_ENTITLEMENT)) {
+		return EPERM;
+	}
+
+	error = copyinstr(uap->new_rootfs_path_before, &new_rootfs_path_before[0], PATHSTATICBUFLEN, &bytes_copied);
+	if (error == ENAMETOOLONG) {
+		new_rootfs_path_before_buf = zalloc_flags(ZV_NAMEI, Z_WAITOK);
+		error = copyinstr(uap->new_rootfs_path_before, new_rootfs_path_before_buf, MAXPATHLEN, &bytes_copied);
+	}
+
+	if (error) {
+		goto out;
+	}
+
+	error = copyinstr(uap->old_rootfs_path_after, &old_rootfs_path_after[0], PATHSTATICBUFLEN, &bytes_copied);
+	if (error == ENAMETOOLONG) {
+		old_rootfs_path_after_buf = zalloc_flags(ZV_NAMEI, Z_WAITOK);
+		error = copyinstr(uap->old_rootfs_path_after, old_rootfs_path_after_buf, MAXPATHLEN, &bytes_copied);
+	}
+	if (error) {
+		goto out;
+	}
+
+	if (new_rootfs_path_before_buf) {
+		incoming = new_rootfs_path_before_buf;
+	} else {
+		incoming = &new_rootfs_path_before[0];
+	}
+
+	if (old_rootfs_path_after_buf) {
+		outgoing = old_rootfs_path_after_buf;
+	} else {
+		outgoing = &old_rootfs_path_after[0];
+	}
+
+	/*
+	 * The proposed incoming FS MUST be authenticated (i.e. not a chunklist DMG).
+	 * Userland is not allowed to pivot to an image.
+	 */
+	error = vnode_lookup(incoming, 0, &incoming_rootvp, vfs_context_kernel());
+	if (error) {
+		goto out;
+	}
+	error = VNOP_IOCTL(incoming_rootvp, FSIOC_KERNEL_ROOTAUTH, NULL, 0, vfs_context_kernel());
+	if (error) {
+		goto out;
+	}
+
+	error = vfs_switch_root(incoming, outgoing, VFSSR_VIRTUALDEV_PROHIBITED);
+
+out:
+	if (incoming_rootvp != NULLVP) {
+		vnode_put(incoming_rootvp);
+		incoming_rootvp = NULLVP;
+	}
+
+	if (old_rootfs_path_after_buf) {
+		zfree(ZV_NAMEI, old_rootfs_path_after_buf);
+	}
+
+	if (new_rootfs_path_before_buf) {
+		zfree(ZV_NAMEI, new_rootfs_path_before_buf);
+	}
+
+	return error;
+}
+#else
+int
+pivot_root(proc_t p, __unused struct pivot_root_args *uap, int *retval)
+{
+	return nosys(p, NULL, retval);
+}
+#endif /* XNU_TARGET_OS_OSX */
+
 /*
  * Common routine for chroot and chdir.
  *
@@ -3864,8 +4117,8 @@ fg_vn_data_alloc(void)
 	struct fd_vn_data *fvdata;
 
 	/* Allocate per fd vnode data */
-	MALLOC(fvdata, struct fd_vn_data *, (sizeof(struct fd_vn_data)),
-	    M_FD_VN_DATA, M_WAITOK | M_ZERO);
+	fvdata = kheap_alloc(KM_FD_VN_DATA, sizeof(struct fd_vn_data),
+	    Z_WAITOK | Z_ZERO);
 	lck_mtx_init(&fvdata->fv_lock, fd_vn_lck_grp, fd_vn_lck_attr);
 	return fvdata;
 }
@@ -3878,11 +4131,9 @@ fg_vn_data_free(void *fgvndata)
 {
 	struct fd_vn_data *fvdata = (struct fd_vn_data *)fgvndata;
 
-	if (fvdata->fv_buf) {
-		FREE(fvdata->fv_buf, M_FD_DIRBUF);
-	}
+	kheap_free(KHEAP_DATA_BUFFERS, fvdata->fv_buf, fvdata->fv_bufallocsiz);
 	lck_mtx_destroy(&fvdata->fv_lock, fd_vn_lck_grp);
-	FREE(fvdata, M_FD_VN_DATA);
+	kheap_free(KM_FD_VN_DATA, fvdata, sizeof(struct fd_vn_data));
 }
 
 /*
@@ -3913,7 +4164,6 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 	vnode_t vp;
 	int flags, oflags;
 	int type, indx, error;
-	struct flock lf;
 	struct vfs_context context;
 
 	oflags = uflags;
@@ -3952,14 +4202,15 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 	uu->uu_dupfd = 0;
 	vp = ndp->ni_vp;
 
-	fp->f_fglob->fg_flag = flags & (FMASK | O_EVTONLY | FENCRYPTED | FUNENCRYPTED);
-	fp->f_fglob->fg_ops = &vnops;
-	fp->f_fglob->fg_data = (caddr_t)vp;
+	fp->fp_glob->fg_flag = flags & (FMASK | O_EVTONLY | FENCRYPTED | FUNENCRYPTED);
+	fp->fp_glob->fg_ops = &vnops;
+	fp->fp_glob->fg_data = (caddr_t)vp;
 
 	if (flags & (O_EXLOCK | O_SHLOCK)) {
-		lf.l_whence = SEEK_SET;
-		lf.l_start = 0;
-		lf.l_len = 0;
+		struct flock lf = {
+			.l_whence = SEEK_SET,
+		};
+
 		if (flags & O_EXLOCK) {
 			lf.l_type = F_WRLCK;
 		} else {
@@ -3970,16 +4221,16 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 			type |= F_WAIT;
 		}
 #if CONFIG_MACF
-		error = mac_file_check_lock(vfs_context_ucred(ctx), fp->f_fglob,
+		error = mac_file_check_lock(vfs_context_ucred(ctx), fp->fp_glob,
 		    F_SETLK, &lf);
 		if (error) {
 			goto bad;
 		}
 #endif
-		if ((error = VNOP_ADVLOCK(vp, (caddr_t)fp->f_fglob, F_SETLK, &lf, type, ctx, NULL))) {
+		if ((error = VNOP_ADVLOCK(vp, (caddr_t)fp->fp_glob, F_SETLK, &lf, type, ctx, NULL))) {
 			goto bad;
 		}
-		fp->f_fglob->fg_flag |= FHASLOCK;
+		fp->fp_glob->fg_flag |= FWASLOCKED;
 	}
 
 	/* try to truncate by setting the size attribute */
@@ -3991,9 +4242,9 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 	 * For directories we hold some additional information in the fd.
 	 */
 	if (vnode_vtype(vp) == VDIR) {
-		fp->f_fglob->fg_vn_data = fg_vn_data_alloc();
+		fp->fp_glob->fg_vn_data = fg_vn_data_alloc();
 	} else {
-		fp->f_fglob->fg_vn_data = NULL;
+		fp->fp_glob->fg_vn_data = NULL;
 	}
 
 	vnode_put(vp);
@@ -4006,7 +4257,7 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 	    !(flags & O_NOCTTY)) {
 		int tmp = 0;
 
-		(void)(*fp->f_fglob->fg_ops->fo_ioctl)(fp, (int)TIOCSCTTY,
+		(void)(*fp->fp_glob->fg_ops->fo_ioctl)(fp, (int)TIOCSCTTY,
 		    (caddr_t)&tmp, ctx);
 	}
 
@@ -4021,7 +4272,7 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 
 #if CONFIG_SECLUDED_MEMORY
 	if (secluded_for_filecache &&
-	    FILEGLOB_DTYPE(fp->f_fglob) == DTYPE_VNODE &&
+	    FILEGLOB_DTYPE(fp->fp_glob) == DTYPE_VNODE &&
 	    vnode_vtype(vp) == VREG) {
 		memory_object_control_t moc;
 
@@ -4029,7 +4280,7 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 
 		if (moc == MEMORY_OBJECT_CONTROL_NULL) {
 			/* nothing to do... */
-		} else if (fp->f_fglob->fg_flag & FWRITE) {
+		} else if (fp->fp_glob->fg_flag & FWRITE) {
 			/* writable -> no longer  eligible for secluded pages */
 			memory_object_mark_eligible_for_secluded(moc,
 			    FALSE);
@@ -4100,20 +4351,20 @@ open1(vfs_context_t ctx, struct nameidata *ndp, int uflags,
 	return 0;
 bad:
 	context = *vfs_context_current();
-	context.vc_ucred = fp->f_fglob->fg_cred;
+	context.vc_ucred = fp->fp_glob->fg_cred;
 
-	if ((fp->f_fglob->fg_flag & FHASLOCK) &&
-	    (FILEGLOB_DTYPE(fp->f_fglob) == DTYPE_VNODE)) {
-		lf.l_whence = SEEK_SET;
-		lf.l_start = 0;
-		lf.l_len = 0;
-		lf.l_type = F_UNLCK;
+	if ((fp->fp_glob->fg_flag & FWASLOCKED) &&
+	    (FILEGLOB_DTYPE(fp->fp_glob) == DTYPE_VNODE)) {
+		struct flock lf = {
+			.l_whence = SEEK_SET,
+			.l_type = F_UNLCK,
+		};
 
 		(void)VNOP_ADVLOCK(
-			vp, (caddr_t)fp->f_fglob, F_UNLCK, &lf, F_FLOCK, ctx, NULL);
+			vp, (caddr_t)fp->fp_glob, F_UNLCK, &lf, F_FLOCK, ctx, NULL);
 	}
 
-	vn_close(vp, fp->f_fglob->fg_flag, &context);
+	vn_close(vp, fp->fp_glob->fg_flag, &context);
 	vnode_put(vp);
 	fp_free(p, indx, fp);
 
@@ -4308,20 +4559,33 @@ openat_internal(vfs_context_t ctx, user_addr_t path, int flags, int mode,
     int fd, enum uio_seg segflg, int *retval)
 {
 	struct filedesc *fdp = (vfs_context_proc(ctx))->p_fd;
-	struct vnode_attr va;
-	struct nameidata nd;
+	struct {
+		struct vnode_attr va;
+		struct nameidata nd;
+	} *__open_data;
+	struct vnode_attr *vap;
+	struct nameidata *ndp;
 	int cmode;
+	int error;
 
-	VATTR_INIT(&va);
+	__open_data = kheap_alloc(KHEAP_TEMP, sizeof(*__open_data), Z_WAITOK);
+	vap = &__open_data->va;
+	ndp = &__open_data->nd;
+
+	VATTR_INIT(vap);
 	/* Mask off all but regular access permissions */
 	cmode = ((mode & ~fdp->fd_cmask) & ALLPERMS) & ~S_ISTXT;
-	VATTR_SET(&va, va_mode, cmode & ACCESSPERMS);
+	VATTR_SET(vap, va_mode, cmode & ACCESSPERMS);
 
-	NDINIT(&nd, LOOKUP, OP_OPEN, FOLLOW | AUDITVNPATH1,
+	NDINIT(ndp, LOOKUP, OP_OPEN, FOLLOW | AUDITVNPATH1,
 	    segflg, path, ctx);
 
-	return open1at(ctx, &nd, flags, &va, fileproc_alloc_init, NULL,
-	           retval, fd);
+	error = open1at(ctx, ndp, flags, vap, fileproc_alloc_init, NULL,
+	    retval, fd);
+
+	kheap_free(KHEAP_TEMP, __open_data, sizeof(*__open_data));
+
+	return error;
 }
 
 int
@@ -4406,7 +4670,7 @@ openbyid_np(__unused proc_t p, struct openbyid_np_args *uap, int *retval)
 
 	/*resolve path from fsis, objid*/
 	do {
-		MALLOC(buf, char *, buflen + 1, M_TEMP, M_WAITOK);
+		buf = kheap_alloc(KHEAP_TEMP, buflen + 1, Z_WAITOK);
 		if (buf == NULL) {
 			return ENOMEM;
 		}
@@ -4415,7 +4679,7 @@ openbyid_np(__unused proc_t p, struct openbyid_np_args *uap, int *retval)
 		    buf, FSOPT_ISREALFSID, &pathlen);
 
 		if (error) {
-			FREE(buf, M_TEMP);
+			kheap_free(KHEAP_TEMP, buf, buflen + 1);
 			buf = NULL;
 		}
 	} while (error == ENOSPC && (buflen += MAXPATHLEN));
@@ -4429,7 +4693,7 @@ openbyid_np(__unused proc_t p, struct openbyid_np_args *uap, int *retval)
 	error = openat_internal(
 		ctx, (user_addr_t)buf, uap->oflags, 0, AT_FDCWD, UIO_SYSSPACE, retval);
 
-	FREE(buf, M_TEMP);
+	kheap_free(KHEAP_TEMP, buf, buflen + 1);
 
 	return error;
 }
@@ -4458,7 +4722,7 @@ mknod(proc_t p, struct mknod_args *uap, __unused int32_t *retval)
 		return mkfifo1(ctx, uap->path, &va);
 	}
 
-	AUDIT_ARG(mode, uap->mode);
+	AUDIT_ARG(mode, (mode_t)uap->mode);
 	AUDIT_ARG(value32, uap->dev);
 
 	if ((error = suser(vfs_context_ucred(ctx), &p->p_acflag))) {
@@ -4665,23 +4929,6 @@ mkfifo(proc_t p, struct mkfifo_args *uap, __unused int32_t *retval)
 	return mkfifo1(vfs_context_current(), uap->path, &va);
 }
 
-
-static char *
-my_strrchr(char *p, int ch)
-{
-	char *save;
-
-	for (save = NULL;; ++p) {
-		if (*p == ch) {
-			save = p;
-		}
-		if (!*p) {
-			return save;
-		}
-	}
-	/* NOTREACHED */
-}
-
 extern int safe_getpath_new(struct vnode *dvp, char *leafname, char *path, int _len, int *truncated_path, int firmlink);
 extern int safe_getpath(struct vnode *dvp, char *leafname, char *path, int _len, int *truncated_path);
 extern int safe_getpath_no_firmlink(struct vnode *dvp, char *leafname, char *path, int _len, int *truncated_path);
@@ -4707,11 +4954,11 @@ safe_getpath_new(struct vnode *dvp, char *leafname, char *path, int _len, int *t
 
 				// the string got truncated!
 				*truncated_path = 1;
-				ptr = my_strrchr(path, '/');
+				ptr = strrchr(path, '/');
 				if (ptr) {
 					*ptr = '\0';   // chop off the string at the last directory component
 				}
-				len = strlen(path) + 1;
+				len = (int)strlen(path) + 1;
 			}
 		}
 	} else if (ret == 0) {
@@ -4802,9 +5049,6 @@ linkat_internal(vfs_context_t ctx, int fd1, user_addr_t path, int fd2,
 
 	error = nameiat(&nd, fd1);
 	if (error) {
-		if (error == EPERM) {
-			printf("XXX 54841485: nameiat() src EPERM\n");
-		}
 		return error;
 	}
 	vp = nd.ni_vp;
@@ -4818,7 +5062,6 @@ linkat_internal(vfs_context_t ctx, int fd1, user_addr_t path, int fd2,
 	if (vp->v_type == VDIR) {
 		if (!ISSET(vp->v_mount->mnt_kern_flag, MNTK_DIR_HARDLINKS)) {
 			error = EPERM;   /* POSIX */
-			printf("XXX 54841485: VDIR EPERM\n");
 			goto out;
 		}
 
@@ -4846,9 +5089,6 @@ linkat_internal(vfs_context_t ctx, int fd1, user_addr_t path, int fd2,
 	nd.ni_dirp = link;
 	error = nameiat(&nd, fd2);
 	if (error != 0) {
-		if (error == EPERM) {
-			printf("XXX 54841485: nameiat() dst EPERM\n");
-		}
 		goto out;
 	}
 	dvp = nd.ni_dvp;
@@ -4856,18 +5096,12 @@ linkat_internal(vfs_context_t ctx, int fd1, user_addr_t path, int fd2,
 
 #if CONFIG_MACF
 	if ((error = mac_vnode_check_link(ctx, dvp, vp, &nd.ni_cnd)) != 0) {
-		if (error == EPERM) {
-			printf("XXX 54841485: mac_vnode_check_link() EPERM\n");
-		}
 		goto out2;
 	}
 #endif
 
 	/* or to anything that kauth doesn't want us to (eg. immutable items) */
 	if ((error = vnode_authorize(vp, NULL, KAUTH_VNODE_LINKTARGET, ctx)) != 0) {
-		if (error == EPERM) {
-			printf("XXX 54841485: vnode_authorize() LINKTARGET EPERM\n");
-		}
 		goto out2;
 	}
 
@@ -4884,18 +5118,12 @@ linkat_internal(vfs_context_t ctx, int fd1, user_addr_t path, int fd2,
 
 	/* authorize creation of the target note */
 	if ((error = vnode_authorize(dvp, NULL, KAUTH_VNODE_ADD_FILE, ctx)) != 0) {
-		if (error == EPERM) {
-			printf("XXX 54841485: vnode_authorize() ADD_FILE EPERM\n");
-		}
 		goto out2;
 	}
 
 	/* and finally make the link */
 	error = VNOP_LINK(vp, dvp, &nd.ni_cnd, ctx);
 	if (error) {
-		if (error == EPERM) {
-			printf("XXX 54841485: VNOP_LINK() EPERM\n");
-		}
 		goto out2;
 	}
 
@@ -4923,10 +5151,6 @@ linkat_internal(vfs_context_t ctx, int fd1, user_addr_t path, int fd2,
 
 		/* build the path to the new link file */
 		GET_PATH(target_path);
-		if (target_path == NULL) {
-			error = ENOMEM;
-			goto out2;
-		}
 
 		len = safe_getpath(dvp, nd.ni_cnd.cn_nameptr, target_path, MAXPATHLEN, &truncated);
 
@@ -4935,10 +5159,6 @@ linkat_internal(vfs_context_t ctx, int fd1, user_addr_t path, int fd2,
 		if (has_listeners) {
 			/* build the path to file we are linking to */
 			GET_PATH(link_to_path);
-			if (link_to_path == NULL) {
-				error = ENOMEM;
-				goto out2;
-			}
 
 			link_name_len = MAXPATHLEN;
 			if (vn_getpath(vp, link_to_path, &link_name_len) == 0) {
@@ -5046,7 +5266,7 @@ symlinkat_internal(vfs_context_t ctx, user_addr_t path_data, int fd,
 
 	error = 0;
 	if (UIO_SEG_IS_USER_SPACE(segflg)) {
-		MALLOC_ZONE(path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
+		path = zalloc(ZV_NAMEI);
 		error = copyinstr(path_data, path, MAXPATHLEN, &dummy);
 	} else {
 		path = (char *)path_data;
@@ -5182,7 +5402,7 @@ skipit:
 	vnode_put(dvp);
 out:
 	if (path && (path != (char *)path_data)) {
-		FREE_ZONE(path, MAXPATHLEN, M_NAMEI);
+		zfree(ZV_NAMEI, path);
 	}
 
 	return error;
@@ -5358,18 +5578,10 @@ continue_lookup:
 	if (need_event || has_listeners) {
 		if (path == NULL) {
 			GET_PATH(path);
-			if (path == NULL) {
-				error = ENOMEM;
-				goto out;
-			}
 		}
 		len_path = safe_getpath(dvp, nd.ni_cnd.cn_nameptr, path, MAXPATHLEN, &truncated_path);
 		if (no_firmlink_path == NULL) {
 			GET_PATH(no_firmlink_path);
-			if (no_firmlink_path == NULL) {
-				error = ENOMEM;
-				goto out;
-			}
 		}
 		len_no_firmlink_path = safe_getpath_no_firmlink(dvp, nd.ni_cnd.cn_nameptr, no_firmlink_path, MAXPATHLEN, &truncated_no_firmlink_path);
 	}
@@ -5565,10 +5777,10 @@ lseek(proc_t p, struct lseek_args *uap, off_t *retval)
 #if CONFIG_MACF
 	if (uap->whence == L_INCR && uap->offset == 0) {
 		error = mac_file_check_get_offset(vfs_context_ucred(ctx),
-		    fp->f_fglob);
+		    fp->fp_glob);
 	} else {
 		error = mac_file_check_change_offset(vfs_context_ucred(ctx),
-		    fp->f_fglob);
+		    fp->fp_glob);
 	}
 	if (error) {
 		file_drop(uap->fd);
@@ -5582,7 +5794,7 @@ lseek(proc_t p, struct lseek_args *uap, off_t *retval)
 
 	switch (uap->whence) {
 	case L_INCR:
-		offset += fp->f_fglob->fg_offset;
+		offset += fp->fp_glob->fg_offset;
 		break;
 	case L_XTND:
 		if ((error = vnode_size(vp, &file_size, ctx)) != 0) {
@@ -5616,8 +5828,8 @@ lseek(proc_t p, struct lseek_args *uap, off_t *retval)
 				error = EINVAL;
 			} else {
 				/* Success */
-				fp->f_fglob->fg_offset = offset;
-				*retval = fp->f_fglob->fg_offset;
+				fp->fp_glob->fg_offset = offset;
+				*retval = fp->fp_glob->fg_offset;
 			}
 		}
 	}
@@ -5750,7 +5962,8 @@ access_extended(__unused proc_t p, struct access_extended_args *uap, __unused in
 	errno_t *result = NULL;
 	errno_t error = 0;
 	int wantdelete = 0;
-	unsigned int desc_max, desc_actual, i, j;
+	size_t desc_max, desc_actual;
+	unsigned int i, j;
 	struct vfs_context context;
 	struct nameidata nd;
 	int niopts;
@@ -5780,7 +5993,7 @@ access_extended(__unused proc_t p, struct access_extended_args *uap, __unused in
 	if (uap->size <= sizeof(stack_input)) {
 		input = stack_input;
 	} else {
-		MALLOC(input, struct accessx_descriptor *, uap->size, M_TEMP, M_WAITOK);
+		input = kheap_alloc(KHEAP_DATA_BUFFERS, uap->size, Z_WAITOK);
 		if (input == NULL) {
 			error = ENOMEM;
 			goto out;
@@ -5876,7 +6089,8 @@ access_extended(__unused proc_t p, struct access_extended_args *uap, __unused in
 		error = ENOMEM;
 		goto out;
 	}
-	MALLOC(result, errno_t *, desc_actual * sizeof(errno_t), M_TEMP, M_WAITOK | M_ZERO);
+	result = kheap_alloc(KHEAP_DATA_BUFFERS, desc_actual * sizeof(errno_t),
+	    Z_WAITOK | Z_ZERO);
 	if (result == NULL) {
 		error = ENOMEM;
 		goto out;
@@ -5967,10 +6181,10 @@ access_extended(__unused proc_t p, struct access_extended_args *uap, __unused in
 
 out:
 	if (input && input != stack_input) {
-		FREE(input, M_TEMP);
+		kheap_free(KHEAP_DATA_BUFFERS, input, uap->size);
 	}
 	if (result) {
-		FREE(result, M_TEMP);
+		kheap_free(KHEAP_DATA_BUFFERS, result, desc_actual * sizeof(errno_t));
 	}
 	if (vp) {
 		vnode_put(vp);
@@ -6179,7 +6393,7 @@ fstatat_internal(vfs_context_t ctx, user_addr_t path, user_addr_t ub,
 		 * going to let them get the basic stat information.
 		 */
 		error = vn_stat_noauth(nd.ni_vp, statptr, NULL, isstat64, needsrealdev, ctx,
-		    fp->f_fglob->fg_cred);
+		    fp->fp_glob->fg_cred);
 	} else {
 		error = vn_stat(nd.ni_vp, statptr, (xsecurity != USER_ADDR_NULL ? &fsec : NULL),
 		    isstat64, needsrealdev, ctx);
@@ -6484,6 +6698,10 @@ readlinkat_internal(vfs_context_t ctx, int fd, user_addr_t path,
 	struct nameidata nd;
 	char uio_buf[UIO_SIZEOF(1)];
 
+	if (bufsize > INT32_MAX) {
+		return EINVAL;
+	}
+
 	NDINIT(&nd, LOOKUP, OP_READLINK, NOFOLLOW | AUDITVNPATH1,
 	    seg, path, ctx);
 
@@ -6514,7 +6732,7 @@ readlinkat_internal(vfs_context_t ctx, int fd, user_addr_t path,
 	}
 	vnode_put(vp);
 
-	*retval = bufsize - (int)uio_resid(auio);
+	*retval = (int)(bufsize - uio_resid(auio));
 	return error;
 }
 
@@ -7169,8 +7387,8 @@ getutimes(user_addr_t usrtvp, struct timespec *tsp)
 			if (error) {
 				return error;
 			}
-			TIMEVAL_TO_TIMESPEC(&tv[0], &tsp[0]);
-			TIMEVAL_TO_TIMESPEC(&tv[1], &tsp[1]);
+			TIMEVAL64_TO_TIMESPEC(&tv[0], &tsp[0]);
+			TIMEVAL64_TO_TIMESPEC(&tv[1], &tsp[1]);
 		} else {
 			struct user32_timeval tv[2];
 			error = copyin(usrtvp, (void *)tv, sizeof(tv));
@@ -7318,7 +7536,7 @@ futimes(__unused proc_t p, struct futimes_args *uap, __unused int32_t *retval)
  */
 /* ARGSUSED */
 int
-truncate(__unused proc_t p, struct truncate_args *uap, __unused int32_t *retval)
+truncate(proc_t p, struct truncate_args *uap, __unused int32_t *retval)
 {
 	vnode_t vp;
 	struct vnode_attr va;
@@ -7326,10 +7544,18 @@ truncate(__unused proc_t p, struct truncate_args *uap, __unused int32_t *retval)
 	int error;
 	struct nameidata nd;
 	kauth_action_t action;
+	rlim_t fsize_limit;
 
 	if (uap->length < 0) {
 		return EINVAL;
 	}
+
+	fsize_limit = proc_limitgetcur(p, RLIMIT_FSIZE, TRUE);
+	if ((rlim_t)uap->length > fsize_limit) {
+		psignal(p, SIGXFSZ);
+		return EFBIG;
+	}
+
 	NDINIT(&nd, LOOKUP, OP_TRUNCATE, FOLLOW | AUDITVNPATH1,
 	    UIO_USERSPACE, uap->path, ctx);
 	if ((error = namei(&nd))) {
@@ -7381,17 +7607,24 @@ ftruncate(proc_t p, struct ftruncate_args *uap, int32_t *retval)
 	struct fileproc *fp;
 	int error;
 	int fd = uap->fd;
+	rlim_t fsize_limit;
 
 	AUDIT_ARG(fd, uap->fd);
 	if (uap->length < 0) {
 		return EINVAL;
 	}
 
+	fsize_limit = proc_limitgetcur(p, RLIMIT_FSIZE, TRUE);
+	if ((rlim_t)uap->length > fsize_limit) {
+		psignal(p, SIGXFSZ);
+		return EFBIG;
+	}
+
 	if ((error = fp_lookup(p, fd, &fp, 0))) {
 		return error;
 	}
 
-	switch (FILEGLOB_DTYPE(fp->f_fglob)) {
+	switch (FILEGLOB_DTYPE(fp->fp_glob)) {
 	case DTYPE_PSXSHM:
 		error = pshm_truncate(p, fp, uap->fd, uap->length, retval);
 		goto out;
@@ -7402,9 +7635,9 @@ ftruncate(proc_t p, struct ftruncate_args *uap, int32_t *retval)
 		goto out;
 	}
 
-	vp = (vnode_t)fp->f_fglob->fg_data;
+	vp = (vnode_t)fp->fp_glob->fg_data;
 
-	if ((fp->f_fglob->fg_flag & FWRITE) == 0) {
+	if ((fp->fp_glob->fg_flag & FWRITE) == 0) {
 		AUDIT_ARG(vnpath_withref, vp, ARG_VNODE1);
 		error = EINVAL;
 		goto out;
@@ -7418,7 +7651,7 @@ ftruncate(proc_t p, struct ftruncate_args *uap, int32_t *retval)
 
 #if CONFIG_MACF
 	error = mac_vnode_check_truncate(ctx,
-	    fp->f_fglob->fg_cred, vp);
+	    fp->fp_glob->fg_cred, vp);
 	if (error) {
 		(void)vnode_put(vp);
 		goto out;
@@ -7430,7 +7663,7 @@ ftruncate(proc_t p, struct ftruncate_args *uap, int32_t *retval)
 
 #if CONFIG_MACF
 	if (error == 0) {
-		mac_vnode_notify_truncate(ctx, fp->f_fglob->fg_cred, vp);
+		mac_vnode_notify_truncate(ctx, fp->fp_glob->fg_cred, vp);
 	}
 #endif
 
@@ -7532,7 +7765,7 @@ fsync_common(proc_t p, struct fsync_args *uap, int flags)
 	    (vp->v_flag & VISNAMEDSTREAM) &&
 	    (vp->v_parent != NULLVP) &&
 	    vnode_isshadow(vp) &&
-	    (fp->f_flags & FP_WRITTEN)) {
+	    (fp->fp_glob->fg_flag & FWASWRITTEN)) {
 		(void) vnode_flushnamedstream(vp->v_parent, vp, ctx);
 	}
 #endif
@@ -7955,7 +8188,7 @@ fclonefileat(__unused proc_t p, struct fclonefileat_args *uap,
 		return error;
 	}
 
-	if ((fp->f_fglob->fg_flag & FREAD) == 0) {
+	if ((fp->fp_glob->fg_flag & FREAD) == 0) {
 		AUDIT_ARG(vnpath_withref, fvp, ARG_VNODE1);
 		error = EBADF;
 		goto out;
@@ -7981,7 +8214,7 @@ rename_submounts_callback(mount_t mp, void *arg)
 {
 	int error = 0;
 	mount_t pmp = (mount_t)arg;
-	int prefix_len = strlen(pmp->mnt_vfsstat.f_mntonname);
+	int prefix_len = (int)strlen(pmp->mnt_vfsstat.f_mntonname);
 
 	if (strncmp(mp->mnt_vfsstat.f_mntonname, pmp->mnt_vfsstat.f_mntonname, prefix_len) != 0) {
 		return 0;
@@ -8025,6 +8258,7 @@ renameat_internal(vfs_context_t ctx, int fromfd, user_addr_t from,
 
 	vnode_t tvp, tdvp;
 	vnode_t fvp, fdvp;
+	vnode_t mnt_fvp;
 	struct nameidata *fromnd, *tond;
 	int error;
 	int do_retry;
@@ -8039,6 +8273,7 @@ renameat_internal(vfs_context_t ctx, int fromfd, user_addr_t from,
 	int from_len = 0, to_len = 0;
 	int from_len_no_firmlink = 0, to_len_no_firmlink = 0;
 	int holding_mntlock;
+	int vn_authorize_skipped;
 	mount_t locked_mp = NULL;
 	vnode_t oparent = NULLVP;
 #if CONFIG_FSE
@@ -8054,7 +8289,7 @@ renameat_internal(vfs_context_t ctx, int fromfd, user_addr_t from,
 		struct nameidata from_node, to_node;
 		struct vnode_attr fv_attr, tv_attr;
 	} * __rename_data;
-	MALLOC(__rename_data, void *, sizeof(*__rename_data), M_TEMP, M_WAITOK);
+	__rename_data = kheap_alloc(KHEAP_TEMP, sizeof(*__rename_data), Z_WAITOK);
 	fromnd = &__rename_data->from_node;
 	tond = &__rename_data->to_node;
 
@@ -8065,7 +8300,9 @@ retry:
 	fvp = tvp = NULL;
 	fdvp = tdvp = NULL;
 	fvap = tvap = NULL;
+	mnt_fvp = NULLVP;
 	mntrename = FALSE;
+	vn_authorize_skipped = FALSE;
 
 	NDINIT(fromnd, DELETE, OP_UNLINK, WANTPARENT | AUDITVNPATH1,
 	    segflg, from, ctx);
@@ -8126,8 +8363,31 @@ continue_lookup:
 	}
 
 	if (tvp && ISSET(flags, VFS_RENAME_EXCL)) {
-		error = EEXIST;
-		goto out1;
+		int32_t pval = 0;
+		int err = 0;
+
+		/*
+		 * We allow rename with VFS_RENAME_EXCL flag for an existing file which
+		 * has the same name as target iff the following conditions are met:
+		 * 1. the target file system is case insensitive
+		 * 2. source and target directories are the same
+		 * 3. source and target files are the same
+		 * 4. name only differs in case (determined by underlying filesystem)
+		 */
+		if (fvp != tvp || fdvp != tdvp) {
+			error = EEXIST;
+			goto out1;
+		}
+
+		/*
+		 * Assume that the target file system is case sensitive if
+		 * _PC_CASE_SENSITIVE selector isn't supported.
+		 */
+		err = VNOP_PATHCONF(tvp, _PC_CASE_SENSITIVE, &pval, ctx);
+		if (err != 0 || pval != 0) {
+			error = EEXIST;
+			goto out1;
+		}
 	}
 
 	batched = vnode_compound_rename_available(fdvp);
@@ -8173,20 +8433,12 @@ continue_lookup:
 	if (need_event || has_listeners) {
 		if (from_name == NULL) {
 			GET_PATH(from_name);
-			if (from_name == NULL) {
-				error = ENOMEM;
-				goto out1;
-			}
 		}
 
 		from_len = safe_getpath(fdvp, fromnd->ni_cnd.cn_nameptr, from_name, MAXPATHLEN, &from_truncated);
 
 		if (from_name_no_firmlink == NULL) {
 			GET_PATH(from_name_no_firmlink);
-			if (from_name_no_firmlink == NULL) {
-				error = ENOMEM;
-				goto out1;
-			}
 		}
 
 		from_len_no_firmlink = safe_getpath_no_firmlink(fdvp, fromnd->ni_cnd.cn_nameptr, from_name_no_firmlink, MAXPATHLEN, &from_truncated_no_firmlink);
@@ -8195,20 +8447,12 @@ continue_lookup:
 	if (need_event || need_kpath2 || has_listeners) {
 		if (to_name == NULL) {
 			GET_PATH(to_name);
-			if (to_name == NULL) {
-				error = ENOMEM;
-				goto out1;
-			}
 		}
 
 		to_len = safe_getpath(tdvp, tond->ni_cnd.cn_nameptr, to_name, MAXPATHLEN, &to_truncated);
 
 		if (to_name_no_firmlink == NULL) {
 			GET_PATH(to_name_no_firmlink);
-			if (to_name_no_firmlink == NULL) {
-				error = ENOMEM;
-				goto out1;
-			}
 		}
 
 		to_len_no_firmlink = safe_getpath_no_firmlink(tdvp, tond->ni_cnd.cn_nameptr, to_name_no_firmlink, MAXPATHLEN, &to_truncated_no_firmlink);
@@ -8234,24 +8478,6 @@ continue_lookup:
 		goto skipped_lookup;
 	}
 
-	if (!batched) {
-		error = vn_authorize_renamex_with_paths(fdvp, fvp, &fromnd->ni_cnd, from_name, tdvp, tvp, &tond->ni_cnd, to_name, ctx, flags, NULL);
-		if (error) {
-			if (error == ENOENT) {
-				if (retry_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
-					/*
-					 * We encountered a race where after doing the namei, tvp stops
-					 * being valid. If so, simply re-drive the rename call from the
-					 * top.
-					 */
-					do_retry = 1;
-					retry_count += 1;
-				}
-			}
-			goto out1;
-		}
-	}
-
 	/*
 	 * If the source and destination are the same (i.e. they're
 	 * links to the same vnode) and the target file system is
@@ -8268,6 +8494,7 @@ continue_lookup:
 		 */
 		if (VNOP_PATHCONF(fvp, _PC_CASE_SENSITIVE, &pathconf_val, ctx) != 0 ||
 		    pathconf_val != 0) {
+			vn_authorize_skipped = TRUE;
 			goto out1;
 		}
 	}
@@ -8277,7 +8504,7 @@ continue_lookup:
 	 * - target must not exist
 	 * - target must reside in the same directory as source
 	 * - union mounts cannot be renamed
-	 * - "/" cannot be renamed
+	 * - the root fs, and tightly-linked system volumes, cannot be renamed
 	 *
 	 * XXX Handle this in VFS after a continued lookup (if we missed
 	 * in the cache to start off)
@@ -8304,7 +8531,11 @@ continue_lookup:
 			error = ENOENT;
 			goto out1;
 		}
-		vnode_put(fvp);
+		/*
+		 * Save the 'fvp' as it is needed for vn_authorize_renamex_with_paths()
+		 * later.
+		 */
+		mnt_fvp = fvp;
 
 		fvp = coveredvp;
 		mntrename = TRUE;
@@ -8342,6 +8573,7 @@ continue_lookup:
 		if (fromnd->ni_cnd.cn_namelen == tond->ni_cnd.cn_namelen &&
 		    !bcmp(fromnd->ni_cnd.cn_nameptr, tond->ni_cnd.cn_nameptr,
 		    fromnd->ni_cnd.cn_namelen)) {
+			vn_authorize_skipped = TRUE;
 			goto out1;
 		}
 	}
@@ -8399,6 +8631,10 @@ continue_lookup:
 			vnode_put(fvp);
 			vnode_put(fdvp);
 
+			if (mnt_fvp != NULLVP) {
+				vnode_put(mnt_fvp);
+			}
+
 			mount_lock_renames(locked_mp);
 			holding_mntlock = 1;
 
@@ -8420,6 +8656,32 @@ continue_lookup:
 			mount_drop(locked_mp, 0);
 			holding_mntlock = 0;
 		}
+	}
+
+	if (!batched) {
+		error = vn_authorize_renamex_with_paths(fdvp, mntrename ? mnt_fvp : fvp,
+		    &fromnd->ni_cnd, from_name, tdvp, tvp, &tond->ni_cnd, to_name, ctx,
+		    flags, NULL);
+		if (error) {
+			if (error == ENOENT) {
+				if (retry_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
+					/*
+					 * We encountered a race where after doing the namei,
+					 * tvp stops being valid. If so, simply re-drive the rename
+					 * call from the top.
+					 */
+					do_retry = 1;
+					retry_count += 1;
+				}
+			}
+			goto out1;
+		}
+	}
+
+	/* Release the 'mnt_fvp' now that it is no longer needed. */
+	if (mnt_fvp != NULLVP) {
+		vnode_put(mnt_fvp);
+		mnt_fvp = NULLVP;
 	}
 
 	// save these off so we can later verify that fvp is the same
@@ -8594,7 +8856,7 @@ skipped_lookup:
 			error = EBUSY;
 			goto out1;
 		}
-		MALLOC_ZONE(tobuf, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
+		tobuf = zalloc(ZV_NAMEI);
 
 		if (UIO_SEG_IS_USER_SPACE(segflg)) {
 			error = copyinstr(to, tobuf, MAXPATHLEN, &len);
@@ -8620,12 +8882,12 @@ skipped_lookup:
 			vfs_iterate(0, rename_submounts_callback, (void *)mp);
 
 			/* append name to prefix */
-			maxlen = MAXPATHLEN - (pathend - mp->mnt_vfsstat.f_mntonname);
+			maxlen = MAXPATHLEN - (int)(pathend - mp->mnt_vfsstat.f_mntonname);
 			bzero(pathend, maxlen);
 
 			strlcpy(pathend, mpname, maxlen);
 		}
-		FREE_ZONE(tobuf, MAXPATHLEN, M_NAMEI);
+		zfree(ZV_NAMEI, tobuf);
 
 		vfs_unbusy(mp);
 
@@ -8651,6 +8913,21 @@ skipped_lookup:
 		vnode_update_identity(fvp, tdvp, tond->ni_cnd.cn_nameptr, tond->ni_cnd.cn_namelen, tond->ni_cnd.cn_hash, update_flags);
 	}
 out1:
+	/*
+	 * There are some cases (for e.g. 'fvp == tvp') when vn_authorize was
+	 * skipped earlier as no actual rename was performed.
+	 */
+	if (vn_authorize_skipped && error == 0) {
+		error = vn_authorize_renamex_with_paths(fdvp, fvp,
+		    &fromnd->ni_cnd, from_name, tdvp, tvp, &tond->ni_cnd, to_name, ctx,
+		    flags, NULL);
+		if (error && error == ENOENT) {
+			if (retry_count < MAX_AUTHORIZE_ENOENT_RETRIES) {
+				do_retry = 1;
+				retry_count += 1;
+			}
+		}
+	}
 	if (to_name != NULL) {
 		RELEASE_PATH(to_name);
 		to_name = NULL;
@@ -8696,7 +8973,9 @@ out1:
 		}
 		vnode_put(fdvp);
 	}
-
+	if (mnt_fvp != NULLVP) {
+		vnode_put(mnt_fvp);
+	}
 	/*
 	 * If things changed after we did the namei, then we will re-drive
 	 * this rename call from the top.
@@ -8706,7 +8985,7 @@ out1:
 		goto retry;
 	}
 
-	FREE(__rename_data, M_TEMP);
+	kheap_free(KHEAP_TEMP, __rename_data, sizeof(*__rename_data));
 	return error;
 }
 
@@ -9025,7 +9304,7 @@ continue_lookup:
 		}
 
 #if CONFIG_FSE
-		fse_info  finfo;
+		fse_info  finfo = {0};
 
 		need_event = need_fsevent(FSE_DELETE, dvp);
 		if (need_event) {
@@ -9045,20 +9324,12 @@ continue_lookup:
 		if (need_event || has_listeners) {
 			if (path == NULL) {
 				GET_PATH(path);
-				if (path == NULL) {
-					error = ENOMEM;
-					goto out;
-				}
 			}
 
 			len_path = safe_getpath(dvp, nd.ni_cnd.cn_nameptr, path, MAXPATHLEN, &truncated_path);
 
 			if (no_firmlink_path == NULL) {
 				GET_PATH(no_firmlink_path);
-				if (no_firmlink_path == NULL) {
-					error = ENOMEM;
-					goto out;
-				}
 			}
 
 			len_no_firmlink_path = safe_getpath_no_firmlink(dvp, nd.ni_cnd.cn_nameptr, no_firmlink_path, MAXPATHLEN, &truncated_no_firmlink_path);
@@ -9234,7 +9505,7 @@ vnode_readdir64(struct vnode *vp, struct uio *uio, int flags, int *eofflag,
 		uio_t auio;
 		struct direntry *entry64;
 		struct dirent *dep;
-		int bytesread;
+		size_t bytesread;
 		int error;
 
 		/*
@@ -9255,7 +9526,7 @@ vnode_readdir64(struct vnode *vp, struct uio *uio, int flags, int *eofflag,
 		 * prevent uio_resid() * 3 / 8 from overflowing.
 		 */
 		bufsize = 3 * MIN((user_size_t)uio_resid(uio), 87371u) / 8;
-		MALLOC(bufptr, void *, bufsize, M_TEMP, M_WAITOK);
+		bufptr = kheap_alloc(KHEAP_DATA_BUFFERS, bufsize, Z_WAITOK);
 		if (bufptr == NULL) {
 			return ENOMEM;
 		}
@@ -9269,15 +9540,16 @@ vnode_readdir64(struct vnode *vp, struct uio *uio, int flags, int *eofflag,
 		dep = (struct dirent *)bufptr;
 		bytesread = bufsize - uio_resid(auio);
 
-		MALLOC(entry64, struct direntry *, sizeof(struct direntry),
-		    M_TEMP, M_WAITOK);
+		entry64 = kheap_alloc(KHEAP_TEMP, sizeof(struct direntry), Z_WAITOK);
 		/*
 		 * Convert all the entries and copy them out to user's buffer.
 		 */
 		while (error == 0 && (char *)dep < ((char *)bufptr + bytesread)) {
-			size_t  enbufsize = DIRENT64_LEN(dep->d_namlen);
-
-			if (DIRENT_END(dep) > ((char *)bufptr + bytesread) ||
+			/* First check that the dirent struct up to d_name is within the buffer */
+			if ((char*)dep + offsetof(struct dirent, d_name) > ((char *)bufptr + bytesread) ||
+			    /* Check that the length of the entire dirent is within the buffer */
+			    DIRENT_END(dep) > ((char *)bufptr + bytesread) ||
+			    /* Check that the actual length including the name doesn't exceed d_reclen */
 			    DIRENT_LEN(dep->d_namlen) > dep->d_reclen) {
 				printf("%s: %s: Bad dirent recived from directory %s\n", __func__,
 				    vp->v_mount->mnt_vfsstat.f_mntonname,
@@ -9286,11 +9558,13 @@ vnode_readdir64(struct vnode *vp, struct uio *uio, int flags, int *eofflag,
 				break;
 			}
 
+			size_t  enbufsize = DIRENT64_LEN(dep->d_namlen);
+
 			bzero(entry64, enbufsize);
 			/* Convert a dirent to a dirent64. */
 			entry64->d_ino = dep->d_ino;
 			entry64->d_seekoff = 0;
-			entry64->d_reclen = enbufsize;
+			entry64->d_reclen = (uint16_t)enbufsize;
 			entry64->d_namlen = dep->d_namlen;
 			entry64->d_type = dep->d_type;
 			bcopy(dep->d_name, entry64->d_name, dep->d_namlen + 1);
@@ -9307,8 +9581,8 @@ vnode_readdir64(struct vnode *vp, struct uio *uio, int flags, int *eofflag,
 			uio->uio_offset = auio->uio_offset;
 		}
 		uio_free(auio);
-		FREE(bufptr, M_TEMP);
-		FREE(entry64, M_TEMP);
+		kheap_free(KHEAP_DATA_BUFFERS, bufptr, bufsize);
+		kheap_free(KHEAP_TEMP, entry64, sizeof(struct direntry));
 		return error;
 	}
 }
@@ -9335,7 +9609,7 @@ getdirentries_common(int fd, user_addr_t bufp, user_size_t bufsize, ssize_t *byt
 	if (error) {
 		return error;
 	}
-	if ((fp->f_fglob->fg_flag & FREAD) == 0) {
+	if ((fp->fp_glob->fg_flag & FREAD) == 0) {
 		AUDIT_ARG(vnpath_withref, vp, ARG_VNODE1);
 		error = EBADF;
 		goto out;
@@ -9346,7 +9620,7 @@ getdirentries_common(int fd, user_addr_t bufp, user_size_t bufsize, ssize_t *byt
 	}
 
 #if CONFIG_MACF
-	error = mac_file_check_change_offset(vfs_context_ucred(&context), fp->f_fglob);
+	error = mac_file_check_change_offset(vfs_context_ucred(&context), fp->fp_glob);
 	if (error) {
 		goto out;
 	}
@@ -9371,16 +9645,16 @@ unionread:
 	}
 #endif /* MAC */
 
-	loff = fp->f_fglob->fg_offset;
+	loff = fp->fp_glob->fg_offset;
 	auio = uio_createwithbuffer(1, loff, spacetype, UIO_READ, &uio_buf[0], sizeof(uio_buf));
 	uio_addiov(auio, bufp, bufsize);
 
 	if (flags & VNODE_READDIR_EXTENDED) {
 		error = vnode_readdir64(vp, auio, flags, eofflag, &numdirent, &context);
-		fp->f_fglob->fg_offset = uio_offset(auio);
+		fp->fp_glob->fg_offset = uio_offset(auio);
 	} else {
 		error = VNOP_READDIR(vp, auio, 0, eofflag, &numdirent, &context);
-		fp->f_fglob->fg_offset = uio_offset(auio);
+		fp->fp_glob->fg_offset = uio_offset(auio);
 	}
 	if (error) {
 		(void)vnode_put(vp);
@@ -9388,23 +9662,12 @@ unionread:
 	}
 
 	if ((user_ssize_t)bufsize == uio_resid(auio)) {
-		if (union_dircheckp) {
-			error = union_dircheckp(&vp, fp, &context);
-			if (error == -1) {
-				goto unionread;
-			}
-			if (error) {
-				(void)vnode_put(vp);
-				goto out;
-			}
-		}
-
 		if ((vp->v_mount->mnt_flag & MNT_UNION)) {
 			struct vnode *tvp = vp;
 			if (lookup_traverse_union(tvp, &vp, &context) == 0) {
 				vnode_ref(vp);
-				fp->f_fglob->fg_data = (caddr_t) vp;
-				fp->f_fglob->fg_offset = 0;
+				fp->fp_glob->fg_data = (caddr_t) vp;
+				fp->fp_glob->fg_offset = 0;
 				vnode_rele(tvp);
 				vnode_put(tvp);
 				goto unionread;
@@ -9444,7 +9707,7 @@ getdirentries(__unused struct proc *p, struct getdirentries_args *uap, int32_t *
 			user32_long_t base = (user32_long_t)offset;
 			error = copyout((caddr_t)&base, uap->basep, sizeof(user32_long_t));
 		}
-		*retval = bytesread;
+		*retval = (int)bytesread;
 	}
 	return error;
 }
@@ -9633,7 +9896,7 @@ getdirentriesattr(proc_t p, struct getdirentriesattr_args *uap, int32_t *retval)
 	uint32_t count = 0, savecount = 0;
 	uint32_t newstate = 0;
 	int error, eofflag;
-	uint32_t loff = 0;
+	off_t loff = 0;
 	struct attrlist attributelist;
 	vfs_context_t ctx = vfs_context_current();
 	int fd = uap->fd;
@@ -9653,7 +9916,7 @@ getdirentriesattr(proc_t p, struct getdirentriesattr_args *uap, int32_t *retval)
 	if ((error = fp_getfvp(p, fd, &fp, &vp))) {
 		return error;
 	}
-	if ((fp->f_fglob->fg_flag & FREAD) == 0) {
+	if ((fp->fp_glob->fg_flag & FREAD) == 0) {
 		AUDIT_ARG(vnpath_withref, vp, ARG_VNODE1);
 		error = EBADF;
 		goto out;
@@ -9662,7 +9925,7 @@ getdirentriesattr(proc_t p, struct getdirentriesattr_args *uap, int32_t *retval)
 
 #if CONFIG_MACF
 	error = mac_file_check_change_offset(vfs_context_ucred(ctx),
-	    fp->f_fglob);
+	    fp->fp_glob);
 	if (error) {
 		goto out;
 	}
@@ -9691,7 +9954,7 @@ unionread:
 #endif /* MAC */
 
 	/* set up the uio structure which will contain the users return buffer */
-	loff = fp->f_fglob->fg_offset;
+	loff = fp->fp_glob->fg_offset;
 	auio = uio_createwithbuffer(1, loff, spacetype, UIO_READ, &uio_buf[0], sizeof(uio_buf));
 	uio_addiov(auio, uap->buffer, uap->buffersize);
 
@@ -9711,7 +9974,7 @@ unionread:
 		 * info, so truncate before extending again */
 
 		error = VNOP_READDIRATTR(vp, &attributelist, auio, count,
-		    (u_long)(uint32_t)uap->options, &newstate, &eofflag, &count, ctx);
+		    (uint32_t)uap->options, &newstate, &eofflag, &count, ctx);
 	}
 
 	if (error) {
@@ -9732,11 +9995,11 @@ unionread:
 		} else {                                                // Empty buffer
 			struct vnode *tvp = vp;
 			if (lookup_traverse_union(tvp, &vp, ctx) == 0) {
-				vnode_ref_ext(vp, fp->f_fglob->fg_flag & O_EVTONLY, 0);
-				fp->f_fglob->fg_data = (caddr_t) vp;
-				fp->f_fglob->fg_offset = 0; // reset index for new dir
+				vnode_ref_ext(vp, fp->fp_glob->fg_flag & O_EVTONLY, 0);
+				fp->fp_glob->fg_data = (caddr_t) vp;
+				fp->fp_glob->fg_offset = 0; // reset index for new dir
 				count = savecount;
-				vnode_rele_internal(tvp, fp->f_fglob->fg_flag & O_EVTONLY, 0, 0);
+				vnode_rele_internal(tvp, fp->fp_glob->fg_flag & O_EVTONLY, 0, 0);
 				vnode_put(tvp);
 				goto unionread;
 			}
@@ -9749,7 +10012,7 @@ unionread:
 	if (error) {
 		goto out;
 	}
-	fp->f_fglob->fg_offset = uio_offset(auio); /* should be multiple of dirent, not variable */
+	fp->fp_glob->fg_offset = uio_offset(auio); /* should be multiple of dirent, not variable */
 
 	if ((error = copyout((caddr_t) &count, uap->count, sizeof(count)))) {
 		goto out;
@@ -9858,10 +10121,6 @@ exchangedata(__unused proc_t p, struct exchangedata_args *uap, __unused int32_t 
 		kauth_authorize_fileop_has_listeners()) {
 		GET_PATH(fpath);
 		GET_PATH(spath);
-		if (fpath == NULL || spath == NULL) {
-			error = ENOMEM;
-			goto out;
-		}
 
 		flen = safe_getpath(fvp, NULL, fpath, MAXPATHLEN, &from_truncated);
 		slen = safe_getpath(svp, NULL, spath, MAXPATHLEN, &to_truncated);
@@ -9937,8 +10196,8 @@ uint32_t
 freespace_mb(vnode_t vp)
 {
 	vfs_update_vfsstat(vp->v_mount, vfs_context_current(), VFS_USER_EVENT);
-	return ((uint64_t)vp->v_mount->mnt_vfsstat.f_bavail *
-	       vp->v_mount->mnt_vfsstat.f_bsize) >> 20;
+	return (uint32_t)(((uint64_t)vp->v_mount->mnt_vfsstat.f_bavail *
+	       vp->v_mount->mnt_vfsstat.f_bsize) >> 20);
 }
 
 #if CONFIG_SEARCHFS
@@ -9960,7 +10219,7 @@ searchfs(proc_t p, struct searchfs_args *uap, __unused int32_t *retval)
 	uio_t auio = NULL;
 	int spacetype = proc_is64bit(p) ? UIO_USERSPACE64 : UIO_USERSPACE32;
 	uint32_t nummatches;
-	int mallocsize;
+	size_t mallocsize;
 	uint32_t nameiflags;
 	vfs_context_t ctx = vfs_context_current();
 	char uio_buf[UIO_SIZEOF(1)];
@@ -10014,7 +10273,7 @@ searchfs(proc_t p, struct searchfs_args *uap, __unused int32_t *retval)
 	mallocsize = searchblock.sizeofsearchparams1 + searchblock.sizeofsearchparams2 +
 	    sizeof(struct attrlist) + sizeof(struct searchstate) + (2 * sizeof(uint32_t));
 
-	MALLOC(searchparams1, void *, mallocsize, M_TEMP, M_WAITOK);
+	searchparams1 = kheap_alloc(KHEAP_DATA_BUFFERS, mallocsize, Z_WAITOK);
 
 	/* Now set up the various pointers to the correct place in our newly allocated memory */
 
@@ -10180,12 +10439,12 @@ searchfs(proc_t p, struct searchfs_args *uap, __unused int32_t *retval)
 	    searchparams1,
 	    searchparams2,
 	    &searchblock.searchattrs,
-	    (u_long)searchblock.maxmatches,
+	    (uint32_t)searchblock.maxmatches,
 	    &timelimit,
 	    returnattrs,
 	    &nummatches,
-	    (u_long)uap->scriptcode,
-	    (u_long)uap->options,
+	    (uint32_t)uap->scriptcode,
+	    (uint32_t)uap->options,
 	    auio,
 	    (struct searchstate *) &state->ss_fsstate,
 	    ctx);
@@ -10219,7 +10478,7 @@ saveandexit:
 
 freeandexit:
 
-	FREE(searchparams1, M_TEMP);
+	kheap_free(KHEAP_DATA_BUFFERS, searchparams1, mallocsize);
 
 	return error;
 } /* end of searchfs system call */
@@ -10294,6 +10553,7 @@ searchfs(__unused proc_t p, __unused struct searchfs_args *uap, __unused int32_t
 
 struct nspace_resolver_request {
 	LIST_ENTRY(nspace_resolver_request) r_hashlink;
+	vnode_t         r_vp;
 	uint32_t        r_req_id;
 	int             r_resolver_error;
 	int             r_flags;
@@ -10454,7 +10714,7 @@ nspace_resolver_req_mark_complete(
 }
 
 static void
-nspace_resolver_req_completed(uint32_t req_id, int resolver_error)
+nspace_resolver_req_completed(uint32_t req_id, int resolver_error, uint64_t orig_gencount)
 {
 	struct nspace_resolver_request *req;
 
@@ -10466,10 +10726,59 @@ nspace_resolver_req_completed(uint32_t req_id, int resolver_error)
 
 	req = nspace_resolver_req_lookup(req_id);
 	if (req) {
+		mount_t locked_mp = NULL;
+
+		locked_mp = req->r_vp->v_mount;
+		mount_ref(locked_mp, 0);
+		mount_lock_renames(locked_mp);
+
+		//
+		// if the resolver isn't already returning an error and we have an
+		// orig_gencount, then get an iocount on the request vnode and check
+		// that the gencount on req->r_vp has not changed.
+		//
+		// note: a ref was taken on req->r_vp when the request was created
+		// and that ref will be dropped by that thread when it wakes up.
+		//
+		if (resolver_error == 0 &&
+		    orig_gencount != 0 &&
+		    vnode_getwithref(req->r_vp) == 0) {
+			struct vnode_attr va;
+			uint64_t cur_gencount;
+
+			VATTR_INIT(&va);
+			VATTR_WANTED(&va, va_recursive_gencount);
+
+			if (vnode_getattr(req->r_vp, &va, vfs_context_kernel()) == 0) {
+				cur_gencount = va.va_recursive_gencount;
+			} else {
+				cur_gencount = 0;
+			}
+
+			if (resolver_error == 0 && cur_gencount && orig_gencount && cur_gencount != orig_gencount) {
+				printf("nspace.complete: gencount changed! (orig %llu cur %llu)\n", orig_gencount, cur_gencount);
+
+				// this error will be returned to the thread that initiated the
+				// materialization of req->r_vp.
+				resolver_error = EBUSY;
+
+				// note: we explicitly do not return an error to the caller (i.e.
+				// the thread that did the materialization) because they said they
+				// don't want one.
+			}
+
+			vnode_put(req->r_vp);
+		}
+
+		mount_unlock_renames(locked_mp);
+		mount_drop(locked_mp, 0);
+
 		nspace_resolver_req_mark_complete(req, resolver_error);
 	}
 
 	NSPACE_REQ_UNLOCK();
+
+	return;
 }
 
 static struct proc *nspace_resolver_proc;
@@ -10717,7 +11026,8 @@ sysctl_nspace_complete(__unused struct sysctl_oid *oidp, __unused void *arg1,
 {
 	struct proc *p = req->p;
 	uint32_t req_status[2] = { 0, 0 };
-	int error, is_resolver, changed = 0;
+	uint64_t gencount = 0;
+	int error, is_resolver, changed = 0, gencount_changed;
 
 	error = nspace_resolver_get_proc_state(p, &is_resolver);
 	if (error) {
@@ -10734,6 +11044,15 @@ sysctl_nspace_complete(__unused struct sysctl_oid *oidp, __unused void *arg1,
 		return error;
 	}
 
+	// get the gencount if it was passed
+	error = sysctl_io_opaque(req, &gencount, sizeof(gencount),
+	    &gencount_changed);
+	if (error) {
+		gencount = 0;
+		// we ignore the error because the gencount was optional
+		error = 0;
+	}
+
 	/*
 	 * req_status[0] is the req_id
 	 *
@@ -10741,7 +11060,7 @@ sysctl_nspace_complete(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	 */
 	if (error == 0 && changed) {
 		nspace_resolver_req_completed(req_status[0],
-		    (int)req_status[1]);
+		    (int)req_status[1], gencount);
 	}
 	return error;
 }
@@ -10882,11 +11201,7 @@ resolve_nspace_item_ext(
 		return ETIMEDOUT;
 	}
 
-	MALLOC_ZONE(path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
-	if (path == NULL) {
-		error = ENOMEM;
-		goto out_release_port;
-	}
+	path = zalloc(ZV_NAMEI);
 	path_len = MAXPATHLEN;
 
 	error = vn_getpath(vp, path, &path_len);
@@ -10896,10 +11211,17 @@ resolve_nspace_item_ext(
 		req.r_resolver_error = 0;
 		req.r_flags = 0;
 
+		if ((error = vnode_ref(vp)) == 0) {     // take a ref so that the vnode doesn't go away
+			req.r_vp = vp;
+		} else {
+			goto out_release_port;
+		}
+
 		NSPACE_REQ_LOCK();
 		error = nspace_resolver_req_add(&req);
 		NSPACE_REQ_UNLOCK();
 		if (error) {
+			vnode_rele(req.r_vp);
 			goto out_release_port;
 		}
 
@@ -10917,12 +11239,13 @@ resolve_nspace_item_ext(
 			NSPACE_REQ_LOCK();
 			nspace_resolver_req_remove(&req);
 			NSPACE_REQ_UNLOCK();
+			vnode_rele(req.r_vp);
 			goto out_release_port;
 		}
 
 		// Give back the memory we allocated earlier while
 		// we wait; we no longer need it.
-		FREE_ZONE(path, MAXPATHLEN, M_NAMEI);
+		zfree(ZV_NAMEI, path);
 		path = NULL;
 
 		// Request has been submitted to the resolver.
@@ -10930,11 +11253,13 @@ resolve_nspace_item_ext(
 		// Upon requrn, the request will have been removed
 		// from the lookup table.
 		error = nspace_resolver_req_wait(&req);
+
+		vnode_rele(req.r_vp);
 	}
 
 out_release_port:
 	if (path != NULL) {
-		FREE_ZONE(path, MAXPATHLEN, M_NAMEI);
+		zfree(ZV_NAMEI, path);
 	}
 	ipc_port_release_send(mp);
 
@@ -11009,6 +11334,122 @@ cas_bsdflags_setattr(vnode_t vp, void *arg, vfs_context_t ctx)
 	return VNOP_IOCTL(vp, FSIOC_CAS_BSDFLAGS, arg, FWRITE, ctx);
 }
 
+static int __attribute__((noinline))
+handle_sync_volume(vnode_t vp, vnode_t *arg_vp, caddr_t data, vfs_context_t ctx)
+{
+	struct vfs_attr vfa;
+	mount_t mp = vp->v_mount;
+	unsigned arg;
+	int error;
+
+	/* record vid of vp so we can drop it below. */
+	uint32_t vvid = vp->v_id;
+
+	/*
+	 * Then grab mount_iterref so that we can release the vnode.
+	 * Without this, a thread may call vnode_iterate_prepare then
+	 * get into a deadlock because we've never released the root vp
+	 */
+	error = mount_iterref(mp, 0);
+	if (error) {
+		return error;
+	}
+	vnode_put(vp);
+
+	arg = MNT_NOWAIT;
+	if (*(uint32_t*)data & FSCTL_SYNC_WAIT) {
+		arg = MNT_WAIT;
+	}
+
+	/*
+	 * If the filessytem supports multiple filesytems in a
+	 * partition (For eg APFS volumes in a container, it knows
+	 * that the waitfor argument to VFS_SYNC are flags.
+	 */
+	VFSATTR_INIT(&vfa);
+	VFSATTR_WANTED(&vfa, f_capabilities);
+	if ((vfs_getattr(mp, &vfa, vfs_context_current()) == 0) &&
+	    VFSATTR_IS_SUPPORTED(&vfa, f_capabilities) &&
+	    ((vfa.f_capabilities.valid[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_SHARED_SPACE)) &&
+	    ((vfa.f_capabilities.capabilities[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_SHARED_SPACE))) {
+		arg |= MNT_VOLUME;
+	}
+
+	/* issue the sync for this volume */
+	(void)sync_callback(mp, &arg);
+
+	/*
+	 * Then release the mount_iterref once we're done syncing; it's not
+	 * needed for the VNOP_IOCTL below
+	 */
+	mount_iterdrop(mp);
+
+	if (arg & FSCTL_SYNC_FULLSYNC) {
+		/* re-obtain vnode iocount on the root vp, if possible */
+		error = vnode_getwithvid(vp, vvid);
+		if (error == 0) {
+			error = VNOP_IOCTL(vp, F_FULLFSYNC, (caddr_t)NULL, 0, ctx);
+			vnode_put(vp);
+		}
+	}
+	/* mark the argument VP as having been released */
+	*arg_vp = NULL;
+	return error;
+}
+
+#if ROUTEFS
+static int __attribute__((noinline))
+handle_routes(user_addr_t udata)
+{
+	char routepath[MAXPATHLEN];
+	size_t len = 0;
+	int error;
+
+	if ((error = suser(kauth_cred_get(), &(current_proc()->p_acflag)))) {
+		return error;
+	}
+	bzero(routepath, MAXPATHLEN);
+	error = copyinstr(udata, &routepath[0], MAXPATHLEN, &len);
+	if (error) {
+		return error;
+	}
+	error = routefs_kernel_mount(routepath);
+	return error;
+}
+#endif
+
+static int __attribute__((noinline))
+handle_flags(vnode_t vp, caddr_t data, vfs_context_t ctx)
+{
+	struct fsioc_cas_bsdflags *cas = (struct fsioc_cas_bsdflags *)data;
+	struct vnode_attr va;
+	int error;
+
+	VATTR_INIT(&va);
+	VATTR_SET(&va, va_flags, cas->new_flags);
+
+	error = chflags0(vp, &va, cas_bsdflags_setattr, cas, ctx);
+	return error;
+}
+
+static int __attribute__((noinline))
+handle_auth(vnode_t vp, u_long cmd, caddr_t data, u_long options, vfs_context_t ctx)
+{
+	struct mount *mp = NULL;
+	errno_t rootauth = 0;
+
+	mp = vp->v_mount;
+
+	/*
+	 * query the underlying FS and see if it reports something
+	 * sane for this vnode. If volume is authenticated via
+	 * chunklist, leave that for the caller to determine.
+	 */
+	rootauth = VNOP_IOCTL(vp, cmd, data, (int)options, ctx);
+
+	return rootauth;
+}
+
 /*
  * Make a filesystem-specific control call:
  */
@@ -11040,7 +11481,7 @@ fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long 
 	memp = NULL;
 
 	if (size > sizeof(stkbuf)) {
-		if ((memp = (caddr_t)kalloc(size)) == 0) {
+		if ((memp = (caddr_t)kheap_alloc(KHEAP_TEMP, size, Z_WAITOK)) == 0) {
 			return ENOMEM;
 		}
 		data = memp;
@@ -11053,7 +11494,7 @@ fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long 
 			error = copyin(udata, data, size);
 			if (error) {
 				if (memp) {
-					kfree(memp, size);
+					kheap_free(KHEAP_TEMP, memp, size);
 				}
 				return error;
 			}
@@ -11080,87 +11521,15 @@ fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long 
 
 	/* Check to see if it's a generic command */
 	switch (cmd) {
-	case FSIOC_SYNC_VOLUME: {
-		struct vfs_attr vfa;
-		mount_t mp = vp->v_mount;
-		unsigned arg;
+	case FSIOC_SYNC_VOLUME:
+		error = handle_sync_volume(vp, arg_vp, data, ctx);
+		break;
 
-
-		/* record vid of vp so we can drop it below. */
-		uint32_t vvid = vp->v_id;
-
-		/*
-		 * Then grab mount_iterref so that we can release the vnode.
-		 * Without this, a thread may call vnode_iterate_prepare then
-		 * get into a deadlock because we've never released the root vp
-		 */
-		error = mount_iterref(mp, 0);
-		if (error) {
-			break;
-		}
-		vnode_put(vp);
-
-		arg = MNT_NOWAIT;
-		if (*(uint32_t*)data & FSCTL_SYNC_WAIT) {
-			arg = MNT_WAIT;
-		}
-
-		/*
-		 * If the filessytem supports multiple filesytems in a
-		 * partition (For eg APFS volumes in a container, it knows
-		 * that the waitfor argument to VFS_SYNC are flags.
-		 */
-		VFSATTR_INIT(&vfa);
-		VFSATTR_WANTED(&vfa, f_capabilities);
-		if ((vfs_getattr(mp, &vfa, vfs_context_current()) == 0) &&
-		    VFSATTR_IS_SUPPORTED(&vfa, f_capabilities) &&
-		    ((vfa.f_capabilities.valid[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_SHARED_SPACE)) &&
-		    ((vfa.f_capabilities.capabilities[VOL_CAPABILITIES_FORMAT] & VOL_CAP_FMT_SHARED_SPACE))) {
-			arg |= MNT_VOLUME;
-		}
-
-		/* issue the sync for this volume */
-		(void)sync_callback(mp, &arg);
-
-		/*
-		 * Then release the mount_iterref once we're done syncing; it's not
-		 * needed for the VNOP_IOCTL below
-		 */
-		mount_iterdrop(mp);
-
-		if (arg & FSCTL_SYNC_FULLSYNC) {
-			/* re-obtain vnode iocount on the root vp, if possible */
-			error = vnode_getwithvid(vp, vvid);
-			if (error == 0) {
-				error = VNOP_IOCTL(vp, F_FULLFSYNC, (caddr_t)NULL, 0, ctx);
-				vnode_put(vp);
-			}
-		}
-		/* mark the argument VP as having been released */
-		*arg_vp = NULL;
-	}
-	break;
-
-	case FSIOC_ROUTEFS_SETROUTEID: {
+	case FSIOC_ROUTEFS_SETROUTEID:
 #if ROUTEFS
-		char routepath[MAXPATHLEN];
-		size_t len = 0;
-
-		if ((error = suser(kauth_cred_get(), &(current_proc()->p_acflag)))) {
-			break;
-		}
-		bzero(routepath, MAXPATHLEN);
-		error = copyinstr(udata, &routepath[0], MAXPATHLEN, &len);
-		if (error) {
-			break;
-		}
-		error = routefs_kernel_mount(routepath);
-		if (error) {
-			break;
-		}
+		error = handle_routes(udata);
 #endif
-	}
-	break;
+		break;
 
 	case FSIOC_SET_PACKAGE_EXTS: {
 		user_addr_t ext_strings;
@@ -11181,7 +11550,10 @@ fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long 
 		}
 
 		if (is64bit) {
-			ext_strings = ((user64_package_ext_info *)data)->strings;
+			if (sizeof(user64_addr_t) > sizeof(user_addr_t)) {
+				assert(((user64_package_ext_info *)data)->strings <= UINT32_MAX);
+			}
+			ext_strings = (user_addr_t)((user64_package_ext_info *)data)->strings;
 			num_entries = ((user64_package_ext_info *)data)->num_entries;
 			max_width   = ((user64_package_ext_info *)data)->max_width;
 		} else {
@@ -11201,6 +11573,21 @@ fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long 
 		if (vp->v_mount) {
 			mount_lock(vp->v_mount);
 			if (data[0] != 0) {
+				int i;
+				for (i = 0; i < MFSTYPENAMELEN; i++) {
+					if (!data[i]) {
+						goto continue_copy;
+					}
+				}
+				/*
+				 * Getting here means we have a user data string which has no
+				 * NULL termination in its first MFSTYPENAMELEN bytes.
+				 * This is bogus, let's avoid strlcpy-ing the read data and
+				 * return an error.
+				 */
+				error = EINVAL;
+				goto unlock;
+continue_copy:
 				strlcpy(&vp->v_mount->fstypename_override[0], data, MFSTYPENAMELEN);
 				vp->v_mount->mnt_kern_flag |= MNTK_TYPENAME_OVERRIDE;
 				if (vfs_isrdonly(vp->v_mount) && strcmp(vp->v_mount->fstypename_override, "mtmfs") == 0) {
@@ -11214,6 +11601,7 @@ fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long 
 				vp->v_mount->mnt_kern_flag &= ~MNTK_TYPENAME_OVERRIDE;
 				vp->v_mount->fstypename_override[0] = '\0';
 			}
+unlock:
 			mount_unlock(vp->v_mount);
 		}
 	}
@@ -11229,25 +11617,29 @@ fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long 
 	}
 	break;
 
-	case FSIOC_CAS_BSDFLAGS: {
-		struct fsioc_cas_bsdflags *cas = (struct fsioc_cas_bsdflags *)data;
-		struct vnode_attr va;
-
-		VATTR_INIT(&va);
-		VATTR_SET(&va, va_flags, cas->new_flags);
-
-		error = chflags0(vp, &va, cas_bsdflags_setattr, cas, ctx);
-	}
-	break;
+	case FSIOC_CAS_BSDFLAGS:
+		error = handle_flags(vp, data, ctx);
+		break;
 
 	case FSIOC_FD_ONLY_OPEN_ONCE: {
+		error = 0;
 		if (vnode_usecount(vp) > 1) {
-			error = EBUSY;
-		} else {
-			error = 0;
+			vnode_lock_spin(vp);
+			if (vp->v_lflag & VL_HASSTREAMS) {
+				if (vnode_isinuse_locked(vp, 1, 1)) {
+					error = EBUSY;
+				}
+			} else if (vnode_usecount(vp) > 1) {
+				error = EBUSY;
+			}
+			vnode_unlock(vp);
 		}
 	}
 	break;
+
+	case FSIOC_EVAL_ROOTAUTH:
+		error = handle_auth(vp, cmd, data, options, ctx);
+		break;
 
 	default: {
 		/* other, known commands shouldn't be passed down here */
@@ -11275,11 +11667,12 @@ fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long 
 		case F_BARRIERFSYNC:
 		case F_FREEZE_FS:
 		case F_THAW_FS:
+		case FSIOC_KERNEL_ROOTAUTH:
 			error = EINVAL;
 			goto outdrop;
 		}
 		/* Invoke the filesystem-specific code */
-		error = VNOP_IOCTL(vp, cmd, data, options, ctx);
+		error = VNOP_IOCTL(vp, cmd, data, (int)options, ctx);
 	}
 	} /* end switch stmt */
 
@@ -11293,7 +11686,7 @@ fsctl_internal(proc_t p, vnode_t *arg_vp, u_long cmd, user_addr_t udata, u_long 
 
 outdrop:
 	if (memp) {
-		kfree(memp, size);
+		kheap_free(KHEAP_TEMP, memp, size);
 	}
 
 	return error;
@@ -11305,11 +11698,11 @@ fsctl(proc_t p, struct fsctl_args *uap, __unused int32_t *retval)
 {
 	int error;
 	struct nameidata nd;
-	u_long nameiflags;
+	uint32_t nameiflags;
 	vnode_t vp = NULL;
 	vfs_context_t ctx = vfs_context_current();
 
-	AUDIT_ARG(cmd, uap->cmd);
+	AUDIT_ARG(cmd, (int)uap->cmd);
 	AUDIT_ARG(value32, uap->options);
 	/* Get the vnode for the file we are getting info on:  */
 	nameiflags = 0;
@@ -11361,7 +11754,7 @@ ffsctl(proc_t p, struct ffsctl_args *uap, __unused int32_t *retval)
 	int fd = -1;
 
 	AUDIT_ARG(fd, uap->fd);
-	AUDIT_ARG(cmd, uap->cmd);
+	AUDIT_ARG(cmd, (int)uap->cmd);
 	AUDIT_ARG(value32, uap->options);
 
 	/* Get the vnode for the file we are getting info on:  */
@@ -11394,6 +11787,27 @@ ffsctl(proc_t p, struct ffsctl_args *uap, __unused int32_t *retval)
 	return error;
 }
 /* end of fsctl system call */
+
+#define FILESEC_ACCESS_ENTITLEMENT              \
+	"com.apple.private.vfs.filesec-access"
+
+static int
+xattr_entitlement_check(const char *attrname, vfs_context_t ctx, bool setting)
+{
+	if (strcmp(attrname, KAUTH_FILESEC_XATTR) == 0) {
+		/*
+		 * get: root and tasks with FILESEC_ACCESS_ENTITLEMENT.
+		 * set: only tasks with FILESEC_ACCESS_ENTITLEMENT.
+		 */
+		if ((!setting && vfs_context_issuser(ctx)) ||
+		    IOTaskHasEntitlement(current_task(),
+		    FILESEC_ACCESS_ENTITLEMENT)) {
+			return 0;
+		}
+	}
+
+	return EPERM;
+}
 
 /*
  *  Retrieve the data of an extended attribute.
@@ -11429,11 +11843,9 @@ getxattr(proc_t p, struct getxattr_args *uap, user_ssize_t *retval)
 	if (error != 0) {
 		goto out;
 	}
-	if (xattr_protected(attrname)) {
-		if (!vfs_context_issuser(ctx) || strcmp(attrname, "com.apple.system.Security") != 0) {
-			error = EPERM;
-			goto out;
-		}
+	if (xattr_protected(attrname) &&
+	    (error = xattr_entitlement_check(attrname, ctx, false)) != 0) {
+		goto out;
 	}
 	/*
 	 * the specific check for 0xffffffff is a hack to preserve
@@ -11491,6 +11903,7 @@ fgetxattr(proc_t p, struct fgetxattr_args *uap, user_ssize_t *retval)
 {
 	vnode_t vp;
 	char attrname[XATTR_MAXNAMELEN + 1];
+	vfs_context_t ctx = vfs_context_current();
 	uio_t auio = NULL;
 	int spacetype = IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32;
 	size_t attrsize = 0;
@@ -11513,8 +11926,8 @@ fgetxattr(proc_t p, struct fgetxattr_args *uap, user_ssize_t *retval)
 	if (error != 0) {
 		goto out;
 	}
-	if (xattr_protected(attrname)) {
-		error = EPERM;
+	if (xattr_protected(attrname) &&
+	    (error = xattr_entitlement_check(attrname, ctx, false)) != 0) {
 		goto out;
 	}
 	if (uap->value && uap->size > 0) {
@@ -11566,11 +11979,15 @@ setxattr(proc_t p, struct setxattr_args *uap, int *retval)
 		/* Otherwise return the default error from copyinstr to detect ERANGE, etc */
 		return error;
 	}
-	if (xattr_protected(attrname)) {
-		return EPERM;
+	if (xattr_protected(attrname) &&
+	    (error = xattr_entitlement_check(attrname, ctx, true)) != 0) {
+		return error;
 	}
 	if (uap->size != 0 && uap->value == 0) {
 		return EINVAL;
+	}
+	if (uap->size > INT_MAX) {
+		return E2BIG;
 	}
 
 	nameiflags = (uap->options & XATTR_NOFOLLOW) ? 0 : FOLLOW;
@@ -11606,14 +12023,12 @@ fsetxattr(proc_t p, struct fsetxattr_args *uap, int *retval)
 {
 	vnode_t vp;
 	char attrname[XATTR_MAXNAMELEN + 1];
+	vfs_context_t ctx = vfs_context_current();
 	uio_t auio = NULL;
 	int spacetype = IS_64BIT_PROCESS(p) ? UIO_USERSPACE64 : UIO_USERSPACE32;
 	size_t namelen;
 	int error;
 	char uio_buf[UIO_SIZEOF(1)];
-#if CONFIG_FSE
-	vfs_context_t ctx = vfs_context_current();
-#endif
 
 	if (uap->options & (XATTR_NOFOLLOW | XATTR_NOSECURITY | XATTR_NODEFAULT)) {
 		return EINVAL;
@@ -11628,11 +12043,15 @@ fsetxattr(proc_t p, struct fsetxattr_args *uap, int *retval)
 		/* Otherwise return the default error from copyinstr to detect ERANGE, etc */
 		return error;
 	}
-	if (xattr_protected(attrname)) {
-		return EPERM;
+	if (xattr_protected(attrname) &&
+	    (error = xattr_entitlement_check(attrname, ctx, true)) != 0) {
+		return error;
 	}
 	if (uap->size != 0 && uap->value == 0) {
 		return EINVAL;
+	}
+	if (uap->size > INT_MAX) {
+		return E2BIG;
 	}
 	if ((error = file_vnode(uap->fd, &vp))) {
 		return error;
@@ -11928,7 +12347,7 @@ unionget:
 		bpflags |= BUILDPATH_NO_FIRMLINK;
 	}
 	bpflags |= BUILDPATH_CHECK_MOVED;
-	error = build_path(vp, buf, bufsize, &length, bpflags, ctx);
+	error = build_path(vp, buf, (int)bufsize, &length, bpflags, ctx);
 	vnode_put(vp);
 
 	if (error) {
@@ -11946,26 +12365,24 @@ unionget:
 
 	AUDIT_ARG(text, buf);
 
-	if (kdebug_enable) {
-		long dbg_parms[NUMPARMS];
-		int  dbg_namelen;
+	if (kdebug_debugid_enabled(VFS_LOOKUP) && length > 0) {
+		unsigned long path_words[NUMPARMS];
+		size_t path_len = sizeof(path_words);
 
-		dbg_namelen = (int)sizeof(dbg_parms);
+		if ((size_t)length < path_len) {
+			memcpy((char *)path_words, buf, length);
+			memset((char *)path_words + length, 0, path_len - length);
 
-		if (length < dbg_namelen) {
-			memcpy((char *)dbg_parms, buf, length);
-			memset((char *)dbg_parms + length, 0, dbg_namelen - length);
-
-			dbg_namelen = length;
+			path_len = length;
 		} else {
-			memcpy((char *)dbg_parms, buf + (length - dbg_namelen), dbg_namelen);
+			memcpy((char *)path_words, buf + (length - path_len), path_len);
 		}
 
-		kdebug_vfs_lookup(dbg_parms, dbg_namelen, (void *)vp,
+		kdebug_vfs_lookup(path_words, (int)path_len, vp,
 		    KDBG_VFS_LOOKUP_FLAG_LOOKUP);
 	}
 
-	*pathlen = (user_ssize_t)length; /* may be superseded by error */
+	*pathlen = length; /* may be superseded by error */
 
 out:
 	return error;
@@ -11975,7 +12392,7 @@ out:
  * Obtain the full pathname of a file system object by id.
  */
 static int
-fsgetpath_extended(user_addr_t buf, int bufsize, user_addr_t user_fsid, uint64_t objid,
+fsgetpath_extended(user_addr_t buf, user_size_t bufsize, user_addr_t user_fsid, uint64_t objid,
     uint32_t options, user_ssize_t *retval)
 {
 	vfs_context_t ctx = vfs_context_current();
@@ -11998,7 +12415,7 @@ fsgetpath_extended(user_addr_t buf, int bufsize, user_addr_t user_fsid, uint64_t
 	if (bufsize > PAGE_SIZE || bufsize <= 0) {
 		return EINVAL;
 	}
-	MALLOC(realpath, char *, bufsize, M_TEMP, M_WAITOK | M_ZERO);
+	realpath = kheap_alloc(KHEAP_TEMP, bufsize, Z_WAITOK | Z_ZERO);
 	if (realpath == NULL) {
 		return ENOMEM;
 	}
@@ -12014,9 +12431,7 @@ fsgetpath_extended(user_addr_t buf, int bufsize, user_addr_t user_fsid, uint64_t
 
 	*retval = (user_ssize_t)length; /* may be superseded by error */
 out:
-	if (realpath) {
-		FREE(realpath, M_TEMP);
-	}
+	kheap_free(KHEAP_TEMP, realpath, bufsize);
 	return error;
 }
 
@@ -12054,7 +12469,7 @@ munge_statfs(struct mount *mp, struct vfsstatfs *sfsp,
 		my_size = copy_size = sizeof(sfs);
 		bzero(&sfs, my_size);
 		sfs.f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
-		sfs.f_type = mp->mnt_vtable->vfc_typenum;
+		sfs.f_type = (short)mp->mnt_vtable->vfc_typenum;
 		sfs.f_reserved1 = (short)sfsp->f_fssubtype;
 		sfs.f_bsize = (user64_long_t)sfsp->f_bsize;
 		sfs.f_iosize = (user64_long_t)sfsp->f_iosize;
@@ -12084,7 +12499,7 @@ munge_statfs(struct mount *mp, struct vfsstatfs *sfsp,
 		bzero(&sfs, my_size);
 
 		sfs.f_flags = mp->mnt_flag & MNT_VISFLAGMASK;
-		sfs.f_type = mp->mnt_vtable->vfc_typenum;
+		sfs.f_type = (short)mp->mnt_vtable->vfc_typenum;
 		sfs.f_reserved1 = (short)sfsp->f_fssubtype;
 
 		/*
@@ -12130,7 +12545,7 @@ munge_statfs(struct mount *mp, struct vfsstatfs *sfsp,
 			sfs.f_bavail = (user32_long_t)__SHIFT_OR_CLIP(sfsp->f_bavail, shift);
 #undef __SHIFT_OR_CLIP
 			sfs.f_bsize = (user32_long_t)(sfsp->f_bsize << shift);
-			sfs.f_iosize = lmax(sfsp->f_iosize, sfsp->f_bsize);
+			sfs.f_iosize = (int)lmax(sfsp->f_iosize, sfsp->f_bsize);
 		} else {
 			/* filesystem is small enough to be reported honestly */
 			sfs.f_bsize = (user32_long_t)sfsp->f_bsize;
@@ -12216,12 +12631,12 @@ munge_user32_stat(struct stat *sbp, struct user32_stat *usbp)
 	usbp->st_gid = sbp->st_gid;
 	usbp->st_rdev = sbp->st_rdev;
 #ifndef _POSIX_C_SOURCE
-	usbp->st_atimespec.tv_sec = sbp->st_atimespec.tv_sec;
-	usbp->st_atimespec.tv_nsec = sbp->st_atimespec.tv_nsec;
-	usbp->st_mtimespec.tv_sec = sbp->st_mtimespec.tv_sec;
-	usbp->st_mtimespec.tv_nsec = sbp->st_mtimespec.tv_nsec;
-	usbp->st_ctimespec.tv_sec = sbp->st_ctimespec.tv_sec;
-	usbp->st_ctimespec.tv_nsec = sbp->st_ctimespec.tv_nsec;
+	usbp->st_atimespec.tv_sec = (user32_time_t)sbp->st_atimespec.tv_sec;
+	usbp->st_atimespec.tv_nsec = (user32_long_t)sbp->st_atimespec.tv_nsec;
+	usbp->st_mtimespec.tv_sec = (user32_time_t)sbp->st_mtimespec.tv_sec;
+	usbp->st_mtimespec.tv_nsec = (user32_long_t)sbp->st_mtimespec.tv_nsec;
+	usbp->st_ctimespec.tv_sec = (user32_time_t)sbp->st_ctimespec.tv_sec;
+	usbp->st_ctimespec.tv_nsec = (user32_long_t)sbp->st_ctimespec.tv_nsec;
 #else
 	usbp->st_atime = sbp->st_atime;
 	usbp->st_atimensec = sbp->st_atimensec;
@@ -12297,14 +12712,14 @@ munge_user32_stat64(struct stat64 *sbp, struct user32_stat64 *usbp)
 	usbp->st_gid = sbp->st_gid;
 	usbp->st_rdev = sbp->st_rdev;
 #ifndef _POSIX_C_SOURCE
-	usbp->st_atimespec.tv_sec = sbp->st_atimespec.tv_sec;
-	usbp->st_atimespec.tv_nsec = sbp->st_atimespec.tv_nsec;
-	usbp->st_mtimespec.tv_sec = sbp->st_mtimespec.tv_sec;
-	usbp->st_mtimespec.tv_nsec = sbp->st_mtimespec.tv_nsec;
-	usbp->st_ctimespec.tv_sec = sbp->st_ctimespec.tv_sec;
-	usbp->st_ctimespec.tv_nsec = sbp->st_ctimespec.tv_nsec;
-	usbp->st_birthtimespec.tv_sec = sbp->st_birthtimespec.tv_sec;
-	usbp->st_birthtimespec.tv_nsec = sbp->st_birthtimespec.tv_nsec;
+	usbp->st_atimespec.tv_sec = (user32_time_t)sbp->st_atimespec.tv_sec;
+	usbp->st_atimespec.tv_nsec = (user32_long_t)sbp->st_atimespec.tv_nsec;
+	usbp->st_mtimespec.tv_sec = (user32_time_t)sbp->st_mtimespec.tv_sec;
+	usbp->st_mtimespec.tv_nsec = (user32_long_t)sbp->st_mtimespec.tv_nsec;
+	usbp->st_ctimespec.tv_sec = (user32_time_t)sbp->st_ctimespec.tv_sec;
+	usbp->st_ctimespec.tv_nsec = (user32_long_t)sbp->st_ctimespec.tv_nsec;
+	usbp->st_birthtimespec.tv_sec = (user32_time_t)sbp->st_birthtimespec.tv_sec;
+	usbp->st_birthtimespec.tv_nsec = (user32_long_t)sbp->st_birthtimespec.tv_nsec;
 #else
 	usbp->st_atime = sbp->st_atime;
 	usbp->st_atimensec = sbp->st_atimensec;
@@ -12423,7 +12838,7 @@ vnode_get_snapshot(int dirfd, vnode_t *rvpp, vnode_t *sdvpp,
 		goto out;
 	}
 
-	MALLOC(name_buf, caddr_t, MAXPATHLEN, M_TEMP, M_WAITOK);
+	name_buf = zalloc_flags(ZV_NAMEI, Z_WAITOK);
 	error = copyinstr(name, name_buf, MAXPATHLEN, &name_len);
 	if (error) {
 		goto out1;
@@ -12466,7 +12881,7 @@ vnode_get_snapshot(int dirfd, vnode_t *rvpp, vnode_t *sdvpp,
 
 	error = namei(ndp);
 out1:
-	FREE(name_buf, M_TEMP);
+	zfree(ZV_NAMEI, name_buf);
 out:
 	if (error) {
 		if (*sdvpp) {
@@ -12496,41 +12911,50 @@ out:
  * Since this requires superuser privileges, vnode_authorize calls are not
  * made.
  */
-static int
+static int __attribute__((noinline))
 snapshot_create(int dirfd, user_addr_t name, __unused uint32_t flags,
     vfs_context_t ctx)
 {
 	vnode_t rvp, snapdvp;
 	int error;
-	struct nameidata namend;
+	struct nameidata *ndp;
 
-	error = vnode_get_snapshot(dirfd, &rvp, &snapdvp, name, &namend, CREATE,
+	ndp = kheap_alloc(KHEAP_TEMP, sizeof(*ndp), Z_WAITOK);
+
+	error = vnode_get_snapshot(dirfd, &rvp, &snapdvp, name, ndp, CREATE,
 	    OP_LINK, ctx);
 	if (error) {
-		return error;
+		goto out;
 	}
 
-	if (namend.ni_vp) {
-		vnode_put(namend.ni_vp);
+	if (ndp->ni_vp) {
+		vnode_put(ndp->ni_vp);
 		error = EEXIST;
 	} else {
-		struct vnode_attr va;
+		struct vnode_attr *vap;
 		vnode_t vp = NULLVP;
 
-		VATTR_INIT(&va);
-		VATTR_SET(&va, va_type, VREG);
-		VATTR_SET(&va, va_mode, 0);
+		vap = kheap_alloc(KHEAP_TEMP, sizeof(*vap), Z_WAITOK);
 
-		error = vn_create(snapdvp, &vp, &namend, &va,
+		VATTR_INIT(vap);
+		VATTR_SET(vap, va_type, VREG);
+		VATTR_SET(vap, va_mode, 0);
+
+		error = vn_create(snapdvp, &vp, ndp, vap,
 		    VN_CREATE_NOAUTH  | VN_CREATE_NOINHERIT, 0, NULL, ctx);
 		if (!error && vp) {
 			vnode_put(vp);
 		}
+
+		kheap_free(KHEAP_TEMP, vap, sizeof(*vap));
 	}
 
-	nameidone(&namend);
+	nameidone(ndp);
 	vnode_put(snapdvp);
 	vnode_put(rvp);
+out:
+	kheap_free(KHEAP_TEMP, ndp, sizeof(*ndp));
+
 	return error;
 }
 
@@ -12540,28 +12964,32 @@ snapshot_create(int dirfd, user_addr_t name, __unused uint32_t flags,
  * get the vnode for the unnamed snapshot directory and the snapshot and
  * delete the snapshot.
  */
-static int
+static int __attribute__((noinline))
 snapshot_delete(int dirfd, user_addr_t name, __unused uint32_t flags,
     vfs_context_t ctx)
 {
 	vnode_t rvp, snapdvp;
 	int error;
-	struct nameidata namend;
+	struct nameidata *ndp;
 
-	error = vnode_get_snapshot(dirfd, &rvp, &snapdvp, name, &namend, DELETE,
+	ndp = kheap_alloc(KHEAP_TEMP, sizeof(*ndp), Z_WAITOK);
+
+	error = vnode_get_snapshot(dirfd, &rvp, &snapdvp, name, ndp, DELETE,
 	    OP_UNLINK, ctx);
 	if (error) {
 		goto out;
 	}
 
-	error = VNOP_REMOVE(snapdvp, namend.ni_vp, &namend.ni_cnd,
+	error = VNOP_REMOVE(snapdvp, ndp->ni_vp, &ndp->ni_cnd,
 	    VNODE_REMOVE_SKIP_NAMESPACE_EVENT, ctx);
 
-	vnode_put(namend.ni_vp);
-	nameidone(&namend);
+	vnode_put(ndp->ni_vp);
+	nameidone(ndp);
 	vnode_put(snapdvp);
 	vnode_put(rvp);
 out:
+	kheap_free(KHEAP_TEMP, ndp, sizeof(*ndp));
+
 	return error;
 }
 
@@ -12570,7 +12998,7 @@ out:
  *
  * Marks the filesystem to revert to the given snapshot on next mount.
  */
-static int
+static int __attribute__((noinline))
 snapshot_revert(int dirfd, user_addr_t name, __unused uint32_t flags,
     vfs_context_t ctx)
 {
@@ -12588,10 +13016,10 @@ snapshot_revert(int dirfd, user_addr_t name, __unused uint32_t flags,
 	}
 	mp = vnode_mount(rvp);
 
-	MALLOC(name_buf, caddr_t, MAXPATHLEN, M_TEMP, M_WAITOK);
+	name_buf = zalloc_flags(ZV_NAMEI, Z_WAITOK);
 	error = copyinstr(name, name_buf, MAXPATHLEN, &name_len);
 	if (error) {
-		FREE(name_buf, M_TEMP);
+		zfree(ZV_NAMEI, name_buf);
 		vnode_put(rvp);
 		return error;
 	}
@@ -12599,7 +13027,7 @@ snapshot_revert(int dirfd, user_addr_t name, __unused uint32_t flags,
 #if CONFIG_MACF
 	error = mac_mount_check_snapshot_revert(ctx, mp, name_buf);
 	if (error) {
-		FREE(name_buf, M_TEMP);
+		zfree(ZV_NAMEI, name_buf);
 		vnode_put(rvp);
 		return error;
 	}
@@ -12612,7 +13040,7 @@ snapshot_revert(int dirfd, user_addr_t name, __unused uint32_t flags,
 	error = mount_iterref(mp, 0);
 	vnode_put(rvp);
 	if (error) {
-		FREE(name_buf, M_TEMP);
+		zfree(ZV_NAMEI, name_buf);
 		return error;
 	}
 
@@ -12627,7 +13055,7 @@ snapshot_revert(int dirfd, user_addr_t name, __unused uint32_t flags,
 
 	error = VFS_IOCTL(mp, VFSIOC_REVERT_SNAPSHOT, (caddr_t)&revert_data, 0, ctx);
 	mount_iterdrop(mp);
-	FREE(name_buf, M_TEMP);
+	zfree(ZV_NAMEI, name_buf);
 
 	if (error) {
 		/* If there was any error, try again using VNOP_IOCTL */
@@ -12662,7 +13090,7 @@ snapshot_revert(int dirfd, user_addr_t name, __unused uint32_t flags,
  * rename(2) (which has to deal with a lot more complications). It differs
  * slightly from rename(2) in that EEXIST is returned if the new name exists.
  */
-static int
+static int __attribute__((noinline))
 snapshot_rename(int dirfd, user_addr_t old, user_addr_t new,
     __unused uint32_t flags, vfs_context_t ctx)
 {
@@ -12678,7 +13106,7 @@ snapshot_rename(int dirfd, user_addr_t old, user_addr_t new,
 		struct nameidata to_node;
 	} * __rename_data;
 
-	MALLOC(__rename_data, void *, sizeof(*__rename_data), M_TEMP, M_WAITOK);
+	__rename_data = kheap_alloc(KHEAP_TEMP, sizeof(*__rename_data), Z_WAITOK);
 	fromnd = &__rename_data->from_node;
 	tond = &__rename_data->to_node;
 
@@ -12689,7 +13117,7 @@ snapshot_rename(int dirfd, user_addr_t old, user_addr_t new,
 	}
 	fvp  = fromnd->ni_vp;
 
-	MALLOC(newname_buf, caddr_t, MAXPATHLEN, M_TEMP, M_WAITOK);
+	newname_buf = zalloc_flags(ZV_NAMEI, Z_WAITOK);
 	error = copyinstr(new, newname_buf, MAXPATHLEN, &name_len);
 	if (error) {
 		goto out1;
@@ -12747,13 +13175,13 @@ snapshot_rename(int dirfd, user_addr_t old, user_addr_t new,
 out2:
 	nameidone(tond);
 out1:
-	FREE(newname_buf, M_TEMP);
+	zfree(ZV_NAMEI, newname_buf);
 	vnode_put(fvp);
 	vnode_put(snapdvp);
 	vnode_put(rvp);
 	nameidone(fromnd);
 out:
-	FREE(__rename_data, M_TEMP);
+	kheap_free(KHEAP_TEMP, __rename_data, sizeof(*__rename_data));
 	return error;
 }
 
@@ -12763,7 +13191,7 @@ out:
  * get the vnode for the unnamed snapshot directory and the snapshot and
  * mount the snapshot.
  */
-static int
+static int __attribute__((noinline))
 snapshot_mount(int dirfd, user_addr_t name, user_addr_t directory,
     __unused user_addr_t mnt_data, __unused uint32_t flags, vfs_context_t ctx)
 {
@@ -12778,8 +13206,8 @@ snapshot_mount(int dirfd, user_addr_t name, user_addr_t directory,
 		struct nameidata dirnd;
 	} * __snapshot_mount_data;
 
-	MALLOC(__snapshot_mount_data, void *, sizeof(*__snapshot_mount_data),
-	    M_TEMP, M_WAITOK);
+	__snapshot_mount_data = kheap_alloc(KHEAP_TEMP,
+	    sizeof(*__snapshot_mount_data), Z_WAITOK);
 	snapndp = &__snapshot_mount_data->snapnd;
 	dirndp = &__snapshot_mount_data->dirnd;
 
@@ -12836,7 +13264,8 @@ out1:
 	vnode_put(rvp);
 	nameidone(snapndp);
 out:
-	FREE(__snapshot_mount_data, M_TEMP);
+	kheap_free(KHEAP_TEMP, __snapshot_mount_data,
+	    sizeof(*__snapshot_mount_data));
 	return error;
 }
 
@@ -12845,7 +13274,7 @@ out:
  *
  * Marks the filesystem to root from the given snapshot on next boot.
  */
-static int
+static int __attribute__((noinline))
 snapshot_root(int dirfd, user_addr_t name, __unused uint32_t flags,
     vfs_context_t ctx)
 {
@@ -12863,10 +13292,10 @@ snapshot_root(int dirfd, user_addr_t name, __unused uint32_t flags,
 	}
 	mp = vnode_mount(rvp);
 
-	MALLOC(name_buf, caddr_t, MAXPATHLEN, M_TEMP, M_WAITOK);
+	name_buf = zalloc_flags(ZV_NAMEI, Z_WAITOK);
 	error = copyinstr(name, name_buf, MAXPATHLEN, &name_len);
 	if (error) {
-		FREE(name_buf, M_TEMP);
+		zfree(ZV_NAMEI, name_buf);
 		vnode_put(rvp);
 		return error;
 	}
@@ -12880,7 +13309,7 @@ snapshot_root(int dirfd, user_addr_t name, __unused uint32_t flags,
 	error = mount_iterref(mp, 0);
 	vnode_put(rvp);
 	if (error) {
-		FREE(name_buf, M_TEMP);
+		zfree(ZV_NAMEI, name_buf);
 		return error;
 	}
 
@@ -12896,7 +13325,7 @@ snapshot_root(int dirfd, user_addr_t name, __unused uint32_t flags,
 	error = VFS_IOCTL(mp, VFSIOC_ROOT_SNAPSHOT, (caddr_t)&root_data, 0, ctx);
 
 	mount_iterdrop(mp);
-	FREE(name_buf, M_TEMP);
+	zfree(ZV_NAMEI, name_buf);
 
 	return error;
 }
@@ -12920,10 +13349,10 @@ fs_snapshot(__unused proc_t p, struct fs_snapshot_args *uap,
 	}
 
 	/*
-	 * Enforce user authorization for snapshot modification operations
+	 * Enforce user authorization for snapshot modification operations,
+	 * or if trying to root from snapshot.
 	 */
-	if ((uap->op != SNAPSHOT_OP_MOUNT) &&
-	    (uap->op != SNAPSHOT_OP_ROOT)) {
+	if (uap->op != SNAPSHOT_OP_MOUNT) {
 		vnode_t dvp = NULLVP;
 		vnode_t devvp = NULLVP;
 		mount_t mp;

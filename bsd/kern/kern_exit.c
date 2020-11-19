@@ -178,6 +178,9 @@ extern uint64_t get_task_phys_footprint_limit(task_t);
 int proc_list_uptrs(void *p, uint64_t *udata_buffer, int size);
 extern uint64_t task_corpse_get_crashed_thread_id(task_t corpse_task);
 
+ZONE_DECLARE(zombie_zone, "zombie",
+    sizeof(struct rusage_superset), ZC_NOENCRYPT);
+
 
 /*
  * Things which should have prototypes in headers, but don't
@@ -214,7 +217,7 @@ siginfo_user_to_user32(user_siginfo_t *in, user32_siginfo_t *out)
 	out->si_addr    = CAST_DOWN_EXPLICIT(user32_addr_t, in->si_addr);
 	/* following cast works for sival_int because of padding */
 	out->si_value.sival_ptr = CAST_DOWN_EXPLICIT(user32_addr_t, in->si_value.sival_ptr);
-	out->si_band    = in->si_band;                  /* range reduction */
+	out->si_band    = (user32_long_t)in->si_band;                  /* range reduction */
 }
 
 void
@@ -339,6 +342,14 @@ populate_corpse_crashinfo(proc_t p, task_t corpse_task, struct rusage_superset *
 	uint64_t ledger_network_nonvolatile;
 	uint64_t ledger_network_nonvolatile_compressed;
 	uint64_t ledger_wired_mem;
+	uint64_t ledger_tagged_footprint;
+	uint64_t ledger_tagged_footprint_compressed;
+	uint64_t ledger_media_footprint;
+	uint64_t ledger_media_footprint_compressed;
+	uint64_t ledger_graphics_footprint;
+	uint64_t ledger_graphics_footprint_compressed;
+	uint64_t ledger_neural_footprint;
+	uint64_t ledger_neural_footprint_compressed;
 
 	void *crash_info_ptr = task_get_corpseinfo(corpse_task);
 
@@ -404,16 +415,13 @@ populate_corpse_crashinfo(proc_t p, task_t corpse_task, struct rusage_superset *
 	}
 
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PROC_PATH, MAXPATHLEN, &uaddr)) {
-		char *buf = (char *) kalloc(MAXPATHLEN);
-		if (buf != NULL) {
-			bzero(buf, MAXPATHLEN);
-			proc_pidpathinfo_internal(p, 0, buf, MAXPATHLEN, &retval);
-			kcdata_memcpy(crash_info_ptr, uaddr, buf, MAXPATHLEN);
-			kfree(buf, MAXPATHLEN);
-		}
+		char *buf = zalloc_flags(ZV_NAMEI, Z_WAITOK | Z_ZERO);
+		proc_pidpathinfo_internal(p, 0, buf, MAXPATHLEN, &retval);
+		kcdata_memcpy(crash_info_ptr, uaddr, buf, MAXPATHLEN);
+		zfree(ZV_NAMEI, buf);
 	}
 
-	pflags = p->p_flag & (P_LP64 | P_SUGID);
+	pflags = p->p_flag & (P_LP64 | P_SUGID | P_TRANSLATED);
 	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_PROC_FLAGS, sizeof(pflags), &uaddr)) {
 		kcdata_memcpy(crash_info_ptr, uaddr, &pflags, sizeof(pflags));
 	}
@@ -543,6 +551,50 @@ populate_corpse_crashinfo(proc_t p, task_t corpse_task, struct rusage_superset *
 		kcdata_memcpy(crash_info_ptr, uaddr, &p->p_memlimit_increase, sizeof(p->p_memlimit_increase));
 	}
 
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_TAGGED_FOOTPRINT, sizeof(ledger_tagged_footprint), &uaddr)) {
+		ledger_tagged_footprint = get_task_tagged_footprint(corpse_task);
+		kcdata_memcpy(crash_info_ptr, uaddr, &ledger_tagged_footprint, sizeof(ledger_tagged_footprint));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_TAGGED_FOOTPRINT_COMPRESSED, sizeof(ledger_tagged_footprint_compressed), &uaddr)) {
+		ledger_tagged_footprint_compressed = get_task_tagged_footprint_compressed(corpse_task);
+		kcdata_memcpy(crash_info_ptr, uaddr, &ledger_tagged_footprint_compressed, sizeof(ledger_tagged_footprint_compressed));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_MEDIA_FOOTPRINT, sizeof(ledger_media_footprint), &uaddr)) {
+		ledger_media_footprint = get_task_media_footprint(corpse_task);
+		kcdata_memcpy(crash_info_ptr, uaddr, &ledger_media_footprint, sizeof(ledger_media_footprint));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_MEDIA_FOOTPRINT_COMPRESSED, sizeof(ledger_media_footprint_compressed), &uaddr)) {
+		ledger_media_footprint_compressed = get_task_media_footprint_compressed(corpse_task);
+		kcdata_memcpy(crash_info_ptr, uaddr, &ledger_media_footprint_compressed, sizeof(ledger_media_footprint_compressed));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_GRAPHICS_FOOTPRINT, sizeof(ledger_graphics_footprint), &uaddr)) {
+		ledger_graphics_footprint = get_task_graphics_footprint(corpse_task);
+		kcdata_memcpy(crash_info_ptr, uaddr, &ledger_graphics_footprint, sizeof(ledger_graphics_footprint));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_GRAPHICS_FOOTPRINT_COMPRESSED, sizeof(ledger_graphics_footprint_compressed), &uaddr)) {
+		ledger_graphics_footprint_compressed = get_task_graphics_footprint_compressed(corpse_task);
+		kcdata_memcpy(crash_info_ptr, uaddr, &ledger_graphics_footprint_compressed, sizeof(ledger_graphics_footprint_compressed));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_NEURAL_FOOTPRINT, sizeof(ledger_neural_footprint), &uaddr)) {
+		ledger_neural_footprint = get_task_neural_footprint(corpse_task);
+		kcdata_memcpy(crash_info_ptr, uaddr, &ledger_neural_footprint, sizeof(ledger_neural_footprint));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_LEDGER_NEURAL_FOOTPRINT_COMPRESSED, sizeof(ledger_neural_footprint_compressed), &uaddr)) {
+		ledger_neural_footprint_compressed = get_task_neural_footprint_compressed(corpse_task);
+		kcdata_memcpy(crash_info_ptr, uaddr, &ledger_neural_footprint_compressed, sizeof(ledger_neural_footprint_compressed));
+	}
+
+	if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, TASK_CRASHINFO_MEMORYSTATUS_EFFECTIVE_PRIORITY, sizeof(p->p_memstat_effectivepriority), &uaddr)) {
+		kcdata_memcpy(crash_info_ptr, uaddr, &p->p_memstat_effectivepriority, sizeof(p->p_memstat_effectivepriority));
+	}
+
 	if (p->p_exit_reason != OS_REASON_NULL && reason == OS_REASON_NULL) {
 		reason = p->p_exit_reason;
 	}
@@ -558,7 +610,7 @@ populate_corpse_crashinfo(proc_t p, task_t corpse_task, struct rusage_superset *
 		}
 
 		if (reason->osr_kcd_buf != 0) {
-			uint32_t reason_buf_size = kcdata_memory_get_used_bytes(&reason->osr_kcd_descriptor);
+			uint32_t reason_buf_size = (uint32_t)kcdata_memory_get_used_bytes(&reason->osr_kcd_descriptor);
 			assert(reason_buf_size != 0);
 
 			if (KERN_SUCCESS == kcdata_get_memory_addr(crash_info_ptr, KCDATA_TYPE_NESTED_KCDATA, reason_buf_size, &uaddr)) {
@@ -785,7 +837,7 @@ void
 exit(proc_t p, struct exit_args *uap, int *retval)
 {
 	p->p_xhighbits = ((uint32_t)(uap->rval) & 0xFF000000) >> 24;
-	exit1(p, W_EXITCODE(uap->rval, 0), retval);
+	exit1(p, W_EXITCODE((uint32_t)uap->rval, 0), retval);
 
 	thread_exception_return();
 	/* NOTREACHED */
@@ -1048,29 +1100,26 @@ skipcheck:
 	 *
 	 * If the zombie allocation fails, just punt the stats.
 	 */
-	MALLOC_ZONE(rup, struct rusage_superset *,
-	    sizeof(*rup), M_ZOMBIE, M_WAITOK);
-	if (rup != NULL) {
-		gather_rusage_info(p, &rup->ri, RUSAGE_INFO_CURRENT);
-		rup->ri.ri_phys_footprint = 0;
-		rup->ri.ri_proc_exit_abstime = mach_absolute_time();
+	rup = zalloc(zombie_zone);
+	gather_rusage_info(p, &rup->ri, RUSAGE_INFO_CURRENT);
+	rup->ri.ri_phys_footprint = 0;
+	rup->ri.ri_proc_exit_abstime = mach_absolute_time();
+	/*
+	 * Make the rusage_info visible to external observers
+	 * only after it has been completely filled in.
+	 */
+	p->p_ru = rup;
 
-		/*
-		 * Make the rusage_info visible to external observers
-		 * only after it has been completely filled in.
-		 */
-		p->p_ru = rup;
-	}
 	if (create_corpse) {
 		int est_knotes = 0, num_knotes = 0;
 		uint64_t *buffer = NULL;
-		int buf_size = 0;
+		uint32_t buf_size = 0;
 
 		/* Get all the udata pointers from kqueue */
 		est_knotes = kevent_proc_copy_uptrs(p, NULL, 0);
 		if (est_knotes > 0) {
-			buf_size = (est_knotes + 32) * sizeof(uint64_t);
-			buffer = (uint64_t *) kalloc(buf_size);
+			buf_size = (uint32_t)((est_knotes + 32) * sizeof(uint64_t));
+			buffer = kheap_alloc(KHEAP_TEMP, buf_size, Z_WAITOK);
 			num_knotes = kevent_proc_copy_uptrs(p, buffer, buf_size);
 			if (num_knotes > est_knotes + 32) {
 				num_knotes = est_knotes + 32;
@@ -1082,7 +1131,7 @@ skipcheck:
 		populate_corpse_crashinfo(p, p->task, rup,
 		    code, subcode, buffer, num_knotes, NULL);
 		if (buffer != NULL) {
-			kfree(buffer, buf_size);
+			kheap_free(KHEAP_TEMP, buffer, buf_size);
 		}
 	}
 	/*
@@ -1258,17 +1307,6 @@ proc_exit(proc_t p)
 			if ((tp != TTY_NULL) && (tp->t_session == sessp)) {
 				session_unlock(sessp);
 
-				/*
-				 * We're going to SIGHUP the foreground process
-				 * group. It can't change from this point on
-				 * until the revoke is complete.
-				 * The process group changes under both the tty
-				 * lock and proc_list_lock but we need only one
-				 */
-				tty_lock(tp);
-				ttysetpgrphup(tp);
-				tty_unlock(tp);
-
 				tty_pgsignal(tp, SIGHUP, 1);
 
 				session_lock(sessp);
@@ -1290,7 +1328,8 @@ proc_exit(proc_t p)
 					(void) ttywait(tp);
 					tty_unlock(tp);
 				}
-				context.vc_thread = proc_thread(p); /* XXX */
+
+				context.vc_thread = NULL;
 				context.vc_ucred = kauth_cred_proc_ref(p);
 				VNOP_REVOKE(ttyvp, REVOKEALL, &context);
 				if (cttyflag) {
@@ -1308,14 +1347,6 @@ proc_exit(proc_t p)
 				ttyvp = NULLVP;
 			}
 			if (tp) {
-				/*
-				 * This is cleared even if not set. This is also done in
-				 * spec_close to ensure that the flag is cleared.
-				 */
-				tty_lock(tp);
-				ttyclrpgrphup(tp);
-				tty_unlock(tp);
-
 				ttyfree(tp);
 			}
 		}
@@ -1329,7 +1360,13 @@ proc_exit(proc_t p)
 	fixjobc(p, pg, 0);
 	pg_rele(pg);
 
-	p->p_rlimit[RLIMIT_FSIZE].rlim_cur = RLIM_INFINITY;
+	/*
+	 * Change RLIMIT_FSIZE for accounting/debugging. proc_limitsetcur_internal() will COW the current plimit
+	 * before making changes if the current plimit is shared. The COW'ed plimit will be freed
+	 * below by calling proc_limitdrop().
+	 */
+	proc_limitsetcur_internal(p, RLIMIT_FSIZE, RLIM_INFINITY);
+
 	(void)acct_process(p);
 
 	proc_list_lock();
@@ -1486,14 +1523,13 @@ proc_exit(proc_t p)
 	/*
 	 * Other substructures are freed from wait().
 	 */
-	FREE_ZONE(p->p_stats, sizeof *p->p_stats, M_PSTATS);
+	zfree(proc_stats_zone, p->p_stats);
 	p->p_stats = NULL;
 
-	FREE_ZONE(p->p_sigacts, sizeof *p->p_sigacts, M_SIGACTS);
+	zfree(proc_sigacts_zone, p->p_sigacts);
 	p->p_sigacts = NULL;
 
-	proc_limitdrop(p, 1);
-	p->p_limit = NULL;
+	proc_limitdrop(p);
 
 	/*
 	 * Finish up by terminating the task
@@ -1740,7 +1776,7 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoi
 		ruadd(&parent->p_stats->p_cru, &child->p_ru->ru);
 		update_rusage_info_child(&parent->p_stats->ri_child, &child->p_ru->ri);
 		proc_unlock(parent);
-		FREE_ZONE(child->p_ru, sizeof *child->p_ru, M_ZOMBIE);
+		zfree(zombie_zone, child->p_ru);
 		child->p_ru = NULL;
 	} else {
 		printf("Warning : lost p_ru for %s\n", child->p_comm);
@@ -1764,15 +1800,6 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoi
 	(void)chgproccnt(kauth_cred_getruid(child->p_ucred), -1);
 
 	os_reason_free(child->p_exit_reason);
-
-	/*
-	 * Free up credentials.
-	 */
-	if (IS_VALID_CRED(child->p_ucred)) {
-		kauth_cred_unref(&child->p_ucred);
-	}
-
-	/*  XXXX Note NOT SAFE TO USE p_ucred from this point onwards */
 
 	/*
 	 * Finally finished with old proc entry.
@@ -1807,6 +1834,14 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoi
 
 	proc_list_unlock();
 
+	/*
+	 * Free up credentials.
+	 */
+	if (IS_VALID_CRED(child->p_ucred)) {
+		kauth_cred_t tmp_ucred = child->p_ucred;
+		kauth_cred_unref(&tmp_ucred);
+		child->p_ucred = NOCRED;
+	}
 
 	lck_mtx_destroy(&child->p_mlock, proc_mlock_grp);
 	lck_mtx_destroy(&child->p_ucred_mlock, proc_ucred_mlock_grp);
@@ -1816,7 +1851,7 @@ reap_child_locked(proc_t parent, proc_t child, int deadparent, int reparentedtoi
 #endif
 	lck_spin_destroy(&child->p_slock, proc_slock_grp);
 
-	FREE_ZONE(child, sizeof *child, M_PROC);
+	zfree(proc_zone, child);
 	if ((locked == 1) && (droplock == 0)) {
 		proc_list_lock();
 	}
@@ -2187,14 +2222,20 @@ loop1:
 #endif
 			siginfo.si_signo = SIGCHLD;
 			siginfo.si_pid = p->p_pid;
-			siginfo.si_status = (WEXITSTATUS(p->p_xstat) & 0x00FFFFFF) | (((uint32_t)(p->p_xhighbits) << 24) & 0xFF000000);
-			p->p_xhighbits = 0;
+
+			/* If the child terminated abnormally due to a signal, the signum
+			 * needs to be preserved in the exit status.
+			 */
 			if (WIFSIGNALED(p->p_xstat)) {
 				siginfo.si_code = WCOREDUMP(p->p_xstat) ?
 				    CLD_DUMPED : CLD_KILLED;
+				siginfo.si_status = WTERMSIG(p->p_xstat);
 			} else {
 				siginfo.si_code = CLD_EXITED;
+				siginfo.si_status = WEXITSTATUS(p->p_xstat) & 0x00FFFFFF;
 			}
+			siginfo.si_status |= (((uint32_t)(p->p_xhighbits) << 24) & 0xFF000000);
+			p->p_xhighbits = 0;
 
 			if ((error = copyoutsiginfo(&siginfo,
 			    caller64, uap->infop)) != 0) {
@@ -2484,9 +2525,7 @@ vfork_exit_internal(proc_t p, int rv, int forceexit)
 	struct session *sessp;
 	struct rusage_superset *rup;
 
-	/* XXX Zombie allocation may fail, in which case stats get lost */
-	MALLOC_ZONE(rup, struct rusage_superset *,
-	    sizeof(*rup), M_ZOMBIE, M_WAITOK);
+	rup = zalloc(zombie_zone);
 
 	proc_refdrain(p);
 
@@ -2498,88 +2537,7 @@ vfork_exit_internal(proc_t p, int rv, int forceexit)
 
 	sessp = proc_session(p);
 	if (SESS_LEADER(p, sessp)) {
-		if (sessp->s_ttyvp != NULLVP) {
-			struct vnode *ttyvp;
-			int ttyvid;
-			int cttyflag = 0;
-			struct vfs_context context;
-			struct tty *tp;
-
-			/*
-			 * Controlling process.
-			 * Signal foreground pgrp,
-			 * drain controlling terminal
-			 * and revoke access to controlling terminal.
-			 */
-			session_lock(sessp);
-			tp = SESSION_TP(sessp);
-			if ((tp != TTY_NULL) && (tp->t_session == sessp)) {
-				session_unlock(sessp);
-
-				/*
-				 * We're going to SIGHUP the foreground process
-				 * group. It can't change from this point on
-				 * until the revoke is complete.
-				 * The process group changes under both the tty
-				 * lock and proc_list_lock but we need only one
-				 */
-				tty_lock(tp);
-				ttysetpgrphup(tp);
-				tty_unlock(tp);
-
-				tty_pgsignal(tp, SIGHUP, 1);
-
-				session_lock(sessp);
-				tp = SESSION_TP(sessp);
-			}
-			cttyflag = sessp->s_flags & S_CTTYREF;
-			sessp->s_flags &= ~S_CTTYREF;
-			ttyvp = sessp->s_ttyvp;
-			ttyvid = sessp->s_ttyvid;
-			sessp->s_ttyvp = NULL;
-			sessp->s_ttyvid = 0;
-			sessp->s_ttyp = TTY_NULL;
-			sessp->s_ttypgrpid = NO_PID;
-			session_unlock(sessp);
-
-			if ((ttyvp != NULLVP) && (vnode_getwithvid(ttyvp, ttyvid) == 0)) {
-				if (tp != TTY_NULL) {
-					tty_lock(tp);
-					(void) ttywait(tp);
-					tty_unlock(tp);
-				}
-				context.vc_thread = proc_thread(p); /* XXX */
-				context.vc_ucred = kauth_cred_proc_ref(p);
-				VNOP_REVOKE(ttyvp, REVOKEALL, &context);
-				if (cttyflag) {
-					/*
-					 * Release the extra usecount taken in cttyopen.
-					 * usecount should be released after VNOP_REVOKE is called.
-					 * This usecount was taken to ensure that
-					 * the VNOP_REVOKE results in a close to
-					 * the tty since cttyclose is a no-op.
-					 */
-					vnode_rele(ttyvp);
-				}
-				vnode_put(ttyvp);
-				kauth_cred_unref(&context.vc_ucred);
-				ttyvp = NULLVP;
-			}
-			if (tp) {
-				/*
-				 * This is cleared even if not set. This is also done in
-				 * spec_close to ensure that the flag is cleared.
-				 */
-				tty_lock(tp);
-				ttyclrpgrphup(tp);
-				tty_unlock(tp);
-
-				ttyfree(tp);
-			}
-		}
-		session_lock(sessp);
-		sessp->s_leader = NULL;
-		session_unlock(sessp);
+		panic("vfork child is session leader");
 	}
 	session_rele(sessp);
 
@@ -2587,9 +2545,15 @@ vfork_exit_internal(proc_t p, int rv, int forceexit)
 	fixjobc(p, pg, 0);
 	pg_rele(pg);
 
-	p->p_rlimit[RLIMIT_FSIZE].rlim_cur = RLIM_INFINITY;
+	/*
+	 * Change RLIMIT_FSIZE for accounting/debugging. proc_limitsetcur_internal() will COW the current plimit
+	 * before making changes if the current plimit is shared. The COW'ed plimit will be freed
+	 * below by calling proc_limitdrop().
+	 */
+	proc_limitsetcur_internal(p, RLIMIT_FSIZE, RLIM_INFINITY);
 
 	proc_list_lock();
+
 	proc_childdrainstart(p);
 	while ((q = p->p_children.lh_first) != NULL) {
 		if (q->p_stat == SZOMB) {
@@ -2755,14 +2719,16 @@ vfork_exit_internal(proc_t p, int rv, int forceexit)
 	/*
 	 * Other substructures are freed from wait().
 	 */
-	FREE_ZONE(p->p_stats, sizeof *p->p_stats, M_PSTATS);
+	zfree(proc_stats_zone, p->p_stats);
 	p->p_stats = NULL;
 
-	FREE_ZONE(p->p_sigacts, sizeof *p->p_sigacts, M_SIGACTS);
+	zfree(proc_sigacts_zone, p->p_sigacts);
 	p->p_sigacts = NULL;
 
-	proc_limitdrop(p, 1);
-	p->p_limit = NULL;
+	FREE(p->p_subsystem_root_path, M_SBUF);
+	p->p_subsystem_root_path = NULL;
+
+	proc_limitdrop(p);
 
 	/*
 	 * Finish up by terminating the task
@@ -2874,28 +2840,28 @@ munge_user32_rusage(struct rusage *a_rusage_p, struct user32_rusage *a_user_rusa
 	bzero(a_user_rusage_p, sizeof(struct user32_rusage));
 
 	/* timeval changes size, so utime and stime need special handling */
-	a_user_rusage_p->ru_utime.tv_sec = a_rusage_p->ru_utime.tv_sec;
+	a_user_rusage_p->ru_utime.tv_sec = (user32_time_t)a_rusage_p->ru_utime.tv_sec;
 	a_user_rusage_p->ru_utime.tv_usec = a_rusage_p->ru_utime.tv_usec;
-	a_user_rusage_p->ru_stime.tv_sec = a_rusage_p->ru_stime.tv_sec;
+	a_user_rusage_p->ru_stime.tv_sec = (user32_time_t)a_rusage_p->ru_stime.tv_sec;
 	a_user_rusage_p->ru_stime.tv_usec = a_rusage_p->ru_stime.tv_usec;
 	/*
 	 * everything else can be a direct assign. We currently ignore
 	 * the loss of precision
 	 */
-	a_user_rusage_p->ru_maxrss = a_rusage_p->ru_maxrss;
-	a_user_rusage_p->ru_ixrss = a_rusage_p->ru_ixrss;
-	a_user_rusage_p->ru_idrss = a_rusage_p->ru_idrss;
-	a_user_rusage_p->ru_isrss = a_rusage_p->ru_isrss;
-	a_user_rusage_p->ru_minflt = a_rusage_p->ru_minflt;
-	a_user_rusage_p->ru_majflt = a_rusage_p->ru_majflt;
-	a_user_rusage_p->ru_nswap = a_rusage_p->ru_nswap;
-	a_user_rusage_p->ru_inblock = a_rusage_p->ru_inblock;
-	a_user_rusage_p->ru_oublock = a_rusage_p->ru_oublock;
-	a_user_rusage_p->ru_msgsnd = a_rusage_p->ru_msgsnd;
-	a_user_rusage_p->ru_msgrcv = a_rusage_p->ru_msgrcv;
-	a_user_rusage_p->ru_nsignals = a_rusage_p->ru_nsignals;
-	a_user_rusage_p->ru_nvcsw = a_rusage_p->ru_nvcsw;
-	a_user_rusage_p->ru_nivcsw = a_rusage_p->ru_nivcsw;
+	a_user_rusage_p->ru_maxrss = (user32_long_t)a_rusage_p->ru_maxrss;
+	a_user_rusage_p->ru_ixrss = (user32_long_t)a_rusage_p->ru_ixrss;
+	a_user_rusage_p->ru_idrss = (user32_long_t)a_rusage_p->ru_idrss;
+	a_user_rusage_p->ru_isrss = (user32_long_t)a_rusage_p->ru_isrss;
+	a_user_rusage_p->ru_minflt = (user32_long_t)a_rusage_p->ru_minflt;
+	a_user_rusage_p->ru_majflt = (user32_long_t)a_rusage_p->ru_majflt;
+	a_user_rusage_p->ru_nswap = (user32_long_t)a_rusage_p->ru_nswap;
+	a_user_rusage_p->ru_inblock = (user32_long_t)a_rusage_p->ru_inblock;
+	a_user_rusage_p->ru_oublock = (user32_long_t)a_rusage_p->ru_oublock;
+	a_user_rusage_p->ru_msgsnd = (user32_long_t)a_rusage_p->ru_msgsnd;
+	a_user_rusage_p->ru_msgrcv = (user32_long_t)a_rusage_p->ru_msgrcv;
+	a_user_rusage_p->ru_nsignals = (user32_long_t)a_rusage_p->ru_nsignals;
+	a_user_rusage_p->ru_nvcsw = (user32_long_t)a_rusage_p->ru_nvcsw;
+	a_user_rusage_p->ru_nivcsw = (user32_long_t)a_rusage_p->ru_nivcsw;
 }
 
 void
@@ -2923,14 +2889,11 @@ exit_with_pac_exception(proc_t p, exception_type_t exception, mach_exception_cod
 	struct uthread *ut = get_bsdthread_info(self);
 
 	os_reason_t exception_reason = os_reason_create(OS_REASON_PAC_EXCEPTION, (uint64_t)code);
-	if (exception_reason == OS_REASON_NULL) {
-		printf("exit_with_pac_exception: failed to allocate exit reason\n");
-	} else {
-		exception_reason->osr_flags |= OS_REASON_FLAG_GENERATE_CRASH_REPORT;
-		ut->uu_exception = exception;
-		ut->uu_code = code;
-		ut->uu_subcode = subcode;
-	}
+	assert(exception_reason != OS_REASON_NULL);
+	exception_reason->osr_flags |= OS_REASON_FLAG_GENERATE_CRASH_REPORT;
+	ut->uu_exception = exception;
+	ut->uu_code = code;
+	ut->uu_subcode = subcode;
 
 	return exit_with_reason(p, W_EXITCODE(0, SIGKILL), (int *)NULL, TRUE, FALSE,
 	           0, exception_reason);

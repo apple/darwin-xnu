@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+# Copyright (c) 2000-2020 Apple Inc. All rights reserved.
 #
 # @APPLE_LICENSE_HEADER_START@
 #
@@ -40,7 +40,8 @@ include $(MakeInc_def)
 #
 CFLAGS+= -include meta_features.h -DDRIVER_PRIVATE \
 	-D_KERNEL_BUILD -DKERNEL_BUILD -DMACH_KERNEL -DBSD_BUILD \
-	-DBSD_KERNEL_PRIVATE -DLP64_DEBUG=0
+	-DBSD_KERNEL_PRIVATE -DLP64_DEBUG=0 \
+        -Warray-bounds-pointer-arithmetic
 SFLAGS+= -include meta_features.h
 
 #
@@ -72,195 +73,511 @@ COMP_SUBDIRS =
 
 %MACHDEP
 
+tcp_cubic.o_CFLAGS_ADD += -Wno-error=implicit-int-float-conversion
+
+#
+# Diagnostic opt-outs.  We need to make this list empty.
+#
+# DO NOT ADD MORE HERE.
+#
+# -Wno-address-of-packed-member
+ah_core.o_CFLAGS_ADD += -Wno-address-of-packed-member
+ah_input.o_CFLAGS_ADD += -Wno-address-of-packed-member
+dlil.o_CFLAGS_ADD += -Wno-address-of-packed-member
+esp_input.o_CFLAGS_ADD += -Wno-address-of-packed-member
+esp_output.o_CFLAGS_ADD += -Wno-address-of-packed-member
+frag6.o_CFLAGS_ADD += -Wno-address-of-packed-member
+icmp6.o_CFLAGS_ADD += -Wno-address-of-packed-member
+if_stf.o_CFLAGS_ADD += -Wno-address-of-packed-member
+in6_cksum.o_CFLAGS_ADD += -Wno-address-of-packed-member
+in6_gif.o_CFLAGS_ADD += -Wno-address-of-packed-member
+ip6_forward.o_CFLAGS_ADD += -Wno-address-of-packed-member
+ip6_input.o_CFLAGS_ADD += -Wno-address-of-packed-member
+ip6_output.o_CFLAGS_ADD += -Wno-address-of-packed-member
+ipsec.o_CFLAGS_ADD += -Wno-address-of-packed-member
+iptap.o_CFLAGS_ADD += -Wno-address-of-packed-member
+mld6.o_CFLAGS_ADD += -Wno-address-of-packed-member
+mptcp_opt.o_CFLAGS_ADD += -Wno-address-of-packed-member
+nd6.o_CFLAGS_ADD += -Wno-address-of-packed-member
+nd6_nbr.o_CFLAGS_ADD += -Wno-address-of-packed-member
+nd6_prproxy.o_CFLAGS_ADD += -Wno-address-of-packed-member
+nd6_rtr.o_CFLAGS_ADD += -Wno-address-of-packed-member
+necp.o_CFLAGS_ADD += -Wno-address-of-packed-member
+packet_mangler.o_CFLAGS_ADD += -Wno-address-of-packed-member
+pf_norm.o_CFLAGS_ADD += -Wno-address-of-packed-member
+pktap.o_CFLAGS_ADD += -Wno-address-of-packed-member
+raw_ip6.o_CFLAGS_ADD += -Wno-address-of-packed-member
+sixxlowpan.o_CFLAGS_ADD += -Wno-address-of-packed-member
+tcp_input.o_CFLAGS_ADD += -Wno-address-of-packed-member
+tcp_subr.o_CFLAGS_ADD += -Wno-address-of-packed-member
+udp6_output.o_CFLAGS_ADD += -Wno-address-of-packed-member
+udp6_usrreq.o_CFLAGS_ADD += -Wno-address-of-packed-member
+udp_usrreq.o_CFLAGS_ADD += -Wno-address-of-packed-member
+# -Wno-cast-align
+audit_bsm_token.o_CFLAGS_ADD += -Wno-cast-align
+audit_pipe.o_CFLAGS_ADD += -Wno-cast-align
+audit_session.o_CFLAGS_ADD += -Wno-cast-align
+bind_vnops.o_CFLAGS_ADD += -Wno-cast-align
+dtrace.o_CFLAGS_ADD += -Wno-cast-align
+fasttrap.o_CFLAGS_ADD += -Wno-cast-align
+fasttrap_isa.o_CFLAGS_ADD += -Wno-cast-align
+fbt.o_CFLAGS_ADD += -Wno-cast-align
+fbt_arm.o_CFLAGS_ADD += -Wno-cast-align
+fbt_x86.o_CFLAGS_ADD += -Wno-cast-align
+if_bond.o_CFLAGS_ADD += -Wno-cast-align
+ip_dummynet.o_CFLAGS_ADD += -Wno-cast-align
+kern_credential.o_CFLAGS_ADD += -Wno-cast-align
+kern_descrip.o_CFLAGS_ADD += -Wno-cast-align
+kern_event.o_CFLAGS_ADD += -Wno-cast-align
+kern_exec.o_CFLAGS_ADD += -Wno-cast-align
+kern_guarded.o_CFLAGS_ADD += -Wno-cast-align
+kern_lockf.o_CFLAGS_ADD += -Wno-cast-align
+kern_subr.o_CFLAGS_ADD += -Wno-cast-align
+km.o_CFLAGS_ADD += -Wno-cast-align
+mach_loader.o_CFLAGS_ADD += -Wno-cast-align
+memdev.o_CFLAGS_ADD += -Wno-cast-align
+munge.o_CFLAGS_ADD += -Wno-cast-align
+nfs4_subs.o_CFLAGS_ADD += -Wno-cast-align
+nfs4_vnops.o_CFLAGS_ADD += -Wno-cast-align
+nfs_boot.o_CFLAGS_ADD += -Wno-cast-align
+nfs_gss.o_CFLAGS_ADD += -Wno-cast-align
+nfs_serv.o_CFLAGS_ADD += -Wno-cast-align
+nfs_socket.o_CFLAGS_ADD += -Wno-cast-align
+nfs_srvcache.o_CFLAGS_ADD += -Wno-cast-align
+nfs_subs.o_CFLAGS_ADD += -Wno-cast-align
+nfs_syscalls.o_CFLAGS_ADD += -Wno-cast-align
+nfs_vfsops.o_CFLAGS_ADD += -Wno-cast-align
+nfs_vnops.o_CFLAGS_ADD += -Wno-cast-align
+proc_info.o_CFLAGS_ADD += -Wno-cast-align
+qsort.o_CFLAGS_ADD += -Wno-cast-align
+sdt.o_CFLAGS_ADD += -Wno-cast-align
+sdt_arm.o_CFLAGS_ADD += -Wno-cast-align
+shadow.o_CFLAGS_ADD += -Wno-cast-align
+spec_vnops.o_CFLAGS_ADD += -Wno-cast-align
+subr_log.o_CFLAGS_ADD += -Wno-cast-align
+sys_generic.o_CFLAGS_ADD += -Wno-cast-align
+sys_pipe.o_CFLAGS_ADD += -Wno-cast-align
+systemcalls.o_CFLAGS_ADD += -Wno-cast-align
+systrace.o_CFLAGS_ADD += -Wno-cast-align
+tty.o_CFLAGS_ADD += -Wno-cast-align
+tty_compat.o_CFLAGS_ADD += -Wno-cast-align
+tty_dev.o_CFLAGS_ADD += -Wno-cast-align
+ubc_subr.o_CFLAGS_ADD += -Wno-cast-align
+uipc_mbuf.o_CFLAGS_ADD += -Wno-cast-align
+uipc_usrreq.o_CFLAGS_ADD += -Wno-cast-align
+vfs_attrlist.o_CFLAGS_ADD += -Wno-cast-align
+vfs_fsevents.o_CFLAGS_ADD += -Wno-cast-align
+vfs_syscalls.o_CFLAGS_ADD += -Wno-cast-align
+vfs_utfconv.o_CFLAGS_ADD += -Wno-cast-align
+vfs_vnops.o_CFLAGS_ADD += -Wno-cast-align
+vfs_xattr.o_CFLAGS_ADD += -Wno-cast-align
+vn.o_CFLAGS_ADD += -Wno-cast-align
+# -Wno-cast-qual
+dis_tables.o_CFLAGS_ADD += -Wno-cast-qual
+# -Wno-format
+dlil.o_CFLAGS_ADD += -Wno-format
+in_rmx.o_CFLAGS_ADD += -Wno-format
+in6_rmx.o_CFLAGS_ADD += -Wno-format
+route.o_CFLAGS_ADD += -Wno-format
+# -Wno-format-extra-args
+dlil.o_CFLAGS_ADD += -Wno-format-extra-args
+kpi_interface.o_CFLAGS_ADD += -Wno-format-extra-args
+in_rmx.o_CFLAGS_ADD += -Wno-format-extra-args
+in6_rmx.o_CFLAGS_ADD += -Wno-format-extra-args
+route.o_CFLAGS_ADD += -Wno-format-extra-args
+# -Wno-format-invalid-specifier
+dlil.o_CFLAGS_ADD += -Wno-format-invalid-specifier
+in_rmx.o_CFLAGS_ADD += -Wno-format-invalid-specifier
+in6_rmx.o_CFLAGS_ADD += -Wno-format-invalid-specifier
+kpi_interface.o_CFLAGS_ADD += -Wno-format-invalid-specifier
+route.o_CFLAGS_ADD += -Wno-format-invalid-specifier
+# -Wno-implicit-int-conversion
+audit.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+audit_bsm.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+audit_bsm_errno.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+audit_bsm_token.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+audit_worker.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+bpf.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+content_filter.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+devfs_fdesc_support.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+devfs_vnops.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+dis_tables.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+dtrace.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+fasttrap.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+fasttrap_isa.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+fbt_arm.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+flow_agg.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+flowadv.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+gss_krb5_mech.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+if.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+if_bond.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+if_bridge.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+if_fake.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+if_ipsec.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+if_stf.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+if_utun.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+if_vlan.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+in6.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+in6_gif.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+in6_pcb.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+in_gif.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+ip_input.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+km.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+kpi_mbuf.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+necp.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+network_agent.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+nfs4_vnops.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+nfs_boot.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+nfs_gss.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+nfs_node.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+nfs_socket.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+nfs_subs.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+nfs_syscalls.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+nfs_vfsops.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+nfs_vnops.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+ntstat.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+null_vnops.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+pf.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+pf_norm.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+radix.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+route.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+shadow.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+skpc.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+spec_vnops.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+systemcalls.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+systrace.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+sysv_msg.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+sysv_sem.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+tcp_input.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+uipc_mbuf.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+uipc_socket.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+vfs_quota.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+vsock_domain.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+# -Wno-shorten-64-to-32
+audit_bsm.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+audit_bsm_token.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+audit_pipe.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+audit_session.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+audit_syscalls.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+audit_worker.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+bind_vnops.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+bpf.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+devfs_fdesc_support.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+devfs_tree.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+devfs_vnops.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+devtimer.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+dis_tables.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+doc_tombstone.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+dtrace.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+dtrace_ptss.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+esp_chachapoly.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+fasttrap.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+fasttrap_isa.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+gss_krb5_mech.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+if.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+if_bond.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+if_bridge.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+if_fake.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+if_gif.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+if_ipsec.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+if_stf.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+if_utun.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+if_vlan.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+in6.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+in6_rmx.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+in_rmx.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+ip_dummynet.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+ip_input.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+iptap.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+kern_fork.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+kern_malloc.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+kern_overrides.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+
+kpi_mbuf.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+krpc_subr.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+lockprof.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+mem.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+memdev.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+nd6_rtr.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+necp.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+necp_client.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+network_agent.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+nfs4_subs.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+nfs4_vnops.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+nfs_bio.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+nfs_boot.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+nfs_gss.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+nfs_lock.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+nfs_node.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+nfs_serv.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+nfs_socket.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+nfs_subs.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+nfs_syscalls.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+nfs_vfsops.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+nfs_vnops.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+ntstat.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+null_vnops.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+pf.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+pf_norm.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+pf_pbuf.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+profile_prvd.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+profile_runtime.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+radix.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+route.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+sdt.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+shadow.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+skpc.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+spec_vnops.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+stubs.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+systemcalls.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+sysv_msg.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+sysv_sem.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+sysv_shm.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+tcp_input.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+uipc_mbuf.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+uipc_socket.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+unix_signal.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+ux_exception.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+vfs_cluster.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+vfs_quota.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+vfs_subr.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+vfs_support.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+vn.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+xcpm.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+# -Wno-sign-compare
+dest6.o_CFLAGS_ADD += -Wno-sign-compare
+dhcp_options.o_CFLAGS_ADD += -Wno-sign-compare
+esp_chachapoly.o_CFLAGS_ADD += -Wno-sign-compare
+frag6.o_CFLAGS_ADD += -Wno-sign-compare
+in6.o_CFLAGS_ADD += -Wno-sign-compare
+in6_cksum.o_CFLAGS_ADD += -Wno-sign-compare
+in6_proto.o_CFLAGS_ADD += -Wno-sign-compare
+ip_dummynet.o_CFLAGS_ADD += -Wno-sign-compare
+ip_input.o_CFLAGS_ADD += -Wno-sign-compare
+radix.o_CFLAGS_ADD += -Wno-sign-compare
+route.o_CFLAGS_ADD += -Wno-sign-compare
+route6.o_CFLAGS_ADD += -Wno-sign-compare
+scope6.o_CFLAGS_ADD += -Wno-sign-compare
+tcp_input.o_CFLAGS_ADD += -Wno-sign-compare
+uipc_mbuf.o_CFLAGS_ADD += -Wno-sign-compare
+uipc_socket.o_CFLAGS_ADD += -Wno-sign-compare
+# -Wno-sign-conversion
+audit.o_CFLAGS_ADD += -Wno-sign-conversion
+audit_arg.o_CFLAGS_ADD += -Wno-sign-conversion
+audit_bsd.o_CFLAGS_ADD += -Wno-sign-conversion
+audit_bsm.o_CFLAGS_ADD += -Wno-sign-conversion
+audit_bsm_klib.o_CFLAGS_ADD += -Wno-sign-conversion
+audit_bsm_token.o_CFLAGS_ADD += -Wno-sign-conversion
+audit_mac.o_CFLAGS_ADD += -Wno-sign-conversion
+audit_pipe.o_CFLAGS_ADD += -Wno-sign-conversion
+audit_session.o_CFLAGS_ADD += -Wno-sign-conversion
+audit_syscalls.o_CFLAGS_ADD += -Wno-sign-conversion
+audit_worker.o_CFLAGS_ADD += -Wno-sign-conversion
+bind_vfsops.o_CFLAGS_ADD += -Wno-sign-conversion
+bind_vnops.o_CFLAGS_ADD += -Wno-sign-conversion
+blist.o_CFLAGS_ADD += -Wno-sign-conversion
+bpf.o_CFLAGS_ADD += -Wno-sign-conversion
+bsd_init.o_CFLAGS_ADD += -Wno-sign-conversion
+bsd_stubs.o_CFLAGS_ADD += -Wno-sign-conversion
+cbrtf.o_CFLAGS_ADD += -Wno-sign-conversion
+chunklist.o_CFLAGS_ADD += -Wno-sign-conversion
+content_filter.o_CFLAGS_ADD += -Wno-sign-conversion
+cpu_in_cksum_gen.o_CFLAGS_ADD += -Wno-sign-conversion
+cuckoo_hashtable_test.o_CFLAGS_ADD += -Wno-sign-conversion
+decmpfs.o_CFLAGS_ADD += -Wno-sign-conversion
+dest6.o_CFLAGS_ADD += -Wno-sign-conversion
+devfs_fdesc_support.o_CFLAGS_ADD += -Wno-sign-conversion
+devfs_tree.o_CFLAGS_ADD += -Wno-sign-conversion
+devfs_vfsops.o_CFLAGS_ADD += -Wno-sign-conversion
+devfs_vnops.o_CFLAGS_ADD += -Wno-sign-conversion
+devtimer.o_CFLAGS_ADD += -Wno-sign-conversion
+dhcp_options.o_CFLAGS_ADD += -Wno-sign-conversion
+dis_tables.o_CFLAGS_ADD += -Wno-sign-conversion
+disassembler.o_CFLAGS_ADD += -Wno-sign-conversion
+doc_tombstone.o_CFLAGS_ADD += -Wno-sign-conversion
+dtrace.o_CFLAGS_ADD += -Wno-sign-conversion
+dtrace_glue.o_CFLAGS_ADD += -Wno-sign-conversion
+dtrace_isa.o_CFLAGS_ADD += -Wno-sign-conversion
+dtrace_ptss.o_CFLAGS_ADD += -Wno-sign-conversion
+dtrace_subr.o_CFLAGS_ADD += -Wno-sign-conversion
+dtrace_subr_arm.o_CFLAGS_ADD += -Wno-sign-conversion
+ether_if_module.o_CFLAGS_ADD += -Wno-sign-conversion
+ether_inet6_pr_module.o_CFLAGS_ADD += -Wno-sign-conversion
+ether_inet_pr_module.o_CFLAGS_ADD += -Wno-sign-conversion
+fasttrap.o_CFLAGS_ADD += -Wno-sign-conversion
+fasttrap_isa.o_CFLAGS_ADD += -Wno-sign-conversion
+fbt.o_CFLAGS_ADD += -Wno-sign-conversion
+fbt_arm.o_CFLAGS_ADD += -Wno-sign-conversion
+fbt_x86.o_CFLAGS_ADD += -Wno-sign-conversion
+fifo_vnops.o_CFLAGS_ADD += -Wno-sign-conversion
+flowhash.o_CFLAGS_ADD += -Wno-sign-conversion
+frag6.o_CFLAGS_ADD += -Wno-sign-conversion
+gss_krb5_mech.o_CFLAGS_ADD += -Wno-sign-conversion
+if.o_CFLAGS_ADD += -Wno-sign-conversion
+if_bond.o_CFLAGS_ADD += -Wno-sign-conversion
+if_bridge.o_CFLAGS_ADD += -Wno-sign-conversion
+if_fake.o_CFLAGS_ADD += -Wno-sign-conversion
+if_gif.o_CFLAGS_ADD += -Wno-sign-conversion
+if_ipsec.o_CFLAGS_ADD += -Wno-sign-conversion
+if_llatbl.o_CFLAGS_ADD += -Wno-sign-conversion
+if_loop.o_CFLAGS_ADD += -Wno-sign-conversion
+if_low_power_mode.o_CFLAGS_ADD += -Wno-sign-conversion
+if_pflog.o_CFLAGS_ADD += -Wno-sign-conversion
+if_stf.o_CFLAGS_ADD += -Wno-sign-conversion
+if_utun.o_CFLAGS_ADD += -Wno-sign-conversion
+if_vlan.o_CFLAGS_ADD += -Wno-sign-conversion
+imageboot.o_CFLAGS_ADD += -Wno-sign-conversion
+in6.o_CFLAGS_ADD += -Wno-sign-conversion
+in6_cga.o_CFLAGS_ADD += -Wno-sign-conversion
+in6_cksum.o_CFLAGS_ADD += -Wno-sign-conversion
+in6_gif.o_CFLAGS_ADD += -Wno-sign-conversion
+in6_pcb.o_CFLAGS_ADD += -Wno-sign-conversion
+in6_proto.o_CFLAGS_ADD += -Wno-sign-conversion
+in6_rmx.o_CFLAGS_ADD += -Wno-sign-conversion
+in_gif.o_CFLAGS_ADD += -Wno-sign-conversion
+in_rmx.o_CFLAGS_ADD += -Wno-sign-conversion
+instr_size.o_CFLAGS_ADD += -Wno-sign-conversion
+ip6_forward.o_CFLAGS_ADD += -Wno-sign-conversion
+ip6_id.o_CFLAGS_ADD += -Wno-sign-conversion
+ip_dummynet.o_CFLAGS_ADD += -Wno-sign-conversion
+ip_input.o_CFLAGS_ADD += -Wno-sign-conversion
+iptap.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_acct.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_authorization.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_clock.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_control.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_core.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_credential.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_cs.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_descrip.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_event.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_exit.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_fork.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_guarded.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_kpc.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_lockf.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_malloc.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_memorystatus.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_memorystatus_freeze.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_memorystatus_notify.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_mib.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_mman.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_ntptime.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_overrides.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_persona.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_physio.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_proc.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_prot.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_resource.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_shutdown.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_sig.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_subr.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_symfile.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_synch.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_time.o_CFLAGS_ADD += -Wno-sign-conversion
+km.o_CFLAGS_ADD += -Wno-sign-conversion
+kpi_mbuf.o_CFLAGS_ADD += -Wno-sign-conversion
+kpi_protocol.o_CFLAGS_ADD += -Wno-sign-conversion
+kpi_socketfilter.o_CFLAGS_ADD += -Wno-sign-conversion
+kpi_vfs.o_CFLAGS_ADD += -Wno-sign-conversion
+krpc_subr.o_CFLAGS_ADD += -Wno-sign-conversion
+lockprof.o_CFLAGS_ADD += -Wno-sign-conversion
+mach_loader.o_CFLAGS_ADD += -Wno-sign-conversion
+mach_process.o_CFLAGS_ADD += -Wno-sign-conversion
+mem.o_CFLAGS_ADD += -Wno-sign-conversion
+memdev.o_CFLAGS_ADD += -Wno-sign-conversion
+monotonic.o_CFLAGS_ADD += -Wno-sign-conversion
+munge.o_CFLAGS_ADD += -Wno-sign-conversion
+nd6_prproxy.o_CFLAGS_ADD += -Wno-sign-conversion
+nd6_send.o_CFLAGS_ADD += -Wno-sign-conversion
+necp.o_CFLAGS_ADD += -Wno-sign-conversion
+necp_client.o_CFLAGS_ADD += -Wno-sign-conversion
+netboot.o_CFLAGS_ADD += -Wno-sign-conversion
+network_agent.o_CFLAGS_ADD += -Wno-sign-conversion
+nfs4_subs.o_CFLAGS_ADD += -Wno-sign-conversion
+nfs4_vnops.o_CFLAGS_ADD += -Wno-sign-conversion
+nfs_bio.o_CFLAGS_ADD += -Wno-sign-conversion
+nfs_boot.o_CFLAGS_ADD += -Wno-sign-conversion
+nfs_gss.o_CFLAGS_ADD += -Wno-sign-conversion
+nfs_lock.o_CFLAGS_ADD += -Wno-sign-conversion
+nfs_node.o_CFLAGS_ADD += -Wno-sign-conversion
+nfs_serv.o_CFLAGS_ADD += -Wno-sign-conversion
+nfs_socket.o_CFLAGS_ADD += -Wno-sign-conversion
+nfs_subs.o_CFLAGS_ADD += -Wno-sign-conversion
+nfs_syscalls.o_CFLAGS_ADD += -Wno-sign-conversion
+nfs_upcall.o_CFLAGS_ADD += -Wno-sign-conversion
+nfs_vfsops.o_CFLAGS_ADD += -Wno-sign-conversion
+nfs_vnops.o_CFLAGS_ADD += -Wno-sign-conversion
+ntstat.o_CFLAGS_ADD += -Wno-sign-conversion
+null_vfsops.o_CFLAGS_ADD += -Wno-sign-conversion
+null_vnops.o_CFLAGS_ADD += -Wno-sign-conversion
+packet_mangler.o_CFLAGS_ADD += -Wno-sign-conversion
+pf.o_CFLAGS_ADD += -Wno-sign-conversion
+pf_norm.o_CFLAGS_ADD += -Wno-sign-conversion
+pf_pbuf.o_CFLAGS_ADD += -Wno-sign-conversion
+pf_table.o_CFLAGS_ADD += -Wno-sign-conversion
+posix_sem.o_CFLAGS_ADD += -Wno-sign-conversion
+posix_shm.o_CFLAGS_ADD += -Wno-sign-conversion
+process_policy.o_CFLAGS_ADD += -Wno-sign-conversion
+profile_prvd.o_CFLAGS_ADD += -Wno-sign-conversion
+profile_runtime.o_CFLAGS_ADD += -Wno-sign-conversion
+radix.o_CFLAGS_ADD += -Wno-sign-conversion
+randomdev.o_CFLAGS_ADD += -Wno-sign-conversion
+route.o_CFLAGS_ADD += -Wno-sign-conversion
+route6.o_CFLAGS_ADD += -Wno-sign-conversion
+routefs_ops.o_CFLAGS_ADD += -Wno-sign-conversion
+scope6.o_CFLAGS_ADD += -Wno-sign-conversion
+sdt.o_CFLAGS_ADD += -Wno-sign-conversion
+sdt_arm.o_CFLAGS_ADD += -Wno-sign-conversion
+sdt_x86.o_CFLAGS_ADD += -Wno-sign-conversion
+shadow.o_CFLAGS_ADD += -Wno-sign-conversion
+sixxlowpan.o_CFLAGS_ADD += -Wno-sign-conversion
+spec_vnops.o_CFLAGS_ADD += -Wno-sign-conversion
+subr_log.o_CFLAGS_ADD += -Wno-sign-conversion
+subr_prf.o_CFLAGS_ADD += -Wno-sign-conversion
+sys_coalition.o_CFLAGS_ADD += -Wno-sign-conversion
+sys_generic.o_CFLAGS_ADD += -Wno-sign-conversion
+sys_pipe.o_CFLAGS_ADD += -Wno-sign-conversion
+sys_reason.o_CFLAGS_ADD += -Wno-sign-conversion
+sys_ulock.o_CFLAGS_ADD += -Wno-sign-conversion
+systemcalls.o_CFLAGS_ADD += -Wno-sign-conversion
+systrace.o_CFLAGS_ADD += -Wno-sign-conversion
+sysv_msg.o_CFLAGS_ADD += -Wno-sign-conversion
+sysv_sem.o_CFLAGS_ADD += -Wno-sign-conversion
+sysv_shm.o_CFLAGS_ADD += -Wno-sign-conversion
+tcp_cc.o_CFLAGS_ADD += -Wno-sign-conversion
+tcp_cubic.o_CFLAGS_ADD += -Wno-sign-conversion
+tcp_input.o_CFLAGS_ADD += -Wno-sign-conversion
+ubc_subr.o_CFLAGS_ADD += -Wno-sign-conversion
+uipc_mbuf.o_CFLAGS_ADD += -Wno-sign-conversion
+uipc_socket.o_CFLAGS_ADD += -Wno-sign-conversion
+unix_signal.o_CFLAGS_ADD += -Wno-sign-conversion
+unix_startup.o_CFLAGS_ADD += -Wno-sign-conversion
+ux_exception.o_CFLAGS_ADD += -Wno-sign-conversion
+vfs_attrlist.o_CFLAGS_ADD += -Wno-sign-conversion
+vfs_bio.o_CFLAGS_ADD += -Wno-sign-conversion
+vfs_cache.o_CFLAGS_ADD += -Wno-sign-conversion
+vfs_cluster.o_CFLAGS_ADD += -Wno-sign-conversion
+vfs_cprotect.o_CFLAGS_ADD += -Wno-sign-conversion
+vfs_disk_conditioner.o_CFLAGS_ADD += -Wno-sign-conversion
+vfs_fsevents.o_CFLAGS_ADD += -Wno-sign-conversion
+vfs_fslog.o_CFLAGS_ADD += -Wno-sign-conversion
+vfs_init.o_CFLAGS_ADD += -Wno-sign-conversion
+vfs_lookup.o_CFLAGS_ADD += -Wno-sign-conversion
+vfs_quota.o_CFLAGS_ADD += -Wno-sign-conversion
+vfs_subr.o_CFLAGS_ADD += -Wno-sign-conversion
+vfs_syscalls.o_CFLAGS_ADD += -Wno-sign-conversion
+vfs_utfconv.o_CFLAGS_ADD += -Wno-sign-conversion
+vfs_vnops.o_CFLAGS_ADD += -Wno-sign-conversion
+vfs_xattr.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_compressor_backing_file.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_unix.o_CFLAGS_ADD += -Wno-sign-conversion
+vn.o_CFLAGS_ADD += -Wno-sign-conversion
+vnode_pager.o_CFLAGS_ADD += -Wno-sign-conversion
+
 #
 # Machine-independent per-file flags
 #
-
-dp_backing_file.o_CFLAGS_ADD	+= -Wshorten-64-to-32
-ubc_subr.o_CFLAGS_ADD			+= -Wshorten-64-to-32
-vnode_pager.o_CFLAGS_ADD		+= -Wshorten-64-to-32
-vm_unix.o_CFLAGS_ADD			+= -Wshorten-64-to-32
-pthread_synch.o_CFLAGS_ADD		+= -Wno-unused-parameter -Wno-missing-prototypes
-pthread_support.o_CFLAGS_ADD		+= -Wno-unused-parameter -Wno-missing-prototypes
-
-# Objects that don't want -Wsign-compare
-OBJS_NO_SIGN_COMPARE =		\
-		radix.o	\
-		route.o	\
-		rtsock.o	\
-		dhcp_options.o	\
-		igmp.o	\
-		in_cksum.o	\
-		ip_divert.o	\
-		ip_dummynet.o	\
-		ip_flow.o	\
-		ip_fw2.o	\
-		ip_fw2_compat.o	\
-		ip_icmp.o	\
-		ip_input.o	\
-		ip_output.o	\
-		raw_ip.o	\
-		tcp_cache.o	\
-		tcp_input.o	\
-		tcp_output.o	\
-		tcp_subr.o	\
-		tcp_usrreq.o	\
-		tcp_timer.o	\
-		udp_usrreq.o	\
-		ah_input.o	\
-		ah_core.o	\
-		ah_output.o	\
-		esp_core.o	\
-		esp_input.o	\
-		esp_output.o	\
-		esp_rijndael.o	\
-		esp_chachapoly.o	\
-		ipsec.o	\
-		dest6.o	\
-		frag6.o	\
-		icmp6.o	\
-		in6.o	\
-		in6_src.o	\
-		in6_cksum.o	\
-		ip6_fw.o	\
-		ip6_forward.o	\
-		in6_ifattach.o	\
-		ip6_input.o	\
-		ip6_output.o	\
-		in6_proto.o	\
-		mld6.o	\
-		nd6.o	\
-		nd6_nbr.o	\
-		nd6_prproxy.o	\
-		nd6_rtr.o	\
-		raw_ip6.o	\
-		route6.o	\
-		scope6.o	\
-		udp6_usrreq.o	\
-		key.o	\
-		keysock.o	\
-		keydb.o	\
-		des_setkey.o	\
-		uipc_mbuf.o	\
-		uipc_mbuf2.o	\
-		uipc_socket.o	\
-		uipc_socket2.o
-
-$(foreach file,$(OBJS_NO_SIGN_COMPARE),$(eval $(call add_perfile_cflags,$(file),-Wno-sign-compare)))
-
-# Objects that don't want -Wcast-align warning (8474835)
-OBJS_NO_CAST_ALIGN =			\
-		audit_bsm_token.o	\
-		audit_pipe.o		\
-		audit_session.o		\
-		bsd_i386.o		\
-		decmpfs.o		\
-		dtrace.o		\
-		fasttrap.o		\
-		fasttrap_isa.o		\
-		fbt.o			\
-		fbt_arm.o		\
-		fbt_x86.o		\
-		if_bond.o		\
-		ip6_fw.o		\
-		ip_dummynet.o		\
-		ip_fw2.o		\
-		kern_credential.o	\
-		kern_descrip.o		\
-		kern_event.o		\
-		kern_exec.o		\
-		kern_lockf.o		\
-		kern_subr.o		\
-		km.o			\
-		lockstat.o		\
-		mach_loader.o		\
-		memdev.o		\
-		nfs4_subs.o		\
-		nfs4_vnops.o		\
-		nfs_boot.o		\
-		nfs_gss.o		\
-		nfs_serv.o		\
-		nfs_socket.o		\
-		nfs_srvcache.o		\
-		nfs_subs.o		\
-		nfs_syscalls.o		\
-		nfs_vfsops.o		\
-		nfs_vnops.o		\
-		proc_info.o		\
-		pthread_synch.o		\
-		qsort.o			\
-		sdt.o			\
-		shadow.o		\
-		spec_vnops.o		\
-		subr_log.o		\
-		subr_prof.o		\
-		sys_generic.o		\
-		sys_pipe.o		\
-		systemcalls.o		\
-		systrace.o		\
-		tcp_lro.o		\
-		tty.o			\
-		tty_compat.o		\
-		tty_dev.o		\
-		tty_ptmx.o		\
-		tty_pty.o		\
-		ubc_subr.o		\
-		uipc_usrreq.o		\
-		vfs_attrlist.o		\
-		vfs_fsevents.o		\
-		vfs_lookup.o		\
-		vfs_syscalls.o		\
-		vfs_utfconv.o		\
-		vfs_vnops.o		\
-		vfs_xattr.o		\
-		vn.o			\
-		munge.o			\
-		aes.o			\
-		aeskey.o		\
-		sdt_arm.o		\
-		uipc_mbuf.o		\
-		kern_guarded.o
-
-$(foreach file,$(OBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-Wno-cast-align)))
-
-# Relax -Waddress-of-packed-member on networking (28123676)
-OBJS_NO_PACKED_ADDRESS =    \
-		ah_core.o           \
-		ah_input.o          \
-		dlil.o              \
-		esp_input.o         \
-		esp_output.o        \
-		frag6.o             \
-		icmp6.o             \
-		if_stf.o            \
-		in6_cksum.o         \
-		in6_gif.o           \
-		ip6_forward.o       \
-		ip6_input.o         \
-		ip6_output.o        \
-		iptap.o	            \
-		ipsec.o             \
-		mld6.o              \
-		mptcp_opt.o         \
-		nat464_utils.o      \
-		nd6.o               \
-		nd6_nbr.o           \
-		nd6_prproxy.o       \
-		nd6_rtr.o           \
-		necp.o              \
-		packet_mangler.o    \
-		pf.o                \
-		pf_norm.o           \
-		pktap.o             \
-		raw_ip6.o           \
-		tcp_input.o         \
-		tcp_subr.o          \
-		udp6_output.o       \
-		udp6_usrreq.o       \
-		udp_usrreq.o        \
-		sixxlowpan.o
-
-$(foreach file,$(OBJS_NO_PACKED_ADDRESS),$(eval $(call add_perfile_cflags,$(file),-Wno-address-of-packed-member)))
 
 #
 # This rule insures that the subr_prof.c does NOT get compiled with
@@ -284,27 +601,27 @@ $(SOBJS): .SFLAGS
 	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
 
 $(COMPONENT).filelist: $(OBJS)
-	$(call makelog,$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0))
+	@$(LOG_LDFILELIST) $(COMPONENT)
 	$(_v)for obj in ${OBJS}; do	\
 		 $(ECHO) $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist
 
 MAKESYSCALLS = $(SRCROOT)/bsd/kern/makesyscalls.sh
 
-init_sysent.c: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
-	$(call makelog,[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0))
+init_sysent.c: $(TARGET)/bsd.syscalls.master
+	@$(LOG_GENERATE) "$@$(Color0) from $(ColorF)$(<F)$(Color0)"
 	$(_v)$(MAKESYSCALLS) $< table > /dev/null
 
-syscalls.c: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
-	$(call makelog,[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0))
+syscalls.c: $(TARGET)/bsd.syscalls.master
+	@$(LOG_GENERATE) "$@$(Color0) from $(ColorF)$(<F)$(Color0)"
 	$(_v)$(MAKESYSCALLS) $< names > /dev/null
 
-audit_kevents.c: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
-	$(call makelog,[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0))
+audit_kevents.c: $(TARGET)/bsd.syscalls.master
+	@$(LOG_GENERATE) "$@$(Color0) from $(ColorF)$(<F)$(Color0)"
 	$(_v)$(MAKESYSCALLS) $< audit > /dev/null
 
-systrace_args.c:  $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
-	$(call makelog,[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)$@$(Color0) from $(ColorF)$<$(Color0))
+systrace_args.c: $(TARGET)/bsd.syscalls.master
+	@$(LOG_GENERATE) "$@$(Color0) from $(ColorF)$(<F)$(Color0)"
 	$(_v)$(MAKESYSCALLS) $< systrace > /dev/null
 
 do_all: $(COMPONENT).filelist

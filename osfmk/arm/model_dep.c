@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -40,9 +40,7 @@
 #include <pexpert/boot.h>
 #include <pexpert/pexpert.h>
 
-#if defined(HAS_APPLE_PAC)
 #include <ptrauth.h>
-#endif
 
 #include <kern/misc_protos.h>
 #include <kern/startup.h>
@@ -74,6 +72,7 @@
 #include <machine/machparam.h>  /* for btop */
 
 #include <console/video_console.h>
+#include <console/serial_protos.h>
 #include <arm/cpu_data.h>
 #include <arm/cpu_data_internal.h>
 #include <arm/cpu_internal.h>
@@ -87,11 +86,16 @@ void    kdp_trap(unsigned int, struct arm_saved_state *);
 #endif
 
 extern kern_return_t    do_stackshot(void *);
-extern void             kdp_snapshot_preflight(int pid, void *tracebuf,
-    uint32_t tracebuf_size, uint32_t flags,
+extern void                    kdp_snapshot_preflight(int pid, void * tracebuf,
+    uint32_t tracebuf_size, uint64_t flags,
     kcdata_descriptor_t data_p,
-    boolean_t enable_faulting);
+    uint64_t since_timestamp, uint32_t pagetable_mask);
 extern int              kdp_stack_snapshot_bytes_traced(void);
+extern int              kdp_stack_snapshot_bytes_uncompressed(void);
+
+#if INTERRUPT_MASKED_DEBUG
+extern boolean_t interrupt_masked_debug;
+#endif
 
 /*
  * Increment the PANICLOG_VERSION if you change the format of the panic
@@ -109,19 +113,21 @@ extern void                             kdp_callouts(kdp_event_t event);
 
 /* #include <sys/proc.h> */
 #define MAXCOMLEN 16
-extern int                              proc_pid(void *p);
+struct proc;
+extern int                              proc_pid(struct proc *p);
 extern void                     proc_name_kdp(task_t, char *, int);
 
 /*
  * Make sure there's enough space to include the relevant bits in the format required
  * within the space allocated for the panic version string in the panic header.
- * The format required by OSAnalytics/DumpPanic is 'Product Version (OS Version)'
+ * The format required by OSAnalytics/DumpPanic is 'Product Version (OS Version)'.
  */
 #define PANIC_HEADER_VERSION_FMT_STR "%.14s (%.14s)"
 
-extern const char               version[];
-extern char                     osversion[];
-extern char                     osproductversion[];
+extern const char version[];
+extern char       osversion[];
+extern char       osproductversion[];
+extern char       osreleasetype[];
 
 #if defined(XNU_TARGET_OS_BRIDGE)
 extern char     macosproductversion[];
@@ -133,9 +139,9 @@ extern uint32_t         gPlatformMemoryID;
 
 extern uint64_t         last_hwaccess_thread;
 
-/*Choosing the size for gTargetTypeBuffer as 8 and size for gModelTypeBuffer as 32
+/*Choosing the size for gTargetTypeBuffer as 16 and size for gModelTypeBuffer as 32
  *  since the target name and model name typically  doesn't exceed this size */
-extern char  gTargetTypeBuffer[8];
+extern char  gTargetTypeBuffer[16];
 extern char  gModelTypeBuffer[32];
 
 decl_simple_lock_data(extern, clock_lock);
@@ -144,6 +150,8 @@ extern struct timeval    gIOLastWakeTime;
 extern boolean_t                 is_clock_configured;
 extern boolean_t kernelcache_uuid_valid;
 extern uuid_t kernelcache_uuid;
+
+extern void stackshot_memcpy(void *dst, const void *src, size_t len);
 
 /* Definitions for frame pointers */
 #define FP_ALIGNMENT_MASK      ((uint32_t)(0x3))
@@ -166,6 +174,7 @@ boolean_t             force_immediate_debug_halt = FALSE;
 unsigned int          debug_ack_timeout_count = 0;
 volatile unsigned int debugger_sync = 0;
 volatile unsigned int mp_kdp_trap = 0; /* CPUs signalled by the debug CPU will spin on this */
+volatile unsigned int debug_cpus_spinning = 0; /* Number of signalled CPUs still spinning on mp_kdp_trap (in DebuggerXCall). */
 unsigned int          DebugContextCount = 0;
 
 #if defined(__arm64__)
@@ -223,7 +232,7 @@ validate_ptr(
  */
 static void
 print_one_backtrace(pmap_t pmap, vm_offset_t topfp, const char *cur_marker,
-    boolean_t is_64_bit)
+    boolean_t is_64_bit, boolean_t print_kexts_in_backtrace)
 {
 	int                 i = 0;
 	addr64_t        lr;
@@ -231,6 +240,7 @@ print_one_backtrace(pmap_t pmap, vm_offset_t topfp, const char *cur_marker,
 	addr64_t        fp_for_ppn;
 	ppnum_t         ppn;
 	boolean_t       dump_kernel_stack;
+	vm_offset_t     raddrs[FP_MAX_NUM_TO_EVALUATE];
 
 	fp = topfp;
 	fp_for_ppn = 0;
@@ -305,8 +315,13 @@ print_one_backtrace(pmap_t pmap, vm_offset_t topfp, const char *cur_marker,
 			} else {
 				paniclog_append_noflush("%s\t  lr: 0x%08x  fp: 0x%08x\n", cur_marker, (uint32_t)lr, (uint32_t)fp);
 			}
+			raddrs[i] = lr;
 		}
 	} while ((++i < FP_MAX_NUM_TO_EVALUATE) && (fp != topfp));
+
+	if (print_kexts_in_backtrace && i != 0) {
+		kmod_panic_dump(&raddrs[0], i);
+	}
 }
 
 #define SANE_TASK_LIMIT 256
@@ -314,6 +329,44 @@ print_one_backtrace(pmap_t pmap, vm_offset_t topfp, const char *cur_marker,
 #define PANICLOG_UUID_BUF_SIZE 256
 
 extern void panic_print_vnodes(void);
+
+static void
+panic_display_hung_cpus_help(void)
+{
+#if defined(__arm64__)
+	const uint32_t pcsr_offset = 0x90;
+
+	/*
+	 * Print some info that might help in cases where nothing
+	 * else does
+	 */
+	const ml_topology_info_t *info = ml_get_topology_info();
+	if (info) {
+		unsigned i, retry;
+
+		for (i = 0; i < info->num_cpus; i++) {
+			if (info->cpus[i].cpu_UTTDBG_regs) {
+				volatile uint64_t *pcsr = (volatile uint64_t*)(info->cpus[i].cpu_UTTDBG_regs + pcsr_offset);
+				volatile uint32_t *pcsrTrigger = (volatile uint32_t*)pcsr;
+				uint64_t pc = 0;
+
+				// a number of retries are needed till this works
+				for (retry = 1024; retry && !pc; retry--) {
+					//a 32-bit read is required to make a PC sample be produced, else we'll only get a zero
+					(void)*pcsrTrigger;
+					pc = *pcsr;
+				}
+
+				//postprocessing (same as astris does)
+				if (pc >> 48) {
+					pc |= 0xffff000000000000ull;
+				}
+				paniclog_append_noflush("CORE %u recently retired instr at 0x%016llx\n", i, pc);
+			}
+		}
+	}
+#endif //defined(__arm64__)
+}
 
 static void
 do_print_all_backtraces(const char *message, uint64_t panic_options)
@@ -327,9 +380,12 @@ do_print_all_backtraces(const char *message, uint64_t panic_options)
 
 	/* end_marker_bytes set to 200 for printing END marker + stackshot summary info always */
 	int bytes_traced = 0, bytes_remaining = 0, end_marker_bytes = 200;
+	int bytes_uncompressed = 0;
 	uint64_t bytes_used = 0ULL;
 	int err = 0;
 	char *stackshot_begin_loc = NULL;
+	kc_format_t kc_format;
+	bool filesetKC = false;
 
 #if defined(__arm__)
 	__asm__         volatile ("mov %0, r7":"=r"(cur_fp));
@@ -342,6 +398,10 @@ do_print_all_backtraces(const char *message, uint64_t panic_options)
 		return;
 	}
 	panic_bt_depth++;
+
+	__unused bool result = PE_get_primary_kc_format(&kc_format);
+	assert(result == true);
+	filesetKC = kc_format == KCFormatFileset;
 
 	/* Truncate panic string to 1200 bytes */
 	paniclog_append_noflush("Debugger message: %.1200s\n", message);
@@ -359,6 +419,8 @@ do_print_all_backtraces(const char *message, uint64_t panic_options)
 		paniclog_append_noflush("Boot args: %s\n", PE_boot_args());
 	}
 	paniclog_append_noflush("Memory ID: 0x%x\n", gPlatformMemoryID);
+	paniclog_append_noflush("OS release type: %.256s\n",
+	    ('\0' != osreleasetype[0]) ? osreleasetype : "Not set yet");
 	paniclog_append_noflush("OS version: %.256s\n",
 	    ('\0' != osversion[0]) ? osversion : "Not set yet");
 #if defined(XNU_TARGET_OS_BRIDGE)
@@ -368,7 +430,11 @@ do_print_all_backtraces(const char *message, uint64_t panic_options)
 	paniclog_append_noflush("Kernel version: %.512s\n", version);
 
 	if (kernelcache_uuid_valid) {
-		paniclog_append_noflush("KernelCache UUID: ");
+		if (filesetKC) {
+			paniclog_append_noflush("Fileset Kernelcache UUID: ");
+		} else {
+			paniclog_append_noflush("KernelCache UUID: ");
+		}
 		for (size_t index = 0; index < sizeof(uuid_t); index++) {
 			paniclog_append_noflush("%02X", kernelcache_uuid[index]);
 		}
@@ -429,6 +495,7 @@ do_print_all_backtraces(const char *message, uint64_t panic_options)
 	panic_display_kernel_aslr();
 	panic_display_times();
 	panic_display_zprint();
+	panic_display_hung_cpus_help();
 #if CONFIG_ZLEAKS
 	panic_display_ztrace();
 #endif /* CONFIG_ZLEAKS */
@@ -519,9 +586,9 @@ do_print_all_backtraces(const char *message, uint64_t panic_options)
 		paniclog_append_noflush("Panicked thread: %p, backtrace: 0x%llx, tid: %llu\n",
 		    cur_thread, (addr64_t)cur_fp, thread_tid(cur_thread));
 #if __LP64__
-		print_one_backtrace(kernel_pmap, cur_fp, nohilite_thread_marker, TRUE);
+		print_one_backtrace(kernel_pmap, cur_fp, nohilite_thread_marker, TRUE, filesetKC);
 #else
-		print_one_backtrace(kernel_pmap, cur_fp, nohilite_thread_marker, FALSE);
+		print_one_backtrace(kernel_pmap, cur_fp, nohilite_thread_marker, FALSE, filesetKC);
 #endif
 	} else {
 		paniclog_append_noflush("Could not print panicked thread backtrace:"
@@ -529,6 +596,10 @@ do_print_all_backtraces(const char *message, uint64_t panic_options)
 	}
 
 	paniclog_append_noflush("\n");
+	if (filesetKC) {
+		kext_dump_panic_lists(&paniclog_append_noflush);
+		paniclog_append_noflush("\n");
+	}
 	panic_info->eph_panic_log_len = PE_get_offset_into_panic_region(debug_buf_ptr) - panic_info->eph_panic_log_offset;
 	/* set the os version data in the panic header in the format 'Product Version (OS Version)' (only if they have been set) */
 	if ((osversion[0] != '\0') && (osproductversion[0] != '\0')) {
@@ -557,13 +628,25 @@ do_print_all_backtraces(const char *message, uint64_t panic_options)
 
 		bytes_remaining = debug_buf_size - (unsigned int)((uintptr_t)stackshot_begin_loc - (uintptr_t)debug_buf_base);
 		err = kcdata_memory_static_init(&kc_panic_data, (mach_vm_address_t)debug_buf_ptr,
-		    KCDATA_BUFFER_BEGIN_STACKSHOT, bytes_remaining - end_marker_bytes,
+		    KCDATA_BUFFER_BEGIN_COMPRESSED, bytes_remaining - end_marker_bytes,
 		    KCFLAG_USE_MEMCOPY);
 		if (err == KERN_SUCCESS) {
+			uint64_t stackshot_flags = (STACKSHOT_GET_GLOBAL_MEM_STATS | STACKSHOT_SAVE_LOADINFO | STACKSHOT_KCDATA_FORMAT |
+			    STACKSHOT_ENABLE_BT_FAULTING | STACKSHOT_ENABLE_UUID_FAULTING | STACKSHOT_FROM_PANIC | STACKSHOT_DO_COMPRESS |
+			    STACKSHOT_DISABLE_LATENCY_INFO | STACKSHOT_NO_IO_STATS | STACKSHOT_THREAD_WAITINFO | STACKSHOT_GET_DQ |
+			    STACKSHOT_COLLECT_SHAREDCACHE_LAYOUT);
+
+			err = kcdata_init_compress(&kc_panic_data, KCDATA_BUFFER_BEGIN_STACKSHOT, stackshot_memcpy, KCDCT_ZLIB);
+			if (err != KERN_SUCCESS) {
+				panic_info->eph_panic_flags |= EMBEDDED_PANIC_HEADER_FLAG_COMPRESS_FAILED;
+				stackshot_flags &= ~STACKSHOT_DO_COMPRESS;
+			}
+			if (filesetKC) {
+				stackshot_flags |= STACKSHOT_SAVE_KEXT_LOADINFO;
+			}
+
 			kdp_snapshot_preflight(-1, stackshot_begin_loc, bytes_remaining - end_marker_bytes,
-			    (STACKSHOT_GET_GLOBAL_MEM_STATS | STACKSHOT_SAVE_LOADINFO | STACKSHOT_KCDATA_FORMAT |
-			    STACKSHOT_ENABLE_BT_FAULTING | STACKSHOT_ENABLE_UUID_FAULTING | STACKSHOT_FROM_PANIC |
-			    STACKSHOT_NO_IO_STATS | STACKSHOT_THREAD_WAITINFO | STACKSHOT_COLLECT_SHAREDCACHE_LAYOUT), &kc_panic_data, 0);
+			    stackshot_flags, &kc_panic_data, 0, 0);
 			err = do_stackshot(NULL);
 			bytes_traced = kdp_stack_snapshot_bytes_traced();
 			if (bytes_traced > 0 && !err) {
@@ -573,7 +656,13 @@ do_print_all_backtraces(const char *message, uint64_t panic_options)
 				panic_info->eph_stackshot_len = bytes_traced;
 
 				panic_info->eph_other_log_offset = PE_get_offset_into_panic_region(debug_buf_ptr);
-				paniclog_append_noflush("\n** Stackshot Succeeded ** Bytes Traced %d **\n", bytes_traced);
+				if (stackshot_flags & STACKSHOT_DO_COMPRESS) {
+					panic_info->eph_panic_flags |= EMBEDDED_PANIC_HEADER_FLAG_STACKSHOT_DATA_COMPRESSED;
+					bytes_uncompressed = kdp_stack_snapshot_bytes_uncompressed();
+					paniclog_append_noflush("\n** Stackshot Succeeded ** Bytes Traced %d (Uncompressed %d) **\n", bytes_traced, bytes_uncompressed);
+				} else {
+					paniclog_append_noflush("\n** Stackshot Succeeded ** Bytes Traced %d **\n", bytes_traced);
+				}
 			} else {
 				bytes_used = kcdata_memory_get_used_bytes(&kc_panic_data);
 				if (bytes_used > 0) {
@@ -815,6 +904,7 @@ DebuggerXCallEnter(
 
 	debugger_sync = 0;
 	mp_kdp_trap = 1;
+	debug_cpus_spinning = 0;
 
 	/*
 	 * We need a barrier here to ensure CPUs see mp_kdp_trap and spin when responding
@@ -845,6 +935,7 @@ DebuggerXCallEnter(
 
 			if (KERN_SUCCESS == cpu_signal(target_cpu_datap, SIGPdebug, (void *)NULL, NULL)) {
 				os_atomic_inc(&debugger_sync, relaxed);
+				os_atomic_inc(&debug_cpus_spinning, relaxed);
 			} else {
 				cpu_signal_failed = true;
 				kprintf("cpu_signal failed in DebuggerXCallEnter\n");
@@ -894,8 +985,6 @@ DebuggerXCallEnter(
 				} else {
 					if (halt_status > 0) {
 						paniclog_append_noflush("cpu %d halted with warning %d: %s\n", cpu, halt_status, ml_dbgwrap_strerror(halt_status));
-					} else {
-						paniclog_append_noflush("cpu %d successfully halted\n", cpu);
 					}
 					target_cpu_datap->halt_status = CPU_HALTED;
 				}
@@ -916,6 +1005,7 @@ DebuggerXCallEnter(
 				if ((halt_status < 0) || (halt_status == DBGWRAP_WARN_CPU_OFFLINE)) {
 					paniclog_append_noflush("Unable to obtain state for cpu %d with status %d: %s\n", cpu, halt_status, ml_dbgwrap_strerror(halt_status));
 				} else {
+					paniclog_append_noflush("cpu %d successfully halted\n", cpu);
 					target_cpu_datap->halt_status = CPU_HALTED_WITH_STATE;
 				}
 			}
@@ -947,6 +1037,7 @@ DebuggerXCallReturn(
 	void)
 {
 	cpu_data_t      *cpu_data_ptr = getCpuDatap();
+	uint64_t max_mabs_time, current_mabs_time;
 
 	cpu_data_ptr->debugger_active--;
 	if (cpu_data_ptr->debugger_active != 0) {
@@ -955,6 +1046,25 @@ DebuggerXCallReturn(
 
 	mp_kdp_trap = 0;
 	debugger_sync = 0;
+
+	nanoseconds_to_absolutetime(DEBUG_ACK_TIMEOUT, &max_mabs_time);
+	current_mabs_time = mach_absolute_time();
+	max_mabs_time += current_mabs_time;
+	assert(max_mabs_time > current_mabs_time);
+
+	/*
+	 * Wait for other CPUs to stop spinning on mp_kdp_trap (see DebuggerXCall).
+	 * It's possible for one or more CPUs to not decrement debug_cpus_spinning,
+	 * since they may be stuck somewhere else with interrupts disabled.
+	 * Wait for DEBUG_ACK_TIMEOUT ns for a response and move on if we don't get it.
+	 *
+	 * Note that the same is done in DebuggerXCallEnter, when we wait for other
+	 * CPUS to update debugger_sync. If we time out, let's hope for all CPUs to be
+	 * spinning in a debugger-safe context
+	 */
+	while ((debug_cpus_spinning != 0) && (current_mabs_time < max_mabs_time)) {
+		current_mabs_time = mach_absolute_time();
+	}
 
 	/* Do we need a barrier here? */
 	__builtin_arm_dmb(DMB_ISH);
@@ -977,6 +1087,22 @@ DebuggerXCall(
 	}
 
 	kstackptr = current_thread()->machine.kstackptr;
+
+#if defined(__arm64__)
+	arm_kernel_saved_state_t *state = (arm_kernel_saved_state_t *)kstackptr;
+
+	if (save_context) {
+		/* Save the interrupted context before acknowledging the signal */
+		current_thread()->machine.kpcb = regs;
+	} else if (regs) {
+		/* zero old state so machine_trace_thread knows not to backtrace it */
+		register_t pc = (register_t)ptrauth_strip((void *)&_was_in_userspace, ptrauth_key_function_pointer);
+		state->fp = 0;
+		state->pc = pc;
+		state->lr = 0;
+		state->sp = 0;
+	}
+#else
 	arm_saved_state_t *state = (arm_saved_state_t *)kstackptr;
 
 	if (save_context) {
@@ -984,16 +1110,42 @@ DebuggerXCall(
 		copy_signed_thread_state(state, regs);
 	} else if (regs) {
 		/* zero old state so machine_trace_thread knows not to backtrace it */
+		register_t pc = (register_t)ptrauth_strip((void *)&_was_in_userspace, ptrauth_key_function_pointer);
 		set_saved_state_fp(state, 0);
-		set_saved_state_pc(state, (register_t)&_was_in_userspace);
+		set_saved_state_pc(state, pc);
 		set_saved_state_lr(state, 0);
 		set_saved_state_sp(state, 0);
+	}
+#endif
+
+	/*
+	 * When running in serial mode, the core capturing the dump may hold interrupts disabled
+	 * for a time longer than the timeout. That path includes logic to reset the timestamp
+	 * so that we do not eventually trigger the interrupt timeout assert().
+	 *
+	 * Here we check whether other cores have already gone over the timeout at this point
+	 * before spinning, so we at least cover the IPI reception path. After spinning, however,
+	 * we reset the timestamp so as to avoid hitting the interrupt timeout assert().
+	 */
+	if ((serialmode & SERIALMODE_OUTPUT) || stackshot_active()) {
+		INTERRUPT_MASKED_DEBUG_END();
 	}
 
 	os_atomic_dec(&debugger_sync, relaxed);
 	__builtin_arm_dmb(DMB_ISH);
 	while (mp_kdp_trap) {
 		;
+	}
+
+	/**
+	 * Alert the triggering CPU that this CPU is done spinning. The CPU that
+	 * signalled all of the other CPUs will wait (in DebuggerXCallReturn) for
+	 * all of the CPUs to exit the above loop before continuing.
+	 */
+	os_atomic_dec(&debug_cpus_spinning, relaxed);
+
+	if ((serialmode & SERIALMODE_OUTPUT) || stackshot_active()) {
+		INTERRUPT_MASKED_DEBUG_START(current_thread()->machine.int_handler_addr, current_thread()->machine.int_type);
 	}
 
 	/* Any cleanup for our pushed context should go here */

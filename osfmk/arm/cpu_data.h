@@ -109,13 +109,10 @@ exception_stack_pointer(void)
 #define getCpuDatap()            current_thread()->machine.CpuDatap
 #define current_cpu_datap()      getCpuDatap()
 
-extern int                                                                      get_preemption_level(void);
-extern void                                                             _enable_preemption_no_check(void);
+extern int                       get_preemption_level(void);
 
-#define enable_preemption_no_check()            _enable_preemption_no_check()
-#define mp_disable_preemption()                         _disable_preemption()
-#define mp_enable_preemption()                          _enable_preemption()
-#define mp_enable_preemption_no_check()         _enable_preemption_no_check()
+#define mp_disable_preemption()  _disable_preemption()
+#define mp_enable_preemption()   _enable_preemption()
 
 #endif  /* MACH_KERNEL_PRIVATE */
 

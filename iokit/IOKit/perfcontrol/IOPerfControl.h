@@ -10,6 +10,7 @@
 #include <IOKit/IOService.h>
 #include <stdatomic.h>
 #include <kern/bits.h>
+#include <libkern/c++/OSPtr.h>
 
 struct thread_group;
 
@@ -146,9 +147,70 @@ public:
  * specific subclass of IOService.
  * @param args Optional device-specific arguments related to the end of this work item.
  * @param done Optional Set to false if the work has not yet completed. Drivers are then responsible for
- * calling workBegin when the work resumes and workEnd with done set to True when it has completed.
+ * calling workBegin when the work resumes and workEnd with done set to True when it has completed. A workEnd() call
+ * without a corresponding workBegin() call is a way to cancel a work item and return token to IOPerfControl.
  */
 	virtual void workEnd(IOService *device, uint64_t token, WorkEndArgs *args = nullptr, bool done = true);
+
+/*!
+ * @function copyWorkContext
+ * @abstract Return a retained reference to an opaque OSObject, to be released by the driver. This object can
+ * be used by IOPerfControl to track a work item. This may perform dynamic memory allocation.
+ * @returns A pointer to an OSObject
+ */
+	OSPtr<OSObject> copyWorkContext();
+
+/*!
+ * @function workSubmitAndBeginWithContext
+ * @abstract Tell the performance controller that work was submitted and immediately began executing
+ * @param device The device that is executing the work. Some platforms require device to be a
+ * specific subclass of IOService.
+ * @param context An OSObject returned by copyWorkContext(). The context object will be used by IOPerfControl to track
+ * this work item.
+ * @param submitArgs Optional device-specific arguments related to the submission of this work item.
+ * @param beginArgs Optional device-specific arguments related to the start of this work item.
+ * @returns true if IOPerfControl is tracking this work item, else false.
+ * @note The workEndWithContext() call is optional if the corresponding workSubmitWithContext() call returned false.
+ */
+	bool workSubmitAndBeginWithContext(IOService *device, OSObject *context, WorkSubmitArgs *submitArgs = nullptr,
+	    WorkBeginArgs *beginArgs = nullptr);
+
+/*!
+ * @function workSubmitWithContext
+ * @abstract Tell the performance controller that work was submitted.
+ * @param device The device that will execute the work. Some platforms require device to be a
+ * specific subclass of IOService.
+ * @param context An OSObject returned by copyWorkContext(). The context object will be used by IOPerfControl to track
+ * this work item.
+ * @param args Optional device-specific arguments related to the submission of this work item.
+ * @returns true if IOPerfControl is tracking this work item, else false.
+ */
+	bool workSubmitWithContext(IOService *device, OSObject *context, WorkSubmitArgs *args = nullptr);
+
+/*!
+ * @function workBeginWithContext
+ * @abstract Tell the performance controller that previously submitted work began executing.
+ * @param device The device that is executing the work. Some platforms require device to be a
+ * specific subclass of IOService.
+ * @param context An OSObject returned by copyWorkContext() and provided to the previous call to workSubmitWithContext().
+ * @param args Optional device-specific arguments related to the start of this work item.
+ * @note The workBeginWithContext() and workEndWithContext() calls are optional if the corresponding workSubmitWithContext() call returned false.
+ */
+	void workBeginWithContext(IOService *device, OSObject *context, WorkBeginArgs *args = nullptr);
+
+/*!
+ * @function workEndWithContext
+ * @abstract Tell the performance controller that previously started work finished executing.
+ * @param device The device that executed the work. Some platforms require device to be a
+ * specific subclass of IOService.
+ * @param context An OSObject returned by copyWorkContext() and provided to the previous call to workSubmitWithContext().
+ * @param args Optional device-specific arguments related to the end of this work item.
+ * @param done Optional Set to false if the work has not yet completed. Drivers are then responsible for
+ * calling workBegin when the work resumes and workEnd with done set to True when it has completed.
+ * @note The workEndWithContext() call is optional if the corresponding workSubmitWithContext() call returned false. A workEndWithContext()
+ * call without a corresponding workBeginWithContext() call is a way to cancel a work item.
+ */
+	void workEndWithContext(IOService *device, OSObject *context, WorkEndArgs *args = nullptr, bool done = true);
 
 /*!
  * @struct PerfControllerInterface
@@ -160,6 +222,8 @@ public:
 			void *thread_group_data;
 			void *work_data;
 			uint32_t work_data_size;
+			uint32_t started : 1;
+			uint32_t reserved : 31;
 		};
 
 		using RegisterDeviceFunction = IOReturn (*)(IOService *);
@@ -203,11 +267,11 @@ private:
 	static constexpr size_t kWorkTableIndexBits = 24;
 	static constexpr size_t kWorkTableMaxSize = (1 << kWorkTableIndexBits) - 1; // - 1 since
 	// kIOPerfControlClientWorkUntracked takes number 0
-	static constexpr size_t kWorkTableIndexMask = mask(kWorkTableIndexBits);
+	static constexpr size_t kWorkTableIndexMask = (const size_t)mask(kWorkTableIndexBits);
 
 	uint64_t allocateToken(thread_group *thread_group);
 	void deallocateToken(uint64_t token);
-	bool getEntryForToken(uint64_t token, WorkTableEntry &entry);
+	WorkTableEntry *getEntryForToken(uint64_t token);
 	void markEntryStarted(uint64_t token, bool started);
 	inline uint64_t tokenToGlobalUniqueToken(uint64_t token);
 

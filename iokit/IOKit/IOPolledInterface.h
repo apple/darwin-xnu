@@ -44,6 +44,7 @@ enum{
 #if defined(__cplusplus)
 
 #include <libkern/c++/OSObject.h>
+#include <libkern/c++/OSPtr.h>
 #include <IOKit/IOMemoryDescriptor.h>
 
 #define kIOPolledInterfaceSupportKey "IOPolledInterface"
@@ -90,7 +91,7 @@ public:
 
 	virtual IOReturn setEncryptionKey(const uint8_t * key, size_t keySize);
 
-	OSMetaClassDeclareReservedUsed(IOPolledInterface, 0);
+	OSMetaClassDeclareReservedUsedX86(IOPolledInterface, 0);
 	OSMetaClassDeclareReservedUnused(IOPolledInterface, 1);
 	OSMetaClassDeclareReservedUnused(IOPolledInterface, 2);
 	OSMetaClassDeclareReservedUnused(IOPolledInterface, 3);
@@ -142,16 +143,16 @@ struct IOPolledFileIOVars {
 	struct kern_direct_file_io_ref_t *  fileRef;
 	OSData *                            fileExtents;
 	uint64_t                            block0;
-	IOByteCount                         blockSize;
+	uint32_t                         blockSize;
 	uint64_t                            maxiobytes;
-	IOByteCount                         bufferLimit;
+	uint32_t                         bufferLimit;
 	uint8_t *                           buffer;
-	IOByteCount                         bufferSize;
-	IOByteCount                         bufferOffset;
-	IOByteCount                         bufferHalf;
-	IOByteCount                         extentRemaining;
-	IOByteCount                         lastRead;
-	IOByteCount                         readEnd;
+	uint32_t                         bufferSize;
+	uint32_t                         bufferOffset;
+	uint32_t                         bufferHalf;
+	uint64_t                         extentRemaining;
+	uint32_t                         lastRead;
+	uint64_t                         readEnd;
 	uint32_t                            flags;
 	uint64_t                            fileSize;
 	uint64_t                            position;
@@ -181,6 +182,14 @@ IOReturn IOPolledFileOpen(const char * filename,
     void * write_file_addr, size_t write_file_len,
     IOPolledFileIOVars ** fileVars,
     LIBKERN_RETURNS_RETAINED OSData ** imagePath,
+    uint8_t * volumeCryptKey, size_t * keySize);
+
+IOReturn IOPolledFileOpen(const char * filename,
+    uint32_t flags,
+    uint64_t setFileSize, uint64_t fsFreeSize,
+    void * write_file_addr, size_t write_file_len,
+    IOPolledFileIOVars ** fileVars,
+    OSSharedPtr<OSData>& imagePath,
     uint8_t * volumeCryptKey, size_t * keySize);
 
 IOReturn IOPolledFileClose(IOPolledFileIOVars ** pVars,

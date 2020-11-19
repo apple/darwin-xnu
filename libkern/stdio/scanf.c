@@ -61,21 +61,20 @@
  * SUCH DAMAGE.
  */
 
+#include <stdarg.h>
+#include <stddef.h>
+#include <string.h>
 #include <sys/cdefs.h>
+#include <sys/param.h>
 
-#if 0 /* XXX coming soon */
-#include <ctype.h>
-#else
+quad_t strtoq(const char *, char **, int);
+u_quad_t strtouq(const char *, char **, int);
+
 static inline int
 isspace(char c)
 {
 	return c == ' ' || c == '\t' || c == '\n' || c == '\12';
 }
-#endif
-#include <stdarg.h>
-#include <string.h>
-#include <sys/param.h>
-#include <sys/systm.h>
 
 #define BUF             32      /* Maximum length of numeric string. */
 
@@ -115,6 +114,9 @@ isspace(char c)
 
 static const u_char *__sccl(char *, const u_char *);
 
+int sscanf(const char *, const char *, ...);
+int vsscanf(const char *, char const *, va_list);
+
 int
 sscanf(const char *ibuf, const char *fmt, ...)
 {
@@ -130,18 +132,16 @@ sscanf(const char *ibuf, const char *fmt, ...)
 int
 vsscanf(const char *inp, char const *fmt0, va_list ap)
 {
-	int inr;
+	ssize_t inr;
 	const u_char *fmt = (const u_char *)fmt0;
-	int c;                  /* character from format, or conversion */
-	size_t width;           /* field width, or 0 */
+	ssize_t width;           /* field width, or 0 */
 	char *p;                /* points into all kinds of strings */
-	int n;                  /* handy integer */
 	int flags;              /* flags as defined above */
 	char *p0;               /* saves original value of p when necessary */
-	int nassigned;          /* number of fields assigned */
-	int nconversions;       /* number of conversions */
-	int nread;              /* number of characters consumed from fp */
-	int base;               /* base argument to conversion function */
+	int nassigned = 0;          /* number of fields assigned */
+	int nconversions = 0;       /* number of conversions */
+	int nread = 0;              /* number of characters consumed from fp */
+	int base = 0;               /* base argument to conversion function */
 	char ccltab[256];       /* character class table for %[...] */
 	char buf[BUF];          /* buffer for numeric conversions */
 
@@ -149,14 +149,10 @@ vsscanf(const char *inp, char const *fmt0, va_list ap)
 	static short basefix[17] =
 	{ 10, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
 
-	inr = strlen(inp);
+	inr = (ssize_t)strlen(inp);
 
-	nassigned = 0;
-	nconversions = 0;
-	nread = 0;
-	base = 0;               /* XXX just to keep gcc happy */
 	for (;;) {
-		c = *fmt++;
+		char c = (char)*fmt++; /* character from format, or conversion */
 		if (c == 0) {
 			return nassigned;
 		}
@@ -177,7 +173,8 @@ vsscanf(const char *inp, char const *fmt0, va_list ap)
 		 * switch on the format.  continue if done;
 		 * break once format type is derived.
 		 */
-again:          c = *fmt++;
+again:
+		c = (char)*fmt++;
 		switch (c) {
 		case '%':
 literal:
@@ -281,15 +278,15 @@ literal:
 				continue;
 			}
 			if (flags & SHORTSHORT) {
-				*va_arg(ap, char *) = nread;
+				*va_arg(ap, char *) = (char)nread;
 			} else if (flags & SHORT) {
-				*va_arg(ap, short *) = nread;
+				*va_arg(ap, short *) = (short)nread;
 			} else if (flags & LONG) {
-				*va_arg(ap, long *) = nread;
+				*va_arg(ap, long *) = (long)nread;
 			} else if (flags & LONGLONG) {
-				*va_arg(ap, long long *) = nread;
+				*va_arg(ap, long long *) = (long long)nread;
 			} else {
-				*va_arg(ap, int *) = nread;
+				*va_arg(ap, int *) = (int)nread;
 			}
 			continue;
 		}
@@ -333,8 +330,9 @@ literal:
 			if (flags & SUPPRESS) {
 				size_t sum = 0;
 				for (;;) {
-					if ((n = inr) < (int)width) {
-						sum += n;
+					ssize_t n = inr;
+					if (n < width) {
+						sum += (size_t)n;
 						width -= n;
 						inp += n;
 						if (sum == 0) {
@@ -342,7 +340,7 @@ literal:
 						}
 						break;
 					} else {
-						sum += width;
+						sum += (size_t)width;
 						inr -= width;
 						inp += width;
 						break;
@@ -359,12 +357,13 @@ literal:
 			nconversions++;
 			break;
 
-		case CT_CCL:
+		case CT_CCL: {
 			/* scan a (nonempty) character class (sets NOSKIP) */
 			if (width == 0) {
-				width = (size_t)~0;     /* `infinity' */
+				width = SSIZE_MAX;     /* `infinity' */
 			}
 			/* take only those things in the class */
+			ptrdiff_t n;
 			if (flags & SUPPRESS) {
 				n = 0;
 				while (ccltab[(unsigned char)*inp]) {
@@ -409,14 +408,15 @@ literal:
 			nread += n;
 			nconversions++;
 			break;
+		}
 
 		case CT_STRING:
 			/* like CCL, but zero-length string OK, & no NOSKIP */
 			if (width == 0) {
-				width = (size_t)~0;
+				width = SSIZE_MAX;
 			}
 			if (flags & SUPPRESS) {
-				n = 0;
+				size_t n = 0;
 				while (!isspace(*inp)) {
 					n++;
 					inr--;
@@ -450,17 +450,9 @@ literal:
 
 		case CT_INT:
 			/* scan an integer as if by the conversion function */
-#ifdef hardway
-			if (width == 0 || width > sizeof(buf) - 1) {
+			if (width <= 0 || width > (ssize_t)(sizeof(buf) - 1)) {
 				width = sizeof(buf) - 1;
 			}
-#else
-			/* size_t is unsigned, hence this optimisation */
-			if (--width > sizeof(buf) - 2) {
-				width = sizeof(buf) - 2;
-			}
-			width++;
-#endif
 			flags |= SIGNOK | NDIGITS | NZDIGITS;
 			for (p = buf; width; width--) {
 				c = *inp;
@@ -568,7 +560,7 @@ ok:
 				}
 				goto match_failure;
 			}
-			c = ((u_char *)p)[-1];
+			c = p[-1];
 			if (c == 'x' || c == 'X') {
 				--p;
 				inp--;
@@ -579,7 +571,7 @@ ok:
 
 				*p = 0;
 				if ((flags & UNSIGNED) == 0) {
-					res = strtoq(buf, (char **)NULL, base);
+					res = (u_quad_t)strtoq(buf, (char **)NULL, base);
 				} else {
 					res = strtouq(buf, (char **)NULL, base);
 				}
@@ -587,15 +579,15 @@ ok:
 					*va_arg(ap, void **) =
 					    (void *)(uintptr_t)res;
 				} else if (flags & SHORTSHORT) {
-					*va_arg(ap, char *) = res;
+					*va_arg(ap, char *) = (char)res;
 				} else if (flags & SHORT) {
-					*va_arg(ap, short *) = res;
+					*va_arg(ap, short *) = (short)res;
 				} else if (flags & LONG) {
-					*va_arg(ap, long *) = res;
+					*va_arg(ap, long *) = (long)res;
 				} else if (flags & LONGLONG) {
-					*va_arg(ap, long long *) = res;
+					*va_arg(ap, long long *) = (long long)res;
 				} else {
-					*va_arg(ap, int *) = res;
+					*va_arg(ap, int *) = (int)res;
 				}
 				nassigned++;
 			}
@@ -619,10 +611,10 @@ match_failure:
 static const u_char *
 __sccl(char *tab, const u_char *fmt)
 {
-	int c, n, v;
+	char v;
 
 	/* first `clear' the whole table */
-	c = *fmt++;             /* first char hat => negated scanset */
+	int c = *fmt++;             /* first char hat => negated scanset */
 	if (c == '^') {
 		v = 1;          /* default => accept */
 		c = *fmt++;     /* get new first char */
@@ -644,9 +636,10 @@ __sccl(char *tab, const u_char *fmt)
 	 */
 	v = 1 - v;
 	for (;;) {
+		int n;
 		tab[c] = v;             /* take character c */
 doswitch:
-		n = *fmt++;             /* and examine the next */
+		n = *fmt++;
 		switch (n) {
 		case 0:                 /* format ended too soon */
 			return fmt - 1;

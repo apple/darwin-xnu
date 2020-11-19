@@ -23,18 +23,31 @@
 T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
 
 static mach_port_t
-get_atm_voucher(void)
+get_user_data_port(mach_msg_type_number_t *size)
 {
-	mach_voucher_attr_recipe_data_t r = {
-		.key = MACH_VOUCHER_ATTR_KEY_ATM,
-		.command = MACH_VOUCHER_ATTR_ATM_CREATE
+#define DATA "Hello World!"
+	struct {
+		mach_voucher_attr_recipe_data_t recipe;
+		char data[sizeof(DATA)];
+	} buf = {
+		.recipe = {
+			.key     = MACH_VOUCHER_ATTR_KEY_USER_DATA,
+			.command = MACH_VOUCHER_ATTR_USER_DATA_STORE,
+			.content_size = sizeof(DATA),
+		},
+		.data = DATA,
 	};
+
 	mach_port_t port = MACH_PORT_NULL;
 	kern_return_t kr = host_create_mach_voucher(mach_host_self(),
-	    (mach_voucher_attr_raw_recipe_array_t)&r,
-	    sizeof(r), &port);
-	T_ASSERT_MACH_SUCCESS(kr, "Create ATM voucher: 0x%x", (unsigned int)port);
+	    (mach_voucher_attr_raw_recipe_array_t)&buf,
+	    sizeof(buf), &port);
+	T_ASSERT_MACH_SUCCESS(kr, "Create USER_DATA voucher: 0x%x",
+	    (unsigned int)port);
 
+	if (size) {
+		*size = sizeof(buf);
+	}
 	return port;
 }
 
@@ -45,6 +58,7 @@ T_DECL(voucher_extract_attr_recipe, "voucher_extract_attr_recipe")
 	mach_vm_size_t alloc_sz;
 	mach_port_t port;
 	mach_vm_address_t alloc_addr;
+	mach_msg_type_number_t expected_size;
 
 	/* map at least a page of memory at some arbitrary location */
 	alloc_sz = (mach_vm_size_t)round_page(MACH_VOUCHER_TRAP_STACK_LIMIT + 1);
@@ -84,15 +98,16 @@ T_DECL(voucher_extract_attr_recipe, "voucher_extract_attr_recipe")
 	void *recipe = malloc(size);
 	memset(recipe, 0x41, size);
 
-	port = get_atm_voucher();
+	port = get_user_data_port(&expected_size);
 
 	/*
-	 * This should try to extract the ATM attribute using a buffer on the
+	 * This should try to extract the USER_DATA attribute using a buffer on the
 	 * kernel heap (probably zone memory).
 	 */
-	kr = mach_voucher_extract_attr_recipe_trap(port, MACH_VOUCHER_ATTR_KEY_ATM,
-	    recipe, recipe_size);
+	kr = mach_voucher_extract_attr_recipe_trap(port,
+	    MACH_VOUCHER_ATTR_KEY_USER_DATA, recipe, recipe_size);
 	T_ASSERT_MACH_SUCCESS(kr, "Extract attribute data with recipe: heap");
+	T_ASSERT_EQ(*recipe_size, expected_size, "size should match");
 
 	/* reset the recipe memory */
 	memset(recipe, 0x41, size);
@@ -100,12 +115,13 @@ T_DECL(voucher_extract_attr_recipe, "voucher_extract_attr_recipe")
 	*recipe_size = MACH_VOUCHER_TRAP_STACK_LIMIT - 1;
 
 	/*
-	 * This should try to extract the ATM attribute using a buffer on the
+	 * This should try to extract the USER_DATA attribute using a buffer on the
 	 * kernel stack.
 	 */
-	kr = mach_voucher_extract_attr_recipe_trap(port, MACH_VOUCHER_ATTR_KEY_ATM,
-	    recipe, recipe_size);
+	kr = mach_voucher_extract_attr_recipe_trap(port,
+	    MACH_VOUCHER_ATTR_KEY_USER_DATA, recipe, recipe_size);
 	T_ASSERT_MACH_SUCCESS(kr, "Extract attribute data with recipe: stack");
+	T_ASSERT_EQ(*recipe_size, expected_size, "size should match");
 
 	/* cleanup */
 

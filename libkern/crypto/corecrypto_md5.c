@@ -31,7 +31,7 @@ MD5ToDi(const struct ccdigest_info *di, MD5_CTX *md5_ctx, struct ccdigest_ctx *d
 {
 	uint64_t count = getCount(md5_ctx);
 
-	ccdigest_num(di, di_ctx) = count % di->block_size;
+	ccdigest_num(di, di_ctx) = (unsigned)(count % di->block_size);
 	ccdigest_nbits(di, di_ctx) = (count - ccdigest_num(di, di_ctx)) * 8;
 	memcpy(ccdigest_data(di, di_ctx), md5_ctx->buffer, di->block_size);
 	memcpy(ccdigest_state_ccn(di, di_ctx), md5_ctx->state, di->state_size);

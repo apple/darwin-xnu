@@ -63,6 +63,7 @@ fatfile_getarch(
 	vm_size_t                data_size,
 	cpu_type_t               req_cpu_type,
 	cpu_type_t               mask_bits,
+	cpu_subtype_t            req_subcpu_type,
 	struct image_params      *imgp,
 	struct fat_arch          *archret)
 {
@@ -71,9 +72,10 @@ fatfile_getarch(
 	struct fat_arch         *best_arch;
 	int                     grade;
 	int                     best_grade;
-	uint32_t                nfat_arch, max_nfat_arch;
+	size_t                  nfat_arch, max_nfat_arch;
 	cpu_type_t              testtype;
-	cpu_type_t              testsubtype;
+	cpu_subtype_t           testsubtype;
+	cpu_subtype_t           testfeatures;
 	struct fat_header       *header;
 
 	if (sizeof(struct fat_header) > data_size) {
@@ -97,18 +99,19 @@ fatfile_getarch(
 	for (; nfat_arch-- > 0; arch++) {
 		testtype = OSSwapBigToHostInt32(arch->cputype);
 		testsubtype = OSSwapBigToHostInt32(arch->cpusubtype) & ~CPU_SUBTYPE_MASK;
+		testfeatures = OSSwapBigToHostInt32(arch->cpusubtype) & CPU_SUBTYPE_MASK;
 
 		/*
-		 *	Check to see if right cpu type.
+		 *	Check to see if right cpu/subcpu type.
 		 */
-		if ((testtype & ~mask_bits) != (req_cpu_type & ~mask_bits)) {
+		if (!binary_match(mask_bits, req_cpu_type, req_subcpu_type, testtype, testsubtype)) {
 			continue;
 		}
 
 		/*
-		 *      Get the grade of the cpu subtype (without feature flags)
+		 *      Get the grade of the cpu subtype
 		 */
-		grade = grade_binary(testtype, testsubtype, TRUE);
+		grade = grade_binary(testtype, testsubtype, testfeatures, TRUE);
 
 		/*
 		 *	Remember it if it's the best we've seen.
@@ -162,18 +165,24 @@ fatfile_getbestarch(
 	vm_offset_t             data_ptr,
 	vm_size_t               data_size,
 	struct image_params     *imgp,
-	struct fat_arch *archret)
+	struct fat_arch *archret,
+	__unused bool affinity)
 {
+	int primary_type = cpu_type();
+
+
 	/*
 	 * Ignore all architectural bits when determining if an image
 	 * in a fat file should be skipped or graded.
 	 */
-	return fatfile_getarch(data_ptr, data_size, cpu_type(), CPU_ARCH_MASK, imgp, archret);
+	load_return_t ret = fatfile_getarch(data_ptr, data_size, primary_type, CPU_ARCH_MASK, CPU_SUBTYPE_ANY, imgp, archret);
+	return ret;
 }
 
 load_return_t
 fatfile_getbestarch_for_cputype(
 	cpu_type_t cputype,
+	cpu_subtype_t cpusubtype,
 	vm_offset_t data_ptr,
 	vm_size_t data_size,
 	struct image_params *imgp,
@@ -182,7 +191,7 @@ fatfile_getbestarch_for_cputype(
 	/*
 	 * Scan the fat_arch array for exact matches for this cpu_type_t only
 	 */
-	return fatfile_getarch(data_ptr, data_size, cputype, 0, imgp, archret);
+	return fatfile_getarch(data_ptr, data_size, cputype, 0, cpusubtype, imgp, archret);
 }
 
 /**********************************************************************
@@ -211,7 +220,7 @@ fatfile_getarch_with_bits(
 	 * Scan the fat_arch array for matches with the requested
 	 * architectural bits set, and for the current hardware cpu CPU.
 	 */
-	return fatfile_getarch(data_ptr, data_size, (archbits & CPU_ARCH_MASK) | (cpu_type() & ~CPU_ARCH_MASK), 0, NULL, archret);
+	return fatfile_getarch(data_ptr, data_size, (archbits & CPU_ARCH_MASK) | (cpu_type() & ~CPU_ARCH_MASK), 0, CPU_SUBTYPE_ANY, NULL, archret);
 }
 
 /*
@@ -226,9 +235,9 @@ fatfile_getarch_with_bits(
 load_return_t
 fatfile_validate_fatarches(vm_offset_t data_ptr, vm_size_t data_size)
 {
-	uint32_t magic, nfat_arch;
-	uint32_t max_nfat_arch, i, j;
-	uint32_t fat_header_size;
+	uint32_t magic;
+	size_t nfat_arch, max_nfat_arch, i, j;
+	size_t fat_header_size;
 
 	struct fat_arch         *arches;
 	struct fat_header       *header;

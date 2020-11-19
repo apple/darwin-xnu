@@ -142,7 +142,7 @@ esp_chachapoly_mature(struct secasvar *sav)
 	return 0;
 }
 
-int
+size_t
 esp_chachapoly_schedlen(__unused const struct esp_algorithm *algo)
 {
 	return sizeof(esp_chachapoly_ctx_s);
@@ -211,7 +211,7 @@ esp_chachapoly_ivlen(const struct esp_algorithm *algo,
 int
 esp_chachapoly_encrypt_finalize(struct secasvar *sav,
     unsigned char *tag,
-    unsigned int tag_bytes)
+    size_t tag_bytes)
 {
 	esp_chachapoly_ctx_t esp_ccp_ctx;
 	int rc = 0;
@@ -219,7 +219,7 @@ esp_chachapoly_encrypt_finalize(struct secasvar *sav,
 	ESP_CHECK_ARG(sav);
 	ESP_CHECK_ARG(tag);
 	if (tag_bytes != ESP_CHACHAPOLY_ICV_LEN) {
-		esp_log_err("ChaChaPoly Invalid tag_bytes %u, SPI 0x%08x",
+		esp_log_err("ChaChaPoly Invalid tag_bytes %zu, SPI 0x%08x",
 		    tag_bytes, ntohl(sav->spi));
 		return EINVAL;
 	}
@@ -237,7 +237,7 @@ esp_chachapoly_encrypt_finalize(struct secasvar *sav,
 int
 esp_chachapoly_decrypt_finalize(struct secasvar *sav,
     unsigned char *tag,
-    unsigned int tag_bytes)
+    size_t tag_bytes)
 {
 	esp_chachapoly_ctx_t esp_ccp_ctx;
 	int rc = 0;
@@ -245,7 +245,7 @@ esp_chachapoly_decrypt_finalize(struct secasvar *sav,
 	ESP_CHECK_ARG(sav);
 	ESP_CHECK_ARG(tag);
 	if (tag_bytes != ESP_CHACHAPOLY_ICV_LEN) {
-		esp_log_err("ChaChaPoly Invalid tag_bytes %u, SPI 0x%08x",
+		esp_log_err("ChaChaPoly Invalid tag_bytes %zu, SPI 0x%08x",
 		    tag_bytes, ntohl(sav->spi));
 		return EINVAL;
 	}
@@ -274,7 +274,7 @@ esp_chachapoly_encrypt(struct mbuf *m, // head of mbuf chain
 	uint8_t *sp; // buffer of a given encryption round
 	size_t len; // length of a given encryption round
 	const int32_t ivoff = (int32_t)off + (int32_t)sizeof(struct newesp); // IV offset
-	const int32_t bodyoff = ivoff + ivlen; // body offset
+	const size_t bodyoff = ivoff + ivlen; // body offset
 	int rc = 0; // return code of corecrypto operations
 	struct newesp esp_hdr; // ESP header for AAD
 	_Static_assert(sizeof(esp_hdr) == 8, "Bad size");

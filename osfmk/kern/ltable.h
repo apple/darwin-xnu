@@ -163,15 +163,6 @@ struct link_table {
 #endif
 } __attribute__((aligned(8)));
 
-
-/**
- * ltable_bootstrap: bootstrap a link table
- *
- * Called once at system boot
- */
-extern void ltable_bootstrap(void);
-
-
 /**
  * ltable_init: initialize a link table with given parameters
  *

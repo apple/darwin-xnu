@@ -123,6 +123,8 @@ typedef struct boot_icon_element boot_icon_element;
  * "Revision" can be incremented for compatible changes
  */
 #define kBootArgsRevision               0
+#define kBootArgsRevision0              kBootArgsRevision
+#define kBootArgsRevision1              1 /* added KC_hdrs_addr */
 #define kBootArgsVersion                2
 
 /* Snapshot constants of previous revisions that are supported */
@@ -143,6 +145,7 @@ typedef struct boot_icon_element boot_icon_element;
 #define kBootArgsFlagBlackBg            (1 << 6)
 #define kBootArgsFlagLoginUI            (1 << 7)
 #define kBootArgsFlagInstallUI          (1 << 8)
+#define kBootArgsFlagRecoveryBoot       (1 << 10)
 
 typedef struct boot_args {
 	uint16_t    Revision;   /* Revision of boot_args structure */
@@ -196,7 +199,17 @@ typedef struct boot_args {
 	uint32_t    apfsDataStart;/* Physical address of apfs volume key structure */
 	uint32_t    apfsDataSize;
 
-	uint32_t    __reserved4[710];
+	/* Version 2, Revision 1 */
+	uint64_t    KC_hdrs_vaddr;
+
+	uint64_t    arvRootHashStart; /* Physical address of root hash file */
+	uint64_t    arvRootHashSize;
+
+	uint64_t    arvManifestStart; /* Physical address of manifest file */
+	uint64_t    arvManifestSize;
+
+	/* Reserved */
+	uint32_t    __reserved4[700];
 } boot_args;
 
 extern char assert_boot_args_size_is_4096[sizeof(boot_args) == 4096 ? 1 : -1];

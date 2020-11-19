@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2005 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2005, 2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -119,7 +119,7 @@ const mach_trap_t       mach_trap_table[MACH_TRAP_TABLE_COUNT] = {
 /* 14 */ MACH_TRAP(_kernelrpc_mach_vm_protect_trap, 5, 7, munge_wllww),
 /* 15 */ MACH_TRAP(_kernelrpc_mach_vm_map_trap, 6, 8, munge_wwllww),
 /* 16 */ MACH_TRAP(_kernelrpc_mach_port_allocate_trap, 3, 3, munge_www),
-/* 17 */ MACH_TRAP(_kernelrpc_mach_port_destroy_trap, 2, 2, munge_ww),
+/* 17 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
 /* 18 */ MACH_TRAP(_kernelrpc_mach_port_deallocate_trap, 2, 2, munge_ww),
 /* 19 */ MACH_TRAP(_kernelrpc_mach_port_mod_refs_trap, 4, 4, munge_wwww),
 /* 20 */ MACH_TRAP(_kernelrpc_mach_port_move_member_trap, 3, 3, munge_www),
@@ -166,7 +166,6 @@ const mach_trap_t       mach_trap_table[MACH_TRAP_TABLE_COUNT] = {
 /* 61 */ MACH_TRAP(thread_switch, 3, 3, munge_www),
 /* 62 */ MACH_TRAP(clock_sleep_trap, 5, 5, munge_wwwww),
 /* 63 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
-/* traps 64 - 95 reserved (debo) */
 /* 64 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
 /* 65 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
 /* 66 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
@@ -199,12 +198,11 @@ const mach_trap_t       mach_trap_table[MACH_TRAP_TABLE_COUNT] = {
 /* 93 */ MACH_TRAP(mk_timer_arm_trap, 2, 3, munge_wl),
 /* 94 */ MACH_TRAP(mk_timer_cancel_trap, 2, 2, munge_ww),
 /* 95 */ MACH_TRAP(mk_timer_arm_leeway_trap, 4, 6, munge_wlll),
-/* traps 64 - 95 reserved (debo) */
 /* 96 */ MACH_TRAP(debug_control_port_for_pid, 3, 3, munge_www),
 /* 97 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
 /* 98 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
 /* 99 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
-/* traps 100-107 reserved for iokit (esb) */
+/* traps 100-107 reserved for IOKit */
 /* 100 */ MACH_TRAP(iokit_user_client_trap, 8, 8, munge_wwwwwwww),
 /* 101 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
 /* 102 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
@@ -213,7 +211,6 @@ const mach_trap_t       mach_trap_table[MACH_TRAP_TABLE_COUNT] = {
 /* 105 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
 /* 106 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
 /* 107 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
-/* traps 108-127 unused */
 /* 108 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
 /* 109 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
 /* 110 */ MACH_TRAP(kern_invalid, 0, 0, NULL),
@@ -254,7 +251,7 @@ const char * mach_syscall_name_table[MACH_TRAP_TABLE_COUNT] = {
 /* 14 */ "_kernelrpc_mach_vm_protect_trap",
 /* 15 */ "_kernelrpc_mach_vm_map_trap",
 /* 16 */ "_kernelrpc_mach_port_allocate_trap",
-/* 17 */ "_kernelrpc_mach_port_destroy_trap",
+/* 17 */ "kern_invalid",
 /* 18 */ "_kernelrpc_mach_port_deallocate_trap",
 /* 19 */ "_kernelrpc_mach_port_mod_refs_trap",
 /* 20 */ "_kernelrpc_mach_port_move_member_trap",
@@ -314,9 +311,9 @@ const char * mach_syscall_name_table[MACH_TRAP_TABLE_COUNT] = {
 /* 73 */ "kern_invalid",
 /* 74 */ "kern_invalid",
 /* 75 */ "kern_invalid",
-/* 76 */ "kern_invalid",
-/* 77 */ "_kernelrpc_mach_port_type_trap",
-/* 78 */ "_kernelrpc_mach_port_request_notification_trap",
+/* 76 */ "_kernelrpc_mach_port_type_trap",
+/* 77 */ "_kernelrpc_mach_port_request_notification_trap",
+/* 78 */ "kern_invalid",
 /* 79 */ "kern_invalid",
 /* 80 */ "kern_invalid",
 /* 81 */ "kern_invalid",

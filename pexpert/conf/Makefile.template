@@ -19,9 +19,6 @@ include $(MakeInc_def)
 CFLAGS+= -include meta_features.h -DPEXPERT_KERNEL_PRIVATE
 SFLAGS+= -include meta_features.h
 
-# Objects that don't want -Wcast-align warning (8474835)
-pe_identify_machine.o_CWARNFLAGS_ADD = -Wno-cast-align
-
 #
 # Directories for mig generated files
 #
@@ -51,6 +48,25 @@ COMP_SUBDIRS =
 
 %MACHDEP
 
+#
+# Diagnostic opt-outs.  We need to make this list empty.
+#
+# DO NOT ADD MORE HERE.
+#
+# -Wno-cast-align
+pe_identify_machine.o_CFLAGS_ADD += -Wno-cast-align
+# -Wno-implicit-int-conversion
+pe_serial.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+# -Wno-shorten-64-to-32
+pe_identify_machine.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+pe_init.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+# -Wno-sign-conversion
+bootargs.o_CFLAGS_ADD += -Wno-sign-conversion
+device_tree.o_CFLAGS_ADD += -Wno-sign-conversion
+pe_identify_machine.o_CFLAGS_ADD += -Wno-sign-conversion
+pe_init.o_CFLAGS_ADD += -Wno-sign-conversion
+pe_serial.o_CFLAGS_ADD += -Wno-sign-conversion
+
 # Rebuild if per-file overrides change
 ${OBJS}: $(firstword $(MAKEFILE_LIST))
 
@@ -66,7 +82,7 @@ $(SOBJS): .SFLAGS
 	$(_v)$(REPLACECONTENTS) $@ $(S_KCC) $(SFLAGS) $(INCFLAGS)
 
 $(COMPONENT).filelist: $(OBJS)
-	$(call makelog,$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0))
+	@$(LOG_LDFILELIST) "$(COMPONENT)"
 	$(_v)for obj in ${OBJS}; do	\
 		 $(ECHO) $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist

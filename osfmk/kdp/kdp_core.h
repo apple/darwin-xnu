@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2003-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -85,7 +85,7 @@ struct  corehdr {
 
 #define CORE_REMOTE_PORT 1069 /* hardwired, we can't really query the services file */
 
-#if CONFIG_EMBEDDED
+#if defined(__arm__) || defined(__arm64__)
 /*
  * xnu shared memory hardware debugger support
  *
@@ -122,7 +122,7 @@ struct xnu_hw_shmem_dbg_command_info {
 
 void panic_spin_shmcon(void);
 
-#endif /* CONFIG_EMBEDDED */
+#endif /* defined(__arm__) || defined(__arm64__) */
 
 void kdp_panic_dump(void);
 void begin_panic_transfer(void);
@@ -134,7 +134,7 @@ void kdp_get_dump_info(kdp_dumpinfo_reply_t *rp);
 enum kern_dump_type {
 	KERN_DUMP_DISK, /* local, on device core dump */
 	KERN_DUMP_NET, /* kdp network core dump */
-#if CONFIG_EMBEDDED
+#if defined(__arm__) || defined(__arm64__)
 	KERN_DUMP_HW_SHMEM_DBG, /* coordinated hardware shared memory debugger core dump */
 #endif
 	KERN_DUMP_STACKSHOT_DISK, /* local, stackshot on device coredump */

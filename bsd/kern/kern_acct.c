@@ -268,14 +268,14 @@ acct_process(proc_t p)
 
 	/* (2) The amount of user and system time that was used */
 	calcru(p, &ut, &st, NULL);
-	an_acct.ac_utime = encode_comp_t(ut.tv_sec, ut.tv_usec);
-	an_acct.ac_stime = encode_comp_t(st.tv_sec, st.tv_usec);
+	an_acct.ac_utime = encode_comp_t((uint32_t)ut.tv_sec, ut.tv_usec);
+	an_acct.ac_stime = encode_comp_t((uint32_t)st.tv_sec, st.tv_usec);
 
 	/* (3) The elapsed time the commmand ran (and its starting time) */
-	an_acct.ac_btime = p->p_start.tv_sec;
+	an_acct.ac_btime = (u_int32_t)p->p_start.tv_sec;
 	microtime(&tmp);
 	timevalsub(&tmp, &p->p_start);
-	an_acct.ac_etime = encode_comp_t(tmp.tv_sec, tmp.tv_usec);
+	an_acct.ac_etime = encode_comp_t((uint32_t)tmp.tv_sec, tmp.tv_usec);
 
 	/* (4) The average amount of memory used */
 	proc_lock(p);
@@ -284,15 +284,15 @@ acct_process(proc_t p)
 	r = &rup;
 	tmp = ut;
 	timevaladd(&tmp, &st);
-	t = tmp.tv_sec * hz + tmp.tv_usec / tick;
+	t = (int)(tmp.tv_sec * hz + tmp.tv_usec / tick);
 	if (t) {
-		an_acct.ac_mem = (r->ru_ixrss + r->ru_idrss + r->ru_isrss) / t;
+		an_acct.ac_mem = (u_int16_t)((r->ru_ixrss + r->ru_idrss + r->ru_isrss) / t);
 	} else {
 		an_acct.ac_mem = 0;
 	}
 
 	/* (5) The number of disk I/O operations done */
-	an_acct.ac_io = encode_comp_t(r->ru_inblock + r->ru_oublock, 0);
+	an_acct.ac_io = encode_comp_t((uint32_t)(r->ru_inblock + r->ru_oublock), 0);
 
 	/* (6) The UID and GID of the process */
 	safecred = kauth_cred_proc_ref(p);
@@ -316,7 +316,7 @@ acct_process(proc_t p)
 	}
 
 	/* (8) The boolean flags that tell how the process terminated, etc. */
-	an_acct.ac_flag = p->p_acflag;
+	an_acct.ac_flag = (u_int8_t)p->p_acflag;
 
 	/*
 	 * Now, just write the accounting information to the file.
@@ -369,7 +369,7 @@ encode_comp_t(uint32_t s, uint32_t us)
 	/* Clean it up and polish it off. */
 	exp <<= MANTSIZE;               /* Shift the exponent into place */
 	exp += s;                       /* and add on the mantissa. */
-	return exp;
+	return (comp_t)exp;
 }
 
 /*

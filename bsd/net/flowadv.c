@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -105,11 +105,10 @@ static STAILQ_HEAD(fadv_head, flowadv_fcentry) fadv_list;
 static thread_t fadv_thread = THREAD_NULL;
 static uint32_t fadv_active;
 
-static unsigned int fadv_zone_size;             /* size of flowadv_fcentry */
-static struct zone *fadv_zone;                  /* zone for flowadv_fcentry */
+static unsigned int fadv_size;                  /* size of flowadv_fcentry */
+static struct mcache *fadv_cache;               /* mcache for flowadv_fcentry */
 
-#define FADV_ZONE_MAX   32                      /* maximum elements in zone */
-#define FADV_ZONE_NAME  "fadv_zone"             /* zone name */
+#define FADV_CACHE_NAME  "flowadv"              /* cache name */
 
 static int flowadv_thread_cont(int);
 static void flowadv_thread_func(void *, wait_result_t);
@@ -124,16 +123,9 @@ flowadv_init(void)
 	fadv_lock_grp = lck_grp_alloc_init("fadv_lock", fadv_lock_grp_attr);
 	lck_mtx_init(&fadv_lock, fadv_lock_grp, NULL);
 
-	fadv_zone_size = P2ROUNDUP(sizeof(struct flowadv_fcentry),
-	    sizeof(u_int64_t));
-	fadv_zone = zinit(fadv_zone_size,
-	    FADV_ZONE_MAX * fadv_zone_size, 0, FADV_ZONE_NAME);
-	if (fadv_zone == NULL) {
-		panic("%s: failed allocating %s", __func__, FADV_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(fadv_zone, Z_EXPAND, TRUE);
-	zone_change(fadv_zone, Z_CALLERACCT, FALSE);
+	fadv_size = sizeof(struct flowadv_fcentry);
+	fadv_cache = mcache_create(FADV_CACHE_NAME, fadv_size,
+	    sizeof(uint64_t), 0, MCR_SLEEP);
 
 	if (kernel_thread_start(flowadv_thread_func, NULL, &fadv_thread) !=
 	    KERN_SUCCESS) {
@@ -149,9 +141,9 @@ flowadv_alloc_entry(int how)
 {
 	struct flowadv_fcentry *fce;
 
-	fce = (how == M_WAITOK) ? zalloc(fadv_zone) : zalloc_noblock(fadv_zone);
-	if (fce != NULL) {
-		bzero(fce, fadv_zone_size);
+	if ((fce = mcache_alloc(fadv_cache, (how == M_WAITOK) ?
+	    MCR_SLEEP : MCR_NOSLEEP)) != NULL) {
+		bzero(fce, fadv_size);
 	}
 
 	return fce;
@@ -160,7 +152,7 @@ flowadv_alloc_entry(int how)
 void
 flowadv_free_entry(struct flowadv_fcentry *fce)
 {
-	zfree(fadv_zone, fce);
+	mcache_free(fadv_cache, fce);
 }
 
 void
@@ -260,4 +252,10 @@ flowadv_thread_func(void *v, wait_result_t w)
 	 */
 	lck_mtx_unlock(&fadv_lock);
 	VERIFY(0);
+}
+
+void
+flowadv_reap_caches(boolean_t purge)
+{
+	mcache_reap_now(fadv_cache, purge);
 }

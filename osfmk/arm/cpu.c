@@ -34,6 +34,7 @@
 #include <kern/kalloc.h>
 #include <kern/machine.h>
 #include <kern/cpu_number.h>
+#include <kern/percpu.h>
 #include <kern/thread.h>
 #include <kern/timer_queue.h>
 #include <arm/cpu_data.h>
@@ -134,8 +135,8 @@ cpu_idle(void)
 	}
 	cpu_data_ptr->cpu_user_debug = NULL;
 
-	if (cpu_data_ptr->cpu_idle_notify) {
-		((processor_idle_t) cpu_data_ptr->cpu_idle_notify)(cpu_data_ptr->cpu_id, TRUE, &new_idle_timeout_ticks);
+	if (cpu_data_ptr->cpu_idle_notify != NULL) {
+		cpu_data_ptr->cpu_idle_notify(cpu_data_ptr->cpu_id, TRUE, &new_idle_timeout_ticks);
 	}
 
 	if (cpu_data_ptr->idle_timer_notify != 0) {
@@ -148,13 +149,17 @@ cpu_idle(void)
 		}
 		timer_resync_deadlines();
 		if (cpu_data_ptr->rtcPop != lastPop) {
+			/*
+			 * Ignore the return value here: this CPU has called idle_notify and
+			 * committed to going idle.
+			 */
 			SetIdlePop();
 		}
 	}
 
 #if KPC
 	kpc_idle();
-#endif
+#endif /* KPC */
 
 	platform_cache_idle_enter();
 	cpu_idle_wfi((boolean_t) wfi_fast);
@@ -181,8 +186,8 @@ cpu_idle_exit(boolean_t from_reset __unused)
 
 	pmap_set_pmap(cpu_data_ptr->cpu_active_thread->map->pmap, current_thread());
 
-	if (cpu_data_ptr->cpu_idle_notify) {
-		((processor_idle_t) cpu_data_ptr->cpu_idle_notify)(cpu_data_ptr->cpu_id, FALSE, &new_idle_timeout_ticks);
+	if (cpu_data_ptr->cpu_idle_notify != NULL) {
+		cpu_data_ptr->cpu_idle_notify(cpu_data_ptr->cpu_id, FALSE, &new_idle_timeout_ticks);
 	}
 
 	if (cpu_data_ptr->idle_timer_notify != 0) {
@@ -265,7 +270,6 @@ cpu_init(void)
 	}
 	cdp->cpu_stat.irq_ex_cnt_wake = 0;
 	cdp->cpu_stat.ipi_cnt_wake = 0;
-	cdp->cpu_stat.timer_cnt_wake = 0;
 	cdp->cpu_running = TRUE;
 	cdp->cpu_sleep_token_last = cdp->cpu_sleep_token;
 	cdp->cpu_sleep_token = 0x0UL;
@@ -309,37 +313,34 @@ cpu_data_free(cpu_data_t *cpu_data_ptr)
 		return;
 	}
 
-	cpu_processor_free( cpu_data_ptr->cpu_processor);
-	if (CpuDataEntries[cpu_data_ptr->cpu_number].cpu_data_vaddr == cpu_data_ptr) {
+	int cpu_number = cpu_data_ptr->cpu_number;
+
+	if (CpuDataEntries[cpu_number].cpu_data_vaddr == cpu_data_ptr) {
 		OSDecrementAtomic((SInt32*)&real_ncpus);
-		CpuDataEntries[cpu_data_ptr->cpu_number].cpu_data_vaddr = NULL;
-		CpuDataEntries[cpu_data_ptr->cpu_number].cpu_data_paddr = 0;
+		CpuDataEntries[cpu_number].cpu_data_vaddr = NULL;
+		CpuDataEntries[cpu_number].cpu_data_paddr = 0;
 		__builtin_arm_dmb(DMB_ISH); // Ensure prior stores to cpu array are visible
 	}
 	(kfree)((void *)(cpu_data_ptr->intstack_top - INTSTACK_SIZE), INTSTACK_SIZE);
 	(kfree)((void *)(cpu_data_ptr->fiqstack_top - FIQSTACK_SIZE), FIQSTACK_SIZE);
-	kmem_free(kernel_map, (vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t));
 }
 
 void
 cpu_data_init(cpu_data_t *cpu_data_ptr)
 {
-	uint32_t i = 0;
-
 	cpu_data_ptr->cpu_flags = 0;
 #if     __arm__
 	cpu_data_ptr->cpu_exc_vectors = (vm_offset_t)&ExceptionVectorsTable;
 #endif
-	cpu_data_ptr->interrupts_enabled = 0;
 	cpu_data_ptr->cpu_int_state = 0;
 	cpu_data_ptr->cpu_pending_ast = AST_NONE;
-	cpu_data_ptr->cpu_cache_dispatch = (void *) 0;
+	cpu_data_ptr->cpu_cache_dispatch = NULL;
 	cpu_data_ptr->rtcPop = EndOfAllTime;
 	cpu_data_ptr->rtclock_datap = &RTClockData;
 	cpu_data_ptr->cpu_user_debug = NULL;
 	cpu_data_ptr->cpu_base_timebase_low = 0;
 	cpu_data_ptr->cpu_base_timebase_high = 0;
-	cpu_data_ptr->cpu_idle_notify = (void *) 0;
+	cpu_data_ptr->cpu_idle_notify = NULL;
 	cpu_data_ptr->cpu_idle_latency = 0x0ULL;
 	cpu_data_ptr->cpu_idle_pop = 0x0ULL;
 	cpu_data_ptr->cpu_reset_type = 0x0UL;
@@ -369,7 +370,7 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 	cpu_data_ptr->cpu_imm_xcall_p0 = NULL;
 	cpu_data_ptr->cpu_imm_xcall_p1 = NULL;
 
-#if     __ARM_SMP__ && defined(ARMA7)
+#if     defined(ARMA7)
 	cpu_data_ptr->cpu_CLWFlush_req = 0x0ULL;
 	cpu_data_ptr->cpu_CLWFlush_last = 0x0ULL;
 	cpu_data_ptr->cpu_CLWClean_req = 0x0ULL;
@@ -384,9 +385,7 @@ cpu_data_init(cpu_data_t *cpu_data_ptr)
 	pmap_cpu_data_ptr->cpu_user_pmap_stamp = 0;
 	pmap_cpu_data_ptr->cpu_number = PMAP_INVALID_CPU_NUM;
 
-	for (i = 0; i < (sizeof(pmap_cpu_data_ptr->cpu_asid_high_bits) / sizeof(*pmap_cpu_data_ptr->cpu_asid_high_bits)); i++) {
-		pmap_cpu_data_ptr->cpu_asid_high_bits[i] = 0;
-	}
+	bzero(&(pmap_cpu_data_ptr->cpu_sw_asids[0]), sizeof(pmap_cpu_data_ptr->cpu_sw_asids));
 #endif
 	cpu_data_ptr->halt_status = CPU_NOT_HALTED;
 }
@@ -397,7 +396,7 @@ cpu_data_register(cpu_data_t *cpu_data_ptr)
 	int cpu;
 
 	cpu = OSIncrementAtomic((SInt32*)&real_ncpus);
-	if (real_ncpus > MAX_CPUS) {
+	if (real_ncpus > ml_get_cpu_count()) {
 		return KERN_FAILURE;
 	}
 
@@ -416,9 +415,9 @@ cpu_start(int cpu)
 		cpu_machine_init();
 		return KERN_SUCCESS;
 	} else {
-#if     __ARM_SMP__
 		cpu_data_t      *cpu_data_ptr;
 		thread_t        first_thread;
+		processor_t     processor;
 
 		cpu_data_ptr = CpuDataEntries[cpu].cpu_data_vaddr;
 		cpu_data_ptr->cpu_reset_handler = (vm_offset_t) start_cpu_paddr;
@@ -427,21 +426,21 @@ cpu_start(int cpu)
 		cpu_data_ptr->cpu_pmap_cpu_data.cpu_user_pmap = NULL;
 #endif
 
-		if (cpu_data_ptr->cpu_processor->startup_thread != THREAD_NULL) {
-			first_thread = cpu_data_ptr->cpu_processor->startup_thread;
+		processor = PERCPU_GET_RELATIVE(processor, cpu_data, cpu_data_ptr);
+		if (processor->startup_thread != THREAD_NULL) {
+			first_thread = processor->startup_thread;
 		} else {
-			first_thread = cpu_data_ptr->cpu_processor->idle_thread;
+			first_thread = processor->idle_thread;
 		}
 		cpu_data_ptr->cpu_active_thread = first_thread;
 		first_thread->machine.CpuDatap = cpu_data_ptr;
+		first_thread->machine.pcpu_data_base =
+		    (vm_address_t)cpu_data_ptr - __PERCPU_ADDR(cpu_data);
 
 		flush_dcache((vm_offset_t)&CpuDataEntries[cpu], sizeof(cpu_data_entry_t), FALSE);
 		flush_dcache((vm_offset_t)cpu_data_ptr, sizeof(cpu_data_t), FALSE);
 		(void) PE_cpu_start(cpu_data_ptr->cpu_id, (vm_offset_t)NULL, (vm_offset_t)NULL);
 		return KERN_SUCCESS;
-#else
-		return KERN_FAILURE;
-#endif
 	}
 }
 
@@ -482,7 +481,8 @@ ml_arm_sleep(void)
 		cpu_data_t      *target_cdp;
 		unsigned int    cpu;
 
-		for (cpu = 0; cpu < MAX_CPUS; cpu++) {
+		const unsigned int max_cpu_id = ml_get_max_cpu_number();
+		for (cpu = 0; cpu <= max_cpu_id; cpu++) {
 			target_cdp = (cpu_data_t *)CpuDataEntries[cpu].cpu_data_vaddr;
 			if (target_cdp == (cpu_data_t *)NULL) {
 				break;
@@ -506,7 +506,7 @@ ml_arm_sleep(void)
 		CleanPoU_Dcache();
 	}
 	cpu_data_ptr->cpu_sleep_token = ARM_CPU_ON_SLEEP_PATH;
-#if     __ARM_SMP__ && defined(ARMA7)
+#if     defined(ARMA7)
 	cpu_data_ptr->cpu_CLWFlush_req = 0;
 	cpu_data_ptr->cpu_CLWClean_req = 0;
 	__builtin_arm_dmb(DMB_ISH);

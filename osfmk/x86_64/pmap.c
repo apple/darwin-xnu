@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -102,7 +102,6 @@
 #include <kern/ledger.h>
 #include <kern/mach_param.h>
 
-#include <kern/kalloc.h>
 #include <kern/spl.h>
 
 #include <vm/pmap.h>
@@ -192,13 +191,12 @@ uint32_t npvhashmask = 0, npvhashbuckets = 0;
 
 pv_hashed_entry_t       pv_hashed_free_list = PV_HASHED_ENTRY_NULL;
 pv_hashed_entry_t       pv_hashed_kern_free_list = PV_HASHED_ENTRY_NULL;
-decl_simple_lock_data(, pv_hashed_free_list_lock);
-decl_simple_lock_data(, pv_hashed_kern_free_list_lock);
-decl_simple_lock_data(, pv_hash_table_lock);
+SIMPLE_LOCK_DECLARE(pv_hashed_free_list_lock, 0);
+SIMPLE_LOCK_DECLARE(pv_hashed_kern_free_list_lock, 0);
+SIMPLE_LOCK_DECLARE(pv_hash_table_lock, 0);
+SIMPLE_LOCK_DECLARE(phys_backup_lock, 0);
 
-decl_simple_lock_data(, phys_backup_lock);
-
-zone_t          pv_hashed_list_zone;    /* zone of pv_hashed_entry structures */
+SECURITY_READ_ONLY_LATE(zone_t) pv_hashed_list_zone;    /* zone of pv_hashed_entry structures */
 
 /*
  *	First and last physical addresses that we maintain any information
@@ -207,9 +205,9 @@ zone_t          pv_hashed_list_zone;    /* zone of pv_hashed_entry structures */
  */
 boolean_t       pmap_initialized = FALSE;/* Has pmap_init completed? */
 
-static struct vm_object kptobj_object_store __attribute__((aligned(VM_PACKED_POINTER_ALIGNMENT)));
-static struct vm_object kpml4obj_object_store __attribute__((aligned(VM_PACKED_POINTER_ALIGNMENT)));
-static struct vm_object kpdptobj_object_store __attribute__((aligned(VM_PACKED_POINTER_ALIGNMENT)));
+static struct vm_object kptobj_object_store VM_PAGE_PACKED_ALIGNED;
+static struct vm_object kpml4obj_object_store VM_PAGE_PACKED_ALIGNED;
+static struct vm_object kpdptobj_object_store VM_PAGE_PACKED_ALIGNED;
 
 /*
  *	Array of physical page attribites for managed pages.
@@ -230,17 +228,14 @@ pmap_memory_region_t pmap_memory_regions[PMAP_MEMORY_REGIONS_SIZE];
 
 struct pmap     kernel_pmap_store;
 SECURITY_READ_ONLY_LATE(pmap_t)          kernel_pmap = NULL;
-
-struct zone     *pmap_zone;             /* zone of pmap structures */
-
-struct zone     *pmap_anchor_zone;
-struct zone     *pmap_uanchor_zone;
+SECURITY_READ_ONLY_LATE(zone_t)          pmap_zone; /* zone of pmap structures */
+SECURITY_READ_ONLY_LATE(zone_t)          pmap_anchor_zone;
+SECURITY_READ_ONLY_LATE(zone_t)          pmap_uanchor_zone;
 int             pmap_debug = 0;         /* flag for debugging prints */
 
 unsigned int    inuse_ptepages_count = 0;
 long long       alloc_ptepages_count __attribute__((aligned(8))) = 0; /* aligned for atomic access */
 unsigned int    bootstrap_wired_pages = 0;
-int             pt_fake_zone_index = -1;
 
 extern  long    NMIPI_acks;
 
@@ -380,9 +375,8 @@ pmap_scale_shift(void)
 	return scale;
 }
 
-lck_grp_t               pmap_lck_grp;
-lck_grp_attr_t          pmap_lck_grp_attr;
-lck_attr_t              pmap_lck_rw_attr;
+LCK_GRP_DECLARE(pmap_lck_grp, "pmap");
+LCK_ATTR_DECLARE(pmap_lck_rw_attr, 0, LCK_ATTR_DEBUG);
 
 /*
  *	Bootstrap the system enough to run with virtual memory.
@@ -395,10 +389,6 @@ pmap_bootstrap(
 	__unused vm_offset_t    load_start,
 	__unused boolean_t      IA32e)
 {
-#if NCOPY_WINDOWS > 0
-	vm_offset_t     va;
-	int i;
-#endif
 	assert(IA32e);
 
 	vm_last_addr = VM_MAX_KERNEL_ADDRESS;   /* Set the highest address
@@ -434,38 +424,6 @@ pmap_bootstrap(
 	virtual_avail = (vm_offset_t)(VM_MIN_KERNEL_ADDRESS) + (vm_offset_t)first_avail;
 	virtual_end = (vm_offset_t)(VM_MAX_KERNEL_ADDRESS);
 
-#if NCOPY_WINDOWS > 0
-	/*
-	 * Reserve some special page table entries/VA space for temporary
-	 * mapping of pages.
-	 */
-#define SYSMAP(c, p, v, n)      \
-	v = (c)va; va += ((n)*INTEL_PGBYTES);
-
-	va = virtual_avail;
-
-	for (i = 0; i < PMAP_NWINDOWS; i++) {
-#if 1
-		kprintf("trying to do SYSMAP idx %d %p\n", i,
-		    current_cpu_datap());
-		kprintf("cpu_pmap %p\n", current_cpu_datap()->cpu_pmap);
-		kprintf("mapwindow %p\n", current_cpu_datap()->cpu_pmap->mapwindow);
-		kprintf("two stuff %p %p\n",
-		    (void *)(current_cpu_datap()->cpu_pmap->mapwindow[i].prv_CMAP),
-		    (void *)(current_cpu_datap()->cpu_pmap->mapwindow[i].prv_CADDR));
-#endif
-		SYSMAP(caddr_t,
-		    (current_cpu_datap()->cpu_pmap->mapwindow[i].prv_CMAP),
-		    (current_cpu_datap()->cpu_pmap->mapwindow[i].prv_CADDR),
-		    1);
-		current_cpu_datap()->cpu_pmap->mapwindow[i].prv_CMAP =
-		    &(current_cpu_datap()->cpu_pmap->mapwindow[i].prv_CMAP_store);
-		*current_cpu_datap()->cpu_pmap->mapwindow[i].prv_CMAP = 0;
-	}
-
-
-	virtual_avail = va;
-#endif
 	if (!PE_parse_boot_argn("npvhash", &npvhashmask, sizeof(npvhashmask))) {
 		npvhashmask = ((NPVHASHBUCKETS) << pmap_scale_shift()) - 1;
 	}
@@ -477,19 +435,8 @@ pmap_bootstrap(
 		    "using default %d\n", npvhashmask, NPVHASHMASK);
 	}
 
-	lck_grp_attr_setdefault(&pmap_lck_grp_attr);
-	lck_grp_init(&pmap_lck_grp, "pmap", &pmap_lck_grp_attr);
-
-	lck_attr_setdefault(&pmap_lck_rw_attr);
-	lck_attr_cleardebug(&pmap_lck_rw_attr);
-
 	lck_rw_init(&kernel_pmap->pmap_rwl, &pmap_lck_grp, &pmap_lck_rw_attr);
 	kernel_pmap->pmap_rwl.lck_rw_can_sleep = FALSE;
-
-	simple_lock_init(&pv_hashed_free_list_lock, 0);
-	simple_lock_init(&pv_hashed_kern_free_list_lock, 0);
-	simple_lock_init(&pv_hash_table_lock, 0);
-	simple_lock_init(&phys_backup_lock, 0);
 
 	pmap_cpu_init();
 
@@ -579,16 +526,13 @@ pmap_virtual_space(
 #if HIBERNATION
 
 #include <IOKit/IOHibernatePrivate.h>
+#include <machine/pal_hibernate.h>
 
 int32_t         pmap_npages;
 int32_t         pmap_teardown_last_valid_compact_indx = -1;
 
-
-void    hibernate_rebuild_pmap_structs(void);
-void    hibernate_teardown_pmap_structs(addr64_t *, addr64_t *);
 void    pmap_pack_index(uint32_t);
 int32_t pmap_unpack_index(pv_rooted_entry_t);
-
 
 int32_t
 pmap_unpack_index(pv_rooted_entry_t pv_h)
@@ -622,7 +566,7 @@ pmap_pack_index(uint32_t indx)
 
 
 void
-hibernate_teardown_pmap_structs(addr64_t *unneeded_start, addr64_t *unneeded_end)
+pal_hib_teardown_pmap_structs(addr64_t *unneeded_start, addr64_t *unneeded_end)
 {
 	int32_t         i;
 	int32_t         compact_target_indx;
@@ -655,12 +599,12 @@ hibernate_teardown_pmap_structs(addr64_t *unneeded_start, addr64_t *unneeded_end
 	*unneeded_start = (addr64_t)&pv_head_table[pmap_teardown_last_valid_compact_indx + 1];
 	*unneeded_end = (addr64_t)&pv_head_table[pmap_npages - 1];
 
-	HIBLOG("hibernate_teardown_pmap_structs done: last_valid_compact_indx %d\n", pmap_teardown_last_valid_compact_indx);
+	HIBLOG("pal_hib_teardown_pmap_structs done: last_valid_compact_indx %d\n", pmap_teardown_last_valid_compact_indx);
 }
 
 
 void
-hibernate_rebuild_pmap_structs(void)
+pal_hib_rebuild_pmap_structs(void)
 {
 	int32_t                 cindx, eindx, rindx = 0;
 	pv_rooted_entry_t       pv_h;
@@ -675,7 +619,7 @@ hibernate_rebuild_pmap_structs(void)
 
 		if (rindx != cindx) {
 			/*
-			 * this pv_rooted_entry_t was moved by hibernate_teardown_pmap_structs,
+			 * this pv_rooted_entry_t was moved by pal_hib_teardown_pmap_structs,
 			 * so move it back to its real location
 			 */
 			pv_head_table[rindx] = pv_head_table[cindx];
@@ -694,7 +638,7 @@ hibernate_rebuild_pmap_structs(void)
 		bzero((char *)&pv_head_table[0], rindx * sizeof(struct pv_rooted_entry));
 	}
 
-	HIBLOG("hibernate_rebuild_pmap_structs done: last_valid_compact_indx %d\n", pmap_teardown_last_valid_compact_indx);
+	HIBLOG("pal_hib_rebuild_pmap_structs done: last_valid_compact_indx %d\n", pmap_teardown_last_valid_compact_indx);
 }
 
 #endif
@@ -843,37 +787,28 @@ pmap_init(void)
 	 *	Create the zone of physical maps,
 	 *	and of the physical-to-virtual entries.
 	 */
-	s = (vm_size_t) sizeof(struct pmap);
-	pmap_zone = zinit(s, 400 * s, 4096, "pmap"); /* XXX */
-	zone_change(pmap_zone, Z_NOENCRYPT, TRUE);
-
-	pmap_anchor_zone = zinit(PAGE_SIZE, task_max, PAGE_SIZE, "pagetable anchors");
-	zone_change(pmap_anchor_zone, Z_NOENCRYPT, TRUE);
+	pmap_zone = zone_create_ext("pmap", sizeof(struct pmap),
+	    ZC_NOENCRYPT | ZC_ZFREE_CLEARMEM, ZONE_ID_PMAP, NULL);
 
 	/* The anchor is required to be page aligned. Zone debugging adds
 	 * padding which may violate that requirement. Tell the zone
 	 * subsystem that alignment is required.
 	 */
+	pmap_anchor_zone = zone_create("pagetable anchors", PAGE_SIZE,
+	    ZC_NOENCRYPT | ZC_ALIGNMENT_REQUIRED);
 
-	zone_change(pmap_anchor_zone, Z_ALIGNMENT_REQUIRED, TRUE);
 /* TODO: possible general optimisation...pre-allocate via zones commonly created
  * level3/2 pagetables
  */
-	pmap_uanchor_zone = zinit(PAGE_SIZE, task_max, PAGE_SIZE, "pagetable user anchors");
-	zone_change(pmap_uanchor_zone, Z_NOENCRYPT, TRUE);
-
 	/* The anchor is required to be page aligned. Zone debugging adds
 	 * padding which may violate that requirement. Tell the zone
 	 * subsystem that alignment is required.
 	 */
+	pmap_uanchor_zone = zone_create("pagetable user anchors", PAGE_SIZE,
+	    ZC_NOENCRYPT | ZC_ALIGNMENT_REQUIRED);
 
-	zone_change(pmap_uanchor_zone, Z_ALIGNMENT_REQUIRED, TRUE);
-
-	s = (vm_size_t) sizeof(struct pv_hashed_entry);
-	pv_hashed_list_zone = zinit(s, 10000 * s /* Expandable zone */,
-	    4096 * 3 /* LCM x86_64*/, "pv_list");
-	zone_change(pv_hashed_list_zone, Z_NOENCRYPT, TRUE);
-	zone_change(pv_hashed_list_zone, Z_GZALLOC_EXEMPT, TRUE);
+	pv_hashed_list_zone = zone_create("pv_list", sizeof(struct pv_hashed_entry),
+	    ZC_NOENCRYPT | ZC_ALIGNMENT_REQUIRED);
 
 	/*
 	 * Create pv entries for kernel pages that might get pmap_remove()ed.
@@ -901,7 +836,6 @@ pmap_init(void)
 #endif /* CONFIG_VMX */
 }
 
-static
 void
 pmap_mark_range(pmap_t npmap, uint64_t sv, uint64_t nxrosz, boolean_t NX, boolean_t ro)
 {
@@ -909,6 +843,7 @@ pmap_mark_range(pmap_t npmap, uint64_t sv, uint64_t nxrosz, boolean_t NX, boolea
 	pd_entry_t *pdep;
 	pt_entry_t *ptep = NULL;
 
+	/* XXX what if nxrosz is 0?  we end up marking the page whose address is passed in via sv -- is that kosher? */
 	assert(!is_ept_pmap(npmap));
 
 	assert(((sv & 0xFFFULL) | (nxrosz & 0xFFFULL)) == 0);
@@ -917,11 +852,27 @@ pmap_mark_range(pmap_t npmap, uint64_t sv, uint64_t nxrosz, boolean_t NX, boolea
 		uint64_t pdev = (cv & ~((uint64_t)PDEMASK));
 
 		if (*pdep & INTEL_PTE_PS) {
+#ifdef REMAP_DEBUG
+			if ((NX ^ !!(*pdep & INTEL_PTE_NX)) || (ro ^ !!!(*pdep & INTEL_PTE_WRITE))) {
+				kprintf("WARNING: Remapping PDE for %p from %s%s%s to %s%s%s\n", (void *)cv,
+				    (*pdep & INTEL_PTE_VALID) ? "R" : "",
+				    (*pdep & INTEL_PTE_WRITE) ? "W" : "",
+				    (*pdep & INTEL_PTE_NX) ? "" : "X",
+				    "R",
+				    ro ? "" : "W",
+				    NX ? "" : "X");
+			}
+#endif
+
 			if (NX) {
 				*pdep |= INTEL_PTE_NX;
+			} else {
+				*pdep &= ~INTEL_PTE_NX;
 			}
 			if (ro) {
 				*pdep &= ~INTEL_PTE_WRITE;
+			} else {
+				*pdep |= INTEL_PTE_WRITE;
 			}
 			cv += NBPD;
 			cv &= ~((uint64_t) PDEMASK);
@@ -930,11 +881,26 @@ pmap_mark_range(pmap_t npmap, uint64_t sv, uint64_t nxrosz, boolean_t NX, boolea
 		}
 
 		for (ptep = pmap_pte(npmap, cv); ptep != NULL && (cv < (pdev + NBPD)) && (cv < ev);) {
+#ifdef REMAP_DEBUG
+			if ((NX ^ !!(*ptep & INTEL_PTE_NX)) || (ro ^ !!!(*ptep & INTEL_PTE_WRITE))) {
+				kprintf("WARNING: Remapping PTE for %p from %s%s%s to %s%s%s\n", (void *)cv,
+				    (*ptep & INTEL_PTE_VALID) ? "R" : "",
+				    (*ptep & INTEL_PTE_WRITE) ? "W" : "",
+				    (*ptep & INTEL_PTE_NX) ? "" : "X",
+				    "R",
+				    ro ? "" : "W",
+				    NX ? "" : "X");
+			}
+#endif
 			if (NX) {
 				*ptep |= INTEL_PTE_NX;
+			} else {
+				*ptep &= ~INTEL_PTE_NX;
 			}
 			if (ro) {
 				*ptep &= ~INTEL_PTE_WRITE;
+			} else {
+				*ptep |= INTEL_PTE_WRITE;
 			}
 			cv += NBPT;
 			ptep = pmap_pte(npmap, cv);
@@ -1201,16 +1167,24 @@ pmap_lowmem_finalize(void)
 
 	kernel_segment_command_t * seg;
 	kernel_section_t         * sec;
+	kc_format_t kc_format;
+
+	PE_get_primary_kc_format(&kc_format);
 
 	for (seg = firstseg(); seg != NULL; seg = nextsegfromheader(&_mh_execute_header, seg)) {
 		if (!strcmp(seg->segname, "__TEXT") ||
 		    !strcmp(seg->segname, "__DATA")) {
 			continue;
 		}
-		//XXX
-		if (!strcmp(seg->segname, "__KLD")) {
-			continue;
+
+		/* XXX: FIXME_IN_dyld: This is a workaround (see below) */
+		if (kc_format != KCFormatFileset) {
+			//XXX
+			if (!strcmp(seg->segname, "__KLD")) {
+				continue;
+			}
 		}
+
 		if (!strcmp(seg->segname, "__HIB")) {
 			for (sec = firstsect(seg); sec != NULL; sec = nextsect(seg, sec)) {
 				if (sec->addr & PAGE_MASK) {
@@ -1223,7 +1197,41 @@ pmap_lowmem_finalize(void)
 				}
 			}
 		} else {
-			pmap_mark_range(kernel_pmap, seg->vmaddr, round_page_64(seg->vmsize), TRUE, FALSE);
+			if (kc_format == KCFormatFileset) {
+#if 0
+				/*
+				 * This block of code is commented out because it may or may not have induced an earlier panic
+				 * in ledger init.
+				 */
+
+
+				boolean_t NXbit = !(seg->initprot & VM_PROT_EXECUTE),
+				    robit = (seg->initprot & (VM_PROT_READ | VM_PROT_WRITE)) == VM_PROT_READ;
+
+				/*
+				 * XXX: FIXME_IN_dyld: This is a workaround for primary KC containing incorrect inaccurate
+				 * initprot for segments containing code.
+				 */
+				if (!strcmp(seg->segname, "__KLD") || !strcmp(seg->segname, "__VECTORS")) {
+					NXbit = FALSE;
+					robit = FALSE;
+				}
+
+				pmap_mark_range(kernel_pmap, seg->vmaddr & ~(uint64_t)PAGE_MASK,
+				    round_page_64(seg->vmsize), NXbit, robit);
+#endif
+
+				/*
+				 * XXX: We are marking *every* segment with rwx permissions as a workaround
+				 * XXX: until the primary KC's kernel segments are page-aligned.
+				 */
+				kprintf("Marking (%p, %p) as rwx\n", (void *)(seg->vmaddr & ~(uint64_t)PAGE_MASK),
+				    (void *)((seg->vmaddr & ~(uint64_t)PAGE_MASK) + round_page_64(seg->vmsize)));
+				pmap_mark_range(kernel_pmap, seg->vmaddr & ~(uint64_t)PAGE_MASK,
+				    round_page_64(seg->vmsize), FALSE, FALSE);
+			} else {
+				pmap_mark_range(kernel_pmap, seg->vmaddr, round_page_64(seg->vmsize), TRUE, FALSE);
+			}
 		}
 	}
 
@@ -1500,6 +1508,7 @@ pmap_create_options(
 	p->pm_task_map = ((flags & PMAP_CREATE_64BIT) ? TASK_MAP_64BIT : TASK_MAP_32BIT);
 
 	p->pagezero_accessible = FALSE;
+	p->pm_vm_map_cs_enforced = FALSE;
 
 	if (pmap_pcid_ncpus) {
 		pmap_pcid_initialize(p);
@@ -1662,6 +1671,7 @@ pmap_destroy(pmap_t     p)
 
 	pmap_check_ledgers(p);
 	ledger_dereference(p->ledger);
+	lck_rw_destroy(&p->pmap_rwl, &pmap_lck_grp);
 	zfree(pmap_zone, p);
 
 	PMAP_TRACE(PMAP_CODE(PMAP__DESTROY) | DBG_FUNC_END);
@@ -2455,7 +2465,7 @@ pmap_list_resident_pages(
 #if CONFIG_COREDUMP
 /* temporary workaround */
 boolean_t
-coredumpok(__unused vm_map_t map, __unused vm_offset_t va)
+coredumpok(__unused vm_map_t map, __unused mach_vm_offset_t va)
 {
 #if 0
 	pt_entry_t     *ptep;
@@ -2502,6 +2512,13 @@ pmap_switch(pmap_t tpmap)
 	PMAP_TRACE_CONSTANT(PMAP_CODE(PMAP__SWITCH) | DBG_FUNC_END);
 }
 
+void
+pmap_require(pmap_t pmap)
+{
+	if (pmap != kernel_pmap) {
+		zone_id_require(ZONE_ID_PMAP, sizeof(struct pmap), pmap);
+	}
+}
 
 /*
  * disable no-execute capability on
@@ -2514,40 +2531,6 @@ pmap_disable_NX(__unused pmap_t pmap)
 	pmap->nx_enabled = 0;
 #endif
 }
-
-void
-pt_fake_zone_init(int zone_index)
-{
-	pt_fake_zone_index = zone_index;
-}
-
-void
-pt_fake_zone_info(
-	int             *count,
-	vm_size_t       *cur_size,
-	vm_size_t       *max_size,
-	vm_size_t       *elem_size,
-	vm_size_t       *alloc_size,
-	uint64_t        *sum_size,
-	int             *collectable,
-	int             *exhaustable,
-	int             *caller_acct)
-{
-	*count      = inuse_ptepages_count;
-	*cur_size   = PAGE_SIZE * inuse_ptepages_count;
-	*max_size   = PAGE_SIZE * (inuse_ptepages_count +
-	    vm_page_inactive_count +
-	    vm_page_active_count +
-	    vm_page_free_count);
-	*elem_size  = PAGE_SIZE;
-	*alloc_size = PAGE_SIZE;
-	*sum_size = alloc_ptepages_count * PAGE_SIZE;
-
-	*collectable = 1;
-	*exhaustable = 0;
-	*caller_acct = 1;
-}
-
 
 void
 pmap_flush_context_init(pmap_flush_context *pfc)
@@ -3297,6 +3280,12 @@ pmap_in_ppl(void)
 {
 	// Nonexistent on this architecture.
 	return false;
+}
+
+void
+pmap_lockdown_image4_slab(__unused vm_offset_t slab, __unused vm_size_t slab_len, __unused uint64_t flags)
+{
+	// Unsupported on this architecture.
 }
 
 void *

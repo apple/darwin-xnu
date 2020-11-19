@@ -9,7 +9,14 @@ include $(MakeInc_def)
 DATAFILES = \
           OSByteOrder.h
 
+DRIVERKIT_DATAFILES = \
+          OSByteOrder.h
+
 INSTALL_MD_LIST	= ${DATAFILES}
+
+INSTALL_DRIVERKIT_MD_LIST = ${DRIVERKIT_DATAFILES}
+
+DRIVERKITINCDIR = $(DRIVERKITSDKHEADERSROOT)/usr/local/include
 
 INSTALL_MD_DIR = libkern/arm
 

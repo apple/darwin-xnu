@@ -63,9 +63,11 @@
 #include <mach/i386/vm_param.h>
 #include <kern/kern_types.h>
 #include <kern/misc_protos.h>
+#include <kern/locks.h>
 #include <sys/errno.h>
 #include <i386/param.h>
 #include <i386/misc_protos.h>
+#include <i386/panic_notify.h>
 #include <i386/cpu_data.h>
 #include <i386/machine_routines.h>
 #include <i386/cpuid.h>
@@ -371,7 +373,7 @@ ml_phys_read_data(uint64_t paddr, int size)
 			(void)ml_set_interrupts_enabled(istate);
 
 			if (phyreadpanic && (machine_timeout_suspended() == FALSE)) {
-				panic_io_port_read();
+				panic_notify();
 				panic("Read from physical addr 0x%llx took %llu ns, "
 				    "result: 0x%llx (start: %llu, end: %llu), ceiling: %llu",
 				    paddr, (eabs - sabs), result, sabs, eabs,
@@ -521,7 +523,7 @@ ml_phys_write_data(uint64_t paddr, unsigned long long data, int size)
 			(void)ml_set_interrupts_enabled(istate);
 
 			if (phywritepanic && (machine_timeout_suspended() == FALSE)) {
-				panic_io_port_read();
+				panic_notify();
 				panic("Write to physical addr 0x%llx took %llu ns, "
 				    "data: 0x%llx (start: %llu, end: %llu), ceiling: %llu",
 				    paddr, (eabs - sabs), data, sabs, eabs,
@@ -654,7 +656,7 @@ ml_port_io_read(uint16_t ioport, int size)
 			(void)ml_set_interrupts_enabled(istate);
 
 			if (phyreadpanic && (machine_timeout_suspended() == FALSE)) {
-				panic_io_port_read();
+				panic_notify();
 				panic("Read from IO port 0x%x took %llu ns, "
 				    "result: 0x%x (start: %llu, end: %llu), ceiling: %llu",
 				    ioport, (eabs - sabs), result, sabs, eabs,
@@ -725,7 +727,7 @@ ml_port_io_write(uint16_t ioport, uint32_t val, int size)
 			(void)ml_set_interrupts_enabled(istate);
 
 			if (phywritepanic && (machine_timeout_suspended() == FALSE)) {
-				panic_io_port_read();
+				panic_notify();
 				panic("Write to IO port 0x%x took %llu ns, val: 0x%x"
 				    " (start: %llu, end: %llu), ceiling: %llu",
 				    ioport, (eabs - sabs), val, sabs, eabs,
@@ -841,13 +843,22 @@ bcmp(
 		return 0;
 	}
 
-	do{
+	do {
 		if (*a++ != *b++) {
 			break;
 		}
 	} while (--len);
 
-	return (int)len;
+	/*
+	 * Check for the overflow case but continue to handle the non-overflow
+	 * case the same way just in case someone is using the return value
+	 * as more than zero/non-zero
+	 */
+	if (__improbable(!(len & 0x00000000FFFFFFFFULL) && (len & 0xFFFFFFFF00000000ULL))) {
+		return 0xFFFFFFFF;
+	} else {
+		return (int)len;
+	}
 }
 
 #undef memcmp
@@ -864,6 +875,45 @@ memcmp(const void *s1, const void *s2, size_t n)
 		} while (--n != 0);
 	}
 	return 0;
+}
+
+unsigned long
+memcmp_zero_ptr_aligned(const void *addr, size_t size)
+{
+	const uint64_t *p = (const uint64_t *)addr;
+	uint64_t a = p[0];
+
+	static_assert(sizeof(unsigned long) == sizeof(uint64_t));
+
+	if (size < 4 * sizeof(uint64_t)) {
+		if (size > 1 * sizeof(uint64_t)) {
+			a |= p[1];
+			if (size > 2 * sizeof(uint64_t)) {
+				a |= p[2];
+			}
+		}
+	} else {
+		size_t count = size / sizeof(uint64_t);
+		uint64_t b = p[1];
+		uint64_t c = p[2];
+		uint64_t d = p[3];
+
+		/*
+		 * note: for sizes not a multiple of 32 bytes, this will load
+		 * the bytes [size % 32 .. 32) twice which is ok
+		 */
+		while (count > 4) {
+			count -= 4;
+			a |= p[count + 0];
+			b |= p[count + 1];
+			c |= p[count + 2];
+			d |= p[count + 3];
+		}
+
+		a |= b | c | d;
+	}
+
+	return a;
 }
 
 #undef memmove
@@ -1038,3 +1088,77 @@ host_vmxoff(void)
 	return;
 }
 #endif
+
+static lck_grp_t       xcpm_lck_grp;
+static lck_grp_attr_t  xcpm_lck_grp_attr;
+static lck_attr_t      xcpm_lck_attr;
+static lck_spin_t      xcpm_lock;
+
+void xcpm_bootstrap(void);
+void xcpm_mbox_lock(void);
+void xcpm_mbox_unlock(void);
+uint32_t xcpm_bios_mbox_cmd_read(uint32_t cmd);
+uint32_t xcpm_bios_mbox_cmd_unsafe_read(uint32_t cmd);
+void xcpm_bios_mbox_cmd_write(uint32_t cmd, uint32_t data);
+boolean_t xcpm_is_hwp_enabled(void);
+
+void
+xcpm_bootstrap(void)
+{
+	lck_grp_attr_setdefault(&xcpm_lck_grp_attr);
+	lck_grp_init(&xcpm_lck_grp, "xcpm", &xcpm_lck_grp_attr);
+	lck_attr_setdefault(&xcpm_lck_attr);
+	lck_spin_init(&xcpm_lock, &xcpm_lck_grp, &xcpm_lck_attr);
+}
+
+void
+xcpm_mbox_lock(void)
+{
+	lck_spin_lock(&xcpm_lock);
+}
+
+void
+xcpm_mbox_unlock(void)
+{
+	lck_spin_unlock(&xcpm_lock);
+}
+
+static uint32_t __xcpm_state[64] = {};
+
+uint32_t
+xcpm_bios_mbox_cmd_read(uint32_t cmd)
+{
+	uint32_t reg;
+	boolean_t istate = ml_set_interrupts_enabled(FALSE);
+	xcpm_mbox_lock();
+	reg = xcpm_bios_mbox_cmd_unsafe_read(cmd);
+	xcpm_mbox_unlock();
+	ml_set_interrupts_enabled(istate);
+	return reg;
+}
+
+uint32_t
+xcpm_bios_mbox_cmd_unsafe_read(uint32_t cmd)
+{
+	return __xcpm_state[cmd % (sizeof(__xcpm_state) / sizeof(__xcpm_state[0]))];
+}
+
+void
+xcpm_bios_mbox_cmd_write(uint32_t cmd, uint32_t data)
+{
+	uint32_t idx = cmd % (sizeof(__xcpm_state) / sizeof(__xcpm_state[0]));
+	idx &= ~0x1;
+
+	boolean_t istate = ml_set_interrupts_enabled(FALSE);
+	xcpm_mbox_lock();
+	__xcpm_state[idx] = data;
+	xcpm_mbox_unlock();
+	ml_set_interrupts_enabled(istate);
+}
+
+boolean_t
+xcpm_is_hwp_enabled(void)
+{
+	return FALSE;
+}
+

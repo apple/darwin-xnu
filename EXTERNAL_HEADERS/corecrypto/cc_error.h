@@ -1,11 +1,12 @@
-/*
- *  cc_error.h
- *  corecrypto
+/* Copyright (c) (2017,2018,2019,2020) Apple Inc. All rights reserved.
  *
- *  Created on 11/14/2017
- *
- *  Copyright (c) 2017 Apple Inc. All rights reserved.
- *
+ * corecrypto is licensed under Apple Inc.’s Internal Use License Agreement (which
+ * is contained in the License.txt file distributed with corecrypto) and only to 
+ * people who accept that license. IMPORTANT:  Any license rights granted to you by 
+ * Apple Inc. (if any) are limited to internal use within your organization only on 
+ * devices and computers you own or control, for the sole purpose of verifying the 
+ * security characteristics and correct functioning of the Apple Software.  You may 
+ * not, directly or indirectly, redistribute the Apple Software or any portions thereof.
  */
 
 #ifndef _CORECRYPTO_CC_ERROR_H_
@@ -140,6 +141,31 @@ enum {
     CCMODE_NONCE_EMPTY = -102,
     CCMODE_AD_EMPTY = -103,
     CCMODE_DECRYPTION_OR_VERIFICATION_ERR=-104,
+    CCMODE_BUFFER_OUT_IN_OVERLAP = -105,
+
+    // Error codes for Secret Sharing
+    CCSS_ELEMENT_TOO_LARGE_FOR_FIELD = -120,
+    CCSS_NOT_ENOUGH_SHARES = -121,
+    CCSS_TOO_MANY_SHARES = -122,
+    CCSS_IMPROPER_DEGREE = -123,
+    CCSS_TWO_SHARES_FOR_SAME_X = -124,
+    CCSS_THRESHOLD_NOT_LARGE_ENOUGH = -125,
+    CCSS_SHARE_BAG_FULL = -126,
+    CCSS_SHARE_ALREADY_PRESENT_IN_SHARE_BAG = -127,
+    CCSS_THRESHOLD_LARGER_OR_EQUAL_TO_FIELD = -128,
+    CCSS_TOO_MANY_SHARES_REQUESTED = -129,
+    CCSS_FIELD_MISMATCH = -130,
+    CCSS_INDEX_OUT_OF_RANGE = -131,
+    
+    CCSAE_NOT_ENOUGH_COMMIT_PARTIAL_CALLS = -132,
+    CCSAE_GENERATE_COMMIT_CALL_AGAIN = -133,
+
+    CCERR_VALID_SIGNATURE = CCERR_OK,
+    CCERR_INVALID_SIGNATURE = -146,
+
+    CCERR_IOSERVICE_GETMATCHING = -147,
+    CCERR_IOSERVICE_OPEN = -148,
+    CCERR_IOCONNECT_CALL = -149,
 };
 
 #define CCDRBG_STATUS_OK CCERR_OK

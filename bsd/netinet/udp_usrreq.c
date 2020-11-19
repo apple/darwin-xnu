@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -87,17 +87,13 @@
 #include <netinet/in_systm.h>
 #include <netinet/in_tclass.h>
 #include <netinet/ip.h>
-#if INET6
 #include <netinet/ip6.h>
-#endif /* INET6 */
 #include <netinet/in_pcb.h>
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
-#if INET6
 #include <netinet6/in6_pcb.h>
 #include <netinet6/ip6_var.h>
 #include <netinet6/udp6_var.h>
-#endif /* INET6 */
 #include <netinet/ip_icmp.h>
 #include <netinet/icmp_var.h>
 #include <netinet/udp.h>
@@ -162,24 +158,7 @@ struct inpcbinfo udbinfo;
 /* Garbage collection performed during most recent udp_gc() run */
 static boolean_t udp_gc_done = FALSE;
 
-#if IPFIREWALL
-extern int fw_verbose;
-extern void ipfwsyslog(int level, const char *format, ...);
-extern void ipfw_stealth_stats_incr_udp(void);
-
-/* Apple logging, log to ipfw.log */
-#define log_in_vain_log(a) {                                            \
-	if ((udp_log_in_vain == 3) && (fw_verbose == 2)) {              \
-	        ipfwsyslog a;                                           \
-	} else if ((udp_log_in_vain == 4) && (fw_verbose == 2)) {       \
-	        ipfw_stealth_stats_incr_udp();                          \
-	} else {                                                        \
-	        log a;                                                  \
-	}                                                               \
-}
-#else /* !IPFIREWALL */
 #define log_in_vain_log(a) { log a; }
-#endif /* !IPFIREWALL */
 
 static int udp_getstat SYSCTL_HANDLER_ARGS;
 struct  udpstat udpstat;        /* from udp_var.h */
@@ -197,7 +176,6 @@ SYSCTL_INT(_net_inet_udp, OID_AUTO, randomize_ports,
     CTLFLAG_RW | CTLFLAG_LOCKED, &udp_use_randomport, 0,
     "Randomize UDP port numbers");
 
-#if INET6
 struct udp_in6 {
 	struct sockaddr_in6     uin6_sin;
 	u_char                  uin6_init_done : 1;
@@ -221,10 +199,6 @@ int udp_send(struct socket *, int, struct mbuf *, struct sockaddr *,
     struct mbuf *, struct proc *);
 static void udp_append(struct inpcb *, struct ip *, struct mbuf *, int,
     struct sockaddr_in *, struct udp_in6 *, struct udp_ip6 *, struct ifnet *);
-#else /* !INET6 */
-static void udp_append(struct inpcb *, struct ip *, struct mbuf *, int,
-    struct sockaddr_in *, struct ifnet *);
-#endif /* !INET6 */
 static int udp_input_checksum(struct mbuf *, struct udphdr *, int, int);
 int udp_output(struct inpcb *, struct mbuf *, struct sockaddr *,
     struct mbuf *, struct proc *);
@@ -255,7 +229,6 @@ udp_init(struct protosw *pp, struct domain *dp)
 {
 #pragma unused(dp)
 	static int udp_initialized = 0;
-	vm_size_t               str_size;
 	struct inpcbinfo        *pcbinfo;
 
 	VERIFY((pp->pr_flags & (PR_INITIALIZED | PR_ATTACHED)) == PR_ATTACHED);
@@ -275,8 +248,7 @@ udp_init(struct protosw *pp, struct domain *dp)
 	    &udbinfo.ipi_hashmask);
 	udbinfo.ipi_porthashbase = hashinit(UDBHASHSIZE, M_PCB,
 	    &udbinfo.ipi_porthashmask);
-	str_size = (vm_size_t) sizeof(struct inpcb);
-	udbinfo.ipi_zone = zinit(str_size, 80000 * str_size, 8192, "udpcb");
+	udbinfo.ipi_zone = zone_create("udpcb", sizeof(struct inpcb), ZC_NONE);
 
 	pcbinfo = &udbinfo;
 	/*
@@ -310,23 +282,24 @@ udp_input(struct mbuf *m, int iphlen)
 	struct sockaddr_in udp_in;
 	struct ip_moptions *imo = NULL;
 	int foundmembership = 0, ret = 0;
-#if INET6
 	struct udp_in6 udp_in6;
 	struct udp_ip6 udp_ip6;
-#endif /* INET6 */
 	struct ifnet *ifp = m->m_pkthdr.rcvif;
 	boolean_t cell = IFNET_IS_CELLULAR(ifp);
 	boolean_t wifi = (!cell && IFNET_IS_WIFI(ifp));
 	boolean_t wired = (!wifi && IFNET_IS_WIRED(ifp));
+	u_int16_t pf_tag = 0;
 
 	bzero(&udp_in, sizeof(udp_in));
 	udp_in.sin_len = sizeof(struct sockaddr_in);
 	udp_in.sin_family = AF_INET;
-#if INET6
 	bzero(&udp_in6, sizeof(udp_in6));
 	udp_in6.uin6_sin.sin6_len = sizeof(struct sockaddr_in6);
 	udp_in6.uin6_sin.sin6_family = AF_INET6;
-#endif /* INET6 */
+
+	if (m->m_flags & M_PKTHDR) {
+		pf_tag = m_pftag(m)->pftag_tag;
+	}
 
 	udpstat.udps_ipackets++;
 
@@ -429,9 +402,7 @@ udp_input(struct mbuf *m, int iphlen)
 		 * Locate pcb(s) for datagram.
 		 * (Algorithm copied from raw_intr().)
 		 */
-#if INET6
 		udp_in6.uin6_init_done = udp_ip6.uip6_init_done = 0;
-#endif /* INET6 */
 		LIST_FOREACH(inp, &udb, inp_list) {
 #if IPSEC
 			int skipit;
@@ -445,11 +416,9 @@ udp_input(struct mbuf *m, int iphlen)
 				    __func__, inp);
 				/* NOTREACHED */
 			}
-#if INET6
 			if ((inp->inp_vflag & INP_IPV4) == 0) {
 				continue;
 			}
-#endif /* INET6 */
 			if (inp_restricted_recv(inp, ifp)) {
 				continue;
 			}
@@ -534,7 +503,7 @@ udp_input(struct mbuf *m, int iphlen)
 			skipit = 0;
 			if (!necp_socket_is_allowed_to_send_recv_v4(inp,
 			    uh->uh_dport, uh->uh_sport, &ip->ip_dst,
-			    &ip->ip_src, ifp, NULL, NULL, NULL)) {
+			    &ip->ip_src, ifp, pf_tag, NULL, NULL, NULL, NULL)) {
 				/* do not inject data to pcb */
 				skipit = 1;
 			}
@@ -546,15 +515,9 @@ udp_input(struct mbuf *m, int iphlen)
 				if (reuse_sock) {
 					n = m_copy(m, 0, M_COPYALL);
 				}
-#if INET6
 				udp_append(inp, ip, m,
 				    iphlen + sizeof(struct udphdr),
 				    &udp_in, &udp_in6, &udp_ip6, ifp);
-#else /* !INET6 */
-				udp_append(inp, ip, m,
-				    iphlen + sizeof(struct udphdr),
-				    &udp_in, ifp);
-#endif /* !INET6 */
 				mcast_delivered++;
 
 				m = n;
@@ -707,7 +670,7 @@ udp_input(struct mbuf *m, int iphlen)
 			goto bad;
 		}
 #if ICMP_BANDLIM
-		if (badport_bandlim(BANDLIM_ICMP_UNREACH) < 0) {
+		if (badport_bandlim(BANDLIM_ICMP_UNREACH)) {
 			goto bad;
 		}
 #endif /* ICMP_BANDLIM */
@@ -731,7 +694,7 @@ udp_input(struct mbuf *m, int iphlen)
 	}
 #if NECP
 	if (!necp_socket_is_allowed_to_send_recv_v4(inp, uh->uh_dport,
-	    uh->uh_sport, &ip->ip_dst, &ip->ip_src, ifp, NULL, NULL, NULL)) {
+	    uh->uh_sport, &ip->ip_dst, &ip->ip_src, ifp, pf_tag, NULL, NULL, NULL, NULL)) {
 		udp_unlock(inp->inp_socket, 1, 0);
 		IF_UDP_STATINC(ifp, badipsec);
 		goto bad;
@@ -745,10 +708,13 @@ udp_input(struct mbuf *m, int iphlen)
 	udp_in.sin_port = uh->uh_sport;
 	udp_in.sin_addr = ip->ip_src;
 	if ((inp->inp_flags & INP_CONTROLOPTS) != 0 ||
+#if CONTENT_FILTER
+	    /* Content Filter needs to see local address */
+	    (inp->inp_socket->so_cfil_db != NULL) ||
+#endif
 	    (inp->inp_socket->so_options & SO_TIMESTAMP) != 0 ||
 	    (inp->inp_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
 	    (inp->inp_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
-#if INET6
 		if (inp->inp_vflag & INP_IPV6) {
 			int savedflags;
 
@@ -757,9 +723,7 @@ udp_input(struct mbuf *m, int iphlen)
 			inp->inp_flags &= ~INP_UNMAPPABLEOPTS;
 			ret = ip6_savecontrol(inp, m, &opts);
 			inp->inp_flags = savedflags;
-		} else
-#endif /* INET6 */
-		{
+		} else {
 			ret = ip_savecontrol(inp, &opts, ip, m);
 		}
 		if (ret != 0) {
@@ -772,13 +736,10 @@ udp_input(struct mbuf *m, int iphlen)
 	KERNEL_DEBUG(DBG_LAYER_IN_END, uh->uh_dport, uh->uh_sport,
 	    save_ip.ip_src.s_addr, save_ip.ip_dst.s_addr, uh->uh_ulen);
 
-#if INET6
 	if (inp->inp_vflag & INP_IPV6) {
 		in6_sin_2_v4mapsin6(&udp_in, &udp_in6.uin6_sin);
 		append_sa = (struct sockaddr *)&udp_in6.uin6_sin;
-	} else
-#endif /* INET6 */
-	{
+	} else {
 		append_sa = (struct sockaddr *)&udp_in;
 	}
 	if (nstat_collect) {
@@ -804,7 +765,6 @@ bad:
 	KERNEL_DEBUG(DBG_FNC_UDP_INPUT | DBG_FUNC_END, 0, 0, 0, 0, 0);
 }
 
-#if INET6
 static void
 ip_2_ip6_hdr(struct ip6_hdr *ip6, struct ip *ip)
 {
@@ -823,20 +783,14 @@ ip_2_ip6_hdr(struct ip6_hdr *ip6, struct ip *ip)
 		ip6->ip6_dst.s6_addr32[3] = ip->ip_dst.s_addr;
 	}
 }
-#endif /* INET6 */
 
 /*
  * subroutine of udp_input(), mainly for source code readability.
  */
 static void
-#if INET6
 udp_append(struct inpcb *last, struct ip *ip, struct mbuf *n, int off,
     struct sockaddr_in *pudp_in, struct udp_in6 *pudp_in6,
     struct udp_ip6 *pudp_ip6, struct ifnet *ifp)
-#else /* !INET6 */
-udp_append(struct inpcb *last, struct ip *ip, struct mbuf *n, int off,
-    struct sockaddr_in *pudp_in, struct ifnet *ifp)
-#endif /* !INET6 */
 {
 	struct sockaddr *append_sa;
 	struct mbuf *opts = 0;
@@ -845,17 +799,14 @@ udp_append(struct inpcb *last, struct ip *ip, struct mbuf *n, int off,
 	boolean_t wired = (!wifi && IFNET_IS_WIRED(ifp));
 	int ret = 0;
 
-#if CONFIG_MACF_NET
-	if (mac_inpcb_check_deliver(last, n, AF_INET, SOCK_DGRAM) != 0) {
-		m_freem(n);
-		return;
-	}
-#endif /* CONFIG_MACF_NET */
 	if ((last->inp_flags & INP_CONTROLOPTS) != 0 ||
+#if CONTENT_FILTER
+	    /* Content Filter needs to see local address */
+	    (last->inp_socket->so_cfil_db != NULL) ||
+#endif
 	    (last->inp_socket->so_options & SO_TIMESTAMP) != 0 ||
 	    (last->inp_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
 	    (last->inp_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
-#if INET6
 		if (last->inp_vflag & INP_IPV6) {
 			int savedflags;
 
@@ -871,25 +822,22 @@ udp_append(struct inpcb *last, struct ip *ip, struct mbuf *n, int off,
 				goto error;
 			}
 			last->inp_flags = savedflags;
-		} else
-#endif /* INET6 */
-		{
+		} else {
 			ret = ip_savecontrol(last, &opts, ip, n);
 			if (ret != 0) {
 				goto error;
 			}
 		}
 	}
-#if INET6
 	if (last->inp_vflag & INP_IPV6) {
 		if (pudp_in6->uin6_init_done == 0) {
 			in6_sin_2_v4mapsin6(pudp_in, &pudp_in6->uin6_sin);
 			pudp_in6->uin6_init_done = 1;
 		}
 		append_sa = (struct sockaddr *)&pudp_in6->uin6_sin;
-	} else
-#endif /* INET6 */
-	append_sa = (struct sockaddr *)pudp_in;
+	} else {
+		append_sa = (struct sockaddr *)pudp_in;
+	}
 	if (nstat_collect) {
 		INP_ADD_STAT(last, cell, wifi, wired, rxpackets, 1);
 		INP_ADD_STAT(last, cell, wifi, wired, rxbytes,
@@ -917,7 +865,7 @@ error:
 void
 udp_notify(struct inpcb *inp, int errno)
 {
-	inp->inp_socket->so_error = errno;
+	inp->inp_socket->so_error = (u_short)errno;
 	sorwakeup(inp->inp_socket);
 	sowwakeup(inp->inp_socket);
 }
@@ -945,10 +893,13 @@ udp_ctlinput(int cmd, struct sockaddr *sa, void *vip, __unused struct ifnet * if
 	}
 	if (ip) {
 		struct udphdr uh;
+		struct icmp *icp = NULL;
 
 		bcopy(((caddr_t)ip + (ip->ip_hl << 2)), &uh, sizeof(uh));
 		inp = in_pcblookup_hash(&udbinfo, faddr, uh.uh_dport,
 		    ip->ip_src, uh.uh_sport, 0, NULL);
+		icp = (struct icmp *)(void *)((caddr_t)ip - offsetof(struct icmp, icmp_ip));
+
 		if (inp != NULL && inp->inp_socket != NULL) {
 			udp_lock(inp->inp_socket, 1, 0);
 			if (in_pcb_checkstate(inp, WNT_RELEASE, 1) ==
@@ -956,7 +907,14 @@ udp_ctlinput(int cmd, struct sockaddr *sa, void *vip, __unused struct ifnet * if
 				udp_unlock(inp->inp_socket, 1, 0);
 				return;
 			}
-			(*notify)(inp, inetctlerrmap[cmd]);
+			if (cmd == PRC_MSGSIZE && !uuid_is_null(inp->necp_client_uuid)) {
+				uuid_t null_uuid;
+				uuid_clear(null_uuid);
+				necp_update_flow_protoctl_event(null_uuid, inp->necp_client_uuid,
+				    PRC_MSGSIZE, ntohs(icp->icmp_nextmtu), 0);
+			} else {
+				(*notify)(inp, inetctlerrmap[cmd]);
+			}
 			udp_unlock(inp->inp_socket, 1, 0);
 		}
 	} else {
@@ -1047,7 +1005,7 @@ udp_ctloutput(struct socket *so, struct sockopt *sopt)
 					inp->inp_keepalive_data = NULL;
 				}
 
-				inp->inp_keepalive_datalen = min(
+				inp->inp_keepalive_datalen = (uint8_t)min(
 					ka.ka_data_len,
 					UDP_KEEPALIVE_OFFLOAD_DATA_SIZE);
 				if (inp->inp_keepalive_datalen > 0) {
@@ -1066,7 +1024,7 @@ udp_ctloutput(struct socket *so, struct sockopt *sopt)
 				} else {
 					inp->inp_keepalive_datalen = 0;
 				}
-				inp->inp_keepalive_interval =
+				inp->inp_keepalive_interval = (uint8_t)
 				    min(UDP_KEEPALIVE_INTERVAL_MAX_SECONDS,
 				    ka.ka_interval);
 				inp->inp_keepalive_type = ka.ka_type;
@@ -1228,7 +1186,7 @@ SYSCTL_PROC(_net_inet_udp, UDPCTL_PCBLIST, pcblist,
     CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0, udp_pcblist,
     "S,xinpcb", "List of active UDP sockets");
 
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 
 static int
 udp_pcblist64 SYSCTL_HANDLER_ARGS
@@ -1350,7 +1308,7 @@ SYSCTL_PROC(_net_inet_udp, OID_AUTO, pcblist64,
     CTLTYPE_STRUCT | CTLFLAG_RD | CTLFLAG_LOCKED, 0, 0, udp_pcblist64,
     "S,xinpcb64", "List of active UDP sockets");
 
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 
 static int
 udp_pcblist_n SYSCTL_HANDLER_ARGS
@@ -1476,14 +1434,15 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	struct ip_moptions *mopts;
 	struct route ro;
 	struct ip_out_args ipoa;
+	bool sndinprog_cnt_used = false;
 #if CONTENT_FILTER
 	struct m_tag *cfil_tag = NULL;
 	bool cfil_faddr_use = false;
-	bool sndinprog_cnt_used = false;
 	uint32_t cfil_so_state_change_cnt = 0;
-	short cfil_so_options = 0;
+	uint32_t cfil_so_options = 0;
 	struct sockaddr *cfil_faddr = NULL;
 #endif
+	bool check_qos_marking_again = (so->so_flags1 & SOF1_QOSMARKING_POLICY_OVERRIDE) ? FALSE : TRUE;
 
 	bzero(&ipoa, sizeof(ipoa));
 	ipoa.ipoa_boundif = IFSCOPE_NONE;
@@ -1754,10 +1713,6 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 		}
 	}
 
-#if CONFIG_MACF_NET
-	mac_mbuf_label_associate_inpcb(inp, m);
-#endif /* CONFIG_MACF_NET */
-
 	if (inp->inp_flowhash == 0) {
 		inp->inp_flowhash = inp_calc_flowhash(inp);
 	}
@@ -1791,6 +1746,16 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	ui->ui_ulen = htons((u_short)len + sizeof(struct udphdr));
 
 	/*
+	 * Set the Don't Fragment bit in the IP header.
+	 */
+	if (inp->inp_flags2 & INP2_DONTFRAG) {
+		struct ip *ip;
+
+		ip = (struct ip *)&ui->ui_i;
+		ip->ip_off |= IP_DF;
+	}
+
+	/*
 	 * Set up checksum to pseudo header checksum and output datagram.
 	 *
 	 * Treat flows to be CLAT46'd as IPv6 flow and compute checksum
@@ -1818,7 +1783,7 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	} else {
 		ui->ui_sum = 0;
 	}
-	((struct ip *)ui)->ip_len = sizeof(struct udpiphdr) + len;
+	((struct ip *)ui)->ip_len = (uint16_t)(sizeof(struct udpiphdr) + len);
 	((struct ip *)ui)->ip_ttl = inp->inp_ip_ttl;    /* XXX */
 	if (tos != IPTOS_UNSPEC) {
 		((struct ip *)ui)->ip_tos = (uint8_t)(tos & IPTOS_MASK);
@@ -1835,6 +1800,7 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 		necp_kernel_policy_id policy_id;
 		necp_kernel_policy_id skip_policy_id;
 		u_int32_t route_rule_id;
+		u_int32_t pass_flags;
 
 		/*
 		 * We need a route to perform NECP route rule checks
@@ -1869,22 +1835,25 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 		}
 
 		if (!necp_socket_is_allowed_to_send_recv_v4(inp, lport, fport,
-		    &laddr, &faddr, NULL, &policy_id, &route_rule_id, &skip_policy_id)) {
+		    &laddr, &faddr, NULL, 0, &policy_id, &route_rule_id, &skip_policy_id, &pass_flags)) {
 			error = EHOSTUNREACH;
 			goto abort;
 		}
 
-		necp_mark_packet_from_socket(m, inp, policy_id, route_rule_id, skip_policy_id);
+		necp_mark_packet_from_socket(m, inp, policy_id, route_rule_id, skip_policy_id, pass_flags);
 
 		if (net_qos_policy_restricted != 0) {
-			necp_socket_update_qos_marking(inp,
-			    inp->inp_route.ro_rt, NULL, route_rule_id);
+			necp_socket_update_qos_marking(inp, inp->inp_route.ro_rt, route_rule_id);
 		}
 	}
 #endif /* NECP */
 	if ((so->so_flags1 & SOF1_QOSMARKING_ALLOWED)) {
 		ipoa.ipoa_flags |= IPOAF_QOSMARKING_ALLOWED;
 	}
+	if (check_qos_marking_again) {
+		ipoa.ipoa_flags |= IPOAF_REDO_QOSMARKING_POLICY;
+	}
+	ipoa.qos_marking_gencount = inp->inp_policyresult.results.qos_marking_gencount;
 
 #if IPSEC
 	if (inp->inp_sp != NULL && ipsec_setsocket(m, inp->inp_socket) != 0) {
@@ -1945,6 +1914,16 @@ udp_output(struct inpcb *inp, struct mbuf *m, struct sockaddr *addr,
 	socket_lock(so, 0);
 	if (mopts != NULL) {
 		IMO_REMREF(mopts);
+	}
+
+	if (check_qos_marking_again) {
+		inp->inp_policyresult.results.qos_marking_gencount = ipoa.qos_marking_gencount;
+
+		if (ipoa.ipoa_flags & IPOAF_QOSMARKING_ALLOWED) {
+			inp->inp_socket->so_flags1 |= SOF1_QOSMARKING_ALLOWED;
+		} else {
+			inp->inp_socket->so_flags1 &= ~SOF1_QOSMARKING_ALLOWED;
+		}
 	}
 
 	if (error == 0 && nstat_collect) {
@@ -2014,7 +1993,7 @@ abort:
 		    (outifp = rt->rt_ifp) != inp->inp_last_outifp) {
 			inp->inp_last_outifp = outifp; /* no reference needed */
 
-			so->so_pktheadroom = P2ROUNDUP(
+			so->so_pktheadroom = (uint16_t)P2ROUNDUP(
 				sizeof(struct udphdr) +
 				sizeof(struct ip) +
 				ifnet_hdrlen(outifp) +
@@ -2066,13 +2045,7 @@ release:
 
 u_int32_t       udp_sendspace = 9216;           /* really max datagram size */
 /* 187 1K datagrams (approx 192 KB) */
-u_int32_t       udp_recvspace = 187 * (1024 +
-#if INET6
-    sizeof(struct sockaddr_in6)
-#else /* !INET6 */
-    sizeof(struct sockaddr_in)
-#endif /* !INET6 */
-    );
+u_int32_t       udp_recvspace = 187 * (1024 + sizeof(struct sockaddr_in6));
 
 /* Check that the values of udp send and recv space do not exceed sb_max */
 static int
@@ -2151,7 +2124,7 @@ udp_attach(struct socket *so, int proto, struct proc *p)
 	}
 	inp = (struct inpcb *)so->so_pcb;
 	inp->inp_vflag |= INP_IPV4;
-	inp->inp_ip_ttl = ip_defttl;
+	inp->inp_ip_ttl = (uint8_t)ip_defttl;
 	if (nstat_collect) {
 		nstat_udp_new_pcb(inp);
 	}
@@ -2211,15 +2184,9 @@ udp_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 #if NECP
 #if FLOW_DIVERT
 	if (necp_socket_should_use_flow_divert(inp)) {
-		uint32_t fd_ctl_unit =
-		    necp_socket_get_flow_divert_control_unit(inp);
-		if (fd_ctl_unit > 0) {
-			error = flow_divert_pcb_init(so, fd_ctl_unit);
-			if (error == 0) {
-				error = flow_divert_connect_out(so, nam, p);
-			}
-		} else {
-			error = ENETDOWN;
+		error = flow_divert_pcb_init(so);
+		if (error == 0) {
+			error = flow_divert_connect_out(so, nam, p);
 		}
 		return error;
 	}
@@ -2287,11 +2254,9 @@ udp_connectx_common(struct socket *so, int af, struct sockaddr *src, struct sock
 	case AF_INET:
 		error = udp_connect(so, dst, p);
 		break;
-#if INET6
 	case AF_INET6:
 		error = udp6_connect(so, dst, p);
 		break;
-#endif /* INET6 */
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
@@ -2584,12 +2549,11 @@ udp_gc(struct inpcbinfo *ipi)
 		so = inp->inp_socket;
 		if (so->so_usecount == 0) {
 			if (inp->inp_state != INPCB_STATE_DEAD) {
-#if INET6
 				if (SOCK_CHECK_DOM(so, PF_INET6)) {
 					in6_pcbdetach(inp);
-				} else
-#endif /* INET6 */
-				in_pcbdetach(inp);
+				} else {
+					in_pcbdetach(inp);
+				}
 			}
 			in_pcbdispose(inp);
 		} else {
@@ -2625,7 +2589,6 @@ udp_out_cksum_stats(u_int32_t len)
 	udpstat.udps_snd_swcsum_bytes += len;
 }
 
-#if INET6
 void
 udp_in6_cksum_stats(u_int32_t len)
 {
@@ -2639,7 +2602,6 @@ udp_out6_cksum_stats(u_int32_t len)
 	udpstat.udps_snd6_swcsum++;
 	udpstat.udps_snd6_swcsum_bytes += len;
 }
-#endif /* INET6 */
 
 /*
  * Checksum extended UDP header and data.
@@ -2860,9 +2822,9 @@ udp_fill_keepalive_offload_frames(ifnet_t ifp,
 			struct udphdr *udp;
 
 			frame = &frames_array[frame_index];
-			frame->length = frame_data_offset +
+			frame->length = (uint8_t)(frame_data_offset +
 			    sizeof(struct udpiphdr) +
-			    inp->inp_keepalive_datalen;
+			    inp->inp_keepalive_datalen);
 			frame->ether_type =
 			    IFNET_KEEPALIVE_OFFLOAD_FRAME_ETHERTYPE_IPV4;
 			frame->interval = inp->inp_keepalive_interval;
@@ -2926,10 +2888,10 @@ udp_fill_keepalive_offload_frames(ifnet_t ifp,
 
 			VERIFY(inp->inp_vflag & INP_IPV6);
 			frame = &frames_array[frame_index];
-			frame->length = frame_data_offset +
+			frame->length = (uint8_t)(frame_data_offset +
 			    sizeof(struct ip6_hdr) +
 			    sizeof(struct udphdr) +
-			    inp->inp_keepalive_datalen;
+			    inp->inp_keepalive_datalen);
 			frame->ether_type =
 			    IFNET_KEEPALIVE_OFFLOAD_FRAME_ETHERTYPE_IPV6;
 			frame->interval = inp->inp_keepalive_interval;
@@ -2962,7 +2924,7 @@ udp_fill_keepalive_offload_frames(ifnet_t ifp,
 			ip6->ip6_vfc &= ~IPV6_VERSION_MASK;
 			ip6->ip6_vfc |= IPV6_VERSION;
 			ip6->ip6_nxt = IPPROTO_UDP;
-			ip6->ip6_hlim = ip6_defhlim;
+			ip6->ip6_hlim = (uint8_t)ip6_defhlim;
 			ip6->ip6_plen = htons(sizeof(struct udphdr) +
 			    (u_short)inp->inp_keepalive_datalen);
 			ip6->ip6_src = inp->in6p_laddr;

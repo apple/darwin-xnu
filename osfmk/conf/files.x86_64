@@ -95,7 +95,7 @@ osfmk/i386/ucode.c				standard
 osfmk/i386/vmx/vmx_cpu.c			optional config_vmx
 osfmk/i386/vmx/vmx_shims.c			optional config_vmx
 
-osfmk/kern/hv_support.c				optional hypervisor
+osfmk/kern/hv_support_kext.c			optional hypervisor
 
 # DUMMIES TO FORCE GENERATION OF .h FILES
 #osfmk/OPTIONS/ln		optional ln
@@ -105,13 +105,12 @@ osfmk/kern/hv_support.c				optional hypervisor
 #osfmk/OPTIONS/hi_res_clock	optional hi_res_clock
 
 # Kernel performance monitoring
-osfmk/kperf/x86_64/kperf_mp.c   optional kperf
 osfmk/x86_64/kpc_x86.c              optional kpc
 
 osfmk/x86_64/monotonic_x86_64.c optional monotonic
 
-osfmk/i386/startup64.c		standard
 osfmk/x86_64/idt64.s		standard
 
 osfmk/i386/panic_hooks.c	standard
+osfmk/i386/panic_notify.c	standard
 osfmk/x86_64/machine_remote_time.c 		optional config_mach_bridge_send_time

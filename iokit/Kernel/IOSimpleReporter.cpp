@@ -26,6 +26,9 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
+#include <libkern/c++/OSSharedPtr.h>
 #include <IOKit/IOKernelReportStructs.h>
 #include <IOKit/IOKernelReporters.h>
 #include "IOReporterDefs.h"
@@ -34,34 +37,23 @@
 OSDefineMetaClassAndStructors(IOSimpleReporter, IOReporter);
 
 /* static */
-IOSimpleReporter*
+OSSharedPtr<IOSimpleReporter>
 IOSimpleReporter::with(IOService *reportingService,
     IOReportCategories categories,
     IOReportUnit unit)
 {
-	IOSimpleReporter *reporter, *rval = NULL;
+	OSSharedPtr<IOSimpleReporter> reporter;
 
-	// kprintf("%s\n", __func__);      // can't IORLOG() from static
-
-	reporter = new IOSimpleReporter;
+	reporter = OSMakeShared<IOSimpleReporter>();
 	if (!reporter) {
-		goto finish;
+		return nullptr;
 	}
-
 
 	if (!reporter->initWith(reportingService, categories, unit)) {
-		goto finish;
+		return nullptr;
 	}
 
-	// success
-	rval = reporter;
-
-finish:
-	if (!rval) {
-		OSSafeReleaseNULL(reporter);
-	}
-
-	return rval;
+	return reporter;
 }
 
 bool

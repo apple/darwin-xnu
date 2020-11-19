@@ -40,19 +40,23 @@
 
 #include <libkern/OSAtomic.h>
 #include <mach/vm_statistics.h>
-#include <kern/processor.h>
+#include <kern/percpu.h>
+#include <os/atomic_private.h>
 
 extern
 uint64_t get_pages_grabbed_count(void);
 
-#define VM_STAT_INCR(event)                                                                     \
-MACRO_BEGIN                                                                                     \
-	OSAddAtomic64(1, (SInt64 *) (&(PROCESSOR_DATA(current_processor(), vm_stat).event)));   \
+PERCPU_DECL(vm_statistics64_data_t, vm_stat);
+PERCPU_DECL(uint64_t, vm_page_grab_count);
+
+#define VM_STAT_INCR(event)                                             \
+MACRO_BEGIN                                                             \
+	os_atomic_inc(&PERCPU_GET(vm_stat)->event, relaxed);            \
 MACRO_END
 
-#define VM_STAT_INCR_BY(event, amount)                                                          \
-MACRO_BEGIN                                                                                     \
-	OSAddAtomic64((amount), (SInt64 *) (&(PROCESSOR_DATA(current_processor(), vm_stat).event)));    \
+#define VM_STAT_INCR_BY(event, amount)                                  \
+MACRO_BEGIN                                                             \
+	os_atomic_add(&PERCPU_GET(vm_stat)->event, amount, relaxed);    \
 MACRO_END
 
 #endif  /* _KERN_HOST_STATISTICS_H_ */

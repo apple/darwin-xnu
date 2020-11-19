@@ -42,6 +42,10 @@ struct test_msg {
 
 static boolean_t spin_for_ever = false;
 
+static boolean_t test_noimportance = false;
+
+#define EXPECTED_MESSAGE_ID 0x100
+
 static void
 thread_create_at_qos(qos_class_t qos, void * (*function)(void *));
 static uint64_t
@@ -226,6 +230,23 @@ get_user_promotion_basepri(void)
 	return thread_policy.thps_user_promotion_basepri;
 }
 
+static uint32_t
+get_thread_base_priority(void)
+{
+	kern_return_t kr;
+	mach_port_t thread_port = pthread_mach_thread_np(pthread_self());
+
+	policy_timeshare_info_data_t timeshare_info;
+	mach_msg_type_number_t count = POLICY_TIMESHARE_INFO_COUNT;
+
+	kr = thread_info(thread_port, THREAD_SCHED_TIMESHARE_INFO,
+	    (thread_info_t)&timeshare_info, &count);
+	T_QUIET; T_ASSERT_MACH_SUCCESS(kr, "thread_info");
+
+	return (uint32_t)timeshare_info.base_priority;
+}
+
+
 #define LISTENER_WLID  0x100
 #define CONN_WLID      0x200
 
@@ -285,6 +306,8 @@ workloop_cb_test_intransit(uint64_t *workloop_id, void **eventslist, int *events
 
 	T_QUIET; T_ASSERT_EQ(*events, 1, "should have one event");
 
+	T_EXPECT_REQUESTED_QOS_EQ(QOS_CLASS_MAINTENANCE, "message handler should have MT requested QoS");
+
 	hdr = (mach_msg_header_t *)kev->ext[0];
 	T_ASSERT_NOTNULL(hdr, "has a message");
 	T_ASSERT_EQ(hdr->msgh_size, (uint32_t)sizeof(struct test_msg), "of the right size");
@@ -315,6 +338,9 @@ workloop_cb_test_intransit(uint64_t *workloop_id, void **eventslist, int *events
 	T_EXPECT_EQ(get_user_promotion_basepri(), 60u,
 	    "dispatch_source event handler should be overridden at 60");
 
+	T_EXPECT_EQ(get_thread_base_priority(), 60u,
+	    "dispatch_source event handler should have base pri at 60");
+
 	if (*workloop_id == LISTENER_WLID) {
 		register_port(CONN_WLID, tmsg->port_descriptor.name);
 
@@ -326,6 +352,14 @@ workloop_cb_test_intransit(uint64_t *workloop_id, void **eventslist, int *events
 		/* this will unblock the waiter */
 		mach_msg_destroy(hdr);
 		*events = 0;
+
+		/* now that the message is destroyed, the priority should be gone */
+		T_EXPECT_EFFECTIVE_QOS_EQ(QOS_CLASS_MAINTENANCE,
+		    "dispatch_source event handler QoS should be QOS_CLASS_MAINTENANCE after destroying message");
+		T_EXPECT_LE(get_user_promotion_basepri(), 0u,
+		    "dispatch_source event handler should not be overridden after destroying message");
+		T_EXPECT_LE(get_thread_base_priority(), 4u,
+		    "dispatch_source event handler should have base pri at 4 or less after destroying message");
 	}
 }
 
@@ -405,7 +439,7 @@ send(
 	    reply_port ? MACH_MSG_TYPE_MAKE_SEND_ONCE : 0,
 	    MACH_MSG_TYPE_MOVE_SEND,
 	    MACH_MSGH_BITS_COMPLEX),
-			.msgh_id          = 0x100,
+			.msgh_id          = EXPECTED_MESSAGE_ID,
 			.msgh_size        = sizeof(send_msg),
 		},
 		.body = {
@@ -430,6 +464,7 @@ send(
 	    MACH_SEND_MSG |
 	    MACH_SEND_TIMEOUT |
 	    MACH_SEND_OVERRIDE |
+	    (test_noimportance ? MACH_SEND_NOIMPORTANCE : 0) |
 	    ((reply_port ? MACH_SEND_SYNC_OVERRIDE : 0) | options),
 	    send_msg.header.msgh_size,
 	    0,
@@ -440,13 +475,11 @@ send(
 	T_QUIET; T_ASSERT_MACH_SUCCESS(ret, "client mach_msg");
 }
 
-static void
+static mach_msg_id_t
 receive(
 	mach_port_t rcv_port,
 	mach_port_t notify_port)
 {
-	kern_return_t ret = 0;
-
 	struct {
 		mach_msg_header_t header;
 		mach_msg_body_t body;
@@ -462,7 +495,8 @@ receive(
 
 	T_LOG("Client: Starting sync receive\n");
 
-	ret = mach_msg(&(rcv_msg.header),
+	kern_return_t kr;
+	kr = mach_msg(&(rcv_msg.header),
 	    MACH_RCV_MSG |
 	    MACH_RCV_SYNC_WAIT,
 	    0,
@@ -470,6 +504,10 @@ receive(
 	    rcv_port,
 	    0,
 	    notify_port);
+
+	T_ASSERT_MACH_SUCCESS(kr, "mach_msg rcv");
+
+	return rcv_msg.header.msgh_id;
 }
 
 static lock_t lock_DEF;
@@ -766,7 +804,9 @@ thread_at_maintenance(void *arg __unused)
 	thread_create_at_qos(QOS_CLASS_DEFAULT, thread_at_default);
 
 	/* Block on Sync IPC */
-	receive(special_reply_port, service_port);
+	mach_msg_id_t message_id = receive(special_reply_port, service_port);
+
+	T_ASSERT_EQ(message_id, MACH_NOTIFY_SEND_ONCE, "got the expected send-once notification");
 
 	T_LOG("received reply");
 
@@ -780,6 +820,15 @@ T_HELPER_DECL(three_ulock_sync_ipc_hop,
 	thread_create_at_qos(QOS_CLASS_MAINTENANCE, thread_at_maintenance);
 	sigsuspend(0);
 }
+
+T_HELPER_DECL(three_ulock_sync_ipc_hop_noimportance,
+    "Create chain of 4 threads with 3 ulocks and 1 no-importance sync IPC at different qos")
+{
+	test_noimportance = true;
+	thread_create_at_qos(QOS_CLASS_MAINTENANCE, thread_at_maintenance);
+	sigsuspend(0);
+}
+
 
 static void
 thread_create_at_qos(qos_class_t qos, void * (*function)(void *))
@@ -841,6 +890,8 @@ T_HELPER_DECL(server_kevent_id,
  * creating a sync chain. The last hop the chain is blocked on Sync IPC.
  */
 TEST_MULTIHOP("server_kevent_id", "three_ulock_sync_ipc_hop", three_ulock_sync_ipc_hop)
+
+TEST_MULTIHOP("server_kevent_id", "three_ulock_sync_ipc_hop_noimportance", three_ulock_sync_ipc_hop_noimportance)
 
 /*
  * Test 2: Test multihop priority boosting with ulocks, dispatch sync and sync IPC.

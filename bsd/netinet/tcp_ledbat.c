@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -37,9 +37,7 @@
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
 
-#if INET6
 #include <netinet/ip6.h>
-#endif
 #include <netinet/ip_var.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_fsm.h>
@@ -64,7 +62,7 @@ void tcp_ledbat_pre_fr(struct tcpcb *tp);
 void tcp_ledbat_post_fr(struct tcpcb *tp, struct tcphdr *th);
 void tcp_ledbat_after_idle(struct tcpcb *tp);
 void tcp_ledbat_after_timeout(struct tcpcb *tp);
-int tcp_ledbat_delay_ack(struct tcpcb *tp, struct tcphdr *th);
+static int tcp_ledbat_delay_ack(struct tcpcb *tp, struct tcphdr *th);
 void tcp_ledbat_switch_cc(struct tcpcb *tp, uint16_t old_cc_index);
 
 struct tcp_cc_algo tcp_cc_ledbat = {
@@ -257,9 +255,9 @@ tcp_ledbat_ack_rcvd(struct tcpcb *tp, struct tcphdr *th)
 	 * greater than or equal to the congestion window.
 	 */
 
-	u_int cw = tp->snd_cwnd;
-	u_int incr = tp->t_maxseg;
-	int acked = 0;
+	uint32_t cw = tp->snd_cwnd;
+	uint32_t incr = tp->t_maxseg;
+	uint32_t acked = 0;
 
 	acked = BYTES_ACKED(th, tp);
 	tp->t_bytes_acked += acked;
@@ -279,10 +277,9 @@ tcp_ledbat_ack_rcvd(struct tcpcb *tp, struct tcphdr *th)
 		 */
 		u_int abc_lim;
 
-		abc_lim = (tcp_do_rfc3465_lim2 &&
-		    tp->snd_nxt == tp->snd_max) ? incr * 2 : incr;
+		abc_lim = (tp->snd_nxt == tp->snd_max) ? incr * 2 : incr;
 
-		incr = lmin(acked, abc_lim);
+		incr = ulmin(acked, abc_lim);
 	}
 	if (tp->t_bytes_acked >= cw) {
 		tp->t_bytes_acked -= cw;
@@ -315,7 +312,11 @@ tcp_ledbat_post_fr(struct tcpcb *tp, struct tcphdr *th)
 {
 	int32_t ss;
 
-	ss = tp->snd_max - th->th_ack;
+	if (th) {
+		ss = tp->snd_max - th->th_ack;
+	} else {
+		ss = tp->snd_max - tp->snd_una;
+	}
 
 	/*
 	 * Complete ack.  Inflate the congestion window to
@@ -390,14 +391,18 @@ tcp_ledbat_after_timeout(struct tcpcb *tp)
  *
  */
 
-int
+static int
 tcp_ledbat_delay_ack(struct tcpcb *tp, struct tcphdr *th)
 {
-	if ((tp->t_flags & TF_RXWIN0SENT) == 0 &&
-	    (th->th_flags & TH_PUSH) == 0 && (tp->t_unacksegs == 1)) {
-		return 1;
+	if (tcp_ack_strategy == TCP_ACK_STRATEGY_MODERN) {
+		return tcp_cc_delay_ack(tp, th);
+	} else {
+		if ((tp->t_flags & TF_RXWIN0SENT) == 0 &&
+		    (th->th_flags & TH_PUSH) == 0 && (tp->t_unacksegs == 1)) {
+			return 1;
+		}
+		return 0;
 	}
-	return 0;
 }
 
 /* Change a connection to use ledbat. First, lower bg_ssthresh value

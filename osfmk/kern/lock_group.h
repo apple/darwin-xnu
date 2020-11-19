@@ -31,17 +31,21 @@
 #include <kern/queue.h>
 #include <mach/mach_types.h>
 
+__BEGIN_DECLS
+
 #define LCK_GRP_NULL    (lck_grp_t *)NULL
 
-typedef unsigned int    lck_type_t;
-
-#define LCK_TYPE_SPIN   1
-#define LCK_TYPE_MTX    2
-#define LCK_TYPE_RW     3
+typedef enum lck_type {
+	LCK_TYPE_SPIN,
+	LCK_TYPE_MTX,
+	LCK_TYPE_RW,
+	LCK_TYPE_TICKET
+} lck_type_t;
 
 #if XNU_KERNEL_PRIVATE
-
+#include <kern/startup.h>
 #include <os/refcnt.h>
+
 /*
  * Arguments wrapped in LCK_GRP_ARG() will be elided
  * when LOCK_STATS is not set.
@@ -71,15 +75,18 @@ typedef struct _lck_grp_stat_ {
 
 typedef struct _lck_grp_stats_ {
 #if LOCK_STATS
-	lck_grp_stat_t                  lgss_spin_held;
-	lck_grp_stat_t                  lgss_spin_miss;
-	lck_grp_stat_t                  lgss_spin_spin;
+	lck_grp_stat_t          lgss_spin_held;
+	lck_grp_stat_t          lgss_spin_miss;
+	lck_grp_stat_t          lgss_spin_spin;
+	lck_grp_stat_t          lgss_ticket_held;
+	lck_grp_stat_t          lgss_ticket_miss;
+	lck_grp_stat_t          lgss_ticket_spin;
 #endif /* LOCK_STATS */
 
-	lck_grp_stat_t                  lgss_mtx_held;
-	lck_grp_stat_t                  lgss_mtx_direct_wait;
-	lck_grp_stat_t                  lgss_mtx_miss;
-	lck_grp_stat_t                  lgss_mtx_wait;
+	lck_grp_stat_t          lgss_mtx_held;
+	lck_grp_stat_t          lgss_mtx_direct_wait;
+	lck_grp_stat_t          lgss_mtx_miss;
+	lck_grp_stat_t          lgss_mtx_wait;
 } lck_grp_stats_t;
 
 #define LCK_GRP_MAX_NAME        64
@@ -88,6 +95,7 @@ typedef struct _lck_grp_ {
 	queue_chain_t           lck_grp_link;
 	os_refcnt_t             lck_grp_refcnt;
 	uint32_t                lck_grp_spincnt;
+	uint32_t                lck_grp_ticketcnt;
 	uint32_t                lck_grp_mtxcnt;
 	uint32_t                lck_grp_rwcnt;
 	uint32_t                lck_grp_attr;
@@ -99,65 +107,107 @@ typedef struct _lck_grp_ {
 typedef struct _lck_grp_ lck_grp_t;
 #endif /* XNU_KERNEL_PRIVATE */
 
+#define LCK_GRP_ATTR_STAT       0x1
+#define LCK_GRP_ATTR_TIME_STAT  0x2
 
-#ifdef  MACH_KERNEL_PRIVATE
+#ifdef XNU_KERNEL_PRIVATE
 typedef struct _lck_grp_attr_ {
 	uint32_t        grp_attr_val;
 } lck_grp_attr_t;
 
-extern lck_grp_attr_t  LockDefaultGroupAttr;
+struct lck_grp_attr_startup_spec {
+	lck_grp_attr_t *grp_attr;
+	uint32_t        grp_attr_set_flags;
+	uint32_t        grp_attr_clear_flags;
+};
 
-#define LCK_GRP_ATTR_STAT       0x1
-#define LCK_GRP_ATTR_TIME_STAT  0x2
+struct lck_grp_startup_spec {
+	lck_grp_t      *grp;
+	const char     *grp_name;
+	lck_grp_attr_t *grp_attr;
+};
+
+extern void lck_grp_attr_startup_init(
+	struct lck_grp_attr_startup_spec *spec);
+
+extern void lck_grp_startup_init(
+	struct lck_grp_startup_spec *spec);
+
+/*
+ * Auto-initializing lock group declarations
+ * -----------------------------------------
+ *
+ * Use LCK_GRP_DECLARE to declare an automatically initialized group.
+ *
+ * Unless you need to configure your lock groups in very specific ways,
+ * there is no point creating explicit lock group attributes. If however
+ * you do need to tune the group, then LCK_GRP_DECLARE_ATTR can be used
+ * and takes an extra lock group attr argument previously declared with
+ * LCK_GRP_ATTR_DECLARE.
+ */
+#define LCK_GRP_ATTR_DECLARE(var, set_flags, clear_flags) \
+	SECURITY_READ_ONLY_LATE(lck_grp_attr_t) var; \
+	static __startup_data struct lck_grp_attr_startup_spec \
+	__startup_lck_grp_attr_spec_ ## var = { &var, set_flags, clear_flags }; \
+	STARTUP_ARG(LOCKS_EARLY, STARTUP_RANK_SECOND, lck_grp_attr_startup_init, \
+	    &__startup_lck_grp_attr_spec_ ## var)
+
+#define LCK_GRP_DECLARE_ATTR(var, name, attr) \
+	__PLACE_IN_SECTION("__DATA,__lock_grp") lck_grp_t var; \
+	static __startup_data struct lck_grp_startup_spec \
+	__startup_lck_grp_spec_ ## var = { &var, name, attr }; \
+	STARTUP_ARG(LOCKS_EARLY, STARTUP_RANK_THIRD, lck_grp_startup_init, \
+	    &__startup_lck_grp_spec_ ## var)
+
+#define LCK_GRP_DECLARE(var, name) \
+	LCK_GRP_DECLARE_ATTR(var, name, LCK_GRP_ATTR_NULL);
 
 #else
 typedef struct __lck_grp_attr__ lck_grp_attr_t;
-#endif /* MACH_KERNEL_PRIVATE */
+#endif /* XNU_KERNEL_PRIVATE */
 
 #define LCK_GRP_ATTR_NULL       (lck_grp_attr_t *)NULL
-
-__BEGIN_DECLS
 
 extern  lck_grp_attr_t  *lck_grp_attr_alloc_init(
 	void);
 
-extern  void                    lck_grp_attr_setdefault(
-	lck_grp_attr_t  *attr);
+extern  void            lck_grp_attr_setdefault(
+	lck_grp_attr_t          *attr);
 
-extern  void                    lck_grp_attr_setstat(
-	lck_grp_attr_t  *attr);
+extern  void            lck_grp_attr_setstat(
+	lck_grp_attr_t          *attr);
 
-extern  void                    lck_grp_attr_free(
-	lck_grp_attr_t  *attr);
+extern  void            lck_grp_attr_free(
+	lck_grp_attr_t          *attr);
 
-extern  lck_grp_t               *lck_grp_alloc_init(
+extern  lck_grp_t       *lck_grp_alloc_init(
 	const char*             grp_name,
 	lck_grp_attr_t  *attr);
 
-extern void                             lck_grp_free(
+extern void             lck_grp_free(
 	lck_grp_t               *grp);
-
-__END_DECLS
 
 #ifdef  MACH_KERNEL_PRIVATE
-extern  void                    lck_grp_init(
+extern  void            lck_grp_init(
 	lck_grp_t               *grp,
 	const char*             grp_name,
-	lck_grp_attr_t  *attr);
+	lck_grp_attr_t          *attr);
 
-extern  void                    lck_grp_reference(
+extern  void            lck_grp_reference(
 	lck_grp_t               *grp);
 
-extern  void                    lck_grp_deallocate(
+extern  void            lck_grp_deallocate(
 	lck_grp_t                *grp);
 
-extern  void                    lck_grp_lckcnt_incr(
+extern  void            lck_grp_lckcnt_incr(
 	lck_grp_t               *grp,
 	lck_type_t              lck_type);
 
-extern  void                    lck_grp_lckcnt_decr(
+extern  void            lck_grp_lckcnt_decr(
 	lck_grp_t               *grp,
 	lck_type_t              lck_type);
 #endif /* MACH_KERNEL_PRIVATE */
+
+__END_DECLS
 
 #endif /* _KERN_LOCK_GROUP_H */

@@ -30,12 +30,11 @@
 #include <machine/atomic.h>
 #include <kern/locks.h>
 #include <kern/clock.h>
+#include <kern/remote_time.h>
 
 void mach_bridge_send_timestamp(uint64_t timestamp);
 
 extern _Atomic uint32_t bt_init_flag;
-extern lck_spin_t *bt_maintenance_lock;
-extern void mach_bridge_timer_init(void);
 extern uint32_t bt_enable_flag;
 
 /*
@@ -56,22 +55,21 @@ mach_bridge_register_regwrite_timestamp_callback(mach_bridge_regwrite_timestamp_
 	static uint64_t delay_amount = 0;
 
 	if (!os_atomic_load(&bt_init_flag, relaxed)) {
-		mach_bridge_timer_init();
 		nanoseconds_to_absolutetime(DELAY_INTERVAL_NS, &delay_amount);
 		os_atomic_store(&bt_init_flag, 1, release);
 	}
 
-	lck_spin_lock(bt_maintenance_lock);
+	lck_spin_lock(&bt_maintenance_lock);
 	bridge_regwrite_timestamp_callback = func;
 	bt_enable_flag = (func != NULL) ? 1 : 0;
 	bt_delay_timestamp = mach_absolute_time() + delay_amount;
-	lck_spin_unlock(bt_maintenance_lock);
+	lck_spin_unlock(&bt_maintenance_lock);
 }
 
 void
 mach_bridge_send_timestamp(uint64_t timestamp)
 {
-	LCK_SPIN_ASSERT(bt_maintenance_lock, LCK_ASSERT_OWNED);
+	LCK_SPIN_ASSERT(&bt_maintenance_lock, LCK_ASSERT_OWNED);
 
 	if (bt_delay_timestamp > 0) {
 		uint64_t now = mach_absolute_time();

@@ -305,7 +305,7 @@ struct pfi_dynaddr {
 	struct pfr_ktable               *pfid_kt;
 	struct pfi_kif                  *pfid_kif;
 	void                            *pfid_hook_cookie;
-	int                              pfid_net;      /* mask or 128 */
+	uint8_t                          pfid_net;      /* mask or 128 */
 	int                              pfid_acnt4;    /* address count IPv4 */
 	int                              pfid_acnt6;    /* address count IPv6 */
 	sa_family_t                      pfid_af;       /* rule af */
@@ -317,21 +317,14 @@ struct pfi_dynaddr {
  */
 
 #if INET
-#if !INET6
-#define PF_INET_ONLY
-#endif /* ! INET6 */
 #endif /* INET */
 
-#if INET6
 #if !INET
 #define PF_INET6_ONLY
 #endif /* ! INET */
-#endif /* INET6 */
 
 #if INET
-#if INET6
 #define PF_INET_INET6
-#endif /* INET6 */
 #endif /* INET */
 
 #else /* !KERNEL */
@@ -854,6 +847,10 @@ struct pf_rule {
 
 #define PFAPPSTATE_HIWAT        10000   /* default same as state table */
 
+/* PF reserved special purpose tags */
+#define PF_TAG_NAME_SYSTEM_SERVICE    "com.apple.pf.system_service_tag"
+#define PF_TAG_NAME_STACK_DROP        "com.apple.pf.stack_drop_tag"
+
 enum pf_extmap {
 	PF_EXTMAP_APD   = 1,    /* Address-port-dependent mapping */
 	PF_EXTMAP_AD,           /* Address-dependent mapping */
@@ -1250,8 +1247,8 @@ RB_PROTOTYPE(pf_anchor_node, pf_anchor, entry_node, pf_anchor_compare);
 struct pfr_table {
 	char                     pfrt_anchor[MAXPATHLEN];
 	char                     pfrt_name[PF_TABLE_NAME_SIZE];
-	u_int32_t                pfrt_flags;
-	u_int8_t                 pfrt_fback;
+	uint32_t                 pfrt_flags;
+	uint8_t                  pfrt_fback;
 };
 
 enum { PFR_FB_NONE, PFR_FB_MATCH, PFR_FB_ADDED, PFR_FB_DELETED,
@@ -1263,10 +1260,10 @@ struct pfr_addr {
 		struct in_addr   _pfra_ip4addr;
 		struct in6_addr  _pfra_ip6addr;
 	}                pfra_u;
-	u_int8_t         pfra_af;
-	u_int8_t         pfra_net;
-	u_int8_t         pfra_not;
-	u_int8_t         pfra_fback;
+	uint8_t          pfra_af;
+	uint8_t          pfra_net;
+	uint8_t          pfra_not;
+	uint8_t          pfra_fback;
 };
 #define pfra_ip4addr    pfra_u._pfra_ip4addr
 #define pfra_ip6addr    pfra_u._pfra_ip6addr
@@ -1278,11 +1275,11 @@ enum { PFR_OP_BLOCK, PFR_OP_PASS, PFR_OP_ADDR_MAX, PFR_OP_TABLE_MAX };
 struct pfr_astats {
 	struct pfr_addr  pfras_a;
 #if !defined(__LP64__)
-	u_int32_t        _pad;
+	uint32_t         _pad;
 #endif /* !__LP64__ */
-	u_int64_t        pfras_packets[PFR_DIR_MAX][PFR_OP_ADDR_MAX];
-	u_int64_t        pfras_bytes[PFR_DIR_MAX][PFR_OP_ADDR_MAX];
-	u_int64_t        pfras_tzero;
+	uint64_t         pfras_packets[PFR_DIR_MAX][PFR_OP_ADDR_MAX];
+	uint64_t         pfras_bytes[PFR_DIR_MAX][PFR_OP_ADDR_MAX];
+	uint64_t         pfras_tzero;
 };
 
 enum { PFR_REFCNT_RULE, PFR_REFCNT_ANCHOR, PFR_REFCNT_MAX };
@@ -1360,11 +1357,6 @@ RB_HEAD(pfi_ifhead, pfi_kif);
 extern struct pf_state_tree_lan_ext      pf_statetbl_lan_ext;
 extern struct pf_state_tree_ext_gwy      pf_statetbl_ext_gwy;
 
-/* keep synced with pfi_kif, used in RB_FIND */
-struct pfi_kif_cmp {
-	char                             pfik_name[IFNAMSIZ];
-};
-
 struct pfi_kif {
 	char                             pfik_name[IFNAMSIZ];
 	RB_ENTRY(pfi_kif)                pfik_tree;
@@ -1416,9 +1408,7 @@ struct pf_pdesc {
 		struct tcphdr           *tcp;
 		struct udphdr           *udp;
 		struct icmp             *icmp;
-#if INET6
 		struct icmp6_hdr        *icmp6;
-#endif /* INET6 */
 		struct pf_grev1_hdr     *grev1;
 		struct pf_esp_hdr       *esp;
 		void                    *any;
@@ -1632,11 +1622,6 @@ struct priq_opts {
 	u_int32_t       flags;
 };
 
-struct qfq_opts {
-	u_int32_t       flags;
-	u_int32_t       lmax;
-};
-
 struct hfsc_opts {
 	/* real-time service curve */
 	u_int64_t       rtsc_m1;        /* slope of the 1st segment in bps */
@@ -1721,7 +1706,6 @@ struct pf_altq {
 		struct priq_opts         priq_opts;
 		struct hfsc_opts         hfsc_opts;
 		struct fairq_opts        fairq_opts;
-		struct qfq_opts          qfq_opts;
 	} pq_u;
 
 	u_int32_t                qid;           /* return value */
@@ -2219,7 +2203,6 @@ __private_extern__ int pf_test_mbuf(int, struct ifnet *, struct mbuf **,
     struct ether_header *, struct ip_fw_args *);
 #endif /* INET */
 
-#if INET6
 __private_extern__ int pf_test6(int, struct ifnet *, pbuf_t **,
     struct ether_header *, struct ip_fw_args *);
 __private_extern__ int pf_test6_mbuf(int, struct ifnet *, struct mbuf **,
@@ -2231,7 +2214,6 @@ __private_extern__ int pf_normalize_ip6(pbuf_t *, int, struct pfi_kif *,
     u_short *, struct pf_pdesc *);
 __private_extern__ int pf_refragment6(struct ifnet *, pbuf_t **,
     struct pf_fragment_tag *);
-#endif /* INET6 */
 
 __private_extern__ void *pf_lazy_makewritable(struct pf_pdesc *,
     pbuf_t *, int);

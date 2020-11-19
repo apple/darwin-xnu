@@ -87,8 +87,8 @@ struct restartable_ranges {
 #endif
 
 static queue_head_t rr_hash[RR_HASH_SIZE];
-lck_spin_t rr_spinlock;
-lck_grp_t rr_lock_grp;
+LCK_GRP_DECLARE(rr_lock_grp, "restartable ranges");
+LCK_SPIN_DECLARE(rr_spinlock, &rr_lock_grp);
 
 #define rr_lock()   lck_spin_lock_grp(&rr_spinlock, &rr_lock_grp)
 #define rr_unlock() lck_spin_unlock(&rr_spinlock);
@@ -365,8 +365,6 @@ thread_reset_pcs_ast(thread_t thread)
 void
 restartable_init(void)
 {
-	lck_grp_init(&rr_lock_grp, "restartable ranges", LCK_GRP_ATTR_NULL);
-	lck_spin_init(&rr_spinlock, &rr_lock_grp, LCK_ATTR_NULL);
 	for (size_t i = 0; i < RR_HASH_SIZE; i++) {
 		queue_head_init(rr_hash[i]);
 	}
@@ -386,6 +384,7 @@ task_restartable_ranges_register(
 	if (task != current_task()) {
 		return KERN_FAILURE;
 	}
+
 
 	kr = _ranges_validate(task, ranges, count);
 

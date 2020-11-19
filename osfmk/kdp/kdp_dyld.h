@@ -132,4 +132,9 @@ struct user64_dyld_all_image_infos {
 	/* the following fields are only in version 16 (macOS 10.13, iOS 12.0) and later */
 	user64_addr_t compact_dyld_image_info_addr;
 	user64_size_t compact_dyld_image_info_size;
+	uint32_t        platform;
+	/* the following fields are only in version 17 (macOS 10.16) and later */
+	uint32_t                                aotInfoArrayCount;
+	user64_addr_t                           aotInfoArray;
+	uint64_t                                aotTimestamp;
 };

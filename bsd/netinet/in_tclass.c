@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2009-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2009-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -58,7 +58,6 @@
 #include <netinet/tcp.h>
 #include <netinet/tcp_var.h>
 #include <netinet/tcp_cc.h>
-#include <netinet/lro_ext.h>
 #include <netinet/in_tclass.h>
 
 struct net_qos_dscp_map {
@@ -349,7 +348,7 @@ set_tclass_for_curr_proc(struct socket *so)
 		    strncmp(pname, tfp->tfp_pname,
 		    sizeof(tfp->tfp_pname)) == 0)) {
 			if (tfp->tfp_class != SO_TC_UNSPEC) {
-				so->so_traffic_class = tfp->tfp_class;
+				so->so_traffic_class = (uint16_t)tfp->tfp_class;
 			}
 
 			if (tfp->tfp_qos_mode == QOS_MODE_MARKING_POLICY_ENABLE) {
@@ -473,10 +472,7 @@ set_pid_tclass(struct so_tcdbg *so_tcdbg)
 {
 	int error = EINVAL;
 	proc_t p = NULL;
-	struct filedesc *fdp;
-	struct fileproc *fp;
 	struct tclass_for_proc *tfp;
-	int i;
 	pid_t pid = so_tcdbg->so_tcdbg_pid;
 	int tclass = so_tcdbg->so_tcdbg_tclass;
 	int netsvctype = so_tcdbg->so_tcdbg_netsvctype;
@@ -505,20 +501,16 @@ set_pid_tclass(struct so_tcdbg *so_tcdbg)
 	lck_mtx_unlock(tclass_lock);
 
 	if (tfp != NULL) {
-		proc_fdlock(p);
+		struct fileproc *fp;
 
-		fdp = p->p_fd;
-		for (i = 0; i < fdp->fd_nfiles; i++) {
+		fdt_foreach(fp, p) {
 			struct socket *so;
 
-			fp = fdp->fd_ofiles[i];
-			if (fp == NULL ||
-			    (fdp->fd_ofileflags[i] & UF_RESERVED) != 0 ||
-			    FILEGLOB_DTYPE(fp->f_fglob) != DTYPE_SOCKET) {
+			if (FILEGLOB_DTYPE(fp->fp_glob) != DTYPE_SOCKET) {
 				continue;
 			}
 
-			so = (struct socket *)fp->f_fglob->fg_data;
+			so = (struct socket *)fp->fp_glob->fg_data;
 			if (SOCK_DOM(so) != PF_INET && SOCK_DOM(so) != PF_INET6) {
 				continue;
 			}
@@ -586,50 +578,40 @@ flush_pid_tclass(struct so_tcdbg *so_tcdbg)
 {
 	pid_t pid = so_tcdbg->so_tcdbg_pid;
 	int tclass = so_tcdbg->so_tcdbg_tclass;
-	struct filedesc *fdp;
-	int error = EINVAL;
+	struct fileproc *fp;
 	proc_t p;
-	int i;
+	int error;
 
 	p = proc_find(pid);
 	if (p == PROC_NULL) {
 		printf("%s proc_find(%d) failed\n", __func__, pid);
-		goto done;
+		return EINVAL;
 	}
 
 	proc_fdlock(p);
-	fdp = p->p_fd;
-	for (i = 0; i < fdp->fd_nfiles; i++) {
-		struct socket *so;
-		struct fileproc *fp;
 
-		fp = fdp->fd_ofiles[i];
-		if (fp == NULL ||
-		    (fdp->fd_ofileflags[i] & UF_RESERVED) != 0 ||
-		    FILEGLOB_DTYPE(fp->f_fglob) != DTYPE_SOCKET) {
+	fdt_foreach(fp, p) {
+		struct socket *so;
+
+		if (FILEGLOB_DTYPE(fp->fp_glob) != DTYPE_SOCKET) {
 			continue;
 		}
 
-		so = (struct socket *)fp->f_fglob->fg_data;
+		so = (struct socket *)fp->fp_glob->fg_data;
 		error = sock_setsockopt(so, SOL_SOCKET, SO_FLUSH, &tclass,
 		    sizeof(tclass));
 		if (error != 0) {
 			printf("%s: setsockopt(SO_FLUSH) (so=0x%llx, fd=%d, "
 			    "tclass=%d) failed %d\n", __func__,
-			    (uint64_t)VM_KERNEL_ADDRPERM(so), i, tclass,
+			    (uint64_t)VM_KERNEL_ADDRPERM(so), fdt_foreach_fd(), tclass,
 			    error);
-			error = 0;
 		}
 	}
+
 	proc_fdunlock(p);
 
-	error = 0;
-done:
-	if (p != PROC_NULL) {
-		proc_rele(p);
-	}
-
-	return error;
+	proc_rele(p);
+	return 0;
 }
 
 int
@@ -934,7 +916,7 @@ so_set_traffic_class(struct socket *so, int optval)
 			int oldval = so->so_traffic_class;
 
 			VERIFY(SO_VALID_TC(optval));
-			so->so_traffic_class = optval;
+			so->so_traffic_class = (uint16_t)optval;
 
 			if ((SOCK_DOM(so) == PF_INET ||
 			    SOCK_DOM(so) == PF_INET6) &&
@@ -980,7 +962,7 @@ so_set_net_service_type(struct socket *so, int netsvctype)
 	if (error != 0) {
 		return error;
 	}
-	so->so_netsvctype = netsvctype;
+	so->so_netsvctype = (int8_t)netsvctype;
 	so->so_flags1 |= SOF1_TC_NET_SERV_TYPE;
 
 	return 0;
@@ -1051,7 +1033,7 @@ so_tc_from_control(struct mbuf *control, int *out_netsvctype)
 			 * passed using SO_TRAFFIC_CLASS
 			 */
 			val = val - SO_TC_NET_SERVICE_OFFSET;
-		/* FALLTHROUGH */
+			OS_FALLTHROUGH;
 		case SO_NET_SERVICE_TYPE:
 			if (!IS_VALID_NET_SERVICE_TYPE(val)) {
 				break;
@@ -1123,7 +1105,7 @@ so_inc_recv_data_stat(struct socket *so, size_t pkts, size_t bytes,
 static inline int
 so_throttle_best_effort(struct socket *so, struct ifnet *ifp)
 {
-	uint32_t uptime = net_uptime();
+	uint32_t uptime = (uint32_t)net_uptime();
 	return soissrcbesteffort(so) &&
 	       net_io_policy_throttle_best_effort == 1 &&
 	       ifp->if_rt_sendts > 0 &&
@@ -1152,7 +1134,7 @@ set_tcp_stream_priority(struct socket *so)
 	}
 
 	outifp = inp->inp_last_outifp;
-	uptime = net_uptime();
+	uptime = (uint32_t)net_uptime();
 
 	/*
 	 * If the socket was marked as a background socket or if the
@@ -1448,34 +1430,6 @@ so_svc2tc(mbuf_svc_class_t svc)
 	}
 }
 
-/*
- * LRO is turned on for AV streaming class.
- */
-void
-so_set_lro(struct socket *so, int optval)
-{
-	if (optval == SO_TC_AV) {
-		so->so_flags |= SOF_USELRO;
-	} else {
-		if (so->so_flags & SOF_USELRO) {
-			/* transition to non LRO class */
-			so->so_flags &= ~SOF_USELRO;
-			struct inpcb *inp = sotoinpcb(so);
-			struct tcpcb *tp = NULL;
-			if (inp) {
-				tp = intotcpcb(inp);
-				if (tp && (tp->t_flagsext & TF_LRO_OFFLOADED)) {
-					tcp_lro_remove_state(inp->inp_laddr,
-					    inp->inp_faddr,
-					    inp->inp_lport,
-					    inp->inp_fport);
-					tp->t_flagsext &= ~TF_LRO_OFFLOADED;
-				}
-			}
-		}
-	}
-}
-
 static size_t
 sotc_index(int sotc)
 {
@@ -1711,8 +1665,12 @@ set_netsvctype_dscp_map(struct net_qos_dscp_map *net_qos_dscp_map,
 			ASSERT(0);
 		}
 	}
-	/* Network control socket traffic class is always best effort */
-	net_qos_dscp_map->sotc_to_dscp[SOTCIX_CTL] = _DSCP_DF;
+	if (net_qos_dscp_map == &fastlane_net_qos_dscp_map) {
+		/* Network control socket traffic class is always best effort for fastlane*/
+		net_qos_dscp_map->sotc_to_dscp[SOTCIX_CTL] = _DSCP_DF;
+	} else {
+		net_qos_dscp_map->sotc_to_dscp[SOTCIX_CTL] = _DSCP_CS6;
+	}
 
 	/* Backround socket traffic class DSCP same as backround system */
 	net_qos_dscp_map->sotc_to_dscp[SOTCIX_BK] =
@@ -1721,35 +1679,20 @@ set_netsvctype_dscp_map(struct net_qos_dscp_map *net_qos_dscp_map,
 	return 0;
 }
 
-/*
- * out_count is an input/ouput parameter
- */
-static errno_t
-get_netsvctype_dscp_map(size_t *out_count,
-    struct netsvctype_dscp_map *netsvctype_dscp_map)
+static size_t
+get_netsvctype_dscp_map(struct netsvctype_dscp_map *netsvctype_dscp_map)
 {
-	size_t i;
-	struct net_qos_dscp_map *net_qos_dscp_map = NULL;
-
-	/*
-	 * Do not accept more that max number of distinct DSCPs
-	 */
-	if (out_count == NULL || netsvctype_dscp_map == NULL) {
-		return EINVAL;
-	}
-	if (*out_count > _MAX_DSCP) {
-		return EINVAL;
-	}
+	struct net_qos_dscp_map *net_qos_dscp_map;
+	int i;
 
 	net_qos_dscp_map = &fastlane_net_qos_dscp_map;
 
-	for (i = 0; i < MIN(_NET_SERVICE_TYPE_COUNT, *out_count); i++) {
+	for (i = 0; i < _NET_SERVICE_TYPE_COUNT; i++) {
 		netsvctype_dscp_map[i].netsvctype = i;
 		netsvctype_dscp_map[i].dscp = net_qos_dscp_map->netsvctype_to_dscp[i];
 	}
-	*out_count = i;
 
-	return 0;
+	return i * sizeof(struct netsvctype_dscp_map);
 }
 
 void
@@ -1773,20 +1716,16 @@ sysctl_default_netsvctype_to_dscp_map SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg1, arg2)
 	int error = 0;
-	size_t len;
-	struct netsvctype_dscp_map netsvctype_dscp_map[_NET_SERVICE_TYPE_COUNT] = {};
-	size_t count;
 
 	if (req->oldptr == USER_ADDR_NULL) {
 		req->oldidx =
 		    _NET_SERVICE_TYPE_COUNT * sizeof(struct netsvctype_dscp_map);
 	} else if (req->oldlen > 0) {
-		count = _NET_SERVICE_TYPE_COUNT;
-		error = get_netsvctype_dscp_map(&count, netsvctype_dscp_map);
-		if (error != 0) {
-			goto done;
-		}
-		len = count * sizeof(struct netsvctype_dscp_map);
+		struct netsvctype_dscp_map netsvctype_dscp_map[_NET_SERVICE_TYPE_COUNT] = {};
+		size_t len;
+
+		len = get_netsvctype_dscp_map(netsvctype_dscp_map);
+
 		error = SYSCTL_OUT(req, netsvctype_dscp_map,
 		    MIN(len, req->oldlen));
 		if (error != 0) {
@@ -1981,11 +1920,12 @@ sysctl_dscp_to_wifi_ac_map SYSCTL_HANDLER_ARGS
 	struct netsvctype_dscp_map netsvctype_dscp_map[DSCP_ARRAY_SIZE] = {};
 	struct dcsp_msc_map dcsp_msc_map[DSCP_ARRAY_SIZE];
 	size_t count;
-	uint32_t i;
 
 	if (req->oldptr == USER_ADDR_NULL) {
 		req->oldidx = len;
 	} else if (req->oldlen > 0) {
+		uint8_t i;
+
 		for (i = 0; i < DSCP_ARRAY_SIZE; i++) {
 			netsvctype_dscp_map[i].dscp = i;
 			netsvctype_dscp_map[i].netsvctype =

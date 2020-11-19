@@ -84,25 +84,17 @@
 #include <netinet/ip.h>
 #include <netinet/in_var.h>
 
-#if INET6
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #include <netinet/icmp6.h>
-#endif
 
 #include <netinet6/ipsec.h>
-#if INET6
 #include <netinet6/ipsec6.h>
-#endif
 #include <netinet6/ah.h>
-#if INET6
 #include <netinet6/ah6.h>
-#endif
 #if IPSEC_ESP
 #include <netinet6/esp.h>
-#if INET6
 #include <netinet6/esp6.h>
-#endif
 #endif
 #include <net/pfkeyv2.h>
 #include <netkey/keydb.h>
@@ -295,9 +287,9 @@ ah_keyed_md5_mature(
 static int
 ah_keyed_md5_init(struct ah_algorithm_state *state, struct secasvar *sav)
 {
-	size_t padlen;
 	size_t keybitlen;
 	u_int8_t buf[32] __attribute__((aligned(4)));
+	unsigned int padlen;
 
 	if (!state) {
 		panic("ah_keyed_md5_init: what?");
@@ -358,7 +350,8 @@ ah_keyed_md5_loop(struct ah_algorithm_state *state, caddr_t addr, size_t len)
 		panic("ah_keyed_md5_loop: what?");
 	}
 
-	MD5Update((MD5_CTX *)state->foo, addr, len);
+	VERIFY(len <= UINT_MAX);
+	MD5Update((MD5_CTX *)state->foo, addr, (uint)len);
 }
 
 static void
@@ -589,7 +582,8 @@ ah_hmac_md5_loop(struct ah_algorithm_state *state, caddr_t addr, size_t len)
 		panic("ah_hmac_md5_loop: what?");
 	}
 	ctxt = (MD5_CTX *)(void *)(((caddr_t)state->foo) + 128);
-	MD5Update(ctxt, addr, len);
+	VERIFY(len <= UINT_MAX);
+	MD5Update(ctxt, addr, (uint)len);
 }
 
 static void
@@ -1298,7 +1292,8 @@ again:
 				error = ENOBUFS;
 				goto fail;
 			}
-			m_copydata(m, off, hlen, mtod(n, caddr_t));
+			VERIFY(hlen <= INT_MAX);
+			m_copydata(m, off, (int)hlen, mtod(n, caddr_t));
 
 			/*
 			 * IP options processing.
@@ -1466,7 +1461,6 @@ fail:
 }
 #endif
 
-#if INET6
 /*
  * Go generate the checksum. This function won't modify the mbuf chain
  * except AH itself.
@@ -1705,4 +1699,3 @@ fail:
 	}
 	return error;
 }
-#endif

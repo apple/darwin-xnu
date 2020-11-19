@@ -9,8 +9,6 @@ OPTIONS/hw_ast				optional hw_ast
 OPTIONS/hw_footprint			optional hw_footprint
 OPTIONS/config_macf			optional config_macf
 OPTIONS/config_macf_socket_subset	optional config_macf_socket_subset
-OPTIONS/config_macf_socket		optional config_macf_socket
-OPTIONS/config_macf_net			optional config_macf_net
 OPTIONS/mach_assert			optional mach_assert
 OPTIONS/mach_compat			optional mach_compat
 OPTIONS/mach_counters			optional mach_counters
@@ -55,7 +53,6 @@ OPTIONS/config_ecc_logging		optional config_ecc_logging
 #
 OPTIONS/networking			optional networking
 OPTIONS/inet				optional inet
-OPTIONS/inet6				optional inet6
 OPTIONS/ipv6send			optional ipv6send
 OPTIONS/ether				optional ether
 OPTIONS/vlan				optional vlan
@@ -157,7 +154,6 @@ bsd/libkern/crc16.c			standard
 bsd/libkern/crc32.c			standard
 bsd/libkern/random.c			standard
 bsd/libkern/scanc.c			standard
-bsd/libkern/skpc.c			standard
 bsd/libkern/strsep.c			standard
 bsd/libkern/bcd.c			standard
 bsd/libkern/memchr.c			standard
@@ -177,6 +173,7 @@ bsd/vfs/vfs_subr.c			standard
 bsd/vfs/vfs_syscalls.c			standard
 bsd/vfs/vfs_support.c			standard
 bsd/vfs/vfs_utfconv.c			standard
+bsd/vfs/vfs_unicode.c			standard
 bsd/vfs/vfs_vnops.c			standard
 bsd/vfs/vfs_xattr.c			standard
 bsd/vfs/vnode_if.c			standard
@@ -213,7 +210,7 @@ bsd/net/init.c				optional sockets
 bsd/net/dlil.c				optional networking
 bsd/net/ether_if_module.c		optional ether
 bsd/net/ether_inet_pr_module.c		optional ether inet
-bsd/net/ether_inet6_pr_module.c		optional ether inet6
+bsd/net/ether_inet6_pr_module.c		optional ether inet
 bsd/net/if_loop.c			optional loop
 bsd/net/if_mib.c			optional networking
 bsd/net/if_vlan.c			optional vlan
@@ -275,8 +272,6 @@ bsd/net/classq/classq_util.c		optional networking
 bsd/net/classq/classq_fq_codel.c	optional networking
 
 bsd/net/pktsched/pktsched.c		optional networking
-bsd/net/pktsched/pktsched_qfq.c		optional networking
-bsd/net/pktsched/pktsched_tcq.c		optional networking
 bsd/net/pktsched/pktsched_fq_codel.c	optional networking
 bsd/net/pktsched/pktsched_netem.c	optional networking
 
@@ -311,7 +306,6 @@ bsd/netinet/tcp_cc.c			optional inet
 bsd/netinet/tcp_newreno.c		optional inet
 bsd/netinet/tcp_cubic.c			optional inet
 bsd/netinet/cbrtf.c			optional inet
-bsd/netinet/tcp_lro.c			optional inet
 bsd/netinet/tcp_ledbat.c		optional inet
 bsd/netinet/tcp_log.c			optional inet
 bsd/netinet/udp_usrreq.c		optional inet
@@ -336,34 +330,35 @@ bsd/netinet6/esp_output.c   		optional ipsec ipsec_esp
 bsd/netinet6/esp_rijndael.c 		optional ipsec ipsec_esp
 bsd/netinet6/esp_chachapoly.c 		optional ipsec ipsec_esp
 bsd/netinet6/ipsec.c        		optional ipsec
-bsd/netinet6/dest6.c        		optional inet6
-bsd/netinet6/frag6.c        		optional inet6
-bsd/netinet6/icmp6.c        		optional inet6
-bsd/netinet6/in6.c          		optional inet6
-bsd/netinet6/in6_cga.c			optional inet6 ipv6send
-bsd/netinet6/in6_cksum.c    		optional inet6
-bsd/netinet6/in6_gif.c      		optional gif inet6
-bsd/netinet6/ip6_forward.c  		optional inet6
-bsd/netinet6/in6_ifattach.c 		optional inet6
-bsd/netinet6/ip6_input.c    		optional inet6
-bsd/netinet6/ip6_output.c   		optional inet6
-bsd/netinet6/in6_src.c      		optional inet6
-bsd/netinet6/in6_mcast.c      		optional inet6
-bsd/netinet6/in6_pcb.c      		optional inet6
-bsd/netinet6/in6_proto.c    		optional inet6
-bsd/netinet6/in6_rmx.c      		optional inet6
-bsd/netinet6/mld6.c         		optional inet6
-bsd/netinet6/nd6.c          		optional inet6
-bsd/netinet6/nd6_nbr.c      		optional inet6
-bsd/netinet6/nd6_prproxy.c     		optional inet6
-bsd/netinet6/nd6_rtr.c      		optional inet6
-bsd/netinet6/nd6_send.c			optional inet6 ipv6send
-bsd/netinet6/raw_ip6.c      		optional inet6
-bsd/netinet6/route6.c       		optional inet6
-bsd/netinet6/scope6.c       		optional inet6
-bsd/netinet6/udp6_output.c  		optional inet6
-bsd/netinet6/udp6_usrreq.c  		optional inet6
-bsd/netinet6/ip6_id.c				optional inet6
+bsd/netinet6/dest6.c        		optional inet
+bsd/netinet6/frag6.c        		optional inet
+bsd/netinet6/icmp6.c        		optional inet
+bsd/netinet6/in6.c          		optional inet
+bsd/netinet6/in6_cga.c			optional inet
+bsd/netinet6/in6_cksum.c    		optional inet
+bsd/netinet6/in6_gif.c      		optional gif inet
+bsd/netinet6/ip6_forward.c  		optional inet
+bsd/netinet6/in6_ifattach.c 		optional inet
+bsd/netinet6/ip6_input.c    		optional inet
+bsd/netinet6/ip6_output.c   		optional inet
+bsd/netinet6/in6_src.c      		optional inet
+bsd/netinet6/in6_mcast.c      		optional inet
+bsd/netinet6/in6_pcb.c      		optional inet
+bsd/netinet6/in6_proto.c    		optional inet
+bsd/netinet6/in6_rmx.c      		optional inet
+bsd/netinet6/mld6.c         		optional inet
+bsd/netinet6/nd6.c          		optional inet
+bsd/netinet6/nd6_nbr.c      		optional inet
+bsd/netinet6/nd6_prproxy.c     		optional inet
+bsd/netinet6/nd6_rtr.c      		optional inet
+bsd/netinet6/nd6_rti.c			optional inet
+bsd/netinet6/nd6_send.c			optional inet
+bsd/netinet6/raw_ip6.c      		optional inet
+bsd/netinet6/route6.c       		optional inet
+bsd/netinet6/scope6.c       		optional inet
+bsd/netinet6/udp6_output.c  		optional inet
+bsd/netinet6/udp6_usrreq.c  		optional inet
+bsd/netinet6/ip6_id.c			optional inet
 
 bsd/net/sixxlowpan.c			optional sixlowpan
 bsd/net/frame802154.c			optional sixlowpan
@@ -374,9 +369,9 @@ bsd/netkey/key_debug.c    		optional ipsec
 bsd/netkey/keysock.c      		optional ipsec
 bsd/netkey/keydb.c      		optional ipsec
 
-bsd/net/multi_layer_pkt_log.c		optional inet inet6 ipsec ipsec_esp
+bsd/net/multi_layer_pkt_log.c		optional inet inet ipsec ipsec_esp
 
-bsd/crypto/rc4/rc4.c              	optional crypto
+bsd/crypto/entropy/diag_entropy_sysctl.c standard
 
 #bsd/netpm/pm_aTT.c        optional pm
 #bsd/netpm/pm_ams.c        optional pm
@@ -462,6 +457,7 @@ bsd/kern/subr_log.c			standard
 bsd/kern/subr_prf.c			standard
 bsd/kern/subr_sbuf.c			standard
 bsd/kern/subr_xxx.c			standard
+bsd/kern/sys_eventlink.c		standard
 bsd/kern/sys_generic.c			standard
 bsd/kern/sys_pipe.c			standard
 bsd/kern/sys_socket.c			optional sockets
@@ -488,6 +484,7 @@ bsd/kern/uipc_socket.c			optional sockets
 bsd/kern/uipc_socket2.c			optional sockets
 bsd/kern/uipc_syscalls.c		optional sockets
 bsd/kern/uipc_usrreq.c			optional sockets
+bsd/kern/vsock_domain.c			optional sockets
 bsd/kern/sysv_ipc.c			standard
 bsd/kern/sysv_shm.c			standard
 bsd/kern/sysv_sem.c			standard
@@ -534,8 +531,13 @@ bsd/miscfs/nullfs/null_subr.c       optional nullfs
 bsd/miscfs/nullfs/null_vfsops.c     optional nullfs
 bsd/miscfs/nullfs/null_vnops.c      optional nullfs
 
+bsd/miscfs/bindfs/bind_subr.c       optional bindfs
+bsd/miscfs/bindfs/bind_vfsops.c     optional bindfs
+bsd/miscfs/bindfs/bind_vnops.c      optional bindfs
+
 bsd/tests/bsd_tests.c 			optional config_xnupost
 bsd/tests/copyio_tests.c		optional config_xnupost
 bsd/tests/pmap_test_sysctl.c		optional config_xnupost
+bsd/tests/ptrauth_data_tests_sysctl.c		optional config_xnupost
 
 bsd/net/skywalk_stubs.c				standard

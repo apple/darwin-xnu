@@ -35,7 +35,9 @@ extern const char *sdt_prefix;
 
 typedef struct sdt_probedesc {
 	char                    *sdpd_name;     /* name of this probe */
+	int                     sdpd_namelen;
 	char                    *sdpd_func;     /* APPLE NOTE: function name */
+	const char              *sdpd_prov;     /* APPLE NOTE: provider name */
 	unsigned long           sdpd_offset;    /* offset of call in text */
 	struct sdt_probedesc    *sdpd_next;     /* next static probe */
 } sdt_probedesc_t;

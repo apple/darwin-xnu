@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -101,6 +101,9 @@
 #include <kern/zalloc.h>
 #include <kern/locks.h>
 #include <kern/debug.h>
+#if KPERF
+#include <kperf/kperf.h>
+#endif /* KPERF */
 #include <corpses/task_corpse.h>
 #include <prng/random.h>
 #include <console/serial_protos.h>
@@ -113,6 +116,7 @@
 #include <vm/vm_shared_region.h>
 #include <machine/pmap.h>
 #include <machine/commpage.h>
+#include <machine/machine_routines.h>
 #include <libkern/version.h>
 #include <sys/codesign.h>
 #include <sys/kdebug.h>
@@ -167,19 +171,11 @@ extern void vnguard_policy_init(void);
 
 #include <san/kasan.h>
 
-#if defined(__arm__) || defined(__arm64__)
-#include <arm/misc_protos.h> // for arm_vm_prot_finalize
-#endif
-
 #include <i386/pmCPU.h>
 static void             kernel_bootstrap_thread(void);
 
 static void             load_context(
 	thread_t        thread);
-#if (defined(__i386__) || defined(__x86_64__)) && NCOPY_WINDOWS > 0
-extern void cpu_userwindow_init(int);
-extern void cpu_physwindow_init(int);
-#endif
 
 #if CONFIG_ECC_LOGGING
 #include <kern/ecc.h>
@@ -202,55 +198,175 @@ extern void bsd_scale_setup(int);
 extern unsigned int semaphore_max;
 extern void stackshot_init(void);
 extern void ktrace_init(void);
-extern void oslog_init(void);
 
 /*
  *	Running in virtual memory, on the interrupt stack.
  */
 
+extern struct startup_entry startup_entries[]
+__SECTION_START_SYM(STARTUP_HOOK_SEGMENT, STARTUP_HOOK_SECTION);
+
+extern struct startup_entry startup_entries_end[]
+__SECTION_END_SYM(STARTUP_HOOK_SEGMENT, STARTUP_HOOK_SECTION);
+
+static struct startup_entry *__startup_data startup_entry_cur = startup_entries;
+
+SECURITY_READ_ONLY_LATE(startup_subsystem_id_t) startup_phase = STARTUP_SUB_NONE;
+
 extern int serverperfmode;
 
+#if DEBUG || DEVELOPMENT
+TUNABLE(startup_debug_t, startup_debug, "startup_debug", 0);
+#endif
+
 /* size of kernel trace buffer, disabled by default */
-unsigned int new_nkdbufs = 0;
-unsigned int wake_nkdbufs = 0;
-unsigned int write_trace_on_panic = 0;
-unsigned int trace_wrap = 0;
-boolean_t trace_serial = FALSE;
-boolean_t early_boot_complete = FALSE;
+TUNABLE(unsigned int, new_nkdbufs, "trace", 0);
+TUNABLE(unsigned int, wake_nkdbufs, "trace_wake", 0);
+TUNABLE(unsigned int, write_trace_on_panic, "trace_panic", 0);
+TUNABLE(unsigned int, trace_wrap, "trace_wrap", 0);
 
 /* mach leak logging */
-int log_leaks = 0;
+TUNABLE(int, log_leaks, "-l", 0);
 
 static inline void
 kernel_bootstrap_log(const char *message)
 {
-//	kprintf("kernel_bootstrap: %s\n", message);
+	if ((startup_debug & STARTUP_DEBUG_VERBOSE) &&
+	    startup_phase >= STARTUP_SUB_KPRINTF) {
+		kprintf("kernel_bootstrap: %s\n", message);
+	}
 	kernel_debug_string_early(message);
 }
 
 static inline void
 kernel_bootstrap_thread_log(const char *message)
 {
-//	kprintf("kernel_bootstrap_thread: %s\n", message);
+	if ((startup_debug & STARTUP_DEBUG_VERBOSE) &&
+	    startup_phase >= STARTUP_SUB_KPRINTF) {
+		kprintf("kernel_bootstrap_thread: %s\n", message);
+	}
 	kernel_debug_string_early(message);
 }
 
-void
-kernel_early_bootstrap(void)
-{
-	/* serverperfmode is needed by timer setup */
-	if (PE_parse_boot_argn("serverperfmode", &serverperfmode, sizeof(serverperfmode))) {
-		serverperfmode = 1;
-	}
+extern void
+qsort(void *a, size_t n, size_t es, int (*cmp)(const void *, const void *));
 
-#if CONFIG_SCHED_SFI
-	/*
-	 * Configure SFI classes
-	 */
-	sfi_early_init();
-#endif
+__startup_func
+static int
+startup_entry_cmp(const void *e1, const void *e2)
+{
+	const struct startup_entry *a = e1;
+	const struct startup_entry *b = e2;
+	if (a->subsystem == b->subsystem) {
+		if (a->rank == b->rank) {
+			return 0;
+		}
+		return a->rank > b->rank ? 1 : -1;
+	}
+	return a->subsystem > b->subsystem ? 1 : -1;
 }
 
+__startup_func
+void
+kernel_startup_bootstrap(void)
+{
+	/*
+	 * Sort the various STARTUP() entries by subsystem/rank.
+	 */
+	size_t n = startup_entries_end - startup_entries;
+
+	if (n == 0) {
+		panic("Section %s,%s missing",
+		    STARTUP_HOOK_SEGMENT, STARTUP_HOOK_SECTION);
+	}
+	if (((uintptr_t)startup_entries_end - (uintptr_t)startup_entries) %
+	    sizeof(struct startup_entry)) {
+		panic("Section %s,%s has invalid size",
+		    STARTUP_HOOK_SEGMENT, STARTUP_HOOK_SECTION);
+	}
+
+	qsort(startup_entries, n, sizeof(struct startup_entry), startup_entry_cmp);
+
+	/*
+	 * Then initialize all tunables, and early locks
+	 */
+	kernel_startup_initialize_upto(STARTUP_SUB_LOCKS_EARLY);
+}
+
+__startup_func
+extern void
+kernel_startup_tunable_init(const struct startup_tunable_spec *spec)
+{
+	if (PE_parse_boot_argn(spec->name, spec->var_addr, spec->var_len)) {
+		if (spec->var_is_bool) {
+			/* make sure bool's are valued in {0, 1} */
+			*(bool *)spec->var_addr = *(uint8_t *)spec->var_addr;
+		}
+	}
+}
+
+static void
+kernel_startup_log(startup_subsystem_id_t subsystem)
+{
+	static const char *names[] = {
+		[STARTUP_SUB_TUNABLES] = "tunables",
+		[STARTUP_SUB_LOCKS_EARLY] = "locks_early",
+		[STARTUP_SUB_KPRINTF] = "kprintf",
+
+		[STARTUP_SUB_PMAP_STEAL] = "pmap_steal",
+		[STARTUP_SUB_VM_KERNEL] = "vm_kernel",
+		[STARTUP_SUB_KMEM] = "kmem",
+		[STARTUP_SUB_KMEM_ALLOC] = "kmem_alloc",
+		[STARTUP_SUB_ZALLOC] = "zalloc",
+		[STARTUP_SUB_PERCPU] = "percpu",
+		[STARTUP_SUB_LOCKS] = "locks",
+
+		[STARTUP_SUB_CODESIGNING] = "codesigning",
+		[STARTUP_SUB_OSLOG] = "oslog",
+		[STARTUP_SUB_MACH_IPC] = "mach_ipc",
+		[STARTUP_SUB_EARLY_BOOT] = "early_boot",
+
+		/* LOCKDOWN is special and its value won't fit here. */
+	};
+	static startup_subsystem_id_t logged = STARTUP_SUB_NONE;
+
+	if (subsystem <= logged) {
+		return;
+	}
+
+	if (subsystem < sizeof(names) / sizeof(names[0]) && names[subsystem]) {
+		kernel_bootstrap_log(names[subsystem]);
+	}
+	logged = subsystem;
+}
+
+__startup_func
+void
+kernel_startup_initialize_upto(startup_subsystem_id_t upto)
+{
+	struct startup_entry *cur = startup_entry_cur;
+
+	assert(startup_phase < upto);
+
+	while (cur < startup_entries_end && cur->subsystem <= upto) {
+		if ((startup_debug & STARTUP_DEBUG_VERBOSE) &&
+		    startup_phase >= STARTUP_SUB_KPRINTF) {
+			kprintf("%s[%d, rank %d]: %p(%p)\n", __func__,
+			    cur->subsystem, cur->rank, cur->func, cur->arg);
+		}
+		startup_phase = cur->subsystem - 1;
+		kernel_startup_log(cur->subsystem);
+		cur->func(cur->arg);
+		startup_entry_cur = ++cur;
+	}
+	kernel_startup_log(upto);
+
+	if ((startup_debug & STARTUP_DEBUG_VERBOSE) &&
+	    upto >= STARTUP_SUB_KPRINTF) {
+		kprintf("%s: reached phase %d\n", __func__, upto);
+	}
+	startup_phase = upto;
+}
 
 void
 kernel_bootstrap(void)
@@ -261,32 +377,21 @@ kernel_bootstrap(void)
 
 	printf("%s\n", version); /* log kernel version */
 
-	if (PE_parse_boot_argn("-l", namep, sizeof(namep))) { /* leaks logging */
-		log_leaks = 1;
-	}
-
-	PE_parse_boot_argn("trace", &new_nkdbufs, sizeof(new_nkdbufs));
-	PE_parse_boot_argn("trace_wake", &wake_nkdbufs, sizeof(wake_nkdbufs));
-	PE_parse_boot_argn("trace_panic", &write_trace_on_panic, sizeof(write_trace_on_panic));
-	PE_parse_boot_argn("trace_wrap", &trace_wrap, sizeof(trace_wrap));
-
 	scale_setup();
 
 	kernel_bootstrap_log("vm_mem_bootstrap");
 	vm_mem_bootstrap();
 
-	kernel_bootstrap_log("cs_init");
-	cs_init();
-
-	kernel_bootstrap_log("vm_mem_init");
-	vm_mem_init();
-
 	machine_info.memory_size = (uint32_t)mem_size;
+#if XNU_TARGET_OS_OSX
+	machine_info.max_mem = max_mem_actual;
+#else
 	machine_info.max_mem = max_mem;
+#endif /* XNU_TARGET_OS_OSX */
 	machine_info.major_version = version_major;
 	machine_info.minor_version = version_minor;
 
-	oslog_init();
+	kernel_startup_initialize_upto(STARTUP_SUB_OSLOG);
 
 #if KASAN
 	kernel_bootstrap_log("kasan_late_init");
@@ -296,11 +401,6 @@ kernel_bootstrap(void)
 #if CONFIG_TELEMETRY
 	kernel_bootstrap_log("telemetry_init");
 	telemetry_init();
-#endif
-
-#if CONFIG_CSR
-	kernel_bootstrap_log("csr_init");
-	csr_init();
 #endif
 
 	if (PE_i_can_has_debugger(NULL)) {
@@ -322,22 +422,15 @@ kernel_bootstrap(void)
 	kernel_bootstrap_log("sched_init");
 	sched_init();
 
-	kernel_bootstrap_log("ltable_bootstrap");
-	ltable_bootstrap();
-
 	kernel_bootstrap_log("waitq_bootstrap");
 	waitq_bootstrap();
-
-	kernel_bootstrap_log("ipc_bootstrap");
-	ipc_bootstrap();
 
 #if CONFIG_MACF
 	kernel_bootstrap_log("mac_policy_init");
 	mac_policy_init();
 #endif
 
-	kernel_bootstrap_log("ipc_init");
-	ipc_init();
+	kernel_startup_initialize_upto(STARTUP_SUB_MACH_IPC);
 
 	/*
 	 * As soon as the virtual memory system is up, we record
@@ -358,11 +451,13 @@ kernel_bootstrap(void)
 	kernel_bootstrap_log("clock_init");
 	clock_init();
 
-	ledger_init();
-
 	/*
 	 *	Initialize the IPC, task, and thread subsystems.
 	 */
+#if CONFIG_THREAD_GROUPS
+	kernel_bootstrap_log("thread_group_init");
+	thread_group_init();
+#endif
 
 #if CONFIG_COALITIONS
 	kernel_bootstrap_log("coalitions_init");
@@ -406,6 +501,7 @@ kernel_bootstrap(void)
 	host_statistics_init();
 
 	/* initialize exceptions */
+	kernel_bootstrap_log("exception_init");
 	exception_init();
 
 #if CONFIG_SCHED_SFI
@@ -439,13 +535,11 @@ kernel_bootstrap(void)
 	/*NOTREACHED*/
 }
 
-int kth_started = 0;
-
-vm_offset_t vm_kernel_addrperm;
-vm_offset_t buf_kernel_addrperm;
-vm_offset_t vm_kernel_addrperm_ext;
-uint64_t vm_kernel_addrhash_salt;
-uint64_t vm_kernel_addrhash_salt_ext;
+SECURITY_READ_ONLY_LATE(vm_offset_t) vm_kernel_addrperm;
+SECURITY_READ_ONLY_LATE(vm_offset_t) buf_kernel_addrperm;
+SECURITY_READ_ONLY_LATE(vm_offset_t) vm_kernel_addrperm_ext;
+SECURITY_READ_ONLY_LATE(uint64_t) vm_kernel_addrhash_salt;
+SECURITY_READ_ONLY_LATE(uint64_t) vm_kernel_addrhash_salt_ext;
 
 /*
  * Now running in a thread.  Kick off other services,
@@ -456,7 +550,6 @@ kernel_bootstrap_thread(void)
 {
 	processor_t             processor = current_processor();
 
-#define kernel_bootstrap_thread_kprintf(x...) /* kprintf("kernel_bootstrap_thread: " x) */
 	kernel_bootstrap_thread_log("idle_thread_create");
 	/*
 	 * Create the idle processor thread.
@@ -488,6 +581,13 @@ kernel_bootstrap_thread(void)
 	thread_call_initialize();
 
 	/*
+	 * Work interval subsystem initialization.
+	 * Needs to be done once thread calls have been initialized.
+	 */
+	kernel_bootstrap_thread_log("work_interval_initialize");
+	work_interval_subsystem_init();
+
+	/*
 	 * Remain on current processor as
 	 * additional processors come online.
 	 */
@@ -517,16 +617,6 @@ kernel_bootstrap_thread(void)
 	 */
 	device_service_create();
 
-	kth_started = 1;
-
-#if (defined(__i386__) || defined(__x86_64__)) && NCOPY_WINDOWS > 0
-	/*
-	 * Create and initialize the physical copy window for processor 0
-	 * This is required before starting kicking off IOKit.
-	 */
-	cpu_physwindow_init(0);
-#endif
-
 	phys_carveout_init();
 
 #if MACH_KDP
@@ -542,11 +632,8 @@ kernel_bootstrap_thread(void)
 	kpc_init();
 #endif
 
-#if CONFIG_ECC_LOGGING
-	ecc_log_init();
-#endif
-
 #if HYPERVISOR
+	kernel_bootstrap_thread_log("hv_support_init");
 	hv_support_init();
 #endif
 
@@ -565,15 +652,15 @@ kernel_bootstrap_thread(void)
 	char trace_typefilter[256] = {};
 	PE_parse_boot_arg_str("trace_typefilter", trace_typefilter,
 	    sizeof(trace_typefilter));
-	kdebug_init(new_nkdbufs, trace_typefilter, trace_wrap);
+#if KPERF
+	kperf_init();
+#endif /* KPERF */
+	kdebug_init(new_nkdbufs, trace_typefilter,
+	    (trace_wrap ? KDOPT_WRAPPING : 0) | KDOPT_ATBOOT);
 
 #ifdef  MACH_BSD
 	kernel_bootstrap_log("bsd_early_init");
 	bsd_early_init();
-#endif
-
-#if defined(__arm64__)
-	ml_lockdown_init();
 #endif
 
 #ifdef  IOKIT
@@ -587,7 +674,7 @@ kernel_bootstrap_thread(void)
 	 * Past this point, kernel subsystems that expect to operate with
 	 * interrupts or preemption enabled may begin enforcement.
 	 */
-	early_boot_complete = TRUE;
+	kernel_startup_initialize_upto(STARTUP_SUB_EARLY_BOOT);
 
 #if INTERRUPT_MASKED_DEBUG
 	// Reset interrupts masked timeout before we enable interrupts
@@ -595,21 +682,14 @@ kernel_bootstrap_thread(void)
 #endif
 	(void) spllo();         /* Allow interruptions */
 
-#if (defined(__i386__) || defined(__x86_64__)) && NCOPY_WINDOWS > 0
 	/*
-	 * Create and initialize the copy window for processor 0
-	 * This also allocates window space for all other processors.
-	 * However, this is dependent on the number of processors - so this call
-	 * must be after IOKit has been started because IOKit performs processor
-	 * discovery.
+	 * This will start displaying progress to the user, start as early as possible
 	 */
-	cpu_userwindow_init(0);
-#endif
+	initialize_screen(NULL, kPEAcquireScreen);
 
 	/*
 	 *	Initialize the shared region module.
 	 */
-	vm_shared_region_init();
 	vm_commpage_init();
 	vm_commpage_text_init();
 
@@ -617,15 +697,19 @@ kernel_bootstrap_thread(void)
 	kernel_bootstrap_log("mac_policy_initmach");
 	mac_policy_initmach();
 #if CONFIG_VNGUARD
+	kernel_bootstrap_log("vnguard_policy_init");
 	vnguard_policy_init();
 #endif
 #endif
 
 #if CONFIG_DTRACE
+	kernel_bootstrap_log("dtrace_early_init");
 	dtrace_early_init();
 	sdt_early_init();
 #endif
 
+
+	kernel_startup_initialize_upto(STARTUP_SUB_LOCKDOWN);
 
 	/*
 	 * Get rid of segments used to bootstrap kext loading. This removes
@@ -633,16 +717,8 @@ kernel_bootstrap_thread(void)
 	 * Must be done prior to lockdown so that we can free (and possibly relocate)
 	 * the static KVA mappings used for the jettisoned bootstrap segments.
 	 */
+	kernel_bootstrap_log("OSKextRemoveKextBootstrap");
 	OSKextRemoveKextBootstrap();
-#if defined(__arm__) || defined(__arm64__)
-#if CONFIG_KERNEL_INTEGRITY
-	machine_lockdown_preflight();
-#endif
-	/*
-	 *  Finalize protections on statically mapped pages now that comm page mapping is established.
-	 */
-	arm_vm_prot_finalize(PE_state.bootArgs);
-#endif
 
 	/*
 	 * Initialize the globals used for permuting kernel
@@ -662,8 +738,19 @@ kernel_bootstrap_thread(void)
 	read_random(&vm_kernel_addrhash_salt, sizeof(vm_kernel_addrhash_salt));
 	read_random(&vm_kernel_addrhash_salt_ext, sizeof(vm_kernel_addrhash_salt_ext));
 
-	vm_set_restrictions();
+	/* No changes to kernel text and rodata beyond this point. */
+	kernel_bootstrap_log("machine_lockdown");
+	machine_lockdown();
 
+#ifdef  IOKIT
+	kernel_bootstrap_log("PE_lockdown_iokit");
+	PE_lockdown_iokit();
+#endif
+	/*
+	 * max_cpus must be nailed down by the time PE_lockdown_iokit() finishes,
+	 * at the latest
+	 */
+	vm_set_restrictions(machine_info.max_cpus);
 
 #ifdef CONFIG_XNUPOST
 	kern_return_t result = kernel_list_tests();
@@ -675,15 +762,15 @@ kernel_bootstrap_thread(void)
 #endif /* CONFIG_XNUPOST */
 
 
+#if KPERF
+	kperf_init_early();
+#endif
+
 	/*
 	 *	Start the user bootstrap.
 	 */
 #ifdef  MACH_BSD
 	bsd_init();
-#endif
-
-#if defined (__x86_64__)
-	x86_64_protect_data_const();
 #endif
 
 
@@ -694,7 +781,7 @@ kernel_bootstrap_thread(void)
 
 	serial_keyboard_init();         /* Start serial keyboard if wanted */
 
-	vm_page_init_local_q();
+	vm_page_init_local_q(machine_info.max_cpus);
 
 	thread_bind(PROCESSOR_NULL);
 
@@ -823,21 +910,23 @@ load_context(
 
 	processor->active_thread = thread;
 	processor_state_update_explicit(processor, thread->sched_pri,
-	    SFI_CLASS_KERNEL, PSET_SMP, thread_get_perfcontrol_class(thread), THREAD_URGENCY_NONE);
+	    SFI_CLASS_KERNEL, PSET_SMP, thread_get_perfcontrol_class(thread), THREAD_URGENCY_NONE,
+	    ((thread->state & TH_IDLE) || (thread->bound_processor != PROCESSOR_NULL)) ? TH_BUCKET_SCHED_MAX : thread->th_sched_bucket);
 	processor->current_is_bound = thread->bound_processor != PROCESSOR_NULL;
 	processor->current_is_NO_SMT = false;
+#if CONFIG_THREAD_GROUPS
+	processor->current_thread_group = thread_group_get(thread);
+#endif
 	processor->starting_pri = thread->sched_pri;
 	processor->deadline = UINT64_MAX;
 	thread->last_processor = processor;
-
 	processor_up(processor);
-
 	processor->last_dispatch = mach_absolute_time();
 	timer_start(&thread->system_timer, processor->last_dispatch);
-	PROCESSOR_DATA(processor, thread_timer) = PROCESSOR_DATA(processor, kernel_timer) = &thread->system_timer;
+	processor->thread_timer = processor->kernel_timer = &thread->system_timer;
 
-	timer_start(&PROCESSOR_DATA(processor, system_state), processor->last_dispatch);
-	PROCESSOR_DATA(processor, current_state) = &PROCESSOR_DATA(processor, system_state);
+	timer_start(&processor->system_state, processor->last_dispatch);
+	processor->current_state = &processor->system_state;
 
 
 	cpu_quiescent_counter_join(processor->last_dispatch);
@@ -846,26 +935,19 @@ load_context(
 
 	load_context_kprintf("machine_load_context\n");
 
-#if __arm__ || __arm64__
-#if __SMP__
-	/* TODO: Should this be ordered? */
-	thread->machine.machine_thread_flags |= MACHINE_THREAD_FLAGS_ON_CPU;
-#endif /* __SMP__ */
-#endif /* __arm__ || __arm64__ */
-
 	machine_load_context(thread);
 	/*NOTREACHED*/
 }
 
 void
-scale_setup()
+scale_setup(void)
 {
 	int scale = 0;
 #if defined(__LP64__)
 	typeof(task_max) task_max_base = task_max;
 
 	/* Raise limits for servers with >= 16G */
-	if ((serverperfmode != 0) && ((uint64_t)sane_size >= (uint64_t)(16 * 1024 * 1024 * 1024ULL))) {
+	if ((serverperfmode != 0) && ((uint64_t)max_mem_actual >= (uint64_t)(16 * 1024 * 1024 * 1024ULL))) {
 		scale = (int)((uint64_t)sane_size / (uint64_t)(8 * 1024 * 1024 * 1024ULL));
 		/* limit to 128 G */
 		if (scale > 16) {
@@ -873,12 +955,12 @@ scale_setup()
 		}
 		task_max_base = 2500;
 		/* Raise limits for machines with >= 3GB */
-	} else if ((uint64_t)sane_size >= (uint64_t)(3 * 1024 * 1024 * 1024ULL)) {
-		if ((uint64_t)sane_size < (uint64_t)(8 * 1024 * 1024 * 1024ULL)) {
+	} else if ((uint64_t)max_mem_actual >= (uint64_t)(3 * 1024 * 1024 * 1024ULL)) {
+		if ((uint64_t)max_mem_actual < (uint64_t)(8 * 1024 * 1024 * 1024ULL)) {
 			scale = 2;
 		} else {
 			/* limit to 64GB */
-			scale = MIN(16, (int)((uint64_t)sane_size / (uint64_t)(4 * 1024 * 1024 * 1024ULL)));
+			scale = MIN(16, (int)((uint64_t)max_mem_actual / (uint64_t)(4 * 1024 * 1024 * 1024ULL)));
 		}
 	}
 
@@ -892,9 +974,4 @@ scale_setup()
 #endif
 
 	bsd_scale_setup(scale);
-
-	ipc_space_max = SPACE_MAX;
-	ipc_port_max = PORT_MAX;
-	ipc_pset_max = SET_MAX;
-	semaphore_max = SEMAPHORE_MAX;
 }

@@ -49,6 +49,9 @@
 #define SHARED_REGION_NESTING_MIN_X86_64        0x0000000000200000ULL
 #define SHARED_REGION_NESTING_MAX_X86_64        0xFFFFFFFFFFE00000ULL
 
+#ifdef XNU_KERNEL_PRIVATE
+#endif
+
 #define SHARED_REGION_BASE_PPC                  0x90000000ULL
 #define SHARED_REGION_SIZE_PPC                  0x20000000ULL
 #define SHARED_REGION_NESTING_BASE_PPC          0x90000000ULL
@@ -82,8 +85,8 @@
 #endif
 #define SHARED_REGION_BASE_ARM64                0x180000000ULL
 #define SHARED_REGION_SIZE_ARM64                0x100000000ULL
-#define SHARED_REGION_NESTING_BASE_ARM64        0x180000000ULL
-#define SHARED_REGION_NESTING_SIZE_ARM64        0x100000000ULL
+#define SHARED_REGION_NESTING_BASE_ARM64        SHARED_REGION_BASE_ARM64
+#define SHARED_REGION_NESTING_SIZE_ARM64        SHARED_REGION_SIZE_ARM64
 #define SHARED_REGION_NESTING_MIN_ARM64         ?
 #define SHARED_REGION_NESTING_MAX_ARM64         ?
 
@@ -137,9 +140,12 @@ void post_sys_powersource(int);
 
 #endif /* KERNEL_PRIVATE */
 /*
- * All shared_region_* declarations are a private interface
- * between dyld and the kernel.
- *
+ * The shared_region_* declarations are a private interface between dyld and the kernel.
+ */
+
+/*
+ * This is used by legacy shared_region_map_and_slide_np() interface.
+ * We build a shared_file_mapping_slide_np from this.
  */
 struct shared_file_mapping_np {
 	mach_vm_address_t       sfm_address;
@@ -148,9 +154,42 @@ struct shared_file_mapping_np {
 	vm_prot_t               sfm_max_prot;
 	vm_prot_t               sfm_init_prot;
 };
-#define VM_PROT_COW  0x8  /* must not interfere with normal prot assignments */
-#define VM_PROT_ZF  0x10  /* must not interfere with normal prot assignments */
-#define VM_PROT_SLIDE  0x20  /* must not interfere with normal prot assignments */
+
+struct shared_file_mapping_slide_np {
+	mach_vm_address_t       sms_address;     /* address at which to create mapping */
+	mach_vm_size_t          sms_size;        /* size of region to map */
+	mach_vm_offset_t        sms_file_offset; /* offset into file to be mapped */
+	user_addr_t             sms_slide_size;  /* size of data at sms_slide_start */
+	user_addr_t             sms_slide_start; /* address from which to get relocation data */
+	vm_prot_t               sms_max_prot;    /* protections, plus flags, see below */
+	vm_prot_t               sms_init_prot;
+};
+struct shared_file_np {
+	int                     sf_fd;             /* file to be mapped into shared region */
+	uint32_t                sf_mappings_count; /* number of mappings */
+	uint32_t                sf_slide;          /* distance in bytes of the slide */
+};
+
+/*
+ * Extensions to sfm_max_prot that identify how to handle each mapping.
+ * These must not interfere with normal prot assignments.
+ *
+ * VM_PROT_COW    - copy on write pages
+ *
+ * VM_PROT_ZF     - zero fill pages
+ *
+ * VM_PROT_SLIDE  - file pages which require relocation and, on arm64e, signing
+ *                  these will be unique per shared region.
+ *
+ * VM_PROT_NOAUTH - file pages which don't require signing. When combined
+ *                  with VM_PROT_SLIDE, pages are shareable across different
+ *                  shared regions which map the same file with the same relocation info.
+ */
+#define VM_PROT_COW                      0x08
+#define VM_PROT_ZF                       0x10
+#define VM_PROT_SLIDE                    0x20
+#define VM_PROT_NOAUTH                   0x40
+#define VM_PROT_TRANSLATED_ALLOW_EXECUTE 0x80
 
 #ifndef KERNEL
 

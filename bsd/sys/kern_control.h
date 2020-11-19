@@ -251,6 +251,13 @@ typedef void * kern_ctl_ref;
  *       the extended fields within the kern_ctl_reg structure.
  */
 #define CTL_FLAG_REG_CRIT       0x10
+
+/*!
+ *       @defined CTL_FLAG_REG_SETUP
+ *   @discussion This flag indicates that this kernel control utilizes the
+ *       the setup callback field within the kern_ctl_reg structure.
+ */
+#define CTL_FLAG_REG_SETUP      0x20
 #endif /* KERNEL_PRIVATE */
 
 /* Data flags for controllers */
@@ -442,6 +449,22 @@ typedef errno_t (*ctl_send_list_func)(kern_ctl_ref kctlref, u_int32_t unit, void
 typedef errno_t (*ctl_bind_func)(kern_ctl_ref kctlref,
     struct sockaddr_ctl *sac,
     void **unitinfo);
+
+/*!
+ *       @typedef ctl_setup_func
+ *       @discussion The ctl_setup_func is an optional function that allows the client
+ *               to pick a unit number in the case that the caller hasn't specified one
+ *       @param unit A placeholder for a pointer to the unit number that is selected with
+ *               this kernel control instance
+ *       @param unitinfo A placeholder for a pointer to the optional user-defined
+ *               private data associated with this kernel control instance.  This
+ *               opaque info will be provided to the user when the rest of the
+ *               callback routines are executed.  For example, it can be used
+ *               to pass a pointer to an instance-specific data structure in
+ *               order for the user to keep track of the states related to this
+ *               kernel control instance.
+ */
+typedef errno_t (*ctl_setup_func)(u_int32_t *unit, void **unitinfo);
 #endif /* KERNEL_PRIVATE */
 
 /*!
@@ -499,6 +522,7 @@ struct kern_ctl_reg {
 	ctl_rcvd_func               ctl_rcvd;   /* Only valid if CTL_FLAG_REG_EXTENDED is set */
 	ctl_send_list_func          ctl_send_list;/* Only valid if CTL_FLAG_REG_EXTENDED is set */
 	ctl_bind_func           ctl_bind;
+	ctl_setup_func                  ctl_setup;
 #endif /* KERNEL_PRIVATE */
 };
 
@@ -652,6 +676,8 @@ void kctl_fill_socketinfo(struct socket *, struct socket_info *);
 
 u_int32_t ctl_id_by_name(const char *name);
 errno_t ctl_name_by_id(u_int32_t id, char *out_name, size_t maxsize);
+
+extern const u_int32_t ctl_maxunit;
 #endif /* KERNEL_PRIVATE */
 
 __END_DECLS

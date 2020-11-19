@@ -222,6 +222,7 @@ extern struct zone *tcp_cc_zone;
 extern struct tcp_cc_algo* tcp_cc_algo_list[TCP_CC_ALGO_COUNT];
 
 #define CC_ALGO(tp) (tcp_cc_algo_list[tp->tcp_cc_index])
+#define TCP_CC_CWND_INIT_PKTS 10
 #define TCP_CC_CWND_INIT_BYTES  4380
 /*
  * The congestion window will have to be reset after a
@@ -242,6 +243,16 @@ extern uint32_t tcp_cc_is_cwnd_nonvalidated(struct tcpcb *tp);
 extern void tcp_cc_adjust_nonvalidated_cwnd(struct tcpcb *tp);
 extern u_int32_t tcp_get_max_pipeack(struct tcpcb *tp);
 extern void tcp_clear_pipeack_state(struct tcpcb *tp);
+
+static inline uint32_t
+tcp_initial_cwnd(struct tcpcb *tp)
+{
+	if (tcp_cubic_minor_fixes) {
+		return TCP_CC_CWND_INIT_PKTS * tp->t_maxseg;
+	} else {
+		return TCP_CC_CWND_INIT_BYTES;
+	}
+}
 
 #endif /* KERNEL_PRIVATE */
 #endif /* _NETINET_CC_H_ */

@@ -29,7 +29,6 @@
 #include <mach/mach_types.h>
 #include <machine/machine_routines.h>
 #include <kern/processor.h>
-#include <kern/kalloc.h>
 #include <kern/thread.h>
 #include <sys/errno.h>
 #include <arm/cpu_data_internal.h>
@@ -53,6 +52,9 @@ static uint32_t kpc_enabled_counters = 0;
 static int first_time = 1;
 
 /* Private */
+
+static uint64_t get_counter_config(uint32_t counter);
+
 
 static boolean_t
 enable_counter(uint32_t counter)
@@ -220,6 +222,23 @@ set_running_configurable(uint64_t target_mask, uint64_t state_mask)
 	ml_set_interrupts_enabled(enabled);
 }
 
+static uintptr_t
+get_interrupted_pc(bool *kernel_out)
+{
+	struct arm_saved_state *state = getCpuDatap()->cpu_int_state;
+	if (!state) {
+		return 0;
+	}
+
+	bool kernel = !PSR_IS_USER(get_saved_state_cpsr(state));
+	*kernel_out = kernel;
+	uintptr_t pc = get_saved_state_pc(state);
+	if (kernel) {
+		pc = VM_KERNEL_UNSLIDE(pc);
+	}
+	return pc;
+}
+
 void kpc_pmi_handler(cpu_id_t source);
 void
 kpc_pmi_handler(cpu_id_t source)
@@ -258,7 +277,10 @@ kpc_pmi_handler(cpu_id_t source)
 			        += (kpc_fixed_max() - FIXED_RELOAD(ctr) + 1 /* wrap */) + extra;
 
 			if (FIXED_ACTIONID(ctr)) {
-				kpc_sample_kperf(FIXED_ACTIONID(ctr));
+				bool kernel = false;
+				uintptr_t pc = get_interrupted_pc(&kernel);
+				kpc_sample_kperf(FIXED_ACTIONID(ctr), ctr, get_counter_config(ctr),
+				    FIXED_SHADOW(ctr), pc, kernel ? KPC_KERNEL_PC : 0);
 			}
 
 			/* clear PMOVSR bit */
@@ -520,7 +542,7 @@ static void
 save_regs(void)
 {
 	int i;
-	int cpuid = current_processor()->cpu_id;
+	int cpuid = cpu_number();
 	uint32_t PMCR = 0;
 
 	__asm__ volatile ("dmb ish");
@@ -557,7 +579,7 @@ static void
 restore_regs(void)
 {
 	int i;
-	int cpuid = current_processor()->cpu_id;
+	int cpuid = cpu_number();
 	uint64_t extra;
 	uint32_t PMCR = 1;
 
@@ -584,7 +606,10 @@ restore_regs(void)
 			        += (kpc_fixed_max() - FIXED_RELOAD(i) + 1 /* Wrap */) + extra;
 
 			if (FIXED_ACTIONID(i)) {
-				kpc_sample_kperf(FIXED_ACTIONID(i));
+				bool kernel = false;
+				uintptr_t pc = get_interrupted_pc(&kernel);
+				kpc_sample_kperf(FIXED_ACTIONID(i), i, get_counter_config(i),
+				    FIXED_SHADOW(i), pc, kernel ? KPC_KERNEL_PC : 0);
 			}
 		} else {
 			write_counter(i, saved_counter[cpuid][i]);
@@ -818,7 +843,7 @@ kpc_get_all_cpus_counters(uint32_t classes, int *curcpu, uint64_t *buf)
 	enabled = ml_set_interrupts_enabled(FALSE);
 
 	if (curcpu) {
-		*curcpu = current_processor()->cpu_id;
+		*curcpu = cpu_number();
 	}
 	cpu_broadcast_xcall(&kpc_xread_sync, TRUE, kpc_get_curcpu_counters_xcall, &hdl);
 

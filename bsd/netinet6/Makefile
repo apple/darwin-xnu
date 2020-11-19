@@ -15,11 +15,13 @@ PRIVATE_DATAFILES = \
 	in6.h \
 	in6_pcb.h \
 	in6_var.h \
-	ip6_fw.h \
 	ip6_var.h \
 	mld6_var.h \
 	nd6.h \
 	scope6_var.h
+
+DRIVERKIT_DATAFILES = \
+	in6.h
 
 PRIVATE_KERNELFILES = \
 	ah6.h esp6.h esp_rijndael.h esp_chachapoly.h \
@@ -27,6 +29,8 @@ PRIVATE_KERNELFILES = \
 	ipsec6.h tcp6_var.h udp6_var.h
 
 INSTALL_MI_LIST	= ${DATAFILES}
+
+INSTALL_DRIVERKIT_MI_LIST = ${DRIVERKIT_DATAFILES}
 
 INSTALL_MI_DIR = netinet6
 

@@ -2,7 +2,7 @@
  * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
- * 
+ *
  * This file contains Original Code and/or Modifications of Original Code
  * as defined in and that are subject to the Apple Public Source License
  * Version 2.0 (the 'License'). You may not use this file except in
@@ -11,10 +11,10 @@
  * unlawful or unlicensed copies of an Apple operating system, or to
  * circumvent, violate, or enable the circumvention or violation of, any
  * terms of an Apple operating system software license agreement.
- * 
+ *
  * Please obtain a copy of the License at
  * http://www.opensource.apple.com/apsl/ and read it before using this file.
- * 
+ *
  * The Original Code and all software distributed under the License are
  * distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
  * EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
@@ -22,7 +22,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
  * Please see the License for the specific language governing rights and
  * limitations under the License.
- * 
+ *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 /*
@@ -71,53 +71,53 @@ __private_extern__
 void
 qsort(void *a, size_t n, size_t es, int (*cmp)(const void *, const void *));
 
-static inline char	*med3(char *, char *, char *, int (*)(const void *, const void *));
-static inline void	 swapfunc(char *, char *, int, int);
+static inline char      *med3(char *, char *, char *, int (*)(const void *, const void *));
+static inline void       swapfunc(char *, char *, long, int);
 
-#define min(a, b)	(a) < (b) ? a : b
+#define min(a, b)       ((a) < (b) ? (a) : (b))
 
 /*
  * Qsort routine from Bentley & McIlroy's "Engineering a Sort Function".
  */
-#define swapcode(TYPE, parmi, parmj, n) { 		\
-	long i = (n) / sizeof (TYPE); 			\
-	TYPE *pi = (TYPE *) (parmi); 			\
-	TYPE *pj = (TYPE *) (parmj); 			\
-	do { 						\
-		TYPE	t = *pi;			\
-		*pi++ = *pj;				\
-		*pj++ = t;				\
-        } while (--i > 0);				\
-}
+#define swapcode(TYPE, parmi, parmj, n)                 \
+	long i = (n) / sizeof (TYPE);                   \
+	TYPE *pi = (TYPE *) (parmi);                    \
+	TYPE *pj = (TYPE *) (parmj);                    \
+	do {                                            \
+	        TYPE	t = *pi;                        \
+	        *pi++ = *pj;                            \
+	        *pj++ = t;                              \
+	} while (--i > 0);
 
 #define SWAPINIT(a, es) swaptype = ((char *)a - (char *)0) % sizeof(long) || \
 	es % sizeof(long) ? 2 : es == sizeof(long)? 0 : 1;
 
 static inline void
-swapfunc(char *a, char *b, int n, int swaptype)
+swapfunc(char *a, char *b, long n, int swaptype)
 {
-	if(swaptype <= 1) 
-		swapcode(long, a, b, n)
-	else
-		swapcode(char, a, b, n)
+	if (swaptype <= 1) {
+		swapcode(long, a, b, n);
+	} else {
+		swapcode(char, a, b, n);
+	}
 }
 
-#define swap(a, b)					\
-	if (swaptype == 0) {				\
-		long t = *(long *)(a);			\
-		*(long *)(a) = *(long *)(b);		\
-		*(long *)(b) = t;			\
-	} else						\
-		swapfunc(a, b, es, swaptype)
+#define swap(a, b)                                      \
+	if (swaptype == 0) {                            \
+	        long t = *(long *)(a);                  \
+	        *(long *)(a) = *(long *)(b);            \
+	        *(long *)(b) = t;                       \
+	} else                                          \
+	        swapfunc(a, b, es, swaptype)
 
-#define vecswap(a, b, n) 	if ((n) > 0) swapfunc(a, b, n, swaptype)
+#define vecswap(a, b, n)        if ((n) > 0) swapfunc(a, b, n, swaptype)
 
 static inline char *
 med3(char *a, char *b, char *c, int (*cmp)(const void *, const void *))
 {
 	return cmp(a, b) < 0 ?
-	       (cmp(b, c) < 0 ? b : (cmp(a, c) < 0 ? c : a ))
-              :(cmp(b, c) > 0 ? b : (cmp(a, c) < 0 ? a : c ));
+	       (cmp(b, c) < 0 ? b : (cmp(a, c) < 0 ? c : a))
+	       :(cmp(b, c) > 0 ? b : (cmp(a, c) < 0 ? a : c));
 }
 
 __private_extern__
@@ -125,16 +125,18 @@ void
 qsort(void *a, size_t n, size_t es, int (*cmp)(const void *, const void *))
 {
 	char *pa, *pb, *pc, *pd, *pl, *pm, *pn;
-	int d, swaptype, swap_cnt;
-	int r;
+	int swaptype, swap_cnt;
+	long d, r;
 
-loop:	SWAPINIT(a, es);
+loop:   SWAPINIT(a, es);
 	swap_cnt = 0;
 	if (n < 7) {
-		for (pm = (char *)a + es; pm < (char *) a + n * es; pm += es)
+		for (pm = (char *)a + es; pm < (char *) a + n * es; pm += es) {
 			for (pl = pm; pl > (char *) a && cmp(pl - es, pl) > 0;
-			     pl -= es)
-				swap(pl, pl - es);
+			    pl -= es) {
+				swap(pl, (char *)(pl - es));
+			}
+		}
 		return;
 	}
 	pm = (char *)a + (n / 2) * es;
@@ -170,29 +172,33 @@ loop:	SWAPINIT(a, es);
 			}
 			pc -= es;
 		}
-		if (pb > pc)
+		if (pb > pc) {
 			break;
+		}
 		swap(pb, pc);
 		swap_cnt = 1;
 		pb += es;
 		pc -= es;
 	}
 	if (swap_cnt == 0) {  /* Switch to insertion sort */
-		for (pm = (char *)a + es; pm < (char *) a + n * es; pm += es)
-			for (pl = pm; pl > (char *) a && cmp(pl - es, pl) > 0; 
-			     pl -= es)
+		for (pm = (char *)a + es; pm < (char *) a + n * es; pm += es) {
+			for (pl = pm; pl > (char *) a && cmp(pl - es, pl) > 0;
+			    pl -= es) {
 				swap(pl, pl - es);
+			}
+		}
 		return;
 	}
 
 	pn = (char *)a + n * es;
 	r = min(pa - (char *)a, pb - pa);
 	vecswap(a, pb - r, r);
-	r = min((size_t)(pd - pc), pn - pd - es);
+	r = min(pd - pc, pn - pd - es);
 	vecswap(pb, pn - r, r);
-	if ((size_t)(r = pb - pa) > es)
+	if ((size_t)(r = pb - pa) > es) {
 		qsort(a, r / es, es, cmp);
-	if ((size_t)(r = pd - pc) > es) { 
+	}
+	if ((size_t)(r = pd - pc) > es) {
 		/* Iterate rather than recurse to save stack space */
 		a = pn - r;
 		n = r / es;
@@ -202,7 +208,8 @@ loop:	SWAPINIT(a, es);
 }
 
 /* private KPI */
-void 
-kx_qsort (void *array, size_t nm, size_t member_size, int (*cmpf)(const void *, const void *)) {
-	qsort (array, nm, member_size, cmpf);
+void
+kx_qsort(void *array, size_t nm, size_t member_size, int (*cmpf)(const void *, const void *))
+{
+	qsort(array, nm, member_size, cmpf);
 }

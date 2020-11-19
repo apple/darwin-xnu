@@ -63,24 +63,31 @@
 
 #ifndef _NETINET_IN_H_
 #define _NETINET_IN_H_
+
+#ifndef DRIVERKIT
 #include <sys/appleapiopts.h>
-#include <sys/_types.h>
 #include <stdint.h>             /* uint(8|16|32)_t */
 
 #ifndef KERNEL
 #include <Availability.h>
 #endif
 
-#include <sys/_types/_in_addr_t.h>
+#else
+#include <sys/_types.h>
+#include <sys/_types/_sa_family_t.h>
+#endif /* DRIVERKIT */
 
+#include <sys/_types/_in_addr_t.h>
 #include <sys/_types/_in_port_t.h>
 
+#ifndef DRIVERKIT
 /*
  * POSIX 1003.1-2003
  * "Inclusion of the <netinet/in.h> header may also make visible all
  *  symbols from <inttypes.h> and <sys/socket.h>".
  */
 #include <sys/socket.h>
+#endif /* DRIVERKIT */
 
 /*
  * The following two #includes insure htonl and family are defined
@@ -478,6 +485,7 @@ struct ip_opts {
 #define IP_PKTINFO              26   /* get pktinfo on recv socket, set src on sent dgram  */
 #define IP_RECVPKTINFO          IP_PKTINFO      /* receive pktinfo w/dgram */
 #define IP_RECVTOS              27   /* bool; receive IP TOS w/dgram */
+#define IP_DONTFRAG             28   /* don't fragment packet */
 
 #define IP_FW_ADD               40   /* add a firewall rule to chain */
 #define IP_FW_DEL               41   /* delete a firewall rule from chain */
@@ -521,7 +529,6 @@ struct ip_opts {
 #define MCAST_UNBLOCK_SOURCE            85   /* unblock a source */
 
 #ifdef PRIVATE
-#define IP_FORCE_OUT_IFP        69   /* not implemented; use IP_BOUND_IF instead */
 #define IP_NO_IFT_CELLULAR      6969 /* for internal use only */
 #define IP_NO_IFT_PDP           IP_NO_IFT_CELLULAR /* deprecated */
 #define IP_OUT_IF               9696 /* for internal use only */
@@ -549,6 +556,7 @@ struct ip_opts {
 #define IP_MAX_SOCK_SRC_FILTER          128     /* sources per socket/group */
 #define IP_MAX_SOCK_MUTE_FILTER         128     /* XXX no longer used */
 
+#ifndef PLATFORM_DriverKit
 /*
  * Argument structure for IP_ADD_MEMBERSHIP and IP_DROP_MEMBERSHIP.
  */
@@ -648,6 +656,7 @@ int     setsourcefilter(int, uint32_t, struct sockaddr *, socklen_t,
 int     getsourcefilter(int, uint32_t, struct sockaddr *, socklen_t,
     uint32_t *, uint32_t *, struct sockaddr_storage *) __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_4_3);
 #endif
+#endif /* PLATFORM_DriverKit */
 
 /*
  * Filter modes; also used to represent per-socket filter mode internally.
@@ -856,6 +865,7 @@ union sockaddr_in_4_6 {
 
 #endif /* PRIVATE */
 
+#ifndef PLATFORM_DriverKit
 #ifdef KERNEL
 #ifdef BSD_KERNEL_PRIVATE
 #include <mach/boolean.h>
@@ -950,4 +960,5 @@ int        bindresvport_sa(int, struct sockaddr *);
 __END_DECLS
 #endif
 #endif /* !KERNEL */
+#endif /* PLATFORM_DriverKit */
 #endif /* _NETINET_IN_H_ */

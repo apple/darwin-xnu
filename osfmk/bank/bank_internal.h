@@ -71,7 +71,10 @@ struct bank_task {
 	queue_head_t              bt_accounts_to_charge;   /* List of accounts I did work and need to charge */
 	decl_lck_mtx_data(, bt_acc_to_pay_lock);           /* Lock to protect accounts to pay list */
 	decl_lck_mtx_data(, bt_acc_to_charge_lock);        /* Lock to protect accounts to charge list */
-	uint8_t                   bt_hasentitlement;       /* If the secure persona entitlement is set on the task */
+	boolean_t                 bt_hasentitlement;       /* If the secure persona entitlement is set on the task */
+#if CONFIG_THREAD_GROUPS
+	struct thread_group *         bt_thread_group;         /* Task's home thread group pointer */
+#endif
 #if DEVELOPMENT || DEBUG
 	queue_chain_t             bt_global_elt;           /* Element on the global bank task chain */
 #endif
@@ -126,6 +129,9 @@ struct bank_account {
 	bank_task_t         ba_proximateprocess;     /* Process who propagated the voucher to us */
 	queue_chain_t       ba_next_acc_to_pay;      /* Next account I need to pay to */
 	queue_chain_t       ba_next_acc_to_charge;   /* Next account I need to charge to */
+#if CONFIG_THREAD_GROUPS
+	struct thread_group * ba_thread_group;       /* thread group to be adopted */
+#endif
 #if DEVELOPMENT || DEBUG
 	queue_chain_t       ba_global_elt;           /* Element on the global account chain */
 #endif

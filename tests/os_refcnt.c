@@ -11,6 +11,9 @@
 #define OS_REFCNT_DEBUG 1
 #define STRESS_TESTS 0
 
+#pragma clang diagnostic ignored "-Watomic-implicit-seq-cst"
+#pragma clang diagnostic ignored "-Wc++98-compat"
+
 void handle_panic(const char *func, char *str, ...);
 #define panic(...) handle_panic(__func__, __VA_ARGS__)
 
@@ -50,15 +53,13 @@ T_DECL(os_refcnt, "Basic atomic refcount")
 	T_ASSERT_EQ_UINT(x, 0, "returned released");
 
 	os_ref_init(&rc, NULL);
-	x = os_ref_retain_try(&rc);
-	T_ASSERT_GT_INT(x, 0, "try retained");
+	T_ASSERT_TRUE(os_ref_retain_try(&rc), "try retained");
 
 	(void)os_ref_release(&rc);
 	(void)os_ref_release(&rc);
 	T_QUIET; T_ASSERT_EQ_UINT(os_ref_get_count(&rc), 0, "release");
 
-	x = os_ref_retain_try(&rc);
-	T_ASSERT_EQ_INT(x, 0, "try failed");
+	T_ASSERT_FALSE(os_ref_retain_try(&rc), "try failed");
 }
 
 T_DECL(refcnt_raw, "Raw refcount")
@@ -83,15 +84,13 @@ T_DECL(refcnt_raw, "Raw refcount")
 	T_ASSERT_EQ_UINT(x, 0, "returned released");
 
 	os_ref_init_raw(&rc, NULL);
-	x = os_ref_retain_try_raw(&rc, NULL);
-	T_ASSERT_GT_INT(x, 0, "try retained");
+	T_ASSERT_TRUE(os_ref_retain_try_raw(&rc, NULL), "try retained");
 
 	(void)os_ref_release_raw(&rc, NULL);
 	(void)os_ref_release_raw(&rc, NULL);
 	T_QUIET; T_ASSERT_EQ_UINT(os_ref_get_count_raw(&rc), 0, "release");
 
-	x = os_ref_retain_try_raw(&rc, NULL);
-	T_ASSERT_EQ_INT(x, 0, "try failed");
+	T_ASSERT_FALSE(os_ref_retain_try_raw(&rc, NULL), "try failed");
 }
 
 T_DECL(refcnt_locked, "Locked refcount")
@@ -132,66 +131,47 @@ T_DECL(refcnt_raw_locked, "Locked raw refcount")
 	T_ASSERT_EQ_UINT(x, 0, "returned released");
 }
 
-T_DECL(refcnt_mask_locked, "Locked bitwise refcount")
-{
-	const os_ref_count_t b = 12;
-	os_ref_atomic_t rc;
-	os_ref_count_t reserved = 0xaaa;
-	os_ref_init_count_mask(&rc, NULL, 1, reserved, b);
-
-	os_ref_retain_locked_mask(&rc, NULL, b);
-	os_ref_retain_locked_mask(&rc, NULL, b);
-	T_ASSERT_EQ_UINT(os_ref_get_count_mask(&rc, b), 3, "retain increased count");
-
-	os_ref_count_t x = os_ref_release_locked_mask(&rc, NULL, b);
-	T_ASSERT_EQ_UINT(os_ref_get_count_mask(&rc, b), 2, "release decreased count");
-	T_ASSERT_EQ_UINT(x, 2, "release returned correct count");
-	T_ASSERT_EQ_UINT(rc & ((1U << b) - 1), reserved, "Reserved bits not modified");
-
-	(void)os_ref_release_locked_mask(&rc, NULL, b);
-	x = os_ref_release_locked_mask(&rc, NULL, b);
-	T_ASSERT_EQ_UINT(os_ref_get_count_mask(&rc, b), 0, "released");
-	T_ASSERT_EQ_UINT(x, 0, "returned released");
-	T_ASSERT_EQ_UINT(rc & ((1U << b) - 1), reserved, "Reserved bits not modified");
-}
-
 static void
 do_bitwise_test(const os_ref_count_t bits)
 {
 	os_ref_atomic_t rc;
 	os_ref_count_t reserved = 0xaaaaaaaaU & ((1U << bits) - 1);
-	os_ref_init_count_mask(&rc, NULL, 1, reserved, bits);
+
+	T_LOG("do_bitwise_test(nbits:%d, reserved:%#x)", bits, reserved);
+
+	os_ref_init_count_mask(&rc, bits, NULL, 1, reserved);
 
 	T_ASSERT_EQ_UINT(os_ref_get_count_mask(&rc, bits), 1, "[%u bits] refcount initialized", bits);
 
-	os_ref_retain_mask(&rc, NULL, bits);
-	os_ref_retain_mask(&rc, NULL, bits);
+	os_ref_retain_mask(&rc, bits, NULL);
+	os_ref_retain_mask(&rc, bits, NULL);
 	T_ASSERT_EQ_UINT(os_ref_get_count_mask(&rc, bits), 3, "retain increased count");
 
-	os_ref_count_t x = os_ref_release_mask(&rc, NULL, bits);
+	os_ref_count_t x = os_ref_release_mask(&rc, bits, NULL);
 	T_ASSERT_EQ_UINT(x, 2, "release returned correct count");
 
-	os_ref_release_live_mask(&rc, NULL, bits);
+	os_ref_release_live_mask(&rc, bits, NULL);
 	T_ASSERT_EQ_UINT(os_ref_get_count_mask(&rc, bits), 1, "release_live decreased count");
 
-	x = os_ref_release_mask(&rc, NULL, bits);
+	x = os_ref_release_mask(&rc, bits, NULL);
 	T_ASSERT_EQ_UINT(os_ref_get_count_mask(&rc, bits), 0, "released");
 	T_ASSERT_EQ_UINT(x, 0, "returned released");
 
 	T_ASSERT_EQ_UINT(rc & ((1U << bits) - 1), reserved, "Reserved bits not modified");
 
-	os_ref_init_count_mask(&rc, NULL, 1, reserved, bits);
-	x = os_ref_retain_try_mask(&rc, NULL, bits);
-	T_ASSERT_GT_INT(x, 0, "try retained");
+	os_ref_init_count_mask(&rc, bits, NULL, 1, reserved);
+	T_ASSERT_TRUE(os_ref_retain_try_mask(&rc, bits, 0, NULL), "try retained");
+	if (reserved) {
+		T_ASSERT_FALSE(os_ref_retain_try_mask(&rc, bits, reserved, NULL), "try reject");
+	}
 
-	(void)os_ref_release_mask(&rc, NULL, bits);
-	(void)os_ref_release_mask(&rc, NULL, bits);
+	(void)os_ref_release_mask(&rc, bits, NULL);
+	(void)os_ref_release_mask(&rc, bits, NULL);
 	T_QUIET; T_ASSERT_EQ_UINT(os_ref_get_count_mask(&rc, bits), 0, "release");
 
-	x = os_ref_retain_try_mask(&rc, NULL, bits);
-	T_ASSERT_EQ_INT(x, 0, "try failed");
+	T_ASSERT_FALSE(os_ref_retain_try_mask(&rc, bits, 0, NULL), "try fail");
 
-	T_ASSERT_EQ_UINT(rc & ((1U << bits) - 1), reserved, "Reserved bits not modified");
+	T_ASSERT_EQ_UINT(os_ref_get_bits_mask(&rc, bits), reserved, "Reserved bits not modified");
 }
 
 T_DECL(refcnt_bitwise, "Bitwise refcount")
@@ -206,7 +186,7 @@ T_DECL(refcnt_bitwise, "Bitwise refcount")
 	const os_ref_count_t nbits = 3;
 	const os_ref_count_t count = 5;
 	const os_ref_count_t bits = 7;
-	os_ref_init_count_mask(&rc, NULL, count, bits, nbits);
+	os_ref_init_count_mask(&rc, nbits, NULL, count, bits);
 
 	os_ref_count_t mask = (1U << nbits) - 1;
 	T_ASSERT_EQ_UINT(rc & mask, bits, "bits correctly initialized");

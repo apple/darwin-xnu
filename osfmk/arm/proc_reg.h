@@ -75,18 +75,14 @@
 #define __ARM_SUB_ARCH__           CPU_ARCH_ARMv7k
 #define __ARM_VMSA__               7
 #define __ARM_VFP__                3
-#if defined(__XNU_UP__)
-#define __ARM_SMP__                0
-#else
-#define __ARM_SMP__                1
-/* For SMP kernels, force physical aperture to be mapped at PTE level so that its mappings
+
+/* Force physical aperture to be mapped at PTE level so that its mappings
  * can be updated to reflect cache attribute changes on alias mappings.  This prevents
  * prefetched physical aperture cachelines from becoming dirty in L1 due to a write to
  * an uncached alias mapping on the same core.  Subsequent uncached writes from another
  * core may not snoop this line, and the dirty line may end up being evicted later to
  * effectively overwrite the uncached writes from other cores. */
 #define __ARM_PTE_PHYSMAP__        1
-#endif
 /* __ARMA7_SMP__ controls whether we are consistent with the A7 MP_CORE spec; needed because entities other than
  * the xnu-managed processors may need to snoop our cache operations.
  */
@@ -96,132 +92,11 @@
 #define __ARM_USER_PROTECT__       1
 #define __ARM_TIME_TIMEBASE_ONLY__ 1
 
-#elif defined (APPLETYPHOON)
-#define __ARM_ARCH__                 8
-#define __ARM_VMSA__                 8
-#define __ARM_SMP__                  1
-#define __ARM_VFP__                  4
-#define __ARM_COHERENT_CACHE__       1
-#define __ARM_COHERENT_IO__          1
-#define __ARM_IC_NOALIAS_ICACHE__    1
-#define __ARM_DEBUG__                7
-#define __ARM_ENABLE_SWAP__          1
-#define __ARM_V8_CRYPTO_EXTENSIONS__ 1
-#define __ARM64_PMAP_SUBPAGE_L1__    1
-#define __ARM_KERNEL_PROTECT__       1
-
-#elif defined (APPLETWISTER)
-#define __ARM_ARCH__                 8
-#define __ARM_VMSA__                 8
-#define __ARM_SMP__                  1
-#define __ARM_VFP__                  4
-#define __ARM_COHERENT_CACHE__       1
-#define __ARM_COHERENT_IO__          1
-#define __ARM_IC_NOALIAS_ICACHE__    1
-#define __ARM_DEBUG__                7
-#define __ARM_ENABLE_SWAP__          1
-#define __ARM_V8_CRYPTO_EXTENSIONS__ 1
-#define __ARM_16K_PG__               1
-#define __ARM64_PMAP_SUBPAGE_L1__    1
-#define __ARM_KERNEL_PROTECT__       1
-
-#elif defined (APPLEHURRICANE)
-#define __ARM_ARCH__                 8
-#define __ARM_VMSA__                 8
-#define __ARM_SMP__                  1
-#define __ARM_VFP__                  4
-#define __ARM_COHERENT_CACHE__       1
-#define __ARM_COHERENT_IO__          1
-#define __ARM_IC_NOALIAS_ICACHE__    1
-#define __ARM_DEBUG__                7
-#define __ARM_ENABLE_SWAP__          1
-#define __ARM_V8_CRYPTO_EXTENSIONS__ 1
-#define __ARM_16K_PG__               1
-#define __ARM64_PMAP_SUBPAGE_L1__    1
-#define __ARM_KERNEL_PROTECT__       1
-#define __ARM_GLOBAL_SLEEP_BIT__     1
-#define __ARM_PAN_AVAILABLE__        1
-
-#elif defined (APPLEMONSOON)
-#define __ARM_ARCH__                         8
-#define __ARM_VMSA__                         8
-#define __ARM_SMP__                          1
-#define __ARM_AMP__                          1
-#define __ARM_VFP__                          4
-#define __ARM_COHERENT_CACHE__               1
-#define __ARM_COHERENT_IO__                  1
-#define __ARM_IC_NOALIAS_ICACHE__            1
-#define __ARM_DEBUG__                        7
-#define __ARM_ENABLE_SWAP__                  1
-#define __ARM_V8_CRYPTO_EXTENSIONS__         1
-#define __ARM_16K_PG__                       1
-#define __ARM64_PMAP_SUBPAGE_L1__            1
-#define __ARM_KERNEL_PROTECT__               1
-#define __ARM_GLOBAL_SLEEP_BIT__             1
-#define __ARM_PAN_AVAILABLE__                1
-#define __ARM_WKDM_ISA_AVAILABLE__           1
-#define __PLATFORM_WKDM_ALIGNMENT_MASK__     (0x3FULL)
-#define __PLATFORM_WKDM_ALIGNMENT_BOUNDARY__ (64)
-#define __ARM_CLUSTER_COUNT__                2
-
-#elif defined (APPLEVORTEX)
-#define __ARM_ARCH__                         8
-#define __ARM_VMSA__                         8
-#define __ARM_SMP__                          1
-#define __ARM_VFP__                          4
-#define __ARM_COHERENT_CACHE__               1
-#define __ARM_COHERENT_IO__                  1
-#define __ARM_IC_NOALIAS_ICACHE__            1
-#define __ARM_DEBUG__                        7
-#define __ARM_ENABLE_SWAP__                  1
-#define __ARM_V8_CRYPTO_EXTENSIONS__         1
-#define __ARM_16K_PG__                       1
-#define __ARM64_PMAP_SUBPAGE_L1__            1
-#define __ARM_GLOBAL_SLEEP_BIT__             1
-#define __ARM_PAN_AVAILABLE__                1
-#define __ARM_WKDM_ISA_AVAILABLE__           1
-#define __PLATFORM_WKDM_ALIGNMENT_MASK__     (0x3FULL)
-#define __PLATFORM_WKDM_ALIGNMENT_BOUNDARY__ (64)
-#define __ARM_CLUSTER_COUNT__                2
-
-#elif defined (APPLELIGHTNING)
-#define __ARM_ARCH__                         8
-#define __ARM_VMSA__                         8
-#define __ARM_SMP__                          1
-#define __ARM_AMP__                          1
-#define __ARM_VFP__                          4
-#define __ARM_COHERENT_CACHE__               1
-#define __ARM_COHERENT_IO__                  1
-#define __ARM_IC_NOALIAS_ICACHE__            1
-#define __ARM_DEBUG__                        7
-#define __ARM_ENABLE_SWAP__                  1
-#define __ARM_V8_CRYPTO_EXTENSIONS__         1
-#define __ARM_16K_PG__                       1
-#define __ARM64_PMAP_SUBPAGE_L1__            1
-#define __ARM_GLOBAL_SLEEP_BIT__             1
-#define __ARM_PAN_AVAILABLE__                1
-#define __ARM_WKDM_ISA_AVAILABLE__           1
-#define __PLATFORM_WKDM_ALIGNMENT_MASK__     (0x3FULL)
-#define __PLATFORM_WKDM_ALIGNMENT_BOUNDARY__ (64)
-#define __ARM_CLUSTER_COUNT__                2
-#define
-#define __APCFG_SUPPORTED__                  1
-#define __ARM_RANGE_TLBI__                   1
-
-#elif defined (BCM2837)
-#define __ARM_ARCH__              8
-#define __ARM_VMSA__              8
-#define __ARM_SMP__               1
-#define __ARM_VFP__               4
-#define __ARM_COHERENT_CACHE__    1
-#define __ARM_DEBUG__             7
-#define __ARM64_PMAP_SUBPAGE_L1__ 1
-#else
-#error processor not supported
 #endif
 
 #if __ARM_42BIT_PA_SPACE__
 /* For now, force the issue! */
+/* We need more VA space for the identity map to bootstrap the MMU */
 #undef __ARM64_PMAP_SUBPAGE_L1__
 #endif /* __ARM_42BIT_PA_SPACE__ */
 
@@ -243,19 +118,42 @@
 #endif /* defined(ARM_BOARD_WFE_TIMEOUT_NS) */
 
 /*
+ * MAX_PSETS allows the scheduler to create statically sized
+ * scheduling data structures (such as an array of processor sets, clutch
+ * buckets in Edge scheduler etc.). All current AMP platforms are dual
+ * pset and all non-AMP platforms are single pset architectures. This
+ * define might need to be conditionalized better (or moved to a better
+ * header) in the future.
+ *
+ * <Edge Multi-cluster Support Needed>
+ */
+#if __ARM_AMP__
+#define MAX_PSETS 2
+#else /*__ARM_AMP__ */
+#define MAX_PSETS 1
+#endif /* __ARM_AMP__ */
+
+/*
  * The clutch scheduler is enabled only on non-AMP platforms for now.
  */
-#if !__ARM_AMP__ && CONFIG_CLUTCH
-#define CONFIG_SCHED_CLUTCH 1
-#else /* !__ARM_AMP__ && CONFIG_CLUTCH */
-#define CONFIG_SCHED_CLUTCH 0
-#endif /* !__ARM_AMP__ && CONFIG_CLUTCH */
+#if CONFIG_CLUTCH
 
-#if __ARM_AMP__ || CONFIG_SCHED_CLUTCH
+#if __ARM_AMP__
+
+/* Enable the Edge scheduler for all J129 platforms */
+#if XNU_TARGET_OS_OSX
+#define CONFIG_SCHED_CLUTCH 1
+#define CONFIG_SCHED_EDGE   1
+#endif /* XNU_TARGET_OS_OSX */
+
+#else /* __ARM_AMP__ */
+#define CONFIG_SCHED_CLUTCH 1
+#endif /* __ARM_AMP__ */
+
+#endif /* CONFIG_CLUTCH */
+
+/* Thread groups are enabled on all ARM platforms (irrespective of scheduler) */
 #define CONFIG_THREAD_GROUPS 1
-#else /* __ARM_AMP__ || CONFIG_SCHED_CLUTCH */
-#define CONFIG_THREAD_GROUPS 0
-#endif
 
 #ifdef XNU_KERNEL_PRIVATE
 
@@ -399,26 +297,7 @@
 #define MMU_I_CLINE     5                      /* cache line size as 1<<MMU_I_CLINE (32) */
 
 /* D-Cache */
-#define MMU_CSIZE       15                     /* cache size as 1<<MMU_CSIZE (32K) */
 #define MMU_CLINE       6                      /* cache line size as 1<<MMU_CLINE (64) */
-#define MMU_NWAY        2                      /* set associativity 1<<MMU_NWAY (4) */
-#define MMU_I7SET       6                      /* cp15 c7 set incrementer 1<<MMU_I7SET */
-#define MMU_I7WAY       30                     /* cp15 c7 way incrementer 1<<MMU_I7WAY */
-
-#define MMU_SWAY        (MMU_CSIZE - MMU_NWAY) /* set size 1<<MMU_SWAY */
-#define MMU_NSET        (MMU_SWAY - MMU_CLINE) /* lines per way 1<<MMU_NSET */
-
-#define __ARM_L2CACHE__ 1
-
-#define L2_CSIZE        __ARM_L2CACHE_SIZE_LOG__ /* cache size as 1<<MMU_CSIZE */
-#define L2_CLINE        6                        /* cache line size as 1<<MMU_CLINE (64) */
-#define L2_NWAY         3                        /* set associativity 1<<MMU_NWAY (8) */
-#define L2_I7SET        6                        /* cp15 c7 set incrementer 1<<MMU_I7SET */
-#define L2_I7WAY        29                       /* cp15 c7 way incrementer 1<<MMU_I7WAY */
-#define L2_I9WAY        29                       /* cp15 c9 way incrementer 1<<MMU_I9WAY */
-
-#define L2_SWAY         (L2_CSIZE - L2_NWAY)     /* set size 1<<MMU_SWAY */
-#define L2_NSET         (L2_SWAY - L2_CLINE)     /* lines per way 1<<MMU_NSET */
 
 #elif defined (APPLETYPHOON)
 
@@ -426,27 +305,7 @@
 #define MMU_I_CLINE 6                      /* cache line size as 1<<MMU_I_CLINE (64) */
 
 /* D-Cache */
-#define MMU_CSIZE   16                     /* cache size as 1<<MMU_CSIZE (64K) */
 #define MMU_CLINE   6                      /* cache line size as 1<<MMU_CLINE (64) */
-#define MMU_NWAY    1                      /* set associativity 1<<MMU_NWAY (2) */
-#define MMU_I7SET   6                      /* cp15 c7 set incrementer 1<<MMU_I7SET */
-#define MMU_I7WAY   31                     /* cp15 c7 way incrementer 1<<MMU_I7WAY */
-#define MMU_I9WAY   31                     /* cp15 c9 way incrementer 1<<MMU_I9WAY */
-
-#define MMU_SWAY    (MMU_CSIZE - MMU_NWAY) /* set size 1<<MMU_SWAY */
-#define MMU_NSET    (MMU_SWAY - MMU_CLINE) /* lines per way 1<<MMU_NSET */
-
-#define __ARM_L2CACHE__ 1
-
-#define L2_CSIZE        __ARM_L2CACHE_SIZE_LOG__ /* cache size as 1<<L2_CSIZE */
-#define L2_CLINE        6                        /* cache line size as 1<<L2_CLINE (64) */
-#define L2_NWAY         3                        /* set associativity 1<<L2_NWAY (8) */
-#define L2_I7SET        6                        /* cp15 c7 set incrementer 1<<L2_I7SET */
-#define L2_I7WAY        29                       /* cp15 c7 way incrementer 1<<L2_I7WAY */
-#define L2_I9WAY        29                       /* cp15 c9 way incrementer 1<<L2_I9WAY */
-
-#define L2_SWAY         (L2_CSIZE - L2_NWAY)     /* set size 1<<L2_SWAY */
-#define L2_NSET         (L2_SWAY - L2_CLINE)     /* lines per way 1<<L2_NSET */
 
 #elif defined (APPLETWISTER)
 
@@ -454,32 +313,7 @@
 #define MMU_I_CLINE 6                      /* cache line size as 1<<MMU_I_CLINE (64) */
 
 /* D-Cache */
-#define MMU_CSIZE   16                     /* cache size as 1<<MMU_CSIZE (64K) */
 #define MMU_CLINE   6                      /* cache line size is 1<<MMU_CLINE (64) */
-#define MMU_NWAY    2                      /* set associativity 1<<MMU_NWAY (4) */
-#define MMU_I7SET   6                      /* cp15 c7 set incrementer 1<<MMU_I7SET */
-#define MMU_I7WAY   30                     /* cp15 c7 way incrementer 1<<MMU_I7WAY */
-#define MMU_I9WAY   30                     /* cp15 c9 way incrementer 1<<MMU_I9WAY */
-
-#define MMU_SWAY    (MMU_CSIZE - MMU_NWAY) /* set size 1<<MMU_SWAY */
-#define MMU_NSET    (MMU_SWAY - MMU_CLINE) /* lines per way 1<<MMU_NSET */
-
-/* L2-Cache */
-#define __ARM_L2CACHE__ 1
-
-/*
- * For reasons discussed in the platform expert code, we round the reported
- * L2 size to 4MB, and adjust the other parameters accordingly.
- */
-#define L2_CSIZE        __ARM_L2CACHE_SIZE_LOG__ /* cache size as 1<<L2_CSIZE */
-#define L2_CLINE        6                        /* cache line size as 1<<L2_CSIZE (64) */
-#define L2_NWAY         4                        /* set associativity as 1<<L2_CLINE (16, is actually 12) */
-#define L2_I7SET        6                        /* cp15 c7 set incrementer 1<<L2_I7SET */
-#define L2_I7WAY        28                       /* cp15 c7 way incrementer 1<<L2_I7WAY */
-#define L2_I9WAY        28                       /* cp15 c9 way incremenber 1<<L2_I9WAY */
-
-#define L2_SWAY         (L2_CSIZE - L2_NWAY)     /* set size 1<<L2_SWAY */
-#define L2_NSET         (L2_SWAY - L2_CLINE)     /* lines per way 1<<L2_NSET */
 
 #elif defined (APPLEHURRICANE)
 
@@ -487,32 +321,7 @@
 #define MMU_I_CLINE 6                      /* cache line size as 1<<MMU_I_CLINE (64) */
 
 /* D-Cache */
-#define MMU_CSIZE   16                     /* cache size as 1<<MMU_CSIZE (64K) */
 #define MMU_CLINE   6                      /* cache line size is 1<<MMU_CLINE (64) */
-#define MMU_NWAY    2                      /* set associativity 1<<MMU_NWAY (4) */
-#define MMU_I7SET   6                      /* cp15 c7 set incrementer 1<<MMU_I7SET */
-#define MMU_I7WAY   30                     /* cp15 c7 way incrementer 1<<MMU_I7WAY */
-#define MMU_I9WAY   30                     /* cp15 c9 way incrementer 1<<MMU_I9WAY */
-
-#define MMU_SWAY    (MMU_CSIZE - MMU_NWAY) /* set size 1<<MMU_SWAY */
-#define MMU_NSET    (MMU_SWAY - MMU_CLINE) /* lines per way 1<<MMU_NSET */
-
-/* L2-Cache */
-#define __ARM_L2CACHE__ 1
-
-/*
- * For reasons discussed in the platform expert code, we round the reported
- * L2 size to 4MB, and adjust the other parameters accordingly.
- */
-#define L2_CSIZE        __ARM_L2CACHE_SIZE_LOG__ /* cache size as 1<<L2_CSIZE */
-#define L2_CLINE        6                        /* cache line size as 1<<L2_CSIZE (64) */
-#define L2_NWAY         4                        /* set associativity as 1<<L2_CLINE (16, is actually 12) */
-#define L2_I7SET        6                        /* cp15 c7 set incrementer 1<<L2_I7SET */
-#define L2_I7WAY        28                       /* cp15 c7 way incrementer 1<<L2_I7WAY */
-#define L2_I9WAY        28                       /* cp15 c9 way incremenber 1<<L2_I9WAY */
-
-#define L2_SWAY         (L2_CSIZE - L2_NWAY)     /* set size 1<<L2_SWAY */
-#define L2_NSET         (L2_SWAY - L2_CLINE)     /* lines per way 1<<L2_NSET */
 
 #elif defined (APPLEMONSOON)
 
@@ -520,35 +329,7 @@
 #define MMU_I_CLINE 6                      /* cache line size as 1<<MMU_I_CLINE (64) */
 
 /* D-Cache, 64KB for Monsoon, 32KB for Mistral, 4-way. */
-#define MMU_CSIZE   16                     /* cache size as 1<<MMU_CSIZE (64K) */
 #define MMU_CLINE   6                      /* cache line size is 1<<MMU_CLINE (64) */
-#define MMU_NWAY    2                      /* set associativity 1<<MMU_NWAY (4) */
-#define MMU_I7SET   6                      /* cp15 c7 set incrementer 1<<MMU_I7SET */
-#define MMU_I7WAY   30                     /* cp15 c7 way incrementer 1<<MMU_I7WAY */
-#define MMU_I9WAY   30                     /* cp15 c9 way incrementer 1<<MMU_I9WAY */
-
-#define MMU_SWAY    (MMU_CSIZE - MMU_NWAY) /* set size 1<<MMU_SWAY */
-#define MMU_NSET    (MMU_SWAY - MMU_CLINE) /* lines per way 1<<MMU_NSET */
-
-/* L2-Cache */
-#define __ARM_L2CACHE__ 1
-
-/*
- * LLC (Monsoon L2, Mistral L3): 8MB, 128-byte lines, 16-way.
- * L2E (Mistral L2): 1MB, 64-byte lines, 8-way.
- *
- * TODO: Our L2 cahes have different line sizes.  I begin to suspect
- * this may be a problem.
- */
-#define L2_CSIZE        __ARM_L2CACHE_SIZE_LOG__ /* cache size as 1<<L2_CSIZE */
-#define L2_CLINE        7                        /* cache line size as 1<<L2_CLINE (128) */
-#define L2_NWAY         4                        /* set associativity as 1<<L2_NWAY (16) */
-#define L2_I7SET        6                        /* TODO: cp15 c7 set incrementer 1<<L2_I7SET */
-#define L2_I7WAY        28                       /* TODO: cp15 c7 way incrementer 1<<L2_I7WAY */
-#define L2_I9WAY        28                       /* TODO: cp15 c9 way incremenber 1<<L2_I9WAY */
-
-#define L2_SWAY         (L2_CSIZE - L2_NWAY)     /* set size 1<<L2_SWAY */
-#define L2_NSET         (L2_SWAY - L2_CLINE)     /* lines per way 1<<L2_NSET */
 
 #elif defined (APPLEVORTEX)
 
@@ -556,32 +337,7 @@
 #define MMU_I_CLINE 6                      /* cache line size as 1<<MMU_I_CLINE (64) */
 
 /* D-Cache, 128KB 8-way for Vortex, 32KB 4-way for Tempest. */
-#define MMU_CSIZE   17                     /* cache size as 1<<MMU_CSIZE (128K) */
 #define MMU_CLINE   6                      /* cache line size is 1<<MMU_CLINE (64) */
-#define MMU_NWAY    3                      /* set associativity 1<<MMU_NWAY (8) */
-#define MMU_I7SET   6                      /* cp15 c7 set incrementer 1<<MMU_I7SET */
-#define MMU_I7WAY   30                     /* cp15 c7 way incrementer 1<<MMU_I7WAY */
-#define MMU_I9WAY   30                     /* cp15 c9 way incrementer 1<<MMU_I9WAY */
-
-#define MMU_SWAY    (MMU_CSIZE - MMU_NWAY) /* set size 1<<MMU_SWAY */
-#define MMU_NSET    (MMU_SWAY - MMU_CLINE) /* lines per way 1<<MMU_NSET */
-
-/* L2-Cache */
-#define __ARM_L2CACHE__ 1
-
-/*
- * LLC (Vortex L2):  8MB, 128-byte lines, 16-way.
- * LLC (Tempest L2): 2MB, 128-byte lines, 16-way.
- */
-#define L2_CSIZE        __ARM_L2CACHE_SIZE_LOG__ /* cache size as 1<<L2_CSIZE */
-#define L2_CLINE        7                        /* cache line size as 1<<L2_CLINE (128) */
-#define L2_NWAY         4                        /* set associativity as 1<<L2_NWAY (16) */
-#define L2_I7SET        6                        /* TODO: cp15 c7 set incrementer 1<<L2_I7SET */
-#define L2_I7WAY        28                       /* TODO: cp15 c7 way incrementer 1<<L2_I7WAY */
-#define L2_I9WAY        28                       /* TODO: cp15 c9 way incremenber 1<<L2_I9WAY */
-
-#define L2_SWAY         (L2_CSIZE - L2_NWAY)     /* set size 1<<L2_SWAY */
-#define L2_NSET         (L2_SWAY - L2_CLINE)     /* lines per way 1<<L2_NSET */
 
 #elif defined (APPLELIGHTNING)
 
@@ -589,32 +345,7 @@
 #define MMU_I_CLINE 6                      /* cache line size as 1<<MMU_I_CLINE (64) */
 
 /* D-Cache, 128KB for Lightning, 8-way. 48KB for Thunder, 6-way. */
-#define MMU_CSIZE   17                     /* cache size as 1<<MMU_CSIZE (128K) */
 #define MMU_CLINE   6                      /* cache line size is 1<<MMU_CLINE (64) */
-#define MMU_NWAY    3                      /* set associativity 1<<MMU_NWAY (8) */
-#define MMU_I7SET   6                      /* cp15 c7 set incrementer 1<<MMU_I7SET */
-#define MMU_I7WAY   30                     /* cp15 c7 way incrementer 1<<MMU_I7WAY */
-#define MMU_I9WAY   30                     /* cp15 c9 way incrementer 1<<MMU_I9WAY */
-
-#define MMU_SWAY    (MMU_CSIZE - MMU_NWAY) /* set size 1<<MMU_SWAY */
-#define MMU_NSET    (MMU_SWAY - MMU_CLINE) /* lines per way 1<<MMU_NSET */
-
-/* L2-Cache */
-#define __ARM_L2CACHE__ 1
-
-/*
- * LLC (Lightning L2):  8MB, 128-byte lines, 16-way.
- * LLC (Thunder L2): 4MB, 128-byte lines, 16-way.
- */
-#define L2_CSIZE        __ARM_L2CACHE_SIZE_LOG__ /* cache size as 1<<L2_CSIZE */
-#define L2_CLINE        7                        /* cache line size as 1<<L2_CLINE (128) */
-#define L2_NWAY         4                        /* set associativity as 1<<L2_NWAY (16) */
-#define L2_I7SET        6                        /* TODO: cp15 c7 set incrementer 1<<L2_I7SET */
-#define L2_I7WAY        28                       /* TODO: cp15 c7 way incrementer 1<<L2_I7WAY */
-#define L2_I9WAY        28                       /* TODO: cp15 c9 way incremenber 1<<L2_I9WAY */
-
-#define L2_SWAY         (L2_CSIZE - L2_NWAY)     /* set size 1<<L2_SWAY */
-#define L2_NSET         (L2_SWAY - L2_CLINE)     /* lines per way 1<<L2_NSET */
 
 #elif defined (BCM2837) /* Raspberry Pi 3 */
 
@@ -622,27 +353,7 @@
 #define MMU_I_CLINE 6
 
 /* D-Cache. */
-#define MMU_CSIZE   15
 #define MMU_CLINE   6
-#define MMU_NWAY    2
-
-#define MMU_I7SET   6
-#define MMU_I7WAY   30
-#define MMU_I9WAY   30
-
-#define MMU_SWAY    (MMU_CSIZE - MMU_NWAY)
-#define MMU_NSET    (MMU_SWAY - MMU_CLINE)
-
-#define __ARM_L2CACHE__ 1
-
-#define L2_CSIZE        __ARM_L2CACHE_SIZE_LOG__
-#define L2_CLINE        6
-#define L2_NWAY         4
-#define L2_I7SET        6
-#define L2_I7WAY        28
-#define L2_I9WAY        28
-#define L2_SWAY         (L2_CSIZE - L2_NWAY)
-#define L2_NSET         (L2_SWAY - L2_CLINE)
 
 #else
 #error processor not supported
@@ -792,6 +503,8 @@
 #define TTBCR_N_2GB_TTB0 0x1 /* 2 GB TTB0, 2GB TTB1 */
 #define TTBCR_N_4GB_TTB0 0x0 /* 4 GB TTB0 */
 #define TTBCR_N_MASK     0x3
+
+#define TTBCR_N_SETUP (TTBCR_N_2GB_TTB0)
 
 
 
@@ -1335,5 +1048,6 @@
 #define MCR_ACTLR(x) 15,0,(x),1,0,1
 
 #endif /* __arm__ */
+
 
 #endif /* _ARM_PROC_REG_H_ */

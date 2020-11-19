@@ -81,8 +81,41 @@ typedef void (*IOThreadFunc)(void *argument);
  *   @param size Size of the memory requested.
  *   @result Pointer to the allocated memory, or zero on failure. */
 
+#if defined(XNU_KERNEL_PRIVATE)
+
+/*
+ * IOMalloc_internal allocates memory from the specifed kalloc heap, which can be:
+ * - KHEAP_DATA_BUFFERS: Should be used for data buffers
+ * - KHEAP_KEXT: Should be used for non core kernel allocations
+ * - KHEAP_DEFAULT: Should be used for all core kernel allocations that
+ *   aren't data buffers.
+ *
+ * The kalloc heap used by IOMalloc calls from core kernel is KHEAP_DEFAULT
+ * and that used by kexts (accessed via IOMalloc_external) is KHEAP_KEXT.
+ *
+ * For more details on kalloc_heaps see kalloc.h
+ */
+
+extern void *
+IOMalloc_internal(
+	struct kalloc_heap * kalloc_heap_cfg,
+	vm_size_t            size)      __attribute__((alloc_size(2)));
+
+extern void *
+IOMallocZero_internal(
+	struct kalloc_heap * kalloc_heap_cfg,
+	vm_size_t            size)      __attribute__((alloc_size(2)));
+
+#define IOMalloc(size)     IOMalloc_internal(KHEAP_DEFAULT, size)
+
+#define IOMallocZero(size) IOMallocZero_internal(KHEAP_DEFAULT, size)
+
+#else/* defined(XNU_KERNEL_PRIVATE) */
+
 void * IOMalloc(vm_size_t size)      __attribute__((alloc_size(1)));
 void * IOMallocZero(vm_size_t size)  __attribute__((alloc_size(1)));
+
+#endif /* !defined(XNU_KERNEL_PRIVATE) */
 
 /*! @function IOFree
  *   @abstract Frees memory allocated with IOMalloc.
@@ -101,7 +134,21 @@ void   IOFree(void * address, vm_size_t size);
  *   @param alignment Byte count of the alignment for the memory. For example, pass 256 to get memory allocated at an address with bit 0-7 zero.
  *   @result Pointer to the allocated memory, or zero on failure. */
 
+#if defined(XNU_KERNEL_PRIVATE)
+
+extern void *
+IOMallocAligned_internal(
+	struct kalloc_heap * kalloc_heap_cfg,
+	vm_size_t            size,
+	vm_size_t            alignment)      __attribute__((alloc_size(2)));
+
+#define IOMallocAligned(size, alignment) IOMallocAligned_internal(KHEAP_DEFAULT, size, alignment)
+
+#else/* defined(XNU_KERNEL_PRIVATE) */
+
 void * IOMallocAligned(vm_size_t size, vm_offset_t alignment) __attribute__((alloc_size(1)));
+
+#endif /* !defined(XNU_KERNEL_PRIVATE) */
 
 /*! @function IOFreeAligned
  *   @abstract Frees memory allocated with IOMallocAligned.
@@ -139,6 +186,15 @@ void   IOFreeContiguous(void * address, vm_size_t size) __attribute__((deprecate
  *   @result Pointer to the allocated memory, or zero on failure. */
 
 void * IOMallocPageable(vm_size_t size, vm_size_t alignment) __attribute__((alloc_size(1)));
+
+/*! @function IOMallocPageableZero
+ *   @abstract Allocates pageable, zeroed memory in the kernel map.
+ *   @discussion Same as IOMallocPageable but guarantees the returned memory will be zeroed.
+ *   @param size Size of the memory requested.
+ *   @param alignment Byte count of the alignment for the memory. For example, pass 256 to get memory allocated at an address with bits 0-7 zero.
+ *   @result Pointer to the allocated memory, or zero on failure. */
+
+void * IOMallocPageableZero(vm_size_t size, vm_size_t alignment) __attribute__((alloc_size(1)));
 
 /*! @function IOFreePageable
  *   @abstract Frees memory allocated with IOMallocPageable.
@@ -342,7 +398,7 @@ __attribute__((format(printf, 1, 0)));
 
 #ifndef _FN_KPRINTF
 #define _FN_KPRINTF
-void kprintf(const char *format, ...);
+void kprintf(const char *format, ...) __printflike(1, 2);
 #endif
 #ifndef _FN_KPRINTF_DECLARED
 #define _FN_KPRINTF_DECLARED

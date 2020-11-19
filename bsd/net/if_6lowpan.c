@@ -403,7 +403,7 @@ sixlowpan_clone_create(struct if_clone *ifc, u_int32_t unit, __unused void *para
 	if_epraram.len = sizeof(if_epraram);
 	if_epraram.flags = IFNET_INIT_LEGACY;
 	if_epraram.uniqueid = ifl->if6lpan_name;
-	if_epraram.uniqueid_len = strlen(ifl->if6lpan_name);
+	if_epraram.uniqueid_len = (uint32_t)strlen(ifl->if6lpan_name);
 	if_epraram.name = ifc->ifc_name;
 	if_epraram.unit = unit;
 	if_epraram.family = IFNET_FAMILY_6LOWPAN;
@@ -633,6 +633,10 @@ sixlowpan_input(ifnet_t p, __unused protocol_family_t protocol,
 
 	p = p_6lowpan_ifnet;
 	mc->m_pkthdr.rcvif = p;
+	if (len > mc->m_pkthdr.len) {
+		err = -1;
+		goto err_out;
+	}
 
 	sixlowpan_lock();
 	ifl = ifnet_get_if6lpan_retained(p);
@@ -661,9 +665,16 @@ sixlowpan_input(ifnet_t p, __unused protocol_family_t protocol,
 	/* Parse the 802.15.4 frame header */
 	bzero(&ieee02154hdr, sizeof(ieee02154hdr));
 	frame802154_parse(mtod(mc, uint8_t *), len, &ieee02154hdr, &payload);
+	if (payload == NULL) {
+		err = -1;
+		goto err_out;
+	}
 
 	/* XXX Add check for your link layer address being dest */
-	sixxlowpan_input(&ieee02154hdr, payload);
+	if (sixxlowpan_input(&ieee02154hdr, payload) != 0) {
+		err = -1;
+		goto err_out;
+	}
 
 	if (mbuf_setdata(mc, payload, ieee02154hdr.payload_len)) {
 		err = -1;
@@ -764,8 +775,9 @@ sixlowpan_ioctl(ifnet_t ifp, u_long cmd, void * data)
 		break;
 
 	case SIOCSIF6LOWPAN:
-		user_addr = proc_is64bit(current_proc())
-		    ? ifr->ifr_data64 : CAST_USER_ADDR_T(ifr->ifr_data);
+		user_addr = proc_is64bit(current_proc()) ?
+		    CAST_USER_ADDR_T(ifr->ifr_data64) :
+		    CAST_USER_ADDR_T(ifr->ifr_data);
 		error = copyin(user_addr, &req, sizeof(req));
 		req.parent[IFNAMSIZ - 1] = '\0';
 		if (error) {
@@ -803,8 +815,9 @@ sixlowpan_ioctl(ifnet_t ifp, u_long cmd, void * data)
 			snprintf(req.parent, sizeof(req.parent),
 			    "%s%d", ifnet_name(p), ifnet_unit(p));
 		}
-		user_addr = proc_is64bit(current_proc())
-		    ? ifr->ifr_data64 : CAST_USER_ADDR_T(ifr->ifr_data);
+		user_addr = proc_is64bit(current_proc()) ?
+		    CAST_USER_ADDR_T(ifr->ifr_data64) :
+		    CAST_USER_ADDR_T(ifr->ifr_data);
 		error = copyout(&req, user_addr, sizeof(req));
 		break;
 
@@ -941,9 +954,9 @@ sixlowpan_framer_extended(struct ifnet *ifp, struct mbuf **m,
 	int buflen = 0, err = 0;
 	frame802154_t ieee02154hdr;
 	if6lpan_ref ifl = NULL;
-	u_int8_t *payload = NULL;
+	uint8_t *payload = NULL;
 	struct mbuf *mc = NULL;
-	u_int16_t len;
+	uint16_t len;
 	struct sockaddr_in6 *dest6 =  (struct sockaddr_in6 *)(uintptr_t)(size_t)ndest;
 
 	/* Initialize 802.15.4 frame header */
@@ -1020,7 +1033,7 @@ sixlowpan_framer_extended(struct ifnet *ifp, struct mbuf **m,
 	 * Add 2 bytes at the front of the frame indicating the total payload
 	 * length
 	 */
-	len = htons(buflen + ieee02154hdr.payload_len);
+	len = htons((uint16_t)(buflen + ieee02154hdr.payload_len));
 	m_copyback(mc, 0, sizeof(len), &len);
 	/* Copy back the 802.15.4 Data frame header into mbuf */
 	m_copyback(mc, sizeof(len), buflen, buf);
@@ -1067,7 +1080,6 @@ sixlowpan_detach_inet6(struct ifnet *ifp, protocol_family_t protocol_family)
 	(void) ifnet_detach_protocol(ifp, protocol_family);
 }
 
-#if INET6
 __private_extern__ int
 sixlowpan_family_init(void)
 {
@@ -1092,4 +1104,3 @@ sixlowpan_family_init(void)
 done:
 	return error;
 }
-#endif

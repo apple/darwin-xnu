@@ -75,7 +75,6 @@
 #include <mach/audit_triggers_server.h>
 
 #include <kern/host.h>
-#include <kern/kalloc.h>
 #include <kern/zalloc.h>
 #include <kern/sched_prim.h>
 
@@ -430,7 +429,7 @@ audit_arg_text(struct kaudit_record *ar, char *text)
 		    M_WAITOK);
 	}
 
-	strncpy(ar->k_ar.ar_arg_text, text, MAXPATHLEN);
+	strlcpy(ar->k_ar.ar_arg_text, text, MAXPATHLEN);
 	ARG_SET_VALID(ar, ARG_TEXT);
 }
 
@@ -576,15 +575,15 @@ audit_arg_file(struct kaudit_record *ar, __unused proc_t p,
 	struct sockaddr_in *sin;
 	struct sockaddr_in6 *sin6;
 
-	switch (FILEGLOB_DTYPE(fp->f_fglob)) {
+	switch (FILEGLOB_DTYPE(fp->fp_glob)) {
 	case DTYPE_VNODE:
 		/* case DTYPE_FIFO: */
 		audit_arg_vnpath_withref(ar,
-		    (struct vnode *)fp->f_fglob->fg_data, ARG_VNODE1);
+		    (struct vnode *)fp->fp_glob->fg_data, ARG_VNODE1);
 		break;
 
 	case DTYPE_SOCKET:
-		so = (struct socket *)fp->f_fglob->fg_data;
+		so = (struct socket *)fp->fp_glob->fg_data;
 		if (SOCK_CHECK_DOM(so, PF_INET)) {
 			if (so->so_pcb == NULL) {
 				break;
@@ -858,7 +857,7 @@ audit_arg_mach_port2(struct kaudit_record *ar, mach_port_name_t port)
  * Audit the argument strings passed to exec.
  */
 void
-audit_arg_argv(struct kaudit_record *ar, char *argv, int argc, int length)
+audit_arg_argv(struct kaudit_record *ar, char *argv, int argc, size_t length)
 {
 	if (audit_argv == 0 || argc == 0) {
 		return;
@@ -876,7 +875,7 @@ audit_arg_argv(struct kaudit_record *ar, char *argv, int argc, int length)
  * Audit the environment strings passed to exec.
  */
 void
-audit_arg_envv(struct kaudit_record *ar, char *envv, int envc, int length)
+audit_arg_envv(struct kaudit_record *ar, char *envv, int envc, size_t length)
 {
 	if (audit_arge == 0 || envc == 0) {
 		return;
@@ -909,7 +908,7 @@ audit_sysclose(struct kaudit_record *ar, proc_t p, int fd)
 		return;
 	}
 
-	audit_arg_vnpath_withref(ar, (struct vnode *)fp->f_fglob->fg_data,
+	audit_arg_vnpath_withref(ar, (struct vnode *)fp->fp_glob->fg_data,
 	    ARG_VNODE1);
 	fp_drop(p, fd, fp, 0);
 }

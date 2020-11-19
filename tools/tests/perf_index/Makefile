@@ -1,34 +1,21 @@
 include ../Makefile.common
 
 CC:=$(shell xcrun -sdk "$(SDKROOT)" -find cc)
-CFLAGS:=-c -Wall -pedantic -Os -isysroot $(SDKROOT)
-LDFLAGS:=
+CFLAGS:=-c -Wall -pedantic -Os -isysroot $(SDKROOT) $(ARCH_FLAGS)
+CFLAGS += -Wl,-sectcreate,__INFO_FILTER,__disable,/dev/null
+LDFLAGS:= $(ARCH_FLAGS) -isysroot $(SDKROOT)
 
 SRCROOT?=$(shell /bin/pwd)
 DSTROOT?=$(shell /bin/pwd)/BUILD/dst
 OBJROOT?=$(shell /bin/pwd)/BUILD/obj
 SYMROOT?=$(shell /bin/pwd)/BUILD/sym
 
-ifdef RC_ARCHS
-	ARCHS:=$(RC_ARCHS)
-else
-	ifeq ($(ARCHS),)
-	ifeq "$(Embedded)" "YES"
-	ARCHS:=armv7 armv7s arm64
-else
-	ARCHS:=x86_64 i386
-endif
-endif
-endif
 
 ifeq "$(Embedded)" "YES"
 	TARGET_NAME:=PerfIndex.bundle-ios
 else
 	TARGET_NAME:=PerfIndex.bundle-osx
 endif
-
-CFLAGS += $(patsubst %, -arch %, $(ARCHS))
-LDFLAGS += $(patsubst %, -arch %, $(ARCHS))
 
 all: $(DSTROOT) $(OBJROOT) $(SYMROOT) \
 	$(DSTROOT)/perf_index \

@@ -298,6 +298,17 @@ lck_rw_t * IORWLockGetMachLock( IORWLock * lock);
 void    IORWLockRead(IORWLock * lock);
 #endif  /* !IOLOCKS_INLINE */
 
+/*! @function IORWLockTryRead
+ *   @abstract Attempt to lock a read/write lock for read.
+ *  @discussion Lock the lock for read, allowing multiple readers when there are no writers. If the lock is held for write, return false. Return true otherwise.
+ *   @param lock Pointer to the allocated lock. */
+
+#ifdef  IOLOCKS_INLINE
+#define IORWLockTryRead(l)        lck_rw_try_lock_shared(l)
+#else
+void    IORWLockTryRead( IORWLock * lock);
+#endif  /* !IOLOCKS_INLINE */
+
 /*! @function IORWLockWrite
  *   @abstract Lock a read/write lock for write.
  *   @discussion Lock the lock for write, allowing one writer exlusive access. If the lock is held for read or write, block waiting for its unlock. This function may block and so should not be called from interrupt level or while a spin lock is held. Locking the lock recursively from one thread, for read or write, can result in deadlock.
@@ -307,6 +318,17 @@ void    IORWLockRead(IORWLock * lock);
 #define IORWLockWrite(l)        lck_rw_lock_exclusive(l)
 #else
 void    IORWLockWrite( IORWLock * lock);
+#endif  /* !IOLOCKS_INLINE */
+
+/*! @function IORWLockTryWrite
+ *   @abstract Attempt to lock a read/write lock for write.
+ *   @discussion Lock the lock for write, allowing one writer exlusive access. If the lock is held for read or write, return false. Return true otherwise.
+ *   @param lock Pointer to the allocated lock. */
+
+#ifdef  IOLOCKS_INLINE
+#define IORWLockTryWrite(l)        lck_rw_try_lock_exclusive(l)
+#else
+void    IORWLockTryWrite( IORWLock * lock);
 #endif  /* !IOLOCKS_INLINE */
 
 /*! @function IORWLockUnlock

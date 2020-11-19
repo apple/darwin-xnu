@@ -111,32 +111,19 @@ const struct fileops socketops = {
 /* ARGSUSED */
 static int
 soo_read(struct fileproc *fp, struct uio *uio, __unused int flags,
-#if !CONFIG_MACF_SOCKET
-    __unused
-#endif
-    vfs_context_t ctx)
+    __unused vfs_context_t ctx)
 {
 	struct socket *so;
 	int stat;
-#if CONFIG_MACF_SOCKET
-	int error;
-#endif
 
 	int (*fsoreceive)(struct socket *so2, struct sockaddr **paddr,
 	    struct uio *uio2, struct mbuf **mp0, struct mbuf **controlp,
 	    int *flagsp);
 
-	if ((so = (struct socket *)fp->f_fglob->fg_data) == NULL) {
+	if ((so = (struct socket *)fp->fp_glob->fg_data) == NULL) {
 		/* This is not a valid open file descriptor */
 		return EBADF;
 	}
-
-#if CONFIG_MACF_SOCKET
-	error = mac_socket_check_receive(vfs_context_ucred(ctx), so);
-	if (error) {
-		return error;
-	}
-#endif /* CONFIG_MACF_SOCKET */
 
 	fsoreceive = so->so_proto->pr_usrreqs->pru_soreceive;
 
@@ -156,22 +143,10 @@ soo_write(struct fileproc *fp, struct uio *uio, __unused int flags,
 	    int flags2);
 	proc_t procp;
 
-#if CONFIG_MACF_SOCKET
-	int error;
-#endif
-
-	if ((so = (struct socket *)fp->f_fglob->fg_data) == NULL) {
+	if ((so = (struct socket *)fp->fp_glob->fg_data) == NULL) {
 		/* This is not a valid open file descriptor */
 		return EBADF;
 	}
-
-#if CONFIG_MACF_SOCKET
-	/* JMM - have to fetch the socket's remote addr */
-	error = mac_socket_check_send(vfs_context_ucred(ctx), so, NULL);
-	if (error) {
-		return error;
-	}
-#endif /* CONFIG_MACF_SOCKET */
 
 	fsosend = so->so_proto->pr_usrreqs->pru_sosend;
 
@@ -314,7 +289,7 @@ soo_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx)
 	struct socket *so;
 	proc_t procp = vfs_context_proc(ctx);
 
-	if ((so = (struct socket *)fp->f_fglob->fg_data) == NULL) {
+	if ((so = (struct socket *)fp->fp_glob->fg_data) == NULL) {
 		/* This is not a valid open file descriptor */
 		return EBADF;
 	}
@@ -325,7 +300,7 @@ soo_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx)
 int
 soo_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx)
 {
-	struct socket *so = (struct socket *)fp->f_fglob->fg_data;
+	struct socket *so = (struct socket *)fp->fp_glob->fg_data;
 	int retnum = 0;
 	proc_t procp;
 
@@ -334,13 +309,6 @@ soo_select(struct fileproc *fp, int which, void *wql, vfs_context_t ctx)
 	}
 
 	procp = vfs_context_proc(ctx);
-
-#if CONFIG_MACF_SOCKET
-	if (mac_socket_check_select(vfs_context_ucred(ctx), so, which) != 0) {
-		return 0;
-	}
-#endif /* CONFIG_MACF_SOCKET */
-
 
 	socket_lock(so, 1);
 	switch (which) {
@@ -457,7 +425,7 @@ static int
 soo_drain(struct fileproc *fp, __unused vfs_context_t ctx)
 {
 	int error = 0;
-	struct socket *so = (struct socket *)fp->f_fglob->fg_data;
+	struct socket *so = (struct socket *)fp->fp_glob->fg_data;
 
 	if (so) {
 		socket_lock(so, 1);

@@ -58,8 +58,8 @@
  */
 
 #include <kern/cpu_number.h>
-#include <kern/kalloc.h>
 #include <kern/cpu_data.h>
+#include <kern/percpu.h>
 #include <mach/mach_types.h>
 #include <mach/machine.h>
 #include <mach/vm_map.h>
@@ -188,9 +188,12 @@ cpu_data_t *cpu_data_master = &scdatas[0];
 
 cpu_data_t      *cpu_data_ptr[MAX_CPUS] = {[0] = &scdatas[0] };
 
+SECURITY_READ_ONLY_LATE(struct percpu_base) percpu_base;
+
 decl_simple_lock_data(, ncpus_lock);     /* protects real_ncpus */
 unsigned int    real_ncpus = 1;
 unsigned int    max_ncpus = MAX_CPUS;
+unsigned int    max_cpus_from_firmware = 0;
 
 extern void hi64_sysenter(void);
 extern void hi64_syscall(void);
@@ -535,6 +538,36 @@ cpu_syscall_init(cpu_data_t *cdp)
 extern vm_offset_t dyn_dblmap(vm_offset_t, vm_offset_t);
 uint64_t ldt_alias_offset;
 
+__startup_func
+static void
+cpu_data_startup_init(void)
+{
+	int flags = KMA_GUARD_FIRST | KMA_GUARD_LAST | KMA_PERMANENT |
+	    KMA_ZERO | KMA_KOBJECT;
+	uint32_t cpus = max_cpus_from_firmware;
+	vm_size_t size = percpu_section_size() * cpus;
+	kern_return_t kr;
+
+	percpu_base.size = percpu_section_size();
+	if (cpus == 0) {
+		panic("percpu: max_cpus_from_firmware not yet initialized");
+	}
+	if (cpus == 1) {
+		percpu_base.start = VM_MAX_KERNEL_ADDRESS;
+		return;
+	}
+
+	kr = kmem_alloc_flags(kernel_map, &percpu_base.start,
+	    round_page(size) + 2 * PAGE_SIZE, VM_KERN_MEMORY_CPU, flags);
+	if (kr != KERN_SUCCESS) {
+		panic("percpu: kmem_alloc failed (%d)", kr);
+	}
+
+	percpu_base.start += PAGE_SIZE - percpu_section_start();
+	percpu_base.end    = percpu_base.start + size - 1;
+}
+STARTUP(PERCPU, STARTUP_RANK_FIRST, cpu_data_startup_init);
+
 cpu_data_t *
 cpu_data_alloc(boolean_t is_boot_cpu)
 {
@@ -546,10 +579,7 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 		cdp = cpu_datap(0);
 		if (cdp->cpu_processor == NULL) {
 			simple_lock_init(&ncpus_lock, 0);
-			cdp->cpu_processor = cpu_processor_alloc(TRUE);
-#if NCOPY_WINDOWS > 0
-			cdp->cpu_pmap = pmap_cpu_alloc(TRUE);
-#endif
+			cdp->cpu_processor = PERCPU_GET_MASTER(processor);
 		}
 		return cdp;
 	}
@@ -572,6 +602,9 @@ cpu_data_alloc(boolean_t is_boot_cpu)
 	cdp->cpu_this = cdp;
 	cdp->cpu_number = cnum;
 	cdp->cd_shadow = &cpshadows[cnum];
+	cdp->cpu_pcpu_base = percpu_base.start + (cnum - 1) * percpu_section_size();
+	cdp->cpu_processor = PERCPU_GET_WITH_BASE(cdp->cpu_pcpu_base, processor);
+
 	/*
 	 * Allocate interrupt stack:
 	 */
@@ -738,93 +771,6 @@ valid_user_segment_selectors(uint16_t cs,
 	       valid_user_data_selector(fs) &&
 	       valid_user_data_selector(gs);
 }
-
-#if NCOPY_WINDOWS > 0
-
-static vm_offset_t user_window_base = 0;
-
-void
-cpu_userwindow_init(int cpu)
-{
-	cpu_data_t              *cdp = cpu_data_ptr[cpu];
-	vm_offset_t             user_window;
-	vm_offset_t             vaddr;
-	int                     num_cpus;
-
-	num_cpus = ml_get_max_cpus();
-
-	if (cpu >= num_cpus) {
-		panic("cpu_userwindow_init: cpu > num_cpus");
-	}
-
-	if (user_window_base == 0) {
-		if (vm_allocate(kernel_map, &vaddr,
-		    (NBPDE * NCOPY_WINDOWS * num_cpus) + NBPDE,
-		    VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_CPU)) != KERN_SUCCESS) {
-			panic("cpu_userwindow_init: "
-			    "couldn't allocate user map window");
-		}
-
-		/*
-		 * window must start on a page table boundary
-		 * in the virtual address space
-		 */
-		user_window_base = (vaddr + (NBPDE - 1)) & ~(NBPDE - 1);
-
-		/*
-		 * get rid of any allocation leading up to our
-		 * starting boundary
-		 */
-		vm_deallocate(kernel_map, vaddr, user_window_base - vaddr);
-
-		/*
-		 * get rid of tail that we don't need
-		 */
-		user_window = user_window_base +
-		    (NBPDE * NCOPY_WINDOWS * num_cpus);
-
-		vm_deallocate(kernel_map, user_window,
-		    (vaddr +
-		    ((NBPDE * NCOPY_WINDOWS * num_cpus) + NBPDE)) -
-		    user_window);
-	}
-
-	user_window = user_window_base + (cpu * NCOPY_WINDOWS * NBPDE);
-
-	cdp->cpu_copywindow_base = user_window;
-	/*
-	 * Abuse this pdp entry, the pdp now actually points to
-	 * an array of copy windows addresses.
-	 */
-	cdp->cpu_copywindow_pdp  = pmap_pde(kernel_pmap, user_window);
-}
-
-void
-cpu_physwindow_init(int cpu)
-{
-	cpu_data_t              *cdp = cpu_data_ptr[cpu];
-	vm_offset_t             phys_window = cdp->cpu_physwindow_base;
-
-	if (phys_window == 0) {
-		if (vm_allocate(kernel_map, &phys_window,
-		    PAGE_SIZE, VM_FLAGS_ANYWHERE | VM_MAKE_TAG(VM_KERN_MEMORY_CPU))
-		    != KERN_SUCCESS) {
-			panic("cpu_physwindow_init: "
-			    "couldn't allocate phys map window");
-		}
-
-		/*
-		 * make sure the page that encompasses the
-		 * pte pointer we're interested in actually
-		 * exists in the page table
-		 */
-		pmap_expand(kernel_pmap, phys_window, PMAP_EXPAND_OPTIONS_NONE);
-
-		cdp->cpu_physwindow_base = phys_window;
-		cdp->cpu_physwindow_ptep = vtopte(phys_window);
-	}
-}
-#endif /* NCOPY_WINDOWS > 0 */
 
 /*
  * Allocate a new interrupt stack for the boot processor from the

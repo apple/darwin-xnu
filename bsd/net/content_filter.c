@@ -405,14 +405,8 @@ void* cfil_rw_lock_history[CFIL_RW_LCK_MAX];
 int cfil_rw_nxt_unlck = 0;
 void* cfil_rw_unlock_history[CFIL_RW_LCK_MAX];
 
-#define CONTENT_FILTER_ZONE_NAME        "content_filter"
-#define CONTENT_FILTER_ZONE_MAX         10
-static struct zone *content_filter_zone = NULL; /* zone for content_filter */
-
-
-#define CFIL_INFO_ZONE_NAME     "cfil_info"
-#define CFIL_INFO_ZONE_MAX      1024
-static struct zone *cfil_info_zone = NULL;      /* zone for cfil_info */
+static ZONE_DECLARE(content_filter_zone, "content_filter",
+    sizeof(struct content_filter), ZC_NONE);
 
 MBUFQ_HEAD(cfil_mqhead);
 
@@ -472,7 +466,7 @@ struct cfil_entry {
 
 
 #define CFI_ADD_TIME_LOG(cfil, t1, t0, op)                                                                                      \
-	        struct timeval _tdiff;                                                                                          \
+	        struct timeval64 _tdiff;                                                                                          \
 	        if ((cfil)->cfi_op_list_ctr < CFI_MAX_TIME_LOG_ENTRY) {                                                         \
 	                timersub(t1, t0, &_tdiff);                                                                              \
 	                (cfil)->cfi_op_time[(cfil)->cfi_op_list_ctr] = (uint32_t)(_tdiff.tv_sec * 1000 + _tdiff.tv_usec / 1000);\
@@ -505,6 +499,7 @@ struct cfil_info {
 	uint64_t                cfi_byte_outbound_count;
 
 	boolean_t               cfi_isSignatureLatest;                  /* Indicates if signature covers latest flow attributes */
+	u_int32_t               cfi_filter_control_unit;
 	u_int32_t               cfi_debug;
 	struct cfi_buf {
 		/*
@@ -533,6 +528,7 @@ struct cfil_info {
 	struct cfil_entry       cfi_entries[MAX_CONTENT_FILTER];
 	struct cfil_hash_entry *cfi_hash_entry;
 	SLIST_HEAD(, cfil_entry) cfi_ordered_entries;
+	os_refcnt_t             cfi_ref_count;
 } __attribute__((aligned(8)));
 
 #define CFIF_DROP               0x0001  /* drop action applied */
@@ -550,7 +546,10 @@ struct cfil_info {
 #define CFI_MASK_FLOWHASH       0x00000000FFFFFFFF      /* lower 32 bits */
 #define CFI_SHIFT_FLOWHASH      0
 
-#define CFI_ENTRY_KCUNIT(i, e) (((e) - &((i)->cfi_entries[0])) + 1)
+#define CFI_ENTRY_KCUNIT(i, e) ((uint32_t)(((e) - &((i)->cfi_entries[0])) + 1))
+
+static ZONE_DECLARE(cfil_info_zone, "cfil_info",
+    sizeof(struct cfil_info), ZC_NONE);
 
 TAILQ_HEAD(cfil_sock_head, cfil_info) cfil_sock_head;
 TAILQ_HEAD(cfil_sock_head_stats, cfil_info) cfil_sock_head_stats;
@@ -584,6 +583,7 @@ LIST_HEAD(cfilhashhead, cfil_hash_entry);
 
 #define UNCONNECTED(inp) (inp && (((inp->inp_vflag & INP_IPV4) && (inp->inp_faddr.s_addr == INADDR_ANY)) || \
 	                                                          ((inp->inp_vflag & INP_IPV6) && IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_faddr))))
+#define IS_INP_V6(inp) (inp && (inp->inp_vflag & INP_IPV6))
 #define IS_ENTRY_ATTACHED(cfil_info, kcunit) (cfil_info != NULL && (kcunit <= MAX_CONTENT_FILTER) && \
 	                                                                                  cfil_info->cfi_entries[kcunit - 1].cfe_filter != NULL)
 #define IS_DNS(local, remote) (check_port(local, 53) || check_port(remote, 53) || check_port(local, 5353) || check_port(remote, 5353))
@@ -591,6 +591,25 @@ LIST_HEAD(cfilhashhead, cfil_hash_entry);
 #define NULLADDRESS(addr) ((addr.sa.sa_len == 0) || \
 	                   (addr.sa.sa_family == AF_INET && addr.sin.sin_addr.s_addr == 0) || \
 	                   (addr.sa.sa_family == AF_INET6 && IN6_IS_ADDR_UNSPECIFIED(&addr.sin6.sin6_addr)))
+#define LOCAL_ADDRESS_NEEDS_UPDATE(entry) \
+	           ((entry->cfentry_family == AF_INET && entry->cfentry_laddr.addr46.ia46_addr4.s_addr == 0) || \
+	            entry->cfentry_family == AF_INET6 && IN6_IS_ADDR_UNSPECIFIED(&entry->cfentry_laddr.addr6))
+#define LOCAL_PORT_NEEDS_UPDATE(entry, so) (entry->cfentry_lport == 0 && IS_UDP(so))
+
+#define SKIP_FILTER_FOR_TCP_SOCKET(so) \
+    (so == NULL || so->so_proto == NULL || so->so_proto->pr_domain == NULL || \
+     (so->so_proto->pr_domain->dom_family != PF_INET && so->so_proto->pr_domain->dom_family != PF_INET6) || \
+      so->so_proto->pr_type != SOCK_STREAM || \
+      so->so_proto->pr_protocol != IPPROTO_TCP || \
+      (so->so_flags & SOF_MP_SUBFLOW) != 0 || \
+      (so->so_flags1 & SOF1_CONTENT_FILTER_SKIP) != 0)
+
+os_refgrp_decl(static, cfil_refgrp, "CFILRefGroup", NULL);
+
+#define CFIL_INFO_FREE(cfil_info) \
+    if (cfil_info && (os_ref_release(&cfil_info->cfi_ref_count) == 0)) { \
+	cfil_info_free(cfil_info); \
+    }
 
 /*
  * Periodic Statistics Report:
@@ -653,6 +672,9 @@ struct cfil_hash_entry {
 		struct in_addr_4in6 addr46;
 		struct in6_addr addr6;
 	} cfentry_laddr;
+	uint8_t                        cfentry_laddr_updated: 1;
+	uint8_t                        cfentry_lport_updated: 1;
+	uint8_t                        cfentry_reserved: 6;
 };
 
 /*
@@ -677,17 +699,15 @@ struct cfil_db {
 struct cfil_tag {
 	union sockaddr_in_4_6 cfil_faddr;
 	uint32_t cfil_so_state_change_cnt;
-	short cfil_so_options;
+	uint32_t cfil_so_options;
 	int cfil_inp_flags;
 };
 
-#define    CFIL_HASH_ENTRY_ZONE_NAME    "cfil_entry_hash"
-#define    CFIL_HASH_ENTRY_ZONE_MAX     1024
-static struct zone *cfil_hash_entry_zone = NULL;
+static ZONE_DECLARE(cfil_hash_entry_zone, "cfil_entry_hash",
+    sizeof(struct cfil_hash_entry), ZC_NONE);
 
-#define    CFIL_DB_ZONE_NAME       "cfil_db"
-#define    CFIL_DB_ZONE_MAX        1024
-static struct zone *cfil_db_zone = NULL;
+static ZONE_DECLARE(cfil_db_zone, "cfil_db",
+    sizeof(struct cfil_db), ZC_NONE);
 
 /*
  * Statistics
@@ -761,7 +781,7 @@ static int cfil_dispatch_closed_event(struct socket *, struct cfil_info *, int);
 static int cfil_data_common(struct socket *, struct cfil_info *, int, struct sockaddr *,
     struct mbuf *, struct mbuf *, uint32_t);
 static int cfil_data_filter(struct socket *, struct cfil_info *, uint32_t, int,
-    struct mbuf *, uint64_t);
+    struct mbuf *, uint32_t);
 static void fill_ip_sockaddr_4_6(union sockaddr_in_4_6 *,
     struct in_addr, u_int16_t);
 static void fill_ip6_sockaddr_4_6(union sockaddr_in_4_6 *,
@@ -793,14 +813,16 @@ static unsigned int cfil_data_length(struct mbuf *, int *, int *);
 static errno_t cfil_db_init(struct socket *);
 static void cfil_db_free(struct socket *so);
 struct cfil_hash_entry *cfil_db_lookup_entry(struct cfil_db *, struct sockaddr *, struct sockaddr *, boolean_t);
+struct cfil_hash_entry *cfil_db_lookup_entry_internal(struct cfil_db *, struct sockaddr *, struct sockaddr *, boolean_t, boolean_t);
 struct cfil_hash_entry *cfil_db_lookup_entry_with_sockid(struct cfil_db *, u_int64_t);
 struct cfil_hash_entry *cfil_db_add_entry(struct cfil_db *, struct sockaddr *, struct sockaddr *);
-void cfil_db_update_entry_local(struct cfil_db *, struct cfil_hash_entry *, struct sockaddr *);
+void cfil_db_update_entry_local(struct cfil_db *, struct cfil_hash_entry *, struct sockaddr *, struct mbuf *);
 void cfil_db_delete_entry(struct cfil_db *, struct cfil_hash_entry *);
-struct cfil_hash_entry *cfil_sock_udp_get_flow(struct socket *, uint32_t, bool, struct sockaddr *, struct sockaddr *, int);
+struct cfil_hash_entry *cfil_sock_udp_get_flow(struct socket *, uint32_t, bool, struct sockaddr *, struct sockaddr *, struct mbuf *, int);
 struct cfil_info *cfil_db_get_cfil_info(struct cfil_db *, cfil_sock_id_t);
 static errno_t cfil_sock_udp_handle_data(bool, struct socket *, struct sockaddr *, struct sockaddr *,
     struct mbuf *, struct mbuf *, uint32_t);
+static int cfil_sock_udp_get_address_from_control(sa_family_t, struct mbuf *, uint8_t **);
 static int32_t cfil_sock_udp_data_pending(struct sockbuf *, bool);
 static void cfil_sock_udp_is_closed(struct socket *);
 static int cfil_sock_udp_notify_shutdown(struct socket *, int, int, int);
@@ -817,14 +839,14 @@ static void cfil_get_flow_address(struct cfil_hash_entry *, struct inpcb *,
 static void cfil_info_log(int, struct cfil_info *, const char *);
 void cfil_filter_show(u_int32_t);
 void cfil_info_show(void);
-bool cfil_info_idle_timed_out(struct cfil_info *, int, u_int32_t);
+bool cfil_info_idle_timed_out(struct cfil_info *, int, u_int64_t);
 bool cfil_info_action_timed_out(struct cfil_info *, int);
 bool cfil_info_buffer_threshold_exceeded(struct cfil_info *);
 struct m_tag *cfil_dgram_save_socket_state(struct cfil_info *, struct mbuf *);
 boolean_t cfil_dgram_peek_socket_state(struct mbuf *m, int *inp_flags);
 static void cfil_udp_gc_thread_func(void *, wait_result_t);
 static void cfil_info_udp_expire(void *, wait_result_t);
-static bool fill_cfil_hash_entry_from_address(struct cfil_hash_entry *, bool, struct sockaddr *);
+static bool fill_cfil_hash_entry_from_address(struct cfil_hash_entry *, bool, struct sockaddr *, bool);
 static void cfil_sock_received_verdict(struct socket *so);
 static void cfil_fill_event_msg_addresses(struct cfil_hash_entry *, struct inpcb *,
     union sockaddr_in_4_6 *, union sockaddr_in_4_6 *,
@@ -1925,6 +1947,14 @@ cfil_ctl_send(kern_ctl_ref kctlref, u_int32_t kcunit, void *unitinfo, mbuf_t m,
 	cfil_info = so->so_cfil_db != NULL ?
 	    cfil_db_get_cfil_info(so->so_cfil_db, msghdr->cfm_sock_id) : so->so_cfil;
 
+	// We should not obtain global lock here in order to avoid deadlock down the path.
+	// But we attempt to retain a valid cfil_info to prevent any deallocation until
+	// we are done.  Abort retain if cfil_info has already entered the free code path.
+	if (cfil_info && os_ref_retain_try(&cfil_info->cfi_ref_count) == false) {
+		socket_unlock(so, 1);
+		goto done;
+	}
+
 	if (cfil_info == NULL) {
 		CFIL_LOG(LOG_NOTICE, "so %llx <id %llu> not attached",
 		    (uint64_t)VM_KERNEL_ADDRPERM(so), msghdr->cfm_sock_id);
@@ -2045,6 +2075,7 @@ cfil_ctl_send(kern_ctl_ref kctlref, u_int32_t kcunit, void *unitinfo, mbuf_t m,
 		break;
 	}
 unlock:
+	CFIL_INFO_FREE(cfil_info)
 	socket_unlock(so, 1);
 done:
 	mbuf_freem(m);
@@ -2364,10 +2395,6 @@ cfil_init(void)
 {
 	struct kern_ctl_reg kern_ctl;
 	errno_t error = 0;
-	vm_size_t content_filter_size = 0;      /* size of content_filter */
-	vm_size_t cfil_info_size = 0;   /* size of cfil_info */
-	vm_size_t cfil_hash_entry_size = 0; /* size of cfil_hash_entry */
-	vm_size_t cfil_db_size = 0; /* size of cfil_db */
 	unsigned int mbuf_limit = 0;
 
 	CFIL_LOG(LOG_NOTICE, "");
@@ -2405,64 +2432,6 @@ cfil_init(void)
 	    sizeof(uint32_t)));
 	VERIFY(IS_P2ALIGNED(&cfil_stats.cfs_inject_q_out_passed,
 	    sizeof(uint32_t)));
-
-	/*
-	 * Zone for content filters kernel control sockets
-	 */
-	content_filter_size = sizeof(struct content_filter);
-	content_filter_zone = zinit(content_filter_size,
-	    CONTENT_FILTER_ZONE_MAX * content_filter_size,
-	    0,
-	    CONTENT_FILTER_ZONE_NAME);
-	if (content_filter_zone == NULL) {
-		panic("%s: zinit(%s) failed", __func__,
-		    CONTENT_FILTER_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(content_filter_zone, Z_CALLERACCT, FALSE);
-	zone_change(content_filter_zone, Z_EXPAND, TRUE);
-
-	/*
-	 * Zone for per socket content filters
-	 */
-	cfil_info_size = sizeof(struct cfil_info);
-	cfil_info_zone = zinit(cfil_info_size,
-	    CFIL_INFO_ZONE_MAX * cfil_info_size,
-	    0,
-	    CFIL_INFO_ZONE_NAME);
-	if (cfil_info_zone == NULL) {
-		panic("%s: zinit(%s) failed", __func__, CFIL_INFO_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(cfil_info_zone, Z_CALLERACCT, FALSE);
-	zone_change(cfil_info_zone, Z_EXPAND, TRUE);
-
-	/*
-	 * Zone for content filters cfil hash entries and db
-	 */
-	cfil_hash_entry_size = sizeof(struct cfil_hash_entry);
-	cfil_hash_entry_zone = zinit(cfil_hash_entry_size,
-	    CFIL_HASH_ENTRY_ZONE_MAX * cfil_hash_entry_size,
-	    0,
-	    CFIL_HASH_ENTRY_ZONE_NAME);
-	if (cfil_hash_entry_zone == NULL) {
-		panic("%s: zinit(%s) failed", __func__, CFIL_HASH_ENTRY_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(cfil_hash_entry_zone, Z_CALLERACCT, FALSE);
-	zone_change(cfil_hash_entry_zone, Z_EXPAND, TRUE);
-
-	cfil_db_size = sizeof(struct cfil_db);
-	cfil_db_zone = zinit(cfil_db_size,
-	    CFIL_DB_ZONE_MAX * cfil_db_size,
-	    0,
-	    CFIL_DB_ZONE_NAME);
-	if (cfil_db_zone == NULL) {
-		panic("%s: zinit(%s) failed", __func__, CFIL_DB_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(cfil_db_zone, Z_CALLERACCT, FALSE);
-	zone_change(cfil_db_zone, Z_EXPAND, TRUE);
 
 	/*
 	 * Allocate locks
@@ -2551,6 +2520,7 @@ cfil_info_alloc(struct socket *so, struct cfil_hash_entry *hash_entry)
 		goto done;
 	}
 	bzero(cfil_info, sizeof(struct cfil_info));
+	os_ref_init(&cfil_info->cfi_ref_count, &cfil_refgrp);
 
 	cfil_queue_init(&cfil_info->cfi_snd.cfi_inject_q);
 	cfil_queue_init(&cfil_info->cfi_rcv.cfi_inject_q);
@@ -2833,13 +2803,17 @@ cfil_sock_attach(struct socket *so, struct sockaddr *local, struct sockaddr *rem
 
 	socket_lock_assert_owned(so);
 
+	if (so->so_flags1 & SOF1_FLOW_DIVERT_SKIP) {
+		/*
+		 * This socket has already been evaluated (and ultimately skipped) by
+		 * flow divert, so it has also already been through content filter if there
+		 * is one.
+		 */
+		goto done;
+	}
+
 	/* Limit ourselves to TCP that are not MPTCP subflows */
-	if ((so->so_proto->pr_domain->dom_family != PF_INET &&
-	    so->so_proto->pr_domain->dom_family != PF_INET6) ||
-	    so->so_proto->pr_type != SOCK_STREAM ||
-	    so->so_proto->pr_protocol != IPPROTO_TCP ||
-	    (so->so_flags & SOF_MP_SUBFLOW) != 0 ||
-	    (so->so_flags1 & SOF1_CONTENT_FILTER_SKIP) != 0) {
+	if (SKIP_FILTER_FOR_TCP_SOCKET(so)) {
 		goto done;
 	}
 
@@ -2870,6 +2844,7 @@ cfil_sock_attach(struct socket *so, struct sockaddr *local, struct sockaddr *rem
 			goto done;
 		}
 		so->so_cfil->cfi_dir = dir;
+		so->so_cfil->cfi_filter_control_unit = filter_control_unit;
 	}
 	if (cfil_info_attach_unit(so, filter_control_unit, so->so_cfil) == 0) {
 		CFIL_LOG(LOG_ERR, "cfil_info_attach_unit(%u) failed",
@@ -2929,7 +2904,7 @@ cfil_sock_detach(struct socket *so)
 			VERIFY(so->so_usecount > 0);
 			so->so_usecount--;
 		}
-		cfil_info_free(so->so_cfil);
+		CFIL_INFO_FREE(so->so_cfil);
 		so->so_cfil = NULL;
 		OSIncrementAtomic(&cfil_stats.cfs_sock_detached);
 	}
@@ -3105,8 +3080,8 @@ cfil_dispatch_closed_event_sign(cfil_crypto_state_t crypto_state,
 		hash_entry_ptr = cfil_info->cfi_hash_entry;
 	} else if (cfil_info->cfi_so_attach_faddr.sa.sa_len > 0 ||
 	    cfil_info->cfi_so_attach_laddr.sa.sa_len > 0) {
-		fill_cfil_hash_entry_from_address(&hash_entry, TRUE, &cfil_info->cfi_so_attach_laddr.sa);
-		fill_cfil_hash_entry_from_address(&hash_entry, FALSE, &cfil_info->cfi_so_attach_faddr.sa);
+		fill_cfil_hash_entry_from_address(&hash_entry, TRUE, &cfil_info->cfi_so_attach_laddr.sa, FALSE);
+		fill_cfil_hash_entry_from_address(&hash_entry, FALSE, &cfil_info->cfi_so_attach_faddr.sa, FALSE);
 		hash_entry_ptr = &hash_entry;
 	}
 	if (hash_entry_ptr != NULL) {
@@ -3216,8 +3191,8 @@ cfil_dispatch_attach_event(struct socket *so, struct cfil_info *cfil_info,
 		hash_entry_ptr = cfil_info->cfi_hash_entry;
 	} else if (cfil_info->cfi_so_attach_faddr.sa.sa_len > 0 ||
 	    cfil_info->cfi_so_attach_laddr.sa.sa_len > 0) {
-		fill_cfil_hash_entry_from_address(&hash_entry, TRUE, &cfil_info->cfi_so_attach_laddr.sa);
-		fill_cfil_hash_entry_from_address(&hash_entry, FALSE, &cfil_info->cfi_so_attach_faddr.sa);
+		fill_cfil_hash_entry_from_address(&hash_entry, TRUE, &cfil_info->cfi_so_attach_laddr.sa, FALSE);
+		fill_cfil_hash_entry_from_address(&hash_entry, FALSE, &cfil_info->cfi_so_attach_faddr.sa, FALSE);
 		hash_entry_ptr = &hash_entry;
 	}
 	if (hash_entry_ptr != NULL) {
@@ -3666,7 +3641,7 @@ cfil_dispatch_data_event(struct socket *so, struct cfil_info *cfil_info, uint32_
 	msg->m_next = copy;
 	data_req = (struct cfil_msg_data_event *)mbuf_data(msg);
 	bzero(data_req, hdrsize);
-	data_req->cfd_msghdr.cfm_len = hdrsize + copylen;
+	data_req->cfd_msghdr.cfm_len = (uint32_t)hdrsize + copylen;
 	data_req->cfd_msghdr.cfm_version = 1;
 	data_req->cfd_msghdr.cfm_type = CFM_TYPE_EVENT;
 	data_req->cfd_msghdr.cfm_op =
@@ -3828,8 +3803,7 @@ cfil_data_service_ctl_q(struct socket *so, struct cfil_info *cfil_info, uint32_t
 			/*
 			 * The first mbuf can partially pass
 			 */
-			copylen = entrybuf->cfe_pass_offset -
-			    entrybuf->cfe_ctl_q.q_start;
+			copylen = (unsigned int)(entrybuf->cfe_pass_offset - entrybuf->cfe_ctl_q.q_start);
 		}
 		VERIFY(copylen <= datalen);
 
@@ -3904,7 +3878,7 @@ cfil_data_service_ctl_q(struct socket *so, struct cfil_info *cfil_info, uint32_t
 		 * The data in the first mbuf may have been
 		 * partially peeked at
 		 */
-		copyoffset = entrybuf->cfe_peeked - currentoffset;
+		copyoffset = (unsigned int)(entrybuf->cfe_peeked - currentoffset);
 		VERIFY(copyoffset < datalen);
 		copylen = datalen - copyoffset;
 		VERIFY(copylen <= datalen);
@@ -3913,8 +3887,8 @@ cfil_data_service_ctl_q(struct socket *so, struct cfil_info *cfil_info, uint32_t
 		 */
 		if (currentoffset + copyoffset + copylen >
 		    entrybuf->cfe_peek_offset) {
-			copylen = entrybuf->cfe_peek_offset -
-			    (currentoffset + copyoffset);
+			copylen = (unsigned int)(entrybuf->cfe_peek_offset -
+			    (currentoffset + copyoffset));
 		}
 
 #if DATA_DEBUG
@@ -4017,7 +3991,7 @@ done:
  */
 int
 cfil_data_filter(struct socket *so, struct cfil_info *cfil_info, uint32_t kcunit, int outgoing,
-    struct mbuf *data, uint64_t datalen)
+    struct mbuf *data, uint32_t datalen)
 {
 	errno_t error = 0;
 	struct cfil_entry *entry;
@@ -4438,6 +4412,7 @@ cfil_set_socket_pass_offset(struct socket *so, struct cfil_info *cfil_info, int 
 	struct cfe_buf *entrybuf;
 	uint32_t kcunit;
 	uint64_t pass_offset = 0;
+	boolean_t first = true;
 
 	if (cfil_info == NULL) {
 		return 0;
@@ -4473,9 +4448,11 @@ cfil_set_socket_pass_offset(struct socket *so, struct cfil_info *cfil_info, int 
 				entrybuf = &entry->cfe_rcv;
 			}
 
-			if (pass_offset == 0 ||
+			// Keep track of the smallest pass_offset among filters.
+			if (first == true ||
 			    entrybuf->cfe_pass_offset < pass_offset) {
 				pass_offset = entrybuf->cfe_pass_offset;
+				first = false;
 			}
 		}
 		cfi_buf->cfi_pass_offset = pass_offset;
@@ -4893,13 +4870,27 @@ cfil_sock_data_out(struct socket *so, struct sockaddr  *to,
     struct mbuf *data, struct mbuf *control, uint32_t flags)
 {
 	int error = 0;
+	int new_filter_control_unit = 0;
 
 	if (IS_IP_DGRAM(so)) {
 		return cfil_sock_udp_handle_data(TRUE, so, NULL, to, data, control, flags);
 	}
 
 	if ((so->so_flags & SOF_CONTENT_FILTER) == 0 || so->so_cfil == NULL) {
+		/* Drop pre-existing TCP sockets if filter is enabled now */
+		if (cfil_active_count > 0 && !SKIP_FILTER_FOR_TCP_SOCKET(so)) {
+			new_filter_control_unit = necp_socket_get_content_filter_control_unit(so);
+			if (new_filter_control_unit > 0) {
+				return EPIPE;
+			}
+		}
 		return 0;
+	}
+
+	/* Drop pre-existing TCP sockets when filter state changed */
+	new_filter_control_unit = necp_socket_get_content_filter_control_unit(so);
+	if (new_filter_control_unit > 0 && new_filter_control_unit != so->so_cfil->cfi_filter_control_unit && !SKIP_FILTER_FOR_TCP_SOCKET(so)) {
+		return EPIPE;
 	}
 
 	/*
@@ -4948,13 +4939,27 @@ cfil_sock_data_in(struct socket *so, struct sockaddr *from,
     struct mbuf *data, struct mbuf *control, uint32_t flags)
 {
 	int error = 0;
+	int new_filter_control_unit = 0;
 
 	if (IS_IP_DGRAM(so)) {
 		return cfil_sock_udp_handle_data(FALSE, so, NULL, from, data, control, flags);
 	}
 
 	if ((so->so_flags & SOF_CONTENT_FILTER) == 0 || so->so_cfil == NULL) {
+		/* Drop pre-existing TCP sockets if filter is enabled now */
+		if (cfil_active_count > 0 && !SKIP_FILTER_FOR_TCP_SOCKET(so)) {
+			new_filter_control_unit = necp_socket_get_content_filter_control_unit(so);
+			if (new_filter_control_unit > 0) {
+				return EPIPE;
+			}
+		}
 		return 0;
+	}
+
+	/* Drop pre-existing TCP sockets when filter state changed */
+	new_filter_control_unit = necp_socket_get_content_filter_control_unit(so);
+	if (new_filter_control_unit > 0 && new_filter_control_unit != so->so_cfil->cfi_filter_control_unit && !SKIP_FILTER_FOR_TCP_SOCKET(so)) {
+		return EPIPE;
 	}
 
 	/*
@@ -5638,11 +5643,12 @@ cfil_hash_entry_log(int level, struct socket *so, struct cfil_hash_entry *entry,
 		return;
 	}
 
-	CFIL_LOG(level, "<%s>: <%s(%d) so %llx, entry %p, sockID %llu> lport %d fport %d laddr %s faddr %s",
+	CFIL_LOG(level, "<%s>: <%s(%d) so %llx, entry %p, sockID %llu> lport %d fport %d laddr %s faddr %s hash %X",
 	    msg,
 	    IS_UDP(so) ? "UDP" : "proto", GET_SO_PROTO(so),
 	    (uint64_t)VM_KERNEL_ADDRPERM(so), entry, sockId,
-	    ntohs(entry->cfentry_lport), ntohs(entry->cfentry_fport), local, remote);
+	    ntohs(entry->cfentry_lport), ntohs(entry->cfentry_fport), local, remote,
+	    entry->cfentry_flowhash);
 }
 
 static void
@@ -5664,15 +5670,12 @@ cfil_inp_log(int level, struct socket *so, const char* msg)
 
 	local[0] = remote[0] = 0x0;
 
-#if INET6
 	if (inp->inp_vflag & INP_IPV6) {
 		addr = &inp->in6p_laddr.s6_addr32;
 		inet_ntop(AF_INET6, addr, local, sizeof(local));
 		addr = &inp->in6p_faddr.s6_addr32;
 		inet_ntop(AF_INET6, addr, remote, sizeof(local));
-	} else
-#endif /* INET6 */
-	{
+	} else {
 		addr = &inp->inp_laddr.s_addr;
 		inet_ntop(AF_INET, addr, local, sizeof(local));
 		addr = &inp->inp_faddr.s_addr;
@@ -5762,7 +5765,7 @@ cfil_db_free(struct socket *so)
 #if LIFECYCLE_DEBUG
 				cfil_info_log(LOG_ERR, entry->cfentry_cfil, "CFIL: LIFECYCLE: DB FREE CLEAN UP");
 #endif
-				cfil_info_free(entry->cfentry_cfil);
+				CFIL_INFO_FREE(entry->cfentry_cfil);
 				OSIncrementAtomic(&cfil_stats.cfs_sock_detached);
 				entry->cfentry_cfil = NULL;
 			}
@@ -5784,13 +5787,13 @@ cfil_db_free(struct socket *so)
 	CFIL_LOG(LOG_ERR, "CFIL: LIFECYCLE: so usecount %d", so->so_usecount);
 #endif
 
-	FREE(db->cfdb_hashbase, M_CFIL);
+	hashdestroy(db->cfdb_hashbase, M_CFIL, db->cfdb_hashmask);
 	zfree(cfil_db_zone, db);
 	so->so_cfil_db = NULL;
 }
 
 static bool
-fill_cfil_hash_entry_from_address(struct cfil_hash_entry *entry, bool isLocal, struct sockaddr *addr)
+fill_cfil_hash_entry_from_address(struct cfil_hash_entry *entry, bool isLocal, struct sockaddr *addr, bool islocalUpdate)
 {
 	struct sockaddr_in *sin = NULL;
 	struct sockaddr_in6 *sin6 = NULL;
@@ -5806,11 +5809,25 @@ fill_cfil_hash_entry_from_address(struct cfil_hash_entry *entry, bool isLocal, s
 			return FALSE;
 		}
 		if (isLocal == TRUE) {
-			entry->cfentry_lport = sin->sin_port;
-			entry->cfentry_laddr.addr46.ia46_addr4.s_addr = sin->sin_addr.s_addr;
+			if (sin->sin_port) {
+				entry->cfentry_lport = sin->sin_port;
+				if (islocalUpdate) {
+					entry->cfentry_lport_updated = TRUE;
+				}
+			}
+			if (sin->sin_addr.s_addr) {
+				entry->cfentry_laddr.addr46.ia46_addr4.s_addr = sin->sin_addr.s_addr;
+				if (islocalUpdate) {
+					entry->cfentry_laddr_updated = TRUE;
+				}
+			}
 		} else {
-			entry->cfentry_fport = sin->sin_port;
-			entry->cfentry_faddr.addr46.ia46_addr4.s_addr = sin->sin_addr.s_addr;
+			if (sin->sin_port) {
+				entry->cfentry_fport = sin->sin_port;
+			}
+			if (sin->sin_addr.s_addr) {
+				entry->cfentry_faddr.addr46.ia46_addr4.s_addr = sin->sin_addr.s_addr;
+			}
 		}
 		entry->cfentry_family = AF_INET;
 		return TRUE;
@@ -5820,11 +5837,25 @@ fill_cfil_hash_entry_from_address(struct cfil_hash_entry *entry, bool isLocal, s
 			return FALSE;
 		}
 		if (isLocal == TRUE) {
-			entry->cfentry_lport = sin6->sin6_port;
-			entry->cfentry_laddr.addr6 = sin6->sin6_addr;
+			if (sin6->sin6_port) {
+				entry->cfentry_lport = sin6->sin6_port;
+				if (islocalUpdate) {
+					entry->cfentry_lport_updated = TRUE;
+				}
+			}
+			if (!IN6_IS_ADDR_UNSPECIFIED(&sin6->sin6_addr)) {
+				entry->cfentry_laddr.addr6 = sin6->sin6_addr;
+				if (islocalUpdate) {
+					entry->cfentry_laddr_updated = TRUE;
+				}
+			}
 		} else {
-			entry->cfentry_fport = sin6->sin6_port;
-			entry->cfentry_faddr.addr6 = sin6->sin6_addr;
+			if (sin6->sin6_port) {
+				entry->cfentry_fport = sin6->sin6_port;
+			}
+			if (!IN6_IS_ADDR_UNSPECIFIED(&sin6->sin6_addr)) {
+				entry->cfentry_faddr.addr6 = sin6->sin6_addr;
+			}
 		}
 		entry->cfentry_family = AF_INET6;
 		return TRUE;
@@ -5834,7 +5865,7 @@ fill_cfil_hash_entry_from_address(struct cfil_hash_entry *entry, bool isLocal, s
 }
 
 static bool
-fill_cfil_hash_entry_from_inp(struct cfil_hash_entry *entry, bool isLocal, struct inpcb *inp)
+fill_cfil_hash_entry_from_inp(struct cfil_hash_entry *entry, bool isLocal, struct inpcb *inp, bool islocalUpdate)
 {
 	if (entry == NULL || inp == NULL) {
 		return FALSE;
@@ -5842,21 +5873,49 @@ fill_cfil_hash_entry_from_inp(struct cfil_hash_entry *entry, bool isLocal, struc
 
 	if (inp->inp_vflag & INP_IPV6) {
 		if (isLocal == TRUE) {
-			entry->cfentry_lport = inp->inp_lport;
-			entry->cfentry_laddr.addr6 = inp->in6p_laddr;
+			if (inp->inp_lport) {
+				entry->cfentry_lport = inp->inp_lport;
+				if (islocalUpdate) {
+					entry->cfentry_lport_updated = TRUE;
+				}
+			}
+			if (!IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_laddr)) {
+				entry->cfentry_laddr.addr6 = inp->in6p_laddr;
+				if (islocalUpdate) {
+					entry->cfentry_laddr_updated = TRUE;
+				}
+			}
 		} else {
-			entry->cfentry_fport = inp->inp_fport;
-			entry->cfentry_faddr.addr6 = inp->in6p_faddr;
+			if (inp->inp_fport) {
+				entry->cfentry_fport = inp->inp_fport;
+			}
+			if (!IN6_IS_ADDR_UNSPECIFIED(&inp->in6p_faddr)) {
+				entry->cfentry_faddr.addr6 = inp->in6p_faddr;
+			}
 		}
 		entry->cfentry_family = AF_INET6;
 		return TRUE;
 	} else if (inp->inp_vflag & INP_IPV4) {
 		if (isLocal == TRUE) {
-			entry->cfentry_lport = inp->inp_lport;
-			entry->cfentry_laddr.addr46.ia46_addr4.s_addr = inp->inp_laddr.s_addr;
+			if (inp->inp_lport) {
+				entry->cfentry_lport = inp->inp_lport;
+				if (islocalUpdate) {
+					entry->cfentry_lport_updated = TRUE;
+				}
+			}
+			if (inp->inp_laddr.s_addr) {
+				entry->cfentry_laddr.addr46.ia46_addr4.s_addr = inp->inp_laddr.s_addr;
+				if (islocalUpdate) {
+					entry->cfentry_laddr_updated = TRUE;
+				}
+			}
 		} else {
-			entry->cfentry_fport = inp->inp_fport;
-			entry->cfentry_faddr.addr46.ia46_addr4.s_addr = inp->inp_faddr.s_addr;
+			if (inp->inp_fport) {
+				entry->cfentry_fport = inp->inp_fport;
+			}
+			if (inp->inp_faddr.s_addr) {
+				entry->cfentry_faddr.addr46.ia46_addr4.s_addr = inp->inp_faddr.s_addr;
+			}
 		}
 		entry->cfentry_family = AF_INET;
 		return TRUE;
@@ -5929,7 +5988,7 @@ cfil_db_lookup_entry_with_sockid(struct cfil_db *db, u_int64_t sock_id)
 }
 
 struct cfil_hash_entry *
-cfil_db_lookup_entry(struct cfil_db *db, struct sockaddr *local, struct sockaddr *remote, boolean_t remoteOnly)
+cfil_db_lookup_entry_internal(struct cfil_db *db, struct sockaddr *local, struct sockaddr *remote, boolean_t remoteOnly, boolean_t withLocalPort)
 {
 	struct cfil_hash_entry matchentry = { };
 	struct cfil_hash_entry *nextentry = NULL;
@@ -5945,54 +6004,45 @@ cfil_db_lookup_entry(struct cfil_db *db, struct sockaddr *local, struct sockaddr
 		goto done;
 	}
 
-	if (remoteOnly == false) {
-		if (local != NULL) {
-			fill_cfil_hash_entry_from_address(&matchentry, TRUE, local);
-		} else {
-			fill_cfil_hash_entry_from_inp(&matchentry, TRUE, inp);
-		}
+	if (local != NULL) {
+		fill_cfil_hash_entry_from_address(&matchentry, TRUE, local, FALSE);
+	} else {
+		fill_cfil_hash_entry_from_inp(&matchentry, TRUE, inp, FALSE);
 	}
 	if (remote != NULL) {
-		fill_cfil_hash_entry_from_address(&matchentry, FALSE, remote);
+		fill_cfil_hash_entry_from_address(&matchentry, FALSE, remote, FALSE);
 	} else {
-		fill_cfil_hash_entry_from_inp(&matchentry, FALSE, inp);
+		fill_cfil_hash_entry_from_inp(&matchentry, FALSE, inp, FALSE);
 	}
 
-#if INET6
 	if (inp->inp_vflag & INP_IPV6) {
 		hashkey_faddr = matchentry.cfentry_faddr.addr6.s6_addr32[3];
 		hashkey_laddr = (remoteOnly == false) ? matchentry.cfentry_laddr.addr6.s6_addr32[3] : 0;
-	} else
-#endif /* INET6 */
-	{
+	} else {
 		hashkey_faddr = matchentry.cfentry_faddr.addr46.ia46_addr4.s_addr;
 		hashkey_laddr = (remoteOnly == false) ? matchentry.cfentry_laddr.addr46.ia46_addr4.s_addr : 0;
 	}
 
 	hashkey_fport = matchentry.cfentry_fport;
-	hashkey_lport = (remoteOnly == false) ? matchentry.cfentry_lport : 0;
+	hashkey_lport = (remoteOnly == false || withLocalPort == true) ? matchentry.cfentry_lport : 0;
 
 	inp_hash_element = CFIL_HASH(hashkey_laddr, hashkey_faddr, hashkey_lport, hashkey_fport);
 	inp_hash_element &= db->cfdb_hashmask;
-
 	cfilhash = &db->cfdb_hashbase[inp_hash_element];
 
 	LIST_FOREACH(nextentry, cfilhash, cfentry_link) {
-#if INET6
 		if ((inp->inp_vflag & INP_IPV6) &&
-		    (remoteOnly || nextentry->cfentry_lport == matchentry.cfentry_lport) &&
+		    (remoteOnly || nextentry->cfentry_lport_updated || nextentry->cfentry_lport == matchentry.cfentry_lport) &&
 		    nextentry->cfentry_fport == matchentry.cfentry_fport &&
-		    (remoteOnly || IN6_ARE_ADDR_EQUAL(&nextentry->cfentry_laddr.addr6, &matchentry.cfentry_laddr.addr6)) &&
+		    (remoteOnly || nextentry->cfentry_laddr_updated || IN6_ARE_ADDR_EQUAL(&nextentry->cfentry_laddr.addr6, &matchentry.cfentry_laddr.addr6)) &&
 		    IN6_ARE_ADDR_EQUAL(&nextentry->cfentry_faddr.addr6, &matchentry.cfentry_faddr.addr6)) {
 #if DATA_DEBUG
 			cfil_hash_entry_log(LOG_DEBUG, db->cfdb_so, &matchentry, 0, "CFIL LOOKUP ENTRY: UDP V6 found entry");
 #endif
 			return nextentry;
-		} else
-#endif /* INET6 */
-		if ((remoteOnly || nextentry->cfentry_lport == matchentry.cfentry_lport) &&
+		} else if ((remoteOnly || nextentry->cfentry_lport_updated || nextentry->cfentry_lport == matchentry.cfentry_lport) &&
 		    nextentry->cfentry_fport == matchentry.cfentry_fport &&
-		    (remoteOnly || nextentry->cfentry_laddr.addr46.ia46_addr4.s_addr == matchentry.cfentry_laddr.addr46.ia46_addr4.s_addr) &&
+		    (remoteOnly || nextentry->cfentry_laddr_updated || nextentry->cfentry_laddr.addr46.ia46_addr4.s_addr == matchentry.cfentry_laddr.addr46.ia46_addr4.s_addr) &&
 		    nextentry->cfentry_faddr.addr46.ia46_addr4.s_addr == matchentry.cfentry_faddr.addr46.ia46_addr4.s_addr) {
 #if DATA_DEBUG
 			cfil_hash_entry_log(LOG_DEBUG, db->cfdb_so, &matchentry, 0, "CFIL LOOKUP ENTRY: UDP V4 found entry");
@@ -6006,6 +6056,39 @@ done:
 	cfil_hash_entry_log(LOG_DEBUG, db->cfdb_so, &matchentry, 0, "CFIL LOOKUP ENTRY: UDP no entry found");
 #endif
 	return NULL;
+}
+
+struct cfil_hash_entry *
+cfil_db_lookup_entry(struct cfil_db *db, struct sockaddr *local, struct sockaddr *remote, boolean_t remoteOnly)
+{
+	struct cfil_hash_entry *entry = cfil_db_lookup_entry_internal(db, local, remote, remoteOnly, false);
+	if (entry == NULL && remoteOnly == true) {
+		entry = cfil_db_lookup_entry_internal(db, local, remote, remoteOnly, true);
+	}
+	return entry;
+}
+
+cfil_sock_id_t
+cfil_sock_id_from_datagram_socket(struct socket *so, struct sockaddr *local, struct sockaddr *remote)
+{
+	struct cfil_hash_entry *hash_entry = NULL;
+
+	socket_lock_assert_owned(so);
+
+	if (so->so_cfil_db == NULL) {
+		return CFIL_SOCK_ID_NONE;
+	}
+
+	hash_entry = cfil_db_lookup_entry(so->so_cfil_db, local, remote, false);
+	if (hash_entry == NULL) {
+		// No match with both local and remote, try match with remote only
+		hash_entry = cfil_db_lookup_entry(so->so_cfil_db, local, remote, true);
+	}
+	if (hash_entry == NULL || hash_entry->cfentry_cfil == NULL) {
+		return CFIL_SOCK_ID_NONE;
+	}
+
+	return hash_entry->cfentry_cfil->cfi_sock_id;
 }
 
 void
@@ -6047,24 +6130,21 @@ cfil_db_add_entry(struct cfil_db *db, struct sockaddr *local, struct sockaddr *r
 	bzero(entry, sizeof(struct cfil_hash_entry));
 
 	if (local != NULL) {
-		fill_cfil_hash_entry_from_address(entry, TRUE, local);
+		fill_cfil_hash_entry_from_address(entry, TRUE, local, FALSE);
 	} else {
-		fill_cfil_hash_entry_from_inp(entry, TRUE, inp);
+		fill_cfil_hash_entry_from_inp(entry, TRUE, inp, FALSE);
 	}
 	if (remote != NULL) {
-		fill_cfil_hash_entry_from_address(entry, FALSE, remote);
+		fill_cfil_hash_entry_from_address(entry, FALSE, remote, FALSE);
 	} else {
-		fill_cfil_hash_entry_from_inp(entry, FALSE, inp);
+		fill_cfil_hash_entry_from_inp(entry, FALSE, inp, FALSE);
 	}
 	entry->cfentry_lastused = net_uptime();
 
-#if INET6
 	if (inp->inp_vflag & INP_IPV6) {
 		hashkey_faddr = entry->cfentry_faddr.addr6.s6_addr32[3];
 		hashkey_laddr = entry->cfentry_laddr.addr6.s6_addr32[3];
-	} else
-#endif /* INET6 */
-	{
+	} else {
 		hashkey_faddr = entry->cfentry_faddr.addr46.ia46_addr4.s_addr;
 		hashkey_laddr = entry->cfentry_laddr.addr46.ia46_addr4.s_addr;
 	}
@@ -6085,9 +6165,10 @@ done:
 }
 
 void
-cfil_db_update_entry_local(struct cfil_db *db, struct cfil_hash_entry *entry, struct sockaddr *local)
+cfil_db_update_entry_local(struct cfil_db *db, struct cfil_hash_entry *entry, struct sockaddr *local, struct mbuf *control)
 {
 	struct inpcb *inp = sotoinpcb(db->cfdb_so);
+	union sockaddr_in_4_6 address_buf = { };
 
 	CFIL_LOG(LOG_INFO, "");
 
@@ -6095,12 +6176,48 @@ cfil_db_update_entry_local(struct cfil_db *db, struct cfil_hash_entry *entry, st
 		return;
 	}
 
-	if (local != NULL) {
-		fill_cfil_hash_entry_from_address(entry, TRUE, local);
-	} else {
-		fill_cfil_hash_entry_from_inp(entry, TRUE, inp);
+	if (LOCAL_ADDRESS_NEEDS_UPDATE(entry)) {
+		// Flow does not have a local address yet.  Retrieve local address
+		// from control mbufs if present.
+		if (local == NULL && control != NULL) {
+			uint8_t *addr_ptr = NULL;
+			int size = cfil_sock_udp_get_address_from_control(entry->cfentry_family, control, &addr_ptr);
+
+			if (size && addr_ptr) {
+				switch (entry->cfentry_family) {
+				case AF_INET:
+					if (size == sizeof(struct in_addr)) {
+						address_buf.sin.sin_port = 0;
+						address_buf.sin.sin_family = AF_INET;
+						address_buf.sin.sin_len = sizeof(struct sockaddr_in);
+						(void) memcpy(&address_buf.sin.sin_addr, addr_ptr, sizeof(struct in_addr));
+						local = sintosa(&address_buf.sin);
+					}
+					break;
+				case AF_INET6:
+					if (size == sizeof(struct in6_addr)) {
+						address_buf.sin6.sin6_port = 0;
+						address_buf.sin6.sin6_family = AF_INET6;
+						address_buf.sin6.sin6_len = sizeof(struct sockaddr_in6);
+						(void) memcpy(&address_buf.sin6.sin6_addr, addr_ptr, sizeof(struct in6_addr));
+						local = sin6tosa(&address_buf.sin6);
+					}
+					break;
+				default:
+					break;
+				}
+			}
+		}
+		if (local != NULL) {
+			fill_cfil_hash_entry_from_address(entry, TRUE, local, TRUE);
+		} else {
+			fill_cfil_hash_entry_from_inp(entry, TRUE, inp, TRUE);
+		}
 	}
-	cfil_hash_entry_log(LOG_DEBUG, db->cfdb_so, entry, 0, "CFIL: cfil_db_add_entry: local updated");
+
+	if (LOCAL_PORT_NEEDS_UPDATE(entry, db->cfdb_so)) {
+		fill_cfil_hash_entry_from_inp(entry, TRUE, inp, TRUE);
+	}
 
 	return;
 }
@@ -6132,9 +6249,10 @@ cfil_db_get_cfil_info(struct cfil_db *db, cfil_sock_id_t id)
 }
 
 struct cfil_hash_entry *
-cfil_sock_udp_get_flow(struct socket *so, uint32_t filter_control_unit, bool outgoing, struct sockaddr *local, struct sockaddr *remote, int debug)
+cfil_sock_udp_get_flow(struct socket *so, uint32_t filter_control_unit, bool outgoing, struct sockaddr *local, struct sockaddr *remote, struct mbuf *control, int debug)
 {
 	struct cfil_hash_entry *hash_entry = NULL;
+	int new_filter_control_unit = 0;
 
 	errno_t error = 0;
 	socket_lock_assert_owned(so);
@@ -6151,13 +6269,19 @@ cfil_sock_udp_get_flow(struct socket *so, uint32_t filter_control_unit, bool out
 	if (hash_entry == NULL) {
 		// No match with both local and remote, try match with remote only
 		hash_entry = cfil_db_lookup_entry(so->so_cfil_db, local, remote, true);
-		if (hash_entry != NULL) {
-			// Simply update the local address into the original flow, keeping
-			// its sockId and flow_hash unchanged.
-			cfil_db_update_entry_local(so->so_cfil_db, hash_entry, local);
-		}
 	}
 	if (hash_entry != NULL) {
+		/* Drop pre-existing UDP flow if filter state changed */
+		new_filter_control_unit = necp_socket_get_content_filter_control_unit(so);
+		if (new_filter_control_unit > 0 &&
+		    new_filter_control_unit != hash_entry->cfentry_cfil->cfi_filter_control_unit) {
+			return NULL;
+		}
+
+		// Try to update flow info from socket and/or control mbufs if necessary
+		if (LOCAL_ADDRESS_NEEDS_UPDATE(hash_entry) || LOCAL_PORT_NEEDS_UPDATE(hash_entry, so)) {
+			cfil_db_update_entry_local(so->so_cfil_db, hash_entry, local, control);
+		}
 		return hash_entry;
 	}
 
@@ -6175,6 +6299,7 @@ cfil_sock_udp_get_flow(struct socket *so, uint32_t filter_control_unit, bool out
 		OSIncrementAtomic(&cfil_stats.cfs_sock_attach_no_mem);
 		return NULL;
 	}
+	hash_entry->cfentry_cfil->cfi_filter_control_unit = filter_control_unit;
 	hash_entry->cfentry_cfil->cfi_dir = outgoing ? CFS_CONNECTION_DIR_OUT : CFS_CONNECTION_DIR_IN;
 	hash_entry->cfentry_cfil->cfi_debug = debug;
 
@@ -6182,8 +6307,13 @@ cfil_sock_udp_get_flow(struct socket *so, uint32_t filter_control_unit, bool out
 	cfil_info_log(LOG_ERR, hash_entry->cfentry_cfil, "CFIL: LIFECYCLE: ADDED");
 #endif
 
+	// Check if we can update the new flow's local address from control mbufs
+	if (control != NULL) {
+		cfil_db_update_entry_local(so->so_cfil_db, hash_entry, local, control);
+	}
+
 	if (cfil_info_attach_unit(so, filter_control_unit, hash_entry->cfentry_cfil) == 0) {
-		cfil_info_free(hash_entry->cfentry_cfil);
+		CFIL_INFO_FREE(hash_entry->cfentry_cfil);
 		cfil_db_delete_entry(so->so_cfil_db, hash_entry);
 		CFIL_LOG(LOG_ERR, "CFIL: UDP cfil_info_attach_unit(%u) failed",
 		    filter_control_unit);
@@ -6213,6 +6343,54 @@ cfil_sock_udp_get_flow(struct socket *so, uint32_t filter_control_unit, bool out
 
 	CFIL_INFO_VERIFY(hash_entry->cfentry_cfil);
 	return hash_entry;
+}
+
+int
+cfil_sock_udp_get_address_from_control(sa_family_t family, struct mbuf *control, uint8_t **address_ptr)
+{
+	struct cmsghdr *cm;
+	struct in6_pktinfo *pi6;
+
+	if (control == NULL || address_ptr == NULL) {
+		return 0;
+	}
+
+	while (control) {
+		if (control->m_type != MT_CONTROL) {
+			control = control->m_next;
+			continue;
+		}
+
+		for (cm = M_FIRST_CMSGHDR(control);
+		    is_cmsg_valid(control, cm);
+		    cm = M_NXT_CMSGHDR(control, cm)) {
+			switch (cm->cmsg_type) {
+			case IP_RECVDSTADDR:
+				if (family == AF_INET &&
+				    cm->cmsg_level == IPPROTO_IP &&
+				    cm->cmsg_len == CMSG_LEN(sizeof(struct in_addr))) {
+					*address_ptr = CMSG_DATA(cm);
+					return sizeof(struct in_addr);
+				}
+				break;
+			case IPV6_PKTINFO:
+			case IPV6_2292PKTINFO:
+				if (family == AF_INET6 &&
+				    cm->cmsg_level == IPPROTO_IPV6 &&
+				    cm->cmsg_len == CMSG_LEN(sizeof(struct in6_pktinfo))) {
+					pi6 = (struct in6_pktinfo *)(void *)CMSG_DATA(cm);
+					*address_ptr = (uint8_t *)&pi6->ipi6_addr;
+					return sizeof(struct in6_addr);
+				}
+				break;
+			default:
+				break;
+			}
+		}
+
+		control = control->m_next;
+	}
+	return 0;
 }
 
 errno_t
@@ -6256,7 +6434,7 @@ cfil_sock_udp_handle_data(bool outgoing, struct socket *so,
 		return error;
 	}
 
-	hash_entry = cfil_sock_udp_get_flow(so, filter_control_unit, outgoing, local, remote, debug);
+	hash_entry = cfil_sock_udp_get_flow(so, filter_control_unit, outgoing, local, remote, control, debug);
 	if (hash_entry == NULL || hash_entry->cfentry_cfil == NULL) {
 		CFIL_LOG(LOG_ERR, "CFIL: Falied to create UDP flow");
 		return EPIPE;
@@ -6794,10 +6972,10 @@ cfil_info_show(void)
 }
 
 bool
-cfil_info_idle_timed_out(struct cfil_info *cfil_info, int timeout, u_int32_t current_time)
+cfil_info_idle_timed_out(struct cfil_info *cfil_info, int timeout, u_int64_t current_time)
 {
 	if (cfil_info && cfil_info->cfi_hash_entry &&
-	    (current_time - cfil_info->cfi_hash_entry->cfentry_lastused >= (u_int32_t)timeout)) {
+	    (current_time - cfil_info->cfi_hash_entry->cfentry_lastused >= (u_int64_t)timeout)) {
 #if GC_DEBUG
 		cfil_info_log(LOG_ERR, cfil_info, "CFIL: flow IDLE timeout expired");
 #endif
@@ -6973,7 +7151,7 @@ cfil_info_udp_expire(void *v, wait_result_t w)
 #endif
 
 		cfil_db_delete_entry(db, hash_entry);
-		cfil_info_free(cfil_info);
+		CFIL_INFO_FREE(cfil_info);
 		OSIncrementAtomic(&cfil_stats.cfs_sock_detached);
 
 		if (so->so_flags & SOF_CONTENT_FILTER) {
@@ -7044,7 +7222,7 @@ cfil_dgram_save_socket_state(struct cfil_info *cfil_info, struct mbuf *m)
 }
 
 struct m_tag *
-cfil_dgram_get_socket_state(struct mbuf *m, uint32_t *state_change_cnt, short *options,
+cfil_dgram_get_socket_state(struct mbuf *m, uint32_t *state_change_cnt, uint32_t *options,
     struct sockaddr **faddr, int *inp_flags)
 {
 	struct m_tag *tag = NULL;
@@ -7120,7 +7298,7 @@ cfil_dispatch_stats_event_locked(int kcunit, struct cfil_stats_report_buffer *bu
 	}
 
 	msgsize = sizeof(struct cfil_msg_stats_report) + (sizeof(struct cfil_msg_sock_stats) * stats_count);
-	buffer->msghdr.cfm_len = msgsize;
+	buffer->msghdr.cfm_len = (uint32_t)msgsize;
 	buffer->msghdr.cfm_version = 1;
 	buffer->msghdr.cfm_type = CFM_TYPE_EVENT;
 	buffer->msghdr.cfm_op = CFM_OP_STATS;

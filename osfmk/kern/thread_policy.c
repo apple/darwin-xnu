@@ -137,10 +137,10 @@ static int
 proc_get_thread_policy_locked(thread_t thread, int category, int flavor, int* value2);
 
 static void
-thread_policy_update_spinlocked(thread_t thread, boolean_t recompute_priority, task_pend_token_t pend_token);
+thread_policy_update_spinlocked(thread_t thread, bool recompute_priority, task_pend_token_t pend_token);
 
 static void
-thread_policy_update_internal_spinlocked(thread_t thread, boolean_t recompute_priority, task_pend_token_t pend_token);
+thread_policy_update_internal_spinlocked(thread_t thread, bool recompute_priority, task_pend_token_t pend_token);
 
 void
 thread_policy_init(void)
@@ -258,7 +258,7 @@ thread_qos_scaled_relative_priority(int qos, int qos_relprio)
  * flag set by -qos-policy-allow boot-arg to allow
  * testing thread qos policy from userspace
  */
-boolean_t allow_qos_policy_set = FALSE;
+static TUNABLE(bool, allow_qos_policy_set, "-qos-policy-allow", false);
 
 kern_return_t
 thread_policy_set(
@@ -276,7 +276,7 @@ thread_policy_set(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	if (allow_qos_policy_set == FALSE) {
+	if (!allow_qos_policy_set) {
 		if (thread_is_static_param(thread)) {
 			return KERN_POLICY_STATIC;
 		}
@@ -365,6 +365,8 @@ thread_policy_set_internal(
 		}
 
 		info = (thread_time_constraint_policy_t)policy_info;
+
+
 		if (info->constraint < info->computation ||
 		    info->computation > max_rt_quantum ||
 		    info->computation < min_rt_quantum) {
@@ -437,7 +439,7 @@ thread_policy_set_internal(
 		return thread_affinity_set(thread, info->affinity_tag);
 	}
 
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 	case THREAD_BACKGROUND_POLICY:
 	{
 		thread_background_policy_t info;
@@ -468,7 +470,7 @@ thread_policy_set_internal(
 
 		break;
 	}
-#endif /* CONFIG_EMBEDDED */
+#endif /* !defined(XNU_TARGET_OS_OSX) */
 
 	case THREAD_THROUGHPUT_QOS_POLICY:
 	{
@@ -698,7 +700,7 @@ thread_workq_pri_for_qos(thread_qos_t qos)
 thread_qos_t
 thread_workq_qos_for_pri(int priority)
 {
-	int qos;
+	thread_qos_t qos;
 	if (priority > thread_qos_policy_params.qos_pri[THREAD_QOS_USER_INTERACTIVE]) {
 		// indicate that workq should map >UI threads to workq's
 		// internal notation for above-UI work.
@@ -1042,7 +1044,11 @@ thread_recompute_priority(
 	 * via THREAD_PRECEDENCE_POLICY.
 	 */
 	if (priority > thread->max_priority) {
-		priority = thread->max_priority;
+		if (thread->effective_policy.thep_promote_above_task) {
+			priority = MAX(thread->max_priority, thread->user_promotion_basepri);
+		} else {
+			priority = thread->max_priority;
+		}
 	} else if (priority < MINPRI) {
 		priority = MINPRI;
 	}
@@ -1068,12 +1074,12 @@ thread_recompute_priority(
 		}
 	}
 
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 	/* No one can have a base priority less than MAXPRI_THROTTLE */
 	if (priority < MAXPRI_THROTTLE) {
 		priority = MAXPRI_THROTTLE;
 	}
-#endif /* CONFIG_EMBEDDED */
+#endif /* !defined(XNU_TARGET_OS_OSX) */
 
 	sched_set_thread_base_priority(thread, priority);
 }
@@ -1099,16 +1105,15 @@ thread_policy_update_tasklocked(
 	__unused
 	integer_t old_max_priority = thread->max_priority;
 
-	thread->task_priority = priority;
-	thread->max_priority = max_priority;
+	assert(priority >= INT16_MIN && priority <= INT16_MAX);
+	thread->task_priority = (int16_t)priority;
 
-#if CONFIG_EMBEDDED
+	assert(max_priority >= INT16_MIN && max_priority <= INT16_MAX);
+	thread->max_priority = (int16_t)max_priority;
+
 	/*
-	 * When backgrounding a thread, iOS has the semantic that
-	 * realtime and fixed priority threads should be demoted
-	 * to timeshare background threads.
-	 *
-	 * On OSX, realtime and fixed priority threads don't lose their mode.
+	 * When backgrounding a thread, realtime and fixed priority threads
+	 * should be demoted to timeshare background threads.
 	 *
 	 * TODO: Do this inside the thread policy update routine in order to avoid double
 	 * remove/reinsert for a runnable thread
@@ -1118,9 +1123,8 @@ thread_policy_update_tasklocked(
 	} else if ((max_priority > MAXPRI_THROTTLE) && (old_max_priority <= MAXPRI_THROTTLE)) {
 		sched_thread_mode_undemote(thread, TH_SFLAG_THROTTLED);
 	}
-#endif /* CONFIG_EMBEDDED */
 
-	thread_policy_update_spinlocked(thread, TRUE, pend_token);
+	thread_policy_update_spinlocked(thread, true, pend_token);
 
 	thread_unlock(thread);
 	splx(s);
@@ -1264,6 +1268,7 @@ thread_policy_get(
 			info->constraint = default_timeshare_constraint;
 			info->preemptible = TRUE;
 		}
+
 
 		break;
 	}
@@ -1447,7 +1452,7 @@ thread_policy_create(thread_t thread)
 	/* We pass a pend token but ignore it */
 	struct task_pend_token pend_token = {};
 
-	thread_policy_update_internal_spinlocked(thread, TRUE, &pend_token);
+	thread_policy_update_internal_spinlocked(thread, true, &pend_token);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 	    (IMPORTANCE_CODE(IMP_UPDATE, (IMP_UPDATE_TASK_CREATE | TASK_POLICY_THREAD))) | DBG_FUNC_END,
@@ -1456,7 +1461,7 @@ thread_policy_create(thread_t thread)
 }
 
 static void
-thread_policy_update_spinlocked(thread_t thread, boolean_t recompute_priority, task_pend_token_t pend_token)
+thread_policy_update_spinlocked(thread_t thread, bool recompute_priority, task_pend_token_t pend_token)
 {
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 	    (IMPORTANCE_CODE(IMP_UPDATE, TASK_POLICY_THREAD) | DBG_FUNC_START),
@@ -1484,7 +1489,7 @@ thread_policy_update_spinlocked(thread_t thread, boolean_t recompute_priority, t
  * Called with thread spinlock locked, task may be locked, thread mutex may be locked
  */
 static void
-thread_policy_update_internal_spinlocked(thread_t thread, boolean_t recompute_priority,
+thread_policy_update_internal_spinlocked(thread_t thread, bool recompute_priority,
     task_pend_token_t pend_token)
 {
 	/*
@@ -1516,6 +1521,17 @@ thread_policy_update_internal_spinlocked(thread_t thread, boolean_t recompute_pr
 		next_qos = MAX(requested.thrp_qos_workq_override, next_qos);
 	}
 
+	if (task_effective.tep_darwinbg && task_effective.tep_adaptive_bg &&
+	    requested.thrp_qos_promote > THREAD_QOS_BACKGROUND) {
+		/*
+		 * This thread is turnstile-boosted higher than the adaptive clamp
+		 * by a synchronous waiter. Allow that to override the adaptive
+		 * clamp temporarily for this thread only.
+		 */
+		next.thep_promote_above_task = true;
+		next_qos = requested.thrp_qos_promote;
+	}
+
 	next.thep_qos = next_qos;
 
 	/* A task clamp will result in an effective QoS even when requested is UNSPECIFIED */
@@ -1534,13 +1550,11 @@ thread_policy_update_internal_spinlocked(thread_t thread, boolean_t recompute_pr
 	next.thep_qos_promote = next.thep_qos;
 
 	/* The ceiling only applies to threads that are in the QoS world */
+	/* TODO: is it appropriate for this to limit a turnstile-boosted thread's QoS? */
 	if (task_effective.tep_qos_ceiling != THREAD_QOS_UNSPECIFIED &&
 	    next.thep_qos != THREAD_QOS_UNSPECIFIED) {
 		next.thep_qos = MIN(task_effective.tep_qos_ceiling, next.thep_qos);
 	}
-
-	/* Apply the sync ipc qos override */
-	assert(requested.thrp_qos_sync_ipc_override == THREAD_QOS_UNSPECIFIED);
 
 	/*
 	 * The QoS relative priority is only applicable when the original programmer's
@@ -1559,8 +1573,12 @@ thread_policy_update_internal_spinlocked(thread_t thread, boolean_t recompute_pr
 	}
 
 	/* Calculate DARWIN_BG */
-	boolean_t wants_darwinbg        = FALSE;
-	boolean_t wants_all_sockets_bg  = FALSE; /* Do I want my existing sockets to be bg */
+	bool wants_darwinbg        = false;
+	bool wants_all_sockets_bg  = false; /* Do I want my existing sockets to be bg */
+
+	if (task_effective.tep_darwinbg && !next.thep_promote_above_task) {
+		wants_darwinbg = true;
+	}
 
 	/*
 	 * If DARWIN_BG has been requested at either level, it's engaged.
@@ -1569,20 +1587,16 @@ thread_policy_update_internal_spinlocked(thread_t thread, boolean_t recompute_pr
 	 * after they're created
 	 */
 	if (requested.thrp_int_darwinbg || requested.thrp_ext_darwinbg) {
-		wants_all_sockets_bg = wants_darwinbg = TRUE;
+		wants_all_sockets_bg = wants_darwinbg = true;
 	}
 
 	if (requested.thrp_pidbind_bg) {
-		wants_all_sockets_bg = wants_darwinbg = TRUE;
-	}
-
-	if (task_effective.tep_darwinbg) {
-		wants_darwinbg = TRUE;
+		wants_all_sockets_bg = wants_darwinbg = true;
 	}
 
 	if (next.thep_qos == THREAD_QOS_BACKGROUND ||
 	    next.thep_qos == THREAD_QOS_MAINTENANCE) {
-		wants_darwinbg = TRUE;
+		wants_darwinbg = true;
 	}
 
 	/* Calculate side effects of DARWIN_BG */
@@ -1616,7 +1630,9 @@ thread_policy_update_internal_spinlocked(thread_t thread, boolean_t recompute_pr
 		iopol = MAX(iopol, task_effective.tep_bg_iotier);
 	}
 
-	iopol = MAX(iopol, task_effective.tep_io_tier);
+	if (!next.thep_promote_above_task) {
+		iopol = MAX(iopol, task_effective.tep_io_tier);
+	}
 
 	/* Look up the associated IO tier value for the QoS class */
 	iopol = MAX(iopol, thread_qos_policy_params.qos_iotier[next.thep_qos]);
@@ -1631,11 +1647,10 @@ thread_policy_update_internal_spinlocked(thread_t thread, boolean_t recompute_pr
 	 * the passive bit so that a thread doesn't end up stuck in its own throttle
 	 * window when the override goes away.
 	 */
-	boolean_t qos_io_override_active = FALSE;
-	if (thread_qos_policy_params.qos_iotier[next.thep_qos] <
-	    thread_qos_policy_params.qos_iotier[requested.thrp_qos]) {
-		qos_io_override_active = TRUE;
-	}
+
+	int next_qos_iotier = thread_qos_policy_params.qos_iotier[next.thep_qos];
+	int req_qos_iotier = thread_qos_policy_params.qos_iotier[requested.thrp_qos];
+	bool qos_io_override_active = (next_qos_iotier < req_qos_iotier);
 
 	/* Calculate Passive IO policy */
 	if (requested.thrp_ext_iopassive ||
@@ -1648,7 +1663,10 @@ thread_policy_update_internal_spinlocked(thread_t thread, boolean_t recompute_pr
 	/* Calculate timer QOS */
 	uint32_t latency_qos = requested.thrp_latency_qos;
 
-	latency_qos = MAX(latency_qos, task_effective.tep_latency_qos);
+	if (!next.thep_promote_above_task) {
+		latency_qos = MAX(latency_qos, task_effective.tep_latency_qos);
+	}
+
 	latency_qos = MAX(latency_qos, thread_qos_policy_params.qos_latency_qos[next.thep_qos]);
 
 	next.thep_latency_qos = latency_qos;
@@ -1656,7 +1674,10 @@ thread_policy_update_internal_spinlocked(thread_t thread, boolean_t recompute_pr
 	/* Calculate throughput QOS */
 	uint32_t through_qos = requested.thrp_through_qos;
 
-	through_qos = MAX(through_qos, task_effective.tep_through_qos);
+	if (!next.thep_promote_above_task) {
+		through_qos = MAX(through_qos, task_effective.tep_through_qos);
+	}
+
 	through_qos = MAX(through_qos, thread_qos_policy_params.qos_through_qos[next.thep_qos]);
 
 	next.thep_through_qos = through_qos;
@@ -1717,6 +1738,7 @@ thread_policy_update_internal_spinlocked(thread_t thread, boolean_t recompute_pr
 	if (prev.thep_qos != next.thep_qos ||
 	    prev.thep_qos_relprio != next.thep_qos_relprio ||
 	    prev.thep_qos_ui_is_urgent != next.thep_qos_ui_is_urgent ||
+	    prev.thep_promote_above_task != next.thep_promote_above_task ||
 	    prev.thep_terminated != next.thep_terminated ||
 	    pend_token->tpt_force_recompute_pri == 1 ||
 	    recompute_priority) {
@@ -1860,7 +1882,7 @@ proc_set_thread_policy_spinlocked(thread_t          thread,
 
 	thread_set_requested_policy_spinlocked(thread, category, flavor, value, value2, pend_token);
 
-	thread_policy_update_spinlocked(thread, FALSE, pend_token);
+	thread_policy_update_spinlocked(thread, false, pend_token);
 
 	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
 	    (IMPORTANCE_CODE(flavor, (category | TASK_POLICY_THREAD))) | DBG_FUNC_END,
@@ -2541,16 +2563,16 @@ proc_thread_qos_add_override_internal(thread_t         thread,
 		/* since first_override_for_resource was TRUE */
 		override->override_contended_resource_count = 1;
 		override->override_resource = resource;
-		override->override_resource_type = resource_type;
+		override->override_resource_type = (int16_t)resource_type;
 		override->override_qos = THREAD_QOS_UNSPECIFIED;
 		thread->overrides = override;
 	}
 
 	if (override) {
 		if (override->override_qos == THREAD_QOS_UNSPECIFIED) {
-			override->override_qos = override_qos;
+			override->override_qos = (int16_t)override_qos;
 		} else {
-			override->override_qos = MAX(override->override_qos, override_qos);
+			override->override_qos = MAX(override->override_qos, (int16_t)override_qos);
 		}
 	}
 
@@ -2763,7 +2785,7 @@ task_set_main_thread_qos(task_t task, thread_t thread)
 	    thread_tid(thread), threquested_0(thread), threquested_1(thread),
 	    thread->requested_policy.thrp_qos, 0);
 
-	int primordial_qos = task_compute_main_thread_qos(task);
+	thread_qos_t primordial_qos = task_compute_main_thread_qos(task);
 
 	proc_set_thread_policy_locked(thread, TASK_POLICY_ATTRIBUTE, TASK_POLICY_QOS_AND_RELPRIO,
 	    primordial_qos, 0, &pend_token);
@@ -2784,10 +2806,10 @@ task_set_main_thread_qos(task_t task, thread_t thread)
  * Return a good guess at what the initial manager QoS will be
  * Dispatch can override this in userspace if it so chooses
  */
-int
+thread_qos_t
 task_get_default_manager_qos(task_t task)
 {
-	int primordial_qos = task_compute_main_thread_qos(task);
+	thread_qos_t primordial_qos = task_compute_main_thread_qos(task);
 
 	if (primordial_qos == THREAD_QOS_LEGACY) {
 		primordial_qos = THREAD_QOS_USER_INITIATED;
@@ -2806,7 +2828,7 @@ boolean_t
 thread_recompute_kernel_promotion_locked(thread_t thread)
 {
 	boolean_t needs_update = FALSE;
-	int kern_promotion_schedpri = thread_get_inheritor_turnstile_sched_priority(thread);
+	uint8_t kern_promotion_schedpri = (uint8_t)thread_get_inheritor_turnstile_sched_priority(thread);
 
 	/*
 	 * For now just assert that kern_promotion_schedpri <= MAXPRI_PROMOTE.
@@ -2848,7 +2870,7 @@ thread_recompute_user_promotion_locked(thread_t thread)
 {
 	boolean_t needs_update = FALSE;
 	struct task_pend_token pend_token = {};
-	int user_promotion_basepri = MIN(thread_get_inheritor_turnstile_base_priority(thread), MAXPRI_USER);
+	uint8_t user_promotion_basepri = MIN((uint8_t)thread_get_inheritor_turnstile_base_priority(thread), MAXPRI_USER);
 	int old_base_pri = thread->base_pri;
 	thread_qos_t qos_promotion;
 
@@ -2903,7 +2925,7 @@ thread_recompute_user_promotion_locked(thread_t thread)
 thread_qos_t
 thread_user_promotion_qos_for_pri(int priority)
 {
-	int qos;
+	thread_qos_t qos;
 	for (qos = THREAD_QOS_USER_INTERACTIVE; qos > THREAD_QOS_MAINTENANCE; qos--) {
 		if (thread_qos_policy_params.qos_pri[qos] <= priority) {
 			return qos;
@@ -3085,7 +3107,7 @@ thread_get_requested_qos(thread_t thread, int *relpri)
 	int relprio_value = 0;
 	thread_qos_t qos;
 
-	qos = proc_get_thread_policy_locked(thread, TASK_POLICY_ATTRIBUTE,
+	qos = (thread_qos_t)proc_get_thread_policy_locked(thread, TASK_POLICY_ATTRIBUTE,
 	    TASK_POLICY_QOS_AND_RELPRIO, &relprio_value);
 	if (relpri) {
 		*relpri = -relprio_value;

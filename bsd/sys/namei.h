@@ -144,7 +144,7 @@ struct nameidata {
 #define NAMEI_COMPOUNDRENAME    0x100
 #define NAMEI_COMPOUND_OP_MASK (NAMEI_COMPOUNDOPEN | NAMEI_COMPOUNDREMOVE | NAMEI_COMPOUNDMKDIR | NAMEI_COMPOUNDRMDIR | NAMEI_COMPOUNDRENAME)
 
-#define NAMEI_NOPROCLOCK        0x1000  /* do not take process lock (set by vnode_lookup) */
+#define NAMEI_NOFOLLOW_ANY      0x1000  /* no symlinks allowed in the path */
 
 #ifdef KERNEL
 /*

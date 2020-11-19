@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_LICENSE_HEADER_START@
  *
@@ -112,10 +112,8 @@ void* pkt_mnglr_rw_lock_history[PKT_MNGLR_RW_LCK_MAX];
 int pkt_mnglr_rw_nxt_unlck = 0;
 void* pkt_mnglr_rw_unlock_history[PKT_MNGLR_RW_LCK_MAX];
 
-
-#define PACKET_MANGLER_ZONE_NAME        "packet_mangler"
-#define PACKET_MANGLER_ZONE_MAX         10
-static struct zone *packet_mangler_zone = NULL; /* zone for packet_mangler */
+static ZONE_DECLARE(packet_mangler_zone, "packet_mangler",
+    sizeof(struct packet_mangler), ZC_NONE);
 
 /*
  * For troubleshooting
@@ -701,7 +699,6 @@ pkt_mnglr_init(void)
 {
 	struct kern_ctl_reg kern_ctl;
 	errno_t error = 0;
-	vm_size_t pkt_mnglr_size = 0;
 
 	PKT_MNGLR_LOG(LOG_NOTICE, "");
 
@@ -709,23 +706,6 @@ pkt_mnglr_init(void)
 	 * Compile time verifications
 	 */
 	_CASSERT(PKT_MNGLR_MAX_FILTER_COUNT == MAX_PACKET_MANGLER);
-
-	/*
-	 * Zone for packet mangler kernel control sockets
-	 */
-	pkt_mnglr_size = sizeof(struct packet_mangler);
-	packet_mangler_zone = zinit(pkt_mnglr_size,
-	    PACKET_MANGLER_ZONE_MAX * pkt_mnglr_size,
-	    0,
-	    PACKET_MANGLER_ZONE_NAME);
-
-	if (packet_mangler_zone == NULL) {
-		panic("%s: zinit(%s) failed", __func__,
-		    PACKET_MANGLER_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(packet_mangler_zone, Z_CALLERACCT, FALSE);
-	zone_change(packet_mangler_zone, Z_EXPAND, TRUE);
 
 	/*
 	 * Allocate locks

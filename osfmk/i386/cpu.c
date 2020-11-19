@@ -31,7 +31,6 @@
  *	cpu specific routines
  */
 
-#include <kern/kalloc.h>
 #include <kern/misc_protos.h>
 #include <kern/lock_group.h>
 #include <kern/machine.h>
@@ -194,33 +193,6 @@ cpu_machine_init(
 	/* initialize VMX for every CPU */
 	vmx_cpu_init();
 #endif
-}
-
-processor_t
-cpu_processor_alloc(boolean_t is_boot_cpu)
-{
-	int             ret;
-	processor_t     proc;
-
-	if (is_boot_cpu) {
-		return &processor_master;
-	}
-
-	ret = kmem_alloc(kernel_map, (vm_offset_t *) &proc, sizeof(*proc), VM_KERN_MEMORY_OSFMK);
-	if (ret != KERN_SUCCESS) {
-		return NULL;
-	}
-
-	bzero((void *) proc, sizeof(*proc));
-	return proc;
-}
-
-void
-cpu_processor_free(processor_t proc)
-{
-	if (proc != NULL && proc != &processor_master) {
-		kfree(proc, sizeof(*proc));
-	}
 }
 
 processor_t

@@ -150,10 +150,12 @@ DATAFILES = \
 	poll.2			\
 	posix_madvise.2		\
 	pread.2			\
+	preadv.2		\
 	pselect.2		\
 	pthread_setugid_np.2	\
 	ptrace.2		\
 	pwrite.2		\
+	pwritev.2		\
 	quotactl.2		\
 	read.2			\
 	readlink.2		\

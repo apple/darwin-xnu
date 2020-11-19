@@ -1,0 +1,12 @@
+// Module maps for machine/types.h and machine/_types.h.
+//
+// See also: stdint.modulemap
+
+module Darwin_C_stdint._machine_types {
+        export *
+        header "machine/types.h"
+}
+module Darwin_C_stdint._machine__types {
+        export *
+        header "machine/_types.h"
+}

@@ -29,7 +29,6 @@
 
 #include <sys/kern_event.h>
 #include <kern/sched_prim.h>
-#include <kern/kalloc.h>
 #include <kern/assert.h>
 #include <kern/debug.h>
 #include <kern/locks.h>
@@ -131,11 +130,11 @@ kern_return_t memorystatus_update_vm_pressure(boolean_t target_foreground_proces
 /*
  * This value is the threshold that a process must meet to be considered for scavenging.
  */
-#if CONFIG_EMBEDDED
-#define VM_PRESSURE_MINIMUM_RSIZE        6    /* MB */
-#else /* CONFIG_EMBEDDED */
+#if XNU_TARGET_OS_OSX
 #define VM_PRESSURE_MINIMUM_RSIZE        10    /* MB */
-#endif /* CONFIG_EMBEDDED */
+#else /* XNU_TARGET_OS_OSX */
+#define VM_PRESSURE_MINIMUM_RSIZE        6    /* MB */
+#endif /* XNU_TARGET_OS_OSX */
 
 static uint32_t vm_pressure_task_footprint_min = VM_PRESSURE_MINIMUM_RSIZE;
 
@@ -283,7 +282,7 @@ filt_memorystatustouch(struct knote *kn, struct kevent_qos_s *kev)
 	prev_kn_sfflags = kn->kn_sfflags;
 	kn->kn_sfflags = (kev->fflags & EVFILT_MEMORYSTATUS_ALL_MASK);
 
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 	/*
 	 * Only on desktop do we restrict notifications to
 	 * one per active/inactive state (soft limits only).
@@ -337,7 +336,7 @@ filt_memorystatustouch(struct knote *kn, struct kevent_qos_s *kev)
 			kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_INACTIVE;
 		}
 	}
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 
 	/*
 	 * reset the output flags based on a
@@ -398,7 +397,7 @@ memorystatus_knote_register(struct knote *kn)
 	 * Support only userspace visible flags.
 	 */
 	if ((kn->kn_sfflags & EVFILT_MEMORYSTATUS_ALL_MASK) == (unsigned int) kn->kn_sfflags) {
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 		if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN) {
 			kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_ACTIVE;
 			kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_INACTIVE;
@@ -408,7 +407,7 @@ memorystatus_knote_register(struct knote *kn)
 			kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_ACTIVE;
 			kn->kn_sfflags |= NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_INACTIVE;
 		}
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 
 		KNOTE_ATTACH(&memorystatus_klist, kn);
 	} else {
@@ -432,15 +431,15 @@ memorystatus_knote_unregister(struct knote *kn __unused)
 
 #if CONFIG_MEMORYSTATUS
 
-int
-memorystatus_send_note(int event_code, void *data, size_t data_length)
+static inline int
+memorystatus_send_note_internal(int event_code, int subclass, void *data, uint32_t data_length)
 {
 	int ret;
 	struct kev_msg ev_msg;
 
 	ev_msg.vendor_code    = KEV_VENDOR_APPLE;
 	ev_msg.kev_class      = KEV_SYSTEM_CLASS;
-	ev_msg.kev_subclass   = KEV_MEMORYSTATUS_SUBCLASS;
+	ev_msg.kev_subclass   = subclass;
 
 	ev_msg.event_code     = event_code;
 
@@ -456,13 +455,32 @@ memorystatus_send_note(int event_code, void *data, size_t data_length)
 	return ret;
 }
 
-boolean_t
-memorystatus_warn_process(pid_t pid, __unused boolean_t is_active, __unused boolean_t is_fatal, boolean_t limit_exceeded)
+int
+memorystatus_send_note(int event_code, void *data, uint32_t data_length)
 {
+	return memorystatus_send_note_internal(event_code, KEV_MEMORYSTATUS_SUBCLASS, data, data_length);
+}
+
+int
+memorystatus_send_dirty_status_change_note(void *data, uint32_t data_length)
+{
+	return memorystatus_send_note_internal(kDirtyStatusChangeNote, KEV_DIRTYSTATUS_SUBCLASS, data, data_length);
+}
+
+boolean_t
+memorystatus_warn_process(const proc_t p, __unused boolean_t is_active, __unused boolean_t is_fatal, boolean_t limit_exceeded)
+{
+	/*
+	 * This function doesn't take a reference to p or lock it. So it better be the current process.
+	 */
+	assert(p == current_proc());
+	pid_t pid = p->p_pid;
 	boolean_t ret = FALSE;
 	boolean_t found_knote = FALSE;
 	struct knote *kn = NULL;
 	int send_knote_count = 0;
+	uint32_t platform;
+	platform = proc_platform(p);
 
 	/*
 	 * See comment in sysctl_memorystatus_vm_pressure_send.
@@ -484,133 +502,146 @@ memorystatus_warn_process(pid_t pid, __unused boolean_t is_active, __unused bool
 			 * filt_memorystatus().
 			 */
 
-#if CONFIG_EMBEDDED
-			if (!limit_exceeded) {
-				/*
-				 * Intentionally set either the unambiguous limit warning,
-				 * the system-wide critical or the system-wide warning
-				 * notification bit.
-				 */
-
-				if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN) {
-					kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_WARN;
-					found_knote = TRUE;
-					send_knote_count++;
-				} else if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PRESSURE_CRITICAL) {
-					kn->kn_fflags = NOTE_MEMORYSTATUS_PRESSURE_CRITICAL;
-					found_knote = TRUE;
-					send_knote_count++;
-				} else if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PRESSURE_WARN) {
-					kn->kn_fflags = NOTE_MEMORYSTATUS_PRESSURE_WARN;
-					found_knote = TRUE;
-					send_knote_count++;
-				}
-			} else {
-				/*
-				 * Send this notification when a process has exceeded a soft limit.
-				 */
-				if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL) {
-					kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL;
-					found_knote = TRUE;
-					send_knote_count++;
-				}
-			}
-#else /* CONFIG_EMBEDDED */
-			if (!limit_exceeded) {
-				/*
-				 * Processes on desktop are not expecting to handle a system-wide
-				 * critical or system-wide warning notification from this path.
-				 * Intentionally set only the unambiguous limit warning here.
-				 *
-				 * If the limit is soft, however, limit this to one notification per
-				 * active/inactive limit (per each registered listener).
-				 */
-
-				if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN) {
-					found_knote = TRUE;
-					if (!is_fatal) {
-						/*
-						 * Restrict proc_limit_warn notifications when
-						 * non-fatal (soft) limit is at play.
-						 */
-						if (is_active) {
-							if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_ACTIVE) {
-								/*
-								 * Mark this knote for delivery.
-								 */
-								kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_WARN;
-								/*
-								 * And suppress it from future notifications.
-								 */
-								kn->kn_sfflags &= ~NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_ACTIVE;
-								send_knote_count++;
+			/*
+			 * The type of notification and the frequency are different between
+			 * embedded and desktop.
+			 *
+			 * Embedded processes register for global pressure notifications
+			 * (NOTE_MEMORYSTATUS_PRESSURE_WARN | NOTE_MEMORYSTATUS_PRESSURE_CRITICAL) via UIKit
+			 * (see applicationDidReceiveMemoryWarning in UIKit). We'll warn them here if
+			 * they are near there memory limit. filt_memorystatus() will warn them based
+			 * on the system pressure level.
+			 *
+			 * On desktop, (NOTE_MEMORYSTATUS_PRESSURE_WARN | NOTE_MEMORYSTATUS_PRESSURE_CRITICAL)
+			 * are only expected to fire for system level warnings. Desktop procesess
+			 * register for NOTE_MEMORYSTATUS_PROC_LIMIT_WARN
+			 * if they want to be warned when they approach their limit
+			 * and for NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL to be warned when they
+			 * exceed their limit.
+			 *
+			 * On embedded we continuously warn processes that are approaching their
+			 * memory limit. However on desktop, we only send one warning while
+			 * the process is active/inactive if the limit is soft..
+			 *
+			 */
+			if (platform == PLATFORM_MACOS || platform == PLATFORM_MACCATALYST || platform == PLATFORM_DRIVERKIT) {
+				if (!limit_exceeded) {
+					if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN) {
+						found_knote = TRUE;
+						if (!is_fatal) {
+							/*
+							 * Restrict proc_limit_warn notifications when
+							 * non-fatal (soft) limit is at play.
+							 */
+							if (is_active) {
+								if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_ACTIVE) {
+									/*
+									 * Mark this knote for delivery.
+									 */
+									kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_WARN;
+									/*
+									 * And suppress it from future notifications.
+									 */
+									kn->kn_sfflags &= ~NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_ACTIVE;
+									send_knote_count++;
+								}
+							} else {
+								if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_INACTIVE) {
+									/*
+									 * Mark this knote for delivery.
+									 */
+									kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_WARN;
+									/*
+									 * And suppress it from future notifications.
+									 */
+									kn->kn_sfflags &= ~NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_INACTIVE;
+									send_knote_count++;
+								}
 							}
 						} else {
-							if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_INACTIVE) {
-								/*
-								 * Mark this knote for delivery.
-								 */
-								kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_WARN;
-								/*
-								 * And suppress it from future notifications.
-								 */
-								kn->kn_sfflags &= ~NOTE_MEMORYSTATUS_PROC_LIMIT_WARN_INACTIVE;
-								send_knote_count++;
-							}
+							/*
+							 * No restriction on proc_limit_warn notifications when
+							 * fatal (hard) limit is at play.
+							 */
+							kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_WARN;
+							send_knote_count++;
 						}
-					} else {
-						/*
-						 * No restriction on proc_limit_warn notifications when
-						 * fatal (hard) limit is at play.
-						 */
+					}
+				} else {
+					/*
+					 * Send this notification when a process has exceeded a soft limit,
+					 */
+
+					if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL) {
+						found_knote = TRUE;
+						if (!is_fatal) {
+							/*
+							 * Restrict critical notifications for soft limits.
+							 */
+
+							if (is_active) {
+								if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_ACTIVE) {
+									/*
+									 * Suppress future proc_limit_critical notifications
+									 * for the active soft limit.
+									 */
+									kn->kn_sfflags &= ~NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_ACTIVE;
+									kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL;
+									send_knote_count++;
+								}
+							} else {
+								if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_INACTIVE) {
+									/*
+									 * Suppress future proc_limit_critical_notifications
+									 * for the inactive soft limit.
+									 */
+									kn->kn_sfflags &= ~NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_INACTIVE;
+									kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL;
+									send_knote_count++;
+								}
+							}
+						} else {
+							/*
+							 * We should never be trying to send a critical notification for
+							 * a hard limit... the process would be killed before it could be
+							 * received.
+							 */
+							panic("Caught sending pid %d a critical warning for a fatal limit.\n", pid);
+						}
+					}
+				}
+			} else {
+				if (!limit_exceeded) {
+					/*
+					 * Intentionally set either the unambiguous limit warning,
+					 * the system-wide critical or the system-wide warning
+					 * notification bit.
+					 */
+
+					if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_WARN) {
 						kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_WARN;
+						found_knote = TRUE;
+						send_knote_count++;
+					} else if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PRESSURE_CRITICAL) {
+						kn->kn_fflags = NOTE_MEMORYSTATUS_PRESSURE_CRITICAL;
+						found_knote = TRUE;
+						send_knote_count++;
+					} else if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PRESSURE_WARN) {
+						kn->kn_fflags = NOTE_MEMORYSTATUS_PRESSURE_WARN;
+						found_knote = TRUE;
+						send_knote_count++;
+					}
+				} else {
+					/*
+					 * Send this notification when a process has exceeded a soft limit.
+					 */
+					if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL) {
+						kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL;
+						found_knote = TRUE;
 						send_knote_count++;
 					}
 				}
-			} else {
-				/*
-				 * Send this notification when a process has exceeded a soft limit,
-				 */
-
-				if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL) {
-					found_knote = TRUE;
-					if (!is_fatal) {
-						/*
-						 * Restrict critical notifications for soft limits.
-						 */
-
-						if (is_active) {
-							if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_ACTIVE) {
-								/*
-								 * Suppress future proc_limit_critical notifications
-								 * for the active soft limit.
-								 */
-								kn->kn_sfflags &= ~NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_ACTIVE;
-								kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL;
-								send_knote_count++;
-							}
-						} else {
-							if (kn->kn_sfflags & NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_INACTIVE) {
-								/*
-								 * Suppress future proc_limit_critical_notifications
-								 * for the inactive soft limit.
-								 */
-								kn->kn_sfflags &= ~NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL_INACTIVE;
-								kn->kn_fflags = NOTE_MEMORYSTATUS_PROC_LIMIT_CRITICAL;
-								send_knote_count++;
-							}
-						}
-					} else {
-						/*
-						 * We should never be trying to send a critical notification for
-						 * a hard limit... the process would be killed before it could be
-						 * received.
-						 */
-						panic("Caught sending pid %d a critical warning for a fatal limit.\n", pid);
-					}
-				}
 			}
-#endif /* CONFIG_EMBEDDED */
 		}
 	}
 
@@ -810,8 +841,6 @@ vm_pressure_select_optimal_candidate_to_notify(struct klist *candidate_list, int
 {
 	struct knote    *kn = NULL, *kn_max = NULL;
 	uint64_t    resident_max = 0;/* MB */
-	struct timeval    curr_tstamp = {0, 0};
-	int        elapsed_msecs = 0;
 	int        selected_task_importance = 0;
 	static int    pressure_snapshot = -1;
 	boolean_t    pressure_increase = FALSE;
@@ -846,8 +875,6 @@ vm_pressure_select_optimal_candidate_to_notify(struct klist *candidate_list, int
 		selected_task_importance = 0;
 	}
 
-	microuptime(&curr_tstamp);
-
 	SLIST_FOREACH(kn, candidate_list, kn_selnext) {
 		uint64_t        resident_size = 0;/* MB */
 		proc_t            p = PROC_NULL;
@@ -877,9 +904,6 @@ vm_pressure_select_optimal_candidate_to_notify(struct klist *candidate_list, int
 
 		t = (struct task *)(p->task);
 
-		timevalsub(&curr_tstamp, &p->vm_pressure_last_notify_tstamp);
-		elapsed_msecs = curr_tstamp.tv_sec * 1000 + curr_tstamp.tv_usec / 1000;
-
 		vm_pressure_level_t dispatch_level = convert_internal_pressure_level_to_dispatch_level(level);
 
 		if ((kn->kn_sfflags & dispatch_level) == 0) {
@@ -895,11 +919,11 @@ vm_pressure_select_optimal_candidate_to_notify(struct klist *candidate_list, int
 		}
 #endif /* CONFIG_MEMORYSTATUS */
 
-#if CONFIG_EMBEDDED
-		curr_task_importance = p->p_memstat_effectivepriority;
-#else /* CONFIG_EMBEDDED */
+#if XNU_TARGET_OS_OSX
 		curr_task_importance = task_importance_estimate(t);
-#endif /* CONFIG_EMBEDDED */
+#else /* XNU_TARGET_OS_OSX */
+		curr_task_importance = p->p_memstat_effectivepriority;
+#endif /* XNU_TARGET_OS_OSX */
 
 		/*
 		 * Privileged listeners are only considered in the multi-level pressure scheme
@@ -1022,7 +1046,7 @@ memorystatus_update_vm_pressure(boolean_t target_foreground_process)
 	boolean_t            smoothing_window_started = FALSE;
 	struct timeval            smoothing_window_start_tstamp = {0, 0};
 	struct timeval            curr_tstamp = {0, 0};
-	int                elapsed_msecs = 0;
+	int64_t              elapsed_msecs = 0;
 	uint64_t             curr_ts = mach_absolute_time();
 
 #if !CONFIG_JETSAM
@@ -1321,7 +1345,7 @@ static int
 sysctl_memorystatus_vm_pressure_level SYSCTL_HANDLER_ARGS
 {
 #pragma unused(arg1, arg2, oidp)
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 	int error = 0;
 
 	error = priv_check_cred(kauth_cred_get(), PRIV_VM_PRESSURE, 0);
@@ -1329,7 +1353,7 @@ sysctl_memorystatus_vm_pressure_level SYSCTL_HANDLER_ARGS
 		return error;
 	}
 
-#endif /* CONFIG_EMBEDDED */
+#endif /* !XNU_TARGET_OS_OSX */
 	uint32_t dispatch_level = convert_internal_pressure_level_to_dispatch_level(memorystatus_vm_pressure_level);
 
 	return SYSCTL_OUT(req, &dispatch_level, sizeof(dispatch_level));

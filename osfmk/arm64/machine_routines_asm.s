@@ -27,7 +27,9 @@
  */
 
 #include <machine/asm.h>
+#include <arm64/exception_asm.h>
 #include <arm64/machine_machdep.h>
+#include <arm64/pac_asm.h>
 #include <arm64/proc_reg.h>
 #include <arm/pmap.h>
 #include <pexpert/arm64/board_config.h>
@@ -36,22 +38,78 @@
 
 
 #if defined(HAS_APPLE_PAC)
-/*
- * void
- * ml_set_kernelkey_enabled(boolean_t enable)
- *
- * Toggle pointer auth kernel domain key diversification. Assembly to prevent compiler reordering.
- *
- */
 
+.macro SET_KERN_KEY		dst, apctl_el1
+	orr		\dst, \apctl_el1, #APCTL_EL1_KernKeyEn
+.endmacro
+
+.macro CLEAR_KERN_KEY	dst, apctl_el1
+	and		\dst, \apctl_el1, #~APCTL_EL1_KernKeyEn
+.endmacro
+
+/*
+ * uint64_t ml_enable_user_jop_key(uint64_t user_jop_key)
+ */
 	.align 2
-	.globl EXT(ml_set_kernelkey_enabled)
-LEXT(ml_set_kernelkey_enabled)
+	.globl EXT(ml_enable_user_jop_key)
+LEXT(ml_enable_user_jop_key)
+	mov		x1, x0
+	mrs		x2, TPIDR_EL1
+	ldr		x2, [x2, ACT_CPUDATAP]
+	ldr		x0, [x2, CPU_JOP_KEY]
+
+	cmp		x0, x1
+	b.eq	Lskip_program_el0_jop_key
+	/*
+	 * We can safely write to the JOP key registers without updating
+	 * current_cpu_datap()->jop_key.  The complementary
+	 * ml_disable_user_jop_key() call will put back the old value.  Interrupts
+	 * are also disabled, so nothing else will read this field in the meantime.
+	 */
+	SET_JOP_KEY_REGISTERS	x1, x2
+Lskip_program_el0_jop_key:
+
+	/*
+	 * if (cpu has APCTL_EL1.UserKeyEn) {
+	 *   set APCTL_EL1.KernKeyEn		// KERNKey is mixed into EL0 keys
+	 * } else {
+	 *   clear APCTL_EL1.KernKeyEn		// KERNKey is not mixed into EL0 keys
+	 * }
+	 */
 	mrs		x1, ARM64_REG_APCTL_EL1
-	orr		x2, x1, #APCTL_EL1_KernKeyEn
-	and 	x1, x1, #~APCTL_EL1_KernKeyEn
-	cmp		w0, #0
-	csel	x1, x1, x2, eq
+#if   defined(HAS_APCTL_EL1_USERKEYEN)
+	SET_KERN_KEY	x1, x1
+#else
+	CLEAR_KERN_KEY	x1, x1
+#endif
+	msr		ARM64_REG_APCTL_EL1, x1
+	isb
+	ret
+
+/*
+ * void ml_disable_user_jop_key(uint64_t user_jop_key, uint64_t saved_jop_state)
+ */
+	.align 2
+	.globl EXT(ml_disable_user_jop_key)
+LEXT(ml_disable_user_jop_key)
+	cmp		x0, x1
+	b.eq	Lskip_program_prev_jop_key
+	SET_JOP_KEY_REGISTERS	x1, x2
+Lskip_program_prev_jop_key:
+
+	/*
+	 * if (cpu has APCTL_EL1.UserKeyEn) {
+	 *   clear APCTL_EL1.KernKeyEn		// KERNKey is not mixed into EL1 keys
+	 * } else {
+	 *   set APCTL_EL1.KernKeyEn		// KERNKey is mixed into EL1 keys
+	 * }
+	 */
+	mrs		x1, ARM64_REG_APCTL_EL1
+#if   defined(HAS_APCTL_EL1_USERKEYEN)
+	CLEAR_KERN_KEY	x1, x1
+#else
+	SET_KERN_KEY	x1, x1
+#endif
 	msr		ARM64_REG_APCTL_EL1, x1
 	isb
 	ret
@@ -93,22 +151,8 @@ LEXT(set_nex_pg)
 	cbz		x14, Lnex_pg_done
 
 	// Set the SEG-recommended value of 12 additional reset cycles
-	mrs		x14, ARM64_REG_HID13
-	and		x14, x14, (~ARM64_REG_HID13_RstCyc_mask)
-	orr		x14, x14, ARM64_REG_HID13_RstCyc_val
-	msr		ARM64_REG_HID13, x14
-
-	// Load nexpg boot-arg
-	adrp		x14, EXT(nex_pg)@page
-	add		x14, x14, EXT(nex_pg)@pageoff
-	ldr		w14, [x14]
-
-	mrs		x13, ARM64_REG_HID14
-	and		x13, x13, (~ARM64_REG_HID14_NexPwgEn)
-	cbz		w14, Lset_nex_pg
-	orr		x13, x13, ARM64_REG_HID14_NexPwgEn
-Lset_nex_pg:
-	msr		ARM64_REG_HID14, x13
+	HID_INSERT_BITS	ARM64_REG_HID13, ARM64_REG_HID13_RstCyc_mask, ARM64_REG_HID13_RstCyc_val, x13
+	HID_SET_BITS ARM64_REG_HID14, ARM64_REG_HID14_NexPwgEn, x13
 
 Lnex_pg_done:
 	ret
@@ -224,9 +268,11 @@ LEXT(set_mmu_ttb_alternate)
 	mov		lr, x1
 #else
 #if defined(HAS_VMSA_LOCK)
+#if DEBUG || DEVELOPMENT
 	mrs		x1, ARM64_REG_VMSA_LOCK_EL1
 	and		x1, x1, #(VMSA_LOCK_TTBR1_EL1)
 	cbnz		x1, L_set_locked_reg_panic
+#endif /* DEBUG || DEVELOPMENT */
 #endif /* defined(HAS_VMSA_LOCK) */
 	msr		TTBR1_EL1, x0
 #endif /* defined(KERNEL_INTEGRITY_KTRR) */
@@ -249,6 +295,16 @@ LEXT(set_mmu_ttb)
 	msr		TTBR0_EL1, x0
 	isb		sy
 	ret
+
+
+#if XNU_MONITOR
+	.text
+	.align 2
+	.globl EXT(ml_get_ppl_cpu_data)
+LEXT(ml_get_ppl_cpu_data)
+	LOAD_PMAP_CPU_DATA x0, x1, x2
+	ret
+#endif
 
 /*
  * 	set AUX control register
@@ -282,7 +338,11 @@ LEXT(set_vbar_el1)
 LEXT(vmsa_lock)
 	isb sy
 	mov x1, #(VMSA_LOCK_SCTLR_M_BIT)
+#if __ARM_MIXED_PAGE_SIZE__
+	mov x0, #(VMSA_LOCK_TTBR1_EL1 | VMSA_LOCK_VBAR_EL1)
+#else
 	mov x0, #(VMSA_LOCK_TTBR1_EL1 | VMSA_LOCK_TCR_EL1 | VMSA_LOCK_VBAR_EL1)
+#endif
 	orr x0, x0, x1
 	msr ARM64_REG_VMSA_LOCK_EL1, x0
 	isb sy
@@ -297,26 +357,32 @@ LEXT(vmsa_lock)
 	.globl EXT(set_tcr)
 LEXT(set_tcr)
 #if defined(APPLE_ARM64_ARCH_FAMILY)
+#if DEBUG || DEVELOPMENT
 	// Assert that T0Z is always equal to T1Z
 	eor		x1, x0, x0, lsr #(TCR_T1SZ_SHIFT - TCR_T0SZ_SHIFT)
 	and		x1, x1, #(TCR_TSZ_MASK << TCR_T0SZ_SHIFT)
 	cbnz	x1, L_set_tcr_panic
+#endif /* DEBUG || DEVELOPMENT */
+#endif /* defined(APPLE_ARM64_ARCH_FAMILY) */
 #if defined(KERNEL_INTEGRITY_KTRR)
 	mov		x1, lr
 	bl		EXT(pinst_set_tcr)
 	mov		lr, x1
 #else
 #if defined(HAS_VMSA_LOCK)
+#if DEBUG || DEVELOPMENT
 	// assert TCR unlocked
 	mrs 		x1, ARM64_REG_VMSA_LOCK_EL1
 	and		x1, x1, #(VMSA_LOCK_TCR_EL1)
 	cbnz		x1, L_set_locked_reg_panic
+#endif /* DEBUG || DEVELOPMENT */
 #endif /* defined(HAS_VMSA_LOCK) */
 	msr		TCR_EL1, x0
 #endif /* defined(KERNEL_INTRITY_KTRR) */
 	isb		sy
 	ret
 
+#if DEBUG || DEVELOPMENT
 L_set_tcr_panic:
 	PUSH_FRAME
 	sub		sp, sp, #16
@@ -338,17 +404,7 @@ L_set_tcr_panic_str:
 
 L_set_locked_reg_panic_str:
 	.asciz	"attempt to set locked register: (%llx)\n"
-#else
-#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
-	mov		x1, lr
-	bl		EXT(pinst_set_tcr)
-	mov		lr, x1
-#else
-	msr		TCR_EL1, x0
-#endif
-	isb		sy
-	ret
-#endif // defined(APPLE_ARM64_ARCH_FAMILY)
+#endif /* DEBUG || DEVELOPMENT */
 
 /*
  *	MMU kernel virtual to physical address translation
@@ -360,6 +416,7 @@ LEXT(mmu_kvtop)
 	mrs		x2, DAIF									// Load current DAIF
 	msr		DAIFSet, #(DAIFSC_IRQF | DAIFSC_FIQF)		// Disable IRQ
 	at		s1e1r, x0									// Translation Stage 1 EL1
+	isb		sy
 	mrs		x1, PAR_EL1									// Read result
 	msr		DAIF, x2									// Restore interrupt state
 	tbnz	x1, #0, L_mmu_kvtop_invalid					// Test Translation not valid
@@ -382,6 +439,7 @@ LEXT(mmu_uvtop)
 	mrs		x2, DAIF									// Load current DAIF
 	msr		DAIFSet, #(DAIFSC_IRQF | DAIFSC_FIQF)		// Disable IRQ
 	at		s1e0r, x0									// Translation Stage 1 EL0
+	isb		sy
 	mrs		x1, PAR_EL1									// Read result
 	msr		DAIF, x2									// Restore interrupt state
 	tbnz	x1, #0, L_mmu_uvtop_invalid					// Test Translation not valid
@@ -751,13 +809,24 @@ LEXT(arm64_prepare_for_sleep)
 
 #if defined(APPLETYPHOON)
 	// <rdar://problem/15827409>
-	mrs		x0, ARM64_REG_HID2                              // Read HID2
-	orr		x0, x0, #(ARM64_REG_HID2_disMMUmtlbPrefetch)    // Set HID.DisableMTLBPrefetch
-	msr		ARM64_REG_HID2, x0                              // Write HID2
+	HID_SET_BITS ARM64_REG_HID2, ARM64_REG_HID2_disMMUmtlbPrefetch, x9
 	dsb		sy
 	isb		sy
 #endif
 
+#if HAS_CLUSTER
+	cbnz		x0, 1f                                      // Skip if deep_sleep == true
+	// Mask FIQ and IRQ to avoid spurious wakeups
+	mrs		x9, ARM64_REG_CYC_OVRD
+	and		x9, x9, #(~(ARM64_REG_CYC_OVRD_irq_mask | ARM64_REG_CYC_OVRD_fiq_mask))
+	mov		x10, #(ARM64_REG_CYC_OVRD_irq_disable | ARM64_REG_CYC_OVRD_fiq_disable)
+	orr		x9, x9, x10
+	msr		ARM64_REG_CYC_OVRD, x9
+	isb
+1:
+#endif
+
+	cbz		x0, 1f                                          // Skip if deep_sleep == false
 #if __ARM_GLOBAL_SLEEP_BIT__
 	// Enable deep sleep
 	mrs		x1, ARM64_REG_ACC_OVRD
@@ -781,17 +850,19 @@ LEXT(arm64_prepare_for_sleep)
 	mov		x1, ARM64_REG_CYC_CFG_deepSleep
 	msr		ARM64_REG_CYC_CFG, x1
 #endif
+
+1:
 	// Set "OK to power down" (<rdar://problem/12390433>)
-	mrs		x0, ARM64_REG_CYC_OVRD
-	orr		x0, x0, #(ARM64_REG_CYC_OVRD_ok2pwrdn_force_down)
+	mrs		x9, ARM64_REG_CYC_OVRD
+	orr		x9, x9, #(ARM64_REG_CYC_OVRD_ok2pwrdn_force_down)
 #if HAS_RETENTION_STATE
-	orr		x0, x0, #(ARM64_REG_CYC_OVRD_disWfiRetn)
+	orr		x9, x9, #(ARM64_REG_CYC_OVRD_disWfiRetn)
 #endif
-	msr		ARM64_REG_CYC_OVRD, x0
+	msr		ARM64_REG_CYC_OVRD, x9
 
 #if defined(APPLEMONSOON) || defined(APPLEVORTEX)
-	ARM64_IS_PCORE x0
-	cbz		x0, Lwfi_inst // skip if not p-core 
+	ARM64_IS_PCORE x9
+	cbz		x9, Lwfi_inst // skip if not p-core
 
 	/* <rdar://problem/32512947>: Flush the GUPS prefetcher prior to
 	 * wfi.  A Skye HW bug can cause the GUPS prefetcher on p-cores
@@ -807,16 +878,19 @@ LEXT(arm64_prepare_for_sleep)
 	/* <rdar://problem/32821461>: Cyprus A0/A1 parts have a similar
 	 * bug in the HSP prefetcher that can be worked around through
 	 * the same method mentioned above for Skye. */
-	SKIP_IF_CPU_VERSION_GREATER_OR_EQUAL x0, VORTEX_CPU_VERSION_B0, Lwfi_inst
+	mrs x9, MIDR_EL1
+	EXEC_COREALL_REVLO CPU_VERSION_B0, x9, x10
 #endif
-	mrs		x0, ARM64_REG_HID10
-	orr		x0, x0, #(ARM64_REG_HID10_DisHwpGups)
-	msr		ARM64_REG_HID10, x0
+	mrs		x9, ARM64_REG_HID10
+	orr		x9, x9, #(ARM64_REG_HID10_DisHwpGups)
+	msr		ARM64_REG_HID10, x9
 	isb		sy
-	and		x0, x0, #(~(ARM64_REG_HID10_DisHwpGups))
-	msr		ARM64_REG_HID10, x0
+	and		x9, x9, #(~(ARM64_REG_HID10_DisHwpGups))
+	msr		ARM64_REG_HID10, x9
 	isb		sy
 #endif
+	EXEC_END
+
 Lwfi_inst:
 	dsb		sy
 	isb		sy
@@ -868,9 +942,7 @@ LEXT(typhoon_prepare_for_wfi)
 	PUSH_FRAME
 
 	// <rdar://problem/15827409>
-	mrs		x0, ARM64_REG_HID2                              // Read HID2
-	orr		x0, x0, #(ARM64_REG_HID2_disMMUmtlbPrefetch)    // Set HID.DisableMTLBPrefetch
-	msr		ARM64_REG_HID2, x0                              // Write HID2
+	HID_SET_BITS ARM64_REG_HID2, ARM64_REG_HID2_disMMUmtlbPrefetch, x0
 	dsb		sy
 	isb		sy
 
@@ -885,10 +957,7 @@ LEXT(typhoon_return_from_wfi)
 	PUSH_FRAME
 
 	// <rdar://problem/15827409>
-	mrs		x0, ARM64_REG_HID2                              // Read HID2
-	mov		x1, #(ARM64_REG_HID2_disMMUmtlbPrefetch)        //
-	bic		x0, x0, x1                                      // Clear HID.DisableMTLBPrefetchMTLBPrefetch
-	msr		ARM64_REG_HID2, x0                              // Write HID2
+	HID_CLEAR_BITS ARM64_REG_HID2, ARM64_REG_HID2_disMMUmtlbPrefetch, x0
 	dsb		sy
 	isb		sy 
 
@@ -1070,15 +1139,13 @@ LEXT(monitor_call)
 #endif
 
 #ifdef HAS_APPLE_PAC
-/**
- * void ml_sign_thread_state(arm_saved_state_t *ss, uint64_t pc,
- *							 uint32_t cpsr, uint64_t lr, uint64_t x16,
- *							 uint64_t x17)
+/*
+ * SIGN_THREAD_STATE
+ *
+ * Macro that signs thread state.
+ * $0 - Offset in arm_saved_state to store JOPHASH value.
  */
-	.text
-	.align 2
-	.globl EXT(ml_sign_thread_state)
-LEXT(ml_sign_thread_state)
+.macro SIGN_THREAD_STATE
 	pacga	x1, x1, x0		/* PC hash (gkey + &arm_saved_state) */
 	/*
 	 * Mask off the carry flag so we don't need to re-sign when that flag is
@@ -1089,7 +1156,62 @@ LEXT(ml_sign_thread_state)
 	pacga	x1, x3, x1		/* LR Hash (gkey + spsr hash) */
 	pacga	x1, x4, x1		/* X16 hash (gkey + lr hash) */
 	pacga	x1, x5, x1		/* X17 hash (gkey + x16 hash) */
-	str		x1, [x0, SS64_JOPHASH]
+	str		x1, [x0, $0]
+#if DEBUG || DEVELOPMENT
+	mrs		x1, DAIF
+	tbz		x1, #DAIF_IRQF_SHIFT, Lintr_enabled_panic
+#endif /* DEBUG || DEVELOPMENT */
+.endmacro
+
+/*
+ * CHECK_SIGNED_STATE
+ *
+ * Macro that checks signed thread state.
+ * $0 - Offset in arm_saved_state to to read the JOPHASH value from.
+ * $1 - Label to jump to when check is unsuccessful.
+ */
+.macro CHECK_SIGNED_STATE
+	pacga	x1, x1, x0		/* PC hash (gkey + &arm_saved_state) */
+	/*
+	 * Mask off the carry flag so we don't need to re-sign when that flag is
+	 * touched by the system call return path.
+	 */
+	bic		x2, x2, PSR_CF
+	pacga	x1, x2, x1		/* SPSR hash (gkey + pc hash) */
+	pacga	x1, x3, x1		/* LR Hash (gkey + spsr hash) */
+	pacga	x1, x4, x1		/* X16 hash (gkey + lr hash) */
+	pacga	x1, x5, x1		/* X17 hash (gkey + x16 hash) */
+	ldr		x2, [x0, $0]
+	cmp		x1, x2
+	b.ne	$1
+#if DEBUG || DEVELOPMENT
+	mrs		x1, DAIF
+	tbz		x1, #DAIF_IRQF_SHIFT, Lintr_enabled_panic
+#endif /* DEBUG || DEVELOPMENT */
+.endmacro
+
+/**
+ * void ml_sign_thread_state(arm_saved_state_t *ss, uint64_t pc,
+ *							 uint32_t cpsr, uint64_t lr, uint64_t x16,
+ *							 uint64_t x17)
+ */
+	.text
+	.align 2
+	.globl EXT(ml_sign_thread_state)
+LEXT(ml_sign_thread_state)
+	SIGN_THREAD_STATE SS64_JOPHASH
+	ret
+
+/**
+ * void ml_sign_kernel_thread_state(arm_kernel_saved_state *ss, uint64_t pc,
+ *							 uint32_t cpsr, uint64_t lr, uint64_t x16,
+ *							 uint64_t x17)
+ */
+	.text
+	.align 2
+	.globl EXT(ml_sign_kernel_thread_state)
+LEXT(ml_sign_kernel_thread_state)
+	SIGN_THREAD_STATE SS64_KERNEL_JOPHASH
 	ret
 
 /**
@@ -1101,26 +1223,55 @@ LEXT(ml_sign_thread_state)
 	.align 2
 	.globl EXT(ml_check_signed_state)
 LEXT(ml_check_signed_state)
-	pacga	x1, x1, x0		/* PC hash (gkey + &arm_saved_state) */
-	/*
-	 * Mask off the carry flag so we don't need to re-sign when that flag is
-	 * touched by the system call return path.
-	 */
-	bic		x2, x2, PSR_CF
-	pacga	x1, x2, x1		/* SPSR hash (gkey + pc hash) */
-	pacga	x1, x3, x1		/* LR Hash (gkey + spsr hash) */
-	pacga	x1, x4, x1		/* X16 hash (gkey + lr hash) */
-	pacga	x1, x5, x1		/* X17 hash (gkey + x16 hash) */
-	ldr		x2, [x0, SS64_JOPHASH]
-	cmp		x1, x2
-	b.ne	Lcheck_hash_panic
+	CHECK_SIGNED_STATE SS64_JOPHASH, Lcheck_hash_panic
 	ret
 Lcheck_hash_panic:
+	/*
+	 * ml_check_signed_state normally doesn't set up a stack frame, since it
+	 * needs to work in the face of attackers that can modify the stack.
+	 * However we lazily create one in the panic path: at this point we're
+	 * *only* using the stack frame for unwinding purposes, and without one
+	 * we'd be missing information about the caller.
+	 */
+	ARM64_STACK_PROLOG
+	PUSH_FRAME
 	mov		x1, x0
 	adr		x0, Lcheck_hash_str
 	CALL_EXTERN panic_with_thread_kernel_state
+
+/**
+ * void ml_check_kernel_signed_state(arm_kernel_saved_state *ss, uint64_t pc,
+ *							  uint32_t cpsr, uint64_t lr, uint64_t x16,
+ *							  uint64_t x17)
+ */
+	.text
+	.align 2
+	.globl EXT(ml_check_kernel_signed_state)
+LEXT(ml_check_kernel_signed_state)
+	CHECK_SIGNED_STATE SS64_KERNEL_JOPHASH, Lcheck_kernel_hash_panic
+	ret
+Lcheck_kernel_hash_panic:
+	ARM64_STACK_PROLOG
+	PUSH_FRAME
+	adr		x0, Lcheck_hash_str
+	CALL_EXTERN panic
+
 Lcheck_hash_str:
 	.asciz "JOP Hash Mismatch Detected (PC, CPSR, or LR corruption)"
+
+#if DEBUG || DEVELOPMENT
+Lintr_enabled_panic:
+	ARM64_STACK_PROLOG
+	PUSH_FRAME
+	adr		x0, Lintr_enabled_str
+	CALL_EXTERN panic
+Lintr_enabled_str:
+	/*
+	 * Please see the "Signing spilled register state" section of doc/pac.md
+	 * for an explanation of why this is bad and how it should be fixed.
+	 */
+	.asciz "Signed thread state manipulated with interrupts enabled"
+#endif /* DEBUG || DEVELOPMENT */
 
 /**
  * void ml_auth_thread_state_invalid_cpsr(arm_saved_state_t *ss)

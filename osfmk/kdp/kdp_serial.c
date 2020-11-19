@@ -49,7 +49,7 @@ kdp_serial_out(unsigned char byte, void (*outFunc)(char))
 		outFunc(SKDP_ESC_CHAR);
 		byte = ~byte;
 	}
-	outFunc(byte);
+	outFunc((char)byte);
 }
 
 void
@@ -62,10 +62,10 @@ kdp_serialize_packet(unsigned char *packet, unsigned int len, void (*outFunc)(ch
 	// insert the CRC between back to back STARTs which is compatible with old clients
 	crc = (uint32_t) z_crc32(0, packet, len);
 	outFunc(SKDP_START_CHAR);
-	kdp_serial_out((crc >> 0), outFunc);
-	kdp_serial_out((crc >> 8), outFunc);
-	kdp_serial_out((crc >> 16), outFunc);
-	kdp_serial_out((crc >> 24), outFunc);
+	kdp_serial_out((unsigned char)(crc >> 0), outFunc);
+	kdp_serial_out((unsigned char)(crc >> 8), outFunc);
+	kdp_serial_out((unsigned char)(crc >> 16), outFunc);
+	kdp_serial_out((unsigned char)(crc >> 24), outFunc);
 
 	outFunc(SKDP_START_CHAR);
 	for (index = 0; index < len; index++) {

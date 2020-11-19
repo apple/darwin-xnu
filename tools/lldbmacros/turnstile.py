@@ -158,7 +158,7 @@ def ShowThreadInheritorBase(cmd_args=None, cmd_options={}, O=None):
 
     thread = kern.GetValueFromAddress(cmd_args[0], "thread_t")
     with O.table(GetTurnstileSummary.header):
-        for turnstile in IteratePriorityQueue(thread.base_inheritor_queue, 'struct turnstile', 'ts_inheritor_links'):
+        for turnstile in IterateSchedPriorityQueue(thread.base_inheritor_queue, 'struct turnstile', 'ts_inheritor_links'):
             PrintTurnstile(turnstile)
 
 @lldb_command('showthreadschedturnstiles', fancy=True)
@@ -172,6 +172,6 @@ def ShowThreadInheritorSched(cmd_args=None, cmd_options={}, O=None):
 
     thread = kern.GetValueFromAddress(cmd_args[0], "thread_t")
     with O.table(GetTurnstileSummary.header):
-        for turnstile in IteratePriorityQueue(thread.sched_inheritor_queue, 'struct turnstile', 'ts_inheritor_links'):
+        for turnstile in IterateSchedPriorityQueue(thread.sched_inheritor_queue, 'struct turnstile', 'ts_inheritor_links'):
             PrintTurnstile(turnstile)
 #endif

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2004 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -92,7 +92,9 @@
 #define NUM_SEQ_ENTRIES 8
 #endif
 
-zone_t ipc_space_zone;
+ZONE_DECLARE(ipc_space_zone, "ipc spaces",
+    sizeof(struct ipc_space), ZC_NOENCRYPT);
+
 ipc_space_t ipc_space_kernel;
 ipc_space_t ipc_space_reply;
 

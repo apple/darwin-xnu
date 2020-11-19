@@ -32,6 +32,7 @@
 #include <mach_assert.h>
 #include <machine/asm.h>
 #include "assym.s"
+#include <arm64/tunables/tunables.s>
 #include <arm64/exception_asm.h>
 
 #if __ARM_KERNEL_PROTECT__
@@ -99,7 +100,7 @@
 .endmacro
 
 .macro MSR_SCTLR_EL1_X0
-#if defined(KERNEL_INTEGRITY_KTRR) 
+#if defined(KERNEL_INTEGRITY_KTRR)
 	mov		x1, lr
 
 	// This may abort, do so on SP1
@@ -192,29 +193,33 @@ LEXT(reset_vector)
 	 * If either values are zero, we're debugging kernel so skip programming KTRR.
 	 */
 
-	/* spin until bootstrap core has completed machine lockdown */
+	/* refuse to boot if machine_lockdown() hasn't completed */
 	adrp	x17, EXT(lockdown_done)@page
-1:
-	ldr	w18, [x17, EXT(lockdown_done)@pageoff]
-	cbz	w18, 1b
+	ldr	w17, [x17, EXT(lockdown_done)@pageoff]
+	cbz	w17, .
 
 	// load stashed rorgn_begin
-	adrp	x17, EXT(rorgn_begin)@page
-	add		x17, x17, EXT(rorgn_begin)@pageoff
+	adrp	x17, EXT(ctrr_begin)@page
+	add		x17, x17, EXT(ctrr_begin)@pageoff
 	ldr		x17, [x17]
+#if DEBUG || DEVELOPMENT || CONFIG_DTRACE
 	// if rorgn_begin is zero, we're debugging. skip enabling ktrr
 	cbz		x17, Lskip_ktrr
+#else
+	cbz		x17, .
+#endif
 
 	// load stashed rorgn_end
-	adrp	x19, EXT(rorgn_end)@page
-	add		x19, x19, EXT(rorgn_end)@pageoff
+	adrp	x19, EXT(ctrr_end)@page
+	add		x19, x19, EXT(ctrr_end)@pageoff
 	ldr		x19, [x19]
+#if DEBUG || DEVELOPMENT || CONFIG_DTRACE
 	cbz		x19, Lskip_ktrr
+#else
+	cbz		x19, .
+#endif
 
-	// program and lock down KTRR
-	// subtract one page from rorgn_end to make pinst insns NX
 	msr		ARM64_REG_KTRR_LOWER_EL1, x17
-	sub		x19, x19, #(1 << (ARM_PTE_SHIFT-12)), lsl #12 
 	msr		ARM64_REG_KTRR_UPPER_EL1, x19
 	mov		x17, #1
 	msr		ARM64_REG_KTRR_LOCK_EL1, x17
@@ -231,7 +236,7 @@ Lskip_ktrr:
 	and		x0, x15, #0xFF						// CPU number is in MPIDR Affinity Level 0
 #endif
 	ldr		x1, [x19, CPU_DATA_ENTRIES]			// Load start of data entries
-	add		x3, x1, MAX_CPUS * 16				// end addr of data entries = start + (16 * MAX_CPUS)  
+	add		x3, x1, MAX_CPUS * 16				// end addr of data entries = start + (16 * MAX_CPUS)
 Lcheck_cpu_data_entry:
 	ldr		x21, [x1, CPU_DATA_PADDR]			// Load physical CPU data address
 	cbz		x21, Lnext_cpu_data_entry
@@ -251,29 +256,34 @@ Lfound_cpu_data_entry:
 	 * A_PXN and A_MMUON_WRPROTECT options provides something close to KTRR behavior
 	 */
 
-	/* spin until bootstrap core has completed machine lockdown */
+	/* refuse to boot if machine_lockdown() hasn't completed */
 	adrp	x17, EXT(lockdown_done)@page
-1:
-	ldr	w18, [x17, EXT(lockdown_done)@pageoff]
-	cbz	w18, 1b
+	ldr	w17, [x17, EXT(lockdown_done)@pageoff]
+	cbz	w17, .
 
 	// load stashed rorgn_begin
-	adrp	x17, EXT(rorgn_begin)@page
-	add		x17, x17, EXT(rorgn_begin)@pageoff
+	adrp	x17, EXT(ctrr_begin)@page
+	add		x17, x17, EXT(ctrr_begin)@pageoff
 	ldr		x17, [x17]
+#if DEBUG || DEVELOPMENT || CONFIG_DTRACE
 	// if rorgn_begin is zero, we're debugging. skip enabling ctrr
 	cbz		x17, Lskip_ctrr
+#else
+	cbz		x17, .
+#endif
 
 	// load stashed rorgn_end
-	adrp	x19, EXT(rorgn_end)@page
-	add		x19, x19, EXT(rorgn_end)@pageoff
+	adrp	x19, EXT(ctrr_end)@page
+	add		x19, x19, EXT(ctrr_end)@pageoff
 	ldr		x19, [x19]
+#if DEBUG || DEVELOPMENT || CONFIG_DTRACE
 	cbz		x19, Lskip_ctrr
+#else
+	cbz		x19, .
+#endif
 
 	mrs		x18, ARM64_REG_CTRR_LOCK_EL1
 	cbnz	x18, Lskip_ctrr  /* don't touch if already locked */
-	ldr		w18, [x21, CLUSTER_MASTER] /* cluster master is unsigned int (32bit) */
-	cbz		w18, Lspin_ctrr_unlocked /* non-cluster master spins if CTRR unlocked (unexpected) */
 	msr		ARM64_REG_CTRR_A_LWR_EL1, x17
 	msr		ARM64_REG_CTRR_A_UPR_EL1, x19
 	mov		x18, #(CTRR_CTL_EL1_A_PXN | CTRR_CTL_EL1_A_MMUON_WRPROTECT)
@@ -310,10 +320,6 @@ Lskip_ctrr:
 	cmp		x0, x2
 	bne		Lskip_cpu_reset_handler
 1:
-
-#if HAS_NEX_PG
-	bl		EXT(set_nex_pg)
-#endif
 
 #if HAS_BP_RET
 	bl		EXT(set_bp_ret)
@@ -447,7 +453,7 @@ start_cpu:
 	ldr		x22, [x20, BA_VIRT_BASE]			// Get the kernel virt base
 	ldr		x23, [x20, BA_PHYS_BASE]			// Get the kernel phys base
 	ldr		x24, [x20, BA_MEM_SIZE]				// Get the physical memory size
-	ldr		x25, [x20, BA_TOP_OF_KERNEL_DATA]	// Get the top of the kernel data
+	adrp	x25, EXT(bootstrap_pagetables)@page	// Get the start of the page tables
 	ldr		x26, [x20, BA_BOOT_FLAGS]			// Get the kernel boot flags
 
 
@@ -629,7 +635,7 @@ LEXT(start_first_cpu)
 	ldr		x22, [x20, BA_VIRT_BASE]			// Get the kernel virt base
 	ldr		x23, [x20, BA_PHYS_BASE]			// Get the kernel phys base
 	ldr		x24, [x20, BA_MEM_SIZE]				// Get the physical memory size
-	ldr		x25, [x20, BA_TOP_OF_KERNEL_DATA]	// Get the top of the kernel data
+	adrp	x25, EXT(bootstrap_pagetables)@page	// Get the start of the page tables
 	ldr		x26, [x20, BA_BOOT_FLAGS]			// Get the kernel boot flags
 
 	// Clear the register that will be used to store the userspace thread pointer and CPU number.
@@ -678,7 +684,7 @@ LEXT(start_first_cpu)
 
 	// Invalidate all entries in the bootstrap page tables
 	mov		x0, #(ARM_TTE_EMPTY)				// Load invalid entry template
-	mov		x1, x25								// Start at top of kernel
+	mov		x1, x25								// Start at V=P pagetable root
 	mov		x2, #(TTE_PGENTRIES)				// Load number of entries per page
 	lsl		x2, x2, #2							// Shift by 2 for num entries on 4 pages
 
@@ -696,16 +702,26 @@ Linvalidate_bootstrap:							// do {
 	 * If the base address belongs to TZ0, it may be dangerous for xnu to map
 	 * it (as it may be prefetched, despite being technically inaccessible).
 	 * In order to avoid this issue while keeping the mapping code simple, we
-	 * may continue to use block mappings, but we will only map xnu's mach
-	 * header to the end of memory.
+	 * may continue to use block mappings, but we will only map the kernelcache
+	 * mach header to the end of memory.
 	 *
 	 * Given that iBoot guarantees that the unslid kernelcache base address
 	 * will begin on an L2 boundary, this should prevent us from accidentally
 	 * mapping TZ0.
 	 */
-	adrp	x0, EXT(_mh_execute_header)@page	// Use xnu's mach header as the start address
-	add	x0, x0, EXT(_mh_execute_header)@pageoff
+	adrp	x0, EXT(_mh_execute_header)@page	// address of kernel mach header
+	add		x0, x0, EXT(_mh_execute_header)@pageoff
+	ldr		w1, [x0, #0x18]						// load mach_header->flags
+	tbz		w1, #0x1f, Lkernelcache_base_found	// if MH_DYLIB_IN_CACHE unset, base is kernel mach header
+	ldr		w1, [x0, #0x20]						// load first segment cmd (offset sizeof(kernel_mach_header_t))
+	cmp		w1, #0x19							// must be LC_SEGMENT_64
+	bne		.
+	ldr		x1, [x0, #0x38]						// load first segment vmaddr
+	sub		x1, x0, x1							// compute slide
+	MOV64	x0, VM_KERNEL_LINK_ADDRESS
+	add		x0, x0, x1							// base is kernel link address + slide
 
+Lkernelcache_base_found:
 	/*
 	 * Adjust physical and virtual base addresses to account for physical
 	 * memory preceeding xnu Mach-O header
@@ -768,7 +784,7 @@ Linvalidate_bootstrap:							// do {
  *	x21 - zero on cold boot, PA of cpu data on warm reset
  *	x22 - Kernel virtual base
  *	x23 - Kernel physical base
- *	x25 - PA of the end of the kernel
+ *	x25 - PA of the V=P pagetable root
  *	 lr - KVA of C init routine
  *	 sp - SP_EL0 selected
  *
@@ -777,6 +793,13 @@ Linvalidate_bootstrap:							// do {
  *	TPIDRRO_EL0 - CPU number
  */
 common_start:
+
+#if HAS_NEX_PG
+	mov x19, lr
+	bl		EXT(set_nex_pg)
+	mov lr, x19
+#endif
+
 	// Set the translation control register.
 	adrp	x0,     EXT(sysreg_restore)@page		// Load TCR value from the system register restore structure
 	add		x0, x0, EXT(sysreg_restore)@pageoff
@@ -819,16 +842,14 @@ common_start:
 	mov		x1, #(MAIR_POSTED_COMBINED_REORDERED << MAIR_ATTR_SHIFT(CACHE_ATTRINDX_POSTED_COMBINED_REORDERED))
 	orr		x0, x0, x1
 	msr		MAIR_EL1, x0
+	isb
+	tlbi	vmalle1
+	dsb		ish
 
 #if defined(APPLEHURRICANE)
-
 	// <rdar://problem/26726624> Increase Snoop reservation in EDB to reduce starvation risk
 	// Needs to be done before MMU is enabled
-	mrs	x12, ARM64_REG_HID5
-	and	x12, x12, (~ARM64_REG_HID5_CrdEdbSnpRsvd_mask)
-	orr x12, x12, ARM64_REG_HID5_CrdEdbSnpRsvd_VALUE
-	msr	ARM64_REG_HID5, x12
-
+	HID_INSERT_BITS	ARM64_REG_HID5, ARM64_REG_HID5_CrdEdbSnpRsvd_mask, ARM64_REG_HID5_CrdEdbSnpRsvd_VALUE, x12
 #endif
 
 #if defined(BCM2837)
@@ -843,8 +864,6 @@ common_start:
 	str		w1, [x0]
 	isb		sy
 #endif
-
-
 
 #ifndef __ARM_IC_NOALIAS_ICACHE__
 	/* Invalidate the TLB and icache on systems that do not guarantee that the
@@ -891,9 +910,16 @@ common_start:
 	cbz		x1, 1b 										// Poll APSTS_EL1.MKEYVld
 	mrs		x0, ARM64_REG_APCTL_EL1
 	orr		x0, x0, #(APCTL_EL1_AppleMode)
+#ifdef HAS_APCTL_EL1_USERKEYEN
+	orr		x0, x0, #(APCTL_EL1_UserKeyEn)
+	and		x0, x0, #~(APCTL_EL1_KernKeyEn)
+#else /* !HAS_APCTL_EL1_USERKEYEN */
 	orr		x0, x0, #(APCTL_EL1_KernKeyEn)
+#endif /* HAS_APCTL_EL1_USERKEYEN */
 	and		x0, x0, #~(APCTL_EL1_EnAPKey0)
 	msr		ARM64_REG_APCTL_EL1, x0
+
+
 #else
 	mrs		x0, ARM64_REG_APCTL_EL1
 	and		x1, x0, #(APCTL_EL1_MKEYVld)
@@ -935,51 +961,30 @@ common_start:
 	msr		APGAKeyHi_EL1, x0
 
 	// Enable caches, MMU, ROP and JOP
-	mov		x0, #(SCTLR_EL1_DEFAULT & 0xFFFF)
-	mov		x1, #(SCTLR_EL1_DEFAULT & 0xFFFF0000)
-	orr		x0, x0, x1
+	MOV64	x0, SCTLR_EL1_DEFAULT
 	orr		x0, x0, #(SCTLR_PACIB_ENABLED) /* IB is ROP */
 
-#if DEBUG || DEVELOPMENT
-	and		x2, x26, BA_BOOT_FLAGS_DISABLE_JOP
 #if __APCFG_SUPPORTED__
-	// for APCFG systems, JOP keys are always on for EL1 unless ELXENKEY is cleared.
+	// for APCFG systems, JOP keys are always on for EL1.
 	// JOP keys for EL0 will be toggled on the first time we pmap_switch to a pmap that has JOP enabled
-	cbz		x2, Lenable_mmu
-	mrs		x3, APCFG_EL1
-	and		x3, x3, #~(APCFG_EL1_ELXENKEY)
-	msr		APCFG_EL1, x3
 #else /* __APCFG_SUPPORTED__ */
-	cbnz	x2, Lenable_mmu
-#endif /* __APCFG_SUPPORTED__ */
-#endif /* DEBUG || DEVELOPMENT */
-
-#if !__APCFG_SUPPORTED__
 	MOV64	x1, SCTLR_JOP_KEYS_ENABLED
 	orr 	x0, x0, x1
 #endif /* !__APCFG_SUPPORTED__ */
-Lenable_mmu:
 #else  /* HAS_APPLE_PAC */
 
 	// Enable caches and MMU
-	mov		x0, #(SCTLR_EL1_DEFAULT & 0xFFFF)
-	mov		x1, #(SCTLR_EL1_DEFAULT & 0xFFFF0000)
-	orr		x0, x0, x1
+	MOV64	x0, SCTLR_EL1_DEFAULT
 #endif /* HAS_APPLE_PAC */
 	MSR_SCTLR_EL1_X0
 	isb		sy
 
-	MOV32	x1, SCTLR_EL1_DEFAULT
+	MOV64	x1, SCTLR_EL1_DEFAULT
 #if HAS_APPLE_PAC
 	orr		x1, x1, #(SCTLR_PACIB_ENABLED)
 #if !__APCFG_SUPPORTED__
 	MOV64	x2, SCTLR_JOP_KEYS_ENABLED
-#if (DEBUG || DEVELOPMENT)
-	// Ignore the JOP bits, since we can't predict at compile time whether BA_BOOT_FLAGS_DISABLE_JOP is set
-	bic		x0, x0, x2
-#else
 	orr		x1, x1, x2
-#endif /* (DEBUG || DEVELOPMENT) */
 #endif /* !__APCFG_SUPPORTED__ */
 #endif /* HAS_APPLE_PAC */
 	cmp		x0, x1
@@ -998,8 +1003,8 @@ Lenable_mmu:
 #endif
 
 	// Clear thread pointer
-	mov		x0, #0
-	msr		TPIDR_EL1, x0						// Set thread register
+	msr		TPIDR_EL1, xzr						// Set thread register
+
 
 #if defined(APPLE_ARM64_ARCH_FAMILY)
 	// Initialization common to all Apple targets
@@ -1010,383 +1015,29 @@ Lenable_mmu:
 	ARM64_WRITE_EP_SPR x15, x12, ARM64_REG_EHID4, ARM64_REG_HID4
 #endif  // APPLE_ARM64_ARCH_FAMILY
 
-#if defined(APPLETYPHOON)
-	//
-	// Typhoon-Specific initialization
-	// For tunable summary, see <rdar://problem/13503621>
-	//
+	// Read MIDR before start of per-SoC tunables
+	mrs x12, MIDR_EL1
 
-	//
-	// Disable LSP flush with context switch to work around bug in LSP
-	// that can cause Typhoon to wedge when CONTEXTIDR is written.
-	// <rdar://problem/12387704>
-	//
-
-	mrs		x12, ARM64_REG_HID0
-	orr		x12, x12, ARM64_REG_HID0_LoopBuffDisb
-	msr		ARM64_REG_HID0, x12
-
-	mrs		x12, ARM64_REG_HID1
-	orr		x12, x12, ARM64_REG_HID1_rccDisStallInactiveIexCtl
-	msr		ARM64_REG_HID1, x12
-
-	mrs		x12, ARM64_REG_HID3
-	orr		x12, x12, ARM64_REG_HID3_DisXmonSnpEvictTriggerL2StarvationMode
-	msr		ARM64_REG_HID3, x12
-
-	mrs		x12, ARM64_REG_HID5
-	and		x12, x12, (~ARM64_REG_HID5_DisHwpLd)
-	and		x12, x12, (~ARM64_REG_HID5_DisHwpSt)
-	msr		ARM64_REG_HID5, x12
-
-	// Change the default memcache data set ID from 0 to 15 for all agents
-	mrs		x12, ARM64_REG_HID8
-	orr		x12, x12, (ARM64_REG_HID8_DataSetID0_VALUE | ARM64_REG_HID8_DataSetID1_VALUE)
-#if ARM64_BOARD_CONFIG_T7001
-	orr		x12, x12, ARM64_REG_HID8_DataSetID2_VALUE
-#endif	// ARM64_BOARD_CONFIG_T7001
-	msr		ARM64_REG_HID8, x12
-	isb		sy
-#endif	// APPLETYPHOON
-
-#if defined(APPLETWISTER)
-
-	// rdar://problem/36112905: Set CYC_CFG:skipInit to pull in isAlive by one DCLK
-	// to work around potential hang.  Must only be applied to Maui C0.
-	mrs		x12, MIDR_EL1
-	ubfx		x13, x12, #MIDR_EL1_PNUM_SHIFT, #12
-	cmp		x13, #4		// Part number 4 => Maui, 5 => Malta/Elba
-	bne		Lskip_isalive
-	ubfx		x13, x12, #MIDR_EL1_VAR_SHIFT, #4
-	cmp		x13, #2		// variant 2 => Maui C0
-	b.lt		Lskip_isalive
-
-	mrs		x12, ARM64_REG_CYC_CFG
-	orr		x12, x12, ARM64_REG_CYC_CFG_skipInit
-	msr		ARM64_REG_CYC_CFG, x12
-
-Lskip_isalive:
-
-	mrs		x12, ARM64_REG_HID11
-	and		x12, x12, (~ARM64_REG_HID11_DisFillC1BubOpt)
-	msr		ARM64_REG_HID11, x12
-
-	// Change the default memcache data set ID from 0 to 15 for all agents
-	mrs		x12, ARM64_REG_HID8
-	orr		x12, x12, (ARM64_REG_HID8_DataSetID0_VALUE | ARM64_REG_HID8_DataSetID1_VALUE)
-	orr		x12, x12, (ARM64_REG_HID8_DataSetID2_VALUE | ARM64_REG_HID8_DataSetID3_VALUE)
-	msr		ARM64_REG_HID8, x12
-
-	// Use 4-cycle MUL latency to avoid denormal stalls
-	mrs		x12, ARM64_REG_HID7
-	orr		x12, x12, #ARM64_REG_HID7_disNexFastFmul
-	msr		ARM64_REG_HID7, x12
-
-	// disable reporting of TLB-multi-hit-error
-	// <rdar://problem/22163216> 
-	mrs		x12, ARM64_REG_LSU_ERR_STS
-	and		x12, x12, (~ARM64_REG_LSU_ERR_STS_L1DTlbMultiHitEN)
-	msr		ARM64_REG_LSU_ERR_STS, x12
-
-	isb		sy
-#endif	// APPLETWISTER
-
-#if defined(APPLEHURRICANE)
-
-	// IC prefetch configuration
-	// <rdar://problem/23019425>
-	mrs		x12, ARM64_REG_HID0
-	and		x12, x12, (~ARM64_REG_HID0_ICPrefDepth_bmsk)
-	orr		x12, x12, (1 << ARM64_REG_HID0_ICPrefDepth_bshift)
-	orr		x12, x12, ARM64_REG_HID0_ICPrefLimitOneBrn
-	msr		ARM64_REG_HID0, x12
-
-	// disable reporting of TLB-multi-hit-error
-	// <rdar://problem/22163216> 
-	mrs		x12, ARM64_REG_LSU_ERR_CTL
-	and		x12, x12, (~ARM64_REG_LSU_ERR_CTL_L1DTlbMultiHitEN)
-	msr		ARM64_REG_LSU_ERR_CTL, x12
-
-	// disable crypto fusion across decode groups
-	// <rdar://problem/27306424>
-	mrs		x12, ARM64_REG_HID1
-	orr		x12, x12, ARM64_REG_HID1_disAESFuseAcrossGrp
-	msr		ARM64_REG_HID1, x12
-
-#if defined(ARM64_BOARD_CONFIG_T8011)
-	// Clear DisDcZvaCmdOnly 
-	// Per Myst A0/B0 tunables document
-	// <rdar://problem/27627428> Myst: Confirm ACC Per-CPU Tunables
-	mrs		x12, ARM64_REG_HID3
-	and             x12, x12, ~ARM64_REG_HID3_DisDcZvaCmdOnly
-	msr             ARM64_REG_HID3, x12
-
-	mrs		x12, ARM64_REG_EHID3
-	and             x12, x12, ~ARM64_REG_EHID3_DisDcZvaCmdOnly
-	msr             ARM64_REG_EHID3, x12
-#endif /* defined(ARM64_BOARD_CONFIG_T8011) */
-
-#endif // APPLEHURRICANE
-
-#if defined(APPLEMONSOON)
-
-	/***** Tunables that apply to all skye cores, all chip revs *****/
-
-	// <rdar://problem/28512310> SW WAR/eval: WKdm write ack lost when bif_wke_colorWrAck_XXaH asserts concurrently for both colors
-	mrs		x12, ARM64_REG_HID8
-	orr		x12, x12, #ARM64_REG_HID8_WkeForceStrictOrder
-	msr		ARM64_REG_HID8, x12
-
-	// Skip if not E-core
-	ARM64_IS_PCORE x15
-	cbnz		x15, Lskip_skye_ecore_only
-
-	/***** Tunables that only apply to skye e-cores, all chip revs *****/
-
-	// <rdar://problem/30423928>: Atomic launch eligibility is erroneously taken away when a store at SMB gets invalidated
-	mrs		x12, ARM64_REG_EHID11
-	and		x12, x12, ~(ARM64_REG_EHID11_SmbDrainThresh_mask)
-	msr		ARM64_REG_EHID11, x12
-
-Lskip_skye_ecore_only:
-
-	SKIP_IF_CPU_VERSION_GREATER_OR_EQUAL x12, MONSOON_CPU_VERSION_B0, Lskip_skye_a0_workarounds
-
-	// Skip if not E-core
-	cbnz		x15, Lskip_skye_a0_ecore_only
-
-	/***** Tunables that only apply to skye e-cores, chip revs < B0 *****/
-
-	// Disable downstream fill bypass logic
-	// <rdar://problem/28545159> [Tunable] Skye - L2E fill bypass collision from both pipes to ecore
-	mrs		x12, ARM64_REG_EHID5
-	orr		x12, x12, ARM64_REG_EHID5_DisFillByp
-	msr		ARM64_REG_EHID5, x12
-
-	// Disable forwarding of return addresses to the NFP 
-	// <rdar://problem/30387067> Skye: FED incorrectly taking illegal va exception
-	mrs		x12, ARM64_REG_EHID0
-	orr		x12, x12, ARM64_REG_EHID0_nfpRetFwdDisb
-	msr		ARM64_REG_EHID0, x12
-
-Lskip_skye_a0_ecore_only:
-
-	/***** Tunables that apply to all skye cores, chip revs < B0 *****/
-
-	// Disable clock divider gating
-	// <rdar://problem/30854420> [Tunable/Errata][cpu_1p_1e] [CPGV2] ACC power down issue when link FSM switches from GO_DN to CANCEL and at the same time upStreamDrain request is set.
-	mrs		x12, ARM64_REG_HID6
-	orr		x12, x12, ARM64_REG_HID6_DisClkDivGating
-	msr		ARM64_REG_HID6, x12
-
-	// Disable clock dithering
-	// <rdar://problem/29022199> [Tunable] Skye A0: Linux: LLC PIO Errors
-	mrs		x12, ARM64_REG_ACC_OVRD
-	orr		x12, x12, ARM64_REG_ACC_OVRD_dsblClkDtr
-	msr		ARM64_REG_ACC_OVRD, x12
-
-	mrs		x12, ARM64_REG_ACC_EBLK_OVRD
-	orr		x12, x12, ARM64_REG_ACC_OVRD_dsblClkDtr
-	msr		ARM64_REG_ACC_EBLK_OVRD, x12
-
-Lskip_skye_a0_workarounds:
-
-	SKIP_IF_CPU_VERSION_LESS_THAN x12, MONSOON_CPU_VERSION_B0, Lskip_skye_post_a1_workarounds
-
-	/***** Tunables that apply to all skye cores, chip revs >= B0 *****/
-
-	// <rdar://problem/32512836>: Disable refcount syncing between E and P
-	mrs		x12, ARM64_REG_CYC_OVRD
-	and		x12, x12, ~ARM64_REG_CYC_OVRD_dsblSnoopTime_mask
-	orr		x12, x12, ARM64_REG_CYC_OVRD_dsblSnoopPTime
-	msr		ARM64_REG_CYC_OVRD, x12
-
-Lskip_skye_post_a1_workarounds:
-
-#endif /* defined(APPLEMONSOON) */
-
-#if defined(APPLEVORTEX)
-
-	ARM64_IS_PCORE x15
-
-	// Skip if not P-core
-	cbz		x15, Lskip_cyprus_pcore_only
-
-	mrs		x12, ARM64_REG_HID1
-
-	mrs		x13, MIDR_EL1
-	ubfx		x14, x13, #MIDR_EL1_PNUM_SHIFT, #12
-	// Should be applied to all Aruba variants, but only Cyprus variants B0 and later
-	cmp		x14, #0xb	// Part number 11 => Cyprus, 16 => Aruba
-	bne		Lbr_kill
-	ubfx		x14, x13, #MIDR_EL1_VAR_SHIFT, #4
-	cbz		x14, Lskip_br_kill		// variant 0 => Cyprus AX, 1 => Cyprus BX
-
-Lbr_kill:
-
-	// rdar://problem/36716477: data corruption due to incorrect branch predictor resolution
-	orr		x12, x12, ARM64_REG_HID1_enaBrKillLimit
-
-Lskip_br_kill:
-
-	// rdar://problem/34435356: segfaults due to IEX clock-gating
-	orr		x12, x12, ARM64_REG_HID1_rccForceAllIexL3ClksOn
-	msr		ARM64_REG_HID1, x12
-
-#if ARM64_BOARD_CONFIG_T8027
-	// rdar://problem/40695685: Enable BIF fill buffer stall logic to prevent skid buffer overflow (Aruba A1 only)
-	mrs		x12, ARM64_REG_HID5
-	orr		x12, x12, ARM64_REG_HID5_EnableDnFIFORdStall
-	msr		ARM64_REG_HID5, x12
-
-#endif	/* ARM64_BOARD_CONFIG_T8027 */
-
-	// Prevent ordered loads from being dispatched from LSU until all prior loads have completed. 
-	// rdar://problem/34095873: AF2 ordering rules allow ARM device ordering violations
-	mrs		x12, ARM64_REG_HID4
-	orr		x12, x12, ARM64_REG_HID4_ForceNsOrdLdReqNoOlderLd
-	msr		ARM64_REG_HID4, x12
-
-	// rdar://problem/38482968: [Cyprus Tunable] Poisoned cache line crossing younger load is not redirected by older load-barrier
-	mrs		x12, ARM64_REG_HID3
-	orr		x12, x12, ARM64_REG_HID3_DisColorOpt
-	msr		ARM64_REG_HID3, x12
-
-	// rdar://problem/41056604: disable faster launches of uncacheable unaligned stores to workaround load/load ordering violation
-	mrs		x12, ARM64_REG_HID11
-	orr		x12, x12, ARM64_REG_HID11_DisX64NTLnchOpt
-	msr		ARM64_REG_HID11, x12
-
-	b		Lskip_cyprus_ecore_only
-
-Lskip_cyprus_pcore_only:
-
-	// Prevent ordered loads from being dispatched from LSU until all prior loads have completed. 
-	// rdar://problem/34095873: AF2 ordering rules allow ARM device ordering violations
-	mrs		x12, ARM64_REG_EHID4
-	orr		x12, x12, ARM64_REG_HID4_ForceNsOrdLdReqNoOlderLd
-	msr		ARM64_REG_EHID4, x12
-
-	// rdar://problem/36595004: Poisoned younger load is not redirected by older load-acquire
-	mrs		x12, ARM64_REG_EHID3
-	orr		x12, x12, ARM64_REG_EHID3_DisColorOpt
-	msr		ARM64_REG_EHID3, x12
-
-	// rdar://problem/37949166: Disable the extension of prefetcher training pipe clock gating, revert to default gating
-	mrs		x12, ARM64_REG_EHID10
-	orr		x12, x12, ARM64_REG_EHID10_rccDisPwrSavePrfClkOff
-	msr		ARM64_REG_EHID10, x12
-
-Lskip_cyprus_ecore_only:
-
-#endif /* defined (APPLEVORTEX) */
-
-#if defined(ARM64_BOARD_CONFIG_T8030)
+#if defined(APPLELIGHTNING)
 	// Cebu <B0 is deprecated and unsupported (see rdar://problem/42835678)
-	SKIP_IF_CPU_VERSION_LESS_THAN x12, LIGHTNING_CPU_VERSION_B0, .
+	EXEC_COREEQ_REVLO MIDR_CEBU_LIGHTNING, CPU_VERSION_B0, x12, x13
+	b .
+	EXEC_END
+	EXEC_COREEQ_REVLO MIDR_CEBU_THUNDER, CPU_VERSION_B0, x12, x13
+	b .
+	EXEC_END
+#endif
 
-	ARM64_IS_PCORE x15
-
-	// Skip if not P-core
-	cbz		x15, Lskip_cebu_pcore_only
-
-	// rdar://problem/50664291: [Cebu B0/B1 Tunables][PerfVerif][LSU] Post-silicon tuning of STNT widget contiguous counter threshold
-	mrs		x12, ARM64_REG_HID4
-	and		x12, x12, ~ARM64_REG_HID4_CnfCntrThresh_mask
-	orr		x12, x12, 3 << ARM64_REG_HID4_CnfCntrThresh_shift
-	msr		ARM64_REG_HID4, x12
-
-	mrs		x12, ARM64_REG_HID9
-	// rdar://problem/47744434: Barrier Load Ordering property is not satisfied for x64-loads
-	orr		x12, x12, ARM64_REG_HID9_EnableFixBug47221499
-	// rdar://problem/50664291: [Cebu B0/B1 Tunables][PerfVerif][LSU] Post-silicon tuning of STNT widget contiguous counter threshold
-	orr		x12, x12, ARM64_REG_HID9_DisSTNTWidgetForUnalign
-	msr		ARM64_REG_HID9, x12
-
-	// rdar://problem/47865629: RF bank and Multipass conflict forward progress widget does not handle 3+ cycle livelock
-	mrs		x12, ARM64_REG_HID16
-	orr		x12, x12, ARM64_REG_HID16_EnRs4Sec
-	and		x12, x12, ~ARM64_REG_HID16_DisxPickRs45
-	orr		x12, x12, ARM64_REG_HID16_EnMPxPick45
-	orr		x12, x12, ARM64_REG_HID16_EnMPCyc7
-	msr		ARM64_REG_HID16, x12
-
-	mrs		x12, ARM64_REG_HID4
-	// Prevent ordered loads from being dispatched from LSU until all prior loads have completed.
-	// rdar://problem/34095873: AF2 ordering rules allow ARM device ordering violations
-	orr		x12, x12, ARM64_REG_HID4_ForceNsOrdLdReqNoOlderLd
-	// rdar://problem/51690962: Disable Store-Non-Temporal downgrade widget
-	orr		x12, x12, ARM64_REG_HID4_DisSTNTWidget
-	msr		ARM64_REG_HID4, x12
-
-	// rdar://problem/41056604: disable faster launches of uncacheable unaligned stores to workaround load/load ordering violation
-	mrs		x12, ARM64_REG_HID11
-	orr		x12, x12, ARM64_REG_HID11_DisX64NTLnchOpt
-	msr		ARM64_REG_HID11, x12
-
-	// rdar://problem/41029832: configure dummy cycles to work around incorrect temp sensor readings on NEX power gating
-	mrs		x12, ARM64_REG_HID13
-	and		x12, x12, ~ARM64_REG_HID13_PreCyc_mask
-	orr		x12, x12, 4 << ARM64_REG_HID13_PreCyc_shift
-	msr		ARM64_REG_HID13, x12
-
-	// rdar://problem/45024523: enable aggressive LEQ throttling to work around LEQ credit leak
-	mrs		x12, ARM64_REG_HID16
-	orr		x12, x12, ARM64_REG_HID16_leqThrottleAggr
-	msr		ARM64_REG_HID16, x12
-
-	b		Lskip_cebu_ecore_only
-
-Lskip_cebu_pcore_only:
-
-	// Prevent ordered loads from being dispatched from LSU until all prior loads have completed.
-	// rdar://problem/34095873: AF2 ordering rules allow ARM device ordering violations
-	mrs		x12, ARM64_REG_EHID4
-	orr		x12, x12, ARM64_REG_HID4_ForceNsOrdLdReqNoOlderLd
-	msr		ARM64_REG_EHID4, x12
-
-	// rdar://problem/37949166: Disable the extension of prefetcher training pipe clock gating, revert to default gating
-	mrs		x12, ARM64_REG_EHID10
-	orr		x12, x12, ARM64_REG_EHID10_rccDisPwrSavePrfClkOff
-	msr		ARM64_REG_EHID10, x12
-
-Lskip_cebu_ecore_only:
-#endif /* defined(ARM64_BOARD_CONFIG_T8030) */
-
-#if defined(APPLELIGHTNING)
-	// rdar://54225210 (Incorrect fusing of a direct branch with AMX/EAS instruction at cross-beat location)
-	ARM64_IS_PCORE x15
-	cbz		x15, not_cebu_pcore
-
-	mrs		x12, ARM64_REG_HID0
-	orr		x12, x12, ARM64_REG_HID0_CacheFusionDisable
-	msr		ARM64_REG_HID0, x12
-
-not_cebu_pcore:
-#endif /* defined(APPLELIGHTNING) */
-
-#if defined(APPLELIGHTNING)
-
-	// rdar://53907283 ([Cebu ACC Errata] Sibling Merge in LLC can cause UC load to violate ARM Memory Ordering Rules.)
-	mrs		x12, ARM64_REG_HID5
-	orr		x12, x12, ARM64_REG_HID5_DisFill2cMerge
-	msr		ARM64_REG_HID5, x12
-
-	// Skip if not E-core or not a two-cluster CPU
-#if defined(CPU_CLUSTER_OFFSETS)
-	ARM64_IS_PCORE x15
-	cbnz	x15, Lskip_h12_h13_ecore_only
-
-	// rdar://problem/48476033: Prevent store-to-load forwarding for UC memory to avoid barrier ordering violation
-	mrs		x12, ARM64_REG_EHID10
-	orr		x12, x12, ARM64_REG_EHID10_ForceWStDrainUc
-	msr		ARM64_REG_EHID10, x12
-
-Lskip_h12_h13_ecore_only:
-#endif /* defined(CPU_CLUSTER_OFFSETS) */
-#endif /* defined(APPLELIGHTNING)*/
+	APPLY_TUNABLES x12, x13
 
 
+
+#if HAS_CLUSTER
+	// Unmask external IRQs if we're restarting from non-retention WFI
+	mrs		x9, ARM64_REG_CYC_OVRD
+	and		x9, x9, #(~(ARM64_REG_CYC_OVRD_irq_mask | ARM64_REG_CYC_OVRD_fiq_mask))
+	msr		ARM64_REG_CYC_OVRD, x9
+#endif
 
 	// If x21 != 0, we're doing a warm reset, so we need to trampoline to the kernel pmap.
 	cbnz	x21, Ltrampoline

@@ -37,7 +37,6 @@
 #include <mach/host_priv.h>
 #include <mach/host_special_ports.h>
 #include <kern/host.h>
-#include <kern/kalloc.h>
 #include <kern/ledger.h>
 #include <sys/kdebug.h>
 #include <IOKit/IOBSD.h>

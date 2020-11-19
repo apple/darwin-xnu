@@ -439,7 +439,7 @@ typedef struct task_vm_info     *task_vm_info_t;
 typedef struct vm_purgeable_info        task_purgable_info_t;
 
 
-#define TASK_TRACE_MEMORY_INFO  24
+#define TASK_TRACE_MEMORY_INFO  24  /* no longer supported */
 struct task_trace_memory_info {
 	uint64_t  user_memory_address;  /* address of start of trace memory buffer */
 	uint64_t  buffer_size;                  /* size of buffer in bytes */
@@ -476,7 +476,7 @@ struct task_power_info_v2 {
 	gpu_energy_data gpu_energy;
 #if defined(__arm__) || defined(__arm64__)
 	uint64_t                task_energy;
-#endif
+#endif /* defined(__arm__) || defined(__arm64__) */
 	uint64_t                task_ptime;
 	uint64_t                task_pset_switches;
 };

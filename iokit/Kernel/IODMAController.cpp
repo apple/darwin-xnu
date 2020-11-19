@@ -26,13 +26,16 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <IOKit/IODMAController.h>
+#include <libkern/c++/OSSharedPtr.h>
 
 
 #define super IOService
 OSDefineMetaClassAndAbstractStructors(IODMAController, IOService);
 
-const OSSymbol *
+OSSharedPtr<const OSSymbol>
 IODMAController::createControllerName(UInt32 phandle)
 {
 #define CREATE_BUF_LEN 48
@@ -47,11 +50,12 @@ IODMAController *
 IODMAController::getController(IOService *provider, UInt32 dmaIndex)
 {
 	OSData          *dmaParentData;
-	const OSSymbol  *dmaParentName;
+	OSSharedPtr<const OSSymbol> dmaParentName;
 	IODMAController *dmaController;
 
 	// Find the name of the parent dma controller
-	dmaParentData = OSDynamicCast(OSData, provider->getProperty("dma-parent"));
+	OSSharedPtr<OSObject> prop = provider->copyProperty("dma-parent");
+	dmaParentData = OSDynamicCast(OSData, prop.get());
 	if (dmaParentData == NULL) {
 		return NULL;
 	}
@@ -69,7 +73,7 @@ IODMAController::getController(IOService *provider, UInt32 dmaIndex)
 	}
 
 	// Wait for the parent dma controller
-	dmaController = OSDynamicCast(IODMAController, IOService::waitForService(IOService::nameMatching(dmaParentName)));
+	dmaController = OSDynamicCast(IODMAController, IOService::waitForService( IOService::nameMatching(dmaParentName.get()).detach()));
 
 	return dmaController;
 }
@@ -95,11 +99,12 @@ IODMAController::registerDMAController(IOOptionBits options)
 {
 	OSData *phandleData;
 
-	phandleData = OSDynamicCast(OSData, _provider->getProperty("AAPL,phandle"));
+	OSSharedPtr<OSObject> prop = _provider->copyProperty("AAPL,phandle");
+	phandleData = OSDynamicCast(OSData, prop.get());
 
 	_dmaControllerName = createControllerName(*(UInt32 *)phandleData->getBytesNoCopy());
 
-	setName(_dmaControllerName);
+	setName(_dmaControllerName.get());
 
 	registerService(options | ((options & kIOServiceAsynchronous) ? 0 : kIOServiceSynchronous));
 }

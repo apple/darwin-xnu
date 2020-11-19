@@ -119,6 +119,8 @@ type mach_port_info_t		= array[*:17] of integer_t;
 type mach_msg_trailer_type_t = int;
 type mach_msg_trailer_info_t	= array[*:68] of char;
 
+type mach_task_flavor_t = int;
+
 type task_t = mach_port_t
 #if	KERNEL_SERVER
 		intran: task_t convert_port_to_task(mach_port_t)
@@ -135,11 +137,34 @@ type task_name_t = mach_port_t
 #endif	/* KERNEL_SERVER */
 		;
 
+type task_policy_set_t = mach_port_t
+#if	KERNEL_SERVER
+		intran: task_policy_set_t convert_port_to_task_policy_set(mach_port_t)
+		destructor: task_policy_set_deallocate(task_policy_set_t)
+#endif	/* KERNEL_SERVER */
+		;
+
+type task_policy_get_t = mach_port_t
+#if	KERNEL_SERVER
+		intran: task_policy_get_t convert_port_to_task_policy_get(mach_port_t)
+		destructor: task_policy_get_deallocate(task_policy_get_t)
+#endif	/* KERNEL_SERVER */
+		;
+
+
 type task_inspect_t = mach_port_t
 #if	KERNEL_SERVER
 		intran: task_inspect_t convert_port_to_task_inspect(mach_port_t)
 		outtran: mach_port_t convert_task_inspect_to_port(task_inspect_t)
 		destructor: task_inspect_deallocate(task_inspect_t)
+#endif	/* KERNEL_SERVER */
+		;
+
+type task_read_t = mach_port_t
+#if	KERNEL_SERVER
+		intran: task_read_t convert_port_to_task_read(mach_port_t)
+		outtran: mach_port_t convert_task_read_to_port(task_read_t)
+		destructor: task_read_deallocate(task_read_t)
 #endif	/* KERNEL_SERVER */
 		;
 
@@ -156,6 +181,14 @@ type thread_inspect_t = mach_port_t
 		intran: thread_inspect_t convert_port_to_thread_inspect(mach_port_t)
 		outtran: mach_port_t convert_thread_inspect_to_port(thread_inspect_t)
 		destructor: thread_inspect_deallocate(thread_inspect_t)
+#endif	/* KERNEL_SERVER */
+		;
+
+type thread_read_t = mach_port_t
+#if	KERNEL_SERVER
+		intran: thread_read_t convert_port_to_thread_read(mach_port_t)
+		outtran: mach_port_t convert_thread_read_to_port(thread_read_t)
+		destructor: thread_read_deallocate(thread_read_t)
 #endif	/* KERNEL_SERVER */
 		;
 
@@ -205,6 +238,20 @@ type vm_map_t = mach_port_t
 #endif	/* KERNEL_SERVER */
 		;
 
+type vm_map_inspect_t = mach_port_t
+#if	KERNEL_SERVER
+		intran: vm_map_inspect_t convert_port_to_map_inspect(mach_port_t)
+		destructor: vm_map_inspect_deallocate(vm_map_inspect_t)
+#endif	/* KERNEL_SERVER */
+		;
+
+type vm_map_read_t = mach_port_t
+#if	KERNEL_SERVER
+		intran: vm_map_read_t convert_port_to_map_read(mach_port_t)
+		destructor: vm_map_read_deallocate(vm_map_read_t)
+#endif	/* KERNEL_SERVER */
+		;
+
 type vm_task_entry_t = mach_port_t
 		cusertype: vm_map_t
 #if	KERNEL_SERVER
@@ -217,6 +264,13 @@ type ipc_space_t = mach_port_t
 #if	KERNEL_SERVER
 		intran: ipc_space_t convert_port_to_space(mach_port_t)
 		destructor: space_deallocate(ipc_space_t)
+#endif	/* KERNEL_SERVER */
+		;
+
+type ipc_space_read_t = mach_port_t
+#if	KERNEL_SERVER
+		intran: ipc_space_read_t convert_port_to_space_read(mach_port_t)
+		destructor: space_read_deallocate(ipc_space_read_t)
 #endif	/* KERNEL_SERVER */
 		;
 
@@ -552,6 +606,33 @@ type semaphore_consume_ref_t = mach_port_move_send_t
 #endif	/* KERNEL_SERVER */
 		;
 
+#ifndef _MACH_MACH_EVENTLINK_TYPE_DEFS
+#define _MACH_MACH_EVENTLINK_TYPE_DEFS
+
+type eventlink_t = mach_port_t
+		ctype: mach_port_t
+#if	KERNEL_SERVER
+		intran: ipc_eventlink_t convert_port_to_eventlink(mach_port_t)
+		destructor: ipc_eventlink_deallocate(ipc_eventlink_t)
+#endif	/* KERNEL_SERVER */
+		;
+
+type eventlink_consume_ref_t = mach_port_move_send_t
+		ctype: mach_port_t
+#if	KERNEL_SERVER
+		intran: ipc_eventlink_t convert_port_to_eventlink(mach_port_t)
+		destructor: ipc_eventlink_deallocate(ipc_eventlink_t)
+#endif	/* KERNEL_SERVER */
+		;
+
+type eventlink_port_pair_t = array[2] of mach_port_t;
+type mach_eventlink_create_option_t = uint32_t;
+type mach_eventlink_associate_option_t = uint32_t;
+type mach_eventlink_disassociate_option_t = uint32_t;
+type mach_eventlink_signal_wait_option_t = uint32_t;
+
+#endif /* _MACH_MACH_EVENTLINK_TYPE_DEFS */
+
 type lock_set_t = mach_port_t
 #if	KERNEL_SERVER
 		intran: lock_set_t convert_port_to_lock_set(mach_port_t)
@@ -642,6 +723,7 @@ simport <kern/ledger.h>;	/* for ledger conversions */
 simport <kern/processor.h>;	/* for processor conversions */
 simport <kern/sync_lock.h>;	/* for lock-set conversions */
 simport <kern/sync_sema.h>;	/* for semaphore conversions */
+simport <ipc/ipc_eventlink.h>;  /* for eventlink conversions */
 simport <vm/memory_object.h>;	/* for memory object type conversions */
 simport <vm/vm_map.h>;		/* for vm_map conversions */
 #if CONFIG_ARCADE

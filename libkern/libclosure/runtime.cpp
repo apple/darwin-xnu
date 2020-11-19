@@ -17,12 +17,28 @@
 #include <os/assumes.h>
 
 #else /* !KERNEL */
+#define TARGET_OS_WIN32 0
 
 #include <libkern/Block_private.h>
-#include <libkern/OSRuntime.h>
+__BEGIN_DECLS
+#include <kern/kalloc.h>
+__END_DECLS
 
-#define malloc(s)  kern_os_malloc((s))
-#define free(a)    kern_os_free((a))
+static inline void *
+malloc(size_t size)
+{
+	if (size == 0) {
+		return NULL;
+	}
+	return kheap_alloc_tag_bt(KHEAP_DEFAULT, size,
+	           (zalloc_flags_t) (Z_WAITOK | Z_ZERO), VM_KERN_MEMORY_LIBKERN);
+}
+
+static inline void
+free(void *addr)
+{
+	kheap_free_addr(KHEAP_DEFAULT, addr);
+}
 
 #endif /* KERNEL */
 
@@ -130,6 +146,23 @@ latching_decr_int_should_deallocate(volatile int32_t *where)
 #if !TARGET_OS_WIN32
 #pragma mark Framework Callback Routines
 #endif
+#if KERNEL
+static inline void
+_Block_retain_object(const void *ptr __unused)
+{
+}
+
+static inline void
+_Block_release_object(const void *ptr __unused)
+{
+}
+
+static inline void
+_Block_destructInstance(const void *aBlock __unused)
+{
+}
+
+#else
 
 static void
 _Block_retain_object_default(const void *ptr __unused)
@@ -162,36 +195,40 @@ _Block_use_RR2(const Block_callbacks_RR *callbacks)
 	_Block_release_object = callbacks->release;
 	_Block_destructInstance = callbacks->destructInstance;
 }
+#endif // !KERNEL
 
 /****************************************************************************
  *  Accessors for block descriptor fields
  *****************************************************************************/
-#if 0
-static struct Block_descriptor_1 *
-_Block_descriptor_1(struct Block_layout *aBlock)
-{
-	return aBlock->descriptor;
-}
-#endif
 
+template <class T>
+static T *
+unwrap_relative_pointer(int32_t &offset)
+{
+	if (offset == 0) {
+		return nullptr;
+	}
+
+	uintptr_t base = (uintptr_t)&offset;
+	uintptr_t extendedOffset = (uintptr_t)(intptr_t)offset;
+	uintptr_t pointer = base + extendedOffset;
+	return (T *)pointer;
+}
+
+#if 0
 static struct Block_descriptor_2 *
 _Block_descriptor_2(struct Block_layout *aBlock)
 {
-	if (!(aBlock->flags & BLOCK_HAS_COPY_DISPOSE)) {
-		return NULL;
-	}
-	uint8_t *desc = (uint8_t *)aBlock->descriptor;
+	uint8_t *desc = (uint8_t *)_Block_get_descriptor(aBlock);
 	desc += sizeof(struct Block_descriptor_1);
 	return __IGNORE_WCASTALIGN((struct Block_descriptor_2 *)desc);
 }
+#endif
 
 static struct Block_descriptor_3 *
 _Block_descriptor_3(struct Block_layout *aBlock)
 {
-	if (!(aBlock->flags & BLOCK_HAS_SIGNATURE)) {
-		return NULL;
-	}
-	uint8_t *desc = (uint8_t *)aBlock->descriptor;
+	uint8_t *desc = (uint8_t *)_Block_get_descriptor(aBlock);
 	desc += sizeof(struct Block_descriptor_1);
 	if (aBlock->flags & BLOCK_HAS_COPY_DISPOSE) {
 		desc += sizeof(struct Block_descriptor_2);
@@ -202,23 +239,17 @@ _Block_descriptor_3(struct Block_layout *aBlock)
 static void
 _Block_call_copy_helper(void *result, struct Block_layout *aBlock)
 {
-	struct Block_descriptor_2 *desc = _Block_descriptor_2(aBlock);
-	if (!desc) {
-		return;
+	if (auto *pFn = _Block_get_copy_function(aBlock)) {
+		pFn(result, aBlock);
 	}
-
-	(*desc->copy)(result, aBlock); // do fixup
 }
 
 static void
 _Block_call_dispose_helper(struct Block_layout *aBlock)
 {
-	struct Block_descriptor_2 *desc = _Block_descriptor_2(aBlock);
-	if (!desc) {
-		return;
+	if (auto *pFn = _Block_get_dispose_function(aBlock)) {
+		pFn(aBlock);
 	}
-
-	(*desc->dispose)(aBlock);
 }
 
 /*******************************************************************************
@@ -249,15 +280,30 @@ _Block_copy(const void *arg)
 		return aBlock;
 	} else {
 		// Its a stack block.  Make a copy.
-		struct Block_layout *result = (typeof(result))malloc(aBlock->descriptor->size);
+		size_t size = Block_size(aBlock);
+		struct Block_layout *result = (struct Block_layout *)malloc(size);
 		if (!result) {
 			return NULL;
 		}
-		memmove(result, aBlock, aBlock->descriptor->size); // bitcopy first
+		memmove(result, aBlock, size); // bitcopy first
 #if __has_feature(ptrauth_calls)
 		// Resign the invoke pointer as it uses address authentication.
 		result->invoke = aBlock->invoke;
+
+#if __has_feature(ptrauth_signed_block_descriptors)
+		uintptr_t oldDesc =
+		    ptrauth_blend_discriminator(
+			&aBlock->descriptor, _Block_descriptor_ptrauth_discriminator);
+		uintptr_t newDesc =
+		    ptrauth_blend_discriminator(
+			&result->descriptor, _Block_descriptor_ptrauth_discriminator);
+
+		result->descriptor =
+		    ptrauth_auth_and_resign(aBlock->descriptor, ptrauth_key_asda, oldDesc,
+		    ptrauth_key_asda, newDesc);
 #endif
+#endif
+
 		// reset refcount
 		result->flags &= ~(BLOCK_REFCOUNT_MASK | BLOCK_DEALLOCATING); // XXX not needed
 		result->flags |= BLOCK_NEEDS_FREE | 2; // logical refcount 1
@@ -399,7 +445,12 @@ _Block_isDeallocating(const void *arg)
 size_t
 Block_size(void *aBlock)
 {
-	return ((struct Block_layout *)aBlock)->descriptor->size;
+	auto *layout = (Block_layout *)aBlock;
+	void *desc = _Block_get_descriptor(layout);
+	if (layout->flags & BLOCK_SMALL_DESCRIPTOR) {
+		return ((Block_descriptor_small *)desc)->size;
+	}
+	return ((Block_descriptor_1 *)desc)->size;
 }
 
 bool
@@ -421,11 +472,17 @@ _Block_has_signature(void *aBlock)
 const char *
 _Block_signature(void *aBlock)
 {
-	struct Block_descriptor_3 *desc3 = _Block_descriptor_3((struct Block_layout *)aBlock);
-	if (!desc3) {
-		return NULL;
+	struct Block_layout *layout = (struct Block_layout *)aBlock;
+	if (!(layout->flags & BLOCK_HAS_SIGNATURE)) {
+		return nullptr;
 	}
 
+	if (layout->flags & BLOCK_SMALL_DESCRIPTOR) {
+		auto *bds = (Block_descriptor_small *)_Block_get_descriptor(layout);
+		return unwrap_relative_pointer<const char>(bds->signature);
+	}
+
+	struct Block_descriptor_3 *desc3 = _Block_descriptor_3(layout);
 	return desc3->signature;
 }
 
@@ -433,40 +490,50 @@ const char *
 _Block_layout(void *aBlock)
 {
 	// Don't return extended layout to callers expecting old GC layout
-	struct Block_layout *layout = (struct Block_layout *)aBlock;
-	if (layout->flags & BLOCK_HAS_EXTENDED_LAYOUT) {
-		return NULL;
+	Block_layout *layout = (Block_layout *)aBlock;
+	if ((layout->flags & BLOCK_HAS_EXTENDED_LAYOUT) ||
+	    !(layout->flags & BLOCK_HAS_SIGNATURE)) {
+		return nullptr;
 	}
 
-	struct Block_descriptor_3 *desc3 = _Block_descriptor_3((struct Block_layout *)aBlock);
-	if (!desc3) {
-		return NULL;
+	if (layout->flags & BLOCK_SMALL_DESCRIPTOR) {
+		auto *bds = (Block_descriptor_small *)_Block_get_descriptor(layout);
+		return unwrap_relative_pointer<const char>(bds->layout);
 	}
 
-	return desc3->layout;
+	Block_descriptor_3 *desc = _Block_descriptor_3(layout);
+	return desc->layout;
 }
 
 const char *
 _Block_extended_layout(void *aBlock)
 {
 	// Don't return old GC layout to callers expecting extended layout
-	struct Block_layout *layout = (struct Block_layout *)aBlock;
-	if (!(layout->flags & BLOCK_HAS_EXTENDED_LAYOUT)) {
-		return NULL;
+	Block_layout *layout = (Block_layout *)aBlock;
+	if (!(layout->flags & BLOCK_HAS_EXTENDED_LAYOUT) ||
+	    !(layout->flags & BLOCK_HAS_SIGNATURE)) {
+		return nullptr;
 	}
 
-	struct Block_descriptor_3 *desc3 = _Block_descriptor_3((struct Block_layout *)aBlock);
-	if (!desc3) {
-		return NULL;
+	const char *extLayout;
+	if (layout->flags & BLOCK_SMALL_DESCRIPTOR) {
+		auto *bds = (Block_descriptor_small *)_Block_get_descriptor(layout);
+		if (layout->flags & BLOCK_INLINE_LAYOUT_STRING) {
+			extLayout = (const char *)(uintptr_t)bds->layout;
+		} else {
+			extLayout = unwrap_relative_pointer<const char>(bds->layout);
+		}
+	} else {
+		Block_descriptor_3 *desc3 = _Block_descriptor_3(layout);
+		extLayout = desc3->layout;
 	}
 
 	// Return empty string (all non-object bytes) instead of NULL
 	// so callers can distinguish "empty layout" from "no layout".
-	if (!desc3->layout) {
-		return "";
-	} else {
-		return desc3->layout;
+	if (!extLayout) {
+		extLayout = "";
 	}
+	return extLayout;
 }
 
 #if !TARGET_OS_WIN32
@@ -612,6 +679,3 @@ _Block_object_dispose(const void *object, const int flags)
 // Workaround for <rdar://26015603> dylib with no __DATA segment fails to rebase
 __attribute__((used))
 static int let_there_be_data = 42;
-
-#undef malloc
-#undef free

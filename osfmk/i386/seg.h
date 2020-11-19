@@ -58,6 +58,7 @@
 #ifndef __ASSEMBLER__
 #include <stdint.h>
 #include <mach/vm_types.h>
+#include <mach/vm_param.h>
 #include <architecture/i386/sel.h>
 
 /*

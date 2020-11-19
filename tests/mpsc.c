@@ -12,7 +12,7 @@
 T_GLOBAL_META(T_META_NAMESPACE("xnu.mpsc"),
     T_META_RUN_CONCURRENTLY(true));
 
-T_DECL(pingpong, "mpsc_pingpong")
+T_DECL(pingpong, "mpsc_pingpong", T_META_ASROOT(true))
 {
 	uint64_t count = 100 * 1000, nsecs = 0;
 	size_t nlen = sizeof(nsecs);

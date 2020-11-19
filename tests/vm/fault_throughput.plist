@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Tests</key>
+	<array>
+		<dict>
+			<key>Command</key>
+			<array>
+				<string>recon</string>
+				<string>/AppleInternal/Tests/xnu/darwintests/vm/fault_throughput.lua</string>
+				<string>--through-max-workers-fast</string>
+				<string>--variant separate-objects</string>
+				<string>--path /AppleInternal/Tests/xnu/darwintests/vm/fault_throughput</string>
+				<string>--tmp</string>
+				<string>--no-subdir</string>
+			</array>
+			<key>Tags</key>
+			<array>
+				<string>perf</string>
+			</array>
+			<key>TestName</key>
+			<string>xnu.vm.zero_fill_fault_throughput.separate-vm-objects</string>
+		</dict>
+		<dict>
+			<key>Command</key>
+			<array>
+				<string>recon</string>
+				<string>/AppleInternal/Tests/xnu/darwintests/vm/fault_throughput.lua</string>
+				<string>--through-max-workers-fast</string>
+				<string>--variant share-objects</string>
+				<string>--path /AppleInternal/Tests/xnu/darwintests/vm/fault_throughput</string>
+				<string>--tmp</string>
+				<string>--no-subdir</string>
+			</array>
+			<key>Tags</key>
+			<array>
+				<string>perf</string>
+			</array>
+			<key>TestName</key>
+			<string>xnu.vm.zero_fill_fault_throughput.share-vm-objects</string>
+		</dict>
+	</array>
+	<key>Timeout</key>
+	<integer>1800</integer>
+</dict>
+</plist>

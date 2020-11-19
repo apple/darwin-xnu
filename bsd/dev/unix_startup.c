@@ -34,6 +34,7 @@
 
 #include <mach/mach_types.h>
 
+#include <kern/startup.h>
 #include <vm/vm_kern.h>
 #include <mach/vm_prot.h>
 
@@ -41,7 +42,6 @@
 #include <sys/buf_internal.h>
 #include <sys/file_internal.h>
 #include <sys/proc_internal.h>
-#include <sys/clist.h>
 #include <sys/mcache.h>
 #include <sys/mbuf.h>
 #include <sys/systm.h>
@@ -57,7 +57,7 @@
 extern uint32_t kern_maxvnodes;
 extern vm_map_t mb_map;
 
-#if INET || INET6
+#if INET
 extern uint32_t   tcp_sendspace;
 extern uint32_t   tcp_recvspace;
 #endif
@@ -88,8 +88,10 @@ SYSCTL_INT(_kern, OID_AUTO, nbuf, CTLFLAG_RD | CTLFLAG_LOCKED, &nbuf_headers, 0,
 SYSCTL_INT(_kern, OID_AUTO, maxnbuf, CTLFLAG_RW | CTLFLAG_LOCKED | CTLFLAG_KERN, &max_nbuf_headers, 0, "");
 
 __private_extern__ int customnbuf = 0;
-int             serverperfmode = 0;     /* Flag indicates a server boot when set */
 int             ncl = 0;
+
+/* Indicates a server boot when set */
+TUNABLE(int, serverperfmode, "serverperfmode", 0);
 
 #if SOCKETS
 static unsigned int mbuf_poolsz;
@@ -110,9 +112,9 @@ bsd_startupearly(void)
 
 	/* clip the number of buf headers upto 16k */
 	if (max_nbuf_headers == 0) {
-		max_nbuf_headers = atop_kernel(sane_size / 50); /* Get 2% of ram, but no more than we can map */
+		max_nbuf_headers = (int)atop_kernel(sane_size / 50); /* Get 2% of ram, but no more than we can map */
 	}
-	if ((customnbuf == 0) && (max_nbuf_headers > 16384)) {
+	if ((customnbuf == 0) && ((unsigned int)max_nbuf_headers > 16384)) {
 		max_nbuf_headers = 16384;
 	}
 	if (max_nbuf_headers < CONFIG_MIN_NBUF) {
@@ -121,8 +123,8 @@ bsd_startupearly(void)
 
 	/* clip the number of hash elements  to 200000 */
 	if ((customnbuf == 0) && nbuf_hashelements == 0) {
-		nbuf_hashelements = atop_kernel(sane_size / 50);
-		if (nbuf_hashelements > 200000) {
+		nbuf_hashelements = (int)atop_kernel(sane_size / 50);
+		if ((unsigned int)nbuf_hashelements > 200000) {
 			nbuf_hashelements = 200000;
 		}
 	} else {
@@ -177,7 +179,7 @@ bsd_startupearly(void)
 
 		nmbclusters = bsd_mbuf_cluster_reserve(NULL) / MCLBYTES;
 
-#if INET || INET6
+#if INET
 		if ((scale = nmbclusters / NMBCLUSTERS) > 1) {
 			tcp_sendspace *= scale;
 			tcp_recvspace *= scale;
@@ -189,7 +191,7 @@ bsd_startupearly(void)
 				tcp_recvspace = maxspace;
 			}
 		}
-#endif /* INET || INET6 */
+#endif /* INET */
 	}
 #endif /* SOCKETS */
 
@@ -204,7 +206,7 @@ bsd_startupearly(void)
 			 * CONFIG_VNODES is set to 263168 for "medium" configurations (the default)
 			 * but can be smaller or larger.
 			 */
-			desiredvnodes  = (sane_size / 65536) + 1024;
+			desiredvnodes  = (int)(sane_size / 65536) + 1024;
 #ifdef CONFIG_VNODES
 			if (desiredvnodes > CONFIG_VNODES) {
 				desiredvnodes = CONFIG_VNODES;
@@ -300,7 +302,7 @@ bsd_mbuf_cluster_reserve(boolean_t *overridden)
 
 		if ((nmbclusters = ncl) == 0) {
 			/* Auto-configure the mbuf pool size */
-			nmbclusters = mbuf_default_ncl(serverperfmode, sane_size);
+			nmbclusters = mbuf_default_ncl(mem_actual);
 		} else {
 			/* Make sure it's not odd in case ncl is manually set */
 			if (nmbclusters & 0x1) {
@@ -314,7 +316,7 @@ bsd_mbuf_cluster_reserve(boolean_t *overridden)
 		}
 
 		/* Round it down to nearest multiple of PAGE_SIZE */
-		nmbclusters = P2ROUNDDOWN(nmbclusters, NCLPG);
+		nmbclusters = (unsigned int)P2ROUNDDOWN(nmbclusters, NCLPG);
 	}
 	mbuf_poolsz = nmbclusters << MCLSHIFT;
 done:

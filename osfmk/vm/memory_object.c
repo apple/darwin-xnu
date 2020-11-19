@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -105,7 +105,7 @@
 #include <vm/vm_protos.h>
 
 memory_object_default_t memory_manager_default = MEMORY_OBJECT_DEFAULT_NULL;
-decl_lck_mtx_data(, memory_manager_default_lock);
+LCK_MTX_EARLY_DECLARE(memory_manager_default_lock, &vm_object_lck_grp);
 
 
 /*
@@ -532,15 +532,24 @@ vm_object_update_extent(
 	vm_object_offset_t      next_offset = offset;
 	memory_object_lock_result_t     page_lock_result;
 	memory_object_cluster_size_t    data_cnt = 0;
-	struct vm_page_delayed_work     dw_array[DEFAULT_DELAYED_WORK_LIMIT];
-	struct vm_page_delayed_work     *dwp;
+	struct  vm_page_delayed_work    dw_array;
+	struct  vm_page_delayed_work    *dwp, *dwp_start;
+	bool            dwp_finish_ctx = TRUE;
 	int             dw_count;
 	int             dw_limit;
 	int             dirty_count;
 
-	dwp = &dw_array[0];
+	dwp_start = dwp = NULL;
 	dw_count = 0;
 	dw_limit = DELAYED_WORK_LIMIT(DEFAULT_DELAYED_WORK_LIMIT);
+	dwp_start = vm_page_delayed_work_get_ctx();
+	if (dwp_start == NULL) {
+		dwp_start = &dw_array;
+		dw_limit = 1;
+		dwp_finish_ctx = FALSE;
+	}
+	dwp = dwp_start;
+
 	dirty_count = 0;
 
 	for (;
@@ -553,8 +562,8 @@ vm_object_update_extent(
 		if (data_cnt) {
 			if ((data_cnt >= MAX_UPL_TRANSFER_BYTES) || (next_offset != offset)) {
 				if (dw_count) {
-					vm_page_do_delayed_work(object, VM_KERN_MEMORY_NONE, &dw_array[0], dw_count);
-					dwp = &dw_array[0];
+					vm_page_do_delayed_work(object, VM_KERN_MEMORY_NONE, dwp_start, dw_count);
+					dwp = dwp_start;
 					dw_count = 0;
 				}
 				LIST_REQ_PAGEOUT_PAGES(object, data_cnt,
@@ -572,8 +581,8 @@ vm_object_update_extent(
 				 *	End of a run of dirty/precious pages.
 				 */
 				if (dw_count) {
-					vm_page_do_delayed_work(object, VM_KERN_MEMORY_NONE, &dw_array[0], dw_count);
-					dwp = &dw_array[0];
+					vm_page_do_delayed_work(object, VM_KERN_MEMORY_NONE, dwp_start, dw_count);
+					dwp = dwp_start;
 					dw_count = 0;
 				}
 				LIST_REQ_PAGEOUT_PAGES(object, data_cnt,
@@ -638,8 +647,8 @@ vm_object_update_extent(
 				VM_PAGE_ADD_DELAYED_WORK(dwp, m, dw_count);
 
 				if (dw_count >= dw_limit) {
-					vm_page_do_delayed_work(object, VM_KERN_MEMORY_NONE, &dw_array[0], dw_count);
-					dwp = &dw_array[0];
+					vm_page_do_delayed_work(object, VM_KERN_MEMORY_NONE, dwp_start, dw_count);
+					dwp = dwp_start;
 					dw_count = 0;
 				}
 			}
@@ -655,13 +664,19 @@ vm_object_update_extent(
 	 *	Clean any pages that have been saved.
 	 */
 	if (dw_count) {
-		vm_page_do_delayed_work(object, VM_KERN_MEMORY_NONE, &dw_array[0], dw_count);
+		vm_page_do_delayed_work(object, VM_KERN_MEMORY_NONE, dwp_start, dw_count);
 	}
 
 	if (data_cnt) {
 		LIST_REQ_PAGEOUT_PAGES(object, data_cnt,
 		    paging_offset, offset_resid, io_errno, should_iosync);
 	}
+
+	if (dwp_start && dwp_finish_ctx) {
+		vm_page_delayed_work_finish_ctx(dwp_start);
+		dwp_start = dwp = NULL;
+	}
+
 	return retval;
 }
 
@@ -757,9 +772,9 @@ vm_object_update(
 		}
 	}
 	if ((copy_object != VM_OBJECT_NULL && update_cow) || (flags & MEMORY_OBJECT_DATA_SYNC)) {
-		vm_map_size_t           i;
-		vm_map_size_t           copy_size;
-		vm_map_offset_t         copy_offset;
+		vm_object_offset_t      i;
+		vm_object_size_t        copy_size;
+		vm_object_offset_t      copy_offset;
 		vm_prot_t               prot;
 		vm_page_t               page;
 		vm_page_t               top_page;
@@ -771,8 +786,7 @@ vm_object_update(
 			 * translate offset with respect to shadow's offset
 			 */
 			copy_offset = (offset >= copy_object->vo_shadow_offset) ?
-			    (vm_map_offset_t)(offset - copy_object->vo_shadow_offset) :
-			    (vm_map_offset_t) 0;
+			    (offset - copy_object->vo_shadow_offset) : 0;
 
 			if (copy_offset > copy_object->vo_size) {
 				copy_offset = copy_object->vo_size;
@@ -784,7 +798,7 @@ vm_object_update(
 			if (offset >= copy_object->vo_shadow_offset) {
 				copy_size = size;
 			} else if (size >= copy_object->vo_shadow_offset - offset) {
-				copy_size = size - (copy_object->vo_shadow_offset - offset);
+				copy_size = (size - (copy_object->vo_shadow_offset - offset));
 			} else {
 				copy_size = 0;
 			}
@@ -870,7 +884,7 @@ RETRY_COW_OF_LOCK_REQUEST:
 				/* success but no VM page: fail */
 				vm_object_paging_end(copy_object);
 				vm_object_unlock(copy_object);
-			/*FALLTHROUGH*/
+				OS_FALLTHROUGH;
 			case VM_FAULT_MEMORY_ERROR:
 				if (object != copy_object) {
 					vm_object_deallocate(copy_object);
@@ -1431,15 +1445,20 @@ memory_object_iopl_request(
 		/* the callers parameter offset is defined to be the */
 		/* offset from beginning of named entry offset in object */
 		offset = offset + named_entry->offset;
+		offset += named_entry->data_offset;
 
 		if (named_entry->is_sub_map ||
 		    named_entry->is_copy) {
 			return KERN_INVALID_ARGUMENT;
 		}
+		if (!named_entry->is_object) {
+			return KERN_INVALID_ARGUMENT;
+		}
 
 		named_entry_lock(named_entry);
 
-		object = named_entry->backing.object;
+		object = vm_named_entry_to_vm_object(named_entry);
+		assert(object != VM_OBJECT_NULL);
 		vm_object_reference(object);
 		named_entry_unlock(named_entry);
 	} else if (ip_kotype(port) == IKOT_MEM_OBJ_CONTROL) {
@@ -1503,6 +1522,8 @@ memory_object_upl_request(
 	int                     tag)
 {
 	vm_object_t             object;
+	vm_tag_t                vmtag = (vm_tag_t)tag;
+	assert(vmtag == tag);
 
 	object = memory_object_control_to_vm_object(control);
 	if (object == VM_OBJECT_NULL) {
@@ -1516,7 +1537,7 @@ memory_object_upl_request(
 	           user_page_list,
 	           page_list_count,
 	           (upl_control_flags_t)(unsigned int) cntrl_flags,
-	           tag);
+	           vmtag);
 }
 
 /*
@@ -1543,6 +1564,8 @@ memory_object_super_upl_request(
 	int                     tag)
 {
 	vm_object_t             object;
+	vm_tag_t                vmtag = (vm_tag_t)tag;
+	assert(vmtag == tag);
 
 	object = memory_object_control_to_vm_object(control);
 	if (object == VM_OBJECT_NULL) {
@@ -1557,7 +1580,7 @@ memory_object_super_upl_request(
 	           user_page_list,
 	           page_list_count,
 	           (upl_control_flags_t)(unsigned int) cntrl_flags,
-	           tag);
+	           vmtag);
 }
 
 kern_return_t
@@ -1747,15 +1770,6 @@ memory_manager_default_check(void)
 		return KERN_SUCCESS;
 	}
 }
-
-__private_extern__ void
-memory_manager_default_init(void)
-{
-	memory_manager_default = MEMORY_OBJECT_DEFAULT_NULL;
-	lck_mtx_init(&memory_manager_default_lock, &vm_object_lck_grp, &vm_object_lck_attr);
-}
-
-
 
 /* Allow manipulation of individual page state.  This is actually part of */
 /* the UPL regimen but takes place on the object rather than on a UPL */
@@ -1992,19 +2006,8 @@ memory_object_is_shared_cache(
 	return object->object_is_shared_cache;
 }
 
-static zone_t mem_obj_control_zone;
-
-__private_extern__ void
-memory_object_control_bootstrap(void)
-{
-	int     i;
-
-	i = (vm_size_t) sizeof(struct memory_object_control);
-	mem_obj_control_zone = zinit(i, 8192 * i, 4096, "mem_obj_control");
-	zone_change(mem_obj_control_zone, Z_CALLERACCT, FALSE);
-	zone_change(mem_obj_control_zone, Z_NOENCRYPT, TRUE);
-	return;
-}
+static ZONE_DECLARE(mem_obj_control_zone, "mem_obj_control",
+    sizeof(struct memory_object_control), ZC_NOENCRYPT);
 
 __private_extern__ memory_object_control_t
 memory_object_control_allocate(

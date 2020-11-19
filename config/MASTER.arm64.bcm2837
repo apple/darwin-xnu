@@ -16,7 +16,7 @@
 #  Standard Apple OS Configurations:
 #  -------- ----- -- ---------------
 #
-#  KERNEL_BASE =    [ arm64 xsmall config_embedded config_requires_u32_munging config_zcache ]
+#  KERNEL_BASE =    [ arm64 xsmall msgb_small config_embedded config_requires_u32_munging config_zcache ]
 #  KERNEL_RELEASE = [ KERNEL_BASE ]
 #  KERNEL_DEV =     [ KERNEL_BASE development mach_assert config_xnupost proc_ref_debug os_reason_debug pgtrace ]
 #  KERNEL_DEBUG =   [ KERNEL_BASE debug mach_assert config_xnupost config_ltable_stats config_ltable_debug config_waitq_stats config_workloop_debug config_waitq_debug pgtrace ]
@@ -24,14 +24,14 @@
 #  BSD_RELEASE =    [ BSD_BASE no_printf_str no_kprintf_str secure_kernel ]
 #  BSD_DEV =        [ BSD_BASE config_netboot config_imageboot config_coredump pgo config_vnguard ]
 #  BSD_DEBUG =      [ BSD_BASE config_netboot config_imageboot config_coredump pgo config_vnguard ]
-#  FILESYS_BASE =   [ devfs fifo fs_compression config_protect config_mnt_rootsnap config_fse routefs namedstreams ]
+#  FILESYS_BASE =   [ devfs fifo fs_compression config_protect config_mnt_rootsnap config_fse routefs namedstreams bindfs]
 #  FILESYS_RELEASE= [ FILESYS_BASE ]
 #  FILESYS_DEV =    [ FILESYS_BASE fdesc ]
 #  FILESYS_DEBUG =  [ FILESYS_BASE fdesc ]
 #  NFS_DEV =        [ nfsclient nfsserver config_nfs_gss ]
 #  NFS_RELEASE =    [ nfsclient ]
 #  NFS_DEBUG =      [ nfsclient config_nfs_gss ]
-#  NETWORKING =     [ inet tcpdrop_synfin bpfilter inet6 ipv6send if_bridge traffic_mgt dummynet ah_all_crypto if_fake ]
+#  NETWORKING =     [ inet bpfilter if_bridge traffic_mgt dummynet ah_all_crypto if_fake ]
 #  NETWORKING_RELEASE = [ NETWORKING ]
 #  NETWORKING_DEV = [ NETWORKING_RELEASE packet_mangler if_headless ]
 #  NETWORKING_DEBUG = [ NETWORKING_DEV ]
@@ -54,18 +54,21 @@
 #  MACH_RELEASE =   [ MACH_BASE config_skip_precise_user_kernel_time debugger_for_zone_info ]
 #  MACH_DEV =       [ MACH_BASE task_zone_info config_io_accounting importance_trace ]
 #  MACH_DEBUG =     [ MACH_BASE task_zone_info config_io_accounting importance_trace importance_debug ]
-#  SCHED_BASE =     [ config_sched_traditional config_sched_multiq config_sched_deferred_ast ]
+#  SCHED_BASE =     [ config_sched_traditional config_sched_multiq config_sched_deferred_ast config_clutch config_taskwatch ]
 #  SCHED_RELEASE =  [ SCHED_BASE ]
 #  SCHED_DEV =      [ SCHED_BASE ]
 #  SCHED_DEBUG =    [ SCHED_BASE config_sched_grrr config_sched_proto ]
-#  VM_BASE =        [ vm_pressure_events jetsam freeze memorystatus config_code_decryption phantom_cache config_secluded_memory config_background_queue config_cs_validation_bitmap]
+#  VM_BASE =        [ vm_pressure_events jetsam freeze memorystatus config_code_decryption phantom_cache config_secluded_memory config_background_queue config_cs_validation_bitmap dirtystatus_tracking ]
 #  VM_RELEASE =     [ VM_BASE ]
 #  VM_DEV =         [ VM_BASE dynamic_codesigning ]
 #  VM_DEBUG =       [ VM_BASE dynamic_codesigning ]
-#  SECURITY =       [ config_macf kernel_integrity ]
-#  RELEASE =        [ KERNEL_RELEASE BSD_RELEASE FILESYS_RELEASE NFS_RELEASE SKYWALK_RELEASE NETWORKING_RELEASE PF MULTIPATH VPN IOKIT_RELEASE LIBKERN_RELEASE PERF_DBG_RELEASE MACH_RELEASE SCHED_RELEASE VM_RELEASE SECURITY ]
-#  DEVELOPMENT =    [ KERNEL_DEV     BSD_DEV     FILESYS_DEV NFS_DEV SKYWALK_DEV     NETWORKING_DEV PF MULTIPATH VPN IOKIT_DEV     LIBKERN_DEV     PERF_DBG_DEV     MACH_DEV     SCHED_DEV     VM_DEV     SECURITY ]
-#  DEBUG =          [ KERNEL_DEBUG   BSD_DEBUG   FILESYS_DEBUG NFS_DEBUG  SKYWALK_DEBUG   NETWORKING_DEBUG PF MULTIPATH VPN IOKIT_DEBUG   LIBKERN_DEBUG   PERF_DBG_DEBUG   MACH_DEBUG   SCHED_DEBUG   VM_DEBUG   SECURITY ]
+#  SECURITY_BASE =     [ config_macf kernel_integrity config_secure_bsd_root config_zalloc_sequester ]
+#  SECURITY_RELEASE = [ SECURITY_BASE ]
+#  SECURITY_DEV =     [ SECURITY_BASE config_setuid config_kas_info ]
+#  SECURITY_DEBUG =   [ SECURITY_BASE config_setuid config_kas_info ]
+#  RELEASE =        [ KERNEL_RELEASE BSD_RELEASE FILESYS_RELEASE NFS_RELEASE SKYWALK_RELEASE NETWORKING_RELEASE PF MULTIPATH VPN IOKIT_RELEASE LIBKERN_RELEASE PERF_DBG_RELEASE MACH_RELEASE SCHED_RELEASE VM_RELEASE SECURITY_RELEASE ]
+#  DEVELOPMENT =    [ KERNEL_DEV     BSD_DEV     FILESYS_DEV NFS_DEV SKYWALK_DEV     NETWORKING_DEV PF MULTIPATH VPN IOKIT_DEV     LIBKERN_DEV     PERF_DBG_DEV     MACH_DEV     SCHED_DEV     VM_DEV     SECURITY_DEV ]
+#  DEBUG =          [ KERNEL_DEBUG   BSD_DEBUG   FILESYS_DEBUG NFS_DEBUG  SKYWALK_DEBUG   NETWORKING_DEBUG PF MULTIPATH VPN IOKIT_DEBUG   LIBKERN_DEBUG   PERF_DBG_DEBUG   MACH_DEBUG   SCHED_DEBUG   VM_DEBUG   SECURITY_DEBUG ]
 #  KASAN =          [ DEVELOPMENT config_kasan config_ubsan config_ksancov ]
 #
 ######################################################################
@@ -85,8 +88,6 @@ options   CONFIG_FREEZE_SUSPENDED_MIN=4		# <xsmall>
 options	  CONFIG_MACH_APPROXIMATE_TIME
 
 options   CONFIG_KERNEL_INTEGRITY		# <kernel_integrity>
-
-options   INTERRUPT_MASKED_DEBUG=1			#      # <interrupt_masked_debug>
 
 options CONFIG_PGTRACE                                      # <pgtrace>
 options CONFIG_PGTRACE_NONKEXT                              # <pgtrace_nonkext>

@@ -29,7 +29,10 @@ extern "C" {
 #include <mach/kmod.h>
 #include <libkern/kernel_mach_header.h>
 #include <libkern/prelink.h>
+#include <libkern/crypto/sha2.h>
 }
+
+#define IOKIT_ENABLE_SHARED_PTR
 
 #include <libkern/version.h>
 #include <libkern/c++/OSContainers.h>
@@ -112,26 +115,6 @@ static const char * sKernelComponentNames[] = {
 	NULL
 };
 
-static int __whereIsAddr(vm_offset_t theAddr, unsigned long * segSizes, vm_offset_t *segAddrs, int segCount );
-
-#define PLK_SEGMENTS 12
-
-static const char * plk_segNames[] = {
-	"__TEXT",
-	"__TEXT_EXEC",
-	"__DATA",
-	"__DATA_CONST",
-	"__LINKEDIT",
-	"__PRELINK_TEXT",
-	"__PLK_TEXT_EXEC",
-	"__PRELINK_DATA",
-	"__PLK_DATA_CONST",
-	"__PLK_LLVM_COV",
-	"__PLK_LINKEDIT",
-	"__PRELINK_INFO",
-	NULL
-};
-
 #if PRAGMA_MARK
 #pragma mark KLDBootstrap Class
 #endif
@@ -149,8 +132,7 @@ class KLDBootstrap {
 private:
 	void readStartupExtensions(void);
 
-	void readPrelinkedExtensions(
-		kernel_section_t * prelinkInfoSect);
+	void readPrelinkedExtensions(kernel_mach_header_t *mh, kc_kind_t type);
 	void readBooterExtensions(void);
 
 	OSReturn loadKernelComponentKexts(void);
@@ -207,147 +189,69 @@ KLDBootstrap::readStartupExtensions(void)
 	    kOSKextLogKextBookkeepingFlag,
 	    "Reading startup extensions.");
 
+	kc_format_t kc_format;
+	kernel_mach_header_t *mh = &_mh_execute_header;
+	if (PE_get_primary_kc_format(&kc_format) && kc_format == KCFormatFileset) {
+		mh = (kernel_mach_header_t *)PE_get_kc_header(KCKindPrimary);
+	}
+
 	/* If the prelink info segment has a nonzero size, we are prelinked
 	 * and won't have any individual kexts or mkexts to read.
 	 * Otherwise, we need to read kexts or the mkext from what the booter
 	 * has handed us.
 	 */
-	prelinkInfoSect = getsectbyname(kPrelinkInfoSegment, kPrelinkInfoSection);
+	prelinkInfoSect = getsectbynamefromheader(mh, kPrelinkInfoSegment, kPrelinkInfoSection);
 	if (prelinkInfoSect->size) {
-		readPrelinkedExtensions(prelinkInfoSect);
+		readPrelinkedExtensions(mh, KCKindPrimary);
 	} else {
 		readBooterExtensions();
+	}
+
+	kernel_mach_header_t *akc_mh;
+	akc_mh = (kernel_mach_header_t*)PE_get_kc_header(KCKindAuxiliary);
+	if (akc_mh) {
+		readPrelinkedExtensions(akc_mh, KCKindAuxiliary);
 	}
 
 	loadKernelComponentKexts();
 	loadKernelExternalComponents();
 	readBuiltinPersonalities();
-	OSKext::sendAllKextPersonalitiesToCatalog();
+	OSKext::sendAllKextPersonalitiesToCatalog(true);
 
 	return;
 }
 
-typedef struct kaslrPackedOffsets {
-	uint32_t    count;          /* number of offsets */
-	uint32_t    offsetsArray[]; /* offsets to slide */
-} kaslrPackedOffsets;
-
 /*********************************************************************
 *********************************************************************/
 void
-KLDBootstrap::readPrelinkedExtensions(
-	kernel_section_t * prelinkInfoSect)
+KLDBootstrap::readPrelinkedExtensions(kernel_mach_header_t *mh, kc_kind_t type)
 {
-	OSArray                   * infoDictArray           = NULL;// do not release
-	OSObject                  * parsedXML       = NULL;// must release
-	OSDictionary              * prelinkInfoDict         = NULL;// do not release
-	OSString                  * errorString             = NULL;// must release
-	OSKext                    * theKernel               = NULL;// must release
-	OSData                    * kernelcacheUUID         = NULL;// do not release
-
-	kernel_segment_command_t  * prelinkTextSegment      = NULL;// see code
-	kernel_segment_command_t  * prelinkInfoSegment      = NULL;// see code
-
-	/* We make some copies of data, but if anything fails we're basically
-	 * going to fail the boot, so these won't be cleaned up on error.
-	 */
-	void                      * prelinkData             = NULL;// see code
-	vm_size_t                   prelinkLength           = 0;
-
-
-	OSDictionary              * infoDict                = NULL;// do not release
-
-	IORegistryEntry           * registryRoot            = NULL;// do not release
-	OSNumber                  * prelinkCountObj         = NULL;// must release
-
-	u_int                       i = 0;
-#if NO_KEXTD
-	bool                        ramDiskBoot;
-	bool                        developerDevice;
-	bool                        dontLoad;
-#endif
-	OSData                     * kaslrOffsets = NULL;
-	unsigned long               plk_segSizes[PLK_SEGMENTS];
-	vm_offset_t                 plk_segAddrs[PLK_SEGMENTS];
+	bool ret;
+	OSSharedPtr<OSData> loaded_kcUUID;
+	OSSharedPtr<OSString> errorString;
+	OSSharedPtr<OSObject> parsedXML;
+	kernel_section_t *infoPlistSection = NULL;
+	OSDictionary *infoDict = NULL;         // do not release
 
 	OSKextLog(/* kext */ NULL,
 	    kOSKextLogProgressLevel |
 	    kOSKextLogDirectoryScanFlag | kOSKextLogArchiveFlag,
 	    "Starting from prelinked kernel.");
 
-	prelinkTextSegment = getsegbyname(kPrelinkTextSegment);
-	if (!prelinkTextSegment) {
-		OSKextLog(/* kext */ NULL,
-		    kOSKextLogErrorLevel |
-		    kOSKextLogDirectoryScanFlag | kOSKextLogArchiveFlag,
-		    "Can't find prelinked kexts' text segment.");
-		goto finish;
-	}
-
-#if KASLR_KEXT_DEBUG
-	unsigned long   scratchSize;
-	vm_offset_t     scratchAddr;
-
-	IOLog("kaslr: prelinked kernel address info: \n");
-
-	scratchAddr = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__TEXT", &scratchSize);
-	IOLog("kaslr: start 0x%lx end 0x%lx length %lu for __TEXT \n",
-	    (unsigned long)scratchAddr,
-	    (unsigned long)(scratchAddr + scratchSize),
-	    scratchSize);
-
-	scratchAddr = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__DATA", &scratchSize);
-	IOLog("kaslr: start 0x%lx end 0x%lx length %lu for __DATA \n",
-	    (unsigned long)scratchAddr,
-	    (unsigned long)(scratchAddr + scratchSize),
-	    scratchSize);
-
-	scratchAddr = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__LINKEDIT", &scratchSize);
-	IOLog("kaslr: start 0x%lx end 0x%lx length %lu for __LINKEDIT \n",
-	    (unsigned long)scratchAddr,
-	    (unsigned long)(scratchAddr + scratchSize),
-	    scratchSize);
-
-	scratchAddr = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__KLD", &scratchSize);
-	IOLog("kaslr: start 0x%lx end 0x%lx length %lu for __KLD \n",
-	    (unsigned long)scratchAddr,
-	    (unsigned long)(scratchAddr + scratchSize),
-	    scratchSize);
-
-	scratchAddr = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__PRELINK_TEXT", &scratchSize);
-	IOLog("kaslr: start 0x%lx end 0x%lx length %lu for __PRELINK_TEXT \n",
-	    (unsigned long)scratchAddr,
-	    (unsigned long)(scratchAddr + scratchSize),
-	    scratchSize);
-
-	scratchAddr = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__PRELINK_INFO", &scratchSize);
-	IOLog("kaslr: start 0x%lx end 0x%lx length %lu for __PRELINK_INFO \n",
-	    (unsigned long)scratchAddr,
-	    (unsigned long)(scratchAddr + scratchSize),
-	    scratchSize);
-#endif
-
-	prelinkData = (void *) prelinkTextSegment->vmaddr;
-	prelinkLength = prelinkTextSegment->vmsize;
-
-	/* build arrays of plk info for later use */
-	const char ** segNamePtr;
-
-	for (segNamePtr = &plk_segNames[0], i = 0; *segNamePtr && i < PLK_SEGMENTS; segNamePtr++, i++) {
-		plk_segSizes[i] = 0;
-		plk_segAddrs[i] = (vm_offset_t)getsegdatafromheader(&_mh_execute_header, *segNamePtr, &plk_segSizes[i]);
-	}
-
-
-	/* Unserialize the info dictionary from the prelink info section.
+	/*
+	 * The 'infoPlistSection' should contains an XML dictionary that
+	 * contains some meta data about the KC, and also describes each kext
+	 * included in the kext collection. Unserialize this dictionary and
+	 * then iterate over each kext.
 	 */
-	parsedXML = OSUnserializeXML((const char *)prelinkInfoSect->addr,
-	    &errorString);
+	infoPlistSection = getsectbynamefromheader(mh, kPrelinkInfoSegment, kPrelinkInfoSection);
+	parsedXML = OSUnserializeXML((const char *)infoPlistSection->addr, errorString);
 	if (parsedXML) {
-		prelinkInfoDict = OSDynamicCast(OSDictionary, parsedXML);
+		infoDict = OSDynamicCast(OSDictionary, parsedXML.get());
 	}
-	if (!prelinkInfoDict) {
-		const char * errorCString = "(unknown error)";
+
+	if (!infoDict) {
+		const char *errorCString = "(unknown error)";
 
 		if (errorString && errorString->getCStringNoCopy()) {
 			errorCString = errorString->getCStringNoCopy();
@@ -355,216 +259,90 @@ KLDBootstrap::readPrelinkedExtensions(
 			errorCString = "not a dictionary";
 		}
 		OSKextLog(/* kext */ NULL, kOSKextLogErrorLevel | kOSKextLogArchiveFlag,
-		    "Error unserializing prelink plist: %s.", errorCString);
-		goto finish;
+		    "Error unserializing kext info plist section: %s.", errorCString);
+		return;
 	}
 
-#if NO_KEXTD
-	/* Check if we should keep developer kexts around.
-	 * TODO: Check DeviceTree instead of a boot-arg <rdar://problem/10604201>
-	 */
-	developerDevice = true;
-	PE_parse_boot_argn("developer", &developerDevice, sizeof(developerDevice));
+	/* Validate that the Kext Collection is prelinked to the loaded KC */
+	if (type == KCKindAuxiliary) {
+		if (OSKext::validateKCFileSetUUID(infoDict, KCKindAuxiliary) != 0) {
+			OSKextLog(/* kext */ NULL, kOSKextLogErrorLevel | kOSKextLogArchiveFlag,
+			    "Early boot AuxKC  doesn't appear to be linked against the loaded BootKC.");
+			return;
+		}
 
-	ramDiskBoot = IORamDiskBSDRoot();
-#endif /* NO_KEXTD */
+		/*
+		 * Defer further processing of the AuxKC, but keep the
+		 * processed info dictionary around so we can ml_static_free
+		 * the segment.
+		 */
+		if (!OSKext::registerDeferredKextCollection(mh, parsedXML, KCKindAuxiliary)) {
+			OSKextLog(/* kext */ NULL, kOSKextLogErrorLevel | kOSKextLogArchiveFlag,
+			    "Error deferring AuxKC kext processing: Kexts in this collection will be unusable.");
+		}
+		goto skip_adding_kexts;
+	}
+
+	/*
+	 * this function does all the heavy lifting of adding OSKext objects
+	 * and potentially sliding them if necessary
+	 */
+	ret = OSKext::addKextsFromKextCollection(mh, infoDict,
+	    kPrelinkTextSegment, loaded_kcUUID, (mh->filetype == MH_FILESET) ? type : KCKindUnknown);
+
+	if (!ret) {
+		OSKextLog(/* kext */ NULL, kOSKextLogErrorLevel | kOSKextLogArchiveFlag,
+		    "Error loading kext info from prelinked primary KC");
+		return;
+	}
 
 	/* Copy in the kernelcache UUID */
-	kernelcacheUUID = OSDynamicCast(OSData,
-	    prelinkInfoDict->getObject(kPrelinkInfoKCIDKey));
-	if (kernelcacheUUID) {
-		if (kernelcacheUUID->getLength() != sizeof(kernelcache_uuid)) {
-			panic("kernelcacheUUID length is %d, expected %lu", kernelcacheUUID->getLength(),
-			    sizeof(kernelcache_uuid));
-		} else {
-			kernelcache_uuid_valid = TRUE;
-			memcpy((void *)&kernelcache_uuid, (const void *)kernelcacheUUID->getBytesNoCopy(), kernelcacheUUID->getLength());
-			uuid_unparse_upper(kernelcache_uuid, kernelcache_uuid_string);
-		}
-	}
-
-	infoDictArray = OSDynamicCast(OSArray,
-	    prelinkInfoDict->getObject(kPrelinkInfoDictionaryKey));
-	if (!infoDictArray) {
+	if (!loaded_kcUUID) {
 		OSKextLog(/* kext */ NULL, kOSKextLogErrorLevel | kOSKextLogArchiveFlag,
-		    "The prelinked kernel has no kext info dictionaries");
-		goto finish;
+		    "WARNING: did not find UUID in %s KC!", (type == KCKindAuxiliary) ? "Aux" : "Primary");
+	} else if (type != KCKindAuxiliary) {
+		kernelcache_uuid_valid = TRUE;
+		memcpy((void *)&kernelcache_uuid, (const void *)loaded_kcUUID->getBytesNoCopy(), loaded_kcUUID->getLength());
+		uuid_unparse_upper(kernelcache_uuid, kernelcache_uuid_string);
+	} else {
+		auxkc_uuid_valid = TRUE;
+		memcpy((void *)&auxkc_uuid, (const void *)loaded_kcUUID->getBytesNoCopy(), loaded_kcUUID->getLength());
+		uuid_unparse_upper(auxkc_uuid, auxkc_uuid_string);
 	}
 
-	/* kaslrOffsets are available use them to slide local relocations */
-	kaslrOffsets = OSDynamicCast(OSData,
-	    prelinkInfoDict->getObject(kPrelinkLinkKASLROffsetsKey));
-
-	/* Create dictionary of excluded kexts
-	 */
-#ifndef CONFIG_EMBEDDED
-	OSKext::createExcludeListFromPrelinkInfo(infoDictArray);
-#endif
-	/* Create OSKext objects for each info dictionary.
-	 */
-	for (i = 0; i < infoDictArray->getCount(); ++i) {
-		infoDict = OSDynamicCast(OSDictionary, infoDictArray->getObject(i));
-		if (!infoDict) {
-			OSKextLog(/* kext */ NULL,
-			    kOSKextLogErrorLevel |
-			    kOSKextLogDirectoryScanFlag | kOSKextLogArchiveFlag,
-			    "Can't find info dictionary for prelinked kext #%d.", i);
-			continue;
-		}
-
-#if NO_KEXTD
-		dontLoad = false;
-
-		/* If we're not on a developer device, skip and free developer kexts.
-		 */
-		if (developerDevice == false) {
-			OSBoolean *devOnlyBool = OSDynamicCast(OSBoolean,
-			    infoDict->getObject(kOSBundleDeveloperOnlyKey));
-			if (devOnlyBool == kOSBooleanTrue) {
-				dontLoad = true;
-			}
-		}
-
-		/* Skip and free kexts that are only needed when booted from a ram disk.
-		 */
-		if (ramDiskBoot == false) {
-			OSBoolean *ramDiskOnlyBool = OSDynamicCast(OSBoolean,
-			    infoDict->getObject(kOSBundleRamDiskOnlyKey));
-			if (ramDiskOnlyBool == kOSBooleanTrue) {
-				dontLoad = true;
-			}
-		}
-
-		if (dontLoad == true) {
-			OSString *bundleID = OSDynamicCast(OSString,
-			    infoDict->getObject(kCFBundleIdentifierKey));
-			if (bundleID) {
-				OSKextLog(NULL, kOSKextLogWarningLevel | kOSKextLogGeneralFlag,
-				    "Kext %s not loading.", bundleID->getCStringNoCopy());
-			}
-
-			OSNumber *addressNum = OSDynamicCast(OSNumber,
-			    infoDict->getObject(kPrelinkExecutableLoadKey));
-			OSNumber *lengthNum = OSDynamicCast(OSNumber,
-			    infoDict->getObject(kPrelinkExecutableSizeKey));
-			if (addressNum && lengthNum) {
-#if __arm__ || __arm64__
-				vm_offset_t data = ml_static_slide(addressNum->unsigned64BitValue());
-				vm_size_t length = (vm_size_t) (lengthNum->unsigned32BitValue());
-				ml_static_mfree(data, length);
-#else
-#error Pick the right way to free prelinked data on this arch
-#endif
-			}
-
-			infoDictArray->removeObject(i--);
-			continue;
-		}
-#endif /* NO_KEXTD */
-
-		/* Create the kext for the entry, then release it, because the
-		 * kext system keeps them around until explicitly removed.
-		 * Any creation/registration failures are already logged for us.
-		 */
-		OSKext * newKext = OSKext::withPrelinkedInfoDict(infoDict, (kaslrOffsets ? TRUE : FALSE));
-		OSSafeReleaseNULL(newKext);
-	}
-
-	/* slide kxld relocations */
-	if (kaslrOffsets && vm_kernel_slide > 0) {
-		int slidKextAddrCount = 0;
-		int badSlideAddr = 0;
-		int badSlideTarget = 0;
-
-		const kaslrPackedOffsets * myOffsets = NULL;
-		myOffsets = (const kaslrPackedOffsets *) kaslrOffsets->getBytesNoCopy();
-
-		for (uint32_t j = 0; j < myOffsets->count; j++) {
-			uint64_t        slideOffset = (uint64_t) myOffsets->offsetsArray[j];
-			uintptr_t *     slideAddr = (uintptr_t *) ((uint64_t)prelinkData + slideOffset);
-			int             slideAddrSegIndex = -1;
-			int             addrToSlideSegIndex = -1;
-
-			slideAddrSegIndex = __whereIsAddr((vm_offset_t)slideAddr, &plk_segSizes[0], &plk_segAddrs[0], PLK_SEGMENTS );
-			if (slideAddrSegIndex >= 0) {
-				addrToSlideSegIndex = __whereIsAddr(ml_static_slide((vm_offset_t)(*slideAddr)), &plk_segSizes[0], &plk_segAddrs[0], PLK_SEGMENTS );
-				if (addrToSlideSegIndex < 0) {
-					badSlideTarget++;
-					continue;
-				}
-			} else {
-				badSlideAddr++;
-				continue;
-			}
-
-			slidKextAddrCount++;
-			*slideAddr = ml_static_slide(*slideAddr);
-		} // for ...
-
-		/* All kexts are now slid, set VM protections for them */
-		OSKext::setAllVMAttributes();
-	}
-
-	/* Store the number of prelinked kexts in the registry so we can tell
-	 * when the system has been started from a prelinked kernel.
-	 */
-	registryRoot = IORegistryEntry::getRegistryRoot();
-	assert(registryRoot);
-
-	prelinkCountObj = OSNumber::withNumber(
-		(unsigned long long)infoDictArray->getCount(),
-		8 * sizeof(uint32_t));
-	assert(prelinkCountObj);
-	if (prelinkCountObj) {
-		registryRoot->setProperty(kOSPrelinkKextCountKey, prelinkCountObj);
-	}
-
-	OSKextLog(/* kext */ NULL,
-	    kOSKextLogProgressLevel |
-	    kOSKextLogGeneralFlag | kOSKextLogKextBookkeepingFlag |
-	    kOSKextLogDirectoryScanFlag | kOSKextLogArchiveFlag,
-	    "%u prelinked kexts",
-	    infoDictArray->getCount());
-
+skip_adding_kexts:
 #if CONFIG_KEXT_BASEMENT
-	/* On CONFIG_KEXT_BASEMENT systems, kexts are copied to their own
-	 * special VM region during OSKext init time, so we can free the whole
-	 * segment now.
-	 */
-	ml_static_mfree((vm_offset_t) prelinkData, prelinkLength);
-#endif /* __x86_64__ */
+	if (mh->filetype != MH_FILESET) {
+		/*
+		 * On CONFIG_KEXT_BASEMENT systems which do _not_ boot the new
+		 * MH_FILESET kext collection, kexts are copied to their own
+		 * special VM region during OSKext init time, so we can free
+		 * the whole segment now.
+		 */
+		kernel_segment_command_t *prelinkTextSegment = NULL;
+		prelinkTextSegment = getsegbyname(kPrelinkTextSegment);
+		if (!prelinkTextSegment) {
+			OSKextLog(/* kext */ NULL,
+			    kOSKextLogErrorLevel | kOSKextLogArchiveFlag,
+			    "Can't find prelinked kexts' text segment.");
+			return;
+		}
 
-	/* Free the prelink info segment, we're done with it.
+		ml_static_mfree((vm_offset_t)prelinkTextSegment->vmaddr, prelinkTextSegment->vmsize);
+	}
+#endif /* CONFIG_KEXT_BASEMENT */
+
+	/*
+	 * Free the prelink info segment, we're done with it.
 	 */
+	kernel_segment_command_t *prelinkInfoSegment = NULL;
 	prelinkInfoSegment = getsegbyname(kPrelinkInfoSegment);
 	if (prelinkInfoSegment) {
 		ml_static_mfree((vm_offset_t)prelinkInfoSegment->vmaddr,
 		    (vm_size_t)prelinkInfoSegment->vmsize);
 	}
 
-finish:
-	OSSafeReleaseNULL(errorString);
-	OSSafeReleaseNULL(parsedXML);
-	OSSafeReleaseNULL(theKernel);
-	OSSafeReleaseNULL(prelinkCountObj);
 	return;
-}
-
-static int
-__whereIsAddr(vm_offset_t theAddr, unsigned long * segSizes, vm_offset_t *segAddrs, int segCount)
-{
-	int i;
-
-	for (i = 0; i < segCount; i++) {
-		vm_offset_t         myAddr = *(segAddrs + i);
-		unsigned long       mySize = *(segSizes + i);
-
-		if (theAddr >= myAddr && theAddr < (myAddr + mySize)) {
-			return i;
-		}
-	}
-
-	return -1;
 }
 
 
@@ -580,16 +358,15 @@ typedef struct _DeviceTreeBuffer {
 void
 KLDBootstrap::readBooterExtensions(void)
 {
-	IORegistryEntry           * booterMemoryMap         = NULL;// must release
-	OSDictionary              * propertyDict            = NULL;// must release
-	OSCollectionIterator      * keyIterator             = NULL;// must release
+	OSSharedPtr<IORegistryEntry> booterMemoryMap;
+	OSSharedPtr<OSDictionary>    propertyDict;
+	OSSharedPtr<OSCollectionIterator>      keyIterator;
 	OSString                  * deviceTreeName          = NULL;// do not release
 
 	const _DeviceTreeBuffer   * deviceTreeBuffer        = NULL;// do not free
 	char                      * booterDataPtr           = NULL;// do not free
-	OSData                    * booterData              = NULL;// must release
-
-	OSKext                    * aKext                   = NULL;// must release
+	OSSharedPtr<OSData>         booterData;
+	OSSharedPtr<OSKext>         aKext;
 
 	OSKextLog(/* kext */ NULL,
 	    kOSKextLogProgressLevel |
@@ -615,7 +392,7 @@ KLDBootstrap::readBooterExtensions(void)
 		goto finish;
 	}
 
-	keyIterator = OSCollectionIterator::withCollection(propertyDict);
+	keyIterator = OSCollectionIterator::withCollection(propertyDict.get());
 	if (!keyIterator) {
 		OSKextLog(/* kext */ NULL,
 		    kOSKextLogErrorLevel |
@@ -627,8 +404,9 @@ KLDBootstrap::readBooterExtensions(void)
 	/* Create dictionary of excluded kexts
 	 */
 #ifndef CONFIG_EMBEDDED
-	OSKext::createExcludeListFromBooterData(propertyDict, keyIterator);
+	OSKext::createExcludeListFromBooterData(propertyDict.get(), keyIterator.get());
 #endif
+	// !! reset the iterator, not the pointer
 	keyIterator->reset();
 
 	while ((deviceTreeName =
@@ -636,10 +414,6 @@ KLDBootstrap::readBooterExtensions(void)
 		const char * devTreeNameCString = deviceTreeName->getCStringNoCopy();
 		OSData * deviceTreeEntry = OSDynamicCast(OSData,
 		    propertyDict->getObject(deviceTreeName));
-
-		/* Clear out the booterData from the prior iteration.
-		 */
-		OSSafeReleaseNULL(booterData);
 
 		/* If there is no entry for the name, we can't do much with it. */
 		if (!deviceTreeEntry) {
@@ -698,19 +472,12 @@ KLDBootstrap::readBooterExtensions(void)
 		 * kext system keeps them around until explicitly removed.
 		 * Any creation/registration failures are already logged for us.
 		 */
-		OSKext * newKext = OSKext::withBooterData(deviceTreeName, booterData);
-		OSSafeReleaseNULL(newKext);
+		OSSharedPtr<OSKext> newKext = OSKext::withBooterData(deviceTreeName, booterData.get());
 
 		booterMemoryMap->removeProperty(deviceTreeName);
 	} /* while ( (deviceTreeName = OSDynamicCast(OSString, ...) ) ) */
 
 finish:
-
-	OSSafeReleaseNULL(booterMemoryMap);
-	OSSafeReleaseNULL(propertyDict);
-	OSSafeReleaseNULL(keyIterator);
-	OSSafeReleaseNULL(booterData);
-	OSSafeReleaseNULL(aKext);
 	return;
 }
 
@@ -721,8 +488,8 @@ finish:
 void
 KLDBootstrap::loadSecurityExtensions(void)
 {
-	OSDictionary         * extensionsDict = NULL;// must release
-	OSCollectionIterator * keyIterator    = NULL;// must release
+	OSSharedPtr<OSDictionary>         extensionsDict;
+	OSSharedPtr<OSCollectionIterator> keyIterator;
 	OSString             * bundleID       = NULL;// don't release
 	OSKext               * theKext        = NULL;// don't release
 
@@ -736,7 +503,7 @@ KLDBootstrap::loadSecurityExtensions(void)
 		return;
 	}
 
-	keyIterator = OSCollectionIterator::withCollection(extensionsDict);
+	keyIterator = OSCollectionIterator::withCollection(extensionsDict.get());
 	if (!keyIterator) {
 		OSKextLog(/* kext */ NULL,
 		    kOSKextLogErrorLevel |
@@ -771,9 +538,6 @@ KLDBootstrap::loadSecurityExtensions(void)
 	}
 
 finish:
-	OSSafeReleaseNULL(keyIterator);
-	OSSafeReleaseNULL(extensionsDict);
-
 	return;
 }
 
@@ -791,12 +555,11 @@ finish:
 OSReturn
 KLDBootstrap::loadKernelComponentKexts(void)
 {
-	OSReturn      result      = kOSReturnSuccess;// optimistic
-	OSKext      * theKext     = NULL;          // must release
-	const char ** kextIDPtr   = NULL;          // do not release
+	OSReturn            result      = kOSReturnSuccess;// optimistic
+	OSSharedPtr<OSKext> theKext;
+	const char       ** kextIDPtr   = NULL;          // do not release
 
 	for (kextIDPtr = &sKernelComponentNames[0]; *kextIDPtr; kextIDPtr++) {
-		OSSafeReleaseNULL(theKext);
 		theKext = OSKext::lookupKextWithIdentifier(*kextIDPtr);
 
 		if (theKext) {
@@ -812,7 +575,6 @@ KLDBootstrap::loadKernelComponentKexts(void)
 		}
 	}
 
-	OSSafeReleaseNULL(theKext);
 	return result;
 }
 
@@ -829,8 +591,8 @@ KLDBootstrap::loadKernelComponentKexts(void)
 void
 KLDBootstrap::loadKernelExternalComponents(void)
 {
-	OSDictionary         * extensionsDict = NULL;// must release
-	OSCollectionIterator * keyIterator    = NULL;// must release
+	OSSharedPtr<OSDictionary>         extensionsDict;
+	OSSharedPtr<OSCollectionIterator> keyIterator;
 	OSString             * bundleID       = NULL;// don't release
 	OSKext               * theKext        = NULL;// don't release
 	OSBoolean            * isKernelExternalComponent = NULL;// don't release
@@ -845,7 +607,7 @@ KLDBootstrap::loadKernelExternalComponents(void)
 		return;
 	}
 
-	keyIterator = OSCollectionIterator::withCollection(extensionsDict);
+	keyIterator = OSCollectionIterator::withCollection(extensionsDict.get());
 	if (!keyIterator) {
 		OSKextLog(/* kext */ NULL,
 		    kOSKextLogErrorLevel |
@@ -882,9 +644,6 @@ KLDBootstrap::loadKernelExternalComponents(void)
 	}
 
 finish:
-	OSSafeReleaseNULL(keyIterator);
-	OSSafeReleaseNULL(extensionsDict);
-
 	return;
 }
 
@@ -893,12 +652,12 @@ finish:
 void
 KLDBootstrap::readBuiltinPersonalities(void)
 {
-	OSObject              * parsedXML             = NULL;// must release
+	OSSharedPtr<OSObject>   parsedXML;
 	OSArray               * builtinExtensions     = NULL;// do not release
-	OSArray               * allPersonalities      = NULL;// must release
-	OSString              * errorString           = NULL;// must release
+	OSSharedPtr<OSArray>    allPersonalities;
+	OSSharedPtr<OSString>   errorString;
 	kernel_section_t      * infosect              = NULL;// do not free
-	OSCollectionIterator  * personalitiesIterator = NULL;// must release
+	OSSharedPtr<OSCollectionIterator>  personalitiesIterator;
 	unsigned int            count, i;
 
 	OSKextLog(/* kext */ NULL,
@@ -920,9 +679,9 @@ KLDBootstrap::readBuiltinPersonalities(void)
 	}
 
 	parsedXML = OSUnserializeXML((const char *) (uintptr_t)infosect->addr,
-	    &errorString);
+	    errorString);
 	if (parsedXML) {
-		builtinExtensions = OSDynamicCast(OSArray, parsedXML);
+		builtinExtensions = OSDynamicCast(OSArray, parsedXML.get());
 	}
 	if (!builtinExtensions) {
 		const char * errorCString = "(unknown error)";
@@ -948,8 +707,6 @@ KLDBootstrap::readBuiltinPersonalities(void)
 		OSString                * moduleName = NULL;// do not release
 		OSDictionary            * personalities;// do not release
 		OSString                * personalityName;// do not release
-
-		OSSafeReleaseNULL(personalitiesIterator);
 
 		infoDict = OSDynamicCast(OSDictionary,
 		    builtinExtensions->getObject(i));
@@ -998,13 +755,9 @@ KLDBootstrap::readBuiltinPersonalities(void)
 		}
 	}
 
-	gIOCatalogue->addDrivers(allPersonalities, false);
+	gIOCatalogue->addDrivers(allPersonalities.get(), false);
 
 finish:
-	OSSafeReleaseNULL(parsedXML);
-	OSSafeReleaseNULL(allPersonalities);
-	OSSafeReleaseNULL(errorString);
-	OSSafeReleaseNULL(personalitiesIterator);
 	return;
 }
 

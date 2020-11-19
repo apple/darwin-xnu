@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2015-2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -76,12 +76,6 @@ typedef struct flipc_port {
 /*** FLIPC Node Managment Declarations (used by mach node layer) ***/
 
 extern mach_node_id_t   localnode_id;   // This node's FLIPC id.
-
-/*  The mach node layer calls flipc_init() once before it calls any other
- *  flipc entry points.  Returns KERN_SUCCESS on success; otherwise flipc
- *  is not initialized and cannot be used.
- */
-kern_return_t flipc_init(void);
 
 /*  flipc_node_prepare() is called by mach node layer when a remote node is
  *  registered by a link driver.  This is the flipc layer's opportunity to

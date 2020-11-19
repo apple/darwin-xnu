@@ -31,10 +31,12 @@
 #include <IOKit/IOService.h>
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/IOTimeStamp.h>
+#include <libkern/c++/OSSharedPtr.h>
 
 #include <IOKit/IOLib.h>
 #include <stdatomic.h>
 #include <IOKit/assert.h>
+#include <machine/atomic.h>
 
 #include "IOKitKernelInternal.h"
 
@@ -430,13 +432,14 @@ IORegistryEntry::free( void )
 #endif /* IOREGSPLITTABLES */
 
 	if (reserved) {
-		if (reserved->fIndexedProperties) {
+		OSObject ** array = os_atomic_load(&reserved->fIndexedProperties, acquire);
+		if (array) {
 			for (int idx = 0; idx < kIORegistryEntryIndexedPropertyCount; idx++) {
-				if (reserved->fIndexedProperties[idx]) {
-					reserved->fIndexedProperties[idx]->release();
+				if (array[idx]) {
+					array[idx]->release();
 				}
 			}
-			IODelete(reserved->fIndexedProperties, OSObject *, kIORegistryEntryIndexedPropertyCount);
+			IODelete(array, OSObject *, kIORegistryEntryIndexedPropertyCount);
 		}
 		if (reserved->fLock) {
 			IORecursiveLockFree(reserved->fLock);
@@ -587,6 +590,135 @@ wrap4(const char, const)           // getProperty() w/plane definition
 wrap5(const OSSymbol, const)       // copyProperty() w/plane definition
 wrap5(const OSString, const)       // copyProperty() w/plane definition
 wrap5(const char, const)           // copyProperty() w/plane definition
+
+
+bool
+IORegistryEntry::propertyExists(const OSSymbol * aKey)
+{
+	return NULL != getProperty(aKey);
+}
+
+bool
+IORegistryEntry::propertyExists(const OSString * aKey)
+{
+	return NULL != getProperty(aKey);
+}
+
+bool
+IORegistryEntry::propertyExists(const char * aKey)
+{
+	return NULL != getProperty(aKey);
+}
+
+
+bool
+IORegistryEntry::propertyHasValue(const OSSymbol * aKey,
+    const OSObject * value)
+{
+	const OSObject * found;
+	bool  result;
+
+	found = copyProperty(aKey);
+	result = (!found && !value) || (found && value && value->isEqualTo(found));
+	OSSafeReleaseNULL(found);
+	return result;
+}
+
+bool
+IORegistryEntry::propertyHasValue(const OSString * aKey,
+    const OSObject * value)
+{
+	const OSObject * found;
+	bool  result;
+
+	found = copyProperty(aKey);
+	result = (!found && !value) || (found && value && value->isEqualTo(found));
+	OSSafeReleaseNULL(found);
+	return result;
+}
+
+bool
+IORegistryEntry::propertyHasValue(const char * aKey,
+    const OSObject * value)
+{
+	const OSObject * found;
+	bool  result;
+
+	found = copyProperty(aKey);
+	result = (!found && !value) || (found && value && value->isEqualTo(found));
+	OSSafeReleaseNULL(found);
+	return result;
+}
+
+
+bool
+IORegistryEntry::propertyExists(const OSSymbol * aKey,
+    const IORegistryPlane * plane,
+    uint32_t                options) const
+{
+	return NULL != getProperty(aKey, plane, options);
+}
+
+bool
+IORegistryEntry::propertyExists(const OSString * aKey,
+    const IORegistryPlane * plane,
+    uint32_t                options) const
+{
+	return NULL != getProperty(aKey, plane, options);
+}
+bool
+IORegistryEntry::propertyExists(const char * aKey,
+    const IORegistryPlane * plane,
+    uint32_t                options) const
+{
+	return NULL != getProperty(aKey, plane, options);
+}
+
+
+bool
+IORegistryEntry::propertyHasValue(const OSSymbol * aKey,
+    const OSObject        * value,
+    const IORegistryPlane * plane,
+    uint32_t                options) const
+{
+	const OSObject * found;
+	bool  result;
+
+	found = copyProperty(aKey, plane, options);
+	result = (!found && !value) || (found && value && value->isEqualTo(found));
+	OSSafeReleaseNULL(found);
+	return result;
+}
+
+bool
+IORegistryEntry::propertyHasValue(const OSString * aKey,
+    const OSObject        * value,
+    const IORegistryPlane * plane,
+    uint32_t                options) const
+{
+	const OSObject * found;
+	bool  result;
+
+	found = copyProperty(aKey, plane, options);
+	result = (!found && !value) || (found && value && value->isEqualTo(found));
+	OSSafeReleaseNULL(found);
+	return result;
+}
+
+bool
+IORegistryEntry::propertyHasValue(const char * aKey,
+    const OSObject        * value,
+    const IORegistryPlane * plane,
+    uint32_t                options) const
+{
+	const OSObject * found;
+	bool  result;
+
+	found = copyProperty(aKey, plane, options);
+	result = (!found && !value) || (found && value && value->isEqualTo(found));
+	OSSafeReleaseNULL(found);
+	return result;
+}
 
 
 OSObject *
@@ -820,26 +952,28 @@ IORegistryEntry::setIndexedProperty(uint32_t index, OSObject * anObject)
 		return NULL;
 	}
 
-	array = atomic_load_explicit(&reserved->fIndexedProperties, memory_order_acquire);
+	array = os_atomic_load(&reserved->fIndexedProperties, acquire);
 	if (!array) {
 		array = IONew(OSObject *, kIORegistryEntryIndexedPropertyCount);
 		if (!array) {
 			return NULL;
 		}
 		bzero(array, kIORegistryEntryIndexedPropertyCount * sizeof(array[0]));
-		if (!OSCompareAndSwapPtr(NULL, array, &reserved->fIndexedProperties)) {
+		if (!os_atomic_cmpxchg(&reserved->fIndexedProperties, NULL, array, release)) {
 			IODelete(array, OSObject *, kIORegistryEntryIndexedPropertyCount);
+			array = os_atomic_load(&reserved->fIndexedProperties, acquire);
 		}
 	}
-	if (!reserved->fIndexedProperties) {
+
+	if (!array) {
 		return NULL;
 	}
 
-	prior = reserved->fIndexedProperties[index];
+	prior = array[index];
 	if (anObject) {
 		anObject->retain();
 	}
-	reserved->fIndexedProperties[index] = anObject;
+	array[index] = anObject;
 
 	return prior;
 }
@@ -850,11 +984,13 @@ IORegistryEntry::getIndexedProperty(uint32_t index) const
 	if (index >= kIORegistryEntryIndexedPropertyCount) {
 		return NULL;
 	}
-	if (!reserved->fIndexedProperties) {
+
+	OSObject ** array = os_atomic_load(&reserved->fIndexedProperties, acquire);
+	if (!array) {
 		return NULL;
 	}
 
-	return reserved->fIndexedProperties[index];
+	return array[index];
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -1025,6 +1161,7 @@ IORegistryEntry::setLocation( const char * location,
 	}
 }
 
+
 bool
 IORegistryEntry::compareName( OSString * name, OSString ** matched ) const
 {
@@ -1074,6 +1211,23 @@ IORegistryEntry::compareNames( OSObject * names, OSString ** matched ) const
 	return result;
 }
 
+bool
+IORegistryEntry::compareName( OSString * name, OSSharedPtr<OSString>& matched ) const
+{
+	OSString* matchedRaw = NULL;
+	bool result = compareName(name, &matchedRaw);
+	matched.reset(matchedRaw, OSNoRetain);
+	return result;
+}
+
+bool
+IORegistryEntry::compareNames( OSObject * names, OSSharedPtr<OSString>& matched ) const
+{
+	OSString* matchedRaw = NULL;
+	bool result = compareNames(names, &matchedRaw);
+	matched.reset(matchedRaw, OSNoRetain);
+	return result;
+}
 
 bool
 IORegistryEntry::getPath(  char * path, int * length,
@@ -1189,9 +1343,9 @@ IORegistryEntry::getPathComponent( char * path, int * length,
 	maxLength = *length;
 
 	compName = getName( plane );
-	len = strlen( compName );
+	len = (int) strnlen( compName, sizeof(io_name_t));
 	if ((loc = getLocation( plane ))) {
-		locLen = 1 + strlen( loc );
+		locLen = 1 + ((int) strnlen( loc, sizeof(io_name_t)));
 	} else {
 		locLen = 0;
 	}
@@ -1480,7 +1634,7 @@ IORegistryEntry::fromPath(
 
 		if (opath && length) {
 			// copy out residual path
-			len2 = strlen( path );
+			len2 = (int) strnlen(path, 65536);
 			if ((len + len2) < *length) {
 				strlcpy( opath + len, path, len2 + 1 );
 			}
@@ -1734,6 +1888,11 @@ IORegistryEntry::copyChildEntry(
 	return entry;
 }
 
+// FIXME: Implementation of this function is hidden from the static analyzer.
+// The analyzer is worried that this release might as well be the last release.
+// Feel free to remove the #ifndef and address the warning!
+// See also rdar://problem/63023165.
+#ifndef __clang_analyzer__
 IORegistryEntry *
 IORegistryEntry::getChildEntry(
 	const IORegistryPlane * plane ) const
@@ -1747,6 +1906,7 @@ IORegistryEntry::getChildEntry(
 
 	return entry;
 }
+#endif // __clang_analyzer__
 
 void
 IORegistryEntry::applyToChildren( IORegistryEntryApplierFunction applier,
@@ -2395,12 +2555,12 @@ OSMetaClassDefineReservedUnused(IORegistryEntry, 3);
 OSMetaClassDefineReservedUnused(IORegistryEntry, 4);
 OSMetaClassDefineReservedUnused(IORegistryEntry, 5);
 #else
-OSMetaClassDefineReservedUsed(IORegistryEntry, 0);
-OSMetaClassDefineReservedUsed(IORegistryEntry, 1);
-OSMetaClassDefineReservedUsed(IORegistryEntry, 2);
-OSMetaClassDefineReservedUsed(IORegistryEntry, 3);
-OSMetaClassDefineReservedUsed(IORegistryEntry, 4);
-OSMetaClassDefineReservedUsed(IORegistryEntry, 5);
+OSMetaClassDefineReservedUsedX86(IORegistryEntry, 0);
+OSMetaClassDefineReservedUsedX86(IORegistryEntry, 1);
+OSMetaClassDefineReservedUsedX86(IORegistryEntry, 2);
+OSMetaClassDefineReservedUsedX86(IORegistryEntry, 3);
+OSMetaClassDefineReservedUsedX86(IORegistryEntry, 4);
+OSMetaClassDefineReservedUsedX86(IORegistryEntry, 5);
 #endif
 OSMetaClassDefineReservedUnused(IORegistryEntry, 6);
 OSMetaClassDefineReservedUnused(IORegistryEntry, 7);

@@ -150,7 +150,7 @@ class GDBServer(object):
 
     def getRegisterData(self, query):
         if query[0] == 'g':
-            #TODO should implement thissometime. Considering getThreadRegistersInfo is there
+            #TODO should implement this sometime. Considering getThreadRegistersInfo is there
             #we wont need this one.
             return rsprotocol.UnSupportedMessage
 
@@ -171,11 +171,11 @@ class GDBServer(object):
     def getRegisterInfo(self, query):
         bytes = ''
         try:
-            query = query.replace('qRegisterInfo', '')
-            regnum = int(query, 16)
+            query_index = query.replace('qRegisterInfo', '')
+            regnum = int(query_index, 16)
             bytes = self.process.getRegisterInfo(regnum)
         except Exception, e:
-            logging.error("Failed to get register information error: %s" % e.message)
+            logging.error("Non-fatal: Failed to get register information: query: %s error: %s" % (query, e.message))
         return rsprotocol.Message(bytes)
 
     def getMemory(self, query):

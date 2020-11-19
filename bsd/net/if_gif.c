@@ -94,23 +94,17 @@
 #include <netinet/ip_var.h>
 #endif  /* INET */
 
-#if INET6
 #include <netinet6/in6_var.h>
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #include <netinet6/in6_gif.h>
 #include <netinet6/ip6protosw.h>
-#endif /* INET6 */
 
 #include <netinet/ip_encap.h>
 #include <net/dlil.h>
 #include <net/if_gif.h>
 
 #include <net/net_osdep.h>
-
-#if CONFIG_MACF_NET
-#include <security/mac_framework.h>
-#endif
 
 #define GIFNAME         "gif"
 #define GIFDEV          "if_gif"
@@ -146,7 +140,6 @@ static struct protosw in_gif_protosw =
 	.pr_unlock =            rip_unlock,
 };
 #endif
-#if INET6
 static struct ip6protosw in6_gif_protosw =
 {
 	.pr_type =              SOCK_RAW,
@@ -156,7 +149,6 @@ static struct ip6protosw in6_gif_protosw =
 	.pr_usrreqs =           &rip6_usrreqs,
 	.pr_unlock =            rip_unlock,
 };
-#endif
 
 static int gif_remove(struct ifnet *);
 static int gif_clone_create(struct if_clone *, uint32_t, void *);
@@ -386,7 +378,6 @@ gif_clone_create(struct if_clone *ifc, uint32_t unit, __unused void *params)
 		goto done;
 	}
 #endif
-#if INET6
 	sc->encap_cookie6 = encap_attach_func(AF_INET6, -1,
 	    gif_encapcheck, (struct protosw *)&in6_gif_protosw, sc);
 	if (sc->encap_cookie6 == NULL) {
@@ -400,14 +391,9 @@ gif_clone_create(struct if_clone *ifc, uint32_t unit, __unused void *params)
 		error = ENOBUFS;
 		goto done;
 	}
-#endif
 	sc->gif_called = 0;
 	ifnet_set_mtu(sc->gif_if, GIF_MTU);
 	ifnet_set_flags(sc->gif_if, IFF_POINTOPOINT | IFF_MULTICAST, 0xffff);
-#if 0
-	/* turn off ingress filter */
-	sc->gif_if.if_flags  |= IFF_LINK2;
-#endif
 	sc->gif_flags |= IFGIF_DETACHING;
 	error = ifnet_attach(sc->gif_if, NULL);
 	if (error != 0) {
@@ -424,9 +410,6 @@ gif_clone_create(struct if_clone *ifc, uint32_t unit, __unused void *params)
 		if_clone_softc_deallocate(&gif_cloner, sc);
 		goto done;
 	}
-#if CONFIG_MACF_NET
-	mac_ifnet_label_init(&sc->gif_if);
-#endif
 	bpfattach(sc->gif_if, DLT_NULL, sizeof(u_int));
 	sc->gif_flags &= ~IFGIF_DETACHING;
 	TAILQ_INSERT_TAIL(&gifs, sc, gif_link);
@@ -464,9 +447,7 @@ gif_remove(struct ifnet *ifp)
 	ngif--;
 
 	gif_delete_tunnel(sc);
-#ifdef INET6
 	encap_cookie6 = sc->encap_cookie6;
-#endif
 #ifdef INET
 	encap_cookie4 = sc->encap_cookie4;
 #endif
@@ -546,10 +527,8 @@ gif_encapcheck(
 	case IPPROTO_IPV4:
 		break;
 #endif
-#if INET6
 	case IPPROTO_IPV6:
 		break;
-#endif
 	default:
 		goto done;
 	}
@@ -565,14 +544,14 @@ gif_encapcheck(
 		}
 		error = gif_encapcheck4(m, off, proto, arg);
 #endif
-#if INET6
+		OS_FALLTHROUGH;
 	case 6:
 		if (sc->gif_psrc->sa_family != AF_INET6 ||
 		    sc->gif_pdst->sa_family != AF_INET6) {
 			goto done;
 		}
 		error = gif_encapcheck6(m, off, proto, arg);
-#endif
+		OS_FALLTHROUGH;
 	default:
 		goto done;
 	}
@@ -631,11 +610,9 @@ gif_output(
 		error = in_gif_output(ifp, sc->gif_proto, m, NULL);
 		break;
 #endif
-#if INET6
 	case AF_INET6:
 		error = in6_gif_output(ifp, sc->gif_proto, m, NULL);
 		break;
-#endif
 	default:
 		error = ENETDOWN;
 		break;
@@ -735,10 +712,8 @@ gif_ioctl(
 #endif /* SIOCSIFMTU */
 
 	case SIOCSIFPHYADDR:
-#if INET6
 	case SIOCSIFPHYADDR_IN6_32:
 	case SIOCSIFPHYADDR_IN6_64:
-#endif /* INET6 */
 		switch (cmd) {
 #if INET
 		case SIOCSIFPHYADDR:
@@ -748,7 +723,6 @@ gif_ioctl(
 			    &(((struct in_aliasreq *)data)->ifra_dstaddr);
 			break;
 #endif
-#if INET6
 		case SIOCSIFPHYADDR_IN6_32: {
 			struct in6_aliasreq_32 *ifra_32 =
 			    (struct in6_aliasreq_32 *)data;
@@ -766,7 +740,6 @@ gif_ioctl(
 			dst = (struct sockaddr *)&ifra_64->ifra_dstaddr;
 			break;
 		}
-#endif
 		}
 
 		/* sa_family must be equal */
@@ -783,13 +756,11 @@ gif_ioctl(
 			}
 			break;
 #endif
-#if INET6
 		case AF_INET6:
 			if (src->sa_len != sizeof(struct sockaddr_in6)) {
 				return EINVAL;
 			}
 			break;
-#endif
 		default:
 			return EAFNOSUPPORT;
 		}
@@ -801,13 +772,11 @@ gif_ioctl(
 			}
 			break;
 #endif
-#if INET6
 		case AF_INET6:
 			if (dst->sa_len != sizeof(struct sockaddr_in6)) {
 				return EINVAL;
 			}
 			break;
-#endif
 		default:
 			return EAFNOSUPPORT;
 		}
@@ -819,14 +788,12 @@ gif_ioctl(
 				break;
 			}
 			return EAFNOSUPPORT;
-#if INET6
 		case SIOCSIFPHYADDR_IN6_32:
 		case SIOCSIFPHYADDR_IN6_64:
 			if (src->sa_family == AF_INET6) {
 				break;
 			}
 			return EAFNOSUPPORT;
-#endif /* INET6 */
 		}
 
 #define GIF_ORDERED_LOCK(sc, sc2)       \
@@ -883,11 +850,9 @@ gif_ioctl(
 			/* can't configure multiple multi-dest interfaces */
 #define multidest(x) \
 	(((struct sockaddr_in *)(void *)(x))->sin_addr.s_addr == INADDR_ANY)
-#if INET6
 #define multidest6(x) \
 	(IN6_IS_ADDR_UNSPECIFIED(&((struct sockaddr_in6 *)      \
 	    (void *)(x))->sin6_addr))
-#endif
 			if (dst->sa_family == AF_INET &&
 			    multidest(dst) && multidest(sc2->gif_pdst)) {
 				GIF_ORDERED_UNLOCK(sc, sc2);
@@ -895,7 +860,6 @@ gif_ioctl(
 				ifnet_head_done();
 				goto bad;
 			}
-#if INET6
 			if (dst->sa_family == AF_INET6 &&
 			    multidest6(dst) && multidest6(sc2->gif_pdst)) {
 				GIF_ORDERED_UNLOCK(sc, sc2);
@@ -903,7 +867,6 @@ gif_ioctl(
 				ifnet_head_done();
 				goto bad;
 			}
-#endif
 			GIF_ORDERED_UNLOCK(sc, sc2);
 		}
 		ifnet_head_done();
@@ -957,9 +920,7 @@ gif_ioctl(
 #endif
 
 	case SIOCGIFPSRCADDR:
-#if INET6
 	case SIOCGIFPSRCADDR_IN6:
-#endif /* INET6 */
 		GIF_LOCK(sc);
 		if (sc->gif_psrc == NULL) {
 			GIF_UNLOCK(sc);
@@ -974,13 +935,11 @@ gif_ioctl(
 			size = sizeof(ifr->ifr_addr);
 			break;
 #endif /* INET */
-#if INET6
 		case SIOCGIFPSRCADDR_IN6:
 			dst = (struct sockaddr *)
 			    &(((struct in6_ifreq *)data)->ifr_addr);
 			size = sizeof(((struct in6_ifreq *)data)->ifr_addr);
 			break;
-#endif /* INET6 */
 		default:
 			GIF_UNLOCK(sc);
 			error = EADDRNOTAVAIL;
@@ -995,9 +954,7 @@ gif_ioctl(
 		break;
 
 	case SIOCGIFPDSTADDR:
-#if INET6
 	case SIOCGIFPDSTADDR_IN6:
-#endif /* INET6 */
 		GIF_LOCK(sc);
 		if (sc->gif_pdst == NULL) {
 			GIF_UNLOCK(sc);
@@ -1012,13 +969,11 @@ gif_ioctl(
 			size = sizeof(ifr->ifr_addr);
 			break;
 #endif /* INET */
-#if INET6
 		case SIOCGIFPDSTADDR_IN6:
 			dst = (struct sockaddr *)
 			    &(((struct in6_ifreq *)data)->ifr_addr);
 			size = sizeof(((struct in6_ifreq *)data)->ifr_addr);
 			break;
-#endif /* INET6 */
 		default:
 			error = EADDRNOTAVAIL;
 			GIF_UNLOCK(sc);

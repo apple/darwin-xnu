@@ -58,6 +58,7 @@
 #include <kern/thread.h>
 #include <arm/misc_protos.h>
 
+
 extern zone_t ads_zone;
 
 kern_return_t
@@ -216,7 +217,6 @@ machine_task_terminate(task_t task)
 {
 	if (task) {
 		void *task_debug;
-
 		task_debug = task->task_debug;
 		if (task_debug != NULL) {
 			task->task_debug = NULL;

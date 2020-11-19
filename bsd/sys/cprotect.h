@@ -38,6 +38,7 @@
 #include <crypto/aes.h>
 #include <stdbool.h>
 #include <uuid/uuid.h>
+#include <libkern/crypto/sha1.h>
 
 __BEGIN_DECLS
 
@@ -67,6 +68,7 @@ enum {
 #endif
 
 #define CP_MAX_WRAPPEDKEYSIZE     128   /* The size of the largest allowed key */
+#define VFS_CP_MAX_CACHEBUFLEN    64    /* Maximum size of the cached key */
 
 /* lock events from AppleKeyStore */
 enum {
@@ -98,6 +100,27 @@ typedef uint64_t cp_crypto_id_t;
 
 typedef struct cprotect *cprotect_t;
 typedef struct cpx *cpx_t;
+
+#ifdef BSD_KERNEL_PRIVATE
+/* Not for consumption outside of XNU */
+typedef uint32_t cpx_flags_t;
+/*
+ * This is a CPX structure with a fixed-length key buffer. We need this defined in a header
+ * so that we can use this structure to allocate the memory for the zone(s) properly.
+ */
+typedef struct fcpx {
+#ifdef DEBUG
+	uint32_t                cpx_magic1;
+#endif // DEBUG
+	aes_encrypt_ctx         *cpx_iv_aes_ctx_ptr;// Context used for generating the IV
+	cpx_flags_t             cpx_flags;
+	uint16_t                cpx_max_key_len;
+	uint16_t                cpx_key_len;
+	uint8_t                 cpx_cached_key[VFS_CP_MAX_CACHEBUFLEN];
+	//Fixed length all the way through
+} fcpx_t;
+
+#endif // BSD_KERNEL_PRIVATE
 
 typedef struct cp_key {
 	uint8_t len;
@@ -155,11 +178,14 @@ typedef int backup_key_t(cp_cred_t access, const cp_wrapped_key_t wrapped_key_in
  * fields;  cpx provides opacity and allows us to modify behavior internally
  * without requiring kext changes.
  */
-cpx_t cpx_alloc(size_t key_size);
+cpx_t cpx_alloc(size_t key_size, bool needs_ctx);
+int cpx_alloc_ctx(cpx_t cpx);
+void cpx_free_ctx(cpx_t cpx);
 void cpx_init(cpx_t, size_t key_len);
+void cpx_init_ctx_ptr(cpx_t cpx);
 void cpx_free(cpx_t);
 void cpx_writeprotect(cpx_t cpx);
-__attribute__((const)) size_t cpx_size(size_t key_size);
+__attribute__((const)) size_t cpx_size(size_t key_len);
 __attribute__((pure)) bool cpx_is_sep_wrapped_key(const struct cpx *);
 void cpx_set_is_sep_wrapped_key(struct cpx *, bool);
 __attribute__((pure)) bool cpx_is_composite_key(const struct cpx *);

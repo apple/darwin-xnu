@@ -28,6 +28,11 @@
 #ifndef _PEXPERT_DEVICE_TREE_H_
 #define _PEXPERT_DEVICE_TREE_H_
 
+#include <stdbool.h>
+
+#include <mach/mach_types.h>
+#include <mach/vm_types.h>
+
 #include <sys/appleapiopts.h>
 
 #ifdef __APPLE_API_PRIVATE
@@ -82,7 +87,7 @@ typedef struct OpaqueDTEntry {
 //  DeviceTreeNode	children[];	// array size == nChildren
 } DeviceTreeNode;
 
-typedef DeviceTreeNode *RealDTEntry;
+typedef const DeviceTreeNode *RealDTEntry;
 
 typedef struct DTSavedScope {
 	struct DTSavedScope * nextScope;
@@ -103,12 +108,12 @@ typedef struct OpaqueDTEntryIterator {
 /* Property Iterator*/
 typedef struct OpaqueDTPropertyIterator {
 	RealDTEntry entry;
-	DeviceTreeNodeProperty *currentProperty;
+	DeviceTreeNodeProperty const *currentProperty;
 	unsigned long currentIndex;
 } OpaqueDTPropertyIterator, *DTPropertyIterator;
 
 /* Entry*/
-typedef struct OpaqueDTEntry* DTEntry;
+typedef const struct OpaqueDTEntry* DTEntry;
 
 /* Entry Iterator*/
 typedef struct OpaqueDTEntryIterator* DTEntryIterator;
@@ -134,7 +139,12 @@ enum {
 
 /* Used to initalize the device tree functions. */
 /* base is the base address of the flatened device tree */
-void DTInit(void *base);
+extern void SecureDTInit(void const *base, size_t size);
+
+/* Whether the device tree is locked down after machine lockdown. */
+/* Returns false if there is no meaningful distinction, in */
+/* contrast to SecureDTFindEntry. */
+extern bool SecureDTIsLockedDown(void);
 
 /*
  *  -------------------------------------------------------------------------------
@@ -142,7 +152,7 @@ void DTInit(void *base);
  *  -------------------------------------------------------------------------------
  */
 /* Compare two Entry's for equality. */
-extern int DTEntryIsEqual(const DTEntry ref1, const DTEntry ref2);
+extern int SecureDTEntryIsEqual(const DTEntry ref1, const DTEntry ref2);
 
 /*
  *  -------------------------------------------------------------------------------
@@ -150,22 +160,24 @@ extern int DTEntryIsEqual(const DTEntry ref1, const DTEntry ref2);
  *  -------------------------------------------------------------------------------
  */
 /*
- *  DTFindEntry:
+ *  Find Entry
  *  Find the device tree entry that contains propName=propValue.
  *  It currently  searches the entire
  *  tree.  This function should eventually go in DeviceTree.c.
  *  Returns:    kSuccess = entry was found.  Entry is in entryH.
  *            kError   = entry was not found
  */
-extern int DTFindEntry(const char *propName, const char *propValue, DTEntry *entryH);
+extern int SecureDTFindEntry(const char *propName, const char *propValue, DTEntry *entryH);
 
 /*
  *  Lookup Entry
  *  Locates an entry given a specified subroot (searchPoint) and path name.  If the
  *  searchPoint pointer is NULL, the path name is assumed to be an absolute path
  *  name rooted to the root of the device tree.
+ *  Returns:    kSuccess = entry was found.  Entry is in foundEntry.
+ *            kError   = entry was not found
  */
-extern int DTLookupEntry(const DTEntry searchPoint, const char *pathName, DTEntry *foundEntry);
+extern int SecureDTLookupEntry(const DTEntry searchPoint, const char *pathName, DTEntry *foundEntry);
 
 /*
  *  -------------------------------------------------------------------------------
@@ -186,7 +198,7 @@ extern int DTLookupEntry(const DTEntry searchPoint, const char *pathName, DTEntr
  *  currentScope are set to the root entry.  The currentPosition for the iterator is
  *  set to "nil".
  */
-extern int DTInitEntryIterator(const DTEntry startEntry, DTEntryIterator iter);
+extern int SecureDTInitEntryIterator(const DTEntry startEntry, DTEntryIterator iter);
 
 /*
  *  Enter Child Entry
@@ -195,7 +207,7 @@ extern int DTInitEntryIterator(const DTEntry startEntry, DTEntryIterator iter);
  *  "childEntry" is nil, the currentScope is set to the entry specified by the
  *  currentPosition of the iterator.
  */
-extern int DTEnterEntry(DTEntryIterator iterator, DTEntry childEntry);
+extern int SecureDTEnterEntry(DTEntryIterator iterator, DTEntry childEntry);
 
 /*
  *  Exit to Parent Entry
@@ -204,7 +216,7 @@ extern int DTEnterEntry(DTEntryIterator iterator, DTEntry childEntry);
  *  previous currentScope), so the next iteration call will continue where it left off.
  *  This position is returned in parameter "currentPosition".
  */
-extern int DTExitEntry(DTEntryIterator iterator, DTEntry *currentPosition);
+extern int SecureDTExitEntry(DTEntryIterator iterator, DTEntry *currentPosition);
 
 /*
  *  Iterate Entries
@@ -213,7 +225,7 @@ extern int DTExitEntry(DTEntryIterator iterator, DTEntry *currentPosition);
  *  int == kIterationDone, all entries have been exhausted, and the
  *  value of nextEntry will be Nil.
  */
-extern int DTIterateEntries(DTEntryIterator iterator, DTEntry *nextEntry);
+extern int SecureDTIterateEntries(DTEntryIterator iterator, DTEntry *nextEntry);
 
 /*
  *  Restart Entry Iteration
@@ -222,7 +234,7 @@ extern int DTIterateEntries(DTEntryIterator iterator, DTEntry *nextEntry);
  *  outermostScope and currentScope of the iterator are unchanged. The currentPosition
  *  for the iterator is set to "nil".
  */
-extern int DTRestartEntryIteration(DTEntryIterator iterator);
+extern int SecureDTRestartEntryIteration(DTEntryIterator iterator);
 
 /*
  *  -------------------------------------------------------------------------------
@@ -234,7 +246,16 @@ extern int DTRestartEntryIteration(DTEntryIterator iterator);
  *
  *  Get Property
  */
-extern int DTGetProperty(const DTEntry entry, const char *propertyName, void **propertyValue, unsigned int *propertySize);
+extern int SecureDTGetProperty(const DTEntry entry, const char *propertyName,
+    void const **propertyValue, unsigned int *propertySize);
+
+#if defined(__i386__) || defined(__x86_64__)
+// x86 processes device tree fragments outside the normal DT region in
+// hibernation. This would not work on ARM.
+extern int SecureDTGetPropertyRegion(const DTEntry entry, const char *propertyName,
+    void const **propertyValue, unsigned int *propertySize,
+    vm_offset_t const region_start, vm_size_t region_size);
+#endif
 
 /*
  *  -------------------------------------------------------------------------------
@@ -245,7 +266,7 @@ extern int DTGetProperty(const DTEntry entry, const char *propertyName, void **p
  *  Initialize Property Iterator
  *  Fill out the property iterator structure. The target entry is defined by entry.
  */
-extern int DTInitPropertyIterator(const DTEntry entry, DTPropertyIterator iter);
+extern int SecureDTInitPropertyIterator(const DTEntry entry, DTPropertyIterator iter);
 
 /*
  *  Iterate Properites
@@ -253,8 +274,8 @@ extern int DTInitPropertyIterator(const DTEntry entry, DTPropertyIterator iter);
  *  When int == kIterationDone, all properties have been exhausted.
  */
 
-extern int DTIterateProperties(DTPropertyIterator iterator,
-    char **foundProperty);
+extern int SecureDTIterateProperties(DTPropertyIterator iterator,
+    char const **foundProperty);
 
 /*
  *  Restart Property Iteration
@@ -262,7 +283,7 @@ extern int DTIterateProperties(DTPropertyIterator iterator,
  *  reset to the beginning of the list of properties for an entry.
  */
 
-extern int DTRestartPropertyIteration(DTPropertyIterator iterator);
+extern int SecureDTRestartPropertyIteration(DTPropertyIterator iterator);
 
 #ifdef __cplusplus
 }

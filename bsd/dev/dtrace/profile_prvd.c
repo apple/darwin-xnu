@@ -711,26 +711,20 @@ _profile_open(dev_t dev, int flags, int devtype, struct proc *p)
 
 #define PROFILE_MAJOR  -24 /* let the kernel pick the device number */
 
-/*
- * A struct describing which functions will get invoked for certain
- * actions.
- */
-static struct cdevsw profile_cdevsw =
+static const struct cdevsw profile_cdevsw =
 {
-	_profile_open,          /* open */
-	eno_opcl,                       /* close */
-	eno_rdwrt,                      /* read */
-	eno_rdwrt,                      /* write */
-	eno_ioctl,                      /* ioctl */
-	(stop_fcn_t *)nulldev, /* stop */
-	(reset_fcn_t *)nulldev, /* reset */
-	NULL,                           /* tty's */
-	eno_select,                     /* select */
-	eno_mmap,                       /* mmap */
-	eno_strat,                      /* strategy */
-	eno_getc,                       /* getc */
-	eno_putc,                       /* putc */
-	0                                       /* type */
+	.d_open = _profile_open,
+	.d_close = eno_opcl,
+	.d_read = eno_rdwrt,
+	.d_write = eno_rdwrt,
+	.d_ioctl = eno_ioctl,
+	.d_stop = (stop_fcn_t *)nulldev,
+	.d_reset = (reset_fcn_t *)nulldev,
+	.d_select = eno_select,
+	.d_mmap = eno_mmap,
+	.d_strategy = eno_strat,
+	.d_reserved_1 = eno_getc,
+	.d_reserved_2 = eno_putc,
 };
 
 void

@@ -23,6 +23,8 @@
  * Use is subject to license terms.
  */
 
+#include <ptrauth.h>
+
 #include <kern/thread.h>
 #include <mach/thread_status.h>
 
@@ -378,7 +380,7 @@ static dtrace_provider_id_t systrace_id;
 #define systrace_init _systrace_init
 
 static void
-systrace_init(struct sysent *actual, systrace_sysent_t **interposed)
+systrace_init(const struct sysent *actual, systrace_sysent_t **interposed)
 {
 	systrace_sysent_t *ssysent = *interposed;  /* Avoid sysent shadow warning
 	                                            *       from bsd/sys/sysent.h */
@@ -390,7 +392,7 @@ systrace_init(struct sysent *actual, systrace_sysent_t **interposed)
 	}
 
 	for (i = 0; i < NSYSCALL; i++) {
-		struct sysent *a = &actual[i];
+		const struct sysent *a = &actual[i];
 		systrace_sysent_t *s = &ssysent[i];
 
 		if (LOADABLE_SYSCALL(a) && !LOADED_SYSCALL(a)) {
@@ -487,7 +489,7 @@ systrace_enable(void *arg, dtrace_id_t id, void *parg)
 
 	lck_mtx_lock(&dtrace_systrace_lock);
 	if (sysent[sysnum].sy_callc == systrace_sysent[sysnum].stsy_underlying) {
-		vm_offset_t dss = (vm_offset_t)&dtrace_systrace_syscall;
+		vm_offset_t dss = ptrauth_nop_cast(vm_offset_t, &dtrace_systrace_syscall);
 		ml_nofault_copy((vm_offset_t)&dss, (vm_offset_t)&sysent[sysnum].sy_callc, sizeof(vm_offset_t));
 	}
 	lck_mtx_unlock(&dtrace_systrace_lock);
@@ -843,7 +845,7 @@ machtrace_enable(void *arg, dtrace_id_t id, void *parg)
 	lck_mtx_lock(&dtrace_systrace_lock);
 
 	if (mach_trap_table[sysnum].mach_trap_function == machtrace_sysent[sysnum].stsy_underlying) {
-		vm_offset_t dss = (vm_offset_t)&dtrace_machtrace_syscall;
+		vm_offset_t dss = ptrauth_nop_cast(vm_offset_t, &dtrace_machtrace_syscall);
 		ml_nofault_copy((vm_offset_t)&dss, (vm_offset_t)&mach_trap_table[sysnum].mach_trap_function, sizeof(vm_offset_t));
 	}
 
@@ -928,26 +930,20 @@ _systrace_open(dev_t dev, int flags, int devtype, struct proc *p)
 
 #define SYSTRACE_MAJOR  -24 /* let the kernel pick the device number */
 
-/*
- * A struct describing which functions will get invoked for certain
- * actions.
- */
 static struct cdevsw systrace_cdevsw =
 {
-	_systrace_open,         /* open */
-	eno_opcl,               /* close */
-	eno_rdwrt,                      /* read */
-	eno_rdwrt,                      /* write */
-	eno_ioctl,              /* ioctl */
-	(stop_fcn_t *)nulldev, /* stop */
-	(reset_fcn_t *)nulldev, /* reset */
-	NULL,                           /* tty's */
-	eno_select,                     /* select */
-	eno_mmap,                       /* mmap */
-	eno_strat,                      /* strategy */
-	eno_getc,                       /* getc */
-	eno_putc,                       /* putc */
-	0                                       /* type */
+	.d_open = _systrace_open,
+	.d_close = eno_opcl,
+	.d_read = eno_rdwrt,
+	.d_write = eno_rdwrt,
+	.d_ioctl = eno_ioctl,
+	.d_stop = (stop_fcn_t *)nulldev,
+	.d_reset = (reset_fcn_t *)nulldev,
+	.d_select = eno_select,
+	.d_mmap = eno_mmap,
+	.d_strategy = eno_strat,
+	.d_reserved_1 = eno_getc,
+	.d_reserved_2 = eno_putc,
 };
 
 void systrace_init( void );

@@ -90,6 +90,7 @@
 #include <kern/thread.h>
 
 #include <machine/commpage.h>
+#include <machine/machine_routines.h>
 
 #if HIBERNATION
 #include <IOKit/IOHibernatePrivate.h>
@@ -101,7 +102,7 @@ extern void (*dtrace_cpu_state_changed_hook)(int, boolean_t);
 #endif
 
 #if defined(__x86_64__)
-#include <i386/misc_protos.h>
+#include <i386/panic_notify.h>
 #include <libkern/OSDebug.h>
 #endif
 
@@ -133,32 +134,27 @@ processor_up(
 {
 	processor_set_t         pset;
 	spl_t                           s;
-	boolean_t pset_online = false;
 
 	s = splsched();
 	init_ast_check(processor);
 	pset = processor->processor_set;
 	pset_lock(pset);
-	if (pset->online_processor_count == 0) {
-		/* About to bring the first processor of a pset online */
-		pset_online = true;
-	}
+
 	++pset->online_processor_count;
 	pset_update_processor_state(pset, processor, PROCESSOR_RUNNING);
 	os_atomic_inc(&processor_avail_count, relaxed);
 	if (processor->is_recommended) {
 		os_atomic_inc(&processor_avail_count_user, relaxed);
+		SCHED(pset_made_schedulable)(processor, pset, false);
+	}
+	if (processor->processor_primary == processor) {
+		os_atomic_inc(&primary_processor_avail_count, relaxed);
+		if (processor->is_recommended) {
+			os_atomic_inc(&primary_processor_avail_count_user, relaxed);
+		}
 	}
 	commpage_update_active_cpus();
-	if (pset_online) {
-		/* New pset is coming up online; callout to the
-		 * scheduler in case it wants to adjust runqs.
-		 */
-		SCHED(pset_made_schedulable)(processor, pset, true);
-		/* pset lock dropped */
-	} else {
-		pset_unlock(pset);
-	}
+	pset_unlock(pset);
 	ml_cpu_up();
 	splx(s);
 
@@ -214,6 +210,7 @@ processor_shutdown(
 	processor_set_t         pset;
 	spl_t                           s;
 
+	ml_cpu_begin_state_transition(processor->cpu_id);
 	s = splsched();
 	pset = processor->processor_set;
 	pset_lock(pset);
@@ -223,8 +220,20 @@ processor_shutdown(
 		 */
 		pset_unlock(pset);
 		splx(s);
+		ml_cpu_end_state_transition(processor->cpu_id);
 
 		return KERN_SUCCESS;
+	}
+
+	if (!ml_cpu_can_exit(processor->cpu_id)) {
+		/*
+		 * Failure if disallowed by arch code.
+		 */
+		pset_unlock(pset);
+		splx(s);
+		ml_cpu_end_state_transition(processor->cpu_id);
+
+		return KERN_FAILURE;
 	}
 
 	if (processor->state == PROCESSOR_START) {
@@ -254,10 +263,12 @@ processor_shutdown(
 	if (processor->state == PROCESSOR_SHUTDOWN) {
 		pset_unlock(pset);
 		splx(s);
+		ml_cpu_end_state_transition(processor->cpu_id);
 
 		return KERN_SUCCESS;
 	}
 
+	ml_broadcast_cpu_event(CPU_EXIT_REQUESTED, processor->cpu_id);
 	pset_update_processor_state(pset, processor, PROCESSOR_SHUTDOWN);
 	pset_unlock(pset);
 
@@ -265,6 +276,8 @@ processor_shutdown(
 	splx(s);
 
 	cpu_exit_wait(processor->cpu_id);
+	ml_cpu_end_state_transition(processor->cpu_id);
+	ml_broadcast_cpu_event(CPU_EXITED, processor->cpu_id);
 
 	return KERN_SUCCESS;
 }
@@ -314,6 +327,12 @@ processor_doshutdown(
 	if (processor->is_recommended) {
 		os_atomic_dec(&processor_avail_count_user, relaxed);
 	}
+	if (processor->processor_primary == processor) {
+		os_atomic_dec(&primary_processor_avail_count, relaxed);
+		if (processor->is_recommended) {
+			os_atomic_dec(&primary_processor_avail_count_user, relaxed);
+		}
+	}
 	commpage_update_active_cpus();
 	SCHED(processor_queue_shutdown)(processor);
 	/* pset lock dropped */
@@ -357,6 +376,7 @@ processor_offline(
 	assert(ml_get_interrupts_enabled() == FALSE);
 	assert(self->continuation == NULL);
 	assert(processor->processor_offlined == false);
+	assert(processor->running_timers_active == false);
 
 	bool enforce_quiesce_safety = gEnforceQuiesceSafety;
 
@@ -425,7 +445,7 @@ processor_offline_intstack(
 	assert(processor == current_processor());
 	assert(processor->active_thread == current_thread());
 
-	timer_stop(PROCESSOR_DATA(processor, current_state), processor->last_dispatch);
+	timer_stop(processor->current_state, processor->last_dispatch);
 
 	cpu_quiescent_counter_leave(processor->last_dispatch);
 
@@ -528,7 +548,7 @@ ml_io_read(uintptr_t vaddr, int size)
 			(void)ml_set_interrupts_enabled(istate);
 
 			if (phyreadpanic && (machine_timeout_suspended() == FALSE)) {
-				panic_io_port_read();
+				panic_notify();
 				panic("Read from IO vaddr 0x%lx paddr 0x%lx took %llu ns, "
 				    "result: 0x%llx (start: %llu, end: %llu), ceiling: %llu",
 				    vaddr, paddr, (eabs - sabs), result, sabs, eabs,
@@ -645,7 +665,7 @@ ml_io_write(uintptr_t vaddr, uint64_t val, int size)
 			(void)ml_set_interrupts_enabled(istate);
 
 			if (phywritepanic && (machine_timeout_suspended() == FALSE)) {
-				panic_io_port_read();
+				panic_notify();
 				panic("Write to IO vaddr %p paddr %p val 0x%llx took %llu ns,"
 				    " (start: %llu, end: %llu), ceiling: %llu",
 				    (void *)vaddr, (void *)paddr, val, (eabs - sabs), sabs, eabs,
@@ -699,4 +719,50 @@ void
 ml_io_write64(uintptr_t vaddr, uint64_t val)
 {
 	ml_io_write(vaddr, val, 8);
+}
+
+struct cpu_callback_chain_elem {
+	cpu_callback_t                  fn;
+	void                            *param;
+	struct cpu_callback_chain_elem  *next;
+};
+
+static struct cpu_callback_chain_elem *cpu_callback_chain;
+static LCK_GRP_DECLARE(cpu_callback_chain_lock_grp, "cpu_callback_chain");
+static LCK_SPIN_DECLARE(cpu_callback_chain_lock, &cpu_callback_chain_lock_grp);
+
+void
+cpu_event_register_callback(cpu_callback_t fn, void *param)
+{
+	struct cpu_callback_chain_elem *new_elem;
+
+	new_elem = zalloc_permanent_type(struct cpu_callback_chain_elem);
+	if (!new_elem) {
+		panic("can't allocate cpu_callback_chain_elem");
+	}
+
+	lck_spin_lock(&cpu_callback_chain_lock);
+	new_elem->next = cpu_callback_chain;
+	new_elem->fn = fn;
+	new_elem->param = param;
+	os_atomic_store(&cpu_callback_chain, new_elem, release);
+	lck_spin_unlock(&cpu_callback_chain_lock);
+}
+
+__attribute__((noreturn))
+void
+cpu_event_unregister_callback(__unused cpu_callback_t fn)
+{
+	panic("Unfortunately, cpu_event_unregister_callback is unimplemented.");
+}
+
+void
+ml_broadcast_cpu_event(enum cpu_event event, unsigned int cpu_or_cluster)
+{
+	struct cpu_callback_chain_elem *cursor;
+
+	cursor = os_atomic_load(&cpu_callback_chain, dependency);
+	for (; cursor != NULL; cursor = cursor->next) {
+		cursor->fn(cursor->param, event, cpu_or_cluster);
+	}
 }

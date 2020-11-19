@@ -3,6 +3,7 @@ from utils import *
 from kdp import *
 from core import caching
 import sys
+import lldb
 from collections import deque
 
 ######################################
@@ -23,6 +24,22 @@ def CastIOKitClass(obj, target_type):
     v = Cast(obj, target_type)
     v.GetSBValue().SetPreferDynamicValue(lldb.eNoDynamicValues)
     return v
+
+#####################################
+# Classes.
+#####################################
+class PreoslogHeader(object):
+    """
+    Represents preoslog buffer header. There's no symbol in the kernel for it.
+    """
+    valid_magic = "POSL"
+    def __init__(self):
+        self.magic = ""
+        self.offset = 0
+        self.size = 0
+        self.source = 0
+        self.wrapped = 0
+        self.data = None
 
 ######################################
 # Type Summaries
@@ -513,6 +530,75 @@ def ShowIOServicePM(cmd_args=None):
     
     print out_string
 
+@lldb_type_summary(['IOPMWorkQueue *'])
+@header("")
+def GetIOPMWorkQueueSummary(wq):
+    out_str = ""
+    ioservicepm_header = "{:<20s}{:<4s}{:<4s}{:<4s}{:<4s}\n"
+    iopmrequest_indent = "    "
+    iopmrequest_header = iopmrequest_indent + "{:<20s}{:<6s}{:<20s}{:<20s}{:<12s}{:<12s}{:<20s}{:<20s}{:<20s}\n"
+
+    for next in IterateQueue(wq.fWorkQueue, 'IOServicePM *', 'WorkChain'):
+        out_str += ioservicepm_header.format("IOService", "ps", "ms", "wr", "name")
+        out_str += "0x{:<16x}  {:<2d}  {:<2d}  {:<2d}  {:<s}\n".format(
+            next.Owner, next.CurrentPowerState, next.MachineState, next.WaitReason, next.Name)
+        out_str += iopmrequest_header.format("IOPMRequest", "type", "next_req", "root_req", "work_wait", "free_wait", "arg0", "arg1", "arg2")
+        for request in IterateQueue(next.RequestHead, 'IOPMRequest *', 'fCommandChain'):
+            out_str += iopmrequest_indent
+            out_str += "0x{:<16x}  0x{:<2x}  0x{:<16x}  0x{:<16x}".format(
+                request, request.fRequestType, request.fRequestNext, request.fRequestRoot)
+            out_str += "  0x{:<8x}  0x{:<8x}".format(
+                request.fWorkWaitCount, request.fFreeWaitCount)
+            out_str += "  0x{:<16x}  0x{:<16x}  0x{:<16x}\n".format(
+                request.fArg0, request.fArg1, request.fArg2)
+    return out_str
+
+@lldb_command('showiopmqueues')
+def ShowIOPMQueues(cmd_args=None):
+    """ Show IOKit power management queues and IOPMRequest objects.
+    """
+    print "IOPMWorkQueue 0x{:<16x} ({:<d} IOServicePM)\n".format(
+        kern.globals.gIOPMWorkQueue, kern.globals.gIOPMWorkQueue.fQueueLength)
+    print GetIOPMWorkQueueSummary(kern.globals.gIOPMWorkQueue)
+
+@lldb_type_summary(['IOService *'])
+@header("")
+def GetIOPMInterest(service):
+    iopm = CastIOKitClass(service.pwrMgt, 'IOServicePM *')
+    if unsigned(iopm) == 0:
+        print("error: no IOServicePM")
+        return
+
+    list = CastIOKitClass(iopm.InterestedDrivers, 'IOPMinformeeList *')
+    out_str = "IOServicePM 0x{:<16x} ({:<d} interest, {:<d} pending ack)\n".format(
+        iopm, list.length, iopm.HeadNotePendingAcks)
+    if list.length == 0:
+        return
+
+    out_str += "    {:<20s}{:<8s}{:<10s}{:<20s}{:<20s}{:<20s}{:<s}\n".format(
+        "informee", "active", "ticks", "notifyTime", "service", "regId", "name")
+    next = CastIOKitClass(list.firstItem, 'IOPMinformee *')
+    while unsigned(next) != 0:
+        driver = CastIOKitClass(next.whatObject, 'IOService *')
+        name = GetRegistryEntryName(driver)
+        reg_id = CastIOKitClass(driver, 'IORegistryEntry *').reserved.fRegistryEntryID;
+        out_str += "    0x{:<16x}  {:<6s}  {:<8d}  0x{:<16x}  0x{:<16x}  0x{:<16x}  {:<s}\n".format(
+            next, "Yes" if next.active != 0 else "No" , next.timer, next.startTime, next.whatObject, reg_id, name)
+        next = CastIOKitClass(next.nextInList, 'IOPMinformee *')
+    return out_str
+
+@lldb_command('showiopminterest')
+def ShowIOPMInterest(cmd_args=None):
+    """ Show the interested drivers for an IOService.
+        syntax: (lldb) showiopminterest <IOService>
+    """
+    if not cmd_args:
+        print "Please specify the address of the IOService"
+        print ShowIOPMInterest.__doc__
+        return
+
+    obj = kern.GetValueFromAddress(cmd_args[0], 'IOService *')
+    print GetIOPMInterest(obj)
 
 @lldb_command("showinterruptvectors")
 def ShowInterruptVectorInfo(cmd_args=None):
@@ -620,8 +706,6 @@ def ShowIOKitClassHierarchy(cmd_args=None):
     for (index, mc) in enumerate(hierarchy):
         indent = ("    " * index) + "+---"
         print("{}[ {} ] {}".format(indent, str(mc.className()), str(mc.data())))
-
-
 
 
 ######################################
@@ -749,6 +833,25 @@ def FindRegistryObjectRecurse(entry, search_name):
                 return registry_object
     return None
 
+def CompareStringToOSSymbol(string, os_sym):
+    """
+    Lexicographically compare python string to OSSymbol
+    Params:
+    string - python string
+    os_sym - OSSymbol
+
+    Returns:
+    0 if string == os_sym
+    1 if string > os_sym
+    -1 if string < os_sym
+    """
+    os_sym_str = GetString(os_sym)
+    if string > os_sym_str:
+        return 1
+    elif string < os_sym_str:
+        return -1
+    else:
+        return 0
 
 class IOKitMetaClass(object):
     """
@@ -1221,7 +1324,7 @@ def SearchInterruptControllerDrivers():
             yield ic
 
 
-def LookupKeyInOSDict(osdict, key):
+def LookupKeyInOSDict(osdict, key, comparer = None):
     """ Returns the value corresponding to a given key in a OSDictionary
         Returns None if the key was not found
     """
@@ -1230,8 +1333,16 @@ def LookupKeyInOSDict(osdict, key):
     count = unsigned(osdict.count)
     result = None
     idx = 0
+
+    if not comparer:
+        # When comparer is specified, "key" argument can be of any type as "comparer" knows how to compare "key" to a key from "osdict".
+        # When comparer is not specified, key is of cpp_obj type.
+        key = getOSPtr(key)
     while idx < count and result is None:
-        if key == osdict.dictionary[idx].key:
+        if comparer is not None:
+            if comparer(key, osdict.dictionary[idx].key) == 0:
+                result = osdict.dictionary[idx].value
+        elif key == osdict.dictionary[idx].key:
             result = osdict.dictionary[idx].value
         idx += 1
     return result
@@ -1270,7 +1381,7 @@ def GetRegDictionary(osdict, prefix):
 def GetString(string):
     """ Returns the python string representation of a given OSString
     """
-    out_string = "\"{0:s}\"".format(CastIOKitClass(string, 'OSString *').string)
+    out_string = "{0:s}".format(CastIOKitClass(string, 'OSString *').string)
     return out_string
 
 def GetNumber(num):
@@ -1311,25 +1422,24 @@ def GetArray(arr):
 def GetDictionary(d):
     """ Returns a string containing info about a given OSDictionary
     """
-    out_string = "{"
+    if d is None:
+        return ""
+    out_string = "{\n"
     idx = 0
     count = unsigned(d.count)
 
     while idx < count:
-        obj = d.dictionary[idx].key
-        out_string += GetObjectSummary(obj) + "="
-        obj = d.dictionary[idx].value
+        key = d.dictionary[idx].key
+        value = d.dictionary[idx].value
+        out_string += "    \"{}\" = {}\n".format(GetString(key), GetObjectSummary(value))
         idx += 1
-        out_string += GetObjectSummary(obj)
-        if idx < count:
-            out_string += ","
     out_string += "}"
     return out_string
 
 def GetSet(se):
     """ Returns a string containing info about a given OSSet
     """
-    out_string += "[" + GetArray(se.members) + "]"
+    out_string = "[" + GetArray(se.members) + "]"
     return out_string
 
 def ReadIOPortInt(addr, numbytes, lcpu):
@@ -1536,3 +1646,120 @@ def showinterruptstats(cmd_args=None):
     
     return True
 
+def GetRegistryPlane(plane_name):
+    """
+    Given plane_name, returns IORegistryPlane * object or None if there's no such registry plane
+    """
+    return LookupKeyInOSDict(kern.globals.gIORegistryPlanes, plane_name, CompareStringToOSSymbol)
+
+def DecodePreoslogSource(source):
+    """
+    Given preoslog source, return a matching string representation
+    """
+    source_to_str = {0 : "iboot"}
+    if source in source_to_str:
+        return source_to_str[source]
+    return "UNKNOWN"
+
+def GetPreoslogHeader():
+    """
+    Scan IODeviceTree for preoslog and return a python representation of it
+    """
+    edt_plane = GetRegistryPlane("IODeviceTree")
+    if edt_plane is None:
+        print "Couldn't obtain a pointer to IODeviceTree"
+        return None
+
+    # Registry API functions operate on "plane" global variable
+    global plane
+    prev_plane = plane
+    plane = edt_plane
+    chosen = FindRegistryObjectRecurse(kern.globals.gRegistryRoot, "chosen")
+    if chosen is None:
+        print "Couldn't obtain /chosen IORegistryEntry"
+        return None
+
+    memory_map = FindRegistryObjectRecurse(chosen, "memory-map")
+    if memory_map is None:
+        print "Couldn't obtain memory-map from /chosen"
+        return None
+
+    plane = prev_plane
+
+    mm_preoslog = LookupKeyInOSDict(memory_map.fPropertyTable, "preoslog", CompareStringToOSSymbol)
+    if mm_preoslog is None:
+        print "Couldn't find preoslog entry in memory-map"
+        return None
+
+    if mm_preoslog.length != 16:
+        print "preoslog entry in memory-map is malformed, expected len is 16, given len is {}".format(preoslog.length)
+        return None
+
+    data = cast(mm_preoslog.data, "dtptr_t *")
+    preoslog_paddr = unsigned(data[0])
+    preoslog_vaddr = kern.PhysToKernelVirt(preoslog_paddr)
+    preoslog_size = unsigned(data[1])
+
+    preoslog_header = PreoslogHeader()
+
+    # This structure defnition doesn't exist in xnu
+    """
+    typedef struct  __attribute__((packed)) {
+        char magic[4];
+        uint32_t size;
+        uint32_t offset;
+        uint8_t source;
+        uint8_t wrapped;
+        char data[];
+    } preoslog_header_t; 
+    """
+    preoslog_header_ptr = kern.GetValueFromAddress(preoslog_vaddr, "uint8_t *")
+    preoslog_header.magic = preoslog_header_ptr[0:4]
+    preoslog_header.source = DecodePreoslogSource(unsigned(preoslog_header_ptr[12]))
+    preoslog_header.wrapped = unsigned(preoslog_header_ptr[13])
+    preoslog_header_ptr = kern.GetValueFromAddress(preoslog_vaddr, "uint32_t *")
+    preoslog_header.size = unsigned(preoslog_header_ptr[1])
+    preoslog_header.offset = unsigned(preoslog_header_ptr[2])
+
+    for i in xrange(len(preoslog_header.valid_magic)):
+        c = chr(unsigned(preoslog_header.magic[i]))
+        if c != preoslog_header.valid_magic[i]:
+            string = "Error: magic doesn't match, expected {:.4s}, given {:.4s}"
+            print string.format(preoslog_header.valid_magic, preoslog_header.magic)
+            return None
+
+    if preoslog_header.size != preoslog_size:
+        string = "Error: size mismatch preoslog_header.size ({}) != preoslog_size ({})"
+        print string.format(preoslog_header.size, preoslog_size)
+        return None
+
+    preoslog_data_ptr = kern.GetValueFromAddress(preoslog_vaddr + 14, "char *")
+    preoslog_header.data = preoslog_data_ptr.sbvalue.GetPointeeData(0, preoslog_size)
+    return preoslog_header
+
+@lldb_command("showpreoslog")
+def showpreoslog(cmd_args=None):
+    """ Display preoslog buffer """
+
+    preoslog = GetPreoslogHeader()
+    if preoslog is None:
+        print "Error: couldn't obtain preoslog header"
+        return False
+
+    header = "".join([
+        "----preoslog log header-----\n",
+        "size - {} bytes\n",
+        "write offset - {:#x}\n",
+        "wrapped - {}\n",
+        "source - {}\n",
+        "----preoslog log start------"
+        ])
+
+    print header.format(preoslog.size, preoslog.offset, preoslog.wrapped, preoslog.source)
+
+    err = lldb.SBError()
+    if preoslog.wrapped > 0:
+        print preoslog.data.GetString(err, preoslog.offset + 1)
+    print preoslog.data.GetString(err, 0)
+    print "-----preoslog log end-------"
+    return True

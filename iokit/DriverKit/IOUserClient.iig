@@ -37,9 +37,8 @@
 
 #include <DriverKit/OSAction.iig>
 #include <DriverKit/IOService.iig>
+#include <DriverKit/IOBufferMemoryDescriptor.iig>
 
-class IOMemoryDescriptor;
-class IOBufferMemoryDescriptor;
 
 enum {
 	kIOUserClientScalarArrayCountMax  = 16,
@@ -242,6 +241,25 @@ public:
 		uint64_t                              type,
 	    uint64_t                            * options,
 	    IOMemoryDescriptor                 ** memory) = 0;
+
+    /*!
+     * @brief       Create a memory descriptor that describes a set of virtual ranges in
+     *              the client task of the user client.
+     * @param       memoryDescriptorCreateOptions
+	 *              kIOMemoryDirectionIn memory described will be writable
+	 *              kIOMemoryDirectionOut memory described will be readable
+	 * @param       segmentsCount Number of valid address ranges being passed
+	 *              in the segments array.
+	 * @param       segments Array of address ranges.
+	 * @param       memory Returned IOMemoryDescriptor object with +1 retain count.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	virtual kern_return_t
+	CreateMemoryDescriptorFromClient(
+		uint64_t memoryDescriptorCreateOptions,
+		uint32_t segmentsCount,
+		const IOAddressSegment segments[32],
+		IOMemoryDescriptor ** memory) __attribute__((availability(driverkit,introduced=20.0)));
 
 private:
 	virtual kern_return_t

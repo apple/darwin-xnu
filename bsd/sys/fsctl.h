@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -348,7 +348,14 @@ struct fsioc_cas_bsdflags {
 #define FSIOC_THAW_EXTENTS                              _IO('h', 21)
 #define FSCTL_THAW_EXTENTS                              IOCBASECMD(FSIOC_THAW_EXTENTS)
 
-/* this FSCTL selector is duplicated in XNU with the intent of making the VFS/generic one the only one eventually */
+/* Selectors on 'h' from 22 -> 49 are defined in HFS repo */
+
+#define FSIOC_EVAL_ROOTAUTH                              _IO('h', 50)
+#define FSCTL_EVAL_ROOTAUTH                              IOCBASECMD(FSIOC_EVAL_ROOTAUTH)
+
+/* This op should only be invoked from within the kernel */
+#define FSIOC_KERNEL_ROOTAUTH                            _IOW('h', 51, uint32_t)
+
 #define FIRMLINK_STRUCT_LEN 1032
 typedef struct generic_firmlink {
 	uint8_t array[FIRMLINK_STRUCT_LEN];
@@ -366,6 +373,5 @@ int     fsctl(const char *, unsigned long, void*, unsigned int);
 int     ffsctl(int, unsigned long, void*, unsigned int);
 
 __END_DECLS
-
 #endif /* !KERNEL */
 #endif /* !_SYS_FSCTL_H_ */

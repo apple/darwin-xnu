@@ -63,13 +63,13 @@ $(SOBJS): .SFLAGS
 	$(_v)$(REPLACECONTENTS) $@ $(KASAN)
 
 $(COMPONENT).filelist: $(OBJS) .KASANFLAGS
-	$(call makelog,$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0))
+	@$(LOG_LDFILELIST) "$(COMPONENT)"
 	$(_v)for obj in ${OBJS}; do	\
 		 $(ECHO) $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist
 
 $(TARGET)/$(CURRENT_KERNEL_CONFIG)/kasan_blacklist_dynamic.h: $(SRCROOT)/$(COMPONENT)/kasan-blacklist-dynamic
-	$(call makelog,$(ColorH)GENERATING$(Color0)    $(ColorLF)$(notdir $@)$(Color0))
+	@$(LOG_GENERATE) "$(notdir $@)"
 	@$(SRCROOT)/$(COMPONENT)/tools/generate_dynamic_blacklist.py "$<" > "$@"
 
 $(SRCROOT)/$(COMPONENT)/kasan_dynamic_blacklist.c: $(TARGET)/$(CURRENT_KERNEL_CONFIG)/kasan_blacklist_dynamic.h

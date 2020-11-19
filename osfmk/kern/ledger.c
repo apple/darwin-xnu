@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2018 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2010-2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -96,7 +96,7 @@ struct entry_template {
 	struct ledger_callback  *et_callback;
 };
 
-lck_grp_t ledger_lck_grp;
+LCK_GRP_DECLARE(ledger_lck_grp, "ledger");
 os_refgrp_decl(static, ledger_refgrp, "ledger", NULL);
 
 /*
@@ -172,12 +172,6 @@ nsecs_to_abstime(uint64_t nsecs)
 
 	nanoseconds_to_absolutetime(nsecs, &abstime);
 	return abstime;
-}
-
-void
-ledger_init(void)
-{
-	lck_grp_init(&ledger_lck_grp, "ledger", LCK_GRP_ATTR_NULL);
 }
 
 ledger_template_t
@@ -371,9 +365,7 @@ ledger_template_complete(ledger_template_t template)
 {
 	size_t ledger_size;
 	ledger_size = sizeof(struct ledger) + (template->lt_cnt * sizeof(struct ledger_entry));
-	template->lt_zone = zinit(ledger_size, CONFIG_TASK_MAX * ledger_size,
-	    ledger_size,
-	    template->lt_name);
+	template->lt_zone = zone_create(template->lt_name, ledger_size, ZC_NONE);
 	template->lt_initialized = true;
 }
 
@@ -659,12 +651,12 @@ ledger_refill(uint64_t now, ledger_t ledger, int entry)
 		due = balance;
 	}
 
-	assertf(due >= 0, "now=%llu, ledger=%p, entry=%d, balance=%lld, due=%lld", now, ledger, entry, balance, due);
-
-	OSAddAtomic64(due, &le->le_debit);
-
-	assert(le->le_debit >= 0);
-
+	if (due < 0 && (le->le_flags & LF_PANIC_ON_NEGATIVE)) {
+		assertf(due >= 0, "now=%llu, ledger=%p, entry=%d, balance=%lld, due=%lld", now, ledger, entry, balance, due);
+	} else {
+		OSAddAtomic64(due, &le->le_debit);
+		assert(le->le_debit >= 0);
+	}
 	/*
 	 * If we've completely refilled the pool, set the refill time to now.
 	 * Otherwise set it to the time at which it last should have been
@@ -1675,7 +1667,8 @@ ledger_template_info(void **buf, int *len)
 	if (*len > l->l_size) {
 		*len = l->l_size;
 	}
-	lti = kalloc((*len) * sizeof(struct ledger_template_info));
+	lti = kheap_alloc(KHEAP_DATA_BUFFERS,
+	    (*len) * sizeof(struct ledger_template_info), Z_WAITOK);
 	if (lti == NULL) {
 		return ENOMEM;
 	}
@@ -1732,7 +1725,8 @@ ledger_get_task_entry_info_multiple(task_t task, void **buf, int *len)
 	if (*len > l->l_size) {
 		*len = l->l_size;
 	}
-	lei = kalloc((*len) * sizeof(struct ledger_entry_info));
+	lei = kheap_alloc(KHEAP_DATA_BUFFERS,
+	    (*len) * sizeof(struct ledger_entry_info), Z_WAITOK);
 	if (lei == NULL) {
 		return ENOMEM;
 	}

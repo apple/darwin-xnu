@@ -47,7 +47,7 @@ static int mt_cdev_ioctl(dev_t dev, unsigned long cmd, char *uptr, int fflag,
 
 #define MT_NODE "monotonic"
 
-static struct cdevsw mt_cdevsw = {
+static const struct cdevsw mt_cdevsw = {
 	.d_open = mt_cdev_open,
 	.d_close = mt_cdev_close,
 	.d_ioctl = mt_cdev_ioctl,

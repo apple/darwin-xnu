@@ -77,4 +77,7 @@ extern void tty_dev_register(struct tty_dev_t *dev);
 
 extern int ttnread(struct tty *tp);
 
+extern void termios32to64(struct termios32 *in, struct user_termios *out);
+extern void termios64to32(struct user_termios *in, struct termios32 *out);
+
 #endif // __TTY_DEV_H__

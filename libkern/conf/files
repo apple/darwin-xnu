@@ -13,6 +13,7 @@ OPTIONS/zlibc						optional zlibc
 # libkern
 
 libkern/gen/OSAtomicOperations.c			standard
+libkern/gen/OSSpinLock.c				standard
 libkern/gen/OSDebug.cpp					standard
 
 libkern/c++/OSMetaClass.cpp				optional libkerncpp
@@ -37,7 +38,8 @@ libkern/c++/OSSymbol.cpp				optional libkerncpp
 libkern/c++/OSUnserialize.cpp				optional libkerncpp
 libkern/c++/OSUnserializeXML.cpp			optional libkerncpp
 libkern/c++/OSSerializeBinary.cpp			optional libkerncpp
-libkern/c++/OSCompat.cpp			optional libkerncpp
+
+libkern/c++/priority_queue.cpp				standard
 
 libkern/OSKextLib.cpp					optional libkerncpp
 libkern/mkext.c						standard
@@ -97,6 +99,7 @@ libkern/crypto/corecrypto_chacha20poly1305.c	optional	crypto
 libkern/img4/interface.c 		standard
 
 libkern/stack_protector.c       standard
+libkern/ptrauth_utils.c         standard
 
 libkern/kxld/kxld.c             optional config_kxld
 libkern/kxld/kxld_array.c       optional config_kxld
@@ -116,7 +119,6 @@ libkern/kxld/kxld_util.c        optional config_kxld
 libkern/kxld/kxld_uuid.c        optional config_kxld
 libkern/kxld/kxld_versionmin.c  optional config_kxld
 libkern/kxld/kxld_vtable.c      optional config_kxld
-libkern/kxld/kxld_stubs.c       standard
 
 libkern/libclosure/runtime.cpp      optional config_blocks
 libkern/libclosure/libclosuredata.c optional config_blocks

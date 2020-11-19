@@ -40,7 +40,5 @@ extern int netem_config(struct netem **ne, const char *name,
 extern void netem_get_params(struct netem *ne, struct if_netem_params *p);
 extern void netem_destroy(struct netem *ne);
 extern int netem_enqueue(struct netem *ne, classq_pkt_t *p, boolean_t *pdrop);
-extern int netem_dequeue(struct netem *ne, pktsched_pkt_t *p,
-    boolean_t *ppending);
 
 __END_DECLS

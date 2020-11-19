@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -73,21 +73,19 @@ mach_node_t                             localnode;                      // This 
 
 
 /*** Private to mach_node layer ***/
-static int                              mach_nodes_to_publish;
-static mach_node_t              mach_node_table[MACH_NODES_MAX];
-static lck_spin_t       mach_node_table_lock_data;
+static int              mach_nodes_to_publish;
+static mach_node_t      mach_node_table[MACH_NODES_MAX];
+static LCK_SPIN_DECLARE_ATTR(mach_node_table_lock_data,
+    &ipc_lck_grp, &ipc_lck_attr);
 #define MACH_NODE_TABLE_LOCK()      lck_spin_lock(&mach_node_table_lock_data)
 #define MACH_NODE_TABLE_UNLOCK()    lck_spin_unlock(&mach_node_table_lock_data)
-#define MACH_NODE_TABLE_LOCK_INIT() lck_spin_init(&mach_node_table_lock_data, \
-	                                          &ipc_lck_grp, &ipc_lck_attr)
 
 static volatile SInt64  mnl_name_next;
-static queue_head_t             mnl_name_table[MNL_NAME_TABLE_SIZE];
-static lck_spin_t       mnl_name_table_lock_data;
+static queue_head_t     mnl_name_table[MNL_NAME_TABLE_SIZE];
+static LCK_SPIN_DECLARE_ATTR(mnl_name_table_lock_data,
+    &ipc_lck_grp, &ipc_lck_attr);
 #define MNL_NAME_TABLE_LOCK()       lck_spin_lock(&mnl_name_table_lock_data)
 #define MNL_NAME_TABLE_UNLOCK()     lck_spin_unlock(&mnl_name_table_lock_data)
-#define MNL_NAME_TABLE_LOCK_INIT()  lck_spin_init(&mnl_name_table_lock_data, \
-	                                        &ipc_lck_grp, &ipc_lck_attr)
 
 static void mach_node_init(void);
 static void mnl_name_table_init(void);
@@ -113,14 +111,12 @@ mach_node_init(void)
 		    localnode_id, MACH_NODES_MAX);
 		mach_node_table_init();
 		mnl_name_table_init();
-		flipc_init();
 	} // TODO: else block until init is finished (init completion race)
 }
 
 void
 mach_node_table_init(void)
 {
-	MACH_NODE_TABLE_LOCK_INIT();
 	MACH_NODE_TABLE_LOCK();
 
 	/* Start with an enpty node table. */
@@ -134,7 +130,7 @@ mach_node_table_init(void)
 	MACH_NODE_TABLE_UNLOCK();
 
 	/* Set up localnode's struct */
-	bzero(localnode, sizeof(localnode));
+	bzero(localnode, sizeof(*localnode));
 	localnode->info.datamodel       = LOCAL_DATA_MODEL;
 	localnode->info.byteorder       = OSHostByteOrder();
 	localnode->info.proto_vers_min      = MNL_PROTOCOL_V1;
@@ -471,7 +467,6 @@ mnl_name_free(mnl_name_t name __unused)
 void
 mnl_name_table_init(void)
 {
-	MNL_NAME_TABLE_LOCK_INIT();
 	MNL_NAME_TABLE_LOCK();
 
 	// Set the first name to this node's bootstrap name

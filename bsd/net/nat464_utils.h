@@ -101,8 +101,8 @@ int
 nat464_translate_icmp(int, void *);
 
 int
-    nat464_translate_icmp_ip(pbuf_t *, uint32_t, uint64_t *, uint32_t *,
-    uint8_t, uint8_t, uint64_t, struct nat464_addr *,
+    nat464_translate_icmp_ip(pbuf_t *, uint16_t, uint16_t *, uint16_t *,
+    uint8_t, uint8_t, uint16_t, struct nat464_addr *,
     struct nat464_addr *, protocol_family_t, protocol_family_t );
 
 int
@@ -116,8 +116,8 @@ int
     struct in_addr, uint64_t, boolean_t *);
 
 int
-    nat464_translate_46(pbuf_t *, int, uint8_t, uint8_t, uint8_t, struct in6_addr,
-    struct in6_addr, uint64_t);
+    nat464_translate_46(pbuf_t *, uint16_t, uint8_t, uint8_t, uint8_t, struct in6_addr,
+    struct in6_addr, uint16_t);
 
 int
     nat464_translate_proto(pbuf_t *, struct nat464_addr *, struct nat464_addr *,

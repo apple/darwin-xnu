@@ -148,7 +148,6 @@ extern int ipsec_bypass;
 #endif /* IPSEC */
 
 #if DUMMYNET
-#include <netinet/ip_fw.h>
 #include <netinet/ip_dummynet.h>
 #endif /* DUMMYNET */
 
@@ -785,7 +784,7 @@ ip6_input_check_interface(struct mbuf *m, struct ip6_hdr *ip6, struct ifnet *ini
 
 			inet_ntop(AF_INET6, &ip6->ip6_src, src_str, sizeof(src_str));
 			inet_ntop(AF_INET6, &ip6->ip6_dst, dst_str, sizeof(dst_str));
-			os_log_info(OS_LOG_DEFAULT,
+			os_log(OS_LOG_DEFAULT,
 			    "%s: no interface match for packet from %s to %s proto %u received via %s",
 			    __func__, src_str, dst_str, ip6->ip6_nxt, inifp->if_xname);
 		}
@@ -1212,7 +1211,7 @@ hbhcheck:
 			in6_ifstat_inc(inifp, ifs6_in_discard);
 			in6_ifstat_inc(inifp, ifs6_in_hdrerr);
 			icmp6_error(m, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_HEADER,
-			    (caddr_t)&ip6->ip6_plen - (caddr_t)ip6);
+			    (int)((caddr_t)&ip6->ip6_plen - (caddr_t)ip6));
 			goto done;
 		}
 		/* ip6_hopopts_input() ensures that mbuf is contiguous */
@@ -1397,7 +1396,7 @@ injectit:
 
 					result = filter->ipf_filter.ipf_input(
 						filter->ipf_filter.cookie,
-						(mbuf_t *)&m, off, nxt);
+						(mbuf_t *)&m, off, (uint8_t)nxt);
 					if (result == EJUSTRETURN) {
 						ipf_unref();
 						goto done;
@@ -1453,7 +1452,7 @@ ip6_setsrcifaddr_info(struct mbuf *m, uint32_t src_idx, struct in6_ifaddr *ia6)
 		m->m_pkthdr.src_iff = (ia6->ia6_flags & 0xffff);
 	} else {
 		m->m_pkthdr.src_iff = 0;
-		m->m_pkthdr.src_ifindex = src_idx;
+		m->m_pkthdr.src_ifindex = (uint16_t)src_idx;
 		if (src_idx != 0) {
 			m->m_pkthdr.pkt_flags |= PKTF_IFAINFO;
 		}
@@ -1478,7 +1477,7 @@ ip6_setdstifaddr_info(struct mbuf *m, uint32_t dst_idx, struct in6_ifaddr *ia6)
 		m->m_pkthdr.dst_iff = (ia6->ia6_flags & 0xffff);
 	} else {
 		m->m_pkthdr.dst_iff = 0;
-		m->m_pkthdr.dst_ifindex = dst_idx;
+		m->m_pkthdr.dst_ifindex = (uint16_t)dst_idx;
 		if (dst_idx != 0) {
 			m->m_pkthdr.pkt_flags |= PKTF_IFAINFO;
 		}
@@ -1602,7 +1601,7 @@ ip6_process_hopopts(struct mbuf *m, u_int8_t *opthead, int hbhlen,
 				/* XXX stat */
 				icmp6_error(m, ICMP6_PARAM_PROB,
 				    ICMP6_PARAMPROB_HEADER,
-				    erroff + opt + 1 - opthead);
+				    (int)(erroff + opt + 1 - opthead));
 				return -1;
 			}
 			optlen = IP6OPT_RTALERT_LEN;
@@ -1619,7 +1618,7 @@ ip6_process_hopopts(struct mbuf *m, u_int8_t *opthead, int hbhlen,
 				/* XXX stat */
 				icmp6_error(m, ICMP6_PARAM_PROB,
 				    ICMP6_PARAMPROB_HEADER,
-				    erroff + opt + 1 - opthead);
+				    (int)(erroff + opt + 1 - opthead));
 				return -1;
 			}
 			optlen = IP6OPT_JUMBO_LEN;
@@ -1633,7 +1632,7 @@ ip6_process_hopopts(struct mbuf *m, u_int8_t *opthead, int hbhlen,
 				ip6stat.ip6s_badoptions++;
 				icmp6_error(m, ICMP6_PARAM_PROB,
 				    ICMP6_PARAMPROB_HEADER,
-				    erroff + opt - opthead);
+				    (int)(erroff + opt - opthead));
 				return -1;
 			}
 
@@ -1657,7 +1656,7 @@ ip6_process_hopopts(struct mbuf *m, u_int8_t *opthead, int hbhlen,
 				ip6stat.ip6s_badoptions++;
 				icmp6_error(m, ICMP6_PARAM_PROB,
 				    ICMP6_PARAMPROB_HEADER,
-				    erroff + opt + 2 - opthead);
+				    (int)(erroff + opt + 2 - opthead));
 				return -1;
 			}
 #endif
@@ -1669,7 +1668,7 @@ ip6_process_hopopts(struct mbuf *m, u_int8_t *opthead, int hbhlen,
 				ip6stat.ip6s_badoptions++;
 				icmp6_error(m, ICMP6_PARAM_PROB,
 				    ICMP6_PARAMPROB_HEADER,
-				    erroff + opt + 2 - opthead);
+				    (int)(erroff + opt + 2 - opthead));
 				return -1;
 			}
 			*plenp = jumboplen;
@@ -1704,7 +1703,7 @@ bad:
  * is not continuous in order to return an ICMPv6 error.
  */
 int
-ip6_unknown_opt(uint8_t *optp, struct mbuf *m, int off)
+ip6_unknown_opt(uint8_t *optp, struct mbuf *m, size_t off)
 {
 	struct ip6_hdr *ip6;
 
@@ -1718,7 +1717,7 @@ ip6_unknown_opt(uint8_t *optp, struct mbuf *m, int off)
 
 	case IP6OPT_TYPE_FORCEICMP: /* send ICMP even if multicasted */
 		ip6stat.ip6s_badoptions++;
-		icmp6_error(m, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_OPTION, off);
+		icmp6_error(m, ICMP6_PARAM_PROB, ICMP6_PARAMPROB_OPTION, (int)off);
 		return -1;
 
 	case IP6OPT_TYPE_ICMP: /* send ICMP if not multicasted */
@@ -1729,7 +1728,7 @@ ip6_unknown_opt(uint8_t *optp, struct mbuf *m, int off)
 			m_freem(m);
 		} else {
 			icmp6_error(m, ICMP6_PARAM_PROB,
-			    ICMP6_PARAMPROB_OPTION, off);
+			    ICMP6_PARAMPROB_OPTION, (int)off);
 		}
 		return -1;
 	}
@@ -1818,7 +1817,12 @@ ip6_savecontrol_v4(struct inpcb *inp, struct mbuf *m, struct mbuf **mp,
 		}
 
 		// Send IN6P_PKTINFO for v4-mapped address
-		if ((inp->inp_flags & IN6P_PKTINFO) != 0) {
+		if ((inp->inp_flags & IN6P_PKTINFO) != 0
+#if CONTENT_FILTER
+		    /* Content Filter needs to see local address */
+		    || (inp->inp_socket->so_cfil_db != NULL)
+#endif
+		    ) {
 			struct in6_pktinfo pi6 = {
 				.ipi6_addr = IN6ADDR_V4MAPPED_INIT,
 				.ipi6_ifindex = (m && m->m_pkthdr.rcvif) ? m->m_pkthdr.rcvif->if_index : 0,
@@ -1839,7 +1843,12 @@ ip6_savecontrol_v4(struct inpcb *inp, struct mbuf *m, struct mbuf **mp,
 	}
 
 	/* RFC 2292 sec. 5 */
-	if ((inp->inp_flags & IN6P_PKTINFO) != 0) {
+	if ((inp->inp_flags & IN6P_PKTINFO) != 0
+#if CONTENT_FILTER
+	    /* Content Filter needs to see local address */
+	    || (inp->inp_socket->so_cfil_db != NULL)
+#endif
+	    ) {
 		struct in6_pktinfo pi6;
 
 		bcopy(&ip6->ip6_dst, &pi6.ipi6_addr, sizeof(struct in6_addr));

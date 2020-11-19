@@ -32,7 +32,7 @@
 .\"     from: @(#)fork.2	6.5 (Berkeley) 3/10/91
 .\" $FreeBSD: /repoman/r/ncvs/src/lib/libc/i386/sys/i386_get_ldt.2,v 1.21 2004/07/02 19:07:30 ru Exp $
 .\"
-.Dd September 20, 1993
+.Dd February 14, 2020
 .Dt I386_GET_LDT 2
 .Os
 .Sh NAME
@@ -106,6 +106,16 @@ is 0 and
 is NULL then, as a special case,
 .Fn i386_set_ldt
 will free all descriptors.
+.Sh NOTES
+.Pp
+.Fn i386_set_ldt
+and
+.Fn i386_get_ldt
+may be used by 64-bit processes to create 32-bit (compatibility mode) code segments
+(in addition to the set of other segments already specified), that, together with
+additional infrastructure not provided by macOS, enables 32-bit code execution.
+Some platforms may reject segments with non-zero base addresses by returning -1 and
+setting errno to EINVAL.
 .Sh RETURN VALUES
 Upon successful completion,
 .Fn i386_get_ldt
@@ -132,7 +142,10 @@ will fail if:
 An inappropriate value was used for
 .Fa start_sel
 or
-.Fa num_sels .
+.Fa num_sels ,
+or the platform does not support non-zero base addresses in custom descriptors and the descriptor base address passed to
+.Fn i386_set_ldt
+is non-zero.
 .It Bq Er EACCES
 The caller attempted to use a descriptor that would
 circumvent protection or cause a failure.

@@ -26,7 +26,6 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#include <kern/kalloc.h>
 #include <vm/vm_compressor_pager.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_page.h>
@@ -47,25 +46,21 @@
 #define C_SEG_BUFSIZE           (1024 * 256)
 #define C_SEG_MAX_PAGES         (C_SEG_BUFSIZE / PAGE_SIZE)
 
-#if CONFIG_EMBEDDED
+#if !defined(__x86_64__)
 #define C_SEG_OFF_LIMIT         (C_SEG_BYTES_TO_OFFSET((C_SEG_BUFSIZE - 512)))
 #define C_SEG_ALLOCSIZE         (C_SEG_BUFSIZE + PAGE_SIZE)
 #else
 #define C_SEG_OFF_LIMIT         (C_SEG_BYTES_TO_OFFSET((C_SEG_BUFSIZE - 128)))
 #define C_SEG_ALLOCSIZE         (C_SEG_BUFSIZE)
-#endif
+#endif /* !defined(__x86_64__) */
 #define C_SEG_MAX_POPULATE_SIZE (4 * PAGE_SIZE)
 
-#if defined(__arm64__)
-
-#if DEVELOPMENT || DEBUG
+#if defined(__arm64__) && (DEVELOPMENT || DEBUG)
 
 #if defined(PLATFORM_WatchOS)
 #define VALIDATE_C_SEGMENTS (1)
 #endif
-#endif
-
-#endif
+#endif /* defined(__arm64__) && (DEVELOPMENT || DEBUG) */
 
 
 #if DEBUG || COMPRESSOR_INTEGRITY_CHECKS
@@ -77,7 +72,7 @@
 #define ENABLE_COMPRESSOR_CHECKS 0
 #endif
 
-#define CHECKSUM_THE_SWAP               ENABLE_SWAP_CHECKS      /* Debug swap data */
+#define CHECKSUM_THE_SWAP               ENABLE_SWAP_CHECKS              /* Debug swap data */
 #define CHECKSUM_THE_DATA               ENABLE_COMPRESSOR_CHECKS        /* Debug compressor/decompressor data */
 #define CHECKSUM_THE_COMPRESSED_DATA    ENABLE_COMPRESSOR_CHECKS        /* Debug compressor/decompressor compressed data */
 
@@ -87,20 +82,89 @@
 
 #define RECORD_THE_COMPRESSED_DATA      0
 
-struct c_slot {
-	uint64_t        c_offset:C_SEG_OFFSET_BITS,
-#if defined(__arm64__)
-	c_size:14,
-	    c_codec:1,
-	    c_packed_ptr:33;
-#elif defined(__arm__)
-	c_size:12,
-	c_codec:1,
-	c_packed_ptr:35;
+/*
+ * The c_slot structure embeds a packed pointer to a c_slot_mapping
+ * (32bits) which we ideally want to span as much VA space as possible
+ * to not limit zalloc in how it sets itself up.
+ */
+#if !defined(__LP64__)                  /* no packing */
+#define C_SLOT_PACKED_PTR_BITS          32
+#define C_SLOT_PACKED_PTR_SHIFT         0
+#define C_SLOT_PACKED_PTR_BASE          0
+
+#define C_SLOT_C_SIZE_BITS              12
+#define C_SLOT_C_CODEC_BITS             1
+#define C_SLOT_C_POPCOUNT_BITS          0
+#define C_SLOT_C_PADDING_BITS           3
+
+#elif __ARM_WKDM_POPCNT__               /* no packing */
+#define C_SLOT_PACKED_PTR_BITS          47
+#define C_SLOT_PACKED_PTR_SHIFT         0
+#define C_SLOT_PACKED_PTR_BASE          ((uintptr_t)KERNEL_PMAP_HEAP_RANGE_START)
+
+#define C_SLOT_C_SIZE_BITS              14
+#define C_SLOT_C_CODEC_BITS             1
+#define C_SLOT_C_POPCOUNT_BITS          18
+#define C_SLOT_C_PADDING_BITS           0
+
+#elif defined(__arm64__)                /* 32G from the heap start */
+#define C_SLOT_PACKED_PTR_BITS          33
+#define C_SLOT_PACKED_PTR_SHIFT         2
+#define C_SLOT_PACKED_PTR_BASE          ((uintptr_t)KERNEL_PMAP_HEAP_RANGE_START)
+
+#define C_SLOT_C_SIZE_BITS              14
+#define C_SLOT_C_CODEC_BITS             1
+#define C_SLOT_C_POPCOUNT_BITS          0
+#define C_SLOT_C_PADDING_BITS           0
+
+#elif defined(__x86_64__)               /* 256G from the heap start */
+#define C_SLOT_PACKED_PTR_BITS          36
+#define C_SLOT_PACKED_PTR_SHIFT         2
+#define C_SLOT_PACKED_PTR_BASE          ((uintptr_t)KERNEL_PMAP_HEAP_RANGE_START)
+
+#define C_SLOT_C_SIZE_BITS              12
+#define C_SLOT_C_CODEC_BITS             0 /* not used */
+#define C_SLOT_C_POPCOUNT_BITS          0
+#define C_SLOT_C_PADDING_BITS           0
+
 #else
-	c_size:12,
-	c_packed_ptr:36;
+#error vm_compressor parameters undefined for this architecture
 #endif
+
+/*
+ * Popcounts needs to represent both 0 and full which requires
+ * (8 ^ C_SLOT_C_SIZE_BITS) + 1 values and (C_SLOT_C_SIZE_BITS + 4) bits.
+ *
+ * We us the (2 * (8 ^ C_SLOT_C_SIZE_BITS) - 1) value to mean "unknown".
+ */
+#define C_SLOT_NO_POPCOUNT              ((16u << C_SLOT_C_SIZE_BITS) - 1)
+
+static_assert((C_SEG_OFFSET_BITS + C_SLOT_C_SIZE_BITS +
+    C_SLOT_C_CODEC_BITS + C_SLOT_C_POPCOUNT_BITS +
+    C_SLOT_C_PADDING_BITS + C_SLOT_PACKED_PTR_BITS) % 32 == 0);
+
+struct c_slot {
+	uint64_t        c_offset:C_SEG_OFFSET_BITS;
+	uint64_t        c_size:C_SLOT_C_SIZE_BITS;
+#if C_SLOT_C_CODEC_BITS
+	uint64_t        c_codec:C_SLOT_C_CODEC_BITS;
+#endif
+#if C_SLOT_C_POPCOUNT_BITS
+	/*
+	 * This value may not agree with c_pop_cdata, as it may be the
+	 * population count of the uncompressed data.
+	 *
+	 * This value must be C_SLOT_NO_POPCOUNT when the compression algorithm
+	 * cannot provide it.
+	 */
+	uint32_t        c_inline_popcount:C_SLOT_C_POPCOUNT_BITS;
+#endif
+#if C_SLOT_C_PADDING_BITS
+	uint64_t        c_padding:C_SLOT_C_PADDING_BITS;
+#endif
+	uint64_t        c_packed_ptr:C_SLOT_PACKED_PTR_BITS;
+
+	/* debugging fields, typically not present on release kernels */
 #if CHECKSUM_THE_DATA
 	unsigned int    c_hash_data;
 #endif
@@ -110,7 +174,7 @@ struct c_slot {
 #if POPCOUNT_THE_COMPRESSED_DATA
 	unsigned int    c_pop_cdata;
 #endif
-};
+} __attribute__((packed, aligned(4)));
 
 #define C_IS_EMPTY              0
 #define C_IS_FREE               1
@@ -129,6 +193,11 @@ struct c_segment {
 	lck_mtx_t       c_lock;
 	queue_chain_t   c_age_list;
 	queue_chain_t   c_list;
+
+#if CONFIG_FREEZE
+	queue_chain_t   c_task_list_next_cseg;
+	task_t          c_task_owner;
+#endif /* CONFIG_FREEZE */
 
 #define C_SEG_MAX_LIMIT         (1 << 20)       /* this needs to track the size of c_mysegno */
 	uint32_t        c_mysegno:20,
@@ -153,8 +222,6 @@ struct c_segment {
 	uint32_t        c_nextoffset;
 	uint32_t        c_populated_offset;
 
-	uint32_t        c_swappedin_ts;
-
 	union {
 		int32_t *c_buffer;
 		uint64_t c_swap_handle;
@@ -171,6 +238,7 @@ struct c_segment {
 #endif /* CHECKSUM_THE_SWAP */
 
 	thread_t        c_busy_for_thread;
+	uint32_t        c_swappedin_ts;
 
 	int             c_slot_var_array_len;
 	struct  c_slot  *c_slot_var_array;
@@ -299,6 +367,7 @@ void c_seg_free(c_segment_t);
 void c_seg_free_locked(c_segment_t);
 void c_seg_insert_into_age_q(c_segment_t);
 void c_seg_need_delayed_compaction(c_segment_t, boolean_t);
+void c_seg_update_task_owner(c_segment_t, task_t);
 
 void vm_decompressor_lock(void);
 void vm_decompressor_unlock(void);
@@ -312,7 +381,6 @@ int                     vm_wants_task_throttled(task_t);
 
 extern void             vm_compaction_swapper_do_init(void);
 extern void             vm_compressor_swap_init(void);
-extern void             vm_compressor_init_locks(void);
 extern lck_rw_t         c_master_lock;
 
 #if ENCRYPTED_SWAP
@@ -320,6 +388,7 @@ extern void             vm_swap_decrypt(c_segment_t);
 #endif /* ENCRYPTED_SWAP */
 
 extern int              vm_swap_low_on_space(void);
+extern int              vm_swap_out_of_space(void);
 extern kern_return_t    vm_swap_get(c_segment_t, uint64_t, uint64_t);
 extern void             vm_swap_free(uint64_t);
 extern void             vm_swap_consider_defragmenting(int);
@@ -421,8 +490,8 @@ extern void kdp_compressor_busy_find_owner(event64_t wait_event, thread_waitinfo
 #define COMPRESSOR_FREE_RESERVED_LIMIT          128
 #endif
 
-uint32_t vm_compressor_get_encode_scratch_size(void);
-uint32_t vm_compressor_get_decode_scratch_size(void);
+uint32_t vm_compressor_get_encode_scratch_size(void) __pure2;
+uint32_t vm_compressor_get_decode_scratch_size(void) __pure2;
 
 #define COMPRESSOR_SCRATCH_BUF_SIZE vm_compressor_get_encode_scratch_size()
 
@@ -431,7 +500,8 @@ extern void      c_compressed_record_init(void);
 extern void      c_compressed_record_write(char *, int);
 #endif
 
-extern lck_mtx_t        *c_list_lock;
+extern lck_mtx_t c_list_lock_storage;
+#define          c_list_lock (&c_list_lock_storage)
 
 #if DEVELOPMENT || DEBUG
 extern uint32_t vm_ktrace_enabled;

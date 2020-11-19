@@ -98,6 +98,7 @@ extern  struct vfsops null_vfsops;
 extern  struct vfsops devfs_vfsops;
 extern  const struct vfsops routefs_vfsops;
 extern  struct vfsops nullfs_vfsops;
+extern struct vfsops bindfs_vfsops;
 
 #if MOCKFS
 extern  struct vfsops mockfs_vfsops;
@@ -116,6 +117,7 @@ enum fs_type_num {
 	FT_SYNTHFS = 20,
 	FT_ROUTEFS = 21,
 	FT_NULLFS = 22,
+	FT_BINDFS = 23,
 	FT_MOCKFS  = 0x6D6F636B
 };
 
@@ -199,6 +201,24 @@ static struct vfstable vfstbllist[] = {
 		.vfc_sysctl = NULL
 	},
 #endif /* NULLFS */
+
+#if BINDFS
+	{
+		.vfc_vfsops = &bindfs_vfsops,
+		.vfc_name = "bindfs",
+		.vfc_typenum = FT_BINDFS,
+		.vfc_refcount = 0,
+		.vfc_flags = MNT_DONTBROWSE | MNT_RDONLY,
+		.vfc_mountroot = NULL,
+		.vfc_next = NULL,
+		.vfc_reserved1 = 0,
+		.vfc_reserved2 = 0,
+		.vfc_vfsflags = VFC_VFS64BITREADY,
+		.vfc_descptr = NULL,
+		.vfc_descsize = 0,
+		.vfc_sysctl = NULL
+	},
+#endif /* BINDFS */
 
 #if MOCKFS
 	/* If we are configured for it, mockfs should always be the last standard entry (and thus the last FS we attempt mountroot with) */
@@ -313,6 +333,7 @@ extern const struct vnodeopv_desc mockfs_vnodeop_opv_desc;
 #endif /* MOCKFS */
 
 extern const struct vnodeopv_desc nullfs_vnodeop_opv_desc;
+extern const struct vnodeopv_desc bindfs_vnodeop_opv_desc;
 
 const struct vnodeopv_desc *vfs_opv_descs[] = {
 	&dead_vnodeop_opv_desc,
@@ -348,6 +369,9 @@ const struct vnodeopv_desc *vfs_opv_descs[] = {
 #if NULLFS
 	&nullfs_vnodeop_opv_desc,
 #endif /* NULLFS */
+#if BINDFS
+	&bindfs_vnodeop_opv_desc,
+#endif /* BINDFS */
 #if MOCKFS
 	&mockfs_vnodeop_opv_desc,
 #endif /* MOCKFS */

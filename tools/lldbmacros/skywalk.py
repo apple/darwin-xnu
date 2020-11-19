@@ -26,7 +26,7 @@ def IterateProcChannels(proc):
     count = 0
     while count <= proc_lastfile:
         if unsigned(proc_ofiles[count]) != 0:
-            proc_fd_fglob = proc_ofiles[count].f_fglob
+            proc_fd_fglob = proc_ofiles[count].fp_glob
             if (unsigned(proc_fd_fglob.fg_ops.fo_type) == 10):
                 yield Cast(proc_fd_fglob.fg_data, 'kern_channel *')
         count += 1
@@ -75,8 +75,8 @@ def GetKernChannelSummary(kc):
         u=GetUUIDSummary(kc.ch_info.cinfo_ch_id))
 
 @lldb_type_summary(['__kern_channel_ring *'])
-@header('{:<20s} {:<65s} {:>10s} | {:<5s} {:<5s} | {:<5s} {:<5s} {:<5s} | {:<5s} {:<5s} {:<5s}'.format(
-        'kernchannelring', 'name', 'flags', 'kc', 'kt', 'rc', 'rh', 'rt', 'c', 'h', 't'))
+@header('{:<20s} {:<65s} {:>10s} | {:<5s} {:<5s} | {:<5s} {:<5s} | {:<5s} {:<5s}'.format(
+        'kernchannelring', 'name', 'flags', 'kh', 'kt', 'rh', 'rt', 'h', 't'))
 def GetKernChannelRingSummary(kring):
     """ Summarizes a __kern_channel_ring and related information
 
@@ -456,7 +456,7 @@ def IterateProcNECP(proc):
     count = 0
     while count <= proc_lastfile:
         if unsigned(proc_ofiles[count]) != 0:
-            proc_fd_fglob = proc_ofiles[count].f_fglob
+            proc_fd_fglob = proc_ofiles[count].fp_glob
             if (unsigned(proc_fd_fglob.fg_ops.fo_type) == 9):
                 yield Cast(proc_fd_fglob.fg_data, 'necp_fd_data *')
         count += 1
@@ -607,43 +607,33 @@ def ShowNexuses(cmd_args=None):
     for nx_str in nexus_summaries:
         print "{0:s}".format(nx_str)
 
-def GetSockAddr4(sin):
-    return GetInAddrAsString(sin.sin_addr)
+def GetSockAddr4(in_addr):
+    return inet_ntoa(struct.pack("!I", in_addr.sin_addr))
 
-def GetSockAddr6(sin6):
-    addr = sin6.sin6_addr.__u6_addr.__u6_addr8
+def GetSockAddr6(in6_addr):
+    addr = in6_addr.__u6_addr.__u6_addr8
     addr_raw_string = ":".join(["{0:02x}{0:02x}".format(unsigned(addr[i]),
         unsigned(addr[i+1])) for i in range(0, 16, 2)])
     return inet_ntop(AF_INET6, inet_pton(AF_INET6, addr_raw_string))
 
-def GetSockAddr46(sockaddr46):
-    if sockaddr46 is None :
-        raise ArgumentError('sockaddr is None')
-    if (sockaddr46.sa.sa_family == 2):
-        return GetSockAddr4(sockaddr46.sin)
-    elif (sockaddr46.sa.sa_family == 30):
-        return GetSockAddr6(sockaddr46.sin6)
+def FlowKeyStr(fk):
+    if fk.fk_ipver == 0x4:
+        src_str = GetSockAddr4(fk.fk_src._v4)
+        dst_str = GetSockAddr4(fk.fk_dst._v4)
+    elif fk.fk_ipver == 0x60:
+        src_str = GetSockAddr6(fk.fk_src._v6)
+        dst_str = GetSockAddr6(fk.fk_dst._v6)
     else:
-        raise ArgumentError('invalid sockaddr_in_4_6 address family')
+        return "unkown ipver"
 
-def GetSockPort46(sockaddr46):
-    if sockaddr46 is None :
-        raise ArgumentError('sockaddr is None')
-    if (sockaddr46.sa.sa_family == 2):
-        return ntohs(sockaddr46.sin.sin_port)
-    elif (sockaddr46.sa.sa_family == 30):
-        return ntohs(sockaddr46.sin6.sin6_port)
-    else:
-        raise ArgumentError('invalid sockaddr_in_4_6 address family')
+    return "src={},dst={},proto={},sport={},dport={}".format(src_str, dst_str,
+            unsigned(fk.fk_proto), ntohs(fk.fk_sport), ntohs(fk.fk_dport))
 
 def FlowEntryStr(fe):
-    return "(struct flow_entry*){} src={},dst={},proto={},sport={},dport={} ".format(
-            hex(fe), GetSockAddr46(fe.fe_laddr), GetSockAddr46(fe.fe_faddr),
-            unsigned(fe.fe_key.fk_proto), GetSockPort46(fe.fe_laddr),
-            GetSockPort46(fe.fe_faddr), fe.fe_owner_name)
+    return "(struct flow_entry*){} {} ".format(hex(fe), FlowKeyStr(fe.fe_key))
 
 def GetFlowEntryPid(fe):
-    return fe.fe_owner_pid
+    return fe.fe_pid
 
 def GetFlowswitchFlowEntries(fsw):
     fm = kern.GetValueFromAddress(unsigned(fsw.fsw_flow_mgr), 'struct flow_mgr *')

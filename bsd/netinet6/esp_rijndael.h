@@ -60,7 +60,7 @@
 #include <sys/appleapiopts.h>
 
 #ifdef BSD_KERNEL_PRIVATE
-int esp_aes_schedlen(const struct esp_algorithm *);
+size_t esp_aes_schedlen(const struct esp_algorithm *);
 int esp_aes_schedule(const struct esp_algorithm *, struct secasvar *);
 int esp_cbc_decrypt_aes(struct mbuf *, size_t, struct secasvar *,
     const struct esp_algorithm *, int);
@@ -68,10 +68,10 @@ int
     esp_cbc_encrypt_aes(struct mbuf *, size_t, size_t, struct secasvar *,
     const struct esp_algorithm *, int);
 
-int esp_gcm_schedlen(const struct esp_algorithm *);
+size_t esp_gcm_schedlen(const struct esp_algorithm *);
 int esp_gcm_schedule(const struct esp_algorithm *, struct secasvar *);
 int esp_gcm_encrypt_aes(struct mbuf *, size_t, size_t, struct secasvar *, const struct esp_algorithm *, int);
 int esp_gcm_decrypt_aes(struct mbuf *, size_t, struct secasvar *, const struct esp_algorithm *, int);
-int esp_gcm_encrypt_finalize(struct secasvar *, unsigned char *, unsigned int);
-int esp_gcm_decrypt_finalize(struct secasvar *, unsigned char *, unsigned int);
+int esp_gcm_encrypt_finalize(struct secasvar *, unsigned char *, size_t);
+int esp_gcm_decrypt_finalize(struct secasvar *, unsigned char *, size_t);
 #endif /* BSD_KERNEL_PRIVATE */

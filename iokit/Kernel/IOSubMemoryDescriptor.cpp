@@ -27,6 +27,7 @@
  */
 
 #include <IOKit/IOSubMemoryDescriptor.h>
+#include <IOKit/IOLib.h>
 
 #include "IOKitKernelInternal.h"
 

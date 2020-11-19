@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -50,9 +50,7 @@
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/ip.h>
-#if INET6
 #include <netinet/ip6.h>
-#endif
 
 #include <net/classq/classq_sfb.h>
 #include <net/flowhash.h>
@@ -190,8 +188,8 @@
 
 #define SFB_SET_DELAY_HIGH(_sp_, _q_) do {                              \
 	(_sp_)->sfb_flags |= SFBF_DELAYHIGH;                            \
-	(_sp_)->sfb_fc_threshold = max(SFB_MIN_FC_THRESHOLD_BYTES,      \
-	        (qsize((_q_)) >> 3));           \
+	(_sp_)->sfb_fc_threshold = ulmax(SFB_MIN_FC_THRESHOLD_BYTES,    \
+	                                 (uint32_t)(qsize((_q_)) >> 3)); \
 } while (0)
 
 #define SFB_QUEUE_DELAYBASED(_sp_) ((_sp_)->sfb_flags & SFBF_DELAYBASED)
@@ -206,26 +204,17 @@
 #define DEQUEUE_SPIKE(_new, _old)       \
 	((u_int64_t)ABS((int64_t)(_new) - (int64_t)(_old)) > ((_old) << 11))
 
-#define SFB_ZONE_MAX            32              /* maximum elements in zone */
-#define SFB_ZONE_NAME           "classq_sfb"    /* zone name */
-
-#define SFB_BINS_ZONE_MAX       32              /* maximum elements in zone */
-#define SFB_BINS_ZONE_NAME      "classq_sfb_bins" /* zone name */
-
-#define SFB_FCL_ZONE_MAX        32              /* maximum elements in zone */
-#define SFB_FCL_ZONE_NAME       "classq_sfb_fcl" /* zone name */
-
 /* Place the flow control entries in current bin on level 0 */
 #define SFB_FC_LEVEL    0
 
-static unsigned int sfb_size;           /* size of zone element */
-static struct zone *sfb_zone;           /* zone for sfb */
+static ZONE_DECLARE(sfb_zone, "classq_sfb",
+    sizeof(struct sfb), ZC_ZFREE_CLEARMEM);
 
-static unsigned int sfb_bins_size;      /* size of zone element */
-static struct zone *sfb_bins_zone;      /* zone for sfb_bins */
+static ZONE_DECLARE(sfb_bins_zone, "classq_sfb_bins",
+    sizeof(struct sfb_bins), ZC_ZFREE_CLEARMEM);
 
-static unsigned int sfb_fcl_size;       /* size of zone element */
-static struct zone *sfb_fcl_zone;       /* zone for sfb_fc_lists */
+static ZONE_DECLARE(sfb_fcl_zone, "classq_sfb_fcl",
+    sizeof(struct sfb_fcl), ZC_ZFREE_CLEARMEM);
 
 /* internal function prototypes */
 static u_int32_t sfb_random(struct sfb *);
@@ -246,7 +235,7 @@ static void sfb_decrement_bin(struct sfb *, struct sfbbinstats *,
 static void sfb_increment_bin(struct sfb *, struct sfbbinstats *,
     struct timespec *, struct timespec *);
 static inline void sfb_dq_update_bins(struct sfb *, uint32_t, uint32_t,
-    struct timespec *, u_int32_t qsize);
+    struct timespec *, u_int64_t qsize);
 static inline void sfb_eq_update_bins(struct sfb *, uint32_t, uint32_t);
 static int sfb_drop_early(struct sfb *, uint32_t, u_int16_t *,
     struct timespec *);
@@ -308,42 +297,8 @@ static struct sfb_time_tbl sfb_ttbl[] = {
 	{ .speed = 0, .holdtime = 0, .pboxtime = 0 }
 };
 
-void
-sfb_init(void)
-{
-	_CASSERT(SFBF_ECN4 == CLASSQF_ECN4);
-	_CASSERT(SFBF_ECN6 == CLASSQF_ECN6);
-
-	sfb_size = sizeof(struct sfb);
-	sfb_zone = zinit(sfb_size, SFB_ZONE_MAX * sfb_size,
-	    0, SFB_ZONE_NAME);
-	if (sfb_zone == NULL) {
-		panic("%s: failed allocating %s", __func__, SFB_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(sfb_zone, Z_EXPAND, TRUE);
-	zone_change(sfb_zone, Z_CALLERACCT, TRUE);
-
-	sfb_bins_size = sizeof(struct sfb_bins);
-	sfb_bins_zone = zinit(sfb_bins_size, SFB_BINS_ZONE_MAX * sfb_bins_size,
-	    0, SFB_BINS_ZONE_NAME);
-	if (sfb_bins_zone == NULL) {
-		panic("%s: failed allocating %s", __func__, SFB_BINS_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(sfb_bins_zone, Z_EXPAND, TRUE);
-	zone_change(sfb_bins_zone, Z_CALLERACCT, TRUE);
-
-	sfb_fcl_size = sizeof(struct sfb_fcl);
-	sfb_fcl_zone = zinit(sfb_fcl_size, SFB_FCL_ZONE_MAX * sfb_fcl_size,
-	    0, SFB_FCL_ZONE_NAME);
-	if (sfb_fcl_zone == NULL) {
-		panic("%s: failed allocating %s", __func__, SFB_FCL_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(sfb_fcl_zone, Z_EXPAND, TRUE);
-	zone_change(sfb_fcl_zone, Z_CALLERACCT, TRUE);
-}
+static_assert(SFBF_ECN4 == CLASSQF_ECN4);
+static_assert(SFBF_ECN6 == CLASSQF_ECN6);
 
 static u_int32_t
 sfb_random(struct sfb *sp)
@@ -362,7 +317,7 @@ sfb_calc_holdtime(struct sfb *sp, u_int64_t outbw)
 	} else if (outbw == 0) {
 		holdtime = SFB_RANDOM(sp, HOLDTIME_MIN, HOLDTIME_MAX);
 	} else {
-		unsigned int n, i;
+		uint64_t n, i;
 
 		n = sfb_ttbl[0].holdtime;
 		for (i = 0; sfb_ttbl[i].speed != 0; i++) {
@@ -386,7 +341,7 @@ sfb_calc_pboxtime(struct sfb *sp, u_int64_t outbw)
 	} else if (outbw == 0) {
 		pboxtime = SFB_RANDOM(sp, PBOXTIME_MIN, PBOXTIME_MAX);
 	} else {
-		unsigned int n, i;
+		uint64_t n, i;
 
 		n = sfb_ttbl[0].pboxtime;
 		for (i = 0; sfb_ttbl[i].speed != 0; i++) {
@@ -446,27 +401,9 @@ sfb_alloc(struct ifnet *ifp, u_int32_t qid, u_int32_t qlim, u_int32_t flags)
 
 	VERIFY(ifp != NULL && qlim > 0);
 
-	sp = zalloc(sfb_zone);
-	if (sp == NULL) {
-		log(LOG_ERR, "%s: SFB unable to allocate\n", if_name(ifp));
-		return NULL;
-	}
-	bzero(sp, sfb_size);
-
-	if ((sp->sfb_bins = zalloc(sfb_bins_zone)) == NULL) {
-		log(LOG_ERR, "%s: SFB unable to allocate bins\n", if_name(ifp));
-		sfb_destroy(sp);
-		return NULL;
-	}
-	bzero(sp->sfb_bins, sfb_bins_size);
-
-	if ((sp->sfb_fc_lists = zalloc(sfb_fcl_zone)) == NULL) {
-		log(LOG_ERR, "%s: SFB unable to allocate flow control lists\n",
-		    if_name(ifp));
-		sfb_destroy(sp);
-		return NULL;
-	}
-	bzero(sp->sfb_fc_lists, sfb_fcl_size);
+	sp = zalloc_flags(sfb_zone, Z_WAITOK | Z_ZERO);
+	sp->sfb_bins = zalloc_flags(sfb_bins_zone, Z_WAITOK | Z_ZERO);
+	sp->sfb_fc_lists = zalloc_flags(sfb_fcl_zone, Z_WAITOK | Z_ZERO);
 
 	for (i = 0; i < SFB_BINS; ++i) {
 		STAILQ_INIT(&SFB_FC_LIST(sp, i)->fclist);
@@ -541,8 +478,9 @@ sfb_resetq(struct sfb *sp, cqev_t ev)
 	if (ev != CLASSQ_EV_LINK_DOWN) {
 		(*sp->sfb_bins)[0].fudge = sfb_random(sp);
 		(*sp->sfb_bins)[1].fudge = sfb_random(sp);
-		sp->sfb_allocation = ((sfb_allocation == 0) ?
-		    (sp->sfb_qlim / 3) : sfb_allocation);
+		sp->sfb_allocation = sfb_allocation == 0 ?
+		    (uint16_t)(sp->sfb_qlim / 3) :
+		    (uint16_t)sfb_allocation;
 		sp->sfb_drop_thresh = sp->sfb_allocation +
 		    (sp->sfb_allocation >> 1);
 	}
@@ -594,7 +532,7 @@ sfb_getstats(struct sfb *sp, struct sfb_stats *sps)
 	sps->current = sp->sfb_current;
 	sps->target_qdelay = sp->sfb_target_qdelay;
 	sps->min_estdelay = sp->sfb_min_qdelay;
-	sps->delay_fcthreshold = sp->sfb_fc_threshold;
+	sps->delay_fcthreshold = (uint32_t)sp->sfb_fc_threshold;
 	sps->flags = sp->sfb_flags;
 
 	net_timernsec(&sp->sfb_holdtime, &sp->sfb_stats.hold_time);
@@ -823,7 +761,7 @@ sfb_increment_bin(struct sfb *sp, struct sfbbinstats *bin, struct timespec *ft,
 
 static inline void
 sfb_dq_update_bins(struct sfb *sp, uint32_t pkt_sfb_hash, uint32_t pkt_len,
-    struct timespec *now, u_int32_t qsize)
+    struct timespec *now, u_int64_t qsize)
 {
 #if SFB_LEVELS != 2 || SFB_FC_LEVEL != 0
 	int i;

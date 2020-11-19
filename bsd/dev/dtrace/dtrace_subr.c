@@ -39,6 +39,10 @@
 #if CONFIG_CSR
 #include <sys/codesign.h>
 #include <sys/csr.h>
+
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
+extern bool csr_unsafe_kernel_text;
+#endif
 #endif
 
 /*
@@ -203,7 +207,7 @@ dtrace_proc_waitfor(dtrace_procdesc_t* pdesc) {
 	 * Never trust user input, compute the length of the process name and ensure the
 	 * string is null terminated.
 	 */
-	pdesc->p_name_length = strnlen(pdesc->p_name, sizeof(pdesc->p_name));
+	pdesc->p_name_length = (int) strnlen(pdesc->p_name, sizeof(pdesc->p_name));
 	if (pdesc->p_name_length >= (int) sizeof(pdesc->p_name))
 		return -1;
 
@@ -327,6 +331,45 @@ dtrace_is_valid_ptrauth_key(uint64_t key)
 #else
 	return (0);
 #endif /* __has_feature(ptrauth_calls) */
+}
+
+uint64_t
+dtrace_physmem_read(uint64_t addr, size_t size)
+{
+	switch (size) {
+	case 1:
+		return (uint64_t)ml_phys_read_byte_64((addr64_t)addr);
+	case 2:
+		return (uint64_t)ml_phys_read_half_64((addr64_t)addr);
+	case 4:
+		return (uint64_t)ml_phys_read_64((addr64_t)addr);
+	case 8:
+		return (uint64_t)ml_phys_read_double_64((addr64_t)addr);
+	}
+	DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+
+	return (0);
+}
+
+void
+dtrace_physmem_write(uint64_t addr, uint64_t data, size_t size)
+{
+	switch (size) {
+	case 1:
+		ml_phys_write_byte_64((addr64_t)addr, (unsigned int)data);
+		break;
+	case 2:
+		ml_phys_write_half_64((addr64_t)addr, (unsigned int)data);
+		break;
+	case 4:
+		ml_phys_write_64((addr64_t)addr, (unsigned int)data);
+		break;
+	case 8:
+		ml_phys_write_double_64((addr64_t)addr, (unsigned long long)data);
+		break;
+	default:
+		DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+	}
 }
 
 static minor_t next_minor = 0;

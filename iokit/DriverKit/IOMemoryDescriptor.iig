@@ -43,10 +43,11 @@ class IOMemoryMap;
 
 // IOMemoryDescriptor Create options
 enum {
-	kIOMemoryDirectionIn    = 0x00000001,
-	kIOMemoryDirectionOut   = 0x00000002,
-	kIOMemoryDirectionOutIn = kIOMemoryDirectionIn | kIOMemoryDirectionOut,
-	kIOMemoryDirectionInOut = kIOMemoryDirectionOutIn,
+	kIOMemoryDirectionIn         = 0x00000001,
+	kIOMemoryDirectionOut        = 0x00000002,
+	kIOMemoryDirectionOutIn      = kIOMemoryDirectionIn | kIOMemoryDirectionOut,
+	kIOMemoryDirectionInOut      = kIOMemoryDirectionOutIn,
+	kIOMemoryDisableCopyOnWrite  = 0x00000010
 };
 
 // IOMemoryDescriptor CreateMapping options
@@ -118,7 +119,7 @@ public:
 	 * @param       offset Start offset of the mapping in the descriptor.
 	 * @param       length Pass zero to map the entire memory, or a value <= the length of the descriptor.
 	 * @param       alignment of the memory virtual mapping. Only zero for no alignment is supported.
-	 * @param       map Returned IOMemoryMap object with +1 retain count. 
+	 * @param       map Returned IOMemoryMap object with +1 retain count.
 	 *              It should be retained until the map is no longer required.
      * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
      */
@@ -131,19 +132,48 @@ public:
 		uint64_t alignment,
 		IOMemoryMap ** map);
 
+    /*!
+     * @brief       Create a memory descriptor that is a subrange of another memory
+     *              descriptor
+     * @param       memoryDescriptorCreateOptions
+	 *              kIOMemoryDirectionIn memory described will be writable
+	 *              kIOMemoryDirectionOut memory described will be readable
+	 * @param       offset Start offset of the memory relative to the descriptor ofDescriptor.
+	 * @param       length Length of the memory.
+	 * @param       ofDescriptor Memory descriptor describing source memory.
+	 * @param       memory Returned IOMemoryDescriptor object with +1 retain count.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	static kern_return_t
+	CreateSubMemoryDescriptor(
+	    uint64_t memoryDescriptorCreateOptions,
+	    uint64_t offset,
+	    uint64_t length,
+		IOMemoryDescriptor * ofDescriptor,
+		IOMemoryDescriptor ** memory) __attribute__((availability(driverkit,introduced=20.0)));
+
+    /*!
+     * @brief       Create a memory descriptor that is a concatenation of a set of memory
+     *              descriptors
+     * @param       memoryDescriptorCreateOptions
+	 *              kIOMemoryDirectionIn memory described will be writable. The source
+	 *              descriptors must include this direction.
+	 *              kIOMemoryDirectionOut memory described will be readable. The source
+	 *              descriptors must include this direction.
+	 * @param       withDescriptorsCount Number of valid memory descriptors being passed
+	 *              in the withDescriptors array.
+	 * @param       withDescriptors Source memory descriptor array.
+	 * @param       memory Returned IOMemoryDescriptor object with +1 retain count.
+     * @return      kIOReturnSuccess on success. See IOReturn.h for error codes.
+     */
+	static kern_return_t
+	CreateWithMemoryDescriptors(
+	    uint64_t memoryDescriptorCreateOptions,
+		uint32_t withDescriptorsCount,
+		IOMemoryDescriptor * const withDescriptors[32],
+		IOMemoryDescriptor ** memory) __attribute__((availability(driverkit,introduced=20.0)));
+
 private:
-	virtual kern_return_t
-	PrepareForDMA(
-		uint64_t options,
-		IOService * device,
-		uint64_t offset,
-		uint64_t length,
-
-		uint64_t * flags,
-		uint64_t * returnLength,
-		uint32_t * segmentsCount,
-		IOAddressSegment segments[32]);
-
 	kern_return_t
 	Map(
 		uint64_t options,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -141,7 +141,7 @@ SLIST_HEAD(nd6_prproxy_prelist_head, nd6_prproxy_prelist);
 
 static void nd6_prproxy_prelist_setroute(boolean_t enable,
     struct nd6_prproxy_prelist_head *, struct nd6_prproxy_prelist_head *);
-static struct nd6_prproxy_prelist *nd6_ndprl_alloc(int);
+static struct nd6_prproxy_prelist *nd6_ndprl_alloc(zalloc_flags_t);
 static void nd6_ndprl_free(struct nd6_prproxy_prelist *);
 static struct nd6_prproxy_solsrc *nd6_solsrc_alloc(int);
 static void nd6_solsrc_free(struct nd6_prproxy_solsrc *);
@@ -177,23 +177,14 @@ RB_PROTOTYPE_SC_PREV(__private_extern__, prproxy_sols_tree, nd6_prproxy_soltgt,
 static u_int32_t nd6_max_tgt_sols = ND6_MAX_TGT_SOLS_DEFAULT;
 static u_int32_t nd6_max_src_sols = ND6_MAX_SRC_SOLS_DEFAULT;
 
-static unsigned int ndprl_size;                 /* size of zone element */
-static struct zone *ndprl_zone;                 /* nd6_prproxy_prelist zone */
+static ZONE_DECLARE(ndprl_zone, "nd6_prproxy_prelist",
+    sizeof(struct nd6_prproxy_prelist), ZC_ZFREE_CLEARMEM);    /* nd6_prproxy_prelist zone */
 
-#define NDPRL_ZONE_MAX  256                     /* maximum elements in zone */
-#define NDPRL_ZONE_NAME "nd6_prproxy_prelist"   /* name for zone */
+static ZONE_DECLARE(solsrc_zone, "nd6_prproxy_solsrc",
+    sizeof(struct nd6_prproxy_solsrc), ZC_ZFREE_CLEARMEM);     /* nd6_prproxy_solsrc zone */
 
-static unsigned int solsrc_size;                /* size of zone element */
-static struct zone *solsrc_zone;                /* nd6_prproxy_solsrc zone */
-
-#define SOLSRC_ZONE_MAX  256                    /* maximum elements in zone */
-#define SOLSRC_ZONE_NAME "nd6_prproxy_solsrc"   /* name for zone */
-
-static unsigned int soltgt_size;                /* size of zone element */
-static struct zone *soltgt_zone;                /* nd6_prproxy_soltgt zone */
-
-#define SOLTGT_ZONE_MAX  256                    /* maximum elements in zone */
-#define SOLTGT_ZONE_NAME "nd6_prproxy_soltgt"   /* name for zone */
+static ZONE_DECLARE(soltgt_zone, "nd6_prproxy_soltgt",
+    sizeof(struct nd6_prproxy_soltgt), ZC_ZFREE_CLEARMEM);     /* nd6_prproxy_soltgt zone */
 
 /* The following is protected by ndpr_lock */
 RB_GENERATE_PREV(prproxy_sols_tree, nd6_prproxy_soltgt,
@@ -218,55 +209,10 @@ SYSCTL_UINT(_net_inet6_icmp6, OID_AUTO, prproxy_cnt,
     CTLFLAG_RD | CTLFLAG_LOCKED, &nd6_prproxy, 0,
     "total number of proxied prefixes");
 
-/*
- * Called by nd6_init() during initialization time.
- */
-void
-nd6_prproxy_init(void)
-{
-	ndprl_size = sizeof(struct nd6_prproxy_prelist);
-	ndprl_zone = zinit(ndprl_size, NDPRL_ZONE_MAX * ndprl_size, 0,
-	    NDPRL_ZONE_NAME);
-	if (ndprl_zone == NULL) {
-		panic("%s: failed allocating ndprl_zone", __func__);
-	}
-
-	zone_change(ndprl_zone, Z_EXPAND, TRUE);
-	zone_change(ndprl_zone, Z_CALLERACCT, FALSE);
-
-	solsrc_size = sizeof(struct nd6_prproxy_solsrc);
-	solsrc_zone = zinit(solsrc_size, SOLSRC_ZONE_MAX * solsrc_size, 0,
-	    SOLSRC_ZONE_NAME);
-	if (solsrc_zone == NULL) {
-		panic("%s: failed allocating solsrc_zone", __func__);
-	}
-
-	zone_change(solsrc_zone, Z_EXPAND, TRUE);
-	zone_change(solsrc_zone, Z_CALLERACCT, FALSE);
-
-	soltgt_size = sizeof(struct nd6_prproxy_soltgt);
-	soltgt_zone = zinit(soltgt_size, SOLTGT_ZONE_MAX * soltgt_size, 0,
-	    SOLTGT_ZONE_NAME);
-	if (soltgt_zone == NULL) {
-		panic("%s: failed allocating soltgt_zone", __func__);
-	}
-
-	zone_change(soltgt_zone, Z_EXPAND, TRUE);
-	zone_change(soltgt_zone, Z_CALLERACCT, FALSE);
-}
-
 static struct nd6_prproxy_prelist *
-nd6_ndprl_alloc(int how)
+nd6_ndprl_alloc(zalloc_flags_t how)
 {
-	struct nd6_prproxy_prelist *ndprl;
-
-	ndprl = (how == M_WAITOK) ? zalloc(ndprl_zone) :
-	    zalloc_noblock(ndprl_zone);
-	if (ndprl != NULL) {
-		bzero(ndprl, ndprl_size);
-	}
-
-	return ndprl;
+	return zalloc_flags(ndprl_zone, how | Z_ZERO);
 }
 
 static void
@@ -405,7 +351,7 @@ nd6_prproxy_prelist_setroute(boolean_t enable,
 
 /*
  * Enable/disable prefix proxying on an interface; typically called
- * as part of handling SIOCSIFINFO_FLAGS[IFEF_IPV6_ROUTER].
+ * as part of handling SIOCSIFINFO_FLAGS[SETROUTERMODE_IN6]
  */
 int
 nd6_if_prproxy(struct ifnet *ifp, boolean_t enable)
@@ -417,7 +363,7 @@ nd6_if_prproxy(struct ifnet *ifp, boolean_t enable)
 
 	/* Can't be enabled if we are an advertising router on the interface */
 	ifnet_lock_shared(ifp);
-	if (enable && (ifp->if_eflags & IFEF_IPV6_ROUTER)) {
+	if (enable && (ifp->if_ipv6_router_mode == IPV6_ROUTER_MODE_EXCLUSIVE)) {
 		ifnet_lock_done(ifp);
 		return EBUSY;
 	}
@@ -457,11 +403,11 @@ nd6_if_prproxy(struct ifnet *ifp, boolean_t enable)
 		if (enable && (pr->ndpr_stateflags & NDPRF_ONLINK) &&
 		    nd6_need_cache(ifp)) {
 			pr->ndpr_stateflags |= NDPRF_PRPROXY;
-			NDPR_ADDREF_LOCKED(pr);
+			NDPR_ADDREF(pr);
 			NDPR_UNLOCK(pr);
 		} else if (!enable) {
 			pr->ndpr_stateflags &= ~NDPRF_PRPROXY;
-			NDPR_ADDREF_LOCKED(pr);
+			NDPR_ADDREF(pr);
 			NDPR_UNLOCK(pr);
 		} else {
 			NDPR_UNLOCK(pr);
@@ -472,7 +418,7 @@ nd6_if_prproxy(struct ifnet *ifp, boolean_t enable)
 			break;
 		}
 
-		up = nd6_ndprl_alloc(M_WAITOK);
+		up = nd6_ndprl_alloc(Z_WAITOK);
 		if (up == NULL) {
 			NDPR_REMREF(pr);
 			continue;
@@ -511,7 +457,7 @@ nd6_if_prproxy(struct ifnet *ifp, boolean_t enable)
 			}
 			NDPR_UNLOCK(fwd);
 
-			down = nd6_ndprl_alloc(M_WAITOK);
+			down = nd6_ndprl_alloc(Z_WAITOK);
 			if (down == NULL) {
 				continue;
 			}
@@ -810,7 +756,7 @@ nd6_prproxy_prelist_update(struct nd_prefix *pr_cur, struct nd_prefix *pr_up)
 	enable = (pr_up->ndpr_stateflags & NDPRF_PRPROXY);
 	NDPR_UNLOCK(pr_up);
 
-	up = nd6_ndprl_alloc(M_WAITOK);
+	up = nd6_ndprl_alloc(Z_WAITOK);
 	if (up == NULL) {
 		lck_mtx_unlock(nd6_mutex);
 		goto done;
@@ -837,7 +783,7 @@ nd6_prproxy_prelist_update(struct nd_prefix *pr_cur, struct nd_prefix *pr_up)
 		}
 		NDPR_UNLOCK(pr);
 
-		down = nd6_ndprl_alloc(M_WAITOK);
+		down = nd6_ndprl_alloc(Z_WAITOK);
 		if (down == NULL) {
 			continue;
 		}
@@ -970,7 +916,7 @@ nd6_prproxy_ns_output(struct ifnet *ifp, struct ifnet *exclifp,
 			fwd_ifp = fwd->ndpr_ifp;
 			NDPR_UNLOCK(fwd);
 
-			ndprl = nd6_ndprl_alloc(M_WAITOK);
+			ndprl = nd6_ndprl_alloc(Z_WAITOK);
 			if (ndprl == NULL) {
 				continue;
 			}
@@ -1086,7 +1032,7 @@ nd6_prproxy_ns_input(struct ifnet *ifp, struct in6_addr *saddr,
 			fwd_ifp = fwd->ndpr_ifp;
 			NDPR_UNLOCK(fwd);
 
-			ndprl = nd6_ndprl_alloc(M_WAITOK);
+			ndprl = nd6_ndprl_alloc(Z_WAITOK);
 			if (ndprl == NULL) {
 				continue;
 			}
@@ -1202,7 +1148,7 @@ nd6_prproxy_na_input(struct ifnet *ifp, struct in6_addr *saddr,
 			VERIFY(!IN6_IS_ADDR_UNSPECIFIED(&daddr) && fwd_ifp);
 			NDPR_UNLOCK(pr);
 
-			ndprl = nd6_ndprl_alloc(M_WAITOK);
+			ndprl = nd6_ndprl_alloc(Z_WAITOK);
 			if (ndprl == NULL) {
 				break;          /* bail out */
 			}
@@ -1237,7 +1183,7 @@ nd6_prproxy_na_input(struct ifnet *ifp, struct in6_addr *saddr,
 				fwd_ifp = fwd->ndpr_ifp;
 				NDPR_UNLOCK(fwd);
 
-				ndprl = nd6_ndprl_alloc(M_WAITOK);
+				ndprl = nd6_ndprl_alloc(Z_WAITOK);
 				if (ndprl == NULL) {
 					continue;
 				}
@@ -1309,15 +1255,7 @@ nd6_prproxy_na_input(struct ifnet *ifp, struct in6_addr *saddr,
 static struct nd6_prproxy_solsrc *
 nd6_solsrc_alloc(int how)
 {
-	struct nd6_prproxy_solsrc *ssrc;
-
-	ssrc = (how == M_WAITOK) ? zalloc(solsrc_zone) :
-	    zalloc_noblock(solsrc_zone);
-	if (ssrc != NULL) {
-		bzero(ssrc, solsrc_size);
-	}
-
-	return ssrc;
+	return zalloc_flags(solsrc_zone, how | Z_ZERO);
 }
 
 static void
@@ -1496,10 +1434,8 @@ nd6_soltgt_alloc(int how)
 {
 	struct nd6_prproxy_soltgt *soltgt;
 
-	soltgt = (how == M_WAITOK) ? zalloc(soltgt_zone) :
-	    zalloc_noblock(soltgt_zone);
+	soltgt = zalloc_flags(soltgt_zone, how | Z_ZERO);
 	if (soltgt != NULL) {
-		bzero(soltgt, soltgt_size);
 		TAILQ_INIT(&soltgt->soltgt_q);
 	}
 	return soltgt;

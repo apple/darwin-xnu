@@ -80,11 +80,11 @@ SYSCTL_PROC(_debug, OID_AUTO, iokit,
     CTLTYPE_QUAD | IODEBUG_CTLFLAGS | CTLFLAG_NOAUTO | CTLFLAG_KERN | CTLFLAG_LOCKED,
     &gIOKitDebug, 0, sysctl_debug_iokit, "Q", "boot_arg io");
 
-int             debug_malloc_size;
-int             debug_iomalloc_size;
+size_t          debug_malloc_size;
+size_t          debug_iomalloc_size;
 
 vm_size_t       debug_iomallocpageable_size;
-int             debug_container_malloc_size;
+size_t          debug_container_malloc_size;
 // int          debug_ivars_size; // in OSObject.cpp
 
 extern "C" {
@@ -147,10 +147,10 @@ IOPrintMemory( void )
 //    OSMetaClass::printInstanceCounts();
 
 	IOLog("\n"
-	    "ivar kalloc()       0x%08x\n"
-	    "malloc()            0x%08x\n"
-	    "containers kalloc() 0x%08x\n"
-	    "IOMalloc()          0x%08x\n"
+	    "ivar kalloc()       0x%08lx\n"
+	    "malloc()            0x%08lx\n"
+	    "containers kalloc() 0x%08lx\n"
+	    "IOMalloc()          0x%08lx\n"
 	    "----------------------------------------\n",
 	    debug_ivars_size,
 	    debug_malloc_size,
@@ -259,19 +259,32 @@ struct IOTrackingQueue {
 	queue_head_t      sites[];
 };
 
+
+struct IOTrackingCallSiteUser {
+	pid_t         pid;
+	uint8_t       user32;
+	uint8_t       userCount;
+	uintptr_t     bt[kIOTrackingCallSiteBTs];
+};
+
 struct IOTrackingCallSite {
 	queue_chain_t          link;
+	queue_head_t           instances;
 	IOTrackingQueue *      queue;
+	IOTracking *           addresses;
+	size_t        size[2];
 	uint32_t               crc;
+	uint32_t      count;
 
 	vm_tag_t      tag;
-	uint32_t      count;
-	size_t        size[2];
-	uintptr_t     bt[kIOTrackingCallSiteBTs];
+	uint8_t       user32;
+	uint8_t       userCount;
+	pid_t         btPID;
 
-	queue_head_t           instances;
-	IOTracking *           addresses;
+	uintptr_t     bt[kIOTrackingCallSiteBTs];
+	IOTrackingCallSiteUser     user[0];
 };
+
 
 struct IOTrackingLeaksRef {
 	uintptr_t * instances;
@@ -367,6 +380,13 @@ IOTrackingQueueAlloc(const char * name, uintptr_t btEntry,
 
 	return queue;
 };
+
+void
+IOTrackingQueueCollectUser(IOTrackingQueue * queue)
+{
+	assert(0 == queue->siteCount);
+	queue->type |= kIOTrackingQueueTypeUser;
+}
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -468,7 +488,7 @@ fasthash32(const void *buf, size_t len, uint32_t seed)
 	// residue, which shall retain information from both the higher
 	// and lower parts of hashcode.
 	uint64_t h = fasthash64(buf, len, seed);
-	return h - (h >> 32);
+	return (uint32_t) (h - (h >> 32));
 }
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
@@ -477,7 +497,7 @@ void
 IOTrackingAddUser(IOTrackingQueue * queue, IOTrackingUser * mem, vm_size_t size)
 {
 	uint32_t num;
-	proc_t   self;
+	int pid;
 
 	if (!queue->captureOn) {
 		return;
@@ -490,16 +510,16 @@ IOTrackingAddUser(IOTrackingQueue * queue, IOTrackingUser * mem, vm_size_t size)
 
 	num = backtrace(&mem->bt[0], kIOTrackingCallSiteBTs, NULL);
 	num = 0;
-	if ((kernel_task != current_task()) && (self = proc_self())) {
+	if ((kernel_task != current_task()) && (pid = proc_selfpid())) {
 		bool user_64 = false;
-		mem->btPID  = proc_pid(self);
+		mem->btPID  = pid;
 		num = backtrace_user(&mem->btUser[0], kIOTrackingCallSiteBTs - 1, NULL,
 		    &user_64, NULL);
 		mem->user32 = !user_64;
-		proc_rele(self);
 	}
 	assert(num <= kIOTrackingCallSiteBTs);
-	mem->userCount = num;
+	static_assert(kIOTrackingCallSiteBTs <= UINT8_MAX);
+	mem->userCount = ((uint8_t) num);
 
 	IOTRecursiveLockLock(&queue->lock);
 	queue_enter/*last*/ (&queue->sites[0], mem, IOTrackingUser *, link);
@@ -531,7 +551,12 @@ IOTrackingAdd(IOTrackingQueue * queue, IOTracking * mem, size_t size, bool addre
 	IOTrackingCallSite * site;
 	uint32_t             crc, num;
 	uintptr_t            bt[kIOTrackingCallSiteBTs + 1];
+	uintptr_t            btUser[kIOTrackingCallSiteBTs];
 	queue_head_t       * que;
+	bool                 user;
+	int                  pid;
+	int                  userCount;
+	bool                 user64;
 
 	if (mem->site) {
 		return;
@@ -543,6 +568,8 @@ IOTrackingAdd(IOTrackingQueue * queue, IOTracking * mem, size_t size, bool addre
 		return;
 	}
 
+	user = (0 != (kIOTrackingQueueTypeUser & queue->type));
+
 	assert(!mem->link.next);
 
 	num  = backtrace(&bt[0], kIOTrackingCallSiteBTs + 1, NULL);
@@ -552,11 +579,25 @@ IOTrackingAdd(IOTrackingQueue * queue, IOTracking * mem, size_t size, bool addre
 	num--;
 	crc = fasthash32(&bt[1], num * sizeof(bt[0]), 0x04C11DB7);
 
+	userCount = 0;
+	user64 = false;
+	pid = 0;
+	if (user) {
+		if ((kernel_task != current_task()) && (pid = proc_selfpid())) {
+			userCount = backtrace_user(&btUser[0], kIOTrackingCallSiteBTs, NULL, &user64, NULL);
+			assert(userCount <= kIOTrackingCallSiteBTs);
+			crc = fasthash32(&btUser[0], userCount * sizeof(bt[0]), crc);
+		}
+	}
+
 	IOTRecursiveLockLock(&queue->lock);
 	que = &queue->sites[crc % queue->numSiteQs];
 	queue_iterate(que, site, IOTrackingCallSite *, link)
 	{
 		if (tag != site->tag) {
+			continue;
+		}
+		if (user && (pid != site->user[0].pid)) {
 			continue;
 		}
 		if (crc == site->crc) {
@@ -565,7 +606,11 @@ IOTrackingAdd(IOTrackingQueue * queue, IOTracking * mem, size_t size, bool addre
 	}
 
 	if (queue_end(que, (queue_entry_t) site)) {
-		site = (typeof(site))kalloc(sizeof(IOTrackingCallSite));
+		size_t siteSize = sizeof(IOTrackingCallSite);
+		if (user) {
+			siteSize += sizeof(IOTrackingCallSiteUser);
+		}
+		site = (typeof(site))kalloc(siteSize);
 
 		queue_init(&site->instances);
 		site->addresses  = (IOTracking *) &site->instances;
@@ -577,7 +622,15 @@ IOTrackingAdd(IOTrackingQueue * queue, IOTracking * mem, size_t size, bool addre
 		bcopy(&bt[1], &site->bt[0], num * sizeof(site->bt[0]));
 		assert(num <= kIOTrackingCallSiteBTs);
 		bzero(&site->bt[num], (kIOTrackingCallSiteBTs - num) * sizeof(site->bt[0]));
-
+		if (user) {
+			bcopy(&btUser[0], &site->user[0].bt[0], userCount * sizeof(site->user[0].bt[0]));
+			assert(userCount <= kIOTrackingCallSiteBTs);
+			bzero(&site->user[0].bt[userCount], (kIOTrackingCallSiteBTs - userCount) * sizeof(site->user[0].bt[0]));
+			site->user[0].pid  = pid;
+			site->user[0].user32 = !user64;
+			static_assert(kIOTrackingCallSiteBTs <= UINT8_MAX);
+			site->user[0].userCount = ((uint8_t) userCount);
+		}
 		queue_enter_first(que, site, IOTrackingCallSite *, link);
 		queue->siteCount++;
 	}
@@ -628,7 +681,11 @@ IOTrackingRemove(IOTrackingQueue * queue, IOTracking * mem, size_t size)
 			remque(&mem->site->link);
 			assert(queue->siteCount);
 			queue->siteCount--;
-			kfree(mem->site, sizeof(IOTrackingCallSite));
+			size_t siteSize = sizeof(IOTrackingCallSite);
+			if (kIOTrackingQueueTypeUser & queue->type) {
+				siteSize += sizeof(IOTrackingCallSiteUser);
+			}
+			kfree(mem->site, siteSize);
 		}
 		mem->site = NULL;
 	}
@@ -744,7 +801,11 @@ IOTrackingReset(IOTrackingQueue * queue)
 						}
 					}
 				}
-				kfree(site, sizeof(IOTrackingCallSite));
+				size_t siteSize = sizeof(IOTrackingCallSite);
+				if (kIOTrackingQueueTypeUser & queue->type) {
+					siteSize += sizeof(IOTrackingCallSiteUser);
+				}
+				kfree(site, siteSize);
 			}
 		}
 	}
@@ -811,7 +872,7 @@ IOTrackingZoneElementCompare(const void * left, const void * right)
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 static void
-CopyOutKernelBacktrace(IOTrackingCallSite * site, IOTrackingCallSiteInfo * siteInfo)
+CopyOutBacktraces(IOTrackingCallSite * site, IOTrackingCallSiteInfo * siteInfo)
 {
 	uint32_t j;
 	mach_vm_address_t bt, btEntry;
@@ -825,6 +886,22 @@ CopyOutKernelBacktrace(IOTrackingCallSite * site, IOTrackingCallSiteInfo * siteI
 			btEntry = 0;
 		}
 		siteInfo->bt[0][j] = VM_KERNEL_UNSLIDE(bt);
+	}
+
+	siteInfo->btPID = 0;
+	if (kIOTrackingQueueTypeUser & site->queue->type) {
+		siteInfo->btPID = site->user[0].pid;
+		uint32_t * bt32 = (typeof(bt32))((void *) &site->user[0].bt[0]);
+		uint64_t * bt64 = (typeof(bt64))((void *) &site->user[0].bt[0]);
+		for (uint32_t j = 0; j < kIOTrackingCallSiteBTs; j++) {
+			if (j >= site->user[0].userCount) {
+				siteInfo->bt[1][j] = 0;
+			} else if (site->user[0].user32) {
+				siteInfo->bt[1][j] = bt32[j];
+			} else {
+				siteInfo->bt[1][j] = bt64[j];
+			}
+		}
 	}
 }
 
@@ -1033,7 +1110,7 @@ IOTrackingLeaks(LIBKERN_CONSUMED OSData * data)
 		siteInfo.count   = siteCount;
 		siteInfo.size[0] = (site->size[0] * site->count) / siteCount;
 		siteInfo.size[1] = (site->size[1] * site->count) / siteCount;;
-		CopyOutKernelBacktrace(site, &siteInfo);
+		CopyOutBacktraces(site, &siteInfo);
 		leakData->appendBytes(&siteInfo, sizeof(siteInfo));
 	}
 	data->release();
@@ -1112,7 +1189,7 @@ IOTrackingDebug(uint32_t selector, uint32_t options, uint64_t value,
 	proc = NULL;
 	if (kIOTrackingGetMappings == selector) {
 		if (value != -1ULL) {
-			proc = proc_find(value);
+			proc = proc_find((pid_t) value);
 			if (!proc) {
 				return kIOReturnNotFound;
 			}
@@ -1261,12 +1338,10 @@ IOTrackingDebug(uint32_t selector, uint32_t options, uint64_t value,
 					if (size && ((tsize[0] + tsize[1]) < size)) {
 						continue;
 					}
-
 					siteInfo.count   = count;
 					siteInfo.size[0] = tsize[0];
 					siteInfo.size[1] = tsize[1];
-
-					CopyOutKernelBacktrace(site, &siteInfo);
+					CopyOutBacktraces(site, &siteInfo);
 					data->appendBytes(&siteInfo, sizeof(siteInfo));
 				}
 			}
@@ -1282,7 +1357,7 @@ IOTrackingDebug(uint32_t selector, uint32_t options, uint64_t value,
 				break;
 			}
 			if (!data) {
-				data = OSData::withCapacity(page_size);
+				data = OSData::withCapacity((unsigned int) page_size);
 			}
 
 			IOTRecursiveLockLock(&queue->lock);
@@ -1359,7 +1434,7 @@ IOTrackingDebug(uint32_t selector, uint32_t options, uint64_t value,
 	if ((kIOTrackingLeaks == selector) && namesLen && names) {
 		const char * scan;
 		const char * next;
-		size_t       sLen;
+		uint8_t      sLen;
 
 		if (!data) {
 			data = OSData::withCapacity(4096 * sizeof(uintptr_t));
@@ -1368,7 +1443,7 @@ IOTrackingDebug(uint32_t selector, uint32_t options, uint64_t value,
 		// <len><name>...<len><name><0>
 		scan    = names;
 		do{
-			sLen = scan[0];
+			sLen = ((uint8_t) scan[0]);
 			scan++;
 			next = scan + sLen;
 			if (next >= (names + namesLen)) {

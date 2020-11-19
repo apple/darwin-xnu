@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -27,6 +27,7 @@
  */
 #include <kern/cpu_data.h>
 #include <kern/kern_types.h>
+#include <kern/clock.h>
 #include <kern/locks.h>
 #include <kern/ltable.h>
 #include <kern/zalloc.h>
@@ -35,7 +36,7 @@
 #include <vm/vm_kern.h>
 
 
-#define P2ROUNDUP(x, align) (-(-((uint32_t)(x)) & -(align)))
+#define P2ROUNDUP(x, align) (-(-((uintptr_t)(x)) & -((uintptr_t)align)))
 #define ROUNDDOWN(x, y)  (((x)/(y))*(y))
 
 /* ----------------------------------------------------------------------
@@ -44,16 +45,33 @@
  *
  * ---------------------------------------------------------------------- */
 
-vm_size_t         g_lt_max_tbl_size;
-static lck_grp_t  g_lt_lck_grp;
-
 /* default VA space for link tables (zone allocated) */
 #define DEFAULT_MAX_TABLE_SIZE  P2ROUNDUP(8 * 1024 * 1024, PAGE_SIZE)
+
+TUNABLE(vm_size_t, g_lt_max_tbl_size, "lt_tbl_size", 0);
+LCK_GRP_DECLARE(g_lt_lck_grp, "link_table_locks");
 
 #if DEVELOPMENT || DEBUG
 /* global for lldb macros */
 uint64_t g_lt_idx_max = LT_IDX_MAX;
 #endif
+
+__startup_func
+static void
+ltable_startup_tunables_init(void)
+{
+	// make sure that if a boot-arg was passed, g_lt_max_tbl_size
+	// is a PAGE_SIZE multiple.
+	//
+	// Also set the default for platforms where PAGE_SIZE
+	// isn't a compile time constant.
+	if (g_lt_max_tbl_size == 0) {
+		g_lt_max_tbl_size = (typeof(g_lt_max_tbl_size))DEFAULT_MAX_TABLE_SIZE;
+	} else {
+		g_lt_max_tbl_size = round_page(g_lt_max_tbl_size);
+	}
+}
+STARTUP(TUNABLES, STARTUP_RANK_MIDDLE, ltable_startup_tunables_init);
 
 
 /* construct a link table element from an offset and mask into a slab */
@@ -152,31 +170,6 @@ lt_elem_set_type(struct lt_elem *elem, int type)
 
 
 /**
- * ltable_bootstrap: bootstrap a link table
- *
- * Called once at system boot
- */
-void
-ltable_bootstrap(void)
-{
-	static int s_is_bootstrapped = 0;
-
-	uint32_t tmp32 = 0;
-
-	if (s_is_bootstrapped) {
-		return;
-	}
-	s_is_bootstrapped = 1;
-
-	g_lt_max_tbl_size = DEFAULT_MAX_TABLE_SIZE;
-	if (PE_parse_boot_argn("lt_tbl_size", &tmp32, sizeof(tmp32)) == TRUE) {
-		g_lt_max_tbl_size = (vm_size_t)P2ROUNDUP(tmp32, PAGE_SIZE);
-	}
-
-	lck_grp_init(&g_lt_lck_grp, "link_table_locks", LCK_GRP_ATTR_NULL);
-}
-
-/**
  * ltable_init: initialize a link table with given parameters
  *
  */
@@ -246,7 +239,7 @@ ltable_init(struct link_table *table, const char *name,
 	/* initialize the table's slab zone (for table growth) */
 	ltdbg("Initializing %s zone: slab:%d (%d,0x%x) max:%ld",
 	    name, slab_sz, slab_shift, slab_msk, max_tbl_sz);
-	slab_zone = zinit(slab_sz, max_tbl_sz, slab_sz, name);
+	slab_zone = zone_create(name, slab_sz, ZC_NONE);
 	assert(slab_zone != ZONE_NULL);
 
 	/* allocate the first slab and populate it */
@@ -371,8 +364,9 @@ ltable_grow(struct link_table *table, uint32_t min_free)
 	/* allocate another slab */
 	slab = (struct lt_elem *)zalloc(table->slab_zone);
 	if (slab == NULL) {
-		panic("Can't allocate a %s table (%p) slab from zone:%p",
-		    table->slab_zone->zone_name, table, table->slab_zone);
+		panic("Can't allocate a %s%s table (%p) slab from zone:%p",
+		    zone_heap_name(table->slab_zone), zone_name(table->slab_zone),
+		    table, table->slab_zone);
 	}
 
 	memset(slab, 0, table->slab_sz);

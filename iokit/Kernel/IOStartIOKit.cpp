@@ -28,6 +28,7 @@
 
 #include <libkern/c++/OSUnserialize.h>
 #include <libkern/c++/OSKext.h>
+#include <libkern/section_keywords.h>
 #include <libkern/version.h>
 #include <IOKit/IORegistryEntry.h>
 #include <IOKit/IODeviceTreeSupport.h>
@@ -35,6 +36,7 @@
 #include <IOKit/IOUserClient.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <IOKit/IOPlatformExpert.h>
+#include <IOKit/IOKernelReporters.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOKitKeys.h>
 #include <IOKit/IOKitDebug.h>
@@ -52,13 +54,17 @@ const OSSymbol * gIOProgressBackbufferKey;
 OSSet *          gIORemoveOnReadProperties;
 
 extern "C" {
-void StartIOKit( void * p1, void * p2, void * p3, void * p4 );
+void InitIOKit(void *dtTop);
+void ConfigureIOKit(void);
+void StartIOKitMatching(void);
 void IORegistrySetOSBuildVersion(char * build_version);
 void IORecordProgressBackbuffer(void * buffer, size_t size, uint32_t theme);
 
 extern void OSlibkernInit(void);
 
 void iokit_post_constructor_init(void);
+
+SECURITY_READ_ONLY_LATE(static IOPlatformExpertDevice*) gRootNub;
 
 #include <kern/clock.h>
 #include <sys/time.h>
@@ -91,6 +97,7 @@ iokit_post_constructor_init(void)
 	OSObject *                  obj;
 
 	IOCPUInitialize();
+	IOPlatformActionsInitialize();
 	root = IORegistryEntry::initialize();
 	assert( root );
 	IOService::initialize();
@@ -100,6 +107,7 @@ iokit_post_constructor_init(void)
 	IOUserClient::initialize();
 	IOMemoryDescriptor::initialize();
 	IORootParent::initialize();
+	IOReporter::initialize();
 
 	// Initializes IOPMinformeeList class-wide shared lock
 	IOPMinformeeList::getSharedRecursiveLock();
@@ -123,19 +131,21 @@ iokit_post_constructor_init(void)
 void (*record_startup_extensions_function)(void) = NULL;
 
 void
-StartIOKit( void * p1, void * p2, void * p3, void * p4 )
+InitIOKit(void *dtTop)
 {
-	IOPlatformExpertDevice *    rootNub;
-	int                         debugFlags;
+	int                         debugFlags = 0;
 
 	if (PE_parse_boot_argn( "io", &debugFlags, sizeof(debugFlags))) {
 		gIOKitDebug = debugFlags;
 	}
-#if DEVELOPMENT || DEBUG
+	// Enable IOWaitQuiet panics on arm64 macOS except on KASAN.
+	// existing 3rd party KEXTs may hold the registry busy on x86 RELEASE kernels.
+	// Enabling this on other platforms is tracked in rdar://66364108
+#if XNU_TARGET_OS_OSX && defined(__arm64__) && !KASAN
 	else {
 		gIOKitDebug |= kIOWaitQuietPanics;
 	}
-#endif /* DEVELOPMENT || DEBUG */
+#endif
 
 	if (PE_parse_boot_argn( "iotrace", &debugFlags, sizeof(debugFlags))) {
 		gIOKitTrace = debugFlags;
@@ -170,29 +180,48 @@ StartIOKit( void * p1, void * p2, void * p3, void * p4 )
 
 	interruptAccountingInit();
 
-	rootNub = new IOPlatformExpertDevice;
+	gRootNub = new IOPlatformExpertDevice;
+	if (__improbable(gRootNub == NULL)) {
+		panic("Failed to allocate IOKit root nub");
+	}
+	bool ok = gRootNub->init(dtTop);
+	if (__improbable(!ok)) {
+		panic("Failed to initialize IOKit root nub");
+	}
+	gRootNub->attach(NULL);
 
-	if (rootNub && rootNub->initWithArgs( p1, p2, p3, p4)) {
-		rootNub->attach( NULL );
+	/* If the bootstrap segment set up a function to record startup
+	 * extensions, call it now.
+	 */
+	if (record_startup_extensions_function) {
+		record_startup_extensions_function();
+	}
+}
 
-		/* If the bootstrap segment set up a function to record startup
-		 * extensions, call it now.
-		 */
-		if (record_startup_extensions_function) {
-			record_startup_extensions_function();
-		}
+void
+ConfigureIOKit(void)
+{
+	assert(gRootNub != NULL);
+	gRootNub->configureDefaults();
+}
 
-		rootNub->registerService();
+void
+StartIOKitMatching(void)
+{
+	assert(gRootNub != NULL);
+	bool ok = gRootNub->startIOServiceMatching();
+	if (__improbable(!ok)) {
+		panic("Failed to start IOService matching");
+	}
 
 #if !NO_KEXTD
-		/* Add a busy count to keep the registry busy until kextd has
-		 * completely finished launching. This is decremented when kextd
-		 * messages the kernel after the in-kernel linker has been
-		 * removed and personalities have been sent.
-		 */
-		IOService::getServiceRoot()->adjustBusy(1);
+	/* Add a busy count to keep the registry busy until kextd has
+	 * completely finished launching. This is decremented when kextd
+	 * messages the kernel after the in-kernel linker has been
+	 * removed and personalities have been sent.
+	 */
+	IOService::getServiceRoot()->adjustBusy(1);
 #endif
-	}
 }
 
 void
@@ -215,8 +244,12 @@ void
 IORecordProgressBackbuffer(void * buffer, size_t size, uint32_t theme)
 {
 	IORegistryEntry * chosen;
+
+	if (((unsigned int) size) != size) {
+		return;
+	}
 	if ((chosen = IORegistryEntry::fromPath(kIODeviceTreePlane ":/chosen"))) {
-		chosen->setProperty(kIOProgressBackbufferKey, buffer, size);
+		chosen->setProperty(kIOProgressBackbufferKey, buffer, (unsigned int) size);
 		chosen->setProperty(kIOProgressColorThemeKey, theme, 32);
 
 		chosen->release();

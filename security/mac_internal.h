@@ -164,10 +164,6 @@ extern unsigned int mac_sysvshm_enforce;
 extern unsigned int mac_vm_enforce;
 extern unsigned int mac_vnode_enforce;
 
-#if CONFIG_MACF_NET
-extern unsigned int mac_label_mbufs;
-#endif
-
 extern unsigned int mac_label_vnodes;
 extern unsigned int mac_vnode_label_count;
 
@@ -221,32 +217,10 @@ int   mac_check_structmac_consistent(struct mac *mac);
 #endif
 
 int mac_cred_label_externalize(struct label *, char *e, char *out, size_t olen, int flags);
-#if CONFIG_MACF_SOCKET
-int mac_socket_label_externalize(struct label *, char *e, char *out, size_t olen);
-#endif /* CONFIG_MACF_SOCKET */
 int mac_vnode_label_externalize(struct label *, char *e, char *out, size_t olen, int flags);
-int mac_pipe_label_externalize(struct label *label, char *elements,
-    char *outbuf, size_t outbuflen);
 
 int mac_cred_label_internalize(struct label *label, char *string);
-#if CONFIG_MACF_SOCKET
-int mac_socket_label_internalize(struct label *label, char *string);
-#endif /* CONFIG_MACF_SOCKET */
 int mac_vnode_label_internalize(struct label *label, char *string);
-int mac_pipe_label_internalize(struct label *label, char *string);
-
-#if CONFIG_MACF_SOCKET
-/* internal socket label manipulation functions */
-struct  label *mac_socket_label_alloc(int flags);
-void    mac_socket_label_free(struct label *l);
-int     mac_socket_label_update(struct ucred *cred, struct socket *so, struct label *l);
-#endif /* MAC_SOCKET */
-
-#if CONFIG_MACF_NET
-struct label *mac_mbuf_to_label(struct mbuf *m);
-#else
-#define mac_mbuf_to_label(m) (NULL)
-#endif
 
 /*
  * MAC_CHECK performs the designated check by walking the policy

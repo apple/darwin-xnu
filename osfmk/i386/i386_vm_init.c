@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2012 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2019 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -76,6 +76,7 @@
 #include <i386/cpuid.h>
 #include <mach/thread_status.h>
 #include <pexpert/i386/efi.h>
+#include <pexpert/pexpert.h>
 #include <i386/i386_lowmem.h>
 #include <i386/misc_protos.h>
 #include <x86_64/lowglobals.h>
@@ -84,11 +85,14 @@
 #include <mach-o/loader.h>
 #include <libkern/kernel_mach_header.h>
 
+#define P2ROUNDUP(x, align)             (-(-(x) & -(align)))
 
 vm_size_t       mem_size = 0;
 pmap_paddr_t    first_avail = 0;/* first after page tables */
 
-uint64_t        max_mem;        /* Size of physical memory (bytes), adjusted by maxmem */
+uint64_t        max_mem;        /* Size of physical memory minus carveouts (bytes), adjusted by maxmem */
+uint64_t        max_mem_actual; /* Actual size of physical memory (bytes) adjusted by
+                                 * the maxmem boot-arg */
 uint64_t        mem_actual;
 uint64_t        sane_size = 0;  /* Memory size for defaults calculations */
 
@@ -356,7 +360,17 @@ i386_vm_init(uint64_t   maxmem,
 	segSizeConst = segCONST->vmsize;
 	econst = sconst + segSizeConst;
 
-	assert(((sconst | econst) & PAGE_MASK) == 0);
+	kc_format_t kc_format = KCFormatUnknown;
+
+	/* XXX: FIXME_IN_dyld: For new-style kernel caches, the ending address of __DATA_CONST may not be page-aligned */
+	if (PE_get_primary_kc_format(&kc_format) && kc_format == KCFormatFileset) {
+		/* Round up the end */
+		econst = P2ROUNDUP(econst, PAGE_SIZE);
+		edata = P2ROUNDUP(edata, PAGE_SIZE);
+	} else {
+		assert(((sconst | econst) & PAGE_MASK) == 0);
+		assert(((sdata | edata) & PAGE_MASK) == 0);
+	}
 
 	DPRINTF("segTEXTB    = %p\n", (void *) segTEXTB);
 	DPRINTF("segDATAB    = %p\n", (void *) segDATAB);
@@ -384,8 +398,38 @@ i386_vm_init(uint64_t   maxmem,
 	vm_prelink_einfo = segPRELINKINFOB + segSizePRELINKINFO;
 	vm_slinkedit = segLINKB;
 	vm_elinkedit = segLINKB + segSizeLINK;
+
+	/*
+	 * In the fileset world, we want to be able to (un)slide addresses from
+	 * the kernel or any of the kexts (e.g., for kernel logging metadata
+	 * passed between the kernel and logd in userspace). VM_KERNEL_UNSLIDE
+	 * (via VM_KERNEL_IS_SLID) should apply to the addresses in the range
+	 * from the first basement address to the last boot kc address.
+	 *
+	 *                     ^
+	 *                     :
+	 *                     |
+	 *  vm_kernel_slid_top - ---------------------------------------------
+	 *                     |
+	 *                     :
+	 *                     : Boot kc (kexts in the boot kc here)
+	 *                     : - - - - - - - - - - - - - - - - - - - - - - -
+	 *                     :
+	 *                     :
+	 *                     | Boot kc (kernel here)
+	 *                     - ---------------------------------------------
+	 *                     |
+	 *                     :
+	 *                     | Basement (kexts in pageable and aux kcs here)
+	 * vm_kernel_slid_base - ---------------------------------------------
+	 *                     0
+	 */
+
 	vm_kernel_slid_base = vm_kext_base + vm_kernel_slide;
-	vm_kernel_slid_top = vm_prelink_einfo;
+	vm_kernel_slid_top = (kc_format == KCFormatFileset) ?
+	    vm_slinkedit : vm_prelink_einfo;
+
+	vm_page_kernelcache_count = (unsigned int) (atop_64(vm_kernel_top - vm_kernel_base));
 
 	vm_set_page_size();
 
@@ -676,7 +720,7 @@ i386_vm_init(uint64_t   maxmem,
 	sane_size = mem_actual;
 
 	/*
-	 * We cap at KERNEL_MAXMEM bytes (currently 32GB for K32, 96GB for K64).
+	 * We cap at KERNEL_MAXMEM bytes (currently 1536GB).
 	 * Unless overriden by the maxmem= boot-arg
 	 * -- which is a non-zero maxmem argument to this function.
 	 */
@@ -738,6 +782,7 @@ i386_vm_init(uint64_t   maxmem,
 		mem_size = (vm_size_t)sane_size;
 	}
 	max_mem = sane_size;
+	max_mem_actual = sane_size;
 
 	kprintf("Physical memory %llu MB\n", sane_size / MB);
 

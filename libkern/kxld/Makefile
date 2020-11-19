@@ -38,7 +38,7 @@ ifdef INSTALL_LOCATION
 override DSTROOT := $(DSTROOT)/$(INSTALL_LOCATION)
 endif
 
-PRODUCT_TYPE ?= DYLIB
+PRODUCT_TYPE ?= ALL
 
 HDRDST=$(DSTROOT)/usr/local/include
 DYLIBDST=$(DSTROOT)/usr/lib/system
@@ -56,6 +56,9 @@ LIBKXLDDST_DYLIB=$(DYLIBDST)/$(LIBKXLD_DYLIB)
 LIBKXLDDST_ARCHIVE=$(ARCHIVEDST)/$(LIBKXLD_ARCHIVE)
 TESTSRC=$(SRCROOT)/tests
 TESTDST=./BUILD/tests
+
+# Build both the dylib and archive
+LIBKXLDDST_ALL=$(LIBKXLDDST_DYLIB) $(LIBKXLDDST_ARCHIVE)
 
 # Flags
 ifdef SDKROOT
@@ -85,7 +88,6 @@ endif
 
 # Tools
 CC = xcrun -sdk $(SDK_DIR) clang
-CLANG_ANALYZER = clang --analyze
 LIBTOOL = xcrun -sdk $(SDK_DIR) libtool
 STRIP = xcrun -sdk $(SDK_DIR) strip
 DSYMUTIL = xcrun -sdk $(SDK_DIR) dsymutil
@@ -193,11 +195,6 @@ $(TESTDST)/copyrighttest: $(COPYTESTOBJS)
 	@mkdir -p $(TESTDST)
 	$(CC) $(ARCHS) $(COPYTESTOBJS) -framework CoreFoundation -framework IOKit -o $(OBJROOT)/copyrighttest
 	install -c -m 755 $(OBJROOT)/copyrighttest $@
-
-analyze:
-	@$(CLANG_ANALYZER) $(CFLAGS) $(INCLUDES) $(filter-out WKdm%.c,$(wildcard *.c))
-	@$(CLANG_ANALYZER) $(CFLAGS) $(INCLUDES) -I$(SRCROOT) tests/*.c
-	@rm -f *.plist
 
 clean:
 	@rm -rf $(OBJROOT)/*

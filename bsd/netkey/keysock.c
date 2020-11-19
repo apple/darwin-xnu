@@ -212,12 +212,13 @@ key_sendup0(struct rawcb *rp, struct mbuf *m, int promisc)
 			return ENOBUFS;
 		}
 		m->m_pkthdr.len += sizeof(*pmsg);
+		VERIFY(PFKEY_UNIT64(m->m_pkthdr.len) <= UINT16_MAX);
 
 		pmsg = mtod(m, struct sadb_msg *);
 		bzero(pmsg, sizeof(*pmsg));
 		pmsg->sadb_msg_version = PF_KEY_V2;
 		pmsg->sadb_msg_type = SADB_X_PROMISC;
-		pmsg->sadb_msg_len = PFKEY_UNIT64(m->m_pkthdr.len);
+		pmsg->sadb_msg_len = (u_int16_t)PFKEY_UNIT64(m->m_pkthdr.len);
 		/* pid and seq? */
 
 		PFKEY_STAT_INCREMENT(pfkeystat.in_msgtype[pmsg->sadb_msg_type]);

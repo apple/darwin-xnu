@@ -31,7 +31,6 @@
 #include <mach_ldebug.h>
 
 #include <kern/locks.h>
-#include <kern/kalloc.h>
 #include <kern/misc_protos.h>
 #include <kern/thread.h>
 #include <kern/processor.h>
@@ -71,6 +70,7 @@
  */
 
 #if DEVELOPMENT || DEBUG
+TUNABLE(bool, LckDisablePreemptCheck, "-disable_mtx_chk", false);
 
 /*
  * If one or more simplelocks are currently held by a thread,

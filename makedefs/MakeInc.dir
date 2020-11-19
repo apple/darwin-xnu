@@ -96,8 +96,13 @@ $(eval $(call RECURSIVE_BUILD_RULES_template,build_install_non_primary,$(INST_SU
 $(eval $(call RECURSIVE_BUILD_RULES_template,config_install,$(CONFIG_SUBDIRS),do_config_install,1))
 
 #
-# Install text files
+# Install machine independent text files
 #
-$(eval $(call RECURSIVE_BUILD_RULES_template,textfiles_install,$(INSTTEXTFILES_SUBDIRS),do_textfiles_install,))
+$(eval $(call RECURSIVE_BUILD_RULES_template,textfiles_install_mi,$(INSTTEXTFILES_SUBDIRS),do_textfiles_install_mi,))
+
+#
+# Install machine dependent text files
+#
+$(eval $(call RECURSIVE_BUILD_RULES_template,textfiles_install_md,$(INSTTEXTFILES_SUBDIRS_$(CURRENT_ARCH_CONFIG)),do_textfiles_install_md,))
 
 # vim: set ft=make:

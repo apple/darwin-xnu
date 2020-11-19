@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -157,7 +157,7 @@ static errno_t arp_lookup_route(const struct in_addr *, int,
     int, route_t *, unsigned int);
 static int arp_getstat SYSCTL_HANDLER_ARGS;
 
-static struct llinfo_arp *arp_llinfo_alloc(int);
+static struct llinfo_arp *arp_llinfo_alloc(zalloc_flags_t);
 static void arp_llinfo_free(void *);
 static uint32_t arp_llinfo_flushq(struct llinfo_arp *);
 static void arp_llinfo_purge(struct rtentry *);
@@ -262,9 +262,8 @@ SYSCTL_PROC(_net_link_ether_inet, OID_AUTO, stats,
     0, 0, arp_getstat, "S,arpstat",
     "ARP statistics (struct arpstat, net/if_arp.h)");
 
-static struct zone *llinfo_arp_zone;
-#define LLINFO_ARP_ZONE_MAX     256             /* maximum elements in zone */
-#define LLINFO_ARP_ZONE_NAME    "llinfo_arp"    /* name for zone */
+static ZONE_DECLARE(llinfo_arp_zone, "llinfo_arp",
+    sizeof(struct llinfo_arp), ZC_ZFREE_CLEARMEM);
 
 void
 arp_init(void)
@@ -273,28 +272,15 @@ arp_init(void)
 
 	LIST_INIT(&llinfo_arp);
 
-	llinfo_arp_zone = zinit(sizeof(struct llinfo_arp),
-	    LLINFO_ARP_ZONE_MAX * sizeof(struct llinfo_arp), 0,
-	    LLINFO_ARP_ZONE_NAME);
-	if (llinfo_arp_zone == NULL) {
-		panic("%s: failed allocating llinfo_arp_zone", __func__);
-	}
-
-	zone_change(llinfo_arp_zone, Z_EXPAND, TRUE);
-	zone_change(llinfo_arp_zone, Z_CALLERACCT, FALSE);
-
 	arpinit_done = 1;
 }
 
 static struct llinfo_arp *
-arp_llinfo_alloc(int how)
+arp_llinfo_alloc(zalloc_flags_t how)
 {
-	struct llinfo_arp *la;
+	struct llinfo_arp *la = zalloc_flags(llinfo_arp_zone, how | Z_ZERO);
 
-	la = (how == M_WAITOK) ? zalloc(llinfo_arp_zone) :
-	    zalloc_noblock(llinfo_arp_zone);
-	if (la != NULL) {
-		bzero(la, sizeof(*la));
+	if (la) {
 		/*
 		 * The type of queue (Q_DROPHEAD) here is just a hint;
 		 * the actual logic that works on this queue performs
@@ -303,7 +289,6 @@ arp_llinfo_alloc(int how)
 		_qinit(&la->la_holdq, Q_DROPHEAD, (arp_maxhold == 0) ?
 		    (uint32_t)-1 : arp_maxhold, QP_MBUF);
 	}
-
 	return la;
 }
 
@@ -969,7 +954,7 @@ arp_rtrequest(int req, struct rtentry *rt, struct sockaddr *sa)
 			RT_LOCK(rt);
 			arpstat.txannounces++;
 		}
-	/* FALLTHRU */
+		OS_FALLTHROUGH;
 	case RTM_RESOLVE:
 		if (gate->sa_family != AF_LINK ||
 		    gate->sa_len < sizeof(null_sdl)) {
@@ -992,11 +977,8 @@ arp_rtrequest(int req, struct rtentry *rt, struct sockaddr *sa)
 		 * Case 2:  This route may come from cloning, or a manual route
 		 * add with a LL address.
 		 */
-		rt->rt_llinfo = la = arp_llinfo_alloc(M_WAITOK);
-		if (la == NULL) {
-			arpstat.reqnobufs++;
-			break;
-		}
+		rt->rt_llinfo = la = arp_llinfo_alloc(Z_WAITOK);
+
 		rt->rt_llinfo_get_ri    = arp_llinfo_get_ri;
 		rt->rt_llinfo_get_iflri = arp_llinfo_get_iflri;
 		rt->rt_llinfo_purge     = arp_llinfo_purge;
@@ -1027,12 +1009,14 @@ arp_rtrequest(int req, struct rtentry *rt, struct sockaddr *sa)
 		    rt->rt_ifp)) {
 			struct sockaddr_dl *gate_ll = SDL(gate);
 			size_t broadcast_len;
-			ifnet_llbroadcast_copy_bytes(rt->rt_ifp,
+			int ret = ifnet_llbroadcast_copy_bytes(rt->rt_ifp,
 			    LLADDR(gate_ll), sizeof(gate_ll->sdl_data),
 			    &broadcast_len);
-			gate_ll->sdl_alen = broadcast_len;
-			gate_ll->sdl_family = AF_LINK;
-			gate_ll->sdl_len = sizeof(struct sockaddr_dl);
+			if (ret == 0 && broadcast_len <= UINT8_MAX) {
+				gate_ll->sdl_alen = (u_char)broadcast_len;
+				gate_ll->sdl_family = AF_LINK;
+				gate_ll->sdl_len = sizeof(struct sockaddr_dl);
+			}
 			/* In case we're called before 1.0 sec. has elapsed */
 			rt_setexpire(rt, MAX(timenow, 1));
 		} else if (IN_LINKLOCAL(ntohl(SIN(rt_key(rt))->
@@ -1311,8 +1295,8 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 		result = ifnet_llbroadcast_copy_bytes(ifp, LLADDR(ll_dest),
 		    ll_dest_len - offsetof(struct sockaddr_dl, sdl_data),
 		    &broadcast_len);
-		if (result == 0) {
-			ll_dest->sdl_alen = broadcast_len;
+		if (result == 0 && broadcast_len <= UINT8_MAX) {
+			ll_dest->sdl_alen = (u_char)broadcast_len;
 			ll_dest->sdl_family = AF_LINK;
 			ll_dest->sdl_len = sizeof(struct sockaddr_dl);
 		}

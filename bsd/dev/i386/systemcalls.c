@@ -91,7 +91,7 @@ unix_syscall(x86_saved_state_t *state)
 	thread_t                thread;
 	void                    *vt;
 	unsigned int            code, syscode;
-	struct sysent           *callp;
+	const struct sysent     *callp;
 
 	int                     error;
 	vm_offset_t             params;
@@ -291,7 +291,7 @@ unix_syscall64(x86_saved_state_t *state)
 	thread_t        thread;
 	void                    *vt;
 	unsigned int    code, syscode;
-	struct sysent   *callp;
+	const struct sysent   *callp;
 	int             args_in_regs;
 	boolean_t       args_start_at_rdi;
 	int             error;
@@ -511,7 +511,7 @@ unix_syscall_return(int error)
 	struct uthread          *uthread;
 	struct proc *p;
 	unsigned int code;
-	struct sysent *callp;
+	const struct sysent *callp;
 
 	thread = current_thread();
 	uthread = get_bsdthread_info(thread);

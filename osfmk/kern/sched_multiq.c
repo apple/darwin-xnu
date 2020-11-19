@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2013-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -224,17 +224,14 @@ static integer_t        drain_depth_limit;
 #define DEFAULT_DRAIN_CEILING BASEPRI_FOREGROUND
 static integer_t        drain_ceiling;
 
-static struct zone      *sched_group_zone;
+static ZONE_DECLARE(sched_group_zone, "sched groups",
+    sizeof(struct sched_group), ZC_NOENCRYPT | ZC_NOCALLOUT);
 
 static uint64_t         num_sched_groups = 0;
 static queue_head_t     sched_groups;
 
-static lck_attr_t       sched_groups_lock_attr;
-static lck_grp_t        sched_groups_lock_grp;
-static lck_grp_attr_t   sched_groups_lock_grp_attr;
-
-static lck_mtx_t        sched_groups_lock;
-
+static LCK_GRP_DECLARE(sched_groups_lock_grp, "sched_groups");
+static LCK_MTX_DECLARE(sched_groups_lock, &sched_groups_lock_grp);
 
 static void
 sched_multiq_init(void);
@@ -302,6 +299,7 @@ const struct sched_dispatch_table sched_multiq_dispatch = {
 	.steal_thread_enabled                           = sched_steal_thread_DISABLED,
 	.steal_thread                                   = sched_multiq_steal_thread,
 	.compute_timeshare_priority                     = sched_compute_timeshare_priority,
+	.choose_node                                    = sched_choose_node,
 	.choose_processor                               = choose_processor,
 	.processor_enqueue                              = sched_multiq_processor_enqueue,
 	.processor_queue_shutdown                       = sched_multiq_processor_queue_shutdown,
@@ -326,11 +324,11 @@ const struct sched_dispatch_table sched_multiq_dispatch = {
 	.thread_avoid_processor                         = sched_multiq_thread_avoid_processor,
 	.processor_balance                              = sched_SMT_balance,
 
-	.rt_runq                                        = sched_rtglobal_runq,
-	.rt_init                                        = sched_rtglobal_init,
-	.rt_queue_shutdown                              = sched_rtglobal_queue_shutdown,
-	.rt_runq_scan                                   = sched_rtglobal_runq_scan,
-	.rt_runq_count_sum                              = sched_rtglobal_runq_count_sum,
+	.rt_runq                                        = sched_rtlocal_runq,
+	.rt_init                                        = sched_rtlocal_init,
+	.rt_queue_shutdown                              = sched_rtlocal_queue_shutdown,
+	.rt_runq_scan                                   = sched_rtlocal_runq_scan,
+	.rt_runq_count_sum                              = sched_rtlocal_runq_count_sum,
 
 	.qos_max_parallelism                            = sched_qos_max_parallelism,
 	.check_spill                                    = sched_check_spill,
@@ -367,21 +365,7 @@ sched_multiq_init(void)
 	printf("multiq scheduler config: deep-drain %d, ceiling %d, depth limit %d, band limit %d, sanity check %d\n",
 	    deep_drain, drain_ceiling, drain_depth_limit, drain_band_limit, multiq_sanity_check);
 
-	sched_group_zone = zinit(
-		sizeof(struct sched_group),
-		task_max * sizeof(struct sched_group),
-		PAGE_SIZE,
-		"sched groups");
-
-	zone_change(sched_group_zone, Z_NOENCRYPT, TRUE);
-	zone_change(sched_group_zone, Z_NOCALLOUT, TRUE);
-
 	queue_init(&sched_groups);
-
-	lck_grp_attr_setdefault(&sched_groups_lock_grp_attr);
-	lck_grp_init(&sched_groups_lock_grp, "sched_groups", &sched_groups_lock_grp_attr);
-	lck_attr_setdefault(&sched_groups_lock_attr);
-	lck_mtx_init(&sched_groups_lock, &sched_groups_lock_grp, &sched_groups_lock_attr);
 
 	sched_timeshare_init();
 }
@@ -423,9 +407,9 @@ sched_group_create(void)
 
 	run_queue_init(&sched_group->runq);
 
-	for (int i = 0; i < NRQS; i++) {
+	for (size_t i = 0; i < NRQS; i++) {
 		sched_group->entries[i].runq = 0;
-		sched_group->entries[i].sched_pri = i;
+		sched_group->entries[i].sched_pri = (int16_t)i;
 	}
 
 	lck_mtx_lock(&sched_groups_lock);

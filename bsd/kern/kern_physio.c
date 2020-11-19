@@ -88,7 +88,8 @@ physio( void (*f_strategy)(buf_t),
     int blocksize)
 {
 	struct proc *p = current_proc();
-	int error, i, buf_allocated, todo, iosize;
+	int error, i, buf_allocated, todo;
+	size_t iosize;
 	int orig_bflags = 0;
 	int64_t done;
 
@@ -156,9 +157,11 @@ physio( void (*f_strategy)(buf_t),
 	 * of the 'while' loop.
 	 */
 	while (uio_resid(uio) > 0) {
-		if ((iosize = uio_curriovlen(uio)) > MAXPHYSIO_WIRED) {
+		iosize = uio_curriovlen(uio);
+		if (iosize > MAXPHYSIO_WIRED) {
 			iosize = MAXPHYSIO_WIRED;
 		}
+
 		/*
 		 * make sure we're set to issue a fresh I/O
 		 * in the right direction
@@ -167,7 +170,8 @@ physio( void (*f_strategy)(buf_t),
 
 		/* [set up the buffer for a maximum-sized transfer] */
 		buf_setblkno(bp, uio_offset(uio) / blocksize);
-		buf_setcount(bp, iosize);
+		assert(iosize <= UINT32_MAX);
+		buf_setcount(bp, (uint32_t)iosize);
 		buf_setdataptr(bp, (uintptr_t)CAST_DOWN(caddr_t, uio_curriovbase(uio)));
 
 		/*
@@ -187,7 +191,7 @@ physio( void (*f_strategy)(buf_t),
 			error = vslock(CAST_USER_ADDR_T(buf_dataptr(bp)),
 			    (user_size_t)todo);
 			if (error) {
-				goto done;
+				goto finished;
 			}
 		}
 
@@ -213,18 +217,19 @@ physio( void (*f_strategy)(buf_t),
 		 *    of data to transfer]
 		 */
 		done = buf_count(bp) - buf_resid(bp);
-		uio_update(uio, done);
+		assert(0 <= done && done <= UINT32_MAX);
+		uio_update(uio, (user_size_t)done);
 
 		/*
 		 * Now, check for an error.
 		 * Also, handle weird end-of-disk semantics.
 		 */
 		if (error || done < todo) {
-			goto done;
+			goto finished;
 		}
 	}
 
-done:
+finished:
 	if (buf_allocated) {
 		buf_free(bp);
 	} else {

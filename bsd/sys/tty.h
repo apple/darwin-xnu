@@ -221,7 +221,7 @@ struct clist;
 #endif
 
 #define TS_IOCTL_NOT_OK 0x1000000       /* Workaround <rdar://....> */
-#define TS_PGRPHUP      0x2000000       /* Don't change Foregroud process group */
+#define TS_REVOKE       0x2000000       /* Terminal getting revoked */
 
 
 /* Character type information. */
@@ -234,8 +234,8 @@ struct clist;
 #define RETURN          6
 
 struct speedtab {
-	int sp_speed;                   /* Speed. */
-	int sp_code;                    /* Code. */
+	int sp_speed;
+	int sp_code;
 };
 
 /* Modem control commands (driver). */
@@ -327,8 +327,6 @@ int      ttysleep(struct tty *tp,
 int      ttywait(struct tty *tp);
 struct tty *ttymalloc(void);
 void     ttyfree(struct tty *);
-void     ttysetpgrphup(struct tty *tp);
-void     ttyclrpgrphup(struct tty *tp);
 
 #ifdef XNU_KERNEL_PRIVATE
 extern void ttyhold(struct tty *tp);

@@ -51,10 +51,8 @@ doc_tombstone_get(void)
 	ut = get_bsdthread_info(current_thread());
 
 	if (ut->t_tombstone == NULL) {
-		ut->t_tombstone = kalloc(sizeof(struct doc_tombstone));
-		if (ut->t_tombstone) {
-			memset(ut->t_tombstone, 0, sizeof(struct doc_tombstone));
-		}
+		ut->t_tombstone = kalloc_flags(sizeof(struct doc_tombstone),
+		    Z_WAITOK | Z_ZERO);
 	}
 
 	return ut->t_tombstone;
@@ -71,7 +69,7 @@ doc_tombstone_get(void)
 void
 doc_tombstone_clear(struct doc_tombstone *ut, vnode_t *old_vpp)
 {
-	uint32_t old_id = ut->t_lastop_document_id;
+	uint64_t old_id = ut->t_lastop_document_id;
 
 	ut->t_lastop_document_id = 0;
 	ut->t_lastop_parent = NULL;
@@ -116,13 +114,16 @@ doc_tombstone_clear(struct doc_tombstone *ut, vnode_t *old_vpp)
 bool
 doc_tombstone_should_ignore_name(const char *nameptr, int len)
 {
+	size_t real_len;
 	if (len == 0) {
-		len = strlen(nameptr);
+		real_len = strlen(nameptr);
+	} else {
+		real_len = (size_t)len;
 	}
 
 	if (strncmp(nameptr, "atmp", 4) == 0
-	    || (len > 4 && strncmp(nameptr + len - 4, ".bak", 4) == 0)
-	    || (len > 4 && strncmp(nameptr + len - 4, ".tmp", 4) == 0)) {
+	    || (real_len > 4 && strncmp(nameptr + real_len - 4, ".bak", 4) == 0)
+	    || (real_len > 4 && strncmp(nameptr + real_len - 4, ".tmp", 4) == 0)) {
 		return true;
 	}
 

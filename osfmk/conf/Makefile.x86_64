@@ -2,14 +2,13 @@
 #BEGIN	Machine dependent Makefile fragment for x86_64
 ######################################################################
 
-CWARNFLAGS = $(CWARNFLAGS_STD) -Wshorten-64-to-32 -Wno-atomic-implicit-seq-cst
+CWARNFLAGS = $(CWARNFLAGS_STD) -Wno-atomic-implicit-seq-cst
 
 # Files that must go in the __HIB segment:
 UNCONFIGURED_HIB_FILES=					\
            WKdmDecompress_new.o         \
            WKdmData_new.o               \
            hibernate_restore.o          \
-           hibernate_bootstrap.o	\
            bcopy.o			\
            bzero.o
 
@@ -19,7 +18,6 @@ HIB_FILES=$(filter $(UNCONFIGURED_HIB_FILES),$(OBJS))
 WKdmDecompress_new.o_CFLAGS_ADD += -fno-stack-protector -fno-stack-check $(CFLAGS_NOLTO_FLAG)
 WKdmData_new.o_CFLAGS_ADD += -fno-stack-protector -fno-stack-check $(CFLAGS_NOLTO_FLAG)
 hibernate_restore.o_CFLAGS_ADD += -fno-stack-protector -fno-stack-check $(CFLAGS_NOLTO_FLAG)
-hibernate_bootstrap.o_CFLAGS_ADD += -fno-stack-protector -fno-stack-check $(CFLAGS_NOLTO_FLAG)
 bcopy.o_CFLAGS_ADD += -fno-stack-protector -fno-stack-check $(CFLAGS_NOLTO_FLAG)
 bzero.o_CFLAGS_ADD += -fno-stack-protector -fno-stack-check $(CFLAGS_NOLTO_FLAG)
 fp_simd.o_SFLAGS_ADD += -mavx512f

@@ -64,6 +64,7 @@
 #ifndef _SYS_GMON_H_
 #define _SYS_GMON_H_
 #include <stdint.h>
+#include <sys/types.h>
 
 /*
  * Structure prepended to gmon.out profiling data file.

@@ -267,7 +267,7 @@ extern mach_msg_return_t ipc_mqueue_preflight_send(
 /* Set a [send-possible] override on the mqueue */
 extern void ipc_mqueue_override_send(
 	ipc_mqueue_t        mqueue,
-	mach_msg_priority_t override);
+	mach_msg_qos_t      qos_ovr);
 
 /* Deliver message to message queue or waiting receiver */
 extern void ipc_mqueue_post(

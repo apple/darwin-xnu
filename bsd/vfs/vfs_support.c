@@ -741,7 +741,8 @@ int
 nop_pagein(struct vnop_pagein_args *ap)
 {
 	if (!(ap->a_flags & UPL_NOCOMMIT)) {
-		ubc_upl_abort_range(ap->a_pl, ap->a_pl_offset, ap->a_size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
+		assert(ap->a_size <= UINT32_MAX);
+		ubc_upl_abort_range(ap->a_pl, ap->a_pl_offset, (upl_size_t)ap->a_size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
 	}
 	return EINVAL;
 }
@@ -750,7 +751,8 @@ int
 err_pagein(struct vnop_pagein_args *ap)
 {
 	if (!(ap->a_flags & UPL_NOCOMMIT)) {
-		ubc_upl_abort_range(ap->a_pl, ap->a_pl_offset, ap->a_size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
+		assert(ap->a_size <= UINT32_MAX);
+		ubc_upl_abort_range(ap->a_pl, ap->a_pl_offset, (upl_size_t)ap->a_size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
 	}
 	return ENOTSUP;
 }
@@ -770,7 +772,8 @@ int
 nop_pageout(struct vnop_pageout_args *ap)
 {
 	if (!(ap->a_flags & UPL_NOCOMMIT)) {
-		ubc_upl_abort_range(ap->a_pl, ap->a_pl_offset, ap->a_size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
+		assert(ap->a_size <= UINT32_MAX);
+		ubc_upl_abort_range(ap->a_pl, ap->a_pl_offset, (upl_size_t)ap->a_size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
 	}
 	return EINVAL;
 }
@@ -779,7 +782,8 @@ int
 err_pageout(struct vnop_pageout_args *ap)
 {
 	if (!(ap->a_flags & UPL_NOCOMMIT)) {
-		ubc_upl_abort_range(ap->a_pl, ap->a_pl_offset, ap->a_size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
+		assert(ap->a_size <= UINT32_MAX);
+		ubc_upl_abort_range(ap->a_pl, ap->a_pl_offset, (upl_size_t)ap->a_size, UPL_ABORT_FREE_ON_EMPTY | UPL_ABORT_ERROR);
 	}
 	return ENOTSUP;
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -38,6 +38,7 @@
 #include <sys/errno.h>
 #include <sys/kernel.h>
 #include <sys/kauth.h>
+#include <sys/sdt.h>
 #include <kern/zalloc.h>
 #include <netinet/in.h>
 
@@ -46,6 +47,8 @@
 #include <net/pktsched/pktsched.h>
 #include <net/pktsched/pktsched_fq_codel.h>
 #include <net/classq/classq_fq_codel.h>
+
+#include <netinet/tcp_var.h>
 
 static uint32_t flowq_size;                     /* size of flowq */
 static struct mcache *flowq_cache = NULL;       /* mcache for flowq */
@@ -85,7 +88,7 @@ fq_alloc(classq_pkt_type_t ptype)
 	fq_t *fq = NULL;
 	fq = mcache_alloc(flowq_cache, MCR_SLEEP);
 	if (fq == NULL) {
-		log(LOG_ERR, "%s: unable to allocate from flowq_cache\n");
+		log(LOG_ERR, "%s: unable to allocate from flowq_cache\n", __func__);
 		return NULL;
 	}
 
@@ -106,7 +109,7 @@ fq_destroy(fq_t *fq)
 	mcache_free(flowq_cache, fq);
 }
 
-static void
+static inline void
 fq_detect_dequeue_stall(fq_if_t *fqs, fq_t *flowq, fq_if_classq_t *fq_cl,
     u_int64_t *now)
 {
@@ -160,6 +163,62 @@ fq_head_drop(fq_if_t *fqs, fq_t *fq)
 	pktsched_free_pkt(&pkt);
 }
 
+
+static int
+fq_compressor(fq_if_t *fqs, fq_t *fq, fq_if_classq_t *fq_cl,
+    pktsched_pkt_t *pkt)
+{
+	classq_pkt_type_t ptype = fq->fq_ptype;
+	uint32_t comp_gencnt = 0;
+	uint64_t *pkt_timestamp;
+	uint64_t old_timestamp = 0;
+	uint32_t old_pktlen = 0;
+	struct ifclassq *ifq = fqs->fqs_ifq;
+
+	if (__improbable(!tcp_do_ack_compression)) {
+		return 0;
+	}
+
+	pktsched_get_pkt_vars(pkt, NULL, &pkt_timestamp, NULL, NULL, NULL,
+	    &comp_gencnt);
+
+	if (comp_gencnt == 0) {
+		return 0;
+	}
+
+	fq_cl->fcl_stat.fcl_pkts_compressible++;
+
+	if (fq_empty(fq)) {
+		return 0;
+	}
+
+	if (ptype == QP_MBUF) {
+		struct mbuf *m = MBUFQ_LAST(&fq->fq_mbufq);
+
+		if (comp_gencnt != m->m_pkthdr.comp_gencnt) {
+			return 0;
+		}
+
+		/* If we got until here, we should merge/replace the segment */
+		MBUFQ_REMOVE(&fq->fq_mbufq, m);
+		old_pktlen = m_pktlen(m);
+		old_timestamp = m->m_pkthdr.pkt_timestamp;
+
+		IFCQ_CONVERT_LOCK(fqs->fqs_ifq);
+		m_freem(m);
+	}
+
+	fq->fq_bytes -= old_pktlen;
+	fq_cl->fcl_stat.fcl_byte_cnt -= old_pktlen;
+	fq_cl->fcl_stat.fcl_pkt_cnt--;
+	IFCQ_DEC_LEN(ifq);
+	IFCQ_DEC_BYTES(ifq, old_pktlen);
+
+	*pkt_timestamp = old_timestamp;
+
+	return CLASSQEQ_COMPRESSED;
+}
+
 int
 fq_addq(fq_if_t *fqs, pktsched_pkt_t *pkt, fq_if_classq_t *fq_cl)
 {
@@ -168,12 +227,18 @@ fq_addq(fq_if_t *fqs, pktsched_pkt_t *pkt, fq_if_classq_t *fq_cl)
 	fq_t *fq = NULL;
 	uint64_t *pkt_timestamp;
 	volatile uint32_t *pkt_flags;
-	uint32_t pkt_flowid, pkt_tx_start_seq;
+	uint32_t pkt_flowid, cnt;
 	uint8_t pkt_proto, pkt_flowsrc;
 
+	cnt = pkt->pktsched_pcnt;
 	pktsched_get_pkt_vars(pkt, &pkt_flags, &pkt_timestamp, &pkt_flowid,
-	    &pkt_flowsrc, &pkt_proto, &pkt_tx_start_seq);
+	    &pkt_flowsrc, &pkt_proto, NULL);
 
+	/*
+	 * XXX Not walking the chain to set this flag on every packet.
+	 * This flag is only used for debugging. Nothing is affected if it's
+	 * not set.
+	 */
 	switch (pkt->pktsched_ptype) {
 	case QP_MBUF:
 		/* See comments in <rdar://problem/14040693> */
@@ -186,58 +251,69 @@ fq_addq(fq_if_t *fqs, pktsched_pkt_t *pkt, fq_if_classq_t *fq_cl)
 		__builtin_unreachable();
 	}
 
-	if (*pkt_timestamp > 0) {
-		now = *pkt_timestamp;
-	} else {
-		struct timespec now_ts;
-		nanouptime(&now_ts);
-		now = (now_ts.tv_sec * NSEC_PER_SEC) + now_ts.tv_nsec;
-		*pkt_timestamp = now;
-	}
+	/*
+	 * Timestamps for every packet must be set prior to entering this path.
+	 */
+	now = *pkt_timestamp;
+	ASSERT(now > 0);
 
 	/* find the flowq for this packet */
 	fq = fq_if_hash_pkt(fqs, pkt_flowid, pktsched_get_pkt_svc(pkt),
 	    now, TRUE, pkt->pktsched_ptype);
-	if (fq == NULL) {
+	if (__improbable(fq == NULL)) {
+		DTRACE_IP1(memfail__drop, fq_if_t *, fqs);
 		/* drop the packet if we could not allocate a flow queue */
-		fq_cl->fcl_stat.fcl_drop_memfailure++;
-		IFCQ_CONVERT_LOCK(fqs->fqs_ifq);
+		fq_cl->fcl_stat.fcl_drop_memfailure += cnt;
 		return CLASSQEQ_DROP;
 	}
 	VERIFY(fq->fq_ptype == pkt->pktsched_ptype);
 
 	fq_detect_dequeue_stall(fqs, fq, fq_cl, &now);
 
-	if (FQ_IS_DELAYHIGH(fq)) {
+	if (__improbable(FQ_IS_DELAYHIGH(fq))) {
 		if ((fq->fq_flags & FQF_FLOWCTL_CAPABLE) &&
 		    (*pkt_flags & PKTF_FLOW_ADV)) {
 			fc_adv = 1;
 			/*
 			 * If the flow is suspended or it is not
-			 * TCP/QUIC, drop the packet
+			 * TCP/QUIC, drop the chain.
 			 */
 			if ((pkt_proto != IPPROTO_TCP) &&
 			    (pkt_proto != IPPROTO_QUIC)) {
 				droptype = DTYPE_EARLY;
-				fq_cl->fcl_stat.fcl_drop_early++;
+				fq_cl->fcl_stat.fcl_drop_early += cnt;
 			}
+			DTRACE_IP6(flow__adv, fq_if_t *, fqs,
+			    fq_if_classq_t *, fq_cl, fq_t *, fq,
+			    int, droptype, pktsched_pkt_t *, pkt,
+			    uint32_t, cnt);
 		} else {
 			/*
-			 * Need to drop a packet, instead of dropping this
-			 * one, try to drop from the head of the queue
+			 * Need to drop packets to make room for the new
+			 * ones. Try to drop from the head of the queue
+			 * instead of the latest packets.
 			 */
 			if (!fq_empty(fq)) {
-				fq_head_drop(fqs, fq);
+				uint32_t i;
+
+				for (i = 0; i < cnt; i++) {
+					fq_head_drop(fqs, fq);
+				}
 				droptype = DTYPE_NODROP;
 			} else {
 				droptype = DTYPE_EARLY;
 			}
-			fq_cl->fcl_stat.fcl_drop_early++;
+			fq_cl->fcl_stat.fcl_drop_early += cnt;
+
+			DTRACE_IP6(no__flow__adv, fq_if_t *, fqs,
+			    fq_if_classq_t *, fq_cl, fq_t *, fq,
+			    int, droptype, pktsched_pkt_t *, pkt,
+			    uint32_t, cnt);
 		}
 	}
 
 	/* Set the return code correctly */
-	if (fc_adv == 1 && droptype != DTYPE_FORCED) {
+	if (__improbable(fc_adv == 1 && droptype != DTYPE_FORCED)) {
 		if (fq_if_add_fcentry(fqs, pkt, pkt_flowid, pkt_flowsrc,
 		    fq_cl)) {
 			fq->fq_flags |= FQF_FLOWCTL_ON;
@@ -257,27 +333,41 @@ fq_addq(fq_if_t *fqs, pktsched_pkt_t *pkt, fq_if_classq_t *fq_cl)
 			ret = CLASSQEQ_DROP_FC;
 			fq_cl->fcl_stat.fcl_flow_control_fail++;
 		}
+		DTRACE_IP3(fc__ret, fq_if_t *, fqs, int, droptype, int, ret);
 	}
 
 	/*
-	 * If the queue length hits the queue limit, drop a packet from the
-	 * front of the queue for a flow with maximum number of bytes. This
-	 * will penalize heavy and unresponsive flows. It will also avoid a
-	 * tail drop.
+	 * If the queue length hits the queue limit, drop a chain with the
+	 * same number of packets from the front of the queue for a flow with
+	 * maximum number of bytes. This will penalize heavy and unresponsive
+	 * flows. It will also avoid a tail drop.
 	 */
-	if (droptype == DTYPE_NODROP && fq_if_at_drop_limit(fqs)) {
+	if (__improbable(droptype == DTYPE_NODROP &&
+	    fq_if_at_drop_limit(fqs))) {
+		uint32_t i;
+
 		if (fqs->fqs_large_flow == fq) {
 			/*
 			 * Drop from the head of the current fq. Since a
 			 * new packet will be added to the tail, it is ok
 			 * to leave fq in place.
 			 */
-			fq_head_drop(fqs, fq);
+			DTRACE_IP5(large__flow, fq_if_t *, fqs,
+			    fq_if_classq_t *, fq_cl, fq_t *, fq,
+			    pktsched_pkt_t *, pkt, uint32_t, cnt);
+
+			for (i = 0; i < cnt; i++) {
+				fq_head_drop(fqs, fq);
+			}
 		} else {
 			if (fqs->fqs_large_flow == NULL) {
 				droptype = DTYPE_FORCED;
-				fq_cl->fcl_stat.fcl_drop_overflow++;
+				fq_cl->fcl_stat.fcl_drop_overflow += cnt;
 				ret = CLASSQEQ_DROP;
+
+				DTRACE_IP5(no__large__flow, fq_if_t *, fqs,
+				    fq_if_classq_t *, fq_cl, fq_t *, fq,
+				    pktsched_pkt_t *, pkt, uint32_t, cnt);
 
 				/*
 				 * if this fq was freshly created and there
@@ -289,17 +379,41 @@ fq_addq(fq_if_t *fqs, pktsched_pkt_t *pkt, fq_if_classq_t *fq_cl)
 					fq = NULL;
 				}
 			} else {
-				fq_if_drop_packet(fqs);
+				DTRACE_IP5(different__large__flow,
+				    fq_if_t *, fqs, fq_if_classq_t *, fq_cl,
+				    fq_t *, fq, pktsched_pkt_t *, pkt,
+				    uint32_t, cnt);
+
+				for (i = 0; i < cnt; i++) {
+					fq_if_drop_packet(fqs);
+				}
 			}
 		}
 	}
 
-	if (droptype == DTYPE_NODROP) {
-		uint32_t pkt_len = pktsched_get_pkt_len(pkt);
-		fq_enqueue(fq, pkt->pktsched_pkt);
-		fq->fq_bytes += pkt_len;
-		fq_cl->fcl_stat.fcl_byte_cnt += pkt_len;
-		fq_cl->fcl_stat.fcl_pkt_cnt++;
+	if (__probable(droptype == DTYPE_NODROP)) {
+		uint32_t chain_len = pktsched_get_pkt_len(pkt);
+
+		/*
+		 * We do not compress if we are enqueuing a chain.
+		 * Traversing the chain to look for acks would defeat the
+		 * purpose of batch enqueueing.
+		 */
+		if (cnt == 1) {
+			ret = fq_compressor(fqs, fq, fq_cl, pkt);
+			if (ret != CLASSQEQ_COMPRESSED) {
+				ret = CLASSQEQ_SUCCESS;
+			} else {
+				fq_cl->fcl_stat.fcl_pkts_compressed++;
+			}
+		}
+		DTRACE_IP5(fq_enqueue, fq_if_t *, fqs, fq_if_classq_t *, fq_cl,
+		    fq_t *, fq, pktsched_pkt_t *, pkt, uint32_t, cnt);
+		fq_enqueue(fq, pkt->pktsched_pkt, pkt->pktsched_tail, cnt);
+
+		fq->fq_bytes += chain_len;
+		fq_cl->fcl_stat.fcl_byte_cnt += chain_len;
+		fq_cl->fcl_stat.fcl_pkt_cnt += cnt;
 
 		/*
 		 * check if this queue will qualify to be the next
@@ -307,7 +421,7 @@ fq_addq(fq_if_t *fqs, pktsched_pkt_t *pkt, fq_if_classq_t *fq_cl)
 		 */
 		fq_if_is_flow_heavy(fqs, fq);
 	} else {
-		IFCQ_CONVERT_LOCK(fqs->fqs_ifq);
+		DTRACE_IP3(fq_drop, fq_if_t *, fqs, int, droptype, int, ret);
 		return (ret != CLASSQEQ_SUCCESS) ? ret : CLASSQEQ_DROP;
 	}
 
@@ -367,7 +481,6 @@ fq_getq_flow(fq_if_t *fqs, fq_t *fq, pktsched_pkt_t *pkt)
 	int64_t qdelay = 0;
 	struct timespec now_ts;
 	volatile uint32_t *pkt_flags;
-	uint32_t pkt_tx_start_seq;
 	uint64_t *pkt_timestamp;
 
 	fq_getq_flow_internal(fqs, fq, pkt);
@@ -377,7 +490,7 @@ fq_getq_flow(fq_if_t *fqs, fq_t *fq, pktsched_pkt_t *pkt)
 	}
 
 	pktsched_get_pkt_vars(pkt, &pkt_flags, &pkt_timestamp, NULL, NULL,
-	    NULL, &pkt_tx_start_seq);
+	    NULL, NULL);
 
 	nanouptime(&now_ts);
 	now = (now_ts.tv_sec * NSEC_PER_SEC) + now_ts.tv_nsec;

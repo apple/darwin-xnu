@@ -669,8 +669,15 @@ def ParseMacOSPanicLog(panic_header, cmd_options={}):
     if other_log_begin_offset != 0 and (other_log_len == 0 or other_log_len < (cur_debug_buf_ptr_offset - other_log_begin_offset)):
         other_log_len = cur_debug_buf_ptr_offset - other_log_begin_offset
     expected_panic_magic = xnudefines.MACOS_PANIC_MAGIC
-    panic_stackshot_addr = unsigned(panic_header) + unsigned(panic_header.mph_stackshot_offset)
-    panic_stackshot_len = unsigned(panic_header.mph_stackshot_len)
+
+    # use the global if it's available (on an x86 corefile), otherwise refer to the header
+    if hasattr(kern.globals, "panic_stackshot_buf"):
+        panic_stackshot_addr = unsigned(kern.globals.panic_stackshot_buf)
+        panic_stackshot_len = unsigned(kern.globals.panic_stackshot_len)
+    else:
+        panic_stackshot_addr = unsigned(panic_header) + unsigned(panic_header.mph_stackshot_offset)
+        panic_stackshot_len = unsigned(panic_header.mph_stackshot_len)
+
     panic_header_flags = unsigned(panic_header.mph_panic_flags)
 
     warn_str = ""
@@ -756,7 +763,7 @@ def ParseAURRPanicLog(panic_header, cmd_options={}):
 
         # Adjust panic log string length (cap to maximum supported values)
         if panic_log_version == xnudefines.AURR_PANIC_VERSION:
-            max_string_len = panic_log_reset_log_len and min(panic_log_reset_log_len, xnudefines.AURR_PANIC_STRING_LEN) or 0
+            max_string_len = panic_log_reset_log_len
         elif panic_log_version == xnudefines.AURR_CRASHLOG_PANIC_VERSION:
             max_string_len = xnudefines.CRASHLOG_PANIC_STRING_LEN
 
@@ -1216,7 +1223,6 @@ from pci import *
 from misc import *
 from apic import *
 from scheduler import *
-from atm import *
 from structanalyze import *
 from ipcimportancedetail import *
 from bank import *

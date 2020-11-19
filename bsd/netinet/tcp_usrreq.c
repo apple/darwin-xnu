@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -67,12 +67,10 @@
 #include <sys/kernel.h>
 #include <sys/sysctl.h>
 #include <sys/mbuf.h>
-#if INET6
 #include <sys/domain.h>
-#endif /* INET6 */
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 #include <sys/kasl.h>
-#endif
+#endif /* XNU_TARGET_OS_OSX */
 #include <sys/priv.h>
 #include <sys/socket.h>
 #include <sys/socketvar.h>
@@ -87,18 +85,12 @@
 
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
-#if INET6
 #include <netinet/ip6.h>
-#endif
 #include <netinet/in_pcb.h>
-#if INET6
 #include <netinet6/in6_pcb.h>
-#endif
 #include <netinet/in_var.h>
 #include <netinet/ip_var.h>
-#if INET6
 #include <netinet6/ip6_var.h>
-#endif
 #include <netinet/tcp.h>
 #include <netinet/tcp_fsm.h>
 #include <netinet/tcp_seq.h>
@@ -135,11 +127,9 @@ static int tcp_get_mpkl_send_info(struct mbuf *, struct so_mpkl_send_info *);
  */
 static int      tcp_attach(struct socket *, struct proc *);
 static int      tcp_connect(struct tcpcb *, struct sockaddr *, struct proc *);
-#if INET6
 static int      tcp6_connect(struct tcpcb *, struct sockaddr *, struct proc *);
 static int      tcp6_usr_connect(struct socket *, struct sockaddr *,
     struct proc *);
-#endif /* INET6 */
 static struct tcpcb *tcp_disconnect(struct tcpcb *);
 static struct tcpcb *tcp_usrclosed(struct tcpcb *);
 extern void tcp_sbrcv_trim(struct tcpcb *tp, struct sockbuf *sb);
@@ -189,7 +179,7 @@ tcp_usr_attach(struct socket *so, __unused int proto, struct proc *p)
 	}
 
 	if ((so->so_options & SO_LINGER) && so->so_linger == 0) {
-		so->so_linger = TCP_LINGERTIME * hz;
+		so->so_linger = (short)(TCP_LINGERTIME * hz);
 	}
 	tp = sototcpcb(so);
 out:
@@ -232,18 +222,18 @@ out:
 }
 
 #if NECP
-#define COMMON_START()  TCPDEBUG0;                                      \
+#define COMMON_START_ALLOW_FLOW_DIVERT(allow)  TCPDEBUG0;               \
 do {                                                                    \
 	if (inp == NULL || inp->inp_state == INPCB_STATE_DEAD)          \
 	        return (EINVAL);                                        \
-	if (necp_socket_should_use_flow_divert(inp))                    \
+	if (!(allow) && necp_socket_should_use_flow_divert(inp))        \
 	        return (EPROTOTYPE);                                    \
 	tp = intotcpcb(inp);                                            \
 	TCPDEBUG1();                                                    \
 	calculate_tcp_clock();                                          \
 } while (0)
 #else /* NECP */
-#define COMMON_START()  TCPDEBUG0;                                      \
+#define COMMON_START_ALLOW_FLOW_DIVERT(allow)  TCPDEBUG0;               \
 do {                                                                    \
 	if (inp == NULL || inp->inp_state == INPCB_STATE_DEAD)          \
 	        return (EINVAL);                                        \
@@ -253,6 +243,7 @@ do {                                                                    \
 } while (0)
 #endif /* !NECP */
 
+#define COMMON_START() COMMON_START_ALLOW_FLOW_DIVERT(false)
 #define COMMON_END(req) out: TCPDEBUG2(req); return error; goto out
 
 
@@ -278,7 +269,7 @@ tcp_usr_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	struct tcpcb *tp;
 	struct sockaddr_in *sinp;
 
-	COMMON_START();
+	COMMON_START_ALLOW_FLOW_DIVERT(true);
 
 	if (nam->sa_family != 0 && nam->sa_family != AF_INET) {
 		error = EAFNOSUPPORT;
@@ -313,7 +304,6 @@ tcp_usr_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	COMMON_END(PRU_BIND);
 }
 
-#if INET6
 static int
 tcp6_usr_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 {
@@ -322,7 +312,7 @@ tcp6_usr_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	struct tcpcb *tp;
 	struct sockaddr_in6 *sin6p;
 
-	COMMON_START();
+	COMMON_START_ALLOW_FLOW_DIVERT(true);
 
 	if (nam->sa_family != 0 && nam->sa_family != AF_INET6) {
 		error = EAFNOSUPPORT;
@@ -360,7 +350,6 @@ tcp6_usr_bind(struct socket *so, struct sockaddr *nam, struct proc *p)
 	}
 	COMMON_END(PRU_BIND);
 }
-#endif /* INET6 */
 
 /*
  * Prepare to accept connections.
@@ -393,7 +382,6 @@ tcp_usr_listen(struct socket *so, struct proc *p)
 	COMMON_END(PRU_LISTEN);
 }
 
-#if INET6
 static int
 tcp6_usr_listen(struct socket *so, struct proc *p)
 {
@@ -415,7 +403,6 @@ tcp6_usr_listen(struct socket *so, struct proc *p)
 	TCP_LOG_LISTEN(tp, error);
 	COMMON_END(PRU_LISTEN);
 }
-#endif /* INET6 */
 
 static int
 tcp_connect_complete(struct socket *so)
@@ -426,7 +413,7 @@ tcp_connect_complete(struct socket *so)
 
 	/* TFO delays the tcp_output until later, when the app calls write() */
 	if (so->so_flags1 & SOF1_PRECONNECT_DATA) {
-		if (!necp_socket_is_allowed_to_send_recv(sotoinpcb(so), NULL, NULL, NULL, NULL)) {
+		if (!necp_socket_is_allowed_to_send_recv(sotoinpcb(so), NULL, 0, NULL, NULL, NULL, NULL)) {
 			TCP_LOG_DROP_NECP(NULL, NULL, tp, true);
 			return EHOSTUNREACH;
 		}
@@ -487,16 +474,10 @@ tcp_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 #endif /* CONTENT_FILTER */
 #if FLOW_DIVERT
 	if (necp_socket_should_use_flow_divert(inp)) {
-		uint32_t fd_ctl_unit = necp_socket_get_flow_divert_control_unit(inp);
-		if (fd_ctl_unit > 0) {
-			error = flow_divert_pcb_init(so, fd_ctl_unit);
-			if (error == 0) {
-				error = flow_divert_connect_out(so, nam, p);
-			}
-		} else {
-			error = ENETDOWN;
+		error = flow_divert_pcb_init(so);
+		if (error == 0) {
+			error = flow_divert_connect_out(so, nam, p);
 		}
-
 		return error;
 	}
 #endif /* FLOW_DIVERT */
@@ -580,11 +561,9 @@ tcp_usr_connectx_common(struct socket *so, int af,
 	case AF_INET:
 		error = tcp_usr_connect(so, dst, p);
 		break;
-#if INET6
 	case AF_INET6:
 		error = tcp6_usr_connect(so, dst, p);
 		break;
-#endif /* INET6 */
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
@@ -644,7 +623,6 @@ tcp_usr_connectx(struct socket *so, struct sockaddr *src,
 	           pcid, flags, arg, arglen, uio, bytes_written);
 }
 
-#if INET6
 static int
 tcp6_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 {
@@ -674,16 +652,10 @@ tcp6_usr_connect(struct socket *so, struct sockaddr *nam, struct proc *p)
 #endif /* CONTENT_FILTER */
 #if FLOW_DIVERT
 	if (necp_socket_should_use_flow_divert(inp)) {
-		uint32_t fd_ctl_unit = necp_socket_get_flow_divert_control_unit(inp);
-		if (fd_ctl_unit > 0) {
-			error = flow_divert_pcb_init(so, fd_ctl_unit);
-			if (error == 0) {
-				error = flow_divert_connect_out(so, nam, p);
-			}
-		} else {
-			error = ENETDOWN;
+		error = flow_divert_pcb_init(so);
+		if (error == 0) {
+			error = flow_divert_connect_out(so, nam, p);
 		}
-
 		return error;
 	}
 #endif /* FLOW_DIVERT */
@@ -750,7 +722,6 @@ tcp6_usr_connectx(struct socket *so, struct sockaddr*src,
 	return tcp_usr_connectx_common(so, AF_INET6, src, dst, p, ifscope, aid,
 	           pcid, flags, arg, arglen, uio, bytes_written);
 }
-#endif /* INET6 */
 
 /*
  * Initiate disconnect from peer.
@@ -833,7 +804,6 @@ tcp_usr_accept(struct socket *so, struct sockaddr **nam)
 	COMMON_END(PRU_ACCEPT);
 }
 
-#if INET6
 static int
 tcp6_usr_accept(struct socket *so, struct sockaddr **nam)
 {
@@ -866,7 +836,6 @@ tcp6_usr_accept(struct socket *so, struct sockaddr **nam)
 	in6_mapped_peeraddr(so, nam);
 	COMMON_END(PRU_ACCEPT);
 }
-#endif /* INET6 */
 
 /*
  * Mark the connection as being incapable of further output.
@@ -944,7 +913,7 @@ tcp_usr_shutdown(struct socket *so)
  * After a receive, possibly send window update to peer.
  */
 static int
-tcp_usr_rcvd(struct socket *so, __unused int flags)
+tcp_usr_rcvd(struct socket *so, int flags)
 {
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
@@ -956,6 +925,10 @@ tcp_usr_rcvd(struct socket *so, __unused int flags)
 		goto out;
 	}
 	tcp_sbrcv_trim(tp, &so->so_rcv);
+
+	if (flags & MSG_WAITALL) {
+		tp->t_flags |= TF_ACKNOW;
+	}
 
 	/*
 	 * This tcp_output is solely there to trigger window-updates.
@@ -1011,14 +984,11 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 	int error = 0;
 	struct inpcb *inp = sotoinpcb(so);
 	struct tcpcb *tp;
-	uint32_t msgpri = MSG_PRI_DEFAULT;
 	uint32_t mpkl_len = 0; /* length of mbuf chain */
 	uint32_t mpkl_seq; /* sequence number where new data is added */
 	struct so_mpkl_send_info mpkl_send_info = {};
 
-#if INET6
 	int isipv6;
-#endif
 	TCPDEBUG0;
 
 	if (inp == NULL || inp->inp_state == INPCB_STATE_DEAD
@@ -1048,9 +1018,7 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 		TCPDEBUG1();
 		goto out;
 	}
-#if INET6
 	isipv6 = nam && nam->sa_family == AF_INET6;
-#endif /* INET6 */
 	tp = intotcpcb(inp);
 	TCPDEBUG1();
 
@@ -1068,19 +1036,6 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 	}
 
 	if (control != NULL) {
-		if (so->so_flags & SOF_ENABLE_MSGS) {
-			/* Get the msg priority from control mbufs */
-			error = tcp_get_msg_priority(control, &msgpri);
-			if (error) {
-				m_freem(control);
-				if (m != NULL) {
-					m_freem(m);
-				}
-				control = NULL;
-				m = NULL;
-				goto out;
-			}
-		}
 		if (control->m_len > 0 && net_mpklog_enabled) {
 			error = tcp_get_mpkl_send_info(control, &mpkl_send_info);
 			/*
@@ -1106,22 +1061,12 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 		control = NULL;
 	}
 
-	if (so->so_flags & SOF_ENABLE_MSGS) {
-		VERIFY(m->m_flags & M_PKTHDR);
-		m->m_pkthdr.msg_pri = msgpri;
-	}
-
 	/* MPTCP sublow socket buffers must not be compressed */
 	VERIFY(!(so->so_flags & SOF_MP_SUBFLOW) ||
 	    (so->so_snd.sb_flags & SB_NOCOMPRESS));
 
 	if (!(flags & PRUS_OOB) || (so->so_flags1 & SOF1_PRECONNECT_DATA)) {
-		/* Call msg send if message delivery is enabled */
-		if (so->so_flags & SOF_ENABLE_MSGS) {
-			sbappendmsg_snd(&so->so_snd, m);
-		} else {
-			sbappendstream(&so->so_snd, m);
-		}
+		sbappendstream(&so->so_snd, m);
 
 		if (nam && tp->t_state < TCPS_SYN_SENT) {
 			/*
@@ -1130,12 +1075,11 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 			 * initialize maxseg/maxopd using peer's cached
 			 * MSS.
 			 */
-#if INET6
 			if (isipv6) {
 				error = tcp6_connect(tp, nam, p);
-			} else
-#endif /* INET6 */
-			error = tcp_connect(tp, nam, p);
+			} else {
+				error = tcp_connect(tp, nam, p);
+			}
 			if (error) {
 				TCP_LOG_CONNECT(tp, true, error);
 				goto out;
@@ -1191,12 +1135,11 @@ tcp_usr_send(struct socket *so, int flags, struct mbuf *m,
 			 * initialize maxseg/maxopd using peer's cached
 			 * MSS.
 			 */
-#if INET6
 			if (isipv6) {
 				error = tcp6_connect(tp, nam, p);
-			} else
-#endif /* INET6 */
-			error = tcp_connect(tp, nam, p);
+			} else {
+				error = tcp_connect(tp, nam, p);
+			}
 			if (error) {
 				TCP_LOG_CONNECT(tp, true, error);
 				goto out;
@@ -1345,7 +1288,6 @@ struct pr_usrreqs tcp_usrreqs = {
 	.pru_preconnect =       tcp_usr_preconnect,
 };
 
-#if INET6
 struct pr_usrreqs tcp6_usrreqs = {
 	.pru_abort =            tcp_usr_abort,
 	.pru_accept =           tcp6_usr_accept,
@@ -1368,7 +1310,6 @@ struct pr_usrreqs tcp6_usrreqs = {
 	.pru_soreceive =        soreceive,
 	.pru_preconnect =       tcp_usr_preconnect,
 };
-#endif /* INET6 */
 
 /*
  * Common subroutine to open a TCP connection to remote host specified
@@ -1487,7 +1428,7 @@ skip_oinp:
 		inp->inp_flowhash = inp_calc_flowhash(inp);
 	}
 
-	tcp_set_max_rwinscale(tp, so, outif);
+	tcp_set_max_rwinscale(tp, so);
 
 	soisconnecting(so);
 	tcpstat.tcps_connattempt++;
@@ -1500,6 +1441,8 @@ skip_oinp:
 		nstat_route_connect_attempt(inp->inp_route.ro_rt);
 	}
 
+	tcp_add_fsw_flow(tp, outif);
+
 done:
 	if (outif != NULL) {
 		ifnet_release(outif);
@@ -1508,7 +1451,6 @@ done:
 	return error;
 }
 
-#if INET6
 static int
 tcp6_connect(struct tcpcb *tp, struct sockaddr *nam, struct proc *p)
 {
@@ -1588,7 +1530,7 @@ tcp6_connect(struct tcpcb *tp, struct sockaddr *nam, struct proc *p)
 		    (htonl(inp->inp_flowhash) & IPV6_FLOWLABEL_MASK);
 	}
 
-	tcp_set_max_rwinscale(tp, so, outif);
+	tcp_set_max_rwinscale(tp, so);
 
 	soisconnecting(so);
 	tcpstat.tcps_connattempt++;
@@ -1602,6 +1544,8 @@ tcp6_connect(struct tcpcb *tp, struct sockaddr *nam, struct proc *p)
 		nstat_route_connect_attempt(inp->inp_route.ro_rt);
 	}
 
+	tcp_add_fsw_flow(tp, outif);
+
 done:
 	if (outif != NULL) {
 		ifnet_release(outif);
@@ -1609,7 +1553,6 @@ done:
 
 	return error;
 }
-#endif /* INET6 */
 
 /*
  * Export TCP internal state information via a struct tcp_info
@@ -1621,7 +1564,7 @@ tcp_fill_info(struct tcpcb *tp, struct tcp_info *ti)
 
 	bzero(ti, sizeof(*ti));
 
-	ti->tcpi_state = tp->t_state;
+	ti->tcpi_state = (uint8_t)tp->t_state;
 	ti->tcpi_flowhash = inp->inp_flowhash;
 
 	if (tp->t_state > TCPS_LISTEN) {
@@ -1691,7 +1634,7 @@ tcp_fill_info(struct tcpcb *tp, struct tcp_info *ti)
 		ti->tcpi_rxoutoforderbytes = tp->t_stat.rxoutoforderbytes;
 
 		if (tp->t_state > TCPS_LISTEN) {
-			ti->tcpi_synrexmits = tp->t_stat.rxmitsyns;
+			ti->tcpi_synrexmits = (uint8_t)tp->t_stat.rxmitsyns;
 		}
 		ti->tcpi_cell_rxpackets = inp->inp_cstat->rxpackets;
 		ti->tcpi_cell_rxbytes = inp->inp_cstat->rxbytes;
@@ -1801,13 +1744,13 @@ tcp_fill_info_for_info_tuple(struct info_tuple *itpl, struct tcp_info *ti)
 		ina6_local = itpl->itpl_local_sin6.sin6_addr;
 		if (IN6_IS_SCOPE_LINKLOCAL(&ina6_local) &&
 		    itpl->itpl_local_sin6.sin6_scope_id) {
-			ina6_local.s6_addr16[1] = htons(itpl->itpl_local_sin6.sin6_scope_id);
+			ina6_local.s6_addr16[1] = htons((uint16_t)itpl->itpl_local_sin6.sin6_scope_id);
 		}
 
 		ina6_remote = itpl->itpl_remote_sin6.sin6_addr;
 		if (IN6_IS_SCOPE_LINKLOCAL(&ina6_remote) &&
 		    itpl->itpl_remote_sin6.sin6_scope_id) {
-			ina6_remote.s6_addr16[1] = htons(itpl->itpl_remote_sin6.sin6_scope_id);
+			ina6_remote.s6_addr16[1] = htons((uint16_t)itpl->itpl_remote_sin6.sin6_scope_id);
 		}
 
 		inp = in6_pcblookup_hash(pcbinfo,
@@ -1842,7 +1785,7 @@ tcp_connection_fill_info(struct tcpcb *tp, struct tcp_connection_info *tci)
 	struct inpcb *inp = tp->t_inpcb;
 
 	bzero(tci, sizeof(*tci));
-	tci->tcpi_state = tp->t_state;
+	tci->tcpi_state = (uint8_t)tp->t_state;
 	if (tp->t_state > TCPS_LISTEN) {
 		if (TSTMP_SUPPORTED(tp)) {
 			tci->tcpi_options |= TCPCI_OPT_TIMESTAMPS;
@@ -2085,12 +2028,11 @@ tcp_ctloutput(struct socket *so, struct sockopt *sopt)
 	if (sopt->sopt_level != IPPROTO_TCP &&
 	    !(sopt->sopt_level == SOL_SOCKET && (sopt->sopt_name == SO_FLUSH ||
 	    sopt->sopt_name == SO_TRAFFIC_MGT_BACKGROUND))) {
-#if INET6
 		if (SOCK_CHECK_DOM(so, PF_INET6)) {
 			error = ip6_ctloutput(so, sopt);
-		} else
-#endif /* INET6 */
-		error = ip_ctloutput(so, sopt);
+		} else {
+			error = ip_ctloutput(so, sopt);
+		}
 		return error;
 	}
 	tp = intotcpcb(inp);
@@ -2383,7 +2325,7 @@ tcp_ctloutput(struct socket *so, struct sockopt *sopt)
 					mptcp_reset_keepalive(tp);
 				}
 			} else {
-				tp->t_adaptive_rtimo = optval;
+				tp->t_adaptive_rtimo = (uint8_t)optval;
 			}
 			break;
 		case TCP_ADAPTIVE_WRITE_TIMEOUT:
@@ -2397,50 +2339,7 @@ tcp_ctloutput(struct socket *so, struct sockopt *sopt)
 				error = EINVAL;
 				break;
 			} else {
-				tp->t_adaptive_wtimo = optval;
-			}
-			break;
-		case TCP_ENABLE_MSGS:
-			error = sooptcopyin(sopt, &optval, sizeof(optval),
-			    sizeof(optval));
-			if (error) {
-				break;
-			}
-			if (optval < 0 || optval > 1) {
-				error = EINVAL;
-			} else if (optval == 1) {
-				/*
-				 * Check if messages option is already
-				 * enabled, if so return.
-				 */
-				if (so->so_flags & SOF_ENABLE_MSGS) {
-					VERIFY(so->so_msg_state != NULL);
-					break;
-				}
-
-				/*
-				 * allocate memory for storing message
-				 * related state
-				 */
-				VERIFY(so->so_msg_state == NULL);
-				MALLOC(so->so_msg_state,
-				    struct msg_state *,
-				    sizeof(struct msg_state),
-				    M_TEMP, M_WAITOK | M_ZERO);
-				if (so->so_msg_state == NULL) {
-					error = ENOMEM;
-					break;
-				}
-
-				/* Enable message delivery */
-				so->so_flags |= SOF_ENABLE_MSGS;
-			} else {
-				/*
-				 * Can't disable message delivery on socket
-				 * because of restrictions imposed by
-				 * encoding/decoding
-				 */
-				error = EINVAL;
+				tp->t_adaptive_wtimo = (uint8_t)optval;
 			}
 			break;
 		case TCP_SENDMOREACKS:
@@ -2748,14 +2647,6 @@ tcp_ctloutput(struct socket *so, struct sockopt *sopt)
 				optval = 0;
 			}
 			break;
-
-		case TCP_ENABLE_MSGS:
-			if (so->so_flags & SOF_ENABLE_MSGS) {
-				optval = 1;
-			} else {
-				optval = 0;
-			}
-			break;
 		case TCP_SENDMOREACKS:
 			if (tp->t_flagsext & TF_NOSTRETCHACK) {
 				optval = 1;
@@ -2898,9 +2789,7 @@ tcp_attach(struct socket *so, struct proc *p)
 	struct tcpcb *tp;
 	struct inpcb *inp;
 	int error;
-#if INET6
 	int isipv6 = SOCK_CHECK_DOM(so, PF_INET6) != 0;
-#endif
 
 	error = in_pcballoc(so, &tcbinfo, p);
 	if (error) {
@@ -2927,24 +2816,22 @@ tcp_attach(struct socket *so, struct proc *p)
 		so->so_snd.sb_flags |= SB_AUTOSIZE;
 	}
 
-#if INET6
 	if (isipv6) {
 		inp->inp_vflag |= INP_IPV6;
 		inp->in6p_hops = -1;    /* use kernel default */
-	} else
-#endif /* INET6 */
-	inp->inp_vflag |= INP_IPV4;
+	} else {
+		inp->inp_vflag |= INP_IPV4;
+	}
 	tp = tcp_newtcpcb(inp);
 	if (tp == NULL) {
 		int nofd = so->so_state & SS_NOFDREF;   /* XXX */
 
 		so->so_state &= ~SS_NOFDREF;    /* don't free the socket yet */
-#if INET6
 		if (isipv6) {
 			in6_pcbdetach(inp);
-		} else
-#endif /* INET6 */
-		in_pcbdetach(inp);
+		} else {
+			in_pcbdetach(inp);
+		}
 		so->so_state |= nofd;
 		return ENOBUFS;
 	}
@@ -3061,7 +2948,6 @@ tcp_out_cksum_stats(u_int32_t len)
 	tcpstat.tcps_snd_swcsum_bytes += len;
 }
 
-#if INET6
 void
 tcp_in6_cksum_stats(u_int32_t len)
 {
@@ -3074,38 +2960,6 @@ tcp_out6_cksum_stats(u_int32_t len)
 {
 	tcpstat.tcps_snd6_swcsum++;
 	tcpstat.tcps_snd6_swcsum_bytes += len;
-}
-#endif /* INET6 */
-
-/*
- * When messages are enabled on a TCP socket, the message priority
- * is sent as a control message. This function will extract it.
- */
-int
-tcp_get_msg_priority(struct mbuf *control, uint32_t *msgpri)
-{
-	struct cmsghdr *cm;
-
-	if (control == NULL) {
-		return EINVAL;
-	}
-
-	for (cm = M_FIRST_CMSGHDR(control);
-	    is_cmsg_valid(control, cm);
-	    cm = M_NXT_CMSGHDR(control, cm)) {
-		if (cm->cmsg_level == SOL_SOCKET &&
-		    cm->cmsg_type == SCM_MSG_PRIORITY) {
-			if (cm->cmsg_len != CMSG_LEN(sizeof(uint32_t))) {
-				return EINVAL;
-			}
-			*msgpri = *(uint32_t *)(void *)CMSG_DATA(cm);
-			if (*msgpri < MSG_PRI_MIN || *msgpri > MSG_PRI_MAX) {
-				return EINVAL;
-			}
-			break;
-		}
-	}
-	return 0;
 }
 
 int

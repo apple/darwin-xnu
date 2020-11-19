@@ -117,11 +117,7 @@ mach_port_destroy(
 {
 	kern_return_t rv;
 
-	rv = _kernelrpc_mach_port_destroy_trap(task, name);
-
-	if (rv == MACH_SEND_INVALID_DEST) {
-		rv = _kernelrpc_mach_port_destroy(task, name);
-	}
+	rv = _kernelrpc_mach_port_destroy(task, name);
 
 	return rv;
 }

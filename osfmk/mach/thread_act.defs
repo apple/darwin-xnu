@@ -102,7 +102,7 @@ act_get_state_to_user(
 #else
 act_get_state(
 #endif
-		target_act	: thread_act_t;
+		target_act	: thread_read_t;
 		flavor		: int;
 	out	old_state	: thread_state_t, CountInOut);
 
@@ -136,7 +136,7 @@ thread_get_state_to_user(
 #else
 thread_get_state(
 #endif
-		target_act	: thread_act_t;
+		target_act	: thread_read_t;
 		flavor		: thread_state_flavor_t;
 	out	old_state	: thread_state_t, CountInOut);
 
@@ -214,10 +214,17 @@ thread_depress_abort(
  *	Returns the current value of the selected special port
  *	associated with the target thread.
  */
-routine thread_get_special_port(
-		thr_act		: thread_act_t;
+routine
+#ifdef KERNEL_SERVER
+thread_get_special_port_from_user(
+		port		: mach_port_t;
+#else
+thread_get_special_port(
+		thr_act		: thread_inspect_t;
+#endif
 		which_port	: int;
 	out	special_port	: mach_port_t);
+
 
 /*
  *	Set one of the special ports associated with the
@@ -249,8 +256,14 @@ routine		thread_set_exception_ports(
 /*
  * Lookup some of the old exception handlers for a thread
  */
-routine		thread_get_exception_ports(
-			thread		: thread_inspect_t;
+routine		
+#if KERNEL_SERVER
+thread_get_exception_ports_from_user(
+			port        : mach_port_t;
+#else
+thread_get_exception_ports(
+			thread		: thread_act_t;
+#endif
 			exception_mask	: exception_mask_t;
 		  out	masks		: exception_mask_array_t;
 		  out	old_handlers	: exception_handler_array_t, SameCount;
@@ -337,7 +350,7 @@ routine thread_assign_default(
  *	Get current assignment for thread.
  */
 routine thread_get_assignment(
-		thread		: thread_act_t;
+		thread		: thread_inspect_t;
 	out	assigned_set	: processor_set_name_t);
 
 /*
@@ -351,7 +364,7 @@ routine PREFIX(thread_set_policy)(
 		limit		: policy_limit_t);
 
 routine thread_get_mach_voucher(
-		thr_act		: thread_act_t;
+		thr_act		: thread_read_t;
 		which		: mach_voucher_selector_t;
 	out	voucher		: ipc_voucher_t);
 
@@ -363,5 +376,15 @@ routine thread_swap_mach_voucher(
 		thr_act		: thread_act_t;
 		new_voucher	: ipc_voucher_t;
 	inout	old_voucher	: ipc_voucher_t);
+
+routine thread_convert_thread_state(
+		thread		: thread_act_t;
+		direction	: int;
+		flavor		: thread_state_flavor_t;
+		in_state	: thread_state_t;
+	out	out_state	: thread_state_t, CountInOut);
+
+#ifdef XNU_KERNEL_PRIVATE
+#endif
 
 /* vim: set ft=c : */

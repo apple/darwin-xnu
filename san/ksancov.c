@@ -28,7 +28,6 @@
 
 #include <string.h>
 #include <stdbool.h>
-#include <stdatomic.h>
 
 #include <kern/assert.h>
 #include <kern/cpu_data.h>
@@ -48,14 +47,13 @@
 #include <mach/vm_map.h>
 #include <mach/vm_param.h>
 #include <mach/machine/vm_param.h>
-#include <machine/atomic.h>
 
 #include <sys/stat.h> /* dev_t */
 #include <miscfs/devfs/devfs.h> /* must come after sys/stat.h */
 #include <sys/conf.h> /* must come after sys/stat.h */
 
 #include <libkern/libkern.h>
-#include <libkern/OSAtomic.h>
+#include <os/atomic_private.h>
 #include <os/overflow.h>
 
 #include <san/ksancov.h>
@@ -70,17 +68,7 @@ typedef struct uthread * uthread_t;
 
 #define USE_PC_TABLE 0
 #define KSANCOV_MAX_DEV 64
-
-extern boolean_t ml_at_interrupt_context(void);
-extern boolean_t ml_get_interrupts_enabled(void);
-
-static int ksancov_detach(dev_t dev);
-
-static int dev_major;
-static size_t nedges = 0;
-static uint32_t __unused npcs = 0;
-
-static _Atomic unsigned active_devs;
+#define KSANCOV_MAX_PCS (1024U * 64)  /* default to 256k buffer => 64k pcs */
 
 enum {
 	KS_MODE_NONE,
@@ -102,18 +90,58 @@ struct ksancov_dev {
 
 	thread_t thread;
 	dev_t dev;
+	lck_mtx_t lock;
 };
+typedef struct ksancov_dev * ksancov_dev_t;
+
+extern boolean_t ml_at_interrupt_context(void);
+extern boolean_t ml_get_interrupts_enabled(void);
+
+static void ksancov_detach(ksancov_dev_t);
+
+static int dev_major;
+static size_t nedges = 0;
+static uint32_t __unused npcs = 0;
+
+static _Atomic unsigned active_devs;
+
+static LCK_GRP_DECLARE(ksancov_lck_grp, "ksancov_lck_grp");
+static lck_rw_t *ksancov_devs_lck;
 
 /* array of devices indexed by devnode minor */
-static struct ksancov_dev *ksancov_devs[KSANCOV_MAX_DEV];
-
+static ksancov_dev_t ksancov_devs[KSANCOV_MAX_DEV];
 static struct ksancov_edgemap *ksancov_edgemap;
 
-static inline struct ksancov_dev *
-get_dev(dev_t dev)
+
+static ksancov_dev_t
+create_dev(dev_t dev)
 {
-	int mn = minor(dev);
-	return ksancov_devs[mn];
+	ksancov_dev_t d = kalloc_tag(sizeof(struct ksancov_dev), VM_KERN_MEMORY_DIAG);
+	if (!d) {
+		return NULL;
+	}
+
+	d->mode = KS_MODE_NONE;
+	d->trace = NULL;
+	d->sz = 0;
+	d->maxpcs = KSANCOV_MAX_PCS;
+	d->dev = dev;
+	d->thread = THREAD_NULL;
+	lck_mtx_init(&d->lock, &ksancov_lck_grp, LCK_ATTR_NULL);
+
+	return d;
+}
+
+static void
+free_dev(ksancov_dev_t d)
+{
+	if (d->mode == KS_MODE_TRACE && d->trace) {
+		kmem_free(kernel_map, (uintptr_t)d->trace, d->sz);
+	} else if (d->mode == KS_MODE_COUNTERS && d->counters) {
+		kmem_free(kernel_map, (uintptr_t)d->counters, d->sz);
+	}
+	lck_mtx_destroy(&d->lock, &ksancov_lck_grp);
+	kfree(d, sizeof(struct ksancov_dev));
 }
 
 void
@@ -134,7 +162,7 @@ trace_pc_guard(uint32_t *guardp, void *caller)
 		if (__improbable(gd && !(gd & GUARD_SEEN) && ksancov_edgemap)) {
 			size_t idx = gd & GUARD_IDX_MASK;
 			if (idx < ksancov_edgemap->nedges) {
-				ksancov_edgemap->addrs[idx] = (uint32_t)(VM_KERNEL_UNSLIDE(caller) - VM_MIN_KERNEL_ADDRESS - 1);
+				ksancov_edgemap->addrs[idx] = (uint32_t)(VM_KERNEL_UNSLIDE(caller) - KSANCOV_PC_OFFSET - 1);
 				*guardp |= GUARD_SEEN;
 			}
 		}
@@ -149,14 +177,14 @@ trace_pc_guard(uint32_t *guardp, void *caller)
 		return;
 	}
 
-	uint32_t pc = (uint32_t)(VM_KERNEL_UNSLIDE(caller) - VM_MIN_KERNEL_ADDRESS - 1);
+	uint32_t pc = (uint32_t)(VM_KERNEL_UNSLIDE(caller) - KSANCOV_PC_OFFSET - 1);
 
 	thread_t th = current_thread();
 	if (__improbable(th == THREAD_NULL)) {
 		return;
 	}
 
-	struct ksancov_dev *dev = *(struct ksancov_dev **)__sanitizer_get_thread_data(th);
+	ksancov_dev_t dev = *(ksancov_dev_t *)__sanitizer_get_thread_data(th);
 	if (__probable(dev == NULL)) {
 		return;
 	}
@@ -211,7 +239,7 @@ __sanitizer_cov_trace_pc_guard_init(uint32_t *start, uint32_t *stop)
 	for (; start != stop; start++) {
 		if (*start == 0) {
 			if (nedges < KSANCOV_MAX_EDGES) {
-				*start = ++nedges;
+				*start = (uint32_t)++nedges;
 			}
 		}
 	}
@@ -295,13 +323,8 @@ ksancov_do_map(uintptr_t base, size_t sz, vm_prot_t prot)
  * map the sancov buffer into the current process
  */
 static int
-ksancov_map(dev_t dev, void **bufp, size_t *sizep)
+ksancov_map(ksancov_dev_t d, uintptr_t *bufp, size_t *sizep)
 {
-	struct ksancov_dev *d = get_dev(dev);
-	if (!d) {
-		return EINVAL;
-	}
-
 	uintptr_t addr;
 	size_t size = d->sz;
 
@@ -324,8 +347,9 @@ ksancov_map(dev_t dev, void **bufp, size_t *sizep)
 		return ENOMEM;
 	}
 
-	*bufp = buf;
+	*bufp = (uintptr_t)buf;
 	*sizep = size;
+
 	return 0;
 }
 
@@ -333,13 +357,8 @@ ksancov_map(dev_t dev, void **bufp, size_t *sizep)
  * map the edge -> pc mapping as read-only
  */
 static int
-ksancov_map_edgemap(dev_t dev, void **bufp, size_t *sizep)
+ksancov_map_edgemap(uintptr_t *bufp, size_t *sizep)
 {
-	struct ksancov_dev *d = get_dev(dev);
-	if (!d) {
-		return EINVAL;
-	}
-
 	uintptr_t addr = (uintptr_t)ksancov_edgemap;
 	size_t size = sizeof(struct ksancov_edgemap) + ksancov_edgemap->nedges * sizeof(uint32_t);
 
@@ -348,11 +367,10 @@ ksancov_map_edgemap(dev_t dev, void **bufp, size_t *sizep)
 		return ENOMEM;
 	}
 
-	*bufp = buf;
+	*bufp = (uintptr_t)buf;
 	*sizep = size;
 	return 0;
 }
-
 
 /*
  * Device node management
@@ -362,35 +380,34 @@ static int
 ksancov_open(dev_t dev, int flags, int devtype, proc_t p)
 {
 #pragma unused(flags,devtype,p)
-	if (minor(dev) >= KSANCOV_MAX_DEV) {
+	const int minor_num = minor(dev);
+
+	if (minor_num >= KSANCOV_MAX_DEV) {
 		return EBUSY;
 	}
 
-	/* allocate a device entry */
-	struct ksancov_dev *d = kalloc_tag(sizeof(struct ksancov_dev), VM_KERN_MEMORY_DIAG);
-	if (!d) {
-		return ENOMEM;
+	lck_rw_lock_exclusive(ksancov_devs_lck);
+
+	if (ksancov_devs[minor_num]) {
+		lck_rw_unlock_exclusive(ksancov_devs_lck);
+		return EBUSY;
 	}
 
-	d->mode = KS_MODE_NONE;
-	d->trace = NULL;
-	d->maxpcs = 1024U * 64; /* default to 256k buffer => 64k pcs */
-	d->dev = dev;
-	d->thread = THREAD_NULL;
+	ksancov_dev_t d = create_dev(dev);
+	if (!d) {
+		lck_rw_unlock_exclusive(ksancov_devs_lck);
+		return ENOMEM;
+	}
+	ksancov_devs[minor_num] = d;
 
-	ksancov_devs[minor(dev)] = d;
+	lck_rw_unlock_exclusive(ksancov_devs_lck);
 
 	return 0;
 }
 
 static int
-ksancov_trace_alloc(dev_t dev, size_t maxpcs)
+ksancov_trace_alloc(ksancov_dev_t d, size_t maxpcs)
 {
-	struct ksancov_dev *d = get_dev(dev);
-	if (!d) {
-		return EINVAL;
-	}
-
 	if (d->mode != KS_MODE_NONE) {
 		return EBUSY; /* trace/counters already created */
 	}
@@ -410,10 +427,10 @@ ksancov_trace_alloc(dev_t dev, size_t maxpcs)
 
 	struct ksancov_trace *trace = (struct ksancov_trace *)buf;
 	trace->magic = KSANCOV_TRACE_MAGIC;
-	trace->offset = VM_MIN_KERNEL_ADDRESS;
-	trace->head = 0;
-	trace->enabled = 0;
-	trace->maxpcs = maxpcs;
+	trace->offset = KSANCOV_PC_OFFSET;
+	os_atomic_init(&trace->head, 0);
+	os_atomic_init(&trace->enabled, 0);
+	trace->maxpcs = (uint32_t)maxpcs;
 
 	d->trace = trace;
 	d->sz = sz;
@@ -424,13 +441,8 @@ ksancov_trace_alloc(dev_t dev, size_t maxpcs)
 }
 
 static int
-ksancov_counters_alloc(dev_t dev)
+ksancov_counters_alloc(ksancov_dev_t d)
 {
-	struct ksancov_dev *d = get_dev(dev);
-	if (!d) {
-		return EINVAL;
-	}
-
 	if (d->mode != KS_MODE_NONE) {
 		return EBUSY; /* trace/counters already created */
 	}
@@ -448,7 +460,7 @@ ksancov_counters_alloc(dev_t dev)
 	struct ksancov_counters *counters = (struct ksancov_counters *)buf;
 	counters->magic = KSANCOV_COUNTERS_MAGIC;
 	counters->nedges = ksancov_edgemap->nedges;
-	counters->enabled = 0;
+	os_atomic_init(&counters->enabled, 0);
 
 	d->counters = counters;
 	d->sz = sz;
@@ -461,18 +473,10 @@ ksancov_counters_alloc(dev_t dev)
  * attach a thread to a ksancov dev instance
  */
 static int
-ksancov_attach(dev_t dev, thread_t th)
+ksancov_attach(ksancov_dev_t d, thread_t th)
 {
-	struct ksancov_dev *d = get_dev(dev);
-	if (!d) {
-		return EINVAL;
-	}
-
-	if (d->thread != THREAD_NULL) {
-		int ret = ksancov_detach(dev);
-		if (ret) {
-			return ret;
-		}
+	if (d->mode == KS_MODE_NONE) {
+		return EINVAL; /* not configured */
 	}
 
 	if (th != current_thread()) {
@@ -480,9 +484,13 @@ ksancov_attach(dev_t dev, thread_t th)
 		return EINVAL;
 	}
 
-	struct ksancov_dev **devp = (void *)__sanitizer_get_thread_data(th);
+	ksancov_dev_t *devp = (void *)__sanitizer_get_thread_data(th);
 	if (*devp) {
 		return EBUSY; /* one dev per thread */
+	}
+
+	if (d->thread != THREAD_NULL) {
+		ksancov_detach(d);
 	}
 
 	d->thread = th;
@@ -503,21 +511,16 @@ thread_wait(
 /*
  * disconnect thread from ksancov dev
  */
-static int
-ksancov_detach(dev_t dev)
+static void
+ksancov_detach(ksancov_dev_t d)
 {
-	struct ksancov_dev *d = get_dev(dev);
-	if (!d) {
-		return EINVAL;
-	}
-
 	if (d->thread == THREAD_NULL) {
 		/* no thread attached */
-		return 0;
+		return;
 	}
 
 	/* disconnect dev from thread */
-	struct ksancov_dev **devp = (void *)__sanitizer_get_thread_data(d->thread);
+	ksancov_dev_t *devp = (void *)__sanitizer_get_thread_data(d->thread);
 	if (*devp != NULL) {
 		assert(*devp == d);
 		os_atomic_store(devp, NULL, relaxed);
@@ -531,53 +534,39 @@ ksancov_detach(dev_t dev)
 	/* drop our thread reference */
 	thread_deallocate(d->thread);
 	d->thread = THREAD_NULL;
-
-	return 0;
 }
 
 static int
 ksancov_close(dev_t dev, int flags, int devtype, proc_t p)
 {
 #pragma unused(flags,devtype,p)
-	struct ksancov_dev *d = get_dev(dev);
+	const int minor_num = minor(dev);
+
+	lck_rw_lock_exclusive(ksancov_devs_lck);
+	ksancov_dev_t d = ksancov_devs[minor_num];
+	ksancov_devs[minor_num] = NULL; /* dev no longer discoverable */
+	lck_rw_unlock_exclusive(ksancov_devs_lck);
+
+	/*
+	 * No need to lock d here as there is and will be no one having its
+	 * reference except for this thread and the one which is going to
+	 * be detached below.
+	 */
+
 	if (!d) {
-		return EINVAL;
+		return ENXIO;
 	}
 
-	if (d->mode == KS_MODE_TRACE) {
-		struct ksancov_trace *trace = d->trace;
-		if (trace) {
-			/* trace allocated - delete it */
-
-			os_atomic_sub(&active_devs, 1, relaxed);
-			os_atomic_store(&trace->enabled, 0, relaxed); /* stop tracing */
-
-			ksancov_detach(dev);
-
-			/* free trace */
-			kmem_free(kernel_map, (uintptr_t)d->trace, d->sz);
-			d->trace = NULL;
-			d->sz = 0;
-		}
-	} else if (d->mode == KS_MODE_COUNTERS) {
-		struct ksancov_counters *counters = d->counters;
-		if (counters) {
-			os_atomic_sub(&active_devs, 1, relaxed);
-			os_atomic_store(&counters->enabled, 0, relaxed); /* stop tracing */
-
-			ksancov_detach(dev);
-
-			/* free counters */
-			kmem_free(kernel_map, (uintptr_t)d->counters, d->sz);
-			d->counters = NULL;
-			d->sz = 0;
-		}
+	if (d->mode == KS_MODE_TRACE && d->trace) {
+		os_atomic_sub(&active_devs, 1, relaxed);
+		os_atomic_store(&d->trace->enabled, 0, relaxed); /* stop tracing */
+	} else if (d->mode == KS_MODE_COUNTERS && d->counters) {
+		os_atomic_sub(&active_devs, 1, relaxed);
+		os_atomic_store(&d->counters->enabled, 0, relaxed);         /* stop tracing */
 	}
 
-	ksancov_devs[minor(dev)] = NULL; /* dev no longer discoverable */
-
-	/* free the ksancov device instance */
-	kfree(d, sizeof(struct ksancov_dev));
+	ksancov_detach(d);
+	free_dev(d);
 
 	return 0;
 }
@@ -628,74 +617,56 @@ static int
 ksancov_ioctl(dev_t dev, unsigned long cmd, caddr_t _data, int fflag, proc_t p)
 {
 #pragma unused(fflag,p)
-	int ret = 0;
+	struct ksancov_buf_desc *mcmd;
 	void *data = (void *)_data;
 
-	struct ksancov_dev *d = get_dev(dev);
+	lck_rw_lock_shared(ksancov_devs_lck);
+	ksancov_dev_t d = ksancov_devs[minor(dev)];
 	if (!d) {
-		return EINVAL; /* dev not open */
+		lck_rw_unlock_shared(ksancov_devs_lck);
+		return EINVAL;         /* dev not open */
 	}
 
-	if (cmd == KSANCOV_IOC_TRACE) {
-		size_t maxpcs = *(size_t *)data;
-		ret = ksancov_trace_alloc(dev, maxpcs);
-		if (ret) {
-			return ret;
-		}
-	} else if (cmd == KSANCOV_IOC_COUNTERS) {
-		ret = ksancov_counters_alloc(dev);
-		if (ret) {
-			return ret;
-		}
-	} else if (cmd == KSANCOV_IOC_MAP) {
-		struct ksancov_buf_desc *mcmd = (struct ksancov_buf_desc *)data;
+	int ret = 0;
 
-		if (d->mode == KS_MODE_NONE) {
-			return EINVAL; /* mode not configured */
-		}
-
-		/* map buffer into the userspace VA space */
-		void *buf;
-		size_t size;
-		ret = ksancov_map(dev, &buf, &size);
-		if (ret) {
-			return ret;
-		}
-
-		mcmd->ptr = (uintptr_t)buf;
-		mcmd->sz = size;
-	} else if (cmd == KSANCOV_IOC_MAP_EDGEMAP) {
-		struct ksancov_buf_desc *mcmd = (struct ksancov_buf_desc *)data;
-
-		/* map buffer into the userspace VA space */
-		void *buf;
-		size_t size;
-		ret = ksancov_map_edgemap(dev, &buf, &size);
-		if (ret) {
-			return ret;
-		}
-
-		mcmd->ptr = (uintptr_t)buf;
-		mcmd->sz = size;
-	} else if (cmd == KSANCOV_IOC_START) {
-		if (d->mode == KS_MODE_NONE) {
-			return EINVAL; /* not configured */
-		}
-
-		ret = ksancov_attach(dev, current_thread());
-		if (ret) {
-			return ret;
-		}
-	} else if (cmd == KSANCOV_IOC_NEDGES) {
-		size_t *nptr = (size_t *)data;
-		*nptr = nedges;
-	} else if (cmd == KSANCOV_IOC_TESTPANIC) {
-		uint64_t guess = *(uint64_t *)data;
-		ksancov_testpanic(guess);
-	} else {
-		/* unknown ioctl */
-		return ENODEV;
+	switch (cmd) {
+	case KSANCOV_IOC_TRACE:
+		lck_mtx_lock(&d->lock);
+		ret = ksancov_trace_alloc(d, *(size_t *)data);
+		lck_mtx_unlock(&d->lock);
+		break;
+	case KSANCOV_IOC_COUNTERS:
+		lck_mtx_lock(&d->lock);
+		ret = ksancov_counters_alloc(d);
+		lck_mtx_unlock(&d->lock);
+		break;
+	case KSANCOV_IOC_MAP:
+		mcmd = (struct ksancov_buf_desc *)data;
+		lck_mtx_lock(&d->lock);
+		ret = ksancov_map(d, &mcmd->ptr, &mcmd->sz);
+		lck_mtx_unlock(&d->lock);
+		break;
+	case KSANCOV_IOC_MAP_EDGEMAP:
+		mcmd = (struct ksancov_buf_desc *)data;
+		ret = ksancov_map_edgemap(&mcmd->ptr, &mcmd->sz);
+		break;
+	case KSANCOV_IOC_START:
+		lck_mtx_lock(&d->lock);
+		ret = ksancov_attach(d, current_thread());
+		lck_mtx_unlock(&d->lock);
+		break;
+	case KSANCOV_IOC_NEDGES:
+		*(size_t *)data = nedges;
+		break;
+	case KSANCOV_IOC_TESTPANIC:
+		ksancov_testpanic(*(uint64_t *)data);
+		break;
+	default:
+		ret = EINVAL;
+		break;
 	}
+
+	lck_rw_unlock_shared(ksancov_devs_lck);
 
 	return ret;
 }
@@ -705,7 +676,7 @@ ksancov_dev_clone(dev_t dev, int action)
 {
 #pragma unused(dev)
 	if (action == DEVFS_CLONE_ALLOC) {
-		for (size_t i = 0; i < KSANCOV_MAX_DEV; i++) {
+		for (int i = 0; i < KSANCOV_MAX_DEV; i++) {
 			if (ksancov_devs[i] == NULL) {
 				return i;
 			}
@@ -717,7 +688,7 @@ ksancov_dev_clone(dev_t dev, int action)
 	return -1;
 }
 
-static struct cdevsw
+static const struct cdevsw
     ksancov_cdev = {
 	.d_open =  ksancov_open,
 	.d_close = ksancov_close,
@@ -762,8 +733,10 @@ ksancov_init_dev(void)
 
 	ksancov_edgemap = (void *)buf;
 	ksancov_edgemap->magic = KSANCOV_EDGEMAP_MAGIC;
-	ksancov_edgemap->nedges = nedges;
-	ksancov_edgemap->offset = VM_MIN_KERNEL_ADDRESS;
+	ksancov_edgemap->nedges = (uint32_t)nedges;
+	ksancov_edgemap->offset = KSANCOV_PC_OFFSET;
+
+	ksancov_devs_lck = lck_rw_alloc_init(&ksancov_lck_grp, LCK_ATTR_NULL);
 
 	return 0;
 }

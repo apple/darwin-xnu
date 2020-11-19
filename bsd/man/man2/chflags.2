@@ -77,7 +77,7 @@ The file has been archived.
 The file may not be changed.
 .It SF_APPEND
 The file may only be appended to.
-.It SF_DATALESSFAULT
+.It SF_DATALESS 
 The file is a dataless placeholder.
 The system will attempt to materialize it when accessed according to the dataless file materialization policy of the accessing thread or process.
 See
@@ -100,7 +100,7 @@ and
 flags may only be set or unset by the super-user.
 .Pp
 The
-.Dq SF_DATALESSFAULT
+.Dq SF_DATALESS
 flag is an internal flag and may not be set from user space.
 .Sh RETURN VALUES
 Upon successful completion, a value of 0 is returned.

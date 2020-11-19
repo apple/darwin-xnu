@@ -29,17 +29,21 @@
 /* OSDictionary.cpp converted to C++ by gvdl on Fri 1998-10-30 */
 /* OSDictionary.cpp rewritten by gvdl on Fri 1998-10-30 */
 
+#define IOKIT_ENABLE_SHARED_PTR
 
-#include <libkern/c++/OSDictionary.h>
 #include <libkern/c++/OSArray.h>
-#include <libkern/c++/OSSymbol.h>
-#include <libkern/c++/OSSerialize.h>
-#include <libkern/c++/OSLib.h>
 #include <libkern/c++/OSCollectionIterator.h>
+#include <libkern/c++/OSDictionary.h>
+#include <libkern/c++/OSLib.h>
+#include <libkern/c++/OSSerialize.h>
+#include <libkern/c++/OSSharedPtr.h>
+#include <libkern/c++/OSSymbol.h>
+#include <os/cpp_util.h>
 
 #define super OSCollection
 
-OSDefineMetaClassAndStructors(OSDictionary, OSCollection)
+OSDefineMetaClassAndStructorsWithZone(OSDictionary, OSCollection,
+    (zone_create_flags_t) (ZC_CACHING | ZC_ZFREE_CLEARMEM))
 OSMetaClassDefineReservedUnused(OSDictionary, 0);
 OSMetaClassDefineReservedUnused(OSDictionary, 1);
 OSMetaClassDefineReservedUnused(OSDictionary, 2);
@@ -62,11 +66,11 @@ OSDictionary::dictEntry::compare(const void *_e1, const void *_e2)
 	const OSDictionary::dictEntry *e1 = (const OSDictionary::dictEntry *)_e1;
 	const OSDictionary::dictEntry *e2 = (const OSDictionary::dictEntry *)_e2;
 
-	if ((uintptr_t)e1->key == (uintptr_t)e2->key) {
+	if ((uintptr_t)e1->key.get() == (uintptr_t)e2->key.get()) {
 		return 0;
 	}
 
-	return (uintptr_t)e1->key > (uintptr_t)e2->key ? 1 : -1;
+	return (uintptr_t)e1->key.get() > (uintptr_t)e2->key.get() ? 1 : -1;
 }
 
 void
@@ -95,7 +99,7 @@ OSDictionary::initWithCapacity(unsigned int inCapacity)
 		return false;
 	}
 
-	bzero(dictionary, size);
+	os::uninitialized_value_construct(dictionary, dictionary + inCapacity);
 	OSCONTAINER_ACCUMSIZE(size);
 
 	count = 0;
@@ -165,19 +169,16 @@ OSDictionary::initWithObjects(const OSObject *objects[],
 	}
 
 	for (unsigned int i = 0; i < theCount; i++) {
-		const OSSymbol *key = OSSymbol::withString(*keys++);
+		OSSharedPtr<const OSSymbol> key = OSSymbol::withString(*keys++);
 		const OSMetaClassBase *newObject = *objects++;
 
 		if (!key) {
 			return false;
 		}
 
-		if (!newObject || !setObject(key, newObject)) {
-			key->release();
+		if (!newObject || !setObject(key.get(), newObject)) {
 			return false;
 		}
-
-		key->release();
 	}
 
 	return true;
@@ -208,10 +209,9 @@ OSDictionary::initWithDictionary(const OSDictionary *dict,
 	}
 
 	count = dict->count;
-	bcopy(dict->dictionary, dictionary, count * sizeof(dictEntry));
 	for (unsigned int i = 0; i < count; i++) {
-		dictionary[i].key->taggedRetain(OSTypeID(OSCollection));
-		dictionary[i].value->taggedRetain(OSTypeID(OSCollection));
+		dictionary[i].key = dict->dictionary[i].key;
+		dictionary[i].value = dict->dictionary[i].value;
 	}
 
 	if ((kSort & fOptions) && !(kSort & dict->fOptions)) {
@@ -221,60 +221,56 @@ OSDictionary::initWithDictionary(const OSDictionary *dict,
 	return true;
 }
 
-OSDictionary *
+OSSharedPtr<OSDictionary>
 OSDictionary::withCapacity(unsigned int capacity)
 {
-	OSDictionary *me = new OSDictionary;
+	OSSharedPtr<OSDictionary> me = OSMakeShared<OSDictionary>();
 
 	if (me && !me->initWithCapacity(capacity)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
 }
 
-OSDictionary *
+OSSharedPtr<OSDictionary>
 OSDictionary::withObjects(const OSObject *objects[],
     const OSSymbol *keys[],
     unsigned int count,
     unsigned int capacity)
 {
-	OSDictionary *me = new OSDictionary;
+	OSSharedPtr<OSDictionary> me = OSMakeShared<OSDictionary>();
 
 	if (me && !me->initWithObjects(objects, keys, count, capacity)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
 }
 
-OSDictionary *
+OSSharedPtr<OSDictionary>
 OSDictionary::withObjects(const OSObject *objects[],
     const OSString *keys[],
     unsigned int count,
     unsigned int capacity)
 {
-	OSDictionary *me = new OSDictionary;
+	OSSharedPtr<OSDictionary> me = OSMakeShared<OSDictionary>();
 
 	if (me && !me->initWithObjects(objects, keys, count, capacity)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
 }
 
-OSDictionary *
+OSSharedPtr<OSDictionary>
 OSDictionary::withDictionary(const OSDictionary *dict,
     unsigned int capacity)
 {
-	OSDictionary *me = new OSDictionary;
+	OSSharedPtr<OSDictionary> me = OSMakeShared<OSDictionary>();
 
 	if (me && !me->initWithDictionary(dict, capacity)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
@@ -322,7 +318,7 @@ unsigned int
 OSDictionary::ensureCapacity(unsigned int newCapacity)
 {
 	dictEntry *newDict;
-	unsigned int finalCapacity;
+	vm_size_t finalCapacity;
 	vm_size_t oldSize, newSize;
 
 	if (newCapacity <= capacity) {
@@ -334,7 +330,7 @@ OSDictionary::ensureCapacity(unsigned int newCapacity)
 	    * capacityIncrement;
 
 	// integer overflow check
-	if (finalCapacity < newCapacity || (finalCapacity > (UINT_MAX / sizeof(dictEntry)))) {
+	if (finalCapacity < newCapacity) {
 		return capacity;
 	}
 
@@ -343,18 +339,24 @@ OSDictionary::ensureCapacity(unsigned int newCapacity)
 	newDict = (dictEntry *) kallocp_container(&newSize);
 	if (newDict) {
 		// use all of the actual allocation size
-		finalCapacity = newSize / sizeof(dictEntry);
+		finalCapacity = (newSize / sizeof(dictEntry));
+		if (finalCapacity > UINT_MAX) {
+			// failure, too large
+			kfree(newDict, newSize);
+			return capacity;
+		}
 
 		oldSize = sizeof(dictEntry) * capacity;
 
-		bcopy(dictionary, newDict, oldSize);
-		bzero(&newDict[capacity], newSize - oldSize);
+		os::uninitialized_move(dictionary, dictionary + capacity, newDict);
+		os::uninitialized_value_construct(newDict + capacity, newDict + finalCapacity);
+		os::destroy(dictionary, dictionary + capacity);
 
 		OSCONTAINER_ACCUMSIZE(((size_t)newSize) - ((size_t)oldSize));
 		kfree(dictionary, oldSize);
 
 		dictionary = newDict;
-		capacity = finalCapacity;
+		capacity = (unsigned int) finalCapacity;
 	}
 
 	return capacity;
@@ -401,14 +403,11 @@ setObject(const OSSymbol *aKey, const OSMetaClassBase *anObject, bool onlyAdd)
 			return false;
 		}
 
-		const OSMetaClassBase *oldObject = dictionary[i].value;
+		OSTaggedSharedPtr<const OSMetaClassBase, OSCollection> oldObject;
 
 		haveUpdated();
 
-		anObject->taggedRetain(OSTypeID(OSCollection));
-		dictionary[i].value = anObject;
-
-		oldObject->taggedRelease(OSTypeID(OSCollection));
+		dictionary[i].value.reset(anObject, OSRetain);
 		return true;
 	}
 
@@ -419,12 +418,11 @@ setObject(const OSSymbol *aKey, const OSMetaClassBase *anObject, bool onlyAdd)
 
 	haveUpdated();
 
-	bcopy(&dictionary[i], &dictionary[i + 1], (count - i) * sizeof(dictionary[0]));
+	new (&dictionary[count]) dictEntry();
+	os::move_backward(&dictionary[i], &dictionary[count], &dictionary[count + 1]);
 
-	aKey->taggedRetain(OSTypeID(OSCollection));
-	anObject->taggedRetain(OSTypeID(OSCollection));
-	dictionary[i].key = aKey;
-	dictionary[i].value = anObject;
+	dictionary[i].key.reset(aKey, OSRetain);
+	dictionary[i].value.reset(anObject, OSRetain);
 	count++;
 
 	return true;
@@ -435,6 +433,24 @@ OSDictionary::
 setObject(const OSSymbol *aKey, const OSMetaClassBase *anObject)
 {
 	return setObject(aKey, anObject, false);
+}
+
+bool
+OSDictionary::setObject(OSSharedPtr<const OSSymbol> const& aKey, OSSharedPtr<const OSMetaClassBase> const& anObject)
+{
+	return setObject(aKey.get(), anObject.get());
+}
+
+bool
+OSDictionary::setObject(const OSString* aKey, OSSharedPtr<const OSMetaClassBase> const& anObject)
+{
+	return setObject(aKey, anObject.get());
+}
+
+bool
+OSDictionary::setObject(const char* aKey, OSSharedPtr<const OSMetaClassBase> const& anObject)
+{
+	return setObject(aKey, anObject.get());
 }
 
 void
@@ -480,7 +496,7 @@ bool
 OSDictionary::merge(const OSDictionary *srcDict)
 {
 	const OSSymbol * sym;
-	OSCollectionIterator * iter;
+	OSSharedPtr<OSCollectionIterator> iter;
 
 	if (!OSDynamicCast(OSDictionary, srcDict)) {
 		return false;
@@ -496,11 +512,9 @@ OSDictionary::merge(const OSDictionary *srcDict)
 
 		obj = srcDict->getObject(sym);
 		if (!setObject(sym, obj)) {
-			iter->release();
 			return false;
 		}
 	}
-	iter->release();
 
 	return true;
 }
@@ -525,10 +539,10 @@ OSDictionary::getObject(const OSSymbol *aKey) const
 		while (l < r) {
 			i = (l + r) / 2;
 			if (aKey == dictionary[i].key) {
-				return const_cast<OSObject *> ((const OSObject *)dictionary[i].value);
+				return const_cast<OSObject *> ((const OSObject *)dictionary[i].value.get());
 			}
 
-			if ((uintptr_t)aKey < (uintptr_t)dictionary[i].key) {
+			if ((uintptr_t)aKey < (uintptr_t)dictionary[i].key.get()) {
 				r = i;
 			} else {
 				l = i + 1;
@@ -537,7 +551,7 @@ OSDictionary::getObject(const OSSymbol *aKey) const
 	} else {
 		for (i = l; i < r; i++) {
 			if (aKey == dictionary[i].key) {
-				return const_cast<OSObject *> ((const OSObject *)dictionary[i].value);
+				return const_cast<OSObject *> ((const OSObject *)dictionary[i].value.get());
 			}
 		}
 	}
@@ -548,30 +562,27 @@ OSDictionary::getObject(const OSSymbol *aKey) const
 // Wrapper macros
 #define OBJECT_WRAP_1(cmd, k)                                           \
 {                                                                       \
-    const OSSymbol *tmpKey = k;                                         \
+    OSSharedPtr<const OSSymbol> tmpKey = k;                                         \
     OSObject *retObj = NULL;                                            \
     if (tmpKey) {                                                       \
-	retObj = cmd(tmpKey);                                           \
-	tmpKey->release();                                              \
+	retObj = cmd(tmpKey.get());                                           \
     }                                                                   \
     return retObj;                                                      \
 }
 
 #define OBJECT_WRAP_2(cmd, k, o)                                        \
 {                                                                       \
-    const OSSymbol *tmpKey = k;                                         \
-    bool ret = cmd(tmpKey, o);                                          \
+    OSSharedPtr<const OSSymbol> tmpKey = k;                                         \
+    bool ret = cmd(tmpKey.get(), o);                                          \
                                                                         \
-    tmpKey->release();                                                  \
     return ret;                                                         \
 }
 
 #define OBJECT_WRAP_3(cmd, k)                                           \
 {                                                                       \
-    const OSSymbol *tmpKey = k;                                         \
+    OSSharedPtr<const OSSymbol> tmpKey = k;                                         \
     if (tmpKey) {                                                       \
-	cmd(tmpKey);                                                    \
-	tmpKey->release();                                              \
+	cmd(tmpKey.get());                                                    \
     }                                                                   \
 }
 
@@ -598,7 +609,7 @@ OBJECT_WRAP_3(removeObject, OSSymbol::existingSymbolForCString(aKey))
 bool
 OSDictionary::isEqualTo(const OSDictionary *srcDict, const OSCollection *keys) const
 {
-	OSCollectionIterator * iter;
+	OSSharedPtr<OSCollectionIterator> iter;
 	unsigned int keysCount;
 	const OSMetaClassBase * obj1;
 	const OSMetaClassBase * obj2;
@@ -633,7 +644,6 @@ OSDictionary::isEqualTo(const OSDictionary *srcDict, const OSCollection *keys) c
 			break;
 		}
 	}
-	iter->release();
 
 	return ret;
 }
@@ -653,7 +663,7 @@ OSDictionary::isEqualTo(const OSDictionary *srcDict) const
 	}
 
 	for (i = 0; i < count; i++) {
-		obj = srcDict->getObject(dictionary[i].key);
+		obj = srcDict->getObject(dictionary[i].key.get());
 		if (!obj) {
 			return false;
 		}
@@ -701,7 +711,7 @@ OSDictionary::getNextObjectForIterator(void *inIterator, OSObject **ret) const
 	unsigned int index = (*iteratorP)++;
 
 	if (index < count) {
-		*ret = (OSObject *) dictionary[index].key;
+		*ret = const_cast<OSSymbol*>(dictionary[index].key.get());
 	} else {
 		*ret = NULL;
 	}
@@ -721,7 +731,7 @@ OSDictionary::serialize(OSSerialize *s) const
 	}
 
 	for (unsigned i = 0; i < count; i++) {
-		const OSSymbol *key = dictionary[i].key;
+		const OSSymbol *key = dictionary[i].key.get();
 
 		// due the nature of the XML syntax, this must be a symbol
 		if (!key->metaCast("OSSymbol")) {
@@ -770,7 +780,7 @@ OSDictionary::setOptions(unsigned options, unsigned mask, void *)
 	if ((old ^ options) & mask) {
 		// Value changed need to recurse over all of the child collections
 		for (unsigned i = 0; i < count; i++) {
-			OSCollection *v = OSDynamicCast(OSCollection, dictionary[i].value);
+			OSCollection *v = OSDynamicCast(OSCollection, dictionary[i].value.get());
 			if (v) {
 				v->setOptions(options, mask);
 			}
@@ -784,18 +794,19 @@ OSDictionary::setOptions(unsigned options, unsigned mask, void *)
 	return old;
 }
 
-OSCollection *
+OSSharedPtr<OSCollection>
 OSDictionary::copyCollection(OSDictionary *cycleDict)
 {
-	bool allocDict = !cycleDict;
-	OSCollection *ret = NULL;
-	OSDictionary *newDict = NULL;
+	OSSharedPtr<OSDictionary> ourCycleDict;
+	OSSharedPtr<OSCollection> ret;
+	OSSharedPtr<OSDictionary> newDict;
 
-	if (allocDict) {
-		cycleDict = OSDictionary::withCapacity(16);
-		if (!cycleDict) {
-			return NULL;
+	if (!cycleDict) {
+		ourCycleDict = OSDictionary::withCapacity(16);
+		if (!ourCycleDict) {
+			return nullptr;
 		}
+		cycleDict = ourCycleDict.get();
 	}
 
 	do {
@@ -811,58 +822,41 @@ OSDictionary::copyCollection(OSDictionary *cycleDict)
 		}
 
 		// Insert object into cycle Dictionary
-		cycleDict->setObject((const OSSymbol *) this, newDict);
+		cycleDict->setObject((const OSSymbol *) this, newDict.get());
 
 		for (unsigned int i = 0; i < count; i++) {
-			const OSMetaClassBase *obj = dictionary[i].value;
-			OSCollection *coll = OSDynamicCast(OSCollection, EXT_CAST(obj));
+			const OSMetaClassBase *obj = dictionary[i].value.get();
+			OSTaggedSharedPtr<OSCollection, OSCollection> coll(OSDynamicCast(OSCollection, EXT_CAST(obj)), OSNoRetain);
 
 			if (coll) {
-				OSCollection *newColl = coll->copyCollection(cycleDict);
+				OSSharedPtr<OSCollection> newColl = coll->copyCollection(cycleDict);
 				if (!newColl) {
-					goto abortCopy;
+					return ret;
 				}
-
-				newDict->dictionary[i].value = newColl;
-
-				coll->taggedRelease(OSTypeID(OSCollection));
-				newColl->taggedRetain(OSTypeID(OSCollection));
-				newColl->release();
+				newDict->dictionary[i].value.detach();
+				newDict->dictionary[i].value.reset(newColl.get(), OSRetain);
 			}
-			;
 		}
 
-		ret = newDict;
-		newDict = NULL;
+		ret = os::move(newDict);
 	} while (false);
-
-abortCopy:
-	if (newDict) {
-		newDict->release();
-	}
-
-	if (allocDict) {
-		cycleDict->release();
-	}
 
 	return ret;
 }
 
-OSArray *
+OSSharedPtr<OSArray>
 OSDictionary::copyKeys(void)
 {
-	OSArray * array;
+	OSSharedPtr<OSArray> array;
 
 	array = OSArray::withCapacity(count);
 	if (!array) {
-		return NULL;
+		return nullptr;
 	}
 
 	for (unsigned int i = 0; i < count; i++) {
-		if (!array->setObject(i, dictionary[i].key)) {
-			array->release();
-			array = NULL;
-			break;
+		if (!array->setObject(i, dictionary[i].key.get())) {
+			return nullptr;
 		}
 	}
 	return array;
@@ -877,7 +871,7 @@ OSDictionary::iterateObjects(void * refcon, bool (*callback)(void * refcon, cons
 	initialUpdateStamp = updateStamp;
 	done = false;
 	for (unsigned int i = 0; i < count; i++) {
-		done = callback(refcon, dictionary[i].key, EXT_CAST(dictionary[i].value));
+		done = callback(refcon, dictionary[i].key.get(), EXT_CAST(dictionary[i].value.get()));
 		if (done) {
 			break;
 		}

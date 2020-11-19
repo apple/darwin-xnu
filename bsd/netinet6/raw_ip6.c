@@ -203,13 +203,17 @@ rip6_input(
 
 #if NECP
 			if (n && !necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0,
-			    &ip6->ip6_dst, &ip6->ip6_src, ifp, NULL, NULL, NULL)) {
+			    &ip6->ip6_dst, &ip6->ip6_src, ifp, 0, NULL, NULL, NULL, NULL)) {
 				m_freem(n);
 				/* do not inject data into pcb */
 			} else
 #endif /* NECP */
 			if (n) {
 				if ((last->in6p_flags & INP_CONTROLOPTS) != 0 ||
+#if CONTENT_FILTER
+				    /* Content Filter needs to see local address */
+				    (last->in6p_socket->so_cfil_db != NULL) ||
+#endif
 				    (last->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
 				    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
 				    (last->in6p_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
@@ -239,7 +243,7 @@ rip6_input(
 
 #if NECP
 	if (last && !necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0,
-	    &ip6->ip6_dst, &ip6->ip6_src, ifp, NULL, NULL, NULL)) {
+	    &ip6->ip6_dst, &ip6->ip6_src, ifp, 0, NULL, NULL, NULL, NULL)) {
 		m_freem(m);
 		ip6stat.ip6s_delivered--;
 		/* do not inject data into pcb */
@@ -247,6 +251,10 @@ rip6_input(
 #endif /* NECP */
 	if (last) {
 		if ((last->in6p_flags & INP_CONTROLOPTS) != 0 ||
+#if CONTENT_FILTER
+		    /* Content Filter needs to see local address */
+		    (last->in6p_socket->so_cfil_db != NULL) ||
+#endif
 		    (last->in6p_socket->so_options & SO_TIMESTAMP) != 0 ||
 		    (last->in6p_socket->so_options & SO_TIMESTAMP_MONOTONIC) != 0 ||
 		    (last->in6p_socket->so_options & SO_TIMESTAMP_CONTINUOUS) != 0) {
@@ -278,7 +286,7 @@ rip6_input(
 			char *prvnxtp = ip6_get_prevhdr(m, *offp); /* XXX */
 			icmp6_error(m, ICMP6_PARAM_PROB,
 			    ICMP6_PARAMPROB_NEXTHEADER,
-			    prvnxtp - mtod(m, char *));
+			    (int)(prvnxtp - mtod(m, char *)));
 		}
 		ip6stat.ip6s_delivered--;
 	}
@@ -296,8 +304,8 @@ rip6_ctlinput(
 	void *d,
 	__unused struct ifnet *ifp)
 {
-	struct ip6_hdr *ip6;
-	struct mbuf *m;
+	struct ip6_hdr *ip6 = NULL;
+	struct mbuf *m = NULL;
 	void *cmdarg = NULL;
 	int off = 0;
 	struct ip6ctlparam *ip6cp = NULL;
@@ -332,6 +340,7 @@ rip6_ctlinput(
 	} else {
 		m = NULL;
 		ip6 = NULL;
+		cmdarg = NULL;
 		sa6_src = &sa6_any;
 	}
 
@@ -369,7 +378,7 @@ rip6_output(
 	struct m_tag *cfil_tag = NULL;
 	bool cfil_faddr_use = false;
 	uint32_t cfil_so_state_change_cnt = 0;
-	short cfil_so_options = 0;
+	uint32_t cfil_so_options = 0;
 	struct sockaddr *cfil_faddr = NULL;
 	struct sockaddr_in6 *cfil_sin6 = NULL;
 #endif
@@ -560,7 +569,7 @@ rip6_output(
 		 */
 		ifnet_head_lock_shared();
 		if (optp && (pi = optp->ip6po_pktinfo) && pi->ipi6_ifindex) {
-			ip6->ip6_dst.s6_addr16[1] = htons(pi->ipi6_ifindex);
+			ip6->ip6_dst.s6_addr16[1] = htons((uint16_t)pi->ipi6_ifindex);
 			oifp = ifindex2ifnet[pi->ipi6_ifindex];
 			if (oifp != NULL) {
 				ifnet_reference(oifp);
@@ -673,6 +682,7 @@ rip6_output(
 		necp_kernel_policy_id policy_id;
 		necp_kernel_policy_id skip_policy_id;
 		u_int32_t route_rule_id;
+		u_int32_t pass_flags;
 
 		/*
 		 * We need a route to perform NECP route rule checks
@@ -711,16 +721,15 @@ rip6_output(
 		}
 
 		if (!necp_socket_is_allowed_to_send_recv_v6(in6p, 0, 0,
-		    &ip6->ip6_src, &ip6->ip6_dst, NULL, &policy_id, &route_rule_id, &skip_policy_id)) {
+		    &ip6->ip6_src, &ip6->ip6_dst, NULL, 0, &policy_id, &route_rule_id, &skip_policy_id, &pass_flags)) {
 			error = EHOSTUNREACH;
 			goto bad;
 		}
 
-		necp_mark_packet_from_socket(m, in6p, policy_id, route_rule_id, skip_policy_id);
+		necp_mark_packet_from_socket(m, in6p, policy_id, route_rule_id, skip_policy_id, pass_flags);
 
 		if (net_qos_policy_restricted != 0) {
-			necp_socket_update_qos_marking(in6p, in6p->in6p_route.ro_rt,
-			    NULL, route_rule_id);
+			necp_socket_update_qos_marking(in6p, in6p->in6p_route.ro_rt, route_rule_id);
 		}
 	}
 #endif /* NECP */

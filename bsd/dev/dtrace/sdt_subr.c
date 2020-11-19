@@ -73,6 +73,14 @@ static dtrace_pattr_t sdt_attr = {
 	{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_ISA },
 };
 
+static dtrace_pattr_t hv_attr = {
+	{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_ISA },
+	{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_UNKNOWN },
+	{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_UNKNOWN },
+	{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_UNKNOWN },
+	{ DTRACE_STABILITY_PRIVATE, DTRACE_STABILITY_PRIVATE, DTRACE_CLASS_ISA },
+};
+
 sdt_provider_t sdt_providers[] = {
 	{ "vtrace", "__vtrace____", &vtrace_attr, 0 },
 	{ "sysinfo", "__cpu_sysinfo____", &info_attr, 0 },
@@ -95,6 +103,7 @@ sdt_provider_t sdt_providers[] = {
 #if KASAN
 	{ "kasan", "__kasan____", &stab_attr, 0 },
 #endif
+	{ "hv", "__hv____", &hv_attr, 0 },
 	{ NULL, NULL, NULL, 0 }
 };
 
@@ -959,6 +968,10 @@ sdt_argdesc_t sdt_args[] = {
 	{"vminfo", "zalloc", 1, 1, "void*", "void*" },
 	{"vminfo", "zfree", 0, 0, "zone_t", "zone_t" },
 	{"vminfo", "zfree", 1, 1, "void*", "void*" },
+	{"hv", "guest-enter", 0, 0, "uint32_t", "uint32_t" },
+	{"hv", "guest-enter", 1, 1, "uint64_t *", "guest_regs_t *" },
+	{"hv", "guest-exit", 0, 0, "uint32_t", "uint32_t" },
+	{"hv", "guest-exit", 1, 1, "uint64_t *", "guest_regs_t *" },
 	{ NULL, NULL, 0, 0, NULL, NULL }
 };
 

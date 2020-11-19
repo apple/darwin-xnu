@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2006 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -68,9 +68,11 @@
 
 #include <debug.h>
 #include <vm/vm_options.h>
+#include <vm/vm_protos.h>
 #include <mach/boolean.h>
 #include <mach/vm_prot.h>
 #include <mach/vm_param.h>
+#include <mach/memory_object_types.h> /* for VMP_CS_BITS... */
 
 
 #if    defined(__LP64__)
@@ -96,11 +98,11 @@ typedef struct vm_page_packed_queue_entry       *vm_page_queue_entry_t;
 
 typedef vm_page_packed_t                        vm_page_object_t;
 
-#else
+#else // __LP64__
 
 /*
- * we can't do the packing trick on 32 bit architectures, so
- * just turn the macros into noops.
+ * we can't do the packing trick on 32 bit architectures
+ * so just turn the macros into noops.
  */
 typedef struct vm_page          *vm_page_packed_t;
 
@@ -110,7 +112,7 @@ typedef struct vm_page          *vm_page_packed_t;
 #define vm_page_queue_entry_t   queue_entry_t
 
 #define vm_page_object_t        vm_object_t
-#endif
+#endif // __LP64__
 
 
 #include <vm/vm_object.h>
@@ -222,7 +224,8 @@ struct vm_page {
 	                                     /* be reused ahead of other pages (P) */
 	    vmp_private:1,                   /* Page should not be returned to the free list (P) */
 	    vmp_reference:1,                 /* page has been used (P) */
-	    vmp_unused_page_bits:5;
+	    vmp_lopage:1,
+	    vmp_unused_page_bits:4;
 
 	/*
 	 * MUST keep the 2 32 bit words used as bit fields
@@ -264,24 +267,139 @@ struct vm_page {
 	    vmp_restart:1,                    /* Page was pushed higher in shadow chain by copy_call-related pagers */
 	                                      /* start again at top of chain */
 	    vmp_unusual:1,                    /* Page is absent, error, restart or page locked */
-	    vmp_cs_validated:1,               /* code-signing: page was checked */
-	    vmp_cs_tainted:1,                 /* code-signing: page is tainted */
-	    vmp_cs_nx:1,                      /* code-signing: page is nx */
+	    vmp_cs_validated:VMP_CS_BITS, /* code-signing: page was checked */
+	    vmp_cs_tainted:VMP_CS_BITS,   /* code-signing: page is tainted */
+	    vmp_cs_nx:VMP_CS_BITS,        /* code-signing: page is nx */
 	    vmp_reusable:1,
-	    vmp_lopage:1,
-	    vmp_written_by_kernel:1,             /* page was written by kernel (i.e. decompressed) */
-	    vmp_unused_object_bits:8;
+	    vmp_written_by_kernel:1;             /* page was written by kernel (i.e. decompressed) */
 
 #if    !defined(__arm__) && !defined(__arm64__)
 	ppnum_t         vmp_phys_page;        /* Physical page number of the page */
 #endif
 };
 
-
 typedef struct vm_page  *vm_page_t;
 extern vm_page_t        vm_pages;
 extern vm_page_t        vm_page_array_beginning_addr;
 extern vm_page_t        vm_page_array_ending_addr;
+
+static inline int
+VMP_CS_FOR_OFFSET(
+	vm_map_offset_t fault_phys_offset)
+{
+	assertf(fault_phys_offset < PAGE_SIZE &&
+	    !(fault_phys_offset & FOURK_PAGE_MASK),
+	    "offset 0x%llx\n", (uint64_t)fault_phys_offset);
+	return 1 << (fault_phys_offset >> FOURK_PAGE_SHIFT);
+}
+static inline bool
+VMP_CS_VALIDATED(
+	vm_page_t p,
+	vm_map_size_t fault_page_size,
+	vm_map_offset_t fault_phys_offset)
+{
+	assertf(fault_page_size <= PAGE_SIZE,
+	    "fault_page_size 0x%llx fault_phys_offset 0x%llx\n",
+	    (uint64_t)fault_page_size, (uint64_t)fault_phys_offset);
+	if (fault_page_size == PAGE_SIZE) {
+		return p->vmp_cs_validated == VMP_CS_ALL_TRUE;
+	}
+	return p->vmp_cs_validated & VMP_CS_FOR_OFFSET(fault_phys_offset);
+}
+static inline bool
+VMP_CS_TAINTED(
+	vm_page_t p,
+	vm_map_size_t fault_page_size,
+	vm_map_offset_t fault_phys_offset)
+{
+	assertf(fault_page_size <= PAGE_SIZE,
+	    "fault_page_size 0x%llx fault_phys_offset 0x%llx\n",
+	    (uint64_t)fault_page_size, (uint64_t)fault_phys_offset);
+	if (fault_page_size == PAGE_SIZE) {
+		return p->vmp_cs_tainted != VMP_CS_ALL_FALSE;
+	}
+	return p->vmp_cs_tainted & VMP_CS_FOR_OFFSET(fault_phys_offset);
+}
+static inline bool
+VMP_CS_NX(
+	vm_page_t p,
+	vm_map_size_t fault_page_size,
+	vm_map_offset_t fault_phys_offset)
+{
+	assertf(fault_page_size <= PAGE_SIZE,
+	    "fault_page_size 0x%llx fault_phys_offset 0x%llx\n",
+	    (uint64_t)fault_page_size, (uint64_t)fault_phys_offset);
+	if (fault_page_size == PAGE_SIZE) {
+		return p->vmp_cs_nx != VMP_CS_ALL_FALSE;
+	}
+	return p->vmp_cs_nx & VMP_CS_FOR_OFFSET(fault_phys_offset);
+}
+static inline void
+VMP_CS_SET_VALIDATED(
+	vm_page_t p,
+	vm_map_size_t fault_page_size,
+	vm_map_offset_t fault_phys_offset,
+	boolean_t value)
+{
+	assertf(fault_page_size <= PAGE_SIZE,
+	    "fault_page_size 0x%llx fault_phys_offset 0x%llx\n",
+	    (uint64_t)fault_page_size, (uint64_t)fault_phys_offset);
+	if (value) {
+		if (fault_page_size == PAGE_SIZE) {
+			p->vmp_cs_validated = VMP_CS_ALL_TRUE;
+		}
+		p->vmp_cs_validated |= VMP_CS_FOR_OFFSET(fault_phys_offset);
+	} else {
+		if (fault_page_size == PAGE_SIZE) {
+			p->vmp_cs_validated = VMP_CS_ALL_FALSE;
+		}
+		p->vmp_cs_validated &= ~VMP_CS_FOR_OFFSET(fault_phys_offset);
+	}
+}
+static inline void
+VMP_CS_SET_TAINTED(
+	vm_page_t p,
+	vm_map_size_t fault_page_size,
+	vm_map_offset_t fault_phys_offset,
+	boolean_t value)
+{
+	assertf(fault_page_size <= PAGE_SIZE,
+	    "fault_page_size 0x%llx fault_phys_offset 0x%llx\n",
+	    (uint64_t)fault_page_size, (uint64_t)fault_phys_offset);
+	if (value) {
+		if (fault_page_size == PAGE_SIZE) {
+			p->vmp_cs_tainted = VMP_CS_ALL_TRUE;
+		}
+		p->vmp_cs_tainted |= VMP_CS_FOR_OFFSET(fault_phys_offset);
+	} else {
+		if (fault_page_size == PAGE_SIZE) {
+			p->vmp_cs_tainted = VMP_CS_ALL_FALSE;
+		}
+		p->vmp_cs_tainted &= ~VMP_CS_FOR_OFFSET(fault_phys_offset);
+	}
+}
+static inline void
+VMP_CS_SET_NX(
+	vm_page_t p,
+	vm_map_size_t fault_page_size,
+	vm_map_offset_t fault_phys_offset,
+	boolean_t value)
+{
+	assertf(fault_page_size <= PAGE_SIZE,
+	    "fault_page_size 0x%llx fault_phys_offset 0x%llx\n",
+	    (uint64_t)fault_page_size, (uint64_t)fault_phys_offset);
+	if (value) {
+		if (fault_page_size == PAGE_SIZE) {
+			p->vmp_cs_nx = VMP_CS_ALL_TRUE;
+		}
+		p->vmp_cs_nx |= VMP_CS_FOR_OFFSET(fault_phys_offset);
+	} else {
+		if (fault_page_size == PAGE_SIZE) {
+			p->vmp_cs_nx = VMP_CS_ALL_FALSE;
+		}
+		p->vmp_cs_nx &= ~VMP_CS_FOR_OFFSET(fault_phys_offset);
+	}
+}
 
 
 #if defined(__arm__) || defined(__arm64__)
@@ -337,36 +455,49 @@ typedef struct vm_page_with_ppnum *vm_page_with_ppnum_t;
 
 
 
-#if    defined(__LP64__)
-
+#if defined(__LP64__)
+/*
+ * Parameters for pointer packing
+ *
+ *
+ * VM Pages pointers might point to:
+ *
+ * 1. VM_PAGE_PACKED_ALIGNED aligned kernel globals,
+ *
+ * 2. VM_PAGE_PACKED_ALIGNED aligned heap allocated vm pages
+ *
+ * 3. entries in the vm_pages array (whose entries aren't VM_PAGE_PACKED_ALIGNED
+ *    aligned).
+ *
+ *
+ * The current scheme uses 31 bits of storage and 6 bits of shift using the
+ * VM_PACK_POINTER() scheme for (1-2), and packs (3) as an index within the
+ * vm_pages array, setting the top bit (VM_PAGE_PACKED_FROM_ARRAY).
+ *
+ * This scheme gives us a reach of 128G from VM_MIN_KERNEL_AND_KEXT_ADDRESS.
+ */
 #define VM_VPLQ_ALIGNMENT               128
-#define VM_PACKED_POINTER_ALIGNMENT     64              /* must be a power of 2 */
-#define VM_PACKED_POINTER_SHIFT         6
+#define VM_PAGE_PACKED_PTR_ALIGNMENT    64              /* must be a power of 2 */
+#define VM_PAGE_PACKED_ALIGNED          __attribute__((aligned(VM_PAGE_PACKED_PTR_ALIGNMENT)))
+#define VM_PAGE_PACKED_PTR_BITS         31
+#define VM_PAGE_PACKED_PTR_SHIFT        6
+#define VM_PAGE_PACKED_PTR_BASE         ((uintptr_t)VM_MIN_KERNEL_AND_KEXT_ADDRESS)
 
-#define VM_PACKED_FROM_VM_PAGES_ARRAY   0x80000000
+#define VM_PAGE_PACKED_FROM_ARRAY       0x80000000
 
 static inline vm_page_packed_t
 vm_page_pack_ptr(uintptr_t p)
 {
-	vm_page_packed_t packed_ptr;
-
-	if (!p) {
-		return (vm_page_packed_t)0;
+	if (p >= (uintptr_t)vm_page_array_beginning_addr &&
+	    p < (uintptr_t)vm_page_array_ending_addr) {
+		ptrdiff_t diff = (vm_page_t)p - vm_page_array_beginning_addr;
+		assert((vm_page_t)p == &vm_pages[diff]);
+		return (vm_page_packed_t)(diff | VM_PAGE_PACKED_FROM_ARRAY);
 	}
 
-	if (p >= (uintptr_t)(vm_page_array_beginning_addr) && p < (uintptr_t)(vm_page_array_ending_addr)) {
-		packed_ptr = ((vm_page_packed_t)(((vm_page_t)p - vm_page_array_beginning_addr)));
-		assert(!(packed_ptr & VM_PACKED_FROM_VM_PAGES_ARRAY));
-		packed_ptr |= VM_PACKED_FROM_VM_PAGES_ARRAY;
-		return packed_ptr;
-	}
-
-	assert((p & (VM_PACKED_POINTER_ALIGNMENT - 1)) == 0);
-
-	packed_ptr = ((vm_page_packed_t)(((uintptr_t)(p - (uintptr_t) VM_MIN_KERNEL_AND_KEXT_ADDRESS)) >> VM_PACKED_POINTER_SHIFT));
-	assert(packed_ptr != 0);
-	assert(!(packed_ptr & VM_PACKED_FROM_VM_PAGES_ARRAY));
-	return packed_ptr;
+	VM_ASSERT_POINTER_PACKABLE(p, VM_PAGE_PACKED_PTR);
+	vm_offset_t packed = VM_PACK_POINTER(p, VM_PAGE_PACKED_PTR);
+	return CAST_DOWN_EXPLICIT(vm_page_packed_t, packed);
 }
 
 
@@ -375,15 +506,13 @@ vm_page_unpack_ptr(uintptr_t p)
 {
 	extern unsigned int vm_pages_count;
 
-	if (!p) {
-		return (uintptr_t)0;
+	if (p >= VM_PAGE_PACKED_FROM_ARRAY) {
+		p &= ~VM_PAGE_PACKED_FROM_ARRAY;
+		assert(p < (uintptr_t)vm_pages_count);
+		return (uintptr_t)&vm_pages[p];
 	}
 
-	if (p & VM_PACKED_FROM_VM_PAGES_ARRAY) {
-		assert((uint32_t)(p & ~VM_PACKED_FROM_VM_PAGES_ARRAY) < vm_pages_count);
-		return (uintptr_t)(&vm_pages[(uint32_t)(p & ~VM_PACKED_FROM_VM_PAGES_ARRAY)]);
-	}
-	return (p << VM_PACKED_POINTER_SHIFT) + (uintptr_t) VM_MIN_KERNEL_AND_KEXT_ADDRESS;
+	return VM_UNPACK_POINTER(p, VM_PAGE_PACKED_PTR);
 }
 
 
@@ -447,10 +576,9 @@ vm_page_remque(
  *	void vm_page_queue_init(q)
  *		vm_page_queue_t	q;	\* MODIFIED *\
  */
-#define vm_page_queue_init(q)                   \
-MACRO_BEGIN                                     \
-	assert((((uintptr_t)q) & (VM_PACKED_POINTER_ALIGNMENT-1)) == 0);        \
-	assert((VM_PAGE_UNPACK_PTR(VM_PAGE_PACK_PTR((uintptr_t)q))) == (uintptr_t)q);   \
+#define vm_page_queue_init(q)               \
+MACRO_BEGIN                                 \
+	VM_ASSERT_POINTER_PACKABLE((vm_offset_t)(q), VM_PAGE_PACKED_PTR); \
 	(q)->next = VM_PAGE_PACK_PTR(q);        \
 	(q)->prev = VM_PAGE_PACK_PTR(q);        \
 MACRO_END
@@ -535,8 +663,8 @@ vm_page_queue_enter_clump(
 	vm_page_queue_t       head,
 	vm_page_t             elt)
 {
-	vm_page_queue_entry_t first;    /* first page in the clump */
-	vm_page_queue_entry_t last;     /* last page in the clump */
+	vm_page_queue_entry_t first = NULL;    /* first page in the clump */
+	vm_page_queue_entry_t last = NULL;     /* last page in the clump */
 	vm_page_queue_entry_t prev = NULL;
 	vm_page_queue_entry_t next;
 	uint_t                n_free = 1;
@@ -866,18 +994,21 @@ MACRO_END
 	    !vm_page_queue_end((head), (vm_page_queue_entry_t)(elt)); \
 	    (elt) = (vm_page_t)vm_page_queue_next(&(elt)->field))     \
 
-#else
+#else // LP64
 
 #define VM_VPLQ_ALIGNMENT               128
-#define VM_PACKED_POINTER_ALIGNMENT     4
-#define VM_PACKED_POINTER_SHIFT         0
+#define VM_PAGE_PACKED_PTR_ALIGNMENT    sizeof(vm_offset_t)
+#define VM_PAGE_PACKED_ALIGNED
+#define VM_PAGE_PACKED_PTR_BITS         32
+#define VM_PAGE_PACKED_PTR_SHIFT        0
+#define VM_PAGE_PACKED_PTR_BASE         0
 
-#define VM_PACKED_FROM_VM_PAGES_ARRAY   0
+#define VM_PAGE_PACKED_FROM_ARRAY       0
 
 #define VM_PAGE_PACK_PTR(p)     (p)
 #define VM_PAGE_UNPACK_PTR(p)   ((uintptr_t)(p))
 
-#define VM_PAGE_OBJECT(p)       (vm_object_t)(p->vmp_object)
+#define VM_PAGE_OBJECT(p)       ((vm_object_t)((p)->vmp_object))
 #define VM_PAGE_PACK_OBJECT(o)  ((vm_page_object_t)(VM_PAGE_PACK_PTR(o)))
 
 
@@ -904,7 +1035,7 @@ MACRO_END
 #define vm_page_queue_prev                  queue_prev
 #define vm_page_queue_iterate(h, e, f)      queue_iterate(h, e, vm_page_t, f)
 
-#endif
+#endif // __LP64__
 
 
 
@@ -949,7 +1080,7 @@ struct vm_speculative_age_q {
 	 */
 	vm_page_queue_head_t    age_q;
 	mach_timespec_t age_ts;
-} __attribute__((aligned(VM_PACKED_POINTER_ALIGNMENT)));
+} VM_PAGE_PACKED_ALIGNED;
 
 
 
@@ -1042,6 +1173,10 @@ extern
 vm_map_size_t   vm_per_task_user_wire_limit;
 extern
 vm_map_size_t   vm_global_user_wire_limit;
+extern
+uint64_t        vm_add_wire_count_over_global_limit;
+extern
+uint64_t        vm_add_wire_count_over_user_limit;
 
 /*
  *	Each pageable resident page falls into one of three lists:
@@ -1080,16 +1215,8 @@ struct vpl {
 #endif
 };
 
-struct  vplq {
-	union {
-		char   cache_line_pad[VM_VPLQ_ALIGNMENT];
-		struct vpl vpl;
-	} vpl_un;
-};
 extern
-unsigned int    vm_page_local_q_count;
-extern
-struct vplq     *vm_page_local_q;
+struct vpl     * /* __zpercpu */ vm_page_local_q;
 extern
 unsigned int    vm_page_local_q_soft_limit;
 extern
@@ -1156,6 +1283,8 @@ extern
 unsigned int    vm_page_active_count;   /* How many pages are active? */
 extern
 unsigned int    vm_page_inactive_count; /* How many pages are inactive? */
+extern
+unsigned int vm_page_kernelcache_count; /* How many pages are used for the kernelcache? */
 #if CONFIG_SECLUDED_MEMORY
 extern
 unsigned int    vm_page_secluded_count; /* How many pages are secluded? */
@@ -1288,9 +1417,7 @@ extern void             vm_page_bootstrap(
 	vm_offset_t     *startp,
 	vm_offset_t     *endp);
 
-extern void             vm_page_module_init(void);
-
-extern void             vm_page_init_local_q(void);
+extern void             vm_page_init_local_q(unsigned int num_cpus);
 
 extern void             vm_page_create(
 	ppnum_t         start,
@@ -1453,9 +1580,14 @@ extern void             vm_set_page_size(void);
 extern void             vm_page_gobble(
 	vm_page_t      page);
 
-extern void             vm_page_validate_cs(vm_page_t   page);
+extern void             vm_page_validate_cs(
+	vm_page_t       page,
+	vm_map_size_t   fault_page_size,
+	vm_map_offset_t fault_phys_offset);
 extern void             vm_page_validate_cs_mapped(
 	vm_page_t       page,
+	vm_map_size_t   fault_page_size,
+	vm_map_offset_t fault_phys_offset,
 	const void      *kaddr);
 extern void             vm_page_validate_cs_mapped_slow(
 	vm_page_t       page,
@@ -1673,11 +1805,18 @@ struct vm_page_delayed_work {
 	int             dw_mask;
 };
 
+#define DEFAULT_DELAYED_WORK_LIMIT      32
+
+struct vm_page_delayed_work_ctx {
+	struct vm_page_delayed_work dwp[DEFAULT_DELAYED_WORK_LIMIT];
+	thread_t delayed_owner;
+};
+
 void vm_page_do_delayed_work(vm_object_t object, vm_tag_t tag, struct vm_page_delayed_work *dwp, int dw_count);
 
 extern unsigned int vm_max_delayed_work_limit;
 
-#define DEFAULT_DELAYED_WORK_LIMIT      32
+extern void vm_page_delayed_work_init_ctx(void);
 
 #define DELAYED_WORK_LIMIT(max) ((vm_max_delayed_work_limit >= max ? max : vm_max_delayed_work_limit))
 
@@ -1716,6 +1855,7 @@ extern void vm_page_check_pageable_safe(vm_page_t page);
 
 #if CONFIG_SECLUDED_MEMORY
 extern uint64_t secluded_shutoff_trigger;
+extern uint64_t secluded_shutoff_headroom;
 extern void start_secluded_suppression(task_t);
 extern void stop_secluded_suppression(task_t);
 #endif /* CONFIG_SECLUDED_MEMORY */

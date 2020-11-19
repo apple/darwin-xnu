@@ -70,7 +70,6 @@
 #ifndef ASSEMBLER
 
 #include <i386/_types.h>
-#include <mach/i386/vm_param.h>
 #include <stdint.h>
 
 /*
@@ -133,8 +132,6 @@ typedef mach_vm_address_t       mach_port_context_t;
 
 #ifdef  MACH_KERNEL_PRIVATE
 
-#ifdef VM32_SUPPORT
-
 /*
  * These are types used internal to Mach to implement the
  * legacy 32-bit VM APIs published by the kernel.
@@ -142,8 +139,6 @@ typedef mach_vm_address_t       mach_port_context_t;
 typedef uint32_t                vm32_address_t;
 typedef uint32_t                vm32_offset_t;
 typedef uint32_t                vm32_size_t;
-
-#endif  /* VM32_SUPPORT */
 
 #endif  /* MACH_KERNEL_PRIVATE */
 

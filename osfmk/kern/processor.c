@@ -67,16 +67,20 @@
 #include <mach/vm_param.h>
 #include <kern/cpu_number.h>
 #include <kern/host.h>
+#include <kern/ipc_host.h>
+#include <kern/ipc_tt.h>
+#include <kern/kalloc.h>
 #include <kern/machine.h>
 #include <kern/misc_protos.h>
 #include <kern/processor.h>
 #include <kern/sched.h>
 #include <kern/task.h>
 #include <kern/thread.h>
-#include <kern/ipc_host.h>
-#include <kern/ipc_tt.h>
+#include <kern/timer.h>
+#if KPERF
+#include <kperf/kperf.h>
+#endif /* KPERF */
 #include <ipc/ipc_port.h>
-#include <kern/kalloc.h>
 
 #include <security/mac_mach_internal.h>
 
@@ -93,34 +97,45 @@
 #include <mach/processor_set_server.h>
 
 struct processor_set    pset0;
-struct pset_node                pset_node0;
-decl_simple_lock_data(static, pset_node_lock);
+struct pset_node        pset_node0;
 
-lck_grp_t pset_lck_grp;
+static SIMPLE_LOCK_DECLARE(pset_node_lock, 0);
+LCK_GRP_DECLARE(pset_lck_grp, "pset");
 
-queue_head_t                    tasks;
-queue_head_t                    terminated_tasks;       /* To be used ONLY for stackshot. */
-queue_head_t                    corpse_tasks;
-int                                             tasks_count;
-int                                             terminated_tasks_count;
-queue_head_t                    threads;
-int                                             threads_count;
-decl_lck_mtx_data(, tasks_threads_lock);
-decl_lck_mtx_data(, tasks_corpse_lock);
+queue_head_t            tasks;
+queue_head_t            terminated_tasks;       /* To be used ONLY for stackshot. */
+queue_head_t            corpse_tasks;
+int                     tasks_count;
+int                     terminated_tasks_count;
+queue_head_t            threads;
+int                     threads_count;
+LCK_GRP_DECLARE(task_lck_grp, "task");
+LCK_ATTR_DECLARE(task_lck_attr, 0, 0);
+LCK_MTX_DECLARE_ATTR(tasks_threads_lock, &task_lck_grp, &task_lck_attr);
+LCK_MTX_DECLARE_ATTR(tasks_corpse_lock, &task_lck_grp, &task_lck_attr);
 
-processor_t                             processor_list;
-unsigned int                    processor_count;
-static processor_t              processor_list_tail;
-decl_simple_lock_data(, processor_list_lock);
+processor_t             processor_list;
+unsigned int            processor_count;
+static processor_t      processor_list_tail;
+SIMPLE_LOCK_DECLARE(processor_list_lock, 0);
 
-uint32_t                                processor_avail_count;
-uint32_t                                processor_avail_count_user;
+uint32_t                processor_avail_count;
+uint32_t                processor_avail_count_user;
+uint32_t                primary_processor_avail_count;
+uint32_t                primary_processor_avail_count_user;
 
-processor_t             master_processor;
 int                     master_cpu = 0;
-boolean_t               sched_stats_active = FALSE;
 
+struct processor        PERCPU_DATA(processor);
 processor_t             processor_array[MAX_SCHED_CPUS] = { 0 };
+processor_set_t         pset_array[MAX_PSETS] = { 0 };
+
+static timer_call_func_t running_timer_funcs[] = {
+	[RUNNING_TIMER_QUANTUM] = thread_quantum_expire,
+	[RUNNING_TIMER_KPERF] = kperf_timer_expire,
+};
+static_assert(sizeof(running_timer_funcs) / sizeof(running_timer_funcs[0])
+    == RUNNING_TIMER_MAX, "missing running timer function");
 
 #if defined(CONFIG_XNUPOST)
 kern_return_t ipi_test(void);
@@ -158,10 +173,6 @@ int sched_enable_smt = 1;
 void
 processor_bootstrap(void)
 {
-	lck_grp_init(&pset_lck_grp, "pset", LCK_GRP_ATTR_NULL);
-
-	simple_lock_init(&pset_node_lock, 0);
-
 	pset_node0.psets = &pset0;
 	pset_init(&pset0, &pset_node0);
 
@@ -169,10 +180,6 @@ processor_bootstrap(void)
 	queue_init(&terminated_tasks);
 	queue_init(&threads);
 	queue_init(&corpse_tasks);
-
-	simple_lock_init(&processor_list_lock, 0);
-
-	master_processor = cpu_to_processor(master_cpu);
 
 	processor_init(master_processor, master_cpu, &pset0);
 }
@@ -184,26 +191,25 @@ processor_bootstrap(void)
  */
 void
 processor_init(
-	processor_t                     processor,
-	int                                     cpu_id,
-	processor_set_t         pset)
+	processor_t            processor,
+	int                    cpu_id,
+	processor_set_t        pset)
 {
 	spl_t           s;
+
+	assert(cpu_id < MAX_SCHED_CPUS);
+	processor->cpu_id = cpu_id;
 
 	if (processor != master_processor) {
 		/* Scheduler state for master_processor initialized in sched_init() */
 		SCHED(processor_init)(processor);
 	}
 
-	assert(cpu_id < MAX_SCHED_CPUS);
-
 	processor->state = PROCESSOR_OFF_LINE;
 	processor->active_thread = processor->startup_thread = processor->idle_thread = THREAD_NULL;
 	processor->processor_set = pset;
 	processor_state_update_idle(processor);
 	processor->starting_pri = MINPRI;
-	processor->cpu_id = cpu_id;
-	timer_call_setup(&processor->quantum_timer, thread_quantum_expire, processor);
 	processor->quantum_end = UINT64_MAX;
 	processor->deadline = UINT64_MAX;
 	processor->first_timeslice = FALSE;
@@ -213,11 +219,18 @@ processor_init(
 	processor->is_SMT = false;
 	processor->is_recommended = true;
 	processor->processor_self = IP_NULL;
-	processor_data_init(processor);
 	processor->processor_list = NULL;
-	processor->cpu_quiesce_state = CPU_QUIESCE_COUNTER_NONE;
-	processor->cpu_quiesce_last_checkin = 0;
 	processor->must_idle = false;
+	processor->running_timers_active = false;
+	for (int i = 0; i < RUNNING_TIMER_MAX; i++) {
+		timer_call_setup(&processor->running_timers[i],
+		    running_timer_funcs[i], processor);
+		running_timer_clear(processor, i);
+	}
+
+	timer_init(&processor->idle_state);
+	timer_init(&processor->system_state);
+	timer_init(&processor->user_state);
 
 	s = splsched();
 	pset_lock(pset);
@@ -246,6 +259,8 @@ processor_init(
 	simple_unlock(&processor_list_lock);
 }
 
+bool system_is_SMT = false;
+
 void
 processor_set_primary(
 	processor_t             processor,
@@ -267,9 +282,16 @@ processor_set_primary(
 		primary->is_SMT = TRUE;
 		processor->is_SMT = TRUE;
 
+		if (!system_is_SMT) {
+			system_is_SMT = true;
+		}
+
 		processor_set_t pset = processor->processor_set;
 		spl_t s = splsched();
 		pset_lock(pset);
+		if (!pset->is_SMT) {
+			pset->is_SMT = true;
+		}
 		bit_clear(pset->primary_map, processor->cpu_id);
 		pset_unlock(pset);
 		splx(s);
@@ -283,16 +305,59 @@ processor_pset(
 	return processor->processor_set;
 }
 
+#if CONFIG_SCHED_EDGE
+
+cluster_type_t
+pset_type_for_id(uint32_t cluster_id)
+{
+	return pset_array[cluster_id]->pset_type;
+}
+
+/*
+ * Processor foreign threads
+ *
+ * With the Edge scheduler, each pset maintains a bitmap of processors running threads
+ * which are foreign to the pset/cluster. A thread is defined as foreign for a cluster
+ * if its of a different type than its preferred cluster type (E/P). The bitmap should
+ * be updated every time a new thread is assigned to run on a processor.
+ *
+ * This bitmap allows the Edge scheduler to quickly find CPUs running foreign threads
+ * for rebalancing.
+ */
+static void
+processor_state_update_running_foreign(processor_t processor, thread_t thread)
+{
+	cluster_type_t current_processor_type = pset_type_for_id(processor->processor_set->pset_cluster_id);
+	cluster_type_t thread_type = pset_type_for_id(sched_edge_thread_preferred_cluster(thread));
+
+	/* Update the bitmap for the pset only for unbounded non-RT threads. */
+	if ((processor->current_pri < BASEPRI_RTQUEUES) && (thread->bound_processor == PROCESSOR_NULL) && (current_processor_type != thread_type)) {
+		bit_set(processor->processor_set->cpu_running_foreign, processor->cpu_id);
+	} else {
+		bit_clear(processor->processor_set->cpu_running_foreign, processor->cpu_id);
+	}
+}
+#else /* CONFIG_SCHED_EDGE */
+static void
+processor_state_update_running_foreign(__unused processor_t processor, __unused thread_t thread)
+{
+}
+#endif /* CONFIG_SCHED_EDGE */
+
 void
 processor_state_update_idle(processor_t processor)
 {
 	processor->current_pri = IDLEPRI;
 	processor->current_sfi_class = SFI_CLASS_KERNEL;
 	processor->current_recommended_pset_type = PSET_SMP;
+#if CONFIG_THREAD_GROUPS
+	processor->current_thread_group = NULL;
+#endif
 	processor->current_perfctl_class = PERFCONTROL_CLASS_IDLE;
 	processor->current_urgency = THREAD_URGENCY_NONE;
 	processor->current_is_NO_SMT = false;
 	processor->current_is_bound = false;
+	os_atomic_store(&processor->processor_set->cpu_running_buckets[processor->cpu_id], TH_BUCKET_SCHED_MAX, relaxed);
 }
 
 void
@@ -301,25 +366,30 @@ processor_state_update_from_thread(processor_t processor, thread_t thread)
 	processor->current_pri = thread->sched_pri;
 	processor->current_sfi_class = thread->sfi_class;
 	processor->current_recommended_pset_type = recommended_pset_type(thread);
+	processor_state_update_running_foreign(processor, thread);
+	/* Since idle and bound threads are not tracked by the edge scheduler, ignore when those threads go on-core */
+	sched_bucket_t bucket = ((thread->state & TH_IDLE) || (thread->bound_processor != PROCESSOR_NULL)) ? TH_BUCKET_SCHED_MAX : thread->th_sched_bucket;
+	os_atomic_store(&processor->processor_set->cpu_running_buckets[processor->cpu_id], bucket, relaxed);
+
+#if CONFIG_THREAD_GROUPS
+	processor->current_thread_group = thread_group_get(thread);
+#endif
 	processor->current_perfctl_class = thread_get_perfcontrol_class(thread);
 	processor->current_urgency = thread_get_urgency(thread, NULL, NULL);
-#if DEBUG || DEVELOPMENT
-	processor->current_is_NO_SMT = (thread->sched_flags & TH_SFLAG_NO_SMT) || (thread->task->t_flags & TF_NO_SMT);
-#else
-	processor->current_is_NO_SMT = (thread->sched_flags & TH_SFLAG_NO_SMT);
-#endif
+	processor->current_is_NO_SMT = thread_no_smt(thread);
 	processor->current_is_bound = thread->bound_processor != PROCESSOR_NULL;
 }
 
 void
 processor_state_update_explicit(processor_t processor, int pri, sfi_class_id_t sfi_class,
-    pset_cluster_type_t pset_type, perfcontrol_class_t perfctl_class, thread_urgency_t urgency)
+    pset_cluster_type_t pset_type, perfcontrol_class_t perfctl_class, thread_urgency_t urgency, sched_bucket_t bucket)
 {
 	processor->current_pri = pri;
 	processor->current_sfi_class = sfi_class;
 	processor->current_recommended_pset_type = pset_type;
 	processor->current_perfctl_class = perfctl_class;
 	processor->current_urgency = urgency;
+	os_atomic_store(&processor->processor_set->cpu_running_buckets[processor->cpu_id], bucket, relaxed);
 }
 
 pset_node_t
@@ -337,7 +407,7 @@ pset_create(
 		return processor_pset(master_processor);
 	}
 
-	processor_set_t         *prev, pset = kalloc(sizeof(*pset));
+	processor_set_t *prev, pset = zalloc_permanent_type(struct processor_set);
 
 	if (pset != PROCESSOR_SET_NULL) {
 		pset_init(pset, node);
@@ -358,7 +428,7 @@ pset_create(
 }
 
 /*
- *	Find processor set in specified node with specified cluster_id.
+ *	Find processor set with specified cluster_id.
  *	Returns default_pset if not found.
  */
 processor_set_t
@@ -378,13 +448,14 @@ pset_find(
 			}
 			pset = pset->pset_list;
 		}
-	} while ((node = node->node_list) != NULL);
+	} while (pset == NULL && (node = node->node_list) != NULL);
 	simple_unlock(&pset_node_lock);
 	if (pset == NULL) {
 		return default_pset;
 	}
 	return pset;
 }
+
 
 /*
  *	Initialize the given processor_set structure.
@@ -394,20 +465,32 @@ pset_init(
 	processor_set_t         pset,
 	pset_node_t                     node)
 {
+	static uint32_t pset_count = 0;
+
 	if (pset != &pset0) {
-		/* Scheduler state for pset0 initialized in sched_init() */
+		/*
+		 * Scheduler runqueue initialization for non-boot psets.
+		 * This initialization for pset0 happens in sched_init().
+		 */
 		SCHED(pset_init)(pset);
 		SCHED(rt_init)(pset);
 	}
 
 	pset->online_processor_count = 0;
 	pset->load_average = 0;
+	bzero(&pset->pset_load_average, sizeof(pset->pset_load_average));
+#if CONFIG_SCHED_EDGE
+	bzero(&pset->pset_execution_time, sizeof(pset->pset_execution_time));
+#endif /* CONFIG_SCHED_EDGE */
 	pset->cpu_set_low = pset->cpu_set_hi = 0;
 	pset->cpu_set_count = 0;
 	pset->last_chosen = -1;
 	pset->cpu_bitmask = 0;
 	pset->recommended_bitmask = 0;
 	pset->primary_map = 0;
+	pset->realtime_map = 0;
+	pset->cpu_running_foreign = 0;
+
 	for (uint i = 0; i < PROCESSOR_STATE_LEN; i++) {
 		pset->cpu_state_map[i] = 0;
 	}
@@ -422,12 +505,24 @@ pset_init(
 	pset->pset_name_self = IP_NULL;
 	pset->pset_list = PROCESSOR_SET_NULL;
 	pset->node = node;
-	pset->pset_cluster_type = PSET_SMP;
-	pset->pset_cluster_id = 0;
+
+	/*
+	 * The pset_cluster_type & pset_cluster_id for all psets
+	 * on the platform are initialized as part of the SCHED(init).
+	 * That works well for small cluster platforms; for large cluster
+	 * count systems, it might be cleaner to do all the setup
+	 * dynamically in SCHED(pset_init).
+	 *
+	 * <Edge Multi-cluster Support Needed>
+	 */
+	pset->is_SMT = false;
 
 	simple_lock(&pset_node_lock, LCK_GRP_NULL);
-	node->pset_count++;
+	pset->pset_id = pset_count++;
+	bit_set(node->pset_map, pset->pset_id);
 	simple_unlock(&pset_node_lock);
+
+	pset_array[pset->pset_id] = pset;
 }
 
 kern_return_t
@@ -529,18 +624,18 @@ processor_info(
 		cpu_load_info = (processor_cpu_load_info_t) info;
 		if (precise_user_kernel_time) {
 			cpu_load_info->cpu_ticks[CPU_STATE_USER] =
-			    (uint32_t)(timer_grab(&PROCESSOR_DATA(processor, user_state)) / hz_tick_interval);
+			    (uint32_t)(timer_grab(&processor->user_state) / hz_tick_interval);
 			cpu_load_info->cpu_ticks[CPU_STATE_SYSTEM] =
-			    (uint32_t)(timer_grab(&PROCESSOR_DATA(processor, system_state)) / hz_tick_interval);
+			    (uint32_t)(timer_grab(&processor->system_state) / hz_tick_interval);
 		} else {
-			uint64_t tval = timer_grab(&PROCESSOR_DATA(processor, user_state)) +
-			    timer_grab(&PROCESSOR_DATA(processor, system_state));
+			uint64_t tval = timer_grab(&processor->user_state) +
+			    timer_grab(&processor->system_state);
 
 			cpu_load_info->cpu_ticks[CPU_STATE_USER] = (uint32_t)(tval / hz_tick_interval);
 			cpu_load_info->cpu_ticks[CPU_STATE_SYSTEM] = 0;
 		}
 
-		idle_state = &PROCESSOR_DATA(processor, idle_state);
+		idle_state = &processor->idle_state;
 		idle_time_snapshot1 = timer_grab(idle_state);
 		idle_time_tstamp1 = idle_state->tstamp;
 
@@ -553,7 +648,7 @@ processor_info(
 		 * have evidence that the timer is being updated
 		 * concurrently, we consider its value up-to-date.
 		 */
-		if (PROCESSOR_DATA(processor, current_state) != idle_state) {
+		if (processor->current_state != idle_state) {
 			cpu_load_info->cpu_ticks[CPU_STATE_IDLE] =
 			    (uint32_t)(idle_time_snapshot1 / hz_tick_interval);
 		} else if ((idle_time_snapshot1 != (idle_time_snapshot2 = timer_grab(idle_state))) ||
@@ -629,12 +724,14 @@ processor_start(
 		scheduler_disable = true;
 	}
 
+	ml_cpu_begin_state_transition(processor->cpu_id);
 	s = splsched();
 	pset = processor->processor_set;
 	pset_lock(pset);
 	if (processor->state != PROCESSOR_OFF_LINE) {
 		pset_unlock(pset);
 		splx(s);
+		ml_cpu_end_state_transition(processor->cpu_id);
 
 		return KERN_FAILURE;
 	}
@@ -654,6 +751,7 @@ processor_start(
 			pset_update_processor_state(pset, processor, PROCESSOR_OFF_LINE);
 			pset_unlock(pset);
 			splx(s);
+			ml_cpu_end_state_transition(processor->cpu_id);
 
 			return result;
 		}
@@ -673,6 +771,7 @@ processor_start(
 			pset_update_processor_state(pset, processor, PROCESSOR_OFF_LINE);
 			pset_unlock(pset);
 			splx(s);
+			ml_cpu_end_state_transition(processor->cpu_id);
 
 			return result;
 		}
@@ -693,6 +792,7 @@ processor_start(
 		ipc_processor_init(processor);
 	}
 
+	ml_broadcast_cpu_event(CPU_BOOT_REQUESTED, processor->cpu_id);
 	result = cpu_start(processor->cpu_id);
 	if (result != KERN_SUCCESS) {
 		s = splsched();
@@ -700,6 +800,7 @@ processor_start(
 		pset_update_processor_state(pset, processor, PROCESSOR_OFF_LINE);
 		pset_unlock(pset);
 		splx(s);
+		ml_cpu_end_state_transition(processor->cpu_id);
 
 		return result;
 	}
@@ -709,6 +810,8 @@ processor_start(
 	}
 
 	ipc_processor_enable(processor);
+	ml_cpu_end_state_transition(processor->cpu_id);
+	ml_broadcast_cpu_event(CPU_ACTIVE, processor->cpu_id);
 
 	return KERN_SUCCESS;
 }
@@ -1072,7 +1175,7 @@ processor_set_policy_disable(
  *
  *	Common internals for processor_set_{threads,tasks}
  */
-kern_return_t
+static kern_return_t
 processor_set_things(
 	processor_set_t pset,
 	void **thing_list,
@@ -1310,17 +1413,17 @@ processor_set_things(
 	return KERN_SUCCESS;
 }
 
-
 /*
  *	processor_set_tasks:
  *
  *	List all tasks in the processor set.
  */
-kern_return_t
-processor_set_tasks(
+static kern_return_t
+processor_set_tasks_internal(
 	processor_set_t         pset,
 	task_array_t            *task_list,
-	mach_msg_type_number_t  *count)
+	mach_msg_type_number_t  *count,
+	int                     flavor)
 {
 	kern_return_t ret;
 	mach_msg_type_number_t i;
@@ -1331,10 +1434,64 @@ processor_set_tasks(
 	}
 
 	/* do the conversion that Mig should handle */
-	for (i = 0; i < *count; i++) {
-		(*task_list)[i] = (task_t)convert_task_to_port((*task_list)[i]);
+	switch (flavor) {
+	case TASK_FLAVOR_CONTROL:
+		for (i = 0; i < *count; i++) {
+			(*task_list)[i] = (task_t)convert_task_to_port((*task_list)[i]);
+		}
+		break;
+	case TASK_FLAVOR_READ:
+		for (i = 0; i < *count; i++) {
+			(*task_list)[i] = (task_t)convert_task_read_to_port((*task_list)[i]);
+		}
+		break;
+	case TASK_FLAVOR_INSPECT:
+		for (i = 0; i < *count; i++) {
+			(*task_list)[i] = (task_t)convert_task_inspect_to_port((*task_list)[i]);
+		}
+		break;
+	case TASK_FLAVOR_NAME:
+		for (i = 0; i < *count; i++) {
+			(*task_list)[i] = (task_t)convert_task_name_to_port((*task_list)[i]);
+		}
+		break;
+	default:
+		return KERN_INVALID_ARGUMENT;
 	}
+
 	return KERN_SUCCESS;
+}
+
+kern_return_t
+processor_set_tasks(
+	processor_set_t         pset,
+	task_array_t            *task_list,
+	mach_msg_type_number_t  *count)
+{
+	return processor_set_tasks_internal(pset, task_list, count, TASK_FLAVOR_CONTROL);
+}
+
+/*
+ *	processor_set_tasks_with_flavor:
+ *
+ *	Based on flavor, return task/inspect/read port to all tasks in the processor set.
+ */
+kern_return_t
+processor_set_tasks_with_flavor(
+	processor_set_t         pset,
+	mach_task_flavor_t      flavor,
+	task_array_t            *task_list,
+	mach_msg_type_number_t  *count)
+{
+	switch (flavor) {
+	case TASK_FLAVOR_CONTROL:
+	case TASK_FLAVOR_READ:
+	case TASK_FLAVOR_INSPECT:
+	case TASK_FLAVOR_NAME:
+		return processor_set_tasks_internal(pset, task_list, count, flavor);
+	default:
+		return KERN_INVALID_ARGUMENT;
+	}
 }
 
 /*
@@ -1351,7 +1508,7 @@ processor_set_threads(
 {
 	return KERN_FAILURE;
 }
-#elif defined(CONFIG_EMBEDDED)
+#elif !defined(XNU_TARGET_OS_OSX)
 kern_return_t
 processor_set_threads(
 	__unused processor_set_t                pset,
@@ -1419,39 +1576,119 @@ pset_reference(
 	return;
 }
 
+#if CONFIG_THREAD_GROUPS
 
-#if CONFIG_SCHED_CLUTCH
+pset_cluster_type_t
+thread_group_pset_recommendation(__unused struct thread_group *tg, __unused cluster_type_t recommendation)
+{
+#if __AMP__
+	switch (recommendation) {
+	case CLUSTER_TYPE_SMP:
+	default:
+		/*
+		 * In case of SMP recommendations, check if the thread
+		 * group has special flags which restrict it to the E
+		 * cluster.
+		 */
+		if (thread_group_smp_restricted(tg)) {
+			return PSET_AMP_E;
+		}
+		return PSET_AMP_P;
+	case CLUSTER_TYPE_E:
+		return PSET_AMP_E;
+	case CLUSTER_TYPE_P:
+		return PSET_AMP_P;
+	}
+#else /* __AMP__ */
+	return PSET_SMP;
+#endif /* __AMP__ */
+}
 
-/*
- * The clutch scheduler decides the recommendation of a thread based
- * on its thread group's properties and recommendations. The only thread
- * level property it looks at is the bucket for the thread to implement
- * the policy of not running Utility & BG buckets on the P-cores. Any
- * other policy being added to this routine might need to be reflected
- * in places such as sched_clutch_hierarchy_thread_pset() &
- * sched_clutch_migrate_thread_group() which rely on getting the recommendations
- * right.
- *
- * Note: The current implementation does not support TH_SFLAG_ECORE_ONLY &
- * TH_SFLAG_PCORE_ONLY flags which are used for debugging utilities. A similar
- * version of that functionality can be implemented by putting these flags
- * on a thread group instead of individual thread basis.
- *
- */
+#endif
+
 pset_cluster_type_t
 recommended_pset_type(thread_t thread)
 {
+#if CONFIG_THREAD_GROUPS && __AMP__
+	if (thread == THREAD_NULL) {
+		return PSET_AMP_E;
+	}
+
+	if (thread->sched_flags & TH_SFLAG_ECORE_ONLY) {
+		return PSET_AMP_E;
+	} else if (thread->sched_flags & TH_SFLAG_PCORE_ONLY) {
+		return PSET_AMP_P;
+	}
+
+	if (thread->base_pri <= MAXPRI_THROTTLE) {
+		if (os_atomic_load(&sched_perfctl_policy_bg, relaxed) != SCHED_PERFCTL_POLICY_FOLLOW_GROUP) {
+			return PSET_AMP_E;
+		}
+	} else if (thread->base_pri <= BASEPRI_UTILITY) {
+		if (os_atomic_load(&sched_perfctl_policy_util, relaxed) != SCHED_PERFCTL_POLICY_FOLLOW_GROUP) {
+			return PSET_AMP_E;
+		}
+	}
+
+#if DEVELOPMENT || DEBUG
+	extern bool system_ecore_only;
+	extern processor_set_t pcore_set;
+	if (system_ecore_only) {
+		if (thread->task->pset_hint == pcore_set) {
+			return PSET_AMP_P;
+		}
+		return PSET_AMP_E;
+	}
+#endif
+
+	struct thread_group *tg = thread_group_get(thread);
+	cluster_type_t recommendation = thread_group_recommendation(tg);
+	switch (recommendation) {
+	case CLUSTER_TYPE_SMP:
+	default:
+		if (thread->task == kernel_task) {
+			return PSET_AMP_E;
+		}
+		return PSET_AMP_P;
+	case CLUSTER_TYPE_E:
+		return PSET_AMP_E;
+	case CLUSTER_TYPE_P:
+		return PSET_AMP_P;
+	}
+#else
 	(void)thread;
 	return PSET_SMP;
+#endif
 }
 
-#else /* CONFIG_SCHED_CLUTCH */
+#if CONFIG_THREAD_GROUPS && __AMP__
 
-pset_cluster_type_t
-recommended_pset_type(thread_t thread)
+void
+sched_perfcontrol_inherit_recommendation_from_tg(perfcontrol_class_t perfctl_class, boolean_t inherit)
 {
-	(void)thread;
-	return PSET_SMP;
+	sched_perfctl_class_policy_t sched_policy = inherit ? SCHED_PERFCTL_POLICY_FOLLOW_GROUP : SCHED_PERFCTL_POLICY_RESTRICT_E;
+
+	KDBG(MACHDBG_CODE(DBG_MACH_SCHED, MACH_AMP_PERFCTL_POLICY_CHANGE) | DBG_FUNC_NONE, perfctl_class, sched_policy, 0, 0);
+
+	switch (perfctl_class) {
+	case PERFCONTROL_CLASS_UTILITY:
+		os_atomic_store(&sched_perfctl_policy_util, sched_policy, relaxed);
+		break;
+	case PERFCONTROL_CLASS_BACKGROUND:
+		os_atomic_store(&sched_perfctl_policy_bg, sched_policy, relaxed);
+		break;
+	default:
+		panic("perfctl_class invalid");
+		break;
+	}
 }
 
-#endif /* CONFIG_SCHED_CLUTCH */
+#elif defined(__arm64__)
+
+/* Define a stub routine since this symbol is exported on all arm64 platforms */
+void
+sched_perfcontrol_inherit_recommendation_from_tg(__unused perfcontrol_class_t perfctl_class, __unused boolean_t inherit)
+{
+}
+
+#endif /* defined(__arm64__) */

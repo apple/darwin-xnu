@@ -508,7 +508,7 @@ extern errno_t mbuf_cluster_get_prop(mbuf_t mbuf, u_int32_t *prop);
  *                   smaller during subsequent requests.
  */
 extern errno_t mbuf_getcluster(mbuf_how_t how, mbuf_type_t type, size_t size,
-    mbuf_t *mbuf);
+    mbuf_t *mbuf)
 __NKE_API_DEPRECATED;
 
 /*!
@@ -2048,4 +2048,5 @@ extern errno_t mbuf_set_keepalive_flag(mbuf_t mbuf, boolean_t is_keepalive);
 }
 
 __END_DECLS
+#undef __NKE_API_DEPRECATED
 #endif /* __KPI_MBUF__ */

@@ -65,7 +65,7 @@
 #include <i386/trap.h>
 #include <i386/pmap.h>
 #include <i386/fpu.h>
-#include <i386/misc_protos.h> /* panic_io_port_read() */
+#include <i386/panic_notify.h>
 
 #include <mach/exception.h>
 #include <mach/kern_return.h>
@@ -130,7 +130,7 @@ panic_64(x86_saved_state_t *sp, __unused int pc, __unused const char *msg, boole
 	 * Issue an I/O port read if one has been requested - this is an
 	 * event logic analyzers can use as a trigger point.
 	 */
-	panic_io_port_read();
+	panic_notify();
 
 
 	/*

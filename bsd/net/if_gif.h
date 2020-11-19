@@ -82,9 +82,7 @@ struct gif_softc {
 #endif
 	union {
 		struct route  gifscr_ro;    /* xxx */
-#if INET6
 		struct route_in6 gifscr_ro6; /* xxx */
-#endif
 	} gifsc_gifscr;
 	int             gif_flags;
 #define IFGIF_DETACHING 0x1
@@ -104,9 +102,7 @@ struct gif_softc {
     LCK_MTX_ASSERT_OWNED)
 
 #define gif_ro gifsc_gifscr.gifscr_ro
-#if INET6
 #define gif_ro6 gifsc_gifscr.gifscr_ro6
-#endif
 
 #endif /* BSD_KERNEL_PRIVATE */
 

@@ -54,8 +54,8 @@ def ShowIfConfiguration(ifnet):
         out_string += "\n\t(struct ifnet *)" + hex(ifnet)
         if iface.if_snd.ifcq_len :
             out_string += "\n\t" + str(iface.if_snd.ifcq_len)
-        if dlifnet.dl_if_inpstorage.rcvq_pkts.qlen :
-            out_string += "\n\t" + str(dlifnet.dl_if_inpstorage.rcvq_pkts.qlen)
+        if dlifnet.dl_if_inpstorage.dlth_pkts.qlen :
+            out_string += "\n\t" + str(dlifnet.dl_if_inpstorage.dlth_pkts.qlen)
     print out_string
 
 def GetIfConfiguration(ifname):
@@ -325,7 +325,7 @@ def ShowDlilIfnetConfiguration(dlil_ifnet, show_all) :
     if show_all :
         out_string += GetIfaddrs(iface)
         out_string += "\n"
-    print out_string 
+    print out_string
 
 # Macro: showifnets
 @lldb_command('showifnets')
@@ -526,6 +526,17 @@ def GetUnixDomainSocketAsString(sock) :
         out_string += "unp_addr: " + GetSocketAddrAsStringUnix(pcb.unp_addr)
     return out_string
 
+def GetVsockSocketAsString(sock) :
+    out_string = ""
+    pcb = Cast(sock.so_pcb, 'vsockpcb *')
+    if (pcb == 0):
+        out_string += "vsockpcb: (null) "
+    else:
+        out_string += "vsockpcb: " + hex(pcb) + " "
+        out_string += str(pcb.local_address) + " "
+        out_string += str(pcb.remote_address)
+    return out_string
+
 def GetSocket(socket) :
     """ Show the contents of a socket
     """
@@ -543,6 +554,8 @@ def GetSocket(socket) :
             out_string += GetIPv4SocketAsString(so)
         if (domain.dom_family == 30):
             out_string += GetIPv6SocketAsString(so)
+        if (domain.dom_family == 40):
+            out_string += GetVsockSocketAsString(so)
         out_string += " s=" + str(int(so.so_snd.sb_cc)) + " r=" + str(int(so.so_rcv.sb_cc)) + " usecnt=" + str(int(so.so_usecount)) + "] "
     else:
         out_string += "(null)"
@@ -572,6 +585,8 @@ def ShowSocket(cmd_args=None) :
             out_string += GetIPv4SocketAsString(so)
         if (domain.dom_family == 30):
             out_string += GetIPv6SocketAsString(so)
+        if (domain.dom_family == 40):
+            out_string += GetVsockSocketAsString(so)
         print out_string
     else:
         print "Unknown value passed as argument."
@@ -598,8 +613,8 @@ def GetProcSockets(proc, total_snd_cc, total_rcv_cc):
         proc_lastfile = unsigned(proc_filedesc.fd_lastfile)
         if proc_filedesc.fd_nfiles != 0:
             while count <= proc_lastfile:
-                if (unsigned(proc_ofiles[count]) != 0 and proc_ofiles[count].f_fglob != 0):
-                        fg = proc_ofiles[count].f_fglob
+                if (unsigned(proc_ofiles[count]) != 0 and proc_ofiles[count].fp_glob != 0):
+                        fg = proc_ofiles[count].fp_glob
                         if (int(fg.fg_ops.fo_type) == 2):
                             if (proc_filedesc.fd_ofileflags[count] & 4):
                                 out_string += "U: "
@@ -1784,6 +1799,29 @@ def Getntohs(port):
     p = ((port & 0x0000ff00) >> 8)
     p |= ((port & 0x000000ff) << 8)
     return str(p)
+
+
+# Macro: mbuf_list_usage_summary
+@lldb_command('mbuf_list_usage_summary')
+def ShowMbufListUsageSummary(cmd_args=None):
+    """ Print mbuf list usage summary
+    """
+    out_string = ""
+    pkt_cnt = [0]
+    buf_byte_cnt = [0] * (Mbuf_Type.MT_LAST + 1)
+    mbuf_cnt = [0]
+    mbuf_cluster_cnt = [0]
+
+    mpkt = kern.GetValueFromAddress(cmd_args[0], 'struct mbuf *')
+    CalcMbufInList(mpkt, pkt_cnt, buf_byte_cnt, mbuf_cnt, mbuf_cluster_cnt)
+
+    out_string += "Total packet count is " + str(int(pkt_cnt[0])) + "\n"
+    for x in range(Mbuf_Type.MT_LAST):
+        if (buf_byte_cnt[x] != 0):
+            out_string += "Total buf bytes of type " + Mbuf_Type.reverse_mapping[x] + " : " + str(int(buf_byte_cnt[x])) + "\n"
+    out_string += "Total mbuf count " + str(int(mbuf_cnt[0])) + "\n"
+    out_string += "Total mbuf cluster count " + str(int(mbuf_cluster_cnt[0])) + "\n"
+    print out_string
 
 # Macro: show_kern_event_pcbinfo
 def GetKernEventPcbInfo(kev_pcb_head):

@@ -49,6 +49,7 @@ typedef x86_saved_state_t savearea_t;
 #include <mach/vm_param.h>
 #include <machine/pal_routines.h>
 #include <i386/mp.h>
+#include <machine/trap.h>
 
 /*
  * APPLE NOTE:  The regmap is used to decode which 64bit uregs[] register
@@ -260,6 +261,38 @@ dtrace_getreg(struct regs *savearea, uint_t reg)
 	}
 }
 
+uint64_t
+dtrace_getvmreg(uint_t ndx)
+{
+	uint64_t reg = 0;
+	bool failed = false;
+
+	/* Any change in the vmread final opcode must be reflected in dtrace_handle_trap below. */
+	__asm__ __volatile__(
+		"vmread %2, %0\n"
+		"ja 1f\n"
+		"mov $1, %1\n"
+		"1:\n"
+	: "=a" (reg), "+r" (failed) : "D" ((uint64_t)ndx));
+
+	/*
+	 * Check for fault in vmreg first. If DTrace has recovered the fault cause by
+	 * vmread above then the value in failed will be unreliable.
+	 */
+	if (DTRACE_CPUFLAG_ISSET(CPU_DTRACE_ILLOP)) {
+		return 0;
+	}
+
+	/* If vmread succeeded but failed because CF or ZS is 1 report fail. */
+	if (failed) {
+		DTRACE_CPUFLAG_SET(CPU_DTRACE_BADADDR);
+		cpu_core[CPU->cpu_id].cpuc_dtrace_illval = ndx;
+		return 0;
+	}
+
+	return reg;
+}
+
 #define RETURN_OFFSET 4
 #define RETURN_OFFSET64 8
 
@@ -267,10 +300,10 @@ static int
 dtrace_getustack_common(uint64_t *pcstack, int pcstack_limit, user_addr_t pc,
     user_addr_t sp)
 {
-#if 0
 	volatile uint16_t *flags =
 	    (volatile uint16_t *)&cpu_core[CPU->cpu_id].cpuc_dtrace_flags;
 
+#if 0
 	uintptr_t oldcontext = lwp->lwp_oldcontext; /* XXX signal stack crawl */
 	size_t s1, s2;
 #endif
@@ -333,17 +366,11 @@ dtrace_getustack_common(uint64_t *pcstack, int pcstack_limit, user_addr_t pc,
 			}
 		}
 
-#if 0 /* XXX */
-		/*
-		 * This is totally bogus:  if we faulted, we're going to clear
-		 * the fault and break.  This is to deal with the apparently
-		 * broken Java stacks on x86.
-		 */
+		/* Truncate ustack if the iterator causes fault. */
 		if (*flags & CPU_DTRACE_FAULT) {
 			*flags &= ~CPU_DTRACE_FAULT;
 			break;
 		}
-#endif
 	}
 
 	return (ret);
@@ -357,6 +384,7 @@ static int
 dtrace_adjust_stack(uint64_t **pcstack, int *pcstack_limit, user_addr_t *pc,
                     user_addr_t sp)
 {
+    volatile uint16_t *flags = (volatile uint16_t *) &cpu_core[CPU->cpu_id].cpuc_dtrace_flags;
     int64_t missing_tos;
     int rc = 0;
     boolean_t is64Bit = proc_is64bit(current_proc());
@@ -381,6 +409,11 @@ dtrace_adjust_stack(uint64_t **pcstack, int *pcstack_limit, user_addr_t *pc,
             *pc = dtrace_fuword64(sp);
         else
             *pc = dtrace_fuword32(sp);
+
+	/* Truncate ustack if the iterator causes fault. */
+	if (*flags & CPU_DTRACE_FAULT) {
+		*flags &= ~CPU_DTRACE_FAULT;
+	}
     } else {
         /*
          * We might have a top of stack override, in which case we just
@@ -639,17 +672,11 @@ dtrace_getufpstack(uint64_t *pcstack, uint64_t *fpstack, int pcstack_limit)
 			}
 		}
 
-#if 0 /* XXX */
-		/*
-		 * This is totally bogus:  if we faulted, we're going to clear
-		 * the fault and break.  This is to deal with the apparently
-		 * broken Java stacks on x86.
-		 */
+		/* Truncate ustack if the iterator causes fault. */
 		if (*flags & CPU_DTRACE_FAULT) {
 			*flags &= ~CPU_DTRACE_FAULT;
 			break;
 		}
-#endif
 	}
 
 zero:
@@ -840,3 +867,34 @@ dtrace_toxic_ranges(void (*func)(uintptr_t base, uintptr_t limit))
 			func(VM_MAX_KERNEL_ADDRESS + 1, ~(uintptr_t)0);
 }
 
+/*
+ * Trap Safety
+ */
+extern boolean_t dtrace_handle_trap(int, x86_saved_state_t *);
+
+boolean_t
+dtrace_handle_trap(int trapno, x86_saved_state_t *state)
+{
+	x86_saved_state64_t *saved_state = saved_state64(state);
+
+	if (!DTRACE_CPUFLAG_ISSET(CPU_DTRACE_NOFAULT)) {
+		return FALSE;
+	}
+
+	/*
+	 * General purpose solution would require pulling in disassembler. Right now there
+	 * is only one specific case to be handled so it is hardcoded here.
+	 */
+	if (trapno == T_INVALID_OPCODE) {
+		uint8_t *inst = (uint8_t *)saved_state->isf.rip;
+
+		/* vmread %rdi, %rax */
+		if (inst[0] == 0x0f && inst[1] == 0x78 && inst[2] == 0xf8) {
+			DTRACE_CPUFLAG_SET(CPU_DTRACE_ILLOP);
+			saved_state->isf.rip += 3;
+			return TRUE;
+		}
+	}
+
+	return FALSE;
+}

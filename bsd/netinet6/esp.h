@@ -99,12 +99,12 @@ struct esptail {
 struct secasvar;
 
 struct esp_algorithm {
-	size_t padbound;        /* pad boundary, in byte */
+	uint32_t padbound;        /* pad boundary, in byte */
 	int ivlenval;           /* iv length, in byte */
 	int (*mature)(struct secasvar *);
-	int keymin;     /* in bits */
-	int keymax;     /* in bits */
-	int (*schedlen)(const struct esp_algorithm *);
+	u_int16_t keymin;     /* in bits */
+	u_int16_t keymax;     /* in bits */
+	size_t (*schedlen)(const struct esp_algorithm *);
 	const char *name;
 	int (*ivlen)(const struct esp_algorithm *, struct secasvar *);
 	int (*decrypt)(struct mbuf *, size_t,
@@ -119,8 +119,8 @@ struct esp_algorithm {
 	    struct secasvar *, u_int8_t *, u_int8_t *);
 	/* For Authenticated Encryption Methods */
 	size_t icvlen;
-	int (*finalizedecrypt)(struct secasvar *, u_int8_t *, uint);
-	int (*finalizeencrypt)(struct secasvar *, u_int8_t *, uint);
+	int (*finalizedecrypt)(struct secasvar *, u_int8_t *, size_t);
+	int (*finalizeencrypt)(struct secasvar *, u_int8_t *, size_t);
 };
 
 extern os_log_t esp_mpkl_log_object;

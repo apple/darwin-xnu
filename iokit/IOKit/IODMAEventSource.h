@@ -29,6 +29,7 @@
 #ifndef _IOKIT_IODMAEVENTSOURCE_H
 #define _IOKIT_IODMAEVENTSOURCE_H
 
+#include <libkern/c++/OSPtr.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IODMACommand.h>
 #include <IOKit/IODMAController.h>
@@ -51,7 +52,7 @@ protected:
 	virtual void notifyDMACommand(IODMACommand *dmaCommand, IOReturn status, IOByteCount actualByteCount, AbsoluteTime timeStamp);
 
 public:
-	static IODMAEventSource *dmaEventSource(OSObject *owner,
+	static OSPtr<IODMAEventSource> dmaEventSource(OSObject *owner,
 	    IOService *provider,
 	    Action completion = NULL,
 	    Action notification = NULL,
@@ -73,7 +74,7 @@ public:
 
 private:
 	IOService       *dmaProvider;
-	IODMAController *dmaController;
+	OSPtr<IODMAController> dmaController;
 	UInt32          dmaIndex;
 	queue_head_t    dmaCommandsCompleted;
 	IOSimpleLock    *dmaCommandsCompletedLock;

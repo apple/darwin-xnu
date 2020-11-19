@@ -200,9 +200,7 @@ devfs_sinit(void)
 		return ENOTSUP;
 	}
 #ifdef HIDDEN_MOUNTPOINT
-	MALLOC(devfs_hidden_mount, struct mount *, sizeof(struct mount),
-	    M_MOUNT, M_WAITOK);
-	bzero(devfs_hidden_mount, sizeof(struct mount));
+	devfs_hidden_mount = zalloc_flags(mount_zone, Z_WAITOK | Z_ZERO);
 	mount_lock_init(devfs_hidden_mount);
 	TAILQ_INIT(&devfs_hidden_mount->mnt_vnodelist);
 	TAILQ_INIT(&devfs_hidden_mount->mnt_workerqueue);
@@ -224,7 +222,7 @@ devfs_sinit(void)
 	        = (struct devfsmount *)devfs_hidden_mount->mnt_data;
 #endif /* HIDDEN_MOUNTPOINT */
 #if CONFIG_MACF
-	mac_devfs_label_associate_directory("/", strlen("/"),
+	mac_devfs_label_associate_directory("/", (int) strlen("/"),
 	    dev_root->de_dnp, "/");
 #endif
 	devfs_ready = 1;
@@ -360,7 +358,7 @@ dev_finddir(const char * path,
 #if CONFIG_MACF
 			mac_devfs_label_associate_directory(
 				dirnode->dn_typeinfo.Dir.myname->de_name,
-				strlen(dirnode->dn_typeinfo.Dir.myname->de_name),
+				(int) strlen(dirnode->dn_typeinfo.Dir.myname->de_name),
 				dnp, fullpath);
 #endif
 			devfs_propogate(dirnode->dn_typeinfo.Dir.myname, dirent_p, delp);
@@ -1581,7 +1579,7 @@ devfs_make_node_internal(dev_t dev, devfstype_t type, uid_t uid,
 #if CONFIG_MACF
 	char buff[sizeof(buf)];
 #endif
-	int             i;
+	size_t          i;
 	uint32_t        log_count;
 	struct devfs_event_log event_log;
 	struct devfs_vnode_event stackbuf[NUM_STACK_ENTRIES];
@@ -1682,7 +1680,7 @@ devfs_make_link(void *original, char *fmt, ...)
 
 	va_list ap;
 	char *p, buf[256]; /* XXX */
-	int i;
+	size_t i;
 
 	DEVFS_LOCK();
 

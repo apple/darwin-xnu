@@ -25,6 +25,12 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+#include <sys/ioctl.h>
+
+#include <sys/stat.h>
+#include <miscfs/devfs/devfs.h>
+#include <sys/conf.h>
+#include <sys/systm.h>
 #include <sys/dtrace.h>
 #include <sys/dtrace_impl.h>
 #include <kern/lock_group.h>
@@ -32,16 +38,10 @@
 
 #if LOCK_STATS
 
-#define SPIN_HELD 0
-#define SPIN_MISS 1
-#define SPIN_SPIN 2
+#define LP_NODE "lockprof"
 
-#define SPIN_HELD_PREFIX "spin-held-"
-#define SPIN_MISS_PREFIX "spin-miss-"
-#define SPIN_SPIN_PREFIX "spin-spin-"
-
-#define LOCKGROUPSTAT_AFRAMES 1
-#define LOCKGROUPSTAT_LEN 64
+#define LOCKPROF_AFRAMES 3
+#define LOCKPROF_LEN 64
 
 static dtrace_provider_id_t lockprof_id;
 
@@ -49,30 +49,62 @@ decl_lck_mtx_data(extern, lck_grp_lock);
 extern queue_head_t lck_grp_queue;
 extern unsigned int lck_grp_cnt;
 
+extern void lck_grp_reference(lck_grp_t *grp);
+extern void lck_grp_deallocate(lck_grp_t *grp);
+
 #define LOCKPROF_MAX 10000 /* maximum number of lockprof probes */
 static uint32_t lockprof_count; /* current number of lockprof probes */
 
+enum probe_flags {
+	/*
+	 * Counts time spent spinning/blocking
+	 */
+	TIME_EVENT = 0x01,
+	/*
+	 * Requires LCK_GRP_ATTR_STAT to be set on the lock
+	 * group, either via lck_grp_attr_setsta on the lock group,
+	 * or globally via the lcks=3 boot-arg
+	 */
+	STAT_NEEDED = 0x02
+};
+
 static const struct {
-	int kind;
 	const char *prefix;
-	bool time_event;
-} events[] = {
-	{SPIN_HELD, SPIN_HELD_PREFIX, false},
-	{SPIN_MISS, SPIN_MISS_PREFIX, false},
-	{SPIN_SPIN, SPIN_SPIN_PREFIX, true},
-	{0, NULL, false}
+	int flags;
+	size_t count_offset;
+	size_t stat_offset;
+} probes[] = {
+	{"spin-held-", 0, offsetof(lck_grp_t, lck_grp_spincnt), offsetof(lck_grp_stats_t, lgss_spin_held)},
+	{"spin-miss-", 0, offsetof(lck_grp_t, lck_grp_spincnt), offsetof(lck_grp_stats_t, lgss_spin_miss)},
+	{"spin-spin-", TIME_EVENT, offsetof(lck_grp_t, lck_grp_spincnt), offsetof(lck_grp_stats_t, lgss_spin_spin)},
+	{"ticket-held-", 0, offsetof(lck_grp_t, lck_grp_ticketcnt), offsetof(lck_grp_stats_t, lgss_ticket_held)},
+	{"ticket-miss-", 0, offsetof(lck_grp_t, lck_grp_ticketcnt), offsetof(lck_grp_stats_t, lgss_ticket_miss)},
+	{"ticket-spin-", TIME_EVENT, offsetof(lck_grp_t, lck_grp_ticketcnt), offsetof(lck_grp_stats_t, lgss_ticket_spin)},
+#if HAS_EXT_MUTEXES
+	{"adaptive-held-", STAT_NEEDED, offsetof(lck_grp_t, lck_grp_mtxcnt), offsetof(lck_grp_stats_t, lgss_mtx_held)},
+	{"adaptive-miss-", STAT_NEEDED, offsetof(lck_grp_t, lck_grp_mtxcnt), offsetof(lck_grp_stats_t, lgss_mtx_miss)},
+	{"adaptive-wait-", STAT_NEEDED, offsetof(lck_grp_t, lck_grp_mtxcnt), offsetof(lck_grp_stats_t, lgss_mtx_wait)},
+	{"adaptive-direct-wait-", STAT_NEEDED, offsetof(lck_grp_t, lck_grp_mtxcnt), offsetof(lck_grp_stats_t, lgss_mtx_direct_wait)},
+#endif /* HAS_EXT_MUTEXES */
+	{NULL, false, 0, 0}
 };
 
+/*
+ * Default defined probes for counting events
+ */
 const static int hold_defaults[] = {
-	100, 1000
+	10000 /* 10000 events */
 };
 
+/*
+ * Default defined probes for time events
+ */
 const static struct {
 	unsigned int time;
 	const char *suffix;
 	uint64_t mult;
 } cont_defaults[] = {
-	{100, "ms", NANOSEC / MILLISEC}
+	{100, "ms", NANOSEC / MILLISEC} /* 100 ms */
 };
 
 typedef struct lockprof_probe {
@@ -88,23 +120,35 @@ lockprof_invoke(lck_grp_t *grp, lck_grp_stat_t *stat, uint64_t val)
 	dtrace_probe(stat->lgs_probeid, (uintptr_t)grp, val, 0, 0, 0);
 }
 
+static int
+lockprof_lock_count(lck_grp_t *grp, int kind)
+{
+	return *(int*)((void*)(grp) + probes[kind].count_offset);
+}
+
 static void
 probe_create(int kind, const char *suffix, const char *grp_name, uint64_t count, uint64_t mult)
 {
-	char name[LOCKGROUPSTAT_LEN];
+	char name[LOCKPROF_LEN];
 	lck_mtx_lock(&lck_grp_lock);
 	lck_grp_t *grp = (lck_grp_t*)queue_first(&lck_grp_queue);
 	uint64_t limit = count * mult;
 
-	if (events[kind].time_event) {
+	if (probes[kind].flags & TIME_EVENT) {
 		nanoseconds_to_absolutetime(limit, &limit);
 	}
 
 	for (unsigned int i = 0; i < lck_grp_cnt; i++, grp = (lck_grp_t*)queue_next((queue_entry_t)grp)) {
 		if (!grp_name || grp_name[0] == '\0' || strcmp(grp_name, grp->lck_grp_name) == 0) {
-			snprintf(name, sizeof(name), "%s%llu%s", events[kind].prefix, count, suffix ?: "");
+			snprintf(name, sizeof(name), "%s%llu%s", probes[kind].prefix, count, suffix ?: "");
 
 			if (dtrace_probe_lookup(lockprof_id, grp->lck_grp_name, NULL, name) != 0) {
+				continue;
+			}
+			if (lockprof_lock_count(grp, kind) == 0) {
+				continue;
+			}
+			if ((probes[kind].flags & STAT_NEEDED) && !(grp->lck_grp_attr & LCK_GRP_ATTR_STAT)) {
 				continue;
 			}
 			if (lockprof_count >= LOCKPROF_MAX) {
@@ -116,8 +160,10 @@ probe_create(int kind, const char *suffix, const char *grp_name, uint64_t count,
 			probe->lockprof_limit = limit;
 			probe->lockprof_grp = grp;
 
+			lck_grp_reference(grp);
+
 			probe->lockprof_id = dtrace_probe_create(lockprof_id, grp->lck_grp_name, NULL, name,
-			    LOCKGROUPSTAT_AFRAMES, probe);
+			    LOCKPROF_AFRAMES, probe);
 
 			lockprof_count++;
 		}
@@ -129,15 +175,22 @@ static void
 lockprof_provide(void *arg, const dtrace_probedesc_t *desc)
 {
 #pragma unused(arg)
-	size_t event_id, i, len;
+	size_t event_id, i, j, len;
 
 	if (desc == NULL) {
 		for (i = 0; i < sizeof(hold_defaults) / sizeof(hold_defaults[0]); i++) {
-			probe_create(SPIN_HELD, NULL, NULL, hold_defaults[i], 1);
-			probe_create(SPIN_MISS, NULL, NULL, hold_defaults[i], 1);
+			for (j = 0; probes[j].prefix != NULL; j++) {
+				if (!(probes[j].flags & TIME_EVENT)) {
+					probe_create(j, NULL, NULL, hold_defaults[i], 1);
+				}
+			}
 		}
 		for (i = 0; i < sizeof(cont_defaults) / sizeof(cont_defaults[0]); i++) {
-			probe_create(SPIN_SPIN, cont_defaults[i].suffix, NULL, cont_defaults[i].time, cont_defaults[i].mult);
+			for (j = 0; probes[j].prefix != NULL; j++) {
+				if (probes[j].flags & TIME_EVENT) {
+					probe_create(j, cont_defaults[i].suffix, NULL, cont_defaults[i].time, cont_defaults[i].mult);
+				}
+			}
 		}
 		return;
 	}
@@ -160,16 +213,16 @@ lockprof_provide(void *arg, const dtrace_probedesc_t *desc)
 
 	name = desc->dtpd_name;
 
-	for (event_id = 0; events[event_id].prefix != NULL; event_id++) {
-		len = strlen(events[event_id].prefix);
+	for (event_id = 0; probes[event_id].prefix != NULL; event_id++) {
+		len = strlen(probes[event_id].prefix);
 
-		if (strncmp(name, events[event_id].prefix, len) != 0) {
+		if (strncmp(name, probes[event_id].prefix, len) != 0) {
 			continue;
 		}
 		break;
 	}
 
-	if (events[event_id].prefix == NULL) {
+	if (probes[event_id].prefix == NULL) {
 		return;
 	}
 
@@ -200,7 +253,7 @@ lockprof_provide(void *arg, const dtrace_probedesc_t *desc)
 		return;
 	}
 
-	if (events[event_id].time_event) {
+	if (probes[event_id].flags & TIME_EVENT) {
 		for (i = 0, mult = 0; suffixes[i].name != NULL; i++) {
 			if (strncasecmp(suffixes[i].name, suffix, strlen(suffixes[i].name) + 1) == 0) {
 				mult = suffixes[i].mult;
@@ -214,23 +267,14 @@ lockprof_provide(void *arg, const dtrace_probedesc_t *desc)
 		return;
 	}
 
-	probe_create(events[event_id].kind, suffix, desc->dtpd_mod, val, mult);
+	probe_create(event_id, suffix, desc->dtpd_mod, val, mult);
 }
 
 
 static lck_grp_stat_t*
 lockprof_stat(lck_grp_t *grp, int kind)
 {
-	switch (kind) {
-	case SPIN_HELD:
-		return &grp->lck_grp_stats.lgss_spin_held;
-	case SPIN_MISS:
-		return &grp->lck_grp_stats.lgss_spin_miss;
-	case SPIN_SPIN:
-		return &grp->lck_grp_stats.lgss_spin_spin;
-	default:
-		return NULL;
-	}
+	return (lck_grp_stat_t*)((void*)&grp->lck_grp_stats + probes[kind].stat_offset);
 }
 
 static int
@@ -294,6 +338,7 @@ lockprof_destroy(void *arg, dtrace_id_t id, void *parg)
 {
 #pragma unused(arg, id)
 	lockprof_probe_t *probe = (lockprof_probe_t*)parg;
+	lck_grp_deallocate(probe->lockprof_grp);
 	kmem_free(probe, sizeof(lockprof_probe_t));
 	lockprof_count--;
 }
@@ -338,14 +383,55 @@ static dtrace_pops_t lockprof_pops = {
 	.dtps_usermode =        NULL,
 	.dtps_destroy =         lockprof_destroy
 };
+
+static int
+_lockprof_open(dev_t dev, int flags, int devtype, struct proc *p)
+{
+#pragma unused(dev,flags,devtype,p)
+	return 0;
+}
+
+static const struct cdevsw lockprof_cdevsw =
+{
+	.d_open = _lockprof_open,
+	.d_close = eno_opcl,
+	.d_read = eno_rdwrt,
+	.d_write = eno_rdwrt,
+	.d_ioctl = eno_ioctl,
+	.d_stop = (stop_fcn_t *)nulldev,
+	.d_reset = (reset_fcn_t *)nulldev,
+	.d_select = eno_select,
+	.d_mmap = eno_mmap,
+	.d_strategy = eno_strat,
+	.d_reserved_1 = eno_getc,
+	.d_reserved_2 = eno_putc,
+};
+
+
 #endif /* LOCK_STATS */
 void lockprof_init(void);
 void
 lockprof_init(void)
 {
 #if LOCK_STATS
-	dtrace_register("lockprof", &lockprof_attr,
-	    DTRACE_PRIV_KERNEL, NULL,
-	    &lockprof_pops, NULL, &lockprof_id);
+	int majorno = cdevsw_add(-1, &lockprof_cdevsw);
+
+	if (majorno < 0) {
+		panic("dtrace: failed to allocate a major number");
+		return;
+	}
+
+	if (dtrace_register(LP_NODE, &lockprof_attr, DTRACE_PRIV_KERNEL,
+	    NULL, &lockprof_pops, NULL, &lockprof_id) != 0) {
+		panic("dtrace: failed to register lockprof provider");
+	}
+
+	dev_t dev = makedev(majorno, 0);
+
+	if (devfs_make_node( dev, DEVFS_CHAR, UID_ROOT, GID_WHEEL, 0666,
+	    LP_NODE, 0 ) == NULL) {
+		panic("dtrace: devfs_make_node failed for lockprof");
+	}
+
 #endif /* LOCK_STATS */
 }

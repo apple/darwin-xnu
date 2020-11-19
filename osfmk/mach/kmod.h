@@ -176,6 +176,7 @@ extern void kmod_panic_dump(vm_offset_t * addr, unsigned int dump_cnt);
  */
 #define KMOD_DTRACE_FORCE_INIT  0x01
 #define KMOD_DTRACE_STATIC_KEXT 0x02
+#define KMOD_DTRACE_NO_KERNEL_SYMS 0x04
 #endif /* CONFIG_DTRACE */
 
 #endif    /* KERNEL_PRIVATE */

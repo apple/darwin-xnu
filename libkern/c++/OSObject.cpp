@@ -42,7 +42,7 @@
 #include <kern/queue.h>
 
 __BEGIN_DECLS
-int debug_ivars_size;
+size_t debug_ivars_size;
 __END_DECLS
 
 
@@ -289,9 +289,9 @@ OSObject::operator new(size_t size)
 	}
 #endif
 
-	void * mem = kalloc_tag_bt(size, VM_KERN_MEMORY_LIBKERN);
+	void *mem = kheap_alloc_tag_bt(KHEAP_DEFAULT, size,
+	    (zalloc_flags_t) (Z_WAITOK | Z_ZERO), VM_KERN_MEMORY_LIBKERN);
 	assert(mem);
-	bzero(mem, size);
 	OSIVAR_ACCUMSIZE(size);
 
 	return (void *) mem;
@@ -310,10 +310,47 @@ OSObject::operator delete(void * mem, size_t size)
 	}
 #endif
 
-	kfree(mem, size);
+	kern_os_kfree(mem, size);
 	OSIVAR_ACCUMSIZE(-size);
 }
 
+__BEGIN_DECLS
+void *OSObject_operator_new_external(size_t size);
+void *
+OSObject_operator_new_external(size_t size)
+{
+  #if IOTRACKING
+	if (kIOTracking & gIOKitDebug) {
+		return OSMetaClass::trackedNew(size);
+	}
+#endif
+
+	void * mem = kheap_alloc_tag_bt(KHEAP_KEXT, size,
+	    (zalloc_flags_t) (Z_WAITOK | Z_ZERO), VM_KERN_MEMORY_LIBKERN);
+	assert(mem);
+	OSIVAR_ACCUMSIZE(size);
+
+	return (void *) mem;
+}
+
+void OSObject_operator_delete_external(void * mem, size_t size);
+void
+OSObject_operator_delete_external(void * mem, size_t size)
+{
+	if (!mem) {
+		return;
+	}
+
+#if IOTRACKING
+	if (kIOTracking & gIOKitDebug) {
+		return OSMetaClass::trackedDelete(mem, size);
+	}
+#endif
+
+	kheap_free(KHEAP_KEXT, mem, size);
+	OSIVAR_ACCUMSIZE(-size);
+}
+__END_DECLS
 bool
 OSObject::init()
 {

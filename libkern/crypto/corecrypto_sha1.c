@@ -31,7 +31,7 @@ SHA1ToDi(const struct ccdigest_info *di, SHA1_CTX *sha1_ctx, struct ccdigest_ctx
 {
 	uint64_t count = getCount(sha1_ctx);
 
-	ccdigest_num(di, di_ctx) = count % di->block_size;
+	ccdigest_num(di, di_ctx) = (unsigned)(count % di->block_size);
 	ccdigest_nbits(di, di_ctx) = (count - ccdigest_num(di, di_ctx)) * 8;
 	memcpy(ccdigest_data(di, di_ctx), sha1_ctx->m.b8, di->block_size);
 	memcpy(ccdigest_state_ccn(di, di_ctx), sha1_ctx->h.b8, di->state_size);

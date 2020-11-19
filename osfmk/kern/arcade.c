@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2019-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -39,7 +39,6 @@
 
 #include <kern/kern_types.h>
 #include <kern/assert.h>
-#include <kern/kalloc.h>
 #include <kern/host.h>
 #include <kern/ast.h>
 #include <kern/task.h>
@@ -93,9 +92,8 @@ arcade_prepare(task_t task, thread_t thread)
 	thread_ast_set(thread, AST_ARCADE);
 }
 
-static lck_grp_attr_t *arcade_upcall_lck_grp_attr;
-static lck_grp_t *arcade_upcall_lck_grp;
-static lck_mtx_t arcade_upcall_mutex;
+static LCK_GRP_DECLARE(arcade_upcall_lck_grp, "arcade_upcall");
+static LCK_MTX_DECLARE(arcade_upcall_mutex, &arcade_upcall_lck_grp);
 
 static ipc_port_t arcade_upcall_port = IP_NULL;
 static boolean_t arcade_upcall_refresh_in_progress = FALSE;
@@ -106,14 +104,10 @@ arcade_init(void)
 {
 	ipc_port_t port;
 
-	arcade_upcall_lck_grp_attr = lck_grp_attr_alloc_init();
-	arcade_upcall_lck_grp = lck_grp_alloc_init("arcade_upcall", arcade_upcall_lck_grp_attr);
-	lck_mtx_init(&arcade_upcall_mutex, arcade_upcall_lck_grp, NULL);
-
 	/* Initialize the global arcade_register kobject and associated port */
 	port = ipc_kobject_alloc_port((ipc_kobject_t)&arcade_register_global,
 	    IKOT_ARCADE_REG, IPC_KOBJECT_ALLOC_MAKE_SEND);
-	arcade_register_global.ar_port = port;
+	os_atomic_store(&arcade_register_global.ar_port, port, release);
 }
 
 arcade_register_t
@@ -207,16 +201,9 @@ arcade_upcall_refresh(uint64_t deadline)
 		arcade_upcall_port = IP_NULL;
 	}
 
-#if 0
 	if (host_get_fairplayd_port(host_priv_self(), &fairplayd_port) != KERN_SUCCESS) {
 		panic("arcade_upcall_refresh(get fairplayd)");
 	}
-#else
-	/* Temporary hack because launchd is rejecting the other special port number */
-	if (host_get_unfreed_port(host_priv_self(), &fairplayd_port) != KERN_SUCCESS) {
-		panic("arcade_upcall_refresh(get fairplayd)");
-	}
-#endif
 
 	/* If no valid fairplayd port registered, we're done */
 	if (!IP_VALID(fairplayd_port)) {
@@ -343,7 +330,7 @@ restart:
 	switch (kr) {
 	case MACH_SEND_INVALID_DEST:
 		vm_map_copy_discard(copy);
-	/* fall thru */
+		OS_FALLTHROUGH;
 	case MIG_SERVER_DIED:
 		goto restart;
 	case KERN_SUCCESS:

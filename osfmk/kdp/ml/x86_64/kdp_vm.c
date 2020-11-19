@@ -175,3 +175,15 @@ kdp_dump_trap(
 	kdp_raise_exception(EXC_BAD_ACCESS, 0, 0, kdp.saved_state);
 	return 0;
 }
+
+/*
+ * kdp_core_start_addr
+ *
+ * return the address where the kernel core file starts
+ *
+ */
+vm_map_offset_t
+kdp_core_start_addr()
+{
+	return VM_MIN_KERNEL_AND_KEXT_ADDRESS;
+}

@@ -71,8 +71,6 @@
 #include <mach/audit_triggers_server.h>
 
 #include <kern/host.h>
-#include <kern/kalloc.h>
-#include <kern/zalloc.h>
 #include <kern/sched_prim.h>
 
 #if CONFIG_MACF
@@ -169,6 +167,9 @@ audit(proc_t p, struct audit_args *uap, __unused int32_t *retval)
 	};
 	token_t *id_tok = NULL;
 	boolean_t kern_events_allowed = FALSE;
+	char *signing_id = NULL;
+	char process_name[MAXCOMLEN + 1] = {};
+	int signer_type = 0;
 
 	error = suser(kauth_cred_get(), &p->p_acflag);
 	if (error) {
@@ -278,6 +279,9 @@ audit(proc_t p, struct audit_args *uap, __unused int32_t *retval)
 			goto free_out;
 		}
 
+		signing_id = id_info.signing_id;
+		signer_type = id_info.signer_type;
+
 		/* Copy the original buffer up to but not including the trailer */
 		memcpy(full_rec, rec, uap->length - AUDIT_TRAILER_SIZE);
 		bytes_copied = uap->length - AUDIT_TRAILER_SIZE;
@@ -326,6 +330,12 @@ audit(proc_t p, struct audit_args *uap, __unused int32_t *retval)
 	 * want to setup kernel based preselection.
 	 */
 	ar->k_ar_commit |= (AR_PRESELECT_USER_TRAIL | AR_PRESELECT_USER_PIPE);
+
+	// Send data for analytics for non-platform binaries only
+	if (signer_type == 0 && add_identity_token) {
+		proc_name(proc_pid(p), process_name, sizeof(process_name));
+		(void)audit_send_analytics(signing_id, process_name);
+	}
 
 free_out:
 	/*

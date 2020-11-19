@@ -145,9 +145,13 @@
 #define PRIV_VFS_SNAPSHOT_REVERT        14003   /* Allow reverting filesystem to a previous snapshot */
 #define PRIV_VFS_DATALESS_RESOLVER      14004   /* Allow registration as dataless file resolver */
 #define PRIV_VFS_DATALESS_MANIPULATION  14005   /* Allow process to inspect dataless directories / manipulate dataless objects */
+#define PRIV_VFS_SETSIZE                14006   /* Allow resizing a file without zeroing space */
 
 #define PRIV_APFS_EMBED_DRIVER          14100   /* Allow embedding an EFI driver into the APFS container */
-#define PRIV_APFS_FUSION_DEBUG      14101   /* Allow getting internal statistics and controlling the APFS Fusion container */
+#define PRIV_APFS_DEBUG                 14101   /* Allow to control a debugging features of the APFS container */
+#define PRIV_APFS_FUSION_DEBUG          14101   /* Old constant name, superceded by PRIV_APFS_DEBUG.
+	                                         * I had to use a numeric value instead of a name because this file is parsed by some
+	                                         * script in the Sandbox project and it may produce a non-compilable output */
 #define PRIV_APFS_FUSION_ALLOW_PIN_FASTPROMOTE  14102   /* Allow changing pinned/fastPromote inode flags in APFS Fusion container */
 // #define PRIV_APFS_UNUSED              14103
 #define PRIV_APFS_SET_FREE_SPACE_CHANGE_THRESHOLD       14104   /* Allow setting the free space change notification threshold */

@@ -112,9 +112,18 @@
 #define T_PF_RSVD               0x8             /* reserved bit set to 1 */
 #define T_PF_EXECUTE            0x10            /* instruction fetch when NX */
 
+#if defined(MACH_KERNEL_PRIVATE)
+
 #if !defined(ASSEMBLER) && defined(MACH_KERNEL)
 
 #include <i386/thread.h>
+
+#define DEFAULT_PANIC_ON_TRAP_MASK ((1U << T_INVALID_OPCODE) |  \
+	(1U << T_GENERAL_PROTECTION) |                          \
+	(1U << T_PAGE_FAULT) |                                  \
+	(1U << T_SEGMENT_NOT_PRESENT) |                         \
+	(1U << T_STACK_FAULT))
+
 
 extern void             i386_exception(
 	int                     exc,
@@ -157,5 +166,7 @@ extern boolean_t        kdp_i386_trap(
 	vm_offset_t);
 #endif /* MACH_KDP */
 #endif  /* !ASSEMBLER && MACH_KERNEL */
+
+#endif /* MACH_KERNEL_PRIVATE */
 
 #endif  /* _I386_TRAP_H_ */

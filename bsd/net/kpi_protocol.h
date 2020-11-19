@@ -223,4 +223,5 @@ proto_kpi_init(void);
 #endif /* BSD_KERNEL_PRIVATE */
 __END_DECLS
 
+#undef __NKE_API_DEPRECATED
 #endif /* __KPI_PROTOCOL__ */

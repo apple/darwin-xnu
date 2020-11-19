@@ -85,6 +85,7 @@
 #endif
 
 #if defined(HAS_APPLE_PAC)
+#include <os/hash.h>
 #include <ptrauth.h>
 #endif /* defined(HAS_APPLE_PAC) */
 
@@ -115,7 +116,7 @@ STATIC int sysctl_sysctl_next_ls(struct sysctl_oid_list *lsp,
     struct sysctl_oid **oidpp);
 STATIC int sysctl_old_kernel(struct sysctl_req *req, const void *p, size_t l);
 STATIC int sysctl_new_kernel(struct sysctl_req *req, void *p, size_t l);
-STATIC int name2oid(char *name, int *oid, u_int *len);
+STATIC int name2oid(char *name, int *oid, size_t *len);
 STATIC int sysctl_sysctl_name2oid(struct sysctl_oid *oidp, void *arg1, int arg2, struct sysctl_req *req);
 STATIC int sysctl_sysctl_next(struct sysctl_oid *oidp, void *arg1, int arg2,
     struct sysctl_req *req);
@@ -125,9 +126,9 @@ STATIC int sysctl_new_user(struct sysctl_req *req, void *p, size_t l);
 
 STATIC void sysctl_create_user_req(struct sysctl_req *req, struct proc *p, user_addr_t oldp,
     size_t oldlen, user_addr_t newp, size_t newlen);
-STATIC int sysctl_root(boolean_t from_kernel, boolean_t string_is_canonical, char *namestring, size_t namestringlen, int *name, u_int namelen, struct sysctl_req *req);
+STATIC int sysctl_root(boolean_t from_kernel, boolean_t string_is_canonical, char *namestring, size_t namestringlen, int *name, size_t namelen, struct sysctl_req *req);
 
-int     kernel_sysctl(struct proc *p, int *name, u_int namelen, void *old, size_t *oldlenp, void *new, size_t newlen);
+int     kernel_sysctl(struct proc *p, int *name, size_t namelen, void *old, size_t *oldlenp, void *new, size_t newlen);
 int     kernel_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, size_t newlen);
 int     userland_sysctl(boolean_t string_is_canonical,
     char *namestring, size_t namestringlen,
@@ -158,6 +159,7 @@ sysctl_register_oid(struct sysctl_oid *new_oidp)
 	 * structure was changed for a necessary reason).
 	 */
 	if (!(new_oidp->oid_kind & CTLFLAG_OID2)) {
+#if __x86_64__
 		/*
 		 * XXX:	M_TEMP is perhaps not the most apropriate zone, as it
 		 * XXX:	will subject us to use-after-free by other consumers.
@@ -173,7 +175,10 @@ sysctl_register_oid(struct sysctl_oid *new_oidp)
 		 * Note:	We may want to set the oid_descr to the
 		 *		oid_name (or "") at some future date.
 		 */
-		memcpy(oidp, new_oidp, offsetof(struct sysctl_oid, oid_descr));
+		*oidp = *new_oidp;
+#else
+		panic("Old style sysctl without a version number isn't supported");
+#endif
 	} else {
 		/* It's a later version; handle the versions we know about */
 		switch (new_oidp->oid_version) {
@@ -215,29 +220,16 @@ sysctl_register_oid(struct sysctl_oid *new_oidp)
 #if defined(HAS_APPLE_PAC)
 	if (oidp->oid_handler) {
 		/*
-		 * Dereference function-pointer-signed oid_handler to prevent an
-		 * attacker with the ability to observe the result of the
-		 * auth_and_resign below from trying all possible inputs until an auth
-		 * succeeds.
-		 */
-		if (__builtin_expect(!*(uintptr_t*)ptrauth_auth_data((void*)
-		    oidp->oid_handler, ptrauth_key_function_pointer, 0), 0)) {
-			/*
-			 * This is necessary to force the dereference but will never
-			 * actually be reached, dereferencing an invalidly signed pointer
-			 * will trap before getting here (and the codegen is nicer than
-			 * with a panic).
-			 */
-			__builtin_trap();
-		}
-		/*
 		 * Sign oid_handler address-discriminated upon installation to make it
-		 * harder to replace with an arbitrary function pointer.
+		 * harder to replace with an arbitrary function pointer.  Blend with
+		 * a hash of oid_arg1 for robustness against memory corruption.
 		 */
 		oidp->oid_handler = ptrauth_auth_and_resign(oidp->oid_handler,
-		    ptrauth_key_function_pointer, 0, ptrauth_key_function_pointer,
+		    ptrauth_key_function_pointer,
+		    ptrauth_function_pointer_type_discriminator(typeof(oidp->oid_handler)),
+		    ptrauth_key_function_pointer,
 		    ptrauth_blend_discriminator(&oidp->oid_handler,
-		    ptrauth_string_discriminator("oid_handler")));
+		    os_hash_kernel_pointer(oidp->oid_arg1)));
 	}
 #endif /* defined(HAS_APPLE_PAC) */
 
@@ -267,12 +259,17 @@ void
 sysctl_unregister_oid(struct sysctl_oid *oidp)
 {
 	struct sysctl_oid *removed_oidp = NULL; /* OID removed from tree */
+#if __x86_64__
 	struct sysctl_oid *old_oidp = NULL;     /* OID compatibility copy */
+#else
+	struct sysctl_oid *const old_oidp = NULL;
+#endif
 
 	/* Get the write lock to modify the geometry */
 	lck_rw_lock_exclusive(sysctl_geometry_lock);
 
 	if (!(oidp->oid_kind & CTLFLAG_OID2)) {
+#if __x86_64__
 		/*
 		 * We're using a copy so we can get the new fields in an
 		 * old structure, so we have to iterate to compare the
@@ -288,6 +285,9 @@ sysctl_unregister_oid(struct sysctl_oid *oidp)
 			SLIST_REMOVE(old_oidp->oid_parent, old_oidp, sysctl_oid, oid_link);
 			removed_oidp = old_oidp;
 		}
+#else
+		panic("Old style sysctl without a version number isn't supported");
+#endif
 	} else {
 		/* It's a later version; handle the versions we know about */
 		switch (oidp->oid_version) {
@@ -308,26 +308,12 @@ sysctl_unregister_oid(struct sysctl_oid *oidp)
 		 * Revert address-discriminated signing performed by
 		 * sysctl_register_oid() (in case this oid is registered again).
 		 */
-		removed_oidp->oid_handler = ptrauth_auth_function(removed_oidp->oid_handler,
+		removed_oidp->oid_handler = ptrauth_auth_and_resign(removed_oidp->oid_handler,
 		    ptrauth_key_function_pointer,
 		    ptrauth_blend_discriminator(&removed_oidp->oid_handler,
-		    ptrauth_string_discriminator("oid_handler")));
-		/*
-		 * Dereference the function-pointer-signed result to prevent an
-		 * attacker with the ability to observe the result of the
-		 * auth_and_resign above from trying all possible inputs until an auth
-		 * succeeds.
-		 */
-		if (__builtin_expect(!*(uintptr_t*)ptrauth_auth_data((void*)
-		    removed_oidp->oid_handler, ptrauth_key_function_pointer, 0), 0)) {
-			/*
-			 * This is necessary to force the dereference but will never
-			 * actually be reached, dereferencing an invalidly signed pointer
-			 * will trap before getting here (and the codegen is nicer than
-			 * with a panic).
-			 */
-			__builtin_trap();
-		}
+		    os_hash_kernel_pointer(removed_oidp->oid_arg1)),
+		    ptrauth_key_function_pointer,
+		    ptrauth_function_pointer_type_discriminator(typeof(removed_oidp->oid_handler)));
 	}
 #endif /* defined(HAS_APPLE_PAC) */
 
@@ -346,9 +332,11 @@ sysctl_unregister_oid(struct sysctl_oid *oidp)
 	/* Release the write lock */
 	lck_rw_unlock_exclusive(sysctl_geometry_lock);
 
-	/* If it was allocated, free it after dropping the lock */
 	if (old_oidp != NULL) {
+#if __x86_64__
+		/* If it was allocated, free it after dropping the lock */
 		FREE(old_oidp, M_TEMP);
+#endif
 	}
 }
 
@@ -492,12 +480,13 @@ int
 sysctl_io_string(struct sysctl_req *req, char *pValue, size_t valueSize, int trunc, int *changed)
 {
 	int error;
+	size_t len = strlen(pValue) + 1;
 
 	if (changed) {
 		*changed = 0;
 	}
 
-	if (trunc && req->oldptr && req->oldlen && (req->oldlen < strlen(pValue) + 1)) {
+	if (trunc && req->oldptr && req->oldlen && (req->oldlen < len)) {
 		/* If trunc != 0, if you give it a too small (but larger than
 		 * 0 bytes) buffer, instead of returning ENOMEM, it truncates the
 		 * returned string to the buffer size.  This preserves the semantics
@@ -511,7 +500,7 @@ sysctl_io_string(struct sysctl_req *req, char *pValue, size_t valueSize, int tru
 		}
 	} else {
 		/* Copy string out */
-		error = SYSCTL_OUT(req, pValue, strlen(pValue) + 1);
+		error = SYSCTL_OUT(req, pValue, len);
 	}
 
 	/* error or no new value */
@@ -975,9 +964,9 @@ SYSCTL_NODE(_sysctl, 2, next, CTLFLAG_RD | CTLFLAG_LOCKED, sysctl_sysctl_next, "
  * Locks:	Assumes sysctl_geometry_lock is held prior to calling
  */
 STATIC int
-name2oid(char *name, int *oid, u_int *len)
+name2oid(char *name, int *oid, size_t *len)
 {
-	int i;
+	char i;
 	struct sysctl_oid *oidp;
 	struct sysctl_oid_list *lsp = &sysctl__children;
 	char *p;
@@ -1011,7 +1000,7 @@ name2oid(char *name, int *oid, u_int *len)
 		*oid++ = oidp->oid_number;
 		(*len)++;
 
-		if (!i) {
+		if (i == '\0') {
 			return 0;
 		}
 
@@ -1083,7 +1072,7 @@ sysctl_sysctl_name2oid(__unused struct sysctl_oid *oidp, __unused void *arg1,
 {
 	char *p;
 	int error, oid[CTL_MAXNAME] = {};
-	u_int len = 0;          /* set by name2oid() */
+	size_t len = 0;          /* set by name2oid() */
 
 	if (req->newlen < 1) {
 		return ENOENT;
@@ -1374,7 +1363,7 @@ sysctl_new_kernel(struct sysctl_req *req, void *p, size_t l)
 }
 
 int
-kernel_sysctl(struct proc *p, int *name, u_int namelen, void *old, size_t *oldlenp, void *new, size_t newlen)
+kernel_sysctl(struct proc *p, int *name, size_t namelen, void *old, size_t *oldlenp, void *new, size_t newlen)
 {
 	int error = 0;
 	struct sysctl_req req;
@@ -1465,7 +1454,7 @@ sysctl_new_user(struct sysctl_req *req, void *p, size_t l)
  */
 
 int
-sysctl_root(boolean_t from_kernel, boolean_t string_is_canonical, char *namestring, size_t namestringlen, int *name, u_int namelen, struct sysctl_req *req)
+sysctl_root(boolean_t from_kernel, boolean_t string_is_canonical, char *namestring, size_t namestringlen, int *name, size_t namelen, struct sysctl_req *req)
 {
 	u_int indx;
 	int i;
@@ -1655,14 +1644,16 @@ found:
 	/*
 	 * oid_handler is signed address-discriminated by sysctl_register_oid().
 	 */
-	oid_handler = ptrauth_auth_function(oid_handler,
+	oid_handler = ptrauth_auth_and_resign(oid_handler,
 	    ptrauth_key_function_pointer,
 	    ptrauth_blend_discriminator(&oid->oid_handler,
-	    ptrauth_string_discriminator("oid_handler")));
+	    os_hash_kernel_pointer(oid->oid_arg1)),
+	    ptrauth_key_function_pointer,
+	    ptrauth_function_pointer_type_discriminator(typeof(oid_handler)));
 #endif /* defined(HAS_APPLE_PAC) */
 
 	if ((oid->oid_kind & CTLTYPE) == CTLTYPE_NODE) {
-		i = oid_handler(oid, name + indx, namelen - indx, req);
+		i = oid_handler(oid, name + indx, (int)(namelen - indx), req);
 	} else {
 		i = oid_handler(oid, oid->oid_arg1, oid->oid_arg2, req);
 	}
@@ -1945,10 +1936,13 @@ kernel_sysctlbyname(const char *name, void *oldp, size_t *oldlenp, void *newp, s
 	oidlen = sizeof(oid);
 	error = kernel_sysctl(current_proc(), name2mib_oid, 2, oid, &oidlen, __DECONST(void *, name), strlen(name));
 	oidlen /= sizeof(int);
+	if (oidlen > UINT_MAX) {
+		error = EDOM;
+	}
 
 	/* now use the OID */
 	if (error == 0) {
-		error = kernel_sysctl(current_proc(), oid, oidlen, oldp, oldlenp, newp, newlen);
+		error = kernel_sysctl(current_proc(), oid, (u_int)oidlen, oldp, oldlenp, newp, newlen);
 	}
 	return error;
 }

@@ -643,10 +643,10 @@ ipc_mqueue_send(
  *		The message queue is not locked.
  *		The caller holds a reference on the message queue.
  */
-extern void
+void
 ipc_mqueue_override_send(
 	ipc_mqueue_t        mqueue,
-	mach_msg_priority_t override)
+	mach_msg_qos_t      qos_ovr)
 {
 	boolean_t __unused full_queue_empty = FALSE;
 
@@ -657,7 +657,7 @@ ipc_mqueue_override_send(
 	if (imq_full(mqueue)) {
 		ipc_kmsg_t first = ipc_kmsg_queue_first(&mqueue->imq_messages);
 
-		if (first && ipc_kmsg_override_qos(&mqueue->imq_messages, first, override)) {
+		if (first && ipc_kmsg_override_qos(&mqueue->imq_messages, first, qos_ovr)) {
 			ipc_object_t object = imq_to_object(mqueue);
 			assert(io_otype(object) == IOT_PORT);
 			ipc_port_t port = ip_object_to_port(object);
@@ -969,8 +969,9 @@ ipc_mqueue_receive_results(wait_result_t saved_wait_result)
 			if (option & MACH_RCV_LARGE) {
 				return;
 			}
-
+			return;
 		case MACH_MSG_SUCCESS:
+			return;
 		case MACH_PEEK_READY:
 			return;
 
@@ -1755,7 +1756,7 @@ ipc_mqueue_set_qlimit(
 			mqueue->imq_msgcount++;  /* give it to the awakened thread */
 		}
 	}
-	mqueue->imq_qlimit = qlimit;
+	mqueue->imq_qlimit = (uint16_t)qlimit;
 	imq_unlock(mqueue);
 }
 

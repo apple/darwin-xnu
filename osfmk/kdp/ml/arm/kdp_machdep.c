@@ -37,7 +37,6 @@
 #include <kdp/kdp_internal.h>
 #include <kern/debug.h>
 #include <IOKit/IOPlatformExpert.h>
-#include <kern/kalloc.h>
 #include <libkern/OSAtomic.h>
 #include <vm/vm_map.h>
 
@@ -60,16 +59,15 @@ int machine_trace_thread(thread_t thread,
     char * tracebound,
     int nframes,
     boolean_t user_p,
-    boolean_t trace_fp,
     uint32_t * thread_trace_flags);
 int machine_trace_thread64(thread_t thread,
     char * tracepos,
     char * tracebound,
     int nframes,
     boolean_t user_p,
-    boolean_t trace_fp,
     uint32_t * thread_trace_flags,
-    uint64_t *sp);
+    uint64_t *sp,
+    vm_offset_t fp);
 
 void kdp_trap(unsigned int, struct arm_saved_state * saved_state);
 
@@ -259,9 +257,16 @@ kdp_machine_hostinfo(kdp_hostinfo_t * hostinfo)
 
 __attribute__((noreturn))
 void
-kdp_panic(const char * msg)
+kdp_panic(const char * fmt, ...)
 {
-	printf("kdp panic: %s\n", msg);
+	char kdp_fmt[256];
+	va_list args;
+
+	va_start(args, fmt);
+	(void) snprintf(kdp_fmt, sizeof(kdp_fmt), "kdp panic: %s", fmt);
+	vprintf(kdp_fmt, args);
+	va_end(args);
+
 	while (1) {
 	}
 	;
@@ -391,12 +396,11 @@ machine_trace_thread(thread_t thread,
     char * tracebound,
     int nframes,
     boolean_t user_p,
-    boolean_t trace_fp,
     uint32_t * thread_trace_flags)
 {
 	uint32_align2_t * tracebuf = (uint32_align2_t *)tracepos;
 
-	vm_size_t framesize = (trace_fp ? 2 : 1) * sizeof(uint32_t);
+	vm_size_t framesize = sizeof(uint32_t);
 
 	vm_offset_t stacklimit        = 0;
 	vm_offset_t stacklimit_bottom = 0;
@@ -424,9 +428,6 @@ machine_trace_thread(thread_t thread,
 
 		/* Fake up a stack frame for the PC */
 		*tracebuf++ = (uint32_t)get_saved_state_pc(state);
-		if (trace_fp) {
-			*tracebuf++ = (uint32_t)get_saved_state_sp(state);
-		}
 		framecount++;
 		bt_vm_map = thread->task->map;
 	} else {
@@ -464,9 +465,6 @@ machine_trace_thread(thread_t thread,
 
 	for (; framecount < nframes; framecount++) {
 		*tracebuf++ = prevlr;
-		if (trace_fp) {
-			*tracebuf++ = (uint32_t)fp;
-		}
 
 		/* Invalid frame */
 		if (!fp) {
@@ -573,28 +571,26 @@ machine_trace_thread64(thread_t thread,
     char * tracebound,
     int nframes,
     boolean_t user_p,
-    boolean_t trace_fp,
     uint32_t * thread_trace_flags,
-    uint64_t *sp_out)
+    uint64_t *sp_out,
+    vm_offset_t fp)
 {
 #pragma unused(sp_out)
 #if defined(__arm__)
-#pragma unused(thread, tracepos, tracebound, nframes, user_p, trace_fp, thread_trace_flags)
+#pragma unused(thread, tracepos, tracebound, nframes, user_p, thread_trace_flags, fp)
 	return 0;
 #elif defined(__arm64__)
 
 	uint64_t * tracebuf = (uint64_t *)tracepos;
-	vm_size_t framesize = (trace_fp ? 2 : 1) * sizeof(uint64_t);
+	vm_size_t framesize = sizeof(uint64_t);
 
 	vm_offset_t stacklimit        = 0;
 	vm_offset_t stacklimit_bottom = 0;
 	int framecount                = 0;
-	vm_offset_t fp                = 0;
 	vm_offset_t pc                = 0;
 	vm_offset_t sp                = 0;
 	vm_offset_t prevfp            = 0;
 	uint64_t prevlr               = 0;
-	struct arm_saved_state * state;
 	vm_offset_t kern_virt_addr    = 0;
 	vm_map_t bt_vm_map            = VM_MAP_NULL;
 
@@ -608,32 +604,41 @@ machine_trace_thread64(thread_t thread,
 
 	if (user_p) {
 		/* Examine the user savearea */
-		state = thread->machine.upcb;
+		struct arm_saved_state * state = thread->machine.upcb;
 		stacklimit = (is_64bit_addr) ? MACH_VM_MAX_ADDRESS : VM_MAX_ADDRESS;
 		stacklimit_bottom = (is_64bit_addr) ? MACH_VM_MIN_ADDRESS : VM_MIN_ADDRESS;
 
 		/* Fake up a stack frame for the PC */
 		*tracebuf++ = get_saved_state_pc(state);
-		if (trace_fp) {
-			*tracebuf++ = get_saved_state_sp(state);
-		}
 		framecount++;
 		bt_vm_map = thread->task->map;
+
+		/* Get the frame pointer */
+		if (fp == 0) {
+			fp = get_saved_state_fp(state);
+		}
+
+		/* Fill in the current link register */
+		prevlr = get_saved_state_lr(state);
+		pc = get_saved_state_pc(state);
+		sp = get_saved_state_sp(state);
 	} else {
 		/* kstackptr may not always be there, so recompute it */
-		state = &thread_get_kernel_state(thread)->machine.ss;
+		struct arm_kernel_saved_state * state = &thread_get_kernel_state(thread)->machine.ss;
 		stacklimit = VM_MAX_KERNEL_ADDRESS;
 		stacklimit_bottom = VM_MIN_KERNEL_ADDRESS;
 		bt_vm_map = kernel_map;
+
+		/* Get the frame pointer */
+		if (fp == 0) {
+			fp = state->fp;
+		}
+
+		/* Fill in the current link register */
+		prevlr = state->lr;
+		pc = state->pc;
+		sp = state->sp;
 	}
-
-	/* Get the frame pointer */
-	fp = get_saved_state_fp(state);
-
-	/* Fill in the current link register */
-	prevlr = get_saved_state_lr(state);
-	pc = get_saved_state_pc(state);
-	sp = get_saved_state_sp(state);
 
 	if (!user_p && !prevlr && !fp && !sp && !pc) {
 		return 0;
@@ -645,9 +650,6 @@ machine_trace_thread64(thread_t thread,
 
 	for (; framecount < nframes; framecount++) {
 		*tracebuf++ = prevlr;
-		if (trace_fp) {
-			*tracebuf++ = fp;
-		}
 
 		/* Invalid frame */
 		if (!fp) {

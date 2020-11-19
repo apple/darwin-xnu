@@ -36,7 +36,6 @@ extern "C" {
 #include <corecrypto/ccdigest.h>
 #include <corecrypto/cchmac.h>
 #include <corecrypto/ccmode.h>
-#include <corecrypto/ccrc4.h>
 #include <corecrypto/ccrng.h>
 #include <corecrypto/ccrsa.h>
 #include <corecrypto/ccchacha20poly1305.h>
@@ -93,13 +92,6 @@ typedef void (*ccpbkdf2_hmac_fn_t)(const struct ccdigest_info *di,
 /* des weak key testing */
 typedef int (*ccdes_key_is_weak_fn_t)(void *key, unsigned long  length);
 typedef void (*ccdes_key_set_odd_parity_fn_t)(void *key, unsigned long length);
-
-/* XTS padding */
-typedef void (*ccpad_xts_decrypt_fn_t)(const struct ccmode_xts *xts, ccxts_ctx *ctx,
-    unsigned long nbytes, const void *in, void *out);
-
-typedef void (*ccpad_xts_encrypt_fn_t)(const struct ccmode_xts *xts, ccxts_ctx *ctx,
-    unsigned long nbytes, const void *in, void *out);
 
 /* CBC padding (such as PKCS7 or CTSx per NIST standard) */
 typedef size_t (*ccpad_cts3_crypt_fn_t)(const struct ccmode_cbc *cbc, cccbc_ctx *cbc_key,
@@ -164,20 +156,9 @@ typedef struct crypto_functions {
 	const struct ccmode_ecb *cctdes_ecb_decrypt;
 	const struct ccmode_cbc *cctdes_cbc_encrypt;
 	const struct ccmode_cbc *cctdes_cbc_decrypt;
-	/* RC4 */
-	const struct ccrc4_info *ccrc4_info;
-	/* Blowfish - ECB only */
-	const struct ccmode_ecb *ccblowfish_ecb_encrypt;
-	const struct ccmode_ecb *ccblowfish_ecb_decrypt;
-	/* CAST - ECB only */
-	const struct ccmode_ecb *cccast_ecb_encrypt;
-	const struct ccmode_ecb *cccast_ecb_decrypt;
 	/* DES key helper functions */
 	ccdes_key_is_weak_fn_t ccdes_key_is_weak_fn;
 	ccdes_key_set_odd_parity_fn_t ccdes_key_set_odd_parity_fn;
-	/* XTS padding+encrypt functions */
-	ccpad_xts_encrypt_fn_t ccpad_xts_encrypt_fn;
-	ccpad_xts_decrypt_fn_t ccpad_xts_decrypt_fn;
 	/* CTS3 padding+encrypt functions */
 	ccpad_cts3_crypt_fn_t ccpad_cts3_encrypt_fn;
 	ccpad_cts3_crypt_fn_t ccpad_cts3_decrypt_fn;

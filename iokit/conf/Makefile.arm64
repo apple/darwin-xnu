@@ -1,17 +1,29 @@
 ######################################################################
 #BEGIN  Machine dependent Makefile fragment for arm
 ######################################################################
-
-IODMACommand.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
-IODataQueue.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
-IOMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
-IONVRAM.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
-IOPMrootDomain.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
-IOSharedDataQueue.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
-IOUserClient.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
+#
+# XXX: CFLAGS
+#
+CWARNFLAGS   = $(CWARNFLAGS_STD) -Wno-unused-parameter  -Wshorten-64-to-32 -Wimplicit-int-conversion
+CXXWARNFLAGS = $(CXXWARNFLAGS_STD) -Wno-unused-parameter -Wno-cast-qual -Wno-shadow  -Wshorten-64-to-32 -Wimplicit-int-conversion
 
 # Files that must go in the __HIB segment:
-HIB_FILES=
+UNCONFIGURED_HIB_FILES=	\
+			IOHibernateRestoreKernel.o
+
+HIB_FILES=$(filter $(UNCONFIGURED_HIB_FILES),$(OBJS))
+
+# Unconfigured __HIB files must be Mach-O for "setsegname"
+# KASAN must be disabled for unconfigured __HIB files
+# because the kasan runtime isn't available during hibernation resume
+IOHibernateRestoreKernel.o_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG) -fno-sanitize=address -UKASAN
+# Stack protector and stack check must be disabled because the stack protector runtime isn't available
+IOHibernateRestoreKernel.o_CFLAGS_ADD += -fno-stack-protector -fno-stack-check
+# signing keys aren't set up yet, so ptrauth must be disabled
+IOHibernateRestoreKernel.o_CFLAGS_ADD += -fno-ptrauth-calls
+
+IOHibernateIO.cpo_CFLAGS_ADD += -I$(SRCROOT)/osfmk
+IOHibernateRestoreKernel.o_CFLAGS_ADD += -I$(SRCROOT)/osfmk
 
 ######################################################################
 #END    Machine dependent Makefile fragment for arm

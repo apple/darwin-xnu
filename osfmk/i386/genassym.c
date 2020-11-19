@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -169,11 +169,8 @@ main(
 	DECLARE("TH_PCB_ISS", offsetof(struct thread, machine.iss));
 	DECLARE("TH_PCB_IDS", offsetof(struct thread, machine.ids));
 	DECLARE("TH_PCB_FPS", offsetof(struct thread, machine.ifps));
-#if NCOPY_WINDOWS > 0
-	DECLARE("TH_COPYIO_STATE", offsetof(struct thread, machine.copyio_state));
-	DECLARE("WINDOWS_CLEAN", WINDOWS_CLEAN);
-#endif
 	DECLARE("TH_RWLOCK_COUNT", offsetof(struct thread, rwlock_count));
+	DECLARE("TH_TMP_ALLOC_CNT", offsetof(struct thread, t_temp_alloc_count));
 
 	DECLARE("MAP_PMAP", offsetof(struct _vm_map, pmap));
 
@@ -294,7 +291,6 @@ main(
 
 	DECLARE("ASM_COMM_PAGE32_BASE_ADDRESS", _COMM_PAGE32_BASE_ADDRESS);
 	DECLARE("ASM_COMM_PAGE32_START_ADDRESS", _COMM_PAGE32_START_ADDRESS);
-	DECLARE("ASM_COMM_PAGE_SCHED_GEN", _COMM_PAGE_SCHED_GEN);
 
 	DECLARE("KERNEL_PML4_INDEX", KERNEL_PML4_INDEX);
 	DECLAREULL("KERNEL_BASE", KERNEL_BASE);
@@ -417,6 +413,10 @@ main(
 	    offsetof(cpu_data_t, cd_estack));
 	DECLARE("CPU_DSHADOW",
 	    offsetof(cpu_data_t, cd_shadow));
+#if DEVELOPMENT || DEBUG
+	DECLARE("CPU_RTIMES",
+	    offsetof(cpu_data_t, cpu_rtimes[0]));
+#endif
 
 	DECLARE("enaExpTrace", enaExpTrace);
 	DECLARE("enaUsrFCall", enaUsrFCall);
@@ -479,21 +479,21 @@ main(
 	    offsetof(struct timer, tstamp));
 
 	DECLARE("THREAD_TIMER",
-	    offsetof(struct processor, processor_data.thread_timer));
+	    offsetof(struct processor, thread_timer));
 	DECLARE("KERNEL_TIMER",
-	    offsetof(struct processor, processor_data.kernel_timer));
+	    offsetof(struct processor, kernel_timer));
 	DECLARE("SYSTEM_TIMER",
 	    offsetof(struct thread, system_timer));
 	DECLARE("USER_TIMER",
 	    offsetof(struct thread, user_timer));
 	DECLARE("SYSTEM_STATE",
-	    offsetof(struct processor, processor_data.system_state));
+	    offsetof(struct processor, system_state));
 	DECLARE("USER_STATE",
-	    offsetof(struct processor, processor_data.user_state));
+	    offsetof(struct processor, user_state));
 	DECLARE("IDLE_STATE",
-	    offsetof(struct processor, processor_data.idle_state));
+	    offsetof(struct processor, idle_state));
 	DECLARE("CURRENT_STATE",
-	    offsetof(struct processor, processor_data.current_state));
+	    offsetof(struct processor, current_state));
 
 	DECLARE("OnProc", OnProc);
 

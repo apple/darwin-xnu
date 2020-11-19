@@ -121,11 +121,17 @@ DRIVERKIT_DATAFILES = \
 	_u_int32_t.h \
 	_u_int64_t.h \
 	_u_int8_t.h \
+	_u_int.h \
+	_u_char.h \
+	_u_short.h \
 	_uintptr_t.h \
 	_uuid_t.h \
 	_va_list.h \
 	_wchar_t.h \
 	_wint_t.h \
+	_in_addr_t.h\
+	_in_port_t.h\
+	_sa_family_t.h
 
 # Installs header file for Apple internal use in user level -
 #	  $(DSTROOT)/System/Library/Frameworks/System.framework/PrivateHeaders

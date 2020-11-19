@@ -31,7 +31,6 @@
 
 #include <arm/proc_reg.h>
 
-#define __SMP__ __ARM_SMP__
 #define __AMP__ __ARM_AMP__
 
 #endif  /* _ARM_SMP_H_ */

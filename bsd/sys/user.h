@@ -178,6 +178,7 @@ struct uthread {
 		} uus_workq_park_data;                   /* saved for parked workq threads */
 
 		struct _ulock_wait_data {
+			struct ull *ull;
 			thread_t owner_thread;
 			thread_t old_owner;
 			int32_t *retval;

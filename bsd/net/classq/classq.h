@@ -189,7 +189,7 @@ SYSCTL_DECL(_net_classq);
 extern void _qinit(class_queue_t *, int, int, classq_pkt_type_t);
 extern void _addq(class_queue_t *, classq_pkt_t *);
 extern void _addq_multi(class_queue_t *, classq_pkt_t *, classq_pkt_t *,
-    u_int32_t, u_int32_t);
+    u_int32_t, u_int64_t);
 extern void _getq(class_queue_t *, classq_pkt_t *);
 extern void _getq_all(class_queue_t *, classq_pkt_t *, classq_pkt_t *,
     u_int32_t *, u_int64_t *);

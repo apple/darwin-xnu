@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -105,6 +105,7 @@
 
 #include <mach/exc_server.h>
 #include <mach/mach_exc_server.h>
+#include <mach/mach_eventlink_server.h>
 
 #include <device/device_types.h>
 #include <device/device_server.h>
@@ -146,12 +147,17 @@
 #include <kern/work_interval.h>
 #include <kern/suid_cred.h>
 
+#if HYPERVISOR
+#include <kern/hv_support.h>
+#endif
+
 #include <vm/vm_protos.h>
 
 #include <security/mac_mach_internal.h>
 
 extern char *proc_name_address(void *p);
-extern int proc_pid(void *p);
+struct proc;
+extern int proc_pid(struct proc *p);
 
 /*
  *	Routine:	ipc_kobject_notify
@@ -167,6 +173,7 @@ typedef struct {
 	mach_msg_id_t num;
 	mig_routine_t routine;
 	int size;
+	int kobjidx;
 #if     MACH_COUNTERS
 	mach_counter_t callcount;
 #endif
@@ -175,17 +182,21 @@ typedef struct {
 #define MAX_MIG_ENTRIES 1031
 #define MIG_HASH(x) (x)
 
+#define KOBJ_IDX_NOT_SET (-1)
+
 #ifndef max
 #define max(a, b)        (((a) > (b)) ? (a) : (b))
 #endif /* max */
 
-static mig_hash_t mig_buckets[MAX_MIG_ENTRIES];
-static int mig_table_max_displ;
-static mach_msg_size_t mig_reply_size = sizeof(mig_reply_error_t);
+static SECURITY_READ_ONLY_LATE(mig_hash_t) mig_buckets[MAX_MIG_ENTRIES];
+static SECURITY_READ_ONLY_LATE(int) mig_table_max_displ;
+SECURITY_READ_ONLY_LATE(int) mach_kobj_count; /* count of total number of kobjects */
 
-static zone_t ipc_kobject_label_zone;
+static ZONE_DECLARE(ipc_kobject_label_zone, "ipc kobject labels",
+    sizeof(struct ipc_kobject_label), ZC_NONE);
 
-const struct mig_subsystem *mig_e[] = {
+__startup_data
+static const struct mig_subsystem *mig_e[] = {
 	(const struct mig_subsystem *)&mach_vm_subsystem,
 	(const struct mig_subsystem *)&mach_port_subsystem,
 	(const struct mig_subsystem *)&mach_host_subsystem,
@@ -222,6 +233,7 @@ const struct mig_subsystem *mig_e[] = {
 #if CONFIG_ARCADE
 	(const struct mig_subsystem *)&arcade_register_subsystem,
 #endif
+	(const struct mig_subsystem *)&mach_eventlink_subsystem,
 };
 
 static void
@@ -260,31 +272,65 @@ mig_init(void)
 				} else {
 					mig_buckets[pos].size = mig_e[i]->maxsize;
 				}
+				mig_buckets[pos].kobjidx = KOBJ_IDX_NOT_SET;
 
 				mig_table_max_displ = max(howmany, mig_table_max_displ);
+				mach_kobj_count++;
 			}
 		}
 	}
-	printf("mig_table_max_displ = %d\n", mig_table_max_displ);
+	printf("mig_table_max_displ = %d mach_kobj_count = %d\n",
+	    mig_table_max_displ, mach_kobj_count);
+}
+STARTUP(MACH_IPC, STARTUP_RANK_FIRST, mig_init);
+
+/*
+ * Do a hash table lookup for given msgh_id. Return 0
+ * if not found.
+ */
+static mig_hash_t *
+find_mig_hash_entry(int msgh_id)
+{
+	unsigned int i = (unsigned int)MIG_HASH(msgh_id);
+	int max_iter = mig_table_max_displ;
+	mig_hash_t *ptr;
+
+	do {
+		ptr = &mig_buckets[i++ % MAX_MIG_ENTRIES];
+	} while (msgh_id != ptr->num && ptr->num && --max_iter);
+
+	if (!ptr->routine || msgh_id != ptr->num) {
+		ptr = (mig_hash_t *)0;
+	} else {
+#if     MACH_COUNTERS
+		ptr->callcount++;
+#endif
+	}
+
+	return ptr;
 }
 
 /*
- *	Routine:	ipc_kobject_init
- *	Purpose:
- *		Deliver notifications to kobjects that care about them.
+ *      Routine:	ipc_kobject_set_kobjidx
+ *      Purpose:
+ *              Set the index for the kobject filter
+ *              mask for a given message ID.
  */
-void
-ipc_kobject_init(void)
+kern_return_t
+ipc_kobject_set_kobjidx(
+	int       msgh_id,
+	int       index)
 {
-	int label_max = CONFIG_TASK_MAX + CONFIG_THREAD_MAX + 1000 /* UEXT estimate */;
+	mig_hash_t *ptr = find_mig_hash_entry(msgh_id);
 
-	mig_init();
+	if (ptr == (mig_hash_t *)0) {
+		return KERN_INVALID_ARGUMENT;
+	}
 
-	ipc_kobject_label_zone =
-	    zinit(sizeof(struct ipc_kobject_label),
-	    label_max * sizeof(struct ipc_kobject_label),
-	    sizeof(struct ipc_kobject_label),
-	    "ipc kobject labels");
+	assert(index < mach_kobj_count);
+	ptr->kobjidx = index;
+
+	return KERN_SUCCESS;
 }
 
 /*
@@ -306,7 +352,7 @@ ipc_kobject_server(
 	ipc_kmsg_t reply;
 	kern_return_t kr;
 	ipc_port_t  replyp = IPC_PORT_NULL;
-	mach_msg_format_0_trailer_t *trailer;
+	mach_msg_max_trailer_t *trailer;
 	mig_hash_t *ptr;
 	task_t task = TASK_NULL;
 	uint32_t exec_token;
@@ -329,26 +375,15 @@ ipc_kobject_server(
 			goto msgdone;
 		}
 	}
-	/*
-	 * Find corresponding mig_hash entry if any
-	 */
-	{
-		unsigned int i = (unsigned int)MIG_HASH(request_msgh_id);
-		int max_iter = mig_table_max_displ;
 
-		do {
-			ptr = &mig_buckets[i++ % MAX_MIG_ENTRIES];
-		} while (request_msgh_id != ptr->num && ptr->num && --max_iter);
+	/* Find corresponding mig_hash entry, if any */
+	ptr = find_mig_hash_entry(request_msgh_id);
 
-		if (!ptr->routine || request_msgh_id != ptr->num) {
-			ptr = (mig_hash_t *)0;
-			reply_size = mig_reply_size;
-		} else {
-			reply_size = ptr->size;
-#if     MACH_COUNTERS
-			ptr->callcount++;
-#endif
-		}
+	/* Get the reply_size. */
+	if (ptr == (mig_hash_t *)0) {
+		reply_size = sizeof(mig_reply_error_t);
+	} else {
+		reply_size = ptr->size;
 	}
 
 	/* round up for trailer size */
@@ -401,11 +436,35 @@ ipc_kobject_server(
 			 * Check if the port is a task port, if its a task port then
 			 * snapshot the task exec token before the mig routine call.
 			 */
-			if (ikot == IKOT_TASK) {
-				task = convert_port_to_task_with_exec_token(port, &exec_token);
+			if (ikot == IKOT_TASK_CONTROL) {
+				task = convert_port_to_task_with_exec_token(port, &exec_token, TRUE);
 			}
 
+#if CONFIG_MACF
+			int idx = ptr->kobjidx;
+			task_t curtask = current_task();
+			uint8_t *filter_mask = curtask->mach_kobj_filter_mask;
+
+			/* Check kobject mig filter mask, if exists. */
+			if (__improbable(filter_mask != NULL && idx != KOBJ_IDX_NOT_SET &&
+			    !bitstr_test(filter_mask, idx))) {
+				/* Not in filter mask, evaluate policy. */
+				if (mac_task_kobj_msg_evaluate != NULL) {
+					kr = mac_task_kobj_msg_evaluate(get_bsdtask_info(curtask),
+					    request_msgh_id, idx);
+					if (kr != KERN_SUCCESS) {
+						((mig_reply_error_t *) reply->ikm_header)->RetCode = kr;
+						goto skip_kobjcall;
+					}
+				}
+			}
+#endif /* CONFIG_MACF */
+
 			(*ptr->routine)(request->ikm_header, reply->ikm_header);
+
+#if CONFIG_MACF
+skip_kobjcall:
+#endif
 
 			/* Check if the exec token changed during the mig routine */
 			if (task != TASK_NULL) {
@@ -580,10 +639,11 @@ msgdone:
 		reply = new_reply;
 	}
 
-	trailer = (mach_msg_format_0_trailer_t *)
+	trailer = (mach_msg_max_trailer_t *)
 	    ((vm_offset_t)reply->ikm_header + (int)reply->ikm_header->msgh_size);
-
+	bzero(trailer, sizeof(*trailer));
 	trailer->msgh_sender = KERNEL_SECURITY_TOKEN;
+	trailer->msgh_audit = KERNEL_AUDIT_TOKEN;
 	trailer->msgh_trailer_type = MACH_MSG_TRAILER_FORMAT_0;
 	trailer->msgh_trailer_size = MACH_MSG_TRAILER_MINIMUM_SIZE;
 
@@ -759,17 +819,41 @@ boolean_t
 ipc_kobject_make_send_lazy_alloc_port(
 	ipc_port_t              *port_store,
 	ipc_kobject_t           kobject,
-	ipc_kobject_type_t      type)
+	ipc_kobject_type_t      type,
+	boolean_t               __ptrauth_only should_ptrauth,
+	uint64_t                __ptrauth_only ptrauth_discriminator)
 {
-	ipc_port_t port, previous;
+	ipc_port_t port, previous, __ptrauth_only port_addr;
 	boolean_t rc = FALSE;
 
 	port = os_atomic_load(port_store, dependency);
 
+#if __has_feature(ptrauth_calls)
+	/* If we're on a ptrauth system and this port is signed, authenticate and strip the pointer */
+	if (should_ptrauth && IP_VALID(port)) {
+		port = ptrauth_auth_data(port,
+		    ptrauth_key_process_independent_data,
+		    ptrauth_blend_discriminator(port_store, ptrauth_discriminator));
+	}
+#endif // __has_feature(ptrauth_calls)
+
 	if (!IP_VALID(port)) {
 		port = ipc_kobject_alloc_port(kobject, type,
 		    IPC_KOBJECT_ALLOC_MAKE_SEND | IPC_KOBJECT_ALLOC_NSREQUEST);
-		if (os_atomic_cmpxchgv(port_store, IP_NULL, port, &previous, release)) {
+
+#if __has_feature(ptrauth_calls)
+		if (should_ptrauth) {
+			port_addr = ptrauth_sign_unauthenticated(port,
+			    ptrauth_key_process_independent_data,
+			    ptrauth_blend_discriminator(port_store, ptrauth_discriminator));
+		} else {
+			port_addr = port;
+		}
+#else
+		port_addr = port;
+#endif // __has_feature(ptrauth_calls)
+
+		if (os_atomic_cmpxchgv(port_store, IP_NULL, port_addr, &previous, release)) {
 			return TRUE;
 		}
 
@@ -952,6 +1036,11 @@ ipc_kobject_label_check(
 		return TRUE;
 	}
 
+	/* Never OK to copyout the receive right for a labeled kobject */
+	if (msgt_name == MACH_MSG_TYPE_PORT_RECEIVE) {
+		panic("ipc_kobject_label_check: attempted receive right copyout for labeled kobject");
+	}
+
 	labelp = port->ip_kolabel;
 	return (labelp->ikol_label & space->is_label) == labelp->ikol_label;
 }
@@ -998,7 +1087,11 @@ ipc_kobject_notify(
 			semaphore_notify(request_header);
 			return TRUE;
 
-		case IKOT_TASK:
+		case IKOT_EVENTLINK:
+			ipc_eventlink_notify(request_header);
+			return TRUE;
+
+		case IKOT_TASK_CONTROL:
 			task_port_notify(request_header);
 			return TRUE;
 
@@ -1035,10 +1128,22 @@ ipc_kobject_notify(
 		case IKOT_WORK_INTERVAL:
 			work_interval_port_notify(request_header);
 			return TRUE;
-
+		case IKOT_TASK_READ:
+		case IKOT_TASK_INSPECT:
+			task_port_with_flavor_notify(request_header);
+			return TRUE;
+		case IKOT_THREAD_READ:
+		case IKOT_THREAD_INSPECT:
+			thread_port_with_flavor_notify(request_header);
+			return TRUE;
 		case IKOT_SUID_CRED:
 			suid_cred_notify(request_header);
 			return TRUE;
+#if HYPERVISOR
+		case IKOT_HYPERVISOR:
+			hv_port_notify(request_header);
+			return TRUE;
+#endif
 		}
 
 		break;

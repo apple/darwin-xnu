@@ -5,12 +5,19 @@
 #ifndef _PEXPERT_ARM_BCM2837_H
 #define _PEXPERT_ARM_BCM2837_H
 
-#ifdef BCM2837
-#include "arm64_common.h"
-#endif
-
 #define NO_MONITOR 1
 #define NO_ECORE 1
+
+#define BCM2837
+#define BCM2837_BRINGUP
+#define ARM_ARCH_TIMER
+
+#define __ARM_ARCH__              8
+#define __ARM_VMSA__              8
+#define __ARM_VFP__               4
+#define __ARM_COHERENT_CACHE__    1
+#define __ARM_DEBUG__             7
+#define __ARM64_PMAP_SUBPAGE_L1__ 1
 
 #ifndef ASSEMBLER
 

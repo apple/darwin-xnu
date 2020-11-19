@@ -77,16 +77,21 @@ cat <<EOF
 EOF
 
 for ver in $(${AVAILABILITY_PL} --ios) ; do
-    ver_major=${ver%.*}
-    ver_minor=${ver#*.}
-    value=$(printf "%d%02d00" ${ver_major} ${ver_minor})
-    str=$(printf "__IPHONE_%d_%d" ${ver_major} ${ver_minor})
-    echo "#if defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__ >= ${value}"
-    echo "#define __DARWIN_ALIAS_STARTING_IPHONE_${str}(x) x"
-    echo "#else"
-    echo "#define __DARWIN_ALIAS_STARTING_IPHONE_${str}(x)"
-    echo "#endif"
-    echo ""
+    set -- $(echo "$ver" | tr '.' ' ')
+    ver_major=$1
+    ver_minor=$2
+    ver_rel=$3
+    if [ -z "$ver_rel" ]; then
+	    # don't produce these defines for releases with tertiary release numbers
+        value=$(printf "%d%02d00" ${ver_major} ${ver_minor})
+        str=$(printf "__IPHONE_%d_%d" ${ver_major} ${ver_minor})
+        echo "#if defined(__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__) && __ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__ >= ${value}"
+        echo "#define __DARWIN_ALIAS_STARTING_IPHONE_${str}(x) x"
+        echo "#else"
+        echo "#define __DARWIN_ALIAS_STARTING_IPHONE_${str}(x)"
+        echo "#endif"
+        echo ""
+    fi
 done
 
 for ver in $(${AVAILABILITY_PL} --macosx) ; do

@@ -169,7 +169,7 @@ nullfs_uninit()
 	/* This gets called when the fs is uninstalled, there wasn't an exact
 	 * equivalent in vfsops */
 	lck_mtx_destroy(&null_hashmtx, null_hashlck_grp);
-	FREE(null_node_hashtbl, M_TEMP);
+	hashdestroy(null_node_hashtbl, M_TEMP, null_hash_mask);
 	if (null_hashlck_grp_attr) {
 		lck_grp_attr_free(null_hashlck_grp_attr);
 		null_hashlck_grp_attr = NULL;
@@ -192,9 +192,9 @@ nullfs_uninit()
 int
 null_hashget(struct mount * mp, struct vnode * lowervp, struct vnode ** vpp)
 {
-	struct null_node_hashhead * hd;
-	struct null_node * a;
-	struct vnode * vp;
+	struct null_node_hashhead * hd = NULL;
+	struct null_node * a = NULL;
+	struct vnode * vp = NULL;
 	int error = ENOENT;
 
 	/*
@@ -204,6 +204,7 @@ null_hashget(struct mount * mp, struct vnode * lowervp, struct vnode ** vpp)
 	 * just check whether the lowervp has gotten pulled from under us
 	 */
 	hd = NULL_NHASH(lowervp);
+	// In the future we should consider using a per bucket lock
 	lck_mtx_lock(&null_hashmtx);
 	LIST_FOREACH(a, hd, null_hash)
 	{
@@ -212,17 +213,19 @@ null_hashget(struct mount * mp, struct vnode * lowervp, struct vnode ** vpp)
 			if (a->null_lowervid != vnode_vid(lowervp)) {
 				/*lowervp has reved */
 				error = EIO;
-			} else {
-				/* if we found something then get an iocount on it */
-				error = vnode_getwithvid(vp, a->null_myvid);
-				if (error == 0) {
-					*vpp = vp;
-				}
+				vp = NULL;
 			}
+			// In the case of a succesful look-up we should consider moving the object to the top of the head
 			break;
 		}
 	}
 	lck_mtx_unlock(&null_hashmtx);
+	if (vp != NULL) {
+		error = vnode_getwithvid(vp, a->null_myvid);
+		if (error == 0) {
+			*vpp = vp;
+		}
+	}
 	return error;
 }
 
@@ -233,9 +236,9 @@ null_hashget(struct mount * mp, struct vnode * lowervp, struct vnode ** vpp)
 static int
 null_hashins(struct mount * mp, struct null_node * xp, struct vnode ** vpp)
 {
-	struct null_node_hashhead * hd;
-	struct null_node * oxp;
-	struct vnode * ovp;
+	struct null_node_hashhead * hd = NULL;
+	struct null_node * oxp = NULL;
+	struct vnode * ovp = NULL;
 	int error = 0;
 
 	hd = NULL_NHASH(xp->null_lowervp);
@@ -255,12 +258,7 @@ null_hashins(struct mount * mp, struct null_node * xp, struct vnode ** vpp)
 				 *  trying to add has been recycled
 				 *  don't add it.*/
 				error = EIO;
-				goto end;
-			}
-			/* if we found something in the hash map then grab an iocount */
-			error = vnode_getwithvid(ovp, oxp->null_myvid);
-			if (error == 0) {
-				*vpp = ovp;
+				ovp = NULL;
 			}
 			goto end;
 		}
@@ -271,6 +269,13 @@ null_hashins(struct mount * mp, struct null_node * xp, struct vnode ** vpp)
 	xp->null_flags |= NULL_FLAG_HASHED;
 end:
 	lck_mtx_unlock(&null_hashmtx);
+	if (ovp != NULL) {
+		/* if we found something in the hash map then grab an iocount */
+		error = vnode_getwithvid(ovp, oxp->null_myvid);
+		if (error == 0) {
+			*vpp = ovp;
+		}
+	}
 	return error;
 }
 

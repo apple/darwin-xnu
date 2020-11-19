@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -165,14 +165,14 @@ struct m_hdr {
  * Packet tag structure (see below for details).
  */
 struct m_tag {
-	u_int64_t               m_tag_cookie;   /* Error checking */
+	uint64_t               m_tag_cookie;   /* Error checking */
 #ifndef __LP64__
-	u_int32_t               pad;            /* For structure alignment */
+	uint32_t               pad;            /* For structure alignment */
 #endif /* !__LP64__ */
 	SLIST_ENTRY(m_tag)      m_tag_link;     /* List of packet tags */
-	u_int16_t               m_tag_type;     /* Module specific type */
-	u_int16_t               m_tag_len;      /* Length of data */
-	u_int32_t               m_tag_id;       /* Module ID */
+	uint16_t               m_tag_type;     /* Module specific type */
+	uint16_t               m_tag_len;      /* Length of data */
+	uint32_t               m_tag_id;       /* Module ID */
 };
 
 #define M_TAG_ALIGN(len) \
@@ -225,6 +225,10 @@ struct pf_mtag {
 #endif /* PF_ECN */
 };
 
+/* System reserved PF tags */
+#define PF_TAG_ID_SYSTEM_SERVICE        0xff00
+#define PF_TAG_ID_STACK_DROP            0xff01
+
 /*
  * PF fragment tag
  */
@@ -242,40 +246,30 @@ struct pf_fragment_tag {
 struct tcp_pktinfo {
 	union {
 		struct {
-			u_int32_t segsz;        /* segment size (actual MSS) */
-			u_int32_t start_seq;    /* start seq of this packet */
+			uint32_t segsz;        /* segment size (actual MSS) */
+			uint32_t start_seq;    /* start seq of this packet */
 			pid_t     pid;
 			pid_t     e_pid;
 		} __tx;
 		struct {
-			u_int16_t lro_pktlen;   /* max seg size encountered */
-			u_int8_t  lro_npkts;    /* # of coalesced TCP pkts */
-			u_int8_t  lro_timediff; /* time spent in LRO */
+			uint8_t  seg_cnt;    /* # of coalesced TCP pkts */
 		} __rx;
 	} __offload;
-	union {
-		u_int32_t       pri;            /* send msg priority */
-		u_int32_t       seq;            /* recv msg sequence # */
-	} __msgattr;
 #define tso_segsz       proto_mtag.__pr_u.tcp.tm_tcp.__offload.__tx.segsz
 #define tx_start_seq    proto_mtag.__pr_u.tcp.tm_tcp.__offload.__tx.start_seq
 #define tx_tcp_pid      proto_mtag.__pr_u.tcp.tm_tcp.__offload.__tx.pid
 #define tx_tcp_e_pid    proto_mtag.__pr_u.tcp.tm_tcp.__offload.__tx.e_pid
-#define lro_pktlen      proto_mtag.__pr_u.tcp.tm_tcp.__offload.__rx.lro_pktlen
-#define lro_npkts       proto_mtag.__pr_u.tcp.tm_tcp.__offload.__rx.lro_npkts
-#define lro_elapsed     proto_mtag.__pr_u.tcp.tm_tcp.__offload.__rx.lro_timediff
-#define msg_pri         proto_mtag.__pr_u.tcp.tm_tcp.__msgattr.pri
-#define msg_seq         proto_mtag.__pr_u.tcp.tm_tcp.__msgattr.seq
+#define seg_cnt         proto_mtag.__pr_u.tcp.tm_tcp.__offload.__rx.seg_cnt
 };
 
 /*
  * MPTCP mbuf tag
  */
 struct mptcp_pktinfo {
-	u_int64_t       mtpi_dsn;       /* MPTCP Data Sequence Number */
-	u_int32_t       mtpi_rel_seq;   /* Relative Seq Number */
-	u_int16_t       mtpi_length;    /* Length of mapping */
-	u_int16_t       mtpi_csum;
+	uint64_t       mtpi_dsn;       /* MPTCP Data Sequence Number */
+	uint32_t       mtpi_rel_seq;   /* Relative Seq Number */
+	uint16_t       mtpi_length;    /* Length of mapping */
+	uint16_t       mtpi_csum;
 #define mp_dsn          proto_mtag.__pr_u.tcp.tm_mptcp.mtpi_dsn
 #define mp_rseq         proto_mtag.__pr_u.tcp.tm_mptcp.mtpi_rel_seq
 #define mp_rlen         proto_mtag.__pr_u.tcp.tm_mptcp.mtpi_length
@@ -453,6 +447,9 @@ struct pkthdr {
 	 */
 	SLIST_HEAD(packet_tags, m_tag) tags; /* list of external tags */
 	union builtin_mtag builtin_mtag;
+
+	uint32_t comp_gencnt;
+	uint32_t padding;
 	/*
 	 * Module private scratch space (32-bit aligned), currently 16-bytes
 	 * large. Anything stored here is not guaranteed to survive across
@@ -538,8 +535,7 @@ struct pkthdr {
 #define PKTF_INET_RESOLVE       0x40    /* IPv4 resolver packet */
 #define PKTF_INET6_RESOLVE      0x80    /* IPv6 resolver packet */
 #define PKTF_RESOLVE_RTR        0x100   /* pkt is for resolving router */
-#define PKTF_SW_LRO_PKT         0x200   /* pkt is a large coalesced pkt */
-#define PKTF_SW_LRO_DID_CSUM    0x400   /* IP and TCP checksums done by LRO */
+#define PKTF_SKIP_PKTAP         0x200   /* pkt has already passed through pktap */
 #define PKTF_MPTCP              0x800   /* TCP with MPTCP metadata */
 #define PKTF_MPSO               0x1000  /* MPTCP socket meta data */
 #define PKTF_LOOP               0x2000  /* loopbacked packet */
@@ -678,9 +674,14 @@ struct mbuf {
 	(CSUM_DELAY_IP | CSUM_DELAY_DATA | CSUM_DELAY_IPV6_DATA |       \
 	CSUM_DATA_VALID | CSUM_PARTIAL | CSUM_ZERO_INVERT)
 
-#define CSUM_RX_FLAGS                                                   \
+#define CSUM_RX_FULL_FLAGS                                              \
 	(CSUM_IP_CHECKED | CSUM_IP_VALID | CSUM_PSEUDO_HDR |            \
-	CSUM_DATA_VALID | CSUM_PARTIAL)
+	CSUM_DATA_VALID)
+
+#define CSUM_RX_FLAGS                                                   \
+	(CSUM_RX_FULL_FLAGS | CSUM_PARTIAL)
+
+
 
 /*
  * Note: see also IF_HWASSIST_CSUM defined in <net/if_var.h>
@@ -1049,8 +1050,8 @@ struct name {                                                   \
 	((struct mbuf *)(void *)((char *)(head)->mq_last -      \
 	     __builtin_offsetof(struct mbuf, m_nextpkt))))
 
-#define max_linkhdr     P2ROUNDUP(_max_linkhdr, sizeof (u_int32_t))
-#define max_protohdr    P2ROUNDUP(_max_protohdr, sizeof (u_int32_t))
+#define max_linkhdr     (int)P2ROUNDUP(_max_linkhdr, sizeof (uint32_t))
+#define max_protohdr    (int)P2ROUNDUP(_max_protohdr, sizeof (uint32_t))
 #endif /* XNU_KERNEL_PRIVATE */
 
 /*
@@ -1398,7 +1399,7 @@ extern int _max_linkhdr;        /* largest link-level header */
 /* Use max_protohdr instead of _max_protohdr */
 extern int _max_protohdr;       /* largest protocol header */
 
-__private_extern__ unsigned int mbuf_default_ncl(int, u_int64_t);
+__private_extern__ unsigned int mbuf_default_ncl(uint64_t);
 __private_extern__ void mbinit(void);
 __private_extern__ struct mbuf *m_clattach(struct mbuf *, int, caddr_t,
     void (*)(caddr_t, u_int, caddr_t), u_int, caddr_t, int, int);

@@ -250,8 +250,8 @@ ndrv_attach(struct socket *so, int proto, __unused struct proc *p)
 	TAILQ_INIT(&np->nd_dlist);
 	np->nd_signature = NDRV_SIGNATURE;
 	np->nd_socket = so;
-	np->nd_proto.sp_family = SOCK_DOM(so);
-	np->nd_proto.sp_protocol = proto;
+	np->nd_proto.sp_family = (uint16_t)SOCK_DOM(so);
+	np->nd_proto.sp_protocol = (uint16_t)proto;
 	np->nd_if = NULL;
 	np->nd_proto_family = 0;
 	np->nd_family = 0;
@@ -331,12 +331,10 @@ ndrv_event(struct ifnet *ifp, __unused protocol_family_t protocol,
 	    event->event_code == KEV_DL_IF_DETACHING) {
 		LCK_MTX_ASSERT(ndrvdomain->dom_mtx, LCK_MTX_ASSERT_NOTOWNED);
 		lck_mtx_lock(ndrvdomain->dom_mtx);
-		ndrv_handle_ifp_detach(ifnet_family(ifp), ifnet_unit(ifp));
+		ndrv_handle_ifp_detach(ifnet_family(ifp), ifp->if_unit);
 		lck_mtx_unlock(ndrvdomain->dom_mtx);
 	}
 }
-
-static int name_cmp(struct ifnet *, char *);
 
 /*
  * This is the "driver open" hook - we 'bind' to the
@@ -383,7 +381,7 @@ ndrv_bind(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 	 */
 	ifnet_head_lock_shared();
 	TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
-		if (name_cmp(ifp, dname) == 0) {
+		if (strncmp(ifp->if_xname, dname, IFNAMSIZ) == 0) {
 			break;
 		}
 	}
@@ -415,7 +413,7 @@ ndrv_bind(struct socket *so, struct sockaddr *nam, __unused struct proc *p)
 
 	np->nd_if = ifp;
 	np->nd_family = ifnet_family(ifp);
-	np->nd_unit = ifnet_unit(ifp);
+	np->nd_unit = ifp->if_unit;
 
 	return 0;
 }
@@ -460,7 +458,8 @@ ndrv_send(struct socket *so, __unused int flags, struct mbuf *m,
 {
 	int error;
 
-	if (control) {
+	if (control != NULL) {
+		m_freem(control);
 		return EOPNOTSUPP;
 	}
 
@@ -649,46 +648,6 @@ ndrv_do_disconnect(struct ndrv_cb *np)
 	return 0;
 }
 
-/* Hackery - return a string version of a decimal number */
-static void
-sprint_d(u_int n, char *buf, int buflen)
-{
-	char dbuf[IFNAMSIZ];
-	char *cp = dbuf + IFNAMSIZ - 1;
-
-	*cp = 0;
-	do {
-		buflen--;
-		cp--;
-		*cp = "0123456789"[n % 10];
-		n /= 10;
-	} while (n != 0 && buflen > 0);
-	strlcpy(buf, cp, IFNAMSIZ - buflen);
-	return;
-}
-
-/*
- * Try to compare a device name (q) with one of the funky ifnet
- *  device names (ifp).
- */
-static int
-name_cmp(struct ifnet *ifp, char *q)
-{
-	char *r;
-	int len;
-	char buf[IFNAMSIZ];
-
-	r = buf;
-	len = strlen(ifnet_name(ifp));
-	strlcpy(r, ifnet_name(ifp), IFNAMSIZ);
-	r += len;
-	sprint_d(ifnet_unit(ifp), r, IFNAMSIZ - (r - buf));
-#if NDRV_DEBUG
-	printf("Comparing %s, %s\n", buf, q);
-#endif
-	return strncmp(buf, q, IFNAMSIZ);
-}
-
 #if 0
 //### Not used
 /*
@@ -746,7 +705,7 @@ ndrv_setspec(struct ndrv_cb *np, struct sockopt *sopt)
 		ndrvSpec.protocol_family = ndrvSpec64.protocol_family;
 		ndrvSpec.demux_count     = ndrvSpec64.demux_count;
 
-		user_addr = ndrvSpec64.demux_list;
+		user_addr = CAST_USER_ADDR_T(ndrvSpec64.demux_list);
 	} else {
 		struct ndrv_protocol_desc32     ndrvSpec32;
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1993-1995, 1999-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 1993-1995, 1999-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -42,7 +42,6 @@
 #include <vm/vm_pageout.h>
 
 #include <kern/thread_call.h>
-#include <kern/call_entry.h>
 #include <kern/timer_call.h>
 
 #include <libkern/OSAtomic.h>
@@ -54,8 +53,10 @@
 #endif
 #include <machine/machine_routines.h>
 
-static zone_t                   thread_call_zone;
-static struct waitq             daemon_waitq;
+static ZONE_DECLARE(thread_call_zone, "thread_call",
+    sizeof(thread_call_data_t), ZC_NOENCRYPT);
+
+static struct waitq daemon_waitq;
 
 typedef enum {
 	TCF_ABSOLUTE    = 0,
@@ -70,72 +71,75 @@ __options_decl(thread_call_group_flags_t, uint32_t, {
 });
 
 static struct thread_call_group {
+	__attribute__((aligned(128))) lck_ticket_t tcg_lock;
+
 	const char *            tcg_name;
 
 	queue_head_t            pending_queue;
 	uint32_t                pending_count;
 
 	queue_head_t            delayed_queues[TCF_COUNT];
+	struct priority_queue_deadline_min delayed_pqueues[TCF_COUNT];
 	timer_call_data_t       delayed_timers[TCF_COUNT];
 
 	timer_call_data_t       dealloc_timer;
 
 	struct waitq            idle_waitq;
+	uint64_t                idle_timestamp;
 	uint32_t                idle_count, active_count, blocked_count;
 
 	uint32_t                tcg_thread_pri;
 	uint32_t                target_thread_count;
-	uint64_t                idle_timestamp;
 
-	thread_call_group_flags_t flags;
+	thread_call_group_flags_t tcg_flags;
 } thread_call_groups[THREAD_CALL_INDEX_MAX] = {
 	[THREAD_CALL_INDEX_HIGH] = {
 		.tcg_name               = "high",
 		.tcg_thread_pri         = BASEPRI_PREEMPT_HIGH,
 		.target_thread_count    = 4,
-		.flags                  = TCG_NONE,
+		.tcg_flags              = TCG_NONE,
 	},
 	[THREAD_CALL_INDEX_KERNEL] = {
 		.tcg_name               = "kernel",
 		.tcg_thread_pri         = BASEPRI_KERNEL,
 		.target_thread_count    = 1,
-		.flags                  = TCG_PARALLEL,
+		.tcg_flags              = TCG_PARALLEL,
 	},
 	[THREAD_CALL_INDEX_USER] = {
 		.tcg_name               = "user",
 		.tcg_thread_pri         = BASEPRI_DEFAULT,
 		.target_thread_count    = 1,
-		.flags                  = TCG_PARALLEL,
+		.tcg_flags              = TCG_PARALLEL,
 	},
 	[THREAD_CALL_INDEX_LOW] = {
 		.tcg_name               = "low",
 		.tcg_thread_pri         = MAXPRI_THROTTLE,
 		.target_thread_count    = 1,
-		.flags                  = TCG_PARALLEL,
+		.tcg_flags              = TCG_PARALLEL,
 	},
 	[THREAD_CALL_INDEX_KERNEL_HIGH] = {
 		.tcg_name               = "kernel-high",
 		.tcg_thread_pri         = BASEPRI_PREEMPT,
 		.target_thread_count    = 2,
-		.flags                  = TCG_NONE,
+		.tcg_flags              = TCG_NONE,
 	},
 	[THREAD_CALL_INDEX_QOS_UI] = {
 		.tcg_name               = "qos-ui",
 		.tcg_thread_pri         = BASEPRI_FOREGROUND,
 		.target_thread_count    = 1,
-		.flags                  = TCG_NONE,
+		.tcg_flags              = TCG_NONE,
 	},
 	[THREAD_CALL_INDEX_QOS_IN] = {
 		.tcg_name               = "qos-in",
 		.tcg_thread_pri         = BASEPRI_USER_INITIATED,
 		.target_thread_count    = 1,
-		.flags                  = TCG_NONE,
+		.tcg_flags              = TCG_NONE,
 	},
 	[THREAD_CALL_INDEX_QOS_UT] = {
 		.tcg_name               = "qos-ut",
 		.tcg_thread_pri         = BASEPRI_UTILITY,
 		.target_thread_count    = 1,
-		.flags                  = TCG_NONE,
+		.tcg_flags              = TCG_NONE,
 	},
 };
 
@@ -147,19 +151,41 @@ typedef struct thread_call_group        *thread_call_group_t;
 #define THREAD_CALL_MACH_FACTOR_CAP     3
 #define THREAD_CALL_GROUP_MAX_THREADS   500
 
-static boolean_t                thread_call_daemon_awake;
+struct thread_call_thread_state {
+	struct thread_call_group * thc_group;
+	struct thread_call *       thc_call;    /* debug only, may be deallocated */
+	uint64_t thc_call_start;
+	uint64_t thc_call_soft_deadline;
+	uint64_t thc_call_hard_deadline;
+	uint64_t thc_call_pending_timestamp;
+	uint64_t thc_IOTES_invocation_timestamp;
+	thread_call_func_t  thc_func;
+	thread_call_param_t thc_param0;
+	thread_call_param_t thc_param1;
+};
+
+static bool                     thread_call_daemon_awake = true;
+/*
+ * This special waitq exists because the daemon thread
+ * might need to be woken while already holding a global waitq locked.
+ */
+static struct waitq             daemon_waitq;
+
 static thread_call_data_t       internal_call_storage[INTERNAL_CALL_COUNT];
 static queue_head_t             thread_call_internal_queue;
 int                                             thread_call_internal_queue_count = 0;
 static uint64_t                 thread_call_dealloc_interval_abs;
 
-static __inline__ thread_call_t _internal_call_allocate(thread_call_func_t func, thread_call_param_t param0);
-static __inline__ void          _internal_call_release(thread_call_t call);
-static __inline__ boolean_t     _pending_call_enqueue(thread_call_t call, thread_call_group_t group);
-static boolean_t                _delayed_call_enqueue(thread_call_t call, thread_call_group_t group,
+static void                     _internal_call_init(void);
+
+static thread_call_t            _internal_call_allocate(thread_call_func_t func, thread_call_param_t param0);
+static bool                     _is_internal_call(thread_call_t call);
+static void                     _internal_call_release(thread_call_t call);
+static bool                     _pending_call_enqueue(thread_call_t call, thread_call_group_t group, uint64_t now);
+static bool                     _delayed_call_enqueue(thread_call_t call, thread_call_group_t group,
     uint64_t deadline, thread_call_flavor_t flavor);
-static __inline__ boolean_t     _call_dequeue(thread_call_t call, thread_call_group_t group);
-static __inline__ void          thread_call_wake(thread_call_group_t group);
+static bool                     _call_dequeue(thread_call_t call, thread_call_group_t group);
+static void                     thread_call_wake(thread_call_group_t group);
 static void                     thread_call_daemon(void *arg);
 static void                     thread_call_thread(thread_call_group_t group, wait_result_t wres);
 static void                     thread_call_dealloc_timer(timer_call_param_t p0, timer_call_param_t p1);
@@ -167,7 +193,7 @@ static void                     thread_call_group_setup(thread_call_group_t grou
 static void                     sched_call_thread(int type, thread_t thread);
 static void                     thread_call_start_deallocate_timer(thread_call_group_t group);
 static void                     thread_call_wait_locked(thread_call_t call, spl_t s);
-static boolean_t                thread_call_wait_once_locked(thread_call_t call, spl_t s);
+static bool                     thread_call_wait_once_locked(thread_call_t call, spl_t s);
 
 static boolean_t                thread_call_enter_delayed_internal(thread_call_t call,
     thread_call_func_t alt_func, thread_call_param_t alt_param0,
@@ -177,42 +203,204 @@ static boolean_t                thread_call_enter_delayed_internal(thread_call_t
 /* non-static so dtrace can find it rdar://problem/31156135&31379348 */
 extern void thread_call_delayed_timer(timer_call_param_t p0, timer_call_param_t p1);
 
-lck_grp_t               thread_call_lck_grp;
-lck_mtx_t               thread_call_lock_data;
+LCK_GRP_DECLARE(thread_call_lck_grp, "thread_call");
 
-#define thread_call_lock_spin()                 \
-	lck_mtx_lock_spin_always(&thread_call_lock_data)
 
-#define thread_call_unlock()                    \
-	lck_mtx_unlock_always(&thread_call_lock_data)
+static void
+thread_call_lock_spin(thread_call_group_t group)
+{
+	lck_ticket_lock(&group->tcg_lock, &thread_call_lck_grp);
+}
 
-#define tc_deadline tc_call.deadline
+static void
+thread_call_unlock(thread_call_group_t group)
+{
+	lck_ticket_unlock(&group->tcg_lock);
+}
 
-extern boolean_t        mach_timer_coalescing_enabled;
+static void __assert_only
+thread_call_assert_locked(thread_call_group_t group)
+{
+	lck_ticket_assert_owned(&group->tcg_lock);
+}
 
-static inline spl_t
-disable_ints_and_lock(void)
+
+static spl_t
+disable_ints_and_lock(thread_call_group_t group)
 {
 	spl_t s = splsched();
-	thread_call_lock_spin();
+	thread_call_lock_spin(group);
 
 	return s;
 }
 
-static inline void
-enable_ints_and_unlock(spl_t s)
+static void
+enable_ints_and_unlock(thread_call_group_t group, spl_t s)
 {
-	thread_call_unlock();
+	thread_call_unlock(group);
 	splx(s);
 }
 
-static inline boolean_t
-group_isparallel(thread_call_group_t group)
+/* Lock held */
+static thread_call_group_t
+thread_call_get_group(thread_call_t call)
 {
-	return (group->flags & TCG_PARALLEL) != 0;
+	thread_call_index_t index = call->tc_index;
+
+	assert(index >= 0 && index < THREAD_CALL_INDEX_MAX);
+
+	return &thread_call_groups[index];
 }
 
-static boolean_t
+/* Lock held */
+static thread_call_flavor_t
+thread_call_get_flavor(thread_call_t call)
+{
+	return (call->tc_flags & THREAD_CALL_FLAG_CONTINUOUS) ? TCF_CONTINUOUS : TCF_ABSOLUTE;
+}
+
+/* Lock held */
+static thread_call_flavor_t
+thread_call_set_flavor(thread_call_t call, thread_call_flavor_t flavor)
+{
+	assert(flavor == TCF_CONTINUOUS || flavor == TCF_ABSOLUTE);
+	thread_call_flavor_t old_flavor = thread_call_get_flavor(call);
+
+	if (old_flavor != flavor) {
+		if (flavor == TCF_CONTINUOUS) {
+			call->tc_flags |= THREAD_CALL_FLAG_CONTINUOUS;
+		} else {
+			call->tc_flags &= ~THREAD_CALL_FLAG_CONTINUOUS;
+		}
+	}
+
+	return old_flavor;
+}
+
+/* returns true if it was on a queue */
+static bool
+thread_call_enqueue_tail(
+	thread_call_t           call,
+	queue_t                 new_queue)
+{
+	queue_t                 old_queue = call->tc_queue;
+
+	thread_call_group_t     group = thread_call_get_group(call);
+	thread_call_flavor_t    flavor = thread_call_get_flavor(call);
+
+	if (old_queue != NULL &&
+	    old_queue != &group->delayed_queues[flavor]) {
+		panic("thread call (%p) on bad queue (old_queue: %p)", call, old_queue);
+	}
+
+	if (old_queue == &group->delayed_queues[flavor]) {
+		priority_queue_remove(&group->delayed_pqueues[flavor], &call->tc_pqlink);
+	}
+
+	if (old_queue == NULL) {
+		enqueue_tail(new_queue, &call->tc_qlink);
+	} else {
+		re_queue_tail(new_queue, &call->tc_qlink);
+	}
+
+	call->tc_queue = new_queue;
+
+	return old_queue != NULL;
+}
+
+static queue_head_t *
+thread_call_dequeue(
+	thread_call_t            call)
+{
+	queue_t                 old_queue = call->tc_queue;
+
+	thread_call_group_t     group = thread_call_get_group(call);
+	thread_call_flavor_t    flavor = thread_call_get_flavor(call);
+
+	if (old_queue != NULL &&
+	    old_queue != &group->pending_queue &&
+	    old_queue != &group->delayed_queues[flavor]) {
+		panic("thread call (%p) on bad queue (old_queue: %p)", call, old_queue);
+	}
+
+	if (old_queue == &group->delayed_queues[flavor]) {
+		priority_queue_remove(&group->delayed_pqueues[flavor], &call->tc_pqlink);
+	}
+
+	if (old_queue != NULL) {
+		remqueue(&call->tc_qlink);
+
+		call->tc_queue = NULL;
+	}
+	return old_queue;
+}
+
+static queue_head_t *
+thread_call_enqueue_deadline(
+	thread_call_t           call,
+	thread_call_group_t     group,
+	thread_call_flavor_t    flavor,
+	uint64_t                deadline)
+{
+	queue_t old_queue = call->tc_queue;
+	queue_t new_queue = &group->delayed_queues[flavor];
+
+	thread_call_flavor_t old_flavor = thread_call_set_flavor(call, flavor);
+
+	if (old_queue != NULL &&
+	    old_queue != &group->pending_queue &&
+	    old_queue != &group->delayed_queues[old_flavor]) {
+		panic("thread call (%p) on bad queue (old_queue: %p)", call, old_queue);
+	}
+
+	if (old_queue == new_queue) {
+		/* optimize the same-queue case to avoid a full re-insert */
+		uint64_t old_deadline = call->tc_pqlink.deadline;
+		call->tc_pqlink.deadline = deadline;
+
+		if (old_deadline < deadline) {
+			priority_queue_entry_increased(&group->delayed_pqueues[flavor],
+			    &call->tc_pqlink);
+		} else {
+			priority_queue_entry_decreased(&group->delayed_pqueues[flavor],
+			    &call->tc_pqlink);
+		}
+	} else {
+		if (old_queue == &group->delayed_queues[old_flavor]) {
+			priority_queue_remove(&group->delayed_pqueues[old_flavor],
+			    &call->tc_pqlink);
+		}
+
+		call->tc_pqlink.deadline = deadline;
+
+		priority_queue_insert(&group->delayed_pqueues[flavor], &call->tc_pqlink);
+	}
+
+	if (old_queue == NULL) {
+		enqueue_tail(new_queue, &call->tc_qlink);
+	} else if (old_queue != new_queue) {
+		re_queue_tail(new_queue, &call->tc_qlink);
+	}
+
+	call->tc_queue = new_queue;
+
+	return old_queue;
+}
+
+uint64_t
+thread_call_get_armed_deadline(thread_call_t call)
+{
+	return call->tc_pqlink.deadline;
+}
+
+
+static bool
+group_isparallel(thread_call_group_t group)
+{
+	return (group->tcg_flags & TCG_PARALLEL) != 0;
+}
+
+static bool
 thread_call_group_should_add_thread(thread_call_group_t group)
 {
 	if ((group->active_count + group->blocked_count + group->idle_count) >= THREAD_CALL_GROUP_MAX_THREADS) {
@@ -221,17 +409,17 @@ thread_call_group_should_add_thread(thread_call_group_t group)
 		    group->active_count, group->blocked_count, group->idle_count);
 	}
 
-	if (group_isparallel(group) == FALSE) {
+	if (group_isparallel(group) == false) {
 		if (group->pending_count > 0 && group->active_count == 0) {
-			return TRUE;
+			return true;
 		}
 
-		return FALSE;
+		return false;
 	}
 
 	if (group->pending_count > 0) {
 		if (group->idle_count > 0) {
-			return FALSE;
+			return false;
 		}
 
 		uint32_t thread_count = group->active_count;
@@ -248,41 +436,26 @@ thread_call_group_should_add_thread(thread_call_group_t group)
 		    (thread_count < group->target_thread_count) ||
 		    ((group->pending_count > THREAD_CALL_ADD_RATIO * thread_count) &&
 		    (sched_mach_factor < THREAD_CALL_MACH_FACTOR_CAP))) {
-			return TRUE;
+			return true;
 		}
 	}
 
-	return FALSE;
-}
-
-/* Lock held */
-static inline thread_call_group_t
-thread_call_get_group(thread_call_t call)
-{
-	thread_call_index_t index = call->tc_index;
-
-	assert(index >= 0 && index < THREAD_CALL_INDEX_MAX);
-
-	return &thread_call_groups[index];
-}
-
-/* Lock held */
-static inline thread_call_flavor_t
-thread_call_get_flavor(thread_call_t call)
-{
-	return (call->tc_flags & THREAD_CALL_CONTINUOUS) ? TCF_CONTINUOUS : TCF_ABSOLUTE;
+	return false;
 }
 
 static void
 thread_call_group_setup(thread_call_group_t group)
 {
-	queue_init(&group->pending_queue);
-	queue_init(&group->delayed_queues[TCF_ABSOLUTE]);
-	queue_init(&group->delayed_queues[TCF_CONTINUOUS]);
+	lck_ticket_init(&group->tcg_lock, &thread_call_lck_grp);
 
-	/* TODO: Consolidate to one hard timer for each group */
-	timer_call_setup(&group->delayed_timers[TCF_ABSOLUTE], thread_call_delayed_timer, group);
-	timer_call_setup(&group->delayed_timers[TCF_CONTINUOUS], thread_call_delayed_timer, group);
+	queue_init(&group->pending_queue);
+
+	for (thread_call_flavor_t flavor = 0; flavor < TCF_COUNT; flavor++) {
+		queue_init(&group->delayed_queues[flavor]);
+		priority_queue_init(&group->delayed_pqueues[flavor]);
+		timer_call_setup(&group->delayed_timers[flavor], thread_call_delayed_timer, group);
+	}
+
 	timer_call_setup(&group->dealloc_timer, thread_call_dealloc_timer, group);
 
 	/* Reverse the wait order so we re-use the most recently parked thread from the pool */
@@ -293,7 +466,7 @@ thread_call_group_setup(thread_call_group_t group)
  * Simple wrapper for creating threads bound to
  * thread call groups.
  */
-static kern_return_t
+static void
 thread_call_thread_create(
 	thread_call_group_t             group)
 {
@@ -305,7 +478,7 @@ thread_call_thread_create(
 	result = kernel_thread_start_priority((thread_continue_t)thread_call_thread,
 	    group, thread_pri, &thread);
 	if (result != KERN_SUCCESS) {
-		return result;
+		panic("cannot create new thread call thread %d", result);
 	}
 
 	if (thread_pri <= BASEPRI_KERNEL) {
@@ -324,7 +497,6 @@ thread_call_thread_create(
 	thread_set_thread_name(thread, name);
 
 	thread_deallocate(thread);
-	return KERN_SUCCESS;
 }
 
 /*
@@ -336,14 +508,6 @@ thread_call_thread_create(
 void
 thread_call_initialize(void)
 {
-	int tc_size = sizeof(thread_call_data_t);
-	thread_call_zone = zinit(tc_size, 4096 * tc_size, 16 * tc_size, "thread_call");
-	zone_change(thread_call_zone, Z_CALLERACCT, FALSE);
-	zone_change(thread_call_zone, Z_NOENCRYPT, TRUE);
-
-	lck_grp_init(&thread_call_lck_grp, "thread_call", LCK_GRP_ATTR_NULL);
-	lck_mtx_init(&thread_call_lock_data, &thread_call_lck_grp, LCK_ATTR_NULL);
-
 	nanotime_to_absolutetime(0, THREAD_CALL_DEALLOC_INTERVAL_NS, &thread_call_dealloc_interval_abs);
 	waitq_init(&daemon_waitq, SYNC_POLICY_DISABLE_IRQ | SYNC_POLICY_FIFO);
 
@@ -351,20 +515,7 @@ thread_call_initialize(void)
 		thread_call_group_setup(&thread_call_groups[i]);
 	}
 
-	spl_t s = disable_ints_and_lock();
-
-	queue_init(&thread_call_internal_queue);
-	for (
-		thread_call_t call = internal_call_storage;
-		call < &internal_call_storage[INTERNAL_CALL_COUNT];
-		call++) {
-		enqueue_tail(&thread_call_internal_queue, &call->tc_call.q_link);
-		thread_call_internal_queue_count++;
-	}
-
-	thread_call_daemon_awake = TRUE;
-
-	enable_ints_and_unlock(s);
+	_internal_call_init();
 
 	thread_t thread;
 	kern_return_t result;
@@ -385,12 +536,35 @@ thread_call_setup(
 	thread_call_param_t             param0)
 {
 	bzero(call, sizeof(*call));
-	call_entry_setup((call_entry_t)call, func, param0);
 
-	/* Thread calls default to the HIGH group unless otherwise specified */
-	call->tc_index = THREAD_CALL_INDEX_HIGH;
+	*call = (struct thread_call) {
+		.tc_func = func,
+		.tc_param0 = param0,
 
-	/* THREAD_CALL_ALLOC not set, memory owned by caller */
+		/*
+		 * Thread calls default to the HIGH group
+		 * unless otherwise specified.
+		 */
+		.tc_index = THREAD_CALL_INDEX_HIGH,
+	};
+}
+
+static void
+_internal_call_init(void)
+{
+	/* Function-only thread calls are only kept in the default HIGH group */
+	thread_call_group_t group = &thread_call_groups[THREAD_CALL_INDEX_HIGH];
+
+	spl_t s = disable_ints_and_lock(group);
+
+	queue_init(&thread_call_internal_queue);
+
+	for (unsigned i = 0; i < INTERNAL_CALL_COUNT; i++) {
+		enqueue_tail(&thread_call_internal_queue, &internal_call_storage[i].tc_qlink);
+		thread_call_internal_queue_count++;
+	}
+
+	enable_ints_and_unlock(group, s);
 }
 
 /*
@@ -400,45 +574,63 @@ thread_call_setup(
  *
  *	Called with thread_call_lock held.
  */
-static __inline__ thread_call_t
+static thread_call_t
 _internal_call_allocate(thread_call_func_t func, thread_call_param_t param0)
 {
-	thread_call_t               call;
+	/* Function-only thread calls are only kept in the default HIGH group */
+	thread_call_group_t group = &thread_call_groups[THREAD_CALL_INDEX_HIGH];
 
-	if (queue_empty(&thread_call_internal_queue)) {
-		panic("_internal_call_allocate");
+	spl_t s = disable_ints_and_lock(group);
+
+	thread_call_t call = qe_dequeue_head(&thread_call_internal_queue,
+	    struct thread_call, tc_qlink);
+
+	if (call == NULL) {
+		panic("_internal_call_allocate: thread_call_internal_queue empty");
 	}
-
-	call = qe_dequeue_head(&thread_call_internal_queue, struct thread_call, tc_call.q_link);
 
 	thread_call_internal_queue_count--;
 
 	thread_call_setup(call, func, param0);
 	call->tc_refs = 0;
 	call->tc_flags = 0; /* THREAD_CALL_ALLOC not set, do not free back to zone */
+	enable_ints_and_unlock(group, s);
 
 	return call;
+}
+
+/* Check if a call is internal and needs to be returned to the internal pool. */
+static bool
+_is_internal_call(thread_call_t call)
+{
+	if (call >= internal_call_storage &&
+	    call < &internal_call_storage[INTERNAL_CALL_COUNT]) {
+		assert((call->tc_flags & THREAD_CALL_ALLOC) == 0);
+		return true;
+	}
+	return false;
 }
 
 /*
  *	_internal_call_release:
  *
  *	Release an internal callout entry which
- *	is no longer pending (or delayed). This is
- *	safe to call on a non-internal entry, in which
- *	case nothing happens.
+ *	is no longer pending (or delayed).
  *
  *      Called with thread_call_lock held.
  */
-static __inline__ void
+static void
 _internal_call_release(thread_call_t call)
 {
-	if (call >= internal_call_storage &&
-	    call < &internal_call_storage[INTERNAL_CALL_COUNT]) {
-		assert((call->tc_flags & THREAD_CALL_ALLOC) == 0);
-		enqueue_head(&thread_call_internal_queue, &call->tc_call.q_link);
-		thread_call_internal_queue_count++;
-	}
+	assert(_is_internal_call(call));
+
+	thread_call_group_t group = thread_call_get_group(call);
+
+	assert(group == &thread_call_groups[THREAD_CALL_INDEX_HIGH]);
+	thread_call_assert_locked(group);
+
+	enqueue_head(&thread_call_internal_queue, &call->tc_qlink);
+	thread_call_internal_queue_count++;
 }
 
 /*
@@ -452,39 +644,36 @@ _internal_call_release(thread_call_t call)
  *
  *	Called with thread_call_lock held.
  */
-static __inline__ boolean_t
-_pending_call_enqueue(thread_call_t             call,
-    thread_call_group_t       group)
+static bool
+_pending_call_enqueue(thread_call_t call,
+    thread_call_group_t group,
+    uint64_t now)
 {
 	if ((THREAD_CALL_ONCE | THREAD_CALL_RUNNING)
 	    == (call->tc_flags & (THREAD_CALL_ONCE | THREAD_CALL_RUNNING))) {
-		call->tc_deadline = 0;
+		call->tc_pqlink.deadline = 0;
 
-		uint32_t flags = call->tc_flags;
+		thread_call_flags_t flags = call->tc_flags;
 		call->tc_flags |= THREAD_CALL_RESCHEDULE;
 
-		if ((flags & THREAD_CALL_RESCHEDULE) != 0) {
-			return TRUE;
-		} else {
-			return FALSE;
-		}
+		assert(call->tc_queue == NULL);
+
+		return flags & THREAD_CALL_RESCHEDULE;
 	}
 
-	queue_head_t *old_queue = call_entry_enqueue_tail(CE(call), &group->pending_queue);
+	call->tc_pending_timestamp = now;
 
-	if (old_queue == NULL) {
+	bool was_on_queue = thread_call_enqueue_tail(call, &group->pending_queue);
+
+	if (!was_on_queue) {
 		call->tc_submit_count++;
-	} else if (old_queue != &group->pending_queue &&
-	    old_queue != &group->delayed_queues[TCF_ABSOLUTE] &&
-	    old_queue != &group->delayed_queues[TCF_CONTINUOUS]) {
-		panic("tried to move a thread call (%p) between groups (old_queue: %p)", call, old_queue);
 	}
 
 	group->pending_count++;
 
 	thread_call_wake(group);
 
-	return old_queue != NULL;
+	return was_on_queue;
 }
 
 /*
@@ -499,7 +688,7 @@ _pending_call_enqueue(thread_call_t             call,
  *
  *	Called with thread_call_lock held.
  */
-static boolean_t
+static bool
 _delayed_call_enqueue(
 	thread_call_t           call,
 	thread_call_group_t     group,
@@ -508,32 +697,23 @@ _delayed_call_enqueue(
 {
 	if ((THREAD_CALL_ONCE | THREAD_CALL_RUNNING)
 	    == (call->tc_flags & (THREAD_CALL_ONCE | THREAD_CALL_RUNNING))) {
-		call->tc_deadline = deadline;
+		call->tc_pqlink.deadline = deadline;
 
-		uint32_t flags = call->tc_flags;
+		thread_call_flags_t flags = call->tc_flags;
 		call->tc_flags |= THREAD_CALL_RESCHEDULE;
 
-		if ((flags & THREAD_CALL_RESCHEDULE) != 0) {
-			return TRUE;
-		} else {
-			return FALSE;
-		}
+		assert(call->tc_queue == NULL);
+		thread_call_set_flavor(call, flavor);
+
+		return flags & THREAD_CALL_RESCHEDULE;
 	}
 
-	queue_head_t *old_queue = call_entry_enqueue_deadline(CE(call),
-	    &group->delayed_queues[flavor],
-	    deadline);
+	queue_head_t *old_queue = thread_call_enqueue_deadline(call, group, flavor, deadline);
 
 	if (old_queue == &group->pending_queue) {
 		group->pending_count--;
 	} else if (old_queue == NULL) {
 		call->tc_submit_count++;
-	} else if (old_queue == &group->delayed_queues[TCF_ABSOLUTE] ||
-	    old_queue == &group->delayed_queues[TCF_CONTINUOUS]) {
-		/* TODO: if it's in the other delayed queue, that might not be OK */
-		// we did nothing, and that's fine
-	} else {
-		panic("tried to move a thread call (%p) between groups (old_queue: %p)", call, old_queue);
 	}
 
 	return old_queue != NULL;
@@ -548,27 +728,24 @@ _delayed_call_enqueue(
  *
  *	Called with thread_call_lock held.
  */
-static __inline__ boolean_t
+static bool
 _call_dequeue(
 	thread_call_t           call,
 	thread_call_group_t     group)
 {
-	queue_head_t            *old_queue;
+	queue_head_t *old_queue = thread_call_dequeue(call);
 
-	old_queue = call_entry_dequeue(CE(call));
-
-	if (old_queue != NULL) {
-		assert(old_queue == &group->pending_queue ||
-		    old_queue == &group->delayed_queues[TCF_ABSOLUTE] ||
-		    old_queue == &group->delayed_queues[TCF_CONTINUOUS]);
-
-		call->tc_finish_count++;
-		if (old_queue == &group->pending_queue) {
-			group->pending_count--;
-		}
+	if (old_queue == NULL) {
+		return false;
 	}
 
-	return old_queue != NULL;
+	call->tc_finish_count++;
+
+	if (old_queue == &group->pending_queue) {
+		group->pending_count--;
+	}
+
+	return true;
 }
 
 /*
@@ -595,22 +772,22 @@ _arm_delayed_call_timer(thread_call_t           new_call,
 		return false;
 	}
 
-	thread_call_t call = qe_queue_first(&group->delayed_queues[flavor], struct thread_call, tc_call.q_link);
+	thread_call_t call = priority_queue_min(&group->delayed_pqueues[flavor], struct thread_call, tc_pqlink);
 
 	/* We only need to change the hard timer if this new call is the first in the list */
 	if (new_call != NULL && new_call != call) {
 		return false;
 	}
 
-	assert((call->tc_soft_deadline != 0) && ((call->tc_soft_deadline <= call->tc_call.deadline)));
+	assert((call->tc_soft_deadline != 0) && ((call->tc_soft_deadline <= call->tc_pqlink.deadline)));
 
 	uint64_t fire_at = call->tc_soft_deadline;
 
 	if (flavor == TCF_CONTINUOUS) {
-		assert((call->tc_flags & THREAD_CALL_CONTINUOUS) == THREAD_CALL_CONTINUOUS);
+		assert(call->tc_flags & THREAD_CALL_FLAG_CONTINUOUS);
 		fire_at = continuoustime_to_absolutetime(fire_at);
 	} else {
-		assert((call->tc_flags & THREAD_CALL_CONTINUOUS) == 0);
+		assert((call->tc_flags & THREAD_CALL_FLAG_CONTINUOUS) == 0);
 	}
 
 	/*
@@ -619,7 +796,7 @@ _arm_delayed_call_timer(thread_call_t           new_call,
 	 * This is a valid coalescing behavior, but masks a possible window to
 	 * fire a timer instead of going idle.
 	 */
-	uint64_t leeway = call->tc_call.deadline - call->tc_soft_deadline;
+	uint64_t leeway = call->tc_pqlink.deadline - call->tc_soft_deadline;
 
 	timer_call_enter_with_leeway(&group->delayed_timers[flavor], (timer_call_param_t)flavor,
 	    fire_at, leeway,
@@ -650,15 +827,17 @@ _cancel_func_from_queue(thread_call_func_t      func,
 	boolean_t call_removed = FALSE;
 	thread_call_t call;
 
-	qe_foreach_element_safe(call, queue, tc_call.q_link) {
-		if (call->tc_call.func != func ||
-		    call->tc_call.param0 != param0) {
+	qe_foreach_element_safe(call, queue, tc_qlink) {
+		if (call->tc_func != func ||
+		    call->tc_param0 != param0) {
 			continue;
 		}
 
 		_call_dequeue(call, group);
 
-		_internal_call_release(call);
+		if (_is_internal_call(call)) {
+			_internal_call_release(call);
+		}
 
 		call_removed = TRUE;
 		if (!remove_all) {
@@ -716,6 +895,9 @@ thread_call_func_delayed_with_leeway(
  *
  *	This iterates all of the pending or delayed thread calls in the group,
  *	which is really inefficient.  Switch to an allocated thread call instead.
+ *
+ *	TODO: Give 'func' thread calls their own group, so this silliness doesn't
+ *	affect the main 'high' group.
  */
 boolean_t
 thread_call_func_cancel(
@@ -727,10 +909,10 @@ thread_call_func_cancel(
 
 	assert(func != NULL);
 
-	spl_t s = disable_ints_and_lock();
-
 	/* Function-only thread calls are only kept in the default HIGH group */
 	thread_call_group_t group = &thread_call_groups[THREAD_CALL_INDEX_HIGH];
+
+	spl_t s = disable_ints_and_lock(group);
 
 	if (cancel_all) {
 		/* exhaustively search every queue, and return true if any search found something */
@@ -744,7 +926,7 @@ thread_call_func_cancel(
 		    _cancel_func_from_queue(func, param, group, cancel_all, &group->delayed_queues[TCF_CONTINUOUS]);
 	}
 
-	enable_ints_and_unlock(s);
+	enable_ints_and_unlock(group, s);
 
 	return result;
 }
@@ -881,11 +1063,13 @@ boolean_t
 thread_call_free(
 	thread_call_t           call)
 {
-	spl_t s = disable_ints_and_lock();
+	thread_call_group_t group = thread_call_get_group(call);
 
-	if (call->tc_call.queue != NULL ||
+	spl_t s = disable_ints_and_lock(group);
+
+	if (call->tc_queue != NULL ||
 	    ((call->tc_flags & THREAD_CALL_RESCHEDULE) != 0)) {
-		thread_call_unlock();
+		thread_call_unlock(group);
 		splx(s);
 
 		return FALSE;
@@ -901,7 +1085,7 @@ thread_call_free(
 		thread_call_wait_once_locked(call, s);
 		/* thread call lock has been unlocked */
 	} else {
-		enable_ints_and_unlock(s);
+		enable_ints_and_unlock(group, s);
 	}
 
 	if (refs == 0) {
@@ -932,24 +1116,21 @@ thread_call_enter1(
 	thread_call_t                   call,
 	thread_call_param_t             param1)
 {
-	boolean_t               result = TRUE;
-	thread_call_group_t     group;
-
-	assert(call->tc_call.func != NULL);
-
+	assert(call->tc_func != NULL);
 	assert((call->tc_flags & THREAD_CALL_SIGNAL) == 0);
 
-	group = thread_call_get_group(call);
+	thread_call_group_t group = thread_call_get_group(call);
+	bool result = true;
 
-	spl_t s = disable_ints_and_lock();
+	spl_t s = disable_ints_and_lock(group);
 
-	if (call->tc_call.queue != &group->pending_queue) {
-		result = _pending_call_enqueue(call, group);
+	if (call->tc_queue != &group->pending_queue) {
+		result = _pending_call_enqueue(call, group, mach_absolute_time());
 	}
 
-	call->tc_call.param1 = param1;
+	call->tc_param1 = param1;
 
-	enable_ints_and_unlock(s);
+	enable_ints_and_unlock(group, s);
 
 	return result;
 }
@@ -1020,33 +1201,31 @@ thread_call_enter_delayed_internal(
 	uint64_t                leeway,
 	unsigned int            flags)
 {
-	boolean_t               result = TRUE;
-	thread_call_group_t     group;
-	uint64_t                now, sdeadline, slop;
-	uint32_t                urgency;
+	uint64_t                now, sdeadline;
 
 	thread_call_flavor_t flavor = (flags & THREAD_CALL_CONTINUOUS) ? TCF_CONTINUOUS : TCF_ABSOLUTE;
 
 	/* direct mapping between thread_call, timer_call, and timeout_urgency values */
-	urgency = (flags & TIMEOUT_URGENCY_MASK);
-
-	spl_t s = disable_ints_and_lock();
+	uint32_t urgency = (flags & TIMEOUT_URGENCY_MASK);
 
 	if (call == NULL) {
 		/* allocate a structure out of internal storage, as a convenience for BSD callers */
 		call = _internal_call_allocate(alt_func, alt_param0);
 	}
 
-	assert(call->tc_call.func != NULL);
-	group = thread_call_get_group(call);
+	assert(call->tc_func != NULL);
+	thread_call_group_t group = thread_call_get_group(call);
 
-	/* TODO: assert that call is not enqueued before flipping the flag */
+	spl_t s = disable_ints_and_lock(group);
+
+	/*
+	 * kevent and IOTES let you change flavor for an existing timer, so we have to
+	 * support flipping flavors for enqueued thread calls.
+	 */
 	if (flavor == TCF_CONTINUOUS) {
 		now = mach_continuous_time();
-		call->tc_flags |= THREAD_CALL_CONTINUOUS;
 	} else {
 		now = mach_absolute_time();
-		call->tc_flags &= ~THREAD_CALL_CONTINUOUS;
 	}
 
 	call->tc_flags |= THREAD_CALL_DELAYED;
@@ -1054,7 +1233,7 @@ thread_call_enter_delayed_internal(
 	call->tc_soft_deadline = sdeadline = deadline;
 
 	boolean_t ratelimited = FALSE;
-	slop = timer_call_slop(deadline, now, urgency, current_thread(), &ratelimited);
+	uint64_t slop = timer_call_slop(deadline, now, urgency, current_thread(), &ratelimited);
 
 	if ((flags & THREAD_CALL_DELAY_LEEWAY) != 0 && leeway > slop) {
 		slop = leeway;
@@ -1067,26 +1246,26 @@ thread_call_enter_delayed_internal(
 	}
 
 	if (ratelimited) {
-		call->tc_flags |= TIMER_CALL_RATELIMITED;
+		call->tc_flags |= THREAD_CALL_RATELIMITED;
 	} else {
-		call->tc_flags &= ~TIMER_CALL_RATELIMITED;
+		call->tc_flags &= ~THREAD_CALL_RATELIMITED;
 	}
 
-	call->tc_call.param1 = param1;
+	call->tc_param1 = param1;
 
 	call->tc_ttd = (sdeadline > now) ? (sdeadline - now) : 0;
 
-	result = _delayed_call_enqueue(call, group, deadline, flavor);
+	bool result = _delayed_call_enqueue(call, group, deadline, flavor);
 
 	_arm_delayed_call_timer(call, group, flavor);
 
 #if CONFIG_DTRACE
-	DTRACE_TMR5(thread_callout__create, thread_call_func_t, call->tc_call.func,
+	DTRACE_TMR5(thread_callout__create, thread_call_func_t, call->tc_func,
 	    uint64_t, (deadline - sdeadline), uint64_t, (call->tc_ttd >> 32),
 	    (unsigned) (call->tc_ttd & 0xFFFFFFFF), call);
 #endif
 
-	enable_ints_and_unlock(s);
+	enable_ints_and_unlock(group, s);
 
 	return result;
 }
@@ -1095,30 +1274,32 @@ thread_call_enter_delayed_internal(
  * Remove a callout entry from the queue
  * Called with thread_call_lock held
  */
-static boolean_t
+static bool
 thread_call_cancel_locked(thread_call_t call)
 {
-	boolean_t canceled = (0 != (THREAD_CALL_RESCHEDULE & call->tc_flags));
-	call->tc_flags &= ~THREAD_CALL_RESCHEDULE;
+	bool canceled;
 
-	if (canceled) {
+	if (call->tc_flags & THREAD_CALL_RESCHEDULE) {
+		call->tc_flags &= ~THREAD_CALL_RESCHEDULE;
+		canceled = true;
+
 		/* if reschedule was set, it must not have been queued */
-		assert(call->tc_call.queue == NULL);
+		assert(call->tc_queue == NULL);
 	} else {
-		boolean_t do_cancel_callout = FALSE;
+		bool queue_head_changed = false;
 
 		thread_call_flavor_t flavor = thread_call_get_flavor(call);
 		thread_call_group_t  group  = thread_call_get_group(call);
 
-		if ((call->tc_call.deadline != 0) &&
-		    (call == qe_queue_first(&group->delayed_queues[flavor], struct thread_call, tc_call.q_link))) {
-			assert(call->tc_call.queue == &group->delayed_queues[flavor]);
-			do_cancel_callout = TRUE;
+		if (call->tc_pqlink.deadline != 0 &&
+		    call == priority_queue_min(&group->delayed_pqueues[flavor], struct thread_call, tc_pqlink)) {
+			assert(call->tc_queue == &group->delayed_queues[flavor]);
+			queue_head_changed = true;
 		}
 
 		canceled = _call_dequeue(call, group);
 
-		if (do_cancel_callout) {
+		if (queue_head_changed) {
 			if (_arm_delayed_call_timer(NULL, group, flavor) == false) {
 				timer_call_cancel(&group->delayed_timers[flavor]);
 			}
@@ -1126,7 +1307,7 @@ thread_call_cancel_locked(thread_call_t call)
 	}
 
 #if CONFIG_DTRACE
-	DTRACE_TMR4(thread_callout__cancel, thread_call_func_t, call->tc_call.func,
+	DTRACE_TMR4(thread_callout__cancel, thread_call_func_t, call->tc_func,
 	    0, (call->tc_ttd >> 32), (unsigned) (call->tc_ttd & 0xFFFFFFFF));
 #endif
 
@@ -1144,11 +1325,13 @@ thread_call_cancel_locked(thread_call_t call)
 boolean_t
 thread_call_cancel(thread_call_t call)
 {
-	spl_t s = disable_ints_and_lock();
+	thread_call_group_t group = thread_call_get_group(call);
+
+	spl_t s = disable_ints_and_lock(group);
 
 	boolean_t result = thread_call_cancel_locked(call);
 
-	enable_ints_and_unlock(s);
+	enable_ints_and_unlock(group, s);
 
 	return result;
 }
@@ -1164,6 +1347,8 @@ thread_call_cancel(thread_call_t call)
 boolean_t
 thread_call_cancel_wait(thread_call_t call)
 {
+	thread_call_group_t group = thread_call_get_group(call);
+
 	if ((call->tc_flags & THREAD_CALL_ALLOC) == 0) {
 		panic("thread_call_cancel_wait: can't wait on thread call whose storage I don't own");
 	}
@@ -1172,12 +1357,15 @@ thread_call_cancel_wait(thread_call_t call)
 		panic("unsafe thread_call_cancel_wait");
 	}
 
-	if (current_thread()->thc_state.thc_call == call) {
+	thread_t self = current_thread();
+
+	if ((thread_get_tag_internal(self) & THREAD_TAG_CALLOUT) &&
+	    self->thc_state && self->thc_state->thc_call == call) {
 		panic("thread_call_cancel_wait: deadlock waiting on self from inside call: %p to function %p",
-		    call, call->tc_call.func);
+		    call, call->tc_func);
 	}
 
-	spl_t s = disable_ints_and_lock();
+	spl_t s = disable_ints_and_lock(group);
 
 	boolean_t canceled = thread_call_cancel_locked(call);
 
@@ -1201,7 +1389,7 @@ thread_call_cancel_wait(thread_call_t call)
 			thread_call_wait_locked(call, s);
 			/* thread call lock unlocked */
 		} else {
-			enable_ints_and_unlock(s);
+			enable_ints_and_unlock(group, s);
 		}
 	}
 
@@ -1222,7 +1410,7 @@ thread_call_cancel_wait(thread_call_t call)
  *	For high-priority group, only does wakeup/creation if there are no threads
  *	running.
  */
-static __inline__ void
+static void
 thread_call_wake(
 	thread_call_group_t             group)
 {
@@ -1231,19 +1419,26 @@ thread_call_wake(
 	 * Traditional behavior: wake only if no threads running.
 	 */
 	if (group_isparallel(group) || group->active_count == 0) {
-		if (waitq_wakeup64_one(&group->idle_waitq, NO_EVENT64,
-		    THREAD_AWAKENED, WAITQ_ALL_PRIORITIES) == KERN_SUCCESS) {
-			group->idle_count--; group->active_count++;
+		if (group->idle_count) {
+			__assert_only kern_return_t kr;
 
-			if (group->idle_count == 0 && (group->flags & TCG_DEALLOC_ACTIVE) == TCG_DEALLOC_ACTIVE) {
+			kr = waitq_wakeup64_one(&group->idle_waitq, NO_EVENT64,
+			    THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
+			assert(kr == KERN_SUCCESS);
+
+			group->idle_count--;
+			group->active_count++;
+
+			if (group->idle_count == 0 && (group->tcg_flags & TCG_DEALLOC_ACTIVE) == TCG_DEALLOC_ACTIVE) {
 				if (timer_call_cancel(&group->dealloc_timer) == TRUE) {
-					group->flags &= ~TCG_DEALLOC_ACTIVE;
+					group->tcg_flags &= ~TCG_DEALLOC_ACTIVE;
 				}
 			}
 		} else {
-			if (!thread_call_daemon_awake && thread_call_group_should_add_thread(group)) {
-				thread_call_daemon_awake = TRUE;
-				waitq_wakeup64_one(&daemon_waitq, NO_EVENT64,
+			if (thread_call_group_should_add_thread(group) &&
+			    os_atomic_cmpxchg(&thread_call_daemon_awake,
+			    false, true, relaxed)) {
+				waitq_wakeup64_all(&daemon_waitq, NO_EVENT64,
 				    THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
 			}
 		}
@@ -1262,10 +1457,13 @@ sched_call_thread(
 {
 	thread_call_group_t             group;
 
-	group = thread->thc_state.thc_group;
+	assert(thread_get_tag_internal(thread) & THREAD_TAG_CALLOUT);
+	assert(thread->thc_state != NULL);
+
+	group = thread->thc_state->thc_group;
 	assert((group - &thread_call_groups[0]) < THREAD_CALL_INDEX_MAX);
 
-	thread_call_lock_spin();
+	thread_call_lock_spin(group);
 
 	switch (type) {
 	case SCHED_CALL_BLOCK:
@@ -1284,7 +1482,7 @@ sched_call_thread(
 		break;
 	}
 
-	thread_call_unlock();
+	thread_call_unlock(group);
 }
 
 /*
@@ -1293,17 +1491,15 @@ sched_call_thread(
  * anyone who might be waiting on this work item and frees it
  * if the client has so requested.
  */
-static boolean_t
+static bool
 thread_call_finish(thread_call_t call, thread_call_group_t group, spl_t *s)
 {
-	uint64_t  time;
-	uint32_t  flags;
-	boolean_t signal;
-	boolean_t repend = FALSE;
+	assert(thread_call_get_group(call) == group);
+
+	bool repend = false;
+	bool signal = call->tc_flags & THREAD_CALL_SIGNAL;
 
 	call->tc_finish_count++;
-	flags = call->tc_flags;
-	signal = ((THREAD_CALL_SIGNAL & flags) != 0);
 
 	if (!signal) {
 		/* The thread call thread owns a ref until the call is finished */
@@ -1313,58 +1509,61 @@ thread_call_finish(thread_call_t call, thread_call_group_t group, spl_t *s)
 		call->tc_refs--;
 	}
 
+	thread_call_flags_t old_flags = call->tc_flags;
 	call->tc_flags &= ~(THREAD_CALL_RESCHEDULE | THREAD_CALL_RUNNING | THREAD_CALL_WAIT);
 
-	if ((call->tc_refs != 0) && ((flags & THREAD_CALL_RESCHEDULE) != 0)) {
-		assert(flags & THREAD_CALL_ONCE);
+	if (call->tc_refs != 0 && (old_flags & THREAD_CALL_RESCHEDULE) != 0) {
+		assert(old_flags & THREAD_CALL_ONCE);
 		thread_call_flavor_t flavor = thread_call_get_flavor(call);
 
-		if (THREAD_CALL_DELAYED & flags) {
-			time =  mach_absolute_time();
+		if (old_flags & THREAD_CALL_DELAYED) {
+			uint64_t now = mach_absolute_time();
 			if (flavor == TCF_CONTINUOUS) {
-				time =  absolutetime_to_continuoustime(time);
+				now = absolutetime_to_continuoustime(now);
 			}
-			if (call->tc_soft_deadline <= time) {
-				call->tc_flags &= ~(THREAD_CALL_DELAYED | TIMER_CALL_RATELIMITED);
-				call->tc_deadline = 0;
+			if (call->tc_soft_deadline <= now) {
+				/* The deadline has already expired, go straight to pending */
+				call->tc_flags &= ~(THREAD_CALL_DELAYED | THREAD_CALL_RATELIMITED);
+				call->tc_pqlink.deadline = 0;
 			}
 		}
-		if (call->tc_deadline) {
-			_delayed_call_enqueue(call, group, call->tc_deadline, flavor);
+
+		if (call->tc_pqlink.deadline) {
+			_delayed_call_enqueue(call, group, call->tc_pqlink.deadline, flavor);
 			if (!signal) {
 				_arm_delayed_call_timer(call, group, flavor);
 			}
 		} else if (signal) {
 			call->tc_submit_count++;
-			repend = TRUE;
+			repend = true;
 		} else {
-			_pending_call_enqueue(call, group);
+			_pending_call_enqueue(call, group, mach_absolute_time());
 		}
 	}
 
 	if (!signal && (call->tc_refs == 0)) {
-		if ((flags & THREAD_CALL_WAIT) != 0) {
-			panic("Someone waiting on a thread call that is scheduled for free: %p\n", call->tc_call.func);
+		if ((old_flags & THREAD_CALL_WAIT) != 0) {
+			panic("Someone waiting on a thread call that is scheduled for free: %p\n", call->tc_func);
 		}
 
 		assert(call->tc_finish_count == call->tc_submit_count);
 
-		enable_ints_and_unlock(*s);
+		enable_ints_and_unlock(group, *s);
 
 		zfree(thread_call_zone, call);
 
-		*s = disable_ints_and_lock();
+		*s = disable_ints_and_lock(group);
 	}
 
-	if ((flags & THREAD_CALL_WAIT) != 0) {
+	if ((old_flags & THREAD_CALL_WAIT) != 0) {
 		/*
 		 * Dropping lock here because the sched call for the
 		 * high-pri group can take the big lock from under
 		 * a thread lock.
 		 */
-		thread_call_unlock();
+		thread_call_unlock(group);
 		thread_wakeup((event_t)call);
-		thread_call_lock_spin();
+		thread_call_lock_spin(group);
 		/* THREAD_CALL_SIGNAL call may have been freed */
 	}
 
@@ -1379,10 +1578,11 @@ thread_call_finish(thread_call_t call, thread_call_group_t group, spl_t *s)
  * Note that the thread call object can be deallocated by the function if we do not control its storage.
  */
 static void __attribute__((noinline))
-thread_call_invoke(thread_call_func_t func, thread_call_param_t param0, thread_call_param_t param1, thread_call_t call)
+thread_call_invoke(thread_call_func_t func,
+    thread_call_param_t param0,
+    thread_call_param_t param1,
+    __unused thread_call_t call)
 {
-	current_thread()->thc_state.thc_call = call;
-
 #if DEVELOPMENT || DEBUG
 	KERNEL_DEBUG_CONSTANT(
 		MACHDBG_CODE(DBG_MACH_SCHED, MACH_CALLOUT) | DBG_FUNC_START,
@@ -1408,8 +1608,6 @@ thread_call_invoke(thread_call_func_t func, thread_call_param_t param0, thread_c
 		MACHDBG_CODE(DBG_MACH_SCHED, MACH_CALLOUT) | DBG_FUNC_END,
 		VM_KERNEL_UNSLIDE(func), 0, 0, 0, 0);
 #endif /* DEVELOPMENT || DEBUG */
-
-	current_thread()->thc_state.thc_call = NULL;
 }
 
 /*
@@ -1420,8 +1618,7 @@ thread_call_thread(
 	thread_call_group_t             group,
 	wait_result_t                   wres)
 {
-	thread_t        self = current_thread();
-	boolean_t       canwait;
+	thread_t self = current_thread();
 
 	if ((thread_get_tag_internal(self) & THREAD_TAG_CALLOUT) == 0) {
 		(void)thread_set_tag_internal(self, THREAD_TAG_CALLOUT);
@@ -1438,43 +1635,60 @@ thread_call_thread(
 		panic("thread_terminate() returned?");
 	}
 
-	spl_t s = disable_ints_and_lock();
+	spl_t s = disable_ints_and_lock(group);
 
-	self->thc_state.thc_group = group;
+	struct thread_call_thread_state thc_state = { .thc_group = group };
+	self->thc_state = &thc_state;
+
 	thread_sched_call(self, sched_call_thread);
 
 	while (group->pending_count > 0) {
-		thread_call_t                   call;
-		thread_call_func_t              func;
-		thread_call_param_t             param0, param1;
-
-		call = qe_dequeue_head(&group->pending_queue, struct thread_call, tc_call.q_link);
+		thread_call_t call = qe_dequeue_head(&group->pending_queue,
+		    struct thread_call, tc_qlink);
 		assert(call != NULL);
+
 		group->pending_count--;
+		if (group->pending_count == 0) {
+			assert(queue_empty(&group->pending_queue));
+		}
 
-		func = call->tc_call.func;
-		param0 = call->tc_call.param0;
-		param1 = call->tc_call.param1;
+		thread_call_func_t  func   = call->tc_func;
+		thread_call_param_t param0 = call->tc_param0;
+		thread_call_param_t param1 = call->tc_param1;
 
-		call->tc_call.queue = NULL;
+		call->tc_queue = NULL;
 
-		_internal_call_release(call);
+		if (_is_internal_call(call)) {
+			_internal_call_release(call);
+		}
 
 		/*
 		 * Can only do wakeups for thread calls whose storage
 		 * we control.
 		 */
-		if ((call->tc_flags & THREAD_CALL_ALLOC) != 0) {
-			canwait = TRUE;
+		bool needs_finish = false;
+		if (call->tc_flags & THREAD_CALL_ALLOC) {
+			needs_finish = true;
 			call->tc_flags |= THREAD_CALL_RUNNING;
 			call->tc_refs++;        /* Delay free until we're done */
-		} else {
-			canwait = FALSE;
 		}
 
-		enable_ints_and_unlock(s);
+		thc_state.thc_call = call;
+		thc_state.thc_call_pending_timestamp = call->tc_pending_timestamp;
+		thc_state.thc_call_soft_deadline = call->tc_soft_deadline;
+		thc_state.thc_call_hard_deadline = call->tc_pqlink.deadline;
+		thc_state.thc_func = func;
+		thc_state.thc_param0 = param0;
+		thc_state.thc_param1 = param1;
+		thc_state.thc_IOTES_invocation_timestamp = 0;
+
+		enable_ints_and_unlock(group, s);
+
+		thc_state.thc_call_start = mach_absolute_time();
 
 		thread_call_invoke(func, param0, param1, call);
+
+		thc_state.thc_call = NULL;
 
 		if (get_preemption_level() != 0) {
 			int pl = get_preemption_level();
@@ -1482,10 +1696,10 @@ thread_call_thread(
 			    pl, (void *)VM_KERNEL_UNSLIDE(func), param0, param1);
 		}
 
-		s = disable_ints_and_lock();
+		s = disable_ints_and_lock(group);
 
-		if (canwait) {
-			/* Frees if so desired */
+		if (needs_finish) {
+			/* Release refcount, may free */
 			thread_call_finish(call, group, &s);
 		}
 	}
@@ -1504,6 +1718,8 @@ thread_call_thread(
 	self->callout_woken_from_platform_idle = FALSE;
 	self->callout_woke_thread = FALSE;
 
+	self->thc_state = NULL;
+
 	if (group_isparallel(group)) {
 		/*
 		 * For new style of thread group, thread always blocks.
@@ -1518,7 +1734,7 @@ thread_call_thread(
 			group->idle_timestamp = mach_absolute_time();
 		}
 
-		if (((group->flags & TCG_DEALLOC_ACTIVE) == 0) &&
+		if (((group->tcg_flags & TCG_DEALLOC_ACTIVE) == 0) &&
 		    ((group->active_count + group->idle_count) > group->target_thread_count)) {
 			thread_call_start_deallocate_timer(group);
 		}
@@ -1529,7 +1745,7 @@ thread_call_thread(
 			panic("kcall worker unable to assert wait?");
 		}
 
-		enable_ints_and_unlock(s);
+		enable_ints_and_unlock(group, s);
 
 		thread_block_parameter((thread_continue_t)thread_call_thread, group);
 	} else {
@@ -1538,18 +1754,35 @@ thread_call_thread(
 
 			waitq_assert_wait64(&group->idle_waitq, NO_EVENT64, THREAD_UNINT, 0); /* Interrupted means to exit */
 
-			enable_ints_and_unlock(s);
+			enable_ints_and_unlock(group, s);
 
 			thread_block_parameter((thread_continue_t)thread_call_thread, group);
 			/* NOTREACHED */
 		}
 	}
 
-	enable_ints_and_unlock(s);
+	enable_ints_and_unlock(group, s);
 
 	thread_terminate(self);
 	/* NOTREACHED */
 }
+
+void
+thread_call_start_iotes_invocation(__assert_only thread_call_t call)
+{
+	thread_t self = current_thread();
+
+	if ((thread_get_tag_internal(self) & THREAD_TAG_CALLOUT) == 0) {
+		/* not a thread call thread, might be a workloop IOTES */
+		return;
+	}
+
+	assert(self->thc_state);
+	assert(self->thc_state->thc_call == call);
+
+	self->thc_state->thc_IOTES_invocation_timestamp = mach_absolute_time();
+}
+
 
 /*
  *	thread_call_daemon: walk list of groups, allocating
@@ -1559,36 +1792,34 @@ thread_call_thread(
 static void
 thread_call_daemon_continue(__unused void *arg)
 {
-	spl_t s = disable_ints_and_lock();
+	do {
+		os_atomic_store(&thread_call_daemon_awake, false, relaxed);
 
-	/* Starting at zero happens to be high-priority first. */
-	for (int i = 0; i < THREAD_CALL_INDEX_MAX; i++) {
-		thread_call_group_t group = &thread_call_groups[i];
-		while (thread_call_group_should_add_thread(group)) {
-			group->active_count++;
+		/* Starting at zero happens to be high-priority first. */
+		for (int i = 0; i < THREAD_CALL_INDEX_MAX; i++) {
+			thread_call_group_t group = &thread_call_groups[i];
 
-			enable_ints_and_unlock(s);
+			spl_t s = disable_ints_and_lock(group);
 
-			kern_return_t kr = thread_call_thread_create(group);
-			if (kr != KERN_SUCCESS) {
-				/*
-				 * On failure, just pause for a moment and give up.
-				 * We can try again later.
-				 */
-				delay(10000); /* 10 ms */
-				s = disable_ints_and_lock();
-				goto out;
+			while (thread_call_group_should_add_thread(group)) {
+				group->active_count++;
+
+				enable_ints_and_unlock(group, s);
+
+				thread_call_thread_create(group);
+
+				s = disable_ints_and_lock(group);
 			}
 
-			s = disable_ints_and_lock();
+			enable_ints_and_unlock(group, s);
 		}
-	}
+	} while (os_atomic_load(&thread_call_daemon_awake, relaxed));
 
-out:
-	thread_call_daemon_awake = FALSE;
 	waitq_assert_wait64(&daemon_waitq, NO_EVENT64, THREAD_UNINT, 0);
 
-	enable_ints_and_unlock(s);
+	if (os_atomic_load(&thread_call_daemon_awake, relaxed)) {
+		clear_wait(current_thread(), THREAD_AWAKENED);
+	}
 
 	thread_block_parameter((thread_continue_t)thread_call_daemon_continue, NULL);
 	/* NOTREACHED */
@@ -1617,18 +1848,18 @@ thread_call_daemon(
 static void
 thread_call_start_deallocate_timer(thread_call_group_t group)
 {
-	__assert_only boolean_t already_enqueued;
+	__assert_only bool already_enqueued;
 
 	assert(group->idle_count > 0);
-	assert((group->flags & TCG_DEALLOC_ACTIVE) == 0);
+	assert((group->tcg_flags & TCG_DEALLOC_ACTIVE) == 0);
 
-	group->flags |= TCG_DEALLOC_ACTIVE;
+	group->tcg_flags |= TCG_DEALLOC_ACTIVE;
 
 	uint64_t deadline = group->idle_timestamp + thread_call_dealloc_interval_abs;
 
 	already_enqueued = timer_call_enter(&group->dealloc_timer, deadline, 0);
 
-	assert(already_enqueued == FALSE);
+	assert(already_enqueued == false);
 }
 
 /* non-static so dtrace can find it rdar://problem/31156135&31379348 */
@@ -1640,10 +1871,8 @@ thread_call_delayed_timer(timer_call_param_t p0, timer_call_param_t p1)
 
 	thread_call_t   call;
 	uint64_t        now;
-	boolean_t       restart;
-	boolean_t       repend;
 
-	thread_call_lock_spin();
+	thread_call_lock_spin(group);
 
 	if (flavor == TCF_CONTINUOUS) {
 		now = mach_continuous_time();
@@ -1653,69 +1882,61 @@ thread_call_delayed_timer(timer_call_param_t p0, timer_call_param_t p1)
 		panic("invalid timer flavor: %d", flavor);
 	}
 
-	do {
-		restart = FALSE;
-		qe_foreach_element_safe(call, &group->delayed_queues[flavor], tc_call.q_link) {
-			if (flavor == TCF_CONTINUOUS) {
-				assert((call->tc_flags & THREAD_CALL_CONTINUOUS) == THREAD_CALL_CONTINUOUS);
-			} else {
-				assert((call->tc_flags & THREAD_CALL_CONTINUOUS) == 0);
-			}
+	while ((call = priority_queue_min(&group->delayed_pqueues[flavor],
+	    struct thread_call, tc_pqlink)) != NULL) {
+		assert(thread_call_get_group(call) == group);
+		assert(thread_call_get_flavor(call) == flavor);
 
-			/*
-			 * if we hit a call that isn't yet ready to expire,
-			 * then we're done for now
-			 * TODO: The next timer in the list could have a larger leeway
-			 *       and therefore be ready to expire.
-			 *       Sort by deadline then by soft deadline to avoid this
-			 */
-			if (call->tc_soft_deadline > now) {
-				break;
-			}
-
-			/*
-			 * If we hit a rate-limited timer, don't eagerly wake it up.
-			 * Wait until it reaches the end of the leeway window.
-			 *
-			 * TODO: What if the next timer is not rate-limited?
-			 *       Have a separate rate-limited queue to avoid this
-			 */
-			if ((call->tc_flags & THREAD_CALL_RATELIMITED) &&
-			    (call->tc_call.deadline > now) &&
-			    (ml_timer_forced_evaluation() == FALSE)) {
-				break;
-			}
-
-			if (THREAD_CALL_SIGNAL & call->tc_flags) {
-				__assert_only queue_head_t *old_queue;
-				old_queue = call_entry_dequeue(&call->tc_call);
-				assert(old_queue == &group->delayed_queues[flavor]);
-
-				do {
-					thread_call_func_t  func   = call->tc_call.func;
-					thread_call_param_t param0 = call->tc_call.param0;
-					thread_call_param_t param1 = call->tc_call.param1;
-
-					call->tc_flags |= THREAD_CALL_RUNNING;
-					thread_call_unlock();
-					thread_call_invoke(func, param0, param1, call);
-					thread_call_lock_spin();
-
-					repend = thread_call_finish(call, group, NULL);
-				} while (repend);
-
-				/* call may have been freed */
-				restart = TRUE;
-				break;
-			} else {
-				_pending_call_enqueue(call, group);
-			}
+		/*
+		 * if we hit a call that isn't yet ready to expire,
+		 * then we're done for now
+		 * TODO: The next timer in the list could have a larger leeway
+		 *       and therefore be ready to expire.
+		 */
+		if (call->tc_soft_deadline > now) {
+			break;
 		}
-	} while (restart);
+
+		/*
+		 * If we hit a rate-limited timer, don't eagerly wake it up.
+		 * Wait until it reaches the end of the leeway window.
+		 *
+		 * TODO: What if the next timer is not rate-limited?
+		 *       Have a separate rate-limited queue to avoid this
+		 */
+		if ((call->tc_flags & THREAD_CALL_RATELIMITED) &&
+		    (call->tc_pqlink.deadline > now) &&
+		    (ml_timer_forced_evaluation() == FALSE)) {
+			break;
+		}
+
+		if (THREAD_CALL_SIGNAL & call->tc_flags) {
+			__assert_only queue_head_t *old_queue;
+			old_queue = thread_call_dequeue(call);
+			assert(old_queue == &group->delayed_queues[flavor]);
+
+			do {
+				thread_call_func_t  func   = call->tc_func;
+				thread_call_param_t param0 = call->tc_param0;
+				thread_call_param_t param1 = call->tc_param1;
+
+				call->tc_flags |= THREAD_CALL_RUNNING;
+
+				thread_call_unlock(group);
+				thread_call_invoke(func, param0, param1, call);
+				thread_call_lock_spin(group);
+
+				/* finish may detect that the call has been re-pended */
+			} while (thread_call_finish(call, group, NULL));
+			/* call may have been freed by the finish */
+		} else {
+			_pending_call_enqueue(call, group, now);
+		}
+	}
 
 	_arm_delayed_call_timer(call, group, flavor);
 
-	thread_call_unlock();
+	thread_call_unlock(group);
 }
 
 static void
@@ -1725,7 +1946,7 @@ thread_call_delayed_timer_rescan(thread_call_group_t group,
 	thread_call_t call;
 	uint64_t now;
 
-	spl_t s = disable_ints_and_lock();
+	spl_t s = disable_ints_and_lock(group);
 
 	assert(ml_timer_forced_evaluation() == TRUE);
 
@@ -1735,16 +1956,27 @@ thread_call_delayed_timer_rescan(thread_call_group_t group,
 		now = mach_absolute_time();
 	}
 
-	qe_foreach_element_safe(call, &group->delayed_queues[flavor], tc_call.q_link) {
+	qe_foreach_element_safe(call, &group->delayed_queues[flavor], tc_qlink) {
 		if (call->tc_soft_deadline <= now) {
-			_pending_call_enqueue(call, group);
+			_pending_call_enqueue(call, group, now);
 		} else {
-			uint64_t skew = call->tc_call.deadline - call->tc_soft_deadline;
-			assert(call->tc_call.deadline >= call->tc_soft_deadline);
+			uint64_t skew = call->tc_pqlink.deadline - call->tc_soft_deadline;
+			assert(call->tc_pqlink.deadline >= call->tc_soft_deadline);
 			/*
 			 * On a latency quality-of-service level change,
 			 * re-sort potentially rate-limited callout. The platform
 			 * layer determines which timers require this.
+			 *
+			 * This trick works by updating the deadline value to
+			 * equal soft-deadline, effectively crushing away
+			 * timer coalescing slop values for any armed
+			 * timer in the queue.
+			 *
+			 * TODO: keep a hint on the timer to tell whether its inputs changed, so we
+			 * only have to crush coalescing for timers that need it.
+			 *
+			 * TODO: Keep a separate queue of timers above the re-sort
+			 * threshold, so we only have to look at those.
 			 */
 			if (timer_resort_threshold(skew)) {
 				_call_dequeue(call, group);
@@ -1755,15 +1987,16 @@ thread_call_delayed_timer_rescan(thread_call_group_t group,
 
 	_arm_delayed_call_timer(NULL, group, flavor);
 
-	enable_ints_and_unlock(s);
+	enable_ints_and_unlock(group, s);
 }
 
 void
 thread_call_delayed_timer_rescan_all(void)
 {
 	for (int i = 0; i < THREAD_CALL_INDEX_MAX; i++) {
-		thread_call_delayed_timer_rescan(&thread_call_groups[i], TCF_ABSOLUTE);
-		thread_call_delayed_timer_rescan(&thread_call_groups[i], TCF_CONTINUOUS);
+		for (thread_call_flavor_t flavor = 0; flavor < TCF_COUNT; flavor++) {
+			thread_call_delayed_timer_rescan(&thread_call_groups[i], flavor);
+		}
 	}
 }
 
@@ -1780,17 +2013,17 @@ thread_call_dealloc_timer(
 	thread_call_group_t group = (thread_call_group_t)p0;
 	uint64_t now;
 	kern_return_t res;
-	boolean_t terminated = FALSE;
+	bool terminated = false;
 
-	thread_call_lock_spin();
+	thread_call_lock_spin(group);
 
-	assert((group->flags & TCG_DEALLOC_ACTIVE) == TCG_DEALLOC_ACTIVE);
+	assert(group->tcg_flags & TCG_DEALLOC_ACTIVE);
 
 	now = mach_absolute_time();
 
 	if (group->idle_count > 0) {
 		if (now > group->idle_timestamp + thread_call_dealloc_interval_abs) {
-			terminated = TRUE;
+			terminated = true;
 			group->idle_count--;
 			res = waitq_wakeup64_one(&group->idle_waitq, NO_EVENT64,
 			    THREAD_INTERRUPTED, WAITQ_ALL_PRIORITIES);
@@ -1800,7 +2033,7 @@ thread_call_dealloc_timer(
 		}
 	}
 
-	group->flags &= ~TCG_DEALLOC_ACTIVE;
+	group->tcg_flags &= ~TCG_DEALLOC_ACTIVE;
 
 	/*
 	 * If we still have an excess of threads, schedule another
@@ -1818,7 +2051,7 @@ thread_call_dealloc_timer(
 		thread_call_start_deallocate_timer(group);
 	}
 
-	thread_call_unlock();
+	thread_call_unlock(group);
 }
 
 /*
@@ -1834,15 +2067,17 @@ thread_call_dealloc_timer(
  * Takes the thread call lock locked, returns unlocked
  *      This lets us avoid a spurious take/drop after waking up from thread_block
  */
-static boolean_t
+static bool
 thread_call_wait_once_locked(thread_call_t call, spl_t s)
 {
 	assert(call->tc_flags & THREAD_CALL_ALLOC);
 	assert(call->tc_flags & THREAD_CALL_ONCE);
 
+	thread_call_group_t group = thread_call_get_group(call);
+
 	if ((call->tc_flags & THREAD_CALL_RUNNING) == 0) {
-		enable_ints_and_unlock(s);
-		return FALSE;
+		enable_ints_and_unlock(group, s);
+		return false;
 	}
 
 	/* call is running, so we have to wait for it */
@@ -1853,7 +2088,7 @@ thread_call_wait_once_locked(thread_call_t call, spl_t s)
 		panic("Unable to assert wait: %d", res);
 	}
 
-	enable_ints_and_unlock(s);
+	enable_ints_and_unlock(group, s);
 
 	res = thread_block(THREAD_CONTINUE_NULL);
 	if (res != THREAD_AWAKENED) {
@@ -1861,7 +2096,7 @@ thread_call_wait_once_locked(thread_call_t call, spl_t s)
 	}
 
 	/* returns unlocked */
-	return TRUE;
+	return true;
 }
 
 /*
@@ -1888,14 +2123,19 @@ thread_call_wait_once(thread_call_t call)
 		panic("unsafe thread_call_wait_once");
 	}
 
-	if (current_thread()->thc_state.thc_call == call) {
+	thread_t self = current_thread();
+
+	if ((thread_get_tag_internal(self) & THREAD_TAG_CALLOUT) &&
+	    self->thc_state && self->thc_state->thc_call == call) {
 		panic("thread_call_wait_once: deadlock waiting on self from inside call: %p to function %p",
-		    call, call->tc_call.func);
+		    call, call->tc_func);
 	}
 
-	spl_t s = disable_ints_and_lock();
+	thread_call_group_t group = thread_call_get_group(call);
 
-	boolean_t waited = thread_call_wait_once_locked(call, s);
+	spl_t s = disable_ints_and_lock(group);
+
+	bool waited = thread_call_wait_once_locked(call, s);
 	/* thread call lock unlocked */
 
 	return waited;
@@ -1913,32 +2153,31 @@ thread_call_wait_once(thread_call_t call)
 static void
 thread_call_wait_locked(thread_call_t call, spl_t s)
 {
-	uint64_t submit_count;
-	wait_result_t res;
+	thread_call_group_t group = thread_call_get_group(call);
 
 	assert(call->tc_flags & THREAD_CALL_ALLOC);
 
-	submit_count = call->tc_submit_count;
+	uint64_t submit_count = call->tc_submit_count;
 
 	while (call->tc_finish_count < submit_count) {
 		call->tc_flags |= THREAD_CALL_WAIT;
 
-		res = assert_wait(call, THREAD_UNINT);
+		wait_result_t res = assert_wait(call, THREAD_UNINT);
 		if (res != THREAD_WAITING) {
 			panic("Unable to assert wait: %d", res);
 		}
 
-		enable_ints_and_unlock(s);
+		enable_ints_and_unlock(group, s);
 
 		res = thread_block(THREAD_CONTINUE_NULL);
 		if (res != THREAD_AWAKENED) {
 			panic("Awoken with %d?", res);
 		}
 
-		s = disable_ints_and_lock();
+		s = disable_ints_and_lock(group);
 	}
 
-	enable_ints_and_unlock(s);
+	enable_ints_and_unlock(group, s);
 }
 
 /*
@@ -1948,11 +2187,11 @@ thread_call_wait_locked(thread_call_t call, spl_t s)
 boolean_t
 thread_call_isactive(thread_call_t call)
 {
-	boolean_t active;
+	thread_call_group_t group = thread_call_get_group(call);
 
-	spl_t s = disable_ints_and_lock();
-	active = (call->tc_submit_count > call->tc_finish_count);
-	enable_ints_and_unlock(s);
+	spl_t s = disable_ints_and_lock(group);
+	boolean_t active = (call->tc_submit_count > call->tc_finish_count);
+	enable_ints_and_unlock(group, s);
 
 	return active;
 }
@@ -1964,15 +2203,13 @@ thread_call_isactive(thread_call_t call)
 void
 adjust_cont_time_thread_calls(void)
 {
-	spl_t s = disable_ints_and_lock();
-
 	for (int i = 0; i < THREAD_CALL_INDEX_MAX; i++) {
 		thread_call_group_t group = &thread_call_groups[i];
+		spl_t s = disable_ints_and_lock(group);
 
 		/* only the continuous timers need to be re-armed */
 
 		_arm_delayed_call_timer(NULL, group, TCF_CONTINUOUS);
+		enable_ints_and_unlock(group, s);
 	}
-
-	enable_ints_and_unlock(s);
 }

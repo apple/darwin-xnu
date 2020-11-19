@@ -107,13 +107,6 @@ void mt_sleep(void);
  */
 void mt_wake_per_core(void);
 
-#if __ARM_CLUSTER_COUNT__
-/*
- * Called when a cluster is initialized.
- */
-void mt_cluster_init(void);
-#endif /* __ARM_CLUSTER_COUNT__ */
-
 /*
  * "Up-call" to the Mach layer to update counters from a PMI.
  */

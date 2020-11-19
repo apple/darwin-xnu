@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -132,8 +132,8 @@ static void rt_getmetrics(struct rtentry *, struct rt_metrics *);
 static void rt_setif(struct rtentry *, struct sockaddr *, struct sockaddr *,
     struct sockaddr *, unsigned int);
 static int rt_xaddrs(caddr_t, caddr_t, struct rt_addrinfo *);
-static struct mbuf *rt_msg1(int, struct rt_addrinfo *);
-static int rt_msg2(int, struct rt_addrinfo *, caddr_t, struct walkarg *,
+static struct mbuf *rt_msg1(u_char, struct rt_addrinfo *);
+static int rt_msg2(u_char, struct rt_addrinfo *, caddr_t, struct walkarg *,
     kauth_cred_t *);
 static int sysctl_dumpentry(struct radix_node *rn, void *vw);
 static int sysctl_dumpentry_ext(struct radix_node *rn, void *vw);
@@ -150,7 +150,7 @@ SYSCTL_NODE(_net, OID_AUTO, route, CTLFLAG_RW | CTLFLAG_LOCKED, 0, "routing");
 
 /* Align x to 1024 (only power of 2) assuming x is positive */
 #define ALIGN_BYTES(x) do {                                             \
-	x = P2ALIGN(x, 1024);                                           \
+	x = (uint32_t)P2ALIGN(x, 1024);                         \
 } while(0)
 
 #define ROUNDUP32(a)                                                    \
@@ -703,7 +703,7 @@ report:
 				(void) rnh->rnh_walktree(rnh, route_event_walktree, (void *)&rt_ev);
 				RT_LOCK(rt);
 			}
-		/* FALLTHRU */
+			OS_FALLTHROUGH;
 		case RTM_LOCK:
 			rt->rt_rmx.rmx_locks &= ~(rtm->rtm_inits);
 			rt->rt_rmx.rmx_locks |=
@@ -790,8 +790,9 @@ rt_setexpire(struct rtentry *rt, uint64_t expiry)
 	/* set both rt_expire and rmx_expire */
 	rt->rt_expire = expiry;
 	if (expiry) {
-		rt->rt_rmx.rmx_expire = expiry + rt->base_calendartime -
-		    rt->base_uptime;
+		rt->rt_rmx.rmx_expire =
+		    (int32_t)(expiry + rt->base_calendartime -
+		    rt->base_uptime);
 	} else {
 		rt->rt_rmx.rmx_expire = 0;
 	}
@@ -865,8 +866,8 @@ rt_getmetrics(struct rtentry *in, struct rt_metrics *out)
 		    NET_CALCULATE_CLOCKSKEW(caltime,
 		    in->base_calendartime, net_uptime(), in->base_uptime);
 
-		out->rmx_expire = in->base_calendartime +
-		    in->rt_expire - in->base_uptime;
+		out->rmx_expire = (int32_t)(in->base_calendartime +
+		    in->rt_expire - in->base_uptime);
 	} else {
 		out->rmx_expire = 0;
 	}
@@ -956,12 +957,9 @@ rt_setif(struct rtentry *rt, struct sockaddr *Ifpaddr, struct sockaddr *Ifaaddr,
 	/* trigger route cache reevaluation */
 	if (rt_key(rt)->sa_family == AF_INET) {
 		routegenid_inet_update();
-	}
-#if INET6
-	else if (rt_key(rt)->sa_family == AF_INET6) {
+	} else if (rt_key(rt)->sa_family == AF_INET6) {
 		routegenid_inet6_update();
 	}
-#endif /* INET6 */
 
 	if (ifa != NULL) {
 		struct ifaddr *oifa = rt->rt_ifa;
@@ -1106,7 +1104,7 @@ rt_xaddrs(caddr_t cp, caddr_t cplim, struct rt_addrinfo *rtinfo)
 }
 
 static struct mbuf *
-rt_msg1(int type, struct rt_addrinfo *rtinfo)
+rt_msg1(u_char type, struct rt_addrinfo *rtinfo)
 {
 	struct rt_msghdr *rtm;
 	struct mbuf *m;
@@ -1186,14 +1184,14 @@ rt_msg1(int type, struct rt_addrinfo *rtinfo)
 		m_freem(m);
 		return NULL;
 	}
-	rtm->rtm_msglen = len;
+	rtm->rtm_msglen = (u_short)len;
 	rtm->rtm_version = RTM_VERSION;
 	rtm->rtm_type = type;
 	return m;
 }
 
 static int
-rt_msg2(int type, struct rt_addrinfo *rtinfo, caddr_t cp, struct walkarg *w,
+rt_msg2(u_char type, struct rt_addrinfo *rtinfo, caddr_t cp, struct walkarg *w,
     kauth_cred_t* credp)
 {
 	int i;
@@ -1311,7 +1309,7 @@ again:
 
 		rtm->rtm_version = RTM_VERSION;
 		rtm->rtm_type = type;
-		rtm->rtm_msglen = len;
+		rtm->rtm_msglen = (u_short)len;
 	}
 	return len;
 }
@@ -1323,7 +1321,7 @@ again:
  * destination.
  */
 void
-rt_missmsg(int type, struct rt_addrinfo *rtinfo, int flags, int error)
+rt_missmsg(u_char type, struct rt_addrinfo *rtinfo, int flags, int error)
 {
 	struct rt_msghdr *rtm;
 	struct mbuf *m;
@@ -1385,7 +1383,7 @@ rt_ifmsg(struct ifnet *ifp)
  * interface will be locked.  Caller must hold rnh_lock and rt_lock.
  */
 void
-rt_newaddrmsg(int cmd, struct ifaddr *ifa, int error, struct rtentry *rt)
+rt_newaddrmsg(u_char cmd, struct ifaddr *ifa, int error, struct rtentry *rt)
 {
 	struct rt_addrinfo info;
 	struct sockaddr *sa = 0;
@@ -1408,7 +1406,7 @@ rt_newaddrmsg(int cmd, struct ifaddr *ifa, int error, struct rtentry *rt)
 		if ((cmd == RTM_ADD && pass == 1) ||
 		    (cmd == RTM_DELETE && pass == 2)) {
 			struct ifa_msghdr *ifam;
-			int ncmd = cmd == RTM_ADD ? RTM_NEWADDR : RTM_DELADDR;
+			u_char ncmd = cmd == RTM_ADD ? RTM_NEWADDR : RTM_DELADDR;
 
 			/* Lock ifp for if_lladdr */
 			ifnet_lock_shared(ifp);
@@ -1468,7 +1466,7 @@ rt_newaddrmsg(int cmd, struct ifaddr *ifa, int error, struct rtentry *rt)
  * there is no route state to worry about.
  */
 void
-rt_newmaddrmsg(int cmd, struct ifmultiaddr *ifma)
+rt_newmaddrmsg(u_char cmd, struct ifmultiaddr *ifma)
 {
 	struct rt_addrinfo info;
 	struct mbuf *m = 0;
@@ -1958,7 +1956,7 @@ sysctl_iflist2(int af, struct walkarg *w)
 				ifm->ifm_snd_len = IFCQ_LEN(&ifp->if_snd);
 				ifm->ifm_snd_maxlen = IFCQ_MAXLEN(&ifp->if_snd);
 				ifm->ifm_snd_drops =
-				    ifp->if_snd.ifcq_dropcnt.packets;
+				    (int)ifp->if_snd.ifcq_dropcnt.packets;
 				ifm->ifm_timer = ifp->if_timer;
 				if_data_internal_to_if_data64(ifp,
 				    &ifp->if_data, &ifm->ifm_data);
@@ -2158,7 +2156,7 @@ sysctl_rtsock SYSCTL_HANDLER_ARGS
 	if (namelen != 3) {
 		return EINVAL;
 	}
-	af = name[0];
+	af = (u_char)name[0];
 	Bzero(&w, sizeof(w));
 	w.w_op = name[1];
 	w.w_arg = name[2];

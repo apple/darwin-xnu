@@ -19,7 +19,9 @@ _vm_map_copyout
 _ml_get_cpu_count
 _ml_get_boot_cpu_number
 _ml_get_cpu_number
+_ml_get_cluster_number
 _ml_get_max_cpu_number
+_ml_get_topology_info
 _ml_dbgwrap_halt_cpu_with_state
 _vm_map:_vm_map_external
 __ZN5IORTC15getUTCTimeOfDayEPjS0_

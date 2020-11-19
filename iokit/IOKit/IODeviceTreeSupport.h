@@ -37,6 +37,7 @@
 
 #include <IOKit/IORegistryEntry.h>
 #include <libkern/c++/OSData.h>
+#include <libkern/c++/OSPtr.h>
 
 class IODeviceMemory;
 class IOService;
@@ -48,6 +49,7 @@ extern const OSSymbol *         gIODTPHandleKey;
 extern const OSSymbol *         gIODTCompatibleKey;
 extern const OSSymbol *         gIODTTypeKey;
 extern const OSSymbol *         gIODTModelKey;
+extern const OSSymbol *         gIODTBridgeModelKey;
 extern const OSSymbol *         gIODTTargetTypeKey;
 
 extern const OSSymbol *         gIODTAAPLInterruptsKey;
@@ -63,6 +65,9 @@ bool IODTMatchNubWithKeys( IORegistryEntry * nub,
 bool IODTCompareNubName( const IORegistryEntry * regEntry,
     OSString * name,
     LIBKERN_RETURNS_RETAINED_ON_NONZERO OSString ** matchingName );
+bool IODTCompareNubName( const IORegistryEntry * regEntry,
+    OSString * name,
+    OSSharedPtr<OSString>& matchingName );
 
 enum {
 	kIODTRecursive      = 0x00000001,

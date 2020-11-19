@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -28,6 +28,7 @@
 #include <string.h>
 #include <mach/boolean.h>
 #include <sys/types.h>
+#include <os/base.h>
 
 #if KERNEL
     #include <libkern/libkern.h>
@@ -1381,25 +1382,25 @@ x86_64_process_reloc(const KXLDRelocator *relocator __unused, u_char *instructio
 				adjustment = 0;
 				break;
 			}
-		/* Fall through */
+			OS_FALLTHROUGH;
 		case X86_64_RELOC_SIGNED_1:
 			if (pair_target) {
 				adjustment = 1;
 				break;
 			}
-		/* Fall through */
+			OS_FALLTHROUGH;
 		case X86_64_RELOC_SIGNED_2:
 			if (pair_target) {
 				adjustment = 2;
 				break;
 			}
-		/* Fall through */
+			OS_FALLTHROUGH;
 		case X86_64_RELOC_SIGNED_4:
 			if (pair_target) {
 				adjustment = 4;
 				break;
 			}
-		/* Fall through */
+			OS_FALLTHROUGH;
 		case X86_64_RELOC_BRANCH:
 		case X86_64_RELOC_GOT:
 		case X86_64_RELOC_GOT_LOAD:

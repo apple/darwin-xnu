@@ -27,10 +27,13 @@
  */
 
 
+#include <libkern/c++/OSSharedPtr.h>
+#include <libkern/OSSerializeBinary.h>
 #include <libkern/c++/OSContainers.h>
 #include <libkern/c++/OSLib.h>
 #include <libkern/c++/OSDictionary.h>
 #include <libkern/OSSerializeBinary.h>
+#include <libkern/c++/OSSharedPtr.h>
 
 #include <IOKit/IOLib.h>
 
@@ -108,7 +111,7 @@ OSSerialize::setIndexed(bool index __unused)
 
 bool
 OSSerialize::addBinaryObject(const OSMetaClassBase * o, uint32_t key,
-    const void * bits, size_t size,
+    const void * bits, uint32_t size,
     uint32_t * startCollection)
 {
 	unsigned int newCapacity;
@@ -216,7 +219,7 @@ OSSerialize::binarySerializeInternal(const OSMetaClassBase *o)
 
 	unsigned int  tagIdx;
 	uint32_t   i, key, startCollection;
-	size_t     len;
+	uint32_t   len;
 	bool       ok;
 
 	tagIdx = tags->getNextIndexOfObject(o, 0);
@@ -519,6 +522,7 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 		if (hasLength) {
 			bufferPos += sizeof(*next);
 			if (!(ok = (bufferPos <= bufferSize))) {
+				o->release();
 				break;
 			}
 			length = *next++;
@@ -625,5 +629,46 @@ OSUnserializeBinary(const char *buffer, size_t bufferSize, OSString **errorStrin
 		kfree(stackArray, stackCapacity * sizeof(*stackArray));
 	}
 
+	return result;
+}
+
+OSObject*
+OSUnserializeXML(
+	const char  * buffer,
+	OSSharedPtr<OSString>& errorString)
+{
+	OSString* errorStringRaw = NULL;
+	OSObject* result = OSUnserializeXML(buffer, &errorStringRaw);
+	errorString.reset(errorStringRaw, OSNoRetain);
+	return result;
+}
+
+OSObject*
+OSUnserializeXML(
+	const char  * buffer,
+	size_t        bufferSize,
+	OSSharedPtr<OSString> &errorString)
+{
+	OSString* errorStringRaw = NULL;
+	OSObject* result = OSUnserializeXML(buffer, bufferSize, &errorStringRaw);
+	errorString.reset(errorStringRaw, OSNoRetain);
+	return result;
+}
+
+OSObject*
+OSUnserializeBinary(const char *buffer, size_t bufferSize, OSSharedPtr<OSString>& errorString)
+{
+	OSString* errorStringRaw = NULL;
+	OSObject* result = OSUnserializeBinary(buffer, bufferSize, &errorStringRaw);
+	errorString.reset(errorStringRaw, OSNoRetain);
+	return result;
+}
+
+OSObject*
+OSUnserialize(const char *buffer, OSSharedPtr<OSString>& errorString)
+{
+	OSString* errorStringRaw = NULL;
+	OSObject* result = OSUnserialize(buffer, &errorStringRaw);
+	errorString.reset(errorStringRaw, OSNoRetain);
 	return result;
 }

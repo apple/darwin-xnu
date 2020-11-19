@@ -67,6 +67,7 @@
 #ifdef MACH_KERNEL_PRIVATE
 #include <arm/cpu_data.h>
 #include <arm/proc_reg.h>
+#include <os/base.h>
 #endif
 
 struct perfcontrol_state {
@@ -80,7 +81,7 @@ extern unsigned int _MachineStateCount[];
 
 #ifdef MACH_KERNEL_PRIVATE
 #if __arm64__
-typedef arm_context_t machine_thread_kernel_state;
+typedef arm_kernel_context_t machine_thread_kernel_state;
 #else
 typedef struct arm_saved_state machine_thread_kernel_state;
 #endif
@@ -88,7 +89,6 @@ typedef struct arm_saved_state machine_thread_kernel_state;
 
 struct machine_thread {
 #if __ARM_USER_PROTECT__
-	unsigned int              uptw_ttc;
 	unsigned int              uptw_ttb;
 	unsigned int              kptw_ttb;
 	unsigned int              asid;
@@ -96,8 +96,10 @@ struct machine_thread {
 
 #if __arm64__
 	arm_context_t *           contextData;             /* allocated user context */
-	arm_saved_state_t *       upcb;                    /* pointer to user GPR state */
+	arm_saved_state_t *       XNU_PTRAUTH_SIGNED_PTR("machine_thread.upcb") upcb;   /* pointer to user GPR state */
 	arm_neon_saved_state_t *  uNeon;                   /* pointer to user VFP state */
+	arm_saved_state_t *       kpcb;                    /* pointer to kernel GPR state */
+	uint64_t                  recover_far;
 #elif __arm__
 	struct arm_saved_state    PcbData;
 #else
@@ -114,27 +116,39 @@ struct machine_thread {
 	vm_address_t              cthread_self;               /* for use of cthread package */
 #endif
 
+#if __arm64__
+	uint32_t                  recover_esr;
+#endif /* __arm64__ */
+
 	vm_offset_t               kstackptr;                  /* top of kernel stack */
-#if defined(HAS_APPLE_PAC)
-	uint64_t                  rop_pid;
-	boolean_t                 disable_user_jop;
-#endif
-	struct cpu_data *         CpuDatap;                   /* current per cpu data */
-	unsigned int              preemption_count;           /* preemption count */
-
-#if __ARM_SMP__
-#define MACHINE_THREAD_FLAGS_ON_CPU (0x1)
-
-	uint8_t                   machine_thread_flags;
-#endif /* __ARM_SMP__ */
-
 	struct perfcontrol_state  perfctrl_state;
 #if __arm64__
 	uint64_t                  energy_estimate_nj;
 #endif
 
 #if INTERRUPT_MASKED_DEBUG
-	uint64_t                  intmask_timestamp;          /* timestamp of when interrupts were masked */
+	uint64_t                  intmask_timestamp;          /* timestamp of when interrupts were manually masked */
+	uint64_t                  inthandler_timestamp;       /* timestamp of when interrupt handler started */
+	unsigned int              int_type;                   /* interrupt type of the interrupt that was processed */
+	uintptr_t                 int_handler_addr;           /* slid, ptrauth-stripped virtual address of the interrupt handler */
+	uintptr_t                 int_vector;                 /* IOInterruptVector */
+#endif
+
+#if __arm64__ && defined(CONFIG_XNUPOST)
+	volatile expected_fault_handler_t  expected_fault_handler;
+	volatile uintptr_t                 expected_fault_addr;
+#endif
+
+	vm_offset_t               pcpu_data_base;
+	struct cpu_data *         CpuDatap;               /* current per cpu data */
+	unsigned int              preemption_count;       /* preemption count */
+#if __arm64__
+	uint16_t                  exception_trace_code;
+#endif
+#if defined(HAS_APPLE_PAC)
+	uint8_t                   disable_user_jop;
+	uint64_t                  rop_pid;
+	uint64_t                  jop_pid;
 #endif
 };
 #endif
@@ -147,7 +161,9 @@ extern struct arm_vfpsaved_state * find_user_vfp(thread_t);
 extern arm_debug_state_t *         find_debug_state(thread_t);
 #elif defined(__arm64__)
 extern arm_debug_state32_t *       find_debug_state32(thread_t);
+extern arm_debug_state32_t *       find_or_allocate_debug_state32(thread_t);
 extern arm_debug_state64_t *       find_debug_state64(thread_t);
+extern arm_debug_state64_t *       find_or_allocate_debug_state64(thread_t);
 extern arm_neon_saved_state_t *    get_user_neon_regs(thread_t);
 #else
 #error unknown arch

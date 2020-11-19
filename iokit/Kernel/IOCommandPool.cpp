@@ -37,7 +37,10 @@
  *
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <IOKit/IOCommandPool.h>
+#include <libkern/c++/OSSharedPtr.h>
 
 #define super OSObject
 OSDefineMetaClassAndStructors(IOCommandPool, OSObject);
@@ -54,15 +57,14 @@ OSMetaClassDefineReservedUnused(IOCommandPool, 7);
 //	withWorkLoop -	primary initializer and factory method
 //--------------------------------------------------------------------------
 
-IOCommandPool *
+OSSharedPtr<IOCommandPool>
 IOCommandPool::
 withWorkLoop(IOWorkLoop *inWorkLoop)
 {
-	IOCommandPool * me = new IOCommandPool;
+	OSSharedPtr<IOCommandPool> me = OSMakeShared<IOCommandPool>();
 
 	if (me && !me->initWithWorkLoop(inWorkLoop)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
@@ -87,7 +89,7 @@ initWithWorkLoop(IOWorkLoop *inWorkLoop)
 		return false;
 	}
 
-	if (kIOReturnSuccess != inWorkLoop->addEventSource(fSerializer)) {
+	if (kIOReturnSuccess != inWorkLoop->addEventSource(fSerializer.get())) {
 		return false;
 	}
 
@@ -98,15 +100,14 @@ initWithWorkLoop(IOWorkLoop *inWorkLoop)
 //	commandPool & init -	obsolete initializer and factory method
 //--------------------------------------------------------------------------
 
-IOCommandPool *
+OSSharedPtr<IOCommandPool>
 IOCommandPool::
 commandPool(IOService * inOwner, IOWorkLoop *inWorkLoop, UInt32 inSize)
 {
-	IOCommandPool * me = new IOCommandPool;
+	OSSharedPtr<IOCommandPool> me = OSMakeShared<IOCommandPool>();
 
 	if (me && !me->init(inOwner, inWorkLoop, inSize)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
@@ -131,11 +132,10 @@ IOCommandPool::free(void)
 		// remove our event source from owner's workloop
 		IOWorkLoop *wl = fSerializer->getWorkLoop();
 		if (wl) {
-			wl->removeEventSource(fSerializer);
+			wl->removeEventSource(fSerializer.get());
 		}
 
-		fSerializer->release();
-		fSerializer = NULL;
+		fSerializer.reset();
 	}
 
 	// Tell our superclass to cleanup too
@@ -149,7 +149,7 @@ IOCommandPool::free(void)
 //			waiting for resources
 //--------------------------------------------------------------------------
 
-IOCommand *
+OSSharedPtr<IOCommand>
 IOCommandPool::getCommand(bool blockForCommand)
 {
 	IOReturn     result  = kIOReturnSuccess;
@@ -160,7 +160,7 @@ IOCommandPool::getCommand(bool blockForCommand)
 	result = fSerializer->
 	    runAction(func, (void *) &command, (void *) blockForCommand);
 	if (kIOReturnSuccess == result) {
-		return command;
+		return OSSharedPtr<IOCommand>(command, OSNoRetain);
 	} else {
 		return NULL;
 	}

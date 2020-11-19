@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2005-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2005-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -42,6 +42,7 @@
 #include <sys/unpcb.h>
 #include <sys/sys_domain.h>
 #include <sys/kern_event.h>
+#include <sys/vsock_domain.h>
 #include <mach/vm_param.h>
 #include <net/ndrv_var.h>
 #include <netinet/in_pcb.h>
@@ -59,9 +60,9 @@ fill_sockbuf_info(struct sockbuf *sb, struct sockbuf_info *sbi)
 	sbi->sbi_mbcnt = sb->sb_mbcnt;
 	sbi->sbi_mbmax = sb->sb_mbmax;
 	sbi->sbi_lowat = sb->sb_lowat;
-	sbi->sbi_flags = sb->sb_flags;
-	sbi->sbi_timeo = (u_int32_t)(sb->sb_timeo.tv_sec * hz) +
-	    sb->sb_timeo.tv_usec / tick;
+	sbi->sbi_flags = (short)sb->sb_flags;
+	sbi->sbi_timeo = (short)((sb->sb_timeo.tv_sec * hz) +
+	    sb->sb_timeo.tv_usec / tick);
 	if (sbi->sbi_timeo == 0 && sb->sb_timeo.tv_usec != 0) {
 		sbi->sbi_timeo = 1;
 	}
@@ -213,6 +214,19 @@ fill_socketinfo(struct socket *so, struct socket_info *si)
 			ndrvsi->ndrvsi_if_unit = ifp->if_unit;
 			strlcpy(ndrvsi->ndrvsi_if_name, ifp->if_name, IFNAMSIZ);
 		}
+		break;
+	}
+	case PF_VSOCK: {
+		const struct vsockpcb *pcb = (struct vsockpcb *)(so)->so_pcb;
+		struct vsock_sockinfo *vsocksi = &si->soi_proto.pri_vsock;
+
+		si->soi_kind = SOCKINFO_VSOCK;
+
+		vsocksi->local_cid = pcb->local_address.cid;
+		vsocksi->local_port = pcb->local_address.port;
+		vsocksi->remote_cid = pcb->remote_address.cid;
+		vsocksi->remote_port = pcb->remote_address.port;
+
 		break;
 	}
 	case PF_SYSTEM:

@@ -151,6 +151,7 @@ are known to the system
 #define    AF_CCITT     10   /* CCITT protocols, X.25 etc */
 #define    AF_HYLINK    15   /* NSC Hyperchannel */
 #define    AF_ISO       18   /* ISO protocols */
+#define    AF_VSOCK     40   /* VM Sockets */
 .Ed
 .Sh ROUTING
 Mac OS X provides some packet routing facilities.
@@ -248,7 +249,7 @@ The metric is used only by user-level routers.
 Get interface metric.
 .El
 .Pp
-There are two requests that make use of a new structure:
+There are requests that make use of a different structure:
 .Bl -tag -width SIOCGIFBRDADDR
 .It Dv SIOCAIFADDR
 An interface may have more than one address associated with it
@@ -270,13 +271,20 @@ identifier itself to include the total size, as described in
 .Xr ioctl .
 .It Dv SIOCDIFADDR
 This requests deletes the specified address from the list
-associated with an interface.  It also uses the
-.Ar if_aliasreq
-structure to allow for the possibility of protocols allowing
-multiple masks or destination addresses, and also adopts the
-convention that specification of the default address means
-to delete the first address for the interface belonging to
-the address family in which the original socket was opened.
+associated with an interface.  It  uses the
+.Ar ifreq
+structure for protocols like
+.Dv PF_INET
+whose
+address fit in the
+.Ar sockaddr
+structure.
+Protocols like
+.Dv PF_INET6
+with addresses that do not fit in the
+.Ar sockaddr
+structure
+must have a variant of that request.
 .It Dv SIOCGIFCONF
 Get interface configuration list.  This request takes an
 .Ar ifconf

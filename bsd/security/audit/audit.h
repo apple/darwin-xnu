@@ -177,7 +177,7 @@ void                    audit_subcall_enter(au_event_t event,
 void                    audit_subcall_exit(int error,
     struct uthread *uthread);
 
-extern struct auditinfo_addr *audit_default_aia_p;
+extern struct auditinfo_addr * const audit_default_aia_p;
 
 /*
  * The remaining kernel functions are conditionally compiled in as they are
@@ -247,9 +247,9 @@ void     audit_arg_auditon(struct kaudit_record *ar,
 void     audit_arg_file(struct kaudit_record *ar, struct proc *p,
     struct fileproc *fp);
 void     audit_arg_argv(struct kaudit_record *ar, char *argv, int argc,
-    int length);
+    size_t length);
 void     audit_arg_envv(struct kaudit_record *ar, char *envv, int envc,
-    int length);
+    size_t length);
 void    audit_arg_identity(struct kaudit_record *ar);
 
 void     audit_arg_mach_port1(struct kaudit_record *ar, mach_port_name_t port);

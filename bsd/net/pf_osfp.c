@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -61,10 +61,8 @@
 #include <net/if.h>
 #include <net/pfvar.h>
 
-#if INET6
 #include <netinet/ip6.h>
 #include <netinet6/in6_var.h>
-#endif /* INET6 */
 
 #define DPFPRINTF(format, x...)                 \
 	if (pf_status.debug >= PF_DEBUG_NOISY)  \
@@ -118,9 +116,6 @@ struct pf_osfp_enlist *
 pf_osfp_fingerprint_hdr(const struct ip *ip, const struct ip6_hdr *ip6,
     const struct tcphdr *tcp)
 {
-#if !INET6
-#pragma unused(ip6)
-#endif /* !INET6 */
 	struct pf_os_fingerprint fp, *fpresult;
 	int cnt, optlen = 0;
 	const u_int8_t *optp;
@@ -145,9 +140,7 @@ pf_osfp_fingerprint_hdr(const struct ip *ip, const struct ip6_hdr *ip6,
 		}
 		(void) inet_ntop(AF_INET, &ip->ip_src, srcname,
 		    (socklen_t)sizeof(srcname));
-	}
-#if INET6
-	else if (ip6) {
+	} else if (ip6) {
 		/* jumbo payload? */
 		fp.fp_psize = sizeof(struct ip6_hdr) + ntohs(ip6->ip6_plen);
 		fp.fp_ttl = ip6->ip6_hlim;
@@ -155,9 +148,7 @@ pf_osfp_fingerprint_hdr(const struct ip *ip, const struct ip6_hdr *ip6,
 		fp.fp_flags |= PF_OSFP_INET6;
 		(void) inet_ntop(AF_INET6, &ip6->ip6_src, srcname,
 		    (socklen_t)sizeof(srcname));
-	}
-#endif
-	else {
+	} else {
 		return NULL;
 	}
 	fp.fp_wsize = ntohs(tcp->th_win);
@@ -200,9 +191,6 @@ pf_osfp_fingerprint_hdr(const struct ip *ip, const struct ip6_hdr *ip6,
 					memcpy(&fp.fp_wscale, &optp[2],
 					    sizeof(fp.fp_wscale));
 				}
-#if BYTE_ORDER != BIG_ENDIAN
-				NTOHS(fp.fp_wscale);
-#endif
 				fp.fp_tcpopts = (fp.fp_tcpopts <<
 				        PF_OSFP_TCPOPT_BITS) |
 				    PF_OSFP_TCPOPT_WSCALE;

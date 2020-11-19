@@ -3,6 +3,7 @@
 #include "../libsyscall/wrappers/libproc/libproc.h"
 #include <stdio.h>
 #include <unistd.h>
+#include <TargetConditionals.h>
 
 T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
 
@@ -14,11 +15,11 @@ T_DECL(proc_udata_info, "Get and set a proc udata token"){
 	udata = token;
 	ret = proc_udata_info(getpid(), PROC_UDATA_INFO_SET, &udata, sizeof(udata));
 
-#if CONFIG_EMBEDDED
+#if !TARGET_OS_OSX
 	T_WITH_ERRNO;
-	T_ASSERT_EQ_INT(ret, -1, "proc_udata_info PROC_UDATA_INFO_SET returns error on non-macOS");
-	T_SKIP("Remaining tests are only supported on macOS");
-#endif /* CONFIG_EMBEDDED */
+	T_ASSERT_EQ_INT(ret, -1, "proc_udata_info PROC_UDATA_INFO_SET returns error on non-supported platforms");
+	T_SKIP("Remaining tests are only supported on platforms with CONFIG_PROC_UDATA_STORAGE configured");
+#endif
 
 	T_WITH_ERRNO;
 	T_ASSERT_EQ_INT(ret, 0, "proc_udata_info PROC_UDATA_INFO_SET");

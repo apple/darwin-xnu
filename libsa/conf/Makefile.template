@@ -69,7 +69,7 @@ $(COMPONENT).filelist: $(OBJS)
 		$(SEG_HACK) -n __KLD -o $${kld_file}__ $${kld_file} || exit 1; \
 		mv $${kld_file}__ $${kld_file} || exit 1; \
 	done
-	$(call makelog,$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0))
+	@$(LOG_LDFILELIST) "$(COMPONENT)"
 	$(_v)for obj in ${OBJS}; do	\
 		 $(ECHO) $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist

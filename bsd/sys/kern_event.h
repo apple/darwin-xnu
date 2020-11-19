@@ -99,6 +99,22 @@
  */
 #define KEV_IEEE80211_CLASS     6
 
+/*
+ * The following struct is KPI, but it was originally defined with a trailing
+ * array member of size one, intended to be used as a Variable-Length Array.
+ * That's problematic because the compiler doesn't know that the array is
+ * accessed out-of-bounds and can assume it isn't. This makes
+ * -Warray-bounds-pointer-arithmetic sad. We can't just change the code because
+ * it requires users to also change their uses of the class, at a minimum
+ * because kern_event_msg's size changes when making the last member a VLA. This
+ * macro allows users of this KPI to opt-in to the new behavior.
+ */
+#if defined(XNU_KERN_EVENT_DATA_IS_VLA)
+#define XNU_KERN_EVENT_DATA_SIZE /* nothing, it's a VLA */
+#else
+#define XNU_KERN_EVENT_DATA_SIZE 1
+#endif
+
 /*!
  *       @struct kern_event_msg
  *       @discussion This structure is prepended to all kernel events. This
@@ -129,7 +145,7 @@ struct kern_event_msg {
 	u_int32_t       kev_subclass;   /* Component within layer */
 	u_int32_t       id;             /* Monotonically increasing value */
 	u_int32_t       event_code;     /* unique code */
-	u_int32_t       event_data[1];  /* One or more data words */
+	u_int32_t       event_data[XNU_KERN_EVENT_DATA_SIZE];   /* One or more data words */
 };
 
 /*!

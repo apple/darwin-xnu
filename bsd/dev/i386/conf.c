@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1997-2017 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 1997-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -259,7 +259,7 @@ isdisk(dev_t dev, int type)
 		if (maj == NODEV) {
 			break;
 		}
-	/* FALL THROUGH */
+		OS_FALLTHROUGH;
 	case VBLK:
 		if (bdevsw[maj].d_type == D_DISK) {
 			return 1;

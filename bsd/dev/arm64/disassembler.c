@@ -6,12 +6,12 @@
 
 #include  <sys/fasttrap_isa.h>
 
-int dtrace_decode_arm64(uint32_t instr);
+uint8_t dtrace_decode_arm64(uint32_t instr);
 
 struct arm64_decode_entry {
 	uint32_t mask;
 	uint32_t value;
-	uint32_t type;
+	uint8_t type;
 };
 
 struct arm64_decode_entry arm64_decode_table[] = {
@@ -43,7 +43,7 @@ struct arm64_decode_entry arm64_decode_table[] = {
 
 #define NUM_DECODE_ENTRIES (sizeof(arm64_decode_table) / sizeof(struct arm64_decode_entry))
 
-int
+uint8_t
 dtrace_decode_arm64(uint32_t instr)
 {
 	unsigned i;

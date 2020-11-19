@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -73,7 +73,7 @@ extern mach_port_name_t ipc_port_copyout_send(
 	ipc_space_t     space);
 extern task_t port_name_to_task(
 	mach_port_name_t name);
-extern task_t port_name_to_task_inspect(
+extern task_t port_name_to_task_name(
 	mach_port_name_t name);
 extern void ipc_port_release_send(
 	ipc_port_t      port);
@@ -90,8 +90,8 @@ extern int max_task_footprint_mb;       /* Per-task limit on physical memory con
 
 extern vm_map_t         kalloc_map;
 extern vm_size_t        msg_ool_size_small;
-extern vm_map_t         zone_map;
 
+extern kern_return_t vm_tests(void);
 extern void consider_machine_adjust(void);
 extern vm_map_offset_t get_map_min(vm_map_t);
 extern vm_map_offset_t get_map_max(vm_map_t);
@@ -124,7 +124,7 @@ vnode_pager_get_object_vnode(
 	uint32_t * vid);
 
 #if CONFIG_COREDUMP
-extern boolean_t coredumpok(vm_map_t map, vm_offset_t va);
+extern boolean_t coredumpok(vm_map_t map, mach_vm_offset_t va);
 #endif
 
 /*
@@ -170,8 +170,8 @@ extern kern_return_t vm_map_apple_protected(
 	vm_map_offset_t         start,
 	vm_map_offset_t         end,
 	vm_object_offset_t      crypto_backing_offset,
-	struct pager_crypt_info *crypt_info);
-extern void apple_protect_pager_bootstrap(void);
+	struct pager_crypt_info *crypt_info,
+	uint32_t                cryptid);
 extern memory_object_t apple_protect_pager_setup(
 	vm_object_t             backing_object,
 	vm_object_offset_t      backing_offset,
@@ -188,14 +188,30 @@ extern kern_return_t vm_map_shared_region(
 	vm_map_offset_t         end,
 	vm_object_offset_t      backing_offset,
 	struct vm_shared_region_slide_info *slide_info);
-extern void shared_region_pager_bootstrap(void);
+
 extern memory_object_t shared_region_pager_setup(
 	vm_object_t             backing_object,
 	vm_object_offset_t      backing_offset,
-	struct vm_shared_region_slide_info *slide_info);
+	struct vm_shared_region_slide_info *slide_info,
+	uint64_t                jop_key);
+#if __has_feature(ptrauth_calls)
+extern memory_object_t shared_region_pager_match(
+	vm_object_t             backing_object,
+	vm_object_offset_t      backing_offset,
+	struct vm_shared_region_slide_info *slide_info,
+	uint64_t                jop_key);
+extern void shared_region_key_alloc(
+	char *shared_region_id,
+	bool inherit,
+	uint64_t inherited_key);
+extern void shared_region_key_dealloc(
+	char *shared_region_id);
+extern uint64_t generate_jop_key(void);
+extern void shared_region_pager_match_task_key(memory_object_t memobj, task_t task);
+#endif /* __has_feature(ptrauth_calls) */
+extern bool vm_shared_region_is_reslide(struct task *task);
 
 struct vnode;
-extern void swapfile_pager_bootstrap(void);
 extern memory_object_t swapfile_pager_setup(struct vnode *vp);
 extern memory_object_control_t swapfile_pager_control(memory_object_t mem_obj);
 
@@ -205,10 +221,11 @@ extern memory_object_control_t swapfile_pager_control(memory_object_t mem_obj);
 #define SIXTEENK_PAGE_SHIFT     14
 #endif /* __arm64__ || (__ARM_ARCH_7K__ >= 2) */
 
-#if __arm64__
 #define FOURK_PAGE_SIZE         0x1000
 #define FOURK_PAGE_MASK         0xFFF
 #define FOURK_PAGE_SHIFT        12
+
+#if __arm64__
 
 extern unsigned int page_shift_user32;
 
@@ -216,7 +233,6 @@ extern unsigned int page_shift_user32;
 #if VM_MAP_DEBUG_FOURK
 extern int vm_map_debug_fourk;
 #endif /* VM_MAP_DEBUG_FOURK */
-extern void fourk_pager_bootstrap(void);
 extern memory_object_t fourk_pager_create(void);
 extern vm_object_t fourk_pager_to_vm_object(memory_object_t mem_obj);
 extern kern_return_t fourk_pager_populate(
@@ -299,7 +315,6 @@ void vnode_pager_issue_reprioritize_io(
 
 #endif /* CHECK_CS_VALIDATION_BITMAP */
 
-extern void vnode_pager_bootstrap(void);
 extern kern_return_t
 vnode_pager_data_unlock(
 	memory_object_t         mem_obj,
@@ -448,7 +463,7 @@ extern memory_object_t device_pager_setup(
 	uintptr_t,
 	vm_size_t,
 	int);
-extern void device_pager_bootstrap(void);
+
 extern boolean_t is_device_pager_ops(const struct memory_object_pager_ops *pager_ops);
 
 extern kern_return_t pager_map_to_phys_contiguous(
@@ -493,6 +508,14 @@ extern boolean_t cs_validate_range(struct vnode *vp,
     const void *data,
     vm_size_t size,
     unsigned *result);
+extern void cs_validate_page(
+	struct vnode *vp,
+	memory_object_t pager,
+	memory_object_offset_t offset,
+	const void *data,
+	int *validated_p,
+	int *tainted_p,
+	int *nx_p);
 #if PMAP_CS
 extern kern_return_t cs_associate_blob_with_mapping(
 	void *pmap,
@@ -523,6 +546,23 @@ extern kern_return_t mach_memory_entry_get_page_counts(
 	unsigned int    *resident_page_count,
 	unsigned int    *dirty_page_count);
 
+extern kern_return_t mach_memory_entry_phys_page_offset(
+	ipc_port_t              entry_port,
+	vm_object_offset_t      *offset_p);
+
+extern kern_return_t mach_memory_entry_map_size(
+	ipc_port_t             entry_port,
+	vm_map_t               map,
+	memory_object_offset_t offset,
+	memory_object_offset_t size,
+	mach_vm_size_t         *map_size);
+
+extern kern_return_t vm_map_range_physical_size(
+	vm_map_t         map,
+	vm_map_address_t start,
+	mach_vm_size_t   size,
+	mach_vm_size_t * phys_size);
+
 extern kern_return_t mach_memory_entry_page_op(
 	ipc_port_t              entry_port,
 	vm_object_offset_t      offset,
@@ -542,6 +582,14 @@ extern void mach_destroy_memory_entry(ipc_port_t port);
 extern kern_return_t mach_memory_entry_allocate(
 	struct vm_named_entry **user_entry_p,
 	ipc_port_t *user_handle_p);
+extern vm_object_t vm_named_entry_to_vm_object(
+	vm_named_entry_t        named_entry);
+extern kern_return_t vm_named_entry_from_vm_object(
+	vm_named_entry_t        named_entry,
+	vm_object_t             object,
+	vm_object_offset_t      offset,
+	vm_object_size_t        size,
+	vm_prot_t               prot);
 
 extern void vm_paging_map_init(void);
 
@@ -649,6 +697,13 @@ extern kern_return_t mach_make_memory_entry_internal(
 	ipc_port_t              *object_handle,
 	ipc_port_t              parent_handle);
 
+extern kern_return_t
+memory_entry_check_for_adjustment(
+	vm_map_t                        src_map,
+	ipc_port_t                      port,
+	vm_map_offset_t         *overmap_start,
+	vm_map_offset_t         *overmap_end);
+
 #define roundup(x, y)   ((((x) % (y)) == 0) ? \
 	                (x) : ((x) + ((y) - ((x) % (y)))))
 
@@ -676,6 +731,104 @@ extern kern_return_t mach_make_memory_entry_internal(
 #define LEGACY_FOOTPRINT_ENTITLEMENT_LIMIT_INCREASE     (3)
 
 #endif /* __arm64__ */
+
+#if MACH_ASSERT
+struct proc;
+extern struct proc *current_proc(void);
+extern int proc_pid(struct proc *);
+extern char *proc_best_name(struct proc *);
+struct thread;
+extern uint64_t thread_tid(struct thread *);
+extern int debug4k_filter;
+extern int debug4k_proc_filter;
+extern char debug4k_proc_name[];
+extern const char *debug4k_category_name[];
+
+#define __DEBUG4K(category, fmt, ...)                                   \
+	MACRO_BEGIN                                                     \
+	int __category = (category);                                    \
+	struct thread *__t = NULL;                                      \
+	struct proc *__p = NULL;                                        \
+	const char *__pname = "?";                                      \
+	boolean_t __do_log = FALSE;                                     \
+                                                                        \
+	if ((1 << __category) & debug4k_filter) {                       \
+	        __do_log = TRUE;                                        \
+	} else if (((1 << __category) & debug4k_proc_filter) &&         \
+	           debug4k_proc_name[0] != '\0') {                      \
+	        __p = current_proc();                                   \
+	        if (__p != NULL) {                                      \
+	                __pname = proc_best_name(__p);                  \
+	        }                                                       \
+	        if (!strcmp(debug4k_proc_name, __pname)) {              \
+	                __do_log = TRUE;                                \
+	        }                                                       \
+	}                                                               \
+	if (__do_log) {                                                 \
+	        if (__p == NULL) {                                      \
+	                __p = current_proc();                           \
+	                if (__p != NULL) {                              \
+	                        __pname = proc_best_name(__p);          \
+	                }                                               \
+	        }                                                       \
+	        __t = current_thread();                                 \
+	        printf("DEBUG4K(%s) %d[%s] %p(0x%llx) %s:%d: " fmt,     \
+	               debug4k_category_name[__category],               \
+	               __p ? proc_pid(__p) : 0,                         \
+	               __pname,                                         \
+	               __t,                                             \
+	               thread_tid(__t),                                 \
+	               __FUNCTION__,                                    \
+	               __LINE__,                                        \
+	               ##__VA_ARGS__);                                  \
+	}                                                               \
+	MACRO_END
+
+#define __DEBUG4K_ERROR         0
+#define __DEBUG4K_LIFE          1
+#define __DEBUG4K_LOAD          2
+#define __DEBUG4K_FAULT         3
+#define __DEBUG4K_COPY          4
+#define __DEBUG4K_SHARE         5
+#define __DEBUG4K_ADJUST        6
+#define __DEBUG4K_PMAP          7
+#define __DEBUG4K_MEMENTRY      8
+#define __DEBUG4K_IOKIT         9
+#define __DEBUG4K_UPL           10
+#define __DEBUG4K_EXC           11
+#define __DEBUG4K_VFS           12
+
+#define DEBUG4K_ERROR(...)      __DEBUG4K(__DEBUG4K_ERROR, ##__VA_ARGS__)
+#define DEBUG4K_LIFE(...)       __DEBUG4K(__DEBUG4K_LIFE, ##__VA_ARGS__)
+#define DEBUG4K_LOAD(...)       __DEBUG4K(__DEBUG4K_LOAD, ##__VA_ARGS__)
+#define DEBUG4K_FAULT(...)      __DEBUG4K(__DEBUG4K_FAULT, ##__VA_ARGS__)
+#define DEBUG4K_COPY(...)       __DEBUG4K(__DEBUG4K_COPY, ##__VA_ARGS__)
+#define DEBUG4K_SHARE(...)      __DEBUG4K(__DEBUG4K_SHARE, ##__VA_ARGS__)
+#define DEBUG4K_ADJUST(...)     __DEBUG4K(__DEBUG4K_ADJUST, ##__VA_ARGS__)
+#define DEBUG4K_PMAP(...)       __DEBUG4K(__DEBUG4K_PMAP, ##__VA_ARGS__)
+#define DEBUG4K_MEMENTRY(...)   __DEBUG4K(__DEBUG4K_MEMENTRY, ##__VA_ARGS__)
+#define DEBUG4K_IOKIT(...)      __DEBUG4K(__DEBUG4K_IOKIT, ##__VA_ARGS__)
+#define DEBUG4K_UPL(...)        __DEBUG4K(__DEBUG4K_UPL, ##__VA_ARGS__)
+#define DEBUG4K_EXC(...)        __DEBUG4K(__DEBUG4K_EXC, ##__VA_ARGS__)
+#define DEBUG4K_VFS(...)        __DEBUG4K(__DEBUG4K_VFS, ##__VA_ARGS__)
+
+#else /* MACH_ASSERT */
+
+#define DEBUG4K_ERROR(...)
+#define DEBUG4K_LIFE(...)
+#define DEBUG4K_LOAD(...)
+#define DEBUG4K_FAULT(...)
+#define DEBUG4K_COPY(...)
+#define DEBUG4K_SHARE(...)
+#define DEBUG4K_ADJUST(...)
+#define DEBUG4K_PMAP(...)
+#define DEBUG4K_MEMENTRY(...)
+#define DEBUG4K_IOKIT(...)
+#define DEBUG4K_UPL(...)
+#define DEBUG4K_EXC(...)
+#define DEBUG4K_VFS(...)
+
+#endif /* MACH_ASSERT */
 
 #endif  /* _VM_VM_PROTOS_H_ */
 

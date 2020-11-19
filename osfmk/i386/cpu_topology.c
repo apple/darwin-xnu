@@ -95,6 +95,12 @@ cpu_topology_sort(int ncpus)
 	assert(cpu_number() == 0);
 	assert(cpu_datap(0)->cpu_number == 0);
 
+	uint32_t cpus_per_pset = 0;
+
+#if DEVELOPMENT || DEBUG
+	PE_parse_boot_argn("cpus_per_pset", &cpus_per_pset, sizeof(cpus_per_pset));
+#endif
+
 	/* Lights out for this */
 	istate = ml_set_interrupts_enabled(FALSE);
 
@@ -166,8 +172,8 @@ cpu_topology_sort(int ncpus)
 	 * for their LLC cache. Each affinity set possesses a processor set
 	 * into which each logical processor is added.
 	 */
-	TOPO_DBG("cpu_topology_start() creating affinity sets:\n");
-	for (i = 0; i < ncpus; i++) {
+	TOPO_DBG("cpu_topology_start() creating affinity sets:ncpus=%d max_cpus=%d\n", ncpus, machine_info.max_cpus);
+	for (i = 0; i < machine_info.max_cpus; i++) {
 		cpu_data_t              *cpup = cpu_datap(i);
 		x86_lcpu_t              *lcpup = cpu_to_lcpu(i);
 		x86_cpu_cache_t         *LLC_cachep;
@@ -176,7 +182,7 @@ cpu_topology_sort(int ncpus)
 		LLC_cachep = lcpup->caches[topoParms.LLCDepth];
 		assert(LLC_cachep->type == CPU_CACHE_TYPE_UNIF);
 		aset = find_cache_affinity(LLC_cachep);
-		if (aset == NULL) {
+		if ((aset == NULL) || ((cpus_per_pset != 0) && (i % cpus_per_pset) == 0)) {
 			aset = (x86_affinity_set_t *) kalloc(sizeof(*aset));
 			if (aset == NULL) {
 				panic("cpu_topology_start() failed aset alloc");
@@ -209,6 +215,17 @@ cpu_topology_sort(int ncpus)
 
 			processor_set_primary(cpup->cpu_processor, lprim);
 		}
+	}
+
+	if (machine_info.max_cpus < machine_info.logical_cpu_max) {
+		/* boot-args cpus=n is set, so adjust max numbers to match */
+		int logical_max = machine_info.max_cpus;
+		int physical_max = logical_max;
+		if (machine_info.logical_cpu_max != machine_info.physical_cpu_max) {
+			physical_max = (logical_max + 1) / 2;
+		}
+		machine_info.logical_cpu_max = logical_max;
+		machine_info.physical_cpu_max = physical_max;
 	}
 }
 

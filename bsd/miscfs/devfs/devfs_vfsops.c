@@ -134,7 +134,7 @@ devfs_init(__unused struct vfsconf *vfsp)
 
 	if (!(logging_config & ATM_TRACE_DISABLE)) {
 		devfs_make_node(makedev(7, 0), DEVFS_CHAR,
-		    UID_ROOT, GID_WHEEL, 0600, "oslog");
+		    UID_LOGD, GID_LOGD, 0600, "oslog");
 		if (cdevsw_setkqueueok(7, (&(cdevsw[7])), 0) == -1) {
 			return ENOTSUP;
 		}

@@ -292,7 +292,13 @@ compute_averages(uint64_t stdelta)
 	/* Update the global pri_shifts based on the latest values */
 	for (uint32_t i = TH_BUCKET_SHARE_FG; i <= TH_BUCKET_SHARE_BG; i++) {
 		uint32_t bucket_load = SCHED_LOAD_EWMA_UNSCALE(sched_load[i]);
-		sched_pri_shifts[i] = sched_fixed_shift - sched_load_shifts[bucket_load];
+		uint32_t shift = sched_fixed_shift - sched_load_shifts[bucket_load];
+
+		if (shift > SCHED_PRI_SHIFT_MAX) {
+			sched_pri_shifts[i] = INT8_MAX;
+		} else {
+			sched_pri_shifts[i] = shift;
+		}
 	}
 
 	/*

@@ -31,6 +31,8 @@
 
 /* code shared by userspace and xnu */
 
+#define COALITION_SPAWN_ENTITLEMENT "com.apple.private.coalition-spawn"
+
 #define COALITION_CREATE_FLAGS_MASK       ((uint32_t)0xFF1)
 #define COALITION_CREATE_FLAGS_PRIVILEGED ((uint32_t)0x01)
 
@@ -149,10 +151,15 @@ struct coalition_resource_usage {
 	uint64_t cpu_time_eqos[COALITION_NUM_THREAD_QOS_TYPES];
 	uint64_t cpu_instructions;
 	uint64_t cpu_cycles;
+	uint64_t fs_metadata_writes;
+	uint64_t pm_writes;
 };
 
 #ifdef PRIVATE
 /* definitions shared by only xnu + Libsyscall */
+
+/* coalition id for kernel task */
+#define COALITION_ID_KERNEL 1
 
 /* Syscall flavors */
 #define COALITION_OP_CREATE 1

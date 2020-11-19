@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -97,11 +97,12 @@ typedef struct alarm    alarm_data_t;
 
 /* local data declarations */
 decl_simple_lock_data(static, alarm_lock);       /* alarm synchronization */
-static struct   zone            *alarm_zone;    /* zone for user alarms */
+/* zone for user alarms */
+static ZONE_DECLARE(alarm_zone, "alarms", sizeof(struct alarm), ZC_NONE);
 static struct   alarm           *alrmfree;              /* alarm free list pointer */
 static struct   alarm           *alrmdone;              /* alarm done list pointer */
 static struct   alarm           *alrmlist;
-static long                                     alrm_seqno;             /* uniquely identifies alarms */
+static long                     alrm_seqno;             /* uniquely identifies alarms */
 static thread_call_data_t       alarm_done_call;
 static timer_call_data_t        alarm_expire_timer;
 
@@ -237,26 +238,16 @@ clock_oldinit(void)
 void
 clock_service_create(void)
 {
-	clock_t                 clock;
-	int     i;
-
 	/*
 	 * Initialize ipc clock services.
 	 */
-	for (i = 0; i < clock_count; i++) {
-		clock = &clock_list[i];
+	for (int i = 0; i < clock_count; i++) {
+		clock_t clock = &clock_list[i];
 		if (clock->cl_ops) {
 			ipc_clock_init(clock);
 			ipc_clock_enable(clock);
 		}
 	}
-
-	/*
-	 * Perform miscellaneous late
-	 * initialization.
-	 */
-	i = sizeof(struct alarm);
-	alarm_zone = zinit(i, (4096 / i) * i, 10 * i, "alarms");
 }
 
 /*

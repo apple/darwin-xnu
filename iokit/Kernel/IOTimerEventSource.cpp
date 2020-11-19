@@ -26,6 +26,7 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#include <ptrauth.h>
 #include <sys/cdefs.h>
 
 __BEGIN_DECLS
@@ -46,13 +47,14 @@ __END_DECLS
 #endif
 
 #include <libkern/Block.h>
+#include <libkern/Block_private.h>
 
 
 #define super IOEventSource
 OSDefineMetaClassAndStructors(IOTimerEventSource, IOEventSource)
-OSMetaClassDefineReservedUsed(IOTimerEventSource, 0);
-OSMetaClassDefineReservedUsed(IOTimerEventSource, 1);
-OSMetaClassDefineReservedUsed(IOTimerEventSource, 2);
+OSMetaClassDefineReservedUsedX86(IOTimerEventSource, 0);
+OSMetaClassDefineReservedUsedX86(IOTimerEventSource, 1);
+OSMetaClassDefineReservedUsedX86(IOTimerEventSource, 2);
 OSMetaClassDefineReservedUnused(IOTimerEventSource, 3);
 OSMetaClassDefineReservedUnused(IOTimerEventSource, 4);
 OSMetaClassDefineReservedUnused(IOTimerEventSource, 5);
@@ -100,29 +102,38 @@ do { \
 //
 
 __inline__ void
-IOTimerEventSource::invokeAction(IOTimerEventSource::Action _action, IOTimerEventSource * ts,
+IOTimerEventSource::invokeAction(IOEventSource::Action _action, IOTimerEventSource * ts,
     OSObject * _owner, IOWorkLoop * _workLoop)
 {
 	bool    trace = (gIOKitTrace & kIOTraceTimers) ? true : false;
+	void  * address;
+
+	if (kActionBlock & flags) {
+		address = ptrauth_nop_cast(void *, _Block_get_invoke_fn((struct Block_layout *) actionBlock));
+	} else {
+		address = ptrauth_nop_cast(void *, _action);
+	}
 
 	if (trace) {
 		IOTimeStampStartConstant(IODBG_TIMES(IOTIMES_ACTION),
-		    VM_KERNEL_ADDRHIDE(_action), VM_KERNEL_ADDRHIDE(_owner));
+		    VM_KERNEL_ADDRHIDE(address),
+		    VM_KERNEL_ADDRHIDE(_owner));
 	}
 
 	if (kActionBlock & flags) {
 		((IOTimerEventSource::ActionBlock) actionBlock)(ts);
 	} else {
-		(*_action)(_owner, ts);
+		((IOTimerEventSource::Action)_action)(_owner, ts);
 	}
 
 #if CONFIG_DTRACE
-	DTRACE_TMR3(iotescallout__expire, Action, _action, OSObject, _owner, void, _workLoop);
+	DTRACE_TMR3(iotescallout__expire, Action, address, OSObject, _owner, void, _workLoop);
 #endif
 
 	if (trace) {
 		IOTimeStampEndConstant(IODBG_TIMES(IOTIMES_ACTION),
-		    VM_KERNEL_UNSLIDE(_action), VM_KERNEL_ADDRHIDE(_owner));
+		    VM_KERNEL_UNSLIDE(address),
+		    VM_KERNEL_ADDRHIDE(_owner));
 	}
 }
 
@@ -137,10 +148,10 @@ IOTimerEventSource::timeout(void *self)
 		IOWorkLoop *
 		    wl = me->workLoop;
 		if (wl) {
-			Action doit;
+			IOEventSource::Action doit;
 			wl->closeGate();
 			IOStatisticsCloseGate();
-			doit = (Action) me->action;
+			doit = me->action;
 			if (doit && me->enabled && AbsoluteTime_to_scalar(&me->abstime)) {
 				me->invokeAction(doit, me, me->owner, me->workLoop);
 			}
@@ -164,11 +175,12 @@ IOTimerEventSource::timeoutAndRelease(void * self, void * c)
 		IOWorkLoop *
 		    wl = me->reserved->workLoop;
 		if (wl) {
-			Action doit;
+			IOEventSource::Action doit;
 			wl->closeGate();
 			IOStatisticsCloseGate();
-			doit = (Action) me->action;
+			doit = me->action;
 			if (doit && (me->reserved->calloutGeneration == count)) {
+				thread_call_start_iotes_invocation((thread_call_t)me->calloutEntry);
 				me->invokeAction(doit, me, me->owner, me->workLoop);
 			}
 			IOStatisticsOpenGate();
@@ -185,11 +197,11 @@ IOTimerEventSource::timeoutAndRelease(void * self, void * c)
 bool
 IOTimerEventSource::checkForWork()
 {
-	Action doit;
+	IOEventSource::Action doit;
 
 	if (reserved
 	    && (reserved->calloutGenerationSignaled == reserved->calloutGeneration)
-	    && enabled && (doit = (Action) action)) {
+	    && enabled && (doit = action)) {
 		reserved->calloutGenerationSignaled = ~reserved->calloutGeneration;
 		invokeAction(doit, this, owner, workLoop);
 	}
@@ -222,9 +234,11 @@ IOTimerEventSource::setTimeoutFunc()
 
 	// reserved != 0 means IOTimerEventSource::timeoutAndRelease is being used,
 	// not a subclassed implementation
-	reserved = IONew(ExpansionData, 1);
+	reserved = IONewZero(ExpansionData, 1);
+
 	reserved->calloutGenerationSignaled = ~reserved->calloutGeneration;
-	options = abstime;
+	// make use of an existing ivar for parameter passing
+	options = (uint32_t) abstime;
 	abstime = 0;
 
 	thread_call_options_t tcoptions = 0;
@@ -308,6 +322,7 @@ IOTimerEventSource::init(OSObject *inOwner, Action inAction)
 bool
 IOTimerEventSource::init(uint32_t options, OSObject *inOwner, Action inAction)
 {
+	// make use of an existing ivar for parameter passing
 	abstime = options;
 	return init(inOwner, inAction);
 }

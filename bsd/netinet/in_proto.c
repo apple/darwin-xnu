@@ -89,8 +89,6 @@
 #include <netinet/udp.h>
 #include <netinet/udp_var.h>
 #include <netinet/ip_encap.h>
-#include <netinet/ip_divert.h>
-
 
 /*
  * TCP/IP protocol family: IP, ICMP, UDP, TCP.
@@ -247,7 +245,6 @@ static struct protosw inetsw[] = {
 		.pr_update_last_owner = inp_update_last_owner,
 		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
-#if INET6
 	{
 		.pr_type =              SOCK_RAW,
 		.pr_protocol =          IPPROTO_IPV6,
@@ -260,21 +257,6 @@ static struct protosw inetsw[] = {
 		.pr_update_last_owner = inp_update_last_owner,
 		.pr_copy_last_owner =   inp_copy_last_owner,
 	},
-#endif /* INET6 */
-#if IPDIVERT
-	{
-		.pr_type =              SOCK_RAW,
-		.pr_protocol =          IPPROTO_DIVERT,
-		.pr_flags =             PR_ATOMIC | PR_ADDR | PR_PCBLOCK,
-		.pr_input =             div_input,
-		.pr_ctloutput =         ip_ctloutput,
-		.pr_init =              div_init,
-		.pr_usrreqs =           &div_usrreqs,
-		.pr_lock =              div_lock,
-		.pr_unlock =            div_unlock,
-		.pr_getlock =           div_getlock,
-	},
-#endif /* IPDIVERT */
 /* raw wildcard */
 	{
 		.pr_type =              SOCK_RAW,
@@ -379,7 +361,3 @@ SYSCTL_NODE(_net_inet, IPPROTO_AH, ipsec,
 #endif /* IPSEC */
 SYSCTL_NODE(_net_inet, IPPROTO_RAW, raw,
     CTLFLAG_RW | CTLFLAG_LOCKED, 0, "RAW");
-#if IPDIVERT
-SYSCTL_NODE(_net_inet, IPPROTO_DIVERT, div,
-    CTLFLAG_RW | CTLFLAG_LOCKED, 0, "DIVERT");
-#endif /* IPDIVERT */

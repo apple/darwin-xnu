@@ -90,8 +90,9 @@ vm_offset_t   mem_size;                             /* Size of actual physical m
 uint64_t      mem_actual;                           /* The "One True" physical memory size
                                                      * actually, it's the highest physical
                                                      * address + 1 */
-uint64_t      max_mem;                              /* Size of physical memory (bytes), adjusted
-                                                     * by maxmem */
+uint64_t      max_mem;                              /* kernel/vm managed memory, adjusted by maxmem */
+uint64_t      max_mem_actual;                       /* Actual size of physical memory (bytes), adjusted
+                                                     * by the maxmem boot-arg */
 uint64_t      sane_size;                            /* Memory size to use for defaults
                                                      * calculations */
 addr64_t      vm_last_addr = VM_MAX_KERNEL_ADDRESS; /* Highest kernel
@@ -101,15 +102,18 @@ addr64_t      vm_last_addr = VM_MAX_KERNEL_ADDRESS; /* Highest kernel
 vm_offset_t            segEXTRADATA;
 unsigned long          segSizeEXTRADATA;
 vm_offset_t            segLOWESTTEXT;
+vm_offset_t            segLOWEST;
 static vm_offset_t     segTEXTB;
 static unsigned long   segSizeTEXT;
 static vm_offset_t     segDATAB;
 static unsigned long   segSizeDATA;
-static vm_offset_t     segLINKB;
+vm_offset_t            segLINKB;
 static unsigned long   segSizeLINK;
 static vm_offset_t     segKLDB;
 static unsigned long   segSizeKLD;
 static vm_offset_t     segLASTB;
+static vm_offset_t     segLASTDATACONSTB;
+static unsigned long   segSizeLASTDATACONST;
 static unsigned long   segSizeLAST;
 static vm_offset_t     sectCONSTB;
 static unsigned long   sectSizeCONST;
@@ -123,6 +127,18 @@ vm_offset_t     segPRELINKTEXTB;
 unsigned long   segSizePRELINKTEXT;
 vm_offset_t     segPRELINKINFOB;
 unsigned long   segSizePRELINKINFO;
+
+vm_offset_t          segLOWESTKC;
+vm_offset_t          segHIGHESTKC;
+vm_offset_t          segLOWESTROKC;
+vm_offset_t          segHIGHESTROKC;
+vm_offset_t          segLOWESTAuxKC;
+vm_offset_t          segHIGHESTAuxKC;
+vm_offset_t          segLOWESTROAuxKC;
+vm_offset_t          segHIGHESTROAuxKC;
+vm_offset_t          segLOWESTRXAuxKC;
+vm_offset_t          segHIGHESTRXAuxKC;
+vm_offset_t          segHIGHESTNLEAuxKC;
 
 static kernel_segment_command_t *segDATA;
 static boolean_t doconstro = TRUE;
@@ -316,6 +332,9 @@ arm_vm_prot_init(boot_args * args)
 	arm_vm_page_granular_ROX(segKLDB, segSizeKLD, force_coarse_physmap);
 	arm_vm_page_granular_RWNX(segLINKB, segSizeLINK, force_coarse_physmap);
 	arm_vm_page_granular_RWNX(segLASTB, segSizeLAST, FALSE); // __LAST may be empty, but we cannot assume this
+	if (segLASTDATACONSTB) {
+		arm_vm_page_granular_RWNX(segLASTDATACONSTB, segSizeLASTDATACONST, FALSE); // __LASTDATA_CONST may be empty, but we cannot assume this
+	}
 	arm_vm_page_granular_RWNX(segPRELINKTEXTB, segSizePRELINKTEXT, TRUE); // Refined in OSKext::readPrelinkedExtensions
 	arm_vm_page_granular_RWNX(segPRELINKTEXTB + segSizePRELINKTEXT,
 	    end_kern - (segPRELINKTEXTB + segSizePRELINKTEXT), force_coarse_physmap);                          // PreLinkInfoDictionary
@@ -344,7 +363,7 @@ arm_vm_prot_init(boot_args * args)
 	 */
 	pmap_paddr_t p = (pmap_paddr_t)(args->topOfKernelData) + (ARM_PGBYTES * 9);
 	pt_entry_t *ppte = (pt_entry_t *)phystokv(p);
-	pmap_init_pte_page(kernel_pmap, ppte, HIGH_EXC_VECTORS & ~ARM_TT_L1_PT_OFFMASK, 2, TRUE, FALSE);
+	pmap_init_pte_page(kernel_pmap, ppte, HIGH_EXC_VECTORS & ~ARM_TT_L1_PT_OFFMASK, 2, TRUE);
 
 	int idx = (HIGH_EXC_VECTORS & ARM_TT_L1_PT_OFFMASK) >> ARM_TT_L2_SHIFT;
 	pt_entry_t ptmp = ppte[idx];
@@ -396,12 +415,17 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	gPhysBase = args->physBase;
 	gPhysSize = args->memSize;
 	mem_size = args->memSize;
-	if ((memory_size != 0) && (mem_size > memory_size)) {
-		mem_size = memory_size;
-	}
+	mem_actual = args->memSizeActual ? args->memSizeActual : mem_size;
 	if (mem_size > MEM_SIZE_MAX) {
 		mem_size = MEM_SIZE_MAX;
 	}
+	if ((memory_size != 0) && (mem_size > memory_size)) {
+		mem_size = memory_size;
+		max_mem_actual = memory_size;
+	} else {
+		max_mem_actual = mem_actual;
+	}
+
 	static_memory_end = gVirtBase + mem_size;
 
 	/* Calculate the nubmer of ~256MB segments of memory */
@@ -453,10 +477,12 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	 */
 	segTEXTB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__TEXT", &segSizeTEXT);
 	segLOWESTTEXT = segTEXTB;
+	segLOWEST = segLOWESTTEXT;
 	segDATAB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__DATA", &segSizeDATA);
 	segLINKB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__LINKEDIT", &segSizeLINK);
 	segKLDB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__KLD", &segSizeKLD);
 	segLASTB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__LAST", &segSizeLAST);
+	segLASTDATACONSTB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__LASTDATA_CONST", &segSizeLASTDATACONST);
 	segPRELINKTEXTB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__PRELINK_TEXT", &segSizePRELINKTEXT);
 	segPRELINKINFOB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__PRELINK_INFO", &segSizePRELINKINFO);
 	segBOOTDATAB = (vm_offset_t) getsegdatafromheader(&_mh_execute_header, "__BOOTDATA", &segSizeBOOTDATA);
@@ -465,14 +491,14 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	segSizeEXTRADATA = 0;
 
 	DTEntry memory_map;
-	MemoryMapFileInfo *trustCacheRange;
+	MemoryMapFileInfo const *trustCacheRange;
 	unsigned int trustCacheRangeSize;
 	int err;
 
-	err = DTLookupEntry(NULL, "chosen/memory-map", &memory_map);
+	err = SecureDTLookupEntry(NULL, "chosen/memory-map", &memory_map);
 	assert(err == kSuccess);
 
-	err = DTGetProperty(memory_map, "TrustCache", (void**)&trustCacheRange, &trustCacheRangeSize);
+	err = SecureDTGetProperty(memory_map, "TrustCache", (const void**)&trustCacheRange, &trustCacheRangeSize);
 	if (err == kSuccess) {
 		assert(trustCacheRangeSize == sizeof(MemoryMapFileInfo));
 
@@ -551,6 +577,8 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 
 	arm_vm_prot_init(args);
 
+	vm_page_kernelcache_count = (unsigned int) (atop_64(end_kern - segLOWEST));
+
 	/*
 	 * To avoid recursing while trying to init the vm_page and object * mechanisms,
 	 * pre-initialize kernel pmap page table pages to cover this address range:
@@ -566,7 +594,8 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 		ptp = (pt_entry_t *) phystokv(avail_start);
 		ptp_phys = (pmap_paddr_t)avail_start;
 		avail_start += ARM_PGBYTES;
-		pmap_init_pte_page(kernel_pmap, ptp, va + off, 2, TRUE, TRUE);
+		bzero(ptp, ARM_PGBYTES);
+		pmap_init_pte_page(kernel_pmap, ptp, va + off, 2, TRUE);
 		tte = &cpu_tte[ttenum(va + off)];
 		*tte     = pa_to_tte((ptp_phys)) | ARM_TTE_TYPE_TABLE;
 		*(tte + 1) = pa_to_tte((ptp_phys + 0x400)) | ARM_TTE_TYPE_TABLE;
@@ -579,15 +608,13 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	flush_mmu_tlb();
 #if __arm__ && __ARM_USER_PROTECT__
 	{
-		unsigned int ttbr0_val, ttbr1_val, ttbcr_val;
+		unsigned int ttbr0_val, ttbr1_val;
 		thread_t thread = current_thread();
 
 		__asm__ volatile ("mrc p15,0,%0,c2,c0,0\n" : "=r"(ttbr0_val));
 		__asm__ volatile ("mrc p15,0,%0,c2,c0,1\n" : "=r"(ttbr1_val));
-		__asm__ volatile ("mrc p15,0,%0,c2,c0,2\n" : "=r"(ttbcr_val));
 		thread->machine.uptw_ttb = ttbr0_val;
 		thread->machine.kptw_ttb = ttbr1_val;
-		thread->machine.uptw_ttc = ttbcr_val;
 	}
 #endif
 	avail_start = (avail_start + PAGE_MASK) & ~PAGE_MASK;

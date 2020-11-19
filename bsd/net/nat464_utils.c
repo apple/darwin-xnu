@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2018-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -393,7 +393,14 @@ nat464_translate_icmp(int naf, void *arg)
 			case ICMP_UNREACH_NEEDFRAG:
 				type = ICMP6_PACKET_TOO_BIG;
 				code = 0;
-				mtu += 20;
+				/*
+				 * Make sure we don't overflow adjusting for
+				 * translation overhead.
+				 * If we do, just work with a lower mtu as is.
+				 */
+				if (mtu <= (UINT16_MAX - CLAT46_HDR_EXPANSION_OVERHD)) {
+					mtu += CLAT46_HDR_EXPANSION_OVERHD;
+				}
 				break;
 			default:
 				return -1;
@@ -440,7 +447,8 @@ nat464_translate_icmp(int naf, void *arg)
 		}
 		icmp4->icmp_type = type;
 		icmp4->icmp_code = code;
-		icmp4->icmp_nextmtu = htons(mtu);
+		icmp4->icmp_nextmtu = htons((uint16_t)mtu);
+
 		if (ptr >= 0) {
 			icmp4->icmp_void = htonl(ptr);
 		}
@@ -470,8 +478,8 @@ nat464_translate_icmp(int naf, void *arg)
  * @return -1 on error and 0 on success
  */
 int
-nat464_translate_icmp_ip(pbuf_t *pbuf, uint32_t off, uint64_t *tot_len, uint32_t *off2,
-    uint8_t proto2, uint8_t ttl2, uint64_t tot_len2, struct nat464_addr *src,
+nat464_translate_icmp_ip(pbuf_t *pbuf, uint16_t off, uint16_t *tot_len, uint16_t *off2,
+    uint8_t proto2, uint8_t ttl2, uint16_t tot_len2, struct nat464_addr *src,
     struct nat464_addr *dst, protocol_family_t af, protocol_family_t naf)
 {
 	struct ip *ip4 = NULL;
@@ -502,7 +510,7 @@ nat464_translate_icmp_ip(pbuf_t *pbuf, uint32_t off, uint64_t *tot_len, uint32_t
 		bzero(ip4, sizeof(*ip4));
 		ip4->ip_v = IPVERSION;
 		ip4->ip_hl = sizeof(*ip4) >> 2;
-		ip4->ip_len = htons(sizeof(*ip4) + tot_len2 - olen);
+		ip4->ip_len = htons((uint16_t)(sizeof(*ip4) + tot_len2 - olen));
 		ip4->ip_id = rfc6864 ? 0 : htons(ip_randomid());
 		ip4->ip_off = htons(IP_DF);
 		ip4->ip_ttl = ttl2;
@@ -528,7 +536,7 @@ nat464_translate_icmp_ip(pbuf_t *pbuf, uint32_t off, uint64_t *tot_len, uint32_t
 		ip6 = hdr;
 		bzero(ip6, sizeof(*ip6));
 		ip6->ip6_vfc  = IPV6_VERSION;
-		ip6->ip6_plen = htons(tot_len2 - olen);
+		ip6->ip6_plen = htons((uint16_t)(tot_len2 - olen));
 		if (proto2 == IPPROTO_ICMP) {
 			ip6->ip6_nxt = IPPROTO_ICMPV6;
 		} else {
@@ -595,7 +603,7 @@ nat464_insert_frag46(pbuf_t *pbuf, uint16_t ip_id_val, uint16_t frag_offset,
 	/* Populate IPv6 fragmentation header */
 	p_ip6_frag->ip6f_nxt = p_ip6h->ip6_nxt;
 	p_ip6_frag->ip6f_reserved = 0;
-	p_ip6_frag->ip6f_offlg = (frag_offset) << 3;
+	p_ip6_frag->ip6f_offlg = (uint16_t)(frag_offset << 3);
 	if (!is_last_frag) {
 		p_ip6_frag->ip6f_offlg |= 0x1;
 	}
@@ -659,7 +667,7 @@ nat464_translate_64(pbuf_t *pbuf, int off, uint8_t tos,
 	ip4->ip_v   = 4;
 	ip4->ip_hl  = 5;
 	ip4->ip_tos = tos;
-	ip4->ip_len = htons(sizeof(*ip4) + (tot_len - off));
+	ip4->ip_len = htons((uint16_t)(sizeof(*ip4) + (tot_len - off)));
 	ip4->ip_id  = 0;
 	ip4->ip_off = 0;
 	ip4->ip_ttl = ttl;
@@ -716,9 +724,9 @@ nat464_translate_64(pbuf_t *pbuf, int off, uint8_t tos,
  * @return NT_NAT64 if IP header translation is successful, else error
  */
 int
-nat464_translate_46(pbuf_t *pbuf, int off, uint8_t tos,
+nat464_translate_46(pbuf_t *pbuf, uint16_t off, uint8_t tos,
     uint8_t proto, uint8_t ttl, struct in6_addr src_v6,
-    struct in6_addr dst_v6, uint64_t tot_len)
+    struct in6_addr dst_v6, uint16_t tot_len)
 {
 	struct ip6_hdr *ip6;
 
@@ -772,8 +780,8 @@ nat464_translate_proto(pbuf_t *pbuf, struct nat464_addr *osrc,
 {
 	struct ip *iph = NULL;
 	struct ip6_hdr *ip6h = NULL;
-	uint32_t hlen = 0, plen = 0;
-	uint64_t tot_len = 0;
+	uint16_t hlen = 0, plen = 0;
+	uint16_t tot_len = 0;
 	void *nsrc = NULL, *ndst = NULL;
 	uint8_t *proto = 0;
 	uint16_t *psum = NULL;
@@ -790,7 +798,7 @@ nat464_translate_proto(pbuf_t *pbuf, struct nat464_addr *osrc,
 	switch (naf) {
 	case PF_INET: {
 		iph = pbuf->pb_data;
-		hlen = iph->ip_hl << 2;
+		hlen = (uint16_t)(iph->ip_hl << 2);
 		plen = ntohs(iph->ip_len) - hlen;
 		tot_len = ntohs(iph->ip_len);
 		nsrc = &iph->ip_src;
@@ -800,7 +808,7 @@ nat464_translate_proto(pbuf_t *pbuf, struct nat464_addr *osrc,
 	}
 	case PF_INET6: {
 		ip6h = pbuf->pb_data;
-		hlen = sizeof(*ip6h);
+		hlen = (uint16_t)sizeof(*ip6h);
 		plen = ntohs(ip6h->ip6_plen);
 		tot_len = hlen + plen;
 		nsrc = &ip6h->ip6_src;
@@ -915,7 +923,7 @@ nat464_translate_proto(pbuf_t *pbuf, struct nat464_addr *osrc,
 
 		struct icmp *icmph = NULL;
 		struct icmp6_hdr *icmp6h = NULL;
-		uint32_t ip2off = 0, hlen2 = 0, tot_len2 = 0;
+		uint16_t ip2off = 0, hlen2 = 0, tot_len2 = 0;
 
 		icmph = (struct icmp*) pbuf_contig_segment(pbuf, hlen,
 		    ICMP_MINLEN);
@@ -935,15 +943,15 @@ nat464_translate_proto(pbuf_t *pbuf, struct nat464_addr *osrc,
 
 		/*Translate the inner IP header only for error messages */
 		if (ICMP6_ERRORTYPE(icmp6h->icmp6_type)) {
-			ip2off = hlen + sizeof(*icmp6h);
-			struct ip *iph2;
+			ip2off = (uint16_t)(hlen + sizeof(*icmp6h));
+			struct ip *iph2 = NULL;
 			iph2 = (struct ip*) pbuf_contig_segment(pbuf, ip2off,
 			    sizeof(*iph2));
 			if (iph2 == NULL) {
 				return NT_DROP;
 			}
 
-			hlen2 = ip2off + (iph2->ip_hl << 2);
+			hlen2 = (uint16_t)(ip2off + (iph2->ip_hl << 2));
 			tot_len2 = ntohs(iph2->ip_len);
 
 			/* Destination in outer IP should be Source in inner IP */
@@ -985,7 +993,7 @@ nat464_translate_proto(pbuf_t *pbuf, struct nat464_addr *osrc,
 
 		struct icmp6_hdr *icmp6h = NULL;
 		struct icmp *icmph = NULL;
-		uint32_t ip2off = 0, hlen2 = 0, tot_len2 = 0;
+		uint16_t ip2off = 0, hlen2 = 0, tot_len2 = 0;
 
 		icmp6h = (struct icmp6_hdr*) pbuf_contig_segment(pbuf, hlen,
 		    sizeof(*icmp6h));
@@ -1006,7 +1014,7 @@ nat464_translate_proto(pbuf_t *pbuf, struct nat464_addr *osrc,
 		/*Translate the inner IP header only for error messages */
 		if (ICMP_ERRORTYPE(icmph->icmp_type)) {
 			ip2off = hlen + ICMP_MINLEN;
-			struct ip6_hdr *iph2;
+			struct ip6_hdr *iph2 = NULL;
 			iph2 = (struct ip6_hdr*) pbuf_contig_segment(pbuf, ip2off,
 			    sizeof(*iph2));
 			if (iph2 == NULL) {
@@ -1096,6 +1104,15 @@ done:
 
 		/* Clear IPv4 checksum flags */
 		*pbuf->pb_csum_flags &= ~(CSUM_IP | CSUM_IP_FRAGS | CSUM_DELAY_DATA | CSUM_FRAGMENT);
+		/*
+		 * If the packet requires TCP segmentation due to TSO offload,
+		 * then change the checksum flag to indicate that an IPv6
+		 * TCP segmentation is needed now.
+		 */
+		if (*pbuf->pb_csum_flags & CSUM_TSO_IPV4) {
+			*pbuf->pb_csum_flags &= ~CSUM_TSO_IPV4;
+			*pbuf->pb_csum_flags |= CSUM_TSO_IPV6;
+		}
 	} else if (direction == NT_IN) {
 		/* XXX On input just reset csum flags */
 		*pbuf->pb_csum_flags = 0; /* Reset all flags for now */
@@ -1188,7 +1205,7 @@ nat464_cksum_fixup(uint16_t cksum, uint16_t old, uint16_t new, uint8_t udp)
 	if (udp && !l) {
 		return 0xffff;
 	}
-	return l;
+	return (uint16_t)l;
 }
 
 /* CLAT46 event handlers */

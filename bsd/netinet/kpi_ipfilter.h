@@ -245,4 +245,5 @@ extern errno_t ipf_inject_output(mbuf_t data, ipfilter_t filter_ref,
 __NKE_API_DEPRECATED;
 
 __END_DECLS
+#undef __NKE_API_DEPRECATED
 #endif /* __KPI_IPFILTER__ */

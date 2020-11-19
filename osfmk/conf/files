@@ -48,7 +48,6 @@ OPTIONS/mach_pagemap		optional mach_pagemap
 OPTIONS/mach_vm_debug		optional mach_vm_debug
 OPTIONS/mach_page_hash_stats    optional mach_page_hash_stats
 OPTIONS/mig_debug		optional mig_debug
-OPTIONS/zone_debug		optional zone_debug
 OPTIONS/vm_cpm			optional vm_cpm
 OPTIONS/task_swapper		optional task_swapper
 OPTIONS/stack_usage		optional stack_usage
@@ -91,6 +90,7 @@ osfmk/kdp/kdp_core.c			optional mach_kdp
 osfmk/kdp/processor_core.c		optional mach_kdp
 osfmk/kdp/kdp_serial.c			optional config_serial_kdp
 osfmk/ipc/ipc_entry.c			standard
+osfmk/ipc/ipc_eventlink.c		standard
 osfmk/ipc/ipc_hash.c			standard
 osfmk/ipc/ipc_importance.c	optional importance_inheritance
 osfmk/ipc/ipc_init.c			standard
@@ -150,9 +150,7 @@ osfmk/kern/mpsc_queue.c		standard
 osfmk/kern/page_decrypt.c	standard
 osfmk/kern/printf.c			standard
 osfmk/kern/priority.c			standard
-osfmk/kern/priority_queue.c		standard
 osfmk/kern/processor.c		standard
-osfmk/kern/processor_data.c		standard
 osfmk/kern/restartable.c		standard
 osfmk/kern/sched_average.c		standard
 #ifdef __AMP__
@@ -208,6 +206,7 @@ osfmk/kern/suid_cred.c		standard
 ./mach/clock_reply_user.c		standard
 ./mach/exc_user.c			standard
 ./mach/exc_server.c			optional mach_bsd
+./mach/mach_eventlink_server.c		standard
 ./mach/host_priv_server.c		standard
 ./mach/host_security_server.c		standard
 ./mach/ktrace_background_user.c		standard
@@ -235,8 +234,10 @@ osfmk/tests/ktest_accessor.c		optional config_xnupost
 osfmk/tests/ktest_emit.c		optional config_xnupost
 osfmk/tests/ktest_global.c		optional config_xnupost
 osfmk/tests/pmap_tests.c		optional config_xnupost
+osfmk/tests/ptrauth_data_tests.c		optional config_xnupost
 osfmk/tests/bitmap_test.c		optional config_xnupost
 osfmk/tests/test_thread_call.c          optional config_xnupost
+osfmk/tests/vfp_state_test.c		optional config_xnupost
 ./mach/telemetry_notification_user.c optional config_telemetry
 osfmk/bank/bank.c			standard
 osfmk/atm/atm.c			optional config_atm
@@ -286,6 +287,7 @@ osfmk/vm/vm_resident.c			standard
 osfmk/vm/vm_shared_region.c		standard
 osfmk/vm/vm_shared_region_pager.c	standard
 osfmk/vm/vm_swapfile_pager.c		standard
+osfmk/vm/vm_tests.c			standard
 osfmk/vm/vm_user.c			standard
 osfmk/vm/vm32_user.c			standard
 
@@ -315,7 +317,7 @@ osfmk/kperf/pet.c                       optional kperf
 osfmk/kperf/thread_samplers.c           optional kperf
 osfmk/kperf/task_samplers.c             optional kperf
 osfmk/kperf/meminfo.c                   optional kperf
-osfmk/kperf/kperf_timer.c               optional kperf
+osfmk/kperf/kptimer.c                   optional kperf
 osfmk/kperf/kperf_kpc.c                 optional kperf
 osfmk/kperf/kdebug_trigger.c            optional kperf
 osfmk/kperf/lazy.c                      optional kperf
@@ -333,22 +335,23 @@ osfmk/console/video_console.c	optional	video_console
 osfmk/kern/telemetry.c			optional config_telemetry
 
 # Built-in corecrypto for early_random():
-osfmk/corecrypto/cc/src/cc_clear.c	standard
-osfmk/corecrypto/cc/src/cc_cmp_safe.c	standard
-osfmk/corecrypto/cc/src/cc_abort.c	standard
-osfmk/corecrypto/ccdbrg/src/ccdrbg_nisthmac.c	standard
-osfmk/corecrypto/ccdigest/src/ccdigest_init.c	standard
-osfmk/corecrypto/ccdigest/src/ccdigest_update.c	standard
-osfmk/corecrypto/cchmac/src/cchmac.c	standard
-osfmk/corecrypto/cchmac/src/cchmac_init.c	standard
-osfmk/corecrypto/cchmac/src/cchmac_update.c	standard
-osfmk/corecrypto/cchmac/src/cchmac_final.c	standard
-osfmk/corecrypto/ccsha1/src/ccdigest_final_64be.c	standard
+osfmk/corecrypto/cc_clear.c	standard
+osfmk/corecrypto/cc_cmp_safe.c	standard
+osfmk/corecrypto/cc_abort.c	standard
+osfmk/corecrypto/ccdrbg_nisthmac.c	standard
+osfmk/corecrypto/ccdigest_init.c	standard
+osfmk/corecrypto/ccdigest_update.c	standard
+osfmk/corecrypto/cchmac.c	standard
+osfmk/corecrypto/cchmac_init.c	standard
+osfmk/corecrypto/cchmac_update.c	standard
+osfmk/corecrypto/cchmac_final.c	standard
+osfmk/corecrypto/ccdigest_final_64be.c	standard
 
-osfmk/corecrypto/ccsha2/src/ccsha256_di.c	standard
-osfmk/corecrypto/ccsha2/src/ccsha256_initial_state.c	standard
-osfmk/corecrypto/ccsha2/src/ccsha256_K.c	standard
-osfmk/corecrypto/ccsha2/src/ccsha256_ltc_compress.c	standard
-osfmk/corecrypto/ccsha2/src/ccsha256_ltc_di.c	standard
+osfmk/corecrypto/ccsha256_di.c	standard
+osfmk/corecrypto/ccsha256_initial_state.c	standard
+osfmk/corecrypto/ccsha256_K.c	standard
+osfmk/corecrypto/ccsha256_ltc_compress.c	standard
+osfmk/corecrypto/ccsha256_ltc_di.c	standard
 
 osfmk/prng/prng_random.c	standard
+osfmk/prng/entropy.c   standard

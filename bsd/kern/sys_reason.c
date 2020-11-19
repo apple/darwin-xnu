@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2015-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -46,48 +46,29 @@ extern int maxproc;
 /*
  * Lock group attributes for os_reason subsystem
  */
-lck_grp_attr_t  *os_reason_lock_grp_attr;
-lck_grp_t       *os_reason_lock_grp;
-lck_attr_t      *os_reason_lock_attr;
+static LCK_GRP_DECLARE(os_reason_lock_grp, "os_reason_lock");
+static ZONE_DECLARE(os_reason_zone, "os reasons",
+    sizeof(struct os_reason), ZC_ZFREE_CLEARMEM);
 
 os_refgrp_decl(static, os_reason_refgrp, "os_reason", NULL);
 
 #define OS_REASON_RESERVE_COUNT 100
-#define OS_REASON_MAX_COUNT     (maxproc + 100)
 
-static struct zone *os_reason_zone;
 static int os_reason_alloc_buffer_internal(os_reason_t cur_reason, uint32_t osr_bufsize,
-    boolean_t can_block);
+    zalloc_flags_t flags);
 
 void
-os_reason_init()
+os_reason_init(void)
 {
 	int reasons_allocated = 0;
 
 	/*
-	 * Initialize OS reason group and lock attributes
-	 */
-	os_reason_lock_grp_attr =  lck_grp_attr_alloc_init();
-	os_reason_lock_grp = lck_grp_alloc_init("os_reason_lock", os_reason_lock_grp_attr);
-	os_reason_lock_attr = lck_attr_alloc_init();
-
-	/*
-	 * Create OS reason zone.
-	 */
-	os_reason_zone = zinit(sizeof(struct os_reason), OS_REASON_MAX_COUNT * sizeof(struct os_reason),
-	    OS_REASON_MAX_COUNT, "os reasons");
-	if (os_reason_zone == NULL) {
-		panic("failed to initialize os_reason_zone");
-	}
-
-	/*
 	 * We pre-fill the OS reason zone to reduce the likelihood that
 	 * the jetsam thread and others block when they create an exit
-	 * reason. This pre-filled memory is not-collectable since it's
-	 * foreign memory crammed in as part of zfill().
+	 * reason.
 	 */
 	reasons_allocated = zfill(os_reason_zone, OS_REASON_RESERVE_COUNT);
-	assert(reasons_allocated > 0);
+	assert(reasons_allocated >= OS_REASON_RESERVE_COUNT);
 }
 
 /*
@@ -103,36 +84,12 @@ os_reason_init()
 os_reason_t
 os_reason_create(uint32_t osr_namespace, uint64_t osr_code)
 {
-	os_reason_t new_reason = OS_REASON_NULL;
+	os_reason_t new_reason;
 
-	new_reason = (os_reason_t) zalloc(os_reason_zone);
-	if (new_reason == OS_REASON_NULL) {
-#if OS_REASON_DEBUG
-		/*
-		 * We rely on OS reasons to communicate important things such
-		 * as process exit reason information, we should be aware
-		 * when issues prevent us from allocating them.
-		 */
-		if (os_reason_debug_disabled) {
-			kprintf("os_reason_create: failed to allocate reason with namespace: %u, code : %llu\n",
-			    osr_namespace, osr_code);
-		} else {
-			panic("os_reason_create: failed to allocate reason with namespace: %u, code: %llu\n",
-			    osr_namespace, osr_code);
-		}
-#endif
-		return new_reason;
-	}
-
-	bzero(new_reason, sizeof(*new_reason));
-
+	new_reason = zalloc_flags(os_reason_zone, Z_WAITOK | Z_ZERO);
 	new_reason->osr_namespace = osr_namespace;
 	new_reason->osr_code = osr_code;
-	new_reason->osr_flags = 0;
-	new_reason->osr_bufsize = 0;
-	new_reason->osr_kcd_buf = NULL;
-
-	lck_mtx_init(&new_reason->osr_lock, os_reason_lock_grp, os_reason_lock_attr);
+	lck_mtx_init(&new_reason->osr_lock, &os_reason_lock_grp, LCK_ATTR_NULL);
 	os_ref_init(&new_reason->osr_refcount, &os_reason_refgrp);
 
 	return new_reason;
@@ -145,14 +102,13 @@ os_reason_dealloc_buffer(os_reason_t cur_reason)
 	LCK_MTX_ASSERT(&cur_reason->osr_lock, LCK_MTX_ASSERT_OWNED);
 
 	if (cur_reason->osr_kcd_buf != NULL && cur_reason->osr_bufsize != 0) {
-		kfree(cur_reason->osr_kcd_buf, cur_reason->osr_bufsize);
+		kheap_free(KHEAP_DATA_BUFFERS, cur_reason->osr_kcd_buf,
+		    cur_reason->osr_bufsize);
 	}
 
 	cur_reason->osr_bufsize = 0;
 	cur_reason->osr_kcd_buf = NULL;
 	bzero(&cur_reason->osr_kcd_descriptor, sizeof(cur_reason->osr_kcd_descriptor));
-
-	return;
 }
 
 /*
@@ -172,7 +128,7 @@ os_reason_dealloc_buffer(os_reason_t cur_reason)
 int
 os_reason_alloc_buffer(os_reason_t cur_reason, uint32_t osr_bufsize)
 {
-	return os_reason_alloc_buffer_internal(cur_reason, osr_bufsize, TRUE);
+	return os_reason_alloc_buffer_internal(cur_reason, osr_bufsize, Z_WAITOK);
 }
 
 /*
@@ -192,12 +148,12 @@ os_reason_alloc_buffer(os_reason_t cur_reason, uint32_t osr_bufsize)
 int
 os_reason_alloc_buffer_noblock(os_reason_t cur_reason, uint32_t osr_bufsize)
 {
-	return os_reason_alloc_buffer_internal(cur_reason, osr_bufsize, FALSE);
+	return os_reason_alloc_buffer_internal(cur_reason, osr_bufsize, Z_NOWAIT);
 }
 
 static int
 os_reason_alloc_buffer_internal(os_reason_t cur_reason, uint32_t osr_bufsize,
-    boolean_t can_block)
+    zalloc_flags_t flags)
 {
 	if (cur_reason == OS_REASON_NULL) {
 		return EINVAL;
@@ -216,23 +172,20 @@ os_reason_alloc_buffer_internal(os_reason_t cur_reason, uint32_t osr_bufsize,
 		return 0;
 	}
 
-	if (can_block) {
-		cur_reason->osr_kcd_buf = kalloc_tag(osr_bufsize, VM_KERN_MEMORY_REASON);
-		assert(cur_reason->osr_kcd_buf != NULL);
-	} else {
-		cur_reason->osr_kcd_buf = kalloc_noblock_tag(osr_bufsize, VM_KERN_MEMORY_REASON);
-		if (cur_reason->osr_kcd_buf == NULL) {
-			lck_mtx_unlock(&cur_reason->osr_lock);
-			return ENOMEM;
-		}
-	}
+	cur_reason->osr_kcd_buf = kheap_alloc_tag(KHEAP_DATA_BUFFERS, osr_bufsize,
+	    flags | Z_ZERO, VM_KERN_MEMORY_REASON);
 
-	bzero(cur_reason->osr_kcd_buf, osr_bufsize);
+	if (cur_reason->osr_kcd_buf == NULL) {
+		lck_mtx_unlock(&cur_reason->osr_lock);
+		return ENOMEM;
+	}
 
 	cur_reason->osr_bufsize = osr_bufsize;
 
-	if (kcdata_memory_static_init(&cur_reason->osr_kcd_descriptor, (mach_vm_address_t) cur_reason->osr_kcd_buf,
-	    KCDATA_BUFFER_BEGIN_OS_REASON, osr_bufsize, KCFLAG_USE_MEMCOPY) != KERN_SUCCESS) {
+	if (kcdata_memory_static_init(&cur_reason->osr_kcd_descriptor,
+	    (mach_vm_address_t)cur_reason->osr_kcd_buf,
+	    KCDATA_BUFFER_BEGIN_OS_REASON, osr_bufsize, KCFLAG_USE_MEMCOPY) !=
+	    KERN_SUCCESS) {
 		os_reason_dealloc_buffer(cur_reason);
 
 		lck_mtx_unlock(&cur_reason->osr_lock);
@@ -259,8 +212,10 @@ os_reason_get_kcdata_descriptor(os_reason_t cur_reason)
 		return NULL;
 	}
 
-	assert(cur_reason->osr_kcd_descriptor.kcd_addr_begin == (mach_vm_address_t) cur_reason->osr_kcd_buf);
-	if (cur_reason->osr_kcd_descriptor.kcd_addr_begin != (mach_vm_address_t) cur_reason->osr_kcd_buf) {
+	assert(cur_reason->osr_kcd_descriptor.kcd_addr_begin ==
+	    (mach_vm_address_t)cur_reason->osr_kcd_buf);
+	if (cur_reason->osr_kcd_descriptor.kcd_addr_begin !=
+	    (mach_vm_address_t)cur_reason->osr_kcd_buf) {
 		return NULL;
 	}
 
@@ -304,7 +259,7 @@ os_reason_free(os_reason_t cur_reason)
 	os_reason_dealloc_buffer(cur_reason);
 
 	lck_mtx_unlock(&cur_reason->osr_lock);
-	lck_mtx_destroy(&cur_reason->osr_lock, os_reason_lock_grp);
+	lck_mtx_destroy(&cur_reason->osr_lock, &os_reason_lock_grp);
 
 	zfree(os_reason_zone, cur_reason);
 }

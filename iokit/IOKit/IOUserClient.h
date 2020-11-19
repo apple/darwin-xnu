@@ -37,6 +37,7 @@
 #include <IOKit/IOService.h>
 #include <IOKit/OSMessageNotification.h>
 #include <DriverKit/IOUserClient.h>
+#include <libkern/c++/OSPtr.h>
 
 #if IOKITSTATS
 #include <IOKit/IOStatisticsPrivate.h>
@@ -166,6 +167,24 @@ enum {
 	kIOExternalMethodArgumentsCurrentVersion = IO_EXTERNAL_METHOD_ARGUMENTS_CURRENT_VERSION
 };
 
+#if PRIVATE
+typedef uintptr_t io_filter_policy_t;
+enum io_filter_type_t {
+	io_filter_type_external_method       = 1,
+	io_filter_type_external_async_method = 2,
+	io_filter_type_trap                  = 3,
+};
+
+typedef IOReturn (*io_filter_resolver_t) (task_t task, IOUserClient * client, uint32_t type, io_filter_policy_t *filterp);
+typedef IOReturn (*io_filter_applier_t) (io_filter_policy_t filter, io_filter_type_t type, uint32_t selector);
+typedef void (*io_filter_release_t) (io_filter_policy_t filter);
+struct io_filter_callbacks {
+	const io_filter_resolver_t      io_filter_resolver;
+	const io_filter_applier_t       io_filter_applier;
+	const io_filter_release_t       io_filter_release;
+};
+struct IOUCFilterPolicy;
+#endif /* PRIVATE */
 
 /*!
  *   @class IOUserClient
@@ -179,7 +198,11 @@ class IOUserClient : public IOService
 	friend class IOStatistics;
 #endif
 
+#if XNU_KERNEL_PRIVATE
+public:
+#else /* XNU_KERNEL_PRIVATE */
 protected:
+#endif /* !XNU_KERNEL_PRIVATE */
 /*! @struct ExpansionData
  *   @discussion This structure will be used to expand the capablilties of this class in the future.
  */
@@ -188,6 +211,11 @@ protected:
 		IOUserClientCounter *counter;
 #else
 		void *iokitstatsReserved;
+#endif
+#if PRIVATE
+		IOUCFilterPolicy * filterPolicies;
+#else
+		void *iokitFilterReserved;
 #endif
 	};
 
@@ -207,14 +235,17 @@ public:
 	UInt8   sharedInstance;
 	UInt8   closed;
 	UInt8   __ipcFinal;
-	UInt8   messageAppSuspended;
+	UInt8   messageAppSuspended:1,
+	    defaultLocking:1,
+	    __reservedA:6;
 	volatile SInt32 __ipc;
 	queue_head_t owners;
-	IOLock * lock;
+	IORWLock * lock;
+	IOLock   * filterLock;
 #if __LP64__
-	void  * __reserved[4];
-#else
 	void  * __reserved[3];
+#else
+	void  * __reserved[2];
 #endif
 
 #else /* XNU_KERNEL_PRIVATE */
@@ -236,8 +267,8 @@ private:
 	OSMetaClassDeclareReservedUnused(IOUserClient, 0);
 	OSMetaClassDeclareReservedUnused(IOUserClient, 1);
 #else
-	OSMetaClassDeclareReservedUsed(IOUserClient, 0);
-	OSMetaClassDeclareReservedUsed(IOUserClient, 1);
+	OSMetaClassDeclareReservedUsedX86(IOUserClient, 0);
+	OSMetaClassDeclareReservedUsedX86(IOUserClient, 1);
 #endif
 	OSMetaClassDeclareReservedUnused(IOUserClient, 2);
 	OSMetaClassDeclareReservedUnused(IOUserClient, 3);
@@ -261,14 +292,19 @@ public:
 	static void initialize( void );
 	static void destroyUserReferences( OSObject * obj );
 	static bool finalizeUserReferences( OSObject * obj );
-	IOMemoryMap * mapClientMemory64( IOOptionBits type,
+	OSPtr<IOMemoryMap>  mapClientMemory64( IOOptionBits type,
 	    task_t task,
 	    IOOptionBits mapFlags = kIOMapAnywhere,
 	    mach_vm_address_t atAddress = 0 );
 	IOReturn registerOwner(task_t task);
 	void     noMoreSenders(void);
-
+	io_filter_policy_t filterForTask(task_t task, io_filter_policy_t addFilterPolicy);
 #endif /* XNU_KERNEL_PRIVATE */
+
+#if PRIVATE
+public:
+	static IOReturn registerFilterCallbacks(const struct io_filter_callbacks *callbacks, size_t size);
+#endif /* PRIVATE */
 
 protected:
 	static IOReturn sendAsyncResult(OSAsyncReference reference,
@@ -308,10 +344,12 @@ public:
 	static IOReturn clientHasPrivilege( void * securityToken,
 	    const char * privilegeName );
 
-	static OSObject * copyClientEntitlement( task_t task,
-	    const char * entitlement );
+	static OSPtr<OSObject>  copyClientEntitlement(task_t task, const char *entitlement);
+	static OSPtr<OSObject>  copyClientEntitlementVnode(struct vnode *vnode, off_t offset, const char *entitlement);
 
-	static OSDictionary * copyClientEntitlements(task_t task);
+	static OSPtr<OSDictionary>  copyClientEntitlements(task_t task);
+	static OSPtr<OSDictionary>  copyClientEntitlementsVnode(struct vnode *vnode, off_t offset);
+	static OSPtr<OSDictionary>  copyEntitlementsFromBlob(void *blob, size_t len);
 
 /*!
  *   @function releaseAsyncReference64
@@ -360,10 +398,14 @@ public:
 	    IOOptionBits * options,
 	    IOMemoryDescriptor ** memory );
 
+	IOReturn clientMemoryForType( UInt32 type,
+	    IOOptionBits * options,
+	    OSSharedPtr<IOMemoryDescriptor>& memory );
+
 #if !__LP64__
 private:
 	APPLE_KEXT_COMPATIBILITY_VIRTUAL
-	IOMemoryMap * mapClientMemory( IOOptionBits type,
+	OSPtr<IOMemoryMap>  mapClientMemory( IOOptionBits type,
 	    task_t task,
 	    IOOptionBits mapFlags = kIOMapAnywhere,
 	    IOVirtualAddress atAddress = 0 );
@@ -379,7 +421,7 @@ public:
  *   @param memory The memory descriptor instance previously returned by the implementation of clientMemoryForType().
  *   @result A reference to the first IOMemoryMap instance found in the list of mappings created by IOUserClient from that passed memory descriptor is returned, or zero if none exist. The caller should release this reference.
  */
-	IOMemoryMap * removeMappingForDescriptor(IOMemoryDescriptor * memory);
+	OSPtr<IOMemoryMap>  removeMappingForDescriptor(IOMemoryDescriptor * memory);
 
 /*!
  *   @function exportObjectToClient
@@ -389,7 +431,7 @@ public:
  *   @param clientObj Returned value is the client's port name.
  */
 	virtual IOReturn exportObjectToClient(task_t task,
-	    OSObject *obj, io_object_t *clientObj);
+	    LIBKERN_CONSUMED OSObject *obj, io_object_t *clientObj);
 
 #if KERNEL_PRIVATE
 
@@ -416,6 +458,9 @@ public:
  */
 	static IOReturn copyObjectForPortNameInTask(task_t task, mach_port_name_t port_name,
 	    OSObject **object);
+
+	static IOReturn copyObjectForPortNameInTask(task_t task, mach_port_name_t port_name,
+	    OSSharedPtr<OSObject>& object);
 
 /*!
  *   @function adjustPortNameReferencesInTask
@@ -446,6 +491,12 @@ public:
 	virtual IOExternalAsyncMethod *
 	getAsyncTargetAndMethodForIndex(
 		LIBKERN_RETURNS_NOT_RETAINED IOService ** targetP, UInt32 index );
+	IOExternalMethod *
+	getTargetAndMethodForIndex(
+		OSSharedPtr<IOService>& targetP, UInt32 index );
+	IOExternalAsyncMethod *
+	getAsyncTargetAndMethodForIndex(
+		OSSharedPtr<IOService>& targetP, UInt32 index );
 
 // Methods for accessing trap vector - old and new style
 	virtual IOExternalTrap *

@@ -218,7 +218,9 @@ allocate_from_generic_zone(void)
 
 	/* return some of the resource to avoid O-O-M problems */
 	for (uint64_t j = 0; j < NUM_GIVE_BACK_PORTS && j < i; ++j) {
-		mach_port_deallocate(mach_task_self(), give_back[j]);
+		int ret;
+		ret = mach_port_mod_refs(mach_task_self(), give_back[j], MACH_PORT_RIGHT_RECEIVE, -1);
+		T_ASSERT_MACH_SUCCESS(ret, "mach_port_mod_refs(RECV_RIGHT, -1)");
 	}
 	printf("[%d] Number of allocations: %lld\n", getpid(), i);
 
@@ -636,7 +638,7 @@ run_test(void)
 
 	initial_zone_occupancy = query_zone_map_size();
 
-	/* On large memory systems, set the zone_map jetsam limit lower so we can hit it without timing out. */
+	/* On large memory systems, set the zone maps jetsam limit lower so we can hit it without timing out. */
 	if (mem > (uint64_t)LARGE_MEM_GB * 1024 * 1024 * 1024) {
 		new_limit = LARGE_MEM_JETSAM_LIMIT;
 	}

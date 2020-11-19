@@ -42,27 +42,6 @@ __BEGIN_DECLS
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#if (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD)
-
-#define IOServiceTrace(csc, a, b, c, d) do {                            \
-    if(kIOTraceIOService & gIOKitTrace) {                               \
-	KERNEL_DEBUG_CONSTANT(IODBG_IOSERVICE(csc), a, b, c, d, 0);     \
-    }                                                                   \
-} while(0)
-
-#else /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) */
-
-#define IOServiceTrace(csc, a, b, c, d) do {    \
-  (void)a;                                      \
-  (void)b;                                      \
-  (void)c;                                      \
-  (void)d;                                      \
-} while (0)
-
-#endif /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) */
-
-/* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
-
 typedef kern_return_t (*IOIteratePageableMapsCallback)(vm_map_t map, void * ref);
 
 void IOLibInit(void);
@@ -111,6 +90,11 @@ __END_DECLS
    ({ typeof(expr) expr_ = (type)(uintptr_t)(expr);             \
        (type)(uintptr_t)(expr_); })
 
+struct IODMACommandMapSegment {
+	uint64_t fDMAOffset;       // The offset of this segment in DMA
+	uint64_t fMapOffset;       // Offset of segment in mapping
+	uint64_t fPageOffset;      // Offset within first page of segment
+};
 
 struct IODMACommandInternal {
 	IOMDDMAWalkSegmentState      fState;
@@ -125,7 +109,6 @@ struct IODMACommandInternal {
 	UInt8  fCheckAddressing;
 	UInt8  fIterateOnly;
 	UInt8  fMisaligned;
-	UInt8  fMapContig;
 	UInt8  fPrepared;
 	UInt8  fDoubleBuffer;
 	UInt8  fNewMD;
@@ -143,7 +126,7 @@ struct IODMACommandInternal {
 	uint64_t  fLocalMapperAlloc;
 	uint64_t  fLocalMapperAllocLength;
 
-	class IOBufferMemoryDescriptor * fCopyMD;
+	OSPtr<IOBufferMemoryDescriptor> fCopyMD;
 
 	IOService * fDevice;
 
@@ -151,6 +134,14 @@ struct IODMACommandInternal {
 	IOReturn fStatus;
 	UInt64   fActualByteCount;
 	AbsoluteTime    fTimeStamp;
+
+	// Multisegment vars
+	IODMACommandMapSegment * fMapSegments;
+	uint32_t                 fMapSegmentsCount;
+	uint64_t fLocalMapperAllocBase;
+	uint64_t fOffset2Index;
+	uint64_t fNextOffset;
+	uint64_t fIndex;
 };
 
 struct IOMemoryDescriptorDevicePager {
@@ -162,6 +153,7 @@ struct IOMemoryDescriptorDevicePager {
 
 struct IOMemoryDescriptorReserved {
 	IOMemoryDescriptorDevicePager dp;
+	uint64_t                      descriptorID;
 	uint64_t                      preparationID;
 	// for kernel IOMD subclasses... they have no expansion
 	uint64_t                      kernReserved[4];
@@ -191,7 +183,7 @@ enum{
 };
 
 extern "C" void      iopa_init(iopa_t * a);
-extern "C" uintptr_t iopa_alloc(iopa_t * a, iopa_proc_t alloc, vm_size_t bytes, uint32_t balign);
+extern "C" uintptr_t iopa_alloc(iopa_t * a, iopa_proc_t alloc, vm_size_t bytes, vm_size_t balign);
 extern "C" uintptr_t iopa_free(iopa_t * a, uintptr_t addr, vm_size_t bytes);
 extern "C" uint32_t  gIOPageAllocChunkBytes;
 
@@ -222,6 +214,8 @@ extern "C" void IOKitKernelLogBuffer(const char * title, const void * buffer, si
 extern const OSSymbol * gIOCreateEFIDevicePathSymbol;
 extern "C" void IOSetKeyStoreData(LIBKERN_CONSUMED IOMemoryDescriptor * data);
 extern "C" void IOSetAPFSKeyStoreData(LIBKERN_CONSUMED IOMemoryDescriptor* data);
+extern "C" void IOSetARVRootHashData(LIBKERN_CONSUMED IOMemoryDescriptor* arvData);
+extern "C" void IOSetARVManifestData(LIBKERN_CONSUMED IOMemoryDescriptor* arvData);
 #endif
 extern const  OSSymbol * gAKSGetKey;
 
@@ -229,6 +223,9 @@ void IOScreenLockTimeUpdate(clock_sec_t secs);
 
 void     IOCPUInitialize(void);
 IOReturn IOInstallServicePlatformActions(IOService * service);
+IOReturn IOInstallServiceSleepPlatformActions(IOService * service);
 IOReturn IORemoveServicePlatformActions(IOService * service);
+void     IOCPUSleepKernel(void);
+void     IOPlatformActionsInitialize(void);
 
 #endif /* ! _IOKIT_KERNELINTERNAL_H */

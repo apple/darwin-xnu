@@ -90,38 +90,45 @@ struct nfs_sillyrename {
 };
 
 /*
+ * NFS buf pages struct
+ */
+typedef struct {
+	uint64_t               pages[8];
+} nfsbufpgs;
+
+/*
  * The nfsbuf is the nfs equivalent to a struct buf.
  */
 struct nfsbuf {
 	LIST_ENTRY(nfsbuf)      nb_hash;        /* hash chain */
 	LIST_ENTRY(nfsbuf)      nb_vnbufs;      /* nfsnode's nfsbuf chain */
 	TAILQ_ENTRY(nfsbuf)     nb_free;        /* free list position if not active. */
-	volatile uint32_t       nb_flags;       /* NB_* flags. */
-	volatile uint32_t       nb_lflags;      /* NBL_* flags. */
 	os_refcnt_t             nb_refs;        /* outstanding references. */
-	uint32_t                nb_bufsize;     /* buffer size */
 	daddr64_t               nb_lblkno;      /* logical block number. */
 	uint64_t                nb_verf;        /* V3 write verifier */
-	int                     nb_commitlevel; /* lowest write commit level */
 	time_t                  nb_timestamp;   /* buffer timestamp */
-	int                     nb_error;       /* errno value. */
-	u_int32_t               nb_valid;       /* valid pages in buf */
-	u_int32_t               nb_dirty;       /* dirty pages in buf */
-	int                     nb_validoff;    /* offset in buffer of valid region. */
-	int                     nb_validend;    /* offset of end of valid region. */
-	int                     nb_dirtyoff;    /* offset in buffer of dirty region. */
-	int                     nb_dirtyend;    /* offset of end of dirty region. */
-	int                     nb_offio;       /* offset in buffer of I/O region. */
-	int                     nb_endio;       /* offset of end of I/O region. */
-	int                     nb_rpcs;        /* Count of RPCs remaining for this buffer. */
+	nfsbufpgs               nb_valid;       /* valid pages in buf */
+	nfsbufpgs               nb_dirty;       /* dirty pages in buf */
 	caddr_t                 nb_data;        /* mapped buffer */
 	nfsnode_t               nb_np;          /* nfsnode buffer belongs to */
 	kauth_cred_t            nb_rcred;       /* read credentials reference */
 	kauth_cred_t            nb_wcred;       /* write credentials reference */
 	void *                  nb_pagelist;    /* upl */
+	volatile uint32_t       nb_flags;       /* NB_* flags. */
+	volatile uint32_t       nb_lflags;      /* NBL_* flags. */
+	uint32_t                nb_bufsize;     /* buffer size */
+	int                     nb_error;       /* errno value. */
+	int                     nb_commitlevel; /* lowest write commit level */
+	off_t                   nb_validoff;    /* offset in buffer of valid region. */
+	off_t                   nb_validend;    /* offset of end of valid region. */
+	off_t                   nb_dirtyoff;    /* offset in buffer of dirty region. */
+	off_t                   nb_dirtyend;    /* offset of end of dirty region. */
+	off_t                   nb_offio;       /* offset in buffer of I/O region. */
+	off_t                   nb_endio;       /* offset of end of I/O region. */
+	uint64_t                nb_rpcs;        /* Count of RPCs remaining for this buffer. */
 };
 
-#define NFS_MAXBSIZE    (32 * PAGE_SIZE)        /* valid/dirty page masks limit buffer size */
+#define NFS_MAXBSIZE    (8 * 64 * PAGE_SIZE)    /* valid/dirty page masks limit buffer size */
 
 #define NFS_A_LOT_OF_NEEDCOMMITS        256                     /* max# uncommitted buffers for a node */
 #define NFS_A_LOT_OF_DELAYED_WRITES     MAX(nfsbufcnt/8,512)    /* max# "delwri" buffers in system */
@@ -177,12 +184,24 @@ struct nfsbuf {
 #define NBAC_NOWAIT             0x01    /* Don't wait if buffer is busy */
 #define NBAC_REMOVE             0x02    /* Remove from free list once buffer is acquired */
 
+/* macros for nfsbufpgs */
+#define NBPGS_STRUCT_SIZE               sizeof(nfsbufpgs)
+#define NBPGS_ELEMENT_SIZE              sizeof(((nfsbufpgs *)0)->pages[0])
+#define NBPGS_ELEMENT_PAGES             (8 * NBPGS_ELEMENT_SIZE)
+#define NBPGS_ELEMENTS                  (NBPGS_STRUCT_SIZE / NBPGS_ELEMENT_SIZE)
+#define NBPGS_ERASE(NFSBP)              bzero((NFSBP), NBPGS_STRUCT_SIZE)
+#define NBPGS_COPY(NFSBPDST, NFSBPSRC)  memcpy((NFSBPDST), (NFSBPSRC), NBPGS_STRUCT_SIZE)
+#define NBPGS_IS_EQUAL(NFSBP1, NFSBP2)  (memcmp((NFSBP1), (NFSBP2), NBPGS_STRUCT_SIZE) == 0)
+#define NBPGS_GET(NFSBP, P)             ((NFSBP)->pages[((P)/NBPGS_ELEMENT_PAGES)] & (1LLU << ((P) % NBPGS_ELEMENT_PAGES)))
+#define NBPGS_SET(NFSBP, P)             ((NFSBP)->pages[((P)/NBPGS_ELEMENT_PAGES)] |= (1LLU << ((P) % NBPGS_ELEMENT_PAGES)))
+#define NBPGS_UNSET(NFSBP, P)           ((NFSBP)->pages[((P)/NBPGS_ELEMENT_PAGES)] &= ~(1LLU << ((P) % NBPGS_ELEMENT_PAGES)))
+
 /* some convenience macros...  */
 #define NBOFF(BP)                       ((off_t)(BP)->nb_lblkno * (off_t)(BP)->nb_bufsize)
-#define NBPGVALID(BP, P)                 (((BP)->nb_valid >> (P)) & 0x1)
-#define NBPGDIRTY(BP, P)                 (((BP)->nb_dirty >> (P)) & 0x1)
-#define NBPGVALID_SET(BP, P)             ((BP)->nb_valid |= (1 << (P)))
-#define NBPGDIRTY_SET(BP, P)             ((BP)->nb_dirty |= (1 << (P)))
+#define NBPGVALID(BP, P)                NBPGS_GET(&((BP)->nb_valid), (P))
+#define NBPGDIRTY(BP, P)                NBPGS_GET(&((BP)->nb_dirty), (P))
+#define NBPGVALID_SET(BP, P)            NBPGS_SET(&((BP)->nb_valid), (P))
+#define NBPGDIRTY_SET(BP, P)            NBPGS_SET(&((BP)->nb_dirty), (P))
 
 #define NBUFSTAMPVALID(BP)              ((BP)->nb_timestamp != ~0)
 #define NBUFSTAMPINVALIDATE(BP)         ((BP)->nb_timestamp = ~0)
@@ -248,7 +267,7 @@ extern struct nfsbuffreehead nfsbuffree, nfsbufdelwri;
 struct nfs_dir_buf_header {
 	uint16_t        ndbh_flags;     /* flags (see below) */
 	uint16_t        ndbh_count;     /* # of entries */
-	uint32_t        ndbh_entry_end; /* end offset of direntry data */
+	off_t           ndbh_entry_end; /* end offset of direntry data */
 	uint32_t        ndbh_ncgen;     /* name cache generation# */
 	uint32_t        ndbh_pad;       /* reserved */
 };
@@ -263,6 +282,8 @@ struct nfs_dir_buf_header {
 	(&((struct nfs_vattr*)((char*)((BP)->nb_data) + (BP)->nb_bufsize))[-((IDX)+1)])
 #define NFS_DIRENTRY_LEN(namlen) \
 	((sizeof(struct direntry) + (namlen) - (MAXPATHLEN-1) + 7) & ~7)
+#define NFS_DIRENTRY_LEN_16(namlen) \
+	        (uint16_t)(NFS_DIRENTRY_LEN(namlen)); assert((namlen) <= UINT16_MAX);
 #define NFS_DIRENT_LEN(namlen) \
 	((sizeof(struct dirent) - (NAME_MAX+1)) + (((namlen) + 1 + 3) &~ 3))
 #define NFS_DIRENTRY_NEXT(DP) \
@@ -315,7 +336,7 @@ struct nfsdmap {
 
 struct nfs_vattr {
 	enum vtype      nva_type;       /* vnode type (for create) */
-	uint32_t        nva_mode;       /* file's access mode (and type) */
+	mode_t          nva_mode;       /* file's access mode (and type) */
 	uid_t           nva_uid;        /* owner user id */
 	gid_t           nva_gid;        /* owner group id */
 	guid_t          nva_uuuid;      /* owner user UUID */
@@ -330,8 +351,8 @@ struct nfs_vattr {
 	uint64_t        nva_size;       /* file size in bytes */
 	uint64_t        nva_bytes;      /* bytes of disk space held by file */
 	uint64_t        nva_change;     /* change attribute */
-	int64_t         nva_timesec[NFSTIME_COUNT];
-	int32_t         nva_timensec[NFSTIME_COUNT];
+	time_t          nva_timesec[NFSTIME_COUNT];
+	long            nva_timensec[NFSTIME_COUNT];
 	uint32_t        nva_bitmap[NFS_ATTR_BITMAP_LEN]; /* attributes that are valid */
 
 	/* FPnfs only. */
@@ -346,6 +367,8 @@ struct nfs_vattr {
 #define NFS_FFLAG_HAS_NAMED_ATTRS       0x0004  /* file has named attributes */
 #define NFS_FFLAG_TRIGGER               0x0008  /* node is a trigger/mirror mount point */
 #define NFS_FFLAG_TRIGGER_REFERRAL      0x0010  /* trigger is a referral */
+#define NFS_FFLAG_PARTIAL_WRITE         0x0020  /* partial attribute for NFSv4 writes */
+#define NFS_FFLAG_FILEID_CONTAINS_XID   0x0040  /* xid might be stashed in nva_fileid is rdirplus is enabled */
 #define NFS_FFLAG_IS_ATTR               0x8000  /* file is a named attribute file/directory */
 /* FPnfs only */
 #define NFS_FFLAG_FPNFS_BSD_FLAGS   0x01000000
@@ -495,7 +518,7 @@ struct nfs_file_lock {
 	uint64_t                        nfl_end;        /* ending offset (inclusive) */
 	uint32_t                        nfl_blockcnt;   /* # locks blocked on this lock */
 	uint16_t                        nfl_flags;      /* see below */
-	uint8_t                         nfl_type;       /* lock type: read/write */
+	uint16_t                        nfl_type;       /* lock type: read/write */
 };
 /* nfl_flags */
 #define NFS_FILE_LOCK_ALLOC             0x01    /* lock was allocated */
@@ -571,7 +594,7 @@ struct nfsnode {
 	time_t                  n_aclstamp;     /* ACL cache timestamp */
 	time_t                  n_evtstamp;     /* last vnode event timestamp */
 	uint32_t                n_events;       /* pending vnode events */
-	u_int8_t                n_access[NFS_ACCESS_CACHE_SIZE + 1];      /* ACCESS cache */
+	uint32_t                n_access[NFS_ACCESS_CACHE_SIZE + 1];      /* ACCESS cache */
 	uid_t                   n_accessuid[NFS_ACCESS_CACHE_SIZE];     /* credentials having access */
 	time_t                  n_accessstamp[NFS_ACCESS_CACHE_SIZE];   /* access cache timestamp */
 	time_t                  n_rdirplusstamp_sof; /* Readdirplus sof timestamp */
@@ -609,7 +632,7 @@ struct nfsnode {
 		struct nfsdmap *nd_cookiecache; /* dir cookie cache */
 	} n_un3;
 	uint32_t                n_flag;         /* node flags */
-	u_short                 n_fhsize;       /* size in bytes, of fh */
+	uint32_t                n_fhsize;       /* size in bytes, of fh */
 	u_short                 n_hflag;        /* node hash flags */
 	u_short                 n_bflag;        /* node buffer flags */
 	u_short                 n_mflag;        /* node mount flags */
@@ -842,12 +865,12 @@ void nfs_data_update_size(nfsnode_t, int);
 
 /* other stuff */
 int nfs_removeit(struct nfs_sillyrename *);
-int nfs_nget(mount_t, nfsnode_t, struct componentname *, u_char *, int, struct nfs_vattr *, u_int64_t *, uint32_t, int, nfsnode_t*);
+int nfs_nget(mount_t, nfsnode_t, struct componentname *, u_char *, uint32_t, struct nfs_vattr *, u_int64_t *, uint32_t, int, nfsnode_t*);
 int nfs_mount_is_dirty(mount_t);
 void nfs_dir_cookie_cache(nfsnode_t, uint64_t, uint64_t);
 int nfs_dir_cookie_to_lbn(nfsnode_t, uint64_t, int *, uint64_t *);
 void nfs_invaldir(nfsnode_t);
-uint32_t nfs_dir_buf_freespace(struct nfsbuf *, int);
+uint64_t nfs_dir_buf_freespace(struct nfsbuf *, int);
 
 /* nfsbuf functions */
 void nfs_nbinit(void);
@@ -872,6 +895,12 @@ void nfs_buf_drop(struct nfsbuf *);
 errno_t nfs_buf_acquire(struct nfsbuf *, int, int, int);
 int nfs_buf_iterprepare(nfsnode_t, struct nfsbuflists *, int);
 void nfs_buf_itercomplete(nfsnode_t, struct nfsbuflists *, int);
+
+void nfs_buf_pgs_get_page_mask(nfsbufpgs *, off_t);
+void nfs_buf_pgs_bit_not(nfsbufpgs *);
+void nfs_buf_pgs_bit_and(nfsbufpgs *, nfsbufpgs *, nfsbufpgs *);
+void nfs_buf_pgs_set_pages_between(nfsbufpgs *, off_t, off_t);
+int nfs_buf_pgs_is_set(nfsbufpgs *);
 
 int nfs_bioread(nfsnode_t, uio_t, int, vfs_context_t);
 int nfs_buf_readahead(nfsnode_t, int, daddr64_t *, daddr64_t, thread_t, kauth_cred_t);

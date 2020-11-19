@@ -247,7 +247,7 @@ def IterateRBTreeEntry(element, element_type, field_name):
                 elt = cast(elt, element_type)
 
 
-def IteratePriorityQueue(root, element_type, field_name):
+def IterateSchedPriorityQueue(root, element_type, field_name):
     """ iterate over a priority queue as defined with struct priority_queue from osfmk/kern/priority_queue.h
             root         - value : Value object for the priority queue
             element_type - str   : Type of the link element
@@ -257,9 +257,9 @@ def IteratePriorityQueue(root, element_type, field_name):
             value  : an object thats of type (element_type). Always a pointer object
     """
     def _make_pqe(addr):
-        return value(root.GetSBValue().CreateValueFromExpression(None,'(struct priority_queue_entry *)'+str(addr)))
+        return value(root.GetSBValue().CreateValueFromExpression(None,'(struct priority_queue_entry_sched *)'+str(addr)))
 
-    queue = [unsigned(root.pq_root_packed) & ~3]
+    queue = [unsigned(root.pq_root)]
 
     while len(queue):
         elt = _make_pqe(queue.pop())
@@ -269,6 +269,20 @@ def IteratePriorityQueue(root, element_type, field_name):
             addr = unsigned(elt.child)
             if addr: queue.append(addr)
             elt = elt.next
+
+def SchedPriorityStableQueueRootPri(root, element_type, field_name):
+    """ Return the root level priority of a priority queue as defined with struct priority_queue from osfmk/kern/priority_queue.h
+            root         - value : Value object for the priority queue
+            element_type - str   : Type of the link element
+            field_name   - str   : Name of the field in link element's structure
+        returns:
+            The sched pri of the root element.
+    """
+    def _make_pqe(addr):
+        return value(root.GetSBValue().CreateValueFromExpression(None,'(struct priority_queue_entry_stable *)'+str(addr)))
+
+    elt = _make_pqe(unsigned(root.pq_root))
+    return (elt.key >> 8);
 
 def IterateMPSCQueue(root, element_type, field_name):
     """ iterate over an MPSC queue as defined with struct mpsc_queue_head from osfmk/kern/mpsc_queue.h

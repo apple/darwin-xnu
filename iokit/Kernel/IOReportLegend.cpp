@@ -26,6 +26,8 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <IOKit/IOKernelReportStructs.h>
 #include <IOKit/IOKernelReporters.h>
 
@@ -47,22 +49,21 @@
 #define super OSObject
 OSDefineMetaClassAndStructors(IOReportLegend, OSObject);
 
-IOReportLegend*
+OSSharedPtr<IOReportLegend>
 IOReportLegend::with(OSArray *legend)
 {
-	IOReportLegend *iorLegend = new IOReportLegend;
+	OSSharedPtr<IOReportLegend> iorLegend = OSMakeShared<IOReportLegend>();
 
 	if (iorLegend) {
 		if (legend != NULL) {
 			if (iorLegend->initWith(legend) != kIOReturnSuccess) {
-				OSSafeReleaseNULL(iorLegend);
-				return NULL;
+				return nullptr;
 			}
 		}
 
 		return iorLegend;
 	} else {
-		return NULL;
+		return nullptr;
 	}
 }
 
@@ -85,9 +86,6 @@ IOReportLegend::initWith(OSArray *legend)
 void
 IOReportLegend::free(void)
 {
-	if (_reportLegend) {
-		_reportLegend->release();
-	}
 	super::free();
 }
 
@@ -95,7 +93,7 @@ IOReportLegend::free(void)
 OSArray*
 IOReportLegend::getLegend(void)
 {
-	return _reportLegend;
+	return _reportLegend.get();
 }
 
 IOReturn
@@ -105,8 +103,8 @@ IOReportLegend::addReporterLegend(IOService *reportingService,
     const char *subGroupName)
 {
 	IOReturn res = kIOReturnError;
-	IOReportLegend *legend = NULL;
-	OSObject *curLegend = NULL;
+	OSSharedPtr<IOReportLegend> legend;
+	OSSharedPtr<OSObject> curLegend;
 
 	// No need to check groupName and subGroupName because optional params
 	if (!reportingService || !reporter) {
@@ -117,7 +115,7 @@ IOReportLegend::addReporterLegend(IOService *reportingService,
 	// is how you make an empty legend).  If it's not an array, then
 	// we're just going to replace it.
 	curLegend = reportingService->copyProperty(kIOReportLegendKey);
-	legend = IOReportLegend::with(OSDynamicCast(OSArray, curLegend));
+	legend = IOReportLegend::with(OSDynamicCast(OSArray, curLegend.get()));
 	if (!legend) {
 		goto finish;
 	}
@@ -131,13 +129,6 @@ IOReportLegend::addReporterLegend(IOService *reportingService,
 	res = kIOReturnSuccess;
 
 finish:
-	if (legend) {
-		legend->release();
-	}
-	if (curLegend) {
-		curLegend->release();
-	}
-
 	return res;
 }
 
@@ -148,11 +139,11 @@ IOReportLegend::addLegendEntry(IOReportLegendEntry *legendEntry,
     const char *subGroupName)
 {
 	kern_return_t res = kIOReturnError;
-	const OSSymbol *tmpGroupName = NULL;
-	const OSSymbol *tmpSubGroupName = NULL;
+	OSSharedPtr<const OSSymbol> tmpGroupName;
+	OSSharedPtr<const OSSymbol> tmpSubGroupName;
 
 	if (!legendEntry) {
-		goto finish;
+		return res;
 	}
 
 	if (groupName) {
@@ -164,18 +155,8 @@ IOReportLegend::addLegendEntry(IOReportLegendEntry *legendEntry,
 	}
 
 	// It is ok to call appendLegendWith() if tmpGroups are NULL
-	if (legendEntry) {
-		res = organizeLegend(legendEntry, tmpGroupName, tmpSubGroupName);
+	res = organizeLegend(legendEntry, tmpGroupName.get(), tmpSubGroupName.get());
 
-		if (tmpGroupName) {
-			tmpGroupName->release();
-		}
-		if (tmpSubGroupName) {
-			tmpSubGroupName->release();
-		}
-	}
-
-finish:
 	return res;
 }
 
@@ -186,14 +167,13 @@ IOReportLegend::addReporterLegend(IOReporter *reporter,
     const char *subGroupName)
 {
 	IOReturn res = kIOReturnError;
-	IOReportLegendEntry *legendEntry = NULL;
+	OSSharedPtr<IOReportLegendEntry> legendEntry;
 
 	if (reporter) {
 		legendEntry = reporter->createLegend();
 
 		if (legendEntry) {
-			res = addLegendEntry(legendEntry, groupName, subGroupName);
-			legendEntry->release();
+			res = addLegendEntry(legendEntry.get(), groupName, subGroupName);
 		}
 	}
 
@@ -206,14 +186,12 @@ IOReportLegend::organizeLegend(IOReportLegendEntry *legendEntry,
     const OSSymbol *groupName,
     const OSSymbol *subGroupName)
 {
-	IOReturn res = kIOReturnError;
-
 	if (!legendEntry) {
-		return res = kIOReturnBadArgument;
+		return kIOReturnBadArgument;
 	}
 
 	if (!groupName && subGroupName) {
-		return res = kIOReturnBadArgument;
+		return kIOReturnBadArgument;
 	}
 
 	IORLEGENDLOG("IOReportLegend::organizeLegend");
@@ -239,5 +217,5 @@ IOReportLegend::organizeLegend(IOReportLegendEntry *legendEntry,
 
 	// callers can now safely release legendEntry (it is part of _reportLegend)
 
-	return res = kIOReturnSuccess;
+	return kIOReturnSuccess;
 }

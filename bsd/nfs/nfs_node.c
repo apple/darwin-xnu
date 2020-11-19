@@ -98,6 +98,9 @@ static lck_grp_t *nfs_node_lck_grp;
 static lck_grp_t *nfs_data_lck_grp;
 lck_mtx_t *nfs_node_hash_mutex;
 
+ZONE_DECLARE(nfsnode_zone, "NFS node",
+    sizeof(struct nfsnode), ZC_ZFREE_CLEARMEM);
+
 #define NFS_NODE_DBG(...) NFS_DBG(NFS_FAC_NODE, 7, ## __VA_ARGS__)
 
 /*
@@ -194,7 +197,7 @@ nfs_nget(
 	nfsnode_t dnp,
 	struct componentname *cnp,
 	u_char *fhp,
-	int fhsize,
+	uint32_t fhsize,
 	struct nfs_vattr *nvap,
 	u_int64_t *xidp,
 	uint32_t auth,
@@ -207,7 +210,8 @@ nfs_nget(
 	int error, nfsvers;
 	mount_t mp2;
 	struct vnode_fsparam vfsp;
-	uint32_t vid;
+	uint32_t vid, cn_namelen;
+	u_long nfshash;
 
 	FSDBG_TOP(263, mp, dnp, flags, npp);
 
@@ -219,10 +223,11 @@ nfs_nget(
 		return error;
 	}
 	nfsvers = VFSTONFS(mp)->nm_vers;
-
-	nhpp = NFSNOHASH(nfs_hash(fhp, fhsize));
+	cn_namelen = cnp ? cnp->cn_namelen : 0;
+	nfshash = nfs_hash(fhp, fhsize);
 loop:
 	lck_mtx_lock(nfs_node_hash_mutex);
+	nhpp = NFSNOHASH(nfshash);
 	for (np = nhpp->lh_first; np != 0; np = np->n_hash.le_next) {
 		mp2 = (np->n_hflag & NHINIT) ? np->n_mount : NFSTOMP(np);
 		if (mp != mp2 || np->n_fhsize != fhsize ||
@@ -230,15 +235,15 @@ loop:
 			continue;
 		}
 		if (nvap && (nvap->nva_flags & NFS_FFLAG_TRIGGER_REFERRAL) &&
-		    cnp && (cnp->cn_namelen > (fhsize - (int)sizeof(dnp)))) {
+		    cnp && (cn_namelen > (fhsize - sizeof(dnp)))) {
 			/* The name was too long to fit in the file handle.  Check it against the node's name. */
 			int namecmp = 0;
 			const char *vname = vnode_getname(NFSTOV(np));
 			if (vname) {
-				if (cnp->cn_namelen != (int)strlen(vname)) {
+				if (cn_namelen != strlen(vname)) {
 					namecmp = 1;
 				} else {
-					namecmp = strncmp(vname, cnp->cn_nameptr, cnp->cn_namelen);
+					namecmp = strncmp(vname, cnp->cn_nameptr, cn_namelen);
 				}
 				vnode_putname(vname);
 			}
@@ -247,8 +252,8 @@ loop:
 			}
 		}
 		FSDBG(263, dnp, np, np->n_flag, 0xcace0000);
-		/* if the node is locked, sleep on it */
-		if ((np->n_hflag & NHLOCKED) && !(flags & NG_NOCREATE)) {
+		/* if the node is being initialized or locked, sleep on it */
+		if ((np->n_hflag & NHINIT) || ((np->n_hflag & NHLOCKED) && !(flags & NG_NOCREATE))) {
 			np->n_hflag |= NHLOCKWANT;
 			FSDBG(263, dnp, np, np->n_flag, 0xcace2222);
 			msleep(np, nfs_node_hash_mutex, PDROP | PINOD, "nfs_nget", NULL);
@@ -356,13 +361,13 @@ loop:
 
 				cmp = nfs_case_insensitive(mp) ? strncasecmp : strncmp;
 
-				if (vp->v_name && (size_t)cnp->cn_namelen != strnlen(vp->v_name, MAXPATHLEN)) {
+				if (vp->v_name && cn_namelen != strnlen(vp->v_name, MAXPATHLEN)) {
 					update_flags |= VNODE_UPDATE_NAME;
 				}
-				if (vp->v_name && cnp->cn_namelen && (*cmp)(cnp->cn_nameptr, vp->v_name, cnp->cn_namelen)) {
+				if (vp->v_name && cn_namelen && (*cmp)(cnp->cn_nameptr, vp->v_name, cn_namelen)) {
 					update_flags |= VNODE_UPDATE_NAME;
 				}
-				if ((vp->v_name == NULL && cnp->cn_namelen != 0) || (vp->v_name != NULL && cnp->cn_namelen == 0)) {
+				if ((vp->v_name == NULL && cn_namelen != 0) || (vp->v_name != NULL && cn_namelen == 0)) {
 					update_flags |= VNODE_UPDATE_NAME;
 				}
 				if (vnode_parent(vp) != NFSTOV(dnp)) {
@@ -370,8 +375,8 @@ loop:
 				}
 				if (update_flags) {
 					NFS_NODE_DBG("vnode_update_identity old name %s new name %.*s update flags = %x\n",
-					    vp->v_name, cnp->cn_namelen, cnp->cn_nameptr ? cnp->cn_nameptr : "", update_flags);
-					vnode_update_identity(vp, NFSTOV(dnp), cnp->cn_nameptr, cnp->cn_namelen, 0, update_flags);
+					    vp->v_name, cn_namelen, cnp->cn_nameptr ? cnp->cn_nameptr : "", update_flags);
+					vnode_update_identity(vp, NFSTOV(dnp), cnp->cn_nameptr, cn_namelen, 0, update_flags);
 				}
 			}
 
@@ -395,14 +400,7 @@ loop:
 	 * before calling getnewvnode().  Anyone finding it in the
 	 * hash before initialization is complete will wait for it.
 	 */
-	MALLOC_ZONE(np, nfsnode_t, sizeof *np, M_NFSNODE, M_WAITOK);
-	if (!np) {
-		lck_mtx_unlock(nfs_node_hash_mutex);
-		*npp = 0;
-		FSDBG_BOT(263, dnp, *npp, 0x80000001, ENOMEM);
-		return ENOMEM;
-	}
-	bzero(np, sizeof *np);
+	np = zalloc_flags(nfsnode_zone, Z_WAITOK | Z_ZERO);
 	np->n_hflag |= (NHINIT | NHLOCKED);
 	np->n_mount = mp;
 	np->n_auth = auth;
@@ -414,7 +412,7 @@ loop:
 	np->n_monlink.le_next = NFSNOLIST;
 
 	/* ugh... need to keep track of ".zfs" directories to workaround server bugs */
-	if ((nvap->nva_type == VDIR) && cnp && (cnp->cn_namelen == 4) &&
+	if ((nvap->nva_type == VDIR) && cnp && (cn_namelen == 4) &&
 	    (cnp->cn_nameptr[0] == '.') && (cnp->cn_nameptr[1] == 'z') &&
 	    (cnp->cn_nameptr[2] == 'f') && (cnp->cn_nameptr[3] == 's')) {
 		np->n_flag |= NISDOTZFS;
@@ -423,7 +421,7 @@ loop:
 		np->n_flag |= NISDOTZFSCHILD;
 	}
 
-	if (dnp && cnp && ((cnp->cn_namelen != 2) ||
+	if (dnp && cnp && ((cn_namelen != 2) ||
 	    (cnp->cn_nameptr[0] != '.') || (cnp->cn_nameptr[1] != '.'))) {
 		vnode_t dvp = NFSTOV(dnp);
 		if (!vnode_get(dvp)) {
@@ -436,11 +434,10 @@ loop:
 
 	/* setup node's file handle */
 	if (fhsize > NFS_SMALLFH) {
-		MALLOC_ZONE(np->n_fhp, u_char *,
-		    fhsize, M_NFSBIGFH, M_WAITOK);
+		MALLOC(np->n_fhp, u_char *, fhsize, M_NFSBIGFH, M_WAITOK);
 		if (!np->n_fhp) {
 			lck_mtx_unlock(nfs_node_hash_mutex);
-			FREE_ZONE(np, sizeof *np, M_NFSNODE);
+			NFS_ZFREE(nfsnode_zone, np);
 			*npp = 0;
 			FSDBG_BOT(263, dnp, *npp, 0x80000002, ENOMEM);
 			return ENOMEM;
@@ -491,9 +488,9 @@ loop:
 		lck_rw_destroy(&np->n_datalock, nfs_data_lck_grp);
 		lck_mtx_destroy(&np->n_openlock, nfs_open_grp);
 		if (np->n_fhsize > NFS_SMALLFH) {
-			FREE_ZONE(np->n_fhp, np->n_fhsize, M_NFSBIGFH);
+			FREE(np->n_fhp, M_NFSBIGFH);
 		}
-		FREE_ZONE(np, sizeof *np, M_NFSNODE);
+		NFS_ZFREE(nfsnode_zone, np);
 		*npp = 0;
 		FSDBG_BOT(263, dnp, *npp, 0x80000003, error);
 		return error;
@@ -585,9 +582,9 @@ loop:
 		lck_rw_destroy(&np->n_datalock, nfs_data_lck_grp);
 		lck_mtx_destroy(&np->n_openlock, nfs_open_grp);
 		if (np->n_fhsize > NFS_SMALLFH) {
-			FREE_ZONE(np->n_fhp, np->n_fhsize, M_NFSBIGFH);
+			FREE(np->n_fhp, M_NFSBIGFH);
 		}
-		FREE_ZONE(np, sizeof *np, M_NFSNODE);
+		NFS_ZFREE(nfsnode_zone, np);
 		*npp = 0;
 		FSDBG_BOT(263, dnp, *npp, 0x80000004, error);
 		return error;
@@ -624,7 +621,7 @@ nfs_vnop_inactive(
 	vfs_context_t ctx = ap->a_context;
 	nfsnode_t np;
 	struct nfs_sillyrename *nsp;
-	struct nfs_vattr nvattr;
+	struct nfs_vattr *nvattr;
 	int unhash, attrerr, busyerror, error, inuse, busied, force;
 	struct nfs_open_file *nofp;
 	struct componentname cn;
@@ -641,6 +638,7 @@ nfs_vnop_inactive(
 
 	nmp = NFSTONMP(np);
 	mp = vnode_mount(vp);
+	MALLOC(nvattr, struct nfs_vattr *, sizeof(*nvattr), M_TEMP, M_WAITOK);
 
 restart:
 	force = (!mp || vfs_isforce(mp));
@@ -661,7 +659,10 @@ restart:
 		NP(np, "nfs_vnop_inactive: still open: %d", np->n_openrefcnt);
 #endif
 		lck_mtx_unlock(&np->n_openlock);
-		return 0;
+		if (inuse) {
+			nfs_mount_state_in_use_end(nmp, 0);
+		}
+		goto out_free;
 	}
 
 	TAILQ_FOREACH(nofp, &np->n_opens, nof_link) {
@@ -695,10 +696,10 @@ restart:
 				if (busied) {
 					nfs_open_file_clear_busy(nofp);
 				}
-				if (inuse) {
-					nfs_mount_state_in_use_end(nmp, 0);
-				}
 				if (!nfs4_reopen(nofp, NULL)) {
+					if (inuse) {
+						nfs_mount_state_in_use_end(nmp, 0);
+					}
 					goto restart;
 				}
 			}
@@ -732,17 +733,21 @@ restart:
 			} else if (!force) {
 				lck_mtx_unlock(&np->n_openlock);
 				if (nofp->nof_flags & NFS_OPEN_FILE_REOPEN) {
+					int should_restart = 0;
 					if (busied) {
 						nfs_open_file_clear_busy(nofp);
 					}
-					if (inuse) {
-						nfs_mount_state_in_use_end(nmp, 0);
-					}
 #if CONFIG_NFS4
 					if (!nfs4_reopen(nofp, NULL)) {
-						goto restart;
+						should_restart = 1;
 					}
 #endif
+					if (should_restart) {
+						if (inuse) {
+							nfs_mount_state_in_use_end(nmp, 0);
+						}
+						goto restart;
+					}
 				}
 				error = nfs_close(np, nofp, NFS_OPEN_SHARE_ACCESS_READ, NFS_OPEN_SHARE_DENY_NONE, ctx);
 				if (error) {
@@ -809,7 +814,7 @@ restart:
 		np->n_flag &= (NMODIFIED);
 		nfs_node_unlock(np);
 		FSDBG_BOT(264, vp, np, np->n_flag, 0);
-		return 0;
+		goto out_free;
 	}
 	nfs_node_unlock(np);
 
@@ -819,11 +824,11 @@ restart:
 	nfs_vinvalbuf2(vp, V_SAVE, vfs_context_thread(ctx), nsp->nsr_cred, 1);
 
 	/* try to get the latest attributes */
-	attrerr = nfs_getattr(np, &nvattr, ctx, NGA_UNCACHED);
+	attrerr = nfs_getattr(np, nvattr, ctx, NGA_UNCACHED);
 
 	/* Check if we should remove it from the node hash. */
 	/* Leave it if inuse or it has multiple hard links. */
-	if (vnode_isinuse(vp, 0) || (!attrerr && (nvattr.nva_nlink > 1))) {
+	if (vnode_isinuse(vp, 0) || (!attrerr && (nvattr->nva_nlink > 1))) {
 		unhash = 0;
 	} else {
 		unhash = 1;
@@ -895,9 +900,10 @@ restart:
 		kauth_cred_unref(&nsp->nsr_cred);
 	}
 	vnode_rele(NFSTOV(nsp->nsr_dnp));
-	FREE_ZONE(nsp, sizeof(*nsp), M_NFSREQ);
-
+	FREE(nsp, M_TEMP);
 	FSDBG_BOT(264, vp, np, np->n_flag, 0);
+out_free:
+	FREE(nvattr, M_TEMP);
 	return 0;
 }
 
@@ -952,8 +958,6 @@ nfs_vnop_reclaim(
 		if ((np->n_openflags & N_DELEG_MASK) && !force) {
 			/* try to return the delegation */
 			np->n_openflags &= ~N_DELEG_MASK;
-			nfs4_delegreturn_rpc(nmp, np->n_fhp, np->n_fhsize, &np->n_dstateid,
-			    R_RECOVER, vfs_context_thread(ctx), vfs_context_ucred(ctx));
 		}
 		if (np->n_attrdirfh) {
 			FREE(np->n_attrdirfh, M_TEMP);
@@ -1069,7 +1073,7 @@ nfs_vnop_reclaim(
 			kauth_cred_unref(&np->n_sillyrename->nsr_cred);
 		}
 		vnode_rele(NFSTOV(np->n_sillyrename->nsr_dnp));
-		FREE_ZONE(np->n_sillyrename, sizeof(*np->n_sillyrename), M_NFSREQ);
+		FREE(np->n_sillyrename, M_TEMP);
 	}
 
 	vnode_removefsref(vp);
@@ -1087,10 +1091,10 @@ nfs_vnop_reclaim(
 	 */
 	nfs_node_lock_force(np);
 	if ((vnode_vtype(vp) == VDIR) && np->n_cookiecache) {
-		FREE_ZONE(np->n_cookiecache, sizeof(struct nfsdmap), M_NFSDIROFF);
+		NFS_ZFREE(ZV_NFSDIROFF, np->n_cookiecache);
 	}
 	if (np->n_fhsize > NFS_SMALLFH) {
-		FREE_ZONE(np->n_fhp, np->n_fhsize, M_NFSBIGFH);
+		FREE(np->n_fhp, M_NFSBIGFH);
 	}
 	if (np->n_vattr.nva_acl) {
 		kauth_acl_free(np->n_vattr.nva_acl);
@@ -1111,7 +1115,7 @@ nfs_vnop_reclaim(
 	lck_mtx_destroy(&np->n_openlock, nfs_open_grp);
 
 	FSDBG_BOT(265, vp, np, np->n_flag, 0xd1ed1e);
-	FREE_ZONE(np, sizeof(struct nfsnode), M_NFSNODE);
+	NFS_ZFREE(nfsnode_zone, np);
 	return 0;
 }
 

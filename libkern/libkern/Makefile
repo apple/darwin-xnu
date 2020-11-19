@@ -54,11 +54,13 @@ KERNELFILES = \
 PRIVATE_KERNELFILES = \
 	OSKextLibPrivate.h \
 	OSSerializeBinary.h \
+	kernel_mach_header.h \
 	kext_request_keys.h \
 	mkext.h \
 	prelink.h \
 	section_keywords.h \
-	Block_private.h
+	Block_private.h \
+	ptrauth_utils.h
 
 PRIVATE_DATAFILES = \
 	${PRIVATE_KERNELFILES} \
@@ -83,7 +85,6 @@ INSTALL_KF_MI_LCL_LIST = ${KERNELFILES} ${PRIVATE_KERNELFILES}
 
 EXPORT_MI_LIST = \
 	$(sort ${KERNELFILES} ${PRIVATE_DATAFILES}) \
-	kernel_mach_header.h   \
 	kxld.h                 \
 	kxld_types.h           \
 	stack_protector.h
@@ -93,7 +94,7 @@ EXPORT_MI_GEN_LIST = version.h
 EXPORT_MI_DIR = libkern
 
 version.h: version.h.template $(SRCROOT)/config/MasterVersion
-	$(call makelog,[$(CMD_MC)] $(ColorH)GENERATING$(Color0) $(ColorLF)libkern/$@$(Color0) from $(ColorF)$<$(Color0))
+	@$(LOG_GENERATE) "libkern/$@$(Color0) from $(ColorF)$<"
 	$(_v)install $(DATA_INSTALL_FLAGS) $< $@
 	$(_v)$(NEWVERS) $@ > /dev/null
 

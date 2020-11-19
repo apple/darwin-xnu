@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2019 Apple Inc. All Rights Reserved.
+ * Copyright (c) 2007-2020 Apple Inc. All Rights Reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -113,6 +113,7 @@
 #include <mach/vm_map.h>
 #include <mach/host_priv.h>
 #include <mach/sdt.h>
+#include <mach-o/loader.h>
 
 #include <machine/machine_routines.h>
 
@@ -132,6 +133,34 @@
 #include <security/mac_framework.h>
 #endif
 #include <os/overflow.h>
+
+/*
+ * this function implements the same logic as dyld's "dyld_fall_2020_os_versions"
+ * from dyld_priv.h. this way we can consistently deny / allow allocations based
+ * on SDK version at fall 2020 level. Compare output to proc_sdk(current_proc())
+ */
+static uint32_t
+proc_2020_fall_os_sdk(void)
+{
+	switch (current_proc()->p_platform) {
+	case PLATFORM_MACOS:
+		return 0x000a1000; // DYLD_MACOSX_VERSION_10_16
+	case PLATFORM_IOS:
+	case PLATFORM_IOSSIMULATOR:
+	case PLATFORM_MACCATALYST:
+		return 0x000e0000; // DYLD_IOS_VERSION_14_0
+	case PLATFORM_BRIDGEOS:
+		return 0x00050000; // DYLD_BRIDGEOS_VERSION_5_0
+	case PLATFORM_TVOS:
+	case PLATFORM_TVOSSIMULATOR:
+		return 0x000e0000; // DYLD_TVOS_VERSION_14_0
+	case PLATFORM_WATCHOS:
+	case PLATFORM_WATCHOSSIMULATOR:
+		return 0x00070000; // DYLD_WATCHOS_VERSION_7_0
+	default:
+		return 0;
+	}
+}
 
 /*
  * XXX Internally, we use VM_PROT_* somewhat interchangeably, but the correct
@@ -205,6 +234,37 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	vp = NULLVP;
 
 	/*
+	 * verify no unknown flags are passed in, and if any are,
+	 * fail out early to make sure the logic below never has to deal
+	 * with invalid flag values
+	 */
+	if (flags & ~(MAP_SHARED |
+	    MAP_PRIVATE |
+	    MAP_COPY |
+	    MAP_FIXED |
+	    MAP_RENAME |
+	    MAP_NORESERVE |
+	    MAP_RESERVED0080 |                                  //grandfathered in as accepted and ignored
+	    MAP_NOEXTEND |
+	    MAP_HASSEMAPHORE |
+	    MAP_NOCACHE |
+	    MAP_JIT |
+	    MAP_FILE |
+	    MAP_ANON |
+	    MAP_RESILIENT_CODESIGN |
+	    MAP_RESILIENT_MEDIA |
+#if XNU_TARGET_OS_OSX
+	    MAP_32BIT |
+#endif
+	    MAP_TRANSLATED_ALLOW_EXECUTE |
+	    MAP_UNIX03)) {
+		if (proc_sdk(current_proc()) >= proc_2020_fall_os_sdk()) {
+			return EINVAL;
+		}
+	}
+
+
+	/*
 	 * The vm code does not have prototypes & compiler doesn't do
 	 * the right thing when you cast 64bit value and pass it in function
 	 * call. So here it is.
@@ -215,6 +275,32 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	/* make sure mapping fits into numeric range etc */
 	if (os_add3_overflow(file_pos, user_size, PAGE_SIZE_64 - 1, &sum)) {
 		return EINVAL;
+	}
+
+	if (flags & MAP_UNIX03) {
+		vm_map_offset_t offset_alignment_mask;
+
+		/*
+		 * Enforce UNIX03 compliance.
+		 */
+
+		if (vm_map_is_exotic(current_map())) {
+			offset_alignment_mask = 0xFFF;
+		} else {
+			offset_alignment_mask = vm_map_page_mask(current_map());
+		}
+		if (file_pos & offset_alignment_mask) {
+			/* file offset should be page-aligned */
+			return EINVAL;
+		}
+		if (!(flags & (MAP_PRIVATE | MAP_SHARED))) {
+			/* need either MAP_PRIVATE or MAP_SHARED */
+			return EINVAL;
+		}
+		if (user_size == 0) {
+			/* mapping length should not be 0 */
+			return EINVAL;
+		}
 	}
 
 	/*
@@ -229,6 +315,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 	user_size += pageoff;   /* low end... */
 	user_size = vm_map_round_page(user_size,
 	    vm_map_page_mask(user_map));                           /* hi end */
+
 
 	if (flags & MAP_JIT) {
 		if ((flags & MAP_FIXED) ||
@@ -248,7 +335,12 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		}
 	}
 	if (flags & MAP_RESILIENT_CODESIGN) {
-		if (prot & (VM_PROT_WRITE | VM_PROT_EXECUTE)) {
+		int reject_prot = ((flags & MAP_PRIVATE) ? VM_PROT_EXECUTE : (VM_PROT_WRITE | VM_PROT_EXECUTE));
+		if (prot & reject_prot) {
+			/*
+			 * Quick sanity check. maxprot is calculated below and
+			 * we will test it again.
+			 */
 			return EPERM;
 		}
 	}
@@ -342,6 +434,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 
 		handle = NULL;
 		file_pos = 0;
+		pageoff = 0;
 		mapanon = 1;
 	} else {
 		struct vnode_attr va;
@@ -360,7 +453,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 			return err;
 		}
 		fpref = 1;
-		switch (FILEGLOB_DTYPE(fp->f_fglob)) {
+		switch (FILEGLOB_DTYPE(fp->fp_glob)) {
 		case DTYPE_PSXSHM:
 			uap->addr = (user_addr_t)user_addr;
 			uap->len = (user_size_t)user_size;
@@ -375,7 +468,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 			error = EINVAL;
 			goto bad;
 		}
-		vp = (struct vnode *)fp->f_fglob->fg_data;
+		vp = (struct vnode *)fp->fp_glob->fg_data;
 		error = vnode_getwithref(vp);
 		if (error != 0) {
 			goto bad;
@@ -417,8 +510,8 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 			 * credentials do we use for determination? What if
 			 * proc does a setuid?
 			 */
-			maxprot = VM_PROT_EXECUTE;      /* ??? */
-			if (fp->f_fglob->fg_flag & FREAD) {
+			maxprot = VM_PROT_EXECUTE;      /* TODO: Remove this and restrict maxprot? */
+			if (fp->fp_glob->fg_flag & FREAD) {
 				maxprot |= VM_PROT_READ;
 			} else if (prot & PROT_READ) {
 				(void)vnode_put(vp);
@@ -434,7 +527,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 			 */
 
 			if ((flags & MAP_SHARED) != 0) {
-				if ((fp->f_fglob->fg_flag & FWRITE) != 0 &&
+				if ((fp->fp_glob->fg_flag & FWRITE) != 0 &&
 				    /*
 				     * Do not allow writable mappings of
 				     * swap files (see vm_swapfile_pager.c).
@@ -470,7 +563,8 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 			handle = (void *)vp;
 #if CONFIG_MACF
 			error = mac_file_check_mmap(vfs_context_ucred(ctx),
-			    fp->f_fglob, prot, flags, file_pos, &maxprot);
+			    fp->fp_glob, prot, flags, file_pos + pageoff,
+			    &maxprot);
 			if (error) {
 				(void)vnode_put(vp);
 				goto bad;
@@ -479,8 +573,13 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 			/*
 			 * Consult the file system to determine if this
 			 * particular file object can be mapped.
+			 *
+			 * N.B. If MAP_PRIVATE (i.e. CoW) has been specified,
+			 * then we don't check for writeability on the file
+			 * object, because it will only ever see reads.
 			 */
-			error = VNOP_MMAP_CHECK(vp, prot, ctx);
+			error = VNOP_MMAP_CHECK(vp, (flags & MAP_PRIVATE) ?
+			    (prot & ~PROT_WRITE) : prot, ctx);
 			if (error) {
 				(void)vnode_put(vp);
 				goto bad;
@@ -551,6 +650,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		vmk_flags.vmkf_map_jit = TRUE;
 	}
 
+
 	if (flags & MAP_RESILIENT_CODESIGN) {
 		alloc_flags |= VM_FLAGS_RESILIENT_CODESIGN;
 	}
@@ -558,7 +658,8 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		alloc_flags |= VM_FLAGS_RESILIENT_MEDIA;
 	}
 
-#ifndef CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
+	/* macOS-specific MAP_32BIT flag handling */
 	if (flags & MAP_32BIT) {
 		vmk_flags.vmkf_32bit_map_va = TRUE;
 	}
@@ -590,6 +691,7 @@ mmap(proc_t p, struct mmap_args *uap, user_addr_t *retval)
 		}
 #endif  /* radar 3777787 */
 map_anon_retry:
+
 		result = vm_map_enter_mem_object(user_map,
 		    &user_addr, user_size,
 		    0, alloc_flags, vmk_flags,
@@ -666,7 +768,17 @@ map_anon_retry:
 
 map_file_retry:
 		if (flags & MAP_RESILIENT_CODESIGN) {
-			if (prot & (VM_PROT_WRITE | VM_PROT_EXECUTE)) {
+			int reject_prot = ((flags & MAP_PRIVATE) ? VM_PROT_EXECUTE : (VM_PROT_WRITE | VM_PROT_EXECUTE));
+			if (prot & reject_prot) {
+				/*
+				 * Would like to use (prot | maxprot) here
+				 * but the assignment of VM_PROT_EXECUTE
+				 * to maxprot above would always fail the test.
+				 *
+				 * Skipping the check is ok, however, because we
+				 * restrict maxprot to prot just below in this
+				 * block.
+				 */
 				assert(!mapanon);
 				vnode_put(vp);
 				error = EPERM;
@@ -1109,17 +1221,32 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 	vm_map_t map = VM_MAP_NULL;
 	user_addr_t vec = 0;
 	int error = 0;
-	int lastvecindex = 0;
+	int64_t lastvecindex = 0;
 	int mincoreinfo = 0;
 	int pqueryinfo = 0;
-	unsigned int pqueryinfo_vec_size = 0;
+	uint64_t pqueryinfo_vec_size = 0;
 	vm_page_info_basic_t info = NULL;
 	mach_msg_type_number_t count = 0;
 	char *kernel_vec = NULL;
 	uint64_t req_vec_size_pages = 0, cur_vec_size_pages = 0, vecindex = 0;
 	kern_return_t kr = KERN_SUCCESS;
+	int effective_page_shift, effective_page_size;
 
 	map = current_map();
+
+	/*
+	 * On systems with 4k kernel space and 16k user space, we will
+	 * use the kernel page size to report back the residency information.
+	 * This is for backwards compatibility since we already have
+	 * processes that depend on this behavior.
+	 */
+	if (vm_map_page_shift(map) < PAGE_SHIFT) {
+		effective_page_shift = vm_map_page_shift(map);
+		effective_page_size = vm_map_page_size(map);
+	} else {
+		effective_page_shift = PAGE_SHIFT;
+		effective_page_size = PAGE_SIZE;
+	}
 
 	/*
 	 * Make sure that the addresses presented are valid for user
@@ -1143,8 +1270,8 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 	 * range in chunks of 'cur_vec_size'.
 	 */
 
-	req_vec_size_pages = (end - addr) >> PAGE_SHIFT;
-	cur_vec_size_pages = MIN(req_vec_size_pages, (MAX_PAGE_RANGE_QUERY >> PAGE_SHIFT));
+	req_vec_size_pages = (end - addr) >> effective_page_shift;
+	cur_vec_size_pages = MIN(req_vec_size_pages, (MAX_PAGE_RANGE_QUERY >> effective_page_shift));
 
 	kernel_vec = (void*) _MALLOC(cur_vec_size_pages * sizeof(char), M_TEMP, M_WAITOK | M_ZERO);
 
@@ -1166,12 +1293,13 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 	}
 
 	while (addr < end) {
-		cur_end = addr + (cur_vec_size_pages * PAGE_SIZE_64);
+		cur_end = addr + (cur_vec_size_pages * effective_page_size);
 
 		count =  VM_PAGE_INFO_BASIC_COUNT;
 		kr = vm_map_page_range_info_internal(map,
 		    addr,
 		    cur_end,
+		    effective_page_shift,
 		    VM_PAGE_INFO_BASIC,
 		    (vm_page_info_t) info,
 		    &count);
@@ -1184,7 +1312,8 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 		 * up the pages elsewhere.
 		 */
 		lastvecindex = -1;
-		for (; addr < cur_end; addr += PAGE_SIZE) {
+
+		for (; addr < cur_end; addr += effective_page_size) {
 			pqueryinfo = info[lastvecindex + 1].disposition;
 
 			mincoreinfo = 0;
@@ -1210,7 +1339,7 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 			/*
 			 * calculate index into user supplied byte vector
 			 */
-			vecindex = (addr - first_addr) >> PAGE_SHIFT;
+			vecindex = (addr - first_addr) >> effective_page_shift;
 			kernel_vec[vecindex] = (char)mincoreinfo;
 			lastvecindex = vecindex;
 		}
@@ -1231,8 +1360,8 @@ mincore(__unused proc_t p, struct mincore_args *uap, __unused int32_t *retval)
 		 * - starting address
 		 */
 		vec += cur_vec_size_pages * sizeof(char);
-		req_vec_size_pages = (end - addr) >> PAGE_SHIFT;
-		cur_vec_size_pages = MIN(req_vec_size_pages, (MAX_PAGE_RANGE_QUERY >> PAGE_SHIFT));
+		req_vec_size_pages = (end - addr) >> effective_page_shift;
+		cur_vec_size_pages = MIN(req_vec_size_pages, (MAX_PAGE_RANGE_QUERY >> effective_page_shift));
 
 		first_addr = addr;
 	}
@@ -1363,10 +1492,11 @@ mremap_encrypted(__unused struct proc *p, struct mremap_encrypted_args *uap, __u
 	}
 
 	switch (cryptid) {
-	case 0:
+	case CRYPTID_NO_ENCRYPTION:
 		/* not encrypted, just an empty load command */
 		return 0;
-	case 1:
+	case CRYPTID_APP_ENCRYPTION:
+	case CRYPTID_MODEL_ENCRYPTION:
 		cryptname = "com.apple.unfree";
 		break;
 	case 0x10:
@@ -1390,16 +1520,12 @@ mremap_encrypted(__unused struct proc *p, struct mremap_encrypted_args *uap, __u
 
 	vp = (vnode_t)vnodeaddr;
 	if ((vnode_getwithvid(vp, vid)) == 0) {
-		MALLOC_ZONE(vpath, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
-		if (vpath == NULL) {
-			vnode_put(vp);
-			return ENOMEM;
-		}
+		vpath = zalloc(ZV_NAMEI);
 
 		len = MAXPATHLEN;
 		ret = vn_getpath(vp, vpath, &len);
 		if (ret) {
-			FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
+			zfree(ZV_NAMEI, vpath);
 			vnode_put(vp);
 			return ret;
 		}
@@ -1431,7 +1557,7 @@ mremap_encrypted(__unused struct proc *p, struct mremap_encrypted_args *uap, __u
 		    __FUNCTION__, vpath, result);
 	}
 #endif /* VM_MAP_DEBUG_APPLE_PROTECT */
-	FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
+	zfree(ZV_NAMEI, vpath);
 
 	if (result) {
 		printf("%s: unable to create decrypter %s, kr=%d\n",
@@ -1451,7 +1577,8 @@ mremap_encrypted(__unused struct proc *p, struct mremap_encrypted_args *uap, __u
 	    user_addr,
 	    user_addr + user_size,
 	    crypto_backing_offset,
-	    &crypt_info);
+	    &crypt_info,
+	    cryptid);
 	if (result) {
 		printf("%s: mapping failed with %d\n", __FUNCTION__, result);
 	}

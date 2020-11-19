@@ -4,13 +4,10 @@
 OPTIONS/audit				optional audit
 OPTIONS/config_macf			optional config_macf
 OPTIONS/config_macf_socket_subset	optional config_macf_socket_subset
-OPTIONS/config_macf_socket		optional config_macf_socket
-OPTIONS/config_macf_net			optional config_macf_net
 OPTIONS/config_fse			optional config_fse
 
 # security
 
-security/mac_alloc.c					optional config_macf
 security/mac_audit.c					optional config_macf
 security/mac_base.c					standard
 security/mac_data.c					optional config_macf
@@ -26,11 +23,9 @@ security/mac_sysv_msg.c					optional config_macf
 security/mac_posix_sem.c				optional config_macf
 security/mac_posix_shm.c				optional config_macf
 security/mac_socket.c					optional config_macf
-security/mac_net.c					optional config_macf_net
 security/mac_pipe.c					optional config_macf
 security/mac_iokit.c					optional config_macf
 security/mac_file.c					optional config_macf
-security/mac_inet.c					optional config_macf_net
 security/mac_priv.c					optional config_macf
 security/mac_pty.c					optional config_macf
 security/mac_kext.c					optional config_macf

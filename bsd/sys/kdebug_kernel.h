@@ -299,15 +299,9 @@ extern unsigned int kdebug_enable;
 	        }                                                                      \
 	} while (0)
 
-#define KERNEL_DEBUG_EARLY(x, a, b, c, d)                                 \
-	do {                                                                  \
-	        kernel_debug_early((uint32_t)(x), (uintptr_t)(a), (uintptr_t)(b), \
-	                (uintptr_t)(c), (uintptr_t)(d));                              \
-	} while (0)
 #else /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) */
 #define KERNEL_DEBUG_CONSTANT(x, a, b, c, d, e) do {} while (0)
 #define KERNEL_DEBUG_CONSTANT1(x, a, b, c, d, e) do {} while (0)
-#define KERNEL_DEBUG_EARLY(x, a, b, c, d) do {} while (0)
 #endif /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_STANDARD) */
 
 /*
@@ -329,6 +323,7 @@ extern unsigned int kdebug_enable;
 	                        (uintptr_t)(d), 0);                                           \
 	        }                                                                     \
 	} while (0)
+
 #define KERNEL_DEBUG_CONSTANT_IST1(x, a, b, c, d, e)                     \
 	do {                                                                       \
 	        if (KDBG_IMPROBABLE(kdebug_enable)) {                         \
@@ -336,9 +331,17 @@ extern unsigned int kdebug_enable;
 	                        (uintptr_t)(d), (uintptr_t)(e));                               \
 	        }                                                                      \
 	} while (0)
+
+#define KERNEL_DEBUG_EARLY(x, a, b, c, d)                                 \
+	do {                                                                  \
+	        kernel_debug_early((uint32_t)(x), (uintptr_t)(a), (uintptr_t)(b), \
+	                (uintptr_t)(c), (uintptr_t)(d));                              \
+	} while (0)
+
 #else /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST) */
 #define KERNEL_DEBUG_CONSTANT_IST(type, x, a, b, c, d, e) do {} while (0)
 #define KERNEL_DEBUG_CONSTANT_IST1(x, a, b, c, d, e) do {} while (0)
+#define KERNEL_DEBUG_EARLY(x, a, b, c, d) do {} while (0)
 #endif /* (KDEBUG_LEVEL >= KDEBUG_LEVEL_IST) */
 
 #if NO_KDEBUG
@@ -400,6 +403,7 @@ void kernel_debug_filtered(uint32_t debugid, uintptr_t arg1, uintptr_t arg2,
 #pragma mark - xnu API
 
 #ifdef XNU_KERNEL_PRIVATE
+
 /* Used in early boot to log events. */
 void kernel_debug_early(uint32_t  debugid, uintptr_t arg1, uintptr_t arg2,
     uintptr_t arg3, uintptr_t arg4);
@@ -411,9 +415,17 @@ void kernel_debug_string_simple(uint32_t eventid, const char *str);
 extern void kdebug_reset(void);
 
 void kdbg_dump_trace_to_file(const char *);
-void kdebug_init(unsigned int n_events, char *filterdesc, bool wrapping);
+
+enum kdebug_opts {
+	KDOPT_WRAPPING = 0x1,
+	KDOPT_ATBOOT = 0x2,
+};
+
+void kdebug_init(unsigned int n_events, char *filterdesc,
+    enum kdebug_opts opts);
 void kdebug_trace_start(unsigned int n_events, const char *filterdesc,
-    bool wrapping, bool at_wake);
+    enum kdebug_opts opts);
+uint64_t kdebug_wake(void);
 void kdebug_free_early_buf(void);
 void release_storage_unit(int cpu, uint32_t storage_unit);
 bool allocate_storage_unit(int cpu);
@@ -425,7 +437,7 @@ void kdbg_trace_string(struct proc *proc, long *arg1, long *arg2, long *arg3,
 
 #define KDBG_VFS_LOOKUP_FLAG_LOOKUP 0x01
 #define KDBG_VFS_LOOKUP_FLAG_NOPROCFILT 0x02
-void kdebug_vfs_lookup(long *dbg_parms, int dbg_namelen, void *dp,
+void kdebug_vfs_lookup(unsigned long *path_words, int path_len, void *vnp,
     uint32_t flags);
 
 #endif /* XNU_KERNEL_PRIVATE */
@@ -433,7 +445,7 @@ void kdebug_vfs_lookup(long *dbg_parms, int dbg_namelen, void *dp,
 #ifdef KERNEL_PRIVATE
 
 #define NUMPARMS 23
-void kdebug_lookup_gen_events(long *dbg_parms, int dbg_namelen, void *dp,
+void kdebug_lookup_gen_events(long *path_words, int path_len, void *vnp,
     bool lookup);
 
 #pragma mark - EnergyTracing

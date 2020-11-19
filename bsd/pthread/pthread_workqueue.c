@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -107,14 +107,15 @@ struct workq_usec_var {
 	                        CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED, &var, 0, \
 	                        workq_sysctl_handle_usecs, "I", "")
 
-static lck_grp_t      *workq_lck_grp;
-static lck_attr_t     *workq_lck_attr;
-static lck_grp_attr_t *workq_lck_grp_attr;
+static LCK_GRP_DECLARE(workq_lck_grp, "workq");
 os_refgrp_decl(static, workq_refgrp, "workq", NULL);
 
+static ZONE_DECLARE(workq_zone_workqueue, "workq.wq",
+    sizeof(struct workqueue), ZC_NONE);
+static ZONE_DECLARE(workq_zone_threadreq, "workq.threadreq",
+    sizeof(struct workq_threadreq_s), ZC_CACHING);
+
 static struct mpsc_daemon_queue workq_deallocate_queue;
-static zone_t workq_zone_workqueue;
-static zone_t workq_zone_threadreq;
 
 WORKQ_SYSCTL_USECS(wq_stalled_window, WQ_STALLED_WINDOW_USECS);
 WORKQ_SYSCTL_USECS(wq_reduce_pool_window, WQ_REDUCE_POOL_WINDOW_USECS);
@@ -254,7 +255,7 @@ _wq_bucket(thread_qos_t qos)
 }
 
 #define WQ_THACTIVE_BEST_CONSTRAINED_REQ_QOS(tha) \
-	        ((tha) >> WQ_THACTIVE_QOS_SHIFT)
+	        ((thread_qos_t)((tha) >> WQ_THACTIVE_QOS_SHIFT))
 
 static inline thread_qos_t
 _wq_thactive_best_constrained_req_qos(struct workqueue *wq)
@@ -394,7 +395,7 @@ workq_lock_spin_is_acquired_kdp(struct workqueue *wq)
 static inline void
 workq_lock_spin(struct workqueue *wq)
 {
-	lck_spin_lock_grp(&wq->wq_lock, workq_lck_grp);
+	lck_spin_lock_grp(&wq->wq_lock, &workq_lck_grp);
 }
 
 static inline void
@@ -406,7 +407,7 @@ workq_lock_held(__assert_only struct workqueue *wq)
 static inline bool
 workq_lock_try(struct workqueue *wq)
 {
-	return lck_spin_try_lock_grp(&wq->wq_lock, workq_lck_grp);
+	return lck_spin_try_lock_grp(&wq->wq_lock, &workq_lck_grp);
 }
 
 static inline void
@@ -866,7 +867,7 @@ workq_add_new_idle_thread(proc_t p, struct workqueue *wq)
 
 	wq->wq_creations++;
 	wq->wq_thidlecount++;
-	uth->uu_workq_stackaddr = th_stackaddr;
+	uth->uu_workq_stackaddr = (user_addr_t)th_stackaddr;
 	TAILQ_INSERT_TAIL(&wq->wq_thnewlist, uth, uu_workq_entry);
 
 	WQ_TRACE_WQ(TRACE_wq_thread_create | DBG_FUNC_NONE, wq, 0, 0, 0, 0);
@@ -1073,7 +1074,7 @@ workq_priority_for_req(workq_threadreq_t req)
 	return thread_workq_pri_for_qos(qos);
 }
 
-static inline struct priority_queue *
+static inline struct priority_queue_sched_max *
 workq_priority_queue_for_req(struct workqueue *wq, workq_threadreq_t req)
 {
 	if (req->tr_flags & WORKQ_TR_FLAG_WL_OUTSIDE_QOS) {
@@ -1104,9 +1105,12 @@ workq_threadreq_enqueue(struct workqueue *wq, workq_threadreq_t req)
 		wq->wq_event_manager_threadreq = req;
 		return true;
 	}
-	if (priority_queue_insert(workq_priority_queue_for_req(wq, req),
-	    &req->tr_entry, workq_priority_for_req(req),
-	    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
+
+	struct priority_queue_sched_max *q = workq_priority_queue_for_req(wq, req);
+	priority_queue_entry_set_sched_pri(q, &req->tr_entry,
+	    workq_priority_for_req(req), false);
+
+	if (priority_queue_insert(q, &req->tr_entry)) {
 		if ((req->tr_flags & WORKQ_TR_FLAG_OVERCOMMIT) == 0) {
 			_wq_thactive_refresh_best_constrained_req_qos(wq);
 		}
@@ -1132,7 +1136,7 @@ workq_threadreq_dequeue(struct workqueue *wq, workq_threadreq_t req)
 			return true;
 		}
 		if (priority_queue_remove(workq_priority_queue_for_req(wq, req),
-		    &req->tr_entry, PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
+		    &req->tr_entry)) {
 			if ((req->tr_flags & WORKQ_TR_FLAG_OVERCOMMIT) == 0) {
 				_wq_thactive_refresh_best_constrained_req_qos(wq);
 			}
@@ -1195,12 +1199,12 @@ workq_schedule_delayed_thread_creation(struct workqueue *wq, int flags)
 	} else if (now - wq->wq_thread_call_last_run <= wq->wq_timer_interval) {
 		wq->wq_timer_interval *= 2;
 		if (wq->wq_timer_interval > wq_max_timer_interval.abstime) {
-			wq->wq_timer_interval = wq_max_timer_interval.abstime;
+			wq->wq_timer_interval = (uint32_t)wq_max_timer_interval.abstime;
 		}
 	} else if (now - wq->wq_thread_call_last_run > 2 * wq->wq_timer_interval) {
 		wq->wq_timer_interval /= 2;
 		if (wq->wq_timer_interval < wq_stalled_window.abstime) {
-			wq->wq_timer_interval = wq_stalled_window.abstime;
+			wq->wq_timer_interval = (uint32_t)wq_stalled_window.abstime;
 		}
 	}
 
@@ -1442,7 +1446,7 @@ workq_deallocate_queue_invoke(mpsc_queue_chain_t e,
 	turnstile_cleanup();
 	turnstile_deallocate(ts);
 
-	lck_spin_destroy(&wq->wq_lock, workq_lck_grp);
+	lck_spin_destroy(&wq->wq_lock, &workq_lck_grp);
 	zfree(workq_zone_workqueue, wq);
 }
 
@@ -1479,7 +1483,7 @@ workq_open(struct proc *p, __unused struct workq_open_args *uap,
 	}
 
 	if (wq_init_constrained_limit) {
-		uint32_t limit, num_cpus = ml_get_max_cpus();
+		uint32_t limit, num_cpus = ml_wait_max_cpus();
 
 		/*
 		 * set up the limit for the constrained pool
@@ -1524,7 +1528,7 @@ workq_open(struct proc *p, __unused struct workq_open_args *uap,
 		thread_qos_t mgr_priority_hint = task_get_default_manager_qos(current_task());
 		pthread_priority_t pp = _pthread_priority_make_from_thread_qos(mgr_priority_hint, 0, 0);
 		wq->wq_event_manager_priority = (uint32_t)pp;
-		wq->wq_timer_interval = wq_stalled_window.abstime;
+		wq->wq_timer_interval = (uint32_t)wq_stalled_window.abstime;
 		wq->wq_proc = p;
 		turnstile_prepare((uintptr_t)wq, &wq->wq_turnstile, turnstile_alloc(),
 		    TURNSTILE_WORKQS);
@@ -1532,12 +1536,9 @@ workq_open(struct proc *p, __unused struct workq_open_args *uap,
 		TAILQ_INIT(&wq->wq_thrunlist);
 		TAILQ_INIT(&wq->wq_thnewlist);
 		TAILQ_INIT(&wq->wq_thidlelist);
-		priority_queue_init(&wq->wq_overcommit_queue,
-		    PRIORITY_QUEUE_BUILTIN_MAX_HEAP);
-		priority_queue_init(&wq->wq_constrained_queue,
-		    PRIORITY_QUEUE_BUILTIN_MAX_HEAP);
-		priority_queue_init(&wq->wq_special_queue,
-		    PRIORITY_QUEUE_BUILTIN_MAX_HEAP);
+		priority_queue_init(&wq->wq_overcommit_queue);
+		priority_queue_init(&wq->wq_constrained_queue);
+		priority_queue_init(&wq->wq_special_queue);
 
 		wq->wq_delayed_call = thread_call_allocate_with_options(
 			workq_add_new_threads_call, p, THREAD_CALL_PRIORITY_KERNEL,
@@ -1549,7 +1550,7 @@ workq_open(struct proc *p, __unused struct workq_open_args *uap,
 			workq_kill_old_threads_call, wq,
 			THREAD_CALL_PRIORITY_USER, THREAD_CALL_OPTIONS_ONCE);
 
-		lck_spin_init(&wq->wq_lock, workq_lck_grp, workq_lck_attr);
+		lck_spin_init(&wq->wq_lock, &workq_lck_grp, LCK_ATTR_NULL);
 
 		WQ_TRACE_WQ(TRACE_wq_create | DBG_FUNC_NONE, wq,
 		    VM_KERNEL_ADDRHIDE(wq), 0, 0, 0);
@@ -1618,15 +1619,15 @@ workq_mark_exiting(struct proc *p)
 	 * It is hence safe to do the tear down without holding any lock.
 	 */
 	priority_queue_destroy(&wq->wq_overcommit_queue,
-	    struct workq_threadreq_s, tr_entry, ^(void *e){
+	    struct workq_threadreq_s, tr_entry, ^(workq_threadreq_t e){
 		workq_threadreq_destroy(p, e);
 	});
 	priority_queue_destroy(&wq->wq_constrained_queue,
-	    struct workq_threadreq_s, tr_entry, ^(void *e){
+	    struct workq_threadreq_s, tr_entry, ^(workq_threadreq_t e){
 		workq_threadreq_destroy(p, e);
 	});
 	priority_queue_destroy(&wq->wq_special_queue,
-	    struct workq_threadreq_s, tr_entry, ^(void *e){
+	    struct workq_threadreq_s, tr_entry, ^(workq_threadreq_t e){
 		workq_threadreq_destroy(p, e);
 	});
 
@@ -1799,7 +1800,7 @@ qos:
 			}
 
 			old_pri = new_pri = uth->uu_workq_pri;
-			new_pri.qos_req = new_policy.qos_tier;
+			new_pri.qos_req = (thread_qos_t)new_policy.qos_tier;
 			workq_thread_update_bucket(p, wq, uth, old_pri, new_pri, force_run);
 			workq_unlock(wq);
 		}
@@ -2221,7 +2222,7 @@ workq_reqthreads(struct proc *p, uint32_t reqcount, pthread_priority_t pp)
 		goto exiting;
 	}
 
-	req->tr_count = reqcount;
+	req->tr_count = (uint16_t)reqcount;
 	if (workq_threadreq_enqueue(wq, req)) {
 		/* This can drop the workqueue lock, and take it again */
 		workq_schedule_creator(p, wq, WORKQ_THREADREQ_CAN_CREATE_THREADS);
@@ -2352,7 +2353,7 @@ workq_kern_threadreq_modify(struct proc *p, workq_threadreq_t req,
 	WQ_TRACE_WQ(TRACE_wq_thread_request_modify | DBG_FUNC_NONE, wq,
 	    workq_trace_req_id(req), qos, 0, 0);
 
-	struct priority_queue *pq = workq_priority_queue_for_req(wq, req);
+	struct priority_queue_sched_max *pq = workq_priority_queue_for_req(wq, req);
 	workq_threadreq_t req_max;
 
 	/*
@@ -2361,8 +2362,7 @@ workq_kern_threadreq_modify(struct proc *p, workq_threadreq_t req,
 	 * If we dequeue the root item of the constrained priority queue,
 	 * maintain the best constrained request qos invariant.
 	 */
-	if (priority_queue_remove(pq, &req->tr_entry,
-	    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE)) {
+	if (priority_queue_remove(pq, &req->tr_entry)) {
 		if ((req->tr_flags & WORKQ_TR_FLAG_OVERCOMMIT) == 0) {
 			_wq_thactive_refresh_best_constrained_req_qos(wq);
 		}
@@ -2382,8 +2382,9 @@ workq_kern_threadreq_modify(struct proc *p, workq_threadreq_t req,
 
 	req_max = priority_queue_max(pq, struct workq_threadreq_s, tr_entry);
 	if (req_max && req_max->tr_qos >= qos) {
-		priority_queue_insert(pq, &req->tr_entry, workq_priority_for_req(req),
-		    PRIORITY_QUEUE_SCHED_PRI_MAX_HEAP_COMPARE);
+		priority_queue_entry_set_sched_pri(pq, &req->tr_entry,
+		    workq_priority_for_req(req), false);
+		priority_queue_insert(pq, &req->tr_entry);
 		workq_unlock(wq);
 		return;
 	}
@@ -2767,6 +2768,8 @@ workq_park_and_unlock(proc_t p, struct workqueue *wq, struct uthread *uth,
 		setup_flags &= ~WQ_SETUP_CLEAR_VOUCHER;
 	}
 
+	WQ_TRACE_WQ(TRACE_wq_thread_logical_run | DBG_FUNC_END, wq, 0, 0, 0, 0);
+
 	if (uth->uu_workq_flags & UT_WORKQ_RUNNING) {
 		/*
 		 * While we'd dropped the lock to unset our voucher, someone came
@@ -2774,7 +2777,6 @@ workq_park_and_unlock(proc_t p, struct workqueue *wq, struct uthread *uth,
 		 * event their thread_wakeup() was ineffectual.  To correct for that,
 		 * we just run the continuation ourselves.
 		 */
-		WQ_TRACE_WQ(TRACE_wq_thread_logical_run | DBG_FUNC_END, wq, 0, 0, 0, 0);
 		workq_unpark_select_threadreq_or_park_and_unlock(p, wq, uth, setup_flags);
 		__builtin_unreachable();
 	}
@@ -2788,7 +2790,6 @@ workq_park_and_unlock(proc_t p, struct workqueue *wq, struct uthread *uth,
 	thread_set_pending_block_hint(uth->uu_thread, kThreadWaitParkedWorkQueue);
 	assert_wait(workq_parked_wait_event(uth), THREAD_INTERRUPTIBLE);
 	workq_unlock(wq);
-	WQ_TRACE_WQ(TRACE_wq_thread_logical_run | DBG_FUNC_END, wq, 0, 0, 0, 0);
 	thread_block(workq_unpark_continue);
 	__builtin_unreachable();
 }
@@ -2895,14 +2896,9 @@ workq_threadreq_admissible(struct workqueue *wq, struct uthread *uth,
 static workq_threadreq_t
 workq_threadreq_select_for_creator(struct workqueue *wq)
 {
-	workq_threadreq_t req_qos, req_pri, req_tmp;
+	workq_threadreq_t req_qos, req_pri, req_tmp, req_mgr;
 	thread_qos_t qos = THREAD_QOS_UNSPECIFIED;
 	uint8_t pri = 0;
-
-	req_tmp = wq->wq_event_manager_threadreq;
-	if (req_tmp && workq_may_start_event_mgr_thread(wq, NULL)) {
-		return req_tmp;
-	}
 
 	/*
 	 * Compute the best priority request, and ignore the turnstile for now
@@ -2911,7 +2907,27 @@ workq_threadreq_select_for_creator(struct workqueue *wq)
 	req_pri = priority_queue_max(&wq->wq_special_queue,
 	    struct workq_threadreq_s, tr_entry);
 	if (req_pri) {
-		pri = priority_queue_entry_key(&wq->wq_special_queue, &req_pri->tr_entry);
+		pri = (uint8_t)priority_queue_entry_sched_pri(&wq->wq_special_queue,
+		    &req_pri->tr_entry);
+	}
+
+	/*
+	 * Handle the manager thread request. The special queue might yield
+	 * a higher priority, but the manager always beats the QoS world.
+	 */
+
+	req_mgr = wq->wq_event_manager_threadreq;
+	if (req_mgr && workq_may_start_event_mgr_thread(wq, NULL)) {
+		uint32_t mgr_pri = wq->wq_event_manager_priority;
+
+		if (mgr_pri & _PTHREAD_PRIORITY_SCHED_PRI_FLAG) {
+			mgr_pri &= _PTHREAD_PRIORITY_SCHED_PRI_MASK;
+		} else {
+			mgr_pri = thread_workq_pri_for_qos(
+				_pthread_priority_thread_qos(mgr_pri));
+		}
+
+		return mgr_pri >= pri ? req_mgr : req_pri;
 	}
 
 	/*
@@ -2971,7 +2987,7 @@ workq_threadreq_select_for_creator(struct workqueue *wq)
 static workq_threadreq_t
 workq_threadreq_select(struct workqueue *wq, struct uthread *uth)
 {
-	workq_threadreq_t req_qos, req_pri, req_tmp;
+	workq_threadreq_t req_qos, req_pri, req_tmp, req_mgr;
 	uintptr_t proprietor;
 	thread_qos_t qos = THREAD_QOS_UNSPECIFIED;
 	uint8_t pri = 0;
@@ -2980,16 +2996,11 @@ workq_threadreq_select(struct workqueue *wq, struct uthread *uth)
 		uth = NULL;
 	}
 
-	req_tmp = wq->wq_event_manager_threadreq;
-	if (req_tmp && workq_may_start_event_mgr_thread(wq, uth)) {
-		return req_tmp;
-	}
-
 	/*
 	 * Compute the best priority request (special or turnstile)
 	 */
 
-	pri = turnstile_workq_proprietor_of_max_turnstile(wq->wq_turnstile,
+	pri = (uint8_t)turnstile_workq_proprietor_of_max_turnstile(wq->wq_turnstile,
 	    &proprietor);
 	if (pri) {
 		struct kqworkloop *kqwl = (struct kqworkloop *)proprietor;
@@ -3004,10 +3015,30 @@ workq_threadreq_select(struct workqueue *wq, struct uthread *uth)
 
 	req_tmp = priority_queue_max(&wq->wq_special_queue,
 	    struct workq_threadreq_s, tr_entry);
-	if (req_tmp && pri < priority_queue_entry_key(&wq->wq_special_queue,
+	if (req_tmp && pri < priority_queue_entry_sched_pri(&wq->wq_special_queue,
 	    &req_tmp->tr_entry)) {
 		req_pri = req_tmp;
-		pri = priority_queue_entry_key(&wq->wq_special_queue, &req_tmp->tr_entry);
+		pri = (uint8_t)priority_queue_entry_sched_pri(&wq->wq_special_queue,
+		    &req_tmp->tr_entry);
+	}
+
+	/*
+	 * Handle the manager thread request. The special queue might yield
+	 * a higher priority, but the manager always beats the QoS world.
+	 */
+
+	req_mgr = wq->wq_event_manager_threadreq;
+	if (req_mgr && workq_may_start_event_mgr_thread(wq, uth)) {
+		uint32_t mgr_pri = wq->wq_event_manager_priority;
+
+		if (mgr_pri & _PTHREAD_PRIORITY_SCHED_PRI_FLAG) {
+			mgr_pri &= _PTHREAD_PRIORITY_SCHED_PRI_MASK;
+		} else {
+			mgr_pri = thread_workq_pri_for_qos(
+				_pthread_priority_thread_qos(mgr_pri));
+		}
+
+		return mgr_pri >= pri ? req_mgr : req_pri;
 	}
 
 	/*
@@ -3640,15 +3671,6 @@ workqueue_get_pwq_state_kdp(void * v)
 void
 workq_init(void)
 {
-	workq_lck_grp_attr = lck_grp_attr_alloc_init();
-	workq_lck_attr = lck_attr_alloc_init();
-	workq_lck_grp = lck_grp_alloc_init("workq", workq_lck_grp_attr);
-
-	workq_zone_workqueue = zinit(sizeof(struct workqueue),
-	    1024 * sizeof(struct workqueue), 8192, "workq.wq");
-	workq_zone_threadreq = zinit(sizeof(struct workq_threadreq_s),
-	    1024 * sizeof(struct workq_threadreq_s), 8192, "workq.threadreq");
-
 	clock_interval_to_absolutetime_interval(wq_stalled_window.usecs,
 	    NSEC_PER_USEC, &wq_stalled_window.abstime);
 	clock_interval_to_absolutetime_interval(wq_reduce_pool_window.usecs,

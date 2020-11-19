@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -61,10 +61,8 @@ struct if_llreach_info {
 #include <kern/locks.h>
 #include <net/ethernet.h>
 #include <netinet/in.h>
-#if INET6
 #include <netinet6/in6_var.h>
 #include <netinet6/nd6.h>
-#endif /* INET6 */
 
 /*
  * Per-interface link-layer reachability.  (Currently only for ARP/NDP/Ethernet.)
@@ -127,11 +125,10 @@ RB_PROTOTYPE_SC_PREV(__private_extern__, ll_reach_tree, if_llreach,
 
 struct ifnet_llreach_info;      /* forward declaration */
 
-extern void ifnet_llreach_init(void);
 extern void ifnet_llreach_ifattach(struct ifnet *, boolean_t);
 extern void ifnet_llreach_ifdetach(struct ifnet *);
 extern struct if_llreach *ifnet_llreach_alloc(struct ifnet *, u_int16_t, void *,
-    unsigned int, u_int64_t);
+    unsigned int, u_int32_t);
 extern void ifnet_llreach_free(struct if_llreach *);
 extern int ifnet_llreach_reachable(struct if_llreach *);
 extern int ifnet_llreach_reachable_delta(struct if_llreach *, u_int64_t);
@@ -139,7 +136,7 @@ extern void ifnet_llreach_set_reachable(struct ifnet *, u_int16_t, void *,
     unsigned int);
 extern u_int64_t ifnet_llreach_up2calexp(struct if_llreach *, u_int64_t);
 extern u_int64_t ifnet_llreach_up2upexp(struct if_llreach *, u_int64_t);
-extern int ifnet_llreach_get_defrouter(struct ifnet *, int,
+extern int ifnet_llreach_get_defrouter(struct ifnet *, sa_family_t,
     struct ifnet_llreach_info *);
 extern void ifnet_lr2ri(struct if_llreach *, struct rt_reach_info *);
 extern void ifnet_lr2iflri(struct if_llreach *, struct ifnet_llreach_info *);

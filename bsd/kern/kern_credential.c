@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2011 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -216,7 +216,7 @@ struct kauth_identity {
 	int     ki_valid;
 	uid_t   ki_uid;
 	gid_t   ki_gid;
-	int     ki_supgrpcnt;
+	uint32_t         ki_supgrpcnt;
 	gid_t   ki_supgrps[NGROUPS];
 	guid_t  ki_guid;
 	ntsid_t ki_ntsid;
@@ -242,7 +242,7 @@ static int kauth_identity_cachemax = KAUTH_IDENTITY_CACHEMAX_DEFAULT;
 static int kauth_identity_count;
 
 static struct kauth_identity *kauth_identity_alloc(uid_t uid, gid_t gid, guid_t *guidp, time_t guid_expiry,
-    ntsid_t *ntsidp, time_t ntsid_expiry, int supgrpcnt, gid_t *supgrps, time_t groups_expiry,
+    ntsid_t *ntsidp, time_t ntsid_expiry, size_t supgrpcnt, gid_t *supgrps, time_t groups_expiry,
     const char *name, int nametype);
 static void     kauth_identity_register_and_free(struct kauth_identity *kip);
 static void     kauth_identity_updatecache(struct kauth_identity_extlookup *elp, struct kauth_identity *kip, uint64_t extend_data);
@@ -282,6 +282,7 @@ static void     kauth_groups_trimcache(int newsize);
 
 #define KAUTH_CRED_TABLE_SIZE 128
 
+ZONE_DECLARE(ucred_zone, "cred", sizeof(struct ucred), ZC_ZFREE_CLEARMEM);
 LIST_HEAD(kauth_cred_entry_head, ucred);
 static struct kauth_cred_entry_head
     kauth_cred_table_anchor[KAUTH_CRED_TABLE_SIZE];
@@ -379,6 +380,28 @@ kauth_resolver_init(void)
 	kauth_resolver_mtx = lck_mtx_alloc_init(kauth_lck_grp, 0 /*LCK_ATTR_NULL*/);
 }
 
+/*
+ * kauth_resolver_identity_reset
+ *
+ * Description: Reset the identity of the external resolver in certain
+ *              controlled circumstances.
+ *
+ * Parameters:  None.
+ *
+ * Returns:     Nothing.
+ */
+void
+kauth_resolver_identity_reset(void)
+{
+	KAUTH_RESOLVER_LOCK();
+	if (kauth_resolver_identity != 0) {
+		printf("kauth external resolver %d failed to de-register.\n",
+		    kauth_resolver_identity);
+		kauth_resolver_identity = 0;
+		kauth_resolver_registered = 0;
+	}
+	KAUTH_RESOLVER_UNLOCK();
+}
 
 /*
  * kauth_resolver_submit
@@ -624,7 +647,7 @@ identitysvc(__unused struct proc *p, struct identitysvc_args *uap, __unused int3
 			 * external resolution timeout
 			 */
 			if (message > 30 && message < 10000) {
-				kauth_resolver_timeout = message;
+				kauth_resolver_timeout = (int)message;
 				KAUTH_DEBUG("RESOLVER - new resolver changes timeout to %d seconds\n", (int)message);
 			}
 			kauth_resolver_identity = new_id;
@@ -974,7 +997,7 @@ kauth_resolver_complete(user_addr_t message)
 			once = 1;
 		}
 	}
-	/* FALLTHROUGH */
+		OS_FALLTHROUGH;
 
 	case KAUTH_EXTLOOKUP_SUCCESS:
 		break;
@@ -1169,7 +1192,7 @@ kauth_identity_init(void)
  */
 static struct kauth_identity *
 kauth_identity_alloc(uid_t uid, gid_t gid, guid_t *guidp, time_t guid_expiry,
-    ntsid_t *ntsidp, time_t ntsid_expiry, int supgrpcnt, gid_t *supgrps, time_t groups_expiry,
+    ntsid_t *ntsidp, time_t ntsid_expiry, size_t supgrpcnt, gid_t *supgrps, time_t groups_expiry,
     const char *name, int nametype)
 {
 	struct kauth_identity *kip;
@@ -1192,17 +1215,16 @@ kauth_identity_alloc(uid_t uid, gid_t gid, guid_t *guidp, time_t guid_expiry,
 			/*
 			 * A malicious/faulty resolver could return bad values
 			 */
-			assert(supgrpcnt >= 0);
 			assert(supgrpcnt <= NGROUPS);
 			assert(supgrps != NULL);
 
-			if ((supgrpcnt < 0) || (supgrpcnt > NGROUPS) || (supgrps == NULL)) {
+			if ((supgrpcnt > NGROUPS) || (supgrps == NULL)) {
 				return NULL;
 			}
 			if (kip->ki_valid & KI_VALID_GID) {
 				panic("can't allocate kauth identity with both gid and supplementary groups");
 			}
-			kip->ki_supgrpcnt = supgrpcnt;
+			kip->ki_supgrpcnt = (uint32_t)supgrpcnt;
 			memcpy(kip->ki_supgrps, supgrps, sizeof(supgrps[0]) * supgrpcnt);
 			kip->ki_valid |= KI_VALID_GROUPS;
 		}
@@ -1364,7 +1386,7 @@ kauth_identity_updatecache(struct kauth_identity_extlookup *elp, struct kauth_id
 	 */
 	if (elp->el_flags & (KAUTH_EXTLOOKUP_VALID_PWNAM | KAUTH_EXTLOOKUP_VALID_GRNAM)) {
 		const char *tmp = CAST_DOWN(const char *, extend_data);
-		speculative_name = vfs_addname(tmp, strnlen(tmp, MAXPATHLEN - 1), 0, 0);
+		speculative_name = vfs_addname(tmp, (uint32_t)strnlen(tmp, MAXPATHLEN - 1), 0, 0);
 	}
 
 	/* user identity? */
@@ -2200,7 +2222,7 @@ kauth_cred_cache_lookup(int from, int to, void *src, void *dst)
  * kauth_cred_cache_lookup below.
  */
 struct supgroups {
-	int *count;
+	size_t *count;
 	gid_t *groups;
 };
 
@@ -2222,7 +2244,7 @@ struct supgroups {
  *
  */
 static int
-kauth_cred_uid2groups(uid_t *uid, gid_t *groups, int *gcount)
+kauth_cred_uid2groups(uid_t *uid, gid_t *groups, size_t *gcount)
 {
 	int rv;
 
@@ -2863,11 +2885,11 @@ kauth_cred_cache_lookup(int from, int to, void *src, void *dst)
 			 * expiration.
 			 */
 			if (ki.ki_supgrpcnt > NGROUPS) {
-				panic("kauth data structure corrupted. kauth identity 0x%p with %d groups, greater than max of %d",
+				panic("kauth data structure corrupted. kauth identity 0x%p with %u groups, greater than max of %d",
 				    &ki, ki.ki_supgrpcnt, NGROUPS);
 			}
 
-			el.el_sup_grp_cnt = ki.ki_supgrpcnt;
+			el.el_sup_grp_cnt = (uint32_t)ki.ki_supgrpcnt;
 
 			memcpy(el.el_sup_groups, ki.ki_supgrps, sizeof(el.el_sup_groups[0]) * ki.ki_supgrpcnt);
 			/* Let the resolver know these were the previous valid groups */
@@ -2937,7 +2959,7 @@ found:
 		break;
 	case KI_VALID_GROUPS: {
 		struct supgroups *gp = (struct supgroups *)dst;
-		u_int32_t limit = ki.ki_supgrpcnt;
+		size_t limit = ki.ki_supgrpcnt;
 
 		if (gp->count) {
 			limit = MIN(ki.ki_supgrpcnt, *gp->count);
@@ -3826,17 +3848,13 @@ kauth_cred_alloc(void)
 {
 	kauth_cred_t newcred;
 
-	MALLOC_ZONE(newcred, kauth_cred_t, sizeof(*newcred), M_CRED, M_WAITOK | M_ZERO);
-	assert(newcred);
-	if (newcred != 0) {
-		posix_cred_t newpcred = posix_cred_get(newcred);
-		newcred->cr_audit.as_aia_p = audit_default_aia_p;
-		/* must do this, or cred has same group membership as uid 0 */
-		newpcred->cr_gmuid = KAUTH_UID_NONE;
+	newcred = zalloc_flags(ucred_zone, Z_WAITOK | Z_ZERO);
+	posix_cred_get(newcred)->cr_gmuid = KAUTH_UID_NONE;
+	newcred->cr_audit.as_aia_p = audit_default_aia_p;
+	/* must do this, or cred has same group membership as uid 0 */
 #if CONFIG_MACF
-		mac_cred_label_init(newcred);
+	mac_cred_label_init(newcred);
 #endif
-	}
 	return newcred;
 }
 
@@ -3856,7 +3874,7 @@ kauth_cred_free(kauth_cred_t cred)
 	mac_cred_label_destroy(cred);
 #endif
 	AUDIT_SESSION_UNREF(cred);
-	FREE_ZONE(cred, sizeof(*cred), M_CRED);
+	zfree(ucred_zone, cred);
 }
 
 /*
@@ -4011,7 +4029,7 @@ kauth_cred_setresuid(kauth_cred_t cred, uid_t ruid, uid_t euid, uid_t svuid, uid
 	 * Look up in cred hash table to see if we have a matching credential
 	 * with the new values; this is done by calling kauth_cred_update().
 	 */
-	bcopy(cred, &temp_cred, sizeof(temp_cred));
+	temp_cred = *cred;
 	if (euid != KAUTH_UID_NONE) {
 		temp_pcred->cr_uid = euid;
 	}
@@ -4086,7 +4104,7 @@ kauth_cred_setresgid(kauth_cred_t cred, gid_t rgid, gid_t egid, gid_t svgid)
 	 * Look up in cred hash table to see if we have a matching credential
 	 * with the new values; this is done by calling kauth_cred_update().
 	 */
-	bcopy(cred, &temp_cred, sizeof(temp_cred));
+	temp_cred = *cred;
 	if (egid != KAUTH_GID_NONE) {
 		/* displacing a supplementary group opts us out of memberd */
 		if (kauth_cred_change_egid(&temp_cred, egid)) {
@@ -4158,14 +4176,16 @@ kauth_cred_setresgid(kauth_cred_t cred, gid_t rgid, gid_t egid, gid_t svgid)
  *		to be the caller's problem.
  */
 kauth_cred_t
-kauth_cred_setgroups(kauth_cred_t cred, gid_t *groups, int groupcount, uid_t gmuid)
+kauth_cred_setgroups(kauth_cred_t cred, gid_t *groups, size_t groupcount, uid_t gmuid)
 {
-	int             i;
+	size_t i;
 	struct ucred temp_cred;
 	posix_cred_t temp_pcred = posix_cred_get(&temp_cred);
 	posix_cred_t pcred;
 
 	NULLCRED_CHECK(cred);
+	assert(groupcount <= NGROUPS);
+	groupcount = MIN(groupcount, NGROUPS);
 
 	pcred = posix_cred_get(cred);
 
@@ -4192,9 +4212,9 @@ kauth_cred_setgroups(kauth_cred_t cred, gid_t *groups, int groupcount, uid_t gmu
 	 * opt-out of memberd processing using setgroups(), and an opt-in
 	 * using initgroups().  This is required for POSIX conformance.
 	 */
-	bcopy(cred, &temp_cred, sizeof(temp_cred));
-	temp_pcred->cr_ngroups = groupcount;
-	bcopy(groups, temp_pcred->cr_groups, sizeof(temp_pcred->cr_groups));
+	temp_cred = *cred;
+	temp_pcred->cr_ngroups = (short)groupcount;
+	bcopy(groups, temp_pcred->cr_groups, groupcount * sizeof(temp_pcred->cr_groups[0]));
 	temp_pcred->cr_gmuid = gmuid;
 	if (gmuid == KAUTH_UID_NONE) {
 		temp_pcred->cr_flags |= CRF_NOMEMBERD;
@@ -4217,9 +4237,9 @@ SYSCTL_INT(_kern, OID_AUTO, ds_supgroups_supported, CTLFLAG_RW | CTLFLAG_LOCKED,
 #endif
 
 int
-kauth_cred_getgroups(kauth_cred_t cred, gid_t *grouplist, int *countp)
+kauth_cred_getgroups(kauth_cred_t cred, gid_t *grouplist, size_t *countp)
 {
-	int limit = NGROUPS;
+	size_t limit = NGROUPS;
 	posix_cred_t pcred;
 
 	pcred = posix_cred_get(cred);
@@ -4401,7 +4421,7 @@ kauth_cred_setsvuidgid(kauth_cred_t cred, uid_t uid, gid_t gid)
 	/* look up in cred hash table to see if we have a matching credential
 	 * with new values.
 	 */
-	bcopy(cred, &temp_cred, sizeof(temp_cred));
+	temp_cred = *cred;
 	temp_pcred->cr_svuid = uid;
 	temp_pcred->cr_svgid = gid;
 
@@ -4447,7 +4467,7 @@ kauth_cred_setauditinfo(kauth_cred_t cred, au_session_t *auditinfo_p)
 		return cred;
 	}
 
-	bcopy(cred, &temp_cred, sizeof(temp_cred));
+	temp_cred = *cred;
 	bcopy(auditinfo_p, &temp_cred.cr_audit, sizeof(temp_cred.cr_audit));
 
 	return kauth_cred_update(cred, &temp_cred, FALSE);
@@ -4482,7 +4502,7 @@ kauth_cred_label_update(kauth_cred_t cred, struct label *label)
 	kauth_cred_t newcred;
 	struct ucred temp_cred;
 
-	bcopy(cred, &temp_cred, sizeof(temp_cred));
+	temp_cred = *cred;
 
 	mac_cred_label_init(&temp_cred);
 	mac_cred_label_associate(cred, &temp_cred);
@@ -4534,7 +4554,7 @@ kauth_cred_label_update_execve(kauth_cred_t cred, vfs_context_t ctx,
 	kauth_cred_t newcred;
 	struct ucred temp_cred;
 
-	bcopy(cred, &temp_cred, sizeof(temp_cred));
+	temp_cred = *cred;
 
 	mac_cred_label_init(&temp_cred);
 	mac_cred_label_associate(cred, &temp_cred);
@@ -5006,7 +5026,7 @@ kauth_cred_copy_real(kauth_cred_t cred)
 	 * Look up in cred hash table to see if we have a matching credential
 	 * with the new values.
 	 */
-	bcopy(cred, &temp_cred, sizeof(temp_cred));
+	temp_cred = *cred;
 	temp_pcred->cr_uid = pcred->cr_ruid;
 	/* displacing a supplementary group opts us out of memberd */
 	if (kauth_cred_change_egid(&temp_cred, pcred->cr_rgid)) {
@@ -5539,7 +5559,7 @@ struct debug_ucred {
 	uid_t   cr_uid;                         /* effective user id */
 	uid_t   cr_ruid;                        /* real user id */
 	uid_t   cr_svuid;                       /* saved user id */
-	short   cr_ngroups;                     /* number of groups in advisory list */
+	u_short cr_ngroups;                     /* number of groups in advisory list */
 	gid_t   cr_groups[NGROUPS];     /* advisory group list */
 	gid_t   cr_rgid;                        /* real group id */
 	gid_t   cr_svgid;                       /* saved group id */
@@ -5860,8 +5880,8 @@ posix_cred_access(kauth_cred_t cred, id_t object_uid, id_t object_gid, mode_t ob
 {
 	int is_member;
 	mode_t mode_owner = (object_mode & S_IRWXU);
-	mode_t mode_group = (object_mode & S_IRWXG) << 3;
-	mode_t mode_world = (object_mode & S_IRWXO) << 6;
+	mode_t mode_group = (mode_t)((object_mode & S_IRWXG) << 3);
+	mode_t mode_world = (mode_t)((object_mode & S_IRWXO) << 6);
 
 	/*
 	 * Check first for owner rights

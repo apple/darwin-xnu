@@ -44,6 +44,10 @@
 #include <sys/types.h>
 #endif
 
+#if defined(KERNEL)
+#include <sys/cdefs.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -66,27 +70,46 @@ extern void     *memmove(void *, const void *, size_t);
 extern void     *memset(void *, int, size_t);
 extern int      memset_s(void *, size_t, int, size_t);
 
+#ifdef XNU_KERNEL_PRIVATE
+/* memcmp_zero_ptr_aligned() checks string s of n bytes contains all zeros.
+ * Address and size of the string s must be pointer-aligned.
+ * Return 0 if true, 1 otherwise. Also return 0 if n is 0.
+ */
+extern unsigned long memcmp_zero_ptr_aligned(const void *s, size_t n);
+#endif
+
 extern size_t   strlen(const char *);
 extern size_t   strnlen(const char *, size_t);
 
-/* strcpy() is being deprecated. Please use strlcpy() instead. */
+/* strcpy() and strncpy() are deprecated. Please use strlcpy() instead. */
+__kpi_deprecated_arm64_macos_unavailable
 extern char     *strcpy(char *, const char *) __deprecated;
+
+__kpi_deprecated_arm64_macos_unavailable
 extern char     *strncpy(char *, const char *, size_t);
 
-extern size_t   strlcat(char *, const char *, size_t);
-extern size_t   strlcpy(char *, const char *, size_t);
-
-/* strcat() is being deprecated. Please use strlcat() instead. */
+/* strcat() and strncat() are deprecated. Please use strlcat() instead. */
+__kpi_deprecated_arm64_macos_unavailable
 extern char     *strcat(char *, const char *) __deprecated;
+
+__kpi_deprecated_arm64_macos_unavailable
 extern char     *strncat(char *, const char *, size_t);
 
-/* strcmp() is being deprecated. Please use strncmp() instead. */
+/* strcmp() is deprecated. Please use strncmp() instead. */
+__kpi_deprecated_arm64_macos_unavailable
 extern int      strcmp(const char *, const char *);
+
+extern size_t   strlcpy(char *, const char *, size_t);
+extern size_t   strlcat(char *, const char *, size_t);
 extern int      strncmp(const char *, const char *, size_t);
 
 extern int      strcasecmp(const char *s1, const char *s2);
 extern int      strncasecmp(const char *s1, const char *s2, size_t n);
-extern char     *strnstr(char *s, const char *find, size_t slen);
+#ifdef XNU_KERNEL_PRIVATE
+extern const char     *strnstr(const char *s, const char *find, size_t slen);
+#else
+extern char     *strnstr(const char *s, const char *find, size_t slen);
+#endif
 extern char     *strchr(const char *s, int c);
 #ifdef XNU_KERNEL_PRIVATE
 extern char     *strrchr(const char *s, int c);
@@ -133,8 +156,8 @@ __nochk_bcopy(const void *src, void *dest, size_t len)
 /* _FORTIFY_SOURCE disabled */
 #else /* _chk macros */
 
-#ifdef XNU_KERNEL_PRIVATE
-/* Stricter checking in xnu than kexts. When type is set to 1, __builtin_object_size
+#if defined XNU_KERNEL_PRIVATE || defined(_FORTIFY_SOURCE_STRICT)
+/* Stricter checking is optional for kexts. When type is set to 1, __builtin_object_size
  * returns the size of the closest surrounding sub-object, which would detect copying past
  * the end of a struct member. */
 #define BOS_COPY_TYPE 1

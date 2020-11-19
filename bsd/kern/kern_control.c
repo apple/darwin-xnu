@@ -72,6 +72,7 @@ struct kctl {
 	u_int32_t               sendbufsize;    /* request more than the default buffer size */
 
 	/* Dispatch functions */
+	ctl_setup_func          setup;          /* Setup contact */
 	ctl_bind_func           bind;           /* Prepare contact */
 	ctl_connect_func        connect;        /* Make contact */
 	ctl_disconnect_func     disconnect;     /* Break contact */
@@ -127,7 +128,7 @@ struct ctl_cb {
  * Definitions and vars for we support
  */
 
-static u_int32_t        ctl_maxunit = 65536;
+const u_int32_t         ctl_maxunit = 65536;
 static lck_grp_attr_t   *ctl_lck_grp_attr = 0;
 static lck_attr_t       *ctl_lck_attr = 0;
 static lck_grp_t        *ctl_lck_grp = 0;
@@ -504,6 +505,12 @@ ctl_setup_kctl(struct socket *so, struct sockaddr *nam, struct proc *p)
 			lck_mtx_unlock(ctl_mtx);
 			return EBUSY;
 		}
+	} else if (kctl->setup != NULL) {
+		error = (*kctl->setup)(&sa.sc_unit, &kcb->userdata);
+		if (error != 0) {
+			lck_mtx_unlock(ctl_mtx);
+			return error;
+		}
 	} else {
 		/* Find an unused ID, assumes control IDs are in order */
 		u_int32_t unit = 1;
@@ -546,13 +553,13 @@ ctl_setup_kctl(struct socket *so, struct sockaddr *nam, struct proc *p)
 	sbmaxsize = (u_quad_t)sb_max * MCLBYTES / (MSIZE + MCLBYTES);
 
 	if (kctl->sendbufsize > sbmaxsize) {
-		sendbufsize = sbmaxsize;
+		sendbufsize = (u_int32_t)sbmaxsize;
 	} else {
 		sendbufsize = kctl->sendbufsize;
 	}
 
 	if (kctl->recvbufsize > sbmaxsize) {
-		recvbufsize = sbmaxsize;
+		recvbufsize = (u_int32_t)sbmaxsize;
 	} else {
 		recvbufsize = kctl->recvbufsize;
 	}
@@ -942,7 +949,7 @@ ctl_send_list(struct socket *so, int flags, struct mbuf *m,
 }
 
 static errno_t
-ctl_rcvbspace(struct socket *so, u_int32_t datasize,
+ctl_rcvbspace(struct socket *so, size_t datasize,
     u_int32_t kctlflags, u_int32_t flags)
 {
 	struct sockbuf *sb = &so->so_rcv;
@@ -966,7 +973,7 @@ ctl_rcvbspace(struct socket *so, u_int32_t datasize,
 			error = 0;
 		}
 	} else {
-		u_int32_t autorcvbuf_max;
+		size_t autorcvbuf_max;
 
 		/*
 		 * Allow overcommit of 25%
@@ -981,10 +988,10 @@ ctl_rcvbspace(struct socket *so, u_int32_t datasize,
 			/*
 			 * Grow with a little bit of leeway
 			 */
-			u_int32_t grow = datasize - space + MSIZE;
+			size_t grow = datasize - space + MSIZE;
+			u_int32_t cc = (u_int32_t)MIN(MIN((sb->sb_hiwat + grow), autorcvbuf_max), UINT32_MAX);
 
-			if (sbreserve(sb,
-			    min((sb->sb_hiwat + grow), autorcvbuf_max)) == 1) {
+			if (sbreserve(sb, cc) == 1) {
 				if (sb->sb_hiwat > ctl_autorcvbuf_high) {
 					ctl_autorcvbuf_high = sb->sb_hiwat;
 				}
@@ -1229,7 +1236,7 @@ ctl_enqueuedata(void *kctlref, u_int32_t unit, void *data, size_t len,
 		if (mlen + curlen > len) {
 			mlen = len - curlen;
 		}
-		n->m_len = mlen;
+		n->m_len = (int32_t)mlen;
 		bcopy((char *)data + curlen, n->m_data, mlen);
 		curlen += mlen;
 	}
@@ -1675,6 +1682,7 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 	u_int32_t       id = 1;
 	size_t          name_len;
 	int             is_extended = 0;
+	int             is_setup = 0;
 
 	if (userkctl == NULL) { /* sanity check */
 		return EINVAL;
@@ -1772,6 +1780,7 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 	}
 
 	is_extended = (userkctl->ctl_flags & CTL_FLAG_REG_EXTENDED);
+	is_setup = (userkctl->ctl_flags & CTL_FLAG_REG_SETUP);
 
 	strlcpy(kctl->name, userkctl->ctl_name, MAX_KCTL_NAME);
 	kctl->flags = userkctl->ctl_flags;
@@ -1792,6 +1801,9 @@ ctl_register(struct kern_ctl_reg *userkctl, kern_ctl_ref *kctlref)
 		kctl->recvbufsize = userkctl->ctl_recvsize;
 	}
 
+	if (is_setup) {
+		kctl->setup = userkctl->ctl_setup;
+	}
 	kctl->bind = userkctl->ctl_bind;
 	kctl->connect = userkctl->ctl_connect;
 	kctl->disconnect = userkctl->ctl_disconnect;
@@ -2155,7 +2167,7 @@ kctl_reg_list SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg1, arg2)
         int error = 0;
-        int n, i;
+        u_int64_t i, n;
         struct xsystmgen xsg;
         void *buf = NULL;
         struct kctl *kctl;
@@ -2171,7 +2183,7 @@ kctl_reg_list SYSCTL_HANDLER_ARGS
         n = kctlstat.kcs_reg_count;
 
         if (req->oldptr == USER_ADDR_NULL) {
-                req->oldidx = (n + n / 8) * sizeof(struct xkctl_reg);
+                req->oldidx = (size_t)(n + n / 8) * sizeof(struct xkctl_reg);
                 goto done;
 	}
         if (req->newptr != USER_ADDR_NULL) {
@@ -2194,7 +2206,6 @@ kctl_reg_list SYSCTL_HANDLER_ARGS
                 goto done;
 	}
 
-        i = 0;
         for (i = 0, kctl = TAILQ_FIRST(&ctl_head);
             i < n && kctl != NULL;
             i++, kctl = TAILQ_NEXT(kctl, next)) {
@@ -2265,7 +2276,7 @@ kctl_pcblist SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg1, arg2)
         int error = 0;
-        int n, i;
+        u_int64_t n, i;
         struct xsystmgen xsg;
         void *buf = NULL;
         struct kctl *kctl;
@@ -2284,7 +2295,7 @@ kctl_pcblist SYSCTL_HANDLER_ARGS
         n = kctlstat.kcs_pcbcount;
 
         if (req->oldptr == USER_ADDR_NULL) {
-                req->oldidx = (n + n / 8) * item_size;
+                req->oldidx = (size_t)(n + n / 8) * item_size;
                 goto done;
 	}
         if (req->newptr != USER_ADDR_NULL) {
@@ -2307,7 +2318,6 @@ kctl_pcblist SYSCTL_HANDLER_ARGS
                 goto done;
 	}
 
-        i = 0;
         for (i = 0, kctl = TAILQ_FIRST(&ctl_head);
             i < n && kctl != NULL;
             kctl = TAILQ_NEXT(kctl, next)) {

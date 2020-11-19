@@ -38,23 +38,25 @@ extern boolean_t doprnt_hide_pointers;
 #endif
 
 static bool
-_encode_data(os_log_buffer_value_t content, const void *arg, uint16_t arg_len, os_log_buffer_context_t context)
+_encode_data(os_log_buffer_value_t content, const void *arg, size_t arg_len, os_log_buffer_context_t context)
 {
 	struct os_log_arginfo_s arginfo;
 	void *databuf;
 
+	arg_len = MIN(arg_len, UINT16_MAX);
+
 	if (content->flags & OS_LOG_CONTENT_FLAG_PRIVATE) {
 		databuf = context->privdata + context->privdata_off;
-		arginfo.length = MIN(arg_len, (context->privdata_sz - context->privdata_off));
+		arginfo.length = MIN((uint16_t)arg_len, (context->privdata_sz - context->privdata_off));
 		arginfo.offset = context->privdata_off;
 	} else {
 		databuf = context->pubdata + context->pubdata_off;
-		arginfo.length = MIN(arg_len, (context->pubdata_sz - context->pubdata_off));
+		arginfo.length = MIN((uint16_t)arg_len, (context->pubdata_sz - context->pubdata_off));
 		arginfo.offset = context->pubdata_off;
 	}
 
 	if (context->arg_content_sz > 0) {
-		arginfo.length = MIN(context->arg_content_sz, arginfo.length);
+		arginfo.length = MIN((uint16_t)context->arg_content_sz, arginfo.length);
 	}
 
 	memcpy(content->value, &arginfo, sizeof(arginfo));
@@ -144,7 +146,7 @@ _os_log_parse_annotated(char *annotated, const char **visibility, const char **l
 
 OS_ALWAYS_INLINE
 static inline bool
-_os_log_encode_arg(void *arg, uint16_t arg_len, os_log_value_type_t ctype, bool is_private, os_log_buffer_context_t context)
+_os_log_encode_arg(void *arg, size_t arg_len, os_log_value_type_t ctype, bool is_private, os_log_buffer_context_t context)
 {
 	os_log_buffer_value_t content = (os_log_buffer_value_t) &context->buffer->content[context->content_off];
 	size_t content_sz = sizeof(*content) + arg_len;
@@ -207,7 +209,7 @@ _os_log_encode_arg(void *arg, uint16_t arg_len, os_log_value_type_t ctype, bool 
 			}
 
 			memcpy(content->value, arg, arg_len);
-			content->size = arg_len;
+			content->size = (uint8_t)arg_len;
 			context->content_off += content_sz;
 		}
 		break;
@@ -331,12 +333,12 @@ _os_log_encode(const char *format, va_list args, int saved_errno, os_log_buffer_
 				case 'X': // upper-hex
 					switch (type) {
 					case OST_CHAR:
-						value.type.ch = va_arg(args, int);
+						value.type.ch = (char) va_arg(args, int);
 						_os_log_encode_arg(&value.type.ch, sizeof(value.type.ch), OS_LOG_BUFFER_VALUE_TYPE_SCALAR, false, context);
 						break;
 
 					case OST_SHORT:
-						value.type.s = va_arg(args, int);
+						value.type.s = (short) va_arg(args, int);
 						_os_log_encode_arg(&value.type.s, sizeof(value.type.s), OS_LOG_BUFFER_VALUE_TYPE_SCALAR, false, context);
 						break;
 
@@ -440,7 +442,7 @@ _os_log_encode(const char *format, va_list args, int saved_errno, os_log_buffer_
 #endif /* !KERNEL */
 
 				case 'c': // char
-					value.type.ch = va_arg(args, int);
+					value.type.ch = (char) va_arg(args, int);
 					_os_log_encode_arg(&value.type.ch, sizeof(value.type.ch), OS_LOG_BUFFER_VALUE_TYPE_SCALAR, false, context);
 					done = true;
 					break;

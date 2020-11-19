@@ -99,10 +99,10 @@ EFI_get_frequency(const char *prop)
 {
 	uint64_t        frequency = 0;
 	DTEntry         entry;
-	void            *value;
+	void const      *value;
 	unsigned int    size;
 
-	if (DTLookupEntry(0, "/efi/platform", &entry) != kSuccess) {
+	if (SecureDTLookupEntry(0, "/efi/platform", &entry) != kSuccess) {
 		kprintf("EFI_get_frequency: didn't find /efi/platform\n");
 		return 0;
 	}
@@ -110,20 +110,20 @@ EFI_get_frequency(const char *prop)
 	/*
 	 * While we're here, see if EFI published an initial TSC value.
 	 */
-	if (DTGetProperty(entry, "InitialTSC", &value, &size) == kSuccess) {
+	if (SecureDTGetProperty(entry, "InitialTSC", &value, &size) == kSuccess) {
 		if (size == sizeof(uint64_t)) {
-			tsc_at_boot = *(uint64_t *) value;
+			tsc_at_boot = *(uint64_t const *) value;
 			kprintf("EFI_get_frequency: read InitialTSC: %llu\n",
 			    tsc_at_boot);
 		}
 	}
 
-	if (DTGetProperty(entry, prop, &value, &size) != kSuccess) {
+	if (SecureDTGetProperty(entry, prop, &value, &size) != kSuccess) {
 		kprintf("EFI_get_frequency: property %s not found\n", prop);
 		return 0;
 	}
 	if (size == sizeof(uint64_t)) {
-		frequency = *(uint64_t *) value;
+		frequency = *(uint64_t const *) value;
 		kprintf("EFI_get_frequency: read %s value: %llu\n",
 		    prop, frequency);
 	}
@@ -141,8 +141,8 @@ tsc_init(void)
 	boolean_t       N_by_2_bus_ratio = FALSE;
 
 	if (cpuid_vmm_present()) {
-		kprintf("VMM vendor %u TSC frequency %u KHz bus frequency %u KHz\n",
-		    cpuid_vmm_info()->cpuid_vmm_family,
+		kprintf("VMM vendor %s TSC frequency %u KHz bus frequency %u KHz\n",
+		    cpuid_vmm_family_string(),
 		    cpuid_vmm_info()->cpuid_vmm_tsc_frequency,
 		    cpuid_vmm_info()->cpuid_vmm_bus_frequency);
 
@@ -166,6 +166,7 @@ tsc_init(void)
 
 	switch (cpuid_cpufamily()) {
 	case CPUFAMILY_INTEL_KABYLAKE:
+	case CPUFAMILY_INTEL_ICELAKE:
 	case CPUFAMILY_INTEL_SKYLAKE: {
 		/*
 		 * SkyLake and later has an Always Running Timer (ART) providing
@@ -320,3 +321,31 @@ tsc_get_info(tscInfo_t *info)
 	info->flex_ratio_min = flex_ratio_min;
 	info->flex_ratio_max = flex_ratio_max;
 }
+
+#if DEVELOPMENT || DEBUG
+void
+cpu_data_tsc_sync_deltas_string(char *buf, uint32_t buflen,
+    uint32_t start_cpu, uint32_t end_cpu)
+{
+	int cnt;
+	uint32_t offset = 0;
+
+	if (start_cpu >= real_ncpus || end_cpu >= real_ncpus) {
+		if (buflen >= 1) {
+			buf[0] = 0;
+		}
+		return;
+	}
+
+	for (uint32_t curcpu = start_cpu; curcpu <= end_cpu; curcpu++) {
+		cnt = snprintf(buf + offset, buflen - offset, "0x%llx ", cpu_datap(curcpu)->tsc_sync_delta);
+		if (cnt < 0 || (offset + (unsigned) cnt >= buflen)) {
+			break;
+		}
+		offset += cnt;
+	}
+	if (offset >= 1) {
+		buf[offset - 1] = 0;    /* Clip the final, trailing space */
+	}
+}
+#endif /* DEVELOPMENT || DEBUG */

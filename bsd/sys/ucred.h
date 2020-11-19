@@ -80,6 +80,7 @@ struct label;
 #ifdef __APPLE_API_UNSTABLE
 #ifdef KERNEL
 #include <sys/queue.h>
+#include <os/base.h>
 
 /*
  * In-kernel credential structure.
@@ -105,14 +106,15 @@ struct ucred {
 		uid_t   cr_uid;         /* effective user id */
 		uid_t   cr_ruid;        /* real user id */
 		uid_t   cr_svuid;       /* saved user id */
-		short   cr_ngroups;     /* number of groups in advisory list */
+		u_short cr_ngroups;     /* number of groups in advisory list */
 		gid_t   cr_groups[NGROUPS];/* advisory group list */
 		gid_t   cr_rgid;        /* real group id */
 		gid_t   cr_svgid;       /* saved group id */
 		uid_t   cr_gmuid;       /* UID for group membership purposes */
 		int     cr_flags;       /* flags on credential */
 	} cr_posix;
-	struct label    *cr_label;      /* MAC label */
+	struct label    * OS_PTRAUTH_SIGNED_PTR("ucred.cr_label") cr_label;     /* MAC label */
+
 	/*
 	 * NOTE: If anything else (besides the flags)
 	 * added after the label, you must change

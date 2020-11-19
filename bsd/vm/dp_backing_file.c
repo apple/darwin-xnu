@@ -60,7 +60,6 @@
 #include <kern/host.h>
 #include <kern/task.h>
 #include <kern/zalloc.h>
-#include <kern/kalloc.h>
 #include <kern/policy_internal.h>
 
 #include <libkern/libkern.h>

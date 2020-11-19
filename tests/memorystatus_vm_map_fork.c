@@ -366,7 +366,7 @@ memorystatus_vm_map_fork_parent(int test_variant)
 	 */
 	wait_for_free_mem(active_limit_mb);
 
-#if defined(__x86_64__)
+#if TARGET_OS_OSX
 	/*
 	 * vm_map_fork() is always allowed on desktop.
 	 */
@@ -458,12 +458,12 @@ memorystatus_vm_map_fork_parent(int test_variant)
  * We test "not allowed first", then "allowed". If it were the other way around, the corpse from the "allowed"
  * test would likely cause memory pressure and jetsam would likely kill the "not allowed" test.
  */
-T_DECL(memorystatus_vm_map_fork_test_not_allowed, "test that corpse generation was not allowed")
+T_DECL(memorystatus_vm_map_fork_test_not_allowed, "test that corpse generation was not allowed", T_META_ASROOT(true))
 {
 	memorystatus_vm_map_fork_parent(TEST_NOT_ALLOWED);
 }
 
-T_DECL(memorystatus_vm_map_fork_test_allowed, "test corpse generation allowed")
+T_DECL(memorystatus_vm_map_fork_test_allowed, "test corpse generation allowed", T_META_ASROOT(true))
 {
 	memorystatus_vm_map_fork_parent(TEST_ALLOWED);
 }

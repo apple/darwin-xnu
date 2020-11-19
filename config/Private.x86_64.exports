@@ -1,9 +1,16 @@
 _IOGetBootKeyStoreData
 _IOGetAPFSKeyStoreData
 _IOSetAPFSKeyStoreData
+_IOGetARVRootHashData
+_IOSetARVRootHashData
+_IOGetARVManifestData
+_IOSetARVManifestData
 __Z33IOSKCopyKextIdentifierWithAddressm
+__ZN14IOPMrootDomain17requestUserActiveEP9IOServicePKc
+__ZN14IOPMrootDomain20claimSystemBootEventEP9IOServicejPKcP8OSObject
 __ZN14IOPMrootDomain20claimSystemWakeEventEP9IOServicejPKcP8OSObject
 __ZN14IOPMrootDomain20restartWithStackshotEv
+__ZN14IOPMrootDomain24claimSystemShutdownEventEP9IOServicejPKcP8OSObject
 __ZN22IOInterruptEventSource7warmCPUEy
 _acpi_install_wake_handler
 _acpi_sleep_kernel
@@ -17,11 +24,6 @@ _cpuid_leaf7_features
 _cpuid_info
 _csr_check
 _csr_get_active_config
-_hv_ast_pending
-_hv_ept_pmap_create
-_hv_get*
-_hv_release*
-_hv_set*
 _lapic_end_of_interrupt
 _lapic_get_cmci_vector
 _lapic_unmask_perfcnt_interrupt
@@ -33,6 +35,7 @@ _ml_port_io_write
 _ml_port_io_write16
 _ml_port_io_write32
 _ml_port_io_write8
+_mountroot_post_hook
 _mp_broadcast
 _mp_cpus_call
 _mp_cpus_call1
@@ -43,6 +46,7 @@ _semaphore_timedwait
 _smp_initialized
 _kext_get_vm_map
 _pal_machine_sleep
+_unmountroot_pre_hook
 _vfs_addtrigger
 _vfs_resolver_auxiliary
 _vfs_resolver_result
@@ -50,6 +54,12 @@ _vfs_resolver_sequence
 _vfs_resolver_status
 _vfs_settriggercallback
 _vnode_trigger_update
+_xcpm_mbox_lock
+_xcpm_mbox_unlock
+_xcpm_bios_mbox_cmd_read
+_xcpm_bios_mbox_cmd_unsafe_read
+_xcpm_bios_mbox_cmd_write
+_xcpm_is_hwp_enabled
 _xts_decrypt
 _xts_done
 _xts_encrypt
@@ -97,3 +107,14 @@ _csproc_forced_lv
 #exports for vmware/, virtualbox, ...
 _mach_vm_map
 _mach_vm_remap
+
+#exports for AppleHV
+_hv_ast_pending
+_hv_disable
+_hv_ept_pmap_create
+_hv_get*
+_hv_release*
+_hv_set*
+_hv_trace*
+_thread_set_no_smt
+_vm_map_disable_hole_optimization

@@ -88,7 +88,7 @@
 static int ttcompatgetflags(struct tty *tp);
 static void ttcompatsetflags(struct tty *tp, struct termios *t);
 static void ttcompatsetlflags(struct tty *tp, struct termios *t);
-static int ttcompatspeedtab(int speed, struct speedtab *table);
+static unsigned int ttcompatspeedtab(speed_t speed, struct speedtab *table);
 
 /*
  * These two tables encode baud rate to speed code and speed code to
@@ -98,7 +98,7 @@ static int ttcompatspeedtab(int speed, struct speedtab *table);
  * name space.
  */
 static struct speedtab compatspeeds[] = {
-#define MAX_SPEED       17
+#define MAX_SPEED 17
 	{ .sp_speed = 115200, .sp_code = 17 },
 	{ .sp_speed = 57600, .sp_code = 16 },
 	{ .sp_speed = 38400, .sp_code = 15 },
@@ -127,34 +127,34 @@ static int compatspcodes[] = {
 /*
  * ttcompatspeedtab
  *
- * Description:	Given a baud rate value as an integer, and a speed table,
- *		convert the baud rate to a speed code, according to the
+ * Description:	Given a baud rate value as a speed_t, and a speed table,
+ *		convert the baud rate to a speed code integer, according to the
  *		contents of the table.  This effectively changes termios.h
  *		baud rate values into ttydev.h baud rate codes.
  *
- * Parameters:	int speed		Baud rate, as an integer
- *		struct speedtab *table	Baud rate table to speed code table
+ * Parameters:	speed_t speed  Baud rate
+ *		struct speedtab *table Baud rate table to speed code table
  *
- * Returns:	1			B50 speed code; returned if we can
- *					not find an answer in the table.
- *		0			If a 0 was requested in order to
- *					trigger a hangup (250ms of line
- *					silence, per Bell 103C standard).
- *		*			A speed code matching the requested
- *					baud rate (potentially rounded down,
- *					if there is no exact match).
+ * Returns:	1              B50 speed code; returned if we can
+ *                         not find an answer in the table.
+ *          0              If a 0 was requested in order to
+ *                         trigger a hangup (250ms of line
+ *                         silence, per Bell 103C standard).
+ *          [2, MAX_SPEED] A speed code matching the requested
+ *                         baud rate (potentially rounded down,
+ *                         if there is no exact match).
  *
  * Notes:	This function is used for TIOCGETP, TIOCSETP, and TIOCSETN.
  */
-static int
-ttcompatspeedtab(int speed, struct speedtab *table)
+static unsigned int
+ttcompatspeedtab(speed_t speed, struct speedtab *table)
 {
 	if (speed == 0) {
 		return 0; /* hangup */
 	}
 	for (; table->sp_speed > 0; table++) {
 		if (table->sp_speed <= speed) { /* nearest one, rounded down */
-			return table->sp_code;
+			return (unsigned int)table->sp_code;
 		}
 	}
 	return 1; /* 50, min and not hangup */
@@ -205,7 +205,7 @@ ttcompatspeedtab(int speed, struct speedtab *table)
  *		real thing.  A subsequent call to ttioctl_locked() in
  *		ttcompat(), however, may result in subsequent changes.
  *
- * WARNING:	This compatibility code is not 6/432 clean; it will only
+ * WARNING:	This compatibility code is not 64/32 clean; it will only
  *		work for 32 bit processes on 32 bit kernels or 64 bit
  *		processes on 64 bit kernels.  We are not addressing this
  *		due to <rdar://6904053>.
@@ -227,23 +227,42 @@ ttsetcompat(struct tty *tp, u_long *com, caddr_t data, struct termios *term)
 		 * pending input is not discarded.
 		 */
 	{
-		struct sgttyb *sg = (struct sgttyb *)data;
-		int speed;
-
-		if ((speed = sg->sg_ispeed) > MAX_SPEED || speed < 0) {
+		__IGNORE_WCASTALIGN(struct sgttyb *sg = (struct sgttyb *)data);
+		if (sg->sg_ispeed < 0) {
 			return EINVAL;
-		} else if (speed != ttcompatspeedtab(tp->t_ispeed, compatspeeds)) {
-			term->c_ispeed = compatspcodes[speed];
+		}
+		unsigned int ispeed = (unsigned int)sg->sg_ispeed;
+		if (ispeed > MAX_SPEED) {
+			return EINVAL;
+		}
+		if (ispeed != ttcompatspeedtab(tp->t_ispeed, compatspeeds)) {
+			term->c_ispeed = compatspcodes[ispeed];
 		} else {
 			term->c_ispeed = tp->t_ispeed;
 		}
-		if ((speed = sg->sg_ospeed) > MAX_SPEED || speed < 0) {
+
+		/*
+		 * Can't error out at the beginning due to potential for
+		 * backwards-incompatibility.  For instance:
+		 *
+		 * struct sgttyb sg; // uninitialized
+		 * sg.sg_ispeed = SOME_VALID_VALUE;
+		 *
+		 * Should still set the input speed.
+		 */
+		if (sg->sg_ospeed < 0) {
 			return EINVAL;
-		} else if (speed != ttcompatspeedtab(tp->t_ospeed, compatspeeds)) {
-			term->c_ospeed = compatspcodes[speed];
+		}
+		unsigned int ospeed = (unsigned int)sg->sg_ospeed;
+		if (ospeed > MAX_SPEED) {
+			return EINVAL;
+		}
+		if (ospeed != ttcompatspeedtab(tp->t_ospeed, compatspeeds)) {
+			term->c_ospeed = compatspcodes[ospeed];
 		} else {
 			term->c_ospeed = tp->t_ospeed;
 		}
+
 		term->c_cc[VERASE] = sg->sg_erase;
 		term->c_cc[VKILL] = sg->sg_kill;
 		tp->t_flags = (tp->t_flags & 0xffff0000) | (sg->sg_flags & 0xffff);
@@ -257,7 +276,7 @@ ttsetcompat(struct tty *tp, u_long *com, caddr_t data, struct termios *term)
 		 * the struct tchars that 'data' points to.
 		 */
 	{
-		struct tchars *tc = (struct tchars *)data;
+		__IGNORE_WCASTALIGN(struct tchars *tc = (struct tchars *)data);
 		cc_t *cc;
 
 		cc = term->c_cc;
@@ -279,7 +298,7 @@ ttsetcompat(struct tty *tp, u_long *com, caddr_t data, struct termios *term)
 		 * the struct ltchars that 'data' points to.
 		 */
 	{
-		struct ltchars *ltc = (struct ltchars *)data;
+		__IGNORE_WCASTALIGN(struct ltchars *ltc = (struct ltchars *)data);
 		cc_t *cc;
 
 		cc = term->c_cc;
@@ -310,20 +329,23 @@ ttsetcompat(struct tty *tp, u_long *com, caddr_t data, struct termios *term)
 		 * bits that correspond to the 16 bit value pointed to by
 		 * 'data'.
 		 */
+	{
+		__IGNORE_WCASTALIGN(int set = *(int *)data);
 		if (*com == TIOCLSET) {
-			tp->t_flags = (tp->t_flags & 0xffff) | *(int *)data << 16;
+			tp->t_flags = (tp->t_flags & 0xffff) | set << 16;
 		} else {
 			tp->t_flags =
 			    (ttcompatgetflags(tp) & 0xffff0000) | (tp->t_flags & 0xffff);
 			if (*com == TIOCLBIS) {
-				tp->t_flags |= *(int *)data << 16;
+				tp->t_flags |= set << 16;
 			} else {
-				tp->t_flags &= ~(*(int *)data << 16);
+				tp->t_flags &= ~(set << 16);
 			}
 		}
 		ttcompatsetlflags(tp, term);
 		*com = TIOCSETA;
 		break;
+	}
 	}
 	return 0;
 }
@@ -395,18 +417,20 @@ ttcompat(struct tty *tp, u_long com, caddr_t data, int flag, struct proc *p)
 		 * flags, into the structure pointed to by 'data'.
 		 */
 	{
-		struct sgttyb *sg = (struct sgttyb *)data;
+		__IGNORE_WCASTALIGN(struct sgttyb *sg = (struct sgttyb *)data);
 		cc_t *cc = tp->t_cc;
 
-		sg->sg_ospeed = ttcompatspeedtab(tp->t_ospeed, compatspeeds);
+		static_assert(MAX_SPEED <= CHAR_MAX, "maximum speed fits in a char");
+		sg->sg_ospeed = (char)ttcompatspeedtab(tp->t_ospeed, compatspeeds);
 		if (tp->t_ispeed == 0) {
 			sg->sg_ispeed = sg->sg_ospeed;
 		} else {
-			sg->sg_ispeed = ttcompatspeedtab(tp->t_ispeed, compatspeeds);
+			sg->sg_ispeed = (char)ttcompatspeedtab(tp->t_ispeed, compatspeeds);
 		}
 		sg->sg_erase = cc[VERASE];
 		sg->sg_kill = cc[VKILL];
-		sg->sg_flags = tp->t_flags = ttcompatgetflags(tp);
+		tp->t_flags = ttcompatgetflags(tp);
+		sg->sg_flags = (short)tp->t_flags;
 		break;
 	}
 	case TIOCGETC:

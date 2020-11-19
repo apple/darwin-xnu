@@ -35,6 +35,7 @@
 #define _IOKIT_IOCOMMANDGATE_H
 
 #include <IOKit/IOEventSource.h>
+#include <libkern/c++/OSPtr.h>
 
 /*!
  *   @class IOCommandGate : public IOEventSource
@@ -99,7 +100,7 @@ public:
 /*! @function commandGate
  *   @abstract Factory method to create and initialise an IOCommandGate, See $link init.
  *   @result Returns a pointer to the new command gate if sucessful, 0 otherwise. */
-	static IOCommandGate *commandGate(OSObject *owner, Action action = NULL);
+	static OSPtr<IOCommandGate> commandGate(OSObject *owner, Action action = NULL);
 
 /*! @function init
  *   @abstract Class initialiser.
@@ -240,7 +241,7 @@ private:
 #if __LP64__
 	OSMetaClassDeclareReservedUnused(IOCommandGate, 0);
 #else
-	OSMetaClassDeclareReservedUsed(IOCommandGate, 0);
+	OSMetaClassDeclareReservedUsedX86(IOCommandGate, 0);
 #endif
 	OSMetaClassDeclareReservedUnused(IOCommandGate, 1);
 	OSMetaClassDeclareReservedUnused(IOCommandGate, 2);

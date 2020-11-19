@@ -1,11 +1,12 @@
-/*
- *  ccdigest.h
- *  corecrypto
+/* Copyright (c) (2010,2011,2012,2014,2015,2016,2017,2018,2019) Apple Inc. All rights reserved.
  *
- *  Created on 11/30/2010
- *
- *  Copyright (c) 2010,2011,2012,2014,2015 Apple Inc. All rights reserved.
- *
+ * corecrypto is licensed under Apple Inc.’s Internal Use License Agreement (which
+ * is contained in the License.txt file distributed with corecrypto) and only to 
+ * people who accept that license. IMPORTANT:  Any license rights granted to you by 
+ * Apple Inc. (if any) are limited to internal use within your organization only on 
+ * devices and computers you own or control, for the sole purpose of verifying the 
+ * security characteristics and correct functioning of the Apple Software.  You may 
+ * not, directly or indirectly, redistribute the Apple Software or any portions thereof.
  */
 
 #ifndef _CORECRYPTO_CCDIGEST_H_
@@ -100,14 +101,15 @@ void ccdigest(const struct ccdigest_info *di, size_t len,
 
 #define OID_DEF(_VALUE_)  ((const unsigned char *)_VALUE_)
 
-#define CC_DIGEST_OID_MD2       OID_DEF("\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x02")
-#define CC_DIGEST_OID_MD4       OID_DEF("\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x04")
-#define CC_DIGEST_OID_MD5       OID_DEF("\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x05")
-#define CC_DIGEST_OID_SHA1      OID_DEF("\x06\x05\x2b\x0e\x03\x02\x1a")
-#define CC_DIGEST_OID_SHA224    OID_DEF("\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x04")
-#define CC_DIGEST_OID_SHA256    OID_DEF("\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01")
-#define CC_DIGEST_OID_SHA384    OID_DEF("\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x02")
-#define CC_DIGEST_OID_SHA512    OID_DEF("\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x03")
-#define CC_DIGEST_OID_RMD160    OID_DEF("\x06\x05\x2B\x24\x03\x02\x01")
+#define CC_DIGEST_OID_MD2           OID_DEF("\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x02")
+#define CC_DIGEST_OID_MD4           OID_DEF("\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x04")
+#define CC_DIGEST_OID_MD5           OID_DEF("\x06\x08\x2A\x86\x48\x86\xF7\x0D\x02\x05")
+#define CC_DIGEST_OID_SHA1          OID_DEF("\x06\x05\x2b\x0e\x03\x02\x1a")
+#define CC_DIGEST_OID_SHA224        OID_DEF("\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x04")
+#define CC_DIGEST_OID_SHA256        OID_DEF("\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x01")
+#define CC_DIGEST_OID_SHA384        OID_DEF("\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x02")
+#define CC_DIGEST_OID_SHA512        OID_DEF("\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x03")
+#define CC_DIGEST_OID_SHA512_256    OID_DEF("\x06\x09\x60\x86\x48\x01\x65\x03\x04\x02\x06")
+#define CC_DIGEST_OID_RMD160        OID_DEF("\x06\x05\x2B\x24\x03\x02\x01")
 
 #endif /* _CORECRYPTO_CCDIGEST_H_ */

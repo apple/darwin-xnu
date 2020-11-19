@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2019-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -37,8 +37,6 @@
 struct vnode;
 
 extern ipc_port_t convert_suid_cred_to_port(suid_cred_t);
-
-extern void suid_cred_init(void);
 
 extern void suid_cred_notify(mach_msg_header_t *msg);
 

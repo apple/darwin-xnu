@@ -62,6 +62,7 @@
 #define	MAC_DOEXCF_TRACED	0x01	/* Only do mach exeception if
 					   being ptrace()'ed */
 struct exception_action;
+struct proc;
 struct uthread;
 struct task;
 
@@ -82,6 +83,24 @@ int	mac_task_check_set_host_exception_port(struct task *task,
 int	mac_task_check_set_host_exception_ports(struct task *task,
 	    unsigned int exception_mask);
 
+/* See rdar://problem/58989880 */
+#ifndef bitstr_test
+#   define bitstr_test(name, bit) ((name)[((bit) >> 3)] & (1 << ((bit) & 0x7)))
+#endif /* ! bitstr_test */
+
+typedef int (*mac_task_mach_filter_cbfunc_t)(struct proc *bsdinfo, int num);
+typedef int (*mac_task_kobj_filter_cbfunc_t)(struct proc *bsdinfo, int msgid, int index);
+extern mac_task_mach_filter_cbfunc_t mac_task_mach_trap_evaluate;
+extern mac_task_kobj_filter_cbfunc_t mac_task_kobj_msg_evaluate;
+extern int mach_trap_count;
+extern int mach_kobj_count;
+
+void mac_task_set_mach_filter_mask(struct task *task, uint8_t *maskptr);
+void mac_task_set_kobj_filter_mask(struct task *task, uint8_t *maskptr);
+int  mac_task_register_filter_callbacks(
+		const mac_task_mach_filter_cbfunc_t mach_cbfunc,
+		const mac_task_kobj_filter_cbfunc_t kobj_cbfunc);
+
 /* threads */
 void	act_set_astmacf(struct thread *);
 void	mac_thread_userret(struct thread *);
@@ -100,6 +119,7 @@ int mac_exc_update_task_crash_label(struct task *task, struct label *newlabel);
 int mac_exc_action_check_exception_send(struct task *victim_task, struct exception_action *action);
 
 void mac_proc_notify_exec_complete(struct proc *proc);
+int mac_proc_check_remote_thread_create(struct task *task, int flavor, thread_state_t new_state, mach_msg_type_number_t new_state_count);
 
 struct label *mac_exc_create_label_for_proc(struct proc *proc);
 struct label *mac_exc_create_label_for_current_proc(void);

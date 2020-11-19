@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -40,23 +40,7 @@
 #ifdef MACH_KERNEL_PRIVATE
 #include <mach/mach_types.h>
 
-#include <kern/thread_call.h>
-
-struct mk_timer {
-	decl_simple_lock_data(, lock);
-	thread_call_data_t              call_entry;
-	uint32_t                        is_dead:1,
-	    is_armed:1;
-	int                                     active;
-	ipc_port_t                      port;
-};
-
-typedef struct mk_timer         *mk_timer_t, mk_timer_data_t;
-
-void            mk_timer_port_destroy(
-	ipc_port_t                              port);
-
-void            mk_timer_init(void);
+void mk_timer_port_destroy(ipc_port_t port);
 
 #endif /* MACH_KERNEL_PRIVATE */
 

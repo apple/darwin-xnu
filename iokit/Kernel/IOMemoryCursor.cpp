@@ -27,6 +27,8 @@
  */
 /* IOMemoryCursor.cpp created by wgulland on 1999-3-02 */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <IOKit/assert.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryCursor.h>
@@ -39,20 +41,19 @@
 #define super OSObject
 OSDefineMetaClassAndStructors(IOMemoryCursor, OSObject)
 
-IOMemoryCursor *
+OSSharedPtr<IOMemoryCursor>
 IOMemoryCursor::withSpecification(SegmentFunction  inSegFunc,
     IOPhysicalLength inMaxSegmentSize,
     IOPhysicalLength inMaxTransferSize,
     IOPhysicalLength inAlignment)
 {
-	IOMemoryCursor * me = new IOMemoryCursor;
+	OSSharedPtr<IOMemoryCursor> me = OSMakeShared<IOMemoryCursor>();
 
 	if (me && !me->initWithSpecification(inSegFunc,
 	    inMaxSegmentSize,
 	    inMaxTransferSize,
 	    inAlignment)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
@@ -88,6 +89,9 @@ IOMemoryCursor::initWithSpecification(SegmentFunction  inSegFunc,
 	if (!inSegFunc) {
 		return false;
 	}
+	if (inMaxTransferSize > UINT_MAX) {
+		return false;
+	}
 
 	outSeg              = inSegFunc;
 	maxSegmentSize      = inMaxSegmentSize;
@@ -121,7 +125,7 @@ IOMemoryCursor::genPhysicalSegments(IOMemoryDescriptor *inDescriptor,
 	}
 
 	if (!inMaxTransferSize) {
-		inMaxTransferSize = maxTransferSize;
+		inMaxTransferSize = (typeof(inMaxTransferSize))maxTransferSize;
 	}
 
 	/*
@@ -204,18 +208,17 @@ IONaturalMemoryCursor::outputSegment(PhysicalSegment segment,
 	((PhysicalSegment *) outSegments)[outSegmentIndex] = segment;
 }
 
-IONaturalMemoryCursor *
+OSSharedPtr<IONaturalMemoryCursor>
 IONaturalMemoryCursor::withSpecification(IOPhysicalLength inMaxSegmentSize,
     IOPhysicalLength inMaxTransferSize,
     IOPhysicalLength inAlignment)
 {
-	IONaturalMemoryCursor *me = new IONaturalMemoryCursor;
+	OSSharedPtr<IONaturalMemoryCursor> me = OSMakeShared<IONaturalMemoryCursor>();
 
 	if (me && !me->initWithSpecification(inMaxSegmentSize,
 	    inMaxTransferSize,
 	    inAlignment)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
@@ -255,18 +258,17 @@ IOBigMemoryCursor::outputSegment(PhysicalSegment inSegment,
 #endif
 }
 
-IOBigMemoryCursor *
+OSSharedPtr<IOBigMemoryCursor>
 IOBigMemoryCursor::withSpecification(IOPhysicalLength inMaxSegmentSize,
     IOPhysicalLength inMaxTransferSize,
     IOPhysicalLength inAlignment)
 {
-	IOBigMemoryCursor * me = new IOBigMemoryCursor;
+	OSSharedPtr<IOBigMemoryCursor> me = OSMakeShared<IOBigMemoryCursor>();
 
 	if (me && !me->initWithSpecification(inMaxSegmentSize,
 	    inMaxTransferSize,
 	    inAlignment)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
@@ -306,18 +308,17 @@ IOLittleMemoryCursor::outputSegment(PhysicalSegment inSegment,
 #endif
 }
 
-IOLittleMemoryCursor *
+OSSharedPtr<IOLittleMemoryCursor>
 IOLittleMemoryCursor::withSpecification(IOPhysicalLength inMaxSegmentSize,
     IOPhysicalLength inMaxTransferSize,
     IOPhysicalLength inAlignment)
 {
-	IOLittleMemoryCursor * me = new IOLittleMemoryCursor;
+	OSSharedPtr<IOLittleMemoryCursor> me = OSMakeShared<IOLittleMemoryCursor>();
 
 	if (me && !me->initWithSpecification(inMaxSegmentSize,
 	    inMaxTransferSize,
 	    inAlignment)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;

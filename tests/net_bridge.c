@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2019-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -2255,19 +2255,28 @@ make_dhcp_payload(dhcp_min_payload_t payload, ether_addr_t *eaddr)
 }
 
 static void
-mac_nat_test_dhcp(switch_port_list_t port_list)
+mac_nat_test_dhcp(switch_port_list_t port_list, bool link_layer_unicast)
 {
 	u_int           i;
 	struct in_addr  ip_dst = { INADDR_BROADCAST };
 	struct in_addr  ip_src = { INADDR_ANY };
 	switch_port_t   port;
+	ether_addr_t *  ether_dst;
 
+	if (link_layer_unicast) {
+		/* use link-layer address of MAC-NAT interface */
+		ether_dst = &port_list->list[0].member_mac;
+	} else {
+		/* use link-layer broadcast address */
+		ether_dst = &ether_broadcast;
+	}
 	for (i = 0, port = port_list->list; i < port_list->count; i++, port++) {
 		ether_addr_t            eaddr;
 		dhcp_min_payload        payload;
 		u_int                   payload_len;
 
-		if (port->mac_nat) {
+		if (!link_layer_unicast && port->mac_nat) {
+			/* only send through non-MAC-NAT ports */
 			continue;
 		}
 		set_ethernet_address(&eaddr, port->unit, 0);
@@ -2281,7 +2290,7 @@ mac_nat_test_dhcp(switch_port_list_t port_list)
 		    &eaddr,
 		    (union ifbrip *)&ip_src,
 		    BOOTP_CLIENT_PORT,
-		    &ether_broadcast,
+		    ether_dst,
 		    (union ifbrip *)&ip_dst,
 		    BOOTP_SERVER_PORT,
 		    &payload,
@@ -2292,8 +2301,13 @@ mac_nat_test_dhcp(switch_port_list_t port_list)
 		    port);
 
 		check_received_count(port_list, port, 1);
+		if (link_layer_unicast) {
+			/* send a single unicast to MAC-NAT interface */
+			break;
+		}
 	}
-	T_PASS("%s", __func__);
+	T_PASS("%s %s", __func__,
+	    link_layer_unicast ? "unicast" : "broadcast");
 }
 
 
@@ -3230,6 +3244,8 @@ bridge_cleanup(const char * bridge, u_int n_ports, bool fail_on_error)
  *  - verify DHCP broadcast bit conversion
  *  - verify IPv6 translation
  *  - verify ND6 translation (Neighbor, Router)
+ *  - verify IPv4 subnet-local broadcast to MAC-NAT interface link-layer
+ *    address arrives on all member links
  */
 
 static void
@@ -3280,11 +3296,14 @@ bridge_test_mac_nat_ipv4(u_int n_ports, u_int num_addrs)
 	mac_nat_test_ip(port_list, AF_INET);
 
 	/* verify the DHCP broadcast bit gets set appropriately */
-	mac_nat_test_dhcp(port_list);
+	mac_nat_test_dhcp(port_list, false);
 
 	/* verify that ARP packet gets translated when necessary */
 	mac_nat_test_arp_out(port_list);
 	mac_nat_test_arp_in(port_list);
+
+	/* verify IP broadcast to MAC-NAT interface link layer address */
+	mac_nat_test_dhcp(port_list, true);
 
 	if (S_debug) {
 		T_LOG("Sleeping for 5 seconds");

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -123,11 +123,11 @@ struct en_desc {
 };
 
 /* descriptors are allocated in blocks of ETHER_DESC_BLK_SIZE */
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 #define ETHER_DESC_BLK_SIZE (2) /* IP, ARP */
-#else
+#else /* XNU_TARGET_OS_OSX */
 #define ETHER_DESC_BLK_SIZE (10)
-#endif
+#endif /* XNU_TARGET_OS_OSX */
 
 /*
  * Header for the demux list, hangs off of IFP at if_family_cookie
@@ -639,14 +639,12 @@ ether_family_init(void)
 		    error);
 		goto done;
 	}
-#if INET6
 	if ((error = proto_register_plumber(PF_INET6, APPLE_IF_FAM_ETHERNET,
 	    ether_attach_inet6, ether_detach_inet6)) != 0) {
 		printf("proto_register_plumber failed for PF_INET6 error=%d\n",
 		    error);
 		goto done;
 	}
-#endif /* INET6 */
 #if VLAN
 	vlan_family_init();
 #endif /* VLAN */

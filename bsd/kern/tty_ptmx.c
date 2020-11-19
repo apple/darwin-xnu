@@ -117,7 +117,7 @@ extern  d_reset_t       ptcreset;
 extern  d_select_t      ptcselect;
 
 static int ptmx_major;          /* dynamically assigned major number */
-static struct cdevsw ptmx_cdev = {
+static const struct cdevsw ptmx_cdev = {
 	.d_open       = ptcopen,
 	.d_close      = ptcclose,
 	.d_read       = ptcread,
@@ -135,7 +135,7 @@ static struct cdevsw ptmx_cdev = {
 };
 
 static int ptsd_major;          /* dynamically assigned major number */
-static struct cdevsw ptsd_cdev = {
+static const struct cdevsw ptsd_cdev = {
 	.d_open       = ptsopen,
 	.d_close      = ptsclose,
 	.d_read       = ptsread,
@@ -269,9 +269,12 @@ static struct _ptmx_ioctl_state {
 static struct ptmx_ioctl *
 ptmx_get_ioctl(int minor, int open_flag)
 {
-	struct ptmx_ioctl *new_ptmx_ioctl;
+	struct ptmx_ioctl *ptmx_ioctl = NULL;
 
 	if (open_flag & PF_OPEN_M) {
+		struct ptmx_ioctl *new_ptmx_ioctl;
+
+		DEVFS_LOCK();
 		/*
 		 * If we are about to allocate more memory, but we have
 		 * already hit the administrative limit, then fail the
@@ -282,8 +285,10 @@ ptmx_get_ioctl(int minor, int open_flag)
 		 *		snapping to the nearest PTMX_GROW_VECTOR...
 		 */
 		if ((_state.pis_total - _state.pis_free) >= ptmx_max) {
+			DEVFS_UNLOCK();
 			return NULL;
 		}
+		DEVFS_UNLOCK();
 
 		MALLOC(new_ptmx_ioctl, struct ptmx_ioctl *, sizeof(struct ptmx_ioctl), M_TTYS, M_WAITOK | M_ZERO);
 		if (new_ptmx_ioctl == NULL) {
@@ -302,6 +307,18 @@ ptmx_get_ioctl(int minor, int open_flag)
 		 * doing so avoids a reallocation race on the minor number.
 		 */
 		DEVFS_LOCK();
+
+		/*
+		 * Check again to ensure the limit is not reached after initial check
+		 * when the lock was dropped momentarily for malloc.
+		 */
+		if ((_state.pis_total - _state.pis_free) >= ptmx_max) {
+			ttyfree(new_ptmx_ioctl->pt_tty);
+			DEVFS_UNLOCK();
+			FREE(new_ptmx_ioctl, M_TTYS);
+			return NULL;
+		}
+
 		/* Need to allocate a larger vector? */
 		if (_state.pis_free == 0) {
 			struct ptmx_ioctl **new_pis_ioctl_list;
@@ -365,11 +382,17 @@ ptmx_get_ioctl(int minor, int open_flag)
 		}
 	}
 
-	if (minor < 0 || minor >= _state.pis_total) {
-		return NULL;
+	/*
+	 * Lock is held here to protect race when the 'pis_ioctl_list' array is
+	 * being reallocated to increase its slots.
+	 */
+	DEVFS_LOCK();
+	if (minor >= 0 && minor < _state.pis_total) {
+		ptmx_ioctl = _state.pis_ioctl_list[minor];
 	}
+	DEVFS_UNLOCK();
 
-	return _state.pis_ioctl_list[minor];
+	return ptmx_ioctl;
 }
 
 /*

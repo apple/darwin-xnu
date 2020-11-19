@@ -106,6 +106,11 @@ enum waitq_type {
 	WQT_SET     = 0x3,
 };
 
+__options_decl(waitq_options_t, uint32_t, {
+	WQ_OPTION_NONE                 = 0,
+	WQ_OPTION_HANDOFF              = 1,
+});
+
 #if CONFIG_WAITQ_STATS
 #define NWAITQ_BTFRAMES 5
 struct wq_stats {
@@ -154,11 +159,16 @@ struct waitq {
 	uint64_t waitq_set_id;
 	uint64_t waitq_prepost_id;
 	union {
-		queue_head_t            waitq_queue;        /* queue of elements */
-		struct priority_queue   waitq_prio_queue;   /* priority ordered queue of elements */
-		struct {
-			struct turnstile   *waitq_ts;           /* turnstile for WQT_TSPROXY */
-			void               *waitq_tspriv;       /* private field for clients use */
+		queue_head_t            waitq_queue;               /* queue of elements - used for waitq not embedded in turnstile or ports */
+		struct priority_queue_sched_max waitq_prio_queue;  /* priority ordered queue of elements - used for waitqs embedded in turnstiles */
+		struct {                                           /* used for waitqs embedded in ports */
+			struct turnstile   *waitq_ts;              /* used to store receive turnstile of the port */
+			union {
+				void               *waitq_tspriv;  /* non special-reply port, used to store the watchport element for port used to store
+				                                    * receive turnstile of the port */
+				int                waitq_priv_pid; /* special-reply port, used to store the pid that copies out the send once right of the
+				                                    * special-reply port. */
+			};
 		};
 	};
 };
@@ -276,7 +286,8 @@ extern kern_return_t waitq_wakeup64_one_locked(struct waitq *waitq,
     wait_result_t result,
     uint64_t *reserved_preposts,
     int priority,
-    waitq_lock_state_t lock_state);
+    waitq_lock_state_t lock_state,
+    waitq_options_t options);
 
 /* return identity of a thread awakened for a particular <wait_queue,event> */
 extern thread_t

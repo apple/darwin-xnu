@@ -95,7 +95,7 @@ __doprnt(
 	int                     is_log);
 
 extern void cons_putc_locked(char);
-extern void bsd_log_lock(void);
+extern bool bsd_log_lock(bool);
 extern void bsd_log_unlock(void);
 
 
@@ -218,13 +218,17 @@ IOLibInit(void)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-static uint32_t
-log2up(uint32_t size)
+static vm_size_t
+log2up(vm_size_t size)
 {
 	if (size <= 1) {
 		size = 0;
 	} else {
-		size = 32 - __builtin_clz(size - 1);
+#if __LP64__
+		size = 64 - __builtin_clzl(size - 1);
+#else
+		size = 32 - __builtin_clzl(size - 1);
+#endif
 	}
 	return size;
 }
@@ -254,13 +258,33 @@ IOExitThread(void)
 	(void) thread_terminate(current_thread());
 }
 
+void *
+IOMalloc_external(
+	vm_size_t size);
+void *
+IOMalloc_external(
+	vm_size_t size)
+{
+	return IOMalloc_internal(KHEAP_KEXT, size);
+}
+
+void *
+IOMallocZero_external(
+	vm_size_t size);
+void *
+IOMallocZero_external(
+	vm_size_t size)
+{
+	return IOMallocZero_internal(KHEAP_KEXT, size);
+}
+
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 void *
-IOMallocZero(vm_size_t size)
+IOMallocZero_internal(struct kalloc_heap *kalloc_heap_cfg, vm_size_t size)
 {
 	void * result;
-	result = IOMalloc(size);
+	result = IOMalloc_internal(kalloc_heap_cfg, size);
 	if (result) {
 		bzero(result, size);
 	}
@@ -284,7 +308,7 @@ struct IOLibMallocHeader {
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 void *
-IOMalloc(vm_size_t size)
+IOMalloc_internal(struct kalloc_heap *kheap, vm_size_t size)
 {
 	void * address;
 	vm_size_t allocSize;
@@ -295,7 +319,7 @@ IOMalloc(vm_size_t size)
 		return NULL;                                          // overflow
 	}
 #endif
-	address = kalloc_tag_bt(allocSize, VM_KERN_MEMORY_IOKIT);
+	address = kheap_alloc_tag_bt(kheap, allocSize, Z_WAITOK, VM_KERN_MEMORY_IOKIT);
 
 	if (address) {
 #if IOTRACKING
@@ -311,7 +335,7 @@ IOMalloc(vm_size_t size)
 		address = (typeof(address))(((uintptr_t) address) + sizeofIOLibMallocHeader);
 
 #if IOALLOCDEBUG
-		OSAddAtomic(size, &debug_iomalloc_size);
+		OSAddAtomicLong(size, &debug_iomalloc_size);
 #endif
 		IOStatisticsAlloc(kIOStatisticsMalloc, size);
 	}
@@ -349,7 +373,7 @@ IOFree(void * inAddress, vm_size_t size)
 
 		kfree(address, size + sizeofIOLibMallocHeader);
 #if IOALLOCDEBUG
-		OSAddAtomic(-size, &debug_iomalloc_size);
+		OSAddAtomicLong(-size, &debug_iomalloc_size);
 #endif
 		IOStatisticsAlloc(kIOStatisticsFree, size);
 	}
@@ -391,9 +415,19 @@ struct IOLibPageMallocHeader {
 #endif
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
+void *
+IOMallocAligned_external(
+	vm_size_t size, vm_size_t alignment);
+void *
+IOMallocAligned_external(
+	vm_size_t size, vm_size_t alignment)
+{
+	return IOMallocAligned_internal(KHEAP_KEXT, size, alignment);
+}
 
 void *
-IOMallocAligned(vm_size_t size, vm_size_t alignment)
+IOMallocAligned_internal(struct kalloc_heap *kheap, vm_size_t size,
+    vm_size_t alignment)
 {
 	kern_return_t           kr;
 	vm_offset_t             address;
@@ -405,8 +439,11 @@ IOMallocAligned(vm_size_t size, vm_size_t alignment)
 	if (size == 0) {
 		return NULL;
 	}
+	if (((uint32_t) alignment) != alignment) {
+		return NULL;
+	}
 
-	alignment = (1UL << log2up(alignment));
+	alignment = (1UL << log2up((uint32_t) alignment));
 	alignMask = alignment - 1;
 	adjustedSize = size + sizeofIOLibPageMallocHeader;
 
@@ -433,7 +470,8 @@ IOMallocAligned(vm_size_t size, vm_size_t alignment)
 				allocationAddress = 0;
 			}
 		} else {
-			allocationAddress = (vm_address_t) kalloc_tag_bt(adjustedSize, VM_KERN_MEMORY_IOKIT);
+			allocationAddress = (vm_address_t) kheap_alloc_tag_bt(kheap,
+			    adjustedSize, Z_WAITOK, VM_KERN_MEMORY_IOKIT);
 		}
 
 		if (allocationAddress) {
@@ -460,7 +498,7 @@ IOMallocAligned(vm_size_t size, vm_size_t alignment)
 
 	if (address) {
 #if IOALLOCDEBUG
-		OSAddAtomic(size, &debug_iomalloc_size);
+		OSAddAtomicLong(size, &debug_iomalloc_size);
 #endif
 		IOStatisticsAlloc(kIOStatisticsMallocAligned, size);
 	}
@@ -511,7 +549,7 @@ IOFreeAligned(void * address, vm_size_t size)
 	}
 
 #if IOALLOCDEBUG
-	OSAddAtomic(-size, &debug_iomalloc_size);
+	OSAddAtomicLong(-size, &debug_iomalloc_size);
 #endif
 
 	IOStatisticsAlloc(kIOStatisticsFreeAligned, size);
@@ -522,8 +560,8 @@ IOFreeAligned(void * address, vm_size_t size)
 void
 IOKernelFreePhysical(mach_vm_address_t address, mach_vm_size_t size)
 {
-	mach_vm_address_t       allocationAddress;
-	mach_vm_size_t          adjustedSize;
+	vm_address_t       allocationAddress;
+	vm_size_t          adjustedSize;
 	IOLibPageMallocHeader * hdr;
 
 	if (!address) {
@@ -554,7 +592,7 @@ IOKernelFreePhysical(mach_vm_address_t address, mach_vm_size_t size)
 
 	IOStatisticsAlloc(kIOStatisticsFreeContiguous, size);
 #if IOALLOCDEBUG
-	OSAddAtomic(-size, &debug_iomalloc_size);
+	OSAddAtomicLong(-size, &debug_iomalloc_size);
 #endif
 }
 
@@ -612,7 +650,7 @@ IOKernelAllocateWithPhysicalRestrict(mach_vm_size_t size, mach_vm_address_t maxP
 		}
 		if (contiguous || maxPhys) {
 			kr = kmem_alloc_contig(kernel_map, &virt, size,
-			    alignMask, atop(maxPhys), atop(alignMask), 0, IOMemoryTag(kernel_map));
+			    alignMask, (ppnum_t) atop(maxPhys), (ppnum_t) atop(alignMask), 0, IOMemoryTag(kernel_map));
 		} else {
 			kr = kernel_memory_allocate(kernel_map, &virt,
 			    size, alignMask, options, IOMemoryTag(kernel_map));
@@ -632,7 +670,8 @@ IOKernelAllocateWithPhysicalRestrict(mach_vm_size_t size, mach_vm_address_t maxP
 		if (adjustedSize < size) {
 			return 0;
 		}
-		allocationAddress = (mach_vm_address_t) kalloc_tag_bt(adjustedSize, VM_KERN_MEMORY_IOKIT);
+		allocationAddress = (mach_vm_address_t) kheap_alloc_tag_bt(KHEAP_KEXT,
+		    adjustedSize, Z_WAITOK, VM_KERN_MEMORY_IOKIT);
 
 		if (allocationAddress) {
 			address = (allocationAddress + alignMask + sizeofIOLibPageMallocHeader)
@@ -661,7 +700,7 @@ IOKernelAllocateWithPhysicalRestrict(mach_vm_size_t size, mach_vm_address_t maxP
 	if (address) {
 		IOStatisticsAlloc(kIOStatisticsMallocContiguous, size);
 #if IOALLOCDEBUG
-		OSAddAtomic(size, &debug_iomalloc_size);
+		OSAddAtomicLong(size, &debug_iomalloc_size);
 #endif
 	}
 
@@ -918,15 +957,23 @@ IOMallocOnePageablePage(iopa_t * a)
 	return (uintptr_t) IOMallocPageablePages(page_size, page_size, VM_KERN_MEMORY_IOKIT);
 }
 
-void *
-IOMallocPageable(vm_size_t size, vm_size_t alignment)
+static void *
+IOMallocPageableInternal(vm_size_t size, vm_size_t alignment, bool zeroed)
 {
 	void * addr;
 
-	if (size >= (page_size - 4 * gIOPageAllocChunkBytes)) {
+	if (((uint32_t) alignment) != alignment) {
+		return NULL;
+	}
+	if (size >= (page_size - 4 * gIOPageAllocChunkBytes) ||
+	    alignment > page_size) {
 		addr = IOMallocPageablePages(size, alignment, IOMemoryTag(kernel_map));
+		/* Memory allocated this way will already be zeroed. */
 	} else {
-		addr = ((void *) iopa_alloc(&gIOPageablePageAllocator, &IOMallocOnePageablePage, size, alignment));
+		addr = ((void *) iopa_alloc(&gIOPageablePageAllocator, &IOMallocOnePageablePage, size, (uint32_t) alignment));
+		if (zeroed) {
+			bzero(addr, size);
+		}
 	}
 
 	if (addr) {
@@ -937,6 +984,18 @@ IOMallocPageable(vm_size_t size, vm_size_t alignment)
 	}
 
 	return addr;
+}
+
+void *
+IOMallocPageable(vm_size_t size, vm_size_t alignment)
+{
+	return IOMallocPageableInternal(size, alignment, /*zeroed*/ false);
+}
+
+void *
+IOMallocPageableZero(vm_size_t size, vm_size_t alignment)
+{
+	return IOMallocPageableInternal(size, alignment, /*zeroed*/ true);
 }
 
 void
@@ -996,7 +1055,7 @@ iopa_allocinpage(iopa_page_t * pa, uint32_t count, uint64_t align)
 }
 
 uintptr_t
-iopa_alloc(iopa_t * a, iopa_proc_t alloc, vm_size_t bytes, uint32_t balign)
+iopa_alloc(iopa_t * a, iopa_proc_t alloc, vm_size_t bytes, vm_size_t balign)
 {
 	static const uint64_t align_masks[] = {
 		0xFFFFFFFFFFFFFFFF,
@@ -1011,12 +1070,19 @@ iopa_alloc(iopa_t * a, iopa_proc_t alloc, vm_size_t bytes, uint32_t balign)
 	uintptr_t     addr = 0;
 	uint32_t      count;
 	uint64_t      align;
+	vm_size_t     align_masks_idx;
 
+	if (((uint32_t) bytes) != bytes) {
+		return 0;
+	}
 	if (!bytes) {
 		bytes = 1;
 	}
-	count = (bytes + gIOPageAllocChunkBytes - 1) / gIOPageAllocChunkBytes;
-	align = align_masks[log2up((balign + gIOPageAllocChunkBytes - 1) / gIOPageAllocChunkBytes)];
+	count = (((uint32_t) bytes) + gIOPageAllocChunkBytes - 1) / gIOPageAllocChunkBytes;
+
+	align_masks_idx = log2up((balign + gIOPageAllocChunkBytes - 1) / gIOPageAllocChunkBytes);
+	assert(align_masks_idx < sizeof(align_masks) / sizeof(*align_masks));
+	align = align_masks[align_masks_idx];
 
 	IOLockLock(a->lock);
 	__IGNORE_WCASTALIGN(pa = (typeof(pa))queue_first(&a->list));
@@ -1061,6 +1127,9 @@ iopa_free(iopa_t * a, uintptr_t addr, vm_size_t bytes)
 	uint32_t      count;
 	uintptr_t     chunk;
 
+	if (((uint32_t) bytes) != bytes) {
+		return 0;
+	}
 	if (!bytes) {
 		bytes = 1;
 	}
@@ -1071,7 +1140,7 @@ iopa_free(iopa_t * a, uintptr_t addr, vm_size_t bytes)
 	pa = (typeof(pa))(addr | (page_size - gIOPageAllocChunkBytes));
 	assert(kIOPageAllocSignature == pa->signature);
 
-	count = (bytes + gIOPageAllocChunkBytes - 1) / gIOPageAllocChunkBytes;
+	count = (((uint32_t) bytes) + gIOPageAllocChunkBytes - 1) / gIOPageAllocChunkBytes;
 	chunk /= gIOPageAllocChunkBytes;
 
 	IOLockLock(a->lock);
@@ -1318,7 +1387,7 @@ IOCopyLogNameForPID(int pid)
 	size_t len;
 	snprintf(buf, sizeof(buf), "pid %d, ", pid);
 	len = strlen(buf);
-	proc_name(pid, buf + len, sizeof(buf) - len);
+	proc_name(pid, buf + len, (int) (sizeof(buf) - len));
 	return OSString::withCString(buf);
 }
 

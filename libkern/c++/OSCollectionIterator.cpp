@@ -27,10 +27,13 @@
  */
 /* IOArray.h created by rsulack on Thu 11-Sep-1997 */
 
-#include <libkern/c++/OSCollectionIterator.h>
-#include <libkern/c++/OSCollection.h>
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <libkern/c++/OSArray.h>
+#include <libkern/c++/OSCollection.h>
+#include <libkern/c++/OSCollectionIterator.h>
 #include <libkern/c++/OSLib.h>
+#include <libkern/c++/OSSharedPtr.h>
 
 #define super OSIterator
 
@@ -43,8 +46,7 @@ OSCollectionIterator::initWithCollection(const OSCollection *inColl)
 		return false;
 	}
 
-	inColl->retain();
-	collection = inColl;
+	collection.reset(inColl, OSRetain);
 	collIterator = NULL;
 	initialUpdateStamp = 0;
 	valid = false;
@@ -52,14 +54,13 @@ OSCollectionIterator::initWithCollection(const OSCollection *inColl)
 	return true;
 }
 
-OSCollectionIterator *
+OSSharedPtr<OSCollectionIterator>
 OSCollectionIterator::withCollection(const OSCollection *inColl)
 {
-	OSCollectionIterator *me = new OSCollectionIterator;
+	OSSharedPtr<OSCollectionIterator> me = OSMakeShared<OSCollectionIterator>();
 
 	if (me && !me->initWithCollection(inColl)) {
-		me->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return me;
@@ -74,10 +75,7 @@ OSCollectionIterator::free()
 		collIterator = NULL;
 	}
 
-	if (collection) {
-		collection->release();
-		collection = NULL;
-	}
+	collection.reset();
 
 	super::free();
 }

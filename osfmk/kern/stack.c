@@ -36,6 +36,7 @@
 #include <kern/kern_types.h>
 #include <kern/lock_group.h>
 #include <kern/mach_param.h>
+#include <kern/percpu.h>
 #include <kern/processor.h>
 #include <kern/thread.h>
 #include <kern/zalloc.h>
@@ -68,10 +69,8 @@ static unsigned int             stack_hiwat;
 unsigned int                    stack_total;                            /* current total count */
 unsigned long long              stack_allocs;                           /* total count of allocations */
 
-static int                      stack_fake_zone_index = -1;     /* index in zone_info array */
-
 static unsigned int             stack_free_target;
-static int                              stack_free_delta;
+static int                      stack_free_delta;
 
 static unsigned int             stack_new_count;                                                /* total new stack allocations */
 
@@ -81,6 +80,12 @@ unsigned int                    kernel_stack_pages;
 vm_offset_t                     kernel_stack_size;
 vm_offset_t                     kernel_stack_mask;
 vm_offset_t                     kernel_stack_depth_max;
+
+struct stack_cache {
+	vm_offset_t     free;
+	unsigned int    count;
+};
+static struct stack_cache PERCPU_DATA(stack_cache);
 
 /*
  *	The next field is at the base of the stack,
@@ -248,7 +253,7 @@ stack_free_stack(
 #endif
 
 	s = splsched();
-	cache = &PROCESSOR_DATA(current_processor(), stack_cache);
+	cache = PERCPU_GET(stack_cache);
 	if (cache->count < STACK_CACHE_SIZE) {
 		stack_next(stack) = cache->free;
 		cache->free = stack;
@@ -283,7 +288,7 @@ stack_alloc_try(
 	struct stack_cache      *cache;
 	vm_offset_t                     stack;
 
-	cache = &PROCESSOR_DATA(current_processor(), stack_cache);
+	cache = PERCPU_GET(stack_cache);
 	stack = cache->free;
 	if (stack != 0) {
 		cache->free = stack_next(stack);
@@ -407,42 +412,6 @@ compute_stack_target(
 	splx(s);
 }
 
-void
-stack_fake_zone_init(int zone_index)
-{
-	stack_fake_zone_index = zone_index;
-}
-
-void
-stack_fake_zone_info(int *count,
-    vm_size_t *cur_size, vm_size_t *max_size, vm_size_t *elem_size, vm_size_t *alloc_size,
-    uint64_t *sum_size, int *collectable, int *exhaustable, int *caller_acct)
-{
-	unsigned int    total, hiwat, free;
-	unsigned long long all;
-	spl_t                   s;
-
-	s = splsched();
-	stack_lock();
-	all = stack_allocs;
-	total = stack_total;
-	hiwat = stack_hiwat;
-	free = stack_free_count;
-	stack_unlock();
-	splx(s);
-
-	*count      = total - free;
-	*cur_size   = kernel_stack_size * total;
-	*max_size   = kernel_stack_size * hiwat;
-	*elem_size  = kernel_stack_size;
-	*alloc_size = kernel_stack_size;
-	*sum_size = all * kernel_stack_size;
-
-	*collectable = 1;
-	*exhaustable = 0;
-	*caller_acct = 1;
-}
-
 /* OBSOLETE */
 void    stack_privilege(
 	thread_t        thread);
@@ -504,13 +473,13 @@ processor_set_stack_usage(
 		lck_mtx_unlock(&tasks_threads_lock);
 
 		if (size != 0) {
-			kfree(addr, size);
+			kheap_free(KHEAP_TEMP, addr, size);
 		}
 
 		assert(size_needed > 0);
 		size = size_needed;
 
-		addr = kalloc(size);
+		addr = kheap_alloc(KHEAP_TEMP, size, Z_WAITOK);
 		if (addr == 0) {
 			return KERN_RESOURCE_SHORTAGE;
 		}
@@ -544,7 +513,7 @@ processor_set_stack_usage(
 	}
 
 	if (size != 0) {
-		kfree(addr, size);
+		kheap_free(KHEAP_TEMP, addr, size);
 	}
 
 	*totalp = total;

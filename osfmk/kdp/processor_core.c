@@ -29,7 +29,7 @@
 #include <kdp/kdp_core.h>
 #include <kdp/processor_core.h>
 #include <kern/assert.h>
-#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <libkern/kernel_mach_header.h>
 #include <libkern/OSAtomic.h>
 #include <libsa/types.h>
@@ -127,7 +127,7 @@ kern_register_coredump_helper_internal(int kern_coredump_config_vers, const kern
 	}
 #endif
 
-	core_helper = kalloc(sizeof(*core_helper));
+	core_helper = zalloc_permanent_type(struct kern_coredump_core);
 	core_helper->kcc_next = NULL;
 	core_helper->kcc_refcon = refcon;
 	if (xnu_callback) {
@@ -739,10 +739,10 @@ kern_coredump_log(void *context, const char *string, ...)
 	va_list coredump_log_args;
 
 	va_start(coredump_log_args, string);
-	_doprnt(string, &coredump_log_args, consdebug_putc, 0);
+	_doprnt(string, &coredump_log_args, consdebug_putc, 16);
 	va_end(coredump_log_args);
 
-#if CONFIG_EMBEDDED
+#if defined(__arm__) || defined(__arm64__)
 	paniclog_flush();
 #endif
 }

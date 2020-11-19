@@ -29,6 +29,7 @@
 #define _IOMEMORYCURSOR_H
 
 #include <libkern/c++/OSObject.h>
+#include <libkern/c++/OSPtr.h>
 #include <IOKit/IOTypes.h>
 
 class IOMemoryDescriptor;
@@ -111,7 +112,7 @@ public:
  *   @param alignment Alignment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
  *   @result Returns a new memory cursor if successfully created and initialized, 0 otherwise.
  */
-	static IOMemoryCursor *
+	static OSPtr<IOMemoryCursor>
 	withSpecification(SegmentFunction  outSegFunc,
 	    IOPhysicalLength maxSegmentSize = 0,
 	    IOPhysicalLength maxTransferSize = 0,
@@ -187,7 +188,7 @@ public:
  *   @param alignment Alignment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
  *   @result Returns a new memory cursor if successfully created and initialized, 0 otherwise.
  */
-	static IONaturalMemoryCursor *
+	static OSPtr<IONaturalMemoryCursor>
 	withSpecification(IOPhysicalLength maxSegmentSize,
 	    IOPhysicalLength maxTransferSize,
 	    IOPhysicalLength alignment = 1);
@@ -263,7 +264,7 @@ public:
  *   @param alignment Alignment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
  *   @result Returns a new memory cursor if successfully created and initialized, 0 otherwise.
  */
-	static IOBigMemoryCursor *
+	static OSPtr<IOBigMemoryCursor>
 	withSpecification(IOPhysicalLength maxSegmentSize,
 	    IOPhysicalLength maxTransferSize,
 	    IOPhysicalLength alignment = 1);
@@ -339,7 +340,7 @@ public:
  *   @param alignment Alignment restrictions on output physical addresses.  Not currently implemented.  Defaults to single byte alignment.
  *   @result Returns a new memory cursor if successfully created and initialized, 0 otherwise.
  */
-	static IOLittleMemoryCursor *
+	static OSPtr<IOLittleMemoryCursor>
 	withSpecification(IOPhysicalLength maxSegmentSize,
 	    IOPhysicalLength maxTransferSize,
 	    IOPhysicalLength alignment = 1);

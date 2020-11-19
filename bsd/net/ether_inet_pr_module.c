@@ -454,10 +454,6 @@ ether_inet_arp(ifnet_t ifp, u_short arpop, const struct sockaddr_dl *sender_hw,
 	eh = mbuf_data(m);
 	eh->ether_type = htons(ETHERTYPE_ARP);
 
-#if CONFIG_MACF_NET
-	mac_mbuf_label_associate_linklayer(ifp, m);
-#endif
-
 	/* Fill out the arp header */
 	ea->arp_pro = htons(ETHERTYPE_IP);
 	ea->arp_hln = sizeof(ea->arp_sha);

@@ -26,11 +26,29 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
-#include <stdint.h>
+#ifndef __IOKIT_IOHIBERNATEPRIVATE_H
+#define __IOKIT_IOHIBERNATEPRIVATE_H
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+#if HIBERNATION
+
+#if defined(__arm64__)
+
+#define HIBERNATE_HMAC_IMAGE 1
+#define HIBERNATE_HAVE_MACHINE_HEADER 1
+
+// enable the hibernation exception handler on DEBUG and DEVELOPMENT kernels
+#define HIBERNATE_TRAP_HANDLER (DEBUG || DEVELOPMENT)
+
+#endif /* defined(__arm64__) */
+
+#endif /* HIBERNATION */
+
+#ifndef __ASSEMBLER__
+
+#include <stdint.h>
+#include <sys/cdefs.h>
+
+__BEGIN_DECLS
 
 #ifdef KERNEL
 #include <libkern/crypto/aes.h>
@@ -38,10 +56,24 @@ extern "C" {
 #include <kern/debug.h>
 
 extern int kdb_printf(const char *format, ...) __printflike(1, 2);
-#endif
+#endif /* KERNEL */
 
-#ifndef __IOKIT_IOHIBERNATEPRIVATE_H
-#define __IOKIT_IOHIBERNATEPRIVATE_H
+#define HIBERNATE_HMAC_SIZE 48 // SHA384 size in bytes
+
+struct IOHibernateHibSegment {
+	uint32_t    iBootMemoryRegion;
+	uint32_t    physPage;
+	uint32_t    pageCount;
+	uint32_t    protection;
+};
+typedef struct IOHibernateHibSegment IOHibernateHibSegment;
+
+#define NUM_HIBSEGINFO_SEGMENTS 10
+struct IOHibernateHibSegInfo {
+	struct IOHibernateHibSegment    segments[NUM_HIBSEGINFO_SEGMENTS];
+	uint8_t                         hmac[HIBERNATE_HMAC_SIZE];
+};
+typedef struct IOHibernateHibSegInfo IOHibernateHibSegInfo;
 
 struct IOPolledFileExtent {
 	uint64_t    start;
@@ -100,12 +132,19 @@ struct IOHibernateImageHeader {
 
 	uint32_t    debugFlags;
 	uint32_t    options;
-	uint32_t    sleepTime;
+	uint64_t    sleepTime __attribute__ ((packed));
 	uint32_t    compression;
 
 	uint8_t     bridgeBootSessionUUID[16];
 
-	uint32_t    reserved[54];       // make sizeof == 512
+	uint64_t    lastHibAbsTime __attribute__ ((packed));
+	union {
+		uint64_t    lastHibContTime;
+		uint64_t    hwClockOffset;
+	} __attribute__ ((packed));
+	uint64_t    kernVirtSlide __attribute__ ((packed));
+
+	uint32_t    reserved[47];       // make sizeof == 512
 	uint32_t    booterTime0;
 	uint32_t    booterTime1;
 	uint32_t    booterTime2;
@@ -120,6 +159,16 @@ struct IOHibernateImageHeader {
 	uint64_t    encryptEnd __attribute__ ((packed));
 	uint64_t    deviceBase __attribute__ ((packed));
 	uint32_t    deviceBlockSize;
+
+#if defined(__arm64__)
+	uint32_t    segmentsFileOffset;
+	IOHibernateHibSegInfo hibSegInfo;
+	uint32_t    imageHeaderHMACSize;
+	uint8_t     imageHeaderHMAC[HIBERNATE_HMAC_SIZE];
+	uint8_t     handoffHMAC[HIBERNATE_HMAC_SIZE];
+	uint8_t     image1PagesHMAC[HIBERNATE_HMAC_SIZE];
+	uint8_t     image2PagesHMAC[HIBERNATE_HMAC_SIZE];
+#endif /* defined(__arm64__) */
 
 	uint32_t            fileExtentMapSize;
 	IOPolledFileExtent  fileExtentMap[2];
@@ -250,9 +299,9 @@ struct hibernate_preview_t {
 	uint32_t  width;        // Width
 	uint32_t  height;       // Height
 	uint32_t  depth;        // Pixel Depth
-	uint32_t  lockTime; // Lock time
-	uint32_t  reservedG[8];// reserved
-	uint32_t  reservedK[8];// reserved
+	uint64_t  lockTime;     // Lock time
+	uint32_t  reservedG[7]; // reserved
+	uint32_t  reservedK[8]; // reserved
 };
 typedef struct hibernate_preview_t hibernate_preview_t;
 
@@ -278,7 +327,8 @@ struct hibernate_statistics_t {
 	uint32_t hidReadyTime;
 
 	uint32_t wakeCapability;
-	uint32_t resvA[15];
+	uint32_t hibCount;
+	uint32_t resvA[14];
 };
 typedef struct hibernate_statistics_t hibernate_statistics_t;
 
@@ -287,6 +337,10 @@ typedef struct hibernate_statistics_t hibernate_statistics_t;
 #define kIOSysctlHibernateWakeNotify    "kern.hibernatewakenotification"
 #define kIOSysctlHibernateScreenReady   "kern.hibernatelockscreenready"
 #define kIOSysctlHibernateHIDReady      "kern.hibernatehidready"
+#define kIOSysctlHibernateCount         "kern.hibernatecount"
+#define kIOSysctlHibernateSetPreview    "kern.hibernatepreview"
+
+#define kIOHibernateSetPreviewEntitlementKey "com.apple.private.hibernation.set-preview"
 
 #ifdef KERNEL
 
@@ -305,6 +359,17 @@ void     IOHibernateSetWakeCapabilities(uint32_t capability);
 void     IOHibernateSystemRestart(void);
 
 #endif /* __cplusplus */
+
+struct hibernate_scratch {
+	uint8_t  *curPage;
+	size_t    curPagePos;
+	uint64_t  curPos;
+	uint64_t  totalLength;
+	ppnum_t  headPage;
+	hibernate_page_list_t *map;
+	uint32_t *nextFree;
+};
+typedef struct hibernate_scratch hibernate_scratch_t;
 
 void
 vm_compressor_do_warmup(void);
@@ -405,10 +470,28 @@ uintptr_t
 hibernate_restore_phys_page(uint64_t src, uint64_t dst, uint32_t len, uint32_t procFlags);
 
 void
+hibernate_scratch_init(hibernate_scratch_t * scratch, hibernate_page_list_t * map, uint32_t * nextFree);
+
+void
+hibernate_scratch_start_read(hibernate_scratch_t * scratch);
+
+void
+hibernate_scratch_write(hibernate_scratch_t * scratch, const void * buffer, size_t size);
+
+void
+hibernate_scratch_read(hibernate_scratch_t * scratch, void * buffer, size_t size);
+
+void
 hibernate_machine_init(void);
 
 uint32_t
 hibernate_write_image(void);
+
+ppnum_t
+hibernate_page_list_grab(hibernate_page_list_t * list, uint32_t * pNextFree);
+
+void
+hibernate_reserve_restore_pages(uint64_t headerPhys, IOHibernateImageHeader *header, hibernate_page_list_t * map);
 
 long
 hibernate_machine_entrypoint(uint32_t p1, uint32_t p2, uint32_t p3, uint32_t p4);
@@ -424,8 +507,10 @@ extern uint32_t    gIOHibernateMode;
 extern uint32_t    gIOHibernateDebugFlags;
 extern uint32_t    gIOHibernateFreeTime;        // max time to spend freeing pages (ms)
 extern boolean_t   gIOHibernateStandbyDisabled;
+#if !defined(__arm64__)
 extern uint8_t     gIOHibernateRestoreStack[];
 extern uint8_t     gIOHibernateRestoreStackEnd[];
+#endif /* !defined(__arm64__) */
 extern IOHibernateImageHeader *    gIOHibernateCurrentHeader;
 
 #define HIBLOGFROMPANIC(fmt, args...) \
@@ -535,8 +620,8 @@ enum{
 #define kIOScreenLockStateKey       "IOScreenLockState"
 #define kIOBooterScreenLockStateKey "IOBooterScreenLockState"
 
-#endif /* ! __IOKIT_IOHIBERNATEPRIVATE_H */
+__END_DECLS
 
-#ifdef __cplusplus
-}
-#endif
+#endif /* !__ASSEMBLER__ */
+
+#endif /* ! __IOKIT_IOHIBERNATEPRIVATE_H */

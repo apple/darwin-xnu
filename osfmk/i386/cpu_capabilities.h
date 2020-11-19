@@ -86,6 +86,7 @@
 #define kHasAVX512BITALG        0x0001000000000000ULL
 #define kHasAVX512VPOPCNTDQ     0x0002000000000000ULL
 
+#define kIsTranslated           0x4000000000000000ULL
 
 #ifndef __ASSEMBLER__
 #include <sys/cdefs.h>
@@ -182,16 +183,16 @@ _NumCPUs( void )
 #define _COMM_PAGE_CPU_CAPABILITIES64   (_COMM_PAGE_START_ADDRESS+0x010)        /* uint64_t _cpu_capabilities */
 #define _COMM_PAGE_UNUSED               (_COMM_PAGE_START_ADDRESS+0x018)        /* 6 unused bytes */
 #define _COMM_PAGE_VERSION              (_COMM_PAGE_START_ADDRESS+0x01E)        /* 16-bit version# */
-#define _COMM_PAGE_THIS_VERSION         13                                      /* in ver 13, _COMM_PAGE_NT_SHIFT defaults to 0 (was 32) */
+#define _COMM_PAGE_THIS_VERSION         14
 
 #define _COMM_PAGE_CPU_CAPABILITIES     (_COMM_PAGE_START_ADDRESS+0x020)        /* uint32_t _cpu_capabilities (retained for compatibility) */
 #define _COMM_PAGE_NCPUS                (_COMM_PAGE_START_ADDRESS+0x022)        /* uint8_t number of configured CPUs (hw.logicalcpu at boot time) */
 #define _COMM_PAGE_UNUSED0              (_COMM_PAGE_START_ADDRESS+0x024)        /* 2 unused bytes, previouly reserved for expansion of cpu_capabilities */
 #define _COMM_PAGE_CACHE_LINESIZE       (_COMM_PAGE_START_ADDRESS+0x026)        /* uint16_t cache line size */
 
-#define _COMM_PAGE_SCHED_GEN            (_COMM_PAGE_START_ADDRESS+0x028)        /* uint32_t scheduler generation number (count of pre-emptions) */
+#define _COMM_PAGE_UNUSED4              (_COMM_PAGE_START_ADDRESS+0x028)        /* used to be _COMM_PAGE_SCHED_GEN: uint32_t scheduler generation number (count of pre-emptions) */
 #define _COMM_PAGE_MEMORY_PRESSURE      (_COMM_PAGE_START_ADDRESS+0x02c)        /* uint32_t copy of vm_memory_pressure */
-#define _COMM_PAGE_SPIN_COUNT           (_COMM_PAGE_START_ADDRESS+0x030)        /* uint32_t max spin count for mutex's */
+#define _COMM_PAGE_UNUSED3              (_COMM_PAGE_START_ADDRESS+0x030)        /* used to be _COMM_PAGE_SPIN_COUNT: uint32_t max spin count for mutex's */
 
 #define _COMM_PAGE_ACTIVE_CPUS          (_COMM_PAGE_START_ADDRESS+0x034)        /* uint8_t number of active CPUs (hw.activecpu) */
 #define _COMM_PAGE_PHYSICAL_CPUS        (_COMM_PAGE_START_ADDRESS+0x035)        /* uint8_t number of physical CPUs (hw.physicalcpu_max) */
@@ -204,7 +205,9 @@ _NumCPUs( void )
 #define _COMM_PAGE_ATM_DIAGNOSTIC_CONFIG        (_COMM_PAGE_START_ADDRESS+0x48) /* uint32_t export "atm_diagnostic_config" to userspace */
 
 #define _COMM_PAGE_DTRACE_DOF_ENABLED   (_COMM_PAGE_START_ADDRESS+0x04C)        /* uint8_t 0 if userspace DOF disable, 1 if enabled */
-#define _COMM_PAGE_UNUSED2              (_COMM_PAGE_START_ADDRESS+0x04D)        /* [0x4D,0x50) unused */
+#define _COMM_PAGE_KERNEL_PAGE_SHIFT    (_COMM_PAGE_START_ADDRESS+0x04D)        /* uint8_t kernel vm page shift. COMM_PAGE_VERSION >= 14 */
+#define _COMM_PAGE_USER_PAGE_SHIFT_64   (_COMM_PAGE_START_ADDRESS+0x04E)        /* uint8_t user vm page shift. COMM_PAGE_VERSION >= 14 */
+#define _COMM_PAGE_UNUSED2              (_COMM_PAGE_START_ADDRESS+0x04F)        /* 0x4F unused */
 
 #define _COMM_PAGE_TIME_DATA_START      (_COMM_PAGE_START_ADDRESS+0x050)        /* base of offsets below (_NT_SCALE etc) */
 #define _COMM_PAGE_NT_TSC_BASE          (_COMM_PAGE_START_ADDRESS+0x050)        /* used by nanotime() */
@@ -226,7 +229,7 @@ _NumCPUs( void )
 #define _COMM_PAGE_NEWTIMEOFDAY_DATA    (_COMM_PAGE_START_ADDRESS+0x0D0)        /* used by gettimeofday(). Currently, sizeof(new_commpage_timeofday_data_t) = 40 */
 
 /* Resume packed values to the next cacheline */
-#define _COMM_PAGE_DYLD_SYSTEM_FLAGS    (_COMM_PAGE_START_ADDRESS+0x100)        /* uint64_t export kern.dyld_system_flags to userspace */
+#define _COMM_PAGE_DYLD_FLAGS           (_COMM_PAGE_START_ADDRESS+0x100)        /* uint64_t export kern.dyld_system_flags to userspace */
 
 #define _COMM_PAGE_END                  (_COMM_PAGE_START_ADDRESS+0xfff)        /* end of common page */
 
@@ -286,6 +289,12 @@ _NumCPUs( void )
  * some point, so don't go relying on them. */
 #define _COMM_PAGE_COMPARE_AND_SWAP32B  (_COMM_PAGE_START_ADDRESS+0xf80)        /* compare-and-swap word w barrier */
 #define _COMM_PAGE_COMPARE_AND_SWAP64B  (_COMM_PAGE_START_ADDRESS+0xfc0)        /* compare-and-swap doubleword w barrier */
+
+/*
+ * _COMM_PAGE_USER_PAGE_SHIFT32 and _COMM_PAGE_USER_PAGE_SHIFT64 are the same on x86.
+ * But both defined to maintain compatability with the arm commpage.
+ */
+#define _COMM_PAGE_USER_PAGE_SHIFT_32 _COMM_PAGE_USER_PAGE_SHIFT_64
 
 #ifdef __ASSEMBLER__
 #ifdef __COMM_PAGE_SYMBOLS

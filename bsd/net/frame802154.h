@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2017-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -95,7 +95,7 @@
 #include "contiki-conf.h"
 
 #include <stdint.h>
-
+#include <sys/types.h>
 #ifdef IEEE802154_CONF_PANID
 #define IEEE802154_PANID        IEEE802154_CONF_PANID
 #else /* IEEE802154_CONF_PANID */
@@ -220,7 +220,7 @@ typedef struct frame802154 frame802154_t;
 
 int frame802154_hdrlen(frame802154_t *p);
 int frame802154_create(frame802154_t *p, uint8_t *buf);
-int frame802154_parse(uint8_t *data, int length, frame802154_t *pf, uint8_t **payload);
+size_t frame802154_parse(uint8_t *data, size_t length, frame802154_t *pf, uint8_t **payload);
 
 /** @} */
 #endif /* FRAME_802154_H */

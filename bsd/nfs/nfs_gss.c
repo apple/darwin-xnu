@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2015 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -145,7 +145,7 @@ static int      nfs_gss_clnt_ctx_find(struct nfsreq *);
 static int      nfs_gss_clnt_ctx_init(struct nfsreq *, struct nfs_gss_clnt_ctx *);
 static int      nfs_gss_clnt_ctx_init_retry(struct nfsreq *, struct nfs_gss_clnt_ctx *);
 static int      nfs_gss_clnt_ctx_callserver(struct nfsreq *, struct nfs_gss_clnt_ctx *);
-static uint8_t  *nfs_gss_clnt_svcname(struct nfsmount *, gssd_nametype *, uint32_t *);
+static uint8_t  *nfs_gss_clnt_svcname(struct nfsmount *, gssd_nametype *, size_t *);
 static int      nfs_gss_clnt_gssd_upcall(struct nfsreq *, struct nfs_gss_clnt_ctx *, uint32_t);
 void            nfs_gss_clnt_ctx_neg_cache_reap(struct nfsmount *);
 static void     nfs_gss_clnt_ctx_clean(struct nfs_gss_clnt_ctx *);
@@ -167,7 +167,7 @@ static void     nfs_gss_nfsm_chain(struct nfsm_chain *, mbuf_t);
 
 static void     host_release_special_port(mach_port_t);
 static mach_port_t host_copy_special_port(mach_port_t);
-static void     nfs_gss_mach_alloc_buffer(u_char *, uint32_t, vm_map_copy_t *);
+static void     nfs_gss_mach_alloc_buffer(u_char *, size_t, vm_map_copy_t *);
 static int      nfs_gss_mach_vmcopyout(vm_map_copy_t, uint32_t, u_char *);
 
 static int      nfs_gss_mchain_length(mbuf_t);
@@ -453,8 +453,7 @@ rpc_gss_priv_data_restore(gss_ctx_id_t ctx, mbuf_t *mb_head, size_t len)
 {
 	uint32_t major, error;
 	mbuf_t mb = *mb_head, next;
-	uint32_t plen;
-	size_t length;
+	size_t plen, length;
 	gss_qop_t qop = GSS_C_QOP_REVERSE;
 
 	/* Chop of the opaque length */
@@ -553,7 +552,7 @@ static char *
 nfs_gss_clnt_ctx_name(struct nfsmount *nmp, struct nfs_gss_clnt_ctx *cp, char *buf, int len)
 {
 	char *np;
-	int nlen;
+	size_t nlen;
 	const char *server = "";
 
 	if (nmp && nmp->nm_mountp) {
@@ -573,7 +572,7 @@ nfs_gss_clnt_ctx_name(struct nfsmount *nmp, struct nfs_gss_clnt_ctx *cp, char *b
 		nlen = np ? strlen(cp->gss_clnt_display) : 0;
 	}
 	if (nlen) {
-		snprintf(buf, len, "[%s] %.*s %d/%d %s", server, nlen, np,
+		snprintf(buf, len, "[%s] %.*s %d/%d %s", server, nlen > INT_MAX ? INT_MAX : (int)nlen, np,
 		    kauth_cred_getasid(cp->gss_clnt_cred),
 		    kauth_cred_getuid(cp->gss_clnt_cred),
 		    cp->gss_clnt_principal ? "" : "[from default cred] ");
@@ -615,7 +614,7 @@ nfs_gss_clnt_ctx_cred_match(kauth_cred_t cred1, kauth_cred_t cred2)
  * so that defaults can be set by service identities.
  */
 
-static void
+static int
 nfs_gss_clnt_mnt_ref(struct nfsmount *nmp)
 {
 	int error;
@@ -623,21 +622,23 @@ nfs_gss_clnt_mnt_ref(struct nfsmount *nmp)
 
 	if (nmp == NULL ||
 	    !(vfs_flags(nmp->nm_mountp) & MNT_AUTOMOUNTED)) {
-		return;
+		return EINVAL;
 	}
 
 	error = VFS_ROOT(nmp->nm_mountp, &rvp, NULL);
 	if (!error) {
-		vnode_ref(rvp);
+		error = vnode_ref(rvp);
 		vnode_put(rvp);
 	}
+
+	return error;
 }
 
 /*
- * Unbusy the mout. See above comment,
+ * Unbusy the mount. See above comment,
  */
 
-static void
+static int
 nfs_gss_clnt_mnt_rele(struct nfsmount *nmp)
 {
 	int error;
@@ -645,7 +646,7 @@ nfs_gss_clnt_mnt_rele(struct nfsmount *nmp)
 
 	if (nmp == NULL ||
 	    !(vfs_flags(nmp->nm_mountp) & MNT_AUTOMOUNTED)) {
-		return;
+		return EINVAL;
 	}
 
 	error = VFS_ROOT(nmp->nm_mountp, &rvp, NULL);
@@ -653,26 +654,28 @@ nfs_gss_clnt_mnt_rele(struct nfsmount *nmp)
 		vnode_rele(rvp);
 		vnode_put(rvp);
 	}
+
+	return error;
 }
 
 int nfs_root_steals_ctx = 0;
 
 static int
-nfs_gss_clnt_ctx_find_principal(struct nfsreq *req, uint8_t *principal, uint32_t plen, uint32_t nt)
+nfs_gss_clnt_ctx_find_principal(struct nfsreq *req, uint8_t *principal, size_t plen, uint32_t nt)
 {
 	struct nfsmount *nmp = req->r_nmp;
-	struct nfs_gss_clnt_ctx *cp;
-	struct nfsreq treq;
+	struct nfs_gss_clnt_ctx *cp, *tcp;
+	struct nfsreq *treq;
 	int error = 0;
 	struct timeval now;
 	char CTXBUF[NFS_CTXBUFSZ];
 
-	bzero(&treq, sizeof(struct nfsreq));
-	treq.r_nmp = nmp;
+	treq = zalloc_flags(nfs_req_zone, Z_WAITOK | Z_ZERO);
+	treq->r_nmp = nmp;
 
 	microuptime(&now);
 	lck_mtx_lock(&nmp->nm_lock);
-	TAILQ_FOREACH(cp, &nmp->nm_gsscl, gss_clnt_entries) {
+	TAILQ_FOREACH_SAFE(cp, &nmp->nm_gsscl, gss_clnt_entries, tcp) {
 		lck_mtx_lock(cp->gss_clnt_mtx);
 		if (cp->gss_clnt_flags & GSS_CTX_DESTROY) {
 			NFS_GSS_DBG("Found destroyed context %s refcnt = %d continuing\n",
@@ -698,9 +701,9 @@ nfs_gss_clnt_ctx_find_principal(struct nfsreq *req, uint8_t *principal, uint32_t
 					lck_mtx_unlock(cp->gss_clnt_mtx);
 					NFS_GSS_DBG("Marking %s for deletion because %s does not match\n",
 					    NFS_GSS_CTX(req, cp), principal);
-					NFS_GSS_DBG("len = (%d,%d), nt = (%d,%d)\n", cp->gss_clnt_prinlen, plen,
+					NFS_GSS_DBG("len = (%zu,%zu), nt = (%d,%d)\n", cp->gss_clnt_prinlen, plen,
 					    cp->gss_clnt_prinnt, nt);
-					treq.r_gss_ctx  = cp;
+					treq->r_gss_ctx  = cp;
 					cp = NULL;
 					break;
 				}
@@ -716,6 +719,7 @@ nfs_gss_clnt_ctx_find_principal(struct nfsreq *req, uint8_t *principal, uint32_t
 					    NFS_GSS_CTX(req, cp), cp->gss_clnt_refcnt, cp->gss_clnt_nctime, now.tv_sec);
 					lck_mtx_unlock(cp->gss_clnt_mtx);
 					lck_mtx_unlock(&nmp->nm_lock);
+					NFS_ZFREE(nfs_req_zone, treq);
 					return NFSERR_EAUTH;
 				}
 				if (cp->gss_clnt_refcnt) {
@@ -732,6 +736,7 @@ nfs_gss_clnt_ctx_find_principal(struct nfsreq *req, uint8_t *principal, uint32_t
 					lck_mtx_unlock(cp->gss_clnt_mtx);
 					if (error) {
 						lck_mtx_unlock(&nmp->nm_lock);
+						NFS_ZFREE(nfs_req_zone, treq);
 						return error;
 					}
 					cp = ncp;
@@ -750,6 +755,7 @@ nfs_gss_clnt_ctx_find_principal(struct nfsreq *req, uint8_t *principal, uint32_t
 			req->r_gss_ctx = cp;
 			lck_mtx_unlock(cp->gss_clnt_mtx);
 			lck_mtx_unlock(&nmp->nm_lock);
+			NFS_ZFREE(nfs_req_zone, treq);
 			return 0;
 		}
 		lck_mtx_unlock(cp->gss_clnt_mtx);
@@ -768,6 +774,7 @@ nfs_gss_clnt_ctx_find_principal(struct nfsreq *req, uint8_t *principal, uint32_t
 				nfs_gss_clnt_ctx_ref(req, cp);
 				lck_mtx_unlock(&nmp->nm_lock);
 				NFS_GSS_DBG("Root stole context %s\n", NFS_GSS_CTX(req, NULL));
+				NFS_ZFREE(nfs_req_zone, treq);
 				return 0;
 			}
 		}
@@ -786,6 +793,7 @@ nfs_gss_clnt_ctx_find_principal(struct nfsreq *req, uint8_t *principal, uint32_t
 		MALLOC(cp, struct nfs_gss_clnt_ctx *, sizeof(*cp), M_TEMP, M_WAITOK | M_ZERO);
 		if (cp == NULL) {
 			lck_mtx_unlock(&nmp->nm_lock);
+			NFS_ZFREE(nfs_req_zone, treq);
 			return ENOMEM;
 		}
 		cp->gss_clnt_cred = req->r_cred;
@@ -798,9 +806,12 @@ nfs_gss_clnt_ctx_find_principal(struct nfsreq *req, uint8_t *principal, uint32_t
 			cp->gss_clnt_prinlen = plen;
 			cp->gss_clnt_prinnt = nt;
 			cp->gss_clnt_flags |= GSS_CTX_STICKY;
-			nfs_gss_clnt_mnt_ref(nmp);
+			if (!nfs_gss_clnt_mnt_ref(nmp)) {
+				cp->gss_clnt_flags |= GSS_CTX_USECOUNT;
+			}
 		}
 	} else {
+		uint32_t oldflags = cp->gss_clnt_flags;
 		nfs_gss_clnt_ctx_clean(cp);
 		if (principal) {
 			/*
@@ -816,6 +827,14 @@ nfs_gss_clnt_ctx_find_principal(struct nfsreq *req, uint8_t *principal, uint32_t
 			 * match and we will fall through here.
 			 */
 			cp->gss_clnt_flags |= GSS_CTX_STICKY;
+
+			/*
+			 * We are preserving old flags if it set, and we take a ref if not set.
+			 * Also, because of the short circuit we will not take extra refs here.
+			 */
+			if ((oldflags & GSS_CTX_USECOUNT) || !nfs_gss_clnt_mnt_ref(nmp)) {
+				cp->gss_clnt_flags |= GSS_CTX_USECOUNT;
+			}
 		}
 	}
 
@@ -831,8 +850,8 @@ nfs_gss_clnt_ctx_find_principal(struct nfsreq *req, uint8_t *principal, uint32_t
 	}
 
 	/* Remove any old matching contex that had a different principal */
-	nfs_gss_clnt_ctx_unref(&treq);
-
+	nfs_gss_clnt_ctx_unref(treq);
+	NFS_ZFREE(nfs_req_zone, treq);
 	return error;
 }
 
@@ -1066,10 +1085,10 @@ nfs_gss_clnt_verf_get(
 	struct nfs_gss_clnt_ctx *cp = req->r_gss_ctx;
 	struct nfsm_chain nmc_tmp;
 	struct gss_seq *gsp;
-	uint32_t reslen, offset;
+	uint32_t reslen;
 	int error = 0;
 	mbuf_t results_mbuf, prev_mbuf, pad_mbuf;
-	size_t ressize;
+	size_t ressize, offset;
 
 	reslen = 0;
 	*accepted_statusp = 0;
@@ -1725,7 +1744,7 @@ nfsmout:
  */
 
 static uint8_t *
-nfs_gss_clnt_svcname(struct nfsmount *nmp, gssd_nametype *nt, uint32_t *len)
+nfs_gss_clnt_svcname(struct nfsmount *nmp, gssd_nametype *nt, size_t *len)
 {
 	char *svcname, *d, *server;
 	int lindx, sindx;
@@ -1899,7 +1918,7 @@ nfs_gss_clnt_gssd_upcall(struct nfsreq *req, struct nfs_gss_clnt_ctx *cp, uint32
 	mach_msg_type_number_t otokenlen;
 	int error = 0;
 	uint8_t *principal = NULL;
-	uint32_t plen = 0;
+	size_t plen = 0;
 	int32_t nt = GSSD_STRING_NAME;
 	vm_map_copy_t pname = NULL;
 	vm_map_copy_t svcname = NULL;
@@ -2057,7 +2076,7 @@ retry:
 	}
 
 	if (cp->gss_clnt_display == NULL && *display_name != '\0') {
-		int dlen = strnlen(display_name, MAX_DISPLAY_STR) + 1;  /* Add extra byte to include '\0' */
+		size_t dlen = strnlen(display_name, MAX_DISPLAY_STR) + 1;  /* Add extra byte to include '\0' */
 
 		if (dlen < MAX_DISPLAY_STR) {
 			MALLOC(cp->gss_clnt_display, char *, dlen, M_TEMP, M_WAITOK);
@@ -2272,8 +2291,8 @@ nfs_gss_clnt_ctx_unref(struct nfsreq *req)
 		}
 		if (cp->gss_clnt_flags & GSS_CTX_DESTROY) {
 			destroy = 1;
-			if (cp->gss_clnt_flags & GSS_CTX_STICKY) {
-				nfs_gss_clnt_mnt_rele(nmp);
+			if ((cp->gss_clnt_flags & GSS_CTX_USECOUNT) && !nfs_gss_clnt_mnt_rele(nmp)) {
+				cp->gss_clnt_flags &= ~GSS_CTX_USECOUNT;
 			}
 			if (cp->gss_clnt_nctime) {
 				on_neg_cache = 1;
@@ -2592,14 +2611,14 @@ nfs_gss_clnt_ctx_unmount(struct nfsmount *nmp)
 	struct nfs_gss_clnt_ctx *cp;
 	struct nfsm_chain nmreq, nmrep;
 	int error, status;
-	struct nfsreq req;
-	req.r_nmp = nmp;
+	struct nfsreq *req;
 
 	if (!nmp) {
 		return;
 	}
 
-
+	req = zalloc(nfs_req_zone);
+	req->r_nmp = nmp;
 	lck_mtx_lock(&nmp->nm_lock);
 	while ((cp = TAILQ_FIRST(&nmp->nm_gsscl))) {
 		TAILQ_REMOVE(&nmp->nm_gsscl, cp, gss_clnt_entries);
@@ -2611,7 +2630,7 @@ nfs_gss_clnt_ctx_unmount(struct nfsmount *nmp)
 		}
 		cp->gss_clnt_refcnt++;
 		lck_mtx_unlock(cp->gss_clnt_mtx);
-		req.r_gss_ctx = cp;
+		req->r_gss_ctx = cp;
 
 		lck_mtx_unlock(&nmp->nm_lock);
 		/*
@@ -2643,11 +2662,12 @@ nfs_gss_clnt_ctx_unmount(struct nfsmount *nmp)
 		lck_mtx_lock(cp->gss_clnt_mtx);
 		cp->gss_clnt_flags |= (GSS_CTX_INVAL | GSS_CTX_DESTROY);
 		lck_mtx_unlock(cp->gss_clnt_mtx);
-		nfs_gss_clnt_ctx_unref(&req);
+		nfs_gss_clnt_ctx_unref(req);
 		lck_mtx_lock(&nmp->nm_lock);
 	}
 	lck_mtx_unlock(&nmp->nm_lock);
 	assert(TAILQ_EMPTY(&nmp->nm_gsscl));
+	NFS_ZFREE(nfs_req_zone, req);
 }
 
 
@@ -2657,15 +2677,16 @@ nfs_gss_clnt_ctx_unmount(struct nfsmount *nmp)
 int
 nfs_gss_clnt_ctx_remove(struct nfsmount *nmp, kauth_cred_t cred)
 {
-	struct nfs_gss_clnt_ctx *cp;
-	struct nfsreq req;
+	struct nfs_gss_clnt_ctx *cp, *tcp;
+	struct nfsreq *req;
 
-	req.r_nmp = nmp;
+	req = zalloc(nfs_req_zone);
+	req->r_nmp = nmp;
 
 	NFS_GSS_DBG("Enter\n");
 	NFS_GSS_CLNT_CTX_DUMP(nmp);
 	lck_mtx_lock(&nmp->nm_lock);
-	TAILQ_FOREACH(cp, &nmp->nm_gsscl, gss_clnt_entries) {
+	TAILQ_FOREACH_SAFE(cp, &nmp->nm_gsscl, gss_clnt_entries, tcp) {
 		lck_mtx_lock(cp->gss_clnt_mtx);
 		if (nfs_gss_clnt_ctx_cred_match(cp->gss_clnt_cred, cred)) {
 			if (cp->gss_clnt_flags & GSS_CTX_DESTROY) {
@@ -2679,7 +2700,7 @@ nfs_gss_clnt_ctx_remove(struct nfsmount *nmp, kauth_cred_t cred)
 			cp->gss_clnt_refcnt++;
 			cp->gss_clnt_flags |= (GSS_CTX_INVAL | GSS_CTX_DESTROY);
 			lck_mtx_unlock(cp->gss_clnt_mtx);
-			req.r_gss_ctx = cp;
+			req->r_gss_ctx = cp;
 			lck_mtx_unlock(&nmp->nm_lock);
 			/*
 			 * Drop the reference to remove it if its
@@ -2689,7 +2710,8 @@ nfs_gss_clnt_ctx_remove(struct nfsmount *nmp, kauth_cred_t cred)
 			    kauth_cred_getasid(cp->gss_clnt_cred),
 			    kauth_cred_getuid(cp->gss_clnt_cred),
 			    cp->gss_clnt_refcnt);
-			nfs_gss_clnt_ctx_unref(&req);
+			nfs_gss_clnt_ctx_unref(req);
+			NFS_ZFREE(nfs_req_zone, req);
 			return 0;
 		}
 		lck_mtx_unlock(cp->gss_clnt_mtx);
@@ -2697,6 +2719,7 @@ nfs_gss_clnt_ctx_remove(struct nfsmount *nmp, kauth_cred_t cred)
 
 	lck_mtx_unlock(&nmp->nm_lock);
 
+	NFS_ZFREE(nfs_req_zone, req);
 	NFS_GSS_DBG("Returning ENOENT\n");
 	return ENOENT;
 }
@@ -2706,21 +2729,20 @@ nfs_gss_clnt_ctx_remove(struct nfsmount *nmp, kauth_cred_t cred)
  */
 int
 nfs_gss_clnt_ctx_set_principal(struct nfsmount *nmp, vfs_context_t ctx,
-    uint8_t *principal, uint32_t princlen, uint32_t nametype)
+    uint8_t *principal, size_t princlen, uint32_t nametype)
 {
-	struct nfsreq req;
+	struct nfsreq *req;
 	int error;
 
 	NFS_GSS_DBG("Enter:\n");
 
-	bzero(&req, sizeof(struct nfsreq));
-	req.r_nmp = nmp;
-	req.r_gss_ctx = NULL;
-	req.r_auth = nmp->nm_auth;
-	req.r_thread = vfs_context_thread(ctx);
-	req.r_cred = vfs_context_ucred(ctx);
+	req = zalloc_flags(nfs_req_zone, Z_WAITOK | Z_ZERO);
+	req->r_nmp = nmp;
+	req->r_auth = nmp->nm_auth;
+	req->r_thread = vfs_context_thread(ctx);
+	req->r_cred = vfs_context_ucred(ctx);
 
-	error = nfs_gss_clnt_ctx_find_principal(&req, principal, princlen, nametype);
+	error = nfs_gss_clnt_ctx_find_principal(req, principal, princlen, nametype);
 	NFS_GSS_DBG("nfs_gss_clnt_ctx_find_principal returned %d\n", error);
 	/*
 	 * We don't care about auth errors. Those would indicate that the context is in the
@@ -2732,8 +2754,8 @@ nfs_gss_clnt_ctx_set_principal(struct nfsmount *nmp, vfs_context_t ctx,
 	}
 
 	/* We're done with this request */
-	nfs_gss_clnt_ctx_unref(&req);
-
+	nfs_gss_clnt_ctx_unref(req);
+	NFS_ZFREE(nfs_req_zone, req);
 	return error;
 }
 
@@ -2744,7 +2766,7 @@ int
 nfs_gss_clnt_ctx_get_principal(struct nfsmount *nmp, vfs_context_t ctx,
     struct user_nfs_gss_principal *p)
 {
-	struct nfsreq req;
+	struct nfsreq *req;
 	int error = 0;
 	struct nfs_gss_clnt_ctx *cp;
 	kauth_cred_t cred = vfs_context_ucred(ctx);
@@ -2757,13 +2779,14 @@ nfs_gss_clnt_ctx_get_principal(struct nfsmount *nmp, vfs_context_t ctx,
 	p->princlen = 0;
 	p->flags = 0;
 
-	req.r_nmp = nmp;
+	req = zalloc_flags(nfs_req_zone, Z_WAITOK);
+	req->r_nmp = nmp;
 	lck_mtx_lock(&nmp->nm_lock);
 	TAILQ_FOREACH(cp, &nmp->nm_gsscl, gss_clnt_entries) {
 		lck_mtx_lock(cp->gss_clnt_mtx);
 		if (cp->gss_clnt_flags & GSS_CTX_DESTROY) {
 			NFS_GSS_DBG("Found destroyed context %s refcnt = %d continuing\n",
-			    NFS_GSS_CTX(&req, cp),
+			    NFS_GSS_CTX(req, cp),
 			    cp->gss_clnt_refcnt);
 			lck_mtx_unlock(cp->gss_clnt_mtx);
 			continue;
@@ -2782,6 +2805,7 @@ out:
 		p->flags |= NFS_IOC_NO_CRED_FLAG;  /* No credentials, valid or invalid on this mount */
 		NFS_GSS_DBG("No context found for session %d by uid %d\n",
 		    kauth_cred_getasid(cred), kauth_cred_getuid(cred));
+		NFS_ZFREE(nfs_req_zone, req);
 		return 0;
 	}
 
@@ -2816,9 +2840,10 @@ out:
 
 	lck_mtx_unlock(&nmp->nm_lock);
 
-	req.r_gss_ctx = cp;
-	NFS_GSS_DBG("Found context %s\n", NFS_GSS_CTX(&req, NULL));
-	nfs_gss_clnt_ctx_unref(&req);
+	req->r_gss_ctx = cp;
+	NFS_GSS_DBG("Found context %s\n", NFS_GSS_CTX(req, NULL));
+	nfs_gss_clnt_ctx_unref(req);
+	NFS_ZFREE(nfs_req_zone, req);
 	return error;
 }
 #endif /* CONFIG_NFS_CLIENT */
@@ -3004,10 +3029,10 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 	uint32_t handle, handle_len;
 	uint32_t major;
 	struct nfs_gss_svc_ctx *cp = NULL;
-	uint32_t flavor = 0, header_len;
+	uint32_t flavor = 0;
 	int error = 0;
-	uint32_t arglen, start;
-	size_t argsize;
+	uint32_t arglen;
+	size_t argsize, start, header_len;
 	gss_buffer_desc cksum;
 	struct nfsm_chain nmc_tmp;
 	mbuf_t reply_mbuf, prev_mbuf, pad_mbuf;
@@ -3153,7 +3178,7 @@ nfs_gss_svc_cred_get(struct nfsrv_descript *nd, struct nfsm_chain *nmc)
 		temp_pcred.cr_uid = cp->gss_svc_uid;
 		bcopy(cp->gss_svc_gids, temp_pcred.cr_groups,
 		    sizeof(gid_t) * cp->gss_svc_ngroups);
-		temp_pcred.cr_ngroups = cp->gss_svc_ngroups;
+		temp_pcred.cr_ngroups = (short)cp->gss_svc_ngroups;
 
 		nd->nd_cr = posix_cred_create(&temp_pcred);
 		if (nd->nd_cr == NULL) {
@@ -3484,7 +3509,7 @@ nfs_gss_svc_ctx_init(struct nfsrv_descript *nd, struct nfsrv_sock *slp, mbuf_t *
 	switch (cp->gss_svc_proc) {
 	case RPCSEC_GSS_INIT:
 		nfs_gss_svc_ctx_insert(cp);
-	/* FALLTHRU */
+		OS_FALLTHROUGH;
 
 	case RPCSEC_GSS_CONTINUE_INIT:
 		/* Get the token from the request */
@@ -3888,7 +3913,7 @@ host_copy_special_port(mach_port_t mp)
  * complete.
  */
 static void
-nfs_gss_mach_alloc_buffer(u_char *buf, uint32_t buflen, vm_map_copy_t *addr)
+nfs_gss_mach_alloc_buffer(u_char *buf, size_t buflen, vm_map_copy_t *addr)
 {
 	kern_return_t kr;
 	vm_offset_t kmem_buf;

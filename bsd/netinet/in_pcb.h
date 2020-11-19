@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -122,9 +122,6 @@ struct in_addr_4in6 {
  * stable.
  */
 struct  icmp6_filter;
-#if CONFIG_MACF_NET
-struct  label;
-#endif
 struct ifnet;
 
 struct inp_stat {
@@ -209,9 +206,6 @@ struct inpcb {
 	} inp_depend6;
 
 	caddr_t inp_saved_ppcb;         /* place to save pointer while cached */
-#if CONFIG_MACF_NET
-	struct label *inp_label;        /* MAC label */
-#endif
 #if IPSEC
 	struct inpcbpolicy *inp_sp;     /* for IPsec */
 #endif /* IPSEC */
@@ -376,7 +370,7 @@ struct  xinpcb {
 	u_quad_t        xi_alignment_hack;
 };
 
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX || !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 struct inpcb64_list_entry {
 	u_int64_t   le_next;
 	u_int64_t   le_prev;
@@ -418,7 +412,7 @@ struct  xinpcb64 {
 	struct  xsocket64 xi_socket;
 	u_quad_t        xi_alignment_hack;
 };
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX || !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 
 #ifdef PRIVATE
 struct xinpcb_list_entry {
@@ -685,7 +679,7 @@ struct inpcbinfo {
 
 #ifdef BSD_KERNEL_PRIVATE
 #define IN6P_RFC2292            0x02000000 /* used RFC2292 API on the socket */
-#define IN6P_MTU                0x04000000 /* receive path MTU */
+#define IN6P_MTU                0x04000000 /* receive path MTU for IPv6 */
 #define INP_PKTINFO             0x08000000 /* rcv and snd PKTINFO for IPv4 */
 #define INP_FLOW_SUSPENDED      0x10000000 /* flow suspended */
 #define INP_NO_IFT_CELLULAR     0x20000000 /* do not use cellular interface */
@@ -717,6 +711,7 @@ struct inpcbinfo {
 #define INP2_CLAT46_FLOW        0x00000200 /* The flow is going to use CLAT46 path */
 #define INP2_EXTERNAL_PORT      0x00000400 /* The port is registered externally, for NECP listeners */
 #define INP2_NO_IFF_CONSTRAINED 0x00000800 /* do not use constrained interface */
+#define INP2_DONTFRAG           0x00001000 /* mark the DF bit in the IP header to avoid fragmentation */
 
 /*
  * Flags passed to in_pcblookup*() functions.
@@ -734,6 +729,8 @@ extern int ipport_firstauto;
 extern int ipport_lastauto;
 extern int ipport_hifirstauto;
 extern int ipport_hilastauto;
+extern int allow_udp_port_exhaustion;
+#define UDP_RANDOM_PORT_RESERVE   4096
 
 /* freshly allocated PCB, it's in use */
 #define INPCB_STATE_INUSE       0x1
@@ -791,9 +788,9 @@ extern int in_getsockaddr_s(struct socket *, struct sockaddr_in *);
 extern int in_pcb_checkstate(struct inpcb *, int, int);
 extern void in_pcbremlists(struct inpcb *);
 extern void inpcb_to_compat(struct inpcb *, struct inpcb_compat *);
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 extern void inpcb_to_xinpcb64(struct inpcb *, struct xinpcb64 *);
-#endif
+#endif /* XNU_TARGET_OS_OSX */
 
 extern int get_pcblist_n(short, struct sysctl_req *, struct inpcbinfo *);
 
@@ -826,6 +823,7 @@ extern u_int32_t inp_calc_flowhash(struct inpcb *);
 extern void inp_reset_fc_state(struct inpcb *);
 extern int inp_set_fc_state(struct inpcb *, int advcode);
 extern void inp_fc_unthrottle_tcp(struct inpcb *);
+extern void inp_fc_throttle_tcp(struct inpcb *inp);
 extern void inp_flowadv(uint32_t);
 extern int inp_flush(struct inpcb *, int);
 extern int inp_findinpcb_procinfo(struct inpcbinfo *, uint32_t, struct so_procinfo *);
@@ -848,5 +846,7 @@ extern void inp_copy_last_owner(struct socket *so, struct socket *head);
 #ifdef KERNEL_PRIVATE
 /* exported for PPP */
 extern void inp_clear_INP_INADDR_ANY(struct socket *);
+extern int inp_limit_companion_link(struct inpcbinfo *pcbinfo, u_int32_t limit);
+extern int inp_recover_companion_link(struct inpcbinfo *pcbinfo);
 #endif /* KERNEL_PRIVATE */
 #endif /* !_NETINET_IN_PCB_H_ */

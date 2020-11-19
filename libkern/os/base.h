@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_APACHE_LICENSE_HEADER_START@
  *
@@ -22,6 +22,7 @@
 #define __OS_BASE__
 
 #include <sys/cdefs.h>
+
 
 #ifndef __has_builtin
 #define __has_builtin(x) 0
@@ -124,6 +125,8 @@
 
 #if defined(__cplusplus) && defined(__clang__)
 #define OS_FALLTHROUGH [[clang::fallthrough]]
+#elif __has_attribute(fallthrough)
+#define OS_FALLTHROUGH __attribute__((__fallthrough__))
 #else
 #define OS_FALLTHROUGH
 #endif
@@ -172,16 +175,13 @@
 #if __has_feature(objc_fixed_enum) || __has_extension(cxx_fixed_enum) || \
         __has_extension(cxx_strong_enums)
 #define OS_ENUM(_name, _type, ...) \
-	        typedef enum : _type { __VA_ARGS__ } _name##_t
+	typedef enum : _type { __VA_ARGS__ } _name##_t
 #define OS_CLOSED_ENUM(_name, _type, ...) \
-	        typedef enum : _type { __VA_ARGS__ } \
-	                __OS_ENUM_ATTR_CLOSED _name##_t
+	typedef enum : _type { __VA_ARGS__ } __OS_ENUM_ATTR_CLOSED _name##_t
 #define OS_OPTIONS(_name, _type, ...) \
-	        typedef enum : _type { __VA_ARGS__ } \
-	                __OS_ENUM_ATTR __OS_OPTIONS_ATTR _name##_t
+	typedef enum : _type { __VA_ARGS__ } __OS_ENUM_ATTR __OS_OPTIONS_ATTR _name##_t
 #define OS_CLOSED_OPTIONS(_name, _type, ...) \
-	        typedef enum : _type { __VA_ARGS__ } \
-	                __OS_ENUM_ATTR_CLOSED __OS_OPTIONS_ATTR _name##_t
+	typedef enum : _type { __VA_ARGS__ } __OS_ENUM_ATTR_CLOSED __OS_OPTIONS_ATTR _name##_t
 #else
 /*!
  * There is unfortunately no good way in plain C to have both fixed-type enums
@@ -214,25 +214,25 @@
  * When compiling in ObjC or C++, both of the above assignments are illegal.
  */
 #define __OS_ENUM_C_FALLBACK(_name, _type, ...) \
-	        typedef _type _name##_t; enum _name { __VA_ARGS__ }
+	typedef _type _name##_t; enum _name { __VA_ARGS__ }
 
 #define OS_ENUM(_name, _type, ...) \
-	        typedef _type _name##_t; enum { __VA_ARGS__ }
+	typedef _type _name##_t; enum { __VA_ARGS__ }
 #define OS_CLOSED_ENUM(_name, _type, ...) \
-	        __OS_ENUM_C_FALLBACK(_name, _type, ## __VA_ARGS__) \
-	        __OS_ENUM_ATTR_CLOSED
+	__OS_ENUM_C_FALLBACK(_name, _type, ## __VA_ARGS__) \
+	__OS_ENUM_ATTR_CLOSED
 #define OS_OPTIONS(_name, _type, ...) \
-	        __OS_ENUM_C_FALLBACK(_name, _type, ## __VA_ARGS__) \
-	        __OS_ENUM_ATTR __OS_OPTIONS_ATTR
+	__OS_ENUM_C_FALLBACK(_name, _type, ## __VA_ARGS__) \
+	__OS_ENUM_ATTR __OS_OPTIONS_ATTR
 #define OS_CLOSED_OPTIONS(_name, _type, ...) \
-	        __OS_ENUM_C_FALLBACK(_name, _type, ## __VA_ARGS__) \
-	        __OS_ENUM_ATTR_CLOSED __OS_OPTIONS_ATTR
+	__OS_ENUM_C_FALLBACK(_name, _type, ## __VA_ARGS__) \
+	__OS_ENUM_ATTR_CLOSED __OS_OPTIONS_ATTR
 #endif // __has_feature(objc_fixed_enum) || __has_extension(cxx_strong_enums)
 
 #if __has_feature(attribute_availability_swift)
 // equivalent to __SWIFT_UNAVAILABLE from Availability.h
 #define OS_SWIFT_UNAVAILABLE(_msg) \
-	        __attribute__((__availability__(swift, unavailable, message=_msg)))
+	__attribute__((__availability__(swift, unavailable, message=_msg)))
 #else
 #define OS_SWIFT_UNAVAILABLE(_msg)
 #endif
@@ -256,16 +256,12 @@
 
 #ifdef __GNUC__
 #define os_prevent_tail_call_optimization()  __asm__("")
-#define os_is_compile_time_constant(expr)  __builtin_constant_p(expr)
-#ifndef KERNEL
-#define os_compiler_barrier()  __asm__ __volatile__("" ::: "memory")
-#endif
+#define os_is_compile_time_constant(expr)    __builtin_constant_p(expr)
+#define os_compiler_barrier()                __asm__ __volatile__("" ::: "memory")
 #else
 #define os_prevent_tail_call_optimization()  do { } while (0)
-#define os_is_compile_time_constant(expr)  0
-#ifndef KERNEL
-#define os_compiler_barrier()  do { } while (0)
-#endif
+#define os_is_compile_time_constant(expr)    0
+#define os_compiler_barrier()                do { } while (0)
 #endif
 
 #if __has_attribute(not_tail_called)
@@ -274,6 +270,7 @@
 #define OS_NOT_TAIL_CALLED
 #endif
 
+#if KERNEL
 /*
  * LIBKERN_ALWAYS_DESTROY attribute can be applied to global variables with
  * destructors. It specifies that and object should have its exit-time
@@ -281,9 +278,10 @@
  * -fno-c++-static-destructors.
  */
 #if __has_attribute(always_destroy)
-#define LIBKERN_ALWAYS_DESTROY __attribute__((always_destroy))
+#define LIBKERN_ALWAYS_DESTROY __attribute__((__always_destroy__))
 #else
 #define LIBKERN_ALWAYS_DESTROY
+#endif
 #endif
 
 typedef void (*os_function_t)(void *_Nullable);
@@ -331,5 +329,22 @@ typedef void (*os_function_t)(void *_Nullable);
  */
 typedef void (^os_block_t)(void);
 #endif
+
+#if KERNEL
+#if __has_feature(ptrauth_calls)
+#include <ptrauth.h>
+#define OS_PTRAUTH_SIGNED_PTR(type) __ptrauth(ptrauth_key_process_independent_data, 1, ptrauth_string_discriminator(type))
+#define OS_PTRAUTH_DISCRIMINATOR(str) ptrauth_string_discriminator(str)
+#define __ptrauth_only
+#else //  __has_feature(ptrauth_calls)
+#define OS_PTRAUTH_SIGNED_PTR(type)
+#define OS_PTRAUTH_DISCRIMINATOR(str) 0
+#define __ptrauth_only __unused
+#endif // __has_feature(ptrauth_calls)
+#endif // KERNEL
+
+#if KERNEL_PRIVATE
+#define XNU_PTRAUTH_SIGNED_PTR OS_PTRAUTH_SIGNED_PTR
+#endif // KERNEL_PRIVATE
 
 #endif // __OS_BASE__

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -118,8 +118,8 @@ struct vm_object_fault_info {
 	uint32_t        user_tag;
 	vm_size_t       cluster_size;
 	vm_behavior_t   behavior;
-	vm_map_offset_t lo_offset;
-	vm_map_offset_t hi_offset;
+	vm_object_offset_t lo_offset;
+	vm_object_offset_t hi_offset;
 	unsigned int
 	/* boolean_t */ no_cache:1,
 	/* boolean_t */ stealth:1,
@@ -536,7 +536,6 @@ extern lck_attr_t               vm_map_lck_attr;
 #define OBJECT_LOCK_EXCLUSIVE   1
 
 extern lck_grp_t        vm_object_lck_grp;
-extern lck_grp_attr_t   vm_object_lck_grp_attr;
 extern lck_attr_t       vm_object_lck_attr;
 extern lck_attr_t       kernel_object_lck_attr;
 extern lck_attr_t       compressor_object_lck_attr;
@@ -544,6 +543,7 @@ extern lck_attr_t       compressor_object_lck_attr;
 extern vm_object_t      vm_pageout_scan_wants_object;
 
 extern void             vm_object_lock(vm_object_t);
+extern bool             vm_object_lock_check_contended(vm_object_t);
 extern boolean_t        vm_object_lock_try(vm_object_t);
 extern boolean_t        _vm_object_lock_try(vm_object_t);
 extern boolean_t        vm_object_lock_avoid(vm_object_t);
@@ -596,10 +596,6 @@ extern boolean_t        vm_object_lock_upgrade(vm_object_t);
  */
 
 __private_extern__ void         vm_object_bootstrap(void);
-
-__private_extern__ void         vm_object_init(void);
-
-__private_extern__ void         vm_object_init_lck_grp(void);
 
 __private_extern__ void         vm_object_reaper_init(void);
 
@@ -678,6 +674,7 @@ __private_extern__ void         vm_object_pmap_protect(
 	vm_object_offset_t      offset,
 	vm_object_size_t        size,
 	pmap_t                  pmap,
+	vm_map_size_t           pmap_page_size,
 	vm_map_offset_t         pmap_start,
 	vm_prot_t               prot);
 
@@ -686,6 +683,7 @@ __private_extern__ void         vm_object_pmap_protect_options(
 	vm_object_offset_t      offset,
 	vm_object_size_t        size,
 	pmap_t                  pmap,
+	vm_map_size_t           pmap_page_size,
 	vm_map_offset_t         pmap_start,
 	vm_prot_t               prot,
 	int                     options);
@@ -702,6 +700,7 @@ __private_extern__ void         vm_object_deactivate_pages(
 	boolean_t               kill_page,
 	boolean_t               reusable_page,
 	struct pmap             *pmap,
+/* XXX TODO4K: need pmap_page_size here too? */
 	vm_map_offset_t         pmap_offset);
 
 __private_extern__ void vm_object_reuse_pages(
@@ -944,7 +943,7 @@ vm_object_assert_wait(
 	assert(event >= 0 && event <= VM_OBJECT_EVENT_MAX);
 
 	object->all_wanted |= 1 << event;
-	wr = assert_wait((event_t)((vm_offset_t)object + event),
+	wr = assert_wait((event_t)((vm_offset_t)object + (vm_offset_t)event),
 	    interruptible);
 	return wr;
 }
@@ -1000,7 +999,7 @@ vm_object_sleep(
 
 	object->all_wanted |= 1 << event;
 	wr = thread_sleep_vm_object(object,
-	    (event_t)((vm_offset_t)object + event),
+	    (event_t)((vm_offset_t)object + (vm_offset_t)event),
 	    interruptible);
 	return wr;
 }
@@ -1014,7 +1013,7 @@ vm_object_wakeup(
 	assert(event >= 0 && event <= VM_OBJECT_EVENT_MAX);
 
 	if (object->all_wanted & (1 << event)) {
-		thread_wakeup((event_t)((vm_offset_t)object + event));
+		thread_wakeup((event_t)((vm_offset_t)object + (vm_offset_t)event));
 	}
 	object->all_wanted &= ~(1 << event);
 }
@@ -1203,5 +1202,10 @@ extern kern_return_t vm_object_ownership_change(
 	task_t new_owner,
 	int new_ledger_flags,
 	boolean_t task_objq_locked);
+
+// LP64todo: all the current tools are 32bit, obviously never worked for 64b
+// so probably should be a real 32b ID vs. ptr.
+// Current users just check for equality
+#define VM_OBJECT_ID(o) ((uint32_t)(uintptr_t)VM_KERNEL_ADDRPERM((o)))
 
 #endif  /* _VM_VM_OBJECT_H_ */

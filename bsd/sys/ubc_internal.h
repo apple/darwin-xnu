@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 1999-2008 Apple Inc. All rights reserved.
+ * Copyright (c) 1999-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -51,6 +51,7 @@
 #include <kern/locks.h>
 #include <mach/memory_object_types.h>
 
+#include <libkern/ptrauth_utils.h>
 
 #define UBC_INFO_NULL   ((struct ubc_info *) 0)
 
@@ -99,8 +100,9 @@ struct cs_hash;
 uint8_t cs_hash_type(struct cs_hash const *);
 
 struct cs_blob {
-	struct cs_blob  *csb_next;
+	struct cs_blob  * XNU_PTRAUTH_SIGNED_PTR("cs_blob.csb_next") csb_next;
 	cpu_type_t      csb_cpu_type;
+	cpu_subtype_t   csb_cpu_subtype;
 	unsigned int    csb_flags;
 	off_t           csb_base_offset;        /* Offset of Mach-O binary in fat binary */
 	off_t           csb_start_offset;       /* Blob coverage area start, from csb_base_offset */
@@ -109,17 +111,22 @@ struct cs_blob {
 	vm_offset_t     csb_mem_offset;
 	vm_address_t    csb_mem_kaddr;
 	unsigned char   csb_cdhash[CS_CDHASH_LEN];
+	ptrauth_generic_signature_t csb_cdhash_signature;
 	const struct cs_hash  *csb_hashtype;
-	vm_size_t       csb_hash_pagesize;      /* each hash entry represent this many bytes in the file */
-	vm_size_t       csb_hash_pagemask;
-	vm_size_t       csb_hash_pageshift;
-	vm_size_t       csb_hash_firstlevel_pagesize;   /* First hash this many bytes, then hash the hashes together */
-	const CS_CodeDirectory *csb_cd;
-	const char      *csb_teamid;
-	const CS_GenericBlob *csb_entitlements_blob;    /* raw blob, subrange of csb_mem_kaddr */
-	void *          csb_entitlements;       /* The entitlements as an OSDictionary */
+#if CONFIG_SUPPLEMENTAL_SIGNATURES
+	unsigned char   csb_linkage[CS_CDHASH_LEN];
+	const struct cs_hash  *csb_linkage_hashtype;
+#endif
+	int             csb_hash_pageshift;
+	int             csb_hash_firstlevel_pageshift;   /* First hash this many bytes, then hash the hashes together */
+	const CS_CodeDirectory * XNU_PTRAUTH_SIGNED_PTR("cs_blob.csb_cd") csb_cd;
+	const char      * XNU_PTRAUTH_SIGNED_PTR("cs_blob.csb_teamid") csb_teamid;
+#if CONFIG_SUPPLEMENTAL_SIGNATURES
+	char            * XNU_PTRAUTH_SIGNED_PTR("cs_blob.csb_supplement_teamid") csb_supplement_teamid;
+#endif
+	const CS_GenericBlob * XNU_PTRAUTH_SIGNED_PTR("cs_blob.csb_entitlements_blob") csb_entitlements_blob;    /* raw blob, subrange of csb_mem_kaddr */
+	void *          XNU_PTRAUTH_SIGNED_PTR("cs_blob.csb_entitlements") csb_entitlements;       /* The entitlements as an OSDictionary */
 	unsigned int    csb_signer_type;
-
 	unsigned int    csb_reconstituted;      /* signature has potentially been modified after validation */
 	/* The following two will be replaced by the csb_signer_type. */
 	unsigned int    csb_platform_binary:1;
@@ -134,7 +141,7 @@ struct cs_blob {
 struct ubc_info {
 	memory_object_t         ui_pager;       /* pager */
 	memory_object_control_t ui_control;     /* VM control for the pager */
-	vnode_t                 ui_vnode;       /* vnode for this ubc_info */
+	vnode_t                 XNU_PTRAUTH_SIGNED_PTR("ubc_info.ui_vnode") ui_vnode;       /* vnode for this ubc_info */
 	kauth_cred_t            ui_ucred;       /* holds credentials for NFS paging */
 	off_t                   ui_size;        /* file size for the vnode */
 	uint32_t                ui_flags;       /* flags */
@@ -145,9 +152,12 @@ struct ubc_info {
 
 	struct timespec         cs_mtime;       /* modify time of file when
 	                                         *   first cs_blob was loaded */
-	struct  cs_blob         *cs_blobs;      /* for CODE SIGNING */
+	struct  cs_blob         * XNU_PTRAUTH_SIGNED_PTR("ubc_info.cs_blobs") cs_blobs; /* for CODE SIGNING */
+#if CONFIG_SUPPLEMENTAL_SIGNATURES
+	struct  cs_blob         * XNU_PTRAUTH_SIGNED_PTR("ubc_info.cs_blob_supplement") cs_blob_supplement;/* supplemental blob (note that there can only be one supplement) */
+#endif
 #if CHECK_CS_VALIDATION_BITMAP
-	void                    *cs_valid_bitmap;     /* right now: used only for signed files on the read-only root volume */
+	void                    * XNU_PTRAUTH_SIGNED_PTR("ubc_info.cs_valid_bitmap") cs_valid_bitmap;     /* right now: used only for signed files on the read-only root volume */
 	uint64_t                cs_valid_bitmap_size; /* Save original bitmap size in case the file size changes.
 	                                               * In the future, we may want to reconsider changing the
 	                                               * underlying bitmap to reflect the new file size changes.
@@ -171,7 +181,7 @@ struct ubc_info {
  */
 
 __BEGIN_DECLS
-__private_extern__ void ubc_init(void);
+
 __private_extern__ int  ubc_umount(mount_t mp);
 __private_extern__ void ubc_unmountall(void);
 __private_extern__ memory_object_t ubc_getpager(vnode_t);
@@ -204,9 +214,14 @@ int UBCINFOEXISTS(const struct vnode *);
 
 /* code signing */
 struct cs_blob;
-int     ubc_cs_blob_add(vnode_t, cpu_type_t, off_t, vm_address_t *, vm_size_t, struct image_params *, int, struct cs_blob **);
-int     ubc_cs_sigpup_add(vnode_t, vm_address_t, vm_size_t);
+int     ubc_cs_blob_add(vnode_t, uint32_t, cpu_type_t, cpu_subtype_t, off_t, vm_address_t *, vm_size_t, struct image_params *, int, struct cs_blob **);
+#if CONFIG_SUPPLEMENTAL_SIGNATURES
+int     ubc_cs_blob_add_supplement(vnode_t, vnode_t, off_t, vm_address_t *, vm_size_t, struct cs_blob **);
+#endif
 struct cs_blob *ubc_get_cs_blobs(vnode_t);
+#if CONFIG_SUPPLEMENTAL_SIGNATURES
+struct cs_blob *ubc_get_cs_supplement(vnode_t);
+#endif
 void    ubc_get_cs_mtime(vnode_t, struct timespec *);
 int     ubc_cs_getcdhash(vnode_t, off_t, unsigned char *);
 kern_return_t ubc_cs_blob_allocate(vm_offset_t *, vm_size_t *);

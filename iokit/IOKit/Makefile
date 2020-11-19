@@ -42,7 +42,9 @@ NOT_KF_MI_HEADERS  = $(NOT_EXPORT_HEADERS)			\
 		     IOSyncer.h AppleKeyStoreInterface.h	\
 		     IOStatistics.h IOStatisticsPrivate.h	\
 		     IOKernelReporters.h			\
-		     IOInterruptAccounting.h
+		     IOInterruptAccounting.h			\
+		     IOPlatformIO.h				\
+		     IOPMGR.h IOPlatformActions.h
 
 
 # These should be additionally installed in IOKit.framework's public Headers

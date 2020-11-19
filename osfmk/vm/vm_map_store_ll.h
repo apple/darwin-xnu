@@ -35,6 +35,7 @@ boolean_t first_free_is_valid_ll( struct _vm_map*);
 
 void vm_map_store_init_ll( struct vm_map_header*  );
 boolean_t vm_map_store_lookup_entry_ll( struct _vm_map*, vm_map_offset_t, struct vm_map_entry**);
+void    vm_map_store_find_last_free_ll( struct _vm_map*, struct vm_map_entry**);
 void    vm_map_store_entry_link_ll( struct vm_map_header*, struct vm_map_entry*, struct vm_map_entry*);
 void    vm_map_store_entry_unlink_ll( struct vm_map_header*, struct vm_map_entry*);
 void    update_first_free_ll(struct _vm_map*, struct vm_map_entry*);

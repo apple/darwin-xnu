@@ -52,7 +52,7 @@ extern int bootarg_no32exec;    /* bsd_init.c */
 *		by 32-bit binaries. 0 means unsupported.
 **********************************************************************/
 int
-grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype, bool allow_simulator_binary __unused)
+grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype, cpu_subtype_t execfeatures __unused, bool allow_simulator_binary __unused)
 {
 	cpu_subtype_t hostsubtype = cpu_subtype();
 
@@ -85,10 +85,4 @@ grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype, bool allow_simulato
 	}
 
 	return 0;
-}
-
-boolean_t
-pie_required(cpu_type_t exectype __unused, cpu_subtype_t execsubtype __unused)
-{
-	return FALSE;
 }

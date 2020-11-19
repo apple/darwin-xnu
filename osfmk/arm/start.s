@@ -30,6 +30,7 @@
 #include <arm/proc_reg.h>
 #include <mach_kdp.h>
 #include "assym.s"
+#include "caches_macros.s"
 
 	.text
 	.align 12
@@ -72,7 +73,7 @@ L_start_cpu_0:
 	orr		r5, r5, #(TTBR_SETUP & 0xFF00)		// Setup PTWs memory attribute
 	mcr		p15, 0, r5, c2, c0, 0				// write kernel to translation table base 0
 	mcr		p15, 0, r5, c2, c0, 1				// also to translation table base 1
-	mov		r5, #TTBCR_N_1GB_TTB0				// identify the split between 0 and 1
+	mov		r5, #TTBCR_N_SETUP					// identify the split between 0 and 1
 	mcr		p15, 0, r5, c2, c0, 2				// and set up the translation control reg
 	ldr		r2, [r1, CPU_NUMBER_GS]				// Get cpu number
 	mcr		p15, 0, r2, c13, c0, 3				// Write TPIDRURO
@@ -151,7 +152,7 @@ LEXT(_start)
 	orr		r5, r5, #(TTBR_SETUP & 0xFF00)		// Setup PTWs memory attribute
 	mcr		p15, 0, r5, c2, c0, 0				// write kernel to translation table base 0
 	mcr		p15, 0, r5, c2, c0, 1				// also to translation table base 1
-	mov		r5, #TTBCR_N_1GB_TTB0				// identify the split between 0 and 1
+	mov		r5, #TTBCR_N_SETUP					// identify the split between 0 and 1
 	mcr		p15, 0, r5, c2, c0, 2				// and set up the translation control reg
 		
 	// Mark the entries invalid in the 4 page trampoline translation table
@@ -281,31 +282,34 @@ doneveqp:
 
 	// clean the dcache
 	mov		r11, #0
+	GET_CACHE_CONFIG r11, r2, r3, r4
+	mov		r11, #0
 cleanflushway:
 cleanflushline:		
 	mcr		p15, 0, r11, c7, c14, 2				 // cleanflush dcache line by way/set
-	add		r11, r11, #1 << MMU_I7SET			 // increment set index
-	tst		r11, #1 << (MMU_NSET + MMU_I7SET)	 // look for overflow
+	add		r11, r11, r2			 			 // increment set index
+	tst		r11, r3								 // look for overflow
 	beq		cleanflushline
-	bic		r11, r11, #1 << (MMU_NSET + MMU_I7SET) // clear set overflow
-	adds	r11, r11, #1 << MMU_I7WAY			 // increment way
+	bic		r11, r11, r3 						 // clear set overflow
+	adds	r11, r11, r4						 // increment way
 	bcc		cleanflushway				 		 // loop
-
-#if	__ARM_L2CACHE__
+	HAS_L2_CACHE r11
+	cmp		r11, #0
+	beq		invall2skipl2dcache
 	// Invalidate L2 cache
+	mov		r11, #1
+	GET_CACHE_CONFIG r11, r2, r3, r4
 	mov		r11, #2
 invall2flushway:
 invall2flushline:		
 	mcr		p15, 0, r11, c7, c14, 2				 // Invalidate dcache line by way/set
-	add		r11, r11, #1 << L2_I7SET			 // increment set index
-	tst		r11, #1 << (L2_NSET + L2_I7SET)		 // look for overflow
+	add		r11, r11, r2						 // increment set index
+	tst		r11, r3								 // look for overflow
 	beq		invall2flushline
-	bic		r11, r11, #1 << (L2_NSET + L2_I7SET) // clear set overflow
-	adds	r11, r11, #1 << L2_I7WAY			 // increment way
+	bic		r11, r11, r3 						 // clear set overflow
+	adds	r11, r11, r4						 // increment way
 	bcc		invall2flushway				 		 // loop
-
-#endif
-
+invall2skipl2dcache:
 	mov		r11, #0
 	mcr		p15, 0, r11, c13, c0, 3				// Write TPIDRURO
 	LOAD_ADDR(sp, intstack_top)					// Get interrupt stack top

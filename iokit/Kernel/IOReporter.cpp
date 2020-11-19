@@ -26,6 +26,8 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <IOKit/IOKernelReportStructs.h>
 #include <IOKit/IOKernelReporters.h>
 #include "IOReporterDefs.h"
@@ -36,8 +38,7 @@
 #define super OSObject
 OSDefineMetaClassAndStructors(IOReporter, OSObject);
 
-// be careful to retain and release as necessary
-static const OSSymbol *gIOReportNoChannelName = OSSymbol::withCString("_NO_NAME_4");
+static OSSharedPtr<const OSSymbol> gIOReportNoChannelName;
 
 // * We might someday want an IOReportManager (vs. these static funcs)
 
@@ -52,7 +53,7 @@ IOReporter::configureAllReports(OSSet *reporters,
     void *destination)
 {
 	IOReturn rval = kIOReturnError;
-	OSCollectionIterator *iterator = NULL;
+	OSSharedPtr<OSCollectionIterator> iterator;
 
 	if (reporters == NULL || channelList == NULL || result == NULL) {
 		rval = kIOReturnBadArgument;
@@ -91,10 +92,6 @@ IOReporter::configureAllReports(OSSet *reporters,
 	rval = kIOReturnSuccess;
 
 finish:
-	if (iterator) {
-		iterator->release();
-	}
-
 	return rval;
 }
 
@@ -107,7 +104,7 @@ IOReporter::updateAllReports(OSSet *reporters,
     void *destination)
 {
 	IOReturn rval = kIOReturnError;
-	OSCollectionIterator *iterator = NULL;
+	OSSharedPtr<OSCollectionIterator> iterator;
 
 	if (reporters == NULL ||
 	    channelList == NULL ||
@@ -146,10 +143,6 @@ IOReporter::updateAllReports(OSSet *reporters,
 	rval = kIOReturnSuccess;
 
 finish:
-	if (iterator) {
-		iterator->release();
-	}
-
 	return rval;
 }
 
@@ -170,7 +163,7 @@ IOReporter::init(IOService *reportingService,
 	_configLock = NULL;
 	_elements = NULL;
 	_enableCounts = NULL;
-	_channelNames = NULL;
+	_channelNames = nullptr;
 
 	if (channelType.report_format == kIOReportInvalidFormat) {
 		IORLOG("init ERROR: Channel Type ill-defined");
@@ -187,6 +180,9 @@ IOReporter::init(IOService *reportingService,
 		return false;
 	}
 
+	if (channelType.nelements > INT16_MAX) {
+		return false;
+	}
 	_channelDimension = channelType.nelements;
 	_channelType = channelType;
 	// FIXME: need to look up dynamically
@@ -234,13 +230,17 @@ finish:
 /***      PUBLIC METHODS     ***/
 /*******************************/
 
+void
+IOReporter::initialize(void)
+{
+	gIOReportNoChannelName = OSSymbol::withCString("_NO_NAME_4");
+}
+
 // init() [possibly via init*()] must be called before free()
 // to ensure that _<var> = NULL
 void
 IOReporter::free(void)
 {
-	OSSafeReleaseNULL(_channelNames);
-
 	if (_configLock) {
 		IOLockFree(_configLock);
 	}
@@ -274,7 +274,7 @@ IOReporter::addChannel(uint64_t channelID,
     const char *channelName /* = NULL */)
 {
 	IOReturn res = kIOReturnError, kerr;
-	const OSSymbol *symChannelName = NULL;
+	OSSharedPtr<const OSSymbol> symChannelName;
 	int oldNChannels, newNChannels = 0, freeNChannels = 0;
 
 	IORLOG("IOReporter::addChannel %llx", channelID);
@@ -306,7 +306,6 @@ IOReporter::addChannel(uint64_t channelID,
 	} else {
 		// grab a reference to our shared global
 		symChannelName = gIOReportNoChannelName;
-		symChannelName->retain();
 	}
 
 	// allocate new buffers into _swap* variables
@@ -318,7 +317,7 @@ IOReporter::addChannel(uint64_t channelID,
 	// exchange main and _swap* buffers with buffer contents protected
 	// IOReporter::handleAddChannelSwap() also increments _nElements, etc
 	lockReporter();
-	res = handleAddChannelSwap(channelID, symChannelName);
+	res = handleAddChannelSwap(channelID, symChannelName.get());
 	unlockReporter();
 	// On failure, handleAddChannelSwap() leaves *new* buffers in _swap*.
 	// On success, it's the old buffers, so we put the right size in here.
@@ -329,19 +328,17 @@ IOReporter::addChannel(uint64_t channelID,
 finish:
 	// free up not-in-use buffers (tracked by _swap*)
 	handleSwapCleanup(freeNChannels);
-	if (symChannelName) {
-		symChannelName->release();
-	}
+
 	unlockReporterConfig();
 
 	return res;
 }
 
 
-IOReportLegendEntry*
+OSSharedPtr<IOReportLegendEntry>
 IOReporter::createLegend(void)
 {
-	IOReportLegendEntry *legendEntry = NULL;
+	OSSharedPtr<IOReportLegendEntry> legendEntry;
 
 	lockReporterConfig();
 
@@ -543,7 +540,7 @@ IOReporter::handleAddChannelSwap(uint64_t channel_id,
 		_elements[_nElements + cnt].channel_id = channel_id;
 		_elements[_nElements + cnt].provider_id = _driver_id;
 		_elements[_nElements + cnt].channel_type = _channelType;
-		_elements[_nElements + cnt].channel_type.element_idx = cnt;
+		_elements[_nElements + cnt].channel_type.element_idx = ((int16_t) cnt);
 
 		//IOREPORTER_DEBUG_ELEMENT(_swapNElements + cnt);
 	}
@@ -731,17 +728,16 @@ finish:
 }
 
 
-IOReportLegendEntry*
+OSSharedPtr<IOReportLegendEntry>
 IOReporter::handleCreateLegend(void)
 {
-	IOReportLegendEntry *legendEntry = NULL;
-	OSArray *channelIDs;
+	OSSharedPtr<IOReportLegendEntry> legendEntry = nullptr;
+	OSSharedPtr<OSArray> channelIDs;
 
 	channelIDs = copyChannelIDs();
 
 	if (channelIDs) {
-		legendEntry = IOReporter::legendWith(channelIDs, _channelNames, _channelType, _unit);
-		channelIDs->release();
+		legendEntry = IOReporter::legendWith(channelIDs.get(), _channelNames.get(), _channelType, _unit);
 	}
 
 	return legendEntry;
@@ -970,17 +966,17 @@ finish:
 
 
 // copyChannelIDs relies on the caller to take lock
-OSArray*
+OSSharedPtr<OSArray>
 IOReporter::copyChannelIDs()
 {
 	int    cnt, cnt2;
-	OSArray        *channelIDs = NULL;
-	OSNumber       *tmpNum;
+	OSSharedPtr<OSArray>    channelIDs;
+	OSSharedPtr<OSNumber>   tmpNum;
 
 	channelIDs = OSArray::withCapacity((unsigned)_nChannels);
 
 	if (!channelIDs) {
-		goto finish;
+		return nullptr;
 	}
 
 	for (cnt = 0; cnt < _nChannels; cnt++) {
@@ -990,22 +986,19 @@ IOReporter::copyChannelIDs()
 		tmpNum = OSNumber::withNumber(_elements[cnt2].channel_id, 64);
 		if (!tmpNum) {
 			IORLOG("ERROR: Could not create array of channelIDs");
-			channelIDs->release();
-			channelIDs = NULL;
-			goto finish;
+			return nullptr;
 		}
 
-		channelIDs->setObject((unsigned)cnt, tmpNum);
-		tmpNum->release();
+		channelIDs->setObject((unsigned)cnt, tmpNum.get());
+		tmpNum.reset();
 	}
 
-finish:
 	return channelIDs;
 }
 
 
 // DO NOT REMOVE THIS METHOD WHICH IS THE MAIN LEGEND CREATION FUNCTION
-/*static */ IOReportLegendEntry*
+/*static */ OSSharedPtr<IOReportLegendEntry>
 IOReporter::legendWith(OSArray *channelIDs,
     OSArray *channelNames,
     IOReportChannelType channelType,
@@ -1013,11 +1006,12 @@ IOReporter::legendWith(OSArray *channelIDs,
 {
 	unsigned int            cnt, chCnt;
 	uint64_t                type64;
-	OSNumber                *tmpNum;
+	OSSharedPtr<OSNumber>   tmpNum;
 	const OSSymbol          *tmpSymbol;
-	OSArray                 *channelLegendArray = NULL, *tmpChannelArray = NULL;
-	OSDictionary            *channelInfoDict = NULL;
-	IOReportLegendEntry     *legendEntry = NULL;
+	OSSharedPtr<OSArray>    channelLegendArray;
+	OSSharedPtr<OSArray>    tmpChannelArray;
+	OSSharedPtr<OSDictionary> channelInfoDict;
+	OSSharedPtr<IOReportLegendEntry> legendEntry = nullptr;
 
 	// No need to check validity of channelNames because param is optional
 	if (!channelIDs) {
@@ -1039,8 +1033,8 @@ IOReporter::legendWith(OSArray *channelIDs,
 		if (!tmpNum) {
 			goto finish;
 		}
-		tmpChannelArray->setObject(kIOReportChannelTypeIdx, tmpNum);
-		tmpNum->release();
+		tmpChannelArray->setObject(kIOReportChannelTypeIdx, tmpNum.get());
+		tmpNum.reset();
 
 		// Encapsulate the Channel Name in OSSymbol
 		// Use channelNames if provided
@@ -1051,9 +1045,8 @@ IOReporter::legendWith(OSArray *channelIDs,
 			} // Else, skip and leave name field empty
 		}
 
-		channelLegendArray->setObject(cnt, tmpChannelArray);
-		tmpChannelArray->release();
-		tmpChannelArray = NULL;
+		channelLegendArray->setObject(cnt, tmpChannelArray.get());
+		tmpChannelArray.reset();
 	}
 
 	// Stuff the legend entry only if we have channels...
@@ -1066,28 +1059,17 @@ IOReporter::legendWith(OSArray *channelIDs,
 
 		tmpNum = OSNumber::withNumber(unit, 64);
 		if (tmpNum) {
-			channelInfoDict->setObject(kIOReportLegendUnitKey, tmpNum);
-			tmpNum->release();
+			channelInfoDict->setObject(kIOReportLegendUnitKey, tmpNum.get());
 		}
 
 		legendEntry = OSDictionary::withCapacity(1);
 
 		if (legendEntry) {
-			legendEntry->setObject(kIOReportLegendChannelsKey, channelLegendArray);
-			legendEntry->setObject(kIOReportLegendInfoKey, channelInfoDict);
+			legendEntry->setObject(kIOReportLegendChannelsKey, channelLegendArray.get());
+			legendEntry->setObject(kIOReportLegendInfoKey, channelInfoDict.get());
 		}
 	}
 
 finish:
-	if (tmpChannelArray) {
-		tmpChannelArray->release();
-	}
-	if (channelInfoDict) {
-		channelInfoDict->release();
-	}
-	if (channelLegendArray) {
-		channelLegendArray->release();
-	}
-
 	return legendEntry;
 }

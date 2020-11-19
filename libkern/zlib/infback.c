@@ -41,6 +41,7 @@
 #include "inftrees.h"
 #include "inflate.h"
 #include "inffast.h"
+#include <os/base.h>
 
 /* function prototypes */
 local void fixedtables OF((struct inflate_state FAR *state));
@@ -484,6 +485,7 @@ inflateBack(z_streamp strm, in_func in, void FAR *in_desc, out_func out,
             Tracev((stderr, "inflate:       codes ok\n"));
             state->mode = LEN;
 
+        OS_FALLTHROUGH;
         case LEN:
             /* use inflate_fast() if we have enough input and output */
             if (have >= 6 && left >= 258) {

@@ -1,11 +1,12 @@
-/*
- *  cc_macros.h
- *  corecrypto
+/* Copyright (c) (2012,2015,2016,2017,2019) Apple Inc. All rights reserved.
  *
- *  Created on 01/11/2012
- *
- *  Copyright (c) 2012,2015 Apple Inc. All rights reserved.
- *
+ * corecrypto is licensed under Apple Inc.’s Internal Use License Agreement (which
+ * is contained in the License.txt file distributed with corecrypto) and only to 
+ * people who accept that license. IMPORTANT:  Any license rights granted to you by 
+ * Apple Inc. (if any) are limited to internal use within your organization only on 
+ * devices and computers you own or control, for the sole purpose of verifying the 
+ * security characteristics and correct functioning of the Apple Software.  You may 
+ * not, directly or indirectly, redistribute the Apple Software or any portions thereof.
  */
 
 #ifndef _CORECRYPTO_CC_MACROS_H_
@@ -113,6 +114,35 @@ CC_UNUSED static char *cc_strstr(const char *file) {
                 }                                                               \
                 goto exceptionLabel;                                            \
             }                                                                   \
+        } while ( 0 )
+#endif
+#endif
+
+#ifndef cc_require_or_return
+#if (__CC_DEBUG_ASSERT_PRODUCTION_CODE) || (!CORECRYPTO_DEBUG_ENABLE_CC_REQUIRE_PRINTS)
+  #if defined(_WIN32) && defined (__clang__)
+    #define cc_require_or_return(assertion, value)                                  \
+       do {                                                                         \
+           if (!(assertion) ) {                                                     \
+              return value;                                                         \
+           }                                                                        \
+        } while ( 0 )
+  #else
+    #define cc_require_or_return(assertion, value)                                  \
+        do {                                                                        \
+            if ( __builtin_expect(!(assertion), 0) ) {                              \
+                return value;                                                       \
+            }                                                                       \
+        } while ( 0 )
+ #endif
+#else
+    #define cc_require_or_return(assertion, value)                                  \
+        do {                                                                        \
+            if ( __builtin_expect(!(assertion), 0) ) {                              \
+                __CC_DEBUG_REQUIRE_MESSAGE(__CC_DEBUG_ASSERT_COMPONENT_NAME_STRING, \
+                    #assertion, #exceptionLabel, 0, __FILE__, __LINE__,  0);        \
+                return value;                                                       \
+            }                                                                       \
         } while ( 0 )
 #endif
 #endif

@@ -17,7 +17,7 @@ T_DECL(set_max_addr,
     T_META_NAMESPACE("xnu.vm"),
     T_META_CHECK_LEAKS(false))
 {
-#if (defined(__arm64__) && defined(__LP64__))
+#if (!defined(TARGET_OS_MAC) && defined(__arm64__) && defined(__LP64__))
 	int result = 0;
 	int code = 0;
 	int child_pid = 0;

@@ -126,7 +126,7 @@ dtrace_user_probe(x86_saved_state_t *regs)
 			if (regs64) {
 				regs64->isf.rip = npc;
 			} else {
-				regs32->eip = npc;
+				regs32->eip = (uint32_t)npc;
 			}
 			return KERN_SUCCESS;
 		}
@@ -145,7 +145,7 @@ dtrace_user_probe(x86_saved_state_t *regs)
 		if (regs64) {
 			regs64->isf.rip = npc;
 		} else {
-			regs32->eip = npc;
+			regs32->eip = (uint32_t)npc;
 		}
 
 		return KERN_SUCCESS;

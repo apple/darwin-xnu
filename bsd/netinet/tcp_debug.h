@@ -78,7 +78,7 @@ struct  tcp_debug {
 	 */
 	struct  tcpiphdr td_ti;
 	struct {
-#if !defined(KERNEL) && defined(INET6)
+#if !defined(KERNEL)
 		struct  ip6_hdr ip6;
 #else
 		u_char  ip6buf[40]; /* sizeof(struct ip6_hdr) */

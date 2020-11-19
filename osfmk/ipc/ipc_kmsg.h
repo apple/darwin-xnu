@@ -82,9 +82,13 @@
 #include <ipc/ipc_object.h>
 #include <sys/kdebug.h>
 
-typedef uint32_t ipc_kmsg_flags_t;
+typedef uint16_t ipc_kmsg_flags_t;
 
 #define IPC_KMSG_FLAGS_ALLOW_IMMOVABLE_SEND 0x1       /* Dest port contains an immovable send right */
+
+#if (DEVELOPMENT || DEBUG)
+#define IKM_PARTIAL_SIG        1     /* Keep partial message signatures for better debug */
+#endif
 
 /*
  *	This structure is only the header for a kmsg buffer;
@@ -103,21 +107,32 @@ typedef uint32_t ipc_kmsg_flags_t;
 
 struct ipc_kmsg {
 	mach_msg_size_t            ikm_size;
-	ipc_kmsg_flags_t           ikm_flags;
+	uint32_t                   ikm_ppriority;    /* pthread priority of this kmsg */
 	struct ipc_kmsg            *ikm_next;        /* next message on port/discard queue */
 	struct ipc_kmsg            *ikm_prev;        /* prev message on port/discard queue */
-	mach_msg_header_t          *ikm_header;
-	ipc_port_t                 ikm_prealloc;     /* port we were preallocated from */
-	ipc_port_t                 ikm_voucher;      /* voucher port carried */
-	mach_msg_priority_t        ikm_qos;          /* qos of this kmsg */
-	mach_msg_priority_t        ikm_qos_override; /* qos override on this kmsg */
+	union {
+		ipc_port_t             XNU_PTRAUTH_SIGNED_PTR("kmsg.ikm_prealloc") ikmu_prealloc; /* port we were preallocated from */
+		void                   *XNU_PTRAUTH_SIGNED_PTR("kmsg.ikm_data") ikmu_data;
+	} ikm_u;
+	mach_msg_header_t          *XNU_PTRAUTH_SIGNED_PTR("kmsg.ikm_header") ikm_header;
+	ipc_port_t                 XNU_PTRAUTH_SIGNED_PTR("kmsg.ikm_voucher") ikm_voucher;   /* voucher port carried */
 	struct ipc_importance_elem *ikm_importance;  /* inherited from */
 	queue_chain_t              ikm_inheritance;  /* inherited from link */
 	struct turnstile           *ikm_turnstile;   /* send turnstile for ikm_prealloc port */
 #if MACH_FLIPC
 	struct mach_node           *ikm_node;        /* Originating node - needed for ack */
 #endif
+#if IKM_PARTIAL_SIG
+	uintptr_t                  ikm_header_sig;   /* sig for just the header */
+	uintptr_t                  ikm_headtrail_sig;/* sif for header and trailer */
+#endif
+	uintptr_t                  ikm_signature;    /* sig for all kernel-processed data */
+	ipc_kmsg_flags_t           ikm_flags;
+	mach_msg_qos_t             ikm_qos_override; /* qos override on this kmsg */
+	mach_msg_filter_id         ikm_filter_policy_id; /* Sandbox-specific policy id used for message filtering */
 };
+#define ikm_prealloc ikm_u.ikmu_prealloc
+#define ikm_data ikm_u.ikmu_data
 
 #if defined(__i386__) || defined(__arm__)
 #define IKM_SUPPORT_LEGACY      1
@@ -167,35 +182,44 @@ MACRO_END
 #define ikm_flipc_init(kmsg)
 #endif
 
+#if IKM_PARTIAL_SIG
 #define ikm_init(kmsg, size)                                    \
 MACRO_BEGIN                                                     \
 	(kmsg)->ikm_size = (size);                                  \
 	(kmsg)->ikm_flags = 0;                                      \
 	(kmsg)->ikm_prealloc = IP_NULL;                             \
+	(kmsg)->ikm_data = NULL;                                    \
 	(kmsg)->ikm_voucher = IP_NULL;                              \
 	(kmsg)->ikm_importance = IIE_NULL;                          \
+	(kmsg)->ikm_filter_policy_id = 0;                           \
+	(kmsg)->ikm_header_sig = 0;                                 \
+	(kmsg)->ikm_headtrail_sig = 0;                              \
+	(kmsg)->ikm_signature = 0;                                  \
 	ikm_qos_init(kmsg);                                         \
 	ikm_flipc_init(kmsg);                                       \
 	assert((kmsg)->ikm_prev = (kmsg)->ikm_next = IKM_BOGUS);    \
 MACRO_END
+#else
+#define ikm_init(kmsg, size)                                    \
+MACRO_BEGIN                                                     \
+	(kmsg)->ikm_size = (size);                                  \
+	(kmsg)->ikm_flags = 0;                                      \
+	(kmsg)->ikm_prealloc = IP_NULL;                             \
+	(kmsg)->ikm_data = NULL;                                    \
+	(kmsg)->ikm_voucher = IP_NULL;                              \
+	(kmsg)->ikm_importance = IIE_NULL;                          \
+	(kmsg)->ikm_filter_policy_id = 0;                           \
+	(kmsg)->ikm_signature = 0;                                  \
+	ikm_qos_init(kmsg);                                         \
+	ikm_flipc_init(kmsg);                                       \
+	assert((kmsg)->ikm_prev = (kmsg)->ikm_next = IKM_BOGUS);    \
+MACRO_END
+#endif
 
 #define ikm_qos_init(kmsg)                                              \
 MACRO_BEGIN                                                             \
-	(kmsg)->ikm_qos = MACH_MSG_PRIORITY_UNSPECIFIED;                \
-	(kmsg)->ikm_qos_override = MACH_MSG_PRIORITY_UNSPECIFIED;       \
-MACRO_END
-
-#define ikm_check_init(kmsg, size)                                      \
-MACRO_BEGIN                                                             \
-	assert((kmsg)->ikm_size == (size));                             \
-	assert((kmsg)->ikm_prev == IKM_BOGUS);                          \
-	assert((kmsg)->ikm_next == IKM_BOGUS);                          \
-MACRO_END
-
-#define ikm_set_header(kmsg, mtsize)                                    \
-MACRO_BEGIN                                                             \
-	(kmsg)->ikm_header = (mach_msg_header_t *)                      \
-	((vm_offset_t)((kmsg) + 1) + (kmsg)->ikm_size - (mtsize));      \
+	(kmsg)->ikm_ppriority = MACH_MSG_PRIORITY_UNSPECIFIED;          \
+	(kmsg)->ikm_qos_override = THREAD_QOS_UNSPECIFIED;              \
 MACRO_END
 
 struct ipc_kmsg_queue {
@@ -230,7 +254,7 @@ extern boolean_t ipc_kmsg_enqueue_qos(
 extern boolean_t ipc_kmsg_override_qos(
 	ipc_kmsg_queue_t    queue,
 	ipc_kmsg_t          kmsg,
-	mach_msg_priority_t override);
+	mach_msg_qos_t      qos_ovr);
 
 /* Dequeue and return a kmsg */
 extern ipc_kmsg_t ipc_kmsg_dequeue(
@@ -323,7 +347,7 @@ extern void ipc_kmsg_put_to_kernel(
 extern mach_msg_return_t ipc_kmsg_copyin_header(
 	ipc_kmsg_t              kmsg,
 	ipc_space_t             space,
-	mach_msg_priority_t override,
+	mach_msg_priority_t     priority,
 	mach_msg_option_t       *optionp);
 
 /* Copyin port rights and out-of-line memory from a user message */
@@ -331,7 +355,7 @@ extern mach_msg_return_t ipc_kmsg_copyin(
 	ipc_kmsg_t              kmsg,
 	ipc_space_t             space,
 	vm_map_t                map,
-	mach_msg_priority_t override,
+	mach_msg_priority_t     priority,
 	mach_msg_option_t       *optionp);
 
 /* Copyin port rights and out-of-line memory from a kernel message */
@@ -404,6 +428,8 @@ extern void ipc_kmsg_copyout_to_kernel_legacy(
 #endif
 
 extern mach_msg_trailer_size_t
+ipc_kmsg_trailer_size(mach_msg_option_t option, thread_t thread);
+extern void
 ipc_kmsg_add_trailer(ipc_kmsg_t kmsg, ipc_space_t space,
     mach_msg_option_t option, thread_t thread,
     mach_port_seqno_t seqno, boolean_t minimal_trailer,

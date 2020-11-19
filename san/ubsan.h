@@ -84,6 +84,11 @@ struct ubsan_oob_desc {
 	struct san_type_desc *index_ty;
 };
 
+struct ubsan_load_invalid_desc {
+	struct san_src_loc loc;
+	struct san_type_desc *type;
+};
+
 enum {
 	UBSAN_OVERFLOW_add = 1,
 	UBSAN_OVERFLOW_sub,
@@ -97,6 +102,7 @@ enum {
 	UBSAN_OOB,
 	UBSAN_GENERIC,
 	UBSAN_TYPE_MISMATCH,
+	UBSAN_LOAD_INVALID_VALUE,
 	UBSAN_VIOLATION_MAX,
 };
 
@@ -111,6 +117,7 @@ struct ubsan_violation {
 		struct ubsan_align_desc *align;
 		struct ubsan_ptroverflow_desc *ptroverflow;
 		struct ubsan_oob_desc *oob;
+		struct ubsan_load_invalid_desc *invalid;
 		const char *func;
 	};
 	struct san_src_loc *loc;
@@ -142,6 +149,8 @@ void __ubsan_handle_sub_overflow(struct ubsan_overflow_desc *, uint64_t lhs, uin
 void __ubsan_handle_sub_overflow_abort(struct ubsan_overflow_desc *, uint64_t lhs, uint64_t rhs);
 void __ubsan_handle_type_mismatch_v1(struct ubsan_align_desc *, uint64_t val);
 void __ubsan_handle_type_mismatch_v1_abort(struct ubsan_align_desc *, uint64_t val);
+void __ubsan_handle_load_invalid_value(struct ubsan_load_invalid_desc *, uint64_t);
+void __ubsan_handle_load_invalid_value_abort(struct ubsan_load_invalid_desc *, uint64_t);
 
 /* currently unimplemented */
 void __ubsan_handle_float_cast_overflow(struct san_src_loc *);
@@ -152,8 +161,6 @@ void __ubsan_handle_implicit_conversion(struct san_src_loc *);
 void __ubsan_handle_implicit_conversion_abort(struct san_src_loc *);
 void __ubsan_handle_invalid_builtin(struct san_src_loc *);
 void __ubsan_handle_invalid_builtin_abort(struct san_src_loc *);
-void __ubsan_handle_load_invalid_value(struct san_src_loc *);
-void __ubsan_handle_load_invalid_value_abort(struct san_src_loc *);
 void __ubsan_handle_missing_return(struct san_src_loc *);
 void __ubsan_handle_missing_return_abort(struct san_src_loc *);
 void __ubsan_handle_nonnull_arg(struct san_src_loc *);

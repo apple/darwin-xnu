@@ -59,7 +59,7 @@ audit_session_mksend(struct auditinfo_addr *aia_p, ipc_port_t *sessionport)
 {
 	audit_session_aiaref(aia_p);
 	if (!ipc_kobject_make_send_lazy_alloc_port(sessionport,
-	    (ipc_kobject_t)aia_p, IKOT_AU_SESSIONPORT)) {
+	    (ipc_kobject_t)aia_p, IKOT_AU_SESSIONPORT, false, 0)) {
 		audit_session_aiaunref(aia_p);
 	}
 

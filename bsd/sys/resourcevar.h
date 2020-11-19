@@ -66,6 +66,7 @@
 
 #include <sys/appleapiopts.h>
 #include <sys/resource.h>
+#include <sys/_types/_caddr_t.h>
 
 /*
  * Kernel per-process accounting / statistics
@@ -100,33 +101,15 @@ struct pstats {
 #endif // KERNEL
 };
 
-/*
- * Kernel shareable process resource limits.  Because this structure
- * is moderately large but changes infrequently, it is normally
- * shared copy-on-write after forks.  If a group of processes
- * ("threads") share modifications, the PL_SHAREMOD flag is set,
- * and a copy must be made for the child of a new fork that isn't
- * sharing modifications to the limits.
- */
-/*
- * Modifications are done with the list lock held (p_limit as well)and access indv
- * limits can be done without limit as we keep the old copy in p_olimit. Which is
- * dropped in proc_exit. This way all access will have a valid kernel address
- */
-struct plimit {
-	struct  rlimit pl_rlimit[RLIM_NLIMITS];
-	int     pl_refcnt;              /* number of references */
-};
-
 #ifdef KERNEL
-void     calcru(struct proc *p, struct timeval *up, struct timeval *sp,
-    struct timeval *ip);
-void     ruadd(struct rusage *ru, struct rusage *ru2);
-void     update_rusage_info_child(struct rusage_info_child *ru, rusage_info_current *ru_current);
+
+void calcru(struct proc *p, struct timeval *up, struct timeval *sp, struct timeval *ip);
+void ruadd(struct rusage *ru, struct rusage *ru2);
+void update_rusage_info_child(struct rusage_info_child *ru, rusage_info_current *ru_current);
 void proc_limitget(proc_t p, int whichi, struct rlimit * limp);
-void proc_limitdrop(proc_t p, int exiting);
 void proc_limitfork(proc_t parent, proc_t child);
-int proc_limitreplace(proc_t p);
+void proc_limitdrop(proc_t p);
+void proc_limitupdate(proc_t p, struct rlimit *newrlim, uint8_t which);
 void proc_limitblock(proc_t);
 void proc_limitunblock(proc_t);
 #endif /* KERNEL */

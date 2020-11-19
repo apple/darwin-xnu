@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -68,9 +68,7 @@
 #ifdef INET
 #include <netinet/igmp_var.h>
 #endif
-#ifdef INET6
 #include <netinet6/mld6_var.h>
-#endif
 #include <netkey/key.h>
 #include <stdbool.h>
 
@@ -91,11 +89,11 @@ static errno_t ifnet_allocate_common(const struct ifnet_init_params *init,
 
 
 #define TOUCHLASTCHANGE(__if_lastchange) {                              \
-	(__if_lastchange)->tv_sec = net_uptime();                       \
+	(__if_lastchange)->tv_sec = (time_t)net_uptime();               \
 	(__if_lastchange)->tv_usec = 0;                                 \
 }
 
-static errno_t ifnet_defrouter_llreachinfo(ifnet_t, int,
+static errno_t ifnet_defrouter_llreachinfo(ifnet_t, sa_family_t,
     struct ifnet_llreach_info *);
 static void ifnet_kpi_free(ifnet_t);
 static errno_t ifnet_list_get_common(ifnet_family_t, boolean_t, ifnet_t **,
@@ -121,12 +119,7 @@ ifnet_kpi_free(ifnet_t ifp)
 		detach_func(ifp);
 	}
 
-	if (ifp->if_broadcast.length > sizeof(ifp->if_broadcast.u.buffer)) {
-		FREE(ifp->if_broadcast.u.ptr, M_IFADDR);
-		ifp->if_broadcast.u.ptr = NULL;
-	}
-
-	dlil_if_release(ifp);
+	ifnet_dispose(ifp);
 }
 
 errno_t
@@ -232,20 +225,28 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 		}
 	}
 
+	if (einit.type > UCHAR_MAX) {
+		return EINVAL;
+	}
+
+	if (einit.unit > SHRT_MAX) {
+		return EINVAL;
+	}
+
 	/* Initialize external name (name + unit) */
 	(void) snprintf(if_xname, sizeof(if_xname), "%s%d",
 	    einit.name, einit.unit);
 
 	if (einit.uniqueid == NULL) {
 		einit.uniqueid = if_xname;
-		einit.uniqueid_len = strlen(if_xname);
+		einit.uniqueid_len = (uint32_t)strlen(if_xname);
 	}
 
 	error = dlil_if_acquire(einit.family, einit.uniqueid,
 	    einit.uniqueid_len, if_xname, &ifp);
 
 	if (error == 0) {
-		u_int64_t br;
+		uint64_t br;
 
 		/*
 		 * Cast ifp->if_name as non const. dlil_if_acquire sets it up
@@ -253,10 +254,10 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 		 * to write to this.
 		 */
 		strlcpy(__DECONST(char *, ifp->if_name), einit.name, IFNAMSIZ);
-		ifp->if_type            = einit.type;
+		ifp->if_type            = (u_char)einit.type;
 		ifp->if_family          = einit.family;
 		ifp->if_subfamily       = einit.subfamily;
-		ifp->if_unit            = einit.unit;
+		ifp->if_unit            = (short)einit.unit;
 		ifp->if_output          = einit.output;
 		ifp->if_pre_enqueue     = einit.pre_enqueue;
 		ifp->if_start           = einit.start;
@@ -281,9 +282,13 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 		ifp->if_softc           = einit.softc;
 		ifp->if_ioctl           = einit.ioctl;
 		ifp->if_set_bpf_tap     = einit.set_bpf_tap;
-		ifp->if_free            = ifnet_kpi_free;
+		ifp->if_free            = (einit.free != NULL) ? einit.free : ifnet_kpi_free;
 		ifp->if_event           = einit.event;
 		ifp->if_kpi_storage     = einit.detach;
+
+		/* Initialize Network ID */
+		ifp->network_id_len     = 0;
+		bzero(&ifp->network_id, sizeof(ifp->network_id));
 
 		/* Initialize external name (name + unit) */
 		snprintf(__DECONST(char *, ifp->if_xname), IFXNAMSIZ,
@@ -305,11 +310,11 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 		 * Internally, DLIL will only use the extended callback
 		 * variant which is represented by if_framer.
 		 */
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 		if (ifp->if_framer == NULL && ifp->if_framer_legacy != NULL) {
 			ifp->if_framer = ifp->if_framer_legacy;
 		}
-#else /* !CONFIG_EMBEDDED */
+#else /* XNU_TARGET_OS_OSX */
 		if (ifp->if_framer == NULL && ifp->if_framer_legacy != NULL) {
 			if (ifp->if_framer_legacy == ether_frameout) {
 				ifp->if_framer = ether_frameout_extended;
@@ -317,7 +322,7 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 				ifp->if_framer = ifnet_framer_stub;
 			}
 		}
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 
 		if (ifp->if_output_bw.eff_bw > ifp->if_output_bw.max_bw) {
 			ifp->if_output_bw.max_bw = ifp->if_output_bw.eff_bw;
@@ -340,7 +345,7 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 		/* Pin if_baudrate to 32 bits */
 		br = MAX(ifp->if_output_bw.max_bw, ifp->if_input_bw.max_bw);
 		if (br != 0) {
-			ifp->if_baudrate = (br > 0xFFFFFFFF) ? 0xFFFFFFFF : br;
+			ifp->if_baudrate = (br > UINT32_MAX) ? UINT32_MAX : (uint32_t)br;
 		}
 
 		if (ifp->if_output_lt.eff_lt > ifp->if_output_lt.max_lt) {
@@ -365,21 +370,17 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 			ifp->if_ioctl = ifp_if_ioctl;
 		}
 
-		ifp->if_eflags = 0;
+		if_clear_eflags(ifp, -1);
 		if (ifp->if_start != NULL) {
-			ifp->if_eflags |= IFEF_TXSTART;
+			if_set_eflags(ifp, IFEF_TXSTART);
 			if (ifp->if_pre_enqueue == NULL) {
 				ifp->if_pre_enqueue = ifnet_enqueue;
 			}
 			ifp->if_output = ifp->if_pre_enqueue;
-		} else {
-			ifp->if_eflags &= ~IFEF_TXSTART;
 		}
 
 		if (ifp->if_input_poll != NULL) {
-			ifp->if_eflags |= IFEF_RXPOLL;
-		} else {
-			ifp->if_eflags &= ~IFEF_RXPOLL;
+			if_set_eflags(ifp, IFEF_RXPOLL);
 		}
 
 		ifp->if_output_dlil = dlil_output_handler;
@@ -414,9 +415,9 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 			bzero(&ifp->if_broadcast, sizeof(ifp->if_broadcast));
 		}
 
-		ifp->if_xflags = 0;
+		if_clear_xflags(ifp, -1);
 		/* legacy interface */
-		ifp->if_xflags |= IFXF_LEGACY;
+		if_set_xflags(ifp, IFXF_LEGACY);
 
 		/*
 		 * output target queue delay is specified in millisecond
@@ -442,8 +443,8 @@ ifnet_allocate_extended(const struct ifnet_init_eparams *einit0,
 		 */
 		OSIncrementAtomic64(&net_api_stats.nas_ifnet_alloc_count);
 		INC_ATOMIC_INT64_LIM(net_api_stats.nas_ifnet_alloc_total);
-		if (einit.flags & IFNET_INIT_ALLOC_KPI) {
-			ifp->if_xflags |= IFXF_ALLOC_KPI;
+		if ((einit.flags & IFNET_INIT_ALLOC_KPI) != 0) {
+			if_set_xflags(ifp, IFXF_ALLOC_KPI);
 		} else {
 			OSIncrementAtomic64(
 				&net_api_stats.nas_ifnet_alloc_os_count);
@@ -467,6 +468,17 @@ errno_t
 ifnet_reference(ifnet_t ifp)
 {
 	return dlil_if_ref(ifp);
+}
+
+void
+ifnet_dispose(ifnet_t ifp)
+{
+	if (ifp->if_broadcast.length > sizeof(ifp->if_broadcast.u.buffer)) {
+		FREE(ifp->if_broadcast.u.ptr, M_IFADDR);
+		ifp->if_broadcast.u.ptr = NULL;
+	}
+
+	dlil_if_release(ifp);
 }
 
 errno_t
@@ -551,11 +563,9 @@ ifnet_set_flags(ifnet_t interface, u_int16_t new_flags, u_int16_t mask)
 			igmp_initsilent(interface, IGMP_IFINFO(interface));
 		}
 #endif /* INET */
-#if INET6
 		if (MLD_IFINFO(interface) != NULL) {
 			mld6_initsilent(interface, MLD_IFINFO(interface));
 		}
-#endif /* INET6 */
 	}
 
 	ifnet_lock_done(interface);
@@ -645,8 +655,10 @@ ifnet_set_eflags(ifnet_t interface, u_int32_t new_flags, u_int32_t mask)
 		return EINVAL;
 	}
 	oeflags = interface->if_eflags;
-	interface->if_eflags =
-	    (new_flags & mask) | (interface->if_eflags & ~mask);
+	if_clear_eflags(interface, mask);
+	if (new_flags != 0) {
+		if_set_eflags(interface, (new_flags & mask));
+	}
 	ifnet_lock_done(interface);
 	if (interface->if_eflags & IFEF_AWDL_RESTRICTED &&
 	    !(oeflags & IFEF_AWDL_RESTRICTED)) {
@@ -830,7 +842,7 @@ done:
 
 
 static errno_t
-ifnet_defrouter_llreachinfo(ifnet_t ifp, int af,
+ifnet_defrouter_llreachinfo(ifnet_t ifp, sa_family_t af,
     struct ifnet_llreach_info *iflri)
 {
 	if (ifp == NULL || iflri == NULL) {
@@ -1103,17 +1115,13 @@ ifnet_set_wake_flags(ifnet_t interface, u_int32_t properties, u_int32_t mask)
 		return EINVAL;
 	}
 
-	ifnet_lock_exclusive(interface);
-
-	if (mask & IF_WAKE_ON_MAGIC_PACKET) {
-		if (properties & IF_WAKE_ON_MAGIC_PACKET) {
-			interface->if_xflags |= IFXF_WAKE_ON_MAGIC_PACKET;
+	if ((mask & IF_WAKE_ON_MAGIC_PACKET) != 0) {
+		if ((properties & IF_WAKE_ON_MAGIC_PACKET) != 0) {
+			if_set_xflags(interface, IFXF_WAKE_ON_MAGIC_PACKET);
 		} else {
-			interface->if_xflags &= ~IFXF_WAKE_ON_MAGIC_PACKET;
+			if_clear_xflags(interface, IFXF_WAKE_ON_MAGIC_PACKET);
 		}
 	}
-
-	ifnet_lock_done(interface);
 
 	(void) ifnet_touch_lastchange(interface);
 
@@ -1143,7 +1151,7 @@ ifnet_get_wake_flags(ifnet_t interface)
 		return 0;
 	}
 
-	if (interface->if_xflags & IFXF_WAKE_ON_MAGIC_PACKET) {
+	if ((interface->if_xflags & IFXF_WAKE_ON_MAGIC_PACKET) != 0) {
 		flags |= IF_WAKE_ON_MAGIC_PACKET;
 	}
 
@@ -1154,7 +1162,7 @@ ifnet_get_wake_flags(ifnet_t interface)
  * Should MIB data store a copy?
  */
 errno_t
-ifnet_set_link_mib_data(ifnet_t interface, void *mibData, u_int32_t mibLen)
+ifnet_set_link_mib_data(ifnet_t interface, void *mibData, uint32_t mibLen)
 {
 	if (interface == NULL) {
 		return EINVAL;
@@ -1168,7 +1176,7 @@ ifnet_set_link_mib_data(ifnet_t interface, void *mibData, u_int32_t mibLen)
 }
 
 errno_t
-ifnet_get_link_mib_data(ifnet_t interface, void *mibData, u_int32_t *mibLen)
+ifnet_get_link_mib_data(ifnet_t interface, void *mibData, uint32_t *mibLen)
 {
 	errno_t result = 0;
 
@@ -1193,7 +1201,7 @@ ifnet_get_link_mib_data(ifnet_t interface, void *mibData, u_int32_t *mibLen)
 	return result;
 }
 
-u_int32_t
+uint32_t
 ifnet_get_link_mib_data_length(ifnet_t interface)
 {
 	return (interface == NULL) ? 0 : interface->if_linkmiblen;
@@ -1299,7 +1307,7 @@ ifnet_metric(ifnet_t interface)
 }
 
 errno_t
-ifnet_set_baudrate(struct ifnet *ifp, u_int64_t baudrate)
+ifnet_set_baudrate(struct ifnet *ifp, uint64_t baudrate)
 {
 	if (ifp == NULL) {
 		return EINVAL;
@@ -1309,7 +1317,7 @@ ifnet_set_baudrate(struct ifnet *ifp, u_int64_t baudrate)
 	    ifp->if_output_bw.eff_bw = ifp->if_input_bw.eff_bw = baudrate;
 
 	/* Pin if_baudrate to 32 bits until we can change the storage size */
-	ifp->if_baudrate = (baudrate > 0xFFFFFFFF) ? 0xFFFFFFFF : baudrate;
+	ifp->if_baudrate = (baudrate > UINT32_MAX) ? UINT32_MAX : (uint32_t)baudrate;
 
 	return 0;
 }
@@ -1349,13 +1357,17 @@ ifnet_set_link_status_outbw(struct ifnet *ifp)
 		sr->valid_bitmask |=
 		    IF_WIFI_UL_EFFECTIVE_BANDWIDTH_VALID;
 		sr->ul_effective_bandwidth =
-		    ifp->if_output_bw.eff_bw;
+		    ifp->if_output_bw.eff_bw > UINT32_MAX ?
+		    UINT32_MAX :
+		    (uint32_t)ifp->if_output_bw.eff_bw;
 	}
 	if (ifp->if_output_bw.max_bw != 0) {
 		sr->valid_bitmask |=
 		    IF_WIFI_UL_MAX_BANDWIDTH_VALID;
 		sr->ul_max_bandwidth =
-		    ifp->if_output_bw.max_bw;
+		    ifp->if_output_bw.max_bw > UINT32_MAX ?
+		    UINT32_MAX :
+		    (uint32_t)ifp->if_output_bw.max_bw;
 	}
 }
 
@@ -1391,7 +1403,7 @@ ifnet_set_output_bandwidths(struct ifnet *ifp, struct if_bandwidths *bw,
 	/* Pin if_baudrate to 32 bits */
 	br = MAX(ifp->if_output_bw.max_bw, ifp->if_input_bw.max_bw);
 	if (br != 0) {
-		ifp->if_baudrate = (br > 0xFFFFFFFF) ? 0xFFFFFFFF : br;
+		ifp->if_baudrate = (br > UINT32_MAX) ? UINT32_MAX : (uint32_t)br;
 	}
 
 	/* Adjust queue parameters if needed */
@@ -1427,12 +1439,16 @@ ifnet_set_link_status_inbw(struct ifnet *ifp)
 		sr->valid_bitmask |=
 		    IF_WIFI_DL_EFFECTIVE_BANDWIDTH_VALID;
 		sr->dl_effective_bandwidth =
-		    ifp->if_input_bw.eff_bw;
+		    ifp->if_input_bw.eff_bw > UINT32_MAX ?
+		    UINT32_MAX :
+		    (uint32_t)ifp->if_input_bw.eff_bw;
 	}
 	if (ifp->if_input_bw.max_bw != 0) {
 		sr->valid_bitmask |=
 		    IF_WIFI_DL_MAX_BANDWIDTH_VALID;
-		sr->dl_max_bandwidth = ifp->if_input_bw.max_bw;
+		sr->dl_max_bandwidth = ifp->if_input_bw.max_bw > UINT32_MAX ?
+		    UINT32_MAX :
+		    (uint32_t)ifp->if_input_bw.max_bw;
 	}
 }
 
@@ -1860,7 +1876,7 @@ ifnet_updown_delta(ifnet_t interface, struct timeval *updown_delta)
 	}
 
 	/* Calculate the delta */
-	updown_delta->tv_sec = net_uptime();
+	updown_delta->tv_sec = (time_t)net_uptime();
 	if (updown_delta->tv_sec > interface->if_data.ifi_lastupdown.tv_sec) {
 		updown_delta->tv_sec -= interface->if_data.ifi_lastupdown.tv_sec;
 	}
@@ -2192,7 +2208,8 @@ ifnet_set_lladdr_internal(ifnet_t interface, const void *lladdr,
 		} else {
 			bzero(LLADDR(sdl), interface->if_addrlen);
 		}
-		sdl->sdl_alen = lladdr_len;
+		/* lladdr_len-check with if_addrlen makes sure it fits in u_char */
+		sdl->sdl_alen = (u_char)lladdr_len;
 
 		if (apply_type) {
 			sdl->sdl_type = new_type;
@@ -2297,7 +2314,7 @@ ifnet_get_multicast_list(ifnet_t ifp, ifmultiaddr_t **addresses)
 	}
 
 	MALLOC(*addresses, ifmultiaddr_t *, sizeof(ifmultiaddr_t) * (cmax + 1),
-	    M_TEMP, M_NOWAIT);
+	    M_TEMP, M_WAITOK);
 	if (*addresses == NULL) {
 		ifnet_lock_done(ifp);
 		return ENOMEM;
@@ -2337,7 +2354,7 @@ errno_t
 ifnet_find_by_name(const char *ifname, ifnet_t *ifpp)
 {
 	struct ifnet *ifp;
-	int     namelen;
+	size_t namelen;
 
 	if (ifname == NULL) {
 		return EINVAL;
@@ -3003,6 +3020,8 @@ ifnet_set_delegate(ifnet_t ifp, ifnet_t delegated_ifp)
 	}
 	bzero(&ifp->if_delegated, sizeof(ifp->if_delegated));
 	if (delegated_ifp != NULL && ifp != delegated_ifp) {
+		uint32_t        set_eflags;
+
 		ifp->if_delegated.ifp = delegated_ifp;
 		ifnet_reference(delegated_ifp);
 		ifp->if_delegated.type = delegated_ifp->if_type;
@@ -3016,10 +3035,10 @@ ifnet_set_delegate(ifnet_t ifp, ifnet_t delegated_ifp)
 		/*
 		 * Propogate flags related to ECN from delegated interface
 		 */
-		ifp->if_eflags &= ~(IFEF_ECN_ENABLE | IFEF_ECN_DISABLE);
-		ifp->if_eflags |= (delegated_ifp->if_eflags &
+		if_clear_eflags(ifp, IFEF_ECN_ENABLE | IFEF_ECN_DISABLE);
+		set_eflags = (delegated_ifp->if_eflags &
 		    (IFEF_ECN_ENABLE | IFEF_ECN_DISABLE));
-
+		if_set_eflags(ifp, set_eflags);
 		printf("%s: is now delegating %s (type 0x%x, family %u, "
 		    "sub-family %u)\n", ifp->if_xname, delegated_ifp->if_xname,
 		    delegated_ifp->if_type, delegated_ifp->if_family,
@@ -3263,7 +3282,9 @@ ifnet_link_status_report(ifnet_t ifp, const void *buffer,
 			if_wifi_sr->valid_bitmask |=
 			    IF_WIFI_UL_MAX_BANDWIDTH_VALID;
 			if_wifi_sr->ul_max_bandwidth =
-			    ifp->if_output_bw.max_bw;
+			    ifp->if_output_bw.max_bw > UINT32_MAX ?
+			    UINT32_MAX :
+			    (uint32_t)ifp->if_output_bw.max_bw;
 		}
 		if (!(new_wifi_sr->valid_bitmask &
 		    IF_WIFI_UL_EFFECTIVE_BANDWIDTH_VALID) &&
@@ -3271,7 +3292,9 @@ ifnet_link_status_report(ifnet_t ifp, const void *buffer,
 			if_wifi_sr->valid_bitmask |=
 			    IF_WIFI_UL_EFFECTIVE_BANDWIDTH_VALID;
 			if_wifi_sr->ul_effective_bandwidth =
-			    ifp->if_output_bw.eff_bw;
+			    ifp->if_output_bw.eff_bw > UINT32_MAX ?
+			    UINT32_MAX :
+			    (uint32_t)ifp->if_output_bw.eff_bw;
 		}
 		if (!(new_wifi_sr->valid_bitmask &
 		    IF_WIFI_DL_MAX_BANDWIDTH_VALID) &&
@@ -3279,7 +3302,9 @@ ifnet_link_status_report(ifnet_t ifp, const void *buffer,
 			if_wifi_sr->valid_bitmask |=
 			    IF_WIFI_DL_MAX_BANDWIDTH_VALID;
 			if_wifi_sr->dl_max_bandwidth =
-			    ifp->if_input_bw.max_bw;
+			    ifp->if_input_bw.max_bw > UINT32_MAX ?
+			    UINT32_MAX :
+			    (uint32_t)ifp->if_input_bw.max_bw;
 		}
 		if (!(new_wifi_sr->valid_bitmask &
 		    IF_WIFI_DL_EFFECTIVE_BANDWIDTH_VALID) &&
@@ -3287,7 +3312,9 @@ ifnet_link_status_report(ifnet_t ifp, const void *buffer,
 			if_wifi_sr->valid_bitmask |=
 			    IF_WIFI_DL_EFFECTIVE_BANDWIDTH_VALID;
 			if_wifi_sr->dl_effective_bandwidth =
-			    ifp->if_input_bw.eff_bw;
+			    ifp->if_input_bw.eff_bw > UINT32_MAX ?
+			    UINT32_MAX :
+			    (uint32_t)ifp->if_input_bw.eff_bw;
 		}
 	}
 
@@ -3420,8 +3447,7 @@ ifnet_get_low_power_mode(ifnet_t ifp, boolean_t *on)
 		return EINVAL;
 	}
 
-	*on  = !!(ifp->if_xflags & IFXF_LOW_POWER);
-
+	*on = ((ifp->if_xflags & IFXF_LOW_POWER) != 0);
 	return 0;
 }
 

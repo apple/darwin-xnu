@@ -59,7 +59,7 @@
 uint32_t spurious_timers;
 
 /*
- *      Event timer interrupt.
+ * Event timer interrupt.
  *
  * XXX a drawback of this implementation is that events serviced earlier must not set deadlines
  *     that occur before the entire chain completes.
@@ -67,83 +67,104 @@ uint32_t spurious_timers;
  * XXX a better implementation would use a set of generic callouts and iterate over them
  */
 void
-timer_intr(int          user_mode,
-    uint64_t    rip)
+timer_intr(int user_mode, uint64_t rip)
 {
-	uint64_t                abstime;
-	rtclock_timer_t         *mytimer;
-	cpu_data_t              *pp;
-	int64_t                 latency;
-	uint64_t                pmdeadline;
-	boolean_t               timer_processed = FALSE;
+	uint64_t        orig_abstime, abstime;
+	rtclock_timer_t *mytimer;
+	cpu_data_t      *pp;
+	uint64_t        pmdeadline;
+	uint64_t        min_deadline = EndOfAllTime;
+	uint64_t        run_deadline = EndOfAllTime;
+	bool            timer_processed = false;
 
 	pp = current_cpu_datap();
 
-	SCHED_STATS_TIMER_POP(current_processor());
+	SCHED_STATS_INC(timer_pop_count);
 
-	abstime = mach_absolute_time();         /* Get the time now */
+	orig_abstime = abstime = mach_absolute_time();
 
-	/* has a pending clock timer expired? */
-	mytimer = &pp->rtclock_timer;           /* Point to the event timer */
+	/*
+	 * Has a pending clock timer expired?
+	 */
+	mytimer = &pp->rtclock_timer;
+	timer_processed = (mytimer->deadline <= abstime ||
+	    abstime >= mytimer->queue.earliest_soft_deadline);
+	if (timer_processed) {
+		uint64_t rtclock_deadline = MAX(mytimer->deadline, mytimer->when_set);
+		/*
+		 * When opportunistically processing coalesced timers, don't factor
+		 * their latency into the trace event.
+		 */
+		if (abstime > rtclock_deadline) {
+			TCOAL_DEBUG(0xEEEE0000, abstime,
+			    mytimer->queue.earliest_soft_deadline,
+			    abstime - mytimer->queue.earliest_soft_deadline, 0, 0);
+		} else {
+			min_deadline = rtclock_deadline;
+		}
 
-	if ((timer_processed = ((mytimer->deadline <= abstime) ||
-	    (abstime >= (mytimer->queue.earliest_soft_deadline))))) {
+		mytimer->has_expired = TRUE;
+		mytimer->deadline = timer_queue_expire(&mytimer->queue, abstime);
+		mytimer->has_expired = FALSE;
+
+		/*
+		 * Get a more up-to-date current time after expiring the timer queue.
+		 */
+		abstime = mach_absolute_time();
+		mytimer->when_set = abstime;
+	}
+
+	/*
+	 * Has a per-CPU running timer expired?
+	 */
+	run_deadline = running_timers_expire(pp->cpu_processor, abstime);
+	if (run_deadline != EndOfAllTime) {
+		if (run_deadline < min_deadline) {
+			min_deadline = run_deadline;
+		}
+		timer_processed = true;
+		abstime = mach_absolute_time();
+	}
+
+	/*
+	 * Log the timer latency *before* the power management events.
+	 */
+	if (__probable(timer_processed)) {
+		/*
+		 * Log the maximum interrupt service latency experienced by a timer.
+		 */
+		int64_t latency = min_deadline == EndOfAllTime ? 0 :
+		    (int64_t)(abstime - min_deadline);
 		/*
 		 * Log interrupt service latency (-ve value expected by tool)
 		 * a non-PM event is expected next.
 		 * The requested deadline may be earlier than when it was set
 		 * - use MAX to avoid reporting bogus latencies.
 		 */
-		latency = (int64_t) (abstime - MAX(mytimer->deadline,
-		    mytimer->when_set));
-		/* Log zero timer latencies when opportunistically processing
-		 * coalesced timers.
-		 */
-		if (latency < 0) {
-			TCOAL_DEBUG(0xEEEE0000, abstime, mytimer->queue.earliest_soft_deadline, abstime - mytimer->queue.earliest_soft_deadline, 0, 0);
-			latency = 0;
-		}
-
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		    DECR_TRAP_LATENCY | DBG_FUNC_NONE,
-		    -latency,
-		    ((user_mode != 0) ? rip : VM_KERNEL_UNSLIDE(rip)),
-		    user_mode, 0, 0);
-
-		mytimer->has_expired = TRUE;    /* Remember that we popped */
-		mytimer->deadline = timer_queue_expire(&mytimer->queue, abstime);
-		mytimer->has_expired = FALSE;
-
-		/* Get the time again since we ran a bit */
-		abstime = mach_absolute_time();
-		mytimer->when_set = abstime;
+		KDBG_RELEASE(DECR_TRAP_LATENCY, -latency,
+		    user_mode != 0 ? rip : VM_KERNEL_UNSLIDE(rip), user_mode);
 	}
 
-	/* is it time for power management state change? */
+	/*
+	 * Is it time for power management state change?
+	 */
 	if ((pmdeadline = pmCPUGetDeadline(pp)) && (pmdeadline <= abstime)) {
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		    DECR_PM_DEADLINE | DBG_FUNC_START,
-		    0, 0, 0, 0, 0);
+		KDBG_RELEASE(DECR_PM_DEADLINE | DBG_FUNC_START);
 		pmCPUDeadline(pp);
-		KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-		    DECR_PM_DEADLINE | DBG_FUNC_END,
-		    0, 0, 0, 0, 0);
-		timer_processed = TRUE;
-		abstime = mach_absolute_time(); /* Get the time again since we ran a bit */
+		KDBG_RELEASE(DECR_PM_DEADLINE | DBG_FUNC_END);
+		timer_processed = true;
+		/*
+		 * XXX Nothing below needs an updated abstime, so omit the update.
+		 */
 	}
 
-	uint64_t quantum_deadline = pp->quantum_timer_deadline;
-	/* is it the quantum timer expiration? */
-	if ((quantum_deadline <= abstime) && (quantum_deadline > 0)) {
-		pp->quantum_timer_deadline = 0;
-		quantum_timer_expire(abstime);
-	}
-
-	/* schedule our next deadline */
+	/*
+	 * Schedule the next deadline.
+	 */
 	x86_lcpu()->rtcDeadline = EndOfAllTime;
 	timer_resync_deadlines();
 
-	if (__improbable(timer_processed == FALSE)) {
+	if (__improbable(!timer_processed)) {
 		spurious_timers++;
 	}
 }
@@ -170,18 +191,6 @@ timer_set_deadline(uint64_t deadline)
 	splx(s);
 }
 
-void
-quantum_timer_set_deadline(uint64_t deadline)
-{
-	cpu_data_t              *pp;
-	/* We should've only come into this path with interrupts disabled */
-	assert(ml_get_interrupts_enabled() == FALSE);
-
-	pp = current_cpu_datap();
-	pp->quantum_timer_deadline = deadline;
-	timer_resync_deadlines();
-}
-
 /*
  * Re-evaluate the outstanding deadlines and select the most proximate.
  *
@@ -192,7 +201,6 @@ timer_resync_deadlines(void)
 {
 	uint64_t                deadline = EndOfAllTime;
 	uint64_t                pmdeadline;
-	uint64_t                quantum_deadline;
 	rtclock_timer_t         *mytimer;
 	spl_t                   s = splclock();
 	cpu_data_t              *pp;
@@ -221,13 +229,10 @@ timer_resync_deadlines(void)
 		deadline = pmdeadline;
 	}
 
-	/* If we have the quantum timer setup, check that */
-	quantum_deadline = pp->quantum_timer_deadline;
-	if ((quantum_deadline > 0) &&
-	    (quantum_deadline < deadline)) {
-		deadline = quantum_deadline;
+	uint64_t run_deadline = running_timers_deadline(pp->cpu_processor);
+	if (run_deadline < deadline) {
+		deadline = run_deadline;
 	}
-
 
 	/*
 	 * Go and set the "pop" event.
@@ -237,7 +242,7 @@ timer_resync_deadlines(void)
 	/* Record non-PM deadline for latency tool */
 	if (decr != 0 && deadline != pmdeadline) {
 		uint64_t queue_count = 0;
-		if (deadline != quantum_deadline) {
+		if (deadline != run_deadline) {
 			/*
 			 * For non-quantum timer put the queue count
 			 * in the tracepoint.

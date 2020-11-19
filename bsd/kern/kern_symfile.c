@@ -162,7 +162,7 @@ kern_ioctl_file_extents(struct kern_direct_file_io_ref_t * ref, u_long theIoctl,
 			fileblk = blkno * ref->blksize;
 		} else if ((ref->vp->v_type == VBLK) || (ref->vp->v_type == VCHR)) {
 			fileblk = offset;
-			filechunk = ref->filelength;
+			filechunk = (unsigned long)((ref->filelength > ULONG_MAX) ? ULONG_MAX: ref->filelength);
 		}
 
 		if (DKIOCUNMAP == theIoctl) {
@@ -234,7 +234,8 @@ kern_open_file_for_direct_io(const char * name,
 	uint32_t          blksize;
 	off_t             maxiocount, count, segcount, wbctotal;
 	boolean_t         locked = FALSE;
-	int               fmode, cmode;
+	int               fmode;
+	mode_t                    cmode;
 	struct            nameidata nd;
 	u_int32_t         ndflags;
 	off_t             mpFree;
@@ -435,7 +436,7 @@ kern_open_file_for_direct_io(const char * name,
 			fileblk = blkno * ref->blksize;
 		} else if ((ref->vp->v_type == VBLK) || (ref->vp->v_type == VCHR)) {
 			fileblk = f_offset;
-			filechunk = f_offset ? 0 : ref->filelength;
+			filechunk = f_offset ? 0 : (unsigned long)ref->filelength;
 		}
 
 		physoffset = 0;
@@ -621,8 +622,9 @@ out:
 int
 kern_write_file(struct kern_direct_file_io_ref_t * ref, off_t offset, void * addr, size_t len, int ioflag)
 {
+	assert(len <= INT32_MAX);
 	return vn_rdwr(UIO_WRITE, ref->vp,
-	           addr, len, offset,
+	           addr, (int)len, offset,
 	           UIO_SYSSPACE, ioflag | IO_SYNC | IO_NODELOCKED | IO_UNIT,
 	           vfs_context_ucred(ref->ctx), (int *) 0,
 	           vfs_context_proc(ref->ctx));
@@ -631,8 +633,9 @@ kern_write_file(struct kern_direct_file_io_ref_t * ref, off_t offset, void * add
 int
 kern_read_file(struct kern_direct_file_io_ref_t * ref, off_t offset, void * addr, size_t len, int ioflag)
 {
+	assert(len <= INT32_MAX);
 	return vn_rdwr(UIO_READ, ref->vp,
-	           addr, len, offset,
+	           addr, (int)len, offset,
 	           UIO_SYSSPACE, ioflag | IO_SYNC | IO_NODELOCKED | IO_UNIT,
 	           vfs_context_ucred(ref->ctx), (int *) 0,
 	           vfs_context_proc(ref->ctx));

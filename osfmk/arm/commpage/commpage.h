@@ -31,6 +31,7 @@
 
 #ifndef __ASSEMBLER__
 #include <stdint.h>
+#include <mach/vm_types.h>
 #endif /* __ASSEMBLER__ */
 
 extern void     commpage_set_timestamp(uint64_t tbr, uint64_t secs, uint64_t frac, uint64_t scale, uint64_t tick_per_sec);
@@ -43,11 +44,13 @@ extern  void    commpage_update_mach_approximate_time(uint64_t);
 extern  void    commpage_update_kdebug_state(void);
 extern  void    commpage_update_atm_diagnostic_config(uint32_t);
 extern  void    commpage_update_mach_continuous_time(uint64_t sleeptime);
+extern  void    commpage_update_mach_continuous_time_hw_offset(uint64_t offset);
 extern  void    commpage_update_multiuser_config(uint32_t);
 extern  void    commpage_update_boottime(uint64_t boottime_usec);
 extern  void    commpage_set_remotetime_params(double rate, uint64_t base_local_ts, uint64_t base_remote_ts);
 extern uint64_t commpage_increment_cpu_quiescent_counter(void);
 extern  void    commpage_update_dof(boolean_t enabled);
 extern  void    commpage_update_dyld_flags(uint64_t value);
+extern uint32_t commpage_is_in_pfz64(addr64_t addr);
 
 #endif /* _ARM_COMMPAGE_H */

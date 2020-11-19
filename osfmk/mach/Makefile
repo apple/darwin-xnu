@@ -50,6 +50,7 @@ MIG_DEFS =	\
 	vm_map.defs
 
 MIG_PRIVATE_DEFS = \
+	mach_eventlink.defs \
 	restartable.defs
 
 MACH_PRIVATE_DEFS = \
@@ -110,6 +111,7 @@ MIG_UUHDRS = \
 MIGINCLUDES = ${MIG_UUHDRS} ${MIG_USHDRS}
 
 DATAFILES = \
+	audit_triggers_types.h \
         boolean.h \
         clock_types.h \
         dyld_kernel.h \
@@ -184,6 +186,7 @@ PRIVATE_DATAFILES = \
 	arcade_upcall.defs \
 	host_info.h \
 	ktrace_background.defs \
+	mach_eventlink_types.h \
 	mach_host.defs \
 	mach_traps.h \
 	memory_object_types.h \
@@ -224,6 +227,7 @@ EXPORT_MI_LIST	= \
 	coalition.h \
 	mach_interface.h \
 	resource_monitors.h \
+	mach_eventlink_types.h \
 	sfi_class.h \
 	${DATAFILES}
 
@@ -236,7 +240,7 @@ ${MIGINCLUDES} : ${MIG_TYPES}
 
 ${MIG_UUHDRS} : \
 	%.h : %.defs
-	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
+	@$(LOG_MIG) $@
 	$(_v)$(MIG) $(MIGFLAGS)		\
 		-server /dev/null	\
 		-user /dev/null		\
@@ -245,7 +249,7 @@ ${MIG_UUHDRS} : \
 
 ${MIG_USHDRS} : \
 	%_server.h : %.defs
-	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
+	@$(LOG_MIG) $@
 	$(_v)$(MIG) $(MIGFLAGS)		\
 		-server /dev/null	\
 		-user /dev/null		\
@@ -310,6 +314,7 @@ MIG_KSHDRS = \
 	arcade_register_server.h \
 	clock_server.h \
 	clock_priv_server.h \
+	mach_eventlink_server.h \
 	exc_server.h \
 	host_priv_server.h \
 	host_security_server.h \
@@ -337,6 +342,7 @@ MIG_KSSRC = \
 	arcade_register_server.c \
 	clock_server.c \
 	clock_priv_server.c \
+	mach_eventlink_server.c \
 	exc_server.c \
 	host_priv_server.c \
 	host_security_server.c \
@@ -384,7 +390,7 @@ ${COMP_FILES} : ${MIG_TYPES}
 
 ${MIG_KUSRC} : \
 	%_user.c : %.defs
-	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
+	@$(LOG_MIG) $@
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}        \
 		-user    $*_user.c              \
 		-header  $*.h              \
@@ -394,7 +400,7 @@ ${MIG_KUSRC} : \
 
 ${MIG_KSSRC}: \
 	%_server.c : %.defs
-	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
+	@$(LOG_MIG) $@
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKSFLAGS}        \
 		-user    /dev/null              \
 		-header  /dev/null              \

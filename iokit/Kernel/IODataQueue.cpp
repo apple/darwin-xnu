@@ -26,6 +26,8 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #define DISABLE_DATAQUEUE_WARNING
 
 #include <IOKit/IODataQueue.h>
@@ -36,6 +38,7 @@
 #include <IOKit/IOLib.h>
 #include <IOKit/IOMemoryDescriptor.h>
 #include <libkern/OSAtomic.h>
+#include <libkern/c++/OSSharedPtr.h>
 
 struct IODataQueueInternal {
 	mach_msg_header_t msg;
@@ -54,29 +57,28 @@ struct IODataQueueInternal {
 
 OSDefineMetaClassAndStructors(IODataQueue, OSObject)
 
-IODataQueue *IODataQueue::withCapacity(UInt32 size)
+OSSharedPtr<IODataQueue>
+IODataQueue::withCapacity(UInt32 size)
 {
-	IODataQueue *dataQueue = new IODataQueue;
+	OSSharedPtr<IODataQueue> dataQueue = OSMakeShared<IODataQueue>();
 
 	if (dataQueue) {
 		if (!dataQueue->initWithCapacity(size)) {
-			dataQueue->release();
-			dataQueue = NULL;
+			return nullptr;
 		}
 	}
 
 	return dataQueue;
 }
 
-IODataQueue *
+OSSharedPtr<IODataQueue>
 IODataQueue::withEntries(UInt32 numEntries, UInt32 entrySize)
 {
-	IODataQueue *dataQueue = new IODataQueue;
+	OSSharedPtr<IODataQueue> dataQueue = OSMakeShared<IODataQueue>();
 
 	if (dataQueue) {
 		if (!dataQueue->initWithEntries(numEntries, entrySize)) {
-			dataQueue->release();
-			dataQueue = NULL;
+			return nullptr;
 		}
 	}
 
@@ -288,10 +290,10 @@ IODataQueue::sendDataAvailableNotification()
 	}
 }
 
-IOMemoryDescriptor *
+OSSharedPtr<IOMemoryDescriptor>
 IODataQueue::getMemoryDescriptor()
 {
-	IOMemoryDescriptor *descriptor = NULL;
+	OSSharedPtr<IOMemoryDescriptor> descriptor;
 	UInt32              queueSize;
 
 	queueSize = ((IODataQueueInternal *) notifyMsg)->queueSize;

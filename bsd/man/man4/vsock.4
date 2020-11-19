@@ -1,0 +1,205 @@
+.\"
+.\" Copyright (c) 2020 Apple Inc. All rights reserved.
+.\"
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+.\"
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. The rights granted to you under the License
+.\" may not be used to create, or enable the creation or redistribution of,
+.\" unlawful or unlicensed copies of an Apple operating system, or to
+.\" circumvent, violate, or enable the circumvention or violation of, any
+.\" terms of an Apple operating system software license agreement.
+.\"
+.\" Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this file.
+.\"
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\"
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+.\"
+.\"     @(#)vsock.4 7/9/2020
+.\"
+.Dd July 9, 2020
+.Dt VSOCK 4
+.Os macOS
+.Sh NAME
+.Nm vsock
+.Nd VM Sockets
+.Sh SYNOPSIS
+.In sys/socket.h
+.In sys/vsock.h
+.Ft int
+.Fn socket AF_VSOCK SOCK_STREAM 0
+.Sh DESCRIPTION
+The
+.Tn vsock
+protocol allows for socket communication between a virtual machine and its host. Socket connections may be established using standard socket interfaces. Currently, only stream connections from a guest are supported using this protocol.
+.Pp
+.Ss "Non-blocking connect"
+When a
+.Tn vsock
+socket is set non-blocking, and the connection cannot be established immediately,
+.Xr connect 2
+returns with the error
+.Dv EINPROGRESS ,
+and the connection is established asynchronously.
+.Pp
+When the asynchronous connection completes successfully,
+.Xr select 2
+or
+.Xr poll 2
+or
+.Xr kqueue 2
+will indicate the file descriptor is ready for writing.
+If the connection encounters an error, the file descriptor
+is marked ready for both reading and writing, and the pending error
+can be retrieved via the socket option
+.Dv SO_ERROR .
+.Pp
+Note that even if the socket is non-blocking, it is possible for the connection
+to be established immediately. In that case
+.Xr connect 2
+does not return with
+.Dv EINPROGRESS .
+.Sh ADDRESSING
+Sockets bound to the vsock protocol family utilize
+the following addressing structure which can be found in the header
+.Aq Pa sys/vsock.h .
+.Bd -literal -offset indent
+struct sockaddr_vm {
+	uint8_t 	svm_len;
+	sa_family_t	svm_family;
+	uint16_t	svm_reserved1;
+	uint32_t	svm_port;
+	uint32_t	svm_cid;
+};
+.Ed
+.Pp
+Addresses consist of a cid and a port.
+The field
+.Ar svm_len
+contains the total length of the structure, while the field
+.Ar svm_family
+contains the value
+.Fa AF_VSOCK .
+The field
+.Fa svm_reserved1
+is reserved and should be set to zero.
+.Pp
+Sockets may be created with the local address
+.Dv VMADDR_CID_ANY
+to effect
+.Dq wildcard
+matching on incoming messages.
+The address in a
+.Xr connect 2
+call may be given as
+.Dv VMADDR_CID_ANY
+to mean
+.Dq this host .
+The cid addresses
+.Dv VMADDR_CID_HYPERVISOR
+or
+.Dv VMADDR_CID_HOST
+may be used to
+.Xr connect 2
+or
+.Xr bind 2
+to the hypervisor or host respectively.
+.Dv VMADDR_PORT_ANY
+may be used to obtain the next available free port when calling
+.Xr bind 2 .
+.Ss CID Constants
+.Bl -tag -width ".Dv VMADDR_CID_HYPERVISOR"
+.It Dv VMADDR_CID_ANY
+Wildcard matches any address.
+.It Dv VMADDR_CID_HYPERVISOR
+The address of the hypervisor.
+.It Dv VMADDR_CID_HOST
+The address of the host.
+.El
+.Ss Port Constants
+.Bl -tag -width ".Dv VMADDR_CID_HYPERVISOR"
+.It Dv VMADDR_PORT_ANY
+Wildcard matches any port.
+.El
+.Sh ERRORS
+A
+.Tn vsock
+socket operation may fail with a general socket error or one of the following
+.Tn vsock
+specific errors:
+.Bl -tag -width ".It Bq Er EADDRNOTAVAIL"
+.It Bq Er EACCES
+returned by
+.Xr bind 2
+when attempting to bind to a privileged port;
+.It Bq Er EADDRINUSE
+returned by
+.Xr bind 2
+when attempting to bind to a cid and port that is already in use;
+.It Bq Er EADDRNOTAVAIL
+returned by
+.Xr bind 2
+when attempting to bind to an invalid cid or port;
+.It Bq Er EFAULT
+returned by
+.Xr connect 2
+when attempting to connect to an invalid cid;
+.It Bq Er EINPROGRESS
+returned by
+.Xr connect 2
+when attempting to connect using a non-blocking socket;
+.It Bq Er EINVAL
+when passing an invalid parameter;
+.It Bq Er ENODEV
+when a vsock transport does not exist;
+.It Bq Er ENOTCONN
+when performing an operation on a non-connected socket;
+.It Bq Er ETIMEDOUT
+returned by
+.Xr connect 2
+when a connection attempt has timed out;
+.It Bq Er EWOULDBLOCK
+returned by
+.Xr send 2
+or
+.Xr recv 2
+when sending or receiving using a non-blocking socket.
+.El
+.Sh IOCTLS
+The
+.Xr ioctl 2
+command codes below are defined in
+.Aq Pa sys/vsock.h .
+All commands require
+these includes:
+.Bd -literal
+        #include <sys/ioctl.h>
+        #include <sys/vsock.h>
+.Ed
+.Pp
+The third argument to
+.Xr ioctl 2
+should be a pointer to the type indicated in parenthesis.
+.Bl -tag -width IOCTL_VM_SOCKETS_GET_LOCAL_CID
+.It Dv IOCTL_VM_SOCKETS_GET_LOCAL_CID
+.Pq Li uint32_t
+Returns the local cid of this socket's transport.
+.El
+.Sh SEE ALSO
+.Xr bind 2 ,
+.Xr connect 2 ,
+.Xr ioctl 2 ,
+.Xr kqueue 2 ,
+.Xr poll 2 ,
+.Xr select 2 ,
+.Xr socket 2

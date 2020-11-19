@@ -263,6 +263,26 @@ name##_SPLAY(struct name *head, struct type *elm)                       \
 	SPLAY_ASSEMBLE(head, &__node, __left, __right, field);          \
 }                                                                       \
                                                                         \
+/* Searches for a matching entry without splaying */                    \
+static __inline struct type *                                           \
+name##_SPLAY_SEARCH(struct name *head, struct type *elm)                \
+{                                                                       \
+	struct type *__tmp;                                             \
+	int __comp;                                                     \
+                                                                        \
+	__tmp = (head)->sph_root;                                       \
+	while ((__tmp != NULL) && ((__comp = (cmp)(elm, __tmp)) != 0)) { \
+	        if (__comp < 0) {                                       \
+	                __tmp = SPLAY_LEFT(__tmp, field);               \
+	        } else if (__comp > 0) {                                \
+	                __tmp = SPLAY_RIGHT(__tmp, field);              \
+	        } else {                                                \
+	               return __tmp;                                    \
+	        }                                                       \
+	}                                                               \
+	return (NULL);                                                  \
+}                                                                       \
+                                                                        \
 /* Splay with either the minimum or the maximum element \
  * Used to find minimum or maximum element in tree. \
  */                                                                     \
@@ -305,6 +325,7 @@ void name##_SPLAY_MINMAX(struct name *head, int __comp) \
 #define SPLAY_INSERT(name, x, y)        name##_SPLAY_INSERT(x, y)
 #define SPLAY_REMOVE(name, x, y)        name##_SPLAY_REMOVE(x, y)
 #define SPLAY_FIND(name, x, y)          name##_SPLAY_FIND(x, y)
+#define SPLAY_SEARCH(name, x, y)        name##_SPLAY_SEARCH(x, y)
 #define SPLAY_NEXT(name, x, y)          name##_SPLAY_NEXT(x, y)
 #define SPLAY_MIN(name, x)              (SPLAY_EMPTY(x) ? NULL  \
 	                                : name##_SPLAY_MIN_MAX(x, SPLAY_NEGINF))

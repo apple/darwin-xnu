@@ -33,7 +33,7 @@ COMP_SUBDIRS = conf
 
 .DELETE_ON_ERROR:
 $(OBJROOT)/san/kasan-blacklist-%: $(SOURCE)/kasan-blacklist $(SOURCE)/ubsan-blacklist $(SOURCE)/kasan-blacklist-%
-	$(call makelog,$(ColorH)GENERATING$(Color0)    $(ColorLF)$(notdir $@)$(Color0))
+	@$(LOG_GENERATE) "$(notdir $@)"
 	$(_v)sed -e 's,^src:\./,src:'"$(SRCROOT)/," $^ > $@
 	$(_v)$(SOURCE)/tools/validate_blacklist.sh "$@"
 
@@ -49,33 +49,42 @@ SYMROOT_KEXT_PATH = $(addprefix $(SYMROOT),/System.kext/PlugIns/Kasan.kext)
 ifneq ($(INSTALL_KASAN_ONLY),1)
 DSTROOT_KEXT = $(DSTROOT_KEXT_PATH)/Kasan
 SYMROOT_KEXT = $(SYMROOT_KEXT_PATH)/Kasan
+SYMBOL_SET_BUILD = $(OBJPATH)/Kasan.symbolset
 endif
 
 ifeq ($(KASAN),1)
 DSTROOT_KEXT += $(DSTROOT_KEXT_PATH)/Kasan_kasan
 SYMROOT_KEXT += $(SYMROOT_KEXT_PATH)/Kasan_kasan
+SYMBOL_SET_BUILD += $(OBJPATH)/Kasan_kasan.symbolset
 endif
 
 # Our external dependency on allsymbols is fine because this runs in a later phase (config_install vs. config_all)
 $(OBJPATH)/%.symbolset: $(SOURCE)/%.exports
-	$(call makelog,$(ColorH)SYMBOLSET$(Color0)     $(ColorF)$*$(Color0) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))")
+	@$(LOG_SYMBOLSET) "$*$(Color0) ($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))"
 	$(_v)$(KEXT_CREATE_SYMBOL_SET)			\
 		$(ARCH_FLAGS_$(CURRENT_ARCH_CONFIG))	\
 		-import $(OBJPATH)/allsymbols		\
 		-export $<		                \
 		-output $@ $(_vstdout)
 
-$(DSTROOT_KEXT): $(DSTROOT_KEXT_PATH)/% : $(OBJPATH)/%.symbolset
+$(DSTROOT_KEXT): $(DSTROOT_KEXT_PATH)/% : $(SYMROOT_KEXT_PATH)/% ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
-	$(call makelog,$(ColorF)INSTALL$(Color0)    $(ColorF)$(notdir $@)$(Color0) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))")
+	@$(LOG_INSTALL) "$(@F)$(Color0) ($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))"
 	$(_v)$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@
 
-$(SYMROOT_KEXT): $(SYMROOT_KEXT_PATH)/% : $(DSTROOT_KEXT_PATH)/%
+$(SYMROOT_KEXT): $(SYMBOL_SET_BUILD) ALWAYS
 	$(_v)$(MKDIR) $(dir $@)
-	$(call makelog,$(ColorF)INSTALL$(Color0)    $(ColorF)$(notdir $@)$(Color0) "($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))")
-	$(_v)$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@
+	@$(LOG_INSTALL) "$(@F)$(Color0) ($(ColorLF)$(CURRENT_ARCH_CONFIG_LC)$(Color0))"
+	$(_v)if [ $(OBJROOT)/.symbolset.timestamp -nt $@ ]; then				\
+		$(INSTALL) $(EXEC_INSTALL_FLAGS) $(OBJPATH)/$(@F).symbolset $@;			\
+		cmdstatus=$$?;									\
+	else											\
+		$(LIPO) -create $@ $(OBJPATH)/$(@F).symbolset -output $@ 2>/dev/null || true;	\
+		cmdstatus=$$?;									\
+	fi;											\
+	exit $$cmdstatus
 
-do_config_install:: $(DSTROOT_KEXT) $(SYMROOT_KEXT)
+do_config_install:: $(SYMROOT_KEXT) $(DSTROOT_KEXT)
 
 
 # Install helper scripts
@@ -86,7 +95,7 @@ endif
 
 $(KASAN_HELPER_SCRIPTS): $(DSTROOT)/$(DEVELOPER_EXTRAS_DIR)/% : $(SOURCE)/tools/%
 	$(_v)$(MKDIR) $(dir $@)
-	$(call makelog,$(ColorH)INSTALL$(Color0)       $(ColorF)$(@F)$(Color0))
+	@$(LOG_INSTALL) "$(@F)"
 	$(_v)$(INSTALL) $(EXEC_INSTALL_FLAGS) $< $@
 
 do_config_install:: $(KASAN_HELPER_SCRIPTS)

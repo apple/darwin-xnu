@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -125,8 +125,11 @@ unsigned int _MachineStateCount[] = {
 	[x86_PAGEIN_STATE]              = x86_PAGEIN_STATE_COUNT
 };
 
-zone_t          iss_zone;               /* zone for saved_state area */
-zone_t          ids_zone;               /* zone for debug_state area */
+ZONE_DECLARE(iss_zone, "x86_64 saved state",
+    sizeof(x86_saved_state_t), ZC_NONE);
+
+ZONE_DECLARE(ids_zone, "x86_64 debug state",
+    sizeof(x86_debug_state64_t), ZC_NONE);
 
 /* Forward */
 
@@ -664,8 +667,13 @@ set_thread_state64(thread_t thread, void *state, int full)
 
 	if (full == TRUE) {
 		ts = &((x86_thread_full_state64_t *)state)->ss64;
+		if (!valid_user_code_selector(((x86_thread_full_state64_t *)ts)->ss64.cs)) {
+			return KERN_INVALID_ARGUMENT;
+		}
 	} else {
 		ts = (x86_thread_state64_t *)state;
+		// In this case, ts->cs exists but is ignored, and
+		// CS is always set to USER_CS below instead.
 	}
 
 	pal_register_cache_state(thread, DIRTY);
@@ -1722,6 +1730,71 @@ machine_thread_get_state(
 		*count = x86_PAGEIN_STATE_COUNT;
 		break;
 	}
+
+	case x86_INSTRUCTION_STATE:
+	{
+		if (*count < x86_INSTRUCTION_STATE_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		x86_instruction_state_t *state = (void *)tstate;
+		x86_instruction_state_t *src_state = THREAD_TO_PCB(thr_act)->insn_state;
+
+		if (src_state != 0 && (src_state->insn_stream_valid_bytes > 0 || src_state->out_of_synch)) {
+#if DEVELOPMENT || DEBUG
+			extern int insnstream_force_cacheline_mismatch;
+#endif
+			size_t byte_count = (src_state->insn_stream_valid_bytes > x86_INSTRUCTION_STATE_MAX_INSN_BYTES)
+			    ? x86_INSTRUCTION_STATE_MAX_INSN_BYTES : src_state->insn_stream_valid_bytes;
+			if (byte_count > 0) {
+				bcopy(src_state->insn_bytes, state->insn_bytes, byte_count);
+			}
+			state->insn_offset = src_state->insn_offset;
+			state->insn_stream_valid_bytes = byte_count;
+#if DEVELOPMENT || DEBUG
+			state->out_of_synch = src_state->out_of_synch || insnstream_force_cacheline_mismatch;
+			insnstream_force_cacheline_mismatch = 0;        /* One-shot, reset after use */
+
+			if (state->out_of_synch) {
+				bcopy(&src_state->insn_cacheline[0], &state->insn_cacheline[0],
+				    x86_INSTRUCTION_STATE_CACHELINE_SIZE);
+			} else {
+				bzero(&state->insn_cacheline[0], x86_INSTRUCTION_STATE_CACHELINE_SIZE);
+			}
+#else
+			state->out_of_synch = src_state->out_of_synch;
+#endif
+			*count = x86_INSTRUCTION_STATE_COUNT;
+		} else {
+			*count = 0;
+		}
+		break;
+	}
+
+	case x86_LAST_BRANCH_STATE:
+	{
+		boolean_t istate;
+
+		if (!last_branch_support_enabled || *count < x86_LAST_BRANCH_STATE_COUNT) {
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		istate = ml_set_interrupts_enabled(FALSE);
+		/* If the current thread is asking for its own LBR data, synch the LBRs first */
+		if (thr_act == current_thread()) {
+			i386_lbr_synch(thr_act);
+		}
+		ml_set_interrupts_enabled(istate);
+
+		if (i386_lbr_native_state_to_mach_thread_state(THREAD_TO_PCB(thr_act), (last_branch_state_t *)tstate) < 0) {
+			*count = 0;
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		*count = x86_LAST_BRANCH_STATE_COUNT;
+		break;
+	}
+
 	default:
 		return KERN_INVALID_ARGUMENT;
 	}
@@ -1948,16 +2021,6 @@ machine_set_current_thread(thread_t thread)
 void
 machine_thread_init(void)
 {
-	iss_zone = zinit(sizeof(x86_saved_state_t),
-	    thread_max * sizeof(x86_saved_state_t),
-	    THREAD_CHUNK * sizeof(x86_saved_state_t),
-	    "x86_64 saved state");
-
-	ids_zone = zinit(sizeof(x86_debug_state64_t),
-	    thread_max * sizeof(x86_debug_state64_t),
-	    THREAD_CHUNK * sizeof(x86_debug_state64_t),
-	    "x86_64 debug state");
-
 	fpu_module_init();
 }
 

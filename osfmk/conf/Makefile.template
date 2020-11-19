@@ -19,63 +19,6 @@ include $(MakeInc_def)
 CFLAGS+= -include meta_features.h -DMACH_KERNEL_PRIVATE -DMACH_KERNEL
 SFLAGS+= -include meta_features.h
 
-# Objects that don't want -Wcast-align warning (8474835)
-OBJS_NO_CAST_ALIGN =			\
-		atm_notification_user.o \
-		model_dep.o		\
-		video_console.o		\
-		kdp_udp.o		\
-		kdp_machdep.o		\
-		host.o			\
-		processor.o		\
-		sched_prim.o		\
-		task.o			\
-		thread.o		\
-		threadinfo.o		\
-		gssd_mach.o		\
-		UNDRequest.o		\
-		panic_dialog.o		\
-		bsd_i386.o		\
-		commpage.o		\
-		cpu_threads.o		\
-		cpuid.o			\
-		locks_i386.o		\
-		locks_i386_opt.o	\
-		machine_task.o		\
-		mp_desc.o		\
-		pcb.o			\
-		pcb_native.o		\
-		kdp_x86_common.o	\
-		startup64.o		\
-		affinity.o		\
-		sched_grrr.o		\
-		sched_proto.o		\
-		stack.o			\
-		task_policy.o		\
-		wait_queue.o		\
-		bsd_kern.o		\
-		pmc.o			\
-		status.o		\
-		machine_routines.o	\
-		loose_ends.o		\
-		sleh.o			\
-		ccdigest_final_64be.o	\
-		ccdigest_init.o		\
-		ccdigest_update.o	\
-		cchmac_final.o		\
-		cchmac_init.o		\
-		ccsha1.o		\
-		ipc_object.o		\
-		ipc_kmsg.o		\
-		ipc_right.o
-
-# Objects that don't want -Wsign-compare warning (15294427)
-OBJS_NO_SIGN_COMPARE =		\
-		atm_notification_user.o
-
-$(foreach file,$(OBJS_NO_CAST_ALIGN),$(eval $(call add_perfile_cflags,$(file),-Wno-cast-align)))
-$(foreach file,$(OBJS_NO_SIGN_COMPARE),$(eval $(call add_perfile_cflags,$(file),-Wno-sign-compare)))
-
 ifeq ($(KSANCOV),1)
 # Don't instrument functions called by the ksancov runtime. SanitizeCoverage does
 # not support blacklists, so exclude the whole file.
@@ -126,6 +69,306 @@ COMP_SUBDIRS = \
 
 %MACHDEP
 
+#
+# Diagnostic opt-outs.  We need to make this list empty.
+#
+# DO NOT ADD MORE HERE.
+#
+vm_tests.o_CFLAGS_ADD += -O0 -g
+# -Wno-atomic-implicit-seq-cst
+mp.o_CFLAGS_ADD += -Wno-atomic-implicit-seq-cst
+pmCPU.o_CFLAGS_ADD += -Wno-atomic-implicit-seq-cst
+pmap_pcid.o_CFLAGS_ADD += -Wno-atomic-implicit-seq-cst
+xcpm_dvfs.o_CFLAGS_ADD += -Wno-atomic-implicit-seq-cst
+xcpm_fi.o_CFLAGS_ADD += -Wno-atomic-implicit-seq-cst
+xcpm_idle.o_CFLAGS_ADD += -Wno-atomic-implicit-seq-cst
+# -Wno-cast-align
+bsd_i386.o_CFLAGS_ADD += -Wno-cast-align
+ccdigest_final_64be.o_CFLAGS_ADD += -Wno-cast-align
+ccdigest_init.o_CFLAGS_ADD += -Wno-cast-align
+ccdigest_update.o_CFLAGS_ADD += -Wno-cast-align
+cchmac_final.o_CFLAGS_ADD += -Wno-cast-align
+cchmac_init.o_CFLAGS_ADD += -Wno-cast-align
+commpage.o_CFLAGS_ADD += -Wno-cast-align
+cpu_threads.o_CFLAGS_ADD += -Wno-cast-align
+host.o_CFLAGS_ADD += -Wno-cast-align
+kdp_machdep.o_CFLAGS_ADD += -Wno-cast-align
+kdp_udp.o_CFLAGS_ADD += -Wno-cast-align
+kdp_x86_common.o_CFLAGS_ADD += -Wno-cast-align
+locks_i386.o_CFLAGS_ADD += -Wno-cast-align
+machine_task.o_CFLAGS_ADD += -Wno-cast-align
+model_dep.o_CFLAGS_ADD += -Wno-cast-align
+mp_desc.o_CFLAGS_ADD += -Wno-cast-align
+pcb.o_CFLAGS_ADD += -Wno-cast-align
+pcb_native.o_CFLAGS_ADD += -Wno-cast-align
+processor.o_CFLAGS_ADD += -Wno-cast-align
+status.o_CFLAGS_ADD += -Wno-cast-align
+task.o_CFLAGS_ADD += -Wno-cast-align
+task_policy.o_CFLAGS_ADD += -Wno-cast-align
+video_console.o_CFLAGS_ADD += -Wno-cast-align
+# -Wno-implicit-int-conversion
+acpi.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+commpage.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+cpu.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+cpu_threads.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+kdebug_trigger.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+kern_stackshot.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+lapic_native.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+loose_ends.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+lz4.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+model_dep.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+mp.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+mp_desc.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+pcb.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+pcb_native.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+pmap_pcid.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+pmap_x86_common.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+sched_clutch.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+thread_group.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+trap.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+uat.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+video_console.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+xcpm_dvfs.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+xcpm_ioctl.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+zalloc.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+# -Wno-shorten-64-to-32
+arm_vm_init.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+backtrace.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+btlog.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+caches.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+callstack.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+clock.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+clock_oldops.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+iokit_rpc.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+ipc_kmsg.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+ipc_pset.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+ipc_right.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+kdp_core.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+kdp_vm.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+kern_cdata.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+kern_stackshot.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+loose_ends.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+mach_msg.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+machine_routines.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+mk_timer.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+model_dep.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+pcb.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+pmap.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+processor_core.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+rtclock.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+status.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+telemetry.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+vm_init.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+vm_kern.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+vm_object.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+vm_shared_region_pager.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+vm_swapfile_pager.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+vm_user.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+zalloc.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+# -Wno-sign-conversion
+Diagnostics.o_CFLAGS_ADD += -Wno-sign-conversion
+acpi.o_CFLAGS_ADD += -Wno-sign-conversion
+action.o_CFLAGS_ADD += -Wno-sign-conversion
+affinity.o_CFLAGS_ADD += -Wno-sign-conversion
+alternate_debugger.o_CFLAGS_ADD += -Wno-sign-conversion
+arcade.o_CFLAGS_ADD += -Wno-sign-conversion
+arm_init.o_CFLAGS_ADD += -Wno-sign-conversion
+arm_timer.o_CFLAGS_ADD += -Wno-sign-conversion
+arm_vm_init.o_CFLAGS_ADD += -Wno-sign-conversion
+ast.o_CFLAGS_ADD += -Wno-sign-conversion
+backtrace.o_CFLAGS_ADD += -Wno-sign-conversion
+bank.o_CFLAGS_ADD += -Wno-sign-conversion
+bitmap_test.o_CFLAGS_ADD += -Wno-sign-conversion
+bsd_arm64.o_CFLAGS_ADD += -Wno-sign-conversion
+bsd_i386.o_CFLAGS_ADD += -Wno-sign-conversion
+bsd_i386_native.o_CFLAGS_ADD += -Wno-sign-conversion
+bsd_kern.o_CFLAGS_ADD += -Wno-sign-conversion
+bsd_vm.o_CFLAGS_ADD += -Wno-sign-conversion
+btlog.o_CFLAGS_ADD += -Wno-sign-conversion
+caches.o_CFLAGS_ADD += -Wno-sign-conversion
+callstack.o_CFLAGS_ADD += -Wno-sign-conversion
+ccdrbg_nisthmac.o_CFLAGS_ADD += -Wno-sign-conversion
+cchmac.o_CFLAGS_ADD += -Wno-sign-conversion
+cchmac_final.o_CFLAGS_ADD += -Wno-sign-conversion
+cchmac_init.o_CFLAGS_ADD += -Wno-sign-conversion
+clock.o_CFLAGS_ADD += -Wno-sign-conversion
+clock_oldops.o_CFLAGS_ADD += -Wno-sign-conversion
+coalition.o_CFLAGS_ADD += -Wno-sign-conversion
+commpage.o_CFLAGS_ADD += -Wno-sign-conversion
+copyio.o_CFLAGS_ADD += -Wno-sign-conversion
+corpse.o_CFLAGS_ADD += -Wno-sign-conversion
+cpu.o_CFLAGS_ADD += -Wno-sign-conversion
+cpu_common.o_CFLAGS_ADD += -Wno-sign-conversion
+cpu_quiesce.o_CFLAGS_ADD += -Wno-sign-conversion
+cpu_threads.o_CFLAGS_ADD += -Wno-sign-conversion
+cpu_topology.o_CFLAGS_ADD += -Wno-sign-conversion
+cpuid.o_CFLAGS_ADD += -Wno-sign-conversion
+dbgwrap.o_CFLAGS_ADD += -Wno-sign-conversion
+debug.o_CFLAGS_ADD += -Wno-sign-conversion
+ecc_logging.o_CFLAGS_ADD += -Wno-sign-conversion
+entropy.o_CFLAGS_ADD += -Wno-sign-conversion
+exception.o_CFLAGS_ADD += -Wno-sign-conversion
+fpu.o_CFLAGS_ADD += -Wno-sign-conversion
+gzalloc.o_CFLAGS_ADD += -Wno-sign-conversion
+host.o_CFLAGS_ADD += -Wno-sign-conversion
+host_notify.o_CFLAGS_ADD += -Wno-sign-conversion
+hv.o_CFLAGS_ADD += -Wno-sign-conversion
+i386_init.o_CFLAGS_ADD += -Wno-sign-conversion
+i386_timer.o_CFLAGS_ADD += -Wno-sign-conversion
+i386_vm_init.o_CFLAGS_ADD += -Wno-sign-conversion
+iokit_rpc.o_CFLAGS_ADD += -Wno-sign-conversion
+ipc_eventlink.o_CFLAGS_ADD += -Wno-sign-conversion
+ipc_host.o_CFLAGS_ADD += -Wno-sign-conversion
+ipc_importance.o_CFLAGS_ADD += -Wno-sign-conversion
+ipc_init.o_CFLAGS_ADD += -Wno-sign-conversion
+ipc_kmsg.o_CFLAGS_ADD += -Wno-sign-conversion
+ipc_kobject.o_CFLAGS_ADD += -Wno-sign-conversion
+ipc_mqueue.o_CFLAGS_ADD += -Wno-sign-conversion
+ipc_object.o_CFLAGS_ADD += -Wno-sign-conversion
+ipc_port.o_CFLAGS_ADD += -Wno-sign-conversion
+ipc_pset.o_CFLAGS_ADD += -Wno-sign-conversion
+ipc_right.o_CFLAGS_ADD += -Wno-sign-conversion
+ipc_space.o_CFLAGS_ADD += -Wno-sign-conversion
+ipc_tt.o_CFLAGS_ADD += -Wno-sign-conversion
+ipc_voucher.o_CFLAGS_ADD += -Wno-sign-conversion
+kalloc.o_CFLAGS_ADD += -Wno-sign-conversion
+kdp.o_CFLAGS_ADD += -Wno-sign-conversion
+kdp_core.o_CFLAGS_ADD += -Wno-sign-conversion
+kdp_machdep.o_CFLAGS_ADD += -Wno-sign-conversion
+kdp_serial.o_CFLAGS_ADD += -Wno-sign-conversion
+kdp_vm.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_monotonic.o_CFLAGS_ADD += -Wno-sign-conversion
+kern_stackshot.o_CFLAGS_ADD += -Wno-sign-conversion
+kernel_tests.o_CFLAGS_ADD += -Wno-sign-conversion
+kext_alloc.o_CFLAGS_ADD += -Wno-sign-conversion
+kpc.o_CFLAGS_ADD += -Wno-sign-conversion
+kpc_arm.o_CFLAGS_ADD += -Wno-sign-conversion
+kpc_common.o_CFLAGS_ADD += -Wno-sign-conversion
+kpc_x86.o_CFLAGS_ADD += -Wno-sign-conversion
+kperf.o_CFLAGS_ADD += -Wno-sign-conversion
+kperf_kpc.o_CFLAGS_ADD += -Wno-sign-conversion
+kperf_mp.o_CFLAGS_ADD += -Wno-sign-conversion
+kperf_timer.o_CFLAGS_ADD += -Wno-sign-conversion
+kperfbsd.o_CFLAGS_ADD += -Wno-sign-conversion
+ktest_emit.o_CFLAGS_ADD += -Wno-sign-conversion
+lapic_native.o_CFLAGS_ADD += -Wno-sign-conversion
+lazy.o_CFLAGS_ADD += -Wno-sign-conversion
+ledger.o_CFLAGS_ADD += -Wno-sign-conversion
+locks.o_CFLAGS_ADD += -Wno-sign-conversion
+locks_arm.o_CFLAGS_ADD += -Wno-sign-conversion
+locks_i386.o_CFLAGS_ADD += -Wno-sign-conversion
+locks_i386_opt.o_CFLAGS_ADD += -Wno-sign-conversion
+loose_ends.o_CFLAGS_ADD += -Wno-sign-conversion
+lowmem_vectors.o_CFLAGS_ADD += -Wno-sign-conversion
+ltable.o_CFLAGS_ADD += -Wno-sign-conversion
+lz4.o_CFLAGS_ADD += -Wno-sign-conversion
+mach_debug.o_CFLAGS_ADD += -Wno-sign-conversion
+mach_kernelrpc.o_CFLAGS_ADD += -Wno-sign-conversion
+mach_port.o_CFLAGS_ADD += -Wno-sign-conversion
+machdep_call.o_CFLAGS_ADD += -Wno-sign-conversion
+machine.o_CFLAGS_ADD += -Wno-sign-conversion
+machine_check.o_CFLAGS_ADD += -Wno-sign-conversion
+machine_remote_time.o_CFLAGS_ADD += -Wno-sign-conversion
+machine_routines.o_CFLAGS_ADD += -Wno-sign-conversion
+machine_routines_common.o_CFLAGS_ADD += -Wno-sign-conversion
+machine_task.o_CFLAGS_ADD += -Wno-sign-conversion
+meminfo.o_CFLAGS_ADD += -Wno-sign-conversion
+memory_object.o_CFLAGS_ADD += -Wno-sign-conversion
+mk_sp.o_CFLAGS_ADD += -Wno-sign-conversion
+mk_timer.o_CFLAGS_ADD += -Wno-sign-conversion
+model_dep.o_CFLAGS_ADD += -Wno-sign-conversion
+monotonic_arm64.o_CFLAGS_ADD += -Wno-sign-conversion
+monotonic_x86_64.o_CFLAGS_ADD += -Wno-sign-conversion
+mp.o_CFLAGS_ADD += -Wno-sign-conversion
+mp_desc.o_CFLAGS_ADD += -Wno-sign-conversion
+mp_native.o_CFLAGS_ADD += -Wno-sign-conversion
+mpsc_queue.o_CFLAGS_ADD += -Wno-sign-conversion
+mtrr.o_CFLAGS_ADD += -Wno-sign-conversion
+pal_routines.o_CFLAGS_ADD += -Wno-sign-conversion
+pcb.o_CFLAGS_ADD += -Wno-sign-conversion
+pcb_native.o_CFLAGS_ADD += -Wno-sign-conversion
+pet.o_CFLAGS_ADD += -Wno-sign-conversion
+platform_tests.o_CFLAGS_ADD += -Wno-sign-conversion
+pmCPU.o_CFLAGS_ADD += -Wno-sign-conversion
+pmap.o_CFLAGS_ADD += -Wno-sign-conversion
+pmap_common.o_CFLAGS_ADD += -Wno-sign-conversion
+pmap_pcid.o_CFLAGS_ADD += -Wno-sign-conversion
+pmap_tests.o_CFLAGS_ADD += -Wno-sign-conversion
+pmap_x86_common.o_CFLAGS_ADD += -Wno-sign-conversion
+printf.o_CFLAGS_ADD += -Wno-sign-conversion
+priority.o_CFLAGS_ADD += -Wno-sign-conversion
+prng_random.o_CFLAGS_ADD += -Wno-sign-conversion
+processor.o_CFLAGS_ADD += -Wno-sign-conversion
+remote_time.o_CFLAGS_ADD += -Wno-sign-conversion
+rtclock.o_CFLAGS_ADD += -Wno-sign-conversion
+sart.o_CFLAGS_ADD += -Wno-sign-conversion
+sched_amp.o_CFLAGS_ADD += -Wno-sign-conversion
+sched_amp_common.o_CFLAGS_ADD += -Wno-sign-conversion
+sched_average.o_CFLAGS_ADD += -Wno-sign-conversion
+sched_clutch.o_CFLAGS_ADD += -Wno-sign-conversion
+sched_dualq.o_CFLAGS_ADD += -Wno-sign-conversion
+sched_multiq.o_CFLAGS_ADD += -Wno-sign-conversion
+sched_prim.o_CFLAGS_ADD += -Wno-sign-conversion
+sched_traditional.o_CFLAGS_ADD += -Wno-sign-conversion
+serial_console.o_CFLAGS_ADD += -Wno-sign-conversion
+serial_general.o_CFLAGS_ADD += -Wno-sign-conversion
+sfi.o_CFLAGS_ADD += -Wno-sign-conversion
+shart.o_CFLAGS_ADD += -Wno-sign-conversion
+sleh.o_CFLAGS_ADD += -Wno-sign-conversion
+stack.o_CFLAGS_ADD += -Wno-sign-conversion
+startup.o_CFLAGS_ADD += -Wno-sign-conversion
+status.o_CFLAGS_ADD += -Wno-sign-conversion
+status_shared.o_CFLAGS_ADD += -Wno-sign-conversion
+subrs.o_CFLAGS_ADD += -Wno-sign-conversion
+sync_sema.o_CFLAGS_ADD += -Wno-sign-conversion
+syscall_subr.o_CFLAGS_ADD += -Wno-sign-conversion
+t8020dart.o_CFLAGS_ADD += -Wno-sign-conversion
+task.o_CFLAGS_ADD += -Wno-sign-conversion
+task_policy.o_CFLAGS_ADD += -Wno-sign-conversion
+telemetry.o_CFLAGS_ADD += -Wno-sign-conversion
+test_lock.o_CFLAGS_ADD += -Wno-sign-conversion
+test_thread_call.o_CFLAGS_ADD += -Wno-sign-conversion
+thread_call.o_CFLAGS_ADD += -Wno-sign-conversion
+thread_group.o_CFLAGS_ADD += -Wno-sign-conversion
+thread_policy.o_CFLAGS_ADD += -Wno-sign-conversion
+timer_call.o_CFLAGS_ADD += -Wno-sign-conversion
+trap.o_CFLAGS_ADD += -Wno-sign-conversion
+trustcache.o_CFLAGS_ADD += -Wno-sign-conversion
+turnstile.o_CFLAGS_ADD += -Wno-sign-conversion
+uat.o_CFLAGS_ADD += -Wno-sign-conversion
+ucode.o_CFLAGS_ADD += -Wno-sign-conversion
+ux_handler.o_CFLAGS_ADD += -Wno-sign-conversion
+vfp_state_test.o_CFLAGS_ADD += -Wno-sign-conversion
+video_console.o_CFLAGS_ADD += -Wno-sign-conversion
+video_scroll.o_CFLAGS_ADD += -Wno-sign-conversion
+vm32_user.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_compressor.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_compressor_algorithms.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_compressor_backing_store.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_compressor_pager.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_fault.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_fourk_pager.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_kern.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_map.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_map_store_ll.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_map_store_rb.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_object.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_pageout.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_phantom_cache.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_purgeable.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_resident.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_shared_region.o_CFLAGS_ADD += -Wno-sign-conversion
+vm_user.o_CFLAGS_ADD += -Wno-sign-conversion
+vmx_cpu.o_CFLAGS_ADD += -Wno-sign-conversion
+waitq.o_CFLAGS_ADD += -Wno-sign-conversion
+work_interval.o_CFLAGS_ADD += -Wno-sign-conversion
+xcpm_dvfs.o_CFLAGS_ADD += -Wno-sign-conversion
+xcpm_fi.o_CFLAGS_ADD += -Wno-sign-conversion
+xcpm_idle.o_CFLAGS_ADD += -Wno-sign-conversion
+xcpm_ioctl.o_CFLAGS_ADD += -Wno-sign-conversion
+zalloc.o_CFLAGS_ADD += -Wno-sign-conversion
+zcache.o_CFLAGS_ADD += -Wno-sign-conversion
+
 # Rebuild if per-file overrides change
 ${OBJS}: $(firstword $(MAKEFILE_LIST))
 
@@ -146,7 +389,7 @@ $(COMPONENT).filelist: $(OBJS)
                 $(SEG_HACK) -n __HIB -o $${hib_file}__ $${hib_file} || exit 1; \
                 mv $${hib_file}__ $${hib_file} || exit 1; \
 	done
-	$(call makelog,$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0))
+	@$(LOG_LDFILELIST) "$(COMPONENT)"
 	$(_v)for obj in ${OBJS}; do	\
 		 $(ECHO) $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist
@@ -170,8 +413,8 @@ endif
 -include genassym.d
 genassym.o: .CFLAGS $(firstword $(MAKEFILE_LIST))
 genassym.o: $(SOURCE_DIR)/$(COMPONENT)/$(GENASSYM_LOCATION)/genassym.c
-	$(call makelog,[$(CMD_MC)] $(ColorH)GENASSYM$(Color0)      $(ColorLF)$<$(Color0))
-	$(_v)${GENASSYM_KCC} ${CFLAGS} ${CFLAGS_NOLTO_FLAG} -MD -S -o ${@} ${INCFLAGS} $<
+	@$(LOG_GENASSYM) "$<"
+	$(_v)${GENASSYM_KCC} ${CFLAGS} ${CFLAGS_NOLTO_FLAG} -fno-integrated-as -MD -S -o ${@} ${INCFLAGS} $<
 
 assym.s: genassym.o
 	$(_v)sed -e '/^[[:space:]]*DEFINITION__define__/!d;{N;s/\n//;}' -e 's/^[[:space:]]*DEFINITION__define__\([^:]*\):.*ascii.*\"[\$$]*\([-0-9\#]*\)\".*$$/#define \1 \2/' -e 'p'  -e 's/#//2' -e 's/^[[:space:]]*#define \([A-Za-z0-9_]*\)[[:space:]]*[\$$#]*\([-0-9]*\).*$$/#define \1_NUM \2/' genassym.o > $@

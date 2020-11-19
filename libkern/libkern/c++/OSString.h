@@ -33,13 +33,13 @@
 
 #include <libkern/c++/OSObject.h>
 #include <libkern/c++/OSPtr.h>
+#include <os/base.h>
 
 class OSData;
 class OSString;
 
-typedef OSPtr<OSString> OSStringPtr;
-typedef OSPtr<const OSString> OSStringConstPtr;
-
+typedef OSString* OSStringPtr;
+typedef OSString const* OSStringConstPtr;
 
 /*!
  * @header
@@ -117,12 +117,12 @@ protected:
 
 	unsigned int   flags:14,
 	    length:18;
-	char         * string;
+	char         * OS_PTRAUTH_SIGNED_PTR("OSString.string") string;;
 
 #else /* APPLE_KEXT_ALIGN_CONTAINERS */
 
 protected:
-	char         * string;
+	char         * OS_PTRAUTH_SIGNED_PTR("OSString.string") string;;
 	unsigned int   flags;
 	unsigned int   length;
 
@@ -150,7 +150,7 @@ public:
  * with the reference count incremented.
  * Changes to one will not be reflected in the other.
  */
-	static OSStringPtr withString(const OSString * aString);
+	static OSPtr<OSString> withString(const OSString * aString);
 
 
 /*!
@@ -167,7 +167,7 @@ public:
  * and with a reference count of 1;
  * <code>NULL</code> on failure.
  */
-	static OSStringPtr withCString(const char * cString);
+	static OSPtr<OSString> withCString(const char * cString);
 
 
 /*!
@@ -196,10 +196,10 @@ public:
  * An OSString object created with this function does not
  * allow changing the string via <code>@link setChar setChar@/link</code>.
  */
-	static OSStringPtr withCStringNoCopy(const char * cString);
+	static OSPtr<OSString> withCStringNoCopy(const char * cString);
 
 #if XNU_KERNEL_PRIVATE
-	static OSStringPtr withStringOfLength(const char *cString, size_t length);
+	static OSPtr<OSString> withStringOfLength(const char *cString, size_t length);
 #endif  /* XNU_KERNEL_PRIVATE */
 
 /*!

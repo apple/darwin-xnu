@@ -342,9 +342,10 @@ __END_DECLS
 
 #ifdef  MACH_KERNEL_PRIVATE
 
-#include <kern/call_entry.h>
+#include <kern/queue.h>
+#include <kern/priority_queue.h>
 
-typedef enum {
+__enum_closed_decl(thread_call_index_t, uint16_t, {
 	THREAD_CALL_INDEX_HIGH          = 0,
 	THREAD_CALL_INDEX_KERNEL        = 1,
 	THREAD_CALL_INDEX_USER          = 2,
@@ -354,28 +355,41 @@ typedef enum {
 	THREAD_CALL_INDEX_QOS_IN        = 6,
 	THREAD_CALL_INDEX_QOS_UT        = 7,
 	THREAD_CALL_INDEX_MAX           = 8,    /* count of thread call indexes */
-} thread_call_index_t;
+});
+
+__options_closed_decl(thread_call_flags_t, uint16_t, {
+	THREAD_CALL_ALLOC               = 0x0001,       /* memory owned by thread_call.c */
+	THREAD_CALL_WAIT                = 0x0002,       /* thread waiting for call to finish running */
+	THREAD_CALL_DELAYED             = 0x0004,       /* deadline based */
+	THREAD_CALL_RUNNING             = 0x0008,       /* currently executing on a thread */
+	THREAD_CALL_SIGNAL              = 0x0010,       /* call from timer interrupt instead of thread */
+	THREAD_CALL_ONCE                = 0x0020,       /* pend the enqueue if re-armed while running */
+	THREAD_CALL_RESCHEDULE          = 0x0040,       /* enqueue is pending due to re-arm while running */
+	THREAD_CALL_RATELIMITED         = 0x0080,       /* timer doesn't fire until slop+deadline */
+	THREAD_CALL_FLAG_CONTINUOUS     = 0x0100,       /* deadline is in continuous time */
+});
 
 struct thread_call {
-	struct call_entry               tc_call;                /* Must be first for queue macros */
-	uint64_t                        tc_submit_count;
-	uint64_t                        tc_finish_count;
-	uint64_t                        tc_ttd;                 /* Time to deadline at creation */
-	uint64_t                        tc_soft_deadline;
-	thread_call_index_t             tc_index;
-	uint32_t                        tc_flags;
-	int32_t                         tc_refs;
+	/* Originally requested deadline */
+	uint64_t                                tc_soft_deadline;
+	/* Deadline presented to hardware (post-leeway) stored in tc_pqlink.deadline */
+	struct priority_queue_entry_deadline    tc_pqlink;
+	/* Which queue head is this call enqueued on */
+	queue_head_t                            *tc_queue;
+	queue_chain_t                           tc_qlink;
+	thread_call_index_t                     tc_index;
+	thread_call_flags_t                     tc_flags;
+	int32_t                                 tc_refs;
+	/* Time to deadline at creation */
+	uint64_t                                tc_ttd;
+	/* Timestamp of enqueue on pending queue */
+	uint64_t                                tc_pending_timestamp;
+	thread_call_func_t                      tc_func;
+	thread_call_param_t                     tc_param0;
+	thread_call_param_t                     tc_param1;
+	uint64_t                                tc_submit_count;
+	uint64_t                                tc_finish_count;
 };
-
-#define THREAD_CALL_ALLOC       0x01    /* memory owned by thread_call.c */
-#define THREAD_CALL_WAIT        0x02    /* thread waiting for call to finish running */
-#define THREAD_CALL_DELAYED     0x04    /* deadline based */
-#define THREAD_CALL_RUNNING     0x08    /* currently executing on a thread */
-#define THREAD_CALL_SIGNAL      0x10    /* call from timer interrupt instead of thread */
-#define THREAD_CALL_ONCE        0x20    /* pend the enqueue if re-armed while running */
-#define THREAD_CALL_RESCHEDULE  0x40    /* enqueue is pending due to re-arm while running */
-#define THREAD_CALL_RATELIMITED TIMEOUT_URGENCY_RATELIMITED     /* 0x80 */
-/*      THREAD_CALL_CONTINUOUS  0x100 */
 
 typedef struct thread_call thread_call_data_t;
 
@@ -387,6 +401,10 @@ extern void             thread_call_setup(
 	thread_call_param_t             param0);
 
 extern void             thread_call_delayed_timer_rescan_all(void);
+extern uint64_t         thread_call_get_armed_deadline(thread_call_t call);
+
+struct thread_call_thread_state;
+
 #endif  /* MACH_KERNEL_PRIVATE */
 
 #ifdef  XNU_KERNEL_PRIVATE
@@ -426,7 +444,10 @@ extern boolean_t        thread_call_func_cancel(
 /*
  * Called on the wake path to adjust the thread callouts running in mach_continuous_time
  */
-void                            adjust_cont_time_thread_calls(void);
+extern void adjust_cont_time_thread_calls(void);
+
+/* called by IOTimerEventSource to track when the workloop lock has been taken */
+extern void thread_call_start_iotes_invocation(thread_call_t call);
 
 __END_DECLS
 

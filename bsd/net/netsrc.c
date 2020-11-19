@@ -76,7 +76,7 @@ netsrc_ctlconnect(kern_ctl_ref kctl, struct sockaddr_ctl *sac, void **uinfo)
 }
 
 static errno_t
-netsrc_reply(kern_ctl_ref kctl, uint32_t unit, uint16_t version,
+netsrc_reply(kern_ctl_ref kctl, uint32_t unit, unsigned int version,
     struct netsrc_rep *reply)
 {
 	switch (version) {
@@ -175,15 +175,21 @@ netsrc_policy_common(struct netsrc_req *request, struct netsrc_rep *reply)
 	// Destination policy
 	struct in6_addrpolicy *policy = lookup_policy(&request->nrq_dst.sa);
 	if (policy != NULL && policy->label != -1) {
-		reply->nrp_dstlabel = policy->label;
-		reply->nrp_dstprecedence = policy->preced;
+		/* Explicit cast because both policy and netsrc are public APIs
+		 * and apps might rely on it.
+		 */
+		reply->nrp_dstlabel = (uint16_t)policy->label;
+		reply->nrp_dstprecedence = (uint16_t)policy->preced;
 	}
 
 	// Source policy
 	policy = lookup_policy(&reply->nrp_src.sa);
 	if (policy != NULL && policy->label != -1) {
-		reply->nrp_label = policy->label;
-		reply->nrp_precedence = policy->preced;
+		/* Explicit cast because both policy and netsrc are public APIs
+		 * and apps might rely on it.
+		 */
+		reply->nrp_label = (uint16_t)policy->label;
+		reply->nrp_precedence = (uint16_t)policy->preced;
 	}
 }
 

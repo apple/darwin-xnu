@@ -93,30 +93,20 @@
 #include <netinet/udp.h>
 #include <netinet/tcp.h>
 #include <netinet/in_tclass.h>
-#if INET6
 #include <netinet6/ip6_ecn.h>
-#endif
 
-#if INET6
 #include <netinet/ip6.h>
 #include <netinet6/in6_pcb.h>
 #include <netinet6/ip6_var.h>
 #include <netinet/icmp6.h>
 #include <netinet6/ip6protosw.h>
-#endif
 
 #include <netinet6/ipsec.h>
-#if INET6
 #include <netinet6/ipsec6.h>
-#endif
 #include <netinet6/ah.h>
-#if INET6
 #include <netinet6/ah6.h>
-#endif
 #include <netinet6/esp.h>
-#if INET6
 #include <netinet6/esp6.h>
-#endif
 #include <netkey/key.h>
 #include <netkey/keydb.h>
 #include <netkey/key_debug.h>
@@ -137,7 +127,6 @@
 
 extern lck_mtx_t  *sadb_mutex;
 
-#if INET
 #define ESPMAXLEN \
 	(sizeof(struct esp) < sizeof(struct newesp) \
 	        ? sizeof(struct newesp) : sizeof(struct esp))
@@ -147,7 +136,7 @@ esp4_input_strip_udp_encap(struct mbuf *m, int iphlen)
 {
 	// strip the udp header that's encapsulating ESP
 	struct ip *ip;
-	size_t     stripsiz = sizeof(struct udphdr);
+	u_int8_t stripsiz = (u_int8_t)sizeof(struct udphdr);
 
 	ip = mtod(m, __typeof__(ip));
 	ovbcopy((caddr_t)ip, (caddr_t)(((u_char *)ip) + stripsiz), iphlen);
@@ -165,7 +154,7 @@ esp6_input_strip_udp_encap(struct mbuf *m, int ip6hlen)
 {
 	// strip the udp header that's encapsulating ESP
 	struct ip6_hdr *ip6;
-	size_t     stripsiz = sizeof(struct udphdr);
+	u_int8_t stripsiz = (u_int8_t)sizeof(struct udphdr);
 
 	ip6 = mtod(m, __typeof__(ip6));
 	ovbcopy((caddr_t)ip6, (caddr_t)(((u_char *)ip6) + stripsiz), ip6hlen);
@@ -184,13 +173,13 @@ esp_input_log(struct mbuf *m, struct secasvar *sav, u_int32_t spi, u_int32_t seq
 	if (net_mpklog_enabled &&
 	    (sav->sah->ipsec_if->if_xflags & IFXF_MPK_LOG) == IFXF_MPK_LOG) {
 		struct tcphdr th = {};
-		size_t iphlen = 0;
 		u_int32_t proto_len = 0;
+		u_int8_t iphlen = 0;
 		u_int8_t proto = 0;
 
 		struct ip *inner_ip = mtod(m, struct ip *);
 		if (IP_VHL_V(inner_ip->ip_vhl) == 4) {
-			iphlen = IP_VHL_HL(inner_ip->ip_vhl) << 2;
+			iphlen = (u_int8_t)(IP_VHL_HL(inner_ip->ip_vhl) << 2);
 			proto = inner_ip->ip_p;
 		} else if (IP_VHL_V(inner_ip->ip_vhl) == 6) {
 			struct ip6_hdr *inner_ip6 = mtod(m, struct ip6_hdr *);
@@ -222,9 +211,7 @@ struct mbuf *
 esp4_input_extended(struct mbuf *m, int off, ifnet_t interface)
 {
 	struct ip *ip;
-#if INET6
 	struct ip6_hdr *ip6;
-#endif /* INET6 */
 	struct esp *esp;
 	struct esptail esptail;
 	u_int32_t spi;
@@ -234,8 +221,8 @@ esp4_input_extended(struct mbuf *m, int off, ifnet_t interface)
 	u_int16_t nxt;
 	const struct esp_algorithm *algo;
 	int ivlen;
-	size_t hlen;
 	size_t esplen;
+	u_int8_t hlen;
 	sa_family_t     ifamily;
 	struct mbuf *out_m = NULL;
 	mbuf_traffic_class_t traffic_class = 0;
@@ -275,7 +262,7 @@ esp4_input_extended(struct mbuf *m, int off, ifnet_t interface)
 	}
 	esp = (struct esp *)(void *)(((u_int8_t *)ip) + off);
 #ifdef _IP_VHL
-	hlen = IP_VHL_HL(ip->ip_vhl) << 2;
+	hlen = (u_int8_t)(IP_VHL_HL(ip->ip_vhl) << 2);
 #else
 	hlen = ip->ip_hl << 2;
 #endif
@@ -334,7 +321,8 @@ esp4_input_extended(struct mbuf *m, int off, ifnet_t interface)
 	unsigned char saved_icv[AH_MAXSUMSIZE];
 	if (algo->finalizedecrypt) {
 		siz = algo->icvlen;
-		m_copydata(m, m->m_pkthdr.len - siz, siz, (caddr_t) saved_icv);
+		VERIFY(siz <= USHRT_MAX);
+		m_copydata(m, m->m_pkthdr.len - (u_short)siz, (u_short)siz, (caddr_t) saved_icv);
 		goto delay_icv;
 	}
 
@@ -351,7 +339,8 @@ esp4_input_extended(struct mbuf *m, int off, ifnet_t interface)
 	/*
 	 * check for sequence number.
 	 */
-	if (ipsec_chkreplay(seq, sav, traffic_class)) {
+	_CASSERT(MBUF_TC_MAX <= UINT8_MAX);
+	if (ipsec_chkreplay(seq, sav, (u_int8_t)traffic_class)) {
 		; /*okey*/
 	} else {
 		IPSEC_STAT_INCREMENT(ipsecstat.in_espreplay);
@@ -384,7 +373,7 @@ esp4_input_extended(struct mbuf *m, int off, ifnet_t interface)
 			goto bad;
 		}
 
-		m_copydata(m, m->m_pkthdr.len - siz, siz, (caddr_t) &sum0[0]);
+		m_copydata(m, m->m_pkthdr.len - (int)siz, (int)siz, (caddr_t) &sum0[0]);
 
 		if (esp_auth(m, off, m->m_pkthdr.len - off - siz, sav, sum)) {
 			ipseclog((LOG_WARNING, "auth fail in IPv4 ESP input: %s %s\n",
@@ -403,10 +392,10 @@ esp4_input_extended(struct mbuf *m, int off, ifnet_t interface)
 delay_icv:
 
 		/* strip off the authentication data */
-		m_adj(m, -siz);
+		m_adj(m, (int)-siz);
 		ip = mtod(m, struct ip *);
 #ifdef IPLEN_FLIPPED
-		ip->ip_len = ip->ip_len - siz;
+		ip->ip_len = ip->ip_len - (u_short)siz;
 #else
 		ip->ip_len = htons(ntohs(ip->ip_len) - siz);
 #endif
@@ -418,7 +407,7 @@ delay_icv:
 	 * update sequence number.
 	 */
 	if ((sav->flags & SADB_X_EXT_OLD) == 0 && sav->replay[traffic_class] != NULL) {
-		if (ipsec_updatereplay(seq, sav, traffic_class)) {
+		if (ipsec_updatereplay(seq, sav, (u_int8_t)traffic_class)) {
 			IPSEC_STAT_INCREMENT(ipsecstat.in_espreplay);
 			goto bad;
 		}
@@ -447,7 +436,7 @@ noreplaycheck:
 	}
 
 	if (m->m_len < off + esplen + ivlen) {
-		m = m_pullup(m, off + esplen + ivlen);
+		m = m_pullup(m, (int)(off + esplen + ivlen));
 		if (!m) {
 			ipseclog((LOG_DEBUG,
 			    "IPv4 ESP input: can't pullup in esp4_input\n"));
@@ -512,10 +501,10 @@ noreplaycheck:
 	}
 
 	/* strip off the trailing pad area. */
-	m_adj(m, -taillen);
+	m_adj(m, (int)-taillen);
 	ip = mtod(m, struct ip *);
 #ifdef IPLEN_FLIPPED
-	ip->ip_len = ip->ip_len - taillen;
+	ip->ip_len = ip->ip_len - (u_short)taillen;
 #else
 	ip->ip_len = htons(ntohs(ip->ip_len) - taillen);
 #endif
@@ -550,7 +539,7 @@ noreplaycheck:
 	}
 
 	/* was it transmitted over the IPsec tunnel SA? */
-	if (ipsec4_tunnel_validate(m, off + esplen + ivlen, nxt, sav, &ifamily)) {
+	if (ipsec4_tunnel_validate(m, (int)(off + esplen + ivlen), nxt, sav, &ifamily)) {
 		ifaddr_t ifa;
 		struct sockaddr_storage addr;
 
@@ -565,7 +554,7 @@ noreplaycheck:
 		int sum;
 
 		tos = ip->ip_tos;
-		m_adj(m, off + esplen + ivlen);
+		m_adj(m, (int)(off + esplen + ivlen));
 		if (ifamily == AF_INET) {
 			struct sockaddr_in *ipaddr;
 
@@ -607,7 +596,6 @@ noreplaycheck:
 			ipaddr->sin_family = AF_INET;
 			ipaddr->sin_len = sizeof(*ipaddr);
 			ipaddr->sin_addr = ip->ip_dst;
-#if INET6
 		} else if (ifamily == AF_INET6) {
 			struct sockaddr_in6 *ip6addr;
 
@@ -651,7 +639,6 @@ noreplaycheck:
 			ip6addr->sin6_family = AF_INET6;
 			ip6addr->sin6_len = sizeof(*ip6addr);
 			ip6addr->sin6_addr = ip6->ip6_dst;
-#endif /* INET6 */
 		} else {
 			ipseclog((LOG_ERR, "ipsec tunnel unsupported address family "
 			    "in ESP input\n"));
@@ -730,11 +717,11 @@ noreplaycheck:
 
 		ip = mtod(m, struct ip *);
 #ifdef IPLEN_FLIPPED
-		ip->ip_len = ip->ip_len - stripsiz;
+		ip->ip_len = ip->ip_len - (u_short)stripsiz;
 #else
 		ip->ip_len = htons(ntohs(ip->ip_len) - stripsiz);
 #endif
-		ip->ip_p = nxt;
+		ip->ip_p = (u_int8_t)nxt;
 
 		key_sa_recordxfer(sav, m);
 		if (ipsec_addhist(m, IPPROTO_ESP, spi) != 0) {
@@ -812,7 +799,7 @@ noreplaycheck:
 				int mlen;
 				if ((mlen = m_length2(m, NULL)) < hlen) {
 					ipseclog((LOG_DEBUG,
-					    "IPv4 ESP input: decrypted packet too short %d < %zu\n",
+					    "IPv4 ESP input: decrypted packet too short %d < %u\n",
 					    mlen, hlen));
 					IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
 					ifnet_release(ipsec_if);
@@ -845,7 +832,7 @@ noreplaycheck:
 				}
 			}
 
-			ip_proto_dispatch_in(m, off, nxt, 0);
+			ip_proto_dispatch_in(m, off, (u_int8_t)nxt, 0);
 		} else {
 			m_freem(m);
 		}
@@ -874,9 +861,6 @@ bad:
 	KERNEL_DEBUG(DBG_FNC_ESPIN | DBG_FUNC_END, 4, 0, 0, 0, 0);
 	return out_m;
 }
-#endif /* INET */
-
-#if INET6
 
 int
 esp6_input(struct mbuf **mp, int *offp, int proto)
@@ -897,12 +881,12 @@ esp6_input_extended(struct mbuf **mp, int *offp, int proto, ifnet_t interface)
 	u_int32_t spi;
 	u_int32_t seq;
 	struct secasvar *sav = NULL;
-	size_t taillen;
 	u_int16_t nxt;
 	char *nproto;
 	const struct esp_algorithm *algo;
 	int ivlen;
 	size_t esplen;
+	u_int16_t taillen;
 	sa_family_t ifamily;
 	mbuf_traffic_class_t traffic_class = 0;
 
@@ -1011,7 +995,8 @@ esp6_input_extended(struct mbuf **mp, int *offp, int proto, ifnet_t interface)
 	unsigned char saved_icv[AH_MAXSUMSIZE];
 	if (algo->finalizedecrypt) {
 		siz = algo->icvlen;
-		m_copydata(m, m->m_pkthdr.len - siz, siz, (caddr_t) saved_icv);
+		VERIFY(siz <= UINT16_MAX);
+		m_copydata(m, m->m_pkthdr.len - (int)siz, (int)siz, (caddr_t) saved_icv);
 		goto delay_icv;
 	}
 
@@ -1029,7 +1014,7 @@ esp6_input_extended(struct mbuf **mp, int *offp, int proto, ifnet_t interface)
 	/*
 	 * check for sequence number.
 	 */
-	if (ipsec_chkreplay(seq, sav, traffic_class)) {
+	if (ipsec_chkreplay(seq, sav, (u_int8_t)traffic_class)) {
 		; /*okey*/
 	} else {
 		IPSEC_STAT_INCREMENT(ipsec6stat.in_espreplay);
@@ -1062,7 +1047,7 @@ esp6_input_extended(struct mbuf **mp, int *offp, int proto, ifnet_t interface)
 			goto bad;
 		}
 
-		m_copydata(m, m->m_pkthdr.len - siz, siz, (caddr_t) &sum0[0]);
+		m_copydata(m, m->m_pkthdr.len - (int)siz, (int)siz, (caddr_t) &sum0[0]);
 
 		if (esp_auth(m, off, m->m_pkthdr.len - off - siz, sav, sum)) {
 			ipseclog((LOG_WARNING, "auth fail in IPv6 ESP input: %s %s\n",
@@ -1081,9 +1066,9 @@ esp6_input_extended(struct mbuf **mp, int *offp, int proto, ifnet_t interface)
 delay_icv:
 
 		/* strip off the authentication data */
-		m_adj(m, -siz);
+		m_adj(m, (int)-siz);
 		ip6 = mtod(m, struct ip6_hdr *);
-		ip6->ip6_plen = htons(ntohs(ip6->ip6_plen) - siz);
+		ip6->ip6_plen = htons(ntohs(ip6->ip6_plen) - (u_int16_t)siz);
 
 		m->m_flags |= M_AUTHIPDGM;
 		IPSEC_STAT_INCREMENT(ipsec6stat.in_espauthsucc);
@@ -1093,7 +1078,7 @@ delay_icv:
 	 * update sequence number.
 	 */
 	if ((sav->flags & SADB_X_EXT_OLD) == 0 && sav->replay[traffic_class] != NULL) {
-		if (ipsec_updatereplay(seq, sav, traffic_class)) {
+		if (ipsec_updatereplay(seq, sav, (u_int8_t)traffic_class)) {
 			IPSEC_STAT_INCREMENT(ipsec6stat.in_espreplay);
 			goto bad;
 		}
@@ -1122,7 +1107,7 @@ noreplaycheck:
 	}
 
 #ifndef PULLDOWN_TEST
-	IP6_EXTHDR_CHECK(m, off, esplen + ivlen, return IPPROTO_DONE);  /*XXX*/
+	IP6_EXTHDR_CHECK(m, off, (int)(esplen + ivlen), return IPPROTO_DONE);  /*XXX*/
 #else
 	IP6_EXTHDR_GET(esp, struct esp *, m, off, esplen + ivlen);
 	if (esp == NULL) {
@@ -1222,7 +1207,7 @@ noreplaycheck:
 
 
 	/* was it transmitted over the IPsec tunnel SA? */
-	if (ipsec6_tunnel_validate(m, off + esplen + ivlen, nxt, sav, &ifamily)) {
+	if (ipsec6_tunnel_validate(m, (int)(off + esplen + ivlen), nxt, sav, &ifamily)) {
 		ifaddr_t ifa;
 		struct sockaddr_storage addr;
 
@@ -1235,7 +1220,7 @@ noreplaycheck:
 		 */
 		u_int32_t flowinfo;     /*net endian*/
 		flowinfo = ip6->ip6_flow;
-		m_adj(m, off + esplen + ivlen);
+		m_adj(m, (int)(off + esplen + ivlen));
 		if (ifamily == AF_INET6) {
 			struct sockaddr_in6 *ip6addr;
 
@@ -1376,16 +1361,17 @@ noreplaycheck:
 		 * even in m_pulldown case, we need to strip off ESP so that
 		 * we can always compute checksum for AH correctly.
 		 */
-		size_t stripsiz;
+		u_int16_t stripsiz;
 		char *prvnxtp;
 
 		/*
 		 * Set the next header field of the previous header correctly.
 		 */
 		prvnxtp = ip6_get_prevhdr(m, off); /* XXX */
-		*prvnxtp = nxt;
+		*prvnxtp = (u_int8_t)nxt;
 
-		stripsiz = esplen + ivlen;
+		VERIFY(esplen + ivlen <= UINT16_MAX);
+		stripsiz = (u_int16_t)(esplen + ivlen);
 
 		ip6 = mtod(m, struct ip6_hdr *);
 		if (m->m_len >= stripsiz + off) {
@@ -1645,4 +1631,3 @@ esp6_ctlinput(int cmd, struct sockaddr *sa, void *d, __unused struct ifnet *ifp)
 		/* we normally notify any pcb here */
 	}
 }
-#endif /* INET6 */

@@ -102,16 +102,28 @@
 #include <sys/csr.h>
 #endif
 
-#if CONFIG_EMBEDDED && !SECURE_KERNEL
+#if !defined(XNU_TARGET_OS_OSX) && !SECURE_KERNEL
 extern int cs_relax_platform_task_ports;
 #endif
 
+extern boolean_t IOTaskHasEntitlement(task_t, const char *);
+
 /* forward declarations */
-task_t convert_port_to_locked_task(ipc_port_t port);
+task_t convert_port_to_locked_task(ipc_port_t port, boolean_t eval);
 task_inspect_t convert_port_to_locked_task_inspect(ipc_port_t port);
+task_read_t convert_port_to_locked_task_read(ipc_port_t port);
+static task_read_t convert_port_to_task_read_locked(ipc_port_t port);
+static kern_return_t port_allowed_with_task_flavor(int which, mach_task_flavor_t flavor);
+static kern_return_t port_allowed_with_thread_flavor(int which, mach_thread_flavor_t flavor);
+static task_inspect_t convert_port_to_task_inspect_locked(ipc_port_t port);
 static void ipc_port_bind_special_reply_port_locked(ipc_port_t port);
 static kern_return_t ipc_port_unbind_special_reply_port(thread_t thread, boolean_t unbind_active_port);
 kern_return_t task_conversion_eval(task_t caller, task_t victim);
+static ipc_space_t convert_port_to_space_no_eval(ipc_port_t port);
+static task_t convert_port_to_task_no_eval(ipc_port_t port);
+static thread_t convert_port_to_thread_no_eval(ipc_port_t port);
+static ipc_port_t convert_task_to_port_with_flavor(task_t task, mach_task_flavor_t flavor);
+static ipc_port_t convert_thread_to_port_with_flavor(thread_t thread, mach_thread_flavor_t flavor);
 
 /*
  *	Routine:	ipc_task_init
@@ -132,6 +144,7 @@ ipc_task_init(
 	ipc_space_t space;
 	ipc_port_t kport;
 	ipc_port_t nport;
+
 	kern_return_t kr;
 	int i;
 
@@ -144,6 +157,7 @@ ipc_task_init(
 	space->is_task = task;
 
 	kport = ipc_port_alloc_kernel();
+
 	if (kport == IP_NULL) {
 		panic("ipc_task_init");
 	}
@@ -154,17 +168,22 @@ ipc_task_init(
 	}
 
 	itk_lock_init(task);
-	task->itk_self = kport;
-	task->itk_nself = nport;
-	task->itk_resume = IP_NULL; /* Lazily allocated on-demand */
+	task->itk_self[TASK_FLAVOR_CONTROL] = kport;
+	task->itk_self[TASK_FLAVOR_NAME] = nport;
+
+	/* Lazily allocated on-demand */
+	task->itk_self[TASK_FLAVOR_INSPECT] = IP_NULL;
+	task->itk_self[TASK_FLAVOR_READ] = IP_NULL;
+	task->itk_resume = IP_NULL;
+
 	if (task_is_a_corpse_fork(task)) {
 		/*
 		 * No sender's notification for corpse would not
 		 * work with a naked send right in kernel.
 		 */
-		task->itk_sself = IP_NULL;
+		task->itk_settable_self = IP_NULL;
 	} else {
-		task->itk_sself = ipc_port_make_send(kport);
+		task->itk_settable_self = ipc_port_make_send(kport);
 	}
 	task->itk_debug_control = IP_NULL;
 	task->itk_space = space;
@@ -202,7 +221,7 @@ ipc_task_init(
 		}
 	} else {
 		itk_lock(parent);
-		assert(parent->itk_self != IP_NULL);
+		assert(parent->itk_self[TASK_FLAVOR_CONTROL] != IP_NULL);
 
 		/* inherit registered ports */
 
@@ -259,16 +278,27 @@ ipc_task_enable(
 {
 	ipc_port_t kport;
 	ipc_port_t nport;
+	ipc_port_t iport;
+	ipc_port_t rdport;
 
 	itk_lock(task);
-	kport = task->itk_self;
+	kport = task->itk_self[TASK_FLAVOR_CONTROL];
 	if (kport != IP_NULL) {
-		ipc_kobject_set(kport, (ipc_kobject_t) task, IKOT_TASK);
+		ipc_kobject_set(kport, (ipc_kobject_t) task, IKOT_TASK_CONTROL);
 	}
-	nport = task->itk_nself;
+	nport = task->itk_self[TASK_FLAVOR_NAME];
 	if (nport != IP_NULL) {
 		ipc_kobject_set(nport, (ipc_kobject_t) task, IKOT_TASK_NAME);
 	}
+	iport = task->itk_self[TASK_FLAVOR_INSPECT];
+	if (iport != IP_NULL) {
+		ipc_kobject_set(iport, (ipc_kobject_t) task, IKOT_TASK_INSPECT);
+	}
+	rdport = task->itk_self[TASK_FLAVOR_READ];
+	if (rdport != IP_NULL) {
+		ipc_kobject_set(rdport, (ipc_kobject_t) task, IKOT_TASK_READ);
+	}
+
 	itk_unlock(task);
 }
 
@@ -286,16 +316,26 @@ ipc_task_disable(
 {
 	ipc_port_t kport;
 	ipc_port_t nport;
+	ipc_port_t iport;
+	ipc_port_t rdport;
 	ipc_port_t rport;
 
 	itk_lock(task);
-	kport = task->itk_self;
+	kport = task->itk_self[TASK_FLAVOR_CONTROL];
 	if (kport != IP_NULL) {
 		ipc_kobject_set(kport, IKO_NULL, IKOT_NONE);
 	}
-	nport = task->itk_nself;
+	nport = task->itk_self[TASK_FLAVOR_NAME];
 	if (nport != IP_NULL) {
 		ipc_kobject_set(nport, IKO_NULL, IKOT_NONE);
+	}
+	iport = task->itk_self[TASK_FLAVOR_INSPECT];
+	if (iport != IP_NULL) {
+		ipc_kobject_set(iport, IKO_NULL, IKOT_NONE);
+	}
+	rdport = task->itk_self[TASK_FLAVOR_READ];
+	if (rdport != IP_NULL) {
+		ipc_kobject_set(rdport, IKO_NULL, IKOT_NONE);
 	}
 
 	rport = task->itk_resume;
@@ -332,22 +372,30 @@ ipc_task_terminate(
 {
 	ipc_port_t kport;
 	ipc_port_t nport;
+	ipc_port_t iport;
+	ipc_port_t rdport;
 	ipc_port_t rport;
 	int i;
 
 	itk_lock(task);
-	kport = task->itk_self;
+	kport = task->itk_self[TASK_FLAVOR_CONTROL];
 
 	if (kport == IP_NULL) {
 		/* the task is already terminated (can this happen?) */
 		itk_unlock(task);
 		return;
 	}
-	task->itk_self = IP_NULL;
+	task->itk_self[TASK_FLAVOR_CONTROL] = IP_NULL;
 
-	nport = task->itk_nself;
+	rdport = task->itk_self[TASK_FLAVOR_READ];
+	task->itk_self[TASK_FLAVOR_READ] = IP_NULL;
+
+	iport = task->itk_self[TASK_FLAVOR_INSPECT];
+	task->itk_self[TASK_FLAVOR_INSPECT] = IP_NULL;
+
+	nport = task->itk_self[TASK_FLAVOR_NAME];
 	assert(nport != IP_NULL);
-	task->itk_nself = IP_NULL;
+	task->itk_self[TASK_FLAVOR_NAME] = IP_NULL;
 
 	rport = task->itk_resume;
 	task->itk_resume = IP_NULL;
@@ -356,8 +404,8 @@ ipc_task_terminate(
 
 	/* release the naked send rights */
 
-	if (IP_VALID(task->itk_sself)) {
-		ipc_port_release_send(task->itk_sself);
+	if (IP_VALID(task->itk_settable_self)) {
+		ipc_port_release_send(task->itk_settable_self);
 	}
 
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
@@ -402,6 +450,12 @@ ipc_task_terminate(
 	/* destroy the kernel ports */
 	ipc_port_dealloc_kernel(kport);
 	ipc_port_dealloc_kernel(nport);
+	if (iport != IP_NULL) {
+		ipc_port_dealloc_kernel(iport);
+	}
+	if (rdport != IP_NULL) {
+		ipc_port_dealloc_kernel(rdport);
+	}
 	if (rport != IP_NULL) {
 		ipc_port_dealloc_kernel(rport);
 	}
@@ -414,8 +468,8 @@ ipc_task_terminate(
  *	Purpose:
  *		Reset a task's IPC state to protect it when
  *		it enters an elevated security context. The
- *		task name port can remain the same - since
- *		it represents no specific privilege.
+ *		task name port can remain the same - since it
+ *              represents no specific privilege.
  *	Conditions:
  *		Nothing locked.  The task must be suspended.
  *		(Or the current thread must be in the task.)
@@ -427,6 +481,8 @@ ipc_task_reset(
 {
 	ipc_port_t old_kport, new_kport;
 	ipc_port_t old_sself;
+	ipc_port_t old_rdport;
+	ipc_port_t old_iport;
 	ipc_port_t old_exc_actions[EXC_TYPES_COUNT];
 	int i;
 
@@ -435,12 +491,14 @@ ipc_task_reset(
 	struct label *unset_label = mac_exc_create_label();
 #endif
 
-	new_kport = ipc_kobject_alloc_port((ipc_kobject_t)task, IKOT_TASK,
+	new_kport = ipc_kobject_alloc_port((ipc_kobject_t)task, IKOT_TASK_CONTROL,
 	    IPC_KOBJECT_ALLOC_MAKE_SEND);
 
 	itk_lock(task);
 
-	old_kport = task->itk_self;
+	old_kport = task->itk_self[TASK_FLAVOR_CONTROL];
+	old_rdport = task->itk_self[TASK_FLAVOR_READ];
+	old_iport = task->itk_self[TASK_FLAVOR_INSPECT];
 
 	if (old_kport == IP_NULL) {
 		/* the task is already terminated (can this happen?) */
@@ -453,14 +511,18 @@ ipc_task_reset(
 		return;
 	}
 
-	old_sself = task->itk_sself;
-	task->itk_sself = task->itk_self = new_kport;
+	old_sself = task->itk_settable_self;
+	task->itk_settable_self = task->itk_self[TASK_FLAVOR_CONTROL] = new_kport;
 
 	/* Set the old kport to IKOT_NONE and update the exec token while under the port lock */
 	ip_lock(old_kport);
 	ipc_kobject_set_atomically(old_kport, IKO_NULL, IKOT_NONE);
 	task->exec_token += 1;
 	ip_unlock(old_kport);
+
+	/* Reset the read and inspect flavors of task port */
+	task->itk_self[TASK_FLAVOR_READ] = IP_NULL;
+	task->itk_self[TASK_FLAVOR_INSPECT] = IP_NULL;
 
 	for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; i++) {
 		old_exc_actions[i] = IP_NULL;
@@ -501,8 +563,14 @@ ipc_task_reset(
 		}
 	}/* for */
 
-	/* destroy the kernel port */
+	/* destroy all task port flavors */
 	ipc_port_dealloc_kernel(old_kport);
+	if (old_rdport != IP_NULL) {
+		ipc_port_dealloc_kernel(old_rdport);
+	}
+	if (old_iport != IP_NULL) {
+		ipc_port_dealloc_kernel(old_iport);
+	}
 }
 
 /*
@@ -519,10 +587,12 @@ ipc_thread_init(
 {
 	ipc_port_t      kport;
 
-	kport = ipc_kobject_alloc_port((ipc_kobject_t)thread, IKOT_THREAD,
+	kport = ipc_kobject_alloc_port((ipc_kobject_t)thread, IKOT_THREAD_CONTROL,
 	    IPC_KOBJECT_ALLOC_MAKE_SEND);
 
-	thread->ith_sself = thread->ith_self = kport;
+	thread->ith_settable_self = thread->ith_self[THREAD_FLAVOR_CONTROL] = kport;
+	thread->ith_self[THREAD_FLAVOR_INSPECT] = IP_NULL;
+	thread->ith_self[THREAD_FLAVOR_READ] = IP_NULL;
 	thread->ith_special_reply_port = NULL;
 	thread->exc_actions = NULL;
 
@@ -568,14 +638,31 @@ ipc_thread_destroy_exc_actions(
 	}
 }
 
+/*
+ *	Routine:	ipc_thread_disable
+ *	Purpose:
+ *		Clean up and destroy a thread's IPC state.
+ *	Conditions:
+ *		Thread locked.
+ */
 void
 ipc_thread_disable(
 	thread_t        thread)
 {
-	ipc_port_t      kport = thread->ith_self;
+	ipc_port_t      kport = thread->ith_self[THREAD_FLAVOR_CONTROL];
+	ipc_port_t      iport = thread->ith_self[THREAD_FLAVOR_INSPECT];
+	ipc_port_t      rdport = thread->ith_self[THREAD_FLAVOR_READ];
 
 	if (kport != IP_NULL) {
 		ipc_kobject_set(kport, IKO_NULL, IKOT_NONE);
+	}
+
+	if (iport != IP_NULL) {
+		ipc_kobject_set(iport, IKO_NULL, IKOT_NONE);
+	}
+
+	if (rdport != IP_NULL) {
+		ipc_kobject_set(rdport, IKO_NULL, IKOT_NONE);
 	}
 
 	/* unbind the thread special reply port */
@@ -596,27 +683,34 @@ void
 ipc_thread_terminate(
 	thread_t        thread)
 {
-	ipc_port_t      kport = thread->ith_self;
+	ipc_port_t kport = IP_NULL;
+	ipc_port_t iport = IP_NULL;
+	ipc_port_t rdport = IP_NULL;
+	ipc_port_t ith_rpc_reply = IP_NULL;
+
+	thread_mtx_lock(thread);
+
+	kport = thread->ith_self[THREAD_FLAVOR_CONTROL];
+	iport = thread->ith_self[THREAD_FLAVOR_INSPECT];
+	rdport = thread->ith_self[THREAD_FLAVOR_READ];
 
 	if (kport != IP_NULL) {
-		int                     i;
-
-		if (IP_VALID(thread->ith_sself)) {
-			ipc_port_release_send(thread->ith_sself);
+		if (IP_VALID(thread->ith_settable_self)) {
+			ipc_port_release_send(thread->ith_settable_self);
 		}
 
-		thread->ith_sself = thread->ith_self = IP_NULL;
+		thread->ith_settable_self = thread->ith_self[THREAD_FLAVOR_CONTROL] = IP_NULL;
+		thread->ith_self[THREAD_FLAVOR_INSPECT] = IP_NULL;
+		thread->ith_self[THREAD_FLAVOR_READ] = IP_NULL;
 
 		if (thread->exc_actions != NULL) {
-			for (i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; ++i) {
+			for (int i = FIRST_EXCEPTION; i < EXC_TYPES_COUNT; ++i) {
 				if (IP_VALID(thread->exc_actions[i].port)) {
 					ipc_port_release_send(thread->exc_actions[i].port);
 				}
 			}
 			ipc_thread_destroy_exc_actions(thread);
 		}
-
-		ipc_port_dealloc_kernel(kport);
 	}
 
 #if IMPORTANCE_INHERITANCE
@@ -624,12 +718,23 @@ ipc_thread_terminate(
 #endif
 
 	assert(ipc_kmsg_queue_empty(&thread->ith_messages));
-
-	if (thread->ith_rpc_reply != IP_NULL) {
-		ipc_port_dealloc_reply(thread->ith_rpc_reply);
-	}
-
+	ith_rpc_reply = thread->ith_rpc_reply;
 	thread->ith_rpc_reply = IP_NULL;
+
+	thread_mtx_unlock(thread);
+
+	if (kport != IP_NULL) {
+		ipc_port_dealloc_kernel(kport);
+	}
+	if (iport != IP_NULL) {
+		ipc_port_dealloc_kernel(iport);
+	}
+	if (rdport != IP_NULL) {
+		ipc_port_dealloc_kernel(rdport);
+	}
+	if (ith_rpc_reply != IP_NULL) {
+		ipc_port_dealloc_reply(ith_rpc_reply);
+	}
 }
 
 /*
@@ -637,9 +742,10 @@ ipc_thread_terminate(
  *	Purpose:
  *		Reset the IPC state for a given Mach thread when
  *		its task enters an elevated security context.
- *              Both the thread port and its exception ports have
+ *		All flavors of thread port and its exception ports have
  *		to be reset.  Its RPC reply port cannot have any
- *		rights outstanding, so it should be fine.
+ *		rights outstanding, so it should be fine. The thread
+ *		inspect and read port are set to NULL.
  *	Conditions:
  *		Nothing locked.
  */
@@ -650,21 +756,25 @@ ipc_thread_reset(
 {
 	ipc_port_t old_kport, new_kport;
 	ipc_port_t old_sself;
+	ipc_port_t old_rdport;
+	ipc_port_t old_iport;
 	ipc_port_t old_exc_actions[EXC_TYPES_COUNT];
 	boolean_t  has_old_exc_actions = FALSE;
-	int                i;
+	int i;
 
 #if CONFIG_MACF
 	struct label *new_label = mac_exc_create_label();
 #endif
 
-	new_kport = ipc_kobject_alloc_port((ipc_kobject_t)thread, IKOT_THREAD,
+	new_kport = ipc_kobject_alloc_port((ipc_kobject_t)thread, IKOT_THREAD_CONTROL,
 	    IPC_KOBJECT_ALLOC_MAKE_SEND);
 
 	thread_mtx_lock(thread);
 
-	old_kport = thread->ith_self;
-	old_sself = thread->ith_sself;
+	old_kport = thread->ith_self[THREAD_FLAVOR_CONTROL];
+	old_rdport = thread->ith_self[THREAD_FLAVOR_READ];
+	old_iport = thread->ith_self[THREAD_FLAVOR_INSPECT];
+	old_sself = thread->ith_settable_self;
 
 	if (old_kport == IP_NULL && thread->inspection == FALSE) {
 		/* the  is already terminated (can this happen?) */
@@ -677,9 +787,18 @@ ipc_thread_reset(
 		return;
 	}
 
-	thread->ith_sself = thread->ith_self = new_kport;
+	thread->ith_settable_self = thread->ith_self[THREAD_FLAVOR_CONTROL] = new_kport;
+	thread->ith_self[THREAD_FLAVOR_READ] = IP_NULL;
+	thread->ith_self[THREAD_FLAVOR_INSPECT] = IP_NULL;
+
 	if (old_kport != IP_NULL) {
 		ipc_kobject_set(old_kport, IKO_NULL, IKOT_NONE);
+	}
+	if (old_rdport != IP_NULL) {
+		ipc_kobject_set(old_rdport, IKO_NULL, IKOT_NONE);
+	}
+	if (old_iport != IP_NULL) {
+		ipc_kobject_set(old_iport, IKO_NULL, IKOT_NONE);
 	}
 
 	/*
@@ -723,6 +842,12 @@ ipc_thread_reset(
 	if (old_kport != IP_NULL) {
 		ipc_port_dealloc_kernel(old_kport);
 	}
+	if (old_rdport != IP_NULL) {
+		ipc_port_dealloc_kernel(old_rdport);
+	}
+	if (old_iport != IP_NULL) {
+		ipc_port_dealloc_kernel(old_iport);
+	}
 
 	/* unbind the thread special reply port */
 	if (IP_VALID(thread->ith_special_reply_port)) {
@@ -752,9 +877,9 @@ retrieve_task_self_fast(
 	assert(task == current_task());
 
 	itk_lock(task);
-	assert(task->itk_self != IP_NULL);
+	assert(task->itk_self[TASK_FLAVOR_CONTROL] != IP_NULL);
 
-	if ((port = task->itk_sself) == task->itk_self) {
+	if ((port = task->itk_settable_self) == task->itk_self[TASK_FLAVOR_CONTROL]) {
 		/* no interposing */
 		sright = ipc_port_copy_send(port);
 		assert(sright == port);
@@ -789,9 +914,9 @@ retrieve_thread_self_fast(
 
 	thread_mtx_lock(thread);
 
-	assert(thread->ith_self != IP_NULL);
+	assert(thread->ith_self[THREAD_FLAVOR_CONTROL] != IP_NULL);
 
-	if ((port = thread->ith_sself) == thread->ith_self) {
+	if ((port = thread->ith_settable_self) == thread->ith_self[THREAD_FLAVOR_CONTROL]) {
 		/* no interposing */
 		sright = ipc_port_copy_send(port);
 		assert(sright == port);
@@ -1000,37 +1125,135 @@ ipc_port_unbind_special_reply_port(
 
 kern_return_t
 thread_get_special_port(
-	thread_t                thread,
-	int                             which,
-	ipc_port_t              *portp)
+	thread_inspect_t         thread,
+	int                      which,
+	ipc_port_t              *portp);
+
+kern_return_t
+static
+thread_get_special_port_internal(
+	thread_inspect_t         thread,
+	int                      which,
+	ipc_port_t              *portp,
+	mach_thread_flavor_t     flavor)
 {
-	kern_return_t   result = KERN_SUCCESS;
-	ipc_port_t              *whichp;
+	kern_return_t      kr;
+	ipc_port_t port;
 
 	if (thread == THREAD_NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	switch (which) {
-	case THREAD_KERNEL_PORT:
-		whichp = &thread->ith_sself;
-		break;
-
-	default:
-		return KERN_INVALID_ARGUMENT;
+	if ((kr = port_allowed_with_thread_flavor(which, flavor)) != KERN_SUCCESS) {
+		return kr;
 	}
 
 	thread_mtx_lock(thread);
-
-	if (thread->active) {
-		*portp = ipc_port_copy_send(*whichp);
-	} else {
-		result = KERN_FAILURE;
+	if (!thread->active) {
+		thread_mtx_unlock(thread);
+		return KERN_FAILURE;
 	}
 
-	thread_mtx_unlock(thread);
+	switch (which) {
+	case THREAD_KERNEL_PORT:
+		port = ipc_port_copy_send(thread->ith_settable_self);
+		thread_mtx_unlock(thread);
+		break;
 
-	return result;
+	case THREAD_READ_PORT:
+	case THREAD_INSPECT_PORT:
+		thread_mtx_unlock(thread);
+		mach_thread_flavor_t current_flavor = (which == THREAD_READ_PORT) ?
+		    THREAD_FLAVOR_READ : THREAD_FLAVOR_INSPECT;
+		/* convert_thread_to_port_with_flavor consumes a thread reference */
+		thread_reference(thread);
+		port = convert_thread_to_port_with_flavor(thread, current_flavor);
+		break;
+
+	default:
+		thread_mtx_unlock(thread);
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	*portp = port;
+
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+thread_get_special_port(
+	thread_inspect_t         thread,
+	int                      which,
+	ipc_port_t              *portp)
+{
+	return thread_get_special_port_internal(thread, which, portp, THREAD_FLAVOR_CONTROL);
+}
+
+kern_return_t
+thread_get_special_port_from_user(
+	mach_port_t     port,
+	int             which,
+	ipc_port_t      *portp)
+{
+	ipc_kobject_type_t kotype;
+	kern_return_t kr;
+
+	thread_t thread = convert_port_to_thread_check_type(port, &kotype, THREAD_FLAVOR_INSPECT, FALSE);
+
+	if (thread == THREAD_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	switch (kotype) {
+	case IKOT_THREAD_CONTROL:
+		kr = thread_get_special_port_internal(thread, which, portp, THREAD_FLAVOR_CONTROL);
+		break;
+	case IKOT_THREAD_READ:
+		kr = thread_get_special_port_internal(thread, which, portp, THREAD_FLAVOR_READ);
+		break;
+	case IKOT_THREAD_INSPECT:
+		kr = thread_get_special_port_internal(thread, which, portp, THREAD_FLAVOR_INSPECT);
+		break;
+	default:
+		panic("strange kobject type");
+		break;
+	}
+
+	thread_deallocate(thread);
+	return kr;
+}
+
+static kern_return_t
+port_allowed_with_thread_flavor(
+	int                  which,
+	mach_thread_flavor_t flavor)
+{
+	switch (flavor) {
+	case THREAD_FLAVOR_CONTROL:
+		return KERN_SUCCESS;
+
+	case THREAD_FLAVOR_READ:
+
+		switch (which) {
+		case THREAD_READ_PORT:
+		case THREAD_INSPECT_PORT:
+			return KERN_SUCCESS;
+		default:
+			return KERN_INVALID_CAPABILITY;
+		}
+
+	case THREAD_FLAVOR_INSPECT:
+
+		switch (which) {
+		case THREAD_INSPECT_PORT:
+			return KERN_SUCCESS;
+		default:
+			return KERN_INVALID_CAPABILITY;
+		}
+
+	default:
+		return KERN_INVALID_CAPABILITY;
+	}
 }
 
 /*
@@ -1042,10 +1265,11 @@ thread_get_special_port(
  *		Nothing locked.  If successful, consumes
  *		the supplied send right.
  *	Returns:
- *		KERN_SUCCESS		Changed the special port.
- *		KERN_INVALID_ARGUMENT	The thread is null.
- *		KERN_FAILURE		The thread is dead.
- *		KERN_INVALID_ARGUMENT	Invalid special port.
+ *		KERN_SUCCESS            Changed the special port.
+ *		KERN_INVALID_ARGUMENT   The thread is null.
+ *		KERN_FAILURE            The thread is dead.
+ *		KERN_INVALID_ARGUMENT   Invalid special port.
+ *		KERN_NO_ACCESS          Restricted access to set port.
  */
 
 kern_return_t
@@ -1063,7 +1287,17 @@ thread_set_special_port(
 
 	switch (which) {
 	case THREAD_KERNEL_PORT:
-		whichp = &thread->ith_sself;
+#if CONFIG_CSR
+		if (csr_check(CSR_ALLOW_KERNEL_DEBUGGER) != 0) {
+			/*
+			 * Only allow setting of thread-self
+			 * special port from user-space when SIP is
+			 * disabled (for Mach-on-Mach emulation).
+			 */
+			return KERN_NO_ACCESS;
+		}
+#endif
+		whichp = &thread->ith_settable_self;
 		break;
 
 	default:
@@ -1106,27 +1340,49 @@ kern_return_t
 task_get_special_port(
 	task_t          task,
 	int             which,
-	ipc_port_t      *portp)
+	ipc_port_t      *portp);
+
+static kern_return_t
+task_get_special_port_internal(
+	task_t          task,
+	int             which,
+	ipc_port_t      *portp,
+	mach_task_flavor_t        flavor)
 {
+	kern_return_t kr;
 	ipc_port_t port;
 
 	if (task == TASK_NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
+	if ((kr = port_allowed_with_task_flavor(which, flavor)) != KERN_SUCCESS) {
+		return kr;
+	}
+
 	itk_lock(task);
-	if (task->itk_self == IP_NULL) {
+	if (task->itk_self[TASK_FLAVOR_CONTROL] == IP_NULL) {
 		itk_unlock(task);
 		return KERN_FAILURE;
 	}
 
 	switch (which) {
 	case TASK_KERNEL_PORT:
-		port = ipc_port_copy_send(task->itk_sself);
+		port = ipc_port_copy_send(task->itk_settable_self);
 		break;
 
+	case TASK_READ_PORT:
+	case TASK_INSPECT_PORT:
+		itk_unlock(task);
+		mach_task_flavor_t current_flavor = (which == TASK_READ_PORT) ?
+		    TASK_FLAVOR_READ : TASK_FLAVOR_INSPECT;
+		/* convert_task_to_port_with_flavor consumes a task reference */
+		task_reference(task);
+		port = convert_task_to_port_with_flavor(task, current_flavor);
+		goto copyout;
+
 	case TASK_NAME_PORT:
-		port = ipc_port_make_send(task->itk_nself);
+		port = ipc_port_make_send(task->itk_self[TASK_FLAVOR_NAME]);
 		break;
 
 	case TASK_HOST_PORT:
@@ -1153,10 +1409,90 @@ task_get_special_port(
 		itk_unlock(task);
 		return KERN_INVALID_ARGUMENT;
 	}
+
 	itk_unlock(task);
 
+copyout:
 	*portp = port;
 	return KERN_SUCCESS;
+}
+
+kern_return_t
+task_get_special_port(
+	task_t          task,
+	int             which,
+	ipc_port_t      *portp)
+{
+	return task_get_special_port_internal(task, which, portp, TASK_FLAVOR_CONTROL);
+}
+
+kern_return_t
+task_get_special_port_from_user(
+	mach_port_t     port,
+	int             which,
+	ipc_port_t      *portp)
+{
+	ipc_kobject_type_t kotype;
+	kern_return_t kr;
+
+	task_t task = convert_port_to_task_check_type(port, &kotype, TASK_FLAVOR_INSPECT, FALSE);
+
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	switch (kotype) {
+	case IKOT_TASK_CONTROL:
+		kr = task_get_special_port_internal(task, which, portp, TASK_FLAVOR_CONTROL);
+		break;
+	case IKOT_TASK_READ:
+		kr = task_get_special_port_internal(task, which, portp, TASK_FLAVOR_READ);
+		break;
+	case IKOT_TASK_INSPECT:
+		kr = task_get_special_port_internal(task, which, portp, TASK_FLAVOR_INSPECT);
+		break;
+	default:
+		panic("strange kobject type");
+		break;
+	}
+
+	task_deallocate(task);
+	return kr;
+}
+
+static kern_return_t
+port_allowed_with_task_flavor(
+	int                which,
+	mach_task_flavor_t flavor)
+{
+	switch (flavor) {
+	case TASK_FLAVOR_CONTROL:
+		return KERN_SUCCESS;
+
+	case TASK_FLAVOR_READ:
+
+		switch (which) {
+		case TASK_READ_PORT:
+		case TASK_INSPECT_PORT:
+		case TASK_NAME_PORT:
+			return KERN_SUCCESS;
+		default:
+			return KERN_INVALID_CAPABILITY;
+		}
+
+	case TASK_FLAVOR_INSPECT:
+
+		switch (which) {
+		case TASK_INSPECT_PORT:
+		case TASK_NAME_PORT:
+			return KERN_SUCCESS;
+		default:
+			return KERN_INVALID_CAPABILITY;
+		}
+
+	default:
+		return KERN_INVALID_CAPABILITY;
+	}
 }
 
 /*
@@ -1232,71 +1568,74 @@ task_set_special_port_internal(
 	int             which,
 	ipc_port_t      port)
 {
-	ipc_port_t *whichp;
-	ipc_port_t old;
+	ipc_port_t old = IP_NULL;
+	kern_return_t rc = KERN_INVALID_ARGUMENT;
 
 	if (task == TASK_NULL) {
-		return KERN_INVALID_ARGUMENT;
+		goto out;
+	}
+
+	itk_lock(task);
+	if (task->itk_self[TASK_FLAVOR_CONTROL] == IP_NULL) {
+		rc = KERN_FAILURE;
+		goto out_unlock;
 	}
 
 	switch (which) {
 	case TASK_KERNEL_PORT:
-		whichp = &task->itk_sself;
+		old = task->itk_settable_self;
+		task->itk_settable_self = port;
 		break;
 
 	case TASK_HOST_PORT:
-		whichp = &task->itk_host;
+		old = task->itk_host;
+		task->itk_host = port;
 		break;
 
 	case TASK_BOOTSTRAP_PORT:
-		whichp = &task->itk_bootstrap;
+		old = task->itk_bootstrap;
+		task->itk_bootstrap = port;
 		break;
 
+	/* Never allow overwrite of seatbelt port */
 	case TASK_SEATBELT_PORT:
-		whichp = &task->itk_seatbelt;
+		if (IP_VALID(task->itk_seatbelt)) {
+			rc = KERN_NO_ACCESS;
+			goto out_unlock;
+		}
+		task->itk_seatbelt = port;
 		break;
 
+	/* Never allow overwrite of the task access port */
 	case TASK_ACCESS_PORT:
-		whichp = &task->itk_task_access;
+		if (IP_VALID(task->itk_task_access)) {
+			rc = KERN_NO_ACCESS;
+			goto out_unlock;
+		}
+		task->itk_task_access = port;
 		break;
 
 	case TASK_DEBUG_CONTROL_PORT:
-		whichp = &task->itk_debug_control;
+		old = task->itk_debug_control;
+		task->itk_debug_control = port;
 		break;
 
 	default:
-		return KERN_INVALID_ARGUMENT;
+		rc = KERN_INVALID_ARGUMENT;
+		goto out_unlock;
 	}/* switch */
 
-	itk_lock(task);
-	if (task->itk_self == IP_NULL) {
-		itk_unlock(task);
-		return KERN_FAILURE;
-	}
+	rc = KERN_SUCCESS;
 
-	/* Never allow overwrite of seatbelt, or task access ports */
-	switch (which) {
-	case TASK_SEATBELT_PORT:
-	case TASK_ACCESS_PORT:
-		if (IP_VALID(*whichp)) {
-			itk_unlock(task);
-			return KERN_NO_ACCESS;
-		}
-		break;
-	default:
-		break;
-	}
-
-	old = *whichp;
-	*whichp = port;
+out_unlock:
 	itk_unlock(task);
 
 	if (IP_VALID(old)) {
 		ipc_port_release_send(old);
 	}
-	return KERN_SUCCESS;
+out:
+	return rc;
 }
-
 /*
  *	Routine:	mach_ports_register [kernel call]
  *	Purpose:
@@ -1344,7 +1683,7 @@ mach_ports_register(
 	}
 
 	itk_lock(task);
-	if (task->itk_self == IP_NULL) {
+	if (task->itk_self[TASK_FLAVOR_CONTROL] == IP_NULL) {
 		itk_unlock(task);
 		return KERN_INVALID_ARGUMENT;
 	}
@@ -1420,7 +1759,7 @@ mach_ports_lookup(
 	}
 
 	itk_lock(task);
-	if (task->itk_self == IP_NULL) {
+	if (task->itk_self[TASK_FLAVOR_CONTROL] == IP_NULL) {
 		itk_unlock(task);
 
 		kfree(memory, size);
@@ -1445,8 +1784,6 @@ mach_ports_lookup(
 	return KERN_SUCCESS;
 }
 
-extern zone_t task_zone;
-
 kern_return_t
 task_conversion_eval(task_t caller, task_t victim)
 {
@@ -1470,11 +1807,11 @@ task_conversion_eval(task_t caller, task_t victim)
 		return KERN_INVALID_SECURITY;
 	}
 
-	zone_require(victim, task_zone);
+	task_require(victim);
 
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 	/*
-	 * On embedded platforms, only a platform binary can resolve the task port
+	 * On platforms other than macOS, only a platform binary can resolve the task port
 	 * of another platform binary.
 	 */
 	if ((victim->t_flags & TF_PLATFORM) && !(caller->t_flags & TF_PLATFORM)) {
@@ -1488,7 +1825,7 @@ task_conversion_eval(task_t caller, task_t victim)
 		}
 #endif /* SECURE_KERNEL */
 	}
-#endif /* CONFIG_EMBEDDED */
+#endif /* !defined(XNU_TARGET_OS_OSX) */
 
 	return KERN_SUCCESS;
 }
@@ -1503,7 +1840,7 @@ task_conversion_eval(task_t caller, task_t victim)
  *		Nothing locked, blocking OK.
  */
 task_t
-convert_port_to_locked_task(ipc_port_t port)
+convert_port_to_locked_task(ipc_port_t port, boolean_t eval)
 {
 	int try_failed_count = 0;
 
@@ -1512,14 +1849,14 @@ convert_port_to_locked_task(ipc_port_t port)
 		task_t task;
 
 		ip_lock(port);
-		if (!ip_active(port) || (ip_kotype(port) != IKOT_TASK)) {
+		if (!ip_active(port) || (ip_kotype(port) != IKOT_TASK_CONTROL)) {
 			ip_unlock(port);
 			return TASK_NULL;
 		}
 		task = (task_t) ip_get_kobject(port);
 		assert(task != TASK_NULL);
 
-		if (task_conversion_eval(ct, task)) {
+		if (eval && task_conversion_eval(ct, task)) {
 			ip_unlock(port);
 			return TASK_NULL;
 		}
@@ -1558,7 +1895,9 @@ convert_port_to_locked_task_inspect(ipc_port_t port)
 		task_inspect_t task;
 
 		ip_lock(port);
-		if (!ip_active(port) || (ip_kotype(port) != IKOT_TASK)) {
+		if (!ip_active(port) || (ip_kotype(port) != IKOT_TASK_CONTROL &&
+		    ip_kotype(port) != IKOT_TASK_READ &&
+		    ip_kotype(port) != IKOT_TASK_INSPECT)) {
 			ip_unlock(port);
 			return TASK_INSPECT_NULL;
 		}
@@ -1580,28 +1919,70 @@ convert_port_to_locked_task_inspect(ipc_port_t port)
 	return TASK_INSPECT_NULL;
 }
 
+/*
+ *	Routine: convert_port_to_locked_task_read
+ *	Purpose:
+ *		Internal helper routine to convert from a port to a locked
+ *		task read right. Used by internal routines that try to convert from a
+ *		task read port to a reference on some task related object.
+ *	Conditions:
+ *		Nothing locked, blocking OK.
+ */
+task_read_t
+convert_port_to_locked_task_read(ipc_port_t port)
+{
+	int try_failed_count = 0;
+
+	while (IP_VALID(port)) {
+		task_read_t task;
+
+		ip_lock(port);
+		if (!ip_active(port) || (ip_kotype(port) != IKOT_TASK_CONTROL &&
+		    ip_kotype(port) != IKOT_TASK_READ)) {
+			ip_unlock(port);
+			return TASK_READ_NULL;
+		}
+		task = (task_read_t)port->ip_kobject;
+		assert(task != TASK_READ_NULL);
+		/*
+		 * Normal lock ordering puts task_lock() before ip_lock().
+		 * Attempt out-of-order locking here.
+		 */
+		if (task_lock_try((task_t)task)) {
+			ip_unlock(port);
+			return task;
+		}
+		try_failed_count++;
+
+		ip_unlock(port);
+		mutex_pause(try_failed_count);
+	}
+	return TASK_READ_NULL;
+}
+
 static task_t
 convert_port_to_task_locked(
 	ipc_port_t              port,
-	uint32_t                *exec_token)
+	uint32_t                *exec_token,
+	boolean_t               eval)
 {
 	task_t          task = TASK_NULL;
 
 	ip_lock_held(port);
 	require_ip_active(port);
 
-	if (ip_kotype(port) == IKOT_TASK) {
-		task_t ct = current_task();
+	if (ip_kotype(port) == IKOT_TASK_CONTROL) {
 		task = (task_t) ip_get_kobject(port);
 		assert(task != TASK_NULL);
 
-		if (task_conversion_eval(ct, task)) {
+		if (eval && task_conversion_eval(current_task(), task)) {
 			return TASK_NULL;
 		}
 
 		if (exec_token) {
 			*exec_token = task->exec_token;
 		}
+
 		task_reference_internal(task);
 	}
 
@@ -1621,14 +2002,15 @@ convert_port_to_task_locked(
 task_t
 convert_port_to_task_with_exec_token(
 	ipc_port_t              port,
-	uint32_t                *exec_token)
+	uint32_t                *exec_token,
+	boolean_t               eval)
 {
 	task_t          task = TASK_NULL;
 
 	if (IP_VALID(port)) {
 		ip_lock(port);
 		if (ip_active(port)) {
-			task = convert_port_to_task_locked(port, exec_token);
+			task = convert_port_to_task_locked(port, exec_token, eval);
 		}
 		ip_unlock(port);
 	}
@@ -1649,9 +2031,24 @@ task_t
 convert_port_to_task(
 	ipc_port_t              port)
 {
-	return convert_port_to_task_with_exec_token(port, NULL);
+	return convert_port_to_task_with_exec_token(port, NULL, TRUE);
 }
 
+/*
+ *	Routine:	convert_port_to_task_no_eval
+ *	Purpose:
+ *		Convert from a port to a task, skips task_conversion_eval.
+ *		Doesn't consume the port ref; produces a task ref,
+ *		which may be null.
+ *	Conditions:
+ *		Nothing locked.
+ */
+static task_t
+convert_port_to_task_no_eval(
+	ipc_port_t              port)
+{
+	return convert_port_to_task_with_exec_token(port, NULL, FALSE);
+}
 
 /*
  *	Routine:	convert_port_to_task_name
@@ -1662,6 +2059,29 @@ convert_port_to_task(
  *	Conditions:
  *		Nothing locked.
  */
+
+static task_name_t
+convert_port_to_task_name_locked(
+	ipc_port_t              port)
+{
+	task_name_t task = TASK_NAME_NULL;
+
+	ip_lock_held(port);
+	require_ip_active(port);
+
+	if (ip_kotype(port) == IKOT_TASK_CONTROL ||
+	    ip_kotype(port) == IKOT_TASK_READ ||
+	    ip_kotype(port) == IKOT_TASK_INSPECT ||
+	    ip_kotype(port) == IKOT_TASK_NAME) {
+		task = (task_name_t) ip_get_kobject(port);
+		assert(task != TASK_NAME_NULL);
+
+		task_reference_internal(task);
+	}
+
+	return task;
+}
+
 task_name_t
 convert_port_to_task_name(
 	ipc_port_t              port)
@@ -1670,20 +2090,65 @@ convert_port_to_task_name(
 
 	if (IP_VALID(port)) {
 		ip_lock(port);
-
-		if (ip_active(port) &&
-		    (ip_kotype(port) == IKOT_TASK ||
-		    ip_kotype(port) == IKOT_TASK_NAME)) {
-			task = (task_name_t) ip_get_kobject(port);
-			assert(task != TASK_NAME_NULL);
-
-			task_reference_internal(task);
+		if (ip_active(port)) {
+			task = convert_port_to_task_name_locked(port);
 		}
-
 		ip_unlock(port);
 	}
 
 	return task;
+}
+
+/*
+ *	Routine:	convert_port_to_task_policy
+ *	Purpose:
+ *		Convert from a port to a task.
+ *		Doesn't consume the port ref; produces a task ref,
+ *		which may be null.
+ *		If the port is being used with task_port_set(), any task port
+ *		type other than TASK_CONTROL requires an entitlement. If the
+ *		port is being used with task_port_get(), TASK_NAME requires an
+ *		entitlement.
+ *	Conditions:
+ *		Nothing locked.
+ */
+static task_t
+convert_port_to_task_policy(ipc_port_t port, boolean_t set)
+{
+	task_t task = TASK_NULL;
+	task_t ctask = current_task();
+
+	if (!IP_VALID(port)) {
+		return TASK_NULL;
+	}
+
+	task = set ?
+	    convert_port_to_task(port) :
+	    convert_port_to_task_inspect(port);
+
+	if (task == TASK_NULL &&
+	    IOTaskHasEntitlement(ctask, "com.apple.private.task_policy")) {
+		task = convert_port_to_task_name(port);
+	}
+
+	if (task_conversion_eval(ctask, task) != KERN_SUCCESS) {
+		task_deallocate(task);
+		return TASK_NULL;
+	}
+
+	return task;
+}
+
+task_policy_set_t
+convert_port_to_task_policy_set(ipc_port_t port)
+{
+	return convert_port_to_task_policy(port, true);
+}
+
+task_policy_get_t
+convert_port_to_task_policy_get(ipc_port_t port)
+{
+	return convert_port_to_task_policy(port, false);
 }
 
 static task_inspect_t
@@ -1695,7 +2160,9 @@ convert_port_to_task_inspect_locked(
 	ip_lock_held(port);
 	require_ip_active(port);
 
-	if (ip_kotype(port) == IKOT_TASK) {
+	if (ip_kotype(port) == IKOT_TASK_CONTROL ||
+	    ip_kotype(port) == IKOT_TASK_READ ||
+	    ip_kotype(port) == IKOT_TASK_INSPECT) {
 		task = (task_inspect_t) ip_get_kobject(port);
 		assert(task != TASK_INSPECT_NULL);
 
@@ -1703,6 +2170,246 @@ convert_port_to_task_inspect_locked(
 	}
 
 	return task;
+}
+
+static task_read_t
+convert_port_to_task_read_locked(
+	ipc_port_t              port)
+{
+	task_read_t task = TASK_READ_NULL;
+
+	ip_lock_held(port);
+	require_ip_active(port);
+
+	if (ip_kotype(port) == IKOT_TASK_CONTROL ||
+	    ip_kotype(port) == IKOT_TASK_READ) {
+		task_t ct = current_task();
+		task = (task_t)port->ip_kobject;
+
+		assert(task != TASK_READ_NULL);
+
+		if (task_conversion_eval(ct, task)) {
+			return TASK_READ_NULL;
+		}
+
+		task_reference_internal(task);
+	}
+
+	return task;
+}
+
+/*
+ *	Routine:	convert_port_to_task_check_type
+ *	Purpose:
+ *		Convert from a port to a task based on port's type.
+ *		Doesn't consume the port ref; produces a task ref,
+ *		which may be null.
+ *  Arguments:
+ *		port:       The port that we do conversion on
+ *      kotype:     Returns the IKOT_TYPE of the port, if translation succeeded
+ *      at_most:    The lowest capability flavor allowed. In mach_task_flavor_t,
+ *                  the higher the flavor number, the lesser the capability, hence the name.
+ *      eval_check: Whether to run task_conversion_eval check during the conversion.
+ *                  For backward compatibility, some interfaces does not run conversion
+ *                  eval on IKOT_TASK_CONTROL.
+ *	Conditions:
+ *		Nothing locked.
+ *  Returns:
+ *      task_t and port's type, if translation succeeded;
+ *      TASK_NULL and IKOT_NONE, if translation failed
+ */
+task_t
+convert_port_to_task_check_type(
+	ipc_port_t              port,
+	ipc_kobject_type_t     *kotype,
+	mach_task_flavor_t      at_most,
+	boolean_t               eval_check)
+{
+	task_t task = TASK_NULL;
+	ipc_kobject_type_t type = IKOT_NONE;
+
+	if (!IP_VALID(port) || !ip_active(port)) {
+		goto out;
+	}
+
+	switch (ip_kotype(port)) {
+	case IKOT_TASK_CONTROL:
+		task = eval_check ? convert_port_to_task(port) : convert_port_to_task_no_eval(port);
+		if (task != TASK_NULL) {
+			type = IKOT_TASK_CONTROL;
+		}
+		break;
+	case IKOT_TASK_READ:
+		if (at_most >= TASK_FLAVOR_READ) {
+			task = convert_port_to_task_read(port);
+			if (task != TASK_READ_NULL) {
+				type = IKOT_TASK_READ;
+			}
+		}
+		break;
+	case IKOT_TASK_INSPECT:
+		if (at_most >= TASK_FLAVOR_INSPECT) {
+			task = convert_port_to_task_inspect(port);
+			if (task != TASK_INSPECT_NULL) {
+				type = IKOT_TASK_INSPECT;
+			}
+		}
+		break;
+	case IKOT_TASK_NAME:
+		if (at_most >= TASK_FLAVOR_NAME) {
+			task = convert_port_to_task_name(port);
+			if (task != TASK_NAME_NULL) {
+				type = IKOT_TASK_NAME;
+			}
+		}
+		break;
+	default:
+		break;
+	}
+
+out:
+	if (kotype) {
+		*kotype = type;
+	}
+	return task;
+}
+
+/*
+ *	Routine:	convert_port_to_thread_check_type
+ *	Purpose:
+ *		Convert from a port to a thread based on port's type.
+ *		Doesn't consume the port ref; produces a thread ref,
+ *		which may be null.
+ *      This conversion routine is _ONLY_ supposed to be used
+ *      by thread_get_special_port.
+ *  Arguments:
+ *		port:       The port that we do conversion on
+ *      kotype:     Returns the IKOT_TYPE of the port, if translation succeeded
+ *      at_most:    The lowest capability flavor allowed. In mach_thread_flavor_t,
+ *                  the higher the flavor number, the lesser the capability, hence the name.
+ *      eval_check: Whether to run task_conversion_eval check during the conversion.
+ *                  For backward compatibility, some interfaces do not run
+ *                  conversion eval on IKOT_THREAD_CONTROL.
+ *	Conditions:
+ *		Nothing locked.
+ *  Returns:
+ *      thread_t and port's type, if translation succeeded;
+ *      THREAD_NULL and IKOT_NONE, if translation failed
+ */
+thread_t
+convert_port_to_thread_check_type(
+	ipc_port_t              port,
+	ipc_kobject_type_t     *kotype,
+	mach_thread_flavor_t    at_most,
+	boolean_t               eval_check)
+{
+	thread_t thread = THREAD_NULL;
+	ipc_kobject_type_t type = IKOT_NONE;
+
+	if (!IP_VALID(port) || !ip_active(port)) {
+		goto out;
+	}
+
+	switch (ip_kotype(port)) {
+	case IKOT_THREAD_CONTROL:
+		thread = eval_check ? convert_port_to_thread(port) : convert_port_to_thread_no_eval(port);
+		if (thread != THREAD_NULL) {
+			type = IKOT_THREAD_CONTROL;
+		}
+		break;
+	case IKOT_THREAD_READ:
+		if (at_most >= THREAD_FLAVOR_READ) {
+			thread = convert_port_to_thread_read(port);
+			if (thread != THREAD_READ_NULL) {
+				type = IKOT_THREAD_READ;
+			}
+		}
+		break;
+	case IKOT_THREAD_INSPECT:
+		if (at_most >= THREAD_FLAVOR_INSPECT) {
+			thread = convert_port_to_thread_inspect(port);
+			if (thread != THREAD_INSPECT_NULL) {
+				type = IKOT_THREAD_INSPECT;
+			}
+		}
+		break;
+	default:
+		break;
+	}
+
+out:
+	if (kotype) {
+		*kotype = type;
+	}
+	return thread;
+}
+
+/*
+ *	Routine:	convert_port_to_space_check_type
+ *	Purpose:
+ *		Convert from a port to a space based on port's type.
+ *		Doesn't consume the port ref; produces a space ref,
+ *		which may be null.
+ *  Arguments:
+ *      port:       The port that we do conversion on
+ *      kotype:     Returns the IKOT_TYPE of the port, if translation succeeded
+ *      at_most:    The lowest capability flavor allowed. In mach_task_flavor_t,
+ *                  the higher the flavor number, the lesser the capability, hence the name.
+ *      eval_check: Whether to run task_conversion_eval check during the conversion.
+ *                  For backward compatibility, some interfaces do not run
+ *                  conversion eval on IKOT_TASK_CONTROL.
+ *	Conditions:
+ *		Nothing locked.
+ *  Returns:
+ *      ipc_space_t and port's type, if translation succeeded;
+ *      IPC_SPACE_NULL and IKOT_NONE, if translation failed
+ */
+ipc_space_t
+convert_port_to_space_check_type(
+	ipc_port_t              port,
+	ipc_kobject_type_t     *kotype,
+	mach_task_flavor_t      at_most,
+	boolean_t               eval_check)
+{
+	ipc_space_t space = IPC_SPACE_NULL;
+	ipc_kobject_type_t type = IKOT_NONE;
+
+	if (!IP_VALID(port) || !ip_active(port)) {
+		goto out;
+	}
+
+	switch (ip_kotype(port)) {
+	case IKOT_TASK_CONTROL:
+		space = eval_check ? convert_port_to_space(port) : convert_port_to_space_no_eval(port);
+		if (space != IPC_SPACE_NULL) {
+			type = IKOT_TASK_CONTROL;
+		}
+		break;
+	case IKOT_TASK_READ:
+		if (at_most >= TASK_FLAVOR_READ) {
+			space = convert_port_to_space_read(port);
+			if (space != IPC_SPACE_READ_NULL) {
+				type = IKOT_TASK_READ;
+			}
+		}
+		break;
+	case IKOT_TASK_INSPECT:
+		if (at_most >= TASK_FLAVOR_INSPECT) {
+			space = convert_port_to_space_inspect(port);
+			if (space != IPC_SPACE_INSPECT_NULL) {
+				type = IKOT_TASK_INSPECT;
+			}
+		}
+		break;
+	default:
+		break;
+	}
+
+out:
+	if (kotype) {
+		*kotype = type;
+	}
+	return space;
 }
 
 /*
@@ -1724,6 +2431,32 @@ convert_port_to_task_inspect(
 		ip_lock(port);
 		if (ip_active(port)) {
 			task = convert_port_to_task_inspect_locked(port);
+		}
+		ip_unlock(port);
+	}
+
+	return task;
+}
+
+/*
+ *	Routine:	convert_port_to_task_read
+ *	Purpose:
+ *		Convert from a port to a task read right
+ *		Doesn't consume the port ref; produces a task ref,
+ *		which may be null.
+ *	Conditions:
+ *		Nothing locked.
+ */
+task_read_t
+convert_port_to_task_read(
+	ipc_port_t              port)
+{
+	task_read_t task = TASK_READ_NULL;
+
+	if (IP_VALID(port)) {
+		ip_lock(port);
+		if (ip_active(port)) {
+			task = convert_port_to_task_read_locked(port);
 		}
 		ip_unlock(port);
 	}
@@ -1764,7 +2497,7 @@ convert_port_to_task_suspension_token(
 }
 
 /*
- *	Routine:	convert_port_to_space
+ *	Routine:	convert_port_to_space_with_flavor
  *	Purpose:
  *		Convert from a port to a space.
  *		Doesn't consume the port ref; produces a space ref,
@@ -1772,14 +2505,29 @@ convert_port_to_task_suspension_token(
  *	Conditions:
  *		Nothing locked.
  */
-ipc_space_t
-convert_port_to_space(
-	ipc_port_t      port)
+static ipc_space_t
+convert_port_to_space_with_flavor(
+	ipc_port_t         port,
+	mach_task_flavor_t flavor,
+	boolean_t          eval)
 {
 	ipc_space_t space;
 	task_t task;
 
-	task = convert_port_to_locked_task(port);
+	switch (flavor) {
+	case TASK_FLAVOR_CONTROL:
+		task = convert_port_to_locked_task(port, eval);
+		break;
+	case TASK_FLAVOR_READ:
+		task = convert_port_to_locked_task_read(port);
+		break;
+	case TASK_FLAVOR_INSPECT:
+		task = convert_port_to_locked_task_inspect(port);
+		break;
+	default:
+		task = TASK_NULL;
+		break;
+	}
 
 	if (task == TASK_NULL) {
 		return IPC_SPACE_NULL;
@@ -1796,41 +2544,36 @@ convert_port_to_space(
 	return space;
 }
 
-/*
- *	Routine:	convert_port_to_space_inspect
- *	Purpose:
- *		Convert from a port to a space inspect right.
- *		Doesn't consume the port ref; produces a space inspect ref,
- *		which may be null.
- *	Conditions:
- *		Nothing locked.
- */
+ipc_space_t
+convert_port_to_space(
+	ipc_port_t      port)
+{
+	return convert_port_to_space_with_flavor(port, TASK_FLAVOR_CONTROL, TRUE);
+}
+
+static ipc_space_t
+convert_port_to_space_no_eval(
+	ipc_port_t      port)
+{
+	return convert_port_to_space_with_flavor(port, TASK_FLAVOR_CONTROL, FALSE);
+}
+
+ipc_space_read_t
+convert_port_to_space_read(
+	ipc_port_t      port)
+{
+	return convert_port_to_space_with_flavor(port, TASK_FLAVOR_READ, TRUE);
+}
+
 ipc_space_inspect_t
 convert_port_to_space_inspect(
 	ipc_port_t      port)
 {
-	ipc_space_inspect_t space;
-	task_inspect_t task;
-
-	task = convert_port_to_locked_task_inspect(port);
-
-	if (task == TASK_INSPECT_NULL) {
-		return IPC_SPACE_INSPECT_NULL;
-	}
-
-	if (!task->active) {
-		task_unlock(task);
-		return IPC_SPACE_INSPECT_NULL;
-	}
-
-	space = (ipc_space_inspect_t)task->itk_space;
-	is_reference((ipc_space_t)space);
-	task_unlock((task_t)task);
-	return space;
+	return convert_port_to_space_with_flavor(port, TASK_FLAVOR_INSPECT, TRUE);
 }
 
 /*
- *	Routine:	convert_port_to_map
+ *	Routine:	convert_port_to_map_with_flavor
  *	Purpose:
  *		Convert from a port to a map.
  *		Doesn't consume the port ref; produces a map ref,
@@ -1839,14 +2582,28 @@ convert_port_to_space_inspect(
  *		Nothing locked.
  */
 
-vm_map_t
-convert_port_to_map(
-	ipc_port_t      port)
+static vm_map_t
+convert_port_to_map_with_flavor(
+	ipc_port_t         port,
+	mach_task_flavor_t flavor)
 {
 	task_t task;
 	vm_map_t map;
 
-	task = convert_port_to_locked_task(port);
+	switch (flavor) {
+	case TASK_FLAVOR_CONTROL:
+		task = convert_port_to_locked_task(port, TRUE);
+		break;
+	case TASK_FLAVOR_READ:
+		task = convert_port_to_locked_task_read(port);
+		break;
+	case TASK_FLAVOR_INSPECT:
+		task = convert_port_to_locked_task_inspect(port);
+		break;
+	default:
+		task = TASK_NULL;
+		break;
+	}
 
 	if (task == TASK_NULL) {
 		return VM_MAP_NULL;
@@ -1858,9 +2615,43 @@ convert_port_to_map(
 	}
 
 	map = task->map;
+	if (map->pmap == kernel_pmap) {
+		if (flavor == TASK_FLAVOR_CONTROL) {
+			panic("userspace has control access to a "
+			    "kernel map %p through task %p", map, task);
+		}
+		if (task != kernel_task) {
+			panic("userspace has access to a "
+			    "kernel map %p through task %p", map, task);
+		}
+	} else {
+		pmap_require(map->pmap);
+	}
+
 	vm_map_reference_swap(map);
 	task_unlock(task);
 	return map;
+}
+
+vm_map_read_t
+convert_port_to_map(
+	ipc_port_t              port)
+{
+	return convert_port_to_map_with_flavor(port, TASK_FLAVOR_CONTROL);
+}
+
+vm_map_read_t
+convert_port_to_map_read(
+	ipc_port_t              port)
+{
+	return convert_port_to_map_with_flavor(port, TASK_FLAVOR_READ);
+}
+
+vm_map_inspect_t
+convert_port_to_map_inspect(
+	ipc_port_t              port)
+{
+	return convert_port_to_map_with_flavor(port, TASK_FLAVOR_INSPECT);
 }
 
 
@@ -1877,14 +2668,15 @@ convert_port_to_map(
 static thread_t
 convert_port_to_thread_locked(
 	ipc_port_t               port,
-	port_to_thread_options_t options)
+	port_to_thread_options_t options,
+	boolean_t                eval)
 {
 	thread_t        thread = THREAD_NULL;
 
 	ip_lock_held(port);
 	require_ip_active(port);
 
-	if (ip_kotype(port) == IKOT_THREAD) {
+	if (ip_kotype(port) == IKOT_THREAD_CONTROL) {
 		thread = (thread_t) ip_get_kobject(port);
 		assert(thread != THREAD_NULL);
 
@@ -1900,7 +2692,7 @@ convert_port_to_thread_locked(
 			}
 		} else {
 			/* Use task conversion rules for thread control conversions */
-			if (task_conversion_eval(current_task(), thread->task) != KERN_SUCCESS) {
+			if (eval && task_conversion_eval(current_task(), thread->task) != KERN_SUCCESS) {
 				return THREAD_NULL;
 			}
 		}
@@ -1920,7 +2712,24 @@ convert_port_to_thread(
 	if (IP_VALID(port)) {
 		ip_lock(port);
 		if (ip_active(port)) {
-			thread = convert_port_to_thread_locked(port, PORT_TO_THREAD_NONE);
+			thread = convert_port_to_thread_locked(port, PORT_TO_THREAD_NONE, TRUE);
+		}
+		ip_unlock(port);
+	}
+
+	return thread;
+}
+
+static thread_t
+convert_port_to_thread_no_eval(
+	ipc_port_t              port)
+{
+	thread_t        thread = THREAD_NULL;
+
+	if (IP_VALID(port)) {
+		ip_lock(port);
+		if (ip_active(port)) {
+			thread = convert_port_to_thread_locked(port, PORT_TO_THREAD_NONE, FALSE);
 		}
 		ip_unlock(port);
 	}
@@ -1931,12 +2740,32 @@ convert_port_to_thread(
 /*
  *	Routine:	convert_port_to_thread_inspect
  *	Purpose:
- *		Convert from a port to a thread inspection right
+ *		Convert from a port to a thread inspect right
  *		Doesn't consume the port ref; produces a thread ref,
  *		which may be null.
  *	Conditions:
  *		Nothing locked.
  */
+static thread_inspect_t
+convert_port_to_thread_inspect_locked(
+	ipc_port_t              port)
+{
+	thread_inspect_t thread = THREAD_INSPECT_NULL;
+
+	ip_lock_held(port);
+	require_ip_active(port);
+
+	if (ip_kotype(port) == IKOT_THREAD_CONTROL ||
+	    ip_kotype(port) == IKOT_THREAD_READ ||
+	    ip_kotype(port) == IKOT_THREAD_INSPECT) {
+		thread = (thread_inspect_t)port->ip_kobject;
+		assert(thread != THREAD_INSPECT_NULL);
+		thread_reference_internal((thread_t)thread);
+	}
+
+	return thread;
+}
+
 thread_inspect_t
 convert_port_to_thread_inspect(
 	ipc_port_t              port)
@@ -1945,12 +2774,8 @@ convert_port_to_thread_inspect(
 
 	if (IP_VALID(port)) {
 		ip_lock(port);
-
-		if (ip_active(port) &&
-		    ip_kotype(port) == IKOT_THREAD) {
-			thread = (thread_inspect_t) ip_get_kobject(port);
-			assert(thread != THREAD_INSPECT_NULL);
-			thread_reference_internal((thread_t)thread);
+		if (ip_active(port)) {
+			thread = convert_port_to_thread_inspect_locked(port);
 		}
 		ip_unlock(port);
 	}
@@ -1959,28 +2784,130 @@ convert_port_to_thread_inspect(
 }
 
 /*
- *	Routine:	convert_thread_inspect_to_port
+ *	Routine:	convert_port_to_thread_read
  *	Purpose:
- *		Convert from a thread inspect reference to a port.
- *		Consumes a thread ref;
- *		As we never export thread inspect ports, always
- *		creates a NULL port.
+ *		Convert from a port to a thread read right
+ *		Doesn't consume the port ref; produces a thread ref,
+ *		which may be null.
  *	Conditions:
  *		Nothing locked.
  */
+static thread_read_t
+convert_port_to_thread_read_locked(
+	ipc_port_t              port)
+{
+	thread_read_t thread = THREAD_READ_NULL;
+
+	ip_lock_held(port);
+	require_ip_active(port);
+
+	if (ip_kotype(port) == IKOT_THREAD_CONTROL ||
+	    ip_kotype(port) == IKOT_THREAD_READ) {
+		thread = (thread_read_t) ip_get_kobject(port);
+		assert(thread != THREAD_READ_NULL);
+
+		/* Use task conversion rules for thread control conversions */
+		if (task_conversion_eval(current_task(), thread->task) != KERN_SUCCESS) {
+			return THREAD_READ_NULL;
+		}
+
+		thread_reference_internal((thread_t)thread);
+	}
+
+	return thread;
+}
+
+thread_read_t
+convert_port_to_thread_read(
+	ipc_port_t              port)
+{
+	thread_read_t thread = THREAD_READ_NULL;
+
+	if (IP_VALID(port)) {
+		ip_lock(port);
+		if (ip_active(port)) {
+			thread = convert_port_to_thread_read_locked(port);
+		}
+		ip_unlock(port);
+	}
+
+	return thread;
+}
+
+
+/*
+ *	Routine:	convert_thread_to_port_with_flavor
+ *	Purpose:
+ *		Convert from a thread to a port of given flavor.
+ *		Consumes a thread ref; produces a naked send right
+ *		which may be invalid.
+ *	Conditions:
+ *		Nothing locked.
+ */
+static ipc_port_t
+convert_thread_to_port_with_flavor(
+	thread_t              thread,
+	mach_thread_flavor_t  flavor)
+{
+	ipc_port_t port = IP_NULL;
+
+	thread_mtx_lock(thread);
+
+	if (thread->ith_self[THREAD_FLAVOR_CONTROL] == IP_NULL) {
+		goto exit;
+	}
+
+	if (flavor == THREAD_FLAVOR_CONTROL) {
+		port = ipc_port_make_send(thread->ith_self[flavor]);
+	} else {
+		if (!thread->active) {
+			goto exit;
+		}
+		ipc_kobject_type_t kotype = (flavor == THREAD_FLAVOR_READ) ? IKOT_THREAD_READ : IKOT_THREAD_INSPECT;
+		/*
+		 * Claim a send right on the thread read/inspect port, and request a no-senders
+		 * notification on that port (if none outstanding). A thread reference is not
+		 * donated here even though the ports are created lazily because it doesn't own the
+		 * kobject that it points to. Threads manage their lifetime explicitly and
+		 * have to synchronize with each other, between the task/thread terminating and the
+		 * send-once notification firing, and this is done under the thread mutex
+		 * rather than with atomics.
+		 */
+		(void)ipc_kobject_make_send_lazy_alloc_port(&thread->ith_self[flavor], (ipc_kobject_t)thread,
+		    kotype, false, 0);
+		port = thread->ith_self[flavor];
+	}
+
+exit:
+	thread_mtx_unlock(thread);
+	thread_deallocate(thread);
+	return port;
+}
+
+ipc_port_t
+convert_thread_to_port(
+	thread_t                thread)
+{
+	return convert_thread_to_port_with_flavor(thread, THREAD_FLAVOR_CONTROL);
+}
+
+ipc_port_t
+convert_thread_read_to_port(thread_read_t thread)
+{
+	return convert_thread_to_port_with_flavor(thread, THREAD_FLAVOR_READ);
+}
 
 ipc_port_t
 convert_thread_inspect_to_port(thread_inspect_t thread)
 {
-	thread_deallocate(thread);
-	return IP_NULL;
+	return convert_thread_to_port_with_flavor(thread, THREAD_FLAVOR_INSPECT);
 }
 
 
 /*
  *	Routine:	port_name_to_thread
  *	Purpose:
- *		Convert from a port name to an thread reference
+ *		Convert from a port name to a thread reference
  *		A name of MACH_PORT_NULL is valid for the null thread.
  *	Conditions:
  *		Nothing locked.
@@ -1997,7 +2924,7 @@ port_name_to_thread(
 	if (MACH_PORT_VALID(name)) {
 		kr = ipc_port_translate_send(current_space(), name, &kport);
 		if (kr == KERN_SUCCESS) {
-			thread = convert_port_to_thread_locked(kport, options);
+			thread = convert_port_to_thread_locked(kport, options, TRUE);
 			ip_unlock(kport);
 		}
 	}
@@ -2005,6 +2932,14 @@ port_name_to_thread(
 	return thread;
 }
 
+/*
+ *	Routine:	port_name_to_task
+ *	Purpose:
+ *		Convert from a port name to a task reference
+ *		A name of MACH_PORT_NULL is valid for the null task.
+ *	Conditions:
+ *		Nothing locked.
+ */
 task_t
 port_name_to_task(
 	mach_port_name_t name)
@@ -2016,13 +2951,84 @@ port_name_to_task(
 	if (MACH_PORT_VALID(name)) {
 		kr = ipc_port_translate_send(current_space(), name, &kport);
 		if (kr == KERN_SUCCESS) {
-			task = convert_port_to_task_locked(kport, NULL);
+			task = convert_port_to_task_locked(kport, NULL, TRUE);
 			ip_unlock(kport);
 		}
 	}
 	return task;
 }
 
+/*
+ *	Routine:	port_name_to_task_read
+ *	Purpose:
+ *		Convert from a port name to a task reference
+ *		A name of MACH_PORT_NULL is valid for the null task.
+ *	Conditions:
+ *		Nothing locked.
+ */
+task_read_t
+port_name_to_task_read(
+	mach_port_name_t name)
+{
+	ipc_port_t kport;
+	kern_return_t kr;
+	task_read_t tr = TASK_READ_NULL;
+
+	if (MACH_PORT_VALID(name)) {
+		kr = ipc_port_translate_send(current_space(), name, &kport);
+		if (kr == KERN_SUCCESS) {
+			tr = convert_port_to_task_read_locked(kport);
+			ip_unlock(kport);
+		}
+	}
+	return tr;
+}
+
+/*
+ *	Routine:	port_name_to_task_read_no_eval
+ *	Purpose:
+ *		Convert from a port name to a task reference
+ *		A name of MACH_PORT_NULL is valid for the null task.
+ *		It doesnt run the task_conversion_eval check if the port
+ *		is of type IKOT_TASK_CONTROL.
+ *	Conditions:
+ *		Nothing locked.
+ */
+task_read_t
+port_name_to_task_read_no_eval(
+	mach_port_name_t name)
+{
+	ipc_port_t kport;
+	kern_return_t kr;
+	task_read_t tr = TASK_READ_NULL;
+
+	if (MACH_PORT_VALID(name)) {
+		kr = ipc_port_translate_send(current_space(), name, &kport);
+		if (kr == KERN_SUCCESS) {
+			switch (ip_kotype(kport)) {
+			case IKOT_TASK_CONTROL:
+				tr = convert_port_to_task_locked(kport, NULL, FALSE);
+				break;
+			case IKOT_TASK_READ:
+				tr = convert_port_to_task_read_locked(kport);
+				break;
+			default:
+				break;
+			}
+			ip_unlock(kport);
+		}
+	}
+	return tr;
+}
+
+/*
+ *	Routine:	port_name_to_task_inspect
+ *	Purpose:
+ *		Convert from a port name to a task reference
+ *		A name of MACH_PORT_NULL is valid for the null task.
+ *	Conditions:
+ *		Nothing locked.
+ */
 task_inspect_t
 port_name_to_task_inspect(
 	mach_port_name_t name)
@@ -2039,6 +3045,32 @@ port_name_to_task_inspect(
 		}
 	}
 	return ti;
+}
+
+/*
+ *	Routine:	port_name_to_task_name
+ *	Purpose:
+ *		Convert from a port name to a task reference
+ *		A name of MACH_PORT_NULL is valid for the null task.
+ *	Conditions:
+ *		Nothing locked.
+ */
+task_name_t
+port_name_to_task_name(
+	mach_port_name_t name)
+{
+	ipc_port_t kport;
+	kern_return_t kr;
+	task_name_t tn = TASK_NAME_NULL;
+
+	if (MACH_PORT_VALID(name)) {
+		kr = ipc_port_translate_send(current_space(), name, &kport);
+		if (kr == KERN_SUCCESS) {
+			tn = convert_port_to_task_name_locked(kport);
+			ip_unlock(kport);
+		}
+	}
+	return tn;
 }
 
 /*
@@ -2068,52 +3100,83 @@ port_name_to_host(
 }
 
 /*
- *	Routine:	convert_task_to_port
+ *	Routine:	convert_task_to_port_with_flavor
  *	Purpose:
- *		Convert from a task to a port.
+ *		Convert from a task to a port of given flavor.
  *		Consumes a task ref; produces a naked send right
  *		which may be invalid.
  *	Conditions:
  *		Nothing locked.
  */
+static ipc_port_t
+convert_task_to_port_with_flavor(
+	task_t              task,
+	mach_task_flavor_t  flavor)
+{
+	ipc_port_t port = IP_NULL;
+	ipc_kobject_type_t kotype = IKOT_NONE;
+
+	itk_lock(task);
+
+	switch (flavor) {
+	case TASK_FLAVOR_CONTROL:
+	case TASK_FLAVOR_NAME:
+		port = ipc_port_make_send(task->itk_self[flavor]);
+		break;
+	/*
+	 * Claim a send right on the task read/inspect port, and request a no-senders
+	 * notification on that port (if none outstanding). A task reference is
+	 * deliberately not donated here because ipc_kobject_make_send_lazy_alloc_port
+	 * is used only for convenience and these ports don't control the lifecycle of
+	 * the task kobject. Instead, the task's itk_lock is used to synchronize the
+	 * handling of the no-senders notification with the task termination.
+	 */
+	case TASK_FLAVOR_READ:
+	case TASK_FLAVOR_INSPECT:
+		if (task->itk_self[TASK_FLAVOR_CONTROL] == IP_NULL) {
+			/* task is either disabled or terminated */
+			goto exit;
+		}
+		kotype = (flavor == TASK_FLAVOR_READ) ? IKOT_TASK_READ : IKOT_TASK_INSPECT;
+		(void)ipc_kobject_make_send_lazy_alloc_port((ipc_port_t *) &task->itk_self[flavor],
+		    (ipc_kobject_t)task, kotype, true, OS_PTRAUTH_DISCRIMINATOR("task.itk_self"));
+		port = task->itk_self[flavor];
+
+		break;
+	}
+
+exit:
+	itk_unlock(task);
+	task_deallocate(task);
+	return port;
+}
 
 ipc_port_t
 convert_task_to_port(
 	task_t          task)
 {
-	ipc_port_t port;
-
-	itk_lock(task);
-
-	if (task->itk_self != IP_NULL) {
-		port = ipc_port_make_send(task->itk_self);
-	} else {
-		port = IP_NULL;
-	}
-
-	itk_unlock(task);
-
-	task_deallocate(task);
-	return port;
+	return convert_task_to_port_with_flavor(task, TASK_FLAVOR_CONTROL);
 }
 
-/*
- *	Routine:	convert_task_inspect_to_port
- *	Purpose:
- *		Convert from a task inspect reference to a port.
- *		Consumes a task ref;
- *		As we never export task inspect ports, always
- *		creates a NULL port.
- *	Conditions:
- *		Nothing locked.
- */
+ipc_port_t
+convert_task_read_to_port(
+	task_read_t          task)
+{
+	return convert_task_to_port_with_flavor(task, TASK_FLAVOR_READ);
+}
+
 ipc_port_t
 convert_task_inspect_to_port(
 	task_inspect_t          task)
 {
-	task_deallocate(task);
+	return convert_task_to_port_with_flavor(task, TASK_FLAVOR_INSPECT);
+}
 
-	return IP_NULL;
+ipc_port_t
+convert_task_name_to_port(
+	task_name_t             task)
+{
+	return convert_task_to_port_with_flavor(task, TASK_FLAVOR_NAME);
 }
 
 /*
@@ -2155,66 +3218,6 @@ convert_task_suspension_token_to_port(
 	return port;
 }
 
-
-/*
- *	Routine:	convert_task_name_to_port
- *	Purpose:
- *		Convert from a task name ref to a port.
- *		Consumes a task name ref; produces a naked send right
- *		which may be invalid.
- *	Conditions:
- *		Nothing locked.
- */
-
-ipc_port_t
-convert_task_name_to_port(
-	task_name_t             task_name)
-{
-	ipc_port_t port;
-
-	itk_lock(task_name);
-	if (task_name->itk_nself != IP_NULL) {
-		port = ipc_port_make_send(task_name->itk_nself);
-	} else {
-		port = IP_NULL;
-	}
-	itk_unlock(task_name);
-
-	task_name_deallocate(task_name);
-	return port;
-}
-
-/*
- *	Routine:	convert_thread_to_port
- *	Purpose:
- *		Convert from a thread to a port.
- *		Consumes an thread ref; produces a naked send right
- *		which may be invalid.
- *	Conditions:
- *		Nothing locked.
- */
-
-ipc_port_t
-convert_thread_to_port(
-	thread_t                thread)
-{
-	ipc_port_t              port;
-
-	thread_mtx_lock(thread);
-
-	if (thread->ith_self != IP_NULL) {
-		port = ipc_port_make_send(thread->ith_self);
-	} else {
-		port = IP_NULL;
-	}
-
-	thread_mtx_unlock(thread);
-
-	thread_deallocate(thread);
-
-	return port;
-}
-
 /*
  *	Routine:	space_deallocate
  *	Purpose:
@@ -2229,6 +3232,23 @@ space_deallocate(
 {
 	if (space != IS_NULL) {
 		is_release(space);
+	}
+}
+
+/*
+ *	Routine:	space_read_deallocate
+ *	Purpose:
+ *		Deallocate a space read ref produced by convert_port_to_space_read.
+ *	Conditions:
+ *		Nothing locked.
+ */
+
+void
+space_read_deallocate(
+	ipc_space_read_t     space)
+{
+	if (space != IS_INSPECT_NULL) {
+		is_release((ipc_space_t)space);
 	}
 }
 
@@ -2248,6 +3268,7 @@ space_inspect_deallocate(
 		is_release((ipc_space_t)space);
 	}
 }
+
 
 /*
  *	Routine:	thread/task_set_exception_ports [kernel call]
@@ -2302,6 +3323,7 @@ thread_set_exception_ports(
 			return KERN_INVALID_ARGUMENT;
 		}
 	}
+
 
 	/*
 	 * Check the validity of the thread_state_flavor by calling the
@@ -2398,6 +3420,7 @@ task_set_exception_ports(
 		}
 	}
 
+
 	/*
 	 * Check the validity of the thread_state_flavor by calling the
 	 * VALID_THREAD_STATE_FLAVOR architecture dependent macro defined in
@@ -2413,7 +3436,7 @@ task_set_exception_ports(
 
 	itk_lock(task);
 
-	if (task->itk_self == IP_NULL) {
+	if (task->itk_self[TASK_FLAVOR_CONTROL] == IP_NULL) {
 		itk_unlock(task);
 
 		return KERN_FAILURE;
@@ -2523,6 +3546,7 @@ thread_swap_exception_ports(
 		}
 	}
 
+
 	if (new_flavor != 0 && !VALID_THREAD_STATE_FLAVOR(new_flavor)) {
 		return KERN_INVALID_ARGUMENT;
 	}
@@ -2535,7 +3559,9 @@ thread_swap_exception_ports(
 
 	if (!thread->active) {
 		thread_mtx_unlock(thread);
-
+#if CONFIG_MACF
+		mac_exc_free_label(new_label);
+#endif
 		return KERN_FAILURE;
 	}
 
@@ -2644,6 +3670,7 @@ task_swap_exception_ports(
 		}
 	}
 
+
 	if (new_flavor != 0 && !VALID_THREAD_STATE_FLAVOR(new_flavor)) {
 		return KERN_INVALID_ARGUMENT;
 	}
@@ -2654,9 +3681,11 @@ task_swap_exception_ports(
 
 	itk_lock(task);
 
-	if (task->itk_self == IP_NULL) {
+	if (task->itk_self[TASK_FLAVOR_CONTROL] == IP_NULL) {
 		itk_unlock(task);
-
+#if CONFIG_MACF
+		mac_exc_free_label(new_label);
+#endif
 		return KERN_FAILURE;
 	}
 
@@ -2738,6 +3767,15 @@ task_swap_exception_ports(
  *					Illegal mask bit set.
  *		KERN_FAILURE		The thread is dead.
  */
+kern_return_t
+thread_get_exception_ports(
+	thread_t                                        thread,
+	exception_mask_t                        exception_mask,
+	exception_mask_array_t          masks,
+	mach_msg_type_number_t          *CountCnt,
+	exception_port_array_t          ports,
+	exception_behavior_array_t      behaviors,
+	thread_state_flavor_array_t     flavors);
 
 kern_return_t
 thread_get_exception_ports(
@@ -2810,6 +3848,40 @@ done:
 }
 
 kern_return_t
+thread_get_exception_ports_from_user(
+	mach_port_t                     port,
+	exception_mask_t                exception_mask,
+	exception_mask_array_t          masks,
+	mach_msg_type_number_t         *CountCnt,
+	exception_port_array_t          ports,
+	exception_behavior_array_t      behaviors,
+	thread_state_flavor_array_t     flavors)
+{
+	kern_return_t kr;
+
+	thread_t thread = convert_port_to_thread_check_type(port, NULL, THREAD_FLAVOR_CONTROL, FALSE);
+
+	if (thread == THREAD_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	kr = thread_get_exception_ports(thread, exception_mask, masks, CountCnt, ports, behaviors, flavors);
+
+	thread_deallocate(thread);
+	return kr;
+}
+
+kern_return_t
+task_get_exception_ports(
+	task_t                                          task,
+	exception_mask_t                        exception_mask,
+	exception_mask_array_t          masks,
+	mach_msg_type_number_t          *CountCnt,
+	exception_port_array_t          ports,
+	exception_behavior_array_t      behaviors,
+	thread_state_flavor_array_t     flavors);
+
+kern_return_t
 task_get_exception_ports(
 	task_t                                          task,
 	exception_mask_t                        exception_mask,
@@ -2831,7 +3903,7 @@ task_get_exception_ports(
 
 	itk_lock(task);
 
-	if (task->itk_self == IP_NULL) {
+	if (task->itk_self[TASK_FLAVOR_CONTROL] == IP_NULL) {
 		itk_unlock(task);
 
 		return KERN_FAILURE;
@@ -2872,4 +3944,28 @@ task_get_exception_ports(
 	*CountCnt = count;
 
 	return KERN_SUCCESS;
+}
+
+kern_return_t
+task_get_exception_ports_from_user(
+	mach_port_t                     port,
+	exception_mask_t                exception_mask,
+	exception_mask_array_t          masks,
+	mach_msg_type_number_t         *CountCnt,
+	exception_port_array_t          ports,
+	exception_behavior_array_t      behaviors,
+	thread_state_flavor_array_t     flavors)
+{
+	kern_return_t kr;
+
+	task_t task = convert_port_to_task_check_type(port, NULL, TASK_FLAVOR_CONTROL, FALSE);
+
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	kr = task_get_exception_ports(task, exception_mask, masks, CountCnt, ports, behaviors, flavors);
+
+	task_deallocate(task);
+	return kr;
 }

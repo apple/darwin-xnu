@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2013-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -36,7 +36,6 @@
 #include <kern/ipc_tt.h>
 #include <kern/mach_param.h>
 #include <kern/misc_protos.h>
-#include <kern/kalloc.h>
 #include <kern/zalloc.h>
 #include <kern/queue.h>
 #include <kern/task.h>
@@ -70,14 +69,8 @@ static boolean_t ipc_importance_delayed_drop_call_requested = FALSE;
 /*
  * Importance Voucher Attribute Manager
  */
+static LCK_SPIN_DECLARE_ATTR(ipc_importance_lock_data, &ipc_lck_grp, &ipc_lck_attr);
 
-static lck_spin_t ipc_importance_lock_data;     /* single lock for now */
-
-
-#define ipc_importance_lock_init() \
-	lck_spin_init(&ipc_importance_lock_data, &ipc_lck_grp, &ipc_lck_attr)
-#define ipc_importance_lock_destroy() \
-	lck_spin_destroy(&ipc_importance_lock_data, &ipc_lck_grp)
 #define ipc_importance_lock() \
 	lck_spin_lock_grp(&ipc_importance_lock_data, &ipc_lck_grp)
 #define ipc_importance_lock_try() \
@@ -151,13 +144,14 @@ ipc_importance_counter_init(ipc_importance_elem_t elem)
 #endif
 
 #if DEVELOPMENT || DEBUG
-static queue_head_t global_iit_alloc_queue;
+static queue_head_t global_iit_alloc_queue =
+    QUEUE_HEAD_INITIALIZER(global_iit_alloc_queue);
 #endif
 
-/* TODO: remove this varibale when interactive daemon audit is complete */
-boolean_t ipc_importance_interactive_receiver = FALSE;
-
-static zone_t ipc_importance_task_zone;
+static ZONE_DECLARE(ipc_importance_task_zone, "ipc task importance",
+    sizeof(struct ipc_importance_task), ZC_NOENCRYPT);
+static ZONE_DECLARE(ipc_importance_inherit_zone, "ipc importance inherit",
+    sizeof(struct ipc_importance_inherit), ZC_NOENCRYPT);
 static zone_t ipc_importance_inherit_zone;
 
 static ipc_voucher_attr_control_t ipc_importance_control;
@@ -1945,7 +1939,7 @@ retry:
 	first_pass = FALSE;
 
 	/* Need to make one - may race with others (be prepared to drop) */
-	task_elem = (ipc_importance_task_t)zalloc(ipc_importance_task_zone);
+	task_elem = zalloc_flags(ipc_importance_task_zone, Z_WAITOK | Z_ZERO);
 	if (IIT_NULL == task_elem) {
 		goto retry;
 	}
@@ -1953,21 +1947,6 @@ retry:
 	task_elem->iit_bits = IIE_TYPE_TASK | 2; /* one for task, one for return/made */
 	task_elem->iit_made = (made) ? 1 : 0;
 	task_elem->iit_task = task; /* take actual ref when we're sure */
-	task_elem->iit_updateq = NULL;
-	task_elem->iit_receiver = 0;
-	task_elem->iit_denap = 0;
-	task_elem->iit_donor = 0;
-	task_elem->iit_live_donor = 0;
-	task_elem->iit_updatepolicy = 0;
-	task_elem->iit_reserved = 0;
-	task_elem->iit_filelocks = 0;
-	task_elem->iit_updatetime = 0;
-	task_elem->iit_transitions = 0;
-	task_elem->iit_assertcnt = 0;
-	task_elem->iit_externcnt = 0;
-	task_elem->iit_externdrop = 0;
-	task_elem->iit_legacy_externcnt = 0;
-	task_elem->iit_legacy_externdrop = 0;
 #if IIE_REF_DEBUG
 	ipc_importance_counter_init(&task_elem->iit_elem);
 #endif
@@ -3831,33 +3810,7 @@ ipc_importance_manager_release(
 void
 ipc_importance_init(void)
 {
-	natural_t ipc_importance_max = (task_max + thread_max) * 2;
-	char temp_buf[26];
 	kern_return_t kr;
-
-	if (PE_parse_boot_argn("imp_interactive_receiver", temp_buf, sizeof(temp_buf))) {
-		ipc_importance_interactive_receiver = TRUE;
-	}
-
-	ipc_importance_task_zone = zinit(sizeof(struct ipc_importance_task),
-	    ipc_importance_max * sizeof(struct ipc_importance_task),
-	    sizeof(struct ipc_importance_task),
-	    "ipc task importance");
-	zone_change(ipc_importance_task_zone, Z_NOENCRYPT, TRUE);
-
-	ipc_importance_inherit_zone = zinit(sizeof(struct ipc_importance_inherit),
-	    ipc_importance_max * sizeof(struct ipc_importance_inherit),
-	    sizeof(struct ipc_importance_inherit),
-	    "ipc importance inherit");
-	zone_change(ipc_importance_inherit_zone, Z_NOENCRYPT, TRUE);
-
-
-#if DEVELOPMENT || DEBUG
-	queue_init(&global_iit_alloc_queue);
-#endif
-
-	/* initialize global locking */
-	ipc_importance_lock_init();
 
 	kr = ipc_register_well_known_mach_voucher_attr_manager(&ipc_importance_manager,
 	    (mach_voucher_attr_value_handle_t)0,

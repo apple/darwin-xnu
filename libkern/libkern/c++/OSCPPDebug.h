@@ -37,21 +37,15 @@
 
 __BEGIN_DECLS
 
-// xx-review: Do we want to document these?
+extern size_t debug_malloc_size;
+extern size_t debug_iomalloc_size;
+extern size_t debug_container_malloc_size;
+extern size_t debug_ivars_size;
 
-// xx-review: exported in IOKit.kext
-extern int debug_malloc_size;
-extern int debug_iomalloc_size;
-extern int debug_container_malloc_size;
-
-// xx-review: exported in Libkern.kext
-extern int debug_ivars_size;
-
-// xx-review: exported in IOKit.kext
 void OSPrintMemory(void);
 
 __END_DECLS
 
-#endif
+#endif /* OSCPP_DEBUG */
 
 #endif    /* _OSCPPDEBUG_H */

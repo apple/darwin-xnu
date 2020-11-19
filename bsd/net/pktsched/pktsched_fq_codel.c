@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2016-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -35,26 +35,15 @@
 #include <net/classq/classq_fq_codel.h>
 #include <net/pktsched/pktsched_fq_codel.h>
 
-static size_t fq_if_size;
-static struct zone *fq_if_zone;
+static ZONE_DECLARE(fq_if_zone, "pktsched_fq_if", sizeof(fq_if_t), ZC_ZFREE_CLEARMEM);
 
 static fq_if_t *fq_if_alloc(struct ifnet *, classq_pkt_type_t);
 static void fq_if_destroy(fq_if_t *fqs);
-static void fq_if_classq_init(fq_if_t *fqs, u_int32_t priority,
-    u_int32_t quantum, u_int32_t drr_max, u_int32_t svc_class);
-static int fq_if_enqueue_classq(struct ifclassq *, classq_pkt_t *, boolean_t *);
-static void fq_if_dequeue_classq(struct ifclassq *, classq_pkt_t *);
-static int fq_if_dequeue_classq_multi(struct ifclassq *, u_int32_t,
-    u_int32_t, classq_pkt_t *, classq_pkt_t *, u_int32_t *, u_int32_t *);
-static void fq_if_dequeue_sc_classq(struct ifclassq *, mbuf_svc_class_t,
-    classq_pkt_t *);
-static int fq_if_dequeue_sc_classq_multi(struct ifclassq *,
-    mbuf_svc_class_t, u_int32_t, u_int32_t, classq_pkt_t *,
-    classq_pkt_t *, u_int32_t *, u_int32_t *);
-static void fq_if_dequeue(fq_if_t *, fq_if_classq_t *, u_int32_t,
-    u_int32_t, classq_pkt_t *, classq_pkt_t *, u_int32_t *,
-    u_int32_t *, boolean_t drvmgmt);
-static int fq_if_request_classq(struct ifclassq *ifq, cqrq_t op, void *arg);
+static void fq_if_classq_init(fq_if_t *fqs, uint32_t priority,
+    uint16_t quantum, uint32_t drr_max, uint32_t svc_class);
+static void fq_if_dequeue(fq_if_t *, fq_if_classq_t *, uint32_t,
+    int64_t, classq_pkt_t *, classq_pkt_t *, uint32_t *,
+    uint32_t *, boolean_t drvmgmt);
 void fq_if_stat_sc(fq_if_t *fqs, cqrq_stat_sc_t *stat);
 static void fq_if_purge(fq_if_t *);
 static void fq_if_purge_classq(fq_if_t *, fq_if_classq_t *);
@@ -63,9 +52,6 @@ static void fq_if_empty_new_flow(fq_t *fq, fq_if_classq_t *fq_cl,
     bool add_to_old);
 static void fq_if_empty_old_flow(fq_if_t *fqs, fq_if_classq_t *fq_cl,
     fq_t *fq, bool remove_hash);
-
-#define FQ_IF_ZONE_MAX  32      /* Maximum elements in zone */
-#define FQ_IF_ZONE_NAME "pktsched_fq_if" /* zone for fq_if class */
 
 #define FQ_IF_FLOW_HASH_ID(_flowid_) \
 	(((_flowid_) >> FQ_IF_HASH_TAG_SHIFT) & FQ_IF_HASH_TAG_MASK)
@@ -76,7 +62,7 @@ static void fq_if_empty_old_flow(fq_if_t *fqs, fq_if_classq_t *fq_cl,
 
 typedef void (* fq_if_append_pkt_t)(classq_pkt_t *, classq_pkt_t *);
 typedef boolean_t (* fq_getq_flow_t)(fq_if_t *, fq_if_classq_t *, fq_t *,
-    u_int32_t, u_int32_t, classq_pkt_t *, classq_pkt_t *, u_int32_t *,
+    int64_t, u_int32_t, classq_pkt_t *, classq_pkt_t *, u_int32_t *,
     u_int32_t *, boolean_t *, u_int32_t);
 
 static void
@@ -89,7 +75,7 @@ fq_if_append_mbuf(classq_pkt_t *pkt, classq_pkt_t *next_pkt)
 
 static boolean_t
 fq_getq_flow_mbuf(fq_if_t *fqs, fq_if_classq_t *fq_cl, fq_t *fq,
-    u_int32_t byte_limit, u_int32_t pkt_limit, classq_pkt_t *top,
+    int64_t byte_limit, u_int32_t pkt_limit, classq_pkt_t *top,
     classq_pkt_t *last, u_int32_t *byte_cnt, u_int32_t *pkt_cnt,
     boolean_t *qempty, u_int32_t pflags)
 {
@@ -135,33 +121,12 @@ fq_getq_flow_mbuf(fq_if_t *fqs, fq_if_classq_t *fq_cl, fq_t *fq,
 	return limit_reached;
 }
 
-void
-fq_codel_scheduler_init(void)
-{
-	/* Initialize the zone for flow queue structures */
-	fq_codel_init();
-
-	fq_if_size = sizeof(fq_if_t);
-	fq_if_zone = zinit(fq_if_size, (FQ_IF_ZONE_MAX * fq_if_size), 0,
-	    FQ_IF_ZONE_NAME);
-	if (fq_if_zone == NULL) {
-		panic("%s: failed allocating from %s", __func__,
-		    (FQ_IF_ZONE_NAME));
-	}
-	zone_change(fq_if_zone, Z_EXPAND, TRUE);
-	zone_change(fq_if_zone, Z_CALLERACCT, TRUE);
-}
-
 fq_if_t *
 fq_if_alloc(struct ifnet *ifp, classq_pkt_type_t ptype)
 {
 	fq_if_t *fqs;
-	fqs = zalloc(fq_if_zone);
-	if (fqs == NULL) {
-		return NULL;
-	}
 
-	bzero(fqs, fq_if_size);
+	fqs = zalloc_flags(fq_if_zone, Z_WAITOK | Z_ZERO);
 	fqs->fqs_ifq = &ifp->if_snd;
 	fqs->fqs_ptype = ptype;
 
@@ -185,10 +150,10 @@ fq_if_destroy(fq_if_t *fqs)
 	zfree(fq_if_zone, fqs);
 }
 
-static inline u_int32_t
+static inline uint8_t
 fq_if_service_to_priority(fq_if_t *fqs, mbuf_svc_class_t svc)
 {
-	u_int32_t pri;
+	uint8_t pri;
 
 	if (fqs->fqs_flags & FQS_DRIVER_MANAGED) {
 		switch (svc) {
@@ -260,9 +225,9 @@ fq_if_service_to_priority(fq_if_t *fqs, mbuf_svc_class_t svc)
 	return pri;
 }
 
-void
-fq_if_classq_init(fq_if_t *fqs, u_int32_t pri, u_int32_t quantum,
-    u_int32_t drr_max, u_int32_t svc_class)
+static void
+fq_if_classq_init(fq_if_t *fqs, uint32_t pri, uint16_t quantum,
+    uint32_t drr_max, uint32_t svc_class)
 {
 	fq_if_classq_t *fq_cl;
 	VERIFY(pri < FQ_IF_MAX_CLASSES);
@@ -278,24 +243,17 @@ fq_if_classq_init(fq_if_t *fqs, u_int32_t pri, u_int32_t quantum,
 }
 
 int
-fq_if_enqueue_classq(struct ifclassq *ifq, classq_pkt_t *p, boolean_t *pdrop)
+fq_if_enqueue_classq(struct ifclassq *ifq, classq_pkt_t *head,
+    classq_pkt_t *tail, uint32_t cnt, uint32_t bytes, boolean_t *pdrop)
 {
-	u_int32_t pri;
+	uint8_t pri;
 	fq_if_t *fqs;
 	fq_if_classq_t *fq_cl;
-	int ret, len;
+	int ret;
 	mbuf_svc_class_t svc;
 	pktsched_pkt_t pkt;
 
-	IFCQ_LOCK_ASSERT_HELD(ifq);
-	if ((p->cp_ptype == QP_MBUF) && !(p->cp_mbuf->m_flags & M_PKTHDR)) {
-		IFCQ_CONVERT_LOCK(ifq);
-		m_freem(p->cp_mbuf);
-		*p = CLASSQ_PKT_INITIALIZER(*p);
-		*pdrop = TRUE;
-		return ENOBUFS;
-	}
-	pktsched_pkt_encap(&pkt, p);
+	pktsched_pkt_encap_chain(&pkt, head, tail, cnt, bytes);
 
 	fqs = (fq_if_t *)ifq->ifcq_disc;
 	svc = pktsched_get_pkt_svc(&pkt);
@@ -303,16 +261,16 @@ fq_if_enqueue_classq(struct ifclassq *ifq, classq_pkt_t *p, boolean_t *pdrop)
 	VERIFY(pri < FQ_IF_MAX_CLASSES);
 	fq_cl = &fqs->fqs_classq[pri];
 
-	if (svc == MBUF_SC_BK_SYS && fqs->fqs_throttle == 1) {
+	if (__improbable(svc == MBUF_SC_BK_SYS && fqs->fqs_throttle == 1)) {
 		/* BK_SYS is currently throttled */
-		fq_cl->fcl_stat.fcl_throttle_drops++;
-		IFCQ_CONVERT_LOCK(ifq);
+		atomic_add_32(&fq_cl->fcl_stat.fcl_throttle_drops, 1);
 		pktsched_free_pkt(&pkt);
 		*pdrop = TRUE;
-		return EQSUSPENDED;
+		ret = EQSUSPENDED;
+		goto done;
 	}
 
-	len = pktsched_get_pkt_len(&pkt);
+	IFCQ_LOCK_SPIN(ifq);
 	ret = fq_addq(fqs, &pkt, fq_cl);
 	if (!(fqs->fqs_flags & FQS_DRIVER_MANAGED) &&
 	    !FQ_IF_CLASSQ_IDLE(fq_cl)) {
@@ -326,54 +284,69 @@ fq_if_enqueue_classq(struct ifclassq *ifq, classq_pkt_t *p, boolean_t *pdrop)
 		}
 	}
 
-	if (ret != 0) {
+	if (__improbable(ret != 0)) {
 		if (ret == CLASSQEQ_SUCCESS_FC) {
 			/* packet enqueued, return advisory feedback */
 			ret = EQFULL;
 			*pdrop = FALSE;
+		} else if (ret == CLASSQEQ_COMPRESSED) {
+			ret = 0;
+			*pdrop = FALSE;
 		} else {
+			IFCQ_UNLOCK(ifq);
 			*pdrop = TRUE;
-			VERIFY(ret == CLASSQEQ_DROP ||
-			    ret == CLASSQEQ_DROP_FC ||
-			    ret == CLASSQEQ_DROP_SP);
 			pktsched_free_pkt(&pkt);
 			switch (ret) {
 			case CLASSQEQ_DROP:
-				return ENOBUFS;
+				ret = ENOBUFS;
+				goto done;
 			case CLASSQEQ_DROP_FC:
-				return EQFULL;
+				ret = EQFULL;
+				goto done;
 			case CLASSQEQ_DROP_SP:
-				return EQSUSPENDED;
+				ret = EQSUSPENDED;
+				goto done;
+			default:
+				VERIFY(0);
+				/* NOTREACHED */
+				__builtin_unreachable();
 			}
+			/* NOTREACHED */
+			__builtin_unreachable();
 		}
 	} else {
 		*pdrop = FALSE;
 	}
-	IFCQ_INC_LEN(ifq);
-	IFCQ_INC_BYTES(ifq, len);
+	IFCQ_ADD_LEN(ifq, cnt);
+	IFCQ_INC_BYTES(ifq, bytes);
+	IFCQ_UNLOCK(ifq);
+done:
 	return ret;
 }
 
-static void
+void
 fq_if_dequeue_classq(struct ifclassq *ifq, classq_pkt_t *pkt)
 {
 	(void) fq_if_dequeue_classq_multi(ifq, 1,
 	    CLASSQ_DEQUEUE_MAX_BYTE_LIMIT, pkt, NULL, NULL, NULL);
 }
 
-static void
+void
 fq_if_dequeue_sc_classq(struct ifclassq *ifq, mbuf_svc_class_t svc,
     classq_pkt_t *pkt)
 {
 	fq_if_t *fqs = (fq_if_t *)ifq->ifcq_disc;
+	uint32_t total_pktcnt = 0, total_bytecnt = 0;
 	fq_if_classq_t *fq_cl;
-	u_int32_t pri;
+	uint8_t pri;
 
 	pri = fq_if_service_to_priority(fqs, svc);
 	fq_cl = &fqs->fqs_classq[pri];
 
 	fq_if_dequeue(fqs, fq_cl, 1, CLASSQ_DEQUEUE_MAX_BYTE_LIMIT,
-	    pkt, NULL, NULL, NULL, TRUE);
+	    pkt, NULL, &total_pktcnt, &total_bytecnt, TRUE);
+
+	IFCQ_XMIT_ADD(ifq, total_pktcnt, total_bytecnt);
 }
 
 int
@@ -514,7 +487,7 @@ fq_if_dequeue_sc_classq_multi(struct ifclassq *ifq, mbuf_svc_class_t svc,
     classq_pkt_t *last_packet, u_int32_t *retpktcnt, u_int32_t *retbytecnt)
 {
 	fq_if_t *fqs = (fq_if_t *)ifq->ifcq_disc;
-	u_int32_t pri;
+	uint8_t pri;
 	u_int32_t total_pktcnt = 0, total_bytecnt = 0;
 	fq_if_classq_t *fq_cl;
 	classq_pkt_t first = CLASSQ_PKT_INITIALIZER(fisrt);
@@ -576,6 +549,8 @@ fq_if_dequeue_sc_classq_multi(struct ifclassq *ifq, mbuf_svc_class_t svc,
 	if (retbytecnt != NULL) {
 		*retbytecnt = total_bytecnt;
 	}
+
+	IFCQ_XMIT_ADD(ifq, total_pktcnt, total_bytecnt);
 
 	return 0;
 }
@@ -724,7 +699,7 @@ static int
 fq_if_throttle(fq_if_t *fqs, cqrq_throttle_t *tr)
 {
 	struct ifclassq *ifq = fqs->fqs_ifq;
-	int index;
+	uint8_t index;
 #if !MACH_ASSERT
 #pragma unused(ifq)
 #endif
@@ -757,7 +732,7 @@ fq_if_throttle(fq_if_t *fqs, cqrq_throttle_t *tr)
 void
 fq_if_stat_sc(fq_if_t *fqs, cqrq_stat_sc_t *stat)
 {
-	u_int32_t pri;
+	uint8_t pri;
 	fq_if_classq_t *fq_cl;
 
 	if (stat == NULL) {
@@ -766,8 +741,8 @@ fq_if_stat_sc(fq_if_t *fqs, cqrq_stat_sc_t *stat)
 
 	pri = fq_if_service_to_priority(fqs, stat->sc);
 	fq_cl = &fqs->fqs_classq[pri];
-	stat->packets = fq_cl->fcl_stat.fcl_pkt_cnt;
-	stat->bytes = fq_cl->fcl_stat.fcl_byte_cnt;
+	stat->packets = (uint32_t)fq_cl->fcl_stat.fcl_pkt_cnt;
+	stat->bytes = (uint32_t)fq_cl->fcl_stat.fcl_byte_cnt;
 }
 
 int
@@ -857,10 +832,7 @@ fq_if_setup_ifclassq(struct ifclassq *ifq, u_int32_t flags,
 		    8, MBUF_SC_CTL);
 	}
 
-	err = ifclassq_attach(ifq, PKTSCHEDT_FQ_CODEL, fqs,
-	    fq_if_enqueue_classq, fq_if_dequeue_classq,
-	    fq_if_dequeue_sc_classq, fq_if_dequeue_classq_multi,
-	    fq_if_dequeue_sc_classq_multi, fq_if_request_classq);
+	err = ifclassq_attach(ifq, PKTSCHEDT_FQ_CODEL, fqs);
 
 	if (err != 0) {
 		printf("%s: error from ifclassq_attach, "
@@ -1096,9 +1068,9 @@ fq_if_flow_feedback(fq_if_t *fqs, fq_t *fq, fq_if_classq_t *fq_cl)
 }
 
 void
-fq_if_dequeue(fq_if_t *fqs, fq_if_classq_t *fq_cl, u_int32_t pktlimit,
-    u_int32_t bytelimit, classq_pkt_t *top, classq_pkt_t *tail,
-    u_int32_t *retpktcnt, u_int32_t *retbytecnt, boolean_t drvmgmt)
+fq_if_dequeue(fq_if_t *fqs, fq_if_classq_t *fq_cl, uint32_t pktlimit,
+    int64_t bytelimit, classq_pkt_t *top, classq_pkt_t *tail,
+    uint32_t *retpktcnt, uint32_t *retbytecnt, boolean_t drvmgmt)
 {
 	fq_t *fq = NULL, *tfq = NULL;
 	flowq_stailq_t temp_stailq;
@@ -1123,7 +1095,7 @@ fq_if_dequeue(fq_if_t *fqs, fq_if_classq_t *fq_cl, u_int32_t pktlimit,
 	 * maximum byte limit should not be greater than the budget for
 	 * this class
 	 */
-	if ((int32_t)bytelimit > fq_cl->fcl_budget && !drvmgmt) {
+	if (bytelimit > fq_cl->fcl_budget && !drvmgmt) {
 		bytelimit = fq_cl->fcl_budget;
 	}
 
@@ -1194,7 +1166,7 @@ done:
 	}
 }
 
-int
+void
 fq_if_teardown_ifclassq(struct ifclassq *ifq)
 {
 	fq_if_t *fqs = (fq_if_t *)ifq->ifcq_disc;
@@ -1204,7 +1176,7 @@ fq_if_teardown_ifclassq(struct ifclassq *ifq)
 
 	fq_if_destroy(fqs);
 	ifq->ifcq_disc = NULL;
-	return ifclassq_detach(ifq);
+	ifclassq_detach(ifq);
 }
 
 static void
@@ -1212,7 +1184,7 @@ fq_export_flowstats(fq_if_t *fqs, fq_t *fq,
     struct fq_codel_flowstats *flowstat)
 {
 	bzero(flowstat, sizeof(*flowstat));
-	flowstat->fqst_min_qdelay = fq->fq_min_qdelay;
+	flowstat->fqst_min_qdelay = (uint32_t)fq->fq_min_qdelay;
 	flowstat->fqst_bytes = fq->fq_bytes;
 	flowstat->fqst_flowhash = fq->fq_flowhash;
 	if (fq->fq_flags & FQF_NEW_FLOW) {
@@ -1277,6 +1249,8 @@ fq_if_getqstats_ifclassq(struct ifclassq *ifq, u_int32_t qid,
 	fcls->fcls_throttle_off = fq_cl->fcl_stat.fcl_throttle_off;
 	fcls->fcls_throttle_drops = fq_cl->fcl_stat.fcl_throttle_drops;
 	fcls->fcls_dup_rexmts = fq_cl->fcl_stat.fcl_dup_rexmts;
+	fcls->fcls_pkts_compressible = fq_cl->fcl_stat.fcl_pkts_compressible;
+	fcls->fcls_pkts_compressed = fq_cl->fcl_stat.fcl_pkts_compressed;
 
 	/* Gather per flow stats */
 	flowstat_cnt = min((fcls->fcls_newflows_cnt +

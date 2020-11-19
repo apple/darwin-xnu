@@ -360,14 +360,7 @@ static __inline__ void
 remque(
 	queue_entry_t elt)
 {
-	queue_entry_t   next_elt, prev_elt;
-
-	__QUEUE_ELT_VALIDATE(elt);
-	next_elt = elt->next;
-	prev_elt = elt->prev; /* next_elt may equal prev_elt (and the queue head) if elt was the only element */
-	next_elt->prev = prev_elt;
-	prev_elt->next = next_elt;
-	__DEQUEUE_ELT_CLEANUP(elt);
+	remqueue(elt);
 }
 
 /*
@@ -572,7 +565,33 @@ re_queue_tail(queue_t que, queue_entry_t elt)
 	_tmp_element; \
 })
 
+/* Peek at the next element, or return NULL if the next element is head (indicating queue_end) */
+#define qe_queue_next(head, element, type, field) ({ \
+	queue_entry_t _tmp_entry = queue_next(&(element)->field); \
+	type *_tmp_element = (type*) NULL; \
+	if (_tmp_entry != (queue_entry_t) head) \
+	        _tmp_element = qe_element(_tmp_entry, type, field); \
+	_tmp_element; \
+})
+
+/* Peek at the prev element, or return NULL if the prev element is head (indicating queue_end) */
+#define qe_queue_prev(head, element, type, field) ({ \
+	queue_entry_t _tmp_entry = queue_prev(&(element)->field); \
+	type *_tmp_element = (type*) NULL; \
+	if (_tmp_entry != (queue_entry_t) head) \
+	        _tmp_element = qe_element(_tmp_entry, type, field); \
+	_tmp_element; \
+})
+
 #endif /* XNU_KERNEL_PRIVATE */
+
+/*
+ *	Macro:		QUEUE_HEAD_INITIALIZER()
+ *	Function:
+ *		Static queue head initializer
+ */
+#define QUEUE_HEAD_INITIALIZER(name) \
+	{ &name, &name }
 
 /*
  *	Macro:		queue_init

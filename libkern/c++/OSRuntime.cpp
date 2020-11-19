@@ -36,6 +36,12 @@
 #include <IOKit/IOKitDebug.h>
 
 #include <sys/cdefs.h>
+#if defined(HAS_APPLE_PAC)
+#include <ptrauth.h>
+#define PTRAUTH_STRIP_STRUCTOR(x)       ((uintptr_t) ptrauth_strip(ptrauth_nop_cast(void *, (x)), ptrauth_key_function_pointer))
+#else  /* defined(HAS_APPLE_PAC) */
+#define PTRAUTH_STRIP_STRUCTOR(x)       ((uintptr_t) (x))
+#endif /* !defined(HAS_APPLE_PAC) */
 
 __BEGIN_DECLS
 
@@ -70,7 +76,7 @@ OSKextLogSpec kOSRuntimeLogSpec =
 *********************************************************************/
 static bool gKernelCPPInitialized = false;
 
-#define OSRuntimeLog(kext, flags, format, args...)            \
+#define OSRuntimeLog(kext, flags, format, args ...)            \
     do {                                                      \
 	if (gKernelCPPInitialized) {                          \
 	    OSKextLog((kext), (flags), (format), ## args);  \
@@ -78,100 +84,6 @@ static bool gKernelCPPInitialized = false;
 	    printf((format), ## args);                        \
 	}                                                     \
     } while (0)
-
-#if PRAGMA_MARK
-#pragma mark kern_os Allocator Package
-#endif /* PRAGMA_MARK */
-/*********************************************************************
-* kern_os Allocator Package
-*********************************************************************/
-
-/*********************************************************************
-*********************************************************************/
-#if OSALLOCDEBUG
-extern int debug_iomalloc_size;
-#endif
-
-/*********************************************************************
-*********************************************************************/
-void *
-kern_os_malloc(size_t size)
-{
-	void *mem;
-	if (size == 0) {
-		return NULL;
-	}
-
-	mem = kallocp_tag_bt((vm_size_t *)&size, VM_KERN_MEMORY_LIBKERN);
-	if (!mem) {
-		return NULL;
-	}
-
-#if OSALLOCDEBUG
-	OSAddAtomic(size, &debug_iomalloc_size);
-#endif
-
-	bzero(mem, size);
-
-	return mem;
-}
-
-/*********************************************************************
-*********************************************************************/
-void
-kern_os_free(void * addr)
-{
-	size_t size;
-	size = kalloc_size(addr);
-#if OSALLOCDEBUG
-	OSAddAtomic(-size, &debug_iomalloc_size);
-#endif
-
-	kfree_addr(addr);
-}
-
-/*********************************************************************
-*********************************************************************/
-void *
-kern_os_realloc(
-	void   * addr,
-	size_t   nsize)
-{
-	void            *nmem;
-	size_t          osize;
-
-	if (!addr) {
-		return kern_os_malloc(nsize);
-	}
-
-	osize = kalloc_size(addr);
-	if (nsize == osize) {
-		return addr;
-	}
-
-	if (nsize == 0) {
-		kfree_addr(addr);
-		return NULL;
-	}
-
-	nmem = kallocp_tag_bt((vm_size_t *)&nsize, VM_KERN_MEMORY_LIBKERN);
-	if (!nmem) {
-		kfree_addr(addr);
-		return NULL;
-	}
-
-#if OSALLOCDEBUG
-	OSAddAtomic((nsize - osize), &debug_iomalloc_size);
-#endif
-
-	if (nsize > osize) {
-		(void)memset((char *)nmem + osize, 0, nsize - osize);
-	}
-	(void)memcpy(nmem, addr, (nsize > osize) ? osize : nsize);
-	kfree_addr(addr);
-
-	return nmem;
-}
 
 #if PRAGMA_MARK
 #pragma mark Libkern Init
@@ -240,10 +152,6 @@ __END_DECLS
 * kern_os C++ Runtime Load/Unload
 *********************************************************************/
 
-#if defined(HAS_APPLE_PAC)
-#include <ptrauth.h>
-#endif /* defined(HAS_APPLE_PAC) */
-
 typedef void (*structor_t)(void);
 
 static bool
@@ -265,6 +173,9 @@ OSRuntimeCallStructorsInSection(
 		if (strncmp(section->sectname, sectionName, sizeof(section->sectname) - 1)) {
 			continue;
 		}
+		if (section->size == 0) {
+			continue;
+		}
 
 		structor_t * structors = (structor_t *)section->addr;
 		if (!structors) {
@@ -272,26 +183,28 @@ OSRuntimeCallStructorsInSection(
 		}
 
 		structor_t structor;
-		unsigned int num_structors = section->size / sizeof(structor_t);
+		uintptr_t value;
+		unsigned long num_structors = section->size / sizeof(structor_t);
 		unsigned int hit_null_structor = 0;
-		unsigned int firstIndex = 0;
+		unsigned long firstIndex = 0;
 
 		if (textStart) {
 			// bsearch for any in range
-			unsigned int baseIdx;
-			unsigned int lim;
-			uintptr_t value;
+			unsigned long baseIdx;
+			unsigned long lim;
 			firstIndex = num_structors;
 			for (lim = num_structors, baseIdx = 0; lim; lim >>= 1) {
-				value = (uintptr_t) structors[baseIdx + (lim >> 1)];
-				if (!value) {
+				structor = structors[baseIdx + (lim >> 1)];
+				if (!structor) {
 					panic("%s: null structor", kmodInfo->name);
 				}
+				value = PTRAUTH_STRIP_STRUCTOR(structor);
 				if ((value >= textStart) && (value < textEnd)) {
 					firstIndex = (baseIdx + (lim >> 1));
 					// scan back for the first in range
 					for (; firstIndex; firstIndex--) {
-						value = (uintptr_t) structors[firstIndex - 1];
+						structor = structors[firstIndex - 1];
+						value = PTRAUTH_STRIP_STRUCTOR(structor);
 						if ((value < textStart) || (value >= textEnd)) {
 							break;
 						}
@@ -312,15 +225,11 @@ OSRuntimeCallStructorsInSection(
 		    && (!metaHandle || OSMetaClass::checkModLoad(metaHandle));
 		    firstIndex++) {
 			if ((structor = structors[firstIndex])) {
-				if ((textStart && ((uintptr_t) structor < textStart))
-				    || (textEnd && ((uintptr_t) structor >= textEnd))) {
+				value = PTRAUTH_STRIP_STRUCTOR(structor);
+				if ((textStart && (value < textStart))
+				    || (textEnd && (value >= textEnd))) {
 					break;
 				}
-
-#if !defined(XXX) && defined(HAS_APPLE_PAC)
-				structor = __builtin_ptrauth_strip(structor, ptrauth_key_function_pointer);
-				structor = __builtin_ptrauth_sign_unauthenticated(structor, ptrauth_key_function_pointer, 0);
-#endif
 				(*structor)();
 			} else if (!hit_null_structor) {
 				hit_null_structor = 1;
@@ -418,6 +327,91 @@ OSRuntimeFinalizeCPP(
 	result = KMOD_RETURN_SUCCESS;
 finish:
 	return result;
+}
+
+#if defined(HAS_APPLE_PAC)
+static inline void
+OSRuntimeSignStructorsInSegment(kernel_segment_command_t *segment)
+{
+	kernel_section_t         * section;
+	structor_t               * structors;
+	volatile structor_t                 structor;
+	size_t                     idx, num_structors;
+
+	for (section = firstsect(segment);
+	    section != NULL;
+	    section = nextsect(segment, section)) {
+		if ((S_MOD_INIT_FUNC_POINTERS != (SECTION_TYPE & section->flags))
+		    && (S_MOD_TERM_FUNC_POINTERS != (SECTION_TYPE & section->flags))) {
+			continue;
+		}
+		structors = (structor_t *)section->addr;
+		if (!structors) {
+			continue;
+		}
+		num_structors = section->size / sizeof(structor_t);
+		for (idx = 0; idx < num_structors; idx++) {
+			structor = structors[idx];
+			if (NULL == structor) {
+				continue;
+			}
+			structor = ptrauth_strip(structor, ptrauth_key_function_pointer);
+			structor = ptrauth_sign_unauthenticated(structor, ptrauth_key_function_pointer, ptrauth_function_pointer_type_discriminator(void (*)(void)));
+			structors[idx] = structor;
+		}
+	} /* for (section...) */
+}
+#endif
+
+/*********************************************************************
+*********************************************************************/
+void
+OSRuntimeSignStructors(
+	kernel_mach_header_t * header __unused)
+{
+#if defined(HAS_APPLE_PAC)
+
+	kernel_segment_command_t * segment;
+
+	for (segment = firstsegfromheader(header);
+	    segment != NULL;
+	    segment = nextsegfromheader(header, segment)) {
+		OSRuntimeSignStructorsInSegment(segment);
+	} /* for (segment...) */
+#endif /* !defined(XXX) && defined(HAS_APPLE_PAC) */
+}
+
+/*********************************************************************
+*********************************************************************/
+void
+OSRuntimeSignStructorsInFileset(
+	kernel_mach_header_t * fileset_header __unused)
+{
+#if defined(HAS_APPLE_PAC)
+	struct load_command *lc;
+
+	lc = (struct load_command *)((uintptr_t)fileset_header + sizeof(*fileset_header));
+	for (uint32_t i = 0; i < fileset_header->ncmds; i++,
+	    lc = (struct load_command *)((uintptr_t)lc + lc->cmdsize)) {
+		if (lc->cmd == LC_FILESET_ENTRY) {
+			struct fileset_entry_command *fse;
+			kernel_mach_header_t *mh;
+
+			fse = (struct fileset_entry_command *)(uintptr_t)lc;
+			mh = (kernel_mach_header_t *)((uintptr_t)fse->vmaddr);
+			OSRuntimeSignStructors(mh);
+		} else if (lc->cmd == LC_SEGMENT_64) {
+			/*
+			 * Slide/adjust all LC_SEGMENT_64 commands in the fileset
+			 * (and any sections in those segments)
+			 */
+			kernel_segment_command_t *seg;
+			seg = (kernel_segment_command_t *)(uintptr_t)lc;
+			OSRuntimeSignStructorsInSegment(seg);
+		}
+	}
+
+#endif /* defined(HAS_APPLE_PAC) */
 }
 
 /*********************************************************************
@@ -551,10 +545,9 @@ OSRuntimeUnloadCPPForSegment(
 void *
 operator new(size_t size)
 {
-	void * result;
-
-	result = (void *) kern_os_malloc(size);
-	return result;
+	assert(size);
+	return kheap_alloc_tag_bt(KERN_OS_MALLOC, size,
+	           (zalloc_flags_t) (Z_WAITOK | Z_ZERO), VM_KERN_MEMORY_LIBKERN);
 }
 
 void
@@ -563,17 +556,15 @@ operator delete(void * addr)
 noexcept
 #endif
 {
-	kern_os_free(addr);
+	kheap_free_addr(KERN_OS_MALLOC, addr);
 	return;
 }
 
 void *
 operator new[](unsigned long sz)
 {
-	if (sz == 0) {
-		sz = 1;
-	}
-	return kern_os_malloc(sz);
+	return kheap_alloc_tag_bt(KERN_OS_MALLOC, sz,
+	           (zalloc_flags_t) (Z_WAITOK | Z_ZERO), VM_KERN_MEMORY_LIBKERN);
 }
 
 void
@@ -590,7 +581,7 @@ noexcept
 		 */
 		kasan_unpoison_cxx_array_cookie(ptr);
 #endif
-		kern_os_free(ptr);
+		kheap_free_addr(KERN_OS_MALLOC, ptr);
 	}
 	return;
 }
@@ -600,20 +591,14 @@ noexcept
 void
 operator delete(void * addr, size_t sz) noexcept
 {
-#if OSALLOCDEBUG
-	OSAddAtomic(-sz, &debug_iomalloc_size);
-#endif /* OSALLOCDEBUG */
-	kfree(addr, sz);
+	kheap_free(KERN_OS_MALLOC, addr, sz);
 }
 
 void
 operator delete[](void * addr, size_t sz) noexcept
 {
 	if (addr) {
-#if OSALLOCDEBUG
-		OSAddAtomic(-sz, &debug_iomalloc_size);
-#endif /* OSALLOCDEBUG */
-		kfree(addr, sz);
+		kheap_free(KERN_OS_MALLOC, addr, sz);
 	}
 }
 

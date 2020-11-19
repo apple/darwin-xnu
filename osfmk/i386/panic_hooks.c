@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2014-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -146,6 +146,7 @@ panic_dump_mem(const void *addr, int len)
 		switch (n % 3) {
 		case 1:
 			panic_dump_buf[n++] = 0;
+			OS_FALLTHROUGH;
 		case 2:
 			panic_dump_buf[n++] = 0;
 		}

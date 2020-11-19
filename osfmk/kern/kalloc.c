@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2011 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -64,34 +64,44 @@
  *	to be used by the kernel to manage dynamic memory fast.
  */
 
-#include <zone_debug.h>
-
 #include <mach/boolean.h>
 #include <mach/sdt.h>
 #include <mach/machine/vm_types.h>
 #include <mach/vm_param.h>
 #include <kern/misc_protos.h>
-#include <kern/zalloc.h>
+#include <kern/zalloc_internal.h>
 #include <kern/kalloc.h>
 #include <kern/ledger.h>
+#include <kern/backtrace.h>
 #include <vm/vm_kern.h>
 #include <vm/vm_object.h>
 #include <vm/vm_map.h>
-#include <libkern/OSMalloc.h>
 #include <sys/kdebug.h>
 
 #include <san/kasan.h>
+#include <libkern/section_keywords.h>
 
-#ifdef MACH_BSD
-zone_t kalloc_zone(vm_size_t);
-#endif
+/* #define KALLOC_DEBUG            1 */
 
 #define KALLOC_MAP_SIZE_MIN  (16 * 1024 * 1024)
 #define KALLOC_MAP_SIZE_MAX  (128 * 1024 * 1024)
-vm_map_t kalloc_map;
-vm_size_t kalloc_max;
-vm_size_t kalloc_max_prerounded;
-vm_size_t kalloc_kernmap_size;  /* size of kallocs that can come from kernel map */
+
+static SECURITY_READ_ONLY_LATE(vm_offset_t) kalloc_map_min;
+static SECURITY_READ_ONLY_LATE(vm_offset_t) kalloc_map_max;
+static SECURITY_READ_ONLY_LATE(vm_size_t) kalloc_max;
+SECURITY_READ_ONLY_LATE(vm_size_t) kalloc_max_prerounded;
+/* size of kallocs that can come from kernel map */
+SECURITY_READ_ONLY_LATE(vm_size_t) kalloc_kernmap_size;
+SECURITY_READ_ONLY_LATE(vm_map_t)  kalloc_map;
+#if DEBUG || DEVELOPMENT
+static TUNABLE(bool, kheap_temp_debug, "kheap_temp_debug", false);
+
+#define KHT_BT_COUNT 14
+struct kheap_temp_header {
+	queue_chain_t kht_hdr_link;
+	uintptr_t     kht_hdr_pcs[KHT_BT_COUNT];
+};
+#endif
 
 /* how many times we couldn't allocate out of kalloc_map and fell back to kernel_map */
 unsigned long kalloc_fallback_count;
@@ -102,31 +112,13 @@ vm_size_t  kalloc_large_max;
 vm_size_t  kalloc_largest_allocated = 0;
 uint64_t   kalloc_large_sum;
 
-int     kalloc_fake_zone_index = -1; /* index of our fake zone in statistics arrays */
+LCK_GRP_DECLARE(kalloc_lck_grp, "kalloc.large");
+LCK_SPIN_DECLARE(kalloc_lock, &kalloc_lck_grp);
 
-vm_offset_t     kalloc_map_min;
-vm_offset_t     kalloc_map_max;
+#define kalloc_spin_lock()      lck_spin_lock(&kalloc_lock)
+#define kalloc_unlock()         lck_spin_unlock(&kalloc_lock)
 
-#ifdef  MUTEX_ZONE
-/*
- * Diagnostic code to track mutexes separately rather than via the 2^ zones
- */
-zone_t          lck_mtx_zone;
-#endif
-
-static void
-KALLOC_ZINFO_SALLOC(vm_size_t bytes)
-{
-	thread_t thr = current_thread();
-	ledger_debit(thr->t_ledger, task_ledgers.tkm_shared, bytes);
-}
-
-static void
-KALLOC_ZINFO_SFREE(vm_size_t bytes)
-{
-	thread_t thr = current_thread();
-	ledger_credit(thr->t_ledger, task_ledgers.tkm_shared, bytes);
-}
+#pragma mark initialization
 
 /*
  * All allocations of size less than kalloc_max are rounded to the next nearest
@@ -144,13 +136,16 @@ KALLOC_ZINFO_SFREE(vm_size_t bytes)
  * from kernel map rather than kalloc_map.
  */
 
-#define KALLOC_MINALIGN (1 << KALLOC_LOG2_MINALIGN)
 #define KiB(x) (1024 * (x))
 
 /*
- * The k_zone_config table defines the configuration of zones on various platforms.
+ * The k_zone_cfg table defines the configuration of zones on various platforms.
  * The currently defined list of zones and their per-CPU caching behavior are as
- * follows (X:zone not present; N:zone present no cpu-caching; Y:zone present with cpu-caching):
+ * follows
+ *
+ *     X:zone not present
+ *     N:zone present no cpu-caching
+ *     Y:zone present with cpu-caching
  *
  * Size       macOS(64-bit)       embedded(32-bit)    embedded(64-bit)
  *--------    ----------------    ----------------    ----------------
@@ -196,14 +191,19 @@ KALLOC_ZINFO_SFREE(vm_size_t bytes)
  * 32768      X                    X                   N
  *
  */
-static const struct kalloc_zone_config {
+struct kalloc_zone_cfg {
 	bool kzc_caching;
-	int kzc_size;
+	uint32_t kzc_size;
 	const char *kzc_name;
-} k_zone_config[] = {
-#define KZC_ENTRY(SIZE, caching) { .kzc_caching = (caching), .kzc_size = (SIZE), .kzc_name = "kalloc." #SIZE }
+};
+static SECURITY_READ_ONLY_LATE(struct kalloc_zone_cfg) k_zone_cfg[] = {
+#define KZC_ENTRY(SIZE, caching) { \
+	.kzc_caching = (caching), \
+	.kzc_size = (SIZE), \
+	.kzc_name = "kalloc." #SIZE \
+}
 
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 
 #if KALLOC_MINSIZE == 16 && KALLOC_LOG2_MINALIGN == 4
 	/* Zone config for embedded 64-bit platforms */
@@ -280,7 +280,7 @@ static const struct kalloc_zone_config {
 #error missing or invalid zone size parameters for kalloc
 #endif
 
-#else /* CONFIG_EMBEDDED */
+#else /* !defined(XNU_TARGET_OS_OSX) */
 
 	/* Zone config for macOS 64-bit platforms */
 	KZC_ENTRY(16, true),
@@ -311,61 +311,197 @@ static const struct kalloc_zone_config {
 	KZC_ENTRY(12288, false),
 	KZC_ENTRY(16384, false)
 
-#endif /* CONFIG_EMBEDDED */
+#endif /* !defined(XNU_TARGET_OS_OSX) */
 
 #undef KZC_ENTRY
 };
 
-#define MAX_K_ZONE (int)(sizeof(k_zone_config) / sizeof(k_zone_config[0]))
+#define MAX_K_ZONE(kzc) (uint32_t)(sizeof(kzc) / sizeof(kzc[0]))
 
 /*
  * Many kalloc() allocations are for small structures containing a few
- * pointers and longs - the k_zone_dlut[] direct lookup table, indexed by
+ * pointers and longs - the dlut[] direct lookup table, indexed by
  * size normalized to the minimum alignment, finds the right zone index
  * for them in one dereference.
  */
 
-#define INDEX_ZDLUT(size)       \
-	                (((size) + KALLOC_MINALIGN - 1) / KALLOC_MINALIGN)
-#define N_K_ZDLUT       (2048 / KALLOC_MINALIGN)
-/* covers sizes [0 .. 2048 - KALLOC_MINALIGN] */
-#define MAX_SIZE_ZDLUT  ((N_K_ZDLUT - 1) * KALLOC_MINALIGN)
+#define INDEX_ZDLUT(size)  (((size) + KALLOC_MINALIGN - 1) / KALLOC_MINALIGN)
+#define MAX_SIZE_ZDLUT     ((KALLOC_DLUT_SIZE - 1) * KALLOC_MINALIGN)
 
-static int8_t k_zone_dlut[N_K_ZDLUT];   /* table of indices into k_zone[] */
+static SECURITY_READ_ONLY_LATE(zone_t) k_zone_default[MAX_K_ZONE(k_zone_cfg)];
+static SECURITY_READ_ONLY_LATE(zone_t) k_zone_data_buffers[MAX_K_ZONE(k_zone_cfg)];
+static SECURITY_READ_ONLY_LATE(zone_t) k_zone_kext[MAX_K_ZONE(k_zone_cfg)];
+
+#if VM_MAX_TAG_ZONES
+#if __LP64__
+static_assert(VM_MAX_TAG_ZONES >=
+    MAX_K_ZONE(k_zone_cfg) + MAX_K_ZONE(k_zone_cfg) + MAX_K_ZONE(k_zone_cfg));
+#else
+static_assert(VM_MAX_TAG_ZONES >= MAX_K_ZONE(k_zone_cfg));
+#endif
+#endif
+
+const char * const kalloc_heap_names[] = {
+	[KHEAP_ID_NONE]          = "",
+	[KHEAP_ID_DEFAULT]       = "default.",
+	[KHEAP_ID_DATA_BUFFERS]  = "data.",
+	[KHEAP_ID_KEXT]          = "kext.",
+};
 
 /*
- * If there's no hit in the DLUT, then start searching from k_zindex_start.
+ * Default kalloc heap configuration
  */
-static int k_zindex_start;
+static SECURITY_READ_ONLY_LATE(struct kheap_zones) kalloc_zones_default = {
+	.cfg         = k_zone_cfg,
+	.heap_id     = KHEAP_ID_DEFAULT,
+	.k_zone      = k_zone_default,
+	.max_k_zone  = MAX_K_ZONE(k_zone_cfg)
+};
+SECURITY_READ_ONLY_LATE(struct kalloc_heap) KHEAP_DEFAULT[1] = {
+	{
+		.kh_zones    = &kalloc_zones_default,
+		.kh_name     = "default.",
+		.kh_heap_id  = KHEAP_ID_DEFAULT,
+	}
+};
 
-static zone_t k_zone[MAX_K_ZONE];
-
-/* #define KALLOC_DEBUG		1 */
-
-/* forward declarations */
-
-lck_grp_t kalloc_lck_grp;
-lck_mtx_t kalloc_lock;
-
-#define kalloc_spin_lock()      lck_mtx_lock_spin(&kalloc_lock)
-#define kalloc_unlock()         lck_mtx_unlock(&kalloc_lock)
-
-
-/* OSMalloc local data declarations */
-static
-queue_head_t    OSMalloc_tag_list;
-
-lck_grp_t *OSMalloc_tag_lck_grp;
-lck_mtx_t OSMalloc_tag_lock;
-
-#define OSMalloc_tag_spin_lock()        lck_mtx_lock_spin(&OSMalloc_tag_lock)
-#define OSMalloc_tag_unlock()           lck_mtx_unlock(&OSMalloc_tag_lock)
+KALLOC_HEAP_DEFINE(KHEAP_TEMP, "temp allocations", KHEAP_ID_DEFAULT);
 
 
-/* OSMalloc forward declarations */
-void OSMalloc_init(void);
-void OSMalloc_Tagref(OSMallocTag        tag);
-void OSMalloc_Tagrele(OSMallocTag       tag);
+/*
+ * Bag of bytes heap configuration
+ */
+static SECURITY_READ_ONLY_LATE(struct kheap_zones) kalloc_zones_data_buffers = {
+	.cfg         = k_zone_cfg,
+	.heap_id     = KHEAP_ID_DATA_BUFFERS,
+	.k_zone      = k_zone_data_buffers,
+	.max_k_zone  = MAX_K_ZONE(k_zone_cfg)
+};
+SECURITY_READ_ONLY_LATE(struct kalloc_heap) KHEAP_DATA_BUFFERS[1] = {
+	{
+		.kh_zones    = &kalloc_zones_data_buffers,
+		.kh_name     = "data.",
+		.kh_heap_id  = KHEAP_ID_DATA_BUFFERS,
+	}
+};
+
+
+/*
+ * Kext heap configuration
+ */
+static SECURITY_READ_ONLY_LATE(struct kheap_zones) kalloc_zones_kext = {
+	.cfg         = k_zone_cfg,
+	.heap_id     = KHEAP_ID_KEXT,
+	.k_zone      = k_zone_kext,
+	.max_k_zone  = MAX_K_ZONE(k_zone_cfg)
+};
+SECURITY_READ_ONLY_LATE(struct kalloc_heap) KHEAP_KEXT[1] = {
+	{
+		.kh_zones    = &kalloc_zones_kext,
+		.kh_name     = "kext.",
+		.kh_heap_id  = KHEAP_ID_KEXT,
+	}
+};
+
+KALLOC_HEAP_DEFINE(KERN_OS_MALLOC, "kern_os_malloc", KHEAP_ID_KEXT);
+
+/*
+ * Initialize kalloc heap: Create zones, generate direct lookup table and
+ * do a quick test on lookups
+ */
+__startup_func
+static void
+kalloc_zones_init(struct kheap_zones *zones)
+{
+	struct kalloc_zone_cfg *cfg = zones->cfg;
+	zone_t *k_zone = zones->k_zone;
+	vm_size_t size;
+
+	/*
+	 * Allocate a zone for each size we are going to handle.
+	 */
+	for (uint32_t i = 0; i < zones->max_k_zone &&
+	    (size = cfg[i].kzc_size) < kalloc_max; i++) {
+		zone_create_flags_t flags = ZC_KASAN_NOREDZONE |
+		    ZC_KASAN_NOQUARANTINE | ZC_KALLOC_HEAP;
+		if (cfg[i].kzc_caching) {
+			flags |= ZC_CACHING;
+		}
+
+		k_zone[i] = zone_create_ext(cfg[i].kzc_name, size, flags,
+		    ZONE_ID_ANY, ^(zone_t z){
+			z->kalloc_heap = zones->heap_id;
+		});
+		/*
+		 * Set the updated elem size back to the config
+		 */
+		cfg[i].kzc_size = k_zone[i]->z_elem_size;
+	}
+
+	/*
+	 * Count all the "raw" views for zones in the heap.
+	 */
+	zone_view_count += zones->max_k_zone;
+
+	/*
+	 * Build the Direct LookUp Table for small allocations
+	 * As k_zone_cfg is shared between the heaps the
+	 * Direct LookUp Table is also shared and doesn't need to
+	 * be rebuilt per heap.
+	 */
+	size = 0;
+	for (int i = 0; i <= KALLOC_DLUT_SIZE; i++, size += KALLOC_MINALIGN) {
+		uint8_t zindex = 0;
+
+		while ((vm_size_t)(cfg[zindex].kzc_size) < size) {
+			zindex++;
+		}
+
+		if (i == KALLOC_DLUT_SIZE) {
+			zones->k_zindex_start = zindex;
+			break;
+		}
+		zones->dlut[i] = zindex;
+	}
+
+#ifdef KALLOC_DEBUG
+	printf("kalloc_init: k_zindex_start %d\n", zones->k_zindex_start);
+
+	/*
+	 * Do a quick synthesis to see how well/badly we can
+	 * find-a-zone for a given size.
+	 * Useful when debugging/tweaking the array of zone sizes.
+	 * Cache misses probably more critical than compare-branches!
+	 */
+	for (uint32_t i = 0; i < zones->max_k_zone; i++) {
+		vm_size_t testsize = (vm_size_t)(cfg[i].kzc_size - 1);
+		int compare = 0;
+		uint8_t zindex;
+
+		if (testsize < MAX_SIZE_ZDLUT) {
+			compare += 1;   /* 'if' (T) */
+
+			long dindex = INDEX_ZDLUT(testsize);
+			zindex = (int)zones->dlut[dindex];
+		} else if (testsize < kalloc_max_prerounded) {
+			compare += 2;   /* 'if' (F), 'if' (T) */
+
+			zindex = zones->k_zindex_start;
+			while ((vm_size_t)(cfg[zindex].kzc_size) < testsize) {
+				zindex++;
+				compare++;      /* 'while' (T) */
+			}
+			compare++;      /* 'while' (F) */
+		} else {
+			break;  /* not zone-backed */
+		}
+		zone_t z = k_zone[zindex];
+		printf("kalloc_init: req size %4lu: %8s.%16s took %d compare%s\n",
+		    (unsigned long)testsize, kalloc_heap_names[zones->heap_id],
+		    z->z_name, compare, compare == 1 ? "" : "s");
+	}
+#endif
+}
 
 /*
  *	Initialize the memory allocator.  This should be called only
@@ -375,13 +511,13 @@ void OSMalloc_Tagrele(OSMallocTag       tag);
  *	This initializes all of the zones.
  */
 
-void
-kalloc_init(
-	void)
+__startup_func
+static void
+kalloc_init(void)
 {
 	kern_return_t retval;
 	vm_offset_t min;
-	vm_size_t size, kalloc_map_size;
+	vm_size_t kalloc_map_size;
 	vm_map_kernel_flags_t vmk_flags;
 
 	/*
@@ -402,11 +538,8 @@ kalloc_init(
 	vmk_flags.vmkf_permanent = TRUE;
 
 	retval = kmem_suballoc(kernel_map, &min, kalloc_map_size,
-	    FALSE,
-	    (VM_FLAGS_ANYWHERE),
-	    vmk_flags,
-	    VM_KERN_MEMORY_KALLOC,
-	    &kalloc_map);
+	    FALSE, VM_FLAGS_ANYWHERE, vmk_flags,
+	    VM_KERN_MEMORY_KALLOC, &kalloc_map);
 
 	if (retval != KERN_SUCCESS) {
 		panic("kalloc_init: kmem_suballoc failed");
@@ -415,7 +548,8 @@ kalloc_init(
 	kalloc_map_min = min;
 	kalloc_map_max = min + kalloc_map_size - 1;
 
-	kalloc_max = (k_zone_config[MAX_K_ZONE - 1].kzc_size << 1);
+	struct kheap_zones *khz_default = &kalloc_zones_default;
+	kalloc_max = (khz_default->cfg[khz_default->max_k_zone - 1].kzc_size << 1);
 	if (kalloc_max < KiB(16)) {
 		kalloc_max = KiB(16);
 	}
@@ -426,141 +560,99 @@ kalloc_init(
 	kalloc_kernmap_size = (kalloc_max * 16) + 1;
 	kalloc_largest_allocated = kalloc_kernmap_size;
 
-	/*
-	 * Allocate a zone for each size we are going to handle.
-	 */
-	for (int i = 0; i < MAX_K_ZONE && (size = k_zone_config[i].kzc_size) < kalloc_max; i++) {
-		k_zone[i] = zinit(size, size, size, k_zone_config[i].kzc_name);
+	/* Initialize kalloc default heap */
+	kalloc_zones_init(&kalloc_zones_default);
 
-		/*
-		 * Don't charge the caller for the allocation, as we aren't sure how
-		 * the memory will be handled.
-		 */
-		zone_change(k_zone[i], Z_CALLERACCT, FALSE);
-#if VM_MAX_TAG_ZONES
-		if (zone_tagging_on) {
-			zone_change(k_zone[i], Z_TAGS_ENABLED, TRUE);
-		}
-#endif
-		zone_change(k_zone[i], Z_KASAN_QUARANTINE, FALSE);
-		if (k_zone_config[i].kzc_caching) {
-			zone_change(k_zone[i], Z_CACHING_ENABLED, TRUE);
-		}
+	/* Initialize kalloc data buffers heap */
+	if (ZSECURITY_OPTIONS_SUBMAP_USER_DATA & zsecurity_options) {
+		kalloc_zones_init(&kalloc_zones_data_buffers);
+	} else {
+		*KHEAP_DATA_BUFFERS = *KHEAP_DEFAULT;
 	}
 
-	/*
-	 * Build the Direct LookUp Table for small allocations
-	 */
-	size = 0;
-	for (int i = 0; i <= N_K_ZDLUT; i++, size += KALLOC_MINALIGN) {
-		int zindex = 0;
+	/* Initialize kalloc kext heap */
+	if (ZSECURITY_OPTIONS_SEQUESTER_KEXT_KALLOC & zsecurity_options) {
+		kalloc_zones_init(&kalloc_zones_kext);
+	} else {
+		*KHEAP_KEXT = *KHEAP_DEFAULT;
+	}
+}
+STARTUP(ZALLOC, STARTUP_RANK_THIRD, kalloc_init);
 
-		while ((vm_size_t)k_zone_config[zindex].kzc_size < size) {
+
+#pragma mark accessors
+
+static void
+KALLOC_ZINFO_SALLOC(vm_size_t bytes)
+{
+	thread_t thr = current_thread();
+	ledger_debit_thread(thr, thr->t_ledger, task_ledgers.tkm_shared, bytes);
+}
+
+static void
+KALLOC_ZINFO_SFREE(vm_size_t bytes)
+{
+	thread_t thr = current_thread();
+	ledger_credit_thread(thr, thr->t_ledger, task_ledgers.tkm_shared, bytes);
+}
+
+static inline vm_map_t
+kalloc_map_for_addr(vm_address_t addr)
+{
+	if (addr >= kalloc_map_min && addr < kalloc_map_max) {
+		return kalloc_map;
+	}
+	return kernel_map;
+}
+
+static inline vm_map_t
+kalloc_map_for_size(vm_size_t size)
+{
+	if (size < kalloc_kernmap_size) {
+		return kalloc_map;
+	}
+	return kernel_map;
+}
+
+zone_t
+kalloc_heap_zone_for_size(kalloc_heap_t kheap, vm_size_t size)
+{
+	struct kheap_zones *khz = kheap->kh_zones;
+
+	if (size < MAX_SIZE_ZDLUT) {
+		uint32_t zindex = khz->dlut[INDEX_ZDLUT(size)];
+		return khz->k_zone[zindex];
+	}
+
+	if (size < kalloc_max_prerounded) {
+		uint32_t zindex = khz->k_zindex_start;
+		while (khz->cfg[zindex].kzc_size < size) {
 			zindex++;
 		}
-
-		if (i == N_K_ZDLUT) {
-			k_zindex_start = zindex;
-			break;
-		}
-		k_zone_dlut[i] = (int8_t)zindex;
+		assert(zindex < khz->max_k_zone);
+		return khz->k_zone[zindex];
 	}
 
-#ifdef KALLOC_DEBUG
-	printf("kalloc_init: k_zindex_start %d\n", k_zindex_start);
-
-	/*
-	 * Do a quick synthesis to see how well/badly we can
-	 * find-a-zone for a given size.
-	 * Useful when debugging/tweaking the array of zone sizes.
-	 * Cache misses probably more critical than compare-branches!
-	 */
-	for (int i = 0; i < MAX_K_ZONE; i++) {
-		vm_size_t testsize = (vm_size_t)k_zone_config[i].kzc_size - 1;
-		int compare = 0;
-		int zindex;
-
-		if (testsize < MAX_SIZE_ZDLUT) {
-			compare += 1;   /* 'if' (T) */
-
-			long dindex = INDEX_ZDLUT(testsize);
-			zindex = (int)k_zone_dlut[dindex];
-		} else if (testsize < kalloc_max_prerounded) {
-			compare += 2;   /* 'if' (F), 'if' (T) */
-
-			zindex = k_zindex_start;
-			while ((vm_size_t)k_zone_config[zindex].kzc_size < testsize) {
-				zindex++;
-				compare++;      /* 'while' (T) */
-			}
-			compare++;      /* 'while' (F) */
-		} else {
-			break;  /* not zone-backed */
-		}
-		zone_t z = k_zone[zindex];
-		printf("kalloc_init: req size %4lu: %11s took %d compare%s\n",
-		    (unsigned long)testsize, z->zone_name, compare,
-		    compare == 1 ? "" : "s");
-	}
-#endif
-
-	lck_grp_init(&kalloc_lck_grp, "kalloc.large", LCK_GRP_ATTR_NULL);
-	lck_mtx_init(&kalloc_lock, &kalloc_lck_grp, LCK_ATTR_NULL);
-	OSMalloc_init();
-#ifdef  MUTEX_ZONE
-	lck_mtx_zone = zinit(sizeof(struct _lck_mtx_), 1024 * 256, 4096, "lck_mtx");
-#endif
-}
-
-/*
- * Given an allocation size, return the kalloc zone it belongs to.
- * Direct LookUp Table variant.
- */
-static __inline zone_t
-get_zone_dlut(vm_size_t size)
-{
-	long dindex = INDEX_ZDLUT(size);
-	int zindex = (int)k_zone_dlut[dindex];
-	return k_zone[zindex];
-}
-
-/* As above, but linear search k_zone_config[] for the next zone that fits. */
-
-static __inline zone_t
-get_zone_search(vm_size_t size, int zindex)
-{
-	assert(size < kalloc_max_prerounded);
-
-	while ((vm_size_t)k_zone_config[zindex].kzc_size < size) {
-		zindex++;
-	}
-
-	assert(zindex < MAX_K_ZONE &&
-	    (vm_size_t)k_zone_config[zindex].kzc_size < kalloc_max);
-
-	return k_zone[zindex];
+	return ZONE_NULL;
 }
 
 static vm_size_t
-vm_map_lookup_kalloc_entry_locked(
-	vm_map_t        map,
-	void            *addr)
+vm_map_lookup_kalloc_entry_locked(vm_map_t map, void *addr)
 {
-	boolean_t       ret;
-	vm_map_entry_t  vm_entry = NULL;
+	vm_map_entry_t vm_entry = NULL;
 
-	ret = vm_map_lookup_entry(map, (vm_map_offset_t)addr, &vm_entry);
-	if (!ret) {
-		panic("Attempting to lookup/free an address not allocated via kalloc! (vm_map_lookup_entry() failed map: %p, addr: %p)\n",
-		    map, addr);
+	if (!vm_map_lookup_entry(map, (vm_map_offset_t)addr, &vm_entry)) {
+		panic("address %p not allocated via kalloc, map %p",
+		    addr, map);
 	}
 	if (vm_entry->vme_start != (vm_map_offset_t)addr) {
-		panic("Attempting to lookup/free the middle of a kalloc'ed element! (map: %p, addr: %p, entry: %p)\n",
-		    map, addr, vm_entry);
+		panic("address %p inside vm entry %p [%p:%p), map %p",
+		    addr, vm_entry, (void *)vm_entry->vme_start,
+		    (void *)vm_entry->vme_end, map);
 	}
 	if (!vm_entry->vme_atomic) {
-		panic("Attempting to lookup/free an address not managed by kalloc! (map: %p, addr: %p, entry: %p)\n",
-		    map, addr, vm_entry);
+		panic("address %p not managed by kalloc (entry %p, map %p)",
+		    addr, vm_entry, map);
 	}
 	return vm_entry->vme_end - vm_entry->vme_start;
 }
@@ -578,21 +670,17 @@ kalloc_size(void *addr)
 }
 #else
 vm_size_t
-kalloc_size(
-	void            *addr)
+kalloc_size(void *addr)
 {
-	vm_map_t                map;
-	vm_size_t               size;
+	vm_map_t  map;
+	vm_size_t size;
 
 	size = zone_element_size(addr, NULL);
 	if (size) {
 		return size;
 	}
-	if (((vm_offset_t)addr >= kalloc_map_min) && ((vm_offset_t)addr < kalloc_map_max)) {
-		map = kalloc_map;
-	} else {
-		map = kernel_map;
-	}
+
+	map = kalloc_map_for_addr((vm_offset_t)addr);
 	vm_map_lock_read(map);
 	size = vm_map_lookup_kalloc_entry_locked(map, addr);
 	vm_map_unlock_read(map);
@@ -601,241 +689,404 @@ kalloc_size(
 #endif
 
 vm_size_t
-kalloc_bucket_size(
-	vm_size_t       size)
+kalloc_bucket_size(vm_size_t size)
 {
-	zone_t          z;
-	vm_map_t        map;
+	zone_t   z   = kalloc_heap_zone_for_size(KHEAP_DEFAULT, size);
+	vm_map_t map = kalloc_map_for_size(size);
 
-	if (size < MAX_SIZE_ZDLUT) {
-		z = get_zone_dlut(size);
-		return z->elem_size;
+	if (z) {
+		return zone_elem_size(z);
 	}
-
-	if (size < kalloc_max_prerounded) {
-		z = get_zone_search(size, k_zindex_start);
-		return z->elem_size;
-	}
-
-	if (size >= kalloc_kernmap_size) {
-		map = kernel_map;
-	} else {
-		map = kalloc_map;
-	}
-
 	return vm_map_round_page(size, VM_MAP_PAGE_MASK(map));
 }
 
+#pragma mark kalloc
+
+void
+kheap_temp_leak_panic(thread_t self)
+{
+#if DEBUG || DEVELOPMENT
+	if (__improbable(kheap_temp_debug)) {
+		struct kheap_temp_header *hdr = qe_dequeue_head(&self->t_temp_alloc_list,
+		    struct kheap_temp_header, kht_hdr_link);
+
+		panic_plain("KHEAP_TEMP leak on thread %p (%d), allocated at:\n"
+		    "  %#016lx\n" "  %#016lx\n" "  %#016lx\n" "  %#016lx\n"
+		    "  %#016lx\n" "  %#016lx\n" "  %#016lx\n" "  %#016lx\n"
+		    "  %#016lx\n" "  %#016lx\n" "  %#016lx\n" "  %#016lx\n"
+		    "  %#016lx\n" "  %#016lx\n",
+		    self, self->t_temp_alloc_count,
+		    hdr->kht_hdr_pcs[0], hdr->kht_hdr_pcs[1],
+		    hdr->kht_hdr_pcs[2], hdr->kht_hdr_pcs[3],
+		    hdr->kht_hdr_pcs[4], hdr->kht_hdr_pcs[5],
+		    hdr->kht_hdr_pcs[6], hdr->kht_hdr_pcs[7],
+		    hdr->kht_hdr_pcs[8], hdr->kht_hdr_pcs[9],
+		    hdr->kht_hdr_pcs[10], hdr->kht_hdr_pcs[11],
+		    hdr->kht_hdr_pcs[12], hdr->kht_hdr_pcs[13]);
+	}
+	panic("KHEAP_TEMP leak on thread %p (%d) "
+	    "(boot with kheap_temp_debug=1 to debug)",
+	    self, self->t_temp_alloc_count);
+#else /* !DEBUG && !DEVELOPMENT */
+	panic("KHEAP_TEMP leak on thread %p (%d)",
+	    self, self->t_temp_alloc_count);
+#endif /* !DEBUG && !DEVELOPMENT */
+}
+
+__abortlike
+static void
+kheap_temp_overuse_panic(thread_t self)
+{
+	panic("too many KHEAP_TEMP allocations in flight: %d",
+	    self->t_temp_alloc_count);
+}
+
+__attribute__((noinline))
+static struct kalloc_result
+kalloc_large(
+	kalloc_heap_t         kheap,
+	vm_size_t             req_size,
+	vm_size_t             size,
+	zalloc_flags_t        flags,
+	vm_allocation_site_t  *site)
+{
+	int kma_flags = KMA_ATOMIC | KMA_KOBJECT;
+	vm_tag_t tag = VM_KERN_MEMORY_KALLOC;
+	vm_map_t alloc_map;
+	vm_offset_t addr;
+
+	if (flags & Z_NOFAIL) {
+		panic("trying to kalloc(Z_NOFAIL) with a large size (%zd)",
+		    (size_t)size);
+	}
+	/* kmem_alloc could block so we return if noblock */
+	if (flags & Z_NOWAIT) {
+		return (struct kalloc_result){ };
+	}
+
+	if (flags & Z_NOPAGEWAIT) {
+		kma_flags |= KMA_NOPAGEWAIT;
+	}
+	if (flags & Z_ZERO) {
+		kma_flags |= KMA_ZERO;
+	}
+
 #if KASAN_KALLOC
-vm_size_t
-(kfree_addr)(void *addr)
-{
-	vm_size_t origsz = kalloc_size(addr);
-	kfree(addr, origsz);
-	return origsz;
-}
+	/* large allocation - use guard pages instead of small redzones */
+	size = round_page(req_size + 2 * PAGE_SIZE);
+	assert(size >= MAX_SIZE_ZDLUT && size >= kalloc_max_prerounded);
 #else
-vm_size_t
-(kfree_addr)(
-	void            *addr)
-{
-	vm_map_t        map;
-	vm_size_t       size = 0;
-	kern_return_t   ret;
-	zone_t                  z;
-
-	size = zone_element_size(addr, &z);
-	if (size) {
-		DTRACE_VM3(kfree, vm_size_t, -1, vm_size_t, z->elem_size, void*, addr);
-		zfree(z, addr);
-		return size;
-	}
-
-	if (((vm_offset_t)addr >= kalloc_map_min) && ((vm_offset_t)addr < kalloc_map_max)) {
-		map = kalloc_map;
-	} else {
-		map = kernel_map;
-	}
-	if ((vm_offset_t)addr < VM_MIN_KERNEL_AND_KEXT_ADDRESS) {
-		panic("kfree on an address not in the kernel & kext address range! addr: %p\n", addr);
-	}
-
-	vm_map_lock(map);
-	size = vm_map_lookup_kalloc_entry_locked(map, addr);
-	ret = vm_map_remove_locked(map,
-	    vm_map_trunc_page((vm_map_offset_t)addr,
-	    VM_MAP_PAGE_MASK(map)),
-	    vm_map_round_page((vm_map_offset_t)addr + size,
-	    VM_MAP_PAGE_MASK(map)),
-	    VM_MAP_REMOVE_KUNWIRE);
-	if (ret != KERN_SUCCESS) {
-		panic("vm_map_remove_locked() failed for kalloc vm_entry! addr: %p, map: %p ret: %d\n",
-		    addr, map, ret);
-	}
-	vm_map_unlock(map);
-	DTRACE_VM3(kfree, vm_size_t, -1, vm_size_t, size, void*, addr);
-
-	kalloc_spin_lock();
-	assert(kalloc_large_total >= size);
-	kalloc_large_total -= size;
-	kalloc_large_inuse--;
-	kalloc_unlock();
-
-	KALLOC_ZINFO_SFREE(size);
-	return size;
-}
+	size = round_page(size);
 #endif
 
-void *
-kalloc_canblock(
-	vm_size_t             *psize,
-	boolean_t             canblock,
-	vm_allocation_site_t *site)
+	alloc_map = kalloc_map_for_size(size);
+
+	if (site) {
+		tag = vm_tag_alloc(site);
+	}
+
+	if (kmem_alloc_flags(alloc_map, &addr, size, tag, kma_flags) != KERN_SUCCESS) {
+		if (alloc_map != kernel_map) {
+			if (kalloc_fallback_count++ == 0) {
+				printf("%s: falling back to kernel_map\n", __func__);
+			}
+			if (kmem_alloc_flags(kernel_map, &addr, size, tag, kma_flags) != KERN_SUCCESS) {
+				addr = 0;
+			}
+		} else {
+			addr = 0;
+		}
+	}
+
+	if (addr != 0) {
+		kalloc_spin_lock();
+		/*
+		 * Thread-safe version of the workaround for 4740071
+		 * (a double FREE())
+		 */
+		if (size > kalloc_largest_allocated) {
+			kalloc_largest_allocated = size;
+		}
+
+		kalloc_large_inuse++;
+		assert(kalloc_large_total + size >= kalloc_large_total); /* no wrap around */
+		kalloc_large_total += size;
+		kalloc_large_sum += size;
+
+		if (kalloc_large_total > kalloc_large_max) {
+			kalloc_large_max = kalloc_large_total;
+		}
+
+		kalloc_unlock();
+
+		KALLOC_ZINFO_SALLOC(size);
+	}
+#if KASAN_KALLOC
+	/* fixup the return address to skip the redzone */
+	addr = kasan_alloc(addr, size, req_size, PAGE_SIZE);
+	/*
+	 * Initialize buffer with unique pattern only if memory
+	 * wasn't expected to be zeroed.
+	 */
+	if (!(flags & Z_ZERO)) {
+		kasan_leak_init(addr, req_size);
+	}
+#else
+	req_size = size;
+#endif
+
+	if (addr && kheap == KHEAP_TEMP) {
+		thread_t self = current_thread();
+
+		if (self->t_temp_alloc_count++ > UINT16_MAX) {
+			kheap_temp_overuse_panic(self);
+		}
+#if DEBUG || DEVELOPMENT
+		if (__improbable(kheap_temp_debug)) {
+			struct kheap_temp_header *hdr = (void *)addr;
+			enqueue_head(&self->t_temp_alloc_list,
+			    &hdr->kht_hdr_link);
+			backtrace(hdr->kht_hdr_pcs, KHT_BT_COUNT, NULL);
+			req_size -= sizeof(struct kheap_temp_header);
+			addr     += sizeof(struct kheap_temp_header);
+		}
+#endif /* DEBUG || DEVELOPMENT */
+	}
+
+	DTRACE_VM3(kalloc, vm_size_t, size, vm_size_t, req_size, void*, addr);
+	return (struct kalloc_result){ .addr = (void *)addr, .size = req_size };
+}
+
+struct kalloc_result
+kalloc_ext(
+	kalloc_heap_t         kheap,
+	vm_size_t             req_size,
+	zalloc_flags_t        flags,
+	vm_allocation_site_t  *site)
 {
-	zone_t z;
+	vm_tag_t tag = VM_KERN_MEMORY_KALLOC;
 	vm_size_t size;
 	void *addr;
-	vm_tag_t tag;
+	zone_t z;
 
-	tag = VM_KERN_MEMORY_KALLOC;
-	size = *psize;
+#if DEBUG || DEVELOPMENT
+	if (__improbable(kheap_temp_debug)) {
+		if (kheap == KHEAP_TEMP) {
+			req_size += sizeof(struct kheap_temp_header);
+		}
+	}
+#endif /* DEBUG || DEVELOPMENT */
 
+	/*
+	 * Kasan for kalloc heaps will put the redzones *inside*
+	 * the allocation, and hence augment its size.
+	 *
+	 * kalloc heaps do not use zone_t::kasan_redzone.
+	 */
 #if KASAN_KALLOC
-	/* expand the allocation to accomodate redzones */
-	vm_size_t req_size = size;
 	size = kasan_alloc_resize(req_size);
-#endif
-
-	if (size < MAX_SIZE_ZDLUT) {
-		z = get_zone_dlut(size);
-	} else if (size < kalloc_max_prerounded) {
-		z = get_zone_search(size, k_zindex_start);
-	} else {
-		/*
-		 * If size is too large for a zone, then use kmem_alloc.
-		 * (We use kmem_alloc instead of kmem_alloc_kobject so that
-		 * krealloc can use kmem_realloc.)
-		 */
-		vm_map_t alloc_map;
-
-		/* kmem_alloc could block so we return if noblock */
-		if (!canblock) {
-			return NULL;
-		}
-
-#if KASAN_KALLOC
-		/* large allocation - use guard pages instead of small redzones */
-		size = round_page(req_size + 2 * PAGE_SIZE);
-		assert(size >= MAX_SIZE_ZDLUT && size >= kalloc_max_prerounded);
 #else
-		size = round_page(size);
+	size = req_size;
 #endif
-
-		if (size >= kalloc_kernmap_size) {
-			alloc_map = kernel_map;
-		} else {
-			alloc_map = kalloc_map;
-		}
-
-		if (site) {
-			tag = vm_tag_alloc(site);
-		}
-
-		if (kmem_alloc_flags(alloc_map, (vm_offset_t *)&addr, size, tag, KMA_ATOMIC) != KERN_SUCCESS) {
-			if (alloc_map != kernel_map) {
-				if (kalloc_fallback_count++ == 0) {
-					printf("%s: falling back to kernel_map\n", __func__);
-				}
-				if (kmem_alloc_flags(kernel_map, (vm_offset_t *)&addr, size, tag, KMA_ATOMIC) != KERN_SUCCESS) {
-					addr = NULL;
-				}
-			} else {
-				addr = NULL;
-			}
-		}
-
-		if (addr != NULL) {
-			kalloc_spin_lock();
-			/*
-			 * Thread-safe version of the workaround for 4740071
-			 * (a double FREE())
-			 */
-			if (size > kalloc_largest_allocated) {
-				kalloc_largest_allocated = size;
-			}
-
-			kalloc_large_inuse++;
-			assert(kalloc_large_total + size >= kalloc_large_total); /* no wrap around */
-			kalloc_large_total += size;
-			kalloc_large_sum += size;
-
-			if (kalloc_large_total > kalloc_large_max) {
-				kalloc_large_max = kalloc_large_total;
-			}
-
-			kalloc_unlock();
-
-			KALLOC_ZINFO_SALLOC(size);
-		}
-#if KASAN_KALLOC
-		/* fixup the return address to skip the redzone */
-		addr = (void *)kasan_alloc((vm_offset_t)addr, size, req_size, PAGE_SIZE);
-#else
-		*psize = size;
-#endif
-		DTRACE_VM3(kalloc, vm_size_t, size, vm_size_t, *psize, void*, addr);
-		return addr;
+	z = kalloc_heap_zone_for_size(kheap, size);
+	if (__improbable(z == ZONE_NULL)) {
+		return kalloc_large(kheap, req_size, size, flags, site);
 	}
+
 #ifdef KALLOC_DEBUG
-	if (size > z->elem_size) {
-		panic("%s: z %p (%s) but requested size %lu", __func__,
-		    z, z->zone_name, (unsigned long)size);
+	if (size > zone_elem_size(z)) {
+		panic("%s: z %p (%s%s) but requested size %lu", __func__, z,
+		    kalloc_heap_names[kheap->kh_zones->heap_id], z->z_name,
+		    (unsigned long)size);
 	}
 #endif
-
-	assert(size <= z->elem_size);
+	assert(size <= zone_elem_size(z));
 
 #if VM_MAX_TAG_ZONES
 	if (z->tags && site) {
 		tag = vm_tag_alloc(site);
-		if (!canblock && !vm_allocation_zone_totals[tag]) {
+		if ((flags & (Z_NOWAIT | Z_NOPAGEWAIT)) && !vm_allocation_zone_totals[tag]) {
 			tag = VM_KERN_MEMORY_KALLOC;
 		}
 	}
 #endif
-
-	addr =  zalloc_canblock_tag(z, canblock, size, tag);
+	addr = zalloc_ext(z, kheap->kh_stats ?: z->z_stats,
+	    flags | Z_VM_TAG(tag), zone_elem_size(z) - size);
 
 #if KASAN_KALLOC
-	/* fixup the return address to skip the redzone */
-	addr = (void *)kasan_alloc((vm_offset_t)addr, z->elem_size, req_size, KASAN_GUARD_SIZE);
-
-	/* For KASan, the redzone lives in any additional space, so don't
-	 * expand the allocation. */
+	addr = (void *)kasan_alloc((vm_offset_t)addr, zone_elem_size(z),
+	    req_size, KASAN_GUARD_SIZE);
 #else
-	*psize = z->elem_size;
+	req_size = zone_elem_size(z);
 #endif
 
-	DTRACE_VM3(kalloc, vm_size_t, size, vm_size_t, *psize, void*, addr);
-	return addr;
+	if (addr && kheap == KHEAP_TEMP) {
+		thread_t self = current_thread();
+
+		if (self->t_temp_alloc_count++ > UINT16_MAX) {
+			kheap_temp_overuse_panic(self);
+		}
+#if DEBUG || DEVELOPMENT
+		if (__improbable(kheap_temp_debug)) {
+			struct kheap_temp_header *hdr = (void *)addr;
+			enqueue_head(&self->t_temp_alloc_list,
+			    &hdr->kht_hdr_link);
+			backtrace(hdr->kht_hdr_pcs, KHT_BT_COUNT, NULL);
+			req_size -= sizeof(struct kheap_temp_header);
+			addr     += sizeof(struct kheap_temp_header);
+		}
+#endif /* DEBUG || DEVELOPMENT */
+	}
+
+	DTRACE_VM3(kalloc, vm_size_t, size, vm_size_t, req_size, void*, addr);
+	return (struct kalloc_result){ .addr = addr, .size = req_size };
 }
 
 void *
-kalloc_external(
-	vm_size_t size);
+kalloc_external(vm_size_t size);
 void *
-kalloc_external(
-	vm_size_t size)
+kalloc_external(vm_size_t size)
 {
-	return kalloc_tag_bt(size, VM_KERN_MEMORY_KALLOC);
+	return kheap_alloc_tag_bt(KHEAP_KEXT, size, Z_WAITOK, VM_KERN_MEMORY_KALLOC);
 }
 
-void
-(kfree)(
-	void            *data,
-	vm_size_t       size)
+
+#pragma mark kfree
+
+__attribute__((noinline))
+static void
+kfree_large(vm_offset_t addr, vm_size_t size)
 {
+	vm_map_t map = kalloc_map_for_addr(addr);
+	kern_return_t ret;
+	vm_offset_t end;
+
+	if (addr < VM_MIN_KERNEL_AND_KEXT_ADDRESS ||
+	    os_add_overflow(addr, size, &end) ||
+	    end > VM_MAX_KERNEL_ADDRESS) {
+		panic("kfree: address range (%p, %ld) doesn't belong to the kernel",
+		    (void *)addr, (uintptr_t)size);
+	}
+
+	if (size == 0) {
+		vm_map_lock(map);
+		size = vm_map_lookup_kalloc_entry_locked(map, (void *)addr);
+		ret = vm_map_remove_locked(map,
+		    vm_map_trunc_page(addr, VM_MAP_PAGE_MASK(map)),
+		    vm_map_round_page(addr + size, VM_MAP_PAGE_MASK(map)),
+		    VM_MAP_REMOVE_KUNWIRE);
+		if (ret != KERN_SUCCESS) {
+			panic("kfree: vm_map_remove_locked() failed for "
+			    "addr: %p, map: %p ret: %d", (void *)addr, map, ret);
+		}
+		vm_map_unlock(map);
+	} else {
+		size = round_page(size);
+
+		if (size > kalloc_largest_allocated) {
+			panic("kfree: size %lu > kalloc_largest_allocated %lu",
+			    (uintptr_t)size, (uintptr_t)kalloc_largest_allocated);
+		}
+		kmem_free(map, addr, size);
+	}
+
+	kalloc_spin_lock();
+
+	assert(kalloc_large_total >= size);
+	kalloc_large_total -= size;
+	kalloc_large_inuse--;
+
+	kalloc_unlock();
+
+#if !KASAN_KALLOC
+	DTRACE_VM3(kfree, vm_size_t, size, vm_size_t, size, void*, addr);
+#endif
+
+	KALLOC_ZINFO_SFREE(size);
+	return;
+}
+
+__abortlike
+static void
+kfree_heap_confusion_panic(kalloc_heap_t kheap, void *data, size_t size, zone_t z)
+{
+	if (z->kalloc_heap == KHEAP_ID_NONE) {
+		panic("kfree: addr %p, size %zd found in regular zone '%s%s'",
+		    data, size, zone_heap_name(z), z->z_name);
+	} else {
+		panic("kfree: addr %p, size %zd found in heap %s* instead of %s*",
+		    data, size, zone_heap_name(z),
+		    kalloc_heap_names[kheap->kh_heap_id]);
+	}
+}
+
+__abortlike
+static void
+kfree_size_confusion_panic(zone_t z, void *data, size_t size, size_t zsize)
+{
+	if (z) {
+		panic("kfree: addr %p, size %zd found in zone '%s%s' "
+		    "with elem_size %zd",
+		    data, size, zone_heap_name(z), z->z_name, zsize);
+	} else {
+		panic("kfree: addr %p, size %zd not found in any zone",
+		    data, size);
+	}
+}
+
+__abortlike
+static void
+kfree_size_invalid_panic(void *data, size_t size)
+{
+	panic("kfree: addr %p trying to free with nonsensical size %zd",
+	    data, size);
+}
+
+__abortlike
+static void
+krealloc_size_invalid_panic(void *data, size_t size)
+{
+	panic("krealloc: addr %p trying to free with nonsensical size %zd",
+	    data, size);
+}
+
+__abortlike
+static void
+kfree_temp_imbalance_panic(void *data, size_t size)
+{
+	panic("kfree: KHEAP_TEMP allocation imbalance freeing addr %p, size %zd",
+	    data, size);
+}
+
+/* used to implement kheap_free_addr() */
+#define KFREE_UNKNOWN_SIZE  ((vm_size_t)~0)
+#define KFREE_ABSURD_SIZE \
+	((VM_MAX_KERNEL_ADDRESS - VM_MIN_KERNEL_AND_KEXT_ADDRESS) / 2)
+
+static void
+kfree_ext(kalloc_heap_t kheap, void *data, vm_size_t size)
+{
+	zone_stats_t zs = NULL;
 	zone_t z;
+	vm_size_t zsize;
+
+	if (__improbable(data == NULL)) {
+		return;
+	}
+
+	if (kheap == KHEAP_TEMP) {
+		assert(size != KFREE_UNKNOWN_SIZE);
+		if (current_thread()->t_temp_alloc_count-- == 0) {
+			kfree_temp_imbalance_panic(data, size);
+		}
+#if DEBUG || DEVELOPMENT
+		if (__improbable(kheap_temp_debug)) {
+			size += sizeof(struct kheap_temp_header);
+			data -= sizeof(struct kheap_temp_header);
+			remqueue(&((struct kheap_temp_header *)data)->kht_hdr_link);
+		}
+#endif /* DEBUG || DEVELOPMENT */
+	}
 
 #if KASAN_KALLOC
 	/*
@@ -843,6 +1094,9 @@ void
 	 * quarantine. `data` may then point to a different allocation.
 	 */
 	vm_size_t user_size = size;
+	if (size == KFREE_UNKNOWN_SIZE) {
+		user_size = size = kalloc_size(data);
+	}
 	kasan_check_free((vm_address_t)data, size, KASAN_HEAP_KALLOC);
 	data = (void *)kasan_dealloc((vm_address_t)data, &size);
 	kasan_free(&data, &size, KASAN_HEAP_KALLOC, NULL, user_size, true);
@@ -851,88 +1105,195 @@ void
 	}
 #endif
 
-	if (size < MAX_SIZE_ZDLUT) {
-		z = get_zone_dlut(size);
-	} else if (size < kalloc_max_prerounded) {
-		z = get_zone_search(size, k_zindex_start);
-	} else {
-		/* if size was too large for a zone, then use kmem_free */
+	if (size >= kalloc_max_prerounded && size != KFREE_UNKNOWN_SIZE) {
+		return kfree_large((vm_offset_t)data, size);
+	}
 
-		vm_map_t alloc_map = kernel_map;
-		size = round_page(size);
-
-		if ((((vm_offset_t) data) >= kalloc_map_min) && (((vm_offset_t) data) <= kalloc_map_max)) {
-			alloc_map = kalloc_map;
+	zsize = zone_element_size(data, &z);
+	if (size == KFREE_UNKNOWN_SIZE) {
+		if (zsize == 0) {
+			return kfree_large((vm_offset_t)data, 0);
 		}
-		if (size > kalloc_largest_allocated) {
-			panic("kfree: size %lu > kalloc_largest_allocated %lu", (unsigned long)size, (unsigned long)kalloc_largest_allocated);
+		size = zsize;
+	} else if (size > zsize) {
+		kfree_size_confusion_panic(z, data, size, zsize);
+	}
+
+	if (kheap != KHEAP_ANY) {
+		if (kheap->kh_heap_id != z->kalloc_heap) {
+			kfree_heap_confusion_panic(kheap, data, size, z);
 		}
-		kmem_free(alloc_map, (vm_offset_t)data, size);
-		kalloc_spin_lock();
-
-		assert(kalloc_large_total >= size);
-		kalloc_large_total -= size;
-		kalloc_large_inuse--;
-
-		kalloc_unlock();
+		zs = kheap->kh_stats;
+	} else if (z->kalloc_heap != KHEAP_ID_DEFAULT &&
+	    z->kalloc_heap != KHEAP_ID_KEXT) {
+		kfree_heap_confusion_panic(kheap, data, size, z);
+	}
 
 #if !KASAN_KALLOC
-		DTRACE_VM3(kfree, vm_size_t, size, vm_size_t, size, void*, data);
+	DTRACE_VM3(kfree, vm_size_t, size, vm_size_t, zsize, void*, data);
 #endif
-
-		KALLOC_ZINFO_SFREE(size);
-		return;
-	}
-
-	/* free to the appropriate zone */
-#ifdef KALLOC_DEBUG
-	if (size > z->elem_size) {
-		panic("%s: z %p (%s) but requested size %lu", __func__,
-		    z, z->zone_name, (unsigned long)size);
-	}
-#endif
-	assert(size <= z->elem_size);
-#if !KASAN_KALLOC
-	DTRACE_VM3(kfree, vm_size_t, size, vm_size_t, z->elem_size, void*, data);
-#endif
-	zfree(z, data);
+	zfree_ext(z, zs ?: z->z_stats, data);
 }
-
-#ifdef MACH_BSD
-zone_t
-kalloc_zone(
-	vm_size_t       size)
-{
-	if (size < MAX_SIZE_ZDLUT) {
-		return get_zone_dlut(size);
-	}
-	if (size <= kalloc_max) {
-		return get_zone_search(size, k_zindex_start);
-	}
-	return ZONE_NULL;
-}
-#endif
 
 void
-OSMalloc_init(
-	void)
+(kfree)(void *addr, vm_size_t size)
 {
-	queue_init(&OSMalloc_tag_list);
-
-	OSMalloc_tag_lck_grp = lck_grp_alloc_init("OSMalloc_tag", LCK_GRP_ATTR_NULL);
-	lck_mtx_init(&OSMalloc_tag_lock, OSMalloc_tag_lck_grp, LCK_ATTR_NULL);
+	if (size > KFREE_ABSURD_SIZE) {
+		kfree_size_invalid_panic(addr, size);
+	}
+	kfree_ext(KHEAP_ANY, addr, size);
 }
 
-OSMallocTag
-OSMalloc_Tagalloc(
-	const char                      *str,
-	uint32_t                        flags)
+void
+(kheap_free)(kalloc_heap_t kheap, void *addr, vm_size_t size)
 {
-	OSMallocTag       OSMTag;
+	if (size > KFREE_ABSURD_SIZE) {
+		kfree_size_invalid_panic(addr, size);
+	}
+	kfree_ext(kheap, addr, size);
+}
 
-	OSMTag = (OSMallocTag)kalloc(sizeof(*OSMTag));
+void
+(kheap_free_addr)(kalloc_heap_t kheap, void *addr)
+{
+	kfree_ext(kheap, addr, KFREE_UNKNOWN_SIZE);
+}
 
-	bzero((void *)OSMTag, sizeof(*OSMTag));
+static struct kalloc_result
+_krealloc_ext(
+	kalloc_heap_t           kheap,
+	void                   *addr,
+	vm_size_t               old_size,
+	vm_size_t               new_size,
+	zalloc_flags_t          flags,
+	vm_allocation_site_t   *site)
+{
+	vm_size_t old_bucket_size, new_bucket_size, min_size;
+	struct kalloc_result kr;
+
+	if (new_size == 0) {
+		kfree_ext(kheap, addr, old_size);
+		return (struct kalloc_result){ };
+	}
+
+	if (addr == NULL) {
+		return kalloc_ext(kheap, new_size, flags, site);
+	}
+
+	/*
+	 * Find out the size of the bucket in which the new sized allocation
+	 * would land. If it matches the bucket of the original allocation,
+	 * simply return the same address.
+	 */
+	new_bucket_size = kalloc_bucket_size(new_size);
+	if (old_size == KFREE_UNKNOWN_SIZE) {
+		old_size = old_bucket_size = kalloc_size(addr);
+	} else {
+		old_bucket_size = kalloc_bucket_size(old_size);
+	}
+	min_size = MIN(old_size, new_size);
+
+	if (old_bucket_size == new_bucket_size) {
+		kr.addr = addr;
+#if KASAN_KALLOC
+		kr.size = new_size;
+#else
+		kr.size = new_bucket_size;
+#endif
+	} else {
+		kr = kalloc_ext(kheap, new_size, flags & ~Z_ZERO, site);
+		if (kr.addr == NULL) {
+			return kr;
+		}
+
+		memcpy(kr.addr, addr, min_size);
+		kfree_ext(kheap, addr, old_size);
+	}
+	if ((flags & Z_ZERO) && kr.size > min_size) {
+		bzero(kr.addr + min_size, kr.size - min_size);
+	}
+	return kr;
+}
+
+struct kalloc_result
+krealloc_ext(
+	kalloc_heap_t           kheap,
+	void                   *addr,
+	vm_size_t               old_size,
+	vm_size_t               new_size,
+	zalloc_flags_t          flags,
+	vm_allocation_site_t   *site)
+{
+	if (old_size > KFREE_ABSURD_SIZE) {
+		krealloc_size_invalid_panic(addr, old_size);
+	}
+	return _krealloc_ext(kheap, addr, old_size, new_size, flags, site);
+}
+
+struct kalloc_result
+kheap_realloc_addr(
+	kalloc_heap_t           kheap,
+	void                   *addr,
+	vm_size_t               size,
+	zalloc_flags_t          flags,
+	vm_allocation_site_t   *site)
+{
+	return _krealloc_ext(kheap, addr, KFREE_UNKNOWN_SIZE, size, flags, site);
+}
+
+__startup_func
+void
+kheap_startup_init(kalloc_heap_t kheap)
+{
+	struct kheap_zones *zones;
+
+	switch (kheap->kh_heap_id) {
+	case KHEAP_ID_DEFAULT:
+		zones = KHEAP_DEFAULT->kh_zones;
+		break;
+	case KHEAP_ID_DATA_BUFFERS:
+		zones = KHEAP_DATA_BUFFERS->kh_zones;
+		break;
+	case KHEAP_ID_KEXT:
+		zones = KHEAP_KEXT->kh_zones;
+		break;
+	default:
+		panic("kalloc_heap_startup_init: invalid KHEAP_ID: %d",
+		    kheap->kh_heap_id);
+	}
+
+	kheap->kh_heap_id = zones->heap_id;
+	kheap->kh_zones = zones;
+	kheap->kh_stats = zalloc_percpu_permanent_type(struct zone_stats);
+	kheap->kh_next = zones->views;
+	zones->views = kheap;
+
+	zone_view_count += 1;
+}
+
+#pragma mark OSMalloc
+/*
+ * This is a deprecated interface, here only for legacy reasons.
+ * There is no internal variant of any of these symbols on purpose.
+ */
+#define OSMallocDeprecated
+#include <libkern/OSMalloc.h>
+
+static KALLOC_HEAP_DEFINE(OSMALLOC, "osmalloc", KHEAP_ID_KEXT);
+static queue_head_t OSMalloc_tag_list = QUEUE_HEAD_INITIALIZER(OSMalloc_tag_list);
+static LCK_GRP_DECLARE(OSMalloc_tag_lck_grp, "OSMalloc_tag");
+static LCK_SPIN_DECLARE(OSMalloc_tag_lock, &OSMalloc_tag_lck_grp);
+
+#define OSMalloc_tag_spin_lock()        lck_spin_lock(&OSMalloc_tag_lock)
+#define OSMalloc_tag_unlock()           lck_spin_unlock(&OSMalloc_tag_lock)
+
+extern typeof(OSMalloc_Tagalloc) OSMalloc_Tagalloc_external;
+OSMallocTag
+OSMalloc_Tagalloc_external(const char *str, uint32_t flags)
+{
+	OSMallocTag OSMTag;
+
+	OSMTag = kheap_alloc(OSMALLOC, sizeof(*OSMTag), Z_WAITOK | Z_ZERO);
 
 	if (flags & OSMT_PAGEABLE) {
 		OSMTag->OSMT_attr = OSMT_ATTR_PAGEABLE;
@@ -949,69 +1310,75 @@ OSMalloc_Tagalloc(
 	return OSMTag;
 }
 
-void
-OSMalloc_Tagref(
-	OSMallocTag            tag)
+static void
+OSMalloc_Tagref(OSMallocTag tag)
 {
 	if (!((tag->OSMT_state & OSMT_VALID_MASK) == OSMT_VALID)) {
-		panic("OSMalloc_Tagref():'%s' has bad state 0x%08X\n", tag->OSMT_name, tag->OSMT_state);
+		panic("OSMalloc_Tagref():'%s' has bad state 0x%08X\n",
+		    tag->OSMT_name, tag->OSMT_state);
 	}
 
 	os_atomic_inc(&tag->OSMT_refcnt, relaxed);
 }
 
-void
-OSMalloc_Tagrele(
-	OSMallocTag            tag)
+static void
+OSMalloc_Tagrele(OSMallocTag tag)
 {
 	if (!((tag->OSMT_state & OSMT_VALID_MASK) == OSMT_VALID)) {
-		panic("OSMalloc_Tagref():'%s' has bad state 0x%08X\n", tag->OSMT_name, tag->OSMT_state);
+		panic("OSMalloc_Tagref():'%s' has bad state 0x%08X\n",
+		    tag->OSMT_name, tag->OSMT_state);
 	}
 
-	if (os_atomic_dec(&tag->OSMT_refcnt, relaxed) == 0) {
-		if (os_atomic_cmpxchg(&tag->OSMT_state, OSMT_VALID | OSMT_RELEASED, OSMT_VALID | OSMT_RELEASED, acq_rel)) {
-			OSMalloc_tag_spin_lock();
-			(void)remque((queue_entry_t)tag);
-			OSMalloc_tag_unlock();
-			kfree(tag, sizeof(*tag));
-		} else {
-			panic("OSMalloc_Tagrele():'%s' has refcnt 0\n", tag->OSMT_name);
-		}
+	if (os_atomic_dec(&tag->OSMT_refcnt, relaxed) != 0) {
+		return;
+	}
+
+	if (os_atomic_cmpxchg(&tag->OSMT_state,
+	    OSMT_VALID | OSMT_RELEASED, OSMT_VALID | OSMT_RELEASED, acq_rel)) {
+		OSMalloc_tag_spin_lock();
+		(void)remque((queue_entry_t)tag);
+		OSMalloc_tag_unlock();
+		kheap_free(OSMALLOC, tag, sizeof(*tag));
+	} else {
+		panic("OSMalloc_Tagrele():'%s' has refcnt 0\n", tag->OSMT_name);
 	}
 }
 
+extern typeof(OSMalloc_Tagfree) OSMalloc_Tagfree_external;
 void
-OSMalloc_Tagfree(
-	OSMallocTag            tag)
+OSMalloc_Tagfree_external(OSMallocTag tag)
 {
-	if (!os_atomic_cmpxchg(&tag->OSMT_state, OSMT_VALID, OSMT_VALID | OSMT_RELEASED, acq_rel)) {
-		panic("OSMalloc_Tagfree():'%s' has bad state 0x%08X \n", tag->OSMT_name, tag->OSMT_state);
+	if (!os_atomic_cmpxchg(&tag->OSMT_state,
+	    OSMT_VALID, OSMT_VALID | OSMT_RELEASED, acq_rel)) {
+		panic("OSMalloc_Tagfree():'%s' has bad state 0x%08X \n",
+		    tag->OSMT_name, tag->OSMT_state);
 	}
 
 	if (os_atomic_dec(&tag->OSMT_refcnt, relaxed) == 0) {
 		OSMalloc_tag_spin_lock();
 		(void)remque((queue_entry_t)tag);
 		OSMalloc_tag_unlock();
-		kfree(tag, sizeof(*tag));
+		kheap_free(OSMALLOC, tag, sizeof(*tag));
 	}
 }
 
+extern typeof(OSMalloc) OSMalloc_external;
 void *
-OSMalloc(
-	uint32_t                        size,
-	OSMallocTag                     tag)
+OSMalloc_external(
+	uint32_t size, OSMallocTag tag)
 {
-	void                    *addr = NULL;
+	void           *addr = NULL;
 	kern_return_t   kr;
 
 	OSMalloc_Tagref(tag);
-	if ((tag->OSMT_attr & OSMT_PAGEABLE)
-	    && (size & ~PAGE_MASK)) {
-		if ((kr = kmem_alloc_pageable_external(kernel_map, (vm_offset_t *)&addr, size)) != KERN_SUCCESS) {
+	if ((tag->OSMT_attr & OSMT_PAGEABLE) && (size & ~PAGE_MASK)) {
+		if ((kr = kmem_alloc_pageable_external(kernel_map,
+		    (vm_offset_t *)&addr, size)) != KERN_SUCCESS) {
 			addr = NULL;
 		}
 	} else {
-		addr = kalloc_tag_bt((vm_size_t)size, VM_KERN_MEMORY_KALLOC);
+		addr = kheap_alloc_tag_bt(OSMALLOC, size,
+		    Z_WAITOK, VM_KERN_MEMORY_KALLOC);
 	}
 
 	if (!addr) {
@@ -1021,10 +1388,9 @@ OSMalloc(
 	return addr;
 }
 
+extern typeof(OSMalloc_nowait) OSMalloc_nowait_external;
 void *
-OSMalloc_nowait(
-	uint32_t                        size,
-	OSMallocTag                     tag)
+OSMalloc_nowait_external(uint32_t size, OSMallocTag tag)
 {
 	void    *addr = NULL;
 
@@ -1034,7 +1400,8 @@ OSMalloc_nowait(
 
 	OSMalloc_Tagref(tag);
 	/* XXX: use non-blocking kalloc for now */
-	addr = kalloc_noblock_tag_bt((vm_size_t)size, VM_KERN_MEMORY_KALLOC);
+	addr = kheap_alloc_tag_bt(OSMALLOC, (vm_size_t)size,
+	    Z_NOWAIT, VM_KERN_MEMORY_KALLOC);
 	if (addr == NULL) {
 		OSMalloc_Tagrele(tag);
 	}
@@ -1042,10 +1409,9 @@ OSMalloc_nowait(
 	return addr;
 }
 
+extern typeof(OSMalloc_noblock) OSMalloc_noblock_external;
 void *
-OSMalloc_noblock(
-	uint32_t                        size,
-	OSMallocTag                     tag)
+OSMalloc_noblock_external(uint32_t size, OSMallocTag tag)
 {
 	void    *addr = NULL;
 
@@ -1054,7 +1420,8 @@ OSMalloc_noblock(
 	}
 
 	OSMalloc_Tagref(tag);
-	addr = kalloc_noblock_tag_bt((vm_size_t)size, VM_KERN_MEMORY_KALLOC);
+	addr = kheap_alloc_tag_bt(OSMALLOC, (vm_size_t)size,
+	    Z_NOWAIT, VM_KERN_MEMORY_KALLOC);
 	if (addr == NULL) {
 		OSMalloc_Tagrele(tag);
 	}
@@ -1062,25 +1429,85 @@ OSMalloc_noblock(
 	return addr;
 }
 
+extern typeof(OSFree) OSFree_external;
 void
-OSFree(
-	void                            *addr,
-	uint32_t                        size,
-	OSMallocTag                     tag)
+OSFree_external(void *addr, uint32_t size, OSMallocTag tag)
 {
 	if ((tag->OSMT_attr & OSMT_PAGEABLE)
 	    && (size & ~PAGE_MASK)) {
 		kmem_free(kernel_map, (vm_offset_t)addr, size);
 	} else {
-		kfree(addr, size);
+		kheap_free(OSMALLOC, addr, size);
 	}
 
 	OSMalloc_Tagrele(tag);
 }
 
-uint32_t
-OSMalloc_size(
-	void                            *addr)
+#pragma mark kern_os_malloc
+
+void *
+kern_os_malloc_external(size_t size);
+void *
+kern_os_malloc_external(size_t size)
 {
-	return (uint32_t)kalloc_size(addr);
+	if (size == 0) {
+		return NULL;
+	}
+
+	return kheap_alloc_tag_bt(KERN_OS_MALLOC, size, Z_WAITOK | Z_ZERO,
+	           VM_KERN_MEMORY_LIBKERN);
+}
+
+void
+kern_os_free_external(void *addr);
+void
+kern_os_free_external(void *addr)
+{
+	kheap_free_addr(KERN_OS_MALLOC, addr);
+}
+
+void *
+kern_os_realloc_external(void *addr, size_t nsize);
+void *
+kern_os_realloc_external(void *addr, size_t nsize)
+{
+	VM_ALLOC_SITE_STATIC(VM_TAG_BT, VM_KERN_MEMORY_LIBKERN);
+
+	return kheap_realloc_addr(KERN_OS_MALLOC, addr, nsize,
+	           Z_WAITOK | Z_ZERO, &site).addr;
+}
+
+void
+kern_os_zfree(zone_t zone, void *addr, vm_size_t size)
+{
+	if (zsecurity_options & ZSECURITY_OPTIONS_STRICT_IOKIT_FREE
+	    || zone_owns(zone, addr)) {
+		zfree(zone, addr);
+	} else {
+		/*
+		 * Third party kexts might not know about the operator new
+		 * and be allocated from the KEXT heap
+		 */
+		printf("kern_os_zfree: kheap_free called for object from zone %s\n",
+		    zone->z_name);
+		kheap_free(KHEAP_KEXT, addr, size);
+	}
+}
+
+void
+kern_os_kfree(void *addr, vm_size_t size)
+{
+	if (zsecurity_options & ZSECURITY_OPTIONS_STRICT_IOKIT_FREE) {
+		kheap_free(KHEAP_DEFAULT, addr, size);
+	} else {
+		/*
+		 * Third party kexts may not know about newly added operator
+		 * default new/delete. If they call new for any iokit object
+		 * it will end up coming from the KEXT heap. If these objects
+		 * are freed by calling release() or free(), the internal
+		 * version of operator delete is called and the kernel ends
+		 * up freeing the object to the DEFAULT heap.
+		 */
+		kheap_free(KHEAP_ANY, addr, size);
+	}
 }

@@ -78,7 +78,7 @@
 #include <miscfs/specfs/specdev.h>
 #include <sys/namei.h>
 #include <sys/errno.h>
-#include <sys/malloc.h>
+#include <kern/kalloc.h>
 #include <sys/kauth.h>
 #include <sys/user.h>
 #include <sys/paths.h>
@@ -108,6 +108,8 @@
 /*
  * Structures associated with name cacheing.
  */
+
+ZONE_DECLARE(namecache_zone, "namecache", sizeof(struct namecache), ZC_NONE);
 
 LIST_HEAD(nchashhead, namecache) * nchashtbl;    /* Hash Table */
 u_long  nchashmask;
@@ -151,8 +153,13 @@ lck_grp_t * strcache_lck_grp;
 lck_grp_attr_t * strcache_lck_grp_attr;
 lck_attr_t * strcache_lck_attr;
 
+lck_grp_t * rootvnode_lck_grp;
+lck_grp_attr_t * rootvnode_lck_grp_attr;
+lck_attr_t * rootvnode_lck_attr;
+
 lck_rw_t  * namecache_rw_lock;
 lck_rw_t  * strtable_rw_lock;
+lck_rw_t  * rootvnode_rw_lock;
 
 #define NUM_STRCACHE_LOCKS 1024
 
@@ -437,7 +444,7 @@ build_path_with_parent(vnode_t first_vp, vnode_t parent_vp, char *buff, int bufl
 	char *end;
 	char *mntpt_end;
 	const char *str;
-	int  len;
+	unsigned int  len;
 	int  ret = 0;
 	int  fixhardlink;
 
@@ -465,6 +472,16 @@ again:
 	end = &buff[buflen - 1];
 	*end = '\0';
 	mntpt_end = NULL;
+
+	/*
+	 * Catch a special corner case here: chroot to /full/path/to/dir, chdir to
+	 * it, then open it. Without this check, the path to it will be
+	 * /full/path/to/dir instead of "/".
+	 */
+	if (proc_root_dir_vp == first_vp) {
+		*--end = '/';
+		goto out;
+	}
 
 	/*
 	 * holding the NAME_CACHE_LOCK in shared mode is
@@ -553,11 +570,11 @@ again:
 				}
 				goto out_unlock;
 			}
-			len = strlen(str);
+			len = (unsigned int)strlen(str);
 			/*
 			 * Check that there's enough space (including space for the '/')
 			 */
-			if ((end - buff) < (len + 1)) {
+			if ((unsigned int)(end - buff) < (len + 1)) {
 				ret = ENOSPC;
 				goto out_unlock;
 			}
@@ -641,7 +658,7 @@ again:
 
 			if (fixhardlink) {
 				VATTR_WANTED(&va, va_name);
-				MALLOC_ZONE(va.va_name, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
+				va.va_name = zalloc(ZV_NAMEI);
 			} else {
 				va.va_name = NULL;
 			}
@@ -653,7 +670,7 @@ again:
 			if (fixhardlink) {
 				if ((ret == 0) && (VATTR_IS_SUPPORTED(&va, va_name))) {
 					str = va.va_name;
-					vnode_update_identity(vp, NULL, str, strlen(str), 0, VNODE_UPDATE_NAME);
+					vnode_update_identity(vp, NULL, str, (unsigned int)strlen(str), 0, VNODE_UPDATE_NAME);
 				} else if (vp->v_name) {
 					str = vp->v_name;
 					ret = 0;
@@ -661,12 +678,12 @@ again:
 					ret = ENOENT;
 					goto bad_news;
 				}
-				len = strlen(str);
+				len = (unsigned int)strlen(str);
 
 				/*
 				 * Check that there's enough space.
 				 */
-				if ((end - buff) < (len + 1)) {
+				if ((unsigned int)(end - buff) < (len + 1)) {
 					ret = ENOSPC;
 				} else {
 					/* Copy the name backwards. */
@@ -681,7 +698,7 @@ again:
 					*--end = '/';
 				}
 bad_news:
-				FREE_ZONE(va.va_name, MAXPATHLEN, M_NAMEI);
+				zfree(ZV_NAMEI, va.va_name);
 			}
 			if (ret || !VATTR_IS_SUPPORTED(&va, va_parentid)) {
 				ret = ENOENT;
@@ -857,7 +874,7 @@ vnode_getname(vnode_t vp)
 	NAME_CACHE_LOCK_SHARED();
 
 	if (vp->v_name) {
-		name = vfs_addname(vp->v_name, strlen(vp->v_name), 0, 0);
+		name = vfs_addname(vp->v_name, (unsigned int)strlen(vp->v_name), 0, 0);
 	}
 	NAME_CACHE_UNLOCK();
 
@@ -899,7 +916,7 @@ vnode_getname_printable(vnode_t vp)
 		 * and returns it.
 		 */
 		NAME_CACHE_LOCK_SHARED();
-		name = vfs_addname(dev_name, strlen(dev_name), 0, 0);
+		name = vfs_addname(dev_name, (unsigned int)strlen(dev_name), 0, 0);
 		NAME_CACHE_UNLOCK();
 		return name;
 	}
@@ -942,6 +959,10 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 	const char *vname = NULL;
 	const char *tname = NULL;
 
+	if (name_len < 0) {
+		return;
+	}
+
 	if (flags & VNODE_UPDATE_PARENT) {
 		if (dvp && vnode_ref(dvp) != 0) {
 			dvp = NULLVP;
@@ -960,7 +981,7 @@ vnode_update_identity(vnode_t vp, vnode_t dvp, const char *name, int name_len, u
 		if (name != vp->v_name) {
 			if (name && *name) {
 				if (name_len == 0) {
-					name_len = strlen(name);
+					name_len = (int)strlen(name);
 				}
 				tname = vfs_addname(name, name_len, name_hashval, 0);
 			}
@@ -1465,7 +1486,7 @@ vnode_cache_authorized_action(vnode_t vp, vfs_context_t ctx, kauth_action_t acti
 		 * authorized actions if the TTL is active and
 		 * it has expired
 		 */
-		vp->v_cred_timestamp = tv.tv_sec;
+		vp->v_cred_timestamp = (int)tv.tv_sec;
 	}
 	vp->v_authorized_actions |= action;
 
@@ -1554,7 +1575,7 @@ cache_lookup_path(struct nameidata *ndp, struct componentname *cnp, vnode_t dp,
 			hash = 1;
 		}
 		cnp->cn_hash = hash;
-		cnp->cn_namelen = cp - cnp->cn_nameptr;
+		cnp->cn_namelen = (int)(cp - cnp->cn_nameptr);
 
 		ndp->ni_pathlen -= cnp->cn_namelen;
 		ndp->ni_next = cp;
@@ -1662,6 +1683,18 @@ skiprsrcfork:
 		*dp_authorized = 1;
 
 		if ((cnp->cn_flags & (ISLASTCN | ISDOTDOT))) {
+			/*
+			 * Moving the firmlinks section to be first to catch a corner case:
+			 * When using DOTDOT to get a parent of a firmlink, we want the
+			 * firmlink source to be resolved even if cn_nameiop != LOOKUP.
+			 * This is because lookup() traverses DOTDOT by calling VNOP_LOOKUP
+			 * and has no notion about firmlinks
+			 */
+#if CONFIG_FIRMLINKS
+			if (cnp->cn_flags & ISDOTDOT && dp->v_fmlink && (dp->v_flag & VFMLINKTARGET)) {
+				dp = dp->v_fmlink;
+			}
+#endif
 			if (cnp->cn_nameiop != LOOKUP) {
 				break;
 			}
@@ -1671,13 +1704,8 @@ skiprsrcfork:
 			if (cnp->cn_flags & NOCACHE) {
 				break;
 			}
-			if (cnp->cn_flags & ISDOTDOT) {
-#if CONFIG_FIRMLINKS
-				if (dp->v_fmlink && (dp->v_flag & VFMLINKTARGET)) {
-					dp = dp->v_fmlink;
-				}
-#endif
 
+			if (cnp->cn_flags & ISDOTDOT) {
 				/*
 				 * Force directory hardlinks to go to
 				 * file system for ".." requests.
@@ -2223,7 +2251,7 @@ cache_enter_locked(struct vnode *dvp, struct vnode *vp, struct componentname *cn
 		/*
 		 * Allocate one more entry
 		 */
-		ncp = (struct namecache *)_MALLOC_ZONE(sizeof(*ncp), M_CACHE, M_WAITOK);
+		ncp = zalloc(namecache_zone);
 		numcache++;
 	} else {
 		/*
@@ -2265,7 +2293,7 @@ cache_enter_locked(struct vnode *dvp, struct vnode *vp, struct componentname *cn
 	//   <rdar://problem/8044697> FSEvents doesn't always decompose diacritical unicode chars in the paths of the changed directories
 	//
 	const char *vn_name = vp ? vp->v_name : NULL;
-	unsigned int len = vn_name ? strlen(vn_name) : 0;
+	unsigned int len = vn_name ? (unsigned int)strlen(vn_name) : 0;
 	if (vn_name && ncp && ncp->nc_name && strncmp(ncp->nc_name, vn_name, len) != 0) {
 		unsigned int hash = hash_string(vn_name, len);
 
@@ -2414,6 +2442,17 @@ nchinit(void)
 	for (i = 0; i < NUM_STRCACHE_LOCKS; i++) {
 		lck_mtx_init(&strcache_mtx_locks[i], strcache_lck_grp, strcache_lck_attr);
 	}
+
+	/* Allocate root vnode lock group attribute and group */
+	rootvnode_lck_grp_attr = lck_grp_attr_alloc_init();
+
+	rootvnode_lck_grp = lck_grp_alloc_init("rootvnode", rootvnode_lck_grp_attr);
+
+	/* Allocate rootvnode lock attribute */
+	rootvnode_lck_attr = lck_attr_alloc_init();
+
+	/* Allocate rootvnode lock */
+	rootvnode_rw_lock = lck_rw_alloc_init(rootvnode_lck_grp, rootvnode_lck_attr);
 }
 
 void
@@ -2528,7 +2567,7 @@ cache_delete(struct namecache *ncp, int free_entry)
 	ncp->nc_name = NULL;
 	if (free_entry) {
 		TAILQ_REMOVE(&nchead, ncp, nc_entry);
-		FREE_ZONE(ncp, sizeof(*ncp), M_CACHE);
+		zfree(namecache_zone, ncp);
 		numcache--;
 	}
 }
@@ -2685,7 +2724,8 @@ resize_string_ref_table(void)
 		lck_rw_done(strtable_rw_lock);
 		return;
 	}
-	new_table = hashinit((string_table_mask + 1) * 2, M_CACHE, &new_mask);
+	assert(string_table_mask < INT32_MAX);
+	new_table = hashinit((int)(string_table_mask + 1) * 2, M_CACHE, &new_mask);
 
 	if (new_table == NULL) {
 		printf("failed to resize the hash table.\n");
@@ -2796,7 +2836,7 @@ add_name_internal(const char *name, uint32_t len, u_int hashval, boolean_t need_
 		/*
 		 * it wasn't already there so add it.
 		 */
-		MALLOC(entry, string_t *, sizeof(string_t) + len + 1, M_TEMP, M_WAITOK);
+		entry = kheap_alloc(KHEAP_DEFAULT, sizeof(string_t) + len + 1, Z_WAITOK);
 
 		if (head->lh_first == NULL) {
 			OSAddAtomic(1, &filled_buckets);
@@ -2869,9 +2909,7 @@ vfs_removename(const char *nameref)
 	lck_mtx_unlock(&strcache_mtx_locks[lock_index]);
 	lck_rw_done(strtable_rw_lock);
 
-	if (entry != NULL) {
-		FREE(entry, M_TEMP);
-	}
+	kheap_free_addr(KHEAP_DEFAULT, entry);
 
 	return retval;
 }

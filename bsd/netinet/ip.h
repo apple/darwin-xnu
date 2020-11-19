@@ -63,11 +63,20 @@
 
 #ifndef _NETINET_IP_H_
 #define _NETINET_IP_H_
+#ifndef DRIVERKIT
 #include <sys/appleapiopts.h>
 #include <sys/types.h>          /* XXX temporary hack to get u_ types */
+#else
+#include <sys/_types.h>
+#include <sys/_types/_u_int.h>
+#include <sys/_types/_u_char.h>
+#include <sys/_types/_u_short.h>
+
+#include <machine/endian.h>
+#endif /* DRIVERKIT */
+
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
-
 
 /*
  * Definitions for internet protocol version 4.
@@ -106,7 +115,7 @@ struct ip {
 };
 
 #ifdef _IP_VHL
-#define IP_MAKE_VHL(v, hl)      ((v) << 4 | (hl))
+#define IP_MAKE_VHL(v, hl)      ((uint8_t)((v) << 4 | (hl)))
 #define IP_VHL_HL(vhl)          ((vhl) & 0x0f)
 #define IP_VHL_V(vhl)           ((vhl) >> 4)
 #define IP_VHL_BORING           0x45

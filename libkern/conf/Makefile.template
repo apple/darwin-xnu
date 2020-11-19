@@ -19,32 +19,6 @@ include $(MakeInc_def)
 CFLAGS+= -include meta_features.h -DLIBKERN_KERNEL_PRIVATE -DOSALLOCDEBUG=1
 SFLAGS+= -include meta_features.h
 
-# Objects that don't want -Wcast-align warning (8474835)
-OSKextLib.cpo_CXXWARNFLAGS_ADD = -Wno-cast-align
-OSKext.cpo_CXXWARNFLAGS_ADD = -Wno-cast-align -Wno-cast-qual
-OSMetaClass.cpo_CXXWARNFLAGS_ADD = -Wno-cast-align
-OSRuntime.cpo_CXXWARNFLAGS_ADD += -Wno-missing-prototypes
-OSUnserialize.cpo_CXXWARNFLAGS_ADD = -Wno-cast-align -Wno-unreachable-code-break
-corecrypto_md5.o_CWARNFLAGS_ADD = -Wno-cast-align
-corecrypto_sha1.o_CWARNFLAGS_ADD = -Wno-cast-align
-
-# zlib is 3rd party source
-compress.o_CWARNFLAGS_ADD = -Wno-cast-qual
-deflate.o_CWARNFLAGS_ADD = -Wno-cast-qual
-infback.o_CWARNFLAGS_ADD = -Wno-cast-qual
-inffast.o_CWARNFLAGS_ADD = -Wno-cast-qual
-inflate.o_CWARNFLAGS_ADD = -Wno-cast-qual
-trees.o_CWARNFLAGS_ADD = -Wno-cast-qual
-uncompr.o_CWARNFLAGS_ADD = -Wno-cast-qual
-
-# libclosure
-runtime.cpo_CXXWARNFLAGS_ADD = -Wno-cast-qual
-
-
-# warnings in bison-generated code
-OSUnserializeXML.cpo_CXXWARNFLAGS_ADD += -Wno-uninitialized -Wno-unreachable-code -Wno-unreachable-code-break -Wno-zero-as-null-pointer-constant
-OSUnserialize.cpo_CXXWARNFLAGS_ADD += -Wno-unreachable-code -Wno-zero-as-null-pointer-constant
-
 # Runtime support functions don't interact well with LTO (9294679)
 stack_protector.o_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG)
 
@@ -77,6 +51,87 @@ COMP_SUBDIRS =
 
 %MACHDEP
 
+#
+# Machine-independent per-file flags
+#
+
+#
+# Diagnostic opt-outs.  We need to make this list empty.
+#
+# DO NOT ADD MORE HERE.
+#
+# -Wno-cast-align
+OSKext.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
+OSKextLib.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
+OSMetaClass.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
+OSUnserialize.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
+corecrypto_md5.o_CFLAGS_ADD += -Wno-cast-align
+corecrypto_sha1.o_CFLAGS_ADD += -Wno-cast-align
+# -Wno-cast-qual
+OSKext.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+compress.o_CFLAGS_ADD += -Wno-cast-qual
+deflate.o_CFLAGS_ADD += -Wno-cast-qual
+runtime.cpo_CXXWARNFLAGS_ADD += -Wno-cast-qual
+trees.o_CFLAGS_ADD += -Wno-cast-qual
+uncompr.o_CFLAGS_ADD += -Wno-cast-qual
+# -Wno-implicit-int-conversion
+OSUnserialize.cpo_CXXWARNFLAGS_ADD += -Wno-implicit-int-conversion
+OSUnserializeXML.cpo_CXXWARNFLAGS_ADD += -Wno-implicit-int-conversion
+kxld_sym.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+log.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+scanf.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+# -Wno-missing-prototypes
+OSRuntime.cpo_CXXWARNFLAGS_ADD += -Wno-missing-prototypes
+# -Wno-shorten-64-to-32
+OSKext.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+OSUnserialize.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+OSUnserializeXML.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+log.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+scanf.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+# -Wno-sign-conversion
+OSCollection.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+OSData.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+OSDebug.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+OSKext.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+OSKextVersion.o_CFLAGS_ADD += -Wno-sign-conversion
+OSMetaClass.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+OSNumber.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+OSObject.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+OSRuntime.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+OSSerializeBinary.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+OSSet.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+OSString.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+OSUnserialize.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+OSUnserializeXML.cpo_CXXWARNFLAGS_ADD += -Wno-sign-conversion
+adler32.o_CFLAGS_ADD += -Wno-sign-conversion
+corecrypto_aes.o_CFLAGS_ADD += -Wno-sign-conversion
+corecrypto_aesxts.o_CFLAGS_ADD += -Wno-sign-conversion
+deflate.o_CFLAGS_ADD += -Wno-sign-conversion
+inet_aton.o_CFLAGS_ADD += -Wno-sign-conversion
+infback.o_CFLAGS_ADD += -Wno-sign-conversion
+inflate.o_CFLAGS_ADD += -Wno-sign-conversion
+kxld_array.o_CFLAGS_ADD += -Wno-sign-conversion
+kxld_copyright.o_CFLAGS_ADD += -Wno-sign-conversion
+kxld_dict.o_CFLAGS_ADD += -Wno-sign-conversion
+kxld_object.o_CFLAGS_ADD += -Wno-sign-conversion
+kxld_reloc.o_CFLAGS_ADD += -Wno-sign-conversion
+kxld_sym.o_CFLAGS_ADD += -Wno-sign-conversion
+kxld_symtab.o_CFLAGS_ADD += -Wno-sign-conversion
+kxld_util.o_CFLAGS_ADD += -Wno-sign-conversion
+log.o_CFLAGS_ADD += -Wno-sign-conversion
+refcnt.o_CFLAGS_ADD += -Wno-sign-conversion
+scanf.o_CFLAGS_ADD += -Wno-sign-conversion
+trees.o_CFLAGS_ADD += -Wno-sign-conversion
+uuid.o_CFLAGS_ADD += -Wno-sign-conversion
+# -Wno-unreachable-code
+OSUnserialize.cpo_CXXWARNFLAGS_ADD += -Wno-unreachable-code
+OSUnserializeXML.cpo_CXXWARNFLAGS_ADD += -Wno-unreachable-code
+OSUnserialize.cpo_CXXWARNFLAGS_ADD += -Wno-unreachable-code-break
+OSUnserializeXML.cpo_CXXWARNFLAGS_ADD += -Wno-unreachable-code-break
+# -Wno-zero-as-null-pointer-constant
+OSUnserialize.cpo_CXXWARNFLAGS_ADD += -Wno-zero-as-null-pointer-constant
+OSUnserializeXML.cpo_CXXWARNFLAGS_ADD += -Wno-zero-as-null-pointer-constant
+
 # Rebuild if per-file overrides change
 ${OBJS}: $(firstword $(MAKEFILE_LIST))
 
@@ -97,7 +152,7 @@ $(COMPONENT).filelist: $(OBJS)
 		$(SEG_HACK) -n __HIB -o $${hib_file}__ $${hib_file} || exit 1; \
 		mv $${hib_file}__ $${hib_file} || exit 1; \
 	done
-	$(call makelog,$(ColorL)LDFILELIST$(Color0) $(ColorLF)$(COMPONENT)$(Color0))
+	@$(LOG_LDFILELIST) "$(COMPONENT)"
 	$(_v)for obj in ${OBJS}; do	\
 		 $(ECHO) $(TARGET)/$(CURRENT_KERNEL_CONFIG)/$${obj}; \
 	done > $(COMPONENT).filelist

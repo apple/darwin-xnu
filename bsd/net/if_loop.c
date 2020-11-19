@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -97,20 +97,14 @@
 #include <netinet/in_var.h>
 #endif
 
-#if INET6
 #if !INET
 #include <netinet/in.h>
 #endif
 #include <netinet6/in6_var.h>
 #include <netinet/ip6.h>
-#endif
 
 #include <net/dlil.h>
 #include <net/kpi_protocol.h>
-
-#if CONFIG_MACF_NET
-#include <security/mac_framework.h>
-#endif
 
 #include <pexpert/pexpert.h>
 
@@ -296,7 +290,6 @@ lo_output(struct ifnet *ifp, struct mbuf *m_list)
 	for (m = m_list; m; m = m->m_nextpkt) {
 		VERIFY(m->m_flags & M_PKTHDR);
 		cnt++;
-		len += m->m_pkthdr.len;
 
 		/*
 		 * Don't overwrite the rcvif field if it is in use.
@@ -317,6 +310,7 @@ lo_output(struct ifnet *ifp, struct mbuf *m_list)
 		    CSUM_IP_CHECKED | CSUM_IP_VALID;
 
 		m_adj(m, sizeof(struct loopback_header));
+		len += m->m_pkthdr.len;
 
 		LO_BPF_TAP_OUT(m);
 		if (m->m_nextpkt == NULL) {
@@ -545,10 +539,8 @@ lo_ioctl(struct ifnet *ifp, u_long cmd, void *data)
 		case AF_INET:
 			break;
 #endif
-#if INET6
 		case AF_INET6:
 			break;
-#endif
 
 		default:
 			error = EAFNOSUPPORT;
@@ -698,10 +690,6 @@ loopattach(void)
 	ifnet_set_hdrlen(lo_ifp, sizeof(struct loopback_header));
 	ifnet_set_eflags(lo_ifp, IFEF_SENDLIST, IFEF_SENDLIST);
 
-#if CONFIG_MACF_NET
-	mac_ifnet_label_init(ifp);
-#endif
-
 	result = ifnet_attach(lo_ifp, NULL);
 	if (result != 0) {
 		panic("%s: couldn't attach loopback ifnet (%d)\n",
@@ -712,8 +700,8 @@ loopattach(void)
 	 * Disable ECN on loopback as ECN serves no purpose and otherwise
 	 * TCP connections are subject to heuristics like SYN retransmits on RST
 	 */
-	lo_ifp->if_eflags &= ~IFEF_ECN_ENABLE;
-	lo_ifp->if_eflags |= IFEF_ECN_DISABLE;
+	if_clear_eflags(lo_ifp, IFEF_ECN_ENABLE);
+	if_set_eflags(lo_ifp, IFEF_ECN_DISABLE);
 
 	bpfattach(lo_ifp, DLT_NULL, sizeof(u_int32_t));
 }

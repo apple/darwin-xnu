@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -58,6 +58,7 @@ extern struct flowadv_fcentry *flowadv_alloc_entry(int);
 extern void flowadv_free_entry(struct flowadv_fcentry *);
 extern void flowadv_add(struct flowadv_fclist *);
 extern void flowadv_add_entry(struct flowadv_fcentry *);
+extern void flowadv_reap_caches(boolean_t);
 
 __END_DECLS
 

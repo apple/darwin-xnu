@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -106,17 +106,6 @@
 #include <net/necp.h>
 #endif /* NECP */
 
-/* XXX This one should go in sys/mbuf.h. It is used to avoid that
- * a firewall-generated packet loops forever through the firewall.
- */
-#ifndef M_SKIP_FIREWALL
-#define M_SKIP_FIREWALL         0x4000
-#endif
-
-#if CONFIG_MACF_NET
-#include <security/mac_framework.h>
-#endif /* MAC_NET */
-
 
 /*
  * ICMP routines: error generation, receive packet processing, and
@@ -155,11 +144,11 @@ const static int icmp_datalen = 8;
 
 /* Default values in case CONFIG_ICMP_BANDLIM is not defined in the MASTER file */
 #ifndef CONFIG_ICMP_BANDLIM
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 #define CONFIG_ICMP_BANDLIM 250
-#else /* CONFIG_EMBEDDED */
+#else /* !XNU_TARGET_OS_OSX */
 #define CONFIG_ICMP_BANDLIM 50
-#endif /* CONFIG_EMBEDDED */
+#endif /* !XNU_TARGET_OS_OSX */
 #endif /* CONFIG_ICMP_BANDLIM */
 
 /*
@@ -218,6 +207,8 @@ icmp_error(
 	u_int32_t nlen = 0;
 
 	VERIFY((u_int)type <= ICMP_MAXTYPE);
+	VERIFY(code <= UINT8_MAX);
+
 	/* Expect 32-bit aligned data pointer on strict-align platforms */
 	MBUF_STRICT_DATA_ALIGNMENT_CHECK_32(n);
 
@@ -306,10 +297,11 @@ icmp_error(
 		th = (struct tcphdr *)(void *)((caddr_t)oip + oiphlen);
 
 		if (th != ((struct tcphdr *)P2ROUNDDOWN(th,
-		    sizeof(u_int32_t)))) {
+		    sizeof(u_int32_t))) ||
+		    ((th->th_off << 2) > UINT16_MAX)) {
 			goto freeit;
 		}
-		tcphlen = th->th_off << 2;
+		tcphlen = (uint16_t)(th->th_off << 2);
 
 		/* Sanity checks */
 		if (tcphlen < sizeof(struct tcphdr)) {
@@ -360,22 +352,19 @@ stdreply:       icmpelen = max(ICMP_MINLEN, min(icmp_datalen,
 		goto freeit;
 	}
 
-#if CONFIG_MACF_NET
-	mac_mbuf_label_associate_netlayer(n, m);
-#endif
 	/*
 	 * Further refine the payload length to the space
 	 * remaining in mbuf after including the IP header and ICMP
 	 * header.
 	 */
-	icmplen = min(icmplen, M_TRAILINGSPACE(m) -
-	    sizeof(struct ip) - ICMP_MINLEN);
+	icmplen = min(icmplen, (u_int)M_TRAILINGSPACE(m) -
+	    (u_int)(sizeof(struct ip) - ICMP_MINLEN));
 	m_align(m, ICMP_MINLEN + icmplen);
 	m->m_len = ICMP_MINLEN + icmplen; /* for ICMP header and data */
 
 	icp = mtod(m, struct icmp *);
 	icmpstat.icps_outhist[type]++;
-	icp->icmp_type = type;
+	icp->icmp_type = (u_char)type;
 	if (type == ICMP_REDIRECT) {
 		icp->icmp_gwaddr.s_addr = dest;
 	} else {
@@ -385,15 +374,15 @@ stdreply:       icmpelen = max(ICMP_MINLEN, min(icmp_datalen,
 		 * zeroed icmp_void field.
 		 */
 		if (type == ICMP_PARAMPROB) {
-			icp->icmp_pptr = code;
+			icp->icmp_pptr = (u_char)code;
 			code = 0;
 		} else if (type == ICMP_UNREACH &&
 		    code == ICMP_UNREACH_NEEDFRAG && nextmtu != 0) {
-			icp->icmp_nextmtu = htons(nextmtu);
+			icp->icmp_nextmtu = htons((uint16_t)nextmtu);
 		}
 	}
 
-	icp->icmp_code = code;
+	icp->icmp_code = (u_char)code;
 
 	/*
 	 * Copy icmplen worth of content from original
@@ -412,17 +401,14 @@ stdreply:       icmpelen = max(ICMP_MINLEN, min(icmp_datalen,
 	/*
 	 * Set up ICMP message mbuf and copy old IP header (without options
 	 * in front of ICMP message.
-	 * If the original mbuf was meant to bypass the firewall, the error
-	 * reply should bypass as well.
 	 */
-	m->m_flags |= n->m_flags & M_SKIP_FIREWALL;
 	m->m_data -= sizeof(struct ip);
 	m->m_len += sizeof(struct ip);
 	m->m_pkthdr.len = m->m_len;
 	m->m_pkthdr.rcvif = n->m_pkthdr.rcvif;
 	nip = mtod(m, struct ip *);
 	bcopy((caddr_t)oip, (caddr_t)nip, sizeof(struct ip));
-	nip->ip_len = m->m_len;
+	nip->ip_len = (uint16_t)m->m_len;
 	nip->ip_vhl = IP_VHL_BORING;
 	nip->ip_p = IPPROTO_ICMP;
 	nip->ip_tos = 0;
@@ -660,7 +646,7 @@ badcode:
 
 		icp->icmp_type = ICMP_ECHOREPLY;
 #if ICMP_BANDLIM
-		if (badport_bandlim(BANDLIM_ICMP_ECHO) < 0) {
+		if (badport_bandlim(BANDLIM_ICMP_ECHO)) {
 			goto freeit;
 		} else
 #endif
@@ -684,7 +670,7 @@ badcode:
 		icp->icmp_rtime = iptime();
 		icp->icmp_ttime = icp->icmp_rtime;      /* bogus, do later! */
 #if ICMP_BANDLIM
-		if (badport_bandlim(BANDLIM_ICMP_TSTAMP) < 0) {
+		if (badport_bandlim(BANDLIM_ICMP_TSTAMP)) {
 			goto freeit;
 		} else
 #endif
@@ -890,14 +876,11 @@ match:
 		IFA_ADDREF(&ia->ia_ifa);
 		lck_rw_done(in_ifaddr_rwlock);
 	}
-#if CONFIG_MACF_NET
-	mac_netinet_icmp_reply(m);
-#endif
 	IFA_LOCK_SPIN(&ia->ia_ifa);
 	t = IA_SIN(ia)->sin_addr;
 	IFA_UNLOCK(&ia->ia_ifa);
 	ip->ip_src = t;
-	ip->ip_ttl = ip_defttl;
+	ip->ip_ttl = (u_char)ip_defttl;
 	IFA_REMREF(&ia->ia_ifa);
 	ia = NULL;
 
@@ -1108,13 +1091,13 @@ ip_next_mtu(int mtu, int dir)
  *	delay with more complex code.
  */
 
-int
+boolean_t
 badport_bandlim(int which)
 {
 	static uint64_t lticks[BANDLIM_MAX + 1];
 	static int lpackets[BANDLIM_MAX + 1];
-	uint64_t time = net_uptime();
-	int secs;
+	uint64_t time;
+	uint64_t secs;
 
 	const char *bandlimittype[] = {
 		"Limiting icmp unreach response",
@@ -1124,15 +1107,13 @@ badport_bandlim(int which)
 		"Limiting open port RST response"
 	};
 
-	/*
-	 * Return ok status if feature disabled or argument out of
-	 * ranage.
-	 */
+	/* Return ok status if feature disabled or argument out of range. */
 
 	if (icmplim <= 0 || which > BANDLIM_MAX || which < 0) {
-		return 0;
+		return false;
 	}
 
+	time = net_uptime();
 	secs = time - lticks[which];
 
 	/*
@@ -1156,9 +1137,9 @@ badport_bandlim(int which)
 	 */
 
 	if (++lpackets[which] > icmplim) {
-		return -1;
+		return true;
 	}
-	return 0;
+	return false;
 }
 
 #endif
@@ -1229,7 +1210,7 @@ icmp_dgram_attach(struct socket *so, __unused int proto, struct proc *p)
 	inp = (struct inpcb *)so->so_pcb;
 	inp->inp_vflag |= INP_IPV4;
 	inp->inp_ip_p = IPPROTO_ICMP;
-	inp->inp_ip_ttl = ip_defttl;
+	inp->inp_ip_ttl = (u_char)ip_defttl;
 	return 0;
 }
 
@@ -1267,6 +1248,7 @@ icmp_dgram_ctloutput(struct socket *so, struct sockopt *sopt)
 	case IP_STRIPHDR:
 	case IP_RECVTTL:
 	case IP_BOUND_IF:
+	case IP_DONTFRAG:
 	case IP_NO_IFT_CELLULAR:
 		error = rip_ctloutput(so, sopt);
 		break;

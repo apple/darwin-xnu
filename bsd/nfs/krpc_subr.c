@@ -358,7 +358,9 @@ krpc_call(
 	if (sotype == SOCK_STREAM) {
 		/* first, fill in RPC record marker */
 		u_int32_t *recmark = mbuf_data(mhead);
-		*recmark = htonl(0x80000000 | (mbuf_pkthdr_len(mhead) - 4));
+		size_t pkthdr_len = mbuf_pkthdr_len(mhead);
+		assert(pkthdr_len <= UINT32_MAX);
+		*recmark = htonl(0x80000000 | (uint32_t)(pkthdr_len - 4));
 		call = (struct rpc_call *)(recmark + 1);
 	} else {
 		call = mbuf_data(mhead);
@@ -393,7 +395,12 @@ krpc_call(
 			msg.msg_namelen = 0;
 		} else {
 			msg.msg_name = mbuf_data(nam);
-			msg.msg_namelen = mbuf_len(nam);
+			if (mbuf_len(nam) > UINT_MAX) {
+				printf("krpc_call: mbuf_len is too long: EINVAL\n");
+				error = EINVAL;
+				goto out;
+			}
+			msg.msg_namelen = (uint32_t)mbuf_len(nam);
 		}
 		error = sock_sendmbuf(so, &msg, m, 0, 0);
 		if (error) {
@@ -447,7 +454,7 @@ krpc_call(
 				if (error) {
 					goto out;
 				}
-				len = ntohl(len) & ~0x80000000;
+				len = ntohll(len) & ~0x80000000;
 				/*
 				 * This is SERIOUS! We are out of sync with the sender
 				 * and forcing a disconnect/reconnect is all I can do.
@@ -592,7 +599,13 @@ gotreply:
 		len += ntohl(reply->rp_u.rpu_ok.rp_auth.rp_alen);
 		len = (len + 3) & ~3; /* XXX? */
 	}
-	mbuf_adj(m, len);
+
+	if (len > INT_MAX) {
+		error = EINVAL;
+		goto out;
+	}
+
+	mbuf_adj(m, (int)len);
 
 	/* result */
 	*data = m;

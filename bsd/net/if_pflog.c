@@ -85,12 +85,10 @@
 #include <netinet/ip.h>
 #endif
 
-#if INET6
 #if !INET
 #include <netinet/in.h>
 #endif
 #include <netinet6/nd6.h>
-#endif /* INET6 */
 
 #include <net/pfvar.h>
 #include <net/if_pflog.h>

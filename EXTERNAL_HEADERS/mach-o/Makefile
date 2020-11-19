@@ -8,6 +8,7 @@ include $(MakeInc_def)
 
 EXPORT_FILES = \
 	fat.h		\
+	fixup-chains.h	\
 	loader.h	\
 	nlist.h		\
 	reloc.h

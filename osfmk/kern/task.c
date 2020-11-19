@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -167,10 +167,6 @@
 
 #include <mach-o/loader.h>
 
-#if CONFIG_ATM
-#include <atm/atm_internal.h>
-#endif
-
 #include <kern/sfi.h>           /* picks up ledger.h */
 
 #if CONFIG_MACF
@@ -184,24 +180,36 @@ extern int kpc_force_all_ctrs(task_t, int);
 #endif
 
 SECURITY_READ_ONLY_LATE(task_t) kernel_task;
-SECURITY_READ_ONLY_LATE(zone_t) task_zone;
-lck_attr_t      task_lck_attr;
-lck_grp_t       task_lck_grp;
-lck_grp_attr_t  task_lck_grp_attr;
+
+static SECURITY_READ_ONLY_LATE(zone_t) task_zone;
+ZONE_INIT(&task_zone, "tasks", sizeof(struct task),
+    ZC_NOENCRYPT | ZC_ZFREE_CLEARMEM,
+    ZONE_ID_TASK, NULL);
 
 extern int exc_via_corpse_forking;
 extern int corpse_for_fatal_memkill;
 extern boolean_t proc_send_synchronous_EXC_RESOURCE(void *p);
+extern void task_disown_frozen_csegs(task_t owner_task);
 
 /* Flag set by core audio when audio is playing. Used to stifle EXC_RESOURCE generation when active. */
 int audio_active = 0;
+
+/*
+ *	structure for tracking zone usage
+ *	Used either one per task/thread for all zones or <per-task,per-zone>.
+ */
+typedef struct zinfo_usage_store_t {
+	/* These fields may be updated atomically, and so must be 8 byte aligned */
+	uint64_t        alloc __attribute__((aligned(8)));              /* allocation counter */
+	uint64_t        free __attribute__((aligned(8)));               /* free counter */
+} zinfo_usage_store_t;
 
 zinfo_usage_store_t tasks_tkm_private;
 zinfo_usage_store_t tasks_tkm_shared;
 
 /* A container to accumulate statistics for expired tasks */
 expired_task_statistics_t               dead_task_statistics;
-lck_spin_t              dead_task_statistics_lock;
+LCK_SPIN_DECLARE_ATTR(dead_task_statistics_lock, &task_lck_grp, &task_lck_attr);
 
 ledger_template_t task_ledger_template = NULL;
 
@@ -244,9 +252,9 @@ SECURITY_READ_ONLY_LATE(struct _task_ledger_indices) task_ledgers __attribute__(
  .neural_footprint_compressed = -1,
  .platform_idle_wakeups = -1,
  .interrupt_wakeups = -1,
-#if !CONFIG_EMBEDDED
+#if CONFIG_SCHED_SFI
  .sfi_wait_times = { 0 /* initialized at runtime */},
-#endif /* !CONFIG_EMBEDDED */
+#endif /* CONFIG_SCHED_SFI */
  .cpu_time_billed_to_me = -1,
  .cpu_time_billed_to_others = -1,
  .physical_writes = -1,
@@ -258,8 +266,15 @@ SECURITY_READ_ONLY_LATE(struct _task_ledger_indices) task_ledgers __attribute__(
  .pages_grabbed_iopl = -1,
  .pages_grabbed_upl = -1,
 #endif
+#if CONFIG_FREEZE
+ .frozen_to_swap = -1,
+#endif /* CONFIG_FREEZE */
  .energy_billed_to_me = -1,
- .energy_billed_to_others = -1};
+ .energy_billed_to_others = -1,
+#if CONFIG_PHYS_WRITE_ACCT
+ .fs_metadata_writes = -1,
+#endif /* CONFIG_PHYS_WRITE_ACCT */
+};
 
 /* System sleep state */
 boolean_t tasks_suspend_state;
@@ -301,12 +316,12 @@ extern kern_return_t thread_resume(thread_t thread);
 int task_wakeups_monitor_interval; /* In seconds. Time period over which wakeups rate is observed */
 int task_wakeups_monitor_rate;     /* In hz. Maximum allowable wakeups per task before EXC_RESOURCE is sent */
 
-int task_wakeups_monitor_ustackshots_trigger_pct; /* Percentage. Level at which we start gathering telemetry. */
+unsigned int task_wakeups_monitor_ustackshots_trigger_pct; /* Percentage. Level at which we start gathering telemetry. */
 
 int disable_exc_resource; /* Global override to supress EXC_RESOURCE for resource monitor violations. */
 
 ledger_amount_t max_task_footprint = 0;  /* Per-task limit on physical memory consumption in bytes     */
-int max_task_footprint_warning_level = 0;  /* Per-task limit warning percentage */
+unsigned int max_task_footprint_warning_level = 0;  /* Per-task limit warning percentage */
 int max_task_footprint_mb = 0;  /* Per-task limit on physical memory consumption in megabytes */
 
 /* I/O Monitor Limits */
@@ -336,15 +351,15 @@ int hwm_user_cores = 0; /* high watermark violations generate user core files */
 #endif
 
 #ifdef MACH_BSD
-extern uint32_t proc_platform(struct proc *);
-extern uint32_t proc_sdk(struct proc *);
+extern uint32_t proc_platform(const struct proc *);
+extern uint32_t proc_min_sdk(struct proc *);
 extern void     proc_getexecutableuuid(void *, unsigned char *, unsigned long);
 extern int      proc_pid(struct proc *p);
 extern int      proc_selfpid(void);
 extern struct proc *current_proc(void);
 extern char     *proc_name_address(struct proc *p);
 extern uint64_t get_dispatchqueue_offset_from_proc(void *);
-extern int kevent_proc_copy_uptrs(void *proc, uint64_t *buf, int bufsize);
+extern int kevent_proc_copy_uptrs(void *proc, uint64_t *buf, uint32_t bufsize);
 extern void workq_proc_suspended(struct proc *p);
 extern void workq_proc_resumed(struct proc *p);
 
@@ -353,7 +368,7 @@ extern void     proc_memstat_terminated(struct proc* p, boolean_t set);
 extern void     memorystatus_on_ledger_footprint_exceeded(int warning, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal);
 extern void     memorystatus_log_exception(const int max_footprint_mb, boolean_t memlimit_is_active, boolean_t memlimit_is_fatal);
 extern boolean_t memorystatus_allowed_vm_map_fork(task_t task);
-extern uint64_t  memorystatus_available_memory_internal(proc_t p);
+extern uint64_t  memorystatus_available_memory_internal(struct proc *p);
 
 #if DEVELOPMENT || DEBUG
 extern void memorystatus_abort_vm_map_fork(task_t);
@@ -459,31 +474,6 @@ task_set_64bit(
 		thread_mtx_lock(thread);
 		machine_thread_switch_addrmode(thread);
 		thread_mtx_unlock(thread);
-
-#if defined(__arm64__)
-		/* specifically, if running on H9 */
-		if (thread == current_thread()) {
-			uint64_t arg1, arg2;
-			int urgency;
-			spl_t spl = splsched();
-			/*
-			 * This call tell that the current thread changed it's 32bitness.
-			 * Other thread were no more on core when 32bitness was changed,
-			 * but current_thread() is on core and the previous call to
-			 * machine_thread_going_on_core() gave 32bitness which is now wrong.
-			 *
-			 * This is needed for bring-up, a different callback should be used
-			 * in the future.
-			 *
-			 * TODO: Remove this callout when we no longer support 32-bit code on H9
-			 */
-			thread_lock(thread);
-			urgency = thread_get_urgency(thread, &arg1, &arg2);
-			machine_thread_going_on_core(thread, urgency, 0, 0, mach_approximate_time());
-			thread_unlock(thread);
-			splx(spl);
-		}
-#endif /* defined(__arm64__) */
 	}
 #endif /* defined(__x86_64__) || defined(__arm64__) */
 
@@ -560,17 +550,6 @@ task_set_mach_header_address(
 	task_lock(task);
 	task->mach_header_vm_address = addr;
 	task_unlock(task);
-}
-
-void
-task_atm_reset(__unused task_t task)
-{
-#if CONFIG_ATM
-	if (task->atm_context != NULL) {
-		atm_task_descriptor_destroy(task->atm_context);
-		task->atm_context = NULL;
-	}
-#endif
 }
 
 void
@@ -752,7 +731,7 @@ task_reference_internal(task_t task)
 	void *       bt[TASK_REF_BTDEPTH];
 	int             numsaved = 0;
 
-	zone_require(task, task_zone);
+	task_require(task);
 	os_ref_retain(&task->ref_count);
 
 	numsaved = OSBacktrace(bt, TASK_REF_BTDEPTH);
@@ -778,24 +757,6 @@ task_deallocate_internal(task_t task)
 void
 task_init(void)
 {
-	lck_grp_attr_setdefault(&task_lck_grp_attr);
-	lck_grp_init(&task_lck_grp, "task", &task_lck_grp_attr);
-	lck_attr_setdefault(&task_lck_attr);
-	lck_mtx_init(&tasks_threads_lock, &task_lck_grp, &task_lck_attr);
-	lck_mtx_init(&tasks_corpse_lock, &task_lck_grp, &task_lck_attr);
-
-	task_zone = zinit(
-		sizeof(struct task),
-		task_max * sizeof(struct task),
-		TASK_CHUNK * sizeof(struct task),
-		"tasks");
-
-	zone_change(task_zone, Z_NOENCRYPT, TRUE);
-
-#if CONFIG_EMBEDDED
-	task_watch_init();
-#endif /* CONFIG_EMBEDDED */
-
 	/*
 	 * Configure per-task memory limit.
 	 * The boot-arg is interpreted as Megabytes,
@@ -944,6 +905,7 @@ task_init(void)
 
 #if defined(HAS_APPLE_PAC)
 	kernel_task->rop_pid = KERNEL_ROP_ID;
+	kernel_task->jop_pid = ml_default_jop_pid();
 	// kernel_task never runs at EL0, but machine_thread_state_convert_from/to_user() relies on
 	// disable_user_jop to be false for kernel threads (e.g. in exception delivery on thread_exception_daemon)
 	ml_task_set_disable_user_jop(kernel_task, FALSE);
@@ -951,7 +913,6 @@ task_init(void)
 
 	vm_map_deallocate(kernel_task->map);
 	kernel_task->map = kernel_map;
-	lck_spin_init(&dead_task_statistics_lock, &task_lck_grp, &task_lck_attr);
 }
 
 /*
@@ -1123,6 +1084,9 @@ init_task_ledgers(void)
 	task_ledgers.neural_nofootprint_compressed = ledger_entry_add(t, "neural_nofootprint_compressed", "physmem", "bytes");
 	task_ledgers.neural_footprint_compressed = ledger_entry_add(t, "neural_footprint_compressed", "physmem", "bytes");
 
+#if CONFIG_FREEZE
+	task_ledgers.frozen_to_swap = ledger_entry_add(t, "frozen_to_swap", "physmem", "bytes");
+#endif /* CONFIG_FREEZE */
 
 	task_ledgers.platform_idle_wakeups = ledger_entry_add(t, "platform_idle_wakeups", "power",
 	    "count");
@@ -1163,6 +1127,9 @@ init_task_ledgers(void)
 	task_ledgers.physical_writes = ledger_entry_add(t, "physical_writes", "res", "bytes");
 	task_ledgers.logical_writes = ledger_entry_add(t, "logical_writes", "res", "bytes");
 	task_ledgers.logical_writes_to_external = ledger_entry_add(t, "logical_writes_to_external", "res", "bytes");
+#if CONFIG_PHYS_WRITE_ACCT
+	task_ledgers.fs_metadata_writes = ledger_entry_add(t, "fs_metadata_writes", "res", "bytes");
+#endif /* CONFIG_PHYS_WRITE_ACCT */
 	task_ledgers.energy_billed_to_me = ledger_entry_add(t, "energy_billed_to_me", "power", "nj");
 	task_ledgers.energy_billed_to_others = ledger_entry_add(t, "energy_billed_to_others", "power", "nj");
 
@@ -1186,6 +1153,9 @@ init_task_ledgers(void)
 	    (task_ledgers.tagged_footprint < 0) ||
 	    (task_ledgers.tagged_nofootprint_compressed < 0) ||
 	    (task_ledgers.tagged_footprint_compressed < 0) ||
+#if CONFIG_FREEZE
+	    (task_ledgers.frozen_to_swap < 0) ||
+#endif /* CONFIG_FREEZE */
 	    (task_ledgers.network_volatile < 0) ||
 	    (task_ledgers.network_nonvolatile < 0) ||
 	    (task_ledgers.network_volatile_compressed < 0) ||
@@ -1208,6 +1178,9 @@ init_task_ledgers(void)
 	    (task_ledgers.physical_writes < 0) ||
 	    (task_ledgers.logical_writes < 0) ||
 	    (task_ledgers.logical_writes_to_external < 0) ||
+#if CONFIG_PHYS_WRITE_ACCT
+	    (task_ledgers.fs_metadata_writes < 0) ||
+#endif /* CONFIG_PHYS_WRITE_ACCT */
 	    (task_ledgers.energy_billed_to_me < 0) ||
 	    (task_ledgers.energy_billed_to_others < 0)
 	    ) {
@@ -1231,6 +1204,7 @@ init_task_ledgers(void)
 	ledger_track_credit_only(t, task_ledgers.pages_grabbed_iopl);
 	ledger_track_credit_only(t, task_ledgers.pages_grabbed_upl);
 #endif
+
 	ledger_track_credit_only(t, task_ledgers.tagged_nofootprint);
 	ledger_track_credit_only(t, task_ledgers.tagged_footprint);
 	ledger_track_credit_only(t, task_ledgers.tagged_nofootprint_compressed);
@@ -1266,6 +1240,9 @@ init_task_ledgers(void)
 		ledger_panic_on_negative(t, task_ledgers.purgeable_nonvolatile);
 		ledger_panic_on_negative(t, task_ledgers.purgeable_volatile_compressed);
 		ledger_panic_on_negative(t, task_ledgers.purgeable_nonvolatile_compressed);
+#if CONFIG_PHYS_WRITE_ACCT
+		ledger_panic_on_negative(t, task_ledgers.fs_metadata_writes);
+#endif /* CONFIG_PHYS_WRITE_ACCT */
 
 		ledger_panic_on_negative(t, task_ledgers.tagged_nofootprint);
 		ledger_panic_on_negative(t, task_ledgers.tagged_footprint);
@@ -1343,8 +1320,10 @@ task_create_internal(
 
 #if defined(HAS_APPLE_PAC)
 	ml_task_set_rop_pid(new_task, parent_task, inherit_memory);
+	ml_task_set_jop_pid(new_task, parent_task, inherit_memory);
 	ml_task_set_disable_user_jop(new_task, inherit_memory ? parent_task->disable_user_jop : FALSE);
 #endif
+
 
 	new_task->ledger = ledger;
 
@@ -1388,9 +1367,6 @@ task_create_internal(
 	new_task->restartable_ranges = NULL;
 	new_task->task_exc_guard = 0;
 
-#if CONFIG_ATM
-	new_task->atm_context = NULL;
-#endif
 	new_task->bank_context = NULL;
 
 #ifdef MACH_BSD
@@ -1400,6 +1376,9 @@ task_create_internal(
 
 #if CONFIG_MACF
 	new_task->crash_label = NULL;
+
+	new_task->mach_trap_filter_mask = NULL;
+	new_task->mach_kobj_filter_mask = NULL;
 #endif
 
 #if CONFIG_MEMORYSTATUS
@@ -1456,11 +1435,11 @@ task_create_internal(
 	new_task->hv_task_target = NULL;
 #endif /* HYPERVISOR */
 
-#if CONFIG_EMBEDDED
+#if CONFIG_TASKWATCH
 	queue_init(&new_task->task_watchers);
 	new_task->num_taskwatchers  = 0;
 	new_task->watchapplying  = 0;
-#endif /* CONFIG_EMBEDDED */
+#endif /* CONFIG_TASKWATCH */
 
 	new_task->mem_notify_reserved = 0;
 	new_task->memlimit_attrs_reserved = 0;
@@ -1477,6 +1456,15 @@ task_create_internal(
 		/* inherit the parent's shared region */
 		shared_region = vm_shared_region_get(parent_task);
 		vm_shared_region_set(new_task, shared_region);
+
+#if __has_feature(ptrauth_calls)
+		/* use parent's shared_region_id */
+		char *shared_region_id = task_get_vm_shared_region_id_and_jop_pid(parent_task, NULL);
+		if (shared_region_id != NULL) {
+			shared_region_key_alloc(shared_region_id, FALSE, 0);   /* get a reference */
+		}
+		task_set_shared_region_id(new_task, shared_region_id);
+#endif /* __has_feature(ptrauth_calls) */
 
 		if (task_has_64Bit_addr(parent_task)) {
 			task_set_64Bit_addr(new_task);
@@ -1496,11 +1484,17 @@ task_create_internal(
 
 		new_task->pset_hint = parent_task->pset_hint = task_choose_pset(parent_task);
 
-#if DEBUG || DEVELOPMENT
 		if (parent_task->t_flags & TF_NO_SMT) {
 			new_task->t_flags |= TF_NO_SMT;
 		}
-#endif
+
+		if (parent_task->t_flags & TF_TECS) {
+			new_task->t_flags |= TF_TECS;
+		}
+
+		if (parent_task->t_flags & TF_FILTER_MSG) {
+			new_task->t_flags |= TF_FILTER_MSG;
+		}
 
 		new_task->priority = BASEPRI_DEFAULT;
 		new_task->max_priority = MAXPRI_USER;
@@ -1539,9 +1533,9 @@ task_create_internal(
 	}
 
 	/* Allocate I/O Statistics */
-	new_task->task_io_stats = (io_stat_info_t)kalloc(sizeof(struct io_stat_info));
+	new_task->task_io_stats = kheap_alloc(KHEAP_DATA_BUFFERS,
+	    sizeof(struct io_stat_info), Z_WAITOK | Z_ZERO);
 	assert(new_task->task_io_stats != NULL);
-	bzero(new_task->task_io_stats, sizeof(struct io_stat_info));
 
 	bzero(&(new_task->cpu_time_eqos_stats), sizeof(new_task->cpu_time_eqos_stats));
 	bzero(&(new_task->cpu_time_rqos_stats), sizeof(new_task->cpu_time_rqos_stats));
@@ -1588,6 +1582,9 @@ task_create_internal(
 		new_task->task_writes_counters_external.task_deferred_writes = 0;
 		new_task->task_writes_counters_external.task_invalidated_writes = 0;
 		new_task->task_writes_counters_external.task_metadata_writes = 0;
+#if CONFIG_PHYS_WRITE_ACCT
+		new_task->task_fs_metadata_writes = 0;
+#endif /* CONFIG_PHYS_WRITE_ACCT */
 
 		new_task->task_energy = 0;
 #if MONOTONIC
@@ -1642,6 +1639,11 @@ task_create_internal(
 	new_task->task_objects_disowned = FALSE;
 	new_task->task_owned_objects = 0;
 	queue_init(&new_task->task_objq);
+
+#if CONFIG_FREEZE
+	queue_init(&new_task->task_frozen_cseg_q);
+#endif /* CONFIG_FREEZE */
+
 	task_objq_lock_init(new_task);
 
 #if __arm64__
@@ -1729,6 +1731,9 @@ task_rollup_accounting_info(task_t to_task, task_t from_task)
 	to_task->task_writes_counters_external.task_deferred_writes = from_task->task_writes_counters_external.task_deferred_writes;
 	to_task->task_writes_counters_external.task_invalidated_writes = from_task->task_writes_counters_external.task_invalidated_writes;
 	to_task->task_writes_counters_external.task_metadata_writes = from_task->task_writes_counters_external.task_metadata_writes;
+#if CONFIG_PHYS_WRITE_ACCT
+	to_task->task_fs_metadata_writes = from_task->task_fs_metadata_writes;
+#endif /* CONFIG_PHYS_WRITE_ACCT */
 	to_task->task_energy = from_task->task_energy;
 
 	/* Skip ledger roll up for memory accounting entries */
@@ -1805,17 +1810,13 @@ task_deallocate(
 	lck_mtx_unlock(&tasks_threads_lock);
 
 	/*
-	 * remove the reference on atm descriptor
-	 */
-	task_atm_reset(task);
-
-	/*
 	 * remove the reference on bank context
 	 */
 	task_bank_reset(task);
 
 	if (task->task_io_stats) {
-		kfree(task->task_io_stats, sizeof(struct io_stat_info));
+		kheap_free(KHEAP_DATA_BUFFERS, task->task_io_stats,
+		    sizeof(struct io_stat_info));
 	}
 
 	/*
@@ -1918,7 +1919,8 @@ task_deallocate(
 		task_crashinfo_destroy(task->corpse_info);
 		task->corpse_info = NULL;
 		if (corpse_info_kernel) {
-			kfree(corpse_info_kernel, CORPSEINFO_ALLOCATION_SIZE);
+			kheap_free(KHEAP_DATA_BUFFERS, corpse_info_kernel,
+			    CORPSEINFO_ALLOCATION_SIZE);
 		}
 	}
 #endif
@@ -1931,6 +1933,7 @@ task_deallocate(
 #endif
 
 	assert(queue_empty(&task->task_objq));
+	task_objq_lock_destroy(task);
 
 	zfree(task_zone, task);
 }
@@ -1948,6 +1951,28 @@ task_name_deallocate(
 }
 
 /*
+ *	task_policy_set_deallocate:
+ *
+ *	Drop a reference on a task type.
+ */
+void
+task_policy_set_deallocate(task_policy_set_t task_policy_set)
+{
+	return task_deallocate((task_t)task_policy_set);
+}
+
+/*
+ *	task_policy_get_deallocate:
+ *
+ *	Drop a reference on a task type.
+ */
+void
+task_policy_get_deallocate(task_policy_get_t task_policy_get)
+{
+	return task_deallocate((task_t)task_policy_get);
+}
+
+/*
  *	task_inspect_deallocate:
  *
  *	Drop a task inspection reference.
@@ -1957,6 +1982,18 @@ task_inspect_deallocate(
 	task_inspect_t          task_inspect)
 {
 	return task_deallocate((task_t)task_inspect);
+}
+
+/*
+ *	task_read_deallocate:
+ *
+ *	Drop a reference on task read port.
+ */
+void
+task_read_deallocate(
+	task_read_t          task_read)
+{
+	return task_deallocate((task_t)task_read);
 }
 
 /*
@@ -2017,12 +2054,12 @@ task_collect_crash_info(
 #endif
 		task_unlock(task);
 
-		crash_data_kernel = (void *) kalloc(CORPSEINFO_ALLOCATION_SIZE);
+		crash_data_kernel = kheap_alloc(KHEAP_DATA_BUFFERS,
+		    CORPSEINFO_ALLOCATION_SIZE, Z_WAITOK | Z_ZERO);
 		if (crash_data_kernel == NULL) {
 			kr = KERN_RESOURCE_SHORTAGE;
 			goto out_no_lock;
 		}
-		bzero(crash_data_kernel, CORPSEINFO_ALLOCATION_SIZE);
 		crash_data_ptr = (mach_vm_offset_t) crash_data_kernel;
 
 		/* Do not get a corpse ref for corpse fork */
@@ -2038,7 +2075,8 @@ task_collect_crash_info(
 			task_unlock(task);
 			kr = KERN_SUCCESS;
 		} else {
-			kfree(crash_data_kernel, CORPSEINFO_ALLOCATION_SIZE);
+			kheap_free(KHEAP_DATA_BUFFERS, crash_data_kernel,
+			    CORPSEINFO_ALLOCATION_SIZE);
 			kr = KERN_FAILURE;
 		}
 
@@ -2046,7 +2084,8 @@ task_collect_crash_info(
 			task_crashinfo_destroy(crash_data_release);
 		}
 		if (crash_data_kernel_release != NULL) {
-			kfree(crash_data_kernel_release, CORPSEINFO_ALLOCATION_SIZE);
+			kheap_free(KHEAP_DATA_BUFFERS, crash_data_kernel_release,
+			    CORPSEINFO_ALLOCATION_SIZE);
 		}
 	} else {
 		task_unlock(task);
@@ -2284,7 +2323,7 @@ task_port_notify(mach_msg_header_t *msg)
 	task_t task;
 
 	require_ip_active(port);
-	assert(IKOT_TASK == ip_kotype(port));
+	assert(IKOT_TASK_CONTROL == ip_kotype(port));
 	task = (task_t) ip_get_kobject(port);
 
 	assert(task_is_a_corpse(task));
@@ -2294,6 +2333,70 @@ task_port_notify(mach_msg_header_t *msg)
 
 	task_clear_corpse(task);
 	task_terminate_internal(task);
+}
+
+/*
+ *	task_port_with_flavor_notify
+ *
+ *	Called whenever the Mach port system detects no-senders on
+ *	the task inspect or read port. These ports are allocated lazily and
+ *	should be deallocated here when there are no senders remaining.
+ */
+void
+task_port_with_flavor_notify(mach_msg_header_t *msg)
+{
+	mach_no_senders_notification_t *notification = (void *)msg;
+	ipc_port_t port = notification->not_header.msgh_remote_port;
+	task_t task;
+	mach_task_flavor_t flavor;
+	ipc_kobject_type_t kotype;
+
+	ip_lock(port);
+	if (port->ip_srights > 0) {
+		ip_unlock(port);
+		return;
+	}
+	task = (task_t)port->ip_kobject;
+	kotype = ip_kotype(port);
+	if (task != TASK_NULL) {
+		assert((IKOT_TASK_READ == kotype) || (IKOT_TASK_INSPECT == kotype));
+		task_reference_internal(task);
+	}
+	ip_unlock(port);
+
+	if (task == TASK_NULL) {
+		/* The task is exiting or disabled; it will eventually deallocate the port */
+		return;
+	}
+
+	itk_lock(task);
+	ip_lock(port);
+	require_ip_active(port);
+	/*
+	 * Check for a stale no-senders notification. A call to any function
+	 * that vends out send rights to this port could resurrect it between
+	 * this notification being generated and actually being handled here.
+	 */
+	if (port->ip_srights > 0) {
+		ip_unlock(port);
+		itk_unlock(task);
+		task_deallocate(task);
+		return;
+	}
+
+	if (kotype == IKOT_TASK_READ) {
+		flavor = TASK_FLAVOR_READ;
+	} else {
+		flavor = TASK_FLAVOR_INSPECT;
+	}
+	assert(task->itk_self[flavor] == port);
+	task->itk_self[flavor] = IP_NULL;
+	port->ip_kobject = IKOT_NONE;
+	ip_unlock(port);
+	itk_unlock(task);
+	task_deallocate(task);
+
+	ipc_port_dealloc_kernel(port);
 }
 
 /*
@@ -2389,7 +2492,7 @@ task_duplicate_map_and_threads(
 		est_knotes = kevent_proc_copy_uptrs(p, NULL, 0);
 		if (est_knotes > 0) {
 			buf_size = (est_knotes + 32) * sizeof(uint64_t);
-			buffer = (uint64_t *) kalloc(buf_size);
+			buffer = kheap_alloc(KHEAP_DATA_BUFFERS, buf_size, Z_WAITOK);
 			num_knotes = kevent_proc_copy_uptrs(p, buffer, buf_size);
 			if (num_knotes > est_knotes + 32) {
 				num_knotes = est_knotes + 32;
@@ -2400,13 +2503,14 @@ task_duplicate_map_and_threads(
 	active_thread_count = task->active_thread_count;
 	if (active_thread_count == 0) {
 		if (buffer != NULL) {
-			kfree(buffer, buf_size);
+			kheap_free(KHEAP_DATA_BUFFERS, buffer, buf_size);
 		}
 		task_resume_internal(task);
 		return KERN_FAILURE;
 	}
 
-	thread_array = (thread_t *) kalloc(sizeof(thread_t) * active_thread_count);
+	thread_array = kheap_alloc(KHEAP_TEMP,
+	    sizeof(thread_t) * active_thread_count, Z_WAITOK);
 
 	/* Iterate all the threads and drop the task lock before calling thread_create_with_continuation */
 	task_lock(task);
@@ -2470,7 +2574,7 @@ task_duplicate_map_and_threads(
 	for (i = 0; i < array_count; i++) {
 		thread_deallocate(thread_array[i]);
 	}
-	kfree(thread_array, sizeof(thread_t) * active_thread_count);
+	kheap_free(KHEAP_TEMP, thread_array, sizeof(thread_t) * active_thread_count);
 
 	if (kr == KERN_SUCCESS) {
 		*thread_ret = thread_return;
@@ -2482,7 +2586,7 @@ task_duplicate_map_and_threads(
 			thread_deallocate(thread_return);
 		}
 		if (buffer != NULL) {
-			kfree(buffer, buf_size);
+			kheap_free(KHEAP_DATA_BUFFERS, buffer, buf_size);
 		}
 	}
 
@@ -2495,6 +2599,9 @@ extern void task_set_can_use_secluded_mem_locked(
 	boolean_t       can_use_secluded_mem);
 #endif /* CONFIG_SECLUDED_MEMORY */
 
+#if MACH_ASSERT
+int debug4k_panic_on_terminate = 0;
+#endif /* MACH_ASSERT */
 kern_return_t
 task_terminate_internal(
 	task_t                  task)
@@ -2617,13 +2724,13 @@ task_terminate_internal(
 // PR-17045188: Revisit implementation
 //        task_partial_reap(task, pid);
 
-#if CONFIG_EMBEDDED
+#if CONFIG_TASKWATCH
 	/*
 	 * remove all task watchers
 	 */
 	task_removewatchers(task);
 
-#endif /* CONFIG_EMBEDDED */
+#endif /* CONFIG_TASKWATCH */
 
 	/*
 	 *	Destroy all synchronizers owned by the task.
@@ -2683,6 +2790,12 @@ task_terminate_internal(
 		strlcpy(procname, "<unknown>", sizeof(procname));
 	}
 	pmap_set_process(task->map->pmap, pid, procname);
+	if (vm_map_page_shift(task->map) < (int)PAGE_SHIFT) {
+		DEBUG4K_LIFE("map %p procname: %s\n", task->map, procname);
+		if (debug4k_panic_on_terminate) {
+			panic("DEBUG4K: %s:%d %d[%s] map %p\n", __FUNCTION__, __LINE__, pid, procname, task->map);
+		}
+	}
 #endif /* MACH_ASSERT */
 
 	vm_map_terminate(task->map);
@@ -2690,6 +2803,9 @@ task_terminate_internal(
 	/* release our shared region */
 	vm_shared_region_set(task, NULL);
 
+#if __has_feature(ptrauth_calls)
+	task_set_shared_region_id(task, NULL);
+#endif /* __has_feature(ptrauth_calls) */
 
 	lck_mtx_lock(&tasks_threads_lock);
 	queue_remove(&tasks, task, task_t, tasks);
@@ -2717,6 +2833,14 @@ task_terminate_internal(
 	 */
 	coalitions_remove_task(task);
 #endif
+
+#if CONFIG_FREEZE
+	extern int      vm_compressor_available;
+	if (VM_CONFIG_FREEZER_SWAP_IS_ACTIVE && vm_compressor_available) {
+		task_disown_frozen_csegs(task);
+		assert(queue_empty(&task->task_frozen_cseg_q));
+	}
+#endif /* CONFIG_FREEZE */
 
 	/*
 	 * Get rid of the task active reference on itself.
@@ -3080,11 +3204,12 @@ task_release(
 	return KERN_SUCCESS;
 }
 
-kern_return_t
-task_threads(
-	task_t                                  task,
-	thread_act_array_t              *threads_out,
-	mach_msg_type_number_t  *count)
+static kern_return_t
+task_threads_internal(
+	task_t                      task,
+	thread_act_array_t         *threads_out,
+	mach_msg_type_number_t     *count,
+	mach_thread_flavor_t        flavor)
 {
 	mach_msg_type_number_t  actual;
 	thread_t                                *thread_list;
@@ -3093,11 +3218,11 @@ task_threads(
 	void                                    *addr;
 	unsigned int                    i, j;
 
+	size = 0; addr = NULL;
+
 	if (task == TASK_NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
-
-	size = 0; addr = NULL;
 
 	for (;;) {
 		task_lock(task);
@@ -3188,12 +3313,72 @@ task_threads(
 
 		/* do the conversion that Mig should handle */
 
-		for (i = 0; i < actual; ++i) {
-			((ipc_port_t *) thread_list)[i] = convert_thread_to_port(thread_list[i]);
+		switch (flavor) {
+		case THREAD_FLAVOR_CONTROL:
+			for (i = 0; i < actual; ++i) {
+				((ipc_port_t *) thread_list)[i] = convert_thread_to_port(thread_list[i]);
+			}
+			break;
+		case THREAD_FLAVOR_READ:
+			for (i = 0; i < actual; ++i) {
+				((ipc_port_t *) thread_list)[i] = convert_thread_read_to_port(thread_list[i]);
+			}
+			break;
+		case THREAD_FLAVOR_INSPECT:
+			for (i = 0; i < actual; ++i) {
+				((ipc_port_t *) thread_list)[i] = convert_thread_inspect_to_port(thread_list[i]);
+			}
+			break;
+		default:
+			return KERN_INVALID_ARGUMENT;
 		}
 	}
 
 	return KERN_SUCCESS;
+}
+
+kern_return_t
+task_threads(
+	task_t                      task,
+	thread_act_array_t         *threads_out,
+	mach_msg_type_number_t     *count)
+{
+	return task_threads_internal(task, threads_out, count, THREAD_FLAVOR_CONTROL);
+}
+
+
+kern_return_t
+task_threads_from_user(
+	mach_port_t                 port,
+	thread_act_array_t         *threads_out,
+	mach_msg_type_number_t     *count)
+{
+	ipc_kobject_type_t kotype;
+	kern_return_t kr;
+
+	task_t task = convert_port_to_task_check_type(port, &kotype, TASK_FLAVOR_INSPECT, FALSE);
+
+	if (task == TASK_NULL) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	switch (kotype) {
+	case IKOT_TASK_CONTROL:
+		kr = task_threads_internal(task, threads_out, count, THREAD_FLAVOR_CONTROL);
+		break;
+	case IKOT_TASK_READ:
+		kr = task_threads_internal(task, threads_out, count, THREAD_FLAVOR_READ);
+		break;
+	case IKOT_TASK_INSPECT:
+		kr = task_threads_internal(task, threads_out, count, THREAD_FLAVOR_INSPECT);
+		break;
+	default:
+		panic("strange kobject type");
+		break;
+	}
+
+	task_deallocate(task);
+	return kr;
 }
 
 #define TASK_HOLD_NORMAL        0
@@ -3215,10 +3400,10 @@ place_task_hold(
 		return KERN_SUCCESS;
 	}
 
-	KERNEL_DEBUG_CONSTANT_IST(KDEBUG_TRACE,
-	    MACHDBG_CODE(DBG_MACH_IPC, MACH_TASK_SUSPEND) | DBG_FUNC_NONE,
-	    task_pid(task), ((thread_t)queue_first(&task->threads))->thread_id,
-	    task->user_stop_count, task->user_stop_count + 1, 0);
+	KDBG_RELEASE(MACHDBG_CODE(DBG_MACH_IPC, MACH_TASK_SUSPEND),
+	    task_pid(task),
+	    task->thread_count > 0 ?((thread_t)queue_first(&task->threads))->thread_id : 0,
+	    task->user_stop_count, task->user_stop_count + 1);
 
 #if MACH_ASSERT
 	current_task()->suspends_outstanding++;
@@ -3364,10 +3549,9 @@ task_suspend(
 	 * Claim a send right on the task resume port, and request a no-senders
 	 * notification on that port (if none outstanding).
 	 */
-	(void)ipc_kobject_make_send_lazy_alloc_port(&task->itk_resume,
-	    (ipc_kobject_t)task, IKOT_TASK_RESUME);
+	(void)ipc_kobject_make_send_lazy_alloc_port((ipc_port_t *) &task->itk_resume,
+	    (ipc_kobject_t)task, IKOT_TASK_RESUME, true, OS_PTRAUTH_DISCRIMINATOR("task.itk_resume"));
 	port = task->itk_resume;
-
 	task_unlock(task);
 
 	/*
@@ -4201,6 +4385,7 @@ task_disconnect_page_mappings(task_t task)
  */
 extern void             vm_wake_compactor_swapper(void);
 extern queue_head_t     c_swapout_list_head;
+extern struct freezer_context freezer_context_global;
 
 kern_return_t
 task_freeze(
@@ -4235,6 +4420,8 @@ task_freeze(
 	}
 	task->changing_freeze_state = TRUE;
 
+	freezer_context_global.freezer_ctx_task = task;
+
 	task_unlock(task);
 
 	kr = vm_map_freeze(task,
@@ -4251,6 +4438,20 @@ task_freeze(
 
 	if ((kr == KERN_SUCCESS) && (eval_only == FALSE)) {
 		task->frozen = TRUE;
+
+		freezer_context_global.freezer_ctx_task = NULL;
+		freezer_context_global.freezer_ctx_uncompressed_pages = 0;
+
+		if (VM_CONFIG_FREEZER_SWAP_IS_ACTIVE) {
+			/*
+			 * reset the counter tracking the # of swapped compressed pages
+			 * because we are now done with this freeze session and task.
+			 */
+
+			*dirty_count = (uint32_t) (freezer_context_global.freezer_ctx_swapped_bytes / PAGE_SIZE_64); /*used to track pageouts*/
+		}
+
+		freezer_context_global.freezer_ctx_swapped_bytes = 0;
 	}
 
 	task->changing_freeze_state = FALSE;
@@ -4311,6 +4512,32 @@ task_thaw(
 	return KERN_SUCCESS;
 }
 
+void
+task_update_frozen_to_swap_acct(task_t task, int64_t amount, freezer_acct_op_t op)
+{
+	/*
+	 * We don't assert that the task lock is held because we call this
+	 * routine from the decompression path and we won't be holding the
+	 * task lock. However, since we are in the context of the task we are
+	 * safe.
+	 * In the case of the task_freeze path, we call it from behind the task
+	 * lock but we don't need to because we have a reference on the proc
+	 * being frozen.
+	 */
+
+	assert(task);
+	if (amount == 0) {
+		return;
+	}
+
+	if (op == CREDIT_TO_SWAP) {
+		ledger_credit_nocheck(task->ledger, task_ledgers.frozen_to_swap, amount);
+	} else if (op == DEBIT_FROM_SWAP) {
+		ledger_debit_nocheck(task->ledger, task_ledgers.frozen_to_swap, amount);
+	} else {
+		panic("task_update_frozen_to_swap_acct: Invalid ledger op\n");
+	}
+}
 #endif /* CONFIG_FREEZE */
 
 kern_return_t
@@ -4375,29 +4602,14 @@ task_set_info(
 	if (task == TASK_NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
-
 	switch (flavor) {
 #if CONFIG_ATM
 	case TASK_TRACE_MEMORY_INFO:
-	{
-		if (task_info_count != TASK_TRACE_MEMORY_INFO_COUNT) {
-			return KERN_INVALID_ARGUMENT;
-		}
-
-		assert(task_info_in != NULL);
-		task_trace_memory_info_t mem_info;
-		mem_info = (task_trace_memory_info_t) task_info_in;
-		kern_return_t kr = atm_register_trace_memory(task,
-		    mem_info->user_memory_address,
-		    mem_info->buffer_size);
-		return kr;
-	}
-
-#endif
+		return KERN_NOT_SUPPORTED;
+#endif // CONFIG_ATM
 	default:
 		return KERN_INVALID_ARGUMENT;
 	}
-	return KERN_SUCCESS;
 }
 
 int radar_20146450 = 1;
@@ -4423,6 +4635,7 @@ task_info(
 		return KERN_INVALID_ARGUMENT;
 	}
 
+
 	switch (flavor) {
 	case TASK_BASIC_INFO_32:
 	case TASK_BASIC2_INFO_32:
@@ -4443,7 +4656,7 @@ task_info(
 			basic_info = (task_basic_info_32_t)task_info_out;
 
 			map = (task == kernel_task)? kernel_map: task->map;
-			basic_info->virtual_size = (typeof(basic_info->virtual_size))map->size;
+			basic_info->virtual_size = (typeof(basic_info->virtual_size))vm_map_adjusted_size(map);
 			if (flavor == TASK_BASIC2_INFO_32) {
 				/*
 				 * The "BASIC2" flavor gets the maximum resident
@@ -4489,7 +4702,7 @@ task_info(
 		basic_info = (task_basic_info_64_2_t)task_info_out;
 
 		map = (task == kernel_task)? kernel_map: task->map;
-		basic_info->virtual_size  = map->size;
+		basic_info->virtual_size  = vm_map_adjusted_size(map);
 		basic_info->resident_size =
 		    (mach_vm_size_t)(pmap_resident_count(map->pmap))
 		    * PAGE_SIZE_64;
@@ -4528,7 +4741,7 @@ task_info(
 		basic_info = (task_basic_info_64_t)task_info_out;
 
 		map = (task == kernel_task)? kernel_map: task->map;
-		basic_info->virtual_size  = map->size;
+		basic_info->virtual_size  = vm_map_adjusted_size(map);
 		basic_info->resident_size =
 		    (mach_vm_size_t)(pmap_resident_count(map->pmap))
 		    * PAGE_SIZE_64;
@@ -4568,7 +4781,7 @@ task_info(
 
 		map = (task == kernel_task) ? kernel_map : task->map;
 
-		basic_info->virtual_size  = map->size;
+		basic_info->virtual_size  = vm_map_adjusted_size(map);
 
 		basic_info->resident_size =
 		    (mach_vm_size_t)(pmap_resident_count(map->pmap));
@@ -4985,7 +5198,7 @@ task_info(
 		uint32_t platform, sdk;
 		p = current_proc();
 		platform = proc_platform(p);
-		sdk = proc_sdk(p);
+		sdk = proc_min_sdk(p);
 		if (original_task_info_count > TASK_VM_INFO_REV2_COUNT &&
 		    platform == PLATFORM_IOS &&
 		    sdk != 0 &&
@@ -5028,7 +5241,7 @@ task_info(
 			vm_map_lock_read(map);
 		}
 
-		vm_info->virtual_size = (typeof(vm_info->virtual_size))map->size;
+		vm_info->virtual_size = (typeof(vm_info->virtual_size))vm_map_adjusted_size(map);
 		vm_info->region_count = map->hdr.nentries;
 		vm_info->page_size = vm_map_page_size(map);
 
@@ -5406,11 +5619,11 @@ task_power_info_locked(
 	info->total_system = task->total_system_time;
 	runnable_time_sum = task->total_runnable_time;
 
-#if CONFIG_EMBEDDED
+#if defined(__arm__) || defined(__arm64__)
 	if (infov2) {
 		infov2->task_energy = task->task_energy;
 	}
-#endif
+#endif /* defined(__arm__) || defined(__arm64__) */
 
 	if (ginfo) {
 		ginfo->task_gpu_utilisation = task->task_gpu_ns;
@@ -5435,11 +5648,11 @@ task_power_info_locked(
 		info->task_timer_wakeups_bin_1 += thread->thread_timer_wakeups_bin_1;
 		info->task_timer_wakeups_bin_2 += thread->thread_timer_wakeups_bin_2;
 
-#if CONFIG_EMBEDDED
+#if defined(__arm__) || defined(__arm64__)
 		if (infov2) {
 			infov2->task_energy += ml_energy_stat(thread);
 		}
-#endif
+#endif /* defined(__arm__) || defined(__arm64__) */
 
 		tval = timer_grab(&thread->user_timer);
 		info->total_user += tval;
@@ -5485,7 +5698,7 @@ task_gpu_utilisation(
 	task_t  task)
 {
 	uint64_t gpu_time = 0;
-#if !CONFIG_EMBEDDED
+#if defined(__x86_64__)
 	thread_t thread;
 
 	task_lock(task);
@@ -5501,10 +5714,10 @@ task_gpu_utilisation(
 	}
 
 	task_unlock(task);
-#else /* CONFIG_EMBEDDED */
+#else /* defined(__x86_64__) */
 	/* silence compiler warning */
 	(void)task;
-#endif /* !CONFIG_EMBEDDED */
+#endif /* defined(__x86_64__) */
 	return gpu_time;
 }
 
@@ -6299,7 +6512,7 @@ task_set_phys_footprint_limit_internal(
 		 */
 		ledger_set_limit(task->ledger, task_ledgers.phys_footprint,
 		    max_task_footprint ? max_task_footprint : LEDGER_LIMIT_INFINITY,
-		    max_task_footprint ? max_task_footprint_warning_level : 0);
+		    max_task_footprint ? (uint8_t)max_task_footprint_warning_level : 0);
 
 		task_lock(task);
 		task_set_memlimit_is_active(task, memlimit_is_active);
@@ -6394,6 +6607,35 @@ task_set_thread_limit(task_t task, uint16_t thread_limit)
 	}
 }
 
+#if XNU_TARGET_OS_OSX
+boolean_t
+task_has_system_version_compat_enabled(task_t task)
+{
+	boolean_t enabled = FALSE;
+
+	task_lock(task);
+	enabled = (task->t_flags & TF_SYS_VERSION_COMPAT);
+	task_unlock(task);
+
+	return enabled;
+}
+
+void
+task_set_system_version_compat_enabled(task_t task, boolean_t enable_system_version_compat)
+{
+	assert(task == current_task());
+	assert(task != kernel_task);
+
+	task_lock(task);
+	if (enable_system_version_compat) {
+		task->t_flags |= TF_SYS_VERSION_COMPAT;
+	} else {
+		task->t_flags &= ~TF_SYS_VERSION_COMPAT;
+	}
+	task_unlock(task);
+}
+#endif /* XNU_TARGET_OS_OSX */
+
 /*
  * We need to export some functions to other components that
  * are currently implemented in macros within the osfmk
@@ -6446,6 +6688,69 @@ task_pid(task_t task)
 	return -1;
 }
 
+#if __has_feature(ptrauth_calls)
+/*
+ * Get the shared region id and jop signing key for the task.
+ * The function will allocate a kalloc buffer and return
+ * it to caller, the caller needs to free it. This is used
+ * for getting the information via task port.
+ */
+char *
+task_get_vm_shared_region_id_and_jop_pid(task_t task, uint64_t *jop_pid)
+{
+	size_t len;
+	char *shared_region_id = NULL;
+
+	task_lock(task);
+	if (task->shared_region_id == NULL) {
+		task_unlock(task);
+		return NULL;
+	}
+	len = strlen(task->shared_region_id) + 1;
+
+	/* don't hold task lock while allocating */
+	task_unlock(task);
+	shared_region_id = kheap_alloc(KHEAP_DATA_BUFFERS, len, Z_WAITOK);
+	task_lock(task);
+
+	if (task->shared_region_id == NULL) {
+		task_unlock(task);
+		kheap_free(KHEAP_DATA_BUFFERS, shared_region_id, len);
+		return NULL;
+	}
+	assert(len == strlen(task->shared_region_id) + 1);      /* should never change */
+	strlcpy(shared_region_id, task->shared_region_id, len);
+	task_unlock(task);
+
+	/* find key from its auth pager */
+	if (jop_pid != NULL) {
+		*jop_pid = shared_region_find_key(shared_region_id);
+	}
+
+	return shared_region_id;
+}
+
+/*
+ * set the shared region id for a task
+ */
+void
+task_set_shared_region_id(task_t task, char *id)
+{
+	char *old_id;
+
+	task_lock(task);
+	old_id = task->shared_region_id;
+	task->shared_region_id = id;
+	task->shared_region_auth_remapped = FALSE;
+	task_unlock(task);
+
+	/* free any pre-existing shared region id */
+	if (old_id != NULL) {
+		shared_region_key_dealloc(old_id);
+		kheap_free(KHEAP_DATA_BUFFERS, old_id, strlen(old_id) + 1);
+	}
+}
+#endif /* __has_feature(ptrauth_calls) */
 
 /*
  * This routine finds a thread in a task by its unique id
@@ -6573,7 +6878,7 @@ task_wakeups_monitor_ctl(task_t task, uint32_t *flags, int32_t *rate_hz)
 
 #ifndef CONFIG_NOMONITORS
 		ledger_set_limit(ledger, task_ledgers.interrupt_wakeups, *rate_hz * task_wakeups_monitor_interval,
-		    task_wakeups_monitor_ustackshots_trigger_pct);
+		    (uint8_t)task_wakeups_monitor_ustackshots_trigger_pct);
 		ledger_set_period(ledger, task_ledgers.interrupt_wakeups, task_wakeups_monitor_interval * NSEC_PER_SEC);
 		ledger_enable_callback(ledger, task_ledgers.interrupt_wakeups);
 #endif /* CONFIG_NOMONITORS */
@@ -6720,6 +7025,39 @@ global_update_logical_writes(int64_t io_delta, int64_t *global_write_count)
 		}
 	} while (!OSCompareAndSwap64(old_count, new_count, global_write_count));
 	return needs_telemetry;
+}
+
+void
+task_update_physical_writes(__unused task_t task, __unused task_physical_write_flavor_t flavor, __unused uint64_t io_size, __unused task_balance_flags_t flags)
+{
+#if CONFIG_PHYS_WRITE_ACCT
+	if (!io_size) {
+		return;
+	}
+
+	/*
+	 * task == NULL means that we have to update kernel_task ledgers
+	 */
+	if (!task) {
+		task = kernel_task;
+	}
+
+	KERNEL_DEBUG_CONSTANT((MACHDBG_CODE(DBG_MACH_VM, VM_PHYS_WRITE_ACCT)) | DBG_FUNC_NONE,
+	    task_pid(task), flavor, io_size, flags, 0);
+	DTRACE_IO4(physical_writes, struct task *, task, task_physical_write_flavor_t, flavor, uint64_t, io_size, task_balance_flags_t, flags);
+
+	if (flags & TASK_BALANCE_CREDIT) {
+		if (flavor == TASK_PHYSICAL_WRITE_METADATA) {
+			OSAddAtomic64(io_size, (SInt64 *)&(task->task_fs_metadata_writes));
+			ledger_credit_nocheck(task->ledger, task_ledgers.fs_metadata_writes, io_size);
+		}
+	} else if (flags & TASK_BALANCE_DEBIT) {
+		if (flavor == TASK_PHYSICAL_WRITE_METADATA) {
+			OSAddAtomic64(-1 * io_size, (SInt64 *)&(task->task_fs_metadata_writes));
+			ledger_debit_nocheck(task->ledger, task_ledgers.fs_metadata_writes, io_size);
+		}
+	}
+#endif /* CONFIG_PHYS_WRITE_ACCT */
 }
 
 void
@@ -7177,7 +7515,7 @@ task_set_could_use_secluded_mem(
 	task_t          task,
 	boolean_t       could_use_secluded_mem)
 {
-	task->task_could_use_secluded_mem = could_use_secluded_mem;
+	task->task_could_use_secluded_mem = !!could_use_secluded_mem;
 }
 
 void
@@ -7185,7 +7523,7 @@ task_set_could_also_use_secluded_mem(
 	task_t          task,
 	boolean_t       could_also_use_secluded_mem)
 {
-	task->task_could_also_use_secluded_mem = could_also_use_secluded_mem;
+	task->task_could_also_use_secluded_mem = !!could_also_use_secluded_mem;
 }
 
 boolean_t
@@ -7205,13 +7543,17 @@ task_can_use_secluded_mem(
 	}
 
 	/*
-	 * If a single task is using more than some amount of
-	 * memory, allow it to dip into secluded and also begin
-	 * suppression of secluded memory until the tasks exits.
+	 * If a single task is using more than some large amount of
+	 * memory (i.e. secluded_shutoff_trigger) and is approaching
+	 * its task limit, allow it to dip into secluded and begin
+	 * suppression of rebuilding secluded memory until that task exits.
 	 */
 	if (is_alloc && secluded_shutoff_trigger != 0) {
 		uint64_t phys_used = get_task_phys_footprint(task);
-		if (phys_used > secluded_shutoff_trigger) {
+		uint64_t limit = get_task_phys_footprint_limit(task);
+		if (phys_used > secluded_shutoff_trigger &&
+		    limit > secluded_shutoff_trigger &&
+		    phys_used > limit - secluded_shutoff_headroom) {
 			start_secluded_suppression(task);
 			return TRUE;
 		}
@@ -7342,8 +7684,9 @@ task_set_exc_guard_behavior(
 
 #if __arm64__
 extern int legacy_footprint_entitlement_mode;
-extern void memorystatus_act_on_legacy_footprint_entitlement(proc_t, boolean_t);
-extern void memorystatus_act_on_ios13extended_footprint_entitlement(proc_t);
+extern void memorystatus_act_on_legacy_footprint_entitlement(struct proc *, boolean_t);
+extern void memorystatus_act_on_ios13extended_footprint_entitlement(struct proc *);
+
 
 void
 task_set_legacy_footprint(
@@ -7442,30 +7785,29 @@ task_set_memory_ownership_transfer(
 	boolean_t value)
 {
 	task_lock(task);
-	task->task_can_transfer_memory_ownership = value;
+	task->task_can_transfer_memory_ownership = !!value;
 	task_unlock(task);
 }
 
 void
-task_copy_vmobjects(task_t task, vm_object_query_t query, int len, int64_t* num)
+task_copy_vmobjects(task_t task, vm_object_query_t query, size_t len, size_t *num)
 {
 	vm_object_t find_vmo;
-	unsigned int i = 0;
-	unsigned int vmobj_limit = len / sizeof(vm_object_query_data_t);
+	size_t size = 0;
 
 	task_objq_lock(task);
 	if (query != NULL) {
 		queue_iterate(&task->task_objq, find_vmo, vm_object_t, task_objq)
 		{
-			vm_object_query_t p = &query[i];
+			vm_object_query_t p = &query[size++];
 
-			/*
-			 * Clear the entire vm_object_query_t struct as we are using
-			 * only the first 6 bits in the uint64_t bitfield for this
-			 * anonymous struct member.
-			 */
+			/* make sure to not overrun */
+			if (size * sizeof(vm_object_query_data_t) > len) {
+				--size;
+				break;
+			}
+
 			bzero(p, sizeof(*p));
-
 			p->object_id = (vm_object_id_t) VM_KERNEL_ADDRPERM(find_vmo);
 			p->virtual_size = find_vmo->internal ? find_vmo->vo_size : 0;
 			p->resident_size = find_vmo->resident_page_count * PAGE_SIZE;
@@ -7480,21 +7822,130 @@ task_copy_vmobjects(task_t task, vm_object_query_t query, int len, int64_t* num)
 			} else {
 				p->compressed_size = 0;
 			}
-
-			i++;
-
-			/* Make sure to not overrun */
-			if (i == vmobj_limit) {
-				break;
-			}
 		}
 	} else {
-		i = task->task_owned_objects;
+		size = (size_t)task->task_owned_objects;
 	}
 	task_objq_unlock(task);
 
-	*num = i;
+	*num = size;
 }
+
+void
+task_set_filter_msg_flag(
+	task_t task,
+	boolean_t flag)
+{
+	assert(task != TASK_NULL);
+
+	task_lock(task);
+	if (flag) {
+		task->t_flags |= TF_FILTER_MSG;
+	} else {
+		task->t_flags &= ~TF_FILTER_MSG;
+	}
+	task_unlock(task);
+}
+
+boolean_t
+task_get_filter_msg_flag(
+	task_t task)
+{
+	uint32_t flags = 0;
+
+	if (!task) {
+		return false;
+	}
+
+	flags = os_atomic_load(&task->t_flags, relaxed);
+	return (flags & TF_FILTER_MSG) ? TRUE : FALSE;
+}
+bool
+task_is_exotic(
+	task_t task)
+{
+	if (task == TASK_NULL) {
+		return false;
+	}
+	return vm_map_is_exotic(get_task_map(task));
+}
+
+bool
+task_is_alien(
+	task_t task)
+{
+	if (task == TASK_NULL) {
+		return false;
+	}
+	return vm_map_is_alien(get_task_map(task));
+}
+
+
+
+#if CONFIG_MACF
+/* Set the filter mask for Mach traps. */
+void
+mac_task_set_mach_filter_mask(task_t task, uint8_t *maskptr)
+{
+	assert(task);
+
+	task->mach_trap_filter_mask = maskptr;
+}
+
+/* Set the filter mask for kobject msgs. */
+void
+mac_task_set_kobj_filter_mask(task_t task, uint8_t *maskptr)
+{
+	assert(task);
+
+	task->mach_kobj_filter_mask = maskptr;
+}
+
+/* Hook for mach trap/sc filter evaluation policy. */
+mac_task_mach_filter_cbfunc_t mac_task_mach_trap_evaluate = NULL;
+
+/* Hook for kobj message filter evaluation policy. */
+mac_task_kobj_filter_cbfunc_t mac_task_kobj_msg_evaluate = NULL;
+
+/* Set the callback hooks for the filtering policy. */
+int
+mac_task_register_filter_callbacks(
+	const mac_task_mach_filter_cbfunc_t mach_cbfunc,
+	const mac_task_kobj_filter_cbfunc_t kobj_cbfunc)
+{
+	if (mach_cbfunc != NULL) {
+		if (mac_task_mach_trap_evaluate != NULL) {
+			return KERN_FAILURE;
+		}
+		mac_task_mach_trap_evaluate = mach_cbfunc;
+	}
+	if (kobj_cbfunc != NULL) {
+		if (mac_task_kobj_msg_evaluate != NULL) {
+			return KERN_FAILURE;
+		}
+		mac_task_kobj_msg_evaluate = kobj_cbfunc;
+	}
+
+	return KERN_SUCCESS;
+}
+#endif /* CONFIG_MACF */
+
+void
+task_transfer_mach_filter_bits(
+	task_t new_task,
+	task_t old_task)
+{
+#ifdef CONFIG_MACF
+	/* Copy mach trap and kernel object mask pointers to new task. */
+	new_task->mach_trap_filter_mask = old_task->mach_trap_filter_mask;
+	new_task->mach_kobj_filter_mask = old_task->mach_kobj_filter_mask;
+#endif
+	/* If filter message flag is set then set it in the new task. */
+	if (task_get_filter_msg_flag(old_task)) {
+		new_task->t_flags |= TF_FILTER_MSG;
+	}
+}
+
 
 #if __has_feature(ptrauth_calls)
 
@@ -7527,3 +7978,27 @@ task_is_pac_exception_fatal(
 	return (bool)(flags & TF_PAC_EXC_FATAL);
 }
 #endif /* __has_feature(ptrauth_calls) */
+
+void
+task_set_tecs(task_t task)
+{
+	if (task == TASK_NULL) {
+		task = current_task();
+	}
+
+	if (!machine_csv(CPUVN_CI)) {
+		return;
+	}
+
+	LCK_MTX_ASSERT(&task->lock, LCK_MTX_ASSERT_NOTOWNED);
+
+	task_lock(task);
+
+	task->t_flags |= TF_TECS;
+
+	thread_t thread;
+	queue_iterate(&task->threads, thread, thread_t, task_threads) {
+		machine_tecs(thread);
+	}
+	task_unlock(task);
+}

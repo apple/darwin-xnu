@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -42,7 +42,7 @@
 #include <sys/proc_internal.h>
 #include <sys/kauth.h>
 #include <sys/uio.h>
-#include <sys/malloc.h>
+#include <kern/kalloc.h>
 #include <sys/dirent.h>
 #include <sys/attr.h>
 #include <sys/sysctl.h>
@@ -217,19 +217,12 @@ fsevents_internal_init(void)
 
 	PE_get_default("kern.maxkfsevents", &max_kfs_events, sizeof(max_kfs_events));
 
-	event_zone = zinit(sizeof(kfs_event),
-	    max_kfs_events * sizeof(kfs_event),
-	    max_kfs_events * sizeof(kfs_event),
-	    "fs-event-buf");
-	if (event_zone == NULL) {
-		printf("fsevents: failed to initialize the event zone.\n");
-	}
-
-	// mark the zone as exhaustible so that it will not
-	// ever grow beyond what we initially filled it with
-	zone_change(event_zone, Z_EXHAUST, TRUE);
-	zone_change(event_zone, Z_COLLECT, FALSE);
-	zone_change(event_zone, Z_CALLERACCT, FALSE);
+	event_zone = zone_create_ext("fs-event-buf", sizeof(kfs_event),
+	    ZC_NOGC | ZC_NOCALLOUT, ZONE_ID_ANY, ^(zone_t z) {
+		// mark the zone as exhaustible so that it will not
+		// ever grow beyond what we initially filled it with
+		zone_set_exhaustible(z, max_kfs_events * sizeof(kfs_event));
+	});
 
 	if (zfill(event_zone, max_kfs_events) < max_kfs_events) {
 		printf("fsevents: failed to pre-fill the event zone.\n");
@@ -352,6 +345,7 @@ static int     last_nlen = 0;
 static int     last_vid = -1;
 static uint64_t last_coalesced_time = 0;
 static void   *last_event_ptr = NULL;
+static pid_t last_pid = -1;
 int            last_coalesced = 0;
 static mach_timebase_info_data_t    sTimebaseInfo = { 0, 0 };
 
@@ -440,6 +434,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 
 		if (type == last_event_type
 		    && (elapsed < 1000000000)
+		    && (last_pid == p->p_pid)
 		    &&
 		    ((vid && vid == last_vid && last_ptr == ptr)
 		    ||
@@ -459,6 +454,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 			last_vid = vid;
 			last_event_type = type;
 			last_coalesced_time = now;
+			last_pid = p->p_pid;
 		}
 	}
 	va_start(ap, ctx);
@@ -538,14 +534,14 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 	OSBitOrAtomic16(KFSE_BEING_CREATED, &kfse->flags);
 
 	last_event_ptr = kfse;
-	kfse->type     = type;
+	kfse->type     = (int16_t)type;
 	kfse->abstime  = now;
 	kfse->pid      = p->p_pid;
 	if (type == FSE_RENAME || type == FSE_EXCHANGE || type == FSE_CLONE) {
 		memset(kfse_dest, 0, sizeof(kfs_event));
 		kfse_dest->refcount = 1;
 		OSBitOrAtomic16(KFSE_BEING_CREATED, &kfse_dest->flags);
-		kfse_dest->type     = type;
+		kfse_dest->type     = (int16_t)type;
 		kfse_dest->pid      = p->p_pid;
 		kfse_dest->abstime  = now;
 
@@ -717,7 +713,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 			}
 
 			// store the path by adding it to the global string table
-			cur->len = pathbuff_len;
+			cur->len = (u_int16_t)pathbuff_len;
 			cur->str = vfs_addname(pathbuff, pathbuff_len, 0, 0);
 			if (cur->str == NULL || cur->str[0] == '\0') {
 				panic("add_fsevent: was not able to add path %s to event %p.\n", pathbuff, cur);
@@ -770,7 +766,7 @@ add_fsevent(int type, vfs_context_t ctx, ...)
 
 		case FSE_ARG_INT32: {
 			uint32_t ival = (uint32_t)va_arg(ap, int32_t);
-			kfse->uid = (ino64_t)ival;
+			kfse->uid = ival;
 			break;
 		}
 
@@ -955,10 +951,8 @@ add_watcher(int8_t *event_list, int32_t num_events, int32_t eventq_size, fs_even
 
 	// Note: the event_queue follows the fs_event_watcher struct
 	//       in memory so we only have to do one allocation
-	MALLOC(watcher,
-	    fs_event_watcher *,
-	    sizeof(fs_event_watcher) + eventq_size * sizeof(kfs_event *),
-	    M_TEMP, M_WAITOK);
+	watcher = kheap_alloc(KHEAP_DEFAULT,
+	    sizeof(fs_event_watcher) + eventq_size * sizeof(kfs_event *), Z_WAITOK);
 	if (watcher == NULL) {
 		return ENOMEM;
 	}
@@ -1005,7 +999,8 @@ add_watcher(int8_t *event_list, int32_t num_events, int32_t eventq_size, fs_even
 	if (i >= MAX_WATCHERS) {
 		printf("fsevents: too many watchers!\n");
 		unlock_watch_table();
-		FREE(watcher, M_TEMP);
+		kheap_free(KHEAP_DEFAULT, watcher,
+		    sizeof(fs_event_watcher) + watcher->eventq_size * sizeof(kfs_event *));
 		return ENOSPC;
 	}
 
@@ -1086,16 +1081,12 @@ remove_watcher(fs_event_watcher *target)
 		}
 		lck_rw_unlock_exclusive(&event_handling_lock);
 
-		if (watcher->event_list) {
-			FREE(watcher->event_list, M_TEMP);
-			watcher->event_list = NULL;
-		}
-		if (watcher->devices_not_to_watch) {
-			FREE(watcher->devices_not_to_watch, M_TEMP);
-			watcher->devices_not_to_watch = NULL;
-		}
-		FREE(watcher, M_TEMP);
-
+		kheap_free(KHEAP_DEFAULT, watcher->event_list,
+		    watcher->num_events * sizeof(int8_t));
+		kheap_free(KHEAP_DEFAULT, watcher->devices_not_to_watch,
+		    watcher->num_devices * sizeof(dev_t));
+		kheap_free(KHEAP_DEFAULT, watcher,
+		    sizeof(fs_event_watcher) + watcher->eventq_size * sizeof(kfs_event *));
 		return;
 	}
 
@@ -1633,7 +1624,7 @@ get_out:
 void
 fsevent_unmount(__unused struct mount *mp, __unused vfs_context_t ctx)
 {
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 	dev_t dev = mp->mnt_vfsstat.f_fsid.val[0];
 	int error, waitcount = 0;
 	struct timespec ts = {.tv_sec = 1, .tv_nsec = 0};
@@ -1691,7 +1682,7 @@ fsevent_unmount(__unused struct mount *mp, __unused vfs_context_t ctx)
 		}
 	}
 	unlock_watch_table();
-#endif
+#endif /* ! XNU_TARGET_OS_OSX */
 }
 
 
@@ -1714,7 +1705,7 @@ static int
 fseventsf_read(struct fileproc *fp, struct uio *uio,
     __unused int flags, __unused vfs_context_t ctx)
 {
-	fsevent_handle *fseh = (struct fsevent_handle *)fp->f_fglob->fg_data;
+	fsevent_handle *fseh = (struct fsevent_handle *)fp->fp_glob->fg_data;
 	int error;
 
 	error = fmod_watch(fseh->watcher, uio);
@@ -1740,7 +1731,7 @@ typedef struct fsevent_dev_filter_args64 {
 static int
 fseventsf_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx)
 {
-	fsevent_handle *fseh = (struct fsevent_handle *)fp->f_fglob->fg_data;
+	fsevent_handle *fseh = (struct fsevent_handle *)fp->fp_glob->fg_data;
 	int ret = 0;
 	fsevent_dev_filter_args64 *devfilt_args, _devfilt_args;
 
@@ -1794,7 +1785,7 @@ fseventsf_ioctl(struct fileproc *fp, u_long cmd, caddr_t data, vfs_context_t ctx
 
 handle_dev_filter:
 		{
-			int new_num_devices;
+			int new_num_devices, old_num_devices = 0;
 			dev_t *devices_not_to_watch, *tmp = NULL;
 
 			if (devfilt_args->num_devices > 256) {
@@ -1808,40 +1799,38 @@ handle_dev_filter:
 
 				tmp = fseh->watcher->devices_not_to_watch;
 				fseh->watcher->devices_not_to_watch = NULL;
+				old_num_devices = fseh->watcher->num_devices;
 				fseh->watcher->num_devices = new_num_devices;
 
 				unlock_watch_table();
-				if (tmp) {
-					FREE(tmp, M_TEMP);
-				}
+				kheap_free(KHEAP_DEFAULT, tmp, old_num_devices * sizeof(dev_t));
 				break;
 			}
 
-			MALLOC(devices_not_to_watch, dev_t *,
-			    new_num_devices * sizeof(dev_t),
-			    M_TEMP, M_WAITOK);
+			devices_not_to_watch = kheap_alloc(KHEAP_DEFAULT,
+			    new_num_devices * sizeof(dev_t), Z_WAITOK);
 			if (devices_not_to_watch == NULL) {
 				ret = ENOMEM;
 				break;
 			}
 
-			ret = copyin(devfilt_args->devices,
+			ret = copyin((user_addr_t)devfilt_args->devices,
 			    (void *)devices_not_to_watch,
 			    new_num_devices * sizeof(dev_t));
 			if (ret) {
-				FREE(devices_not_to_watch, M_TEMP);
+				kheap_free(KHEAP_DEFAULT, devices_not_to_watch,
+				    new_num_devices * sizeof(dev_t));
 				break;
 			}
 
 			lock_watch_table();
+			old_num_devices = fseh->watcher->num_devices;
 			fseh->watcher->num_devices = new_num_devices;
 			tmp = fseh->watcher->devices_not_to_watch;
 			fseh->watcher->devices_not_to_watch = devices_not_to_watch;
 			unlock_watch_table();
 
-			if (tmp) {
-				FREE(tmp, M_TEMP);
-			}
+			kheap_free(KHEAP_DEFAULT, tmp, old_num_devices * sizeof(dev_t));
 
 			break;
 		}
@@ -1875,7 +1864,7 @@ handle_dev_filter:
 static int
 fseventsf_select(struct fileproc *fp, int which, __unused void *wql, vfs_context_t ctx)
 {
-	fsevent_handle *fseh = (struct fsevent_handle *)fp->f_fglob->fg_data;
+	fsevent_handle *fseh = (struct fsevent_handle *)fp->fp_glob->fg_data;
 	int ready = 0;
 
 	if ((which != FREAD) || (fseh->watcher->flags & WATCHER_CLOSING)) {
@@ -1920,7 +1909,7 @@ fseventsf_close(struct fileglob *fg, __unused vfs_context_t ctx)
 	fseh->watcher = NULL;
 
 	remove_watcher(watcher);
-	FREE(fseh, M_TEMP);
+	kheap_free(KHEAP_DEFAULT, fseh, sizeof(fsevent_handle));
 
 	return 0;
 }
@@ -2051,7 +2040,7 @@ static int
 fseventsf_kqfilter(struct fileproc *fp, struct knote *kn,
     __unused struct kevent_qos_s *kev)
 {
-	fsevent_handle *fseh = (struct fsevent_handle *)fp->f_fglob->fg_data;
+	fsevent_handle *fseh = (struct fsevent_handle *)fp->fp_glob->fg_data;
 	int res;
 
 	kn->kn_hook = (void*)fseh;
@@ -2074,7 +2063,7 @@ static int
 fseventsf_drain(struct fileproc *fp, __unused vfs_context_t ctx)
 {
 	int counter = 0;
-	fsevent_handle *fseh = (struct fsevent_handle *)fp->f_fglob->fg_data;
+	fsevent_handle *fseh = (struct fsevent_handle *)fp->fp_glob->fg_data;
 
 	// if there are people still waiting, sleep for 10ms to
 	// let them clean up and get out of there.  however we
@@ -2122,11 +2111,12 @@ fseventsread(__unused dev_t dev, __unused struct uio *uio, __unused int ioflag)
 
 
 static int
-parse_buffer_and_add_events(const char *buffer, int bufsize, vfs_context_t ctx, long *remainder)
+parse_buffer_and_add_events(const char *buffer, size_t bufsize, vfs_context_t ctx, size_t *remainder)
 {
 	const fse_info *finfo, *dest_finfo;
 	const char *path, *ptr, *dest_path, *event_start = buffer;
-	int path_len, type, dest_path_len, err = 0;
+	size_t path_len, dest_path_len;
+	int type, err = 0;
 
 
 	ptr = buffer;
@@ -2232,9 +2222,9 @@ char *write_buffer = NULL;
 static int
 fseventswrite(__unused dev_t dev, struct uio *uio, __unused int ioflag)
 {
-	int error = 0, count;
+	int error = 0;
+	size_t count, offset = 0, remainder = 0;
 	vfs_context_t ctx = vfs_context_current();
-	long offset = 0, remainder;
 
 	lck_mtx_lock(&event_writer_lock);
 
@@ -2254,18 +2244,13 @@ fseventswrite(__unused dev_t dev, struct uio *uio, __unused int ioflag)
 	// after it.
 	//
 	while (uio_resid(uio)) {
-		if (uio_resid(uio) > (WRITE_BUFFER_SIZE - offset)) {
-			count = WRITE_BUFFER_SIZE - offset;
-		} else {
-			count = uio_resid(uio);
-		}
+		count = MIN(WRITE_BUFFER_SIZE - offset, (size_t)uio_resid(uio));
 
-		error = uiomove(write_buffer + offset, count, uio);
+		error = uiomove(write_buffer + offset, (int)count, uio);
 		if (error) {
 			break;
 		}
 
-		// printf("fsevents: write: copied in %d bytes (offset: %ld)\n", count, offset);
 		error = parse_buffer_and_add_events(write_buffer, offset + count, ctx, &remainder);
 		if (error) {
 			break;
@@ -2277,14 +2262,8 @@ fseventswrite(__unused dev_t dev, struct uio *uio, __unused int ioflag)
 		// through the loop.  note that the remainder always starts
 		// at an event boundary.
 		//
-		if (remainder != 0) {
-			// printf("fsevents: write: an event spanned a %d byte boundary.  remainder: %ld\n",
-			//	WRITE_BUFFER_SIZE, remainder);
-			memmove(write_buffer, (write_buffer + count + offset) - remainder, remainder);
-			offset = remainder;
-		} else {
-			offset = 0;
-		}
+		memmove(write_buffer, (write_buffer + count + offset) - remainder, remainder);
+		offset = remainder;
 	}
 
 	lck_mtx_unlock(&event_writer_lock);
@@ -2355,33 +2334,31 @@ fseventsioctl(__unused dev_t dev, u_long cmd, caddr_t data, __unused int flag, s
 		fse_clone_args = (fsevent_clone_args64 *)data;
 
 handle_clone:
-		if (fse_clone_args->num_events < 0 || fse_clone_args->num_events > 4096) {
+		if (fse_clone_args->num_events <= 0 || fse_clone_args->num_events > 4096) {
 			return EINVAL;
 		}
 
-		MALLOC(fseh, fsevent_handle *, sizeof(fsevent_handle),
-		    M_TEMP, M_WAITOK);
+		fseh = kheap_alloc(KHEAP_DEFAULT, sizeof(fsevent_handle), Z_WAITOK | Z_ZERO);
 		if (fseh == NULL) {
 			return ENOMEM;
 		}
-		memset(fseh, 0, sizeof(fsevent_handle));
 
 		klist_init(&fseh->knotes);
 
-		MALLOC(event_list, int8_t *,
-		    fse_clone_args->num_events * sizeof(int8_t),
-		    M_TEMP, M_WAITOK);
+		event_list = kheap_alloc(KHEAP_DEFAULT,
+		    fse_clone_args->num_events * sizeof(int8_t), Z_WAITOK);
 		if (event_list == NULL) {
-			FREE(fseh, M_TEMP);
+			kheap_free(KHEAP_DEFAULT, fseh, sizeof(fsevent_handle));
 			return ENOMEM;
 		}
 
-		error = copyin(fse_clone_args->event_list,
+		error = copyin((user_addr_t)fse_clone_args->event_list,
 		    (void *)event_list,
 		    fse_clone_args->num_events * sizeof(int8_t));
 		if (error) {
-			FREE(event_list, M_TEMP);
-			FREE(fseh, M_TEMP);
+			kheap_free(KHEAP_DEFAULT, event_list,
+			    fse_clone_args->num_events * sizeof(int8_t));
+			kheap_free(KHEAP_DEFAULT, fseh, sizeof(fsevent_handle));
 			return error;
 		}
 
@@ -2392,8 +2369,9 @@ handle_clone:
 		error = vslock((user_addr_t)fse_clone_args->fd,
 		    sizeof(int32_t));
 		if (error) {
-			FREE(event_list, M_TEMP);
-			FREE(fseh, M_TEMP);
+			kheap_free(KHEAP_DEFAULT, event_list,
+			    fse_clone_args->num_events * sizeof(int8_t));
+			kheap_free(KHEAP_DEFAULT, fseh, sizeof(fsevent_handle));
 			return error;
 		}
 
@@ -2405,8 +2383,9 @@ handle_clone:
 		if (error) {
 			vsunlock((user_addr_t)fse_clone_args->fd,
 			    sizeof(int32_t), 0);
-			FREE(event_list, M_TEMP);
-			FREE(fseh, M_TEMP);
+			kheap_free(KHEAP_DEFAULT, event_list,
+			    fse_clone_args->num_events * sizeof(int8_t));
+			kheap_free(KHEAP_DEFAULT, fseh, sizeof(fsevent_handle));
 			return error;
 		}
 
@@ -2417,21 +2396,22 @@ handle_clone:
 			remove_watcher(fseh->watcher);
 			vsunlock((user_addr_t)fse_clone_args->fd,
 			    sizeof(int32_t), 0);
-			FREE(event_list, M_TEMP);
-			FREE(fseh, M_TEMP);
+			kheap_free(KHEAP_DEFAULT, event_list,
+			    fse_clone_args->num_events * sizeof(int8_t));
+			kheap_free(KHEAP_DEFAULT, fseh, sizeof(fsevent_handle));
 			return error;
 		}
 		proc_fdlock(p);
-		f->f_fglob->fg_flag = FREAD | FWRITE;
-		f->f_fglob->fg_ops = &fsevents_fops;
-		f->f_fglob->fg_data = (caddr_t) fseh;
+		f->fp_glob->fg_flag = FREAD | FWRITE;
+		f->fp_glob->fg_ops = &fsevents_fops;
+		f->fp_glob->fg_data = (caddr_t) fseh;
 		/*
 		 * We can safely hold the proc_fdlock across this copyout()
 		 * because of the vslock() call above.  The vslock() call
 		 * also ensures that we will never get an error, so assert
 		 * this.
 		 */
-		error = copyout((void *)&fd, fse_clone_args->fd, sizeof(int32_t));
+		error = copyout((void *)&fd, (user_addr_t)fse_clone_args->fd, sizeof(int32_t));
 		assert(error == 0);
 
 		procfdtbl_releasefd(p, fd, NULL);
@@ -2463,22 +2443,20 @@ fsevents_wakeup(fs_event_watcher *watcher)
  * A struct describing which functions will get invoked for certain
  * actions.
  */
-static struct cdevsw fsevents_cdevsw =
+static const struct cdevsw fsevents_cdevsw =
 {
-	fseventsopen,           /* open */
-	fseventsclose,          /* close */
-	fseventsread,           /* read */
-	fseventswrite,          /* write */
-	fseventsioctl,          /* ioctl */
-	(stop_fcn_t *)&nulldev, /* stop */
-	(reset_fcn_t *)&nulldev, /* reset */
-	NULL,                   /* tty's */
-	eno_select,             /* select */
-	eno_mmap,               /* mmap */
-	eno_strat,              /* strategy */
-	eno_getc,               /* getc */
-	eno_putc,               /* putc */
-	0                       /* type */
+	.d_open = fseventsopen,
+	.d_close = fseventsclose,
+	.d_read = fseventsread,
+	.d_write = fseventswrite,
+	.d_ioctl = fseventsioctl,
+	.d_stop = (stop_fcn_t *)&nulldev,
+	.d_reset = (reset_fcn_t *)&nulldev,
+	.d_select = eno_select,
+	.d_mmap = eno_mmap,
+	.d_strategy = eno_strat,
+	.d_reserved_1 = eno_getc,
+	.d_reserved_2 = eno_putc,
 };
 
 
@@ -2514,10 +2492,7 @@ fsevents_init(void)
 char *
 get_pathbuff(void)
 {
-	char *path;
-
-	MALLOC_ZONE(path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
-	return path;
+	return zalloc(ZV_NAMEI);
 }
 
 void
@@ -2526,7 +2501,7 @@ release_pathbuff(char *path)
 	if (path == NULL) {
 		return;
 	}
-	FREE_ZONE(path, MAXPATHLEN, M_NAMEI);
+	zfree(ZV_NAMEI, path);
 }
 
 int
@@ -2642,15 +2617,13 @@ create_fsevent_from_kevent(vnode_t vp, uint32_t kevents, struct vnode_attr *vap)
 char *
 get_pathbuff(void)
 {
-	char *path;
-	MALLOC_ZONE(path, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
-	return path;
+	return zalloc(ZV_NAMEI);
 }
 
 void
 release_pathbuff(char *path)
 {
-	FREE_ZONE(path, MAXPATHLEN, M_NAMEI);
+	zfree(ZV_NAMEI, path);
 }
 
 int

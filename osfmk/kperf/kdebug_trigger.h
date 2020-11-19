@@ -42,7 +42,7 @@ struct kperf_kdebug_filter;
 	(((FILTER_SIZE) <= (2 * sizeof(uint64_t))) ? 0 : \
 	  (((FILTER_SIZE) - (2 * sizeof(uint64_t))) / sizeof(uint32_t)))
 
-int kperf_kdebug_init(void);
+void kperf_kdebug_setup(void);
 void kperf_kdebug_reset(void);
 
 boolean_t kperf_kdebug_should_trigger(uint32_t debugid);

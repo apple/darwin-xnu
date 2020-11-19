@@ -70,6 +70,7 @@
 #include <sys/vnode.h>
 #include <sys/vnode_internal.h>
 #include <security/mac_internal.h>
+#include <sys/kauth.h>
 
 #include <sys/param.h>
 
@@ -110,7 +111,9 @@ nullfs_mount(struct mount * mp, __unused vnode_t devvp, user_addr_t user_data, v
 	struct vnode *lowerrootvp = NULL, *vp = NULL;
 	struct vfsstatfs * sp   = NULL;
 	struct null_mount * xmp = NULL;
-	char data[MAXPATHLEN];
+	struct null_mount_conf conf = {0};
+	char path[MAXPATHLEN];
+
 	size_t count;
 	struct vfs_attr vfa;
 	/* set defaults (arbitrary since this file system is readonly) */
@@ -144,9 +147,18 @@ nullfs_mount(struct mount * mp, __unused vnode_t devvp, user_addr_t user_data, v
 	}
 
 	/*
+	 * Get configuration
+	 */
+	error = copyin(user_data, &conf, sizeof(conf));
+	if (error) {
+		NULLFSDEBUG("nullfs: error copying configuration form user %d\n", error);
+		goto error;
+	}
+
+	/*
 	 * Get argument
 	 */
-	error = copyinstr(user_data, data, MAXPATHLEN - 1, &count);
+	error = copyinstr(user_data + sizeof(conf), path, MAXPATHLEN - 1, &count);
 	if (error) {
 		NULLFSDEBUG("nullfs: error copying data form user %d\n", error);
 		goto error;
@@ -156,13 +168,13 @@ nullfs_mount(struct mount * mp, __unused vnode_t devvp, user_addr_t user_data, v
 	 * 64 bit */
 	if (count > MAX_MNT_FROM_LENGTH) {
 		error = EINVAL;
-		NULLFSDEBUG("nullfs: path to translocate too large for this system %d vs %d\n", count, MAX_MNT_FROM_LENGTH);
+		NULLFSDEBUG("nullfs: path to translocate too large for this system %ld vs %ld\n", count, MAX_MNT_FROM_LENGTH);
 		goto error;
 	}
 
-	error = vnode_lookup(data, 0, &lowerrootvp, ctx);
+	error = vnode_lookup(path, 0, &lowerrootvp, ctx);
 	if (error) {
-		NULLFSDEBUG("lookup %s -> %d\n", data, error);
+		NULLFSDEBUG("lookup %s -> %d\n", path, error);
 		goto error;
 	}
 
@@ -177,13 +189,19 @@ nullfs_mount(struct mount * mp, __unused vnode_t devvp, user_addr_t user_data, v
 		goto error;
 	}
 
-	NULLFSDEBUG("mount %s\n", data);
+	NULLFSDEBUG("mount %s\n", path);
 
 	MALLOC(xmp, struct null_mount *, sizeof(*xmp), M_TEMP, M_WAITOK | M_ZERO);
 	if (xmp == NULL) {
 		error = ENOMEM;
 		goto error;
 	}
+
+	/*
+	 * Grab the uid/gid of the caller, which may be used for unveil later
+	 */
+	xmp->uid = kauth_cred_getuid(cred);
+	xmp->gid = kauth_cred_getgid(cred);
 
 	/*
 	 * Save reference to underlying FS
@@ -229,11 +247,14 @@ nullfs_mount(struct mount * mp, __unused vnode_t devvp, user_addr_t user_data, v
 
 	/* fill in the stat block */
 	sp = vfs_statfs(mp);
-	strlcpy(sp->f_mntfromname, data, MAX_MNT_FROM_LENGTH);
+	strlcpy(sp->f_mntfromname, path, MAX_MNT_FROM_LENGTH);
 
 	sp->f_flags = flags;
 
 	xmp->nullm_flags = NULLM_CASEINSENSITIVE; /* default to case insensitive */
+
+	// Set the flags that are requested
+	xmp->nullm_flags |= conf.flags & NULLM_UNVEIL;
 
 	error = nullfs_vfs_getlowerattr(vnode_mount(lowerrootvp), &vfa, ctx);
 	if (error == 0) {
@@ -407,6 +428,7 @@ nullfs_vfs_getattr(struct mount * mp, struct vfs_attr * vfap, vfs_context_t ctx)
 	struct null_mount * null_mp = MOUNTTONULLMOUNT(mp);
 	vol_capabilities_attr_t capabilities;
 	struct vfsstatfs * sp = vfs_statfs(mp);
+	vfs_context_t ectx = nullfs_get_patched_context(null_mp, ctx);
 
 	struct timespec tzero = {.tv_sec = 0, .tv_nsec = 0};
 
@@ -417,7 +439,7 @@ nullfs_vfs_getattr(struct mount * mp, struct vfs_attr * vfap, vfs_context_t ctx)
 	capabilities.capabilities[VOL_CAPABILITIES_FORMAT] = VOL_CAP_FMT_FAST_STATFS | VOL_CAP_FMT_HIDDEN_FILES;
 	capabilities.valid[VOL_CAPABILITIES_FORMAT]        = VOL_CAP_FMT_FAST_STATFS | VOL_CAP_FMT_HIDDEN_FILES;
 
-	if (nullfs_vfs_getlowerattr(vnode_mount(null_mp->nullm_lowerrootvp), &vfa, ctx) == 0) {
+	if (nullfs_vfs_getlowerattr(vnode_mount(null_mp->nullm_lowerrootvp), &vfa, ectx) == 0) {
 		if (VFSATTR_IS_SUPPORTED(&vfa, f_capabilities)) {
 			memcpy(&capabilities, &vfa.f_capabilities, sizeof(capabilities));
 			/* don't support vget */
@@ -527,6 +549,8 @@ nullfs_vfs_getattr(struct mount * mp, struct vfs_attr * vfap, vfs_context_t ctx)
 			vnode_put(coveredvp);
 		}
 	}
+
+	nullfs_cleanup_patched_context(null_mp, ectx);
 
 	return 0;
 }

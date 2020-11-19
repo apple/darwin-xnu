@@ -303,6 +303,7 @@ typedef enum dtrace_probespec {
 #define	DIF_VAR_ARGS		0x0000	/* arguments array */
 #define	DIF_VAR_REGS		0x0001	/* registers array */
 #define	DIF_VAR_UREGS		0x0002	/* user registers array */
+#define	DIF_VAR_VMREGS		0x0003	/* virtual machine registers array */
 #define	DIF_VAR_CURTHREAD	0x0100	/* thread pointer */
 #define	DIF_VAR_TIMESTAMP	0x0101	/* timestamp */
 #define	DIF_VAR_VTIMESTAMP	0x0102	/* virtual timestamp */
@@ -339,12 +340,13 @@ typedef enum dtrace_probespec {
 #if defined(__APPLE__)
 #define DIF_VAR_PTHREAD_SELF	0x0200	/* Apple specific PTHREAD_SELF (Not currently supported!) */
 #define DIF_VAR_DISPATCHQADDR	0x0201	/* Apple specific dispatch queue addr */
-#define DIF_VAR_MACHTIMESTAMP	0x0202	/* mach_absolute_timestamp() */
+#define DIF_VAR_MACHTIMESTAMP	0x0202	/* mach_absolute_time() */
 #define DIF_VAR_CPU		0x0203	/* cpu number */
 #define DIF_VAR_CPUINSTRS	0x0204	/* cpu instructions */
 #define DIF_VAR_CPUCYCLES	0x0205	/* cpu cycles */
 #define DIF_VAR_VINSTRS		0x0206	/* virtual instructions */
 #define DIF_VAR_VCYCLES		0x0207	/* virtual cycles */
+#define DIF_VAR_MACHCTIMESTAMP	0x0208	/* mach_continuous_time() */
 #endif /* __APPLE __ */
 
 #define	DIF_SUBR_RAND			0
@@ -404,7 +406,11 @@ typedef enum dtrace_probespec {
 #define DIF_SUBR_VM_KERNEL_ADDRPERM	200
 #define DIF_SUBR_KDEBUG_TRACE		201
 #define DIF_SUBR_KDEBUG_TRACE_STRING	202
-#define DIF_SUBR_APPLE_MAX		202      /* max apple-specific subroutine value */
+#define DIF_SUBR_MTONS			203
+#define DIF_SUBR_PHYSMEM_READ		204
+#define DIF_SUBR_PHYSMEM_WRITE		205
+#define DIF_SUBR_KVTOPHYS		206
+#define DIF_SUBR_APPLE_MAX		206      /* max apple-specific subroutine value */
 #endif /* __APPLE__ */
 
 typedef uint32_t dif_instr_t;

@@ -67,3 +67,4 @@ _vm_kernel_addrhash:_vm_kernel_addrhash_external
 _vm_kernel_addrhide
 _vm_kernel_addrperm_external
 _vm_kernel_unslide_or_perm_external
+_vm_stats

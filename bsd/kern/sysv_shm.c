@@ -280,7 +280,8 @@ shm_deallocate_segment(struct shmid_kernel *shmseg)
 		FREE(shm_handle, M_SHM);
 	}
 	shmseg->u.shm_internal = USER_ADDR_NULL;                /* tunnel */
-	size = mach_vm_round_page(shmseg->u.shm_segsz);
+	size = vm_map_round_page(shmseg->u.shm_segsz,
+	    vm_map_page_mask(current_map()));
 	shm_committed -= btoc(size);
 	shm_nused--;
 	shmseg->u.shm_perm.mode = SHMSEG_FREE;
@@ -300,7 +301,8 @@ shm_delete_mapping(__unused struct proc *p, struct shmmap_state *shmmap_s,
 
 	segnum = IPCID_TO_IX(shmmap_s->shmid);
 	shmseg = &shmsegs[segnum];
-	size = mach_vm_round_page(shmseg->u.shm_segsz); /* XXX done for us? */
+	size = vm_map_round_page(shmseg->u.shm_segsz,
+	    vm_map_page_mask(current_map())); /* XXX done for us? */
 	if (deallocate) {
 		result = mach_vm_deallocate(current_map(), shmmap_s->va, size);
 		if (result != KERN_SUCCESS) {
@@ -383,6 +385,7 @@ shmat(struct proc *p, struct shmat_args *uap, user_addr_t *retval)
 	struct shmmap_state     *shmmap_s = NULL;
 	struct shm_handle       *shm_handle;
 	mach_vm_address_t       attach_va;      /* attach address in/out */
+	mach_vm_address_t       shmlba;
 	mach_vm_size_t          map_size;       /* size of map entry */
 	mach_vm_size_t          mapped_size;
 	vm_prot_t           prot;
@@ -465,7 +468,8 @@ shmat(struct proc *p, struct shmat_args *uap, user_addr_t *retval)
 		goto shmat_out;
 	}
 
-	map_size = mach_vm_round_page(shmseg->u.shm_segsz);
+	map_size = vm_map_round_page(shmseg->u.shm_segsz,
+	    vm_map_page_mask(current_map()));
 	prot = VM_PROT_READ;
 	if ((uap->shmflg & SHM_RDONLY) == 0) {
 		prot |= VM_PROT_WRITE;
@@ -476,9 +480,10 @@ shmat(struct proc *p, struct shmat_args *uap, user_addr_t *retval)
 	}
 
 	attach_va = (mach_vm_address_t)uap->shmaddr;
+	shmlba = vm_map_page_size(current_map()); /* XXX instead of SHMLBA */
 	if (uap->shmflg & SHM_RND) {
-		attach_va &= ~(SHMLBA - 1);
-	} else if ((attach_va & (SHMLBA - 1)) != 0) {
+		attach_va &= ~(shmlba - 1);
+	} else if ((attach_va & (shmlba - 1)) != 0) {
 		shmat_ret = EINVAL;
 		goto shmat_out;
 	}
@@ -515,10 +520,23 @@ shmat(struct proc *p, struct shmat_args *uap, user_addr_t *retval)
 	for (shm_handle = CAST_DOWN(void *, shmseg->u.shm_internal);/* tunnel */
 	    shm_handle != NULL;
 	    shm_handle = shm_handle->shm_handle_next) {
+		vm_map_size_t chunk_size;
+
+		assert(mapped_size < map_size);
+		chunk_size = shm_handle->shm_handle_size;
+		if (chunk_size > map_size - mapped_size) {
+			/*
+			 * Partial mapping of last chunk due to
+			 * page size mismatch.
+			 */
+			assert(vm_map_page_shift(current_map()) < PAGE_SHIFT);
+			assert(shm_handle->shm_handle_next == NULL);
+			chunk_size = map_size - mapped_size;
+		}
 		rv = vm_map_enter_mem_object(
 			current_map(),          /* process map */
 			&attach_va,             /* attach address */
-			shm_handle->shm_handle_size, /* segment size */
+			chunk_size,             /* size to map */
 			(mach_vm_offset_t)0,    /* alignment mask */
 			VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
 			VM_MAP_KERNEL_FLAGS_NONE,
@@ -533,8 +551,8 @@ shmat(struct proc *p, struct shmat_args *uap, user_addr_t *retval)
 			goto out;
 		}
 
-		mapped_size += shm_handle->shm_handle_size;
-		attach_va = attach_va + shm_handle->shm_handle_size;
+		mapped_size += chunk_size;
+		attach_va = attach_va + chunk_size;
 	}
 
 	shmmap_s->shmid = uap->shmid;
@@ -1185,9 +1203,9 @@ IPCS_shm_sysctl(__unused struct sysctl_oid *oidp, __unused void *arg1,
 	union {
 		struct user32_IPCS_command u32;
 		struct user_IPCS_command u64;
-	} ipcs;
-	struct user32_shmid_ds shmid_ds32 = {}; /* post conversion, 32 bit version */
-	struct user_shmid_ds   shmid_ds;        /* 64 bit version */
+	} ipcs = { };
+	struct user32_shmid_ds shmid_ds32 = { }; /* post conversion, 32 bit version */
+	struct user_shmid_ds   shmid_ds = { };   /* 64 bit version */
 	void *shmid_dsp;
 	size_t ipcs_sz = sizeof(struct user_IPCS_command);
 	size_t shmid_ds_sz = sizeof(struct user_shmid_ds);

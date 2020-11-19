@@ -189,3 +189,17 @@ static
 SYSCTL_INT(_machdep, OID_AUTO, lck_mtx_adaptive_spin_mode,
     CTLFLAG_RW, &lck_mtx_adaptive_spin_mode, 0,
     "Enable adaptive spin behavior for kernel mutexes");
+
+static int
+virtual_address_size SYSCTL_HANDLER_ARGS
+{
+#pragma unused(arg1, arg2, oidp)
+	int return_value = 32 - (TTBCR_N_SETUP & TTBCR_N_MASK);
+	return SYSCTL_OUT(req, &return_value, sizeof(return_value));
+}
+
+static
+SYSCTL_PROC(_machdep, OID_AUTO, virtual_address_size,
+    CTLTYPE_INT | CTLFLAG_RD | CTLFLAG_LOCKED,
+    0, 0, virtual_address_size, "I",
+    "Number of addressable bits in userspace virtual addresses");

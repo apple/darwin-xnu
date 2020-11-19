@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2011-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -44,8 +44,6 @@
 #include <net/if_types.h>
 #include <net/net_osdep.h>
 #include <net/pktsched/pktsched.h>
-#include <net/pktsched/pktsched_tcq.h>
-#include <net/pktsched/pktsched_qfq.h>
 #include <net/pktsched/pktsched_fq_codel.h>
 #include <net/pktsched/pktsched_netem.h>
 
@@ -72,8 +70,6 @@ pktsched_init(void)
 		/* NOTREACHED */
 	}
 
-	tcq_init();
-	qfq_init();
 	netem_init();
 }
 
@@ -84,7 +80,7 @@ init_machclk(void)
 	 * Initialize machclk_freq using the timerbase frequency
 	 * value from device specific info.
 	 */
-	machclk_freq = gPEClockFrequencyInfo.timebase_frequency_hz;
+	machclk_freq = (uint32_t)gPEClockFrequencyInfo.timebase_frequency_hz;
 
 	clock_interval_to_absolutetime_interval(1, NSEC_PER_SEC,
 	    &machclk_per_sec);
@@ -131,33 +127,14 @@ pktsched_setup(struct ifclassq *ifq, u_int32_t scheduler, u_int32_t sflags,
 	rflags = (ifq->ifcq_flags & IFCQF_ENABLED);
 
 	if (ifq->ifcq_type != PKTSCHEDT_NONE) {
-		(void) pktsched_teardown(ifq);
+		pktsched_teardown(ifq);
 
 		/* Teardown should have succeeded */
 		VERIFY(ifq->ifcq_type == PKTSCHEDT_NONE);
 		VERIFY(ifq->ifcq_disc == NULL);
-		VERIFY(ifq->ifcq_enqueue == NULL);
-		VERIFY(ifq->ifcq_dequeue == NULL);
-		VERIFY(ifq->ifcq_dequeue_sc == NULL);
-		VERIFY(ifq->ifcq_request == NULL);
 	}
 
-	switch (scheduler) {
-	case PKTSCHEDT_TCQ:
-		error = tcq_setup_ifclassq(ifq, sflags, ptype);
-		break;
-
-	case PKTSCHEDT_QFQ:
-		error = qfq_setup_ifclassq(ifq, sflags, ptype);
-		break;
-	case PKTSCHEDT_FQ_CODEL:
-		error = fq_if_setup_ifclassq(ifq, sflags, ptype);
-		break;
-	default:
-		error = ENXIO;
-		break;
-	}
-
+	error = fq_if_setup_ifclassq(ifq, sflags, ptype);
 	if (error == 0) {
 		ifq->ifcq_flags |= rflags;
 	}
@@ -165,11 +142,9 @@ pktsched_setup(struct ifclassq *ifq, u_int32_t scheduler, u_int32_t sflags,
 	return error;
 }
 
-int
+void
 pktsched_teardown(struct ifclassq *ifq)
 {
-	int error = 0;
-
 	IFCQ_LOCK_ASSERT_HELD(ifq);
 
 	if_qflush(ifq->ifcq_ifp, 1);
@@ -177,51 +152,25 @@ pktsched_teardown(struct ifclassq *ifq)
 
 	ifq->ifcq_flags &= ~IFCQF_ENABLED;
 
-	switch (ifq->ifcq_type) {
-	case PKTSCHEDT_NONE:
-		break;
-
-	case PKTSCHEDT_TCQ:
-		error = tcq_teardown_ifclassq(ifq);
-		break;
-
-	case PKTSCHEDT_QFQ:
-		error = qfq_teardown_ifclassq(ifq);
-		break;
-
-	case PKTSCHEDT_FQ_CODEL:
-		error = fq_if_teardown_ifclassq(ifq);
-		break;
-	default:
-		error = ENXIO;
-		break;
+	if (ifq->ifcq_type == PKTSCHEDT_FQ_CODEL) {
+		/* Could be PKTSCHEDT_NONE */
+		fq_if_teardown_ifclassq(ifq);
 	}
-	return error;
+
+	return;
 }
 
 int
 pktsched_getqstats(struct ifclassq *ifq, u_int32_t qid,
     struct if_ifclassq_stats *ifqs)
 {
-	int error;
+	int error = 0;
 
 	IFCQ_LOCK_ASSERT_HELD(ifq);
 
-	switch (ifq->ifcq_type) {
-	case PKTSCHEDT_TCQ:
-		error = tcq_getqstats_ifclassq(ifq, qid, ifqs);
-		break;
-
-	case PKTSCHEDT_QFQ:
-		error = qfq_getqstats_ifclassq(ifq, qid, ifqs);
-		break;
-
-	case PKTSCHEDT_FQ_CODEL:
+	if (ifq->ifcq_type == PKTSCHEDT_FQ_CODEL) {
+		/* Could be PKTSCHEDT_NONE */
 		error = fq_if_getqstats_ifclassq(ifq, qid, ifqs);
-		break;
-	default:
-		error = ENXIO;
-		break;
 	}
 
 	return error;
@@ -231,11 +180,34 @@ void
 pktsched_pkt_encap(pktsched_pkt_t *pkt, classq_pkt_t *cpkt)
 {
 	pkt->pktsched_pkt = *cpkt;
+	pkt->pktsched_tail = *cpkt;
+	pkt->pktsched_pcnt = 1;
 
 	switch (cpkt->cp_ptype) {
 	case QP_MBUF:
 		pkt->pktsched_plen =
 		    (uint32_t)m_pktlen(pkt->pktsched_pkt_mbuf);
+		break;
+
+
+	default:
+		VERIFY(0);
+		/* NOTREACHED */
+		__builtin_unreachable();
+	}
+}
+
+void
+pktsched_pkt_encap_chain(pktsched_pkt_t *pkt, classq_pkt_t *cpkt,
+    classq_pkt_t *tail, uint32_t cnt, uint32_t bytes)
+{
+	pkt->pktsched_pkt = *cpkt;
+	pkt->pktsched_tail = *tail;
+	pkt->pktsched_pcnt = cnt;
+	pkt->pktsched_plen = bytes;
+
+	switch (cpkt->cp_ptype) {
+	case QP_MBUF:
 		break;
 
 
@@ -253,6 +225,8 @@ pktsched_clone_pkt(pktsched_pkt_t *pkt1, pktsched_pkt_t *pkt2)
 
 	ASSERT(pkt1 != NULL);
 	ASSERT(pkt1->pktsched_pkt_mbuf != NULL);
+	ASSERT(pkt1->pktsched_pcnt == 1);
+
 	/* allow in place clone, but make sure pkt2->pktsched_pkt won't leak */
 	ASSERT((pkt1 == pkt2 && pkt1->pktsched_pkt_mbuf ==
 	    pkt2->pktsched_pkt_mbuf) || (pkt1 != pkt2 &&
@@ -277,6 +251,8 @@ pktsched_clone_pkt(pktsched_pkt_t *pkt1, pktsched_pkt_t *pkt2)
 
 	pkt2->pktsched_plen = pkt1->pktsched_plen;
 	pkt2->pktsched_ptype = pkt1->pktsched_ptype;
+	pkt2->pktsched_tail = pkt2->pktsched_pkt;
+	pkt2->pktsched_pcnt = 1;
 	return 0;
 }
 
@@ -310,20 +286,32 @@ pktsched_corrupt_packet(pktsched_pkt_t *pkt)
 void
 pktsched_free_pkt(pktsched_pkt_t *pkt)
 {
-	switch (pkt->pktsched_ptype) {
-	case QP_MBUF:
-		m_freem(pkt->pktsched_pkt_mbuf);
-		break;
+	uint32_t cnt = pkt->pktsched_pcnt;
+	ASSERT(cnt != 0);
 
+	switch (pkt->pktsched_ptype) {
+	case QP_MBUF: {
+		struct mbuf *m;
+
+		m = pkt->pktsched_pkt_mbuf;
+		if (cnt == 1) {
+			VERIFY(m->m_nextpkt == NULL);
+		} else {
+			VERIFY(m->m_nextpkt != NULL);
+		}
+		m_freem_list(m);
+		break;
+	}
 
 	default:
 		VERIFY(0);
 		/* NOTREACHED */
 		__builtin_unreachable();
 	}
-
 	pkt->pktsched_pkt = CLASSQ_PKT_INITIALIZER(pkt->pktsched_pkt);
+	pkt->pktsched_tail = CLASSQ_PKT_INITIALIZER(pkt->pktsched_tail);
 	pkt->pktsched_plen = 0;
+	pkt->pktsched_pcnt = 0;
 }
 
 mbuf_svc_class_t
@@ -349,7 +337,7 @@ pktsched_get_pkt_svc(pktsched_pkt_t *pkt)
 void
 pktsched_get_pkt_vars(pktsched_pkt_t *pkt, volatile uint32_t **flags,
     uint64_t **timestamp, uint32_t *flowid, uint8_t *flowsrc, uint8_t *proto,
-    uint32_t *tcp_start_seq)
+    uint32_t *comp_gencnt)
 {
 	switch (pkt->pktsched_ptype) {
 	case QP_MBUF: {
@@ -370,12 +358,8 @@ pktsched_get_pkt_vars(pktsched_pkt_t *pkt, volatile uint32_t **flags,
 		if (proto != NULL) {
 			*proto = pkth->pkt_proto;
 		}
-		/*
-		 * caller should use this value only if PKTF_START_SEQ
-		 * is set in the mbuf packet flags
-		 */
-		if (tcp_start_seq != NULL) {
-			*tcp_start_seq = pkth->tx_start_seq;
+		if (comp_gencnt != NULL) {
+			*comp_gencnt = pkth->comp_gencnt;
 		}
 
 		break;

@@ -41,6 +41,7 @@ EXPORT_ONLY_FILES =	\
 		    seg.h \
 		    simple_lock.h \
 		    smp.h \
+	            trap.h \
 		    tsc.h \
 		    tss.h \
 		    ucode.h \

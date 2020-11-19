@@ -156,12 +156,6 @@ cpuid_get_cpufamily(void)
 
 	case CPU_VID_APPLE:
 		switch (cpuid_info()->arm_info.arm_part) {
-		case CPU_PART_SWIFT:
-			cpufamily = CPUFAMILY_ARM_SWIFT;
-			break;
-		case CPU_PART_CYCLONE:
-			cpufamily = CPUFAMILY_ARM_CYCLONE;
-			break;
 		case CPU_PART_TYPHOON:
 		case CPU_PART_TYPHOON_CAPRI:
 			cpufamily = CPUFAMILY_ARM_TYPHOON;
@@ -185,12 +179,10 @@ cpuid_get_cpufamily(void)
 		case CPU_PART_TEMPEST_ARUBA:
 			cpufamily = CPUFAMILY_ARM_VORTEX_TEMPEST;
 			break;
-#ifndef RC_HIDE_XNU_LIGHTNING
 		case CPU_PART_LIGHTNING:
 		case CPU_PART_THUNDER:
 			cpufamily = CPUFAMILY_ARM_LIGHTNING_THUNDER;
 			break;
-#endif /* !RC_HIDE_XNU_LIGHTNING */
 		default:
 			cpufamily = CPUFAMILY_UNKNOWN;
 			break;
@@ -203,6 +195,45 @@ cpuid_get_cpufamily(void)
 	}
 
 	return cpufamily;
+}
+
+int
+cpuid_get_cpusubfamily(void)
+{
+	int cpusubfamily = CPUSUBFAMILY_UNKNOWN;
+
+	if (cpuid_info()->arm_info.arm_implementor != CPU_VID_APPLE) {
+		return cpusubfamily;
+	}
+
+	switch (cpuid_info()->arm_info.arm_part) {
+	case CPU_PART_TYPHOON:
+	case CPU_PART_TWISTER:
+	case CPU_PART_HURRICANE:
+	case CPU_PART_MONSOON:
+	case CPU_PART_MISTRAL:
+	case CPU_PART_VORTEX:
+	case CPU_PART_TEMPEST:
+	case CPU_PART_LIGHTNING:
+	case CPU_PART_THUNDER:
+		cpusubfamily = CPUSUBFAMILY_ARM_HP;
+		break;
+	case CPU_PART_TYPHOON_CAPRI:
+	case CPU_PART_TWISTER_ELBA_MALTA:
+	case CPU_PART_HURRICANE_MYST:
+	case CPU_PART_VORTEX_ARUBA:
+	case CPU_PART_TEMPEST_ARUBA:
+		cpusubfamily = CPUSUBFAMILY_ARM_HG;
+		break;
+	case CPU_PART_TEMPEST_M9:
+		cpusubfamily = CPUSUBFAMILY_ARM_M;
+		break;
+	default:
+		cpusubfamily = CPUFAMILY_UNKNOWN;
+		break;
+	}
+
+	return cpusubfamily;
 }
 
 void
@@ -312,6 +343,15 @@ do_cacheid(void)
 
 		cpuid_cache_info.c_inner_cache_size = cpuid_cache_info.c_dsize;
 		cpuid_cache_info.c_bulksize_op = cpuid_cache_info.c_dsize;
+	}
+
+	if (cpuid_cache_info.c_unified == 0) {
+		machine_write_csselr(CSSELR_L1, CSSELR_INSTR);
+		arm_cache_ccsidr_info.value = machine_read_ccsidr();
+		uint32_t c_linesz = 4 * (1 << (arm_cache_ccsidr_info.bits.LineSize + 2));
+		uint32_t c_assoc = (arm_cache_ccsidr_info.bits.Assoc + 1);
+		/* I cache size */
+		cpuid_cache_info.c_isize = (arm_cache_ccsidr_info.bits.NumSets + 1) * c_linesz * c_assoc;
 	}
 
 	kprintf("%s() - %u bytes %s cache (I:%u D:%u (%s)), %u-way assoc, %u bytes/line\n",

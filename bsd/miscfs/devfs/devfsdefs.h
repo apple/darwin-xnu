@@ -113,7 +113,7 @@ union devnode_type {
 	}Dir;
 	struct {
 		char *          name;/* must be allocated separately */
-		int             namelen;
+		size_t          namelen;
 	}Slnk;
 };
 
@@ -298,7 +298,7 @@ dn_copy_times(devnode_t * target, devnode_t * source)
 }
 
 #ifdef BSD_KERNEL_PRIVATE
-int     devfs_make_symlink(devnode_t *dir_p, char *name, int mode, char *target, devdirent_t **newent);
+int     devfs_make_symlink(devnode_t *dir_p, char *name, mode_t mode, char *target, devdirent_t **newent);
 #endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* __APPLE_API_PRIVATE */

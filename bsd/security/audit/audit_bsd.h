@@ -34,6 +34,7 @@
 #include <machine/endian.h>
 
 #if defined(_KERNEL) || defined(KERNEL)
+#include <kern/kalloc.h>
 
 #if DIAGNOSTIC
 #ifdef KASSERT
@@ -311,11 +312,6 @@ void    _audit_rw_destroy(struct rwlock *lp);
 #define rlck_assert(lp, wht)
 #define slck_assert(lp, wht)
 #endif /* DIAGNOSTIC */
-
-/*
- * Synchronization initialization.
- */
-void    _audit_lck_grp_init(void);
 
 /*
  * BSD (IPv6) event rate limiter.

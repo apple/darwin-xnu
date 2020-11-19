@@ -42,7 +42,7 @@ T_HELPER_DECL(spawn_children_helper, "spawn_children helper")
 static void
 take_stackshot(void)
 {
-	uint32_t stackshot_flags = (STACKSHOT_SAVE_LOADINFO | STACKSHOT_GET_GLOBAL_MEM_STATS |
+	uint64_t stackshot_flags = (STACKSHOT_SAVE_LOADINFO | STACKSHOT_GET_GLOBAL_MEM_STATS |
 	    STACKSHOT_SAVE_IMP_DONATION_PIDS | STACKSHOT_KCDATA_FORMAT);
 
 	void *config = stackshot_config_create();

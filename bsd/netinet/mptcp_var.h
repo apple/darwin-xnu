@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2012-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -200,9 +200,9 @@ static inline int
 mptcp_subflow_cwnd_space(struct socket *so)
 {
 	struct tcpcb *tp = sototcpcb(so);
-	int cwnd = min(tp->snd_wnd, tp->snd_cwnd) - (so->so_snd.sb_cc);
+	int cwnd = (int)(MIN(tp->snd_wnd, tp->snd_cwnd) - (so->so_snd.sb_cc));
 
-	return min(cwnd, sbspace(&so->so_snd));
+	return MIN(cwnd, sbspace(&so->so_snd));
 }
 
 
@@ -227,15 +227,15 @@ struct mptopt {
  * Note that mpts_flags and mpts_evctl are modified via atomic operations.
  */
 struct mptsub {
-	TAILQ_ENTRY(mptsub)     mpts_entry;     /* glue to peer subflows */
-	uint32_t                mpts_refcnt;    /* reference count */
-	uint32_t                mpts_flags;     /* see flags below */
-	uint32_t                mpts_evctl;     /* subflow control events */
-	sae_connid_t            mpts_connid;    /* subflow connection ID */
-	int                     mpts_oldintval; /* sopt_val before sosetopt  */
-	struct mptses           *mpts_mpte;     /* back ptr to MPTCP session */
-	struct socket           *mpts_socket;   /* subflow socket */
-	struct sockaddr         *mpts_src;      /* source address */
+	TAILQ_ENTRY(mptsub)   mpts_entry;     /* glue to peer subflows */
+	uint32_t              mpts_refcnt;    /* reference count */
+	uint32_t              mpts_flags;     /* see flags below */
+	long                  mpts_evctl;     /* subflow control events */
+	sae_connid_t          mpts_connid;    /* subflow connection ID */
+	int                   mpts_oldintval; /* sopt_val before sosetopt  */
+	struct mptses         *mpts_mpte;     /* back ptr to MPTCP session */
+	struct socket         *mpts_socket;   /* subflow socket */
+	struct sockaddr       *mpts_src;      /* source address */
 
 	union {
 		/* destination address */
@@ -356,11 +356,12 @@ struct mptcp_subf_auth_entry {
  * Keep in sync with bsd/dev/dtrace/scripts/mptcp.d.
  */
 struct mptcb {
-	struct mptses   *mpt_mpte;              /* back ptr to MPTCP session */
+	struct mptses  *mpt_mpte;               /* back ptr to MPTCP session */
 	mptcp_state_t   mpt_state;              /* MPTCP state */
-	uint32_t       mpt_flags;              /* see flags below */
-	uint32_t       mpt_version;            /* MPTCP proto version */
-	int             mpt_softerror;          /* error not yet reported */
+	uint32_t        mpt_flags;              /* see flags below */
+	uint8_t         mpt_version;            /* MPTCP proto version */
+	uint8_t         mpt_peer_version;       /* Version from peer */
+	u_short         mpt_softerror;          /* error not yet reported */
 	/*
 	 * Authentication and metadata invariants
 	 */
@@ -374,10 +375,10 @@ struct mptcb {
 	 * Data ACKs do not.
 	 */
 	int             mpt_rxtshift;           /* num of consecutive retrans */
-	uint32_t        mpt_rxtstart;           /* time at which rxt started */
+	uint64_t        mpt_rxtstart;           /* time at which rxt started */
 	uint64_t        mpt_rtseq;              /* seq # being tracked */
+	uint64_t        mpt_timewait;           /* timewait */
 	uint32_t        mpt_timer_vals;         /* timer related values */
-	uint32_t        mpt_timewait;           /* timewait */
 	/*
 	 * Sending side
 	 */
@@ -393,8 +394,8 @@ struct mptcb {
 	 */
 	uint64_t        mpt_rcvnxt;             /* Next expected DSN */
 	uint64_t        mpt_remote_idsn;        /* Peer's IDSN */
+	uint64_t        mpt_rcvadv;
 	uint32_t        mpt_rcvwnd;
-	uint32_t        mpt_rcvadv;
 	LIST_HEAD(, mptcp_subf_auth_entry) mpt_subauth_list; /* address IDs */
 	/*
 	 * Fastclose
@@ -409,10 +410,9 @@ struct mptcb {
 	int32_t         mpt_gc_ticks;           /* Used for zombie deletion */
 
 	uint32_t        mpt_notsent_lowat;      /* TCP_NOTSENT_LOWAT support */
-	uint32_t        mpt_peer_version;       /* Version from peer */
 
 	struct tsegqe_head      mpt_segq;
-	uint16_t        mpt_reassqlen;          /* length of reassembly queue */
+	uint32_t        mpt_reassqlen;          /* length of reassembly queue */
 };
 
 /* valid values for mpt_flags (see also notes on mpts_flags above) */
@@ -568,8 +568,8 @@ extern void mptcp_check_subflows_and_add(struct mptses *mpte);
 extern void mptcp_check_subflows_and_remove(struct mptses *mpte);
 extern void mptcpstats_inc_switch(struct mptses *mpte, const struct mptsub *mpts);
 extern void mptcpstats_update(struct mptcp_itf_stats *stats, const struct mptsub *mpts);
-extern int mptcpstats_get_index_by_ifindex(struct mptcp_itf_stats *stats, int ifindex, boolean_t create);
-extern struct mptses *mptcp_drop(struct mptses *, struct mptcb *, int);
+extern int mptcpstats_get_index_by_ifindex(struct mptcp_itf_stats *stats, u_short ifindex, boolean_t create);
+extern struct mptses *mptcp_drop(struct mptses *mpte, struct mptcb *mp_tp, u_short errno);
 extern struct mptses *mptcp_close(struct mptses *, struct mptcb *);
 extern int mptcp_lock(struct socket *, int, void *);
 extern int mptcp_unlock(struct socket *, int, void *);
@@ -579,7 +579,7 @@ extern void mptcp_subflow_workloop(struct mptses *);
 extern void mptcp_sched_create_subflows(struct mptses *);
 
 extern void mptcp_finish_usrclosed(struct mptses *mpte);
-extern struct mptopt *mptcp_sopt_alloc(int);
+extern struct mptopt *mptcp_sopt_alloc(zalloc_flags_t);
 extern const char *mptcp_sopt2str(int, int);
 extern void mptcp_sopt_free(struct mptopt *);
 extern void mptcp_sopt_insert(struct mptses *, struct mptopt *);
@@ -624,7 +624,7 @@ extern void mptcp_output_getm_dsnmap64(struct socket *so, int off,
     uint16_t *data_len, uint16_t *dss_csum);
 extern void mptcp_act_on_txfail(struct socket *);
 extern struct mptsub *mptcp_get_subflow(struct mptses *mpte, struct mptsub **preferred);
-extern int mptcp_get_map_for_dsn(struct socket *, u_int64_t, u_int32_t *);
+extern int mptcp_get_map_for_dsn(struct socket *so, uint64_t dsn_fail, uint32_t *tcp_seq);
 extern int32_t mptcp_adj_sendlen(struct socket *so, int32_t off);
 extern void mptcp_sbrcv_grow(struct mptcb *mp_tp);
 extern int32_t mptcp_sbspace(struct mptcb *);
@@ -649,16 +649,15 @@ extern void mptcp_unset_cellicon(struct mptses *mpte, struct mptsub *mpts, uint3
 extern void mptcp_reset_rexmit_state(struct tcpcb *tp);
 extern void mptcp_reset_keepalive(struct tcpcb *tp);
 extern int mptcp_validate_csum(struct tcpcb *tp, struct mbuf *m, uint64_t dsn,
-    uint32_t sseq, uint16_t dlen, uint16_t csum,
-    uint16_t dfin);
+    uint32_t sseq, uint16_t dlen, uint16_t csum, int dfin);
 __END_DECLS
 
 #endif /* BSD_KERNEL_PRIVATE */
 #ifdef PRIVATE
 
 typedef struct mptcp_flow {
-	size_t                  flow_len;
-	size_t                  flow_tcpci_offset;
+	uint64_t                flow_len;
+	uint64_t                flow_tcpci_offset;
 	uint32_t                flow_flags;
 	sae_connid_t            flow_cid;
 	struct sockaddr_storage flow_src;
@@ -670,9 +669,9 @@ typedef struct mptcp_flow {
 } mptcp_flow_t;
 
 typedef struct conninfo_mptcp {
-	size_t          mptcpci_len;
-	size_t          mptcpci_flow_offset;    /* offsetof first flow */
-	size_t          mptcpci_nflows;         /* number of subflows */
+	uint64_t        mptcpci_len;
+	uint64_t        mptcpci_flow_offset;    /* offsetof first flow */
+	uint64_t        mptcpci_nflows;         /* number of subflows */
 	uint32_t        mptcpci_state;          /* MPTCP level state */
 	uint32_t        mptcpci_mpte_flags;     /* Session flags */
 	uint32_t        mptcpci_flags;          /* MPTCB flags */

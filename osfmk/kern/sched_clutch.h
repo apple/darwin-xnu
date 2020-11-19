@@ -47,9 +47,12 @@
  * daemon thread groups which are marked "Efficient" on AMP
  * systems.
  */
-#define SCHED_CLUTCH_TG_PRI_LOW           0x0
-#define SCHED_CLUTCH_TG_PRI_MED           0x1
-#define SCHED_CLUTCH_TG_PRI_HIGH          0x2
+__enum_decl(sched_clutch_tg_priority_t, uint8_t, {
+	SCHED_CLUTCH_TG_PRI_LOW           = 0,
+	SCHED_CLUTCH_TG_PRI_MED           = 1,
+	SCHED_CLUTCH_TG_PRI_HIGH          = 2,
+	SCHED_CLUTCH_TG_PRI_MAX           = 3,
+});
 
 /*
  * For the current implementation, bound threads are not managed
@@ -58,13 +61,22 @@
  */
 #define SCHED_CLUTCH_THREAD_ELIGIBLE(thread)    ((thread->bound_processor) == PROCESSOR_NULL)
 
+#if CONFIG_SCHED_EDGE
+#define SCHED_CLUTCH_THREAD_CLUSTER_BOUND(thread)       ((thread->sched_flags & (TH_SFLAG_ECORE_ONLY | TH_SFLAG_PCORE_ONLY)) != 0)
+#define SCHED_CLUTCH_THREAD_CLUSTER_BOUND_SOFT(thread)  ((thread->sched_flags & TH_SFLAG_BOUND_SOFT) != 0)
+
+#else /* CONFIG_SCHED_EDGE */
+#define SCHED_CLUTCH_THREAD_CLUSTER_BOUND(thread)       (0)
+#define SCHED_CLUTCH_THREAD_CLUSTER_BOUND_SOFT(thread)  (0)
+#endif /* CONFIG_SCHED_EDGE */
+
 /*
  * Clutch Bucket Runqueue Structure.
  */
 struct sched_clutch_bucket_runq {
 	int                     scbrq_highq;
-	bitmap_t                scbrq_bitmap[BITMAP_LEN(NRQS_MAX)];
 	int                     scbrq_count;
+	bitmap_t                scbrq_bitmap[BITMAP_LEN(NRQS_MAX)];
 	circle_queue_head_t     scbrq_queues[NRQS_MAX];
 };
 typedef struct sched_clutch_bucket_runq *sched_clutch_bucket_runq_t;
@@ -94,16 +106,25 @@ typedef struct sched_clutch_bucket_runq *sched_clutch_bucket_runq_t;
 struct sched_clutch_root_bucket {
 	/* (I) sched bucket represented by this root bucket */
 	uint8_t                         scrb_bucket;
-	/* (P) priority queue for all clutch buckets in this sched bucket */
-	struct sched_clutch_bucket_runq scrb_clutch_buckets;
+	/* (I) Indicates the root bucket represents cluster bound threads */
+	bool                            scrb_bound;
+	/* (P) Indicates if the root bucket is in starvation avoidance mode */
+	bool                            scrb_starvation_avoidance;
+
+	union {
+		/* (P) priority queue for all unbound clutch buckets in this sched bucket */
+		struct sched_clutch_bucket_runq scrb_clutch_buckets;
+		/* (P) Runqueue for all bound threads part of this root bucket */
+		struct run_queue                scrb_bound_thread_runq;
+	};
 	/* (P) priority queue entry to use for enqueueing root bucket into root prioq */
-	struct priority_queue_entry     scrb_pqlink;
-	/* (P) ageout deadline for this root bucket */
-	uint64_t                        scrb_deadline;
+	struct priority_queue_entry_deadline scrb_pqlink;
 	/* (P) warped deadline for root bucket */
 	uint64_t                        scrb_warped_deadline;
 	/* (P) warp remaining for root bucket */
 	uint64_t                        scrb_warp_remaining;
+	/* (P) timestamp for the start of the starvation avoidance window */
+	uint64_t                        scrb_starvation_ts;
 };
 typedef struct sched_clutch_root_bucket *sched_clutch_root_bucket_t;
 
@@ -126,6 +147,7 @@ struct sched_clutch_root {
 	/* (P) root level urgency; represents the urgency of the whole hierarchy for pre-emption purposes */
 	int16_t                         scr_urgency;
 
+	uint32_t                        scr_cluster_id;
 	/* (I) processor set this hierarchy belongs to */
 	processor_set_t                 scr_pset;
 	/*
@@ -133,23 +155,37 @@ struct sched_clutch_root {
 	 * allows easy iteration in the sched tick based timesharing code
 	 */
 	queue_head_t                    scr_clutch_buckets;
+
 	/*
-	 * (P) list of all runnable foreign buckets in this hierarchy;
+	 * (P) priority queue of all runnable foreign buckets in this hierarchy;
 	 * used for tracking thread groups which need to be migrated when
-	 * psets are available
+	 * psets are available or rebalancing threads on CPU idle.
 	 */
-	queue_head_t                    scr_foreign_buckets;
+	struct priority_queue_sched_max scr_foreign_buckets;
 
 	/* Root level bucket management */
 
-	/* (P) bitmap of all runnable clutch_root_buckets; used for root pri calculation */
-	bitmap_t                        scr_runnable_bitmap[BITMAP_LEN(TH_BUCKET_SCHED_MAX)];
-	/* (P) bitmap of all runnable root buckets which have warps remaining */
-	bitmap_t                        scr_warp_available[BITMAP_LEN(TH_BUCKET_SCHED_MAX)];
-	/* (P) priority queue of all runnable clutch_root_buckets */
-	struct priority_queue           scr_root_buckets;
-	/* (P) storage for all possible clutch_root_buckets */
-	struct sched_clutch_root_bucket scr_buckets[TH_BUCKET_SCHED_MAX];
+	/* (P) bitmap of all runnable unbounded root buckets */
+	bitmap_t                        scr_unbound_runnable_bitmap[BITMAP_LEN(TH_BUCKET_SCHED_MAX)];
+	/* (P) bitmap of all runnable unbounded root buckets which have warps remaining */
+	bitmap_t                        scr_unbound_warp_available[BITMAP_LEN(TH_BUCKET_SCHED_MAX)];
+	/* (P) bitmap of all runnable bounded root buckets */
+	bitmap_t                        scr_bound_runnable_bitmap[BITMAP_LEN(TH_BUCKET_SCHED_MAX)];
+	/* (P) bitmap of all runnable bounded root buckets which have warps remaining */
+	bitmap_t                        scr_bound_warp_available[BITMAP_LEN(TH_BUCKET_SCHED_MAX)];
+
+	/* (P) priority queue of all runnable unbounded root buckets in deadline order */
+	struct priority_queue_deadline_min scr_unbound_root_buckets;
+	/* (P) priority queue of all bounded root buckets in deadline order */
+	struct priority_queue_deadline_min scr_bound_root_buckets;
+
+	/* (P) cumulative run counts at each bucket for load average calculation */
+	uint16_t _Atomic                scr_cumulative_run_count[TH_BUCKET_SCHED_MAX];
+
+	/* (P) storage for all unbound clutch_root_buckets */
+	struct sched_clutch_root_bucket scr_unbound_buckets[TH_BUCKET_SCHED_MAX];
+	/* (P) storage for all bound clutch_root_buckets */
+	struct sched_clutch_root_bucket scr_bound_buckets[TH_BUCKET_SCHED_MAX];
 };
 typedef struct sched_clutch_root *sched_clutch_root_t;
 
@@ -167,19 +203,19 @@ struct sched_clutch;
  * types used are different based on the platform.
  */
 
-#if __arm64__
+#if __LP64__
 
 #define CLUTCH_CPU_DATA_MAX             (UINT64_MAX)
 typedef uint64_t                        clutch_cpu_data_t;
 typedef unsigned __int128               clutch_cpu_data_wide_t;
 
-#else /* __arm64__ */
+#else /* __LP64__ */
 
 #define CLUTCH_CPU_DATA_MAX             (UINT32_MAX)
 typedef uint32_t                        clutch_cpu_data_t;
 typedef uint64_t                        clutch_cpu_data_wide_t;
 
-#endif /* __arm64__ */
+#endif /* __LP64__ */
 
 typedef union sched_clutch_bucket_cpu_data {
 	struct {
@@ -195,60 +231,111 @@ typedef union sched_clutch_bucket_cpu_data {
  * struct sched_clutch_bucket
  *
  * A sched_clutch_bucket represents the set of threads for a thread
- * group at a particular scheduling bucket. It maintains information
- * about the CPU usage & blocking behavior of all threads part of
- * the clutch_bucket and maintains the timesharing attributes for
- * threads in its runq. It uses the decay based algorithm to timeshare
- * among threads in the runq.
+ * group at a particular scheduling bucket in a specific cluster.
+ * It maintains information about the CPU usage & blocking behavior
+ * of all threads part of the clutch_bucket. It inherits the timeshare
+ * values from the clutch_bucket_group for decay and timesharing among
+ * threads in the clutch.
+ *
+ * Since the clutch bucket is a per thread group per-QoS entity it is
+ * important to keep its size small and the structure well aligned.
  */
 struct sched_clutch_bucket {
+#if CONFIG_SCHED_EDGE
+	/* (P) flag to indicate if the bucket is a foreign bucket */
+	bool                            scb_foreign;
+#endif /* CONFIG_SCHED_EDGE */
 	/* (I) bucket for the clutch_bucket */
 	uint8_t                         scb_bucket;
 	/* (P) priority of the clutch bucket */
 	uint8_t                         scb_priority;
-	/* (P) interactivity score of the clutch bucket */
-	uint8_t                         scb_interactivity_score;
-	/* (P) flag to indicate if the bucket is a foreign bucket */
-	bool                            scb_foreign;
-
-	/* Properties used for timesharing threads in this clutch_bucket */
-
 	/* (P) number of threads in this clutch_bucket; should match runq.count */
 	uint16_t                        scb_thr_count;
-	/* (A) run count (running + runnable) for this clutch_bucket */
-	uint16_t _Atomic                scb_run_count;
-	/* (A) sched tick when the clutch bucket load/shifts were updated */
-	uint32_t _Atomic                scb_timeshare_tick;
-	/* (A) priority shifts for threads in the clutch_bucket */
-	uint32_t _Atomic                scb_pri_shift;
-	/* (P) linkage for all clutch_buckets in a root bucket; used for tick operations */
-	queue_chain_t                   scb_listlink;
 
-#if __AMP__
-	/* (P) linkage for all "foreign" clutch buckets in the root clutch */
-	queue_chain_t                   scb_foreignlink;
-#endif /* __AMP__ */
-
-	/* (P) timestamp for the last time the interactivity score was updated */
-	uint64_t                        scb_interactivity_ts;
-	/* (P) timestamp for the last time the clutch_bucket blocked */
-	uint64_t                        scb_blocked_ts;
-
-	/* (A) CPU usage information for the clutch bucket */
-	sched_clutch_bucket_cpu_data_t  scb_cpu_data;
-
-	/* (P) linkage for clutch_bucket in root_bucket runqueue */
-	queue_chain_t                   scb_runqlink;
-	/* (I) clutch to which this clutch bucket belongs */
-	struct sched_clutch             *scb_clutch;
+	/* Pointer to the clutch bucket group this clutch bucket belongs to */
+	struct sched_clutch_bucket_group *scb_group;
 	/* (A) pointer to the root of the hierarchy this bucket is in */
 	struct sched_clutch_root        *scb_root;
 	/* (P) priority queue of threads based on their promoted/base priority */
-	struct priority_queue           scb_clutchpri_prioq;
+	struct priority_queue_sched_max scb_clutchpri_prioq;
 	/* (P) runq of threads in clutch_bucket */
-	struct run_queue                scb_runq;
+	struct priority_queue_sched_stable_max scb_thread_runq;
+
+	/* (P) linkage for all clutch_buckets in a root bucket; used for tick operations */
+	queue_chain_t                   scb_listlink;
+	/* (P) linkage for clutch_bucket in root_bucket runqueue */
+	queue_chain_t                   scb_runqlink;
+	/* (P) queue of threads for timesharing purposes */
+	queue_head_t                    scb_thread_timeshare_queue;
+#if CONFIG_SCHED_EDGE
+	/* (P) linkage for all "foreign" clutch buckets in the root clutch */
+	struct priority_queue_entry_sched     scb_foreignlink;
+#endif /* CONFIG_SCHED_EDGE */
 };
 typedef struct sched_clutch_bucket *sched_clutch_bucket_t;
+
+/*
+ * sched_clutch_counter_time_t
+ *
+ * Holds thread counts and a timestamp (typically for a clutch bucket group).
+ * Used to allow atomic updates to these fields.
+ */
+typedef union sched_clutch_counter_time {
+	struct {
+		uint64_t                scct_count;
+		uint64_t                scct_timestamp;
+	};
+#if __LP64__
+	unsigned __int128               scct_packed;
+#endif /* __LP64__ */
+} __attribute__((aligned(16))) sched_clutch_counter_time_t;
+
+/*
+ * struct sched_clutch_bucket_group
+ *
+ * It represents all the threads for a thread group at a particular
+ * QoS/Scheduling bucket. This structure also maintains the timesharing
+ * properties that are used for decay calculation for all threads in the
+ * thread group at the specific scheduling bucket.
+ */
+struct sched_clutch_bucket_group {
+	/* (I) bucket for the clutch_bucket_group */
+	uint8_t                         scbg_bucket;
+	/* (A) sched tick when the clutch bucket group load/shifts were updated */
+	uint32_t _Atomic                scbg_timeshare_tick;
+	/* (A) priority shifts for threads in the clutch_bucket_group */
+	uint32_t _Atomic                scbg_pri_shift;
+	/* (A) preferred cluster ID for clutch bucket */
+	uint32_t _Atomic                scbg_preferred_cluster;
+	/* (I) clutch to which this clutch bucket_group belongs */
+	struct sched_clutch             *scbg_clutch;
+#if !__LP64__
+	/* Lock for synchronizing updates to blocked data (only on platforms without 128-atomics) */
+	lck_spin_t                      scbg_stats_lock;
+#endif /* !__LP64__ */
+	/* (A/L depending on arch) holds blcked timestamp and runnable/running count */
+	sched_clutch_counter_time_t     scbg_blocked_data;
+	/* (P/A depending on scheduler) holds pending timestamp and thread count */
+	sched_clutch_counter_time_t     scbg_pending_data;
+	/* (P/A depending on scheduler) holds interactivity timestamp and score */
+	sched_clutch_counter_time_t     scbg_interactivity_data;
+	/* (A) CPU usage information for the clutch bucket group */
+	sched_clutch_bucket_cpu_data_t  scbg_cpu_data;
+
+	/*
+	 * Edge Scheduler Optimization
+	 *
+	 * Currently the array is statically sized based on MAX_PSETS.
+	 * If that definition does not exist (or has a large theoretical
+	 * max value), this could be a dynamic array based on ml_topology_info*
+	 * routines.
+	 *
+	 * <Edge Multi-cluster Support Needed>
+	 */
+	/* Storage for all clutch buckets for a thread group at scbg_bucket */
+	struct sched_clutch_bucket      scbg_clutch_buckets[MAX_PSETS];
+};
+typedef struct sched_clutch_bucket_group *sched_clutch_bucket_group_t;
 
 
 /*
@@ -270,14 +357,14 @@ struct sched_clutch {
 	 */
 	union {
 		/* (A) priority specified by the thread grouping mechanism */
-		uint8_t _Atomic         sc_tg_priority;
+		sched_clutch_tg_priority_t _Atomic sc_tg_priority;
 	};
 	union {
 		/* (I) Pointer to thread group */
 		struct thread_group     *sc_tg;
 	};
 	/* (I) storage for all clutch_buckets for this clutch */
-	struct sched_clutch_bucket      sc_clutch_buckets[TH_BUCKET_SCHED_MAX];
+	struct sched_clutch_bucket_group sc_clutch_groups[TH_BUCKET_SCHED_MAX];
 };
 typedef struct sched_clutch *sched_clutch_t;
 
@@ -288,6 +375,7 @@ void sched_clutch_destroy(sched_clutch_t);
 
 /* Clutch thread membership management */
 void sched_clutch_thread_clutch_update(thread_t, sched_clutch_t, sched_clutch_t);
+uint32_t sched_edge_thread_preferred_cluster(thread_t);
 
 /* Clutch timesharing stats management */
 uint32_t sched_clutch_thread_run_bucket_incr(thread_t, sched_bucket_t);
@@ -300,6 +388,32 @@ uint32_t sched_clutch_root_count(sched_clutch_root_t);
 
 /* Grouping specific external routines */
 extern sched_clutch_t sched_clutch_for_thread(thread_t);
+extern sched_clutch_t sched_clutch_for_thread_group(struct thread_group *);
+
+#if CONFIG_SCHED_EDGE
+
+/*
+ * Getter and Setter for Edge configuration. Used by CLPC to affect thread migration behavior.
+ */
+void sched_edge_matrix_get(sched_clutch_edge *edge_matrix, bool *edge_request_bitmap, uint64_t flags, uint64_t matrix_order);
+void sched_edge_matrix_set(sched_clutch_edge *edge_matrix, bool *edge_changes_bitmap, uint64_t flags, uint64_t matrix_order);
+void sched_edge_tg_preferred_cluster_change(struct thread_group *tg, uint32_t *tg_bucket_preferred_cluster, sched_perfcontrol_preferred_cluster_options_t options);
+
+uint16_t sched_edge_cluster_cumulative_count(sched_clutch_root_t root_clutch, sched_bucket_t bucket);
+
+#if DEVELOPMENT || DEBUG
+/*
+ * Sysctl support for dynamically configuring edge properties.
+ *
+ * <Edge Multi-cluster Support Needed>
+ */
+kern_return_t sched_edge_sysctl_configure_e_to_p(uint64_t);
+kern_return_t sched_edge_sysctl_configure_p_to_e(uint64_t);
+sched_clutch_edge sched_edge_e_to_p(void);
+sched_clutch_edge sched_edge_p_to_e(void);
+#endif /* DEVELOPMENT || DEBUG */
+
+#endif /* CONFIG_SCHED_EDGE */
 
 #endif /* CONFIG_SCHED_CLUTCH */
 

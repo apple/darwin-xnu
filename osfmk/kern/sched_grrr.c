@@ -201,6 +201,7 @@ const struct sched_dispatch_table sched_grrr_dispatch = {
 	.steal_thread_enabled                           = sched_steal_thread_DISABLED,
 	.steal_thread                                   = sched_grrr_steal_thread,
 	.compute_timeshare_priority                     = sched_grrr_compute_priority,
+	.choose_node                                    = sched_choose_node,
 	.choose_processor                               = sched_grrr_choose_processor,
 	.processor_enqueue                              = sched_grrr_processor_enqueue,
 	.processor_queue_shutdown                       = sched_grrr_processor_queue_shutdown,
@@ -225,11 +226,11 @@ const struct sched_dispatch_table sched_grrr_dispatch = {
 	.thread_avoid_processor                         = NULL,
 	.processor_balance                              = sched_SMT_balance,
 
-	.rt_runq                                        = sched_rtglobal_runq,
-	.rt_init                                        = sched_rtglobal_init,
-	.rt_queue_shutdown                              = sched_rtglobal_queue_shutdown,
-	.rt_runq_scan                                   = sched_rtglobal_runq_scan,
-	.rt_runq_count_sum                              = sched_rtglobal_runq_count_sum,
+	.rt_runq                                        = sched_rtlocal_runq,
+	.rt_init                                        = sched_rtlocal_init,
+	.rt_queue_shutdown                              = sched_rtlocal_queue_shutdown,
+	.rt_runq_scan                                   = sched_rtlocal_runq_scan,
+	.rt_runq_count_sum                              = sched_rtlocal_runq_count_sum,
 
 	.qos_max_parallelism                            = sched_qos_max_parallelism,
 	.check_spill                                    = sched_check_spill,
@@ -558,17 +559,17 @@ grrr_priority_mapping_init(void)
 
 	/* Map 0->0 up to 10->20 */
 	for (i = 0; i <= 10; i++) {
-		grrr_priority_mapping[i] = 2 * i;
+		grrr_priority_mapping[i] = (grrr_proportional_priority_t)(2 * i);
 	}
 
 	/* Map user priorities 11->33 up to 51 -> 153 */
 	for (i = 11; i <= 51; i++) {
-		grrr_priority_mapping[i] = 3 * i;
+		grrr_priority_mapping[i] = (grrr_proportional_priority_t)(3 * i);
 	}
 
 	/* Map high priorities 52->180 up to 127->255 */
 	for (i = 52; i <= 127; i++) {
-		grrr_priority_mapping[i] = 128 + i;
+		grrr_priority_mapping[i] = (grrr_proportional_priority_t)(128 + i);
 	}
 
 	for (i = 0; i < NUM_GRRR_PROPORTIONAL_PRIORITIES; i++) {
@@ -581,7 +582,7 @@ grrr_priority_mapping_init(void)
 #endif
 
 		/* Groups of 4 */
-		grrr_group_mapping[i] = i >> 2;
+		grrr_group_mapping[i] = (grrr_group_index_t)(i >> 2);
 	}
 }
 
@@ -721,10 +722,6 @@ grrr_enqueue(
 	gpriority = grrr_priority_mapping[thread->sched_pri];
 	gindex = grrr_group_mapping[gpriority];
 	group = &rq->groups[gindex];
-
-#if 0
-	thread->grrr_deficit = 0;
-#endif
 
 	if (group->count == 0) {
 		/* Empty group, this is the first client */

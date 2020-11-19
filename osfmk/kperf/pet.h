@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2011 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2011-2018 Apple Computer, Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -27,29 +27,44 @@
  */
 
 #include <kern/thread.h>
+#include <stdbool.h>
 
-#define KPERF_PET_DEFAULT_IDLE_RATE (15)
+#define KPERF_PET_DEFAULT_IDLE_RATE 15
 
-extern boolean_t kperf_lightweight_pet_active;
-extern uint32_t kperf_pet_gen;
+extern bool kppet_lightweight_active;
+extern _Atomic uint32_t kppet_gencount;
 
-/* prepare PET to be able to fire action with given ID, or disable PET */
-void kperf_pet_config(unsigned int action_id);
+/*
+ * If `actionid` is non-zero, set up PET to sample the action.  Otherwise,
+ * disable PET.
+ */
+void kppet_config(unsigned int actionid);
 
-/* fire off a PET sample, both before and after on-core samples */
-void kperf_pet_fire_before(void);
-void kperf_pet_fire_after(void);
+/*
+ * Reset PET back to its default settings.
+ */
+void kppet_reset(void);
 
-/* notify PET of new threads switching on */
-void kperf_pet_on_cpu(thread_t thread, thread_continue_t continuation,
+/*
+ * Notify PET that new threads are switching on-CPU.
+ */
+void kppet_on_cpu(thread_t thread, thread_continue_t continuation,
     uintptr_t *starting_frame);
 
-/* get/set rate at which idle threads are sampled by PET */
-int kperf_get_pet_idle_rate(void);
-int kperf_set_pet_idle_rate(int val);
+/*
+ * Wake the PET thread from its timer handler.
+ */
+void kppet_wake_thread(void);
 
-/* get/set whether lightweight PET is enabled */
-int kperf_get_lightweight_pet(void);
-int kperf_set_lightweight_pet(int val);
+/*
+ * For configuring PET from the sysctl interface.
+ */
+int kppet_get_idle_rate(void);
+int kppet_set_idle_rate(int new_idle_rate);
+int kppet_get_lightweight_pet(void);
+int kppet_set_lightweight_pet(int on);
 
-void kperf_lightweight_pet_active_update(void);
+/*
+ * Update whether lightweight PET is active when turning sampling on and off.
+ */
+void kppet_lightweight_active_update(void);

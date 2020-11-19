@@ -41,12 +41,12 @@ COMP_FILES = ${MIG_KUSRC}
 do_build_all:: $(COMP_FILES)
 
 ${MIG_KUSRC} : gssd_mach.defs
-	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
-	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}	\
-		-user    gssd_mach.c		\
-		-header  gssd_mach.h		\
-		-server  /dev/null		\
-		-sheader /dev/null		\
+	@$(LOG_MIG) "$@"
+	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS} \
+		-user    gssd_mach.c              \
+		-header  gssd_mach.h              \
+		-server  /dev/null                \
+		-sheader /dev/null                \
 		$<
 
 include $(MakeInc_rule)

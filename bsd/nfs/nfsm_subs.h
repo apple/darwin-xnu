@@ -79,20 +79,20 @@ int nfsm_rpchead(struct nfsreq *, mbuf_t, u_int64_t *, mbuf_t *);
 int nfsm_rpchead2(struct nfsmount *, int, int, int, int, int, kauth_cred_t, struct nfsreq *, mbuf_t, u_int64_t *, mbuf_t *);
 
 int nfsm_chain_new_mbuf(struct nfsm_chain *, size_t);
-int nfsm_chain_add_opaque_f(struct nfsm_chain *, const u_char *, uint32_t);
-int nfsm_chain_add_opaque_nopad_f(struct nfsm_chain *, const u_char *, uint32_t);
-int nfsm_chain_add_uio(struct nfsm_chain *, uio_t, uint32_t);
+int nfsm_chain_add_opaque_f(struct nfsm_chain *, const u_char *, size_t);
+int nfsm_chain_add_opaque_nopad_f(struct nfsm_chain *, const u_char *, size_t);
+int nfsm_chain_add_uio(struct nfsm_chain *, uio_t, size_t);
 int nfsm_chain_add_fattr4_f(struct nfsm_chain *, struct vnode_attr *, struct nfsmount *);
 int nfsm_chain_add_v2sattr_f(struct nfsm_chain *, struct vnode_attr *, uint32_t);
 int nfsm_chain_add_v3sattr_f(struct nfsmount *, struct nfsm_chain *, struct vnode_attr *);
-int nfsm_chain_add_string_nfc(struct nfsm_chain *, const uint8_t *, uint32_t);
+int nfsm_chain_add_string_nfc(struct nfsm_chain *, const uint8_t *, size_t);
 
-int nfsm_chain_advance(struct nfsm_chain *, uint32_t);
-int nfsm_chain_offset(struct nfsm_chain *);
-int nfsm_chain_reverse(struct nfsm_chain *, uint32_t);
+int nfsm_chain_advance(struct nfsm_chain *, size_t);
+size_t nfsm_chain_offset(struct nfsm_chain *);
+int nfsm_chain_reverse(struct nfsm_chain *, size_t);
 int nfsm_chain_get_opaque_pointer_f(struct nfsm_chain *, uint32_t, u_char **);
-int nfsm_chain_get_opaque_f(struct nfsm_chain *, uint32_t, u_char *);
-int nfsm_chain_get_uio(struct nfsm_chain *, uint32_t, uio_t);
+int nfsm_chain_get_opaque_f(struct nfsm_chain *, size_t, u_char *);
+int nfsm_chain_get_uio(struct nfsm_chain *, size_t, uio_t);
 int nfsm_chain_get_fh_attr(struct nfsmount *, struct nfsm_chain *, nfsnode_t,
     vfs_context_t, int, uint64_t *, fhandle_t *, struct nfs_vattr *);
 int nfsm_chain_get_wcc_data_f(struct nfsm_chain *, nfsnode_t, struct timespec *, int *, u_int64_t *);
@@ -210,6 +210,29 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 	                (E) = mbuf_get(MBUF_WAITOK, MBUF_TYPE_DATA, (MBP)); \
 	} while (0)
 
+/*
+ * get an mbuf with size of M16KCLBYTES given a size hint
+ * According to mbuf_getcluster() documentation, clusters greater than 4096 bytes might
+ * not be available in all configurations; the caller must additionally check for ENOTSUP.
+ * */
+#define nfsm_mbuf_getcluster(E, MBP, SIZEHINT) \
+	do { \
+	        *(MBP) = NULL; \
+	        if ((size_t)(SIZEHINT) > MBIGCLBYTES) { \
+	                (E) = mbuf_getcluster(MBUF_WAITOK, MBUF_TYPE_DATA, M16KCLBYTES, (MBP)); \
+	                if ((E) == 0) { \
+	                      break; \
+	                } \
+	        } \
+	        if ((size_t)(SIZEHINT) > MCLBYTES) { \
+	                (E) = mbuf_getcluster(MBUF_WAITOK, MBUF_TYPE_DATA, MBIGCLBYTES, (MBP)); \
+	                if ((E) == 0) { \
+	                      break; \
+	                } \
+	        } \
+	        nfsm_mbuf_get(E, MBP, SIZEHINT); \
+	} while (0)
+
 
 /*
  * macros for building NFS mbuf chains
@@ -298,7 +321,7 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 /* add buffer of opaque data to an mbuf chain */
 #define nfsm_chain_add_opaque(E, NMC, BUF, LEN) \
 	do { \
-	        uint32_t rndlen = nfsm_rndup(LEN); \
+	        size_t rndlen = nfsm_rndup(LEN); \
 	        if (E) break; \
 	        if ((NMC)->nmc_left < rndlen) { \
 	                (E) = nfsm_chain_add_opaque_f((NMC), (const u_char*)(BUF), (LEN)); \
@@ -555,6 +578,7 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 #define nfsm_chain_get_32(E, NMC, LVAL) \
 	do { \
 	        uint32_t __tmp32, *__tmpptr; \
+	        (LVAL) = 0; \
 	        if (E) break; \
 	        if ((NMC)->nmc_left >= NFSX_UNSIGNED) { \
 	                __tmpptr = (uint32_t*)(NMC)->nmc_ptr; \
@@ -572,6 +596,7 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 #define nfsm_chain_get_64(E, NMC, LVAL) \
 	do { \
 	        uint64_t __tmp64, *__tmpptr; \
+	        (LVAL) = 0; \
 	        if (E) break; \
 	        if ((NMC)->nmc_left >= 2 * NFSX_UNSIGNED) { \
 	                __tmpptr = (uint64_t*)(NMC)->nmc_ptr; \
@@ -607,7 +632,7 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 /* copy the next consecutive bytes of opaque data from an mbuf chain */
 #define nfsm_chain_get_opaque(E, NMC, LEN, PTR) \
 	do { \
-	        uint32_t rndlen; \
+	        size_t rndlen; \
 	        if (E) break; \
 	        rndlen = nfsm_rndup(LEN); \
 	        if (rndlen < (LEN)) { \
@@ -777,7 +802,7 @@ int nfsm_chain_trim_data(struct nfsm_chain *, int, int *);
 
 #define nfsm_chain_check_change_info(E, NMC, DNP) \
 	do { \
-	        uint64_t __ci_before, __ci_after; \
+	        uint64_t __ci_before = 0, __ci_after = 0; \
 	        uint32_t __ci_atomic = 0; \
 	        nfsm_chain_get_32((E), (NMC), __ci_atomic); \
 	        nfsm_chain_get_64((E), (NMC), __ci_before); \

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2014-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -162,8 +162,9 @@ typedef struct fourk_pager {
  */
 int fourk_pager_count = 0;              /* number of pagers */
 int fourk_pager_count_mapped = 0;       /* number of unmapped pagers */
-queue_head_t fourk_pager_queue;
-decl_lck_mtx_data(, fourk_pager_lock);
+queue_head_t fourk_pager_queue = QUEUE_HEAD_INITIALIZER(fourk_pager_queue);
+LCK_GRP_DECLARE(fourk_pager_lck_grp, "4K-pager");
+LCK_MTX_DECLARE(fourk_pager_lock, &fourk_pager_lck_grp);
 
 /*
  * Maximum number of unmapped pagers we're willing to keep around.
@@ -177,12 +178,6 @@ int fourk_pager_count_max = 0;
 int fourk_pager_count_unmapped_max = 0;
 int fourk_pager_num_trim_max = 0;
 int fourk_pager_num_trim_total = 0;
-
-
-lck_grp_t       fourk_pager_lck_grp;
-lck_grp_attr_t  fourk_pager_lck_grp_attr;
-lck_attr_t      fourk_pager_lck_attr;
-
 
 /* internal prototypes */
 fourk_pager_t fourk_pager_lookup(memory_object_t mem_obj);
@@ -209,16 +204,6 @@ int fourk_pagerdebug = 0;
 #define PAGER_DEBUG(LEVEL, A)
 #endif
 
-
-void
-fourk_pager_bootstrap(void)
-{
-	lck_grp_attr_setdefault(&fourk_pager_lck_grp_attr);
-	lck_grp_init(&fourk_pager_lck_grp, "4K-pager", &fourk_pager_lck_grp_attr);
-	lck_attr_setdefault(&fourk_pager_lck_attr);
-	lck_mtx_init(&fourk_pager_lock, &fourk_pager_lck_grp, &fourk_pager_lck_attr);
-	queue_init(&fourk_pager_queue);
-}
 
 /*
  * fourk_pager_init()
@@ -1034,7 +1019,7 @@ retry_src_fault:
 				if (vm_page_wait(interruptible)) {
 					goto retry_src_fault;
 				}
-			/* fall thru */
+				OS_FALLTHROUGH;
 			case VM_FAULT_INTERRUPTED:
 				retval = MACH_SEND_INTERRUPTED;
 				goto src_fault_done;
@@ -1042,7 +1027,7 @@ retry_src_fault:
 				/* success but no VM page: fail */
 				vm_object_paging_end(src_object);
 				vm_object_unlock(src_object);
-			/*FALLTHROUGH*/
+				OS_FALLTHROUGH;
 			case VM_FAULT_MEMORY_ERROR:
 				/* the page is not there! */
 				if (error_code) {
@@ -1189,11 +1174,11 @@ src_fault_done:
 				/* a tainted subpage taints entire 16K page */
 				UPL_SET_CS_TAINTED(upl_pl,
 				    cur_offset / PAGE_SIZE,
-				    TRUE);
+				    VMP_CS_ALL_TRUE);
 				/* also mark as "validated" for consisteny */
 				UPL_SET_CS_VALIDATED(upl_pl,
 				    cur_offset / PAGE_SIZE,
-				    TRUE);
+				    VMP_CS_ALL_TRUE);
 			} else if (num_subpg_validated == num_subpg_signed) {
 				/*
 				 * All the code-signed 4K subpages of this
@@ -1202,12 +1187,12 @@ src_fault_done:
 				 */
 				UPL_SET_CS_VALIDATED(upl_pl,
 				    cur_offset / PAGE_SIZE,
-				    TRUE);
+				    VMP_CS_ALL_TRUE);
 			}
 			if (num_subpg_nx > 0) {
 				UPL_SET_CS_NX(upl_pl,
 				    cur_offset / PAGE_SIZE,
-				    TRUE);
+				    VMP_CS_ALL_TRUE);
 			}
 		}
 	}
@@ -1257,7 +1242,10 @@ done:
 			}
 		} else {
 			boolean_t empty;
-			upl_commit_range(upl, 0, upl->size,
+			assertf(page_aligned(upl->u_offset) && page_aligned(upl->u_size),
+			    "upl %p offset 0x%llx size 0x%x",
+			    upl, upl->u_offset, upl->u_size);
+			upl_commit_range(upl, 0, upl->u_size,
 			    UPL_COMMIT_CS_VALIDATED | UPL_COMMIT_WRITTEN_BY_KERNEL,
 			    upl_pl, pl_count, &empty);
 		}

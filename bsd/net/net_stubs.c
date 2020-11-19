@@ -42,6 +42,10 @@ STUB(bpf_attach);
 STUB(bpf_tap_in);
 STUB(bpf_tap_out);
 STUB(bpfattach);
+#if !SKYWALK
+STUB(bpf_tap_packet_in);
+STUB(bpf_tap_packet_out);
+#endif /* SKYWALK */
 STUB(ctl_deregister);
 STUB(ctl_enqueuedata);
 STUB(ctl_enqueuembuf);
@@ -462,6 +466,10 @@ STUB(ipf_addv6_internal);
 STUB(sflt_register_internal);
 STUB(sock_accept_internal);
 STUB(sock_socket_internal);
+STUB(vsock_add_transport);
+STUB(vsock_remove_transport);
+STUB(vsock_reset_transport);
+STUB(vsock_put_message);
 #undef STUB
 
 /*

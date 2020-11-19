@@ -55,7 +55,7 @@ static __inline__
 unsigned short
 ntohs(unsigned short w_int)
 {
-	return (w_int << 8) | (w_int >> 8);
+	return (unsigned short)((w_int << 8) | (w_int >> 8));
 }
 #endif
 

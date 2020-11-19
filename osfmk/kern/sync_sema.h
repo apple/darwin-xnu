@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -60,8 +60,6 @@ typedef struct semaphore {
 
 #define semaphore_lock(semaphore)   waitq_lock(&(semaphore)->waitq)
 #define semaphore_unlock(semaphore) waitq_unlock(&(semaphore)->waitq)
-
-extern void semaphore_init(void);
 
 extern  void            semaphore_reference(semaphore_t semaphore);
 extern  void            semaphore_dereference(semaphore_t semaphore);

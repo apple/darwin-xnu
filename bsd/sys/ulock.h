@@ -63,6 +63,8 @@ ulock_owner_value_to_port_name(uint32_t uval)
 
 extern int __ulock_wait(uint32_t operation, void *addr, uint64_t value,
     uint32_t timeout);             /* timeout is specified in microseconds */
+extern int __ulock_wait2(uint32_t operation, void *addr, uint64_t value,
+    uint64_t timeout, uint64_t value2);
 extern int __ulock_wake(uint32_t operation, void *addr, uint64_t wake_value);
 
 #endif /* !KERNEL */
@@ -92,6 +94,7 @@ extern int __ulock_wake(uint32_t operation, void *addr, uint64_t wake_value);
  */
 #define ULF_WAKE_ALL                    0x00000100
 #define ULF_WAKE_THREAD                 0x00000200
+#define ULF_WAKE_ALLOW_NON_OWNER        0x00000400
 
 /*
  * operation bits [23, 16] contain the flags for __ulock_wait
@@ -130,7 +133,8 @@ extern int __ulock_wake(uint32_t operation, void *addr, uint64_t wake_value);
 
 #define ULF_WAKE_MASK           (ULF_NO_ERRNO | \
 	                         ULF_WAKE_ALL | \
-	                         ULF_WAKE_THREAD)
+	                         ULF_WAKE_THREAD | \
+	                         ULF_WAKE_ALLOW_NON_OWNER)
 
 #endif /* PRIVATE */
 

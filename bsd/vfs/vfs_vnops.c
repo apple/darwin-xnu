@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -169,12 +169,19 @@ vn_open(struct nameidata *ndp, int fmode, int cmode)
 int
 vn_open_modflags(struct nameidata *ndp, int *fmodep, int cmode)
 {
-	struct vnode_attr va;
+	int error;
+	struct vnode_attr *vap;
 
-	VATTR_INIT(&va);
-	VATTR_SET(&va, va_mode, cmode);
+	vap = kheap_alloc(KHEAP_TEMP, sizeof(struct vnode_attr), M_WAITOK);
 
-	return vn_open_auth(ndp, fmodep, &va);
+	VATTR_INIT(vap);
+	VATTR_SET(vap, va_mode, (mode_t)cmode);
+
+	error = vn_open_auth(ndp, fmodep, vap);
+
+	kheap_free(KHEAP_TEMP, vap, sizeof(struct vnode_attr));
+
+	return error;
 }
 
 static int
@@ -395,6 +402,11 @@ again:
 		fmode |= FENCRYPTED;
 	}
 
+	if ((fmode & O_NOFOLLOW_ANY) && (fmode & (O_SYMLINK | O_NOFOLLOW))) {
+		error = EINVAL;
+		goto out;
+	}
+
 	/*
 	 * O_CREAT
 	 */
@@ -417,6 +429,10 @@ again:
 #endif
 		if ((fmode & O_EXCL) == 0 && (fmode & O_NOFOLLOW) == 0 && (origcnflags & FOLLOW) != 0) {
 			ndp->ni_cnd.cn_flags |= FOLLOW;
+		}
+		if (fmode & O_NOFOLLOW_ANY) {
+			/* will return ELOOP on the first symlink to be hit */
+			ndp->ni_flag |= NAMEI_NOFOLLOW_ANY;
 		}
 
 continue_create_lookup:
@@ -533,6 +549,10 @@ continue_create_lookup:
 		/* preserve NOFOLLOW from vnode_open() */
 		if (fmode & O_NOFOLLOW || fmode & O_SYMLINK || (origcnflags & FOLLOW) == 0) {
 			ndp->ni_cnd.cn_flags &= ~FOLLOW;
+		}
+		if (fmode & O_NOFOLLOW_ANY) {
+			/* will return ELOOP on the first symlink to be hit */
+			ndp->ni_flag |= NAMEI_NOFOLLOW_ANY;
 		}
 
 		/* Do a lookup, possibly going directly to filesystem for compound operation */
@@ -824,9 +844,7 @@ vn_read_swapfile(
 
 	while (swap_count > 0) {
 		if (my_swap_page == NULL) {
-			MALLOC(my_swap_page, char *, PAGE_SIZE,
-			    M_TEMP, M_WAITOK);
-			memset(my_swap_page, '\0', PAGE_SIZE);
+			my_swap_page = kheap_alloc(KHEAP_TEMP, PAGE_SIZE, Z_WAITOK | Z_ZERO);
 			/* add an end-of-line to keep line counters happy */
 			my_swap_page[PAGE_SIZE - 1] = '\n';
 		}
@@ -837,17 +855,14 @@ vn_read_swapfile(
 
 		prev_resid = uio_resid(uio);
 		error = uiomove((caddr_t) my_swap_page,
-		    this_count,
+		    (int)this_count,
 		    uio);
 		if (error) {
 			break;
 		}
 		swap_count -= (prev_resid - uio_resid(uio));
 	}
-	if (my_swap_page != NULL) {
-		FREE(my_swap_page, M_TEMP);
-		my_swap_page = NULL;
-	}
+	kheap_free(KHEAP_TEMP, my_swap_page, PAGE_SIZE);
 
 	return error;
 }
@@ -870,6 +885,10 @@ vn_rdwr(
 	int64_t resid;
 	int result;
 
+	if (len < 0) {
+		return EINVAL;
+	}
+
 	result = vn_rdwr_64(rw,
 	    vp,
 	    (uint64_t)(uintptr_t)base,
@@ -883,7 +902,7 @@ vn_rdwr(
 
 	/* "resid" should be bounded above by "len," which is an int */
 	if (aresid != NULL) {
-		*aresid = resid;
+		*aresid = (int)resid;
 	}
 
 	return result;
@@ -917,9 +936,14 @@ vn_rdwr_64(
 	} else {
 		spacetype = UIO_SYSSPACE;
 	}
+
+	if (len < 0) {
+		return EINVAL;
+	}
+
 	auio = uio_createwithbuffer(1, offset, spacetype, rw,
 	    &uio_buf[0], sizeof(uio_buf));
-	uio_addiov(auio, base, len);
+	uio_addiov(auio, CAST_USER_ADDR_T(base), (user_size_t)len);
 
 #if CONFIG_MACF
 	/* XXXMAC
@@ -950,6 +974,7 @@ vn_rdwr_64(
 
 	if (aresid) {
 		*aresid = uio_resid(auio);
+		assert(*aresid <= len);
 	} else if (uio_resid(auio) && error == 0) {
 		error = EIO;
 	}
@@ -994,10 +1019,21 @@ vn_read(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 	struct vnode *vp;
 	int error;
 	int ioflag;
-	off_t count;
-	int offset_locked = 0;
+	off_t read_offset;
+	user_ssize_t  read_len;
+	user_ssize_t  adjusted_read_len;
+	user_ssize_t  clippedsize;
+	bool offset_locked;
 
-	vp = (struct vnode *)fp->f_fglob->fg_data;
+	read_len = uio_resid(uio);
+	if (read_len < 0 || read_len > INT_MAX) {
+		return EINVAL;
+	}
+	adjusted_read_len = read_len;
+	clippedsize = 0;
+	offset_locked = false;
+
+	vp = (struct vnode *)fp->fp_glob->fg_data;
 	if ((error = vnode_getwithref(vp))) {
 		return error;
 	}
@@ -1013,33 +1049,65 @@ vn_read(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 	/* This signals to VNOP handlers that this read came from a file table read */
 	ioflag = IO_SYSCALL_DISPATCH;
 
-	if (fp->f_fglob->fg_flag & FNONBLOCK) {
+	if (fp->fp_glob->fg_flag & FNONBLOCK) {
 		ioflag |= IO_NDELAY;
 	}
-	if ((fp->f_fglob->fg_flag & FNOCACHE) || vnode_isnocache(vp)) {
+	if ((fp->fp_glob->fg_flag & FNOCACHE) || vnode_isnocache(vp)) {
 		ioflag |= IO_NOCACHE;
 	}
-	if (fp->f_fglob->fg_flag & FENCRYPTED) {
+	if (fp->fp_glob->fg_flag & FENCRYPTED) {
 		ioflag |= IO_ENCRYPTED;
 	}
-	if (fp->f_fglob->fg_flag & FUNENCRYPTED) {
+	if (fp->fp_glob->fg_flag & FUNENCRYPTED) {
 		ioflag |= IO_SKIP_ENCRYPTION;
 	}
-	if (fp->f_fglob->fg_flag & O_EVTONLY) {
+	if (fp->fp_glob->fg_flag & O_EVTONLY) {
 		ioflag |= IO_EVTONLY;
 	}
-	if (fp->f_fglob->fg_flag & FNORDAHEAD) {
+	if (fp->fp_glob->fg_flag & FNORDAHEAD) {
 		ioflag |= IO_RAOFF;
 	}
 
 	if ((flags & FOF_OFFSET) == 0) {
 		if ((vnode_vtype(vp) == VREG) && !vnode_isswap(vp)) {
-			vn_offset_lock(fp->f_fglob);
-			offset_locked = 1;
+			vn_offset_lock(fp->fp_glob);
+			offset_locked = true;
 		}
-		uio->uio_offset = fp->f_fglob->fg_offset;
+		read_offset = fp->fp_glob->fg_offset;
+		uio_setoffset(uio, read_offset);
+	} else {
+		read_offset = uio_offset(uio);
+		/* POSIX allows negative offsets for character devices. */
+		if ((read_offset < 0) && (vnode_vtype(vp) != VCHR)) {
+			error = EINVAL;
+			goto error_out;
+		}
 	}
-	count = uio_resid(uio);
+
+	if (read_offset == INT64_MAX) {
+		/* can't read any more */
+		error = 0;
+		goto error_out;
+	}
+
+	/*
+	 * If offset + len will cause overflow, reduce the len to a value
+	 * (adjusted_read_len) where it won't
+	 */
+	if ((read_offset >= 0) && (INT64_MAX - read_offset) < read_len) {
+		/*
+		 * 0                                          read_offset  INT64_MAX
+		 * |-----------------------------------------------|----------|~~~
+		 *                                                 <--read_len-->
+		 *                                                 <-adjusted->
+		 */
+		adjusted_read_len = (user_ssize_t)(INT64_MAX - read_offset);
+	}
+
+	if (adjusted_read_len < read_len) {
+		uio_setresid(uio, adjusted_read_len);
+		clippedsize = read_len - adjusted_read_len;
+	}
 
 	if (vnode_isswap(vp) && !(IO_SKIP_ENCRYPTION & ioflag)) {
 		/* special case for swap files */
@@ -1048,12 +1116,18 @@ vn_read(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 		error = VNOP_READ(vp, uio, ioflag, ctx);
 	}
 
+	if (clippedsize) {
+		uio_setresid(uio, (uio_resid(uio) + clippedsize));
+	}
+
 	if ((flags & FOF_OFFSET) == 0) {
-		fp->f_fglob->fg_offset += count - uio_resid(uio);
-		if (offset_locked) {
-			vn_offset_unlock(fp->f_fglob);
-			offset_locked = 0;
-		}
+		fp->fp_glob->fg_offset += read_len - uio_resid(uio);
+	}
+
+error_out:
+	if (offset_locked) {
+		vn_offset_unlock(fp->fp_glob);
+		offset_locked = false;
 	}
 
 	(void)vnode_put(vp);
@@ -1069,15 +1143,24 @@ vn_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 {
 	struct vnode *vp;
 	int error, ioflag;
-	off_t count;
-	int clippedsize = 0;
-	int partialwrite = 0;
-	int residcount, oldcount;
-	int offset_locked = 0;
+	off_t write_offset;
+	off_t write_end_offset;
+	user_ssize_t write_len;
+	user_ssize_t adjusted_write_len;
+	user_ssize_t clippedsize;
+	bool offset_locked;
 	proc_t p = vfs_context_proc(ctx);
+	rlim_t rlim_cur_fsize = p ? proc_limitgetcur(p, RLIMIT_FSIZE, TRUE) : 0;
 
-	count = 0;
-	vp = (struct vnode *)fp->f_fglob->fg_data;
+	write_len = uio_resid(uio);
+	if (write_len < 0 || write_len > INT_MAX) {
+		return EINVAL;
+	}
+	adjusted_write_len = write_len;
+	clippedsize = 0;
+	offset_locked = false;
+
+	vp = (struct vnode *)fp->fp_glob->fg_data;
 	if ((error = vnode_getwithref(vp))) {
 		return error;
 	}
@@ -1096,22 +1179,22 @@ vn_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 	 */
 	ioflag = (IO_UNIT | IO_SYSCALL_DISPATCH);
 
-	if (vp->v_type == VREG && (fp->f_fglob->fg_flag & O_APPEND)) {
+	if (vp->v_type == VREG && (fp->fp_glob->fg_flag & O_APPEND)) {
 		ioflag |= IO_APPEND;
 	}
-	if (fp->f_fglob->fg_flag & FNONBLOCK) {
+	if (fp->fp_glob->fg_flag & FNONBLOCK) {
 		ioflag |= IO_NDELAY;
 	}
-	if ((fp->f_fglob->fg_flag & FNOCACHE) || vnode_isnocache(vp)) {
+	if ((fp->fp_glob->fg_flag & FNOCACHE) || vnode_isnocache(vp)) {
 		ioflag |= IO_NOCACHE;
 	}
-	if (fp->f_fglob->fg_flag & FNODIRECT) {
+	if (fp->fp_glob->fg_flag & FNODIRECT) {
 		ioflag |= IO_NODIRECT;
 	}
-	if (fp->f_fglob->fg_flag & FSINGLE_WRITER) {
+	if (fp->fp_glob->fg_flag & FSINGLE_WRITER) {
 		ioflag |= IO_SINGLE_WRITER;
 	}
-	if (fp->f_fglob->fg_flag & O_EVTONLY) {
+	if (fp->fp_glob->fg_flag & O_EVTONLY) {
 		ioflag |= IO_EVTONLY;
 	}
 
@@ -1122,23 +1205,69 @@ vn_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 	 * XXX the non-essential metadata without some additional VFS work;
 	 * XXX the intent at this point is to plumb the interface for it.
 	 */
-	if ((fp->f_fglob->fg_flag & (O_FSYNC | O_DSYNC)) ||
+	if ((fp->fp_glob->fg_flag & (O_FSYNC | O_DSYNC)) ||
 	    (vp->v_mount && (vp->v_mount->mnt_flag & MNT_SYNCHRONOUS))) {
 		ioflag |= IO_SYNC;
 	}
 
 	if ((flags & FOF_OFFSET) == 0) {
 		if ((vnode_vtype(vp) == VREG) && !vnode_isswap(vp)) {
-			vn_offset_lock(fp->f_fglob);
-			offset_locked = 1;
+			vn_offset_lock(fp->fp_glob);
+			offset_locked = true;
 		}
-		uio->uio_offset = fp->f_fglob->fg_offset;
-		count = uio_resid(uio);
+		write_offset = fp->fp_glob->fg_offset;
+		uio_setoffset(uio, write_offset);
+	} else {
+		/* for pwrite, append should  be ignored */
+		ioflag &= ~IO_APPEND;
+		write_offset = uio_offset(uio);
+		/* POSIX allows negative offsets for character devices. */
+		if ((write_offset < 0) && (vnode_vtype(vp) != VCHR)) {
+			error = EINVAL;
+			goto error_out;
+		}
 	}
-	if (((flags & FOF_OFFSET) == 0) &&
-	    vfs_context_proc(ctx) && (vp->v_type == VREG) &&
-	    (((rlim_t)(uio->uio_offset + uio_resid(uio)) > p->p_rlimit[RLIMIT_FSIZE].rlim_cur) ||
-	    ((rlim_t)uio_resid(uio) > (p->p_rlimit[RLIMIT_FSIZE].rlim_cur - uio->uio_offset)))) {
+
+	if (write_offset == INT64_MAX) {
+		/* writes are not possible */
+		error = EFBIG;
+		goto error_out;
+	}
+
+	/*
+	 * write_len is the original write length that was requested.
+	 * We may however need to reduce that becasue of two reasons
+	 *
+	 * 1) If write_offset + write_len will exceed OFF_T_MAX (i.e. INT64_MAX)
+	 *    and/or
+	 * 2) If write_offset + write_len will exceed the administrative
+	 *    limit for the maximum file size.
+	 *
+	 * In both cases the write will be denied if we can't write even a single
+	 * byte otherwise it will be "clipped" (i.e. a short write).
+	 */
+
+	/*
+	 * If offset + len will cause overflow, reduce the len
+	 * to a value (adjusted_write_len) where it won't
+	 */
+	if ((write_offset >= 0) && (INT64_MAX - write_offset) < write_len) {
+		/*
+		 * 0                                          write_offset  INT64_MAX
+		 * |-----------------------------------------------|----------|~~~
+		 *                                                 <--write_len-->
+		 *                                                 <-adjusted->
+		 */
+		adjusted_write_len = (user_ssize_t)(INT64_MAX - write_offset);
+	}
+
+	/* write_end_offset will always be [0, INT64_MAX] */
+	write_end_offset = write_offset + adjusted_write_len;
+
+	if (p && (vp->v_type == VREG) &&
+	    (rlim_cur_fsize != RLIM_INFINITY) &&
+	    (rlim_cur_fsize <= INT64_MAX) &&
+	    (write_end_offset > (off_t)rlim_cur_fsize)) {
 		/*
 		 * If the requested residual would cause us to go past the
 		 * administrative limit, then we need to adjust the residual
@@ -1146,55 +1275,55 @@ vn_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 		 * we can't do that (e.g. the residual is already 1 byte),
 		 * then we fail the write with EFBIG.
 		 */
-		residcount = uio_resid(uio);
-		if ((rlim_t)(uio->uio_offset + uio_resid(uio)) > p->p_rlimit[RLIMIT_FSIZE].rlim_cur) {
-			clippedsize =  (uio->uio_offset + uio_resid(uio)) - p->p_rlimit[RLIMIT_FSIZE].rlim_cur;
-		} else if ((rlim_t)uio_resid(uio) > (p->p_rlimit[RLIMIT_FSIZE].rlim_cur - uio->uio_offset)) {
-			clippedsize = (p->p_rlimit[RLIMIT_FSIZE].rlim_cur - uio->uio_offset);
-		}
-		if (clippedsize >= residcount) {
+		if (write_offset >= (off_t)rlim_cur_fsize) {
+			/*
+			 * 0                  rlim_fsize  write_offset  write_end  INT64_MAX
+			 * |------------------------|----------|-------------|--------|
+			 *                                     <--write_len-->
+			 *
+			 *                write not permitted
+			 */
 			psignal(p, SIGXFSZ);
 			error = EFBIG;
 			goto error_out;
 		}
-		partialwrite = 1;
-		uio_setresid(uio, residcount - clippedsize);
+
+		/*
+		 * 0                  write_offset rlim_fsize  write_end  INT64_MAX
+		 * |------------------------|-----------|---------|------------|
+		 *                          <------write_len------>
+		 *                          <-adjusted-->
+		 */
+		adjusted_write_len =  (user_ssize_t)((off_t)rlim_cur_fsize - write_offset);
+		assert((adjusted_write_len > 0) && (adjusted_write_len < write_len));
 	}
-	if ((flags & FOF_OFFSET) != 0) {
-		/* for pwrite, append should  be ignored */
-		ioflag &= ~IO_APPEND;
-		if (p && (vp->v_type == VREG) &&
-		    ((rlim_t)uio->uio_offset >= p->p_rlimit[RLIMIT_FSIZE].rlim_cur)) {
-			psignal(p, SIGXFSZ);
-			error = EFBIG;
-			goto error_out;
-		}
-		if (p && (vp->v_type == VREG) &&
-		    ((rlim_t)(uio->uio_offset + uio_resid(uio)) > p->p_rlimit[RLIMIT_FSIZE].rlim_cur)) {
-			//Debugger("vn_bwrite:overstepping the bounds");
-			residcount = uio_resid(uio);
-			clippedsize =  (uio->uio_offset + uio_resid(uio)) - p->p_rlimit[RLIMIT_FSIZE].rlim_cur;
-			partialwrite = 1;
-			uio_setresid(uio, residcount - clippedsize);
-		}
+
+	if (adjusted_write_len < write_len) {
+		uio_setresid(uio, adjusted_write_len);
+		clippedsize = write_len - adjusted_write_len;
 	}
 
 	error = VNOP_WRITE(vp, uio, ioflag, ctx);
 
-	if (partialwrite) {
-		oldcount = uio_resid(uio);
-		uio_setresid(uio, oldcount + clippedsize);
+	/*
+	 * If we had to reduce the size of write requested either because
+	 * of rlimit or because it would have exceeded
+	 * maximum file size, we have to add that back to the residual so
+	 * it correctly reflects what we did in this function.
+	 */
+	if (clippedsize) {
+		uio_setresid(uio, (uio_resid(uio) + clippedsize));
 	}
 
 	if ((flags & FOF_OFFSET) == 0) {
 		if (ioflag & IO_APPEND) {
-			fp->f_fglob->fg_offset = uio->uio_offset;
+			fp->fp_glob->fg_offset = uio_offset(uio);
 		} else {
-			fp->f_fglob->fg_offset += count - uio_resid(uio);
+			fp->fp_glob->fg_offset += (write_len - uio_resid(uio));
 		}
 		if (offset_locked) {
-			vn_offset_unlock(fp->f_fglob);
-			offset_locked = 0;
+			vn_offset_unlock(fp->fp_glob);
+			offset_locked = false;
 		}
 	}
 
@@ -1221,7 +1350,7 @@ vn_write(struct fileproc *fp, struct uio *uio, int flags, vfs_context_t ctx)
 
 error_out:
 	if (offset_locked) {
-		vn_offset_unlock(fp->f_fglob);
+		vn_offset_unlock(fp->fp_glob);
 	}
 	(void)vnode_put(vp);
 	return error;
@@ -1455,7 +1584,7 @@ vn_stat(struct vnode *vp, void *sb, kauth_filesec_t *xsec, int isstat64, int nee
 static int
 vn_ioctl(struct fileproc *fp, u_long com, caddr_t data, vfs_context_t ctx)
 {
-	struct vnode *vp = ((struct vnode *)fp->f_fglob->fg_data);
+	struct vnode *vp = ((struct vnode *)fp->fp_glob->fg_data);
 	off_t file_size;
 	int error;
 	struct vnode *ttyvp;
@@ -1476,16 +1605,24 @@ vn_ioctl(struct fileproc *fp, u_long com, caddr_t data, vfs_context_t ctx)
 	case VREG:
 	case VDIR:
 		if (com == FIONREAD) {
+			off_t temp_nbytes;
 			if ((error = vnode_size(vp, &file_size, ctx)) != 0) {
 				goto out;
 			}
-			*(int *)data = file_size - fp->f_fglob->fg_offset;
+			temp_nbytes = file_size - fp->fp_glob->fg_offset;
+			if (temp_nbytes > INT_MAX) {
+				*(int *)data = INT_MAX;
+			} else if (temp_nbytes < 0) {
+				*(int *)data = 0;
+			} else {
+				*(int *)data = (int)temp_nbytes;
+			}
 			goto out;
 		}
 		if (com == FIONBIO || com == FIOASYNC) {        /* XXX */
 			goto out;
 		}
-	/* fall into ... */
+		OS_FALLTHROUGH;
 
 	default:
 		error = ENOTTY;
@@ -1495,7 +1632,7 @@ vn_ioctl(struct fileproc *fp, u_long com, caddr_t data, vfs_context_t ctx)
 	case VCHR:
 	case VBLK:
 
-		if (com == TIOCREVOKE) {
+		if (com == TIOCREVOKE || com == TIOCREVOKECLEAR) {
 			error = ENOTTY;
 			goto out;
 		}
@@ -1525,7 +1662,7 @@ vn_ioctl(struct fileproc *fp, u_long com, caddr_t data, vfs_context_t ctx)
 			}
 			goto out;
 		}
-		error = VNOP_IOCTL(vp, com, data, fp->f_fglob->fg_flag, ctx);
+		error = VNOP_IOCTL(vp, com, data, fp->fp_glob->fg_flag, ctx);
 
 		if (error == 0 && com == TIOCSCTTY) {
 			sessp = proc_session(vfs_context_proc(ctx));
@@ -1550,12 +1687,12 @@ static int
 vn_select(struct fileproc *fp, int which, void *wql, __unused vfs_context_t ctx)
 {
 	int error;
-	struct vnode * vp = (struct vnode *)fp->f_fglob->fg_data;
+	struct vnode * vp = (struct vnode *)fp->fp_glob->fg_data;
 	struct vfs_context context;
 
 	if ((error = vnode_getwithref(vp)) == 0) {
 		context.vc_thread = current_thread();
-		context.vc_ucred = fp->f_fglob->fg_cred;
+		context.vc_ucred = fp->fp_glob->fg_cred;
 
 #if CONFIG_MACF
 		/*
@@ -1566,7 +1703,7 @@ vn_select(struct fileproc *fp, int which, void *wql, __unused vfs_context_t ctx)
 		error = mac_vnode_check_select(ctx, vp, which);
 		if (error == 0)
 #endif
-		error = VNOP_SELECT(vp, which, fp->f_fglob->fg_flag, wql, ctx);
+		error = VNOP_SELECT(vp, which, fp->fp_glob->fg_flag, wql, ctx);
 
 		(void)vnode_put(vp);
 	}
@@ -1584,7 +1721,7 @@ vn_closefile(struct fileglob *fg, vfs_context_t ctx)
 
 	if ((error = vnode_getwithref(vp)) == 0) {
 		if (FILEGLOB_DTYPE(fg) == DTYPE_VNODE &&
-		    ((fg->fg_flag & FHASLOCK) != 0 ||
+		    ((fg->fg_flag & FWASLOCKED) != 0 ||
 		    (fg->fg_lflags & FG_HAS_OFDLOCK) != 0)) {
 			struct flock lf = {
 				.l_whence = SEEK_SET,
@@ -1593,7 +1730,7 @@ vn_closefile(struct fileglob *fg, vfs_context_t ctx)
 				.l_type = F_UNLCK
 			};
 
-			if ((fg->fg_flag & FHASLOCK) != 0) {
+			if ((fg->fg_flag & FWASLOCKED) != 0) {
 				(void) VNOP_ADVLOCK(vp, (caddr_t)fg,
 				    F_UNLCK, &lf, F_FLOCK, ctx, NULL);
 			}
@@ -1699,7 +1836,7 @@ vn_kqfilter(struct fileproc *fp, struct knote *kn, struct kevent_qos_s *kev)
 	int error = 0;
 	int result = 0;
 
-	vp = (struct vnode *)fp->f_fglob->fg_data;
+	vp = (struct vnode *)fp->fp_glob->fg_data;
 
 	/*
 	 * Don't attach a knote to a dead vnode.
@@ -1733,7 +1870,7 @@ vn_kqfilter(struct fileproc *fp, struct knote *kn, struct kevent_qos_s *kev)
 
 		if (error == 0) {
 #if CONFIG_MACF
-			error = mac_vnode_check_kqfilter(ctx, fp->f_fglob->fg_cred, kn, vp);
+			error = mac_vnode_check_kqfilter(ctx, fp->fp_glob->fg_cred, kn, vp);
 			if (error) {
 				vnode_put(vp);
 				goto out;
@@ -1887,7 +2024,7 @@ filt_vnode_common(struct knote *kn, struct kevent_qos_s *kev, vnode_t vp, long h
 	} else {
 		switch (kn->kn_filter) {
 		case EVFILT_READ:
-			data = vnode_readable_data_count(vp, kn->kn_fp->f_fglob->fg_offset, (kn->kn_flags & EV_POLL));
+			data = vnode_readable_data_count(vp, kn->kn_fp->fp_glob->fg_offset, (kn->kn_flags & EV_POLL));
 			activate = (data != 0);
 			break;
 		case EVFILT_WRITE:

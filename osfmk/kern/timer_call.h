@@ -25,8 +25,20 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+
 /*
- * Declarations for timer interrupt callouts.
+ * The timer_call system is responsible for manipulating timers that call
+ * callbacks at a given deadline (with or without some leeway for coalescing).
+ *
+ * Call timer_call_setup once on a timer_call structure to register the callback
+ * function and a context parameter that's passed to it (param0).
+ *
+ * To arm the timer to fire at a deadline, call any of the timer_call_enter
+ * functions.  If the function used accepts a parameter, it will be passed to
+ * the callback function when it fires.
+ *
+ * If the timer needs to be cancelled (like if the timer_call has been armed but
+ * now needs to be deallocated), call timer_call_cancel.
  */
 
 #ifndef _KERN_TIMER_CALL_H_
@@ -37,37 +49,46 @@
 
 #ifdef XNU_KERNEL_PRIVATE
 
-#include <kern/call_entry.h>
 #include <kern/simple_lock.h>
 
 #ifdef MACH_KERNEL_PRIVATE
 #include <kern/queue.h>
+#include <kern/priority_queue.h>
 #include <kern/mpqueue.h>
 
 extern boolean_t mach_timer_coalescing_enabled;
 extern void timer_call_queue_init(mpqueue_head_t *);
+#endif /* MACH_KERNEL_PRIVATE */
+
+#if XNU_TARGET_OS_OSX
+#define TIMER_TRACE     1
 #endif
-
-/*
- * NOTE: for now, bsd/dev/dtrace/dtrace_glue.c has its own definition
- * of this data structure, and the two had better match.
- */
-typedef struct timer_call {
-	struct call_entry       call_entry;
-	decl_simple_lock_data(, lock);          /* protects call_entry queue */
-	uint64_t                soft_deadline;
-	uint32_t                flags;
-	boolean_t               async_dequeue;  /* this field is protected by
-	                                        *  call_entry queue's lock */
-	uint64_t                ttd; /* Time to deadline at creation */
-} timer_call_data_t, *timer_call_t;
-
-#define EndOfAllTime            0xFFFFFFFFFFFFFFFFULL
 
 typedef void            *timer_call_param_t;
 typedef void            (*timer_call_func_t)(
 	timer_call_param_t      param0,
 	timer_call_param_t      param1);
+
+typedef struct timer_call {
+	uint64_t                                tc_soft_deadline;
+	decl_simple_lock_data(, tc_lock);          /* protects tc_queue */
+	struct priority_queue_entry_deadline    tc_pqlink;
+	queue_head_t                            *tc_queue;
+	queue_chain_t                           tc_qlink;
+	timer_call_func_t                       tc_func;
+	timer_call_param_t                      tc_param0;
+	timer_call_param_t                      tc_param1;
+	uint64_t                                tc_ttd; /* Time to deadline at creation */
+#if TIMER_TRACE
+	uint64_t                                tc_entry_time;
+#endif
+	uint32_t                                tc_flags;
+	/* this field is locked by the lock in the object tc_queue points at */
+	bool                                    tc_async_dequeue;
+} timer_call_data_t, *timer_call_t;
+
+#define EndOfAllTime            0xFFFFFFFFFFFFFFFFULL
+
 
 /*
  * Flags to alter the default timer/timeout coalescing behavior
@@ -125,19 +146,8 @@ extern boolean_t        timer_call_enter_with_leeway(
 	uint32_t                flags,
 	boolean_t               ratelimited);
 
-extern boolean_t        timer_call_quantum_timer_enter(
-	timer_call_t            call,
-	timer_call_param_t      param1,
-	uint64_t                deadline,
-	uint64_t                ctime);
-
 extern boolean_t        timer_call_cancel(
 	timer_call_t    call);
-
-extern boolean_t        timer_call_quantum_timer_cancel(
-	timer_call_t    call);
-
-extern void             timer_call_init(void);
 
 extern void             timer_call_setup(
 	timer_call_t            call,
@@ -172,6 +182,90 @@ typedef struct {
 	boolean_t latency_tier_rate_limited[NUM_LATENCY_QOS_TIERS];
 } timer_coalescing_priority_params_t;
 extern timer_coalescing_priority_params_t tcoal_prio_params;
+
+/*
+ * Initialize the timer call subsystem during system startup.
+ */
+extern void timer_call_init(void);
+
+#if MACH_KERNEL_PRIVATE
+
+/*
+ * Handle deadlines in the past.
+ */
+uint64_t timer_call_past_deadline_timer_handle(uint64_t deadline,
+    uint64_t ctime);
+
+/*
+ * Running timers are only active for a given CPU when a non-idle thread
+ * is running.
+ */
+
+enum running_timer {
+	RUNNING_TIMER_QUANTUM,
+#if KPERF
+	RUNNING_TIMER_KPERF,
+#endif /* KPERF */
+	RUNNING_TIMER_MAX,
+};
+
+/*
+ * Get the earliest active deadline for this processor.
+ */
+uint64_t running_timers_deadline(processor_t processor);
+
+/*
+ * Run the expire handler to process any timers past their deadline.  Returns
+ * true if any timer was processed, and false otherwise.
+ */
+bool running_timers_expire(processor_t processor, uint64_t now);
+
+/*
+ * Set up a new deadline for the given running timer on the processor, but don't
+ * synchronize it with the hardware.  A subsequent call to running_timers_sync
+ * is necessary.  This allows thread_dispatch to batch all of the setup and only
+ * set the decrementer once.
+ */
+void running_timer_setup(processor_t processor, enum running_timer timer,
+    void *param, uint64_t deadline, uint64_t now);
+
+/*
+ * Synchronize the state of any running timers that have been set up with the
+ * hardware.
+ */
+void running_timers_sync(void);
+
+/*
+ * Enter a new deadline for the given running timer on the processor and put it
+ * into effect.
+ */
+void running_timer_enter(processor_t processor, enum running_timer timer,
+    void *param, uint64_t deadline, uint64_t now);
+
+/*
+ * Clear the deadline and parameters for the given running timer on the
+ * processor.
+ */
+void running_timer_clear(processor_t processor, enum running_timer timer);
+
+/*
+ * Cancel a running timer on the processor.
+ */
+void running_timer_cancel(processor_t processor, enum running_timer timer);
+
+/*
+ * Activate the running timers for the given, current processor.  Should only be
+ * called by thread_dispatch.
+ */
+void running_timers_activate(processor_t processor);
+
+/*
+ * Deactivate the running timers for the given, current processor.  Should only
+ * be called by thread_dispatch.
+ */
+void running_timers_deactivate(processor_t processor);
+
+#endif /* MACH_KERNEL_PRIVATE */
 
 #endif /* XNU_KERNEL_PRIVATE */
 

@@ -67,7 +67,7 @@ ktest_emit_testbegin(const char * test_name)
 	int ret;
 
 	/* left trim the file path for readability */
-	char *fname = strnstr((char *)(uintptr_t)ktest_current_file, "xnu", 100);
+	const char *fname = strnstr((char *)(uintptr_t)ktest_current_file, "xnu", 100);
 
 	ret = snprintf(msg,
 	    size,
@@ -95,7 +95,7 @@ ktest_emit_testskip(const char * skip_msg, va_list args)
 	int size = sizeof(ktest_output_buf);
 	int ret;
 
-	char *fname = strnstr((char *)(uintptr_t)ktest_current_file, "xnu", 100);
+	const char *fname = strnstr((char *)(uintptr_t)ktest_current_file, "xnu", 100);
 
 	ret = snprintf(msg,
 	    size,
@@ -125,7 +125,7 @@ ktest_emit_testend()
 	int size = sizeof(ktest_output_buf);
 	int ret;
 
-	char *fname = strnstr((char *)(uintptr_t)ktest_current_file, "xnu", 100);
+	const char *fname = strnstr((char *)(uintptr_t)ktest_current_file, "xnu", 100);
 
 	ret = snprintf(msg,
 	    size,
@@ -153,7 +153,7 @@ ktest_emit_log(const char * log_msg, va_list args)
 	int size = sizeof(ktest_output_buf);
 	int ret;
 
-	char *fname = strnstr((char *)(uintptr_t)ktest_current_file, "xnu", 100);
+	const char *fname = strnstr((char *)(uintptr_t)ktest_current_file, "xnu", 100);
 
 	ret = snprintf(msg,
 	    size,
@@ -185,7 +185,7 @@ ktest_emit_perfdata(const char * metric, const char * unit, double value, const 
 	int size   = sizeof(ktest_output_buf);
 	int ret;
 
-	char *fname = strnstr((char *)(uintptr_t)ktest_current_file, "xnu", 100);
+	const char *fname = strnstr((char *)(uintptr_t)ktest_current_file, "xnu", 100);
 
 	ret = snprintf(msg, size,
 	    "\n[KTEST]\t"            /* header */
@@ -214,7 +214,7 @@ ktest_emit_testcase(void)
 	int size = sizeof(ktest_output_buf);
 	int ret;
 
-	char *fname = strnstr((char *)(uintptr_t)ktest_current_file, "xnu", 100);
+	const char *fname = strnstr((char *)(uintptr_t)ktest_current_file, "xnu", 100);
 
 	ret = snprintf(msg,
 	    size,

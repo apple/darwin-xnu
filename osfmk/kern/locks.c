@@ -66,7 +66,7 @@
 #include <kern/lock_stat.h>
 #include <kern/locks.h>
 #include <kern/misc_protos.h>
-#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <kern/thread.h>
 #include <kern/processor.h>
 #include <kern/sched_prim.h>
@@ -103,11 +103,23 @@ static lck_mtx_ext_t lck_grp_lock_ext;
 
 SECURITY_READ_ONLY_LATE(boolean_t) spinlock_timeout_panic = TRUE;
 
-lck_grp_attr_t  LockDefaultGroupAttr;
-lck_grp_t               LockCompatGroup;
-lck_attr_t              LockDefaultLckAttr;
+/* Obtain "lcks" options:this currently controls lock statistics */
+TUNABLE(uint32_t, LcksOpts, "lcks", 0);
 
-#if CONFIG_DTRACE && __SMP__
+ZONE_VIEW_DEFINE(ZV_LCK_GRP_ATTR, "lck_grp_attr",
+    KHEAP_ID_DEFAULT, sizeof(lck_grp_attr_t));
+
+ZONE_VIEW_DEFINE(ZV_LCK_GRP, "lck_grp",
+    KHEAP_ID_DEFAULT, sizeof(lck_grp_t));
+
+ZONE_VIEW_DEFINE(ZV_LCK_ATTR, "lck_attr",
+    KHEAP_ID_DEFAULT, sizeof(lck_attr_t));
+
+lck_grp_attr_t  LockDefaultGroupAttr;
+lck_grp_t       LockCompatGroup;
+lck_attr_t      LockDefaultLckAttr;
+
+#if CONFIG_DTRACE
 #if defined (__x86_64__)
 uint64_t dtrace_spin_threshold = 500; // 500ns
 #elif defined(__arm__) || defined(__arm64__)
@@ -125,28 +137,10 @@ unslide_for_kdebug(void* object)
 	}
 }
 
-/*
- * Routine:	lck_mod_init
- */
-
-void
-lck_mod_init(
-	void)
+__startup_func
+static void
+lck_mod_init(void)
 {
-	/*
-	 * Obtain "lcks" options:this currently controls lock statistics
-	 */
-	if (!PE_parse_boot_argn("lcks", &LcksOpts, sizeof(LcksOpts))) {
-		LcksOpts = 0;
-	}
-
-
-#if (DEVELOPMENT || DEBUG) && defined(__x86_64__)
-	if (!PE_parse_boot_argn("-disable_mtx_chk", &LckDisablePreemptCheck, sizeof(LckDisablePreemptCheck))) {
-		LckDisablePreemptCheck = 0;
-	}
-#endif /* (DEVELOPMENT || DEBUG) && defined(__x86_64__) */
-
 	queue_init(&lck_grp_queue);
 
 	/*
@@ -158,6 +152,7 @@ lck_mod_init(
 	(void) strncpy(LockCompatGroup.lck_grp_name, "Compatibility APIs", LCK_GRP_MAX_NAME);
 
 	LockCompatGroup.lck_grp_attr = LCK_ATTR_NONE;
+
 	if (LcksOpts & enaLkStat) {
 		LockCompatGroup.lck_grp_attr |= LCK_GRP_ATTR_STAT;
 	}
@@ -175,6 +170,7 @@ lck_mod_init(
 
 	lck_mtx_init_ext(&lck_grp_lock, &lck_grp_lock_ext, &LockCompatGroup, &LockDefaultLckAttr);
 }
+STARTUP(LOCKS_EARLY, STARTUP_RANK_FIRST, lck_mod_init);
 
 /*
  * Routine:	lck_grp_attr_alloc_init
@@ -186,10 +182,8 @@ lck_grp_attr_alloc_init(
 {
 	lck_grp_attr_t  *attr;
 
-	if ((attr = (lck_grp_attr_t *)kalloc(sizeof(lck_grp_attr_t))) != 0) {
-		lck_grp_attr_setdefault(attr);
-	}
-
+	attr = zalloc(ZV_LCK_GRP_ATTR);
+	lck_grp_attr_setdefault(attr);
 	return attr;
 }
 
@@ -218,6 +212,7 @@ void
 lck_grp_attr_setstat(
 	lck_grp_attr_t  *attr)
 {
+#pragma unused(attr)
 	os_atomic_or(&attr->grp_attr_val, LCK_GRP_ATTR_STAT, relaxed);
 }
 
@@ -230,7 +225,7 @@ void
 lck_grp_attr_free(
 	lck_grp_attr_t  *attr)
 {
-	kfree(attr, sizeof(lck_grp_attr_t));
+	zfree(ZV_LCK_GRP_ATTR, attr);
 }
 
 
@@ -245,10 +240,8 @@ lck_grp_alloc_init(
 {
 	lck_grp_t       *grp;
 
-	if ((grp = (lck_grp_t *)kalloc(sizeof(lck_grp_t))) != 0) {
-		lck_grp_init(grp, grp_name, attr);
-	}
-
+	grp = zalloc(ZV_LCK_GRP);
+	lck_grp_init(grp, grp_name, attr);
 	return grp;
 }
 
@@ -289,8 +282,9 @@ lck_grp_init(lck_grp_t * grp, const char * grp_name, lck_grp_attr_t * attr)
 		lck_grp_stat_enable(&stats->lgss_mtx_held);
 		lck_grp_stat_enable(&stats->lgss_mtx_miss);
 		lck_grp_stat_enable(&stats->lgss_mtx_direct_wait);
+		lck_grp_stat_enable(&stats->lgss_mtx_wait);
 	}
-	if (grp->lck_grp_attr * LCK_GRP_ATTR_TIME_STAT) {
+	if (grp->lck_grp_attr & LCK_GRP_ATTR_TIME_STAT) {
 #if LOCK_STATS
 		lck_grp_stats_t *stats = &grp->lck_grp_stats;
 		lck_grp_stat_enable(&stats->lgss_spin_spin);
@@ -345,7 +339,7 @@ lck_grp_deallocate(
 		return;
 	}
 
-	kfree(grp, sizeof(lck_grp_t));
+	zfree(ZV_LCK_GRP, grp);
 }
 
 /*
@@ -368,6 +362,9 @@ lck_grp_lckcnt_incr(
 		break;
 	case LCK_TYPE_RW:
 		lckcnt = &grp->lck_grp_rwcnt;
+		break;
+	case LCK_TYPE_TICKET:
+		lckcnt = &grp->lck_grp_ticketcnt;
 		break;
 	default:
 		return panic("lck_grp_lckcnt_incr(): invalid lock type: %d\n", lck_type);
@@ -398,6 +395,9 @@ lck_grp_lckcnt_decr(
 	case LCK_TYPE_RW:
 		lckcnt = &grp->lck_grp_rwcnt;
 		break;
+	case LCK_TYPE_TICKET:
+		lckcnt = &grp->lck_grp_ticketcnt;
+		break;
 	default:
 		panic("lck_grp_lckcnt_decr(): invalid lock type: %d\n", lck_type);
 		return;
@@ -417,10 +417,8 @@ lck_attr_alloc_init(
 {
 	lck_attr_t      *attr;
 
-	if ((attr = (lck_attr_t *)kalloc(sizeof(lck_attr_t))) != 0) {
-		lck_attr_setdefault(attr);
-	}
-
+	attr = zalloc(ZV_LCK_ATTR);
+	lck_attr_setdefault(attr);
 	return attr;
 }
 
@@ -491,7 +489,7 @@ void
 lck_attr_free(
 	lck_attr_t      *attr)
 {
-	kfree(attr, sizeof(lck_attr_t));
+	zfree(ZV_LCK_ATTR, attr);
 }
 
 /*
@@ -505,7 +503,6 @@ hw_lock_init(hw_lock_t lock)
 	ordered_store_hw(lock, 0);
 }
 
-#if     __SMP__
 static inline bool
 hw_lock_trylock_contended(hw_lock_t lock, uintptr_t newval)
 {
@@ -590,12 +587,10 @@ hw_lock_lock_contended(hw_lock_t lock, uintptr_t data, uint64_t timeout, boolean
 	}
 	return 0;
 }
-#endif  // __SMP__
 
 void *
 hw_wait_while_equals(void **address, void *current)
 {
-#if     __SMP__
 	void *v;
 	uint64_t end = 0;
 
@@ -622,10 +617,6 @@ hw_wait_while_equals(void **address, void *current)
 			panic("Wait while equals timeout @ *%p == %p", address, v);
 		}
 	}
-#else // !__SMP__
-	panic("Value at %p is %p", address, current);
-	__builtin_unreachable();
-#endif // !__SMP__
 }
 
 static inline void
@@ -634,7 +625,6 @@ hw_lock_lock_internal(hw_lock_t lock, thread_t thread LCK_GRP_ARG(lck_grp_t *grp
 	uintptr_t       state;
 
 	state = LCK_MTX_THREAD_TO_STATE(thread) | PLATFORM_LCK_ILOCK;
-#if     __SMP__
 #if     LOCK_PRETEST
 	if (ordered_load_hw(lock)) {
 		goto contended;
@@ -648,12 +638,6 @@ contended:
 #endif  // LOCK_PRETEST
 	hw_lock_lock_contended(lock, state, 0, spinlock_timeout_panic LCK_GRP_ARG(grp));
 end:
-#else   // __SMP__
-	if (lock->lock_data) {
-		panic("Spinlock held %p", lock);
-	}
-	lock->lock_data = state;
-#endif  // __SMP__
 	lck_grp_spin_update_held(lock LCK_GRP_ARG(grp));
 
 	return;
@@ -706,7 +690,6 @@ int
 	thread = current_thread();
 	disable_preemption_for_thread(thread);
 	state = LCK_MTX_THREAD_TO_STATE(thread) | PLATFORM_LCK_ILOCK;
-#if     __SMP__
 #if     LOCK_PRETEST
 	if (ordered_load_hw(lock)) {
 		goto contended;
@@ -721,13 +704,6 @@ contended:
 #endif  // LOCK_PRETEST
 	success = hw_lock_lock_contended(lock, state, timeout, FALSE LCK_GRP_ARG(grp));
 end:
-#else   // __SMP__
-	(void)timeout;
-	if (ordered_load_hw(lock) == 0) {
-		ordered_store_hw(lock, state);
-		success = 1;
-	}
-#endif  // __SMP__
 	if (success) {
 		lck_grp_spin_update_held(lock LCK_GRP_ARG(grp));
 	}
@@ -744,7 +720,6 @@ hw_lock_try_internal(hw_lock_t lock, thread_t thread LCK_GRP_ARG(lck_grp_t *grp)
 {
 	int             success = 0;
 
-#if     __SMP__
 #if     LOCK_PRETEST
 	if (ordered_load_hw(lock)) {
 		goto failed;
@@ -752,12 +727,6 @@ hw_lock_try_internal(hw_lock_t lock, thread_t thread LCK_GRP_ARG(lck_grp_t *grp)
 #endif  // LOCK_PRETEST
 	success = os_atomic_cmpxchg(&lock->lock_data, 0,
 	    LCK_MTX_THREAD_TO_STATE(thread) | PLATFORM_LCK_ILOCK, acquire);
-#else
-	if (lock->lock_data == 0) {
-		lock->lock_data = LCK_MTX_THREAD_TO_STATE(thread) | PLATFORM_LCK_ILOCK;
-		success = 1;
-	}
-#endif  // __SMP__
 
 #if     LOCK_PRETEST
 failed:
@@ -836,34 +805,20 @@ hw_lock_held(hw_lock_t lock)
 	return ordered_load_hw(lock) != 0;
 }
 
-#if     __SMP__
 static unsigned int
 hw_lock_bit_to_contended(hw_lock_bit_t *lock, uint32_t mask, uint32_t timeout LCK_GRP_ARG(lck_grp_t *grp));
-#endif
 
 static inline unsigned int
 hw_lock_bit_to_internal(hw_lock_bit_t *lock, unsigned int bit, uint32_t timeout LCK_GRP_ARG(lck_grp_t *grp))
 {
 	unsigned int success = 0;
 	uint32_t        mask = (1 << bit);
-#if     !__SMP__
-	uint32_t        state;
-#endif
 
-#if     __SMP__
 	if (__improbable(!hw_atomic_test_and_set32(lock, mask, mask, memory_order_acquire, FALSE))) {
 		success = hw_lock_bit_to_contended(lock, mask, timeout LCK_GRP_ARG(grp));
 	} else {
 		success = 1;
 	}
-#else   // __SMP__
-	(void)timeout;
-	state = ordered_load_bit(lock);
-	if (!(mask & state)) {
-		ordered_store_bit(lock, state | mask);
-		success = 1;
-	}
-#endif  // __SMP__
 
 	if (success) {
 		lck_grp_spin_update_held(lock LCK_GRP_ARG(grp));
@@ -880,7 +835,6 @@ int
 	return hw_lock_bit_to_internal(lock, bit, timeout LCK_GRP_ARG(grp));
 }
 
-#if     __SMP__
 static unsigned int NOINLINE
 hw_lock_bit_to_contended(hw_lock_bit_t *lock, uint32_t mask, uint32_t timeout LCK_GRP_ARG(lck_grp_t *grp))
 {
@@ -921,7 +875,6 @@ end:
 
 	return 1;
 }
-#endif  // __SMP__
 
 void
 (hw_lock_bit)(hw_lock_bit_t * lock, unsigned int bit LCK_GRP_ARG(lck_grp_t *grp))
@@ -929,11 +882,7 @@ void
 	if (hw_lock_bit_to(lock, bit, LOCK_PANIC_TIMEOUT, LCK_GRP_PROBEARG(grp))) {
 		return;
 	}
-#if     __SMP__
 	panic("hw_lock_bit(): timed out (%p)", lock);
-#else
-	panic("hw_lock_bit(): interlock held (%p)", lock);
-#endif
 }
 
 void
@@ -945,11 +894,7 @@ void
 	if (hw_lock_bit_to_internal(lock, bit, LOCK_PANIC_TIMEOUT LCK_GRP_ARG(grp))) {
 		return;
 	}
-#if     __SMP__
 	panic("hw_lock_bit_nopreempt(): timed out (%p)", lock);
-#else
-	panic("hw_lock_bit_nopreempt(): interlock held (%p)", lock);
-#endif
 }
 
 unsigned
@@ -957,22 +902,11 @@ int
 (hw_lock_bit_try)(hw_lock_bit_t * lock, unsigned int bit LCK_GRP_ARG(lck_grp_t *grp))
 {
 	uint32_t        mask = (1 << bit);
-#if     !__SMP__
-	uint32_t        state;
-#endif
 	boolean_t       success = FALSE;
 
 	_disable_preemption();
-#if     __SMP__
 	// TODO: consider weak (non-looping) atomic test-and-set
 	success = hw_atomic_test_and_set32(lock, mask, mask, memory_order_acquire, FALSE);
-#else
-	state = ordered_load_bit(lock);
-	if (!(mask & state)) {
-		ordered_store_bit(lock, state | mask);
-		success = TRUE;
-	}
-#endif  // __SMP__
 	if (!success) {
 		_enable_preemption();
 	}
@@ -988,19 +922,11 @@ static inline void
 hw_unlock_bit_internal(hw_lock_bit_t *lock, unsigned int bit)
 {
 	uint32_t        mask = (1 << bit);
-#if     !__SMP__
-	uint32_t        state;
-#endif
 
-#if     __SMP__
 	os_atomic_andnot(lock, mask, release);
 #if __arm__
 	set_event();
 #endif
-#else   // __SMP__
-	state = ordered_load_bit(lock);
-	ordered_store_bit(lock, state & ~mask);
-#endif  // __SMP__
 #if CONFIG_DTRACE
 	LOCKSTAT_RECORD(LS_LCK_SPIN_UNLOCK_RELEASE, lock, bit);
 #endif
@@ -3250,4 +3176,65 @@ lck_mtx_gate_assert(__assert_only lck_mtx_t *lock, gate_t *gate, int flags)
 	LCK_MTX_ASSERT(lock, LCK_MTX_ASSERT_OWNED);
 
 	gate_assert(gate, flags);
+}
+
+#pragma mark - LCK_*_DECLARE support
+
+__startup_func
+void
+lck_grp_attr_startup_init(struct lck_grp_attr_startup_spec *sp)
+{
+	lck_grp_attr_t *attr = sp->grp_attr;
+	lck_grp_attr_setdefault(attr);
+	attr->grp_attr_val |= sp->grp_attr_set_flags;
+	attr->grp_attr_val &= ~sp->grp_attr_clear_flags;
+}
+
+__startup_func
+void
+lck_grp_startup_init(struct lck_grp_startup_spec *sp)
+{
+	lck_grp_init(sp->grp, sp->grp_name, sp->grp_attr);
+}
+
+__startup_func
+void
+lck_attr_startup_init(struct lck_attr_startup_spec *sp)
+{
+	lck_attr_t *attr = sp->lck_attr;
+	lck_attr_setdefault(attr);
+	attr->lck_attr_val |= sp->lck_attr_set_flags;
+	attr->lck_attr_val &= ~sp->lck_attr_clear_flags;
+}
+
+__startup_func
+void
+lck_spin_startup_init(struct lck_spin_startup_spec *sp)
+{
+	lck_spin_init(sp->lck, sp->lck_grp, sp->lck_attr);
+}
+
+__startup_func
+void
+lck_mtx_startup_init(struct lck_mtx_startup_spec *sp)
+{
+	if (sp->lck_ext) {
+		lck_mtx_init_ext(sp->lck, sp->lck_ext, sp->lck_grp, sp->lck_attr);
+	} else {
+		lck_mtx_init(sp->lck, sp->lck_grp, sp->lck_attr);
+	}
+}
+
+__startup_func
+void
+lck_rw_startup_init(struct lck_rw_startup_spec *sp)
+{
+	lck_rw_init(sp->lck, sp->lck_grp, sp->lck_attr);
+}
+
+__startup_func
+void
+usimple_lock_startup_init(struct usimple_lock_startup_spec *sp)
+{
+	simple_lock_init(sp->lck, sp->lck_init_arg);
 }

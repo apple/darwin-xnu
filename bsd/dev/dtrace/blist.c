@@ -71,7 +71,10 @@ typedef unsigned int u_daddr_t;
 #include "blist.h"
 #include <sys/malloc.h>
 
+#if !defined(__APPLE__)
 #define SWAPBLK_NONE ((daddr_t)-1)
+#endif
+
 #define malloc _MALLOC
 #define free _FREE
 #define M_SWAP M_TEMP

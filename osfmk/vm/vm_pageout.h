@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -94,7 +94,28 @@ extern unsigned int vm_pageout_cleaned_fault_reactivated;
 
 #if CONFIG_FREEZE
 extern boolean_t memorystatus_freeze_enabled;
-#endif
+
+struct freezer_context {
+	/*
+	 * All these counters & variables track the task
+	 * being frozen.
+	 * Currently we only freeze one task at a time. Should that
+	 * change, we'll need to add support for multiple freezer contexts.
+	 */
+
+	task_t  freezer_ctx_task; /* Task being frozen. */
+
+	void    *freezer_ctx_chead; /* The chead used to track c_segs allocated */
+	                            /* to freeze the task.*/
+
+	uint64_t        freezer_ctx_swapped_bytes; /* Tracks # of compressed bytes.*/
+
+	int     freezer_ctx_uncompressed_pages; /* Tracks # of uncompressed pages frozen. */
+
+	char    *freezer_ctx_compressor_scratch_buf; /* Scratch buffer for the compressor algorithm. */
+};
+
+#endif /* CONFIG_FREEZE */
 
 #define VM_DYNAMIC_PAGING_ENABLED() (VM_CONFIG_COMPRESSOR_IS_ACTIVE)
 
@@ -170,6 +191,8 @@ extern int      vm_debug_events;
 
 #define VM_PRESSURE_LEVEL_CHANGE        0x141
 
+#define VM_PHYS_WRITE_ACCT              0x142
+
 #define VM_DEBUG_EVENT(name, event, control, arg1, arg2, arg3, arg4)    \
 	MACRO_BEGIN                                             \
 	if (__improbable(vm_debug_events)) {                    \
@@ -205,6 +228,15 @@ extern upl_t upl_associated_upl(upl_t upl);
 extern void upl_set_associated_upl(upl_t upl, upl_t associated_upl);
 
 #ifdef  XNU_KERNEL_PRIVATE
+
+extern upl_size_t upl_adjusted_size(
+	upl_t upl,
+	vm_map_offset_t page_mask);
+extern vm_object_offset_t upl_adjusted_offset(
+	upl_t upl,
+	vm_map_offset_t page_mask);
+extern vm_object_offset_t upl_get_data_offset(
+	upl_t upl);
 
 extern kern_return_t vm_map_create_upl(
 	vm_map_t                map,
@@ -261,18 +293,19 @@ extern unsigned int     vm_page_anonymous_count;
  * manipulate this structure
  */
 struct vm_pageout_queue {
-	vm_page_queue_head_t    pgo_pending;    /* laundry pages to be processed by pager's iothread */
-	unsigned int    pgo_laundry;    /* current count of laundry pages on queue or in flight */
+	vm_page_queue_head_t pgo_pending;  /* laundry pages to be processed by pager's iothread */
+	uint64_t        pgo_tid;           /* thread ID of I/O thread that services this queue */
+	unsigned int    pgo_laundry;       /* current count of laundry pages on queue or in flight */
 	unsigned int    pgo_maxlaundry;
-	uint64_t        pgo_tid;        /* thread ID of I/O thread that services this queue */
-	uint8_t         pgo_lowpriority; /* iothread is set to use low priority I/O */
 
-	unsigned int    pgo_idle:1,     /* iothread is blocked waiting for work to do */
-	    pgo_busy:1,                 /* iothread is currently processing request from pgo_pending */
-	    pgo_throttled:1,            /* vm_pageout_scan thread needs a wakeup when pgo_laundry drops */
+	uint32_t
+	    pgo_idle:1,        /* iothread is blocked waiting for work to do */
+	    pgo_busy:1,        /* iothread is currently processing request from pgo_pending */
+	    pgo_throttled:1,   /* vm_pageout_scan thread needs a wakeup when pgo_laundry drops */
+	    pgo_lowpriority:1, /* iothread is set to use low priority I/O */
 	    pgo_draining:1,
 	    pgo_inited:1,
-	:0;
+	    pgo_unused_bits:26;
 };
 
 #define VM_PAGE_Q_THROTTLED(q)          \
@@ -357,8 +390,13 @@ struct upl {
 	int             ref_count;
 	int             ext_ref_count;
 	int             flags;
-	vm_object_offset_t offset;
-	upl_size_t      size;       /* size in bytes of the address space */
+	/*
+	 * XXX CAUTION: to accomodate devices with "mixed page sizes",
+	 * u_offset and u_size are now byte-aligned and no longer
+	 * page-aligned, on all devices.
+	 */
+	vm_object_offset_t u_offset;
+	upl_size_t      u_size;       /* size in bytes of the address space */
 	vm_offset_t     kaddr;      /* secondary mapping in kernel */
 	vm_object_t     map_object;
 	ppnum_t         highest_page;
@@ -469,6 +507,12 @@ extern kern_return_t vm_map_remove_upl(
 /* wired  page list structure */
 typedef uint32_t *wpl_array_t;
 
+extern struct vm_page_delayed_work*
+vm_page_delayed_work_get_ctx(void);
+
+extern void
+vm_page_delayed_work_finish_ctx(struct vm_page_delayed_work* dwp);
+
 extern void vm_page_free_reserve(int pages);
 
 extern void vm_pageout_throttle_down(vm_page_t page);
@@ -558,7 +602,7 @@ extern int hibernate_flush_memory(void);
 extern void hibernate_reset_stats(void);
 extern void hibernate_create_paddr_map(void);
 
-extern void vm_set_restrictions(void);
+extern void vm_set_restrictions(unsigned int num_cpus);
 
 extern int vm_compressor_mode;
 extern kern_return_t vm_pageout_compress_page(void **, char *, vm_page_t);

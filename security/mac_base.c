@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -80,6 +80,7 @@
 #include <sys/namei.h>
 #include <bsd/bsm/audit.h>
 #include <bsd/security/audit/audit.h>
+#include <bsd/security/audit/audit_private.h>
 #include <sys/file.h>
 #include <sys/file_internal.h>
 #include <sys/filedesc.h>
@@ -92,10 +93,9 @@
 #include <mach/vm_types.h>
 #include <mach/vm_prot.h>
 
-#include <kern/zalloc.h>
+#include <kern/kalloc.h>
 #include <kern/sched_prim.h>
-#include <osfmk/kern/task.h>
-#include <osfmk/kern/kalloc.h>
+#include <kern/task.h>
 
 #if CONFIG_MACF
 #include <security/mac.h>
@@ -105,9 +105,7 @@
 #include <security/mac_mach_internal.h>
 #endif
 
-#if CONFIG_EMBEDDED
 #include <libkern/section_keywords.h>
-#endif
 
 /*
  * define MB_DEBUG to display run-time debugging information
@@ -151,24 +149,6 @@ SYSCTL_UINT(_security_mac, OID_AUTO, max_slots, CTLFLAG_RD | CTLFLAG_LOCKED,
  * the end of serialization, we don't update this flag; no locking.
  */
 int     mac_late = 0;
-
-/*
- * Flag to indicate whether or not we should allocate label storage for
- * new mbufs.  Since most dynamic policies we currently work with don't
- * rely on mbuf labeling, try to avoid paying the cost of mtag allocation
- * unless specifically notified of interest.  One result of this is
- * that if a dynamically loaded policy requests mbuf labels, it must
- * be able to deal with a NULL label being returned on any mbufs that
- * were already in flight when the policy was loaded.  Since the policy
- * already has to deal with uninitialized labels, this probably won't
- * be a problem.  Note: currently no locking.  Will this be a problem?
- */
-#if CONFIG_MACF_NET
-unsigned int mac_label_mbufs    = 1;
-SYSCTL_UINT(_security_mac, OID_AUTO, label_mbufs, SECURITY_MAC_CTLFLAGS,
-    &mac_label_mbufs, 0, "Label all MBUFs");
-#endif
-
 
 /*
  * Flag to indicate whether or not we should allocate label storage for
@@ -244,15 +224,6 @@ unsigned int    mac_vnode_enforce = 1;
 SYSCTL_UINT(_security_mac, OID_AUTO, vnode_enforce, SECURITY_MAC_CTLFLAGS,
     &mac_vnode_enforce, 0, "Enforce MAC policy on vnode operations");
 
-#if CONFIG_AUDIT
-/*
- * mac_audit_data_zone is the zone used for data pushed into the audit
- * record by policies. Using a zone simplifies memory management of this
- * data, and allows tracking of the amount of data in flight.
- */
-extern zone_t mac_audit_data_zone;
-#endif
-
 /*
  * mac_policy_list holds the list of policy modules.  Modules with a
  * handle lower than staticmax are considered "static" and cannot be
@@ -272,14 +243,13 @@ extern zone_t mac_audit_data_zone;
 static lck_mtx_t *mac_policy_mtx;
 
 /*
- * Policy list array allocation chunk size. Trying to set this so that we
- * allocate a page at a time.
+ * Policy list array allocation chunk size. Each entry holds a pointer.
  */
-#define MAC_POLICY_LIST_CHUNKSIZE 512
+#define MAC_POLICY_LIST_CHUNKSIZE 8
 
 static int mac_policy_busy;
 
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 SECURITY_READ_ONLY_LATE(mac_policy_list_t) mac_policy_list;
 SECURITY_READ_ONLY_LATE(static struct mac_policy_list_element) mac_policy_static_entries[MAC_POLICY_LIST_CHUNKSIZE];
 #else
@@ -373,13 +343,13 @@ mac_policy_init(void)
 	mac_policy_list.freehint = 0;
 	mac_policy_list.chunks = 1;
 
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 	mac_policy_list.entries = mac_policy_static_entries;
 #else
-	mac_policy_list.entries = kalloc(sizeof(struct mac_policy_list_element) * MAC_POLICY_LIST_CHUNKSIZE);
+	mac_policy_list.entries = kalloc_flags(
+		sizeof(struct mac_policy_list_element) * MAC_POLICY_LIST_CHUNKSIZE,
+		Z_WAITOK | Z_ZERO);
 #endif
-
-	bzero(mac_policy_list.entries, sizeof(struct mac_policy_list_element) * MAC_POLICY_LIST_CHUNKSIZE);
 
 	LIST_INIT(&mac_label_element_list);
 	LIST_INIT(&mac_static_label_element_list);
@@ -392,8 +362,6 @@ mac_policy_init(void)
 	lck_attr_free(mac_lck_attr);
 	lck_grp_attr_free(mac_lck_grp_attr);
 	lck_grp_free(mac_lck_grp);
-
-	mac_labelzone_init();
 }
 
 /* Function pointer set up for loading security extensions.
@@ -430,12 +398,6 @@ mac_policy_initbsd(void)
 {
 	struct mac_policy_conf *mpc;
 	u_int i;
-
-#if CONFIG_AUDIT
-	mac_audit_data_zone = zinit(MAC_AUDIT_DATA_LIMIT,
-	    AQ_HIWATER * MAC_AUDIT_DATA_LIMIT,
-	    8192, "mac_audit_data_zone");
-#endif
 
 	printf("MAC Framework successfully initialized\n");
 
@@ -669,7 +631,7 @@ int
 mac_policy_register(struct mac_policy_conf *mpc, mac_policy_handle_t *handlep,
     void *xd)
 {
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 	struct mac_policy_list_element *tmac_policy_list_element;
 #endif
 	int error, slot, static_entry = 0;
@@ -707,7 +669,7 @@ mac_policy_register(struct mac_policy_conf *mpc, mac_policy_handle_t *handlep,
 	}
 
 	if (mac_policy_list.numloaded >= mac_policy_list.max) {
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 		/* allocate new policy list array, zero new chunk */
 		tmac_policy_list_element =
 		    kalloc((sizeof(struct mac_policy_list_element) *
@@ -734,7 +696,7 @@ mac_policy_register(struct mac_policy_conf *mpc, mac_policy_handle_t *handlep,
 #else
 		printf("out of space in mac_policy_list.\n");
 		return ENOMEM;
-#endif /* CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 	}
 
 	/* Check for policy with same name already loaded */
@@ -997,6 +959,7 @@ mac_label_externalize(size_t mpo_externalize_off, struct label *label,
 	const char *name;
 	int (*mpo_externalize)(struct label *, char *, struct sbuf *);
 	int all_labels = 0, ignorenotfound = 0, error = 0, busy = FALSE;
+	int sb_pos;
 	unsigned int count = 0;
 
 	if (element[0] == '?') {
@@ -1032,6 +995,7 @@ element_loop:
 			if (mpo_externalize == NULL) {
 				continue;
 			}
+			sb_pos = sbuf_len(sb);
 			error = sbuf_printf(sb, "%s/", name);
 			if (error) {
 				goto done;
@@ -1048,8 +1012,7 @@ element_loop:
 				 * multiple label elements for some
 				 * (but not all) object types.
 				 */
-				sbuf_setpos(sb, sbuf_len(sb) -
-				    (strlen(name) + 1));
+				sbuf_setpos(sb, sb_pos);
 				error = 0;
 				continue;
 			}
@@ -1110,8 +1073,14 @@ mac_externalize(size_t mpo_externalize_off, struct label *label,
 	 */
 	scratch = scratch_base;
 
-	/* get an sbuf */
-	if (sbuf_new(&sb, outbuf, outbuflen, SBUF_FIXEDLEN) == NULL) {
+	/*
+	 * initialize an sbuf mapping over the output buffer (or newly-allocated internal buffer, if
+	 * outbuf is NULL), up to sbuf's limit of INT_MAX.
+	 */
+	if (outbuflen > INT_MAX) {
+		outbuflen = INT_MAX;
+	}
+	if (sbuf_new(&sb, outbuf, (int)outbuflen, SBUF_FIXEDLEN) == NULL) {
 		/* could not allocate interior buffer */
 		error = ENOMEM;
 		goto out;
@@ -1400,9 +1369,6 @@ __mac_get_fd(proc_t p, struct __mac_get_fd_args *uap, int *ret __unused)
 	int error;
 	size_t ulen;
 	kauth_cred_t my_cred;
-#if CONFIG_MACF_SOCKET
-	struct socket *so;
-#endif  /* MAC_SOCKET */
 	struct label *intlabel;
 
 	AUDIT_ARG(fd, uap->fd);
@@ -1445,7 +1411,7 @@ __mac_get_fd(proc_t p, struct __mac_get_fd_args *uap, int *ret __unused)
 	}
 
 	my_cred = kauth_cred_proc_ref(p);
-	error = mac_file_check_get(my_cred, fp->f_fglob, elements, mac.m_buflen);
+	error = mac_file_check_get(my_cred, fp->fp_glob, elements, mac.m_buflen);
 	kauth_cred_unref(&my_cred);
 	if (error) {
 		fp_drop(p, uap->fd, fp, 0);
@@ -1454,14 +1420,14 @@ __mac_get_fd(proc_t p, struct __mac_get_fd_args *uap, int *ret __unused)
 		return error;
 	}
 
-	switch (FILEGLOB_DTYPE(fp->f_fglob)) {
+	switch (FILEGLOB_DTYPE(fp->fp_glob)) {
 	case DTYPE_VNODE:
 		intlabel = mac_vnode_label_alloc();
 		if (intlabel == NULL) {
 			error = ENOMEM;
 			break;
 		}
-		vp = (struct vnode *)fp->f_fglob->fg_data;
+		vp = (struct vnode *)fp->fp_glob->fg_data;
 		error = vnode_getwithref(vp);
 		if (error == 0) {
 			mac_vnode_label_copy(vp->v_label, intlabel);
@@ -1473,16 +1439,6 @@ __mac_get_fd(proc_t p, struct __mac_get_fd_args *uap, int *ret __unused)
 		mac_vnode_label_free(intlabel);
 		break;
 	case DTYPE_SOCKET:
-#if CONFIG_MACF_SOCKET
-		so = (struct socket *) fp->f_fglob->fg_data;
-		intlabel = mac_socket_label_alloc(MAC_WAITOK);
-		sock_lock(so, 1);
-		mac_socket_label_copy(so->so_label, intlabel);
-		sock_unlock(so, 1);
-		error = mac_socket_label_externalize(intlabel, elements, buffer, mac.m_buflen);
-		mac_socket_label_free(intlabel);
-		break;
-#endif
 	case DTYPE_PSXSHM:
 	case DTYPE_PSXSEM:
 	case DTYPE_PIPE:
@@ -1605,9 +1561,6 @@ __mac_set_fd(proc_t p, struct __mac_set_fd_args *uap, int *ret __unused)
 	size_t ulen;
 	char *buffer;
 	struct label *intlabel;
-#if CONFIG_MACF_SOCKET
-	struct socket *so;
-#endif
 	struct vnode *vp;
 
 	AUDIT_ARG(fd, uap->fd);
@@ -1647,14 +1600,14 @@ __mac_set_fd(proc_t p, struct __mac_set_fd_args *uap, int *ret __unused)
 	}
 
 
-	error = mac_file_check_set(vfs_context_ucred(ctx), fp->f_fglob, buffer, mac.m_buflen);
+	error = mac_file_check_set(vfs_context_ucred(ctx), fp->fp_glob, buffer, mac.m_buflen);
 	if (error) {
 		fp_drop(p, uap->fd, fp, 0);
 		FREE(buffer, M_MACTEMP);
 		return error;
 	}
 
-	switch (FILEGLOB_DTYPE(fp->f_fglob)) {
+	switch (FILEGLOB_DTYPE(fp->fp_glob)) {
 	case DTYPE_VNODE:
 		if (mac_label_vnodes == 0) {
 			error = ENOSYS;
@@ -1670,7 +1623,7 @@ __mac_set_fd(proc_t p, struct __mac_set_fd_args *uap, int *ret __unused)
 		}
 
 
-		vp = (struct vnode *)fp->f_fglob->fg_data;
+		vp = (struct vnode *)fp->fp_glob->fg_data;
 
 		error = vnode_getwithref(vp);
 		if (error == 0) {
@@ -1681,18 +1634,6 @@ __mac_set_fd(proc_t p, struct __mac_set_fd_args *uap, int *ret __unused)
 		break;
 
 	case DTYPE_SOCKET:
-#if CONFIG_MACF_SOCKET
-		intlabel = mac_socket_label_alloc(MAC_WAITOK);
-		error = mac_socket_label_internalize(intlabel, buffer);
-		if (error == 0) {
-			so = (struct socket *) fp->f_fglob->fg_data;
-			SOCK_LOCK(so);
-			error = mac_socket_label_update(vfs_context_ucred(ctx), so, intlabel);
-			SOCK_UNLOCK(so);
-		}
-		mac_socket_label_free(intlabel);
-		break;
-#endif
 	case DTYPE_PSXSHM:
 	case DTYPE_PSXSEM:
 	case DTYPE_PIPE:
@@ -1944,10 +1885,13 @@ __mac_get_mount(proc_t p __unused, struct __mac_get_mount_args *uap,
 		return error;
 	}
 	mp = nd.ni_vp->v_mount;
+	mount_ref(mp, 0);
 	vnode_put(nd.ni_vp);
 	nameidone(&nd);
 
-	return mac_mount_label_get(mp, uap->mac_p);
+	error = mac_mount_label_get(mp, uap->mac_p);
+	mount_drop(mp, 0);
+	return error;
 }
 
 /*

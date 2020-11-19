@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2007-2018 Apple Inc. All rights reserved.
+ * Copyright (c) 2007-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -82,10 +82,8 @@
 #include <netinet/udp.h>
 #include <netinet/ip_icmp.h>
 
-#if INET6
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
-#endif /* INET6 */
 
 #include <net/pfvar.h>
 
@@ -168,7 +166,6 @@ static struct mbuf *pf_fragcache(struct mbuf **, struct ip *,
     struct pf_fragment **, int, int, int *);
 static int pf_normalize_tcpopt(struct pf_rule *, int, struct pfi_kif *,
     struct pf_pdesc *, pbuf_t *, struct tcphdr *, int, int *);
-#if INET6
 static __inline struct pf_fragment *
 pf_find_fragment_by_ipv6_header(struct ip6_hdr *, struct ip6_frag *,
     struct pf_frag_tree *);
@@ -176,7 +173,6 @@ static struct mbuf *pf_reassemble6(struct mbuf **, struct pf_fragment **,
     struct pf_frent *, int);
 static struct mbuf *pf_frag6cache(struct mbuf **, struct ip6_hdr*,
     struct ip6_frag *, struct pf_fragment **, int, int, int, int *);
-#endif /* INET6 */
 
 #define DPFPRINTF(x) do {                               \
 	if (pf_status.debug >= PF_DEBUG_MISC) {         \
@@ -264,7 +260,6 @@ pf_frag_compare(struct pf_fragment *a, struct pf_fragment *b)
 			}
 			break;
 #endif
-#ifdef INET6
 		case AF_INET6:
 			if ((diff = a->fr_id6 - b->fr_id6)) {
 				return diff;
@@ -302,7 +297,6 @@ pf_frag_compare(struct pf_fragment *a, struct pf_fragment *b)
 				return 1;
 			}
 			break;
-#endif
 		default:
 			VERIFY(!0 && "only IPv4 and IPv6 supported!");
 			break;
@@ -1114,7 +1108,6 @@ drop_fragment:
 	return NULL;
 }
 
-#if INET6
 #define FR_IP6_OFF(fr) \
 	(ntohs((fr)->fr_ip6f_opt.ip6f_offlg & IP6F_OFF_MASK))
 #define FR_IP6_PLEN(fr) (ntohs((fr)->fr_ip6->ip6_plen))
@@ -1908,7 +1901,6 @@ pf_refragment6(struct ifnet *ifp, pbuf_t **pbufp, struct pf_fragment_tag *ftag)
 done:
 	return action;
 }
-#endif /* INET6 */
 
 int
 pf_normalize_ip(pbuf_t *pbuf, int dir, struct pfi_kif *kif, u_short *reason,
@@ -2231,7 +2223,6 @@ bad:
 	return PF_DROP;
 }
 
-#if INET6
 static __inline struct pf_fragment *
 pf_find_fragment_by_ipv6_header(struct ip6_hdr *ip6, struct ip6_frag *fh,
     struct pf_frag_tree *tree)
@@ -2599,7 +2590,6 @@ dropout:
 	}
 	return PF_DROP;
 }
-#endif /* INET6 */
 
 int
 pf_normalize_tcp(int dir, struct pfi_kif *kif, pbuf_t *pbuf, int ipoff,
@@ -2783,13 +2773,11 @@ pf_normalize_tcp_init(pbuf_t *pbuf, int off, struct pf_pdesc *pd,
 		break;
 	}
 #endif /* INET */
-#if INET6
 	case AF_INET6: {
 		struct ip6_hdr *h = pbuf->pb_data;
 		src->scrub->pfss_ttl = h->ip6_hlim;
 		break;
 	}
-#endif /* INET6 */
 	}
 
 
@@ -2832,7 +2820,7 @@ pf_normalize_tcp_init(pbuf_t *pbuf, int off, struct pf_pdesc *pd,
 					src->scrub->pfss_tsecr = ntohl(tsecr);
 					getmicrouptime(&src->scrub->pfss_last);
 				}
-			/* FALLTHROUGH */
+				OS_FALLTHROUGH;
 			default:
 				hlen -= MAX(opt[1], 2);
 				opt += MAX(opt[1], 2);
@@ -2890,7 +2878,6 @@ pf_normalize_tcp_stateful(pbuf_t *pbuf, int off, struct pf_pdesc *pd,
 		break;
 	}
 #endif /* INET */
-#if INET6
 	case AF_INET6: {
 		if (src->scrub) {
 			struct ip6_hdr *h = pbuf->pb_data;
@@ -2901,7 +2888,6 @@ pf_normalize_tcp_stateful(pbuf_t *pbuf, int off, struct pf_pdesc *pd,
 		}
 		break;
 	}
-#endif /* INET6 */
 	}
 
 	if (th->th_off > (sizeof(struct tcphdr) >> 2) &&
@@ -2966,7 +2952,7 @@ pf_normalize_tcp_stateful(pbuf_t *pbuf, int off, struct pf_pdesc *pd,
 					}
 					got_ts = 1;
 				}
-			/* FALLTHROUGH */
+				OS_FALLTHROUGH;
 			default:
 				hlen -= MAX(opt[1], 2);
 				opt += MAX(opt[1], 2);

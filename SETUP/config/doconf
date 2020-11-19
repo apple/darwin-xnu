@@ -78,6 +78,7 @@ unset beverbose
 unset MACHINE
 unset profile
 unset SOC_CONFIG
+unset PLATFORM
 
 while ($#argv >= 1)
     if ("$argv[1]" =~ -*) then
@@ -100,6 +101,14 @@ while ($#argv >= 1)
 		exit 1
 	    endif
 	    set SOC_CONFIG="$argv[2]"
+	    shift
+	    breaksw
+	case "-platform":
+	    if ($#argv < 2) then
+		echo "${prog}: missing argument to ${argv[1]}"
+		exit 1
+	    endif
+	    set PLATFORM="$argv[2]"
 	    shift
 	    breaksw
 	case "-d":
@@ -155,21 +164,31 @@ set cpu=`echo $MACHINE | tr A-Z a-z`
 set ID=`echo $MACHINE | tr a-z A-Z`
 set MASTER_DIR=${MASTER_CONF_DIR}
 set MASTER =   ${MASTER_DIR}/MASTER
-set MASTER_CPU=${MASTER}.${cpu}
-set MASTER_CPU_PER_SOC=${MASTER}.${cpu}.${SOC_CONFIG}
-if (-f $MASTER_CPU_PER_SOC) set MASTER_CPU = ${MASTER_CPU_PER_SOC}
+
+foreach master_file (${MASTER}.${cpu}.${SOC_CONFIG}.${PLATFORM} ${MASTER}.${cpu}.${SOC_CONFIG} ${MASTER}.${cpu}.${PLATFORM} ${MASTER}.${cpu})
+    if (-f $master_file) then
+        set MASTER_CPU = $master_file
+        break
+    endif
+end
+
+if ($?beverbose) then
+    echo MASTER_CPU=$MASTER_CPU
+endif
 
 foreach SYS ($argv)
     set SYSID=${SYS}_${ID}
     set SYSCONF=$OBJDIR/config.$SYSID
     set BLDDIR=$OBJDIR
     if ($?beverbose) then
-	echo "[ generating $SYSID from $MASTER_DIR/MASTER{,.$cpu}{,.local} ]"
+        echo "[ generating $SYSID from $MASTER_DIR/MASTER{,.$cpu}{,.local} ]"
     endif
     echo +$SYS \
     | \
     cat $MASTER $MASTER_CPU - \
         $MASTER $MASTER_CPU \
+    | \
+    unifdef -t -DPLATFORM_${PLATFORM} -DCPU_$cpu -DSOC_CONFIG_${SOC_CONFIG} -DSYS_${SYS} - \
     | \
     sed -n \
 	-e "/^+/{" \

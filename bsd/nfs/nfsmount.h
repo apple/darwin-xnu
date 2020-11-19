@@ -79,13 +79,13 @@
 struct nfs_fsattr {
 	uint32_t        nfsa_flags;             /* file system flags */
 	uint32_t        nfsa_lease;             /* lease time in seconds */
-	uint32_t        nfsa_maxname;           /* maximum filename size */
+	int32_t         nfsa_maxname;           /* maximum filename size */
 	uint32_t        nfsa_maxlink;           /* maximum # links */
 	uint32_t        nfsa_bsize;             /* block size */
 	uint32_t        nfsa_pad;               /* UNUSED */
 	uint64_t        nfsa_maxfilesize;       /* maximum file size */
-	uint64_t        nfsa_maxread;           /* maximum read size */
-	uint64_t        nfsa_maxwrite;          /* maximum write size */
+	uint32_t        nfsa_maxread;           /* maximum read size */
+	uint32_t        nfsa_maxwrite;          /* maximum write size */
 	uint64_t        nfsa_files_avail;       /* file slots available */
 	uint64_t        nfsa_files_free;        /* file slots free */
 	uint64_t        nfsa_files_total;       /* file slots total */
@@ -224,7 +224,7 @@ struct nfs_funcs {
 	int     (*nf_setattr_rpc)(nfsnode_t, struct vnode_attr *, vfs_context_t);
 	int     (*nf_read_rpc_async)(nfsnode_t, off_t, size_t, thread_t, kauth_cred_t, struct nfsreq_cbinfo *, struct nfsreq **);
 	int     (*nf_read_rpc_async_finish)(nfsnode_t, struct nfsreq *, uio_t, size_t *, int *);
-	int     (*nf_readlink_rpc)(nfsnode_t, char *, uint32_t *, vfs_context_t);
+	int     (*nf_readlink_rpc)(nfsnode_t, char *, size_t *, vfs_context_t);
 	int     (*nf_write_rpc_async)(nfsnode_t, uio_t, size_t, thread_t, kauth_cred_t, int, struct nfsreq_cbinfo *, struct nfsreq **);
 	int     (*nf_write_rpc_async_finish)(nfsnode_t, struct nfsreq *, int *, size_t *, uint64_t *);
 	int     (*nf_commit_rpc)(nfsnode_t, uint64_t, uint64_t, kauth_cred_t, uint64_t);
@@ -243,7 +243,7 @@ struct nfs_funcs {
 struct nfs_client_id {
 	TAILQ_ENTRY(nfs_client_id)      nci_link;       /* list of client IDs */
 	char                            *nci_id;        /* client id buffer */
-	int                             nci_idlen;      /* length of client id buffer */
+	long                            nci_idlen;      /* length of client id buffer */
 };
 TAILQ_HEAD(nfsclientidlist, nfs_client_id);
 extern struct nfsclientidlist nfsclientids;
@@ -284,10 +284,10 @@ struct nfsmount {
 	uint32_t nm_biosize;            /* buffer I/O size */
 	uint32_t nm_readdirsize;        /* Size of a readdir rpc */
 	uint32_t nm_readahead;          /* Num. of blocks to readahead */
-	uint32_t nm_acregmin;           /* reg file min attr cache timeout */
-	uint32_t nm_acregmax;           /* reg file max attr cache timeout */
-	uint32_t nm_acdirmin;           /* dir min attr cache timeout */
-	uint32_t nm_acdirmax;           /* dir max attr cache timeout */
+	time_t   nm_acregmin;           /* reg file min attr cache timeout */
+	time_t   nm_acregmax;           /* reg file max attr cache timeout */
+	time_t   nm_acdirmin;           /* dir min attr cache timeout */
+	time_t   nm_acdirmax;           /* dir max attr cache timeout */
 	uint32_t nm_auth;               /* security mechanism flavor being used */
 	uint32_t nm_writers;            /* Number of nodes open for writing */
 	uint32_t nm_mappers;            /* Number of nodes that have mmapped */
@@ -295,9 +295,9 @@ struct nfsmount {
 	struct nfs_sec nm_servsec;      /* server's acceptable security mechanism flavors */
 	struct nfs_etype nm_etype;      /* If using kerberos, the support session key encryption types */
 	fhandle_t *nm_fh;               /* initial file handle */
-	uint8_t  nm_lockmode;           /* advisory file locking mode */
+	uint32_t  nm_lockmode;          /* advisory file locking mode */
 	/* mount info */
-	uint32_t nm_fsattrstamp;        /* timestamp for fs attrs */
+	time_t nm_fsattrstamp;          /* timestamp for fs attrs */
 	struct nfs_fsattr nm_fsattr;    /* file system attributes */
 	uint64_t nm_verf;               /* v3/v4 write verifier */
 	union {
@@ -307,7 +307,7 @@ struct nfsmount {
 			int udp_cwnd;   /* UDP request congestion window */
 			struct nfs_reqqhead udp_cwndq; /* requests waiting on cwnd */
 			struct sockaddr *rqsaddr;/* cached rquota socket address */
-			uint32_t rqsaddrstamp; /* timestamp of rquota socket address */
+			uint64_t rqsaddrstamp; /* timestamp of rquota socket address */
 		} v3;
 		struct {                /* v4 specific fields */
 			struct nfs_client_id *longid; /* client ID, long form */

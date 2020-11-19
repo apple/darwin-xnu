@@ -227,6 +227,39 @@ vm_map_store_lookup_entry_ll(
 	return FALSE;
 }
 
+/*
+ *  vm_map_store_find_last_free_ll:
+ *
+ *  Finds and returns in O_ENTRY the entry *after* the last hole (if one exists) in MAP.
+ *  Returns NULL if map is full and no hole can be found.
+ */
+void
+vm_map_store_find_last_free_ll(
+	vm_map_t map,
+	vm_map_entry_t *o_entry)        /* OUT */
+{
+	vm_map_entry_t  entry, prev_entry;
+	vm_offset_t     end;
+
+	entry = vm_map_to_entry(map);
+	end = map->max_offset;
+
+	/* Skip over contiguous entries from end of map until wraps around */
+	while ((prev_entry = entry->vme_prev) != vm_map_to_entry(map)
+	    && (prev_entry->vme_end == end || prev_entry->vme_end > map->max_offset)) {
+		entry = prev_entry;
+		end = entry->vme_start;
+	}
+
+	if (entry != vm_map_to_entry(map) && entry->vme_start == map->min_offset) {
+		/* Map is completely full, no holes exist */
+		*o_entry = NULL;
+		return;
+	}
+
+	*o_entry = entry;
+}
+
 void
 vm_map_store_entry_link_ll( struct vm_map_header *mapHdr, vm_map_entry_t after_where, vm_map_entry_t entry)
 {

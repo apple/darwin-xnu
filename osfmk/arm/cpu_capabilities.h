@@ -35,6 +35,7 @@
 #include <mach/vm_types.h>
 #endif
 
+
 #define USER_TIMEBASE_NONE   0
 #define USER_TIMEBASE_SPEC   1
 
@@ -48,8 +49,6 @@
 /*
  * Bit definitions for _cpu_capabilities:
  */
-#define kHasICDSBShift                  2
-#define kHasICDSB                       0x00000004      // ICache Data Syncronization on DSB enabled (H13)
 #define kHasNeonFP16                    0x00000008      // ARM v8.2 NEON FP16 supported
 #define kCache32                        0x00000010      // cache line size is 32 bytes
 #define kCache64                        0x00000020      // cache line size is 64 bytes
@@ -67,6 +66,9 @@
 #define kHasARMv8Crypto                 0x01000000      // Optional ARMv8 Crypto extensions
 #define kHasARMv81Atomics               0x02000000      // ARMv8.1 Atomic instructions supported
 #define kHasARMv8Crc32                  0x04000000      // Optional ARMv8 crc32 instructions (required in ARMv8.1)
+#define kHasARMv82SHA512                0x80000000      // Optional ARMv8.2 SHA512 instructions
+/* Extending into 64-bits from here: */
+#define kHasARMv82SHA3          0x0000000100000000      // Optional ARMv8.2 SHA3 instructions
 
 #define kNumCPUsShift                   16              // see _NumCPUs() below
 /*
@@ -79,7 +81,7 @@
 #include <sys/commpage.h>
 
 __BEGIN_DECLS
-extern int  _get_cpu_capabilities( void );
+extern uint64_t _get_cpu_capabilities( void );
 __END_DECLS
 
 __inline static
@@ -103,6 +105,7 @@ typedef struct {
 
 __BEGIN_DECLS
 extern vm_address_t                             _get_commpage_priv_address(void);
+extern vm_address_t                             _get_commpage_text_priv_address(void);
 __END_DECLS
 
 #endif /* __ASSEMBLER__ */
@@ -115,7 +118,11 @@ __END_DECLS
 #if defined(__LP64__)
 
 #define _COMM_PAGE64_BASE_ADDRESS               (0x0000000FFFFFC000ULL) /* In TTBR0 */
+#if defined(ARM_LARGE_MEMORY)
+#define _COMM_HIGH_PAGE64_BASE_ADDRESS  (0xFFFFFE00001FC000ULL) /* Just below the kernel, safely in TTBR1; only used for testing */
+#else
 #define _COMM_HIGH_PAGE64_BASE_ADDRESS  (0xFFFFFFF0001FC000ULL) /* Just below the kernel, safely in TTBR1; only used for testing */
+#endif
 
 #define _COMM_PAGE64_AREA_LENGTH                (_COMM_PAGE32_AREA_LENGTH)
 #define _COMM_PAGE64_AREA_USED                  (-1)
@@ -128,6 +135,28 @@ __END_DECLS
 
 #define _COMM_PAGE_BASE_ADDRESS                 (_get_commpage_priv_address())
 #define _COMM_PAGE_START_ADDRESS                (_get_commpage_priv_address())
+
+/**
+ * This represents the size of the memory region that the commpage is nested in.
+ * On 4K page systems, this is 1GB, and on 16KB page systems this is technically
+ * only 32MB, but to keep consistency across address spaces we always reserve
+ * 1GB for the commpage on ARM devices.
+ *
+ * The commpage itself only takes up a single page, but its page tables are
+ * being shared across every user process. Entries should not be allowed to
+ * be created in those shared tables, which is why the VM uses these values to
+ * reserve the entire nesting region in every user process address space.
+ *
+ * If the commpage base address changes, these values might also need to be
+ * updated.
+ */
+#define _COMM_PAGE64_NESTING_START                (0x0000000FC0000000ULL)
+#define _COMM_PAGE64_NESTING_SIZE                 (0x40000000ULL) /* 1GiB */
+_Static_assert((_COMM_PAGE64_BASE_ADDRESS >= _COMM_PAGE64_NESTING_START) &&
+    (_COMM_PAGE64_BASE_ADDRESS < (_COMM_PAGE64_NESTING_START + _COMM_PAGE64_NESTING_SIZE)),
+    "_COMM_PAGE64_BASE_ADDRESS is not within the nesting region. Commpage nesting "
+    "region probably needs to be updated.");
+
 #else /* KERNEL_PRIVATE */
 #define _COMM_PAGE_AREA_LENGTH                  (4096)
 
@@ -135,7 +164,7 @@ __END_DECLS
 #define _COMM_PAGE_START_ADDRESS                _COMM_PAGE64_BASE_ADDRESS
 #endif /* KERNEL_PRIVATE */
 
-#else
+#else /* __LP64__ */
 
 #define _COMM_PAGE64_BASE_ADDRESS               (-1)
 #define _COMM_PAGE64_AREA_LENGTH                (-1)
@@ -149,23 +178,18 @@ __END_DECLS
 #ifdef KERNEL_PRIVATE
 #define _COMM_PAGE_RW_OFFSET                    (_get_commpage_priv_address()-_COMM_PAGE_BASE_ADDRESS)
 #define _COMM_PAGE_AREA_LENGTH                  (PAGE_SIZE)
-#else
+#else /* KERNEL_PRIVATE */
 #define _COMM_PAGE_AREA_LENGTH                  (4096)
-#endif
+#endif /* KERNEL_PRIVATE */
 
 #define _COMM_PAGE_BASE_ADDRESS                 _COMM_PAGE32_BASE_ADDRESS
 #define _COMM_PAGE_START_ADDRESS                _COMM_PAGE32_BASE_ADDRESS
 
-#endif
+#endif /* __LP64__ */
 
 #define _COMM_PAGE32_BASE_ADDRESS               (0xFFFF4000)            /* Must be outside of normal map bounds */
 #define _COMM_PAGE32_AREA_LENGTH                (_COMM_PAGE_AREA_LENGTH)
-
-#define _COMM_PAGE_TEXT_START                   (-1)
 #define _COMM_PAGE32_TEXT_START                 (-1)
-#define _COMM_PAGE64_TEXT_START                 (-1)
-#define _COMM_PAGE_PFZ_START_OFFSET             (-1)
-#define _COMM_PAGE_PFZ_END_OFFSET               (-1)
 
 #define _COMM_PAGE32_OBJC_SIZE                  0ULL
 #define _COMM_PAGE32_OBJC_BASE                  0ULL
@@ -178,6 +202,8 @@ __END_DECLS
  */
 #define _COMM_PAGE_SIGNATURE                    (_COMM_PAGE_START_ADDRESS+0x000)        // first few bytes are a signature
 #define _COMM_PAGE_SIGNATURELEN                 (0x10)
+#define _COMM_PAGE_CPU_CAPABILITIES64           (_COMM_PAGE_START_ADDRESS+0x010)        /* uint64_t _cpu_capabilities */
+#define _COMM_PAGE_UNUSED                       (_COMM_PAGE_START_ADDRESS+0x018)        /* 6 unused bytes */
 #define _COMM_PAGE_VERSION                      (_COMM_PAGE_START_ADDRESS+0x01E)        // 16-bit version#
 #define _COMM_PAGE_THIS_VERSION                 3                                       // version of the commarea format
 
@@ -186,8 +212,8 @@ __END_DECLS
 #define _COMM_PAGE_USER_PAGE_SHIFT_32           (_COMM_PAGE_START_ADDRESS+0x024)        // VM page shift for 32-bit processes
 #define _COMM_PAGE_USER_PAGE_SHIFT_64           (_COMM_PAGE_START_ADDRESS+0x025)        // VM page shift for 64-bit processes
 #define _COMM_PAGE_CACHE_LINESIZE               (_COMM_PAGE_START_ADDRESS+0x026)        // uint16_t cache line size
-#define _COMM_PAGE_SCHED_GEN                    (_COMM_PAGE_START_ADDRESS+0x028)        // uint32_t scheduler generation number (count of pre-emptions)
-#define _COMM_PAGE_SPIN_COUNT                   (_COMM_PAGE_START_ADDRESS+0x02C)        // uint32_t max spin count for mutex's
+#define _COMM_PAGE_UNUSED4                      (_COMM_PAGE_START_ADDRESS+0x028)        // used to be _COMM_PAGE_SCHED_GEN: uint32_t scheduler generation number (count of pre-emptions)
+#define _COMM_PAGE_UNUSED3                      (_COMM_PAGE_START_ADDRESS+0x02C)        // used to be _COMM_PAGE_SPIN_COUNT: uint32_t max spin count for mutex's
 #define _COMM_PAGE_MEMORY_PRESSURE              (_COMM_PAGE_START_ADDRESS+0x030)        // uint32_t copy of vm_memory_pressure
 #define _COMM_PAGE_ACTIVE_CPUS                  (_COMM_PAGE_START_ADDRESS+0x034)        // uint8_t number of active CPUs (hw.activecpu)
 #define _COMM_PAGE_PHYSICAL_CPUS                (_COMM_PAGE_START_ADDRESS+0x035)        // uint8_t number of physical CPUs (hw.physicalcpu_max)
@@ -202,8 +228,9 @@ __END_DECLS
 #define _COMM_PAGE_CONT_HWCLOCK                 (_COMM_PAGE_START_ADDRESS+0x091)        // uint8_t is always-on hardware clock present for mach_continuous_time()
 #define _COMM_PAGE_DTRACE_DOF_ENABLED           (_COMM_PAGE_START_ADDRESS+0x092)        // uint8_t 0 if userspace DOF disable, 1 if enabled
 #define _COMM_PAGE_UNUSED0                      (_COMM_PAGE_START_ADDRESS+0x093)        // 5 unused bytes
-#define _COMM_PAGE_CONT_TIMEBASE                (_COMM_PAGE_START_ADDRESS+0x098)        // uint64_t base for mach_continuous_time()
+#define _COMM_PAGE_CONT_TIMEBASE                (_COMM_PAGE_START_ADDRESS+0x098)        // uint64_t base for mach_continuous_time() relative to mach_absolute_time()
 #define _COMM_PAGE_BOOTTIME_USEC                (_COMM_PAGE_START_ADDRESS+0x0A0)        // uint64_t boottime in microseconds
+#define _COMM_PAGE_CONT_HW_TIMEBASE             (_COMM_PAGE_START_ADDRESS+0x0A8)        // uint64_t base for mach_continuous_time() relative to CNT[PV]CT
 
 // aligning to 64byte for cacheline size
 #define _COMM_PAGE_APPROX_TIME                  (_COMM_PAGE_START_ADDRESS+0x0C0)        // uint64_t last known mach_absolute_time()
@@ -217,12 +244,25 @@ __END_DECLS
 
 #define _COMM_PAGE_NEWTIMEOFDAY_DATA            (_COMM_PAGE_START_ADDRESS+0x120)        // used by gettimeofday(). Currently, sizeof(new_commpage_timeofday_data_t) = 40.
 #define _COMM_PAGE_REMOTETIME_PARAMS            (_COMM_PAGE_START_ADDRESS+0x148)        // used by mach_bridge_remote_time(). Currently, sizeof(struct bt_params) = 24
-#define _COMM_PAGE_DYLD_SYSTEM_FLAGS            (_COMM_PAGE_START_ADDRESS+0x160)        // uint64_t export kern.dyld_system_flags to userspace
+#define _COMM_PAGE_DYLD_FLAGS                   (_COMM_PAGE_START_ADDRESS+0x160)        // uint64_t export kern.dyld_system_flags to userspace
 
 // aligning to 128 bytes for cacheline/fabric size
 #define _COMM_PAGE_CPU_QUIESCENT_COUNTER        (_COMM_PAGE_START_ADDRESS+0x180)        // uint64_t, but reserve the whole 128 (0x80) bytes
 
-#define _COMM_PAGE_END                          (_COMM_PAGE_START_ADDRESS+0x1000)       // end of common page
+#define _COMM_PAGE_END                          (_COMM_PAGE_START_ADDRESS+0xfff)        // end of common page
+
+#if defined(__LP64__)
+#if KERNEL_PRIVATE
+#define _COMM_PAGE64_TEXT_START_ADDRESS          (_get_commpage_text_priv_address())      // Address through physical aperture
+#endif
+/* Offset in bytes from start of text comm page to get to these functions. Start
+ * address to text comm page is from apple array */
+#define _COMM_PAGE_TEXT_ATOMIC_ENQUEUE                  (0x0)
+#define _COMM_PAGE_TEXT_ATOMIC_DEQUEUE                  (0x4)
+
+#else /* __LP64__ */
+/* No 32 bit text region */
+#endif /* __LP64__ */
 
 #endif /* _ARM_CPU_CAPABILITIES_H */
 #endif /* PRIVATE */

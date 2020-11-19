@@ -114,37 +114,9 @@ struct data_stats {
 	u_int64_t       txpackets;
 	u_int64_t       txbytes;
 };
-
-#define MSG_PRI_0 0     /* TCP message priority, lowest */
-#define MSG_PRI_1 1
-#define MSG_PRI_2 2
-#define MSG_PRI_3 3     /* TCP message priority, highest */
-#define MSG_PRI_MAX MSG_PRI_3
-#define MSG_PRI_MIN MSG_PRI_0
-#define MSG_PRI_COUNT 4
-#define MSG_PRI_DEFAULT MSG_PRI_1
 #endif /* PRIVATE */
 
 #ifdef KERNEL_PRIVATE
-/* State for TCP message send or receive */
-struct msg_priq {
-	struct mbuf *msgq_head; /* first mbuf in the queue */
-	struct mbuf *msgq_tail; /* last mbuf in the queue */
-	struct mbuf *msgq_lastmsg; /* last message in the queue */
-	u_int32_t msgq_flags;   /* flags per priority queue */
-#define MSGQ_MSG_NOTDONE 0x1    /* set when EOR of a msg is not seen */
-	u_int32_t msgq_bytes;   /* data bytes in this queue */
-};
-
-struct msg_state {
-	struct msg_priq msg_priq[MSG_PRI_COUNT]; /* priority queues */
-	u_int32_t msg_serial_bytes; /* bytes moved to serial queue */
-	u_int32_t msg_uno_bytes; /* out-of-order chars in rcv buffer */
-};
-
-/* mbuf flag used to indicate out of order data received */
-#define M_UNORDERED_DATA M_PROTO1
-
 /*
  * Kernel structure per socket.
  * Contains send and receive buffer queues,
@@ -227,15 +199,16 @@ struct socket {
 #define SB_NOCOMPRESS   0x1000          /* do not compress socket buffer */
 #define SB_SNDBYTE_CNT  0x2000          /* keep track of snd bytes per interface */
 #define SB_UPCALL_LOCK  0x4000          /* Keep socket locked when doing the upcall */
+#define SB_LIMITED      0x8000          /* Socket buffer size limited */
+	/* XXX Note that Unix domain socket's sb_flags is defined as short */
 	caddr_t so_tpcb;                /* Misc. protocol control block, used
 	                                 *  by some kexts */
 
-	void            (*so_event)(struct socket *, void *, u_int32_t);
+	void            (*so_event)(struct socket *, void *, long);
 	void            *so_eventarg;   /* Arg for above */
 	kauth_cred_t    so_cred;        /* cred of who opened the socket */
 	/* NB: generation count must not be first; easiest to make it last. */
 	so_gen_t so_gencnt;             /* generation count */
-	TAILQ_HEAD(, eventqelt) so_evlist;
 	STAILQ_ENTRY(socket) so_cache_ent;      /* socache entry */
 	caddr_t         so_saved_pcb;           /* Saved pcb when cacheing */
 	u_int32_t       cache_timestamp;        /* time socket was cached */
@@ -271,8 +244,6 @@ struct socket {
 #define SOF_NOTSENT_LOWAT       0x00080000 /* A different lowat on not sent
 	                                    *    data has been set */
 #define SOF_KNOTE               0x00100000 /* socket is on the EV_SOCK klist */
-#define SOF_USELRO              0x00200000 /* TCP must use LRO on these sockets */
-#define SOF_ENABLE_MSGS         0x00400000 /* TCP must enable message delivery */
 #define SOF_FLOW_DIVERT         0x00800000 /* Flow Divert is enabled */
 #define SOF_MP_SUBFLOW          0x01000000 /* is a multipath subflow socket */
 #define SOF_MP_SEC_SUBFLOW      0x04000000 /* Set up secondary flow */
@@ -283,10 +254,10 @@ struct socket {
 	uint32_t        so_upcallusecount; /* number of upcalls in progress */
 	int             so_usecount;    /* refcounting of socket use */
 	int             so_retaincnt;
-	u_int32_t       so_filteruse;   /* usecount for the socket filters */
-	u_int16_t       so_traffic_class;
+	uint32_t        so_filteruse;   /* usecount for the socket filters */
+	uint16_t        so_traffic_class;
 	int8_t          so_netsvctype;
-	u_int8_t        so_restrictions;
+	uint8_t         so_restrictions;
 	thread_t        so_send_filt_thread;
 
 	/* for debug pruposes */
@@ -307,7 +278,6 @@ struct socket {
 	struct data_stats so_tc_stats[SO_TC_STATS_MAX];
 	struct klist    so_klist;               /* klist for EV_SOCK events */
 
-	struct msg_state *so_msg_state;         /* unordered snd/rcv state */
 	struct flow_divert_pcb  *so_fd_pcb;     /* Flow Divert control block */
 
 #if CONTENT_FILTER
@@ -320,16 +290,16 @@ struct socket {
 
 	pid_t           e_pid;          /* pid of the effective owner */
 	u_int64_t       e_upid;         /* upid of the effective owner */
-#if defined(XNU_TARGET_OS_OSX)
+#if XNU_TARGET_OS_OSX
 	pid_t           so_rpid;        /* pid of the responsible process */
-#endif
+#endif /* XNU_TARGET_OS_OSX */
 
 	uuid_t          last_uuid;      /* uuid of most recent accessor */
 	uuid_t          e_uuid;         /* uuid of effective owner */
 	uuid_t          so_vuuid;       /* UUID of the Voucher originator */
-#if defined(XNU_TARGET_OS_OSX)
+#if XNU_TARGET_OS_OSX
 	uuid_t          so_ruuid;       /* UUID of the responsible process */
-#endif
+#endif /* XNU_TARGET_OS_OSX */
 
 	int32_t         so_policy_gencnt; /* UUID policy gencnt */
 
@@ -342,8 +312,7 @@ struct socket {
 #define SOF1_PRECONNECT_DATA            0x00000020 /* request for preconnect data */
 #define SOF1_EXTEND_BK_IDLE_WANTED      0x00000040 /* option set */
 #define SOF1_EXTEND_BK_IDLE_INPROG      0x00000080 /* socket */
-#define SOF1_CACHED_IN_SOCK_LAYER       0x00000100 /* bundled with inpcb and
-	                                            *  tcpcb */
+#define SOF1_CACHED_IN_SOCK_LAYER       0x00000100 /* bundled with inpcb and  tcpcb */
 #define SOF1_TFO_REWIND                 0x00000200 /* rewind mptcp meta data */
 #define SOF1_CELLFALLBACK               0x00000400 /* Initiated by cell fallback */
 #define SOF1_QOSMARKING_ALLOWED         0x00000800 /* policy allows DSCP map */
@@ -360,6 +329,8 @@ struct socket {
 #define SOF1_DNS_COUNTED                0x00400000 /* socket counted to send DNS queries */
 #define SOF1_MPKL_SEND_INFO             0x00800000 /* SO_MPKL_SEND_INFO option is set */
 #define SOF1_INBOUND                    0x01000000 /* Created via a passive listener */
+#define SOF1_WANT_KEV_SOCK_CLOSED       0x02000000 /* Want generation of KEV_SOCKET_CLOSED event */
+#define SOF1_FLOW_DIVERT_SKIP           0x04000000 /* Flow divert already declined to handle the socket */
 
 	u_int64_t       so_extended_bk_start;
 
@@ -462,7 +433,7 @@ struct  xsocket {
 	uid_t                   so_uid;         /* XXX */
 };
 
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX || !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 struct  xsocket64 {
 	u_int32_t               xso_len;        /* length of this structure */
 	u_int64_t               xso_so;         /* makes a convenient handle */
@@ -484,7 +455,7 @@ struct  xsocket64 {
 	struct xsockbuf         so_snd;
 	uid_t                   so_uid;         /* XXX */
 };
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX || !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 
 #ifdef PRIVATE
 #define XSO_SOCKET      0x001
@@ -728,7 +699,6 @@ extern int sothrottlelog;
 extern int sorestrictrecv;
 extern int sorestrictsend;
 extern int somaxconn;
-extern uint32_t tcp_do_autosendbuf;
 extern uint32_t tcp_autosndbuf_max;
 extern uint32_t tcp_autosndbuf_inc;
 extern u_int32_t sotcdb;
@@ -794,7 +764,7 @@ extern int soopt_cred_check(struct socket *so, int priv, boolean_t allow_root,
     boolean_t ignore_delegate);
 extern int soreceive(struct socket *so, struct sockaddr **paddr,
     struct uio *uio, struct mbuf **mp0, struct mbuf **controlp, int *flagsp);
-extern int soreserve(struct socket *so, u_int32_t sndcc, u_int32_t rcvcc);
+extern int soreserve(struct socket *so, uint32_t sndcc, uint32_t rcvcc);
 extern void soreserve_preconnect(struct socket *so, unsigned int pre_cc);
 extern void sorwakeup(struct socket *so);
 extern int sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
@@ -805,7 +775,7 @@ extern int sosend_list(struct socket *so, struct uio **uio, u_int uiocnt,
     int flags);
 extern int soreceive_list(struct socket *so, struct recv_msg_elem *msgarray,
     u_int msgcnt, int *flags);
-extern void sonullevent(struct socket *so, void *arg, uint32_t hint);
+extern void sonullevent(struct socket *so, void *arg, long hint);
 extern struct mbuf *sbconcat_mbufs(struct sockbuf *sb, struct sockaddr *asa, struct mbuf *m0,
     struct mbuf *control);
 
@@ -822,7 +792,7 @@ __BEGIN_DECLS
 extern void socketinit(void);
 extern struct sockaddr *dup_sockaddr(struct sockaddr *sa, int canwait);
 extern int getsock(struct filedesc *fdp, int fd, struct file **fpp);
-extern int sockargs(struct mbuf **mp, user_addr_t data, int buflen, int type);
+extern int sockargs(struct mbuf **mp, user_addr_t data, socklen_t buflen, int type);
 extern void get_sockev_state(struct socket *, u_int32_t *);
 extern void so_update_last_owner_locked(struct socket *, struct proc *);
 extern void so_update_policy(struct socket *);
@@ -834,15 +804,10 @@ extern int sbappend_nodrop(struct sockbuf *sb, struct mbuf *m);
 extern int sbappendstream(struct sockbuf *sb, struct mbuf *m);
 extern int sbappendcontrol(struct sockbuf *sb, struct mbuf *m0,
     struct mbuf *control, int *error_out);
-extern int sbappendmsgstream_rcv(struct sockbuf *sb, struct mbuf *m,
-    uint32_t seqnum, int flags);
-extern int sbappendstream_rcvdemux(struct socket *so, struct mbuf *m,
-    uint32_t seqnum, int flags);
+extern int sbappendstream_rcvdemux(struct socket *so, struct mbuf *m);
 #if MPTCP
 extern int sbappendmptcpstream_rcv(struct sockbuf *sb, struct mbuf *m);
 #endif /* MPTCP */
-extern int sbappendmsg_snd(struct sockbuf *sb, struct mbuf *m);
-extern void sbpull_unordered_data(struct socket *, int32_t, int32_t);
 extern void sbcheck(struct sockbuf *sb);
 extern void sblastmbufchk(struct sockbuf *, const char *);
 extern void sblastrecordchk(struct sockbuf *, const char *);
@@ -888,7 +853,7 @@ extern int soconnectxlocked(struct socket *so, struct sockaddr *src,
     sae_connid_t *, uint32_t, void *, u_int32_t, uio_t, user_ssize_t *);
 extern int sodisconnectx(struct socket *so, sae_associd_t, sae_connid_t);
 extern int sodisconnectxlocked(struct socket *so, sae_associd_t, sae_connid_t);
-extern void soevupcall(struct socket *, u_int32_t);
+extern void soevupcall(struct socket *so, long hint);
 /* flags for socreate_internal */
 #define SOCF_MPTCP      0x1     /* MPTCP-subflow */
 extern int socreate_internal(int dom, struct socket **aso, int type, int proto,
@@ -936,15 +901,15 @@ extern int soshutdown(struct socket *so, int how);
 extern int soshutdownlock(struct socket *so, int how);
 extern int soshutdownlock_final(struct socket *so, int how);
 extern void sotoxsocket(struct socket *so, struct xsocket *xso);
-#if !CONFIG_EMBEDDED
+#if XNU_TARGET_OS_OSX
 extern void sotoxsocket64(struct socket *so, struct xsocket64 *xso);
-#endif /* !CONFIG_EMBEDDED */
+#endif /* XNU_TARGET_OS_OSX */
 extern int sosendallatonce(struct socket *so);
 extern int soreadable(struct socket *so);
 extern int sowriteable(struct socket *so);
 extern void sowwakeup(struct socket *so);
 extern int sosendcheck(struct socket *, struct sockaddr *, user_ssize_t,
-    int32_t, int32_t, int, int *, struct mbuf *);
+    int32_t, int32_t, int, int *);
 
 extern int soo_ioctl(struct fileproc *, u_long, caddr_t, vfs_context_t);
 extern int soo_stat(struct socket *, void *, int);
@@ -974,7 +939,6 @@ extern mbuf_svc_class_t so_tc2msc(int);
 extern int so_svc2tc(mbuf_svc_class_t);
 
 extern u_int8_t tcp_cansbgrow(struct sockbuf *sb);
-extern int tcp_get_msg_priority(struct mbuf *, uint32_t *);
 extern void set_tcp_stream_priority(struct socket *so);
 
 extern int so_set_net_service_type(struct socket *, int);
@@ -993,13 +957,11 @@ extern void socket_tclass_init(void);
 extern int so_set_tcdbg(struct socket *, struct so_tcdbg *);
 extern int sogetopt_tcdbg(struct socket *, struct sockopt *);
 #endif /* (DEVELOPMENT || DEBUG) */
-extern void so_set_lro(struct socket *, int);
 
 extern int so_isdstlocal(struct socket *);
 extern void so_recv_data_stat(struct socket *, struct mbuf *, size_t);
 extern void so_inc_recv_data_stat(struct socket *, size_t, size_t, uint32_t);
 extern int so_wait_for_if_feedback(struct socket *);
-extern int msgq_sbspace(struct socket *so, struct mbuf *control);
 extern int soopt_getm(struct sockopt *sopt, struct mbuf **mp);
 extern int soopt_mcopyin(struct sockopt *sopt, struct mbuf *m);
 extern int soopt_mcopyout(struct sockopt *sopt, struct mbuf *m);
@@ -1012,15 +974,6 @@ extern void mptcp_postproc_sbdrop(struct mbuf *, u_int64_t, u_int32_t,
 
 extern void netpolicy_post_msg(uint32_t, struct netpolicy_event_data *,
     uint32_t);
-/*
- * Socket operation routines.
- * These routines are called by the routines in
- * sys_socket.c or from a system process, and
- * implement the semantics of socket operations by
- * switching out to the protocol specific routines.
- */
-extern void postevent(struct socket *, struct sockbuf *, int);
-extern void evsofree(struct socket *);
 
 extern int tcp_notsent_lowat_check(struct socket *so);
 

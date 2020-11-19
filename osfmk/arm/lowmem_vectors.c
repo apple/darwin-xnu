@@ -48,7 +48,7 @@ lowglo lowGlo __attribute__ ((aligned(PAGE_MAX_SIZE))) = {
 	// Increment the minor version for changes that provide additonal info/function
 	// but does not break current usage
 	.lgLayoutMajorVersion = 3,
-	.lgLayoutMinorVersion = 0,
+	.lgLayoutMinorVersion = 2,
 	.lgLayoutMagic = LOWGLO_LAYOUT_MAGIC,
 	.lgVersion = (uint32_t)&version,
 	.lgKmodptr = (uint32_t)&kmod,
@@ -65,10 +65,11 @@ lowglo lowGlo __attribute__ ((aligned(PAGE_MAX_SIZE))) = {
 	.lgPmapMemPageOffset = offsetof(struct vm_page_with_ppnum, vmp_phys_page),
 	.lgPmapMemChainOffset = offsetof(struct vm_page, vmp_listq),
 	.lgPmapMemPagesize = (uint32_t)sizeof(struct vm_page),
-
 	.lgPmapMemStartAddr = -1,
 	.lgPmapMemEndAddr = -1,
-	.lgPmapMemFirstppnum = -1
+	.lgPmapMemFirstppnum = -1,
+	.lgVmFirstPhys = -1,
+	.lgVmLastPhys = -1
 };
 
 void
@@ -82,8 +83,18 @@ patch_low_glo_static_region(uint32_t address, uint32_t size)
 {
 	lowGlo.lgStaticAddr = address;
 	lowGlo.lgStaticSize = size;
-}
 
+	/**
+	 * These values are set in pmap_bootstrap() and represent the range of
+	 * kernel managed memory.
+	 */
+	extern const pmap_paddr_t vm_first_phys;
+	extern const pmap_paddr_t vm_last_phys;
+	assertf((vm_first_phys != 0) && (vm_last_phys != 0),
+	    "Tried setting the Low Globals before pmap_bootstrap()");
+	lowGlo.lgVmFirstPhys = vm_first_phys;
+	lowGlo.lgVmLastPhys = vm_last_phys;
+}
 
 void
 patch_low_glo_vm_page_info(void * start_addr, void * end_addr, uint32_t first_ppnum)

@@ -1458,3 +1458,335 @@ T_DECL(iop_events_disable,
 
 	dispatch_main();
 }
+
+T_DECL(lookup_long_paths,
+	"lookup long path names")
+{
+	start_controlling_ktrace();
+
+	int ret = chdir("/tmp");
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "chdir to /tmp");
+	const char *dir = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/";
+	int i = 0;
+	do {
+		ret = mkdir(dir, S_IRUSR | S_IWUSR | S_IXUSR);
+		if (ret >= 0 || errno != EEXIST) {
+			T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "mkdir of %d nested directory",
+			    i);
+		}
+		ret = chdir(dir);
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "chdir to %d nested directory", i);
+	} while (i++ < 40);
+
+	ktrace_session_t s = ktrace_session_create();
+	ktrace_set_collection_interval(s, 250);
+	ktrace_filter_pid(s, getpid());
+	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "created session");
+	ktrace_events_single(s, VFS_LOOKUP, ^(struct trace_point *tp __unused){});
+	ktrace_set_vnode_paths_enabled(s, KTRACE_FEATURE_ENABLED);
+
+	dispatch_queue_t q = dispatch_queue_create("com.apple.kdebug-test", 0);
+
+	ktrace_set_completion_handler(s, ^{
+		dispatch_release(q);
+		T_END;
+	});
+
+	int error = ktrace_start(s, q);
+	T_ASSERT_POSIX_ZERO(error, "started tracing");
+
+	int fd = open("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", O_RDWR | O_CREAT);
+	T_ASSERT_POSIX_SUCCESS(fd, "opened file at %d directories deep", i);
+
+	sleep(5);
+
+	T_LOG("ending tracing");
+	ktrace_end(s, 0);
+	dispatch_main();
+}
+
+#pragma mark - boot tracing
+
+static const char *expected_subsystems[] = {
+	"tunables", "locks_early", "kprintf", "pmap_steal", "vm_kernel",
+	"kmem", "kmem_alloc", "zalloc",
+	/* "percpu", only has a startup phase on Intel */
+	"locks", "codesigning", "oslog", "early_boot",
+};
+#define EXPECTED_SUBSYSTEMS_LEN \
+		(sizeof(expected_subsystems) / sizeof(expected_subsystems[0]))
+
+T_DECL(early_boot_tracing, "ensure early boot strings are present",
+	T_META_BOOTARGS_SET("trace=100000"))
+{
+	T_ATEND(reset_ktrace);
+
+	T_SETUPBEGIN;
+	ktrace_session_t s = ktrace_session_create();
+	ktrace_set_collection_interval(s, 250);
+	int error = ktrace_set_use_existing(s);
+	T_ASSERT_POSIX_ZERO(error, "use existing trace buffer");
+
+#if defined(__x86_64__)
+#define FIRST_EVENT_STRING "i386_init"
+#else /* defined(__x86_64__) */
+#define FIRST_EVENT_STRING "kernel_startup_bootstrap"
+#endif /* !defined(__x86_64__) */
+
+	__block bool seen_event = false;
+	__block unsigned int cur_subsystem = 0;
+	ktrace_events_single(s, TRACE_INFO_STRING, ^(struct trace_point *tp) {
+		char early_str[33] = "";
+		size_t argsize = ktrace_is_kernel_64_bit(s) ? 8 : 4;
+		memcpy(early_str, &tp->arg1, argsize);
+		memcpy(early_str + argsize, &tp->arg2, argsize);
+		memcpy(early_str + argsize * 2, &tp->arg3, argsize);
+		memcpy(early_str + argsize * 3, &tp->arg4, argsize);
+
+		if (!seen_event) {
+			T_LOG("found first string event with args: "
+			    "0x%" PRIx64 ", 0x%" PRIx64 ", 0x%" PRIx64 ", 0x%" PRIx64,
+			    tp->arg1, tp->arg2, tp->arg3, tp->arg4);
+			char expect_str[33] = FIRST_EVENT_STRING;
+			if (!ktrace_is_kernel_64_bit(s)) {
+				// Only the first 16 bytes of the string will be traced.
+				expect_str[16] = '\0';
+			}
+
+			T_EXPECT_EQ_STR(early_str, expect_str,
+			    "first event in boot trace should be the bootstrap message");
+		}
+		seen_event = true;
+
+		if (strcmp(early_str, expected_subsystems[cur_subsystem]) == 0) {
+			T_LOG("found log for subsystem %s",
+					expected_subsystems[cur_subsystem]);
+			cur_subsystem++;
+		}
+
+		if (cur_subsystem == EXPECTED_SUBSYSTEMS_LEN) {
+			T_LOG("ending after seeing all expected logs");
+			ktrace_end(s, 1);
+		}
+	});
+
+	ktrace_set_completion_handler(s, ^{
+		T_EXPECT_TRUE(seen_event, "should see an early boot string event");
+		T_EXPECT_TRUE(cur_subsystem == EXPECTED_SUBSYSTEMS_LEN,
+				"should see logs from all subsystems");
+		if (cur_subsystem != EXPECTED_SUBSYSTEMS_LEN) {
+			T_LOG("missing log for %s", expected_subsystems[cur_subsystem]);
+		}
+		T_END;
+	});
+
+	error = ktrace_start(s, dispatch_get_main_queue());
+	T_ASSERT_POSIX_ZERO(error, "started tracing");
+
+	T_SETUPEND;
+
+	dispatch_main();
+}
+
+T_DECL(typefilter_boot_arg, "ensure typefilter is set up correctly at boot",
+	T_META_BOOTARGS_SET("trace=100000 trace_typefilter=S0x0c00,C0xfe"))
+{
+	T_ATEND(reset_ktrace);
+
+	T_SETUPBEGIN;
+	ktrace_config_t config = ktrace_config_create_current();
+	T_QUIET; T_WITH_ERRNO;
+	T_ASSERT_NOTNULL(config, "create config from current system");
+	T_SETUPEND;
+
+	T_LOG("ktrace configuration:");
+	ktrace_config_print_description(config, stdout);
+
+	uint8_t *typefilt = ktrace_config_kdebug_get_typefilter(config);
+	T_ASSERT_NOTNULL(typefilt, "typefilter is active");
+	T_EXPECT_TRUE(typefilt[0x0c00 / 8],
+			"specified subclass is set in typefilter");
+	T_MAYFAIL; // rdar://63625062 (UTD converts commas in boot-args to spaces)
+	T_EXPECT_TRUE(typefilt[0xfeed / 8],
+			"specified class is set in typefilter");
+
+	ktrace_config_destroy(config);
+}
+
+#pragma mark - events present
+
+static int recvd_sigchild = 0;
+static void
+sighandler(int sig)
+{
+	if (sig != SIGCHLD) {
+		T_ASSERT_FAIL("unexpected signal: %d", sig);
+	}
+	recvd_sigchild = 1;
+}
+
+T_DECL(instrs_and_cycles_on_proc_exit,
+		"instructions and cycles should be traced on thread exit",
+		T_META_REQUIRES_SYSCTL_EQ("kern.monotonic.supported", 1))
+{
+	T_SETUPBEGIN;
+	start_controlling_ktrace();
+	int error;
+	struct rusage_info_v4 *rusage = calloc(1, sizeof(*rusage));
+	char *args[] = { "ls", "-l", NULL, };
+	int status;
+	dispatch_queue_t q = dispatch_queue_create("com.apple.kdebug-test",
+			DISPATCH_QUEUE_SERIAL);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(signal(SIGCHLD, sighandler),
+			"register signal handler");
+
+	ktrace_session_t s = ktrace_session_create();
+	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "ktrace_session_create");
+
+	__block pid_t pid;
+	__block bool seen_event = false;
+	__block uint64_t proc_instrs = 0;
+	__block uint64_t proc_cycles = 0;
+	__block uint64_t proc_sys_time = 0;
+	__block uint64_t proc_usr_time = 0;
+	error = ktrace_events_single(s, DBG_MT_INSTRS_CYCLES_PROC_EXIT,
+			^(ktrace_event_t tp){
+		if (tp->pid == pid) {
+			seen_event = true;
+			proc_instrs = tp->arg1;
+			proc_cycles = tp->arg2;
+			proc_sys_time = tp->arg3;
+			proc_usr_time = tp->arg4;
+			ktrace_end(s, 1);
+		}
+	});
+	T_QUIET; T_WITH_ERRNO; T_ASSERT_POSIX_ZERO(error, "trace single event");
+	ktrace_set_completion_handler(s, ^{
+		// TODO Check for equality once rdar://61948669 is fixed.
+		T_ASSERT_GE(proc_instrs, rusage->ri_instructions,
+				"trace event instrs are >= to rusage instrs");
+		T_ASSERT_GE(proc_cycles, rusage->ri_cycles,
+				"trace event cycles are >= to rusage cycles");
+		T_ASSERT_GE(proc_sys_time, rusage->ri_system_time,
+				"trace event sys time is >= rusage sys time");
+		T_ASSERT_GE(proc_usr_time, rusage->ri_user_time,
+				"trace event usr time >= rusage usr time");
+		T_EXPECT_TRUE(seen_event, "should see the proc exit trace event");
+
+		free(rusage);
+		ktrace_session_destroy(s);
+		dispatch_release(q);
+		T_END;
+	});
+	error = ktrace_start(s, q);
+	T_ASSERT_POSIX_ZERO(error, "start tracing");
+	T_SETUPEND;
+
+	extern char **environ;
+	status = posix_spawnp(&pid, args[0], NULL, NULL, args, environ);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(status, "spawn process");
+	if (status == 0) {
+		while (!recvd_sigchild) {
+			pause();
+		}
+		error = proc_pid_rusage(pid, RUSAGE_INFO_V4, (rusage_info_t)rusage);
+		T_QUIET; T_ASSERT_POSIX_ZERO(error, "rusage");
+		error = waitpid(pid, &status, 0);
+		T_QUIET; T_ASSERT_POSIX_SUCCESS(error, "waitpid");
+	}
+	dispatch_main();
+}
+
+#define NO_OF_THREADS 2
+
+struct thread_counters_info {
+	uint64_t counts[2]; //cycles and/or instrs
+	uint64_t cpu_time;
+	uint64_t thread_id;
+};
+typedef struct thread_counters_info *tc_info_t;
+
+static void*
+get_thread_counters(void* ptr)
+{
+	extern int thread_selfcounts(int type, void *buf, size_t nbytes);
+	extern uint64_t __thread_selfusage(void);
+	extern uint64_t __thread_selfid(void);
+	tc_info_t tc_info = (tc_info_t) ptr;
+	tc_info->thread_id = __thread_selfid();
+	// Just to increase the instr, cycle count
+	T_LOG("printing %llu\n", tc_info->thread_id);
+	tc_info->cpu_time = __thread_selfusage();
+	thread_selfcounts(1, tc_info->counts, sizeof(tc_info->counts));
+	return NULL;
+}
+
+T_DECL(instrs_and_cycles_on_thread_exit,
+		"instructions and cycles should be traced on thread exit",
+		T_META_REQUIRES_SYSCTL_EQ("kern.monotonic.supported", 1))
+{
+	T_SETUPBEGIN;
+	start_controlling_ktrace();
+
+	int error;
+	pthread_t *threads = calloc((unsigned int)(NO_OF_THREADS),
+			sizeof(pthread_t));
+	 T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(threads, "calloc(%d threads)",
+	    NO_OF_THREADS);
+	tc_info_t tc_infos = calloc((unsigned int) (NO_OF_THREADS),
+			sizeof(struct thread_counters_info));
+	T_WITH_ERRNO; T_QUIET; T_ASSERT_NOTNULL(tc_infos,
+			"calloc(%d thread counters)", NO_OF_THREADS);
+
+	ktrace_session_t s = ktrace_session_create();
+	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(s, "ktrace_session_create");
+	ktrace_filter_pid(s, getpid());
+
+	__block int nevents = 0;
+	error = ktrace_events_single(s, DBG_MT_INSTRS_CYCLES_THR_EXIT,
+			^(ktrace_event_t tp) {
+		for (int i = 0; i < NO_OF_THREADS; i++) {
+			if (tp->threadid == tc_infos[i].thread_id) {
+				nevents++;
+				uint64_t cpu_time = tp->arg3 + tp->arg4;
+				/*
+				 * as we are getting counts before thread exit,
+				 * the counts at thread exit should be greater than
+				 * thread_selfcounts
+				 */
+				T_ASSERT_GE(tp->arg1, tc_infos[i].counts[0],
+					"trace event instrs are >= to thread's instrs");
+				T_ASSERT_GE(tp->arg2, tc_infos[i].counts[1],
+					"trace event cycles are >= to thread's cycles");
+				T_ASSERT_GE(cpu_time, tc_infos[i].cpu_time,
+					"trace event cpu time is >= thread's cpu time");
+			}
+			if (nevents == NO_OF_THREADS) {
+				ktrace_end(s, 1);
+			}
+		}
+	});
+	T_QUIET; T_ASSERT_POSIX_ZERO(error, "trace single event");
+	ktrace_set_completion_handler(s, ^{
+		T_EXPECT_EQ(NO_OF_THREADS, nevents, "seen %d thread exit trace events",
+				NO_OF_THREADS);
+		free(tc_infos);
+		ktrace_session_destroy(s);
+		T_END;
+	});
+	error = ktrace_start(s, dispatch_get_main_queue());
+	T_ASSERT_POSIX_ZERO(error, "start tracing");
+
+	for (int i = 0; i < NO_OF_THREADS; i++) {
+		error = pthread_create(&threads[i], NULL, get_thread_counters,
+				(void *)&tc_infos[i]);
+		T_QUIET; T_ASSERT_POSIX_ZERO(error, "pthread_create thread %d", i);
+	}
+	T_SETUPEND;
+	for (int i = 0; i < NO_OF_THREADS; i++) {
+		error = pthread_join(threads[i], NULL);
+		T_QUIET; T_EXPECT_POSIX_ZERO(error, "pthread_join thread %d", i);
+	}
+
+	dispatch_main();
+}

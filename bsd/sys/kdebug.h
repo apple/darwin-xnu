@@ -144,8 +144,10 @@ __BEGIN_DECLS
 
 /* **** The Kernel Debug Sub Classes for Mach (DBG_MACH) **** */
 #define DBG_MACH_EXCP_KTRAP_x86 0x02 /* Kernel Traps on x86 */
-#define DBG_MACH_EXCP_DFLT      0x03 /* Data Translation Fault */
-#define DBG_MACH_EXCP_IFLT      0x04 /* Inst Translation Fault */
+#define DBG_MACH_EXCP_DFLT      0x03 /* deprecated name */
+#define DBG_MACH_EXCP_SYNC_ARM  0x03 /* arm/arm64 synchronous exception */
+#define DBG_MACH_EXCP_IFLT      0x04 /* deprecated name */
+#define DBG_MACH_EXCP_SERR_ARM  0x04 /* arm/arm64 SError (async) exception */
 #define DBG_MACH_EXCP_INTR      0x05 /* Interrupts */
 #define DBG_MACH_EXCP_ALNG      0x06 /* Alignment Exception */
 #define DBG_MACH_EXCP_UTRAP_x86 0x07 /* User Traps on x86 */
@@ -179,6 +181,7 @@ __BEGIN_DECLS
 #define DBG_MACH_SHAREDREGION   0xA8 /* Shared region */
 #define DBG_MACH_SCHED_CLUTCH   0xA9 /* Clutch scheduler */
 #define DBG_MACH_IO             0xAA /* I/O */
+#define DBG_MACH_WORKGROUP      0xAB /* Workgroup subsystem */
 
 /* Codes for DBG_MACH_IO */
 #define DBC_MACH_IO_MMIO_READ           0x1
@@ -253,14 +256,34 @@ __BEGIN_DECLS
 #define MACH_QUIESCENT_COUNTER     0x38 /* quiescent counter tick */
 #define MACH_TURNSTILE_USER_CHANGE 0x39 /* base priority change because of turnstile */
 #define MACH_AMP_RECOMMENDATION_CHANGE 0x3a /* Thread group recommendation change */
+#define MACH_AMP_PERFCTL_POLICY_CHANGE 0x3b /* AMP policy for perfctl cluster recommendation */
 #define MACH_TURNSTILE_KERNEL_CHANGE 0x40 /* sched priority change because of turnstile */
+#define MACH_SCHED_WI_AUTO_JOIN      0x41 /* work interval auto join events */
+#define MACH_SCHED_WI_DEFERRED_FINISH 0x42 /* work interval pending finish events for auto-join thread groups */
+#define MACH_PSET_AVG_EXEC_TIME    0x50
 
-/* Codes for Clutch Scheduler (DBG_MACH_SCHED_CLUTCH) */
-#define MACH_SCHED_CLUTCH_ROOT_BUCKET_STATE     0x0
-#define MACH_SCHED_CLUTCH_TG_BUCKET_STATE       0x1
-#define MACH_SCHED_CLUTCH_THREAD_SELECT         0x2
-#define MACH_SCHED_CLUTCH_THREAD_STATE          0x3
-#define MACH_SCHED_CLUTCH_TG_BUCKET_PRI         0x4
+/* Codes for Clutch/Edge Scheduler (DBG_MACH_SCHED_CLUTCH) */
+#define MACH_SCHED_CLUTCH_ROOT_BUCKET_STATE     0x0 /* __unused */
+#define MACH_SCHED_CLUTCH_TG_BUCKET_STATE       0x1 /* __unused */
+#define MACH_SCHED_CLUTCH_THREAD_SELECT         0x2 /* Thread selection events for Clutch scheduler */
+#define MACH_SCHED_CLUTCH_THREAD_STATE          0x3 /* __unused */
+#define MACH_SCHED_CLUTCH_TG_BUCKET_PRI         0x4 /* Clutch bucket priority update event */
+/* Edge Scheduler Tracepoints */
+#define MACH_SCHED_EDGE_CLUSTER_OVERLOAD        0x5 /* Cluster experienced overload; migrating threads to other clusters */
+#define MACH_SCHED_EDGE_STEAL                   0x6 /* Per-cluster avg. thread execution time */
+#define MACH_SCHED_EDGE_REBAL_RUNNABLE          0x7 /* Rebalance runnable threads on a foreign cluster */
+#define MACH_SCHED_EDGE_REBAL_RUNNING           0x8 /* Rebalance running threads on a foreign cluster */
+#define MACH_SCHED_EDGE_SHOULD_YIELD            0x9 /* Edge decisions for thread yield */
+#define MACH_SCHED_CLUTCH_THR_COUNT             0xa /* Clutch scheduler runnable thread counts */
+#define MACH_SCHED_EDGE_LOAD_AVG                0xb /* Per-cluster load average */
+
+/* Codes for workgroup interval subsystem (DBG_MACH_WORKGROUP) */
+#define WORKGROUP_INTERVAL_CREATE               0x0 /* work interval creation */
+#define WORKGROUP_INTERVAL_DESTROY              0x1 /* work interval destruction */
+#define WORKGROUP_INTERVAL_CHANGE               0x2 /* thread work interval change */
+#define WORKGROUP_INTERVAL_START                0x3 /* work interval start call */
+#define WORKGROUP_INTERVAL_UPDATE               0x4 /* work interval update call */
+#define WORKGROUP_INTERVAL_FINISH               0x5 /* work interval finish call */
 
 /* Variants for MACH_MULTIQ_DEQUEUE */
 #define MACH_MULTIQ_BOUND     1
@@ -268,16 +291,17 @@ __BEGIN_DECLS
 #define MACH_MULTIQ_GLOBAL    3
 
 /* Arguments for vm_fault (DBG_MACH_VM) */
-#define DBG_ZERO_FILL_FAULT   1
-#define DBG_PAGEIN_FAULT      2
-#define DBG_COW_FAULT         3
-#define DBG_CACHE_HIT_FAULT   4
-#define DBG_NZF_PAGE_FAULT    5
-#define DBG_GUARD_FAULT       6
-#define DBG_PAGEINV_FAULT     7
-#define DBG_PAGEIND_FAULT     8
-#define DBG_COMPRESSOR_FAULT  9
+#define DBG_ZERO_FILL_FAULT           1
+#define DBG_PAGEIN_FAULT              2
+#define DBG_COW_FAULT                 3
+#define DBG_CACHE_HIT_FAULT           4
+#define DBG_NZF_PAGE_FAULT            5
+#define DBG_GUARD_FAULT               6
+#define DBG_PAGEINV_FAULT             7
+#define DBG_PAGEIND_FAULT             8
+#define DBG_COMPRESSOR_FAULT          9
 #define DBG_COMPRESSOR_SWAPIN_FAULT  10
+#define DBG_COR_FAULT                11
 
 /* Codes for IPC (DBG_MACH_IPC) */
 #define MACH_TASK_SUSPEND                       0x0     /* Suspended a task */
@@ -302,6 +326,7 @@ __BEGIN_DECLS
 #define MACH_THREAD_GROUP_NAME          0x3
 #define MACH_THREAD_GROUP_NAME_FREE     0x4
 #define MACH_THREAD_GROUP_FLAGS         0x5
+#define MACH_THREAD_GROUP_BLOCK         0x6
 
 /* Codes for coalitions (DBG_MACH_COALITION) */
 #define MACH_COALITION_NEW                      0x0
@@ -333,6 +358,8 @@ __BEGIN_DECLS
 #define PMAP__TTE               0x13
 #define PMAP__SWITCH_USER_TTB   0x14
 #define PMAP__UPDATE_CACHING    0x15
+#define PMAP__ATTRIBUTE_CLEAR_RANGE 0x16
+#define PMAP__CLEAR_USER_TTB    0x17
 
 /* Codes for clock (DBG_MACH_CLOCK) */
 #define MACH_EPOCH_CHANGE       0x0     /* wake epoch change */
@@ -641,8 +668,16 @@ __BEGIN_DECLS
 /* The Kernel Debug Sub Classes for DBG_MONOTONIC */
 #define DBG_MT_INSTRS_CYCLES 1
 #define DBG_MT_DEBUG 2
+#define DBG_MT_RESOURCES_PROC_EXIT 3
+#define DBG_MT_RESOURCES_THR_EXIT 4
 #define DBG_MT_TMPTH 0xfe
 #define DBG_MT_TMPCPU 0xff
+
+/* Kernel Debug events for the DBG_MT_RESOURCES_PROC_EXIT subclass */
+#define DBG_MT_INSTRS_CYCLES_PROC_EXIT MTDBG_RESOURCES_ON_PROC_EXIT(0)
+
+/* Kernel Debug events for the DBG_MT_RESOURCES_THR_EXIT subclass */
+#define DBG_MT_INSTRS_CYCLES_THR_EXIT  MTDBG_RESOURCES_ON_THR_EXIT(0)
 
 /* The Kernel Debug Sub Classes for DBG_MISC */
 #define DBG_MISC_COREBRIGHTNESS 0x01
@@ -672,6 +707,8 @@ __BEGIN_DECLS
 #define DBG_DYLD_UUID_SHARED_CACHE_32_A (12)
 #define DBG_DYLD_UUID_SHARED_CACHE_32_B (13)
 #define DBG_DYLD_UUID_SHARED_CACHE_32_C (14)
+#define DBG_DYLD_AOT_UUID_MAP_A         (15)
+#define DBG_DYLD_AOT_UUID_MAP_B         (16)
 
 /* The Kernel Debug modifiers for the DBG_DKRW sub class */
 #define DKIO_DONE       0x01
@@ -729,7 +766,7 @@ __BEGIN_DECLS
 
 /* task only attributes */
 #define IMP_TASK_POLICY_DARWIN_BG_IOPOL     0x27
-#define IMP_TASK_POLICY_TAL                 0x28
+/* unused, was IMP_TASK_POLICY_TAL          0x28 */
 #define IMP_TASK_POLICY_BOOST               0x29
 #define IMP_TASK_POLICY_ROLE                0x2A
 /* unused                                   0x2B */
@@ -870,6 +907,9 @@ __BEGIN_DECLS
 #define ARIADNEDBG_CODE(SubClass, code) KDBG_CODE(DBG_ARIADNE, SubClass, code)
 #define DAEMONDBG_CODE(SubClass, code) KDBG_CODE(DBG_DAEMON, SubClass, code)
 #define CPUPM_CODE(code) IOKDBG_CODE(DBG_IOCPUPM, code)
+#define MTDBG_CODE(SubClass, code) KDBG_CODE(DBG_MONOTONIC, SubClass, code)
+#define MTDBG_RESOURCES_ON_PROC_EXIT(code) MTDBG_CODE(DBG_MT_RESOURCES_PROC_EXIT, code)
+#define MTDBG_RESOURCES_ON_THR_EXIT(code) MTDBG_CODE(DBG_MT_RESOURCES_THR_EXIT, code)
 
 #define KMEM_ALLOC_CODE MACHDBG_CODE(DBG_MACH_LEAKS, 0)
 #define KMEM_ALLOC_CODE_2 MACHDBG_CODE(DBG_MACH_LEAKS, 1)

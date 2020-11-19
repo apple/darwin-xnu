@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2013 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -131,15 +131,15 @@ proto_register_input(protocol_family_t protocol, proto_input_handler input,
 
 	entry->domain = dp;
 
-	lck_mtx_lock(&inp->input_lck);
+	lck_mtx_lock(&inp->dlth_lock);
 	entry->next = proto_input_add_list;
 	proto_input_add_list = entry;
 
-	inp->input_waiting |= DLIL_PROTO_REGISTER;
-	if ((inp->input_waiting & DLIL_INPUT_RUNNING) == 0) {
-		wakeup((caddr_t)&inp->input_waiting);
+	inp->dlth_flags |= DLIL_PROTO_REGISTER;
+	if ((inp->dlth_flags & DLIL_INPUT_RUNNING) == 0) {
+		wakeup((caddr_t)&inp->dlth_flags);
 	}
-	lck_mtx_unlock(&inp->input_lck);
+	lck_mtx_unlock(&inp->dlth_lock);
 
 	return 0;
 }
@@ -201,14 +201,14 @@ proto_input_run(void)
 	mbuf_t packet_list;
 	int i, locked = 0;
 
-	LCK_MTX_ASSERT(&inp->input_lck, LCK_MTX_ASSERT_NOTOWNED);
+	LCK_MTX_ASSERT(&inp->dlth_lock, LCK_MTX_ASSERT_NOTOWNED);
 
-	if (inp->input_waiting & DLIL_PROTO_REGISTER) {
-		lck_mtx_lock_spin(&inp->input_lck);
+	if (inp->dlth_flags & DLIL_PROTO_REGISTER) {
+		lck_mtx_lock_spin(&inp->dlth_lock);
 		entry = proto_input_add_list;
 		proto_input_add_list = NULL;
-		inp->input_waiting &= ~DLIL_PROTO_REGISTER;
-		lck_mtx_unlock(&inp->input_lck);
+		inp->dlth_flags &= ~DLIL_PROTO_REGISTER;
+		lck_mtx_unlock(&inp->dlth_lock);
 		proto_delayed_attach(entry);
 	}
 
@@ -220,8 +220,8 @@ proto_input_run(void)
 		for (entry = proto_hash[i];
 		    entry != NULL && proto_total_waiting; entry = entry->next) {
 			if (entry->inject_first != NULL) {
-				lck_mtx_lock_spin(&inp->input_lck);
-				inp->input_waiting &= ~DLIL_PROTO_WAITING;
+				lck_mtx_lock_spin(&inp->dlth_lock);
+				inp->dlth_flags &= ~DLIL_PROTO_WAITING;
 
 				packet_list = entry->inject_first;
 
@@ -229,7 +229,7 @@ proto_input_run(void)
 				entry->inject_last = NULL;
 				proto_total_waiting--;
 
-				lck_mtx_unlock(&inp->input_lck);
+				lck_mtx_unlock(&inp->dlth_lock);
 
 				if (entry->domain != NULL && !(entry->domain->
 				    dom_flags & DOM_REENTRANT)) {
@@ -324,19 +324,19 @@ proto_inject(protocol_family_t protocol, mbuf_t packet_list)
 	}
 
 	if (entry != NULL) {
-		lck_mtx_lock(&inp->input_lck);
+		lck_mtx_lock(&inp->dlth_lock);
 		if (entry->inject_first == NULL) {
 			proto_total_waiting++;
-			inp->input_waiting |= DLIL_PROTO_WAITING;
+			inp->dlth_flags |= DLIL_PROTO_WAITING;
 			entry->inject_first = packet_list;
 		} else {
 			mbuf_setnextpkt(entry->inject_last, packet_list);
 		}
 		entry->inject_last = last_packet;
-		if ((inp->input_waiting & DLIL_INPUT_RUNNING) == 0) {
-			wakeup((caddr_t)&inp->input_waiting);
+		if ((inp->dlth_flags & DLIL_INPUT_RUNNING) == 0) {
+			wakeup((caddr_t)&inp->dlth_flags);
 		}
-		lck_mtx_unlock(&inp->input_lck);
+		lck_mtx_unlock(&inp->dlth_lock);
 	} else {
 		return ENOENT;
 	}

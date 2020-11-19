@@ -44,6 +44,7 @@ __BEGIN_DECLS
 #include <kern/clock.h>
 __END_DECLS
 
+#include <libkern/c++/OSPtr.h>
 #include <IOKit/IOEventSource.h>
 #include <IOKit/IOTypes.h>
 
@@ -160,7 +161,7 @@ public:
 	typedef void (^ActionBlock)(IOTimerEventSource *sender);
 #endif /* __BLOCKS__ */
 
-	static IOTimerEventSource *
+	static OSPtr<IOTimerEventSource>
 	timerEventSource(OSObject *owner, Action action = NULL);
 
 /*! @function timerEventSource
@@ -169,7 +170,7 @@ public:
  *   @param owner The object that that will be passed to the Action callback.
  *   @param action 'C' Function pointer for the callout routine of this event source.
  */
-	static IOTimerEventSource *
+	static OSPtr<IOTimerEventSource>
 	timerEventSource(uint32_t options, OSObject *owner, Action action = NULL);
 
 #ifdef __BLOCKS__
@@ -179,12 +180,12 @@ public:
  *   @param inOwner The object that that will be passed to the Action callback.
  *   @param action Block for the callout routine of this event source.
  */
-	static IOTimerEventSource *
+	static OSPtr<IOTimerEventSource>
 	timerEventSource(uint32_t options, OSObject *inOwner, ActionBlock action);
 #endif /* __BLOCKS__ */
 
 #if XNU_KERNEL_PRIVATE
-	__inline__ void invokeAction(IOTimerEventSource::Action action, IOTimerEventSource * ts,
+	__inline__ void invokeAction(IOEventSource::Action action, IOTimerEventSource * ts,
 	    OSObject * owner, IOWorkLoop * workLoop);
 #endif /* XNU_KERNEL_PRIVATE */
 
@@ -316,9 +317,9 @@ private:
 	static void timeoutSignaled(void *self, void *c);
 
 private:
-	OSMetaClassDeclareReservedUsed(IOTimerEventSource, 0);
-	OSMetaClassDeclareReservedUsed(IOTimerEventSource, 1);
-	OSMetaClassDeclareReservedUsed(IOTimerEventSource, 2);
+	OSMetaClassDeclareReservedUsedX86(IOTimerEventSource, 0);
+	OSMetaClassDeclareReservedUsedX86(IOTimerEventSource, 1);
+	OSMetaClassDeclareReservedUsedX86(IOTimerEventSource, 2);
 	OSMetaClassDeclareReservedUnused(IOTimerEventSource, 3);
 	OSMetaClassDeclareReservedUnused(IOTimerEventSource, 4);
 	OSMetaClassDeclareReservedUnused(IOTimerEventSource, 5);

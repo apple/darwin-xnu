@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -116,7 +116,7 @@ imf_graft(struct in_mfilter *, const uint8_t,
 static int      imf_prune(struct in_mfilter *, const struct sockaddr_in *);
 static void     imf_rollback(struct in_mfilter *);
 static void     imf_reap(struct in_mfilter *);
-static int      imo_grow(struct ip_moptions *, size_t);
+static int      imo_grow(struct ip_moptions *, uint16_t);
 static size_t   imo_match_group(const struct ip_moptions *,
     const struct ifnet *, const struct sockaddr_in *);
 static struct in_msource *
@@ -153,9 +153,9 @@ static u_long in_mcast_maxgrpsrc = IP_MAX_GROUP_SRC_FILTER;
 SYSCTL_LONG(_net_inet_ip_mcast, OID_AUTO, maxgrpsrc,
     CTLFLAG_RW | CTLFLAG_LOCKED, &in_mcast_maxgrpsrc, "Max source filters per group");
 
-static u_long in_mcast_maxsocksrc = IP_MAX_SOCK_SRC_FILTER;
-SYSCTL_LONG(_net_inet_ip_mcast, OID_AUTO, maxsocksrc,
-    CTLFLAG_RW | CTLFLAG_LOCKED, &in_mcast_maxsocksrc,
+static u_int in_mcast_maxsocksrc = IP_MAX_SOCK_SRC_FILTER;
+SYSCTL_UINT(_net_inet_ip_mcast, OID_AUTO, maxsocksrc,
+    CTLFLAG_RW | CTLFLAG_LOCKED, &in_mcast_maxsocksrc, IP_MAX_SOCK_SRC_FILTER,
     "Max source filters per socket");
 
 int in_mcast_loop = IP_DEFAULT_MULTICAST_LOOP;
@@ -192,28 +192,19 @@ struct in_multi_dbg {
 static TAILQ_HEAD(, in_multi_dbg) inm_trash_head;
 static decl_lck_mtx_data(, inm_trash_lock);
 
-#define INM_ZONE_MAX            64              /* maximum elements in zone */
-#define INM_ZONE_NAME           "in_multi"      /* zone name */
 
 #if DEBUG
 static unsigned int inm_debug = 1;              /* debugging (enabled) */
 #else
 static unsigned int inm_debug;                  /* debugging (disabled) */
 #endif /* !DEBUG */
-static unsigned int inm_size;                   /* size of zone element */
+#define INM_ZONE_NAME           "in_multi"      /* zone name */
 static struct zone *inm_zone;                   /* zone for in_multi */
 
-#define IPMS_ZONE_MAX           64              /* maximum elements in zone */
-#define IPMS_ZONE_NAME          "ip_msource"    /* zone name */
-
-static unsigned int ipms_size;                  /* size of zone element */
-static struct zone *ipms_zone;                  /* zone for ip_msource */
-
-#define INMS_ZONE_MAX           64              /* maximum elements in zone */
-#define INMS_ZONE_NAME          "in_msource"    /* zone name */
-
-static unsigned int inms_size;                  /* size of zone element */
-static struct zone *inms_zone;                  /* zone for in_msource */
+static ZONE_DECLARE(ipms_zone, "ip_msource", sizeof(struct ip_msource),
+    ZC_ZFREE_CLEARMEM);
+static ZONE_DECLARE(inms_zone, "in_msource", sizeof(struct in_msource),
+    ZC_ZFREE_CLEARMEM);
 
 /* Lock group and attribute for in_multihead_lock lock */
 static lck_attr_t       *in_multihead_lock_attr;
@@ -223,14 +214,14 @@ static lck_grp_attr_t   *in_multihead_lock_grp_attr;
 static decl_lck_rw_data(, in_multihead_lock);
 struct in_multihead in_multihead;
 
-static struct in_multi *in_multi_alloc(int);
+static struct in_multi *in_multi_alloc(zalloc_flags_t);
 static void in_multi_free(struct in_multi *);
 static void in_multi_attach(struct in_multi *);
 static void inm_trace(struct in_multi *, int);
 
-static struct ip_msource *ipms_alloc(int);
+static struct ip_msource *ipms_alloc(zalloc_flags_t);
 static void ipms_free(struct ip_msource *);
-static struct in_msource *inms_alloc(int);
+static struct in_msource *inms_alloc(zalloc_flags_t);
 static void inms_free(struct in_msource *);
 
 static __inline int
@@ -262,7 +253,7 @@ inm_is_ifp_detached(const struct in_multi *inm)
  * with an empty source filter list.
  */
 static __inline__ void
-imf_init(struct in_mfilter *imf, const int st0, const int st1)
+imf_init(struct in_mfilter *imf, const uint8_t st0, const uint8_t st1)
 {
 	memset(imf, 0, sizeof(struct in_mfilter));
 	RB_INIT(&imf->imf_sources);
@@ -274,14 +265,14 @@ imf_init(struct in_mfilter *imf, const int st0, const int st1)
  * Resize the ip_moptions vector to the next power-of-two minus 1.
  */
 static int
-imo_grow(struct ip_moptions *imo, size_t newmax)
+imo_grow(struct ip_moptions *imo, uint16_t newmax)
 {
 	struct in_multi         **nmships;
 	struct in_multi         **omships;
 	struct in_mfilter        *nmfilters;
 	struct in_mfilter        *omfilters;
-	size_t                    idx;
-	size_t                    oldmax;
+	uint16_t                  idx;
+	uint16_t                  oldmax;
 
 	IMO_LOCK_ASSERT_HELD(imo);
 
@@ -629,12 +620,8 @@ in_getmulti(struct ifnet *ifp, const struct in_addr *group,
 	 *
 	 * The initial source filter state is INCLUDE, {} as per the RFC.
 	 */
-	inm = in_multi_alloc(M_WAITOK);
-	if (inm == NULL) {
-		in_multihead_lock_done();
-		IFMA_REMREF(ifma);
-		return ENOMEM;
-	}
+	inm = in_multi_alloc(Z_WAITOK);
+
 	INM_LOCK(inm);
 	inm->inm_addr = *group;
 	inm->inm_ifp = ifp;
@@ -721,10 +708,7 @@ inm_record_source(struct in_multi *inm, const in_addr_t naddr)
 		if (inm->inm_nsrc == in_mcast_maxgrpsrc) {
 			return -ENOSPC;
 		}
-		nims = ipms_alloc(M_WAITOK);
-		if (nims == NULL) {
-			return -ENOMEM;
-		}
+		nims = ipms_alloc(Z_WAITOK);
 		nims->ims_haddr = find.ims_haddr;
 		RB_INSERT(ip_msource_tree, &inm->inm_srcs, nims);
 		++inm->inm_nsrc;
@@ -773,10 +757,7 @@ imf_get_source(struct in_mfilter *imf, const struct sockaddr_in *psin,
 		if (imf->imf_nsrc == in_mcast_maxsocksrc) {
 			return ENOSPC;
 		}
-		lims = inms_alloc(M_WAITOK);
-		if (lims == NULL) {
-			return ENOMEM;
-		}
+		lims = inms_alloc(Z_WAITOK);
 		lims->ims_haddr = find.ims_haddr;
 		lims->imsl_st[0] = MCAST_UNDEFINED;
 		RB_INSERT(ip_msource_tree, &imf->imf_sources,
@@ -805,10 +786,7 @@ imf_graft(struct in_mfilter *imf, const uint8_t st1,
 {
 	struct in_msource       *lims;
 
-	lims = inms_alloc(M_WAITOK);
-	if (lims == NULL) {
-		return NULL;
-	}
+	lims = inms_alloc(Z_WAITOK);
 	lims->ims_haddr = ntohl(psin->sin_addr.s_addr);
 	lims->imsl_st[0] = MCAST_UNDEFINED;
 	lims->imsl_st[1] = st1;
@@ -989,10 +967,7 @@ inm_get_source(struct in_multi *inm, const in_addr_t haddr,
 		if (inm->inm_nsrc == in_mcast_maxgrpsrc) {
 			return ENOSPC;
 		}
-		nims = ipms_alloc(M_WAITOK);
-		if (nims == NULL) {
-			return ENOMEM;
-		}
+		nims = ipms_alloc(Z_WAITOK);
 		nims->ims_haddr = haddr;
 		RB_INSERT(ip_msource_tree, &inm->inm_srcs, nims);
 		++inm->inm_nsrc;
@@ -1485,7 +1460,7 @@ inp_block_unblock_source(struct inpcb *inp, struct sockopt *sopt)
 	struct in_msource               *ims;
 	struct in_multi                 *inm;
 	size_t                           idx;
-	uint16_t                         fmode;
+	uint8_t                          fmode;
 	int                              error, doblock;
 	unsigned int                     ifindex = 0;
 	struct igmp_tparams              itp;
@@ -1703,7 +1678,7 @@ inp_findmoptions(struct inpcb *inp)
 		return imo;
 	}
 
-	imo = ip_allocmoptions(M_WAITOK);
+	imo = ip_allocmoptions(Z_WAITOK);
 	if (imo == NULL) {
 		return NULL;
 	}
@@ -1727,7 +1702,7 @@ inp_findmoptions(struct inpcb *inp)
 	imo->imo_multicast_addr.s_addr = INADDR_ANY;
 	imo->imo_multicast_vif = -1;
 	imo->imo_multicast_ttl = IP_DEFAULT_MULTICAST_TTL;
-	imo->imo_multicast_loop = in_mcast_loop;
+	imo->imo_multicast_loop = !!in_mcast_loop;
 	imo->imo_num_memberships = 0;
 	imo->imo_max_memberships = IP_MIN_MEMBERSHIPS;
 	imo->imo_membership = immp;
@@ -1761,7 +1736,8 @@ inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	struct sockaddr_storage *ptss;
 	struct sockaddr_storage *tss;
 	int                      error;
-	size_t                   idx, nsrcs, ncsrcs;
+	size_t                   idx;
+	uint32_t                 nsrcs, ncsrcs;
 	user_addr_t              tmp_ptr;
 
 	imo = inp->inp_moptions;
@@ -1840,7 +1816,7 @@ inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	 */
 
 	if (IS_64BIT_PROCESS(current_proc())) {
-		tmp_ptr = msfr64.msfr_srcs;
+		tmp_ptr = CAST_USER_ADDR_T(msfr64.msfr_srcs);
 	} else {
 		tmp_ptr = CAST_USER_ADDR_T(msfr32.msfr_srcs);
 	}
@@ -1883,7 +1859,7 @@ inp_get_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	IMO_UNLOCK(imo);
 
 	if (tss != NULL) {
-		error = copyout(tss, tmp_ptr, ncsrcs * sizeof(*tss));
+		error = copyout(tss, CAST_USER_ADDR_T(tmp_ptr), ncsrcs * sizeof(*tss));
 		FREE(tss, M_TEMP);
 		if (error) {
 			return error;
@@ -2812,7 +2788,7 @@ inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	struct in_multi         *inm;
 	size_t                   idx;
 	int                      error;
-	user_addr_t              tmp_ptr;
+	uint64_t                 tmp_ptr;
 	struct igmp_tparams      itp;
 
 	bzero(&itp, sizeof(itp));
@@ -2896,7 +2872,7 @@ inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 	 * Begin state merge transaction at socket layer.
 	 */
 
-	imf->imf_st[1] = msfr.msfr_fmode;
+	imf->imf_st[1] = (uint8_t)msfr.msfr_fmode;
 
 	/*
 	 * Apply any new source filters, if present.
@@ -2924,7 +2900,7 @@ inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 			error = ENOMEM;
 			goto out_imo_locked;
 		}
-		error = copyin(tmp_ptr, kss,
+		error = copyin(CAST_USER_ADDR_T(tmp_ptr), kss,
 		    (size_t) msfr.msfr_nsrcs * sizeof(*kss));
 		if (error) {
 			FREE(kss, M_TEMP);
@@ -2937,7 +2913,7 @@ inp_set_source_filters(struct inpcb *inp, struct sockopt *sopt)
 		 * will set it to INCLUDE.
 		 */
 		imf_leave(imf);
-		imf->imf_st[1] = msfr.msfr_fmode;
+		imf->imf_st[1] = (uint8_t)msfr.msfr_fmode;
 
 		/*
 		 * Update socket layer filters at t1, lazy-allocating
@@ -3379,43 +3355,18 @@ in_multi_init(void)
 	    in_multihead_lock_attr);
 	TAILQ_INIT(&inm_trash_head);
 
-	inm_size = (inm_debug == 0) ? sizeof(struct in_multi) :
+	vm_size_t inm_size = (inm_debug == 0) ? sizeof(struct in_multi) :
 	    sizeof(struct in_multi_dbg);
-	inm_zone = zinit(inm_size, INM_ZONE_MAX * inm_size,
-	    0, INM_ZONE_NAME);
-	if (inm_zone == NULL) {
-		panic("%s: failed allocating %s", __func__, INM_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(inm_zone, Z_EXPAND, TRUE);
-
-	ipms_size = sizeof(struct ip_msource);
-	ipms_zone = zinit(ipms_size, IPMS_ZONE_MAX * ipms_size,
-	    0, IPMS_ZONE_NAME);
-	if (ipms_zone == NULL) {
-		panic("%s: failed allocating %s", __func__, IPMS_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(ipms_zone, Z_EXPAND, TRUE);
-
-	inms_size = sizeof(struct in_msource);
-	inms_zone = zinit(inms_size, INMS_ZONE_MAX * inms_size,
-	    0, INMS_ZONE_NAME);
-	if (inms_zone == NULL) {
-		panic("%s: failed allocating %s", __func__, INMS_ZONE_NAME);
-		/* NOTREACHED */
-	}
-	zone_change(inms_zone, Z_EXPAND, TRUE);
+	inm_zone = zone_create(INM_ZONE_NAME, inm_size, ZC_ZFREE_CLEARMEM);
 }
 
 static struct in_multi *
-in_multi_alloc(int how)
+in_multi_alloc(zalloc_flags_t how)
 {
 	struct in_multi *inm;
 
-	inm = (how == M_WAITOK) ? zalloc(inm_zone) : zalloc_noblock(inm_zone);
+	inm = zalloc_flags(inm_zone, how | Z_ZERO);
 	if (inm != NULL) {
-		bzero(inm, inm_size);
 		lck_mtx_init(&inm->inm_lock, in_multihead_lock_grp,
 		    in_multihead_lock_attr);
 		inm->inm_debug |= IFD_ALLOC;
@@ -3695,16 +3646,9 @@ in_multihead_lock_done(void)
 }
 
 static struct ip_msource *
-ipms_alloc(int how)
+ipms_alloc(zalloc_flags_t how)
 {
-	struct ip_msource *ims;
-
-	ims = (how == M_WAITOK) ? zalloc(ipms_zone) : zalloc_noblock(ipms_zone);
-	if (ims != NULL) {
-		bzero(ims, ipms_size);
-	}
-
-	return ims;
+	return zalloc_flags(ipms_zone, how | Z_ZERO);
 }
 
 static void
@@ -3714,17 +3658,9 @@ ipms_free(struct ip_msource *ims)
 }
 
 static struct in_msource *
-inms_alloc(int how)
+inms_alloc(zalloc_flags_t how)
 {
-	struct in_msource *inms;
-
-	inms = (how == M_WAITOK) ? zalloc(inms_zone) :
-	    zalloc_noblock(inms_zone);
-	if (inms != NULL) {
-		bzero(inms, inms_size);
-	}
-
-	return inms;
+	return zalloc_flags(inms_zone, how | Z_ZERO);
 }
 
 static void

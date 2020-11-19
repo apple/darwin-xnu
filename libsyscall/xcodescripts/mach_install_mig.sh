@@ -46,27 +46,19 @@ MIG_PRIVATE_DEFS_INCFLAGS="-I${SDKROOT}/${SDK_INSTALL_HEADERS_ROOT}/System/Libra
 SRC="$SRCROOT/mach"
 FILTER_MIG="$SRCROOT/xcodescripts/filter_mig.awk"
 
-# from old Libsystem makefiles
-MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 1`
-if [[ ( "$MACHINE_ARCH" =~ ^"arm64" || "$MACHINE_ARCH" =~ ^"x86_64" ) && `echo $ARCHS | wc -w` -gt 1 ]]
-then
-	# MACHINE_ARCH needs to be a 32-bit arch to generate vm_map_internal.h correctly.
-	MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 2`
-	if [[ ( "$MACHINE_ARCH" =~ ^"arm64" || "$MACHINE_ARCH" =~ ^"x86_64" ) && `echo $ARCHS | wc -w` -gt 2 ]]
-	then
-		# MACHINE_ARCH needs to be a 32-bit arch to generate vm_map_internal.h correctly.
-		MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 3`
-	fi
-fi
 # MACHINE_ARCH *really* needs to be a 32-bit arch to generate vm_map_internal.h correctly, even if there are no 32-bit targets.
-if [[ ( "$MACHINE_ARCH" =~ ^"arm64" ) ]]
-then
-	MACHINE_ARCH="armv7"
-fi
-if [[ ( "$MACHINE_ARCH" =~ ^"x86_64" ) ]]
-then
-	MACHINE_ARCH="i386"
-fi
+# thread_state_t *really* needs to pick up arm64 over intel because it has a larger struct type.
+case "$ARCHS" in
+*arm64*)
+    MACHINE_ARCH=armv7
+    ;;
+*x86_64*)
+    MACHINE_ARCH=i386
+    ;;
+*)
+    MACHINE_ARCH=`echo $ARCHS | cut -d' ' -f 1`
+    ;;
+esac
 
 ASROOT=""
 if [ `whoami` = "root" ]; then
@@ -80,6 +72,7 @@ MIGS="clock.defs
 	host_priv.defs
 	host_security.defs
 	lock_set.defs
+	mach_eventlink.defs
 	mach_host.defs
 	mach_port.defs
 	mach_voucher.defs

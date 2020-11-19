@@ -73,8 +73,24 @@ test_bitmap(void)
 		for (uint i = 0; i < nbits; i++) {
 			bitmap_set(map, i);
 		}
+		assert(bitmap_is_full(map, nbits));
 
 		int expected_result = nbits - 1;
+		for (int i = bitmap_first(map, nbits); i >= 0; i = bitmap_next(map, i)) {
+			assert(i == expected_result);
+			expected_result--;
+		}
+		assert(expected_result == -1);
+
+		bitmap_zero(map, nbits);
+
+		assert(bitmap_first(map, nbits) == -1);
+		assert(bitmap_lsb_first(map, nbits) == -1);
+
+		bitmap_full(map, nbits);
+		assert(bitmap_is_full(map, nbits));
+
+		expected_result = nbits - 1;
 		for (int i = bitmap_first(map, nbits); i >= 0; i = bitmap_next(map, i)) {
 			assert(i == expected_result);
 			expected_result--;
@@ -87,6 +103,13 @@ test_bitmap(void)
 			expected_result++;
 		}
 		assert(expected_result == (int)nbits);
+
+		for (uint i = 0; i < nbits; i++) {
+			bitmap_clear(map, i);
+			assert(!bitmap_is_full(map, nbits));
+			bitmap_set(map, i);
+			assert(bitmap_is_full(map, nbits));
+		}
 
 		for (uint i = 0; i < nbits; i++) {
 			bitmap_clear(map, i);

@@ -56,34 +56,38 @@ ifeq ($(LOGCOLORS),y)
         #    export CDevs := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH) -query "SELECT DISTINCT TargetType FROM Targets WHERE KernelPlatform = '$(CURRENT_MACHINE_CONFIG_LC)'" | tr '[\r\n]' ':' | sed 's,:$$,,')
         #endif
     endif
-    ifndef CMD_MC
+    ifndef MACHINE_PFX
         export _MACHINE := $(CURRENT_MACHINE_CONFIG_LC)
         ifeq ($(CURRENT_MACHINE_CONFIG),NONE)
-            export _MACHINE := $(subst Mac,,$(PLATFORM))
+            export _MACHINE := $(subst OSX,,$(PLATFORM))
         endif
-        export CMD_MC := $(shell __A="$(CURRENT_ARCH_CONFIG_LC)"; \
+        export MACHINE_PFX := $(shell __A="$(CURRENT_ARCH_CONFIG_LC)"; \
                                          __As=$$((6-$${\#__A})); \
-                                         printf "\\033[1m%-.6s%*.*s %9.9s\\033[m" \
+                                         printf "%-.6s%*.*s %9.9s" \
                                                 "$${__A}" \
                                                 $${__As} $${__As} " " \
                                                 "$(_MACHINE)")
     endif
+    override LOG_PFX_LEN := 30
+    override LOG_PFX_LEN_ADJ := $(shell __TMP="$(MACHINE_PFX)"; \
+            printf "%d" $$(($(LOG_PFX_LEN) - $${\#__TMP} - 3)))
+    MACHINE_PFX_COL = $(shell printf "\\033[1m%s\\033[m" "$(MACHINE_PFX)")
     # Turn off colored output
     Color0:=$(shell printf "\\033[m")
-    # Start a host command: bold, underlined pink text
-    ColorH:=$(shell printf "\\033[1;4;35m")
-    # Start a compilation-related command: bold, underlined blue text
-    ColorC:=$(shell printf "[$(CMD_MC)] \\033[1;4;34m")
-    # Start a MIG command: bold, green text on light grey background
-    ColorM:=$(shell printf "[$(CMD_MC)] \\033[1;32;40m")
-    # Start a linking command: bold, white text on blue background
-    ColorL:=$(shell printf "[$(CMD_MC)] \\033[1;37;44m")
-    # Start a filename: bold, white text
-    ColorF:=$(shell printf "\\033[1;37m")
-    # Start a linked file name: yellow text on light grey background
-    ColorLF:=$(shell printf "\\033[1;33;40m")
-    # Error strings: underlined bold white text on red background
-    ColorErr:=$(shell printf "\033[1;4;37;41m")
+    # Start a host command: bold text
+    ColorH:=$(shell printf "\\033[1m")
+    # Start a compilation-related command: blue text
+    ColorC:=$(shell printf "[$(MACHINE_PFX_COL)] \\033[1;34m")
+    # Start a MIG command: green text
+    ColorM:=$(shell printf "[$(MACHINE_PFX_COL)] \\033[1;32m")
+    # Start a linking command: purple text
+    ColorL:=$(shell printf "[$(MACHINE_PFX_COL)] \\033[1;35m")
+    # Start a filename
+    ColorF:=$(shell printf "")
+    # Start a linked file name: italic text
+    ColorLF:=$(shell printf "\\033[3m")
+    # Error strings: red text
+    ColorErr:=$(shell printf "\033[31m")
 endif
 
 .PHONY: ALWAYS
@@ -112,7 +116,7 @@ $(3)/.UNIFDEF_FLAGS: ALWAYS | $(3)_MKDIR
 	$$(_v)$$(REPLACECONTENTS) $$@ $$(UNIFDEF) $(4)
 
 $(1): $(dir $(firstword $(1)))% : $(if $(2),%,$$(SOURCE)/%) | $(3)_MKDIR
-	$$(call makelog,$$(ColorH)INSTALLHDR$$(Color0)    $$(ColorF)$$*$$(Color0))
+	@$$(LOG_INSTALLHDR) "$$*"
 	$$(_v)$$(UNIFDEF) $(4) $$< > ./$(3)/$$*.unifdef.$$$$$$$$;	\
 	if [ $$$$? -eq 2 ]; then						\
 		$(ERR) Parse failure for $$<;				\
@@ -148,7 +152,7 @@ $(3)/.UNIFDEF_FLAGS: ALWAYS | $(3)_MKDIR
 	$$(_v)$$(REPLACECONTENTS) $$@ $$(UNIFDEF) -t $(4)
 
 $(1): $(5)% : $(2) | $(3)_MKDIR
-	$$(call makelog,$$(ColorH)INSTALLPY$$(Color0)     $$(ColorF)$$*$$(Color0))
+	@$$(LOG_INSTALLPY) "$$*"
 	$$(_v)$$(MKDIR) $$(dir $$@) $$(dir ./$(3)/$$*)
 	$$(_v)$$(UNIFDEF) -t $(4) $$< > ./$(3)/$$*.unifdef.$$$$$$$$$$(suffix $$*); \
 	if [ $$$$? -eq 2 ]; then						\
@@ -192,6 +196,7 @@ INSTALL_DRIVERKIT_MD_LCL_LIST =
 INSTALL_DRIVERKIT_MD_LCL_GEN_LIST =
 INSTALL_KF_MD_LCL_LIST =
 INSTALL_KF_MD_LCL_GEN_LIST =
+INSTALL_MODULEMAP_INCDIR_MI_LIST =
 endif
 
 #
@@ -218,12 +223,22 @@ INSTALL_KF_MI_GEN_FILES = $(addprefix $(DSTROOT)/$(KINCDIR)/$(EXPORT_MI_DIR)/, $
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MI_FILES),,kincmidir,$(KINCFRAME_UNIFDEF)))
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MI_GEN_FILES),1,kincmigendir,$(KINCFRAME_UNIFDEF)))
 
+# Skip INSTALL_MI_DIR to install directly to INCDIR.
+INSTALL_MODULEMAP_INCDIR_MI_INC_FILES = $(addprefix $(DSTROOT)/$(INCDIR)/,$(INSTALL_MODULEMAP_INCDIR_MI_LIST))
+
+$(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MODULEMAP_INCDIR_MI_INC_FILES),,mmrootincmidir,-t $(DATA_UNIFDEF)))
+
 #
 # Machine-independent local (private) files
 #
 
+ifeq ($(LIBKERN_USE_USR_LOCAL_INCLUDE),)
 INSTALL_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(sort $(INSTALL_MI_LCL_LIST) $(INSTALL_MI_LIST)))
 INSTALL_MI_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(sort $(INSTALL_MI_LCL_GEN_LIST) $(INSTALL_MI_GEN_LIST)))
+else
+INSTALL_MI_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(sort $(INSTALL_MI_LCL_LIST)))
+INSTALL_MI_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MI_DIR)/, $(sort $(INSTALL_MI_LCL_GEN_LIST)))
+endif
 
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MI_LCL_FILES),,pincmidir,$(SPINCFRAME_UNIFDEF)))
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MI_LCL_GEN_FILES),1,pincmigendir,$(SPINCFRAME_UNIFDEF)))
@@ -270,8 +285,13 @@ $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_KF_MD_GEN_FILES),1,kincgendir,
 # Machine-dependent local (private) files
 #
 
+ifeq ($(LIBKERN_USE_USR_LOCAL_INCLUDE),)
 INSTALL_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(sort $(INSTALL_MD_LCL_LIST) $(INSTALL_MD_LIST)))
 INSTALL_MD_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(sort $(INSTALL_MD_LCL_GEN_LIST) $(INSTALL_MD_GEN_LIST)))
+else
+INSTALL_MD_LCL_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(sort $(INSTALL_MD_LCL_LIST)))
+INSTALL_MD_LCL_GEN_FILES = $(addprefix $(DSTROOT)/$(LCLDIR)/$(INSTALL_MD_DIR)/, $(sort $(INSTALL_MD_LCL_GEN_LIST)))
+endif
 
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MD_LCL_FILES),,pincdir,$(SPINCFRAME_UNIFDEF)))
 $(eval $(call INSTALLHDRS_RULE_template,$(INSTALL_MD_LCL_GEN_FILES),1,pincgendir,$(SPINCFRAME_UNIFDEF)))
@@ -298,7 +318,8 @@ do_installhdrs_mi:: $(INSTALL_MI_INC_FILES) $(INSTALL_MI_INC_GEN_FILES) \
 		    $(INSTALL_KF_MI_FILES) $(INSTALL_KF_MI_GEN_FILES) \
 		    $(INSTALL_MI_LCL_FILES) $(INSTALL_MI_LCL_GEN_FILES) \
 		    $(INSTALL_DRIVERKIT_MI_LCL_FILES) $(INSTALL_DRIVERKIT_MI_LCL_GEN_FILES) \
-		    $(INSTALL_KF_MI_LCL_FILES) $(INSTALL_KF_MI_LCL_GEN_FILES)
+		    $(INSTALL_KF_MI_LCL_FILES) $(INSTALL_KF_MI_LCL_GEN_FILES) \
+		    $(INSTALL_MODULEMAP_INCDIR_MI_INC_FILES)
 	@:
 
 .PHONY: do_installhdrs_md
@@ -323,10 +344,10 @@ EXP_MI_INC_DIR:
 	$(_v)$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)
 
 $(EXPORT_MI_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/% : % | EXP_MI_INC_DIR
-	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
+	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS_RO) $< $@
 
 $(EXPORT_MI_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MI_DIR)/% : $(SOURCE)/% | EXP_MI_INC_DIR
-	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
+	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS_RO) $< $@
 
 EXPORT_MD_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/, $(EXPORT_MD_LIST))
 EXPORT_MD_GEN_INC_FILES = $(addprefix $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/, $(EXPORT_MD_GEN_LIST))
@@ -337,10 +358,10 @@ EXP_MD_INC_DIR:
 	$(_v)$(MKDIR) $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)
 
 $(EXPORT_MD_GEN_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/% : % | EXP_MD_INC_DIR
-	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
+	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS_RO) $< $@
 
 $(EXPORT_MD_INC_FILES): $(OBJROOT)/$(EXPDIR)/$(EXPORT_MD_DIR)/% : $(SOURCE)/% | EXP_MD_INC_DIR
-	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS) $< $@
+	$(_v)$(INSTALL) $(DATA_INSTALL_FLAGS_RO) $< $@
 
 .PHONY: do_exporthdrs_mi
 
@@ -360,7 +381,7 @@ do_exporthdrs_md: $(EXPORT_MD_GEN_INC_FILES)  $(EXPORT_MD_INC_FILES)
 # Compilation rules to generate .o from .s
 #
 
-S_RULE_0=$(call makelog,$(ColorC)AS$(Color0)  $(ColorF)$@$(Color0))
+S_RULE_0=@$(LOG_AS) "$@"
 S_RULE_1A=$(_v)${S_KCC} -c ${SFLAGS} -MD -MF $(@:o=d) -MP ${$@_SFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS}
 S_RULE_1B=$(<F)
 S_RULE_2=
@@ -368,7 +389,7 @@ S_RULE_2=
 #
 # Compilation rules to generate .o from .c for normal files
 #
-C_RULE_0=$(call makelog,$(ColorC)CC$(Color0)  $(ColorF)$@$(Color0))
+C_RULE_0=@$(LOG_CC) "$@"
 C_RULE_1A=$(_v)${KCC} -c ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CWARNFLAGS}} -MD -MF $(@:o=d) -MP ${$@_CFLAGS_ADD} ${$@_CWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS}
 C_RULE_1B=$(<F)
 C_RULE_2=
@@ -392,7 +413,7 @@ C_RULE_4B_D=${C_RULE_4B}
 # Compilation rules to generate .co from .cp or .cpo from .cpp
 #   The config tool slickly changes the last source filename char to 'o'
 #   for the object filename.
-P_RULE_0=$(call makelog,$(ColorC)C++$(Color0) $(ColorF)$@$(Color0))
+P_RULE_0=@$(LOG_CXX) "$@"
 P_RULE_1A=$(_v)${KC++} -o $@ -c ${CXXFLAGS} ${filter-out ${$@_CFLAGS_RM}, ${CFLAGS} ${CXXWARNFLAGS}} -MD -MF $(@:o=d) -MP ${$@_CFLAGS_ADD} ${$@_CXXWARNFLAGS_ADD} ${INCFLAGS} ${$@_INCFLAGS}
 P_RULE_1B=$(<F)
 P_RULE_2=
@@ -400,6 +421,17 @@ P_RULE_2=
 P_RULE_3=
 P_RULE_4A=
 P_RULE_4B=
+
+#
+# Explain how to make the bsd syscall list
+#
+$(TARGET)/bsd.syscalls.master: $(SRCROOT)/bsd/kern/syscalls.master $(MAKESYSCALLS)
+	@$(LOG_GENERATE) "$(@F)$(Color0) from $(ColorF)$<$(Color0)"
+	$(_v)$(UNIFDEF) $(SEED_DEFINES) $< > $@;	\
+	if [ $$? -eq 2 ]; then				\
+		$(ERR) Parse failure for $<;		\
+		exit 1;					\
+	fi
 
 #
 # This isn't the right place to put this, but we need to := override some settings
@@ -440,12 +472,12 @@ INSTALL_MAN_DIR:
 	$(_v)$(MKDIR) $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)
 
 $(INSTALL_MAN_FILES): $(DSTROOT)/$(MANDIR)/$(INSTALL_MAN_DIR)/% : % | INSTALL_MAN_DIR
-	$(call makelog,$(ColorH)MAN$(Color0)           $(ColorF)$*$(Color0))
+	@$(LOG_MAN) "$*"
 	$(_v)$(INSTALL) $(INSTALL_FLAGS) $< $@
 
 define MAN_LINKS_RULE_template
 $$(DSTROOT)/$$(MANDIR)/$$(INSTALL_MAN_DIR)/$(2): $$(DSTROOT)/$$(MANDIR)/$$(INSTALL_MAN_DIR)/$(1)
-	$$(call makelog,$$(ColorH)MANLINK$$(Color0)       $$(ColorF)$(2)$$(Color0))
+	@$$(LOG_MANLINK) "$(2)"
 	$(_v)ln -f $$< $$@
 endef
 
@@ -458,11 +490,16 @@ INSTALL_MAN_FILES_LINKS = $(call function_generate_man_links_rules,$(INSTALL_MAN
 do_installman: $(INSTALL_MAN_FILES) $(INSTALL_MAN_FILES_LINKS)
 	@:
 
-.PHONY: do_textfiles_install
+.PHONY: do_textfiles_install do_textfiles_install_mi do_textfiles_install_md
 
 # Do-nothing rule, since not all levels of the recursive hierarchy might implement this
 # in their local Makefiles. Those that do will use a "::" rule to augment this.
-do_textfiles_install:: do_installman
+do_textfiles_install_mi:: do_installman
+	@:
+
+# Do-nothing rule, since not all levels of the recursive hierarchy might implement this
+# in their local Makefiles. Those that do will use a "::" rule to augment this.
+do_textfiles_install_md::
 	@:
 
 .PHONY: do_build_setup

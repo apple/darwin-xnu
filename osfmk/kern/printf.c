@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -267,6 +267,10 @@ __doprnt(
 	} numeric_type = INT;
 	int             nprinted = 0;
 
+	if (radix < 2 || radix > 36) {
+		radix = 10;
+	}
+
 	while ((c = *fmt) != '\0') {
 		if (c != '%') {
 			(*putc)(c, arg);
@@ -443,7 +447,7 @@ __doprnt(
 		}
 
 		case 'c':
-			c = va_arg(argp, int);
+			c = (char)va_arg(argp, int);
 			(*putc)(c, arg);
 			nprinted++;
 			break;
@@ -503,6 +507,7 @@ __doprnt(
 
 		case 'o':
 			truncate = _doprnt_truncates;
+			OS_FALLTHROUGH;
 		case 'O':
 			base = 8;
 			goto print_unsigned;
@@ -532,13 +537,14 @@ __doprnt(
 		}
 
 		case 'd':
+		case 'i':
 			truncate = _doprnt_truncates;
 			base = 10;
 			goto print_signed;
 
 		case 'u':
 			truncate = _doprnt_truncates;
-		/* FALLTHROUGH */
+			OS_FALLTHROUGH;
 		case 'U':
 			base = 10;
 			goto print_unsigned;
@@ -548,7 +554,7 @@ __doprnt(
 			if (sizeof(int) < sizeof(void *)) {
 				long_long = 1;
 			}
-		/* FALLTHROUGH */
+			OS_FALLTHROUGH;
 		case 'x':
 			truncate = _doprnt_truncates;
 			base = 16;
@@ -561,14 +567,14 @@ __doprnt(
 
 		case 'r':
 			truncate = _doprnt_truncates;
-		/* FALLTHROUGH */
+			OS_FALLTHROUGH;
 		case 'R':
 			base = radix;
 			goto print_signed;
 
 		case 'n':
 			truncate = _doprnt_truncates;
-		/* FALLTHROUGH */
+			OS_FALLTHROUGH;
 		case 'N':
 			base = radix;
 			goto print_unsigned;
@@ -740,7 +746,7 @@ dummy_putc(int ch, void *arg)
 	 * already panicing), so we'll just do nothing instead of crashing.
 	 */
 	if (real_putc) {
-		real_putc(ch);
+		real_putc((char)ch);
 	}
 }
 
@@ -770,45 +776,50 @@ _doprnt_log(
 boolean_t       new_printf_cpu_number = FALSE;
 #endif  /* MP_PRINTF */
 
-decl_simple_lock_data(, printf_lock);
-decl_simple_lock_data(, bsd_log_spinlock);
+SIMPLE_LOCK_DECLARE(bsd_log_spinlock, 0);
 
-lck_grp_t oslog_stream_lock_grp;
-decl_lck_spin_data(, oslog_stream_lock);
-void oslog_lock_init(void);
-
-extern void bsd_log_init(void);
-void bsd_log_lock(void);
+bool bsd_log_lock(bool);
+void bsd_log_lock_safe(void);
 void bsd_log_unlock(void);
 
-void
-printf_init(void)
+/*
+ * Locks OS log lock and returns true if successful, false otherwise. Locking
+ * always succeeds in a safe context but may block. Locking in an unsafe context
+ * never blocks but fails if someone else is already holding the lock.
+ *
+ * A caller is responsible to decide whether the context is safe or not.
+ *
+ * As a rule of thumb following cases are *not* considered safe:
+ *   - Interrupts are disabled
+ *   - Pre-emption is disabled
+ *   - When in a debugger
+ *   - During a panic
+ */
+bool
+bsd_log_lock(bool safe)
 {
-	/*
-	 * Lock is only really needed after the first thread is created.
-	 */
-	simple_lock_init(&printf_lock, 0);
-	simple_lock_init(&bsd_log_spinlock, 0);
-	bsd_log_init();
+	if (!safe) {
+		assert(!oslog_is_safe());
+		return simple_lock_try(&bsd_log_spinlock, LCK_GRP_NULL);
+	}
+	simple_lock(&bsd_log_spinlock, LCK_GRP_NULL);
+	return true;
 }
 
+/*
+ * Locks OS log lock assuming the context is safe. See bsd_log_lock() comment
+ * for details.
+ */
 void
-bsd_log_lock(void)
+bsd_log_lock_safe(void)
 {
-	simple_lock(&bsd_log_spinlock, LCK_GRP_NULL);
+	(void) bsd_log_lock(true);
 }
 
 void
 bsd_log_unlock(void)
 {
 	simple_unlock(&bsd_log_spinlock);
-}
-
-void
-oslog_lock_init(void)
-{
-	lck_grp_init(&oslog_stream_lock_grp, "oslog stream", LCK_GRP_ATTR_NULL);
-	lck_spin_init(&oslog_stream_lock, &oslog_stream_lock_grp, LCK_ATTR_NULL);
 }
 
 /* derived from boot_gets */
@@ -818,12 +829,12 @@ safe_gets(
 	int     maxlen)
 {
 	char *lp;
-	int c;
+	char c;
 	char *strmax = str + maxlen - 1; /* allow space for trailing 0 */
 
 	lp = str;
 	for (;;) {
-		c = cngetc();
+		c = (char)cngetc();
 		switch (c) {
 		case '\n':
 		case '\r':
@@ -983,7 +994,7 @@ paniclog_append_noflush(const char *fmt, ...)
 	va_list listp;
 
 	va_start(listp, fmt);
-	_doprnt_log(fmt, &listp, consdebug_putc, 16);
+	_doprnt_log(fmt, &listp, consdebug_putc_unbuffered, 16);
 	va_end(listp);
 
 	return 0;
@@ -998,7 +1009,7 @@ kdb_printf(const char *fmt, ...)
 	_doprnt_log(fmt, &listp, consdebug_putc, 16);
 	va_end(listp);
 
-#if CONFIG_EMBEDDED
+#if defined(__arm__) || defined(__arm64__)
 	paniclog_flush();
 #endif
 
@@ -1014,7 +1025,7 @@ kdb_log(const char *fmt, ...)
 	_doprnt(fmt, &listp, consdebug_log, 16);
 	va_end(listp);
 
-#if CONFIG_EMBEDDED
+#if defined(__arm__) || defined(__arm64__)
 	paniclog_flush();
 #endif
 
@@ -1030,15 +1041,14 @@ kdb_printf_unbuffered(const char *fmt, ...)
 	_doprnt(fmt, &listp, consdebug_putc_unbuffered, 16);
 	va_end(listp);
 
-#if CONFIG_EMBEDDED
+#if defined(__arm__) || defined(__arm64__)
 	paniclog_flush();
 #endif
 
 	return 0;
 }
 
-#if !CONFIG_EMBEDDED
-
+#if CONFIG_VSPRINTF
 static void
 copybyte(int c, void *arg)
 {
@@ -1049,7 +1059,7 @@ copybyte(int c, void *arg)
 	 * the inside pointer.
 	 */
 	char** p = arg; /* cast outside pointer */
-	**p = c;        /* store character */
+	**p = (char)c;  /* store character */
 	(*p)++;         /* increment inside pointer */
 }
 
@@ -1070,4 +1080,4 @@ sprintf(char *buf, const char *fmt, ...)
 	*copybyte_str = '\0';
 	return (int)strlen(buf);
 }
-#endif /* !CONFIG_EMBEDDED */
+#endif /* CONFIG_VSPRINTF */

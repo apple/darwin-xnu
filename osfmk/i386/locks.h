@@ -37,11 +37,6 @@
 
 #include <i386/hw_lock_types.h>
 
-extern  unsigned int    LcksOpts;
-#if DEVELOPMENT || DEBUG
-extern  unsigned int    LckDisablePreemptCheck;
-#endif
-
 #define enaLkDeb                0x00000001      /* Request debug in default attribute */
 #define enaLkStat               0x00000002      /* Request statistic in default attribute */
 #define disLkRWPrio             0x00000004      /* Disable RW lock priority promotion */
@@ -269,8 +264,8 @@ static_assert(sizeof(lck_rw_t) == LCK_RW_T_SIZE);
 
 #if LOCK_PRIVATE
 
-#define disable_preemption_for_thread(t) ((cpu_data_t GS_RELATIVE *)0UL)->cpu_preemption_level++
-#define preemption_disabled_for_thread(t) (((cpu_data_t GS_RELATIVE *)0UL)->cpu_preemption_level > 0)
+#define disable_preemption_for_thread(t)   disable_preemption_internal()
+#define preemption_disabled_for_thread(t)  (get_preemption_level() > 0)
 
 #define LCK_MTX_THREAD_TO_STATE(t)      ((uintptr_t)t)
 #define PLATFORM_LCK_ILOCK              0

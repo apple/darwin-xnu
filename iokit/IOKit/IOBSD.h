@@ -58,8 +58,10 @@ enum{
 	kIOMountChangeWillResize = 0x00000201,
 	kIOMountChangeDidResize  = 0x00000202,
 };
-extern void IOBSDMountChange(struct mount * mp, uint32_t op);
-extern boolean_t IOTaskHasEntitlement(task_t task, const char * entitlement);
+extern void IOBSDMountChange(struct mount *mp, uint32_t op);
+extern boolean_t IOTaskHasEntitlement(task_t task, const char *entitlement);
+extern boolean_t IOVnodeHasEntitlement(struct vnode *vnode, int64_t off, const char *entitlement);
+extern char *IOVnodeGetEntitlement(struct vnode *vnode, int64_t offset, const char *entitlement);
 
 typedef enum {
 	kIOPolledCoreFileModeNotInitialized,

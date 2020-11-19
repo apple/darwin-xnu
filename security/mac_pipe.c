@@ -106,33 +106,6 @@ mac_pipe_label_destroy(struct pipe *cpipe)
 }
 
 void
-mac_pipe_label_copy(struct label *src, struct label *dest)
-{
-	MAC_PERFORM(pipe_label_copy, src, dest);
-}
-
-int
-mac_pipe_label_externalize(struct label *label, char *elements,
-    char *outbuf, size_t outbuflen)
-{
-	int error;
-
-	error = MAC_EXTERNALIZE(pipe, label, elements, outbuf, outbuflen);
-
-	return error;
-}
-
-int
-mac_pipe_label_internalize(struct label *label, char *string)
-{
-	int error;
-
-	error = MAC_INTERNALIZE(pipe, label, string);
-
-	return error;
-}
-
-void
 mac_pipe_label_associate(kauth_cred_t cred, struct pipe *cpipe)
 {
 	MAC_PERFORM(pipe_label_associate, cred, cpipe, cpipe->pipe_label);
@@ -154,7 +127,7 @@ mac_pipe_check_kqfilter(kauth_cred_t cred, struct knote *kn,
 	return error;
 }
 int
-mac_pipe_check_ioctl(kauth_cred_t cred, struct pipe *cpipe, u_int cmd)
+mac_pipe_check_ioctl(kauth_cred_t cred, struct pipe *cpipe, u_long cmd)
 {
 	int error;
 
@@ -183,24 +156,6 @@ mac_pipe_check_read(kauth_cred_t cred, struct pipe *cpipe)
 #endif
 
 	MAC_CHECK(pipe_check_read, cred, cpipe, cpipe->pipe_label);
-
-	return error;
-}
-
-static int
-mac_pipe_check_label_update(kauth_cred_t cred, struct pipe *cpipe,
-    struct label *newlabel)
-{
-	int error;
-
-#if SECURITY_MAC_CHECK_ENFORCE
-	/* 21167099 - only check if we allow write */
-	if (!mac_pipe_enforce) {
-		return 0;
-	}
-#endif
-
-	MAC_CHECK(pipe_check_label_update, cred, cpipe, cpipe->pipe_label, newlabel);
 
 	return error;
 }
@@ -254,20 +209,4 @@ mac_pipe_check_write(kauth_cred_t cred, struct pipe *cpipe)
 	MAC_CHECK(pipe_check_write, cred, cpipe, cpipe->pipe_label);
 
 	return error;
-}
-
-int
-mac_pipe_label_update(kauth_cred_t cred, struct pipe *cpipe,
-    struct label *label)
-{
-	int error;
-
-	error = mac_pipe_check_label_update(cred, cpipe, label);
-	if (error) {
-		return error;
-	}
-
-	MAC_PERFORM(pipe_label_update, cred, cpipe, cpipe->pipe_label, label);
-
-	return 0;
 }

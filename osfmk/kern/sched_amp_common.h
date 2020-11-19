@@ -76,6 +76,8 @@ int64_t sched_amp_rt_runq_count_sum(void);
 uint32_t sched_amp_qos_max_parallelism(int qos, uint64_t options);
 void sched_amp_bounce_thread_group_from_ecores(processor_set_t pset, struct thread_group *tg);
 
+pset_node_t sched_amp_choose_node(thread_t thread);
+
 #endif /* __AMP__ */
 
 #endif /* _KERN_SCHED_AMP_COMMON_H_ */

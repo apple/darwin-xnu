@@ -110,8 +110,8 @@ enum vtagtype   {
 	VT_HFS, VT_ZFS, VT_DEVFS, VT_WEBDAV, VT_UDF,
 	/* 21 - 25 */
 	VT_AFP, VT_CDDA, VT_CIFS, VT_OTHER, VT_APFS,
-	/* 26 */
-	VT_LOCKERFS,
+	/* 26 - 27*/
+	VT_LOCKERFS, VT_BINDFS,
 };
 
 #define HAVE_VT_LOCKERFS 1
@@ -561,6 +561,7 @@ struct vnode_trigger_param {
 #define VNODE_ATTR_va_private_size      (1LL<<43)       /* 80000000000 */
 #define VNODE_ATTR_va_clone_id          (1LL<<44)       /* 100000000000 */
 #define VNODE_ATTR_va_extflags          (1LL<<45)       /* 200000000000 */
+#define VNODE_ATTR_va_recursive_gencount (1LL<<46)      /* 400000000000 */
 
 #define VNODE_ATTR_BIT(n)       (VNODE_ATTR_ ## n)
 
@@ -612,7 +613,8 @@ struct vnode_trigger_param {
 	                        VNODE_ATTR_BIT(va_write_gencount) |     \
 	                        VNODE_ATTR_BIT(va_private_size) |       \
 	                        VNODE_ATTR_BIT(va_clone_id) |           \
-	                        VNODE_ATTR_BIT(va_extflags))
+	                        VNODE_ATTR_BIT(va_extflags) |           \
+	                        VNODE_ATTR_BIT(va_recursive_gencount))
 
 /*
  * Read-only attributes.
@@ -644,7 +646,8 @@ struct vnode_trigger_param {
 	                        VNODE_ATTR_BIT(va_write_gencount) |     \
 	                        VNODE_ATTR_BIT(va_private_size) |       \
 	                        VNODE_ATTR_BIT(va_clone_id) |           \
-	                        VNODE_ATTR_BIT(va_extflags))
+	                        VNODE_ATTR_BIT(va_extflags) |           \
+	                        VNODE_ATTR_BIT(va_recursive_gencount))
 
 /*
  * Attributes that can be applied to a new file object.
@@ -751,6 +754,7 @@ struct vnode_attr {
 	uint64_t va_private_size; /* If the file were deleted, how many bytes would be freed immediately */
 	uint64_t va_clone_id;     /* If a file is cloned this is a unique id shared by all "perfect" clones */
 	uint64_t va_extflags;     /* extended file/directory flags */
+	uint64_t va_recursive_gencount; /* for dir-stats enabled directories */
 
 	/* add new fields here only */
 };
@@ -2036,6 +2040,7 @@ int     vnode_iterate(struct mount *mp, int flags, int (*callout)(struct vnode *
 #ifdef BSD_KERNEL_PRIVATE
 #define VNODE_ALWAYS            0x400
 #define VNODE_DRAINO            0x800
+#define VNODE_PAGER             0x1000
 #endif /* BSD_KERNEL_PRIVATE */
 
 /*
@@ -2285,7 +2290,6 @@ int     vaccess(mode_t file_mode, uid_t uid, gid_t gid,
 int     check_mountedon(dev_t dev, enum vtype type, int  *errorp);
 int vn_getcdhash(struct vnode *vp, off_t offset, unsigned char *cdhash);
 void    vnode_reclaim(vnode_t);
-vnode_t current_rootdir(void);
 vnode_t current_workingdir(void);
 void    *vnode_vfsfsprivate(vnode_t);
 struct vfsstatfs *vnode_vfsstatfs(vnode_t);
@@ -2409,6 +2413,9 @@ int is_package_name(const char *name, int len);
 int     vfs_context_issuser(vfs_context_t);
 int vfs_context_iskernel(vfs_context_t);
 vfs_context_t vfs_context_kernel(void);         /* get from 1st kernel thread */
+#ifdef XNU_KERNEL_PRIVATE
+void vfs_set_context_kernel(vfs_context_t);     /* set from 1st kernel thread */
+#endif /* XNU_KERNEL_PRIVATE */
 vnode_t vfs_context_cwd(vfs_context_t);
 vnode_t vfs_context_get_cwd(vfs_context_t); /* get cwd with iocount */
 int vnode_isnoflush(vnode_t);

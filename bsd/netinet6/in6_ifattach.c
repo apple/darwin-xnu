@@ -131,7 +131,7 @@ get_rand_iid(
 {
 	SHA1_CTX ctxt;
 	u_int8_t digest[SHA1_RESULTLEN];
-	int hostnlen;
+	size_t hostnlen;
 
 	/* generate 8 bytes of pseudo-random value. */
 	bzero(&ctxt, sizeof(ctxt));
@@ -511,7 +511,7 @@ in6_ifattach_linklocal(struct ifnet *ifp, struct in6_aliasreq *ifra)
 	lck_mtx_init(&pr0.ndpr_lock, ifa_mtx_grp, ifa_mtx_attr);
 	pr0.ndpr_ifp = ifp;
 	/* this should be 64 at this moment. */
-	pr0.ndpr_plen = in6_mask2len(&ifra->ifra_prefixmask.sin6_addr, NULL);
+	pr0.ndpr_plen = (u_char)in6_mask2len(&ifra->ifra_prefixmask.sin6_addr, NULL);
 	pr0.ndpr_mask = ifra->ifra_prefixmask.sin6_addr;
 	pr0.ndpr_prefix = ifra->ifra_addr;
 	/* apply the mask for safety. (nd6_prelist_add will apply it again) */
@@ -619,14 +619,14 @@ int
 in6_nigroup(
 	struct ifnet *ifp,
 	const char *name,
-	int namelen,
+	size_t namelen,
 	struct in6_addr *in6)
 {
 	const char *p;
 	u_char *q;
 	SHA1_CTX ctxt;
 	u_int8_t digest[SHA1_RESULTLEN];
-	char l;
+	size_t l;
 	char n[64];     /* a single label must not exceed 63 chars */
 
 	if (!namelen || !name) {
@@ -804,8 +804,7 @@ skipmcast:
 		error = in6_ifattach_loopback(ifp);
 		if (error != 0) {
 			log(LOG_ERR, "%s: in6_ifattach_loopback returned %d\n",
-			    __func__, error, ifp->if_name,
-			    ifp->if_unit);
+			    __func__, error);
 			return error;
 		}
 	}
@@ -989,8 +988,8 @@ in6_ifattach_llcgareq(struct ifnet *ifp, struct in6_cgareq *llcgasr)
 	ifra.ifra_flags = IN6_IFF_SECURED;
 
 	in6_cga_node_lock();
-	if (in6_cga_generate(&llcgasr->cgar_cgaprep, 0,
-	    &ifra.ifra_addr.sin6_addr)) {
+	if (in6_cga_generate(&llcgasr->cgar_cgaprep, llcgasr->cgar_collision_count,
+	    &ifra.ifra_addr.sin6_addr, ifp)) {
 		in6_cga_node_unlock();
 		return EADDRNOTAVAIL;
 	}

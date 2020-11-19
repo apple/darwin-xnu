@@ -1,145 +1,116 @@
-#ifndef _OS_OBJECT_PTR_H
-#define _OS_OBJECT_PTR_H
+//
+// Copyright (c) 2019 Apple, Inc. All rights reserved.
+//
+// @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+//
+// This file contains Original Code and/or Modifications of Original Code
+// as defined in and that are subject to the Apple Public Source License
+// Version 2.0 (the 'License'). You may not use this file except in
+// compliance with the License. The rights granted to you under the License
+// may not be used to create, or enable the creation or redistribution of,
+// unlawful or unlicensed copies of an Apple operating system, or to
+// circumvent, violate, or enable the circumvention or violation of, any
+// terms of an Apple operating system software license agreement.
+//
+// Please obtain a copy of the License at
+// http://www.opensource.apple.com/apsl/ and read it before using this file.
+//
+// The Original Code and all software distributed under the License are
+// distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+// EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+// INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+// Please see the License for the specific language governing rights and
+// limitations under the License.
+//
+// @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+//
 
-#include <sys/cdefs.h>
-#include <os/smart_ptr.h>
+#ifndef XNU_LIBKERN_LIBKERN_CXX_OS_PTR_H
+#define XNU_LIBKERN_LIBKERN_CXX_OS_PTR_H
 
-#if KERNEL
-# include <libkern/c++/OSObject.h>
+//
+// The declarations in this file are a transition tool from raw pointers to
+// the new OSSharedPtr class.
+//
+// Basically, code in headers that wants to be able to vend both a raw pointer
+// and a shared pointer interface should use `OSPtr<T>` instead of `T*`.
+// Then, users that want to opt into using `OSSharedPtr` can define the
+// `IOKIT_ENABLE_SHARED_PTR` macro in their translation unit (.cpp file),
+// and `OSPtr<T>` will suddenly be `OSSharedPtr<T>`.
+//
+// When the `IOKIT_ENABLE_SHARED_PTR` macro is not enabled, however, `OSPtr<T>`
+// will simply be `T*`, so that clients that do not wish to migrate to smart
+// pointers don't need to.
+//
+// Note that defining `IOKIT_ENABLE_SHARED_PTR` requires C++17, because the
+// implementation of `OSSharedPtr` requires that.
+//
+
+#if !defined(PRIVATE) // only ask to opt-in explicitly for third-party developers
+#   if defined(IOKIT_ENABLE_SHARED_PTR)
+#       if !defined(IOKIT_ENABLE_EXPERIMENTAL_SHARED_PTR_IN_API)
+#           error It seems that you have defined IOKIT_ENABLE_SHARED_PTR to \
+        ask IOKit to return shared pointers from many of its API \
+        functions. This is great! However, please note that we may \
+        transition more IOKit APIs to shared pointers in the future, \
+        so if you enable IOKIT_ENABLE_SHARED_PTR right now, your \
+        code may fail to compile with future versions of IOKit \
+        (which would return shared pointers where you expect raw \
+        pointers). If you are OK with that, please define the \
+        IOKIT_ENABLE_EXPERIMENTAL_SHARED_PTR_IN_API macro to \
+        silence this error. If that is not acceptable, please hold \
+        off on enabling shared pointers in IOKit APIs until we have \
+        committed to API stability for it.
+#       endif
+#   endif
 #endif
 
-#ifdef LIBKERN_SMART_POINTERS
+#if defined(IOKIT_ENABLE_SHARED_PTR)
 
-/*
- * OSObject pointers (OSPtr)
- */
+#if __cplusplus < 201703L
+#error "Your code must compile with C++17 or later to adopt shared pointers. Use Xcode's 'C++ Language Dialect' setting, or on clang's command-line use -std=gnu++17"
+#endif
 
-struct osobject_policy {
-	static void
-	retain(const OSMetaClassBase *obj)
-	{
-		obj->retain();
-	}
-	static void
-	release(const OSMetaClassBase *obj)
-	{
-		obj->release();
-	}
-	template <class T> static T *
-	alloc()
-	{
-		return OSTypeAlloc(T);
-	}
-	template <class From, class To> static To *
-	dyn_cast(From *p)
-	{
-		return OSDynamicCast(To, p);
-	}
-};
+#include <libkern/c++/OSSharedPtr.h>
 
-template <class T>
-using OSPtr = os::smart_ptr<T, osobject_policy>;
+template <typename T>
+using OSPtr = OSSharedPtr<T>;
 
-/*
- * Tagged OSObject pointers (OSTaggedPtr)
- */
+class OSCollection; // Forward declare only because OSCollection.h needs OSPtr.h
 
-template <class Tag>
-struct osobject_tagged_policy {
-	static void
-	retain(const OSMetaClassBase *obj)
-	{
-		obj->taggedRetain(OSTypeID(Tag));
-	}
-	static void
-	release(const OSMetaClassBase *obj)
-	{
-		obj->taggedRelease(OSTypeID(Tag));
-	}
-	template <class T> static T *
-	alloc()
-	{
-		return OSTypeAlloc(T);
-	}
-	template <class From, class To> static To *
-	dyn_cast(From *p)
-	{
-		return OSDynamicCast(To, p);
-	}
-};
+template <typename T>
+using OSTaggedPtr = OSTaggedSharedPtr<T, OSCollection>;
 
-template <class T, class Tag>
-using OSTaggedPtr = os::smart_ptr<T, osobject_tagged_policy<Tag> >;
+#else
 
-/*
- * Dynamic cast
- */
+template <typename T>
+class __attribute__((trivial_abi)) OSSharedPtr;
 
-template<class T, class U, class P>
-os::smart_ptr<T, P>
-OSDynamicCastPtr(os::smart_ptr<U, P> const &from)
-{
-	return from.template dynamic_pointer_cast<T>();
-}
+template <typename T, typename Tag>
+class __attribute__((trivial_abi)) OSTaggedSharedPtr;
 
-template<class T, class U, class P>
-os::smart_ptr<T, P>
-OSDynamicCastPtr(os::smart_ptr<U, P> &&from)
-{
-	return os::move(from).template dynamic_pointer_cast<T>();
-}
+// We're not necessarily in C++11 mode, so we need to disable warnings
+// for C++11 extensions
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wc++11-extensions"
 
-/*
- * Creation helpers
- */
-
-template<class T, class P>
-os::smart_ptr<T, P>
-OSNewObject()
-{
-	return os::smart_ptr<T, P>::alloc();
-}
-
-template<class T, class P>
-os::smart_ptr<T, P>
-OSMakePtr(T *&p)
-{
-	return os::smart_ptr<T, P>(p);
-}
-
-template<class T, class P>
-os::smart_ptr<T, P>
-OSMakePtr(T *&&p)
-{
-	return os::smart_ptr<T, P>(os::move(p));
-}
-
-template<class T, class P>
-os::smart_ptr<T, P>
-OSMakePtr(T *&&p, bool retain)
-{
-	return os::smart_ptr<T, P>(os::move(p), retain);
-}
-
-template<class T, class P>
-static inline T **
-OSOutPtr(os::smart_ptr<T, P> *p)
-{
-	if (p == nullptr) {
-		return nullptr;
-	} else {
-		return p->get_for_out_param();
-	}
-}
-
-#else /* LIBKERN_SMART_POINTERS */
-
-/* Fall back to the smart pointer types just being a simple pointer */
-template<class T, class policy = void>
+template <typename T>
 using OSPtr = T *;
 
-template <class T, class Tag = void>
+template <typename T>
 using OSTaggedPtr = T *;
 
-#endif /* LIBKERN_SMART_POINTERS */
-#endif /* _OS_OBJECT_PTR_H */
+#pragma clang diagnostic pop
+
+#endif
+
+// Allow C++98 code to use nullptr.
+//
+// This isn't the right place to put this, however the old OSPtr.h header
+// had it and some code has now started relying on nullptr being defined.
+#if !__has_feature(cxx_nullptr) && !defined(nullptr)
+# define nullptr NULL
+#endif
+
+#endif // !XNU_LIBKERN_LIBKERN_CXX_OS_PTR_H

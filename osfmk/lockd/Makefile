@@ -42,7 +42,7 @@ COMP_FILES = ${MIG_KUSRC}
 do_build_all:: $(COMP_FILES)
 
 ${MIG_KUSRC} : lockd_mach.defs
-	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
+	@$(LOG_MIG) $@
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKUFLAGS}	\
 		-user    lockd_mach.c		\
 		-header  lockd_mach.h		\

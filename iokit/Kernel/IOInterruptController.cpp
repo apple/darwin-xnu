@@ -43,9 +43,9 @@
 
 OSDefineMetaClassAndAbstractStructors(IOInterruptController, IOService);
 
-OSMetaClassDefineReservedUnused(IOInterruptController, 0);
-OSMetaClassDefineReservedUnused(IOInterruptController, 1);
-OSMetaClassDefineReservedUnused(IOInterruptController, 2);
+OSMetaClassDefineReservedUsedX86(IOInterruptController, 0);
+OSMetaClassDefineReservedUsedX86(IOInterruptController, 1);
+OSMetaClassDefineReservedUsedX86(IOInterruptController, 2);
 OSMetaClassDefineReservedUnused(IOInterruptController, 3);
 OSMetaClassDefineReservedUnused(IOInterruptController, 4);
 OSMetaClassDefineReservedUnused(IOInterruptController, 5);
@@ -317,9 +317,15 @@ IOInterruptController::enableInterrupt(IOService *nub, int source)
 		}
 		if (vector->interruptDisabledHard) {
 			vector->interruptDisabledHard = 0;
-#if !defined(__i386__) && !defined(__x86_64__)
-			OSMemoryBarrier();
-#endif
+
+			// A DSB ISH on ARM is needed to make sure the vector data are
+			// properly initialized before the MMIO enabling the interrupts
+			// in hardware. OSMemoryBarrier(), which maps to DMB, is not
+			// sufficient here as the CPUs are not consumers of the device
+			// write. Hence, the DMB does not guarantee the CPUs won't see an
+			// interrupt before it initalizes the vector data properly.
+			OSSynchronizeIO();
+
 			enableVector(vectorNumber, vector);
 		}
 	}
@@ -426,6 +432,21 @@ IOInterruptController::causeVector(IOInterruptVectorNumber /*vectorNumber*/,
 }
 
 void
+IOInterruptController::setCPUInterruptProperties(IOService */*service*/)
+{
+}
+
+void
+IOInterruptController::sendIPI(unsigned int /*cpu_id*/, bool /*deferred*/)
+{
+}
+
+void
+IOInterruptController::cancelDeferredIPI(unsigned int /*cpu_id*/)
+{
+}
+
+void
 IOInterruptController::timeStampSpuriousInterrupt(void)
 {
 	uint64_t providerID = 0;
@@ -458,11 +479,17 @@ IOInterruptController::timeStampInterruptHandlerInternal(bool isStart, IOInterru
 
 
 	if (isStart) {
+#if INTERRUPT_MASKED_DEBUG
+		ml_irq_debug_start((uintptr_t)vector->handler, (uintptr_t)vector);
+#endif
 		IOTimeStampStartConstant(IODBG_INTC(IOINTC_HANDLER), (uintptr_t)vectorNumber, (uintptr_t)unslidHandler,
 		    (uintptr_t)unslidTarget, (uintptr_t)providerID);
 	} else {
 		IOTimeStampEndConstant(IODBG_INTC(IOINTC_HANDLER), (uintptr_t)vectorNumber, (uintptr_t)unslidHandler,
 		    (uintptr_t)unslidTarget, (uintptr_t)providerID);
+#if INTERRUPT_MASKED_DEBUG
+		ml_irq_debug_end();
+#endif
 	}
 }
 

@@ -56,6 +56,8 @@
 #ifndef _SYS_EVENTHANDLER_H_
 #define _SYS_EVENTHANDLER_H_
 
+#include <ptrauth.h>
+
 #include <kern/locks.h>
 #include <sys/queue.h>
 #include <sys/cdefs.h>
@@ -126,7 +128,7 @@ typedef struct eventhandler_entry       *eventhandler_tag;
 	                EHL_UNLOCK((list));                             \
 	                _t = (struct eventhandler_entry_ ## name *)_ep; \
 	                evhlog((LOG_DEBUG, "eventhandler_invoke: executing %p", \
-	                    VM_KERNEL_UNSLIDE((void *)_t->eh_func)));   \
+	                    (void *)VM_KERNEL_UNSLIDE((void *)_t->eh_func)));   \
 	                _t->eh_func(_ep->ee_arg , ## __VA_ARGS__);      \
 	                EHL_LOCK_SPIN((list));                          \
 	        }                                                       \
@@ -181,7 +183,7 @@ do {                                                                    \
 } while (0)
 
 #define EVENTHANDLER_REGISTER(evthdlr_ref, name, func, arg, priority)           \
-	eventhandler_register(evthdlr_ref, NULL, #name, func, arg, priority)
+	eventhandler_register(evthdlr_ref, NULL, #name, ptrauth_nop_cast(void *, &func), arg, priority)
 
 #define EVENTHANDLER_DEREGISTER(evthdlr_ref, name, tag)                                 \
 do {                                                                    \

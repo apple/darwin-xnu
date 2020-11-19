@@ -37,6 +37,7 @@
 #ifndef _IOKIT_IORANGEALLOCATOR_H
 #define _IOKIT_IORANGEALLOCATOR_H
 
+#include <libkern/c++/OSPtr.h>
 #include <libkern/c++/OSObject.h>
 #include <IOKit/IOTypes.h>
 
@@ -92,7 +93,7 @@ public:
  *   @param options Pass kLocking if the instance can be used by multiple threads.
  *   @result Returns the new IORangeAllocator instance, to be released by the caller, or zero on failure. */
 
-	static IORangeAllocator * withRange( IORangeScalar endOfRange,
+	static OSPtr<IORangeAllocator>  withRange( IORangeScalar endOfRange,
 	    IORangeScalar defaultAlignment = 0,
 	    UInt32 capacity = 0,
 	    IOOptionBits options = 0 );

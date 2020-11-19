@@ -67,7 +67,13 @@ static void *s_callback_data = NULL;
 
 #if !KERNEL
 static boolean_t s_cross_link_enabled  = FALSE;
-static kxld_size_t s_cross_link_page_size = PAGE_SIZE;
+/* Can't use PAGE_SIZE here because it is not a compile-time constant.
+ * However from inspection below, s_cross_link_page_size is not used
+ * unless s_cross_link_enabled is TRUE, and s_cross_link_enabled is
+ * only set to TRUE when a client specifies the value. So the
+ * default should never be used in practice,
+ */
+static kxld_size_t s_cross_link_page_size;
 #endif
 
 
@@ -833,37 +839,6 @@ boolean_t
 kxld_is_32_bit(cpu_type_t cputype)
 {
 	return !(cputype & CPU_ARCH_ABI64);
-}
-
-/*******************************************************************************
-* Borrowed (and slightly modified) the libc implementation for the kernel
-* until the kernel has a supported strstr().
-* Find the first occurrence of find in s.
-*******************************************************************************/
-const char *
-kxld_strstr(const char *s, const char *find)
-{
-#if KERNEL
-	char c, sc;
-	size_t len;
-	if (!s || !find) {
-		return s;
-	}
-	if ((c = *find++) != 0) {
-		len = strlen(find);
-		do {
-			do {
-				if ((sc = *s++) == 0) {
-					return NULL;
-				}
-			} while (sc != c);
-		} while (strncmp(s, find, len) != 0);
-		s--;
-	}
-	return s;
-#else
-	return strstr(s, find);
-#endif /* KERNEL */
 }
 
 /*******************************************************************************

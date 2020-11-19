@@ -29,6 +29,8 @@
 #ifndef _KERN_CODESIGN_H_
 #define _KERN_CODESIGN_H_
 
+#include <stdint.h>
+
 /* code signing attributes of a process */
 #define CS_VALID                    0x00000001  /* dynamically valid */
 #define CS_ADHOC                    0x00000002  /* ad hoc signed */
@@ -48,10 +50,11 @@
 #define CS_ENTITLEMENTS_VALIDATED   0x00004000  /* code signature permits restricted entitlements */
 #define CS_NVRAM_UNRESTRICTED       0x00008000  /* has com.apple.rootless.restricted-nvram-variables.heritable entitlement */
 
-#define CS_RUNTIME                                      0x00010000  /* Apply hardened runtime policies */
+#define CS_RUNTIME                  0x00010000  /* Apply hardened runtime policies */
+#define CS_LINKER_SIGNED            0x00020000  /* Automatically signed by the linker */
 
 #define CS_ALLOWED_MACHO            (CS_ADHOC | CS_HARD | CS_KILL | CS_CHECK_EXPIRATION | \
-	                             CS_RESTRICT | CS_ENFORCEMENT | CS_REQUIRE_LV | CS_RUNTIME)
+	                             CS_RESTRICT | CS_ENFORCEMENT | CS_REQUIRE_LV | CS_RUNTIME | CS_LINKER_SIGNED)
 
 #define CS_EXEC_SET_HARD            0x00100000  /* set CS_HARD on any exec'ed process */
 #define CS_EXEC_SET_KILL            0x00200000  /* set CS_KILL on any exec'ed process */
@@ -72,11 +75,11 @@
 
 /* executable segment flags */
 
-#define CS_EXECSEG_MAIN_BINARY          0x1                     /* executable segment denotes main binary */
+#define CS_EXECSEG_MAIN_BINARY          0x1             /* executable segment denotes main binary */
 #define CS_EXECSEG_ALLOW_UNSIGNED       0x10            /* allow unsigned pages (for debugging) */
-#define CS_EXECSEG_DEBUGGER                     0x20            /* main binary is debugger */
-#define CS_EXECSEG_JIT                          0x40            /* JIT enabled */
-#define CS_EXECSEG_SKIP_LV                      0x80            /* OBSOLETE: skip library validation */
+#define CS_EXECSEG_DEBUGGER             0x20            /* main binary is debugger */
+#define CS_EXECSEG_JIT                  0x40            /* JIT enabled */
+#define CS_EXECSEG_SKIP_LV              0x80            /* OBSOLETE: skip library validation */
 #define CS_EXECSEG_CAN_LOAD_CDHASH      0x100           /* can bless cdhash for execution */
 #define CS_EXECSEG_CAN_EXEC_CDHASH      0x200           /* can execute blessed cdhash */
 
@@ -97,6 +100,8 @@ enum {
 	CS_SUPPORTSTEAMID = 0x20200,
 	CS_SUPPORTSCODELIMIT64 = 0x20300,
 	CS_SUPPORTSEXECSEG = 0x20400,
+	CS_SUPPORTSRUNTIME = 0x20500,
+	CS_SUPPORTSLINKAGE = 0x20600,
 
 	CSSLOT_CODEDIRECTORY = 0,                               /* slot index for CodeDirectory */
 	CSSLOT_INFOSLOT = 1,
@@ -135,6 +140,10 @@ enum {
 	CS_SIGNER_TYPE_UNKNOWN = 0,
 	CS_SIGNER_TYPE_LEGACYVPN = 5,
 	CS_SIGNER_TYPE_MAC_APP_STORE = 6,
+
+	CS_SUPPL_SIGNER_TYPE_UNKNOWN = 0,
+	CS_SUPPL_SIGNER_TYPE_TRUSTCACHE = 7,
+	CS_SUPPL_SIGNER_TYPE_LOCAL = 8,
 };
 
 #define KERNEL_HAVE_CS_CODEDIRECTORY 1
@@ -179,6 +188,19 @@ typedef struct __CodeDirectory {
 	uint64_t execSegLimit;                  /* limit of executable segment */
 	uint64_t execSegFlags;                  /* executable segment flags */
 	char end_withExecSeg[0];
+	/* Version 0x20500 */
+	uint32_t runtime;
+	uint32_t preEncryptOffset;
+	char end_withPreEncryptOffset[0];
+
+	/* Version 0x20600 */
+	uint8_t linkageHashType;
+	uint8_t linkageTruncated;
+	uint16_t spare4;
+	uint32_t linkageOffset;
+	uint32_t linkageSize;
+	char end_withLinkage[0];
+
 
 	/* followed by dynamic content as located by offset fields above */
 } CS_CodeDirectory

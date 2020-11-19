@@ -27,6 +27,8 @@
  */
 /* IOArray.h created by rsulack on Thu 11-Sep-1997 */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <libkern/OSDebug.h>
 
 #include <libkern/c++/OSCollection.h>
@@ -39,8 +41,8 @@
 OSDefineMetaClassAndAbstractStructors(OSCollection, OSObject)
 
 
-OSMetaClassDefineReservedUsed(OSCollection, 0);
-OSMetaClassDefineReservedUsed(OSCollection, 1);
+OSMetaClassDefineReservedUsedX86(OSCollection, 0);
+OSMetaClassDefineReservedUsedX86(OSCollection, 1);
 OSMetaClassDefineReservedUnused(OSCollection, 2);
 OSMetaClassDefineReservedUnused(OSCollection, 3);
 OSMetaClassDefineReservedUnused(OSCollection, 4);
@@ -85,23 +87,19 @@ OSCollection::setOptions(unsigned options, unsigned mask, void *)
 	return old;
 }
 
-OSCollection *
+OSSharedPtr<OSCollection>
 OSCollection::copyCollection(OSDictionary *cycleDict)
 {
 	if (cycleDict) {
 		OSObject *obj = cycleDict->getObject((const OSSymbol *) this);
-		if (obj) {
-			obj->retain();
-		}
 
-		return reinterpret_cast<OSCollection *>(obj);
+		return OSSharedPtr<OSCollection>(reinterpret_cast<OSCollection *>(obj), OSRetain);
 	} else {
 		// If we are here it means that there is a collection subclass that
 		// hasn't overridden the copyCollection method.  In which case just
 		// return a reference to ourselves.
 		// Hopefully this collection will not be inserted into the registry
-		retain();
-		return this;
+		return OSSharedPtr<OSCollection>(this, OSRetain);
 	}
 }
 

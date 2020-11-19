@@ -42,7 +42,7 @@
 
 //------------------------------------------------------------------------
 // from ppc/misc_protos.h
-extern void printf(const char *fmt, ...);
+extern void printf(const char *fmt, ...) __printflike(1, 2);
 
 extern void interrupt_enable(void);
 extern void interrupt_disable(void);
@@ -85,7 +85,9 @@ void Debugger(const char *message);
 //------------------------------------------------------------------------
 
 // from iokit/IOStartIOKit.cpp
-extern void StartIOKit( void * p1, void * p2, void * p3, void * p4);
+extern void InitIOKit(void *dtTop);
+extern void ConfigureIOKit(void);
+extern void StartIOKitMatching(void);
 
 // from iokit/Families/IOFramebuffer.cpp
 extern unsigned char appleClut8[256 * 3];

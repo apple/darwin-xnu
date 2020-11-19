@@ -102,7 +102,7 @@ extern uint32_t os_cpu_in_cksum(const void *, uint32_t, uint32_t);
 uint16_t
 b_sum16(const void *buf, int len)
 {
-	return os_cpu_in_cksum(buf, len, 0);
+	return (uint16_t)os_cpu_in_cksum(buf, len, 0);
 }
 
 uint16_t inet_cksum_simple(struct mbuf *, int);
@@ -121,7 +121,7 @@ in_addword(uint16_t a, uint16_t b)
 	uint64_t sum = a + b;
 
 	ADDCARRY(sum);
-	return sum;
+	return (uint16_t)sum;
 }
 
 uint16_t
@@ -133,7 +133,7 @@ in_pseudo(uint32_t a, uint32_t b, uint32_t c)
 
 	sum = (uint64_t)a + b + c;
 	REDUCE16;
-	return sum;
+	return (uint16_t)sum;
 }
 
 uint16_t
@@ -145,7 +145,7 @@ in_pseudo64(uint64_t a, uint64_t b, uint64_t c)
 
 	sum = a + b + c;
 	REDUCE16;
-	return sum;
+	return (uint16_t)sum;
 }
 
 /*

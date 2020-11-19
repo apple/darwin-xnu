@@ -42,8 +42,9 @@
 #include <mach/sdt.h>
 #include <libkern/OSAtomic.h>
 
-SYSCTL_SKMEM_TCP_INT(OID_AUTO, cc_debug, CTLFLAG_RW | CTLFLAG_LOCKED,
-    int, tcp_cc_debug, 0, "Enable debug data collection");
+static int tcp_cc_debug;
+SYSCTL_INT(_net_inet_tcp, OID_AUTO, cc_debug, CTLFLAG_RW | CTLFLAG_LOCKED,
+    &tcp_cc_debug, 0, "Enable debug data collection");
 
 extern struct tcp_cc_algo tcp_cc_newreno;
 SYSCTL_INT(_net_inet_tcp, OID_AUTO, newreno_sockets,
@@ -220,8 +221,6 @@ tcp_ccdbg_trace(struct tcpcb *tp, struct tcphdr *th, int32_t event)
 			    tp->t_ccstate->cub_last_max;
 			dbg_state.u.cubic_state.ccd_tcp_win =
 			    tp->t_ccstate->cub_tcp_win;
-			dbg_state.u.cubic_state.ccd_target_win =
-			    tp->t_ccstate->cub_target_win;
 			dbg_state.u.cubic_state.ccd_avg_lastmax =
 			    tp->t_ccstate->cub_avg_lastmax;
 			dbg_state.u.cubic_state.ccd_mean_deviation =
@@ -282,9 +281,6 @@ tcp_bad_rexmt_fix_sndbuf(struct tcpcb *tp)
 
 /*
  * Calculate initial cwnd according to RFC3390.
- *
- * Keep the old ss_fltsz sysctl for ABI compabitility issues.
- * but it will be overriden if tcp_do_rfc3390 sysctl when it is set.
  */
 void
 tcp_cc_cwnd_init_or_reset(struct tcpcb *tp)
@@ -292,12 +288,12 @@ tcp_cc_cwnd_init_or_reset(struct tcpcb *tp)
 	if (tp->t_flags & TF_LOCAL) {
 		tp->snd_cwnd = tp->t_maxseg * ss_fltsz_local;
 	} else {
-		/* initial congestion window according to RFC 3390 */
-		if (tcp_do_rfc3390) {
+		if (tcp_cubic_minor_fixes) {
+			tp->snd_cwnd = tcp_initial_cwnd(tp);
+		} else {
+			/* initial congestion window according to RFC 3390 */
 			tp->snd_cwnd = min(4 * tp->t_maxseg,
 			    max(2 * tp->t_maxseg, TCP_CC_CWND_INIT_BYTES));
-		} else {
-			tp->snd_cwnd = tp->t_maxseg * ss_fltsz;
 		}
 	}
 }
@@ -334,12 +330,50 @@ tcp_cc_delay_ack(struct tcpcb *tp, struct tcphdr *th)
 		}
 		break;
 	case 3:
-		if ((tp->t_flags & TF_RXWIN0SENT) == 0 &&
-		    (th->th_flags & TH_PUSH) == 0 &&
-		    ((tp->t_unacksegs == 1) ||
-		    ((tp->t_flags & TF_STRETCHACK) &&
-		    tp->t_unacksegs < maxseg_unacked))) {
-			return 1;
+		if (tcp_ack_strategy == TCP_ACK_STRATEGY_LEGACY) {
+			if ((tp->t_flags & TF_RXWIN0SENT) == 0 &&
+			    (th->th_flags & TH_PUSH) == 0 &&
+			    ((tp->t_unacksegs == 1) ||
+			    ((tp->t_flags & TF_STRETCHACK) &&
+			    tp->t_unacksegs < maxseg_unacked))) {
+				return 1;
+			}
+		} else {
+			uint32_t recwin;
+
+			/* Get the receive-window we would announce */
+			recwin = tcp_sbspace(tp);
+			if (recwin > (uint32_t)(TCP_MAXWIN << tp->rcv_scale)) {
+				recwin = (uint32_t)(TCP_MAXWIN << tp->rcv_scale);
+			}
+
+			/* Delay ACK, if:
+			 *
+			 * 1. We are not sending a zero-window
+			 * 2. We are not forcing fast ACKs
+			 * 3. We have more than the low-water mark in receive-buffer
+			 * 4. The receive-window is not increasing
+			 * 5. We have less than or equal of an MSS unacked or
+			 *    Window actually has been growing larger than the initial value by half of it.
+			 *    (this makes sure that during ramp-up we ACK every second MSS
+			 *    until we pass the tcp_recvspace * 1.5-threshold)
+			 * 6. We haven't waited for half a BDP
+			 *
+			 * (a note on 6: The receive-window is
+			 * roughly 2 BDP. Thus, recwin / 4 means half a BDP and
+			 * thus we enforce an ACK roughly twice per RTT - even
+			 * if the app does not read)
+			 */
+			if ((tp->t_flags & TF_RXWIN0SENT) == 0 &&
+			    tp->t_forced_acks == 0 &&
+			    tp->t_inpcb->inp_socket->so_rcv.sb_cc > tp->t_inpcb->inp_socket->so_rcv.sb_lowat &&
+			    recwin <= tp->t_last_recwin &&
+			    (tp->rcv_nxt - tp->last_ack_sent <= tp->t_maxseg ||
+			    recwin > (uint32_t)(tcp_recvspace + (tcp_recvspace >> 1))) &&
+			    (tp->rcv_nxt - tp->last_ack_sent) < (recwin >> 2)) {
+				tp->t_stat.acks_delayed++;
+				return 1;
+			}
 		}
 		break;
 	}
@@ -431,7 +465,11 @@ tcp_cc_adjust_nonvalidated_cwnd(struct tcpcb *tp)
 	tp->t_pipeack = tcp_get_max_pipeack(tp);
 	tcp_clear_pipeack_state(tp);
 	tp->snd_cwnd = (max(tp->t_pipeack, tp->t_lossflightsize) >> 1);
-	tp->snd_cwnd = max(tp->snd_cwnd, TCP_CC_CWND_INIT_BYTES);
+	if (tcp_cubic_minor_fixes) {
+		tp->snd_cwnd = max(tp->snd_cwnd, tp->t_maxseg);
+	} else {
+		tp->snd_cwnd = max(tp->snd_cwnd, TCP_CC_CWND_INIT_BYTES);
+	}
 	tp->snd_cwnd += tp->t_maxseg * tcprexmtthresh;
 	tp->t_flagsext &= ~TF_CWND_NONVALIDATED;
 }

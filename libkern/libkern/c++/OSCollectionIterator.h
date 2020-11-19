@@ -36,7 +36,7 @@
 
 class OSCollectionIterator;
 
-typedef OSPtr<OSCollectionIterator> OSCollectionIteratorPtr;
+typedef OSCollectionIterator* OSCollectionIteratorPtr;
 
 /*!
  * @header
@@ -63,7 +63,7 @@ typedef OSPtr<OSCollectionIterator> OSCollectionIteratorPtr;
  *
  * @textblock
  * <pre>
- *     OSCollectionIterator * iterator =
+ *     OSPtr <OSCollectionIterator> iterator =
  *         OSCollectionIterator::withCollection(myCollection);
  *     OSObject * object;
  *     while (object = iterator->getNextObject()) {
@@ -73,7 +73,7 @@ typedef OSPtr<OSCollectionIterator> OSCollectionIteratorPtr;
  *     if (!iterator->isValid()) {
  *         // report that collection changed during iteration
  *     }
- *     iterator->release();
+ *     iterator = nullptr;
  * </pre>
  * @/textblock
  *
@@ -116,7 +116,7 @@ public:
  * @result
  * A new instance of OSCollectionIterator, or <code>NULL</code> on failure.
  */
-	static OSCollectionIteratorPtr withCollection(const OSCollection * inColl);
+	static OSPtr<OSCollectionIterator> withCollection(const OSCollection * inColl);
 
 
 /*!

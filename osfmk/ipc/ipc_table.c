@@ -71,11 +71,11 @@
 #include <kern/kalloc.h>
 #include <vm/vm_kern.h>
 
-ipc_table_size_t ipc_table_entries = NULL;
-unsigned int ipc_table_entries_size = CONFIG_IPC_TABLE_ENTRIES_STEPS;
+#define IPC_TABLE_ENTRIES_SIZE CONFIG_IPC_TABLE_ENTRIES_STEPS
+SECURITY_READ_ONLY_LATE(struct ipc_table_size) ipc_table_entries[IPC_TABLE_ENTRIES_SIZE];
 
-ipc_table_size_t ipc_table_requests;
-unsigned int ipc_table_requests_size = 64;
+#define IPC_TABLE_REQUESTS_SIZE 64
+SECURITY_READ_ONLY_LATE(struct ipc_table_size) ipc_table_requests[IPC_TABLE_REQUESTS_SIZE];
 
 static void
 ipc_table_fill(
@@ -119,38 +119,30 @@ ipc_table_fill(
 	}
 }
 
-void
+__startup_func
+static void
 ipc_table_init(void)
 {
-	ipc_table_entries = (ipc_table_size_t)
-	    kalloc(sizeof(struct ipc_table_size) *
-	    ipc_table_entries_size);
-	assert(ipc_table_entries != ITS_NULL);
-
-	ipc_table_fill(ipc_table_entries, ipc_table_entries_size - 1,
+	ipc_table_fill(ipc_table_entries, IPC_TABLE_ENTRIES_SIZE - 1,
 	    16, sizeof(struct ipc_entry));
 
 	/* the last two elements should have the same size */
 
-	ipc_table_entries[ipc_table_entries_size - 1].its_size =
-	    ipc_table_entries[ipc_table_entries_size - 2].its_size;
+	ipc_table_entries[IPC_TABLE_ENTRIES_SIZE - 1].its_size =
+	    ipc_table_entries[IPC_TABLE_ENTRIES_SIZE - 2].its_size;
 
 	/* make sure the robin hood hashing in ipc hash will work */
-	assert(ipc_table_entries[ipc_table_entries_size - 1].its_size <=
+	assert(ipc_table_entries[IPC_TABLE_ENTRIES_SIZE - 1].its_size <=
 	    IPC_ENTRY_INDEX_MAX);
 
-	ipc_table_requests = (ipc_table_size_t)
-	    kalloc(sizeof(struct ipc_table_size) *
-	    ipc_table_requests_size);
-	assert(ipc_table_requests != ITS_NULL);
-
-	ipc_table_fill(ipc_table_requests, ipc_table_requests_size - 1,
+	ipc_table_fill(ipc_table_requests, IPC_TABLE_REQUESTS_SIZE - 1,
 	    2, sizeof(struct ipc_port_request));
 
 	/* the last element should have zero size */
 
-	ipc_table_requests[ipc_table_requests_size - 1].its_size = 0;
+	ipc_table_requests[IPC_TABLE_REQUESTS_SIZE - 1].its_size = 0;
 }
+STARTUP(MACH_IPC, STARTUP_RANK_FIRST, ipc_table_init);
 
 
 /*
@@ -164,10 +156,8 @@ ipc_table_init(void)
 unsigned int
 ipc_table_max_entries(void)
 {
-	if (!ipc_table_entries || ipc_table_entries_size < 2) {
-		return 0;
-	}
-	return (unsigned int)ipc_table_entries[ipc_table_entries_size - 1].its_size;
+	static_assert(IPC_TABLE_ENTRIES_SIZE >= 1);
+	return (unsigned int)ipc_table_entries[IPC_TABLE_ENTRIES_SIZE - 1].its_size;
 }
 
 
@@ -182,10 +172,8 @@ ipc_table_max_entries(void)
 unsigned int
 ipc_table_max_requests(void)
 {
-	if (!ipc_table_requests || ipc_table_requests_size < 2) {
-		return 0;
-	}
-	return (unsigned int)ipc_table_requests[ipc_table_requests_size - 2].its_size;
+	static_assert(IPC_TABLE_REQUESTS_SIZE >= 2);
+	return (unsigned int)ipc_table_requests[IPC_TABLE_REQUESTS_SIZE - 2].its_size;
 }
 
 

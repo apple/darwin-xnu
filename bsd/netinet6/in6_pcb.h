@@ -118,7 +118,7 @@ extern int in6_getsockaddr(struct socket *, struct sockaddr **);
 extern int in6_getsockaddr_s(struct socket *, struct sockaddr_in6 *);
 extern int in6_mapped_sockaddr(struct socket *so, struct sockaddr **nam);
 extern int in6_mapped_peeraddr(struct socket *so, struct sockaddr **nam);
-extern int in6_selecthlim(struct in6pcb *, struct ifnet *);
+extern uint8_t in6_selecthlim(struct in6pcb *, struct ifnet *);
 extern int in6_pcbsetport(struct in6_addr *, struct inpcb *,
     struct proc *, int);
 extern void init_sin6(struct sockaddr_in6 *sin6, struct mbuf *m);

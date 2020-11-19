@@ -88,26 +88,18 @@
 #include <netinet/ip_var.h>
 #include <netinet/ip_ecn.h>
 #include <netinet/in_pcb.h>
-#if INET6
 #include <netinet6/ip6_ecn.h>
-#endif
 
-#if INET6
 #include <netinet/ip6.h>
 #include <netinet6/ip6_var.h>
 #include <netinet6/in6_pcb.h>
 #include <netinet/icmp6.h>
 #include <netinet6/ip6protosw.h>
-#endif
 
 #include <netinet6/ipsec.h>
-#if INET6
 #include <netinet6/ipsec6.h>
-#endif
 #include <netinet6/ah.h>
-#if INET6
 #include <netinet6/ah6.h>
-#endif
 #include <netkey/key.h>
 #include <netkey/keydb.h>
 #if IPSEC_DEBUG
@@ -139,7 +131,7 @@ ah4_input(struct mbuf *m, int off)
 	u_char *cksum;
 	struct secasvar *sav = NULL;
 	u_int16_t nxt;
-	size_t hlen;
+	u_int8_t hlen;
 	size_t stripsiz = 0;
 	sa_family_t ifamily;
 
@@ -160,9 +152,9 @@ ah4_input(struct mbuf *m, int off)
 	ah = (struct ah *)(void *)(((caddr_t)ip) + off);
 	nxt = ah->ah_nxt;
 #ifdef _IP_VHL
-	hlen = IP_VHL_HL(ip->ip_vhl) << 2;
+	hlen = (u_int8_t)(IP_VHL_HL(ip->ip_vhl) << 2);
 #else
-	hlen = ip->ip_hl << 2;
+	hlen = (u_int8_t)(ip->ip_hl << 2);
 #endif
 
 	/* find the sassoc. */
@@ -248,7 +240,8 @@ ah4_input(struct mbuf *m, int off)
 		}
 
 		if (m->m_len < off + sizeof(struct ah) + sizoff + siz1) {
-			m = m_pullup(m, off + sizeof(struct ah) + sizoff + siz1);
+			VERIFY((off + sizeof(struct ah) + sizoff + siz1) <= INT_MAX);
+			m = m_pullup(m, (int)(off + sizeof(struct ah) + sizoff + siz1));
 			if (!m) {
 				ipseclog((LOG_DEBUG, "IPv4 AH input: can't pullup\n"));
 				IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
@@ -293,7 +286,15 @@ ah4_input(struct mbuf *m, int off)
 	 * some of IP header fields are flipped to the host endian.
 	 * convert them back to network endian.  VERY stupid.
 	 */
-	ip->ip_len = htons(ip->ip_len + hlen);
+	if ((ip->ip_len + hlen) > UINT16_MAX) {
+		ipseclog((LOG_DEBUG, "IPv4 AH input: "
+		    "bad length ip header len %u, total len %u\n",
+		    ip->ip_len, hlen));
+		IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
+		goto fail;
+	}
+
+	ip->ip_len = htons((u_int16_t)(ip->ip_len + hlen));
 	ip->ip_off = htons(ip->ip_off);
 	if (ah4_calccksum(m, (caddr_t)cksum, siz1, algo, sav)) {
 		FREE(cksum, M_TEMP);
@@ -333,49 +334,7 @@ ah4_input(struct mbuf *m, int off)
 	m->m_flags |= M_AUTHIPHDR;
 	m->m_flags |= M_AUTHIPDGM;
 
-#if 0
-	/*
-	 * looks okey, but we need more sanity check.
-	 * XXX should elaborate.
-	 */
-	if (ah->ah_nxt == IPPROTO_IPIP || ah->ah_nxt == IPPROTO_IP) {
-		struct ip *nip;
-		size_t sizoff;
-
-		sizoff = (sav->flags & SADB_X_EXT_OLD) ? 0 : 4;
-
-		if (m->m_len < off + sizeof(struct ah) + sizoff + siz1 + hlen) {
-			m = m_pullup(m, off + sizeof(struct ah)
-			    + sizoff + siz1 + hlen);
-			if (!m) {
-				ipseclog((LOG_DEBUG,
-				    "IPv4 AH input: can't pullup\n"));
-				IPSEC_STAT_INCREMENT(ipsecstat.in_inval);
-				goto fail;
-			}
-		}
-
-		nip = (struct ip *)((u_char *)(ah + 1) + sizoff + siz1);
-		if (nip->ip_src.s_addr != ip->ip_src.s_addr
-		    || nip->ip_dst.s_addr != ip->ip_dst.s_addr) {
-			m->m_flags &= ~M_AUTHIPHDR;
-			m->m_flags &= ~M_AUTHIPDGM;
-		}
-	}
-#if INET6
-	else if (ah->ah_nxt == IPPROTO_IPV6) {
-		m->m_flags &= ~M_AUTHIPHDR;
-		m->m_flags &= ~M_AUTHIPDGM;
-	}
-#endif /*INET6*/
-#endif /*0*/
-
-	if (m->m_flags & M_AUTHIPHDR
-	    && m->m_flags & M_AUTHIPDGM) {
-#if 0
-		ipseclog((LOG_DEBUG,
-		    "IPv4 AH input: authentication succeess\n"));
-#endif
+	if (m->m_flags & M_AUTHIPHDR && m->m_flags & M_AUTHIPDGM) {
 		IPSEC_STAT_INCREMENT(ipsecstat.in_ahauthsucc);
 	} else {
 		ipseclog((LOG_WARNING,
@@ -403,7 +362,7 @@ ah4_input(struct mbuf *m, int off)
 		/* RFC 2402 */
 		stripsiz = sizeof(struct newah) + siz1;
 	}
-	if (ipsec4_tunnel_validate(m, off + stripsiz, nxt, sav, &ifamily)) {
+	if (ipsec4_tunnel_validate(m, (int)(off + stripsiz), nxt, sav, &ifamily)) {
 		ifaddr_t ifa;
 		struct sockaddr_storage addr;
 		struct sockaddr_in *ipaddr;
@@ -424,7 +383,7 @@ ah4_input(struct mbuf *m, int off)
 			goto fail;
 		}
 		tos = ip->ip_tos;
-		m_adj(m, off + stripsiz);
+		m_adj(m, (int)(off + stripsiz));
 		if (m->m_len < sizeof(*ip)) {
 			m = m_pullup(m, sizeof(*ip));
 			if (!m) {
@@ -548,11 +507,11 @@ ah4_input(struct mbuf *m, int off)
 		}
 		ip = mtod(m, struct ip *);
 #ifdef IPLEN_FLIPPED
-		ip->ip_len = ip->ip_len - stripsiz;
+		ip->ip_len = (u_short)(ip->ip_len - stripsiz);
 #else
 		ip->ip_len = htons(ntohs(ip->ip_len) - stripsiz);
 #endif
-		ip->ip_p = nxt;
+		ip->ip_p = (u_char)nxt;
 		/* forget about IP hdr checksum, the check has already been passed */
 
 		key_sa_recordxfer(sav, m);
@@ -594,7 +553,7 @@ ah4_input(struct mbuf *m, int off)
 				IPSEC_STAT_INCREMENT(ipsecstat.in_polvio);
 				goto fail;
 			}
-			ip_proto_dispatch_in(m, off, nxt, 0);
+			ip_proto_dispatch_in(m, off, (u_int8_t)nxt, 0);
 		} else {
 			m_freem(m);
 		}
@@ -624,7 +583,6 @@ fail:
 }
 #endif /* INET */
 
-#if INET6
 int
 ah6_input(struct mbuf **mp, int *offp, int proto)
 {
@@ -722,7 +680,8 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 			IPSEC_STAT_INCREMENT(ipsec6stat.in_inval);
 			goto fail;
 		}
-		IP6_EXTHDR_CHECK(m, off, sizeof(struct ah) + sizoff + siz1,
+		VERIFY((sizeof(struct ah) + sizoff + siz1) <= INT_MAX);
+		IP6_EXTHDR_CHECK(m, off, (int)(sizeof(struct ah) + sizoff + siz1),
 		    {return IPPROTO_DONE;});
 		ip6 = mtod(m, struct ip6_hdr *);
 		ah = (struct ah *)(void *)(mtod(m, caddr_t) + off);
@@ -789,42 +748,7 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 	m->m_flags |= M_AUTHIPHDR;
 	m->m_flags |= M_AUTHIPDGM;
 
-#if 0
-	/*
-	 * looks okey, but we need more sanity check.
-	 * XXX should elaborate.
-	 */
-	if (ah->ah_nxt == IPPROTO_IPV6) {
-		struct ip6_hdr *nip6;
-		size_t sizoff;
-
-		sizoff = (sav->flags & SADB_X_EXT_OLD) ? 0 : 4;
-
-		IP6_EXTHDR_CHECK(m, off, sizeof(struct ah) + sizoff + siz1
-		    + sizeof(struct ip6_hdr),
-		    {return IPPROTO_DONE;});
-
-		nip6 = (struct ip6_hdr *)((u_char *)(ah + 1) + sizoff + siz1);
-		if (!IN6_ARE_ADDR_EQUAL(&nip6->ip6_src, &ip6->ip6_src)
-		    || !IN6_ARE_ADDR_EQUAL(&nip6->ip6_dst, &ip6->ip6_dst)) {
-			m->m_flags &= ~M_AUTHIPHDR;
-			m->m_flags &= ~M_AUTHIPDGM;
-		}
-	} else if (ah->ah_nxt == IPPROTO_IPIP) {
-		m->m_flags &= ~M_AUTHIPHDR;
-		m->m_flags &= ~M_AUTHIPDGM;
-	} else if (ah->ah_nxt == IPPROTO_IP) {
-		m->m_flags &= ~M_AUTHIPHDR;
-		m->m_flags &= ~M_AUTHIPDGM;
-	}
-#endif
-
-	if (m->m_flags & M_AUTHIPHDR
-	    && m->m_flags & M_AUTHIPDGM) {
-#if 0
-		ipseclog((LOG_DEBUG,
-		    "IPv6 AH input: authentication succeess\n"));
-#endif
+	if (m->m_flags & M_AUTHIPHDR && m->m_flags & M_AUTHIPDGM) {
 		IPSEC_STAT_INCREMENT(ipsec6stat.in_ahauthsucc);
 	} else {
 		ipseclog((LOG_WARNING,
@@ -852,7 +776,7 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 		/* RFC 2402 */
 		stripsiz = sizeof(struct newah) + siz1;
 	}
-	if (ipsec6_tunnel_validate(m, off + stripsiz, nxt, sav, &ifamily)) {
+	if (ipsec6_tunnel_validate(m, (int)(off + stripsiz), nxt, sav, &ifamily)) {
 		ifaddr_t ifa;
 		struct sockaddr_storage addr;
 		struct sockaddr_in6 *ip6addr;
@@ -872,7 +796,7 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 		}
 
 		flowinfo = ip6->ip6_flow;
-		m_adj(m, off + stripsiz);
+		m_adj(m, (int)(off + stripsiz));
 		if (m->m_len < sizeof(*ip6)) {
 			/*
 			 * m_pullup is prohibited in KAME IPv6 input processing
@@ -900,14 +824,12 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 			goto fail;
 		}
 
-#if 1
 		/*
 		 * should the inner packet be considered authentic?
 		 * see comment in ah4_input().
 		 */
 		m->m_flags &= ~M_AUTHIPHDR;
 		m->m_flags &= ~M_AUTHIPDGM;
-#endif
 
 		key_sa_recordxfer(sav, m);
 		if (ipsec_addhist(m, IPPROTO_AH, spi) != 0 ||
@@ -965,7 +887,7 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 		 * This is necessary because AH will be stripped off below.
 		 */
 		prvnxtp = ip6_get_prevhdr(m, off); /* XXX */
-		*prvnxtp = nxt;
+		*prvnxtp = (u_int8_t)nxt;
 
 		ip6 = mtod(m, struct ip6_hdr *);
 		/*
@@ -978,7 +900,7 @@ ah6_input(struct mbuf **mp, int *offp, int proto)
 		m->m_pkthdr.len -= stripsiz;
 		ip6 = mtod(m, struct ip6_hdr *);
 		/* XXX jumbogram */
-		ip6->ip6_plen = htons(ntohs(ip6->ip6_plen) - stripsiz);
+		ip6->ip6_plen = htons((u_int16_t)(ntohs(ip6->ip6_plen) - stripsiz));
 
 		key_sa_recordxfer(sav, m);
 		if (ipsec_addhist(m, IPPROTO_AH, spi) != 0) {
@@ -1124,4 +1046,3 @@ ah6_ctlinput(int cmd, struct sockaddr *sa, void *d)
 		/* we normally notify any pcb here */
 	}
 }
-#endif /* INET6 */

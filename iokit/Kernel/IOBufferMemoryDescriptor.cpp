@@ -25,6 +25,7 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
+#define IOKIT_ENABLE_SHARED_PTR
 
 #define _IOMEMORYDESCRIPTOR_INTERNAL_
 
@@ -72,8 +73,8 @@ enum{
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
 #define super IOGeneralMemoryDescriptor
-OSDefineMetaClassAndStructors(IOBufferMemoryDescriptor,
-    IOGeneralMemoryDescriptor);
+OSDefineMetaClassAndStructorsWithZone(IOBufferMemoryDescriptor,
+    IOGeneralMemoryDescriptor, ZC_ZFREE_CLEARMEM);
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
@@ -111,7 +112,7 @@ IOBufferMemoryDescriptor::initWithOptions(
 }
 #endif /* !__LP64__ */
 
-IOBufferMemoryDescriptor *
+OSSharedPtr<IOBufferMemoryDescriptor>
 IOBufferMemoryDescriptor::withCopy(
 	task_t                inTask,
 	IOOptionBits      options,
@@ -119,7 +120,7 @@ IOBufferMemoryDescriptor::withCopy(
 	mach_vm_address_t source,
 	mach_vm_size_t    size)
 {
-	IOBufferMemoryDescriptor * inst;
+	OSSharedPtr<IOBufferMemoryDescriptor> inst;
 	kern_return_t              err;
 	vm_map_copy_t              copy;
 	vm_map_address_t           address;
@@ -127,7 +128,7 @@ IOBufferMemoryDescriptor::withCopy(
 	copy = NULL;
 	do {
 		err = kIOReturnNoMemory;
-		inst = new IOBufferMemoryDescriptor;
+		inst = OSMakeShared<IOBufferMemoryDescriptor>();
 		if (!inst) {
 			break;
 		}
@@ -163,8 +164,8 @@ IOBufferMemoryDescriptor::withCopy(
 	if (copy) {
 		vm_map_copy_discard(copy);
 	}
-	OSSafeReleaseNULL(inst);
-	return NULL;
+
+	return nullptr;
 }
 
 
@@ -183,7 +184,7 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 	IODMAMapSpecification mapSpec;
 	bool                  mapped = false;
 	bool                  withCopy = false;
-	bool                  needZero;
+	bool                  mappedOrShared = false;
 
 	if (!capacity) {
 		return false;
@@ -225,7 +226,6 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 		IOMapper::checkForSystemMapper();
 		mapped = (NULL != IOMapper::gSystem);
 	}
-	needZero = (mapped || (0 != (kIOMemorySharingTypeMask & options)));
 
 	if (physicalMask && (alignment <= 1)) {
 		alignment   = ((physicalMask ^ (-1ULL)) & (physicalMask - 1));
@@ -241,7 +241,9 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 	}
 
 	if (alignment >= page_size) {
-		capacity = round_page(capacity);
+		if (round_page_overflow(capacity, &capacity)) {
+			return false;
+		}
 	}
 
 	if (alignment > page_size) {
@@ -263,9 +265,9 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 	mapSpec.numAddressBits = 64;
 	if (highestMask && mapped) {
 		if (highestMask <= 0xFFFFFFFF) {
-			mapSpec.numAddressBits = (32 - __builtin_clz((unsigned int) highestMask));
+			mapSpec.numAddressBits = (uint8_t)(32 - __builtin_clz((unsigned int) highestMask));
 		} else {
-			mapSpec.numAddressBits = (64 - __builtin_clz((unsigned int) (highestMask >> 32)));
+			mapSpec.numAddressBits = (uint8_t)(64 - __builtin_clz((unsigned int) (highestMask >> 32)));
 		}
 		highestMask = 0;
 	}
@@ -297,23 +299,25 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 #endif
 		}
 
+		mappedOrShared = (mapped || (0 != (kIOMemorySharingTypeMask & options)));
 		if (contig || highestMask || (alignment > page_size)) {
 			_internalFlags |= kInternalFlagPhysical;
 			if (highestMask) {
 				_internalFlags |= kInternalFlagPageSized;
-				capacity = round_page(capacity);
+				if (round_page_overflow(capacity, &capacity)) {
+					return false;
+				}
 			}
 			_buffer = (void *) IOKernelAllocateWithPhysicalRestrict(
 				capacity, highestMask, alignment, contig);
-		} else if (needZero
-		    && ((capacity + alignment) <= (page_size - gIOPageAllocChunkBytes))) {
+		} else if (mappedOrShared
+		    && (capacity + alignment) <= (page_size - gIOPageAllocChunkBytes)) {
 			_internalFlags |= kInternalFlagPageAllocated;
-			needZero        = false;
 			_buffer         = (void *) iopa_alloc(&gIOBMDPageAllocator, &IOBMDPageProc, capacity, alignment);
 			if (_buffer) {
 				IOStatisticsAlloc(kIOStatisticsMallocAligned, capacity);
 #if IOALLOCDEBUG
-				OSAddAtomic(capacity, &debug_iomalloc_size);
+				OSAddAtomicLong(capacity, &debug_iomalloc_size);
 #endif
 			}
 		} else if (alignment > 1) {
@@ -324,9 +328,7 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 		if (!_buffer) {
 			return false;
 		}
-		if (needZero) {
-			bzero(_buffer, capacity);
-		}
+		bzero(_buffer, capacity);
 	}
 
 	if ((options & (kIOMemoryPageable | kIOMapCacheMask))) {
@@ -389,7 +391,7 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 			}
 		}
 		reserved->map = createMappingInTask(mapTask, 0,
-		    kIOMapAnywhere | (options & kIOMapPrefault) | (options & kIOMapCacheMask), 0, 0);
+		    kIOMapAnywhere | (options & kIOMapPrefault) | (options & kIOMapCacheMask), 0, 0).detach();
 		if (!reserved->map) {
 			_buffer = NULL;
 			return false;
@@ -409,23 +411,22 @@ IOBufferMemoryDescriptor::initWithPhysicalMask(
 	return true;
 }
 
-IOBufferMemoryDescriptor *
+OSSharedPtr<IOBufferMemoryDescriptor>
 IOBufferMemoryDescriptor::inTaskWithOptions(
 	task_t       inTask,
 	IOOptionBits options,
 	vm_size_t    capacity,
 	vm_offset_t  alignment)
 {
-	IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
+	OSSharedPtr<IOBufferMemoryDescriptor> me = OSMakeShared<IOBufferMemoryDescriptor>();
 
 	if (me && !me->initWithPhysicalMask(inTask, options, capacity, alignment, 0)) {
-		me->release();
-		me = NULL;
+		me.reset();
 	}
 	return me;
 }
 
-IOBufferMemoryDescriptor *
+OSSharedPtr<IOBufferMemoryDescriptor>
 IOBufferMemoryDescriptor::inTaskWithOptions(
 	task_t       inTask,
 	IOOptionBits options,
@@ -434,31 +435,29 @@ IOBufferMemoryDescriptor::inTaskWithOptions(
 	uint32_t     kernTag,
 	uint32_t     userTag)
 {
-	IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
+	OSSharedPtr<IOBufferMemoryDescriptor> me = OSMakeShared<IOBufferMemoryDescriptor>();
 
 	if (me) {
 		me->setVMTags(kernTag, userTag);
 
 		if (!me->initWithPhysicalMask(inTask, options, capacity, alignment, 0)) {
-			me->release();
-			me = NULL;
+			me.reset();
 		}
 	}
 	return me;
 }
 
-IOBufferMemoryDescriptor *
+OSSharedPtr<IOBufferMemoryDescriptor>
 IOBufferMemoryDescriptor::inTaskWithPhysicalMask(
 	task_t            inTask,
 	IOOptionBits      options,
 	mach_vm_size_t    capacity,
 	mach_vm_address_t physicalMask)
 {
-	IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
+	OSSharedPtr<IOBufferMemoryDescriptor> me = OSMakeShared<IOBufferMemoryDescriptor>();
 
 	if (me && !me->initWithPhysicalMask(inTask, options, capacity, 1, physicalMask)) {
-		me->release();
-		me = NULL;
+		me.reset();
 	}
 	return me;
 }
@@ -474,17 +473,16 @@ IOBufferMemoryDescriptor::initWithOptions(
 }
 #endif /* !__LP64__ */
 
-IOBufferMemoryDescriptor *
+OSSharedPtr<IOBufferMemoryDescriptor>
 IOBufferMemoryDescriptor::withOptions(
 	IOOptionBits options,
 	vm_size_t    capacity,
 	vm_offset_t  alignment)
 {
-	IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
+	OSSharedPtr<IOBufferMemoryDescriptor> me = OSMakeShared<IOBufferMemoryDescriptor>();
 
 	if (me && !me->initWithPhysicalMask(kernel_task, options, capacity, alignment, 0)) {
-		me->release();
-		me = NULL;
+		me.reset();
 	}
 	return me;
 }
@@ -496,7 +494,7 @@ IOBufferMemoryDescriptor::withOptions(
  * Returns a new IOBufferMemoryDescriptor with a buffer large enough to
  * hold capacity bytes.  The descriptor's length is initially set to the capacity.
  */
-IOBufferMemoryDescriptor *
+OSSharedPtr<IOBufferMemoryDescriptor>
 IOBufferMemoryDescriptor::withCapacity(vm_size_t   inCapacity,
     IODirection inDirection,
     bool        inContiguous)
@@ -543,20 +541,19 @@ IOBufferMemoryDescriptor::initWithBytes(const void * inBytes,
  * Returns a new IOBufferMemoryDescriptor preloaded with bytes (copied).
  * The descriptor's length and capacity are set to the input buffer's size.
  */
-IOBufferMemoryDescriptor *
+OSSharedPtr<IOBufferMemoryDescriptor>
 IOBufferMemoryDescriptor::withBytes(const void * inBytes,
     vm_size_t    inLength,
     IODirection  inDirection,
     bool         inContiguous)
 {
-	IOBufferMemoryDescriptor *me = new IOBufferMemoryDescriptor;
+	OSSharedPtr<IOBufferMemoryDescriptor> me = OSMakeShared<IOBufferMemoryDescriptor>();
 
 	if (me && !me->initWithPhysicalMask(
 		    kernel_task, inDirection | kIOMemoryUnshared
 		    | (inContiguous ? kIOMemoryPhysicallyContiguous : 0),
 		    inLength, inLength, 0 )) {
-		me->release();
-		me = NULL;
+		me.reset();
 	}
 
 	if (me) {
@@ -564,8 +561,7 @@ IOBufferMemoryDescriptor::withBytes(const void * inBytes,
 		me->setLength(0);
 
 		if (!me->appendBytes(inBytes, inLength)) {
-			me->release();
-			me = NULL;
+			me.reset();
 		}
 	}
 	return me;
@@ -632,7 +628,7 @@ IOBufferMemoryDescriptor::free()
 				kmem_free(kernel_map, page, page_size);
 			}
 #if IOALLOCDEBUG
-			OSAddAtomic(-size, &debug_iomalloc_size);
+			OSAddAtomicLong(-size, &debug_iomalloc_size);
 #endif
 			IOStatisticsAlloc(kIOStatisticsFreeAligned, size);
 		} else if (alignment > 1) {
@@ -785,8 +781,8 @@ IOBufferMemoryDescriptor::getVirtualSegment(IOByteCount offset,
 OSMetaClassDefineReservedUnused(IOBufferMemoryDescriptor, 0);
 OSMetaClassDefineReservedUnused(IOBufferMemoryDescriptor, 1);
 #else /* !__LP64__ */
-OSMetaClassDefineReservedUsed(IOBufferMemoryDescriptor, 0);
-OSMetaClassDefineReservedUsed(IOBufferMemoryDescriptor, 1);
+OSMetaClassDefineReservedUsedX86(IOBufferMemoryDescriptor, 0);
+OSMetaClassDefineReservedUsedX86(IOBufferMemoryDescriptor, 1);
 #endif /* !__LP64__ */
 OSMetaClassDefineReservedUnused(IOBufferMemoryDescriptor, 2);
 OSMetaClassDefineReservedUnused(IOBufferMemoryDescriptor, 3);

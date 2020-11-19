@@ -50,6 +50,7 @@
 #include <arm/misc_protos.h>
 
 #include <sys/errno.h>
+#include <libkern/section_keywords.h>
 
 #define INT_SIZE        (BYTE_SIZE * sizeof (int))
 
@@ -72,8 +73,12 @@ bcopy_phys_internal(addr64_t src, addr64_t dst, vm_size_t bytes, int flags)
 	addr64_t        end __assert_only;
 	kern_return_t   res = KERN_SUCCESS;
 
-	assert(!__improbable(os_add_overflow(src, bytes, &end)));
-	assert(!__improbable(os_add_overflow(dst, bytes, &end)));
+	if (!BCOPY_PHYS_SRC_IS_USER(flags)) {
+		assert(!__improbable(os_add_overflow(src, bytes, &end)));
+	}
+	if (!BCOPY_PHYS_DST_IS_USER(flags)) {
+		assert(!__improbable(os_add_overflow(dst, bytes, &end)));
+	}
 
 	while ((bytes > 0) && (res == KERN_SUCCESS)) {
 		src_offset = src & PAGE_MASK;
@@ -650,6 +655,7 @@ bcmp(
 }
 
 #undef memcmp
+MARK_AS_HIBERNATE_TEXT
 int
 memcmp(const void *s1, const void *s2, size_t n)
 {
@@ -800,3 +806,36 @@ kdp_register_callout(kdp_callout_fn_t fn, void *arg)
 #pragma unused(fn,arg)
 }
 #endif
+
+/*
+ * Get a quick virtual mapping of a physical page and run a callback on that
+ * page's virtual address.
+ *
+ * @param dst64 Physical address to access (doesn't need to be page-aligned).
+ * @param bytes Number of bytes to be accessed. This cannot cross page boundaries.
+ * @param func Callback function to call with the page's virtual address.
+ * @param arg Argument passed directly to `func`.
+ *
+ * @return The return value from `func`.
+ */
+int
+apply_func_phys(
+	addr64_t dst64,
+	vm_size_t bytes,
+	int (*func)(void * buffer, vm_size_t bytes, void * arg),
+	void * arg)
+{
+	/* The physical aperture is only guaranteed to work with kernel-managed addresses. */
+	if (!pmap_valid_address(dst64)) {
+		panic("%s address error: passed in address (%#llx) not a kernel managed address",
+		    __FUNCTION__, dst64);
+	}
+
+	/* Ensure we stay within a single page */
+	if (((((uint32_t)dst64 & (ARM_PGBYTES - 1)) + bytes) > ARM_PGBYTES)) {
+		panic("%s alignment error: tried accessing addresses spanning more than one page %#llx %#lx",
+		    __FUNCTION__, dst64, bytes);
+	}
+
+	return func((void*)phystokv(dst64), bytes, arg);
+}

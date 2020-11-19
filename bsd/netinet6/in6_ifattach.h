@@ -69,7 +69,7 @@ extern void in6_ifdetach(struct ifnet *);
 extern int in6_iid_from_hw(struct ifnet *, struct in6_addr *);
 extern void in6_iid_mktmp(struct ifnet *, u_int8_t *, const u_int8_t *, int);
 extern void in6_tmpaddrtimer(void *);
-extern int in6_nigroup(struct ifnet *, const char *, int, struct in6_addr *);
+extern int in6_nigroup(struct ifnet *, const char *, size_t, struct in6_addr *);
 #endif /* BSD_KERNEL_PRIVATE */
 
 #endif /* _NETINET6_IN6_IFATTACH_H_ */

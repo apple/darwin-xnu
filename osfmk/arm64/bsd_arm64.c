@@ -54,7 +54,12 @@
 
 #include <sys/syscall.h>
 
+#if CONFIG_MACF
+#include <security/mac_mach_internal.h>
+#endif
+
 extern void throttle_lowpri_io(int);
+extern arm_debug_state64_t *find_or_allocate_debug_state64(thread_t thread);
 void mach_syscall(struct arm_saved_state*);
 typedef kern_return_t (*mach_call_t)(void *);
 
@@ -116,10 +121,37 @@ arm_get_mach_syscall_args(struct arm_saved_state *state, struct mach_call_args *
 	return KERN_SUCCESS;
 }
 
+/**
+ *  Marks or unmarks the given thread to be single stepped such
+ *  that it executes exactly one instruction and then takes an exception to
+ *  prevent further execution.
+ *
+ *  @param thread 64 bit thread to be single stepped
+ *  @param on boolean value representing whether the thread should be
+ *            single stepped (on is true) or not (on is false)
+ *
+ *  @returns KERN_SUCCESS if the status is successfully set or KERN_FAILURE if
+ *           it fails for any reason.
+ */
 kern_return_t
-thread_setsinglestep(__unused thread_t thread, __unused int on)
+thread_setsinglestep(thread_t thread, int on)
 {
-	return KERN_FAILURE; /* XXX TODO */
+	arm_debug_state64_t *thread_state = find_or_allocate_debug_state64(thread);
+
+	if (thread_state == NULL) {
+		return KERN_FAILURE;
+	}
+
+	if (on) {
+		thread_state->mdscr_el1 |= MDSCR_SS;
+	} else {
+		thread_state->mdscr_el1 &= ~MDSCR_SS;
+	}
+
+	if (thread == current_thread()) {
+		arm_debug_set64(thread->machine.DebugData);
+	}
+	return KERN_SUCCESS;
 }
 
 #if CONFIG_DTRACE
@@ -201,7 +233,33 @@ mach_syscall(struct arm_saved_state *state)
 	    MACHDBG_CODE(DBG_MACH_EXCP_SC, (call_number)) | DBG_FUNC_START,
 	    args.arg1, args.arg2, args.arg3, args.arg4, 0);
 
+#if CONFIG_MACF
+	/*
+	 * Check syscall filter mask, if exists.
+	 *
+	 * Not all mach traps are filtered. e.g., mach_absolute_time() and
+	 * mach_continuous_time(). See handle_svc().
+	 */
+	task_t task = current_task();
+	uint8_t *filter_mask = task->mach_trap_filter_mask;
+
+	if (__improbable(filter_mask != NULL &&
+	    !bitstr_test(filter_mask, call_number))) {
+		if (mac_task_mach_trap_evaluate != NULL) {
+			retval = mac_task_mach_trap_evaluate(get_bsdtask_info(task),
+			    call_number);
+			if (retval) {
+				goto skip_machcall;
+			}
+		}
+	}
+#endif /* CONFIG_MACF */
+
 	retval = mach_call(&args);
+
+#if CONFIG_MACF
+skip_machcall:
+#endif
 
 	DEBUG_KPRINT_SYSCALL_MACH("mach_syscall: retval=0x%x (pid %d, tid %lld)\n", retval,
 	    proc_pid(current_proc()), thread_tid(current_thread()));

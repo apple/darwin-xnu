@@ -32,9 +32,9 @@
 #include <sys/fcntl.h>
 #include <miscfs/devfs/devfs.h>
 
-#if CONFIG_EMBEDDED
+#if defined(__arm__) || defined(__arm64__)
 #include <arm/caches_internal.h>
-#endif
+#endif /* defined(__arm__) || defined(__arm64__) */
 
 #include <sys/dtrace.h>
 #include <sys/dtrace_impl.h>
@@ -43,6 +43,8 @@
 
 #include <sys/sdt_impl.h>
 extern int dtrace_kernel_symbol_mode;
+
+#include <ptrauth.h>
 
 /* #include <machine/trap.h */
 struct savearea_t; /* Used anonymously */
@@ -88,7 +90,6 @@ __sdt_provide_module(void *arg, struct modctl *ctl)
 	sdt_probedesc_t *sdpd;
 	sdt_probe_t *sdp, *old;
 	sdt_provider_t *prov;
-	int len;
 
 	/*
 	 * One for all, and all for one:  if we haven't yet registered all of
@@ -105,51 +106,36 @@ __sdt_provide_module(void *arg, struct modctl *ctl)
 	}
 
 	for (sdpd = mp->sdt_probes; sdpd != NULL; sdpd = sdpd->sdpd_next) {
-		const char *name = sdpd->sdpd_name, *func;
-		char *nname;
-		int i, j;
+		const char *func;
 		dtrace_id_t id;
 
-		for (prov = sdt_providers; prov->sdtp_prefix != NULL; prov++) {
-			const char *prefpart, *prefix = prov->sdtp_prefix;
-
-			if ((prefpart = strstr(name, prefix))) {
-				name = prefpart + strlen(prefix);
+		/* Validate probe's provider name. Do not provide probes for unknown providers. */
+		for (prov = sdt_providers; prov->sdtp_name != NULL; prov++) {
+			if (strcmp(prov->sdtp_prefix, sdpd->sdpd_prov) == 0) {
 				break;
 			}
 		}
 
-		nname = kmem_alloc(len = strlen(name) + 1, KM_SLEEP);
-
-		for (i = 0, j = 0; name[j] != '\0'; i++) {
-			if (name[j] == '_' && name[j + 1] == '_') {
-				nname[i] = '-';
-				j += 2;
-			} else {
-				nname[i] = name[j++];
-			}
+		if (prov->sdtp_name == NULL) {
+			printf("Ignoring probes from unsupported provider %s\n", sdpd->sdpd_prov);
+			continue;
 		}
-
-		nname[i] = '\0';
 
 		sdp = kmem_zalloc(sizeof(sdt_probe_t), KM_SLEEP);
 		sdp->sdp_loadcnt = ctl->mod_loadcnt;
 		sdp->sdp_ctl = ctl;
-		sdp->sdp_name = nname;
-		sdp->sdp_namelen = len;
+		sdp->sdp_name = kmem_alloc(strlen(sdpd->sdpd_name) + 1, KM_SLEEP);
+		strncpy(sdp->sdp_name, sdpd->sdpd_name, strlen(sdpd->sdpd_name) + 1);
+		sdp->sdp_namelen = strlen(sdpd->sdpd_name) + 1;
 		sdp->sdp_provider = prov;
 
-		func = sdpd->sdpd_func;
-
-		if (func == NULL) {
-			func = "<unknown>";
-		}
+		func = (sdpd->sdpd_func != NULL) ? sdpd->sdpd_func : "<unknown>";
 
 		/*
 		 * We have our provider.  Now create the probe.
 		 */
 		if ((id = dtrace_probe_lookup(prov->sdtp_id, modname,
-		    func, nname)) != DTRACE_IDNONE) {
+		    func, sdp->sdp_name)) != DTRACE_IDNONE) {
 			old = dtrace_probe_arg(prov->sdtp_id, id);
 			ASSERT(old != NULL);
 
@@ -158,13 +144,14 @@ __sdt_provide_module(void *arg, struct modctl *ctl)
 			old->sdp_next = sdp;
 		} else {
 			sdp->sdp_id = dtrace_probe_create(prov->sdtp_id,
-			    modname, func, nname, SDT_AFRAMES, sdp);
+			    modname, func, sdp->sdp_name, SDT_AFRAMES, sdp);
 
 			mp->sdt_nprobes++;
 		}
 
 #if 0
-		printf("__sdt_provide_module:  sdpd=0x%p  sdp=0x%p  name=%s, id=%d\n", sdpd, sdp, nname, sdp->sdp_id);
+		printf("__sdt_provide_module:  sdpd=0x%p  sdp=0x%p  name=%s, id=%d\n", sdpd, sdp,
+		    sdp->sdp_name, sdp->sdp_id);
 #endif
 
 		sdp->sdp_hashnext =
@@ -264,7 +251,7 @@ sdt_enable(void *arg, dtrace_id_t id, void *parg)
 		goto err;
 	}
 
-	dtrace_casptr(&tempDTraceTrapHook, NULL, fbt_perfCallback);
+	dtrace_casptr(&tempDTraceTrapHook, NULL, ptrauth_nop_cast(void *, &fbt_perfCallback));
 	if (tempDTraceTrapHook != (perfCallback)fbt_perfCallback) {
 		if (sdt_verbose) {
 			cmn_err(CE_NOTE, "sdt_enable is failing for probe %s "
@@ -418,26 +405,20 @@ _sdt_open(dev_t dev, int flags, int devtype, struct proc *p)
 
 #define SDT_MAJOR  -24 /* let the kernel pick the device number */
 
-/*
- * A struct describing which functions will get invoked for certain
- * actions.
- */
-static struct cdevsw sdt_cdevsw =
+static const struct cdevsw sdt_cdevsw =
 {
-	_sdt_open,              /* open */
-	eno_opcl,                       /* close */
-	eno_rdwrt,                      /* read */
-	eno_rdwrt,                      /* write */
-	eno_ioctl,                      /* ioctl */
-	(stop_fcn_t *)nulldev, /* stop */
-	(reset_fcn_t *)nulldev, /* reset */
-	NULL,                           /* tty's */
-	eno_select,                     /* select */
-	eno_mmap,                       /* mmap */
-	eno_strat,                      /* strategy */
-	eno_getc,                       /* getc */
-	eno_putc,                       /* putc */
-	0                                       /* type */
+	.d_open = _sdt_open,
+	.d_close = eno_opcl,
+	.d_read = eno_rdwrt,
+	.d_write = eno_rdwrt,
+	.d_ioctl = eno_ioctl,
+	.d_stop = (stop_fcn_t *)nulldev,
+	.d_reset = (reset_fcn_t *)nulldev,
+	.d_select = eno_select,
+	.d_mmap = eno_mmap,
+	.d_strategy = eno_strat,
+	.d_reserved_1 = eno_getc,
+	.d_reserved_2 = eno_putc,
 };
 
 static struct modctl g_sdt_kernctl;
@@ -445,6 +426,38 @@ static struct module g_sdt_mach_module;
 
 #include <mach-o/nlist.h>
 #include <libkern/kernel_mach_header.h>
+
+/*
+ * Represents single record in __DATA,__sdt section.
+ */
+typedef struct dtrace_sdt_def {
+	uintptr_t      dsd_addr;    /* probe site location */
+	const char     *dsd_prov;   /* provider's name */
+	const char     *dsd_name;   /* probe's name */
+} __attribute__((__packed__))  dtrace_sdt_def_t;
+
+/*
+ * Creates a copy of name and unescapes '-' characters.
+ */
+static char *
+sdt_strdup_name(const char *name)
+{
+	size_t len = strlen(name) + 1;
+	size_t i, j;
+	char *nname = kmem_alloc(len, KM_SLEEP);
+
+	for (i = 0, j = 0; name[j] != '\0'; i++) {
+		if (name[j] == '_' && name[j + 1] == '_') {
+			nname[i] = '-';
+			j += 2;
+		} else {
+			nname[i] = name[j++];
+		}
+	}
+
+	nname[i] = '\0';
+	return nname;
+}
 
 void
 sdt_early_init( void )
@@ -459,10 +472,12 @@ sdt_early_init( void )
 		kernel_mach_header_t        *mh;
 		struct load_command         *cmd;
 		kernel_segment_command_t    *orig_ts = NULL, *orig_le = NULL;
+		kernel_section_t            *orig_dt = NULL;
 		struct symtab_command       *orig_st = NULL;
 		kernel_nlist_t              *sym = NULL;
 		char                        *strings;
 		unsigned int                i;
+		unsigned int                len;
 
 		g_sdt_mach_module.sdt_nprobes = 0;
 		g_sdt_mach_module.sdt_probes = NULL;
@@ -499,6 +514,12 @@ sdt_early_init( void )
 			cmd = (struct load_command *) ((uintptr_t) cmd + cmd->cmdsize);
 		}
 
+		/* Locate DTrace SDT section in the object. */
+		if ((orig_dt = getsectbyname("__DATA", "__sdt")) == NULL) {
+			printf("DTrace section not found.\n");
+			return;
+		}
+
 		if ((orig_ts == NULL) || (orig_st == NULL) || (orig_le == NULL)) {
 			return;
 		}
@@ -506,88 +527,68 @@ sdt_early_init( void )
 		sym = (kernel_nlist_t *)(orig_le->vmaddr + orig_st->symoff - orig_le->fileoff);
 		strings = (char *)(orig_le->vmaddr + orig_st->stroff - orig_le->fileoff);
 
-		for (i = 0; i < orig_st->nsyms; i++) {
-			uint8_t n_type = sym[i].n_type & (N_TYPE | N_EXT);
-			char *name = strings + sym[i].n_un.n_strx;
-			const char *prev_name;
+		/*
+		 * Iterate over SDT section and establish all SDT probes.
+		 */
+		dtrace_sdt_def_t *sdtdef = (dtrace_sdt_def_t *)(orig_dt->addr);
+		for (size_t k = 0; k < orig_dt->size / sizeof(dtrace_sdt_def_t); k++, sdtdef++) {
+			const char *funcname;
 			unsigned long best;
-			unsigned int j;
 
-			/* Check that the symbol is a global and that it has a name. */
-			if (((N_SECT | N_EXT) != n_type && (N_ABS | N_EXT) != n_type)) {
-				continue;
-			}
+			sdt_probedesc_t *sdpd = kmem_alloc(sizeof(sdt_probedesc_t), KM_SLEEP);
 
-			if (0 == sym[i].n_un.n_strx) { /* iff a null, "", name. */
-				continue;
-			}
+			/* Unescape probe name and keep a note of the size of original memory allocation. */
+			sdpd->sdpd_name = sdt_strdup_name(sdtdef->dsd_name);
+			sdpd->sdpd_namelen = strlen(sdtdef->dsd_name) + 1;
 
-			/* Lop off omnipresent leading underscore. */
-			if (*name == '_') {
-				name += 1;
-			}
+			/* Used only for provider structure lookup so there is no need to make dynamic copy. */
+			sdpd->sdpd_prov = sdtdef->dsd_prov;
 
-			if (strncmp(name, DTRACE_PROBE_PREFIX, sizeof(DTRACE_PROBE_PREFIX) - 1) == 0) {
-				sdt_probedesc_t *sdpd = kmem_alloc(sizeof(sdt_probedesc_t), KM_SLEEP);
-				int len = strlen(name) + 1;
+			/*
+			 * Find the symbol immediately preceding the sdt probe site just discovered,
+			 * that symbol names the function containing the sdt probe.
+			 */
+			funcname = "<unknown>";
+			for (i = 0; i < orig_st->nsyms; i++) {
+				uint8_t jn_type = sym[i].n_type & N_TYPE;
+				char *jname = strings + sym[i].n_un.n_strx;
 
-				sdpd->sdpd_name = kmem_alloc(len, KM_SLEEP);
-				strncpy(sdpd->sdpd_name, name, len); /* NUL termination is ensured. */
-
-				prev_name = "<unknown>";
-				best = 0;
-
-				/*
-				 * Find the symbol immediately preceding the sdt probe site just discovered,
-				 * that symbol names the function containing the sdt probe.
-				 */
-				for (j = 0; j < orig_st->nsyms; j++) {
-					uint8_t jn_type = sym[j].n_type & N_TYPE;
-					char *jname = strings + sym[j].n_un.n_strx;
-
-					if ((N_SECT != jn_type && N_ABS != jn_type)) {
-						continue;
-					}
-
-					if (0 == sym[j].n_un.n_strx) { /* iff a null, "", name. */
-						continue;
-					}
-
-					if (*jname == '_') {
-						jname += 1;
-					}
-
-					if (*(unsigned long *)sym[i].n_value <= (unsigned long)sym[j].n_value) {
-						continue;
-					}
-
-					if ((unsigned long)sym[j].n_value > best) {
-						best = (unsigned long)sym[j].n_value;
-						prev_name = jname;
-					}
+				if ((N_SECT != jn_type && N_ABS != jn_type)) {
+					continue;
 				}
 
-				sdpd->sdpd_func = kmem_alloc((len = strlen(prev_name) + 1), KM_SLEEP);
-				strncpy(sdpd->sdpd_func, prev_name, len); /* NUL termination is ensured. */
+				if (0 == sym[i].n_un.n_strx) { /* iff a null, "", name. */
+					continue;
+				}
 
-				sdpd->sdpd_offset = *(unsigned long *)sym[i].n_value;
+				if (*jname == '_') {
+					jname += 1;
+				}
+
+				if (sdtdef->dsd_addr <= (unsigned long)sym[i].n_value) {
+					continue;
+				}
+
+				if ((unsigned long)sym[i].n_value > best) {
+					best = (unsigned long)sym[i].n_value;
+					funcname = jname;
+				}
+			}
+
+			len = strlen(funcname) + 1;
+			sdpd->sdpd_func = kmem_alloc(len, KM_SLEEP);
+			strncpy(sdpd->sdpd_func, funcname, len);
+
+			sdpd->sdpd_offset = sdtdef->dsd_addr;
 #if defined(__arm__)
-				/* PR8353094 - mask off thumb-bit */
-				sdpd->sdpd_offset &= ~0x1U;
+			/* PR8353094 - mask off thumb-bit */
+			sdpd->sdpd_offset &= ~0x1U;
 #elif defined(__arm64__)
-				sdpd->sdpd_offset &= ~0x1LU;
+			sdpd->sdpd_offset &= ~0x1LU;
 #endif  /* __arm__ */
 
-#if 0
-				printf("sdt_init: sdpd_offset=0x%lx, n_value=0x%lx, name=%s\n",
-				    sdpd->sdpd_offset, *(unsigned long *)sym[i].n_value, name);
-#endif
-
-				sdpd->sdpd_next = g_sdt_mach_module.sdt_probes;
-				g_sdt_mach_module.sdt_probes = sdpd;
-			} else {
-				prev_name = name;
-			}
+			sdpd->sdpd_next = g_sdt_mach_module.sdt_probes;
+			g_sdt_mach_module.sdt_probes = sdpd;
 		}
 	}
 }
@@ -630,7 +631,7 @@ sdt_provide_module(void *arg, struct modctl *ctl)
 		sdt_probedesc_t *sdpd = g_sdt_mach_module.sdt_probes;
 		while (sdpd) {
 			sdt_probedesc_t *this_sdpd = sdpd;
-			kmem_free((void *)sdpd->sdpd_name, strlen(sdpd->sdpd_name) + 1);
+			kmem_free((void *)sdpd->sdpd_name, sdpd->sdpd_namelen);
 			kmem_free((void *)sdpd->sdpd_func, strlen(sdpd->sdpd_func) + 1);
 			sdpd = sdpd->sdpd_next;
 			kmem_free((void *)this_sdpd, sizeof(sdt_probedesc_t));

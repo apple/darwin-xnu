@@ -6,6 +6,7 @@
 #include <kern/backtrace.h>
 #include <libkern/libkern.h>
 #endif
+#include <os/atomic_private.h>
 
 #include "refcnt.h"
 
@@ -20,8 +21,11 @@ bool ref_debug_enable = false;
 static const size_t ref_log_nrecords = 1000000;
 
 #define REFLOG_BTDEPTH   10
-#define REFLOG_RETAIN    1
-#define REFLOG_RELEASE   2
+
+__enum_closed_decl(reflog_op_t, uint8_t, {
+	REFLOG_RETAIN  = 1,
+	REFLOG_RELEASE = 2
+});
 
 #define __debug_only
 #else
@@ -60,9 +64,9 @@ os_ref_panic_overflow(void *rc)
 }
 
 static inline void
-os_ref_check_underflow(void *rc, os_ref_count_t count)
+os_ref_check_underflow(void *rc, os_ref_count_t count, os_ref_count_t n)
 {
-	if (__improbable(count == 0)) {
+	if (__improbable(count < n)) {
 		os_ref_panic_underflow(rc);
 	}
 }
@@ -76,17 +80,11 @@ os_ref_check_overflow(os_ref_atomic_t *rc, os_ref_count_t count)
 }
 
 static inline void
-os_ref_assert_referenced(void *rc, os_ref_count_t count)
+os_ref_check_retain(os_ref_atomic_t *rc, os_ref_count_t count, os_ref_count_t n)
 {
-	if (__improbable(count == 0)) {
+	if (__improbable(count < n)) {
 		os_ref_panic_resurrection(rc);
 	}
-}
-
-static inline void
-os_ref_check_retain(os_ref_atomic_t *rc, os_ref_count_t count)
-{
-	os_ref_assert_referenced(rc, count);
 	os_ref_check_overflow(rc, count);
 }
 
@@ -94,7 +92,7 @@ os_ref_check_retain(os_ref_atomic_t *rc, os_ref_count_t count)
 #if KERNEL
 __attribute__((cold, noinline))
 static void
-ref_log_op(struct os_refgrp *grp, void *elem, int op)
+ref_log_op(struct os_refgrp *grp, void *elem, reflog_op_t op)
 {
 	if (grp == NULL) {
 		return;
@@ -158,13 +156,22 @@ ref_log_init(struct os_refgrp *grp)
 #else
 
 #ifndef ref_log_init
-# define ref_log_init(...) do {} while (0)
+static inline void
+ref_log_init(struct os_refgrp *grp __unused)
+{
+}
 #endif
 #ifndef ref_log_op
-# define ref_log_op(...) do {} while (0)
+static inline void
+ref_log_op(struct os_refgrp *grp __unused, void *rc __unused, reflog_op_t op __unused)
+{
+}
 #endif
 #ifndef ref_log_drop
-# define ref_log_drop(...) do {} while (0)
+static inline void
+ref_log_drop(struct os_refgrp *grp __unused, void *rc __unused)
+{
+}
 #endif
 
 #endif /* KERNEL */
@@ -248,7 +255,7 @@ ref_retain_debug(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp)
 void
 os_ref_init_count_internal(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp, os_ref_count_t count)
 {
-	os_ref_check_underflow(rc, count);
+	os_ref_check_underflow(rc, count, 1);
 	atomic_init(rc, count);
 
 #if OS_REFCNT_DEBUG
@@ -262,7 +269,7 @@ void
 os_ref_retain_internal(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp)
 {
 	os_ref_count_t old = atomic_fetch_add_explicit(rc, 1, memory_order_relaxed);
-	os_ref_check_retain(rc, old);
+	os_ref_check_retain(rc, old, 1);
 
 #if OS_REFCNT_DEBUG
 	if (__improbable(grp && ref_debug_enable)) {
@@ -274,20 +281,17 @@ os_ref_retain_internal(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp)
 bool
 os_ref_retain_try_internal(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp)
 {
-	os_ref_count_t cur = os_ref_get_count_internal(rc);
+	os_ref_count_t cur, next;
 
-	while (1) {
+	os_atomic_rmw_loop(rc, cur, next, relaxed, {
 		if (__improbable(cur == 0)) {
-			return false;
+		        os_atomic_rmw_loop_give_up(return false);
 		}
 
-		os_ref_check_retain(rc, cur);
+		next = cur + 1;
+	});
 
-		if (atomic_compare_exchange_weak_explicit(rc, &cur, cur + 1,
-		    memory_order_relaxed, memory_order_relaxed)) {
-			break;
-		}
-	}
+	os_ref_check_overflow(rc, cur);
 
 #if OS_REFCNT_DEBUG
 	if (__improbable(grp && ref_debug_enable)) {
@@ -300,7 +304,8 @@ os_ref_retain_try_internal(os_ref_atomic_t *rc, struct os_refgrp * __debug_only 
 
 __attribute__((always_inline))
 static inline os_ref_count_t
-_os_ref_release_inline(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp,
+_os_ref_release_inline(os_ref_atomic_t *rc, os_ref_count_t n,
+    struct os_refgrp * __debug_only grp,
     memory_order release_order, memory_order dealloc_order)
 {
 	os_ref_count_t val;
@@ -315,15 +320,16 @@ _os_ref_release_inline(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp,
 	}
 #endif
 
-	val = atomic_fetch_sub_explicit(rc, 1, release_order);
-	os_ref_check_underflow(rc, val);
-	if (__improbable(--val == 0)) {
+	val = atomic_fetch_sub_explicit(rc, n, release_order);
+	os_ref_check_underflow(rc, val, n);
+	val -= n;
+	if (__improbable(val < n)) {
 		atomic_load_explicit(rc, dealloc_order);
 	}
 
 #if OS_REFCNT_DEBUG
 	if (__improbable(grp && ref_debug_enable)) {
-		if (val == 0) {
+		if (val < n) {
 			ref_log_drop(grp, (void *)rc); /* rc is only used as an identifier */
 		}
 		ref_release_group(grp, !val);
@@ -332,6 +338,21 @@ _os_ref_release_inline(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp,
 
 	return val;
 }
+
+#if OS_REFCNT_DEBUG
+__attribute__((noinline))
+static os_ref_count_t
+os_ref_release_n_internal(os_ref_atomic_t *rc, os_ref_count_t n,
+    struct os_refgrp * __debug_only grp,
+    memory_order release_order, memory_order dealloc_order)
+{
+	// Legacy exported interface with bad codegen due to the barriers
+	// not being immediate
+	//
+	// Also serves as the debug function
+	return _os_ref_release_inline(rc, n, grp, release_order, dealloc_order);
+}
+#endif
 
 __attribute__((noinline))
 os_ref_count_t
@@ -342,7 +363,7 @@ os_ref_release_internal(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp
 	// not being immediate
 	//
 	// Also serves as the debug function
-	return _os_ref_release_inline(rc, grp, release_order, dealloc_order);
+	return _os_ref_release_inline(rc, 1, grp, release_order, dealloc_order);
 }
 
 os_ref_count_t
@@ -355,7 +376,7 @@ os_ref_release_barrier_internal(os_ref_atomic_t *rc,
 		           memory_order_release, memory_order_acquire);
 	}
 #endif
-	return _os_ref_release_inline(rc, NULL,
+	return _os_ref_release_inline(rc, 1, NULL,
 	           memory_order_release, memory_order_acquire);
 }
 
@@ -369,7 +390,7 @@ os_ref_release_relaxed_internal(os_ref_atomic_t *rc,
 		           memory_order_relaxed, memory_order_relaxed);
 	}
 #endif
-	return _os_ref_release_inline(rc, NULL,
+	return _os_ref_release_inline(rc, 1, NULL,
 	           memory_order_relaxed, memory_order_relaxed);
 }
 
@@ -377,7 +398,7 @@ void
 os_ref_retain_locked_internal(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp)
 {
 	os_ref_count_t val = os_ref_get_count_internal(rc);
-	os_ref_check_retain(rc, val);
+	os_ref_check_retain(rc, val, 1);
 	atomic_store_explicit(rc, ++val, memory_order_relaxed);
 
 #if OS_REFCNT_DEBUG
@@ -391,7 +412,7 @@ os_ref_count_t
 os_ref_release_locked_internal(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp)
 {
 	os_ref_count_t val = os_ref_get_count_internal(rc);
-	os_ref_check_underflow(rc, val);
+	os_ref_check_underflow(rc, val, 1);
 	atomic_store_explicit(rc, --val, memory_order_relaxed);
 
 #if OS_REFCNT_DEBUG
@@ -411,22 +432,15 @@ os_ref_release_locked_internal(os_ref_atomic_t *rc, struct os_refgrp * __debug_o
  * Bitwise API
  */
 
-os_ref_count_t
-os_ref_get_count_mask(os_ref_atomic_t *rc, os_ref_count_t bits)
-{
-	os_ref_count_t ret;
-	ret = os_ref_get_count_raw(rc);
-	return ret >> bits;
-}
-
 #undef os_ref_init_count_mask
 void
-os_ref_init_count_mask(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp,
-    os_ref_count_t init_count, os_ref_count_t init_bits, os_ref_count_t b)
+os_ref_init_count_mask(os_ref_atomic_t *rc, uint32_t b,
+    struct os_refgrp *__debug_only grp,
+    os_ref_count_t init_count, uint32_t init_bits)
 {
 	assert(init_bits < (1U << b));
-	os_ref_check_underflow(rc, init_count);
 	atomic_init(rc, (init_count << b) | init_bits);
+	os_ref_check_underflow(rc, (init_count << b), 1u << b);
 
 #if OS_REFCNT_DEBUG
 	if (__improbable(ref_debug_enable && grp)) {
@@ -435,13 +449,13 @@ os_ref_init_count_mask(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp,
 #endif
 }
 
-#undef os_ref_retain_mask
-void
-os_ref_retain_mask(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp, os_ref_count_t bits)
+__attribute__((always_inline))
+static inline void
+os_ref_retain_mask_inline(os_ref_atomic_t *rc, uint32_t n,
+    struct os_refgrp *__debug_only grp, memory_order mo)
 {
-	os_ref_count_t old = atomic_fetch_add_explicit(rc, 1U << bits, memory_order_relaxed);
-	os_ref_check_overflow(rc, old);
-	os_ref_assert_referenced(rc, old >> bits);
+	os_ref_count_t old = atomic_fetch_add_explicit(rc, n, mo);
+	os_ref_check_retain(rc, old, n);
 
 #if OS_REFCNT_DEBUG
 	if (__improbable(grp && ref_debug_enable)) {
@@ -450,59 +464,64 @@ os_ref_retain_mask(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp, os_
 #endif
 }
 
-#undef os_ref_release_mask_internal
-os_ref_count_t
-os_ref_release_mask_internal(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp, os_ref_count_t bits,
-    memory_order release_order, memory_order dealloc_order)
+void
+os_ref_retain_mask_internal(os_ref_atomic_t *rc, uint32_t n,
+    struct os_refgrp *__debug_only grp)
 {
-#if OS_REFCNT_DEBUG
-	if (__improbable(grp && ref_debug_enable)) {
-		/*
-		 * Care not to use 'rc' after the decrement because it might be deallocated
-		 * under us.
-		 */
-		ref_log_op(grp, (void *)rc, REFLOG_RELEASE);
-	}
-#endif
-
-	os_ref_count_t val = atomic_fetch_sub_explicit(rc, 1U << bits, release_order);
-	val >>= bits;
-	os_ref_check_underflow(rc, val);
-	if (__improbable(--val == 0)) {
-		atomic_load_explicit(rc, dealloc_order);
-	}
-
-#if OS_REFCNT_DEBUG
-	if (__improbable(grp && ref_debug_enable)) {
-		if (val == 0) {
-			ref_log_drop(grp, (void *)rc); /* rc is only used as an identifier */
-		}
-		ref_release_group(grp, !val);
-	}
-#endif
-
-	return val;
+	os_ref_retain_mask_inline(rc, n, grp, memory_order_relaxed);
 }
 
-#undef os_ref_retain_try_mask
-bool
-os_ref_retain_try_mask(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp, os_ref_count_t bits)
+void
+os_ref_retain_acquire_mask_internal(os_ref_atomic_t *rc, uint32_t n,
+    struct os_refgrp *__debug_only grp)
 {
-	os_ref_count_t cur = os_ref_get_count_internal(rc);
+	os_ref_retain_mask_inline(rc, n, grp, memory_order_acquire);
+}
 
-	while (1) {
-		if (__improbable((cur >> bits) == 0)) {
-			return false;
-		}
-
-		os_ref_check_overflow(rc, cur);
-
-		os_ref_count_t next = cur + (1U << bits);
-		if (atomic_compare_exchange_weak_explicit(rc, &cur, next,
-		    memory_order_relaxed, memory_order_relaxed)) {
-			break;
-		}
+uint32_t
+os_ref_release_barrier_mask_internal(os_ref_atomic_t *rc, uint32_t n,
+    struct os_refgrp *__debug_only grp)
+{
+#if OS_REFCNT_DEBUG
+	if (__improbable(grp && ref_debug_enable)) {
+		return os_ref_release_n_internal(rc, n, grp,
+		           memory_order_release, memory_order_acquire);
 	}
+#endif
+
+	return _os_ref_release_inline(rc, n, NULL,
+	           memory_order_release, memory_order_acquire);
+}
+
+uint32_t
+os_ref_release_relaxed_mask_internal(os_ref_atomic_t *rc, uint32_t n,
+    struct os_refgrp *__debug_only grp)
+{
+#if OS_REFCNT_DEBUG
+	if (__improbable(grp && ref_debug_enable)) {
+		return os_ref_release_n_internal(rc, n, grp,
+		           memory_order_relaxed, memory_order_relaxed);
+	}
+#endif
+
+	return _os_ref_release_inline(rc, n, NULL,
+	           memory_order_relaxed, memory_order_relaxed);
+}
+
+bool
+os_ref_retain_try_mask_internal(os_ref_atomic_t *rc, uint32_t n,
+    uint32_t reject_mask, struct os_refgrp *__debug_only grp)
+{
+	os_ref_count_t cur, next;
+
+	os_atomic_rmw_loop(rc, cur, next, relaxed, {
+		if (__improbable(cur < n || (cur & reject_mask))) {
+		        os_atomic_rmw_loop_give_up(return false);
+		}
+		next = cur + n;
+	});
+
+	os_ref_check_overflow(rc, cur);
 
 #if OS_REFCNT_DEBUG
 	if (__improbable(grp && ref_debug_enable)) {
@@ -513,45 +532,26 @@ os_ref_retain_try_mask(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp,
 	return true;
 }
 
-#undef os_ref_retain_locked_mask
-void
-os_ref_retain_locked_mask(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp, os_ref_count_t bits)
+bool
+os_ref_retain_try_acquire_mask_internal(os_ref_atomic_t *rc, uint32_t n,
+    uint32_t reject_mask, struct os_refgrp *__debug_only grp)
 {
-	os_ref_count_t val = os_ref_get_count_internal(rc);
+	os_ref_count_t cur, next;
 
-	os_ref_check_overflow(rc, val);
-	os_ref_assert_referenced(rc, val >> bits);
+	os_atomic_rmw_loop(rc, cur, next, acquire, {
+		if (__improbable(cur < n || (cur & reject_mask))) {
+		        os_atomic_rmw_loop_give_up(return false);
+		}
+		next = cur + n;
+	});
 
-	val += (1U << bits);
-	atomic_store_explicit(rc, val, memory_order_relaxed);
+	os_ref_check_overflow(rc, cur);
 
 #if OS_REFCNT_DEBUG
 	if (__improbable(grp && ref_debug_enable)) {
 		ref_retain_debug(rc, grp);
 	}
 #endif
-}
 
-#undef os_ref_release_locked_mask
-os_ref_count_t
-os_ref_release_locked_mask(os_ref_atomic_t *rc, struct os_refgrp * __debug_only grp, os_ref_count_t bits)
-{
-	os_ref_count_t val = os_ref_get_count_internal(rc);
-	os_ref_check_underflow(rc, val >> bits);
-	val -= (1U << bits);
-	atomic_store_explicit(rc, val, memory_order_relaxed);
-
-	val >>= bits;
-
-#if OS_REFCNT_DEBUG
-	if (__improbable(grp && ref_debug_enable)) {
-		ref_release_group(grp, !val);
-		ref_log_op(grp, (void *)rc, REFLOG_RELEASE);
-		if (val == 0) {
-			ref_log_drop(grp, (void *)rc);
-		}
-	}
-#endif
-
-	return val;
+	return true;
 }

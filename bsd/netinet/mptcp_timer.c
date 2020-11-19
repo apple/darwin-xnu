@@ -69,7 +69,7 @@ SYSCTL_INT(_net_inet_mptcp, OID_AUTO, tw, CTLFLAG_RW | CTLFLAG_LOCKED,
 static int mptcp_cancel_urgency_timer(struct mptses *mpte);
 
 static int
-mptcp_timer_demux(struct mptses *mpte, uint32_t now_msecs)
+mptcp_timer_demux(struct mptses *mpte, uint64_t now_msecs)
 {
 	struct mptcb *mp_tp = NULL;
 	mp_tp = mpte->mpte_mptcb;
@@ -82,8 +82,7 @@ mptcp_timer_demux(struct mptses *mpte, uint32_t now_msecs)
 		if (mp_tp->mpt_rxtstart == 0) {
 			break;
 		}
-		if ((now_msecs - mp_tp->mpt_rxtstart) >
-		    (mptcp_rto * hz)) {
+		if ((now_msecs - mp_tp->mpt_rxtstart) > (mptcp_rto * hz)) {
 			if (MPTCP_SEQ_GT(mp_tp->mpt_snduna, mp_tp->mpt_rtseq)) {
 				mp_tp->mpt_timer_vals = 0;
 				mp_tp->mpt_rtseq = 0;
@@ -133,8 +132,8 @@ mptcp_timer(struct mppcbinfo *mppi)
 {
 	struct mppcb *mpp, *tmpp;
 	struct timeval now;
-	u_int32_t now_msecs;
 	uint32_t resched_timer = 0;
+	uint64_t now_msecs;
 
 	LCK_MTX_ASSERT(&mppi->mppi_lock, LCK_MTX_ASSERT_OWNED);
 

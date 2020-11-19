@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2007 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -1681,7 +1681,7 @@ kern_return_t
 mach_vm_region(
 	vm_map_t                 map,
 	mach_vm_offset_t        *address,               /* IN/OUT */
-	mach_vm_size_t  *size,                  /* OUT */
+	mach_vm_size_t          *size,                  /* OUT */
 	vm_region_flavor_t       flavor,                /* IN */
 	vm_region_info_t         info,                  /* OUT */
 	mach_msg_type_number_t  *count,                 /* IN/OUT */
@@ -1955,7 +1955,7 @@ mach_vm_purgable_control(
 	}
 
 	return vm_map_purgable_control(map,
-	           vm_map_trunc_page(address, PAGE_MASK),
+	           vm_map_trunc_page(address, VM_MAP_PAGE_MASK(map)),
 	           control,
 	           state);
 }
@@ -1977,7 +1977,7 @@ vm_purgable_control(
 	}
 
 	return vm_map_purgable_control(map,
-	           vm_map_trunc_page(address, PAGE_MASK),
+	           vm_map_trunc_page(address, VM_MAP_PAGE_MASK(map)),
 	           control,
 	           state);
 }
@@ -2086,14 +2086,22 @@ mach_vm_page_range_query(
 	void                    *local_disp = NULL;;
 	vm_map_size_t           info_size = 0, local_disp_size = 0;
 	mach_vm_offset_t        start = 0, end = 0;
+	int                     effective_page_shift, effective_page_size, effective_page_mask;
 
 	if (map == VM_MAP_NULL || dispositions_count == NULL) {
 		return KERN_INVALID_ARGUMENT;
 	}
 
+	effective_page_shift = vm_self_region_page_shift_safely(map);
+	if (effective_page_shift == -1) {
+		return KERN_INVALID_ARGUMENT;
+	}
+	effective_page_size = (1 << effective_page_shift);
+	effective_page_mask = effective_page_size - 1;
+
 	disp_buf_req_size = (*dispositions_count * sizeof(int));
-	start = mach_vm_trunc_page(address);
-	end = mach_vm_round_page(address + size);
+	start = vm_map_trunc_page(address, effective_page_mask);
+	end = vm_map_round_page(address + size, effective_page_mask);
 
 	if (end < start) {
 		return KERN_INVALID_ARGUMENT;
@@ -2116,22 +2124,17 @@ mach_vm_page_range_query(
 	 */
 
 	curr_sz = MIN(end - start, MAX_PAGE_RANGE_QUERY);
-	num_pages = (int) (curr_sz >> PAGE_SHIFT);
+	num_pages = (int) (curr_sz >> effective_page_shift);
 
 	info_size = num_pages * sizeof(vm_page_info_basic_data_t);
-	info = kalloc(info_size);
-
-	if (info == NULL) {
-		return KERN_RESOURCE_SHORTAGE;
-	}
+	info = kheap_alloc(KHEAP_TEMP, info_size, Z_WAITOK);
 
 	local_disp_size = num_pages * sizeof(int);
-	local_disp = kalloc(local_disp_size);
+	local_disp = kheap_alloc(KHEAP_TEMP, local_disp_size, Z_WAITOK);
 
-	if (local_disp == NULL) {
-		kfree(info, info_size);
-		info = NULL;
-		return KERN_RESOURCE_SHORTAGE;
+	if (info == NULL || local_disp == NULL) {
+		kr = KERN_RESOURCE_SHORTAGE;
+		goto out;
 	}
 
 	while (size) {
@@ -2139,7 +2142,8 @@ mach_vm_page_range_query(
 		kr = vm_map_page_range_info_internal(
 			map,
 			start,
-			mach_vm_round_page(start + curr_sz),
+			vm_map_round_page(start + curr_sz, effective_page_mask),
+			effective_page_shift,
 			VM_PAGE_INFO_BASIC,
 			(vm_page_info_t) info,
 			&count);
@@ -2175,19 +2179,20 @@ mach_vm_page_range_query(
 
 			size -= curr_sz;
 
-			curr_sz = MIN(mach_vm_round_page(size), MAX_PAGE_RANGE_QUERY);
-			num_pages = (int)(curr_sz >> PAGE_SHIFT);
+			curr_sz = MIN(vm_map_round_page(size, effective_page_mask), MAX_PAGE_RANGE_QUERY);
+			num_pages = (int)(curr_sz >> effective_page_shift);
 		}
 	}
 
 	*dispositions_count = disp_buf_total_size / sizeof(int);
 
-	kfree(local_disp, local_disp_size);
-	local_disp = NULL;
-
-	kfree(info, info_size);
-	info = NULL;
-
+out:
+	if (local_disp) {
+		kheap_free(KHEAP_TEMP, local_disp, local_disp_size);
+	}
+	if (info) {
+		kheap_free(KHEAP_TEMP, info, info_size);
+	}
 	return kr;
 }
 
@@ -2279,13 +2284,6 @@ vm_map_get_upl(
 	return kr;
 }
 
-#if CONFIG_EMBEDDED
-extern int proc_selfpid(void);
-extern char *proc_name_address(void *p);
-int cs_executable_mem_entry = 0;
-int log_executable_mem_entry = 0;
-#endif /* CONFIG_EMBEDDED */
-
 /*
  * mach_make_memory_entry_64
  *
@@ -2335,31 +2333,13 @@ mach_make_memory_entry_internal(
 	ipc_port_t              *object_handle,
 	ipc_port_t              parent_handle)
 {
-	vm_map_version_t        version;
 	vm_named_entry_t        parent_entry;
 	vm_named_entry_t        user_entry;
 	ipc_port_t              user_handle;
 	kern_return_t           kr;
-	vm_map_t                real_map;
-
-	/* needed for call to vm_map_lookup_locked */
-	boolean_t               wired;
-	boolean_t               iskernel;
-	vm_object_offset_t      obj_off;
-	vm_prot_t               prot;
-	struct vm_object_fault_info     fault_info = {};
 	vm_object_t             object;
-	vm_object_t             shadow_object;
-
-	/* needed for direct map entry manipulation */
-	vm_map_entry_t          map_entry;
-	vm_map_entry_t          next_entry;
-	vm_map_t                local_map;
-	vm_map_t                original_map = target_map;
-	vm_map_size_t           total_size, map_size;
+	vm_map_size_t           map_size;
 	vm_map_offset_t         map_start, map_end;
-	vm_map_offset_t         local_offset;
-	vm_object_size_t        mappable_size;
 
 	/*
 	 * Stash the offset in the page for use by vm_map_enter_mem_object()
@@ -2371,18 +2351,18 @@ mach_make_memory_entry_internal(
 	vm_prot_t               protections;
 	vm_prot_t               original_protections, mask_protections;
 	unsigned int            wimg_mode;
-
-	boolean_t               force_shadow = FALSE;
 	boolean_t               use_data_addr;
 	boolean_t               use_4K_compat;
-#if VM_NAMED_ENTRY_LIST
-	int                     alias = -1;
-#endif /* VM_NAMED_ENTRY_LIST */
+
+	DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x\n", target_map, offset, *size, permission);
+
+	user_entry = NULL;
 
 	if ((permission & MAP_MEM_FLAGS_MASK) & ~MAP_MEM_FLAGS_ALL) {
 		/*
 		 * Unknown flag: reject for forward compatibility.
 		 */
+		DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_INVALID_VALUE);
 		return KERN_INVALID_VALUE;
 	}
 
@@ -2394,6 +2374,7 @@ mach_make_memory_entry_internal(
 	}
 
 	if (parent_entry && parent_entry->is_copy) {
+		DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_INVALID_ARGUMENT);
 		return KERN_INVALID_ARGUMENT;
 	}
 
@@ -2407,20 +2388,25 @@ mach_make_memory_entry_internal(
 	user_handle = IP_NULL;
 	user_entry = NULL;
 
-	map_start = vm_map_trunc_page(offset, PAGE_MASK);
+	map_start = vm_map_trunc_page(offset, VM_MAP_PAGE_MASK(target_map));
 
 	if (permission & MAP_MEM_ONLY) {
 		boolean_t               parent_is_object;
 
-		map_end = vm_map_round_page(offset + *size, PAGE_MASK);
+		map_end = vm_map_round_page(offset + *size, VM_MAP_PAGE_MASK(target_map));
 		map_size = map_end - map_start;
 
 		if (use_data_addr || use_4K_compat || parent_entry == NULL) {
+			DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_INVALID_ARGUMENT);
 			return KERN_INVALID_ARGUMENT;
 		}
 
-		parent_is_object = !parent_entry->is_sub_map;
-		object = parent_entry->backing.object;
+		parent_is_object = parent_entry->is_object;
+		if (!parent_is_object) {
+			DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_INVALID_ARGUMENT);
+			return KERN_INVALID_ARGUMENT;
+		}
+		object = vm_named_entry_to_vm_object(parent_entry);
 		if (parent_is_object && object != VM_OBJECT_NULL) {
 			wimg_mode = object->wimg_bits;
 		} else {
@@ -2428,6 +2414,7 @@ mach_make_memory_entry_internal(
 		}
 		if ((access != GET_MAP_MEM(parent_entry->protection)) &&
 		    !(parent_entry->protection & VM_PROT_WRITE)) {
+			DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_INVALID_RIGHT);
 			return KERN_INVALID_RIGHT;
 		}
 		vm_prot_to_wimg(access, &wimg_mode);
@@ -2446,20 +2433,29 @@ mach_make_memory_entry_internal(
 		if (object_handle) {
 			*object_handle = IP_NULL;
 		}
+		DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_SUCCESS);
 		return KERN_SUCCESS;
 	} else if (permission & MAP_MEM_NAMED_CREATE) {
 		int     ledger_flags = 0;
 		task_t  owner;
 
-		map_end = vm_map_round_page(offset + *size, PAGE_MASK);
+		map_end = vm_map_round_page(offset + *size, VM_MAP_PAGE_MASK(target_map));
 		map_size = map_end - map_start;
 
 		if (use_data_addr || use_4K_compat) {
+			DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_INVALID_ARGUMENT);
 			return KERN_INVALID_ARGUMENT;
+		}
+
+		if (map_size == 0) {
+			*size = 0;
+			*object_handle = IPC_PORT_NULL;
+			return KERN_SUCCESS;
 		}
 
 		kr = mach_memory_entry_allocate(&user_entry, &user_handle);
 		if (kr != KERN_SUCCESS) {
+			DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_FAILURE);
 			return KERN_FAILURE;
 		}
 
@@ -2585,7 +2581,16 @@ mach_make_memory_entry_internal(
 
 		/* the object has no pages, so no WIMG bits to update here */
 
-		user_entry->backing.object = object;
+		kr = vm_named_entry_from_vm_object(
+			user_entry,
+			object,
+			0,
+			map_size,
+			(protections & VM_PROT_ALL));
+		if (kr != KERN_SUCCESS) {
+			vm_object_deallocate(object);
+			goto make_mem_done;
+		}
 		user_entry->internal = TRUE;
 		user_entry->is_sub_map = FALSE;
 		user_entry->offset = 0;
@@ -2600,6 +2605,7 @@ mach_make_memory_entry_internal(
 		*size = CAST_DOWN(vm_size_t, (user_entry->size -
 		    user_entry->data_offset));
 		*object_handle = user_handle;
+		DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_SUCCESS);
 		return KERN_SUCCESS;
 	}
 
@@ -2607,11 +2613,17 @@ mach_make_memory_entry_internal(
 		vm_map_copy_t   copy;
 
 		if (target_map == VM_MAP_NULL) {
+			DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_INVALID_TASK);
 			return KERN_INVALID_TASK;
 		}
 
-		map_end = vm_map_round_page(offset + *size, PAGE_MASK);
+		map_end = vm_map_round_page(offset + *size, VM_MAP_PAGE_MASK(target_map));
 		map_size = map_end - map_start;
+		if (map_size == 0) {
+			DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_INVALID_ARGUMENT);
+			return KERN_INVALID_ARGUMENT;
+		}
+
 		if (use_data_addr || use_4K_compat) {
 			offset_in_page = offset - map_start;
 			if (use_4K_compat) {
@@ -2627,12 +2639,15 @@ mach_make_memory_entry_internal(
 		    VM_MAP_COPYIN_ENTRY_LIST,
 		    &copy);
 		if (kr != KERN_SUCCESS) {
+			DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, kr);
 			return kr;
 		}
+		assert(copy != VM_MAP_COPY_NULL);
 
 		kr = mach_memory_entry_allocate(&user_entry, &user_handle);
 		if (kr != KERN_SUCCESS) {
 			vm_map_copy_discard(copy);
+			DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_FAILURE);
 			return KERN_FAILURE;
 		}
 
@@ -2648,19 +2663,47 @@ mach_make_memory_entry_internal(
 		*size = CAST_DOWN(vm_size_t, (user_entry->size -
 		    user_entry->data_offset));
 		*object_handle = user_handle;
+		DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_SUCCESS);
 		return KERN_SUCCESS;
 	}
 
-	if (permission & MAP_MEM_VM_SHARE) {
+	if ((permission & MAP_MEM_VM_SHARE)
+	    || parent_entry == NULL
+	    || (permission & MAP_MEM_NAMED_REUSE)) {
 		vm_map_copy_t   copy;
 		vm_prot_t       cur_prot, max_prot;
+		vm_map_kernel_flags_t vmk_flags;
+		vm_map_entry_t parent_copy_entry;
+		vm_prot_t required_protection;
 
 		if (target_map == VM_MAP_NULL) {
+			DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_INVALID_TASK);
 			return KERN_INVALID_TASK;
 		}
 
-		map_end = vm_map_round_page(offset + *size, PAGE_MASK);
+		map_end = vm_map_round_page(offset + *size, VM_MAP_PAGE_MASK(target_map));
+		vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
+		parent_copy_entry = VM_MAP_ENTRY_NULL;
+		if (!(permission & MAP_MEM_VM_SHARE)) {
+			/* stop extracting if VM object changes */
+			vmk_flags.vmkf_copy_single_object = TRUE;
+			if ((permission & MAP_MEM_NAMED_REUSE) &&
+			    parent_entry != NULL &&
+			    parent_entry->is_object) {
+				vm_map_copy_t parent_copy;
+				parent_copy = parent_entry->backing.copy;
+				assert(parent_copy->cpy_hdr.nentries == 1);
+				parent_copy_entry = vm_map_copy_first_entry(parent_copy);
+				assert(!parent_copy_entry->is_sub_map);
+			}
+		}
+
 		map_size = map_end - map_start;
+		if (map_size == 0) {
+			DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_INVALID_ARGUMENT);
+			return KERN_INVALID_ARGUMENT;
+		}
+
 		if (use_data_addr || use_4K_compat) {
 			offset_in_page = offset - map_start;
 			if (use_4K_compat) {
@@ -2670,16 +2713,42 @@ mach_make_memory_entry_internal(
 			offset_in_page = 0;
 		}
 
+		if (mask_protections) {
+			/*
+			 * caller is asking for whichever proctections are
+			 * available: no required protections.
+			 */
+			required_protection = VM_PROT_NONE;
+		} else {
+			/*
+			 * Caller wants a memory entry with "protections".
+			 * Make sure we extract only memory that matches that.
+			 */
+			required_protection = protections;
+		}
 		cur_prot = VM_PROT_ALL;
+		vmk_flags.vmkf_copy_pageable = TRUE;
+		vmk_flags.vmkf_copy_same_map = FALSE;
+		assert(map_size != 0);
 		kr = vm_map_copy_extract(target_map,
 		    map_start,
 		    map_size,
+		    required_protection,
+		    FALSE,                      /* copy */
 		    &copy,
 		    &cur_prot,
-		    &max_prot);
+		    &max_prot,
+		    VM_INHERIT_SHARE,
+		    vmk_flags);
 		if (kr != KERN_SUCCESS) {
+			DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, kr);
+			if (VM_MAP_PAGE_SHIFT(target_map) < PAGE_SHIFT) {
+//				panic("DEBUG4K %s:%d kr 0x%x\n", __FUNCTION__, __LINE__, kr);
+			}
 			return kr;
 		}
+		assert(copy != VM_MAP_COPY_NULL);
+		assert((cur_prot & required_protection) == required_protection);
 
 		if (mask_protections) {
 			/*
@@ -2689,6 +2758,10 @@ mach_make_memory_entry_internal(
 			protections &= cur_prot;
 			if (protections == VM_PROT_NONE) {
 				/* no access at all: fail */
+				DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_PROTECTION_FAILURE);
+				if (VM_MAP_PAGE_SHIFT(target_map) < PAGE_SHIFT) {
+//					panic("DEBUG4K %s:%d kr 0x%x\n", __FUNCTION__, __LINE__, kr);
+				}
 				vm_map_copy_discard(copy);
 				return KERN_PROTECTION_FAILURE;
 			}
@@ -2698,462 +2771,194 @@ mach_make_memory_entry_internal(
 			 * out of "cur_prot".
 			 */
 			if ((cur_prot & protections) != protections) {
+				if (VM_MAP_PAGE_SHIFT(target_map) < PAGE_SHIFT) {
+//					panic("DEBUG4K %s:%d kr 0x%x\n", __FUNCTION__, __LINE__, KERN_PROTECTION_FAILURE);
+				}
 				vm_map_copy_discard(copy);
+				DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_PROTECTION_FAILURE);
 				return KERN_PROTECTION_FAILURE;
 			}
 		}
 
+		if (!(permission & MAP_MEM_VM_SHARE)) {
+			vm_map_entry_t copy_entry;
+
+			/* limit size to what's actually covered by "copy" */
+			assert(copy->cpy_hdr.nentries == 1);
+			copy_entry = vm_map_copy_first_entry(copy);
+			map_size = copy_entry->vme_end - copy_entry->vme_start;
+
+			if ((permission & MAP_MEM_NAMED_REUSE) &&
+			    parent_copy_entry != VM_MAP_ENTRY_NULL &&
+			    VME_OBJECT(copy_entry) == VME_OBJECT(parent_copy_entry) &&
+			    VME_OFFSET(copy_entry) == VME_OFFSET(parent_copy_entry) &&
+			    parent_entry->offset == 0 &&
+			    parent_entry->size == map_size &&
+			    (parent_entry->data_offset == offset_in_page)) {
+				/* we have a match: re-use "parent_entry" */
+
+				/* release our new "copy" */
+				vm_map_copy_discard(copy);
+				/* get extra send right on handle */
+				ipc_port_copy_send(parent_handle);
+
+				*size = CAST_DOWN(vm_size_t,
+				    (parent_entry->size -
+				    parent_entry->data_offset));
+				*object_handle = parent_handle;
+				DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_SUCCESS);
+				return KERN_SUCCESS;
+			}
+
+			/* no match: we need to create a new entry */
+			object = VME_OBJECT(copy_entry);
+			vm_object_lock(object);
+			wimg_mode = object->wimg_bits;
+			if (!(object->nophyscache)) {
+				vm_prot_to_wimg(access, &wimg_mode);
+			}
+			if (object->wimg_bits != wimg_mode) {
+				vm_object_change_wimg_mode(object, wimg_mode);
+			}
+			vm_object_unlock(object);
+		}
+
 		kr = mach_memory_entry_allocate(&user_entry, &user_handle);
 		if (kr != KERN_SUCCESS) {
+			if (VM_MAP_PAGE_SHIFT(target_map) < PAGE_SHIFT) {
+//				panic("DEBUG4K %s:%d kr 0x%x\n", __FUNCTION__, __LINE__, kr);
+			}
 			vm_map_copy_discard(copy);
+			DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_FAILURE);
 			return KERN_FAILURE;
 		}
 
 		user_entry->backing.copy = copy;
-		user_entry->internal = FALSE;
 		user_entry->is_sub_map = FALSE;
-		user_entry->is_copy = TRUE;
-		user_entry->offset = 0;
+		user_entry->is_object = FALSE;
+		user_entry->internal = FALSE;
 		user_entry->protection = protections;
 		user_entry->size = map_size;
 		user_entry->data_offset = offset_in_page;
 
+		if (permission & MAP_MEM_VM_SHARE) {
+			user_entry->is_copy = TRUE;
+			user_entry->offset = 0;
+		} else {
+			user_entry->is_object = TRUE;
+			user_entry->internal = object->internal;
+			user_entry->offset = VME_OFFSET(vm_map_copy_first_entry(copy));
+			SET_MAP_MEM(GET_MAP_MEM(permission), user_entry->protection);
+		}
+
 		*size = CAST_DOWN(vm_size_t, (user_entry->size -
 		    user_entry->data_offset));
 		*object_handle = user_handle;
+		DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_SUCCESS);
 		return KERN_SUCCESS;
 	}
 
-	if (parent_entry == NULL ||
-	    (permission & MAP_MEM_NAMED_REUSE)) {
+	/* The new object will be based on an existing named object */
+	if (parent_entry == NULL) {
+		kr = KERN_INVALID_ARGUMENT;
+		goto make_mem_done;
+	}
+
+	if (parent_entry->is_copy) {
+		panic("parent_entry %p is_copy not supported\n", parent_entry);
+		kr = KERN_INVALID_ARGUMENT;
+		goto make_mem_done;
+	}
+
+	if (use_data_addr || use_4K_compat) {
+		/*
+		 * submaps and pagers should only be accessible from within
+		 * the kernel, which shouldn't use the data address flag, so can fail here.
+		 */
+		if (parent_entry->is_sub_map) {
+			panic("Shouldn't be using data address with a parent entry that is a submap.");
+		}
+		/*
+		 * Account for offset to data in parent entry and
+		 * compute our own offset to data.
+		 */
+		if ((offset + *size + parent_entry->data_offset) > parent_entry->size) {
+			kr = KERN_INVALID_ARGUMENT;
+			goto make_mem_done;
+		}
+
+		map_start = vm_map_trunc_page(offset + parent_entry->data_offset, PAGE_MASK);
+		offset_in_page = (offset + parent_entry->data_offset) - map_start;
+		if (use_4K_compat) {
+			offset_in_page &= ~((signed)(0xFFF));
+		}
+		map_end = vm_map_round_page(offset + parent_entry->data_offset + *size, PAGE_MASK);
+		map_size = map_end - map_start;
+	} else {
 		map_end = vm_map_round_page(offset + *size, PAGE_MASK);
 		map_size = map_end - map_start;
-		if (use_data_addr || use_4K_compat) {
-			offset_in_page = offset - map_start;
-			if (use_4K_compat) {
-				offset_in_page &= ~((signed)(0xFFF));
-			}
-		} else {
-			offset_in_page = 0;
+		offset_in_page = 0;
+
+		if ((offset + map_size) > parent_entry->size) {
+			kr = KERN_INVALID_ARGUMENT;
+			goto make_mem_done;
 		}
+	}
 
-		/* Create a named object based on address range within the task map */
-		/* Go find the object at given address */
+	if (mask_protections) {
+		/*
+		 * The caller asked us to use the "protections" as
+		 * a mask, so restrict "protections" to what this
+		 * mapping actually allows.
+		 */
+		protections &= parent_entry->protection;
+	}
+	if ((protections & parent_entry->protection) != protections) {
+		kr = KERN_PROTECTION_FAILURE;
+		goto make_mem_done;
+	}
 
-		if (target_map == VM_MAP_NULL) {
-			return KERN_INVALID_TASK;
-		}
+	if (mach_memory_entry_allocate(&user_entry, &user_handle)
+	    != KERN_SUCCESS) {
+		kr = KERN_FAILURE;
+		goto make_mem_done;
+	}
 
-redo_lookup:
-		protections = original_protections;
-		vm_map_lock_read(target_map);
+	user_entry->size = map_size;
+	user_entry->offset = parent_entry->offset + map_start;
+	user_entry->data_offset = offset_in_page;
+	user_entry->is_sub_map = parent_entry->is_sub_map;
+	user_entry->is_copy = parent_entry->is_copy;
+	user_entry->internal = parent_entry->internal;
+	user_entry->protection = protections;
 
-		/* get the object associated with the target address */
-		/* note we check the permission of the range against */
-		/* that requested by the caller */
+	if (access != MAP_MEM_NOOP) {
+		SET_MAP_MEM(access, user_entry->protection);
+	}
 
-		kr = vm_map_lookup_locked(&target_map, map_start,
-		    protections | mask_protections,
-		    OBJECT_LOCK_EXCLUSIVE, &version,
-		    &object, &obj_off, &prot, &wired,
-		    &fault_info,
-		    &real_map);
+	if (parent_entry->is_sub_map) {
+		vm_map_t map = parent_entry->backing.map;
+		user_entry->backing.map = map;
+		lck_mtx_lock(&map->s_lock);
+		os_ref_retain_locked(&map->map_refcnt);
+		lck_mtx_unlock(&map->s_lock);
+	} else {
+		object = vm_named_entry_to_vm_object(parent_entry);
+		assert(object != VM_OBJECT_NULL);
+		assert(object->copy_strategy != MEMORY_OBJECT_COPY_SYMMETRIC);
+		kr = vm_named_entry_from_vm_object(
+			user_entry,
+			object,
+			user_entry->offset,
+			user_entry->size,
+			(user_entry->protection & VM_PROT_ALL));
 		if (kr != KERN_SUCCESS) {
-			vm_map_unlock_read(target_map);
 			goto make_mem_done;
 		}
-		if (mask_protections) {
-			/*
-			 * The caller asked us to use the "protections" as
-			 * a mask, so restrict "protections" to what this
-			 * mapping actually allows.
-			 */
-			protections &= prot;
-		}
-#if CONFIG_EMBEDDED
-		/*
-		 * Wiring would copy the pages to a shadow object.
-		 * The shadow object would not be code-signed so
-		 * attempting to execute code from these copied pages
-		 * would trigger a code-signing violation.
-		 */
-		if (prot & VM_PROT_EXECUTE) {
-			if (log_executable_mem_entry) {
-				void *bsd_info;
-				bsd_info = current_task()->bsd_info;
-				printf("pid %d[%s] making memory entry out of "
-				    "executable range from 0x%llx to 0x%llx:"
-				    "might cause code-signing issues "
-				    "later\n",
-				    proc_selfpid(),
-				    (bsd_info != NULL
-				    ? proc_name_address(bsd_info)
-				    : "?"),
-				    (uint64_t) map_start,
-				    (uint64_t) map_end);
-			}
-			DTRACE_VM2(cs_executable_mem_entry,
-			    uint64_t, (uint64_t)map_start,
-			    uint64_t, (uint64_t)map_end);
-			cs_executable_mem_entry++;
-
-#if 11
-			/*
-			 * We don't know how the memory entry will be used.
-			 * It might never get wired and might not cause any
-			 * trouble, so let's not reject this request...
-			 */
-#else /* 11 */
-			kr = KERN_PROTECTION_FAILURE;
-			vm_object_unlock(object);
-			vm_map_unlock_read(target_map);
-			if (real_map != target_map) {
-				vm_map_unlock_read(real_map);
-			}
-			goto make_mem_done;
-#endif /* 11 */
-		}
-#endif /* CONFIG_EMBEDDED */
-
-		if (((prot & protections) != protections)
-		    || (object == kernel_object)) {
-			kr = KERN_INVALID_RIGHT;
-			vm_object_unlock(object);
-			vm_map_unlock_read(target_map);
-			if (real_map != target_map) {
-				vm_map_unlock_read(real_map);
-			}
-			if (object == kernel_object) {
-				printf("Warning: Attempt to create a named"
-				    " entry from the kernel_object\n");
-			}
-			goto make_mem_done;
-		}
-
-		/* We have an object, now check to see if this object */
-		/* is suitable.  If not, create a shadow and share that */
-
-		/*
-		 * We have to unlock the VM object to avoid deadlocking with
-		 * a VM map lock (the lock ordering is map, the object), if we
-		 * need to modify the VM map to create a shadow object.  Since
-		 * we might release the VM map lock below anyway, we have
-		 * to release the VM map lock now.
-		 * XXX FBDP There must be a way to avoid this double lookup...
-		 *
-		 * Take an extra reference on the VM object to make sure it's
-		 * not going to disappear.
-		 */
-		vm_object_reference_locked(object); /* extra ref to hold obj */
-		vm_object_unlock(object);
-
-		local_map = original_map;
-		local_offset = map_start;
-		if (target_map != local_map) {
-			vm_map_unlock_read(target_map);
-			if (real_map != target_map) {
-				vm_map_unlock_read(real_map);
-			}
-			vm_map_lock_read(local_map);
-			target_map = local_map;
-			real_map = local_map;
-		}
-		while (TRUE) {
-			if (!vm_map_lookup_entry(local_map,
-			    local_offset, &map_entry)) {
-				kr = KERN_INVALID_ARGUMENT;
-				vm_map_unlock_read(target_map);
-				if (real_map != target_map) {
-					vm_map_unlock_read(real_map);
-				}
-				vm_object_deallocate(object); /* release extra ref */
-				object = VM_OBJECT_NULL;
-				goto make_mem_done;
-			}
-			iskernel = (local_map->pmap == kernel_pmap);
-			if (!(map_entry->is_sub_map)) {
-				if (VME_OBJECT(map_entry) != object) {
-					kr = KERN_INVALID_ARGUMENT;
-					vm_map_unlock_read(target_map);
-					if (real_map != target_map) {
-						vm_map_unlock_read(real_map);
-					}
-					vm_object_deallocate(object); /* release extra ref */
-					object = VM_OBJECT_NULL;
-					goto make_mem_done;
-				}
-				break;
-			} else {
-				vm_map_t        tmap;
-				tmap = local_map;
-				local_map = VME_SUBMAP(map_entry);
-
-				vm_map_lock_read(local_map);
-				vm_map_unlock_read(tmap);
-				target_map = local_map;
-				real_map = local_map;
-				local_offset = local_offset - map_entry->vme_start;
-				local_offset += VME_OFFSET(map_entry);
-			}
-		}
-
-#if VM_NAMED_ENTRY_LIST
-		alias = VME_ALIAS(map_entry);
-#endif /* VM_NAMED_ENTRY_LIST */
-
-		/*
-		 * We found the VM map entry, lock the VM object again.
-		 */
+		assert(user_entry->is_object);
+		/* we now point to this object, hold on */
 		vm_object_lock(object);
-		if (map_entry->wired_count) {
-			/* JMM - The check below should be reworked instead. */
-			object->true_share = TRUE;
-		}
-		if (mask_protections) {
-			/*
-			 * The caller asked us to use the "protections" as
-			 * a mask, so restrict "protections" to what this
-			 * mapping actually allows.
-			 */
-			protections &= map_entry->max_protection;
-		}
-		if (((map_entry->max_protection) & protections) != protections) {
-			kr = KERN_INVALID_RIGHT;
-			vm_object_unlock(object);
-			vm_map_unlock_read(target_map);
-			if (real_map != target_map) {
-				vm_map_unlock_read(real_map);
-			}
-			vm_object_deallocate(object);
-			object = VM_OBJECT_NULL;
-			goto make_mem_done;
-		}
-
-		mappable_size = fault_info.hi_offset - obj_off;
-		total_size = map_entry->vme_end - map_entry->vme_start;
-		if (map_size > mappable_size) {
-			/* try to extend mappable size if the entries */
-			/* following are from the same object and are */
-			/* compatible */
-			next_entry = map_entry->vme_next;
-			/* lets see if the next map entry is still   */
-			/* pointing at this object and is contiguous */
-			while (map_size > mappable_size) {
-				if ((VME_OBJECT(next_entry) == object) &&
-				    (next_entry->vme_start ==
-				    next_entry->vme_prev->vme_end) &&
-				    (VME_OFFSET(next_entry) ==
-				    (VME_OFFSET(next_entry->vme_prev) +
-				    (next_entry->vme_prev->vme_end -
-				    next_entry->vme_prev->vme_start)))) {
-					if (mask_protections) {
-						/*
-						 * The caller asked us to use
-						 * the "protections" as a mask,
-						 * so restrict "protections" to
-						 * what this mapping actually
-						 * allows.
-						 */
-						protections &= next_entry->max_protection;
-					}
-					if ((next_entry->wired_count) &&
-					    (map_entry->wired_count == 0)) {
-						break;
-					}
-					if (((next_entry->max_protection)
-					    & protections) != protections) {
-						break;
-					}
-					if (next_entry->needs_copy !=
-					    map_entry->needs_copy) {
-						break;
-					}
-					mappable_size += next_entry->vme_end
-					    - next_entry->vme_start;
-					total_size += next_entry->vme_end
-					    - next_entry->vme_start;
-					next_entry = next_entry->vme_next;
-				} else {
-					break;
-				}
-			}
-		}
-
-		/* vm_map_entry_should_cow_for_true_share() checks for malloc tags,
-		 * never true in kernel */
-		if (!iskernel && vm_map_entry_should_cow_for_true_share(map_entry) &&
-		    object->vo_size > map_size &&
-		    map_size != 0) {
-			/*
-			 * Set up the targeted range for copy-on-write to
-			 * limit the impact of "true_share"/"copy_delay" to
-			 * that range instead of the entire VM object...
-			 */
-
-			vm_object_unlock(object);
-			if (vm_map_lock_read_to_write(target_map)) {
-				vm_object_deallocate(object);
-				target_map = original_map;
-				goto redo_lookup;
-			}
-
-			vm_map_clip_start(target_map,
-			    map_entry,
-			    vm_map_trunc_page(map_start,
-			    VM_MAP_PAGE_MASK(target_map)));
-			vm_map_clip_end(target_map,
-			    map_entry,
-			    (vm_map_round_page(map_end,
-			    VM_MAP_PAGE_MASK(target_map))));
-			force_shadow = TRUE;
-
-			if ((map_entry->vme_end - offset) < map_size) {
-				map_size = map_entry->vme_end - map_start;
-			}
-			total_size = map_entry->vme_end - map_entry->vme_start;
-
-			vm_map_lock_write_to_read(target_map);
-			vm_object_lock(object);
-		}
-
-		if (object->internal) {
-			/* vm_map_lookup_locked will create a shadow if   */
-			/* needs_copy is set but does not check for the   */
-			/* other two conditions shown. It is important to */
-			/* set up an object which will not be pulled from */
-			/* under us.  */
-
-			if (force_shadow ||
-			    ((map_entry->needs_copy ||
-			    object->shadowed ||
-			    (object->vo_size > total_size &&
-			    (VME_OFFSET(map_entry) != 0 ||
-			    object->vo_size >
-			    vm_map_round_page(total_size,
-			    VM_MAP_PAGE_MASK(target_map)))))
-			    && !object->true_share
-			    && object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC)) {
-				/*
-				 * We have to unlock the VM object before
-				 * trying to upgrade the VM map lock, to
-				 * honor lock ordering (map then object).
-				 * Otherwise, we would deadlock if another
-				 * thread holds a read lock on the VM map and
-				 * is trying to acquire the VM object's lock.
-				 * We still hold an extra reference on the
-				 * VM object, guaranteeing that it won't
-				 * disappear.
-				 */
-				vm_object_unlock(object);
-
-				if (vm_map_lock_read_to_write(target_map)) {
-					/*
-					 * We couldn't upgrade our VM map lock
-					 * from "read" to "write" and we lost
-					 * our "read" lock.
-					 * Start all over again...
-					 */
-					vm_object_deallocate(object); /* extra ref */
-					target_map = original_map;
-					goto redo_lookup;
-				}
-#if 00
-				vm_object_lock(object);
-#endif
-
-				/*
-				 * JMM - We need to avoid coming here when the object
-				 * is wired by anybody, not just the current map.  Why
-				 * couldn't we use the standard vm_object_copy_quickly()
-				 * approach here?
-				 */
-
-				/* create a shadow object */
-				VME_OBJECT_SHADOW(map_entry, total_size);
-				shadow_object = VME_OBJECT(map_entry);
-#if 00
-				vm_object_unlock(object);
-#endif
-
-				prot = map_entry->protection & ~VM_PROT_WRITE;
-
-				if (override_nx(target_map,
-				    VME_ALIAS(map_entry))
-				    && prot) {
-					prot |= VM_PROT_EXECUTE;
-				}
-
-				vm_object_pmap_protect(
-					object, VME_OFFSET(map_entry),
-					total_size,
-					((map_entry->is_shared
-					|| target_map->mapped_in_other_pmaps)
-					? PMAP_NULL :
-					target_map->pmap),
-					map_entry->vme_start,
-					prot);
-				total_size -= (map_entry->vme_end
-				    - map_entry->vme_start);
-				next_entry = map_entry->vme_next;
-				map_entry->needs_copy = FALSE;
-
-				vm_object_lock(shadow_object);
-				while (total_size) {
-					assert((next_entry->wired_count == 0) ||
-					    (map_entry->wired_count));
-
-					if (VME_OBJECT(next_entry) == object) {
-						vm_object_reference_locked(shadow_object);
-						VME_OBJECT_SET(next_entry,
-						    shadow_object);
-						vm_object_deallocate(object);
-						VME_OFFSET_SET(
-							next_entry,
-							(VME_OFFSET(next_entry->vme_prev) +
-							(next_entry->vme_prev->vme_end
-							- next_entry->vme_prev->vme_start)));
-						next_entry->use_pmap = TRUE;
-						next_entry->needs_copy = FALSE;
-					} else {
-						panic("mach_make_memory_entry_64:"
-						    " map entries out of sync\n");
-					}
-					total_size -=
-					    next_entry->vme_end
-					    - next_entry->vme_start;
-					next_entry = next_entry->vme_next;
-				}
-
-				/*
-				 * Transfer our extra reference to the
-				 * shadow object.
-				 */
-				vm_object_reference_locked(shadow_object);
-				vm_object_deallocate(object); /* extra ref */
-				object = shadow_object;
-
-				obj_off = ((local_offset - map_entry->vme_start)
-				    + VME_OFFSET(map_entry));
-
-				vm_map_lock_write_to_read(target_map);
-			}
-		}
-
-		/* note: in the future we can (if necessary) allow for  */
-		/* memory object lists, this will better support        */
-		/* fragmentation, but is it necessary?  The user should */
-		/* be encouraged to create address space oriented       */
-		/* shared objects from CLEAN memory regions which have  */
-		/* a known and defined history.  i.e. no inheritence    */
-		/* share, make this call before making the region the   */
-		/* target of ipc's, etc.  The code above, protecting    */
-		/* against delayed copy, etc. is mostly defensive.      */
-
-		wimg_mode = object->wimg_bits;
-		if (!(object->nophyscache)) {
-			vm_prot_to_wimg(access, &wimg_mode);
-		}
-
+		vm_object_reference_locked(object);
 #if VM_OBJECT_TRACKING_OP_TRUESHARE
 		if (!object->true_share &&
 		    vm_object_tracking_inited) {
@@ -3170,218 +2975,17 @@ redo_lookup:
 		}
 #endif /* VM_OBJECT_TRACKING_OP_TRUESHARE */
 
-		vm_object_lock_assert_exclusive(object);
 		object->true_share = TRUE;
 		if (object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC) {
 			object->copy_strategy = MEMORY_OBJECT_COPY_DELAY;
 		}
-
-		/*
-		 * The memory entry now points to this VM object and we
-		 * need to hold a reference on the VM object.  Use the extra
-		 * reference we took earlier to keep the object alive when we
-		 * had to unlock it.
-		 */
-
-		vm_map_unlock_read(target_map);
-		if (real_map != target_map) {
-			vm_map_unlock_read(real_map);
-		}
-
-		if (object->wimg_bits != wimg_mode) {
-			vm_object_change_wimg_mode(object, wimg_mode);
-		}
-
-		/* the size of mapped entry that overlaps with our region */
-		/* which is targeted for share.                           */
-		/* (entry_end - entry_start) -                            */
-		/*                   offset of our beg addr within entry  */
-		/* it corresponds to this:                                */
-
-		if (map_size > mappable_size) {
-			map_size = mappable_size;
-		}
-
-		if (permission & MAP_MEM_NAMED_REUSE) {
-			/*
-			 * Compare what we got with the "parent_entry".
-			 * If they match, re-use the "parent_entry" instead
-			 * of creating a new one.
-			 */
-			if (parent_entry != NULL &&
-			    parent_entry->backing.object == object &&
-			    parent_entry->internal == object->internal &&
-			    parent_entry->is_sub_map == FALSE &&
-			    parent_entry->offset == obj_off &&
-			    parent_entry->protection == protections &&
-			    parent_entry->size == map_size &&
-			    ((!(use_data_addr || use_4K_compat) &&
-			    (parent_entry->data_offset == 0)) ||
-			    ((use_data_addr || use_4K_compat) &&
-			    (parent_entry->data_offset == offset_in_page)))) {
-				/*
-				 * We have a match: re-use "parent_entry".
-				 */
-				/* release our extra reference on object */
-				vm_object_unlock(object);
-				vm_object_deallocate(object);
-				/* parent_entry->ref_count++; XXX ? */
-				/* Get an extra send-right on handle */
-				ipc_port_copy_send(parent_handle);
-
-				*size = CAST_DOWN(vm_size_t,
-				    (parent_entry->size -
-				    parent_entry->data_offset));
-				*object_handle = parent_handle;
-				return KERN_SUCCESS;
-			} else {
-				/*
-				 * No match: we need to create a new entry.
-				 * fall through...
-				 */
-			}
-		}
-
 		vm_object_unlock(object);
-		if (mach_memory_entry_allocate(&user_entry, &user_handle)
-		    != KERN_SUCCESS) {
-			/* release our unused reference on the object */
-			vm_object_deallocate(object);
-			return KERN_FAILURE;
-		}
-
-		user_entry->backing.object = object;
-		user_entry->internal = object->internal;
-		user_entry->is_sub_map = FALSE;
-		user_entry->offset = obj_off;
-		user_entry->data_offset = offset_in_page;
-		user_entry->protection = protections;
-		SET_MAP_MEM(GET_MAP_MEM(permission), user_entry->protection);
-		user_entry->size = map_size;
-#if VM_NAMED_ENTRY_LIST
-		user_entry->named_entry_alias = alias;
-#endif /* VM_NAMED_ENTRY_LIST */
-
-		/* user_object pager and internal fields are not used */
-		/* when the object field is filled in.		      */
-
-		*size = CAST_DOWN(vm_size_t, (user_entry->size -
-		    user_entry->data_offset));
-		*object_handle = user_handle;
-		return KERN_SUCCESS;
-	} else {
-		/* The new object will be base on an existing named object */
-		if (parent_entry == NULL) {
-			kr = KERN_INVALID_ARGUMENT;
-			goto make_mem_done;
-		}
-
-		if (use_data_addr || use_4K_compat) {
-			/*
-			 * submaps and pagers should only be accessible from within
-			 * the kernel, which shouldn't use the data address flag, so can fail here.
-			 */
-			if (parent_entry->is_sub_map) {
-				panic("Shouldn't be using data address with a parent entry that is a submap.");
-			}
-			/*
-			 * Account for offset to data in parent entry and
-			 * compute our own offset to data.
-			 */
-			if ((offset + *size + parent_entry->data_offset) > parent_entry->size) {
-				kr = KERN_INVALID_ARGUMENT;
-				goto make_mem_done;
-			}
-
-			map_start = vm_map_trunc_page(offset + parent_entry->data_offset, PAGE_MASK);
-			offset_in_page = (offset + parent_entry->data_offset) - map_start;
-			if (use_4K_compat) {
-				offset_in_page &= ~((signed)(0xFFF));
-			}
-			map_end = vm_map_round_page(offset + parent_entry->data_offset + *size, PAGE_MASK);
-			map_size = map_end - map_start;
-		} else {
-			map_end = vm_map_round_page(offset + *size, PAGE_MASK);
-			map_size = map_end - map_start;
-			offset_in_page = 0;
-
-			if ((offset + map_size) > parent_entry->size) {
-				kr = KERN_INVALID_ARGUMENT;
-				goto make_mem_done;
-			}
-		}
-
-		if (mask_protections) {
-			/*
-			 * The caller asked us to use the "protections" as
-			 * a mask, so restrict "protections" to what this
-			 * mapping actually allows.
-			 */
-			protections &= parent_entry->protection;
-		}
-		if ((protections & parent_entry->protection) != protections) {
-			kr = KERN_PROTECTION_FAILURE;
-			goto make_mem_done;
-		}
-
-		if (mach_memory_entry_allocate(&user_entry, &user_handle)
-		    != KERN_SUCCESS) {
-			kr = KERN_FAILURE;
-			goto make_mem_done;
-		}
-
-		user_entry->size = map_size;
-		user_entry->offset = parent_entry->offset + map_start;
-		user_entry->data_offset = offset_in_page;
-		user_entry->is_sub_map = parent_entry->is_sub_map;
-		user_entry->is_copy = parent_entry->is_copy;
-		user_entry->internal = parent_entry->internal;
-		user_entry->protection = protections;
-
-		if (access != MAP_MEM_NOOP) {
-			SET_MAP_MEM(access, user_entry->protection);
-		}
-
-		if (parent_entry->is_sub_map) {
-			vm_map_t map = parent_entry->backing.map;
-			user_entry->backing.map = map;
-			lck_mtx_lock(&map->s_lock);
-			os_ref_retain_locked(&map->map_refcnt);
-			lck_mtx_unlock(&map->s_lock);
-		} else {
-			object = parent_entry->backing.object;
-			assert(object != VM_OBJECT_NULL);
-			user_entry->backing.object = object;
-			/* we now point to this object, hold on */
-			vm_object_lock(object);
-			vm_object_reference_locked(object);
-#if VM_OBJECT_TRACKING_OP_TRUESHARE
-			if (!object->true_share &&
-			    vm_object_tracking_inited) {
-				void *bt[VM_OBJECT_TRACKING_BTDEPTH];
-				int num = 0;
-
-				num = OSBacktrace(bt,
-				    VM_OBJECT_TRACKING_BTDEPTH);
-				btlog_add_entry(vm_object_tracking_btlog,
-				    object,
-				    VM_OBJECT_TRACKING_OP_TRUESHARE,
-				    bt,
-				    num);
-			}
-#endif /* VM_OBJECT_TRACKING_OP_TRUESHARE */
-
-			object->true_share = TRUE;
-			if (object->copy_strategy == MEMORY_OBJECT_COPY_SYMMETRIC) {
-				object->copy_strategy = MEMORY_OBJECT_COPY_DELAY;
-			}
-			vm_object_unlock(object);
-		}
-		*size = CAST_DOWN(vm_size_t, (user_entry->size -
-		    user_entry->data_offset));
-		*object_handle = user_handle;
-		return KERN_SUCCESS;
 	}
+	*size = CAST_DOWN(vm_size_t, (user_entry->size -
+	    user_entry->data_offset));
+	*object_handle = user_handle;
+	DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, KERN_SUCCESS);
+	return KERN_SUCCESS;
 
 make_mem_done:
 	if (user_handle != IP_NULL) {
@@ -3392,6 +2996,7 @@ make_mem_done:
 		 */
 		mach_memory_entry_port_release(user_handle);
 	}
+	DEBUG4K_MEMENTRY("map %p offset 0x%llx size 0x%llx prot 0x%x -> entry %p kr 0x%x\n", target_map, offset, *size, permission, user_entry, kr);
 	return kr;
 }
 
@@ -3475,25 +3080,11 @@ vm_map_exec_lockdown(
 }
 
 #if VM_NAMED_ENTRY_LIST
-queue_head_t    vm_named_entry_list;
+queue_head_t    vm_named_entry_list = QUEUE_HEAD_INITIALIZER(vm_named_entry_list);
 int             vm_named_entry_count = 0;
-lck_mtx_t       vm_named_entry_list_lock_data;
-lck_mtx_ext_t   vm_named_entry_list_lock_data_ext;
+LCK_MTX_EARLY_DECLARE_ATTR(vm_named_entry_list_lock_data,
+    &vm_object_lck_grp, &vm_object_lck_attr);
 #endif /* VM_NAMED_ENTRY_LIST */
-
-void vm_named_entry_init(void);
-void
-vm_named_entry_init(void)
-{
-#if VM_NAMED_ENTRY_LIST
-	queue_init(&vm_named_entry_list);
-	vm_named_entry_count = 0;
-	lck_mtx_init_ext(&vm_named_entry_list_lock_data,
-	    &vm_named_entry_list_lock_data_ext,
-	    &vm_object_lck_grp,
-	    &vm_object_lck_attr);
-#endif /* VM_NAMED_ENTRY_LIST */
-}
 
 __private_extern__ kern_return_t
 mach_memory_entry_allocate(
@@ -3511,7 +3102,8 @@ mach_memory_entry_allocate(
 
 	named_entry_lock_init(user_entry);
 
-	user_entry->backing.object = NULL;
+	user_entry->backing.copy = NULL;
+	user_entry->is_object = FALSE;
 	user_entry->is_sub_map = FALSE;
 	user_entry->is_copy = FALSE;
 	user_entry->internal = FALSE;
@@ -3565,6 +3157,7 @@ mach_memory_object_memory_entry_64(
 	vm_named_entry_t        user_entry;
 	ipc_port_t              user_handle;
 	vm_object_t             object;
+	kern_return_t           kr;
 
 	if (host == HOST_NULL) {
 		return KERN_INVALID_HOST;
@@ -3599,7 +3192,11 @@ mach_memory_object_memory_entry_64(
 	user_entry->is_sub_map = FALSE;
 	assert(user_entry->ref_count == 1);
 
-	user_entry->backing.object = object;
+	kr = vm_named_entry_from_vm_object(user_entry, object, 0, size,
+	    (user_entry->protection & VM_PROT_ALL));
+	if (kr != KERN_SUCCESS) {
+		return kr;
+	}
 	user_entry->internal = object->internal;
 	assert(object->internal == internal);
 
@@ -3672,7 +3269,8 @@ memory_entry_purgeable_control_internal(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	object = mem_entry->backing.object;
+	assert(mem_entry->is_object);
+	object = vm_named_entry_to_vm_object(mem_entry);
 	if (object == VM_OBJECT_NULL) {
 		named_entry_unlock(mem_entry);
 		return KERN_INVALID_ARGUMENT;
@@ -3735,7 +3333,8 @@ memory_entry_access_tracking_internal(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	object = mem_entry->backing.object;
+	assert(mem_entry->is_object);
+	object = vm_named_entry_to_vm_object(mem_entry);
 	if (object == VM_OBJECT_NULL) {
 		named_entry_unlock(mem_entry);
 		return KERN_INVALID_ARGUMENT;
@@ -3814,7 +3413,8 @@ mach_memory_entry_ownership(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	object = mem_entry->backing.object;
+	assert(mem_entry->is_object);
+	object = vm_named_entry_to_vm_object(mem_entry);
 	if (object == VM_OBJECT_NULL) {
 		named_entry_unlock(mem_entry);
 		return KERN_INVALID_ARGUMENT;
@@ -3868,7 +3468,8 @@ mach_memory_entry_get_page_counts(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	object = mem_entry->backing.object;
+	assert(mem_entry->is_object);
+	object = vm_named_entry_to_vm_object(mem_entry);
 	if (object == VM_OBJECT_NULL) {
 		named_entry_unlock(mem_entry);
 		return KERN_INVALID_ARGUMENT;
@@ -3878,6 +3479,8 @@ mach_memory_entry_get_page_counts(
 
 	offset = mem_entry->offset;
 	size = mem_entry->size;
+	size = vm_object_round_page(offset + size) - vm_object_trunc_page(offset);
+	offset = vm_object_trunc_page(offset);
 
 	named_entry_unlock(mem_entry);
 
@@ -3885,6 +3488,136 @@ mach_memory_entry_get_page_counts(
 
 	vm_object_unlock(object);
 
+	return kr;
+}
+
+kern_return_t
+mach_memory_entry_phys_page_offset(
+	ipc_port_t              entry_port,
+	vm_object_offset_t      *offset_p)
+{
+	vm_named_entry_t        mem_entry;
+	vm_object_t             object;
+	vm_object_offset_t      offset;
+	vm_object_offset_t      data_offset;
+
+	if (!IP_VALID(entry_port) ||
+	    ip_kotype(entry_port) != IKOT_NAMED_ENTRY) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	mem_entry = (vm_named_entry_t) entry_port->ip_kobject;
+
+	named_entry_lock(mem_entry);
+
+	if (mem_entry->is_sub_map ||
+	    mem_entry->is_copy) {
+		named_entry_unlock(mem_entry);
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	assert(mem_entry->is_object);
+	object = vm_named_entry_to_vm_object(mem_entry);
+	if (object == VM_OBJECT_NULL) {
+		named_entry_unlock(mem_entry);
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	offset = mem_entry->offset;
+	data_offset = mem_entry->data_offset;
+
+	named_entry_unlock(mem_entry);
+
+	*offset_p = offset - vm_object_trunc_page(offset) + data_offset;
+	return KERN_SUCCESS;
+}
+
+kern_return_t
+mach_memory_entry_map_size(
+	ipc_port_t             entry_port,
+	vm_map_t               map,
+	memory_object_offset_t offset,
+	memory_object_offset_t size,
+	mach_vm_size_t         *map_size)
+{
+	vm_named_entry_t        mem_entry;
+	vm_object_t             object;
+	vm_object_offset_t      object_offset_start, object_offset_end;
+	vm_map_copy_t           copy_map, target_copy_map;
+	vm_map_offset_t         overmap_start, overmap_end, trimmed_start;
+	kern_return_t           kr;
+
+	if (!IP_VALID(entry_port) ||
+	    ip_kotype(entry_port) != IKOT_NAMED_ENTRY) {
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	mem_entry = (vm_named_entry_t) entry_port->ip_kobject;
+	named_entry_lock(mem_entry);
+
+	if (mem_entry->is_sub_map) {
+		named_entry_unlock(mem_entry);
+		return KERN_INVALID_ARGUMENT;
+	}
+
+	if (mem_entry->is_object) {
+		object = vm_named_entry_to_vm_object(mem_entry);
+		if (object == VM_OBJECT_NULL) {
+			named_entry_unlock(mem_entry);
+			return KERN_INVALID_ARGUMENT;
+		}
+
+		object_offset_start = mem_entry->offset;
+		object_offset_start += mem_entry->data_offset;
+		object_offset_start += offset;
+		object_offset_end = object_offset_start + size;
+		object_offset_start = vm_map_trunc_page(object_offset_start,
+		    VM_MAP_PAGE_MASK(map));
+		object_offset_end = vm_map_round_page(object_offset_end,
+		    VM_MAP_PAGE_MASK(map));
+
+		named_entry_unlock(mem_entry);
+
+		*map_size = object_offset_end - object_offset_start;
+		return KERN_SUCCESS;
+	}
+
+	if (!mem_entry->is_copy) {
+		panic("unsupported type of mem_entry %p\n", mem_entry);
+	}
+
+	assert(mem_entry->is_copy);
+	if (VM_MAP_COPY_PAGE_MASK(mem_entry->backing.copy) == VM_MAP_PAGE_MASK(map)) {
+		*map_size = vm_map_round_page(mem_entry->offset + mem_entry->data_offset + offset + size, VM_MAP_PAGE_MASK(map)) - vm_map_trunc_page(mem_entry->offset + mem_entry->data_offset + offset, VM_MAP_PAGE_MASK(map));
+		DEBUG4K_SHARE("map %p (%d) mem_entry %p offset 0x%llx + 0x%llx + 0x%llx size 0x%llx -> map_size 0x%llx\n", map, VM_MAP_PAGE_MASK(map), mem_entry, mem_entry->offset, mem_entry->data_offset, offset, size, *map_size);
+		named_entry_unlock(mem_entry);
+		return KERN_SUCCESS;
+	}
+
+	DEBUG4K_SHARE("mem_entry %p copy %p (%d) map %p (%d) offset 0x%llx size 0x%llx\n", mem_entry, mem_entry->backing.copy, VM_MAP_COPY_PAGE_SHIFT(mem_entry->backing.copy), map, VM_MAP_PAGE_SHIFT(map), offset, size);
+	copy_map = mem_entry->backing.copy;
+	target_copy_map = VM_MAP_COPY_NULL;
+	DEBUG4K_ADJUST("adjusting...\n");
+	kr = vm_map_copy_adjust_to_target(copy_map,
+	    mem_entry->data_offset + offset,
+	    size,
+	    map,
+	    FALSE,
+	    &target_copy_map,
+	    &overmap_start,
+	    &overmap_end,
+	    &trimmed_start);
+	if (kr == KERN_SUCCESS) {
+		if (target_copy_map->size != copy_map->size) {
+			DEBUG4K_ADJUST("copy %p (%d) map %p (%d) offset 0x%llx size 0x%llx overmap_start 0x%llx overmap_end 0x%llx trimmed_start 0x%llx map_size 0x%llx -> 0x%llx\n", copy_map, VM_MAP_COPY_PAGE_SHIFT(copy_map), map, VM_MAP_PAGE_SHIFT(map), (uint64_t)offset, (uint64_t)size, (uint64_t)overmap_start, (uint64_t)overmap_end, (uint64_t)trimmed_start, (uint64_t)copy_map->size, (uint64_t)target_copy_map->size);
+		}
+		*map_size = target_copy_map->size;
+		if (target_copy_map != copy_map) {
+			vm_map_copy_discard(target_copy_map);
+		}
+		target_copy_map = VM_MAP_COPY_NULL;
+	}
+	named_entry_unlock(mem_entry);
 	return kr;
 }
 
@@ -3933,9 +3666,11 @@ mach_destroy_memory_entry(
 			vm_map_deallocate(named_entry->backing.map);
 		} else if (named_entry->is_copy) {
 			vm_map_copy_discard(named_entry->backing.copy);
+		} else if (named_entry->is_object) {
+			assert(named_entry->backing.copy->cpy_hdr.nentries == 1);
+			vm_map_copy_discard(named_entry->backing.copy);
 		} else {
-			/* release the VM object we've been pointing to */
-			vm_object_deallocate(named_entry->backing.object);
+			assert(named_entry->backing.copy == VM_MAP_COPY_NULL);
 		}
 
 		named_entry_unlock(named_entry);
@@ -3986,7 +3721,8 @@ mach_memory_entry_page_op(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	object = mem_entry->backing.object;
+	assert(mem_entry->is_object);
+	object = vm_named_entry_to_vm_object(mem_entry);
 	if (object == VM_OBJECT_NULL) {
 		named_entry_unlock(mem_entry);
 		return KERN_INVALID_ARGUMENT;
@@ -4039,7 +3775,8 @@ mach_memory_entry_range_op(
 		return KERN_INVALID_ARGUMENT;
 	}
 
-	object = mem_entry->backing.object;
+	assert(mem_entry->is_object);
+	object = vm_named_entry_to_vm_object(mem_entry);
 	if (object == VM_OBJECT_NULL) {
 		named_entry_unlock(mem_entry);
 		return KERN_INVALID_ARGUMENT;
@@ -4394,7 +4131,8 @@ kernel_object_iopl_request(
 	/* object cannot be mapped until it is ready  */
 	/* we can therefore avoid the ready check     */
 	/* in this case.  */
-	object = named_entry->backing.object;
+	assert(named_entry->is_object);
+	object = vm_named_entry_to_vm_object(named_entry);
 	vm_object_reference(object);
 	named_entry_unlock(named_entry);
 

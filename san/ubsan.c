@@ -34,10 +34,11 @@
 static const bool ubsan_print = false;
 static const uint32_t line_acquired = 0x80000000UL;
 static const char *get_type_check_kind(uint8_t kind);
+
 static size_t
 format_loc(struct san_src_loc *loc, char *dst, size_t sz)
 {
-	return scnprintf(dst, sz, "  loc: %s:%d:%d\n",
+	return scnprintf(dst, sz, ", file:\"%s\", line:%d, column:%d },\n",
 	           loc->filename,
 	           loc->line & ~line_acquired,
 	           loc->col
@@ -74,7 +75,7 @@ format_overflow(struct ubsan_violation *v, char *buf, size_t sz)
 {
 	struct san_type_desc *ty = v->overflow->ty;
 	return scnprintf(buf, sz,
-	           "%s overflow, op = %s, ty = %s, width = %d, lhs = 0x%llx, rhs = 0x%llx\n",
+	           "problem:\"%s overflow\", op:\"%s\", ty:\"%s\", width:%d, lhs:0x%llx, rhs:0x%llx, ",
 	           ty->issigned ? "signed" : "unsigned",
 	           overflow_str[v->ubsan_type],
 	           ty->name,
@@ -91,9 +92,9 @@ format_shift(struct ubsan_violation *v, char *buf, size_t sz)
 	struct san_type_desc *l = v->shift->lhs_t;
 	struct san_type_desc *r = v->shift->rhs_t;
 
-	n += scnprintf(buf + n, sz - n, "bad shift\n");
-	n += scnprintf(buf + n, sz - n, "  lhs: 0x%llx, ty = %s, signed = %d, width = %d\n", v->lhs, l->name, l->issigned, 1 << l->width);
-	n += scnprintf(buf + n, sz - n, "  rhs: 0x%llx, ty = %s, signed = %d, width = %d\n", v->rhs, r->name, r->issigned, 1 << r->width);
+	n += scnprintf(buf + n, sz - n, "problem:\"bad shift\", ");
+	n += scnprintf(buf + n, sz - n, "lhs:0x%llx, lty:\"%s\", lsigned:%d, lwidth:%d, ", v->lhs, l->name, l->issigned, 1 << l->width);
+	n += scnprintf(buf + n, sz - n, "rhs:0x%llx, rty:\"%s\", rsigned:%d, rwidth:%d, ", v->rhs, r->name, r->issigned, 1 << r->width);
 
 	return n;
 }
@@ -122,15 +123,15 @@ format_type_mismatch(struct ubsan_violation *v, char *buf, size_t sz)
 	const char * kind = get_type_check_kind(v->align->kind);
 	if (NULL == ptr) {
 		//null pointer use
-		n += scnprintf(buf + n, sz - n, "%s NULL pointer of type %s\n", kind, v->align->ty->name);
+		n += scnprintf(buf + n, sz - n, "problem:\"%s NULL pointer\", ty:\"%s\", ", kind, v->align->ty->name);
 	} else if (alignment && ((uintptr_t)ptr & (alignment - 1))) {
 		//misaligned pointer use
-		n += scnprintf(buf + n, sz - n, "%s mis-aligned address %p for type %s ", kind, (void*)v->lhs, v->align->ty->name);
-		n += scnprintf(buf + n, sz - n, "which requires %d byte alignment\n", 1 << v->align->align);
+		n += scnprintf(buf + n, sz - n, "problem:\"%s mis-aligned\", address:%p, ty:\"%s\", ", kind, (void*)v->lhs, v->align->ty->name);
+		n += scnprintf(buf + n, sz - n, "required_alignment:%d, ", 1 << v->align->align);
 	} else {
 		//insufficient object size
-		n += scnprintf(buf + n, sz - n, "%s address %p with insufficient space for an object of type %s\n",
-		    kind, ptr, v->align->ty->name);
+		n += scnprintf(buf + n, sz - n, "problem:\"%s insufficient object size\", ty:\"%s\", address:%p, ",
+		    kind, v->align->ty->name, ptr);
 	}
 
 	return n;
@@ -144,25 +145,32 @@ format_oob(struct ubsan_violation *v, char *buf, size_t sz)
 	struct san_type_desc *ity = v->oob->index_ty;
 	uintptr_t idx = v->lhs;
 
-	n += scnprintf(buf + n, sz - n, "OOB array access\n");
-	n += scnprintf(buf + n, sz - n, "  idx %ld\n", idx);
-	n += scnprintf(buf + n, sz - n, "  aty: ty = %s, signed = %d, width = %d\n", aty->name, aty->issigned, 1 << aty->width);
-	n += scnprintf(buf + n, sz - n, "  ity: ty = %s, signed = %d, width = %d\n", ity->name, ity->issigned, 1 << ity->width);
+	n += scnprintf(buf + n, sz - n, "problem:\"OOB array access\", ");
+	n += scnprintf(buf + n, sz - n, "idx:%ld, ", idx);
+	n += scnprintf(buf + n, sz - n, "aty:\"%s\", asigned:%d, awidth:%d, ", aty->name, aty->issigned, 1 << aty->width);
+	n += scnprintf(buf + n, sz - n, "ity:\"%s\", isigned:%d, iwidth:%d, ", ity->name, ity->issigned, 1 << ity->width);
 
 	return n;
+}
+
+static size_t
+format_load_invalid_value(struct ubsan_violation *v, char *buf, size_t sz)
+{
+	return scnprintf(buf, sz, "problem:\"invalid value load\", type:\"%s\", value:0x%llx",
+	           v->invalid->type->name, v->lhs);
 }
 
 size_t
 ubsan_format(struct ubsan_violation *v, char *buf, size_t sz)
 {
-	size_t n = 0;
+	size_t n = scnprintf(buf, sz, "{ ");
 
 	switch (v->ubsan_type) {
 	case UBSAN_OVERFLOW_add ... UBSAN_OVERFLOW_negate:
 		n += format_overflow(v, buf + n, sz - n);
 		break;
 	case UBSAN_UNREACHABLE:
-		n += scnprintf(buf + n, sz - n, "unreachable\n");
+		n += scnprintf(buf + n, sz - n, "problem:\"unreachable\", ");
 		break;
 	case UBSAN_SHIFT:
 		n += format_shift(v, buf + n, sz - n);
@@ -171,13 +179,16 @@ ubsan_format(struct ubsan_violation *v, char *buf, size_t sz)
 		n += format_type_mismatch(v, buf + n, sz - n);
 		break;
 	case UBSAN_POINTER_OVERFLOW:
-		n += scnprintf(buf + n, sz - n, "pointer overflow, before = 0x%llx, after = 0x%llx\n", v->lhs, v->rhs);
+		n += scnprintf(buf + n, sz - n, "problem:\"pointer overflow\", before:0x%llx, after:0x%llx, ", v->lhs, v->rhs);
 		break;
 	case UBSAN_OOB:
 		n += format_oob(v, buf + n, sz - n);
 		break;
+	case UBSAN_LOAD_INVALID_VALUE:
+		n += format_load_invalid_value(v, buf + n, sz - n);
+		break;
 	case UBSAN_GENERIC:
-		n += scnprintf(buf + n, sz - n, "%s\n", v->func);
+		n += scnprintf(buf + n, sz - n, "problem:\"generic\", function:\"%s\", ", v->func);
 		break;
 	default:
 		panic("unknown violation");
@@ -188,14 +199,11 @@ ubsan_format(struct ubsan_violation *v, char *buf, size_t sz)
 	return n;
 }
 
-static void
-ubsan_handle(struct ubsan_violation *v, bool fatal)
-{
-	const size_t sz = 256;
-	static char buf[sz];
-	size_t n = 0;
-	buf[0] = '\0';
+enum UBFatality { Fatal, FleshWound };
 
+static void
+ubsan_handle(struct ubsan_violation *v, enum UBFatality fatality)
+{
 	if (!ubsan_loc_acquire(v->loc)) {
 		/* violation site already reported */
 		return;
@@ -203,16 +211,12 @@ ubsan_handle(struct ubsan_violation *v, bool fatal)
 
 	ubsan_log_append(v);
 
-	if (ubsan_print || fatal) {
-		n += ubsan_format(v, buf + n, sz - n);
-	}
-
-	if (ubsan_print) {
+	if (ubsan_print || (fatality == Fatal)) {
+		const size_t sz = 256;
+		static char buf[sz];
+		buf[0] = '\0';
+		ubsan_format(v, buf, sz);
 		printf("UBSan: %s", buf);
-	}
-
-	if (fatal) {
-		panic("UBSan: %s", buf);
 	}
 }
 
@@ -220,31 +224,31 @@ void
 __ubsan_handle_builtin_unreachable(struct ubsan_unreachable_desc *desc)
 {
 	struct ubsan_violation v = { UBSAN_UNREACHABLE, 0, 0, .unreachable = desc, &desc->loc };
-	ubsan_handle(&v, true);
+	ubsan_handle(&v, Fatal);
 }
 
 void
 __ubsan_handle_shift_out_of_bounds(struct ubsan_shift_desc *desc, uint64_t lhs, uint64_t rhs)
 {
 	struct ubsan_violation v = { UBSAN_SHIFT, lhs, rhs, .shift = desc, &desc->loc };
-	ubsan_handle(&v, false);
+	ubsan_handle(&v, FleshWound);
 }
 
 void
 __ubsan_handle_shift_out_of_bounds_abort(struct ubsan_shift_desc *desc, uint64_t lhs, uint64_t rhs)
 {
 	struct ubsan_violation v = { UBSAN_SHIFT, lhs, rhs, .shift = desc, &desc->loc };
-	ubsan_handle(&v, true);
+	ubsan_handle(&v, Fatal);
 }
 
 #define DEFINE_OVERFLOW(op) \
 	void __ubsan_handle_##op##_overflow(struct ubsan_overflow_desc *desc, uint64_t lhs, uint64_t rhs) { \
 	        struct ubsan_violation v = { UBSAN_OVERFLOW_##op, lhs, rhs, .overflow = desc, &desc->loc }; \
-	        ubsan_handle(&v, false); \
+	        ubsan_handle(&v, FleshWound); \
 	} \
 	void __ubsan_handle_##op##_overflow_abort(struct ubsan_overflow_desc *desc, uint64_t lhs, uint64_t rhs) { \
 	        struct ubsan_violation v = { UBSAN_OVERFLOW_##op, lhs, rhs, .overflow = desc, &desc->loc }; \
-	        ubsan_handle(&v, true); \
+	        ubsan_handle(&v, Fatal); \
 	}
 
 DEFINE_OVERFLOW(add)
@@ -257,58 +261,71 @@ void
 __ubsan_handle_type_mismatch_v1(struct ubsan_align_desc *desc, uint64_t val)
 {
 	struct ubsan_violation v = { UBSAN_TYPE_MISMATCH, val, 0, .align = desc, &desc->loc };
-	ubsan_handle(&v, false);
+	ubsan_handle(&v, FleshWound);
 }
 
 void
 __ubsan_handle_type_mismatch_v1_abort(struct ubsan_align_desc *desc, uint64_t val)
 {
 	struct ubsan_violation v = { UBSAN_TYPE_MISMATCH, val, 0, .align = desc, &desc->loc };
-	ubsan_handle(&v, true);
+	ubsan_handle(&v, Fatal);
 }
 
 void
 __ubsan_handle_pointer_overflow(struct ubsan_ptroverflow_desc *desc, uint64_t before, uint64_t after)
 {
 	struct ubsan_violation v = { UBSAN_POINTER_OVERFLOW, before, after, .ptroverflow = desc, &desc->loc };
-	ubsan_handle(&v, false);
+	ubsan_handle(&v, FleshWound);
 }
 
 void
 __ubsan_handle_pointer_overflow_abort(struct ubsan_ptroverflow_desc *desc, uint64_t before, uint64_t after)
 {
 	struct ubsan_violation v = { UBSAN_POINTER_OVERFLOW, before, after, .ptroverflow = desc, &desc->loc };
-	ubsan_handle(&v, true);
+	ubsan_handle(&v, Fatal);
 }
 
 void
 __ubsan_handle_out_of_bounds(struct ubsan_oob_desc *desc, uint64_t idx)
 {
 	struct ubsan_violation v = { UBSAN_OOB, idx, 0, .oob = desc, &desc->loc };
-	ubsan_handle(&v, false);
+	ubsan_handle(&v, FleshWound);
 }
 
 void
 __ubsan_handle_out_of_bounds_abort(struct ubsan_oob_desc *desc, uint64_t idx)
 {
 	struct ubsan_violation v = { UBSAN_OOB, idx, 0, .oob = desc, &desc->loc };
-	ubsan_handle(&v, true);
+	ubsan_handle(&v, Fatal);
+}
+
+void
+__ubsan_handle_load_invalid_value(struct ubsan_load_invalid_desc *desc, uint64_t invalid_value)
+{
+	struct ubsan_violation v = { UBSAN_LOAD_INVALID_VALUE, invalid_value, 0, .invalid = desc, &desc->loc };
+	ubsan_handle(&v, Fatal);
+}
+
+void
+__ubsan_handle_load_invalid_value_abort(struct ubsan_load_invalid_desc *desc, uint64_t invalid_value)
+{
+	struct ubsan_violation v = { UBSAN_LOAD_INVALID_VALUE, invalid_value, 0, .invalid = desc, &desc->loc };
+	ubsan_handle(&v, Fatal);
 }
 
 #define DEFINE_GENERIC(check) \
 	void __ubsan_handle_##check (struct san_src_loc* loc) \
 	{ \
 	        struct ubsan_violation v = { UBSAN_GENERIC, 0, 0, .func = __func__, loc }; \
-	        ubsan_handle(&v, false); \
+	        ubsan_handle(&v, FleshWound); \
 	} \
 	void __ubsan_handle_##check##_abort(struct san_src_loc* loc) \
 	{ \
 	        struct ubsan_violation v = { UBSAN_GENERIC, 0, 0, .func = __func__, loc }; \
-	        ubsan_handle(&v, true); \
+	        ubsan_handle(&v, Fatal); \
 	}
 
 DEFINE_GENERIC(invalid_builtin)
-DEFINE_GENERIC(load_invalid_value)
 DEFINE_GENERIC(nonnull_arg)
 DEFINE_GENERIC(vla_bound_not_positive)
 DEFINE_GENERIC(float_cast_overflow)

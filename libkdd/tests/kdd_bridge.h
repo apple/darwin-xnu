@@ -9,8 +9,8 @@
 #ifndef kdd_bridge_h
 #define kdd_bridge_h
 
-#include <kdd/kdd.h>
-#include <kdd/kcdata.h>
+#include <kdd.h>
+#include <kcdata.h>
 #include <zlib.h>
 
 #endif /* kdd_bridge_h */

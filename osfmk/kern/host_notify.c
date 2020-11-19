@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -37,46 +37,33 @@
 
 #include "mach/host_notify_reply.h"
 
-decl_lck_mtx_data(, host_notify_lock);
+struct host_notify_entry {
+	queue_chain_t           entries;
+	ipc_port_t              port;
+};
+typedef struct host_notify_entry        *host_notify_t;
 
-lck_mtx_ext_t                   host_notify_lock_ext;
-lck_grp_t                               host_notify_lock_grp;
-lck_attr_t                              host_notify_lock_attr;
-static lck_grp_attr_t   host_notify_lock_grp_attr;
-static zone_t                   host_notify_zone;
+LCK_GRP_DECLARE(host_notify_lock_grp, "host_notify");
+LCK_MTX_EARLY_DECLARE(host_notify_lock, &host_notify_lock_grp);
 
-static queue_head_t             host_notify_queue[HOST_NOTIFY_TYPE_MAX + 1];
+static ZONE_DECLARE(host_notify_zone, "host_notify",
+    sizeof(struct host_notify_entry), ZC_NONE);
+
+static queue_head_t     host_notify_queue[HOST_NOTIFY_TYPE_MAX + 1];
 
 static mach_msg_id_t    host_notify_replyid[HOST_NOTIFY_TYPE_MAX + 1] =
 { HOST_CALENDAR_CHANGED_REPLYID,
   HOST_CALENDAR_SET_REPLYID };
 
-struct host_notify_entry {
-	queue_chain_t           entries;
-	ipc_port_t                      port;
-};
-
-typedef struct host_notify_entry        *host_notify_t;
-
-void
+__startup_func
+static void
 host_notify_init(void)
 {
-	int             i;
-
-	for (i = 0; i <= HOST_NOTIFY_TYPE_MAX; i++) {
+	for (int i = 0; i <= HOST_NOTIFY_TYPE_MAX; i++) {
 		queue_init(&host_notify_queue[i]);
 	}
-
-	lck_grp_attr_setdefault(&host_notify_lock_grp_attr);
-	lck_grp_init(&host_notify_lock_grp, "host_notify", &host_notify_lock_grp_attr);
-	lck_attr_setdefault(&host_notify_lock_attr);
-
-	lck_mtx_init_ext(&host_notify_lock, &host_notify_lock_ext, &host_notify_lock_grp, &host_notify_lock_attr);
-
-	i = sizeof(struct host_notify_entry);
-	host_notify_zone =
-	    zinit(i, (4096 * i), (16 * i), "host_notify");
 }
+STARTUP(MACH_IPC, STARTUP_RANK_FIRST, host_notify_init);
 
 kern_return_t
 host_request_notification(
@@ -106,7 +93,8 @@ host_request_notification(
 	lck_mtx_lock(&host_notify_lock);
 
 	ip_lock(port);
-	if (!ip_active(port) || port->ip_tempowner || ip_kotype(port) != IKOT_NONE) {
+	if (!ip_active(port) || port->ip_tempowner || port->ip_specialreply ||
+	    ip_is_kolabeled(port) || ip_kotype(port) != IKOT_NONE) {
 		ip_unlock(port);
 
 		lck_mtx_unlock(&host_notify_lock);

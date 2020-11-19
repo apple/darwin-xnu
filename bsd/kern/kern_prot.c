@@ -2033,6 +2033,30 @@ set_security_token(proc_t p)
 	return set_security_token_task_internal(p, p->task);
 }
 
+static void
+proc_calc_audit_token(proc_t p, kauth_cred_t my_cred, audit_token_t *audit_token)
+{
+	posix_cred_t my_pcred = posix_cred_get(my_cred);
+
+	/*
+	 * The current layout of the Mach audit token explicitly
+	 * adds these fields.  But nobody should rely on such
+	 * a literal representation.  Instead, the BSM library
+	 * provides a function to convert an audit token into
+	 * a BSM subject.  Use of that mechanism will isolate
+	 * the user of the trailer from future representation
+	 * changes.
+	 */
+	audit_token->val[0] = my_cred->cr_audit.as_aia_p->ai_auid;
+	audit_token->val[1] = my_pcred->cr_uid;
+	audit_token->val[2] = my_pcred->cr_gid;
+	audit_token->val[3] = my_pcred->cr_ruid;
+	audit_token->val[4] = my_pcred->cr_rgid;
+	audit_token->val[5] = p->p_pid;
+	audit_token->val[6] = my_cred->cr_audit.as_aia_p->ai_asid;
+	audit_token->val[7] = p->p_idversion;
+}
+
 /*
  * Set the secrity token of the task with current euid and eguid
  * The function takes a proc and a task, where proc->task might point to a
@@ -2042,10 +2066,9 @@ set_security_token(proc_t p)
 int
 set_security_token_task_internal(proc_t p, void *t)
 {
+	kauth_cred_t my_cred;
 	security_token_t sec_token;
 	audit_token_t    audit_token;
-	kauth_cred_t my_cred;
-	posix_cred_t my_pcred;
 	host_priv_t host_priv;
 	task_t task = t;
 
@@ -2064,7 +2087,8 @@ set_security_token_task_internal(proc_t p, void *t)
 	}
 
 	my_cred = kauth_cred_proc_ref(p);
-	my_pcred = posix_cred_get(my_cred);
+
+	proc_calc_audit_token(p, my_cred, &audit_token);
 
 	/* XXX mach_init doesn't have a p_ucred when it calls this function */
 	if (IS_VALID_CRED(my_cred)) {
@@ -2074,24 +2098,6 @@ set_security_token_task_internal(proc_t p, void *t)
 		sec_token.val[0] = 0;
 		sec_token.val[1] = 0;
 	}
-
-	/*
-	 * The current layout of the Mach audit token explicitly
-	 * adds these fields.  But nobody should rely on such
-	 * a literal representation.  Instead, the BSM library
-	 * provides a function to convert an audit token into
-	 * a BSM subject.  Use of that mechanism will isolate
-	 * the user of the trailer from future representation
-	 * changes.
-	 */
-	audit_token.val[0] = my_cred->cr_audit.as_aia_p->ai_auid;
-	audit_token.val[1] = my_pcred->cr_uid;
-	audit_token.val[2] = my_pcred->cr_gid;
-	audit_token.val[3] = my_pcred->cr_ruid;
-	audit_token.val[4] = my_pcred->cr_rgid;
-	audit_token.val[5] = p->p_pid;
-	audit_token.val[6] = my_cred->cr_audit.as_aia_p->ai_asid;
-	audit_token.val[7] = p->p_idversion;
 
 	host_priv = (sec_token.val[0]) ? HOST_PRIV_NULL : host_priv_self();
 #if CONFIG_MACF
@@ -2113,6 +2119,22 @@ set_security_token_task_internal(proc_t p, void *t)
 	           sec_token,
 	           audit_token,
 	           host_priv) != KERN_SUCCESS;
+}
+
+void
+proc_parent_audit_token(proc_t p, audit_token_t *token_out)
+{
+	proc_t parent;
+	kauth_cred_t my_cred;
+
+	proc_list_lock();
+
+	parent = p->p_pptr;
+	my_cred = kauth_cred_proc_ref(parent);
+	proc_calc_audit_token(parent, my_cred, token_out);
+	kauth_cred_unref(&my_cred);
+
+	proc_list_unlock();
 }
 
 

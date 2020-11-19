@@ -26,6 +26,8 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <IOKit/IODMAEventSource.h>
 #include <IOKit/IOService.h>
 
@@ -57,11 +59,10 @@ IODMAEventSource::init(OSObject *inOwner,
 	dmaCompletionAction = inCompletion;
 	dmaNotificationAction = inNotification;
 
-	dmaController = IODMAController::getController(dmaProvider, inDMAIndex);
+	dmaController.reset(IODMAController::getController(dmaProvider, inDMAIndex), OSRetain);
 	if (dmaController == NULL) {
 		return false;
 	}
-	dmaController->retain();
 
 	result = dmaController->initDMAChannel(dmaProvider, this, &dmaIndex, inDMAIndex);
 	if (result != kIOReturnSuccess) {
@@ -83,18 +84,17 @@ IODMAEventSource::free()
 	super::free();
 }
 
-IODMAEventSource *
+OSSharedPtr<IODMAEventSource>
 IODMAEventSource::dmaEventSource(OSObject *inOwner,
     IOService *inProvider,
     Action inCompletion,
     Action inNotification,
     UInt32 inDMAIndex)
 {
-	IODMAEventSource *dmaES = new IODMAEventSource;
+	OSSharedPtr<IODMAEventSource> dmaES = OSMakeShared<IODMAEventSource>();
 
 	if (dmaES && !dmaES->init(inOwner, inProvider, inCompletion, inNotification, inDMAIndex)) {
-		dmaES->release();
-		return NULL;
+		return nullptr;
 	}
 
 	return dmaES;

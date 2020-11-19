@@ -58,6 +58,7 @@
 #include <IOKit/IOCommandGate.h>
 #include <IOKit/IOService.h>
 #include <IOKit/IOWorkLoop.h>
+#include <libkern/c++/OSPtr.h>
 
 /*!
  * @class IOCommandPool
@@ -81,7 +82,7 @@ protected:
 
 	queue_head_t fQueueHead; /* head of the queue of elements available */
 	UInt32 fSleepers;       /* Count of threads sleeping on this pool */
-	IOCommandGate *fSerializer; /* command gate used for serializing pool access */
+	OSPtr<IOCommandGate> fSerializer; /* command gate used for serializing pool access */
 
 /*! @struct ExpansionData
  *   @discussion This structure will be used to expand the capablilties of the IOEventSource in the future.
@@ -136,7 +137,7 @@ public:
  * otherwise NULL.
  */
 
-	static IOCommandPool *withWorkLoop(IOWorkLoop *inWorkLoop);
+	static OSPtr<IOCommandPool> withWorkLoop(IOWorkLoop *inWorkLoop);
 
 /*!
  * @function init
@@ -150,7 +151,7 @@ public:
  * @function withWorkLoop
  * @abstract Should never be used, obsolete. See IOCommandPool::withWorkLoop.
  */
-	static IOCommandPool *commandPool(IOService *inOwner,
+	static OSPtr<IOCommandPool> commandPool(IOService *inOwner,
 	    IOWorkLoop *inWorkLoop,
 	    UInt32 inSize = kIOCommandPoolDefaultSize);
 
@@ -168,7 +169,8 @@ public:
  * pointer was returned.
  */
 
-	virtual IOCommand *getCommand(bool blockForCommand = true);
+	virtual OSPtr<IOCommand> getCommand(
+		bool blockForCommand = true);
 
 /*!
  * @function returnCommand
@@ -179,7 +181,7 @@ public:
  * The command to place in the pool.
  */
 
-	virtual void returnCommand(IOCommand *command);
+	virtual void returnCommand(LIBKERN_CONSUMED IOCommand *command);
 
 protected:
 

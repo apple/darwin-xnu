@@ -25,7 +25,6 @@
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
-#include <zone_debug.h>
 #include <mach/boolean.h>
 #include <mach/kern_return.h>
 #include <mach/mig_errors.h>
@@ -70,6 +69,9 @@
 
 #define EXTERN
 #define MIGEXTERN
+
+LCK_GRP_DECLARE(dev_lck_grp, "device");
+LCK_MTX_DECLARE(iokit_obj_to_port_binding_lock, &dev_lck_grp);
 
 /*
  * Lookup a device by its port.
@@ -184,8 +186,6 @@ iokit_release_port_send( ipc_port_t port )
 {
 	ipc_port_release_send( port );
 }
-
-extern lck_mtx_t iokit_obj_to_port_binding_lock;
 
 EXTERN void
 iokit_lock_port( __unused ipc_port_t port )

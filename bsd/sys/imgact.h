@@ -95,6 +95,8 @@ struct image_params {
 	char            *ip_strings;            /* base address for strings */
 	char            *ip_strendp;            /* current end pointer */
 
+	char            *ip_subsystem_root_path;        /* filepath for the subsystem root */
+
 	int             ip_argspace;    /* remaining space of NCARGS limit (argv+envv) */
 	int             ip_strspace;            /* remaining total string space */
 
@@ -120,9 +122,11 @@ struct image_params {
 	void            *ip_px_persona;         /* persona args */
 	void            *ip_px_pcred_info;      /* posix cred args */
 	void            *ip_cs_error;           /* codesigning error reason */
+	char            *ip_inherited_shared_region_id;  /* inherited shared region id for ptr auth */
 
 	uint64_t ip_dyld_fsid;
 	uint64_t ip_dyld_fsobjid;
+	uint64_t ip_inherited_jop_pid;
 	unsigned int    ip_simulator_binary;    /* simulator binary flags */
 
 	ipc_port_t      ip_sc_port;             /* SUID port. */
@@ -144,7 +148,10 @@ struct image_params {
 #define IMGPF_HIGH_BITS_ASLR    0x00000200      /* randomize high bits of ASLR slide */
 #define IMGPF_IS_64BIT_DATA             0x00000400      /* exec to a 64Bit register state */
 #define IMGPF_DRIVER             0x00000800      /* exec of a driver binary (no LC_MAIN) */
+#define IMGPF_RESLIDE           0x000001000     /* reslide the shared cache */
+#define IMGPF_PLUGIN_HOST_DISABLE_A_KEYS  0x000002000     /* process hosts plugins, disable ptr auth A keys */
 #define IMGPF_NOJOP             0x80000000
+
 
 /*
  * Simulator binary flags
@@ -152,5 +159,6 @@ struct image_params {
 #define IMGPF_SB_DEFAULT         0               /* Default value, did not check if it is a simulator binary */
 #define IMGPF_SB_TRUE            1               /* Binary is a simulator binary */
 #define IMGPF_SB_FALSE           2               /* Binary is not a simulator binary */
+
 
 #endif  /* !_SYS_IMGACT */

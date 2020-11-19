@@ -81,8 +81,6 @@ kpc_init(void)
 	lck_mtx_init(&sysctl_lock, sysctl_lckgrp, LCK_ATTR_NULL);
 
 	kpc_arch_init();
-	kpc_common_init();
-	kpc_thread_init();
 
 	kpc_initted = 1;
 }
@@ -105,7 +103,8 @@ kpc_get_bigarray(uint32_t *size_out)
 	 * Another element is needed to hold the CPU number when getting counter
 	 * values.
 	 */
-	bigarray = kalloc_tag(size, VM_KERN_MEMORY_DIAG);
+	bigarray = kheap_alloc_tag(KHEAP_DATA_BUFFERS, size,
+	    Z_WAITOK, VM_KERN_MEMORY_DIAG);
 	assert(bigarray != NULL);
 	return bigarray;
 }

@@ -41,10 +41,12 @@ extern "C" {
 #endif /* XNU_KERNEL_PRIVATE */
 }
 
+
 #include <libkern/OSKextLib.h>
 #include <libkern/OSKextLibPrivate.h>
 #include <libkern/c++/OSObject.h>
 #include <libkern/c++/OSContainers.h>
+
 #include <libkern/c++/OSPtr.h>
 #include <IOKit/IOLocks.h>
 
@@ -71,8 +73,6 @@ void kxld_log_callback(
 *********************************************************************/
 class OSKext;
 
-typedef OSPtr<OSKext> OSKextPtr;
-
 extern "C" {
 void OSKextLog(
 	OSKext         * aKext,
@@ -95,6 +95,12 @@ kern_return_t OSRuntimeFinalizeCPP(
 	OSKext * kext);
 void OSRuntimeUnloadCPPForSegment(
 	kernel_segment_command_t * segment);
+void
+OSRuntimeSignStructors(
+	kernel_mach_header_t * header);
+void
+OSRuntimeSignStructorsInFileset(
+	kernel_mach_header_t * fileset_header);
 
 kern_return_t is_io_catalog_send_data(
 	mach_port_t              masterPort,
@@ -147,6 +153,22 @@ struct OSKextActiveAccount {
 	OSKextAccount * account;
 };
 typedef struct OSKextActiveAccount OSKextActiveAccount;
+
+class OSKextSavedMutableSegment : public OSObject {
+	OSDeclareDefaultStructors(OSKextSavedMutableSegment);
+public:
+	static OSPtr<OSKextSavedMutableSegment> withSegment(kernel_segment_command_t *seg);
+	OSReturn restoreContents(kernel_segment_command_t *seg);
+	vm_offset_t getVMAddr() const;
+	vm_size_t getVMSize() const;
+	virtual void free(void) APPLE_KEXT_OVERRIDE;
+private:
+	bool initWithSegment(kernel_segment_command_t *seg);
+	kernel_segment_command_t *savedSegment;
+	vm_offset_t vmaddr;
+	vm_size_t   vmsize;
+	void      * data;
+};
 
 #endif /* XNU_KERNEL_PRIVATE */
 
@@ -237,12 +259,12 @@ private:
 /*************************
 * Instance variables
 *************************/
-	OSDictionaryPtr  infoDict;
+	OSPtr<OSDictionary>  infoDict;
 
-	OSSymbolConstPtr    bundleID;
-	OSStringPtr    path;           // not necessarily correct :-/
-	OSStringPtr    executableRelPath;// relative to bundle
-	OSStringPtr    userExecutableRelPath;// relative to bundle
+	OSPtr<const OSSymbol>    bundleID;
+	OSPtr<OSString>    path;           // not necessarily correct :-/
+	OSPtr<OSString>    executableRelPath;// relative to bundle
+	OSPtr<OSString>    userExecutableRelPath;// relative to bundle
 
 	OSKextVersion    version;        // parsed
 	OSKextVersion    compatibleVersion;// parsed
@@ -254,19 +276,19 @@ private:
 	                                 // kOSKextInvalidLoadTag invalid
 	kmod_info_t    * kmod_info;      // address into linkedExec./alloced for interface
 
-	OSArrayPtr     dependencies;   // kernel resource does not have any;
-	                               // links directly to kernel
+	OSPtr<OSArray>     dependencies;   // kernel resource does not have any;
+	// links directly to kernel
 
 /* Only real kexts have these; interface kexts do not.
  */
-	OSDataPtr        linkedExecutable;
-	OSSetPtr         metaClasses;       // for C++/OSMetaClass kexts
+	OSPtr<OSData>       linkedExecutable;
+	OSPtr<OSSet>        metaClasses;       // for C++/OSMetaClass kexts
 
 /* Only interface kexts have these; non-interface kexts can get at them
  * in the linked Executable.
  */
-	OSDataPtr        interfaceUUID;
-	OSDataPtr        driverKitUUID;
+	OSPtr<OSData>       interfaceUUID;
+	OSPtr<OSData>       driverKitUUID;
 
 	struct {
 		unsigned int loggingEnabled:1;
@@ -284,20 +306,25 @@ private:
 		unsigned int started:1;
 		unsigned int stopping:1;
 		unsigned int unloading:1;
+		unsigned int resetSegmentsFromVnode:1;
 
+		unsigned int requireExplicitLoad:1;
 		unsigned int autounloadEnabled:1;
 		unsigned int delayAutounload:1; // for development
 
 		unsigned int CPPInitialized:1;
 		unsigned int jettisonLinkeditSeg:1;
+		unsigned int resetSegmentsFromImmutableCopy:1;
 	} flags;
 
 	uint32_t matchingRefCount;
+	kc_kind_t kc_type;
 
 	struct list_head pendingPgoHead;
 	uuid_t instance_uuid;
 	OSKextAccount * account;
 	uint32_t builtinKmodIdx;
+	OSPtr<OSArray> savedMutableSegments;
 
 #if PRAGMA_MARK
 /**************************************/
@@ -310,9 +337,11 @@ private:
  */
 public:
 	static void           initialize(void);
-	static OSDictionaryPtr copyKexts(void);
+	static OSPtr<OSDictionary> copyKexts(void);
 	static OSReturn       removeKextBootstrap(void);
 	static void           willShutdown(void);// called by IOPMrootDomain on shutdown
+	static void           willUserspaceReboot(void);
+	static void           resetAfterUserspaceReboot(void);
 	static  void reportOSMetaClassInstances(
 		const char     * kextIdentifier,
 		OSKextLogSpec    msgLogSpec);
@@ -335,28 +364,26 @@ private:
 
 /* Instance life cycle.
  */
-	static OSKextPtr withBooterData(
+	static OSPtr<OSKext> withBooterData(
 		OSString * deviceTreeName,
 		OSData   * booterData);
 	virtual bool initWithBooterData(
 		OSString * deviceTreeName,
 		OSData   * booterData);
 
-	static OSKextPtr withPrelinkedInfoDict(
+	static OSPtr<OSKext> withPrelinkedInfoDict(
 		OSDictionary * infoDict,
-		bool doCoalesedSlides);
+		bool doCoalesedSlides, kc_kind_t type);
 	virtual bool initWithPrelinkedInfoDict(
 		OSDictionary * infoDict,
-		bool doCoalesedSlides);
+		bool doCoalesedSlides, kc_kind_t type);
+
+	static OSSharedPtr<OSKext> withCodelessInfo(
+		OSDictionary * infoDict);
+	virtual bool initWithCodelessInfo(
+		OSDictionary * infoDict);
 
 	static void setAllVMAttributes(void);
-
-	static OSKextPtr withMkext2Info(
-		OSDictionary * anInfoDict,
-		OSData       * mkextData);
-	virtual bool initWithMkext2Info(
-		OSDictionary * anInfoDict,
-		OSData       * mkextData);
 
 	virtual bool setInfoDictionaryAndPath(
 		OSDictionary * aDictionary,
@@ -374,9 +401,18 @@ private:
 		bool     terminateServicesAndRemovePersonalitiesFlag = false);
 
 	virtual bool isInExcludeList(void);
+	virtual bool isLoadable(void);
 
 /* Mkexts.
  */
+#if CONFIG_KXLD
+	static OSPtr<OSKext> withMkext2Info(
+		OSDictionary * anInfoDict,
+		OSData       * mkextData);
+	virtual bool initWithMkext2Info(
+		OSDictionary * anInfoDict,
+		OSData       * mkextData);
+
 	static OSReturn readMkextArchive(
 		OSData   * mkextData,
 		uint32_t * checksumPtr = NULL);
@@ -384,15 +420,22 @@ private:
 		OSData * mkextData,
 		OSDictionary ** mkextPlistOut,
 		uint32_t * checksumPtr = NULL);
-	virtual OSData * createMkext2FileEntry(
+
+	static OSReturn readMkext2Archive(
+		OSData * mkextData,
+		OSSharedPtr<OSDictionary> &mkextPlistOut,
+		uint32_t * checksumPtr = NULL);
+
+	virtual OSPtr<OSData> createMkext2FileEntry(
 		OSData * mkextData,
 		OSNumber * offsetNum,
 		const char * entryName);
-	virtual OSDataPtr extractMkext2FileData(
+	virtual OSPtr<OSData> extractMkext2FileData(
 		UInt8      * data,
 		const char * name,
 		uint32_t     compressedSize,
 		uint32_t     fullSize);
+#endif // CONFIG_KXLD
 
 /* Dependencies.
  */
@@ -420,6 +463,9 @@ private:
 		uint32_t      * responseLengthOut,
 		char         ** logInfoOut,
 		uint32_t      * logInfoLengthOut);
+	static OSReturn loadCodelessKext(
+		OSString      * kextIdentifier,
+		OSDictionary  * requestDict);
 	static OSReturn serializeLogInfo(
 		OSArray   * logInfoArray,
 		char     ** logInfoOut,
@@ -427,6 +473,18 @@ private:
 
 /* Loading.
  */
+	static bool addKextsFromKextCollection(kernel_mach_header_t *mh,
+	    OSDictionary *infoDict, const char *text_seg_name,
+	    OSData **kcUUID, kc_kind_t type);
+
+	static bool addKextsFromKextCollection(kernel_mach_header_t *mh,
+	    OSDictionary *infoDict, const char *text_seg_name,
+	    OSSharedPtr<OSData> &kcUUID, kc_kind_t type);
+
+	static bool registerDeferredKextCollection(kernel_mach_header_t *mh,
+	    OSSharedPtr<OSObject> &parsedXML, kc_kind_t type);
+	static OSSharedPtr<OSObject> consumeDeferredKextCollection(kc_kind_t type);
+
 	virtual OSReturn load(
 		OSKextExcludeLevel   startOpt         = kOSKextExcludeNone,
 		OSKextExcludeLevel   startMatchingOpt = kOSKextExcludeAll,
@@ -461,7 +519,7 @@ private:
 	virtual OSReturn validateKextMapping(bool startFlag);
 	virtual boolean_t verifySegmentMapping(kernel_segment_command_t *seg);
 
-	static OSArrayPtr copyAllKextPersonalities(
+	static OSPtr<OSArray> copyAllKextPersonalities(
 		bool filterSafeBootFlag = false);
 
 	static  void  setPrelinkedPersonalities(OSArray * personalitiesArray);
@@ -480,25 +538,28 @@ private:
 
 /* Sync with user space.
  */
-	static OSReturn pingKextd(void);
+	static OSReturn pingIOKitDaemon(void);
 
 /* Getting info about loaded kexts (kextstat).
  */
-	static  OSDictionaryPtr copyLoadedKextInfo(
+	static  OSPtr<OSDictionary> copyLoadedKextInfo(
 		OSArray * kextIdentifiers = NULL,
 		OSArray * keys = NULL);
-	static  OSDictionaryPtr copyLoadedKextInfoByUUID(
+	static  OSPtr<OSDictionary> copyLoadedKextInfoByUUID(
 		OSArray * kextIdentifiers = NULL,
 		OSArray * keys = NULL);
-	static OSDataPtr copyKextUUIDForAddress(OSNumber *address = NULL);
-	virtual OSDictionaryPtr copyInfo(OSArray * keys = NULL);
+	static  OSPtr<OSDictionary> copyKextCollectionInfo(
+		OSDictionary *requestDict,
+		OSArray  *infoKeys = NULL);
+	static OSPtr<OSData> copyKextUUIDForAddress(OSNumber *address = NULL);
+	virtual OSPtr<OSDictionary> copyInfo(OSArray * keys = NULL);
 
 /* Logging to user space.
  */
 	static OSKextLogSpec setUserSpaceLogFilter(
 		OSKextLogSpec  userLogSpec,
 		bool           captureFlag = false);
-	static OSArrayPtr clearUserSpaceLogFilter(void);
+	static OSPtr<OSArray> clearUserSpaceLogFilter(void);
 	static OSKextLogSpec getUserSpaceLogFilter(void);
 
 /* OSMetaClasses defined by kext.
@@ -516,7 +577,49 @@ private:
 
 /* Resource requests and other callback stuff.
  */
+	static OSReturn loadFileSetKexts(OSDictionary * requestDict);
+
+	static OSReturn loadKCFileSet(const char *filepath, kc_kind_t type);
+
+#if defined(__x86_64__) || defined(__i386__)
+	static OSReturn mapKCFileSet(
+		void                 *control,
+		vm_size_t            fsize,
+		kernel_mach_header_t **mh,
+		off_t                file_offset,
+		uintptr_t            *slide,
+		bool                 pageable,
+		void                 *map_entry_buffer);
+	static OSReturn protectKCFileSet(
+		kernel_mach_header_t *mh,
+		kc_kind_t            type);
+	static OSReturn mapKCTextSegment(
+		void                 *control,
+		kernel_mach_header_t **mhp,
+		off_t                file_offset,
+		uintptr_t            *slide,
+		void                 *map_entry_list);
+	static void freeKCFileSetcontrol(void);
+	OSReturn resetKCFileSetSegments(void);
+	static void jettisonFileSetLinkeditSegment(kernel_mach_header_t *mh);
+#endif //(__x86_64__) || defined(__i386__)
+
+	static OSReturn validateKCFileSetUUID(
+		OSDictionary         *infoDict,
+		kc_kind_t            type);
+
+	static OSReturn validateKCUUIDfromPrelinkInfo(
+		uuid_t               *loaded_kcuuid,
+		kc_kind_t             type,
+		OSDictionary         *infoDict,
+		const char           *uuid_key);
+
 	static OSReturn dispatchResource(OSDictionary * requestDict);
+
+	static OSReturn setMissingAuxKCBundles(OSDictionary * requestDict);
+
+	static OSReturn setAuxKCBundleAvailable(OSString *kextIdentifier,
+	    OSDictionary *requestDict);
 
 	static OSReturn dequeueCallbackForRequestTag(
 		OSKextRequestTag    requestTag,
@@ -524,6 +627,14 @@ private:
 	static OSReturn dequeueCallbackForRequestTag(
 		OSNumber     *    requestTagNum,
 		LIBKERN_RETURNS_RETAINED OSDictionary ** callbackRecordOut);
+
+	static OSReturn dequeueCallbackForRequestTag(
+		OSKextRequestTag    requestTag,
+		OSSharedPtr<OSDictionary> &callbackRecordOut);
+	static OSReturn dequeueCallbackForRequestTag(
+		OSNumber     *    requestTagNum,
+		OSSharedPtr<OSDictionary> &callbackRecordOut);
+
 	static void invokeRequestCallback(
 		OSDictionary * callbackRecord,
 		OSReturn         requestResult);
@@ -531,6 +642,7 @@ private:
 		OSReturn callbackResult,
 		bool     invokeFlag = true);
 	virtual uint32_t countRequestCallbacks(void);
+	OSReturn resetMutableSegments(void);
 
 /* panic() support.
  */
@@ -546,6 +658,7 @@ public:
 		int          (* printf_func)(const char *fmt, ...),
 		uint32_t        flags);
 	bool isDriverKit(void);
+	bool isInFileset(void);
 private:
 	static OSKextLoadedKextSummary *summaryForAddress(const uintptr_t addr);
 	static void *kextForAddress(const void *addr);
@@ -589,11 +702,11 @@ public:
 #endif
 public:
 	// caller must release
-	static OSKextPtr lookupKextWithIdentifier(const char * kextIdentifier);
-	static OSKextPtr lookupKextWithIdentifier(OSString * kextIdentifier);
-	static OSKextPtr lookupKextWithLoadTag(OSKextLoadTag aTag);
-	static OSKextPtr lookupKextWithAddress(vm_address_t address);
-	static OSKextPtr lookupKextWithUUID(uuid_t uuid);
+	static OSPtr<OSKext> lookupKextWithIdentifier(const char * kextIdentifier);
+	static OSPtr<OSKext> lookupKextWithIdentifier(OSString * kextIdentifier);
+	static OSPtr<OSKext> lookupKextWithLoadTag(OSKextLoadTag aTag);
+	static OSPtr<OSKext> lookupKextWithAddress(vm_address_t address);
+	static OSPtr<OSKext> lookupKextWithUUID(uuid_t uuid);
 
 	kernel_section_t *lookupSection(const char *segname, const char*secname);
 
@@ -616,8 +729,21 @@ public:
 		OSKextExcludeLevel startMatchingOpt    = kOSKextExcludeAll,
 		OSArray          * personalityNames    = NULL);
 
+	static OSReturn loadKextWithIdentifier(
+		OSString         *    kextIdentifier,
+		OSSharedPtr<OSObject> &kextRef,
+		Boolean                allowDeferFlag      = true,
+		Boolean                delayAutounloadFlag = false,
+		OSKextExcludeLevel     startOpt            = kOSKextExcludeNone,
+		OSKextExcludeLevel     startMatchingOpt    = kOSKextExcludeAll,
+		OSArray              * personalityNames    = NULL);
+
+	static OSReturn loadKextFromKC(OSKext *theKext, OSDictionary *requestDict);
+
 	static void dropMatchingReferences(
 		OSSet * kexts);
+
+	bool hasDependency(const OSSymbol * depID);
 
 	static OSReturn removeKextWithIdentifier(
 		const char * kextIdentifier,
@@ -628,7 +754,15 @@ public:
 	static OSReturn requestDaemonLaunch(
 		OSString        * kextIdentifier,
 		OSString        * serverName,
-		OSNumber        * serverTag);
+		OSNumber        * serverTag,
+		class IOUserServerCheckInToken ** checkInToken);
+
+	static OSReturn requestDaemonLaunch(
+		OSString        * kextIdentifier,
+		OSString        * serverName,
+		OSNumber        * serverTag,
+		OSSharedPtr<class IOUserServerCheckInToken> &checkInToken);
+
 	static OSReturn requestResource(
 		const char                    * kextIdentifier,
 		const char                    * resourceName,
@@ -641,7 +775,7 @@ public:
 
 	static void     considerUnloads(Boolean rescheduleOnlyFlag = false);
 	static void     flushNonloadedKexts(Boolean flushPrelinkedKexts);
-	static void     setKextdActive(Boolean active = true);
+	static void     setIOKitDaemonActive(bool active = true);
 	static void     setDeferredLoadSucceeded(Boolean succeeded = true);
 	static void     considerRebuildOfPrelinkedKernel(void);
 	static void     createExcludeListFromBooterData(
@@ -650,7 +784,7 @@ public:
 	static void     createExcludeListFromPrelinkInfo(OSArray * theInfoArray);
 	static boolean_t updateExcludeList(OSDictionary * infoDict);
 
-	static bool     isWaitingKextd(void);
+	static bool     pendingIOKitDaemonRequests(void);
 
 	virtual bool    setAutounloadEnabled(bool flag);
 
@@ -664,10 +798,10 @@ public:
 
 	virtual OSKextLoadTag      getLoadTag(void);
 	virtual void               getSizeInfo(uint32_t *loadSize, uint32_t *wiredSize);
-	virtual OSDataPtr          copyUUID(void);
-	OSDataPtr                  copyTextUUID(void);
-	OSDataPtr                  copyMachoUUID(const kernel_mach_header_t * header);
-	virtual OSArrayPtr         copyPersonalitiesArray(void);
+	virtual OSPtr<OSData>          copyUUID(void);
+	OSPtr<OSData>                  copyTextUUID(void);
+	OSPtr<OSData>                  copyMachoUUID(const kernel_mach_header_t * header);
+	virtual OSPtr<OSArray>         copyPersonalitiesArray(void);
 	static bool                copyUserExecutablePath(const OSSymbol * bundleID, char * pathResult, size_t pathSize);
 	virtual void               setDriverKitUUID(OSData *uuid);
 /* This removes personalities naming the kext (by CFBundleIdentifier),
@@ -678,6 +812,9 @@ public:
 /* Converts common string-valued properties to OSSymbols for lower memory consumption.
  */
 	static void uniquePersonalityProperties(OSDictionary * personalityDict);
+#ifdef XNU_KERNEL_PRIVATE
+	static void uniquePersonalityProperties(OSDictionary * personalityDict, bool defaultAddKernelBundleIdentifier);
+#endif
 
 	virtual bool               declaresExecutable(void); // might be missing
 	virtual bool               isInterface(void);
@@ -689,7 +826,25 @@ public:
 	virtual bool               isLoaded(void);
 	virtual bool               isStarted(void);
 	virtual bool               isCPPInitialized(void);
+
+	const char *
+	getKCTypeString(void)
+	{
+		switch (kc_type) {
+		case KCKindPrimary:
+			return kKCTypePrimary;
+		case KCKindPageable:
+			return kKCTypeSystem;
+		case KCKindAuxiliary:
+			return kKCTypeAuxiliary;
+		case KCKindNone:
+			return kKCTypeCodeless;
+		default:
+			return "??";
+		}
+	}
 };
 
+extern "C" void OSKextResetAfterUserspaceReboot(void);
 
 #endif /* !_LIBKERN_OSKEXT_H */

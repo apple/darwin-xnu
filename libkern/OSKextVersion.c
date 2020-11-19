@@ -169,9 +169,11 @@ __OSKextVersionStageForString(const char ** string_p)
 /*********************************************************************
 *********************************************************************/
 static const char *
-__OSKextVersionStringForStage(OSKextVersionStage stage)
+__OSKextVersionStringForStage(OSKextVersion stage)
 {
 	switch (stage) {
+	default:
+		OS_FALLTHROUGH;
 	case kOSKextVersionStageInvalid:     return NULL;
 	case kOSKextVersionStageDevelopment: return "d";
 	case kOSKextVersionStageAlpha:       return "a";
@@ -192,7 +194,7 @@ OSKextParseVersionString(const char * versionString)
 	OSKextVersion   vers_major         = 0;
 	OSKextVersion   vers_minor         = 0;
 	OSKextVersion   vers_revision      = 0;
-	OSKextVersion   vers_stage         = 0;
+	OSKextVersionStage   vers_stage         = 0;
 	OSKextVersion   vers_stage_level   = 0;
 	const char    * current_char_p;
 

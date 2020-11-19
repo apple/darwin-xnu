@@ -4,6 +4,7 @@ import struct
 
 from xnu import *
 from core.operating_system import Armv8_RegisterSet, Armv7_RegisterSet, I386_RegisterSet, X86_64RegisterSet
+from core import caching
 
 """ these defines should come from an authoritative header file """
 CPU_TYPE_I386 = 0x00000007
@@ -23,7 +24,7 @@ def GetRegisterSetForCPU(cputype, subtype):
         retval = I386_RegisterSet
     elif cputype == CPU_TYPE_X86_64:
         retval = X86_64RegisterSet
-    
+
     """ crash if unknown cputype """
 
     return retval.register_info['registers']
@@ -113,16 +114,25 @@ class UserProcess(target.Process):
         self.cpusubtype = unsigned(self.proc.p_cpusubtype)
 
         super(UserProcess, self).__init__(self.cputype, self.cpusubtype, ptrsize)
-
-        self.hinfo['ostype'] = 'macosx'
-        if self.cputype != CPU_TYPE_X86_64 and self.cputype != CPU_TYPE_I386:
+        dbg_message = "process:%s is64bit:%d ptrsize:%d cputype:0x%x cpusubtype:0x%x" % (hex(self.proc), int(dataregisters64bit), ptrsize, self.cputype, self.cpusubtype)
+        self.proc_platform = int(self.proc.p_platform)
+        if self.proc_platform == xnudefines.P_PLATFORM_MACOS:
+            self.hinfo['ostype'] = 'macosx'
+        elif self.proc_platform == xnudefines.P_PLATFORM_WATCHOS:
+            self.hinfo['ostype'] = 'watchos'
+        elif self.proc_platform == xnudefines.P_PLATFORM_TVOS:
+            self.hinfo['ostype'] = 'tvos'
+        else:
             self.hinfo['ostype'] = 'ios'
+        dbg_message += " ostype:%s" % self.hinfo['ostype']
+
+        if is_kern_64bit and str(kern.arch).lower().startswith('arm'):
+            addressing_bits = 64 - int(kern.globals.gT1Sz)
+            self.hinfo['addressing_bits'] = addressing_bits
+            dbg_message += " addressing_bits:%d" % addressing_bits
 
         self.registerset = GetRegisterSetForCPU(self.cputype, self.cpusubtype)
-        logging.debug("process %s is64bit: %d ptrsize: %d cputype: %d  cpusubtype:%d",
-                      hex(self.proc), int(dataregisters64bit), ptrsize,
-                      self.cputype, self.cpusubtype
-                      )
+        logging.info(dbg_message)
         self.threads = {}
         self.threads_ids_list = []
         logging.debug("iterating over threads in process")
@@ -165,7 +175,7 @@ class UserProcess(target.Process):
     def getRegisterInfo(self, regnum):
         #something similar to
         #"name:x1;bitsize:64;offset:8;encoding:uint;format:hex;gcc:1;dwarf:1;set:General Purpose Registers;"
-        if regnum > len(self.registerset):
+        if regnum >= len(self.registerset):
             logging.debug("No register_info for number %d." % regnum)
             return 'E45'
 
@@ -200,9 +210,15 @@ class UserProcess(target.Process):
         return retval
 
     def readMemory(self, address, size):
+        cache_key = "{}-{}-{}".format(hex(self.task), hex(address), size)
+        cache_data = caching.GetDynamicCacheData(cache_key)
+        if cache_data:
+            return self.encodeByteString(cache_data)
         data = GetUserDataAsString(self.task, address, size)
         if not data:
             logging.error("Failed to read memory task:{: <#018x} {: <#018x} {:d}".format(self.task, address, size))
+        else:
+            caching.SaveDynamicCacheData(cache_key, data)
         return self.encodeByteString(data)
 
     def getSharedLibInfoAddress(self):

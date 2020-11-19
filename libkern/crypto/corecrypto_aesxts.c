@@ -55,7 +55,7 @@ xts_start(uint32_t cipher __unused, // ignored - we're doing this for xts-aes on
 	enc = g_crypto_funcs->ccaes_xts_encrypt;
 	dec = g_crypto_funcs->ccaes_xts_decrypt;
 
-	if (!enc && !dec) {
+	if (!enc || !dec) {
 		panic("%s: xts mode not registered? enc=%p, dec=%p\n", __FUNCTION__, enc, dec);
 	}
 

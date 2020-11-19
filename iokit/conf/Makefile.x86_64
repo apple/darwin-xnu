@@ -1,6 +1,11 @@
 ######################################################################
 #BEGIN  Machine dependent Makefile fragment for x86_64
 ######################################################################
+#
+# XXX: CFLAGS
+#
+CWARNFLAGS   = $(CWARNFLAGS_STD) -Wno-unused-parameter  -Wshorten-64-to-32 -Wimplicit-int-conversion
+CXXWARNFLAGS = $(CXXWARNFLAGS_STD) -Wno-unused-parameter -Wno-cast-qual -Wno-shadow  -Wshorten-64-to-32 -Wimplicit-int-conversion
 
 # Files that must go in the __HIB segment:
 UNCONFIGURED_HIB_FILES=	\

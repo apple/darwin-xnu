@@ -36,6 +36,7 @@
 #ifndef _IOKIT_IOCATALOGUE_H
 #define _IOKIT_IOCATALOGUE_H
 
+#include <libkern/c++/OSPtr.h>
 #include <libkern/c++/OSObject.h>
 #include <libkern/c++/OSCollectionIterator.h>
 #include <libkern/c++/OSArray.h>
@@ -47,8 +48,8 @@
 
 class IOService;
 
-extern const OSSymbol * gIOModuleIdentifierKey;
-extern const OSSymbol * gIOModuleIdentifierKernelKey;
+extern OSPtr<const OSSymbol> gIOModuleIdentifierKey;
+extern OSPtr<const OSSymbol> gIOModuleIdentifierKernelKey;
 
 
 /*!
@@ -63,7 +64,7 @@ class IOCatalogue : public OSObject
 private:
 	IORWLock *               lock;
 	SInt32                   generation;
-	OSDictionary           * personalities;
+	OSPtr<OSDictionary> personalities;
 	OSArray * arrayForPersonality(OSDictionary * dict);
 	void addPersonality(OSDictionary * dict);
 
@@ -94,7 +95,7 @@ public:
  *   @param generationCount  Returns a reference to the generation count of the database. The generation count increases only when personalities are added to the database *and* IOService matching has been initiated.
  *   @result Returns an ordered set of driver personalities ranked on probe-scores.  The ordered set must be released by the receiver.
  */
-	OSOrderedSet * findDrivers( IOService * service, SInt32 * generationCount );
+	OSPtr<OSOrderedSet>  findDrivers( IOService * service, SInt32 * generationCount );
 
 /*!
  *   @function findDrivers
@@ -103,7 +104,7 @@ public:
  *   @param generationCount  Returns a reference to the current generation of the database. The generation count increases only when personalities are added to the database *and* IOService matching has been initiated.
  *   @result Returns an ordered set of driver personalities ranked on probe-scores. The ordered set must be released by the receiver.
  */
-	OSOrderedSet * findDrivers( OSDictionary * matching, SInt32 * generationCount );
+	OSPtr<OSOrderedSet>  findDrivers( OSDictionary * matching, SInt32 * generationCount );
 
 /*!
  *   @function addDrivers
@@ -123,6 +124,10 @@ public:
  */
 	bool removeDrivers( OSDictionary * matching, bool doNubMatching = true );
 
+#if XNU_KERNEL_PRIVATE
+	bool removeDrivers(bool doNubMatching, bool (^shouldRemove)(OSDictionary *personality));
+#endif /* XNU_KERNEL_PRIVATE */
+
 /*!
  *   @function getGenerationCount
  *   @abstract Get the current generation count of the database.
@@ -137,6 +142,8 @@ public:
  *   @result Returns true if the associated kernel module has been loaded into the kernel for a particular driver personality on which it depends.
  */
 	bool isModuleLoaded( OSDictionary * driver, OSObject ** kextRef ) const;
+
+	bool isModuleLoaded( OSDictionary * driver, OSSharedPtr<OSObject>& kextRef ) const;
 
 /*!
  *   @function moduleHasLoaded
@@ -176,6 +183,10 @@ public:
 	IOReturn terminateDriversForModule( const char * moduleName, bool unload = true);
 #if XNU_KERNEL_PRIVATE
 	IOReturn terminateDrivers(OSDictionary * matching, io_name_t className);
+
+	IOReturn terminateDriversForUserspaceReboot();
+
+	IOReturn resetAfterUserspaceReboot();
 #endif /* XNU_KERNEL_PRIVATE */
 
 /*!
@@ -232,8 +243,8 @@ private:
 	IOReturn _removeDrivers(OSDictionary * matching);
 };
 
-extern const OSSymbol * gIOClassKey;
-extern const OSSymbol * gIOProbeScoreKey;
-extern IOCatalogue    * gIOCatalogue;
+extern OSPtr<const OSSymbol> gIOClassKey;
+extern OSPtr<const OSSymbol> gIOProbeScoreKey;
+extern OSPtr<IOCatalogue> gIOCatalogue;
 
 #endif /* ! _IOKIT_IOCATALOGUE_H */

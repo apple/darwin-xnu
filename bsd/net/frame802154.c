@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2017 Apple Inc. All rights reserved.
+ * Copyright (c) 2017-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -223,14 +223,14 @@ frame802154_create(frame802154_t *p, uint8_t *buf)
 
 	/* OK, now we have field lengths.  Time to actually construct */
 	/* the outgoing frame, and store it in buf */
-	buf[0] = (p->fcf.frame_type & 7) |
+	buf[0] = (uint8_t)((p->fcf.frame_type & 7) |
 	    ((p->fcf.security_enabled & 1) << 3) |
 	    ((p->fcf.frame_pending & 1) << 4) |
 	    ((p->fcf.ack_required & 1) << 5) |
-	    ((p->fcf.panid_compression & 1) << 6);
-	buf[1] = ((p->fcf.dest_addr_mode & 3) << 2) |
+	    ((p->fcf.panid_compression & 1) << 6));
+	buf[1] = (uint8_t)(((p->fcf.dest_addr_mode & 3) << 2) |
 	    ((p->fcf.frame_version & 3) << 4) |
-	    ((p->fcf.src_addr_mode & 3) << 6);
+	    ((p->fcf.src_addr_mode & 3) << 6));
 
 	/* sequence number */
 	buf[2] = p->seq;
@@ -293,12 +293,12 @@ frame802154_create(frame802154_t *p, uint8_t *buf)
  *   \param len The size of the input data
  *   \param pf The frame802154_t struct to store the parsed frame information.
  */
-int
-frame802154_parse(uint8_t *data, int len, frame802154_t *pf, uint8_t **payload)
+size_t
+frame802154_parse(uint8_t *data, size_t len, frame802154_t *pf, uint8_t **payload)
 {
 	uint8_t *p;
 	frame802154_fcf_t fcf;
-	int c;
+	size_t c;
 #if LLSEC802154_USES_EXPLICIT_KEYS
 	uint8_t key_id_mode;
 #endif /* LLSEC802154_USES_EXPLICIT_KEYS */
@@ -328,7 +328,7 @@ frame802154_parse(uint8_t *data, int len, frame802154_t *pf, uint8_t **payload)
 	/* Destination address, if any */
 	if (fcf.dest_addr_mode) {
 		/* Destination PAN */
-		pf->dest_pid = p[0] + (p[1] << 8);
+		pf->dest_pid = (uint16_t)(p[0] + (p[1] << 8));
 		p += 2;
 
 		/* Destination address */
@@ -357,7 +357,7 @@ frame802154_parse(uint8_t *data, int len, frame802154_t *pf, uint8_t **payload)
 	if (fcf.src_addr_mode) {
 		/* Source PAN */
 		if (!fcf.panid_compression) {
-			pf->src_pid = p[0] + (p[1] << 8);
+			pf->src_pid = (uint16_t)(p[0] + (p[1] << 8));
 			p += 2;
 		} else {
 			pf->src_pid = pf->dest_pid;
@@ -412,7 +412,7 @@ frame802154_parse(uint8_t *data, int len, frame802154_t *pf, uint8_t **payload)
 	/* header length */
 	c = p - data;
 	/* payload length */
-	pf->payload_len = (len - c);
+	pf->payload_len = (int)(len - c);
 	/* payload */
 	*payload = p;
 

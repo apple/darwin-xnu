@@ -17,7 +17,7 @@
  *    are met.
  */
 /*
- * Copyright (c) 2003-2014 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -152,17 +152,15 @@
 #include <security/mac_framework.h>
 #endif
 
-#define f_flag f_fglob->fg_flag
-#define f_msgcount f_fglob->fg_msgcount
-#define f_cred f_fglob->fg_cred
-#define f_ops f_fglob->fg_ops
-#define f_offset f_fglob->fg_offset
-#define f_data f_fglob->fg_data
+#define f_flag fp_glob->fg_flag
+#define f_ops fp_glob->fg_ops
+#define f_data fp_glob->fg_data
 
 struct pipepair {
 	lck_mtx_t     pp_mtx;
 	struct pipe   pp_rpipe;
 	struct pipe   pp_wpipe;
+	uint64_t      pp_pipe_id;       /* unique ID shared by both pipe ends */
 };
 
 #define PIPE_PAIR(pipe) \
@@ -233,9 +231,13 @@ SECURITY_READ_ONLY_EARLY(struct filterops) pipe_wfiltops = {
 	.f_process = filt_pipewriteprocess,
 };
 
+#if PIPE_SYSCTLS
 static int nbigpipe;      /* for compatibility sake. no longer used */
+#endif
 static int amountpipes;   /* total number of pipes in system */
 static int amountpipekva; /* total memory used by pipes */
+
+static _Atomic uint64_t pipe_unique_id = 1;
 
 int maxpipekva __attribute__((used)) = PIPE_KVAMAX;  /* allowing 16MB max. */
 
@@ -266,39 +268,14 @@ static void pipeselwakeup(struct pipe *cpipe, struct pipe *spipe);
 static __inline int pipeio_lock(struct pipe *cpipe, int catch);
 static __inline void pipeio_unlock(struct pipe *cpipe);
 
-extern int postpipeevent(struct pipe *, int);
-extern void evpipefree(struct pipe *cpipe);
-
-static lck_grp_t        *pipe_mtx_grp;
-static lck_attr_t       *pipe_mtx_attr;
-static lck_grp_attr_t   *pipe_mtx_grp_attr;
-
-static zone_t pipe_zone;
+static LCK_GRP_DECLARE(pipe_mtx_grp, "pipe");
+static ZONE_DECLARE(pipe_zone, "pipe zone", sizeof(struct pipepair), ZC_NONE);
 
 #define MAX_PIPESIZE(pipe)              ( MAX(PIPE_SIZE, (pipe)->pipe_buffer.size) )
 
 SYSINIT(vfs, SI_SUB_VFS, SI_ORDER_ANY, pipeinit, NULL);
 
-/* initial setup done at time of sysinit */
-void
-pipeinit(void)
-{
-	nbigpipe = 0;
-	vm_size_t zone_size;
-
-	zone_size = 8192 * sizeof(struct pipepair);
-	pipe_zone = zinit(sizeof(struct pipepair), zone_size, 4096, "pipe zone");
-
-
-	/* allocate lock group attribute and group for pipe mutexes */
-	pipe_mtx_grp_attr = lck_grp_attr_alloc_init();
-	pipe_mtx_grp = lck_grp_alloc_init("pipe", pipe_mtx_grp_attr);
-
-	/* allocate the lock attribute for pipe mutexes */
-	pipe_mtx_attr = lck_attr_alloc_init();
-}
-
-#ifndef CONFIG_EMBEDDED
+#if defined(XNU_TARGET_OS_OSX)
 /* Bitmap for things to touch in pipe_touch() */
 #define PIPE_ATIME      0x00000001      /* time of last access */
 #define PIPE_MTIME      0x00000002      /* time of last modification */
@@ -588,6 +565,11 @@ pipe_stat(struct pipe *cpipe, void *ub, int isstat64)
 	return 0;
 }
 
+uint64_t
+pipe_id(struct pipe *p)
+{
+	return PIPE_PAIR(p)->pp_pipe_id;
+}
 
 /*
  * Allocate kva for pipe circular buffer, the space is pageable
@@ -604,7 +586,8 @@ pipespace(struct pipe *cpipe, int size)
 		return EINVAL;
 	}
 
-	if ((buffer = (vm_offset_t)kalloc(size)) == 0) {
+	buffer = (vm_offset_t)kheap_alloc(KHEAP_DATA_BUFFERS, size, Z_WAITOK);
+	if (!buffer) {
 		return ENOMEM;
 	}
 
@@ -641,15 +624,13 @@ pipepair_alloc(struct pipe **rp_out, struct pipe **wp_out)
 	 * if pipespace() fails.
 	 */
 	bzero(pp, sizeof(struct pipepair));
-	lck_mtx_init(&pp->pp_mtx, pipe_mtx_grp, pipe_mtx_attr);
+	pp->pp_pipe_id = os_atomic_inc_orig(&pipe_unique_id, relaxed);
+	lck_mtx_init(&pp->pp_mtx, &pipe_mtx_grp, LCK_ATTR_NULL);
 
 	rpipe->pipe_mtxp = &pp->pp_mtx;
 	wpipe->pipe_mtxp = &pp->pp_mtx;
 
-	TAILQ_INIT(&rpipe->pipe_evlist);
-	TAILQ_INIT(&wpipe->pipe_evlist);
-
-#ifndef CONFIG_EMBEDDED
+#if defined(XNU_TARGET_OS_OSX)
 	/* Initial times are all the time of creation of the pipe */
 	pipe_touch(rpipe, PIPE_ATIME | PIPE_MTIME | PIPE_CTIME);
 	pipe_touch(wpipe, PIPE_ATIME | PIPE_MTIME | PIPE_CTIME);
@@ -662,7 +643,7 @@ pipepair_alloc(struct pipe **rp_out, struct pipe **wp_out)
 	 */
 	int error = pipespace(rpipe, choose_pipespace(rpipe->pipe_buffer.size, 0));
 	if (__improbable(error)) {
-		lck_mtx_destroy(&pp->pp_mtx, pipe_mtx_grp);
+		lck_mtx_destroy(&pp->pp_mtx, &pipe_mtx_grp);
 		zfree(pipe_zone, pp);
 		return error;
 	}
@@ -691,7 +672,7 @@ pipepair_destroy_pipe(struct pipepair *pp, struct pipe *cpipe)
 	lck_mtx_unlock(&pp->pp_mtx);
 
 	if (can_free) {
-		lck_mtx_destroy(&pp->pp_mtx, pipe_mtx_grp);
+		lck_mtx_destroy(&pp->pp_mtx, &pipe_mtx_grp);
 		zfree(pipe_zone, pp);
 	}
 }
@@ -740,8 +721,6 @@ pipeselwakeup(struct pipe *cpipe, struct pipe *spipe)
 	}
 
 	KNOTE(&cpipe->pipe_sel.si_note, 1);
-
-	postpipeevent(cpipe, EV_RWBYTES);
 
 	if (spipe && (spipe->pipe_state & PIPE_ASYNC) && spipe->pipe_pgid) {
 		if (spipe->pipe_pgid < 0) {
@@ -796,10 +775,9 @@ pipe_read(struct fileproc *fp, struct uio *uio, __unused int flags,
 			if (size > rpipe->pipe_buffer.cnt) {
 				size = rpipe->pipe_buffer.cnt;
 			}
-			// LP64todo - fix this!
-			if (size > (u_int) uio_resid(uio)) {
-				size = (u_int) uio_resid(uio);
-			}
+
+			size = (u_int) MIN(INT_MAX, MIN((user_size_t)size,
+			    (user_size_t)uio_resid(uio)));
 
 			PIPE_UNLOCK(rpipe); /* we still hold io lock.*/
 			error = uiomove(
@@ -905,7 +883,7 @@ unlocked_error:
 		pipeselwakeup(rpipe, rpipe->pipe_peer);
 	}
 
-#ifndef CONFIG_EMBEDDED
+#if defined(XNU_TARGET_OS_OSX)
 	/* update last read time */
 	pipe_touch(rpipe, PIPE_ATIME);
 #endif
@@ -924,11 +902,14 @@ pipe_write(struct fileproc *fp, struct uio *uio, __unused int flags,
     __unused vfs_context_t ctx)
 {
 	int error = 0;
-	int orig_resid;
+	size_t orig_resid;
 	int pipe_size;
 	struct pipe *wpipe, *rpipe;
 	// LP64todo - fix this!
-	orig_resid = uio_resid(uio);
+	orig_resid = (size_t)uio_resid(uio);
+	if (orig_resid > LONG_MAX) {
+		return EINVAL;
+	}
 	int space;
 
 	rpipe = (struct pipe *)fp->f_data;
@@ -1013,8 +994,8 @@ retrywrite:
 
 		if (space > 0) {
 			if ((error = pipeio_lock(wpipe, 1)) == 0) {
-				int size;       /* Transfer size */
-				int segsize;    /* first segment to transfer */
+				size_t size;       /* Transfer size */
+				size_t segsize;    /* first segment to transfer */
 
 				if ((wpipe->pipe_state & (PIPE_DRAIN | PIPE_EOF)) ||
 				    (fileproc_get_vflags(fp) & FPV_DRAIN)) {
@@ -1039,7 +1020,10 @@ retrywrite:
 				 */
 				// LP64todo - fix this!
 				if (space > uio_resid(uio)) {
-					size = uio_resid(uio);
+					size = (size_t)uio_resid(uio);
+					if (size > LONG_MAX) {
+						panic("size greater than LONG_MAX");
+					}
 				} else {
 					size = space;
 				}
@@ -1060,7 +1044,7 @@ retrywrite:
 
 				PIPE_UNLOCK(rpipe);
 				error = uiomove(&wpipe->pipe_buffer.buffer[wpipe->pipe_buffer.in],
-				    segsize, uio);
+				    (int)segsize, uio);
 				PIPE_LOCK(rpipe);
 
 				if (error == 0 && segsize < size) {
@@ -1078,7 +1062,7 @@ retrywrite:
 					PIPE_UNLOCK(rpipe);
 					error = uiomove(
 						&wpipe->pipe_buffer.buffer[0],
-						size - segsize, uio);
+						(int)(size - segsize), uio);
 					PIPE_LOCK(rpipe);
 				}
 				/*
@@ -1094,8 +1078,8 @@ retrywrite:
 							panic("Expected "
 							    "wraparound bad");
 						}
-						wpipe->pipe_buffer.in = size -
-						    segsize;
+						wpipe->pipe_buffer.in = (unsigned int)(size -
+						    segsize);
 					}
 
 					wpipe->pipe_buffer.cnt += size;
@@ -1173,7 +1157,7 @@ retrywrite:
 		pipeselwakeup(wpipe, wpipe);
 	}
 
-#ifndef CONFIG_EMBEDDED
+#if defined(XNU_TARGET_OS_OSX)
 	/* Update modification, status change (# of bytes in pipe) times */
 	pipe_touch(rpipe, PIPE_MTIME | PIPE_CTIME);
 	pipe_touch(wpipe, PIPE_MTIME | PIPE_CTIME);
@@ -1331,7 +1315,7 @@ pipe_free_kmem(struct pipe *cpipe)
 	if (cpipe->pipe_buffer.buffer != NULL) {
 		OSAddAtomic(-(cpipe->pipe_buffer.size), &amountpipekva);
 		OSAddAtomic(-1, &amountpipes);
-		kfree(cpipe->pipe_buffer.buffer,
+		kheap_free(KHEAP_DATA_BUFFERS, cpipe->pipe_buffer.buffer,
 		    cpipe->pipe_buffer.size);
 		cpipe->pipe_buffer.buffer = NULL;
 		cpipe->pipe_buffer.size = 0;
@@ -1384,11 +1368,8 @@ pipeclose(struct pipe *cpipe)
 
 		KNOTE(&ppipe->pipe_sel.si_note, 1);
 
-		postpipeevent(ppipe, EV_RCLOSED);
-
 		ppipe->pipe_peer = NULL;
 	}
-	evpipefree(cpipe);
 
 	/*
 	 * free resources
@@ -1766,15 +1747,15 @@ static int
 pipe_drain(struct fileproc *fp, __unused vfs_context_t ctx)
 {
 	/* Note: fdlock already held */
-	struct pipe *ppipe, *cpipe = (struct pipe *)(fp->f_fglob->fg_data);
+	struct pipe *ppipe, *cpipe = (struct pipe *)(fp->fp_glob->fg_data);
 	boolean_t drain_pipe = FALSE;
 
 	/* Check if the pipe is going away */
-	lck_mtx_lock_spin(&fp->f_fglob->fg_lock);
-	if (fp->f_fglob->fg_count == 1) {
+	lck_mtx_lock_spin(&fp->fp_glob->fg_lock);
+	if (os_ref_get_count_raw(&fp->fp_glob->fg_count) == 1) {
 		drain_pipe = TRUE;
 	}
-	lck_mtx_unlock(&fp->f_fglob->fg_lock);
+	lck_mtx_unlock(&fp->fp_glob->fg_lock);
 
 	if (cpipe) {
 		PIPE_LOCK(cpipe);

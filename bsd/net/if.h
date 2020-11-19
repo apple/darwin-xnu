@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -153,7 +153,6 @@ struct if_clonereq32 {
 #define IFEF_NOAUTOIPV6LL       0x00002000      /* Need explicit IPv6 LL address */
 #define IFEF_EXPENSIVE          0x00004000      /* Data access has a cost */
 #define IFEF_IPV4_ROUTER        0x00008000      /* interior when in IPv4 router mode */
-#define IFEF_IPV6_ROUTER        0x00010000      /* interior when in IPv6 router mode */
 #define IFEF_LOCALNET_PRIVATE   0x00020000      /* local private network */
 #define IFEF_SERVICE_TRIGGERED  IFEF_LOCALNET_PRIVATE
 #define IFEF_IPV6_ND6ALT        0x00040000      /* alternative. KPI for ND6 */
@@ -168,7 +167,7 @@ struct if_clonereq32 {
 #define IFEF_3CA                0x08000000      /* Capable of 3CA */
 #define IFEF_SENDLIST           0x10000000      /* Supports tx packet lists */
 #define IFEF_DIRECTLINK         0x20000000      /* point-to-point topology */
-#define IFEF_QOSMARKING_ENABLED 0x40000000      /* OoS marking is enabled */
+#define IFEF_QOSMARKING_ENABLED 0x40000000      /* QoS marking is enabled */
 #define IFEF_UPDOWNCHANGE       0x80000000      /* up/down state is changing */
 
 #ifdef XNU_KERNEL_PRIVATE
@@ -982,6 +981,12 @@ struct if_nsreq {
 	u_int8_t        ifnsr_data[IFNET_SIGNATURELEN];
 };
 
+/* Structure for SIOCSIFNETWORKID */
+struct if_netidreq {
+	char            ifnetid_name[IFNAMSIZ];
+	u_int8_t        ifnetid_len;
+	u_int8_t        ifnetid[IFNET_NETWORK_ID_LEN];
+};
 
 #define NAT64_PREFIX_LEN_32     4
 #define NAT64_PREFIX_LEN_40     5

@@ -45,7 +45,7 @@ COMP_FILES	= ${DEVICE_FILES}
 do_build_all:: $(COMP_FILES)
 
 ${DEVICE_FILES}: device.defs
-	$(call makelog,$(ColorM)MIG$(Color0) $(ColorF)$@$(Color0))
+	@$(LOG_MIG) "$@"
 	$(_v)${MIG} ${MIGFLAGS} ${MIGKSFLAGS}	\
 	-header /dev/null			\
 	-user /dev/null				\

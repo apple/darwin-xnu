@@ -100,7 +100,7 @@ def GetWorkqueueThreadRequestSummary(proc, req):
     if req.tr_kq_wakeup: state += "*"
 
     thread = 0
-    if int(req.tr_state) in [3, 4]:
+    if int(req.tr_state) in [4, 5]: # BINDING or BOUND
         thread = req.tr_thread
 
     qos = int(req.tr_qos)
@@ -159,11 +159,11 @@ def ShowProcWorkqueue(cmd_args=None, cmd_options={}, O=None):
                 print ""
             if wq.wq_event_manager_threadreq:
                 print GetWorkqueueThreadRequestSummary(proc, wq.wq_event_manager_threadreq)
-            for req in IteratePriorityQueue(wq.wq_overcommit_queue, 'struct workq_threadreq_s', 'tr_entry'):
+            for req in IterateSchedPriorityQueue(wq.wq_overcommit_queue, 'struct workq_threadreq_s', 'tr_entry'):
                 print GetWorkqueueThreadRequestSummary(proc, req)
-            for req in IteratePriorityQueue(wq.wq_constrained_queue, 'struct workq_threadreq_s', 'tr_entry'):
+            for req in IterateSchedPriorityQueue(wq.wq_constrained_queue, 'struct workq_threadreq_s', 'tr_entry'):
                 print GetWorkqueueThreadRequestSummary(proc, req)
-            for req in IteratePriorityQueue(wq.wq_special_queue, 'struct workq_threadreq_s', 'tr_entry'):
+            for req in IterateSchedPriorityQueue(wq.wq_special_queue, 'struct workq_threadreq_s', 'tr_entry'):
                 print GetWorkqueueThreadRequestSummary(proc, req)
 
         with O.table(GetWQThreadSummary.header, indent=True):

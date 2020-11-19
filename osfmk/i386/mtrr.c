@@ -27,7 +27,7 @@
  */
 
 #include <mach/kern_return.h>
-#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 #include <kern/cpu_number.h>
 #include <kern/cpu_data.h>
 #include <i386/cpuid.h>
@@ -288,8 +288,8 @@ mtrr_init(void)
 	/* allocate storage for variable ranges (can block?) */
 	if (mtrr_state.var_count) {
 		mtrr_state.var_range = (mtrr_var_range_t *)
-		    kalloc(sizeof(mtrr_var_range_t) *
-		    mtrr_state.var_count);
+		    zalloc_permanent(sizeof(mtrr_var_range_t) *
+		    mtrr_state.var_count, ZALIGN(mtrr_var_range_t));
 		if (mtrr_state.var_range == NULL) {
 			mtrr_state.var_count = 0;
 		}

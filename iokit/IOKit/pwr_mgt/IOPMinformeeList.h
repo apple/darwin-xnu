@@ -50,7 +50,7 @@ public:
 
 	unsigned long numberOfItems( void );
 
-	IOPMinformee *appendNewInformee( IOService * newObject );
+	LIBKERN_RETURNS_NOT_RETAINED IOPMinformee *appendNewInformee( IOService * newObject );
 
 // OBSOLETE
 // do not use addToList(); Use appendNewInformee() instead

@@ -5,13 +5,12 @@ from xnu import *
 import sys, shlex
 from utils import *
 from process import *
-from atm import *
 from bank import *
 from waitq import *
 from ioreg import *
 import xnudefines
 
-@header("{0: <20s} {1: <6s} {2: <6s} {3: <10s} {4: <20s}".format("task", "pid", '#acts', "tablesize", "command"))
+@header("{0: <20s} {1: <6s} {2: <6s} {3: <10s} {4: <32s}".format("task", "pid", '#acts', "tablesize", "command"))
 def GetTaskIPCSummary(task, show_busy = False):
     """ Display a task's ipc summary. 
         params:
@@ -20,7 +19,7 @@ def GetTaskIPCSummary(task, show_busy = False):
             str - string of ipc info for the task
     """
     out_string = ''
-    format_string = "{0: <#020x} {1: <6d} {2: <6d} {3: <10d} {4: <20s}"
+    format_string = "{0: <#020x} {1: <6d} {2: <6d} {3: <10d} {4: <32s}"
     busy_format = " {0: <10d} {1: <6d}"
     proc_name = ''
     if not task.active:
@@ -29,7 +28,7 @@ def GetTaskIPCSummary(task, show_busy = False):
         proc_name += 'halting: '
     pval = Cast(task.bsd_info, 'proc *')
     if int(pval) != 0:
-        proc_name += str(pval.p_comm)
+        proc_name += GetProcName(pval)
     elif int(task.task_imp_base) != 0 and hasattr(task.task_imp_base, 'iit_procname'):
         proc_name += str(task.task_imp_base.iit_procname)
     table_size = int(task.itk_space.is_table_size)
@@ -40,7 +39,7 @@ def GetTaskIPCSummary(task, show_busy = False):
         return (out_string, table_size, nbusy, nmsgs)
     return (out_string, table_size)
 
-@header("{0: <20s} {1: <6s} {2: <6s} {3: <10s} {4: <20s} {5: <10s} {6: <6s}".format("task", "pid", '#acts', "tablesize", "command", "#busyports", "#kmsgs"))
+@header("{0: <20s} {1: <6s} {2: <6s} {3: <10s} {4: <32s} {5: <10s} {6: <6s}".format("task", "pid", '#acts', "tablesize", "command", "#busyports", "#kmsgs"))
 def GetTaskBusyIPCSummary(task):
     return GetTaskIPCSummary(task, True)
 
@@ -113,7 +112,7 @@ def GetPortDestProc(portp):
         if tsk.itk_space == spacep:
             if tsk.bsd_info:
                 destprocp = Cast(tsk.bsd_info, 'struct proc *')
-                out_str = "{0:s}({1: <d})".format(destprocp.p_comm, destprocp.p_pid)
+                out_str = "{0:s}({1: <d})".format(GetProcName(destprocp), destprocp.p_pid)
             else:
                 out_str = "unknown"
             break
@@ -501,6 +500,9 @@ def GetKObjectFromPort(portval):
         returns: str - string of kobject information
     """
     io_bits = unsigned(portval.ip_object.io_bits)
+    if not io_bits & 0x800:
+        return "not a kobject"
+
     if io_bits & 0x400 :
         kobject_val = portval.kdata.kolabel.ikol_kobject
     else:
@@ -524,36 +526,21 @@ def GetKObjectFromPort(portval):
         desc_str = "kobject(UNKNOWN) {:d}".format(objtype_index)
     return kobject_str + " " + desc_str
 
-@static_var('destcache', {})    
+@static_var('destcache', {})
 def GetDestinationProcessFromPort(port):
     """
         params: port - core.value representation of 'ipc_port *' object
-        returns: str - name of process 
+        returns: str - name of process
     """
     out_str = ''
     dest_space = port.data.receiver
-    found_dest = False
-    #update destcache if data is not found
-    if hex(dest_space) not in GetDestinationProcessFromPort.destcache:
-        for t in kern.tasks:
-            if hex(t.itk_space) == hex(dest_space):
-                pval = Cast(t.bsd_info, 'proc *')
-                GetDestinationProcessFromPort.destcache[hex(dest_space)] = (t, pval)
-                found_dest = True
-                break
-        #end of for loop
-    else: found_dest = True
-    
-    if found_dest:
-        (ftask , fproc) = GetDestinationProcessFromPort.destcache[hex(dest_space)]
-        if fproc:
-            out_str = "{0:s}({1:d})".format(fproc.p_comm, fproc.p_pid )
-        else:
-            out_str = "task {0: <#020x}".format(ftask)
+    task = dest_space.is_task
+    if task.bsd_info != 0:
+        out_str = "{0:s}({1:d})".format(GetProcNameForTask(task), GetProcPIDForTask(task) )
+    else:
+        out_str = "task {0: <#020x}".format(task)
     return out_str
-    
-        
-    
+
 @header("{0: <20s} {1: <20s}".format("destname", "destination") )
 def GetPortDestinationSummary(port):
     """ Get destination information for a port. 
@@ -565,16 +552,16 @@ def GetPortDestinationSummary(port):
     destname_str = ''
     destination_str = ''
     target_spaceval = port.data.receiver
-    if int(port.ip_object.io_bits) & 0x800 :
-        destname_str = GetKObjectFromPort(port)
-    else:
+
+    destname_str = GetKObjectFromPort(port)
+    if "not a kobject" in destname_str or "kobject(TIMER)" in destname_str :
         if int(port.ip_object.io_bits) & 0x80000000 :
             destname_str = "{0: <#020x}".format(port.ip_messages.data.port.receiver_name)
             destination_str = GetDestinationProcessFromPort(port)
         else:
             destname_str = "{0: <#020x}".format(port)
             destination_str = "inactive-port"
-    
+
     out_str += format_string.format(destname_str, destination_str)
     return out_str
     
@@ -613,6 +600,7 @@ def GetIPCEntrySummary(entry, ipc_name='', rights_filter=0):
 
     ie_object = entry.ie_object
     ie_bits = int(entry.ie_bits)
+    io_bits = int(ie_object.io_bits)
     urefs = int(ie_bits & 0xffff)
     nsets = 0
     nmsgs = 0
@@ -660,6 +648,8 @@ def GetIPCEntrySummary(entry, ipc_name='', rights_filter=0):
         if portval.ip_immovable_send != 0: right_str += 'm'
         # No-grant Port
         if portval.ip_no_grant != 0: right_str += 'g'
+        # Port with SB filtering on
+        if io_bits & 0x00001000 != 0: right_str += 'f'
 
         # early-out if the rights-filter doesn't match
         if rights_filter != 0 and rights_filter != right_str:
@@ -800,6 +790,7 @@ def ShowTaskRights(cmd_args=None, cmd_options={}):
                    'm'     : Immovable send port
                    'i'     : Immovable receive port
                    'g'     : No grant port
+                   'f'     : Port with SB filtering on
                types of notifications:
                    'd'     : Dead-Name notification requested
                    's'     : Send-Possible notification armed
@@ -823,6 +814,41 @@ def ShowTaskRights(cmd_args=None, cmd_options={}):
     print GetTaskSummary(tval) + " " + GetProcSummary(pval)
     print PrintIPCInformation.header
     PrintIPCInformation(tval.itk_space, True, False, rights_type)
+
+# Count the vouchers in a given task's ipc space
+@header("{: <20s} {: <6s} {: <12s} {: <8s}".format("task", "pid", "name", "#vouchers"))
+def GetTaskVoucherCount(t):
+    space = t.itk_space
+    is_tableval = space.is_table
+    num_entries = int(space.is_table_size)
+    count = 0
+    for index in range (0, num_entries):
+        entryval = GetObjectAtIndexFromArray(is_tableval, index)
+        entry_ie_bits = unsigned(entryval.ie_bits)
+        if (int(entry_ie_bits) & 0x00070000 ) != 0:
+            port = Cast(entryval.ie_object, 'ipc_port_t')
+            if int(port.ip_object.io_bits) & 0x800 :
+                # Is kObject
+                io_bits = unsigned(port.ip_object.io_bits)
+                objtype_index = io_bits & 0x3ff
+                if objtype_index < len(xnudefines.kobject_types) :
+                    objtype_str = xnudefines.kobject_types[objtype_index]
+                    if objtype_str == "VOUCHER":
+                        count += 1
+    format_str = "{: <#020x} {: <6d} {: <12s} {: <8d}"
+    pval = Cast(t.bsd_info, 'proc *')
+    return format_str.format(t, pval.p_pid, GetProcNameForTask(t), count)
+
+# Macro: countallvouchers
+@lldb_command('countallvouchers', fancy=True)
+def CountAllVouchers(cmd_args=None, cmd_options={}, O=None):
+    """ Routine to count the number of vouchers by task. Useful for finding leaks.
+        Usage: countallvouchers
+    """
+
+    with O.table(GetTaskVoucherCount.header):
+        for t in kern.tasks:
+            print(GetTaskVoucherCount(t))
 
 # Macro: showataskrightsbt
 
@@ -1156,7 +1182,7 @@ def IterateAllPorts(tasklist, func, ctx, include_psets, follow_busyports, should
                 procname += 'halting: '
             t_p = Cast(t.bsd_info, 'proc *')
             if unsigned(t_p) != 0:
-                procname += str(t_p.p_name)
+                procname += GetProcName(t_p)
             elif unsigned(t.task_imp_base) != 0 and hasattr(t.task_imp_base, 'iit_procname'):
                 procname += str(t.task_imp_base.iit_procname)
             sys.stderr.write("  checking {:s} ({}/{})...{:50s}\r".format(procname, tidx, len(tasklist), ''))
@@ -1202,8 +1228,8 @@ def IterateAllPorts(tasklist, func, ctx, include_psets, follow_busyports, should
         ## while (idx < num_entries)
 
         ## Task ports (send rights)
-        if unsigned(t.itk_sself) > 0:
-            func(t, space, ctx, taskports_idx, 0, t.itk_sself, 17)
+        if unsigned(t.itk_settable_self) > 0:
+            func(t, space, ctx, taskports_idx, 0, t.itk_settable_self, 17)
         if unsigned(t.itk_host) > 0:
             func(t, space, ctx, taskports_idx, 0, t.itk_host, 17)
         if unsigned(t.itk_bootstrap) > 0:
@@ -1216,10 +1242,14 @@ def IterateAllPorts(tasklist, func, ctx, include_psets, follow_busyports, should
             func(t, space, ctx, taskports_idx, 0, t.itk_debug_control, 17)
         if unsigned(t.itk_task_access) > 0:
             func(t, space, ctx, taskports_idx, 0, t.itk_task_access, 17)
+        if unsigned(t.itk_self[1]) > 0: ## task read port
+            func(t, space, ctx, taskports_idx, 0, t.itk_self[1], 17)
+        if unsigned(t.itk_self[2]) > 0: ## task inspect port
+            func(t, space, ctx, taskports_idx, 0, t.itk_self[2], 17)
 
-        ## Task name port (not a send right, just a naked ref)
-        if unsigned(t.itk_nself) > 0:
-            func(t, space, ctx, taskports_idx, 0,t.itk_nself, 0)
+        ## Task name port (not a send right, just a naked ref); TASK_FLAVOR_NAME = 3
+        if unsigned(t.itk_self[3]) > 0:
+            func(t, space, ctx, taskports_idx, 0, t.itk_self[3], 0)
 
         ## task resume port is a receive right to resume the task
         if unsigned(t.itk_resume) > 0:
@@ -1257,8 +1287,8 @@ def IterateAllPorts(tasklist, func, ctx, include_psets, follow_busyports, should
             ## XXX: look at block reason to see if it's in mach_msg_receive - then look at saved state / message
 
             ## Thread port (send right)
-            if unsigned(thval.ith_sself) > 0:
-                thport = thval.ith_sself
+            if unsigned(thval.ith_settable_self) > 0:
+                thport = thval.ith_settable_self
                 func(t, space, ctx, thports_idx, 0, thport, 17) ## see: osfmk/mach/message.h
             ## Thread special reply port (send-once right)
             if unsigned(thval.ith_special_reply_port) > 0:
@@ -1386,7 +1416,7 @@ def CountPortsCallback(task, space, ctx, entry_idx, ipc_entry, ipc_port, port_di
         p_intransit.add(unsigned(ipc_port))
 
     if task.active or (task.halting and not task.active):
-        pname = str(Cast(task.bsd_info, 'proc *').p_name)
+        pname = GetProcName(Cast(task.bsd_info, 'proc *'))
         if not pname in p_bytask.keys():
             p_bytask[pname] = { 'transit':0, 'table':0, 'other':0 }
         if entry_idx == intransit_idx:
@@ -1610,7 +1640,7 @@ def ShowAllIITs(cmd_args=[], cmd_options={}):
         print GetIPCImportantTaskSummary(iit)
     return
 
-@header("{: <18s} {: <3s} {: <18s} {: <20s} {: <18s} {: <8s}".format("ipc_imp_inherit", "don", "to_task", "proc_name", "from_elem", "depth"))
+@header("{: <18s} {: <3s} {: <18s} {: <32s} {: <18s} {: <8s}".format("ipc_imp_inherit", "don", "to_task", "proc_name", "from_elem", "depth"))
 @lldb_type_summary(['ipc_importance_inherit *', 'ipc_importance_inherit_t'])
 def GetIPCImportanceInheritSummary(iii):
     """ describes iii object of type ipc_importance_inherit_t * """
@@ -1666,12 +1696,12 @@ def GetIPCImportanceElemSummary(iie):
 
     return out_str
 
-@header("{: <18s} {: <18s} {: <20s}".format("iit", "task", "name"))
+@header("{: <18s} {: <18s} {: <32}".format("iit", "task", "name"))
 @lldb_type_summary(['ipc_importance_task *'])
 def GetIPCImportantTaskSummary(iit):
     """ iit is a ipc_importance_task value object.
     """
-    fmt = "{: <#018x} {: <#018x} {: <20s}"
+    fmt = "{: <#018x} {: <#018x} {: <32}"
     out_str=''
     pname = GetProcNameForTask(iit.iit_task)
     if hasattr(iit, 'iit_bsd_pid'):
@@ -1818,8 +1848,7 @@ def GetATMHandleSummary(handle_ptr):
         params: handle_ptr - uint64 number stored in handle of voucher
         returns: str - summary of atm value
     """
-    elem = kern.GetValueFromAddress(handle_ptr, 'atm_value *')
-    return GetATMValueSummary(elem)
+    return "???"
 
 def GetBankHandleSummary(handle_ptr):
     """ converts a handle value inside a voucher attribute table to bank element and returns appropriate summary.
@@ -1847,8 +1876,7 @@ def GetBagofBitsHandleSummary(handle_ptr):
 @static_var('attr_managers',{1: GetATMHandleSummary, 2: GetIPCHandleSummary, 3: GetBankHandleSummary, 7: GetBagofBitsHandleSummary})
 def GetHandleSummaryForKey(handle_ptr, key_num):
     """ Get a summary of handle pointer from the voucher attribute manager. 
-        For example key 1 -> ATM and it puts atm_value_t in the handle. So summary of it would be atm value and refs etc.
-                    key 2 -> ipc and it puts either ipc_importance_inherit_t or ipc_important_task_t.
+        For example key 2 -> ipc and it puts either ipc_importance_inherit_t or ipc_important_task_t.
                     key 3 -> Bank and it puts either bank_task_t or bank_account_t.
                     key 7 -> Bag of Bits and it puts user_data_element_t in handle. So summary of it would be Bag of Bits content and refs etc.
     """
@@ -2084,7 +2112,7 @@ def ShowTaskSuspenders(cmd_args=[], cmd_options={}):
     task = kern.GetValueFromAddress(cmd_args[0], 'task_t')
 
     if task.suspend_count == 0:
-        print "task {:#x} ({:s}) is not suspended".format(unsigned(task), Cast(task.bsd_info, 'proc_t').p_name)
+        print "task {:#x} ({:s}) is not suspended".format(unsigned(task), GetProcName(Cast(task.bsd_info, 'proc_t')))
         return
 
     # If the task has been suspended by the kernel (potentially by
@@ -2094,7 +2122,7 @@ def ShowTaskSuspenders(cmd_args=[], cmd_options={}):
     # which task did the suspension.
     port = task.itk_resume
     if not port:
-        print "task {:#x} ({:s}) is suspended but no resume port exists".format(unsigned(task), Cast(task.bsd_info, 'proc_t').p_name)
+        print "task {:#x} ({:s}) is suspended but no resume port exists".format(unsigned(task), GetProcName(Cast(task.bsd_info, 'proc_t')))
         return
 
     return FindPortRights(cmd_args=[unsigned(port)], cmd_options={'-R':'S'})

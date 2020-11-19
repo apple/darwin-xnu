@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -85,9 +85,7 @@
 #include <netinet/in_systm.h>
 #include <netinet/in_pcb.h>
 #include <netinet/in_var.h>
-#if INET6
 #include <netinet6/in6_pcb.h>
-#endif
 #include <netinet/ip_var.h>
 #include <netinet/tcp.h>
 #include <netinet/tcp_cache.h>
@@ -96,9 +94,7 @@
 #include <netinet/tcp_timer.h>
 #include <netinet/tcp_var.h>
 #include <netinet/tcp_cc.h>
-#if INET6
 #include <netinet6/tcp6_var.h>
-#endif
 #include <netinet/tcpip.h>
 #if TCPDEBUG
 #include <netinet/tcp_debug.h>
@@ -448,6 +444,9 @@ sysctl_change_mss_recommended SYSCTL_HANDLER_ARGS
 	err = sysctl_io_number(req, tcp_change_mss_recommended,
 	    sizeof(int32_t), &i, &changed);
 	if (changed) {
+		if (i < 0 || i > UINT16_MAX) {
+			return EINVAL;
+		}
 		ifnet_head_lock_shared();
 		TAILQ_FOREACH(ifp, &ifnet_head, if_link) {
 			if (IFNET_IS_CELLULAR(ifp)) {
@@ -458,7 +457,7 @@ sysctl_change_mss_recommended SYSCTL_HANDLER_ARGS
 
 				/* Set MSS recommended */
 				new_cell_sr->valid_bitmask |= IF_CELL_UL_MSS_RECOMMENDED_VALID;
-				new_cell_sr->mss_recommended = i;
+				new_cell_sr->mss_recommended = (uint16_t)i;
 				err = ifnet_link_status_report(ifp, new_cell_sr, sizeof(new_cell_sr));
 				if (err == 0) {
 					tcp_change_mss_recommended = i;
@@ -537,6 +536,8 @@ add_to_time_wait(struct tcpcb *tp, uint32_t delay)
 	if (tp->t_inpcb->inp_socket->so_options & SO_NOWAKEFROMSLEEP) {
 		socket_post_kev_msg_closed(tp->t_inpcb->inp_socket);
 	}
+
+	tcp_del_fsw_flow(tp);
 
 	/* 19182803: Notify nstat that connection is closing before waiting. */
 	nstat_pcb_detach(tp->t_inpcb);
@@ -640,12 +641,11 @@ tcp_garbage_collect(struct inpcb *inp, int istimewait)
 		if (inp->inp_state != INPCB_STATE_DEAD) {
 			/* Become a regular mutex */
 			lck_mtx_convert_spin(&inp->inpcb_mtx);
-#if INET6
 			if (SOCK_CHECK_DOM(so, PF_INET6)) {
 				in6_pcbdetach(inp);
-			} else
-#endif /* INET6 */
-			in_pcbdetach(inp);
+			} else {
+				in_pcbdetach(inp);
+			}
 		}
 		VERIFY(so->so_usecount > 0);
 		so->so_usecount--;
@@ -686,12 +686,11 @@ tcp_garbage_collect(struct inpcb *inp, int istimewait)
 		}
 
 		if (inp->inp_state != INPCB_STATE_DEAD) {
-#if INET6
 			if (SOCK_CHECK_DOM(so, PF_INET6)) {
 				in6_pcbdetach(inp);
-			} else
-#endif /* INET6 */
-			in_pcbdetach(inp);
+			} else {
+				in_pcbdetach(inp);
+			}
 		}
 
 		if (mp_so) {
@@ -897,6 +896,21 @@ tcp_pmtud_revert_segment_size(struct tcpcb *tp)
 	tcp_update_mss_locked(tp->t_inpcb->inp_socket, NULL);
 }
 
+static uint32_t
+tcp_pmtud_black_holed_next_mss(struct tcpcb *tp)
+{
+	/* Reduce the MSS to intermediary value */
+	if (tp->t_maxopd > tcp_pmtud_black_hole_mss) {
+		return tcp_pmtud_black_hole_mss;
+	} else {
+		if (tp->t_inpcb->inp_vflag & INP_IPV4) {
+			return tcp_mssdflt;
+		} else {
+			return tcp_v6mssdflt;
+		}
+	}
+}
+
 /*
  * TCP timer processing.
  */
@@ -909,12 +923,8 @@ tcp_timers(struct tcpcb *tp, int timer)
 #if TCPDEBUG
 	int ostate;
 #endif
-
-#if INET6
-	int isipv6 = (tp->t_inpcb->inp_vflag & INP_IPV4) == 0;
-#endif /* INET6 */
 	u_int64_t accsleep_ms;
-	u_int32_t last_sleep_ms = 0;
+	u_int64_t last_sleep_ms = 0;
 
 	so = tp->t_inpcb->inp_socket;
 	idle_time = tcp_now - tp->t_rcvtime;
@@ -1001,7 +1011,6 @@ tcp_timers(struct tcpcb *tp, int timer)
 				}
 			}
 			tp->t_rxtshift = TCP_MAXRXTSHIFT;
-			postevent(so, 0, EV_TIMEOUT);
 			soevent(so,
 			    (SO_FILT_HINT_LOCKED | SO_FILT_HINT_TIMEOUT));
 
@@ -1159,8 +1168,7 @@ retransmit_packet:
 		    !(tp->t_flagsext & TF_NOBLACKHOLE_DETECTION) &&
 		    (tp->t_state == TCPS_ESTABLISHED)) {
 			if ((tp->t_flags & TF_PMTUD) &&
-			    ((tp->t_flags & TF_MAXSEGSNT)
-			    || tp->t_pmtud_lastseg_size > tcp_pmtud_black_hole_mss) &&
+			    tp->t_pmtud_lastseg_size > tcp_pmtud_black_holed_next_mss(tp) &&
 			    tp->t_rxtshift == 2) {
 				/*
 				 * Enter Path MTU Black-hole Detection mechanism:
@@ -1180,15 +1188,7 @@ retransmit_packet:
 					tp->t_pmtud_start_ts++;
 				}
 				/* Reduce the MSS to intermediary value */
-				if (tp->t_maxopd > tcp_pmtud_black_hole_mss) {
-					tp->t_maxopd = tcp_pmtud_black_hole_mss;
-				} else {
-					tp->t_maxopd = /* use the default MSS */
-#if INET6
-					    isipv6 ? tcp_v6mssdflt :
-#endif /* INET6 */
-					    tcp_mssdflt;
-				}
+				tp->t_maxopd = tcp_pmtud_black_holed_next_mss(tp);
 				tp->t_maxseg = tp->t_maxopd - optlen;
 
 				/*
@@ -1239,12 +1239,11 @@ retransmit_packet:
 		 * retransmit times until then.
 		 */
 		if (tp->t_rxtshift > TCP_MAXRXTSHIFT / 4) {
-#if INET6
-			if (isipv6) {
+			if (!(tp->t_inpcb->inp_vflag & INP_IPV4)) {
 				in6_losing(tp->t_inpcb);
-			} else
-#endif /* INET6 */
-			in_losing(tp->t_inpcb);
+			} else {
+				in_losing(tp->t_inpcb);
+			}
 			tp->t_rttvar += (tp->t_srtt >> TCP_RTT_SHIFT);
 			tp->t_srtt = 0;
 		}
@@ -1321,7 +1320,6 @@ fc_output:
 		    ((tp->t_persist_stop != 0) &&
 		    TSTMP_LEQ(tp->t_persist_stop, tcp_now))) {
 			tcpstat.tcps_persistdrop++;
-			postevent(so, 0, EV_TIMEOUT);
 			soevent(so,
 			    (SO_FILT_HINT_LOCKED | SO_FILT_HINT_TIMEOUT));
 			tp = tcp_drop(tp, ETIMEDOUT);
@@ -1338,6 +1336,12 @@ fc_output:
 	 * or drop connection if idle for too long.
 	 */
 	case TCPT_KEEP:
+#if FLOW_DIVERT
+		if (tp->t_inpcb->inp_socket->so_flags & SOF_FLOW_DIVERT) {
+			break;
+		}
+#endif /* FLOW_DIVERT */
+
 		tcpstat.tcps_keeptimeo++;
 #if MPTCP
 		/*
@@ -1511,6 +1515,7 @@ fc_output:
 				}
 				tcp_reset_stretch_ack(tp);
 			}
+			tp->t_forced_acks = TCP_FORCED_ACKS_COUNT;
 
 			/*
 			 * If we are measuring inter packet arrival jitter
@@ -1521,6 +1526,7 @@ fc_output:
 			CLEAR_IAJ_STATE(tp);
 
 			tcpstat.tcps_delack++;
+			tp->t_stat.delayed_acks_sent++;
 			(void) tcp_output(tp);
 		}
 		break;
@@ -1532,7 +1538,6 @@ fc_output:
 		    (tp->t_mpflags & TMPF_JOINED_FLOW)) {
 			if (++tp->t_mprxtshift > TCP_MAXRXTSHIFT) {
 				tcpstat.tcps_timeoutdrop++;
-				postevent(so, 0, EV_TIMEOUT);
 				soevent(so,
 				    (SO_FILT_HINT_LOCKED |
 				    SO_FILT_HINT_TIMEOUT));
@@ -1589,7 +1594,7 @@ fc_output:
 		    tp->t_rxtshift > 0 ||
 		    tp->snd_max == tp->snd_una ||
 		    !SACK_ENABLED(tp) ||
-		    !TAILQ_EMPTY(&tp->snd_holes) ||
+		    (tcp_do_better_lr != 1 && !TAILQ_EMPTY(&tp->snd_holes)) ||
 		    IN_FASTRECOVERY(tp)) &&
 		    !(tp->t_flagsext & TF_IF_PROBING)) {
 			break;
@@ -1766,7 +1771,6 @@ fc_output:
 		break;
 dropit:
 		tcpstat.tcps_keepdrops++;
-		postevent(so, 0, EV_TIMEOUT);
 		soevent(so,
 		    (SO_FILT_HINT_LOCKED | SO_FILT_HINT_TIMEOUT));
 		tp = tcp_drop(tp, ETIMEDOUT);
@@ -2142,7 +2146,7 @@ tcp_run_timerlist(void * arg1, void * arg2)
 	}
 
 	if (!LIST_EMPTY(&listp->lhead)) {
-		u_int16_t next_mode = 0;
+		uint32_t next_mode = 0;
 		if ((list_mode & TCP_TIMERLIST_10MS_MODE) ||
 		    (listp->pref_mode & TCP_TIMERLIST_10MS_MODE)) {
 			next_mode = TCP_TIMERLIST_10MS_MODE;
@@ -2463,13 +2467,13 @@ tcp_report_stats(void)
 	/* send packet loss rate, shift by 10 for precision */
 	if (tcpstat.tcps_sndpack > 0 && tcpstat.tcps_sndrexmitpack > 0) {
 		var = tcpstat.tcps_sndrexmitpack << 10;
-		stat.send_plr = (var * 100) / tcpstat.tcps_sndpack;
+		stat.send_plr = (uint32_t)((var * 100) / tcpstat.tcps_sndpack);
 	}
 
 	/* recv packet loss rate, shift by 10 for precision */
 	if (tcpstat.tcps_rcvpack > 0 && tcpstat.tcps_recovered_pkts > 0) {
 		var = tcpstat.tcps_recovered_pkts << 10;
-		stat.recv_plr = (var * 100) / tcpstat.tcps_rcvpack;
+		stat.recv_plr = (uint32_t)((var * 100) / tcpstat.tcps_rcvpack);
 	}
 
 	/* RTO after tail loss, shift by 10 for precision */
@@ -2477,14 +2481,14 @@ tcp_report_stats(void)
 	    && tcpstat.tcps_tailloss_rto > 0) {
 		var = tcpstat.tcps_tailloss_rto << 10;
 		stat.send_tlrto_rate =
-		    (var * 100) / tcpstat.tcps_sndrexmitpack;
+		    (uint32_t)((var * 100) / tcpstat.tcps_sndrexmitpack);
 	}
 
 	/* packet reordering */
 	if (tcpstat.tcps_sndpack > 0 && tcpstat.tcps_reordered_pkts > 0) {
 		var = tcpstat.tcps_reordered_pkts << 10;
 		stat.send_reorder_rate =
-		    (var * 100) / tcpstat.tcps_sndpack;
+		    (uint32_t)((var * 100) / tcpstat.tcps_sndpack);
 	}
 
 	if (tcp_ecn_outbound == 1) {

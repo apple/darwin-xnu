@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2010 Apple Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -47,12 +47,14 @@
 #include <sys/malloc.h>
 #include <sys/mount_internal.h>
 #include <sys/fcntl.h>
+#include <sys/file_internal.h>
 #include <sys/ubc_internal.h>
 #include <sys/imgact.h>
 #include <sys/codesign.h>
 #include <sys/proc_uuid_policy.h>
 #include <sys/reason.h>
 #include <sys/kdebug.h>
+#include <sys/spawn_internal.h>
 
 #include <mach/mach_types.h>
 #include <mach/vm_map.h>        /* vm_allocate() */
@@ -84,7 +86,9 @@
 #include <vm/vm_pager.h>
 #include <vm/vnode_pager.h>
 #include <vm/vm_protos.h>
+#include <vm/vm_shared_region.h>
 #include <IOKit/IOReturn.h>     /* for kIOReturnNotPrivileged */
+#include <IOKit/IOBSD.h>        /* for IOVnodeHasEntitlement */
 
 #include <os/overflow.h>
 
@@ -94,6 +98,9 @@
  */
 extern pmap_t   pmap_create_options(ledger_t ledger, vm_map_size_t size,
     unsigned int flags);
+#if __has_feature(ptrauth_calls) && XNU_TARGET_OS_OSX
+extern void pmap_disable_user_jop(pmap_t pmap);
+#endif /* __has_feature(ptrauth_calls) && XNU_TARGET_OS_OSX */
 
 /* XXX should have prototypes in a shared header file */
 extern int      get_map_nentries(vm_map_t);
@@ -127,7 +134,10 @@ static const load_result_t load_result_null = {
 	.max_vm_addr = MACH_VM_MIN_ADDRESS,
 	.cs_end_offset = 0,
 	.threadstate = NULL,
-	.threadstate_sz = 0
+	.threadstate_sz = 0,
+	.is_cambria = 0,
+	.dynlinker_mach_header = MACH_VM_MIN_ADDRESS,
+	.dynlinker_fd = -1,
 };
 
 /*
@@ -159,7 +169,8 @@ load_segment(
 	struct vnode                    *vp,
 	vm_map_t                        map,
 	int64_t                         slide,
-	load_result_t                   *result
+	load_result_t                   *result,
+	struct image_params             *imgp
 	);
 
 static load_return_t
@@ -173,6 +184,7 @@ static load_return_t
 load_version(
 	struct version_min_command     *vmc,
 	boolean_t               *found_version_cmd,
+	int                     ip_flags,
 	load_result_t           *result
 	);
 
@@ -183,6 +195,7 @@ load_code_signature(
 	off_t                           macho_offset,
 	off_t                           macho_size,
 	cpu_type_t                      cputype,
+	cpu_subtype_t                   cpusubtype,
 	load_result_t                   *result,
 	struct image_params             *imgp);
 
@@ -221,6 +234,7 @@ load_unixthread(
 	struct thread_command   *tcp,
 	thread_t                        thread,
 	int64_t                         slide,
+	boolean_t                       is_x86_64_compat_binary,
 	load_result_t                   *result
 	);
 
@@ -239,6 +253,7 @@ load_threadstack(
 	uint32_t                total_size,
 	mach_vm_offset_t        *user_stack,
 	int                     *customstack,
+	boolean_t               is_x86_64_compat_binary,
 	load_result_t           *result
 	);
 
@@ -262,6 +277,7 @@ load_dylinker(
 	struct image_params     *imgp
 	);
 
+
 #if __x86_64__
 extern int bootarg_no32exec;
 static boolean_t
@@ -281,7 +297,8 @@ get_macho_vnode(
 	off_t                   *file_offset,
 	off_t                   *macho_size,
 	struct macho_data       *macho_data,
-	struct vnode            **vpp
+	struct vnode            **vpp,
+	struct image_params     *imgp
 	);
 
 static inline void
@@ -313,7 +330,8 @@ note_all_image_info_section(const struct segment_command_64 *scp,
 	unsigned int i;
 
 
-	if (strncmp(scp->segname, "__DATA", sizeof(scp->segname)) != 0) {
+	if (strncmp(scp->segname, "__DATA_DIRTY", sizeof(scp->segname)) != 0 &&
+	    strncmp(scp->segname, "__DATA", sizeof(scp->segname)) != 0) {
 		return;
 	}
 	for (i = 0; i < scp->nsects; ++i) {
@@ -340,6 +358,68 @@ note_all_image_info_section(const struct segment_command_64 *scp,
 const int fourk_binary_compatibility_unsafe = TRUE;
 const int fourk_binary_compatibility_allow_wx = FALSE;
 #endif /* __arm64__ */
+
+#if __has_feature(ptrauth_calls) && XNU_TARGET_OS_OSX
+/**
+ * Determines whether this is an arm64e process which may host in-process
+ * plugins.
+ */
+static inline bool
+arm64e_plugin_host(struct image_params *imgp, load_result_t *result)
+{
+	if (imgp->ip_flags & IMGPF_NOJOP) {
+		return false;
+	}
+
+	if (!result->platform_binary) {
+		return false;
+	}
+
+	struct cs_blob *csblob = csvnode_get_blob(imgp->ip_vp, imgp->ip_arch_offset);
+	const char *identity = csblob_get_identity(csblob);
+	if (!identity) {
+		return false;
+	}
+
+	/* Check if override host plugin entitlement is present and posix spawn attribute to disable A keys is passed */
+	if (IOVnodeHasEntitlement(imgp->ip_vp, (int64_t)imgp->ip_arch_offset, OVERRIDE_PLUGIN_HOST_ENTITLEMENT)) {
+		return imgp->ip_flags & IMGPF_PLUGIN_HOST_DISABLE_A_KEYS;
+	}
+
+	/* Disabling library validation is a good signal that this process plans to host plugins */
+	const char *const disable_lv_entitlements[] = {
+		"com.apple.security.cs.disable-library-validation",
+		"com.apple.private.cs.automator-plugins",
+		CLEAR_LV_ENTITLEMENT,
+	};
+	for (size_t i = 0; i < ARRAY_COUNT(disable_lv_entitlements); i++) {
+		if (IOVnodeHasEntitlement(imgp->ip_vp, (int64_t)imgp->ip_arch_offset, disable_lv_entitlements[i])) {
+			return true;
+		}
+	}
+
+	/* From /System/Library/Security/HardeningExceptions.plist */
+	const char *const hardening_exceptions[] = {
+		"com.apple.perl5", /* Scripting engines may load third party code and jit*/
+		"com.apple.perl", /* Scripting engines may load third party code and jit*/
+		"org.python.python", /* Scripting engines may load third party code and jit*/
+		"com.apple.expect", /* Scripting engines may load third party code and jit*/
+		"com.tcltk.wish", /* Scripting engines may load third party code and jit*/
+		"com.tcltk.tclsh", /* Scripting engines may load third party code and jit*/
+		"com.apple.ruby", /* Scripting engines may load third party code and jit*/
+		"com.apple.bash", /* Required for the 'enable' command */
+		"com.apple.zsh", /* Required for the 'zmodload' command */
+		"com.apple.ksh", /* Required for 'builtin' command */
+	};
+	for (size_t i = 0; i < ARRAY_COUNT(hardening_exceptions); i++) {
+		if (strncmp(hardening_exceptions[i], identity, strlen(hardening_exceptions[i])) == 0) {
+			return true;
+		}
+	}
+
+	return false;
+}
+#endif /* __has_feature(ptrauth_calls) && XNU_TARGET_OS_OSX */
 
 load_return_t
 load_machfile(
@@ -387,6 +467,16 @@ load_machfile(
 	} else {
 		ledger_task = task;
 	}
+
+#if defined(PMAP_CREATE_FORCE_4K_PAGES) && (DEBUG || DEVELOPMENT)
+	if (imgp->ip_px_sa != NULL) {
+		struct _posix_spawnattr* psa = (struct _posix_spawnattr *) imgp->ip_px_sa;
+		if (psa->psa_flags & _POSIX_SPAWN_FORCE_4K_PAGES) {
+			pmap_flags |= PMAP_CREATE_FORCE_4K_PAGES;
+		}
+	}
+#endif /* defined(PMAP_CREATE_FORCE_4K_PAGES) && (DEBUG || DEVELOPMENT) */
+
 	pmap = pmap_create_options(get_task_ledger(ledger_task),
 	    (vm_map_size_t) 0,
 	    pmap_flags);
@@ -409,6 +499,13 @@ load_machfile(
 	/* enforce 16KB alignment for watch targets with new ABI */
 	vm_map_set_page_shift(map, SIXTEENK_PAGE_SHIFT);
 #endif /* __arm64__ */
+
+#if PMAP_CREATE_FORCE_4K_PAGES
+	if (pmap_flags & PMAP_CREATE_FORCE_4K_PAGES) {
+		DEBUG4K_LIFE("***** launching '%s' as 4k *****\n", vp->v_name);
+		vm_map_set_page_shift(map, FOURK_PAGE_SHIFT);
+	}
+#endif /* PMAP_CREATE_FORCE_4K_PAGES */
 
 #ifndef CONFIG_ENFORCE_SIGNED_CODE
 	/* This turns off faulting for executable pages, which allows
@@ -444,6 +541,9 @@ load_machfile(
 		dyld_aslr_page_offset <<= vm_map_page_shift(map);
 
 		aslr_page_offset += aslr_section_offset;
+	}
+	if (vm_map_page_shift(map) < (int)PAGE_SHIFT) {
+		DEBUG4K_LOAD("slide=0x%llx dyld_slide=0x%llx\n", aslr_page_offset, dyld_aslr_page_offset);
 	}
 
 	if (!result) {
@@ -500,12 +600,13 @@ load_machfile(
 	if (enforce_hard_pagezero &&
 	    (vm_map_has_hard_pagezero(map, 0x1000) == FALSE)) {
 #if __arm64__
-		if (!result->is_64bit_addr && /* not 64-bit address space */
-		    !(header->flags & MH_PIE) &&          /* not PIE */
-		    (vm_map_page_shift(map) != FOURK_PAGE_SHIFT ||
-		    PAGE_SHIFT != FOURK_PAGE_SHIFT) &&  /* page size != 4KB */
-		    result->has_pagezero &&     /* has a "soft" page zero */
-		    fourk_binary_compatibility_unsafe) {
+		if (
+			!result->is_64bit_addr && /* not 64-bit address space */
+			!(header->flags & MH_PIE) &&      /* not PIE */
+			(vm_map_page_shift(map) != FOURK_PAGE_SHIFT ||
+			PAGE_SHIFT != FOURK_PAGE_SHIFT) && /* page size != 4KB */
+			result->has_pagezero && /* has a "soft" page zero */
+			fourk_binary_compatibility_unsafe) {
 			/*
 			 * For backwards compatibility of "4K" apps on
 			 * a 16K system, do not enforce a hard page zero...
@@ -517,6 +618,16 @@ load_machfile(
 			return LOAD_BADMACHO;
 		}
 	}
+
+#if __arm64__
+	if (enforce_hard_pagezero && result->is_64bit_addr && (header->cputype == CPU_TYPE_ARM64)) {
+		/* 64 bit ARM binary must have "hard page zero" of 4GB to cover the lower 32 bit address space */
+		if (vm_map_has_hard_pagezero(map, 0x100000000) == FALSE) {
+			vm_map_deallocate(map); /* will lose pmap reference too */
+			return LOAD_BADMACHO;
+		}
+	}
+#endif
 
 	vm_commit_pagezero_status(map);
 
@@ -565,6 +676,17 @@ load_machfile(
 	}
 	*mapp = map;
 
+#if __has_feature(ptrauth_calls) && defined(XNU_TARGET_OS_OSX)
+	/*
+	 * arm64e plugin hosts currently run with JOP keys disabled, since they
+	 * may need to run arm64 plugins.
+	 */
+	if (arm64e_plugin_host(imgp, result)) {
+		imgp->ip_flags |= IMGPF_NOJOP;
+		pmap_disable_user_jop(pmap);
+	}
+#endif /* __has_feature(ptrauth_calls) && defined(XNU_TARGET_OS_OSX) */
+
 #ifdef CONFIG_32BIT_TELEMETRY
 	if (!result->is_64bit_data) {
 		/*
@@ -587,6 +709,27 @@ int macho_printf = 0;
 	                printf args;                    \
 	        }                                       \
 	} while (0)
+
+
+static boolean_t
+pie_required(
+	cpu_type_t exectype,
+	cpu_subtype_t execsubtype)
+{
+	switch (exectype) {
+	case CPU_TYPE_X86_64:
+		return FALSE;
+	case CPU_TYPE_ARM64:
+		return TRUE;
+	case CPU_TYPE_ARM:
+		switch (execsubtype) {
+		case CPU_SUBTYPE_ARM_V7K:
+			return TRUE;
+		}
+		break;
+	}
+	return FALSE;
+}
 
 /*
  * The file size of a mach-o file is limited to 32 bits; this is because
@@ -619,7 +762,6 @@ parse_machfile(
 	uint32_t                ncmds;
 	struct load_command     *lcp;
 	struct dylinker_command *dlp = 0;
-	integer_t               dlarchbits = 0;
 	void *                  control;
 	load_return_t           ret = LOAD_SUCCESS;
 	void *                  addr;
@@ -641,14 +783,15 @@ parse_machfile(
 	int64_t                 slide = 0;
 	boolean_t               dyld_no_load_addr = FALSE;
 	boolean_t               is_dyld = FALSE;
-	vm_map_offset_t         effective_page_mask = MAX(PAGE_MASK, vm_map_page_mask(map));
+	vm_map_offset_t         effective_page_mask = PAGE_MASK;
 #if __arm64__
-	uint32_t                pagezero_end = 0;
-	uint32_t                executable_end = 0;
-	uint32_t                writable_start = 0;
+	uint64_t                pagezero_end = 0;
+	uint64_t                executable_end = 0;
+	uint64_t                writable_start = 0;
 	vm_map_size_t           effective_page_size;
 
-	effective_page_size = MAX(PAGE_SIZE, vm_map_page_size(map));
+	effective_page_mask = vm_map_page_mask(map);
+	effective_page_size = vm_map_page_size(map);
 #endif /* __arm64__ */
 
 	if (header->magic == MH_MAGIC_64 ||
@@ -659,7 +802,7 @@ parse_machfile(
 	/*
 	 *	Break infinite recursion
 	 */
-	if (depth > 1) {
+	if (depth > 2) {
 		return LOAD_FAILURE;
 	}
 
@@ -668,9 +811,14 @@ parse_machfile(
 	/*
 	 *	Check to see if right machine type.
 	 */
-	if (((cpu_type_t)(header->cputype & ~CPU_ARCH_MASK) != (cpu_type() & ~CPU_ARCH_MASK)) ||
-	    !grade_binary(header->cputype,
-	    header->cpusubtype & ~CPU_SUBTYPE_MASK, TRUE)) {
+	if (((cpu_type_t)(header->cputype & ~CPU_ARCH_MASK) != (cpu_type() & ~CPU_ARCH_MASK))
+	    ) {
+		return LOAD_BADARCH;
+	}
+
+	if (!grade_binary(header->cputype,
+	    header->cpusubtype & ~CPU_SUBTYPE_MASK,
+	    header->cpusubtype & CPU_SUBTYPE_MASK, TRUE)) {
 		return LOAD_BADARCH;
 	}
 
@@ -678,24 +826,23 @@ parse_machfile(
 
 	switch (header->filetype) {
 	case MH_EXECUTE:
-		if (depth != 1) {
+		if (depth != 1 && depth != 3) {
 			return LOAD_FAILURE;
 		}
-#if CONFIG_EMBEDDED
 		if (header->flags & MH_DYLDLINK) {
 			/* Check properties of dynamic executables */
 			if (!(header->flags & MH_PIE) && pie_required(header->cputype, header->cpusubtype & ~CPU_SUBTYPE_MASK)) {
 				return LOAD_FAILURE;
 			}
 			result->needs_dynlinker = TRUE;
+		} else if (header->cputype == CPU_TYPE_X86_64) {
+			/* x86_64 static binaries allowed */
 		} else {
 			/* Check properties of static executables (disallowed except for development) */
 #if !(DEVELOPMENT || DEBUG)
 			return LOAD_FAILURE;
 #endif
 		}
-#endif /* CONFIG_EMBEDDED */
-
 		break;
 	case MH_DYLINKER:
 		if (depth != 2) {
@@ -709,6 +856,13 @@ parse_machfile(
 	}
 
 	/*
+	 *	For PIE and dyld, slide everything by the ASLR offset.
+	 */
+	if ((header->flags & MH_PIE) || is_dyld) {
+		slide = aslr_offset;
+	}
+
+	/*
 	 *	Get the pager for the file.
 	 */
 	control = ubc_getobject(vp, UBC_FLAGS_NONE);
@@ -716,7 +870,8 @@ parse_machfile(
 	/* ensure header + sizeofcmds falls within the file */
 	if (os_add_overflow(mach_header_sz, header->sizeofcmds, &cmds_size) ||
 	    (off_t)cmds_size > macho_size ||
-	    round_page_overflow(cmds_size, &alloc_size)) {
+	    round_page_overflow(cmds_size, &alloc_size) ||
+	    alloc_size > INT_MAX) {
 		return LOAD_BADMACHO;
 	}
 
@@ -728,7 +883,7 @@ parse_machfile(
 		return LOAD_NOSPACE;
 	}
 
-	error = vn_rdwr(UIO_READ, vp, addr, alloc_size, file_offset,
+	error = vn_rdwr(UIO_READ, vp, addr, (int)alloc_size, file_offset,
 	    UIO_SYSSPACE, 0, vfs_context_ucred(imgp->ip_vfs_context), &resid, p);
 	if (error) {
 		kfree(addr, alloc_size);
@@ -736,22 +891,17 @@ parse_machfile(
 	}
 
 	if (resid) {
-		/* We must be able to read in as much as the mach_header indicated */
-		kfree(addr, alloc_size);
-		return LOAD_BADMACHO;
-	}
-
-	/*
-	 *	For PIE and dyld, slide everything by the ASLR offset.
-	 */
-	if ((header->flags & MH_PIE) || is_dyld) {
-		slide = aslr_offset;
+		{
+			/* We must be able to read in as much as the mach_header indicated */
+			kfree(addr, alloc_size);
+			return LOAD_BADMACHO;
+		}
 	}
 
 	/*
 	 *  Scan through the commands, processing each one as necessary.
 	 *  We parse in three passes through the headers:
-	 *  0: determine if TEXT and DATA boundary can be page-aligned
+	 *  0: determine if TEXT and DATA boundary can be page-aligned, load platform version
 	 *  1: thread state, uuid, code signature
 	 *  2: segments
 	 *  3: dyld, encryption, check entry point
@@ -765,11 +915,7 @@ parse_machfile(
 #endif
 
 	for (pass = 0; pass <= 3; pass++) {
-		if (pass == 0 && !slide_realign && !is_dyld) {
-			/* if we dont need to realign the slide or determine dyld's load
-			 * address, pass 0 can be skipped */
-			continue;
-		} else if (pass == 1) {
+		if (pass == 1) {
 #if __arm64__
 			boolean_t       is_pie;
 			int64_t         adjust;
@@ -831,14 +977,15 @@ parse_machfile(
 				 * it right after the main binary. If binresult == NULL, load
 				 * directly to the given slide.
 				 */
-				slide = vm_map_round_page(slide + binresult->max_vm_addr, effective_page_mask);
+				mach_vm_address_t max_vm_addr = binresult->max_vm_addr;
+				slide = vm_map_round_page(slide + max_vm_addr, effective_page_mask);
 			}
 		}
 
 		/*
-		 * Check that the entry point is contained in an executable segments
+		 * Check that the entry point is contained in an executable segment
 		 */
-		if (pass == 3) {
+		if ((pass == 3) && (thread != THREAD_NULL)) {
 			if (depth == 1 && imgp && (imgp->ip_flags & IMGPF_DRIVER)) {
 				/* Driver binaries must have driverkit platform */
 				if (result->ip_platform == PLATFORM_DRIVERKIT) {
@@ -930,21 +1077,21 @@ parse_machfile(
 
 					if (scp->initprot == 0 && scp->maxprot == 0 && scp->vmaddr == 0) {
 						/* PAGEZERO */
-						if (os_add3_overflow(scp->vmaddr, scp->vmsize, slide, &pagezero_end)) {
+						if (os_add3_overflow(scp->vmaddr, scp->vmsize, slide, &pagezero_end) || pagezero_end > UINT32_MAX) {
 							ret = LOAD_BADMACHO;
 							break;
 						}
 					}
 					if (scp->initprot & VM_PROT_EXECUTE) {
 						/* TEXT */
-						if (os_add3_overflow(scp->vmaddr, scp->vmsize, slide, &executable_end)) {
+						if (os_add3_overflow(scp->vmaddr, scp->vmsize, slide, &executable_end) || executable_end > UINT32_MAX) {
 							ret = LOAD_BADMACHO;
 							break;
 						}
 					}
 					if (scp->initprot & VM_PROT_WRITE) {
 						/* DATA */
-						if (os_add_overflow(scp->vmaddr, slide, &writable_start)) {
+						if (os_add_overflow(scp->vmaddr, slide, &writable_start) || writable_start > UINT32_MAX) {
 							ret = LOAD_BADMACHO;
 							break;
 						}
@@ -978,7 +1125,8 @@ parse_machfile(
 				    vp,
 				    map,
 				    slide,
-				    result);
+				    result,
+				    imgp);
 				if (ret == LOAD_SUCCESS && scp->fileoff == 0 && scp->filesize > 0) {
 					/* Enforce a single segment mapping offset zero, with R+X
 					 * protection. */
@@ -1001,11 +1149,9 @@ parse_machfile(
 				if (pass == 0) {
 					if (is_dyld && scp64->vmaddr == 0 && scp64->fileoff == 0) {
 						dyld_no_load_addr = TRUE;
-						if (!slide_realign) {
-							/* got what we need, bail early on pass 0 */
-							continue;
-						}
 					}
+					/* got what we need, bail early on pass 0 */
+					continue;
 				}
 
 				if (pass == 1 && !strncmp(scp64->segname, "__XHDR", sizeof(scp64->segname))) {
@@ -1033,7 +1179,8 @@ parse_machfile(
 				    vp,
 				    map,
 				    slide,
-				    result);
+				    result,
+				    imgp);
 
 				if (ret == LOAD_SUCCESS && scp64->fileoff == 0 && scp64->filesize > 0) {
 					/* Enforce a single segment mapping offset zero, with R+X
@@ -1048,7 +1195,8 @@ parse_machfile(
 
 				break;
 			}
-			case LC_UNIXTHREAD:
+			case LC_UNIXTHREAD: {
+				boolean_t is_x86_64_compat_binary = FALSE;
 				if (pass != 1) {
 					break;
 				}
@@ -1056,8 +1204,10 @@ parse_machfile(
 					(struct thread_command *) lcp,
 					thread,
 					slide,
+					is_x86_64_compat_binary,
 					result);
 				break;
+			}
 			case LC_MAIN:
 				if (pass != 1) {
 					break;
@@ -1077,7 +1227,6 @@ parse_machfile(
 				}
 				if ((depth == 1) && (dlp == 0)) {
 					dlp = (struct dylinker_command *)lcp;
-					dlarchbits = (header->cputype & CPU_ARCH_MASK);
 				} else {
 					ret = LOAD_FAILURE;
 				}
@@ -1094,6 +1243,7 @@ parse_machfile(
 				if (pass != 1) {
 					break;
 				}
+
 				/* pager -> uip ->
 				 *  load signatures & store in uip
 				 *  set VM object "signed_pages"
@@ -1104,6 +1254,7 @@ parse_machfile(
 					file_offset,
 					macho_size,
 					header->cputype,
+					header->cpusubtype,
 					result,
 					imgp);
 				if (ret != LOAD_SUCCESS) {
@@ -1137,7 +1288,7 @@ parse_machfile(
 						    NULL,
 						    file_offset + off,
 						    addr + off,
-						    PAGE_SIZE,
+						    MIN(PAGE_SIZE, cmds_size),
 						    &tainted);
 						if (!valid || (tainted & CS_VALIDATE_TAINTED)) {
 							if (cs_debug) {
@@ -1217,15 +1368,15 @@ parse_machfile(
 			case LC_VERSION_MIN_TVOS: {
 				struct version_min_command *vmc;
 
-				if (depth != 1 || pass != 1) {
+				if (depth != 1 || pass != 0) {
 					break;
 				}
 				vmc = (struct version_min_command *) lcp;
-				ret = load_version(vmc, &found_version_cmd, result);
+				ret = load_version(vmc, &found_version_cmd, imgp->ip_flags, result);
 				break;
 			}
 			case LC_BUILD_VERSION: {
-				if (depth != 1 || pass != 1) {
+				if (depth != 1 || pass != 0) {
 					break;
 				}
 				struct build_version_command* bvc = (struct build_version_command*)lcp;
@@ -1238,6 +1389,7 @@ parse_machfile(
 					break;
 				}
 				result->ip_platform = bvc->platform;
+				result->lr_sdk = bvc->sdk;
 				found_version_cmd = TRUE;
 				break;
 			}
@@ -1270,9 +1422,10 @@ parse_machfile(
 			 * load the dylinker, and slide it by the independent DYLD ASLR
 			 * offset regardless of the PIE-ness of the main binary.
 			 */
-			ret = load_dylinker(dlp, dlarchbits, map, thread, depth,
+			ret = load_dylinker(dlp, header->cputype, map, thread, depth,
 			    dyld_aslr_offset, result, imgp);
 		}
+
 
 		if ((ret == LOAD_SUCCESS) && (depth == 1)) {
 			if (result->thread_count == 0) {
@@ -1344,6 +1497,7 @@ check_if_simulator_binary(
 
 	/* Allocate page to copyin mach header */
 	ip_vdata = kalloc(PAGE_SIZE);
+	bzero(ip_vdata, PAGE_SIZE);
 	if (ip_vdata == NULL) {
 		goto bad;
 	}
@@ -1367,7 +1521,8 @@ check_if_simulator_binary(
 	/* ensure header + sizeofcmds falls within the file */
 	if (os_add_overflow(mach_header_sz, header->sizeofcmds, &cmds_size) ||
 	    (off_t)cmds_size > macho_size ||
-	    round_page_overflow(cmds_size, &alloc_size)) {
+	    round_page_overflow(cmds_size, &alloc_size) ||
+	    alloc_size > INT_MAX) {
 		goto bad;
 	}
 
@@ -1379,7 +1534,7 @@ check_if_simulator_binary(
 		goto bad;
 	}
 
-	error = vn_rdwr(UIO_READ, imgp->ip_vp, addr, alloc_size, file_offset,
+	error = vn_rdwr(UIO_READ, imgp->ip_vp, addr, (int)alloc_size, file_offset,
 	    UIO_SYSSPACE, IO_NODELOCKED, cred, &resid, p);
 	if (error) {
 		goto bad;
@@ -1494,28 +1649,38 @@ unprotect_dsmos_segment(
 	vm_map_size_t   map_size)
 {
 	kern_return_t   kr;
+	uint64_t        slice_off;
 
 	/*
 	 * The first APPLE_UNPROTECTED_HEADER_SIZE bytes (from offset 0 of
 	 * this part of a Universal binary) are not protected...
 	 * The rest needs to be "transformed".
 	 */
-	if (file_off <= APPLE_UNPROTECTED_HEADER_SIZE &&
-	    file_off + file_size <= APPLE_UNPROTECTED_HEADER_SIZE) {
+	slice_off = file_off - macho_offset;
+	if (slice_off <= APPLE_UNPROTECTED_HEADER_SIZE &&
+	    slice_off + file_size <= APPLE_UNPROTECTED_HEADER_SIZE) {
 		/* it's all unprotected, nothing to do... */
 		kr = KERN_SUCCESS;
 	} else {
-		if (file_off <= APPLE_UNPROTECTED_HEADER_SIZE) {
+		if (slice_off <= APPLE_UNPROTECTED_HEADER_SIZE) {
 			/*
 			 * We start mapping in the unprotected area.
 			 * Skip the unprotected part...
 			 */
-			vm_map_offset_t delta;
+			uint64_t delta_file;
+			vm_map_offset_t delta_map;
 
-			delta = APPLE_UNPROTECTED_HEADER_SIZE;
-			delta -= file_off;
-			map_addr += delta;
-			map_size -= delta;
+			delta_file = (uint64_t)APPLE_UNPROTECTED_HEADER_SIZE;
+			delta_file -= slice_off;
+			if (os_convert_overflow(delta_file, &delta_map)) {
+				return LOAD_BADMACHO;
+			}
+			if (os_add_overflow(map_addr, delta_map, &map_addr)) {
+				return LOAD_BADMACHO;
+			}
+			if (os_sub_overflow(map_size, delta_map, &map_size)) {
+				return LOAD_BADMACHO;
+			}
 		}
 		/* ... transform the rest of the mapping. */
 		struct pager_crypt_info crypt_info;
@@ -1549,7 +1714,8 @@ unprotect_dsmos_segment(
 		    map_addr,
 		    map_addr + map_size,
 		    crypto_backing_offset,
-		    &crypt_info);
+		    &crypt_info,
+		    CRYPTID_APP_ENCRYPTION);
 	}
 
 	if (kr != KERN_SUCCESS) {
@@ -1619,7 +1785,7 @@ map_segment(
 		return LOAD_SUCCESS;
 	}
 
-	effective_page_mask = MAX(PAGE_MASK, vm_map_page_mask(map));
+	effective_page_mask = vm_map_page_mask(map);
 
 	vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
 	if (vm_map_page_aligned(vm_start, effective_page_mask) &&
@@ -1707,9 +1873,9 @@ map_segment(
 			cur_vmk_flags = VM_MAP_KERNEL_FLAGS_NONE;
 		}
 
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 		(void) result;
-#else /* CONFIG_EMBEDDED */
+#else /* !defined(XNU_TARGET_OS_OSX) */
 		/*
 		 * This process doesn't have its new csflags (from
 		 * the image being loaded) yet, so tell VM to override the
@@ -1721,7 +1887,11 @@ map_segment(
 			cur_vmk_flags.vmkf_cs_enforcement = FALSE;
 		}
 		cur_vmk_flags.vmkf_cs_enforcement_override = TRUE;
-#endif /* CONFIG_EMBEDDED */
+#endif /* !defined(XNU_TARGET_OS_OSX) */
+
+		if (result->is_cambria && (initprot & VM_PROT_EXECUTE) == VM_PROT_EXECUTE) {
+			cur_vmk_flags.vmkf_translated_allow_execute = TRUE;
+		}
 
 		cur_end = vm_map_trunc_page(vm_start + (file_end -
 		    file_start),
@@ -1825,7 +1995,8 @@ load_segment(
 	struct vnode            *vp,
 	vm_map_t                map,
 	int64_t                 slide,
-	load_result_t           *result)
+	load_result_t           *result,
+	struct image_params     *imgp)
 {
 	struct segment_command_64 segment_command, *scp;
 	kern_return_t           ret;
@@ -1834,8 +2005,9 @@ load_segment(
 	vm_prot_t               maxprot;
 	size_t                  segment_command_size, total_section_size,
 	    single_section_size;
-	vm_map_offset_t         file_offset, file_size;
-	vm_map_offset_t         vm_offset, vm_size;
+	uint64_t                file_offset, file_size;
+	vm_map_offset_t         vm_offset;
+	size_t                  vm_size;
 	vm_map_offset_t         vm_start, vm_end, vm_end_aligned;
 	vm_map_offset_t         file_start, file_end;
 	kern_return_t           kr;
@@ -1847,8 +2019,10 @@ load_segment(
 	boolean_t               fourk_align;
 #endif /* __arm64__ */
 
-	effective_page_size = MAX(PAGE_SIZE, vm_map_page_size(map));
-	effective_page_mask = MAX(PAGE_MASK, vm_map_page_mask(map));
+	(void)imgp;
+
+	effective_page_size = vm_map_page_size(map);
+	effective_page_mask = vm_map_page_mask(map);
 
 	verbose = FALSE;
 	if (LC_SEGMENT_64 == lcp->cmd) {
@@ -1857,6 +2031,12 @@ load_segment(
 #if __arm64__
 		/* 64-bit binary: should already be 16K-aligned */
 		fourk_align = FALSE;
+
+		if (vm_map_page_shift(map) == FOURK_PAGE_SHIFT &&
+		    PAGE_SHIFT != FOURK_PAGE_SHIFT) {
+			fourk_align = TRUE;
+			verbose = TRUE;
+		}
 #endif /* __arm64__ */
 	} else {
 		segment_command_size = sizeof(struct segment_command);
@@ -1874,6 +2054,7 @@ load_segment(
 #endif /* __arm64__ */
 	}
 	if (lcp->cmdsize < segment_command_size) {
+		DEBUG4K_ERROR("LOAD_BADMACHO cmdsize %d < %zu\n", lcp->cmdsize, segment_command_size);
 		return LOAD_BADMACHO;
 	}
 	total_section_size = lcp->cmdsize - segment_command_size;
@@ -1905,6 +2086,7 @@ load_segment(
 	 */
 	if (scp->fileoff + scp->filesize < scp->fileoff ||
 	    scp->fileoff + scp->filesize > (uint64_t)macho_size) {
+		DEBUG4K_ERROR("LOAD_BADMACHO fileoff 0x%llx filesize 0x%llx macho_size 0x%llx\n", scp->fileoff, scp->filesize, (uint64_t)macho_size);
 		return LOAD_BADMACHO;
 	}
 	/*
@@ -1912,12 +2094,16 @@ load_segment(
 	 * within the load command size.
 	 */
 	if (total_section_size / single_section_size < scp->nsects) {
+		DEBUG4K_ERROR("LOAD_BADMACHO 0x%zx 0x%zx %d\n", total_section_size, single_section_size, scp->nsects);
 		return LOAD_BADMACHO;
 	}
 	/*
 	 * Make sure the segment is page-aligned in the file.
 	 */
-	file_offset = pager_offset + scp->fileoff;      /* limited to 32 bits */
+	if (os_add_overflow(pager_offset, scp->fileoff, &file_offset)) {
+		DEBUG4K_ERROR("LOAD_BADMACHO file_offset: 0x%llx + 0x%llx\n", pager_offset, scp->fileoff);
+		return LOAD_BADMACHO;
+	}
 	file_size = scp->filesize;
 #if __arm64__
 	if (fourk_align) {
@@ -1926,6 +2112,7 @@ load_segment(
 			 * we can't mmap() it if it's not at least 4KB-aligned
 			 * in the file
 			 */
+			DEBUG4K_ERROR("LOAD_BADMACHO file_offset 0x%llx\n", file_offset);
 			return LOAD_BADMACHO;
 		}
 	} else
@@ -1938,6 +2125,7 @@ load_segment(
 		 * was what this process believe is the page size, so let's
 		 * fail here too for the sake of consistency.
 		 */
+		DEBUG4K_ERROR("LOAD_BADMACHO file_offset 0x%llx\n", file_offset);
 		return LOAD_BADMACHO;
 	}
 
@@ -1952,6 +2140,7 @@ load_segment(
 		if (cs_debug) {
 			printf("section outside code signature\n");
 		}
+		DEBUG4K_ERROR("LOAD_BADMACHO end_offset 0x%llx fileoff 0x%llx filesize 0x%llx\n", result->cs_end_offset, scp->fileoff, scp->filesize);
 		return LOAD_BADMACHO;
 	}
 
@@ -1959,10 +2148,16 @@ load_segment(
 		if (cs_debug) {
 			printf("vmaddr too large\n");
 		}
+		DEBUG4K_ERROR("LOAD_BADMACHO vmaddr 0x%llx slide 0x%llx vm_offset 0x%llx\n", scp->vmaddr, slide, (uint64_t)vm_offset);
 		return LOAD_BADMACHO;
 	}
 
-	vm_size = scp->vmsize;
+	if (scp->vmsize > SIZE_MAX) {
+		DEBUG4K_ERROR("LOAD_BADMACHO vmsize 0x%llx\n", scp->vmsize);
+		return LOAD_BADMACHO;
+	}
+
+	vm_size = (size_t)scp->vmsize;
 
 	if (vm_size == 0) {
 		return LOAD_SUCCESS;
@@ -1972,6 +2167,10 @@ load_segment(
 	    vm_size != 0 &&
 	    (scp->initprot & VM_PROT_ALL) == VM_PROT_NONE &&
 	    (scp->maxprot & VM_PROT_ALL) == VM_PROT_NONE) {
+		if (map == VM_MAP_NULL) {
+			return LOAD_SUCCESS;
+		}
+
 		/*
 		 * For PIE, extend page zero rather than moving it.  Extending
 		 * page zero keeps early allocations from falling predictably
@@ -1985,10 +2184,12 @@ load_segment(
 		 * make it completely off limits by raising the VM map's
 		 * minimum offset.
 		 */
-		vm_end = vm_offset + vm_size;
+		vm_end = (vm_map_offset_t)(vm_offset + vm_size);
 		if (vm_end < vm_offset) {
+			DEBUG4K_ERROR("LOAD_BADMACHO vm_end 0x%llx vm_offset 0x%llx vm_size 0x%llx\n", (uint64_t)vm_end, (uint64_t)vm_offset, (uint64_t)vm_size);
 			return LOAD_BADMACHO;
 		}
+
 		if (verbose) {
 			MACHO_PRINTF(("++++++ load_segment: "
 			    "page_zero up to 0x%llx\n",
@@ -2033,16 +2234,18 @@ load_segment(
 #endif /* __arm64__ */
 
 		if (ret != KERN_SUCCESS) {
+			DEBUG4K_ERROR("LOAD_FAILURE ret 0x%x\n", ret);
 			return LOAD_FAILURE;
 		}
 		return LOAD_SUCCESS;
 	} else {
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 		/* not PAGEZERO: should not be mapped at address 0 */
 		if (filetype != MH_DYLINKER && scp->vmaddr == 0) {
+			DEBUG4K_ERROR("LOAD_BADMACHO filetype %d vmaddr 0x%llx\n", filetype, scp->vmaddr);
 			return LOAD_BADMACHO;
 		}
-#endif /* CONFIG_EMBEDDED */
+#endif /* !defined(XNU_TARGET_OS_OSX) */
 	}
 
 #if __arm64__
@@ -2056,6 +2259,18 @@ load_segment(
 		    FOURK_PAGE_MASK);
 		vm_end = vm_map_round_page(vm_offset + vm_size,
 		    FOURK_PAGE_MASK);
+
+		if (file_offset - file_start > FOURK_PAGE_MASK ||
+		    file_end - file_offset - file_size > FOURK_PAGE_MASK) {
+			DEBUG4K_ERROR("LOAD_BADMACHO file_start / file_size wrap "
+			    "[0x%llx:0x%llx] -> [0x%llx:0x%llx]\n",
+			    file_offset,
+			    file_offset + file_size,
+			    (uint64_t) file_start,
+			    (uint64_t) file_end);
+			return LOAD_BADMACHO;
+		}
+
 		if (!strncmp(scp->segname, "__LINKEDIT", 11) &&
 		    page_aligned(file_start) &&
 		    vm_map_page_aligned(file_start, vm_map_page_mask(map)) &&
@@ -2078,6 +2293,17 @@ load_segment(
 		    effective_page_mask);
 		vm_end = vm_map_round_page(vm_offset + vm_size,
 		    effective_page_mask);
+
+		if (file_offset - file_start > effective_page_mask ||
+		    file_end - file_offset - file_size > effective_page_mask) {
+			DEBUG4K_ERROR("LOAD_BADMACHO file_start / file_size wrap "
+			    "[0x%llx:0x%llx] -> [0x%llx:0x%llx]\n",
+			    file_offset,
+			    file_offset + file_size,
+			    (uint64_t) file_start,
+			    (uint64_t) file_end);
+			return LOAD_BADMACHO;
+		}
 	}
 
 	if (vm_start < result->min_vm_addr) {
@@ -2116,6 +2342,7 @@ load_segment(
 		    maxprot,
 		    result);
 		if (ret) {
+			DEBUG4K_ERROR("LOAD_NOSPACE start 0x%llx end 0x%llx ret 0x%x\n", (uint64_t)vm_start, (uint64_t)vm_end, ret);
 			return LOAD_NOSPACE;
 		}
 
@@ -2130,6 +2357,7 @@ load_segment(
 
 			ret = mach_vm_allocate_kernel(kernel_map, &tmp, delta_size, VM_FLAGS_ANYWHERE, VM_KERN_MEMORY_BSD);
 			if (ret != KERN_SUCCESS) {
+				DEBUG4K_ERROR("LOAD_RESOURCE delta_size 0x%llx ret 0x%x\n", delta_size, ret);
 				return LOAD_RESOURCE;
 			}
 
@@ -2137,6 +2365,7 @@ load_segment(
 			    delta_size)) {
 				(void) mach_vm_deallocate(
 					kernel_map, tmp, delta_size);
+				DEBUG4K_ERROR("LOAD_FAILURE copyout 0x%llx 0x%llx\n", map_addr + scp->filesize, delta_size);
 				return LOAD_FAILURE;
 			}
 
@@ -2156,18 +2385,28 @@ load_segment(
 		delta_size = 0;
 	}
 	if (delta_size > 0) {
-		mach_vm_offset_t tmp;
+		vm_map_offset_t tmp_start;
+		vm_map_offset_t tmp_end;
 
-		tmp = vm_start + (file_end - file_start);
+		if (os_add_overflow(vm_start, file_end - file_start, &tmp_start)) {
+			DEBUG4K_ERROR("LOAD_NOSPACE tmp_start: 0x%llx + 0x%llx\n", (uint64_t)vm_start, (uint64_t)(file_end - file_start));
+			return LOAD_NOSPACE;
+		}
+
+		if (os_add_overflow(tmp_start, delta_size, &tmp_end)) {
+			DEBUG4K_ERROR("LOAD_NOSPACE tmp_end: 0x%llx + 0x%llx\n", (uint64_t)tmp_start, (uint64_t)delta_size);
+			return LOAD_NOSPACE;
+		}
+
 		if (verbose) {
 			MACHO_PRINTF(("++++++ load_segment: "
 			    "delta mapping vm [0x%llx:0x%llx]\n",
-			    (uint64_t) tmp,
-			    (uint64_t) (tmp + delta_size)));
+			    (uint64_t) tmp_start,
+			    (uint64_t) tmp_end));
 		}
 		kr = map_segment(map,
-		    tmp,
-		    tmp + delta_size,
+		    tmp_start,
+		    tmp_end,
 		    MEMORY_OBJECT_CONTROL_NULL,
 		    0,
 		    delta_size,
@@ -2175,6 +2414,7 @@ load_segment(
 		    scp->maxprot,
 		    result);
 		if (kr != KERN_SUCCESS) {
+			DEBUG4K_ERROR("LOAD_NOSPACE 0x%llx 0x%llx kr 0x%x\n", (unsigned long long)tmp_start, (uint64_t)delta_size, kr);
 			return LOAD_NOSPACE;
 		}
 	}
@@ -2192,6 +2432,7 @@ load_segment(
 		    vm_start,
 		    vm_end - vm_start);
 		if (ret != LOAD_SUCCESS) {
+			DEBUG4K_ERROR("unprotect 0x%llx 0x%llx ret %d \n", (uint64_t)vm_start, (uint64_t)vm_end, ret);
 			return ret;
 		}
 	} else {
@@ -2221,6 +2462,9 @@ load_segment(
 		}
 	}
 
+	if (ret != LOAD_SUCCESS && verbose) {
+		DEBUG4K_ERROR("ret %d\n", ret);
+	}
 	return ret;
 }
 
@@ -2252,6 +2496,7 @@ load_return_t
 load_version(
 	struct version_min_command     *vmc,
 	boolean_t               *found_version_cmd,
+	int                     ip_flags __unused,
 	load_result_t           *result
 	)
 {
@@ -2305,7 +2550,7 @@ load_version(
 		__builtin_unreachable();
 	}
 	result->ip_platform = platform;
-	result->lr_sdk = sdk;
+	result->lr_min_sdk = sdk;
 	return LOAD_SUCCESS;
 }
 
@@ -2362,8 +2607,7 @@ load_main(
 	}
 
 	/* The stack slides down from the default location */
-	result->user_stack = addr;
-	result->user_stack -= slide;
+	result->user_stack = (user_addr_t)mach_vm_trunc_page((user_addr_t)addr - slide);
 
 	if (result->using_lcmain || result->entry_point != MACH_VM_MIN_ADDRESS) {
 		/* Already processed LC_MAIN or LC_UNIXTHREAD */
@@ -2411,7 +2655,7 @@ setup_driver_main(
 	}
 
 	/* The stack slides down from the default location */
-	result->user_stack = addr;
+	result->user_stack = (user_addr_t)addr;
 	result->user_stack -= slide;
 
 	if (result->using_lcmain || result->entry_point != MACH_VM_MIN_ADDRESS) {
@@ -2438,6 +2682,7 @@ load_unixthread(
 	struct thread_command   *tcp,
 	thread_t                thread,
 	int64_t                         slide,
+	boolean_t               is_x86_64_compat_binary,
 	load_result_t           *result
 	)
 {
@@ -2459,7 +2704,7 @@ load_unixthread(
 	    (uint32_t *)(((vm_offset_t)tcp) +
 	    sizeof(struct thread_command)),
 	    tcp->cmdsize - sizeof(struct thread_command),
-	    &addr, &customstack, result);
+	    &addr, &customstack, is_x86_64_compat_binary, result);
 	if (ret != LOAD_SUCCESS) {
 		return ret;
 	}
@@ -2473,32 +2718,33 @@ load_unixthread(
 	}
 
 	/* The stack slides down from the default location */
-	result->user_stack = addr;
-	result->user_stack -= slide;
+	result->user_stack = (user_addr_t)mach_vm_trunc_page((user_addr_t)addr - slide);
 
-	ret = load_threadentry(thread,
-	    (uint32_t *)(((vm_offset_t)tcp) +
-	    sizeof(struct thread_command)),
-	    tcp->cmdsize - sizeof(struct thread_command),
-	    &addr);
-	if (ret != LOAD_SUCCESS) {
-		return ret;
-	}
+	{
+		ret = load_threadentry(thread,
+		    (uint32_t *)(((vm_offset_t)tcp) +
+		    sizeof(struct thread_command)),
+		    tcp->cmdsize - sizeof(struct thread_command),
+		    &addr);
+		if (ret != LOAD_SUCCESS) {
+			return ret;
+		}
 
-	if (result->using_lcmain || result->entry_point != MACH_VM_MIN_ADDRESS) {
-		/* Already processed LC_MAIN or LC_UNIXTHREAD */
-		return LOAD_FAILURE;
-	}
+		if (result->using_lcmain || result->entry_point != MACH_VM_MIN_ADDRESS) {
+			/* Already processed LC_MAIN or LC_UNIXTHREAD */
+			return LOAD_FAILURE;
+		}
 
-	result->entry_point = addr;
-	result->entry_point += slide;
+		result->entry_point = (user_addr_t)addr;
+		result->entry_point += slide;
 
-	ret = load_threadstate(thread,
-	    (uint32_t *)(((vm_offset_t)tcp) + sizeof(struct thread_command)),
-	    tcp->cmdsize - sizeof(struct thread_command),
-	    result);
-	if (ret != LOAD_SUCCESS) {
-		return ret;
+		ret = load_threadstate(thread,
+		    (uint32_t *)(((vm_offset_t)tcp) + sizeof(struct thread_command)),
+		    tcp->cmdsize - sizeof(struct thread_command),
+		    result);
+		if (ret != LOAD_SUCCESS) {
+			return ret;
+		}
 	}
 
 	result->unixproc = TRUE;
@@ -2542,6 +2788,10 @@ load_threadstate(
 	 * activation time where we can't bail out cleanly.
 	 */
 	while (total_size > 0) {
+		if (total_size < 2 * sizeof(uint32_t)) {
+			return LOAD_BADMACHO;
+		}
+
 		flavor = *ts++;
 		size = *ts++;
 
@@ -2565,6 +2815,7 @@ bad:
 	return ret;
 }
 
+
 static
 load_return_t
 load_threadstack(
@@ -2573,6 +2824,7 @@ load_threadstack(
 	uint32_t                total_size,
 	mach_vm_offset_t        *user_stack,
 	int                     *customstack,
+	__unused boolean_t      is_x86_64_compat_binary,
 	load_result_t           *result
 	)
 {
@@ -2586,6 +2838,10 @@ load_threadstack(
 	}
 
 	while (total_size > 0) {
+		if (total_size < 2 * sizeof(uint32_t)) {
+			return LOAD_BADMACHO;
+		}
+
 		flavor = *ts++;
 		size = *ts++;
 		if (UINT32_MAX - 2 < size ||
@@ -2603,10 +2859,13 @@ load_threadstack(
 		 * to the appropriate type in thread_userstack() based on
 		 * the value of flavor.
 		 */
-		ret = thread_userstack(thread, flavor, (thread_state_t)ts, size, user_stack, customstack, result->is_64bit_data);
-		if (ret != KERN_SUCCESS) {
-			return LOAD_FAILURE;
+		{
+			ret = thread_userstack(thread, flavor, (thread_state_t)ts, size, user_stack, customstack, result->is_64bit_data);
+			if (ret != KERN_SUCCESS) {
+				return LOAD_FAILURE;
+			}
 		}
+
 		ts += size;     /* ts is a (uint32_t *) */
 	}
 	return LOAD_SUCCESS;
@@ -2631,6 +2890,10 @@ load_threadentry(
 	 */
 	*entry_point = MACH_VM_MIN_ADDRESS;
 	while (total_size > 0) {
+		if (total_size < 2 * sizeof(uint32_t)) {
+			return LOAD_BADMACHO;
+		}
+
 		flavor = *ts++;
 		size = *ts++;
 		if (UINT32_MAX - 2 < size ||
@@ -2675,7 +2938,7 @@ extern int use_alt_dyld;
 static load_return_t
 load_dylinker(
 	struct dylinker_command *lcp,
-	integer_t               archbits,
+	cpu_type_t              cputype,
 	vm_map_t                map,
 	thread_t        thread,
 	int                     depth,
@@ -2747,8 +3010,12 @@ load_dylinker(
 	myresult = &dyld_data->__myresult;
 	macho_data = &dyld_data->__macho_data;
 
-	ret = get_macho_vnode(name, archbits, header,
-	    &file_offset, &macho_size, macho_data, &vp);
+	{
+		cputype = (cputype & CPU_ARCH_MASK) | (cpu_type() & ~CPU_ARCH_MASK);
+	}
+
+	ret = get_macho_vnode(name, cputype, header,
+	    &file_offset, &macho_size, macho_data, &vp, imgp);
 	if (ret) {
 		goto novp_out;
 	}
@@ -2776,24 +3043,28 @@ load_dylinker(
 		if (myresult->platform_binary) {
 			result->csflags |= CS_DYLD_PLATFORM;
 		}
+
 	}
 
-	struct vnode_attr va;
-	VATTR_INIT(&va);
-	VATTR_WANTED(&va, va_fsid64);
-	VATTR_WANTED(&va, va_fsid);
-	VATTR_WANTED(&va, va_fileid);
-	int error = vnode_getattr(vp, &va, imgp->ip_vfs_context);
+	struct vnode_attr *va;
+	va = kheap_alloc(KHEAP_TEMP, sizeof(*va), Z_WAITOK | Z_ZERO);
+	VATTR_INIT(va);
+	VATTR_WANTED(va, va_fsid64);
+	VATTR_WANTED(va, va_fsid);
+	VATTR_WANTED(va, va_fileid);
+	int error = vnode_getattr(vp, va, imgp->ip_vfs_context);
 	if (error == 0) {
-		imgp->ip_dyld_fsid = vnode_get_va_fsid(&va);
-		imgp->ip_dyld_fsobjid = va.va_fileid;
+		imgp->ip_dyld_fsid = vnode_get_va_fsid(va);
+		imgp->ip_dyld_fsobjid = va->va_fileid;
 	}
 
 	vnode_put(vp);
+	kheap_free(KHEAP_TEMP, va, sizeof(*va));
 novp_out:
 	FREE(dyld_data, M_TEMP);
 	return ret;
 }
+
 
 static load_return_t
 load_code_signature(
@@ -2802,6 +3073,7 @@ load_code_signature(
 	off_t                           macho_offset,
 	off_t                           macho_size,
 	cpu_type_t                      cputype,
+	cpu_subtype_t                   cpusubtype,
 	load_result_t                   *result,
 	struct image_params             *imgp)
 {
@@ -2813,9 +3085,12 @@ load_code_signature(
 	int             error;
 	vm_size_t       blob_size;
 	uint32_t        sum;
+	boolean_t               anyCPU;
 
 	addr = 0;
 	blob = NULL;
+
+	cpusubtype &= ~CPU_SUBTYPE_MASK;
 
 	if (lcp->cmdsize != sizeof(struct linkedit_data_command)) {
 		ret = LOAD_BADMACHO;
@@ -2828,11 +3103,13 @@ load_code_signature(
 		goto out;
 	}
 
-	blob = ubc_cs_blob_get(vp, cputype, macho_offset);
+	blob = ubc_cs_blob_get(vp, cputype, cpusubtype, macho_offset);
 
 	if (blob != NULL) {
-		/* we already have a blob for this vnode and cputype */
-		if (blob->csb_cpu_type != cputype ||
+		/* we already have a blob for this vnode and cpu(sub)type */
+		anyCPU = blob->csb_cpu_type == -1;
+		if ((blob->csb_cpu_type != cputype &&
+		    blob->csb_cpu_subtype != cpusubtype && !anyCPU) ||
 		    blob->csb_base_offset != macho_offset) {
 			/* the blob has changed for this vnode: fail ! */
 			ret = LOAD_BADMACHO;
@@ -2840,16 +3117,23 @@ load_code_signature(
 		}
 
 		/* It matches the blob we want here, let's verify the version */
-		if (ubc_cs_generation_check(vp) == 0) {
+		if (!anyCPU && ubc_cs_generation_check(vp) == 0) {
 			/* No need to revalidate, we're good! */
 			ret = LOAD_SUCCESS;
 			goto out;
 		}
 
 		/* That blob may be stale, let's revalidate. */
-		error = ubc_cs_blob_revalidate(vp, blob, imgp, 0);
+		error = ubc_cs_blob_revalidate(vp, blob, imgp, 0, result->ip_platform);
 		if (error == 0) {
 			/* Revalidation succeeded, we're good! */
+			/* If we were revaliding a CS blob with any CPU arch we adjust it */
+			if (anyCPU) {
+				vnode_lock_spin(vp);
+				blob->csb_cpu_type = cputype;
+				blob->csb_cpu_subtype = cpusubtype;
+				vnode_unlock(vp);
+			}
 			ret = LOAD_SUCCESS;
 			goto out;
 		}
@@ -2893,7 +3177,9 @@ load_code_signature(
 	}
 
 	if (ubc_cs_blob_add(vp,
+	    result->ip_platform,
 	    cputype,
+	    cpusubtype,
 	    macho_offset,
 	    &addr,
 	    lcp->datasize,
@@ -2987,15 +3273,12 @@ set_code_unprotect(
 		return LOAD_FAILURE;
 	}
 
-	MALLOC_ZONE(vpath, char *, MAXPATHLEN, M_NAMEI, M_WAITOK);
-	if (vpath == NULL) {
-		return LOAD_FAILURE;
-	}
+	vpath = zalloc(ZV_NAMEI);
 
 	len = MAXPATHLEN;
 	error = vn_getpath(vp, vpath, &len);
 	if (error) {
-		FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
+		zfree(ZV_NAMEI, vpath);
 		return LOAD_FAILURE;
 	}
 
@@ -3014,7 +3297,7 @@ set_code_unprotect(
 		    p->p_pid, p->p_comm, map, __FUNCTION__, vpath, kr);
 	}
 #endif /* VM_MAP_DEBUG_APPLE_PROTECT */
-	FREE_ZONE(vpath, MAXPATHLEN, M_NAMEI);
+	zfree(ZV_NAMEI, vpath);
 
 	if (kr) {
 		printf("set_code_unprotect: unable to create decrypter %s, kr=%d\n",
@@ -3051,21 +3334,23 @@ set_code_unprotect(
 			if ((seg64->fileoff <= eip->cryptoff) &&
 			    (seg64->fileoff + seg64->filesize >=
 			    eip->cryptoff + eip->cryptsize)) {
-				map_offset = seg64->vmaddr + eip->cryptoff - seg64->fileoff + slide;
+				map_offset = (vm_map_offset_t)(seg64->vmaddr + eip->cryptoff - seg64->fileoff + slide);
 				map_size = eip->cryptsize;
 				crypto_backing_offset = macho_offset + eip->cryptoff;
 				goto remap_now;
 			}
+			break;
 		case LC_SEGMENT:
 			seg32 = (struct segment_command *)lcp;
 			if ((seg32->fileoff <= eip->cryptoff) &&
 			    (seg32->fileoff + seg32->filesize >=
 			    eip->cryptoff + eip->cryptsize)) {
-				map_offset = seg32->vmaddr + eip->cryptoff - seg32->fileoff + slide;
+				map_offset = (vm_map_offset_t)(seg32->vmaddr + eip->cryptoff - seg32->fileoff + slide);
 				map_size = eip->cryptsize;
 				crypto_backing_offset = macho_offset + eip->cryptoff;
 				goto remap_now;
 			}
+			break;
 		}
 	}
 
@@ -3081,7 +3366,8 @@ remap_now:
 	    map_offset,
 	    map_offset + map_size,
 	    crypto_backing_offset,
-	    &crypt_info);
+	    &crypt_info,
+	    CRYPTID_APP_ENCRYPTION);
 	if (kr) {
 		printf("set_code_unprotect(): mapping failed with %x\n", kr);
 		return LOAD_PROTECT;
@@ -3102,12 +3388,13 @@ static
 load_return_t
 get_macho_vnode(
 	const char              *path,
-	integer_t               archbits,
+	cpu_type_t              cputype,
 	struct mach_header      *mach_header,
 	off_t                   *file_offset,
 	off_t                   *macho_size,
 	struct macho_data       *data,
-	struct vnode            **vpp
+	struct vnode            **vpp,
+	struct image_params     *imgp
 	)
 {
 	struct vnode            *vp;
@@ -3205,8 +3492,8 @@ get_macho_vnode(
 		}
 
 		/* Look up our architecture in the fat file. */
-		error = fatfile_getarch_with_bits(archbits,
-		    (vm_offset_t)(&header->fat_header), sizeof(*header), &fat_arch);
+		error = fatfile_getbestarch_for_cputype(cputype, CPU_SUBTYPE_ANY,
+		    (vm_offset_t)(&header->fat_header), sizeof(*header), imgp, &fat_arch);
 		if (error != LOAD_SUCCESS) {
 			goto bad2;
 		}
@@ -3245,7 +3532,7 @@ get_macho_vnode(
 		 * required, since the dynamic linker might work, but we will
 		 * refuse to load it because of this check.
 		 */
-		if ((cpu_type_t)(header->mach_header.cputype & CPU_ARCH_MASK) != archbits) {
+		if ((cpu_type_t)header->mach_header.cputype != cputype) {
 			error = LOAD_BADARCH;
 			goto bad2;
 		}

@@ -88,6 +88,10 @@
 /* KEV_NETPOLICY_SUBCLASS event codes */
 #define KEV_NETPOLICY_IFDENIED  1       /* denied access to interface */
 #define KEV_NETPOLICY_IFFAILED  2       /* failed to bring up interface */
+#define KEV_NETPOLICY_NETDENIED 3       /* denied access to some network */
+
+#define NETPOLICY_NETWORKTYPE_LOCAL     1   /* local network */
+
 
 #define KEV_SOCKET_SUBCLASS     4       /* Socket subclass */
 /* KEV_SOCKET_SUBCLASS event codes */

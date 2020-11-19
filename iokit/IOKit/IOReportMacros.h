@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2014 Apple Computer, Inc.  All Rights Reserved.
+ * Copyright (c) 2012-2020 Apple Computer, Inc.  All Rights Reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -218,7 +218,7 @@ typedef struct {
 /*
  * Initialize a StateReport buffer.
  *
- *                   int nstates - number of states to be reported
+ *              uint16_t nstates - number of states to be reported
  *                  void* buffer - ptr to STATEREPORT_BUFSIZE(nstates) bytes
  *                size_t bufSize - sanity check of buffer's size
  *           uint64_t providerID - registry Entry ID of the reporting service
@@ -235,7 +235,7 @@ do {  \
     IOStateReportValues *__rep;  \
     IOReportElement     *__elem;  \
     if ((bufSize) >= STATEREPORT_BUFSIZE(nstates)) {  \
-	for (unsigned __no = 0; __no < (nstates); __no++) {  \
+	for (uint16_t __no = 0; __no < (nstates); __no++) {  \
 	    __elem =  &(__info->elem[__no]);  \
 	    __rep = (IOStateReportValues *) &(__elem->values);  \
 	    __elem->provider_id = (providerID);  \
@@ -577,8 +577,8 @@ typedef struct {
 /*
  * Initialize a HistogramReport buffer. Supports only linear scale histogram.
  *
- *                   int nbuckets - number of buckets data is combined into
- *           uint32_t bucketWidth - size of each bucket
+ *             uint16_t nbuckets - number of buckets data is combined into
+ *          uint32_t bucketWidth - size of each bucket
  *                  void* buffer - ptr to HISTREPORT_BUFSIZE(nbuckets) bytes
  *                size_t bufSize - sanity check of buffer's size
  *           uint64_t providerID - registry Entry ID of the reporting service
@@ -596,7 +596,7 @@ do {  \
     IOHistogramReportValues *__rep;  \
     if ((bufSize) >= HISTREPORT_BUFSIZE(nbuckets)) {  \
 	__info->bucketWidth = (bktSize);  \
-	for (unsigned __no = 0; __no < (nbuckets); __no++) {  \
+	for (uint16_t __no = 0; __no < (nbuckets); __no++) {  \
 	    __elem =  &(__info->elem[__no]);  \
 	    __rep = (IOHistogramReportValues *) &(__elem->values);  \
 	    __elem->provider_id = (providerID);  \

@@ -28,7 +28,7 @@
 
 #include <sys/errno.h>
 #include <sys/types.h>
-#include <sys/malloc.h>
+#include <kern/kalloc.h>
 #include <sys/buf.h>
 #include <sys/time.h>
 #include <sys/kauth.h>
@@ -41,7 +41,7 @@
 #include <sys/kasl.h>
 
 #include <sys/queue.h>
-#include <kern/kalloc.h>
+#include <kern/zalloc.h>
 
 #include <uuid/uuid.h>
 
@@ -203,7 +203,7 @@ novel_fpx_event(const uuid_t uuid, uint32_t code, uint32_t xcpt)
 		DPRINTF_FPX_EVENT("reusing", fe);
 	} else {
 		/* add a new element to the list */
-		fe = kalloc(sizeof(*fe));
+		fe = zalloc_permanent_type(struct fpx_event);
 	}
 	memcpy(fe->fe_uuid, uuid, sizeof(uuid_t));
 	fe->fe_code = code;

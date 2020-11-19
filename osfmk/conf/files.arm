@@ -68,7 +68,6 @@ osfmk/OPTIONS/ec		optional ec
 osfmk/OPTIONS/hi_res_clock	optional hi_res_clock
 
 # Kernel performance monitoring
-osfmk/kperf/arm/kperf_mp.c      optional kperf
 osfmk/arm/kpc_arm.c		optional kpc
 
 osfmk/arm/monotonic_arm.c optional monotonic

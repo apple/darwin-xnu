@@ -45,6 +45,7 @@
 #include <sys/resource.h>
 #include <sys/signal.h>
 #include <sys/errno.h>
+#include <sys/proc_require.h>
 
 #if MONOTONIC
 #include <kern/monotonic.h>
@@ -90,6 +91,7 @@ extern void psignal(void *, int);
 void  *
 get_bsdtask_info(task_t t)
 {
+	proc_require(t->bsd_info, PROC_REQUIRE_ALLOW_NULL | PROC_REQUIRE_ALLOW_KERNPROC);
 	return t->bsd_info;
 }
 
@@ -107,7 +109,12 @@ task_bsdtask_kill(task_t t)
 void *
 get_bsdthreadtask_info(thread_t th)
 {
-	return th->task != TASK_NULL ? th->task->bsd_info : NULL;
+	void *bsd_info = NULL;
+
+	if (th->task) {
+		bsd_info = get_bsdtask_info(th->task);
+	}
+	return bsd_info;
 }
 
 /*
@@ -375,10 +382,6 @@ swap_task_map(task_t task, thread_t thread, vm_map_t map)
 	mp_enable_preemption();
 	task_unlock(task);
 
-#if defined(__x86_64__) && NCOPY_WINDOWS > 0
-	inval_copy_windows(thread);
-#endif
-
 	return old_map;
 }
 
@@ -425,26 +428,39 @@ get_task_resident_max(task_t task)
 	return (uint64_t)pmap_resident_max(map->pmap) * PAGE_SIZE_64;
 }
 
+/*
+ * Get the balance for a given field in the task ledger.
+ * Returns 0 if the entry is invalid.
+ */
+static uint64_t
+get_task_ledger_balance(task_t task, int entry)
+{
+	ledger_amount_t balance = 0;
+
+	ledger_get_balance(task->ledger, entry, &balance);
+	return balance;
+}
+
 uint64_t
 get_task_purgeable_size(task_t task)
 {
 	kern_return_t ret;
-	ledger_amount_t credit, debit;
+	ledger_amount_t balance = 0;
 	uint64_t volatile_size = 0;
 
-	ret = ledger_get_entries(task->ledger, task_ledgers.purgeable_volatile, &credit, &debit);
+	ret = ledger_get_balance(task->ledger, task_ledgers.purgeable_volatile, &balance);
 	if (ret != KERN_SUCCESS) {
 		return 0;
 	}
 
-	volatile_size += (credit - debit);
+	volatile_size += balance;
 
-	ret = ledger_get_entries(task->ledger, task_ledgers.purgeable_volatile_compressed, &credit, &debit);
+	ret = ledger_get_balance(task->ledger, task_ledgers.purgeable_volatile_compressed, &balance);
 	if (ret != KERN_SUCCESS) {
 		return 0;
 	}
 
-	volatile_size += (credit - debit);
+	volatile_size += balance;
 
 	return volatile_size;
 }
@@ -455,15 +471,7 @@ get_task_purgeable_size(task_t task)
 uint64_t
 get_task_phys_footprint(task_t task)
 {
-	kern_return_t ret;
-	ledger_amount_t credit, debit;
-
-	ret = ledger_get_entries(task->ledger, task_ledgers.phys_footprint, &credit, &debit);
-	if (KERN_SUCCESS == ret) {
-		return credit - debit;
-	}
-
-	return 0;
+	return get_task_ledger_balance(task, task_ledgers.phys_footprint);
 }
 
 #if CONFIG_LEDGER_INTERVAL_MAX
@@ -524,150 +532,140 @@ get_task_phys_footprint_limit(task_t task)
 uint64_t
 get_task_internal(task_t task)
 {
-	kern_return_t ret;
-	ledger_amount_t credit, debit;
-
-	ret = ledger_get_entries(task->ledger, task_ledgers.internal, &credit, &debit);
-	if (KERN_SUCCESS == ret) {
-		return credit - debit;
-	}
-
-	return 0;
+	return get_task_ledger_balance(task, task_ledgers.internal);
 }
 
 uint64_t
 get_task_internal_compressed(task_t task)
 {
-	kern_return_t ret;
-	ledger_amount_t credit, debit;
-
-	ret = ledger_get_entries(task->ledger, task_ledgers.internal_compressed, &credit, &debit);
-	if (KERN_SUCCESS == ret) {
-		return credit - debit;
-	}
-
-	return 0;
+	return get_task_ledger_balance(task, task_ledgers.internal_compressed);
 }
 
 uint64_t
 get_task_purgeable_nonvolatile(task_t task)
 {
-	kern_return_t ret;
-	ledger_amount_t credit, debit;
-
-	ret = ledger_get_entries(task->ledger, task_ledgers.purgeable_nonvolatile, &credit, &debit);
-	if (KERN_SUCCESS == ret) {
-		return credit - debit;
-	}
-
-	return 0;
+	return get_task_ledger_balance(task, task_ledgers.purgeable_nonvolatile);
 }
 
 uint64_t
 get_task_purgeable_nonvolatile_compressed(task_t task)
 {
-	kern_return_t ret;
-	ledger_amount_t credit, debit;
-
-	ret = ledger_get_entries(task->ledger, task_ledgers.purgeable_nonvolatile_compressed, &credit, &debit);
-	if (KERN_SUCCESS == ret) {
-		return credit - debit;
-	}
-
-	return 0;
+	return get_task_ledger_balance(task, task_ledgers.purgeable_nonvolatile_compressed);
 }
 
 uint64_t
 get_task_alternate_accounting(task_t task)
 {
-	kern_return_t ret;
-	ledger_amount_t credit, debit;
-
-	ret = ledger_get_entries(task->ledger, task_ledgers.alternate_accounting, &credit, &debit);
-	if (KERN_SUCCESS == ret) {
-		return credit - debit;
-	}
-
-	return 0;
+	return get_task_ledger_balance(task, task_ledgers.alternate_accounting);
 }
 
 uint64_t
 get_task_alternate_accounting_compressed(task_t task)
 {
-	kern_return_t ret;
-	ledger_amount_t credit, debit;
-
-	ret = ledger_get_entries(task->ledger, task_ledgers.alternate_accounting_compressed, &credit, &debit);
-	if (KERN_SUCCESS == ret) {
-		return credit - debit;
-	}
-
-	return 0;
+	return get_task_ledger_balance(task, task_ledgers.alternate_accounting_compressed);
 }
 
 uint64_t
 get_task_page_table(task_t task)
 {
-	kern_return_t ret;
-	ledger_amount_t credit, debit;
-
-	ret = ledger_get_entries(task->ledger, task_ledgers.page_table, &credit, &debit);
-	if (KERN_SUCCESS == ret) {
-		return credit - debit;
-	}
-
-	return 0;
+	return get_task_ledger_balance(task, task_ledgers.page_table);
 }
+
+#if CONFIG_FREEZE
+uint64_t
+get_task_frozen_to_swap(task_t task)
+{
+	return get_task_ledger_balance(task, task_ledgers.frozen_to_swap);
+}
+#endif /* CONFIG_FREEZE */
 
 uint64_t
 get_task_iokit_mapped(task_t task)
 {
-	kern_return_t ret;
-	ledger_amount_t credit, debit;
-
-	ret = ledger_get_entries(task->ledger, task_ledgers.iokit_mapped, &credit, &debit);
-	if (KERN_SUCCESS == ret) {
-		return credit - debit;
-	}
-
-	return 0;
+	return get_task_ledger_balance(task, task_ledgers.iokit_mapped);
 }
 
 uint64_t
 get_task_network_nonvolatile(task_t task)
 {
-	kern_return_t ret;
-	ledger_amount_t credit, debit;
-
-	ret = ledger_get_entries(task->ledger, task_ledgers.network_nonvolatile, &credit, &debit);
-	if (KERN_SUCCESS == ret) {
-		return credit - debit;
-	}
-
-	return 0;
+	return get_task_ledger_balance(task, task_ledgers.network_nonvolatile);
 }
 
 uint64_t
 get_task_network_nonvolatile_compressed(task_t task)
 {
-	kern_return_t ret;
-	ledger_amount_t credit, debit;
-
-	ret = ledger_get_entries(task->ledger, task_ledgers.network_nonvolatile_compressed, &credit, &debit);
-	if (KERN_SUCCESS == ret) {
-		return credit - debit;
-	}
-
-	return 0;
+	return get_task_ledger_balance(task, task_ledgers.network_nonvolatile_compressed);
 }
 
 uint64_t
 get_task_wired_mem(task_t task)
 {
+	return get_task_ledger_balance(task, task_ledgers.wired_mem);
+}
+
+uint64_t
+get_task_tagged_footprint(task_t task)
+{
 	kern_return_t ret;
 	ledger_amount_t credit, debit;
 
-	ret = ledger_get_entries(task->ledger, task_ledgers.wired_mem, &credit, &debit);
+	ret = ledger_get_entries(task->ledger, task_ledgers.tagged_footprint, &credit, &debit);
+	if (KERN_SUCCESS == ret) {
+		return credit - debit;
+	}
+
+	return 0;
+}
+
+uint64_t
+get_task_tagged_footprint_compressed(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+
+	ret = ledger_get_entries(task->ledger, task_ledgers.tagged_footprint_compressed, &credit, &debit);
+	if (KERN_SUCCESS == ret) {
+		return credit - debit;
+	}
+
+	return 0;
+}
+
+uint64_t
+get_task_media_footprint(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+
+	ret = ledger_get_entries(task->ledger, task_ledgers.media_footprint, &credit, &debit);
+	if (KERN_SUCCESS == ret) {
+		return credit - debit;
+	}
+
+	return 0;
+}
+
+uint64_t
+get_task_media_footprint_compressed(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+
+	ret = ledger_get_entries(task->ledger, task_ledgers.media_footprint_compressed, &credit, &debit);
+	if (KERN_SUCCESS == ret) {
+		return credit - debit;
+	}
+
+	return 0;
+}
+
+uint64_t
+get_task_graphics_footprint(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+
+	ret = ledger_get_entries(task->ledger, task_ledgers.graphics_footprint, &credit, &debit);
 	if (KERN_SUCCESS == ret) {
 		return credit - debit;
 	}
@@ -677,17 +675,51 @@ get_task_wired_mem(task_t task)
 
 
 uint64_t
-get_task_cpu_time(task_t task)
+get_task_graphics_footprint_compressed(task_t task)
 {
 	kern_return_t ret;
 	ledger_amount_t credit, debit;
 
-	ret = ledger_get_entries(task->ledger, task_ledgers.cpu_time, &credit, &debit);
+	ret = ledger_get_entries(task->ledger, task_ledgers.graphics_footprint_compressed, &credit, &debit);
 	if (KERN_SUCCESS == ret) {
 		return credit - debit;
 	}
 
 	return 0;
+}
+
+uint64_t
+get_task_neural_footprint(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+
+	ret = ledger_get_entries(task->ledger, task_ledgers.neural_footprint, &credit, &debit);
+	if (KERN_SUCCESS == ret) {
+		return credit - debit;
+	}
+
+	return 0;
+}
+
+uint64_t
+get_task_neural_footprint_compressed(task_t task)
+{
+	kern_return_t ret;
+	ledger_amount_t credit, debit;
+
+	ret = ledger_get_entries(task->ledger, task_ledgers.neural_footprint_compressed, &credit, &debit);
+	if (KERN_SUCCESS == ret) {
+		return credit - debit;
+	}
+
+	return 0;
+}
+
+uint64_t
+get_task_cpu_time(task_t task)
+{
+	return get_task_ledger_balance(task, task_ledgers.cpu_time);
 }
 
 uint32_t
@@ -734,7 +766,7 @@ vm_map_size_t
 get_vmmap_size(
 	vm_map_t        map)
 {
-	return map->size;
+	return vm_map_adjusted_size(map);
 }
 
 #if CONFIG_COREDUMP
@@ -930,7 +962,7 @@ fill_taskprocinfo(task_t task, struct proc_taskinfo_internal * ptinfo)
 
 	map = (task == kernel_task)? kernel_map: task->map;
 
-	ptinfo->pti_virtual_size  = map->size;
+	ptinfo->pti_virtual_size  = vm_map_adjusted_size(map);
 	ptinfo->pti_resident_size =
 	    (mach_vm_size_t)(pmap_resident_count(map->pmap))
 	    * PAGE_SIZE_64;
@@ -1103,12 +1135,10 @@ fill_task_rusage(task_t task, rusage_info_current *ri)
 	ri->ri_system_time = powerinfo.total_system;
 	ri->ri_runnable_time = runnable_time;
 
-	ledger_get_balance(task->ledger, task_ledgers.phys_footprint,
-	    (ledger_amount_t *)&ri->ri_phys_footprint);
+	ri->ri_phys_footprint = get_task_phys_footprint(task);
 	ledger_get_balance(task->ledger, task_ledgers.phys_mem,
 	    (ledger_amount_t *)&ri->ri_resident_size);
-	ledger_get_balance(task->ledger, task_ledgers.wired_mem,
-	    (ledger_amount_t *)&ri->ri_wired_size);
+	ri->ri_wired_size = get_task_wired_mem(task);
 
 	ri->ri_pageins = task->pageins;
 

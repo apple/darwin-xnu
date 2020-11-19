@@ -34,9 +34,20 @@
 #include <sys/types.h>
 #include <stdint.h>
 
-#ifndef XNU_KERNEL_PRIVATE
+#if defined(XNU_KERNEL_PRIVATE)
+
+#if defined(XNU_TARGET_OS_OSX)
+#define PROCESS_POLICY_OSX  1
+#else /* defined(XNU_TARGET_OS_OSX) */
+#define PROCESS_POLICY_OSX  0
+#endif /* defined(XNU_TARGET_OS_OSX) */
+
+#else /* defined(XNU_KERNEL_PRIVATE) */
+
 #include <TargetConditionals.h>
-#endif
+
+#define PROCESS_POLICY_OSX !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
+#endif /* defined(XNU_KERNEL_PRIVATE) */
 
 __BEGIN_DECLS
 
@@ -65,13 +76,15 @@ __BEGIN_DECLS
 #define PROC_POLICY_HARDWARE_ACCESS     2       /* access to various hardware */
 #define PROC_POLICY_RESOURCE_STARVATION 3       /* behavior on resource starvation */
 #define PROC_POLICY_RESOURCE_USAGE      4       /* behavior on resource consumption */
-#if CONFIG_EMBEDDED || (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
+#if !PROCESS_POLICY_OSX
 #define PROC_POLICY_APP_LIFECYCLE       5       /* app life cycle management */
-#else /* CONFIG_EMBEDDED */
+#else /* !PROCESS_POLICY_OSX */
 #define PROC_POLICY_RESERVED            5       /* behavior on resource consumption */
-#endif /* CONFIG_EMBEDDED */
+#endif /* !PROCESS_POLICY_OSX */
 #define PROC_POLICY_APPTYPE             6       /* behavior on resource consumption */
 #define PROC_POLICY_BOOST               7       /* importance boost/drop */
+#define PROC_POLICY_NO_SMT              8       /* Disallow Simultaneous Multi-Threading */
+#define PROC_POLICY_TECS                9       /* Enable CPU security for threads */
 
 /* sub policies for background policy */
 #define PROC_POLICY_BG_NONE             0       /* none */
@@ -79,11 +92,11 @@ __BEGIN_DECLS
 #define PROC_POLICY_BG_DISKTHROTTLE     2       /* disk accesses throttled */
 #define PROC_POLICY_BG_NETTHROTTLE      4       /* network accesses throttled */
 #define PROC_POLICY_BG_GPUDENY          8       /* no access to GPU */
-#if CONFIG_EMBEDDED || (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
+#if !PROCESS_POLICY_OSX
 #define PROC_POLICY_BG_ALL            0x0F
-#else /* CONFIG_EMBEDDED */
+#else /* !PROCESS_POLICY_OSX */
 #define PROC_POLICY_BG_ALL            0x07
-#endif /* CONFIG_EMBEDDED */
+#endif /* !PROCESS_POLICY_OSX */
 #define PROC_POLICY_BG_DEFAULT          PROC_POLICY_BG_ALL
 
 /* sub policies for hardware */
@@ -169,20 +182,20 @@ typedef struct proc_policy_cpuusage_attr {
 	uint64_t        ppattr_cpu_attr_deadline;     /* 64bit deadline in nsecs */
 } proc_policy_cpuusage_attr_t;
 
-#if CONFIG_EMBEDDED || (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
+#if !PROCESS_POLICY_OSX
 /* sub policies for app lifecycle management */
 #define PROC_POLICY_APPLIFE_NONE        0       /* does nothing.. */
 #define PROC_POLICY_APPLIFE_STATE       1       /* sets the app to various lifecycle states */
 #define PROC_POLICY_APPLIFE_DEVSTATUS   2       /* notes the device in inactive or short/long term */
 #define PROC_POLICY_APPLIFE_PIDBIND     3       /* a thread is to be bound to another processes app state */
-#endif /* CONFIG_EMBEDDED */
+#endif /* !PROCESS_POLICY_OSX */
 
 /* sub policies for PROC_POLICY_APPTYPE */
 #define PROC_POLICY_APPTYPE_NONE        0       /* does nothing.. */
 #define PROC_POLICY_APPTYPE_MODIFY      1       /* sets the app to various lifecycle states */
-#if CONFIG_EMBEDDED || (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
+#if !PROCESS_POLICY_OSX
 #define PROC_POLICY_APPTYPE_THREADTHR   2       /* notes the device in inactive or short/long term */
-#endif /* CONFIG_EMBEDDED */
+#endif /* !PROCESS_POLICY_OSX */
 
 /* exported apptypes for PROC_POLICY_APPTYPE */
 #define PROC_POLICY_OSX_APPTYPE_TAL             1       /* TAL-launched app */

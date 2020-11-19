@@ -32,6 +32,7 @@
 #ifndef _IOKIT_IOCONDITIONLOCK_H
 #define _IOKIT_IOCONDITIONLOCK_H
 
+#include <libkern/c++/OSPtr.h>
 #include <libkern/c++/OSObject.h>
 #include <IOKit/IOLib.h>
 #include <IOKit/system.h>
@@ -52,7 +53,7 @@ private:
 	volatile bool       waiting;
 
 public:
-	static IOConditionLock *withCondition(int condition, bool inIntr = true);
+	static OSPtr<IOConditionLock> withCondition(int condition, bool inIntr = true);
 	virtual bool initWithCondition(int condition, bool inIntr = true);
 	virtual void free() APPLE_KEXT_OVERRIDE;
 

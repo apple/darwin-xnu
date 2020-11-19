@@ -36,7 +36,7 @@
 typedef struct stackshot_config {
 	/* Input options */
 	int             sc_pid;                 /* PID to trace, or -1 for the entire system */
-	uint32_t        sc_flags;               /* Stackshot flags */
+	uint64_t        sc_flags;               /* Stackshot flags */
 	uint64_t        sc_delta_timestamp;     /* Retrieve a delta stackshot of system state that has changed since this time */
 
 	/* Stackshot results */
@@ -46,21 +46,23 @@ typedef struct stackshot_config {
 	/* Internals */
 	uint64_t        sc_out_buffer_addr;     /* Location where the kernel should copy the address of the newly mapped buffer in user space */
 	uint64_t        sc_out_size_addr;       /* Location where the kernel should copy the size of the stackshot buffer */
+	uint64_t                sc_pagetable_mask;      /* Mask of page table levels to dump, must pass STACKSHOT_PAGE_TABLES */
 } stackshot_config_t;
 
 #ifndef KERNEL
 
 stackshot_config_t * stackshot_config_create(void);
 int stackshot_config_set_pid(stackshot_config_t * stackshot_config, int pid);
-int stackshot_config_set_flags(stackshot_config_t * stackshot_config, uint32_t flags);
+int stackshot_config_set_flags(stackshot_config_t * stackshot_config, uint64_t flags);
 int stackshot_capture_with_config(stackshot_config_t * stackshot_config);
 void * stackshot_config_get_stackshot_buffer(stackshot_config_t * stackshot_config);
 uint32_t stackshot_config_get_stackshot_size(stackshot_config_t * stackshot_config);
 int stackshot_config_set_size_hint(stackshot_config_t * stackshot_config, uint32_t suggested_size);
 int stackshot_config_set_delta_timestamp(stackshot_config_t * stackshot_config, uint64_t delta_timestamp);
+int stackshot_config_set_pagetable_mask(stackshot_config_t * stackshot_config, uint32_t mask);
 int stackshot_config_dealloc_buffer(stackshot_config_t * stackshot_config);
 int stackshot_config_dealloc(stackshot_config_t * stackshot_config);
 
-#endif /* KERNEL */
+#endif /* ! KERNEL */
 
 #endif /* _SYS_STACKSHOT_H */

@@ -47,6 +47,7 @@
 #ifndef _MACH_TYPES_H_
 #define _MACH_TYPES_H_
 
+#include <stddef.h>
 #include "libsa/machine/types.h"
 
 #ifndef _SIZE_T

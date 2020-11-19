@@ -297,8 +297,8 @@ sleh_abort(struct arm_saved_state * regs, int type)
 	if ((regs->fsr) & FSR_EXT) {
 		cpu_data_t      *cdp = getCpuDatap();
 
-		if (cdp->platform_error_handler != (platform_error_handler_t) NULL) {
-			(*(platform_error_handler_t)cdp->platform_error_handler)(cdp->cpu_id, 0);
+		if (cdp->platform_error_handler != NULL) {
+			cdp->platform_error_handler(cdp->cpu_id, 0);
 			/* If a platform error handler is registered, expect it to panic, not fall through */
 			panic("Unexpected return from platform_error_handler");
 		}
@@ -625,14 +625,10 @@ sleh_alignment(struct arm_saved_state * regs)
 		unsigned short ins16 = 0;
 
 		/* Get aborted instruction */
-#if     __ARM_SMP__ || __ARM_USER_PROTECT__
 		if (COPYIN((user_addr_t)(regs->pc), (char *)&ins16, (vm_size_t)(sizeof(uint16_t))) != KERN_SUCCESS) {
 			/* Failed to fetch instruction, return success to re-drive the exception */
 			return KERN_SUCCESS;
 		}
-#else
-		ins16 = *(unsigned short *) (regs->pc);
-#endif
 
 		/*
 		 * Map multi-word Thumb loads and stores to their ARM
@@ -668,14 +664,10 @@ sleh_alignment(struct arm_saved_state * regs)
 		}
 	} else {
 		/* Get aborted instruction */
-#if     __ARM_SMP__ || __ARM_USER_PROTECT__
 		if (COPYIN((user_addr_t)(regs->pc), (char *)&ins, (vm_size_t)(sizeof(unsigned int))) != KERN_SUCCESS) {
 			/* Failed to fetch instruction, return success to re-drive the exception */
 			return KERN_SUCCESS;
 		}
-#else
-		ins = *(unsigned int *) (regs->pc);
-#endif
 	}
 
 	/* Don't try to emulate unconditional instructions */
@@ -855,7 +847,7 @@ void interrupt_stats(void);
 void
 interrupt_stats(void)
 {
-	SCHED_STATS_INTERRUPT(current_processor());
+	SCHED_STATS_INC(interrupt_count);
 }
 
 __dead2

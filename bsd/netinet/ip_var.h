@@ -82,9 +82,6 @@ struct ipovly {
 };
 
 #ifdef BSD_KERNEL_PRIVATE
-#if CONFIG_MACF_NET
-struct label;
-#endif /* CONFIG_MACF_NET */
 /*
  * Ip reassembly queue structure.  Each fragment
  * being reassembled is attached to one of these structures.
@@ -94,9 +91,6 @@ struct label;
 struct ipq {
 	TAILQ_ENTRY(ipq) ipq_list;      /* to other reass headers */
 	struct mbuf *ipq_frags;         /* to ip headers of fragments */
-#if CONFIG_MACF_NET
-	struct label *ipq_label;        /* MAC label */
-#endif /* CONFIG_MACF_NET */
 	u_char  ipq_ttl;                /* time for reass q to live */
 	u_char  ipq_p;                  /* protocol of this fragment */
 	u_short ipq_id;                 /* sequence id for reassembly */
@@ -104,14 +98,6 @@ struct ipq {
 	u_int32_t       ipq_nfrags;     /* # frags in this packet */
 	uint32_t ipq_csum_flags;        /* checksum flags */
 	uint32_t ipq_csum;              /* partial checksum value */
-#if IPDIVERT
-#ifdef IPDIVERT_44
-	u_int32_t ipq_div_info;         /* ipfw divert port & flags */
-#else /* !IPDIVERT_44 */
-	u_int16_t ipq_divert;           /* ipfw divert port (legacy) */
-#endif /* !IPDIVERT_44 */
-	u_int16_t ipq_div_cookie;       /* ipfw divert cookie */
-#endif /* IPDIVERT */
 };
 
 /*
@@ -279,6 +265,7 @@ struct inpcb;
 struct route;
 struct sockopt;
 
+#include <kern/zalloc.h>
 #include <net/flowadv.h>
 
 /*
@@ -300,10 +287,12 @@ struct ip_out_args {
 	                                         *  AWDL_RESTRICTED */
 #define IPOAF_QOSMARKING_ALLOWED        0x00000080      /* policy allows Fastlane DSCP marking */
 #define IPOAF_NO_CONSTRAINED    0x00000100      /* skip IFXF_CONSTRAINED */
+#define IPOAF_REDO_QOSMARKING_POLICY    0x00000200      /* Re-evaluate QOS marking policy */
 	u_int32_t       ipoa_retflags;  /* IPOARF return flags (see below) */
 #define IPOARF_IFDENIED 0x00000001      /* denied access to interface */
 	int             ipoa_sotc;      /* traffic class for Fastlane DSCP mapping */
 	int             ipoa_netsvctype; /* network service type */
+	int32_t         qos_marking_gencount;
 };
 
 extern struct ipstat ipstat;
@@ -316,7 +305,7 @@ extern struct protosw *ip_protox[];
 extern struct pr_usrreqs rip_usrreqs;
 
 extern void ip_moptions_init(void);
-extern struct ip_moptions *ip_allocmoptions(int);
+extern struct ip_moptions *ip_allocmoptions(zalloc_flags_t);
 extern int inp_getmoptions(struct inpcb *, struct sockopt *);
 extern int inp_setmoptions(struct inpcb *, struct sockopt *);
 extern void imo_addref(struct ip_moptions *, int);
@@ -342,8 +331,7 @@ extern struct mbuf *ip_srcroute(void);
 extern void  ip_stripoptions(struct mbuf *);
 extern void ip_initid(void);
 extern u_int16_t ip_randomid(void);
-extern void ip_proto_dispatch_in_wrapper(struct mbuf *, int, u_int8_t);
-extern int ip_fragment(struct mbuf *, struct ifnet *, unsigned long, int);
+extern int ip_fragment(struct mbuf *, struct ifnet *, uint32_t, int);
 
 extern void ip_setsrcifaddr_info(struct mbuf *, uint32_t, struct in_ifaddr *);
 extern void ip_setdstifaddr_info(struct mbuf *, uint32_t, struct in_ifaddr *);
@@ -365,13 +353,11 @@ extern void tcp_out_cksum_stats(u_int32_t);
 extern void udp_in_cksum_stats(u_int32_t);
 extern void udp_out_cksum_stats(u_int32_t);
 
-#if INET6
 extern void tcp_in6_cksum_stats(u_int32_t);
 extern void tcp_out6_cksum_stats(u_int32_t);
 
 extern void udp_in6_cksum_stats(u_int32_t);
 extern void udp_out6_cksum_stats(u_int32_t);
-#endif /* INET6 */
 #endif /* BSD_KERNEL_PRIVATE */
 #ifdef KERNEL_PRIVATE
 /* for PPP/PPTP */

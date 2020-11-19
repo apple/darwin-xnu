@@ -133,6 +133,7 @@ __END_DECLS
 
 #define SEMAPHORE_USE_SAVED_RESULT      0x01000000      /* internal use only */
 #define SEMAPHORE_SIGNAL_RELEASE        0x02000000      /* internal use only */
+#define SEMAPHORE_THREAD_HANDOFF        0x04000000
 
 #endif  /* PRIVATE */
 

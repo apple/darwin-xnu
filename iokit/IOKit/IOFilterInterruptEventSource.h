@@ -35,7 +35,9 @@
 #ifndef _IOKIT_IOFILTERINTERRUPTEVENTSOURCE_H
 #define _IOKIT_IOFILTERINTERRUPTEVENTSOURCE_H
 
+#include <libkern/c++/OSPtr.h>
 #include <IOKit/IOInterruptEventSource.h>
+#include <libkern/c++/OSPtr.h>
 
 class IOService;
 
@@ -77,7 +79,7 @@ private:
 	    IOService *inProvider = NULL,
 	    int inIntIndex = 0) APPLE_KEXT_OVERRIDE;
 
-	static IOInterruptEventSource *
+	static OSPtr<IOInterruptEventSource>
 	interruptEventSource(OSObject *inOwner,
 	    IOInterruptEventSource::Action inAction = NULL,
 	    IOService *inProvider = NULL,
@@ -112,7 +114,7 @@ public:
  *   @param provider Service that provides interrupts.
  *   @param intIndex Defaults to 0.
  *   @result a new event source if succesful, 0 otherwise.  */
-	static IOFilterInterruptEventSource *
+	static OSPtr<IOFilterInterruptEventSource>
 	filterInterruptEventSource(OSObject *owner,
 	    IOInterruptEventSource::Action action,
 	    Filter filter,
@@ -128,7 +130,7 @@ public:
  *   @param action Block for the callout routine of this event source.
  *   @param filter Block to invoke when HW interrupt occurs.
  *   @result a new event source if succesful, 0 otherwise.  */
-	static IOFilterInterruptEventSource *
+	static OSPtr<IOFilterInterruptEventSource>
 	filterInterruptEventSource(OSObject *owner,
 	    IOService *provider,
 	    int intIndex,

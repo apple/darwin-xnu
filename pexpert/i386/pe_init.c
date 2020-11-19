@@ -98,7 +98,7 @@ PE_initialize_console( PE_Video * info, int op )
 		if (info) {
 			PE_state.video = *info;
 		}
-	/* fall thru */
+		OS_FALLTHROUGH;
 
 	default:
 		initialize_screen(info, op);
@@ -118,13 +118,12 @@ PE_init_iokit(void)
 
 	DTEntry             entry;
 	unsigned int        size;
-	uint32_t            *map;
+	uint32_t const      *map;
 	boot_progress_element *bootPict;
 
 	norootIcon_lzss = NULL;
 	norootClut_lzss = NULL;
 
-	PE_init_kprintf(TRUE);
 	PE_init_printf(TRUE);
 
 	kprintf("Kernel boot args: '%s'\n", PE_boot_args());
@@ -133,15 +132,15 @@ PE_init_iokit(void)
 	 * Fetch the CLUT and the noroot image.
 	 */
 
-	if (kSuccess == DTLookupEntry(NULL, "/chosen/memory-map", &entry)) {
-		if (kSuccess == DTGetProperty(entry, "BootCLUT", (void **) &map, &size)) {
+	if (kSuccess == SecureDTLookupEntry(NULL, "/chosen/memory-map", &entry)) {
+		if (kSuccess == SecureDTGetProperty(entry, "BootCLUT", (void const **) &map, &size)) {
 			if (sizeof(appleClut8) <= map[1]) {
 				bcopy((void *)ml_static_ptovirt(map[0]), appleClut8, sizeof(appleClut8));
 				bootClutInitialized = TRUE;
 			}
 		}
 
-		if (kSuccess == DTGetProperty(entry, "Pict-FailedBoot", (void **) &map, &size)) {
+		if (kSuccess == SecureDTGetProperty(entry, "Pict-FailedBoot", (void const **) &map, &size)) {
 			bootPict = (boot_progress_element *) ml_static_ptovirt(map[0]);
 			default_noroot.width  = bootPict->width;
 			default_noroot.height = bootPict->height;
@@ -151,11 +150,11 @@ PE_init_iokit(void)
 			noroot_rle_Initialized = TRUE;
 		}
 
-		if (kSuccess == DTGetProperty(entry, "FailedCLUT", (void **) &map, &size)) {
+		if (kSuccess == SecureDTGetProperty(entry, "FailedCLUT", (void const **) &map, &size)) {
 			norootClut_lzss = (uint8_t*) ml_static_ptovirt(map[0]);
 		}
 
-		if (kSuccess == DTGetProperty(entry, "FailedImage", (void **) &map, &size)) {
+		if (kSuccess == SecureDTGetProperty(entry, "FailedImage", (void const **) &map, &size)) {
 			norootIcon_lzss = (boot_icon_element *) ml_static_ptovirt(map[0]);
 			if (norootClut_lzss == NULL) {
 				printf("ERROR: No FailedCLUT provided for noroot icon!\n");
@@ -184,7 +183,20 @@ PE_init_iokit(void)
 	    default_progress_data3x,
 	    (unsigned char *) appleClut8);
 
-	StartIOKit( PE_state.deviceTreeHead, PE_state.bootArgs, gPEEFIRuntimeServices, NULL);
+	/*
+	 * x86 only minimally enforces lockdown in hardware.  Additionally, some pre-lockdown functionality
+	 * such as commpage initialization requires IOKit enumeration of CPUs, which is heavily entangled
+	 * with the ACPI stack.  Therefore, we start the IOKit matching process immediately on x86.
+	 */
+	InitIOKit(PE_state.deviceTreeHead);
+	StartIOKitMatching();
+}
+
+void
+PE_lockdown_iokit(void)
+{
+	/* Ensure that at least the CPUs have been enumerated before moving forward. */
+	ml_wait_max_cpus();
 }
 
 void
@@ -198,6 +210,7 @@ PE_init_platform(boolean_t vm_initialized, void * _args)
 		// New EFI-style
 		PE_state.bootArgs           = _args;
 		PE_state.deviceTreeHead     = (void *) ml_static_ptovirt(args->deviceTreeP);
+		PE_state.deviceTreeSize     = args->deviceTreeLength;
 		if (args->Video.v_baseAddr) {
 			PE_state.video.v_baseAddr   = args->Video.v_baseAddr;// remains physical address
 			PE_state.video.v_rowBytes   = args->Video.v_rowBytes;
@@ -243,7 +256,7 @@ PE_init_platform(boolean_t vm_initialized, void * _args)
 
 	if (!vm_initialized) {
 		if (PE_state.deviceTreeHead) {
-			DTInit(PE_state.deviceTreeHead);
+			SecureDTInit(PE_state.deviceTreeHead, PE_state.deviceTreeSize);
 		}
 
 		pe_identify_machine(args);
@@ -366,7 +379,7 @@ PE_i_can_has_debugger(uint32_t *debug_flags)
 {
 #if DEVELOPMENT || DEBUG
 	if (debug_flags) {
-		assert(debug_boot_arg_inited);
+		assert(startup_phase >= STARTUP_SUB_TUNABLES);
 	}
 #endif
 

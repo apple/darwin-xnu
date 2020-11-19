@@ -177,11 +177,11 @@ kasan_map_shadow_superpage_zero(vm_offset_t address, vm_size_t size)
 void
 kasan_map_shadow(vm_offset_t address, vm_size_t size, bool is_zero)
 {
-	size = (size + 0x7UL) & ~0x7UL;
+	size = kasan_granule_round(size);
 	vm_offset_t shadow_base = vm_map_trunc_page(SHADOW_FOR_ADDRESS(address), PAGE_MASK);
 	vm_offset_t shadow_top = vm_map_round_page(SHADOW_FOR_ADDRESS(address + size), PAGE_MASK);
 
-	assert((size & 0x7) == 0);
+	assert(kasan_granule_partial(size) == 0);
 
 	for (; shadow_base < shadow_top; shadow_base += I386_PGBYTES) {
 		split_addr_t addr = split_address(shadow_base);
@@ -290,7 +290,7 @@ kasan_reserve_memory(void *_args)
 		total_pages += mptr_tmp->NumberOfPages;
 	}
 
-	to_steal = (total_pages * STOLEN_MEM_PERCENT) / 100 + (STOLEN_MEM_BYTES / I386_PGBYTES);
+	to_steal = (unsigned long)(total_pages * STOLEN_MEM_PERCENT) / 100 + (STOLEN_MEM_BYTES / I386_PGBYTES);
 
 	/* Search for a range large enough to steal from */
 	for (i = 0, mptr_tmp = mptr; i < mcount; i++, mptr_tmp = (EfiMemoryRange *)(((vm_offset_t)mptr_tmp) + msize)) {
@@ -305,7 +305,7 @@ kasan_reserve_memory(void *_args)
 			shadow_pbase = mptr_tmp->PhysicalStart + (mptr_tmp->NumberOfPages << I386_PGSHIFT);
 			shadow_ptop = shadow_pbase + (to_steal << I386_PGSHIFT);
 			shadow_pnext = shadow_pbase;
-			shadow_pages_total = to_steal;
+			shadow_pages_total = (unsigned int)to_steal;
 			shadow_stolen_idx = i;
 
 			/* Set aside a page of zeros we can use for dummy shadow mappings */

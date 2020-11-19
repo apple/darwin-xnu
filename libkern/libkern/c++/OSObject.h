@@ -35,9 +35,9 @@
 #define _LIBKERN_OSOBJECT_H
 
 #include <libkern/c++/OSMetaClass.h>
+#include <libkern/c++/OSPtr.h>
 #include <IOKit/IORPC.h>
 #include <DriverKit/OSObject.h>
-#include <libkern/c++/OSPtr.h>
 
 #if defined(__clang__)
 #pragma clang diagnostic ignored "-Woverloaded-virtual"
@@ -47,7 +47,7 @@ class OSSymbol;
 class OSString;
 class OSObject;
 
-typedef OSPtr<OSObject> OSObjectPtr;
+typedef OSObject* OSObjectPtr;
 
 
 /*!
@@ -173,15 +173,10 @@ typedef OSPtr<OSObject> OSObjectPtr;
  */
 class OSObject : public OSMetaClassBase
 {
-	OSDeclareAbstractStructorsWithDispatch(OSObject);
+	OSDeclareAbstractStructorsWithDispatchAndNoOperators(OSObject);
 
 #if IOKITSTATS
 	friend class IOStatistics;
-#endif
-
-#ifdef LIBKERN_SMART_POINTERS
-	template<class T, class OSPtrPolicy>
-	friend class os::smart_ptr;
 #endif
 
 private:
@@ -309,7 +304,13 @@ protected:
  * release@/link</code>
  * instead.
  */
+#ifdef XNU_KERNEL_PRIVATE
+	static void operator delete(void * mem, size_t size)
+	__XNU_INTERNAL(OSObject_operator_delete);
+#else
 	static void operator delete(void * mem, size_t size);
+#endif
+
 
 // XXX: eventually we can flip this switch
 //#ifdef LIBKERN_SMART_POINTERS
@@ -330,7 +331,12 @@ public:
  * @result
  * A pointer to block of memory if available, <code>NULL</code> otherwise.
  */
+#ifdef XNU_KERNEL_PRIVATE
+	static void * operator new(size_t size)
+	__XNU_INTERNAL(OSObject_operator_new);
+#else
 	static void * operator new(size_t size);
+#endif
 
 public:
 

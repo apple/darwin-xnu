@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2000-2016 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2000-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -88,7 +88,7 @@ _sleep_continue( __unused void *parameter, wait_result_t wresult)
 		if (!catch) {
 			break;
 		}
-	/* else fall through */
+		OS_FALLTHROUGH;
 	case THREAD_INTERRUPTED:
 		if (catch) {
 			if (thread_should_abort(self)) {
@@ -257,7 +257,7 @@ _sleep(
 block:
 		if ((thread_continue_t)continuation != THREAD_CONTINUE_NULL) {
 			ut->uu_continuation = continuation;
-			ut->uu_pri  = pri;
+			ut->uu_pri  = (uint16_t)pri;
 			ut->uu_mtx  = mtx;
 			(void) thread_block(_sleep_continue);
 			/* NOTREACHED */
@@ -288,7 +288,7 @@ block:
 		if (catch != THREAD_ABORTSAFE) {
 			break;
 		}
-	/* else fall through */
+		OS_FALLTHROUGH;
 	case THREAD_INTERRUPTED:
 		if (catch == THREAD_ABORTSAFE) {
 			if (thread_should_abort(self)) {

@@ -26,6 +26,9 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
+#include <libkern/c++/OSSharedPtr.h>
 #include <IOKit/IOKernelReportStructs.h>
 #include <IOKit/IOKernelReporters.h>
 #include "IOReporterDefs.h"
@@ -36,34 +39,28 @@ OSDefineMetaClassAndStructors(IOStateReporter, IOReporter);
 
 
 /* static */
-IOStateReporter*
+OSSharedPtr<IOStateReporter>
 IOStateReporter::with(IOService *reportingService,
     IOReportCategories categories,
     int nstates,
     IOReportUnit unit /* = kIOReportUnitHWTicks*/)
 {
-	IOStateReporter *reporter, *rval = NULL;
+	OSSharedPtr<IOStateReporter> reporter;
 
-	// kprintf("%s\n", __func__);      // can't IORLOG() from static
+	if (nstates > INT16_MAX) {
+		return nullptr;
+	}
 
-	reporter = new IOStateReporter;
+	reporter = OSMakeShared<IOStateReporter>();
 	if (!reporter) {
-		goto finish;
+		return nullptr;
 	}
 
-	if (!reporter->initWith(reportingService, categories, nstates, unit)) {
-		goto finish;
+	if (!reporter->initWith(reportingService, categories, (int16_t) nstates, unit)) {
+		return nullptr;
 	}
 
-	// success
-	rval = reporter;
-
-finish:
-	if (!rval) {
-		OSSafeReleaseNULL(reporter);
-	}
-
-	return rval;
+	return reporter;
 }
 
 bool

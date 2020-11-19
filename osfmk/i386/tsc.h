@@ -78,6 +78,12 @@ typedef struct tscInfo tscInfo_t;
 extern void tsc_get_info(tscInfo_t *info);
 
 extern void tsc_init(void);
+
+#if DEVELOPMENT || DEBUG
+extern void cpu_data_tsc_sync_deltas_string(char *buf, uint32_t buflen,
+    uint32_t start_cpu, uint32_t end_cpu);
+#endif
+
 #endif /* ASSEMBLER */
 #endif /* _I386_TSC_H_ */
 #endif /* KERNEL_PRIVATE */

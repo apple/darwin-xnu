@@ -436,7 +436,6 @@ typedef struct memory_object_attr_info  memory_object_attr_info_data_t;
 #define MAX_UPL_TRANSFER        (MAX_UPL_TRANSFER_BYTES / PAGE_SIZE)
 #endif
 
-
 struct upl_page_info {
 	ppnum_t         phys_addr;      /* physical page index number */
 	unsigned int
@@ -447,9 +446,13 @@ struct upl_page_info {
 	    precious:1,         /* must be cleaned, we have only copy */
 	    device:1,           /* no page data, mapped dev memory */
 	    speculative:1,      /* page is valid, but not yet accessed */
-	    cs_validated:1,     /* CODE SIGNING: page was validated */
-	    cs_tainted:1,       /* CODE SIGNING: page is tainted */
-	    cs_nx:1,            /* CODE SIGNING: page is NX */
+#define VMP_CS_BITS 4
+#define VMP_CS_ALL_FALSE 0x0
+#define VMP_CS_ALL_TRUE 0xF
+	cs_validated:VMP_CS_BITS,     /* CODE SIGNING: page was validated */
+	    cs_tainted:VMP_CS_BITS,   /* CODE SIGNING: page is tainted */
+	    cs_nx:VMP_CS_BITS,        /* CODE SIGNING: page is NX */
+
 	    needed:1,           /* page should be left in cache on abort */
 	    mark:1,             /* a mark flag for the creator to use as they wish */
 	:0;                     /* force to long boundary */
@@ -713,13 +716,13 @@ typedef uint64_t upl_control_flags_t;
 /* modifier macros for upl_t */
 
 #define UPL_SET_CS_VALIDATED(upl, index, value) \
-	((upl)[(index)].cs_validated = ((value) ? TRUE : FALSE))
+	((upl)[(index)].cs_validated = (value))
 
 #define UPL_SET_CS_TAINTED(upl, index, value) \
-	((upl)[(index)].cs_tainted = ((value) ? TRUE : FALSE))
+	((upl)[(index)].cs_tainted = (value))
 
 #define UPL_SET_CS_NX(upl, index, value) \
-	((upl)[(index)].cs_nx = ((value) ? TRUE : FALSE))
+	((upl)[(index)].cs_nx = (value))
 
 #define UPL_SET_REPRIO_INFO(upl, index, blkno, len) \
 	((upl)->upl_reprio_info[(index)]) = (((uint64_t)(blkno) & UPL_REPRIO_INFO_MASK) | \

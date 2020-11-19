@@ -110,7 +110,8 @@ void kasan_fakestack_gc(thread_t thread);   /* free and poison all unused fakest
 void kasan_fakestack_suspend(void);
 void kasan_fakestack_resume(void);
 
-/* check for uninitialized memory */
+/* Initialization and check for uninitialized memory */
+void kasan_leak_init(vm_address_t addr, vm_size_t sz);
 void kasan_check_uninitialized(vm_address_t base, vm_size_t sz);
 
 struct kasan_test;
@@ -130,9 +131,13 @@ void kasan_notify_address_zero(vm_offset_t, vm_size_t);
 #elif __x86_64__
 extern void kasan_map_low_fixed_regions(void);
 extern unsigned shadow_stolen_idx;
+#endif
+#endif
+
+#if HIBERNATION
+// if we're building a kernel with hibernation support, hibernate_write_image depends on these symbols
 extern vm_offset_t shadow_pnext, shadow_ptop;
-#endif
-#endif
+#endif /* HIBERNATION */
 
 /*
  * Allocator hooks

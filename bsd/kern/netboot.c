@@ -60,9 +60,6 @@
 #include <sys/imageboot.h>
 #include <pexpert/pexpert.h>
 
-//#include <libkern/libkern.h>
-extern struct filedesc  filedesc0;
-
 extern int      nfs_mountroot(void);    /* nfs_vfsops.c */
 extern int (*mountroot)(void);
 
@@ -102,14 +99,14 @@ struct netboot_info {
 	struct in_addr      client_ip;
 	struct in_addr      server_ip;
 	char *              server_name;
-	int                 server_name_length;
+	size_t              server_name_length;
 	char *              mount_point;
-	int                 mount_point_length;
+	size_t              mount_point_length;
 	char *              image_path;
-	int                 image_path_length;
+	size_t              image_path_length;
 	NetBootImageType    image_type;
 	char *              second_image_path;
-	int                 second_image_path_length;
+	size_t              second_image_path_length;
 };
 
 /*
@@ -308,10 +305,10 @@ get_root_path(char * root_path)
 }
 
 static void
-save_path(char * * str_p, int * length_p, char * path)
+save_path(char * * str_p, size_t * length_p, char * path)
 {
 	*length_p = strlen(path) + 1;
-	*str_p = (char *)kalloc(*length_p);
+	*str_p = (char *)kheap_alloc(KHEAP_DATA_BUFFERS, *length_p, Z_WAITOK);
 	strlcpy(*str_p, path, *length_p);
 	return;
 }
@@ -329,10 +326,8 @@ netboot_info_init(struct in_addr iaddr)
 	info->image_type = kNetBootImageTypeUnknown;
 
 	/* check for a booter-specified path then a NetBoot path */
-	MALLOC_ZONE(root_path, caddr_t, MAXPATHLEN, M_NAMEI, M_WAITOK);
-	if (root_path == NULL) {
-		panic("netboot_info_init: M_NAMEI zone exhausted");
-	}
+	root_path = zalloc(ZV_NAMEI);
+
 	if (PE_parse_boot_argn("rp0", root_path, MAXPATHLEN) == TRUE
 	    || PE_parse_boot_argn("rp", root_path, MAXPATHLEN) == TRUE
 	    || PE_parse_boot_argn("rootpath", root_path, MAXPATHLEN) == TRUE) {
@@ -357,9 +352,11 @@ netboot_info_init(struct in_addr iaddr)
 			info->image_type = kNetBootImageTypeNFS;
 			info->server_ip = server_ip;
 			info->server_name_length = strlen(server_name) + 1;
-			info->server_name = (char *)kalloc(info->server_name_length);
+			info->server_name = kheap_alloc(KHEAP_DATA_BUFFERS,
+			    info->server_name_length, Z_WAITOK);
 			info->mount_point_length = strlen(mount_point) + 1;
-			info->mount_point = (char *)kalloc(info->mount_point_length);
+			info->mount_point = kheap_alloc(KHEAP_DATA_BUFFERS,
+			    info->mount_point_length, Z_WAITOK);
 			strlcpy(info->server_name, server_name, info->server_name_length);
 			strlcpy(info->mount_point, mount_point, info->mount_point_length);
 
@@ -373,7 +370,8 @@ netboot_info_init(struct in_addr iaddr)
 					needs_slash = TRUE;
 					info->image_path_length++;
 				}
-				info->image_path = (char *)kalloc(info->image_path_length);
+				info->image_path = kheap_alloc(KHEAP_DATA_BUFFERS,
+				    info->image_path_length, Z_WAITOK);
 				if (needs_slash) {
 					info->image_path[0] = '/';
 					strlcpy(info->image_path + 1, image_path,
@@ -408,7 +406,7 @@ netboot_info_init(struct in_addr iaddr)
 			printf("netboot: nested image %s\n", info->second_image_path);
 		}
 	}
-	FREE_ZONE(root_path, MAXPATHLEN, M_NAMEI);
+	zfree(ZV_NAMEI, root_path);
 	return info;
 }
 
@@ -419,21 +417,24 @@ netboot_info_free(struct netboot_info * * info_p)
 
 	if (info) {
 		if (info->mount_point) {
-			kfree(info->mount_point, info->mount_point_length);
+			kheap_free(KHEAP_DATA_BUFFERS, info->mount_point,
+			    info->mount_point_length);
 		}
 		if (info->server_name) {
-			kfree(info->server_name, info->server_name_length);
+			kheap_free(KHEAP_DATA_BUFFERS, info->server_name,
+			    info->server_name_length);
 		}
 		if (info->image_path) {
-			kfree(info->image_path, info->image_path_length);
+			kheap_free(KHEAP_DATA_BUFFERS, info->image_path,
+			    info->image_path_length);
 		}
 		if (info->second_image_path) {
-			kfree(info->second_image_path, info->second_image_path_length);
+			kheap_free(KHEAP_DATA_BUFFERS, info->second_image_path,
+			    info->second_image_path_length);
 		}
 		kfree(info, sizeof(*info));
 	}
 	*info_p = NULL;
-	return;
 }
 
 boolean_t
@@ -449,8 +450,8 @@ netboot_iaddr(struct in_addr * iaddr_p)
 
 boolean_t
 netboot_rootpath(struct in_addr * server_ip,
-    char * name, int name_len,
-    char * path, int path_len)
+    char * name, size_t name_len,
+    char * path, size_t path_len)
 {
 	if (S_netboot_info_p == NULL) {
 		return FALSE;
@@ -463,7 +464,7 @@ netboot_rootpath(struct in_addr * server_ip,
 		return FALSE;
 	}
 	if (path_len < S_netboot_info_p->mount_point_length) {
-		printf("netboot: path too small %d < %d\n",
+		printf("netboot: path too small %zu < %zu\n",
 		    path_len, S_netboot_info_p->mount_point_length);
 		return FALSE;
 	}
@@ -761,7 +762,7 @@ failed:
 }
 
 int
-netboot_setup()
+netboot_setup(void)
 {
 	int         error = 0;
 

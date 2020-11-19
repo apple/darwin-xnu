@@ -89,17 +89,17 @@
 
 typedef natural_t       ipc_kobject_type_t;
 
-#define IKOT_NONE                               0
-#define IKOT_THREAD                             1
-#define IKOT_TASK                               2
-#define IKOT_HOST                               3
+#define IKOT_NONE                       0
+#define IKOT_THREAD_CONTROL             1
+#define IKOT_TASK_CONTROL               2
+#define IKOT_HOST                       3
 #define IKOT_HOST_PRIV                  4
 #define IKOT_PROCESSOR                  5
-#define IKOT_PSET                               6
+#define IKOT_PSET                       6
 #define IKOT_PSET_NAME                  7
-#define IKOT_TIMER                              8
+#define IKOT_TIMER                      8
 #define IKOT_PAGING_REQUEST             9
-#define IKOT_MIG                                10
+#define IKOT_MIG                        10
 #define IKOT_MEMORY_OBJECT              11
 #define IKOT_XMM_PAGER                  12
 #define IKOT_XMM_KERNEL                 13
@@ -107,20 +107,20 @@ typedef natural_t       ipc_kobject_type_t;
 #define IKOT_UND_REPLY                  15
 #define IKOT_HOST_NOTIFY                16
 #define IKOT_HOST_SECURITY              17
-#define IKOT_LEDGER                             18
+#define IKOT_LEDGER                     18
 #define IKOT_MASTER_DEVICE              19
 #define IKOT_TASK_NAME                  20
 #define IKOT_SUBSYSTEM                  21
 #define IKOT_IO_DONE_QUEUE              22
 #define IKOT_SEMAPHORE                  23
 #define IKOT_LOCK_SET                   24
-#define IKOT_CLOCK                              25
+#define IKOT_CLOCK                      25
 #define IKOT_CLOCK_CTRL                 26
 #define IKOT_IOKIT_IDENT                27
 #define IKOT_NAMED_ENTRY                28
 #define IKOT_IOKIT_CONNECT              29
 #define IKOT_IOKIT_OBJECT               30
-#define IKOT_UPL                                31
+#define IKOT_UPL                        31
 #define IKOT_MEM_OBJ_CONTROL            32
 #define IKOT_AU_SESSIONPORT             33
 #define IKOT_FILEPORT                   34
@@ -132,21 +132,31 @@ typedef natural_t       ipc_kobject_type_t;
 #define IKOT_UX_HANDLER                 40
 #define IKOT_UEXT_OBJECT                41
 #define IKOT_ARCADE_REG                 42
-
+#define IKOT_EVENTLINK                  43
+#define IKOT_TASK_INSPECT               44
+#define IKOT_TASK_READ                  45
+#define IKOT_THREAD_INSPECT             46
+#define IKOT_THREAD_READ                47
 #define IKOT_SUID_CRED                  48
+#define IKOT_HYPERVISOR                 49
 
 /*
  * Add new entries here and adjust IKOT_UNKNOWN.
  * Please keep ipc/ipc_object.c:ikot_print_array up to date.
  */
-#define IKOT_UNKNOWN                    49      /* magic catchall       */
+#define IKOT_UNKNOWN                    50      /* magic catchall       */
 #define IKOT_MAX_TYPE   (IKOT_UNKNOWN+1)        /* # of IKOT_ types	*/
+
+/* set the bitstring index for kobject */
+extern kern_return_t ipc_kobject_set_kobjidx(
+	int                         msgid,
+	int                         index);
 
 #ifdef MACH_KERNEL_PRIVATE
 
 struct ipc_kobject_label {
 	ipc_label_t   ikol_label;       /* [private] mandatory access label */
-	ipc_kobject_t ikol_kobject;     /* actual kobject address */
+	ipc_kobject_t XNU_PTRAUTH_SIGNED_PTR("ipc_kobject_label.ikol_kobject") ikol_kobject;     /* actual kobject address */
 };
 
 /* initialization of kobject subsystem */
@@ -200,7 +210,9 @@ extern ipc_port_t ipc_kobject_alloc_labeled_port(
 extern boolean_t ipc_kobject_make_send_lazy_alloc_port(
 	ipc_port_t                 *port_store,
 	ipc_kobject_t               kobject,
-	ipc_kobject_type_t          type) __result_use_check;
+	ipc_kobject_type_t          type,
+	boolean_t                   should_ptrauth,
+	uint64_t                    ptrauth_discriminator) __result_use_check;
 
 /* Makes a send right, lazily allocating a kobject port, arming for no-senders, never fails */
 extern boolean_t ipc_kobject_make_send_lazy_alloc_labeled_port(

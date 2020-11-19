@@ -1,5 +1,5 @@
 /*-
- * Copyright (c) 1999-2016 Apple Inc.
+ * Copyright (c) 1999-2020 Apple Inc.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -58,6 +58,15 @@ MALLOC_DECLARE(M_AUDITBSM);
 MALLOC_DECLARE(M_AUDITDATA);
 MALLOC_DECLARE(M_AUDITPATH);
 MALLOC_DECLARE(M_AUDITTEXT);
+#endif
+KALLOC_HEAP_DECLARE(KHEAP_AUDIT);
+#if CONFIG_AUDIT
+/*
+ * mac_audit_data_zone is the zone used for data pushed into the audit
+ * record by policies. Using a zone simplifies memory management of this
+ * data, and allows tracking of the amount of data in flight.
+ */
+extern zone_t mac_audit_data_zone;
 #endif
 
 /*
@@ -421,6 +430,7 @@ au_event_t       audit_fcntl_command_event(int cmd, int oflags, int error);
  * asynchronously.
  */
 int              audit_send_trigger(unsigned int trigger);
+int              audit_send_analytics(char* id, char* name);
 
 /*
  * Accessor functions to manage global audit state.
@@ -455,7 +465,6 @@ void     audit_pipe_submit_user(void *record, u_int record_len);
 /*
  * Audit MAC prototypes.
  */
-void    audit_mac_init(void);
 int     audit_mac_new(proc_t p, struct kaudit_record *ar);
 void    audit_mac_free(struct kaudit_record *ar);
 int     audit_mac_syscall_enter(unsigned short code, proc_t p,

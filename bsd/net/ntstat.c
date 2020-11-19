@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2010-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2010-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -42,7 +42,6 @@
 #include <kern/debug.h>
 
 #include <libkern/libkern.h>
-#include <libkern/OSMalloc.h>
 #include <libkern/OSAtomic.h>
 #include <libkern/locks.h>
 
@@ -84,11 +83,11 @@ SYSCTL_INT(_net, OID_AUTO, statistics, CTLFLAG_RW | CTLFLAG_LOCKED,
     &nstat_collect, 0, "Collect detailed statistics");
 #endif /* (DEBUG || DEVELOPMENT) */
 
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 static int nstat_privcheck = 1;
-#else
+#else /* XNU_TARGET_OS_OSX */
 static int nstat_privcheck = 0;
-#endif
+#endif /* XNU_TARGET_OS_OSX */
 SYSCTL_INT(_net, OID_AUTO, statistics_privcheck, CTLFLAG_RW | CTLFLAG_LOCKED,
     &nstat_privcheck, 0, "Entitlement check");
 
@@ -145,11 +144,11 @@ enum{
 	NSTAT_FLAG_SYSINFO_SUBSCRIBED   = (1 << 3),
 };
 
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX
 #define QUERY_CONTINUATION_SRC_COUNT 50
-#else
+#else /* XNU_TARGET_OS_OSX */
 #define QUERY_CONTINUATION_SRC_COUNT 100
-#endif
+#endif /* XNU_TARGET_OS_OSX */
 
 typedef TAILQ_HEAD(, nstat_src)     tailq_head_nstat_src;
 typedef TAILQ_ENTRY(nstat_src)      tailq_entry_nstat_src;
@@ -187,7 +186,7 @@ typedef struct nstat_provider {
 	errno_t                 (*nstat_counts)(nstat_provider_cookie_t cookie, struct nstat_counts *out_counts, int *out_gone);
 	errno_t                 (*nstat_watcher_add)(nstat_control_state *state, nstat_msg_add_all_srcs *req);
 	void                    (*nstat_watcher_remove)(nstat_control_state *state);
-	errno_t                 (*nstat_copy_descriptor)(nstat_provider_cookie_t cookie, void *data, u_int32_t len);
+	errno_t                 (*nstat_copy_descriptor)(nstat_provider_cookie_t cookie, void *data, size_t len);
 	void                    (*nstat_release)(nstat_provider_cookie_t cookie, boolean_t locked);
 	bool                    (*nstat_reporting_allowed)(nstat_provider_cookie_t cookie, nstat_provider_filter *filter);
 } nstat_provider;
@@ -238,9 +237,10 @@ static void nstat_control_register(void);
  *     nstat_mtx
  *         state->ncs_mtx
  */
-static volatile OSMallocTag     nstat_malloc_tag = NULL;
+static KALLOC_HEAP_DEFINE(KHEAP_NET_STAT, NET_STAT_CONTROL_NAME,
+    KHEAP_ID_DEFAULT);
 static nstat_control_state      *nstat_controls = NULL;
-static uint64_t                         nstat_idle_time = 0;
+static uint64_t                  nstat_idle_time = 0;
 static decl_lck_mtx_data(, nstat_mtx);
 
 /* some extern definitions */
@@ -407,22 +407,11 @@ static void nstat_init_ifnet_provider(void);
 __private_extern__ void
 nstat_init(void)
 {
-	if (nstat_malloc_tag != NULL) {
-		return;
-	}
-
-	OSMallocTag tag = OSMalloc_Tagalloc(NET_STAT_CONTROL_NAME, OSMT_DEFAULT);
-	if (!OSCompareAndSwapPtr(NULL, tag, &nstat_malloc_tag)) {
-		OSMalloc_Tagfree(tag);
-		tag = nstat_malloc_tag;
-	} else {
-		// we need to initialize other things, we do it here as this code path will only be hit once;
-		nstat_init_route_provider();
-		nstat_init_tcp_provider();
-		nstat_init_udp_provider();
-		nstat_init_ifnet_provider();
-		nstat_control_register();
-	}
+	nstat_init_route_provider();
+	nstat_init_tcp_provider();
+	nstat_init_udp_provider();
+	nstat_init_ifnet_provider();
+	nstat_control_register();
 }
 
 #pragma mark -- Aligned Buffer Allocation --
@@ -434,14 +423,18 @@ struct align_header {
 
 static void*
 nstat_malloc_aligned(
-	u_int32_t       length,
+	size_t          length,
 	u_int8_t        alignment,
-	OSMallocTag     tag)
+	zalloc_flags_t  flags)
 {
 	struct align_header     *hdr = NULL;
-	u_int32_t size = length + sizeof(*hdr) + alignment - 1;
+	size_t size = length + sizeof(*hdr) + alignment - 1;
 
-	u_int8_t *buffer = OSMalloc(size, tag);
+	// Arbitrary limit to prevent abuse
+	if (length > (64 * 1024)) {
+		return NULL;
+	}
+	u_int8_t *buffer = kheap_alloc(KHEAP_NET_STAT, size, flags);
 	if (buffer == NULL) {
 		return NULL;
 	}
@@ -458,11 +451,10 @@ nstat_malloc_aligned(
 
 static void
 nstat_free_aligned(
-	void            *buffer,
-	OSMallocTag     tag)
+	void            *buffer)
 {
 	struct align_header *hdr = (struct align_header*)(void *)((u_int8_t*)buffer - sizeof(*hdr));
-	OSFree(((char*)buffer) - hdr->offset, hdr->length, tag);
+	(kheap_free)(KHEAP_NET_STAT, (char *)buffer - hdr->offset, hdr->length);
 }
 
 #pragma mark -- Route Provider --
@@ -692,7 +684,7 @@ static errno_t
 nstat_route_copy_descriptor(
 	nstat_provider_cookie_t cookie,
 	void                    *data,
-	u_int32_t               len)
+	size_t                  len)
 {
 	nstat_route_descriptor  *desc = (nstat_route_descriptor*)data;
 	if (len < sizeof(*desc)) {
@@ -780,19 +772,14 @@ nstat_route_attach(
 		return result;
 	}
 
-	if (nstat_malloc_tag == NULL) {
-		nstat_init();
-	}
-
-	result = nstat_malloc_aligned(sizeof(*result), sizeof(u_int64_t), nstat_malloc_tag);
+	result = nstat_malloc_aligned(sizeof(*result), sizeof(u_int64_t),
+	    Z_WAITOK | Z_ZERO);
 	if (!result) {
 		return result;
 	}
 
-	bzero(result, sizeof(*result));
-
 	if (!OSCompareAndSwapPtr(NULL, result, &rte->rt_stats)) {
-		nstat_free_aligned(result, nstat_malloc_tag);
+		nstat_free_aligned(result);
 		result = rte->rt_stats;
 	}
 
@@ -804,7 +791,7 @@ nstat_route_detach(
 	struct rtentry  *rte)
 {
 	if (rte->rt_stats) {
-		nstat_free_aligned(rte->rt_stats, nstat_malloc_tag);
+		nstat_free_aligned(rte->rt_stats);
 		rte->rt_stats = NULL;
 	}
 }
@@ -1013,7 +1000,7 @@ nstat_tucookie_alloc_internal(
 {
 	struct nstat_tucookie *cookie;
 
-	cookie = OSMalloc(sizeof(*cookie), nstat_malloc_tag);
+	cookie = kheap_alloc(KHEAP_NET_STAT, sizeof(*cookie), Z_WAITOK);
 	if (cookie == NULL) {
 		return NULL;
 	}
@@ -1021,7 +1008,7 @@ nstat_tucookie_alloc_internal(
 		LCK_MTX_ASSERT(&nstat_mtx, LCK_MTX_ASSERT_NOTOWNED);
 	}
 	if (ref && in_pcb_checkstate(inp, WNT_ACQUIRE, locked) == WNT_STOPUSING) {
-		OSFree(cookie, sizeof(*cookie), nstat_malloc_tag);
+		kheap_free(KHEAP_NET_STAT, cookie, sizeof(*cookie));
 		return NULL;
 	}
 	bzero(cookie, sizeof(*cookie));
@@ -1069,7 +1056,7 @@ nstat_tucookie_release_internal(
 		OSDecrementAtomic(&cookie->inp->inp_nstat_refcnt);
 	}
 	in_pcb_checkstate(cookie->inp, WNT_RELEASE, inplock);
-	OSFree(cookie, sizeof(*cookie), nstat_malloc_tag);
+	kheap_free(KHEAP_NET_STAT, cookie, sizeof(*cookie));
 }
 
 static void
@@ -1125,7 +1112,6 @@ nstat_tcpudp_lookup(
 	}
 	break;
 
-#if INET6
 	case AF_INET6:
 	{
 		union{
@@ -1146,7 +1132,6 @@ nstat_tcpudp_lookup(
 		    local.in6, param->local.v6.sin6_port, 1, NULL);
 	}
 	break;
-#endif
 
 	default:
 		return EINVAL;
@@ -1507,7 +1492,7 @@ static errno_t
 nstat_tcp_copy_descriptor(
 	nstat_provider_cookie_t cookie,
 	void                    *data,
-	u_int32_t               len)
+	size_t                  len)
 {
 	if (len < sizeof(nstat_tcp_descriptor)) {
 		return EINVAL;
@@ -1583,6 +1568,7 @@ nstat_tcp_copy_descriptor(
 			desc->epid = desc->pid;
 			memcpy(desc->euuid, desc->uuid, sizeof(desc->uuid));
 		}
+		uuid_copy(desc->fuuid, inp->necp_client_uuid);
 		desc->sndbufsize = so->so_snd.sb_hiwat;
 		desc->sndbufused = so->so_snd.sb_cc;
 		desc->rcvbufsize = so->so_rcv.sb_hiwat;
@@ -1852,7 +1838,7 @@ static errno_t
 nstat_udp_copy_descriptor(
 	nstat_provider_cookie_t cookie,
 	void                    *data,
-	u_int32_t               len)
+	size_t                  len)
 {
 	if (len < sizeof(nstat_udp_descriptor)) {
 		return EINVAL;
@@ -1929,6 +1915,7 @@ nstat_udp_copy_descriptor(
 			desc->epid = desc->pid;
 			memcpy(desc->euuid, desc->uuid, sizeof(desc->uuid));
 		}
+		uuid_copy(desc->fuuid, inp->necp_client_uuid);
 		desc->rcvbufsize = so->so_rcv.sb_hiwat;
 		desc->rcvbufused = so->so_rcv.sb_cc;
 		desc->traffic_class = so->so_traffic_class;
@@ -2003,11 +1990,10 @@ nstat_ifnet_lookup(
 			return result;
 		}
 	}
-	cookie = OSMalloc(sizeof(*cookie), nstat_malloc_tag);
+	cookie = kheap_alloc(KHEAP_NET_STAT, sizeof(*cookie), Z_WAITOK | Z_ZERO);
 	if (cookie == NULL) {
 		return ENOMEM;
 	}
-	bzero(cookie, sizeof(*cookie));
 
 	ifnet_head_lock_shared();
 	TAILQ_FOREACH(ifp, &ifnet_head, if_link)
@@ -2052,7 +2038,7 @@ nstat_ifnet_lookup(
 		lck_mtx_unlock(&nstat_mtx);
 	}
 	if (cookie->ifp == NULL) {
-		OSFree(cookie, sizeof(*cookie), nstat_malloc_tag);
+		kheap_free(KHEAP_NET_STAT, cookie, sizeof(*cookie));
 	}
 
 	return ifp ? 0 : EINVAL;
@@ -2158,7 +2144,7 @@ nstat_ifnet_release(
 		ifnet_decr_iorefcnt(ifp);
 	}
 	ifnet_release(ifp);
-	OSFree(ifcookie, sizeof(*ifcookie), nstat_malloc_tag);
+	kheap_free(KHEAP_NET_STAT, ifcookie, sizeof(*ifcookie));
 }
 
 static void
@@ -2675,7 +2661,7 @@ static errno_t
 nstat_ifnet_copy_descriptor(
 	nstat_provider_cookie_t cookie,
 	void                    *data,
-	u_int32_t               len)
+	size_t                  len)
 {
 	nstat_ifnet_descriptor *desc = (nstat_ifnet_descriptor *)data;
 	struct nstat_ifnet_cookie *ifcookie =
@@ -2761,6 +2747,15 @@ nstat_set_keyval_scalar(nstat_sysinfo_keyval *kv, int key, u_int32_t val)
 }
 
 static void
+nstat_set_keyval_u64_scalar(nstat_sysinfo_keyval *kv, int key, u_int64_t val)
+{
+	kv->nstat_sysinfo_key = key;
+	kv->nstat_sysinfo_flags = NSTAT_SYSINFO_FLAG_SCALAR;
+	kv->u.nstat_sysinfo_scalar = val;
+	kv->nstat_sysinfo_valsize = sizeof(kv->u.nstat_sysinfo_scalar);
+}
+
+static void
 nstat_set_keyval_string(nstat_sysinfo_keyval *kv, int key, u_int8_t *buf,
     u_int32_t len)
 {
@@ -2817,11 +2812,10 @@ nstat_sysinfo_send_data_internal(
 	countsize += sizeof(nstat_sysinfo_keyval) * nkeyvals;
 	allocsize += countsize;
 
-	syscnt = OSMalloc(allocsize, nstat_malloc_tag);
+	syscnt = kheap_alloc(KHEAP_TEMP, allocsize, Z_WAITOK | Z_ZERO);
 	if (syscnt == NULL) {
 		return;
 	}
-	bzero(syscnt, allocsize);
 
 	kv = (nstat_sysinfo_keyval *) &syscnt->counts.nstat_sysinfo_keyvals;
 	switch (data->flags) {
@@ -3042,22 +3036,22 @@ nstat_sysinfo_send_data_internal(
 		nstat_set_keyval_scalar(&kv[i++],
 		    NSTAT_SYSINFO_MPTCP_INTERACTIVE_CELL_FROM_WIFI,
 		    data->u.tcp_stats.mptcp_interactive_cell_from_wifi);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_MPTCP_HANDOVER_CELL_BYTES,
 		    data->u.tcp_stats.mptcp_handover_cell_bytes);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_MPTCP_INTERACTIVE_CELL_BYTES,
 		    data->u.tcp_stats.mptcp_interactive_cell_bytes);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_MPTCP_AGGREGATE_CELL_BYTES,
 		    data->u.tcp_stats.mptcp_aggregate_cell_bytes);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_MPTCP_HANDOVER_ALL_BYTES,
 		    data->u.tcp_stats.mptcp_handover_all_bytes);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_MPTCP_INTERACTIVE_ALL_BYTES,
 		    data->u.tcp_stats.mptcp_interactive_all_bytes);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_MPTCP_AGGREGATE_ALL_BYTES,
 		    data->u.tcp_stats.mptcp_aggregate_all_bytes);
 		nstat_set_keyval_scalar(&kv[i++],
@@ -3083,142 +3077,142 @@ nstat_sysinfo_send_data_internal(
 		nstat_set_keyval_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_PROTO,
 		    data->u.ifnet_ecn_stats.ifnet_proto);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_CLIENT_SETUP,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_client_setup);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_SERVER_SETUP,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_server_setup);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_CLIENT_SUCCESS,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_client_success);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_SERVER_SUCCESS,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_server_success);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_PEER_NOSUPPORT,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_peer_nosupport);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_SYN_LOST,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_syn_lost);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_SYNACK_LOST,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_synack_lost);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_RECV_CE,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_recv_ce);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_RECV_ECE,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_recv_ece);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_CONN_RECV_CE,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_conn_recv_ce);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_CONN_RECV_ECE,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_conn_recv_ece);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_CONN_PLNOCE,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_conn_plnoce);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_CONN_PLCE,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_conn_plce);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_CONN_NOPLCE,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_conn_noplce);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_FALLBACK_SYNLOSS,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_fallback_synloss);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_FALLBACK_REORDER,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_fallback_reorder);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_FALLBACK_CE,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_fallback_ce);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_ON_RTT_AVG,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.rtt_avg);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_ON_RTT_VAR,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.rtt_var);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_ON_OOPERCENT,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.oo_percent);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_ON_SACK_EPISODE,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.sack_episodes);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_ON_REORDER_PERCENT,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.reorder_percent);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_ON_RXMIT_PERCENT,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.rxmit_percent);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_ON_RXMIT_DROP,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.rxmit_drop);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_OFF_RTT_AVG,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.rtt_avg);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_OFF_RTT_VAR,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.rtt_var);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_OFF_OOPERCENT,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.oo_percent);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_OFF_SACK_EPISODE,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.sack_episodes);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_OFF_REORDER_PERCENT,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.reorder_percent);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_OFF_RXMIT_PERCENT,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.rxmit_percent);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_OFF_RXMIT_DROP,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.rxmit_drop);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_ON_TOTAL_TXPKTS,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.total_txpkts);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_ON_TOTAL_RXMTPKTS,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.total_rxmitpkts);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_ON_TOTAL_RXPKTS,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.total_rxpkts);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_ON_TOTAL_OOPKTS,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.total_oopkts);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_ON_DROP_RST,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_on.rst_drop);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_OFF_TOTAL_TXPKTS,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.total_txpkts);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_OFF_TOTAL_RXMTPKTS,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.total_rxmitpkts);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_OFF_TOTAL_RXPKTS,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.total_rxpkts);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_OFF_TOTAL_OOPKTS,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.total_oopkts);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_OFF_DROP_RST,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_off.rst_drop);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_TOTAL_CONN,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_total_conn);
 		nstat_set_keyval_scalar(&kv[i++],
 		    NSTAT_SYSINFO_IFNET_UNSENT_DATA,
 		    data->unsent_data_cnt);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_FALLBACK_DROPRST,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_fallback_droprst);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_FALLBACK_DROPRXMT,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_fallback_droprxmt);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_ECN_IFNET_FALLBACK_SYNRST,
 		    data->u.ifnet_ecn_stats.ecn_stat.ecn_fallback_synrst);
 		break;
@@ -3229,28 +3223,28 @@ nstat_sysinfo_send_data_internal(
 		    NSTAT_SYSINFO_LIM_IFNET_SIGNATURE,
 		    data->u.lim_stats.ifnet_signature,
 		    data->u.lim_stats.ifnet_siglen);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_LIM_IFNET_DL_MAX_BANDWIDTH,
 		    data->u.lim_stats.lim_stat.lim_dl_max_bandwidth);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_LIM_IFNET_UL_MAX_BANDWIDTH,
 		    data->u.lim_stats.lim_stat.lim_ul_max_bandwidth);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_LIM_IFNET_PACKET_LOSS_PERCENT,
 		    data->u.lim_stats.lim_stat.lim_packet_loss_percent);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_LIM_IFNET_PACKET_OOO_PERCENT,
 		    data->u.lim_stats.lim_stat.lim_packet_ooo_percent);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_LIM_IFNET_RTT_VARIANCE,
 		    data->u.lim_stats.lim_stat.lim_rtt_variance);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_LIM_IFNET_RTT_MIN,
 		    data->u.lim_stats.lim_stat.lim_rtt_min);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_LIM_IFNET_RTT_AVG,
 		    data->u.lim_stats.lim_stat.lim_rtt_average);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_LIM_IFNET_CONN_TIMEOUT_PERCENT,
 		    data->u.lim_stats.lim_stat.lim_conn_timeout_percent);
 		nstat_set_keyval_scalar(&kv[i++],
@@ -3266,135 +3260,135 @@ nstat_sysinfo_send_data_internal(
 	}
 	case NSTAT_SYSINFO_NET_API_STATS:
 	{
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_IF_FLTR_ATTACH,
 		    data->u.net_api_stats.net_api_stats.nas_iflt_attach_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_IF_FLTR_ATTACH_OS,
 		    data->u.net_api_stats.net_api_stats.nas_iflt_attach_os_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_IP_FLTR_ADD,
 		    data->u.net_api_stats.net_api_stats.nas_ipf_add_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_IP_FLTR_ADD_OS,
 		    data->u.net_api_stats.net_api_stats.nas_ipf_add_os_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_FLTR_ATTACH,
 		    data->u.net_api_stats.net_api_stats.nas_sfltr_register_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_FLTR_ATTACH_OS,
 		    data->u.net_api_stats.net_api_stats.nas_sfltr_register_os_total);
 
 
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_ALLOC_TOTAL,
 		    data->u.net_api_stats.net_api_stats.nas_socket_alloc_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_ALLOC_KERNEL,
 		    data->u.net_api_stats.net_api_stats.nas_socket_in_kernel_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_ALLOC_KERNEL_OS,
 		    data->u.net_api_stats.net_api_stats.nas_socket_in_kernel_os_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_NECP_CLIENTUUID,
 		    data->u.net_api_stats.net_api_stats.nas_socket_necp_clientuuid_total);
 
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_DOMAIN_LOCAL,
 		    data->u.net_api_stats.net_api_stats.nas_socket_domain_local_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_DOMAIN_ROUTE,
 		    data->u.net_api_stats.net_api_stats.nas_socket_domain_route_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_DOMAIN_INET,
 		    data->u.net_api_stats.net_api_stats.nas_socket_domain_inet_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_DOMAIN_INET6,
 		    data->u.net_api_stats.net_api_stats.nas_socket_domain_inet6_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_DOMAIN_SYSTEM,
 		    data->u.net_api_stats.net_api_stats.nas_socket_domain_system_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_DOMAIN_MULTIPATH,
 		    data->u.net_api_stats.net_api_stats.nas_socket_domain_multipath_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_DOMAIN_KEY,
 		    data->u.net_api_stats.net_api_stats.nas_socket_domain_key_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_DOMAIN_NDRV,
 		    data->u.net_api_stats.net_api_stats.nas_socket_domain_ndrv_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_DOMAIN_OTHER,
 		    data->u.net_api_stats.net_api_stats.nas_socket_domain_other_total);
 
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_INET_STREAM,
 		    data->u.net_api_stats.net_api_stats.nas_socket_inet_stream_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_INET_DGRAM,
 		    data->u.net_api_stats.net_api_stats.nas_socket_inet_dgram_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_INET_DGRAM_CONNECTED,
 		    data->u.net_api_stats.net_api_stats.nas_socket_inet_dgram_connected);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_INET_DGRAM_DNS,
 		    data->u.net_api_stats.net_api_stats.nas_socket_inet_dgram_dns);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_INET_DGRAM_NO_DATA,
 		    data->u.net_api_stats.net_api_stats.nas_socket_inet_dgram_no_data);
 
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_INET6_STREAM,
 		    data->u.net_api_stats.net_api_stats.nas_socket_inet6_stream_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_INET6_DGRAM,
 		    data->u.net_api_stats.net_api_stats.nas_socket_inet6_dgram_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_INET6_DGRAM_CONNECTED,
 		    data->u.net_api_stats.net_api_stats.nas_socket_inet6_dgram_connected);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_INET6_DGRAM_DNS,
 		    data->u.net_api_stats.net_api_stats.nas_socket_inet6_dgram_dns);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_INET6_DGRAM_NO_DATA,
 		    data->u.net_api_stats.net_api_stats.nas_socket_inet6_dgram_no_data);
 
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_INET_MCAST_JOIN,
 		    data->u.net_api_stats.net_api_stats.nas_socket_mcast_join_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_SOCK_INET_MCAST_JOIN_OS,
 		    data->u.net_api_stats.net_api_stats.nas_socket_mcast_join_os_total);
 
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_NEXUS_FLOW_INET_STREAM,
 		    data->u.net_api_stats.net_api_stats.nas_nx_flow_inet_stream_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_NEXUS_FLOW_INET_DATAGRAM,
 		    data->u.net_api_stats.net_api_stats.nas_nx_flow_inet_dgram_total);
 
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_NEXUS_FLOW_INET6_STREAM,
 		    data->u.net_api_stats.net_api_stats.nas_nx_flow_inet6_stream_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_NEXUS_FLOW_INET6_DATAGRAM,
 		    data->u.net_api_stats.net_api_stats.nas_nx_flow_inet6_dgram_total);
 
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_IFNET_ALLOC,
 		    data->u.net_api_stats.net_api_stats.nas_ifnet_alloc_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_IFNET_ALLOC_OS,
 		    data->u.net_api_stats.net_api_stats.nas_ifnet_alloc_os_total);
 
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_PF_ADDRULE,
 		    data->u.net_api_stats.net_api_stats.nas_pf_addrule_total);
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_PF_ADDRULE_OS,
 		    data->u.net_api_stats.net_api_stats.nas_pf_addrule_os);
 
-		nstat_set_keyval_scalar(&kv[i++],
+		nstat_set_keyval_u64_scalar(&kv[i++],
 		    NSTAT_SYSINFO_API_VMNET_START,
 		    data->u.net_api_stats.net_api_stats.nas_vmnet_total);
 
@@ -3413,15 +3407,16 @@ nstat_sysinfo_send_data_internal(
 		    sizeof(nstat_sysinfo_keyval) * i;
 		finalsize += countsize;
 		syscnt->hdr.type = NSTAT_MSG_TYPE_SYSINFO_COUNTS;
-		syscnt->hdr.length = finalsize;
-		syscnt->counts.nstat_sysinfo_len = countsize;
+		assert(finalsize <= MAX_NSTAT_MSG_HDR_LENGTH);
+		syscnt->hdr.length = (u_int16_t)finalsize;
+		syscnt->counts.nstat_sysinfo_len = (u_int32_t)countsize;
 
 		result = ctl_enqueuedata(control->ncs_kctl,
 		    control->ncs_unit, syscnt, finalsize, CTL_DATA_EOR);
 		if (result != 0) {
 			nstat_stats.nstat_sysinfofailures += 1;
 		}
-		OSFree(syscnt, allocsize, nstat_malloc_tag);
+		kheap_free(KHEAP_TEMP, syscnt, allocsize);
 	}
 	return;
 }
@@ -3472,7 +3467,7 @@ nstat_net_api_report_stats(void)
 		return;
 	}
 
-	st->report_interval = uptime - net_api_stats_last_report_time;
+	st->report_interval = (u_int32_t)(uptime - net_api_stats_last_report_time);
 	net_api_stats_last_report_time = uptime;
 
 	data.flags = NSTAT_SYSINFO_NET_API_STATS;
@@ -3709,8 +3704,10 @@ static errno_t
 nstat_accumulate_msg(
 	nstat_control_state     *state,
 	nstat_msg_hdr           *hdr,
-	size_t                          length)
+	size_t                  length)
 {
+	assert(length <= MAX_NSTAT_MSG_HDR_LENGTH);
+
 	if (state->ncs_accumulated && mbuf_trailingspace(state->ncs_accumulated) < length) {
 		// Will send the current mbuf
 		nstat_flush_accumulated_msgs(state);
@@ -3731,7 +3728,7 @@ nstat_accumulate_msg(
 	}
 
 	if (result == 0) {
-		hdr->length = length;
+		hdr->length = (u_int16_t)length;
 		result = mbuf_copyback(state->ncs_accumulated, mbuf_len(state->ncs_accumulated),
 		    length, hdr, MBUF_DONTWAIT);
 	}
@@ -3852,7 +3849,7 @@ nstat_control_cleanup_source(
 	}
 	// Cleanup the source if we found it.
 	src->provider->nstat_release(src->cookie, locked);
-	OSFree(src, sizeof(*src), nstat_malloc_tag);
+	kheap_free(KHEAP_NET_STAT, src, sizeof(*src));
 }
 
 
@@ -3876,12 +3873,12 @@ nstat_control_connect(
 	struct sockaddr_ctl *sac,
 	void                **uinfo)
 {
-	nstat_control_state *state = OSMalloc(sizeof(*state), nstat_malloc_tag);
+	nstat_control_state *state = kheap_alloc(KHEAP_NET_STAT,
+	    sizeof(*state), Z_WAITOK | Z_ZERO);
 	if (state == NULL) {
 		return ENOMEM;
 	}
 
-	bzero(state, sizeof(*state));
 	lck_mtx_init(&state->ncs_mtx, nstat_lck_grp, NULL);
 	state->ncs_kctl = kctl;
 	state->ncs_unit = sac->sc_unit;
@@ -3956,7 +3953,7 @@ nstat_control_disconnect(
 	}
 
 	lck_mtx_destroy(&state->ncs_mtx, nstat_lck_grp);
-	OSFree(state, sizeof(*state), nstat_malloc_tag);
+	kheap_free(KHEAP_NET_STAT, state, sizeof(*state));
 
 	return 0;
 }
@@ -4057,7 +4054,9 @@ nstat_control_send_description(
 	// Allocate storage for the descriptor message
 	mbuf_t          msg;
 	unsigned int    one = 1;
-	u_int32_t       size = offsetof(nstat_msg_src_description, data) + src->provider->nstat_descriptor_length;
+	size_t          size = offsetof(nstat_msg_src_description, data) + src->provider->nstat_descriptor_length;
+	assert(size <= MAX_NSTAT_MSG_HDR_LENGTH);
+
 	if (mbuf_allocpacket(MBUF_DONTWAIT, size, &one, &msg) != 0) {
 		return ENOMEM;
 	}
@@ -4077,7 +4076,7 @@ nstat_control_send_description(
 
 	desc->hdr.context = context;
 	desc->hdr.type = NSTAT_MSG_TYPE_SRC_DESC;
-	desc->hdr.length = size;
+	desc->hdr.length = (u_int16_t)size;
 	desc->hdr.flags = hdr_flags;
 	desc->srcref = src->srcref;
 	desc->event_flags = 0;
@@ -4109,7 +4108,7 @@ nstat_control_append_description(
 
 	nstat_msg_src_description *desc = (nstat_msg_src_description*)buffer;
 	desc->hdr.type = NSTAT_MSG_TYPE_SRC_DESC;
-	desc->hdr.length = size;
+	desc->hdr.length = (u_int16_t)size;
 	desc->srcref = src->srcref;
 	desc->event_flags = 0;
 	desc->provider = src->provider->nstat_provider_id;
@@ -4145,8 +4144,10 @@ nstat_control_send_update(
 	// Allocate storage for the descriptor message
 	mbuf_t          msg;
 	unsigned int    one = 1;
-	u_int32_t       size = offsetof(nstat_msg_src_update, data) +
+	size_t          size = offsetof(nstat_msg_src_update, data) +
 	    src->provider->nstat_descriptor_length;
+	assert(size <= MAX_NSTAT_MSG_HDR_LENGTH);
+
 	if (mbuf_allocpacket(MBUF_DONTWAIT, size, &one, &msg) != 0) {
 		return ENOMEM;
 	}
@@ -4155,7 +4156,7 @@ nstat_control_send_update(
 	bzero(desc, size);
 	desc->hdr.context = context;
 	desc->hdr.type = NSTAT_MSG_TYPE_SRC_UPDATE;
-	desc->hdr.length = size;
+	desc->hdr.length = (u_int16_t)size;
 	desc->hdr.flags = hdr_flags;
 	desc->srcref = src->srcref;
 	desc->event_flags = event;
@@ -4214,7 +4215,7 @@ nstat_control_append_update(
 
 	nstat_msg_src_update    *desc = (nstat_msg_src_update*)buffer;
 	desc->hdr.type = NSTAT_MSG_TYPE_SRC_UPDATE;
-	desc->hdr.length = size;
+	desc->hdr.length = (u_int16_t)size;
 	desc->srcref = src->srcref;
 	desc->event_flags = 0;
 	desc->provider = src->provider->nstat_provider_id;
@@ -4288,7 +4289,7 @@ nstat_control_handle_add_request(
 	}
 
 	// Calculate the length of the parameter field
-	int32_t paramlength = mbuf_pkthdr_len(m) - offsetof(nstat_msg_add_src_req, param);
+	ssize_t paramlength = mbuf_pkthdr_len(m) - offsetof(nstat_msg_add_src_req, param);
 	if (paramlength < 0 || paramlength > 2 * 1024) {
 		return EINVAL;
 	}
@@ -4298,7 +4299,7 @@ nstat_control_handle_add_request(
 	nstat_msg_add_src_req   *req = mbuf_data(m);
 	if (mbuf_pkthdr_len(m) > mbuf_len(m)) {
 		// parameter is too large, we need to make a contiguous copy
-		void    *data = OSMalloc(paramlength, nstat_malloc_tag);
+		void *data = kheap_alloc(KHEAP_TEMP, paramlength, Z_WAITOK);
 
 		if (!data) {
 			return ENOMEM;
@@ -4307,7 +4308,7 @@ nstat_control_handle_add_request(
 		if (result == 0) {
 			result = nstat_lookup_entry(req->provider, data, paramlength, &provider, &cookie);
 		}
-		OSFree(data, paramlength, nstat_malloc_tag);
+		kheap_free(KHEAP_TEMP, data, paramlength);
 	} else {
 		result = nstat_lookup_entry(req->provider, (void*)&req->param, paramlength, &provider, &cookie);
 	}
@@ -4436,14 +4437,15 @@ nstat_control_source_add(
 		nstat_msg_src_added     *add = mbuf_data(msg);
 		bzero(add, sizeof(*add));
 		add->hdr.type = NSTAT_MSG_TYPE_SRC_ADDED;
-		add->hdr.length = mbuf_len(msg);
+		assert(mbuf_len(msg) <= MAX_NSTAT_MSG_HDR_LENGTH);
+		add->hdr.length = (u_int16_t)mbuf_len(msg);
 		add->hdr.context = context;
 		add->provider = provider->nstat_provider_id;
 		srcrefp = &add->srcref;
 	}
 
 	// Allocate storage for the source
-	nstat_src       *src = OSMalloc(sizeof(*src), nstat_malloc_tag);
+	nstat_src *src = kheap_alloc(KHEAP_NET_STAT, sizeof(*src), Z_WAITOK);
 	if (src == NULL) {
 		if (msg) {
 			mbuf_freem(msg);
@@ -4461,7 +4463,7 @@ nstat_control_source_add(
 
 	if (state->ncs_flags & NSTAT_FLAG_CLEANUP || src->srcref == NSTAT_SRC_REF_INVALID) {
 		lck_mtx_unlock(&state->ncs_mtx);
-		OSFree(src, sizeof(*src), nstat_malloc_tag);
+		kheap_free(KHEAP_NET_STAT, src, sizeof(*src));
 		if (msg) {
 			mbuf_freem(msg);
 		}
@@ -4479,7 +4481,7 @@ nstat_control_source_add(
 		if (result != 0) {
 			nstat_stats.nstat_srcaddedfailures += 1;
 			lck_mtx_unlock(&state->ncs_mtx);
-			OSFree(src, sizeof(*src), nstat_malloc_tag);
+			kheap_free(KHEAP_NET_STAT, src, sizeof(*src));
 			mbuf_freem(msg);
 			return result;
 		}
@@ -4997,7 +4999,8 @@ nstat_control_send(
 	// Fix everything up so old clients continue to work
 	if (hdr->length != mbuf_pkthdr_len(m)) {
 		hdr->flags = 0;
-		hdr->length = mbuf_pkthdr_len(m);
+		assert(mbuf_pkthdr_len(m) <= MAX_NSTAT_MSG_HDR_LENGTH);
+		hdr->length = (u_int16_t)mbuf_pkthdr_len(m);
 		if (hdr == &storage) {
 			mbuf_copyback(m, 0, sizeof(*hdr), hdr, MBUF_DONTWAIT);
 		}
@@ -5046,7 +5049,7 @@ nstat_control_send(
 
 		bzero(&err, sizeof(err));
 		err.hdr.type = NSTAT_MSG_TYPE_ERROR;
-		err.hdr.length = sizeof(err) + mbuf_pkthdr_len(m);
+		err.hdr.length = (u_int16_t)(sizeof(err) + mbuf_pkthdr_len(m));
 		err.hdr.context = hdr->context;
 		err.error = result;
 
@@ -5158,7 +5161,7 @@ ntstat_tcp_progress_indicators(struct sysctl_req *req)
 	if (error != 0) {
 		return error;
 	}
-	error = tcp_progress_indicators_for_interface(requested.ifindex, requested.recentflow_maxduration, (uint16_t)requested.filter_flags, &indicators);
+	error = tcp_progress_indicators_for_interface((unsigned int)requested.ifindex, requested.recentflow_maxduration, (uint16_t)requested.filter_flags, &indicators);
 	if (error != 0) {
 		return error;
 	}

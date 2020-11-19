@@ -140,7 +140,7 @@ convert_semaphore_to_port(semaphore_t semaphore)
 	 * semaphore_notify if this is the first send right
 	 */
 	if (!ipc_kobject_make_send_lazy_alloc_port(&semaphore->port,
-	    (ipc_kobject_t) semaphore, IKOT_SEMAPHORE)) {
+	    (ipc_kobject_t) semaphore, IKOT_SEMAPHORE, false, 0)) {
 		semaphore_dereference(semaphore);
 	}
 	return semaphore->port;

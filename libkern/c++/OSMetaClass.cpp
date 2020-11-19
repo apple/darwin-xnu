@@ -129,7 +129,7 @@ struct ExpansionData {
 /*********************************************************************
 * Reserved vtable functions.
 *********************************************************************/
-#if SLOT_USED
+#if defined(__arm64__) || defined(__arm__)
 void
 OSMetaClassBase::_RESERVEDOSMetaClassBase0()
 {
@@ -150,7 +150,7 @@ OSMetaClassBase::_RESERVEDOSMetaClassBase3()
 {
 	panic("OSMetaClassBase::_RESERVEDOSMetaClassBase%d called.", 3);
 }
-#endif /* SLOT_USED */
+#endif /* defined(__arm64__) || defined(__arm__) */
 
 // As these slots are used move them up inside the #if above
 void
@@ -196,14 +196,13 @@ OSMetaClassBase::_RESERVEDOSMetaClassBase6()
  */
 
 OSMetaClassBase::_ptf_t
-#if defined(HAS_APPLE_PAC) && __has_feature(ptrauth_type_discriminator)
+#if defined(HAS_APPLE_PAC) && \
+        __has_feature(ptrauth_member_function_pointer_type_discrimination)
 OSMetaClassBase::_ptmf2ptf(const OSMetaClassBase *self __attribute__((unused)),
-    void (OSMetaClassBase::*func)(void), uintptr_t typeDisc)
+    void (OSMetaClassBase::*func)(void))
 #else
 OSMetaClassBase::_ptmf2ptf(const OSMetaClassBase *self,
-    void (OSMetaClassBase::*func)(void),
-    uintptr_t typeDisc
-    __attribute__((unused)))
+    void (OSMetaClassBase::*func)(void))
 #endif
 {
 	struct ptmf_t {
@@ -219,11 +218,18 @@ OSMetaClassBase::_ptmf2ptf(const OSMetaClassBase *self,
 	map.fIn = func;
 	pfn     = map.pTMF.fPFN;
 
-#if defined(HAS_APPLE_PAC) && __has_feature(ptrauth_type_discriminator)
+#if defined(HAS_APPLE_PAC) && \
+	__has_feature(ptrauth_member_function_pointer_type_discrimination)
 	// Authenticate 'pfn' using the member function pointer type discriminator
 	// and resign it as a C function pointer. 'pfn' can point to either a
 	// non-virtual function or a virtual member function thunk.
-	pfn = ptrauth_auth_function(pfn, ptrauth_key_function_pointer, typeDisc);
+	// It can also be NULL.
+	if (pfn) {
+		pfn = ptrauth_auth_and_resign(pfn, ptrauth_key_function_pointer,
+		    ptrauth_type_discriminator(__typeof__(func)),
+		    ptrauth_key_function_pointer,
+		    ptrauth_function_pointer_type_discriminator(_ptf_t));
+	}
 	return pfn;
 #else
 	if (map.pTMF.delta & 1) {
@@ -241,9 +247,14 @@ OSMetaClassBase::_ptmf2ptf(const OSMetaClassBase *self,
 		uint32_t entity_hash = ((uintptr_t)pfn) >> 32;
 		pfn = (_ptf_t)(((uintptr_t) pfn) & 0xFFFFFFFF);
 
+#if __has_builtin(__builtin_get_vtable_pointer)
+		const _ptf_t *vtablep =
+		    (const _ptf_t *)__builtin_get_vtable_pointer(u.fObj);
+#else
 		// Authenticate the vtable pointer.
-		_ptf_t *vtablep = ptrauth_auth_data(*u.vtablep,
+		const _ptf_t *vtablep = ptrauth_auth_data(*u.vtablep,
 		    ptrauth_key_cxx_vtable_pointer, 0);
+#endif
 		// Calculate the address of the vtable entry.
 		_ptf_t *vtentryp = (_ptf_t *)(((uintptr_t)vtablep) + (uintptr_t)pfn);
 		// Load the pointer from the vtable entry.
@@ -252,7 +263,8 @@ OSMetaClassBase::_ptmf2ptf(const OSMetaClassBase *self,
 		// Finally, resign the vtable entry as a function pointer.
 		uintptr_t auth_data = ptrauth_blend_discriminator(vtentryp, entity_hash);
 		pfn = ptrauth_auth_and_resign(pfn, ptrauth_key_function_pointer,
-		    auth_data, ptrauth_key_function_pointer, 0);
+		    auth_data, ptrauth_key_function_pointer,
+		    ptrauth_function_pointer_type_discriminator(_ptf_t));
 #else /* defined(HAS_APPLE_PAC) */
 		pfn = *(_ptf_t *)(((uintptr_t)*u.vtablep) + (uintptr_t)pfn);
 #endif /* !defined(HAS_APPLE_PAC) */
@@ -627,11 +639,26 @@ OSMetaClass::OSMetaClass(
 	}
 }
 
+OSMetaClass::OSMetaClass(
+	const char        * inClassName,
+	const OSMetaClass * inSuperClass,
+	unsigned int        inClassSize,
+	zone_t            * inZone,
+	const char        * zone_name,
+	zone_create_flags_t zflags) : OSMetaClass(inClassName, inSuperClass,
+	    inClassSize)
+{
+	if (!(kIOTracking & gIOKitDebug)) {
+		*inZone  = zone_create(zone_name, inClassSize,
+		    (zone_create_flags_t) (ZC_ZFREE_CLEARMEM | zflags));
+	}
+}
+
 /*********************************************************************
 *********************************************************************/
 OSMetaClass::~OSMetaClass()
 {
-	OSKext * myKext = reserved ? reserved->kext : NULL; // do not release
+	OSKext * myKext = reserved->kext; // do not release
 
 	/* Hack alert: 'className' is a C string during early C++ init, and
 	 * is converted to a real OSSymbol only when we record the OSKext in
@@ -860,15 +887,15 @@ OSMetaClass::postModLoad(void * loadHandle)
 					/* Log this error here so we can include the class name.
 					 * xxx - we should look up the other kext that defines the class
 					 */
-#if CONFIG_EMBEDDED
-					panic(
-#else
+#if defined(XNU_TARGET_OS_OSX)
 					OSKextLog(myKext, kOSMetaClassLogSpec,
-#endif /* CONFIG_EMBEDDED */
-						"OSMetaClass: Kext %s class %s is a duplicate;"
-						"kext %s already has a class by that name.",
-						sStalled->kextIdentifier, (const char *)me->className,
-						((OSKext *)orig->reserved->kext)->getIdentifierCString());
+#else
+					panic(
+#endif /* defined(XNU_TARGET_OS_OSX) */
+					    "OSMetaClass: Kext %s class %s is a duplicate;"
+					    "kext %s already has a class by that name.",
+					    sStalled->kextIdentifier, (const char *)me->className,
+					    ((OSKext *)orig->reserved->kext)->getIdentifierCString());
 					result = kOSMetaClassDuplicateClass;
 					break;
 				}

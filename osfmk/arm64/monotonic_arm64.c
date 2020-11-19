@@ -37,7 +37,7 @@
 #include <machine/limits.h> /* CHAR_BIT */
 #include <os/overflow.h>
 #include <pexpert/arm64/board_config.h>
-#include <pexpert/device_tree.h> /* DTFindEntry */
+#include <pexpert/device_tree.h> /* SecureDTFindEntry */
 #include <pexpert/pexpert.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -69,6 +69,8 @@
 #pragma mark core counters
 
 bool mt_core_supported = true;
+
+static const ml_topology_info_t *topology_info;
 
 /*
  * PMC[0-1] are the 48-bit fixed counters -- PMC0 is cycles and PMC1 is
@@ -328,9 +330,10 @@ static bool mt_uncore_initted = false;
  */
 
 #if UNCORE_PER_CLUSTER
-static vm_size_t cpm_impl_size = 0;
-static uintptr_t cpm_impl[__ARM_CLUSTER_COUNT__] = {};
-static uintptr_t cpm_impl_phys[__ARM_CLUSTER_COUNT__] = {};
+#define MAX_NMONITORS MAX_CPU_CLUSTERS
+static uintptr_t cpm_impl[MAX_NMONITORS] = {};
+#else
+#define MAX_NMONITORS (1)
 #endif /* UNCORE_PER_CLUSTER */
 
 #if UNCORE_VERSION >= 2
@@ -368,16 +371,6 @@ static_assert(sizeof(uncore_active_ctrs) * CHAR_BIT >= UNCORE_NCTRS,
 bool mt_uncore_enabled = false;
 
 /*
- * Each uncore unit has its own monitor, corresponding to the memory hierarchy
- * of the LLCs.
- */
-#if UNCORE_PER_CLUSTER
-#define UNCORE_NMONITORS (__ARM_CLUSTER_COUNT__)
-#else /* UNCORE_PER_CLUSTER */
-#define UNCORE_NMONITORS (1)
-#endif /* !UNCORE_PER_CLUSTER */
-
-/*
  * The uncore_events are the event configurations for each uncore counter -- as
  * a union to make it easy to program the hardware registers.
  */
@@ -389,7 +382,7 @@ static struct uncore_config {
 	union {
 		uint16_t uccm_masks[UNCORE_NCTRS];
 		uint64_t uccm_regs[UNCORE_NCTRS / 4];
-	} uc_cpu_masks[UNCORE_NMONITORS];
+	} uc_cpu_masks[MAX_NMONITORS];
 } uncore_config;
 
 static struct uncore_monitor {
@@ -412,12 +405,27 @@ static struct uncore_monitor {
 	 * Whether this monitor needs its registers restored after wake.
 	 */
 	bool um_sleeping;
-} uncore_monitors[UNCORE_NMONITORS];
+} uncore_monitors[MAX_NMONITORS];
+
+/*
+ * Each uncore unit has its own monitor, corresponding to the memory hierarchy
+ * of the LLCs.
+ */
+static unsigned int
+uncore_nmonitors(void)
+{
+#if UNCORE_PER_CLUSTER
+	return topology_info->num_clusters;
+#else /* UNCORE_PER_CLUSTER */
+	return 1;
+#endif /* !UNCORE_PER_CLUSTER */
+}
 
 static unsigned int
 uncmon_get_curid(void)
 {
 #if UNCORE_PER_CLUSTER
+	// Pointer arithmetic to translate cluster_id into a clusters[] index.
 	return cpu_cluster_id();
 #else /* UNCORE_PER_CLUSTER */
 	return 0;
@@ -572,8 +580,6 @@ uncmon_write_counter_locked_l(__unused unsigned int monid, unsigned int ctr,
 
 #if UNCORE_PER_CLUSTER
 
-static const uint8_t clust_offs[__ARM_CLUSTER_COUNT__] = CPU_CLUSTER_OFFSETS;
-
 uintptr_t upmc_offs[UNCORE_NCTRS] = {
 	[0] = 0x4100, [1] = 0x4248, [2] = 0x4110, [3] = 0x4250, [4] = 0x4120,
 	[5] = 0x4258, [6] = 0x4130, [7] = 0x4260, [8] = 0x4140, [9] = 0x4268,
@@ -584,7 +590,7 @@ uintptr_t upmc_offs[UNCORE_NCTRS] = {
 static inline uint64_t
 uncmon_read_counter_locked_r(unsigned int mon_id, unsigned int ctr)
 {
-	assert(mon_id < __ARM_CLUSTER_COUNT__);
+	assert(mon_id < uncore_nmonitors());
 	assert(ctr < UNCORE_NCTRS);
 	return *(uint64_t *)(cpm_impl[mon_id] + upmc_offs[ctr]);
 }
@@ -595,7 +601,7 @@ uncmon_write_counter_locked_r(unsigned int mon_id, unsigned int ctr,
 {
 	assert(count < UPMC_MAX);
 	assert(ctr < UNCORE_NCTRS);
-	assert(mon_id < __ARM_CLUSTER_COUNT__);
+	assert(mon_id < uncore_nmonitors());
 	*(uint64_t *)(cpm_impl[mon_id] + upmc_offs[ctr]) = count;
 }
 
@@ -715,24 +721,7 @@ uncmon_get_pmi_mask(unsigned int monid)
 	uint64_t pmi_mask = uncore_pmi_mask;
 
 #if UNCORE_PER_CLUSTER
-	/*
-	 * Set up the mask for the high bits.
-	 */
-	uint64_t clust_cpumask;
-	if (monid == __ARM_CLUSTER_COUNT__ - 1) {
-		clust_cpumask = UINT64_MAX;
-	} else {
-		clust_cpumask = ((1ULL << clust_offs[monid + 1]) - 1);
-	}
-
-	/*
-	 * Mask off the low bits, if necessary.
-	 */
-	if (clust_offs[monid] != 0) {
-		clust_cpumask &= ~((1ULL << clust_offs[monid]) - 1);
-	}
-
-	pmi_mask &= clust_cpumask;
+	pmi_mask &= topology_info->clusters[monid].cpu_mask;
 #else /* UNCORE_PER_CLUSTER */
 #pragma unused(monid)
 #endif /* !UNCORE_PER_CLUSTER */
@@ -758,9 +747,7 @@ uncmon_init_locked_l(unsigned int monid)
 
 #if UNCORE_PER_CLUSTER
 
-static vm_size_t acc_impl_size = 0;
-static uintptr_t acc_impl[__ARM_CLUSTER_COUNT__] = {};
-static uintptr_t acc_impl_phys[__ARM_CLUSTER_COUNT__] = {};
+static uintptr_t acc_impl[MAX_NMONITORS] = {};
 
 static void
 uncmon_init_locked_r(unsigned int monid)
@@ -780,6 +767,11 @@ uncmon_init_locked_r(unsigned int monid)
 static int
 uncore_init(__unused mt_device_t dev)
 {
+#if HAS_UNCORE_CTRS
+	assert(MT_NDEVS > 0);
+	mt_devices[MT_NDEVS - 1].mtd_nmonitors = (uint8_t)uncore_nmonitors();
+#endif
+
 #if DEVELOPMENT || DEBUG
 	/*
 	 * Development and debug kernels observe the `uncore_pmi_mask` boot-arg,
@@ -790,10 +782,10 @@ uncore_init(__unused mt_device_t dev)
 	    sizeof(uncore_pmi_mask));
 	if (parsed_arg) {
 #if UNCORE_PER_CLUSTER
-		if (__builtin_popcount(uncore_pmi_mask) != __ARM_CLUSTER_COUNT__) {
+		if (__builtin_popcount(uncore_pmi_mask) != (int)uncore_nmonitors()) {
 			panic("monotonic: invalid uncore PMI mask 0x%x", uncore_pmi_mask);
 		}
-		for (unsigned int i = 0; i < __ARM_CLUSTER_COUNT__; i++) {
+		for (unsigned int i = 0; i < uncore_nmonitors(); i++) {
 			if (__builtin_popcountll(uncmon_get_pmi_mask(i)) != 1) {
 				panic("monotonic: invalid uncore PMI CPU for cluster %d in mask 0x%x",
 				    i, uncore_pmi_mask);
@@ -808,9 +800,8 @@ uncore_init(__unused mt_device_t dev)
 #endif /* DEVELOPMENT || DEBUG */
 	{
 #if UNCORE_PER_CLUSTER
-		for (int i = 0; i < __ARM_CLUSTER_COUNT__; i++) {
-			/* route to the first CPU in each cluster */
-			uncore_pmi_mask |= (1ULL << clust_offs[i]);
+		for (unsigned int i = 0; i < topology_info->num_clusters; i++) {
+			uncore_pmi_mask |= 1ULL << topology_info->clusters[i].first_cpu_id;
 		}
 #else /* UNCORE_PER_CLUSTER */
 		/* arbitrarily route to core 0 */
@@ -821,15 +812,12 @@ uncore_init(__unused mt_device_t dev)
 
 	unsigned int curmonid = uncmon_get_curid();
 
-	for (unsigned int monid = 0; monid < UNCORE_NMONITORS; monid++) {
+	for (unsigned int monid = 0; monid < uncore_nmonitors(); monid++) {
 #if UNCORE_PER_CLUSTER
-		cpm_impl[monid] = (uintptr_t)ml_io_map(cpm_impl_phys[monid],
-		    cpm_impl_size);
-		assert(cpm_impl[monid] != 0);
-
-		acc_impl[monid] = (uintptr_t)ml_io_map(acc_impl_phys[monid],
-		    acc_impl_size);
-		assert(acc_impl[monid] != 0);
+		ml_topology_cluster_t *cluster = &topology_info->clusters[monid];
+		cpm_impl[monid] = (uintptr_t)cluster->cpm_IMPL_regs;
+		acc_impl[monid] = (uintptr_t)cluster->acc_IMPL_regs;
+		assert(cpm_impl[monid] != 0 && acc_impl[monid] != 0);
 #endif /* UNCORE_PER_CLUSTER */
 
 		struct uncore_monitor *mon = &uncore_monitors[monid];
@@ -890,7 +878,7 @@ uncore_read(uint64_t ctr_mask, uint64_t *counts_out)
 	}
 
 	unsigned int curmonid = uncmon_get_curid();
-	for (unsigned int monid = 0; monid < UNCORE_NMONITORS; monid++) {
+	for (unsigned int monid = 0; monid < uncore_nmonitors(); monid++) {
 		/*
 		 * Find this monitor's starting offset into the `counts_out` array.
 		 */
@@ -932,18 +920,18 @@ uncore_add(struct monotonic_config *config, uint32_t *ctr_out)
 	uint32_t ctr = __builtin_ffsll(available) - 1;
 
 	uncore_active_ctrs |= UINT64_C(1) << ctr;
-	uncore_config.uc_events.uce_ctrs[ctr] = config->event;
+	uncore_config.uc_events.uce_ctrs[ctr] = (uint8_t)config->event;
 	uint64_t cpu_mask = UINT64_MAX;
 	if (config->cpu_mask != 0) {
 		cpu_mask = config->cpu_mask;
 	}
-	for (int i = 0; i < UNCORE_NMONITORS; i++) {
+	for (unsigned int i = 0; i < uncore_nmonitors(); i++) {
 #if UNCORE_PER_CLUSTER
-		const unsigned int shift = clust_offs[i];
+		const unsigned int shift = topology_info->clusters[i].first_cpu_id;
 #else /* UNCORE_PER_CLUSTER */
 		const unsigned int shift = 0;
 #endif /* !UNCORE_PER_CLUSTER */
-		uncore_config.uc_cpu_masks[i].uccm_masks[ctr] = cpu_mask >> shift;
+		uncore_config.uc_cpu_masks[i].uccm_masks[ctr] = (uint16_t)(cpu_mask >> shift);
 	}
 
 	*ctr_out = ctr;
@@ -965,7 +953,7 @@ uncore_reset(void)
 
 	unsigned int curmonid = uncmon_get_curid();
 
-	for (unsigned int monid = 0; monid < UNCORE_NMONITORS; monid++) {
+	for (unsigned int monid = 0; monid < uncore_nmonitors(); monid++) {
 		struct uncore_monitor *mon = &uncore_monitors[monid];
 		bool remote = monid != curmonid;
 
@@ -1006,7 +994,7 @@ uncore_reset(void)
 	uncore_active_ctrs = 0;
 	memset(&uncore_config, 0, sizeof(uncore_config));
 
-	for (unsigned int monid = 0; monid < UNCORE_NMONITORS; monid++) {
+	for (unsigned int monid = 0; monid < uncore_nmonitors(); monid++) {
 		struct uncore_monitor *mon = &uncore_monitors[monid];
 		bool remote = monid != curmonid;
 
@@ -1068,7 +1056,7 @@ uncore_set_enabled(bool enable)
 	mt_uncore_enabled = enable;
 
 	unsigned int curmonid = uncmon_get_curid();
-	for (unsigned int monid = 0; monid < UNCORE_NMONITORS; monid++) {
+	for (unsigned int monid = 0; monid < uncore_nmonitors(); monid++) {
 		if (monid != curmonid) {
 #if UNCORE_PER_CLUSTER
 			uncmon_set_enabled_r(monid, enable);
@@ -1138,7 +1126,7 @@ uncore_save(void)
 
 	unsigned int curmonid = uncmon_get_curid();
 
-	for (unsigned int monid = 0; monid < UNCORE_NMONITORS; monid++) {
+	for (unsigned int monid = 0; monid < uncore_nmonitors(); monid++) {
 		struct uncore_monitor *mon = &uncore_monitors[monid];
 		int intrs_en = uncmon_lock(mon);
 
@@ -1190,53 +1178,6 @@ out:
 	uncmon_unlock(mon, intrs_en);
 }
 
-static void
-uncore_early_init(void)
-{
-#if UNCORE_PER_CLUSTER
-	/*
-	 * Initialize the necessary PIO physical regions from the device tree.
-	 */
-	DTEntry armio_entry = NULL;
-	if ((DTFindEntry("name", "arm-io", &armio_entry) != kSuccess)) {
-		panic("unable to find arm-io DT entry");
-	}
-
-	uint64_t *regs;
-	unsigned int regs_size = 0;
-	if (DTGetProperty(armio_entry, "acc-impl", (void **)&regs, &regs_size) !=
-	    kSuccess) {
-		panic("unable to find acc-impl DT property");
-	}
-	/*
-	 * Two 8-byte values are expected for each cluster -- the physical address
-	 * of the region and its size.
-	 */
-	const unsigned int expected_size =
-	    (typeof(expected_size))sizeof(uint64_t) * __ARM_CLUSTER_COUNT__ * 2;
-	if (regs_size != expected_size) {
-		panic("invalid size for acc-impl DT property");
-	}
-	for (int i = 0; i < __ARM_CLUSTER_COUNT__; i++) {
-		acc_impl_phys[i] = regs[i * 2];
-	}
-	acc_impl_size = regs[1];
-
-	regs_size = 0;
-	if (DTGetProperty(armio_entry, "cpm-impl", (void **)&regs, &regs_size) !=
-	    kSuccess) {
-		panic("unable to find cpm-impl property");
-	}
-	if (regs_size != expected_size) {
-		panic("invalid size for cpm-impl DT property");
-	}
-	for (int i = 0; i < __ARM_CLUSTER_COUNT__; i++) {
-		cpm_impl_phys[i] = regs[i * 2];
-	}
-	cpm_impl_size = regs[1];
-#endif /* UNCORE_PER_CLUSTER */
-}
-
 #endif /* HAS_UNCORE_CTRS */
 
 #pragma mark common hooks
@@ -1244,9 +1185,7 @@ uncore_early_init(void)
 void
 mt_early_init(void)
 {
-#if HAS_UNCORE_CTRS
-	uncore_early_init();
-#endif /* HAS_UNCORE_CTRS */
+	topology_info = ml_get_topology_info();
 }
 
 void
@@ -1309,9 +1248,8 @@ uint64_t
 mt_count_pmis(void)
 {
 	uint64_t npmis = 0;
-	int max_cpu = ml_get_max_cpu_number();
-	for (int i = 0; i <= max_cpu; i++) {
-		cpu_data_t *cpu = (cpu_data_t *)CpuDataEntries[i].cpu_data_vaddr;
+	for (unsigned int i = 0; i < topology_info->num_cpus; i++) {
+		cpu_data_t *cpu = (cpu_data_t *)CpuDataEntries[topology_info->cpus[i].cpu_id].cpu_data_vaddr;
 		npmis += cpu->cpu_monotonic.mtc_npmis;
 	}
 	return npmis;
@@ -1502,7 +1440,6 @@ struct mt_device mt_devices[] = {
 		.mtd_enable = uncore_set_enabled,
 		.mtd_read = uncore_read,
 
-		.mtd_nmonitors = UNCORE_NMONITORS,
 		.mtd_ncounters = UNCORE_NCTRS,
 	}
 #endif /* HAS_UNCORE_CTRS */

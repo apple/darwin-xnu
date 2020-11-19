@@ -3,6 +3,8 @@
 #include <mach/mach.h>
 #include <mach/task_info.h>
 #include <os/proc.h>
+#include <sys/kern_memorystatus.h>
+#include <unistd.h>
 
 T_GLOBAL_META(T_META_RUN_CONCURRENTLY(true));
 
@@ -44,8 +46,57 @@ T_DECL(test_os_proc_available_memory, "Basic available memory")
 	    vm_info.limit_bytes_remaining, remainingBytes);
 }
 #else
+
+/*
+ * os_proc_available_memory is only available on embedded.
+ * But the underlying syscall works on macOS to support catalyst
+ * extensions. So we test the syscall directly here.
+ */
+extern uint64_t __memorystatus_available_memory(void);
+
+static int
+set_memlimit(pid_t pid, int32_t limit_mb)
+{
+	memorystatus_memlimit_properties_t mmprops;
+
+	memset(&mmprops, 0, sizeof(memorystatus_memlimit_properties_t));
+
+	mmprops.memlimit_active = limit_mb;
+	mmprops.memlimit_inactive = limit_mb;
+
+	/* implies we want to set fatal limits */
+	mmprops.memlimit_active_attr |= MEMORYSTATUS_MEMLIMIT_ATTR_FATAL;
+	mmprops.memlimit_inactive_attr |= MEMORYSTATUS_MEMLIMIT_ATTR_FATAL;
+	return memorystatus_control(MEMORYSTATUS_CMD_SET_MEMLIMIT_PROPERTIES, pid, 0, &mmprops, sizeof(mmprops));
+}
 T_DECL(test_os_proc_available_memory, "Basic available memory")
 {
-	T_SKIP("Not available on macOS");
+	uint64_t available_memory;
+	int ret;
+	pid_t pid = getpid();
+	static const size_t kLimitMb = 1024;
+
+	/*
+	 * Should return 0 unless an proccess is both memory managed and has a
+	 * hard memory limit.
+	 */
+	ret = memorystatus_control(MEMORYSTATUS_CMD_SET_PROCESS_IS_MANAGED, pid, 0, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "memorystatus_control");
+
+	available_memory = __memorystatus_available_memory();
+	T_ASSERT_EQ(available_memory, 0ULL, "__memorystatus_available_memory == 0");
+
+	ret = memorystatus_control(MEMORYSTATUS_CMD_SET_PROCESS_IS_MANAGED, pid, 1, NULL, 0);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "memorystatus_control");
+	available_memory = __memorystatus_available_memory();
+	T_ASSERT_EQ(available_memory, 0ULL, "__memorystatus_available_memory == 0");
+
+	/*
+	 * Should not return 0 for managed procs with a hard memory limit.
+	 */
+	ret = set_memlimit(pid, kLimitMb);
+	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "memorystatus_control");
+	available_memory = __memorystatus_available_memory();
+	T_ASSERT_NE(available_memory, 0ULL, "__memorystatus_available_memory != 0");
 }
 #endif

@@ -109,7 +109,8 @@ kdp_exception_ack(
 extern
 void
 kdp_panic(
-	const char          *msg
+	const char          *fmt,
+	...
 	);
 
 extern
@@ -208,3 +209,6 @@ int
 
 int
     kdp_machine_msr64_write(kdp_writemsr64_req_t *, caddr_t /* data */, uint16_t /* lcpu */);
+
+vm_map_offset_t
+kdp_core_start_addr(void);

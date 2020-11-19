@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2016, 2019 Apple Computer, Inc. All rights reserved.
+ * Copyright (c) 2016-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -54,7 +54,7 @@ backtrace_sysctl SYSCTL_HANDLER_ARGS
 #pragma unused(oidp, arg2)
 	uintptr_t type = (uintptr_t)arg1;
 	uintptr_t *bt = NULL;
-	uint32_t bt_len = 0, bt_filled = 0;
+	unsigned int bt_len = 0, bt_filled = 0;
 	size_t bt_size = 0;
 	int error = 0;
 
@@ -66,13 +66,12 @@ backtrace_sysctl SYSCTL_HANDLER_ARGS
 		return EFAULT;
 	}
 
-	bt_len = req->oldlen > MAX_BACKTRACE ? MAX_BACKTRACE : req->oldlen;
+	bt_len = req->oldlen > MAX_BACKTRACE ? MAX_BACKTRACE : (unsigned int)req->oldlen;
 	bt_size = sizeof(bt[0]) * bt_len;
-	bt = kalloc(bt_size);
+	bt = kheap_alloc(KHEAP_TEMP, bt_size, Z_WAITOK | Z_ZERO);
 	if (!bt) {
 		return ENOBUFS;
 	}
-	memset(bt, 0, bt_size);
 	bt_filled = backtrace_user(bt, bt_len, &error, NULL, NULL);
 	if (error != 0) {
 		goto out;
@@ -86,7 +85,7 @@ backtrace_sysctl SYSCTL_HANDLER_ARGS
 	req->oldidx = bt_filled;
 
 out:
-	kfree(bt, bt_size);
+	kheap_free(KHEAP_TEMP, bt, bt_size);
 	return error;
 }
 

@@ -166,8 +166,12 @@ physical blocks. This will not change the actual file size. Holes must be
 aligned to file system block boundaries. This will fail on
 file systems that do not support this interface.
 .It Dv F_SETSIZE
-Truncate a file without zeroing space.
-The calling process must have root privileges.
+Deprecated.
+In previous releases, this would allow a process with root privileges to
+truncate a file without zeroing space.
+For security reasons, this operation is no longer supported and will
+instead truncate the file in the same manner as
+.Xr truncate 2 .
 .It Dv F_RDADVISE
 Issue an advisory read async with no copy to user.
 .It Dv F_RDAHEAD

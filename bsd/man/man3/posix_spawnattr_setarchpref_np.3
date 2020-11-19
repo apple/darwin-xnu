@@ -1,0 +1,185 @@
+.\"
+.\" Copyright (c) 2020 Apple Inc. All rights reserved.
+.\"
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_START@
+.\" 
+.\" This file contains Original Code and/or Modifications of Original Code
+.\" as defined in and that are subject to the Apple Public Source License
+.\" Version 2.0 (the 'License'). You may not use this file except in
+.\" compliance with the License. The rights granted to you under the License
+.\" may not be used to create, or enable the creation or redistribution of,
+.\" unlawful or unlicensed copies of an Apple operating system, or to
+.\" circumvent, violate, or enable the circumvention or violation of, any
+.\" terms of an Apple operating system software license agreement.
+.\" 
+.\" Please obtain a copy of the License at
+.\" http://www.opensource.apple.com/apsl/ and read it before using this file.
+.\" 
+.\" The Original Code and all software distributed under the License are
+.\" distributed on an 'AS IS' basis, WITHOUT WARRANTY OF ANY KIND, EITHER
+.\" EXPRESS OR IMPLIED, AND APPLE HEREBY DISCLAIMS ALL SUCH WARRANTIES,
+.\" INCLUDING WITHOUT LIMITATION, ANY WARRANTIES OF MERCHANTABILITY,
+.\" FITNESS FOR A PARTICULAR PURPOSE, QUIET ENJOYMENT OR NON-INFRINGEMENT.
+.\" Please see the License for the specific language governing rights and
+.\" limitations under the License.
+.\" 
+.\" @APPLE_OSREFERENCE_LICENSE_HEADER_END@
+.\"
+.\"     @(#)posix_spawnattr_setarchpref_np.3
+.
+.Dd May 8, 2020
+.Dt POSIX_SPAWNATTR_SETARCHPREF_NP 3
+.Os "Mac OS X"
+.Sh NAME
+.Nm posix_spawnattr_setarchpref_np
+.Nm posix_spawnattr_getarchpref_np
+.Nd set or get the
+.Em cpu/subcpu preference
+attribute on a
+.Em posix_spawnattr_t
+.Sh SYNOPSIS
+.Fd #include <spawn.h>
+.Ft int
+.Fo posix_spawnattr_setarchpref_np
+.Fa "posix_spawnattr_t *restrict attr"
+.Fa "size_t count"
+.Fa "cpu_type_t *pref"
+.Fa "cpu_subtype_t *subpref"
+.Fa "size_t *restrict ocount"
+.Fc
+.Ft int
+.Fo posix_spawnattr_getarchpref_np
+.Fa "const posix_spawnattr_t *restrict attr"
+.Fa "size_t count"
+.Fa "cpu_type_t *pref"
+.Fa "cpu_subtype_t *subpref"
+.Fa "size_t * restrict ocount"
+.Fc
+.Sh IMPORTANT
+These functions represent an Apple extension to
+.Xr posix_spawn 2
+and
+.Xr posix_spawnp 2 ,
+and as such should not be used by programs intending their code to be
+portable to other platforms.
+.Sh DESCRIPTION
+The
+.Fn posix_spawnattr_setarchpref_np
+function sets the precise universal binary preferences for the spawn attribute
+value referenced by
+.Fa attr
+from the memory containing the
+.Em cpu_type_t
+referenced by 
+.Fa pref
+and the 
+.Em cpu_subtype_t
+referenced by 
+.Fa subpref
+with a size of
+.Fa count
+elements; the actual number of elements that are set in the attribute
+is returned in
+.Fa ocount .
+.Pp
+When
+.Xr spawn 2
+or
+.Xr spawnp 2
+is subsequently invoked on a Universal binary with the
+.Em posix_spawnattr_t ,
+the elements which were set will be used, in the order they were set,
+to select the first element in the list which matches any
+.Em cpu_type_t
+and
+.Em cpu_subtype_t
+of those available in the Universal binary.  If there is no match, then
+the attempt to create the child process will fail with the error
+EBADARCH.
+If the
+.Em cpu_type_t
+.Em CPU_TYPE_ANY
+and
+.Em cpu_subtype_t
+.Em CPU_SUBTYPE_ANY
+are the last pair in the list, then rather than returning
+EBADARCH
+on no match, the system will instead fall back to the standard Universal
+binary grading preference order. Using
+.Em CPU_SUBTYPE_ANY
+as a
+.Em cpu_subtype_t
+for any
+.Em cpu_type_t
+value will select the best slice for that specific
+.Em cpu_type_t ,
+similar to using
+.Fn posix_spawnattr_setbinpref_np .
+If called multiple times on the same
+.Em attr ,
+the previous preferences will be overwritten.
+.Pp
+The
+.Fn posix_spawnattr_getarchpref_np
+function gets the precise universal binary preferences for the spawn attribute
+value referenced by
+.Fa attr
+(set by a prior call to
+.Fn posix_spawnattr_setbinpref_np
+or
+.Fn posix_spawnattr_setarchpref_np )
+into the memory
+containing the
+.Em cpu_type_t
+referenced by 
+.Fa pref
+and the
+.Em cpu_subtype_t
+referenced by
+.Fa subpref
+with a prereserved size of
+.Fa count
+elements; the actual number of elements that are copied from the attribute
+is returned in
+.Fa ocount .
+.Pp
+.Sh RETURN VALUES
+On success, these functions return 0; on failure they return an error
+number from
+.In errno.h 
+and modify the value of
+.Fa ocount .
+Additionally, if successful,
+.Fn posix_spawnattr_getarchpref_np
+will modify the contents of the
+.Fa pref
+array with the current attribute values.
+.Sh ERRORS
+These functions may fail if:
+.Bl -tag -width Er
+.\" ==========
+.It Bq Er EINVAL
+The value specified by
+.Fa attr
+is invalid.
+.\" ==========
+.It Bq Er EINVAL
+The value of
+.Fa attr
+is invalid.
+.El
+.Sh SEE ALSO
+.Xr posix_spawn 2 ,
+.Xr posix_spawnp 2 ,
+.Xr posix_spawnattr_init 3 ,
+.Xr posix_spawnattr_destroy 3 ,
+.Xr posix_spawnattr_setbinpref_np 3 ,
+.Xr posix_spawnattr_setflags 3
+.Sh STANDARDS
+Nonstandard
+.Sh HISTORY
+The
+.Fn posix_spawnattr_setarchpref_np
+and
+.Fn posix_spawnattr_getarchpref_np
+function calls appeared in macOS 10.16

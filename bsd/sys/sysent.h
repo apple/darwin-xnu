@@ -54,10 +54,7 @@ struct sysent {         /* system call table */
 	                                 */
 };
 
-#ifndef __INIT_SYSENT_C__
-extern struct sysent sysent[];
-#endif  /* __INIT_SYSENT_C__ */
-
+extern const struct sysent sysent[];
 extern const unsigned int nsysent;
 
 /*

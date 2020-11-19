@@ -42,6 +42,8 @@ extern "C" {
 
 #include <IOKit/IOService.h>
 #include <IOKit/IOInterruptController.h>
+#include <IOKit/IOPlatformActions.h>
+#include <libkern/c++/OSPtr.h>
 
 enum {
 	kIOCPUStateUnregistered = 0,
@@ -56,7 +58,7 @@ class IOCPU : public IOService
 	OSDeclareAbstractStructors(IOCPU);
 
 private:
-	OSArray                *_cpuGroup;
+	OSPtr<OSArray> _cpuGroup;
 	UInt32                 _cpuNumber;
 	UInt32                 _cpuState;
 
@@ -107,13 +109,6 @@ public:
 	OSMetaClassDeclareReservedUnused(IOCPU, 7);
 };
 
-void IOCPUSleepKernel(void);
-extern "C" kern_return_t IOCPURunPlatformQuiesceActions(void);
-extern "C" kern_return_t IOCPURunPlatformActiveActions(void);
-extern "C" kern_return_t IOCPURunPlatformHaltRestartActions(uint32_t message);
-extern "C" kern_return_t IOCPURunPlatformPanicActions(uint32_t message);
-extern "C" kern_return_t IOCPURunPlatformPanicSyncAction(void *addr, uint32_t offset, uint32_t len);
-
 class IOCPUInterruptController : public IOInterruptController
 {
 	OSDeclareDefaultStructors(IOCPUInterruptController);
@@ -131,9 +126,9 @@ protected:
 public:
 	virtual IOReturn initCPUInterruptController(int sources);
 	virtual void     registerCPUInterruptController(void);
-	virtual void     setCPUInterruptProperties(IOService *service);
 	virtual void     enableCPUInterrupt(IOCPU *cpu);
 
+	virtual void     setCPUInterruptProperties(IOService *service) APPLE_KEXT_OVERRIDE;
 	virtual IOReturn registerInterrupt(IOService *nub, int source,
 	    void *target,
 	    IOInterruptHandler handler,

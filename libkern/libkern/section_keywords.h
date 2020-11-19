@@ -29,21 +29,37 @@
 #ifndef _SECTION_KEYWORDS_H
 #define _SECTION_KEYWORDS_H
 
-
-/* Default behaviour */
-#ifndef SECURITY_READ_ONLY_EARLY
 #define __PLACE_IN_SECTION(__segment__section) \
 	__attribute__((used, section(__segment__section)))
 
+#define __SEGMENT_START_SYM(seg)       asm("segment$start$" seg)
+#define __SEGMENT_END_SYM(seg)         asm("segment$end$" seg)
+
+#define __SECTION_START_SYM(seg, sect) asm("section$start$" seg "$" sect)
+#define __SECTION_END_SYM(seg, sect)   asm("section$end$" seg "$" sect)
+
+
+#ifndef __security_const_early
+#define __security_const_early const
+#endif
+#ifndef __security_const_late
+#define __security_const_late
+#endif
+#ifndef __security_read_write
+#define __security_read_write
+#endif
+#ifndef MARK_AS_HIBERNATE_TEXT
+#define MARK_AS_HIBERNATE_TEXT
+#endif
+#ifndef MARK_AS_HIBERNATE_DATA
+#define MARK_AS_HIBERNATE_DATA
+#endif
+
 #define SECURITY_READ_ONLY_SPECIAL_SECTION(_t, __segment__section) \
-	const _t __PLACE_IN_SECTION(__segment__section)
+	__security_const_early _t __PLACE_IN_SECTION(__segment__section)
 
-#define SECURITY_READ_ONLY_EARLY(_t) const _t
-
-#define SECURITY_READ_ONLY_LATE(_t) _t
-
-#define SECURITY_READ_WRITE(_t) _t __attribute__((used))
-#endif /* SECURITY_READ_ONLY_EARLY */
-
+#define SECURITY_READ_ONLY_EARLY(_t) _t __security_const_early __attribute__((used))
+#define SECURITY_READ_ONLY_LATE(_t)  _t __security_const_late  __attribute__((used))
+#define SECURITY_READ_WRITE(_t)      _t __security_read_write  __attribute__((used))
 
 #endif /* _SECTION_KEYWORDS_H_ */

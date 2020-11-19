@@ -27,20 +27,24 @@
  */
 /* IOSymbol.cpp created by gvdl on Fri 1998-11-17 */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <string.h>
 #include <sys/cdefs.h>
 
 #include <kern/locks.h>
 
 #include <libkern/c++/OSSymbol.h>
+#include <libkern/c++/OSSharedPtr.h>
 #include <libkern/c++/OSLib.h>
+#include <os/cpp_util.h>
 #include <string.h>
 
 #define super OSString
 
 typedef struct { unsigned int i, j; } OSSymbolPoolState;
 
-#define INITIAL_POOL_SIZE  (exp2ml(1 + log2(kInitBucketCount)))
+#define INITIAL_POOL_SIZE  ((unsigned int)((exp2ml(1 + log2(kInitBucketCount)))))
 
 #define GROW_FACTOR   (1)
 #define SHRINK_FACTOR (3)
@@ -83,26 +87,26 @@ private:
 			if (!*s) {
 				break;
 			}
-			len++; hash ^= *s++;
+			len++; hash ^= (unsigned int)(unsigned char) *s++;
 			if (!*s) {
 				break;
 			}
-			len++; hash ^= *s++ <<  8;
+			len++; hash ^= ((unsigned int)(unsigned char) *s++) <<  8;
 			if (!*s) {
 				break;
 			}
-			len++; hash ^= *s++ << 16;
+			len++; hash ^= ((unsigned int)(unsigned char) *s++) << 16;
 			if (!*s) {
 				break;
 			}
-			len++; hash ^= *s++ << 24;
+			len++; hash ^= ((unsigned int)(unsigned char) *s++) << 24;
 		}
 		*lenP = len;
 		*hashP = hash;
 	}
 
 	static unsigned long log2(unsigned int x);
-	static unsigned long exp2ml(unsigned int x);
+	static unsigned long exp2ml(unsigned long x);
 
 	void reconstructSymbols(void);
 	void reconstructSymbols(bool grow);
@@ -145,12 +149,12 @@ public:
 		lck_rw_unlock(poolGate, LCK_RW_TYPE_EXCLUSIVE);
 	}
 
-	LIBKERN_RETURNS_RETAINED OSSymbol *findSymbol(const char *cString) const;
-	LIBKERN_RETURNS_RETAINED OSSymbol *insertSymbol(OSSymbol *sym);
+	OSSharedPtr<OSSymbol> findSymbol(const char *cString) const;
+	OSSharedPtr<OSSymbol> insertSymbol(OSSymbol *sym);
 	void removeSymbol(OSSymbol *sym);
 
 	OSSymbolPoolState initHashState();
-	LIBKERN_RETURNS_NOT_RETAINED OSSymbol *nextHashState(OSSymbolPoolState *stateP);
+	LIBKERN_RETURNS_NOT_RETAINED OSSymbol * nextHashState(OSSymbolPoolState *stateP);
 };
 
 void *
@@ -183,7 +187,6 @@ OSSymbolPool::init()
 	if (!buckets) {
 		return false;
 	}
-
 	bzero(buckets, nBuckets * sizeof(Bucket));
 
 	poolGate = lck_rw_alloc_init(IOLockGroup, LCK_ATTR_NULL);
@@ -231,7 +234,7 @@ OSSymbolPool::log2(unsigned int x)
 }
 
 unsigned long
-OSSymbolPool::exp2ml(unsigned int x)
+OSSymbolPool::exp2ml(unsigned long x)
 {
 	return (1 << x) - 1;
 }
@@ -307,12 +310,13 @@ OSSymbolPool::reconstructSymbols(bool grow)
 	}
 }
 
-OSSymbol *
+OSSharedPtr<OSSymbol>
 OSSymbolPool::findSymbol(const char *cString) const
 {
 	Bucket *thisBucket;
 	unsigned int j, inLen, hash;
 	OSSymbol *probeSymbol, **list;
+	OSSharedPtr<OSSymbol> ret;
 
 	hashSymbol(cString, &hash, &inLen); inLen++;
 	thisBucket = &buckets[hash % nBuckets];
@@ -328,7 +332,8 @@ OSSymbolPool::findSymbol(const char *cString) const
 		if (inLen == probeSymbol->length
 		    && strncmp(probeSymbol->string, cString, probeSymbol->length) == 0
 		    && probeSymbol->taggedTryRetain(nullptr)) {
-			return probeSymbol;
+			ret.reset(probeSymbol, OSNoRetain);
+			return ret;
 		}
 		return NULL;
 	}
@@ -338,20 +343,22 @@ OSSymbolPool::findSymbol(const char *cString) const
 		if (inLen == probeSymbol->length
 		    && strncmp(probeSymbol->string, cString, probeSymbol->length) == 0
 		    && probeSymbol->taggedTryRetain(nullptr)) {
-			return probeSymbol;
+			ret.reset(probeSymbol, OSNoRetain);
+			return ret;
 		}
 	}
 
 	return NULL;
 }
 
-OSSymbol *
+OSSharedPtr<OSSymbol>
 OSSymbolPool::insertSymbol(OSSymbol *sym)
 {
 	const char *cString = sym->string;
 	Bucket *thisBucket;
 	unsigned int j, inLen, hash;
 	OSSymbol *probeSymbol, **list;
+	OSSharedPtr<OSSymbol> ret;
 
 	hashSymbol(cString, &hash, &inLen); inLen++;
 	thisBucket = &buckets[hash % nBuckets];
@@ -370,7 +377,8 @@ OSSymbolPool::insertSymbol(OSSymbol *sym)
 		if (inLen == probeSymbol->length
 		    && strncmp(probeSymbol->string, cString, probeSymbol->length) == 0
 		    && probeSymbol->taggedTryRetain(nullptr)) {
-			return probeSymbol;
+			ret.reset(probeSymbol, OSNoRetain);
+			return ret;
 		}
 
 		list = (OSSymbol **) kalloc_tag(2 * sizeof(OSSymbol *), VM_KERN_MEMORY_LIBKERN);
@@ -391,7 +399,8 @@ OSSymbolPool::insertSymbol(OSSymbol *sym)
 		if (inLen == probeSymbol->length
 		    && strncmp(probeSymbol->string, cString, probeSymbol->length) == 0
 		    && probeSymbol->taggedTryRetain(nullptr)) {
-			return probeSymbol;
+			ret.reset(probeSymbol, OSNoRetain);
+			return ret;
 		}
 	}
 
@@ -502,8 +511,8 @@ OSSymbolPool::removeSymbol(OSSymbol *sym)
  * From here on we are actually implementing the OSSymbol class
  *********************************************************************
  */
-OSDefineMetaClassAndStructorsWithInit(OSSymbol, OSString,
-    OSSymbol::initialize())
+OSDefineMetaClassAndStructorsWithInitAndZone(OSSymbol, OSString,
+    OSSymbol::initialize(), ZC_ZFREE_CLEARMEM)
 OSMetaClassDefineReservedUnused(OSSymbol, 0);
 OSMetaClassDefineReservedUnused(OSSymbol, 1);
 OSMetaClassDefineReservedUnused(OSSymbol, 2);
@@ -544,13 +553,13 @@ OSSymbol::initWithString(const OSString *)
 	return false;
 }
 
-const OSSymbol *
+OSSharedPtr<const OSSymbol>
 OSSymbol::withString(const OSString *aString)
 {
 	// This string may be a OSSymbol already, cheap check.
 	if (OSDynamicCast(OSSymbol, aString)) {
-		aString->retain();
-		return (const OSSymbol *) aString;
+		OSSharedPtr<const OSSymbol> aStringNew((const OSSymbol *)aString, OSRetain);
+		return aStringNew;
 	} else if (((const OSSymbol *) aString)->flags & kOSStringNoCopy) {
 		return OSSymbol::withCStringNoCopy(aString->getCStringNoCopy());
 	} else {
@@ -558,10 +567,10 @@ OSSymbol::withString(const OSString *aString)
 	}
 }
 
-const OSSymbol *
+OSSharedPtr<const OSSymbol>
 OSSymbol::withCString(const char *cString)
 {
-	const OSSymbol *symbol;
+	OSSharedPtr<const OSSymbol> symbol;
 
 	// Check if the symbol exists already, we don't need to take a lock here,
 	// since existingSymbolForCString will take the shared lock.
@@ -570,31 +579,31 @@ OSSymbol::withCString(const char *cString)
 		return symbol;
 	}
 
-	OSSymbol *newSymb = new OSSymbol;
+	OSSharedPtr<OSSymbol> newSymb = OSMakeShared<OSSymbol>();
 	if (!newSymb) {
-		return newSymb;
+		return os::move(newSymb);
 	}
 
 	if (newSymb->OSString::initWithCString(cString)) {
 		pool->closeWriteGate();
-		symbol = pool->insertSymbol(newSymb);
+		symbol = pool->insertSymbol(newSymb.get());
 		pool->openWriteGate();
 
 		if (symbol) {
 			// Somebody must have inserted the new symbol so free our copy
-			newSymb->OSString::free();
+			newSymb.detach()->OSString::free();
 			return symbol;
 		}
 	}
 
-	return newSymb; // return the newly created & inserted symbol.
+	return os::move(newSymb); // return the newly created & inserted symbol.
 }
 
-const OSSymbol *
+OSSharedPtr<const OSSymbol>
 OSSymbol::withCStringNoCopy(const char *cString)
 {
-	const OSSymbol *symbol;
-	OSSymbol *newSymb;
+	OSSharedPtr<const OSSymbol> symbol;
+	OSSharedPtr<OSSymbol> newSymb;
 
 	// Check if the symbol exists already, we don't need to take a lock here,
 	// since existingSymbolForCString will take the shared lock.
@@ -603,47 +612,47 @@ OSSymbol::withCStringNoCopy(const char *cString)
 		return symbol;
 	}
 
-	newSymb = new OSSymbol;
+	newSymb = OSMakeShared<OSSymbol>();
 	if (!newSymb) {
-		return newSymb;
+		return os::move(newSymb);
 	}
 
 	if (newSymb->OSString::initWithCStringNoCopy(cString)) {
 		pool->closeWriteGate();
-		symbol = pool->insertSymbol(newSymb);
+		symbol = pool->insertSymbol(newSymb.get());
 		pool->openWriteGate();
 
 		if (symbol) {
+			newSymb.detach()->OSString::free();
 			// Somebody must have inserted the new symbol so free our copy
-			newSymb->OSString::free();
 			return symbol;
 		}
 	}
 
-	return newSymb; // return the newly created & inserted symbol.
+	return os::move(newSymb); // return the newly created & inserted symbol.
 }
 
-const OSSymbol *
+OSSharedPtr<const OSSymbol>
 OSSymbol::existingSymbolForString(const OSString *aString)
 {
 	if (OSDynamicCast(OSSymbol, aString)) {
-		aString->retain();
-		return (const OSSymbol *) aString;
+		OSSharedPtr<const OSSymbol> aStringNew((const OSSymbol *)aString, OSRetain);
+		return aStringNew;
 	}
 
 	return OSSymbol::existingSymbolForCString(aString->getCStringNoCopy());
 }
 
-const OSSymbol *
+OSSharedPtr<const OSSymbol>
 OSSymbol::existingSymbolForCString(const char *cString)
 {
-	OSSymbol *symbol;
+	OSSharedPtr<OSSymbol> symbol;
 
 	pool->closeReadGate();
 	symbol = pool->findSymbol(cString);
 	pool->openReadGate();
 
-	return symbol;
+	return os::move(symbol);
 }
 
 void

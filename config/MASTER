@@ -84,7 +84,6 @@ options		DUMMYNET	# dummynet support		# <dummynet>
 options		TRAFFIC_MGT	# traffic management support		# <traffic_mgt>
 options		MULTICAST	# Internet Protocol Class-D	$
 options		TCPDEBUG	# TCP debug			# <tcpdebug>
-options		TCP_DROP_SYNFIN	# Drop TCP packets with SYN+FIN set	# <tcpdrop_synfin>
 options		ICMP_BANDLIM	# ICMP bandwidth limiting sysctl
 options		IFNET_INPUT_SANITY_CHK	# allow dlil/ifnet input sanity check # <ifnet_input_chk>
 options		MULTIPATH	# Multipath domain		# <multipath>
@@ -106,11 +105,11 @@ options     OLD_SEMWAIT_SIGNAL  # old semwait_signal handler
 #
 #	4.4 general kernel
 #
-options		SOCKETS		# socket support		# <inet, inet6>
+options		SOCKETS		# socket support		# <inet>
 options 	DIAGNOSTIC	# diagnostics			# <diagnostic>
 options		PROFILE		# kernel profiling		# <profile>
 options		SENDFILE	# sendfile					# <sendfile>
-options		NETWORKING	# networking layer		# <inet, inet6>
+options		NETWORKING	# networking layer		# <inet>
 options		CONFIG_FSE	# file system events		# <config_fse>
 options		CONFIG_IMAGEBOOT	# local image boot	# <config_imageboot>
 options		CONFIG_LOCKERBOOT 	# locker boot 	# <config_lockerboot>
@@ -130,6 +129,7 @@ options		FDESC		# fdesc_fs support		# <fdesc>
 options		DEVFS		# devfs support			# <devfs>
 options		ROUTEFS		# routefs support		# <routefs>
 options		NULLFS		# nullfs support 		# <nullfs>
+options		BINDFS		# bindfs support 		# <bindfs>
 options		FS_COMPRESSION	# fs compression	    # <fs_compression>
 options		CONFIG_DEV_KMEM	    # /dev/kmem device for reading KVA	# <config_dev_kmem>
 
@@ -149,7 +149,9 @@ options		CONFIG_MNT_ROOTSNAP # allow rooting from snapshot # <config_mnt_rootsna
 options 	CONFIG_ROSV_STARTUP # allow read-only system volume startup # <config_rosv_startup>
 options		CONFIG_FIRMLINKS # support "firmlinks" # <config_firmlinks>
 options 	CONFIG_MOUNT_VM # mount VM volume on startup # <config_mount_vm>
+options 	CONFIG_MOUNT_PREBOOTRECOVERY # mount Preboot and/or Recovery volume on startup # <config_mount_prebootrecovery>
 options		CONFIG_DATALESS_FILES # support dataless file materialization # <config_dataless_files>
+options         CONFIG_BASESYSTEMROOT # mount BaseSystem as initial root filesystem on some kinds of startup # <config_basesystemroot>
 
 #
 # NFS support
@@ -168,13 +170,8 @@ profile				# build a profiling kernel	# <profile>
 #
 # IPv6 Support
 #
-options         "INET6"         # kernel IPv6 Support           # <inet6>
-options         IPV6SEND	# Secure Neighbor Discovery	# <ipv6send>
 options         IPSEC           # IP security            	# <ipsec>
 options         IPSEC_ESP       # IP security            	# <ipsec>
-options         "IPV6FIREWALL"  # IPv6 Firewall Feature   	# <ipv6firewall>
-options         "IPV6FIREWALL_DEFAULT_TO_ACCEPT"	#IPv6 Firewall Feature   	# <ipv6firewall>
-#options         "IPV6FIREWALL_VERBOSE" 		#IPv6 Firewall Feature   	# <ipv6firewall>
 
 pseudo-device   gif     1				# <gif>
 pseudo-device   dummy   2				# <dummy>
@@ -296,10 +293,10 @@ options   CONFIG_MFCTBLSIZ=16			# <bsmall>
 #
 # configurable kernel message buffer size
 #
-options   CONFIG_MSG_BSIZE_REL=4096		# <bsmall,small,xsmall>
-options   CONFIG_MSG_BSIZE_DEV=4096		# <bsmall,small,xsmall>
-options   CONFIG_MSG_BSIZE_REL=16384		# <medium,large,xlarge>
-options   CONFIG_MSG_BSIZE_DEV=131072		# <medium,large,xlarge>
+options   CONFIG_MSG_BSIZE_REL=4096		# <msgb_small>
+options   CONFIG_MSG_BSIZE_DEV=4096		# <msgb_small>
+options   CONFIG_MSG_BSIZE_REL=16384		# <msgb_large>
+options   CONFIG_MSG_BSIZE_DEV=131072		# <msgb_large>
 options   CONFIG_MSG_BSIZE=CONFIG_MSG_BSIZE_REL	# <!development,debug>
 options   CONFIG_MSG_BSIZE=CONFIG_MSG_BSIZE_DEV	# <development,debug>
 
@@ -317,11 +314,16 @@ options   CONFIG_IPC_TABLE_ENTRIES_STEPS=256 	# 300714 entries	# <medium,large,x
 options   CONFIG_NO_PRINTF_STRINGS		# <no_printf_str>
 options   CONFIG_NO_KPRINTF_STRINGS		# <no_kprintf_str>
 
+# support vsprintf (deprecated in favor of vsnprintf)
+options   CONFIG_VSPRINTF               # <vsprintf>
+
 #
 # configurable kernel - general switch to say we are building for an
 # embedded device
 #
 options   CONFIG_EMBEDDED			# <config_embedded>
+
+options   CONFIG_ARROW              # <config_arrow>
 
 
 # support dynamic signing of code
@@ -331,6 +333,14 @@ options		CONFIG_DYNAMIC_CODE_SIGNING	# <dynamic_codesigning>
 # enforce library validation on all processes.
 #
 options		CONFIG_ENFORCE_LIBRARY_VALIDATION  # <config_library_validation>
+
+# support loading a second static trust cache
+#
+options CONFIG_SECOND_STATIC_TRUST_CACHE # <second_static_trust_cache>
+
+# support supplemental signatures
+#
+options CONFIG_SUPPLEMENTAL_SIGNATURES # <config_supplemental_signatures>
 
 #
 # code decryption... used on embedded for app protection, DSMOS on desktop
@@ -356,6 +366,10 @@ options		CONFIG_VPS_DYNAMIC_PRIO		# <vps_dynamic_prio>
 options		CONFIG_MEMORYSTATUS		# <memorystatus>
 
 #
+# enable per-process dirty-status tracking
+#
+options		CONFIG_DIRTYSTATUS_TRACKING	# <dirtystatus_tracking>
+#
 # enable jetsam - used on embedded
 #
 options		CONFIG_JETSAM			# <jetsam>
@@ -379,6 +393,11 @@ options		CONFIG_WAITQ_DEBUG			# <config_waitq_debug>
 options		CONFIG_FREEZE			# <freeze>
 
 options		CHECK_CS_VALIDATION_BITMAP	# <config_cs_validation_bitmap>
+
+#
+# enable physical writes accounting
+#
+options		CONFIG_PHYS_WRITE_ACCT		# <phys_write_acct>
 
 #
 # enable detectiion of file cache thrashing - used on platforms with
@@ -440,11 +459,11 @@ options		CONFIG_VNGUARD			# <config_vnguard>
 #
 #  Ethernet (ARP)
 #
-pseudo-device	ether				# <networking,inet,inet6>
+pseudo-device	ether				# <networking,inet>
 #
 #  Network loopback device
 #
-pseudo-device	loop				# <networking,inet,inet6>
+pseudo-device	loop				# <networking,inet>
 #
 #  UCB pseudo terminal service
 #
@@ -472,7 +491,7 @@ pseudo-device	mdevdevice	1	init	mdevinit
 #
 # packet filter device
 #
-pseudo-device	bpfilter	4	init	bpf_init		# <networking,inet,inet6>
+pseudo-device	bpfilter	4	init	bpf_init		# <networking,inet>
 
 #
 # fsevents device
@@ -498,7 +517,7 @@ options		IOKITCPP	# C++ implementation	# <iokitcpp>
 options		IOKITSTATS	# IOKit statistics	# <iokitstats>
 options		IOTRACKING	# IOKit tracking	# <iotracking>
 options		CONFIG_SLEEP	#			# <config_sleep>
-options   CONFIG_MAX_THREADS=64	# IOConfigThread threads
+options		CONFIG_MAX_THREADS=500	# IOConfigThread threads
 options         NO_KEXTD                		# <no_kextd>
 options         NO_KERNEL_HID           		# <no_kernel_hid>
 
@@ -536,13 +555,19 @@ options		PERSONA_DEBUG	    # Persona debugging     # <persona_debug>
 
 options		CONFIG_MACF	# Mandatory Access Control Framework	# <config_macf>
 options		CONFIG_MACF_SOCKET_SUBSET	# MAC socket subest (no labels)	# <config_macf>
-#options	CONFIG_MACF_SOCKET  # MAC socket labels	    # <config_macf>
-#options	CONFIG_MACF_NET	    # mbuf	    	    # <config_macf>
 #options	CONFIG_MACF_DEBUG   # debug	    	    # <config_macf>
 
 options		CONFIG_AUDIT	    # Kernel auditing	    # <config_audit>
 
 options		CONFIG_ARCADE		# Arcade validation support	# <config_arcade>
+
+options		CONFIG_SETUID		# setuid/setgid support # <config_setuid>
+
+options		CONFIG_SECURE_BSD_ROOT	# secure BSD root	# <config_secure_bsd_root>
+
+options		CONFIG_KAS_INFO		# kas_info support	# <config_kas_info>
+
+options		CONFIG_ZALLOC_SEQUESTER		# Sequester VA for zones # <config_zalloc_sequester>
 
 #
 # MACH configuration options.
@@ -581,12 +606,7 @@ options		MACH_VM_DEBUG	#				# <debug>
 #	hardclock device driver.
 #
 options		MACH_MP_DEBUG	#				# <debug>
-#
-# ZONE_DEBUG keeps track of all zalloc()ed elements to perform further
-#	operations on each element.
-#
-options		ZONE_DEBUG	#		# <debug>
-options		CONFIG_ZCACHE 	#Enable per-cpu caching for zones	# <config_zcache>
+options		CONFIG_ZCACHE 	# Enable per-cpu caching for zones	# <config_zcache>
 options		CONFIG_ZLEAKS	# Live zone leak debugging	# <zleaks>
 
 #
@@ -699,6 +719,7 @@ options		CONFIG_SCHED_GRRR_CORE		# <config_sched_grrr>
 options		CONFIG_SCHED_MULTIQ		# <config_sched_multiq>
 options		CONFIG_SCHED_TIMESHARE_CORE	# <config_sched_traditional,config_sched_multiq>
 options		CONFIG_CLUTCH			# <config_clutch>
+options 	CONFIG_SCHED_AUTO_JOIN		# <config_sched_auto_join>
 
 options		CONFIG_SCHED_IDLE_IN_PLACE	# <config_sched_idle_in_place>
 options		CONFIG_SCHED_SFI		# <config_sched_sfi>
@@ -719,6 +740,7 @@ options		MACH_KDP	    # KDP		# <mach_kdp>
 options		CONFIG_SERIAL_KDP   # KDP over serial	# <config_serial_kdp>
 options		CONFIG_KDP_INTERACTIVE_DEBUGGING	# <kdp_interactive_debugging>
 
+options 	CONFIG_TASKWATCH
 #
 # Kernel Power On Self Tests
 #
@@ -747,6 +769,7 @@ options		CONFIG_SYSDIAGNOSE			# <config_sysdiagnose>
 
 # Configurable Security Restrictions
 options		CONFIG_CSR				# <config_csr>
+options		CONFIG_CSR_FROM_DT		# <config_csr_from_dt>
 
 #
 # Console options
@@ -776,6 +799,7 @@ options		CONFIG_MACH_BRIDGE_RECV_TIME #  # <config_mach_bridge_recv_time>
 options		CONFIG_32BIT_TELEMETRY # # <config_32bit_telemetry>
 
 options		CONFIG_QUIESCE_COUNTER # Support for _COMM_PAGE_CPU_QUIESCENT_COUNTER # <config_quiesce_counter>
+options		CONFIG_ARM_PFZ	# Support for PFZ on ARM # <config_arm_pfz>
 
 #
 # Sanitizers
@@ -784,4 +808,17 @@ options		CONFIG_KASAN		# <config_kasan>
 options		CONFIG_UBSAN		# <config_ubsan>
 options		CONFIG_KSANCOV		# <config_ksancov>
 
+# dark boot support
+options		CONFIG_DARKBOOT		# <config_darkboot>
+
+# support for processes delaying idle sleep for pending IO
+options		CONFIG_DELAY_IDLE_SLEEP # <config_delay_idle_sleep>
+
+# support for storing a 64-bit user supplied value in the proc structure
+options		CONFIG_PROC_UDATA_STORAGE # <config_proc_udata_storage>
+
 pseudo-device ksancov 1 init ksancov_init_dev # <config_ksancov>
+
+# debug instrumentation to catch code that leaves interrupts masked
+# for an excessive period of time
+options   INTERRUPT_MASKED_DEBUG # <interrupt_masked_debug>

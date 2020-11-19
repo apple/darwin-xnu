@@ -35,6 +35,7 @@
 #include <pexpert/pexpert.h>
 #include <sys/random.h>
 #include <prng/random.h>
+#include <prng/entropy.h>
 #include <corecrypto/ccdigest.h>
 #include <corecrypto/ccdrbg.h>
 #include <corecrypto/cckprng.h>
@@ -45,7 +46,7 @@ static struct cckprng_ctx *prng_ctx;
 static SECURITY_READ_ONLY_LATE(struct cckprng_funcs) prng_funcs;
 static SECURITY_READ_ONLY_LATE(int) prng_ready;
 
-entropy_data_t EntropyData = {};
+extern entropy_data_t EntropyData;
 
 #define SEED_SIZE (SHA256_DIGEST_LENGTH)
 static uint8_t bootseed[SEED_SIZE];
@@ -146,7 +147,7 @@ static struct {
 		     .strictFIPS = 0,
 	     }};
 
-static void read_erandom(void * buf, uint32_t nbytes);
+static void read_erandom(void * buf, size_t nbytes);
 
 /*
  * Return a uniformly distributed 64-bit random number.
@@ -221,10 +222,10 @@ early_random(void)
 }
 
 static void
-read_random_generate(uint8_t *buffer, u_int numbytes);
+read_random_generate(uint8_t *buffer, size_t numbytes);
 
 static void
-read_erandom(void * buf, uint32_t nbytes)
+read_erandom(void * buf, size_t nbytes)
 {
 	uint8_t * buffer_bytes = buf;
 	size_t n;
@@ -267,11 +268,13 @@ register_and_init_prng(struct cckprng_ctx *ctx, const struct cckprng_funcs *func
 	assert(cpu_number() == master_cpu);
 	assert(!prng_ready);
 
+	entropy_buffer_init();
+
 	prng_ctx = ctx;
 	prng_funcs = *funcs;
 
 	uint64_t nonce = ml_get_timebase();
-	prng_funcs.init(prng_ctx, MAX_CPUS, sizeof(EntropyData.buffer), EntropyData.buffer, &EntropyData.sample_count, sizeof(bootseed), bootseed, sizeof(nonce), &nonce);
+	prng_funcs.init(prng_ctx, MAX_CPUS, EntropyData.buffer_size, EntropyData.buffer, &EntropyData.sample_count, sizeof(bootseed), bootseed, sizeof(nonce), &nonce);
 	prng_funcs.initgen(prng_ctx, master_cpu);
 	prng_ready = 1;
 
@@ -320,7 +323,7 @@ ensure_gsbase(void)
 }
 
 static void
-read_random_generate(uint8_t *buffer, u_int numbytes)
+read_random_generate(uint8_t *buffer, size_t numbytes)
 {
 	ensure_gsbase();
 

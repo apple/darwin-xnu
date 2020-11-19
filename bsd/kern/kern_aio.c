@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2003-2016 Apple Inc. All rights reserved.
+ * Copyright (c) 2003-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -70,41 +70,115 @@
 
 #include <vm/vm_map.h>
 
-#include <libkern/OSAtomic.h>
+#include <os/refcnt.h>
 
 #include <sys/kdebug.h>
-#define AIO_work_queued                                 1
-#define AIO_worker_wake                                 2
-#define AIO_completion_sig                              3
-#define AIO_completion_cleanup_wait             4
-#define AIO_completion_cleanup_wake             5
+#define AIO_work_queued                 1
+#define AIO_worker_wake                 2
+#define AIO_completion_sig              3
+#define AIO_completion_cleanup_wait     4
+#define AIO_completion_cleanup_wake     5
 #define AIO_completion_suspend_wake     6
-#define AIO_fsync_delay                                 7
-#define AIO_cancel                                              10
-#define AIO_cancel_async_workq                  11
-#define AIO_cancel_sync_workq                   12
-#define AIO_cancel_activeq                              13
-#define AIO_cancel_doneq                                14
-#define AIO_fsync                                               20
-#define AIO_read                                                30
-#define AIO_write                                               40
-#define AIO_listio                                              50
-#define AIO_error                                               60
-#define AIO_error_val                                   61
-#define AIO_error_activeq                               62
-#define AIO_error_workq                                 63
-#define AIO_return                                              70
-#define AIO_return_val                                  71
-#define AIO_return_activeq                              72
-#define AIO_return_workq                                73
-#define AIO_exec                                                80
-#define AIO_exit                                                90
-#define AIO_exit_sleep                                  91
-#define AIO_close                                               100
-#define AIO_close_sleep                                 101
-#define AIO_suspend                                             110
-#define AIO_suspend_sleep                               111
-#define AIO_worker_thread                               120
+#define AIO_fsync_delay                 7
+#define AIO_cancel                      10
+#define AIO_cancel_async_workq          11
+#define AIO_cancel_sync_workq           12
+#define AIO_cancel_activeq              13
+#define AIO_cancel_doneq                14
+#define AIO_fsync                       20
+#define AIO_read                        30
+#define AIO_write                       40
+#define AIO_listio                      50
+#define AIO_error                       60
+#define AIO_error_val                   61
+#define AIO_error_activeq               62
+#define AIO_error_workq                 63
+#define AIO_return                      70
+#define AIO_return_val                  71
+#define AIO_return_activeq              72
+#define AIO_return_workq                73
+#define AIO_exec                        80
+#define AIO_exit                        90
+#define AIO_exit_sleep                  91
+#define AIO_close                       100
+#define AIO_close_sleep                 101
+#define AIO_suspend                     110
+#define AIO_suspend_sleep               111
+#define AIO_worker_thread               120
+
+__options_decl(aio_entry_flags_t, uint32_t, {
+	AIO_READ        = 0x00000001, /* a read */
+	AIO_WRITE       = 0x00000002, /* a write */
+	AIO_FSYNC       = 0x00000004, /* aio_fsync with op = O_SYNC */
+	AIO_DSYNC       = 0x00000008, /* aio_fsync with op = O_DSYNC (not supported yet) */
+	AIO_LIO         = 0x00000010, /* lio_listio generated IO */
+	AIO_LIO_WAIT    = 0x00000020, /* lio_listio is waiting on the leader */
+
+	/*
+	 * These flags mean that this entry is blocking either:
+	 * - close (AIO_CLOSE_WAIT)
+	 * - exit or exec (AIO_EXIT_WAIT)
+	 *
+	 * These flags are mutually exclusive, and the AIO_EXIT_WAIT variant
+	 * will also neuter notifications in do_aio_completion_and_unlock().
+	 */
+	AIO_CLOSE_WAIT  = 0x00004000,
+	AIO_EXIT_WAIT   = 0x00008000,
+});
+
+/*! @struct aio_workq_entry
+ *
+ * @discussion
+ * This represents a piece of aio/lio work.
+ *
+ * The ownership rules go as follows:
+ *
+ * - the "proc" owns one refcount on the entry (from creation), while it is
+ *   enqueued on the aio_activeq and then the aio_doneq.
+ *
+ *   either aio_return() (user read the status) or _aio_exit() (the process
+ *   died) will dequeue the entry and consume this ref.
+ *
+ * - the async workqueue owns one refcount once the work is submitted,
+ *   which is consumed in do_aio_completion_and_unlock().
+ *
+ *   This ref protects the entry for the the end of
+ *   do_aio_completion_and_unlock() (when signal delivery happens).
+ *
+ * - lio_listio() for batches picks one of the entries to be the "leader"
+ *   of the batch. Each work item will have a refcount on its leader
+ *   so that the accounting of the batch completion can be done on the leader
+ *   (to be able to decrement lio_pending).
+ *
+ *   This ref is consumed in do_aio_completion_and_unlock() as well.
+ *
+ * - lastly, in lio_listio() when the LIO_WAIT behavior is requested,
+ *   an extra ref is taken in this syscall as it needs to keep accessing
+ *   the leader "lio_pending" field until it hits 0.
+ */
+struct aio_workq_entry {
+	/* queue lock */
+	TAILQ_ENTRY(aio_workq_entry)    aio_workq_link;
+
+	/* Proc lock */
+	TAILQ_ENTRY(aio_workq_entry)    aio_proc_link;  /* p_aio_activeq or p_aio_doneq */
+	user_ssize_t                    returnval;      /* return value from read / write request */
+	errno_t                         errorval;       /* error value from read / write request */
+	os_refcnt_t                     aio_refcount;
+	aio_entry_flags_t               flags;
+
+	int                             lio_pending;    /* pending I/Os in lio group, only on leader */
+	struct aio_workq_entry         *lio_leader;     /* pointer to the lio leader, can be self */
+
+	/* Initialized and never changed, safe to access */
+	struct proc                    *procp;          /* user proc that queued this request */
+	user_addr_t                     uaiocbp;        /* pointer passed in from user land */
+	struct user_aiocb               aiocb;          /* copy of aiocb from user land */
+	thread_t                        thread;         /* thread that queued this request */
+
+	/* Initialized, and possibly freed by aio_work_thread() or at free if cancelled */
+	vm_map_t                        aio_map;        /* user land map we have a reference to */
+};
 
 /*
  * aio requests queue up on the aio_async_workq or lio_sync_workq (for
@@ -117,16 +191,13 @@
  */
 typedef struct aio_workq   {
 	TAILQ_HEAD(, aio_workq_entry)   aioq_entries;
-	int                             aioq_count;
-	lck_mtx_t                       aioq_mtx;
+	lck_spin_t                      aioq_lock;
 	struct waitq                    aioq_waitq;
 } *aio_workq_t;
 
 #define AIO_NUM_WORK_QUEUES 1
 struct aio_anchor_cb {
-	volatile int32_t        aio_inflight_count;     /* entries that have been taken from a workq */
-	volatile int32_t        aio_done_count;         /* entries on all done queues (proc.aio_doneq) */
-	volatile int32_t        aio_total_count;        /* total extant entries */
+	os_atomic(int)          aio_total_count;        /* total extant entries */
 
 	/* Hash table of queues here */
 	int                     aio_num_workqs;
@@ -134,21 +205,13 @@ struct aio_anchor_cb {
 };
 typedef struct aio_anchor_cb aio_anchor_cb;
 
-struct aio_lio_context {
-	int             io_waiter;
-	int             io_issued;
-	int             io_completed;
-};
-typedef struct aio_lio_context aio_lio_context;
-
-
 /*
  * Notes on aio sleep / wake channels.
  * We currently pick a couple fields within the proc structure that will allow
  * us sleep channels that currently do not collide with any other kernel routines.
  * At this time, for binary compatibility reasons, we cannot create new proc fields.
  */
-#define AIO_SUSPEND_SLEEP_CHAN  p_aio_active_count
+#define AIO_SUSPEND_SLEEP_CHAN  p_aio_activeq
 #define AIO_CLEANUP_SLEEP_CHAN  p_aio_total_count
 
 #define ASSERT_AIO_FROM_PROC(aiop, theproc)     \
@@ -162,67 +225,43 @@ typedef struct aio_lio_context aio_lio_context;
 static void             aio_proc_lock(proc_t procp);
 static void             aio_proc_lock_spin(proc_t procp);
 static void             aio_proc_unlock(proc_t procp);
-static lck_mtx_t*       aio_proc_mutex(proc_t procp);
-static void             aio_proc_move_done_locked(proc_t procp, aio_workq_entry *entryp);
-static void             aio_proc_remove_done_locked(proc_t procp, aio_workq_entry *entryp);
-static int              aio_get_process_count(proc_t procp );
-static int              aio_active_requests_for_process(proc_t procp );
-static int              aio_proc_active_requests_for_file(proc_t procp, int fd);
-static boolean_t        is_already_queued(proc_t procp, user_addr_t aiocbp );
-static boolean_t        should_cancel(aio_workq_entry *entryp, user_addr_t aiocbp, int fd);
+static lck_mtx_t       *aio_proc_mutex(proc_t procp);
+static bool             aio_has_active_requests_for_process(proc_t procp);
+static bool             aio_proc_has_active_requests_for_file(proc_t procp, int fd);
+static boolean_t        is_already_queued(proc_t procp, user_addr_t aiocbp);
 
-static void             aio_entry_lock(aio_workq_entry *entryp);
-static void             aio_entry_lock_spin(aio_workq_entry *entryp);
 static aio_workq_t      aio_entry_workq(aio_workq_entry *entryp);
-static lck_mtx_t*       aio_entry_mutex(__unused aio_workq_entry *entryp);
 static void             aio_workq_remove_entry_locked(aio_workq_t queue, aio_workq_entry *entryp);
 static void             aio_workq_add_entry_locked(aio_workq_t queue, aio_workq_entry *entryp);
-static void             aio_entry_ref_locked(aio_workq_entry *entryp);
-static void             aio_entry_unref_locked(aio_workq_entry *entryp);
 static void             aio_entry_ref(aio_workq_entry *entryp);
 static void             aio_entry_unref(aio_workq_entry *entryp);
-static void             aio_entry_update_for_cancel(aio_workq_entry *entryp, boolean_t cancelled,
-    int wait_for_completion, boolean_t disable_notification);
-static int              aio_entry_try_workq_remove(aio_workq_entry *entryp);
-static boolean_t        aio_delay_fsync_request( aio_workq_entry *entryp );
-static int              aio_free_request(aio_workq_entry *entryp);
+static bool             aio_entry_try_workq_remove(aio_workq_entry *entryp);
+static boolean_t        aio_delay_fsync_request(aio_workq_entry *entryp);
+static void             aio_free_request(aio_workq_entry *entryp);
 
 static void             aio_workq_init(aio_workq_t wq);
 static void             aio_workq_lock_spin(aio_workq_t wq);
 static void             aio_workq_unlock(aio_workq_t wq);
-static lck_mtx_t*       aio_workq_mutex(aio_workq_t wq);
+static lck_spin_t      *aio_workq_lock(aio_workq_t wq);
 
-static void             aio_work_thread( void );
-static aio_workq_entry *aio_get_some_work( void );
+static void             aio_work_thread(void *arg, wait_result_t wr);
+static aio_workq_entry *aio_get_some_work(void);
 
-static int              aio_get_all_queues_count( void );
-static int              aio_queue_async_request(proc_t procp, user_addr_t aiocbp, int kindOfIO );
-static int              aio_validate( aio_workq_entry *entryp );
-static int              aio_increment_total_count(void);
-static int              aio_decrement_total_count(void);
+static int              aio_queue_async_request(proc_t procp, user_addr_t aiocbp, aio_entry_flags_t);
+static int              aio_validate(proc_t, aio_workq_entry *entryp);
 
-static int              do_aio_cancel_locked(proc_t p, int fd, user_addr_t aiocbp, int wait_for_completion, boolean_t disable_notification );
-static void             do_aio_completion( aio_workq_entry *entryp );
-static int              do_aio_fsync( aio_workq_entry *entryp );
-static int              do_aio_read( aio_workq_entry *entryp );
-static int              do_aio_write( aio_workq_entry *entryp );
-static void             do_munge_aiocb_user32_to_user( struct user32_aiocb *my_aiocbp, struct user_aiocb *the_user_aiocbp );
-static void             do_munge_aiocb_user64_to_user( struct user64_aiocb *my_aiocbp, struct user_aiocb *the_user_aiocbp );
-static int      lio_create_entry(proc_t procp,
-    user_addr_t aiocbp,
-    void *group_tag,
-    aio_workq_entry **entrypp );
-static aio_workq_entry *aio_create_queue_entry(proc_t procp,
-    user_addr_t aiocbp,
-    void *group_tag,
-    int kindOfIO);
-static user_addr_t *aio_copy_in_list(proc_t procp, user_addr_t aiocblist, int nent);
-static void             free_lio_context(aio_lio_context* context);
-static void             aio_enqueue_work( proc_t procp, aio_workq_entry *entryp, int proc_locked);
+static int              do_aio_cancel_locked(proc_t p, int fd, user_addr_t aiocbp, aio_entry_flags_t);
+static void             do_aio_completion_and_unlock(proc_t p, aio_workq_entry *entryp);
+static int              do_aio_fsync(aio_workq_entry *entryp);
+static int              do_aio_read(aio_workq_entry *entryp);
+static int              do_aio_write(aio_workq_entry *entryp);
+static void             do_munge_aiocb_user32_to_user(struct user32_aiocb *my_aiocbp, struct user_aiocb *the_user_aiocbp);
+static void             do_munge_aiocb_user64_to_user(struct user64_aiocb *my_aiocbp, struct user_aiocb *the_user_aiocbp);
+static aio_workq_entry *aio_create_queue_entry(proc_t procp, user_addr_t aiocbp, aio_entry_flags_t);
+static int              aio_copy_in_list(proc_t, user_addr_t, user_addr_t *, int);
 
-#define ASSERT_AIO_PROC_LOCK_OWNED(p)   lck_mtx_assert(aio_proc_mutex((p)), LCK_MTX_ASSERT_OWNED)
-#define ASSERT_AIO_WORKQ_LOCK_OWNED(q)  lck_mtx_assert(aio_workq_mutex((q)), LCK_MTX_ASSERT_OWNED)
-#define ASSERT_AIO_ENTRY_LOCK_OWNED(e)  lck_mtx_assert(aio_entry_mutex((e)), LCK_MTX_ASSERT_OWNED)
+#define ASSERT_AIO_PROC_LOCK_OWNED(p)   LCK_MTX_ASSERT(aio_proc_mutex(p), LCK_MTX_ASSERT_OWNED)
+#define ASSERT_AIO_WORKQ_LOCK_OWNED(q)  LCK_SPIN_ASSERT(aio_workq_lock(q), LCK_ASSERT_OWNED)
 
 /*
  *  EXTERNAL PROTOTYPES
@@ -231,13 +270,10 @@ static void             aio_enqueue_work( proc_t procp, aio_workq_entry *entryp,
 /* in ...bsd/kern/sys_generic.c */
 extern int dofileread(vfs_context_t ctx, struct fileproc *fp,
     user_addr_t bufp, user_size_t nbyte,
-    off_t offset, int flags, user_ssize_t *retval );
+    off_t offset, int flags, user_ssize_t *retval);
 extern int dofilewrite(vfs_context_t ctx, struct fileproc *fp,
     user_addr_t bufp, user_size_t nbyte, off_t offset,
-    int flags, user_ssize_t *retval );
-#if DEBUG
-static uint32_t                         lio_contexts_alloced = 0;
-#endif  /* DEBUG */
+    int flags, user_ssize_t *retval);
 
 /*
  * aio external global variables.
@@ -250,33 +286,16 @@ extern int aio_worker_threads;                  /* AIO_THREAD_COUNT - configurab
 /*
  * aio static variables.
  */
-static aio_anchor_cb    aio_anchor;
-static lck_grp_t        *aio_proc_lock_grp;
-static lck_grp_t        *aio_entry_lock_grp;
-static lck_grp_t        *aio_queue_lock_grp;
-static lck_attr_t       *aio_lock_attr;
-static lck_grp_attr_t   *aio_lock_grp_attr;
-static struct zone      *aio_workq_zonep;
-static lck_mtx_t        aio_entry_mtx;
-static lck_mtx_t        aio_proc_mtx;
+static aio_anchor_cb aio_anchor = {
+	.aio_num_workqs = AIO_NUM_WORK_QUEUES,
+};
+os_refgrp_decl(static, aio_refgrp, "aio", NULL);
+static LCK_GRP_DECLARE(aio_proc_lock_grp, "aio_proc");
+static LCK_GRP_DECLARE(aio_queue_lock_grp, "aio_queue");
+static LCK_MTX_DECLARE(aio_proc_mtx, &aio_proc_lock_grp);
 
-static void
-aio_entry_lock(__unused aio_workq_entry *entryp)
-{
-	lck_mtx_lock(&aio_entry_mtx);
-}
-
-static void
-aio_entry_lock_spin(__unused aio_workq_entry *entryp)
-{
-	lck_mtx_lock_spin(&aio_entry_mtx);
-}
-
-static void
-aio_entry_unlock(__unused aio_workq_entry *entryp)
-{
-	lck_mtx_unlock(&aio_entry_mtx);
-}
+static ZONE_DECLARE(aio_workq_zonep, "aiowq", sizeof(aio_workq_entry),
+    ZC_ZFREE_CLEARMEM);
 
 /* Hash */
 static aio_workq_t
@@ -285,18 +304,11 @@ aio_entry_workq(__unused aio_workq_entry *entryp)
 	return &aio_anchor.aio_async_workqs[0];
 }
 
-static lck_mtx_t*
-aio_entry_mutex(__unused aio_workq_entry *entryp)
-{
-	return &aio_entry_mtx;
-}
-
 static void
 aio_workq_init(aio_workq_t wq)
 {
 	TAILQ_INIT(&wq->aioq_entries);
-	wq->aioq_count = 0;
-	lck_mtx_init(&wq->aioq_mtx, aio_queue_lock_grp, aio_lock_attr);
+	lck_spin_init(&wq->aioq_lock, &aio_queue_lock_grp, LCK_ATTR_NULL);
 	waitq_init(&wq->aioq_waitq, SYNC_POLICY_FIFO);
 }
 
@@ -314,12 +326,7 @@ aio_workq_remove_entry_locked(aio_workq_t queue, aio_workq_entry *entryp)
 	}
 
 	TAILQ_REMOVE(&queue->aioq_entries, entryp, aio_workq_link);
-	queue->aioq_count--;
 	entryp->aio_workq_link.tqe_prev = NULL; /* Not on a workq */
-
-	if (queue->aioq_count < 0) {
-		panic("Negative count on a queue.\n");
-	}
 }
 
 static void
@@ -328,10 +335,6 @@ aio_workq_add_entry_locked(aio_workq_t queue, aio_workq_entry *entryp)
 	ASSERT_AIO_WORKQ_LOCK_OWNED(queue);
 
 	TAILQ_INSERT_TAIL(&queue->aioq_entries, entryp, aio_workq_link);
-	if (queue->aioq_count < 0) {
-		panic("Negative count on a queue.\n");
-	}
-	queue->aioq_count++;
 }
 
 static void
@@ -346,24 +349,57 @@ aio_proc_lock_spin(proc_t procp)
 	lck_mtx_lock_spin(aio_proc_mutex(procp));
 }
 
+static bool
+aio_has_any_work(void)
+{
+	return os_atomic_load(&aio_anchor.aio_total_count, relaxed) != 0;
+}
+
+static bool
+aio_try_proc_insert_active_locked(proc_t procp, aio_workq_entry *entryp)
+{
+	int old, new;
+
+	ASSERT_AIO_PROC_LOCK_OWNED(procp);
+
+	if (procp->p_aio_total_count >= aio_max_requests_per_process) {
+		return false;
+	}
+
+	if (is_already_queued(procp, entryp->uaiocbp)) {
+		return false;
+	}
+
+	os_atomic_rmw_loop(&aio_anchor.aio_total_count, old, new, relaxed, {
+		if (old >= aio_max_requests) {
+		        os_atomic_rmw_loop_give_up(return false);
+		}
+		new = old + 1;
+	});
+
+	TAILQ_INSERT_TAIL(&procp->p_aio_activeq, entryp, aio_proc_link);
+	procp->p_aio_total_count++;
+	return true;
+}
+
 static void
 aio_proc_move_done_locked(proc_t procp, aio_workq_entry *entryp)
 {
-	ASSERT_AIO_PROC_LOCK_OWNED(procp);
-
-	TAILQ_REMOVE(&procp->p_aio_activeq, entryp, aio_proc_link );
-	TAILQ_INSERT_TAIL( &procp->p_aio_doneq, entryp, aio_proc_link);
-	procp->p_aio_active_count--;
-	OSIncrementAtomic(&aio_anchor.aio_done_count);
+	TAILQ_REMOVE(&procp->p_aio_activeq, entryp, aio_proc_link);
+	TAILQ_INSERT_TAIL(&procp->p_aio_doneq, entryp, aio_proc_link);
 }
 
 static void
 aio_proc_remove_done_locked(proc_t procp, aio_workq_entry *entryp)
 {
 	TAILQ_REMOVE(&procp->p_aio_doneq, entryp, aio_proc_link);
-	OSDecrementAtomic(&aio_anchor.aio_done_count);
-	aio_decrement_total_count();
-	procp->p_aio_total_count--;
+	entryp->aio_proc_link.tqe_prev = NULL;
+	if (os_atomic_dec_orig(&aio_anchor.aio_total_count, relaxed) <= 0) {
+		panic("Negative total AIO count!\n");
+	}
+	if (procp->p_aio_total_count-- <= 0) {
+		panic("proc %p: p_aio_total_count accounting mismatch", procp);
+	}
 }
 
 static void
@@ -379,75 +415,20 @@ aio_proc_mutex(proc_t procp)
 }
 
 static void
-aio_entry_ref_locked(aio_workq_entry *entryp)
-{
-	ASSERT_AIO_ENTRY_LOCK_OWNED(entryp);
-
-	if (entryp->aio_refcount < 0) {
-		panic("AIO workq entry with a negative refcount.\n");
-	}
-	entryp->aio_refcount++;
-}
-
-
-/* Return 1 if you've freed it */
-static void
-aio_entry_unref_locked(aio_workq_entry *entryp)
-{
-	ASSERT_AIO_ENTRY_LOCK_OWNED(entryp);
-
-	entryp->aio_refcount--;
-	if (entryp->aio_refcount < 0) {
-		panic("AIO workq entry with a negative refcount.\n");
-	}
-}
-
-static void
 aio_entry_ref(aio_workq_entry *entryp)
 {
-	aio_entry_lock_spin(entryp);
-	aio_entry_ref_locked(entryp);
-	aio_entry_unlock(entryp);
+	os_ref_retain(&entryp->aio_refcount);
 }
+
 static void
 aio_entry_unref(aio_workq_entry *entryp)
 {
-	aio_entry_lock_spin(entryp);
-	aio_entry_unref_locked(entryp);
-
-	if ((entryp->aio_refcount == 0) && ((entryp->flags & AIO_DO_FREE) != 0)) {
-		aio_entry_unlock(entryp);
+	if (os_ref_release(&entryp->aio_refcount) == 0) {
 		aio_free_request(entryp);
-	} else {
-		aio_entry_unlock(entryp);
 	}
-
-	return;
 }
 
-static void
-aio_entry_update_for_cancel(aio_workq_entry *entryp, boolean_t cancelled, int wait_for_completion, boolean_t disable_notification)
-{
-	aio_entry_lock_spin(entryp);
-
-	if (cancelled) {
-		aio_entry_ref_locked(entryp);
-		entryp->errorval = ECANCELED;
-		entryp->returnval = -1;
-	}
-
-	if (wait_for_completion) {
-		entryp->flags |= wait_for_completion; /* flag for special completion processing */
-	}
-
-	if (disable_notification) {
-		entryp->flags |= AIO_DISABLE; /* Don't want a signal */
-	}
-
-	aio_entry_unlock(entryp);
-}
-
-static int
+static bool
 aio_entry_try_workq_remove(aio_workq_entry *entryp)
 {
 	/* Can only be cancelled if it's still on a work queue */
@@ -460,31 +441,31 @@ aio_entry_try_workq_remove(aio_workq_entry *entryp)
 		if (entryp->aio_workq_link.tqe_prev != NULL) {
 			aio_workq_remove_entry_locked(queue, entryp);
 			aio_workq_unlock(queue);
-			return 1;
+			return true;
 		} else {
 			aio_workq_unlock(queue);
 		}
 	}
 
-	return 0;
+	return false;
 }
 
 static void
 aio_workq_lock_spin(aio_workq_t wq)
 {
-	lck_mtx_lock_spin(aio_workq_mutex(wq));
+	lck_spin_lock(aio_workq_lock(wq));
 }
 
 static void
 aio_workq_unlock(aio_workq_t wq)
 {
-	lck_mtx_unlock(aio_workq_mutex(wq));
+	lck_spin_unlock(aio_workq_lock(wq));
 }
 
-static lck_mtx_t*
-aio_workq_mutex(aio_workq_t wq)
+static lck_spin_t*
+aio_workq_lock(aio_workq_t wq)
 {
-	return &wq->aioq_mtx;
+	return &wq->aioq_lock;
 }
 
 /*
@@ -495,16 +476,16 @@ aio_workq_mutex(aio_workq_t wq)
  * descriptor are cancelled (if possible).
  */
 int
-aio_cancel(proc_t p, struct aio_cancel_args *uap, int *retval )
+aio_cancel(proc_t p, struct aio_cancel_args *uap, int *retval)
 {
 	struct user_aiocb my_aiocb;
 	int               result;
 
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel) | DBG_FUNC_START,
-	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, 0, 0, 0);
+	    VM_KERNEL_ADDRPERM(p), uap->aiocbp, 0, 0, 0);
 
 	/* quick check to see if there are any async IO requests queued up */
-	if (aio_get_all_queues_count() < 1) {
+	if (!aio_has_any_work()) {
 		result = 0;
 		*retval = AIO_ALLDONE;
 		goto ExitRoutine;
@@ -515,16 +496,16 @@ aio_cancel(proc_t p, struct aio_cancel_args *uap, int *retval )
 		if (proc_is64bit(p)) {
 			struct user64_aiocb aiocb64;
 
-			result = copyin( uap->aiocbp, &aiocb64, sizeof(aiocb64));
+			result = copyin(uap->aiocbp, &aiocb64, sizeof(aiocb64));
 			if (result == 0) {
 				do_munge_aiocb_user64_to_user(&aiocb64, &my_aiocb);
 			}
 		} else {
 			struct user32_aiocb aiocb32;
 
-			result = copyin( uap->aiocbp, &aiocb32, sizeof(aiocb32));
+			result = copyin(uap->aiocbp, &aiocb32, sizeof(aiocb32));
 			if (result == 0) {
-				do_munge_aiocb_user32_to_user( &aiocb32, &my_aiocb );
+				do_munge_aiocb_user32_to_user(&aiocb32, &my_aiocb);
 			}
 		}
 
@@ -544,7 +525,7 @@ aio_cancel(proc_t p, struct aio_cancel_args *uap, int *retval )
 	}
 
 	aio_proc_lock(p);
-	result = do_aio_cancel_locked( p, uap->fd, uap->aiocbp, 0, FALSE );
+	result = do_aio_cancel_locked(p, uap->fd, uap->aiocbp, 0);
 	ASSERT_AIO_PROC_LOCK_OWNED(p);
 	aio_proc_unlock(p);
 
@@ -558,10 +539,10 @@ aio_cancel(proc_t p, struct aio_cancel_args *uap, int *retval )
 
 ExitRoutine:
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel) | DBG_FUNC_END,
-	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, result, 0, 0);
+	    VM_KERNEL_ADDRPERM(p), uap->aiocbp, result, 0, 0);
 
 	return result;
-} /* aio_cancel */
+}
 
 
 /*
@@ -570,12 +551,12 @@ ExitRoutine:
  * THIS MAY BLOCK.
  */
 __private_extern__ void
-_aio_close(proc_t p, int fd )
+_aio_close(proc_t p, int fd)
 {
 	int error;
 
 	/* quick check to see if there are any async IO requests queued up */
-	if (aio_get_all_queues_count() < 1) {
+	if (!aio_has_any_work()) {
 		return;
 	}
 
@@ -584,7 +565,7 @@ _aio_close(proc_t p, int fd )
 
 	/* cancel all async IO requests on our todo queues for this file descriptor */
 	aio_proc_lock(p);
-	error = do_aio_cancel_locked( p, fd, 0, AIO_CLOSE_WAIT, FALSE );
+	error = do_aio_cancel_locked(p, fd, USER_ADDR_NULL, AIO_CLOSE_WAIT);
 	ASSERT_AIO_PROC_LOCK_OWNED(p);
 	if (error == AIO_NOTCANCELED) {
 		/*
@@ -599,8 +580,8 @@ _aio_close(proc_t p, int fd )
 		KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_close_sleep) | DBG_FUNC_NONE,
 		    VM_KERNEL_ADDRPERM(p), fd, 0, 0, 0);
 
-		while (aio_proc_active_requests_for_file(p, fd) > 0) {
-			msleep(&p->AIO_CLEANUP_SLEEP_CHAN, aio_proc_mutex(p), PRIBIO, "aio_close", 0 );
+		while (aio_proc_has_active_requests_for_file(p, fd)) {
+			msleep(&p->AIO_CLEANUP_SLEEP_CHAN, aio_proc_mutex(p), PRIBIO, "aio_close", 0);
 		}
 	}
 
@@ -608,9 +589,7 @@ _aio_close(proc_t p, int fd )
 
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_close) | DBG_FUNC_END,
 	    VM_KERNEL_ADDRPERM(p), fd, 0, 0, 0);
-
-	return;
-} /* _aio_close */
+}
 
 
 /*
@@ -620,44 +599,43 @@ _aio_close(proc_t p, int fd )
  * fdatasync, or sync).
  */
 int
-aio_error(proc_t p, struct aio_error_args *uap, int *retval )
+aio_error(proc_t p, struct aio_error_args *uap, int *retval)
 {
 	aio_workq_entry *entryp;
 	int              error;
 
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_error) | DBG_FUNC_START,
-	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, 0, 0, 0);
+	    VM_KERNEL_ADDRPERM(p), uap->aiocbp, 0, 0, 0);
 
 	/* see if there are any aios to check */
-	if (aio_get_all_queues_count() < 1) {
+	if (!aio_has_any_work()) {
 		return EINVAL;
 	}
 
 	aio_proc_lock(p);
 
 	/* look for a match on our queue of async IO requests that have completed */
-	TAILQ_FOREACH( entryp, &p->p_aio_doneq, aio_proc_link) {
+	TAILQ_FOREACH(entryp, &p->p_aio_doneq, aio_proc_link) {
 		if (entryp->uaiocbp == uap->aiocbp) {
 			ASSERT_AIO_FROM_PROC(entryp, p);
 
-			aio_entry_lock_spin(entryp);
 			*retval = entryp->errorval;
 			error = 0;
-			aio_entry_unlock(entryp);
+
 			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_error_val) | DBG_FUNC_NONE,
-			    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, *retval, 0, 0);
+			    VM_KERNEL_ADDRPERM(p), uap->aiocbp, *retval, 0, 0);
 			goto ExitRoutine;
 		}
 	}
 
 	/* look for a match on our queue of active async IO requests */
-	TAILQ_FOREACH( entryp, &p->p_aio_activeq, aio_proc_link) {
+	TAILQ_FOREACH(entryp, &p->p_aio_activeq, aio_proc_link) {
 		if (entryp->uaiocbp == uap->aiocbp) {
 			ASSERT_AIO_FROM_PROC(entryp, p);
 			*retval = EINPROGRESS;
 			error = 0;
 			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_error_activeq) | DBG_FUNC_NONE,
-			    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, *retval, 0, 0);
+			    VM_KERNEL_ADDRPERM(p), uap->aiocbp, *retval, 0, 0);
 			goto ExitRoutine;
 		}
 	}
@@ -666,11 +644,11 @@ aio_error(proc_t p, struct aio_error_args *uap, int *retval )
 
 ExitRoutine:
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_error) | DBG_FUNC_END,
-	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, error, 0, 0);
+	    VM_KERNEL_ADDRPERM(p), uap->aiocbp, error, 0, 0);
 	aio_proc_unlock(p);
 
 	return error;
-} /* aio_error */
+}
 
 
 /*
@@ -681,13 +659,13 @@ ExitRoutine:
  * fdatasync() call.
  */
 int
-aio_fsync(proc_t p, struct aio_fsync_args *uap, int *retval )
+aio_fsync(proc_t p, struct aio_fsync_args *uap, int *retval)
 {
+	aio_entry_flags_t fsync_kind;
 	int error;
-	int fsync_kind;
 
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_fsync) | DBG_FUNC_START,
-	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, uap->op, 0, 0);
+	    VM_KERNEL_ADDRPERM(p), uap->aiocbp, uap->op, 0, 0);
 
 	*retval = 0;
 	/* 0 := O_SYNC for binary backward compatibility with Panther */
@@ -701,17 +679,17 @@ aio_fsync(proc_t p, struct aio_fsync_args *uap, int *retval )
 		goto ExitRoutine;
 	}
 
-	error = aio_queue_async_request( p, uap->aiocbp, fsync_kind );
+	error = aio_queue_async_request(p, uap->aiocbp, fsync_kind);
 	if (error != 0) {
 		*retval = -1;
 	}
 
 ExitRoutine:
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_fsync) | DBG_FUNC_END,
-	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, error, 0, 0);
+	    VM_KERNEL_ADDRPERM(p), uap->aiocbp, error, 0, 0);
 
 	return error;
-} /* aio_fsync */
+}
 
 
 /* aio_read - asynchronously read uap->aiocbp->aio_nbytes bytes from the
@@ -719,25 +697,25 @@ ExitRoutine:
  * (uap->aiocbp->aio_buf).
  */
 int
-aio_read(proc_t p, struct aio_read_args *uap, int *retval )
+aio_read(proc_t p, struct aio_read_args *uap, int *retval)
 {
 	int error;
 
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_read) | DBG_FUNC_START,
-	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, 0, 0, 0);
+	    VM_KERNEL_ADDRPERM(p), uap->aiocbp, 0, 0, 0);
 
 	*retval = 0;
 
-	error = aio_queue_async_request( p, uap->aiocbp, AIO_READ );
+	error = aio_queue_async_request(p, uap->aiocbp, AIO_READ);
 	if (error != 0) {
 		*retval = -1;
 	}
 
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_read) | DBG_FUNC_END,
-	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, error, 0, 0);
+	    VM_KERNEL_ADDRPERM(p), uap->aiocbp, error, 0, 0);
 
 	return error;
-} /* aio_read */
+}
 
 
 /*
@@ -748,79 +726,60 @@ aio_read(proc_t p, struct aio_read_args *uap, int *retval )
  * held for async IO call associated with the given aiocb pointer.
  */
 int
-aio_return(proc_t p, struct aio_return_args *uap, user_ssize_t *retval )
+aio_return(proc_t p, struct aio_return_args *uap, user_ssize_t *retval)
 {
 	aio_workq_entry *entryp;
-	int              error;
-	boolean_t        proc_lock_held = FALSE;
+	int              error = EINVAL;
 
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_return) | DBG_FUNC_START,
-	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, 0, 0, 0);
+	    VM_KERNEL_ADDRPERM(p), uap->aiocbp, 0, 0, 0);
 
 	/* See if there are any entries to check */
-	if (aio_get_all_queues_count() < 1) {
-		error = EINVAL;
+	if (!aio_has_any_work()) {
 		goto ExitRoutine;
 	}
 
 	aio_proc_lock(p);
-	proc_lock_held = TRUE;
 	*retval = 0;
 
 	/* look for a match on our queue of async IO requests that have completed */
-	TAILQ_FOREACH( entryp, &p->p_aio_doneq, aio_proc_link) {
+	TAILQ_FOREACH(entryp, &p->p_aio_doneq, aio_proc_link) {
 		ASSERT_AIO_FROM_PROC(entryp, p);
 		if (entryp->uaiocbp == uap->aiocbp) {
 			/* Done and valid for aio_return(), pull it off the list */
 			aio_proc_remove_done_locked(p, entryp);
 
-			/* Drop the proc lock, but keep the entry locked */
-			aio_entry_lock(entryp);
-			aio_proc_unlock(p);
-			proc_lock_held = FALSE;
-
 			*retval = entryp->returnval;
 			error = 0;
+			aio_proc_unlock(p);
 
-			/* No references and off all lists, safe to free */
-			if (entryp->aio_refcount == 0) {
-				aio_entry_unlock(entryp);
-				aio_free_request(entryp);
-			} else {
-				/* Whoever has the refcount will have to free it */
-				entryp->flags |= AIO_DO_FREE;
-				aio_entry_unlock(entryp);
-			}
-
+			aio_entry_unref(entryp);
 
 			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_return_val) | DBG_FUNC_NONE,
-			    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, *retval, 0, 0);
+			    VM_KERNEL_ADDRPERM(p), uap->aiocbp, *retval, 0, 0);
 			goto ExitRoutine;
 		}
 	}
 
 	/* look for a match on our queue of active async IO requests */
-	TAILQ_FOREACH( entryp, &p->p_aio_activeq, aio_proc_link) {
+	TAILQ_FOREACH(entryp, &p->p_aio_activeq, aio_proc_link) {
 		ASSERT_AIO_FROM_PROC(entryp, p);
 		if (entryp->uaiocbp == uap->aiocbp) {
 			error = EINPROGRESS;
 			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_return_activeq) | DBG_FUNC_NONE,
-			    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, *retval, 0, 0);
-			goto ExitRoutine;
+			    VM_KERNEL_ADDRPERM(p), uap->aiocbp, *retval, 0, 0);
+			break;
 		}
 	}
 
-	error = EINVAL;
+	aio_proc_unlock(p);
 
 ExitRoutine:
-	if (proc_lock_held) {
-		aio_proc_unlock(p);
-	}
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_return) | DBG_FUNC_END,
-	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, error, 0, 0);
+	    VM_KERNEL_ADDRPERM(p), uap->aiocbp, error, 0, 0);
 
 	return error;
-} /* aio_return */
+}
 
 
 /*
@@ -831,33 +790,33 @@ ExitRoutine:
  * This routine MAY block!
  */
 __private_extern__ void
-_aio_exec(proc_t p )
+_aio_exec(proc_t p)
 {
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_exec) | DBG_FUNC_START,
 	    VM_KERNEL_ADDRPERM(p), 0, 0, 0, 0);
 
-	_aio_exit( p );
+	_aio_exit(p);
 
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_exec) | DBG_FUNC_END,
 	    VM_KERNEL_ADDRPERM(p), 0, 0, 0, 0);
-} /* _aio_exec */
+}
 
 
 /*
  * _aio_exit - internal function used to clean up async IO requests for
- * a process that is terminating (via exit() or exec() ).  We cancel any async IOs
+ * a process that is terminating (via exit() or exec()).  We cancel any async IOs
  * we can and wait for those already active.  We also disable signaling
  * for cancelled or active aio requests that complete.  This routine MAY block!
  */
 __private_extern__ void
-_aio_exit(proc_t p )
+_aio_exit(proc_t p)
 {
+	TAILQ_HEAD(, aio_workq_entry) tofree = TAILQ_HEAD_INITIALIZER(tofree);
+	aio_workq_entry *entryp, *tmp;
 	int              error;
-	aio_workq_entry *entryp;
-
 
 	/* quick check to see if there are any async IO requests queued up */
-	if (aio_get_all_queues_count() < 1) {
+	if (!aio_has_any_work()) {
 		return;
 	}
 
@@ -870,7 +829,7 @@ _aio_exit(proc_t p )
 	 * cancel async IO requests on the todo work queue and wait for those
 	 * already active to complete.
 	 */
-	error = do_aio_cancel_locked( p, 0, 0, AIO_EXIT_WAIT, TRUE );
+	error = do_aio_cancel_locked(p, -1, USER_ADDR_NULL, AIO_EXIT_WAIT);
 	ASSERT_AIO_PROC_LOCK_OWNED(p);
 	if (error == AIO_NOTCANCELED) {
 		/*
@@ -885,62 +844,51 @@ _aio_exit(proc_t p )
 		KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_exit_sleep) | DBG_FUNC_NONE,
 		    VM_KERNEL_ADDRPERM(p), 0, 0, 0, 0);
 
-		while (p->p_aio_active_count != 0) {
-			msleep(&p->AIO_CLEANUP_SLEEP_CHAN, aio_proc_mutex(p), PRIBIO, "aio_exit", 0 );
+		while (aio_has_active_requests_for_process(p)) {
+			msleep(&p->AIO_CLEANUP_SLEEP_CHAN, aio_proc_mutex(p), PRIBIO, "aio_exit", 0);
 		}
 	}
 
-	if (p->p_aio_active_count != 0) {
-		panic("Exiting process has %d active AIOs after cancellation has completed.\n", p->p_aio_active_count);
-	}
+	assert(!aio_has_active_requests_for_process(p));
 
 	/* release all aio resources used by this process */
-	entryp = TAILQ_FIRST( &p->p_aio_doneq );
-	while (entryp != NULL) {
+	TAILQ_FOREACH_SAFE(entryp, &p->p_aio_doneq, aio_proc_link, tmp) {
 		ASSERT_AIO_FROM_PROC(entryp, p);
-		aio_workq_entry                 *next_entryp;
 
-		next_entryp = TAILQ_NEXT( entryp, aio_proc_link);
 		aio_proc_remove_done_locked(p, entryp);
-
-		/* we cannot free requests that are still completing */
-		aio_entry_lock_spin(entryp);
-		if (entryp->aio_refcount == 0) {
-			aio_proc_unlock(p);
-			aio_entry_unlock(entryp);
-			aio_free_request(entryp);
-
-			/* need to start over since aio_doneq may have been */
-			/* changed while we were away.  */
-			aio_proc_lock(p);
-			entryp = TAILQ_FIRST( &p->p_aio_doneq );
-			continue;
-		} else {
-			/* whoever has the reference will have to do the free */
-			entryp->flags |= AIO_DO_FREE;
-		}
-
-		aio_entry_unlock(entryp);
-		entryp = next_entryp;
+		TAILQ_INSERT_TAIL(&tofree, entryp, aio_proc_link);
 	}
 
 	aio_proc_unlock(p);
 
-	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_exit) | DBG_FUNC_END,
-	    VM_KERNEL_ADDRPERM(p), 0, 0, 0, 0);
-} /* _aio_exit */
-
-
-static boolean_t
-should_cancel(aio_workq_entry *entryp, user_addr_t aiocbp, int fd)
-{
-	if ((aiocbp == USER_ADDR_NULL && fd == 0) ||
-	    (aiocbp != USER_ADDR_NULL && entryp->uaiocbp == aiocbp) ||
-	    (aiocbp == USER_ADDR_NULL && fd == entryp->aiocb.aio_fildes)) {
-		return TRUE;
+	/* free all the entries outside of the aio_proc_lock() */
+	TAILQ_FOREACH_SAFE(entryp, &tofree, aio_proc_link, tmp) {
+		entryp->aio_proc_link.tqe_prev = NULL;
+		aio_entry_unref(entryp);
 	}
 
-	return FALSE;
+	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_exit) | DBG_FUNC_END,
+	    VM_KERNEL_ADDRPERM(p), 0, 0, 0, 0);
+}
+
+
+static bool
+should_cancel(aio_workq_entry *entryp, int fd, user_addr_t aiocbp,
+    aio_entry_flags_t reason)
+{
+	if (reason & AIO_EXIT_WAIT) {
+		/* caller is _aio_exit() */
+		return true;
+	}
+	if (fd != entryp->aiocb.aio_fildes) {
+		/* not the file we're looking for */
+		return false;
+	}
+	/*
+	 * aio_cancel() or _aio_close() cancel
+	 * everything for a given fd when aiocbp is NULL
+	 */
+	return aiocbp == USER_ADDR_NULL || entryp->uaiocbp == aiocbp;
 }
 
 /*
@@ -955,89 +903,81 @@ should_cancel(aio_workq_entry *entryp, user_addr_t aiocbp, int fd)
  * target async IO requests, and AIO_ALLDONE if all target async IO requests
  * were already complete.
  * WARNING - do not deference aiocbp in this routine, it may point to user
- * land data that has not been copied in (when called from aio_cancel() )
+ * land data that has not been copied in (when called from aio_cancel())
  *
  * Called with proc locked, and returns the same way.
  */
 static int
 do_aio_cancel_locked(proc_t p, int fd, user_addr_t aiocbp,
-    int wait_for_completion, boolean_t disable_notification )
+    aio_entry_flags_t reason)
 {
+	bool multiple_matches = (aiocbp == USER_ADDR_NULL);
+	aio_workq_entry *entryp, *tmp;
+	int result;
+
 	ASSERT_AIO_PROC_LOCK_OWNED(p);
 
-	aio_workq_entry                 *entryp;
-	int                                             result;
-
-	result = -1;
-
 	/* look for a match on our queue of async todo work. */
-	entryp = TAILQ_FIRST(&p->p_aio_activeq);
-	while (entryp != NULL) {
+again:
+	result = -1;
+	TAILQ_FOREACH_SAFE(entryp, &p->p_aio_activeq, aio_proc_link, tmp) {
 		ASSERT_AIO_FROM_PROC(entryp, p);
-		aio_workq_entry                 *next_entryp;
 
-		next_entryp = TAILQ_NEXT( entryp, aio_proc_link);
-		if (!should_cancel(entryp, aiocbp, fd)) {
-			entryp = next_entryp;
+		if (!should_cancel(entryp, fd, aiocbp, reason)) {
 			continue;
 		}
 
-		/* Can only be cancelled if it's still on a work queue */
-		if (aio_entry_try_workq_remove(entryp) != 0) {
-			/* Have removed from workq. Update entry state and take a ref */
-			aio_entry_update_for_cancel(entryp, TRUE, 0, disable_notification);
+		if (reason) {
+			/* mark the entry as blocking close or exit/exec */
+			entryp->flags |= reason;
+			if ((entryp->flags & AIO_EXIT_WAIT) && (entryp->flags & AIO_CLOSE_WAIT)) {
+				panic("Close and exit flags set at the same time\n");
+			}
+		}
 
-			/* Put on the proc done queue and update counts, then unlock the proc */
-			aio_proc_move_done_locked(p, entryp);
-			aio_proc_unlock(p);
+		/* Can only be cancelled if it's still on a work queue */
+		if (aio_entry_try_workq_remove(entryp)) {
+			entryp->errorval = ECANCELED;
+			entryp->returnval = -1;
 
 			/* Now it's officially cancelled.  Do the completion */
-			result = AIO_CANCELED;
 			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel_async_workq) | DBG_FUNC_NONE,
 			    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
 			    fd, 0, 0);
-			do_aio_completion(entryp);
+			do_aio_completion_and_unlock(p, entryp);
 
-			/* This will free if the aio_return() has already happened ... */
-			aio_entry_unref(entryp);
 			aio_proc_lock(p);
 
-			if (aiocbp != USER_ADDR_NULL) {
-				return result;
+			if (multiple_matches) {
+				/*
+				 * Restart from the head of the proc active queue since it
+				 * may have been changed while we were away doing completion
+				 * processing.
+				 *
+				 * Note that if we found an uncancellable AIO before, we will
+				 * either find it again or discover that it's been completed,
+				 * so resetting the result will not cause us to return success
+				 * despite outstanding AIOs.
+				 */
+				goto again;
 			}
 
-			/*
-			 * Restart from the head of the proc active queue since it
-			 * may have been changed while we were away doing completion
-			 * processing.
-			 *
-			 * Note that if we found an uncancellable AIO before, we will
-			 * either find it again or discover that it's been completed,
-			 * so resetting the result will not cause us to return success
-			 * despite outstanding AIOs.
-			 */
-			entryp = TAILQ_FIRST(&p->p_aio_activeq);
-			result = -1; /* As if beginning anew */
-		} else {
-			/*
-			 * It's been taken off the active queue already, i.e. is in flight.
-			 * All we can do is ask for notification.
-			 */
-			result = AIO_NOTCANCELED;
-
-			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel_activeq) | DBG_FUNC_NONE,
-			    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
-			    fd, 0, 0);
-
-			/* Mark for waiting and such; will not take a ref if "cancelled" arg is FALSE */
-			aio_entry_update_for_cancel(entryp, FALSE, wait_for_completion, disable_notification);
-
-			if (aiocbp != USER_ADDR_NULL) {
-				return result;
-			}
-			entryp = next_entryp;
+			return AIO_CANCELED;
 		}
-	} /* while... */
+
+		/*
+		 * It's been taken off the active queue already, i.e. is in flight.
+		 * All we can do is ask for notification.
+		 */
+		KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel_activeq) | DBG_FUNC_NONE,
+		    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
+		    fd, 0, 0);
+
+		result = AIO_NOTCANCELED;
+		if (!multiple_matches) {
+			return result;
+		}
+	}
 
 	/*
 	 * if we didn't find any matches on the todo or active queues then look for a
@@ -1049,13 +989,13 @@ do_aio_cancel_locked(proc_t p, int fd, user_addr_t aiocbp,
 	if (result == -1) {
 		TAILQ_FOREACH(entryp, &p->p_aio_doneq, aio_proc_link) {
 			ASSERT_AIO_FROM_PROC(entryp, p);
-			if (should_cancel(entryp, aiocbp, fd)) {
-				result = AIO_ALLDONE;
+			if (should_cancel(entryp, fd, aiocbp, reason)) {
 				KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_cancel_doneq) | DBG_FUNC_NONE,
 				    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
 				    fd, 0, 0);
 
-				if (aiocbp != USER_ADDR_NULL) {
+				result = AIO_ALLDONE;
+				if (!multiple_matches) {
 					return result;
 				}
 			}
@@ -1064,7 +1004,6 @@ do_aio_cancel_locked(proc_t p, int fd, user_addr_t aiocbp,
 
 	return result;
 }
-/* do_aio_cancel_locked */
 
 
 /*
@@ -1077,7 +1016,7 @@ do_aio_cancel_locked(proc_t p, int fd, user_addr_t aiocbp,
  * woke us up.
  */
 int
-aio_suspend(proc_t p, struct aio_suspend_args *uap, int *retval )
+aio_suspend(proc_t p, struct aio_suspend_args *uap, int *retval)
 {
 	__pthread_testcancel(1);
 	return aio_suspend_nocancel(p, (struct aio_suspend_nocancel_args *)uap, retval);
@@ -1085,14 +1024,15 @@ aio_suspend(proc_t p, struct aio_suspend_args *uap, int *retval )
 
 
 int
-aio_suspend_nocancel(proc_t p, struct aio_suspend_nocancel_args *uap, int *retval )
+aio_suspend_nocancel(proc_t p, struct aio_suspend_nocancel_args *uap, int *retval)
 {
 	int                     error;
-	int                     i, count;
+	int                     i;
 	uint64_t                abstime;
 	struct user_timespec    ts;
 	aio_workq_entry        *entryp;
 	user_addr_t            *aiocbpp;
+	size_t                  aiocbpp_size;
 
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_suspend) | DBG_FUNC_START,
 	    VM_KERNEL_ADDRPERM(p), uap->nent, 0, 0, 0);
@@ -1101,13 +1041,13 @@ aio_suspend_nocancel(proc_t p, struct aio_suspend_nocancel_args *uap, int *retva
 	abstime = 0;
 	aiocbpp = NULL;
 
-	count = aio_get_all_queues_count();
-	if (count < 1) {
+	if (!aio_has_any_work()) {
 		error = EINVAL;
 		goto ExitThisRoutine;
 	}
 
-	if (uap->nent < 1 || uap->nent > aio_max_requests_per_process) {
+	if (uap->nent < 1 || uap->nent > aio_max_requests_per_process ||
+	    os_mul_overflow(sizeof(user_addr_t), uap->nent, &aiocbpp_size)) {
 		error = EINVAL;
 		goto ExitThisRoutine;
 	}
@@ -1115,14 +1055,14 @@ aio_suspend_nocancel(proc_t p, struct aio_suspend_nocancel_args *uap, int *retva
 	if (uap->timeoutp != USER_ADDR_NULL) {
 		if (proc_is64bit(p)) {
 			struct user64_timespec temp;
-			error = copyin( uap->timeoutp, &temp, sizeof(temp));
+			error = copyin(uap->timeoutp, &temp, sizeof(temp));
 			if (error == 0) {
-				ts.tv_sec = temp.tv_sec;
-				ts.tv_nsec = temp.tv_nsec;
+				ts.tv_sec = (user_time_t)temp.tv_sec;
+				ts.tv_nsec = (user_long_t)temp.tv_nsec;
 			}
 		} else {
 			struct user32_timespec temp;
-			error = copyin( uap->timeoutp, &temp, sizeof(temp));
+			error = copyin(uap->timeoutp, &temp, sizeof(temp));
 			if (error == 0) {
 				ts.tv_sec = temp.tv_sec;
 				ts.tv_nsec = temp.tv_nsec;
@@ -1139,12 +1079,12 @@ aio_suspend_nocancel(proc_t p, struct aio_suspend_nocancel_args *uap, int *retva
 		}
 
 		nanoseconds_to_absolutetime((uint64_t)ts.tv_sec * NSEC_PER_SEC + ts.tv_nsec,
-		    &abstime );
-		clock_absolutetime_interval_to_deadline( abstime, &abstime );
+		    &abstime);
+		clock_absolutetime_interval_to_deadline(abstime, &abstime);
 	}
 
-	aiocbpp = aio_copy_in_list(p, uap->aiocblist, uap->nent);
-	if (aiocbpp == NULL) {
+	aiocbpp = kheap_alloc(KHEAP_TEMP, aiocbpp_size, Z_WAITOK);
+	if (aiocbpp == NULL || aio_copy_in_list(p, uap->aiocblist, aiocbpp, uap->nent)) {
 		error = EAGAIN;
 		goto ExitThisRoutine;
 	}
@@ -1162,7 +1102,7 @@ check_for_our_aiocbp:
 		}
 
 		/* return immediately if any aio request in the list is done */
-		TAILQ_FOREACH( entryp, &p->p_aio_doneq, aio_proc_link) {
+		TAILQ_FOREACH(entryp, &p->p_aio_doneq, aio_proc_link) {
 			ASSERT_AIO_FROM_PROC(entryp, p);
 			if (entryp->uaiocbp == aiocbp) {
 				aio_proc_unlock(p);
@@ -1171,7 +1111,7 @@ check_for_our_aiocbp:
 				goto ExitThisRoutine;
 			}
 		}
-	} /* for ( ; i < uap->nent; ) */
+	}
 
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_suspend_sleep) | DBG_FUNC_NONE,
 	    VM_KERNEL_ADDRPERM(p), uap->nent, 0, 0, 0);
@@ -1183,7 +1123,8 @@ check_for_our_aiocbp:
 	 * timeout expires, we get a wakeup call from aio_work_thread().
 	 */
 
-	error = msleep1(&p->AIO_SUSPEND_SLEEP_CHAN, aio_proc_mutex(p), PCATCH | PWAIT | PDROP, "aio_suspend", abstime); /* XXX better priority? */
+	error = msleep1(&p->AIO_SUSPEND_SLEEP_CHAN, aio_proc_mutex(p),
+	    PCATCH | PWAIT | PDROP, "aio_suspend", abstime);
 	if (error == 0) {
 		/*
 		 * got our wakeup call from aio_work_thread().
@@ -1204,14 +1145,14 @@ check_for_our_aiocbp:
 
 ExitThisRoutine:
 	if (aiocbpp != NULL) {
-		FREE( aiocbpp, M_TEMP );
+		kheap_free(KHEAP_TEMP, aiocbpp, aiocbpp_size);
 	}
 
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_suspend) | DBG_FUNC_END,
 	    VM_KERNEL_ADDRPERM(p), uap->nent, error, 0, 0);
 
 	return error;
-} /* aio_suspend */
+}
 
 
 /* aio_write - asynchronously write uap->aiocbp->aio_nbytes bytes to the
@@ -1225,37 +1166,29 @@ aio_write(proc_t p, struct aio_write_args *uap, int *retval __unused)
 	int error;
 
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_write) | DBG_FUNC_START,
-	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, 0, 0, 0);
+	    VM_KERNEL_ADDRPERM(p), uap->aiocbp, 0, 0, 0);
 
-	error = aio_queue_async_request( p, uap->aiocbp, AIO_WRITE );
+	error = aio_queue_async_request(p, uap->aiocbp, AIO_WRITE);
 
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_write) | DBG_FUNC_END,
-	    VM_KERNEL_ADDRPERM(p), uap->uaiocbp, error, 0, 0);
+	    VM_KERNEL_ADDRPERM(p), uap->aiocbp, error, 0, 0);
 
 	return error;
-} /* aio_write */
+}
 
 
-static user_addr_t *
-aio_copy_in_list(proc_t procp, user_addr_t aiocblist, int nent)
+static int
+aio_copy_in_list(proc_t procp, user_addr_t aiocblist, user_addr_t *aiocbpp,
+    int nent)
 {
-	user_addr_t     *aiocbpp;
-	int             i, result;
-
-	/* we reserve enough space for largest possible pointer size */
-	MALLOC( aiocbpp, user_addr_t *, (nent * sizeof(user_addr_t)), M_TEMP, M_WAITOK );
-	if (aiocbpp == NULL) {
-		goto err;
-	}
+	int result;
 
 	/* copyin our aiocb pointers from list */
-	result = copyin( aiocblist, aiocbpp,
+	result = copyin(aiocblist, aiocbpp,
 	    proc_is64bit(procp) ? (nent * sizeof(user64_addr_t))
 	    : (nent * sizeof(user32_addr_t)));
 	if (result) {
-		FREE( aiocbpp, M_TEMP );
-		aiocbpp = NULL;
-		goto err;
+		return result;
 	}
 
 	/*
@@ -1268,13 +1201,12 @@ aio_copy_in_list(proc_t procp, user_addr_t aiocblist, int nent)
 		user32_addr_t *my_ptrp = ((user32_addr_t *)aiocbpp) + (nent - 1);
 		user_addr_t *my_addrp = aiocbpp + (nent - 1);
 
-		for (i = 0; i < nent; i++, my_ptrp--, my_addrp--) {
+		for (int i = 0; i < nent; i++, my_ptrp--, my_addrp--) {
 			*my_addrp = (user_addr_t) (*my_ptrp);
 		}
 	}
 
-err:
-	return aiocbpp;
+	return 0;
 }
 
 
@@ -1298,9 +1230,10 @@ aio_copy_in_sigev(proc_t procp, user_addr_t sigp, struct user_sigevent *sigev)
 	 *		sigev_value yet in the aio context.
 	 */
 	if (proc_is64bit(procp)) {
+#if __LP64__
 		struct user64_sigevent sigevent64;
 
-		result = copyin( sigp, &sigevent64, sizeof(sigevent64));
+		result = copyin(sigp, &sigevent64, sizeof(sigevent64));
 		if (result == 0) {
 			sigev->sigev_notify = sigevent64.sigev_notify;
 			sigev->sigev_signo = sigevent64.sigev_signo;
@@ -1308,10 +1241,13 @@ aio_copy_in_sigev(proc_t procp, user_addr_t sigp, struct user_sigevent *sigev)
 			sigev->sigev_notify_function = sigevent64.sigev_notify_function;
 			sigev->sigev_notify_attributes = sigevent64.sigev_notify_attributes;
 		}
+#else
+		panic("64bit process on 32bit kernel is not supported");
+#endif
 	} else {
 		struct user32_sigevent sigevent32;
 
-		result = copyin( sigp, &sigevent32, sizeof(sigevent32));
+		result = copyin(sigp, &sigevent32, sizeof(sigevent32));
 		if (result == 0) {
 			sigev->sigev_notify = sigevent32.sigev_notify;
 			sigev->sigev_signo = sigevent32.sigev_signo;
@@ -1337,7 +1273,7 @@ out:
  * with no [RTS] (RalTime Signal) option group support.
  */
 static int
-aio_sigev_validate( const struct user_sigevent *sigev )
+aio_sigev_validate(const struct user_sigevent *sigev)
 {
 	switch (sigev->sigev_notify) {
 	case SIGEV_SIGNAL:
@@ -1368,7 +1304,7 @@ aio_sigev_validate( const struct user_sigevent *sigev )
 
 
 /*
- * aio_enqueue_work
+ * aio_try_enqueue_work_locked
  *
  * Queue up the entry on the aio asynchronous work queue in priority order
  * based on the relative priority of the request.  We calculate the relative
@@ -1376,8 +1312,9 @@ aio_sigev_validate( const struct user_sigevent *sigev )
  *
  * Parameters:	procp			Process queueing the I/O
  *		entryp			The work queue entry being queued
+ *		leader			The work leader if any
  *
- * Returns:	(void)			No failure modes
+ * Returns:	Wether the enqueue was successful
  *
  * Notes:	This function is used for both lio_listio and aio
  *
@@ -1385,88 +1322,41 @@ aio_sigev_validate( const struct user_sigevent *sigev )
  *		rather than process priority, but we don't maintain the
  *		adjusted priority for threads the POSIX way.
  *
- *
  * Called with proc locked.
  */
-static void
-aio_enqueue_work( proc_t procp, aio_workq_entry *entryp, int proc_locked)
+static bool
+aio_try_enqueue_work_locked(proc_t procp, aio_workq_entry *entryp,
+    aio_workq_entry *leader)
 {
-#if 0
-	aio_workq_entry *my_entryp;     /* used for insertion sort */
-#endif /* 0 */
 	aio_workq_t queue = aio_entry_workq(entryp);
-
-	if (proc_locked == 0) {
-		aio_proc_lock(procp);
-	}
 
 	ASSERT_AIO_PROC_LOCK_OWNED(procp);
 
 	/* Onto proc queue */
-	TAILQ_INSERT_TAIL(&procp->p_aio_activeq, entryp, aio_proc_link);
-	procp->p_aio_active_count++;
-	procp->p_aio_total_count++;
+	if (!aio_try_proc_insert_active_locked(procp, entryp)) {
+		return false;
+	}
+
+	if (leader) {
+		aio_entry_ref(leader); /* consumed in do_aio_completion_and_unlock */
+		leader->lio_pending++;
+		entryp->lio_leader = leader;
+	}
 
 	/* And work queue */
+	aio_entry_ref(entryp); /* consumed in do_aio_completion_and_unlock */
 	aio_workq_lock_spin(queue);
 	aio_workq_add_entry_locked(queue, entryp);
 	waitq_wakeup64_one(&queue->aioq_waitq, CAST_EVENT64_T(queue),
 	    THREAD_AWAKENED, WAITQ_ALL_PRIORITIES);
 	aio_workq_unlock(queue);
 
-
 	KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_AIO, AIO_work_queued) | DBG_FUNC_START,
 	    VM_KERNEL_ADDRPERM(procp), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
-	    entryp->flags, entryp->aiocb.aio_fildes, 0 );
+	    entryp->flags, entryp->aiocb.aio_fildes, 0);
 	KERNEL_DEBUG_CONSTANT(BSDDBG_CODE(DBG_BSD_AIO, AIO_work_queued) | DBG_FUNC_END,
 	    entryp->aiocb.aio_offset, 0, entryp->aiocb.aio_nbytes, 0, 0);
-
-	if (proc_locked == 0) {
-		aio_proc_unlock(procp);
-	}
-
-#if 0
-	/*
-	 * Procedure:
-	 *
-	 * (1)	The nice value is in the range PRIO_MIN..PRIO_MAX [-20..20]
-	 * (2)	The normalized nice value is in the range 0..((2 * NZERO) - 1)
-	 *	which is [0..39], with 0 not being used.  In nice values, the
-	 *	lower the nice value, the higher the priority.
-	 * (3)	The normalized scheduling prioritiy is the highest nice value
-	 *	minus the current nice value.  In I/O scheduling priority, the
-	 *	higher the value the lower the priority, so it is the inverse
-	 *	of the nice value (the higher the number, the higher the I/O
-	 *	priority).
-	 * (4)	From the normalized scheduling priority, we subtract the
-	 *	request priority to get the request priority value number;
-	 *	this means that requests are only capable of depressing their
-	 *	priority relative to other requests,
-	 */
-	entryp->priority = (((2 * NZERO) - 1) - procp->p_nice);
-
-	/* only premit depressing the priority */
-	if (entryp->aiocb.aio_reqprio < 0) {
-		entryp->aiocb.aio_reqprio = 0;
-	}
-	if (entryp->aiocb.aio_reqprio > 0) {
-		entryp->priority -= entryp->aiocb.aio_reqprio;
-		if (entryp->priority < 0) {
-			entryp->priority = 0;
-		}
-	}
-
-	/* Insertion sort the entry; lowest ->priority to highest */
-	TAILQ_FOREACH(my_entryp, &aio_anchor.aio_async_workq, aio_workq_link) {
-		if (entryp->priority <= my_entryp->priority) {
-			TAILQ_INSERT_BEFORE(my_entryp, entryp, aio_workq_link);
-			break;
-		}
-	}
-	if (my_entryp == NULL) {
-		TAILQ_INSERT_TAIL( &aio_anchor.aio_async_workq, entryp, aio_workq_link );
-	}
-#endif /* 0 */
+	return true;
 }
 
 
@@ -1480,79 +1370,24 @@ aio_enqueue_work( proc_t procp, aio_workq_entry *entryp, int proc_locked)
  * released by the aio_return call.
  */
 int
-lio_listio(proc_t p, struct lio_listio_args *uap, int *retval )
+lio_listio(proc_t p, struct lio_listio_args *uap, int *retval __unused)
 {
-	int                      i;
-	int                      call_result;
-	int                      result;
-	int                      old_count;
-	aio_workq_entry        **entryp_listp;
-	user_addr_t             *aiocbpp;
-	struct user_sigevent     aiosigev;
-	aio_lio_context         *lio_context;
-	boolean_t                free_context = FALSE;
+	aio_workq_entry         *entries[AIO_LISTIO_MAX] = { };
+	user_addr_t              aiocbpp[AIO_LISTIO_MAX];
+	struct user_sigevent     aiosigev = { };
+	int                      result = 0;
+	int                      lio_count = 0;
 
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_listio) | DBG_FUNC_START,
 	    VM_KERNEL_ADDRPERM(p), uap->nent, uap->mode, 0, 0);
 
-	entryp_listp = NULL;
-	lio_context = NULL;
-	aiocbpp = NULL;
-	call_result = -1;
-	*retval = -1;
 	if (!(uap->mode == LIO_NOWAIT || uap->mode == LIO_WAIT)) {
-		call_result = EINVAL;
+		result = EINVAL;
 		goto ExitRoutine;
 	}
 
 	if (uap->nent < 1 || uap->nent > AIO_LISTIO_MAX) {
-		call_result = EINVAL;
-		goto ExitRoutine;
-	}
-
-	/*
-	 * allocate a list of aio_workq_entry pointers that we will use
-	 * to queue up all our requests at once while holding our lock.
-	 */
-	MALLOC( entryp_listp, void *, (uap->nent * sizeof(aio_workq_entry *)), M_TEMP, M_WAITOK );
-	if (entryp_listp == NULL) {
-		call_result = EAGAIN;
-		goto ExitRoutine;
-	}
-
-	/*
-	 * lio_context ownership rules go as follow:
-	 *
-	 * - when the mode is LIO_WAIT, and that the AIOs aren't cancelled,
-	 *   this function will perform the deallocation.
-	 *
-	 * - when the mode is LIO_WAIT but AIOs are cancelled, then io_waiter is
-	 *   forced to '0' (pretending the mode is LIO_NOWAIT) and the ownership is
-	 *   handed over to the async path.
-	 *
-	 * - when the mode is LIO_NOWAIT, then the aio thread is responsible for
-	 *   cleaning up the context.
-	 *
-	 * However, there is a last case, which is when none of the commands pass
-	 * preflight and no submission is done, in this case this function is
-	 * responsible for cleanup.
-	 */
-	MALLOC( lio_context, aio_lio_context*, sizeof(aio_lio_context), M_TEMP, M_WAITOK );
-	if (lio_context == NULL) {
-		call_result = EAGAIN;
-		goto ExitRoutine;
-	}
-
-#if DEBUG
-	OSIncrementAtomic(&lio_contexts_alloced);
-#endif /* DEBUG */
-
-	free_context = TRUE;
-	bzero(lio_context, sizeof(aio_lio_context));
-
-	aiocbpp = aio_copy_in_list(p, uap->aiocblist, uap->nent);
-	if (aiocbpp == NULL) {
-		call_result = EAGAIN;
+		result = EINVAL;
 		goto ExitRoutine;
 	}
 
@@ -1560,155 +1395,111 @@ lio_listio(proc_t p, struct lio_listio_args *uap, int *retval )
 	 * Use sigevent passed in to lio_listio for each of our calls, but
 	 * only do completion notification after the last request completes.
 	 */
-	bzero(&aiosigev, sizeof(aiosigev));
-	/* Only copy in an sigev if the user supplied one */
 	if (uap->sigp != USER_ADDR_NULL) {
-		call_result = aio_copy_in_sigev(p, uap->sigp, &aiosigev);
-		if (call_result) {
+		result = aio_copy_in_sigev(p, uap->sigp, &aiosigev);
+		if (result) {
 			goto ExitRoutine;
 		}
-		call_result = aio_sigev_validate(&aiosigev);
-		if (call_result) {
+		result = aio_sigev_validate(&aiosigev);
+		if (result) {
 			goto ExitRoutine;
 		}
 	}
 
-	/* process list of aio requests */
-	free_context = FALSE;
-	lio_context->io_issued = uap->nent;
-	lio_context->io_waiter = uap->mode == LIO_WAIT ? 1 : 0; /* Should it be freed by last AIO */
-	for (i = 0; i < uap->nent; i++) {
-		user_addr_t my_aiocbp;
-		aio_workq_entry                         *entryp;
-
-		*(entryp_listp + i) = NULL;
-		my_aiocbp = *(aiocbpp + i);
-
-		/* NULL elements are legal so check for 'em */
-		if (my_aiocbp == USER_ADDR_NULL) {
-			aio_proc_lock_spin(p);
-			if (--lio_context->io_issued == 0) {
-				/* no submission made, needs cleanup */
-				free_context = TRUE;
-			}
-			aio_proc_unlock(p);
-			continue;
-		}
-
-		/*
-		 * We use lio_context to mark IO requests for delayed completion
-		 * processing which means we wait until all IO requests in the
-		 * group have completed before we either return to the caller
-		 * when mode is LIO_WAIT or signal user when mode is LIO_NOWAIT.
-		 *
-		 * We use the address of the lio_context for this, since it is
-		 * unique in the address space.
-		 */
-		result = lio_create_entry( p, my_aiocbp, lio_context, (entryp_listp + i));
-		if (result != 0 && call_result == -1) {
-			call_result = result;
-		}
-
-		/* NULL elements are legal so check for 'em */
-		entryp = *(entryp_listp + i);
-		if (entryp == NULL) {
-			aio_proc_lock_spin(p);
-			if (--lio_context->io_issued == 0) {
-				/* no submission made, needs cleanup */
-				free_context = TRUE;
-			}
-			aio_proc_unlock(p);
-			continue;
-		}
-
-		if (uap->mode == LIO_NOWAIT) {
-			/* Set signal hander, if any */
-			entryp->aiocb.aio_sigevent = aiosigev;
-		} else {
-			/* flag that this thread blocks pending completion */
-			entryp->flags |= AIO_LIO_NOTIFY;
-		}
-
-		/* check our aio limits to throttle bad or rude user land behavior */
-		old_count = aio_increment_total_count();
-
-		aio_proc_lock_spin(p);
-		if (old_count >= aio_max_requests ||
-		    aio_get_process_count( entryp->procp ) >= aio_max_requests_per_process ||
-		    is_already_queued( entryp->procp, entryp->uaiocbp ) == TRUE) {
-			if (--lio_context->io_issued == 0) {
-				/* no submission made, needs cleanup */
-				free_context = TRUE;
-			}
-			aio_proc_unlock(p);
-
-			aio_decrement_total_count();
-
-			if (call_result == -1) {
-				call_result = EAGAIN;
-			}
-			aio_free_request(entryp);
-			entryp_listp[i] = NULL;
-			continue;
-		}
-
-		lck_mtx_convert_spin(aio_proc_mutex(p));
-		aio_enqueue_work(p, entryp, 1);
-		aio_proc_unlock(p);
-	}
-
-	if (free_context) {
-		/* no submission was made, just exit */
+	if (aio_copy_in_list(p, uap->aiocblist, aiocbpp, uap->nent)) {
+		result = EAGAIN;
 		goto ExitRoutine;
 	}
 
+	/*
+	 * allocate/parse all entries
+	 */
+	for (int i = 0; i < uap->nent; i++) {
+		aio_workq_entry *entryp;
+
+		/* NULL elements are legal so check for 'em */
+		if (aiocbpp[i] == USER_ADDR_NULL) {
+			continue;
+		}
+
+		entryp = aio_create_queue_entry(p, aiocbpp[i], AIO_LIO);
+		if (entryp == NULL) {
+			result = EAGAIN;
+			goto ExitRoutine;
+		}
+
+		/*
+		 * This refcount is cleaned up on exit if the entry
+		 * isn't submitted
+		 */
+		entries[lio_count++] = entryp;
+		if (uap->mode == LIO_NOWAIT) {
+			/* Set signal hander, if any */
+			entryp->aiocb.aio_sigevent = aiosigev;
+		}
+	}
+
+	if (lio_count == 0) {
+		/* There's nothing to submit */
+		goto ExitRoutine;
+	}
+
+	/*
+	 * Past this point we're commited and will not bail out
+	 *
+	 * - keep a reference on the leader for LIO_WAIT
+	 * - perform the submissions and optionally wait
+	 */
+
+	aio_workq_entry *leader = entries[0];
 	if (uap->mode == LIO_WAIT) {
-		aio_proc_lock_spin(p);
+		aio_entry_ref(leader); /* consumed below */
+	}
 
-		while (lio_context->io_completed < lio_context->io_issued) {
-			result = msleep(lio_context, aio_proc_mutex(p), PCATCH | PRIBIO | PSPIN, "lio_listio", 0);
+	aio_proc_lock_spin(p);
 
+	for (int i = 0; i < lio_count; i++) {
+		if (aio_try_enqueue_work_locked(p, entries[i], leader)) {
+			entries[i] = NULL; /* the entry was submitted */
+		} else {
+			result = EAGAIN;
+		}
+	}
+
+	if (uap->mode == LIO_WAIT && result == 0) {
+		leader->flags |= AIO_LIO_WAIT;
+
+		while (leader->lio_pending) {
 			/* If we were interrupted, fail out (even if all finished) */
-			if (result != 0) {
-				call_result = EINTR;
+			if (msleep(leader, aio_proc_mutex(p),
+			    PCATCH | PRIBIO | PSPIN, "lio_listio", 0) != 0) {
+				result = EINTR;
 				break;
 			}
 		}
 
-		if (lio_context->io_completed == lio_context->io_issued) {
-			/* If all IOs have finished must free it */
-			free_context = TRUE;
-		} else {
-			/* handoff to the async codepath for clean up */
-			assert(call_result == EINTR);
-			lio_context->io_waiter = 0;
-		}
-
-		aio_proc_unlock(p);
+		leader->flags &= ~AIO_LIO_WAIT;
 	}
 
-	/* call_result == -1 means we had no trouble queueing up requests */
-	if (call_result == -1) {
-		call_result = 0;
-		*retval = 0;
+	aio_proc_unlock(p);
+
+	if (uap->mode == LIO_WAIT) {
+		aio_entry_unref(leader);
 	}
 
 ExitRoutine:
-	if (entryp_listp != NULL) {
-		FREE( entryp_listp, M_TEMP );
-	}
-	if (aiocbpp != NULL) {
-		FREE( aiocbpp, M_TEMP );
-	}
-	if (free_context) {
-		free_lio_context(lio_context);
+	/* Consume unsubmitted entries */
+	for (int i = 0; i < lio_count; i++) {
+		if (entries[i]) {
+			aio_entry_unref(entries[i]);
+		}
 	}
 
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_listio) | DBG_FUNC_END,
-	    VM_KERNEL_ADDRPERM(p), call_result, 0, 0, 0);
+	    VM_KERNEL_ADDRPERM(p), result, 0, 0, 0);
 
-	return call_result;
-} /* lio_listio */
+	return result;
+}
 
 
 /*
@@ -1718,7 +1509,7 @@ ExitRoutine:
  */
 __attribute__((noreturn))
 static void
-aio_work_thread(void)
+aio_work_thread(void *arg __unused, wait_result_t wr __unused)
 {
 	aio_workq_entry *entryp;
 	int              error;
@@ -1726,6 +1517,7 @@ aio_work_thread(void)
 	vm_map_t         oldmap = VM_MAP_NULL;
 	task_t           oldaiotask = TASK_NULL;
 	struct uthread  *uthreadp = NULL;
+	proc_t           p = NULL;
 
 	for (;;) {
 		/*
@@ -1733,6 +1525,7 @@ aio_work_thread(void)
 		 * sleeps until work is available.
 		 */
 		entryp = aio_get_some_work();
+		p = entryp->procp;
 
 		KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_worker_thread) | DBG_FUNC_START,
 		    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
@@ -1743,68 +1536,51 @@ aio_work_thread(void)
 		 * of the IO.  Note: don't need to have the entryp locked,
 		 * because the proc and map don't change until it's freed.
 		 */
-		currentmap = get_task_map((current_proc())->task );
+		currentmap = get_task_map((current_proc())->task);
 		if (currentmap != entryp->aio_map) {
 			uthreadp = (struct uthread *) get_bsdthread_info(current_thread());
 			oldaiotask = uthreadp->uu_aio_task;
-			uthreadp->uu_aio_task = entryp->procp->task;
-			oldmap = vm_map_switch( entryp->aio_map );
+			/*
+			 * workq entries at this stage cause _aio_exec() and _aio_exit() to
+			 * block until we hit `do_aio_completion_and_unlock()` below,
+			 * which means that it is safe to dereference p->task without
+			 * holding a lock or taking references.
+			 */
+			uthreadp->uu_aio_task = p->task;
+			oldmap = vm_map_switch(entryp->aio_map);
 		}
 
 		if ((entryp->flags & AIO_READ) != 0) {
-			error = do_aio_read( entryp );
+			error = do_aio_read(entryp);
 		} else if ((entryp->flags & AIO_WRITE) != 0) {
-			error = do_aio_write( entryp );
+			error = do_aio_write(entryp);
 		} else if ((entryp->flags & (AIO_FSYNC | AIO_DSYNC)) != 0) {
-			error = do_aio_fsync( entryp );
+			error = do_aio_fsync(entryp);
 		} else {
-			printf( "%s - unknown aio request - flags 0x%02X \n",
-			    __FUNCTION__, entryp->flags );
 			error = EINVAL;
 		}
 
 		/* Restore old map */
 		if (currentmap != entryp->aio_map) {
-			(void) vm_map_switch( oldmap );
+			vm_map_switch(oldmap);
 			uthreadp->uu_aio_task = oldaiotask;
 		}
+
+		/* liberate unused map */
+		vm_map_deallocate(entryp->aio_map);
+		entryp->aio_map = VM_MAP_NULL;
 
 		KERNEL_DEBUG(SDDBG_CODE(DBG_BSD_AIO, AIO_worker_thread) | DBG_FUNC_END,
 		    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
 		    entryp->errorval, entryp->returnval, 0);
 
-
-		/* XXX COUNTS */
-		aio_entry_lock_spin(entryp);
-		entryp->errorval = error;
-		aio_entry_unlock(entryp);
-
 		/* we're done with the IO request so pop it off the active queue and */
 		/* push it on the done queue */
-		aio_proc_lock(entryp->procp);
-		aio_proc_move_done_locked(entryp->procp, entryp);
-		aio_proc_unlock(entryp->procp);
-
-		OSDecrementAtomic(&aio_anchor.aio_inflight_count);
-
-		/* remove our reference to the user land map. */
-		if (VM_MAP_NULL != entryp->aio_map) {
-			vm_map_t                my_map;
-
-			my_map = entryp->aio_map;
-			entryp->aio_map = VM_MAP_NULL;
-			vm_map_deallocate( my_map );
-		}
-
-		/* Provide notifications */
-		do_aio_completion( entryp );
-
-		/* Will free if needed */
-		aio_entry_unref(entryp);
-	} /* for ( ;; ) */
-
-	/* NOT REACHED */
-} /* aio_work_thread */
+		aio_proc_lock(p);
+		entryp->errorval = error;
+		do_aio_completion_and_unlock(p, entryp);
+	}
+}
 
 
 /*
@@ -1814,7 +1590,7 @@ aio_work_thread(void)
  * NOTE - AIO_LOCK must be held by caller
  */
 static aio_workq_entry *
-aio_get_some_work( void )
+aio_get_some_work(void)
 {
 	aio_workq_entry *entryp = NULL;
 	aio_workq_t      queue = NULL;
@@ -1822,9 +1598,6 @@ aio_get_some_work( void )
 	/* Just one queue for the moment.  In the future there will be many. */
 	queue = &aio_anchor.aio_async_workqs[0];
 	aio_workq_lock_spin(queue);
-	if (queue->aioq_count == 0) {
-		goto nowork;
-	}
 
 	/*
 	 * Hold the queue lock.
@@ -1832,20 +1605,11 @@ aio_get_some_work( void )
 	 * pop some work off the work queue and add to our active queue
 	 * Always start with the queue lock held.
 	 */
-	for (;;) {
+	while ((entryp = TAILQ_FIRST(&queue->aioq_entries))) {
 		/*
 		 * Pull of of work queue.  Once it's off, it can't be cancelled,
 		 * so we can take our ref once we drop the queue lock.
 		 */
-		entryp = TAILQ_FIRST(&queue->aioq_entries);
-
-		/*
-		 * If there's no work or only fsyncs that need delay, go to sleep
-		 * and then start anew from aio_work_thread
-		 */
-		if (entryp == NULL) {
-			goto nowork;
-		}
 
 		aio_workq_remove_entry_locked(queue, entryp);
 
@@ -1861,7 +1625,7 @@ aio_get_some_work( void )
 			 * in this proc's queue.
 			 */
 			aio_proc_lock_spin(entryp->procp);
-			if (aio_delay_fsync_request( entryp )) {
+			if (aio_delay_fsync_request(entryp)) {
 				/* It needs to be delayed.  Put it back on the end of the work queue */
 				KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_fsync_delay) | DBG_FUNC_NONE,
 				    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
@@ -1876,22 +1640,15 @@ aio_get_some_work( void )
 			aio_proc_unlock(entryp->procp);
 		}
 
-		break;
+		return entryp;
 	}
 
-	aio_entry_ref(entryp);
-
-	OSIncrementAtomic(&aio_anchor.aio_inflight_count);
-	return entryp;
-
-nowork:
 	/* We will wake up when someone enqueues something */
 	waitq_assert_wait64(&queue->aioq_waitq, CAST_EVENT64_T(queue), THREAD_UNINT, 0);
 	aio_workq_unlock(queue);
-	thread_block((thread_continue_t)aio_work_thread );
+	thread_block(aio_work_thread);
 
-	// notreached
-	return NULL;
+	__builtin_unreachable();
 }
 
 /*
@@ -1900,7 +1657,7 @@ nowork:
  * not been completed.
  */
 static boolean_t
-aio_delay_fsync_request( aio_workq_entry *entryp )
+aio_delay_fsync_request(aio_workq_entry *entryp)
 {
 	if (proc_in_teardown(entryp->procp)) {
 		/*
@@ -1915,77 +1672,53 @@ aio_delay_fsync_request( aio_workq_entry *entryp )
 	}
 
 	return TRUE;
-} /* aio_delay_fsync_request */
+}
 
 static aio_workq_entry *
-aio_create_queue_entry(proc_t procp, user_addr_t aiocbp, void *group_tag, int kindOfIO)
+aio_create_queue_entry(proc_t procp, user_addr_t aiocbp, aio_entry_flags_t flags)
 {
 	aio_workq_entry *entryp;
-	int             result = 0;
 
-	entryp = (aio_workq_entry *) zalloc( aio_workq_zonep );
-	if (entryp == NULL) {
-		result = EAGAIN;
-		goto error_exit;
-	}
-
-	bzero( entryp, sizeof(*entryp));
-
-	/* fill in the rest of the aio_workq_entry */
+	entryp = zalloc_flags(aio_workq_zonep, Z_WAITOK | Z_ZERO);
 	entryp->procp = procp;
 	entryp->uaiocbp = aiocbp;
-	entryp->flags |= kindOfIO;
-	entryp->group_tag = group_tag;
-	entryp->aio_map = VM_MAP_NULL;
-	entryp->aio_refcount = 0;
+	entryp->flags = flags;
+	/* consumed in aio_return or _aio_exit */
+	os_ref_init(&entryp->aio_refcount, &aio_refgrp);
 
 	if (proc_is64bit(procp)) {
 		struct user64_aiocb aiocb64;
 
-		result = copyin( aiocbp, &aiocb64, sizeof(aiocb64));
-		if (result == 0) {
-			do_munge_aiocb_user64_to_user(&aiocb64, &entryp->aiocb);
+		if (copyin(aiocbp, &aiocb64, sizeof(aiocb64)) != 0) {
+			goto error_exit;
 		}
+		do_munge_aiocb_user64_to_user(&aiocb64, &entryp->aiocb);
 	} else {
 		struct user32_aiocb aiocb32;
 
-		result = copyin( aiocbp, &aiocb32, sizeof(aiocb32));
-		if (result == 0) {
-			do_munge_aiocb_user32_to_user( &aiocb32, &entryp->aiocb );
+		if (copyin(aiocbp, &aiocb32, sizeof(aiocb32)) != 0) {
+			goto error_exit;
 		}
+		do_munge_aiocb_user32_to_user(&aiocb32, &entryp->aiocb);
 	}
 
-	if (result != 0) {
-		result = EAGAIN;
+	/* do some more validation on the aiocb and embedded file descriptor */
+	if (aio_validate(procp, entryp) != 0) {
 		goto error_exit;
 	}
 
 	/* get a reference to the user land map in order to keep it around */
-	entryp->aio_map = get_task_map( procp->task );
-	vm_map_reference( entryp->aio_map );
-
-	/* do some more validation on the aiocb and embedded file descriptor */
-	result = aio_validate( entryp );
-	if (result != 0) {
-		goto error_exit_with_ref;
-	}
+	entryp->aio_map = get_task_map(procp->task);
+	vm_map_reference(entryp->aio_map);
 
 	/* get a reference on the current_thread, which is passed in vfs_context. */
 	entryp->thread = current_thread();
-	thread_reference( entryp->thread );
+	thread_reference(entryp->thread);
 	return entryp;
 
-error_exit_with_ref:
-	if (VM_MAP_NULL != entryp->aio_map) {
-		vm_map_deallocate( entryp->aio_map );
-	}
 error_exit:
-	if (result && entryp != NULL) {
-		zfree( aio_workq_zonep, entryp );
-		entryp = NULL;
-	}
-
-	return entryp;
+	zfree(aio_workq_zonep, entryp);
+	return NULL;
 }
 
 
@@ -1996,43 +1729,23 @@ error_exit:
  * processing the request.
  */
 static int
-aio_queue_async_request(proc_t procp, user_addr_t aiocbp, int kindOfIO )
+aio_queue_async_request(proc_t procp, user_addr_t aiocbp,
+    aio_entry_flags_t flags)
 {
 	aio_workq_entry *entryp;
 	int              result;
-	int              old_count;
 
-	old_count = aio_increment_total_count();
-	if (old_count >= aio_max_requests) {
-		result = EAGAIN;
-		goto error_noalloc;
-	}
-
-	entryp = aio_create_queue_entry( procp, aiocbp, 0, kindOfIO);
+	entryp = aio_create_queue_entry(procp, aiocbp, flags);
 	if (entryp == NULL) {
 		result = EAGAIN;
 		goto error_noalloc;
 	}
 
-
 	aio_proc_lock_spin(procp);
-
-	if (is_already_queued( entryp->procp, entryp->uaiocbp ) == TRUE) {
+	if (!aio_try_enqueue_work_locked(procp, entryp, NULL)) {
 		result = EAGAIN;
 		goto error_exit;
 	}
-
-	/* check our aio limits to throttle bad or rude user land behavior */
-	if (aio_get_process_count( procp ) >= aio_max_requests_per_process) {
-		printf("aio_queue_async_request(): too many in flight for proc: %d.\n", procp->p_aio_total_count);
-		result = EAGAIN;
-		goto error_exit;
-	}
-
-	/* Add the IO to proc and work queues, wake up threads as appropriate */
-	lck_mtx_convert_spin(aio_proc_mutex(procp));
-	aio_enqueue_work(procp, entryp, 1);
-
 	aio_proc_unlock(procp);
 	return 0;
 
@@ -2043,79 +1756,9 @@ error_exit:
 	 */
 	aio_proc_unlock(procp);
 	aio_free_request(entryp);
-
 error_noalloc:
-	aio_decrement_total_count();
-
 	return result;
-} /* aio_queue_async_request */
-
-
-/*
- * lio_create_entry
- *
- * Allocate an aio_workq_entry and fill it in.  If all goes well return 0
- * and pass the aio_workq_entry pointer back to our caller.
- *
- * Parameters:	procp			The process makign the request
- *		aiocbp			The aio context buffer pointer
- *		group_tag		The group tag used to indicate a
- *					group of operations has completed
- *		entrypp			Pointer to the pointer to receive the
- *					address of the created aio_workq_entry
- *
- * Returns:	0			Successfully created
- *		EAGAIN			Try again (usually resource shortage)
- *
- *
- * Notes:	We get a reference to our caller's user land map in order
- *		to keep it around while we are processing the request.
- *
- *		lio_listio calls behave differently at completion they do
- *		completion notification when all async IO requests have
- *		completed.  We use group_tag to tag IO requests that behave
- *		in the delay notification manner.
- *
- *		All synchronous operations are considered to not have a
- *		signal routine associated with them (sigp == USER_ADDR_NULL).
- */
-static int
-lio_create_entry(proc_t procp, user_addr_t aiocbp, void *group_tag,
-    aio_workq_entry **entrypp )
-{
-	aio_workq_entry *entryp;
-	int             result;
-
-	entryp = aio_create_queue_entry( procp, aiocbp, group_tag, AIO_LIO);
-	if (entryp == NULL) {
-		result = EAGAIN;
-		goto error_exit;
-	}
-
-	/*
-	 * Look for lio_listio LIO_NOP requests and ignore them; this is
-	 * not really an error, but we need to free our aio_workq_entry.
-	 */
-	if (entryp->aiocb.aio_lio_opcode == LIO_NOP) {
-		result = 0;
-		goto error_exit;
-	}
-
-	*entrypp = entryp;
-	return 0;
-
-error_exit:
-
-	if (entryp != NULL) {
-		/*
-		 * This entry has not been queued up so no worries about
-		 * unlocked state and aio_map
-		 */
-		aio_free_request(entryp);
-	}
-
-	return result;
-} /* lio_create_entry */
+}
 
 
 /*
@@ -2123,10 +1766,13 @@ error_exit:
  * free the work queue entry resources.  The entry is off all lists
  * and has zero refcount, so no one can have a pointer to it.
  */
-
-static int
+static void
 aio_free_request(aio_workq_entry *entryp)
 {
+	if (entryp->aio_proc_link.tqe_prev || entryp->aio_workq_link.tqe_prev) {
+		panic("aio_workq_entry %p being freed while still enqueued", entryp);
+	}
+
 	/* remove our reference to the user land map. */
 	if (VM_MAP_NULL != entryp->aio_map) {
 		vm_map_deallocate(entryp->aio_map);
@@ -2134,15 +1780,11 @@ aio_free_request(aio_workq_entry *entryp)
 
 	/* remove our reference to thread which enqueued the request */
 	if (NULL != entryp->thread) {
-		thread_deallocate( entryp->thread );
+		thread_deallocate(entryp->thread);
 	}
 
-	entryp->aio_refcount = -1; /* A bit of poisoning in case of bad refcounting. */
-
-	zfree( aio_workq_zonep, entryp );
-
-	return 0;
-} /* aio_free_request */
+	zfree(aio_workq_zonep, entryp);
+}
 
 
 /*
@@ -2151,7 +1793,7 @@ aio_free_request(aio_workq_entry *entryp)
  * validate the aiocb passed in by one of the aio syscalls.
  */
 static int
-aio_validate( aio_workq_entry *entryp )
+aio_validate(proc_t p, aio_workq_entry *entryp)
 {
 	struct fileproc *fp;
 	int              flag;
@@ -2192,118 +1834,49 @@ aio_validate( aio_workq_entry *entryp )
 	/* validate the file descriptor and that the file was opened
 	 * for the appropriate read / write access.
 	 */
-	proc_fdlock(entryp->procp);
+	proc_fdlock(p);
 
-	result = fp_lookup( entryp->procp, entryp->aiocb.aio_fildes, &fp, 1);
-	if (result == 0) {
-		if ((fp->f_fglob->fg_flag & flag) == 0) {
-			/* we don't have read or write access */
-			result = EBADF;
-		} else if (FILEGLOB_DTYPE(fp->f_fglob) != DTYPE_VNODE) {
-			/* this is not a file */
-			result = ESPIPE;
-		} else {
-			fp->f_flags |= FP_AIOISSUED;
-		}
-
-		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 1);
-	} else {
+	fp = fp_get_noref_locked(p, entryp->aiocb.aio_fildes);
+	if (fp == NULL) {
 		result = EBADF;
+	} else if ((fp->fp_glob->fg_flag & flag) == 0) {
+		/* we don't have read or write access */
+		result = EBADF;
+	} else if (FILEGLOB_DTYPE(fp->fp_glob) != DTYPE_VNODE) {
+		/* this is not a file */
+		result = ESPIPE;
+	} else {
+		fp->fp_flags |= FP_AIOISSUED;
 	}
 
-	proc_fdunlock(entryp->procp);
+	proc_fdunlock(p);
 
 	return result;
-} /* aio_validate */
-
-static int
-aio_increment_total_count(void)
-{
-	return OSIncrementAtomic(&aio_anchor.aio_total_count);
 }
-
-static int
-aio_decrement_total_count(void)
-{
-	int old = OSDecrementAtomic(&aio_anchor.aio_total_count);
-	if (old <= 0) {
-		panic("Negative total AIO count!\n");
-	}
-
-	return old;
-}
-
-static int
-aio_get_process_count(proc_t procp)
-{
-	return procp->p_aio_total_count;
-} /* aio_get_process_count */
-
-static int
-aio_get_all_queues_count( void )
-{
-	return aio_anchor.aio_total_count;
-} /* aio_get_all_queues_count */
-
 
 /*
- * do_aio_completion.  Handle async IO completion.
+ * do_aio_completion_and_unlock.  Handle async IO completion.
  */
 static void
-do_aio_completion( aio_workq_entry *entryp )
+do_aio_completion_and_unlock(proc_t p, aio_workq_entry *entryp)
 {
-	boolean_t        lastLioCompleted = FALSE;
-	aio_lio_context *lio_context = NULL;
-	int              waiter = 0;
+	aio_workq_entry *leader = entryp->lio_leader;
+	int              lio_pending = 0;
+	bool             do_signal = false;
 
-	lio_context = (aio_lio_context *)entryp->group_tag;
+	ASSERT_AIO_PROC_LOCK_OWNED(p);
 
-	if (lio_context != NULL) {
-		aio_proc_lock_spin(entryp->procp);
+	aio_proc_move_done_locked(p, entryp);
 
-		/* Account for this I/O completing. */
-		lio_context->io_completed++;
-
-		/* Are we done with this lio context? */
-		if (lio_context->io_issued == lio_context->io_completed) {
-			lastLioCompleted = TRUE;
+	if (leader) {
+		lio_pending = --leader->lio_pending;
+		if (lio_pending < 0) {
+			panic("lio_pending accounting mistake");
 		}
-
-		waiter = lio_context->io_waiter;
-
-		/* explicit wakeup of lio_listio() waiting in LIO_WAIT */
-		if ((entryp->flags & AIO_LIO_NOTIFY) && (lastLioCompleted) && (waiter != 0)) {
-			/* wake up the waiter */
-			wakeup(lio_context);
+		if (lio_pending == 0 && (leader->flags & AIO_LIO_WAIT)) {
+			wakeup(leader);
 		}
-
-		aio_proc_unlock(entryp->procp);
-	}
-
-	if (entryp->aiocb.aio_sigevent.sigev_notify == SIGEV_SIGNAL &&
-	    (entryp->flags & AIO_DISABLE) == 0) {
-		boolean_t       performSignal = FALSE;
-		if (lio_context == NULL) {
-			performSignal = TRUE;
-		} else {
-			/*
-			 * If this was the last request in the group and a signal
-			 * is desired, send one.
-			 */
-			performSignal = lastLioCompleted;
-		}
-
-		if (performSignal) {
-			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_sig) | DBG_FUNC_NONE,
-			    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
-			    entryp->aiocb.aio_sigevent.sigev_signo, 0, 0);
-
-			psignal( entryp->procp, entryp->aiocb.aio_sigevent.sigev_signo );
-		}
-	}
-
-	if ((entryp->flags & AIO_EXIT_WAIT) && (entryp->flags & AIO_CLOSE_WAIT)) {
-		panic("Close and exit flags set at the same time\n");
+		entryp->lio_leader = NULL; /* no dangling pointers please */
 	}
 
 	/*
@@ -2314,57 +1887,56 @@ do_aio_completion( aio_workq_entry *entryp )
 	 * none then wakeup using the AIO_CLEANUP_SLEEP_CHAN tsleep channel.
 	 * If there are some still active then do nothing - we only want to
 	 * wakeup when all active aio requests for the process are complete.
-	 *
-	 * Don't need to lock the entry or proc to check the cleanup flag.  It can only be
-	 * set for cancellation, while the entryp is still on a proc list; now it's
-	 * off, so that flag is already set if it's going to be.
 	 */
-	if ((entryp->flags & AIO_EXIT_WAIT) != 0) {
-		int             active_requests;
-
+	if (__improbable(entryp->flags & AIO_EXIT_WAIT)) {
 		KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_cleanup_wait) | DBG_FUNC_NONE,
 		    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
 		    0, 0, 0);
 
-		aio_proc_lock_spin(entryp->procp);
-		active_requests = aio_active_requests_for_process( entryp->procp );
-		if (active_requests < 1) {
+		if (!aio_has_active_requests_for_process(p)) {
 			/*
 			 * no active aio requests for this process, continue exiting.  In this
 			 * case, there should be no one else waiting ont he proc in AIO...
 			 */
-			wakeup_one((caddr_t)&entryp->procp->AIO_CLEANUP_SLEEP_CHAN);
-			aio_proc_unlock(entryp->procp);
+			wakeup_one((caddr_t)&p->AIO_CLEANUP_SLEEP_CHAN);
 
 			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_cleanup_wake) | DBG_FUNC_NONE,
 			    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
 			    0, 0, 0);
-		} else {
-			aio_proc_unlock(entryp->procp);
 		}
+	} else if (entryp->aiocb.aio_sigevent.sigev_notify == SIGEV_SIGNAL) {
+		/*
+		 * If this was the last request in the group, or not part of
+		 * a group, and that a signal is desired, send one.
+		 */
+		do_signal = (lio_pending == 0);
 	}
 
-	if ((entryp->flags & AIO_CLOSE_WAIT) != 0) {
-		int             active_requests;
-
+	if (__improbable(entryp->flags & AIO_CLOSE_WAIT)) {
 		KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_cleanup_wait) | DBG_FUNC_NONE,
 		    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
 		    0, 0, 0);
 
-		aio_proc_lock_spin(entryp->procp);
-		active_requests = aio_proc_active_requests_for_file( entryp->procp, entryp->aiocb.aio_fildes);
-		if (active_requests < 1) {
+		if (!aio_proc_has_active_requests_for_file(p, entryp->aiocb.aio_fildes)) {
 			/* Can't wakeup_one(); multiple closes might be in progress. */
-			wakeup(&entryp->procp->AIO_CLEANUP_SLEEP_CHAN);
-			aio_proc_unlock(entryp->procp);
+			wakeup(&p->AIO_CLEANUP_SLEEP_CHAN);
 
 			KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_cleanup_wake) | DBG_FUNC_NONE,
 			    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
 			    0, 0, 0);
-		} else {
-			aio_proc_unlock(entryp->procp);
 		}
 	}
+
+	aio_proc_unlock(p);
+
+	if (do_signal) {
+		KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_sig) | DBG_FUNC_NONE,
+		    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp),
+		    entryp->aiocb.aio_sigevent.sigev_signo, 0, 0);
+
+		psignal(p, entryp->aiocb.aio_sigevent.sigev_signo);
+	}
+
 	/*
 	 * A thread in aio_suspend() wants to known about completed IOs.  If it checked
 	 * the done list before we moved our AIO there, then it already asserted its wait,
@@ -2372,135 +1944,130 @@ do_aio_completion( aio_workq_entry *entryp )
 	 * we did our move, then it already has seen the AIO that we moved.  Herego, we
 	 * can do our wakeup without holding the lock.
 	 */
-	wakeup((caddr_t) &entryp->procp->AIO_SUSPEND_SLEEP_CHAN );
+	wakeup(&p->AIO_SUSPEND_SLEEP_CHAN);
 	KERNEL_DEBUG(BSDDBG_CODE(DBG_BSD_AIO, AIO_completion_suspend_wake) | DBG_FUNC_NONE,
 	    VM_KERNEL_ADDRPERM(p), VM_KERNEL_ADDRPERM(entryp->uaiocbp), 0, 0, 0);
 
-	/*
-	 * free the LIO context if the last lio completed and no thread is
-	 * waiting
-	 */
-	if (lastLioCompleted && (waiter == 0)) {
-		free_lio_context(lio_context);
+	aio_entry_unref(entryp); /* see aio_try_enqueue_work_locked */
+	if (leader) {
+		aio_entry_unref(leader); /* see lio_listio */
 	}
-} /* do_aio_completion */
+}
 
 
 /*
  * do_aio_read
  */
 static int
-do_aio_read( aio_workq_entry *entryp )
+do_aio_read(aio_workq_entry *entryp)
 {
-	struct fileproc        *fp;
-	int                     error;
-	struct vfs_context      context;
+	struct proc     *p = entryp->procp;
+	struct fileproc *fp;
+	int error;
 
-	if ((error = fp_lookup(entryp->procp, entryp->aiocb.aio_fildes, &fp, 0))) {
+	if ((error = fp_lookup(p, entryp->aiocb.aio_fildes, &fp, 0))) {
 		return error;
 	}
-	if ((fp->f_fglob->fg_flag & FREAD) == 0) {
-		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
-		return EBADF;
+
+	if (fp->fp_glob->fg_flag & FREAD) {
+		struct vfs_context context = {
+			.vc_thread = entryp->thread,     /* XXX */
+			.vc_ucred = fp->fp_glob->fg_cred,
+		};
+
+		error = dofileread(&context, fp,
+		    entryp->aiocb.aio_buf,
+		    entryp->aiocb.aio_nbytes,
+		    entryp->aiocb.aio_offset, FOF_OFFSET,
+		    &entryp->returnval);
+	} else {
+		error = EBADF;
 	}
 
-	context.vc_thread = entryp->thread;     /* XXX */
-	context.vc_ucred = fp->f_fglob->fg_cred;
-
-	error = dofileread(&context, fp,
-	    entryp->aiocb.aio_buf,
-	    entryp->aiocb.aio_nbytes,
-	    entryp->aiocb.aio_offset, FOF_OFFSET,
-	    &entryp->returnval);
-	fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
-
+	fp_drop(p, entryp->aiocb.aio_fildes, fp, 0);
 	return error;
-} /* do_aio_read */
+}
 
 
 /*
  * do_aio_write
  */
 static int
-do_aio_write( aio_workq_entry *entryp )
+do_aio_write(aio_workq_entry *entryp)
 {
-	struct fileproc        *fp;
-	int                     error, flags;
-	struct vfs_context      context;
+	struct proc     *p = entryp->procp;
+	struct fileproc *fp;
+	int error;
 
-	if ((error = fp_lookup(entryp->procp, entryp->aiocb.aio_fildes, &fp, 0))) {
+	if ((error = fp_lookup(p, entryp->aiocb.aio_fildes, &fp, 0))) {
 		return error;
 	}
-	if ((fp->f_fglob->fg_flag & FWRITE) == 0) {
-		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
-		return EBADF;
-	}
 
-	flags = FOF_PCRED;
-	if ((fp->f_fglob->fg_flag & O_APPEND) == 0) {
-		flags |= FOF_OFFSET;
-	}
+	if (fp->fp_glob->fg_flag & FWRITE) {
+		struct vfs_context context = {
+			.vc_thread = entryp->thread,     /* XXX */
+			.vc_ucred = fp->fp_glob->fg_cred,
+		};
+		int flags = FOF_PCRED;
 
-	context.vc_thread = entryp->thread;     /* XXX */
-	context.vc_ucred = fp->f_fglob->fg_cred;
+		if ((fp->fp_glob->fg_flag & O_APPEND) == 0) {
+			flags |= FOF_OFFSET;
+		}
 
-	/* NB: tell dofilewrite the offset, and to use the proc cred */
-	error = dofilewrite(&context,
-	    fp,
-	    entryp->aiocb.aio_buf,
-	    entryp->aiocb.aio_nbytes,
-	    entryp->aiocb.aio_offset,
-	    flags,
-	    &entryp->returnval);
-
-	if (entryp->returnval) {
-		fp_drop_written(entryp->procp, entryp->aiocb.aio_fildes, fp);
+		/* NB: tell dofilewrite the offset, and to use the proc cred */
+		error = dofilewrite(&context,
+		    fp,
+		    entryp->aiocb.aio_buf,
+		    entryp->aiocb.aio_nbytes,
+		    entryp->aiocb.aio_offset,
+		    flags,
+		    &entryp->returnval);
 	} else {
-		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
+		error = EBADF;
 	}
 
+	fp_drop(p, entryp->aiocb.aio_fildes, fp, 0);
 	return error;
-} /* do_aio_write */
+}
 
 
 /*
- * aio_active_requests_for_process - return number of active async IO
- * requests for the given process.
+ * aio_has_active_requests_for_process - return whether the process has active
+ * requests pending.
  */
-static int
-aio_active_requests_for_process(proc_t procp)
+static bool
+aio_has_active_requests_for_process(proc_t procp)
 {
-	return procp->p_aio_active_count;
-} /* aio_active_requests_for_process */
+	return !TAILQ_EMPTY(&procp->p_aio_activeq);
+}
 
 /*
  * Called with the proc locked.
  */
-static int
-aio_proc_active_requests_for_file(proc_t procp, int fd)
+static bool
+aio_proc_has_active_requests_for_file(proc_t procp, int fd)
 {
-	int count = 0;
 	aio_workq_entry *entryp;
+
 	TAILQ_FOREACH(entryp, &procp->p_aio_activeq, aio_proc_link) {
 		if (entryp->aiocb.aio_fildes == fd) {
-			count++;
+			return true;
 		}
 	}
 
-	return count;
-} /* aio_active_requests_for_process */
-
+	return false;
+}
 
 
 /*
  * do_aio_fsync
  */
 static int
-do_aio_fsync( aio_workq_entry *entryp )
+do_aio_fsync(aio_workq_entry *entryp)
 {
-	struct vfs_context      context;
-	struct vnode            *vp;
-	struct fileproc         *fp;
+	struct proc            *p = entryp->procp;
+	struct vnode           *vp;
+	struct fileproc        *fp;
 	int                     sync_flag;
 	int                     error;
 
@@ -2524,28 +2091,29 @@ do_aio_fsync( aio_workq_entry *entryp )
 		sync_flag = MNT_DWAIT;
 	}
 
-	error = fp_getfvp( entryp->procp, entryp->aiocb.aio_fildes, &fp, &vp);
-	if (error == 0) {
-		if ((error = vnode_getwithref(vp))) {
-			fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
-			entryp->returnval = -1;
-			return error;
-		}
-		context.vc_thread = current_thread();
-		context.vc_ucred = fp->f_fglob->fg_cred;
+	error = fp_get_ftype(p, entryp->aiocb.aio_fildes, DTYPE_VNODE, ENOTSUP, &fp);
+	if (error != 0) {
+		entryp->returnval = -1;
+		return error;
+	}
+	vp = fp->fp_glob->fg_data;
 
-		error = VNOP_FSYNC( vp, sync_flag, &context);
+	if ((error = vnode_getwithref(vp)) == 0) {
+		struct vfs_context context = {
+			.vc_thread = entryp->thread,     /* XXX */
+			.vc_ucred = fp->fp_glob->fg_cred,
+		};
+
+		error = VNOP_FSYNC(vp, sync_flag, &context);
 
 		(void)vnode_put(vp);
-
-		fp_drop(entryp->procp, entryp->aiocb.aio_fildes, fp, 0);
-	}
-	if (error != 0) {
+	} else {
 		entryp->returnval = -1;
 	}
 
+	fp_drop(p, entryp->aiocb.aio_fildes, fp, 0);
 	return error;
-} /* do_aio_fsync */
+}
 
 
 /*
@@ -2564,7 +2132,7 @@ is_already_queued(proc_t procp, user_addr_t aiocbp)
 	result = FALSE;
 
 	/* look for matches on our queue of async IO requests that have completed */
-	TAILQ_FOREACH( entryp, &procp->p_aio_doneq, aio_proc_link ) {
+	TAILQ_FOREACH(entryp, &procp->p_aio_doneq, aio_proc_link) {
 		if (aiocbp == entryp->uaiocbp) {
 			result = TRUE;
 			goto ExitThisRoutine;
@@ -2572,7 +2140,7 @@ is_already_queued(proc_t procp, user_addr_t aiocbp)
 	}
 
 	/* look for matches on our queue of active async IO requests */
-	TAILQ_FOREACH( entryp, &procp->p_aio_activeq, aio_proc_link ) {
+	TAILQ_FOREACH(entryp, &procp->p_aio_activeq, aio_proc_link) {
 		if (aiocbp == entryp->uaiocbp) {
 			result = TRUE;
 			goto ExitThisRoutine;
@@ -2581,59 +2149,28 @@ is_already_queued(proc_t procp, user_addr_t aiocbp)
 
 ExitThisRoutine:
 	return result;
-} /* is_already_queued */
-
-
-static void
-free_lio_context(aio_lio_context* context)
-{
-#if DEBUG
-	OSDecrementAtomic(&lio_contexts_alloced);
-#endif /* DEBUG */
-
-	FREE( context, M_TEMP );
-} /* free_lio_context */
+}
 
 
 /*
  * aio initialization
  */
 __private_extern__ void
-aio_init( void )
+aio_init(void)
 {
-	int i;
-
-	aio_lock_grp_attr = lck_grp_attr_alloc_init();
-	aio_proc_lock_grp = lck_grp_alloc_init("aio_proc", aio_lock_grp_attr);;
-	aio_entry_lock_grp = lck_grp_alloc_init("aio_entry", aio_lock_grp_attr);;
-	aio_queue_lock_grp = lck_grp_alloc_init("aio_queue", aio_lock_grp_attr);;
-	aio_lock_attr = lck_attr_alloc_init();
-
-	lck_mtx_init(&aio_entry_mtx, aio_entry_lock_grp, aio_lock_attr);
-	lck_mtx_init(&aio_proc_mtx, aio_proc_lock_grp, aio_lock_attr);
-
-	aio_anchor.aio_inflight_count = 0;
-	aio_anchor.aio_done_count = 0;
-	aio_anchor.aio_total_count = 0;
-	aio_anchor.aio_num_workqs = AIO_NUM_WORK_QUEUES;
-
-	for (i = 0; i < AIO_NUM_WORK_QUEUES; i++) {
+	for (int i = 0; i < AIO_NUM_WORK_QUEUES; i++) {
 		aio_workq_init(&aio_anchor.aio_async_workqs[i]);
 	}
 
-
-	i = sizeof(aio_workq_entry);
-	aio_workq_zonep = zinit( i, i * aio_max_requests, i * aio_max_requests, "aiowq" );
-
-	_aio_create_worker_threads( aio_worker_threads );
-} /* aio_init */
+	_aio_create_worker_threads(aio_worker_threads);
+}
 
 
 /*
  * aio worker threads created here.
  */
 __private_extern__ void
-_aio_create_worker_threads( int num )
+_aio_create_worker_threads(int num)
 {
 	int i;
 
@@ -2641,15 +2178,13 @@ _aio_create_worker_threads( int num )
 	for (i = 0; i < num; i++) {
 		thread_t                myThread;
 
-		if (KERN_SUCCESS != kernel_thread_start((thread_continue_t)aio_work_thread, NULL, &myThread)) {
-			printf( "%s - failed to create a work thread \n", __FUNCTION__ );
+		if (KERN_SUCCESS != kernel_thread_start(aio_work_thread, NULL, &myThread)) {
+			printf("%s - failed to create a work thread \n", __FUNCTION__);
 		} else {
 			thread_deallocate(myThread);
 		}
 	}
-
-	return;
-} /* _aio_create_worker_threads */
+}
 
 /*
  * Return the current activation utask
@@ -2668,7 +2203,7 @@ get_aiotask(void)
  * aiocb (in our case that is a user_aiocb)
  */
 static void
-do_munge_aiocb_user32_to_user( struct user32_aiocb *my_aiocbp, struct user_aiocb *the_user_aiocbp )
+do_munge_aiocb_user32_to_user(struct user32_aiocb *my_aiocbp, struct user_aiocb *the_user_aiocbp)
 {
 	the_user_aiocbp->aio_fildes = my_aiocbp->aio_fildes;
 	the_user_aiocbp->aio_offset = my_aiocbp->aio_offset;
@@ -2697,9 +2232,13 @@ do_munge_aiocb_user32_to_user( struct user32_aiocb *my_aiocbp, struct user_aiocb
 /* Similar for 64-bit user process, so that we don't need to satisfy
  * the alignment constraints of the original user64_aiocb
  */
+#if !__LP64__
+__dead2
+#endif
 static void
-do_munge_aiocb_user64_to_user( struct user64_aiocb *my_aiocbp, struct user_aiocb *the_user_aiocbp )
+do_munge_aiocb_user64_to_user(struct user64_aiocb *my_aiocbp, struct user_aiocb *the_user_aiocbp)
 {
+#if __LP64__
 	the_user_aiocbp->aio_fildes = my_aiocbp->aio_fildes;
 	the_user_aiocbp->aio_offset = my_aiocbp->aio_offset;
 	the_user_aiocbp->aio_buf = my_aiocbp->aio_buf;
@@ -2715,4 +2254,8 @@ do_munge_aiocb_user64_to_user( struct user64_aiocb *my_aiocbp, struct user_aiocb
 	    my_aiocbp->aio_sigevent.sigev_notify_function;
 	the_user_aiocbp->aio_sigevent.sigev_notify_attributes =
 	    my_aiocbp->aio_sigevent.sigev_notify_attributes;
+#else
+#pragma unused(my_aiocbp, the_user_aiocbp)
+	panic("64bit process on 32bit kernel is not supported");
+#endif
 }

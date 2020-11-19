@@ -37,8 +37,6 @@
 
 #ifdef  MACH_KERNEL_PRIVATE
 
-extern  unsigned int    LcksOpts;
-
 #define enaLkDeb                0x00000001      /* Request debug in default attribute */
 #define enaLkStat               0x00000002      /* Request statistic in default attribute */
 #define disLkRWPrio             0x00000004      /* Disable RW lock priority promotion */
@@ -300,7 +298,7 @@ get_interrupts(void)
 #if __arm__
 	__asm__ volatile ("mrs %[state], cpsr" :[state] "=r" (state));  // Read cpsr
 #else
-	state = __builtin_arm_rsr64("DAIF");    // Read interrupt state
+	state = (long)__builtin_arm_rsr64("DAIF");    // Read interrupt state
 #endif
 	return state;
 }
@@ -321,7 +319,7 @@ restore_interrupts(long state)
 #if __arm__
 	__asm__ volatile ("msr  cpsr, %[state]" :: [state] "r" (state) : "cc", "memory"); // Restore CPSR
 #elif __arm64__
-	__builtin_arm_wsr64("DAIF", state);     // Restore masks
+	__builtin_arm_wsr64("DAIF", (uint64_t)state);     // Restore masks
 #endif
 }
 

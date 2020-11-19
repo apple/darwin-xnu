@@ -210,7 +210,7 @@ aes_encrypt_gcm(const unsigned char *in_blk, unsigned int num_bytes,
 }
 
 aes_rval
-aes_encrypt_finalize_gcm(unsigned char *tag, unsigned int tag_bytes, ccgcm_ctx *ctx)
+aes_encrypt_finalize_gcm(unsigned char *tag, size_t tag_bytes, ccgcm_ctx *ctx)
 {
 	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_encrypt;
 	if (!gcm) {
@@ -248,7 +248,7 @@ aes_decrypt_key_with_iv_gcm(const unsigned char *key, int key_len, const unsigne
 }
 
 aes_rval
-aes_decrypt_set_iv_gcm(const unsigned char *in_iv, unsigned int len, ccgcm_ctx *ctx)
+aes_decrypt_set_iv_gcm(const unsigned char *in_iv, size_t len, ccgcm_ctx *ctx)
 {
 	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_decrypt;
 	if (!gcm) {
@@ -309,7 +309,7 @@ aes_decrypt_gcm(const unsigned char *in_blk, unsigned int num_bytes,
 }
 
 aes_rval
-aes_decrypt_finalize_gcm(unsigned char *tag, unsigned int tag_bytes, ccgcm_ctx *ctx)
+aes_decrypt_finalize_gcm(unsigned char *tag, size_t tag_bytes, ccgcm_ctx *ctx)
 {
 	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_decrypt;
 	if (!gcm) {
@@ -324,7 +324,7 @@ aes_decrypt_finalize_gcm(unsigned char *tag, unsigned int tag_bytes, ccgcm_ctx *
 	return ccgcm_reset(gcm, ctx);
 }
 
-unsigned
+size_t
 aes_encrypt_get_ctx_size_gcm(void)
 {
 	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_encrypt;
@@ -334,7 +334,7 @@ aes_encrypt_get_ctx_size_gcm(void)
 	return cc_ctx_sizeof(ccgcm_ctx, gcm->size);
 }
 
-unsigned
+size_t
 aes_decrypt_get_ctx_size_gcm(void)
 {
 	const struct ccmode_gcm *gcm = g_crypto_funcs->ccaes_gcm_decrypt;

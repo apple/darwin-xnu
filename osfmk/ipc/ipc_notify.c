@@ -158,8 +158,6 @@ void
 ipc_notify_send_once(
 	ipc_port_t      port)
 {
-	ipc_port_adjust_special_reply_port(port, IPC_PORT_ADJUST_RESET_BOOSTRAP_CHECKIN);
-
 	(void)mach_notify_send_once(port);
 	/* send-once right consumed */
 }

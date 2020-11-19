@@ -1,6 +1,6 @@
 # -*- mode: makefile;-*-
 #
-# Copyright (C) 1999-2019 Apple Inc. All rights reserved.
+# Copyright (C) 1999-2020 Apple Inc. All rights reserved.
 #
 # MakeInc.def contains global definitions for building,
 # linking, and installing files.
@@ -24,9 +24,17 @@ SUPPORTED_KERNEL_CONFIGS = RELEASE DEVELOPMENT DEBUG PROFILE KASAN
 SUPPORTED_X86_64_MACHINE_CONFIGS = NONE
 SUPPORTED_X86_64H_MACHINE_CONFIGS = NONE
 
-SUPPORTED_ARM_MACHINE_CONFIGS = S7002 T8002 T8004
+ifneq ($(findstring _Sim,$(RC_ProjectName)),)
+SUPPORTED_ARM_MACHINE_CONFIGS = NONE
+SUPPORTED_ARM64_MACHINE_CONFIGS = NONE
+else ifneq ($(findstring _host,$(RC_ProjectName)),)
+SUPPORTED_ARM_MACHINE_CONFIGS = NONE
+SUPPORTED_ARM64_MACHINE_CONFIGS = NONE
+else
+SUPPORTED_ARM_MACHINE_CONFIGS = T8002 T8004
 SUPPORTED_ARM64_MACHINE_CONFIGS = T7000 T7001 S8000 S8001 T8010 T8011 BCM2837
 
+endif
 
 #
 # Setup up *_LC variables during recursive invocations
@@ -53,7 +61,6 @@ COMPONENT_IMPORT_LIST = $(filter-out $(COMPONENT),$(COMPONENT_LIST))
 
 MACHINE_FLAGS_ARM64_T7000 = -DARM64_BOARD_CONFIG_T7000
 MACHINE_FLAGS_ARM64_T7001 = -DARM64_BOARD_CONFIG_T7001
-MACHINE_FLAGS_ARM_S7002 = -DARM_BOARD_CONFIG_S7002
 MACHINE_FLAGS_ARM64_S8000 = -DARM64_BOARD_CONFIG_S8000
 MACHINE_FLAGS_ARM64_S8001 = -DARM64_BOARD_CONFIG_S8001
 MACHINE_FLAGS_ARM_T8002 = -DARM_BOARD_CONFIG_T8002
@@ -97,20 +104,31 @@ endif
 DEPLOYMENT_TARGET_DEFINES = -DPLATFORM_$(PLATFORM)
 
 
+ifneq ($(RC_ENABLE_PRODUCT_INFO_FILTER),)
+SEED_DEFINES += -DRC_ENABLE_XNU_PRODUCT_INFO_FILTER
+else
+SEED_DEFINES += -URC_ENABLE_XNU_PRODUCT_INFO_FILTER
+endif
+
 #
 # Standard defines list
 #
 DEFINES = -DAPPLE -DKERNEL -DKERNEL_PRIVATE -DXNU_KERNEL_PRIVATE \
-	-DPRIVATE -D__MACHO__=1 -Dvolatile=__volatile $(CONFIG_DEFINES) \
-	$(SEED_DEFINES)
+	-DPRIVATE -D__MACHO__=1 -Dvolatile=__volatile -DXNU_KERN_EVENT_DATA_IS_VLA \
+	$(CONFIG_DEFINES) $(SEED_DEFINES)
+
+# Enable caching with `make CCACHE=ccache`
+# This intentionally does not override $(CC) because that will confuse
+# utilities like mig.
+CCACHE ?=
 
 #
 # Compiler command
 #
-KCC  = $(CC)
-KC++ = $(CXX)
+KCC  = $(CCACHE) $(CC)
+KC++ = $(CCACHE) $(CXX)
 
-GENASSYM_KCC = $(CC)
+GENASSYM_KCC = $(CCACHE) $(CC)
 
 #
 # Compiler warning flags
@@ -131,9 +149,6 @@ WARNFLAGS_STD := \
 	-Weverything \
 	-Wno-pedantic \
 	$(WERROR) \
-	-Wno-implicit-int-conversion \
-	-Wno-sign-conversion \
-	-Wno-shorten-64-to-32 \
 	-Wno-bad-function-cast \
 	-Wno-c++-compat \
 	-Wno-c++98-compat \
@@ -159,9 +174,20 @@ WARNFLAGS_STD := \
 	-Wno-vla \
 	-Wno-zero-length-array
 
+# When a new clang has new warnings disable them here until the kernel is fixed.
 WARNFLAGS_STD := $(WARNFLAGS_STD) \
 	-Wno-unknown-warning-option \
-	-Wno-error=atomic-implicit-seq-cst
+	-Wno-anon-enum-enum-conversion \
+	-Wno-error=enum-enum-conversion \
+	-Wno-error=c99-designator \
+	-Wno-error=reorder-init-list
+
+# Hand-written sign conversion diagnostics are resolved, but the
+# auto-generated ones need mig and iig to be updated to fix.  Disable the
+# diagnostic here until we've completed that:
+WARNFLAGS_STD := $(WARNFLAGS_STD) \
+	-Wno-sign-compare \
+	-Wno-sign-conversion
 
 CWARNFLAGS_STD = \
 	$(WARNFLAGS_STD)
@@ -201,40 +227,48 @@ ARCH_FLAGS_X86_64H	  = -arch x86_64h
 
 ifneq ($(filter ARM ARM64,$(CURRENT_ARCH_CONFIG)),)
 
+ifneq ($(findstring _Sim,$(RC_ProjectName)),)
+ARCH_FLAGS_ARM64          = -arch arm64e
+else ifneq ($(findstring _host,$(RC_ProjectName)),)
+ARCH_FLAGS_ARM64          = -arch arm64e
+else
+
 ifndef ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG
+
+ifneq ($(EMBEDDED_DEVICE_MAP),)
 export ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH) -query SELECT DISTINCT KernelMachOArchitecture FROM Targets WHERE KernelPlatform IS \"$(CURRENT_MACHINE_CONFIG_LC)\" LIMIT 1 || echo UNKNOWN )
+else
+# Without embdedded device map, use a default arch string
+export ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG := $(shell echo $(CURRENT_ARCH_CONFIG) | tr A-Z a-z)
+endif
 endif
 
 #
 # This can have false negatives, and is used to avoid calling CTF when we'll build a static KC
 #
 ifndef WILL_BUILD_STATIC_KC
+ifneq ($(EMBEDDED_DEVICE_MAP),)
 export WILL_BUILD_STATIC_KC := $(shell $(EMBEDDED_DEVICE_MAP) -db $(EDM_DBPATH)	\
 				-query 'SELECT COUNT(*) != 0 FROM Targets WHERE KernelPlatform IS "$(CURRENT_MACHINE_CONFIG_LC)" \
 					AND (KernelMachOArchitecture LIKE "arm64e" OR ProductType LIKE "iphone10,%")')
+else
+export WILL_BUILD_STATIC_KC := 0
+endif
 endif
 
 BUILD_STATIC_LINK := 1
 
-endif
-
 ARCH_FLAGS_ARM		  = -arch $(ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG)
 ARCH_FLAGS_ARM64	  = -arch $(ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG)
 
-#
-# Clang static analyzer flags
-#
-ANALYZER			= $(CC)
-ANALYZERPP			= $(CXX)
-ANALYZERFLAGS		= --analyze -D__clang_analyzer__
-ifneq ($(ANALYZE_FORMAT),text)
-ANALYZERFLAGS		+= -Xanalyzer -analyzer-output=html
-ANALYZERFLAGS		+= -o $(OBJROOT)/analyzer-html
-else
-ANALYZERFLAGS		+= -Xanalyzer -analyzer-output=text
 endif
-ifneq ($(ANALYZE_VERBOSE),YES)
-ANALYZERFLAGS		+= -Xclang -analyzer-disable-checker -Xclang deadcode.DeadStores
+
+else
+# non arm machine config string
+ifndef ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG
+export ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG := $(shell echo $(CURRENT_ARCH_CONFIG) | tr A-Z a-z)
+endif
+
 endif
 
 #
@@ -284,8 +318,20 @@ CFLAGS_X86_64H = $(CFLAGS_X86_64)
 CFLAGS_ARM	= -Darm -DARM -D__ARM__ -DPAGE_SIZE_FIXED \
 			-momit-leaf-frame-pointer -fno-strict-aliasing -D__API__=v4
 
-CFLAGS_ARM64	= -Darm64 -DARM64 -D__ARM64__ -DLP64 -DPAGE_SIZE_FIXED \
-			-momit-leaf-frame-pointer -fno-strict-aliasing -D__API__=v4 -mkernel
+LARGE_MEMORY_DEFINE=-UARM_LARGE_MEMORY
+ARM64_PLKSEG_ADDR  =0xfffffff004004000
+ARM64_LINK_ADDR    =0xfffffff007004000
+
+# Use ARM_LARGE_MEMORY config for all MacOSX targets.
+ifneq ($(filter $(PLATFORM),MacOSX),)
+LARGE_MEMORY_DEFINE=-DARM_LARGE_MEMORY=1
+ARM64_PLKSEG_ADDR  =0xfffffe0004004000
+ARM64_LINK_ADDR    =0xfffffe0007004000
+endif
+
+
+CFLAGS_ARM64	= -Darm64 -DARM64 -D__ARM64__ -DLP64 -DPAGE_SIZE_FIXED -DVM_KERNEL_LINK_ADDRESS=$(ARM64_LINK_ADDR) \
+			$(LARGE_MEMORY_DEFINE) -momit-leaf-frame-pointer -fno-strict-aliasing -D__API__=v4 -mkernel
 
 CFLAGS_RELEASEX86_64 = -O2
 CFLAGS_DEVELOPMENTX86_64 = -O2
@@ -319,6 +365,9 @@ CFLAGS_PROFILEARM64 = -O2
 
 SAN=0
 
+# KASan support
+#
+
 ifeq ($(CURRENT_KERNEL_CONFIG),KASAN)
 # KASan kernel config implicitly enables the KASan instrumentation.
 # Instrumentation for other sanitizers is enabled explicitly at build time.
@@ -327,23 +376,30 @@ endif
 
 ifeq ($(KASAN),1)
 SAN=1
-BUILD_LTO = 0
-KASAN_SHIFT_ARM64=0xe000000000000000
+BUILD_LTO=0
+
+# Shadow map scale size. With KASAN_SCALE=N, the shadow memory consumes 1/2^N of
+# the virtual address space.
+KASAN_SCALE=3
+
+KASAN_OFFSET_ARM64=0xe000000000000000
 #
-# To calculate the kasan shift, subtract the lowest KVA to sanitize, shifted right by 3 bits,
+# To calculate the kasan offset, subtract the lowest KVA to sanitize, shifted right by 3 bits,
 # from the base address of the kasan shadow area, (e.g. solve the following equation:
-# SHIFT = {VA mapped by the first KASAN PML4 [Currently #494]} - (LOWEST_KVA >> 3)
-# SHIFT = (0ULL - (512GiB * (512 - 494))) - (LOWEST_SAN_KVA >> 3)
-# SHIFT = FFFFF70000000000 - ((0ULL - (512GiB * (512 - 496))) >> 3) [PML4 #496 is the first possible KVA]
-# SHIFT = FFFFF70000000000 - (FFFFF80000000000 >> 3)
-# SHIFT = DFFFF80000000000
+# OFFSET = {VA mapped by the first KASAN PML4 [Currently #494]} - (LOWEST_KVA >> 3)
+# OFFSET = (0ULL - (512GiB * (512 - 494))) - (LOWEST_SAN_KVA >> 3)
+# OFFSET = FFFFF70000000000 - ((0ULL - (512GiB * (512 - 496))) >> 3) [PML4 #496 is the first possible KVA]
+# OFFSET = FFFFF70000000000 - (FFFFF80000000000 >> 3)
+# OFFSET = DFFFF80000000000
 # ).
-KASAN_SHIFT_X86_64=0xdffff80000000000
-KASAN_SHIFT_X86_64H=$(KASAN_SHIFT_X86_64)
-KASAN_SHIFT=$($(addsuffix $(CURRENT_ARCH_CONFIG),KASAN_SHIFT_))
-CFLAGS_GEN += -DKASAN=1 -DKASAN_SHIFT=$(KASAN_SHIFT) -fsanitize=address \
+KASAN_OFFSET_X86_64=0xdffff80000000000
+KASAN_OFFSET_X86_64H=$(KASAN_OFFSET_X86_64)
+KASAN_OFFSET=$($(addsuffix $(CURRENT_ARCH_CONFIG),KASAN_OFFSET_))
+KASAN_BLACKLIST=$(OBJROOT)/san/kasan-blacklist-$(CURRENT_ARCH_CONFIG_LC)
+CFLAGS_GEN += -DKASAN=1 -DKASAN_OFFSET=$(KASAN_OFFSET) -DKASAN_SCALE=$(KASAN_SCALE) -fsanitize=address \
 		-mllvm -asan-globals-live-support \
-		-mllvm -asan-mapping-offset=$(KASAN_SHIFT)
+		-mllvm -asan-mapping-offset=$(KASAN_OFFSET) \
+		-fsanitize-blacklist=$(KASAN_BLACKLIST)
 
 endif
 
@@ -406,7 +462,7 @@ CXXFLAGS      = $(CXXFLAGS_GEN) \
 #
 # Assembler command
 #
-AS	= $(CC)
+AS	= $(CCACHE) $(CC)
 S_KCC	= $(CC)
 
 #
@@ -451,9 +507,11 @@ LDFLAGS_KERNEL_GEN = \
 	-fapple-kext \
 	-Wl,-e,__start \
 	-Wl,-sectalign,__TEXT,__text,0x1000 \
+	-Wl,-sectalign,__DATA,__percpu,0x80 \
 	-Wl,-sectalign,__DATA,__common,0x1000 \
 	-Wl,-sectalign,__DATA,__bss,0x1000 \
 	-Wl,-sectcreate,__PRELINK_TEXT,__text,/dev/null \
+	-Wl,-segprot,__PRELINK_TEXT,r-x,r-x \
 	-Wl,-sectcreate,__PRELINK_INFO,__info,/dev/null \
 	-Wl,-new_linker \
 	-Wl,-pagezero_size,0x0 \
@@ -501,7 +559,9 @@ LDFLAGS_KERNEL_RELEASEX86_64 = \
 	-Wl,-sectalign,__HIB,__llvm_prf_names,0x1000 \
 	-Wl,-sectalign,__HIB,__llvm_prf_data,0x1000 \
 	-Wl,-sectalign,__HIB,__textcoal_nt,0x1000 \
+	-Wl,-sectalign,__HIB,__cstring,0x1000 \
 	-Wl,-rename_section,__DATA,__const,__DATA_CONST,__const \
+	-Wl,-segprot,__DATA_CONST,r--,r-- \
 	-Wl,-no_zero_fill_sections \
 	$(LDFLAGS_NOSTRIP_FLAG)
 
@@ -549,17 +609,17 @@ LDFLAGS_KERNEL_RELEASEARM     = \
 	$(LDFLAGS_KERNEL_GENARM) \
 	$(LDFLAGS_KERNEL_STRIP_LTO)
 
-LDFLAGS_KERNEL_EXPORTS_RELEASEARM     = \
+LDFLAGS_KERNEL_ONLY_CONFIG_RELEASEARM     = \
 	-Wl,-exported_symbols_list,$(TARGET)/all-kpi.exp
 
 LDFLAGS_KERNEL_DEVELOPMENTARM     = \
 	$(LDFLAGS_KERNEL_GENARM) \
 	$(LDFLAGS_NOSTRIP_FLAG)
 
-LDFLAGS_KERNEL_EXPORTS_DEVELOPMENTARM =
+LDFLAGS_KERNEL_ONLY_CONFIG_DEVELOPMENTARM =
 
 LDFLAGS_KERNEL_DEBUGARM = $(LDFLAGS_KERNEL_DEVELOPMENTARM)
-LDFLAGS_KERNEL_EXPORTS_DEBUGARM = $(LDFLAGS_KERNEL_EXPORTS_DEVELOPMENTARM)
+LDFLAGS_KERNEL_ONLY_CONFIG_DEBUGARM = $(LDFLAGS_KERNEL_ONLY_CONFIG_DEVELOPMENTARM)
 
 # Offset image base by page to have iBoot load kernel TEXT correctly.
 # First page is used for various purposes : sleep token, reset vector.
@@ -592,17 +652,28 @@ LDFLAGS_KERNEL_EXPORTS_DEBUGARM = $(LDFLAGS_KERNEL_EXPORTS_DEVELOPMENTARM)
 LDFLAGS_KERNEL_GENARM64 = \
 	-Wl,-pie \
 	-Wl,-static \
-	-Wl,-segaddr,__PRELINK_TEXT,0xfffffff004004000 \
-	-Wl,-image_base,0xfffffff007004000 \
+	-Wl,-segaddr,__PRELINK_TEXT,$(ARM64_PLKSEG_ADDR) \
+	-Wl,-image_base,$(ARM64_LINK_ADDR) \
+	\
+	-Wl,-rename_section,__HIB,__text,__TEXT_EXEC,__hib_text \
+	\
+	-Wl,-rename_section,__HIB,__const,__DATA_CONST,__hib_const \
+	-Wl,-rename_section,__HIB,__cstring,__DATA_CONST,__hib_const \
+	-Wl,-rename_section,__HIB,__literal8,__DATA_CONST,__hib_const \
+	-Wl,-rename_section,__HIB,__literal16,__DATA_CONST,__hib_const \
+	\
+	-Wl,-rename_segment,__HIB,__HIBDATA \
+	\
 	-Wl,-sectalign,__DATA,__const,0x4000 \
+	-Wl,-sectalign,__DATA,__data,0x4000 \
 	-Wl,-rename_section,__DATA,__mod_init_func,__DATA_CONST,__mod_init_func \
 	-Wl,-rename_section,__DATA,__mod_term_func,__DATA_CONST,__mod_term_func \
 	-Wl,-rename_section,__DATA,__auth_ptr,__DATA_CONST,__auth_ptr \
 	-Wl,-rename_section,__DATA,__auth_got,__DATA_CONST,__auth_got \
 	-Wl,-rename_section,__DATA,__const,__DATA_CONST,__const \
+	-Wl,-segprot,__DATA_CONST,r--,r-- \
 	-Wl,-rename_section,__TEXT,__text,__TEXT_EXEC,__text \
 	-Wl,-rename_section,__TEXT,__stubs,__TEXT_EXEC,__stubs \
-	-Wl,-rename_section,__TEXT,initcode,__TEXT_EXEC,initcode \
 	-Wl,-sectcreate,"__PLK_TEXT_EXEC",__text,/dev/null \
 	-Wl,-sectcreate,__PRELINK_DATA,__data,/dev/null \
 	-Wl,-sectcreate,"__PLK_DATA_CONST",__data,/dev/null \
@@ -618,7 +689,7 @@ LDFLAGS_KERNEL_RELEASEARM64     = \
 	$(LDFLAGS_KERNEL_SEGARM64) \
 	$(LDFLAGS_KERNEL_STRIP_LTO)
 
-LDFLAGS_KERNEL_EXPORTS_RELEASEARM64     = \
+LDFLAGS_KERNEL_ONLY_CONFIG_RELEASEARM64     = \
 	-Wl,-exported_symbols_list,$(TARGET)/all-kpi.exp
 
 LDFLAGS_KERNEL_DEVELOPMENTARM64     = \
@@ -626,13 +697,26 @@ LDFLAGS_KERNEL_DEVELOPMENTARM64     = \
 	$(LDFLAGS_KERNEL_SEGARM64) \
 	$(LDFLAGS_NOSTRIP_FLAG)
 
-LDFLAGS_KERNEL_EXPORTS_DEVELOPMENTARM64 =
+LDFLAGS_KERNEL_ONLY_CONFIG_DEVELOPMENTARM64 =
 
 LDFLAGS_KERNEL_KASANARM64 = $(LDFLAGS_KERNEL_DEVELOPMENTARM64)
 LDFLAGS_KERNEL_DEBUGARM64 = $(LDFLAGS_KERNEL_DEVELOPMENTARM64)
 
-LDFLAGS_KERNEL_EXPORTS_KASANARM64 = $(LDFLAGS_KERNEL_EXPORTS_DEVELOPMENTARM64)
-LDFLAGS_KERNEL_EXPORTS_DEBUGARM64 = $(LDFLAGS_KERNEL_EXPORTS_DEVELOPMENTARM64)
+LDFLAGS_KERNEL_ONLY_CONFIG_KASANARM64 = $(LDFLAGS_KERNEL_ONLY_CONFIG_DEVELOPMENTARM64)
+LDFLAGS_KERNEL_ONLY_CONFIG_DEBUGARM64 = $(LDFLAGS_KERNEL_ONLY_CONFIG_DEVELOPMENTARM64)
+
+#
+# arm64e specific linker flags that should be used only when linking the kernel
+# (and not the static kernel cache / kcgen)
+#
+LDFLAGS_KERNEL_ONLY_SUBARCH_arm64e = \
+	-Wl,-add_split_seg_info \
+	-Wl,-kernel
+
+LDFLAGS_KERNEL_ONLY_SUBARCH_x86_64 = \
+	-Wl,-add_split_seg_info \
+	-Wl,-kernel
+LDFLAGS_KERNEL_ONLY_SUBARCH_x86_64h = $(LDFLAGS_KERNEL_ONLY_SUBARCH_x86_64)
 
 LDFLAGS_KERNEL	= $(LDFLAGS_KERNEL_GEN) \
 		  $(LDFLAGS_KERNEL_SDK) \
@@ -642,11 +726,11 @@ LDFLAGS_KERNEL	= $(LDFLAGS_KERNEL_GEN) \
 		  $($(addsuffix $(CURRENT_ARCH_CONFIG), $(addsuffix $(CURRENT_KERNEL_CONFIG),LDFLAGS_KERNEL_))) \
 		  $(DEPLOYMENT_TARGET_FLAGS)
 
-
-LDFLAGS_KERNEL_EXPORTS   =   \
-		  $($(addsuffix $(CURRENT_ARCH_CONFIG), $(addsuffix $(CURRENT_KERNEL_CONFIG),LDFLAGS_KERNEL_EXPORTS_))) \
-		  -Wl,-alias_list,$(TARGET)/all-alias.exp
-
+LDFLAGS_KERNEL_ONLY   =   \
+		  $($(addsuffix $(CURRENT_ARCH_CONFIG), $(addsuffix $(CURRENT_KERNEL_CONFIG),LDFLAGS_KERNEL_ONLY_CONFIG_))) \
+		  $($(addsuffix $(ARCH_STRING_FOR_CURRENT_MACHINE_CONFIG),LDFLAGS_KERNEL_ONLY_SUBARCH_)) \
+		  -Wl,-alias_list,$(TARGET)/all-alias.exp \
+		  -Wl,-sectcreate,__LINKINFO,__symbolsets,$(TARGET)/symbolsets.plist -Wl,-segprot,__LINKINFO,r--,r--
 
 #
 # Default runtime libraries to be linked with the kernel
@@ -660,13 +744,15 @@ LD_KERNEL_ARCHIVES = $(LDFLAGS_KERNEL_SDK) -lfirehose_kernel
 ifndef DO_CTFMERGE
 DO_CTFMERGE := 1
 ifeq ($(CURRENT_KERNEL_CONFIG),RELEASE)
-ifneq ($(filter ARM%,$(CURRENT_ARCH_CONFIG)),)
+ifneq ($(PLATFORM),MacOSX)
 DO_CTFMERGE := 0
 endif
 endif
 ifneq ($(CURRENT_KERNEL_CONFIG),KASAN)
+ifneq ($(PLATFORM),MacOSX)
 ifeq ($(WILL_BUILD_STATIC_KC),1)
 DO_CTFMERGE := 0
+endif
 endif
 endif
 endif # DO_CTFMERGE
@@ -769,6 +855,7 @@ export VPATH = .:$(SOURCE)
 #
 INSTALL_FLAGS = -c -S -m 0444
 DATA_INSTALL_FLAGS = -c -S -m 0644
+DATA_INSTALL_FLAGS_RO = -c -S -m 0444
 EXEC_INSTALL_FLAGS = -c -S -m 0755
 
 #
@@ -797,7 +884,11 @@ ifndef DRIVERKITINCDIR
     DRIVERKITINCDIR = $(DRIVERKITSDKHEADERSROOT)/usr/include
 endif
 ifndef LCLDIR
-    LCLDIR = $(SPINCDIR)
+    ifeq ($(LIBKERN_USE_USR_LOCAL_INCLUDE),)
+	LCLDIR = $(SPINCDIR)
+    else
+	LCLDIR = $(SDKHEADERSROOT)/usr/local/include
+    endif
 endif
 ifndef DRIVERKITLCLDIR
     DRIVERKITLCLDIR = $(DRIVERKITSDKHEADERSROOT)/usr/local/include
@@ -929,7 +1020,7 @@ INSTALL_DTRACE_LIBEXEC_DIR = /usr/libexec/dtrace
 #
 # Overrides for XBS build aliases
 #
-ifeq ($(RC_ProjectName),xnu_debug)
+ifneq ($(filter $(RC_ProjectName),xnu_debug),)
 INSTALL_KERNEL_DIR := $(DEVELOPER_EXTRAS_DIR)
 INSTALL_KERNEL_SYM_DIR := $(DEVELOPER_EXTRAS_DIR)
 INSTALL_KERNEL_SYM_TO_KDK = 1
@@ -945,7 +1036,7 @@ INSTALL_KERNEL_SYM_DIR := $(SYSTEM_LIBRARY_KERNELS_DIR)
 INSTALL_KERNEL_SYM_TO_KDK = $(if $(filter YES,$(DWARF_DSYM_FILE_SHOULD_ACCOMPANY_PRODUCT)),1,0)
 endif
 
-ifeq ($(RC_ProjectName),xnu_kasan)
+ifneq ($(filter $(RC_ProjectName),xnu_kasan),)
 INSTALL_KASAN_ONLY = 1
 endif
 

@@ -73,4 +73,10 @@
 /* Number of watchport for task */
 #define TASK_MAX_WATCHPORT_COUNT 32
 
+/* Number of different task port flavor */
+#define TASK_SELF_PORT_COUNT 4
+
+/* Number of different thread port flavor */
+#define THREAD_SELF_PORT_COUNT 3
+
 #endif  /* _MACH_MACH_PARAM_H_ */

@@ -134,7 +134,7 @@ _addq(class_queue_t *q, classq_pkt_t *pkt)
 /* add one or more packets at the tail of the queue */
 void
 _addq_multi(class_queue_t *q, classq_pkt_t *pkt_head, classq_pkt_t *pkt_tail,
-    u_int32_t cnt, u_int32_t size)
+    u_int32_t cnt, u_int64_t size)
 {
 	ASSERT(pkt_head->cp_ptype == qptype(q));
 	ASSERT(pkt_tail->cp_ptype == qptype(q));

@@ -172,7 +172,7 @@ __options_decl(workq_tr_flags_t, uint8_t, {
 
 typedef struct workq_threadreq_s {
 	union {
-		struct priority_queue_entry tr_entry;
+		struct priority_queue_entry_sched tr_entry;
 		thread_t tr_thread;
 	};
 	uint16_t           tr_count;
@@ -245,9 +245,9 @@ struct workqueue {
 	struct workq_uthread_head wq_thnewlist;
 	struct workq_uthread_head wq_thidlelist;
 
-	struct priority_queue wq_overcommit_queue;
-	struct priority_queue wq_constrained_queue;
-	struct priority_queue wq_special_queue;
+	struct priority_queue_sched_max wq_overcommit_queue;
+	struct priority_queue_sched_max wq_constrained_queue;
+	struct priority_queue_sched_max wq_special_queue;
 	workq_threadreq_t wq_event_manager_threadreq;
 };
 

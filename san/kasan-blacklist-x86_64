@@ -5,8 +5,8 @@
 # Early boot AUTOGEN
 src:./bsd/kern/kdebug.c
 src:./bsd/kern/kern_csr.c
-src:./osfmk/corecrypto/cc/src/cc_clear.c
-src:./osfmk/corecrypto/ccdbrg/src/ccdrbg_nisthmac.c
+src:./osfmk/corecrypto/cc_clear.c
+src:./osfmk/corecrypto/ccdrbg_nisthmac.c
 src:./osfmk/device/subrs.c
 src:./osfmk/i386/Diagnostics.c
 src:./osfmk/i386/acpi.c
@@ -31,6 +31,8 @@ src:./pexpert/i386/pe_bootargs.c
 src:./pexpert/i386/pe_identify_machine.c
 src:./pexpert/i386/pe_init.c
 src:./pexpert/i386/pe_serial.c
+# added by hand
+src:./osfmk/mach/dyld_kernel_fixups.h
 
 # Nothing below is needed before kasan init, so most of it should go away.
 src:./osfmk/corecrypto/*.c
@@ -64,9 +66,15 @@ src:./osfmk/i386/mp_desc.c
 src:./osfmk/i386/pmap_common.c
 src:./osfmk/i386/pmap_x86_common.c
 src:./osfmk/i386/pmCPU.c
-src:./osfmk/i386/startup64.c
 src:./osfmk/i386/lapic_native.c
 src:./osfmk/vm/vm_compressor.c
 fun:doublemap_init
 fun:getsegbynamefromheader
 fun:getsectbynamefromheader
+
+src:./osfmk/i386/*.h
+src:./EXTERNAL_HEADERS/corecrypto/*.h
+src:./osfmk/corecrypto/*.h
+src:./osfmk/kern/queue.h
+src:*/libkern/libkern/*.h
+

@@ -178,7 +178,7 @@ strtol(const char *nptr, char **endptr, int base)
 	 * overflow.
 	 */
 	cutoff = neg ? -(unsigned long)LONG_MIN : LONG_MAX;
-	cutlim = cutoff % (unsigned long)base;
+	cutlim = ((int)(cutoff % (unsigned long)base));
 	cutoff /= (unsigned long)base;
 	for (acc = 0, any = 0;; c = *s++) {
 		if (isdigit(c)) {
@@ -251,7 +251,7 @@ strtoul(const char *nptr, char **endptr, int base)
 		base = c == '0' ? 8 : 10;
 	}
 	cutoff = (unsigned long)ULONG_MAX / (unsigned long)base;
-	cutlim = (unsigned long)ULONG_MAX % (unsigned long)base;
+	cutlim = ((int)((unsigned long)ULONG_MAX % (unsigned long)base));
 	for (acc = 0, any = 0;; c = *s++) {
 		if (isdigit(c)) {
 			c -= '0';
@@ -351,7 +351,7 @@ strtoq(const char *nptr, char **endptr, int base)
 	 */
 	qbase = (unsigned)base;
 	cutoff = neg ? -(u_quad_t)QUAD_MIN : QUAD_MAX;
-	cutlim = cutoff % qbase;
+	cutlim = ((int)(cutoff % qbase));
 	cutoff /= qbase;
 	for (acc = 0, any = 0;; c = *s++) {
 		if (isdigit(c)) {
@@ -434,7 +434,7 @@ strtouq(const char *nptr,
 	}
 	qbase = (unsigned)base;
 	cutoff = (u_quad_t)UQUAD_MAX / qbase;
-	cutlim = (u_quad_t)UQUAD_MAX % qbase;
+	cutlim = ((int)((u_quad_t)UQUAD_MAX % qbase));
 	for (acc = 0, any = 0;; c = *s++) {
 		if (isdigit(c)) {
 			c -= '0';

@@ -171,8 +171,8 @@
 #define SO_ERROR        0x1007          /* get error status and clear */
 #define SO_TYPE         0x1008          /* get socket type */
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
-#define SO_LABEL        0x1010          /* socket's MAC label */
-#define SO_PEERLABEL    0x1011          /* socket's peer MAC label */
+#define SO_LABEL        0x1010          /* deprecated */
+#define SO_PEERLABEL    0x1011          /* deprecated */
 #ifdef __APPLE__
 #define SO_NREAD        0x1020          /* APPLE: get 1st-packet byte count */
 #define SO_NKE          0x1021          /* APPLE: Install socket-level NKE */
@@ -302,7 +302,7 @@
 
 #define SO_RECV_TRAFFIC_CLASS   0x1087          /* Receive traffic class (bool) */
 #define SO_TRAFFIC_CLASS_DBG    0x1088          /* Debug traffic class (struct so_tcdbg) */
-#define SO_TRAFFIC_CLASS_STATS  0x1089          /* Traffic class statistics */
+#define SO_OPTION_UNUSED_0      0x1089          /* Traffic class statistics */
 #define SO_PRIVILEGED_TRAFFIC_CLASS 0x1090      /* Privileged traffic class (bool) */
 #define SO_DEFUNCTIT    0x1091          /* Defunct a socket (only in internal builds) */
 #define SO_DEFUNCTOK    0x1100          /* can be defunct'd */
@@ -342,12 +342,13 @@
 #define SO_INTCOPROC_ALLOW              0x1118  /* Try to use internal co-processor interfaces. */
 #endif /* PRIVATE */
 
-#define SO_NETSVC_MARKING_LEVEL 0x1119  /* Get QoS marking in effect for socket */
+#define SO_NETSVC_MARKING_LEVEL    0x1119  /* Get QoS marking in effect for socket */
 
 #ifdef PRIVATE
-#define SO_NECP_LISTENUUID      0x1120  /* NECP client UUID for listener */
-#define SO_MPKL_SEND_INFO       0x1122  /* (struct so_mpkl_send_info) */
-#define SO_STATISTICS_EVENT 0x1123  /* int64 argument, an event in statistics collection */
+#define SO_NECP_LISTENUUID         0x1120  /* NECP client UUID for listener */
+#define SO_MPKL_SEND_INFO          0x1122  /* (struct so_mpkl_send_info) */
+#define SO_STATISTICS_EVENT        0x1123  /* int64 argument, an event in statistics collection */
+#define SO_WANT_KEV_SOCKET_CLOSED  0x1124  /* want delivery of KEV_SOCKET_CLOSED (int) */
 #endif /* PRIVATE */
 /*
  * Network Service Type for option SO_NET_SERVICE_TYPE
@@ -592,7 +593,8 @@ struct so_np_extensions {
 #ifdef PRIVATE
 #define AF_MULTIPATH    39
 #endif /* PRIVATE */
-#define AF_MAX          40
+#define AF_VSOCK        40              /* VM Sockets */
+#define AF_MAX          41
 #endif  /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 /*
@@ -687,6 +689,7 @@ struct sockaddr_storage {
 #ifdef PRIVATE
 #define PF_MULTIPATH    AF_MULTIPATH
 #endif /* PRIVATE */
+#define PF_VSOCK        AF_VSOCK
 #define PF_MAX          AF_MAX
 
 /*
@@ -749,6 +752,7 @@ struct sockaddr_storage {
 	{ "netbios", CTLTYPE_NODE }, \
 	{ "ppp", CTLTYPE_NODE }, \
 	{ "hdrcomplete", CTLTYPE_NODE }, \
+	{ "vsock", CTLTYPE_NODE }, \
 }
 #endif /* KERNEL_PRIVATE */
 
@@ -1016,8 +1020,15 @@ struct user32_sa_endpoints {
 #define MSG_NBIO        0x20000         /* FIONBIO mode, used by fifofs */
 #define MSG_SKIPCFIL    0x40000         /* skip pass content filter */
 #endif
+#endif  /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
+
+#if __DARWIN_C_LEVEL >= 200809L
+#define MSG_NOSIGNAL    0x80000         /* do not generate SIGPIPE on EOF */
+#endif /* __DARWIN_C_LEVEL */
+
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 #ifdef  KERNEL
-#define MSG_USEUPCALL   0x80000000 /* Inherit upcall in sock_accept */
+#define MSG_USEUPCALL   0x80000000      /* Inherit upcall in sock_accept */
 #endif
 #endif  /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
@@ -1096,7 +1107,7 @@ struct cmsgcred {
 #define CMSG_LEN(l)             (__DARWIN_ALIGN32(sizeof(struct cmsghdr)) + (l))
 
 #ifdef KERNEL
-#define CMSG_ALIGN(n)   __DARWIN_ALIGN32(n)
+#define CMSG_ALIGN(n)   ((typeof(n))__DARWIN_ALIGN32(n))
 #endif
 #endif  /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
@@ -1108,8 +1119,6 @@ struct cmsgcred {
 #define SCM_TIMESTAMP_MONOTONIC         0x04    /* timestamp (uint64_t) */
 
 #ifdef PRIVATE
-#define SCM_SEQNUM                      0x05    /* TCP unordered recv seq no */
-#define SCM_MSG_PRIORITY                0x06    /* TCP unordered snd priority */
 #define SCM_TIMESTAMP_CONTINUOUS        0x07    /* timestamp (uint64_t) */
 #define SCM_MPKL_SEND_INFO              0x08    /* send info for multi-layer packet logging (struct so_mpkl_send_info) */
 #define SCM_MPKL_RECV_INFO              0x09    /* receive info for multi-layer packet logging (struct so_mpkl_recv_info */
@@ -1147,7 +1156,7 @@ struct omsghdr {
 #define SHUT_WR         1               /* shut down the writing side */
 #define SHUT_RDWR       2               /* shut down both sides */
 
-#if !defined(_POSIX_C_SOURCE)
+#if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
 /*
  * sendfile(2) header/trailer struct
  */
@@ -1186,7 +1195,7 @@ struct user32_sf_hdtr {
 
 #endif /* KERNEL */
 
-#endif  /* !_POSIX_C_SOURCE */
+#endif  /* (!_POSIX_C_SOURCE || _DARWIN_C_SOURCE) */
 
 #ifdef PRIVATE
 #if !defined(_POSIX_C_SOURCE) || defined(_DARWIN_C_SOURCE)
@@ -1297,7 +1306,7 @@ struct so_cinforeq64 {
 
 /* valid connection info auxiliary data types */
 #define CIAUX_TCP       0x1     /* TCP auxiliary data (conninfo_tcp_t) */
-#define CIAUX_MPTCP     0x2     /* MPTCP auxiliary data (conninfo_mptcp_t) */
+#define CIAUX_MPTCP     0x2     /* MPTCP auxiliary data (conninfo_multipathtcp) */
 
 /*
  * Structure for SIOC{S,G}CONNORDER
@@ -1322,6 +1331,14 @@ struct netpolicy_event_data {
 struct kev_netpolicy_ifdenied {
 	struct netpolicy_event_data     ev_data;
 	__uint32_t ev_if_functional_type;
+};
+
+/*
+ * KEV_NETPOLICY_NETDENIED event structure
+ */
+struct kev_netpolicy_netdenied {
+	struct netpolicy_event_data     ev_data;
+	__uint32_t ev_network_type;
 };
 
 /*

@@ -35,7 +35,7 @@
 #include <machine/machine_cpu.h>
 
 #include <kern/sched_prim.h>
-#include <kern/processor.h>
+#include <kern/percpu.h>
 #include <kern/ast.h>
 
 #include <kern/cpu_quiesce.h>
@@ -76,6 +76,13 @@ typedef unsigned long checkin_mask_t;
 static _Atomic checkin_mask_t cpu_quiescing_checkin_state;
 
 static uint64_t cpu_checkin_last_commit;
+
+struct cpu_quiesce {
+	cpu_quiescent_state_t   state;
+	uint64_t                last_checkin;
+};
+
+static struct cpu_quiesce PERCPU_DATA(cpu_quiesce);
 
 #define CPU_CHECKIN_MIN_INTERVAL_US     4000 /* 4ms */
 #define CPU_CHECKIN_MIN_INTERVAL_MAX_US USEC_PER_SEC /* 1s */
@@ -182,16 +189,16 @@ cpu_quiescent_counter_needs_commit(checkin_mask_t state)
 void
 cpu_quiescent_counter_join(__unused uint64_t ctime)
 {
-	processor_t processor = current_processor();
-	__assert_only int cpuid = processor->cpu_id;
+	struct cpu_quiesce *st = PERCPU_GET(cpu_quiesce);
+	__assert_only int cpuid = cpu_number();
 
-	assert(processor->cpu_quiesce_state == CPU_QUIESCE_COUNTER_NONE ||
-	    processor->cpu_quiesce_state == CPU_QUIESCE_COUNTER_LEFT);
+	assert(st->state == CPU_QUIESCE_COUNTER_NONE ||
+	    st->state == CPU_QUIESCE_COUNTER_LEFT);
 
 	assert((os_atomic_load(&cpu_quiescing_checkin_state, relaxed) &
 	    (cpu_expected_bit(cpuid) | cpu_checked_in_bit(cpuid))) == 0);
 
-	processor->cpu_quiesce_state = CPU_QUIESCE_COUNTER_PENDING_JOIN;
+	st->state = CPU_QUIESCE_COUNTER_PENDING_JOIN;
 
 	/*
 	 * Mark the processor to call cpu_quiescent_counter_ast before it
@@ -207,10 +214,10 @@ cpu_quiescent_counter_join(__unused uint64_t ctime)
 void
 cpu_quiescent_counter_ast(void)
 {
-	processor_t processor = current_processor();
-	int cpuid = processor->cpu_id;
+	struct cpu_quiesce *st = PERCPU_GET(cpu_quiesce);
+	int cpuid = cpu_number();
 
-	assert(processor->cpu_quiesce_state == CPU_QUIESCE_COUNTER_PENDING_JOIN);
+	assert(st->state == CPU_QUIESCE_COUNTER_PENDING_JOIN);
 
 	/* We had better not already be joined. */
 	assert((os_atomic_load(&cpu_quiescing_checkin_state, relaxed) &
@@ -231,8 +238,8 @@ cpu_quiescent_counter_ast(void)
 	 * its expected bit.
 	 */
 
-	processor->cpu_quiesce_state = CPU_QUIESCE_COUNTER_JOINED;
-	processor->cpu_quiesce_last_checkin = mach_absolute_time();
+	st->state = CPU_QUIESCE_COUNTER_JOINED;
+	st->last_checkin = mach_absolute_time();
 
 	checkin_mask_t old_mask, new_mask;
 	os_atomic_rmw_loop(&cpu_quiescing_checkin_state, old_mask, new_mask, acquire, {
@@ -258,23 +265,23 @@ cpu_quiescent_counter_ast(void)
 void
 cpu_quiescent_counter_leave(uint64_t ctime)
 {
-	processor_t processor = current_processor();
-	int cpuid = processor->cpu_id;
+	struct cpu_quiesce *st = PERCPU_GET(cpu_quiesce);
+	int cpuid = cpu_number();
 
-	assert(processor->cpu_quiesce_state == CPU_QUIESCE_COUNTER_JOINED ||
-	    processor->cpu_quiesce_state == CPU_QUIESCE_COUNTER_PENDING_JOIN);
+	assert(st->state == CPU_QUIESCE_COUNTER_JOINED ||
+	    st->state == CPU_QUIESCE_COUNTER_PENDING_JOIN);
 
 	/* We no longer need the cpu_quiescent_counter_ast callback to be armed */
 	ast_off(AST_UNQUIESCE);
 
-	if (processor->cpu_quiesce_state == CPU_QUIESCE_COUNTER_PENDING_JOIN) {
+	if (st->state == CPU_QUIESCE_COUNTER_PENDING_JOIN) {
 		/* We never actually joined, so we don't have to do the work to leave. */
-		processor->cpu_quiesce_state = CPU_QUIESCE_COUNTER_LEFT;
+		st->state = CPU_QUIESCE_COUNTER_LEFT;
 		return;
 	}
 
 	/* Leaving can't be deferred, even if we're within the min interval */
-	processor->cpu_quiesce_last_checkin = ctime;
+	st->last_checkin = ctime;
 
 	checkin_mask_t mask = cpu_checked_in_bit(cpuid) | cpu_expected_bit(cpuid);
 
@@ -283,7 +290,7 @@ cpu_quiescent_counter_leave(uint64_t ctime)
 
 	assert((orig_state & cpu_expected_bit(cpuid)));
 
-	processor->cpu_quiesce_state = CPU_QUIESCE_COUNTER_LEFT;
+	st->state = CPU_QUIESCE_COUNTER_LEFT;
 
 	if (cpu_quiescent_counter_needs_commit(orig_state)) {
 		/*
@@ -311,22 +318,22 @@ cpu_quiescent_counter_leave(uint64_t ctime)
 void
 cpu_quiescent_counter_checkin(uint64_t ctime)
 {
-	processor_t processor = current_processor();
-	int cpuid = processor->cpu_id;
+	struct cpu_quiesce *st = PERCPU_GET(cpu_quiesce);
+	int cpuid = cpu_number();
 
-	assert(processor->cpu_quiesce_state != CPU_QUIESCE_COUNTER_NONE);
+	assert(st->state != CPU_QUIESCE_COUNTER_NONE);
 
 	/* If we're not joined yet, we don't need to check in */
-	if (__probable(processor->cpu_quiesce_state != CPU_QUIESCE_COUNTER_JOINED)) {
+	if (__probable(st->state != CPU_QUIESCE_COUNTER_JOINED)) {
 		return;
 	}
 
 	/* If we've checked in recently, we don't need to check in yet. */
-	if (__probable((ctime - processor->cpu_quiesce_last_checkin) <= cpu_checkin_min_interval)) {
+	if (__probable((ctime - st->last_checkin) <= cpu_checkin_min_interval)) {
 		return;
 	}
 
-	processor->cpu_quiesce_last_checkin = ctime;
+	st->last_checkin = ctime;
 
 	checkin_mask_t state = os_atomic_load(&cpu_quiescing_checkin_state, relaxed);
 
@@ -361,10 +368,10 @@ cpu_quiescent_counter_checkin(uint64_t ctime)
 void
 cpu_quiescent_counter_assert_ast(void)
 {
-	processor_t processor = current_processor();
-	int cpuid = processor->cpu_id;
+	struct cpu_quiesce *st = PERCPU_GET(cpu_quiesce);
+	int cpuid = cpu_number();
 
-	assert(processor->cpu_quiesce_state == CPU_QUIESCE_COUNTER_JOINED);
+	assert(st->state == CPU_QUIESCE_COUNTER_JOINED);
 
 	checkin_mask_t state = os_atomic_load(&cpu_quiescing_checkin_state, relaxed);
 	assert((state & cpu_expected_bit(cpuid)));

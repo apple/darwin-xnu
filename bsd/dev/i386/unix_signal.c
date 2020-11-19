@@ -791,6 +791,8 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 
 	ut = (struct uthread *)get_bsdthread_info(thread);
 
+	/* see osfmk/kern/restartable.c */
+	act_set_ast_reset_pcs(thread);
 	/*
 	 * If we are being asked to change the altstack flag on the thread, we
 	 * just set/reset it and return (the uap->uctx is not used).
@@ -802,9 +804,6 @@ sigreturn(struct proc *p, struct sigreturn_args *uap, __unused int *retval)
 		ut->uu_sigstk.ss_flags &= ~SA_ONSTACK;
 		return 0;
 	}
-
-	/* see osfmk/kern/restartable.c */
-	act_set_ast_reset_pcs(thread);
 
 	bzero(mctxp, sizeof(*mctxp));
 

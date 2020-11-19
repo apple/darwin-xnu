@@ -80,12 +80,37 @@ typedef uintptr_t uptr;
 # error KASAN undefined
 #endif
 
-#ifndef KASAN_SHIFT
-# error KASAN_SHIFT undefined
+#ifndef KASAN_OFFSET
+# error KASAN_OFFSET undefined
 #endif
 
-#define ADDRESS_FOR_SHADOW(x) (((x) - KASAN_SHIFT) << 3)
-#define SHADOW_FOR_ADDRESS(x) (uint8_t *)(((x) >> 3) + KASAN_SHIFT)
+#ifndef KASAN_SCALE
+# error KASAN_SCALE undefined
+#endif
+
+#define KASAN_GRANULE        (1UL << KASAN_SCALE)
+#define KASAN_GRANULE_MASK   (KASAN_GRANULE - 1UL)
+
+static inline uintptr_t
+kasan_granule_trunc(uintptr_t x)
+{
+	return x & ~KASAN_GRANULE_MASK;
+}
+
+static inline uintptr_t
+kasan_granule_round(uintptr_t x)
+{
+	return (x + KASAN_GRANULE_MASK) & ~KASAN_GRANULE_MASK;
+}
+
+static inline size_t
+kasan_granule_partial(uintptr_t x)
+{
+	return x & KASAN_GRANULE_MASK;
+}
+
+#define ADDRESS_FOR_SHADOW(x) (((x) - KASAN_OFFSET) << KASAN_SCALE)
+#define SHADOW_FOR_ADDRESS(x) (uint8_t *)(((x) >> KASAN_SCALE) + KASAN_OFFSET)
 
 #if KASAN_DEBUG
 # define NOINLINE OS_NOINLINE

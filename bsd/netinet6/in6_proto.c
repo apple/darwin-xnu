@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2008-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2008-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -130,18 +130,12 @@
 
 #if IPSEC
 #include <netinet6/ipsec.h>
-#if INET6
 #include <netinet6/ipsec6.h>
-#endif
 #include <netinet6/ah.h>
-#if INET6
 #include <netinet6/ah6.h>
-#endif
 #if IPSEC_ESP
 #include <netinet6/esp.h>
-#if INET6
 #include <netinet6/esp6.h>
-#endif
 #endif
 #endif /*IPSEC*/
 
@@ -461,7 +455,7 @@ int     ip6_v6only = 0;         /* Mapped addresses off by default -  Radar 3347
 
 int     ip6_neighborgcthresh = 1024;    /* Threshold # of NDP entries for GC */
 int     ip6_maxifprefixes = 16;         /* Max acceptable prefixes via RA per IF */
-int     ip6_maxifdefrouters = 16;       /* Max acceptable def routers via RA */
+int     ip6_maxifdefrouters = 64;       /* Max acceptable default or RTI routers via RA */
 int     ip6_maxdynroutes = 1024;        /* Max # of routes created via redirect */
 int     ip6_only_allow_rfc4193_prefix = 0;      /* Only allow RFC4193 style Unique Local IPv6 Unicast prefixes */
 
@@ -526,20 +520,24 @@ sysctl_ip6_temppltime SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg2)
 	int error = 0;
-	int old;
+	int value = 0;
 
 	error = SYSCTL_OUT(req, arg1, sizeof(int));
 	if (error || !req->newptr) {
 		return error;
 	}
-	old = ip6_temp_preferred_lifetime;
-	error = SYSCTL_IN(req, arg1, sizeof(int));
-	if (ip6_temp_preferred_lifetime > ND6_MAX_LIFETIME ||
-	    ip6_temp_preferred_lifetime <
-	    ip6_desync_factor + ip6_temp_regen_advance) {
-		ip6_temp_preferred_lifetime = old;
+
+	error = SYSCTL_IN(req, &value, sizeof(value));
+	if (error) {
+		return error;
+	}
+
+	if (value > ND6_MAX_LIFETIME ||
+	    value < ip6_desync_factor + ip6_temp_regen_advance) {
 		return EINVAL;
 	}
+
+	ip6_temp_preferred_lifetime = value;
 	return error;
 }
 
@@ -548,20 +546,49 @@ sysctl_ip6_tempvltime SYSCTL_HANDLER_ARGS
 {
 #pragma unused(oidp, arg2)
 	int error = 0;
-	int old;
+	int value = 0;
 
 	error = SYSCTL_OUT(req, arg1, sizeof(int));
 	if (error || !req->newptr) {
 		return error;
 	}
-	old = ip6_temp_valid_lifetime;
-	error = SYSCTL_IN(req, arg1, sizeof(int));
-	if (ip6_temp_valid_lifetime > ND6_MAX_LIFETIME ||
-	    ip6_temp_valid_lifetime < ip6_temp_preferred_lifetime) {
-		ip6_temp_valid_lifetime = old;
+
+	error = SYSCTL_IN(req, &value, sizeof(value));
+	if (error) {
+		return error;
+	}
+
+	if (value > ND6_MAX_LIFETIME ||
+	    value < ip6_temp_preferred_lifetime) {
 		return EINVAL;
 	}
+
+	ip6_temp_valid_lifetime = value;
 	return error;
+}
+
+static int
+sysctl_ip6_cga_conflict_retries SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg2)
+	int error = 0;
+	int value = 0;
+
+	error = SYSCTL_OUT(req, arg1, sizeof(int));
+	if (error || !req->newptr) {
+		return error;
+	}
+
+	error = SYSCTL_IN(req, &value, sizeof(value));
+	if (error) {
+		return error;
+	}
+	if (value > IPV6_CGA_CONFLICT_RETRIES_MAX || value < 0) {
+		return EINVAL;
+	}
+
+	ip6_cga_conflict_retries = value;
+	return 0;
 }
 
 static int
@@ -647,6 +674,55 @@ SYSCTL_INT(_net_inet6_ip6, OID_AUTO,
     &ip6_only_allow_rfc4193_prefix, 0, "");
 SYSCTL_INT(_net_inet6_ip6, OID_AUTO,
     clat_debug, CTLFLAG_RW | CTLFLAG_LOCKED, &clat_debug, 0, "");
+
+SYSCTL_PROC(_net_inet6_ip6, OID_AUTO,
+    cga_conflict_retries, CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &ip6_cga_conflict_retries, 0, sysctl_ip6_cga_conflict_retries, "IU", "");
+
+/*
+ * One single sysctl to set v6 stack profile for IPv6 compliance testing.
+ * A lot of compliance test suites are not aware of other enhancements in IPv6
+ * protocol and expect some arguably obsolete behavior.
+ */
+int v6_compliance_profile = 0;
+static int
+sysctl_set_v6_compliance_profile SYSCTL_HANDLER_ARGS
+{
+#pragma unused(oidp, arg2)
+	int changed, error;
+	int value = *(int *) arg1;
+
+	error = sysctl_io_number(req, value, sizeof(value), &value, &changed);
+	if (error || !changed) {
+		return error;
+	}
+
+	if (value != 0 && value != 1) {
+		return ERANGE;
+	}
+
+	if (value == 1) {
+		ip6_use_tempaddr = 0;
+		dad_enhanced = 0;
+		icmp6_rediraccept = 1;
+		nd6_optimistic_dad = 0;
+		nd6_process_rti = ND6_PROCESS_RTI_ENABLE;
+	} else {
+		ip6_use_tempaddr = IP6_USE_TMPADDR_DEFAULT;
+		dad_enhanced = ND6_DAD_ENHANCED_DEFAULT;
+		icmp6_rediraccept = ICMP6_REDIRACCEPT_DEFAULT;
+		nd6_optimistic_dad = ND6_OPTIMISTIC_DAD_DEFAULT;
+		nd6_process_rti = ND6_PROCESS_RTI_DEFAULT;
+	}
+
+	v6_compliance_profile = value;
+	return 0;
+}
+
+SYSCTL_PROC(_net_inet6_ip6, OID_AUTO, compliance_profile,
+    CTLTYPE_INT | CTLFLAG_RW | CTLFLAG_LOCKED,
+    &v6_compliance_profile, 0, sysctl_set_v6_compliance_profile,
+    "I", "set IPv6 compliance profile");
 
 /* net.inet6.icmp6 */
 SYSCTL_INT(_net_inet6_icmp6, ICMPV6CTL_REDIRACCEPT,

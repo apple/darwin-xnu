@@ -44,6 +44,8 @@
 #include <sys/dtrace_glue.h>
 #include <san/kasan.h>
 
+#include <ptrauth.h>
+
 /* #include <machine/trap.h> */
 struct savearea_t; /* Used anonymously */
 
@@ -150,7 +152,7 @@ fbt_enable(void *arg, dtrace_id_t id, void *parg)
 			continue;
 		}
 
-		dtrace_casptr(&tempDTraceTrapHook, NULL, fbt_perfCallback);
+		dtrace_casptr(&tempDTraceTrapHook, NULL, ptrauth_nop_cast(void *, &fbt_perfCallback));
 		if (tempDTraceTrapHook != (perfCallback)fbt_perfCallback) {
 			if (fbt_verbose) {
 				cmn_err(CE_NOTE, "fbt_enable is failing for probe %s "
@@ -272,7 +274,7 @@ fbt_resume(void *arg, dtrace_id_t id, void *parg)
 			continue;
 		}
 
-		dtrace_casptr(&tempDTraceTrapHook, NULL, fbt_perfCallback);
+		dtrace_casptr(&tempDTraceTrapHook, NULL, ptrauth_nop_cast(void *, &fbt_perfCallback));
 		if (tempDTraceTrapHook != (perfCallback)fbt_perfCallback) {
 			if (fbt_verbose) {
 				cmn_err(CE_NOTE, "fbt_resume is failing for probe %s "
@@ -478,6 +480,10 @@ fbt_provide_module(void *arg, struct modctl *ctl)
 	ASSERT(dtrace_kernel_symbol_mode != DTRACE_KERNEL_SYMBOLS_NEVER);
 	LCK_MTX_ASSERT(&mod_lock, LCK_MTX_ASSERT_OWNED);
 
+	if (dtrace_fbt_probes_restricted()) {
+		return;
+	}
+
 	// Update the "ignore blacklist" bit
 	if (ignore_fbt_blacklist) {
 		ctl->mod_flags |= MODCTL_FBT_PROVIDE_BLACKLISTED_PROBES;
@@ -577,27 +583,20 @@ _fbt_open(dev_t dev, int flags, int devtype, struct proc *p)
 
 #define FBT_MAJOR  -24 /* let the kernel pick the device number */
 
-
-/*
- * A struct describing which functions will get invoked for certain
- * actions.
- */
-static struct cdevsw fbt_cdevsw =
+static const struct cdevsw fbt_cdevsw =
 {
-	_fbt_open,              /* open */
-	eno_opcl,                       /* close */
-	eno_rdwrt,                      /* read */
-	eno_rdwrt,                      /* write */
-	eno_ioctl,                      /* ioctl */
-	(stop_fcn_t *)nulldev, /* stop */
-	(reset_fcn_t *)nulldev, /* reset */
-	NULL,                           /* tty's */
-	eno_select,                     /* select */
-	eno_mmap,                       /* mmap */
-	eno_strat,                      /* strategy */
-	eno_getc,                       /* getc */
-	eno_putc,                       /* putc */
-	0                                       /* type */
+	.d_open = _fbt_open,
+	.d_close = eno_opcl,
+	.d_read = eno_rdwrt,
+	.d_write = eno_rdwrt,
+	.d_ioctl = eno_ioctl,
+	.d_stop = (stop_fcn_t *)nulldev,
+	.d_reset = (reset_fcn_t *)nulldev,
+	.d_select = eno_select,
+	.d_mmap = eno_mmap,
+	.d_strategy = eno_strat,
+	.d_reserved_1 = eno_getc,
+	.d_reserved_2 = eno_putc,
 };
 
 #undef kmem_alloc /* from its binding to dt_kmem_alloc glue */

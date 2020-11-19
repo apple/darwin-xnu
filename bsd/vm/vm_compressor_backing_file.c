@@ -193,7 +193,7 @@ int
 vm_swapfile_io(vnode_t vp, uint64_t offset, uint64_t start, int npages, int flags, void *upl_iodone)
 {
 	int error = 0;
-	uint64_t io_size = npages * PAGE_SIZE_64;
+	upl_size_t io_size = (upl_size_t) (npages * PAGE_SIZE_64);
 #if 1
 	kern_return_t   kr = KERN_SUCCESS;
 	upl_t           upl = NULL;
@@ -240,7 +240,7 @@ vm_swapfile_io(vnode_t vp, uint64_t offset, uint64_t start, int npages, int flag
 		    &error);
 		if (error) {
 #if DEBUG
-			printf("vm_swapfile_io: vnode_pagein failed with %d (vp: %p, offset: 0x%llx, size:%llu)\n", error, vp, offset, io_size);
+			printf("vm_swapfile_io: vnode_pagein failed with %d (vp: %p, offset: 0x%llx, size:%u)\n", error, vp, offset, io_size);
 #else /* DEBUG */
 			printf("vm_swapfile_io: vnode_pagein failed with %d.\n", error);
 #endif /* DEBUG */
@@ -257,12 +257,13 @@ vm_swapfile_io(vnode_t vp, uint64_t offset, uint64_t start, int npages, int flag
 		    &error);
 		if (error) {
 #if DEBUG
-			printf("vm_swapfile_io: vnode_pageout failed with %d (vp: %p, offset: 0x%llx, size:%llu)\n", error, vp, offset, io_size);
+			printf("vm_swapfile_io: vnode_pageout failed with %d (vp: %p, offset: 0x%llx, size:%u)\n", error, vp, offset, io_size);
 #else /* DEBUG */
 			printf("vm_swapfile_io: vnode_pageout failed with %d.\n", error);
 #endif /* DEBUG */
 		}
 	}
+
 	return error;
 
 #else /* 1 */
@@ -312,7 +313,8 @@ vnode_trim_list(vnode_t vp, struct trim_list *tl, boolean_t route_only)
 	devvp = vp->v_mount->mnt_devvp;
 	blocksize = vp->v_mount->mnt_devblocksize;
 
-	extents = kalloc(sizeof(dk_extent_t) * MAX_BATCH_TO_TRIM);
+	extents = kheap_alloc(KHEAP_TEMP,
+	    sizeof(dk_extent_t) * MAX_BATCH_TO_TRIM, Z_WAITOK);
 
 	if (vp->v_mount->mnt_ioflags & MNT_IOFLAGS_CSUNMAP_SUPPORTED) {
 		memset(&cs_unmap, 0, sizeof(_dk_cs_unmap_t));
@@ -390,7 +392,7 @@ vnode_trim_list(vnode_t vp, struct trim_list *tl, boolean_t route_only)
 		}
 	}
 trim_exit:
-	kfree(extents, sizeof(dk_extent_t) * MAX_BATCH_TO_TRIM);
+	kheap_free(KHEAP_TEMP, extents, sizeof(dk_extent_t) * MAX_BATCH_TO_TRIM);
 
 	return error;
 }

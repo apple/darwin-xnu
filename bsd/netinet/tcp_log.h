@@ -38,15 +38,11 @@
 #include <netinet/in.h>
 #include <netinet/in_systm.h>
 #include <netinet/in_pcb.h>
-#if INET6
 #include <netinet6/in6_pcb.h>
-#endif
 
 #include <netinet/tcp.h>
 #include <netinet/tcp_var.h>
-#if INET6
 #include <netinet6/tcp6_var.h>
-#endif
 
 #include <net/net_log_common.h>
 
@@ -72,6 +68,7 @@ extern int tcp_log_privacy;
 	X(TLEF_DROP_NECP,	0x1000, dropnecp)       \
 	X(TLEF_DROP_PCB,	0x2000, droppcb)       \
 	X(TLEF_DROP_PKT,	0x4000, droppkt)       \
+	X(TLEF_FSW_FLOW,	0x8000, fswflow)
 
 /*
  * Flag values for tcp_log_enabled
@@ -97,7 +94,7 @@ extern void tcp_log_rt_rtt(const char *func_name, int line_no, struct tcpcb *tp,
 extern void tcp_log_rtt_change(const char *func_name, int line_no, struct tcpcb *tp, int old_srtt, int old_rttvar);
 extern void tcp_log_keepalive(const char *func_name, int line_no, struct tcpcb *tp, int32_t idle_time);
 extern void tcp_log_message(const char *func_name, int line_no, struct tcpcb *tp, const char *format, ...);
-
+extern void tcp_log_fsw_flow(const char *func_name, int line_no, struct tcpcb *tp, const char *format, ...);
 
 static inline bool
 tcp_is_log_enabled(struct tcpcb *tp, uint32_t req_flags)
@@ -180,6 +177,9 @@ tcp_is_log_enabled(struct tcpcb *tp, uint32_t req_flags)
     if ((th) != NULL && ((th->th_flags) & (TH_SYN|TH_FIN|TH_RST)) && \
 	(tcp_log_enable_flags & TLEF_DROP_PKT)) \
 	        tcp_log_drop_pkt((hdr), (th), (ifp), (reason))
+
+#define TCP_LOG_FSW_FLOW(tp, format, ...) if (tcp_is_log_enabled(tp, TLEF_FSW_FLOW)) \
+    tcp_log_fsw_flow(__func__, __LINE__, (tp), format, ##__VA_ARGS__)
 
 #define TCP_LOG(tp, format, ...) \
     tcp_log_message(__func__, __LINE__, tp, format, ## __VA_ARGS__)

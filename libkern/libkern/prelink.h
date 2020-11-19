@@ -40,6 +40,9 @@
 #define kBuiltinInfoSection                "__kmod_info"
 #define kBuiltinStartSection               "__kmod_start"
 
+#define kReceiptInfoSegment                "__RECEIPT_INFO"
+#define kAuxKCReceiptSection               "__aux_kc_receipt"
+
 // __DATA segment
 #define kBuiltinInitSection                "__kmod_init"
 #define kBuiltinTermSection                "__kmod_term"
@@ -56,5 +59,9 @@
 #define kPrelinkLinkStateSizeKey           "_PrelinkLinkStateSize"
 #define kPrelinkLinkKASLROffsetsKey        "_PrelinkLinkKASLROffsets"
 #define kPrelinkInfoKCIDKey                "_PrelinkKCID"
+#define kPrelinkInfoBootKCIDKey            "_BootKCID"
+#define kPrelinkInfoPageableKCIDKey        "_PageableKCID"
+#define kKCBranchStubs                     "__BRANCH_STUBS"
+#define kKCBranchGots                      "__BRANCH_GOTS"
 
 #endif /* _PRELINK_H_ */

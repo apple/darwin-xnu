@@ -38,6 +38,7 @@
 .Sh NAME
 .Nm pwrite ,
 .Nm write ,
+.Nm pwritev ,
 .Nm writev
 .Nd write output
 .Sh LIBRARY
@@ -64,6 +65,13 @@
 .Fa "const struct iovec *iov"
 .Fa "int iovcnt"
 .Fc
+.Ft ssize_t
+.Fo pwritev
+.Fa "int fildes"
+.Fa "const struct iovec *iov"
+.Fa "int iovcnt"
+.Fa "off_t offset"
+.Fc
 .Sh DESCRIPTION
 .Fn write
 attempts to write
@@ -80,11 +88,15 @@ buffers specified by the members of the
 .Fa iov
 array: iov[0], iov[1], ..., iov[iovcnt\|-\|1].
 .Fn pwrite
-performs the same function, but writes to the specified position in
+and
+.Fn pwritev
+perform the same functions, but write to the specified position in
 the file without modifying the file pointer.
 .Pp
 For
-.Fn writev ,
+.Fn writev
+and
+.Fn pwritev ,
 the
 .Fa iovec
 structure is defined as:
@@ -101,6 +113,8 @@ Each
 entry specifies the base address and length of an area
 in memory from which data should be written.
 .Fn writev
+and
+.Fn pwritev
 will always write a complete area before proceeding
 to the next.
 .Pp
@@ -146,8 +160,9 @@ is set to indicate the error.
 The
 .Fn write ,
 .Fn writev ,
+.Fn pwrite ,
 and
-.Fn pwrite
+.Fn pwritev
 system calls will fail and the file pointer will remain unchanged if:
 .Bl -tag -width Er
 .\" ===========
@@ -259,6 +274,17 @@ or
 .Xr connectx 2
 had been used to set a destination address.
 .\" ===========
+.It Bq Er ENOBUFS
+The mbuf pool has been completely exhausted when writing to a socket.
+.El
+.Pp
+The
+.Fn writev
+and
+.Fn pwritev
+calls may also return the following errors:
+.Bl -tag -width Er
+.\" ===========
 .It Bq Er EINVAL
 .Fa Iovcnt
 is less than or equal to 0, or greater than
@@ -277,14 +303,13 @@ The sum of the
 values in the
 .Fa iov
 array overflows a 32-bit integer.
-.\" ===========
-.It Bq Er ENOBUFS
-The mbuf pool has been completely exhausted when writing to a socket.
 .El
 .Pp
 The
 .Fn pwrite
-call may also return the following errors:
+and
+.Fn pwritev
+calls may also return the following errors:
 .Bl -tag -width Er
 .\" ===========
 .It Bq Er EINVAL
@@ -317,6 +342,8 @@ and
 .Fn pwrite
 functions are expected to conform to
 .St -xpg4.2 .
+.Fn pwritev
+is nonstandard.
 .Sh HISTORY
 The
 .Fn pwrite

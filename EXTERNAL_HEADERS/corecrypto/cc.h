@@ -1,11 +1,12 @@
-/*
- *  cc.h
- *  corecrypto
+/* Copyright (c) (2010,2011,2012,2014,2015,2016,2017,2018,2019) Apple Inc. All rights reserved.
  *
- *  Created on 12/16/2010
- *
- *  Copyright (c) 2010,2011,2012,2014,2015 Apple Inc. All rights reserved.
- *
+ * corecrypto is licensed under Apple Inc.’s Internal Use License Agreement (which
+ * is contained in the License.txt file distributed with corecrypto) and only to 
+ * people who accept that license. IMPORTANT:  Any license rights granted to you by 
+ * Apple Inc. (if any) are limited to internal use within your organization only on 
+ * devices and computers you own or control, for the sole purpose of verifying the 
+ * security characteristics and correct functioning of the Apple Software.  You may 
+ * not, directly or indirectly, redistribute the Apple Software or any portions thereof.
  */
 
 #ifndef _CORECRYPTO_CC_H_
@@ -44,6 +45,10 @@ __CC_BRIDGEOS_DEPRECATED(bridgeos_version, replacement_message)
 #define cc_concat_(a, b) a##b
 #define cc_concat(a, b) cc_concat_(a, b)
 
+#if defined(_MSC_VER)
+#define __asm__(x)
+#endif
+
 /* Manage asserts here because a few functions in header public files do use asserts */
 #if CORECRYPTO_DEBUG
 #define cc_assert(x) assert(x)
@@ -72,9 +77,9 @@ uint8_t b[_alignment_]; \
 } CC_ALIGNED(_alignment_)
 
 #if defined(__BIGGEST_ALIGNMENT__)
-#define CC_MAX_ALIGNMENT __BIGGEST_ALIGNMENT__
+#define CC_MAX_ALIGNMENT ((size_t)__BIGGEST_ALIGNMENT__)
 #else
-#define CC_MAX_ALIGNMENT 16
+#define CC_MAX_ALIGNMENT ((size_t)16)
 #endif
 
 /* pads a given size to be a multiple of the biggest alignment for any type */
@@ -95,12 +100,16 @@ uint8_t b[_alignment_]; \
 #if defined(_MSC_VER)
 #include <malloc.h>
 #define cc_ctx_decl(_type_, _size_, _name_)  _type_ * _name_ = (_type_ *) _alloca(sizeof(_type_) * cc_ctx_n(_type_, _size_) )
+#define cc_ctx_decl_field(_type_, _size_, _name_)  _type_ _name_ [cc_ctx_n(_type_, _size_)]
 #else
-#define cc_ctx_decl(_type_, _size_, _name_)  _type_ _name_ [cc_ctx_n(_type_, _size_)]
+// FIXME <rdar://problem/57372917> this pragma is the wrong fix for VLA usage, but since this API is central to corecrypto it's difficult to remove VLAs. The macro is then used in many other projects who don't need to be warned about VLAs at the moment. It's therefore desirable to silence the diagnostic and let corecrypto deal with removing VLAs.
+#define cc_ctx_decl(_type_, _size_, _name_)     \
+  _Pragma("GCC diagnostic push")                \
+  _Pragma("GCC diagnostic ignored \"-Wvla\"")   \
+  _type_ _name_ [cc_ctx_n(_type_, _size_)]      \
+  _Pragma("GCC diagnostic pop")
+#define cc_ctx_decl_field cc_ctx_decl
 #endif
-
-// cc_zero is deprecated, please use cc_clear instead.
-#define cc_zero(_size_,_data_) _Pragma ("corecrypto deprecation warning \"'cc_zero' macro is deprecated. Use 'cc_clear' instead.\"") cc_clear(_size_,_data_)
 
 /*!
  @brief cc_clear(len, dst) zeroizes array dst and it will not be optimized out.
@@ -110,6 +119,14 @@ uint8_t b[_alignment_]; \
  */
 CC_NONNULL((2))
 void cc_clear(size_t len, void *dst);
+
+// cc_zero is deprecated, please use cc_clear instead.
+cc_deprecate_with_replacement("cc_clear", 13.0, 10.15, 13.0, 6.0, 4.0)
+CC_NONNULL_ALL CC_INLINE
+void cc_zero(size_t len, void *dst)
+{
+    cc_clear(len, dst);
+}
 
 #define cc_copy(_size_, _dst_, _src_) memcpy(_dst_, _src_, _size_)
 

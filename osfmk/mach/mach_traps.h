@@ -109,7 +109,7 @@ extern mach_msg_return_t mach_msg_overwrite_trap(
 	mach_msg_size_t rcv_size,
 	mach_port_name_t rcv_name,
 	mach_msg_timeout_t timeout,
-	mach_msg_priority_t override,
+	mach_msg_priority_t priority,
 	mach_msg_header_t *rcv_msg,
 	mach_msg_size_t rcv_limit);
 
@@ -189,12 +189,6 @@ extern kern_return_t _kernelrpc_mach_port_allocate_trap(
 	mach_port_name_t target,
 	mach_port_right_t right,
 	mach_port_name_t *name
-	);
-
-
-extern kern_return_t _kernelrpc_mach_port_destroy_trap(
-	mach_port_name_t target,
-	mach_port_name_t name
 	);
 
 extern kern_return_t _kernelrpc_mach_port_deallocate_trap(
@@ -441,7 +435,7 @@ struct mach_msg_overwrite_trap_args {
 	PAD_ARG_(mach_msg_size_t, rcv_size);
 	PAD_ARG_(mach_port_name_t, rcv_name);
 	PAD_ARG_(mach_msg_timeout_t, timeout);
-	PAD_ARG_(mach_msg_priority_t, override);
+	PAD_ARG_(mach_msg_priority_t, priority);
 	PAD_ARG_8
 	    PAD_ARG_(user_addr_t, rcv_msg); /* Unused on mach_msg_trap */
 };
@@ -707,14 +701,6 @@ struct _kernelrpc_mach_port_allocate_args {
 };
 extern kern_return_t _kernelrpc_mach_port_allocate_trap(
 	struct _kernelrpc_mach_port_allocate_args *args);
-
-
-struct _kernelrpc_mach_port_destroy_args {
-	PAD_ARG_(mach_port_name_t, target);
-	PAD_ARG_(mach_port_name_t, name);
-};
-extern kern_return_t _kernelrpc_mach_port_destroy_trap(
-	struct _kernelrpc_mach_port_destroy_args *args);
 
 struct _kernelrpc_mach_port_deallocate_args {
 	PAD_ARG_(mach_port_name_t, target);

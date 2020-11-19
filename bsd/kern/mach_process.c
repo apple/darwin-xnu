@@ -117,7 +117,7 @@ extern thread_t get_firstthread(task_t);
 int
 ptrace(struct proc *p, struct ptrace_args *uap, int32_t *retval)
 {
-	struct proc *t = current_proc();        /* target process */
+	struct proc     *t; /* target process */
 	task_t          task;
 	thread_t        th_act;
 	struct uthread  *ut;
@@ -131,7 +131,7 @@ ptrace(struct proc *p, struct ptrace_args *uap, int32_t *retval)
 	AUDIT_ARG(value32, uap->data);
 
 	if (uap->req == PT_DENY_ATTACH) {
-#if (DEVELOPMENT || DEBUG) && CONFIG_EMBEDDED
+#if (DEVELOPMENT || DEBUG) && !defined(XNU_TARGET_OS_OSX)
 		if (PE_i_can_has_debugger(NULL)) {
 			return 0;
 		}
@@ -154,6 +154,7 @@ ptrace(struct proc *p, struct ptrace_args *uap, int32_t *retval)
 
 	if (uap->req == PT_FORCEQUOTA) {
 		if (kauth_cred_issuser(kauth_cred_get())) {
+			t = current_proc();
 			OSBitOrAtomic(P_FORCEQUOTA, &t->p_flag);
 			return 0;
 		} else {
@@ -177,7 +178,20 @@ retry_trace_me: ;
 		 *     when, in this case, it is the current process's parent.
 		 *     Most of the other checks in cantrace() don't apply either.
 		 */
-		if ((error = mac_proc_check_debug(pproc, p)) == 0) {
+		struct proc_ident p_ident = proc_ident(p);
+		struct proc_ident pproc_ident = proc_ident(pproc);
+		kauth_cred_t pproc_cred = kauth_cred_proc_ref(pproc);
+
+		proc_rele(pproc);
+		error = mac_proc_check_debug(&pproc_ident, pproc_cred, &p_ident);
+		kauth_cred_unref(&pproc_cred);
+
+		if (error != 0) {
+			return error;
+		}
+		if (proc_find_ident(&pproc_ident) == PROC_NULL) {
+			return ESRCH;
+		}
 #endif
 		proc_lock(p);
 		/* Make sure the process wasn't re-parented. */
@@ -193,10 +207,8 @@ retry_trace_me: ;
 		/* Child and parent will have to be able to run modified code. */
 		cs_allow_invalid(p);
 		cs_allow_invalid(pproc);
-#if CONFIG_MACF
-	}
-#endif
 		proc_rele(pproc);
+
 		return error;
 	}
 	if (uap->req == PT_SIGEXC) {
@@ -238,7 +250,7 @@ retry_trace_me: ;
 #pragma clang diagnostic pop
 		int             err;
 
-#if CONFIG_EMBEDDED
+#if !defined(XNU_TARGET_OS_OSX)
 		if (tr_sigexc == 0) {
 			error = ENOTSUP;
 			goto out;
@@ -282,12 +294,18 @@ retry_trace_me: ;
 			error = 0;
 			goto out;
 		} else {
+			error = err;
+			if (error == ESRCH) {
+				/*
+				 * The target 't' is not valid anymore as it
+				 * could not be found after the MAC check.
+				 */
+				return error;
+			}
 			/* not allowed to attach, proper error code returned by kauth_authorize_process */
 			if (ISSET(t->p_lflag, P_LNOATTACH)) {
 				psignal(p, SIGSEGV);
 			}
-
-			error = err;
 			goto out;
 		}
 	}
@@ -528,11 +546,26 @@ cantrace(proc_t cur_procp, kauth_cred_t creds, proc_t traced_procp, int *errp)
 	}
 
 #if CONFIG_MACF
-	if ((my_err = mac_proc_check_debug(cur_procp, traced_procp)) != 0) {
+	struct proc_ident cur_ident = proc_ident(cur_procp);
+	struct proc_ident traced_ident = proc_ident(traced_procp);
+	kauth_cred_t cur_cred = kauth_cred_proc_ref(cur_procp);
+
+	/*
+	 * Drop the proc reference to avoid a deadlock during an upcall and find
+	 * (reference) the proc again so our caller can keep using it.
+	 */
+	proc_rele(traced_procp);
+	my_err = mac_proc_check_debug(&cur_ident, cur_cred, &traced_ident);
+	kauth_cred_unref(&cur_cred);
+
+	if (proc_find_ident(&traced_ident) == PROC_NULL) {
+		*errp = ESRCH;
+		return 0;
+	}
+	if (my_err != 0) {
 		*errp = my_err;
 		return 0;
 	}
 #endif
-
 	return 1;
 }

@@ -91,6 +91,7 @@ IOPMinformeeList::appendNewInformee( IOService * newObject )
 	if (IOPMNoErr == addToList(newInformee)) {
 		return newInformee;
 	} else {
+		newInformee->release();
 		return NULL;
 	}
 }
@@ -104,33 +105,30 @@ IOPMinformeeList::appendNewInformee( IOService * newObject )
 IOReturn
 IOPMinformeeList::addToList( IOPMinformee * newInformee )
 {
-	IOPMinformee * nextInformee;
-	IORecursiveLock    *listLock = getSharedRecursiveLock();
+	IORecursiveLock *listLock = getSharedRecursiveLock();
+	IOReturn        ret = kIOReturnError;
 
 	if (!listLock) {
-		return kIOReturnError;
+		return ret;
 	}
 
 	IORecursiveLockLock(listLock);
-	nextInformee = firstItem;
 
 	// Is new object already in the list?
-	while (nextInformee != NULL) {
-		if (nextInformee->whatObject == newInformee->whatObject) {
-			// object is present; just exit
-			goto unlock_and_exit;
-		}
-		nextInformee = nextInList(nextInformee);
+	if (findItem(newInformee->whatObject) != NULL) {
+		// object is present; just exit
+		goto unlock_and_exit;
 	}
 
 	// add it to the front of the list
 	newInformee->nextInList = firstItem;
 	firstItem = newInformee;
 	length++;
+	ret = IOPMNoErr;
 
 unlock_and_exit:
 	IORecursiveLockUnlock(listLock);
-	return IOPMNoErr;
+	return ret;
 }
 
 

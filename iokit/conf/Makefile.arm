@@ -1,17 +1,66 @@
 ######################################################################
 #BEGIN  Machine dependent Makefile fragment for arm
 ######################################################################
-
-IODMACommand.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
-IODataQueue.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
-IOMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
-IONVRAM.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
-IOPMrootDomain.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
-IOSharedDataQueue.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
-IOUserClient.cpo_CXXWARNFLAGS_ADD += -Wno-cast-align
+#
+# XXX: CFLAGS
+#
+CWARNFLAGS   = $(CWARNFLAGS_STD) -Wno-unused-parameter
+CXXWARNFLAGS = $(CXXWARNFLAGS_STD) -Wno-unused-parameter -Wno-cast-qual -Wno-shadow
 
 # Files that must go in the __HIB segment:
 HIB_FILES=
+
+#
+# Diagnostic opt-outs.  We need to make this list empty.
+#
+# DO NOT ADD MORE HERE.
+#
+# -Wno-implicit-int-conversion
+IOBufferMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-implicit-int-conversion
+IODMACommand.cpo_CXXWARNFLAGS_ADD += -Wno-implicit-int-conversion
+IOHibernateIO.cpo_CXXWARNFLAGS_ADD += -Wno-implicit-int-conversion
+IOHibernateRestoreKernel.o_CFLAGS_ADD += -Wno-implicit-int-conversion
+IOHistogramReporter.cpo_CXXWARNFLAGS_ADD += -Wno-implicit-int-conversion
+IOKitBSDInit.cpo_CXXWARNFLAGS_ADD += -Wno-implicit-int-conversion
+IOKitDebug.cpo_CXXWARNFLAGS_ADD += -Wno-implicit-int-conversion
+IOMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-implicit-int-conversion
+IONVRAM.cpo_CXXWARNFLAGS_ADD += -Wno-implicit-int-conversion
+IOReporter.cpo_CXXWARNFLAGS_ADD += -Wno-implicit-int-conversion
+IOService.cpo_CXXWARNFLAGS_ADD += -Wno-implicit-int-conversion
+IOStateReporter.cpo_CXXWARNFLAGS_ADD += -Wno-implicit-int-conversion
+TestIOMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-implicit-int-conversion
+# -Wno-shorten-64-to-32
+IOBufferMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOCPU.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IODMACommand.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IODMAEventSource.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IODeviceTreeSupport.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOHibernateIO.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOHibernateRestoreKernel.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+IOInterruptController.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOKitBSDInit.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOKitDebug.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOLib.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOMapper.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOMemoryCursor.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOMultiMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IONVRAM.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOPerfControl.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOPlatformExpert.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOPolledInterface.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IORegistryEntry.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOService.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOSkywalkSupport.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOStartIOKit.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOStatistics.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOStringFuncs.o_CFLAGS_ADD += -Wno-shorten-64-to-32
+IOSubMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOTimerEventSource.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOUserClient.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+IOUserServer.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+RootDomainUserClient.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
+TestIOMemoryDescriptor.cpo_CXXWARNFLAGS_ADD += -Wno-shorten-64-to-32
 
 ######################################################################
 #END    Machine dependent Makefile fragment for arm

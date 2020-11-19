@@ -161,9 +161,8 @@ map_mem_regions_multiple(int fault_type, size_t memsize)
 		}
 		region_len *= pgsize;
 
-		int flags = VM_MAKE_TAG((i % 2)? VM_TAG1 : VM_TAG2) | MAP_ANON | MAP_PRIVATE;
-
-		memblock = (char *)mmap(NULL, region_len, PROT_READ | PROT_WRITE, flags, -1, 0);
+		int fd = VM_MAKE_TAG((i % 2)? VM_TAG1 : VM_TAG2);
+		memblock = (char *)mmap(NULL, region_len, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, fd, 0);
 		T_QUIET; T_ASSERT_NE((void *)memblock, MAP_FAILED, "mmap");
 		memregion_config_per_thread[i].region_addr = memblock;
 		memregion_config_per_thread[i].shared_region_addr = 0;

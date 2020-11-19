@@ -87,6 +87,9 @@
 #include <mach/memory_object_types.h>
 
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdocumentation"
+
 #ifdef KERNEL
 
 extern struct vnodeop_desc vnop_default_desc;
@@ -144,6 +147,9 @@ extern struct vnodeop_desc vnop_offtoblk_desc;
 extern struct vnodeop_desc vnop_blockmap_desc;
 extern struct vnodeop_desc vnop_strategy_desc;
 extern struct vnodeop_desc vnop_bwrite_desc;
+#ifdef KERNEL_PRIVATE
+extern struct vnodeop_desc vnop_verify_desc;
+#endif
 
 #ifdef __APPLE_API_UNSTABLE
 
@@ -461,11 +467,12 @@ struct vnop_read_args {
  *  @param vp The vnode to read from.
  *  @param uio Description of request, including file offset, amount of data requested, destination address for data,
  *  and whether that destination is in kernel or user space.
+ *  @param ioflag IO flags as defined in vnode.h, e.g. IO_SYNC, IO_NODELOCKED
  *  @param ctx Context against which to authenticate read request.
  *  @return 0 for success or a filesystem-specific error.  VNOP_READ() can return success even if less data was
  *  read than originally requested; returning an error value should indicate that something actually went wrong.
  */
-extern errno_t VNOP_READ(vnode_t vp, struct uio *uio, int, vfs_context_t ctx);
+extern errno_t VNOP_READ(vnode_t vp, struct uio *uio, int ioflag, vfs_context_t ctx);
 
 struct vnop_write_args {
 	struct vnodeop_desc *a_desc;
@@ -485,6 +492,7 @@ struct vnop_write_args {
  *  @param vp The vnode to write to.
  *  @param uio Description of request, including file offset, amount of data to write, source address for data,
  *  and whether that destination is in kernel or user space.
+ *  @param ioflag IO flags as defined in vnode.h, e.g. IO_SYNC, IO_NODELOCKED
  *  @param ctx Context against which to authenticate write request.
  *  @return 0 for success or a filesystem-specific error.  VNOP_WRITE() can return success even if less data was
  *  written than originally requested; returning an error value should indicate that something actually went wrong.
@@ -1808,10 +1816,49 @@ extern errno_t VNOP_REMOVENAMEDSTREAM(vnode_t, vnode_t, const char *, int flags,
 
 #endif // NAMEDSTREAMS
 
+__options_decl(vnode_verify_flags_t, uint32_t, {
+	VNODE_VERIFY_DEFAULT = 0,
+});
+
+#define VNODE_VERIFY_DEFAULT VNODE_VERIFY_DEFAULT
+
+struct vnop_verify_args {
+	struct vnodeop_desc *a_desc;
+	vnode_t a_vp;
+	off_t a_foffset;
+	uint8_t  *a_buf;
+	size_t a_bufsize;
+	size_t *a_verifyblksize;
+	vnode_verify_flags_t a_flags;
+	vfs_context_t a_context;
+};
+
+/*!
+ *  @function VNOP_VERIFY
+ *  @abstract Call down to a filesystem to verify file data for integrity.
+ *  @discussion VNOP_VERIFY() returns whether file data being read has been verified to be what was written.
+ *  This does not impose a specific mechanism for ensuring integrity beyond requiring that this be done in
+ *  multiples of a verify block size (analogous to a filesystem block size but it can be per file)
+ *  @param vp The vnode for which data is to be verified.
+ *  @param foffset Offset (in bytes) at which region to be verified starts.
+ *  @param buf buffer containing file data at foffset. If this is NULL, then only the verification block size is
+ *  being requested.
+ *  @param bufsize size of data buffer to be verified.
+ *  @param verifyblksize pointer to size of verification block size in use for this file. If the verification block size is 0,
+ *  no verification will be performed. The verification block size can be any value which is a power of two upto 128KiB.
+ *  @param flags modifier flags.
+ *  @param ctx Context to authenticate for verify request; currently often set to NULL.
+ *  @return 0 for success, else an error code.
+ */
+#ifdef XNU_KERNEL_PRIVATE
+extern errno_t VNOP_VERIFY(vnode_t, off_t, uint8_t *, size_t, size_t *, vnode_verify_flags_t, vfs_context_t);
+#endif /* XNU_KERNEL_PRIVATE */
+
 #endif // defined(__APPLE_API_UNSTABLE)
 
 __END_DECLS
 
 #endif /* KERNEL */
 
+#pragma clang diagnostic pop /* #pragma clang diagnostic ignored "-Wdocumentation" */
 #endif /* !_SYS_VNODE_IF_H_ */

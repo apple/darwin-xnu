@@ -56,89 +56,39 @@
 
 
 #define ASID_SHIFT                  (11)                            /* Shift for 2048 max virtual ASIDs (2048 pmaps) */
-#define MAX_ASID                    (1 << ASID_SHIFT)               /* Max supported ASIDs (can be virtual) */
+#define MAX_ASIDS                    (1 << ASID_SHIFT)               /* Max supported ASIDs (can be virtual) */
 #ifndef ARM_ASID_SHIFT
 #define ARM_ASID_SHIFT              (8)                             /* Shift for the maximum ARM ASID value (256) */
 #endif
-#define ARM_MAX_ASID                (1 << ARM_ASID_SHIFT)           /* Max ASIDs supported by the hardware */
+#define ARM_MAX_ASIDS                (1 << ARM_ASID_SHIFT)           /* Max ASIDs supported by the hardware */
 #define NBBY                        8
 
 #if __ARM_KERNEL_PROTECT__
-#define MAX_HW_ASID ((ARM_MAX_ASID >> 1) - 1)
+#define MAX_HW_ASIDS ((ARM_MAX_ASIDS >> 1) - 1)
 #else
-#define MAX_HW_ASID (ARM_MAX_ASID - 1)
+#define MAX_HW_ASIDS (ARM_MAX_ASIDS - 1)
 #endif
 
 #ifndef ARM_VMID_SHIFT
 #define ARM_VMID_SHIFT                  (8)
 #endif
-#define ARM_MAX_VMID                    (1 << ARM_VMID_SHIFT)
+#define ARM_MAX_VMIDS                    (1 << ARM_VMID_SHIFT)
 
 /* XPRR virtual register map */
 
 #define CPUWINDOWS_MAX              4
 
-struct pmap_cpu_data {
-#if XNU_MONITOR
-	uint64_t cpu_id;
-	void * ppl_kern_saved_sp;
-	void * ppl_stack;
-	arm_context_t * save_area;
-	unsigned int ppl_state;
-#endif
 #if defined(__arm64__)
-	pmap_t cpu_nested_pmap;
-#else
-	pmap_t cpu_user_pmap;
-	unsigned int cpu_user_pmap_stamp;
-#endif
-	unsigned int cpu_number;
-	bool copywindow_strong_sync[CPUWINDOWS_MAX];
 
-#if MAX_ASID > MAX_HW_ASID
-
-	/*
-	 * This supports overloading of ARM ASIDs by the pmap.  The field needs
-	 * to be wide enough to cover all the virtual bits in a virtual ASID.
-	 * With 256 physical ASIDs, 8-bit fields let us support up to 65536
-	 * Virtual ASIDs, minus all that would map on to 0 (as 0 is a global
-	 * ASID).
-	 *
-	 * If we were to use bitfield shenanigans here, we could save a bit of
-	 * memory by only having enough bits to support MAX_ASID.  However, such
-	 * an implementation would be more error prone.
-	 */
-	uint8_t cpu_asid_high_bits[MAX_HW_ASID];
-#endif
-};
-typedef struct pmap_cpu_data pmap_cpu_data_t;
-
-#include <mach/vm_prot.h>
-#include <mach/vm_statistics.h>
-#include <mach/machine/vm_param.h>
-#include <kern/kern_types.h>
-#include <kern/thread.h>
-#include <kern/queue.h>
-
-
-#include <sys/cdefs.h>
-
-/* Base address for low globals. */
-#define LOW_GLOBAL_BASE_ADDRESS 0xfffffff000000000ULL
-
+#if defined(ARM_LARGE_MEMORY)
 /*
- * This indicates (roughly) where there is free space for the VM
- * to use for the heap; this does not need to be precise.
+ * 2 L1 tables (Linear KVA and V=P), plus 2*16 L2 tables map up to (16*64GB) 1TB of DRAM
+ * Upper limit on how many pages can be consumed by bootstrap page tables
  */
-#if __ARM64_PMAP_SUBPAGE_L1__ && __ARM_16K_PG__
-#define KERNEL_PMAP_HEAP_RANGE_START VM_MIN_KERNEL_AND_KEXT_ADDRESS
-#else
-#define KERNEL_PMAP_HEAP_RANGE_START LOW_GLOBAL_BASE_ADDRESS
-#endif
-
-#if defined(__arm64__)
-
+#define BOOTSTRAP_TABLE_SIZE (ARM_PGBYTES * 34)
+#else // ARM_LARGE_MEMORY
 #define BOOTSTRAP_TABLE_SIZE (ARM_PGBYTES * 8)
+#endif
 
 typedef uint64_t        tt_entry_t;                                     /* translation table entry type */
 #define TT_ENTRY_NULL    ((tt_entry_t *) 0)
@@ -158,6 +108,100 @@ typedef uint32_t        pt_entry_t;                                     /* page 
 #error unknown arch
 #endif
 
+/* Forward declaration of the structure that controls page table
+ * geometry and TTE/PTE format. */
+struct page_table_attr;
+
+/*
+ *      pv_entry_t - structure to track the active mappings for a given page
+ */
+typedef struct pv_entry {
+	struct pv_entry *pve_next;              /* next alias */
+	pt_entry_t      *pve_ptep;              /* page table entry */
+}
+#if __arm__ && (__BIGGEST_ALIGNMENT__ > 4)
+/* For the newer ARMv7k ABI where 64-bit types are 64-bit aligned, but pointers
+ * are 32-bit:
+ * Since pt_desc is 64-bit aligned and we cast often from pv_entry to
+ * pt_desc.
+ */
+__attribute__ ((aligned(8))) pv_entry_t;
+#else
+pv_entry_t;
+#endif
+
+typedef struct {
+	pv_entry_t *list;
+	uint32_t count;
+} pv_free_list_t;
+
+struct pmap_cpu_data {
+#if XNU_MONITOR
+	void * ppl_kern_saved_sp;
+	void * ppl_stack;
+	arm_context_t * save_area;
+	unsigned int ppl_state;
+#endif
+#if defined(__arm64__)
+	pmap_t cpu_nested_pmap;
+	const struct page_table_attr *cpu_nested_pmap_attr;
+	vm_map_address_t cpu_nested_region_addr;
+	vm_map_offset_t cpu_nested_region_size;
+#else
+	pmap_t cpu_user_pmap;
+	unsigned int cpu_user_pmap_stamp;
+#endif
+	unsigned int cpu_number;
+	bool copywindow_strong_sync[CPUWINDOWS_MAX];
+	pv_free_list_t pv_free;
+	pv_entry_t *pv_free_tail;
+
+	/*
+	 * This supports overloading of ARM ASIDs by the pmap.  The field needs
+	 * to be wide enough to cover all the virtual bits in a virtual ASID.
+	 * With 256 physical ASIDs, 8-bit fields let us support up to 65536
+	 * Virtual ASIDs, minus all that would map on to 0 (as 0 is a global
+	 * ASID).
+	 *
+	 * If we were to use bitfield shenanigans here, we could save a bit of
+	 * memory by only having enough bits to support MAX_ASIDS.  However, such
+	 * an implementation would be more error prone.
+	 */
+	uint8_t cpu_sw_asids[MAX_HW_ASIDS];
+};
+typedef struct pmap_cpu_data pmap_cpu_data_t;
+
+#include <mach/vm_prot.h>
+#include <mach/vm_statistics.h>
+#include <mach/machine/vm_param.h>
+#include <kern/kern_types.h>
+#include <kern/thread.h>
+#include <kern/queue.h>
+
+
+#include <sys/cdefs.h>
+
+/* Base address for low globals. */
+#if defined(ARM_LARGE_MEMORY)
+#define LOW_GLOBAL_BASE_ADDRESS 0xfffffe0000000000ULL
+#else
+#define LOW_GLOBAL_BASE_ADDRESS 0xfffffff000000000ULL
+#endif
+
+/*
+ * This indicates (roughly) where there is free space for the VM
+ * to use for the heap; this does not need to be precise.
+ */
+#if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
+#if defined(ARM_LARGE_MEMORY)
+#define KERNEL_PMAP_HEAP_RANGE_START (VM_MIN_KERNEL_AND_KEXT_ADDRESS+ARM_TT_L1_SIZE)
+#else // ARM_LARGE_MEMORY
+#define KERNEL_PMAP_HEAP_RANGE_START VM_MIN_KERNEL_AND_KEXT_ADDRESS
+#endif // ARM_LARGE_MEMORY
+#else
+#define KERNEL_PMAP_HEAP_RANGE_START LOW_GLOBAL_BASE_ADDRESS
+#endif
+
 struct page_table_level_info {
 	const uint64_t size;
 	const uint64_t offmask;
@@ -167,6 +211,15 @@ struct page_table_level_info {
 	const uint64_t type_mask;
 	const uint64_t type_block;
 };
+
+/*
+ * For setups where the kernel page size does not match the hardware
+ * page size (assumably, the kernel page size must be a multiple of
+ * the hardware page size), we will need to determine what the page
+ * ratio is.
+ */
+#define PAGE_RATIO        ((1 << PAGE_SHIFT) >> ARM_PGSHIFT)
+#define TEST_PAGE_RATIO_4 (PAGE_RATIO == 4)
 
 
 /* superpages */
@@ -188,17 +241,10 @@ struct page_table_level_info {
 	((((vm_map_address_t)(x)) + ARM_PGMASK) & ~ARM_PGMASK)
 #define arm_trunc_page(x)   (((vm_map_address_t)(x)) & ~ARM_PGMASK)
 
+#if __arm__
 /* Convert address offset to page table index */
 #define ptenum(a) ((((a) & ARM_TT_LEAF_INDEX_MASK) >> ARM_TT_LEAF_SHIFT))
-
-/*
- * For setups where the kernel page size does not match the hardware
- * page size (assumably, the kernel page size must be a multiple of
- * the hardware page size), we will need to determine what the page
- * ratio is.
- */
-#define PAGE_RATIO                      ((1 << PAGE_SHIFT) >> ARM_PGSHIFT)
-#define TEST_PAGE_RATIO_4       (PAGE_RATIO == 4)
+#endif
 
 #if (__ARM_VMSA__ <= 7)
 #define NTTES   (ARM_PGBYTES / sizeof(tt_entry_t))
@@ -270,12 +316,11 @@ extern pmap_paddr_t mmu_uvtop(vm_offset_t va);
 #define pa_to_tte(a)            ((a) & ARM_TTE_TABLE_MASK)
 #define tte_to_pa(p)            ((p) & ARM_TTE_TABLE_MASK)
 
-#define pa_to_pte(a)            ((a) & ARM_PTE_MASK)
-#define pte_to_pa(p)            ((p) & ARM_PTE_MASK)
+#define pa_to_pte(a)            ((a) & ARM_PTE_PAGE_MASK)
+#define pte_to_pa(p)            ((p) & ARM_PTE_PAGE_MASK)
 #define pte_to_ap(p)            (((p) & ARM_PTE_APMASK) >> ARM_PTE_APSHIFT)
 #define pte_increment_pa(p)     ((p) += ptoa(1))
 
-#define ARM_NESTING_SIZE_MIN    ((PAGE_SIZE/ARM_PGBYTES)*ARM_TT_L2_SIZE)
 #define ARM_NESTING_SIZE_MAX    (0x0000000010000000ULL)
 
 #define TLBFLUSH_SIZE   (ARM_TTE_MAX/((sizeof(unsigned int))*BYTE_SIZE))
@@ -289,16 +334,12 @@ extern pmap_paddr_t mmu_uvtop(vm_offset_t va);
 #define pmap_cs_log_h(msg, args...) { if(pmap_cs_log_hacks) printf("PMAP_CS: " msg "\n", args); }
 #define pmap_cs_log pmap_cs_log_h
 
-#define PMAP_CS_EXCEPTION_LIST_HACK 1
-
 #else
 #define pmap_cs_log(msg, args...)
 #define pmap_cs_log_h(msg, args...)
 #endif /* DEVELOPMENT || DEBUG */
 
 
-/* Forward struct declarations for the pmap data structure */
-struct page_table_attr;
 
 /*
  *	Convert translation/page table entry to kernel virtual address
@@ -307,7 +348,7 @@ struct page_table_attr;
 #define ptetokv(a)      (phystokv(pte_to_pa(a)))
 
 struct pmap {
-	tt_entry_t              *tte;                   /* translation table entries */
+	tt_entry_t              *XNU_PTRAUTH_SIGNED_PTR("pmap.tte") tte; /* translation table entries */
 	pmap_paddr_t            ttep;                   /* translation table physical */
 	vm_map_address_t        min;                    /* min address in pmap */
 	vm_map_address_t        max;                    /* max address in pmap */
@@ -315,13 +356,14 @@ struct pmap {
 	const struct page_table_attr * pmap_pt_attr;    /* details about page table layout */
 #endif /* ARM_PARAMETERIZED_PMAP */
 	ledger_t                ledger;                 /* ledger tracking phys mappings */
-	decl_simple_lock_data(, lock);           /* lock on map */
+
+	decl_lck_rw_data(, rwlock);
+
 	struct pmap_statistics  stats;          /* map statistics */
 	queue_chain_t           pmaps;                  /* global list of pmaps */
 	tt_entry_t                      *tt_entry_free; /* free translation table entries */
-	struct pmap                     *nested_pmap;   /* nested pmap */
-	vm_map_address_t        nested_region_grand_addr;
-	vm_map_address_t        nested_region_subord_addr;
+	struct pmap                     *XNU_PTRAUTH_SIGNED_PTR("pmap.nested_pmap") nested_pmap;   /* nested pmap */
+	vm_map_address_t        nested_region_addr;
 	vm_map_offset_t         nested_region_size;
 	vm_map_offset_t         nested_region_true_start;
 	vm_map_offset_t         nested_region_true_end;
@@ -345,6 +387,7 @@ struct pmap {
 	char                    pmap_procname[17];
 	bool            pmap_stats_assert;
 #endif /* MACH_ASSERT */
+	bool                    pmap_vm_map_cs_enforced;
 #if DEVELOPMENT || DEBUG
 	bool            footprint_suspended;
 	bool            footprint_was_suspended;
@@ -396,16 +439,16 @@ extern void pmap_switch_user_ttb(pmap_t pmap);
 extern void pmap_clear_user_ttb(void);
 extern void pmap_bootstrap(vm_offset_t);
 extern vm_map_address_t pmap_ptov(pmap_t, ppnum_t);
+extern pmap_paddr_t pmap_find_pa(pmap_t map, addr64_t va);
+extern pmap_paddr_t pmap_find_pa_nofault(pmap_t map, addr64_t va);
 extern ppnum_t pmap_find_phys(pmap_t map, addr64_t va);
+extern ppnum_t pmap_find_phys_nofault(pmap_t map, addr64_t va);
 extern void pmap_set_pmap(pmap_t pmap, thread_t thread);
 extern void pmap_collect(pmap_t pmap);
 extern  void pmap_gc(void);
-#if defined(__arm64__)
-extern vm_offset_t pmap_extract(pmap_t pmap, vm_map_offset_t va);
-#endif
 #if HAS_APPLE_PAC && XNU_MONITOR
-extern void * pmap_sign_user_ptr(void *value, ptrauth_key key, uint64_t data);
-extern void * pmap_auth_user_ptr(void *value, ptrauth_key key, uint64_t data);
+extern void * pmap_sign_user_ptr(void *value, ptrauth_key key, uint64_t data, uint64_t jop_key);
+extern void * pmap_auth_user_ptr(void *value, ptrauth_key key, uint64_t data, uint64_t jop_key);
 #endif /* HAS_APPLE_PAC && XNU_MONITOR */
 
 /*
@@ -468,12 +511,12 @@ extern void pmap_map_globals(void);
 extern vm_map_address_t pmap_map_bd_with_options(vm_map_address_t va, vm_offset_t sa, vm_offset_t ea, vm_prot_t prot, int32_t options);
 extern vm_map_address_t pmap_map_bd(vm_map_address_t va, vm_offset_t sa, vm_offset_t ea, vm_prot_t prot);
 
-extern void pmap_init_pte_page(pmap_t, pt_entry_t *, vm_offset_t, unsigned int ttlevel, boolean_t alloc_ptd, boolean_t clear);
+extern void pmap_init_pte_page(pmap_t, pt_entry_t *, vm_offset_t, unsigned int ttlevel, boolean_t alloc_ptd);
 
 extern boolean_t pmap_valid_address(pmap_paddr_t addr);
 extern void pmap_disable_NX(pmap_t pmap);
 extern void pmap_set_nested(pmap_t pmap);
-extern vm_map_address_t pmap_create_sharedpage(void);
+extern void pmap_create_sharedpages(vm_map_address_t *kernel_data_addr, vm_map_address_t *kernel_text_addr, vm_map_address_t *user_text_addr);
 extern void pmap_insert_sharedpage(pmap_t pmap);
 extern void pmap_protect_sharedpage(void);
 
@@ -481,9 +524,15 @@ extern vm_offset_t pmap_cpu_windows_copy_addr(int cpu_num, unsigned int index);
 extern unsigned int pmap_map_cpu_windows_copy(ppnum_t pn, vm_prot_t prot, unsigned int wimg_bits);
 extern void pmap_unmap_cpu_windows_copy(unsigned int index);
 
-extern void pt_fake_zone_init(int);
-extern void pt_fake_zone_info(int *, vm_size_t *, vm_size_t *, vm_size_t *, vm_size_t *,
-    uint64_t *, int *, int *, int *);
+#if XNU_MONITOR
+/* exposed for use by the HMAC SHA driver */
+extern void pmap_invoke_with_page(ppnum_t page_number, void *ctx,
+    void (*callback)(void *ctx, ppnum_t page_number, const void *page));
+extern void pmap_hibernate_invoke(void *ctx, void (*callback)(void *ctx, uint64_t addr, uint64_t len));
+extern void pmap_set_ppl_hashed_flag(const pmap_paddr_t addr);
+extern void pmap_clear_ppl_hashed_flag_all(void);
+extern void pmap_check_ppl_hashed_flag_all(void);
+#endif /* XNU_MONITOR */
 
 extern boolean_t pmap_valid_page(ppnum_t pn);
 extern boolean_t pmap_bootloader_page(ppnum_t pn);
@@ -506,6 +555,13 @@ boolean_t pmap_virtual_region(unsigned int region_select, vm_map_offset_t *start
 
 boolean_t pmap_enforces_execute_only(pmap_t pmap);
 
+
+
+#if __has_feature(ptrauth_calls) && defined(XNU_TARGET_OS_OSX)
+extern void
+pmap_disable_user_jop(pmap_t pmap);
+#endif /* __has_feature(ptrauth_calls) && defined(XNU_TARGET_OS_OSX) */
+
 /* pmap dispatch indices */
 #define ARM_FAST_FAULT_INDEX 0
 #define ARM_FORCE_FAST_FAULT_INDEX 1
@@ -518,8 +574,8 @@ boolean_t pmap_enforces_execute_only(pmap_t pmap);
 #define PMAP_CREATE_INDEX 8
 #define PMAP_DESTROY_INDEX 9
 #define PMAP_ENTER_OPTIONS_INDEX 10
-#define PMAP_EXTRACT_INDEX 11
-#define PMAP_FIND_PHYS_INDEX 12
+/* #define PMAP_EXTRACT_INDEX 11 -- Not used*/
+#define PMAP_FIND_PA_INDEX 12
 #define PMAP_INSERT_SHAREDPAGE_INDEX 13
 #define PMAP_IS_EMPTY_INDEX 14
 #define PMAP_MAP_CPU_WINDOWS_COPY_INDEX 15
@@ -546,25 +602,35 @@ boolean_t pmap_enforces_execute_only(pmap_t pmap);
 #define PMAP_SET_JIT_ENTITLED_INDEX 36
 
 
-#define PMAP_UPDATE_COMPRESSOR_PAGE_INDEX 57
-#define PMAP_TRIM_INDEX 64
-#define PMAP_LEDGER_ALLOC_INIT_INDEX 65
-#define PMAP_LEDGER_ALLOC_INDEX 66
-#define PMAP_LEDGER_FREE_INDEX 67
+#define PMAP_UPDATE_COMPRESSOR_PAGE_INDEX 55
+#define PMAP_TRIM_INDEX 56
+#define PMAP_LEDGER_ALLOC_INIT_INDEX 57
+#define PMAP_LEDGER_ALLOC_INDEX 58
+#define PMAP_LEDGER_FREE_INDEX 59
 
 #if HAS_APPLE_PAC && XNU_MONITOR
-#define PMAP_SIGN_USER_PTR 68
-#define PMAP_AUTH_USER_PTR 69
+#define PMAP_SIGN_USER_PTR 60
+#define PMAP_AUTH_USER_PTR 61
 #endif /* HAS_APPLE_PAC && XNU_MONITOR */
 
+#define PHYS_ATTRIBUTE_CLEAR_RANGE_INDEX 66
 
-#define PMAP_COUNT 71
+
+#if __has_feature(ptrauth_calls) && defined(XNU_TARGET_OS_OSX)
+#define PMAP_DISABLE_USER_JOP_INDEX 69
+#endif /* __has_feature(ptrauth_calls) && defined(XNU_TARGET_OS_OSX) */
+
+
+
+#define PMAP_SET_VM_MAP_CS_ENFORCED_INDEX 72
+
+#define PMAP_COUNT 73
 
 #define PMAP_INVALID_CPU_NUM (~0U)
 
 struct pmap_cpu_data_array_entry {
 	pmap_cpu_data_t cpu_data;
-} __attribute__((aligned(1 << L2_CLINE)));
+} __attribute__((aligned(1 << MAX_L2_CLINE)));
 
 /* Initialize the pmap per-CPU data for the current CPU. */
 extern void pmap_cpu_data_init(void);
@@ -633,7 +699,7 @@ extern kern_return_t pmap_return(boolean_t do_panic, boolean_t do_recurse);
 extern lck_grp_t pmap_lck_grp;
 
 #if XNU_MONITOR
-extern void CleanPoC_DcacheRegion_Force_nopreempt(vm_offset_t va, unsigned length);
+extern void CleanPoC_DcacheRegion_Force_nopreempt(vm_offset_t va, size_t length);
 #define pmap_force_dcache_clean(va, sz) CleanPoC_DcacheRegion_Force_nopreempt(va, sz)
 #define pmap_simple_lock(l)             simple_lock_nopreempt(l, &pmap_lck_grp)
 #define pmap_simple_unlock(l)           simple_unlock_nopreempt(l)

@@ -26,6 +26,8 @@
  * @APPLE_OSREFERENCE_LICENSE_HEADER_END@
  */
 
+#define IOKIT_ENABLE_SHARED_PTR
+
 #include <IOKit/IOInterruptAccountingPrivate.h>
 #include <IOKit/IOKernelReporters.h>
 

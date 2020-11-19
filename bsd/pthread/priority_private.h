@@ -93,33 +93,33 @@
  */
 typedef unsigned long pthread_priority_t;
 
-#define _PTHREAD_PRIORITY_FLAGS_MASK                    0xff000000
+#define _PTHREAD_PRIORITY_FLAGS_MASK                    0xff000000u
 #define _PTHREAD_PRIORITY_FLAGS_SHIFT                   (24ull)
 
-#define _PTHREAD_PRIORITY_OVERCOMMIT_FLAG               0x80000000
-#define _PTHREAD_PRIORITY_INHERIT_FLAG                  0x40000000 /* dispatch only */
-#define _PTHREAD_PRIORITY_ROOTQUEUE_FLAG                0x20000000 /* dispatch only */
-#define _PTHREAD_PRIORITY_SCHED_PRI_FLAG                0x20000000
-#define _PTHREAD_PRIORITY_SCHED_PRI_MASK                0x0000ffff
-#define _PTHREAD_PRIORITY_ENFORCE_FLAG                  0x10000000 /* dispatch only */
-#define _PTHREAD_PRIORITY_OVERRIDE_FLAG                 0x08000000 /* unused */
-#define _PTHREAD_PRIORITY_FALLBACK_FLAG                 0x04000000
-#define _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG    0x02000000
-#define _PTHREAD_PRIORITY_NEEDS_UNBIND_FLAG             0x01000000
+#define _PTHREAD_PRIORITY_OVERCOMMIT_FLAG               0x80000000u
+#define _PTHREAD_PRIORITY_INHERIT_FLAG                  0x40000000u /* dispatch only */
+#define _PTHREAD_PRIORITY_ROOTQUEUE_FLAG                0x20000000u /* dispatch only */
+#define _PTHREAD_PRIORITY_SCHED_PRI_FLAG                0x20000000u
+#define _PTHREAD_PRIORITY_SCHED_PRI_MASK                0x0000ffffu
+#define _PTHREAD_PRIORITY_ENFORCE_FLAG                  0x10000000u /* dispatch only */
+#define _PTHREAD_PRIORITY_OVERRIDE_FLAG                 0x08000000u /* unused */
+#define _PTHREAD_PRIORITY_FALLBACK_FLAG                 0x04000000u
+#define _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG            0x02000000u
+#define _PTHREAD_PRIORITY_NEEDS_UNBIND_FLAG             0x01000000u
 #define _PTHREAD_PRIORITY_DEFAULTQUEUE_FLAG             _PTHREAD_PRIORITY_FALLBACK_FLAG // compat
 
-#define _PTHREAD_PRIORITY_ENCODING_MASK                 0x00a00000
+#define _PTHREAD_PRIORITY_ENCODING_MASK                 0x00a00000u
 #define _PTHREAD_PRIORITY_ENCODING_SHIFT                (22ull)
-#define _PTHREAD_PRIORITY_ENCODING_V0                   0x00000000
-#define _PTHREAD_PRIORITY_ENCODING_V1                   0x00400000 /* unused */
-#define _PTHREAD_PRIORITY_ENCODING_V2                   0x00800000 /* unused */
-#define _PTHREAD_PRIORITY_ENCODING_V3                   0x00a00000 /* unused */
+#define _PTHREAD_PRIORITY_ENCODING_V0                   0x00000000u
+#define _PTHREAD_PRIORITY_ENCODING_V1                   0x00400000u /* unused */
+#define _PTHREAD_PRIORITY_ENCODING_V2                   0x00800000u /* unused */
+#define _PTHREAD_PRIORITY_ENCODING_V3                   0x00a00000u /* unused */
 
-#define _PTHREAD_PRIORITY_QOS_CLASS_MASK                0x003fff00
-#define _PTHREAD_PRIORITY_VALID_QOS_CLASS_MASK  0x00003f00
+#define _PTHREAD_PRIORITY_QOS_CLASS_MASK                0x003fff00u
+#define _PTHREAD_PRIORITY_VALID_QOS_CLASS_MASK          0x00003f00u
 #define _PTHREAD_PRIORITY_QOS_CLASS_SHIFT               (8ull)
 
-#define _PTHREAD_PRIORITY_PRIORITY_MASK                 0x000000ff
+#define _PTHREAD_PRIORITY_PRIORITY_MASK                 0x000000ffu
 #define _PTHREAD_PRIORITY_PRIORITY_SHIFT                (0)
 
 #if PRIVATE
@@ -134,6 +134,10 @@ typedef unsigned long pthread_priority_t;
 #include <mach/thread_policy.h> // THREAD_QOS_*
 #include <stdbool.h>
 
+// pthread_priority_t's type is unfortunately 64bits on LP64
+// so we use this type for people who need to store it in structs
+typedef unsigned int pthread_priority_compact_t;
+
 __attribute__((always_inline, const))
 static inline bool
 _pthread_priority_has_qos(pthread_priority_t pp)
@@ -146,11 +150,11 @@ _pthread_priority_has_qos(pthread_priority_t pp)
 }
 
 __attribute__((always_inline, const))
-static inline pthread_priority_t
+static inline pthread_priority_compact_t
 _pthread_priority_make_from_thread_qos(thread_qos_t qos, int relpri,
     unsigned long flags)
 {
-	pthread_priority_t pp = (flags & _PTHREAD_PRIORITY_FLAGS_MASK);
+	pthread_priority_compact_t pp = (flags & _PTHREAD_PRIORITY_FLAGS_MASK);
 	if (qos && qos < THREAD_QOS_LAST) {
 		pp |= (1 << (_PTHREAD_PRIORITY_QOS_CLASS_SHIFT + qos - 1));
 		pp |= ((uint8_t)relpri - 1) & _PTHREAD_PRIORITY_PRIORITY_MASK;
@@ -159,21 +163,21 @@ _pthread_priority_make_from_thread_qos(thread_qos_t qos, int relpri,
 }
 
 __attribute__((always_inline, const))
-static inline pthread_priority_t
+static inline pthread_priority_compact_t
 _pthread_event_manager_priority(void)
 {
 	return _PTHREAD_PRIORITY_EVENT_MANAGER_FLAG;
 }
 
 __attribute__((always_inline, const))
-static inline pthread_priority_t
+static inline pthread_priority_compact_t
 _pthread_unspecified_priority(void)
 {
 	return _pthread_priority_make_from_thread_qos(THREAD_QOS_UNSPECIFIED, 0, 0);
 }
 
 __attribute__((always_inline, const))
-static inline pthread_priority_t
+static inline pthread_priority_compact_t
 _pthread_default_priority(unsigned long flags)
 {
 	return _pthread_priority_make_from_thread_qos(THREAD_QOS_LEGACY, 0, flags);
@@ -218,7 +222,7 @@ _pthread_priority_relpri(pthread_priority_t pp)
  * Normalize and validate QoS/relpri
  */
 __attribute__((const))
-pthread_priority_t
+pthread_priority_compact_t
 _pthread_priority_normalize(pthread_priority_t pp);
 
 /*
@@ -226,7 +230,7 @@ _pthread_priority_normalize(pthread_priority_t pp);
  * Normalize and validate QoS/relpri
  */
 __attribute__((const))
-pthread_priority_t
+pthread_priority_compact_t
 _pthread_priority_normalize_for_ipc(pthread_priority_t pp);
 
 /*
@@ -234,7 +238,7 @@ _pthread_priority_normalize_for_ipc(pthread_priority_t pp);
  * of base_pp and _pthread_priority_make_from_thread_qos(qos, 0, 0)
  */
 __attribute__((const))
-pthread_priority_t
+pthread_priority_compact_t
 _pthread_priority_combine(pthread_priority_t base_pp, thread_qos_t qos);
 
 #endif // KERNEL

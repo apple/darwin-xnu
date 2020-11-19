@@ -32,7 +32,7 @@ typedef boolean_t (*argsep_func_t) (char c);
 
 static boolean_t isargsep( char c);
 static boolean_t israngesep( char c);
-#ifndef CONFIG_EMBEDDED
+#if defined(__x86_64__)
 static int argstrcpy(char *from, char *to);
 #endif
 static int argstrcpy2(char *from, char *to, unsigned maxlen);
@@ -70,7 +70,7 @@ PE_parse_boot_argn_internal(
 		return FALSE;
 	}
 
-#ifdef CONFIG_EMBEDDED
+#if !defined(__x86_64__)
 	if (max_len == -1) {
 		return FALSE;
 	}
@@ -149,7 +149,7 @@ PE_parse_boot_argn_internal(
 				} else if (max_len == 0) {
 					arg_found = TRUE;
 				}
-#if !CONFIG_EMBEDDED
+#if defined(__x86_64__)
 				else if (max_len == -1) {         /* unreachable on embedded */
 					argstrcpy(++cp, (char *)arg_ptr);
 					arg_found = TRUE;
@@ -212,7 +212,7 @@ israngesep(char c)
 	}
 }
 
-#if !CONFIG_EMBEDDED
+#if defined(__x86_64__)
 static int
 argstrcpy(
 	char *from,
@@ -253,23 +253,23 @@ argnumcpy(long long val, void *to, unsigned maxlen)
 		/* No write-back, caller just wants to know if arg was found */
 		break;
 	case 1:
-		*(int8_t *)to = val;
+		*(int8_t *)to = (int8_t)val;
 		break;
 	case 2:
-		*(int16_t *)to = val;
+		*(int16_t *)to = (int16_t)val;
 		break;
 	case 3:
 		/* Unlikely in practice */
-		((struct i24 *)to)->i24 = val;
+		((struct i24 *)to)->i24 = (int32_t)val;
 		break;
 	case 4:
-		*(int32_t *)to = val;
+		*(int32_t *)to = (int32_t)val;
 		break;
 	case 8:
-		*(int64_t *)to = val;
+		*(int64_t *)to = (int64_t)val;
 		break;
 	default:
-		*(int32_t *)to = val;
+		*(int32_t *)to = (int32_t)val;
 		maxlen = 4;
 		break;
 	}
@@ -395,17 +395,17 @@ PE_get_default(
 	unsigned int max_property)
 {
 	DTEntry         dte;
-	void            **property_data;
+	void const      *property_data;
 	unsigned int property_size;
 
 	/*
 	 * Look for the property using the PE DT support.
 	 */
-	if (kSuccess == DTLookupEntry(NULL, "/defaults", &dte)) {
+	if (kSuccess == SecureDTLookupEntry(NULL, "/defaults", &dte)) {
 		/*
 		 * We have a /defaults node, look for the named property.
 		 */
-		if (kSuccess != DTGetProperty(dte, property_name, (void **)&property_data, &property_size)) {
+		if (kSuccess != SecureDTGetProperty(dte, property_name, &property_data, &property_size)) {
 			return FALSE;
 		}
 

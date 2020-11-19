@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2004-2019 Apple Inc. All rights reserved.
+ * Copyright (c) 2004-2020 Apple Inc. All rights reserved.
  *
  * @APPLE_OSREFERENCE_LICENSE_HEADER_START@
  *
@@ -57,11 +57,11 @@ struct ifnet_interface_advisory;
 #endif /* PRIVATE */
 
 #ifdef XNU_KERNEL_PRIVATE
-#if CONFIG_EMBEDDED
+#if !XNU_TARGET_OS_OSX || (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 #define KPI_INTERFACE_EMBEDDED 1
-#else
+#else /* XNU_TARGET_OS_OSX && !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 #define KPI_INTERFACE_EMBEDDED 0
-#endif
+#endif /* XNU_TARGET_OS_OSX && !(TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR) */
 #else
 #if (TARGET_OS_IPHONE && !TARGET_OS_SIMULATOR)
 #define KPI_INTERFACE_EMBEDDED 1
@@ -773,6 +773,15 @@ typedef void (*ifnet_input_poll_func)(ifnet_t interface, u_int32_t flags,
     u_int32_t max_count, mbuf_t *first_packet, mbuf_t *last_packet,
     u_int32_t *cnt, u_int32_t *len);
 
+/*!
+ *       @typedef ifnet_free_func
+ *       @discussion ifnet_free_func is called as an alternative to ifnet_detach_func
+ *               on a specific interface. Implementors of this callback are responsible
+ *               for fully tearing down the interface.
+ *       @param interface The interface that should be freed
+ */
+typedef void (*ifnet_free_func)(ifnet_t interface);
+
 /*
  *       @enum Interface control commands
  *       @abstract Constants defining control commands.
@@ -1127,10 +1136,12 @@ struct ifnet_init_eparams {
 	u_int16_t               tx_trailer;             /* optional */
 	u_int32_t               rx_mit_ival;            /* optional */
 #if !defined(__LP64__)
-	u_int64_t               ____reserved[2];        /* for future use */
+	ifnet_free_func         free;                   /* optional */
+	u_int32_t               _____reserved;          /* for future use */
+	u_int64_t               ____reserved[1];        /* for future use */
 #else
 	u_int32_t               ____reserved;           /* for future use */
-	u_int64_t               _____reserved[1];       /* for future use */
+	ifnet_free_func         free;                   /* optional */
 #endif /* __LP64__ */
 };
 #endif /* KERNEL_PRIVATE */
@@ -1284,6 +1295,14 @@ __NKE_API_DEPRECATED;
  */
 extern errno_t ifnet_allocate_extended(const struct ifnet_init_eparams *init,
     ifnet_t *interface);
+
+/*
+ *       @function ifnet_dispose
+ *       @discusion Dispose the interface. This is meant to only be called
+ *                  by clients that implement ifnet_free_func
+ *       @param interface The interface to dispose
+ */
+extern void ifnet_dispose(ifnet_t interface);
 
 /*
  *       @function ifnet_purge
@@ -3765,4 +3784,5 @@ extern errno_t ifnet_interface_advisory_report(ifnet_t ifp,
 
 __END_DECLS
 
+#undef __NKE_API_DEPRECATED
 #endif /* __KPI_INTERFACE__ */

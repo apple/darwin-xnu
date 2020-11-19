@@ -42,7 +42,9 @@ struct exec_info {
 	char    **ev;
 };
 
-int grade_binary(cpu_type_t, cpu_subtype_t, bool allow_simulator_binary);
-boolean_t pie_required(cpu_type_t, cpu_subtype_t);
+int grade_binary(cpu_type_t, cpu_subtype_t, cpu_subtype_t, bool allow_simulator_binary);
+boolean_t binary_match(cpu_type_t mask_bits, cpu_type_t req_cpu,
+    cpu_subtype_t req_subcpu, cpu_type_t test_cpu,
+    cpu_subtype_t test_subcpu);
 
 #endif /* _BSD_MACHINE_EXEC_H_ */

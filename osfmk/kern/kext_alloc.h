@@ -33,11 +33,15 @@
 
 __BEGIN_DECLS
 
+vm_offset_t get_address_from_kext_map(vm_size_t fsize);
+
 void kext_alloc_init(void);
 
 kern_return_t kext_alloc(vm_offset_t *addr, vm_size_t size, boolean_t fixed);
 
 void kext_free(vm_offset_t addr, vm_size_t size);
+
+kern_return_t kext_receipt(void **addrp, size_t *sizep);
 
 __END_DECLS
 

@@ -2,12 +2,13 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<key>Label</key>
-	<string>com.apple.xnu.test.turnstile_multihop</string>
 	<key>MachServices</key>
 	<dict>
 		<key>com.apple.xnu.test.turnstile_multihop</key>
-		<true/>
+		<dict>
+			<key>ResetAtClose</key>
+			<true/>
+		</dict>
 	</dict>
 	<key>ThrottleInterval</key>
 	<integer>1</integer>
@@ -20,5 +21,7 @@
 		<key>MallocNanoZone</key>
 		<string>1</string>
 	</dict>
+	<key>LaunchOnlyOnce</key>
+	<true/>
 </dict>
 </plist>

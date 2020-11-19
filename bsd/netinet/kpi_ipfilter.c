@@ -411,10 +411,10 @@ ipf_injectv4_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 	}
 
 	if (options != NULL && (options->ippo_flags & IPPOF_MCAST_OPTS) &&
-	    (imo = ip_allocmoptions(M_DONTWAIT)) != NULL) {
+	    (imo = ip_allocmoptions(Z_NOWAIT)) != NULL) {
 		imo->imo_multicast_ifp = options->ippo_mcast_ifnet;
 		imo->imo_multicast_ttl = options->ippo_mcast_ttl;
-		imo->imo_multicast_loop = options->ippo_mcast_loop;
+		imo->imo_multicast_loop = (u_char)options->ippo_mcast_loop;
 	}
 
 	if (options != NULL) {
@@ -463,7 +463,6 @@ ipf_injectv4_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 	return error;
 }
 
-#if INET6
 static errno_t
 ipf_injectv6_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 {
@@ -501,10 +500,10 @@ ipf_injectv6_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 	}
 
 	if (options != NULL && (options->ippo_flags & IPPOF_MCAST_OPTS) &&
-	    (im6o = ip6_allocmoptions(M_DONTWAIT)) != NULL) {
+	    (im6o = ip6_allocmoptions(Z_NOWAIT)) != NULL) {
 		im6o->im6o_multicast_ifp = options->ippo_mcast_ifnet;
 		im6o->im6o_multicast_hlim = options->ippo_mcast_ttl;
-		im6o->im6o_multicast_loop = options->ippo_mcast_loop;
+		im6o->im6o_multicast_loop = (u_char)options->ippo_mcast_loop;
 	}
 
 	if (options != NULL) {
@@ -548,7 +547,6 @@ ipf_injectv6_out(mbuf_t data, ipfilter_t filter_ref, ipf_pktopts_t options)
 
 	return error;
 }
-#endif /* INET6 */
 
 errno_t
 ipf_inject_output(
@@ -573,11 +571,9 @@ ipf_inject_output(
 	case 4:
 		error = ipf_injectv4_out(data, filter_ref, options);
 		break;
-#if INET6
 	case 6:
 		error = ipf_injectv6_out(data, filter_ref, options);
 		break;
-#endif
 	default:
 		m_freem(m);
 		error = ENOTSUP;

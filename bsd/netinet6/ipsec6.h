@@ -53,12 +53,12 @@ extern int ip6_esp_randpad;
 
 struct ip6_out_args;
 
-extern struct secpolicy *ipsec6_getpolicybysock(struct mbuf *, u_int,
+extern struct secpolicy *ipsec6_getpolicybysock(struct mbuf *, u_int8_t,
     struct socket *, int *);
-extern struct secpolicy *ipsec6_getpolicybyaddr(struct mbuf *, u_int, int,
+extern struct secpolicy *ipsec6_getpolicybyaddr(struct mbuf *, u_int8_t, int,
     int *);
 extern int ipsec6_getpolicybyinterface(struct mbuf *,
-    u_int, int, struct ip6_out_args *, int *, struct secpolicy **);
+    u_int8_t, int, struct ip6_out_args *, int *, struct secpolicy **);
 
 struct inpcb;
 
@@ -70,7 +70,7 @@ extern int ipsec6_in_reject(struct mbuf *, struct inpcb *);
 
 struct tcp6cb;
 
-extern size_t ipsec6_hdrsiz(struct mbuf *, u_int, struct inpcb *);
+extern size_t ipsec6_hdrsiz(struct mbuf *, u_int8_t, struct inpcb *);
 
 struct ip6_hdr;
 extern const char *ipsec6_logpacketstr(struct ip6_hdr *, u_int32_t);

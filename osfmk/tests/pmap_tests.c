@@ -253,6 +253,25 @@ test_pmap_iommu_disconnect(void)
 	pmap_disconnect(phys_page);
 	assert(pmap_verify_free(phys_page));
 
+	/* Phase 7: allocate contiguous memory and hand it to the shart */
+	shart_more more_shart;
+	more_shart.nbytes = (PAGE_SIZE * 5) + 42;
+	more_shart.baseaddr = pmap_iommu_alloc_contiguous_pages(&iommu->super, more_shart.nbytes, 0, 0, VM_WIMG_DEFAULT);
+	assert(more_shart.baseaddr != 0);
+
+	kr = pmap_iommu_ioctl(&iommu->super, SHART_IOCTL_MORE, &more_shart, sizeof(more_shart), NULL, 0);
+	assert(kr == KERN_SUCCESS);
+	assert(iommu->extra_memory == more_shart.baseaddr);
+	assert(iommu->extra_bytes == more_shart.nbytes);
+
+	more_shart.baseaddr += PAGE_SIZE;
+	more_shart.nbytes -= PAGE_SIZE;
+	kr = pmap_iommu_ioctl(&iommu->super, SHART_IOCTL_MORE, &more_shart, sizeof(more_shart), NULL, 0);
+	assert(kr == KERN_NOT_SUPPORTED);
+	kr = KERN_SUCCESS;
+	assert(iommu->extra_memory == (more_shart.baseaddr - PAGE_SIZE));
+	assert(iommu->extra_bytes == (more_shart.nbytes + PAGE_SIZE));
+
 cleanup:
 
 	if (iommu != NULL) {
@@ -272,6 +291,7 @@ cleanup:
 	return KERN_SUCCESS;
 #endif
 }
+
 
 kern_return_t
 test_pmap_extended(void)
