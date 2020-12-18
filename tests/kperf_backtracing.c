@@ -12,11 +12,6 @@
 #include "kperf_helpers.h"
 #include "ktrace_helpers.h"
 
-#define PERF_STK_KHDR  UINT32_C(0x25020014)
-#define PERF_STK_UHDR  UINT32_C(0x25020018)
-#define PERF_STK_KDATA UINT32_C(0x2502000c)
-#define PERF_STK_UDATA UINT32_C(0x25020010)
-
 #define CALLSTACK_VALID 0x1
 #define CALLSTACK_TRUNCATED 0x10
 

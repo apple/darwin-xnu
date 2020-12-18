@@ -509,14 +509,12 @@ SecureDTGetProperty(const DTEntry entry, const char *propertyName, void const **
 	           (vm_offset_t)DTRootNode, (vm_size_t)((uintptr_t)DTEnd - (uintptr_t)DTRootNode));
 }
 
-#if defined(__i386__) || defined(__x86_64__)
 int
 SecureDTGetPropertyRegion(const DTEntry entry, const char *propertyName, void const **propertyValue, unsigned int *propertySize, vm_offset_t const region_start, vm_size_t region_size)
 {
 	return SecureDTGetPropertyInternal(entry, propertyName, propertyValue, propertySize,
 	           region_start, region_size);
 }
-#endif
 
 
 int

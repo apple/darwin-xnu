@@ -37,8 +37,6 @@
 #define PPL_EXIT_BAD_CALL   2 /* The PPL request failed. */
 #define PPL_EXIT_EXCEPTION  3 /* The PPL took an exception. */
 
-/* Guarded mode trap numbers: these are passed as the genter immediate. */
-#define GXF_ENTER_PPL 0
 
 #define KERNEL_MODE_ELR      ELR_GL11
 #define KERNEL_MODE_FAR      FAR_GL11
@@ -135,8 +133,11 @@
  * On CPUs with PAC, the kernel "A" keys are used to create a thread signature.
  * These keys are deliberately kept loaded into the CPU for later kernel use.
  *
+ *   arg0 - KERNEL_MODE or HIBERNATE_MODE
  *   x0 - Address of the save area
  */
+#define KERNEL_MODE 0
+#define HIBERNATE_MODE 1
 
 .macro SPILL_REGISTERS	mode
 	stp		x2, x3, [x0, SS64_X2]                                   // Save remaining GPRs

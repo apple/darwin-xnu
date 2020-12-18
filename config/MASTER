@@ -326,6 +326,9 @@ options   CONFIG_EMBEDDED			# <config_embedded>
 options   CONFIG_ARROW              # <config_arrow>
 
 
+options   NOS_ARM_ASM			# <nos_arm_asm>
+options   NOS_ARM_PMAP			# <nos_arm_pmap>
+
 # support dynamic signing of code
 #
 options		CONFIG_DYNAMIC_CODE_SIGNING	# <dynamic_codesigning>
@@ -566,8 +569,6 @@ options		CONFIG_SETUID		# setuid/setgid support # <config_setuid>
 options		CONFIG_SECURE_BSD_ROOT	# secure BSD root	# <config_secure_bsd_root>
 
 options		CONFIG_KAS_INFO		# kas_info support	# <config_kas_info>
-
-options		CONFIG_ZALLOC_SEQUESTER		# Sequester VA for zones # <config_zalloc_sequester>
 
 #
 # MACH configuration options.

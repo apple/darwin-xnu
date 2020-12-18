@@ -7,7 +7,7 @@ include $(MakeInc_cmd)
 include $(MakeInc_def)
 
 DATAFILES = \
-	diag_entropy_sysctl.h
+	entropy_sysctl.h
 
 INSTALL_MI_LIST =
 

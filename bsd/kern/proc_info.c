@@ -2716,7 +2716,7 @@ proc_pidfdinfo(int pid, int flavor, int fd, user_addr_t buffer, uint32_t buffers
 	break;
 
 	case PROC_PIDFDPSEMINFO: {
-		if ((error = fp_get_ftype(p, fd, DTYPE_PSXSHM, EBADF, &fp)) != 0) {
+		if ((error = fp_get_ftype(p, fd, DTYPE_PSXSEM, EBADF, &fp)) != 0) {
 			goto out1;
 		}
 		error = pid_pseminfo(fp->fp_glob->fg_data, fp, p, fd, buffer, buffersize, retval);

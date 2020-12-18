@@ -196,6 +196,7 @@ bind_hashget(struct mount * mp, struct vnode * lowervp, struct vnode ** vpp)
 	struct bind_node_hashhead * hd;
 	struct bind_node * a;
 	struct vnode * vp = NULL;
+	uint32_t vp_vid = 0;
 	int error = ENOENT;
 
 	/*
@@ -214,6 +215,8 @@ bind_hashget(struct mount * mp, struct vnode * lowervp, struct vnode ** vpp)
 				/*lowervp has reved */
 				error = EIO;
 				vp = NULL;
+			} else {
+				vp_vid = a->bind_myvid;
 			}
 			break;
 		}
@@ -221,7 +224,7 @@ bind_hashget(struct mount * mp, struct vnode * lowervp, struct vnode ** vpp)
 	lck_mtx_unlock(&bind_hashmtx);
 
 	if (vp != NULL) {
-		error = vnode_getwithvid(vp, a->bind_myvid);
+		error = vnode_getwithvid(vp, vp_vid);
 		if (error == 0) {
 			*vpp = vp;
 		}
@@ -243,6 +246,7 @@ bind_hashins(struct mount * mp, struct bind_node * xp, struct vnode ** vpp)
 	struct bind_node_hashhead * hd;
 	struct bind_node * oxp;
 	struct vnode * ovp = NULL;
+	uint32_t oxp_vid = 0;
 	int error = 0;
 
 	hd = BIND_NHASH(xp->bind_lowervp);
@@ -259,6 +263,8 @@ bind_hashins(struct mount * mp, struct bind_node * xp, struct vnode ** vpp)
 				 *  don't add it.*/
 				error = EIO;
 				ovp = NULL;
+			} else {
+				oxp_vid = oxp->bind_myvid;
 			}
 			goto end;
 		}
@@ -271,7 +277,7 @@ end:
 	lck_mtx_unlock(&bind_hashmtx);
 	if (ovp != NULL) {
 		/* if we found something in the hash map then grab an iocount */
-		error = vnode_getwithvid(ovp, oxp->bind_myvid);
+		error = vnode_getwithvid(ovp, oxp_vid);
 		if (error == 0) {
 			*vpp = ovp;
 		}

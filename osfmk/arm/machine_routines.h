@@ -270,6 +270,8 @@ typedef struct ml_cpu_info ml_cpu_info_t;
 
 typedef enum {
 	CLUSTER_TYPE_SMP,
+	CLUSTER_TYPE_E,
+	CLUSTER_TYPE_P,
 } cluster_type_t;
 
 cluster_type_t ml_get_boot_cluster(void);
@@ -674,6 +676,10 @@ void ml_init_timebase(
 	vm_offset_t     int_value);
 
 uint64_t ml_get_timebase(void);
+
+uint64_t ml_get_speculative_timebase(void);
+
+uint64_t ml_get_timebase_entropy(void);
 
 void ml_init_lock_timeout(void);
 
@@ -1272,18 +1278,6 @@ void ml_thread_set_disable_user_jop(thread_t thread, uint8_t disable_user_jop);
 void ml_thread_set_jop_pid(thread_t thread, task_t task);
 void *ml_auth_ptr_unchecked(void *ptr, unsigned key, uint64_t modifier);
 
-/**
- * Temporarily enables a userspace JOP key in kernel space, so that the kernel
- * can sign or auth pointers on that process's behalf.
- *
- * @note The caller must disable interrupts before calling
- * ml_enable_user_jop_key(), and may only re-enable interrupts after the
- * complementary ml_disable_user_jop_key() call.
- *
- * @param user_jop_key  The userspace JOP key to temporarily use
- * @return              Saved JOP state, to be passed to the complementary
- *                      ml_disable_user_jop_key() call
- */
 uint64_t ml_enable_user_jop_key(uint64_t user_jop_key);
 
 /**
@@ -1298,6 +1292,7 @@ uint64_t ml_enable_user_jop_key(uint64_t user_jop_key);
 void ml_disable_user_jop_key(uint64_t user_jop_key, uint64_t saved_jop_state);
 #endif /* defined(HAS_APPLE_PAC) */
 
+void ml_enable_monitor(void);
 
 
 #endif /* KERNEL_PRIVATE */

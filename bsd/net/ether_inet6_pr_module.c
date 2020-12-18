@@ -161,7 +161,7 @@ ether_inet6_pre_output(ifnet_t ifp, protocol_family_t protocol_family,
 {
 #pragma unused(protocol_family)
 	errno_t result;
-	struct sockaddr_dl sdl;
+	struct sockaddr_dl sdl = {};
 	struct mbuf *m = *m0;
 
 	/*

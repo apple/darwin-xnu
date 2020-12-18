@@ -71,13 +71,6 @@ static_assert((((~ARM_KERNEL_PROTECT_EXCEPTION_START) + 1) * 2ULL) <= (ARM_TT_RO
 #endif /* __ARM_KERNEL_PROTECT__ */
 
 #if __APRR_SUPPORTED__ && XNU_MONITOR
-/*
- * If APRR is supported, setting XN on L1/L2 table entries will shift the effective
- * APRR index of L3 PTEs covering PPL-protected pages in the kernel dynamic region
- * from PPL R/W to kernel R/W.  That will effectively remove PPL write protection
- * from those pages.  Avoid setting XN at the table level for MONITOR-enabled builds
- * that are backed by APRR.
- */
 #define ARM_DYNAMIC_TABLE_XN ARM_TTE_TABLE_PXN
 #else
 #define ARM_DYNAMIC_TABLE_XN (ARM_TTE_TABLE_PXN | ARM_TTE_TABLE_XN)
@@ -2003,6 +1996,7 @@ arm_vm_init(uint64_t memory_size, boot_args * args)
 	arm_vm_physmap_init(args);
 	set_mmu_ttb_alternate(cpu_ttep & TTBR_BADDR_MASK);
 
+	ml_enable_monitor();
 
 	set_mmu_ttb(invalid_ttep & TTBR_BADDR_MASK);
 

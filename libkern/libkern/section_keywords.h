@@ -38,6 +38,22 @@
 #define __SECTION_START_SYM(seg, sect) asm("section$start$" seg "$" sect)
 #define __SECTION_END_SYM(seg, sect)   asm("section$end$" seg "$" sect)
 
+#if defined(__arm64__) || defined (__x86_64__)
+
+#define SECURITY_SEGMENT_NAME           "__DATA"
+#define SECURITY_SECTION_NAME           "__const"
+#define SECURITY_SEGMENT_SECTION_NAME   "__DATA,__const"
+
+#define __security_const_early const
+#define __security_const_late __attribute__((section(SECURITY_SEGMENT_SECTION_NAME)))
+#define __security_read_write
+
+#if HIBERNATION
+#define MARK_AS_HIBERNATE_TEXT __attribute__((section("__HIB, __text, regular, pure_instructions")))
+#define MARK_AS_HIBERNATE_DATA __attribute__((section("__HIB, __data")))
+#define MARK_AS_HIBERNATE_DATA_CONST_LATE __attribute__((section("__HIB, __const")))
+#endif /* HIBERNATION */
+#endif /* __arm64__ || __x86_64__ */
 
 #ifndef __security_const_early
 #define __security_const_early const

@@ -32,6 +32,7 @@ osfmk/arm/machine_cpuid.c	standard
 osfmk/arm/machine_routines.c		standard
 osfmk/arm/machine_routines_common.c	standard
 osfmk/arm/machine_routines_asm.s	standard
+osfmk/arm/machine_routines_apple.c	optional nos_arm_asm
 osfmk/arm/machine_task.c		standard
 osfmk/arm/pal_routines.c		standard
 osfmk/arm/mcount.s		optional profile
@@ -47,6 +48,7 @@ osfmk/arm/strnlen.s	standard
 osfmk/arm/strncmp.s	standard
 osfmk/arm/strncpy.c	standard
 osfmk/arm/strlcpy.c	standard
+osfmk/arm/trustcache.c		standard
 
 osfmk/arm/model_dep.c		standard
 osfmk/arm/pcb.c		standard

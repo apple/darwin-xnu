@@ -1345,7 +1345,6 @@ __attribute__((noinline))
 static kern_return_t
 vm_shared_region_map_file_setup(
 	vm_shared_region_t              shared_region,
-	void                            *root_dir,
 	int                             sr_file_mappings_count,
 	struct _sr_file_mappings        *sr_file_mappings,
 	unsigned int                    *mappings_to_slide_cnt,
@@ -1381,21 +1380,6 @@ vm_shared_region_map_file_setup(
 
 	vm_shared_region_lock();
 	assert(shared_region->sr_ref_count > 1);
-
-	if (shared_region->sr_root_dir != root_dir) {
-		/*
-		 * This shared region doesn't match the current root
-		 * directory of this process.  Deny the mapping to
-		 * avoid tainting the shared region with something that
-		 * doesn't quite belong into it.
-		 */
-		vm_shared_region_unlock();
-
-		SHARED_REGION_TRACE_DEBUG(
-			("shared_region: map(%p) <- 0x%x \n",
-			(void *)VM_KERNEL_ADDRPERM(shared_region), kr));
-		return KERN_PROTECTION_FAILURE;
-	}
 
 	/*
 	 * Make sure we handle only one mapping at a time in a given
@@ -1728,7 +1712,6 @@ __attribute__((noinline))
 kern_return_t
 vm_shared_region_map_file(
 	vm_shared_region_t       shared_region,
-	void                     *root_dir,
 	int                      sr_file_mappings_count,
 	struct _sr_file_mappings *sr_file_mappings)
 {
@@ -1745,7 +1728,7 @@ vm_shared_region_map_file(
 	vm_map_offset_t         lowest_unnestable_addr = 0;
 	mach_vm_offset_t        file_first_mappings[VMSR_NUM_SLIDES] = {(mach_vm_offset_t) -1, (mach_vm_offset_t) -1};
 
-	kr = vm_shared_region_map_file_setup(shared_region, root_dir, sr_file_mappings_count, sr_file_mappings,
+	kr = vm_shared_region_map_file_setup(shared_region, sr_file_mappings_count, sr_file_mappings,
 	    &mappings_to_slide_cnt, &mappings_to_slide[0], slid_mappings, slid_file_controls,
 	    &first_mapping, &file_first_mappings[0],
 	    &sfm_min_address, &sfm_max_address, &sr_map, &lowest_unnestable_addr);
@@ -3487,3 +3470,15 @@ post_sys_powersource_internal(int i, int internal)
 	}
 }
 #endif
+
+void *
+vm_shared_region_root_dir(
+	struct vm_shared_region *sr)
+{
+	void *vnode;
+
+	vm_shared_region_lock();
+	vnode = sr->sr_root_dir;
+	vm_shared_region_unlock();
+	return vnode;
+}

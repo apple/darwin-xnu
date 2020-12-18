@@ -83,6 +83,7 @@ private:
 	OSPtr<const OSSymbol>  _registryPropertiesKey;
 	UInt8                  *_nvramImage;
 	IOLock                 *_variableLock;
+	IOLock                 *_controllerLock;
 	UInt32                 _commonPartitionOffset;
 	UInt32                 _commonPartitionSize;
 	UInt8                  *_commonImage;
@@ -145,7 +146,7 @@ private:
 	UInt32 getNVRAMSize(void);
 	void initNVRAMImage(void);
 	void initProxyData(void);
-	IOReturn syncVariables(void);
+	IOReturn serializeVariables(void);
 	IOReturn setPropertyInternal(const OSSymbol *aKey, OSObject *anObject);
 	IOReturn removePropertyInternal(const OSSymbol *aKey);
 	IOReturn chooseDictionary(IONVRAMOperation operation, const uuid_t *varGuid,

@@ -1369,7 +1369,6 @@ __attribute__((optnone))
 	debug_code('  sp', context->ss.ss_64.sp);
 	debug_code('  pc', context->ss.ss_64.pc);
 	debug_code('cpsr', context->ss.ss_64.cpsr);
-	debug_code('asps', context->ss.ss_64.aspsr);
 	debug_code(' far', context->ss.ss_64.far);
 	debug_code(' esr', context->ss.ss_64.esr);
 

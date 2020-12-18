@@ -101,7 +101,7 @@ multicast_list_program(struct multicast_list * mc_list,
 	int                         i;
 	struct multicast_entry *    mc = NULL;
 	struct multicast_list       new_mc_list;
-	struct sockaddr_dl          source_sdl;
+	struct sockaddr_dl          source_sdl = {};
 	ifmultiaddr_t *             source_multicast_list;
 	struct sockaddr_dl          target_sdl;
 

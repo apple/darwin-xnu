@@ -95,6 +95,7 @@
 #include <sys/kdebug.h>
 #include <kperf/kperf.h>
 #include <prng/random.h>
+#include <prng/entropy.h>
 
 #include <string.h>
 
@@ -474,7 +475,7 @@ interrupt(x86_saved_state_t *state)
 	}
 
 	if (cnum == master_cpu) {
-		ml_entropy_collect();
+		entropy_collect();
 	}
 
 #if KPERF

@@ -2497,9 +2497,7 @@ sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
 				if (error) {
 					if (error == EJUSTRETURN) {
 						error = 0;
-						clen = 0;
-						control = NULL;
-						top = NULL;
+						goto packet_consumed;
 					}
 					goto out_locked;
 				}
@@ -2523,6 +2521,7 @@ sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
 			error = (*so->so_proto->pr_usrreqs->pru_send)
 			    (so, sendflags, top, addr, control, p);
 
+packet_consumed:
 			if (dontroute) {
 				so->so_options &= ~SO_DONTROUTE;
 			}

@@ -919,6 +919,12 @@ common_start:
 	and		x0, x0, #~(APCTL_EL1_EnAPKey0)
 	msr		ARM64_REG_APCTL_EL1, x0
 
+#if defined(APPLEFIRESTORM)
+	IF_PAC_FAST_A_KEY_SWITCHING	1f, x0
+	orr		x0, x0, #(APCTL_EL1_KernKeyEn)
+	msr		ARM64_REG_APCTL_EL1, x0
+1:
+#endif /* APPLEFIRESTORM */
 
 #else
 	mrs		x0, ARM64_REG_APCTL_EL1

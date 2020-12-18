@@ -195,6 +195,7 @@ null_hashget(struct mount * mp, struct vnode * lowervp, struct vnode ** vpp)
 	struct null_node_hashhead * hd = NULL;
 	struct null_node * a = NULL;
 	struct vnode * vp = NULL;
+	uint32_t vp_vid = 0;
 	int error = ENOENT;
 
 	/*
@@ -214,6 +215,8 @@ null_hashget(struct mount * mp, struct vnode * lowervp, struct vnode ** vpp)
 				/*lowervp has reved */
 				error = EIO;
 				vp = NULL;
+			} else {
+				vp_vid = a->null_myvid;
 			}
 			// In the case of a succesful look-up we should consider moving the object to the top of the head
 			break;
@@ -221,7 +224,7 @@ null_hashget(struct mount * mp, struct vnode * lowervp, struct vnode ** vpp)
 	}
 	lck_mtx_unlock(&null_hashmtx);
 	if (vp != NULL) {
-		error = vnode_getwithvid(vp, a->null_myvid);
+		error = vnode_getwithvid(vp, vp_vid);
 		if (error == 0) {
 			*vpp = vp;
 		}
@@ -239,6 +242,7 @@ null_hashins(struct mount * mp, struct null_node * xp, struct vnode ** vpp)
 	struct null_node_hashhead * hd = NULL;
 	struct null_node * oxp = NULL;
 	struct vnode * ovp = NULL;
+	uint32_t oxp_vid = 0;
 	int error = 0;
 
 	hd = NULL_NHASH(xp->null_lowervp);
@@ -259,6 +263,8 @@ null_hashins(struct mount * mp, struct null_node * xp, struct vnode ** vpp)
 				 *  don't add it.*/
 				error = EIO;
 				ovp = NULL;
+			} else {
+				oxp_vid = oxp->null_myvid;
 			}
 			goto end;
 		}
@@ -271,7 +277,7 @@ end:
 	lck_mtx_unlock(&null_hashmtx);
 	if (ovp != NULL) {
 		/* if we found something in the hash map then grab an iocount */
-		error = vnode_getwithvid(ovp, oxp->null_myvid);
+		error = vnode_getwithvid(ovp, oxp_vid);
 		if (error == 0) {
 			*vpp = ovp;
 		}

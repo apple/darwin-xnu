@@ -4415,13 +4415,21 @@ ipsec6_tunnel_validate(
 		panic("too short mbuf on ipsec6_tunnel_validate");
 	}
 #endif
-	if (nxt != IPPROTO_IPV4 && nxt != IPPROTO_IPV6) {
+	if (nxt == IPPROTO_IPV4) {
+		if (m->m_pkthdr.len < off + sizeof(struct ip)) {
+			ipseclog((LOG_NOTICE, "ipsec6_tunnel_validate pkthdr %d off %d ip6hdr %zu", m->m_pkthdr.len, off, sizeof(struct ip6_hdr)));
+			return 0;
+		}
+	} else if (nxt == IPPROTO_IPV6) {
+		if (m->m_pkthdr.len < off + sizeof(struct ip6_hdr)) {
+			ipseclog((LOG_NOTICE, "ipsec6_tunnel_validate pkthdr %d off %d ip6hdr %zu", m->m_pkthdr.len, off, sizeof(struct ip6_hdr)));
+			return 0;
+		}
+	} else {
+		ipseclog((LOG_NOTICE, "ipsec6_tunnel_validate invalid nxt(%u) protocol", nxt));
 		return 0;
 	}
 
-	if (m->m_pkthdr.len < off + sizeof(struct ip6_hdr)) {
-		return 0;
-	}
 	/* do not decapsulate if the SA is for transport mode only */
 	if (sav->sah->saidx.mode == IPSEC_MODE_TRANSPORT) {
 		return 0;

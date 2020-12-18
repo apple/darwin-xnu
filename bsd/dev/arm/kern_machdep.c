@@ -37,6 +37,31 @@ cpu_subtype32()
 	}
 }
 
+static int
+grade_arm64e_binary(cpu_subtype_t execfeatures)
+{
+#if XNU_TARGET_OS_IOS
+	/*
+	 * iOS 13 toolchains produced unversioned arm64e slices which are not
+	 * ABI compatible with this release.
+	 */
+	if ((execfeatures & CPU_SUBTYPE_PTRAUTH_ABI) == 0) {
+#if DEBUG || DEVELOPMENT
+		printf("%s: arm64e prerelease ABI cannot be used with this kernel\n", __func__);
+#endif /* DEBUG || DEVELOPMENT */
+		return 0;
+	}
+#endif /* XNU_TARGET_OS_IOS */
+
+	/* The current ABI version is preferred over arm64 */
+	if (CPU_SUBTYPE_ARM64_PTR_AUTH_VERSION(execfeatures) ==
+	    CPU_SUBTYPE_ARM64_PTR_AUTH_CURRENT_VERSION) {
+		return 12;
+	}
+
+	/* Future ABIs are allowed, but exec_mach_imgact will treat it like an arm64 slice */
+	return 11;
+}
 #endif /* __arm64__ */
 
 /**********************************************************************
@@ -70,6 +95,15 @@ grade_binary(cpu_type_t exectype, cpu_subtype_t execsubtype, cpu_subtype_t execf
 			}
 			break;
 
+		case CPU_SUBTYPE_ARM64E:
+			switch (execsubtype) {
+			case CPU_SUBTYPE_ARM64E:
+				return grade_arm64e_binary(execfeatures);
+			case CPU_SUBTYPE_ARM64_V8:
+				return 10;
+			case CPU_SUBTYPE_ARM64_ALL:
+				return 9;
+			}
 		} /* switch (hostsubtype) */
 		break;
 

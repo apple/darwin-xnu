@@ -72,6 +72,7 @@ __enum_decl(startup_subsystem_id_t, uint32_t, {
 	STARTUP_SUB_CODESIGNING,      /**< codesigning subsystem               */
 	STARTUP_SUB_OSLOG,            /**< oslog and kernel loggging           */
 	STARTUP_SUB_MACH_IPC,         /**< Mach IPC                            */
+	STARTUP_SUB_SYSCTL,           /**< registers sysctls                   */
 	STARTUP_SUB_EARLY_BOOT,       /**< interrupts/premption are turned on  */
 
 	STARTUP_SUB_LOCKDOWN = ~0u,   /**< reserved for the startup subsystem  */

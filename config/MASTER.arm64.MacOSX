@@ -18,8 +18,8 @@
 #
 #  KERNEL_BASE =    [ arm64 medium msgb_large config_arrow config_requires_u32_munging config_zcache config_delay_idle_sleep config_proc_udata_storage ARM_EXTRAS_BASE ]
 #  KERNEL_RELEASE = [ KERNEL_BASE ]
-#  KERNEL_DEV =     [ KERNEL_BASE development mach_assert config_xnupost proc_ref_debug os_reason_debug pgtrace config_zalloc_sequester ]
-#  KERNEL_DEBUG =   [ KERNEL_BASE debug mach_assert config_xnupost config_ltable_stats config_ltable_debug config_waitq_stats config_workloop_debug config_waitq_debug pgtrace config_zalloc_sequester ]
+#  KERNEL_DEV =     [ KERNEL_BASE development mach_assert config_xnupost proc_ref_debug os_reason_debug pgtrace ]
+#  KERNEL_DEBUG =   [ KERNEL_BASE debug mach_assert config_xnupost config_ltable_stats config_ltable_debug config_waitq_stats config_workloop_debug config_waitq_debug pgtrace ]
 #  BSD_BASE =       [ mach_bsd sysv_sem sysv_msg sysv_shm config_netboot config_imageboot config_workqueue psynch config_proc_uuid_policy config_coredump pgo config_personas ]
 #  BSD_RELEASE =    [ BSD_BASE ]
 #  BSD_DEV =        [ BSD_BASE config_vnguard ]
@@ -40,11 +40,7 @@
 #  VPN =            [ ipsec flow_divert necp content_filter ]
 #  PF =             [ pf pflog ]
 #  MULTIPATH =      [ multipath mptcp ]
-#ifdef SOC_CONFIG_t8020
 #  HIBERNATION =    [ ]
-#else /*!SOC_CONFIG_t8020*/
-#  HIBERNATION =    [ hibernation ]
-#endif /*!SOC_CONFIG_t8020*/
 #  IOKIT_BASE =     [ iokit iokitcpp no_kernel_hid config_sleep iokitstats HIBERNATION ]
 #  IOKIT_RELEASE =  [ IOKIT_BASE ]
 #  IOKIT_DEV =      [ IOKIT_BASE iotracking ]

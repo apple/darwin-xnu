@@ -87,7 +87,8 @@ typedef uint16_t ipc_kmsg_flags_t;
 #define IPC_KMSG_FLAGS_ALLOW_IMMOVABLE_SEND 0x1       /* Dest port contains an immovable send right */
 
 #if (DEVELOPMENT || DEBUG)
-#define IKM_PARTIAL_SIG        1     /* Keep partial message signatures for better debug */
+/* Turn on to keep partial message signatures for better debug */
+#define IKM_PARTIAL_SIG        0
 #endif
 
 /*
@@ -175,46 +176,6 @@ MACRO_END
 MACRO_BEGIN                                                             \
 	(kmsg)->ikm_prealloc = IP_NULL;                                 \
 MACRO_END
-
-#if MACH_FLIPC
-#define ikm_flipc_init(kmsg) (kmsg)->ikm_node = MACH_NODE_NULL
-#else
-#define ikm_flipc_init(kmsg)
-#endif
-
-#if IKM_PARTIAL_SIG
-#define ikm_init(kmsg, size)                                    \
-MACRO_BEGIN                                                     \
-	(kmsg)->ikm_size = (size);                                  \
-	(kmsg)->ikm_flags = 0;                                      \
-	(kmsg)->ikm_prealloc = IP_NULL;                             \
-	(kmsg)->ikm_data = NULL;                                    \
-	(kmsg)->ikm_voucher = IP_NULL;                              \
-	(kmsg)->ikm_importance = IIE_NULL;                          \
-	(kmsg)->ikm_filter_policy_id = 0;                           \
-	(kmsg)->ikm_header_sig = 0;                                 \
-	(kmsg)->ikm_headtrail_sig = 0;                              \
-	(kmsg)->ikm_signature = 0;                                  \
-	ikm_qos_init(kmsg);                                         \
-	ikm_flipc_init(kmsg);                                       \
-	assert((kmsg)->ikm_prev = (kmsg)->ikm_next = IKM_BOGUS);    \
-MACRO_END
-#else
-#define ikm_init(kmsg, size)                                    \
-MACRO_BEGIN                                                     \
-	(kmsg)->ikm_size = (size);                                  \
-	(kmsg)->ikm_flags = 0;                                      \
-	(kmsg)->ikm_prealloc = IP_NULL;                             \
-	(kmsg)->ikm_data = NULL;                                    \
-	(kmsg)->ikm_voucher = IP_NULL;                              \
-	(kmsg)->ikm_importance = IIE_NULL;                          \
-	(kmsg)->ikm_filter_policy_id = 0;                           \
-	(kmsg)->ikm_signature = 0;                                  \
-	ikm_qos_init(kmsg);                                         \
-	ikm_flipc_init(kmsg);                                       \
-	assert((kmsg)->ikm_prev = (kmsg)->ikm_next = IKM_BOGUS);    \
-MACRO_END
-#endif
 
 #define ikm_qos_init(kmsg)                                              \
 MACRO_BEGIN                                                             \

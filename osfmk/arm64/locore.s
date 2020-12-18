@@ -27,7 +27,6 @@
  */
 
 #include <machine/asm.h>
-#include <arm64/hv/hv_regs.h>
 #include <arm64/machine_routines_asm.h>
 #include <arm64/proc_reg.h>
 #include <pexpert/arm64/board_config.h>
@@ -1143,7 +1142,7 @@ no_asts:
 
 #endif
 
-#if defined(APPLELIGHTNING)
+#if defined(APPLELIGHTNING) || defined(APPLEFIRESTORM)
 
 	mrs		x12, ARM64_REG_HID1                         // if any debug session ever existed, set forceNexL3ClkOn
 	orr		x12, x12, ARM64_REG_HID1_forceNexL3ClkOn
@@ -1226,13 +1225,6 @@ Lexception_return_restore_registers:
 	//		} else {
 	//			disable_jop = thread->machine.disable_user_jop;
 	//		}
-#if DEVELOPMENT || DEBUG
-	adrp	x4, EXT(const_boot_args)@page
-	add		x4, x4, EXT(const_boot_args)@pageoff
-	ldr		x4, [x4, BA_BOOT_FLAGS]
-	and		x1, x4, BA_BOOT_FLAGS_DISABLE_USER_JOP
-	cbnz	x1, Ldisable_jop
-#endif
 	mrs		x2, TPIDR_EL1
 	ldrb	w1, [x2, TH_DISABLE_USER_JOP]
 	cbz		w1, Lenable_jop
@@ -1263,6 +1255,13 @@ Lenable_jop:
 	ldr		x1, [x2, TH_JOP_PID]
 	ldr		x2, [x2, ACT_CPUDATAP]
 	REPROGRAM_JOP_KEYS	Ldone_reconfigure_jop, x1, x2, x3
+#if defined(__ARM_ARCH_8_5__)
+	/**
+	 * The new keys will be used after eret to userspace, so explicit sync is
+	 * required iff eret is non-synchronizing.
+	 */
+	isb		sy
+#endif /* defined(__ARM_ARCH_8_5__) */
 #endif /* HAS_PAC_SLOW_A_KEY_SWITCHING */
 Ldone_reconfigure_jop:
 #endif /* defined(HAS_APPLE_PAC) */
@@ -1908,8 +1907,6 @@ LEXT(ml_panic_trap_to_debugger)
 	ldr		x12, [x11, PMAP_CPU_DATA_KERN_SAVED_SP]
 	mov		sp, x12
 
-	// we want interrupts to stay masked after exiting PPL when calling into panic to halt system
-	// x10 is used in ppl_return_to_kernel_mode restore desired DAIF state after GEXIT
 	mrs		x10, DAIF
 	mov		w13, #PPL_STATE_PANIC
 	str		w13, [x11, PMAP_CPU_DATA_PPL_STATE]

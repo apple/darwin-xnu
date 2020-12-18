@@ -367,10 +367,18 @@ extern lck_attr_t       ipc_lck_attr;
 extern lck_spin_t ipc_port_multiple_lock_data;
 
 #define ipc_port_multiple_lock()                                        \
-	        lck_spin_lock_grp(&ipc_port_multiple_lock_data, &ipc_lck_grp)
+	lck_spin_lock_grp(&ipc_port_multiple_lock_data, &ipc_lck_grp)
 
 #define ipc_port_multiple_unlock()                                      \
-	        lck_spin_unlock(&ipc_port_multiple_lock_data)
+	lck_spin_unlock(&ipc_port_multiple_lock_data)
+
+/*
+ *	Search for the end of the chain (a port not in transit),
+ *	acquiring locks along the way.
+ */
+extern boolean_t ipc_port_destination_chain_lock(
+	ipc_port_t port,
+	ipc_port_t *base);
 
 /*
  *	The port timestamp facility provides timestamps

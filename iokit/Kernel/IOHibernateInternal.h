@@ -31,22 +31,12 @@
 
 #ifdef __cplusplus
 
-#if HIBERNATE_HMAC_IMAGE
-#include <libkern/crypto/sha2.h>
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 enum { kIOHibernateAESKeySize = 16 };  /* bytes */
 
-#if HIBERNATE_HMAC_IMAGE
-// when we call out to PPL to compute IOHibernateHibSegInfo, we use
-// srcBuffer as a temporary buffer, to copy out all of the required
-// HIB segments, so it should be big enough to contain those segments
-#define HIBERNATION_SRC_BUFFER_SIZE (16 * 1024 * 1024)
-#else
 // srcBuffer has to be big enough for a source page, the WKDM
 // compressed output, and a scratch page needed by WKDM
 #define HIBERNATION_SRC_BUFFER_SIZE (2 * page_size + WKdm_SCRATCH_BUF_SIZE_INTERNAL)
-#endif
 
 struct IOHibernateVars {
 	hibernate_page_list_t *             page_list;
@@ -73,9 +63,6 @@ struct IOHibernateVars {
 	uint8_t                             cryptKey[kIOHibernateAESKeySize];
 	size_t                              volumeCryptKeySize;
 	uint8_t                             volumeCryptKey[64];
-#if HIBERNATE_HMAC_IMAGE
-	SHA256_CTX *                        imageShaCtx;
-#endif /* HIBERNATE_HMAC_IMAGE */
 };
 typedef struct IOHibernateVars IOHibernateVars;
 

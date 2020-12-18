@@ -623,6 +623,9 @@ cpu_init(void)
 		case CPU_ARCH_ARMv8:
 			cdp->cpu_subtype = CPU_SUBTYPE_ARM64_V8;
 			break;
+		case CPU_ARCH_ARMv8E:
+			cdp->cpu_subtype = CPU_SUBTYPE_ARM64E;
+			break;
 		default:
 			//cdp->cpu_subtype = CPU_SUBTYPE_ARM64_ALL;
 			/* this panic doesn't work this early in startup */

@@ -46,8 +46,6 @@ static struct cckprng_ctx *prng_ctx;
 static SECURITY_READ_ONLY_LATE(struct cckprng_funcs) prng_funcs;
 static SECURITY_READ_ONLY_LATE(int) prng_ready;
 
-extern entropy_data_t EntropyData;
-
 #define SEED_SIZE (SHA256_DIGEST_LENGTH)
 static uint8_t bootseed[SEED_SIZE];
 
@@ -268,13 +266,13 @@ register_and_init_prng(struct cckprng_ctx *ctx, const struct cckprng_funcs *func
 	assert(cpu_number() == master_cpu);
 	assert(!prng_ready);
 
-	entropy_buffer_init();
+	entropy_init();
 
 	prng_ctx = ctx;
 	prng_funcs = *funcs;
 
 	uint64_t nonce = ml_get_timebase();
-	prng_funcs.init(prng_ctx, MAX_CPUS, EntropyData.buffer_size, EntropyData.buffer, &EntropyData.sample_count, sizeof(bootseed), bootseed, sizeof(nonce), &nonce);
+	prng_funcs.init_with_getentropy(prng_ctx, MAX_CPUS, sizeof(bootseed), bootseed, sizeof(nonce), &nonce, entropy_provide, NULL);
 	prng_funcs.initgen(prng_ctx, master_cpu);
 	prng_ready = 1;
 

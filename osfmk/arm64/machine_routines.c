@@ -62,8 +62,6 @@
 #include <IOKit/IOPlatformExpert.h>
 #if HIBERNATION
 #include <IOKit/IOHibernatePrivate.h>
-#include <arm64/hibernate_ppl_hmac.h>
-#include <arm64/ppl/ppl_hib.h>
 #endif /* HIBERNATION */
 
 #if defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR)
@@ -152,6 +150,11 @@ extern uint32_t lockdown_done;
  * (pre-mapped) in each user address space.
  */
 SECURITY_READ_ONLY_LATE(static struct vm_reserved_region) vm_reserved_regions[] = {
+	{
+		.vmrr_name = "GPU Carveout",
+		.vmrr_addr = MACH_VM_MIN_GPU_CARVEOUT_ADDRESS,
+		.vmrr_size = (vm_map_size_t)(MACH_VM_MAX_GPU_CARVEOUT_ADDRESS - MACH_VM_MIN_GPU_CARVEOUT_ADDRESS)
+	},
 	/*
 	 * Reserve the virtual memory space representing the commpage nesting region
 	 * to prevent user processes from allocating memory within it. The actual
@@ -402,6 +405,21 @@ machine_startup(__unused boot_args * args)
 	/* NOTREACHED */
 }
 
+typedef void (*invalidate_fn_t)(void);
+
+static SECURITY_READ_ONLY_LATE(invalidate_fn_t) invalidate_hmac_function = NULL;
+
+void set_invalidate_hmac_function(invalidate_fn_t fn);
+
+void
+set_invalidate_hmac_function(invalidate_fn_t fn)
+{
+	if (NULL != invalidate_hmac_function) {
+		panic("Invalidate HMAC function already set");
+	}
+
+	invalidate_hmac_function = fn;
+}
 
 void
 machine_lockdown(void)
@@ -436,25 +454,13 @@ machine_lockdown(void)
 	rorgn_lockdown();
 #endif /* defined(KERNEL_INTEGRITY_KTRR) || defined(KERNEL_INTEGRITY_CTRR) */
 
-#if HIBERNATION
-	/* sign the kernel read-only region */
-	if (ppl_hmac_init() == KERN_SUCCESS) {
-		ppl_hmac_compute_rorgn_hmac();
-	}
-#endif /* HIBERNATION */
 
 #endif /* CONFIG_KERNEL_INTEGRITY */
 
-#if HIBERNATION
-	/* Avoid configuration security issues by panic'ing if hibernation is
-	 * supported but we don't know how to invalidate SIO HMAC keys, see
-	 * below. */
-	if (ppl_hib_hibernation_supported() &&
-	    NULL == invalidate_hmac_function) {
-		panic("Invalidate HMAC function wasn't set when needed");
-	}
-#endif  /* HIBERNATION */
 
+	if (NULL != invalidate_hmac_function) {
+		invalidate_hmac_function();
+	}
 
 	lockdown_done = 1;
 }
@@ -903,6 +909,12 @@ ml_parse_cpu_topology(void)
 		ml_read_reg_range(child, "coresight-reg", &cpu->coresight_pa, &cpu->coresight_len);
 		cpu->cluster_type = CLUSTER_TYPE_SMP;
 
+		int cluster_type = (int)ml_readprop(child, "cluster-type", 0);
+		if (cluster_type == 'E') {
+			cpu->cluster_type = CLUSTER_TYPE_E;
+		} else if (cluster_type == 'P') {
+			cpu->cluster_type = CLUSTER_TYPE_P;
+		}
 
 		/*
 		 * Since we want to keep a linear cluster ID space, we cannot just rely
@@ -912,7 +924,7 @@ ml_parse_cpu_topology(void)
 #if HAS_CLUSTER
 		uint32_t phys_cluster_id = MPIDR_CLUSTER_ID(cpu->phys_id);
 #else
-		uint32_t phys_cluster_id = 0;
+		uint32_t phys_cluster_id = (cpu->cluster_type == CLUSTER_TYPE_P);
 #endif
 		assert(phys_cluster_id <= MAX_CPU_CLUSTER_PHY_ID);
 		cpu->cluster_id = ((cluster_phys_to_logical[phys_cluster_id] == -1) ?
@@ -1817,8 +1829,7 @@ ml_get_timebase()
 /*
  * Get the speculative timebase without an ISB.
  */
-__attribute__((unused))
-static uint64_t
+uint64_t
 ml_get_speculative_timebase()
 {
 	uint64_t timebase;
@@ -1826,6 +1837,12 @@ ml_get_speculative_timebase()
 	timebase = __builtin_arm_rsr64("CNTVCT_EL0");
 
 	return timebase + getCpuDatap()->cpu_base_timebase;
+}
+
+uint64_t
+ml_get_timebase_entropy(void)
+{
+	return ml_get_speculative_timebase();
 }
 
 uint32_t
@@ -2275,7 +2292,9 @@ ex_cb_invoke(
 static inline bool
 cpu_supports_userkeyen()
 {
-#if   HAS_APCTL_EL1_USERKEYEN
+#if defined(APPLEFIRESTORM)
+	return __builtin_arm_rsr64(ARM64_REG_APCTL_EL1) & APCTL_EL1_UserKeyEn;
+#elif HAS_APCTL_EL1_USERKEYEN
 	return true;
 #else
 	return false;
@@ -2370,7 +2389,6 @@ ml_thread_set_jop_pid(thread_t thread, task_t task)
 }
 #endif /* defined(HAS_APPLE_PAC) */
 
-
 #if defined(HAS_APPLE_PAC)
 #define _ml_auth_ptr_unchecked(_ptr, _suffix, _modifier) \
 	asm volatile ("aut" #_suffix " %[ptr], %[modifier]" : [ptr] "+r"(_ptr) : [modifier] "r"(_modifier));
@@ -2425,8 +2443,6 @@ ml_hibernate_active_pre(void)
 {
 #if HIBERNATION
 	if (kIOHibernateStateWakingFromHibernate == gIOHibernateState) {
-		/* validate rorgn hmac */
-		ppl_hmac_compute_rorgn_hmac();
 
 		hibernate_rebuild_vm_structs();
 	}

@@ -1928,7 +1928,11 @@ mptcp_adj_rmap(struct socket *so, struct mbuf *m, int off, uint64_t dsn,
 		return 0;
 	}
 
-	if ((m->m_flags & M_PKTHDR) && (m->m_pkthdr.pkt_flags & PKTF_MPTCP)) {
+	if (!(m->m_flags & M_PKTHDR)) {
+		return 0;
+	}
+
+	if (m->m_pkthdr.pkt_flags & PKTF_MPTCP) {
 		if (off && (dsn != m->m_pkthdr.mp_dsn ||
 		    rseq != m->m_pkthdr.mp_rseq ||
 		    dlen != m->m_pkthdr.mp_rlen)) {
@@ -1941,33 +1945,37 @@ mptcp_adj_rmap(struct socket *so, struct mbuf *m, int off, uint64_t dsn,
 			soevent(mpts->mpts_socket, SO_FILT_HINT_LOCKED | SO_FILT_HINT_MUSTRST);
 			return -1;
 		}
-		m->m_pkthdr.mp_dsn += off;
-		m->m_pkthdr.mp_rseq += off;
+	}
 
-		VERIFY(m_pktlen(m) < UINT16_MAX);
-		m->m_pkthdr.mp_rlen = (uint16_t)m_pktlen(m);
-	} else {
-		if (!(mpts->mpts_flags & MPTSF_FULLY_ESTABLISHED)) {
-			/* data arrived without an DSS option mapping */
+	/* If mbuf is beyond right edge of the mapping, we need to split */
+	if (m_pktlen(m) > dlen - off) {
+		struct mbuf *new = m_split(m, dlen - off, M_DONTWAIT);
+		if (new == NULL) {
+			os_log_error(mptcp_log_handle, "%s - %lx: m_split failed dlen %u off %d pktlen %d, killing subflow %d",
+			    __func__, (unsigned long)VM_KERNEL_ADDRPERM(mpts->mpts_mpte),
+			    dlen, off, m_pktlen(m),
+			    mpts->mpts_connid);
 
-			/* initial subflow can fallback right after SYN handshake */
-			if (mpts->mpts_flags & MPTSF_INITIAL_SUB) {
-				mptcp_notify_mpfail(so);
-			} else {
-				soevent(mpts->mpts_socket, SO_FILT_HINT_LOCKED | SO_FILT_HINT_MUSTRST);
+			soevent(mpts->mpts_socket, SO_FILT_HINT_LOCKED | SO_FILT_HINT_MUSTRST);
+			return -1;
+		}
 
-				return -1;
-			}
-		} else if (m->m_flags & M_PKTHDR) {
-			/* We need to fake the DATA-mapping */
-			m->m_pkthdr.pkt_flags |= PKTF_MPTCP;
-			m->m_pkthdr.mp_dsn = dsn + off;
-			m->m_pkthdr.mp_rseq = rseq + off;
+		m->m_next = new;
+		sballoc(&so->so_rcv, new);
+		/* Undo, as sballoc will add to it as well */
+		so->so_rcv.sb_cc -= new->m_len;
 
-			VERIFY(m_pktlen(m) < UINT16_MAX);
-			m->m_pkthdr.mp_rlen = (uint16_t)m_pktlen(m);
+		if (so->so_rcv.sb_mbtail == m) {
+			so->so_rcv.sb_mbtail = new;
 		}
 	}
+
+	m->m_pkthdr.pkt_flags |= PKTF_MPTCP;
+	m->m_pkthdr.mp_dsn = dsn + off;
+	m->m_pkthdr.mp_rseq = rseq + off;
+
+	VERIFY(m_pktlen(m) < UINT16_MAX);
+	m->m_pkthdr.mp_rlen = (uint16_t)m_pktlen(m);
 
 	mpts->mpts_flags |= MPTSF_FULLY_ESTABLISHED;
 
@@ -1982,11 +1990,15 @@ mptcp_subflow_soreceive(struct socket *so, struct sockaddr **psa,
     struct uio *uio, struct mbuf **mp0, struct mbuf **controlp, int *flagsp)
 {
 #pragma unused(uio)
-	struct socket *mp_so = mptetoso(tptomptp(sototcpcb(so))->mpt_mpte);
+	struct socket *mp_so;
+	struct mptses *mpte;
+	struct mptcb *mp_tp;
 	int flags, error = 0;
-	struct proc *p = current_proc();
 	struct mbuf *m, **mp = mp0;
-	boolean_t proc_held = FALSE;
+
+	mpte = tptomptp(sototcpcb(so))->mpt_mpte;
+	mp_so = mptetoso(mpte);
+	mp_tp = mpte->mpte_mptcb;
 
 	VERIFY(so->so_proto->pr_flags & PR_CONNREQUIRED);
 
@@ -2107,16 +2119,6 @@ mptcp_subflow_soreceive(struct socket *so, struct sockaddr **psa,
 
 	mptcp_update_last_owner(so, mp_so);
 
-	if (mp_so->last_pid != proc_pid(p)) {
-		p = proc_find(mp_so->last_pid);
-		if (p == PROC_NULL) {
-			p = current_proc();
-		} else {
-			proc_held = TRUE;
-		}
-	}
-
-	OSIncrementAtomicLong(&p->p_stats->p_ru.ru_msgrcv);
 	SBLASTRECORDCHK(&so->so_rcv, "mptcp_subflow_soreceive 1");
 	SBLASTMBUFCHK(&so->so_rcv, "mptcp_subflow_soreceive 1");
 
@@ -2130,18 +2132,9 @@ mptcp_subflow_soreceive(struct socket *so, struct sockaddr **psa,
 
 		VERIFY(m->m_nextpkt == NULL);
 
-		if ((m->m_flags & M_PKTHDR) && (m->m_pkthdr.pkt_flags & PKTF_MPTCP)) {
-			orig_dlen = dlen = m->m_pkthdr.mp_rlen;
-			dsn = m->m_pkthdr.mp_dsn;
-			sseq = m->m_pkthdr.mp_rseq;
-			csum = m->m_pkthdr.mp_csum;
-		} else {
-			/* We did fallback */
-			if (mptcp_adj_rmap(so, m, 0, 0, 0, 0)) {
-				error = EIO;
-				*mp0 = NULL;
-				goto release;
-			}
+		if (mp_tp->mpt_flags & MPTCPF_FALLBACK_TO_TCP) {
+fallback:
+			/* Just move mbuf to MPTCP-level */
 
 			sbfree(&so->so_rcv, m);
 
@@ -2159,20 +2152,93 @@ mptcp_subflow_soreceive(struct socket *so, struct sockaddr **psa,
 			}
 
 			continue;
-		}
+		} else if (!(m->m_flags & M_PKTHDR) || !(m->m_pkthdr.pkt_flags & PKTF_MPTCP)) {
+			struct mptsub *mpts = sototcpcb(so)->t_mpsub;
+			boolean_t found_mapping = false;
+			int parsed_length = 0;
+			struct mbuf *m_iter;
 
-		if (m->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN) {
-			dfin = 1;
+			/*
+			 * No MPTCP-option in the header. Either fallback or
+			 * wait for additional mappings.
+			 */
+			if (!(mpts->mpts_flags & MPTSF_FULLY_ESTABLISHED)) {
+				/* data arrived without a DSS option mapping */
+
+				/* initial subflow can fallback right after SYN handshake */
+				if (mpts->mpts_flags & MPTSF_INITIAL_SUB) {
+					mptcp_notify_mpfail(so);
+
+					goto fallback;
+				} else {
+					os_log_error(mptcp_log_handle, "%s - %lx: No DSS on secondary subflow. Killing %d\n",
+					    __func__, (unsigned long)VM_KERNEL_ADDRPERM(mpte),
+					    mpts->mpts_connid);
+					soevent(mpts->mpts_socket, SO_FILT_HINT_LOCKED | SO_FILT_HINT_MUSTRST);
+
+					error = EIO;
+					*mp0 = NULL;
+					goto release;
+				}
+			}
+
+			/* Thus, let's look for an mbuf with the mapping */
+			m_iter = m->m_next;
+			parsed_length = m->m_len;
+			while (m_iter != NULL && parsed_length < UINT16_MAX) {
+				if (!(m_iter->m_flags & M_PKTHDR) || !(m_iter->m_pkthdr.pkt_flags & PKTF_MPTCP)) {
+					parsed_length += m_iter->m_len;
+					m_iter = m_iter->m_next;
+					continue;
+				}
+
+				found_mapping = true;
+
+				/* Found an mbuf with a DSS-mapping */
+				orig_dlen = dlen = m_iter->m_pkthdr.mp_rlen;
+				dsn = m_iter->m_pkthdr.mp_dsn;
+				sseq = m_iter->m_pkthdr.mp_rseq;
+				csum = m_iter->m_pkthdr.mp_csum;
+
+				if (m_iter->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN) {
+					dfin = 1;
+				}
+
+				break;
+			}
+
+			if (!found_mapping && parsed_length < UINT16_MAX) {
+				/* Mapping not yet present, we can wait! */
+				if (*mp0 == NULL) {
+					error = EWOULDBLOCK;
+				}
+				goto release;
+			} else if (!found_mapping && parsed_length >= UINT16_MAX) {
+				os_log_error(mptcp_log_handle, "%s - %lx: Received more than 64KB without DSS mapping. Killing %d\n",
+				    __func__, (unsigned long)VM_KERNEL_ADDRPERM(mpte),
+				    mpts->mpts_connid);
+				/* Received 64KB without DSS-mapping. We should kill the subflow */
+				soevent(mpts->mpts_socket, SO_FILT_HINT_LOCKED | SO_FILT_HINT_MUSTRST);
+
+				error = EIO;
+				*mp0 = NULL;
+				goto release;
+			}
+		} else {
+			orig_dlen = dlen = m->m_pkthdr.mp_rlen;
+			dsn = m->m_pkthdr.mp_dsn;
+			sseq = m->m_pkthdr.mp_rseq;
+			csum = m->m_pkthdr.mp_csum;
+
+			if (m->m_pkthdr.pkt_flags & PKTF_MPTCP_DFIN) {
+				dfin = 1;
+			}
 		}
 
 		/*
 		 * Check if the full mapping is now present
 		 */
 		if ((int)so->so_rcv.sb_cc < dlen - dfin) {
-			mptcplog((LOG_INFO, "%s not enough data (%u) need %u for dsn %u\n",
-			    __func__, so->so_rcv.sb_cc, dlen, (uint32_t)dsn),
-			    MPTCP_RECEIVER_DBG, MPTCP_LOGLVL_LOG);
-
 			if (*mp0 == NULL) {
 				error = EWOULDBLOCK;
 			}
@@ -2238,10 +2304,6 @@ mptcp_subflow_soreceive(struct socket *so, struct sockaddr **psa,
 release:
 	sbunlock(&so->so_rcv, TRUE);
 
-	if (proc_held) {
-		proc_rele(p);
-	}
-
 	return error;
 }
 
@@ -2253,8 +2315,8 @@ mptcp_subflow_sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
     struct mbuf *top, struct mbuf *control, int flags)
 {
 	struct socket *mp_so = mptetoso(tptomptp(sototcpcb(so))->mpt_mpte);
-	struct proc *p = current_proc();
 	boolean_t en_tracing = FALSE, proc_held = FALSE;
+	struct proc *p = current_proc();
 	int en_tracing_val;
 	int sblocked = 1; /* Pretend as if it is already locked, so we won't relock it */
 	int error;
@@ -2300,8 +2362,6 @@ mptcp_subflow_sosend(struct socket *so, struct sockaddr *addr, struct uio *uio,
 #if NECP
 	inp_update_necp_policy(sotoinpcb(so), NULL, NULL, 0);
 #endif /* NECP */
-
-	OSIncrementAtomicLong(&p->p_stats->p_ru.ru_msgsnd);
 
 	error = sosendcheck(so, NULL, top->m_pkthdr.len, 0, 1, 0, &sblocked);
 	if (error) {

@@ -1129,6 +1129,57 @@ drop_assertions:
 }
 
 /*
+ *	Routine:	ipc_port_destination_chain_lock
+ *	Purpose:
+ *		Search for the end of the chain (a port not in transit),
+ *		acquiring locks along the way, and return it in `base`.
+ *
+ *		Returns true if a reference was taken on `base`
+ *
+ *	Conditions:
+ *		No ports locked.
+ *		ipc_port_multiple_lock held.
+ */
+boolean_t
+ipc_port_destination_chain_lock(
+	ipc_port_t port,
+	ipc_port_t *base)
+{
+	for (;;) {
+		ip_lock(port);
+
+		if (!ip_active(port)) {
+			/*
+			 * Active ports that are ip_lock()ed cannot go away.
+			 *
+			 * But inactive ports at the end of walking
+			 * an ip_destination chain are only protected
+			 * from space termination cleanup while the entire
+			 * chain of ports leading to them is held.
+			 *
+			 * Callers of this code tend to unlock the chain
+			 * in the same order than this walk which doesn't
+			 * protect `base` properly when it's inactive.
+			 *
+			 * In that case, take a reference that the caller
+			 * is responsible for releasing.
+			 */
+			ip_reference(port);
+			*base = port;
+			return true;
+		}
+		if ((port->ip_receiver_name != MACH_PORT_NULL) ||
+		    (port->ip_destination == IP_NULL)) {
+			*base = port;
+			return false;
+		}
+
+		port = port->ip_destination;
+	}
+}
+
+
+/*
  *	Routine:	ipc_port_check_circularity
  *	Purpose:
  *		Check if queueing "port" in a message for "dest"
@@ -1156,6 +1207,7 @@ ipc_port_check_circularity(
 #else
 	ipc_port_t base;
 	struct task_watchport_elem *watchport_elem = NULL;
+	bool took_base_ref = false;
 
 	assert(port != IP_NULL);
 	assert(dest != IP_NULL);
@@ -1193,18 +1245,7 @@ ipc_port_check_circularity(
 	 *	acquiring locks along the way.
 	 */
 
-	for (;;) {
-		ip_lock(base);
-
-		if (!ip_active(base) ||
-		    (base->ip_receiver_name != MACH_PORT_NULL) ||
-		    (base->ip_destination == IP_NULL)) {
-			break;
-		}
-
-		base = base->ip_destination;
-	}
-
+	took_base_ref = ipc_port_destination_chain_lock(dest, &base);
 	/* all ports in chain from dest to base, inclusive, are locked */
 
 	if (port == base) {
@@ -1216,6 +1257,7 @@ ipc_port_check_circularity(
 		require_ip_active(port);
 		assert(port->ip_receiver_name == MACH_PORT_NULL);
 		assert(port->ip_destination == IP_NULL);
+		assert(!took_base_ref);
 
 		base = dest;
 		while (base != IP_NULL) {
@@ -1310,6 +1352,9 @@ not_circular:
 	    (base->ip_destination == IP_NULL));
 
 	ip_unlock(base);
+	if (took_base_ref) {
+		ip_release(base);
+	}
 
 	/* All locks dropped, call turnstile_update_inheritor_complete for source port's turnstile */
 	if (send_turnstile) {
@@ -2382,7 +2427,8 @@ ipc_port_importance_delta_internal(
 	ipc_importance_task_t   *imp_task)
 {
 	ipc_port_t next, base;
-	boolean_t dropped = FALSE;
+	bool dropped = false;
+	bool took_base_ref = false;
 
 	*imp_task = IIT_NULL;
 
@@ -2398,18 +2444,14 @@ ipc_port_importance_delta_internal(
 	if (ip_active(port) &&
 	    port->ip_destination != IP_NULL &&
 	    port->ip_receiver_name == MACH_PORT_NULL) {
-		dropped = TRUE;
+		dropped = true;
 
 		ip_unlock(port);
 		ipc_port_multiple_lock(); /* massive serialization */
-		ip_lock(base);
 
-		while (ip_active(base) &&
-		    base->ip_destination != IP_NULL &&
-		    base->ip_receiver_name == MACH_PORT_NULL) {
-			base = base->ip_destination;
-			ip_lock(base);
-		}
+		took_base_ref = ipc_port_destination_chain_lock(port, &base);
+		/* all ports in chain from port to base, inclusive, are locked */
+
 		ipc_port_multiple_unlock();
 	}
 
@@ -2475,8 +2517,11 @@ ipc_port_importance_delta_internal(
 		ipc_importance_task_reference(*imp_task);
 	}
 
-	if (dropped == TRUE) {
+	if (dropped) {
 		ip_unlock(base);
+		if (took_base_ref) {
+			ip_release(base);
+		}
 	}
 
 	return dropped;

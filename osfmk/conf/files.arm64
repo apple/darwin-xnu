@@ -7,7 +7,7 @@ osfmk/vm/vm_fourk_pager.c	 standard
 
 osfmk/arm64/hi_res_clock_map.c 	optional hi_res_clock
 
-osfmk/arm/pmap.c		standard
+osfmk/arm/pmap.c		optional nos_arm_pmap
 
 osfmk/arm64/bsd_arm64.c		optional mach_bsd
 osfmk/arm/machdep_call.c	optional mach_bsd
@@ -36,18 +36,19 @@ osfmk/arm64/arm_vm_init.c	standard
 osfmk/arm/io_map.c		standard
 osfmk/arm64/loose_ends.c	standard
 osfmk/arm/locks_arm.c	standard
-osfmk/arm64/locore.s	standard
-osfmk/arm64/gxf_exceptions.s	standard
+osfmk/arm64/locore.s	optional nos_arm_asm
+osfmk/arm64/gxf_exceptions.s	optional nos_arm_asm
 osfmk/arm64/lowmem_vectors.c	standard
 osfmk/arm64/sleh.c			standard
-osfmk/arm64/start.s	standard
-osfmk/arm64/pinst.s	standard
+osfmk/arm64/start.s	optional nos_arm_asm
+osfmk/arm64/pinst.s	optional nos_arm_asm
 osfmk/arm64/cswitch.s	standard
 osfmk/arm/machine_cpuid.c	standard
 osfmk/arm/machine_routines_common.c		standard
 osfmk/arm64/machine_routines.c		standard
-osfmk/arm64/machine_routines_asm.s	standard
+osfmk/arm64/machine_routines_asm.s	optional nos_arm_asm
 osfmk/arm64/machine_task.c		standard
+osfmk/arm/machine_routines_apple.c	optional nos_arm_asm
 osfmk/arm/pal_routines.c		standard
 osfmk/arm64/mcount.s		optional profile
 osfmk/arm64/memcmp_zero.s	standard
@@ -55,9 +56,10 @@ osfmk/arm64/strnlen.s   standard
 osfmk/arm64/strncmp.s   standard
 osfmk/arm/strncpy.c     standard
 osfmk/arm/strlcpy.c     standard
+osfmk/arm/trustcache.c		standard
 
 osfmk/arm/model_dep.c		standard
-osfmk/arm64/pcb.c		standard
+osfmk/arm64/pcb.c		optional nos_arm_pmap
 osfmk/arm/rtclock.c		standard
 osfmk/arm64/status.c		standard
 osfmk/arm/status_shared.c	standard

@@ -20,6 +20,8 @@ PRIVATE_KERNELFILES = \
 	H7.h \
 	H8.h \
 	H9.h \
+	H11.h \
+	H13.h \
 	BCM2837.h \
 	spr_locks.h
 
@@ -54,6 +56,8 @@ DATAFILES = \
 	H7.h \
 	H8.h \
 	H9.h \
+	H11.h \
+	H13.h \
 	BCM2837.h \
 	spr_locks.h
 

@@ -662,6 +662,14 @@ int pmap_stats_assert = 1;
 #endif /* DEVELOPMENT || DEBUG */
 
 
+#ifdef PLATFORM_BridgeOS
+static struct pmap_legacy_trust_cache *pmap_legacy_trust_caches MARK_AS_PMAP_DATA = NULL;
+#endif
+static struct pmap_image4_trust_cache *pmap_image4_trust_caches MARK_AS_PMAP_DATA = NULL;
+
+MARK_AS_PMAP_DATA SIMPLE_LOCK_DECLARE(pmap_loaded_trust_caches_lock, 0);
+
+
 /*
  * Represents a tlb range that will be flushed before exiting
  * the ppl.
@@ -1115,8 +1123,12 @@ SECURITY_READ_ONLY_LATE(boolean_t)      pmap_initialized = FALSE;       /* Has p
 
 SECURITY_READ_ONLY_LATE(vm_map_offset_t) arm_pmap_max_offset_default  = 0x0;
 #if defined(__arm64__)
+#  ifdef XNU_TARGET_OS_OSX
+SECURITY_READ_ONLY_LATE(vm_map_offset_t) arm64_pmap_max_offset_default = MACH_VM_MAX_ADDRESS;
+#  else
 SECURITY_READ_ONLY_LATE(vm_map_offset_t) arm64_pmap_max_offset_default = 0x0;
-#endif
+#  endif
+#endif /* __arm64__ */
 
 #if PMAP_PANIC_DEV_WIMG_ON_MANAGED && (DEVELOPMENT || DEBUG)
 SECURITY_READ_ONLY_LATE(boolean_t)   pmap_panic_dev_wimg_on_managed = TRUE;
@@ -2245,16 +2257,29 @@ PMAP_SUPPORT_PROTOTYPES(
 	addr64_t vstart,
 	uint64_t size), PMAP_TRIM_INDEX);
 
-#if HAS_APPLE_PAC && XNU_MONITOR
+#if HAS_APPLE_PAC
 PMAP_SUPPORT_PROTOTYPES(
 	void *,
 	pmap_sign_user_ptr, (void *value, ptrauth_key key, uint64_t discriminator, uint64_t jop_key), PMAP_SIGN_USER_PTR);
 PMAP_SUPPORT_PROTOTYPES(
 	void *,
 	pmap_auth_user_ptr, (void *value, ptrauth_key key, uint64_t discriminator, uint64_t jop_key), PMAP_AUTH_USER_PTR);
-#endif /* HAS_APPLE_PAC && XNU_MONITOR */
+#endif /* HAS_APPLE_PAC */
 
 
+
+
+PMAP_SUPPORT_PROTOTYPES(
+	bool,
+	pmap_is_trust_cache_loaded, (const uuid_t uuid), PMAP_IS_TRUST_CACHE_LOADED_INDEX);
+
+PMAP_SUPPORT_PROTOTYPES(
+	uint32_t,
+	pmap_lookup_in_static_trust_cache, (const uint8_t cdhash[CS_CDHASH_LEN]), PMAP_LOOKUP_IN_STATIC_TRUST_CACHE_INDEX);
+
+PMAP_SUPPORT_PROTOTYPES(
+	bool,
+	pmap_lookup_in_loaded_trust_caches, (const uint8_t cdhash[CS_CDHASH_LEN]), PMAP_LOOKUP_IN_LOADED_TRUST_CACHES_INDEX);
 
 
 #if XNU_MONITOR
@@ -2392,6 +2417,9 @@ const void * __ptrauth_ppl_handler const ppl_handler_table[PMAP_COUNT] = {
 	[PMAP_RELEASE_PAGES_TO_KERNEL_INDEX] = pmap_release_ppl_pages_to_kernel_internal,
 	[PMAP_SET_VM_MAP_CS_ENFORCED_INDEX] = pmap_set_vm_map_cs_enforced_internal,
 	[PMAP_SET_JIT_ENTITLED_INDEX] = pmap_set_jit_entitled_internal,
+	[PMAP_IS_TRUST_CACHE_LOADED_INDEX] = pmap_is_trust_cache_loaded_internal,
+	[PMAP_LOOKUP_IN_STATIC_TRUST_CACHE_INDEX] = pmap_lookup_in_static_trust_cache_internal,
+	[PMAP_LOOKUP_IN_LOADED_TRUST_CACHES_INDEX] = pmap_lookup_in_loaded_trust_caches_internal,
 	[PMAP_TRIM_INDEX] = pmap_trim_internal,
 	[PMAP_LEDGER_ALLOC_INIT_INDEX] = pmap_ledger_alloc_init_internal,
 	[PMAP_LEDGER_ALLOC_INDEX] = pmap_ledger_alloc_internal,
@@ -10957,62 +10985,13 @@ pmap_unmap_cpu_windows_copy(
 
 #if XNU_MONITOR
 
-/*
- * The HMAC SHA driver needs to be able to operate on physical pages in
- * place without copying them out. This function provides an interface
- * to run a callback on a given page, making use of a CPU copy window
- * if necessary.
- *
- * This should only be used during the hibernation process since every DRAM page
- * will be mapped as VM_WIMG_DEFAULT. This can cause coherency issues if the pages
- * were originally mapped as VM_WIMG_IO/RT. In the hibernation case, by the time
- * we start copying memory all other agents shouldn't be writing to memory so we
- * can ignore these coherency issues. Regardless of this code, if other agents
- * were modifying memory during the image creation process, there would be
- * issues anyway.
- */
 MARK_AS_PMAP_TEXT void
 pmap_invoke_with_page(
 	ppnum_t page_number,
 	void *ctx,
 	void (*callback)(void *ctx, ppnum_t page_number, const void *page))
 {
-#if HIBERNATION
-	/* This function should only be used from within a hibernation context. */
-	assert((gIOHibernateState == kIOHibernateStateHibernating) ||
-	    (gIOHibernateState == kIOHibernateStateWakingFromHibernate));
-
-	/* from bcopy_phys_internal */
-	vm_offset_t src = ptoa_64(page_number);
-	vm_offset_t tmp_src;
-	bool use_copy_window_src = !pmap_valid_address(src);
-	unsigned int src_index;
-	if (use_copy_window_src) {
-		unsigned int wimg_bits_src = pmap_cache_attributes(page_number);
-
-		/**
-		 * Always map DRAM as VM_WIMG_DEFAULT (regardless of whether it's
-		 * kernel-managed) to denote that it's safe to use memcpy on it.
-		 */
-		if (is_dram_addr(src)) {
-			wimg_bits_src = VM_WIMG_DEFAULT;
-		}
-
-		src_index = pmap_map_cpu_windows_copy_internal(page_number, VM_PROT_READ, wimg_bits_src);
-		tmp_src = pmap_cpu_windows_copy_addr(pmap_get_cpu_data()->cpu_number, src_index);
-	} else {
-		vm_size_t count = PAGE_SIZE;
-		tmp_src = phystokv_range((pmap_paddr_t)src, &count);
-	}
-
-	callback(ctx, page_number, (const void *)tmp_src);
-
-	if (use_copy_window_src) {
-		pmap_unmap_cpu_windows_copy_internal(src_index);
-	}
-#else
 	#pragma unused(page_number, ctx, callback)
-#endif /* HIBERNATION */
 }
 
 /*
@@ -11465,7 +11444,7 @@ pmap_trim(
 #endif
 }
 
-#if HAS_APPLE_PAC && XNU_MONITOR
+#if HAS_APPLE_PAC
 static void *
 pmap_sign_user_ptr_internal(void *value, ptrauth_key key, uint64_t discriminator, uint64_t jop_key)
 {
@@ -11520,7 +11499,7 @@ pmap_auth_user_ptr(void *value, ptrauth_key key, uint64_t discriminator, uint64_
 {
 	return pmap_auth_user_ptr_internal(value, key, discriminator, jop_key);
 }
-#endif /* HAS_APPLE_PAC && XNU_MONITOR */
+#endif /* HAS_APPLE_PAC */
 
 /*
  *	kern_return_t pmap_nest(grand, subord, vstart, size)
@@ -12682,10 +12661,6 @@ cache_skip_pve:
 		}
 	}
 	if (tlb_flush_needed) {
-		/* For targets that distinguish between mild and strong DSB, mild DSB
-		 * will not drain the prefetcher.  This can lead to prefetch-driven
-		 * cache fills that defeat the uncacheable requirement of the RT memory type.
-		 * In those cases, strong DSB must instead be employed to drain the prefetcher. */
 		pmap_sync_tlb((attributes & VM_WIMG_MASK) == VM_WIMG_RT);
 	}
 
@@ -14794,6 +14769,161 @@ pmap_return(boolean_t do_panic, boolean_t do_recurse)
 
 
 
+kern_return_t
+pmap_load_legacy_trust_cache(struct pmap_legacy_trust_cache __unused *trust_cache,
+    const vm_size_t __unused trust_cache_len)
+{
+	// Unsupported
+	return KERN_NOT_SUPPORTED;
+}
+
+pmap_tc_ret_t
+pmap_load_image4_trust_cache(struct pmap_image4_trust_cache __unused *trust_cache,
+    const vm_size_t __unused trust_cache_len,
+    uint8_t const * __unused img4_manifest,
+    const vm_size_t __unused img4_manifest_buffer_len,
+    const vm_size_t __unused img4_manifest_actual_len,
+    bool __unused dry_run)
+{
+	// Unsupported
+	return PMAP_TC_UNKNOWN_FORMAT;
+}
+
+bool
+pmap_in_ppl(void)
+{
+	// Unsupported
+	return false;
+}
+
+void
+pmap_lockdown_image4_slab(__unused vm_offset_t slab, __unused vm_size_t slab_len, __unused uint64_t flags)
+{
+	// Unsupported
+}
+
+void *
+pmap_claim_reserved_ppl_page(void)
+{
+	// Unsupported
+	return NULL;
+}
+
+void
+pmap_free_reserved_ppl_page(void __unused *kva)
+{
+	// Unsupported
+}
+
+
+MARK_AS_PMAP_TEXT static bool
+pmap_is_trust_cache_loaded_internal(const uuid_t uuid)
+{
+	bool found = false;
+
+	pmap_simple_lock(&pmap_loaded_trust_caches_lock);
+
+	for (struct pmap_image4_trust_cache const *c = pmap_image4_trust_caches; c != NULL; c = c->next) {
+		if (bcmp(uuid, c->module->uuid, sizeof(uuid_t)) == 0) {
+			found = true;
+			goto done;
+		}
+	}
+
+#ifdef PLATFORM_BridgeOS
+	for (struct pmap_legacy_trust_cache const *c = pmap_legacy_trust_caches; c != NULL; c = c->next) {
+		if (bcmp(uuid, c->uuid, sizeof(uuid_t)) == 0) {
+			found = true;
+			goto done;
+		}
+	}
+#endif
+
+done:
+	pmap_simple_unlock(&pmap_loaded_trust_caches_lock);
+	return found;
+}
+
+bool
+pmap_is_trust_cache_loaded(const uuid_t uuid)
+{
+#if XNU_MONITOR
+	return pmap_is_trust_cache_loaded_ppl(uuid);
+#else
+	return pmap_is_trust_cache_loaded_internal(uuid);
+#endif
+}
+
+MARK_AS_PMAP_TEXT static bool
+pmap_lookup_in_loaded_trust_caches_internal(const uint8_t cdhash[CS_CDHASH_LEN])
+{
+	struct pmap_image4_trust_cache const *cache = NULL;
+#ifdef PLATFORM_BridgeOS
+	struct pmap_legacy_trust_cache const *legacy = NULL;
+#endif
+
+	pmap_simple_lock(&pmap_loaded_trust_caches_lock);
+
+	for (cache = pmap_image4_trust_caches; cache != NULL; cache = cache->next) {
+		uint8_t hash_type = 0, flags = 0;
+
+		if (lookup_in_trust_cache_module(cache->module, cdhash, &hash_type, &flags)) {
+			goto done;
+		}
+	}
+
+#ifdef PLATFORM_BridgeOS
+	for (legacy = pmap_legacy_trust_caches; legacy != NULL; legacy = legacy->next) {
+		for (uint32_t i = 0; i < legacy->num_hashes; i++) {
+			if (bcmp(legacy->hashes[i], cdhash, CS_CDHASH_LEN) == 0) {
+				goto done;
+			}
+		}
+	}
+#endif
+
+done:
+	pmap_simple_unlock(&pmap_loaded_trust_caches_lock);
+
+	if (cache != NULL) {
+		return true;
+#ifdef PLATFORM_BridgeOS
+	} else if (legacy != NULL) {
+		return true;
+#endif
+	}
+
+	return false;
+}
+
+bool
+pmap_lookup_in_loaded_trust_caches(const uint8_t cdhash[CS_CDHASH_LEN])
+{
+#if XNU_MONITOR
+	return pmap_lookup_in_loaded_trust_caches_ppl(cdhash);
+#else
+	return pmap_lookup_in_loaded_trust_caches_internal(cdhash);
+#endif
+}
+
+MARK_AS_PMAP_TEXT static uint32_t
+pmap_lookup_in_static_trust_cache_internal(const uint8_t cdhash[CS_CDHASH_LEN])
+{
+	// Awkward indirection, because the PPL macros currently force their functions to be static.
+	return lookup_in_static_trust_cache(cdhash);
+}
+
+uint32_t
+pmap_lookup_in_static_trust_cache(const uint8_t cdhash[CS_CDHASH_LEN])
+{
+#if XNU_MONITOR
+	return pmap_lookup_in_static_trust_cache_ppl(cdhash);
+#else
+	return pmap_lookup_in_static_trust_cache_internal(cdhash);
+#endif
+}
+
+
 MARK_AS_PMAP_TEXT static void
 pmap_footprint_suspend_internal(
 	vm_map_t        map,
@@ -15165,12 +15295,6 @@ pmap_test_test_config(unsigned int flags)
 	T_LOG("Validate that writes to our mapping do not fault.");
 	pmap_test_write(pmap, va_base, false);
 
-#if PMAP_CS
-	bool pmap_cs_enforced = pmap->pmap_cs_enforced;
-
-	T_LOG("Disable PMAP CS enforcement");
-	pmap_cs_configure_enforcement(pmap, false);
-#endif
 
 	T_LOG("Make the first mapping XO.");
 	pmap_enter_addr(pmap, va_base, pa, VM_PROT_EXECUTE, VM_PROT_EXECUTE, 0, false);
@@ -15186,10 +15310,6 @@ pmap_test_test_config(unsigned int flags)
 	T_LOG("Validate that writes to our mapping fault.");
 	pmap_test_write(pmap, va_base, true);
 
-#if PMAP_CS
-	T_LOG("Set PMAP CS enforcement configuration to previous value.");
-	pmap_cs_configure_enforcement(pmap, pmap_cs_enforced);
-#endif
 
 	/*
 	 * For page ratios of greater than 1: validate that writes to the other

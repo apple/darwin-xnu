@@ -169,6 +169,9 @@ typedef struct cpu_data {
 	bool                            cpu_hibernate; /* This cpu is currently hibernating the system */
 	bool                            cpu_running;
 	bool                            cluster_master;
+#if __ARM_ARCH_8_5__
+	bool                            sync_on_cswitch;
+#endif /* __ARM_ARCH_8_5__ */
 	/* true if processor_start() or processor_exit() is operating on this CPU */
 	bool                            in_state_transition;
 

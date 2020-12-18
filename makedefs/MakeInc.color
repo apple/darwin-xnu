@@ -1,0 +1,55 @@
+# -*- mode: makefile;-*-
+#
+# Copyright (C) 2020 Apple Inc. All rights reserved.
+#
+# MakeInc.color defines macros used to enable
+# colored output of the build log.
+#
+
+define _setup_build_log_colors
+ifeq ($${XNU_LOGCOLORS},y)
+    LOGCOLORS ?= y
+endif
+ifeq ($$(LOGCOLORS),y)
+    # Get a nice list of device code names associated with the build platform
+    ifndef CDevs
+        #ifdef EMBEDDED_DEVICE_MAP
+        #    export CDevs := $$(shell $$(EMBEDDED_DEVICE_MAP) -db $$(EDM_DBPATH) -query "SELECT DISTINCT TargetType FROM Targets WHERE KernelPlatform = '$$(CURRENT_MACHINE_CONFIG_LC)'" | tr '[\r\n]' ':' | sed 's,:$$$$,,')
+        #endif
+    endif
+    ifndef MACHINE_PFX
+        export _MACHINE := $$(CURRENT_MACHINE_CONFIG_LC)
+        ifeq ($$(CURRENT_MACHINE_CONFIG),NONE)
+            export _MACHINE := $$(subst OSX,,$$(PLATFORM))
+        endif
+        export MACHINE_PFX := $$(shell __A="$$(CURRENT_ARCH_CONFIG_LC)"; \
+                                         __As=$$$$((6-$$$${\#__A})); \
+                                         printf "%-.6s%*.*s %9.9s" \
+                                                "$$$${__A}" \
+                                                $$$${__As} $$$${__As} " " \
+                                                "$$(_MACHINE)")
+    endif
+    override LOG_PFX_LEN := 30
+    override LOG_PFX_LEN_ADJ := $$(shell __TMP="$$(MACHINE_PFX)"; \
+            printf "%d" $$$$(($$(LOG_PFX_LEN) - $$$${\#__TMP} - 3)))
+    MACHINE_PFX_COL = $$(shell printf "\\033[1m%s\\033[m" "$$(MACHINE_PFX)")
+    # Turn off colored output
+    Color0:=$$(shell printf "\\033[m")
+    # Start a host command: bold text
+    ColorH:=$$(shell printf "\\033[1m")
+    # Start a compilation-related command: blue text
+    ColorC:=$$(shell printf "[$$(MACHINE_PFX_COL)] \\033[1;34m")
+    # Start a MIG command: green text
+    ColorM:=$$(shell printf "[$$(MACHINE_PFX_COL)] \\033[1;32m")
+    # Start a linking command: purple text
+    ColorL:=$$(shell printf "[$$(MACHINE_PFX_COL)] \\033[1;35m")
+    # Start a filename
+    ColorF:=$$(shell printf "")
+    # Start a linked file name: italic text
+    ColorLF:=$$(shell printf "\\033[3m")
+    # Error strings: red text
+    ColorErr:=$$(shell printf "\033[31m")
+endif
+endef
+
+# vim: set ft=make:

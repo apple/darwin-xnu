@@ -322,13 +322,16 @@ main(int     argc,
 #endif /* defined(HAS_APPLE_PAC) */
 
 
+#if __ARM_ARCH_8_5__
+	DECLARE("CPU_SYNC_ON_CSWITCH", offsetof(cpu_data_t, sync_on_cswitch));
+#endif /* __ARM_ARCH_8_5__ */
 
 #if HIBERNATION
 	DECLARE("HIBHDR_STACKOFFSET", offsetof(IOHibernateImageHeader, restore1StackOffset));
 	DECLARE("HIBTRAMP_TTBR0", offsetof(pal_hib_tramp_result_t, ttbr0));
 	DECLARE("HIBTRAMP_TTBR1", offsetof(pal_hib_tramp_result_t, ttbr1));
 	DECLARE("HIBTRAMP_MEMSLIDE", offsetof(pal_hib_tramp_result_t, memSlide));
-	DECLARE("HIBTRAMP_KERNELSLIDE", offsetof(pal_hib_tramp_result_t, kernelSlide));
+	DECLARE("HIBGLOBALS_KERNELSLIDE", offsetof(pal_hib_globals_t, kernelSlide));
 #endif /* HIBERNATION */
 
 	return 0;

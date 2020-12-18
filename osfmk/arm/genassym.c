@@ -349,14 +349,5 @@ main(
 	DECLARE("BA_TOP_OF_KERNEL_DATA",
 	    offsetof(struct boot_args, topOfKernelData));
 
-	DECLARE("ENTROPY_SAMPLE_COUNT",
-	    offsetof(entropy_data_t, sample_count));
-	DECLARE("ENTROPY_BUFFER",
-	    offsetof(entropy_data_t, buffer));
-	DECLARE("ENTROPY_BUFFER_INDEX_MASK",
-	    offsetof(entropy_data_t, buffer_index_mask));
-	DECLARE("ENTROPY_BUFFER_ROR_MASK",
-	    offsetof(entropy_data_t, ror_mask));
-
 	return 0;
 }

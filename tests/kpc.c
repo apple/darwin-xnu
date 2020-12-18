@@ -377,7 +377,8 @@ T_DECL(kpc_pmi_configurable,
 	free(actions);
 
 	(void)kperf_action_count_set(1);
-	ret = kperf_action_samplers_set(1, KPERF_SAMPLER_TINFO);
+	ret = kperf_action_samplers_set(1,
+	    KPERF_SAMPLER_TINFO | KPERF_SAMPLER_KSTACK);
 	T_QUIET; T_ASSERT_POSIX_SUCCESS(ret, "kperf_action_samplers_set");
 
 	ktrace_config_t ktconfig = ktrace_config_create_current();
@@ -389,6 +390,8 @@ T_DECL(kpc_pmi_configurable,
 	T_QUIET; T_WITH_ERRNO; T_ASSERT_NOTNULL(cpus, "allocate CPUs array");
 
 	__block unsigned int nsamples = 0;
+	__block unsigned int npmis = 0;
+	__block unsigned int nstacks = 0;
 	__block uint64_t first_ns = 0;
 	__block uint64_t last_ns = 0;
 
@@ -436,10 +439,20 @@ T_DECL(kpc_pmi_configurable,
 			cpu->timeslices[(unsigned int)slice] += 1;
 		}
 
-		nsamples++;
+		npmis++;
 	});
 
-	ktrace_events_single(sess, END_EVENT, ^(struct trace_point *tp __unused) {
+	ktrace_events_single(sess, PERF_SAMPLE, ^(struct trace_point * tp) {
+		if (tp->debugid & DBG_FUNC_START) {
+			nsamples++;
+		}
+	});
+	ktrace_events_single(sess, PERF_STK_KHDR,
+	    ^(struct trace_point * __unused tp) {
+		nstacks++;
+	});
+
+	ktrace_events_single(sess, END_EVENT, ^(struct trace_point *tp) {
 		int cret = ktrace_convert_timestamp_to_nanoseconds(sess,
 		    tp->timestamp, &last_ns);
 		T_QUIET; T_ASSERT_POSIX_ZERO(cret, "convert timestamp");
@@ -479,6 +492,7 @@ T_DECL(kpc_pmi_configurable,
 		}
 		check_counters(mch.ncpus, mch.nfixed + mch.nconfig, tly, counts);
 	});
+	ktrace_events_class(sess, DBG_PERF, ^(struct trace_point * __unused tp) {});
 
 	int stop = 0;
 	(void)start_threads(&mch, spin, &stop);
@@ -496,6 +510,16 @@ T_DECL(kpc_pmi_configurable,
 		T_LOG("saw %llu cycles in process", post_ru.ri_cycles - pre_ru.ri_cycles);
 		uint64_t total = 0;
 
+		T_LOG("saw pmis = %u, samples = %u, stacks = %u", npmis, nsamples,
+		    nstacks);
+		// Allow some slop in case the trace is cut-off midway through a
+		// sample.
+		const unsigned int cutoff_leeway = 32;
+		T_EXPECT_GE(nsamples + cutoff_leeway, npmis,
+		    "saw as many samples as PMIs");
+		T_EXPECT_GE(nstacks + cutoff_leeway, npmis,
+		    "saw as many stacks as PMIs");
+
 		unsigned int nsamplecpus = 0;
 		char sample_slices[NTIMESLICES + 1];
 		sample_slices[NTIMESLICES] = '\0';
@@ -508,7 +532,6 @@ T_DECL(kpc_pmi_configurable,
 			bool seen_empty = false;
 			for (unsigned int j = 0; j < NTIMESLICES; j++) {
 				unsigned int nslice = cpu->timeslices[j];
-				nsamples += nslice;
 				ncpusamples += nslice;
 				if (nslice > 0) {
 					nsampleslices++;

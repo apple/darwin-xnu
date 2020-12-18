@@ -181,9 +181,6 @@
 #endif /* defined(__i386__) || defined(__x86_64__) */
 #include <san/kasan.h>
 
-#if HIBERNATE_HMAC_IMAGE
-#include <arm64/hibernate_ppl_hmac.h>
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 extern "C" addr64_t             kvtophys(vm_offset_t va);
 extern "C" ppnum_t              pmap_find_phys(pmap_t pmap, addr64_t va);
@@ -258,7 +255,6 @@ enum { kVideoMapSize  = 80 * 1024 * 1024 };
 
 // copy from phys addr to MD
 
-#if !HIBERNATE_HMAC_IMAGE
 static IOReturn
 IOMemoryDescriptorWriteFromPhysical(IOMemoryDescriptor * md,
     IOByteCount offset, addr64_t bytes, IOByteCount length)
@@ -296,7 +292,6 @@ IOMemoryDescriptorWriteFromPhysical(IOMemoryDescriptor * md,
 
 	return remaining ? kIOReturnUnderrun : kIOReturnSuccess;
 }
-#endif /* !HIBERNATE_HMAC_IMAGE */
 
 // copy from MD to phys addr
 
@@ -631,10 +626,6 @@ IOHibernateSystemSleep(void)
 			gIOHibernateCurrentHeader->options |= kIOHibernateOptionProgress;
 		}
 
-#if HIBERNATE_HMAC_IMAGE
-		// inform HMAC driver that we're going to hibernate
-		ppl_hmac_hibernate_begin();
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 #if defined(__i386__) || defined(__x86_64__)
 		if (vars->volumeCryptKeySize &&
@@ -1144,26 +1135,40 @@ IOHibernateSystemHasSlept(void)
 
 /* * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * * */
 
-#if defined(__i386__) || defined(__x86_64__)
-static DeviceTreeNode *
-MergeDeviceTree(DeviceTreeNode * entry, IORegistryEntry * regEntry, vm_offset_t region_start, vm_size_t region_size)
+static const DeviceTreeNode *
+MergeDeviceTree(const DeviceTreeNode * entry, IORegistryEntry * regEntry, OSSet * entriesToUpdate, vm_offset_t region_start, vm_size_t region_size)
 {
 	DeviceTreeNodeProperty * prop;
-	DeviceTreeNode *         child;
+	const DeviceTreeNode *   child;
 	IORegistryEntry *        childRegEntry;
 	const char *             nameProp;
 	unsigned int             propLen, idx;
 
+	bool updateEntry = true;
+	if (!regEntry) {
+		updateEntry = false;
+	} else if (entriesToUpdate && !entriesToUpdate->containsObject(regEntry)) {
+		updateEntry = false;
+	}
+
 	prop = (DeviceTreeNodeProperty *) (entry + 1);
 	for (idx = 0; idx < entry->nProperties; idx++) {
-		if (regEntry && (0 != strcmp("name", prop->name))) {
+		if (updateEntry && (0 != strcmp("name", prop->name))) {
 			regEntry->setProperty((const char *) prop->name, (void *) (prop + 1), prop->length);
 //	    HIBPRINT("%s: %s, %d\n", regEntry->getName(), prop->name, prop->length);
 		}
 		prop = (DeviceTreeNodeProperty *) (((uintptr_t)(prop + 1)) + ((prop->length + 3) & ~3));
 	}
 
-	child = (DeviceTreeNode *) prop;
+	if (entriesToUpdate) {
+		entriesToUpdate->removeObject(regEntry);
+		if (entriesToUpdate->getCount() == 0) {
+			// we've updated all the entries we care about so we can stop
+			return NULL;
+		}
+	}
+
+	child = (const DeviceTreeNode *) prop;
 	for (idx = 0; idx < entry->nChildren; idx++) {
 		if (kSuccess != SecureDTGetPropertyRegion(child, "name", (void const **) &nameProp, &propLen,
 		    region_start, region_size)) {
@@ -1171,12 +1176,14 @@ MergeDeviceTree(DeviceTreeNode * entry, IORegistryEntry * regEntry, vm_offset_t 
 		}
 		childRegEntry = regEntry ? regEntry->childFromPath(nameProp, gIODTPlane) : NULL;
 //	HIBPRINT("%s == %p\n", nameProp, childRegEntry);
-		child = MergeDeviceTree(child, childRegEntry, region_start, region_size);
+		child = MergeDeviceTree(child, childRegEntry, entriesToUpdate, region_start, region_size);
+		if (!child) {
+			// the recursive call updated the last entry we cared about, so we can stop
+			break;
+		}
 	}
 	return child;
 }
-#endif
-
 
 IOReturn
 IOHibernateSystemWake(void)
@@ -1276,10 +1283,6 @@ IOHibernateDone(IOHibernateVars * vars)
 		vars->srcBuffer->release();
 	}
 
-#if HIBERNATE_HMAC_IMAGE
-	// inform HMAC driver that we're done hibernating
-	ppl_hmac_hibernate_end();
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 	bzero(&gIOHibernateHandoffPages[0], gIOHibernateHandoffPageCount * sizeof(gIOHibernateHandoffPages[0]));
 	if (vars->handoffBuffer) {
@@ -1297,14 +1300,32 @@ IOHibernateDone(IOHibernateVars * vars)
 					break;
 
 				case kIOHibernateHandoffTypeDeviceTree:
+				{
 #if defined(__i386__) || defined(__x86_64__)
-					MergeDeviceTree((DeviceTreeNode *) data, IOService::getServiceRoot(),
-					    (vm_offset_t)data, (vm_size_t)handoff->bytecount);
-#else
-					// On ARM, the device tree is confined to its region covered by CTRR, so effectively immutable.
-					panic("kIOHibernateHandoffTypeDeviceTree not supported on this platform.");
+					// On Intel, process the entirety of the passed in device tree
+					OSSet * entriesToUpdate = NULL;
+#elif defined(__arm64__)
+					// On ARM, only allow hibernation to update specific entries
+					const char *mergePaths[] = {
+						kIODeviceTreePlane ":/chosen/boot-object-manifests",
+						kIODeviceTreePlane ":/chosen/secure-boot-hashes",
+					};
+					const size_t mergePathCount = sizeof(mergePaths) / sizeof(mergePaths[0]);
+					OSSet * entriesToUpdate = OSSet::withCapacity(mergePathCount);
+					for (size_t i = 0; i < mergePathCount; i++) {
+						IORegistryEntry *entry = IORegistryEntry::fromPath(mergePaths[i]);
+						if (!entry) {
+							panic("failed to find %s in IORegistry", mergePaths[i]);
+						}
+						entriesToUpdate->setObject(entry);
+						OSSafeReleaseNULL(entry);
+					}
 #endif
+					MergeDeviceTree((DeviceTreeNode *) data, IOService::getServiceRoot(), entriesToUpdate,
+					    (vm_offset_t)data, (vm_size_t)handoff->bytecount);
+					OSSafeReleaseNULL(entriesToUpdate);
 					break;
+				}
 
 				case kIOHibernateHandoffTypeKeyStore:
 #if defined(__i386__) || defined(__x86_64__)
@@ -1562,38 +1583,12 @@ IOHibernatePolledFileWrite(IOHibernateVars * vars,
 {
 	IOReturn err;
 
-#if HIBERNATE_HMAC_IMAGE
-	uint64_t originalPosition = 0;
-	if (!bytes && !size) {
-		originalPosition = vars->fileVars->position;
-	}
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 	err = IOPolledFileWrite(vars->fileVars, bytes, size, cryptvars);
 	if ((kIOReturnSuccess == err) && hibernate_should_abort()) {
 		err = kIOReturnAborted;
 	}
 
-#if HIBERNATE_HMAC_IMAGE
-	if ((kIOReturnSuccess == err) && (vars->imageShaCtx)) {
-		if (!bytes && !size) {
-			// determine how many bytes were written
-			size = vars->fileVars->position - originalPosition;
-		}
-		if (bytes) {
-			SHA256_Update(vars->imageShaCtx, bytes, size);
-		} else {
-			// update with zeroes
-			uint8_t zeroes[512] = {};
-			size_t len = size;
-			while (len) {
-				IOByteCount toHash = min(len, sizeof(zeroes));
-				SHA256_Update(vars->imageShaCtx, zeroes, toHash);
-				len -= toHash;
-			}
-		}
-	}
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 	return err;
 }
@@ -1630,11 +1625,9 @@ hibernate_write_image(void)
 	uint32_t     pageAndCount[2];
 	addr64_t     phys64;
 	IOByteCount  segLen;
-#if !HIBERNATE_HMAC_IMAGE
 	uint32_t     restore1Sum = 0, sum = 0, sum1 = 0, sum2 = 0;
 	uintptr_t    hibernateBase;
 	uintptr_t    hibernateEnd;
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 	AbsoluteTime startTime, endTime;
 	AbsoluteTime allTime, compTime;
@@ -1665,13 +1658,6 @@ hibernate_write_image(void)
 		return kIOHibernatePostWriteSleep;
 	}
 
-#if HIBERNATE_HMAC_IMAGE
-	// set up SHA and HMAC context to hash image1 (wired pages)
-	SHA256_CTX imageShaCtx;
-	vars->imageShaCtx = &imageShaCtx;
-	SHA256_Init(vars->imageShaCtx);
-	ppl_hmac_reset(true);
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 #if !defined(__arm64__)
 	if (kIOHibernateModeSleep & gIOHibernateMode) {
@@ -1795,61 +1781,6 @@ hibernate_write_image(void)
 			}
 		}
 
-#if HIBERNATE_HMAC_IMAGE
-		if (vars->fileVars->position > UINT32_MAX) {
-			err = kIOReturnNoSpace;
-			break;
-		}
-		header->segmentsFileOffset = (uint32_t)vars->fileVars->position;
-
-		// fetch the IOHibernateHibSegInfo and the actual pages to write
-		// we use srcBuffer as scratch space
-		IOHibernateHibSegInfo *segInfo = &header->hibSegInfo;
-		void *segInfoScratch = vars->srcBuffer->getBytesNoCopy();
-
-		// This call also enables PMAP hibernation asserts which will prevent modification
-		// of PMAP data structures. This needs to occur before pages start getting written
-		// into the image.
-		ppl_hmac_fetch_hibseg_and_info(segInfoScratch, vars->srcBuffer->getCapacity(), segInfo);
-
-		// write each segment to the file
-		size_t segInfoScratchPos = 0;
-		int hibSectIdx = -1;
-		uint32_t hibSegPageCount = 0;
-		for (int i = 0; i < NUM_HIBSEGINFO_SEGMENTS; i++) {
-			hibSegPageCount += segInfo->segments[i].pageCount;
-			size_t size = ptoa_64(segInfo->segments[i].pageCount);
-			if (size) {
-				err = IOHibernatePolledFileWrite(vars,
-				    (uint8_t*)segInfoScratch + segInfoScratchPos, size, cryptvars);
-				if (kIOReturnSuccess != err) {
-					break;
-				}
-				segInfoScratchPos += size;
-
-				// is this sectHIBTEXTB?
-				if (ptoa_64(segInfo->segments[i].physPage) == trunc_page(kvtophys(sectHIBTEXTB))) {
-					// remember which segment is sectHIBTEXTB because we'll need it later
-					hibSectIdx = i;
-				}
-			}
-		}
-
-		if (hibSectIdx == -1) {
-			panic("couldn't find sectHIBTEXTB in segInfo");
-		}
-
-		// set the header fields corresponding to the HIB segments
-		header->restore1CodePhysPage = segInfo->segments[hibSectIdx].physPage;
-		header->restore1CodeVirt = trunc_page(sectHIBTEXTB);
-		header->restore1PageCount = hibSegPageCount;
-		header->restore1CodeOffset = (uint32_t)(((uintptr_t) &hibernate_machine_entrypoint) - header->restore1CodeVirt);
-
-		// set restore1StackOffset to the physical page of the top of the stack to simplify the restore code
-		vm_offset_t stackFirstPage, stackPageSize;
-		pal_hib_get_stack_pages(&stackFirstPage, &stackPageSize);
-		header->restore1StackOffset = (uint32_t)(stackFirstPage + stackPageSize);
-#else /* !HIBERNATE_HMAC_IMAGE */
 		hibernateBase = HIB_BASE; /* Defined in PAL headers */
 		hibernateEnd = (segHIBB + segSizeHIB);
 
@@ -1907,7 +1838,6 @@ hibernate_write_image(void)
 				break;
 			}
 		}
-#endif /* !HIBERNATE_HMAC_IMAGE */
 
 		if (!vars->hwEncrypt && (kIOHibernateModeEncrypt & gIOHibernateMode)) {
 			vars->fileVars->encryptStart = (vars->fileVars->position & ~(AES_BLOCK_SIZE - 1));
@@ -1948,14 +1878,7 @@ hibernate_write_image(void)
 
 			for (page = 0; page < count; page += page_size) {
 				phys64 = vars->previewBuffer->getPhysicalSegment(page, NULL, kIOMemoryMapperNone);
-#if HIBERNATE_HMAC_IMAGE
-				err = ppl_hmac_update_and_compress_page(atop_64_ppnum(phys64), NULL, NULL);
-				if (kIOReturnSuccess != err) {
-					break;
-				}
-#else /* !HIBERNATE_HMAC_IMAGE */
 				sum1 += hibernate_sum_page(src + page, atop_64_ppnum(phys64));
-#endif /* !HIBERNATE_HMAC_IMAGE */
 			}
 			if (kIOReturnSuccess != err) {
 				break;
@@ -2042,12 +1965,6 @@ hibernate_write_image(void)
 		    bitmap_size, header->previewSize,
 		    pageCount, vars->fileVars->position);
 
-#if HIBERNATE_HMAC_IMAGE
-		// we don't need to sign the page data into imageHeaderHMAC because it's
-		// already signed into image1PagesHMAC/image2PagesHMAC
-		vars->imageShaCtx = NULL;
-		header->imageHeaderHMACSize = (uint32_t)vars->fileVars->position;
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 		enum
 		// pageType
@@ -2126,9 +2043,6 @@ hibernate_write_image(void)
 				}
 
 				for (page = ppnum; page < (ppnum + count); page++) {
-#if HIBERNATE_HMAC_IMAGE
-					wkresult = ppl_hmac_update_and_compress_page(page, (void **)&src, compressed);
-#else /* !HIBERNATE_HMAC_IMAGE */
 					err = IOMemoryDescriptorWriteFromPhysical(vars->srcBuffer, 0, ptoa_64(page), page_size);
 					if (err) {
 						HIBLOG("IOMemoryDescriptorWriteFromPhysical %d [%ld] %x\n", __LINE__, (long)page, err);
@@ -2147,7 +2061,6 @@ hibernate_write_image(void)
 					    (WK_word*) compressed,
 					    (WK_word*) scratch,
 					    (uint32_t) (page_size - 4));
-#endif /* !HIBERNATE_HMAC_IMAGE */
 
 					clock_get_uptime(&endTime);
 					ADD_ABSOLUTETIME(&compTime, &endTime);
@@ -2239,12 +2152,6 @@ hibernate_write_image(void)
 				image1Size = vars->fileVars->position;
 				HIBLOG("image1Size 0x%qx, encryptStart1 0x%qx, End1 0x%qx\n",
 				    image1Size, header->encryptStart, header->encryptEnd);
-#if HIBERNATE_HMAC_IMAGE
-				// compute the image1 HMAC
-				ppl_hmac_final(header->image1PagesHMAC, sizeof(header->image1PagesHMAC));
-				// reset the PPL context so we can compute the image2 (non-wired pages) HMAC
-				ppl_hmac_reset(false);
-#endif /* HIBERNATE_HMAC_IMAGE */
 			}
 		}
 		if (kIOReturnSuccess != err) {
@@ -2258,10 +2165,6 @@ hibernate_write_image(void)
 			break;
 		}
 
-#if HIBERNATE_HMAC_IMAGE
-		// compute the image2 HMAC
-		ppl_hmac_final(header->image2PagesHMAC, sizeof(header->image2PagesHMAC));
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 		// Header:
 
@@ -2270,11 +2173,9 @@ hibernate_write_image(void)
 		header->bitmapSize   = bitmap_size;
 		header->pageCount    = pageCount;
 
-#if !HIBERNATE_HMAC_IMAGE
 		header->restore1Sum  = restore1Sum;
 		header->image1Sum    = sum1;
 		header->image2Sum    = sum2;
-#endif /* !HIBERNATE_HMAC_IMAGE */
 		header->sleepTime    = gIOLastSleepTime.tv_sec;
 
 		header->compression     = ((uint32_t)((compressedSize << 8) / uncompressedSize));
@@ -2294,17 +2195,6 @@ hibernate_write_image(void)
 		header->lastHibAbsTime  = mach_absolute_time();
 		header->lastHibContTime = mach_continuous_time();
 
-#if HIBERNATE_HMAC_IMAGE
-		// include the headers in the SHA calculation
-		SHA256_Update(&imageShaCtx, header, sizeof(*header));
-
-		// finalize the image header SHA
-		uint8_t imageHash[CCSHA256_OUTPUT_SIZE];
-		SHA256_Final(imageHash, &imageShaCtx);
-
-		// compute the header HMAC
-		ppl_hmac_finalize_image(imageHash, sizeof(imageHash), header->imageHeaderHMAC, sizeof(header->imageHeaderHMAC));
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 		IOPolledFileSeek(vars->fileVars, 0);
 		err = IOHibernatePolledFileWrite(vars,
@@ -2343,9 +2233,7 @@ hibernate_write_image(void)
 	    uncompressedSize, atop_32(uncompressedSize), compressedSize,
 	    uncompressedSize ? ((int) ((compressedSize * 100ULL) / uncompressedSize)) : 0);
 
-#if !HIBERNATE_HMAC_IMAGE
 	HIBLOG("\nsum1 %x, sum2 %x\n", sum1, sum2);
-#endif /* !HIBERNATE_HMAC_IMAGE */
 
 	HIBLOG("svPageCount %d, zvPageCount %d, wiredPagesEncrypted %d, wiredPagesClear %d, dirtyPagesEncrypted %d\n",
 	    svPageCount, zvPageCount, wiredPagesEncrypted, wiredPagesClear, dirtyPagesEncrypted);
@@ -2643,10 +2531,6 @@ hibernate_machine_init(void)
 
 	HIBLOG("hibernate_machine_init reading\n");
 
-#if HIBERNATE_HMAC_IMAGE
-	// Reset SHA context to verify image2 hash (non-wired pages).
-	ppl_hmac_reset(false);
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 	uint32_t * header = (uint32_t *) src;
 	sum = 0;
@@ -2721,12 +2605,6 @@ hibernate_machine_init(void)
 				panic("Hibernate restore error %x", err);
 			}
 
-#if HIBERNATE_HMAC_IMAGE
-			err = ppl_hmac_update_and_compress_page(ppnum, NULL, NULL);
-			if (err) {
-				panic("Hibernate restore error %x", err);
-			}
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 			ppnum++;
 			pagesDone++;
@@ -2753,13 +2631,6 @@ hibernate_machine_init(void)
 		panic("Hibernate restore error %x", err);
 	}
 
-#if HIBERNATE_HMAC_IMAGE
-	uint8_t image2PagesHMAC[HIBERNATE_HMAC_SIZE];
-	ppl_hmac_final(image2PagesHMAC, sizeof(image2PagesHMAC));
-	if (memcmp(image2PagesHMAC, gIOHibernateCurrentHeader->image2PagesHMAC, sizeof(image2PagesHMAC)) != 0) {
-		panic("image2 pages corrupted");
-	}
-#endif /* HIBERNATE_HMAC_IMAGE */
 
 	gIOHibernateCurrentHeader->actualImage2Sum = sum;
 	gIOHibernateCompression = gIOHibernateCurrentHeader->compression;

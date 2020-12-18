@@ -1254,7 +1254,7 @@ arp_lookup_ip(ifnet_t ifp, const struct sockaddr_in *net_dest,
 	struct ifaddr *rt_ifa;
 	struct sockaddr *sa;
 	uint32_t rtflags;
-	struct sockaddr_dl sdl;
+	struct sockaddr_dl sdl = {};
 	boolean_t send_probe_notif = FALSE;
 	boolean_t enqueued = FALSE;
 
@@ -1632,7 +1632,7 @@ arp_ip_handle_input(ifnet_t ifp, u_short arpop,
     const struct sockaddr_in *target_ip)
 {
 	char ipv4str[MAX_IPv4_STR_LEN];
-	struct sockaddr_dl proxied;
+	struct sockaddr_dl proxied = {};
 	struct sockaddr_dl *gateway, *target_hw = NULL;
 	struct ifaddr *ifa;
 	struct in_ifaddr *ia;

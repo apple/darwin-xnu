@@ -276,11 +276,6 @@ static long _Atomic zones_phys_page_count;
 /* number of zone mapped pages used by all zones */
 static long _Atomic zones_phys_page_mapped_count;
 
-#if CONFIG_ZALLOC_SEQUESTER
-#define ZSECURITY_OPTIONS_SEQUESTER_DEFAULT ZSECURITY_OPTIONS_SEQUESTER
-#else
-#define ZSECURITY_OPTIONS_SEQUESTER_DEFAULT 0
-#endif
 /*
  * Turn ZSECURITY_OPTIONS_STRICT_IOKIT_FREE off on x86 so as not
  * not break third party kexts that haven't yet been recompiled
@@ -294,7 +289,7 @@ static long _Atomic zones_phys_page_mapped_count;
 #endif
 
 #define ZSECURITY_DEFAULT ( \
-	        ZSECURITY_OPTIONS_SEQUESTER_DEFAULT | \
+	        ZSECURITY_OPTIONS_SEQUESTER | \
 	        ZSECURITY_OPTIONS_SUBMAP_USER_DATA | \
 	        ZSECURITY_OPTIONS_SEQUESTER_KEXT_KALLOC | \
 	        ZSECURITY_OPTIONS_STRICT_IOKIT_FREE_DEFAULT | \
@@ -4651,7 +4646,8 @@ zalloc_log_or_trace_leaks(zone_t zone, vm_offset_t addr)
 
 #if ZONE_ENABLE_LOGGING
 	if (DO_LOGGING(zone)) {
-		numsaved = backtrace(zbt, MAX_ZTRACE_DEPTH, NULL);
+		numsaved = backtrace_frame(zbt, MAX_ZTRACE_DEPTH,
+		    __builtin_frame_address(0), NULL);
 		btlog_add_entry(zone->zlog_btlog, (void *)addr,
 		    ZOP_ALLOC, (void **)zbt, numsaved);
 	}
@@ -4666,7 +4662,8 @@ zalloc_log_or_trace_leaks(zone_t zone, vm_offset_t addr)
 		if (sample_counter(&zone->zleak_capture, zleak_sample_factor)) {
 			/* Avoid backtracing twice if zone logging is on */
 			if (numsaved == 0) {
-				numsaved = backtrace(zbt, MAX_ZTRACE_DEPTH, NULL);
+				numsaved = backtrace_frame(zbt, MAX_ZTRACE_DEPTH,
+				    __builtin_frame_address(1), NULL);
 			}
 			/* Sampling can fail if another sample is happening at the same time in a different zone. */
 			if (!zleak_log(zbt, addr, numsaved, zone_elem_size(zone))) {
@@ -4681,7 +4678,8 @@ zalloc_log_or_trace_leaks(zone_t zone, vm_offset_t addr)
 		unsigned int count, idx;
 		/* Fill element, from tail, with backtrace in reverse order */
 		if (numsaved == 0) {
-			numsaved = backtrace(zbt, MAX_ZTRACE_DEPTH, NULL);
+			numsaved = backtrace_frame(zbt, MAX_ZTRACE_DEPTH,
+			    __builtin_frame_address(1), NULL);
 		}
 		count = (unsigned int)(zone_elem_size(zone) / sizeof(uintptr_t));
 		if (count >= numsaved) {
@@ -4738,7 +4736,8 @@ zfree_log_trace(zone_t zone, vm_offset_t addr)
 			 *
 			 * Add a record of this zfree operation to log.
 			 */
-			numsaved = backtrace(zbt, MAX_ZTRACE_DEPTH, NULL);
+			numsaved = backtrace_frame(zbt, MAX_ZTRACE_DEPTH,
+			    __builtin_frame_address(1), NULL);
 			btlog_add_entry(zone->zlog_btlog, (void *)addr, ZOP_FREE,
 			    (void **)zbt, numsaved);
 		} else {
@@ -4891,7 +4890,14 @@ zalloc_direct_locked(
 
 /*
  *	zalloc returns an element from the specified zone.
+ *
+ *	The function is noinline when zlog can be used so that the backtracing can
+ *	reliably skip the zalloc_ext() and zalloc_log_or_trace_leaks()
+ *	boring frames.
  */
+#if ZONE_ENABLE_LOGGING
+__attribute__((noinline))
+#endif
 void *
 zalloc_ext(
 	zone_t          zone,
@@ -5271,6 +5277,14 @@ zfree_direct_locked(zone_t zone, vm_offset_t element, bool poison)
 #endif
 }
 
+/*
+ *	The function is noinline when zlog can be used so that the backtracing can
+ *	reliably skip the zfree_ext() and zfree_log_trace()
+ *	boring frames.
+ */
+#if ZONE_ENABLE_LOGGING
+__attribute__((noinline))
+#endif
 void
 zfree_ext(zone_t zone, zone_stats_t zstats, void *addr)
 {

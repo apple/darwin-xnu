@@ -2202,6 +2202,7 @@ ipc_importance_check_circularity(
 	ipc_port_t base;
 	struct turnstile *send_turnstile = TURNSTILE_NULL;
 	struct task_watchport_elem *watchport_elem = NULL;
+	bool took_base_ref = false;
 
 	assert(port != IP_NULL);
 	assert(dest != IP_NULL);
@@ -2263,23 +2264,7 @@ ipc_importance_check_circularity(
 
 	ipc_port_multiple_lock(); /* massive serialization */
 
-	/*
-	 *	Search for the end of the chain (a port not in transit),
-	 *	acquiring locks along the way.
-	 */
-
-	for (;;) {
-		ip_lock(base);
-
-		if (!ip_active(base) ||
-		    (base->ip_receiver_name != MACH_PORT_NULL) ||
-		    (base->ip_destination == IP_NULL)) {
-			break;
-		}
-
-		base = base->ip_destination;
-	}
-
+	took_base_ref = ipc_port_destination_chain_lock(dest, &base);
 	/* all ports in chain from dest to base, inclusive, are locked */
 
 	if (port == base) {
@@ -2292,6 +2277,7 @@ ipc_importance_check_circularity(
 		require_ip_active(port);
 		assert(port->ip_receiver_name == MACH_PORT_NULL);
 		assert(port->ip_destination == IP_NULL);
+		assert(!took_base_ref);
 
 		base = dest;
 		while (base != IP_NULL) {
@@ -2439,6 +2425,9 @@ not_circular:
 	}
 
 	ip_unlock(base);
+	if (took_base_ref) {
+		ip_release(base);
+	}
 
 	/* All locks dropped, call turnstile_update_inheritor_complete for source port's turnstile */
 	if (send_turnstile) {

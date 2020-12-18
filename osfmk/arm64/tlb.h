@@ -55,6 +55,13 @@ sync_tlb_flush(void)
 	__builtin_arm_isb(ISB_SY);
 }
 
+static inline void
+sync_tlb_flush_local(void)
+{
+	__builtin_arm_dsb(DSB_NSH);
+	__builtin_arm_isb(ISB_SY);
+}
+
 // flush_mmu_tlb: full TLB flush on all cores
 static inline void
 flush_mmu_tlb_async(void)
@@ -290,7 +297,7 @@ generate_rtlbi_param(ppnum_t npages, uint32_t asid, vm_offset_t va, uint64_t pma
 	 * Per the armv8.4 RTLBI extension spec, the range encoded in the rtlbi register operand is defined by:
 	 * BaseADDR <= VA < BaseADDR+((NUM+1)*2^(5*SCALE+1) * Translation_Granule_Size)
 	 */
-	unsigned order = (sizeof(npages) * 8) - __builtin_clz(npages - 1) - 1;
+	unsigned order = (unsigned)(sizeof(npages) * 8) - (unsigned)__builtin_clz(npages - 1) - 1;
 	unsigned scale = ((order ? order : 1) - 1) / 5;
 	unsigned granule = 1 << ((5 * scale) + 1);
 	unsigned num = (((npages + granule - 1) & ~(granule - 1)) / granule) - 1;

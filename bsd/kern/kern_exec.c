@@ -3939,16 +3939,7 @@ bad:
 		 * received by the child in a partially constructed state.
 		 */
 		proc_signalend(p, 0);
-
-		/* flag the 'fork' has occurred */
-		proc_knote(p->p_pptr, NOTE_FORK | p->p_pid);
 	}
-
-	/* flag exec has occurred, notify only if it has not failed due to FP Key error */
-	if (!error && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)) {
-		proc_knote(p, NOTE_EXEC);
-	}
-
 
 	if (error == 0) {
 		/*
@@ -4077,6 +4068,15 @@ bad:
 		}
 	}
 
+	if (spawn_no_exec) {
+		/* flag the 'fork' has occurred */
+		proc_knote(p->p_pptr, NOTE_FORK | p->p_pid);
+	}
+
+	/* flag exec has occurred, notify only if it has not failed due to FP Key error */
+	if (!error && ((p->p_lflag & P_LTERM_DECRYPTFAIL) == 0)) {
+		proc_knote(p, NOTE_EXEC);
+	}
 
 	if (imgp != NULL) {
 		if (imgp->ip_vp) {

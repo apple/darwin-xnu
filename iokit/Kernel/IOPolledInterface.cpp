@@ -591,19 +591,7 @@ IOGetHibernationCryptKey(uint8_t * hibernationKey,
     uint32_t *swSeed
     )
 {
-#if XNU_MONITOR_PPL_HIB
-	SEPHibernator *hibernator = SEPHibernator::sepHibernator();
-	sephib_wrapped_key_t wrappedKey = {};
-	sephib_seprom_hib_payload_t sepromPayload = {};
-	hibernator->prepareToHibernate(&wrappedKey, &sepromPayload);
-	*swSeed = sepromPayload.sw_seed;
-	assert(*keySize >= sizeof(wrappedKey.data));
-	*keySize = sizeof(wrappedKey.data);
-	memcpy(hibernationKey, wrappedKey.data, *keySize);
-	return kIOReturnSuccess;
-#else
 	return kIOReturnNotFound;
-#endif
 }
 #endif /* defined(__arm64__) */
 

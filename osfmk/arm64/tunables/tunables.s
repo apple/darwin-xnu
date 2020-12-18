@@ -39,6 +39,8 @@
 #include "tunables_h11.s"
 #elif defined(APPLELIGHTNING)
 #include "tunables_h12.s"
+#elif defined(APPLEFIRESTORM)
+#include "tunables_h13.s"
 #else
 .macro APPLY_TUNABLES
 .endmacro

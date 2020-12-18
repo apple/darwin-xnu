@@ -73,10 +73,14 @@ extern void __dead2 Call_continuation(thread_continue_t, void *, wait_result_t, 
  * Prior to ARMv8.5, the eret instruction itself is always synchronizing, and
  * this function is an empty stub which serves only as documentation.
  */
+#if __ARM_ARCH_8_5__
+extern void arm_context_switch_requires_sync(void);
+#else
 static inline void
 arm_context_switch_requires_sync(void)
 {
 }
+#endif /* __ARM_ARCH_8_5__ */
 
 #if __has_feature(ptrauth_calls)
 extern boolean_t arm_user_jop_disabled(void);

@@ -1,5 +1,5 @@
 #
-# Copyright (C) 1999-2016 Apple Inc. All rights reserved.
+# Copyright (C) 1999-2020 Apple Inc. All rights reserved.
 #
 ifndef VERSDIR
 export VERSDIR := $(shell /bin/pwd)
@@ -186,7 +186,6 @@ TOP_TARGETS = \
 	install install_desktop install_embedded \
 	install_release_embedded install_development_embedded \
 	install_kernels \
-	installopensource \
 	cscope tags TAGS checkstyle restyle check_uncrustify uncrustify \
 	help
 
@@ -316,6 +315,7 @@ xnu_tests:
 xnu_tests_driverkit:
 	$(MAKE) -C $(SRCROOT)/tests/driverkit $(if $(filter -j,$(MAKEFLAGS)),,$(MAKEJOBS)) \
 		SRCROOT=$(SRCROOT)/tests/driverkit
+
 
 #
 # The "analyze" target defined below invokes Clang Static Analyzer

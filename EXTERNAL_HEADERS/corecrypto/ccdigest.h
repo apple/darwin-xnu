@@ -46,9 +46,9 @@ struct ccdigest_info {
     size_t oid_size;
     const unsigned char *oid;
     const void *initial_state;
-    void(*compress)(ccdigest_state_t state, size_t nblocks,
+    void(* CC_SPTR(ccdigest_info, compress))(ccdigest_state_t state, size_t nblocks,
                     const void *data);
-    void(*final)(const struct ccdigest_info *di, ccdigest_ctx_t ctx,
+    void(* CC_SPTR(ccdigest_info, final))(const struct ccdigest_info *di, ccdigest_ctx_t ctx,
                  unsigned char *digest);
 };
 

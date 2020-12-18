@@ -2045,6 +2045,9 @@ memorystatus_add(proc_t p, boolean_t locked)
 	if (isSysProc(p)) {
 		p->p_memstat_state |= P_MEMSTAT_FREEZE_DISABLED;
 	}
+#if CONFIG_FREEZE
+	memorystatus_freeze_init_proc(p);
+#endif
 
 	bucket = &memstat_bucket[p->p_memstat_effectivepriority];
 
@@ -4903,8 +4906,10 @@ memorystatus_update_jetsam_snapshot_entry_locked(proc_t p, uint32_t kill_cause, 
 			entry->jse_idle_delta = p->p_memstat_idle_delta;
 #if CONFIG_FREEZE
 			entry->jse_thaw_count = p->p_memstat_thaw_count;
+			entry->jse_freeze_skip_reason = p->p_memstat_freeze_skip_reason;
 #else /* CONFIG_FREEZE */
 			entry->jse_thaw_count = 0;
+			entry->jse_freeze_skip_reason = kMemorystatusFreezeSkipReasonNone;
 #endif /* CONFIG_FREEZE */
 
 			/*
@@ -5179,9 +5184,11 @@ memorystatus_init_jetsam_snapshot_entry_locked(proc_t p, memorystatus_jetsam_sna
 	entry->jse_idle_delta = p->p_memstat_idle_delta; /* Most recent timespan spent in idle-band */
 
 #if CONFIG_FREEZE
+	entry->jse_freeze_skip_reason = p->p_memstat_freeze_skip_reason;
 	entry->jse_thaw_count = p->p_memstat_thaw_count;
 #else /* CONFIG_FREEZE */
 	entry->jse_thaw_count = 0;
+	entry->jse_freeze_skip_reason = kMemorystatusFreezeSkipReasonNone;
 #endif /* CONFIG_FREEZE */
 
 	proc_coalitionids(p, cids);
@@ -7884,8 +7891,10 @@ memorystatus_control(struct proc *p __unused, struct memorystatus_control_args *
     #pragma unused(jetsam_reason)
 #endif
 
-	/* We don't need entitlements if we're setting/ querying the freeze preference for a process. Skip the check below. */
-	if (args->command == MEMORYSTATUS_CMD_SET_PROCESS_IS_FREEZABLE || args->command == MEMORYSTATUS_CMD_GET_PROCESS_IS_FREEZABLE) {
+	/* We don't need entitlements if we're setting / querying the freeze preference or frozen status for a process. */
+	if (args->command == MEMORYSTATUS_CMD_SET_PROCESS_IS_FREEZABLE ||
+	    args->command == MEMORYSTATUS_CMD_GET_PROCESS_IS_FREEZABLE ||
+	    args->command == MEMORYSTATUS_CMD_GET_PROCESS_IS_FROZEN) {
 		skip_auth_check = TRUE;
 	}
 
@@ -8022,6 +8031,9 @@ memorystatus_control(struct proc *p __unused, struct memorystatus_control_args *
 
 	case MEMORYSTATUS_CMD_GET_PROCESS_IS_FREEZABLE:
 		error = memorystatus_get_process_is_freezable(args->pid, ret);
+		break;
+	case MEMORYSTATUS_CMD_GET_PROCESS_IS_FROZEN:
+		error = memorystatus_get_process_is_frozen(args->pid, ret);
 		break;
 
 	case MEMORYSTATUS_CMD_FREEZER_CONTROL:

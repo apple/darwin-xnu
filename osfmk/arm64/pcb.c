@@ -1058,15 +1058,18 @@ machine_csv(__unused cpuvn_e cve)
 	return 0;
 }
 
+#if __ARM_ARCH_8_5__
+void
+arm_context_switch_requires_sync()
+{
+	current_cpu_datap()->sync_on_cswitch = 1;
+}
+#endif
 
 #if __has_feature(ptrauth_calls)
 boolean_t
 arm_user_jop_disabled(void)
 {
-#if DEVELOPMENT || DEBUG
-	return !!(BootArgs->bootFlags & kBootFlagsDisableUserJOP);
-#else
 	return FALSE;
-#endif
 }
 #endif /* __has_feature(ptrauth_calls) */

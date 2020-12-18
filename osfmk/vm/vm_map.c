@@ -399,13 +399,8 @@ vm_map_entry_copy_pmap_cs_assoc(
 	vm_map_entry_t new __unused,
 	vm_map_entry_t old __unused)
 {
-#if PMAP_CS
-	/* when pmap_cs is enabled, we want to reset on copy */
-	new->pmap_cs_associated = FALSE;
-#else /* PMAP_CS */
 	/* when pmap_cs is not enabled, assert as a sanity check */
 	assert(new->pmap_cs_associated == FALSE);
-#endif /* PMAP_CS */
 }
 
 /*
@@ -2489,9 +2484,6 @@ vm_map_enter(
 #endif /* __arm64__ */
 	    ))) &&
 #endif /* XNU_TARGET_OS_OSX */
-#if PMAP_CS
-	    !pmap_cs_exempt(map->pmap) &&
-#endif
 	    (VM_MAP_POLICY_WX_FAIL(map) ||
 	    VM_MAP_POLICY_WX_STRIP_X(map)) &&
 	    !entry_for_jit) {
@@ -3640,9 +3632,6 @@ vm_map_enter_fourk(
 #endif /* __arm64__ */
 	    ) &&
 #endif /* XNU_TARGET_OS_OSX */
-#if PMAP_CS
-	    !pmap_cs_exempt(map->pmap) &&
-#endif
 	    !entry_for_jit) {
 		DTRACE_VM3(cs_wx,
 		    uint64_t, 0,
@@ -6164,11 +6153,6 @@ vm_map_protect(
 		}
 
 		new_max = current->max_protection;
-#if PMAP_CS
-		if (set_max && (new_prot & VM_PROT_EXECUTE) && pmap_cs_exempt(map->pmap)) {
-			new_max |= VM_PROT_EXECUTE;
-		}
-#endif
 		if ((new_prot & new_max) != new_prot) {
 			vm_map_unlock(map);
 			return KERN_PROTECTION_FAILURE;
@@ -6184,9 +6168,6 @@ vm_map_protect(
 #endif /* __arm64__ */
 		    ) &&
 #endif /* XNU_TARGET_OS_OSX */
-#if PMAP_CS
-		    !pmap_cs_exempt(map->pmap) &&
-#endif
 		    !(current->used_for_jit)) {
 			DTRACE_VM3(cs_wx,
 			    uint64_t, (uint64_t) current->vme_start,
@@ -6610,11 +6591,6 @@ vm_map_wire_nested(
 		extra_prots &= ~VM_PROT_COPY_FAIL_IF_EXECUTABLE;
 	}
 #endif /* XNU_TARGET_OS_OSX */
-#if PMAP_CS
-	if (pmap_cs_exempt(map->pmap)) {
-		extra_prots &= ~VM_PROT_COPY_FAIL_IF_EXECUTABLE;
-	}
-#endif /* PMAP_CS */
 
 	access_type = (caller_prot & VM_PROT_ALL);
 
@@ -7034,10 +7010,6 @@ vm_map_wire_nested(
 #endif /* __arm64__ */
 		    )
 #endif /* XNU_TARGET_OS_OSX */
-#if PMAP_CS
-		    &&
-		    !pmap_cs_exempt(map->pmap)
-#endif
 		    ) {
 #if MACH_ASSERT
 			printf("pid %d[%s] wiring executable range from "
@@ -8170,25 +8142,6 @@ vm_map_delete(
 			} else if (flags & VM_MAP_REMOVE_IMMUTABLE) {
 //				printf("FBDP %d[%s] removing permanent entry %p [0x%llx:0x%llx] prot 0x%x/0x%x\n", proc_selfpid(), (current_task()->bsd_info ? proc_name_address(current_task()->bsd_info) : "?"), entry, (uint64_t)entry->vme_start, (uint64_t)entry->vme_end, entry->protection, entry->max_protection);
 				entry->permanent = FALSE;
-#if PMAP_CS
-			} else if ((entry->protection & VM_PROT_EXECUTE) && !pmap_cs_enforced(map->pmap)) {
-				entry->permanent = FALSE;
-
-				printf("%d[%s] %s(0x%llx,0x%llx): "
-				    "pmap_cs disabled, allowing for permanent executable entry [0x%llx:0x%llx] "
-				    "prot 0x%x/0x%x\n",
-				    proc_selfpid(),
-				    (current_task()->bsd_info
-				    ? proc_name_address(current_task()->bsd_info)
-				    : "?"),
-				    __FUNCTION__,
-				    (uint64_t) start,
-				    (uint64_t) end,
-				    (uint64_t)entry->vme_start,
-				    (uint64_t)entry->vme_end,
-				    entry->protection,
-				    entry->max_protection);
-#endif
 			} else {
 				if (vm_map_executable_immutable_verbose) {
 					printf("%d[%s] %s(0x%llx,0x%llx): "
@@ -13779,9 +13732,6 @@ RetrySubMap:
 #endif /* __arm64__ */
 			    ) &&
 #endif /* XNU_TARGET_OS_OSX */
-#if PMAP_CS
-			    !pmap_cs_exempt(map->pmap) &&
-#endif
 			    !(entry->used_for_jit) &&
 			    VM_MAP_POLICY_WX_STRIP_X(map)) {
 				DTRACE_VM3(cs_wx,
@@ -13973,9 +13923,6 @@ protection_failure:
 		fault_info->stealth = FALSE;
 		fault_info->io_sync = FALSE;
 		if (entry->used_for_jit ||
-#if PMAP_CS
-		    pmap_cs_exempt(map->pmap) ||
-#endif
 		    entry->vme_resilient_codesign) {
 			fault_info->cs_bypass = TRUE;
 		} else {
@@ -18011,33 +17958,6 @@ vm_map_remap(
 		target_map->size += target_size;
 		SAVE_HINT_MAP_WRITE(target_map, insp_entry);
 
-#if PMAP_CS
-		if (*max_protection & VM_PROT_EXECUTE) {
-			vm_map_address_t region_start = 0, region_size = 0;
-			struct pmap_cs_code_directory *region_cd = NULL;
-			vm_map_address_t base = 0;
-			struct pmap_cs_lookup_results results = {};
-			vm_map_size_t page_addr = vm_map_trunc_page(memory_address, PAGE_MASK);
-			vm_map_size_t assoc_size = vm_map_round_page(memory_address + size - page_addr, PAGE_MASK);
-
-			pmap_cs_lookup(src_map->pmap, memory_address, &results);
-			region_size = results.region_size;
-			region_start = results.region_start;
-			region_cd = results.region_cd_entry;
-			base = results.base;
-
-			if (region_cd != NULL && (page_addr != region_start || assoc_size != region_size)) {
-				*cur_protection = VM_PROT_READ;
-				*max_protection = VM_PROT_READ;
-				printf("mismatched remap of executable range 0x%llx-0x%llx to 0x%llx, "
-				    "region_start 0x%llx, region_size 0x%llx, cd_entry %sNULL, making non-executable.\n",
-				    page_addr, page_addr + assoc_size, *address,
-				    region_start, region_size,
-				    region_cd != NULL ? "not " : ""                     // Don't leak kernel slide
-				    );
-			}
-		}
-#endif
 	}
 	vm_map_unlock(target_map);
 
@@ -21070,128 +20990,6 @@ vm_map_set_high_start(
 }
 #endif /* XNU_TARGET_OS_OSX */
 
-#if PMAP_CS
-kern_return_t
-vm_map_entry_cs_associate(
-	vm_map_t                map,
-	vm_map_entry_t          entry,
-	vm_map_kernel_flags_t   vmk_flags)
-{
-	vm_object_t cs_object, cs_shadow;
-	vm_object_offset_t cs_offset;
-	void *cs_blobs;
-	struct vnode *cs_vnode;
-	kern_return_t cs_ret;
-
-	if (map->pmap == NULL ||
-	    entry->is_sub_map || /* XXX FBDP: recurse on sub-range? */
-	    pmap_cs_exempt(map->pmap) ||
-	    VME_OBJECT(entry) == VM_OBJECT_NULL ||
-	    !(entry->protection & VM_PROT_EXECUTE)) {
-		return KERN_SUCCESS;
-	}
-
-	vm_map_lock_assert_exclusive(map);
-
-	if (entry->used_for_jit) {
-		cs_ret = pmap_cs_associate(map->pmap,
-		    PMAP_CS_ASSOCIATE_JIT,
-		    entry->vme_start,
-		    entry->vme_end - entry->vme_start,
-		    0);
-		goto done;
-	}
-
-	if (vmk_flags.vmkf_remap_prot_copy) {
-		cs_ret = pmap_cs_associate(map->pmap,
-		    PMAP_CS_ASSOCIATE_COW,
-		    entry->vme_start,
-		    entry->vme_end - entry->vme_start,
-		    0);
-		goto done;
-	}
-
-	vm_object_lock_shared(VME_OBJECT(entry));
-	cs_offset = VME_OFFSET(entry);
-	for (cs_object = VME_OBJECT(entry);
-	    (cs_object != VM_OBJECT_NULL &&
-	    !cs_object->code_signed);
-	    cs_object = cs_shadow) {
-		cs_shadow = cs_object->shadow;
-		if (cs_shadow != VM_OBJECT_NULL) {
-			cs_offset += cs_object->vo_shadow_offset;
-			vm_object_lock_shared(cs_shadow);
-		}
-		vm_object_unlock(cs_object);
-	}
-	if (cs_object == VM_OBJECT_NULL) {
-		return KERN_SUCCESS;
-	}
-
-	cs_offset += cs_object->paging_offset;
-	cs_vnode = vnode_pager_lookup_vnode(cs_object->pager);
-	cs_ret = vnode_pager_get_cs_blobs(cs_vnode,
-	    &cs_blobs);
-	assert(cs_ret == KERN_SUCCESS);
-	cs_ret = cs_associate_blob_with_mapping(map->pmap,
-	    entry->vme_start,
-	    (entry->vme_end -
-	    entry->vme_start),
-	    cs_offset,
-	    cs_blobs);
-	vm_object_unlock(cs_object);
-	cs_object = VM_OBJECT_NULL;
-
-done:
-	if (cs_ret == KERN_SUCCESS) {
-		DTRACE_VM2(vm_map_entry_cs_associate_success,
-		    vm_map_offset_t, entry->vme_start,
-		    vm_map_offset_t, entry->vme_end);
-		if (vm_map_executable_immutable) {
-			/*
-			 * Prevent this executable
-			 * mapping from being unmapped
-			 * or modified.
-			 */
-			entry->permanent = TRUE;
-		}
-		/*
-		 * pmap says it will validate the
-		 * code-signing validity of pages
-		 * faulted in via this mapping, so
-		 * this map entry should be marked so
-		 * that vm_fault() bypasses code-signing
-		 * validation for faults coming through
-		 * this mapping.
-		 */
-		entry->pmap_cs_associated = TRUE;
-	} else if (cs_ret == KERN_NOT_SUPPORTED) {
-		/*
-		 * pmap won't check the code-signing
-		 * validity of pages faulted in via
-		 * this mapping, so VM should keep
-		 * doing it.
-		 */
-		DTRACE_VM3(vm_map_entry_cs_associate_off,
-		    vm_map_offset_t, entry->vme_start,
-		    vm_map_offset_t, entry->vme_end,
-		    int, cs_ret);
-	} else {
-		/*
-		 * A real error: do not allow
-		 * execution in this mapping.
-		 */
-		DTRACE_VM3(vm_map_entry_cs_associate_failure,
-		    vm_map_offset_t, entry->vme_start,
-		    vm_map_offset_t, entry->vme_end,
-		    int, cs_ret);
-		entry->protection &= ~VM_PROT_EXECUTE;
-		entry->max_protection &= ~VM_PROT_EXECUTE;
-	}
-
-	return cs_ret;
-}
-#endif /* PMAP_CS */
 
 /*
  * FORKED CORPSE FOOTPRINT

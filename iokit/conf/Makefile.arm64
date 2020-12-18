@@ -19,8 +19,6 @@ HIB_FILES=$(filter $(UNCONFIGURED_HIB_FILES),$(OBJS))
 IOHibernateRestoreKernel.o_CFLAGS_ADD += $(CFLAGS_NOLTO_FLAG) -fno-sanitize=address -UKASAN
 # Stack protector and stack check must be disabled because the stack protector runtime isn't available
 IOHibernateRestoreKernel.o_CFLAGS_ADD += -fno-stack-protector -fno-stack-check
-# signing keys aren't set up yet, so ptrauth must be disabled
-IOHibernateRestoreKernel.o_CFLAGS_ADD += -fno-ptrauth-calls
 
 IOHibernateIO.cpo_CFLAGS_ADD += -I$(SRCROOT)/osfmk
 IOHibernateRestoreKernel.o_CFLAGS_ADD += -I$(SRCROOT)/osfmk

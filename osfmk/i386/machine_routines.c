@@ -816,6 +816,12 @@ virtual_timeout_inflate_us(unsigned int vti, uint64_t timeout)
 	return virtual_timeout_inflate32(vti, timeout, max_timeout);
 }
 
+uint64_t
+ml_get_timebase_entropy(void)
+{
+	return __builtin_ia32_rdtsc();
+}
+
 /*
  *	Routine:        ml_init_lock_timeout
  *	Function:
@@ -1159,30 +1165,6 @@ boolean_t
 ml_timer_forced_evaluation(void)
 {
 	return ml_timer_evaluation_in_progress;
-}
-
-/* 32-bit right-rotate n bits */
-static inline uint32_t
-ror32(uint32_t val, const unsigned int n)
-{
-	__asm__ volatile ("rorl %%cl,%0" : "=r" (val) : "0" (val), "c" (n));
-	return val;
-}
-
-void
-ml_entropy_collect(void)
-{
-	uint32_t        tsc_lo, tsc_hi;
-	uint32_t        *ep;
-
-	assert(cpu_number() == master_cpu);
-
-	/* update buffer pointer cyclically */
-	ep = EntropyData.buffer + (EntropyData.sample_count & EntropyData.buffer_index_mask);
-	EntropyData.sample_count += 1;
-
-	rdtsc_nofence(tsc_lo, tsc_hi);
-	*ep = (ror32(*ep, 9) & EntropyData.ror_mask) ^ tsc_lo;
 }
 
 uint64_t

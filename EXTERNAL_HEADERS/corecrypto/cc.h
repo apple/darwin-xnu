@@ -167,4 +167,19 @@ int cc_cmp_safe (size_t num, const void * ptr1, const void * ptr2);
 /* Return the minimum value between S and T. */
 #define CC_MIN(S, T) ({__typeof__(S) _cc_min_s = S; __typeof__(T) _cc_min_t = T; _cc_min_s <= _cc_min_t ? _cc_min_s : _cc_min_t;})
 
+/*
+ When building with "-nostdinc" (i.e. iboot), ptrauth.h is in a non-standard location.
+ This requires a new flag to be used when building iboot: -ibuiltininc.
+ 
+ This flag doesn't seem present at the moment in clang. For now lets not
+ diversify in iBoot.
+*/
+#if __has_feature(ptrauth_calls) && (CC_KERNEL || CC_USE_L4 || CC_USE_SEPROM)
+#include <ptrauth.h>
+#define CC_SPTR(_sn_, _n_) \
+    __ptrauth(ptrauth_key_process_independent_code, 1, ptrauth_string_discriminator("cc_" #_sn_ #_n_)) _n_
+#else
+#define CC_SPTR(_sn_, _n_) _n_
+#endif
+
 #endif /* _CORECRYPTO_CC_H_ */

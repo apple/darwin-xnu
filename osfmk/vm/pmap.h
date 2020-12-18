@@ -694,7 +694,11 @@ extern pmap_t   kernel_pmap;                    /* The kernel's map */
 #else
 
 #define PMAP_CREATE_STAGE2         0
+#if __arm64e__
+#define PMAP_CREATE_DISABLE_JOP    0x4
+#else
 #define PMAP_CREATE_DISABLE_JOP    0
+#endif
 #if __ARM_MIXED_PAGE_SIZE__
 #define PMAP_CREATE_FORCE_4K_PAGES 0x8
 #else
