@@ -175,7 +175,7 @@ Further options about style options is available at [clang docs](http://clang.ll
 How to install a new header file from XNU
 =========================================
 
-To install IOKit headers, see additional comments in [iokit/IOKit/Makefile]().
+To install IOKit headers, see additional comments in [iokit/Makefile](iokit/Makefile).
 
 XNU installs header files at the following locations -
 
